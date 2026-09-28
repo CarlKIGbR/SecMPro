@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+/target/
+**/target/
+.DS_Store
+# cargo-fuzz working directories (corpora are committed explicitly under fuzz/corpus when added)
+/fuzz/artifacts/
+/fuzz/coverage/
+# mutation-testing output
+/mutants.out*/

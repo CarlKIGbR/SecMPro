@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Build flags from docs/06 §6. These apply to every profile of the listed targets.
+#
+# `--remap-path-prefix` for $CARGO_HOME and the workspace cannot be expressed here: Cargo does not expand
+# variables in config values and `trim-paths` is unstable in the pinned Cargo 1.98.1. `cargo xtask` adds the
+# two remap flags for release builds with `--config target.<triple>.rustflags=[...]`, which Cargo *appends*
+# to the arrays below (config arrays merge). See docs/reviews/M00-report.md §5.
+
+[alias]
+xtask = "run --package xtask --locked --"
+
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "target-cpu=x86-64-v2"]
+
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-cpu=x86-64-v2", "-C", "control-flow-guard"]

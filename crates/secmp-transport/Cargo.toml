@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+[package]
+name = "secmp-transport"
+description = "QueueTransport trait, SecMP-LINK client, relay-queue transport, Tor and TLS stream providers"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

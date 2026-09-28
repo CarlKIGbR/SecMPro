@@ -1,0 +1,23 @@
+# Fixture for the workflow-hygiene check (M0 review F1): a workflow that satisfies every rule.
+name: good
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    continue-on-error: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./local-action
+      - run: |
+          echo "status: done"
+      - run: cargo xtask ci-fast --strict

@@ -51,6 +51,7 @@ pub(crate) struct Cmd {
     program: String,
     args: Vec<String>,
     dir: Option<PathBuf>,
+    envs: Vec<(String, String)>,
 }
 
 /// Captured result of a command that is allowed to fail.
@@ -67,6 +68,7 @@ impl Cmd {
             program: program.into(),
             args: Vec::new(),
             dir: None,
+            envs: Vec::new(),
         }
     }
 
@@ -99,8 +101,21 @@ impl Cmd {
         self
     }
 
+    /// Set an environment variable for the child (shown in the echoed command line).
+    pub(crate) fn env(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.envs.push((key.into(), value.into()));
+        self
+    }
+
     fn display(&self) -> String {
-        let mut s = self.program.clone();
+        let mut s = String::new();
+        for (k, v) in &self.envs {
+            s.push_str(k);
+            s.push('=');
+            s.push_str(v);
+            s.push(' ');
+        }
+        s.push_str(&self.program);
         for a in &self.args {
             s.push(' ');
             if a.contains(' ') {
@@ -117,6 +132,7 @@ impl Cmd {
     fn command(&self) -> Command {
         let mut c = Command::new(OsStr::new(&self.program));
         c.args(&self.args);
+        c.envs(self.envs.iter().map(|(k, v)| (k.as_str(), v.as_str())));
         if let Some(d) = &self.dir {
             c.current_dir(d);
         }

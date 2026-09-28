@@ -23,7 +23,11 @@ fn check(suite: &str) {
     let ours = strip_generator(vectors::generate(suite));
     assert!(vectors::validate(&ours).is_empty(), "{suite}: hex fields");
     let (fc, oc) = (frozen.get("cases").unwrap(), ours.get("cases").unwrap());
-    assert_eq!(fc.as_array().map(Vec::len), oc.as_array().map(Vec::len), "{suite}: number of cases");
+    assert_eq!(
+        fc.as_array().map(Vec::len),
+        oc.as_array().map(Vec::len),
+        "{suite}: number of cases"
+    );
     for (f, o) in fc.as_array().unwrap().iter().zip(oc.as_array().unwrap()) {
         assert_eq!(f, o, "{suite}: case {}", f.get("id").unwrap());
     }

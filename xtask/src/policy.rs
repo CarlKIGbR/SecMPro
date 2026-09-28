@@ -555,39 +555,53 @@ pub(crate) fn zero_exemption_closure(ws: &Workspace) -> Result<BTreeSet<(String,
     Ok(closure)
 }
 
-/// `vet-closure`: zero exemptions in the normal `secmp-crypto`/`secmp-proto` closure (docs/06 §3, ADR-036).
-pub(crate) fn check_vet_closure(ws: &Workspace) -> Result<String> {
-    let config = std::fs::read_to_string(ws.root.join("supply-chain").join("config.toml"))?;
-    let entries = vet_exemptions(&config);
+/// The `vet-closure` findings for a `supply-chain/config.toml` text and a closure: exemptions without a
+/// tracked-exemption note, and exemptions of crates inside the closure. Returns the findings and the number of
+/// exempted crates.
+pub(crate) fn vet_closure_findings(
+    config: &str,
+    closure: &BTreeSet<(String, String)>,
+) -> (Vec<String>, usize) {
+    let entries = vet_exemptions(config);
+    let mut findings = Vec::new();
     let untracked: Vec<&str> = entries
         .iter()
         .filter(|(_, noted)| !noted)
         .map(|(n, _)| n.as_str())
         .collect();
     if !untracked.is_empty() {
-        bail!(
+        findings.push(format!(
             "cargo-vet exemptions without a tracked-exemption note (supply-chain/README.md): {}",
             untracked.join(", ")
-        );
+        ));
     }
     let exempt: BTreeSet<String> = entries.into_iter().map(|(n, _)| n).collect();
-    let closure = zero_exemption_closure(ws)?;
     let bad: Vec<String> = closure
         .iter()
         .filter(|(n, _)| exempt.contains(n))
         .map(|(n, v)| format!("{n} {v}"))
         .collect();
     if !bad.is_empty() {
-        bail!(
+        findings.push(format!(
             "cargo-vet exemptions inside the secmp-crypto/secmp-proto closure: {}",
             bad.join(", ")
-        );
+        ));
+    }
+    (findings, exempt.len())
+}
+
+/// `vet-closure`: zero exemptions in the normal `secmp-crypto`/`secmp-proto` closure (docs/06 §3, ADR-036).
+pub(crate) fn check_vet_closure(ws: &Workspace) -> Result<String> {
+    let config = std::fs::read_to_string(ws.root.join("supply-chain").join("config.toml"))?;
+    let closure = zero_exemption_closure(ws)?;
+    let (findings, exempted) = vet_closure_findings(&config, &closure);
+    if !findings.is_empty() {
+        bail!("{}", findings.join("; "));
     }
     Ok(format!(
-        "secmp-crypto/secmp-proto normal closure ({}): {} external crates, 0 exempted; tracked exemptions elsewhere: {}",
+        "secmp-crypto/secmp-proto normal closure ({}): {} external crates, 0 exempted; tracked exemptions elsewhere: {exempted}",
         expect::VET_CLOSURE_TARGETS.join(", "),
         closure.len(),
-        exempt.len()
     ))
 }
 
@@ -913,5 +927,215 @@ mod tests {
             vet_exemptions(noted),
             vec![("a".to_owned(), true), ("b".to_owned(), false)]
         );
+    }
+
+    // ---- fixture-based negative tests (M0 review F1) -----------------------------------------------------
+
+    /// A throw-away directory tree for the checks that walk the file system.
+    struct Tree(PathBuf);
+
+    impl Tree {
+        fn new(name: &str, files: &[(&str, &str)]) -> Result<Self> {
+            let root = std::env::temp_dir()
+                .join(format!("secmp-xtask-fixture-{name}-{}", std::process::id()));
+            if root.exists() {
+                std::fs::remove_dir_all(&root)?;
+            }
+            for (path, text) in files {
+                let p = root.join(path);
+                if let Some(dir) = p.parent() {
+                    std::fs::create_dir_all(dir)?;
+                }
+                std::fs::write(&p, src(text))?;
+            }
+            Ok(Self(root))
+        }
+
+        fn files(&self, rel_paths: &[&str]) -> Vec<PathBuf> {
+            rel_paths.iter().map(|p| self.0.join(p)).collect()
+        }
+    }
+
+    impl Drop for Tree {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    const SPDX: &str = "// SPDX-License-Identifier: AGPL-3.0-or-later\n";
+
+    #[test]
+    fn fixture_unsanctioned_lint_allowances() -> Result<()> {
+        let tree = Tree::new(
+            "lint-allows",
+            &[
+                // a relaxation in library code: never sanctioned
+                (
+                    "crates/x/src/lib.rs",
+                    "#[ALLOW(clippy::unwrap_used)]\nfn f() {}\n",
+                ),
+                // the docs/06 §2 test allowance at the top of a test file: sanctioned by rule
+                (
+                    "crates/x/tests/t.rs",
+                    "#![ALLOW(clippy::unwrap_used, clippy::expect_used)]\nfn g() {}\n",
+                ),
+                // the same lint, but not at the file top
+                (
+                    "crates/x/tests/u.rs",
+                    "fn g() {}\n#[ALLOW(clippy::unwrap_used)]\nfn h() {}\n",
+                ),
+                // a lint outside the test allowance, at the top of a test file
+                (
+                    "crates/x/tests/v.rs",
+                    "#![ALLOW(clippy::panic)]\nfn g() {}\n",
+                ),
+                // `expect` and `cfg_attr` forms count as relaxations too
+                (
+                    "crates/y/src/lib.rs",
+                    "#[cfg_attr(test, EXPECT(clippy::indexing_slicing))]\nfn f() {}\n",
+                ),
+            ],
+        )?;
+        let files = tree.files(&[
+            "crates/x/src/lib.rs",
+            "crates/x/tests/t.rs",
+            "crates/x/tests/u.rs",
+            "crates/x/tests/v.rs",
+            "crates/y/src/lib.rs",
+        ]);
+        let mut findings = Vec::new();
+        let count = check_lint_allows(&tree.0, &files, &mut findings)?;
+        assert_eq!(count, 6);
+        assert_eq!(findings.len(), 4, "{findings:?}");
+        for path in [
+            "crates/x/src/lib.rs",
+            "crates/x/tests/u.rs",
+            "crates/x/tests/v.rs",
+            "crates/y/src/lib.rs",
+        ] {
+            assert!(
+                findings.iter().any(|f| f.contains(path)),
+                "{path}: {findings:?}"
+            );
+        }
+        assert!(!findings.iter().any(|f| f.contains("crates/x/tests/t.rs")));
+        Ok(())
+    }
+
+    #[test]
+    fn fixture_missing_or_wrong_spdx() -> Result<()> {
+        let tree = Tree::new(
+            "spdx",
+            &[
+                ("crates/a/src/good.rs", &format!("{SPDX}fn f() {{}}\n")),
+                ("crates/a/src/missing.rs", "fn f() {}\n"),
+                (
+                    "crates/a/Cargo.toml",
+                    "# SPDX-License-Identifier: MIT\n[package]\n",
+                ),
+                (
+                    "formal/m.pv",
+                    "(* SPDX-License-Identifier: AGPL-3.0-or-later *)\n",
+                ),
+                (".github/workflows/w.yml", "name: no header\n"),
+                // fixtures are data for external tools and are not checked
+                ("xtask/fixtures/data.rs", "no header\n"),
+                ("Cargo.toml", "[workspace]\n"),
+            ],
+        )?;
+        let mut findings = Vec::new();
+        let n = check_spdx(&tree.0, &mut findings)?;
+        assert_eq!(n, 6, "every candidate except the fixture");
+        let mut bad: Vec<&str> = [
+            "crates/a/src/missing.rs",
+            "crates/a/Cargo.toml",
+            ".github/workflows/w.yml",
+            "Cargo.toml",
+        ]
+        .to_vec();
+        bad.sort_unstable();
+        assert_eq!(findings.len(), bad.len(), "{findings:?}");
+        for path in bad {
+            assert!(
+                findings
+                    .iter()
+                    .any(|f| f.starts_with(&format!("spdx: {path} "))),
+                "{path}: {findings:?}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn fixture_build_scripts() -> Result<()> {
+        let tree = Tree::new(
+            "build-rs",
+            &[
+                ("crates/with-build/Cargo.toml", "[package]\n"),
+                ("crates/with-build/build.rs", "fn main() {}\n"),
+                ("crates/with-build/src/lib.rs", "\n"),
+                ("crates/clean/Cargo.toml", "[package]\n"),
+                ("crates/clean/src/lib.rs", "\n"),
+            ],
+        )?;
+        let root = tree.0.to_string_lossy().replace('\\', "/");
+        let json = format!(
+            r#"{{"workspace_root": "{root}",
+              "workspace_members": ["w#0", "c#0"],
+              "packages": [
+                {{"id": "w#0", "name": "with-build", "version": "0.0.0", "features": {{}},
+                  "manifest_path": "{root}/crates/with-build/Cargo.toml",
+                  "targets": [{{"name": "with-build", "kind": ["lib"], "src_path": "{root}/crates/with-build/src/lib.rs"}},
+                              {{"name": "build-script-build", "kind": ["custom-build"], "src_path": "{root}/crates/with-build/build.rs"}}]}},
+                {{"id": "c#0", "name": "clean", "version": "0.0.0", "features": {{}},
+                  "manifest_path": "{root}/crates/clean/Cargo.toml",
+                  "targets": [{{"name": "clean", "kind": ["lib"], "src_path": "{root}/crates/clean/src/lib.rs"}}]}}],
+              "resolve": {{"nodes": [{{"id": "w#0", "deps": []}}, {{"id": "c#0", "deps": []}}]}}}}"#
+        );
+        let ws = Workspace::parse(&json)?;
+        let mut findings = Vec::new();
+        assert_eq!(check_build_scripts(&ws, &mut findings), 2);
+        assert_eq!(findings.len(), 2, "{findings:?}");
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.contains("crate with-build has a build script"))
+        );
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.contains("crates/with-build/build.rs exists"))
+        );
+        assert!(!findings.iter().any(|f| f.contains("clean")));
+        Ok(())
+    }
+
+    #[test]
+    fn fixture_vet_exemptions() {
+        let config = include_str!("../fixtures/policy/vet-config.toml");
+        let closure: BTreeSet<(String, String)> = [("typenum", "1.20.1"), ("subtle", "2.6.1")]
+            .iter()
+            .map(|(n, v)| ((*n).to_owned(), (*v).to_owned()))
+            .collect();
+        let (findings, exempted) = vet_closure_findings(config, &closure);
+        assert_eq!(exempted, 3);
+        assert_eq!(findings.len(), 2, "{findings:?}");
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.contains("without a tracked-exemption note") && f.contains("crabgrind"))
+        );
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.contains("inside the secmp-crypto/secmp-proto closure: typenum 1.20.1"))
+        );
+        // outside the closure, correctly noted exemptions are fine
+        let clean = config.replace(
+            "[[exemptions.crabgrind]]",
+            "[[exemptions.crabgrind]]\nnotes = \"Tracked exemption: x\"",
+        );
+        let empty = BTreeSet::new();
+        assert!(vet_closure_findings(&clean, &empty).0.is_empty());
     }
 }

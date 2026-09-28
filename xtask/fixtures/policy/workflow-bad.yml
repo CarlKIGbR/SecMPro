@@ -1,0 +1,16 @@
+# Fixture for the workflow-hygiene check (M0 review F1): every rule of `workflow_findings` is violated once.
+name: bad
+
+on:
+  pull_request_target:
+  workflow_run:
+    workflows: [ci]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@0123456789abcdef
+      - run: echo "status: done"

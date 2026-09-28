@@ -376,7 +376,18 @@ pub(crate) fn coverage(ctx: &Ctx) -> Result<Outcome> {
 
 pub(crate) fn mutants(ctx: &Ctx) -> Result<Outcome> {
     tools::require(tools::MUTANTS)?;
-    let mut c = Cmd::cargo().args(["mutants", "--no-shuffle", "--output", "target"]);
+    // With feature `kat` the external KATs and the frozen-vector test join the unit tests in killing mutants;
+    // the differential tests run 20 instead of 10 000 iterations per mutant (they run in full in the kat step).
+    let mut c = Cmd::cargo()
+        .args([
+            "mutants",
+            "--no-shuffle",
+            "--output",
+            "target",
+            "--features",
+            "secmp-crypto/kat",
+        ])
+        .env("SECMP_DIFF_ITERATIONS", "20");
     for p in expect::MUTANT_PACKAGES {
         c = c.args(["--package", p]);
     }
@@ -788,6 +799,34 @@ mod tests {
             "missing input must fail"
         );
         Ok(())
+    }
+
+    /// M0 review F1: fixture workflows — every hygiene rule violated once, and a clean one.
+    #[test]
+    fn workflow_fixture_files() {
+        let bad = workflow_findings(
+            "bad.yml",
+            include_str!("../fixtures/policy/workflow-bad.yml"),
+        );
+        for expected in [
+            "forbidden trigger `pull_request_target`",
+            "forbidden trigger `workflow_run`",
+            "continue-on-error in job Some(\"build\")",
+            "action not pinned by commit SHA: actions/checkout@v4",
+            "action not pinned by commit SHA: actions/cache@0123456789abcdef",
+            "plain-scalar `run:`",
+        ] {
+            assert!(
+                bad.iter().any(|f| f.contains(expected)),
+                "{expected}: {bad:?}"
+            );
+        }
+        assert_eq!(bad.len(), 6, "{bad:?}");
+        let good = workflow_findings(
+            "good.yml",
+            include_str!("../fixtures/policy/workflow-good.yml"),
+        );
+        assert!(good.is_empty(), "{good:?}");
     }
 
     #[test]

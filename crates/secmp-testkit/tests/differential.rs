@@ -2,7 +2,9 @@
 #![cfg(feature = "kat")]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 #![forbid(unsafe_code)]
-//! Differential tests (docs/06 §4, M1 acceptance "differential tests pass 10 000 iterations"; feature `kat`):
+//! Differential tests (docs/06 §4, M1 acceptance "differential tests pass 10 000 iterations"; feature `kat` of
+//! `secmp-testkit`, which enables `secmp-crypto/kat`). They live here, not in `secmp-crypto`, so that the test
+//! graph of `secmp-crypto` stays pure Rust (Miri; no C build per mutant):
 //!
 //! - ML-KEM-768/1024: the wrapper (libcrux) vs RustCrypto `ml-kem` (same seed → same ek; same `m` → same
 //!   ciphertext and secret; each decapsulates the other's ciphertexts) vs `aws-lc-rs` (the same expanded key
@@ -57,7 +59,7 @@ fn take<const N: usize>(r: &mut impl XofReader) -> [u8; N] {
 }
 
 macro_rules! mlkem_differential {
-    ($name:ident, $label:literal, $ours_dk:ident, $ours_ek:ident, $ours_ct:ident, $rc:ident, $lib:ident, $aws:ident) => {
+    ($name:ident, $label:literal, $ours_dk:ident, $ours_ek:ident, $ours_ct:ident, $rc:ident, $aws:ident) => {
         #[test]
         fn $name() {
             let (master, n) = setup();
@@ -97,9 +99,11 @@ macro_rules! mlkem_differential {
                 );
 
                 // aws-lc-rs with the same expanded key decapsulates the wrapper's ciphertext to the same secret
-                let sk = libcrux_ml_kem::$lib::generate_key_pair(seed);
-                let aws_dk =
-                    aws_lc_rs::kem::DecapsulationKey::new(&aws_lc_rs::kem::$aws, sk.sk()).unwrap();
+                let aws_dk = aws_lc_rs::kem::DecapsulationKey::new(
+                    &aws_lc_rs::kem::$aws,
+                    &ours.expanded_kat(),
+                )
+                .unwrap();
                 let aws_ss = aws_dk.decapsulate(ct.as_bytes().as_slice().into()).unwrap();
                 assert_eq!(
                     aws_ss.as_ref(),
@@ -144,7 +148,6 @@ mlkem_differential!(
     MlKem768Ek,
     MlKem768Ct,
     MlKem768,
-    mlkem768,
     ML_KEM_768
 );
 mlkem_differential!(
@@ -154,7 +157,6 @@ mlkem_differential!(
     MlKem1024Ek,
     MlKem1024Ct,
     MlKem1024,
-    mlkem1024,
     ML_KEM_1024
 );
 

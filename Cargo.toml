@@ -53,13 +53,14 @@ getrandom = { version = "=0.4.3", default-features = false }
 libc = { version = "=0.2.189", default-features = false }
 windows-sys = { version = "=0.61.2", default-features = false, features = ["Win32_Foundation", "Win32_System_Memory", "Win32_System_SystemInformation", "Win32_System_Threading"] }
 
-# ADR-023, ADR-036, ADR-037: test-only differential partners and the SHAKE-256 of the vector seeds
-# (dev-dependencies of secmp-crypto; never in the shipped closure).
+# ADR-023, ADR-036, ADR-037: test-only differential partners (dev-dependencies of secmp-testkit) and the SHAKE-256
+# of the vector seeds; never in the shipped closure.
 ml-kem = { version = "=0.3.2", default-features = false }
 aws-lc-rs = { version = "=1.18.1", default-features = false, features = ["aws-lc-sys", "alloc"] }
 shake = { version = "=0.1.0", default-features = false }
 
 # Workspace crates (path dependencies; docs/02 §3 fixes who may depend on whom).
+secmp-crypto = { path = "crates/secmp-crypto" }
 secmp-sys-mem = { path = "crates/secmp-sys-mem" }
 secmp-testkit = { path = "crates/secmp-testkit" }
 

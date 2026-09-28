@@ -98,15 +98,6 @@ impl Caead {
             Err(Error::Rejected)
         }
     }
-
-    /// `(K_enc, COM)` for a key and nonce, for known-answer tests (feature `kat`).
-    ///
-    /// # Errors
-    /// None in practice (fixed lengths).
-    #[cfg(feature = "kat")]
-    pub fn commitment_kat(k: &SecretBytes<32>, nonce: &[u8; NONCE_LEN]) -> Result<[u8; COM_LEN]> {
-        Ok(derive(k, nonce)?.1)
-    }
 }
 
 #[cfg(test)]

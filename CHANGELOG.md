@@ -35,8 +35,28 @@ All notable changes to this project are documented in this file. The format foll
   `unsafe_code` relaxations of `docs/06` §2 (`#![allow(unsafe_code)]` at the library root of exactly the two
   `secmp-sys-*` crates, `#![deny(unsafe_code)]` and no `unsafe` token in `secmp-ui`, `forbid` everywhere else);
   Dependabot for Cargo and GitHub Actions (weekly, grouped, 7-day cooldown).
+- M1 `secmp-crypto`: typed primitives (X25519 with all-zero rejection, ML-KEM-768/1024 via libcrux with seed-held
+  decapsulation keys and validated encapsulation keys, Ed25519 with the strict verification rule of spec §3.5
+  checked on the bytes, pure hedged ML-DSA-65) and the SecMP constructions `HybridKEM-768/1024` (§3.2),
+  `MsgEncrypt` (§3.3), `CAEAD` (§3.4), `HybridSign` (§3.5), fingerprints (§6.2) and the safety number (§6.7);
+  `SecretBytes`/`LockedSecret`, single-use `Nonce24`/`Counter64`, the Appendix A label enum (checked against the
+  spec text, prefix-free), label-first HKDF helpers, one uniform error.
+- M1 `secmp-sys-mem::SecretPage`: a secret in a locked page between guard pages (`memfd_secret`, `mlock` +
+  `MADV_DONTDUMP`/`MADV_WIPEONFORK`, `VirtualLock`), zeroised before release; Miri via a heap backend.
+- M1 verification: Wycheproof and NIST ACVP known-answer tests on every target (`vectors/external/`),
+  three-way differential tests (10 000 iterations), dudect-style constant-time tests (`cargo xtask step ct`),
+  seven fuzz targets with corpora, the mutation gate with the KATs, and the SecMP vectors of all eight M1 suites
+  cross-checked against the independent `ref/` implementation and frozen (`cargo xtask vectors`).
+- M1 supply chain (ADR-036, ADR-037): publisher trust for the RustCrypto, dalek, Cryspen and AWS accounts,
+  crate-scoped trust for `getrandom`, `hax-lib*` and `typenum`, delta audits for `rand_core` and `rand`, tracked
+  exemptions only outside the normal `secmp-crypto`/`secmp-proto` closure (checked per target).
 
 ### Changed
+
+- xtask: `vet-closure` follows only normal dependency edges on each target (ADR-036); `clippy` lints all features;
+  `cargo audit` ignores are ADR-backed entries in `expect.rs`; the cooldown check covers `fuzz/Cargo.lock`; Miri
+  interprets `aarch64-unknown-linux-gnu` (libcrux's x86 CPU detection uses inline assembly); policy checks have
+  fixture-based negative tests (M0 review F1).
 
 - CI: the cargo-xwin cross-build job is a hard gate (no `continue-on-error`) and installs NASM (M0 review,
   condition C1).

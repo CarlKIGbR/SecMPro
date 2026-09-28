@@ -40,13 +40,14 @@ pub(crate) fn half(fp: &Fingerprint) -> [u8; SAS_HALF_DIGITS] {
     let h = iter(fp.as_bytes());
     let mut out = [b'0'; SAS_HALF_DIGITS];
     for (group, digits) in h.as_chunks::<5>().0.iter().zip(out.as_chunks_mut::<5>().0) {
-        // int_be(iter(fp)[5k..5k+5]) mod 100000
+        // int_be(iter(fp)[5k..5k+5])
         let mut be = [0_u8; 8];
         for (d, s) in be.iter_mut().skip(3).zip(group) {
             *d = *s;
         }
-        let mut v = u64::from_be_bytes(be) % 100_000;
-        // zero-padded to 5 digits, most significant first
+        let mut v = u64::from_be_bytes(be);
+        // mod 100000, zero-padded to 5 digits: the five least significant decimal digits of v, written most
+        // significant first, are exactly `v mod 100000` zero-padded (spec §6.7)
         for d in digits.iter_mut().rev() {
             let digit = u8::try_from(v % 10).unwrap_or(0);
             *d = b'0'.wrapping_add(digit);

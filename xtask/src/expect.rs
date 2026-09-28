@@ -41,7 +41,7 @@ pub(crate) const AUDIT_IGNORES: &[(&str, &str)] = &[(
 )];
 
 /// Packages exposing the `kat` feature (docs/06 §5 step 5): external KATs, differential tests, vector checks.
-pub(crate) const KAT_PACKAGES: &[&str] = &["secmp-crypto"];
+pub(crate) const KAT_PACKAGES: &[&str] = &["secmp-crypto", "secmp-testkit"];
 
 /// cargo-fuzz targets under `fuzz/fuzz_targets/` (docs/06 §5 step 6): M1 key, ciphertext and signature parsers
 /// and the two openers of `secmp-crypto`.
@@ -60,6 +60,12 @@ pub(crate) const MUTANT_PACKAGES: &[&str] = &["secmp-crypto", "secmp-proto"];
 
 /// Packages run under Miri (docs/06 §4).
 pub(crate) const MIRI_PACKAGES: &[&str] = &["secmp-sys-mem", "secmp-sys-desktop", "secmp-crypto"];
+
+/// The target Miri interprets, on every host. `libcrux-ml-kem` selects its backend at run time through
+/// `libcrux-platform`, which executes `cpuid` (inline assembly, unsupported by Miri) on `x86`/`x86_64`; on `AArch64` the
+/// selection is a compile-time constant (and the gate compiles libcrux's NEON backend out, since Miri cannot run
+/// SIMD intrinsics). `secmp-sys-mem` uses its heap backend under Miri on every target.
+pub(crate) const MIRI_TARGET: &str = "aarch64-unknown-linux-gnu";
 
 /// Packages containing Kani harnesses (docs/06 §4). M2 adds `secmp-proto`.
 pub(crate) const KANI_PACKAGES: &[&str] = &[];

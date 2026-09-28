@@ -70,12 +70,7 @@ mod strict {
 
     /// `a < b` for 32-byte little-endian integers (public values; not constant time).
     fn less_than(a: &[u8; 32], b: &[u8; 32]) -> bool {
-        for (x, y) in a.iter().rev().zip(b.iter().rev()) {
-            if x != y {
-                return x < y;
-            }
-        }
-        false
+        a.iter().rev().cmp(b.iter().rev()).is_lt()
     }
 
     /// The y-coordinate of an encoded point (sign bit of x cleared).
@@ -103,6 +98,11 @@ mod strict {
     /// An acceptable `A` or `R`: canonical and not of small order.
     pub(super) fn point_ok(enc: &[u8; 32]) -> bool {
         is_canonical_point(enc) && !is_small_order(enc)
+    }
+
+    /// The byte-level rules for a signature `R ‖ S`: `R` acceptable and `S < L`.
+    pub(super) fn signature_ok(r: &[u8; 32], s: &[u8; 32]) -> bool {
+        point_ok(r) && is_canonical_scalar(s)
     }
 
     #[cfg(test)]
@@ -191,7 +191,7 @@ impl Ed25519VerifyingKey {
         let (r, s) = sig.split_at(32);
         let r: [u8; 32] = r.try_into().map_err(|_| Error::Rejected)?;
         let s: [u8; 32] = s.try_into().map_err(|_| Error::Rejected)?;
-        if !strict::point_ok(&r) || !strict::is_canonical_scalar(&s) {
+        if !strict::signature_ok(&r, &s) {
             return Err(Error::Rejected);
         }
         self.key
@@ -396,5 +396,32 @@ mod tests {
         assert!(strict::is_canonical_scalar(&l_minus_1));
         assert!(!strict::is_canonical_scalar(&strict::L_BYTES));
         assert!(strict::is_canonical_scalar(&[0; 32]));
+        // the most significant differing byte decides, not the first one
+        let mut high = [0_u8; 32];
+        high[31] = 1;
+        let mut low = [0xff_u8; 32];
+        low[31] = 0;
+        assert!(strict::is_canonical_scalar(&low) && !strict::is_canonical_scalar(&[0xff; 32]));
+        assert!(strict::is_canonical_point(&high) && strict::is_canonical_point(&low));
+    }
+
+    /// The byte-level signature rules on their own: `ed25519-dalek`'s `verify_strict` rejects the same inputs,
+    /// so these checks (spec §3.5 "add the missing checks on the encoded bytes") are tested directly.
+    #[test]
+    fn signature_byte_rules() -> Result<()> {
+        let (_, _, sig) = signed()?;
+        let (r, s) = sig.split_at(32);
+        let r: [u8; 32] = r.try_into().map_err(|_| Error::Rejected)?;
+        let s: [u8; 32] = s.try_into().map_err(|_| Error::Rejected)?;
+        assert!(strict::signature_ok(&r, &s));
+        assert!(!strict::signature_ok(&r, &strict::L_BYTES), "S = L");
+        let identity =
+            unhex_n::<32>("0100000000000000000000000000000000000000000000000000000000000000");
+        assert!(!strict::signature_ok(&identity, &s), "small-order R");
+        let non_canonical =
+            unhex_n::<32>("f0ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f");
+        assert!(!strict::signature_ok(&non_canonical, &s), "R with y >= p");
+        assert!(!strict::signature_ok(&identity, &strict::L_BYTES));
+        Ok(())
     }
 }

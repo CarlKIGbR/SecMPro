@@ -65,6 +65,14 @@ macro_rules! ml_kem {
                 out
             }
 
+            /// The expanded decapsulation key (FIPS 203 `dk`), for differential tests with libraries that import
+            /// only expanded keys (feature `kat`; SecMP itself stores and uses only the seed).
+            #[cfg(feature = "kat")]
+            #[must_use]
+            pub fn expanded_kat(&self) -> Vec<u8> {
+                self.with_key_pair(|kp| kp.sk().to_vec())
+            }
+
             /// The encapsulation key of this decapsulation key.
             #[must_use]
             pub fn encapsulation_key(&self) -> $ek {

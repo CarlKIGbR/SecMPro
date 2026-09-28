@@ -842,7 +842,6 @@ version = "0.0.0"
 name = "secmp-crypto"
 version = "0.0.0"
 dependencies = [
- "aws-lc-rs",
  "chacha20",
  "chacha20poly1305",
  "ed25519-dalek",
@@ -851,7 +850,6 @@ dependencies = [
  "hmac",
  "libcrux-ml-kem",
  "ml-dsa",
- "ml-kem",
  "secmp-sys-mem",
  "secmp-testkit",
  "serde_json",
@@ -892,7 +890,11 @@ dependencies = [
 name = "secmp-testkit"
 version = "0.0.0"
 dependencies = [
+ "aws-lc-rs",
+ "ml-kem",
+ "secmp-crypto",
  "serde_json",
+ "shake",
 ]
 
 [[package]]

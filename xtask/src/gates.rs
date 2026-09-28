@@ -158,8 +158,31 @@ pub(crate) fn kat(ctx: &Ctx) -> Result<Outcome> {
             ])
             .run()?;
     }
+    // libcrux's build scripts compile its SIMD backends on aarch64 (NEON) and x86_64 (AVX2, chosen at run time),
+    // so the run above tests the backend this host uses. A CPU without AVX2 runs the portable backend: the ML-KEM
+    // KATs and the frozen vectors run again with the SIMD backends compiled out (own target directory, because
+    // the build scripts do not declare the variables and Cargo would reuse a stale build).
+    let portable_dir = ctx.root.join("target").join("kat-portable");
+    Cmd::cargo()
+        .args([
+            "nextest",
+            "run",
+            "--locked",
+            "--package",
+            "secmp-crypto",
+            "--features",
+            "kat",
+            "--test",
+            "kat_mlkem",
+            "--test",
+            "vectors",
+        ])
+        .env("LIBCRUX_DISABLE_SIMD128", "1")
+        .env("LIBCRUX_DISABLE_SIMD256", "1")
+        .env("CARGO_TARGET_DIR", portable_dir.to_string_lossy())
+        .run()?;
     Ok(Outcome::Pass(format!(
-        "KAT/differential packages: {} (expected set matches)",
+        "KAT/differential packages: {} (expected set matches); ML-KEM KATs and frozen vectors also with libcrux's portable backend",
         list(&found)
     )))
 }
@@ -374,42 +397,82 @@ pub(crate) fn coverage(ctx: &Ctx) -> Result<Outcome> {
     )))
 }
 
+/// Missed or timed-out mutants (lines `<path>:<line>:<col>: <description>` of `cargo mutants`' `missed.txt` /
+/// `timeout.txt`) that no line of `docs/mutants-accepted.md` documents with both its path and its description
+/// (line numbers are ignored, so an accepted survivor stays accepted when unrelated code moves).
+pub(crate) fn undocumented_survivors(listing: &str, accepted: &str) -> Vec<String> {
+    listing
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .filter(|l| {
+            let mut parts = l.splitn(4, ':');
+            let path = parts.next().unwrap_or_default();
+            let desc = parts.nth(2).map(str::trim).unwrap_or_default();
+            path.is_empty()
+                || desc.is_empty()
+                || !accepted
+                    .lines()
+                    .any(|a| a.contains(&format!("`{path}`")) && a.contains(&format!("`{desc}`")))
+        })
+        .map(str::to_owned)
+        .collect()
+}
+
 pub(crate) fn mutants(ctx: &Ctx) -> Result<Outcome> {
     tools::require(tools::MUTANTS)?;
-    // With feature `kat` the external KATs and the frozen-vector test join the unit tests in killing mutants;
-    // the differential tests run 20 instead of 10 000 iterations per mutant (they run in full in the kat step).
-    let mut c = Cmd::cargo()
-        .args([
-            "mutants",
-            "--no-shuffle",
-            "--output",
-            "target",
-            "--features",
-            "secmp-crypto/kat",
-        ])
-        .env("SECMP_DIFF_ITERATIONS", "20");
+    // With feature `kat` the external KATs and the frozen-vector test join the unit tests in killing mutants.
+    let mut c = Cmd::cargo().args([
+        "mutants",
+        "--no-shuffle",
+        "--output",
+        "target",
+        "--features",
+        "secmp-crypto/kat",
+    ]);
     for p in expect::MUTANT_PACKAGES {
         c = c.args(["--package", p]);
     }
     let cap = c.dir(&ctx.root).capture()?;
     say(cap.stdout.trim_end());
-    if !cap.success {
+    let out = ctx.root.join("target").join("mutants.out");
+    let read = |name: &str| std::fs::read_to_string(out.join(name)).unwrap_or_default();
+    let accepted = std::fs::read_to_string(ctx.root.join("docs").join("mutants-accepted.md"))?;
+    let survivors = format!("{}\n{}", read("missed.txt"), read("timeout.txt"));
+    let undocumented = undocumented_survivors(&survivors, &accepted);
+    let documented = survivors
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .count()
+        .saturating_sub(undocumented.len());
+    // cargo-mutants: 0 all caught, 2 missed mutants, 3 timeouts; anything else (baseline failure, usage) fails
+    let only_survivors = matches!(cap.code, Some(0 | 2 | 3));
+    if !only_survivors || !undocumented.is_empty() {
         say(cap.stderr.trim_end());
+        for u in &undocumented {
+            say(&format!("  UNDOCUMENTED SURVIVOR {u}"));
+        }
         bail!(
-            "cargo mutants failed (exit {:?}): missed/timeout mutants or baseline failure",
-            cap.code
+            "cargo mutants (exit {:?}): {} undocumented survivor(s) (docs/mutants-accepted.md){}",
+            cap.code,
+            undocumented.len(),
+            if only_survivors {
+                ""
+            } else {
+                "; baseline or usage failure"
+            }
         );
     }
     let summary = cap
         .stdout
         .lines()
         .rev()
-        .find(|l| !l.trim().is_empty())
+        .find(|l| l.contains("mutants tested"))
         .unwrap_or_default()
         .trim()
         .to_owned();
     Ok(Outcome::Pass(format!(
-        "{}: {summary}",
+        "{}: {summary}; survivors documented in docs/mutants-accepted.md: {documented}",
         expect::MUTANT_PACKAGES.join(", ")
     )))
 }
@@ -417,19 +480,31 @@ pub(crate) fn mutants(ctx: &Ctx) -> Result<Outcome> {
 pub(crate) fn miri(ctx: &Ctx) -> Result<Outcome> {
     tools::require_nightly(&["miri", "rust-src"])?;
     Cmd::cargo_on(tools::NIGHTLY)
-        .args(["miri", "setup"])
+        .args(["miri", "setup", "--target", expect::MIRI_TARGET])
         .dir(&ctx.root)
         .run()?;
+    // Miri cannot execute SIMD intrinsics: libcrux is built with its portable backend (own target directory,
+    // because libcrux's build scripts do not declare these variables and Cargo would reuse a stale build).
     let mut c = Cmd::cargo_on(tools::NIGHTLY)
-        .args(["miri", "test", "--locked"])
+        .args(["miri", "test", "--locked", "--target", expect::MIRI_TARGET])
+        .env("LIBCRUX_DISABLE_SIMD128", "1")
+        .env("LIBCRUX_DISABLE_SIMD256", "1")
+        .env(
+            "CARGO_TARGET_DIR",
+            ctx.root
+                .join("target")
+                .join("miri-portable")
+                .to_string_lossy(),
+        )
         .dir(&ctx.root);
     for p in expect::MIRI_PACKAGES {
         c = c.args(["--package", p]);
     }
     c.run()?;
     Ok(Outcome::Pass(format!(
-        "Miri ({}): {}",
+        "Miri ({}, interpreting {}, libcrux portable backend): {}",
         tools::NIGHTLY,
+        expect::MIRI_TARGET,
         expect::MIRI_PACKAGES.join(", ")
     )))
 }
@@ -827,6 +902,37 @@ mod tests {
             include_str!("../fixtures/policy/workflow-good.yml"),
         );
         assert!(good.is_empty(), "{good:?}");
+    }
+
+    #[test]
+    fn mutation_survivors_must_be_documented() {
+        let accepted =
+            "| `crates/a/src/x.rs`: `replace <impl Drop for S>::drop with ()` | reason |\n";
+        let listing = "crates/a/src/x.rs:59:9: replace <impl Drop for S>::drop with ()\n\
+                       crates/a/src/x.rs:12:5: replace f -> bool with true\n\n";
+        let u = undocumented_survivors(listing, accepted);
+        assert_eq!(
+            u,
+            vec!["crates/a/src/x.rs:12:5: replace f -> bool with true".to_owned()]
+        );
+        // the line number does not matter, the file does
+        assert!(
+            undocumented_survivors(
+                "crates/a/src/x.rs:99:1: replace <impl Drop for S>::drop with ()",
+                accepted
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            undocumented_survivors(
+                "crates/b/src/x.rs:59:9: replace <impl Drop for S>::drop with ()",
+                accepted
+            )
+            .len(),
+            1
+        );
+        assert_eq!(undocumented_survivors("garbage", accepted).len(), 1);
+        assert!(undocumented_survivors("", accepted).is_empty());
     }
 
     #[test]

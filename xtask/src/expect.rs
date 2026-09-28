@@ -17,11 +17,28 @@ pub(crate) const UNSAFE_ALLOWED: &[&str] = &["secmp-sys-mem", "secmp-sys-desktop
 /// neither the token `unsafe` nor any relaxation of `unsafe_code`.
 pub(crate) const UNSAFE_DENY_ONLY: &[&str] = &["secmp-ui"];
 
-/// Crates whose full dependency closure must have zero cargo-vet exemptions (docs/06 §3).
+/// Crates whose normal (shipped) dependency closure must have zero cargo-vet exemptions (docs/06 §3, ADR-036).
 pub(crate) const ZERO_EXEMPTION_ROOTS: &[&str] = &["secmp-crypto", "secmp-proto"];
+
+/// The targets over which that closure is taken and united: the `[graph] targets` of `deny.toml` (the two
+/// shipped targets and the development host, ADR-029).
+pub(crate) const VET_CLOSURE_TARGETS: &[&str] = &[
+    "x86_64-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc",
+    "aarch64-apple-darwin",
+];
 
 /// Workspace binaries (hello-world banner in M0; SBOM + `cargo auditable` release builds).
 pub(crate) const BINARIES: &[&str] = &["secmp-relay", "secmp-cli", "secmp-ui"];
+
+/// `RustSec` advisories that `cargo audit` (docs/06 §5 step 3) ignores, as (id, reason). An entry needs an ADR
+/// (`deny.toml`: "An advisory may only be ignored with an ADR and a reason") and is re-triaged at every release.
+/// The gate prints every ignored id in its result line.
+pub(crate) const AUDIT_IGNORES: &[(&str, &str)] = &[(
+    "RUSTSEC-2026-0173",
+    "ADR-037: proc-macro-error2 (unmaintained) is in Cargo.lock only as a cfg(hax) dependency of hax-lib-macros \
+     and is never compiled for any target; cargo deny, which evaluates the per-target graph, does not report it",
+)];
 
 /// Packages exposing the `kat` feature (docs/06 §5 step 5). M1 adds `secmp-crypto`.
 pub(crate) const KAT_PACKAGES: &[&str] = &[];

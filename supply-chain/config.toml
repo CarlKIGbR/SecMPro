@@ -18,3 +18,128 @@ url = "https://raw.githubusercontent.com/mozilla/supply-chain/main/audits.toml"
 
 [imports.zcash]
 url = "https://raw.githubusercontent.com/zcash/rust-ecosystem/main/supply-chain/audits.toml"
+
+[[exemptions.bitflags]]
+version = "2.13.2"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): build-dependency of bindgen <- crabgrind (build) <- libcrux-secrets under cfg(valgrind_ct_test), which is never set; outside the normal closure (ADR-036). Review at every release."
+
+[[exemptions.cc]]
+version = "1.4.7"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): build-dependency of cmake/aws-lc-sys <- aws-lc-rs (dev-dependency of secmp-crypto, differential tests) and of crabgrind (cfg(valgrind_ct_test) only); outside the normal closure (ADR-036). Pinned below 1.5.x by the 7-day cooldown. Review at every release."
+
+[[exemptions.clang-sys]]
+version = "1.9.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): dependency of bindgen <- crabgrind (build) <- libcrux-secrets under cfg(valgrind_ct_test), never compiled; outside the normal closure (ADR-036). Review at every release."
+
+[[exemptions.crabgrind]]
+version = "0.2.6"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): dependency of libcrux-secrets under cfg(valgrind_ct_test) (valgrind constant-time tests of libcrux), never set in our builds; outside the normal closure (ADR-036). Review at every release."
+
+[[exemptions.find-msvc-tools]]
+version = "0.1.13"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): dependency of cc, a build-dependency of aws-lc-sys <- aws-lc-rs (dev-dependency of secmp-crypto, differential tests); outside the normal closure (ADR-036). Review at every release."
+
+[[exemptions.fs_extra]]
+version = "1.3.0"
+criteria = "safe-to-run"
+notes = "Tracked exemption (supply-chain/README.md): build-dependency of aws-lc-sys <- aws-lc-rs (dev-dependency of secmp-crypto, differential tests); outside the normal closure (ADR-036). Review at every release."
+
+[[exemptions.futures-core]]
+version = "0.3.34"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): dependency of js-sys, compiled only for wasm32 targets (getrandom/uuid); outside the normal closure (ADR-036). Review at every release."
+
+[[exemptions.futures-task]]
+version = "0.3.34"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): dependency of futures-util <- js-sys, compiled only for wasm32 targets (getrandom/uuid); outside the normal closure (ADR-036). Review at every release."
+
+[[exemptions.futures-util]]
+version = "0.3.34"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): dependency of js-sys, compiled only for wasm32 targets (getrandom/uuid); outside the normal closure (ADR-036). Review at every release."
+
+[[exemptions.itertools]]
+version = "0.13.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): dependency of bindgen <- crabgrind (build) <- libcrux-secrets under cfg(valgrind_ct_test), never compiled; outside the normal closure (ADR-036). Review at every release."
+
+[[exemptions.js-sys]]
+version = "0.3.105"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): wasm32-only dependency of getrandom and uuid; outside the normal closure (ADR-036). Pinned below 0.3.106 by the 7-day cooldown. Review at every release."
+
+[[exemptions.libloading]]
+version = "0.8.9"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): dependency of clang-sys <- bindgen <- crabgrind (build) <- libcrux-secrets under cfg(valgrind_ct_test), never compiled; outside the normal closure (ADR-036). Review at every release."
+
+[[exemptions.log]]
+version = "0.4.34"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): dependency of bindgen <- crabgrind (build) <- libcrux-secrets under cfg(valgrind_ct_test), never compiled; outside the normal closure (ADR-036). Review at every release."
+
+[[exemptions.minimal-lexical]]
+version = "0.2.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): dependency of nom <- cexpr <- bindgen <- crabgrind (build) <- libcrux-secrets under cfg(valgrind_ct_test), never compiled; outside the normal closure (ADR-036). Review at every release."
+
+[[exemptions.once_cell]]
+version = "1.12.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): base version for the imported deltas up to the locked version; dependency of wasm-bindgen, compiled only for wasm32 targets; outside the normal closure (ADR-036). Review at every release."
+
+[[exemptions.pastey]]
+version = "0.2.3"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): proc-macro dependency of core-models <- libcrux-intrinsics under cfg(hax) only (hax verification builds), never compiled; outside the normal closure (ADR-036). Review at every release."
+
+[[exemptions.pin-project-lite]]
+version = "0.2.17"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): dependency of futures-util <- js-sys, compiled only for wasm32 targets; outside the normal closure (ADR-036). Review at every release."
+
+[[exemptions.pkg-config]]
+version = "0.3.34"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): build-dependency of aws-lc-sys <- aws-lc-rs (dev-dependency of secmp-crypto) and of crabgrind (cfg(valgrind_ct_test) only); outside the normal closure (ADR-036). Review at every release."
+
+[[exemptions.r-efi]]
+version = "6.0.0"
+criteria = "safe-to-deploy"
+notes = 'Tracked exemption (supply-chain/README.md): dependency of getrandom for target_os = "uefi" only; outside the normal closure (ADR-036). Review at every release.'
+
+[[exemptions.rustc-hash]]
+version = "2.1.3"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): dependency of bindgen <- crabgrind (build) <- libcrux-secrets under cfg(valgrind_ct_test), never compiled; outside the normal closure (ADR-036). Review at every release."
+
+[[exemptions.uuid]]
+version = "1.26.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): dependency of hax-lib-macros-types <- hax-lib-macros under cfg(hax) only, never compiled; outside the normal closure (ADR-036). Review at every release."
+
+[[exemptions.wasm-bindgen]]
+version = "0.2.128"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): wasm32-only dependency of getrandom and uuid; outside the normal closure (ADR-036). Review at every release."
+
+[[exemptions.wasm-bindgen-macro]]
+version = "0.2.128"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): proc-macro of wasm-bindgen, wasm32 targets only; outside the normal closure (ADR-036). Review at every release."
+
+[[exemptions.wasm-bindgen-macro-support]]
+version = "0.2.128"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): support crate of wasm-bindgen-macro, wasm32 targets only; outside the normal closure (ADR-036). Review at every release."
+
+[[exemptions.wasm-bindgen-shared]]
+version = "0.2.128"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): shared crate of wasm-bindgen, wasm32 targets only; outside the normal closure (ADR-036). Review at every release."

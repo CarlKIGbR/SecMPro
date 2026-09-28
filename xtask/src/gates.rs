@@ -82,10 +82,20 @@ pub(crate) fn vet(ctx: &Ctx) -> Result<Outcome> {
 
 pub(crate) fn audit(_: &Ctx) -> Result<Outcome> {
     tools::require(tools::AUDIT)?;
-    Cmd::cargo().args(["audit", "--deny", "warnings"]).run()?;
-    Ok(Outcome::Pass(
-        "RustSec: no advisories (warnings denied)".into(),
-    ))
+    let mut c = Cmd::cargo().args(["audit", "--deny", "warnings"]);
+    for (id, _) in expect::AUDIT_IGNORES {
+        c = c.args(["--ignore", id]);
+    }
+    c.run()?;
+    let ignored: Vec<&str> = expect::AUDIT_IGNORES.iter().map(|(id, _)| *id).collect();
+    Ok(Outcome::Pass(format!(
+        "RustSec: no advisories (warnings denied); ignored with an ADR: {}",
+        if ignored.is_empty() {
+            "none".to_owned()
+        } else {
+            ignored.join(", ")
+        }
+    )))
 }
 
 pub(crate) fn cooldown(ctx: &Ctx) -> Result<Outcome> {

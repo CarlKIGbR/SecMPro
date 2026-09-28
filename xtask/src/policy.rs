@@ -12,7 +12,8 @@
 //!   `unsafe_code` is owned by `unsafe-attrs`.
 //! * `build-scripts`: no workspace crate has a build script (CLAUDE.md §1.9).
 //! * `spdx`: every first-party source file starts with the AGPL-3.0-or-later SPDX header.
-//! * `vet-closure`: no cargo-vet exemption covers a crate in the `secmp-crypto`/`secmp-proto` closure.
+//! * `vet-closure`: no cargo-vet exemption covers a crate in the normal (shipped) `secmp-crypto`/`secmp-proto`
+//!   closure (ADR-036), and every exemption carries a tracked-exemption note.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -536,7 +537,25 @@ pub(crate) fn vet_exemptions(config: &str) -> Vec<(String, bool)> {
     out
 }
 
-/// `vet-closure`: zero exemptions in the `secmp-crypto`/`secmp-proto` closure (docs/06 §3).
+/// The normal (shipped) dependency closure of `secmp-crypto`/`secmp-proto` (ADR-036, docs/06 §3): normal edges
+/// only (`cargo tree -e normal`), taken on every target of `expect::VET_CLOSURE_TARGETS` and united, so a crate
+/// compiled for any shipped target or the development host is inside. Build- and dev-dependencies and
+/// dependencies of other platforms or unset `cfg`s are outside and may be tracked exemptions.
+pub(crate) fn zero_exemption_closure(ws: &Workspace) -> Result<BTreeSet<(String, String)>> {
+    let mut closure = BTreeSet::new();
+    for triple in expect::VET_CLOSURE_TARGETS {
+        let graph = Workspace::load_for_platform(triple)?;
+        for root in expect::ZERO_EXEMPTION_ROOTS {
+            if ws.member(root).is_none() {
+                bail!("zero-exemption root {root} is not a workspace member");
+            }
+            closure.extend(graph.external_closure(root, true)?);
+        }
+    }
+    Ok(closure)
+}
+
+/// `vet-closure`: zero exemptions in the normal `secmp-crypto`/`secmp-proto` closure (docs/06 §3, ADR-036).
 pub(crate) fn check_vet_closure(ws: &Workspace) -> Result<String> {
     let config = std::fs::read_to_string(ws.root.join("supply-chain").join("config.toml"))?;
     let entries = vet_exemptions(&config);
@@ -552,10 +571,7 @@ pub(crate) fn check_vet_closure(ws: &Workspace) -> Result<String> {
         );
     }
     let exempt: BTreeSet<String> = entries.into_iter().map(|(n, _)| n).collect();
-    let mut closure = BTreeSet::new();
-    for root in expect::ZERO_EXEMPTION_ROOTS {
-        closure.extend(ws.external_closure(root)?);
-    }
+    let closure = zero_exemption_closure(ws)?;
     let bad: Vec<String> = closure
         .iter()
         .filter(|(n, _)| exempt.contains(n))
@@ -568,7 +584,8 @@ pub(crate) fn check_vet_closure(ws: &Workspace) -> Result<String> {
         );
     }
     Ok(format!(
-        "secmp-crypto/secmp-proto closure: {} external crates, 0 exempted; tracked exemptions elsewhere: {}",
+        "secmp-crypto/secmp-proto normal closure ({}): {} external crates, 0 exempted; tracked exemptions elsewhere: {}",
+        expect::VET_CLOSURE_TARGETS.join(", "),
         closure.len(),
         exempt.len()
     ))

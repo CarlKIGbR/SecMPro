@@ -1,0 +1,101 @@
+You are about to diff versions 0.10.0 and 0.10.1 of 'rand_core', likely to certify it for "safe-to-deploy", which means:
+
+  This crate will not introduce a serious security vulnerability to production
+  software exposed to untrusted input.
+  
+  Auditors are not required to perform a full logic review of the entire crate.
+  Rather, they must review enough to fully reason about the behavior of all unsafe
+  blocks and usage of powerful imports. For any reasonable usage of the crate in
+  real-world software, an attacker must not be able to manipulate the runtime
+  behavior of these sections in an exploitable or surprising way.
+  
+  Ideally, all unsafe code is fully sound, and ambient capabilities (e.g.
+  filesystem access) are hardened against manipulation and consistent with the
+  advertised behavior of the crate. However, some discretion is permitted. In such
+  cases, the nature of the discretion should be recorded in the `notes` field of
+  the audit record.
+  
+  For crates which generate deployed code (e.g. build dependencies or procedural
+  macros), reasonable usage of the crate should output code which meets the above
+  criteria.
+  
+Please read the above criteria and consider them when performing the audit.
+Other software projects may rely on this audit. Ask for help if you're not sure.
+
+diff --git a/rand_core-0.10.0/CHANGELOG.md b/rand_core-0.10.1/CHANGELOG.md
+index 623751f..15bbeb5 100644
+--- a/rand_core-0.10.0/CHANGELOG.md
++++ b/rand_core-0.10.1/CHANGELOG.md
+@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
+ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
+ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+ 
++## [0.10.1] - 2026-04-13
++
++### Fixed
++- Reference to the `rand` crate in `TryRng` docs ([#75])
++
++[0.10.1]: https://github.com/rust-random/rand_core/compare/v0.10.0...v0.10.1
++
++[#75]: https://github.com/rust-random/rand_core/pull/75
++
+ ## [0.10.0] - 2026-02-01
+ 
+ This release makes a number of significant changes which we hope will be the
+@@ -55,7 +64,7 @@ repository to its own [rust-random/rand_core].
+ - `Generator::Item` associated type ([#26])
+ - `CryptoBlockRng` ([#69])
+ 
+-[0.10.0]: https://github.com/rust-random/rand_core/compare/v0.9.3...HEAD
++[0.10.0]: https://github.com/rust-random/rand_core/compare/v0.9.3...v0.10.0
+ 
+ [rand#1641]: https://github.com/rust-random/rand/pull/1641
+ [rand#1667]: https://github.com/rust-random/rand/pull/1667
+diff --git a/rand_core-0.10.0/Cargo.toml b/rand_core-0.10.1/Cargo.toml
+index 08efab5..5925e22 100644
+--- a/rand_core-0.10.0/Cargo.toml
++++ b/rand_core-0.10.1/Cargo.toml
+@@ -13,7 +13,7 @@
+ edition = "2024"
+ rust-version = "1.85"
+ name = "rand_core"
+-version = "0.10.0"
++version = "0.10.1"
+ authors = ["The Rand Project Developers"]
+ build = false
+ exclude = ["/.github"]
+diff --git a/rand_core-0.10.0/Cargo.toml.orig b/rand_core-0.10.1/Cargo.toml.orig
+index 29f98af..a9d366d 100644
+--- a/rand_core-0.10.0/Cargo.toml.orig
++++ b/rand_core-0.10.1/Cargo.toml.orig
+@@ -1,6 +1,6 @@
+ [package]
+ name = "rand_core"
+-version = "0.10.0"
++version = "0.10.1"
+ authors = ["The Rand Project Developers"]
+ license = "MIT OR Apache-2.0"
+ readme = "README.md"
+diff --git a/rand_core-0.10.0/src/lib.rs b/rand_core-0.10.1/src/lib.rs
+index c4eeb3b..03ae5e3 100644
+--- a/rand_core-0.10.0/src/lib.rs
++++ b/rand_core-0.10.1/src/lib.rs
+@@ -146,7 +146,7 @@ impl<R> CryptoRng for R where R: TryCryptoRng<Error = Infallible> + ?Sized {}
+ /// # Usage
+ ///
+ /// Often, usage of the infallible trait [`Rng`] or its extension trait
+-/// [`rand::Rng`] is preferred to direct usage of `TryRng`.
++/// [`rand::RngExt`] is preferred to direct usage of `TryRng`.
+ //
+ /// Many implementations of `TryRng` (those with <code>type Error = [Infallible][]</code>)
+ /// already implement [`Rng`]; in other cases [`UnwrapErr`] may be used to obtain
+@@ -185,7 +185,7 @@ impl<R> CryptoRng for R where R: TryCryptoRng<Error = Infallible> + ?Sized {}
+ ///   the subset of this derived from the key).
+ /// - [`Eq`] and [`PartialEq`] could be implemented, but are probably not useful.
+ ///
+-/// [`rand::Rng`]: https://docs.rs/rand/latest/rand/trait.Rng.html
++/// [`rand::RngExt`]: https://docs.rs/rand/latest/rand/trait.RngExt.html
+ pub trait TryRng {
+     /// The type returned in the event of a RNG error.
+     ///
+

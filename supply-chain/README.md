@@ -22,23 +22,40 @@ cargo-vet registry. `imports.lock` pins what was fetched; CI runs `--locked` and
 1. **Direct dependency** (listed in a crate's `Cargo.toml`): needs an ADR line in `docs/08-decisions.md` (why,
    alternatives, maintenance and audit status), passing `cargo deny check`, the 7-day cooldown, **and** either
    an imported audit or a local audit recorded with `cargo vet certify` **by a named human reviewer**. An AI
-   agent never records itself as auditor.
+   agent never records itself as auditor — with the one exception of ADR-036 (3): a **delta audit** against an
+   audited or trusted version, written by the implementer with the full diff under
+   `docs/reviews/Mxx-evidence/vet-deltas/`, read by the reviewer and approved by the owner (the note says so).
 2. **Transitive dependency not covered by an import**: covered by a **publisher-trust** entry if its publisher
    qualifies (below), otherwise recorded as a **tracked exemption** (below).
-3. **The dependency closure of `secmp-crypto` and `secmp-proto` must have zero exemptions.** `cargo xtask
-   policy` fails if any exempted crate is reachable from either crate (all dependency kinds).
+3. **The normal (shipped) dependency closure of `secmp-crypto` and `secmp-proto` must have zero exemptions**
+   (ADR-036): normal edges only (`cargo tree -e normal`), on each of the three targets of `deny.toml`
+   (`x86_64-unknown-linux-gnu`, `x86_64-pc-windows-msvc`, `aarch64-apple-darwin`), united. Build- and
+   dev-dependencies and crates reachable only on other platforms or under unset `cfg`s are outside and may be
+   tracked exemptions. `cargo xtask policy` (`vet-closure`) computes the closure with `cargo metadata
+   --filter-platform` and fails if any exempted crate is inside.
 
 ## Publisher trust
 
 docs/06 §3 (M0 review, ADR-015 update): a `cargo vet trust` entry is permitted for an individual publisher whom
-at least two of the imported audit sets trust. Entries live in `audits.toml` with `criteria = "safe-to-deploy"`,
+at least two of the imported audit sets trust. ADR-036 (2) adds the crates.io accounts and trusted-publishing
+identities that publish the primitive crates chosen by ADR-023/docs/06 §3 (RustCrypto, dalek-cryptography,
+Cryspen, AWS), per account, with a note naming the crate family. Entries live in `audits.toml` with `criteria = "safe-to-deploy"`,
 an `end` date at most 12 months out and a note naming the importing organisations; they are reviewed at every
 release (renewed, or replaced by audits/exemptions). Trust entries are not exemptions: they cover only the
 versions that publisher published in the `start`–`end` window (`imports.lock` pins the publisher of each
 version), and the zero-exemption rule for the `secmp-crypto`/`secmp-proto` closure is unaffected.
 
-Currently trusted (approved in the M0 review, `end = 2027-09-28`): **dtolnay** (crates.io user 3618) and
-**BurntSushi** (user 189) — both trusted by the Mozilla, ISRG and Bytecode Alliance audit sets. Added with
+Trusted in the M0 review (`end = 2027-09-28`): **dtolnay** (crates.io user 3618) and **BurntSushi** (user 189)
+— both trusted by the Mozilla, ISRG and Bytecode Alliance audit sets.
+
+Trusted since M1 (all `end = 2027-09-28`; the entries are in `audits.toml`, the rationale in ADR-036/ADR-037):
+RustCrypto (`tarcieri` and the trusted-publishing identities `github:RustCrypto/{traits, utils, stream-ciphers,
+signatures, KDFs, MACs, hashes, hybrid-array, sponges, XOFs, universal-hashes, KEMs}`), dalek-cryptography
+(`rozbb`), Cryspen (`jschneider-bensch`; `maximebuyse` crate-scoped for `hax-lib`, `hax-lib-macros`,
+`hax-lib-macros-types`), AWS (`justsmth`), rust-random (`github:rust-random/getrandom`, crate-scoped for
+`getrandom`), `paholg` (crate-scoped for `typenum`; no audited base version exists for a delta audit), and —
+under the M0 rule — `rust-lang-owner`, `kennykerr`, `cuviper`, `Darksonn`, plus further crates of `dtolnay` and
+`BurntSushi`. Added with
 
 ```sh
 cargo vet trust --all <login> --criteria safe-to-deploy --end-date <YYYY-MM-DD> \
@@ -72,3 +89,13 @@ cargo vet trust --all <login> --criteria safe-to-deploy --end-date <YYYY-MM-DD> 
 Google/Mozilla audits; the other 10 are covered by the publisher-trust entries for dtolnay and BurntSushi (the
 ten tracked exemptions of the first M0 state were removed after the M0 review). `cargo vet --locked`: *Vetting
 Succeeded (11 fully audited)*; **no exemptions**. The `secmp-crypto`/`secmp-proto` closure is empty.
+
+## State at M1
+
+The primitive crates (ADR-023, ADR-037), the `secmp-sys-mem` OS bindings and the test-only partners bring 117
+registry crates. The normal closure of `secmp-crypto`/`secmp-proto` on the three targets is **52 crates with
+zero exemptions**: covered by imported audits, the publisher-trust entries above and two delta audits
+(`rand_core` 0.10.0 → 0.10.1, `rand` 0.10.1 → 0.10.3; diffs in `docs/reviews/M01-evidence/vet-deltas/`, owner
+approval pending). The 25 tracked exemptions are all outside it (aws-lc-sys build tools, the `bindgen` chain of
+`crabgrind` under `cfg(valgrind_ct_test)`, `cfg(hax)`-only crates, wasm32/UEFI-only crates). `cargo vet
+--locked`: *Vetting Succeeded (92 fully audited, 1 partially audited, 24 exempted)*.

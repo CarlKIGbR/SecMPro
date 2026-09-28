@@ -152,7 +152,8 @@ Format: MADR-style, one entry per decision, numbered, never deleted (superseded 
 
 ### ADR-023 — Provisional crate choices for PQ primitives
 **Decision.** ML-KEM: `libcrux-ml-kem` (hax/F*-verified, used by Signal/Google) with differential tests against RustCrypto `ml-kem` and `aws-lc-rs`; ML-DSA: RustCrypto `ml-dsa` (≥ version fixing RUSTSEC-2025-0144) with differential tests against `aws-lc-rs`; KATs on every target. Pinned exactly; bumps require KAT re-runs. Revisit at M11 with audit status.
-**Status.** Accepted (implementer verifies exact versions at M1 and records them here).
+**Versions (M1, live-checked on crates.io 2026-09-28; approved by the reviewer in the M1 brief; all ≥ 7 days old, at or above the patched version of every RustSec advisory for the crate).** `libcrux-ml-kem =0.0.10` (portable backend only: `default-features = false`, features `mlkem768`, `mlkem1024`); `ml-dsa =0.1.1` (fixes RUSTSEC-2025-0144; `default-features = false`, `zeroize`); `x25519-dalek =3.0.0`, `ed25519-dalek =3.0.0` (`curve25519-dalek 5.0.0` transitively; RUSTSEC-2024-0344 and RUSTSEC-2022-0093 fixed); `chacha20 =0.10.2`; `chacha20poly1305 =0.11.0`; `hmac =0.13.0`; `hkdf =0.13.0`; `sha2 =0.11.0`; `sha3 =0.11.0` (not 0.12.0: `ml-kem 0.3.2` depends on 0.11 and `deny.toml` bans duplicate versions); `subtle =2.6.1`; `zeroize =1.9.0`; `getrandom =0.4.3`; `rand_core =0.10.1`. Differential partners (dev-dependencies of `secmp-crypto` only): `ml-kem =0.3.2`, `aws-lc-rs =1.18.1` (`aws-lc-sys 0.45.0`, RUSTSEC-2026-0044…0048 fixed). The full M1 dependency set, its vetting and the feature choices are in ADR-037.
+**Status.** Accepted; versions recorded 2026-09-28.
 
 ### ADR-029 — Development host, repository hosting and CI topology
 **Context.** OQ-3 and Amendment A1 (2026-09-28): the development host is macOS on Apple Silicon, not Linux; the libvirt Windows 11 VM does not exist yet; the repository is hosted on GitHub.
@@ -211,6 +212,33 @@ Format: MADR-style, one entry per decision, numbered, never deleted (superseded 
 **Alternatives.** Named human audits of ≈ 0.69 M lines (not credible); dropping vet for crypto crates (loses the change-tracking benefit); trusting whole organisations by name (over-broad — accounts, not organisations, are trusted).
 **Consequences.** `06` §3 amended; `supply-chain/audits.toml` gains trust entries and delta audits; the residual crates named in the probe (`rand_core`, `keccak`, `hax-lib`, `hax-lib-macros`, `typenum`) are covered by trust or delta audits in M1.
 **Status.** Accepted (reviewer, 2026-09-28).
+
+### ADR-037 — M1 dependency set: primitive crates, OS bindings, test-only crates
+**Context.** M1 brings the first third-party code into the shipped graph (`secmp-crypto`, `secmp-sys-mem`) and the test-only crates for KATs, differential tests and vector generation. `docs/06` §3 requires an ADR line per direct dependency (why, alternatives, maintenance, audit status); ADR-036 defines the vetting; ADR-023 records the primitive versions.
+**Decision.** Direct dependencies, all pinned with `=` in `[workspace.dependencies]`, default features off:
+
+| Crate | Where | Why / features | Alternatives | Maintenance | Vet coverage (ADR-036) |
+|---|---|---|---|---|---|
+| `libcrux-ml-kem 0.0.10` | `secmp-crypto` | ML-KEM-768/1024 (ADR-023). `mlkem768`, `mlkem1024`; portable backend only (no `simd128`/`simd256`: one code path on every target, less code; speed is ample for per-message use) | `ml-kem`, `aws-lc-rs` (kept as differential partners) | Cryspen, active; hax/F*-verified | trust `jschneider-bensch`; `hax-lib`, `hax-lib-macros`(`-types`): trust `maximebuyse` (Cryspen hax co-owner), crate-scoped |
+| `ml-dsa 0.1.1` | `secmp-crypto` | ML-DSA-65, pure, hedged (spec §3.5). `zeroize` | `aws-lc-rs` (C; differential partner) | RustCrypto, active | trust `github:RustCrypto/signatures`, `tarcieri` |
+| `x25519-dalek 3.0.0` | `secmp-crypto` | X25519 (RFC 7748). `static_secrets`, `zeroize`, `precomputed-tables` | `aws-lc-rs` | dalek-cryptography, active | trust `rozbb` |
+| `ed25519-dalek 3.0.0` | `secmp-crypto` | Ed25519 signing; strict verification completed by byte-level checks (spec §3.5). `fast`, `zeroize` | `aws-lc-rs` | dalek-cryptography | trust `rozbb` |
+| `chacha20 0.10.2`, `chacha20poly1305 0.11.0`, `hmac 0.13.0`, `hkdf 0.13.0`, `sha2 0.11.0`, `sha3 0.11.0` | `secmp-crypto` | ChaCha20 (§3.3), XChaCha20-Poly1305 (§3.4), HMAC/HKDF-SHA-256, SHA-256, SHA3-256; `zeroize` where offered | `aws-lc-rs` (no XChaCha20-Poly1305) | RustCrypto, active | trust RustCrypto accounts (`tarcieri`, `github:RustCrypto/*`) |
+| `subtle 2.6.1` | `secmp-crypto` | constant-time comparison and selection | — | dalek-cryptography | imported audit |
+| `zeroize 1.9.0` | `secmp-crypto`, `secmp-sys-mem` | zeroisation of secrets | — | RustCrypto | trust `github:RustCrypto/utils`, `tarcieri` |
+| `getrandom 0.4.3` | `secmp-crypto` | OS CSPRNG, the only randomness source (spec §3) | `rand` (adds a userspace RNG) | rust-random | trust `github:rust-random/getrandom`, crate-scoped |
+| `rand_core 0.10.1` | `secmp-crypto` | RNG trait required by the dalek/ml-dsa randomised APIs | — | rust-random | delta audit 0.10.0 → 0.10.1 |
+| `libc 0.2.189` | `secmp-sys-mem` (unix) | `mmap`, `mprotect`, `mlock`, `madvise`, `memfd_secret` for `SecretPage` | `rustix`, `nix` (more code; `secmp-sys-mem` is the one place for such bindings) | rust-lang | trust `rust-lang-owner` (M0 rule) |
+| `windows-sys 0.61.2` | `secmp-sys-mem` (windows) | `VirtualAlloc`/`VirtualProtect`/`VirtualLock`/working-set adjustment. `Win32_Foundation`, `Win32_System_Memory`, `Win32_System_SystemInformation`, `Win32_System_Threading` | `windows` (heavier) | Microsoft | trust `kennykerr` (M0 rule) |
+| `ml-kem 0.3.2` | dev (`secmp-crypto`) | ML-KEM differential partner | — | RustCrypto | trust |
+| `aws-lc-rs 1.18.1` | dev (`secmp-crypto`) | differential partner for ML-KEM, ML-DSA (`unstable`), Ed25519. `aws-lc-sys`, `alloc` | — | AWS | trust `justsmth` |
+| `shake 0.1.0` | dev (`secmp-crypto`) | SHAKE-256 of the vector seed rule (`vectors/SCHEMA.md` §2) | `libcrux-sha3` | RustCrypto (already in the closure via `ml-dsa`) | trust `github:RustCrypto/XOFs` |
+| `serde_json 1.0.151` | `secmp-testkit`; dev (`secmp-crypto`) | JSON of the external KAT files and the vector files (canonical writer: sorted keys, compact) | hand-written parser (ADR-031 reasoning) | dtolnay | trust `dtolnay` (ADR-031) |
+
+The normal closure of `secmp-crypto`/`secmp-proto` on the three targets is 52 crates, each covered by an imported audit, publisher trust or one of the two delta audits (`rand_core`, `rand`; diffs in `docs/reviews/M01-evidence/vet-deltas/`); the 25 tracked exemptions are all outside it (build-only, dev-only, wasm32/UEFI-only or `cfg(hax)`/`cfg(valgrind_ct_test)`-only crates). Cooldown: the newest `cc` (1.5.x), `find-msvc-tools` 0.1.14, `wasm-bindgen` 0.2.129 and `js-sys` 0.3.106 were younger than 7 days, so `Cargo.lock` pins 1.4.7, 0.1.13, 0.2.128 and 0.3.105. **Advisory triage:** RUSTSEC-2026-0173 (`proc-macro-error2` unmaintained) is ignored by `cargo audit` (`xtask/src/expect.rs` `AUDIT_IGNORES`): the crate is in `Cargo.lock` only as a `cfg(hax)` dependency of `hax-lib-macros` and is never compiled for any target; `cargo deny` (per-target graph) does not report it.
+**Alternatives.** `aws-lc-rs` for all primitives (one C library; but no XChaCha20-Poly1305, and ADR-023 keeps it as an independent differential partner); `libcrux` for every primitive (its non-ML-KEM crates are younger).
+**Consequences.** Every bump of a crate above re-runs the KATs, differential tests and frozen vectors (`docs/06` §3); trust entries end 2027-09-28 and are reviewed at every release; `rand_core`/`rand` delta audits await the owner's approval (note in `supply-chain/audits.toml`).
+**Status.** Proposed (implementer, M1); dependency pins approved in the M1 brief, 2026-09-28.
 
 ---
 

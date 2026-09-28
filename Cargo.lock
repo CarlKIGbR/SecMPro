@@ -852,7 +852,6 @@ dependencies = [
  "libcrux-ml-kem",
  "ml-dsa",
  "ml-kem",
- "rand_core",
  "secmp-sys-mem",
  "secmp-testkit",
  "serde_json",

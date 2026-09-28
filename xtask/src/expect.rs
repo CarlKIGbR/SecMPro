@@ -40,8 +40,8 @@ pub(crate) const AUDIT_IGNORES: &[(&str, &str)] = &[(
      and is never compiled for any target; cargo deny, which evaluates the per-target graph, does not report it",
 )];
 
-/// Packages exposing the `kat` feature (docs/06 §5 step 5). M1 adds `secmp-crypto`.
-pub(crate) const KAT_PACKAGES: &[&str] = &[];
+/// Packages exposing the `kat` feature (docs/06 §5 step 5): external KATs, differential tests, vector checks.
+pub(crate) const KAT_PACKAGES: &[&str] = &["secmp-crypto"];
 
 /// cargo-fuzz targets under `fuzz/fuzz_targets/` (docs/06 §5 step 6). M1 adds the first ones.
 pub(crate) const FUZZ_TARGETS: &[&str] = &[];

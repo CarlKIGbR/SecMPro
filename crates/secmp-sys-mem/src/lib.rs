@@ -5,10 +5,13 @@
 //! Landlock, seccomp and mlockall for the client and the relay (docs/02 §3, docs/04 §2, docs/05 §4).
 //!
 //! **Unsafe code.** One of the only two crates that may contain `unsafe` (the other is `secmp-sys-desktop`);
-//! therefore it does not declare `#![forbid(unsafe_code)]`. The workspace lint `unsafe_code = "deny"` still
-//! applies. Every `unsafe` block will carry a `// SAFETY:` comment and a test and run under Miri (docs/06 §4).
+//! it carries `#![allow(unsafe_code)]` at the crate root instead of `#![forbid(unsafe_code)]` (docs/06 §2 (a),
+//! checked by `cargo xtask policy`). Every `unsafe` block must have a `// SAFETY:` comment
+//! (`clippy::undocumented_unsafe_blocks`), do one thing (`clippy::multiple_unsafe_ops_per_block`), and be
+//! covered by a unit test and Miri (docs/06 §4).
 //!
 //! **Allowed dependencies** (docs/02 §3): no workspace crate; operating-system binding crates added with an ADR.
 //! Used by `secmp-crypto`, `secmp-relay` and the client.
 //!
 //! **Status.** M0 skeleton — no code (first use in M1).
+#![allow(unsafe_code)]

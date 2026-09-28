@@ -54,6 +54,8 @@ todo = "deny"
 unimplemented = "deny"
 mem_forget = "deny"
 large_stack_arrays = "warn"
+undocumented_unsafe_blocks = "deny"      # every unsafe block needs a `// SAFETY:` comment (fires only where unsafe exists)
+multiple_unsafe_ops_per_block = "deny"   # one unsafe operation per block
 
 # docs/06 §6 — release profile for reproducible builds.
 [profile.release]

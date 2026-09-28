@@ -9,8 +9,12 @@
 //! **Allowed dependencies** (docs/02 §3): `secmp-client-core`, `secmp-sys-desktop`; `slint` (the single copyleft
 //! licence exception, docs/06 §3), added with an ADR.
 //!
+//! **Unsafe code.** None. The crate declares `#![deny(unsafe_code)]` instead of `forbid`, because `slint!`
+//! expansions carry a generated `allow(unsafe_code)` (E0453 under `forbid`; docs/06 §2 (b), ADR-033). `cargo
+//! xtask policy` rejects the keyword and any hand-written relaxation of `unsafe_code` in this crate's sources.
+//!
 //! **Status.** M0 skeleton — prints its name and version and exits (no window yet; UI starts in M8).
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 
 use std::io::Write as _;
 use std::process::ExitCode;

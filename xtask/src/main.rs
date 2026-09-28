@@ -2,7 +2,7 @@
 //! `xtask` — SecMPro build, CI, supply-chain and release automation, run as `cargo xtask <command>`.
 //!
 //! **Responsibility.** The local mirror of the CI pipeline of docs/06 §5 (`ci-fast`, `ci-full`, single
-//! `step`s), the repository policy checks (`forbid(unsafe_code)` grep, lint allowances, build scripts, SPDX,
+//! `step`s), the repository policy checks (`unsafe_code` attributes, lint allowances, build scripts, SPDX,
 //! workflow hygiene, cargo-vet closure), the 7-day dependency cooldown, SBOM generation, the Windows gate
 //! (`win-test`) and pinned tool installation. Stubs until their milestone: `vectors` (M1), `repro-check`
 //! (M11), `ops-check` (M10).

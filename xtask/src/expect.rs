@@ -6,9 +6,16 @@
 //! therefore never pass vacuously because its inputs disappeared: removing a fuzz target or a model is a
 //! reviewed change of this file. Each milestone that adds inputs extends these lists.
 
-/// The two crates that may contain `unsafe` (CLAUDE.md §1.6, docs/02 §3). Every other crate root must carry
-/// `#![forbid(unsafe_code)]`.
+/// The two crates that may contain `unsafe` (CLAUDE.md §1.6, docs/02 §3, docs/06 §2 (a)). Their library root
+/// carries `#![allow(unsafe_code)]` — the only relaxation of `unsafe_code` allowed in first-party code; their
+/// other target roots (integration tests, benches, examples) carry `#![forbid(unsafe_code)]` like every crate
+/// not listed here or in `UNSAFE_DENY_ONLY`.
 pub(crate) const UNSAFE_ALLOWED: &[&str] = &["secmp-sys-mem", "secmp-sys-desktop"];
+
+/// Crates that carry `#![deny(unsafe_code)]` instead of `forbid`, because `slint::slint!` expansions contain
+/// `#[allow(unsafe_code)]` (E0453 under `forbid`; docs/06 §2 (b), ADR-033). Their own `.rs` files may contain
+/// neither the token `unsafe` nor any relaxation of `unsafe_code`.
+pub(crate) const UNSAFE_DENY_ONLY: &[&str] = &["secmp-ui"];
 
 /// Crates whose full dependency closure must have zero cargo-vet exemptions (docs/06 §3).
 pub(crate) const ZERO_EXEMPTION_ROOTS: &[&str] = &["secmp-crypto", "secmp-proto"];

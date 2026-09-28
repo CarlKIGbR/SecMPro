@@ -28,3 +28,10 @@ All notable changes to this project are documented in this file. The format foll
   opens on macOS and compiles for Linux and Windows (`slint!` conflicts with `#![forbid(unsafe_code)]`, reported
   for M8).
 - M0 milestone report with evidence (`docs/reviews/M00-report.md`, `docs/reviews/M00-evidence/`).
+- M0 review follow-ups (`docs/reviews/M00-review.md` §F): reviewer amendments to `docs/02`, `06`, `08` (ADR-033,
+  ADR-034), `09` (OQ-18), `vectors/SCHEMA.md` and `docs/prompts/kickoff-ref.md`; cargo-vet publisher trust for
+  dtolnay and BurntSushi replaces the ten tracked exemptions (no exemptions left); workspace lints
+  `undocumented_unsafe_blocks` and `multiple_unsafe_ops_per_block`; the `policy` step enforces the sanctioned
+  `unsafe_code` relaxations of `docs/06` §2 (`#![allow(unsafe_code)]` at the library root of exactly the two
+  `secmp-sys-*` crates, `#![deny(unsafe_code)]` and no `unsafe` token in `secmp-ui`, `forbid` everywhere else);
+  Dependabot for Cargo and GitHub Actions (weekly, grouped, 7-day cooldown).

@@ -1,10 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Repository policy checks that the compiler and clippy cannot express on their own.
 //!
-//! * `forbid-unsafe`: every target root (lib, bin, test, bench, example) of every workspace crate except the
-//!   two `secmp-sys-*` crates declares `#![forbid(unsafe_code)]` in its inner-attribute header (docs/06 §2).
+//! * `unsafe-attrs`: the `unsafe_code` rules of docs/06 §2. Every target root (lib, bin, test, bench, example)
+//!   declares `#![forbid(unsafe_code)]` in its inner-attribute header, except (a) the library root of
+//!   `secmp-sys-mem`/`secmp-sys-desktop`, which declares `#![allow(unsafe_code)]` — the only relaxation of
+//!   `unsafe_code` first-party code may contain, anywhere — and (b) the roots of `secmp-ui`, which declare
+//!   `#![deny(unsafe_code)]` (or `forbid`) while the crate's own `.rs` files contain neither the token `unsafe`
+//!   nor any relaxation of `unsafe_code` (ADR-033: only `slint!` expansions may carry one).
 //! * `lints-table`: every member manifest inherits `[lints] workspace = true` and declares no lints of its own.
-//! * `lint-allows`: no attribute relaxes a lint unless sanctioned (`expect::LINT_ALLOWANCES`, docs/06 §2).
+//! * `lint-allows`: no attribute relaxes a lint unless sanctioned (`expect::LINT_ALLOWANCES`, docs/06 §2);
+//!   `unsafe_code` is owned by `unsafe-attrs`.
 //! * `build-scripts`: no workspace crate has a build script (CLAUDE.md §1.9).
 //! * `spdx`: every first-party source file starts with the AGPL-3.0-or-later SPDX header.
 //! * `vet-closure`: no cargo-vet exemption covers a crate in the `secmp-crypto`/`secmp-proto` closure.
@@ -20,10 +25,21 @@ pub(crate) const SPDX_RS: &str = "// SPDX-License-Identifier: AGPL-3.0-or-later"
 pub(crate) const SPDX_HASH: &str = "# SPDX-License-Identifier: AGPL-3.0-or-later";
 pub(crate) const SPDX_ML: &str = "(* SPDX-License-Identifier: AGPL-3.0-or-later *)";
 
-/// True if `#![forbid(unsafe_code)]` appears in the inner-attribute header of `src`: the leading run of blank
-/// lines, `//` comments (including `//!` docs) and single-line inner attributes. Anything else (an item, a
-/// block comment, a multi-line attribute) ends the header, so an unusual layout fails closed.
-pub(crate) fn header_forbids_unsafe(src: &str) -> bool {
+/// Library-like target kinds (`cargo metadata`): the crate root that `#![allow(unsafe_code)]` applies to.
+const LIB_KINDS: &[&str] = &["lib", "rlib", "dylib", "cdylib", "staticlib", "proc-macro"];
+
+const FORBID_UNSAFE: &str = "forbid(unsafe_code)";
+const DENY_UNSAFE: &str = "deny(unsafe_code)";
+/// The one sanctioned relaxation, compared with the whitespace-free attribute body. Messages build the
+/// attribute from this constant, so this file itself contains no `unsafe_code` relaxation for the scan to find.
+const ALLOW_UNSAFE: &str = "allow(unsafe_code)";
+
+/// True if the inner attribute `#![<attr>]` appears in the inner-attribute header of `src`: the leading run of
+/// blank lines, `//` comments (including `//!` docs) and single-line inner attributes. Anything else (an item, a
+/// block comment, a multi-line attribute) ends the header, so an unusual layout fails closed. Whitespace inside
+/// the attribute is ignored.
+pub(crate) fn header_declares(src: &str, attr: &str) -> bool {
+    let wanted = format!("#![{attr}]");
     for line in src.lines() {
         let t = line.trim();
         if t.is_empty() || t.starts_with("//") {
@@ -31,7 +47,7 @@ pub(crate) fn header_forbids_unsafe(src: &str) -> bool {
         }
         if t.starts_with("#![") && t.ends_with(']') {
             let compact: String = t.chars().filter(|c| !c.is_whitespace()).collect();
-            if compact == "#![forbid(unsafe_code)]" {
+            if compact == wanted {
                 return true;
             }
             continue;
@@ -41,27 +57,202 @@ pub(crate) fn header_forbids_unsafe(src: &str) -> bool {
     false
 }
 
-fn check_forbid_unsafe(ws: &Workspace, findings: &mut Vec<String>) -> Result<usize> {
-    let mut checked = 0_usize;
-    for p in &ws.members {
-        if expect::UNSAFE_ALLOWED.contains(&p.name.as_str()) {
-            continue;
-        }
-        for t in &p.targets {
-            let src = std::fs::read_to_string(&t.src_path)?;
-            checked = checked.saturating_add(1);
-            if !header_forbids_unsafe(&src) {
-                findings.push(format!(
-                    "forbid-unsafe: {} (crate {}, target {} [{}]) lacks #![forbid(unsafe_code)]",
-                    rel(&ws.root, &t.src_path),
-                    p.name,
-                    t.name,
-                    t.kinds.join(",")
-                ));
-            }
+/// How docs/06 §2 treats `unsafe_code` in one crate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum UnsafeRule {
+    /// Every crate not listed below: `#![forbid(unsafe_code)]` in every target root.
+    Forbid,
+    /// `expect::UNSAFE_ALLOWED`: `#![allow(unsafe_code)]` in the library root, `forbid` in every other root.
+    SysAllow,
+    /// `expect::UNSAFE_DENY_ONLY` (ADR-033): `#![deny(unsafe_code)]` or `forbid` in every root; no `unsafe`
+    /// token and no relaxation of `unsafe_code` in the crate's own `.rs` files.
+    UiDeny,
+}
+
+pub(crate) fn unsafe_rule(krate: &str) -> UnsafeRule {
+    if expect::UNSAFE_ALLOWED.contains(&krate) {
+        UnsafeRule::SysAllow
+    } else if expect::UNSAFE_DENY_ONLY.contains(&krate) {
+        UnsafeRule::UiDeny
+    } else {
+        UnsafeRule::Forbid
+    }
+}
+
+/// One target root as the `unsafe-attrs` check sees it.
+#[derive(Debug)]
+pub(crate) struct Root {
+    pub(crate) krate: String,
+    /// Target name and kinds, for the message (e.g. `hello [test]`).
+    pub(crate) target: String,
+    /// Path relative to the workspace root.
+    pub(crate) path: String,
+    /// The library root of its crate (`LIB_KINDS`).
+    pub(crate) lib: bool,
+    pub(crate) src: String,
+}
+
+/// The header finding for one target root, if any.
+pub(crate) fn root_finding(r: &Root) -> Option<String> {
+    let (ok, wanted) = match unsafe_rule(&r.krate) {
+        UnsafeRule::SysAllow if r.lib => (
+            header_declares(&r.src, ALLOW_UNSAFE),
+            format!("#![{ALLOW_UNSAFE}] (library root of a secmp-sys-* crate)"),
+        ),
+        UnsafeRule::Forbid | UnsafeRule::SysAllow => (
+            header_declares(&r.src, FORBID_UNSAFE),
+            format!("#![{FORBID_UNSAFE}]"),
+        ),
+        UnsafeRule::UiDeny => (
+            header_declares(&r.src, DENY_UNSAFE) || header_declares(&r.src, FORBID_UNSAFE),
+            format!("#![{DENY_UNSAFE}] (ADR-033)"),
+        ),
+    };
+    (!ok).then(|| {
+        format!(
+            "unsafe-attrs: {} (crate {}, target {}) lacks {wanted} in its inner-attribute header",
+            r.path, r.krate, r.target
+        )
+    })
+}
+
+/// 1-based numbers of the lines on which the keyword `unsafe` occurs as a whole token. The raw text is
+/// scanned — comments and string literals count — so the check fails closed.
+pub(crate) fn unsafe_token_lines(src: &str) -> Vec<usize> {
+    let ident = |c: char| c.is_alphanumeric() || c == '_';
+    let mut out = Vec::new();
+    for (n, line) in src.lines().enumerate() {
+        let hit = line.match_indices("unsafe").any(|(i, m)| {
+            let before = line.get(..i).and_then(|b| b.chars().last());
+            let after = line
+                .get(i.saturating_add(m.len())..)
+                .and_then(|a| a.chars().next());
+            !before.is_some_and(ident) && !after.is_some_and(ident)
+        });
+        if hit {
+            out.push(n.saturating_add(1));
         }
     }
-    Ok(checked)
+    out
+}
+
+/// `unsafe_code` findings for one first-party `.rs` file (`path` relative to the workspace root): every
+/// relaxation of `unsafe_code` except the exact `#![allow(unsafe_code)]` at the top of a `SysAllow` library
+/// root, and — in a `UiDeny` crate — every line holding the token `unsafe`.
+pub(crate) fn unsafe_source_findings(
+    path: &str,
+    src: &str,
+    sys_lib_root: bool,
+    ui: bool,
+) -> Vec<String> {
+    let mut out = Vec::new();
+    for r in find_relaxations(src) {
+        if r.lint != "unsafe_code" {
+            continue;
+        }
+        if sys_lib_root && r.file_top && r.attr == ALLOW_UNSAFE {
+            continue;
+        }
+        out.push(format!(
+            "unsafe-attrs: {path} relaxes `unsafe_code` with `{}` (docs/06 §2: only `#![{ALLOW_UNSAFE}]` at the \
+             library root of secmp-sys-mem/secmp-sys-desktop{})",
+            r.attr,
+            if ui {
+                "; secmp-ui tolerates only the one inside `slint!` expansions, ADR-033"
+            } else {
+                ""
+            }
+        ));
+    }
+    if ui {
+        for n in unsafe_token_lines(src) {
+            out.push(format!(
+                "unsafe-attrs: {path}:{n} contains the token `unsafe` (secmp-ui, ADR-033; comments count too)"
+            ));
+        }
+    }
+    out
+}
+
+/// Counts for the `unsafe-attrs` summary line.
+#[derive(Default)]
+struct UnsafeCounts {
+    forbid: usize,
+    sys_allow: usize,
+    ui_deny: usize,
+    ui_files: usize,
+}
+
+fn check_unsafe_attrs(
+    ws: &Workspace,
+    rs_files: &[PathBuf],
+    findings: &mut Vec<String>,
+) -> Result<UnsafeCounts> {
+    let mut counts = UnsafeCounts::default();
+    for name in expect::UNSAFE_ALLOWED
+        .iter()
+        .chain(expect::UNSAFE_DENY_ONLY)
+    {
+        if ws.member(name).is_none() {
+            findings.push(format!(
+                "unsafe-attrs: {name} is listed in xtask/src/expect.rs but is not a workspace member"
+            ));
+        }
+    }
+    let mut sys_lib_roots = BTreeSet::new();
+    let mut ui_dirs = Vec::new();
+    for p in &ws.members {
+        let rule = unsafe_rule(&p.name);
+        if rule == UnsafeRule::UiDeny
+            && let Some(dir) = p.manifest_path.parent()
+        {
+            ui_dirs.push(format!("{}/", rel(&ws.root, dir)));
+        }
+        let mut has_lib = false;
+        for t in &p.targets {
+            let lib = t.kinds.iter().any(|k| LIB_KINDS.contains(&k.as_str()));
+            has_lib |= lib;
+            let root = Root {
+                krate: p.name.clone(),
+                target: format!("{} [{}]", t.name, t.kinds.join(",")),
+                path: rel(&ws.root, &t.src_path),
+                lib,
+                src: std::fs::read_to_string(&t.src_path)?,
+            };
+            match rule {
+                UnsafeRule::SysAllow if lib => {
+                    counts.sys_allow = counts.sys_allow.saturating_add(1);
+                    sys_lib_roots.insert(root.path.clone());
+                }
+                UnsafeRule::UiDeny => counts.ui_deny = counts.ui_deny.saturating_add(1),
+                UnsafeRule::Forbid | UnsafeRule::SysAllow => {
+                    counts.forbid = counts.forbid.saturating_add(1);
+                }
+            }
+            findings.extend(root_finding(&root));
+        }
+        if rule == UnsafeRule::SysAllow && !has_lib {
+            findings.push(format!(
+                "unsafe-attrs: crate {} has no library root to carry #![{ALLOW_UNSAFE}]",
+                p.name
+            ));
+        }
+    }
+    for f in rs_files {
+        let path = rel(&ws.root, f);
+        let ui = ui_dirs.iter().any(|d| path.starts_with(d.as_str()));
+        if ui {
+            counts.ui_files = counts.ui_files.saturating_add(1);
+        }
+        let src = std::fs::read_to_string(f)?;
+        findings.extend(unsafe_source_findings(
+            &path,
+            &src,
+            sys_lib_roots.contains(&path),
+            ui,
+        ));
+    }
+    Ok(counts)
 }
 
 /// True if a manifest inherits the workspace lints and declares none of its own.
@@ -96,6 +287,8 @@ pub(crate) struct Relaxation {
     pub(crate) lint: String,
     /// True for an inner attribute (`#![...]`) that appears before any item.
     pub(crate) file_top: bool,
+    /// The whole attribute body between the brackets, without whitespace (e.g. `allow(unsafe_code)`).
+    pub(crate) attr: String,
 }
 
 /// Find `allow(...)`, `expect(...)` and `warn(...)` lint lists inside `#[...]`/`#![...]` attributes
@@ -136,10 +329,17 @@ pub(crate) fn find_relaxations(src: &str) -> Vec<Relaxation> {
                 .unwrap_or_default()
                 .iter()
                 .collect();
+            // `body` starts with the opening bracket
+            let attr: String = body
+                .chars()
+                .skip(1)
+                .filter(|c| !c.is_whitespace())
+                .collect();
             for lint in relaxed_lints(&body) {
                 out.push(Relaxation {
                     lint,
                     file_top: inner && !seen_item,
+                    attr: attr.clone(),
                 });
             }
             i = j.saturating_add(1);
@@ -203,6 +403,10 @@ fn check_lint_allows(root: &Path, files: &[PathBuf], findings: &mut Vec<String>)
         let src = std::fs::read_to_string(f)?;
         for r in find_relaxations(&src) {
             count = count.saturating_add(1);
+            if r.lint == "unsafe_code" {
+                // owned by `unsafe-attrs`, which sanctions exactly one form at exactly two crate roots
+                continue;
+            }
             let test_file = path.contains("/tests/")
                 || path.starts_with("tests/")
                 || expect::TEST_FILE_PREFIXES
@@ -373,7 +577,6 @@ pub(crate) fn check_vet_closure(ws: &Workspace) -> Result<String> {
 /// Run every policy check; fail with the full list of findings.
 pub(crate) fn run(ws: &Workspace) -> Result<String> {
     let mut findings = Vec::new();
-    let roots = check_forbid_unsafe(ws, &mut findings)?;
     let mut manifests = 0_usize;
     for p in &ws.members {
         manifests = manifests.saturating_add(1);
@@ -393,6 +596,7 @@ pub(crate) fn run(ws: &Workspace) -> Result<String> {
         .into_iter()
         .flatten()
         .collect();
+    let unsafe_counts = check_unsafe_attrs(ws, &rs_files, &mut findings)?;
     let relaxations = check_lint_allows(&ws.root, &rs_files, &mut findings)?;
     let crates = check_build_scripts(ws, &mut findings);
     let spdx = check_spdx(&ws.root, &mut findings)?;
@@ -406,9 +610,16 @@ pub(crate) fn run(ws: &Workspace) -> Result<String> {
     if !findings.is_empty() {
         bail!("{} policy finding(s)", findings.len());
     }
+    let UnsafeCounts {
+        forbid,
+        sys_allow,
+        ui_deny,
+        ui_files,
+    } = unsafe_counts;
     Ok(format!(
-        "forbid-unsafe: {roots} target roots; lints-table: {manifests} manifests; lint-allows: {relaxations} relaxing attributes \
-         (all sanctioned); build-scripts: {crates} crates, none; spdx: {spdx} files; {}",
+        "unsafe-attrs: {forbid} target roots forbid, {sys_allow} sys library roots allow, {ui_deny} secmp-ui roots deny, \
+         {ui_files} secmp-ui files without `unsafe`; lints-table: {manifests} manifests; lint-allows: {relaxations} \
+         relaxing attributes (all sanctioned); build-scripts: {crates} crates, none; spdx: {spdx} files; {}",
         vet.unwrap_or_default()
     ))
 }
@@ -419,25 +630,22 @@ mod tests {
 
     #[test]
     fn forbid_header_detection() {
-        assert!(header_forbids_unsafe(
+        let forbids = |s: &str| header_declares(s, FORBID_UNSAFE);
+        assert!(forbids(
             "// SPDX\n//! doc\n#![forbid(unsafe_code)]\nfn main() {}\n"
         ));
-        assert!(header_forbids_unsafe(
+        assert!(forbids(
             "#![deny(missing_docs)]\n#![forbid( unsafe_code )]\n"
         ));
         // after an item: not in the header
-        assert!(!header_forbids_unsafe(
-            "fn f() {}\n#![forbid(unsafe_code)]\n"
-        ));
+        assert!(!forbids("fn f() {}\n#![forbid(unsafe_code)]\n"));
         // commented out
-        assert!(!header_forbids_unsafe(
-            "// #![forbid(unsafe_code)]\nfn main() {}\n"
-        ));
+        assert!(!forbids("// #![forbid(unsafe_code)]\nfn main() {}\n"));
         // inside a block comment: fails closed
-        assert!(!header_forbids_unsafe("/*\n#![forbid(unsafe_code)]\n*/\n"));
+        assert!(!forbids("/*\n#![forbid(unsafe_code)]\n*/\n"));
         // weaker attribute
-        assert!(!header_forbids_unsafe("#![deny(unsafe_code)]\n"));
-        assert!(!header_forbids_unsafe(""));
+        assert!(!forbids("#![deny(unsafe_code)]\n"));
+        assert!(!forbids(""));
     }
 
     #[test]
@@ -507,7 +715,8 @@ mod tests {
             r,
             vec![Relaxation {
                 lint: "clippy::unwrap_used".into(),
-                file_top: true
+                file_top: true,
+                attr: src("ALLOW(clippy::unwrap_used)"),
             }]
         );
         let r = find_relaxations(&src("fn f() {}\n#![ALLOW(clippy::unwrap_used)]\n"));
@@ -515,9 +724,161 @@ mod tests {
             r,
             vec![Relaxation {
                 lint: "clippy::unwrap_used".into(),
-                file_top: false
+                file_top: false,
+                attr: src("ALLOW(clippy::unwrap_used)"),
             }]
         );
+    }
+
+    const SYS: &str = "secmp-sys-mem";
+    const UI: &str = "secmp-ui";
+    const PLAIN: &str = "secmp-proto";
+    const FORBID_SRC: &str = "// SPDX\n//! doc\n#![forbid(unsafe_code)]\n";
+    const DENY_SRC: &str = "// SPDX\n//! doc\n#![deny(unsafe_code)]\n";
+
+    fn root(krate: &str, lib: bool, text: &str) -> Root {
+        Root {
+            krate: krate.to_owned(),
+            target: "x [lib]".to_owned(),
+            path: format!("crates/{krate}/src/x.rs"),
+            lib,
+            src: src(text),
+        }
+    }
+
+    #[test]
+    fn rules_follow_expect_lists() {
+        assert_eq!(unsafe_rule("secmp-sys-mem"), UnsafeRule::SysAllow);
+        assert_eq!(unsafe_rule("secmp-sys-desktop"), UnsafeRule::SysAllow);
+        assert_eq!(unsafe_rule("secmp-ui"), UnsafeRule::UiDeny);
+        for c in [
+            "secmp-crypto",
+            "secmp-proto",
+            "secmp-transport",
+            "secmp-store",
+            "secmp-client-core",
+            "secmp-relay",
+            "secmp-cli",
+            "secmp-testkit",
+            "xtask",
+        ] {
+            assert_eq!(unsafe_rule(c), UnsafeRule::Forbid, "{c}");
+        }
+    }
+
+    /// Rule: every other crate carries `#![forbid(unsafe_code)]` in every target root.
+    #[test]
+    fn forbid_rule_rejects_weaker_or_missing_headers() {
+        assert_eq!(root_finding(&root(PLAIN, true, FORBID_SRC)), None);
+        assert_eq!(root_finding(&root(PLAIN, false, FORBID_SRC)), None);
+        for bad in [
+            DENY_SRC,
+            "// SPDX\n#![ALLOW(unsafe_code)]\n",
+            "// SPDX\nfn main() {}\n",
+        ] {
+            assert!(root_finding(&root(PLAIN, true, bad)).is_some(), "{bad}");
+            assert!(root_finding(&root(PLAIN, false, bad)).is_some(), "{bad}");
+        }
+    }
+
+    /// Rule: exactly the library roots of the two sys crates carry `#![allow(unsafe_code)]`.
+    #[test]
+    fn sys_rule_requires_allow_at_the_library_root_only() {
+        let allow = "// SPDX\n//! doc\n#![ALLOW(unsafe_code)]\n";
+        assert_eq!(root_finding(&root(SYS, true, allow)), None);
+        // missing, or a different attribute, at the library root
+        for bad in [
+            FORBID_SRC,
+            DENY_SRC,
+            "// SPDX\n#![EXPECT(unsafe_code)]\n",
+            "// SPDX\n#![cfg_attr(unix, ALLOW(unsafe_code))]\n",
+            "// SPDX\nfn f() {}\n#![ALLOW(unsafe_code)]\n",
+        ] {
+            assert!(root_finding(&root(SYS, true, bad)).is_some(), "{bad}");
+        }
+        // integration tests, benches, examples and binaries of a sys crate still forbid
+        assert_eq!(root_finding(&root(SYS, false, FORBID_SRC)), None);
+        assert!(root_finding(&root(SYS, false, allow)).is_some());
+
+        // sources: the exact form at the library root is the only sanctioned relaxation
+        let lib = "crates/secmp-sys-mem/src/lib.rs";
+        assert!(unsafe_source_findings(lib, &src(allow), true, false).is_empty());
+        let not_root = "crates/secmp-sys-mem/src/ffi.rs";
+        assert_eq!(
+            unsafe_source_findings(not_root, &src(allow), false, false).len(),
+            1
+        );
+        for bad in [
+            "#![EXPECT(unsafe_code)]\n",
+            "#![ALLOW(unsafe_code, reason = \"x\")]\n",
+            "#![cfg_attr(unix, ALLOW(unsafe_code))]\n",
+            "fn f() {}\n#[ALLOW(unsafe_code)]\nfn g() {}\n",
+            "#![WARN(unsafe_code)]\n",
+        ] {
+            assert_eq!(
+                unsafe_source_findings(lib, &src(bad), true, false).len(),
+                1,
+                "{bad}"
+            );
+        }
+        // the same attribute in any other crate's root
+        let other = "crates/secmp-crypto/src/lib.rs";
+        assert_eq!(
+            unsafe_source_findings(other, &src(allow), false, false).len(),
+            1
+        );
+    }
+
+    /// Rule: `secmp-ui` carries `#![deny(unsafe_code)]`, has no `unsafe` token and no hand-written relaxation.
+    #[test]
+    fn ui_rule_requires_deny_and_no_unsafe_token_or_relaxation() {
+        assert_eq!(root_finding(&root(UI, false, DENY_SRC)), None);
+        assert_eq!(root_finding(&root(UI, true, DENY_SRC)), None);
+        // `forbid` is stronger and accepted (e.g. for integration tests that do not use `slint!`)
+        assert_eq!(root_finding(&root(UI, false, FORBID_SRC)), None);
+        assert!(root_finding(&root(UI, false, "// SPDX\nfn main() {}\n")).is_some());
+        assert!(root_finding(&root(UI, false, "#![ALLOW(unsafe_code)]\n")).is_some());
+
+        let path = "crates/secmp-ui/src/main.rs";
+        let clean = "#![deny(unsafe_code)]\n//! no unsafe_code here\nfn main() {}\n";
+        assert!(unsafe_source_findings(path, clean, false, true).is_empty());
+        let token = "#![deny(unsafe_code)]\nfn main() {\n    unsafe { f() }\n}\n";
+        let f = unsafe_source_findings(path, token, false, true);
+        assert_eq!(f.len(), 1);
+        assert!(f.iter().all(|m| m.contains("main.rs:3")), "{f:?}");
+        // comments count too
+        assert_eq!(
+            unsafe_source_findings(path, "// an unsafe block\n", false, true).len(),
+            1
+        );
+        for bad in [
+            "#![ALLOW(unsafe_code)]\n",
+            "#![EXPECT(unsafe_code)]\n",
+            "fn f() {}\n#[ALLOW(unsafe_code)]\nfn g() {}\n",
+            "#[EXPECT(unsafe_code, reason = \"slint\")]\nfn g() {}\n",
+        ] {
+            assert_eq!(
+                unsafe_source_findings(path, &src(bad), false, true).len(),
+                1,
+                "{bad}"
+            );
+        }
+        // the token rule applies to secmp-ui only
+        assert!(
+            unsafe_source_findings("crates/secmp-sys-mem/src/lib.rs", token, true, false)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn unsafe_token_boundaries() {
+        assert_eq!(unsafe_token_lines("unsafe { x }"), vec![1]);
+        assert_eq!(unsafe_token_lines("a\npub unsafe fn f()"), vec![2]);
+        assert_eq!(unsafe_token_lines("x=\"unsafe\";"), vec![1]);
+        assert_eq!(unsafe_token_lines("r#unsafe"), vec![1]);
+        assert!(unsafe_token_lines("#![deny(unsafe_code)]").is_empty());
+        assert!(unsafe_token_lines("not_unsafe unsafely Unsafe UNSAFE").is_empty());
+        assert!(unsafe_token_lines("").is_empty());
     }
 
     #[test]

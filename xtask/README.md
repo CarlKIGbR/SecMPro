@@ -21,8 +21,14 @@ because its inputs disappeared.
 
 ## Policy checks (`policy` step)
 
-* every target root (lib, bin, test, bench, example) of every crate except `secmp-sys-mem`/`secmp-sys-desktop`
-  declares `#![forbid(unsafe_code)]` in its inner-attribute header;
+* `unsafe_code` (docs/06 §2, `src/expect.rs`: `UNSAFE_ALLOWED`, `UNSAFE_DENY_ONLY`): every target root (lib,
+  bin, test, bench, example) declares `#![forbid(unsafe_code)]` in its inner-attribute header, except
+  * the library root of `secmp-sys-mem` and `secmp-sys-desktop`, which declares `#![allow(unsafe_code)]` — the
+    only relaxation of `unsafe_code` allowed anywhere in first-party code (any other `allow`/`expect`/`warn` of
+    `unsafe_code`, a `cfg_attr` form or one on an item is a finding);
+  * the roots of `secmp-ui`, which declare `#![deny(unsafe_code)]` (or `forbid`); the crate's own `.rs` files
+    must contain neither the token `unsafe` (raw text, comments included) nor any relaxation of `unsafe_code`
+    (ADR-033: only `slint!` expansions may carry one);
 * every member manifest contains exactly `[lints] workspace = true`;
 * no `allow`/`expect`/`warn` lint attribute (also inside `cfg_attr`) unless sanctioned by docs/06 §2
   (`src/expect.rs`: `LINT_ALLOWANCES`, test-file rule);

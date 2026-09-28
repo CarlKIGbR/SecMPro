@@ -4,7 +4,7 @@
 //!
 //! * `github` (M0–M8): the `windows-native` job of `.github/workflows/ci.yml` on GitHub-hosted `windows-latest`
 //!   (native MSVC build, clippy, tests, KATs, hello-world binaries) for the **pushed commit** of the current
-//!   branch. By default the run that the push triggered is used (waiting for it if it is still running);
+//!   branch. By default the run that the push triggered is used (waiting for that job if it is still running);
 //!   `--rerun` re-executes that run's `windows-native` job; `--dispatch` starts a new `workflow_dispatch` run
 //!   with `suite=windows` (GitHub only allows this once `ci.yml` exists on the default branch). The job log is
 //!   saved under `target/win-test/`; the command fails unless the job concluded `success`.
@@ -58,8 +58,16 @@ fn runs(branch: &str) -> Result<Vec<Run>> {
     parse_runs(&json)
 }
 
-/// (database id, conclusion) of the named job in `gh run view --json jobs` output.
-pub(crate) fn job(json: &str, name: &str) -> Result<(u64, String)> {
+/// State of one job of a run.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct Job {
+    pub(crate) id: u64,
+    pub(crate) status: String,
+    pub(crate) conclusion: String,
+}
+
+/// The named job in `gh run view --json jobs` output.
+pub(crate) fn job(json: &str, name: &str) -> Result<Job> {
     let v: Value = serde_json::from_str(json).map_err(|e| Error(format!("gh run view: {e}")))?;
     let j = v
         .get("jobs")
@@ -69,16 +77,49 @@ pub(crate) fn job(json: &str, name: &str) -> Result<(u64, String)> {
                 .find(|j| j.get("name").and_then(Value::as_str) == Some(name))
         })
         .ok_or_else(|| Error(format!("job {name} not found in the run")))?;
+    let text = |key: &str| {
+        j.get(key)
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned()
+    };
     let id = j
         .get("databaseId")
         .and_then(Value::as_u64)
         .ok_or_else(|| Error(format!("job {name}: no id")))?;
-    let conclusion = j
-        .get("conclusion")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_owned();
-    Ok((id, conclusion))
+    Ok(Job {
+        id,
+        status: text("status"),
+        conclusion: text("conclusion"),
+    })
+}
+
+fn job_of_run(run: &str) -> Result<Job> {
+    job(
+        &Cmd::new("gh")
+            .args(["run", "view", run, "--json", "jobs"])
+            .read()?,
+        JOB,
+    )
+}
+
+/// Remove ANSI escape sequences (CSI `ESC [ ... letter`) from a log.
+pub(crate) fn strip_ansi(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' && chars.peek() == Some(&'[') {
+            chars.next();
+            for d in chars.by_ref() {
+                if d.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -144,12 +185,7 @@ fn github(branch_arg: Option<&str>, mode: Mode) -> Result<()> {
             let _ = Cmd::new("gh")
                 .args(["run", "watch", &id.to_string(), "--interval", "30"])
                 .run();
-            let (job_id, _) = job(
-                &Cmd::new("gh")
-                    .args(["run", "view", &id.to_string(), "--json", "jobs"])
-                    .read()?,
-                JOB,
-            )?;
+            let job_id = job_of_run(&id.to_string())?.id;
             Cmd::new("gh")
                 .args([
                     "run",
@@ -164,30 +200,47 @@ fn github(branch_arg: Option<&str>, mode: Mode) -> Result<()> {
         }
         (Mode::Existing, Some(id)) => id,
     };
+    collect(id, &branch, &local)
+}
+
+/// Wait for job `windows-native` of run `id`, save its log and fail unless it succeeded.
+fn collect(id: u64, branch: &str, local: &str) -> Result<()> {
     let id_s = id.to_string();
     say(&format!(
-        "win-test: {WORKFLOW} run {id} for {branch} @ {local}"
+        "win-test: {WORKFLOW} run {id} for {branch} @ {local}; waiting for job {JOB}"
     ));
-    let watched = Cmd::new("gh")
-        .args(["run", "watch", &id_s, "--interval", "30"])
-        .run();
-    let (job_id, conclusion) = job(
-        &Cmd::new("gh")
-            .args(["run", "view", &id_s, "--json", "jobs"])
-            .read()?,
-        JOB,
-    )?;
-    let log = Cmd::new("gh")
-        .args(["run", "view", &id_s, "--job", &job_id.to_string(), "--log"])
+    // Wait for the job only (not the whole run): the jobs-log API serves a finished job's log at once.
+    let mut state = job_of_run(&id_s)?;
+    for _ in 0..240 {
+        if state.status == "completed" {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_secs(30));
+        state = job_of_run(&id_s)?;
+    }
+    if state.status != "completed" {
+        bail!(
+            "job {JOB} did not complete within 2 hours (status {:?})",
+            state.status
+        );
+    }
+    let raw = Cmd::new("gh")
+        .args(["api", "--allow-escape-sequences"])
+        .arg(format!(
+            "repos/{{owner}}/{{repo}}/actions/jobs/{}/logs",
+            state.id
+        ))
         .read()?;
+    let log = strip_ansi(&raw);
     let dir = std::path::Path::new("target").join("win-test");
     std::fs::create_dir_all(&dir)?;
-    let path = dir.join(format!("run-{id}-job-{job_id}.log"));
+    let path = dir.join(format!("run-{id}-job-{}.log", state.id));
     std::fs::write(&path, &log)?;
     for line in log.lines() {
         if line.contains("hello-world:")
             || line.contains("Summary [")
             || line.contains("step summary")
+            || line.contains("host: ")
             || line.contains(" PASS ")
             || line.contains(" FAIL ")
         {
@@ -195,12 +248,13 @@ fn github(branch_arg: Option<&str>, mode: Mode) -> Result<()> {
         }
     }
     say(&format!(
-        "win-test: job {JOB} ({job_id}) concluded {conclusion:?}; log: {}",
+        "win-test: job {JOB} ({}) of run {id} concluded {:?}; log: {}",
+        state.id,
+        state.conclusion,
         path.display()
     ));
-    watched?;
-    if conclusion != "success" {
-        bail!("{JOB} concluded {conclusion:?}");
+    if state.conclusion != "success" {
+        bail!("{JOB} concluded {:?}", state.conclusion);
     }
     Ok(())
 }
@@ -255,11 +309,27 @@ mod tests {
 
     #[test]
     fn job_lookup() -> Result<()> {
-        let json = r#"{"jobs":[{"name":"linux-fast","databaseId":1,"conclusion":"success"},
-                               {"name":"windows-native","databaseId":2,"conclusion":"failure"}]}"#;
-        assert_eq!(job(json, "windows-native")?, (2, "failure".to_owned()));
+        let json = r#"{"jobs":[{"name":"linux-fast","databaseId":1,"status":"completed","conclusion":"success"},
+                               {"name":"windows-native","databaseId":2,"status":"completed","conclusion":"failure"}]}"#;
+        assert_eq!(
+            job(json, "windows-native")?,
+            Job {
+                id: 2,
+                status: "completed".into(),
+                conclusion: "failure".into()
+            }
+        );
         assert!(job(json, "nope").is_err());
         Ok(())
+    }
+
+    #[test]
+    fn ansi_is_stripped() {
+        assert_eq!(
+            strip_ansi("\u{1b}[1m\u{1b}[92m   Compiling\u{1b}[0m x"),
+            "   Compiling x"
+        );
+        assert_eq!(strip_ansi("plain"), "plain");
     }
 
     #[test]

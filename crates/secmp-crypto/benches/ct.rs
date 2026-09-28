@@ -32,7 +32,8 @@ use std::process::ExitCode;
 use std::time::Instant;
 
 use secmp_crypto::{BODY_LEN, Caead, Fingerprint, MsgEncrypt, Nonce24, SafetyNumber, SecretBytes};
-use shake::{ExtendableOutput, Shake256, Update, XofReader};
+use sha3::Shake256;
+use sha3::digest::{ExtendableOutput, Update, XofReader};
 use subtle::ConstantTimeEq;
 
 /// |t| threshold of dudect.
@@ -76,7 +77,7 @@ impl Stats {
 }
 
 /// A deterministic byte stream for classes and random inputs, seeded from the OS CSPRNG.
-struct Stream(shake::Shake256Reader);
+struct Stream(sha3::Shake256Reader);
 
 impl Stream {
     fn new() -> Result<Self, secmp_crypto::Error> {

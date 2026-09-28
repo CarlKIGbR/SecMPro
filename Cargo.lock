@@ -855,7 +855,6 @@ dependencies = [
  "serde_json",
  "sha2",
  "sha3",
- "shake",
  "subtle",
  "x25519-dalek",
  "zeroize",
@@ -894,7 +893,7 @@ dependencies = [
  "ml-kem",
  "secmp-crypto",
  "serde_json",
- "shake",
+ "sha3",
 ]
 
 [[package]]

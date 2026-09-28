@@ -592,7 +592,7 @@ criteria = "safe-to-deploy"
 trusted-publisher = "github:RustCrypto/XOFs"
 start = "2026-05-15"
 end = "2027-09-28"
-notes = "Publisher trust (ADR-036 (2), docs/06 §3): RustCrypto trusted-publishing identity (GitHub Actions of the RustCrypto/XOFs repository) for shake, used by ml-dsa (ADR-023) and the vector seed derivation. Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
+notes = "Publisher trust (ADR-036 (2), docs/06 §3): RustCrypto trusted-publishing identity (GitHub Actions of the RustCrypto/XOFs repository) for shake, a normal dependency of ml-dsa (ADR-023); not a direct dependency (the vector seed streams use sha3::Shake256, M1 review note). Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
 
 [[trusted.signature]]
 criteria = "safe-to-deploy"

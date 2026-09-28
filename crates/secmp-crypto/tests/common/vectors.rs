@@ -10,7 +10,8 @@
 //! stream with row r's shape (reviewer-confirmed reading 1, `docs/reviews/ref-spec-questions-M1.md`).
 
 use serde_json::{Map, Value, json};
-use shake::{ExtendableOutput, Shake256, Update, XofReader};
+use sha3::Shake256;
+use sha3::digest::{ExtendableOutput, Update, XofReader};
 
 use secmp_crypto::{
     Caead, Ed25519SigningKey, Error, Fingerprint, HybridKem768Ciphertext, HybridKem768PublicKey,
@@ -42,7 +43,7 @@ pub fn hex(b: &[u8]) -> String {
 }
 
 /// The per-case input stream of SCHEMA §2.
-pub struct Stream(shake::Shake256Reader);
+pub struct Stream(sha3::Shake256Reader);
 
 impl Stream {
     /// `stream_i` of `suite`.

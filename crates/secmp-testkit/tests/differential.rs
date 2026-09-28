@@ -25,7 +25,8 @@ use secmp_crypto::{
     Ed25519SigningKey, Ed25519VerifyingKey, MlDsa65SigningKey, MlDsa65VerifyingKey, SecretBytes,
 };
 use secmp_testkit::kat::{decode_hex, to_hex};
-use shake::{ExtendableOutput, Shake256, Update, XofReader};
+use sha3::Shake256;
+use sha3::digest::{ExtendableOutput, Update, XofReader};
 
 const DEFAULT_ITERATIONS: u32 = 10_000;
 

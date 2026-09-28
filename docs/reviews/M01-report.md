@@ -127,9 +127,14 @@ Direct dependencies (all `=`-pinned, ADR-023/ADR-037; vet per ADR-036):
 | `libc` | 0.2.189 | `secmp-sys-mem` (unix) | 037 | trust `rust-lang-owner` (M0 rule) |
 | `windows-sys` | 0.61.2 | `secmp-sys-mem` (windows) | 037 | trust `kennykerr` (M0 rule) |
 | `ml-kem` 0.3.2, `aws-lc-rs` 1.18.1 | — | dev `secmp-testkit` | 023, 037 | trust `tarcieri`/`github:RustCrypto/KEMs`; `justsmth` |
-| `shake` | 0.1.0 | dev `secmp-crypto`, `secmp-testkit` | 037 | trust `github:RustCrypto/XOFs` |
+| `sha3` 0.11.0 | — | dev `secmp-testkit` (already a normal dependency of `secmp-crypto`) | 037 | trust RustCrypto accounts |
 | `serde_json` | 1.0.151 | `secmp-testkit`; dev `secmp-crypto` | 031, 037 | trust `dtolnay` |
 | `libfuzzer-sys` 0.4.13 (+ `arbitrary` 1.4.2) | — | `fuzz/` only | 037 | outside the workspace graph; cooldown checked |
+
+`shake` 0.1.0 was a direct dev-dependency for the SHAKE-256 seed streams until the reviewer's note of 2026-09-28
+(brief M1-2 C); the streams now use `sha3::Shake256` (same bytes: the frozen vectors re-generate identically). The
+crate is no longer a direct dependency but remains in the normal closure as a dependency of `ml-dsa 0.1.1`, so its
+trust record (`github:RustCrypto/XOFs`) stays; `Cargo.lock` lost only the two dev edges.
 
 **Every trust record** (`supply-chain/audits.toml`, all `safe-to-deploy`, `end = 2027-09-28`):
 

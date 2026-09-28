@@ -34,7 +34,6 @@ getrandom.workspace = true
 # live in secmp-testkit).
 [dev-dependencies]
 secmp-testkit.workspace = true
-shake.workspace = true
 serde_json.workspace = true
 
 [[example]]

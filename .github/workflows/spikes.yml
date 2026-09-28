@@ -61,8 +61,8 @@ jobs:
           persist-credentials: false
       - name: Pinned toolchain
         run: rustup toolchain install && rustc -vV
-      - name: Packages (LLVM for cargo-xwin; fontconfig/xkbcommon for Slint)
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends clang lld llvm libfontconfig1-dev libxkbcommon-dev
+      - name: Packages (LLVM for cargo-xwin; NASM for aws-lc-sys on x86_64 Windows; fontconfig/xkbcommon for Slint)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends clang lld llvm nasm libfontconfig1-dev libxkbcommon-dev && nasm -v
       - name: Install cargo-xwin (pinned)
         run: cargo xtask install-tools --set xwin
       - name: "(a) SQLCipher: native Linux build and run"

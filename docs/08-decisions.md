@@ -141,7 +141,8 @@ Format: MADR-style, one entry per decision, numbered, never deleted (superseded 
 ### ADR-027 — Local store: SQLCipher primary, sealed-column SQLite fallback
 **Context.** SQLCipher needs an OpenSSL backend; cross-compiling it to `x86_64-pc-windows-msvc` with cargo-xwin is unproven for this project.
 **Decision.** M0 spikes the SQLCipher build. If it fails or cannot be made reproducible, the store uses plain SQLite (bundled) with **every** column sealed by `CAEAD` under per-table keys (CS-3.3), fixed-size dummy padding of rows, and no plaintext metadata beyond table names and row counts; the decision is recorded here at M0.
-**Status.** Proposed (resolved at M0).
+**M0 outcome 2026-09-28 (spike (a), `docs/reviews/M0-spikes.md`; rule of Amendment A1 §4: fallback only if the native Windows build fails).** `rusqlite` 0.40.2 `bundled-sqlcipher-vendored-openssl` (SQLCipher 4.14.0, OpenSSL 3.6.3) builds and runs natively on `windows-latest`, Linux and macOS → **SQLCipher remains primary; the fallback is not triggered.** The cargo-xwin cross-build to `x86_64-pc-windows-msvc` fails (OpenSSL's `VC-WIN64A` configuration requires a Windows perl and `nmake`), so the Windows release-build route and its reproducibility are open questions for M11 (options listed in the spike record).
+**Status.** Proposed (M0 outcome recorded; reviewer approval pending; build route open until M11).
 
 ### ADR-028 — Relay identity distribution: `RelayInfo` per link, access-key commitment
 **Context.** A relay that could hand each client a different static key or access key would link all of that client's links or identify it by token.

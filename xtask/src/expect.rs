@@ -67,6 +67,21 @@ pub(crate) const MIRI_PACKAGES: &[&str] = &["secmp-sys-mem", "secmp-sys-desktop"
 /// SIMD intrinsics). `secmp-sys-mem` uses its heap backend under Miri on every target.
 pub(crate) const MIRI_TARGET: &str = "aarch64-unknown-linux-gnu";
 
+/// Test-name filters excluded from the Miri run only (docs/06 §4: "under Miri (where feasible)"), as (filter,
+/// reason). The tests still run natively on every target. Measured M1 (macOS arm64, nightly-2026-09-21): one
+/// ML-DSA-65 test takes about 25 minutes under Miri, the two modules together several hours.
+pub(crate) const MIRI_SKIP: &[(&str, &str)] = &[
+    (
+        "mldsa::",
+        "ML-DSA-65 key generation and signing take ~25 min per test under Miri",
+    ),
+    ("hybrid_sign::", "HybridSign runs ML-DSA-65 (as above)"),
+    (
+        "sas::",
+        "5200 SHA-256 iterations per half take ~10 min per test under Miri; SHA-256 itself runs under Miri in hash::",
+    ),
+];
+
 /// Packages containing Kani harnesses (docs/06 §4). M2 adds `secmp-proto`.
 pub(crate) const KANI_PACKAGES: &[&str] = &[];
 

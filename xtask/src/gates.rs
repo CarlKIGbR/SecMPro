@@ -500,12 +500,21 @@ pub(crate) fn miri(ctx: &Ctx) -> Result<Outcome> {
     for p in expect::MIRI_PACKAGES {
         c = c.args(["--package", p]);
     }
+    c = c.arg("--");
+    for (filter, _) in expect::MIRI_SKIP {
+        c = c.args(["--skip", filter]);
+    }
     c.run()?;
     Ok(Outcome::Pass(format!(
-        "Miri ({}, interpreting {}, libcrux portable backend): {}",
+        "Miri ({}, interpreting {}, libcrux portable backend): {}; skipped test modules: {}",
         tools::NIGHTLY,
         expect::MIRI_TARGET,
-        expect::MIRI_PACKAGES.join(", ")
+        expect::MIRI_PACKAGES.join(", "),
+        expect::MIRI_SKIP
+            .iter()
+            .map(|(f, _)| *f)
+            .collect::<Vec<_>>()
+            .join(", ")
     )))
 }
 

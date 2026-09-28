@@ -104,7 +104,13 @@ fn chacha20_stream_from_wycheproof_aead_cases() {
         );
         tally.check();
     }
-    assert!(tally.checked >= 200, "{}", tally.summary("chacha20 stream"));
+    // 325 cases, 256 of them valid with a 96-bit nonce
+    assert_eq!(
+        (tally.checked, tally.skipped.len()),
+        (256, 69),
+        "{}",
+        tally.summary("chacha20 stream")
+    );
 }
 
 /// RFC 8439 A.1 test vector #1: block 0 of the all-zero key and nonce — the counter `MsgEncrypt` starts at.

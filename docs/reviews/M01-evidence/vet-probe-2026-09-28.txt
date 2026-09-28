@@ -1,0 +1,158 @@
+# M1 supply-chain probe, 2026-09-28 (scratch crate outside the repository; nothing added to the workspace)
+
+## Probe dependencies (candidate pins, all features default)
+[dependencies]
+libcrux-ml-kem = "=0.0.10"
+ml-kem = "=0.3.2"
+ml-dsa = "=0.1.1"
+aws-lc-rs = "=1.18.1"
+x25519-dalek = "=3.0.0"
+ed25519-dalek = "=3.0.0"
+curve25519-dalek = "=5.0.0"
+chacha20 = "=0.10.2"
+chacha20poly1305 = "=0.11.0"
+hmac = "=0.13.0"
+hkdf = "=0.13.0"
+sha2 = "=0.11.0"
+sha3 = "=0.11.0"
+subtle = "=2.6.1"
+zeroize = "=1.9.0"
+getrandom = "=0.4.3"
+rand_core = "=0.10.1"
+
+## cargo deny --locked check (repository deny.toml)
+sha3 =0.12.0: error[duplicate] sha3 0.11.0 (ml-kem 0.3.2) + 0.12.0 -> bans FAILED
+sha3 =0.11.0: advisories ok, bans ok, licenses ok, sources ok
+
+## cargo vet suggest with the five imports + existing trust (dtolnay, BurntSushi)
+ cargo vet diff rand_core 0.10.0 0.10.1 github:rust-random/rand_core kem, rand, probe, ml-kem, and 5 others 4 files changed, 14 insertions(+), 5 deletions(-)
+ cargo vet diff cfg-if 1.0.4 1.0.5 rust-lang-owner sha2, js-sys, keccak, and 5 others 7 files changed, 20 insertions(+), 5 deletions(-)
+ NOTE: isrg, mozilla, and bytecode-alliance trust rust-lang-owner - consider cargo vet trust cfg-if rust-lang-owner
+ cargo vet diff futures-core 0.3.31 0.3.34 taiki-e futures-util 4 files changed, 17 insertions(+), 11 deletions(-)
+ NOTE: cargo vet import ariel-os would reduce this to a 4-line diff
+ cargo vet diff rustversion 1.0.22 1.0.23 dtolnay wasm-bindgen 5 files changed, 19 insertions(+), 13 deletions(-)
+ NOTE: this project trusts David Tolnay (dtolnay) - consider cargo vet trust rustversion or cargo vet trust --all dtolnay
+ cargo vet diff autocfg 1.5.0 1.5.1 cuviper num-traits 5 files changed, 50 insertions(+), 21 deletions(-)
+ NOTE: isrg, mozilla, and bytecode-alliance trust Josh Stone (cuviper) - consider cargo vet trust autocfg or cargo vet trust --all cuviper
+ cargo vet diff rustc-hash 2.1.1 2.1.3 Noratrieb bindgen 5 files changed, 52 insertions(+), 28 deletions(-)
+ cargo vet diff glob 0.3.3 0.3.4 rust-lang-owner clang-sys 8 files changed, 64 insertions(+), 57 deletions(-)
+ NOTE: isrg, mozilla, and bytecode-alliance trust rust-lang-owner - consider cargo vet trust glob rust-lang-owner
+ cargo vet diff num-integer 0.1.46 0.1.47 cuviper num-bigint 6 files changed, 100 insertions(+), 24 deletions(-)
+ NOTE: isrg, mozilla, and bytecode-alliance trust Josh Stone (cuviper) - consider cargo vet trust num-integer or cargo vet trust --all cuviper
+ cargo vet diff pkg-config 0.3.32 0.3.34 sdroege crabgrind and aws-lc-sys 8 files changed, 110 insertions(+), 92 deletions(-)
+ cargo vet diff universal-hash 0.5.1 0.6.1 github:RustCrypto/traits poly1305 6 files changed, 110 insertions(+), 99 deletions(-)
+ cargo vet diff regex-syntax 0.8.5 0.8.11 BurntSushi regex and regex-automata 16 files changed, 144 insertions(+), 112 deletions(-)
+ NOTE: this project trusts Andrew Gallant (BurntSushi) - consider cargo vet trust regex-syntax or cargo vet trust --all BurntSushi
+ cargo vet inspect hax-lib-macros-types 0.3.7 maximebuyse hax-lib-macros 276 lines
+ cargo vet diff pin-project-lite 0.2.16 0.2.17 github:taiki-e/pin-project-lite futures-util 19 files changed, 145 insertions(+), 147 deletions(-)
+ cargo vet diff slab 0.4.8 0.4.12 Darksonn futures-util 7 files changed, 256 insertions(+), 90 deletions(-)
+ NOTE: cargo vet import ariel-os would reduce this to a 55-line diff
+ NOTE: mozilla and bytecode-alliance trust Alice Ryhl (Darksonn) - consider cargo vet trust slab Darksonn
+ cargo vet diff chacha20 0.10.0 0.10.2 github:RustCrypto/stream-ciphers rand, probe, and chacha20poly1305 13 files changed, 191 insertions(+), 207 deletions(-)
+ cargo vet diff log 0.4.29 0.4.34 KodrAus bindgen 11 files changed, 368 insertions(+), 67 deletions(-)
+ cargo vet inspect wasm-bindgen-macro 0.2.129 github:wasm-bindgen/wasm-bindgen wasm-bindgen 449 lines
+ NOTE: isrg, mozilla, and bytecode-alliance trust Alex Crichton (alexcrichton), who published another version of this crate - consider cargo vet trust wasm-bindgen-macro alexcrichton
+ cargo vet inspect kem 0.3.0 github:RustCrypto/traits ml-kem 480 lines
+ cargo vet diff either 1.16.0 1.18.0 cuviper itertools 9 files changed, 264 insertions(+), 242 deletions(-)
+ NOTE: isrg, mozilla, and bytecode-alliance trust Josh Stone (cuviper) - consider cargo vet trust either cuviper
+ cargo vet diff rand 0.10.1 0.10.3 github:rust-random/rand core-models, libcrux-ml-kem, and 1 other 19 files changed, 404 insertions(+), 135 deletions(-)
+ cargo vet diff wasm-bindgen-shared 0.2.92 0.2.129 github:wasm-bindgen/wasm-bindgen wasm-bindgen and wasm-bindgen-macro-support 7 files changed, 506 insertions(+), 36 deletions(-)
+ NOTE: isrg, mozilla, and bytecode-alliance trust Alex Crichton (alexcrichton), who published another version of this crate - consider cargo vet trust wasm-bindgen-shared alexcrichton
+ cargo vet inspect libcrux-platform 0.0.3 jschneider-bensch libcrux-sha3 and libcrux-ml-kem 622 lines
+ cargo vet diff cmake 0.1.49 0.1.58 rust-lang-owner aws-lc-sys 8 files changed, 477 insertions(+), 147 deletions(-)
+ NOTE: isrg, mozilla, and bytecode-alliance trust rust-lang-owner - consider cargo vet trust cmake rust-lang-owner
+ cargo vet inspect shake 0.1.0 github:RustCrypto/XOFs ml-dsa 695 lines
+ cargo vet diff bitflags 2.11.1 2.13.2 KodrAus bindgen 12 files changed, 641 insertions(+), 92 deletions(-)
+ cargo vet diff zeroize 1.8.2 1.9.0 github:RustCrypto/utils der, probe, aws-lc-rs, and 4 others 13 files changed, 590 insertions(+), 208 deletions(-)
+ cargo vet inspect curve25519-dalek-derive 0.1.0 rozbb curve25519-dalek 861 lines
+ cargo vet inspect sponge-cursor 0.1.0 github:RustCrypto/utils shake 916 lines
+ cargo vet diff crypto-common 0.1.6 0.2.2 github:RustCrypto/traits kem, aead, cipher, digest, and 2 others 8 files changed, 791 insertions(+), 137 deletions(-)
+ cargo vet diff signature 2.2.0 3.0.0 github:RustCrypto/traits ml-dsa and ed25519 12 files changed, 649 insertions(+), 451 deletions(-)
+ cargo vet diff pastey 0.2.1 0.2.3 AS1100K core-models 8 files changed, 1127 insertions(+), 28 deletions(-)
+ cargo vet inspect futures-task 0.3.34 taiki-e futures-util 1162 lines
+ cargo vet diff libloading 0.9.0 0.8.9 nagisa clang-sys 16 files changed, 275 insertions(+), 907 deletions(-)
+ cargo vet inspect hkdf 0.13.0 github:RustCrypto/KDFs probe 1219 lines
+ cargo vet diff block-buffer 0.10.4 0.12.1 github:RustCrypto/utils cipher and digest 9 files changed, 964 insertions(+), 281 deletions(-)
+ cargo vet diff hmac 0.12.1 0.13.0 github:RustCrypto/MACs hkdf and probe 22 files changed, 685 insertions(+), 569 deletions(-)
+ cargo vet inspect x25519-dalek 3.0.0 rozbb probe 1283 lines
+ cargo vet inspect chacha20poly1305 0.11.0 tarcieri probe 1338 lines
+ cargo vet inspect cpufeatures 0.3.1 tarcieri sha2, keccak, chacha20, and 2 others 1387 lines
+ cargo vet inspect aead 0.6.1 github:RustCrypto/traits chacha20poly1305 1488 lines
+ cargo vet diff sha3 0.10.8 0.11.0 github:RustCrypto/hashes probe and ml-kem 40 files changed, 547 insertions(+), 1121 deletions(-)
+ cargo vet diff num-bigint 0.4.5 0.4.8 cuviper hax-lib 29 files changed, 1277 insertions(+), 530 deletions(-)
+ NOTE: isrg, mozilla, and bytecode-alliance trust Josh Stone (cuviper) - consider cargo vet trust num-bigint or cargo vet trust --all cuviper
+ cargo vet diff keccak 0.1.6 0.2.2 github:RustCrypto/sponges sha3 and shake 17 files changed, 1033 insertions(+), 790 deletions(-)
+ cargo vet inspect spki 0.8.0 github:RustCrypto/formats pkcs8 1828 lines
+ cargo vet inspect libcrux-secrets 0.0.6 jschneider-bensch libcrux-ml-kem and libcrux-traits 1835 lines
+ cargo vet inspect ed25519 3.0.0 github:RustCrypto/signatures ed25519-dalek 1863 lines
+ cargo vet inspect module-lattice 0.2.3 github:RustCrypto/KEMs ml-dsa and ml-kem 2407 lines
+ cargo vet inspect hax-lib-macros 0.3.7 maximebuyse hax-lib 2490 lines
+ cargo vet inspect pkcs8 0.11.0 github:RustCrypto/formats ml-dsa and ml-kem 2643 lines
+ cargo vet inspect libcrux-intrinsics 0.0.8 jschneider-bensch libcrux-sha3 and libcrux-ml-kem 2687 lines
+ cargo vet diff sha2 0.10.9 0.11.0 github:RustCrypto/hashes probe and ed25519-dalek 51 files changed, 1885 insertions(+), 975 deletions(-)
+ cargo vet diff libcrux-traits 0.0.3 0.0.8 jschneider-bensch libcrux-sha3 and libcrux-ml-kem 28 files changed, 2823 insertions(+), 51 deletions(-)
+ cargo vet inspect cmov 0.5.4 github:RustCrypto/utils ctutils 2904 lines
+ cargo vet inspect jobserver 0.1.35 rust-lang-owner cc 2969 lines
+ NOTE: isrg, mozilla, and bytecode-alliance trust rust-lang-owner - consider cargo vet trust jobserver rust-lang-owner
+ cargo vet inspect find-msvc-tools 0.1.14 github:rust-lang/cc-rs cc 3164 lines
+ NOTE: isrg, mozilla, and bytecode-alliance trust Josh Stone (cuviper), who published another version of this crate - consider cargo vet trust find-msvc-tools cuviper
+ cargo vet diff cipher 0.4.4 0.5.2 github:RustCrypto/traits chacha20 and chacha20poly1305 25 files changed, 2186 insertions(+), 1378 deletions(-)
+ cargo vet inspect tls_codec_derive 0.5.0 franziskuskiefer tls_codec 3577 lines
+ cargo vet inspect base64ct 1.8.3 tarcieri spki 3651 lines
+ cargo vet inspect poly1305 0.9.1 github:RustCrypto/universal-hashes chacha20poly1305 3673 lines
+ cargo vet inspect core-models 0.0.7 jschneider-bensch libcrux-intrinsics 3688 lines
+ cargo vet inspect digest 0.11.3 github:RustCrypto/traits hmac, sha2, sha3, shake, and 2 others 3747 lines
+ cargo vet inspect ml-kem 0.3.2 github:RustCrypto/KEMs probe 3895 lines
+ cargo vet inspect once_cell 1.12.0 matklad wasm-bindgen 3974 lines
+ cargo vet inspect ctutils 0.4.2 github:RustCrypto/utils digest, ml-dsa, hybrid-array, and 2 others 4103 lines
+ cargo vet inspect crabgrind 0.2.6 2dav libcrux-secrets 4626 lines
+ cargo vet inspect getrandom 0.4.3 github:rust-random/getrandom rand, uuid, probe, jobserver, and 1 other 4636 lines
+ cargo vet inspect hybrid-array 0.4.15 github:RustCrypto/hybrid-array inout, ml-dsa, ml-kem, and 3 others 4817 lines
+ cargo vet inspect ml-dsa 0.1.1 github:RustCrypto/signatures probe 4899 lines
+ cargo vet inspect tls_codec 0.5.0 franziskuskiefer libcrux-ml-kem 5321 lines
+ cargo vet inspect ed25519-dalek 3.0.0 rozbb probe 5426 lines
+ cargo vet inspect libcrux-sha3 0.0.10 jschneider-bensch libcrux-ml-kem 5843 lines
+ cargo vet inspect clang-sys 1.9.1 madsmtm bindgen 5941 lines
+ cargo vet inspect const-oid 0.10.2 tarcieri der, digest, and ml-dsa 7987 lines
+ cargo vet inspect minimal-lexical 0.2.1 Alexhuszagh nom 8787 lines
+ cargo vet inspect wasm-bindgen 0.2.129 github:wasm-bindgen/wasm-bindgen uuid and js-sys 8893 lines
+ NOTE: isrg, mozilla, and bytecode-alliance trust Alex Crichton (alexcrichton), who published another version of this crate - consider cargo vet trust wasm-bindgen alexcrichton
+ cargo vet inspect r-efi 6.0.0 dvdhrm getrandom 9953 lines
+ cargo vet inspect uuid 1.26.1 KodrAus hax-lib-macros-types 10053 lines
+ cargo vet diff der 0.7.10 0.8.2 github:RustCrypto/formats spki and pkcs8 72 files changed, 7395 insertions(+), 2974 deletions(-)
+ cargo vet inspect prettyplease 0.2.37 dtolnay bindgen 11544 lines
+ NOTE: this project trusts David Tolnay (dtolnay) - consider cargo vet trust prettyplease or cargo vet trust --all dtolnay
+ cargo vet diff wasm-bindgen-macro-support 0.2.92 0.2.129
+ NOTE: isrg, mozilla, and bytecode-alliance trust Alex Crichton (alexcrichton), who published another version of this crate - consider cargo vet trust wasm-bindgen-macro-support alexcrichton
+ cargo vet diff cc 1.2.5 1.5.1 github:rust-lang/cc-rs cmake, crabgrind, and aws-lc-sys 34 files changed, 4882 insertions(+), 7223 deletions(-)
+ NOTE: isrg, mozilla, and bytecode-alliance trust rust-lang-owner, who published another version of this crate - consider cargo vet trust cc rust-lang-owner
+ cargo vet inspect fs_extra 1.3.0 webdesus aws-lc-sys 12715 lines
+ cargo vet inspect js-sys 0.3.106 github:wasm-bindgen/wasm-bindgen uuid 19473 lines
+ NOTE: isrg, mozilla, and bytecode-alliance trust Alex Crichton (alexcrichton), who published another version of this crate - consider cargo vet trust js-sys alexcrichton
+ cargo vet inspect libcrux-ml-kem 0.0.10 jschneider-bensch probe 21578 lines
+ cargo vet inspect regex 1.13.1 BurntSushi bindgen 22188 lines
+ NOTE: this project trusts Andrew Gallant (BurntSushi) - consider cargo vet trust regex or cargo vet trust --all BurntSushi
+ cargo vet inspect aho-corasick 1.1.5 BurntSushi regex and regex-automata 22375 lines
+ NOTE: this project trusts Andrew Gallant (BurntSushi) - consider cargo vet trust aho-corasick or cargo vet trust --all BurntSushi
+ cargo vet inspect itertools 0.13.0 jswrenn bindgen 22757 lines
+ cargo vet inspect futures-util 0.3.34 taiki-e js-sys 26835 lines
+ cargo vet inspect aws-lc-rs 1.18.1 justsmth probe 34006 lines
+ cargo vet inspect curve25519-dalek 5.0.0 rozbb probe, x25519-dalek, and ed25519-dalek 38745 lines
+ cargo vet inspect typenum 1.20.1 paholg hybrid-array 41159 lines
+ cargo vet inspect hax-lib 0.3.7 maximebuyse core-models, libcrux-sha3, and 3 others 51567 lines
+ cargo vet inspect regex-automata 0.4.18 BurntSushi regex 69141 lines
+ NOTE: this project trusts Andrew Gallant (BurntSushi) - consider cargo vet trust regex-automata or cargo vet trust --all BurntSushi
+ cargo vet inspect libc 0.2.189 rust-lang-owner cc, clang-sys, getrandom, and 3 others 133279 lines
+ NOTE: isrg, mozilla, and bytecode-alliance trust rust-lang-owner - consider cargo vet trust libc rust-lang-owner
+ cargo vet inspect aws-lc-sys 0.45.0 justsmth aws-lc-rs 2117524 lines
+estimated audit backlog: 2861365 lines
+
+## Production-only graph (without aws-lc-rs, ml-kem): estimated audit backlog: 689152 lines
+
+## Simulation (scratch copy only)
+(a) trust publishers trusted by >= 2 imported sets: dtolnay, BurntSushi, cuviper, rust-lang-owner, alexcrichton (--allow-multiple-publishers): backlog 2581124 lines, 81 crates
+(b) + trust primitive maintainers: tarcieri rozbb jschneider-bensch franziskuskiefer justsmth github:RustCrypto/{KEMs,signatures,traits,utils,formats,KDFs,universal-hashes,XOFs,hybrid-array,hashes,MACs,stream-ciphers} github:rust-random/{getrandom,rand} github:rust-lang/cc-rs github:wasm-bindgen/wasm-bindgen: backlog 206477 lines, 26 crates:
+   in the runtime (normal-dependency) closure on x86_64 Linux/Windows + aarch64-apple-darwin: rand_core (delta 0.10.0->0.10.1), keccak (delta 0.2.0-rc.1->0.2.2), hax-lib + hax-lib-macros (delta 0.1.0-rc.1->0.3.7), typenum 1.20.1 (full, 41159 lines)
+   build/proc-macro/test/other-platform only: futures-core hax-lib-macros-types rustc-hash pkg-config pin-project-lite slab log either bitflags pastey futures-task libloading once_cell crabgrind clang-sys minimal-lexical r-efi uuid fs_extra itertools futures-util
+
+## Other registry audit sets (actix, ariel-os, embark-studios, fermyon): no entries for curve25519-dalek, ed25519-dalek, x25519-dalek, libcrux-ml-kem, ml-kem, ml-dsa, aws-lc-rs, aws-lc-sys, hkdf, chacha20poly1305, sha2, hmac, chacha20

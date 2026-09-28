@@ -22,3 +22,9 @@ All notable changes to this project are documented in this file. The format foll
   cargo-xwin cross-build, nightly `ci-full`.
 - `LICENSE` (AGPL-3.0-or-later), `SECURITY.md`, ADR-029 to ADR-032, owner decisions OQ-1, OQ-2, OQ-3 and OQ-17
   recorded.
+- M0 build spikes (`docs/reviews/M0-spikes.md`): SQLCipher with vendored OpenSSL builds and runs natively on
+  Windows, Linux and macOS but does not cross-build with cargo-xwin (ADR-027: SQLCipher stays primary); aws-lc-rs
+  builds natively everywhere and cross-builds with cargo-xwin when NASM is present; a Slint hello-world window
+  opens on macOS and compiles for Linux and Windows (`slint!` conflicts with `#![forbid(unsafe_code)]`, reported
+  for M8).
+- M0 milestone report with evidence (`docs/reviews/M00-report.md`, `docs/reviews/M00-evidence/`).

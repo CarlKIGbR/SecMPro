@@ -1,0 +1,14 @@
+# cargo deny --locked check (cargo-deny 0.20.2), commit 58dc402
+   1 advisories ok, bans ok, licenses ok, sources ok
+   1 warning[license-exception-not-encountered]: license exception was not encountered
+   7 warning[license-not-encountered]: license was not encountered
+
+# cargo vet --locked (cargo-vet 0.10.2)
+Vetting Succeeded (1 fully audited, 10 exempted)
+
+# cargo tree -p secmp-crypto -p secmp-proto -e all (closure)
+secmp-crypto v0.0.0 (~/coding/claude_code/SecMPro/crates/secmp-crypto)
+secmp-proto v0.0.0 (~/coding/claude_code/SecMPro/crates/secmp-proto)
+
+# exemptions in supply-chain/config.toml
+10

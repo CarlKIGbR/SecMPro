@@ -28,7 +28,8 @@ because its inputs disappeared.
   (`src/expect.rs`: `LINT_ALLOWANCES`, test-file rule);
 * no build scripts in workspace crates; SPDX headers on every first-party source file;
 * workflows: no `pull_request_target`/`workflow_run`, every action pinned by a full commit SHA,
-  `continue-on-error` only in the jobs of `CONTINUE_ON_ERROR_JOBS`;
+  `continue-on-error` only in the jobs of `CONTINUE_ON_ERROR_JOBS`, no plain-scalar `run:` value containing `: `
+  or ` #` (invalid YAML that GitHub rejects without running any job);
 * cargo-vet: every exemption carries a tracked-exemption note, and none lies in the `secmp-crypto`/`secmp-proto`
   closure.
 

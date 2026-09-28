@@ -1,0 +1,51 @@
+# cargo xtask win-test --backend github  (macOS host, 2026-09-28T17:53Z)
+# run 36461122501, job windows-native 109059632373, commit 58dc402, https://github.com/CarlKIGbR/SecMPro/actions/runs/36461122501
+
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.11s
+     Running `target/debug/xtask win-test --backend github`
+win-test: ci.yml run 36461122501 for m00-bootstrap @ 58dc40222088ceb391cbefd0493a0019157743a9; waiting for job windows-native
+2026-09-28T17:52:14.1686397Z host: x86_64-pc-windows-msvc
+2026-09-28T17:52:41.7862505Z         PASS [   0.020s] ( 1/32) secmp-relay::hello prints_banner_and_exits_successfully
+2026-09-28T17:52:41.7863623Z         PASS [   0.022s] ( 2/32) secmp-cli::hello prints_banner_and_exits_successfully
+2026-09-28T17:52:41.7864668Z         PASS [   0.008s] ( 3/32) xtask::bin/xtask ci::tests::option_parsing
+2026-09-28T17:52:41.7865656Z         PASS [   0.009s] ( 4/32) xtask::bin/xtask ci::tests::step_ids_are_unique
+2026-09-28T17:52:41.7866997Z         PASS [   0.020s] ( 5/32) secmp-ui::hello prints_banner_and_exits_successfully
+2026-09-28T17:52:41.7868038Z         PASS [   0.009s] ( 6/32) xtask::bin/xtask cooldown::tests::index_paths
+2026-09-28T17:52:41.7869052Z         PASS [   0.008s] ( 7/32) xtask::bin/xtask cooldown::tests::lockfile_parsing
+2026-09-28T17:52:41.7870447Z         PASS [   0.009s] ( 8/32) xtask::bin/xtask cooldown::tests::response_split_and_pubtime
+2026-09-28T17:52:41.7871515Z         PASS [   0.009s] ( 9/32) xtask::bin/xtask cooldown::tests::seven_day_boundary
+2026-09-28T17:52:41.7872555Z         PASS [   0.009s] (10/32) xtask::bin/xtask gates::tests::coverage_grouping
+2026-09-28T17:52:41.7873580Z         PASS [   0.009s] (11/32) xtask::bin/xtask gates::tests::proverif_verdicts
+2026-09-28T17:52:41.7874571Z         PASS [   0.009s] (12/32) xtask::bin/xtask gates::tests::set_comparison
+2026-09-28T17:52:41.7875616Z         PASS [   0.009s] (13/32) xtask::bin/xtask gates::tests::systemd_levels
+2026-09-28T17:52:41.7876639Z         PASS [   0.008s] (14/32) xtask::bin/xtask gates::tests::workflow_hygiene
+2026-09-28T17:52:41.7877756Z         PASS [   0.009s] (15/32) xtask::bin/xtask meta::tests::closure_is_transitive_and_external_only
+2026-09-28T17:52:41.7878932Z         PASS [   0.009s] (16/32) xtask::bin/xtask meta::tests::parses_members_targets_features
+2026-09-28T17:52:41.7881226Z         PASS [   0.008s] (17/32) xtask::bin/xtask meta::tests::rejects_garbage
+2026-09-28T17:52:41.7882414Z         PASS [   0.009s] (18/32) xtask::bin/xtask policy::tests::exemption_names
+2026-09-28T17:52:41.7883444Z         PASS [   0.009s] (19/32) xtask::bin/xtask policy::tests::file_top_is_tracked
+2026-09-28T17:52:41.7884481Z         PASS [   0.009s] (20/32) xtask::bin/xtask policy::tests::forbid_header_detection
+2026-09-28T17:52:41.7885533Z         PASS [   0.008s] (21/32) xtask::bin/xtask policy::tests::manifest_lints_table
+2026-09-28T17:52:41.7886610Z         PASS [   0.009s] (22/32) xtask::bin/xtask policy::tests::relaxations_are_found
+2026-09-28T17:52:41.7887825Z         PASS [   0.008s] (23/32) xtask::bin/xtask sbom::tests::toml_escaping
+2026-09-28T17:52:41.7888855Z         PASS [   0.008s] (24/32) xtask::bin/xtask time::tests::epoch_and_known_dates
+2026-09-28T17:52:41.7889904Z         PASS [   0.009s] (25/32) xtask::bin/xtask time::tests::http_date_matches_rfc3339
+2026-09-28T17:52:41.7891004Z         PASS [   0.008s] (26/32) xtask::bin/xtask time::tests::malformed_inputs_are_rejected
+2026-09-28T17:52:41.7892079Z         PASS [   0.008s] (27/32) xtask::bin/xtask tools::tests::install_list_parsing
+2026-09-28T17:52:41.7893132Z         PASS [   0.008s] (28/32) xtask::bin/xtask tools::tests::unknown_set_is_rejected
+2026-09-28T17:52:41.7894251Z         PASS [   0.008s] (29/32) xtask::bin/xtask wintest::tests::ansi_is_stripped
+2026-09-28T17:52:41.7895306Z         PASS [   0.006s] (30/32) xtask::bin/xtask wintest::tests::backend_is_required
+2026-09-28T17:52:41.7896321Z         PASS [   0.010s] (31/32) xtask::bin/xtask wintest::tests::job_lookup
+2026-09-28T17:52:41.7897308Z         PASS [   0.010s] (32/32) xtask::bin/xtask wintest::tests::run_listing
+2026-09-28T17:52:41.7898691Z      Summary [   0.414s] 32 tests run: 32 passed, 0 skipped
+2026-09-28T17:52:42.1385015Z   hello-world: secmp-relay 0.0.0 (M0 skeleton: no functionality)
+2026-09-28T17:52:42.1828411Z   hello-world: secmp-cli 0.0.0 (M0 skeleton: no functionality)
+2026-09-28T17:52:42.2201022Z   hello-world: secmp-ui 0.0.0 (M0 skeleton: no functionality)
+2026-09-28T17:52:42.2202283Z === step summary (host x86_64-pc-windows-msvc, strict: true) ===
+2026-09-28T17:52:42.2203048Z    2 clippy          PASS          5s  clippy -D warnings on x86_64-pc-windows-msvc (12 crates)
+2026-09-28T17:52:42.2203772Z    4 nextest         PASS          6s  cargo nextest run --workspace
+2026-09-28T17:52:42.2204367Z    4 doctest         PASS          0s  cargo test --doc
+2026-09-28T17:52:42.2205639Z    5 kat             PASS          0s  KAT/differential packages: none (expected set matches)
+2026-09-28T17:52:42.2206807Z    4 hello           PASS          0s  secmp-relay 0.0.0 (M0 skeleton: no functionality) | secmp-cli 0.0.0 (M0 skeleton: no functionality) | secmp-ui 0.0.0 (M0 skeleton: no functionality)
+win-test: job windows-native (109059632373) of run 36461122501 concluded "success"; log: target/win-test/run-36461122501-job-109059632373.log
+exit=0

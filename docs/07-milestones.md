@@ -40,7 +40,7 @@ v1.1: M16 → M17 → M18 → M19 → M20 (release)
 - Types: `X25519{Secret,Public}`, `MlKem{768,1024}{Dk,Ek,Ct}`, `HybridKem{768,1024}` (spec §3.2), `Ed25519`, `MlDsa65`, `HybridSigningKey/VerifyingKey/Signature` (§3.5), `MsgEncrypt` (§3.3), `Caead` (§3.4), HKDF helpers with the label enum from Appendix A, `Sas` (§6.7), `Fingerprint`, `SecretBytes<N>` (zeroizing, no Debug/PartialEq/Clone), `Nonce24`/`Counter64` (consumed by value).
 - `secmp-sys-mem::SecretPage` (memfd_secret / mlock / VirtualLock) used for long-lived secrets; Miri on the crate.
 - KAT loaders (Wycheproof, ACVP) under feature `kat`; differential tests (libcrux vs RustCrypto `ml-kem` vs `aws-lc-rs`; `ml-dsa` vs `aws-lc-rs`; dalek vs `aws-lc-rs`).
-- `ref/` (Python, ADR-026) implementations of HybridKEM, HybridSign, MsgEncrypt, CAEAD, SAS, written **in a separate session from the spec alone**; `cargo xtask vectors` cross-checks Rust against `ref/` and freezes `vectors/crypto/*.json`.
+- `ref/` (Python, ADR-026) implementations of HybridKEM, HybridSign, MsgEncrypt, CAEAD, SAS, written **in a separate session from the spec alone**; `cargo xtask vectors` cross-checks the Rust-generated files (`vectors/rust/<suite>.json`, gitignored) against the committed reference files (`vectors/ref/<suite>.json`, generated on the owner's machine by the `ref/` session — CI never runs the Python generator) and, on byte-for-byte agreement, freezes `vectors/<suite>.json`.
 - Fuzz targets for key/ciphertext/signature parsers; mutation run.
 
 **Acceptance.** All KATs pass on Linux and ⚙ in the Windows VM; differential tests pass 10 000 iterations; constant-time test (dudect-style) for tag comparison shows no leak; mutation survivors zero or documented; coverage ≥ 90 %; Rust and `ref/` vectors identical.

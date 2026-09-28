@@ -1,6 +1,6 @@
 # SecMP/1 — Protocol Specification (normative)
 
-Status: **v1 design freeze candidate, revision 2.1** (2026-09-25, after adversarial review and verification pass; see `docs/reviews/plan-review-2026-09-25.md`). Changes to this document require an ADR (see `08-decisions.md`) and a reviewer sign-off.
+Status: **v1 design freeze candidate, revision 2.2** (2026-09-28; rev 2.1 of 2026-09-25 after adversarial review and verification pass, see `docs/reviews/plan-review-2026-09-25.md`; rev 2.2 answers the reference implementation's spec questions, see `docs/reviews/ref-spec-questions-M1.md` and ADR-035). Changes to this document require an ADR (see `08-decisions.md`) and a reviewer sign-off.
 Audience: the implementer (Claude Code / Opus), the reviewer, and future auditors.
 
 The words MUST / MUST NOT / SHOULD / MAY are used as in RFC 2119.
@@ -64,11 +64,11 @@ All primitives below are the only ones permitted in SecMP constructions. `secmp-
 
 | Role | Primitive | Parameters / notes |
 |---|---|---|
-| Classical KEX | X25519 (RFC 7748) | All-zero output MUST be rejected. |
+| Classical KEX | X25519 (RFC 7748) | Inputs handled exactly per RFC 7748 §5 (top bit of the u-coordinate masked, non-canonical u accepted, scalar clamped); the all-zero output MUST be rejected — this covers every low-order input. Public keys are hashed/transmitted as the received 32 bytes. |
 | PQ KEM (prekeys, relay static key) | ML-KEM-1024 (FIPS 203) | ek 1568, ct 1568, ss 32. Decapsulation keys stored as 64-byte seeds. |
 | PQ KEM (ratchet, link ephemeral) | ML-KEM-768 (FIPS 203) | ek 1184, ct 1088, ss 32. |
 | Hybrid KEM | `HybridKEM-768`, `HybridKEM-1024` (§3.2) | X-Wing-shaped combiner with public key and ciphertext bound in. |
-| Signatures | `HybridSign` = Ed25519 (`verify_strict`) ‖ ML-DSA-65 (hedged) (§3.5) | pk 32 + 1952; sig 64 + 3309. |
+| Signatures | `HybridSign` = Ed25519 (strict verification, §3.5) ‖ ML-DSA-65 (pure, hedged) (§3.5) | pk 32 + 1952; sig 64 + 3309. |
 | Hash | SHA-256; SHA3-256 in the KEM combiner | |
 | KDF | HKDF-SHA-256 | Every `info` begins with a label from Appendix A. |
 | MAC | HMAC-SHA-256 | 32-byte tags, constant-time comparison. |
@@ -112,7 +112,7 @@ TAG = HMAC-SHA-256(K_mac, AD ‖ C)
 return C ‖ TAG
 ```
 
-Decrypt: recompute `TAG'`, compare in constant time, only then decrypt. `MK` is never reused (§7), so the derived fixed `IV` is safe. A restored backup MUST NOT contain ratchet state (see `04-client-security.md` CS-3.5) precisely because this construction has no nonce.
+Decrypt: recompute `TAG'`, compare in constant time, only then decrypt. `MsgEncrypt` MUST reject `|P| ≠ BODY_LEN` and `MsgDecrypt` MUST reject `|C ‖ TAG| ≠ BODY_LEN + 32`, with the same uniform error as a MAC failure. Padding is not interpreted here; it is verified by the `Content` decoder (§7.6, D.5). `MK` is never reused (§7), so the derived fixed `IV` is safe. A restored backup MUST NOT contain ratchet state (see `04-client-security.md` CS-3.5) precisely because this construction has no nonce.
 
 ### 3.4 `CAEAD` (committing AEAD wrapper)
 
@@ -132,8 +132,10 @@ This is the UtC transform: `COM` commits to `(K, N)` with a key separate from th
 HybridSign(sk = (sk_ed, sk_mldsa), label, M):
     m = SHA-256("SecMP-HybridSign/1" ‖ label ‖ M)
     return Ed25519.Sign(sk_ed, m) ‖ ML-DSA-65.Sign(sk_mldsa, m, ctx = label)
-HybridVerify(pk, label, M, sig): both components MUST verify (verify_strict for Ed25519).
+HybridVerify(pk, label, M, sig): both components MUST verify.
 ```
+
+`label` MUST be one of the two HybridSign labels (`"SecMP-HX/1 bundle"`, `"SecMP-TR/1 keychange"`); implementations MUST refuse any other label. ML-DSA-65 is used as **pure ML-DSA** (FIPS 204 Alg. 2/3: `M' = 0x00 ‖ len(ctx) ‖ ctx ‖ m`), hedged with 32 bytes of randomness; keys come from `KeyGen_internal(ξ)`. Not HashML-DSA. **Ed25519 verification is strict**, defined here rather than by any library: RFC 8032 §5.1.7 with the cofactorless equation `[S]B = R + [k]A`, and rejection of `S ≥ L`, of non-canonical encodings of `A` or `R` (y-coordinate ≥ p), and of small-order `A` or `R` (order dividing 8, including the identity). Implementations whose library does less MUST add the missing checks on the encoded bytes before verifying.
 
 ---
 
@@ -234,7 +236,7 @@ LinkDataV1 {
   created:      u64
 }
 K_ld = HKDF-SHA-256(salt = ld_id, IKM = link_key, info = "SecMP-INV/1 linkdata", L = 32)
-blob = N (24) ‖ CAEAD.Seal(K_ld, N, AD = "SecMP-INV/1" ‖ ld_id, pad(LinkDataV1, 12288))
+blob = N (24) ‖ CAEAD.Seal(K_ld, N, AD = "SecMP-INV/1 blob" ‖ ld_id, pad(LinkDataV1, 12288))
      = 24 + 32 (COM) + 12288 + 16 = 12360 B
 ```
 
@@ -325,7 +327,7 @@ inner_ct = N2 (24) ‖ CAEAD.Seal(K_id, N2, AD = "SecMP-HX/1 inner" ‖ ld_id, I
 Outer    = ver ‖ EK_I ‖ spk_id ‖ opk_id ‖ ct_spk ‖ ct_opk ‖ inner_ct                 ; 1+32+4+4+1568+1568+6185 = 9362 B
 Padded   = pad(Outer, 3 × 4006 = 12018)
 init_id  = random 16 B
-cell_i (i = 0,1,2) = N_i (24, random) ‖ CAEAD.Seal(K_inv, N_i, AD = "SecMP-HX/1 init" ‖ ld_id,
+cell_i (i = 0,1,2) = N_i (24, random) ‖ CAEAD.Seal(K_inv, N_i, AD = "SecMP-HX/1 initcell" ‖ ld_id,
                                                     init_id ‖ i (u8) ‖ 0x03 ‖ Padded[i·4006 .. (i+1)·4006])
                    = 24 + 32 (COM) + (16 + 1 + 1 + 4006) + 16 (tag) = 4096 B
 ```
@@ -586,7 +588,7 @@ Every request frame carries `cmd_seq: u32` (per link, strictly increasing; the r
 | `QUEUE_NEW` | `recv_pk`, `send_pk`, `token` (signed by recv key) | `OK_QUEUE_NEW { rid, sid }` \| `ERR_TOKEN` \| `ERR_FULL` \| `OK_QUEUE_NEW` also when the identical queue already exists (idempotent) |
 | `SEND` | `sid`, `cell` (signed by send key) | `OK_SEND { cell_id, evicted: Option<cell_id> }` \| `ERR_NOQUEUE` \| `ERR_AUTH` |
 | `FETCH` | `rid`, `ack: u64` (signed by recv key) | exactly `F` `CELLR` frames; errors are signalled in `CELLR.present` (2 = NOQUEUE, 3 = AUTH, 4 = MALFORMED) |
-| `FETCH_MULTI` | `count ≤ 32`, then per entry `rid`, `ack`, `sig` | exactly `F_M` `CELLR` frames: first one `CELLR` with `present ∈ {2,3,4}` for each listed queue in error, then cells from the remaining queues oldest-first by `arrival`, then dummies |
+| `FETCH_MULTI` | `count ≤ 32`, then per entry `rid`, `ack`, `sig` (signature label `MFETCH`, App. A) | exactly `F_M` `CELLR` frames: first one `CELLR` with `present ∈ {2,3,4}` for each listed queue in error, then cells from the remaining queues oldest-first by `arrival`, then dummies |
 | `QUEUE_DEL` | `rid` (signed by recv key) | `OK` |
 | `LINK_PUT` | `ld_id`, `one_time`, `expires_bucket`, `owner_pk [32]`, `token`, `blob` (3 frames) | `OK` \| `ERR_EXISTS` \| `ERR_FULL` \| `ERR_TOKEN` |
 | `LINK_GET` | `ld_id`, `mode: u8 (0 = consume, 1 = owner status; owner status is signed by `owner_pk`)` | 3 `LINKR` frames `{ present, consumed, blob }` (dummy blob when absent) |
@@ -741,13 +743,18 @@ Arti 2.6.x (`arti-client` 0.46.x, features `onion-service-client`, `rustls`; **n
 ```
 "SecMP-HybridKEM-768/1"  "SecMP-HybridKEM-1024/1"  "SecMP-HybridSign/1"  "SecMP-commit/1"
 "SecMP-FP/1"  "SecMP-SAS/1"
-"SecMP-INV/1"  "SecMP-INV/1 linkdata"
-"SecMP-HX/1 transcript"  "SecMP-HX/1 sk"  "SecMP-HX/1 idkey"  "SecMP-HX/1 bundle"  "SecMP-HX/1 initkey"  "SecMP-HX/1 init"  "SecMP-HX/1 inner"
+"SecMP-INV/1 blob"  "SecMP-INV/1 linkdata"
+"SecMP-HX/1 transcript"  "SecMP-HX/1 sk"  "SecMP-HX/1 idkey"  "SecMP-HX/1 bundle"  "SecMP-HX/1 initkey"  "SecMP-HX/1 initcell"  "SecMP-HX/1 inner"
 "SecMP-TR/1 init"  "SecMP-TR/1 rk"  "SecMP-TR/1 msgkeys"  "SecMP-TR/1 hdr"  "SecMP-TR/1 body"  "SecMP-TR/1 keychange"
 "SecMP-LINK/1 relay-fp"  "SecMP-LINK/1 relayinfo"  "SecMP-LINK/1 h0"  "SecMP-LINK/1 hs1"  "SecMP-LINK/1 hs2"  "SecMP-LINK/1 keys"  "SecMP-LINK/1 frame"
-"SecMP-Q/1 rid"  "SecMP-Q/1 sid"  "SecMP-Q/1 akc"  "SecMP-Q/1 token"  "SecMP-Q/1 <CMD_NAME>"   (CMD_NAME ∈ {QUEUE_NEW, SEND, FETCH, FETCH_MULTI, QUEUE_DEL, LINK_PUT, LINK_GET})
-"SecMP-STORE/1 <table>"  (local storage; tables per 02-architecture.md §4.2)
+"SecMP-Q/1 rid"  "SecMP-Q/1 sid"  "SecMP-Q/1 akc"  "SecMP-Q/1 token"
+"SecMP-Q/1 QUEUE_NEW"  "SecMP-Q/1 SEND"  "SecMP-Q/1 FETCH"  "SecMP-Q/1 MFETCH"  "SecMP-Q/1 QUEUE_DEL"  "SecMP-Q/1 LINK_PUT"  "SecMP-Q/1 LINK_GET"
+"SecMP-STORE/1 identity"  "SecMP-STORE/1 prekeys"  "SecMP-STORE/1 relays"  "SecMP-STORE/1 contacts"  "SecMP-STORE/1 sessions"
+"SecMP-STORE/1 outbox"  "SecMP-STORE/1 messages"  "SecMP-STORE/1 invitations"  "SecMP-STORE/1 settings"
+"SecMP-vectors/1"        (test-vector seed derivation only, vectors/SCHEMA.md)
 ```
+
+Rules: labels are ASCII, used as raw bytes with no length prefix or terminator, and **the set is prefix-free** — no label is a prefix of another (rev 2.2 renamed `"SecMP-INV/1"` → `"SecMP-INV/1 blob"`, `"SecMP-HX/1 init"` → `"SecMP-HX/1 initcell"`, and gave `FETCH_MULTI` the label `MFETCH`; ADR-035). Both implementations carry a unit test that re-reads this list and checks prefix-freeness. `HybridSign` accepts only `"SecMP-HX/1 bundle"` and `"SecMP-TR/1 keychange"`. Any new label requires a spec change and an ADR.
 
 ## Appendix B — Sizes
 
@@ -767,7 +774,7 @@ Arti 2.6.x (`arti-client` 0.46.x, features `onion-service-client`, `rustls`; **n
 
 ## Appendix C — Test-vector obligations
 
-`vectors/` MUST contain vectors for: HybridKEM (both sets), HybridSign, MsgEncrypt, CAEAD, SAS, a full HX run with fixed randomness (both sides derive identical `SK`, `transcript`, `K_id`), a TR transcript of 40 messages with two full round trips, out-of-order delivery, a dropped first-message-of-chain, and a 10 000-message gap (fast-forward), LINK handshake + first three frames each direction, and every command/response layout (positive) plus ≥ 200 malformed encodings (negative). **Vectors are generated by an independent reference implementation** (`ref/`, Python, written from this document alone in a separate session — ADR-026) and cross-checked against the Rust implementation; they are frozen thereafter. External vectors: Wycheproof (X25519, Ed25519, XChaCha20-Poly1305, HKDF, HMAC, ML-KEM, ML-DSA) and NIST ACVP (ML-KEM, ML-DSA) on every target.
+`vectors/` MUST contain vectors for: HybridKEM (both sets) — including decapsulation of a bit-flipped KEM ciphertext, which is a **positive** case whose output is the implicit-rejection-derived hybrid secret (FIPS 203 rejects implicitly; only length errors and all-zero X25519 outputs reject explicitly); HybridSign (incl. strict-Ed25519 negatives: `S ≥ L`, non-canonical `A`, small-order `A`, wrong label); MsgEncrypt and CAEAD (incl. wrong MAC/COM, truncation, wrong AD/nonce/key); SAS; fingerprints; a full HX run with fixed randomness (both sides derive identical `SK`, `transcript`, `K_id`); a TR transcript of 40 messages with two full round trips, out-of-order delivery, a dropped first-message-of-chain, and a 10 000-message gap (fast-forward); LINK handshake + first three frames each direction; canonical encodings (positive) and ≥ 200 malformed encodings (negative, incl. wrong padding) for every structure. The exact case tables live in `vectors/SCHEMA.md`, written by the reviewer. **Vectors are generated by an independent reference implementation** (`ref/`, Python, written from this document alone in a separate session — ADR-026) and cross-checked against the Rust implementation; they are frozen thereafter. External vectors: Wycheproof (X25519, Ed25519, XChaCha20-Poly1305, HKDF, HMAC, ML-KEM, ML-DSA) and NIST ACVP (ML-KEM, ML-DSA) on every target.
 
 ## Appendix D — Byte layouts (normative)
 
@@ -792,14 +799,14 @@ After HS2 the stream carries only 4352-byte frames (no length prefix).
 `op: u8 ‖ cmd_seq: u32 ‖ fields ‖ pad`. Request opcodes (client → relay):
 
 ```
-0x01 QUEUE_NEW    recv_pk[32] ‖ send_pk[32] ‖ token[32] ‖ sig[64]           ; sig by recv key over "QUEUE_NEW"‖sess_id‖cmd_seq‖recv_pk‖send_pk‖token
+0x01 QUEUE_NEW    recv_pk[32] ‖ send_pk[32] ‖ token[32] ‖ sig[64]           ; sig by recv key over "SecMP-Q/1 QUEUE_NEW"‖sess_id‖cmd_seq‖recv_pk‖send_pk‖token
 0x02 SKEY         (reserved, v1 relay answers ERR_MALFORMED)
-0x03 SEND         sid[16] ‖ cell[4096] ‖ sig[64]                             ; sig by send key over "SEND"‖sess_id‖cmd_seq‖sid‖cell
-0x04 FETCH        rid[16] ‖ ack u64 ‖ sig[64]                                ; by recv key over "FETCH"‖sess_id‖cmd_seq‖rid‖ack
-0x05 FETCH_MULTI  count u8 (1..=32) ‖ { rid[16] ‖ ack u64 ‖ sig[64] } × count ; each sig by that queue's recv key over "FETCH_MULTI"‖sess_id‖cmd_seq‖rid‖ack
-0x06 QUEUE_DEL    rid[16] ‖ sig[64]                                          ; by recv key over "QUEUE_DEL"‖sess_id‖cmd_seq‖rid
-0x07 LINK_PUT     ld_id[16] ‖ one_time u8 ‖ expires_bucket u32 ‖ owner_pk[32] ‖ token[32] ‖ sig[64] ‖ blob_part[4160]   ; frame 1 of 3; sig by owner key over "LINK_PUT"‖sess_id‖cmd_seq‖ld_id‖one_time‖expires_bucket‖owner_pk‖token‖SHA-256(blob)
-0x08 LINK_GET     ld_id[16] ‖ mode u8 ‖ sig[64] (zeros when mode = 0)         ; mode 1 sig by owner key over "LINK_GET"‖sess_id‖cmd_seq‖ld_id‖mode
+0x03 SEND         sid[16] ‖ cell[4096] ‖ sig[64]                             ; sig by send key over "SecMP-Q/1 SEND"‖sess_id‖cmd_seq‖sid‖cell
+0x04 FETCH        rid[16] ‖ ack u64 ‖ sig[64]                                ; by recv key over "SecMP-Q/1 FETCH"‖sess_id‖cmd_seq‖rid‖ack
+0x05 FETCH_MULTI  count u8 (1..=32) ‖ { rid[16] ‖ ack u64 ‖ sig[64] } × count ; each sig by that queue's recv key over "SecMP-Q/1 MFETCH"‖sess_id‖cmd_seq‖rid‖ack   (label MFETCH keeps the label set prefix-free)
+0x06 QUEUE_DEL    rid[16] ‖ sig[64]                                          ; by recv key over "SecMP-Q/1 QUEUE_DEL"‖sess_id‖cmd_seq‖rid
+0x07 LINK_PUT     ld_id[16] ‖ one_time u8 ‖ expires_bucket u32 ‖ owner_pk[32] ‖ token[32] ‖ sig[64] ‖ blob_part[4160]   ; frame 1 of 3; sig by owner key over "SecMP-Q/1 LINK_PUT"‖sess_id‖cmd_seq‖ld_id‖one_time‖expires_bucket‖owner_pk‖token‖SHA-256(blob)
+0x08 LINK_GET     ld_id[16] ‖ mode u8 ‖ sig[64] (zeros when mode = 0)         ; mode 1 sig by owner key over "SecMP-Q/1 LINK_GET"‖sess_id‖cmd_seq‖ld_id‖mode
 0x09 PING         (no fields)
 0x7F CONT         idx u8 ‖ data                                              ; continuation of the previous multi-frame command with the same cmd_seq (LINK_PUT: idx 1,2 carry 4100 B each: 4160 + 4100 + 4100 = 12360); LINK_PUT receives ONE response frame after its third frame
 ```
@@ -855,4 +862,4 @@ Control body    = code u8 ‖ arg_len u16 ‖ arg
 
 ### D.6 Signatures over commands
 
-The signed message is always `"SecMP-Q/1 " ‖ CMD_NAME ‖ sess_id[16] ‖ cmd_seq u32 ‖ <fields in the order listed in D.2, excluding sig and excluding blob parts (use SHA-256(blob) for LINK_PUT)>`.
+The signed message is always `"SecMP-Q/1 " ‖ CMD_LABEL ‖ sess_id[16] ‖ cmd_seq u32 ‖ <fields in the order listed in D.2, excluding sig and excluding blob parts (use SHA-256(blob) for LINK_PUT)>`, where `CMD_LABEL` is the command name except for `FETCH_MULTI`, whose label is `MFETCH`.

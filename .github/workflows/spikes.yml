@@ -67,13 +67,16 @@ jobs:
         run: cargo xtask install-tools --set xwin
       - name: "(a) SQLCipher: native Linux build and run"
         working-directory: spikes/sqlcipher
-        run: cargo build --release && ./target/release/spike-sqlcipher && echo "SPIKE-A linux-native: OK"
+        run: |
+          cargo build --release && ./target/release/spike-sqlcipher && echo "SPIKE-A linux-native: OK"
       - name: "(b) aws-lc-rs: native Linux build and run"
         working-directory: spikes/aws-lc
-        run: cargo build --release && ./target/release/spike-aws-lc && echo "SPIKE-B linux-native: OK"
+        run: |
+          cargo build --release && ./target/release/spike-aws-lc && echo "SPIKE-B linux-native: OK"
       - name: "(c) Slint hello-world: compile for Linux (required)"
         working-directory: spikes/slint-hello
-        run: cargo build --release && ls -l target/release/spike-slint-hello && echo "SPIKE-C linux-compile: OK"
+        run: |
+          cargo build --release && ls -l target/release/spike-slint-hello && echo "SPIKE-C linux-compile: OK"
       - name: "(a) SQLCipher: cargo-xwin cross-build from Linux (outcome recorded)"
         working-directory: spikes/sqlcipher
         run: |

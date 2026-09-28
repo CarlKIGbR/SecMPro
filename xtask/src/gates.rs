@@ -655,6 +655,15 @@ pub(crate) fn workflow_findings(name: &str, text: &str) -> Vec<String> {
                 out.push(format!("{name}: action not pinned by commit SHA: {u}"));
             }
         }
+        if let Some(v) = t.strip_prefix("run:").or_else(|| t.strip_prefix("- run:")) {
+            let v = v.trim_start();
+            let plain = !(v.is_empty() || v.starts_with(['|', '>', '"', '\'']));
+            if plain && (v.contains(": ") || v.contains(" #")) {
+                out.push(format!(
+                    "{name}: plain-scalar `run:` containing \": \" or \" #\" is not valid YAML: {v}"
+                ));
+            }
+        }
         if t.starts_with("continue-on-error:") && !t.ends_with("false") {
             let ok = job
                 .as_deref()
@@ -745,5 +754,7 @@ mod tests {
         assert!(workflow_findings("w", good).is_empty());
         let bad = "on:\n  pull_request_target:\n  workflow_run:\njobs:\n  build:\n    continue-on-error: true\n    steps:\n      - uses: actions/checkout@v7\n";
         assert_eq!(workflow_findings("w", bad).len(), 4);
+        let yaml_trap = "jobs:\n  a:\n    steps:\n      - run: echo \"done: ok\"\n      - run: |\n          echo \"done: ok\"\n";
+        assert_eq!(workflow_findings("w", yaml_trap).len(), 1);
     }
 }

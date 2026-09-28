@@ -1,0 +1,228 @@
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.03s
+     Running `target/debug/xtask ci-fast`
+
+=== [1] fmt ===
+$ ~/.rustup/toolchains/1.98.1-aarch64-apple-darwin/bin/cargo fmt --all --check
+
+=== [2] clippy ===
+$ ~/.rustup/toolchains/1.98.1-aarch64-apple-darwin/bin/cargo clippy --workspace --all-targets --locked -- -D warnings
+    Checking secmp-relay v0.0.0 (~/coding/claude_code/SecMPro/crates/secmp-relay)
+    Checking secmp-sys-mem v0.0.0 (~/coding/claude_code/SecMPro/crates/secmp-sys-mem)
+    Checking secmp-crypto v0.0.0 (~/coding/claude_code/SecMPro/crates/secmp-crypto)
+    Checking secmp-testkit v0.0.0 (~/coding/claude_code/SecMPro/crates/secmp-testkit)
+    Checking secmp-cli v0.0.0 (~/coding/claude_code/SecMPro/crates/secmp-cli)
+    Checking secmp-client-core v0.0.0 (~/coding/claude_code/SecMPro/crates/secmp-client-core)
+    Checking secmp-sys-desktop v0.0.0 (~/coding/claude_code/SecMPro/crates/secmp-sys-desktop)
+    Checking secmp-transport v0.0.0 (~/coding/claude_code/SecMPro/crates/secmp-transport)
+    Checking xtask v0.0.0 (~/coding/claude_code/SecMPro/xtask)
+    Checking secmp-ui v0.0.0 (~/coding/claude_code/SecMPro/crates/secmp-ui)
+    Checking scratch-unwrap v0.0.0 (~/coding/claude_code/SecMPro/crates/scratch-unwrap)
+    Checking secmp-proto v0.0.0 (~/coding/claude_code/SecMPro/crates/secmp-proto)
+    Checking secmp-store v0.0.0 (~/coding/claude_code/SecMPro/crates/secmp-store)
+error: used `unwrap()` on an `Option` value
+  --> crates/scratch-unwrap/src/lib.rs:11:5
+   |
+11 |     data.first().copied().unwrap()
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: if this value is `None`, it will panic
+   = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#unwrap_used
+   = note: requested on the command line with `-D clippy::unwrap-used`
+
+error: could not compile `scratch-unwrap` (lib test) due to 1 previous error
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `scratch-unwrap` (lib) due to 1 previous error
+FAIL [2] clippy: `~/.rustup/toolchains/1.98.1-aarch64-apple-darwin/bin/cargo clippy --workspace --all-targets --locked -- -D warnings` failed with exit status: 101
+
+=== [2] policy ===
+
+=== [3] deny ===
+$ ~/.rustup/toolchains/1.98.1-aarch64-apple-darwin/bin/cargo deny --locked check
+warning[license-exception-not-encountered]: license exception was not encountered
+   ┌─ ~/coding/claude_code/SecMPro/deny.toml:36:52
+   │
+36 │ exceptions = [{ allow = ["GPL-3.0-only"], crate = "slint" }]
+   │                                                    ━━━━━ unmatched license exception
+
+warning[license-not-encountered]: license was not encountered
+   ┌─ ~/coding/claude_code/SecMPro/deny.toml:24:6
+   │
+24 │     "BSD-2-Clause",
+   │      ━━━━━━━━━━━━ unmatched license allowance
+
+warning[license-not-encountered]: license was not encountered
+   ┌─ ~/coding/claude_code/SecMPro/deny.toml:25:6
+   │
+25 │     "BSD-3-Clause",
+   │      ━━━━━━━━━━━━ unmatched license allowance
+
+warning[license-not-encountered]: license was not encountered
+   ┌─ ~/coding/claude_code/SecMPro/deny.toml:26:6
+   │
+26 │     "ISC",
+   │      ━━━ unmatched license allowance
+
+warning[license-not-encountered]: license was not encountered
+   ┌─ ~/coding/claude_code/SecMPro/deny.toml:30:6
+   │
+30 │     "MPL-2.0",
+   │      ━━━━━━━ unmatched license allowance
+
+warning[license-not-encountered]: license was not encountered
+   ┌─ ~/coding/claude_code/SecMPro/deny.toml:28:6
+   │
+28 │     "Unicode-3.0",
+   │      ━━━━━━━━━━━ unmatched license allowance
+
+warning[license-not-encountered]: license was not encountered
+   ┌─ ~/coding/claude_code/SecMPro/deny.toml:29:6
+   │
+29 │     "Unicode-DFS-2016",
+   │      ━━━━━━━━━━━━━━━━ unmatched license allowance
+
+warning[license-not-encountered]: license was not encountered
+   ┌─ ~/coding/claude_code/SecMPro/deny.toml:27:6
+   │
+27 │     "Zlib",
+   │      ━━━━ unmatched license allowance
+
+advisories ok, bans ok, licenses ok, sources ok
+
+=== [3] vet ===
+$ ~/.rustup/toolchains/1.98.1-aarch64-apple-darwin/bin/cargo vet --locked
+Vetting Succeeded (1 fully audited, 10 exempted)
+
+=== [3] audit ===
+$ ~/.rustup/toolchains/1.98.1-aarch64-apple-darwin/bin/cargo audit --deny warnings
+    Fetching advisory database from `https://github.com/RustSec/advisory-db.git`
+      Loaded 1273 security advisories (from ~/.cargo/advisory-db)
+    Updating crates.io index
+    Scanning Cargo.lock for vulnerabilities (24 crate dependencies)
+
+=== [3] cooldown ===
+
+=== [4] nextest ===
+$ ~/.rustup/toolchains/1.98.1-aarch64-apple-darwin/bin/cargo nextest run --workspace --locked
+   Compiling scratch-unwrap v0.0.0 (~/coding/claude_code/SecMPro/crates/scratch-unwrap)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.37s
+────────────
+ Nextest run ID 926d1390-f183-4640-9289-cac8962ea3dd with nextest profile: default
+    Starting 30 tests across 17 binaries
+        PASS [   0.036s] ( 1/30) xtask::bin/xtask cooldown::tests::response_split_and_pubtime
+        PASS [   0.037s] ( 2/30) xtask::bin/xtask cooldown::tests::seven_day_boundary
+        PASS [   0.037s] ( 3/30) xtask::bin/xtask cooldown::tests::lockfile_parsing
+        PASS [   0.038s] ( 4/30) xtask::bin/xtask gates::tests::coverage_grouping
+        PASS [   0.039s] ( 5/30) xtask::bin/xtask ci::tests::option_parsing
+        PASS [   0.046s] ( 6/30) xtask::bin/xtask ci::tests::step_ids_are_unique
+        PASS [   0.051s] ( 7/30) xtask::bin/xtask cooldown::tests::index_paths
+        PASS [   0.021s] ( 8/30) xtask::bin/xtask gates::tests::proverif_verdicts
+        PASS [   0.023s] ( 9/30) xtask::bin/xtask gates::tests::workflow_hygiene
+        PASS [   0.024s] (10/30) xtask::bin/xtask gates::tests::set_comparison
+        PASS [   0.024s] (11/30) xtask::bin/xtask gates::tests::systemd_levels
+        PASS [   0.028s] (12/30) xtask::bin/xtask meta::tests::closure_is_transitive_and_external_only
+        PASS [   0.025s] (13/30) xtask::bin/xtask meta::tests::parses_members_targets_features
+        PASS [   0.023s] (14/30) xtask::bin/xtask meta::tests::rejects_garbage
+        PASS [   0.019s] (15/30) xtask::bin/xtask policy::tests::file_top_is_tracked
+        PASS [   0.019s] (16/30) xtask::bin/xtask policy::tests::forbid_header_detection
+        PASS [   0.019s] (17/30) xtask::bin/xtask policy::tests::manifest_lints_table
+        PASS [   0.025s] (18/30) xtask::bin/xtask policy::tests::exemption_names
+        PASS [   0.015s] (19/30) xtask::bin/xtask sbom::tests::toml_escaping
+        PASS [   0.020s] (20/30) xtask::bin/xtask policy::tests::relaxations_are_found
+        PASS [   0.032s] (21/30) xtask::bin/xtask time::tests::epoch_and_known_dates
+        PASS [   0.026s] (22/30) xtask::bin/xtask time::tests::http_date_matches_rfc3339
+        PASS [   0.030s] (23/30) xtask::bin/xtask tools::tests::install_list_parsing
+        PASS [   0.031s] (24/30) xtask::bin/xtask time::tests::malformed_inputs_are_rejected
+        PASS [   0.031s] (25/30) xtask::bin/xtask tools::tests::unknown_set_is_rejected
+        PASS [   0.028s] (26/30) xtask::bin/xtask wintest::tests::backend_is_required
+        PASS [   0.028s] (27/30) xtask::bin/xtask wintest::tests::job_lookup
+        PASS [   0.235s] (28/30) secmp-relay::hello prints_banner_and_exits_successfully
+        PASS [   0.462s] (29/30) secmp-cli::hello prints_banner_and_exits_successfully
+        PASS [   0.644s] (30/30) secmp-ui::hello prints_banner_and_exits_successfully
+────────────
+     Summary [   0.646s] 30 tests run: 30 passed, 0 skipped
+
+=== [4] doctest ===
+$ ~/.rustup/toolchains/1.98.1-aarch64-apple-darwin/bin/cargo test --workspace --locked --doc
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.01s
+   Doc-tests scratch_unwrap
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests secmp_client_core
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests secmp_crypto
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests secmp_proto
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests secmp_relay
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests secmp_store
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests secmp_sys_desktop
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests secmp_sys_mem
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests secmp_testkit
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests secmp_transport
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+=== [4] hello ===
+  hello-world: secmp-relay 0.0.0 (M0 skeleton: no functionality)
+  hello-world: secmp-cli 0.0.0 (M0 skeleton: no functionality)
+  hello-world: secmp-ui 0.0.0 (M0 skeleton: no functionality)
+
+=== [5] kat ===
+
+=== ci-fast summary (host aarch64-apple-darwin, strict: false) ===
+   1 fmt             PASS          0s  rustfmt: no changes
+   2 clippy          FAIL          0s  `~/.rustup/toolchains/1.98.1-aarch64-apple-darwin/bin/cargo clippy --workspace --all-targets --locked -- -D warnings` failed with exit status: 101
+   2 policy          PASS          0s  forbid-unsafe: 15 target roots; lints-table: 13 manifests; lint-allows: 0 relaxing attributes (all sanctioned); build-scripts: 13 crates, none; spdx: 49 files; secmp-crypto/secmp-proto closure: 0 external crates, 0 exempted; tracked exemptions elsewhere: 10; workflows: 1 files, triggers/SHA pins/continue-on-error ok
+   3 deny            PASS          1s  advisories, bans, licenses, sources: ok
+   3 vet             PASS          0s  secmp-crypto/secmp-proto closure: 0 external crates, 0 exempted; tracked exemptions elsewhere: 10
+   3 audit           PASS          0s  RustSec: no advisories (warnings denied)
+   3 cooldown        PASS          2s  11 registry packages, all ≥ 7 days old; youngest: unicode-ident 1.0.26, 11 days
+   4 nextest         PASS          1s  cargo nextest run --workspace
+   4 doctest         PASS          0s  cargo test --doc
+   4 hello           PASS          0s  secmp-relay 0.0.0 (M0 skeleton: no functionality) | secmp-cli 0.0.0 (M0 skeleton: no functionality) | secmp-ui 0.0.0 (M0 skeleton: no functionality)
+   5 kat             PASS          0s  KAT/differential packages: none (expected set matches)
+xtask: error: ci-fast: 1 step(s) failed
+exit=1

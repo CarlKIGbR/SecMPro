@@ -1,0 +1,61 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# cargo-deny policy — docs/06 §3, ADR-015 (license decision OQ-1: AGPL-3.0-or-later for all SecMPro crates).
+# Run: `cargo deny --locked check` (part of `cargo xtask ci-fast`, step 3).
+
+[graph]
+# Check the dependency graph of every shipped target, with every feature enabled.
+targets = ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc", "aarch64-apple-darwin"]
+all-features = true
+
+[advisories]
+# RustSec: vulnerabilities always fail; unmaintained and unsound crates fail anywhere in the graph; yanked
+# versions fail. An advisory may only be ignored with an ADR and a reason.
+unmaintained = "all"
+unsound = "all"
+yanked = "deny"
+ignore = []
+
+[licenses]
+# Allowlist for dependencies (docs/06 §3). SQLCipher is covered by BSD-3-Clause. No LGPL anywhere (ADR-024).
+# Licences that are allowed but not yet present in the graph are reported as warnings, not failures.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "MPL-2.0",
+]
+confidence-threshold = 0.93
+# The single copyleft exception: Slint (GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR
+# LicenseRef-Slint-Software-3.0; GPLv3 is compatible with this project's AGPL-3.0-or-later). Its `i-slint-*`
+# component crates are added here, by name, when Slint enters the graph in M8 (ADR-013).
+exceptions = [{ allow = ["GPL-3.0-only"], crate = "slint" }]
+
+[licenses.private]
+# Our own crates are unpublished (`publish = false`) and AGPL-3.0-or-later; the allowlist governs dependencies.
+ignore = true
+
+[bans]
+multiple-versions = "deny"
+# Path dependencies between workspace crates carry no version; everything else must be a concrete version.
+wildcards = "deny"
+allow-wildcard-paths = true
+highlight = "all"
+workspace-default-features = "allow"
+external-default-features = "allow"
+allow = []
+# Wildcard exceptions to `multiple-versions` are listed here, each with a justification.
+skip = []
+skip-tree = []
+deny = []
+
+[sources]
+# crates.io only; no git dependencies (CLAUDE.md §1.9).
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

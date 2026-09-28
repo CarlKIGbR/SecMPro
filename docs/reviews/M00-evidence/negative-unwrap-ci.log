@@ -1,0 +1,60 @@
+# GitHub Actions run 36458107077 (commit 1e8bd75: scratch crate calling unwrap()), https://github.com/CarlKIGbR/SecMPro/actions/runs/36458107077
+# conclusion: failure; jobs: linux-fast=failure, windows-native=failure, xwin-cross=success, linux-full=failure
+# xwin-cross only compiles (no clippy), so a clippy-only violation does not fail it.
+
+## job linux-fast (109049522479)
+error: used `unwrap()` on an `Option` value
+  --> crates/scratch-unwrap/src/lib.rs:11:5
+=== ci-fast summary (host x86_64-unknown-linux-gnu, strict: true) ===
+   1 fmt             PASS          0s  rustfmt: no changes
+   2 clippy          FAIL          1s  `/home/runner/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/cargo clippy --workspace --all-targets --locked -- -D warnings` failed with exit status: 101
+   2 policy          PASS          0s  forbid-unsafe: 15 target roots; lints-table: 13 manifests; lint-allows: 0 relaxing attributes (all sanctioned); build-scripts: 13 crates, none; spdx: 50 files; s
+   3 deny            PASS          0s  advisories, bans, licenses, sources: ok
+   3 vet             PASS          0s  secmp-crypto/secmp-proto closure: 0 external crates, 0 exempted; tracked exemptions elsewhere: 10
+   3 audit           PASS          4s  RustSec: no advisories (warnings denied)
+   3 cooldown        PASS          0s  11 registry packages, all ≥ 7 days old; youngest: unicode-ident 1.0.26, 11 days
+   4 nextest         PASS          3s  cargo nextest run --workspace
+   4 doctest         PASS          0s  cargo test --doc
+   4 hello           PASS          0s  secmp-relay 0.0.0 (M0 skeleton: no functionality) | secmp-cli 0.0.0 (M0 skeleton: no functionality) | secmp-ui 0.0.0 (M0 skeleton: no functionality)
+   5 kat             PASS          0s  KAT/differential packages: none (expected set matches)
+xtask: error: ci-fast: 1 step(s) failed
+
+## job windows-native (109049522815)
+error: used `unwrap()` on an `Option` value
+xtask: error: step: 1 step(s) failed
+=== step summary (host x86_64-pc-windows-msvc, strict: true) ===
+   2 clippy          FAIL          4s  `C:\Users\runneradmin\.rustup\toolchains\1.98.1-x86_64-pc-windows-msvc\bin\cargo.exe clippy --workspace --all-targets --locked -- -D warnings` failed with exit c
+   4 nextest         PASS          9s  cargo nextest run --workspace
+   4 doctest         PASS          0s  cargo test --doc
+   5 kat             PASS          0s  KAT/differential packages: none (expected set matches)
+   4 hello           PASS          0s  secmp-relay 0.0.0 (M0 skeleton: no functionality) | secmp-cli 0.0.0 (M0 skeleton: no functionality) | secmp-ui 0.0.0 (M0 skeleton: no functionality)
+
+## job linux-full (109049523078)
+error: used `unwrap()` on an `Option` value
+  --> crates/scratch-unwrap/src/lib.rs:11:5
+xtask: error: ci-full: 2 step(s) failed
+=== ci-full summary (host x86_64-unknown-linux-gnu, strict: true) ===
+   1 fmt             PASS          0s  rustfmt: no changes
+   2 clippy          FAIL          1s  `/home/runner/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/cargo clippy --workspace --all-targets --locked -- -D warnings` failed with exit status: 101
+   2 policy          PASS          0s  forbid-unsafe: 15 target roots; lints-table: 13 manifests; lint-allows: 0 relaxing attributes (all sanctioned); build-scripts: 13 crates, none; spdx: 50 files; s
+   3 deny            PASS          0s  advisories, bans, licenses, sources: ok
+   3 vet             PASS          0s  secmp-crypto/secmp-proto closure: 0 external crates, 0 exempted; tracked exemptions elsewhere: 10
+   3 audit           PASS          4s  RustSec: no advisories (warnings denied)
+   3 cooldown        PASS          0s  11 registry packages, all ≥ 7 days old; youngest: unicode-ident 1.0.26, 11 days
+   4 nextest         PASS          3s  cargo nextest run --workspace
+   4 doctest         PASS          0s  cargo test --doc
+   4 hello           PASS          0s  secmp-relay 0.0.0 (M0 skeleton: no functionality) | secmp-cli 0.0.0 (M0 skeleton: no functionality) | secmp-ui 0.0.0 (M0 skeleton: no functionality)
+   5 kat             PASS          0s  KAT/differential packages: none (expected set matches)
+   6 fuzz            PASS          0s  fuzz smoke, 120 s per target: none (expected set matches)
+   7 coverage        FAIL          6s  coverage below threshold: scratch-unwrap
+   8 mutants         PASS          0s  secmp-crypto, secmp-proto: Found 0 mutants to test
+   9 miri            PASS         22s  Miri (nightly-2026-09-21): secmp-sys-mem, secmp-sys-desktop, secmp-crypto
+   9 kani            PASS          0s  Kani 0.68.0: harness packages none (expected set matches)
+  10 proverif        PASS          0s  ProVerif 2.05 self-test [true, false] ok; models: none (expected set matches)
+  11 windows-cross   DELEGATED     0s  handed to another CI job with --delegated
+  11 windows-native  DELEGATED     0s  handed to another CI job with --delegated
+  11 linux-target    PASS          0s  host is x86_64-unknown-linux-gnu: every step above ran natively
+ 12a ref-vectors     STUB          0s  ref/ holds only its README; the cross-check starts in M1 with the separate reference session (OQ-17, ADR-026)
+  12 repro           STUB          0s  two-builder reproducibility check becomes real in M11 (`cargo xtask repro-check`)
+  13 sbom            PASS          7s  13 CycloneDX SBOMs in target/sbom; auditable release builds (x86_64-unknown-linux-gnu, remapped paths) read back by `cargo audit bin`: target/release/secmp-relay
+  14 systemd         PASS          0s  systemd 255 (255.4-1ubuntu8.17); self-test: unhardened fixture 9.4 > 2 rejected; units: none (deploy/secmp-relay.service arrives in M10)

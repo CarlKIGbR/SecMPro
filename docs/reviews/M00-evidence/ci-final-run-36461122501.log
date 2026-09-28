@@ -1,0 +1,60 @@
+# GitHub Actions run 36461122501, commit 58dc402 (final M0 code state), https://github.com/CarlKIGbR/SecMPro/actions/runs/36461122501
+# conclusion: success; jobs: xwin-cross=success, windows-native=success, linux-fast=success, linux-full=success
+
+## job linux-fast (109059632429)
+rustc 1.98.1 (48a229cea 2026-09-01)
+     Summary [   0.092s] 32 tests run: 32 passed, 0 skipped
+=== ci-fast summary (host x86_64-unknown-linux-gnu, strict: true) ===
+   1 fmt             PASS          0s  rustfmt: no changes
+   2 clippy          PASS          2s  clippy -D warnings on x86_64-unknown-linux-gnu (12 crates)
+   2 policy          PASS          0s  forbid-unsafe: 14 target roots; lints-table: 12 manifests; lint-allows: 0 relaxing attributes (all sanctioned); build-scripts: 12 crates, none; spdx: 47 files; secmp-crypto/secmp-proto closure: 0 external crates, 0 exempted; tracked exemptions elsewhere: 10; workflows: 1 files, triggers/SHA pins/continue-on-error ok
+   3 deny            PASS          1s  advisories, bans, licenses, sources: ok
+   3 vet             PASS          0s  secmp-crypto/secmp-proto closure: 0 external crates, 0 exempted; tracked exemptions elsewhere: 10
+   3 audit           PASS          6s  RustSec: no advisories (warnings denied)
+   3 cooldown        PASS          0s  11 registry packages, all ≥ 7 days old; youngest: unicode-ident 1.0.26, 11 days
+   4 nextest         PASS          3s  cargo nextest run --workspace
+   4 doctest         PASS          0s  cargo test --doc
+   4 hello           PASS          0s  secmp-relay 0.0.0 (M0 skeleton: no functionality) | secmp-cli 0.0.0 (M0 skeleton: no functionality) | secmp-ui 0.0.0 (M0 skeleton: no functionality)
+   5 kat             PASS          0s  KAT/differential packages: none (expected set matches)
+ci-fast: PASS
+=== step summary (host x86_64-unknown-linux-gnu, strict: true) ===
+  13 sbom            PASS          9s  12 CycloneDX SBOMs in target/sbom; auditable release builds (x86_64-unknown-linux-gnu, remapped paths) read back by `cargo audit bin`: target/release/secmp-relay, target/release/secmp-cli, target/release/secmp-ui
+  14 systemd         PASS          0s  systemd 255 (255.4-1ubuntu8.17); self-test: unhardened fixture 9.4 > 2 rejected; units: none (deploy/secmp-relay.service arrives in M10)
+step: PASS
+
+## job linux-full (109059632550)
+rustc 1.98.1 (48a229cea 2026-09-01)
+     Summary [   0.115s] 32 tests run: 32 passed, 0 skipped
+     Summary [   0.117s] 32 tests run: 32 passed, 0 skipped
+=== ci-full summary (host x86_64-unknown-linux-gnu, strict: true) ===
+   1 fmt             PASS          0s  rustfmt: no changes
+   2 clippy          PASS          3s  clippy -D warnings on x86_64-unknown-linux-gnu (12 crates)
+   2 policy          PASS          0s  forbid-unsafe: 14 target roots; lints-table: 12 manifests; lint-allows: 0 relaxing attributes (all sanctioned); build-scripts: 12 crates, none; spdx: 47 files; secmp-crypto/secmp-proto closure: 0 external crates, 0 exempted; tracked exemptions elsewhere: 10; workflows: 1 files, triggers/SHA pins/continue-on-error ok
+   3 deny            PASS          2s  advisories, bans, licenses, sources: ok
+   3 vet             PASS          0s  secmp-crypto/secmp-proto closure: 0 external crates, 0 exempted; tracked exemptions elsewhere: 10
+   3 audit           PASS          5s  RustSec: no advisories (warnings denied)
+   3 cooldown        PASS          1s  11 registry packages, all ≥ 7 days old; youngest: unicode-ident 1.0.26, 11 days
+   4 nextest         PASS          3s  cargo nextest run --workspace
+   4 doctest         PASS          0s  cargo test --doc
+   4 hello           PASS          0s  secmp-relay 0.0.0 (M0 skeleton: no functionality) | secmp-cli 0.0.0 (M0 skeleton: no functionality) | secmp-ui 0.0.0 (M0 skeleton: no functionality)
+   5 kat             PASS          0s  KAT/differential packages: none (expected set matches)
+   6 fuzz            PASS          0s  fuzz smoke, 120 s per target: none (expected set matches)
+   7 coverage        PASS          6s  secmp-cli: 5/6 lines = 83.3 % (min 80 %); secmp-client-core: no code; secmp-crypto: no code; secmp-proto: no code; secmp-relay: 5/6 lines = 83.3 % (min 80 %); secmp-store: no code; secmp-sys-desktop: no code; secmp-sys-mem: no code; secmp-testkit: no code; secmp-transport: no code; secmp-ui: 5/6 lines = 83.3 % (min 80 %) (xtask not measured)
+   8 mutants         PASS          0s  secmp-crypto, secmp-proto: Found 0 mutants to test
+   9 miri            PASS         25s  Miri (nightly-2026-09-21): secmp-sys-mem, secmp-sys-desktop, secmp-crypto
+   9 kani            PASS          0s  Kani 0.68.0: harness packages none (expected set matches)
+  10 proverif        PASS          0s  ProVerif 2.05 self-test [true, false] ok; models: none (expected set matches)
+  11 windows-cross   DELEGATED     0s  handed to another CI job with --delegated
+  11 windows-native  DELEGATED     0s  handed to another CI job with --delegated
+  11 linux-target    PASS          0s  host is x86_64-unknown-linux-gnu: every step above ran natively
+ 12a ref-vectors     STUB          0s  ref/ holds only its README; the cross-check starts in M1 with the separate reference session (OQ-17, ADR-026)
+  12 repro           STUB          0s  two-builder reproducibility check becomes real in M11 (`cargo xtask repro-check`)
+  13 sbom            PASS          9s  12 CycloneDX SBOMs in target/sbom; auditable release builds (x86_64-unknown-linux-gnu, remapped paths) read back by `cargo audit bin`: target/release/secmp-relay, target/release/secmp-cli, target/release/secmp-ui
+  14 systemd         PASS          0s  systemd 255 (255.4-1ubuntu8.17); self-test: unhardened fixture 9.4 > 2 rejected; units: none (deploy/secmp-relay.service arrives in M10)
+ci-full: PASS
+
+## job xwin-cross (109059632067)
+rustc 1.98.1 (48a229cea 2026-09-01)
+=== step summary (host x86_64-unknown-linux-gnu, strict: true) ===
+  11 windows-cross   PASS        180s  cargo xwin build --all-targets for x86_64-pc-windows-msvc
+step: PASS

@@ -1,0 +1,177 @@
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.01s
+     Running `target/debug/xtask ci-fast`
+
+=== [1] fmt ===
+$ ~/.rustup/toolchains/1.98.1-aarch64-apple-darwin/bin/cargo fmt --all --check
+
+=== [2] clippy ===
+$ ~/.rustup/toolchains/1.98.1-aarch64-apple-darwin/bin/cargo clippy --workspace --all-targets --locked -- -D warnings
+    Checking secmp-relay v0.0.0 (~/coding/claude_code/SecMPro/crates/secmp-relay)
+    Checking secmp-sys-mem v0.0.0 (~/coding/claude_code/SecMPro/crates/secmp-sys-mem)
+    Checking secmp-crypto v0.0.0 (~/coding/claude_code/SecMPro/crates/secmp-crypto)
+    Checking secmp-client-core v0.0.0 (~/coding/claude_code/SecMPro/crates/secmp-client-core)
+    Checking scratch-unsafe v0.0.0 (~/coding/claude_code/SecMPro/crates/scratch-unsafe)
+    Checking secmp-transport v0.0.0 (~/coding/claude_code/SecMPro/crates/secmp-transport)
+    Checking secmp-cli v0.0.0 (~/coding/claude_code/SecMPro/crates/secmp-cli)
+    Checking secmp-sys-desktop v0.0.0 (~/coding/claude_code/SecMPro/crates/secmp-sys-desktop)
+    Checking xtask v0.0.0 (~/coding/claude_code/SecMPro/xtask)
+error: declaration of an `unsafe` function
+  --> crates/scratch-unsafe/src/lib.rs:10:1
+   |
+10 | / pub unsafe fn first_unchecked(data: &[u8]) -> u8 {
+11 | |     // SAFETY: the caller guarantees that `data` is not empty.
+12 | |     unsafe { *data.get_unchecked(0) }
+13 | | }
+   | |_^
+   |
+   = note: requested on the command line with `-D unsafe-code`
+
+error: usage of an `unsafe` block
+  --> crates/scratch-unsafe/src/lib.rs:12:5
+   |
+12 |     unsafe { *data.get_unchecked(0) }
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: could not compile `scratch-unsafe` (lib) due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...
+FAIL [2] clippy: `~/.rustup/toolchains/1.98.1-aarch64-apple-darwin/bin/cargo clippy --workspace --all-targets --locked -- -D warnings` failed with exit status: 101
+
+=== [2] policy ===
+  FINDING forbid-unsafe: crates/scratch-unsafe/src/lib.rs (crate scratch-unsafe, target scratch_unsafe [lib]) lacks #![forbid(unsafe_code)]
+FAIL [2] policy: 1 policy finding(s)
+
+=== [3] deny ===
+$ ~/.rustup/toolchains/1.98.1-aarch64-apple-darwin/bin/cargo deny --locked check
+warning[license-exception-not-encountered]: license exception was not encountered
+   ┌─ ~/coding/claude_code/SecMPro/deny.toml:36:52
+   │
+36 │ exceptions = [{ allow = ["GPL-3.0-only"], crate = "slint" }]
+   │                                                    ━━━━━ unmatched license exception
+
+warning[license-not-encountered]: license was not encountered
+   ┌─ ~/coding/claude_code/SecMPro/deny.toml:24:6
+   │
+24 │     "BSD-2-Clause",
+   │      ━━━━━━━━━━━━ unmatched license allowance
+
+warning[license-not-encountered]: license was not encountered
+   ┌─ ~/coding/claude_code/SecMPro/deny.toml:25:6
+   │
+25 │     "BSD-3-Clause",
+   │      ━━━━━━━━━━━━ unmatched license allowance
+
+warning[license-not-encountered]: license was not encountered
+   ┌─ ~/coding/claude_code/SecMPro/deny.toml:26:6
+   │
+26 │     "ISC",
+   │      ━━━ unmatched license allowance
+
+warning[license-not-encountered]: license was not encountered
+   ┌─ ~/coding/claude_code/SecMPro/deny.toml:30:6
+   │
+30 │     "MPL-2.0",
+   │      ━━━━━━━ unmatched license allowance
+
+warning[license-not-encountered]: license was not encountered
+   ┌─ ~/coding/claude_code/SecMPro/deny.toml:28:6
+   │
+28 │     "Unicode-3.0",
+   │      ━━━━━━━━━━━ unmatched license allowance
+
+warning[license-not-encountered]: license was not encountered
+   ┌─ ~/coding/claude_code/SecMPro/deny.toml:29:6
+   │
+29 │     "Unicode-DFS-2016",
+   │      ━━━━━━━━━━━━━━━━ unmatched license allowance
+
+warning[license-not-encountered]: license was not encountered
+   ┌─ ~/coding/claude_code/SecMPro/deny.toml:27:6
+   │
+27 │     "Zlib",
+   │      ━━━━ unmatched license allowance
+
+advisories ok, bans ok, licenses ok, sources ok
+
+=== [3] vet ===
+$ ~/.rustup/toolchains/1.98.1-aarch64-apple-darwin/bin/cargo vet --locked
+Vetting Succeeded (1 fully audited, 10 exempted)
+
+=== [3] audit ===
+$ ~/.rustup/toolchains/1.98.1-aarch64-apple-darwin/bin/cargo audit --deny warnings
+    Fetching advisory database from `https://github.com/RustSec/advisory-db.git`
+      Loaded 1273 security advisories (from ~/.cargo/advisory-db)
+    Updating crates.io index
+    Scanning Cargo.lock for vulnerabilities (24 crate dependencies)
+
+=== [3] cooldown ===
+
+=== [4] nextest ===
+$ ~/.rustup/toolchains/1.98.1-aarch64-apple-darwin/bin/cargo nextest run --workspace --locked
+   Compiling scratch-unsafe v0.0.0 (~/coding/claude_code/SecMPro/crates/scratch-unsafe)
+error: declaration of an `unsafe` function
+  --> crates/scratch-unsafe/src/lib.rs:10:1
+   |
+10 | / pub unsafe fn first_unchecked(data: &[u8]) -> u8 {
+11 | |     // SAFETY: the caller guarantees that `data` is not empty.
+12 | |     unsafe { *data.get_unchecked(0) }
+13 | | }
+   | |_^
+   |
+   = note: requested on the command line with `-D unsafe-code`
+
+error: usage of an `unsafe` block
+  --> crates/scratch-unsafe/src/lib.rs:12:5
+   |
+12 |     unsafe { *data.get_unchecked(0) }
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: could not compile `scratch-unsafe` (lib) due to 2 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `scratch-unsafe` (lib test) due to 2 previous errors
+error: command `~/.rustup/toolchains/1.98.1-aarch64-apple-darwin/bin/cargo '--color=auto' test --no-run --message-format json-render-diagnostics --workspace --locked` exited with code 101
+FAIL [4] nextest: `~/.rustup/toolchains/1.98.1-aarch64-apple-darwin/bin/cargo nextest run --workspace --locked` failed with exit status: 101
+
+=== [4] doctest ===
+$ ~/.rustup/toolchains/1.98.1-aarch64-apple-darwin/bin/cargo test --workspace --locked --doc
+   Compiling scratch-unsafe v0.0.0 (~/coding/claude_code/SecMPro/crates/scratch-unsafe)
+error: declaration of an `unsafe` function
+  --> crates/scratch-unsafe/src/lib.rs:10:1
+   |
+10 | / pub unsafe fn first_unchecked(data: &[u8]) -> u8 {
+11 | |     // SAFETY: the caller guarantees that `data` is not empty.
+12 | |     unsafe { *data.get_unchecked(0) }
+13 | | }
+   | |_^
+   |
+   = note: requested on the command line with `-D unsafe-code`
+
+error: usage of an `unsafe` block
+  --> crates/scratch-unsafe/src/lib.rs:12:5
+   |
+12 |     unsafe { *data.get_unchecked(0) }
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: could not compile `scratch-unsafe` (lib) due to 2 previous errors
+FAIL [4] doctest: `~/.rustup/toolchains/1.98.1-aarch64-apple-darwin/bin/cargo test --workspace --locked --doc` failed with exit status: 101
+
+=== [4] hello ===
+  hello-world: secmp-relay 0.0.0 (M0 skeleton: no functionality)
+  hello-world: secmp-cli 0.0.0 (M0 skeleton: no functionality)
+  hello-world: secmp-ui 0.0.0 (M0 skeleton: no functionality)
+
+=== [5] kat ===
+
+=== ci-fast summary (host aarch64-apple-darwin, strict: false) ===
+   1 fmt             PASS          0s  rustfmt: no changes
+   2 clippy          FAIL          0s  `~/.rustup/toolchains/1.98.1-aarch64-apple-darwin/bin/cargo clippy --workspace --all-targets --locked -- -D warnings` failed with exit status: 101
+   2 policy          FAIL          0s  1 policy finding(s)
+   3 deny            PASS          1s  advisories, bans, licenses, sources: ok
+   3 vet             PASS          0s  secmp-crypto/secmp-proto closure: 0 external crates, 0 exempted; tracked exemptions elsewhere: 10
+   3 audit           PASS          0s  RustSec: no advisories (warnings denied)
+   3 cooldown        PASS          2s  11 registry packages, all ≥ 7 days old; youngest: unicode-ident 1.0.26, 11 days
+   4 nextest         FAIL          0s  `~/.rustup/toolchains/1.98.1-aarch64-apple-darwin/bin/cargo nextest run --workspace --locked` failed with exit status: 101
+   4 doctest         FAIL          0s  `~/.rustup/toolchains/1.98.1-aarch64-apple-darwin/bin/cargo test --workspace --locked --doc` failed with exit status: 101
+   4 hello           PASS          0s  secmp-relay 0.0.0 (M0 skeleton: no functionality) | secmp-cli 0.0.0 (M0 skeleton: no functionality) | secmp-ui 0.0.0 (M0 skeleton: no functionality)
+   5 kat             PASS          0s  KAT/differential packages: none (expected set matches)
+xtask: error: ci-fast: 4 step(s) failed
+exit=1

@@ -1,0 +1,36 @@
+# GitHub Actions run 36458106999 (workflow spikes.yml, commit 1e8bd75; Linux job now installs NASM), https://github.com/CarlKIGbR/SecMPro/actions/runs/36458106999
+# conclusion: success
+
+## job linux (109049522790)
+NASM version 2.16.01
+cipher_version = 4.14.0 community; cipher_provider = openssl OpenSSL 3.6.3 9 Jun 2026
+reopen with the right key: read back "hello from sqlcipher"
+reopen with a wrong key fails as expected: file is not a database
+database file (8192 bytes) has no plaintext header and no plaintext row
+SPIKE-A OK (linux x86_64)
+SPIKE-A linux-native: OK
+SHA-256("abc") known answer ok
+X25519 agreement ok
+ML-KEM-768 encapsulate/decapsulate ok (ct 1088 bytes)
+SPIKE-B OK (linux x86_64)
+SPIKE-B linux-native: OK
+SPIKE-C linux-compile: OK
+  This perl implementation doesn't produce Windows like paths (with backward
+SPIKE-A xwin-from-linux: FAILED (exit 101)
+SPIKE-B xwin-from-linux: OK
+
+## job windows-native (109049523147)
+C:\Strawberry\perl\bin\perl.exe
+This is perl 5, version 42, subversion 0 (v5.42.0) built for MSWin32-x64-multi-thread
+cipher_version = 4.14.0 community; cipher_provider = openssl OpenSSL 3.6.3 9 Jun 2026
+reopen with the right key: read back "hello from sqlcipher"
+reopen with a wrong key fails as expected: file is not a database
+database file (8192 bytes) has no plaintext header and no plaintext row
+SPIKE-A OK (windows x86_64)
+SPIKE-A windows-native: OK
+SHA-256("abc") known answer ok
+X25519 agreement ok
+ML-KEM-768 encapsulate/decapsulate ok (ct 1088 bytes)
+SPIKE-B OK (windows x86_64)
+SPIKE-B windows-native: OK
+SPIKE-C windows-compile: OK

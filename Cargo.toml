@@ -1,0 +1,67 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# SecMPro workspace (docs/02 §3, docs/06 §1–2, §6).
+
+[workspace]
+resolver = "3"
+members = [
+    "crates/secmp-crypto",
+    "crates/secmp-proto",
+    "crates/secmp-transport",
+    "crates/secmp-store",
+    "crates/secmp-client-core",
+    "crates/secmp-relay",
+    "crates/secmp-cli",
+    "crates/secmp-ui",
+    "crates/secmp-sys-mem",
+    "crates/secmp-sys-desktop",
+    "crates/secmp-testkit",
+    "xtask",
+]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.98.1"
+license = "AGPL-3.0-or-later"
+repository = "https://github.com/CarlKIGbR/SecMPro"
+publish = false
+
+# All versions live here; crates use `workspace = true` (docs/06 §1). Every direct dependency has an ADR line
+# (docs/08) and a cargo-vet record (docs/06 §3).
+[workspace.dependencies]
+# ADR-031: JSON for `cargo metadata`, cargo-llvm-cov and crates.io index lines — used by xtask only.
+serde_json = { version = "=1.0.151", default-features = false, features = ["std"] }
+
+[workspace.lints.rust]
+unsafe_code = "deny"              # every crate except secmp-sys-* additionally declares #![forbid(unsafe_code)] (checked by `xtask ci` with a grep);
+                                  # a workspace-level "forbid" cannot be relaxed per crate (E0453), hence deny + per-crate forbid
+missing_docs = "warn"
+unused_must_use = "deny"
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+indexing_slicing = "deny"
+arithmetic_side_effects = "deny"
+as_conversions = "deny"
+dbg_macro = "deny"
+print_stdout = "deny"
+print_stderr = "deny"
+todo = "deny"
+unimplemented = "deny"
+mem_forget = "deny"
+large_stack_arrays = "warn"
+undocumented_unsafe_blocks = "deny"      # every unsafe block needs a `// SAFETY:` comment (fires only where unsafe exists)
+multiple_unsafe_ops_per_block = "deny"   # one unsafe operation per block
+
+# docs/06 §6 — release profile for reproducible builds.
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
+debug = false

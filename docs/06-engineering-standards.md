@@ -33,11 +33,17 @@ todo = "deny"
 unimplemented = "deny"
 mem_forget = "deny"
 large_stack_arrays = "warn"
+undocumented_unsafe_blocks = "deny"      # every unsafe block needs a `// SAFETY:` comment (fires only where unsafe exists)
+multiple_unsafe_ops_per_block = "deny"   # one unsafe operation per block
 ```
 
 `clippy.toml`: `disallowed-methods` for `rand::thread_rng` (use `OsRng`) and `std::time::SystemTime::now` (sanctioned exceptions, each with `#[allow(clippy::disallowed_methods)]` and a comment: `secmp-client-core::clock`, the relay's hour-bucket function, and `secmp-cli` output timestamps). Hash maps keyed by attacker-influenced data use `std::collections::HashMap` with the default `RandomState` (SipHash-1-3, randomly keyed — the HashDoS-resistant choice); `ahash`/`foldhash` are permitted only for maps keyed by relay-generated ids.
 
-Test code (`#[cfg(test)]`, `tests/`, `fuzz/`, `testkit`) may use `unwrap`/`expect` via `#![allow(clippy::unwrap_used, clippy::expect_used)]` at the file top. The lint allowances listed in this paragraph are the only sanctioned ones; the review checklist treats any other `#[allow]` on a `deny` lint as a finding.
+Test code (`#[cfg(test)]`, `tests/`, `fuzz/`, `testkit`) may use `unwrap`/`expect` via `#![allow(clippy::unwrap_used, clippy::expect_used)]` at the file top.
+
+**Sanctioned `unsafe_code` relaxations (M0 review, 2026-09-28):** (a) `secmp-sys-mem` and `secmp-sys-desktop` carry `#![allow(unsafe_code)]` at the crate root — these two crates exist for platform bindings and every `unsafe` block in them must have a `// SAFETY:` comment (`undocumented_unsafe_blocks`), do one thing (`multiple_unsafe_ops_per_block`), and be covered by a unit test and, where feasible, Miri; (b) `secmp-ui` carries `#![deny(unsafe_code)]` instead of `forbid`, because Slint's `slint!` macro expansion contains `#[allow(unsafe_code)]` (E0453 under `forbid`); the `policy` step verifies that `secmp-ui`'s own source files contain neither the token `unsafe` nor a hand-written `allow(unsafe_code)`/`expect(unsafe_code)` (ADR-033). Every other crate carries `#![forbid(unsafe_code)]`.
+
+The lint allowances listed in this section are the only sanctioned ones; the review checklist treats any other `#[allow]` on a `deny` lint as a finding.
 
 Crypto-specific rules (enforced by review checklist and, where possible, by types):
 
@@ -56,6 +62,7 @@ Crypto-specific rules (enforced by review checklist and, where possible, by type
 - **Allowlist in `deny.toml`**: `[sources]` crates.io only; `[bans] multiple-versions = "deny"` (wildcard exceptions listed with justification); `[licenses]` allowlist (MIT, Apache-2.0, BSD-2/3 (covers SQLCipher), ISC, Zlib, Unicode, MPL-2.0; Slint's GPLv3 / royalty-free dual license as the single copyleft exception; **no LGPL** — which is why Arti's `hs-pow-full` is excluded, ADR-024 — recorded in ADR-015 pending the project license decision OQ-1).
 - **Adding a *direct* dependency requires**: an ADR line in `08-decisions.md` (why, alternatives, maintenance status, audit status), a `cargo vet` entry (an imported audit from Mozilla/Google/ISRG/Bytecode Alliance/Zcash, or a local audit by a named human reviewer — an AI agent must not record itself as auditor), and passing `cargo deny check`.
 - **Transitive dependencies** (Arti, Slint and wgpu bring several hundred): `cargo vet` runs with imports; uncovered crates are recorded as *tracked exemptions* in `supply-chain/config.toml` with the crate, version and the direct dependency that pulls them, and reviewed at every release. The **zero-exemption requirement applies to the dependency closure of `secmp-crypto` and `secmp-proto` only**.
+- **Publisher trust** (M0 review): `cargo vet trust` entries are permitted for individual publishers whom at least two of the imported audit sets trust (currently dtolnay and BurntSushi, per Mozilla, ISRG and Bytecode Alliance), recorded in `supply-chain/audits.toml` with `criteria = "safe-to-deploy"`, an `end` date at most 12 months out, and a note naming the importing organisations; reviewed at every release. Trust entries are not exemptions.
 - **Cooldown**: no dependency version younger than 7 days is allowed (`cargo` `global-min-publish-age = "7 days"` once stabilised in Rust 1.100; until then Renovate/Dependabot cooldown + a CI check comparing `Cargo.lock` versions against crates.io publish dates).
 - **Crypto crates** (only in `secmp-crypto`): `libcrux-ml-kem`, `ml-kem` (differential), `ml-dsa`, `aws-lc-rs` (differential + TLS), `x25519-dalek`, `ed25519-dalek`, `curve25519-dalek`, `chacha20`, `chacha20poly1305`, `hmac`, `hkdf`, `sha2`, `sha3`, `argon2`, `subtle`, `zeroize`, `getrandom`, `rand_core`. Versions pinned to exact (`=`) in `[workspace.dependencies]` and bumped only with KAT re-runs.
 - **No git dependencies** except pinned by full `rev` with an ADR. **No build scripts** in our crates. Dependencies with build scripts are inspected on every bump (`cargo vet` `build-script` criteria).
@@ -95,9 +102,9 @@ Nothing that touches the network or wall clock in unit tests; `secmp-client-core
 8. Mutation gate (nightly, and on PRs touching `secmp-crypto`/`secmp-proto`)
 9. Miri + Kani (nightly, and on PRs touching `secmp-sys-*`/parsers)
 10. ProVerif models (**mandatory**; CI installs `proverif` from the distribution package or opam; a missing prover fails the gate)
-11. Windows: native build + tests on GitHub-hosted `windows-latest` (every PR); `cargo-xwin` cross-build from the Linux release builder (release path, M11); from M9: tests on the owner's libvirt VM runner (nightly + on PRs touching platform code) — **owner-operated**; if unavailable the report says so and the milestone is not closed
+11. Windows: native build + tests on GitHub-hosted `windows-latest` (every PR); `cargo-xwin` cross-build job as a compile-compatibility check only (with NASM once `aws-lc-rs` is in the graph; a hard job from M1 on); from M9: tests on the owner's libvirt VM runner (nightly + on PRs touching platform code) — **owner-operated**; if unavailable the report says so and the milestone is not closed
 12a. Reference-implementation cross-check: `ref/` (independent Python implementation, ADR-026) regenerates the SecMP vectors and they must match `vectors/` byte-for-byte
-12. Reproducible build check: two independent builders (GitHub-hosted + owner's server or two containers with different base images) must produce identical hashes for release profiles
+12. Reproducible build check: two independent builders per target must produce identical hashes for release profiles — Linux artefacts on two Linux builders (GitHub-hosted + the owner's server, or two containers with different base images); **Windows artefacts on two Windows builders, built natively** (GitHub `windows-latest` and, from M9, the owner's libvirt VM; before that, two GitHub Windows jobs with different runner images/dates) — ADR-034, because SQLCipher's vendored OpenSSL cannot be cross-built to MSVC
 13. SBOM (CycloneDX via `cargo-cyclonedx`), `cargo auditable` binaries
 14. `systemd-analyze security --offline` on `deploy/secmp-relay.service` (≤ 2.0)
 
@@ -108,7 +115,8 @@ CI hygiene: no `pull_request_target`/`workflow_run` triggers; all actions pinned
 - Release profile: `opt-level = 3`, `lto = "fat"`, `codegen-units = 1`, `panic = "abort"`, `strip = "symbols"`, `debug = false`.
 - `RUSTFLAGS` fixed in `.cargo/config.toml` (`--remap-path-prefix` for `$CARGO_HOME` and the workspace; `-C target-cpu=x86-64-v2`; Windows: `-C control-flow-guard`). `SOURCE_DATE_EPOCH` from the git commit time. `trim-paths` once stable.
 - Builds run in a pinned container image (digest-pinned) with vendored deps; `diffoscope` on mismatch.
-- C dependencies (SQLCipher via `bundled-sqlcipher`, `aws-lc-sys`) are the main reproducibility risk: pinned `cc`/`cmake` versions in the image; if a dependency cannot be made reproducible, the milestone report says so and the ADR decides.
+- C dependencies (SQLCipher via `bundled-sqlcipher-vendored-openssl`, `aws-lc-sys`) are the main reproducibility risk: pinned `cc`/`cmake`/NASM/MSVC versions in the image or runner; if a dependency cannot be made reproducible, the milestone report says so and the ADR decides.
+- Release builds run only through `cargo xtask release` (M11), which injects the `--remap-path-prefix` flags for `$CARGO_HOME` and the workspace (ADR-032; Cargo cannot expand those paths in `.cargo/config.toml` and `trim-paths` is still unstable). A plain `cargo build --release` is a developer convenience, never a release.
 
 ## 7. Repository conventions
 

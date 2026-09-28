@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Exact pinned stable toolchain (docs/06 §1). MSRV = this version. Upgrades are their own PR with an ADR note.
+# aarch64-apple-darwin: development host and first-class KAT target (Amendment A1 §1, ADR-029).
+[toolchain]
+channel = "1.98.1"
+components = ["clippy", "rustfmt", "llvm-tools"]
+targets = ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc", "aarch64-apple-darwin"]
+profile = "minimal"

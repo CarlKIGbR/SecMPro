@@ -1,0 +1,8 @@
+ Downloading crates ...
+  Downloaded cfg-if v1.0.5
+   Compiling untrusted v0.7.1
+   Compiling zeroize v1.9.0
+   Compiling aws-lc-sys v0.45.0
+   Compiling aws-lc-rs v1.18.1
+   Compiling spike-aws-lc v0.0.0 (~/coding/claude_code/SecMPro/spikes/aws-lc)
+    Finished `release` profile [optimized] target(s) in 22.37s

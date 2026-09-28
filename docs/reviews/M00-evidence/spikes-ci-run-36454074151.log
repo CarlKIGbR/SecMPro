@@ -1,0 +1,52 @@
+# GitHub Actions run 36454074151 (workflow spikes.yml, commit 1ca8a00), filtered: outcome lines only
+# https://github.com/CarlKIGbR/SecMPro/actions/runs/36454074151
+linux	Pinned toolchain	2026-09-28T16:52:10.2303500Z rustc 1.98.1 (48a229cea 2026-09-01)
+linux	Install cargo-xwin (pinned)	2026-09-28T16:52:28.1668881Z     Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.61s
+linux	Install cargo-xwin (pinned)	2026-09-28T16:54:16.2999369Z     Finished `release` profile [optimized] target(s) in 1m 48s
+linux	(a) SQLCipher: native Linux build and run	2026-09-28T16:56:18.1382383Z     Finished `release` profile [optimized] target(s) in 2m 01s
+linux	(a) SQLCipher: native Linux build and run	2026-09-28T16:56:18.1464719Z cipher_version = 4.14.0 community; cipher_provider = openssl OpenSSL 3.6.3 9 Jun 2026
+linux	(a) SQLCipher: native Linux build and run	2026-09-28T16:56:18.3072245Z reopen with the right key: read back "hello from sqlcipher"
+linux	(a) SQLCipher: native Linux build and run	2026-09-28T16:56:18.3856927Z reopen with a wrong key fails as expected: file is not a database
+linux	(a) SQLCipher: native Linux build and run	2026-09-28T16:56:18.3857987Z database file (8192 bytes) has no plaintext header and no plaintext row
+linux	(a) SQLCipher: native Linux build and run	2026-09-28T16:56:18.3859062Z SPIKE-A OK (linux x86_64)
+linux	(a) SQLCipher: native Linux build and run	2026-09-28T16:56:18.3869074Z SPIKE-A linux-native: OK
+linux	(b) aws-lc-rs: native Linux build and run	2026-09-28T16:56:58.4757818Z     Finished `release` profile [optimized] target(s) in 40.05s
+linux	(b) aws-lc-rs: native Linux build and run	2026-09-28T16:56:58.4847084Z SHA-256("abc") known answer ok
+linux	(b) aws-lc-rs: native Linux build and run	2026-09-28T16:56:58.5041214Z X25519 agreement ok
+linux	(b) aws-lc-rs: native Linux build and run	2026-09-28T16:56:58.5041809Z ML-KEM-768 encapsulate/decapsulate ok (ct 1088 bytes)
+linux	(b) aws-lc-rs: native Linux build and run	2026-09-28T16:56:58.5042397Z SPIKE-B OK (linux x86_64)
+linux	(b) aws-lc-rs: native Linux build and run	2026-09-28T16:56:58.5046631Z SPIKE-B linux-native: OK
+linux	(c) Slint hello-world: compile for Linux (required)	2026-09-28T17:01:58.0282628Z     Finished `release` profile [optimized] target(s) in 4m 59s
+linux	(c) Slint hello-world: compile for Linux (required)	2026-09-28T17:01:58.1123696Z SPIKE-C linux-compile: OK
+linux	(a) SQLCipher: cargo-xwin cross-build from Linux (outcome recorded)	2026-09-28T17:03:33.3992984Z error: failed to run custom build command for `openssl-sys v0.9.117`
+linux	(a) SQLCipher: cargo-xwin cross-build from Linux (outcome recorded)	2026-09-28T17:03:33.4032933Z   Configuring OpenSSL version 3.6.3 for target VC-WIN64A
+linux	(a) SQLCipher: cargo-xwin cross-build from Linux (outcome recorded)	2026-09-28T17:03:33.4036218Z   Failure!  makefile wasn't produced.
+linux	(a) SQLCipher: cargo-xwin cross-build from Linux (outcome recorded)	2026-09-28T17:03:33.4039315Z   This perl implementation doesn't produce Windows like paths (with backward
+linux	(a) SQLCipher: cargo-xwin cross-build from Linux (outcome recorded)	2026-09-28T17:03:33.5851161Z SPIKE-A xwin-from-linux: FAILED (exit 101)
+linux	(b) aws-lc-rs: cargo-xwin cross-build from Linux (outcome recorded)	2026-09-28T17:03:39.2153392Z warning: aws-lc-sys@0.45.0: NASM command not found or failed to execute.
+linux	(b) aws-lc-rs: cargo-xwin cross-build from Linux (outcome recorded)	2026-09-28T17:03:39.2153712Z warning: aws-lc-sys@0.45.0: NASM command not found or failed to execute.
+linux	(b) aws-lc-rs: cargo-xwin cross-build from Linux (outcome recorded)	2026-09-28T17:03:39.2154025Z error: failed to run custom build command for `aws-lc-sys v0.45.0`
+linux	(b) aws-lc-rs: cargo-xwin cross-build from Linux (outcome recorded)	2026-09-28T17:03:39.2274704Z   cargo:warning=NASM command not found or failed to execute.
+linux	(b) aws-lc-rs: cargo-xwin cross-build from Linux (outcome recorded)	2026-09-28T17:03:39.2274921Z   cargo:warning=NASM command not found or failed to execute.
+linux	(b) aws-lc-rs: cargo-xwin cross-build from Linux (outcome recorded)	2026-09-28T17:03:39.2275800Z   NASM command not found! Build cannot continue.
+linux	(b) aws-lc-rs: cargo-xwin cross-build from Linux (outcome recorded)	2026-09-28T17:03:39.2276434Z SPIKE-B xwin-from-linux: FAILED (exit 101)
+windows-native	Pinned toolchain	2026-09-28T16:52:22.0344567Z rustc 1.98.1 (48a229cea 2026-09-01)
+windows-native	Pinned toolchain	2026-09-28T16:52:22.1189907Z C:\Strawberry\perl\bin\perl.exe
+windows-native	Pinned toolchain	2026-09-28T16:52:23.7233613Z This is perl 5, version 42, subversion 0 (v5.42.0) built for MSWin32-x64-multi-thread
+windows-native	(a) SQLCipher + vendored OpenSSL: build and run (required)	2026-09-28T17:01:37.9022442Z     Finished `release` profile [optimized] target(s) in 9m 12s
+windows-native	(a) SQLCipher + vendored OpenSSL: build and run (required)	2026-09-28T17:01:37.9023069Z cipher_version = 4.14.0 community; cipher_provider = openssl OpenSSL 3.6.3 9 Jun 2026
+windows-native	(a) SQLCipher + vendored OpenSSL: build and run (required)	2026-09-28T17:01:38.3717986Z reopen with the right key: read back "hello from sqlcipher"
+windows-native	(a) SQLCipher + vendored OpenSSL: build and run (required)	2026-09-28T17:01:38.4852394Z reopen with a wrong key fails as expected: file is not a database
+windows-native	(a) SQLCipher + vendored OpenSSL: build and run (required)	2026-09-28T17:01:38.4854048Z database file (8192 bytes) has no plaintext header and no plaintext row
+windows-native	(a) SQLCipher + vendored OpenSSL: build and run (required)	2026-09-28T17:01:38.4858960Z SPIKE-A OK (windows x86_64)
+windows-native	(a) SQLCipher + vendored OpenSSL: build and run (required)	2026-09-28T17:01:38.4980862Z SPIKE-A windows-native: OK
+windows-native	(b) aws-lc-rs: build and run (required)	2026-09-28T17:03:18.4832319Z     Finished `release` profile [optimized] target(s) in 1m 39s
+windows-native	(b) aws-lc-rs: build and run (required)	2026-09-28T17:03:18.5118675Z SHA-256("abc") known answer ok
+windows-native	(b) aws-lc-rs: build and run (required)	2026-09-28T17:03:18.5466721Z X25519 agreement ok
+windows-native	(b) aws-lc-rs: build and run (required)	2026-09-28T17:03:18.5469112Z ML-KEM-768 encapsulate/decapsulate ok (ct 1088 bytes)
+windows-native	(b) aws-lc-rs: build and run (required)	2026-09-28T17:03:18.5469811Z SPIKE-B OK (windows x86_64)
+windows-native	(b) aws-lc-rs: build and run (required)	2026-09-28T17:03:18.5552513Z SPIKE-B windows-native: OK
+windows-native	(c) Slint hello-world: compile (required; opened on macOS only, A1 §4)	2026-09-28T17:03:18.6658909Z Get-Item .\target\release\spike-slint-hello.exe | Format-List Name, Length
+windows-native	(c) Slint hello-world: compile (required; opened on macOS only, A1 §4)	2026-09-28T17:10:30.3104084Z     Finished `release` profile [optimized] target(s) in 7m 11s
+windows-native	(c) Slint hello-world: compile (required; opened on macOS only, A1 §4)	2026-09-28T17:10:32.9274839Z Length : 10718208
+windows-native	(c) Slint hello-world: compile (required; opened on macOS only, A1 §4)	2026-09-28T17:10:32.9284037Z SPIKE-C windows-compile: OK

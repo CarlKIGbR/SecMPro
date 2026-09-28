@@ -168,7 +168,7 @@ The unit of scale is an *independent relay*. Queue addresses include the relay r
 | Local storage | rusqlite + bundled SQLCipher; master key from Argon2id passphrase, optionally also OS keystore (DPAPI/TPM, Secret Service/TPM2) |
 | Formal verification | ProVerif models in CI for HX, LINK, TR; Tamarin optional later |
 | Build & supply chain | cargo-deny + cargo-vet + cargo-audit + cargo-auditable; 7-day dependency cooldown; reproducible builds checked on two builders; SLSA L3 provenance + offline minisign signature; SBOM |
-| Windows builds | cross-compiled from Linux with `cargo-xwin` (msvc target); tests executed on the owner's ephemeral libvirt Windows 11 VM |
+| Windows builds | tests and release artefacts built **natively on Windows** (GitHub `windows-latest`; from M9 also the owner's ephemeral libvirt Windows 11 VM) — ADR-034; `cargo-xwin` cross-builds from Linux/macOS are a compile-compatibility check only |
 
 ## 8. What v1.1 changes (and what it does not)
 

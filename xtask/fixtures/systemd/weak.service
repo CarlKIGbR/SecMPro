@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Self-test of the xtask systemd gate: a deliberately unhardened unit. Its exposure level must exceed the
+# docs/06 §5 step 14 limit of 2.0, otherwise the gate could not detect a weak unit.
+[Unit]
+Description=Unhardened self-test unit (never installed)
+
+[Service]
+ExecStart=/bin/true

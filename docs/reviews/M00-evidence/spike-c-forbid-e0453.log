@@ -1,0 +1,21 @@
+   Compiling slint-macros v1.18.1
+   Compiling slint v1.18.1
+   Compiling spike-slint-hello v0.0.0 (~/coding/claude_code/SecMPro/spikes/slint-hello)
+error[E0453]: allow(unsafe_code) incompatible with previous forbid
+  --> src/main.rs:8:1
+   |
+ 3 |   #![forbid(unsafe_code)]
+   |             ----------- `forbid` level set here
+...
+ 8 | / slint::slint! {
+ 9 | |     export component Hello inherits Window {
+10 | |         title: "SecMPro M0 spike";
+11 | |         width: 360px;
+...  |
+15 | | }
+   | |_^ overruled by previous forbid
+   |
+   = note: this error originates in the macro `ItemTreeVTable_static` which comes from the expansion of the macro `slint::slint` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+For more information about this error, try `rustc --explain E0453`.
+error: could not compile `spike-slint-hello` (bin "spike-slint-hello") due to 1 previous error

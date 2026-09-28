@@ -8,25 +8,55 @@ A zero-trust, post-quantum, metadata-free desktop messenger (Linux + Windows) wi
 - The desktop client removes its windows from the operating system's screenshot and screen-recording APIs (Windows; Linux/Wayland on KDE Plasma ≥ 6.7, Hyprland, niri — these Linux exclusions are compositor settings, not a security boundary) and locks content by default on displays that cannot be protected (X11, GNOME, remote sessions).
 - v1: one relay + two clients with every security function active. v1.1: peer-to-peer over per-contact onion endpoints with optional personal mailboxes.
 
-**Status:** planning complete; implementation starts with milestone M0. See `docs/07-milestones.md`.
+**Status:** implementation milestone M0 (repository bootstrap). See `docs/07-milestones.md` and `CHANGELOG.md`.
 
 ## Documentation
 
-Start with `docs/00-vision-and-scope.md` (document map) and `CLAUDE.md` (rules for the implementing agent). The normative protocol is `docs/03-protocol-spec.md`; the threat model is `docs/01-threat-model.md`.
+Start with `docs/00-vision-and-scope.md` (document map) and `CLAUDE.md` (rules for the implementing agent). The normative protocol is `docs/03-protocol-spec.md`; the threat model is `docs/01-threat-model.md`; decisions are in `docs/08-decisions.md`.
 
-## Building (after M0)
+## Building
+
+The toolchain is pinned in `rust-toolchain.toml` (Rust 1.98.1 with clippy, rustfmt, llvm-tools and the targets `x86_64-unknown-linux-gnu`, `x86_64-pc-windows-msvc`, `aarch64-apple-darwin`); `rustup` installs it on first use. All gates run through `cargo xtask` (`cargo xtask help`, details in `xtask/README.md`). Pinned tool versions live in `xtask/src/tools.rs`.
+
+### Development host: macOS (Apple Silicon)
+
+macOS is a development host only (ADR-029); v1 ships for Linux and Windows.
 
 ```
-rustup show                 # toolchain pinned by rust-toolchain.toml
-cargo xtask ci              # all gates
-cargo build --release -p secmp-relay -p secmp-cli -p secmp-ui
-cargo xtask win-test        # cross-build for Windows (cargo-xwin) and run tests in the Windows 11 VM
+rustup toolchain install              # from rust-toolchain.toml
+cargo xtask install-tools --nightly   # pinned cargo tools + nightly for Miri/fuzz (Kani runs its own setup)
+cargo xtask ci-fast                   # after every logical unit
+cargo xtask ci-full                   # before a milestone report; systemd-analyze is Linux-only and is reported as SKIP
+cargo xtask win-test --backend github # the Windows gate on GitHub-hosted windows-latest (needs `gh` and a pushed branch)
 ```
+
+Extra host tools for `ci-full`: `zig` 0.16.0 (Linux-target build via cargo-zigbuild), LLVM 22 (`clang-cl`, `lld-link`, `llvm-lib`) for cargo-xwin, CMake and NASM for C dependencies from M1 on, and ProVerif 2.05 built from source (`https://proverif.inria.fr/proverif2.05.tar.gz`, SHA-256 `4871f53c32ab4a04669a060c4886ba5d9080496963fb980a9a62d2c429ceabc4`; `./build -nointeract` with OCaml, ocamlfind and ocamlbuild). Set `SECMP_PROVERIF` if `proverif` is not on `PATH`.
+
+### Linux (x86_64)
+
+```
+rustup toolchain install
+cargo xtask install-tools --nightly
+cargo xtask ci-full --strict          # all 14 steps; systemd-analyze and ProVerif must be installed
+cargo build --release --locked -p secmp-relay -p secmp-cli -p secmp-ui
+```
+
+### Windows (x86_64, MSVC)
+
+Native: install Rust with rustup and the Visual Studio Build Tools (MSVC, Windows SDK), then
+
+```
+rustup toolchain install
+cargo xtask install-tools --set windows
+cargo xtask step --strict clippy nextest doctest kat hello
+```
+
+Cross-build from Linux or macOS: `cargo xtask step windows-cross` (cargo-xwin; needs `clang-cl`, `lld-link`, `llvm-lib`; downloads the MSVC CRT and Windows SDK). The Windows gate for M0–M8 is GitHub-hosted `windows-latest`; from M9 an ephemeral libvirt Windows 11 VM (`cargo xtask win-test --backend libvirt`, `xtask/README.md`).
 
 ## License
 
-To be decided by the owner (see `docs/09-open-questions.md`, OQ-1). Until then: all rights reserved.
+AGPL-3.0-or-later (`LICENSE`, ADR-015). Every source file carries an SPDX header.
 
 ## Security
 
-See `SECURITY.md` (created in M0). Please do not open public issues for vulnerabilities.
+See `SECURITY.md`. Please do not open public issues for vulnerabilities.

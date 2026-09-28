@@ -60,3 +60,5 @@ All notable changes to this project are documented in this file. The format foll
 
 - CI: the cargo-xwin cross-build job is a hard gate (no `continue-on-error`) and installs NASM (M0 review,
   condition C1).
+- Repository public (OQ-18, decided 2026-09-28): README pre-release banner, private vulnerability reporting as the
+  only reporting channel, ruleset `main-protection` with the four CI jobs as required checks, squash-only merges.

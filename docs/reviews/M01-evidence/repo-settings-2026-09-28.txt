@@ -1,0 +1,256 @@
+Repository configuration after OQ-18 (public, decided by the owner 2026-09-28), delegated by the reviewer
+(brief M1-2 B, steps 4-7). Executed by the implementer with `gh` 's keyring login (account CarlKIGbR,
+token scopes gist, read:org, repo, workflow); no token was written anywhere. Timestamps UTC.
+
+== state before ==
+[2026-09-28T22:52:04Z] $ gh repo view CarlKIGbR/SecMPro --json visibility,squashMergeAllowed,mergeCommitAllowed,rebaseMergeAllowed,deleteBranchOnMerge,hasWikiEnabled,hasProjectsEnabled
+  exit status: 0
+  response: {
+    "deleteBranchOnMerge": false,
+    "hasProjectsEnabled": true,
+    "hasWikiEnabled": false,
+    "mergeCommitAllowed": true,
+    "rebaseMergeAllowed": true,
+    "squashMergeAllowed": true,
+    "visibility": "PUBLIC"
+  }
+
+== step 4: merge settings ==
+[2026-09-28T22:52:05Z] $ gh repo edit CarlKIGbR/SecMPro --enable-squash-merge --enable-merge-commit=false --enable-rebase-merge=false --delete-branch-on-merge --enable-wiki=false --enable-projects=false
+  exit status: 0
+  (no body: HTTP 204 / success)
+
+[2026-09-28T22:52:06Z] $ gh repo view CarlKIGbR/SecMPro --json visibility,squashMergeAllowed,mergeCommitAllowed,rebaseMergeAllowed,deleteBranchOnMerge,hasWikiEnabled,hasProjectsEnabled
+  exit status: 0
+  response: {
+    "deleteBranchOnMerge": true,
+    "hasProjectsEnabled": false,
+    "hasWikiEnabled": false,
+    "mergeCommitAllowed": false,
+    "rebaseMergeAllowed": false,
+    "squashMergeAllowed": true,
+    "visibility": "PUBLIC"
+  }
+
+== step 5: ruleset for main ==
+[2026-09-28T22:52:06Z] $ gh api repos/CarlKIGbR/SecMPro/rulesets --method GET
+  exit status: 0
+  response: []
+
+[2026-09-28T22:52:07Z] $ gh api --method POST repos/CarlKIGbR/SecMPro/rulesets --input -
+  request body: {
+    "name": "main-protection",
+    "target": "branch",
+    "enforcement": "active",
+    "bypass_actors": [],
+    "conditions": {
+      "ref_name": {
+        "include": [
+          "refs/heads/main",
+          "~DEFAULT_BRANCH"
+        ],
+        "exclude": []
+      }
+    },
+    "rules": [
+      {
+        "type": "deletion"
+      },
+      {
+        "type": "non_fast_forward"
+      },
+      {
+        "type": "required_linear_history"
+      },
+      {
+        "type": "pull_request",
+        "parameters": {
+          "required_approving_review_count": 0,
+          "dismiss_stale_reviews_on_push": true,
+          "require_code_owner_review": false,
+          "require_last_push_approval": false,
+          "required_review_thread_resolution": true
+        }
+      },
+      {
+        "type": "required_status_checks",
+        "parameters": {
+          "strict_required_status_checks_policy": true,
+          "required_status_checks": [
+            {
+              "context": "linux-fast"
+            },
+            {
+              "context": "windows-native"
+            },
+            {
+              "context": "xwin-cross"
+            },
+            {
+              "context": "linux-full"
+            }
+          ]
+        }
+      }
+    ]
+  }
+  exit status: 0
+  response (key fields): {"id": 24146212, "name": "main-protection", "target": "branch", "enforcement": "active", "bypass_actors": [], "conditions": {"ref_name": {"exclude": [], "include": ["refs/heads/main", "~DEFAULT_BRANCH"]}}, "rules": [{"type": "deletion"}, {"type": "non_fast_forward"}, {"type": "required_linear_history"}, {"type": "pull_request", "parameters": {"required_approving_review_count": 0, "dismiss_stale_reviews_on_push": true, "required_reviewers": [], "require_code_owner_review": false, "require_last_push_approval": false, "required_review_thread_resolution": true, "require_extra_approval_for_unattributed_changes": true, "allowed_merge_methods": ["merge", "squash", "rebase"]}}, {"type": "required_status_checks", "parameters": {"strict_required_status_checks_policy": true, "do_not_enforce_on_create": false, "required_status_checks": [{"context": "linux-fast"}, {"context": "windows-native"}, {"context": "xwin-cross"}, {"context": "linux-full"}]}}]}
+
+-- verification (brief: paste the result) --
+[2026-09-28T22:52:07Z] $ gh api repos/CarlKIGbR/SecMPro/rules/branches/main
+  exit status: 0
+  response: [
+    {
+      "type": "deletion",
+      "ruleset_source_type": "Repository",
+      "ruleset_source": "CarlKIGbR/SecMPro",
+      "ruleset_id": 24146212
+    },
+    {
+      "type": "non_fast_forward",
+      "ruleset_source_type": "Repository",
+      "ruleset_source": "CarlKIGbR/SecMPro",
+      "ruleset_id": 24146212
+    },
+    {
+      "type": "required_linear_history",
+      "ruleset_source_type": "Repository",
+      "ruleset_source": "CarlKIGbR/SecMPro",
+      "ruleset_id": 24146212
+    },
+    {
+      "type": "pull_request",
+      "parameters": {
+        "required_approving_review_count": 0,
+        "dismiss_stale_reviews_on_push": true,
+        "required_reviewers": [],
+        "require_code_owner_review": false,
+        "require_last_push_approval": false,
+        "required_review_thread_resolution": true,
+        "require_extra_approval_for_unattributed_changes": true,
+        "allowed_merge_methods": [
+          "merge",
+          "squash",
+          "rebase"
+        ]
+      },
+      "ruleset_source_type": "Repository",
+      "ruleset_source": "CarlKIGbR/SecMPro",
+      "ruleset_id": 24146212
+    },
+    {
+      "type": "required_status_checks",
+      "parameters": {
+        "strict_required_status_checks_policy": true,
+        "do_not_enforce_on_create": false,
+        "required_status_checks": [
+          {
+            "context": "linux-fast"
+          },
+          {
+            "context": "windows-native"
+          },
+          {
+            "context": "xwin-cross"
+          },
+          {
+            "context": "linux-full"
+          }
+        ]
+      },
+      "ruleset_source_type": "Repository",
+      "ruleset_source": "CarlKIGbR/SecMPro",
+      "ruleset_id": 24146212
+    }
+  ]
+
+== step 6: security features ==
+[2026-09-28T22:52:08Z] $ gh api --method PUT repos/CarlKIGbR/SecMPro/private-vulnerability-reporting
+  exit status: 0
+  (no body: HTTP 204 / success)
+
+[2026-09-28T22:52:09Z] $ gh api --method PUT repos/CarlKIGbR/SecMPro/vulnerability-alerts
+  exit status: 0
+  (no body: HTTP 204 / success)
+
+[2026-09-28T22:52:10Z] $ gh api --method PUT repos/CarlKIGbR/SecMPro/automated-security-fixes
+  exit status: 0
+  (no body: HTTP 204 / success)
+
+-- verification --
+[2026-09-28T22:52:10Z] $ gh api repos/CarlKIGbR/SecMPro/private-vulnerability-reporting
+  exit status: 0
+  response: {
+    "enabled": true
+  }
+
+[2026-09-28T22:52:11Z] $ gh api repos/CarlKIGbR/SecMPro/vulnerability-alerts --include  (204 = enabled, 404 = disabled; status line only)
+  exit status: 0
+  stdout: HTTP/2.0 204 No Content
+
+[2026-09-28T22:52:11Z] $ gh api repos/CarlKIGbR/SecMPro/automated-security-fixes
+  exit status: 0
+  response: {
+    "enabled": true,
+    "paused": false
+  }
+
+== step 7: Actions hardening ==
+[2026-09-28T22:52:12Z] $ gh api --method PUT repos/CarlKIGbR/SecMPro/actions/permissions/workflow -f default_workflow_permissions=read -F can_approve_pull_request_reviews=false
+  exit status: 0
+  (no body: HTTP 204 / success)
+
+[2026-09-28T22:52:12Z] $ gh api --method PUT repos/CarlKIGbR/SecMPro/actions/permissions/fork-pr-contributor-approval -f approval_policy=all_external_contributors
+  exit status: 0
+  (no body: HTTP 204 / success)
+
+[2026-09-28T22:52:13Z] $ gh api --method PUT repos/CarlKIGbR/SecMPro/actions/permissions --input -
+  request body: {
+    "enabled": true,
+    "allowed_actions": "selected"
+  }
+  exit status: 0
+  (no body: HTTP 204 / success)
+
+  .github/workflows/ci.yml uses only actions/* (actions/checkout, actions/cache/restore, actions/cache/save,
+  actions/upload-artifact), all SHA-pinned -> patterns_allowed is empty.
+[2026-09-28T22:52:15Z] $ gh api --method PUT repos/CarlKIGbR/SecMPro/actions/permissions/selected-actions --input -
+  request body: {
+    "github_owned_allowed": true,
+    "verified_allowed": false,
+    "patterns_allowed": []
+  }
+  exit status: 0
+  (no body: HTTP 204 / success)
+
+-- verification --
+[2026-09-28T22:52:16Z] $ gh api repos/CarlKIGbR/SecMPro/actions/permissions/workflow
+  exit status: 0
+  response: {
+    "default_workflow_permissions": "read",
+    "can_approve_pull_request_reviews": false
+  }
+
+[2026-09-28T22:52:16Z] $ gh api repos/CarlKIGbR/SecMPro/actions/permissions/fork-pr-contributor-approval
+  exit status: 0
+  response: {
+    "approval_policy": "all_external_contributors"
+  }
+
+[2026-09-28T22:52:16Z] $ gh api repos/CarlKIGbR/SecMPro/actions/permissions
+  exit status: 0
+  response: {
+    "enabled": true,
+    "allowed_actions": "selected",
+    "selected_actions_url": "https://api.github.com/repositories/1393129458/actions/permissions/selected-actions",
+    "sha_pinning_required": false
+  }
+
+[2026-09-28T22:52:17Z] $ gh api repos/CarlKIGbR/SecMPro/actions/permissions/selected-actions
+  exit status: 0
+  response: {
+    "github_owned_allowed": true,
+    "patterns_allowed": [],
+    "verified_allowed": false
+  }

@@ -1,5 +1,7 @@
 # SecMPro
 
+> **Pre-release — do not use.** SecMPro is under active development (milestone M1 of 12). Nothing here has been audited, the protocol and the code change without notice, and there are no releases. Do not use it for anything that matters.
+
 A zero-trust, post-quantum, metadata-free desktop messenger (Linux + Windows) with its own protocol, **SecMP/1**, written in Rust.
 
 - No accounts, no identifiers, no directories — contacts are made by out-of-band invitation and verified with a safety number.
@@ -8,11 +10,11 @@ A zero-trust, post-quantum, metadata-free desktop messenger (Linux + Windows) wi
 - The desktop client removes its windows from the operating system's screenshot and screen-recording APIs (Windows; Linux/Wayland on KDE Plasma ≥ 6.7, Hyprland, niri — these Linux exclusions are compositor settings, not a security boundary) and locks content by default on displays that cannot be protected (X11, GNOME, remote sessions).
 - v1: one relay + two clients with every security function active. v1.1: peer-to-peer over per-contact onion endpoints with optional personal mailboxes.
 
-**Status:** implementation milestone M0 (repository bootstrap). See `docs/07-milestones.md` and `CHANGELOG.md`.
+**Status:** implementation milestone M1 (`secmp-crypto`: primitives and constructions). See `docs/07-milestones.md` and `CHANGELOG.md`.
 
 ## Documentation
 
-Start with `docs/00-vision-and-scope.md` (document map) and `CLAUDE.md` (rules for the implementing agent). The normative protocol is `docs/03-protocol-spec.md`; the threat model is `docs/01-threat-model.md`; decisions are in `docs/08-decisions.md`.
+Start with `docs/00-vision-and-scope.md` (document map) and `CLAUDE.md` (rules for the implementing agent). The normative protocol is `docs/03-protocol-spec.md`; the threat model is `docs/01-threat-model.md`; decisions are in `docs/08-decisions.md`. The reference implementation of the test vectors is a separate, independently written Python package (`docs/08-decisions.md` ADR-026) outside this repository; only its vector files are committed under `vectors/ref/`.
 
 ## Building
 

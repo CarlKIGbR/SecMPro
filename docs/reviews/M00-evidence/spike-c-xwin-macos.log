@@ -1,0 +1,20 @@
+   Compiling url v2.5.8
+   Compiling windows-sys v0.60.2
+   Compiling keyboard-types v0.7.0
+   Compiling windows-sys v0.61.2
+   Compiling i-slint-backend-winit v1.18.1
+   Compiling arboard v3.6.1
+   Compiling webbrowser v1.2.4
+   Compiling fontique v0.11.1
+   Compiling accesskit_windows v0.34.0
+   Compiling scoped-tls-hkt v0.1.5
+   Compiling i-slint-backend-selector v1.18.1
+   Compiling i-slint-common v1.18.1
+   Compiling parley v0.11.1
+   Compiling i-slint-core v1.18.1
+   Compiling muda v0.19.3
+   Compiling accesskit_winit v0.33.2
+   Compiling i-slint-renderer-femtovg v1.18.1
+   Compiling slint v1.18.1
+   Compiling spike-slint-hello v0.0.0 (~/coding/claude_code/SecMPro/spikes/slint-hello)
+    Finished `release` profile [optimized] target(s) in 1m 01s

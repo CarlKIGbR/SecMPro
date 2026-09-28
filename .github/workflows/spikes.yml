@@ -1,0 +1,92 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# M0 spikes (docs/07 M0, Amendment A1 §4) — temporary; removed together with spikes/ once the outcomes are
+# recorded in docs/reviews/M0-spikes.md. Each step prints an explicit `SPIKE-<id> <platform>: OK|FAILED` line.
+# Required outcomes fail the job; cross-build outcomes are recorded (A1 §4: native-works/cross-fails is not a
+# blocker).
+name: spikes
+
+on:
+  push:
+    branches: ["m00-bootstrap"]
+    paths: ["spikes/**", ".github/workflows/spikes.yml"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: spikes-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  windows-native:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    # PowerShell, so that openssl-src finds Strawberry Perl (a Windows perl), not Git Bash's MSYS perl.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Pinned toolchain
+        run: |
+          rustup toolchain install; if ($LASTEXITCODE -ne 0) { exit 1 }
+          rustc -vV; (Get-Command perl).Source; perl -v | Select-Object -First 2
+      - name: "(a) SQLCipher + vendored OpenSSL: build and run (required)"
+        working-directory: spikes/sqlcipher
+        run: |
+          cargo build --release; if ($LASTEXITCODE -ne 0) { exit 1 }
+          .\target\release\spike-sqlcipher.exe; if ($LASTEXITCODE -ne 0) { exit 1 }
+          "SPIKE-A windows-native: OK"
+      - name: "(b) aws-lc-rs: build and run (required)"
+        working-directory: spikes/aws-lc
+        run: |
+          cargo build --release; if ($LASTEXITCODE -ne 0) { exit 1 }
+          .\target\release\spike-aws-lc.exe; if ($LASTEXITCODE -ne 0) { exit 1 }
+          "SPIKE-B windows-native: OK"
+      - name: "(c) Slint hello-world: compile (required; opened on macOS only, A1 §4)"
+        working-directory: spikes/slint-hello
+        run: |
+          cargo build --release; if ($LASTEXITCODE -ne 0) { exit 1 }
+          Get-Item .\target\release\spike-slint-hello.exe | Format-List Name, Length
+          "SPIKE-C windows-compile: OK"
+
+  linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Pinned toolchain
+        run: rustup toolchain install && rustc -vV
+      - name: Packages (LLVM for cargo-xwin; fontconfig/xkbcommon for Slint)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends clang lld llvm libfontconfig1-dev libxkbcommon-dev
+      - name: Install cargo-xwin (pinned)
+        run: cargo xtask install-tools --set xwin
+      - name: "(a) SQLCipher: native Linux build and run"
+        working-directory: spikes/sqlcipher
+        run: cargo build --release && ./target/release/spike-sqlcipher && echo "SPIKE-A linux-native: OK"
+      - name: "(b) aws-lc-rs: native Linux build and run"
+        working-directory: spikes/aws-lc
+        run: cargo build --release && ./target/release/spike-aws-lc && echo "SPIKE-B linux-native: OK"
+      - name: "(c) Slint hello-world: compile for Linux (required)"
+        working-directory: spikes/slint-hello
+        run: cargo build --release && ls -l target/release/spike-slint-hello && echo "SPIKE-C linux-compile: OK"
+      - name: "(a) SQLCipher: cargo-xwin cross-build from Linux (outcome recorded)"
+        working-directory: spikes/sqlcipher
+        run: |
+          if cargo xwin build --release --target x86_64-pc-windows-msvc; then
+            echo "SPIKE-A xwin-from-linux: OK"
+          else
+            echo "SPIKE-A xwin-from-linux: FAILED (exit $?)"
+          fi
+      - name: "(b) aws-lc-rs: cargo-xwin cross-build from Linux (outcome recorded)"
+        working-directory: spikes/aws-lc
+        run: |
+          if cargo xwin build --release --target x86_64-pc-windows-msvc; then
+            echo "SPIKE-B xwin-from-linux: OK"
+          else
+            echo "SPIKE-B xwin-from-linux: FAILED (exit $?)"
+          fi

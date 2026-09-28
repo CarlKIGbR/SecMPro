@@ -1,0 +1,18 @@
+# spikes, native macOS (aarch64-apple-darwin), 26.6.2, Rust 1.98.1
+## (a) ./spikes/sqlcipher/target/release/spike-sqlcipher
+cipher_version = 4.14.0 community; cipher_provider = openssl OpenSSL 3.6.3 9 Jun 2026
+reopen with the right key: read back "hello from sqlcipher"
+reopen with a wrong key fails as expected: file is not a database
+database file (8192 bytes) has no plaintext header and no plaintext row
+SPIKE-A OK (macos aarch64)
+exit=0
+## (b) ./spikes/aws-lc/target/release/spike-aws-lc
+SHA-256("abc") known answer ok
+X25519 agreement ok
+ML-KEM-768 encapsulate/decapsulate ok (ct 1088 bytes)
+SPIKE-B OK (macos aarch64)
+exit=0
+## (c) ./spikes/slint-hello/target/release/spike-slint-hello (window opened on screen, closed by timer)
+window visible after 2 s: true (size PhysicalSize { width: 720, height: 240 }, scale 2)
+SPIKE-C OK (macos aarch64)
+exit=0

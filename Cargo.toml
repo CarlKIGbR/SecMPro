@@ -15,7 +15,6 @@ members = [
     "crates/secmp-sys-mem",
     "crates/secmp-sys-desktop",
     "crates/secmp-testkit",
-    "crates/scratch-unsafe",
     "xtask",
 ]
 

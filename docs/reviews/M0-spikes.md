@@ -4,7 +4,7 @@ Milestone M0 (docs/07), Amendment A1 §4. Date: 2026-09-28. Author: Claude Code 
 
 The spike programs lived in `spikes/` (each its own Cargo workspace, outside the product workspace and its
 `Cargo.lock`/deny/vet) and in the temporary workflow `.github/workflows/spikes.yml`; both were removed after this
-record was written. They are preserved in git history (commit range noted in §5).
+record was written and are preserved in git history (see Provenance).
 
 Toolchain everywhere: Rust 1.98.1 (`rust-toolchain.toml`). macOS host: Apple M1 Pro, macOS 26.6.2,
 `aarch64-apple-darwin`; cross tools: cargo-xwin 0.23.1 with LLVM 22.1.8 (`clang-cl`, `lld-link`, `llvm-lib`), NASM
@@ -37,7 +37,11 @@ trip.
 | `windows-latest`, native MSVC | **OK** — KAT, X25519, ML-KEM-768; `SPIKE-B OK (windows x86_64)` | [run 36454074151](https://github.com/CarlKIGbR/SecMPro/actions/runs/36454074151) |
 | Linux x86_64, native | **OK**; `SPIKE-B OK (linux x86_64)` | same run |
 | cargo-xwin from Linux → `x86_64-pc-windows-msvc`, runner without NASM | **FAILED** — `aws-lc-sys: NASM command not found or failed to execute` (x86_64 Windows assembly needs NASM; the macOS host had NASM 3.02) | same run |
-| cargo-xwin from Linux, with the distribution's NASM | *pending re-run* | |
+| cargo-xwin from Linux with Ubuntu's NASM 2.16.01 | **OK** — `SPIKE-B xwin-from-linux: OK`; (a) in the same job still fails for the OpenSSL reason above | [run 36458106999](https://github.com/CarlKIGbR/SecMPro/actions/runs/36458106999), `M00-evidence/spikes-ci-run-36458106999.log` |
+
+Consequence: every builder that cross-compiles to `x86_64-pc-windows-msvc` needs NASM once `aws-lc-rs` is in the
+graph (M1 differential tests, M6 TLS) — the `xwin-cross` CI job must then install it (not needed for the empty M0
+workspace). The alternative `prebuilt-nasm` feature of `aws-lc-sys` links prebuilt objects and is not proposed.
 
 Observation: under cargo-xwin, `CARGO_ENCODED_RUSTFLAGS` contains the `.cargo/config.toml` target flags
 (`-C target-cpu=x86-64-v2 -C control-flow-guard`, listed twice — harmless), so the docs/06 §6 flags survive a
@@ -84,6 +88,14 @@ own; (3) the ADR-027 sealed-column SQLite fallback, which needs no OpenSSL at al
 crypto provider (not exposed by `libsqlite3-sys` today). ADR-027's clause "or cannot be made reproducible" makes
 this an M11 question at the latest; it affects M7 (store) only if option (3) is chosen.
 
-## 5. Provenance
+## Provenance
 
-*Filled in when the spikes are removed.*
+The spike sources were added in commit `70fa3e8` (`spikes/`, `.github/workflows/spikes.yml`), the workflow was
+fixed in `1ca8a00` (YAML) and `4963663` (NASM), and everything was removed in the M0 cleanup commit that follows
+`bab5320`. To inspect them: `git show 70fa3e8 --stat`, `git show 4963663:.github/workflows/spikes.yml`.
+
+| Run | What |
+|---|---|
+| [36454074151](https://github.com/CarlKIGbR/SecMPro/actions/runs/36454074151) | native `windows-latest` and Linux runs of (a), (b), (c); xwin from Linux without NASM |
+| [36458106999](https://github.com/CarlKIGbR/SecMPro/actions/runs/36458106999) | the same with NASM installed on the Linux runner |
+| local (macOS) | native runs of (a), (b), (c) incl. the window; xwin cross-builds from macOS (`M00-evidence/spikes-native-macos.log`, `spike-*-xwin-macos.log`, `spike-c-forbid-e0453.log`) |

@@ -1,0 +1,75 @@
+# GitHub Actions run 36458696523 (commit bab5320: scratch crate with unsafe, no forbid), https://github.com/CarlKIGbR/SecMPro/actions/runs/36458696523
+# conclusion: failure; jobs: linux-fast=failure, xwin-cross=failure, linux-full=failure, windows-native=failure
+
+## job linux-fast (109051502341)
+error: declaration of an `unsafe` function
+  --> crates/scratch-unsafe/src/lib.rs:10:1
+error: usage of an `unsafe` block
+  --> crates/scratch-unsafe/src/lib.rs:12:5
+  FINDING forbid-unsafe: crates/scratch-unsafe/src/lib.rs (crate scratch-unsafe, target scratch_unsafe [lib]) lacks #![forbid(unsafe_code)]
+xtask: error: ci-fast: 4 step(s) failed
+=== ci-fast summary (host x86_64-unknown-linux-gnu, strict: true) ===
+   1 fmt             PASS          0s  rustfmt: no changes
+   2 clippy          FAIL          1s  `/home/runner/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/cargo clippy --workspace --all-targets --locked -- -D warnings` failed with exit status: 101
+   2 policy          FAIL          0s  1 policy finding(s)
+   3 deny            PASS          1s  advisories, bans, licenses, sources: ok
+   3 vet             PASS          0s  secmp-crypto/secmp-proto closure: 0 external crates, 0 exempted; tracked exemptions elsewhere: 10
+   3 audit           PASS          5s  RustSec: no advisories (warnings denied)
+   3 cooldown        PASS          0s  11 registry packages, all ≥ 7 days old; youngest: unicode-ident 1.0.26, 11 days
+   4 nextest         FAIL          0s  `/home/runner/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/cargo nextest run --workspace --locked` failed with exit status: 101
+   4 doctest         FAIL          0s  `/home/runner/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/cargo test --workspace --locked --doc` failed with exit status: 101
+   4 hello           PASS          0s  secmp-relay 0.0.0 (M0 skeleton: no functionality) | secmp-cli 0.0.0 (M0 skeleton: no functionality) | secmp-ui 0.0.0 (M0 skeleton: no functionality)
+   5 kat             PASS          0s  KAT/differential packages: none (expected set matches)
+
+## job windows-native (109051502657)
+error: declaration of an `unsafe` function
+error: usage of an `unsafe` block
+xtask: error: step: 3 step(s) failed
+=== step summary (host x86_64-pc-windows-msvc, strict: true) ===
+   2 clippy          FAIL          3s  `C:\Users\runneradmin\.rustup\toolchains\1.98.1-x86_64-pc-windows-msvc\bin\cargo.exe clippy --workspace --all-targets --locked -- -D warnings` failed with exit c
+   4 nextest         FAIL          0s  `C:\Users\runneradmin\.rustup\toolchains\1.98.1-x86_64-pc-windows-msvc\bin\cargo.exe nextest run --workspace --locked` failed with exit code: 101
+   4 doctest         FAIL          0s  `C:\Users\runneradmin\.rustup\toolchains\1.98.1-x86_64-pc-windows-msvc\bin\cargo.exe test --workspace --locked --doc` failed with exit code: 101
+   5 kat             PASS          0s  KAT/differential packages: none (expected set matches)
+   4 hello           PASS          0s  secmp-relay 0.0.0 (M0 skeleton: no functionality) | secmp-cli 0.0.0 (M0 skeleton: no functionality) | secmp-ui 0.0.0 (M0 skeleton: no functionality)
+
+## job xwin-cross (109051502465)
+error: declaration of an `unsafe` function
+  --> crates/scratch-unsafe/src/lib.rs:10:1
+error: usage of an `unsafe` block
+  --> crates/scratch-unsafe/src/lib.rs:12:5
+xtask: error: step: 1 step(s) failed
+=== step summary (host x86_64-unknown-linux-gnu, strict: true) ===
+  11 windows-cross   FAIL        177s  `/home/runner/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/cargo xwin build --workspace --all-targets --locked --target x86_64-pc-windows-msvc` failed 
+
+## job linux-full (109051502466)
+error: declaration of an `unsafe` function
+  --> crates/scratch-unsafe/src/lib.rs:10:1
+error: usage of an `unsafe` block
+  --> crates/scratch-unsafe/src/lib.rs:12:5
+  FINDING forbid-unsafe: crates/scratch-unsafe/src/lib.rs (crate scratch-unsafe, target scratch_unsafe [lib]) lacks #![forbid(unsafe_code)]
+xtask: error: ci-full: 5 step(s) failed
+=== ci-full summary (host x86_64-unknown-linux-gnu, strict: true) ===
+   1 fmt             PASS          0s  rustfmt: no changes
+   2 clippy          FAIL          1s  `/home/runner/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/cargo clippy --workspace --all-targets --locked -- -D warnings` failed with exit status: 101
+   2 policy          FAIL          0s  1 policy finding(s)
+   3 deny            PASS          1s  advisories, bans, licenses, sources: ok
+   3 vet             PASS          0s  secmp-crypto/secmp-proto closure: 0 external crates, 0 exempted; tracked exemptions elsewhere: 10
+   3 audit           PASS          4s  RustSec: no advisories (warnings denied)
+   3 cooldown        PASS          0s  11 registry packages, all ≥ 7 days old; youngest: unicode-ident 1.0.26, 11 days
+   4 nextest         FAIL          0s  `/home/runner/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/cargo nextest run --workspace --locked` failed with exit status: 101
+   4 doctest         FAIL          0s  `/home/runner/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/cargo test --workspace --locked --doc` failed with exit status: 101
+   4 hello           PASS          0s  secmp-relay 0.0.0 (M0 skeleton: no functionality) | secmp-cli 0.0.0 (M0 skeleton: no functionality) | secmp-ui 0.0.0 (M0 skeleton: no functionality)
+   5 kat             PASS          0s  KAT/differential packages: none (expected set matches)
+   6 fuzz            PASS          0s  fuzz smoke, 120 s per target: none (expected set matches)
+   7 coverage        FAIL          2s  `/home/runner/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/cargo llvm-cov nextest --workspace --locked --json --summary-only --output-path /home/runner
+   8 mutants         PASS          0s  secmp-crypto, secmp-proto: Found 0 mutants to test
+   9 miri            PASS         22s  Miri (nightly-2026-09-21): secmp-sys-mem, secmp-sys-desktop, secmp-crypto
+   9 kani            PASS          0s  Kani 0.68.0: harness packages none (expected set matches)
+  10 proverif        PASS          0s  ProVerif 2.05 self-test [true, false] ok; models: none (expected set matches)
+  11 windows-cross   DELEGATED     0s  handed to another CI job with --delegated
+  11 windows-native  DELEGATED     0s  handed to another CI job with --delegated
+  11 linux-target    PASS          0s  host is x86_64-unknown-linux-gnu: every step above ran natively
+ 12a ref-vectors     STUB          0s  ref/ holds only its README; the cross-check starts in M1 with the separate reference session (OQ-17, ADR-026)
+  12 repro           STUB          0s  two-builder reproducibility check becomes real in M11 (`cargo xtask repro-check`)
+  13 sbom            PASS          8s  13 CycloneDX SBOMs in target/sbom; auditable release builds (x86_64-unknown-linux-gnu, remapped paths) read back by `cargo audit bin`: target/release/secmp-relay
+  14 systemd         PASS          0s  systemd 255 (255.4-1ubuntu8.17); self-test: unhardened fixture 9.4 > 2 rejected; units: none (deploy/secmp-relay.service arrives in M10)

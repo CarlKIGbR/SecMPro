@@ -2,9 +2,12 @@
 //! `cargo xtask win-test --backend github|libvirt` — run the Windows gate (docs/06 §4 "Platform", Amendment A1
 //! §2, ADR-029).
 //!
-//! * `github` (M0–M8): dispatches `.github/workflows/ci.yml` with `suite=windows` for the pushed commit of the
-//!   current branch, waits for the `windows-native` job on `windows-latest` (native MSVC build, clippy, tests,
-//!   hello-world binaries), saves the full log under `target/win-test/` and fails unless the job succeeded.
+//! * `github` (M0–M8): the `windows-native` job of `.github/workflows/ci.yml` on GitHub-hosted `windows-latest`
+//!   (native MSVC build, clippy, tests, KATs, hello-world binaries) for the **pushed commit** of the current
+//!   branch. By default the run that the push triggered is used (waiting for it if it is still running);
+//!   `--rerun` re-executes that run's `windows-native` job; `--dispatch` starts a new `workflow_dispatch` run
+//!   with `suite=windows` (GitHub only allows this once `ci.yml` exists on the default branch). The job log is
+//!   saved under `target/win-test/`; the command fails unless the job concluded `success`.
 //! * `libvirt` (required from M9, deferred by owner decision A1): documented in `xtask/README.md`, not active.
 
 use serde_json::Value;
@@ -22,50 +25,83 @@ fn git(args: &[&str]) -> Result<String> {
         .to_owned())
 }
 
-fn run_ids(branch: &str) -> Result<Vec<(u64, String)>> {
-    let json = Cmd::new("gh")
-        .args([
-            "run",
-            "list",
-            "--workflow",
-            WORKFLOW,
-            "--branch",
-            branch,
-            "--event",
-            "workflow_dispatch",
-        ])
-        .args(["--limit", "20", "--json", "databaseId,headSha"])
-        .read()?;
-    let v: Value = serde_json::from_str(&json).map_err(|e| Error(format!("gh run list: {e}")))?;
-    Ok(v.as_array()
-        .map(|a| {
-            a.iter()
-                .filter_map(|r| {
-                    Some((
-                        r.get("databaseId")?.as_u64()?,
-                        r.get("headSha")?.as_str()?.to_owned(),
-                    ))
-                })
-                .collect()
-        })
-        .unwrap_or_default())
+/// A workflow run as listed by `gh run list --json databaseId,headSha,event`.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct Run {
+    pub(crate) id: u64,
+    pub(crate) head_sha: String,
+    pub(crate) event: String,
 }
 
-/// Conclusion of the named job in `gh run view --json jobs` output.
-pub(crate) fn job_conclusion(json: &str, job: &str) -> Result<String> {
+pub(crate) fn parse_runs(json: &str) -> Result<Vec<Run>> {
+    let v: Value = serde_json::from_str(json).map_err(|e| Error(format!("gh run list: {e}")))?;
+    let Some(items) = v.as_array() else {
+        bail!("gh run list: expected a JSON array")
+    };
+    Ok(items
+        .iter()
+        .filter_map(|r| {
+            Some(Run {
+                id: r.get("databaseId")?.as_u64()?,
+                head_sha: r.get("headSha")?.as_str()?.to_owned(),
+                event: r.get("event")?.as_str()?.to_owned(),
+            })
+        })
+        .collect())
+}
+
+fn runs(branch: &str) -> Result<Vec<Run>> {
+    let json = Cmd::new("gh")
+        .args(["run", "list", "--workflow", WORKFLOW, "--branch", branch])
+        .args(["--limit", "30", "--json", "databaseId,headSha,event"])
+        .read()?;
+    parse_runs(&json)
+}
+
+/// (database id, conclusion) of the named job in `gh run view --json jobs` output.
+pub(crate) fn job(json: &str, name: &str) -> Result<(u64, String)> {
     let v: Value = serde_json::from_str(json).map_err(|e| Error(format!("gh run view: {e}")))?;
-    v.get("jobs")
+    let j = v
+        .get("jobs")
         .and_then(Value::as_array)
         .and_then(|jobs| {
             jobs.iter()
-                .find(|j| j.get("name").and_then(Value::as_str) == Some(job))
+                .find(|j| j.get("name").and_then(Value::as_str) == Some(name))
         })
-        .and_then(|j| j.get("conclusion").and_then(Value::as_str))
-        .map(str::to_owned)
-        .ok_or_else(|| Error(format!("job {job} not found in the run")))
+        .ok_or_else(|| Error(format!("job {name} not found in the run")))?;
+    let id = j
+        .get("databaseId")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| Error(format!("job {name}: no id")))?;
+    let conclusion = j
+        .get("conclusion")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    Ok((id, conclusion))
 }
 
-fn github(branch_arg: Option<&str>) -> Result<()> {
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    Existing,
+    Rerun,
+    Dispatch,
+}
+
+fn wait_for_new_run(branch: &str, sha: &str, newer_than: u64) -> Result<u64> {
+    for _ in 0..60 {
+        std::thread::sleep(std::time::Duration::from_secs(5));
+        if let Some(r) = runs(branch)?
+            .into_iter()
+            .find(|r| r.id > newer_than && r.head_sha == sha)
+        {
+            return Ok(r.id);
+        }
+    }
+    bail!("the dispatched run did not appear within 5 minutes")
+}
+
+fn github(branch_arg: Option<&str>, mode: Mode) -> Result<()> {
     let branch = match branch_arg {
         Some(b) => b.to_owned(),
         None => git(&["rev-parse", "--abbrev-ref", "HEAD"])?,
@@ -78,68 +114,93 @@ fn github(branch_arg: Option<&str>) -> Result<()> {
             "origin/{branch} is at {remote_sha:?}, local {branch} at {local}: push first so the tested commit is known"
         );
     }
-    let before = run_ids(&branch)?
+    let listed = runs(&branch)?;
+    let newest_for_head = listed
         .iter()
-        .map(|(id, _)| *id)
-        .max()
-        .unwrap_or(0);
-    Cmd::new("gh")
-        .args([
-            "workflow",
-            "run",
-            WORKFLOW,
-            "--ref",
-            &branch,
-            "-f",
-            "suite=windows",
-        ])
-        .run()?;
-    let mut run_id = None;
-    for _ in 0..60 {
-        std::thread::sleep(std::time::Duration::from_secs(5));
-        if let Some((id, _)) = run_ids(&branch)?
-            .into_iter()
-            .find(|(id, sha)| *id > before && *sha == local)
-        {
-            run_id = Some(id);
-            break;
+        .filter(|r| r.head_sha == local)
+        .map(|r| r.id)
+        .max();
+    let id = match (mode, newest_for_head) {
+        (Mode::Dispatch, _) => {
+            let before = listed.iter().map(|r| r.id).max().unwrap_or(0);
+            Cmd::new("gh")
+                .args([
+                    "workflow",
+                    "run",
+                    WORKFLOW,
+                    "--ref",
+                    &branch,
+                    "-f",
+                    "suite=windows",
+                ])
+                .run()?;
+            wait_for_new_run(&branch, &local, before)?
         }
-    }
-    let Some(id) = run_id else {
-        bail!("the dispatched run did not appear within 5 minutes")
+        (_, None) => {
+            bail!("no {WORKFLOW} run exists for {local}; push the branch (or use --dispatch)")
+        }
+        (Mode::Rerun, Some(id)) => {
+            // Wait for the run to finish first: GitHub only re-runs jobs of completed runs.
+            let _ = Cmd::new("gh")
+                .args(["run", "watch", &id.to_string(), "--interval", "30"])
+                .run();
+            let (job_id, _) = job(
+                &Cmd::new("gh")
+                    .args(["run", "view", &id.to_string(), "--json", "jobs"])
+                    .read()?,
+                JOB,
+            )?;
+            Cmd::new("gh")
+                .args([
+                    "run",
+                    "rerun",
+                    &id.to_string(),
+                    "--job",
+                    &job_id.to_string(),
+                ])
+                .run()?;
+            std::thread::sleep(std::time::Duration::from_secs(10));
+            id
+        }
+        (Mode::Existing, Some(id)) => id,
     };
     let id_s = id.to_string();
-    say(&format!("win-test: run {id} for {branch} @ {local}"));
+    say(&format!(
+        "win-test: {WORKFLOW} run {id} for {branch} @ {local}"
+    ));
     let watched = Cmd::new("gh")
-        .args(["run", "watch", &id_s, "--exit-status", "--interval", "30"])
+        .args(["run", "watch", &id_s, "--interval", "30"])
         .run();
+    let (job_id, conclusion) = job(
+        &Cmd::new("gh")
+            .args(["run", "view", &id_s, "--json", "jobs"])
+            .read()?,
+        JOB,
+    )?;
     let log = Cmd::new("gh")
-        .args(["run", "view", &id_s, "--log"])
+        .args(["run", "view", &id_s, "--job", &job_id.to_string(), "--log"])
         .read()?;
     let dir = std::path::Path::new("target").join("win-test");
     std::fs::create_dir_all(&dir)?;
-    let path = dir.join(format!("run-{id}.log"));
+    let path = dir.join(format!("run-{id}-job-{job_id}.log"));
     std::fs::write(&path, &log)?;
-    for line in log.lines().filter(|l| l.starts_with(JOB)) {
+    for line in log.lines() {
         if line.contains("hello-world:")
             || line.contains("Summary [")
+            || line.contains("step summary")
             || line.contains(" PASS ")
             || line.contains(" FAIL ")
         {
             say(line);
         }
     }
-    let jobs = Cmd::new("gh")
-        .args(["run", "view", &id_s, "--json", "jobs"])
-        .read()?;
-    let conclusion = job_conclusion(&jobs, JOB)?;
     say(&format!(
-        "win-test: job {JOB} concluded {conclusion}; full log: {}",
+        "win-test: job {JOB} ({job_id}) concluded {conclusion:?}; log: {}",
         path.display()
     ));
     watched?;
     if conclusion != "success" {
-        bail!("{JOB} concluded {conclusion}");
+        bail!("{JOB} concluded {conclusion:?}");
     }
     Ok(())
 }
@@ -149,36 +210,42 @@ fn libvirt() -> Result<()> {
         "win-test --backend libvirt: the ephemeral Windows 11 VM runner (libvirt/QEMU on the owner's server).",
     );
     say(
-        "Per run: revert the qcow2 overlay to the read-only base image, boot, copy the test binaries in over the",
+        "Per run: revert the qcow2 overlay to the read-only base image, boot, copy the test archive in over the",
     );
     say(
-        "QEMU guest agent (guest-file-open/-write) or SSH, execute them, collect exit codes and logs, power off and",
+        "QEMU guest agent (guest-file-open/-write) or SSH, execute it, collect exit codes and logs, power off and",
     );
     say(
         "discard the overlay. The VM holds no secrets and only runs commits already on protected branches.",
     );
     say("Procedure and configuration: xtask/README.md (section win-test).");
     bail!(
-        "the libvirt backend is deferred by owner decision (Amendment A1): GitHub windows-latest is the Windows gate for M0–M8; the VM is required from M9"
+        "the libvirt backend is deferred by owner decision (Amendment A1): GitHub windows-latest is the Windows gate \
+         for M0–M8; the VM is required from M9"
     )
 }
 
-/// `cargo xtask win-test --backend github|libvirt [--ref BRANCH]`.
+/// `cargo xtask win-test --backend github|libvirt [--ref BRANCH] [--rerun | --dispatch]`.
 pub(crate) fn run(args: &[String]) -> Result<()> {
     let mut backend = None;
     let mut branch = None;
+    let mut mode = Mode::Existing;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
             "--backend" => backend = it.next().cloned(),
             "--ref" => branch = it.next().cloned(),
+            "--rerun" => mode = Mode::Rerun,
+            "--dispatch" => mode = Mode::Dispatch,
             other => bail!("unknown argument {other:?}"),
         }
     }
     match backend.as_deref() {
-        Some("github") => github(branch.as_deref()),
+        Some("github") => github(branch.as_deref(), mode),
         Some("libvirt") => libvirt(),
-        _ => bail!("usage: cargo xtask win-test --backend github|libvirt [--ref BRANCH]"),
+        _ => bail!(
+            "usage: cargo xtask win-test --backend github|libvirt [--ref BRANCH] [--rerun | --dispatch]"
+        ),
     }
 }
 
@@ -188,9 +255,26 @@ mod tests {
 
     #[test]
     fn job_lookup() -> Result<()> {
-        let json = r#"{"jobs":[{"name":"linux-fast","conclusion":"success"},{"name":"windows-native","conclusion":"failure"}]}"#;
-        assert_eq!(job_conclusion(json, "windows-native")?, "failure");
-        assert!(job_conclusion(json, "nope").is_err());
+        let json = r#"{"jobs":[{"name":"linux-fast","databaseId":1,"conclusion":"success"},
+                               {"name":"windows-native","databaseId":2,"conclusion":"failure"}]}"#;
+        assert_eq!(job(json, "windows-native")?, (2, "failure".to_owned()));
+        assert!(job(json, "nope").is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn run_listing() -> Result<()> {
+        let json = r#"[{"databaseId":7,"headSha":"abc","event":"push"},{"databaseId":6,"headSha":"def","event":"pull_request"}]"#;
+        let r = parse_runs(json)?;
+        assert_eq!(
+            r.first(),
+            Some(&Run {
+                id: 7,
+                head_sha: "abc".into(),
+                event: "push".into()
+            })
+        );
+        assert!(parse_runs("{}").is_err());
         Ok(())
     }
 
@@ -201,5 +285,6 @@ mod tests {
             run(&["--backend".into(), "libvirt".into()]).is_err(),
             "libvirt is deferred and must not pass"
         );
+        assert!(run(&["--backend".into(), "github".into(), "--bogus".into()]).is_err());
     }
 }

@@ -9,7 +9,7 @@ Build, CI, supply-chain and release automation (docs/06 §5). The alias lives in
 | `ci-full [--strict] [--delegated ID]…` (`ci`) | steps 1–14: the above plus `fuzz`, `coverage`, `mutants`, `miri`, `kani`, `proverif`, `windows-cross`, `windows-native`, `linux-target`, `ref-vectors`, `repro`, `sbom`, `systemd` |
 | `step [--strict] ID…` | run selected steps |
 | `policy`, `cooldown`, `sbom` | shortcuts for single steps |
-| `win-test --backend github\|libvirt` | the Windows gate (below) |
+| `win-test --backend github\|libvirt [--rerun\|--dispatch]` | the Windows gate (below) |
 | `install-tools [--set fast\|windows\|xwin\|full\|all] [--nightly]` | install the pinned tools (`src/tools.rs`); `SECMP_TOOLS_ROOT` sets `cargo install --root` |
 | `vectors`, `repro-check`, `ops-check` | documented stubs until M1, M11 and M10; they exit non-zero |
 
@@ -45,10 +45,13 @@ check. Replaced by Cargo's `global-min-publish-age` once it is stable (docs/06 �
 
 1. Requires `gh` (authenticated) and that `origin/<branch>` equals the local branch head, so the tested commit
    is known.
-2. Dispatches `.github/workflows/ci.yml` with `suite=windows` on that branch.
-3. Waits for the run (`gh run watch`), saves the full log to `target/win-test/run-<id>.log`, prints the
-   hello-world banners and the nextest summary of job `windows-native`, and fails unless that job concluded
-   `success`.
+2. Selects the `ci.yml` run for exactly that commit: by default the run the push triggered (waiting while it
+   is in progress); `--rerun` re-executes that run's `windows-native` job; `--dispatch` starts a new
+   `workflow_dispatch` run with `suite=windows` (GitHub accepts dispatches only for workflows that exist on the
+   default branch, i.e. after M0 is merged).
+3. Waits for the run (`gh run watch`), saves the `windows-native` job log to
+   `target/win-test/run-<run>-job-<job>.log`, prints the hello-world banners and the step summary, and fails
+   unless the job concluded `success`.
 
 Job `windows-native` runs on GitHub-hosted `windows-latest` with the native MSVC toolchain:
 `cargo xtask step --strict clippy nextest doctest kat hello` (clippy with `-D warnings`, all tests, the KATs,

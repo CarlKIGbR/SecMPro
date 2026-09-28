@@ -118,9 +118,13 @@ jobs:
       - name: Cross-build for x86_64-pc-windows-msvc
         run: cargo xtask step --strict windows-cross
 
-  # docs/06 §5 steps 1–14 (ci-full) nightly and on demand. The Windows steps are covered by the two jobs above.
+  # docs/06 §5 steps 1–14 (ci-full): nightly on main, on every pull request and milestone-branch push (the gate
+  # before a milestone report), and on demand. The Windows steps are covered by the two jobs above.
   linux-full:
-    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && (inputs.suite == 'all' || inputs.suite == 'full'))
+    if: >-
+      github.event_name == 'schedule' || github.event_name == 'pull_request' ||
+      (github.event_name == 'push' && github.ref != 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch' && (inputs.suite == 'all' || inputs.suite == 'full'))
     runs-on: ubuntu-latest
     timeout-minutes: 240
     steps:

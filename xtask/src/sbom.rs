@@ -103,7 +103,7 @@ pub(crate) fn run(root: &Path) -> Result<String> {
             .join("release")
             .join(format!("{bin}{}", std::env::consts::EXE_SUFFIX));
         Cmd::cargo()
-            .args(["audit", "bin", "--deny", "warnings"])
+            .args(["audit", "--deny", "warnings", "bin"])
             .arg(exe.to_string_lossy())
             .run()?;
         audited.push(rel(root, &exe));

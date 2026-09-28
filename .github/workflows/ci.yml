@@ -47,12 +47,19 @@ jobs:
           echo "SECMP_TOOLS_ROOT=$HOME/.secmp-tools" >> "$GITHUB_ENV"
           echo "$HOME/.secmp-tools/bin" >> "$GITHUB_PATH"
       - name: Restore pinned tools
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: tools-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.secmp-tools
           key: ci-tools-fast-${{ runner.os }}-${{ hashFiles('xtask/src/tools.rs', 'rust-toolchain.toml') }}
       - name: Install pinned tools
         run: cargo xtask install-tools --set fast
+      - name: Save pinned tools (right after installing, so a later failing step cannot lose the cache)
+        if: steps.tools-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.secmp-tools
+          key: ${{ steps.tools-cache.outputs.cache-primary-key }}
       - name: ci-fast (steps 1–5)
         run: cargo xtask ci-fast --strict
       - name: SBOM (step 13) and systemd exposure (step 14)
@@ -80,12 +87,19 @@ jobs:
           "SECMP_TOOLS_ROOT=$env:USERPROFILE\.secmp-tools" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "$env:USERPROFILE\.secmp-tools\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
       - name: Restore pinned tools
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: tools-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.secmp-tools
           key: ci-tools-windows-${{ runner.os }}-${{ hashFiles('xtask/src/tools.rs', 'rust-toolchain.toml') }}
       - name: Install pinned tools
         run: cargo xtask install-tools --set windows
+      - name: Save pinned tools (right after installing, so a later failing step cannot lose the cache)
+        if: steps.tools-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.secmp-tools
+          key: ${{ steps.tools-cache.outputs.cache-primary-key }}
       - name: Windows gate
         run: cargo xtask step --strict clippy nextest doctest kat hello
 
@@ -106,15 +120,22 @@ jobs:
         run: |
           echo "SECMP_TOOLS_ROOT=$HOME/.secmp-tools" >> "$GITHUB_ENV"
           echo "$HOME/.secmp-tools/bin" >> "$GITHUB_PATH"
+      - name: LLVM tools for clang-cl / lld-link / llvm-lib
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends clang lld llvm
       - name: Restore pinned tools
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: tools-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.secmp-tools
           key: ci-tools-xwin-${{ runner.os }}-${{ hashFiles('xtask/src/tools.rs', 'rust-toolchain.toml') }}
-      - name: LLVM tools for clang-cl / lld-link / llvm-lib
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends clang lld llvm
       - name: Install pinned tools
         run: cargo xtask install-tools --set xwin
+      - name: Save pinned tools (right after installing, so a later failing step cannot lose the cache)
+        if: steps.tools-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.secmp-tools
+          key: ${{ steps.tools-cache.outputs.cache-primary-key }}
       - name: Cross-build for x86_64-pc-windows-msvc
         run: cargo xtask step --strict windows-cross
 
@@ -138,7 +159,8 @@ jobs:
           echo "SECMP_TOOLS_ROOT=$HOME/.secmp-tools" >> "$GITHUB_ENV"
           echo "$HOME/.secmp-tools/bin" >> "$GITHUB_PATH"
       - name: Restore pinned tools
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: tools-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.secmp-tools
@@ -158,5 +180,13 @@ jobs:
             install -m 0755 proverif "$HOME/.secmp-tools/bin/proverif"
           fi
           proverif -help | head -1
+      - name: Save pinned tools (right after installing, so a later failing step cannot lose the cache)
+        if: steps.tools-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.secmp-tools
+            ~/.kani
+          key: ${{ steps.tools-cache.outputs.cache-primary-key }}
       - name: ci-full (steps 1–14)
         run: cargo xtask ci-full --strict --delegated windows-native --delegated windows-cross

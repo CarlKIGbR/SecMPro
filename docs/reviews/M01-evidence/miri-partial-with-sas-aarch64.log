@@ -1,0 +1,68 @@
+   Compiling xtask v0.0.0 (/Users/c.carl/coding/claude_code/SecMPro/xtask)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.93s
+     Running `target/debug/xtask step miri`
+
+=== [9] miri ===
+$ rustup component list --installed --toolchain nightly-2026-09-21
+$ rustup run nightly-2026-09-21 cargo miri setup --target aarch64-unknown-linux-gnu
+A sysroot for Miri is already available in `/Users/c.carl/Library/Caches/org.rust-lang.miri`.
+$ LIBCRUX_DISABLE_SIMD128=1 LIBCRUX_DISABLE_SIMD256=1 CARGO_TARGET_DIR=/Users/c.carl/coding/claude_code/SecMPro/target/miri-portable rustup run nightly-2026-09-21 cargo miri test --locked --target aarch64-unknown-linux-gnu --package secmp-sys-mem --package secmp-sys-desktop --package secmp-crypto -- --skip mldsa:: --skip hybrid_sign::
+   Compiling secmp-crypto v0.0.0 (/Users/c.carl/coding/claude_code/SecMPro/crates/secmp-crypto)
+warning: unused dependency `libc`
+  --> crates/secmp-sys-mem/Cargo.toml:16:1
+   |
+16 | libc.workspace = true
+   | ^^^^
+   |
+   = note: `cargo::unused_dependencies` is set to `warn` by default
+help: consider removing the dependency on `libc`
+warning: `secmp-sys-mem` (manifest) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.71s
+     Running unittests src/lib.rs (target/miri-portable/miri/aarch64-unknown-linux-gnu/debug/build/secmp-crypto/71f5dcc08c483464/out/secmp_crypto-71f5dcc08c483464)
+
+running 53 tests
+test caead::tests::every_failure_is_the_same_rejection ... ok
+test caead::tests::matches_the_definition ... ok
+test caead::tests::round_trip_and_layout ... ok
+test caead::tests::tag_valid_but_commitment_wrong ... ok
+test ed25519::tests::bad_r_is_rejected ... ok
+test ed25519::tests::canonical_edges ... ok
+test ed25519::tests::rfc8032_vectors ... ok
+test ed25519::tests::s_plus_l_is_rejected ... ok
+test ed25519::tests::signature_byte_rules ... ok
+test ed25519::tests::small_order_and_non_canonical_keys_are_refused ... ok
+test ed25519::tests::wrong_message_signature_or_length ... ok
+test error::tests::display_carries_no_detail ... ok
+test error::tests::locked_memory_failure_maps_to_unavailable ... ok
+test fingerprint::tests::definition_and_lengths ... ok
+test hash::tests::sha256_fips180_vectors ... ok
+test hash::tests::sha3_256_fips202_vectors ... ok
+test hybrid_kem::tests::combiner_order_and_label ... ok
+test hybrid_kem::tests::debug_is_redacted ... ok
+test hybrid_kem::tests::low_order_keys_are_rejected_on_both_sides ... ok
+test hybrid_kem::tests::round_trips ... ok
+test hybrid_kem::tests::tampering_changes_the_secret_without_error ... ok
+test kdf::tests::empty_salt_equals_zero_salt ... ok
+test kdf::tests::info_is_label_then_context_unframed ... ok
+test kdf::tests::length_limits ... ok
+test kdf::tests::matches_manual_hmac_composition ... ok
+test label::tests::enum_equals_appendix_a_of_the_spec ... ok
+test label::tests::exactly_two_hybrid_sign_labels ... ok
+test label::tests::label_set_is_prefix_free ... ok
+test label::tests::labels_are_ascii_and_round_trip ... ok
+test mlkem::tests::ciphertext_lengths_and_debug ... ok
+test mlkem::tests::encapsulation_key_import_is_validated ... ok
+test mlkem::tests::implicit_rejection_on_a_flipped_ciphertext ... ok
+test mlkem::tests::round_trip_768_and_1024 ... ok
+test mlkem::tests::seed_is_the_key ... ok
+test msg::tests::every_failure_is_the_same_rejection ... ok
+test msg::tests::matches_the_definition ... ok
+test msg::tests::round_trip ... ok
+test nonce::tests::counter_never_wraps ... ok
+test nonce::tests::counter_receives_strictly_plus_one ... ok
+test nonce::tests::counter_sends_in_order ... ok
+test nonce::tests::nonces_are_random ... ok
+test rng::tests::fills_and_differs ... ok
+test sas::tests::constant_time_order ... ok
+test sas::tests::half_matches_the_definition ... ok
+test sas::tests::symmetric_sorted_and_grouped ... 

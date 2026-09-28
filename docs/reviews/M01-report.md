@@ -63,7 +63,7 @@ coverage is in §6 (the original probe is `docs/reviews/M01-evidence/vet-probe-2
 | **Coverage ≥ 90 %** | `cargo xtask step coverage` | `secmp-crypto` 1657/1660 lines = **99.8 %**; `secmp-sys-mem` 95.6 % (macOS; Linux/Windows paths are measured on their CI hosts); `secmp-testkit` 100 % |
 | **Rust and `ref/` vectors identical** | `cargo xtask vectors`; `cargo xtask step ref-vectors`; `tests/vectors.rs` in the `kat` step | all 8 suites (118 cases, 40 of them negative) structurally identical on the **first** comparison; frozen as `vectors/<suite>.json`; step 12a PASS; re-generated identically on every target |
 | Deliverable: types | unit tests in every module (`cargo nextest run -p secmp-crypto --lib`: 61 unit tests) | pass |
-| Deliverable: `SecretPage` + Miri on the crate | `secmp-sys-mem` unit tests (8, incl. kernel-level guard-page probes via `write(2)`/`VirtualQuery` and `VmFlags` in `/proc/self/smaps` on Linux); `cargo xtask step miri` | native: pass on macOS, Linux, Windows (CI); Miri: 7 tests pass (OS-probe test not compiled under Miri) |
+| Deliverable: `SecretPage` + Miri on the crate | `secmp-sys-mem` unit tests (8, incl. kernel-level guard-page probes via `write(2)`/`VirtualQuery` and `VmFlags` in `/proc/self/smaps` on Linux); `cargo xtask step miri` | native: pass on macOS, Linux, Windows (CI nextest); Miri: 7 tests pass (OS-probe test not compiled under Miri); `secmp-crypto` under Miri: 50 tests pass |
 | Deliverable: KAT loaders | `secmp-testkit` unit tests (6) | pass |
 | Deliverable: `ref/` implementations, cross-check | separate session (ADR-026); `cargo xtask vectors` | see row "vectors identical" |
 | Deliverable: fuzz targets, mutation run | `cargo xtask step fuzz`, `mutants` | 7 targets, local smoke 20 s each without findings (e.g. `caead_open` 1.47 M runs, `msg_open` 1.50 M); ci-full runs 120 s each |
@@ -84,14 +84,14 @@ Review focus:
 |---|---|
 | `cargo xtask ci-fast` (macOS arm64) | pass (fmt, clippy `--all-features`, policy, deny, vet, audit, cooldown, nextest, doctest, hello, kat) |
 | `ci-full --strict` (Linux, CI) | PENDING — run for the final commit, filled in below |
-| `windows-native` (CI) | pass on `68897d0` (run 36481098423, 19 min, incl. KATs and differential); final commit: PENDING |
+| `windows-native` (CI) | pass on `68897d0` (run 36481098423) and on `d379c6c` (run 36486510630, 18 min): clippy `--all-features`, nextest (156 tests), doctest, kat 859 s (secmp-crypto 96 tests, secmp-testkit 10 incl. 10 000-iteration differential, portable-backend re-run 21), hello; collected with `cargo xtask win-test --backend github` (`docs/reviews/M01-evidence/win-test-run-36486510630.txt`) |
 | `xwin-cross` (hard since C1) | pass on every M1 push (e.g. run 36481098423, 2 min) |
 | KATs / differential | §3 |
 | Constant time (`ct`) | macOS: pass (§3); Linux: PENDING |
 | Fuzz smoke | local 20 s × 7, no findings; ci-full 120 s × 7: PENDING |
 | Mutation | macOS: PASS — 234 mutants, 147 caught, 86 unviable, 1 documented survivor (§3); Linux: in ci-full |
 | Coverage | 99.8 % `secmp-crypto` |
-| Miri | `secmp-sys-mem`, `secmp-sys-desktop`, `secmp-crypto` interpreted as `aarch64-unknown-linux-gnu` with libcrux's portable backend; ML-DSA modules skipped under Miri only (§5, §8): PENDING |
+| Miri | macOS host: PASS in 702 s — `secmp-crypto` 50 tests (11 skipped by `MIRI_SKIP`), `secmp-sys-mem` 7 tests, interpreted as `aarch64-unknown-linux-gnu` with libcrux's portable backend. An earlier run without the SAS skip also passed the first SAS tests (`docs/reviews/M01-evidence/miri-partial-with-sas-aarch64.log`). Linux: in ci-full |
 | Kani / ProVerif | no harnesses/models in M1 (M2/M3); ProVerif self-test runs |
 | `cargo deny` / `vet` / `audit` / cooldown | pass: normal closure 52 crates, 0 exempted; 25 tracked exemptions outside; audit ignores RUSTSEC-2026-0173 (ADR-037); 119 packages ≥ 7 days (both lockfiles) |
 | Reproducible build | not applicable before M11 |

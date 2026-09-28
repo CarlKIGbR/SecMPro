@@ -1,0 +1,11 @@
+     Summary [  11.456s] 156 tests run: 156 passed, 0 skipped
+     Summary [  11.373s] 96 tests run: 96 passed, 0 skipped
+     Summary [ 810.939s] 10 tests run: 10 passed (4 slow), 0 skipped
+     Summary [   4.171s] 21 tests run: 21 passed, 0 skipped
+=== step summary (host x86_64-pc-windows-msvc, strict: true) ===
+   2 clippy          PASS         62s  clippy --all-features -D warnings on x86_64-pc-windows-msvc (12 crates)
+   4 nextest         PASS         85s  cargo nextest run --workspace
+   4 doctest         PASS          0s  cargo test --doc
+   5 kat             PASS        859s  KAT/differential packages: secmp-crypto, secmp-testkit (expected set matches); ML-KEM KATs and frozen vectors also with libcrux's portable backend
+   4 hello           PASS          0s  secmp-relay 0.0.0 (M0 skeleton: no functionality) | secmp-cli 0.0.0 (M0 skeleton: no functionality) | secmp-ui 0.0.0 (M0 skeleton: no functionality)
+win-test: job windows-native (109144945382) of run 36486510630 (commit d379c6c) concluded "success" on windows-latest (x86_64-pc-windows-msvc)

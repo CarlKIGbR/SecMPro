@@ -181,19 +181,34 @@ fn fetch(name: &str) -> Result<(i64, String)> {
     Ok((parse_http_date(&date)?, body))
 }
 
-/// `cargo xtask cooldown`: check every registry package in `Cargo.lock`.
+/// The lockfiles checked: the workspace and, when present, the separate cargo-fuzz package.
+const LOCKFILES: &[&str] = &["Cargo.lock", "fuzz/Cargo.lock"];
+
+/// `cargo xtask cooldown`: check every registry package in the lockfiles.
 pub(crate) fn run(root: &Path) -> Result<String> {
-    let lock = std::fs::read_to_string(root.join("Cargo.lock"))?;
     let mut registry = Vec::new();
-    for p in parse_lock(&lock) {
-        match p.source.as_deref() {
-            None => {} // workspace member
-            Some(s) if CRATES_IO_SOURCES.contains(&s) => registry.push(p),
-            Some(s) => bail!(
-                "{} {} comes from a non-crates.io source: {s}",
-                p.name,
-                p.version
-            ),
+    let mut seen = std::collections::BTreeSet::new();
+    let mut files = Vec::new();
+    for rel in LOCKFILES {
+        let path = root.join(rel);
+        if *rel != "Cargo.lock" && !path.exists() {
+            continue;
+        }
+        files.push(*rel);
+        for p in parse_lock(&std::fs::read_to_string(path)?) {
+            match p.source.as_deref() {
+                None => {} // workspace member
+                Some(s) if CRATES_IO_SOURCES.contains(&s) => {
+                    if seen.insert((p.name.clone(), p.version.clone())) {
+                        registry.push(p);
+                    }
+                }
+                Some(s) => bail!(
+                    "{rel}: {} {} comes from a non-crates.io source: {s}",
+                    p.name,
+                    p.version
+                ),
+            }
         }
     }
     let mut bodies: BTreeMap<String, String> = BTreeMap::new();
@@ -243,8 +258,9 @@ pub(crate) fn run(root: &Path) -> Result<String> {
         None => String::new(),
     };
     Ok(format!(
-        "{} registry packages, all ≥ 7 days old{youngest}",
-        registry.len()
+        "{} registry packages ({}), all ≥ 7 days old{youngest}",
+        registry.len(),
+        files.join(", ")
     ))
 }
 

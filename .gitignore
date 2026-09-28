@@ -9,3 +9,5 @@
 /mutants.out*/
 # Claude Code local permission settings (per machine, never committed)
 .claude/settings.local.json
+# Rust-generated SecMP vectors (compared with vectors/ref/ by `cargo xtask vectors`; the frozen files are vectors/*.json)
+/vectors/rust/

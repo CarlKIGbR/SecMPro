@@ -43,8 +43,17 @@ pub(crate) const AUDIT_IGNORES: &[(&str, &str)] = &[(
 /// Packages exposing the `kat` feature (docs/06 §5 step 5): external KATs, differential tests, vector checks.
 pub(crate) const KAT_PACKAGES: &[&str] = &["secmp-crypto"];
 
-/// cargo-fuzz targets under `fuzz/fuzz_targets/` (docs/06 §5 step 6). M1 adds the first ones.
-pub(crate) const FUZZ_TARGETS: &[&str] = &[];
+/// cargo-fuzz targets under `fuzz/fuzz_targets/` (docs/06 §5 step 6): M1 key, ciphertext and signature parsers
+/// and the two openers of `secmp-crypto`.
+pub(crate) const FUZZ_TARGETS: &[&str] = &[
+    "caead_open",
+    "ed25519_verify",
+    "hybrid_sign_verify",
+    "mldsa65_verify",
+    "mlkem_parse",
+    "msg_open",
+    "x25519_dh",
+];
 
 /// Packages under the mutation gate (docs/06 §4, §5 step 8).
 pub(crate) const MUTANT_PACKAGES: &[&str] = &["secmp-crypto", "secmp-proto"];
@@ -54,6 +63,19 @@ pub(crate) const MIRI_PACKAGES: &[&str] = &["secmp-sys-mem", "secmp-sys-desktop"
 
 /// Packages containing Kani harnesses (docs/06 §4). M2 adds `secmp-proto`.
 pub(crate) const KANI_PACKAGES: &[&str] = &[];
+
+/// The SecMP vector suites (`vectors/SCHEMA.md` §3): frozen as `vectors/<suite>.json`, reference files
+/// `vectors/ref/<suite>.json`, Rust files `vectors/rust/<suite>.json` (docs/06 §5 step 12a). M2–M5 add suites.
+pub(crate) const VECTOR_SUITES: &[&str] = &[
+    "caead",
+    "fingerprint",
+    "hkdf-labels",
+    "hybridkem-1024",
+    "hybridkem-768",
+    "hybridsign",
+    "msgencrypt",
+    "sas",
+];
 
 /// ProVerif models under `formal/` (docs/06 §5 step 10). M3 adds `tr.pv`, M4 `hx.pv`, M5 `link.pv`.
 pub(crate) const PROVERIF_MODELS: &[&str] = &[];

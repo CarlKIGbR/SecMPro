@@ -41,5 +41,11 @@ serde_json.workspace = true
 name = "gen-vectors"
 required-features = ["kat"]
 
+# dudect-style constant-time tests (release profile), run by `cargo xtask step ct`.
+[[bench]]
+name = "ct"
+harness = false
+required-features = ["kat"]
+
 [lints]
 workspace = true

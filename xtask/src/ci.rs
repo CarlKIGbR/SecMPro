@@ -95,6 +95,11 @@ const FAST: &[Step] = &[
 
 const FULL_EXTRA: &[Step] = &[
     Step {
+        num: "5",
+        id: "ct",
+        run: gates::ct,
+    },
+    Step {
         num: "6",
         id: "fuzz",
         run: gates::fuzz,

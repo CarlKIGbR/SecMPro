@@ -164,6 +164,70 @@ pub(crate) fn kat(ctx: &Ctx) -> Result<Outcome> {
     )))
 }
 
+/// One line per target of `target/ct-report.json` (written by `crates/secmp-crypto/benches/ct.rs`).
+pub(crate) fn ct_table(json: &str) -> Result<(Vec<String>, bool)> {
+    let v: Value = serde_json::from_str(json).map_err(|e| Error(format!("ct report: {e}")))?;
+    let results = v
+        .get("results")
+        .and_then(Value::as_array)
+        .ok_or_else(|| Error("ct report: no results".to_owned()))?;
+    let mut lines = Vec::new();
+    let mut all = !results.is_empty();
+    for r in results {
+        let name = r.get("name").and_then(Value::as_str).unwrap_or("?");
+        let passed = r.get("passed").and_then(Value::as_bool).unwrap_or(false);
+        let control = r.get("control").and_then(Value::as_bool).unwrap_or(false);
+        let t = r
+            .get("max_abs_t")
+            .and_then(Value::as_f64)
+            .unwrap_or(f64::NAN);
+        let n = r.get("samples").and_then(Value::as_u64).unwrap_or(0);
+        all &= passed;
+        lines.push(format!(
+            "{name}: max |t| = {t:.2} over {n} samples{} -> {}",
+            if control {
+                " (control, must be detected)"
+            } else {
+                ""
+            },
+            if passed { "ok" } else { "FAIL" }
+        ));
+    }
+    Ok((lines, all))
+}
+
+/// dudect-style constant-time tests (docs/06 §2): `cargo bench --bench ct` in the release profile; every target
+/// must stay below |t| = 4.5 and the variable-time control must be detected.
+pub(crate) fn ct(ctx: &Ctx) -> Result<Outcome> {
+    let report = ctx.root.join("target").join("ct-report.json");
+    if report.exists() {
+        std::fs::remove_file(&report)?;
+    }
+    let cap = Cmd::cargo()
+        .args([
+            "bench",
+            "--locked",
+            "--package",
+            "secmp-crypto",
+            "--features",
+            "kat",
+            "--bench",
+            "ct",
+        ])
+        .capture()?;
+    let (lines, all) = ct_table(&std::fs::read_to_string(&report).map_err(|e| {
+        say(cap.stderr.trim_end());
+        Error(format!("ct: no report written ({e})"))
+    })?)?;
+    for l in &lines {
+        say(&format!("  ct {l}"));
+    }
+    if !cap.success || !all {
+        bail!("constant-time test failed: {}", lines.join("; "));
+    }
+    Ok(Outcome::Pass(lines.join("; ")))
+}
+
 // ---- steps 6–10 ------------------------------------------------------------------------------------------
 
 fn file_stems(dir: &Path, ext: &str) -> Result<BTreeSet<String>> {
@@ -527,16 +591,13 @@ pub(crate) fn linux_target(ctx: &Ctx) -> Result<Outcome> {
 
 // ---- steps 12–14 -----------------------------------------------------------------------------------------
 
+/// Step 12a: the frozen SecMP vectors equal the committed reference files of the independent `ref/` session
+/// (ADR-026; CI compares with the committed `vectors/ref/*.json` and never runs the Python generator, M1 brief
+/// Q-4). The Rust side is re-checked against the frozen files by the `kat` step (`tests/vectors.rs`).
 pub(crate) fn ref_vectors(ctx: &Ctx) -> Result<Outcome> {
-    let impl_files = walk_files(&ctx.root.join("ref"), &|p: &Path| {
-        p.file_name().is_some_and(|n| n != "README.md")
-    })?;
-    if !impl_files.is_empty() {
-        bail!("ref/ contains an implementation but `cargo xtask vectors` is still the M0 stub");
-    }
-    Ok(Outcome::Stub(
-        "ref/ holds only its README; the cross-check starts in M1 with the separate reference session (OQ-17, ADR-026)".into(),
-    ))
+    Ok(Outcome::Pass(crate::vectors::check_frozen_against_ref(
+        &ctx.root,
+    )?))
 }
 
 pub(crate) fn repro(_: &Ctx) -> Outcome {
@@ -726,6 +787,32 @@ mod tests {
             same_set("x", &BTreeSet::new(), &["a"]).is_err(),
             "missing input must fail"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn ct_report_table() -> Result<()> {
+        let ok = r#"{"threshold":4.5,"results":[
+            {"name":"control","samples":10,"control":true,"max_abs_t":99.0,"passed":true,"t":{}},
+            {"name":"tag","samples":10,"control":false,"max_abs_t":1.25,"passed":true,"t":{}}]}"#;
+        let (lines, all) = ct_table(ok)?;
+        assert!(all);
+        assert_eq!(lines.len(), 2);
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("control, must be detected"))
+        );
+        let bad = ok.replace(
+            r#""max_abs_t":1.25,"passed":true"#,
+            r#""max_abs_t":7.0,"passed":false"#,
+        );
+        assert!(!ct_table(&bad)?.1);
+        assert!(
+            !ct_table(r#"{"results":[]}"#)?.1,
+            "an empty report never passes"
+        );
+        assert!(ct_table("{}").is_err());
         Ok(())
     }
 

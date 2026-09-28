@@ -1,0 +1,11 @@
+(* SPDX-License-Identifier: AGPL-3.0-or-later *)
+(* Self-test of the xtask ProVerif gate (not a SecMP model). The first query must be proved true and the
+   second must be found false; any other outcome means the prover or the result parsing is broken. *)
+free c: channel.
+free s: bitstring [private].
+free p: bitstring [private].
+
+query attacker(s).
+query attacker(p).
+
+process out(c, p)

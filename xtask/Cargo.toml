@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+[package]
+name = "xtask"
+description = "SecMPro build, CI, supply-chain and release automation (`cargo xtask`)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

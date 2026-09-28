@@ -15,6 +15,7 @@ members = [
     "crates/secmp-sys-mem",
     "crates/secmp-sys-desktop",
     "crates/secmp-testkit",
+    "xtask",
 ]
 
 [workspace.package]
@@ -28,6 +29,8 @@ publish = false
 # All versions live here; crates use `workspace = true` (docs/06 §1). Every direct dependency has an ADR line
 # (docs/08) and a cargo-vet record (docs/06 §3).
 [workspace.dependencies]
+# ADR-031: JSON for `cargo metadata`, cargo-llvm-cov and crates.io index lines — used by xtask only.
+serde_json = { version = "=1.0.151", default-features = false, features = ["std"] }
 
 [workspace.lints.rust]
 unsafe_code = "deny"              # every crate except secmp-sys-* additionally declares #![forbid(unsafe_code)] (checked by `xtask ci` with a grep);

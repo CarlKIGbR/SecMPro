@@ -230,7 +230,7 @@ Format: MADR-style, one entry per decision, numbered, never deleted (superseded 
 | `libc 0.2.189` | `secmp-sys-mem` (unix) | `mmap`, `mprotect`, `mlock`, `madvise`, `memfd_secret` for `SecretPage` | `rustix`, `nix` (more code; `secmp-sys-mem` is the one place for such bindings) | rust-lang | trust `rust-lang-owner` (M0 rule) |
 | `windows-sys 0.61.2` | `secmp-sys-mem` (windows) | `VirtualAlloc`/`VirtualProtect`/`VirtualLock`/working-set adjustment. `Win32_Foundation`, `Win32_System_Memory`, `Win32_System_SystemInformation`, `Win32_System_Threading` | `windows` (heavier) | Microsoft | trust `kennykerr` (M0 rule) |
 | `ml-kem 0.3.2` | dev (`secmp-crypto`) | ML-KEM differential partner | — | RustCrypto | trust |
-| `aws-lc-rs 1.18.1` | dev (`secmp-crypto`) | differential partner for ML-KEM, ML-DSA (`unstable`), Ed25519. `aws-lc-sys`, `alloc` | — | AWS | trust `justsmth` |
+| `aws-lc-rs 1.18.1` | dev (`secmp-crypto`) | differential partner for ML-KEM, ML-DSA (stable `signature` API), Ed25519. `aws-lc-sys`, `alloc` | — | AWS | trust `justsmth` |
 | `shake 0.1.0` | dev (`secmp-crypto`) | SHAKE-256 of the vector seed rule (`vectors/SCHEMA.md` §2) | `libcrux-sha3` | RustCrypto (already in the closure via `ml-dsa`) | trust `github:RustCrypto/XOFs` |
 | `serde_json 1.0.151` | `secmp-testkit`; dev (`secmp-crypto`) | JSON of the external KAT files and the vector files (canonical writer: sorted keys, compact) | hand-written parser (ADR-031 reasoning) | dtolnay | trust `dtolnay` (ADR-031) |
 

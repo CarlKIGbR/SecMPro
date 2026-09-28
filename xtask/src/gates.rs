@@ -46,6 +46,7 @@ pub(crate) fn clippy(ctx: &Ctx) -> Result<Outcome> {
             "clippy",
             "--workspace",
             "--all-targets",
+            "--all-features",
             "--locked",
             "--",
             "-D",
@@ -53,7 +54,7 @@ pub(crate) fn clippy(ctx: &Ctx) -> Result<Outcome> {
         ])
         .run()?;
     Ok(Outcome::Pass(format!(
-        "clippy -D warnings on {} ({} crates)",
+        "clippy --all-features -D warnings on {} ({} crates)",
         ctx.host,
         ctx.ws.members.len()
     )))

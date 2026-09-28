@@ -56,7 +56,7 @@ windows-sys = { version = "=0.61.2", default-features = false, features = ["Win3
 # ADR-023, ADR-036, ADR-037: test-only differential partners and the SHAKE-256 of the vector seeds
 # (dev-dependencies of secmp-crypto; never in the shipped closure).
 ml-kem = { version = "=0.3.2", default-features = false }
-aws-lc-rs = { version = "=1.18.1", default-features = false, features = ["aws-lc-sys", "alloc", "unstable"] }
+aws-lc-rs = { version = "=1.18.1", default-features = false, features = ["aws-lc-sys", "alloc"] }
 shake = { version = "=0.1.0", default-features = false }
 
 # Workspace crates (path dependencies; docs/02 §3 fixes who may depend on whom).

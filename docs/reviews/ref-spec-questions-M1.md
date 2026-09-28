@@ -19,6 +19,8 @@ and why, and the suites it blocks. A blocked suite is not written until the answ
 | SQ-10 | What the `fingerprint` input `iks` is | fingerprint | answered 2026-09-28 |
 | SQ-11 | X25519 public-key input handling beyond the all-zero check | negatives with crafted X25519 keys (if any) | answered 2026-09-28 |
 
+**State 2026-09-28 (brief REF-M1):** all answers applied; `BLOCKED_BY` is empty; the eight M1 files are written to `vectors/`. No new question was raised by the rev 2.2 spec or SCHEMA rev 2. The readings applied to the new SCHEMA §4 tables are listed at the end ("Readings adopted without a question — SCHEMA rev 2 §4") for the reviewer to veto.
+
 ---
 
 ## SQ-01 — How case inputs are derived from `seed_i` (blocks all M1 suites)
@@ -165,6 +167,25 @@ These seemed unambiguous. They are listed because an identical wrong reading on 
 - **§3.5 HybridSign:** Ed25519 is pure RFC 8032 Ed25519 over the 32-byte `m` (not Ed25519ph/ctx). `sig = sig_ed (64) ‖ sig_mldsa (3309)`.
 - **§3 table HKDF:** an empty salt equals `0^32` (RFC 5869 §2.2); `info = label ‖ context` with no separator.
 - **§6.7 SAS:** `iter` applies SHA-256 exactly 5200 times, starting from `h = fp`, and every round hashes `"SecMP-SAS/1" ‖ h ‖ fp`. `0..6` and `[5k..5k+5]` are half-open, so the six groups use bytes 0–29 of the 32-byte result. `int_be` is big-endian. Each group is zero-padded to 5 digits. "sorted_lexicographically" is ascending, and for equal-length digit strings this equals numeric order. `half_a = half(fp_a)`, `half_b = half(fp_b)`. The cross-checks 6 × 5 = 30 digits, 2 × 30 = 60 = `SAS_DIGITS`, and 12 display groups of 5 are consistent.
+
+## Readings adopted without a question — SCHEMA rev 2 §4 (for the reviewer to veto)
+
+None of these blocks a suite. Item 1 is the one where a different reading changes bytes; if the Rust side differs, the comparison will show it exactly in the rows named there.
+
+**Reviewer (2026-09-28): all seven readings are confirmed as the intended meaning of SCHEMA rev 2 §4.** In particular (1): a derived negative case always draws from its *own* stream and takes only the referenced row's shape (lengths, label); the honest object is computed from that stream and then manipulated. (3): the decapsulator hashes its own recomputed `ek_kem`/`pk_dh` and the received (manipulated) `pk_e`/`ct_kem` bytes. (7): the Rust side is bound to the same four byte-level rules (`S < L`, canonical `A` and `R`, no small-order `A` or `R`) independently of what its library checks. These readings bind the Rust implementation; no schema change is needed.
+
+1. **Stream of a negative row "derived from row r".** The §4 preamble says "Manipulations apply to the honest value derived from the case's **own** stream". So case *i* always draws from its own `stream_i`, and row *r* supplies only the shape (lengths, label). The stream is consumed exactly as row *r* would consume it, the honest object is computed, and then the manipulation is applied. Consequences:
+   - caead rows 9–17 consume `k, n, ad, p`.
+   - msgencrypt rows 9–15 consume `mk, ad, p`; row 16 consumes `mk`, `ad` (0), `p` (1709).
+   - hybridkem decaps rows 9–16 and encaps-to rows 17–19 consume `dk_seed, sk_dh, m, sk_e` ("stream as the referenced row"), although decaps rows list only `dk_seed, sk_dh, pk_e, ct_kem` and encaps-to rows list `ek_kem, pk_dh, m, sk_e`. So row 9's honest `ss` is the `ss` of its own encapsulation, not row 1's.
+   - hybridsign rows 9–17 consume `ed_seed, mldsa_seed, rnd, msg (32)` and sign with row 3's label.
+   - The only row that reuses another row's *values* is sas row 10, because its table text says so ("swapped relative to row 1", "same safety_number as row 1").
+2. **sas row 9:** `fp_a` = the first 32 bytes of `stream_9`, and `fp_b := fp_a`. No further bytes are drawn.
+3. **hybridkem decaps, combiner inputs:** `ek_kem` and `pk_dh` in the combiner are the decapsulator's own public keys, recomputed from `dk_seed` and `sk_dh`. `pk_e` and `ct_kem` are hashed as the (manipulated) bytes received.
+4. **hybridsign `verify`:** this is the result of `HybridVerify` over the row's own `pk_ed`, `pk_mldsa`, `label`, `msg` and `sig`, i.e. always `true`. Negative rows list `label` as a JSON string like the positives.
+5. **hkdf-labels rows 8/9:** these list `"salt": ""`. HKDF-Expand additionally requires `|PRK| ≥ 32` (RFC 5869 §2.3). No vector is affected.
+6. **Uniform errors:** HybridVerify refuses a non-HybridSign label with the same `Reject` as a failed signature (row 12). HybridSign refuses one as a caller error. MsgEncrypt rejects `|P| ≠ BODY_LEN` with the uniform `Reject` (row 16).
+7. **Strict Ed25519 (§3.5), libsodium 1.0.20-stable in PyNaCl 1.6.2:** every rule that can be isolated is enforced by `crypto_sign_open` itself: `S < L`, `A` not of small order (all eight torsion points, their `y + p` encodings, and the x-sign-bit variants), `R` not of small order, and `A`/`R` canonical. Each probe satisfies the cofactorless equation under an independent pure-Python model, so it isolates a single rule (`ref/tools/probe_ed25519_strict.py`, `ref/tests/test_hybridsign.py`). A non-canonical encoding of a point outside the torsion subgroup cannot be isolated, because that needs a point with y < 19 and a known discrete logarithm; both layers still reject it. The wrapper nevertheless carries all four rules as byte-level pre-checks (`primitives.ed25519_strict_precheck`). That keeps `ref/` independent of libsodium build options: an `ED25519_COMPAT` build checks only the top bits of S.
 
 ## Noted for later milestones (not blocking M1)
 

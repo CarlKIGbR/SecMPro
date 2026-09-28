@@ -35,3 +35,8 @@ All notable changes to this project are documented in this file. The format foll
   `unsafe_code` relaxations of `docs/06` §2 (`#![allow(unsafe_code)]` at the library root of exactly the two
   `secmp-sys-*` crates, `#![deny(unsafe_code)]` and no `unsafe` token in `secmp-ui`, `forbid` everywhere else);
   Dependabot for Cargo and GitHub Actions (weekly, grouped, 7-day cooldown).
+
+### Changed
+
+- CI: the cargo-xwin cross-build job is a hard gate (no `continue-on-error`) and installs NASM (M0 review,
+  condition C1).

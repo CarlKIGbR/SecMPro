@@ -750,8 +750,11 @@ mod tests {
 
     #[test]
     fn workflow_hygiene() {
-        let good = "on:\n  pull_request:\njobs:\n  xwin-cross:\n    continue-on-error: true\n    steps:\n      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n";
+        let good = "on:\n  pull_request:\njobs:\n  xwin-cross:\n    continue-on-error: false\n    steps:\n      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n";
         assert!(workflow_findings("w", good).is_empty());
+        // the M0 allowance for xwin-cross ended with condition C1 of the M0 review
+        let soft_xwin = good.replace("continue-on-error: false", "continue-on-error: true");
+        assert_eq!(workflow_findings("w", &soft_xwin).len(), 1);
         let bad = "on:\n  pull_request_target:\n  workflow_run:\njobs:\n  build:\n    continue-on-error: true\n    steps:\n      - uses: actions/checkout@v7\n";
         assert_eq!(workflow_findings("w", bad).len(), 4);
         let yaml_trap = "jobs:\n  a:\n    steps:\n      - run: echo \"done: ok\"\n      - run: |\n          echo \"done: ok\"\n";

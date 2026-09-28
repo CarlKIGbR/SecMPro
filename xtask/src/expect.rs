@@ -69,6 +69,6 @@ pub(crate) const TEST_FILE_ALLOWANCE: &[&str] = &["clippy::unwrap_used", "clippy
 /// Path prefixes (relative to the workspace root) where the test-file allowance applies.
 pub(crate) const TEST_FILE_PREFIXES: &[&str] = &["fuzz/", "crates/secmp-testkit/"];
 
-/// CI jobs that may use `continue-on-error: true`. Amendment A1 §5 allows it for the cargo-xwin cross-build
-/// in M0; the outcome is recorded in the milestone report.
-pub(crate) const CONTINUE_ON_ERROR_JOBS: &[&str] = &["xwin-cross"];
+/// CI jobs that may use `continue-on-error: true`. None: Amendment A1 §5 allowed it for the cargo-xwin
+/// cross-build in M0 only, and the M0 review (condition C1) made that job a hard gate from M1 on.
+pub(crate) const CONTINUE_ON_ERROR_JOBS: &[&str] = &[];

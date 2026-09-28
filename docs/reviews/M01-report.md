@@ -1,12 +1,13 @@
 # Milestone report — M01 `secmp-crypto`: typed primitives and constructions
 
-Branch: `m01-crypto` · Commit range: `cd5eeb4..` (M0 merge base; M1 work from `2aa5b1d`) · Author: Claude Code (Opus 5.5) · Date: 2026-09-28
+Branch: `m01-crypto` · Commit range: `cd5eeb4..` (M0 merge base; M1 work from `2aa5b1d`) · Author: Claude Code (Opus 5.5) · Date: 2026-09-28 (updated 2026-09-29)
 
 Status: **implementation complete; all acceptance criteria evidenced locally (macOS arm64) and on CI (Linux,
-Windows) as listed in §3–§4; open items in §8 (reviewer/owner decisions, no blocker).** Inputs: `docs/07` M1,
-spec rev 2.2, `vectors/SCHEMA.md` rev 2, ADR-035/036, the reviewer's M1 brief (decisions on B-1, Q-1…Q-4) and
-`docs/reviews/ref-spec-questions-M1.md` (SQ-01…SQ-11 and the confirmed SCHEMA §4 readings, which bind the Rust
-side as well).
+Windows) as listed in §3–§4 — the Linux constant-time gate after the harness fix is confirmed by the final CI run
+(§4); open items in §8 (reviewer/owner decisions, no blocker).** Inputs: `docs/07` M1, spec rev 2.2,
+`vectors/SCHEMA.md` rev 2, ADR-035/036, the reviewer's M1 brief (decisions on B-1, Q-1…Q-4), brief M1-2 (reference
+vectors, public-repository configuration, `shake` note) and `docs/reviews/ref-spec-questions-M1.md` (SQ-01…SQ-11
+and the confirmed SCHEMA §4 readings, which bind the Rust side as well).
 
 ## 1. Plan (written before implementation, updated during)
 
@@ -29,8 +30,10 @@ written by this session.
 | 10 | Fuzz targets (7) with corpora | "fuzz targets for key/ciphertext/signature parsers" | done `68897d0` |
 | 11 | `cargo mutants` on `secmp-crypto`/`secmp-proto` | "mutation survivors zero or documented" | done (`006942f`, §3) |
 | 12 | F1: fixture-based negative tests for every policy check | M0 review F1 | done `5018b02` |
-| 13 | `cargo xtask vectors`: generator, structural comparison with `vectors/ref/`, freeze | "Rust and `ref/` vectors identical" | done `68897d0` (reference files committed verbatim in `63965fe`) |
+| 13 | `cargo xtask vectors`: generator, structural comparison with `vectors/ref/`, freeze | "Rust and `ref/` vectors identical" | done `68897d0` (reference files committed verbatim in `63965fe`; re-run identical after `d81d0d0`, §5) |
 | 14 | `ci-full --strict` on Linux, `windows-native`, `xwin-cross`, `win-test --backend github`, report, CHANGELOG, PR | `06` §8 DoD | see §4 |
+| M1-2 B | Public-repository configuration (OQ-18, owner decision delegated by the reviewer): README banner, `SECURITY.md` route, merge settings, ruleset `main-protection`, security features, Actions hardening | brief M1-2 B | done `fd94ec5` (§3, §4) |
+| M1-2 C | `shake` dev-dependency replaced by `sha3::Shake256` | brief M1-2 C | done `d81d0d0` (§6) |
 
 Crate versions were live-checked on 2026-09-28 and approved in the M1 brief; the final dependency set with its vet
 coverage is in §6 (the original probe is `docs/reviews/M01-evidence/vet-probe-2026-09-28.txt`).
@@ -67,6 +70,7 @@ coverage is in §6 (the original probe is `docs/reviews/M01-evidence/vet-probe-2
 | Deliverable: KAT loaders | `secmp-testkit` unit tests (6) | pass |
 | Deliverable: `ref/` implementations, cross-check | separate session (ADR-026); `cargo xtask vectors` | see row "vectors identical" |
 | Deliverable: fuzz targets, mutation run | `cargo xtask step fuzz`, `mutants` | 7 targets, local smoke 20 s each without findings (e.g. `caead_open` 1.47 M runs, `msg_open` 1.50 M); ci-full runs 120 s each |
+| Repository configuration (not an M1 criterion) | `gh` (keyring login), every command and result in `docs/reviews/M01-evidence/repo-settings-2026-09-28.txt` | done on the **reviewer's delegation of the owner's decision OQ-18** (public, 2026-09-28; brief M1-2 B): squash-only merges, delete branch on merge, wiki/projects off; ruleset `main-protection` (id 24146212) on `refs/heads/main` + `~DEFAULT_BRANCH`, active, no bypass actors: `deletion`, `non_fast_forward`, `required_linear_history`, `pull_request` (0 approvals, dismiss stale reviews, thread resolution), strict `required_status_checks` `linux-fast`, `windows-native`, `xwin-cross`, `linux-full` (verified with `gh api repos/CarlKIGbR/SecMPro/rules/branches/main`); private vulnerability reporting, Dependabot alerts and security updates on; default workflow token read-only, Actions cannot approve PRs, approval required for all external fork contributors, allowed actions = GitHub-owned only (`ci.yml` uses only SHA-pinned `actions/*`, so `patterns_allowed` is empty). No call was refused |
 
 Review focus:
 
@@ -96,10 +100,35 @@ Review focus:
 | Kani / ProVerif | no harnesses/models in M1 (M2/M3); ProVerif self-test runs |
 | `cargo deny` / `vet` / `audit` / cooldown | pass: normal closure 52 crates, 0 exempted; 25 tracked exemptions outside; audit ignores RUSTSEC-2026-0173 (ADR-037); 119 packages ≥ 7 days (both lockfiles) |
 | Reproducible build | not applicable before M11 |
+| Required checks on `main` (ruleset `main-protection`) | `linux-fast`, `windows-native`, `xwin-cross`, `linux-full`; `gh pr checks` on the PR: PENDING (filled in after the PR is opened) |
 
 ## 5. Deviations from spec / plan
 
 Spec: **none.** Every construction follows rev 2.2 as written; the vectors agree with the independent reference.
+
+**Frozen vectors** (`cargo xtask vectors`: all eight suites structurally identical to `vectors/ref/` on the first
+comparison, and again after `d81d0d0`; the frozen files are the reference files byte for byte, ADR-026). The
+reference files were committed in `63965fe` (they had arrived in the working tree during the first M1 run, so
+that commit carries the message `vectors(ref): …` rather than the one named in brief M1-2 A.2; its content is the
+eight files unmodified plus the updated `ref-spec-questions-M1.md`, and the SHA-256 values equal the brief's):
+
+| Suite | + / − | SHA-256 of `vectors/<suite>.json` (= `vectors/ref/<suite>.json`) |
+|---|---|---|
+| hkdf-labels | 12 / 0 | `8566b4abd2fc5794e89bb30128532dc4ede727d266a3d410d21a395421b8180b` |
+| caead | 8 / 9 | `845ac0425941d20aee78b3ffcd52e55c8564c2c477c1da43219b36a1c0c8d1f3` |
+| msgencrypt | 8 / 8 | `0af6181aa974a373585c288006342ac4a78dff6a1a1317386191bd12be8e356d` |
+| hybridkem-768 | 12 / 7 | `a2f226ded4995ef96650ab9104363aed88265a9d343a8410158dc0b65b6cd233` |
+| hybridkem-1024 | 12 / 7 | `50a47f598958088f97467af9d487e8774325b2dfe431a5015e3e3b7746542cc9` |
+| hybridsign | 8 / 9 | `fca25e061cb63217ad1041235e5558a7880a874927a5392b786eda3478273ebd` |
+| fingerprint | 8 / 0 | `5af8afc88c790aa21ac18974eefa5b958c8868b6bfae2492c3162e711fb3e379` |
+| sas | 10 / 0 | `a36bb29b07df26d9264d445810b1ad60be9e031178f912afaa7df3075d255778` |
+
+The confirmed SCHEMA §4 readings bind the generator and the verifier as follows: (1) every derived negative row
+draws from its own `stream_i` with the referenced row's shape (`tests/common/vectors.rs`, module doc and the
+per-suite generators); (3) `HybridKem*SecretKey::decapsulate` hashes its own recomputed `ek_kem`/`pk_dh` and the
+received `pk_e`/`ct_kem` (`hybrid_kem.rs`); (7) `Ed25519VerifyingKey` enforces canonical and non-small-order `A`
+on import and `ed25519::strict::signature_ok` checks canonical, non-small-order `R` and `S < L` before
+`verify_strict` (§3 review focus). Rows 14–16 of `hybridsign` pass on both sides.
 
 Plan / engineering (none weakens an invariant; reviewer please confirm):
 
@@ -170,6 +199,8 @@ tools (`cc` 1.4.7, `find-msvc-tools`, `fs_extra`, `pkg-config`), the `bindgen` c
 - **Miri does not cover the ML-DSA and SAS code paths in the gate** (runtime); natively everything runs on three targets.
 - **ci-full duration:** differential (≈ 5 min), portable KAT re-run, mutants (13 min locally), fuzz (14 min), Miri; `linux-full` has a 240-minute timeout. M0 review F2 (revisit after M2) stands.
 - **RUSTSEC-2026-0173** (`proc-macro-error2` unmaintained, `cfg(hax)` only) is ignored with ADR-037; re-triage at every release.
+- **`shake` (brief M1-2 C):** no reason to keep the direct dev-dependency was found; it is replaced by `sha3::Shake256` (§6). The crate stays in `Cargo.lock` and the vetted closure only because `ml-dsa 0.1.1` depends on it.
+- **Repository settings not covered by the brief:** the ruleset's `pull_request` rule reports `allowed_merge_methods: [merge, squash, rebase]` (API default); the repository setting allows only squash, and `required_linear_history` excludes merge commits, so squash is the only effective method. `sha_pinning_required` (repository-level "require actions to be pinned to a full-length commit SHA") is `false`; every action in `ci.yml` is SHA-pinned and `cargo xtask policy` checks it, so turning it on would add a second, server-side guard — owner's choice, not done.
 
 ## 8. Blocked / questions for the reviewer or owner
 
@@ -179,7 +210,7 @@ No blocker. Decisions requested:
 - **Q-M2 (reviewer) — libcrux SIMD.** Keep libcrux's default (NEON/AVX2 compiled in, run-time selected; KATs for both host and portable backend), or force the portable backend in all builds?
 - **Owner approvals pending** (recorded in the files): the two delta audits (`rand_core`, `rand`) need the owner's name in the note; crate-scoped trust for `typenum` (`paholg`) and `hax-lib*` (`maximebuyse`); ADR-037 (status *Proposed*), including the RUSTSEC-2026-0173 ignore.
 - **Findings for the reviewer's attention:** (1) `ed25519-dalek` 3.0.0 accepts non-canonical `A` — covered by the byte-level check; (2) libcrux's build scripts override Cargo features (ADR-023/037 corrected); (3) the standalone fuzz build showed `secmp-crypto` had relied on feature unification for `zeroize/alloc` (fixed); (4) the constant-time harness measured per-class buffers and failed on `x86_64` (|t| = 24 and 210 for the two openers); the harness was corrected (`ee7d30b`, §4) — please check that the analysis and the fix are acceptable, i.e. that this is not read as tuning the test until it passes.
-- **Owner (open):** OQ-18 (repository visibility), due before the M1 merge at the latest M2.
+- **OQ-18:** decided 2026-09-28 (public); configuration done per brief M1-2 B (§3). One wording point: brief M1-2 B.3 asks to *keep* the "no bounty, pre-release" wording of `SECURITY.md`, but the file never contained a bounty statement. The pre-release wording is kept (milestone updated to M1); no bounty sentence was added, because that is a statement of the owner's policy — please add it if intended.
 
 ## 9. Checklist before requesting review
 

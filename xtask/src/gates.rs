@@ -238,13 +238,16 @@ pub(crate) fn ct(ctx: &Ctx) -> Result<Outcome> {
             "ct",
         ])
         .capture()?;
-    let (lines, all) = ct_table(&std::fs::read_to_string(&report).map_err(|e| {
+    let json = std::fs::read_to_string(&report).map_err(|e| {
         say(cap.stderr.trim_end());
         Error(format!("ct: no report written ({e})"))
-    })?)?;
+    })?;
+    let (lines, all) = ct_table(&json)?;
     for l in &lines {
         say(&format!("  ct {l}"));
     }
+    // the per-crop t values, so a CI log carries the whole report
+    say(&format!("  ct report: {}", json.trim_end()));
     if !cap.success || !all {
         bail!("constant-time test failed: {}", lines.join("; "));
     }

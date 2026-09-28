@@ -15,6 +15,12 @@
 //!   (commitment matches, tag fails) — the trial-decryption case of spec §6.5;
 //! - `sas`: `SafetyNumber::new` for a fixed pair of fingerprints vs random pairs.
 //!
+//! The classes may differ only in their contents, never in where the inputs live: every measured input is a
+//! fresh copy made by `prepare` (by value or in a new allocation, identical sequence for both classes), so buffer
+//! placement cannot correlate with the class. With one fixed buffer per class, the alignment-dependent cost of
+//! copying and loading the input is itself a class difference (M1, `x86_64` CI: |t| = 24 and 210 for the two
+//! openers with per-class buffers; M1 report §4).
+//!
 //! Run by `cargo xtask step ct` (ci-full) as `cargo bench -p secmp-crypto --features kat --bench ct`; the results
 //! are written to `target/ct-report.json` and the exit status is the verdict. `SECMP_CT_SCALE` (a divisor, default
 //! 1) shortens every sample count for quick local runs.
@@ -235,7 +241,7 @@ fn msg_open_reject(
     Ok(measure(
         n,
         stream,
-        |c, _| inputs.get(c).map_or(&[][..], Vec::as_slice),
+        |c, _| inputs.get(c).cloned().unwrap_or_default(),
         |ct| {
             black_box(MsgEncrypt::open(&key, &ad, black_box(ct)).is_ok());
         },
@@ -254,9 +260,12 @@ fn caead_open_reject(
     stream.fill(&mut p);
     let nonce = Nonce24::random()?;
     let nb = *nonce.as_bytes();
-    let key = SecretBytes::<32>::from_slice(&k)?;
-    let wrong_key = SecretBytes::<32>::from_slice(&other)?;
-    let sealed = Caead::seal(&key, nonce, b"SecMP-HX/1 initcell", &p)?;
+    let sealed = Caead::seal(
+        &SecretBytes::from_slice(&k)?,
+        nonce,
+        b"SecMP-HX/1 initcell",
+        &p,
+    )?;
     let mut tampered = sealed.clone();
     if let Some(b) = tampered.get_mut(100) {
         *b ^= 1;
@@ -266,14 +275,17 @@ fn caead_open_reject(
         n,
         stream,
         |c, _| {
-            if c == 0 {
-                (&wrong_key, &sealed)
+            let (key, ct) = if c == 0 {
+                (&other, &sealed)
             } else {
-                (&key, &tampered)
-            }
+                (&k, &tampered)
+            };
+            (SecretBytes::<32>::from_slice(key).ok(), ct.clone())
         },
-        |(k, ct)| {
-            black_box(Caead::open(k, &nb, b"SecMP-HX/1 initcell", black_box(ct)).is_ok());
+        |(key, ct)| {
+            if let Some(key) = key {
+                black_box(Caead::open(key, &nb, b"SecMP-HX/1 initcell", black_box(ct)).is_ok());
+            }
         },
     ))
 }

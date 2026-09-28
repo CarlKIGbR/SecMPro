@@ -1,0 +1,8 @@
+=== [5] ct ===
+$ /home/runner/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/cargo bench --locked --package secmp-crypto --features kat --bench ct
+FAIL [5] ct: constant-time test failed: control_variable_time_compare: max |t| = 60785.20 over 1000000 samples (control, must be detected) -> ok; tag_compare: max |t| = 1.86 over 1000000 samples -> ok; msg_open_reject: max |t| = 24.23 over 1000000 samples -> FAIL; caead_open_reject: max |t| = 210.52 over 1000000 samples -> FAIL; sas: max |t| = 1.65 over 20000 samples -> ok
+  ct control_variable_time_compare: max |t| = 60785.20 over 1000000 samples (control, must be detected) -> ok
+  ct tag_compare: max |t| = 1.86 over 1000000 samples -> ok
+  ct msg_open_reject: max |t| = 24.23 over 1000000 samples -> FAIL
+  ct caead_open_reject: max |t| = 210.52 over 1000000 samples -> FAIL
+  ct sas: max |t| = 1.65 over 20000 samples -> ok

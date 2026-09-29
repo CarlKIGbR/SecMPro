@@ -501,6 +501,32 @@ fn analyse(samples: &[(usize, u64)]) -> Vec<(String, f64)> {
     results
 }
 
+/// Percentiles (per mille) of each class's samples that the report carries for diagnosis (WEISUNG M2-2 C.4): the
+/// shape of the two class distributions, which a crop-dependent t with raw t ≈ 0 points at. No verdict uses them.
+const SHAPE_PERMILLE: [usize; 9] = [10, 50, 100, 250, 500, 750, 900, 950, 990];
+
+/// `{"n":…,"p1":…,…,"p99":…}` of the samples of `class`, in ticks.
+fn class_shape(samples: &[(usize, u64)], class: usize) -> String {
+    let mut v: Vec<u64> = samples
+        .iter()
+        .filter(|(c, _)| *c == class)
+        .map(|(_, x)| *x)
+        .collect();
+    v.sort_unstable();
+    let percentiles: Vec<String> = SHAPE_PERMILLE
+        .iter()
+        .map(|permille| {
+            let idx = v.len().saturating_mul(*permille) / 1000;
+            let value = v
+                .get(idx.min(v.len().saturating_sub(1)))
+                .copied()
+                .unwrap_or(0);
+            format!("\"p{}\":{value}", permille / 10)
+        })
+        .collect();
+    format!("{{\"n\":{},{}}}", v.len(), percentiles.join(","))
+}
+
 /// One measurement of one target: the t statistics and how finely its samples (batch durations) are resolved.
 struct Measurement {
     ts: Vec<(String, f64)>,
@@ -509,6 +535,8 @@ struct Measurement {
     median_ticks: u64,
     /// The smaller class median (`median_ticks()`), which the realised-resolution rule uses.
     class_median_ticks: u64,
+    /// Per-class count and percentiles (`class_shape`), diagnosis only.
+    shape: [String; 2],
 }
 
 impl Measurement {
@@ -522,6 +550,7 @@ impl Measurement {
             distinct: sorted.len(),
             median_ticks: median,
             class_median_ticks: median_ticks(samples),
+            shape: [class_shape(samples, 0), class_shape(samples, 1)],
         }
     }
 
@@ -551,13 +580,15 @@ impl Measurement {
             )
         };
         format!(
-            "{{\"max_abs_t\":{max:.3},\"max_at\":\"{at}\",\"t\":{{{}}},\"distinct\":{},\"median_ticks\":{},\"median_ns\":{median_ns:.1},\"median_per_resolution\":{},\"class_median_ticks\":{},\"realised_quanta\":{}}}",
+            "{{\"max_abs_t\":{max:.3},\"max_at\":\"{at}\",\"t\":{{{}}},\"distinct\":{},\"median_ticks\":{},\"median_ns\":{median_ns:.1},\"median_per_resolution\":{},\"class_median_ticks\":{},\"realised_quanta\":{},\"shape\":{{\"class0\":{},\"class1\":{}}}}}",
             ts.join(","),
             self.distinct,
             self.median_ticks,
             per_resolution(self.median_ticks),
             self.class_median_ticks,
-            per_resolution(self.class_median_ticks)
+            per_resolution(self.class_median_ticks),
+            self.shape[0],
+            self.shape[1]
         )
     }
 }

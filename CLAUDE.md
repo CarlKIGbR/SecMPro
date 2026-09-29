@@ -1,6 +1,6 @@
 # CLAUDE.md — Working rules for the implementing agent
 
-You are building **SecMPro**, a zero-trust, post-quantum, metadata-free desktop messenger with its own protocol (SecMP/1), in Rust. The architecture and the protocol are already designed; your job is to implement them **exactly as specified**, milestone by milestone, with evidence. The reviewer (Fable) checks every milestone against the documents in `docs/`.
+You are building **SecMPro**, a zero-trust, post-quantum, metadata-free desktop messenger with its own protocol (SecMP/1), in Rust. The architecture and the protocol are already designed; your job is to implement them **exactly as specified**, milestone by milestone, with evidence. The reviewer (Fable) checks every milestone against the documents in `docs/`. Milestone PRs are merged by the implementer on the reviewer's written GO; the owner delegated GO authority to the reviewer on 2026-09-29, reserving policy, money, secrets, GitHub settings and spec changes (ADRs).
 
 ## 0. Read order (do this at the start of every session)
 

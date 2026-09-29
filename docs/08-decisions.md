@@ -260,6 +260,15 @@ Amended 2026-09-29 (reviewer, M1 review F8): the calibration runs a warm-up firs
 
 ---
 
+### ADR-040 — M2 test-only dependencies of `secmp-proto`
+**Context.** M2 checks `secmp-proto` against the `encodings` vector file (the reference file now, the frozen file after plan step 10) and needs canonicality property tests on a seeded generator. `docs/06` §3 requires an ADR line per direct dependency; WEISUNG M2-1 ruled out `proptest` and named `rand` (already vetted) as the generator source.
+**Decision.** Two dev-dependencies of `secmp-proto`, test targets only, no change to its normal (shipped) closure: `serde_json =1.0.151` (the crate, version and use of `secmp-crypto`'s dev-dependency, ADR-031/037: JSON of the vector files) and, for the property tests of plan step 9, `rand =0.10.3` (`default-features = false`; a seeded RNG only, never a source of key material). Neither brings a new crate into `Cargo.lock`.
+**Alternatives.** `proptest` (rejected in WEISUNG M2-1: a new dependency tree); a hand-written JSON reader (ADR-031 reasoning); a PRNG built from `secmp_crypto::sha256` in counter mode (possible, but the reviewer named `rand`).
+**Consequences.** `cargo vet`: both crates already covered (trust `dtolnay`; delta audit `rand` 0.10.1 → 0.10.3, owner-approved 2026-09-29); the zero-exemption rule for the normal closure of `secmp-crypto`/`secmp-proto` is unaffected (dev edges only).
+**Status.** Proposed (implementer, 2026-09-29; `rand` as directed in WEISUNG M2-1).
+
+---
+
 *Template for new entries:*
 
 ### ADR-0NN — Title

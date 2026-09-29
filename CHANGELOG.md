@@ -78,3 +78,13 @@ All notable changes to this project are documented in this file. The format foll
   complete Miri set (F3); the constant-time report is uploaded as a CI artefact (§E 5.7); the constant-time
   calibration warms up and derives the batch size from the median of batches (F8).
 - CI: `push` runs only for `main`; pull-request runs cover every branch head.
+- Constant-time gate (ADR-038 (3) as amended): 10 % calibration margin, NOT MEASURABLE below 80 realised quanta,
+  resolution rules on the smaller class median.
+- M2 `secmp-crypto`: decode-time checks for spec §4.1 — `X25519Public::from_bytes_checked` (low-order encodings)
+  and `check_ed25519_signature_encoding` (`R` canonical, not small order, on the curve; `S < L`), cross-checked
+  against Wycheproof.
+- M2 `secmp-proto` (in progress): bounded reader/writer, ISO/IEC 7816-4 padding, Appendix B sizes checked at compile
+  time, key and signature fields with the decoder obligations of spec §4.1, and `Encode`/`Decode` for every
+  Appendix D structure (records, frame plaintexts with the complete opcode table, invitation and link data,
+  handshake envelope, ratchet cell/header/content and bodies, signed command messages); every row of the
+  `encodings` reference file decodes (positives, byte-exact) or is rejected (547 negatives).

@@ -15,6 +15,7 @@ secmp-crypto.workspace = true
 # ADR-040: test-only (the vector files).
 [dev-dependencies]
 serde_json.workspace = true
+rand.workspace = true
 
 [lints]
 workspace = true

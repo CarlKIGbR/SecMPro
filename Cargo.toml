@@ -58,6 +58,9 @@ windows-sys = { version = "=0.61.2", default-features = false, features = ["Win3
 ml-kem = { version = "=0.3.2", default-features = false }
 aws-lc-rs = { version = "=1.18.1", default-features = false, features = ["aws-lc-sys", "alloc"] }
 
+# ADR-040: seeded generators for the property tests of secmp-proto (dev-dependency only; never key material).
+rand = { version = "=0.10.3", default-features = false, features = ["std_rng"] }
+
 # Workspace crates (path dependencies; docs/02 §3 fixes who may depend on whom).
 secmp-crypto = { path = "crates/secmp-crypto" }
 secmp-sys-mem = { path = "crates/secmp-sys-mem" }

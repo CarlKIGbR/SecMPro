@@ -115,7 +115,7 @@ WEISUNG M2-1 and plan steps 1–8:
 | Criterion (from `07-milestones.md`) | Test / command | Result |
 |---|---|---|
 | `decode(encode(x)) == x` and `encode(decode(b)) == b` for all structures | — | open (step 9) |
-| every negative vector rejected with the uniform error | `cargo nextest run -p secmp-proto --test encodings_ref` (`every_row_of_the_encodings_file`, reference file SHA-256 `9abd63d7…`) | **547/547 negatives rejected with `Error::Rejected`**; 78/78 decodable positives decode and re-encode byte-for-byte (frames to the named command); 7 `Signed/*` rows encode-only (step 10). Freeze pending (step 10). Evidence `M02-evidence/secmp-proto-tests-d90f3b7.txt` |
+| every negative vector rejected with the uniform error | `cargo nextest run -p secmp-proto --test encodings_ref` (`every_row_of_the_encodings_file`, reference file SHA-256 `9abd63d7…`) | **547/547 negatives rejected by the decoder itself with `Error::Rejected`** (since `05b6807` judged on the decode result alone, not after re-encoding); 78/78 decodable positives decode and re-encode byte-for-byte (frames to the named command); 7 `Signed/*` rows encode-only (step 10; their exact message layouts are unit-tested in `signed::tests::exact_contents`). Freeze pending (step 10). Evidence `M02-evidence/secmp-proto-tests-05b6807.txt` |
 | Kani proofs pass | — | open (step 11) |
 | fuzzers run 2 min without findings | — | open (step 12) |
 | Rust and `ref/` encodings identical | — | open (step 10) |
@@ -153,7 +153,7 @@ Commit-1 evidence:
 | Kani / Miri | open; weekly `miri-full` workflow added (runs on `main` once merged: `schedule` works only on the default branch) |
 | `cargo xtask ci-fast` on `d90f3b7` (macOS arm64) | **PASS** — every step, nextest over the workspace, kat 368 s (`M02-evidence/ci-fast-aarch64-apple-darwin-d90f3b7.txt`) |
 | `cargo deny` / `cargo vet` / `cargo audit` / cooldown | PASS in local `ci-fast` on `d90f3b7` (vet: 92 fully audited, 1 partially, 24 exempted — normal `secmp-crypto`/`secmp-proto` closure: 52 external crates, 0 exempted; cooldown: 119 packages ≥ 7 days) |
-| `secmp-proto` unit + reference tests | 40/40 on `d90f3b7` (`M02-evidence/secmp-proto-tests-d90f3b7.txt`) |
+| `secmp-proto` unit + reference tests | 40/40 on `d90f3b7` (`M02-evidence/secmp-proto-tests-d90f3b7.txt`); 41/41 on `05b6807` after the survivor tests (`M02-evidence/secmp-proto-tests-05b6807.txt`) |
 | CI runs | PR run of each pushed head (no push runs on milestone branches since `54da5af`); ids in the final message of each run |
 
 ## 5. Deviations from spec / plan

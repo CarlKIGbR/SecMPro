@@ -590,8 +590,9 @@ impl Calibration {
 /// warm-up pass whose timings are discarded (on the first target the calibration ran cold: the control
 /// calibrated at 1 875 ns per call and measured 667 ns per call); single calls give the first estimate; while
 /// the median batch duration of `k` calls is not resolved (`quantum > fraction · median`), `k` is re-derived from
-/// that batch median divided by `k` (at most `CALIBRATION_ROUNDS` batched rounds). NOT MEASURABLE when the quantum
-/// is unknown, when even `max_batch` calls would not be resolved, or when the rounds run out.
+/// that batch median divided by `k` (at most `CALIBRATION_ROUNDS` batched rounds; a call shorter than one quantum
+/// starts at `max_batch`). NOT MEASURABLE when the quantum is unknown, when even `max_batch` calls would not be
+/// resolved, or when the rounds run out.
 fn calibrate(
     target: &Target,
     stream: &mut Stream,
@@ -610,7 +611,12 @@ fn calibrate(
     let Some(quantum) = clock.resolution_ticks else {
         return Ok(calibration);
     };
-    let Some(mut k) = rules.batch(quantum, f64_of(single_median_ticks)) else {
+    // a call shorter than one quantum (single-call median 0) is probed with the largest batch
+    let first = match rules.batch(quantum, f64_of(single_median_ticks)) {
+        None if single_median_ticks == 0 => Some(rules.max_batch),
+        first => first,
+    };
+    let Some(mut k) = first else {
         return Ok(calibration);
     };
     if k == 1 {

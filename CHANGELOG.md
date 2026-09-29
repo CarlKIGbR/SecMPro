@@ -72,4 +72,9 @@ All notable changes to this project are documented in this file. The format foll
   Handshake `caps` = 0; list counts ≥ 1; Fragment rules; the Batch, RouteUpdate, reassembled-Fragment and Dummy
   layouts in Appendix D.5; `AppMessage.payload` and `Control.arg` opaque at the encoding layer. No byte layout changed.
 - Test-vector schema revision 3 (`vectors/SCHEMA.md` §4.8, case table `vectors/SCHEMA-4.8-encodings.md`) and the
-  reference file `vectors/ref/encodings.json` (632 cases) for the M2 `encodings` suite.
+  reference file `vectors/ref/encodings.json` (632 cases) for the M2 `encodings` suite; the `ref-vectors` step
+  accepts reference files listed as pending freeze (`expect::VECTOR_REF_PENDING`).
+- M1 review follow-ups: `expanded_kat` returns a zeroising buffer (F1); weekly `miri-full` workflow over the
+  complete Miri set (F3); the constant-time report is uploaded as a CI artefact (§E 5.7); the constant-time
+  calibration warms up and derives the batch size from the median of batches (F8).
+- CI: `push` runs only for `main`; pull-request runs cover every branch head.

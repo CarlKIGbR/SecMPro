@@ -70,7 +70,8 @@ pub(crate) const CT_BATCH_MARGIN: f64 = 1.1;
 pub(crate) const CT_MIN_REALISED_QUANTA: u64 = 80;
 
 /// cargo-fuzz targets under `fuzz/fuzz_targets/` (docs/06 §5 step 6): M1 key, ciphertext and signature parsers
-/// and the two openers of `secmp-crypto`.
+/// and the two openers of `secmp-crypto`; M2 every `secmp-proto` decoder, one target per Appendix D section
+/// (`proto_*`, a selector byte picks the decoder).
 pub(crate) const FUZZ_TARGETS: &[&str] = &[
     "caead_open",
     "ed25519_verify",
@@ -78,6 +79,11 @@ pub(crate) const FUZZ_TARGETS: &[&str] = &[
     "mldsa65_verify",
     "mlkem_parse",
     "msg_open",
+    "proto_cell",
+    "proto_frames",
+    "proto_handshake",
+    "proto_invitation",
+    "proto_records",
     "x25519_dh",
 ];
 
@@ -108,8 +114,8 @@ pub(crate) const MIRI_SKIP: &[(&str, &str)] = &[
     ),
 ];
 
-/// Packages containing Kani harnesses (docs/06 §4). M2 adds `secmp-proto`.
-pub(crate) const KANI_PACKAGES: &[&str] = &[];
+/// Packages containing Kani harnesses (docs/06 §4). M2: `secmp-proto` (`src/kani_proofs.rs`).
+pub(crate) const KANI_PACKAGES: &[&str] = &["secmp-proto"];
 
 /// The SecMP vector suites (`vectors/SCHEMA.md` §3): frozen as `vectors/<suite>.json`, reference files
 /// `vectors/ref/<suite>.json`, Rust files `vectors/rust/<suite>.json` (docs/06 §5 step 12a). M2–M5 add suites.

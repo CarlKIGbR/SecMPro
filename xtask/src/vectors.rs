@@ -153,9 +153,9 @@ pub(crate) fn hex_violations(doc: &Value) -> Vec<String> {
     out
 }
 
-/// `cargo xtask vectors`.
-pub(crate) fn run(root: &Path) -> Result<()> {
-    let rust_dir = root.join("vectors").join("rust");
+/// Step 1: both Rust generators write `rust_dir`; the decoders must reject every negative row of the
+/// positive-only suites.
+fn generate(rust_dir: &Path) -> Result<()> {
     Cmd::cargo()
         .args([
             "run",
@@ -198,6 +198,13 @@ pub(crate) fn run(root: &Path) -> Result<()> {
             "encodings_ref",
         ])
         .run()?;
+    Ok(())
+}
+
+/// `cargo xtask vectors`.
+pub(crate) fn run(root: &Path) -> Result<()> {
+    let rust_dir = root.join("vectors").join("rust");
+    generate(&rust_dir)?;
     let mut problems = Vec::new();
     let mut open = Vec::new();
     for suite in expect::VECTOR_SUITES {

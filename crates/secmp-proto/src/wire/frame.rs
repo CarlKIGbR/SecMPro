@@ -318,7 +318,8 @@ impl RequestCmd {
         Ok(())
     }
 
-    fn decode_fields(op: u8, r: &mut Reader<'_>) -> Result<Self> {
+    /// The fields of command `op` (after `op ‖ cmd_seq`); crate-visible for the Kani harnesses.
+    pub(crate) fn decode_fields(op: u8, r: &mut Reader<'_>) -> Result<Self> {
         Ok(match op {
             opcode::QUEUE_NEW => Self::QueueNew {
                 recv_pk: Ed25519Pk::decode_from(r)?,
@@ -384,6 +385,24 @@ impl RequestCmd {
             // SKEY (reserved in v1), response opcodes and unknown opcodes
             _ => return Err(Error::Rejected),
         })
+    }
+}
+
+/// Kani stub (`crate::kani_proofs::request_frame`): the request command decoder as "consume any number of bytes,
+/// then accept or reject" — the frame-level glue (outer size, `unpad`, `op`, `cmd_seq`, trailing bytes) is proven
+/// with it, each command decoder by its own harness.
+#[cfg(kani)]
+pub(crate) mod kani_stubs {
+    use super::{Error, Reader, RequestCmd, Result};
+
+    pub(crate) fn request_decode_fields(_op: u8, r: &mut Reader<'_>) -> Result<RequestCmd> {
+        let consumed: usize = kani::any();
+        r.take(consumed)?;
+        if kani::any() {
+            Ok(RequestCmd::Ping)
+        } else {
+            Err(Error::Rejected)
+        }
     }
 }
 

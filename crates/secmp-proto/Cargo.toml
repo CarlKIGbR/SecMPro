@@ -21,3 +21,8 @@ rand.workspace = true
 
 [lints]
 workspace = true
+
+# Kani (docs/06 §4; `src/kani_proofs.rs`): the harnesses replace the `secmp-crypto` key checks with
+# nondeterministic outcomes (`keys::kani_stubs`), which needs Kani's function stubbing (RFC 0002).
+[package.metadata.kani.unstable]
+stubbing = true

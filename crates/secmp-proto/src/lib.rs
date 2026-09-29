@@ -28,6 +28,8 @@
 
 pub mod codec;
 mod error;
+#[cfg(kani)]
+mod kani_proofs;
 pub mod keys;
 pub mod sizes;
 pub mod wire;

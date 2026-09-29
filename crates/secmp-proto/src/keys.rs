@@ -236,6 +236,44 @@ mlkem_ek!(
     "An ML-KEM-1024 encapsulation-key field (`relay_kem_ek`, `spk_kem`, `opk_kem`), modulus-checked (spec §4.1 (c))."
 );
 
+/// Kani stubs (`crate::kani_proofs`): the key and signature constructors with the cryptographic check replaced by a
+/// nondeterministic outcome and everything else kept (the length rule, the stored bytes). A harness using them
+/// covers every accept/reject decision of the `secmp-crypto` checks without modelling curve or lattice arithmetic;
+/// the checks themselves are tested against Wycheproof and the frozen vectors (M1, `encodings`).
+#[cfg(kani)]
+pub(crate) mod kani_stubs {
+    use super::{
+        ED25519_PK_LEN, ED25519_SIG_LEN, Ed25519Pk, Ed25519Sig, Error, MLKEM768_EK_LEN,
+        MLKEM1024_EK_LEN, MlKem768Ek, MlKem1024Ek, Result, boxed,
+    };
+
+    fn checked<T>(value: T) -> Result<T> {
+        if kani::any() {
+            Ok(value)
+        } else {
+            Err(Error::Rejected)
+        }
+    }
+
+    pub(crate) fn ed25519_pk(bytes: &[u8]) -> Result<Ed25519Pk> {
+        let key: [u8; ED25519_PK_LEN] = bytes.try_into().map_err(|_| Error::Rejected)?;
+        checked(Ed25519Pk(key))
+    }
+
+    pub(crate) fn ed25519_sig(bytes: &[u8]) -> Result<Ed25519Sig> {
+        let sig: [u8; ED25519_SIG_LEN] = bytes.try_into().map_err(|_| Error::Rejected)?;
+        checked(Ed25519Sig(sig))
+    }
+
+    pub(crate) fn mlkem768_ek(bytes: &[u8]) -> Result<MlKem768Ek> {
+        checked(MlKem768Ek(boxed::<MLKEM768_EK_LEN>(bytes)?))
+    }
+
+    pub(crate) fn mlkem1024_ek(bytes: &[u8]) -> Result<MlKem1024Ek> {
+        checked(MlKem1024Ek(boxed::<MLKEM1024_EK_LEN>(bytes)?))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

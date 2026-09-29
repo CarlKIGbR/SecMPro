@@ -215,13 +215,14 @@ pub trait Decode: Sized {
 /// # Errors
 /// [`Error::Rejected`] if the fields leave no room for the marker.
 pub fn pad(fields: &[u8], size: usize) -> Result<Vec<u8>> {
-    if fields.len() >= size {
-        return Err(Error::Rejected);
-    }
-    let mut out = Vec::with_capacity(size);
-    out.extend_from_slice(fields);
-    out.push(PAD_MARKER);
-    out.resize(size, 0);
+    // zeros of the full size, then the fields and the marker over their front (no fill loop: the Kani harnesses
+    // re-encode 4336-byte frames)
+    let mut out = vec![0; size];
+    let (head, tail) = out
+        .split_at_mut_checked(fields.len())
+        .ok_or(Error::Rejected)?;
+    head.copy_from_slice(fields);
+    *tail.first_mut().ok_or(Error::Rejected)? = PAD_MARKER;
     Ok(out)
 }
 
@@ -240,6 +241,24 @@ pub fn unpad(bytes: &[u8], size: usize) -> Result<&[u8]> {
         Ok(fields)
     } else {
         Err(Error::Rejected)
+    }
+}
+
+/// Kani stub (`crate::kani_proofs`): an over-approximation of [`unpad`] for the frame harnesses — for an input of
+/// the right size it returns *any* proper prefix, or rejects. Every result of the real `unpad` is among these, so
+/// a command decoder proven on the stub's output is proven on every field string a frame can carry; `unpad` itself
+/// is proven by the `padding` harness.
+#[cfg(kani)]
+pub(crate) mod kani_stubs {
+    use crate::error::{Error, Result};
+
+    pub(crate) fn unpad(bytes: &[u8], size: usize) -> Result<&[u8]> {
+        if bytes.len() != size || kani::any() {
+            return Err(Error::Rejected);
+        }
+        let n: usize = kani::any();
+        kani::assume(n < size);
+        bytes.get(..n).ok_or(Error::Rejected)
     }
 }
 

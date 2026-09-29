@@ -71,6 +71,7 @@ unsafe_code = "deny"              # every crate except secmp-sys-* additionally 
                                   # a workspace-level "forbid" cannot be relaxed per crate (E0453), hence deny + per-crate forbid
 missing_docs = "warn"
 unused_must_use = "deny"
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(kani)"] }  # declares `cfg(kani)`: the Kani harnesses (docs/06 §4) compile only under `cargo kani`
 
 [workspace.lints.clippy]
 all = { level = "deny", priority = -1 }

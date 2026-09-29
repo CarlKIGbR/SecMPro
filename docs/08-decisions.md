@@ -138,6 +138,7 @@ Format: MADR-style, one entry per decision, numbered, never deleted (superseded 
 **Decision.** `ref/` contains a Python implementation of HybridKEM, HybridSign, MsgEncrypt, CAEAD, SAS, encodings, HX, TR and LINK written from the spec alone in a separate agent session (no access to the Rust code). Vectors are cross-generated and must match byte-for-byte before being frozen. Formal-model queries (`formal/CLAIMS.md`) are fixed by the reviewer before modelling, including queries expected to be false.
 **Update 2026-09-28 (owner decision OQ-17).** The owner starts the separate `ref/` session before M1; the reviewer supplies its brief. In M0 `ref/` contains only a README stating this rule; the implementer never writes `ref/` code.
 **Status.** Accepted.
+Amended 2026-09-29 (reviewer, external review EXT-2): Rust and `ref/` agree *structurally* per `vectors/SCHEMA.md` §1 (the `generator` field excluded); the frozen `vectors/<suite>.json` is a verbatim copy of `vectors/ref/<suite>.json`. The earlier phrase "byte-for-byte" referred to the frozen copy.
 
 ### ADR-027 — Local store: SQLCipher primary, sealed-column SQLite fallback
 **Context.** SQLCipher needs an OpenSSL backend; cross-compiling it to `x86_64-pc-windows-msvc` with cargo-xwin is unproven for this project.
@@ -247,7 +248,7 @@ Format: MADR-style, one entry per decision, numbered, never deleted (superseded 
 **Alternatives.** Keep `Instant` and raise the threshold (rejected: hides real leaks on fine-clock hosts; the C4 branch was found at 32). Majority vote over N repeats (rejected: N repeats of a noisy test converge on "pass"; one confirmatory re-measurement with a sign condition is the sequential-testing minimum). Move the gate to a dedicated bare-metal host only (deferred: the owner's server is an option for the nightly, but every PR must still run the gate). Batching k calls per sample (kept as a fallback if the cycle counter is unavailable on a target).
 **Consequences.** `benches/ct.rs` gains the timer helper and the verdict logic; `xtask` `ct` gate prints the two-tier result; `docs/06` §4 "Constant time" row references this ADR; M1 acceptance "constant-time test shows no leak" is evidenced by a PASS under this rule on the final commit, and the M1 review records the two real defects the gate found. The ADR does not change what constant-time means for the code: the rules of `docs/06` §9 and `CLAUDE.md` §1 stand.
 **Status.** Accepted (owner, 2026-09-29; "ich folge deiner Empfehlung"); (3) amended by the reviewer on 2026-09-29 (batching) under the owner's delegation of the same day; implemented in `0d2c6e8`, the commit named in `docs/reviews/M01-review.md` §G.
-Amended 2026-09-29 (reviewer, M1 review F8): the calibration runs a warm-up first and derives `k` from the median of a batch of calibration measurements with a 10 % margin (`k = ceil(110·quantum/median)`); the realised tick count is recorded in the report and is informative (< 80 ticks → NOT_MEASURABLE).
+Amended 2026-09-29 (reviewer, M1 review F8): the calibration runs a warm-up first and derives `k` from the median of a batch of calibration measurements with a 10 % margin (`k = ceil(110·quantum/median)`); the realised tick count is recorded in the report and is informative (< 80 ticks → NOT_MEASURABLE) (the median is the smaller of the two class medians, so the resolution rule holds for each class).
 
 ---
 
@@ -265,7 +266,7 @@ Amended 2026-09-29 (reviewer, M1 review F8): the calibration runs a warm-up firs
 **Decision.** Two dev-dependencies of `secmp-proto`, test targets only, no change to its normal (shipped) closure: `serde_json =1.0.151` (the crate, version and use of `secmp-crypto`'s dev-dependency, ADR-031/037: JSON of the vector files) and, for the property tests of plan step 9, `rand =0.10.3` (`default-features = false`; a seeded RNG only, never a source of key material). Neither brings a new crate into `Cargo.lock`.
 **Alternatives.** `proptest` (rejected in WEISUNG M2-1: a new dependency tree); a hand-written JSON reader (ADR-031 reasoning); a PRNG built from `secmp_crypto::sha256` in counter mode (possible, but the reviewer named `rand`).
 **Consequences.** `cargo vet`: both crates already covered (trust `dtolnay`; delta audit `rand` 0.10.1 → 0.10.3, owner-approved 2026-09-29); the zero-exemption rule for the normal closure of `secmp-crypto`/`secmp-proto` is unaffected (dev edges only).
-**Status.** Proposed (implementer, 2026-09-29; `rand` as directed in WEISUNG M2-1).
+**Status.** Accepted 2026-09-29 (reviewer, under the owner's delegation of 2026-09-29: dev-dependencies only, no new crate in `Cargo.lock`, supply-chain closure of the shipped targets unchanged).
 
 ---
 

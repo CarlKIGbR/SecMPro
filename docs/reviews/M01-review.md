@@ -98,3 +98,5 @@ Applied by the reviewer in the working tree of `m01-crypto` on 2026-09-29 (to be
 ## H. Verdict
 
 **Approved.** M1 is closed when C1 is met and PR #2 is squash-merged (C2–C4 met). M2 (`secmp-proto`) starts immediately on `m02-proto` stacked on `m01-crypto`; its first commits carry F1 (`Zeroizing` return of `expanded_kat`), the weekly `miri-full` workflow (F3) and the ct-report artefact upload (§E 5.7).
+
+**External review (added 2026-09-29).** glm-5.3 (Z.ai), read-only, pinned to `bc8d6d5`, brief `BRIEF_M1-EXT`, internal review not attached: **verdict no blockers**; every review-focus item and every docs/06 §9 item "met" except `ref/` independence, "not verifiable from the repository" (EXT-1, major) — accepted, the `ref/` tree is committed with M2; EXT-2 (note, ADR-026/`ref/README.md` "byte-for-byte" wording) accepted, reworded in M2; its §7 addition equals F1 (fixed `962069b`). Full text: `docs/reviews/M01-review-ext-glm.md`.

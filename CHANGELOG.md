@@ -102,5 +102,5 @@ All notable changes to this project are documented in this file. The format foll
   measured from the data — with an inline A/A control per run (`CONTROL_FAIL` otherwise) and the positive control
   detected; smaller reproduced shifts are reported as sub-quantum shifts; the immediate-FAIL tier of ADR-038 is
   withdrawn (`CT_EFFECT_FLOOR_QUANTA`, `CT_AA_MAX_T` in `xtask/src/expect.rs`).
-- xtask: the `kani` gate runs `cargo kani --manifest-path` per harness package (so the package's Kani metadata,
-  e.g. stubbing, applies); the `mutants` gate leaves out code compiled only under Kani.
+- xtask: the `kani` gate passes a harness package's Kani unstable features (`[package.metadata.kani.unstable]`,
+  e.g. stubbing) as `-Z`; the `mutants` gate leaves out code compiled only under Kani.

@@ -705,7 +705,7 @@ fn miri_with(ctx: &Ctx, skip: &[(&str, &str)]) -> Result<Outcome> {
 pub(crate) fn kani(ctx: &Ctx) -> Result<Outcome> {
     tools::require(tools::KANI)?;
     let mut found = BTreeSet::new();
-    let mut manifests = Vec::new();
+    let mut packages = Vec::new();
     for p in &ctx.ws.members {
         let Some(dir) = p.manifest_path.parent() else {
             continue;
@@ -715,19 +715,20 @@ pub(crate) fn kani(ctx: &Ctx) -> Result<Outcome> {
             if std::fs::read_to_string(&f)?.contains(concat!("#[kani", "::proof]"))
                 && found.insert(p.name.clone())
             {
-                manifests.push(p.manifest_path.clone());
+                packages.push(p);
             }
         }
     }
     same_set("Kani harness packages", &found, expect::KANI_PACKAGES)?;
-    // by manifest path: Kani reads a package's `[package.metadata.kani]` (here `unstable.stubbing`) only then, not
-    // with `--package` from the workspace root (M2: the CI run on 774e04a failed to compile the stubbed harnesses)
-    for manifest in &manifests {
-        Cmd::cargo()
-            .args(["kani", "--manifest-path"])
-            .arg(manifest.to_string_lossy())
-            .dir(&ctx.root)
-            .run()?;
+    // `cargo kani --package` from the workspace root does not apply the package's `[package.metadata.kani]` (M2: the
+    // stubbed harnesses did not compile in CI run 36614956208), and `--manifest-path` could not start `cargo
+    // metadata` on the CI runner (run 36633643390): the gate passes the package's unstable features as `-Z` itself
+    for p in &packages {
+        let mut c = Cmd::cargo().args(["kani", "--package", &p.name]);
+        for feature in &p.kani_unstable {
+            c = c.args(["-Z", feature]);
+        }
+        c.dir(&ctx.root).run()?;
     }
     Ok(Outcome::Pass(format!(
         "Kani {}: harness packages {} (expected set matches)",

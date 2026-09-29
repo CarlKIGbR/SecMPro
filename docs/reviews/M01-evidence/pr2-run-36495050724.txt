@@ -1,0 +1,29 @@
+CI run 36495050724 (PR #2, event pull_request, head 0a788dc). Collected 2026-09-29 for brief M1-4.
+
+$ gh run view 36495050724 --repo CarlKIGbR/SecMPro --json jobs --jq '.jobs[] | {name, conclusion, startedAt, completedAt}'
+{"completedAt":"2026-09-28T23:14:47Z","conclusion":"success","name":"windows-native","startedAt":"2026-09-28T22:54:06Z"}
+{"completedAt":"2026-09-28T23:50:02Z","conclusion":"success","name":"linux-full","startedAt":"2026-09-28T22:54:06Z"}
+{"completedAt":"2026-09-28T22:56:28Z","conclusion":"success","name":"xwin-cross","startedAt":"2026-09-28T22:54:06Z"}
+{"completedAt":"2026-09-28T23:02:44Z","conclusion":"success","name":"linux-fast","startedAt":"2026-09-28T22:54:06Z"}
+
+$ gh run view 36495050724 --log --job 109172557707 | grep -E '^\S+\s+ci-full.*\bct\b|  ct '
+linux-full	ci-full (steps 1–14)	2026-09-28T23:16:48.9488477Z === [5] ct ===
+linux-full	ci-full (steps 1–14)	2026-09-28T23:16:48.9488930Z $ /home/runner/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/cargo bench --locked --package secmp-crypto --features kat --bench ct
+linux-full	ci-full (steps 1–14)	2026-09-28T23:17:39.8129957Z   ct control_variable_time_compare: max |t| = 61568.50 over 1000000 samples (control, must be detected) -> ok
+linux-full	ci-full (steps 1–14)	2026-09-28T23:17:39.8131482Z   ct tag_compare: max |t| = 0.76 over 1000000 samples -> ok
+linux-full	ci-full (steps 1–14)	2026-09-28T23:17:39.8131949Z   ct msg_open_reject: max |t| = 1.20 over 1000000 samples -> ok
+linux-full	ci-full (steps 1–14)	2026-09-28T23:17:39.8132411Z   ct caead_open_reject: max |t| = 1.69 over 1000000 samples -> ok
+linux-full	ci-full (steps 1–14)	2026-09-28T23:17:39.8132761Z   ct sas: max |t| = 1.05 over 20000 samples -> ok
+linux-full	ci-full (steps 1–14)	2026-09-28T23:17:39.8135033Z   ct report: {"threshold":4.5,"results":[{"name":"control_variable_time_compare","samples":1000000,"control":true,"max_abs_t":61568.495,"passed":true,"t":{"raw":-3006.347,"p50":0.000,"p75":-61568.495,"p90":-60754.404,"p95":-60415.793,"p99":-52803.424}},{"name":"tag_compare","samples":1000000,"control":false,"max_abs_t":0.757,"passed":true,"t":{"raw":-0.637,"p50":0.311,"p75":0.757,"p90":-0.018,"p95":-0.436,"p99":0.752}},{"name":"msg_open_reject","samples":1000000,"control":false,"max_abs_t":1.197,"passed":true,"t":{"raw":-1.021,"p50":0.205,"p75":0.505,"p90":0.336,"p95":-0.426,"p99":-1.197}},{"name":"caead_open_reject","samples":1000000,"control":false,"max_abs_t":1.691,"passed":true,"t":{"raw":-0.707,"p50":-1.042,"p75":-1.691,"p90":-0.836,"p95":-0.692,"p99":-0.934}},{"name":"sas","samples":20000,"control":false,"max_abs_t":1.048,"passed":true,"t":{"raw":-0.436,"p50":-0.731,"p75":-0.439,"p90":-1.048,"p95":-0.735,"p99":-0.740}}]}
+linux-full	ci-full (steps 1–14)	2026-09-28T23:49:59.9103623Z    5 ct              PASS         50s  control_variable_time_compare: max |t| = 61568.50 over 1000000 samples (control, must be detected) -> ok; tag_compare: max |t| = 0.76 over 1000000 samples -> ok; msg_open_reject: max |t| = 1.20 over 1000000 samples -> ok; caead_open_reject: max |t| = 1.69 over 1000000 samples -> ok; sas: max |t| = 1.05 over 20000 samples -> ok
+
+Mutants summary line (same log):
+linux-full	ci-full (steps 1–14)	2026-09-28T23:49:59.9106974Z    8 mutants         PASS        366s  secmp-crypto, secmp-proto: 234 mutants tested in 6m: 1 missed, 147 caught, 86 unviable; survivors documented in docs/mutants-accepted.md: 1
+
+Miri summary line and the two Miri test results (same log):
+linux-full	ci-full (steps 1–14)	2026-09-28T23:49:51.1266065Z test result: ok. 50 passed; 0 failed; 0 ignored; 0 measured; 11 filtered out; finished in 2009.53s
+linux-full	ci-full (steps 1–14)	2026-09-28T23:49:55.2503813Z test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.04s
+linux-full	ci-full (steps 1–14)	2026-09-28T23:49:59.9108238Z    9 miri            PASS        657s  Miri (nightly-2026-09-21, interpreting aarch64-unknown-linux-gnu, libcrux portable backend): secmp-sys-mem, secmp-sys-desktop, secmp-crypto; skipped test modules: mldsa::, hybrid_sign::, sas::
+
+Final line of ci-full (same log):
+linux-full	ci-full (steps 1–14)	2026-09-28T23:49:59.9115882Z ci-full: PASS

@@ -14,7 +14,7 @@
 
 use chacha20poly1305::aead::AeadInOut;
 use chacha20poly1305::{KeyInit, Tag, XChaCha20Poly1305, XNonce};
-use subtle::ConstantTimeEq;
+use subtle::{Choice, ConstantTimeEq};
 use zeroize::{Zeroize, Zeroizing};
 
 use crate::error::{Error, Result};
@@ -91,7 +91,12 @@ impl Caead {
         let tag_ok = aead
             .decrypt_inout_detached(&XNonce::from(*nonce), ad, buf.as_mut_slice().into(), &tag)
             .is_ok();
-        if bool::from(com_ok) && tag_ok {
+        // M1 review C4: combine both results as `Choice`s and branch once on the final verdict. A short-circuit
+        // `bool::from(com_ok) && tag_ok` branches on `com_ok`, so a rejection took a different path depending on
+        // whether the commitment matched — measurable (dudect |t| = 32 on x86_64 CI) and exactly what trial
+        // decryption must not reveal (spec §6.5).
+        let ok = com_ok & Choice::from(u8::from(tag_ok));
+        if bool::from(ok) {
             Ok(buf)
         } else {
             buf.zeroize();

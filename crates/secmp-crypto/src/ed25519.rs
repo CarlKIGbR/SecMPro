@@ -4,7 +4,7 @@
 //! non-canonical encodings of `A` or `R` (y-coordinate ≥ p), and of small-order `A` or `R` (order dividing 8,
 //! including the identity).
 //!
-//! What `ed25519-dalek` 3.0.0 `verify_strict` does by itself (source read, M1): it rejects `S ≥ L`
+//! What `ed25519-dalek` 3.0.0 `verify_strict` does by itself (as of 3.0.0, source read 2026-09-28): it rejects `S ≥ L`
 //! (`Scalar::from_canonical_bytes`), small-order `A` and `R` (`is_small_order`), and — implicitly — a
 //! non-canonical `R` (it compares the canonical encoding of the recomputed `R` with the received bytes), using
 //! the cofactorless equation. It **accepts a non-canonical `A`**: `CompressedEdwardsY::decompress` reduces

@@ -1,7 +1,325 @@
 
 # cargo-vet audits file
 
-[audits]
+[[audits.rand]]
+who = "Claude Code (Opus 5.5), SecMPro implementer"
+criteria = "safe-to-deploy"
+delta = "0.10.1 -> 0.10.3"
+notes = "delta audit by implementer; reviewer read; owner approved. ADR-036 (3). Diff: docs/reviews/M01-evidence/vet-deltas/rand-0.10.1-0.10.3.diff. Two unsafe blocks removed (slice get_unchecked, char::from_u32_unchecked, replaced by checked calls); serde deserialization of UniformChar validated; float Uniform/WeightedIndex overflow fixes returning errors instead of panicking; docs and tests. No new unsafe, no I/O, no build script, no new dependencies. Owner approval: Christopher Carl, 2026-09-29 (M1 review §D)."
+
+[[audits.rand_core]]
+who = "Claude Code (Opus 5.5), SecMPro implementer"
+criteria = "safe-to-deploy"
+delta = "0.10.0 -> 0.10.1"
+notes = "delta audit by implementer; reviewer read; owner approved. ADR-036 (3). Diff: docs/reviews/M01-evidence/vet-deltas/rand_core-0.10.0-0.10.1.diff (CHANGELOG, version bump, two doc-comment links; no code change). Owner approval: Christopher Carl, 2026-09-29 (M1 review §D)."
+
+[[trusted.aead]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2020-06-05"
+end = "2027-09-28"
+notes = "Publisher trust (ADR-036 (2), docs/06 §3): RustCrypto maintainer account publishing the RustCrypto primitive crates chosen by ADR-023/docs/06 §3 (hashes, MACs, KDFs, ciphers, AEADs, signatures, KEMs and their trait/utility crates). Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
+
+[[trusted.aead]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:RustCrypto/traits"
+start = "2026-06-08"
+end = "2027-09-28"
+notes = "Publisher trust (ADR-036 (2), docs/06 §3): RustCrypto trusted-publishing identity (GitHub Actions of the RustCrypto/traits repository) for the RustCrypto trait crates used by the primitive crates chosen by ADR-023/docs/06 §3. Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
+
+[[trusted.aho-corasick]]
+criteria = "safe-to-deploy"
+user-id = 189 # Andrew Gallant (BurntSushi)
+start = "2019-03-28"
+end = "2027-09-28"
+notes = "Publisher trust (docs/06 §3, ADR-015 update of the M0 review): publisher trusted by >= 2 imported audit sets (Mozilla, ISRG, Bytecode Alliance); reviewed at every release."
+
+[[trusted.autocfg]]
+criteria = "safe-to-deploy"
+user-id = 539 # Josh Stone (cuviper)
+start = "2019-05-22"
+end = "2027-09-28"
+notes = "Publisher trust (docs/06 §3, ADR-015 update of the M0 review): publisher trusted by >= 2 imported audit sets (Mozilla, ISRG, Bytecode Alliance); reviewed at every release."
+
+[[trusted.aws-lc-rs]]
+criteria = "safe-to-deploy"
+user-id = 156764 # Justin W Smith (justsmth)
+start = "2023-04-11"
+end = "2027-09-28"
+notes = "Publisher trust (ADR-036 (2), docs/06 §3): AWS account publishing aws-lc-rs and aws-lc-sys (differential-test partner in M1, dev-dependency only; TLS in secmp-transport from M6). Reviewed at every release."
+
+[[trusted.aws-lc-sys]]
+criteria = "safe-to-deploy"
+user-id = 156764 # Justin W Smith (justsmth)
+start = "2022-11-09"
+end = "2027-09-28"
+notes = "Publisher trust (ADR-036 (2), docs/06 §3): AWS account publishing aws-lc-rs and aws-lc-sys (differential-test partner in M1, dev-dependency only; TLS in secmp-transport from M6). Reviewed at every release."
+
+[[trusted.block-buffer]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2020-06-04"
+end = "2027-09-28"
+notes = "Publisher trust (ADR-036 (2), docs/06 §3): RustCrypto maintainer account publishing the RustCrypto primitive crates chosen by ADR-023/docs/06 §3 (hashes, MACs, KDFs, ciphers, AEADs, signatures, KEMs and their trait/utility crates). Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
+
+[[trusted.block-buffer]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:RustCrypto/utils"
+start = "2026-02-24"
+end = "2027-09-28"
+notes = "Publisher trust (ADR-036 (2), docs/06 §3): RustCrypto trusted-publishing identity (GitHub Actions of the RustCrypto/utils repository) for the RustCrypto utility crates (zeroize, block-buffer, cmov, ctutils, sponge-cursor, ...) used by the primitive crates chosen by ADR-023/docs/06 §3. Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
+
+[[trusted.cc]]
+criteria = "safe-to-deploy"
+user-id = 55123 # rust-lang-owner
+start = "2022-10-29"
+end = "2027-09-28"
+notes = "Publisher trust (docs/06 §3, ADR-015 update of the M0 review): publisher trusted by >= 2 imported audit sets (Mozilla, ISRG, Bytecode Alliance); reviewed at every release."
+
+[[trusted.cfg-if]]
+criteria = "safe-to-deploy"
+user-id = 55123 # rust-lang-owner
+start = "2025-06-09"
+end = "2027-09-28"
+notes = "Publisher trust (docs/06 §3, ADR-015 update of the M0 review): publisher trusted by >= 2 imported audit sets (Mozilla, ISRG, Bytecode Alliance); reviewed at every release."
+
+[[trusted.chacha20]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2019-06-24"
+end = "2027-09-28"
+notes = "Publisher trust (ADR-036 (2), docs/06 §3): RustCrypto maintainer account publishing the RustCrypto primitive crates chosen by ADR-023/docs/06 §3 (hashes, MACs, KDFs, ciphers, AEADs, signatures, KEMs and their trait/utility crates). Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
+
+[[trusted.chacha20]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:RustCrypto/stream-ciphers"
+start = "2026-02-06"
+end = "2027-09-28"
+notes = "Publisher trust (ADR-036 (2), docs/06 §3): RustCrypto trusted-publishing identity (GitHub Actions of the RustCrypto/stream-ciphers repository) for chacha20, chosen by docs/06 §3. Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
+
+[[trusted.chacha20poly1305]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2019-08-30"
+end = "2027-09-28"
+notes = "Publisher trust (ADR-036 (2), docs/06 §3): RustCrypto maintainer account publishing the RustCrypto primitive crates chosen by ADR-023/docs/06 §3 (hashes, MACs, KDFs, ciphers, AEADs, signatures, KEMs and their trait/utility crates). Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
+
+[[trusted.cipher]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2020-10-15"
+end = "2027-09-28"
+notes = "Publisher trust (ADR-036 (2), docs/06 §3): RustCrypto maintainer account publishing the RustCrypto primitive crates chosen by ADR-023/docs/06 §3 (hashes, MACs, KDFs, ciphers, AEADs, signatures, KEMs and their trait/utility crates). Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
+
+[[trusted.cipher]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:RustCrypto/traits"
+start = "2026-02-04"
+end = "2027-09-28"
+notes = "Publisher trust (ADR-036 (2), docs/06 §3): RustCrypto trusted-publishing identity (GitHub Actions of the RustCrypto/traits repository) for the RustCrypto trait crates used by the primitive crates chosen by ADR-023/docs/06 §3. Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
+
+[[trusted.cmake]]
+criteria = "safe-to-deploy"
+user-id = 55123 # rust-lang-owner
+start = "2022-10-29"
+end = "2027-09-28"
+notes = "Publisher trust (docs/06 §3, ADR-015 update of the M0 review): publisher trusted by >= 2 imported audit sets (Mozilla, ISRG, Bytecode Alliance); reviewed at every release."
+
+[[trusted.cmov]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2022-02-27"
+end = "2027-09-28"
+notes = "Publisher trust (ADR-036 (2), docs/06 §3): RustCrypto maintainer account publishing the RustCrypto primitive crates chosen by ADR-023/docs/06 §3 (hashes, MACs, KDFs, ciphers, AEADs, signatures, KEMs and their trait/utility crates). Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
+
+[[trusted.cmov]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:RustCrypto/utils"
+start = "2026-04-02"
+end = "2027-09-28"
+notes = "Publisher trust (ADR-036 (2), docs/06 §3): RustCrypto trusted-publishing identity (GitHub Actions of the RustCrypto/utils repository) for the RustCrypto utility crates (zeroize, block-buffer, cmov, ctutils, sponge-cursor, ...) used by the primitive crates chosen by ADR-023/docs/06 §3. Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
+
+[[trusted.core-models]]
+criteria = "safe-to-deploy"
+user-id = 281161 # Jonas Schneider-Bensch (jschneider-bensch)
+start = "2025-11-05"
+end = "2027-09-28"
+notes = "Publisher trust (ADR-036 (2), docs/06 §3): Cryspen account publishing the libcrux crate family (libcrux-ml-kem, chosen by ADR-023, and its libcrux-* support crates). Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
+
+[[trusted.cpufeatures]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2021-04-26"
+end = "2027-09-28"
+notes = "Publisher trust (ADR-036 (2), docs/06 §3): RustCrypto maintainer account publishing the RustCrypto primitive crates chosen by ADR-023/docs/06 §3 (hashes, MACs, KDFs, ciphers, AEADs, signatures, KEMs and their trait/utility crates). Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
+
+[[trusted.crypto-common]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2021-04-28"
+end = "2027-09-28"
+notes = "Publisher trust (ADR-036 (2), docs/06 §3): RustCrypto maintainer account publishing the RustCrypto primitive crates chosen by ADR-023/docs/06 §3 (hashes, MACs, KDFs, ciphers, AEADs, signatures, KEMs and their trait/utility crates). Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
+
+[[trusted.crypto-common]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:RustCrypto/traits"
+start = "2026-02-04"
+end = "2027-09-28"
+notes = "Publisher trust (ADR-036 (2), docs/06 §3): RustCrypto trusted-publishing identity (GitHub Actions of the RustCrypto/traits repository) for the RustCrypto trait crates used by the primitive crates chosen by ADR-023/docs/06 §3. Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
+
+[[trusted.ctutils]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2025-12-18"
+end = "2027-09-28"
+notes = "Publisher trust (ADR-036 (2), docs/06 §3): RustCrypto maintainer account publishing the RustCrypto primitive crates chosen by ADR-023/docs/06 §3 (hashes, MACs, KDFs, ciphers, AEADs, signatures, KEMs and their trait/utility crates). Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
+
+[[trusted.ctutils]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:RustCrypto/utils"
+start = "2026-04-02"
+end = "2027-09-28"
+notes = "Publisher trust (ADR-036 (2), docs/06 §3): RustCrypto trusted-publishing identity (GitHub Actions of the RustCrypto/utils repository) for the RustCrypto utility crates (zeroize, block-buffer, cmov, ctutils, sponge-cursor, ...) used by the primitive crates chosen by ADR-023/docs/06 §3. Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
+
+[[trusted.curve25519-dalek]]
+criteria = "safe-to-deploy"
+user-id = 6979 # Michael Rosenberg (rozbb)
+start = "2022-12-13"
+end = "2027-09-28"
+notes = "Publisher trust (ADR-036 (2), docs/06 §3): dalek-cryptography maintainer account publishing x25519-dalek, ed25519-dalek and curve25519-dalek(-derive), chosen by docs/06 §3. Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
+
+[[trusted.curve25519-dalek-derive]]
+criteria = "safe-to-deploy"
+user-id = 6979 # Michael Rosenberg (rozbb)
+start = "2023-06-24"
+end = "2027-09-28"
+notes = "Publisher trust (ADR-036 (2), docs/06 §3): dalek-cryptography maintainer account publishing x25519-dalek, ed25519-dalek and curve25519-dalek(-derive), chosen by docs/06 §3. Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
+
+[[trusted.digest]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2020-06-10"
+end = "2027-09-28"
+notes = "Publisher trust (ADR-036 (2), docs/06 §3): RustCrypto maintainer account publishing the RustCrypto primitive crates chosen by ADR-023/docs/06 §3 (hashes, MACs, KDFs, ciphers, AEADs, signatures, KEMs and their trait/utility crates). Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
+
+[[trusted.digest]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:RustCrypto/traits"
+start = "2026-02-12"
+end = "2027-09-28"
+notes = "Publisher trust (ADR-036 (2), docs/06 §3): RustCrypto trusted-publishing identity (GitHub Actions of the RustCrypto/traits repository) for the RustCrypto trait crates used by the primitive crates chosen by ADR-023/docs/06 §3. Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
+
+[[trusted.ed25519]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2019-08-10"
+end = "2027-09-28"
+notes = "Publisher trust (ADR-036 (2), docs/06 §3): RustCrypto maintainer account publishing the RustCrypto primitive crates chosen by ADR-023/docs/06 §3 (hashes, MACs, KDFs, ciphers, AEADs, signatures, KEMs and their trait/utility crates). Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
+
+[[trusted.ed25519]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:RustCrypto/signatures"
+start = "2026-05-03"
+end = "2027-09-28"
+notes = "Publisher trust (ADR-036 (2), docs/06 §3): RustCrypto trusted-publishing identity (GitHub Actions of the RustCrypto/signatures repository) for ml-dsa and ed25519, chosen by ADR-023/docs/06 §3. Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
+
+[[trusted.ed25519-dalek]]
+criteria = "safe-to-deploy"
+user-id = 6979 # Michael Rosenberg (rozbb)
+start = "2023-02-04"
+end = "2027-09-28"
+notes = "Publisher trust (ADR-036 (2), docs/06 §3): dalek-cryptography maintainer account publishing x25519-dalek, ed25519-dalek and curve25519-dalek(-derive), chosen by docs/06 §3. Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
+
+[[trusted.either]]
+criteria = "safe-to-deploy"
+user-id = 539 # Josh Stone (cuviper)
+start = "2019-04-02"
+end = "2027-09-28"
+notes = "Publisher trust (docs/06 §3, ADR-015 update of the M0 review): publisher trusted by >= 2 imported audit sets (Mozilla, ISRG, Bytecode Alliance); reviewed at every release."
+
+[[trusted.find-msvc-tools]]
+criteria = "safe-to-deploy"
+user-id = 539 # Josh Stone (cuviper)
+start = "2025-08-29"
+end = "2027-09-28"
+notes = "Publisher trust (docs/06 §3, ADR-015 update of the M0 review): publisher trusted by >= 2 imported audit sets (Mozilla, ISRG, Bytecode Alliance); reviewed at every release."
+
+[[trusted.getrandom]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:rust-random/getrandom"
+start = "2025-12-27"
+end = "2027-09-28"
+notes = "Publisher trust (ADR-036 (2), docs/06 §3), crate-scoped: rust-random trusted-publishing identity (GitHub Actions of the rust-random/getrandom repository) for getrandom, the OS CSPRNG crate chosen by docs/06 §3. No audited base exists for 0.4.x. Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
+
+[[trusted.glob]]
+criteria = "safe-to-deploy"
+user-id = 55123 # rust-lang-owner
+start = "2023-01-06"
+end = "2027-09-28"
+notes = "Publisher trust (docs/06 §3, ADR-015 update of the M0 review): publisher trusted by >= 2 imported audit sets (Mozilla, ISRG, Bytecode Alliance); reviewed at every release."
+
+[[trusted.hax-lib]]
+criteria = "safe-to-deploy"
+user-id = 333734 # maximebuyse
+start = "2025-05-16"
+end = "2027-09-28"
+notes = "Publisher trust (ADR-036 (2), brief M1 decision 1), crate-scoped: Cryspen hax team account (co-owner of hax-lib with franziskuskiefer and the github:cryspen:tools team) publishing hax-lib, the verification-support library compiled into libcrux-ml-kem (ADR-023). Residual crate of the M1 vet probe. Reviewed at every release. Owner approval: Christopher Carl, 2026-09-29 (M1 review §D)."
+
+[[trusted.hax-lib-macros]]
+criteria = "safe-to-deploy"
+user-id = 333734 # maximebuyse
+start = "2025-05-16"
+end = "2027-09-28"
+notes = "Publisher trust (ADR-036 (2), brief M1 decision 1), crate-scoped: Cryspen hax team account (co-owner of the hax crates with franziskuskiefer and the github:cryspen:tools team) publishing hax-lib-macros, the proc-macro crate of hax-lib compiled into libcrux-ml-kem (ADR-023). Residual crate of the M1 vet probe. Reviewed at every release. Owner approval: Christopher Carl, 2026-09-29 (M1 review §D)."
+
+[[trusted.hax-lib-macros-types]]
+criteria = "safe-to-deploy"
+user-id = 333734 # maximebuyse
+start = "2025-05-16"
+end = "2027-09-28"
+notes = "Publisher trust (ADR-036 (2)), crate-scoped: Cryspen hax team account (co-owner of the hax crates with franziskuskiefer and the github:cryspen:tools team) publishing hax-lib-macros-types. Only compiled under cfg(hax) (hax-lib-macros), never for the shipped targets. Reviewed at every release. Owner approval: Christopher Carl, 2026-09-29 (M1 review §D)."
+
+[[trusted.hkdf]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2020-10-19"
+end = "2027-09-28"
+notes = "Publisher trust (ADR-036 (2), docs/06 §3): RustCrypto maintainer account publishing the RustCrypto primitive crates chosen by ADR-023/docs/06 §3 (hashes, MACs, KDFs, ciphers, AEADs, signatures, KEMs and their trait/utility crates). Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
+
+[[trusted.hkdf]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:RustCrypto/KDFs"
+start = "2026-03-30"
+end = "2027-09-28"
+notes = "Publisher trust (ADR-036 (2), docs/06 §3): RustCrypto trusted-publishing identity (GitHub Actions of the RustCrypto/KDFs repository) for hkdf, chosen by docs/06 §3. Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
+
+[[trusted.hmac]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2020-06-10"
+end = "2027-09-28"
+notes = "Publisher trust (ADR-036 (2), docs/06 §3): RustCrypto maintainer account publishing the RustCrypto primitive crates chosen by ADR-023/docs/06 §3 (hashes, MACs, KDFs, ciphers, AEADs, signatures, KEMs and their trait/utility crates). Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
+
+[[trusted.hmac]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:RustCrypto/MACs"
+start = "2026-03-20"
+end = "2027-09-28"
+notes = "Publisher trust (ADR-036 (2), docs/06 §3): RustCrypto trusted-publishing identity (GitHub Actions of the RustCrypto/MACs repository) for hmac, chosen by docs/06 §3. Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
+
+[[trusted.hybrid-array]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2022-05-07"
+end = "2027-09-28"
+notes = "Publisher trust (ADR-036 (2), docs/06 §3): RustCrypto maintainer account publishing the RustCrypto primitive crates chosen by ADR-023/docs/06 §3 (hashes, MACs, KDFs, ciphers, AEADs, signatures, KEMs and their trait/utility crates). Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
+
+[[trusted.hybrid-array]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:RustCrypto/hybrid-array"
+start = "2026-03-08"
+end = "2027-09-28"
+notes = "Publisher trust (ADR-036 (2), docs/06 §3): RustCrypto trusted-publishing identity (GitHub Actions of the RustCrypto/hybrid-array repository) for hybrid-array, used by the RustCrypto primitive crates chosen by ADR-023/docs/06 §3. Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
 
 [[trusted.itoa]]
 criteria = "safe-to-deploy"
@@ -10,6 +328,90 @@ start = "2019-05-02"
 end = "2027-09-28"
 notes = "Publisher trust (docs/06 §3, ADR-015 update of the M0 review): publisher trusted by >= 2 imported audit sets (Mozilla, ISRG, Bytecode Alliance); reviewed at every release."
 
+[[trusted.jobserver]]
+criteria = "safe-to-deploy"
+user-id = 55123 # rust-lang-owner
+start = "2024-07-23"
+end = "2027-09-28"
+notes = "Publisher trust (docs/06 §3, ADR-015 update of the M0 review): publisher trusted by >= 2 imported audit sets (Mozilla, ISRG, Bytecode Alliance); reviewed at every release."
+
+[[trusted.keccak]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2022-05-24"
+end = "2027-09-28"
+notes = "Publisher trust (ADR-036 (2), docs/06 §3): RustCrypto maintainer account publishing the RustCrypto primitive crates chosen by ADR-023/docs/06 §3 (hashes, MACs, KDFs, ciphers, AEADs, signatures, KEMs and their trait/utility crates). Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
+
+[[trusted.keccak]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:RustCrypto/sponges"
+start = "2026-02-26"
+end = "2027-09-28"
+notes = "Publisher trust (ADR-036 (2), docs/06 §3): RustCrypto trusted-publishing identity (GitHub Actions of the RustCrypto/sponges repository) for keccak, used by sha3/shake (docs/06 §3). Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
+
+[[trusted.kem]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2021-02-09"
+end = "2027-09-28"
+notes = "Publisher trust (ADR-036 (2), docs/06 §3): RustCrypto maintainer account publishing the RustCrypto primitive crates chosen by ADR-023/docs/06 §3 (hashes, MACs, KDFs, ciphers, AEADs, signatures, KEMs and their trait/utility crates). Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
+
+[[trusted.kem]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:RustCrypto/traits"
+start = "2026-02-05"
+end = "2027-09-28"
+notes = "Publisher trust (ADR-036 (2), docs/06 §3): RustCrypto trusted-publishing identity (GitHub Actions of the RustCrypto/traits repository) for the RustCrypto trait crates used by the primitive crates chosen by ADR-023/docs/06 §3. Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
+
+[[trusted.libc]]
+criteria = "safe-to-deploy"
+user-id = 55123 # rust-lang-owner
+start = "2024-08-15"
+end = "2027-09-28"
+notes = "Publisher trust (docs/06 §3, ADR-015 update of the M0 review): publisher trusted by >= 2 imported audit sets (Mozilla, ISRG, Bytecode Alliance); reviewed at every release."
+
+[[trusted.libcrux-intrinsics]]
+criteria = "safe-to-deploy"
+user-id = 281161 # Jonas Schneider-Bensch (jschneider-bensch)
+start = "2024-07-22"
+end = "2027-09-28"
+notes = "Publisher trust (ADR-036 (2), docs/06 §3): Cryspen account publishing the libcrux crate family (libcrux-ml-kem, chosen by ADR-023, and its libcrux-* support crates). Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
+
+[[trusted.libcrux-ml-kem]]
+criteria = "safe-to-deploy"
+user-id = 281161 # Jonas Schneider-Bensch (jschneider-bensch)
+start = "2024-07-22"
+end = "2027-09-28"
+notes = "Publisher trust (ADR-036 (2), docs/06 §3): Cryspen account publishing the libcrux crate family (libcrux-ml-kem, chosen by ADR-023, and its libcrux-* support crates). Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
+
+[[trusted.libcrux-platform]]
+criteria = "safe-to-deploy"
+user-id = 281161 # Jonas Schneider-Bensch (jschneider-bensch)
+start = "2024-07-22"
+end = "2027-09-28"
+notes = "Publisher trust (ADR-036 (2), docs/06 §3): Cryspen account publishing the libcrux crate family (libcrux-ml-kem, chosen by ADR-023, and its libcrux-* support crates). Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
+
+[[trusted.libcrux-secrets]]
+criteria = "safe-to-deploy"
+user-id = 281161 # Jonas Schneider-Bensch (jschneider-bensch)
+start = "2025-11-05"
+end = "2027-09-28"
+notes = "Publisher trust (ADR-036 (2), docs/06 §3): Cryspen account publishing the libcrux crate family (libcrux-ml-kem, chosen by ADR-023, and its libcrux-* support crates). Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
+
+[[trusted.libcrux-sha3]]
+criteria = "safe-to-deploy"
+user-id = 281161 # Jonas Schneider-Bensch (jschneider-bensch)
+start = "2024-07-22"
+end = "2027-09-28"
+notes = "Publisher trust (ADR-036 (2), docs/06 §3): Cryspen account publishing the libcrux crate family (libcrux-ml-kem, chosen by ADR-023, and its libcrux-* support crates). Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
+
+[[trusted.libcrux-traits]]
+criteria = "safe-to-deploy"
+user-id = 281161 # Jonas Schneider-Bensch (jschneider-bensch)
+start = "2025-11-05"
+end = "2027-09-28"
+notes = "Publisher trust (ADR-036 (2), docs/06 §3): Cryspen account publishing the libcrux crate family (libcrux-ml-kem, chosen by ADR-023, and its libcrux-* support crates). Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
+
 [[trusted.memchr]]
 criteria = "safe-to-deploy"
 user-id = 189 # Andrew Gallant (BurntSushi)
@@ -17,10 +419,115 @@ start = "2019-07-07"
 end = "2027-09-28"
 notes = "Publisher trust (docs/06 §3, ADR-015 update of the M0 review): publisher trusted by >= 2 imported audit sets (Mozilla, ISRG, Bytecode Alliance); reviewed at every release."
 
+[[trusted.ml-dsa]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2024-06-20"
+end = "2027-09-28"
+notes = "Publisher trust (ADR-036 (2), docs/06 §3): RustCrypto maintainer account publishing the RustCrypto primitive crates chosen by ADR-023/docs/06 §3 (hashes, MACs, KDFs, ciphers, AEADs, signatures, KEMs and their trait/utility crates). Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
+
+[[trusted.ml-dsa]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:RustCrypto/signatures"
+start = "2026-03-26"
+end = "2027-09-28"
+notes = "Publisher trust (ADR-036 (2), docs/06 §3): RustCrypto trusted-publishing identity (GitHub Actions of the RustCrypto/signatures repository) for ml-dsa and ed25519, chosen by ADR-023/docs/06 §3. Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
+
+[[trusted.ml-kem]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2024-03-04"
+end = "2027-09-28"
+notes = "Publisher trust (ADR-036 (2), docs/06 §3): RustCrypto maintainer account publishing the RustCrypto primitive crates chosen by ADR-023/docs/06 §3 (hashes, MACs, KDFs, ciphers, AEADs, signatures, KEMs and their trait/utility crates). Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
+
+[[trusted.ml-kem]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:RustCrypto/KEMs"
+start = "2026-02-05"
+end = "2027-09-28"
+notes = "Publisher trust (ADR-036 (2), docs/06 §3): RustCrypto trusted-publishing identity (GitHub Actions of the RustCrypto/KEMs repository) for module-lattice (used by ml-dsa, ADR-023) and ml-kem (differential partner). Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
+
+[[trusted.module-lattice]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2026-01-27"
+end = "2027-09-28"
+notes = "Publisher trust (ADR-036 (2), docs/06 §3): RustCrypto maintainer account publishing the RustCrypto primitive crates chosen by ADR-023/docs/06 §3 (hashes, MACs, KDFs, ciphers, AEADs, signatures, KEMs and their trait/utility crates). Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
+
+[[trusted.module-lattice]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:RustCrypto/KEMs"
+start = "2026-02-05"
+end = "2027-09-28"
+notes = "Publisher trust (ADR-036 (2), docs/06 §3): RustCrypto trusted-publishing identity (GitHub Actions of the RustCrypto/KEMs repository) for module-lattice (used by ml-dsa, ADR-023) and ml-kem (differential partner). Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
+
+[[trusted.num-bigint]]
+criteria = "safe-to-deploy"
+user-id = 539 # Josh Stone (cuviper)
+start = "2019-09-04"
+end = "2027-09-28"
+notes = "Publisher trust (docs/06 §3, ADR-015 update of the M0 review): publisher trusted by >= 2 imported audit sets (Mozilla, ISRG, Bytecode Alliance); reviewed at every release."
+
+[[trusted.num-integer]]
+criteria = "safe-to-deploy"
+user-id = 539 # Josh Stone (cuviper)
+start = "2019-05-20"
+end = "2027-09-28"
+notes = "Publisher trust (docs/06 §3, ADR-015 update of the M0 review): publisher trusted by >= 2 imported audit sets (Mozilla, ISRG, Bytecode Alliance); reviewed at every release."
+
+[[trusted.poly1305]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2019-08-15"
+end = "2027-09-28"
+notes = "Publisher trust (ADR-036 (2), docs/06 §3): RustCrypto maintainer account publishing the RustCrypto primitive crates chosen by ADR-023/docs/06 §3 (hashes, MACs, KDFs, ciphers, AEADs, signatures, KEMs and their trait/utility crates). Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
+
+[[trusted.poly1305]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:RustCrypto/universal-hashes"
+start = "2026-05-10"
+end = "2027-09-28"
+notes = "Publisher trust (ADR-036 (2), docs/06 §3): RustCrypto trusted-publishing identity (GitHub Actions of the RustCrypto/universal-hashes repository) for poly1305, used by chacha20poly1305 (docs/06 §3). Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
+
+[[trusted.prettyplease]]
+criteria = "safe-to-deploy"
+user-id = 3618 # David Tolnay (dtolnay)
+start = "2022-01-04"
+end = "2027-09-28"
+notes = "Publisher trust (docs/06 §3, ADR-015 update of the M0 review): publisher trusted by >= 2 imported audit sets (Mozilla, ISRG, Bytecode Alliance); reviewed at every release."
+
 [[trusted.proc-macro2]]
 criteria = "safe-to-deploy"
 user-id = 3618 # David Tolnay (dtolnay)
 start = "2019-04-23"
+end = "2027-09-28"
+notes = "Publisher trust (docs/06 §3, ADR-015 update of the M0 review): publisher trusted by >= 2 imported audit sets (Mozilla, ISRG, Bytecode Alliance); reviewed at every release."
+
+[[trusted.regex]]
+criteria = "safe-to-deploy"
+user-id = 189 # Andrew Gallant (BurntSushi)
+start = "2019-02-27"
+end = "2027-09-28"
+notes = "Publisher trust (docs/06 §3, ADR-015 update of the M0 review): publisher trusted by >= 2 imported audit sets (Mozilla, ISRG, Bytecode Alliance); reviewed at every release."
+
+[[trusted.regex-automata]]
+criteria = "safe-to-deploy"
+user-id = 189 # Andrew Gallant (BurntSushi)
+start = "2019-02-25"
+end = "2027-09-28"
+notes = "Publisher trust (docs/06 §3, ADR-015 update of the M0 review): publisher trusted by >= 2 imported audit sets (Mozilla, ISRG, Bytecode Alliance); reviewed at every release."
+
+[[trusted.regex-syntax]]
+criteria = "safe-to-deploy"
+user-id = 189 # Andrew Gallant (BurntSushi)
+start = "2019-03-30"
+end = "2027-09-28"
+notes = "Publisher trust (docs/06 §3, ADR-015 update of the M0 review): publisher trusted by >= 2 imported audit sets (Mozilla, ISRG, Bytecode Alliance); reviewed at every release."
+
+[[trusted.rustversion]]
+criteria = "safe-to-deploy"
+user-id = 3618 # David Tolnay (dtolnay)
+start = "2019-07-08"
 end = "2027-09-28"
 notes = "Publisher trust (docs/06 §3, ADR-015 update of the M0 review): publisher trusted by >= 2 imported audit sets (Mozilla, ISRG, Bytecode Alliance); reviewed at every release."
 
@@ -52,6 +559,69 @@ start = "2019-02-28"
 end = "2027-09-28"
 notes = "Publisher trust (docs/06 §3, ADR-015 update of the M0 review): publisher trusted by >= 2 imported audit sets (Mozilla, ISRG, Bytecode Alliance); reviewed at every release."
 
+[[trusted.sha2]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2020-05-24"
+end = "2027-09-28"
+notes = "Publisher trust (ADR-036 (2), docs/06 §3): RustCrypto maintainer account publishing the RustCrypto primitive crates chosen by ADR-023/docs/06 §3 (hashes, MACs, KDFs, ciphers, AEADs, signatures, KEMs and their trait/utility crates). Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
+
+[[trusted.sha2]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:RustCrypto/hashes"
+start = "2026-03-25"
+end = "2027-09-28"
+notes = "Publisher trust (ADR-036 (2), docs/06 §3): RustCrypto trusted-publishing identity (GitHub Actions of the RustCrypto/hashes repository) for sha2 and sha3, chosen by docs/06 §3. Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
+
+[[trusted.sha3]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2020-06-10"
+end = "2027-09-28"
+notes = "Publisher trust (ADR-036 (2), docs/06 §3): RustCrypto maintainer account publishing the RustCrypto primitive crates chosen by ADR-023/docs/06 §3 (hashes, MACs, KDFs, ciphers, AEADs, signatures, KEMs and their trait/utility crates). Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
+
+[[trusted.sha3]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:RustCrypto/hashes"
+start = "2026-02-26"
+end = "2027-09-28"
+notes = "Publisher trust (ADR-036 (2), docs/06 §3): RustCrypto trusted-publishing identity (GitHub Actions of the RustCrypto/hashes repository) for sha2 and sha3, chosen by docs/06 §3. Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
+
+[[trusted.shake]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:RustCrypto/XOFs"
+start = "2026-05-15"
+end = "2027-09-28"
+notes = "Publisher trust (ADR-036 (2), docs/06 §3): RustCrypto trusted-publishing identity (GitHub Actions of the RustCrypto/XOFs repository) for shake, a normal dependency of ml-dsa (ADR-023); not a direct dependency (the vector seed streams use sha3::Shake256, M1 review note). Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
+
+[[trusted.signature]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2019-05-25"
+end = "2027-09-28"
+notes = "Publisher trust (ADR-036 (2), docs/06 §3): RustCrypto maintainer account publishing the RustCrypto primitive crates chosen by ADR-023/docs/06 §3 (hashes, MACs, KDFs, ciphers, AEADs, signatures, KEMs and their trait/utility crates). Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
+
+[[trusted.signature]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:RustCrypto/traits"
+start = "2026-05-02"
+end = "2027-09-28"
+notes = "Publisher trust (ADR-036 (2), docs/06 §3): RustCrypto trusted-publishing identity (GitHub Actions of the RustCrypto/traits repository) for the RustCrypto trait crates used by the primitive crates chosen by ADR-023/docs/06 §3. Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
+
+[[trusted.slab]]
+criteria = "safe-to-deploy"
+user-id = 6741 # Alice Ryhl (Darksonn)
+start = "2021-10-13"
+end = "2027-09-28"
+notes = "Publisher trust (docs/06 §3, ADR-015 update of the M0 review): publisher trusted by >= 2 imported audit sets (Mozilla, Bytecode Alliance); reviewed at every release."
+
+[[trusted.sponge-cursor]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:RustCrypto/utils"
+start = "2026-05-08"
+end = "2027-09-28"
+notes = "Publisher trust (ADR-036 (2), docs/06 §3): RustCrypto trusted-publishing identity (GitHub Actions of the RustCrypto/utils repository) for the RustCrypto utility crates (zeroize, block-buffer, cmov, ctutils, sponge-cursor, ...) used by the primitive crates chosen by ADR-023/docs/06 §3. Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
+
 [[trusted.syn]]
 criteria = "safe-to-deploy"
 user-id = 3618 # David Tolnay (dtolnay)
@@ -59,12 +629,61 @@ start = "2019-03-01"
 end = "2027-09-28"
 notes = "Publisher trust (docs/06 §3, ADR-015 update of the M0 review): publisher trusted by >= 2 imported audit sets (Mozilla, ISRG, Bytecode Alliance); reviewed at every release."
 
+[[trusted.typenum]]
+criteria = "safe-to-deploy"
+user-id = 243 # Paho Lurie-Gregg (paholg)
+start = "2019-08-25"
+end = "2027-09-28"
+notes = "Publisher trust (brief M1 decision 1: residual crate covered by trust or delta audit), crate-scoped: paholg is the author, owner and sole publisher of typenum (type-level integers used by hybrid-array in the RustCrypto closure). A delta audit is impossible: the imported sets hold only the deltas 1.15.0 -> 1.16.0 (Mozilla) and 1.16.0 -> 1.17.0 (Zcash) without an audited base. Reviewed at every release. Owner approval: Christopher Carl, 2026-09-29 (M1 review §D)."
+
 [[trusted.unicode-ident]]
 criteria = "safe-to-deploy"
 user-id = 3618 # David Tolnay (dtolnay)
 start = "2021-10-02"
 end = "2027-09-28"
 notes = "Publisher trust (docs/06 §3, ADR-015 update of the M0 review): publisher trusted by >= 2 imported audit sets (Mozilla, ISRG, Bytecode Alliance); reviewed at every release."
+
+[[trusted.universal-hash]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2019-08-30"
+end = "2027-09-28"
+notes = "Publisher trust (ADR-036 (2), docs/06 §3): RustCrypto maintainer account publishing the RustCrypto primitive crates chosen by ADR-023/docs/06 §3 (hashes, MACs, KDFs, ciphers, AEADs, signatures, KEMs and their trait/utility crates). Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
+
+[[trusted.universal-hash]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:RustCrypto/traits"
+start = "2026-02-27"
+end = "2027-09-28"
+notes = "Publisher trust (ADR-036 (2), docs/06 §3): RustCrypto trusted-publishing identity (GitHub Actions of the RustCrypto/traits repository) for the RustCrypto trait crates used by the primitive crates chosen by ADR-023/docs/06 §3. Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
+
+[[trusted.windows-sys]]
+criteria = "safe-to-deploy"
+user-id = 64539 # Kenny Kerr (kennykerr)
+start = "2021-11-15"
+end = "2027-09-28"
+notes = "Publisher trust (docs/06 §3, ADR-015 update of the M0 review): publisher trusted by >= 2 imported audit sets (Mozilla, ISRG, Zcash, Bytecode Alliance); reviewed at every release."
+
+[[trusted.x25519-dalek]]
+criteria = "safe-to-deploy"
+user-id = 6979 # Michael Rosenberg (rozbb)
+start = "2023-03-31"
+end = "2027-09-28"
+notes = "Publisher trust (ADR-036 (2), docs/06 §3): dalek-cryptography maintainer account publishing x25519-dalek, ed25519-dalek and curve25519-dalek(-derive), chosen by docs/06 §3. Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
+
+[[trusted.zeroize]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2021-11-05"
+end = "2027-09-28"
+notes = "Publisher trust (ADR-036 (2), docs/06 §3): RustCrypto maintainer account publishing the RustCrypto primitive crates chosen by ADR-023/docs/06 §3 (hashes, MACs, KDFs, ciphers, AEADs, signatures, KEMs and their trait/utility crates). Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
+
+[[trusted.zeroize]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:RustCrypto/utils"
+start = "2026-06-12"
+end = "2027-09-28"
+notes = "Publisher trust (ADR-036 (2), docs/06 §3): RustCrypto trusted-publishing identity (GitHub Actions of the RustCrypto/utils repository) for the RustCrypto utility crates (zeroize, block-buffer, cmov, ctutils, sponge-cursor, ...) used by the primitive crates chosen by ADR-023/docs/06 §3. Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
 
 [[trusted.zmij]]
 criteria = "safe-to-deploy"

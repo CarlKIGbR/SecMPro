@@ -103,13 +103,12 @@ jobs:
       - name: Windows gate
         run: cargo xtask step --strict clippy nextest doctest kat hello
 
-  # docs/06 §5 step 11 cross-build with cargo-xwin. continue-on-error is allowed for this job in M0 only
-  # (Amendment A1 §5); the outcome is recorded in the milestone report.
+  # docs/06 §5 step 11: cargo-xwin cross-build, a compile-compatibility check only (ADR-034; Windows release
+  # builds are native). A hard gate since M1 (M0 review, condition C1).
   xwin-cross:
     if: github.event_name != 'workflow_dispatch' || inputs.suite == 'all' || inputs.suite == 'full'
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    continue-on-error: true
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -122,6 +121,8 @@ jobs:
           echo "$HOME/.secmp-tools/bin" >> "$GITHUB_PATH"
       - name: LLVM tools for clang-cl / lld-link / llvm-lib
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends clang lld llvm
+      - name: NASM (aws-lc-sys assembles its x86_64 Windows objects with it; M0 spike (b))
+        run: sudo apt-get install -y --no-install-recommends nasm && nasm -v
       - name: Restore pinned tools
         id: tools-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

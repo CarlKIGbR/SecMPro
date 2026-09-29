@@ -9,5 +9,42 @@ license.workspace = true
 repository.workspace = true
 publish.workspace = true
 
+[features]
+# Derandomised entry points (fixed randomness), the external KATs and the SecMP vector generator (docs/06 §5
+# step 5, vectors/SCHEMA.md); the differential tests use it from secmp-testkit. Never enabled in a shipped build.
+kat = []
+
+[dependencies]
+secmp-sys-mem.workspace = true
+libcrux-ml-kem.workspace = true
+ml-dsa.workspace = true
+x25519-dalek.workspace = true
+ed25519-dalek.workspace = true
+chacha20.workspace = true
+chacha20poly1305.workspace = true
+hmac.workspace = true
+hkdf.workspace = true
+sha2.workspace = true
+sha3.workspace = true
+subtle.workspace = true
+zeroize.workspace = true
+getrandom.workspace = true
+
+# Pure Rust only, so that Miri can interpret the tests for another target (the differential partners with C code
+# live in secmp-testkit).
+[dev-dependencies]
+secmp-testkit.workspace = true
+serde_json.workspace = true
+
+[[example]]
+name = "gen-vectors"
+required-features = ["kat"]
+
+# dudect-style constant-time tests (release profile), run by `cargo xtask step ct`.
+[[bench]]
+name = "ct"
+harness = false
+required-features = ["kat"]
+
 [lints]
 workspace = true

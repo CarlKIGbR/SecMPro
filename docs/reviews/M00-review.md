@@ -68,3 +68,5 @@ One commit `chore(m0): review follow-ups` containing: (1) the reviewer's documen
 ## G. Verdict
 
 **Approved.** M0 is closed when the follow-up commit is on the PR, the PR run is green, and PR #1 is squash-merged into `main`. M1 (`secmp-crypto`) may then start; its first commit removes `continue-on-error` from `xwin-cross` and adds NASM to that job (C1).
+
+Closed 2026-09-28: PR #1 squash-merged as cd5eeb4; reviewer release on run 36467421878.

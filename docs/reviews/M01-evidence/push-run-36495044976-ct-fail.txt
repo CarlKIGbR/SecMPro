@@ -1,0 +1,28 @@
+CI run 36495044976 (event push, head 0a788dc — the same commit as PR run 36495050724). linux-full FAILED
+at step 5 (ct): caead_open_reject max |t| = 32.17. Collected 2026-09-29 (brief M1-3 step 5, M1-4 step 4).
+
+$ gh run view 36495044976 --repo CarlKIGbR/SecMPro --json jobs --jq '.jobs[] | {name, conclusion, startedAt, completedAt}'
+{"completedAt":"2026-09-28T23:54:45Z","conclusion":"failure","name":"linux-full","startedAt":"2026-09-28T22:54:19Z"}
+{"completedAt":"2026-09-28T23:08:34Z","conclusion":"success","name":"linux-fast","startedAt":"2026-09-28T22:54:19Z"}
+{"completedAt":"2026-09-28T23:15:18Z","conclusion":"success","name":"windows-native","startedAt":"2026-09-28T22:54:19Z"}
+{"completedAt":"2026-09-28T22:57:18Z","conclusion":"success","name":"xwin-cross","startedAt":"2026-09-28T22:54:21Z"}
+
+Runner (Set up job):
+linux-full	Set up job	2026-09-28T22:54:20.4731144Z Azure Region: eastus2
+linux-full	Set up job	2026-09-28T22:54:20.4737048Z Image: ubuntu-24.04
+linux-full	Set up job	2026-09-28T22:54:20.4740634Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20260920.314
+
+$ gh run view 36495044976 --log --job 109172629324 | grep -E '^\S+\s+ci-full.*\bct\b|  ct '
+linux-full	ci-full (steps 1–14)	2026-09-28T23:10:55.5423043Z === [5] ct ===
+linux-full	ci-full (steps 1–14)	2026-09-28T23:10:55.5423909Z $ /home/runner/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/cargo bench --locked --package secmp-crypto --features kat --bench ct
+linux-full	ci-full (steps 1–14)	2026-09-28T23:12:04.8880745Z FAIL [5] ct: constant-time test failed: control_variable_time_compare: max |t| = 25362.69 over 1000000 samples (control, must be detected) -> ok; tag_compare: max |t| = 2.30 over 1000000 samples -> ok; msg_open_reject: max |t| = 2.26 over 1000000 samples -> ok; caead_open_reject: max |t| = 32.17 over 1000000 samples -> FAIL; sas: max |t| = 2.88 over 20000 samples -> ok
+linux-full	ci-full (steps 1–14)	2026-09-28T23:12:04.8882439Z   ct control_variable_time_compare: max |t| = 25362.69 over 1000000 samples (control, must be detected) -> ok
+linux-full	ci-full (steps 1–14)	2026-09-28T23:12:04.8883285Z   ct tag_compare: max |t| = 2.30 over 1000000 samples -> ok
+linux-full	ci-full (steps 1–14)	2026-09-28T23:12:04.8883673Z   ct msg_open_reject: max |t| = 2.26 over 1000000 samples -> ok
+linux-full	ci-full (steps 1–14)	2026-09-28T23:12:04.8884111Z   ct caead_open_reject: max |t| = 32.17 over 1000000 samples -> FAIL
+linux-full	ci-full (steps 1–14)	2026-09-28T23:12:04.8884477Z   ct sas: max |t| = 2.88 over 20000 samples -> ok
+linux-full	ci-full (steps 1–14)	2026-09-28T23:12:04.8887166Z   ct report: {"threshold":4.5,"results":[{"name":"control_variable_time_compare","samples":1000000,"control":true,"max_abs_t":25362.693,"passed":true,"t":{"raw":-2475.769,"p50":0.000,"p75":-25362.693,"p90":-25325.099,"p95":-19920.158,"p99":-13617.746}},{"name":"tag_compare","samples":1000000,"control":false,"max_abs_t":2.302,"passed":true,"t":{"raw":1.081,"p50":-2.302,"p75":-0.210,"p90":0.859,"p95":0.859,"p99":0.220}},{"name":"msg_open_reject","samples":1000000,"control":false,"max_abs_t":2.259,"passed":true,"t":{"raw":1.924,"p50":-1.629,"p75":-1.575,"p90":-1.575,"p95":-2.097,"p99":-2.259}},{"name":"caead_open_reject","samples":1000000,"control":false,"max_abs_t":32.175,"passed":false,"t":{"raw":-0.422,"p50":-18.487,"p75":-24.372,"p90":-32.175,"p95":-31.818,"p99":-9.923}},{"name":"sas","samples":20000,"control":false,"max_abs_t":2.879,"passed":true,"t":{"raw":2.879,"p50":1.031,"p75":1.618,"p90":2.142,"p95":1.954,"p99":2.598}}]}
+linux-full	ci-full (steps 1–14)	2026-09-28T23:54:43.2859401Z    5 ct              FAIL         69s  constant-time test failed: control_variable_time_compare: max |t| = 25362.69 over 1000000 samples (control, must be detected) -> ok; tag_compare: max |t| = 2.30 over 1000000 samples -> ok; msg_open_reject: max |t| = 2.26 over 1000000 samples -> ok; caead_open_reject: max |t| = 32.17 over 1000000 samples -> FAIL; sas: max |t| = 2.88 over 20000 samples -> ok
+
+Final line of ci-full (same log):
+linux-full	ci-full (steps 1–14)	2026-09-28T23:54:43.2853314Z xtask: error: ci-full: 1 step(s) failed

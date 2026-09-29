@@ -1,25 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! Commands that are documented stubs in M0. Each explains what it will do and exits with an error, so a stub
+//! Commands that are documented stubs until their milestone. Each explains what it will do and exits with an error, so a stub
 //! can never be mistaken for a passing check.
 
 use crate::util::{Result, bail, say};
-
-/// `cargo xtask vectors` (real from M1).
-pub(crate) fn vectors() -> Result<()> {
-    say(
-        "cargo xtask vectors — cross-generate and freeze the SecMP test vectors (docs/06 §5 step 12a, ADR-026).",
-    );
-    say(
-        "From M1: run the independent Python reference implementation in ref/ (written in a separate session from",
-    );
-    say(
-        "the spec alone) and the Rust implementation over the same inputs, compare every vector byte-for-byte,",
-    );
-    say(
-        "and write vectors/<area>/*.json only when both agree. After M1–M5 vectors change only with a spec revision.",
-    );
-    bail!("stub in M0: there is no reference implementation or vector set yet")
-}
 
 /// `cargo xtask repro-check` (real in M11).
 pub(crate) fn repro_check() -> Result<()> {

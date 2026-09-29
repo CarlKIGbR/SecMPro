@@ -1,0 +1,1101 @@
+You are about to diff versions 0.10.1 and 0.10.3 of 'rand', likely to certify it for "safe-to-deploy", which means:
+
+  This crate will not introduce a serious security vulnerability to production
+  software exposed to untrusted input.
+  
+  Auditors are not required to perform a full logic review of the entire crate.
+  Rather, they must review enough to fully reason about the behavior of all unsafe
+  blocks and usage of powerful imports. For any reasonable usage of the crate in
+  real-world software, an attacker must not be able to manipulate the runtime
+  behavior of these sections in an exploitable or surprising way.
+  
+  Ideally, all unsafe code is fully sound, and ambient capabilities (e.g.
+  filesystem access) are hardened against manipulation and consistent with the
+  advertised behavior of the crate. However, some discretion is permitted. In such
+  cases, the nature of the discretion should be recorded in the `notes` field of
+  the audit record.
+  
+  For crates which generate deployed code (e.g. build dependencies or procedural
+  macros), reasonable usage of the crate should output code which meets the above
+  criteria.
+  
+Please read the above criteria and consider them when performing the audit.
+Other software projects may rely on this audit. Ask for help if you're not sure.
+
+diff --git a/rand-0.10.1/CHANGELOG.md b/rand-0.10.3/CHANGELOG.md
+index d2f78fa..48f5fc7 100644
+--- a/rand-0.10.1/CHANGELOG.md
++++ b/rand-0.10.3/CHANGELOG.md
+@@ -8,6 +8,34 @@ A [separate changelog is kept for rand_core](https://github.com/rust-random/core
+ 
+ You may also find the [Upgrade Guide](https://rust-random.github.io/book/update.html) useful.
+ 
++## [0.10.3] — 2026-09-20
++
++### Fixes
++- Fix `WeightedIndex` panic when the sum of float weights is infinite; return `Error::Overflow` instead ([#1808])
++- Fix spurious `Error::NonFinite` from `Uniform::new_inclusive` on large finite float ranges such as `0.0..=f64::MAX` ([#1821])
++- Fix possible panic due to sampling a deserialized `Uniform<char>` ([#1831])
++
++### Changes
++- Report exact remaining lengths from `WeightedIndex::weights()` and reduce overhead when reading weights ([#1838])
++
++[#1808]: https://github.com/rust-random/rand/pull/1808
++[#1821]: https://github.com/rust-random/rand/pull/1821
++[#1831]: https://github.com/rust-random/rand/pull/1831
++[#1838]: https://github.com/rust-random/rand/pull/1838
++
++## [0.10.2] — 2026-07-02
++
++### Fixes
++- Fix possible memory safety violation due to deserialization of `UniformChar` from bad source ([#1790])
++
++### Changes
++- Document required output order of fn `partial_shuffle` and apply `#[must_use]` ([#1769])
++- Avoid usage of `unsafe` in contexts where non-local memory corruption could invalidate contract ([#1791])
++
++[#1769]: https://github.com/rust-random/rand/pull/1769
++[#1790]: https://github.com/rust-random/rand/pull/1790
++[#1791]: https://github.com/rust-random/rand/pull/1791
++
+ ## [0.10.1] — 2026-02-11
+ This release includes a fix for a soundness bug; see [#1763].
+ 
+@@ -1156,7 +1184,7 @@ Code replaced with a compatibility layer over rand 0.4.
+ ### Added
+ - Separate `rand` out of the standard library
+ 
+-[Unreleased]: https://github.com/rust-random/rand/compare/0.10.0...HEAD
++[Unreleased]: https://github.com/rust-random/rand/compare/0.10.1...HEAD
+ [0.10.1]: https://github.com/rust-random/rand/compare/0.10.0...0.10.1
+ [0.10.0]: https://github.com/rust-random/rand/compare/0.9.2...0.10.0
+ [0.9.2]: https://github.com/rust-random/rand/compare/0.9.1...0.9.2
+diff --git a/rand-0.10.1/Cargo.toml b/rand-0.10.3/Cargo.toml
+index fb30409..901e50a 100644
+--- a/rand-0.10.1/Cargo.toml
++++ b/rand-0.10.3/Cargo.toml
+@@ -13,7 +13,7 @@
+ edition = "2024"
+ rust-version = "1.85"
+ name = "rand"
+-version = "0.10.1"
++version = "0.10.3"
+ authors = [
+     "The Rand Project Developers",
+     "The Rust Project Developers",
+diff --git a/rand-0.10.1/Cargo.toml.orig b/rand-0.10.3/Cargo.toml.orig
+index 9bbef85..2d8cf77 100644
+--- a/rand-0.10.1/Cargo.toml.orig
++++ b/rand-0.10.3/Cargo.toml.orig
+@@ -1,9 +1,8 @@
+ [package]
+ name = "rand"
+-version = "0.10.1"
++version = "0.10.3"
+ authors = ["The Rand Project Developers", "The Rust Project Developers"]
+ license = "MIT OR Apache-2.0"
+-readme = "README.md"
+ repository = "https://github.com/rust-random/rand"
+ documentation = "https://docs.rs/rand"
+ homepage = "https://rust-random.github.io/book"
+diff --git a/rand-0.10.1/src/distr/bernoulli.rs b/rand-0.10.3/src/distr/bernoulli.rs
+index 1fe88f2..377752f 100644
+--- a/rand-0.10.1/src/distr/bernoulli.rs
++++ b/rand-0.10.3/src/distr/bernoulli.rs
+@@ -117,13 +117,28 @@ impl Bernoulli {
+     }
+ 
+     /// Construct a new `Bernoulli` with the probability of success of
+-    /// `numerator`-in-`denominator`. I.e. `new_ratio(2, 3)` will return
++    /// `numerator`-in-`denominator`. I.e. `from_ratio(2, 3)` will return
+     /// a `Bernoulli` with a 2-in-3 chance, or about 67%, of returning `true`.
+     ///
+-    /// return `true`. If `numerator == 0` it will always return `false`.
+-    /// For `numerator > denominator` and `denominator == 0`, this returns an
+-    /// error. Otherwise, for `numerator == denominator`, samples are always
+-    /// true; for `numerator == 0` samples are always false.
++    /// For `numerator == denominator`, the resulting distribution will always
++    /// return `true`; for `numerator == 0` it will always return `false`.
++    /// For `numerator > denominator` or `denominator == 0`, this returns an
++    /// error.
++    ///
++    /// # Example
++    ///
++    /// ```
++    /// use rand::distr::Bernoulli;
++    ///
++    /// let d = Bernoulli::from_ratio(2, 3).unwrap();
++    /// assert!((d.p() - 2.0 / 3.0).abs() < 1e-9);
++    ///
++    /// // Edge cases:
++    /// assert_eq!(Bernoulli::from_ratio(3, 3).unwrap().p(), 1.0); // always true
++    /// assert_eq!(Bernoulli::from_ratio(0, 3).unwrap().p(), 0.0); // always false
++    /// assert!(Bernoulli::from_ratio(4, 3).is_err());             // numerator > denominator
++    /// assert!(Bernoulli::from_ratio(1, 0).is_err());             // denominator == 0
++    /// ```
+     #[inline]
+     pub fn from_ratio(numerator: u32, denominator: u32) -> Result<Bernoulli, BernoulliError> {
+         if numerator > denominator || denominator == 0 {
+diff --git a/rand-0.10.1/src/distr/mod.rs b/rand-0.10.3/src/distr/mod.rs
+index 70ecf24..f730dc2 100644
+--- a/rand-0.10.1/src/distr/mod.rs
++++ b/rand-0.10.3/src/distr/mod.rs
+@@ -9,38 +9,45 @@
+ 
+ //! Generating random samples from probability distributions
+ //!
+-//! This module is the home of the [`Distribution`] trait and several of its
+-//! implementations. It is the workhorse behind some of the convenient
+-//! functionality of the [`RngExt`] trait, e.g. [`RngExt::random`] and of course
+-//! [`RngExt::sample`].
++//! # Quick start
+ //!
+-//! Abstractly, a [probability distribution] describes the probability of
+-//! occurrence of each value in its sample space.
++//! ```
++//! use rand::RngExt;
++//! let mut rng = rand::rng();
+ //!
+-//! More concretely, an implementation of `Distribution<T>` for type `X` is an
+-//! algorithm for choosing values from the sample space (a subset of `T`)
+-//! according to the distribution `X` represents, using an external source of
+-//! randomness (an RNG supplied to the `sample` function).
++//! eprintln!("A letter: {}", rng.sample(rand::distr::Alphabetic) as char);
+ //!
+-//! A type `X` may implement `Distribution<T>` for multiple types `T`.
+-//! Any type implementing [`Distribution`] is stateless (i.e. immutable),
+-//! but it may have internal parameters set at construction time (for example,
+-//! [`Uniform`] allows specification of its sample space as a range within `T`).
++//! let percent_range = rand::distr::Uniform::try_from(0..=100).unwrap();
++//! eprintln!("Percentage: {}%", rng.sample(&percent_range));
++//! ```
+ //!
++//! # `Distribution` trait
+ //!
+-//! # The Standard Uniform distribution
++//! Abstractly, a [probability distribution] describes the probability of
++//! occurrence of each value in its sample space.
+ //!
+-//! The [`StandardUniform`] distribution is important to mention. This is the
+-//! distribution used by [`RngExt::random`] and represents the "default" way to
+-//! produce a random value for many different types, including most primitive
+-//! types, tuples, arrays, and a few derived types. See the documentation of
+-//! [`StandardUniform`] for more details.
++//! More concretely, a sampler `X` implementing
++//! <code>[Distribution][]&lt;T&gt;</code> is an algorithm for choosing values
++//! from the sample space `T` (or a subset of `T`) using randomness from an
++//! [`Rng`].
++//! Typically the sampler `X` emulates some like-named probability distribution
++//! (for example, [`Bernoulli`] emulates the
++//! [Bernoulli distribution](https://en.wikipedia.org/wiki/Bernoulli_distribution)).
+ //!
+-//! Implementing [`Distribution<T>`] for [`StandardUniform`] for user types `T` makes it
+-//! possible to generate type `T` with [`RngExt::random`], and by extension also
+-//! with the [`random`] function.
++//! ## The Standard Uniform distribution
+ //!
+-//! ## Other standard uniform distributions
++//! The [`StandardUniform`] distribution is perhaps the most important sampler,
++//! representing the "default" probability distribution for a type.
++//! Its distribution is expected to be uniform. For `bool`, `char` and integer
++//! types the sample space equals that of the type (i.e. any valid value of that
++//! type may be yielded), but for floating-point types the sample range is
++//! arbitrarily set to `0.0..1.0`.
++//!
++//! Implementing [`Distribution<T>`] for [`StandardUniform`] for type `T`
++//! enables sampling type `T` using [`RngExt::random`] and (by extension)
++//! [`rand::random`].
++//!
++//! ### Other standard uniform distributions
+ //!
+ //! [`Alphanumeric`] is a simple distribution to sample random letters and
+ //! numbers of the `char` type; in contrast [`StandardUniform`] may sample any valid
+@@ -56,7 +63,7 @@
+ //! sample a value which would have a low chance of being sampled anyway is
+ //! rarely an issue in practice.
+ //!
+-//! # Parameterized Uniform distributions
++//! ## Parameterized Uniform distributions
+ //!
+ //! The [`Uniform`] distribution provides uniform sampling over a specified
+ //! range on a subset of the types supported by the above distributions.
+@@ -67,7 +74,7 @@
+ //! faster to pre-construct a [`Distribution`] object using
+ //! [`Uniform::new`], [`Uniform::new_inclusive`] or `From<Range>`.
+ //!
+-//! # Non-uniform sampling
++//! ## Non-uniform sampling
+ //!
+ //! Sampling a simple true/false outcome with a given probability has a name:
+ //! the [`Bernoulli`] distribution (this is used by [`RngExt::random_bool`]).
+@@ -81,10 +88,10 @@
+ //! [probability distribution]: https://en.wikipedia.org/wiki/Probability_distribution
+ //! [`rand_distr`]: https://crates.io/crates/rand_distr
+ //! [`statrs`]: https://crates.io/crates/statrs
+-
+-//! [`random`]: crate::random
++//! [`rand::random`]: crate::random
+ //! [`rand_distr`]: https://crates.io/crates/rand_distr
+ //! [`statrs`]: https://crates.io/crates/statrs
++//! [`Rng`]: crate::Rng
+ 
+ mod bernoulli;
+ mod distribution;
+diff --git a/rand-0.10.1/src/distr/slice.rs b/rand-0.10.3/src/distr/slice.rs
+index bbe7840..dc58535 100644
+--- a/rand-0.10.1/src/distr/slice.rs
++++ b/rand-0.10.3/src/distr/slice.rs
+@@ -86,18 +86,9 @@ impl<'a, T> Choose<'a, T> {
+ impl<'a, T> Distribution<&'a T> for Choose<'a, T> {
+     fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> &'a T {
+         let idx = self.range.sample(rng);
+-
+-        debug_assert!(
+-            idx < self.slice.len(),
+-            "Uniform::new(0, {}) somehow returned {}",
+-            self.slice.len(),
+-            idx
+-        );
+-
+-        // Safety: at construction time, it was ensured that the slice was
+-        // non-empty, and that the `Uniform` range produces values in range
+-        // for the slice
+-        unsafe { self.slice.get_unchecked(idx) }
++        self.slice
++            .get(idx)
++            .expect("rand::distr::slice::Choose: index out-of-range (likely memory corruption)")
+     }
+ }
+ 
+diff --git a/rand-0.10.1/src/distr/uniform.rs b/rand-0.10.3/src/distr/uniform.rs
+index c61a518..9d3b00b 100644
+--- a/rand-0.10.1/src/distr/uniform.rs
++++ b/rand-0.10.3/src/distr/uniform.rs
+@@ -419,8 +419,23 @@ where
+ 
+ /// Range that supports generating a single sample efficiently.
+ ///
+-/// Any type implementing this trait can be used to specify the sampled range
+-/// for `Rng::random_range`.
++/// See [`RngExt::random_range`] for examples; the method provides a convenient
++/// interface over this type.
++///
++/// # Examples
++///
++/// ```
++/// use rand::distr::uniform::SampleRange;
++/// let mut rng = rand::rng();
++///
++/// // Range and InclusiveRange are supported for many types:
++/// assert_eq!((9..10).sample_single(&mut rng), Ok(9));
++/// assert_eq!(('a'..='a').sample_single(&mut rng), Ok('a'));
++///
++/// // RangeTo and RangeToInclusive are supported for unsigned integers:
++/// assert_eq!((..1u8).sample_single(&mut rng), Ok(0));
++/// assert!((..=10u32).sample_single(&mut rng).unwrap() <= 10);
++/// ```
+ pub trait SampleRange<T> {
+     /// Generate a sample from the given range.
+     fn sample_single<R: Rng + ?Sized>(self, rng: &mut R) -> Result<T, Error>;
+diff --git a/rand-0.10.1/src/distr/uniform_float.rs b/rand-0.10.3/src/distr/uniform_float.rs
+index 3e91c0f..b5eae07 100644
+--- a/rand-0.10.1/src/distr/uniform_float.rs
++++ b/rand-0.10.3/src/distr/uniform_float.rs
+@@ -57,6 +57,9 @@ macro_rules! uniform_float_impl {
+             /// Construct, reducing `scale` as required to ensure that rounding
+             /// can never yield values greater than `high`.
+             ///
++            /// Requirements: `low` and `high` must be finite with `low <= high`.
++            /// `scale` must be non-negative, may be positive infinity but must not be NaN.
++            ///
+             /// Note: though it may be tempting to use a variant of this method
+             /// to ensure that samples from `[low, high)` are always strictly
+             /// less than `high`, this approach may be very slow where
+@@ -66,11 +69,11 @@ macro_rules! uniform_float_impl {
+                 let max_rand = <$ty>::splat(1.0 as $f_scalar - $f_scalar::EPSILON);
+ 
+                 loop {
+-                    let mask = (scale * max_rand + low).gt_mask(high);
+-                    if !mask.any() {
++                    let mask = (scale * max_rand + low).le_mask(high);
++                    if mask.all() {
+                         break;
+                     }
+-                    scale = scale.decrease_masked(mask);
++                    scale = scale.decrease_masked(!mask);
+                 }
+ 
+                 debug_assert!(<$ty>::splat(0.0).all_le(scale));
+@@ -126,12 +129,14 @@ macro_rules! uniform_float_impl {
+                     return Err(Error::EmptyRange);
+                 }
+ 
+-                let max_rand = <$ty>::splat(1.0 as $f_scalar - $f_scalar::EPSILON);
+-                let scale = (high - low) / max_rand;
+-                if !scale.all_finite() {
++                let range = high - low;
++                if !range.all_finite() {
+                     return Err(Error::NonFinite);
+                 }
+ 
++                let max_rand = <$ty>::splat(1.0 as $f_scalar - $f_scalar::EPSILON);
++                let scale = range / max_rand;
++
+                 Ok(Self::new_bounded(low, high, scale))
+             }
+ 
+@@ -238,6 +243,8 @@ mod tests {
+                     (-<$f_scalar>::from_bits(7), -0.0),
+                     (0.1 * $f_scalar::MAX, $f_scalar::MAX),
+                     (-$f_scalar::MAX * 0.2, $f_scalar::MAX * 0.7),
++                    (0.0, $f_scalar::MAX),
++                    (-$f_scalar::MAX, 0.0),
+                 ];
+                 for &(low_scalar, high_scalar) in v.iter() {
+                     for lane in 0..<$ty>::LEN {
+@@ -360,6 +367,10 @@ mod tests {
+     #[test]
+     fn test_float_overflow() {
+         assert_eq!(Uniform::try_from(f64::MIN..f64::MAX), Err(Error::NonFinite));
++        assert_eq!(
++            Uniform::try_from(f64::MIN..=f64::MAX),
++            Err(Error::NonFinite)
++        );
+     }
+ 
+     #[test]
+diff --git a/rand-0.10.1/src/distr/uniform_int.rs b/rand-0.10.3/src/distr/uniform_int.rs
+index 865d63f..e0ccf42 100644
+--- a/rand-0.10.1/src/distr/uniform_int.rs
++++ b/rand-0.10.3/src/distr/uniform_int.rs
+@@ -74,6 +74,23 @@ pub struct UniformInt<X> {
+ 
+ macro_rules! uniform_int_impl {
+     ($ty:ty, $uty:ty, $sample_ty:ident) => {
++        impl UniformInt<$ty> {
++            /// Get the maximum possible value
++            #[allow(unused)]
++            #[inline]
++            pub(crate) fn max(&self) -> $ty {
++                if self.range == 0 {
++                    return <$ty>::MAX;
++                } else {
++                    // Wrapping through <$ty>::MIN is possible with a valid
++                    // sampler over signed types. Wrapping through <$ty>::MAX is
++                    // possible with a bad sampler (constructible using serde).
++                    let max = self.low.wrapping_add(self.range.wrapping_sub(1));
++                    if max < self.low { <$ty>::MAX } else { max }
++                }
++            }
++        }
++
+         impl SampleUniform for $ty {
+             type Sampler = UniformInt<$ty>;
+         }
+@@ -693,6 +710,7 @@ mod tests {
+         let r = Uniform::try_from(2u32..7).unwrap();
+         assert_eq!(r.0.low, 2);
+         assert_eq!(r.0.range, 5);
++        assert_eq!(r.0.max(), 6);
+     }
+ 
+     #[test]
+@@ -707,6 +725,7 @@ mod tests {
+         let r = Uniform::try_from(2u32..=6).unwrap();
+         assert_eq!(r.0.low, 2);
+         assert_eq!(r.0.range, 5);
++        assert_eq!(r.0.max(), 6);
+     }
+ 
+     #[test]
+diff --git a/rand-0.10.1/src/distr/uniform_other.rs b/rand-0.10.3/src/distr/uniform_other.rs
+index a1813b7..9991e32 100644
+--- a/rand-0.10.1/src/distr/uniform_other.rs
++++ b/rand-0.10.3/src/distr/uniform_other.rs
+@@ -33,9 +33,24 @@ impl SampleUniform for char {
+ #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+ #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+ pub struct UniformChar {
++    #[cfg_attr(feature = "serde", serde(deserialize_with = "deser_sampler"))]
+     sampler: UniformInt<u32>,
+ }
+ 
++#[cfg(feature = "serde")]
++fn deser_sampler<'de, D>(d: D) -> Result<UniformInt<u32>, D::Error>
++where
++    D: serde::Deserializer<'de>,
++{
++    let sampler = <UniformInt<u32> as serde::Deserialize>::deserialize(d)?;
++    if sampler.max() > char::MAX as u32 - CHAR_SURROGATE_LEN {
++        return Err(serde::de::Error::custom(
++            "bad sampler range for UniformChar",
++        ));
++    }
++    Ok(sampler)
++}
++
+ /// UTF-16 surrogate range start
+ const CHAR_SURROGATE_START: u32 = 0xD800;
+ /// UTF-16 surrogate range size
+@@ -83,10 +98,9 @@ impl UniformSampler for UniformChar {
+         if x >= CHAR_SURROGATE_START {
+             x += CHAR_SURROGATE_LEN;
+         }
+-        // SAFETY: x must not be in surrogate range or greater than char::MAX.
+-        // This relies on range constructors which accept char arguments.
+-        // Validity of input char values is assumed.
+-        unsafe { core::char::from_u32_unchecked(x) }
++
++        char::from_u32(x)
++            .expect("rand::distr::uniform::UniformChar: invalid Unicode scalar value (likely memory corruption)")
+     }
+ }
+ 
+@@ -299,6 +313,31 @@ mod tests {
+         }
+     }
+ 
++    #[test]
++    #[cfg(feature = "serde")]
++    fn test_char_bad_deser() {
++        fn do_test(json: &str, col: usize) {
++            let result = serde_json::from_str::<Uniform<char>>(json);
++            assert!(result.is_err());
++            let err = result.unwrap_err();
++            assert_eq!(err.classify(), serde_json::error::Category::Data);
++
++            #[cfg(feature = "alloc")]
++            {
++                let msg =
++                    alloc::format!("bad sampler range for UniformChar at line 1 column {col}");
++                assert_eq!(alloc::string::ToString::to_string(&err), msg);
++            }
++        }
++
++        do_test(r#"{"sampler":{"low":5,"range":0,"thresh":0}}"#, 42);
++        do_test(r#"{"sampler":{"low":4294967200,"range":0,"thresh":0}}"#, 51);
++        do_test(
++            r#"{"sampler":{"low":4294967280,"range":32,"thresh":0}}"#,
++            52,
++        );
++    }
++
+     #[test]
+     #[cfg_attr(miri, ignore)] // Miri is too slow
+     fn test_durations() {
+diff --git a/rand-0.10.1/src/distr/utils.rs b/rand-0.10.3/src/distr/utils.rs
+index d3cfbf6..344c79d 100644
+--- a/rand-0.10.1/src/distr/utils.rs
++++ b/rand-0.10.3/src/distr/utils.rs
+@@ -219,11 +219,12 @@ pub(crate) trait FloatSIMDUtils {
+     fn all_finite(self) -> bool;
+ 
+     type Mask;
+-    fn gt_mask(self, other: Self) -> Self::Mask;
++    fn le_mask(self, other: Self) -> Self::Mask;
+ 
+-    // Decrease all lanes where the mask is `true` to the next lower value
+-    // representable by the floating-point type. At least one of the lanes
+-    // must be set.
++    // Decrease in absolute terms (i.e. towards zero) all lanes where the mask
++    // is `true` to the next lower value representable by the floating-point
++    // type. At least one of the lanes must be set. Inputs may be non-finite but
++    // must not be zero or NaN.
+     fn decrease_masked(self, mask: Self::Mask) -> Self;
+ 
+     // Convert from int value. Conversion is done while retaining the numerical
+@@ -262,12 +263,12 @@ impl IntAsSIMD for u32 {}
+ impl IntAsSIMD for u64 {}
+ 
+ pub(crate) trait BoolAsSIMD: Sized {
+-    fn any(self) -> bool;
++    fn all(self) -> bool;
+ }
+ 
+ impl BoolAsSIMD for bool {
+     #[inline(always)]
+-    fn any(self) -> bool {
++    fn all(self) -> bool {
+         self
+     }
+ }
+@@ -294,8 +295,8 @@ macro_rules! scalar_float_impl {
+             }
+ 
+             #[inline(always)]
+-            fn gt_mask(self, other: Self) -> Self::Mask {
+-                self > other
++            fn le_mask(self, other: Self) -> Self::Mask {
++                self <= other
+             }
+ 
+             #[inline(always)]
+@@ -357,8 +358,8 @@ macro_rules! simd_impl {
+             }
+ 
+             #[inline(always)]
+-            fn gt_mask(self, other: Self) -> Self::Mask {
+-                self.simd_gt(other)
++            fn le_mask(self, other: Self) -> Self::Mask {
++                self.simd_le(other)
+             }
+ 
+             #[inline(always)]
+@@ -401,3 +402,41 @@ macro_rules! simd_impl {
+ simd_impl!(f32, u32);
+ #[cfg(feature = "simd_support")]
+ simd_impl!(f64, u64);
++
++#[cfg(test)]
++mod test {
++    use crate::distr::utils::FloatSIMDUtils;
++    #[cfg(feature = "simd_support")]
++    use std::simd::{Mask, Simd};
++
++    #[test]
++    fn decrease_masked() {
++        assert_eq!((-1.0 - f32::EPSILON).decrease_masked(true), -1.0);
++        assert_eq!((1.0 + f64::EPSILON).decrease_masked(true), 1.0);
++
++        #[cfg(feature = "simd_support")]
++        assert_eq!(
++            Simd::<f32, 4>::splat(1.0 + f32::EPSILON).decrease_masked(Mask::splat(true)),
++            Simd::splat(1.0)
++        );
++
++        #[cfg(feature = "simd_support")]
++        assert_eq!(
++            Simd::<f64, 2>::from_array([-1.0, -1.0 - f64::EPSILON])
++                .decrease_masked(Mask::from_array([false, true])),
++            Simd::splat(-1.0)
++        );
++    }
++
++    #[test]
++    fn decrease_masked_infinity() {
++        assert_eq!(f32::INFINITY.decrease_masked(true), f32::MAX);
++        assert_eq!((-f64::INFINITY).decrease_masked(true), -f64::MAX);
++
++        #[cfg(feature = "simd_support")]
++        assert_eq!(
++            Simd::<f32, 2>::splat(-f32::INFINITY).decrease_masked(Mask::splat(true)),
++            Simd::splat(-f32::MAX)
++        );
++    }
++}
+diff --git a/rand-0.10.1/src/distr/weighted/mod.rs b/rand-0.10.3/src/distr/weighted/mod.rs
+index 2bc012b..49715e2 100644
+--- a/rand-0.10.1/src/distr/weighted/mod.rs
++++ b/rand-0.10.3/src/distr/weighted/mod.rs
+@@ -28,6 +28,9 @@ pub trait Weight: Clone {
+ 
+     /// Checked addition
+     ///
++    /// Note that for floating-point formats with a representation of infinity,
++    /// overflow-to-infinity is not considered an error.
++    ///
+     /// -   `Result::Ok`: On success, `v` is added to `self`
+     /// -   `Result::Err`: Returns an error when `Self` cannot represent the
+     ///     result of `self + v` (i.e. overflow). The value of `self` should be
+diff --git a/rand-0.10.1/src/distr/weighted/weighted_index.rs b/rand-0.10.3/src/distr/weighted/weighted_index.rs
+index ad8cf8c..6262b49 100644
+--- a/rand-0.10.1/src/distr/weighted/weighted_index.rs
++++ b/rand-0.10.3/src/distr/weighted/weighted_index.rs
+@@ -127,7 +127,7 @@ impl<X: SampleUniform + PartialOrd> WeightedIndex<X> {
+         if total_weight == zero {
+             return Err(Error::InsufficientNonZero);
+         }
+-        let distr = X::Sampler::new(zero, total_weight.clone()).unwrap();
++        let distr = X::Sampler::new(zero, total_weight.clone()).map_err(|_| Error::Overflow)?;
+ 
+         Ok(WeightedIndex {
+             cumulative_weights: weights,
+@@ -152,6 +152,7 @@ impl<X: SampleUniform + PartialOrd> WeightedIndex<X> {
+     ///     Note that due to floating-point loss of precision, this case is not
+     ///     always correctly detected; usage of a fixed-point weight type may be
+     ///     preferred.
++    /// -   [`Error::Overflow`] when the sum of all weights overflows.
+     ///
+     /// Updates take `O(N)` time. If you need to frequently update weights, consider
+     /// [`rand_distr::weighted_tree`](https://docs.rs/rand_distr/*/rand_distr/weighted_tree/index.html)
+@@ -203,6 +204,8 @@ impl<X: SampleUniform + PartialOrd> WeightedIndex<X> {
+         if total_weight <= zero {
+             return Err(Error::InsufficientNonZero);
+         }
++        let weight_distribution =
++            X::Sampler::new(zero.clone(), total_weight.clone()).map_err(|_| Error::Overflow)?;
+ 
+         // Update the weights. Because we checked all the preconditions in the
+         // previous loop, this should never panic.
+@@ -233,7 +236,7 @@ impl<X: SampleUniform + PartialOrd> WeightedIndex<X> {
+         }
+ 
+         self.total_weight = total_weight;
+-        self.weight_distribution = X::Sampler::new(zero, self.total_weight.clone()).unwrap();
++        self.weight_distribution = weight_distribution;
+ 
+         Ok(())
+     }
+@@ -286,6 +289,16 @@ where
+             }
+         }
+     }
++
++    fn size_hint(&self) -> (usize, Option<usize>) {
++        let remaining = self.weighted_index.cumulative_weights.len() + 1 - self.index;
++        (remaining, Some(remaining))
++    }
++}
++
++impl<X> ExactSizeIterator for WeightedIndexIter<'_, X> where
++    X: for<'b> core::ops::SubAssign<&'b X> + SampleUniform + PartialOrd + Clone
++{
+ }
+ 
+ impl<X: SampleUniform + PartialOrd + Clone> WeightedIndex<X> {
+@@ -309,12 +322,12 @@ impl<X: SampleUniform + PartialOrd + Clone> WeightedIndex<X> {
+     where
+         X: for<'a> core::ops::SubAssign<&'a X>,
+     {
+-        use core::cmp::Ordering::*;
+-
+-        let mut weight = match index.cmp(&self.cumulative_weights.len()) {
+-            Less => self.cumulative_weights[index].clone(),
+-            Equal => self.total_weight.clone(),
+-            Greater => return None,
++        let mut weight = if let Some(weight) = self.cumulative_weights.get(index) {
++            weight.clone()
++        } else if index == self.cumulative_weights.len() {
++            self.total_weight.clone()
++        } else {
++            return None;
+         };
+ 
+         if index > 0 {
+@@ -465,7 +478,10 @@ mod test {
+                 4
+             );
+         }
++    }
+ 
++    #[test]
++    fn weighted_index_new_errors() {
+         assert_eq!(
+             WeightedIndex::new(&[10][0..0]).unwrap_err(),
+             Error::InvalidInput
+@@ -483,6 +499,10 @@ mod test {
+             Error::InvalidWeight
+         );
+         assert_eq!(WeightedIndex::new([-10]).unwrap_err(), Error::InvalidWeight);
++        assert_eq!(
++            WeightedIndex::new([f64::INFINITY]).unwrap_err(),
++            Error::Overflow
++        );
+     }
+ 
+     #[test]
+@@ -514,6 +534,15 @@ mod test {
+         }
+     }
+ 
++    #[test]
++    fn weighted_index_update_errors() {
++        let mut distr = WeightedIndex::new([1.0, 10.0]).unwrap();
++        assert_eq!(
++            distr.update_weights(&[(0, &f32::INFINITY)]).unwrap_err(),
++            Error::Overflow
++        );
++    }
++
+     #[test]
+     fn test_update_weights_errors() {
+         let data = [
+@@ -565,6 +594,7 @@ mod test {
+                 assert_eq!(distr.weight(i), Some(*weight));
+             }
+             assert_eq!(distr.weight(weights.len()), None);
++            assert_eq!(distr.weight(usize::MAX), None);
+         }
+     }
+ 
+@@ -580,6 +610,20 @@ mod test {
+         for weights in data.iter() {
+             let distr = WeightedIndex::new(weights.to_vec()).unwrap();
+             assert_eq!(distr.weights().collect::<Vec<_>>(), weights.to_vec());
++
++            let mut iter = distr.weights();
++            for (index, expected) in weights.iter().enumerate() {
++                let remaining = weights.len() - index;
++                assert_eq!(iter.size_hint(), (remaining, Some(remaining)));
++                assert_eq!(iter.len(), remaining);
++                assert_eq!(iter.clone().collect::<Vec<_>>(), weights[index..]);
++                assert_eq!(iter.next(), Some(*expected));
++            }
++            for _ in 0..2 {
++                assert_eq!(iter.size_hint(), (0, Some(0)));
++                assert_eq!(iter.len(), 0);
++                assert_eq!(iter.next(), None);
++            }
+         }
+     }
+ 
+@@ -629,4 +673,25 @@ mod test {
+     fn overflow() {
+         assert_eq!(WeightedIndex::new([2, usize::MAX]), Err(Error::Overflow));
+     }
++
++    #[test]
++    fn overflow_float() {
++        assert_eq!(
++            WeightedIndex::new([f64::MAX, f64::MAX]),
++            Err(Error::Overflow)
++        );
++        assert_eq!(
++            WeightedIndex::new([f32::MAX, f32::MAX]),
++            Err(Error::Overflow)
++        );
++        assert_eq!(WeightedIndex::new([f64::INFINITY]), Err(Error::Overflow));
++
++        // In case of error, self is not modified.
++        let mut distr = WeightedIndex::new([1.0f64, 2.0]).unwrap();
++        assert_eq!(
++            distr.update_weights(&[(0, &f64::MAX), (1, &f64::MAX)]),
++            Err(Error::Overflow)
++        );
++        assert_eq!(distr, WeightedIndex::new([1.0f64, 2.0]).unwrap());
++    }
+ }
+diff --git a/rand-0.10.1/src/lib.rs b/rand-0.10.3/src/lib.rs
+index 51d26f5..70867a0 100644
+--- a/rand-0.10.1/src/lib.rs
++++ b/rand-0.10.3/src/lib.rs
+@@ -7,37 +7,24 @@
+ // option. This file may not be copied, modified, or distributed
+ // except according to those terms.
+ 
+-//! Utilities for random number generation
+-//!
+-//! Rand provides utilities to generate random numbers, to convert them to
+-//! useful types and distributions, and some randomness-related algorithms.
++//! Random-number generators and samplers
+ //!
+ //! # Quick Start
+ //!
+ //! ```
+-//! // The prelude import enables methods we use below, specifically
+-//! // Rng::random, Rng::sample, SliceRandom::shuffle and IndexedRandom::choose.
+-//! use rand::prelude::*;
+-//!
+-//! // Get an RNG:
+-//! let mut rng = rand::rng();
++//! // rand::random() supports many common types:
++//! println!("Uniform i8 sample: {}", match rand::random() {
++//!     0i8 => "zero",
++//!     i if i > 0 => "positive",
++//!     _ => "negative",
++//! });
+ //!
+-//! // Try printing a random unicode code point (probably a bad idea)!
+-//! println!("char: '{}'", rng.random::<char>());
+-//! // Try printing a random alphanumeric value instead!
+-//! println!("alpha: '{}'", rng.sample(rand::distr::Alphanumeric) as char);
+-//!
+-//! // Generate and shuffle a sequence:
+-//! let mut nums: Vec<i32> = (1..100).collect();
+-//! nums.shuffle(&mut rng);
+-//! // And take a random pick (yes, we didn't need to shuffle first!):
+-//! let _ = nums.choose(&mut rng);
++//! // Ranged sampling:
++//! use std::f32::consts::PI;
++//! println!("Angle: {} radians", rand::random_range(-PI..PI));
+ //! ```
+ //!
+-//! # The Book
+-//!
+-//! For the user guide and further documentation, please read
+-//! [The Rust Rand Book](https://rust-random.github.io/book).
++//! See also [The Book: Quick Start](https://rust-random.github.io/book/quick-start.html).
+ 
+ #![doc(
+     html_logo_url = "https://www.rust-lang.org/logos/rust-logo-128x128-blk.png",
+diff --git a/rand-0.10.1/src/rng.rs b/rand-0.10.3/src/rng.rs
+index 564dc9f..31ba716 100644
+--- a/rand-0.10.1/src/rng.rs
++++ b/rand-0.10.3/src/rng.rs
+@@ -129,8 +129,10 @@ pub trait RngExt: Rng {
+     /// made from the given range. See also the [`Uniform`] distribution
+     /// type which may be faster if sampling from the same range repeatedly.
+     ///
+-    /// All types support `low..high_exclusive` and `low..=high` range syntax.
+-    /// Unsigned integer types also support `..high_exclusive` and `..=high` syntax.
++    /// All supported types may be sampled with `low..high_exclusive`
++    /// ([`Range`]) and `low..=high` ([`RangeInclusive`]) syntax. Unsigned
++    /// integer types also support `..high_exclusive` ([`RangeTo`]) and
++    /// `..=high` ([`RangeToInclusive`]) syntax.
+     ///
+     /// # Panics
+     ///
+@@ -144,17 +146,19 @@ pub trait RngExt: Rng {
+     /// let mut rng = rand::rng();
+     ///
+     /// // Exclusive range
+-    /// let n: u32 = rng.random_range(..10);
+-    /// println!("{}", n);
+-    /// let m: f64 = rng.random_range(-40.0..1.3e5);
+-    /// println!("{}", m);
++    /// println!("{}", rng.random_range::<u32, _>(..10));
++    /// println!("{}", rng.random_range(-40.0..1.3e5));
+     ///
+     /// // Inclusive range
+-    /// let n: u32 = rng.random_range(..=10);
+-    /// println!("{}", n);
++    /// println!("{}", rng.random_range(-10..=10));
++    /// println!("{}", rng.random_range('a'..='z'));
+     /// ```
+     ///
+     /// [`Uniform`]: distr::uniform::Uniform
++    /// [`Range`]: std::ops::Range
++    /// [`RangeInclusive`]: std::ops::RangeInclusive
++    /// [`RangeTo`]: std::ops::RangeTo
++    /// [`RangeToInclusive`]: std::ops::RangeToInclusive
+     #[track_caller]
+     fn random_range<T, R>(&mut self, range: R) -> T
+     where
+diff --git a/rand-0.10.1/src/rngs/xoshiro128plusplus.rs b/rand-0.10.3/src/rngs/xoshiro128plusplus.rs
+index 9661e93..7cc193b 100644
+--- a/rand-0.10.1/src/rngs/xoshiro128plusplus.rs
++++ b/rand-0.10.3/src/rngs/xoshiro128plusplus.rs
+@@ -34,7 +34,7 @@ impl SeedableRng for Xoshiro128PlusPlus {
+     fn from_seed(seed: [u8; 16]) -> Xoshiro128PlusPlus {
+         let state = utils::read_words(&seed);
+         // Check for zero on aligned integers for better code generation.
+-        // Furtermore, seed_from_u64(0) will expand to a constant when optimized.
++        // Furthermore, seed_from_u64(0) will expand to a constant when optimized.
+         if state.iter().all(|&x| x == 0) {
+             return Self::seed_from_u64(0);
+         }
+diff --git a/rand-0.10.1/src/rngs/xoshiro256plusplus.rs b/rand-0.10.3/src/rngs/xoshiro256plusplus.rs
+index 20bbe41..63ac73d 100644
+--- a/rand-0.10.1/src/rngs/xoshiro256plusplus.rs
++++ b/rand-0.10.3/src/rngs/xoshiro256plusplus.rs
+@@ -34,7 +34,7 @@ impl SeedableRng for Xoshiro256PlusPlus {
+     fn from_seed(seed: [u8; 32]) -> Xoshiro256PlusPlus {
+         let state = utils::read_words(&seed);
+         // Check for zero on aligned integers for better code generation.
+-        // Furtermore, seed_from_u64(0) will expand to a constant when optimized.
++        // Furthermore, seed_from_u64(0) will expand to a constant when optimized.
+         if state.iter().all(|&x| x == 0) {
+             return Self::seed_from_u64(0);
+         }
+diff --git a/rand-0.10.1/src/seq/index.rs b/rand-0.10.3/src/seq/index.rs
+index 65f55f6..40311cf 100644
+--- a/rand-0.10.1/src/seq/index.rs
++++ b/rand-0.10.3/src/seq/index.rs
+@@ -295,7 +295,10 @@ where
+ /// an alternative.
+ ///
+ /// Error cases:
+-/// -   [`WeightError::InvalidWeight`] when a weight is not-a-number or negative.
++/// -   [`WeightError::InvalidWeight`] when a weight is not-a-number or negative,
++///     or when infinite weights fill the reservoir before all elements have
++///     been processed (this always happens with more than `amount` infinite
++///     weights, and may also happen with exactly `amount`, depending on order).
+ ///
+ /// This implementation uses `O(length + amount)` space and `O(length)` time.
+ #[cfg(feature = "std")]
+@@ -341,7 +344,10 @@ where
+ /// It uses `O(length + amount)` space and `O(length)` time.
+ ///
+ /// Error cases:
+-/// -   [`WeightError::InvalidWeight`] when a weight is not-a-number or negative.
++/// -   [`WeightError::InvalidWeight`] when a weight is not-a-number or negative,
++///     or when infinite weights fill the reservoir before all elements have
++///     been processed (this always happens with more than `amount` infinite
++///     weights, and may also happen with exactly `amount`, depending on order).
+ #[cfg(feature = "std")]
+ fn sample_efraimidis_spirakis<R, F, X, N>(
+     rng: &mut R,
+@@ -408,6 +414,10 @@ where
+     if index < length {
+         let mut x = rng.random::<f64>().ln() / candidates.peek().unwrap().key;
+         while index < length {
++            if !x.is_finite() {
++                return Err(WeightError::InvalidWeight);
++            }
++
+             let weight = weight(index.as_usize()).into();
+             if weight > 0.0 {
+                 x -= weight;
+@@ -656,6 +666,30 @@ mod test {
+         assert_eq!(r.unwrap().len(), 9);
+     }
+ 
++    #[cfg(feature = "std")]
++    #[test]
++    fn test_sample_weighted_infinities() {
++        let mut rng = crate::test::rng(1351);
++
++        for _ in 0..10 {
++            let result = sample_weighted(&mut rng, 5, |i| 2.0 / (2.0 - (i as f64)).abs(), 2);
++            assert!(result.is_ok());
++            // Since one input has infinite weight, it must be selected:
++            assert!(result.unwrap().iter().any(|i| i == 2));
++        }
++
++        // Sampling from amount infinities should succeed
++        let weights = [1.0, 0.0, f32::INFINITY, 2.5, f32::INFINITY];
++        let result = sample_weighted(&mut rng, weights.len(), |i| weights[i], 2);
++        assert!(result.is_ok());
++        let mut results = result.unwrap().into_vec();
++        results.sort();
++        assert_eq!(results, [2, 4]);
++
++        // Sampling from too many infinities is an error
++        assert!(sample_weighted(&mut rng, weights.len(), |i| weights[i], 1).is_err());
++    }
++
+     #[test]
+     fn value_stability_sample() {
+         let do_test = |length, amount, values: &[u32]| {
+diff --git a/rand-0.10.1/src/seq/slice.rs b/rand-0.10.3/src/seq/slice.rs
+index 1b8a068..64bdd3b 100644
+--- a/rand-0.10.1/src/seq/slice.rs
++++ b/rand-0.10.3/src/seq/slice.rs
+@@ -88,6 +88,7 @@ pub trait IndexedRandom: Index<usize> {
+     /// Chooses `amount` elements from the slice at random, without repetition,
+     /// and in random order. The returned iterator is appropriate both for
+     /// collection into a `Vec` and filling an existing buffer (see example).
++    /// If `amount > self.len()`, all available elements are sampled.
+     ///
+     /// In case this API is not sufficiently flexible, use [`index::sample`].
+     ///
+@@ -126,7 +127,7 @@ pub trait IndexedRandom: Index<usize> {
+     /// Uniformly sample a fixed-size array of distinct elements from self
+     ///
+     /// Chooses `N` elements from the slice at random, without repetition,
+-    /// and in random order.
++    /// and in random order. Returns `None` if (and only if) `N > self.len()`.
+     ///
+     /// For slices, complexity is the same as [`index::sample_array`].
+     ///
+@@ -151,7 +152,7 @@ pub trait IndexedRandom: Index<usize> {
+     /// Biased sampling for one element
+     ///
+     /// Returns a reference to one element of the slice, sampled according
+-    /// to the provided weights. Returns `None` if and only if `self.is_empty()`.
++    /// to the provided weights.
+     ///
+     /// The specified function `weight` maps each item `x` to a relative
+     /// likelihood `weight(x)`. The probability of each item being selected is
+@@ -198,7 +199,6 @@ pub trait IndexedRandom: Index<usize> {
+     ///
+     /// Returns an iterator which samples elements from `self` according to the
+     /// given weights with replacement (i.e. elements may be repeated).
+-    /// Returns `None` if and only if `self.is_empty()`.
+     ///
+     /// See also doc for [`Self::choose_weighted`].
+     #[cfg(feature = "alloc")]
+@@ -347,7 +347,7 @@ pub trait IndexedMutRandom: IndexedRandom + IndexMut<usize> {
+     /// Biased sampling for one element (mut)
+     ///
+     /// Returns a mutable reference to one element of the slice, sampled according
+-    /// to the provided weights. Returns `None` only if the slice is empty.
++    /// to the provided weights.
+     ///
+     /// The specified function `weight` maps each item `x` to a relative
+     /// likelihood `weight(x)`. The probability of each item being selected is
+@@ -420,23 +420,35 @@ pub trait SliceRandom: IndexedMutRandom {
+     where
+         R: Rng + ?Sized;
+ 
+-    /// Shuffle a slice in place, but exit early.
++    /// Sample `amount` shuffled elements
++    ///
++    /// Shuffles `amount` random elements into the end of the slice (`n..` where
++    /// `n = self.len() - amount`). The rest of the slice (`..n`) contains the
++    /// remaining elements in a permuted but not fully shuffled order.
+     ///
+-    /// Returns two mutable slices from the source slice. The first contains
+-    /// `amount` elements randomly permuted. The second has the remaining
+-    /// elements that are not fully shuffled.
++    /// Returns a tuple of the sampled elements (`&mut self[n..]`) and the
++    /// remaining elements (`&mut self[..n]`).
+     ///
+     /// This is an efficient method to select `amount` elements at random from
+     /// the slice, provided the slice may be mutated.
+     ///
+-    /// If you only need to choose elements randomly and `amount > self.len()/2`
+-    /// then you may improve performance by taking
+-    /// `amount = self.len() - amount` and using only the second slice.
++    /// For slices, complexity is `O(m)` where `m = amount`.
++    /// If `amount >= self.len()` this is equivalent to [`Self::shuffle`].
+     ///
+-    /// If `amount` is greater than the number of elements in the slice, this
+-    /// will perform a full shuffle.
++    /// # Example
+     ///
+-    /// For slices, complexity is `O(m)` where `m = amount`.
++    /// ```
++    /// use rand::seq::SliceRandom;
++    ///
++    /// let mut rng = rand::rng();
++    /// let mut y = [1, 2, 3, 4, 5];
++    /// let (shuffled, rest) = y.partial_shuffle(&mut rng, 3);
++    /// assert_eq!(shuffled.len(), 3);
++    /// assert_eq!(rest.len(), 2);
++    /// let sampled = shuffled.to_vec();
++    /// assert_eq!(&sampled, &y[2..5]);
++    /// ```
++    #[must_use]
+     fn partial_shuffle<R>(
+         &mut self,
+         rng: &mut R,
+@@ -464,14 +476,14 @@ impl<T> SliceRandom for [T] {
+             // There is no need to shuffle an empty or single element slice
+             return;
+         }
+-        self.partial_shuffle(rng, self.len());
++        let _ = self.partial_shuffle(rng, self.len());
+     }
+ 
+     fn partial_shuffle<R>(&mut self, rng: &mut R, amount: usize) -> (&mut [T], &mut [T])
+     where
+         R: Rng + ?Sized,
+     {
+-        let m = self.len().saturating_sub(amount);
++        let n = self.len().saturating_sub(amount);
+ 
+         // The algorithm below is based on Durstenfeld's algorithm for the
+         // [Fisher–Yates shuffle](https://en.wikipedia.org/wiki/Fisher%E2%80%93Yates_shuffle#The_modern_algorithm)
+@@ -483,18 +495,18 @@ impl<T> SliceRandom for [T] {
+         // but only works for 32 bit integers
+         // So we must use the slow method if the slice is longer than that.
+         if self.len() < (u32::MAX as usize) {
+-            let mut chooser = IncreasingUniform::new(rng, m as u32);
+-            for i in m..self.len() {
++            let mut chooser = IncreasingUniform::new(rng, n as u32);
++            for i in n..self.len() {
+                 let index = chooser.next_index();
+                 self.swap(i, index);
+             }
+         } else {
+-            for i in m..self.len() {
++            for i in n..self.len() {
+                 let index = rng.random_range(..i + 1);
+                 self.swap(i, index);
+             }
+         }
+-        let r = self.split_at_mut(m);
++        let r = self.split_at_mut(n);
+         (r.1, r.0)
+     }
+ }
+@@ -812,6 +824,7 @@ mod test {
+ 
+     #[test]
+     #[cfg(feature = "std")]
++    #[cfg_attr(miri, ignore)] // Miri is too slow
+     fn test_multiple_weighted_distributions() {
+         use super::*;
+ 
+

@@ -7,13 +7,9 @@ build and supply chain are very welcome.
 
 **Do not open a public issue, pull request or discussion for a vulnerability.**
 
-Report privately through GitHub's private vulnerability reporting for this repository ("Security" tab →
-"Report a vulnerability"; enabled when the repository becomes public — while it is private, collaborators report
-to the owner directly). Please include the affected component and version or commit, the impact, and the
-steps or proof of concept needed to reproduce it. Reports may be written in English or German.
-
-A dedicated disclosure contact with an encryption key and an RFC 9116 `security.txt` will be published before
-the first release (milestone M11, docs/07). Until then, GitHub's private reporting is the only channel.
+The only reporting channel is GitHub's private vulnerability reporting for this repository: the "Security" tab →
+"Report a vulnerability" (https://github.com/CarlKIGbR/SecMPro/security/advisories/new). Please include the affected component and version or commit, the impact, and the steps or
+proof of concept needed to reproduce it. Reports may be written in English or German.
 
 ## What to expect
 
@@ -32,5 +28,5 @@ not hold is always in scope.
 
 ## Supported versions
 
-There is no release yet (pre-1.0, implementation milestone M0). Once released, only the latest release receives
-security fixes.
+There is no release yet (pre-1.0, implementation milestone M1): the code is pre-release and must not be used for
+anything that matters (see `README.md`). Once released, only the latest release receives security fixes.

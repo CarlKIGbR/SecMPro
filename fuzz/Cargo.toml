@@ -1,0 +1,69 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# cargo-fuzz package (docs/06 §4–5 step 6). Outside the main workspace (its own `[workspace]` and Cargo.lock):
+# built only with the pinned nightly by `cargo xtask step fuzz`; `libfuzzer-sys` is a fuzzing-only dependency
+# (ADR-037) and never part of a shipped build.
+[package]
+name = "secmp-fuzz"
+version = "0.0.0"
+edition = "2024"
+license = "AGPL-3.0-or-later"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = { version = "=0.4.13" }
+secmp-crypto = { path = "../crates/secmp-crypto" }
+
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "x25519_dh"
+path = "fuzz_targets/x25519_dh.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ed25519_verify"
+path = "fuzz_targets/ed25519_verify.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "mldsa65_verify"
+path = "fuzz_targets/mldsa65_verify.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "mlkem_parse"
+path = "fuzz_targets/mlkem_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "hybrid_sign_verify"
+path = "fuzz_targets/hybrid_sign_verify.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "msg_open"
+path = "fuzz_targets/msg_open.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "caead_open"
+path = "fuzz_targets/caead_open.rs"
+test = false
+doc = false
+bench = false

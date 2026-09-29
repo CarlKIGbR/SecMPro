@@ -29,8 +29,39 @@ publish = false
 # All versions live here; crates use `workspace = true` (docs/06 §1). Every direct dependency has an ADR line
 # (docs/08) and a cargo-vet record (docs/06 §3).
 [workspace.dependencies]
-# ADR-031: JSON for `cargo metadata`, cargo-llvm-cov and crates.io index lines — used by xtask only.
+# ADR-031: JSON for `cargo metadata`, cargo-llvm-cov and crates.io index lines — used by xtask; ADR-037: also
+# by secmp-testkit (KAT loaders, test-only).
 serde_json = { version = "=1.0.151", default-features = false, features = ["std"] }
+
+# ADR-023, ADR-037: the primitive crates of secmp-crypto (docs/06 §3). Exact pins; a bump requires the KATs,
+# the differential tests and the frozen vectors to pass again. Vetting: ADR-036 (supply-chain/audits.toml).
+libcrux-ml-kem = { version = "=0.0.10", default-features = false, features = ["mlkem768", "mlkem1024"] }
+ml-dsa = { version = "=0.1.1", default-features = false, features = ["zeroize"] }
+x25519-dalek = { version = "=3.0.0", default-features = false, features = ["precomputed-tables", "static_secrets", "zeroize"] }
+ed25519-dalek = { version = "=3.0.0", default-features = false, features = ["fast", "zeroize"] }
+chacha20 = { version = "=0.10.2", default-features = false, features = ["cipher", "zeroize"] }
+chacha20poly1305 = { version = "=0.11.0", default-features = false, features = ["zeroize"] }
+hmac = { version = "=0.13.0", default-features = false, features = ["zeroize"] }
+hkdf = { version = "=0.13.0", default-features = false }
+sha2 = { version = "=0.11.0", default-features = false, features = ["zeroize"] }
+sha3 = { version = "=0.11.0", default-features = false, features = ["zeroize"] }
+subtle = { version = "=2.6.1", default-features = false }
+zeroize = { version = "=1.9.0", default-features = false, features = ["alloc"] }
+getrandom = { version = "=0.4.3", default-features = false }
+
+# ADR-037: operating-system bindings of secmp-sys-mem (SecretPage).
+libc = { version = "=0.2.189", default-features = false }
+windows-sys = { version = "=0.61.2", default-features = false, features = ["Win32_Foundation", "Win32_System_Memory", "Win32_System_SystemInformation", "Win32_System_Threading"] }
+
+# ADR-023, ADR-036, ADR-037: test-only differential partners (dev-dependencies of secmp-testkit); never in the
+# shipped closure.
+ml-kem = { version = "=0.3.2", default-features = false }
+aws-lc-rs = { version = "=1.18.1", default-features = false, features = ["aws-lc-sys", "alloc"] }
+
+# Workspace crates (path dependencies; docs/02 §3 fixes who may depend on whom).
+secmp-crypto = { path = "crates/secmp-crypto" }
+secmp-sys-mem = { path = "crates/secmp-sys-mem" }
+secmp-testkit = { path = "crates/secmp-testkit" }
 
 [workspace.lints.rust]
 unsafe_code = "deny"              # every crate except secmp-sys-* additionally declares #![forbid(unsafe_code)] (checked by `xtask ci` with a grep);

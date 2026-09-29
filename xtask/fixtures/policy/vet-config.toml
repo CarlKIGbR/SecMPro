@@ -1,0 +1,18 @@
+# Fixture for the vet-closure check (M0 review F1, ADR-036): `typenum` is exempted although it is in the
+# closure the test supplies, `crabgrind` lacks the tracked-exemption note, `uuid` is a correct tracked exemption.
+[cargo-vet]
+version = "0.10"
+
+[[exemptions.typenum]]
+version = "1.20.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): pulled by hybrid-array. Review at every release."
+
+[[exemptions.crabgrind]]
+version = "0.2.6"
+criteria = "safe-to-deploy"
+
+[[exemptions.uuid]]
+version = "1.26.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): cfg(hax) only. Review at every release."

@@ -4,8 +4,8 @@
 //! **Responsibility.** The local mirror of the CI pipeline of docs/06 §5 (`ci-fast`, `ci-full`, single
 //! `step`s), the repository policy checks (`unsafe_code` attributes, lint allowances, build scripts, SPDX,
 //! workflow hygiene, cargo-vet closure), the 7-day dependency cooldown, SBOM generation, the Windows gate
-//! (`win-test`) and pinned tool installation. Stubs until their milestone: `vectors` (M1), `repro-check`
-//! (M11), `ops-check` (M10).
+//! (`win-test`), the SecMP vector cross-check (`vectors`) and pinned tool installation. Stubs until their
+//! milestone: `repro-check` (M11), `ops-check` (M10).
 //!
 //! **Allowed dependencies.** `std` and `serde_json` (ADR-031); external programs are invoked as processes
 //! (cargo subcommands, `curl`, `gh`, `git`, `proverif`, `systemd-analyze`, `zig`). Never a dependency of a
@@ -23,6 +23,7 @@ mod stubs;
 mod time;
 mod tools;
 mod util;
+mod vectors;
 mod wintest;
 
 use std::path::Path;
@@ -42,7 +43,8 @@ usage: cargo xtask <command> [options]
   sbom                                      CycloneDX SBOMs + cargo-auditable release builds
   win-test --backend github|libvirt         Windows gate (github: windows-latest; libvirt: from M9)
   install-tools [--set NAME] [--nightly]    install the pinned tools (fast | windows | xwin | full | all)
-  vectors | repro-check | ops-check         documented stubs until M1 / M11 / M10";
+  vectors                                   generate the Rust vectors, compare with vectors/ref, freeze
+  repro-check | ops-check                   documented stubs until M11 / M10";
 
 fn run(args: &[String]) -> Result<()> {
     // Every command runs from the workspace root (the parent of this crate's manifest directory).
@@ -63,7 +65,7 @@ fn run(args: &[String]) -> Result<()> {
         "sbom" => ci::step(&[vec!["sbom".to_owned()], rest.to_vec()].concat()),
         "win-test" => wintest::run(rest),
         "install-tools" => tools::install(rest),
-        "vectors" => stubs::vectors(),
+        "vectors" => vectors::run(root),
         "repro-check" => stubs::repro_check(),
         "ops-check" => stubs::ops_check(),
         "help" | "--help" | "-h" => {

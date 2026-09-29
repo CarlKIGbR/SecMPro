@@ -46,6 +46,7 @@ pub(crate) fn clippy(ctx: &Ctx) -> Result<Outcome> {
             "clippy",
             "--workspace",
             "--all-targets",
+            "--all-features",
             "--locked",
             "--",
             "-D",
@@ -53,7 +54,7 @@ pub(crate) fn clippy(ctx: &Ctx) -> Result<Outcome> {
         ])
         .run()?;
     Ok(Outcome::Pass(format!(
-        "clippy -D warnings on {} ({} crates)",
+        "clippy --all-features -D warnings on {} ({} crates)",
         ctx.host,
         ctx.ws.members.len()
     )))
@@ -82,10 +83,20 @@ pub(crate) fn vet(ctx: &Ctx) -> Result<Outcome> {
 
 pub(crate) fn audit(_: &Ctx) -> Result<Outcome> {
     tools::require(tools::AUDIT)?;
-    Cmd::cargo().args(["audit", "--deny", "warnings"]).run()?;
-    Ok(Outcome::Pass(
-        "RustSec: no advisories (warnings denied)".into(),
-    ))
+    let mut c = Cmd::cargo().args(["audit", "--deny", "warnings"]);
+    for (id, _) in expect::AUDIT_IGNORES {
+        c = c.args(["--ignore", id]);
+    }
+    c.run()?;
+    let ignored: Vec<&str> = expect::AUDIT_IGNORES.iter().map(|(id, _)| *id).collect();
+    Ok(Outcome::Pass(format!(
+        "RustSec: no advisories (warnings denied); ignored with an ADR: {}",
+        if ignored.is_empty() {
+            "none".to_owned()
+        } else {
+            ignored.join(", ")
+        }
+    )))
 }
 
 pub(crate) fn cooldown(ctx: &Ctx) -> Result<Outcome> {
@@ -147,10 +158,202 @@ pub(crate) fn kat(ctx: &Ctx) -> Result<Outcome> {
             ])
             .run()?;
     }
+    // libcrux's build scripts compile its SIMD backends on aarch64 (NEON) and x86_64 (AVX2, chosen at run time),
+    // so the run above tests the backend this host uses. A CPU without AVX2 runs the portable backend: the ML-KEM
+    // KATs and the frozen vectors run again with the SIMD backends compiled out (own target directory, because
+    // the build scripts do not declare the variables and Cargo would reuse a stale build).
+    let portable_dir = ctx.root.join("target").join("kat-portable");
+    Cmd::cargo()
+        .args([
+            "nextest",
+            "run",
+            "--locked",
+            "--package",
+            "secmp-crypto",
+            "--features",
+            "kat",
+            "--test",
+            "kat_mlkem",
+            "--test",
+            "vectors",
+        ])
+        .env("LIBCRUX_DISABLE_SIMD128", "1")
+        .env("LIBCRUX_DISABLE_SIMD256", "1")
+        .env("CARGO_TARGET_DIR", portable_dir.to_string_lossy())
+        .run()?;
     Ok(Outcome::Pass(format!(
-        "KAT/differential packages: {} (expected set matches)",
+        "KAT/differential packages: {} (expected set matches); ML-KEM KATs and frozen vectors also with libcrux's portable backend",
         list(&found)
     )))
+}
+
+/// The `ct` report (`target/ct-report.json`, written by `crates/secmp-crypto/benches/ct.rs`) as the gate reads it
+/// (ADR-038): one line per target, and the targets that fail or are not measurable on this runner.
+#[derive(Debug, Default)]
+pub(crate) struct CtTable {
+    pub(crate) lines: Vec<String>,
+    pub(crate) failed: Vec<String>,
+    pub(crate) not_measurable: Vec<String>,
+}
+
+/// The verdicts a report may carry and whether each passes (ADR-038 (2)–(4)).
+const CT_VERDICTS: &[(&str, bool)] = &[
+    ("PASS", true),
+    ("INCONCLUSIVE→PASS", true),
+    ("FAIL", false),
+    ("INCONCLUSIVE→FAIL", false),
+    ("NOT_MEASURABLE", false),
+];
+
+/// `max |t| = x (crop), batch median y ns` of one measurement object.
+fn ct_measurement(m: &Value) -> String {
+    let t = m
+        .get("max_abs_t")
+        .and_then(Value::as_f64)
+        .unwrap_or(f64::NAN);
+    let at = m.get("max_at").and_then(Value::as_str).unwrap_or("?");
+    let median = m
+        .get("median_ns")
+        .and_then(Value::as_f64)
+        .unwrap_or(f64::NAN);
+    format!("max |t| = {t:.2} ({at}), batch median {median:.1} ns")
+}
+
+pub(crate) fn ct_table(json: &str) -> Result<CtTable> {
+    let v: Value = serde_json::from_str(json).map_err(|e| Error(format!("ct report: {e}")))?;
+    if let Some(e) = v.get("error").and_then(Value::as_str) {
+        bail!("ct report: {e}");
+    }
+    // the bench reads the ADR-038 parameters from expect.rs; the report must echo exactly them
+    let th = v
+        .get("thresholds")
+        .ok_or_else(|| Error("ct report: no thresholds".to_owned()))?;
+    let num = |k: &str| th.get(k).and_then(Value::as_f64).map(f64::to_bits);
+    let (pass, fail) = expect::CT_THRESHOLDS;
+    if num("pass") != Some(pass.to_bits())
+        || num("fail") != Some(fail.to_bits())
+        || num("max_resolution_fraction") != Some(expect::CT_RESOLUTION_MAX_FRACTION.to_bits())
+        || th.get("max_batch").and_then(Value::as_u64) != Some(u64::from(expect::CT_MAX_BATCH))
+    {
+        bail!(
+            "ct report: thresholds {th} differ from expect::CT_THRESHOLDS {:?} / CT_RESOLUTION_MAX_FRACTION {} / \
+             CT_MAX_BATCH {}",
+            expect::CT_THRESHOLDS,
+            expect::CT_RESOLUTION_MAX_FRACTION,
+            expect::CT_MAX_BATCH
+        );
+    }
+    let resolution = v
+        .get("clock")
+        .and_then(|c| c.get("resolution_ns"))
+        .and_then(Value::as_f64);
+    let results = v
+        .get("results")
+        .and_then(Value::as_array)
+        .ok_or_else(|| Error("ct report: no results".to_owned()))?;
+    let mut table = CtTable::default();
+    if results.is_empty() {
+        table
+            .failed
+            .push("ct report: no target was measured".to_owned());
+    }
+    for r in results {
+        let name = r.get("name").and_then(Value::as_str).unwrap_or("?");
+        let verdict = r.get("verdict").and_then(Value::as_str).unwrap_or("?");
+        let control = r.get("control").and_then(Value::as_bool).unwrap_or(false);
+        let n = r.get("samples").and_then(Value::as_u64).unwrap_or(0);
+        let k = r
+            .get("k")
+            .and_then(Value::as_u64)
+            .map_or_else(|| "-".to_owned(), |k| k.to_string());
+        let calibration = r.get("calibration_median_ns").and_then(Value::as_f64);
+        let ns = |x: Option<f64>| x.map_or_else(|| "?".to_owned(), |x| format!("{x:.1}"));
+        let measurement = |key: &str| {
+            r.get(key)
+                .filter(|m| !m.is_null())
+                .map(|m| format!("; {key} {}", ct_measurement(m)))
+                .unwrap_or_default()
+        };
+        let line = format!(
+            "{name}: {verdict} — k={k}, calibration median {} ns, {n} samples{}{}{}",
+            ns(calibration),
+            measurement("first"),
+            measurement("second"),
+            if control {
+                " (control, must be detected)"
+            } else {
+                ""
+            }
+        );
+        let passes = CT_VERDICTS
+            .iter()
+            .find(|(v, _)| *v == verdict)
+            .is_some_and(|(_, ok)| *ok);
+        if verdict == "NOT_MEASURABLE" {
+            table.not_measurable.push(format!(
+                "{name} (resolution {} ns, median {} ns)",
+                ns(resolution),
+                ns(calibration)
+            ));
+        } else if !passes {
+            table.failed.push(line.clone());
+        }
+        table.lines.push(line);
+    }
+    Ok(table)
+}
+
+/// dudect-style constant-time tests (docs/06 §2, §4; ADR-038): `cargo bench --bench ct` in the release profile,
+/// timed with the CPU counter; per target ≤ pass → PASS, > fail → FAIL, in between one re-measurement; the
+/// variable-time control must be detected; a target the runner's timer cannot resolve is NOT MEASURABLE, which
+/// fails the gate with that wording.
+pub(crate) fn ct(ctx: &Ctx) -> Result<Outcome> {
+    let report = ctx.root.join("target").join("ct-report.json");
+    if report.exists() {
+        std::fs::remove_file(&report)?;
+    }
+    let cap = Cmd::cargo()
+        .args([
+            "bench",
+            "--locked",
+            "--package",
+            "secmp-crypto",
+            "--features",
+            "kat",
+            "--bench",
+            "ct",
+        ])
+        .capture()?;
+    let json = std::fs::read_to_string(&report).map_err(|e| {
+        say(cap.stderr.trim_end());
+        Error(format!("ct: no report written ({e})"))
+    })?;
+    // the whole report first (clock, both measurements, per-crop t), so a CI log carries it even on failure
+    say(&format!("  ct report: {}", json.trim_end()));
+    let table = ct_table(&json)?;
+    for l in &table.lines {
+        say(&format!("  ct {l}"));
+    }
+    let mut problems = Vec::new();
+    if !table.not_measurable.is_empty() {
+        problems.push(format!(
+            "ct: not measurable on this runner: {}",
+            table.not_measurable.join(", ")
+        ));
+    }
+    if !table.failed.is_empty() {
+        problems.push(format!(
+            "constant-time test failed: {}",
+            table.failed.join("; ")
+        ));
+    }
+    if !cap.success && problems.is_empty() {
+        problems.push("ct: the bench failed without a failing target in its report".to_owned());
+    }
+    if !problems.is_empty() {
+        bail!("{}", problems.join("; "));
+    }
+    Ok(Outcome::Pass(table.lines.join("; ")))
 }
 
 // ---- steps 6–10 ------------------------------------------------------------------------------------------
@@ -299,31 +502,82 @@ pub(crate) fn coverage(ctx: &Ctx) -> Result<Outcome> {
     )))
 }
 
+/// Missed or timed-out mutants (lines `<path>:<line>:<col>: <description>` of `cargo mutants`' `missed.txt` /
+/// `timeout.txt`) that no line of `docs/mutants-accepted.md` documents with both its path and its description
+/// (line numbers are ignored, so an accepted survivor stays accepted when unrelated code moves).
+pub(crate) fn undocumented_survivors(listing: &str, accepted: &str) -> Vec<String> {
+    listing
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .filter(|l| {
+            let mut parts = l.splitn(4, ':');
+            let path = parts.next().unwrap_or_default();
+            let desc = parts.nth(2).map(str::trim).unwrap_or_default();
+            path.is_empty()
+                || desc.is_empty()
+                || !accepted
+                    .lines()
+                    .any(|a| a.contains(&format!("`{path}`")) && a.contains(&format!("`{desc}`")))
+        })
+        .map(str::to_owned)
+        .collect()
+}
+
 pub(crate) fn mutants(ctx: &Ctx) -> Result<Outcome> {
     tools::require(tools::MUTANTS)?;
-    let mut c = Cmd::cargo().args(["mutants", "--no-shuffle", "--output", "target"]);
+    // With feature `kat` the external KATs and the frozen-vector test join the unit tests in killing mutants.
+    let mut c = Cmd::cargo().args([
+        "mutants",
+        "--no-shuffle",
+        "--output",
+        "target",
+        "--features",
+        "secmp-crypto/kat",
+    ]);
     for p in expect::MUTANT_PACKAGES {
         c = c.args(["--package", p]);
     }
     let cap = c.dir(&ctx.root).capture()?;
     say(cap.stdout.trim_end());
-    if !cap.success {
+    let out = ctx.root.join("target").join("mutants.out");
+    let read = |name: &str| std::fs::read_to_string(out.join(name)).unwrap_or_default();
+    let accepted = std::fs::read_to_string(ctx.root.join("docs").join("mutants-accepted.md"))?;
+    let survivors = format!("{}\n{}", read("missed.txt"), read("timeout.txt"));
+    let undocumented = undocumented_survivors(&survivors, &accepted);
+    let documented = survivors
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .count()
+        .saturating_sub(undocumented.len());
+    // cargo-mutants: 0 all caught, 2 missed mutants, 3 timeouts; anything else (baseline failure, usage) fails
+    let only_survivors = matches!(cap.code, Some(0 | 2 | 3));
+    if !only_survivors || !undocumented.is_empty() {
         say(cap.stderr.trim_end());
+        for u in &undocumented {
+            say(&format!("  UNDOCUMENTED SURVIVOR {u}"));
+        }
         bail!(
-            "cargo mutants failed (exit {:?}): missed/timeout mutants or baseline failure",
-            cap.code
+            "cargo mutants (exit {:?}): {} undocumented survivor(s) (docs/mutants-accepted.md){}",
+            cap.code,
+            undocumented.len(),
+            if only_survivors {
+                ""
+            } else {
+                "; baseline or usage failure"
+            }
         );
     }
     let summary = cap
         .stdout
         .lines()
         .rev()
-        .find(|l| !l.trim().is_empty())
+        .find(|l| l.contains("mutants tested"))
         .unwrap_or_default()
         .trim()
         .to_owned();
     Ok(Outcome::Pass(format!(
-        "{}: {summary}",
+        "{}: {summary}; survivors documented in docs/mutants-accepted.md: {documented}",
         expect::MUTANT_PACKAGES.join(", ")
     )))
 }
@@ -331,20 +585,41 @@ pub(crate) fn mutants(ctx: &Ctx) -> Result<Outcome> {
 pub(crate) fn miri(ctx: &Ctx) -> Result<Outcome> {
     tools::require_nightly(&["miri", "rust-src"])?;
     Cmd::cargo_on(tools::NIGHTLY)
-        .args(["miri", "setup"])
+        .args(["miri", "setup", "--target", expect::MIRI_TARGET])
         .dir(&ctx.root)
         .run()?;
+    // Miri cannot execute SIMD intrinsics: libcrux is built with its portable backend (own target directory,
+    // because libcrux's build scripts do not declare these variables and Cargo would reuse a stale build).
     let mut c = Cmd::cargo_on(tools::NIGHTLY)
-        .args(["miri", "test", "--locked"])
+        .args(["miri", "test", "--locked", "--target", expect::MIRI_TARGET])
+        .env("LIBCRUX_DISABLE_SIMD128", "1")
+        .env("LIBCRUX_DISABLE_SIMD256", "1")
+        .env(
+            "CARGO_TARGET_DIR",
+            ctx.root
+                .join("target")
+                .join("miri-portable")
+                .to_string_lossy(),
+        )
         .dir(&ctx.root);
     for p in expect::MIRI_PACKAGES {
         c = c.args(["--package", p]);
     }
+    c = c.arg("--");
+    for (filter, _) in expect::MIRI_SKIP {
+        c = c.args(["--skip", filter]);
+    }
     c.run()?;
     Ok(Outcome::Pass(format!(
-        "Miri ({}): {}",
+        "Miri ({}, interpreting {}, libcrux portable backend): {}; skipped test modules: {}",
         tools::NIGHTLY,
-        expect::MIRI_PACKAGES.join(", ")
+        expect::MIRI_TARGET,
+        expect::MIRI_PACKAGES.join(", "),
+        expect::MIRI_SKIP
+            .iter()
+            .map(|(f, _)| *f)
+            .collect::<Vec<_>>()
+            .join(", ")
     )))
 }
 
@@ -516,16 +791,13 @@ pub(crate) fn linux_target(ctx: &Ctx) -> Result<Outcome> {
 
 // ---- steps 12–14 -----------------------------------------------------------------------------------------
 
+/// Step 12a: the frozen SecMP vectors equal the committed reference files of the independent `ref/` session
+/// (ADR-026; CI compares with the committed `vectors/ref/*.json` and never runs the Python generator, M1 brief
+/// Q-4). The Rust side is re-checked against the frozen files by the `kat` step (`tests/vectors.rs`).
 pub(crate) fn ref_vectors(ctx: &Ctx) -> Result<Outcome> {
-    let impl_files = walk_files(&ctx.root.join("ref"), &|p: &Path| {
-        p.file_name().is_some_and(|n| n != "README.md")
-    })?;
-    if !impl_files.is_empty() {
-        bail!("ref/ contains an implementation but `cargo xtask vectors` is still the M0 stub");
-    }
-    Ok(Outcome::Stub(
-        "ref/ holds only its README; the cross-check starts in M1 with the separate reference session (OQ-17, ADR-026)".into(),
-    ))
+    Ok(Outcome::Pass(crate::vectors::check_frozen_against_ref(
+        &ctx.root,
+    )?))
 }
 
 pub(crate) fn repro(_: &Ctx) -> Outcome {
@@ -718,6 +990,183 @@ mod tests {
         Ok(())
     }
 
+    /// M0 review F1: fixture workflows — every hygiene rule violated once, and a clean one.
+    #[test]
+    fn workflow_fixture_files() {
+        let bad = workflow_findings(
+            "bad.yml",
+            include_str!("../fixtures/policy/workflow-bad.yml"),
+        );
+        for expected in [
+            "forbidden trigger `pull_request_target`",
+            "forbidden trigger `workflow_run`",
+            "continue-on-error in job Some(\"build\")",
+            "action not pinned by commit SHA: actions/checkout@v4",
+            "action not pinned by commit SHA: actions/cache@0123456789abcdef",
+            "plain-scalar `run:`",
+        ] {
+            assert!(
+                bad.iter().any(|f| f.contains(expected)),
+                "{expected}: {bad:?}"
+            );
+        }
+        assert_eq!(bad.len(), 6, "{bad:?}");
+        let good = workflow_findings(
+            "good.yml",
+            include_str!("../fixtures/policy/workflow-good.yml"),
+        );
+        assert!(good.is_empty(), "{good:?}");
+    }
+
+    #[test]
+    fn mutation_survivors_must_be_documented() {
+        let accepted =
+            "| `crates/a/src/x.rs`: `replace <impl Drop for S>::drop with ()` | reason |\n";
+        let listing = "crates/a/src/x.rs:59:9: replace <impl Drop for S>::drop with ()\n\
+                       crates/a/src/x.rs:12:5: replace f -> bool with true\n\n";
+        let u = undocumented_survivors(listing, accepted);
+        assert_eq!(
+            u,
+            vec!["crates/a/src/x.rs:12:5: replace f -> bool with true".to_owned()]
+        );
+        // the line number does not matter, the file does
+        assert!(
+            undocumented_survivors(
+                "crates/a/src/x.rs:99:1: replace <impl Drop for S>::drop with ()",
+                accepted
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            undocumented_survivors(
+                "crates/b/src/x.rs:59:9: replace <impl Drop for S>::drop with ()",
+                accepted
+            )
+            .len(),
+            1
+        );
+        assert_eq!(undocumented_survivors("garbage", accepted).len(), 1);
+        assert!(undocumented_survivors("", accepted).is_empty());
+    }
+
+    /// A report in the ADR-038 format with the given results, the parameters of `expect.rs` and a 0.5 ns clock.
+    fn ct_report(results: &str) -> String {
+        let (pass, fail) = expect::CT_THRESHOLDS;
+        format!(
+            r#"{{"thresholds":{{"pass":{pass},"fail":{fail},"max_resolution_fraction":{},"max_batch":{}}},"sign":"t < 0: class 0 faster","clock":{{"timer":"rdtscp","tick_ns":0.5,"resolution_ns":0.5}},"results":[{results}]}}"#,
+            expect::CT_RESOLUTION_MAX_FRACTION,
+            expect::CT_MAX_BATCH
+        )
+    }
+
+    /// One target; `first: None` means no measurement (NOT MEASURABLE, `k` null).
+    fn ct_target(
+        name: &str,
+        control: bool,
+        verdict: &str,
+        first: Option<f64>,
+        second: Option<f64>,
+    ) -> String {
+        let m = |t: f64| {
+            format!(
+                r#"{{"max_abs_t":{t},"max_at":"p90","t":{{}},"distinct":900,"median_ticks":6000,"median_ns":3000.0,"median_per_resolution":6000.0}}"#
+            )
+        };
+        let k = if first.is_some() { "2" } else { "null" };
+        format!(
+            r#"{{"name":"{name}","samples":10,"control":{control},"k":{k},"calibration_median_ticks":3000,"calibration_median_ns":1500.0,"verdict":"{verdict}","passed":false,"first":{},"second":{}}}"#,
+            first.map_or_else(|| "null".to_owned(), m),
+            second.map_or_else(|| "null".to_owned(), m)
+        )
+    }
+
+    #[test]
+    fn ct_report_table() -> Result<()> {
+        let ok = ct_report(
+            &[
+                ct_target("control", true, "PASS", Some(99.0), None),
+                ct_target("tag", false, "PASS", Some(1.25), None),
+                ct_target("msg", false, "INCONCLUSIVE→PASS", Some(6.0), Some(1.5)),
+            ]
+            .join(","),
+        );
+        let t = ct_table(&ok)?;
+        assert!(t.failed.is_empty() && t.not_measurable.is_empty(), "{t:?}");
+        assert_eq!(t.lines.len(), 3);
+        assert!(
+            t.lines
+                .iter()
+                .any(|l| l.contains("control, must be detected"))
+        );
+        // k, the calibration median and both measurements (with their batch medians) are printed
+        assert!(
+            t.lines
+                .iter()
+                .any(|l| l.contains("k=2, calibration median 1500.0 ns")
+                    && l.contains("first max |t| = 6.00 (p90), batch median 3000.0 ns")
+                    && l.contains("second max |t| = 1.50 (p90), batch median 3000.0 ns")),
+            "{t:?}"
+        );
+
+        // FAIL and INCONCLUSIVE→FAIL fail the gate; so does an unknown verdict (fail closed)
+        for bad in ["FAIL", "INCONCLUSIVE→FAIL", "MAYBE"] {
+            let t = ct_table(&ct_report(&ct_target(
+                "tag",
+                false,
+                bad,
+                Some(7.0),
+                Some(6.0),
+            )))?;
+            assert_eq!(t.failed.len(), 1, "{bad}: {t:?}");
+        }
+
+        // NOT_MEASURABLE (k > max_batch: no measurement) is reported separately, with resolution and median
+        let t = ct_table(&ct_report(&ct_target(
+            "derive",
+            false,
+            "NOT_MEASURABLE",
+            None,
+            None,
+        )))?;
+        assert!(t.failed.is_empty(), "{t:?}");
+        assert_eq!(
+            t.not_measurable,
+            vec!["derive (resolution 0.5 ns, median 1500.0 ns)".to_owned()]
+        );
+        assert!(t.lines.iter().any(|l| l.contains("k=-")), "{t:?}");
+
+        // parameters that differ from expect.rs are refused
+        for (from, to) in [
+            (r#""fail":10"#, r#""fail":12"#),
+            (r#""max_batch":64"#, r#""max_batch":128"#),
+            (
+                r#""max_resolution_fraction":0.01"#,
+                r#""max_resolution_fraction":0.1"#,
+            ),
+        ] {
+            let tuned = ok.replacen(from, to, 1);
+            assert_ne!(tuned, ok, "{from}");
+            assert!(ct_table(&tuned).is_err(), "{from}");
+        }
+        let (without, _) = ok
+            .split_once(r#""sign""#)
+            .ok_or_else(|| Error("fixture".to_owned()))?;
+        assert!(
+            ct_table(&ok.replacen(without, "{", 1)).is_err(),
+            "no thresholds"
+        );
+
+        // an error report, an empty report, a malformed report
+        assert!(ct_table(r#"{"error":"thresholds not readable"}"#).is_err());
+        assert_eq!(
+            ct_table(&ct_report(""))?.failed.len(),
+            1,
+            "an empty report never passes"
+        );
+        assert!(ct_table("{}").is_err());
+        Ok(())
+    }
+
     #[test]
     fn proverif_verdicts() {
         let out = "Verification summary:\nRESULT not attacker(s[]) is true.\nRESULT not attacker(p[]) is false.\nRESULT event(x) ==> event(y) cannot be proved.\n";
@@ -750,8 +1199,11 @@ mod tests {
 
     #[test]
     fn workflow_hygiene() {
-        let good = "on:\n  pull_request:\njobs:\n  xwin-cross:\n    continue-on-error: true\n    steps:\n      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n";
+        let good = "on:\n  pull_request:\njobs:\n  xwin-cross:\n    continue-on-error: false\n    steps:\n      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n";
         assert!(workflow_findings("w", good).is_empty());
+        // the M0 allowance for xwin-cross ended with condition C1 of the M0 review
+        let soft_xwin = good.replace("continue-on-error: false", "continue-on-error: true");
+        assert_eq!(workflow_findings("w", &soft_xwin).len(), 1);
         let bad = "on:\n  pull_request_target:\n  workflow_run:\njobs:\n  build:\n    continue-on-error: true\n    steps:\n      - uses: actions/checkout@v7\n";
         assert_eq!(workflow_findings("w", bad).len(), 4);
         let yaml_trap = "jobs:\n  a:\n    steps:\n      - run: echo \"done: ok\"\n      - run: |\n          echo \"done: ok\"\n";

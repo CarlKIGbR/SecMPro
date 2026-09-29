@@ -47,14 +47,19 @@
 //!   was above pass**, INCONCLUSIVE→PASS otherwise. The control is measured once: detected (> pass) → PASS, else
 //!   FAIL. `(pass, fail)`, the resolution fraction and the batch cap below are read from `xtask/src/expect.rs`
 //!   (`CT_THRESHOLDS`, `CT_RESOLUTION_MAX_FRACTION`, `CT_MAX_BATCH`) — this file contains no copy of them.
-//! - **Runner metadata and batching (3).** A calibration pass (`CALIBRATION_SAMPLES` single calls, no verdict)
-//!   gives each target's median call duration `m`. One sample is `k` consecutive calls on `k` inputs of the same
+//! - **Runner metadata and batching (3).** One sample is `k` consecutive calls on `k` inputs of the same
 //!   class, all prepared before the window opens (identical allocation sequence for both classes), timed as one
-//!   batch; `k` is the smallest integer with `quantum ≤ fraction · k · m` (= `ceil(100 · quantum / m)`, and 1 on a
-//!   fine counter). A target that would need `k > CT_MAX_BATCH` — or whose quantum is unknown — is NOT
-//!   MEASURABLE on this runner: its verdict is `NOT_MEASURABLE`, which fails the gate with that wording. The
-//!   report carries the clock (arch, Linux clocksource, timer, tick, resolution, overhead), and per target `k`,
-//!   the calibration median and, per measurement, the batch median and the number of distinct batch durations.
+//!   batch; `k` is the smallest integer with `quantum ≤ fraction · k · m` for the median call duration `m`
+//!   (= `ceil(100 · quantum / m)`, and 1 on a fine counter). The calibration (no verdict; M1 review F8) first
+//!   runs a warm-up pass whose timings are discarded, then `CALIBRATION_SAMPLES` single calls for a first
+//!   estimate of `k`; where that is above 1, `k` is derived from the median of *batches* of `k` calls (`m` =
+//!   batch median / `k`), re-derived until the batch median is resolved (`quantum ≤ fraction · batch median`), at
+//!   most `CALIBRATION_ROUNDS` times. A target that would need `k > CT_MAX_BATCH`, whose quantum is unknown, or
+//!   that is still unresolved after the rounds is NOT MEASURABLE on this runner: its verdict is
+//!   `NOT_MEASURABLE`, which fails the gate with that wording. The report carries the clock (arch, Linux
+//!   clocksource, timer, tick, resolution, overhead), and per target `k`, the calibration (single-call median,
+//!   every batched round, the per-call median `k` rests on) and, per measurement, the batch median and the number
+//!   of distinct batch durations.
 //!
 //! Run by `cargo xtask step ct` (ci-full) as `cargo bench -p secmp-crypto --features kat --bench ct`; the results
 //! are written to `target/ct-report.json` and the exit status is the verdict. `SECMP_CT_SCALE` (a divisor, default
@@ -90,8 +95,11 @@ const CROPS_PERMILLE: [usize; 5] = [500, 750, 900, 950, 990];
 const CALIBRATION: Duration = Duration::from_millis(200);
 /// Back-to-back timer reads for the resolution estimate.
 const RESOLUTION_PAIRS: usize = 1_000_000;
-/// Single calls of the calibration pass that sets a target's batch size (ADR-038 (3): "a few thousand").
+/// Samples per calibration pass (the warm-up, the single calls and each batched round; ADR-038 (3): "a few
+/// thousand").
 const CALIBRATION_SAMPLES: usize = 2_000;
+/// Batched calibration rounds at most (M1 review F8); a target still unresolved after them is NOT MEASURABLE.
+const CALIBRATION_ROUNDS: usize = 3;
 
 // ---- thresholds (ADR-038 (2), (3)): read from xtask/src/expect.rs ---------------------------------------------
 
@@ -141,14 +149,18 @@ impl Rules {
         sane.then_some(rules)
     }
 
-    /// The batch size for a target with median call duration `median_ticks` on a timer with quantum
-    /// `quantum_ticks`: the smallest `k ≤ max_batch` with `quantum ≤ fraction · k · median`, or `None` (NOT
-    /// MEASURABLE) if there is none or the quantum is unknown.
-    fn batch(self, quantum_ticks: Option<u64>, median_ticks: u64) -> Option<u32> {
-        let quantum = f64_of(quantum_ticks?);
-        let median = f64_of(median_ticks);
+    /// The batch size for a target with median call duration `per_call_ticks` on a timer with quantum
+    /// `quantum_ticks`: the smallest `k ≤ max_batch` with `quantum ≤ fraction · k · per_call`, or `None` if
+    /// there is none.
+    fn batch(self, quantum_ticks: u64, per_call_ticks: f64) -> Option<u32> {
+        let quantum = f64_of(quantum_ticks);
         (1..=self.max_batch)
-            .find(|k| quantum <= self.max_resolution_fraction * f64::from(*k) * median)
+            .find(|k| quantum <= self.max_resolution_fraction * f64::from(*k) * per_call_ticks)
+    }
+
+    /// Whether a sample with median `median_ticks` is resolved: `quantum ≤ fraction · median`.
+    fn resolved(self, quantum_ticks: u64, median_ticks: u64) -> bool {
+        f64_of(quantum_ticks) <= self.max_resolution_fraction * f64_of(median_ticks)
     }
 
     fn json(self) -> String {
@@ -534,33 +546,116 @@ struct Target {
     run: fn(usize, usize, &mut Stream) -> Result<Samples, secmp_crypto::Error>,
 }
 
+/// How a target's batch size was found (ADR-038 (3), M1 review F8).
+struct Calibration {
+    /// Median of the single calls after the warm-up, in ticks.
+    single_median_ticks: u64,
+    /// The batched rounds, as (batch size, median batch duration in ticks).
+    rounds: Vec<(u32, u64)>,
+    /// The batch size (`None`: NOT MEASURABLE).
+    k: Option<u32>,
+}
+
+impl Calibration {
+    /// The median duration of one call, in ticks, by the last round (the single calls if there was none).
+    fn per_call_ticks(&self) -> f64 {
+        self.rounds.last().map_or_else(
+            || f64_of(self.single_median_ticks),
+            |(k, median)| f64_of(*median) / f64::from(*k),
+        )
+    }
+
+    fn json(&self, clock: &Clock) -> String {
+        let rounds: Vec<String> = self
+            .rounds
+            .iter()
+            .map(|(k, median)| {
+                format!(
+                    "{{\"k\":{k},\"batch_median_ticks\":{median},\"per_call_ns\":{:.1}}}",
+                    f64_of(*median) / f64::from(*k) * clock.tick_ns
+                )
+            })
+            .collect();
+        format!(
+            "{{\"warmup_calls\":{},\"single_median_ticks\":{},\"single_median_ns\":{:.1},\"rounds\":[{}]}}",
+            CALIBRATION_SAMPLES,
+            self.single_median_ticks,
+            f64_of(self.single_median_ticks) * clock.tick_ns,
+            rounds.join(",")
+        )
+    }
+}
+
+/// The batch size of `target` (ADR-038 (3); M1 review F8: warm-up, then `k` from the median of *batches*): a
+/// warm-up pass whose timings are discarded (on the first target the calibration ran cold: the control
+/// calibrated at 1 875 ns per call and measured 667 ns per call); single calls give the first estimate; while
+/// the median batch duration of `k` calls is not resolved (`quantum > fraction · median`), `k` is re-derived from
+/// that batch median divided by `k` (at most `CALIBRATION_ROUNDS` batched rounds). NOT MEASURABLE when the quantum
+/// is unknown, when even `max_batch` calls would not be resolved, or when the rounds run out.
+fn calibrate(
+    target: &Target,
+    stream: &mut Stream,
+    clock: &Clock,
+    rules: Rules,
+) -> Result<Calibration, secmp_crypto::Error> {
+    let n = CALIBRATION_SAMPLES.min(target.samples);
+    // warm-up: timings discarded
+    (target.run)(n, 1, stream)?;
+    let single_median_ticks = median_ticks(&(target.run)(n, 1, stream)?);
+    let mut calibration = Calibration {
+        single_median_ticks,
+        rounds: Vec::new(),
+        k: None,
+    };
+    let Some(quantum) = clock.resolution_ticks else {
+        return Ok(calibration);
+    };
+    let Some(mut k) = rules.batch(quantum, f64_of(single_median_ticks)) else {
+        return Ok(calibration);
+    };
+    if k == 1 {
+        // the single calls are the batches of size 1, and they are resolved
+        calibration.k = Some(1);
+        return Ok(calibration);
+    }
+    for _ in 0..CALIBRATION_ROUNDS {
+        let median = median_ticks(&(target.run)(n, usize::try_from(k).unwrap_or(1), stream)?);
+        calibration.rounds.push((k, median));
+        if rules.resolved(quantum, median) {
+            calibration.k = Some(k);
+            return Ok(calibration);
+        }
+        // not resolved ⇒ the estimate from this batch median is larger than `k`, or none fits
+        match rules.batch(quantum, calibration.per_call_ticks()) {
+            Some(next) if next > k => k = next,
+            _ => return Ok(calibration),
+        }
+    }
+    Ok(calibration)
+}
+
 struct Outcome {
     target: Target,
-    /// Median duration of one call in the calibration pass, in ticks.
-    calibration_median_ticks: u64,
-    /// The batch size (`None`: NOT MEASURABLE, no measurement taken).
-    k: Option<u32>,
+    calibration: Calibration,
     verdict: Verdict,
     first: Option<Measurement>,
     second: Option<Measurement>,
 }
 
-/// Measure `target` and decide (ADR-038): a calibration pass of single calls sets the batch size `k`; NOT
-/// MEASURABLE if none up to `max_batch` suffices; the control must exceed `pass`; every other target is judged
-/// by the two-tier rule with at most one re-measurement.
+/// Measure `target` and decide (ADR-038): the calibration sets the batch size `k`; NOT MEASURABLE if none up to
+/// `max_batch` suffices; the control must exceed `pass`; every other target is judged by the two-tier rule with
+/// at most one re-measurement.
 fn evaluate(
     target: Target,
     stream: &mut Stream,
     clock: &Clock,
     rules: Rules,
 ) -> Result<Outcome, secmp_crypto::Error> {
-    let calibration = CALIBRATION_SAMPLES.min(target.samples);
-    let calibration_median_ticks = median_ticks(&(target.run)(calibration, 1, stream)?);
-    let Some(k) = rules.batch(clock.resolution_ticks, calibration_median_ticks) else {
+    let calibration = calibrate(&target, stream, clock, rules)?;
+    let Some(k) = calibration.k else {
         return Ok(Outcome {
             target,
-            calibration_median_ticks,
-            k: None,
+            calibration,
             verdict: Verdict::NotMeasurable,
             first: None,
             second: None,
@@ -598,8 +693,7 @@ fn evaluate(
     };
     Ok(Outcome {
         target,
-        calibration_median_ticks,
-        k: Some(k),
+        calibration,
         verdict,
         first: Some(first),
         second,
@@ -611,14 +705,17 @@ impl Outcome {
         let [class0, class1] = self.target.classes;
         let measurement =
             |m: Option<&Measurement>| m.map_or_else(|| "null".to_owned(), |m| m.json(clock));
+        let per_call_ticks = self.calibration.per_call_ticks();
         format!(
-            "{{\"name\":\"{}\",\"class0\":\"{class0}\",\"class1\":\"{class1}\",\"samples\":{},\"control\":{},\"k\":{},\"calibration_median_ticks\":{},\"calibration_median_ns\":{:.1},\"verdict\":\"{}\",\"passed\":{},\"first\":{},\"second\":{}}}",
+            "{{\"name\":\"{}\",\"class0\":\"{class0}\",\"class1\":\"{class1}\",\"samples\":{},\"control\":{},\"k\":{},\"calibration_median_ticks\":{per_call_ticks:.2},\"calibration_median_ns\":{:.1},\"calibration\":{},\"verdict\":\"{}\",\"passed\":{},\"first\":{},\"second\":{}}}",
             self.target.name,
             self.target.samples,
             self.target.control,
-            self.k.map_or_else(|| "null".to_owned(), |k| k.to_string()),
-            self.calibration_median_ticks,
-            f64_of(self.calibration_median_ticks) * clock.tick_ns,
+            self.calibration
+                .k
+                .map_or_else(|| "null".to_owned(), |k| k.to_string()),
+            per_call_ticks * clock.tick_ns,
+            self.calibration.json(clock),
             self.verdict.as_str(),
             self.verdict.passed(),
             measurement(self.first.as_ref()),

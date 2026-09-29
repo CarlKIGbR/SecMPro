@@ -88,6 +88,8 @@ Crypto-specific rules (enforced by review checklist and, where possible, by type
 | Formal | ProVerif models in `formal/` run in CI (`proverif` from Debian/Ubuntu packages or opam); a model change requires a spec change reference. |
 | Benchmarks | `criterion` for AEAD/KEM/ratchet step; relay throughput harness (frames/s) run manually per release and recorded. |
 
+CI triggers (M2, 2026-09-29): `push` runs only for `main`; every PR head is covered by its `pull_request` run, whose jobs are the `main-protection` required checks (a cancelled push run on `7d4e4f0` had left `cancelled` check runs under the required names and blocked the merge).
+
 Nothing that touches the network or wall clock in unit tests; `secmp-client-core::clock` is injectable.
 
 ## 5. CI pipeline (`cargo xtask ci-fast` / `cargo xtask ci-full` mirror it locally)

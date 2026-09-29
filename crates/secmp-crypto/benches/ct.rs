@@ -45,21 +45,26 @@
 //!   the target is measured once more (fresh class sequence and inputs from the stream, same n) and the verdict is
 //!   INCONCLUSIVE→FAIL if the second measurement is above pass **with the same sign at a crop where the first
 //!   was above pass**, INCONCLUSIVE→PASS otherwise. The control is measured once: detected (> pass) → PASS, else
-//!   FAIL. `(pass, fail)`, the resolution fraction and the batch cap below are read from `xtask/src/expect.rs`
-//!   (`CT_THRESHOLDS`, `CT_RESOLUTION_MAX_FRACTION`, `CT_MAX_BATCH`) — this file contains no copy of them.
+//!   FAIL. `(pass, fail)`, the resolution fraction, the batch cap, the margin and the realised minimum below are
+//!   read from `xtask/src/expect.rs` (`CT_THRESHOLDS`, `CT_RESOLUTION_MAX_FRACTION`, `CT_MAX_BATCH`,
+//!   `CT_BATCH_MARGIN`, `CT_MIN_REALISED_QUANTA`) — this file contains no copy of them.
 //! - **Runner metadata and batching (3).** One sample is `k` consecutive calls on `k` inputs of the same
 //!   class, all prepared before the window opens (identical allocation sequence for both classes), timed as one
-//!   batch; `k` is the smallest integer with `quantum ≤ fraction · k · m` for the median call duration `m`
-//!   (= `ceil(100 · quantum / m)`, and 1 on a fine counter). The calibration (no verdict; M1 review F8) first
-//!   runs a warm-up pass whose timings are discarded, then `CALIBRATION_SAMPLES` single calls for a first
-//!   estimate of `k`; where that is above 1, `k` is derived from the median of *batches* of `k` calls (`m` =
-//!   batch median / `k`), re-derived until the batch median is resolved (`quantum ≤ fraction · batch median`), at
-//!   most `CALIBRATION_ROUNDS` times. A target that would need `k > CT_MAX_BATCH`, whose quantum is unknown, or
-//!   that is still unresolved after the rounds is NOT MEASURABLE on this runner: its verdict is
-//!   `NOT_MEASURABLE`, which fails the gate with that wording. The report carries the clock (arch, Linux
-//!   clocksource, timer, tick, resolution, overhead), and per target `k`, the calibration (single-call median,
-//!   every batched round, the per-call median `k` rests on) and, per measurement, the batch median and the number
-//!   of distinct batch durations.
+//!   batch; `k` is the smallest integer with `margin · quantum ≤ fraction · k · m` for the median call duration
+//!   `m` (ADR-038 (3) as amended 2026-09-29: a 10 % margin, `k = ceil(110 · quantum / m)`, and 1 on a fine
+//!   counter). The calibration (no verdict; M1 review F8) first runs a warm-up pass whose timings are discarded,
+//!   then `CALIBRATION_SAMPLES` single calls for a first estimate of `k`; where that is above 1, `k` is derived
+//!   from the median of *batches* of `k` calls (`m` = batch median / `k`), re-derived until the batch median
+//!   reaches the target (`margin · quantum ≤ fraction · batch median`), at most `CALIBRATION_ROUNDS` times. Every
+//!   median of these rules is the smaller of the two class medians (`median_ticks`), so that the resolution holds
+//!   for each class. A measurement whose realised median is below `CT_MIN_REALISED_QUANTA` quanta is NOT
+//!   MEASURABLE (from there up to 100 quanta the count is informative only). A target that would need
+//!   `k > CT_MAX_BATCH`, whose quantum is unknown, that is still short of the target after the rounds, or whose
+//!   measurement is too coarse is NOT MEASURABLE on this runner: its verdict is `NOT_MEASURABLE`, which fails the
+//!   gate with that wording. The report carries the clock (arch, Linux clocksource, timer, tick, resolution,
+//!   overhead), and per target `k`, the calibration (single-call median, every batched round, the per-call median
+//!   `k` rests on) and, per measurement, the pooled and the class median, the realised quanta and the number of
+//!   distinct batch durations.
 //!
 //! Run by `cargo xtask step ct` (ci-full) as `cargo bench -p secmp-crypto --features kat --bench ct`; the results
 //! are written to `target/ct-report.json` and the exit status is the verdict. `SECMP_CT_SCALE` (a divisor, default
@@ -98,7 +103,8 @@ const RESOLUTION_PAIRS: usize = 1_000_000;
 /// Samples per calibration pass (the warm-up, the single calls and each batched round; ADR-038 (3): "a few
 /// thousand").
 const CALIBRATION_SAMPLES: usize = 2_000;
-/// Batched calibration rounds at most (M1 review F8); a target still unresolved after them is NOT MEASURABLE.
+/// Batched calibration rounds at most (M1 review F8); a target still short of the target after them is NOT
+/// MEASURABLE.
 const CALIBRATION_ROUNDS: usize = 3;
 
 // ---- thresholds (ADR-038 (2), (3)): read from xtask/src/expect.rs ---------------------------------------------
@@ -117,6 +123,10 @@ struct Rules {
     max_resolution_fraction: f64,
     /// The largest batch size; a target that needs more is NOT MEASURABLE.
     max_batch: u32,
+    /// The calibration aims at `margin` times the resolution bound (10 %: 110 quanta at the 1 % fraction).
+    margin: f64,
+    /// A measurement whose realised median is below this many quanta is NOT MEASURABLE.
+    min_realised_quanta: u64,
 }
 
 /// The value text of the one-line `pub(crate) const <name>: … = <value>;` in `EXPECT_RS`.
@@ -140,33 +150,51 @@ impl Rules {
             fail: fail.trim().parse().ok()?,
             max_resolution_fraction: const_value("CT_RESOLUTION_MAX_FRACTION")?.parse().ok()?,
             max_batch: const_value("CT_MAX_BATCH")?.parse().ok()?,
+            margin: const_value("CT_BATCH_MARGIN")?.parse().ok()?,
+            min_realised_quanta: const_value("CT_MIN_REALISED_QUANTA")?.parse().ok()?,
         };
         let sane = rules.pass > 0.0
             && rules.fail > rules.pass
             && rules.max_resolution_fraction > 0.0
             && rules.max_resolution_fraction < 1.0
-            && rules.max_batch >= 1;
+            && rules.max_batch >= 1
+            && rules.margin >= 1.0
+            && rules.min_realised_quanta >= 1;
         sane.then_some(rules)
     }
 
     /// The batch size for a target with median call duration `per_call_ticks` on a timer with quantum
-    /// `quantum_ticks`: the smallest `k ≤ max_batch` with `quantum ≤ fraction · k · per_call`, or `None` if
-    /// there is none.
+    /// `quantum_ticks`: the smallest `k ≤ max_batch` with `margin · quantum ≤ fraction · k · per_call` (ADR-038
+    /// (3) as amended: `k = ceil(110 · quantum / median)`), or `None` if there is none.
     fn batch(self, quantum_ticks: u64, per_call_ticks: f64) -> Option<u32> {
-        let quantum = f64_of(quantum_ticks);
+        let target = self.margin * f64_of(quantum_ticks);
         (1..=self.max_batch)
-            .find(|k| quantum <= self.max_resolution_fraction * f64::from(*k) * per_call_ticks)
+            .find(|k| target <= self.max_resolution_fraction * f64::from(*k) * per_call_ticks)
     }
 
-    /// Whether a sample with median `median_ticks` is resolved: `quantum ≤ fraction · median`.
+    /// Whether a calibration batch with median `median_ticks` reaches the target with the margin:
+    /// `margin · quantum ≤ fraction · median`.
     fn resolved(self, quantum_ticks: u64, median_ticks: u64) -> bool {
-        f64_of(quantum_ticks) <= self.max_resolution_fraction * f64_of(median_ticks)
+        self.margin * f64_of(quantum_ticks) <= self.max_resolution_fraction * f64_of(median_ticks)
+    }
+
+    /// Whether a measurement with median `median_ticks` is too coarse to judge: fewer than
+    /// `min_realised_quanta` quanta (NOT MEASURABLE; ADR-038 (3) as amended).
+    fn too_coarse(self, quantum_ticks: u64, median_ticks: u64) -> bool {
+        self.min_realised_quanta
+            .checked_mul(quantum_ticks)
+            .is_none_or(|min_ticks| median_ticks < min_ticks)
     }
 
     fn json(self) -> String {
         format!(
-            "{{\"pass\":{},\"fail\":{},\"max_resolution_fraction\":{},\"max_batch\":{}}}",
-            self.pass, self.fail, self.max_resolution_fraction, self.max_batch
+            "{{\"pass\":{},\"fail\":{},\"max_resolution_fraction\":{},\"max_batch\":{},\"batch_margin\":{},\"min_realised_quanta\":{}}}",
+            self.pass,
+            self.fail,
+            self.max_resolution_fraction,
+            self.max_batch,
+            self.margin,
+            self.min_realised_quanta
         )
     }
 }
@@ -424,11 +452,28 @@ fn measure<T>(
     out
 }
 
-/// The median sample duration, in ticks.
+/// The median of `values` (0 if empty).
+fn median_of(mut values: Vec<u64>) -> u64 {
+    values.sort_unstable();
+    values.get(values.len() / 2).copied().unwrap_or(0)
+}
+
+/// The median sample duration a target's resolution rules use, in ticks: the smaller of the two class medians,
+/// so that the resolution holds for each class. For every target whose classes take the same time it equals the
+/// pooled median up to noise; for the variable-time control, whose pooled distribution is a 50/50 mixture of a
+/// fast and a slow class, the pooled median falls into either mode from run to run (M2 report, F8), while the
+/// smaller class median is stable.
 fn median_ticks(samples: &[(usize, u64)]) -> u64 {
-    let mut sorted: Vec<u64> = samples.iter().map(|(_, x)| *x).collect();
-    sorted.sort_unstable();
-    sorted.get(sorted.len() / 2).copied().unwrap_or(0)
+    let class = |c: usize| {
+        median_of(
+            samples
+                .iter()
+                .filter(|(k, _)| *k == c)
+                .map(|(_, x)| *x)
+                .collect(),
+        )
+    };
+    class(0).min(class(1))
 }
 
 /// Welch t on the raw samples and on the samples below each crop percentile.
@@ -460,19 +505,23 @@ fn analyse(samples: &[(usize, u64)]) -> Vec<(String, f64)> {
 struct Measurement {
     ts: Vec<(String, f64)>,
     distinct: usize,
+    /// The pooled median batch duration.
     median_ticks: u64,
+    /// The smaller class median (`median_ticks()`), which the realised-resolution rule uses.
+    class_median_ticks: u64,
 }
 
 impl Measurement {
     fn of(samples: &[(usize, u64)]) -> Self {
         let mut sorted: Vec<u64> = samples.iter().map(|(_, x)| *x).collect();
         sorted.sort_unstable();
-        let median_ticks = sorted.get(sorted.len() / 2).copied().unwrap_or(0);
+        let median = sorted.get(sorted.len() / 2).copied().unwrap_or(0);
         sorted.dedup();
         Self {
             ts: analyse(samples),
             distinct: sorted.len(),
-            median_ticks,
+            median_ticks: median,
+            class_median_ticks: median_ticks(samples),
         }
     }
 
@@ -495,15 +544,20 @@ impl Measurement {
             .collect();
         let (max, at) = self.max();
         let median_ns = f64_of(self.median_ticks) * clock.tick_ns;
-        let per_resolution = clock.resolution_ticks.filter(|r| *r > 0).map_or_else(
-            || "null".to_owned(),
-            |r| format!("{:.1}", f64_of(self.median_ticks) / f64_of(r)),
-        );
+        let per_resolution = |ticks: u64| {
+            clock.resolution_ticks.filter(|r| *r > 0).map_or_else(
+                || "null".to_owned(),
+                |r| format!("{:.1}", f64_of(ticks) / f64_of(r)),
+            )
+        };
         format!(
-            "{{\"max_abs_t\":{max:.3},\"max_at\":\"{at}\",\"t\":{{{}}},\"distinct\":{},\"median_ticks\":{},\"median_ns\":{median_ns:.1},\"median_per_resolution\":{per_resolution}}}",
+            "{{\"max_abs_t\":{max:.3},\"max_at\":\"{at}\",\"t\":{{{}}},\"distinct\":{},\"median_ticks\":{},\"median_ns\":{median_ns:.1},\"median_per_resolution\":{},\"class_median_ticks\":{},\"realised_quanta\":{}}}",
             ts.join(","),
             self.distinct,
-            self.median_ticks
+            self.median_ticks,
+            per_resolution(self.median_ticks),
+            self.class_median_ticks,
+            per_resolution(self.class_median_ticks)
         )
     }
 }
@@ -586,13 +640,12 @@ impl Calibration {
     }
 }
 
-/// The batch size of `target` (ADR-038 (3); M1 review F8: warm-up, then `k` from the median of *batches*): a
-/// warm-up pass whose timings are discarded (on the first target the calibration ran cold: the control
-/// calibrated at 1 875 ns per call and measured 667 ns per call); single calls give the first estimate; while
-/// the median batch duration of `k` calls is not resolved (`quantum > fraction · median`), `k` is re-derived from
-/// that batch median divided by `k` (at most `CALIBRATION_ROUNDS` batched rounds; a call shorter than one quantum
-/// starts at `max_batch`). NOT MEASURABLE when the quantum is unknown, when even `max_batch` calls would not be
-/// resolved, or when the rounds run out.
+/// The batch size of `target` (ADR-038 (3) as amended; M1 review F8: warm-up, then `k` from the median of
+/// *batches* with a 10 % margin): a warm-up pass whose timings are discarded; single calls give the first
+/// estimate; while the median batch duration of `k` calls misses the target (`margin · quantum > fraction ·
+/// median`), `k` is re-derived from that batch median divided by `k` (at most `CALIBRATION_ROUNDS` batched
+/// rounds; a call shorter than one quantum starts at `max_batch`). NOT MEASURABLE when the quantum is unknown,
+/// when even `max_batch` calls would miss the target, or when the rounds run out.
 fn calibrate(
     target: &Target,
     stream: &mut Stream,
@@ -668,9 +721,17 @@ fn evaluate(
         });
     };
     let batch = usize::try_from(k).unwrap_or(1);
+    // the realised resolution of a measurement (ADR-038 (3) as amended): < `min_realised_quanta` → NOT MEASURABLE
+    let too_coarse = |m: &Measurement| {
+        clock
+            .resolution_ticks
+            .is_none_or(|q| rules.too_coarse(q, m.class_median_ticks))
+    };
     let first = Measurement::of(&(target.run)(target.samples, batch, stream)?);
     let (max, _) = first.max();
-    let (verdict, second) = if target.control {
+    let (verdict, second) = if too_coarse(&first) {
+        (Verdict::NotMeasurable, None)
+    } else if target.control {
         let detected = max > rules.pass;
         (
             if detected {
@@ -690,7 +751,9 @@ fn evaluate(
         let confirmed = first.ts.iter().zip(&second.ts).any(|((k1, t1), (k2, t2))| {
             k1 == k2 && t1.abs() > rules.pass && t2.abs() > rules.pass && (*t1 < 0.0) == (*t2 < 0.0)
         });
-        let verdict = if confirmed {
+        let verdict = if too_coarse(&second) {
+            Verdict::NotMeasurable
+        } else if confirmed {
             Verdict::InconclusiveFail
         } else {
             Verdict::InconclusivePass
@@ -1130,7 +1193,7 @@ fn main() -> ExitCode {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/ct-report.json");
     let Some(rules) = Rules::from_expect() else {
         // written for the gate to print; the bench itself may not print (docs/06 §2)
-        let error = "{\"error\":\"CT_THRESHOLDS / CT_RESOLUTION_MAX_FRACTION not readable from xtask/src/expect.rs\"}";
+        let error = "{\"error\":\"CT_THRESHOLDS / CT_RESOLUTION_MAX_FRACTION / CT_MAX_BATCH / CT_BATCH_MARGIN / CT_MIN_REALISED_QUANTA not readable from xtask/src/expect.rs\"}";
         let _ = std::fs::write(path, error);
         return ExitCode::FAILURE;
     };

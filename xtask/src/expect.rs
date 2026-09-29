@@ -61,6 +61,14 @@ pub(crate) const CT_RESOLUTION_MAX_FRACTION: f64 = 0.01;
 /// ADR-038 (3): the largest batch size; a target that would need more is NOT MEASURABLE on that runner.
 pub(crate) const CT_MAX_BATCH: u32 = 64;
 
+/// ADR-038 (3), amended 2026-09-29 (M1 review F8): the calibration aims at this multiple of the resolution bound,
+/// a 10 % margin: `k = ceil(110 · quantum / median)` with the 1 % fraction above.
+pub(crate) const CT_BATCH_MARGIN: f64 = 1.1;
+
+/// ADR-038 (3), amended 2026-09-29: a measurement whose realised batch median is below this many timer quanta
+/// is NOT MEASURABLE for that target (from here up to 100 the realised count is informative only).
+pub(crate) const CT_MIN_REALISED_QUANTA: u64 = 80;
+
 /// cargo-fuzz targets under `fuzz/fuzz_targets/` (docs/06 §5 step 6): M1 key, ciphertext and signature parsers
 /// and the two openers of `secmp-crypto`.
 pub(crate) const FUZZ_TARGETS: &[&str] = &[

@@ -205,7 +205,7 @@ const CT_VERDICTS: &[(&str, bool)] = &[
     ("NOT_MEASURABLE", false),
 ];
 
-/// `max |t| = x (crop), batch median y ns` of one measurement object.
+/// `max |t| = x (crop), batch median y ns, realised r quanta` of one measurement object.
 fn ct_measurement(m: &Value) -> String {
     let t = m
         .get("max_abs_t")
@@ -216,7 +216,11 @@ fn ct_measurement(m: &Value) -> String {
         .get("median_ns")
         .and_then(Value::as_f64)
         .unwrap_or(f64::NAN);
-    format!("max |t| = {t:.2} ({at}), batch median {median:.1} ns")
+    let realised = m
+        .get("realised_quanta")
+        .and_then(Value::as_f64)
+        .map_or_else(|| "?".to_owned(), |r| format!("{r:.1}"));
+    format!("max |t| = {t:.2} ({at}), batch median {median:.1} ns, realised {realised} quanta")
 }
 
 pub(crate) fn ct_table(json: &str) -> Result<CtTable> {
@@ -234,13 +238,18 @@ pub(crate) fn ct_table(json: &str) -> Result<CtTable> {
         || num("fail") != Some(fail.to_bits())
         || num("max_resolution_fraction") != Some(expect::CT_RESOLUTION_MAX_FRACTION.to_bits())
         || th.get("max_batch").and_then(Value::as_u64) != Some(u64::from(expect::CT_MAX_BATCH))
+        || num("batch_margin") != Some(expect::CT_BATCH_MARGIN.to_bits())
+        || th.get("min_realised_quanta").and_then(Value::as_u64)
+            != Some(expect::CT_MIN_REALISED_QUANTA)
     {
         bail!(
             "ct report: thresholds {th} differ from expect::CT_THRESHOLDS {:?} / CT_RESOLUTION_MAX_FRACTION {} / \
-             CT_MAX_BATCH {}",
+             CT_MAX_BATCH {} / CT_BATCH_MARGIN {} / CT_MIN_REALISED_QUANTA {}",
             expect::CT_THRESHOLDS,
             expect::CT_RESOLUTION_MAX_FRACTION,
-            expect::CT_MAX_BATCH
+            expect::CT_MAX_BATCH,
+            expect::CT_BATCH_MARGIN,
+            expect::CT_MIN_REALISED_QUANTA
         );
     }
     let resolution = v
@@ -1064,9 +1073,11 @@ mod tests {
     fn ct_report(results: &str) -> String {
         let (pass, fail) = expect::CT_THRESHOLDS;
         format!(
-            r#"{{"thresholds":{{"pass":{pass},"fail":{fail},"max_resolution_fraction":{},"max_batch":{}}},"sign":"t < 0: class 0 faster","clock":{{"timer":"rdtscp","tick_ns":0.5,"resolution_ns":0.5}},"results":[{results}]}}"#,
+            r#"{{"thresholds":{{"pass":{pass},"fail":{fail},"max_resolution_fraction":{},"max_batch":{},"batch_margin":{},"min_realised_quanta":{}}},"sign":"t < 0: class 0 faster","clock":{{"timer":"rdtscp","tick_ns":0.5,"resolution_ns":0.5}},"results":[{results}]}}"#,
             expect::CT_RESOLUTION_MAX_FRACTION,
-            expect::CT_MAX_BATCH
+            expect::CT_MAX_BATCH,
+            expect::CT_BATCH_MARGIN,
+            expect::CT_MIN_REALISED_QUANTA
         )
     }
 
@@ -1080,7 +1091,7 @@ mod tests {
     ) -> String {
         let m = |t: f64| {
             format!(
-                r#"{{"max_abs_t":{t},"max_at":"p90","t":{{}},"distinct":900,"median_ticks":6000,"median_ns":3000.0,"median_per_resolution":6000.0}}"#
+                r#"{{"max_abs_t":{t},"max_at":"p90","t":{{}},"distinct":900,"median_ticks":6000,"median_ns":3000.0,"median_per_resolution":6000.0,"class_median_ticks":6000,"realised_quanta":6000.0}}"#
             )
         };
         let k = if first.is_some() { "2" } else { "null" };
@@ -1114,8 +1125,12 @@ mod tests {
             t.lines
                 .iter()
                 .any(|l| l.contains("k=2, calibration median 1500.0 ns")
-                    && l.contains("first max |t| = 6.00 (p90), batch median 3000.0 ns")
-                    && l.contains("second max |t| = 1.50 (p90), batch median 3000.0 ns")),
+                    && l.contains(
+                        "first max |t| = 6.00 (p90), batch median 3000.0 ns, realised 6000.0 quanta"
+                    )
+                    && l.contains(
+                        "second max |t| = 1.50 (p90), batch median 3000.0 ns, realised 6000.0 quanta"
+                    )),
             "{t:?}"
         );
 
@@ -1154,6 +1169,8 @@ mod tests {
                 r#""max_resolution_fraction":0.01"#,
                 r#""max_resolution_fraction":0.1"#,
             ),
+            (r#""batch_margin":1.1"#, r#""batch_margin":1"#),
+            (r#""min_realised_quanta":80"#, r#""min_realised_quanta":40"#),
         ] {
             let tuned = ok.replacen(from, to, 1);
             assert_ne!(tuned, ok, "{from}");

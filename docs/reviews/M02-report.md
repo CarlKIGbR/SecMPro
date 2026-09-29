@@ -38,8 +38,8 @@ on-curve, ML-KEM modulus check, SHA3-256 for the onion checksum) goes through `s
 | 6 | D.4 `Outer` (padded), `inner_ct`, `Inner`, `HandshakeCell`, `HandshakeCellPlaintext` | App. D coverage | open |
 | 7 | D.5 `Cell`, `HeaderV1`, `Content` (typed bodies, padded), `AppMessage`, `Fragment`, `FragmentPayload`, `RouteDescriptor` (unknown kinds kept), `RelayQueue`, the Handshake/Batch/RouteUpdate/KeyChange/Receipt/Control bodies | App. D coverage; consistency rule | open |
 | 8 | D.6 signed-message builders (encode only) | App. D coverage | open |
-| 9 | Unit tests with every failure path; property tests `decode(encode(x)) == x`, `encode(decode(b)) == b` per structure (`proptest` is a new dev-dependency: ADR + `cargo vet` record first, `docs/06` §3) | "`decode(encode(x)) == x` and `encode(decode(b)) == b` for all structures" | open |
-| 10 | `cargo xtask vectors` for `encodings`: Rust generator of the 85 positives from the SCHEMA §2 streams, structural comparison with `vectors/ref/encodings.json` (byte-for-byte on every positive, decode of every positive to its value), every one of the 547 negatives rejected with the uniform error; freeze `vectors/encodings.json`; per-target re-check test | "every negative vector rejected with the uniform error"; "Rust and `ref/` encodings identical" | open |
+| 9 | Unit tests with every failure path; canonicality property tests on generators built from `rand` (already vetted; WEISUNG M2-1: no new dependency, no `proptest`): random valid values from a seeded RNG, `decode(encode(x)) == x` and `encode(decode(b)) == b` per structure, plus targeted edge values (every counter and length at its minimum and maximum, every enum variant); any case that needs shrinking is reported | "`decode(encode(x)) == x` and `encode(decode(b)) == b` for all structures" | open |
+| 10 | `cargo xtask vectors` for `encodings`: Rust generator of the 85 positives from the SCHEMA §2 streams (header `"spec": "SecMP/1 rev 2.3"`, WEISUNG M2-1 Q-2), structural comparison with `vectors/ref/encodings.json` (byte-for-byte on every positive, decode of every positive to its value), every one of the 547 negatives rejected with the uniform error; freeze `vectors/encodings.json`; per-target re-check test; **`expect::VECTOR_REF_PENDING` empty again** (`encodings` moved to `VECTOR_SUITES`) — acceptance condition of `285cb17` (WEISUNG M2-1) | "every negative vector rejected with the uniform error"; "Rust and `ref/` encodings identical"; `285cb17` condition | open |
 | 11 | Kani harnesses for `Cell`, `Frame`, `HeaderV1` and frame-plaintext parsing (no panic, exact fit); `KANI_PACKAGES` += `secmp-proto` | "Kani proofs pass" | open |
 | 12 | Fuzz targets for every decoder (corpora seeded from the vectors); `FUZZ_TARGETS` extended; 2 min each | "fuzzers run 2 min without findings" | open |
 | 13 | Mutation gate on `secmp-proto` (and the `secmp-crypto` additions), coverage ≥ 90 % | `docs/06` §4, §8 | open |
@@ -84,6 +84,7 @@ Commit 1 (before any M2 code):
 | Kani proofs pass | — | open (step 11) |
 | fuzzers run 2 min without findings | — | open (step 12) |
 | Rust and `ref/` encodings identical | — | open (step 10) |
+| `expect::VECTOR_REF_PENDING` empty at the DoD (condition on `285cb17`, WEISUNG M2-1) | `cargo xtask step ref-vectors` ("pending freeze: none") | open (step 10) |
 
 Commit-1 evidence:
 
@@ -105,7 +106,7 @@ Commit-1 evidence:
 | Windows (`windows-native`, `xwin-cross`) | open |
 | `cargo xtask ci-fast` (macOS arm64) | PASS on `9835bb3` (§3); fmt/clippy/policy/nextest/ref-vectors PASS on `168ede0` |
 | KATs / differential | PASS in `ci-fast` (§3); differential 4/4 in release after F1 |
-| Constant time (`ct`, M1 code) | macOS arm64 PASS on `168ede0` and `9835bb3` (§3); Linux: in the PR run's `linux-full`, report uploaded as artefact |
+| Constant time (`ct`, M1 code) | macOS arm64 PASS on `168ede0` and `9835bb3` (§3); on `19f5700` (margin): run 1 **FAIL** (`caead_open_reject_samekey` 18.39 at p50, raw −0.80), runs 2 and 3 PASS (2.95, 0.91) — §8 Blocked; Linux: in the PR run's `linux-full`, report uploaded as artefact |
 | Fuzz smoke | open |
 | Mutation | open |
 | Coverage | open |
@@ -117,14 +118,13 @@ Commit-1 evidence:
 
 None. Notes: (a) the brief asks for the CI-trigger line in `docs/06` §4; it sits after the §4 table. (b) Removing
 the `push && ref != main` clause of `linux-full` is the direct consequence of `push: branches: [main]` (the clause
-could no longer be true); no other workflow change. (c) ADR-038 (3) says the calibration "measures each target's
-median once"; F8 replaces that with a warm-up plus up to three batched rounds — the ADR text may want the
-reviewer's amendment line.
+could no longer be true); no other workflow change. (c) ADR-038 (3) now carries the reviewer's amendment line
+(warm-up, batch median, 10 % margin, < 80 → NOT_MEASURABLE), implemented in `19f5700`.
 
 ## 6. Dependencies added or bumped
 
-None so far. Planned: `proptest` as a dev-dependency of `secmp-proto` (step 9) — ADR line and `cargo vet` record
-before it is added.
+None so far. `proptest` is not used (WEISUNG M2-1); the property tests use generators built from `rand`, which is
+already in the vetted closure.
 
 ## 7. Open risks and known limitations
 
@@ -134,17 +134,47 @@ before it is added.
 
 ## 8. Blocked / questions for the reviewer or owner
 
-None blocking.
+**Blocked (ct gate, M1 code — docs/06 §4 STOP rule):** `cargo xtask step ct` on `19f5700` (macOS arm64,
+`cntvct_el0`, 41.67 ns) failed once: `caead_open_reject_samekey` FAIL, max |t| **18.39 at p50** (raw −0.80; p75
+3.82, p90 3.25, p95 4.92, p99 6.34; k = 1, realised 190 quanta; every other target PASS). Root-cause step in the
+code under test first: `Caead::open` (`crates/secmp-crypto/src/caead.rs`, unchanged since `b24bcfa`) has no path
+that depends on *where* the ciphertext is tampered — both classes use the right key, the commitment matches, the
+whole ciphertext is copied and authenticated and the tag compare is `subtle`-based; the harness gives both classes
+fresh copies of equal size in the same allocation sequence. The change under test in `19f5700` does not touch this
+target (k = 1 before and after; the margin and the class-median rule change only k > 1 targets). Two further runs of
+the same code, recorded as they came: run 2 PASS, `caead_open_reject_samekey` **2.95** (p50 **−**2.95, the opposite
+sign; raw 0.35); run 3 PASS, **0.91** (raw 0.91). The shape of run 1 (raw ≈ 0, crop-dependent size, sign not
+reproduced) is the one ADR-038's context describes for quantised timers; on this 24 MHz counter a single call is
+~190 quanta and the p50 crop cuts through a mass point. Nothing was changed to make the gate pass (thresholds,
+sample counts, control, verdict tiers untouched). Evidence: `M02-evidence/ct-report-aarch64-apple-darwin-19f5700-
+run1-FAIL.json`, `…-run2.json`, `…-run3.json` and the three gate logs. **Question:** does the reviewer accept run 1
+as instrument noise (the ADR-038 verdict has no re-measurement above 10), or should the target be isolated further
+(e.g. a same-key/same-position A/A control on this host)? The M2 decoder work below does not touch `Caead` or any
+measured code and continued.
 
-- Q-1 (F8, for the reviewer): the batched calibration resolves each target *in the calibration* (`quantum ≤ 1 % ·
-  batch median`), but the measurement itself may run a few per cent faster (`caead_derive` on `9835bb3`: 100 quanta
-  calibrated, 97 realised; on `168ede0`: 105 calibrated, 101 realised). Keep the rule as written (ADR-038 (3)), or should `k` carry a margin (e.g. aim at 110 quanta)? No
-  change without the reviewer's word; `CT_*` constants untouched.
-- Q-2 (step 10, early notice): the header of `vectors/ref/encodings.json` reads `"spec": "SecMP/1 rev 2.2"`
-  (`"schema": 3`). The structural comparison (SCHEMA §1) removes only `generator`, so the Rust generator must
-  write the same `spec` string. The layouts are unchanged in rev 2.3, but the file encodes rev 2.3 rules (SQ-12 …
-  SQ-18). Unless the reviewer says otherwise, the Rust side writes `"SecMP/1 rev 2.2"` to match the delivered
-  reference; the reference file is not touched either way.
+Decisions of WEISUNG M2-1 (2026-09-29), applied:
+
+- Q-1 (F8 margin): **10 %** — `k = ceil(110 · quantum / median)`, realised count recorded, < 80 quanta →
+  NOT_MEASURABLE; ADR-038 amended with the reviewer's line; implemented in `19f5700` (constants
+  `CT_BATCH_MARGIN = 1.1`, `CT_MIN_REALISED_QUANTA = 80` in `expect.rs`, echoed in the report and checked by the
+  gate). Reading to confirm: "median" in these rules is the smaller of the two class medians (resolution must hold
+  for each class). For all targets but the control this equals the pooled median up to noise; for the
+  variable-time control the pooled median of its 50/50 bimodal distribution fell into either mode from run to run
+  (realised 19 quanta on `9835bb3`, which would now be NOT_MEASURABLE), while the smaller class median is stable
+  (realised 115–120 quanta in the three runs). Realised counts in runs 1–3: every target ≥ 109 quanta.
+- Q-2 (`"spec"` string): the reference file will be regenerated with `"spec": "SecMP/1 rev 2.3"`; the Rust
+  generator writes `"SecMP/1 rev 2.3"`; the reference file is committed unchanged when the reviewer places it.
+- `proptest`: not used; property tests on `rand`-based generators (plan step 9).
+- `285cb17` accepted with the condition that `VECTOR_REF_PENDING` is empty at the DoD (§3 acceptance table).
+- Repository security settings: done, `M02-evidence/repo-settings-2026-09-29.txt` — secret scanning and push
+  protection **enabled**; CodeQL default setup for Rust **rejected by the API** (HTTP 422: "`rust` is not a possible
+  value", accepted languages: actions, c-cpp, csharp, go, java-kotlin, javascript-typescript, python, ruby, swift),
+  left as it is; private vulnerability reporting and vulnerability alerts still enabled. Observed but not changed
+  (not in the instruction): `secret_scanning_non_provider_patterns` and `secret_scanning_validity_checks` are
+  `disabled`.
+
+Other notes:
+
 - CI: since `54da5af` a push to `m02-proto` starts no `push` run by design; the PR run covers every head.
 - `ref-vectors` gate (ci-full step 12a): it required `vectors/ref/*.json` to equal the frozen suite list, so the
   committed `vectors/ref/encodings.json` would have failed `linux-full` until the freeze. Fixed in xtask by an

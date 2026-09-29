@@ -628,7 +628,11 @@ pub(crate) mod tests {
     fn profile_names() -> Result<()> {
         for name in ["", "Zoë Ångström 李雷 🙂", &"a".repeat(64)] {
             for avatar in [None, Some([1; 32])] {
-                exact_fit::<Profile>(&round_trip(&Profile::new(name, avatar)?)?);
+                let p = Profile::new(name, avatar)?;
+                assert_eq!(p.name(), name);
+                let bytes = round_trip(&p)?;
+                assert_eq!(Profile::decode(&bytes)?.name(), name);
+                exact_fit::<Profile>(&bytes);
             }
         }
         assert!(Profile::new(&"a".repeat(65), None).is_err());

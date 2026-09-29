@@ -148,7 +148,7 @@ Commit-1 evidence:
 | KATs / differential | PASS in `ci-fast` (§3); differential 4/4 in release after F1 |
 | Constant time (`ct`, M1 code) | macOS arm64 PASS on `168ede0` and `9835bb3` (§3); on `19f5700` (margin): run 1 **FAIL** (`caead_open_reject_samekey` 18.39 at p50, raw −0.80), runs 2 and 3 PASS (2.95, 0.91) — §8 Blocked; Linux: in the PR run's `linux-full`, report uploaded as artefact |
 | Fuzz smoke | open |
-| Mutation | open |
+| Mutation | gate in step 13; local look-ahead (`M02-evidence/mutants-local-steps1-8.txt`): `cargo mutants -p secmp-proto` first pass 343 mutants — 258 caught, 75 unviable, **10 missed** (four untested accessors, three `FragmentPayload` inner-type arms, `Profile::name`, and `FETCH_MULTI` `count == 0 \|\| count > 32` → `&&`, which the reference-file test missed because it judged negatives after re-encoding and the encoder enforces the same rule). Fixed by tests, and the reference test now judges every negative on the decoder alone: second pass **268 caught, 75 unviable, 0 missed**; the changed `secmp-crypto` files (`x25519.rs`, `ed25519.rs`, feature `kat`): 47 mutants, 28 caught, 19 unviable, 0 missed |
 | Coverage | open (gate in step 13); preliminary local measurement on `d90f3b7`: `cargo llvm-cov nextest -p secmp-proto` — lines 2321, missed 26, **98.88 %** (codec 100, frame 100, hx 100, record 99.5, signed 99.0, mod 98.9, inv 98.3, keys 98.0, cell 97.5) |
 | Kani / Miri | open; weekly `miri-full` workflow added (runs on `main` once merged: `schedule` works only on the default branch) |
 | `cargo xtask ci-fast` on `d90f3b7` (macOS arm64) | **PASS** — every step, nextest over the workspace, kat 368 s (`M02-evidence/ci-fast-aarch64-apple-darwin-d90f3b7.txt`) |

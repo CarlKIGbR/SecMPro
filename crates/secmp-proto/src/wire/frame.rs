@@ -986,6 +986,24 @@ mod tests {
             .encode()
             .is_err()
         );
+        // the decoder refuses count 0 and count 33 on its own (independent of the encoder's check)
+        for count in [0_u8, 33] {
+            let mut f = Writer::new();
+            f.u8(opcode::FETCH_MULTI);
+            f.u32(0);
+            f.u8(count);
+            for i in 0..count {
+                f.bytes(&[i; 16]);
+                f.u64(0);
+                f.bytes(sig(i)?.as_bytes());
+            }
+            let bytes = pad(&f.into_vec(), FRAME_PLAINTEXT_LEN)?;
+            assert_eq!(
+                Request::decode(&bytes),
+                Err(Error::Rejected),
+                "count {count}"
+            );
+        }
         // LINK_GET mode 0 with a non-zero signature field, mode 2
         let mut f = Writer::new();
         f.u8(opcode::LINK_GET);

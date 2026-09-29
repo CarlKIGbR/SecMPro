@@ -40,10 +40,14 @@ fn text<'a>(v: &'a Value, key: &str) -> &'a str {
     at(v, key).as_str().expect(key)
 }
 
-/// Decode then re-encode.
-fn again<T: Decode + Encode>(bytes: &[u8]) -> Result<Vec<u8>, Error> {
-    T::decode(bytes)?.encode()
+/// Decode (outer result), then re-encode (inner result). A negative row is judged on the decoder alone, so that
+/// a rule the encoder happens to enforce as well cannot hide a decoder that accepts the row.
+fn again<T: Decode + Encode>(bytes: &[u8]) -> Decoded {
+    T::decode(bytes).map(|v| v.encode())
 }
+
+/// The decoder's verdict and, if it accepted, the re-encoding.
+type Decoded = Result<Result<Vec<u8>, Error>, Error>;
 
 /// The D.2 name of an opcode in a direction table.
 fn name_of(table: &[(u8, &'static str)], op: u8) -> &'static str {
@@ -53,16 +57,16 @@ fn name_of(table: &[(u8, &'static str)], op: u8) -> &'static str {
         .map_or("?", |(_, n)| *n)
 }
 
-/// The outcome of decoding and re-encoding one row: the re-encoding (or the error) and, for a frame, the D.2
-/// name of the decoded command.
-type Outcome = (Result<Vec<u8>, Error>, Option<&'static str>);
+/// The outcome of one row: the decoder's verdict with the re-encoding, and for a frame the D.2 name of the
+/// decoded command.
+type Outcome = (Decoded, Option<&'static str>);
 
 /// `structure` decoded from `bytes` and encoded again. `None`: no decoder for this structure name (a test error,
 /// never counted as a rejection).
 fn decode_encode(structure: &str, context: Option<&str>, bytes: &[u8]) -> Option<Outcome> {
     if structure.starts_with("Request/") {
         return Some(match Request::decode(bytes) {
-            Ok(r) => (r.encode(), Some(name_of(&opcode::REQUESTS, r.cmd.op()))),
+            Ok(r) => (Ok(r.encode()), Some(name_of(&opcode::REQUESTS, r.cmd.op()))),
             Err(e) => (Err(e), None),
         });
     }
@@ -73,7 +77,10 @@ fn decode_encode(structure: &str, context: Option<&str>, bytes: &[u8]) -> Option
             _ => CellrContext::Fetch,
         };
         return Some(match Response::decode(bytes, ctx) {
-            Ok(r) => (r.encode(), Some(name_of(&opcode::RESPONSES, r.cmd.op()))),
+            Ok(r) => (
+                Ok(r.encode()),
+                Some(name_of(&opcode::RESPONSES, r.cmd.op())),
+            ),
             Err(e) => (Err(e), None),
         });
     }
@@ -146,7 +153,11 @@ fn every_row_of_the_encodings_file() {
             let bytes = unhex(text(at(case, "outputs"), "bytes"));
             let (again, name) =
                 decode_encode(structure, context, &bytes).expect("a decoder for every structure");
-            assert_eq!(again.as_deref(), Ok(&bytes[..]), "{id} {structure}");
+            assert_eq!(
+                again.map(Result::ok),
+                Ok(Some(bytes.clone())),
+                "{id} {structure}: decodes and re-encodes to exactly its bytes"
+            );
             if let Some(name) = name {
                 assert_eq!(
                     Some(name),
@@ -160,10 +171,11 @@ fn every_row_of_the_encodings_file() {
             let bytes = unhex(text(inputs, "bytes"));
             let (again, _) =
                 decode_encode(structure, context, &bytes).expect("a decoder for every structure");
+            // the decoder itself must reject (not merely the re-encoding)
             assert_eq!(
                 again.err(),
                 Some(Error::Rejected),
-                "{id} {structure} must be rejected"
+                "{id} {structure} must be rejected by the decoder"
             );
             negatives = negatives.saturating_add(1);
         }

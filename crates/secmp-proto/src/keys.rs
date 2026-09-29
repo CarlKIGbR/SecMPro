@@ -303,6 +303,7 @@ mod tests {
         overwrite(&mut bytes, &sk.sign(b"m"));
         let sig = HybridSig::decode(&bytes)?;
         assert_eq!(sig.encode()?, bytes);
+        assert_eq!(sig.as_bytes().as_slice(), bytes.as_slice());
         assert_eq!(format!("{sig:?}"), "HybridSig(..)");
         // an arbitrary (never sigDecoded) ML-DSA half is kept; a bad Ed25519 R is refused
         overwrite(&mut bytes, &[0; 32]);

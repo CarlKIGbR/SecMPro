@@ -168,4 +168,72 @@ mod tests {
         }
         Ok(())
     }
+
+    /// The full messages, field by field in D.2 order (spec §9.2, D.6), with distinct field values.
+    #[test]
+    fn exact_contents() -> Result<()> {
+        let sess = [0x11_u8; 16];
+        let seq = 0x0102_0304_u32.to_be_bytes();
+        let id = [0x22_u8; 16];
+        let (recv, send_pk) = (ed25519(3)?, ed25519(4)?);
+        let cell = Cell::from_bytes(&[0x33; CELL_LEN])?;
+        let blob = LinkBlob::from_parts(&[0x44; 24], &[0x55; COM_LEN + LINK_BLOB_CT_LEN])?;
+        let ack = 0x0a0b_0c0d_0e0f_1011_u64.to_be_bytes();
+        let cat = |parts: &[&[u8]]| parts.concat();
+        assert_eq!(
+            queue_new(&sess, 0x0102_0304, &recv, &send_pk, &[0x66; 32]),
+            cat(&[
+                b"SecMP-Q/1 QUEUE_NEW",
+                &sess,
+                &seq,
+                recv.as_bytes(),
+                send_pk.as_bytes(),
+                &[0x66; 32]
+            ])
+        );
+        assert_eq!(
+            send(&sess, 0x0102_0304, &id, &cell),
+            cat(&[b"SecMP-Q/1 SEND", &sess, &seq, &id, cell.as_bytes()])
+        );
+        assert_eq!(
+            fetch(&sess, 0x0102_0304, &id, 0x0a0b_0c0d_0e0f_1011),
+            cat(&[b"SecMP-Q/1 FETCH", &sess, &seq, &id, &ack])
+        );
+        assert_eq!(
+            fetch_multi_entry(&sess, 0x0102_0304, &id, 0x0a0b_0c0d_0e0f_1011),
+            cat(&[b"SecMP-Q/1 MFETCH", &sess, &seq, &id, &ack])
+        );
+        assert_eq!(
+            queue_del(&sess, 0x0102_0304, &id),
+            cat(&[b"SecMP-Q/1 QUEUE_DEL", &sess, &seq, &id])
+        );
+        for one_time in [false, true] {
+            let fields = LinkPutFields {
+                ld_id: &id,
+                one_time,
+                expires_bucket: 0x0708_090a,
+                owner_pk: &recv,
+                token: &[0x77; 32],
+            };
+            assert_eq!(
+                link_put(&sess, 0x0102_0304, &fields, &blob)?,
+                cat(&[
+                    b"SecMP-Q/1 LINK_PUT",
+                    &sess,
+                    &seq,
+                    &id,
+                    &[u8::from(one_time)],
+                    &[7, 8, 9, 10],
+                    recv.as_bytes(),
+                    &[0x77; 32],
+                    &secmp_crypto::sha256(&[&blob.encode()?])
+                ])
+            );
+        }
+        assert_eq!(
+            link_get_owner_status(&sess, 0x0102_0304, &id),
+            cat(&[b"SecMP-Q/1 LINK_GET", &sess, &seq, &id, &[1]])
+        );
+        Ok(())
+    }
 }

@@ -806,6 +806,10 @@ mod tests {
             ),
             (24, 2330, 1710, 32)
         );
+        // the parts are the consecutive slices of the 4096 bytes
+        let joined = [p.hdr_nonce, p.hdr_ct, p.body_ct, p.tag].concat();
+        assert_eq!(joined, bytes);
+        assert_eq!(cell.as_bytes().as_slice(), bytes.as_slice());
         assert_eq!(round_trip(&cell)?, bytes);
         exact_fit::<Cell>(&bytes);
         Ok(())
@@ -1073,6 +1077,47 @@ mod tests {
             msg_ids: vec![[1; 16]],
         });
         exact_fit::<FragmentPayload>(&round_trip_bytes(&receipt)?);
+        // every accepted inner type decodes to its own variant (first byte = inner_type)
+        let others = [
+            (
+                content_type::BATCH,
+                FragmentPayload::Batch(BatchBody {
+                    messages: vec![message(AppKind::Text, 1_800)],
+                }),
+            ),
+            (
+                content_type::ROUTE_UPDATE,
+                FragmentPayload::RouteUpdate(RouteUpdateBody {
+                    routes: vec![RouteDescriptor::RelayQueue(relay_queue(
+                        false,
+                        Period::S20,
+                    )?)],
+                }),
+            ),
+            (
+                content_type::CONTROL,
+                FragmentPayload::Control(ControlBody {
+                    code: ControlCode::ContactRemoved,
+                    arg: vec![5; 2_000],
+                }),
+            ),
+        ];
+        for (t, payload) in others {
+            let bytes = round_trip_bytes(&payload)?;
+            assert_eq!(bytes.first(), Some(&t));
+            exact_fit::<FragmentPayload>(&bytes);
+            let back = FragmentPayload::decode(&bytes)?;
+            let same_variant = matches!(
+                (&payload, &back),
+                (FragmentPayload::Batch(_), FragmentPayload::Batch(_))
+                    | (
+                        FragmentPayload::RouteUpdate(_),
+                        FragmentPayload::RouteUpdate(_)
+                    )
+                    | (FragmentPayload::Control(_), FragmentPayload::Control(_))
+            );
+            assert!(same_variant, "{t}");
+        }
         for t in [0x00_u8, 0x01, 0x03, 0x08] {
             assert!(FragmentPayload::decode(&[t, 1, 1]).is_err(), "{t}");
         }

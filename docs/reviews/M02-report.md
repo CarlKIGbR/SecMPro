@@ -308,6 +308,20 @@ C.7: the macOS run-1 `caead_open_reject_samekey` FAIL (per-class sources) is con
 passes 3/3 in the macOS A/A runs and 3/3 with the fixed harness on macOS. No second harness defect that can be
 named with a diff line was found, so nothing else was changed.
 
+**Verdict-statistic experiment (WEISUNG M2-3 D; report only, evidence for the reviewer's ADR proposal).**
+`M02-evidence/ct-verdict/README.md` (method, per-run tables, findings) and the nine reports. Throwaway refs
+`diag/ct-verdict` `303a784` (report extension: per-crop class means, Δ in ticks and quanta, pooled sd, n per class;
+t1/t2 for every target; an inline A/A pass) and `diag/ct-verdict-fvr` `96f869a` (the same, fixed-vs-random arm);
+not merged. The default targets already are fixed-vs-fixed (two constant inputs through `blend`), so the extra
+Linux arm is fixed-vs-random. Runs: default Linux 36612364236, 36613373270, 36614037720 (3/3 FAIL); fixed-vs-random
+Linux 36612369405, 36613376947, 36614043000 (3/3 FAIL); default macOS local 3/3 FAIL. Findings: the inline A/A
+control stays ≤ 2.69 in all 72 target measurements; contents-only differences fail in both arms on every platform;
+within a process 22 of 33 excursions above 10 reproduce with the same sign at the same crop (3 flip, 8 fall below
+4.5), across runs they do not; the shifts are 0.005 … 0.32 of the effective quantum on the Linux lattice runners
+(0.05 … 3.2 ns) and 0.4 … 4.5 ns per batch on macOS; on 5 of 6 Linux runs the reported resolution (1 tick)
+understates the effective quantum (samples on a ≈ 24.5-tick lattice, ≈ 10 ns). Thresholds, samples, control and
+verdict unchanged.
+
 Decisions of WEISUNG M2-1 (2026-09-29), applied:
 
 - Q-1 (F8 margin): **10 %** — `k = ceil(110 · quantum / median)`, realised count recorded, < 80 quanta →

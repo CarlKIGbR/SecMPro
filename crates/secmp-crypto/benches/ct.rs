@@ -825,6 +825,46 @@ impl Outcome {
 }
 
 // ---- targets --------------------------------------------------------------------------------------------------
+//
+// Input preparation (M2 finding, WEISUNG M2-2 C): every measured input is built from **one common source per
+// target** — `base ^ (delta & mask)`, `base` the class-1 input, `delta` = class 0 XOR class 1, `mask` all-ones
+// for class 0 and zero for class 1, computed without a branch — so that preparing an input reads and writes the
+// same memory for both classes and the classes differ only in the contents of the fresh copy. Before, `prepare`
+// copied each input from a per-class source buffer (`inputs[c]`, `&sealed` vs `&tampered`, `&at_100` vs
+// `&at_300`, `&other` vs `&k`), right before the timed window: the class-dependent source address left a
+// class-dependent cache footprint at the start of every timed call. An A/A′ control (identical contents, the
+// class-1 source only moved to its own allocation) failed with it on GitHub-hosted Linux (`msg_open_reject`
+// 13.0, `caead_open_reject` 50.1, run 36569831144), while the A/A control (one source for both labels) passed in
+// every run — the M1 review F7 rule ("the classes may differ only in their contents, never in where the inputs
+// live") applied one step earlier, to the sources the fresh copies are made from.
+
+/// `out = base ^ (delta & mask)`: `base` for class 1, `base ^ delta` for class 0. Reads `base` and `delta` in full
+/// for both classes; the mask is `0x00`/`0xff` from the class without a branch.
+fn blend(base: &[u8], delta: &[u8], class: usize, out: &mut [u8]) {
+    let mask = u8::from(class == 0).wrapping_neg();
+    for ((o, b), d) in out.iter_mut().zip(base).zip(delta) {
+        *o = b ^ (d & mask);
+    }
+}
+
+/// `a ^ b`, bytewise (the `delta` of `blend`).
+fn xor(a: &[u8], b: &[u8]) -> Vec<u8> {
+    a.iter().zip(b).map(|(x, y)| x ^ y).collect()
+}
+
+/// A fresh `Vec` input of class `class` (see `blend`).
+fn blended_vec(base: &[u8], delta: &[u8], class: usize) -> Vec<u8> {
+    let mut v = vec![0_u8; base.len()];
+    blend(base, delta, class, &mut v);
+    v
+}
+
+/// A fresh 32-byte key of class `class` (see `blend`), built on the stack and copied into a `SecretBytes`.
+fn blended_key(base: &[u8; 32], delta: &[u8], class: usize) -> Option<SecretBytes<32>> {
+    let mut key = [0_u8; 32];
+    blend(base, delta, class, &mut key);
+    SecretBytes::from_slice(&key).ok()
+}
 
 /// Batched 32-byte tag comparisons: class 0 differs in byte 0, class 1 in byte 31.
 fn tag_compare(n: usize, k: usize, stream: &mut Stream, variable_time: bool) -> Samples {
@@ -834,12 +874,16 @@ fn tag_compare(n: usize, k: usize, stream: &mut Stream, variable_time: bool) -> 
     first[0] ^= 1;
     let mut last = expected;
     last[31] ^= 1;
-    let inputs = [first, last];
+    let delta = xor(&first, &last);
     measure(
         n,
         k,
         stream,
-        |c, _| inputs.get(c).copied().unwrap_or(first),
+        |c, _| {
+            let mut tag = [0_u8; 32];
+            blend(&last, &delta, c, &mut tag);
+            tag
+        },
         |tag| {
             for _ in 0..256 {
                 let eq = if variable_time {
@@ -880,13 +924,13 @@ fn msg_open_reject(
     if let Some(b) = last.last_mut() {
         *b ^= 1;
     }
-    let inputs = [first, last];
+    let delta = xor(&first, &last);
     let key = SecretBytes::<32>::from_slice(&mk)?;
     Ok(measure(
         n,
         k,
         stream,
-        |c, _| inputs.get(c).cloned().unwrap_or_default(),
+        |c, _| blended_vec(&last, &delta, c),
         |ct| {
             black_box(MsgEncrypt::open(&key, &ad, black_box(ct)).is_ok());
         },
@@ -917,17 +961,17 @@ fn caead_open_reject(
         *b ^= 1;
     }
     // class 0: wrong key (COM and tag fail); class 1: right key, tampered ciphertext (COM ok, tag fails)
+    let key_delta = xor(&other, &k);
+    let ct_delta = xor(&sealed, &tampered);
     Ok(measure(
         n,
         batch,
         stream,
         |c, _| {
-            let (key, ct) = if c == 0 {
-                (&other, &sealed)
-            } else {
-                (&k, &tampered)
-            };
-            (SecretBytes::<32>::from_slice(key).ok(), ct.clone())
+            (
+                blended_key(&k, &key_delta, c),
+                blended_vec(&tampered, &ct_delta, c),
+            )
         },
         |(key, ct)| {
             if let Some(key) = key {
@@ -989,11 +1033,12 @@ impl CaeadInputs {
 /// `derive` alone: class 0 wrong key, class 1 right key.
 fn caead_derive(n: usize, k: usize, stream: &mut Stream) -> Result<Samples, secmp_crypto::Error> {
     let io = CaeadInputs::new(stream)?;
+    let key_delta = xor(&io.other, &io.k);
     Ok(measure(
         n,
         k,
         stream,
-        |c, _| SecretBytes::<32>::from_slice(if c == 0 { &io.other } else { &io.k }).ok(),
+        |c, _| blended_key(&io.k, &key_delta, c),
         |key| {
             if let Some(key) = key {
                 // the inner `black_box` materialises the derived key and `COM`
@@ -1013,6 +1058,7 @@ fn caead_aead_reject(
     let io = CaeadInputs::new(stream)?;
     let (k_enc_other, _) = io.derived(&io.other)?;
     let (k_enc_k, _) = io.derived(&io.k)?;
+    let k_enc_delta = xor(&k_enc_other, &k_enc_k);
     let tampered = io.tampered(100);
     let c = tampered.get(COM_LEN..).unwrap_or_default();
     let (body, tag) = c.split_at(c.len().saturating_sub(AEAD_TAG_LEN));
@@ -1023,9 +1069,8 @@ fn caead_aead_reject(
         k,
         stream,
         |c, _| {
-            let k_enc = if c == 0 { &k_enc_other } else { &k_enc_k };
             (
-                SecretBytes::<32>::from_slice(k_enc).ok(),
+                blended_key(&k_enc_k, &k_enc_delta, c),
                 RefCell::new(body.to_vec()),
             )
         },
@@ -1051,6 +1096,7 @@ fn caead_com_compare(
     let io = CaeadInputs::new(stream)?;
     let (_, expected_other) = io.derived(&io.other)?;
     let (_, expected_k) = io.derived(&io.k)?;
+    let expected_delta = xor(&expected_other, &expected_k);
     let com: [u8; COM_LEN] = io
         .sealed
         .get(..COM_LEN)
@@ -1060,7 +1106,11 @@ fn caead_com_compare(
         n,
         k,
         stream,
-        |c, _| (if c == 0 { expected_other } else { expected_k }, com),
+        |c, _| {
+            let mut expected = [0_u8; COM_LEN];
+            blend(&expected_k, &expected_delta, c, &mut expected);
+            (expected, com)
+        },
         |(expected, com)| {
             for _ in 0..256 {
                 black_box(black_box(*expected).ct_eq(black_box(com)));
@@ -1079,13 +1129,16 @@ fn caead_open_reject_samekey(
     let io = CaeadInputs::new(stream)?;
     let at_100 = io.tampered(100);
     let at_300 = io.tampered(300);
+    let ct_delta = xor(&at_100, &at_300);
     Ok(measure(
         n,
         k,
         stream,
         |c, _| {
-            let ct = if c == 0 { &at_100 } else { &at_300 };
-            (SecretBytes::<32>::from_slice(&io.k).ok(), ct.clone())
+            (
+                SecretBytes::<32>::from_slice(&io.k).ok(),
+                blended_vec(&at_300, &ct_delta, c),
+            )
         },
         |(key, ct)| {
             if let Some(key) = key {
@@ -1095,38 +1148,36 @@ fn caead_open_reject_samekey(
     ))
 }
 
-fn sas(n: usize, k: usize, stream: &mut Stream) -> Result<Samples, secmp_crypto::Error> {
-    let mut fixed = [[0_u8; 32]; 2];
-    stream.fill(&mut fixed[0]);
-    stream.fill(&mut fixed[1]);
+/// Class 0: a fixed pair of fingerprints; class 1: random pairs. Both classes read the fixed pair and the next
+/// random pair and select with `blend` (the selection is the only class-dependent step).
+fn sas(n: usize, k: usize, stream: &mut Stream) -> Samples {
+    let mut fixed = [0_u8; 64];
+    stream.fill(&mut fixed);
     let mut random = vec![[0_u8; 64]; n.saturating_mul(k)];
     for r in &mut random {
         stream.fill(r);
     }
-    let fixed_a = Fingerprint::from_bytes(&fixed[0])?;
-    let fixed_b = Fingerprint::from_bytes(&fixed[1])?;
-    let random: Vec<(Fingerprint, Fingerprint)> = random
-        .iter()
-        .map(|r| {
-            let (a, b) = r.split_at(32);
-            Ok((Fingerprint::from_bytes(a)?, Fingerprint::from_bytes(b)?))
-        })
-        .collect::<Result<_, secmp_crypto::Error>>()?;
-    Ok(measure(
+    measure(
         n,
         k,
         stream,
         |c, i| {
-            if c == 0 {
-                (fixed_a, fixed_b)
-            } else {
-                random.get(i).copied().unwrap_or((fixed_a, fixed_b))
+            let random_pair = random.get(i).copied().unwrap_or(fixed);
+            // base = the random pair (class 1), delta = fixed XOR random (class 0 gets the fixed pair)
+            let delta = xor(&fixed, &random_pair);
+            let mut pair = [0_u8; 64];
+            blend(&random_pair, &delta, c, &mut pair);
+            let (first, second) = pair.split_at(32);
+            Fingerprint::from_bytes(first)
+                .ok()
+                .zip(Fingerprint::from_bytes(second).ok())
+        },
+        |pair| {
+            if let Some((first, second)) = pair {
+                black_box(SafetyNumber::new(black_box(first), black_box(second)));
             }
         },
-        |(a, b)| {
-            black_box(SafetyNumber::new(black_box(a), black_box(b)));
-        },
-    ))
+    )
 }
 
 fn run(rules: Rules) -> Result<(Clock, Vec<Outcome>), secmp_crypto::Error> {
@@ -1176,7 +1227,7 @@ fn run(rules: Rules) -> Result<(Clock, Vec<Outcome>), secmp_crypto::Error> {
             classes: ["fixed fingerprint pair", "random fingerprint pairs"],
             samples: n_sas,
             control: false,
-            run: sas,
+            run: |n, k, s| Ok(sas(n, k, s)),
         },
         Target {
             name: "caead_derive",

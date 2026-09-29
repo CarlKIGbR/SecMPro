@@ -249,6 +249,7 @@ Amended 2026-09-29 (reviewer, external review EXT-2): Rust and `ref/` agree *str
 **Consequences.** `benches/ct.rs` gains the timer helper and the verdict logic; `xtask` `ct` gate prints the two-tier result; `docs/06` §4 "Constant time" row references this ADR; M1 acceptance "constant-time test shows no leak" is evidenced by a PASS under this rule on the final commit, and the M1 review records the two real defects the gate found. The ADR does not change what constant-time means for the code: the rules of `docs/06` §9 and `CLAUDE.md` §1 stand.
 **Status.** Accepted (owner, 2026-09-29; "ich folge deiner Empfehlung"); (3) amended by the reviewer on 2026-09-29 (batching) under the owner's delegation of the same day; implemented in `0d2c6e8`, the commit named in `docs/reviews/M01-review.md` §G.
 Amended 2026-09-29 (reviewer, M1 review F8): the calibration runs a warm-up first and derives `k` from the median of a batch of calibration measurements with a 10 % margin (`k = ceil(110·quantum/median)`); the realised tick count is recorded in the report and is informative (< 80 ticks → NOT_MEASURABLE) (the median is the smaller of the two class medians, so the resolution rule holds for each class).
+Amended 2026-09-29 (M2, M1 review F9): input preparation reads and writes the same memory for both classes (`base ^ (delta & mask)` from one common source per target, `f7b3066`); an A/A′ control (identical contents, class-1 source in its own allocation) is the test for this class of artefact.
 
 ---
 

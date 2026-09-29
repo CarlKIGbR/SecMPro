@@ -336,10 +336,14 @@ Open questions:
   artefact is removed, with the pattern of findings 3–4 above. Is this a property of the fixed-vs-fixed statistic at
   10⁶ samples on these runners, to be decided under ADR-038, or does the reviewer want a further isolation step?
   Every PR run's `linux-full` will fail at step `ct` until then (PR run 36564976761: only `ct` failed).
+  WEISUNG M2-3: `f7b3066` stands (F9, ADR-038 amendment); the residual contents-only failures go to an ADR proposal
+  on the verdict statistic (owner decision); this session supplies the evidence (report-only experiment on
+  `diag/ct-verdict`, §8 "Verdict-statistic experiment"). PR #3 stays a draft until then.
 - Q-5 (vectors): `cargo xtask vectors` cross-generates the 85 positive rows (all agree); the 547 negative rows are
   the reference file's manipulations, checked by rejection (every one rejected by the Rust decoders, run before the
   freeze). Is a Rust-side regeneration of the negative rows wanted as well (a second implementation of the
-  SCHEMA-4.8 manipulations)?
+  SCHEMA-4.8 manipulations)? **Answered (WEISUNG M2-3): no.** The 547 negative rows are reference-defined
+  mutations; the Rust side proves rejection, which is the acceptance criterion (`docs/07` M2).
 - Q-6 (Kani design and bounds): the harnesses replace the `secmp-crypto` key checks by nondeterministic
   accept/reject stubs (the checks are covered by Wycheproof, KATs and the vectors) and, in the frame harnesses,
   `unpad` by an over-approximation (any proper prefix or reject); `unpad`/`pad` are proven on their own for every
@@ -347,6 +351,8 @@ Open questions:
   minutes). Further documented bounds (§5 (d)): no re-encoding property in the frame harnesses, requests split per
   opcode, `FETCH_MULTI` counts ≤ 8 and > 32. Acceptable, or should any of them run unbounded as a long,
   non-gating job? ci-full step 9 now runs 15 harnesses (≈ 7 min locally, sum of the verification times).
+  **Answered (WEISUNG M2-3): the documented Kani bounds are accepted** as written in §5 (d); no unbounded job now
+  (revisit at M11).
 - No App. D reading was unsettled in steps 1–12: every rule implemented is in rev 2.3, ADR-039, the SQ answers or
   the SCHEMA-4.8 contract, no row of the reference file disagreed with the decoders, and the Rust generator agreed
   with every positive row.

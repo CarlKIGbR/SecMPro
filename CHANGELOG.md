@@ -97,3 +97,10 @@ All notable changes to this project are documented in this file. The format foll
 - Constant-time harness (WEISUNG M2-2 C.6): both classes' inputs are built from one common source per target
   (branch-free blend), removing a class-dependent source-buffer artefact; a dispatch-only `linux-ct` CI job and
   per-class sample percentiles in the report support the diagnosis (`docs/reviews/M02-evidence/ct-diagnosis/`).
+- Constant-time gate verdict per ADR-041 (owner-accepted): FAIL only for a shift reproduced in two measurements at
+  the same crop and sign (|t| > 4.5) of at least one effective quantum — the lattice spacing of the samples,
+  measured from the data — with an inline A/A control per run (`CONTROL_FAIL` otherwise) and the positive control
+  detected; smaller reproduced shifts are reported as sub-quantum shifts; the immediate-FAIL tier of ADR-038 is
+  withdrawn (`CT_EFFECT_FLOOR_QUANTA`, `CT_AA_MAX_T` in `xtask/src/expect.rs`).
+- xtask: the `kani` gate runs `cargo kani --manifest-path` per harness package (so the package's Kani metadata,
+  e.g. stubbing, applies); the `mutants` gate leaves out code compiled only under Kani.

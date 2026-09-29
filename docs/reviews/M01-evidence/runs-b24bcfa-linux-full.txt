@@ -1,0 +1,126 @@
+Both linux-full jobs of commit b24bcfa (brief M1-6). Extracted verbatim from
+`gh run view <run> --log --job <linux-full job>` (full job log) and cross-checked against
+`gh run view <run> --log-failed`. Collected 2026-09-29; nothing re-run, nothing changed.
+
+====================================================================================================
+Run 36508749179 (push), linux-full job 109215991981
+====================================================================================================
+
+$ gh run view 36508749179 --json jobs --jq '.jobs[] | {name, conclusion, startedAt, completedAt}'
+{"completedAt":"2026-09-29T01:54:37Z","conclusion":"success","name":"linux-fast","startedAt":"2026-09-29T01:37:42Z"}
+{"completedAt":"2026-09-29T02:37:45Z","conclusion":"failure","name":"linux-full","startedAt":"2026-09-29T01:37:06Z"}
+{"completedAt":"2026-09-29T01:40:05Z","conclusion":"success","name":"xwin-cross","startedAt":"2026-09-29T01:37:06Z"}
+{"completedAt":"2026-09-29T01:56:48Z","conclusion":"success","name":"windows-native","startedAt":"2026-09-29T01:37:06Z"}
+
+(d) runner:
+linux-full	Set up job	2026-09-29T01:37:07.4695116Z Azure Region: eastus
+linux-full	Set up job	2026-09-29T01:37:07.4705498Z Image: ubuntu-24.04
+linux-full	Set up job	2026-09-29T01:37:07.4711551Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20260920.314
+
+(a) ci-full step verdicts (summary at the end of the job):
+linux-full	ci-full (steps 1–14)	2026-09-29T02:37:43.7561257Z    1 fmt             PASS          0s  rustfmt: no changes
+linux-full	ci-full (steps 1–14)	2026-09-29T02:37:43.7562414Z    2 clippy          PASS         27s  clippy --all-features -D warnings on x86_64-unknown-linux-gnu (12 crates)
+linux-full	ci-full (steps 1–14)	2026-09-29T02:37:43.7565319Z    2 policy          PASS          0s  unsafe-attrs: 20 target roots forbid, 2 sys library roots allow, 2 secmp-ui roots deny, 2 secmp-ui files without `unsafe`; lints-table: 12 manifests; lint-allows: 18 relaxing attributes (all sanctioned); build-scripts: 12 crates, none; spdx: 89 files; secmp-crypto/secmp-proto normal closure (x86_64-unknown-linux-gnu, x86_64-pc-windows-msvc, aarch64-apple-darwin): 52 external crates, 0 exempted; tracked exemptions elsewhere: 25; workflows: 1 files, triggers/SHA pins/continue-on-error ok
+linux-full	ci-full (steps 1–14)	2026-09-29T02:37:43.7568706Z    3 deny            PASS          0s  advisories, bans, licenses, sources: ok
+linux-full	ci-full (steps 1–14)	2026-09-29T02:37:43.7569853Z    3 vet             PASS          0s  secmp-crypto/secmp-proto normal closure (x86_64-unknown-linux-gnu, x86_64-pc-windows-msvc, aarch64-apple-darwin): 52 external crates, 0 exempted; tracked exemptions elsewhere: 25
+linux-full	ci-full (steps 1–14)	2026-09-29T02:37:43.7571143Z    3 audit           PASS          3s  RustSec: no advisories (warnings denied); ignored with an ADR: RUSTSEC-2026-0173
+linux-full	ci-full (steps 1–14)	2026-09-29T02:37:43.7572301Z    3 cooldown        PASS          4s  119 registry packages (Cargo.lock, fuzz/Cargo.lock), all ≥ 7 days old; youngest: rand 0.10.3, 8 days
+linux-full	ci-full (steps 1–14)	2026-09-29T02:37:43.7572949Z    4 nextest         PASS         41s  cargo nextest run --workspace
+linux-full	ci-full (steps 1–14)	2026-09-29T02:37:43.7573337Z    4 doctest         PASS          0s  cargo test --doc
+linux-full	ci-full (steps 1–14)	2026-09-29T02:37:43.7574396Z    4 hello           PASS          0s  secmp-relay 0.0.0 (M0 skeleton: no functionality) | secmp-cli 0.0.0 (M0 skeleton: no functionality) | secmp-ui 0.0.0 (M0 skeleton: no functionality)
+linux-full	ci-full (steps 1–14)	2026-09-29T02:37:43.7575576Z    5 kat             PASS        842s  KAT/differential packages: secmp-crypto, secmp-testkit (expected set matches); ML-KEM KATs and frozen vectors also with libcrux's portable backend
+linux-full	ci-full (steps 1–14)	2026-09-29T02:37:43.7577283Z    5 ct              FAIL         70s  constant-time test failed: control_variable_time_compare: max |t| = 48030.67 over 1000000 samples (control, must be detected) -> ok; tag_compare: max |t| = 2.54 over 1000000 samples -> ok; msg_open_reject: max |t| = 2.85 over 1000000 samples -> ok; caead_open_reject: max |t| = 5.87 over 1000000 samples -> FAIL; sas: max |t| = 0.91 over 20000 samples -> ok
+linux-full	ci-full (steps 1–14)	2026-09-29T02:37:43.7578960Z    6 fuzz            PASS        892s  fuzz smoke, 120 s per target: caead_open, ed25519_verify, hybrid_sign_verify, mldsa65_verify, mlkem_parse, msg_open, x25519_dh (expected set matches)
+linux-full	ci-full (steps 1–14)	2026-09-29T02:37:43.7580827Z    7 coverage        PASS         45s  secmp-cli: 5/6 lines = 83.3 % (min 80 %); secmp-client-core: no code; secmp-crypto: 1732/1740 lines = 99.5 % (min 90 %); secmp-proto: no code; secmp-relay: 5/6 lines = 83.3 % (min 80 %); secmp-store: no code; secmp-sys-desktop: no code; secmp-sys-mem: 234/246 lines = 95.1 % (min 80 %); secmp-testkit: 172/172 lines = 100.0 % (min 80 %); secmp-transport: no code; secmp-ui: 5/6 lines = 83.3 % (min 80 %) (xtask not measured)
+linux-full	ci-full (steps 1–14)	2026-09-29T02:37:43.7582693Z    8 mutants         PASS        539s  secmp-crypto, secmp-proto: 235 mutants tested in 9m: 1 missed, 148 caught, 86 unviable; survivors documented in docs/mutants-accepted.md: 1
+linux-full	ci-full (steps 1–14)	2026-09-29T02:37:43.7584219Z    9 miri            PASS       1126s  Miri (nightly-2026-09-21, interpreting aarch64-unknown-linux-gnu, libcrux portable backend): secmp-sys-mem, secmp-sys-desktop, secmp-crypto; skipped test modules: mldsa::, hybrid_sign::, sas::
+linux-full	ci-full (steps 1–14)	2026-09-29T02:37:43.7585285Z    9 kani            PASS          0s  Kani 0.68.0: harness packages none (expected set matches)
+linux-full	ci-full (steps 1–14)	2026-09-29T02:37:43.7585920Z   10 proverif        PASS          0s  ProVerif 2.05 self-test [true, false] ok; models: none (expected set matches)
+linux-full	ci-full (steps 1–14)	2026-09-29T02:37:43.7586730Z   11 windows-cross   DELEGATED     0s  handed to another CI job with --delegated
+linux-full	ci-full (steps 1–14)	2026-09-29T02:37:43.7587244Z   11 windows-native  DELEGATED     0s  handed to another CI job with --delegated
+linux-full	ci-full (steps 1–14)	2026-09-29T02:37:43.7587919Z   11 linux-target    PASS          0s  host is x86_64-unknown-linux-gnu: every step above ran natively
+linux-full	ci-full (steps 1–14)	2026-09-29T02:37:43.7588571Z  12a ref-vectors     PASS          0s  8 frozen suites (118 cases) structurally identical to vectors/ref (ADR-026)
+linux-full	ci-full (steps 1–14)	2026-09-29T02:37:43.7589267Z   12 repro           STUB          0s  two-builder reproducibility check becomes real in M11 (`cargo xtask repro-check`)
+linux-full	ci-full (steps 1–14)	2026-09-29T02:37:43.7590409Z   13 sbom            PASS          4s  12 CycloneDX SBOMs in target/sbom; auditable release builds (x86_64-unknown-linux-gnu, remapped paths) read back by `cargo audit bin`: target/release/secmp-relay, target/release/secmp-cli, target/release/secmp-ui
+linux-full	ci-full (steps 1–14)	2026-09-29T02:37:43.7591728Z   14 systemd         PASS          0s  systemd 255 (255.4-1ubuntu8.17); self-test: unhardened fixture 9.4 > 2 rejected; units: none (deploy/secmp-relay.service arrives in M10)
+linux-full	ci-full (steps 1–14)	2026-09-29T02:37:43.7592410Z xtask: error: ci-full: 1 step(s) failed
+
+(b) ct lines:
+linux-full	ci-full (steps 1–14)	2026-09-29T01:53:04.4842629Z === [5] ct ===
+linux-full	ci-full (steps 1–14)	2026-09-29T01:53:04.4843630Z $ /home/runner/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/cargo bench --locked --package secmp-crypto --features kat --bench ct
+linux-full	ci-full (steps 1–14)	2026-09-29T01:54:14.9333960Z FAIL [5] ct: constant-time test failed: control_variable_time_compare: max |t| = 48030.67 over 1000000 samples (control, must be detected) -> ok; tag_compare: max |t| = 2.54 over 1000000 samples -> ok; msg_open_reject: max |t| = 2.85 over 1000000 samples -> ok; caead_open_reject: max |t| = 5.87 over 1000000 samples -> FAIL; sas: max |t| = 0.91 over 20000 samples -> ok
+linux-full	ci-full (steps 1–14)	2026-09-29T01:54:14.9336363Z   ct control_variable_time_compare: max |t| = 48030.67 over 1000000 samples (control, must be detected) -> ok
+linux-full	ci-full (steps 1–14)	2026-09-29T01:54:14.9337041Z   ct tag_compare: max |t| = 2.54 over 1000000 samples -> ok
+linux-full	ci-full (steps 1–14)	2026-09-29T01:54:14.9337505Z   ct msg_open_reject: max |t| = 2.85 over 1000000 samples -> ok
+linux-full	ci-full (steps 1–14)	2026-09-29T01:54:14.9337993Z   ct caead_open_reject: max |t| = 5.87 over 1000000 samples -> FAIL
+linux-full	ci-full (steps 1–14)	2026-09-29T01:54:14.9338440Z   ct sas: max |t| = 0.91 over 20000 samples -> ok
+linux-full	ci-full (steps 1–14)	2026-09-29T01:54:14.9345080Z   ct report: {"threshold":4.5,"results":[{"name":"control_variable_time_compare","samples":1000000,"control":true,"max_abs_t":48030.672,"passed":true,"t":{"raw":-2527.908,"p50":-38334.233,"p75":-48030.672,"p90":-47399.102,"p95":-24232.182,"p99":-17154.388}},{"name":"tag_compare","samples":1000000,"control":false,"max_abs_t":2.541,"passed":true,"t":{"raw":-0.859,"p50":-2.541,"p75":-1.783,"p90":-1.309,"p95":-1.309,"p99":-0.950}},{"name":"msg_open_reject","samples":1000000,"control":false,"max_abs_t":2.851,"passed":true,"t":{"raw":-0.110,"p50":-2.412,"p75":-2.507,"p90":-2.507,"p95":-2.851,"p99":-1.513}},{"name":"caead_open_reject","samples":1000000,"control":false,"max_abs_t":5.865,"passed":false,"t":{"raw":-0.969,"p50":-5.362,"p75":-0.897,"p90":-5.136,"p95":-5.865,"p99":-5.275}},{"name":"sas","samples":20000,"control":false,"max_abs_t":0.907,"passed":true,"t":{"raw":-0.706,"p50":-0.907,"p75":-0.681,"p90":-0.490,"p95":-0.536,"p99":-0.490}}]}
+linux-full	ci-full (steps 1–14)	2026-09-29T02:37:43.7577283Z    5 ct              FAIL         70s  constant-time test failed: control_variable_time_compare: max |t| = 48030.67 over 1000000 samples (control, must be detected) -> ok; tag_compare: max |t| = 2.54 over 1000000 samples -> ok; msg_open_reject: max |t| = 2.85 over 1000000 samples -> ok; caead_open_reject: max |t| = 5.87 over 1000000 samples -> FAIL; sas: max |t| = 0.91 over 20000 samples -> ok
+
+(c) failing gate: its message and the lines before it (from the step header to the bail! line):
+linux-full	ci-full (steps 1–14)	2026-09-29T01:53:04.4842629Z === [5] ct ===
+linux-full	ci-full (steps 1–14)	2026-09-29T01:53:04.4843630Z $ /home/runner/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/cargo bench --locked --package secmp-crypto --features kat --bench ct
+linux-full	ci-full (steps 1–14)	2026-09-29T01:54:14.9333960Z FAIL [5] ct: constant-time test failed: control_variable_time_compare: max |t| = 48030.67 over 1000000 samples (control, must be detected) -> ok; tag_compare: max |t| = 2.54 over 1000000 samples -> ok; msg_open_reject: max |t| = 2.85 over 1000000 samples -> ok; caead_open_reject: max |t| = 5.87 over 1000000 samples -> FAIL; sas: max |t| = 0.91 over 20000 samples -> ok
+(--log-failed contains the FAIL line and the caead_open_reject line: 2 matching lines)
+
+====================================================================================================
+Run 36508752054 (pull_request (PR #2)), linux-full job 109216001196
+====================================================================================================
+
+$ gh run view 36508752054 --json jobs --jq '.jobs[] | {name, conclusion, startedAt, completedAt}'
+{"completedAt":"2026-09-29T02:37:33Z","conclusion":"failure","name":"linux-full","startedAt":"2026-09-29T01:37:14Z"}
+{"completedAt":"2026-09-29T01:50:35Z","conclusion":"success","name":"linux-fast","startedAt":"2026-09-29T01:37:09Z"}
+{"completedAt":"2026-09-29T01:49:10Z","conclusion":"success","name":"windows-native","startedAt":"2026-09-29T01:37:09Z"}
+{"completedAt":"2026-09-29T01:39:37Z","conclusion":"success","name":"xwin-cross","startedAt":"2026-09-29T01:37:09Z"}
+
+(d) runner:
+linux-full	Set up job	2026-09-29T01:37:15.6668585Z Azure Region: westus
+linux-full	Set up job	2026-09-29T01:37:15.6674460Z Image: ubuntu-24.04
+linux-full	Set up job	2026-09-29T01:37:15.6678220Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20260920.314
+
+(a) ci-full step verdicts (summary at the end of the job):
+linux-full	ci-full (steps 1–14)	2026-09-29T02:37:29.6786216Z    1 fmt             PASS          0s  rustfmt: no changes
+linux-full	ci-full (steps 1–14)	2026-09-29T02:37:29.6787191Z    2 clippy          PASS         26s  clippy --all-features -D warnings on x86_64-unknown-linux-gnu (12 crates)
+linux-full	ci-full (steps 1–14)	2026-09-29T02:37:29.6789888Z    2 policy          PASS          0s  unsafe-attrs: 20 target roots forbid, 2 sys library roots allow, 2 secmp-ui roots deny, 2 secmp-ui files without `unsafe`; lints-table: 12 manifests; lint-allows: 18 relaxing attributes (all sanctioned); build-scripts: 12 crates, none; spdx: 89 files; secmp-crypto/secmp-proto normal closure (x86_64-unknown-linux-gnu, x86_64-pc-windows-msvc, aarch64-apple-darwin): 52 external crates, 0 exempted; tracked exemptions elsewhere: 25; workflows: 1 files, triggers/SHA pins/continue-on-error ok
+linux-full	ci-full (steps 1–14)	2026-09-29T02:37:29.6793625Z    3 deny            PASS          0s  advisories, bans, licenses, sources: ok
+linux-full	ci-full (steps 1–14)	2026-09-29T02:37:29.6795499Z    3 vet             PASS          0s  secmp-crypto/secmp-proto normal closure (x86_64-unknown-linux-gnu, x86_64-pc-windows-msvc, aarch64-apple-darwin): 52 external crates, 0 exempted; tracked exemptions elsewhere: 25
+linux-full	ci-full (steps 1–14)	2026-09-29T02:37:29.6796794Z    3 audit           PASS          4s  RustSec: no advisories (warnings denied); ignored with an ADR: RUSTSEC-2026-0173
+linux-full	ci-full (steps 1–14)	2026-09-29T02:37:29.6798014Z    3 cooldown        PASS          4s  119 registry packages (Cargo.lock, fuzz/Cargo.lock), all ≥ 7 days old; youngest: rand 0.10.3, 8 days
+linux-full	ci-full (steps 1–14)	2026-09-29T02:37:29.6798789Z    4 nextest         PASS         40s  cargo nextest run --workspace
+linux-full	ci-full (steps 1–14)	2026-09-29T02:37:29.6799239Z    4 doctest         PASS          0s  cargo test --doc
+linux-full	ci-full (steps 1–14)	2026-09-29T02:37:29.6800120Z    4 hello           PASS          0s  secmp-relay 0.0.0 (M0 skeleton: no functionality) | secmp-cli 0.0.0 (M0 skeleton: no functionality) | secmp-ui 0.0.0 (M0 skeleton: no functionality)
+linux-full	ci-full (steps 1–14)	2026-09-29T02:37:29.6801719Z    5 kat             PASS        850s  KAT/differential packages: secmp-crypto, secmp-testkit (expected set matches); ML-KEM KATs and frozen vectors also with libcrux's portable backend
+linux-full	ci-full (steps 1–14)	2026-09-29T02:37:29.6803507Z    5 ct              FAIL         69s  constant-time test failed: control_variable_time_compare: max |t| = 30762.97 over 1000000 samples (control, must be detected) -> ok; tag_compare: max |t| = 1.02 over 1000000 samples -> ok; msg_open_reject: max |t| = 1.69 over 1000000 samples -> ok; caead_open_reject: max |t| = 11.06 over 1000000 samples -> FAIL; sas: max |t| = 1.01 over 20000 samples -> ok
+linux-full	ci-full (steps 1–14)	2026-09-29T02:37:29.6805342Z    6 fuzz            PASS        891s  fuzz smoke, 120 s per target: caead_open, ed25519_verify, hybrid_sign_verify, mldsa65_verify, mlkem_parse, msg_open, x25519_dh (expected set matches)
+linux-full	ci-full (steps 1–14)	2026-09-29T02:37:29.6807240Z    7 coverage        PASS         44s  secmp-cli: 5/6 lines = 83.3 % (min 80 %); secmp-client-core: no code; secmp-crypto: 1732/1740 lines = 99.5 % (min 90 %); secmp-proto: no code; secmp-relay: 5/6 lines = 83.3 % (min 80 %); secmp-store: no code; secmp-sys-desktop: no code; secmp-sys-mem: 234/246 lines = 95.1 % (min 80 %); secmp-testkit: 172/172 lines = 100.0 % (min 80 %); secmp-transport: no code; secmp-ui: 5/6 lines = 83.3 % (min 80 %) (xtask not measured)
+linux-full	ci-full (steps 1–14)	2026-09-29T02:37:29.6809281Z    8 mutants         PASS        532s  secmp-crypto, secmp-proto: 235 mutants tested in 9m: 1 missed, 148 caught, 86 unviable; survivors documented in docs/mutants-accepted.md: 1
+linux-full	ci-full (steps 1–14)	2026-09-29T02:37:29.6810601Z    9 miri            PASS       1103s  Miri (nightly-2026-09-21, interpreting aarch64-unknown-linux-gnu, libcrux portable backend): secmp-sys-mem, secmp-sys-desktop, secmp-crypto; skipped test modules: mldsa::, hybrid_sign::, sas::
+linux-full	ci-full (steps 1–14)	2026-09-29T02:37:29.6811601Z    9 kani            PASS          0s  Kani 0.68.0: harness packages none (expected set matches)
+linux-full	ci-full (steps 1–14)	2026-09-29T02:37:29.6812200Z   10 proverif        PASS          0s  ProVerif 2.05 self-test [true, false] ok; models: none (expected set matches)
+linux-full	ci-full (steps 1–14)	2026-09-29T02:37:29.6812792Z   11 windows-cross   DELEGATED     0s  handed to another CI job with --delegated
+linux-full	ci-full (steps 1–14)	2026-09-29T02:37:29.6813300Z   11 windows-native  DELEGATED     0s  handed to another CI job with --delegated
+linux-full	ci-full (steps 1–14)	2026-09-29T02:37:29.6813845Z   11 linux-target    PASS          0s  host is x86_64-unknown-linux-gnu: every step above ran natively
+linux-full	ci-full (steps 1–14)	2026-09-29T02:37:29.6814481Z  12a ref-vectors     PASS          0s  8 frozen suites (118 cases) structurally identical to vectors/ref (ADR-026)
+linux-full	ci-full (steps 1–14)	2026-09-29T02:37:29.6815419Z   12 repro           STUB          0s  two-builder reproducibility check becomes real in M11 (`cargo xtask repro-check`)
+linux-full	ci-full (steps 1–14)	2026-09-29T02:37:29.6816648Z   13 sbom            PASS          5s  12 CycloneDX SBOMs in target/sbom; auditable release builds (x86_64-unknown-linux-gnu, remapped paths) read back by `cargo audit bin`: target/release/secmp-relay, target/release/secmp-cli, target/release/secmp-ui
+linux-full	ci-full (steps 1–14)	2026-09-29T02:37:29.6818160Z   14 systemd         PASS          0s  systemd 255 (255.4-1ubuntu8.17); self-test: unhardened fixture 9.4 > 2 rejected; units: none (deploy/secmp-relay.service arrives in M10)
+linux-full	ci-full (steps 1–14)	2026-09-29T02:37:29.6792840Z xtask: error: ci-full: 1 step(s) failed
+
+(b) ct lines:
+linux-full	ci-full (steps 1–14)	2026-09-29T01:53:23.4847015Z === [5] ct ===
+linux-full	ci-full (steps 1–14)	2026-09-29T01:53:23.4847962Z $ /home/runner/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/cargo bench --locked --package secmp-crypto --features kat --bench ct
+linux-full	ci-full (steps 1–14)	2026-09-29T01:54:32.8126200Z FAIL [5] ct: constant-time test failed: control_variable_time_compare: max |t| = 30762.97 over 1000000 samples (control, must be detected) -> ok; tag_compare: max |t| = 1.02 over 1000000 samples -> ok; msg_open_reject: max |t| = 1.69 over 1000000 samples -> ok; caead_open_reject: max |t| = 11.06 over 1000000 samples -> FAIL; sas: max |t| = 1.01 over 20000 samples -> ok
+linux-full	ci-full (steps 1–14)	2026-09-29T01:54:32.8127976Z   ct control_variable_time_compare: max |t| = 30762.97 over 1000000 samples (control, must be detected) -> ok
+linux-full	ci-full (steps 1–14)	2026-09-29T01:54:32.8128545Z   ct tag_compare: max |t| = 1.02 over 1000000 samples -> ok
+linux-full	ci-full (steps 1–14)	2026-09-29T01:54:32.8128932Z   ct msg_open_reject: max |t| = 1.69 over 1000000 samples -> ok
+linux-full	ci-full (steps 1–14)	2026-09-29T01:54:32.8129356Z   ct caead_open_reject: max |t| = 11.06 over 1000000 samples -> FAIL
+linux-full	ci-full (steps 1–14)	2026-09-29T01:54:32.8129730Z   ct sas: max |t| = 1.01 over 20000 samples -> ok
+linux-full	ci-full (steps 1–14)	2026-09-29T01:54:32.8132513Z   ct report: {"threshold":4.5,"results":[{"name":"control_variable_time_compare","samples":1000000,"control":true,"max_abs_t":30762.965,"passed":true,"t":{"raw":-1601.177,"p50":-30762.965,"p75":-30189.003,"p90":-23686.689,"p95":-16282.361,"p99":-13969.024}},{"name":"tag_compare","samples":1000000,"control":false,"max_abs_t":1.017,"passed":true,"t":{"raw":0.436,"p50":0.903,"p75":0.000,"p90":-0.582,"p95":-0.582,"p99":1.017}},{"name":"msg_open_reject","samples":1000000,"control":false,"max_abs_t":1.690,"passed":true,"t":{"raw":-0.063,"p50":0.419,"p75":0.419,"p90":-0.078,"p95":0.137,"p99":-1.690}},{"name":"caead_open_reject","samples":1000000,"control":false,"max_abs_t":11.062,"passed":false,"t":{"raw":1.163,"p50":-3.808,"p75":-9.195,"p90":-11.062,"p95":-10.633,"p99":-2.811}},{"name":"sas","samples":20000,"control":false,"max_abs_t":1.015,"passed":true,"t":{"raw":0.935,"p50":0.577,"p75":1.015,"p90":0.422,"p95":0.693,"p99":0.906}}]}
+linux-full	ci-full (steps 1–14)	2026-09-29T02:37:29.6803507Z    5 ct              FAIL         69s  constant-time test failed: control_variable_time_compare: max |t| = 30762.97 over 1000000 samples (control, must be detected) -> ok; tag_compare: max |t| = 1.02 over 1000000 samples -> ok; msg_open_reject: max |t| = 1.69 over 1000000 samples -> ok; caead_open_reject: max |t| = 11.06 over 1000000 samples -> FAIL; sas: max |t| = 1.01 over 20000 samples -> ok
+
+(c) failing gate: its message and the lines before it (from the step header to the bail! line):
+linux-full	ci-full (steps 1–14)	2026-09-29T01:53:23.4847015Z === [5] ct ===
+linux-full	ci-full (steps 1–14)	2026-09-29T01:53:23.4847962Z $ /home/runner/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/cargo bench --locked --package secmp-crypto --features kat --bench ct
+linux-full	ci-full (steps 1–14)	2026-09-29T01:54:32.8126200Z FAIL [5] ct: constant-time test failed: control_variable_time_compare: max |t| = 30762.97 over 1000000 samples (control, must be detected) -> ok; tag_compare: max |t| = 1.02 over 1000000 samples -> ok; msg_open_reject: max |t| = 1.69 over 1000000 samples -> ok; caead_open_reject: max |t| = 11.06 over 1000000 samples -> FAIL; sas: max |t| = 1.01 over 20000 samples -> ok
+(--log-failed contains the FAIL line and the caead_open_reject line: 2 matching lines)
+

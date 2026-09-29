@@ -62,3 +62,7 @@ All notable changes to this project are documented in this file. The format foll
   condition C1).
 - Repository public (OQ-18, decided 2026-09-28): README pre-release banner, private vulnerability reporting as the
   only reporting channel, ruleset `main-protection` with the four CI jobs as required checks, squash-only merges.
+- Constant-time gate (ADR-038): calls timed with the CPU counter (`rdtscp` / `cntvct_el0`), batching on coarse
+  counters, two-tier verdict (≤ 4.5 PASS, > 10 FAIL, otherwise one confirmatory re-measurement), NOT MEASURABLE
+  when a runner's timer cannot resolve a target, runner metadata in the report; parameters only in
+  `xtask/src/expect.rs`; the bench is the one `unsafe_code` exemption outside the sys crates (path-exact policy).

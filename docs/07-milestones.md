@@ -36,6 +36,8 @@ v1.1: M16 → M17 → M18 → M19 → M20 (release)
 
 ### M1 — `secmp-crypto`: typed primitives and constructions (M)
 
+**Status (2026-09-29).** Reviewed — `docs/reviews/M01-review.md`: approved with conditions C1–C3 (final PR run green, `shake` removed, owner approval of the delta audits/ADR-037); PR #2 is squash-merged on the reviewer's GO after C3. M2 starts on `m02-proto` stacked on `m01-crypto` (sequential rule kept: the M1 review is recorded).
+
 **Deliverables.**
 - Types: `X25519{Secret,Public}`, `MlKem{768,1024}{Dk,Ek,Ct}`, `HybridKem{768,1024}` (spec §3.2), `Ed25519`, `MlDsa65`, `HybridSigningKey/VerifyingKey/Signature` (§3.5), `MsgEncrypt` (§3.3), `Caead` (§3.4), HKDF helpers with the label enum from Appendix A, `Sas` (§6.7), `Fingerprint`, `SecretBytes<N>` (zeroizing, no Debug/PartialEq/Clone), `Nonce24`/`Counter64` (consumed by value).
 - `secmp-sys-mem::SecretPage` (memfd_secret / mlock / VirtualLock) used for long-lived secrets; Miri on the crate.

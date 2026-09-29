@@ -5,13 +5,13 @@
 who = "Claude Code (Opus 5.5), SecMPro implementer"
 criteria = "safe-to-deploy"
 delta = "0.10.1 -> 0.10.3"
-notes = "delta audit by implementer; reviewer read; owner approval pending. ADR-036 (3). Diff: docs/reviews/M01-evidence/vet-deltas/rand-0.10.1-0.10.3.diff. Two unsafe blocks removed (slice get_unchecked, char::from_u32_unchecked, replaced by checked calls); serde deserialization of UniformChar validated; float Uniform/WeightedIndex overflow fixes returning errors instead of panicking; docs and tests. No new unsafe, no I/O, no build script, no new dependencies."
+notes = "delta audit by implementer; reviewer read; owner approved. ADR-036 (3). Diff: docs/reviews/M01-evidence/vet-deltas/rand-0.10.1-0.10.3.diff. Two unsafe blocks removed (slice get_unchecked, char::from_u32_unchecked, replaced by checked calls); serde deserialization of UniformChar validated; float Uniform/WeightedIndex overflow fixes returning errors instead of panicking; docs and tests. No new unsafe, no I/O, no build script, no new dependencies. Owner approval: Christopher Carl, 2026-09-29 (M1 review §D)."
 
 [[audits.rand_core]]
 who = "Claude Code (Opus 5.5), SecMPro implementer"
 criteria = "safe-to-deploy"
 delta = "0.10.0 -> 0.10.1"
-notes = "delta audit by implementer; reviewer read; owner approval pending. ADR-036 (3). Diff: docs/reviews/M01-evidence/vet-deltas/rand_core-0.10.0-0.10.1.diff (CHANGELOG, version bump, two doc-comment links; no code change)."
+notes = "delta audit by implementer; reviewer read; owner approved. ADR-036 (3). Diff: docs/reviews/M01-evidence/vet-deltas/rand_core-0.10.0-0.10.1.diff (CHANGELOG, version bump, two doc-comment links; no code change). Owner approval: Christopher Carl, 2026-09-29 (M1 review §D)."
 
 [[trusted.aead]]
 criteria = "safe-to-deploy"
@@ -263,21 +263,21 @@ criteria = "safe-to-deploy"
 user-id = 333734 # maximebuyse
 start = "2025-05-16"
 end = "2027-09-28"
-notes = "Publisher trust (ADR-036 (2), brief M1 decision 1), crate-scoped: Cryspen hax team account (co-owner of hax-lib with franziskuskiefer and the github:cryspen:tools team) publishing hax-lib, the verification-support library compiled into libcrux-ml-kem (ADR-023). Residual crate of the M1 vet probe. Reviewed at every release."
+notes = "Publisher trust (ADR-036 (2), brief M1 decision 1), crate-scoped: Cryspen hax team account (co-owner of hax-lib with franziskuskiefer and the github:cryspen:tools team) publishing hax-lib, the verification-support library compiled into libcrux-ml-kem (ADR-023). Residual crate of the M1 vet probe. Reviewed at every release. Owner approval: Christopher Carl, 2026-09-29 (M1 review §D)."
 
 [[trusted.hax-lib-macros]]
 criteria = "safe-to-deploy"
 user-id = 333734 # maximebuyse
 start = "2025-05-16"
 end = "2027-09-28"
-notes = "Publisher trust (ADR-036 (2), brief M1 decision 1), crate-scoped: Cryspen hax team account (co-owner of the hax crates with franziskuskiefer and the github:cryspen:tools team) publishing hax-lib-macros, the proc-macro crate of hax-lib compiled into libcrux-ml-kem (ADR-023). Residual crate of the M1 vet probe. Reviewed at every release."
+notes = "Publisher trust (ADR-036 (2), brief M1 decision 1), crate-scoped: Cryspen hax team account (co-owner of the hax crates with franziskuskiefer and the github:cryspen:tools team) publishing hax-lib-macros, the proc-macro crate of hax-lib compiled into libcrux-ml-kem (ADR-023). Residual crate of the M1 vet probe. Reviewed at every release. Owner approval: Christopher Carl, 2026-09-29 (M1 review §D)."
 
 [[trusted.hax-lib-macros-types]]
 criteria = "safe-to-deploy"
 user-id = 333734 # maximebuyse
 start = "2025-05-16"
 end = "2027-09-28"
-notes = "Publisher trust (ADR-036 (2)), crate-scoped: Cryspen hax team account (co-owner of the hax crates with franziskuskiefer and the github:cryspen:tools team) publishing hax-lib-macros-types. Only compiled under cfg(hax) (hax-lib-macros), never for the shipped targets. Reviewed at every release."
+notes = "Publisher trust (ADR-036 (2)), crate-scoped: Cryspen hax team account (co-owner of the hax crates with franziskuskiefer and the github:cryspen:tools team) publishing hax-lib-macros-types. Only compiled under cfg(hax) (hax-lib-macros), never for the shipped targets. Reviewed at every release. Owner approval: Christopher Carl, 2026-09-29 (M1 review §D)."
 
 [[trusted.hkdf]]
 criteria = "safe-to-deploy"
@@ -634,7 +634,7 @@ criteria = "safe-to-deploy"
 user-id = 243 # Paho Lurie-Gregg (paholg)
 start = "2019-08-25"
 end = "2027-09-28"
-notes = "Publisher trust (brief M1 decision 1: residual crate covered by trust or delta audit), crate-scoped: paholg is the author, owner and sole publisher of typenum (type-level integers used by hybrid-array in the RustCrypto closure). A delta audit is impossible: the imported sets hold only the deltas 1.15.0 -> 1.16.0 (Mozilla) and 1.16.0 -> 1.17.0 (Zcash) without an audited base. Reviewed at every release."
+notes = "Publisher trust (brief M1 decision 1: residual crate covered by trust or delta audit), crate-scoped: paholg is the author, owner and sole publisher of typenum (type-level integers used by hybrid-array in the RustCrypto closure). A delta audit is impossible: the imported sets hold only the deltas 1.15.0 -> 1.16.0 (Mozilla) and 1.16.0 -> 1.17.0 (Zcash) without an audited base. Reviewed at every release. Owner approval: Christopher Carl, 2026-09-29 (M1 review §D)."
 
 [[trusted.unicode-ident]]
 criteria = "safe-to-deploy"

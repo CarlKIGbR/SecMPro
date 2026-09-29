@@ -66,11 +66,12 @@ macro_rules! ml_kem {
             }
 
             /// The expanded decapsulation key (FIPS 203 `dk`), for differential tests with libraries that import
-            /// only expanded keys (feature `kat`; SecMP itself stores and uses only the seed).
+            /// only expanded keys (feature `kat`; SecMP itself stores and uses only the seed). Zeroised when the
+            /// returned value is dropped (M1 review F1).
             #[cfg(feature = "kat")]
             #[must_use]
-            pub fn expanded_kat(&self) -> Vec<u8> {
-                self.with_key_pair(|kp| kp.sk().to_vec())
+            pub fn expanded_kat(&self) -> zeroize::Zeroizing<Vec<u8>> {
+                self.with_key_pair(|kp| zeroize::Zeroizing::new(kp.sk().to_vec()))
             }
 
             /// The encapsulation key of this decapsulation key.

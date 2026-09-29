@@ -600,6 +600,12 @@ pub(crate) fn mutants(ctx: &Ctx) -> Result<Outcome> {
     for p in expect::MUTANT_PACKAGES {
         c = c.args(["--package", p]);
     }
+    for f in expect::MUTANT_EXCLUDE_FILES {
+        c = c.args(["--exclude", f]);
+    }
+    for re in expect::MUTANT_EXCLUDE_RE {
+        c = c.args(["--exclude-re", re]);
+    }
     let cap = c.dir(&ctx.root).capture()?;
     say(cap.stdout.trim_end());
     let out = ctx.root.join("target").join("mutants.out");
@@ -699,21 +705,27 @@ fn miri_with(ctx: &Ctx, skip: &[(&str, &str)]) -> Result<Outcome> {
 pub(crate) fn kani(ctx: &Ctx) -> Result<Outcome> {
     tools::require(tools::KANI)?;
     let mut found = BTreeSet::new();
+    let mut manifests = Vec::new();
     for p in &ctx.ws.members {
         let Some(dir) = p.manifest_path.parent() else {
             continue;
         };
         for f in walk_files(dir, &|x: &Path| x.extension().is_some_and(|e| e == "rs"))? {
             // spelled in two parts so that this file does not count as a harness
-            if std::fs::read_to_string(&f)?.contains(concat!("#[kani", "::proof]")) {
-                found.insert(p.name.clone());
+            if std::fs::read_to_string(&f)?.contains(concat!("#[kani", "::proof]"))
+                && found.insert(p.name.clone())
+            {
+                manifests.push(p.manifest_path.clone());
             }
         }
     }
     same_set("Kani harness packages", &found, expect::KANI_PACKAGES)?;
-    for p in &found {
+    // by manifest path: Kani reads a package's `[package.metadata.kani]` (here `unstable.stubbing`) only then, not
+    // with `--package` from the workspace root (M2: the CI run on 774e04a failed to compile the stubbed harnesses)
+    for manifest in &manifests {
         Cmd::cargo()
-            .args(["kani", "--package", p])
+            .args(["kani", "--manifest-path"])
+            .arg(manifest.to_string_lossy())
             .dir(&ctx.root)
             .run()?;
     }

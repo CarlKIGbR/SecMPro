@@ -100,6 +100,13 @@ pub(crate) const FUZZ_TARGETS: &[&str] = &[
 /// Packages under the mutation gate (docs/06 §4, §5 step 8).
 pub(crate) const MUTANT_PACKAGES: &[&str] = &["secmp-crypto", "secmp-proto"];
 
+/// Code compiled only under Kani (`#[cfg(kani)]`: `secmp-proto`'s harnesses and the `kani_stubs` modules), kept out
+/// of the mutation gate by file and by mutant name: no test build contains it, so every mutant of it would survive
+/// (M2: 52 such survivors in the CI run on `774e04a`); Kani runs it (ci-full step 9).
+pub(crate) const MUTANT_EXCLUDE_FILES: &[&str] = &["crates/secmp-proto/src/kani_proofs.rs"];
+/// Mutant names (regex, `cargo mutants --exclude-re`) excluded for the reason above.
+pub(crate) const MUTANT_EXCLUDE_RE: &[&str] = &["kani_stubs::"];
+
 /// Packages run under Miri (docs/06 §4).
 pub(crate) const MIRI_PACKAGES: &[&str] = &["secmp-sys-mem", "secmp-sys-desktop", "secmp-crypto"];
 

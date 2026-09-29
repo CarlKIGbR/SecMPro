@@ -2,8 +2,9 @@
 
 Branch: `m02-proto` · Base: `main` at `bc8d6d559795cf515bcf08f63fcfe0b9eb3058d9` (M1 squash merge) · Author: Claude Code (Opus 5.5) · Date: 2026-09-29
 
-Status: **commit 1 done (docs, reviewer deliverables, M1 carry-overs, CI trigger; `9f20b95` … `168ede0`), local
-`ci-fast` green; M2 code not started.** Inputs:
+Status: **commit 1 done (`9f20b95` … `168ede0`); WEISUNG M2-1 applied (`d09666a` … `ffe0612`); plan steps 1–8
+done (`86830da`, `b2e3319`, `d90f3b7`): every Appendix D structure encodes and decodes, all 547 negative rows of the
+reference file are rejected. Steps 9–14 open. One open item on the ct gate (M1 code, §8 Blocked).** Inputs:
 `docs/07` M2, spec rev 2.3 (ADR-039), `vectors/SCHEMA.md` rev 3 with the §4.8 case table
 `vectors/SCHEMA-4.8-encodings.md` (decoding contract D-1 … D-13), `docs/reviews/ref-spec-questions-M2.md` (SQ-12 …
 SQ-21, binding readings), `docs/reviews/M01-review.md` §G/§H, and the reviewer's M2 brief. `ref/`, `vectors/ref/`,
@@ -30,14 +31,17 @@ on-curve, ML-KEM modulus check, SHA3-256 for the onion checksum) goes through `s
 | 0i | `CLAUDE.md` GO delegation; `docs/07` status lines (M1 merged, M2 started) | brief commit 1.5, 1.6 | done `90a1d3c` |
 | 0j | `ref-vectors` step: explicit list of reference files pending freeze (`encodings`), so committing the reference file does not break `linux-full` | keeps step 12a exact (§8) | done `285cb17` |
 | 0k | F8 follow-up: a call shorter than one quantum starts the batched calibration at `CT_MAX_BATCH` | M1 review F8 | done `168ede0` |
-| 1 | Crate foundation: uniform `Reject` error; bounded `Reader`/`Writer` (checked arithmetic, `try_into`, no indexing); ISO/IEC 7816-4 padding helpers; App. B size constants with `const` assertions; `Encode`/`Decode` traits (exact fit, D-1) | review focus: no unchecked `usize` arithmetic; sizes match App. B | open |
-| 2 | Decoder-obligation types: X25519 public key (D-9), Ed25519 key and signature encodings (D-10), HybridSig, ML-KEM-768/1024 `ek` (D-11); the missing message-free checks added to `secmp-crypto` with unit and Wycheproof-derived tests | spec §4.1 decoder obligations | open |
-| 3 | D.1 records and `RelayInfoV1` | App. D coverage | open |
-| 4 | D.2 frame plaintext: request and response decoders per direction, complete opcode table (SKEY 0x02 reserved → reject), CONT, CELLR with its request context, D-7 zero fields | review focus: opcode table complete | open |
-| 5 | D.3 `RelayRef` (onion version/checksum, direct host/port), `InvitationV1`, `Profile` (strict UTF-8), `LinkDataV1` (padded), `LinkBlob`, `IKSPublic`, `PrekeyBundle` | App. D coverage; `Option` strictness (D-5) | open |
-| 6 | D.4 `Outer` (padded), `inner_ct`, `Inner`, `HandshakeCell`, `HandshakeCellPlaintext` | App. D coverage | open |
-| 7 | D.5 `Cell`, `HeaderV1`, `Content` (typed bodies, padded), `AppMessage`, `Fragment`, `FragmentPayload`, `RouteDescriptor` (unknown kinds kept), `RelayQueue`, the Handshake/Batch/RouteUpdate/KeyChange/Receipt/Control bodies | App. D coverage; consistency rule | open |
-| 8 | D.6 signed-message builders (encode only) | App. D coverage | open |
+| 0l | WEISUNG M2-1: repository security settings (secret scanning + push protection on; CodeQL default setup for Rust rejected by the API, left) | owner decision 2026-09-29 | done `d09666a` |
+| 0m | WEISUNG M2-1 Q-1: ADR-038 amendment line; 10 % calibration margin, < 80 realised quanta → NOT_MEASURABLE | M1 review F8 | done `19f5700` (ct event: §8) |
+| 1 | Crate foundation: uniform `Error::Rejected`; bounded `Reader`/`Writer` (checked arithmetic, `try_into`, no indexing); ISO/IEC 7816-4 padding helpers; App. B size constants with `const` assertions; `Encode`/`Decode` traits (exact fit, D-1) | review focus: no unchecked `usize` arithmetic; sizes match App. B | done `b2e3319` (§3) |
+| 2 | Decoder-obligation types: X25519 public key (D-9), Ed25519 key and signature encodings (D-10), HybridSig, ML-KEM-768/1024 `ek` (D-11); the missing message-free checks added to `secmp-crypto` with unit and Wycheproof-derived tests | spec §4.1 decoder obligations | done `86830da` (`secmp-crypto`), `b2e3319` (`keys.rs`) |
+| 3 | D.1 records and `RelayInfoV1` | App. D coverage | done `b2e3319` |
+| 4 | D.2 frame plaintext: request and response decoders per direction, complete opcode table (SKEY 0x02 reserved → reject), CONT, CELLR with its request context, D-7 zero fields | review focus: opcode table complete | done `b2e3319` |
+| 5 | D.3 `RelayRef` (onion version/checksum, direct host/port), `InvitationV1`, `Profile` (strict UTF-8), `LinkDataV1` (padded), `LinkBlob`, `IKSPublic`, `PrekeyBundle` | App. D coverage; `Option` strictness (D-5) | done `b2e3319` |
+| 6 | D.4 `Outer` (padded), `inner_ct`, `Inner`, `HandshakeCell`, `HandshakeCellPlaintext` | App. D coverage | done `b2e3319` |
+| 7 | D.5 `Cell`, `HeaderV1`, `Content` (typed bodies, padded), `AppMessage`, `Fragment`, `FragmentPayload`, `RouteDescriptor` (unknown kinds kept), `RelayQueue`, the Handshake/Batch/RouteUpdate/KeyChange/Receipt/Control bodies | App. D coverage; consistency rule | done `b2e3319` |
+| 8 | D.6 signed-message builders (encode only) | App. D coverage | done `b2e3319` |
+| 8a | Every row of `vectors/ref/encodings.json` through the decoders (ahead of step 10's generator): 78 decodable positives byte-exact, **547/547 negatives rejected** | "every negative vector rejected with the uniform error" (the Rust side; the freeze in step 10) | done `d90f3b7` |
 | 9 | Unit tests with every failure path; canonicality property tests on generators built from `rand` (already vetted; WEISUNG M2-1: no new dependency, no `proptest`): random valid values from a seeded RNG, `decode(encode(x)) == x` and `encode(decode(b)) == b` per structure, plus targeted edge values (every counter and length at its minimum and maximum, every enum variant); any case that needs shrinking is reported | "`decode(encode(x)) == x` and `encode(decode(b)) == b` for all structures" | open |
 | 10 | `cargo xtask vectors` for `encodings`: Rust generator of the 85 positives from the SCHEMA §2 streams (header `"spec": "SecMP/1 rev 2.3"`, WEISUNG M2-1 Q-2), structural comparison with `vectors/ref/encodings.json` (byte-for-byte on every positive, decode of every positive to its value), every one of the 547 negatives rejected with the uniform error; freeze `vectors/encodings.json`; per-target re-check test; **`expect::VECTOR_REF_PENDING` empty again** (`encodings` moved to `VECTOR_SUITES`) — acceptance condition of `285cb17` (WEISUNG M2-1) | "every negative vector rejected with the uniform error"; "Rust and `ref/` encodings identical"; `285cb17` condition | open |
 | 11 | Kani harnesses for `Cell`, `Frame`, `HeaderV1` and frame-plaintext parsing (no panic, exact fit); `KANI_PACKAGES` += `secmp-proto` | "Kani proofs pass" | open |
@@ -75,16 +79,52 @@ Commit 1 (before any M2 code):
 - `ct.rs` follow-up: a call shorter than one quantum starts its batched calibration at `CT_MAX_BATCH`.
 - `CHANGELOG.md` entries; `docs/reviews/M02-evidence/` (ct reports and gate logs, `ci-fast` summary).
 
+WEISUNG M2-1 and plan steps 1–8:
+
+- `d09666a` repository security settings (log `M02-evidence/repo-settings-2026-09-29.txt`); `19f5700` ADR-038
+  amendment and the ct margin / realised-quanta rule (`expect::CT_BATCH_MARGIN`, `CT_MIN_REALISED_QUANTA`, echoed
+  and checked by the gate).
+- `86830da` `secmp-crypto`: `X25519Public::from_bytes_checked` (the 14 low-order encodings, spec §4.1 (a)) and
+  `check_ed25519_signature_encoding` (spec §4.1 (b): R canonical, not of small order, a curve point; S < L); the
+  Ed25519 key and ML-KEM `ek` checks already existed. Wycheproof cross-checks: X25519 refused at decode exactly when
+  the shared secret is all zero (518 cases); 51 Ed25519 signatures refused at decode, each also refused by strict
+  verification; every valid one accepted.
+- `b2e3319` `secmp-proto` (sans-IO; depends on `secmp-crypto` only):
+  - `error.rs` — `Error::Rejected`, the one error; `codec.rs` — `Reader` (every read `split_at_checked`, lengths
+    `usize::from`/`try_from`), `Writer`, `Encode`/`Decode` (exact fit), `pad`/`unpad` (ISO/IEC 7816-4, marker
+    required, zero tail, no room → reject); `sizes.rs` — Appendix B/§4.2 sizes re-derived at compile time from the
+    App. D field lists (`const _: () = assert!(…)`, incl. every largest frame payload < 4336 and agreement with
+    `secmp-crypto`'s constants); the crate root repeats the deny set (`arithmetic_side_effects`, `indexing_slicing`,
+    `as_conversions`, `unwrap_used`, `expect_used`, `panic`).
+  - `keys.rs` — `X25519Pk`, `Ed25519Pk`, `Ed25519Sig`, `HybridSig` (Ed25519 half checked, ML-DSA half opaque:
+    no sigDecode at decode), `MlKem768Ek`, `MlKem1024Ek`; redacted `Debug`.
+  - `wire/` — D.1 `record.rs`, D.2 `frame.rs` (opcode table `opcode::REQUESTS`/`RESPONSES`, checked against the
+    spec text), D.3 `inv.rs`, D.4 `hx.rs`, D.5 `cell.rs`, D.6 `signed.rs`. App.-D constants (`ver`, record types,
+    `flags`, `caps`, `total = 3`, `opk_present`, reserved zero fields) are not struct fields: written by the
+    encoder, checked by the decoder. Optional parts are `Option`s (`Direct`, avatar, evicted id, LINK_GET owner
+    signature), booleans `bool`, closed sets enums (`Period`, `AppKind`, `ErrCode`, `CellrError`,
+    `ReceiptKind`, `ControlCode`, `ContIdx`); unknown `RouteDescriptor` kinds are kept opaque (§9.8). Secret fields
+    (`link_key`, `inv_send_seed`, `send_seed`) are `SecretBytes<32>`; their structures have no `Clone`/`PartialEq`/
+    `Debug`. Other structures get `Debug` only in unit tests (CS-2.5). No decoder recurses or allocates more than
+    its input bounds (≤ 64 KiB per length field, ≤ 255 list elements).
+- `d90f3b7` `tests/encodings_ref.rs` (every row of the reference file) and ADR-040 (Proposed: `serde_json`, later
+  `rand`, as dev-dependencies of `secmp-proto`; no new crate in `Cargo.lock`).
+
 ## 3. Evidence per acceptance criterion
 
 | Criterion (from `07-milestones.md`) | Test / command | Result |
 |---|---|---|
 | `decode(encode(x)) == x` and `encode(decode(b)) == b` for all structures | — | open (step 9) |
-| every negative vector rejected with the uniform error | — | open (step 10) |
+| every negative vector rejected with the uniform error | `cargo nextest run -p secmp-proto --test encodings_ref` (`every_row_of_the_encodings_file`, reference file SHA-256 `9abd63d7…`) | **547/547 negatives rejected with `Error::Rejected`**; 78/78 decodable positives decode and re-encode byte-for-byte (frames to the named command); 7 `Signed/*` rows encode-only (step 10). Freeze pending (step 10). Evidence `M02-evidence/secmp-proto-tests-d90f3b7.txt` |
 | Kani proofs pass | — | open (step 11) |
 | fuzzers run 2 min without findings | — | open (step 12) |
 | Rust and `ref/` encodings identical | — | open (step 10) |
 | `expect::VECTOR_REF_PENDING` empty at the DoD (condition on `285cb17`, WEISUNG M2-1) | `cargo xtask step ref-vectors` ("pending freeze: none") | open (step 10) |
+| Review focus: sizes match Appendix B | `crates/secmp-proto/src/sizes.rs` compile-time assertions (every App. B size re-derived from its App. D field list, frame payload maxima < 4336, agreement with `secmp-crypto`) | compiles (a wrong size is a build error); per-structure unit tests assert the encoded lengths (e.g. `relay_info_and_its_record` 1741/1744, `iks_bundle_link_data_blob` 2017/7775/12288/12360, `outer_is_padded_to_three_chunks` 12018, `every_request_round_trips_at_frame_size` 4336) |
+| Review focus: no unchecked `usize` arithmetic | `cargo clippy -p secmp-proto --all-targets -- -D warnings` with the crate-level deny set (`arithmetic_side_effects`, `indexing_slicing`, `as_conversions`) on top of the workspace lints | clean; lengths come from `split_at_checked`/`try_from`, the few size computations use `checked_add`/`checked_sub` |
+| Review focus: opcode table complete | `wire::frame::tests::opcode_table_equals_appendix_d2` (parses D.2 of `docs/03`), `reserved_and_foreign_opcodes_reject` (all 256 opcodes in both directions) | pass: 10 request opcodes (SKEY listed, rejects), 7 response opcodes |
+| Review focus: `Option` strictness, consistency rule | presence/boolean bytes through `Reader::flag` (0/1 only); `Option` fields derive their presence byte; exact fit everywhere (`testutil::exact_fit` in every structure's unit test) | pass (39 unit tests); the reference rows of families OPT, LEN, TRAIL, SIZE all reject |
+| Spec §4.1 decoder obligations | `secmp-crypto`: `decode_refuses_exactly_the_low_order_encodings`, `signature_encoding_check`, `kat_curve25519::wycheproof_x25519`/`wycheproof_ed25519_strict` (decode-time checks agree with the checks at use); `secmp-proto`: `keys::tests::*`, `onion_checksum_and_version` (incl. a published v3 address) | pass (`M02-evidence/secmp-crypto-decode-checks-86830da.txt`, 16/16); reference rows of families X25519 (all 9 fields), ED25519, MLKEM reject |
 
 Commit-1 evidence:
 
@@ -109,10 +149,12 @@ Commit-1 evidence:
 | Constant time (`ct`, M1 code) | macOS arm64 PASS on `168ede0` and `9835bb3` (§3); on `19f5700` (margin): run 1 **FAIL** (`caead_open_reject_samekey` 18.39 at p50, raw −0.80), runs 2 and 3 PASS (2.95, 0.91) — §8 Blocked; Linux: in the PR run's `linux-full`, report uploaded as artefact |
 | Fuzz smoke | open |
 | Mutation | open |
-| Coverage | open |
+| Coverage | open (gate in step 13); preliminary local measurement on `d90f3b7`: `cargo llvm-cov nextest -p secmp-proto` — lines 2321, missed 26, **98.88 %** (codec 100, frame 100, hx 100, record 99.5, signed 99.0, mod 98.9, inv 98.3, keys 98.0, cell 97.5) |
 | Kani / Miri | open; weekly `miri-full` workflow added (runs on `main` once merged: `schedule` works only on the default branch) |
-| `cargo deny` / `cargo vet` / `cargo audit` / cooldown | open |
-| CI runs of commit 1 | see §8 (run ids) |
+| `cargo xtask ci-fast` on `d90f3b7` (macOS arm64) | **PASS** — every step, nextest over the workspace, kat 368 s (`M02-evidence/ci-fast-aarch64-apple-darwin-d90f3b7.txt`) |
+| `cargo deny` / `cargo vet` / `cargo audit` / cooldown | PASS in local `ci-fast` on `d90f3b7` (vet: 92 fully audited, 1 partially, 24 exempted — normal `secmp-crypto`/`secmp-proto` closure: 52 external crates, 0 exempted; cooldown: 119 packages ≥ 7 days) |
+| `secmp-proto` unit + reference tests | 40/40 on `d90f3b7` (`M02-evidence/secmp-proto-tests-d90f3b7.txt`) |
+| CI runs | PR run of each pushed head (no push runs on milestone branches since `54da5af`); ids in the final message of each run |
 
 ## 5. Deviations from spec / plan
 
@@ -123,8 +165,13 @@ could no longer be true); no other workflow change. (c) ADR-038 (3) now carries 
 
 ## 6. Dependencies added or bumped
 
-None so far. `proptest` is not used (WEISUNG M2-1); the property tests use generators built from `rand`, which is
-already in the vetted closure.
+| Crate | Version | ADR | Vet record | Reason |
+|---|---|---|---|---|
+| `secmp-crypto` (path) | workspace | docs/02 §3 | — (first party) | `secmp-proto`'s only allowed workspace dependency |
+| `serde_json` (dev, `secmp-proto`) | 1.0.151 (already in the lock) | ADR-040 (Proposed) | trust `dtolnay` (ADR-031) | reading the `encodings` vector file in tests |
+
+`rand` (dev, for step 9) is covered by ADR-040 but not added yet. `proptest` is not used (WEISUNG M2-1). No new
+crate entered `Cargo.lock` (the only lock change is `secmp-proto`'s two dependency edges).
 
 ## 7. Open risks and known limitations
 
@@ -172,6 +219,14 @@ Decisions of WEISUNG M2-1 (2026-09-29), applied:
   left as it is; private vulnerability reporting and vulnerability alerts still enabled. Observed but not changed
   (not in the instruction): `secret_scanning_non_provider_patterns` and `secret_scanning_validity_checks` are
   `disabled`.
+
+Open questions:
+
+- Q-3: ADR-040 (Proposed) — `serde_json` is in use as a dev-dependency of `secmp-proto` for the reference-file test
+  (same crate/version/use as `secmp-crypto`'s, ADR-037); `rand` follows in step 9 per WEISUNG M2-1. Acceptance
+  requested.
+- No App. D reading was unsettled in steps 1–8: every rule implemented is in rev 2.3, ADR-039, the SQ answers or
+  the SCHEMA-4.8 contract, and no row of the reference file disagreed with the decoders.
 
 Other notes:
 

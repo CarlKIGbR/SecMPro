@@ -1,0 +1,17 @@
+        PASS ( 1/16) secmp-crypto ed25519::tests::s_plus_l_is_rejected
+        PASS ( 2/16) secmp-crypto ed25519::tests::signature_byte_rules
+        PASS ( 3/16) secmp-crypto ed25519::tests::wrong_message_signature_or_length
+        PASS ( 4/16) secmp-crypto ed25519::tests::bad_r_is_rejected
+        PASS ( 5/16) secmp-crypto ed25519::tests::canonical_edges
+        PASS ( 6/16) secmp-crypto ed25519::tests::rfc8032_vectors
+        PASS ( 7/16) secmp-crypto x25519::tests::decode_refuses_exactly_the_low_order_encodings
+        PASS ( 8/16) secmp-crypto ed25519::tests::small_order_and_non_canonical_keys_are_refused
+        PASS ( 9/16) secmp-crypto ed25519::tests::signature_encoding_check
+        PASS (10/16) secmp-crypto x25519::tests::lengths_and_debug
+        PASS (11/16) secmp-crypto hybrid_kem::tests::low_order_keys_are_rejected_on_both_sides
+        PASS (12/16) secmp-crypto x25519::tests::rfc7748_top_bit_masked
+        PASS (13/16) secmp-crypto x25519::tests::low_order_inputs_are_rejected
+        PASS (14/16) secmp-crypto x25519::tests::rfc7748_diffie_hellman
+        PASS (15/16) secmp-crypto::kat_curve25519 wycheproof_ed25519_strict
+        PASS (16/16) secmp-crypto::kat_curve25519 wycheproof_x25519
+     Summary 16 tests run: 16 passed, 83 skipped

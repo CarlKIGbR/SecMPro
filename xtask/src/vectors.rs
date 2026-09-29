@@ -216,7 +216,21 @@ pub(crate) fn run(root: &Path) -> Result<()> {
 /// ci-full step 12a: every frozen file equals its reference file structurally, both validate, and exactly the
 /// expected suites exist in both directories.
 pub(crate) fn check_frozen_against_ref(root: &Path) -> Result<String> {
-    for dir in ["vectors", "vectors/ref"] {
+    if let Some(both) = expect::VECTOR_REF_PENDING
+        .iter()
+        .find(|p| expect::VECTOR_SUITES.contains(p))
+    {
+        bail!("suite {both} is listed as frozen and as pending freeze");
+    }
+    let with_pending: Vec<&str> = expect::VECTOR_SUITES
+        .iter()
+        .chain(expect::VECTOR_REF_PENDING)
+        .copied()
+        .collect();
+    for (dir, expected) in [
+        ("vectors", expect::VECTOR_SUITES),
+        ("vectors/ref", with_pending.as_slice()),
+    ] {
         let found: std::collections::BTreeSet<String> = std::fs::read_dir(root.join(dir))?
             .filter_map(std::result::Result::ok)
             .filter_map(|e| {
@@ -224,7 +238,20 @@ pub(crate) fn check_frozen_against_ref(root: &Path) -> Result<String> {
                 name.strip_suffix(".json").map(str::to_owned)
             })
             .collect();
-        crate::gates::same_set(&format!("{dir}/*.json"), &found, expect::VECTOR_SUITES)?;
+        crate::gates::same_set(&format!("{dir}/*.json"), &found, expected)?;
+    }
+    let mut pending = Vec::new();
+    for suite in expect::VECTOR_REF_PENDING {
+        let reference = parse(
+            &root
+                .join("vectors")
+                .join("ref")
+                .join(format!("{suite}.json")),
+        )?;
+        pending.push(format!(
+            "{suite} ({} cases, reference only)",
+            pending_cases(suite, &reference)?
+        ));
     }
     let mut cases = 0_usize;
     for suite in expect::VECTOR_SUITES {
@@ -250,9 +277,25 @@ pub(crate) fn check_frozen_against_ref(root: &Path) -> Result<String> {
         );
     }
     Ok(format!(
-        "{} frozen suites ({cases} cases) structurally identical to vectors/ref (ADR-026)",
-        expect::VECTOR_SUITES.len()
+        "{} frozen suites ({cases} cases) structurally identical to vectors/ref (ADR-026); pending freeze: {}",
+        expect::VECTOR_SUITES.len(),
+        if pending.is_empty() {
+            "none".to_owned()
+        } else {
+            pending.join(", ")
+        }
     ))
+}
+
+/// The number of cases of a reference file pending freeze, after checking that it names `suite` and has cases.
+fn pending_cases(suite: &str, reference: &Value) -> Result<usize> {
+    if reference.get("suite").and_then(Value::as_str) != Some(suite) {
+        bail!("vectors/ref/{suite}.json: `suite` is not {suite:?}");
+    }
+    match reference.get("cases").and_then(Value::as_array) {
+        Some(cases) if !cases.is_empty() => Ok(cases.len()),
+        _ => bail!("vectors/ref/{suite}.json: no cases"),
+    }
 }
 
 #[cfg(test)]
@@ -297,5 +340,24 @@ mod tests {
         assert!(hex_violations(&ok).is_empty());
         let bad = doc(r#"{"cases":[{"id":"a","inputs":{"k":"00FF"},"outputs":{"c":"0"}}]}"#);
         assert_eq!(hex_violations(&bad).len(), 2);
+    }
+
+    #[test]
+    fn pending_reference_files_must_name_their_suite_and_have_cases() {
+        let ok = doc(r#"{"suite":"encodings","cases":[{"id":"enc-0001"},{"id":"enc-0002"}]}"#);
+        assert_eq!(pending_cases("encodings", &ok).ok(), Some(2));
+        let other = doc(r#"{"suite":"sas","cases":[{"id":"sas-0001"}]}"#);
+        assert!(pending_cases("encodings", &other).is_err());
+        let empty = doc(r#"{"suite":"encodings","cases":[]}"#);
+        assert!(pending_cases("encodings", &empty).is_err());
+        let missing = doc(r#"{"suite":"encodings"}"#);
+        assert!(pending_cases("encodings", &missing).is_err());
+    }
+
+    #[test]
+    fn the_committed_vector_files_match_the_expected_sets() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let summary = check_frozen_against_ref(&root);
+        assert!(summary.is_ok(), "{summary:?}");
     }
 }

@@ -66,3 +66,10 @@ All notable changes to this project are documented in this file. The format foll
   counters, two-tier verdict (≤ 4.5 PASS, > 10 FAIL, otherwise one confirmatory re-measurement), NOT MEASURABLE
   when a runner's timer cannot resolve a target, runner metadata in the report; parameters only in
   `xtask/src/expect.rs`; the bench is the one `unsafe_code` exemption outside the sys crates (path-exact policy).
+- Protocol specification revision 2.3 (ADR-039, answers SQ-12 … SQ-21 in `docs/reviews/ref-spec-questions-M2.md`):
+  the `ver` rule of §4.1 reworded; decoder obligations for X25519, Ed25519 and ML-KEM key fields; `RelayRef.onion`
+  (rend-spec-v3 version and checksum) and `RelayRef.direct` (host 1..=253 printable bytes, port ≠ 0) validity;
+  Handshake `caps` = 0; list counts ≥ 1; Fragment rules; the Batch, RouteUpdate, reassembled-Fragment and Dummy
+  layouts in Appendix D.5; `AppMessage.payload` and `Control.arg` opaque at the encoding layer. No byte layout changed.
+- Test-vector schema revision 3 (`vectors/SCHEMA.md` §4.8, case table `vectors/SCHEMA-4.8-encodings.md`) and the
+  reference file `vectors/ref/encodings.json` (632 cases) for the M2 `encodings` suite.

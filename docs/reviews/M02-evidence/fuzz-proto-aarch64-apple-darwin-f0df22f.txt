@@ -1,0 +1,12 @@
+# fuzz smoke of the M2 targets (plan step 12), macOS arm64, local, 2026-09-29 18:28-18:40. Targets and decoders as in
+# f0df22f (later changes before that commit: cfg(kani)-only code and the crate visibility of
+# RequestCmd::decode_fields, no decoder behaviour); run on the seed corpora, which were minimised afterwards
+# (cargo fuzz cmin: records 199, frames 157, invitation 263, handshake 86, cell 405 files)
+# command per target: cargo +nightly-2026-09-21 fuzz run --fuzz-dir fuzz <target> -- -max_total_time=120
+# (the same command as ci-full step 6; exit status 0 = no crash, no assertion failure, no timeout/oom)
+
+proto_records: exit 0; seed files 81 (max 2858 B); max_len 4096; 4570298 runs in 121 s; final cov 667, features 1251, corpus 336; findings: 0
+proto_frames: exit 0; seed files 182 (max 4338 B); max_len 4338; 3879394 runs in 121 s; final cov 743, features 1587, corpus 164; findings: 0
+proto_invitation: exit 0; seed files 132 (max 12362 B); max_len 12362; 4182508 runs in 121 s; final cov 946, features 1647, corpus 391; findings: 0
+proto_handshake: exit 0; seed files 40 (max 12020 B); max_len 12020; 5768752 runs in 121 s; final cov 453, features 491, corpus 89; findings: 0
+proto_cell: exit 0; seed files 190 (max 65559 B); max_len 65559; 6393524 runs in 121 s; final cov 1364, features 2391, corpus 495; findings: 0

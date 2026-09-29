@@ -3,8 +3,9 @@
 Branch: `m02-proto` · Base: `main` at `bc8d6d559795cf515bcf08f63fcfe0b9eb3058d9` (M1 squash merge) · Author: Claude Code (Opus 5.5) · Date: 2026-09-29
 
 Status: **commit 1 done (`9f20b95` … `168ede0`); WEISUNG M2-1 applied (`d09666a` … `ffe0612`); plan steps 1–8
-done (`86830da`, `b2e3319`, `d90f3b7`): every Appendix D structure encodes and decodes, all 547 negative rows of the
-reference file are rejected. Steps 9–14 open. One open item on the ct gate (M1 code, §8 Blocked).** Inputs:
+done (`86830da`, `b2e3319`, `d90f3b7`); WEISUNG M2-2 applied (A `68ac537`, B `6beb30e`, C `4e582cb` `f7b3066`
+`916bbf6`); plan steps 9–12 done (`d8d8851`; `e4da4a1` `94b14cf`; `45d28e1`; `f0df22f`).
+Steps 13–14 open. The ct gate still fails on Linux after the harness fix (§8, for the reviewer).** Inputs:
 `docs/07` M2, spec rev 2.3 (ADR-039), `vectors/SCHEMA.md` rev 3 with the §4.8 case table
 `vectors/SCHEMA-4.8-encodings.md` (decoding contract D-1 … D-13), `docs/reviews/ref-spec-questions-M2.md` (SQ-12 …
 SQ-21, binding readings), `docs/reviews/M01-review.md` §G/§H, and the reviewer's M2 brief. `ref/`, `vectors/ref/`,
@@ -42,10 +43,13 @@ on-curve, ML-KEM modulus check, SHA3-256 for the onion checksum) goes through `s
 | 7 | D.5 `Cell`, `HeaderV1`, `Content` (typed bodies, padded), `AppMessage`, `Fragment`, `FragmentPayload`, `RouteDescriptor` (unknown kinds kept), `RelayQueue`, the Handshake/Batch/RouteUpdate/KeyChange/Receipt/Control bodies | App. D coverage; consistency rule | done `b2e3319` |
 | 8 | D.6 signed-message builders (encode only) | App. D coverage | done `b2e3319` |
 | 8a | Every row of `vectors/ref/encodings.json` through the decoders (ahead of step 10's generator): 78 decodable positives byte-exact, **547/547 negatives rejected** | "every negative vector rejected with the uniform error" (the Rust side; the freeze in step 10) | done `d90f3b7` |
-| 9 | Unit tests with every failure path; canonicality property tests on generators built from `rand` (already vetted; WEISUNG M2-1: no new dependency, no `proptest`): random valid values from a seeded RNG, `decode(encode(x)) == x` and `encode(decode(b)) == b` per structure, plus targeted edge values (every counter and length at its minimum and maximum, every enum variant); any case that needs shrinking is reported | "`decode(encode(x)) == x` and `encode(decode(b)) == b` for all structures" | open |
-| 10 | `cargo xtask vectors` for `encodings`: Rust generator of the 85 positives from the SCHEMA §2 streams (header `"spec": "SecMP/1 rev 2.3"`, WEISUNG M2-1 Q-2), structural comparison with `vectors/ref/encodings.json` (byte-for-byte on every positive, decode of every positive to its value), every one of the 547 negatives rejected with the uniform error; freeze `vectors/encodings.json`; per-target re-check test; **`expect::VECTOR_REF_PENDING` empty again** (`encodings` moved to `VECTOR_SUITES`) — acceptance condition of `285cb17` (WEISUNG M2-1) | "every negative vector rejected with the uniform error"; "Rust and `ref/` encodings identical"; `285cb17` condition | open |
-| 11 | Kani harnesses for `Cell`, `Frame`, `HeaderV1` and frame-plaintext parsing (no panic, exact fit); `KANI_PACKAGES` += `secmp-proto` | "Kani proofs pass" | open |
-| 12 | Fuzz targets for every decoder (corpora seeded from the vectors); `FUZZ_TARGETS` extended; 2 min each | "fuzzers run 2 min without findings" | open |
+| 9 | Unit tests with every failure path; canonicality property tests on generators built from `rand` (already vetted; WEISUNG M2-1: no new dependency, no `proptest`): random valid values from a seeded RNG, `decode(encode(x)) == x` and `encode(decode(b)) == b` per structure, plus targeted edge values (every counter and length at its minimum and maximum, every enum variant); any case that needs shrinking is reported | "`decode(encode(x)) == x` and `encode(decode(b)) == b` for all structures" | done `d8d8851` (§3) |
+| 10 | `cargo xtask vectors` for `encodings`: Rust generator of the 85 positives from the SCHEMA §2 streams (header `"spec": "SecMP/1 rev 2.3"`, WEISUNG M2-1 Q-2), structural comparison with `vectors/ref/encodings.json` (byte-for-byte on every positive, decode of every positive to its value), every one of the 547 negatives rejected with the uniform error; freeze `vectors/encodings.json`; per-target re-check test; **`expect::VECTOR_REF_PENDING` empty again** (`encodings` moved to `VECTOR_SUITES`) — acceptance condition of `285cb17` (WEISUNG M2-1) | "every negative vector rejected with the uniform error"; "Rust and `ref/` encodings identical"; `285cb17` condition | done `e4da4a1`, `94b14cf` (§3) |
+| 11 | Kani harnesses for `Cell`, `Frame`, `HeaderV1` and frame-plaintext parsing (no panic, exact fit); `KANI_PACKAGES` += `secmp-proto` | "Kani proofs pass" | done `45d28e1` (§3; bounds §5 (d)) |
+| 12 | Fuzz targets for every decoder (corpora seeded from the vectors); `FUZZ_TARGETS` extended; 2 min each | "fuzzers run 2 min without findings" | done `f0df22f` (§3) |
+| M2-2 A | Reviewer files committed unchanged (`.gitignore`, `M01-review.md`, `ref/README.md`, `vectors/ref/encodings.json` SHA-256 `9a1d5995…`, `M01-review-ext-glm.md`, the `ref/` tree); `cargo xtask step policy` PASS | WEISUNG M2-2 A | done `68ac537` |
+| M2-2 B | ADR-026 amendment (EXT-2), ADR-038 class-median sentence, ADR-040 Accepted | WEISUNG M2-2 B | done `6beb30e` |
+| M2-2 C | ct gate diagnosis: dispatch-only `linux-ct` job, per-class percentiles, M1-harness bisect, A/A and A/A′ controls, harness fix, evidence | WEISUNG M2-2 C.1–C.7 | done `4e582cb`, `f7b3066`, `916bbf6` (§8) |
 | 13 | Mutation gate on `secmp-proto` (and the `secmp-crypto` additions), coverage ≥ 90 % | `docs/06` §4, §8 | open |
 | 14 | `ci-full --strict` locally and on CI (PR run), evidence under `docs/reviews/M02-evidence/`, CHANGELOG, report, PR ready for review | `docs/06` §8 DoD | open |
 
@@ -110,16 +114,58 @@ WEISUNG M2-1 and plan steps 1–8:
 - `d90f3b7` `tests/encodings_ref.rs` (every row of the reference file) and ADR-040 (Proposed: `serde_json`, later
   `rand`, as dev-dependencies of `secmp-proto`; no new crate in `Cargo.lock`).
 
+WEISUNG M2-2 and plan steps 9–12:
+
+- `68ac537` the reviewer's files unchanged (A); `6beb30e` ADR-026 amendment (EXT-2), the ADR-038 class-median
+  sentence, ADR-040 Accepted (B).
+- `4e582cb` CI: `workflow_dispatch` suite `ct` runs only the new `linux-ct` job (`ubuntu-latest`,
+  `cargo xtask step --strict ct`, report artefact; not a required check, same hygiene as the other jobs);
+  the ct report gains per-class sample percentiles (`shape`: p1 … p99 and count per class, C.4).
+- `d8d8851` step 9: `tests/canonical.rs` — seeded `StdRng` generators for every Appendix D structure;
+  `decode(encode(x)) == x` (the encoding compared for secret-bearing structures), 24 random mutations per
+  encoding with "accepted ⇒ re-encodes to itself" (each test asserts that some mutants were accepted), edge
+  values (every counter and length at its minimum and maximum) and every enum variant; 8 tests.
+- `f7b3066` ct harness fix (C.6, §8): every measured input is `base ^ (delta & mask)` from one common source
+  per target.
+- `e4da4a1` `secmp-crypto`: `VectorStream` (SCHEMA §2 stream, feature `kat`) for generators in crates that
+  may not use cryptographic crates. `94b14cf` step 10: `tests/common/encodings.rs` generates the 85 positive
+  rows (stream order of SCHEMA-4.8, keys derived with the M1 primitives, signatures computed) and decodes any
+  row to its value; example `gen-encodings` (self-checks every decodable row before writing); `encodings_ref`
+  also checks `decode(bytes) = value` and re-runs the generator on every target; `cargo xtask vectors` runs
+  both generators, compares `encodings` on the header and the positive rows (`expect::VECTOR_POSITIVE_ONLY`)
+  and requires every other reference row to be a rejecting decode row that the decoders reject; `encodings`
+  moved to `VECTOR_SUITES`, `VECTOR_REF_PENDING` empty; `vectors/encodings.json` frozen (verbatim copy of the
+  reference file). `916bbf6` the diagnosis evidence.
+- `45d28e1` step 11: `src/kani_proofs.rs`, 15 harnesses — `cell` (0…4097 bytes) and `header_v1` (0…2315 bytes):
+  no panic, accepted only at the exact size, an accepted input re-encodes to itself (`header_v1` also `ver` = 1,
+  `flags` = 0); `padding`: `pad`/`unpad` inverse for every size ≤ 32; `response_frame` (every response opcode, both
+  `CELLR` contexts) and `request_frame` (the request glue, command decoder stubbed): 4335/4336/4337-byte
+  plaintexts, no panic, exact fit at 4336, response opcode fidelity; one harness per request opcode on
+  `RequestCmd::decode_fields` with the opcode concrete (`request_queue_new`, `_skey`, `_send`, `_fetch`,
+  `_fetch_multi` for counts ≤ 8 and > 32, `_queue_del`, `_link_put`, `_link_get`, `_ping`, `_cont`). Stubs:
+  `keys::kani_stubs` (key and signature checks as a nondeterministic accept/reject), `codec::kani_stubs::unpad`
+  (any proper prefix or a rejection), `wire::frame::kani_stubs` (the command decoder, for the glue harness);
+  `[package.metadata.kani.unstable] stubbing = true` in the crate manifest (the gate runs a plain
+  `cargo kani --package secmp-proto`); `cfg(kani)` declared in the workspace `unexpected_cfgs` lint;
+  `RequestCmd::decode_fields` `pub(crate)`; `expect::KANI_PACKAGES = ["secmp-proto"]`. `codec::pad` now writes the
+  fields and the marker over a zeroed buffer (same results, unit tests unchanged; no fill loop for CBMC).
+  `xtask::vectors::run` split (clippy `too_many_lines`, introduced in `94b14cf`).
+- `f0df22f` step 12: fuzz targets `proto_records`, `proto_frames`, `proto_invitation`, `proto_handshake`,
+  `proto_cell` (every Appendix D decoder, one target per section, a selector byte picks the decoder; oracle: no
+  panic, accepted ⇒ re-encodes to exactly its input); corpora seeded from the 625 decodable rows of
+  `vectors/encodings.json`, fuzzed, minimised with `cargo fuzz cmin`; `expect::FUZZ_TARGETS` 7 → 12 (in
+  `45d28e1`'s `expect.rs`); `fuzz/README.md` table; `fuzz/Cargo.lock` gains only the `secmp-proto` path entry.
+
 ## 3. Evidence per acceptance criterion
 
 | Criterion (from `07-milestones.md`) | Test / command | Result |
 |---|---|---|
-| `decode(encode(x)) == x` and `encode(decode(b)) == b` for all structures | — | open (step 9) |
-| every negative vector rejected with the uniform error | `cargo nextest run -p secmp-proto --test encodings_ref` (`every_row_of_the_encodings_file`, reference file SHA-256 `9abd63d7…`) | **547/547 negatives rejected by the decoder itself with `Error::Rejected`** (since `05b6807` judged on the decode result alone, not after re-encoding); 78/78 decodable positives decode and re-encode byte-for-byte (frames to the named command); 7 `Signed/*` rows encode-only (step 10; their exact message layouts are unit-tested in `signed::tests::exact_contents`). Freeze pending (step 10). Evidence `M02-evidence/secmp-proto-tests-05b6807.txt` |
-| Kani proofs pass | — | open (step 11) |
-| fuzzers run 2 min without findings | — | open (step 12) |
-| Rust and `ref/` encodings identical | — | open (step 10) |
-| `expect::VECTOR_REF_PENDING` empty at the DoD (condition on `285cb17`, WEISUNG M2-1) | `cargo xtask step ref-vectors` ("pending freeze: none") | open (step 10) |
+| `decode(encode(x)) == x` and `encode(decode(b)) == b` for all structures | `cargo nextest run -p secmp-proto --test canonical` (8 tests: `records`, `frames`, `invitation_and_link_data`, `handshake_envelope`, `ratchet_cell_content_and_bodies`, `edge_counters`, `edge_lengths`, `edge_enum_variants`); `--test encodings_ref` (`every_row_of_the_encodings_file`: each positive decodes to exactly its `value` and re-encodes to its bytes); Kani harnesses (below) | pass — `M02-evidence/secmp-proto-tests-f0df22f.txt` (51/51) |
+| every negative vector rejected with the uniform error | `cargo nextest run -p secmp-proto --test encodings_ref` (`every_row_of_the_encodings_file`; since `94b14cf` on the frozen `vectors/encodings.json`, SHA-256 `9a1d5995…` = the reference file; before on the reference file SHA-256 `9abd63d7…`); also run by `cargo xtask vectors` before the freeze | **547/547 negatives rejected by the decoder itself with `Error::Rejected`** (since `05b6807` judged on the decode result alone, not after re-encoding); 78/78 decodable positives decode and re-encode byte-for-byte (frames to the named command); 7 `Signed/*` rows encode-only (step 10; their exact message layouts are unit-tested in `signed::tests::exact_contents`). Frozen in `94b14cf`. Evidence `M02-evidence/secmp-proto-tests-05b6807.txt`, `M02-evidence/secmp-proto-tests-f0df22f.txt` (51/51) |
+| Kani proofs pass | `cargo kani --package secmp-proto` (ci-full step 9) | pass — 15/15 harnesses verified, 0 failures (Kani 0.68.0, macOS arm64, on the tree of `45d28e1`): `padding` 47.7 s, `cell` 9.7 s, `header_v1` 218.0 s, `response_frame` 30.5 s, `request_frame` 4.9 s, the ten per-opcode request harnesses 0.3–85.4 s (`request_fetch_multi` 68.2 s); each run in the foreground with `--harness-timeout`; bounds and the attempts that exceeded them in the evidence file and §5 (d). Evidence `M02-evidence/kani-aarch64-apple-darwin-45d28e1.txt`. On CI: the PR run's `linux-full` step 9 |
+| fuzzers run 2 min without findings | `cargo +nightly-2026-09-21 fuzz run --fuzz-dir fuzz <target> -- -max_total_time=120` for the five `proto_*` targets (ci-full step 6 runs all twelve) | pass — all five: exit 0, no findings; `proto_records` 4 570 298 runs, `proto_frames` 3 879 394, `proto_invitation` 4 182 508, `proto_handshake` 5 768 752, `proto_cell` 6 393 524, each in 121 s; libFuzzer's `max_len` reached each target's largest seed (4338, 12 362, 12 020, 65 559 B). Evidence `M02-evidence/fuzz-proto-aarch64-apple-darwin-f0df22f.txt` |
+| Rust and `ref/` encodings identical | `cargo xtask vectors`; test `encodings_ref::the_rust_generator_reproduces_every_positive_row` (every target) | pass — "encodings: agrees with ref; frozen as vectors/encodings.json", "9 suites identical to vectors/ref (structural, SCHEMA §1; positive rows of encodings)"; all 85 generated positives agreed at the first comparison (ADR-026 as amended: structural; the frozen file is the verbatim reference file). The 547 negatives are the reference file's rows, each rejected by the Rust decoders (M2 deliverables: cross-generated *positive* vectors) — §8 Q-5 |
+| `expect::VECTOR_REF_PENDING` empty at the DoD (condition on `285cb17`, WEISUNG M2-1) | `cargo xtask step ref-vectors` | pass — "9 frozen suites (750 cases) structurally identical to vectors/ref (ADR-026); pending freeze: none" (`94b14cf`) |
 | Review focus: sizes match Appendix B | `crates/secmp-proto/src/sizes.rs` compile-time assertions (every App. B size re-derived from its App. D field list, frame payload maxima < 4336, agreement with `secmp-crypto`) | compiles (a wrong size is a build error); per-structure unit tests assert the encoded lengths (e.g. `relay_info_and_its_record` 1741/1744, `iks_bundle_link_data_blob` 2017/7775/12288/12360, `outer_is_padded_to_three_chunks` 12018, `every_request_round_trips_at_frame_size` 4336) |
 | Review focus: no unchecked `usize` arithmetic | `cargo clippy -p secmp-proto --all-targets -- -D warnings` with the crate-level deny set (`arithmetic_side_effects`, `indexing_slicing`, `as_conversions`) on top of the workspace lints | clean; lengths come from `split_at_checked`/`try_from`, the few size computations use `checked_add`/`checked_sub` |
 | Review focus: opcode table complete | `wire::frame::tests::opcode_table_equals_appendix_d2` (parses D.2 of `docs/03`), `reserved_and_foreign_opcodes_reject` (all 256 opcodes in both directions) | pass: 10 request opcodes (SKEY listed, rejects), 7 response opcodes |
@@ -144,14 +190,16 @@ Commit-1 evidence:
 |---|---|
 | `cargo xtask ci` (Linux) | open |
 | Windows (`windows-native`, `xwin-cross`) | open |
-| `cargo xtask ci-fast` (macOS arm64) | PASS on `9835bb3` (§3); fmt/clippy/policy/nextest/ref-vectors PASS on `168ede0` |
+| `cargo xtask ci-fast` (macOS arm64) | PASS on `9835bb3` (§3); fmt/clippy/policy/nextest/ref-vectors PASS on `168ede0`; **PASS on the tree of `f0df22f`** — every `ci-fast` step (fmt … hello, kat 303 s), run as two foreground `cargo xtask step` calls (`M02-evidence/ci-fast-aarch64-apple-darwin-f0df22f.txt`); `ref-vectors` "pending freeze: none" (`M02-evidence/ref-vectors-aarch64-apple-darwin-f0df22f.txt`) |
 | KATs / differential | PASS in `ci-fast` (§3); differential 4/4 in release after F1 |
 | Constant time (`ct`, M1 code) | macOS arm64 PASS on `168ede0` and `9835bb3` (§3); on `19f5700` (margin): run 1 **FAIL** (`caead_open_reject_samekey` 18.39 at p50, raw −0.80), runs 2 and 3 PASS (2.95, 0.91); **Linux x86_64, PR run 36556788827 on `b8ffb1c`: FAIL** (`msg_open_reject` 82.17, `caead_open_reject` 25.66, `caead_aead_reject` 12.51, `caead_open_reject_samekey` 14.56; `tsc`/`rdtscp`, k = 1) — both in §8 Blocked |
 | PR run 36556788827 (`b8ffb1c`, commit 1) | `windows-native` ✅, `xwin-cross` ✅, `linux-fast` ✅, `linux-full` ❌ — only step `ct` failed (`M02-evidence/ci-full-x86_64-linux-pr-run-36556788827-b8ffb1c.txt`) |
-| Fuzz smoke | open |
+| PR run 36564976761 (`49601cc`, WEISUNG M2-1 head) | `windows-native` ✅, `xwin-cross` ✅, `linux-fast` ✅, `linux-full` ❌ — only step `ct` failed: `caead_open_reject` INCONCLUSIVE→FAIL, 7.22 then 10.96 at p95 (runner resolution 26 ticks); every other step PASS incl. mutants (584 tested, 1 documented survivor), coverage (`secmp-proto` 99.6 %), miri, fuzz, kat (`M02-evidence/ci-full-x86_64-linux-pr-run-36564976761-49601cc.txt`, `…/ct-report-x86_64-linux-pr-run-36564976761-49601cc-FAIL.json`) |
+| ct diagnosis (15 `linux-ct` dispatches, 6 local macOS runs) | `M02-evidence/ct-diagnosis/summary.md` (every verdict, per-class percentiles), `README.md` (harness reading, findings); §8 |
+| Fuzz smoke | M1 targets: PASS in every `linux-full` run; M2 targets: 5/5 without findings locally (`M02-evidence/fuzz-proto-aarch64-apple-darwin-f0df22f.txt`) |
 | Mutation | gate in step 13; local look-ahead (`M02-evidence/mutants-local-steps1-8.txt`): `cargo mutants -p secmp-proto` first pass 343 mutants — 258 caught, 75 unviable, **10 missed** (four untested accessors, three `FragmentPayload` inner-type arms, `Profile::name`, and `FETCH_MULTI` `count == 0 \|\| count > 32` → `&&`, which the reference-file test missed because it judged negatives after re-encoding and the encoder enforces the same rule). Fixed by tests, and the reference test now judges every negative on the decoder alone: second pass **268 caught, 75 unviable, 0 missed**; the changed `secmp-crypto` files (`x25519.rs`, `ed25519.rs`, feature `kat`): 47 mutants, 28 caught, 19 unviable, 0 missed |
 | Coverage | local gate `cargo xtask step coverage` on `9125c42`: **PASS** — `secmp-proto` 2414/2423 lines = 99.6 %, `secmp-crypto` 1830/1838 = 99.6 % (min 90 %) (`M02-evidence/coverage-aarch64-apple-darwin-9125c42.txt`); earlier on `d90f3b7` 98.88 % for `secmp-proto` |
-| Kani / Miri | Kani: open (step 11); Miri: local `cargo xtask step miri` on `665d5af` **PASS** in 850 s — `secmp-crypto` 52 tests (incl. the new decode-check tests; 11 skipped by `MIRI_SKIP`), `secmp-sys-mem` 7 (`M02-evidence/miri-aarch64-apple-darwin-665d5af.txt`); weekly `miri-full` workflow added (runs on `main` once merged: `schedule` works only on the default branch) |
+| Kani / Miri | Kani: 15/15 verified locally (`M02-evidence/kani-aarch64-apple-darwin-45d28e1.txt`); Miri: local `cargo xtask step miri` on `665d5af` **PASS** in 850 s — `secmp-crypto` 52 tests (incl. the new decode-check tests; 11 skipped by `MIRI_SKIP`), `secmp-sys-mem` 7 (`M02-evidence/miri-aarch64-apple-darwin-665d5af.txt`); weekly `miri-full` workflow added (runs on `main` once merged: `schedule` works only on the default branch) |
 | `cargo xtask ci-fast` on `d90f3b7` (macOS arm64) | **PASS** — every step, nextest over the workspace, kat 368 s (`M02-evidence/ci-fast-aarch64-apple-darwin-d90f3b7.txt`) |
 | `cargo deny` / `cargo vet` / `cargo audit` / cooldown | PASS in local `ci-fast` on `d90f3b7` (vet: 92 fully audited, 1 partially, 24 exempted — normal `secmp-crypto`/`secmp-proto` closure: 52 external crates, 0 exempted; cooldown: 119 packages ≥ 7 days) |
 | `secmp-proto` unit + reference tests | 40/40 on `d90f3b7` (`M02-evidence/secmp-proto-tests-d90f3b7.txt`); 41/41 on `05b6807` after the survivor tests (`M02-evidence/secmp-proto-tests-05b6807.txt`) |
@@ -162,17 +210,30 @@ Commit-1 evidence:
 None. Notes: (a) the brief asks for the CI-trigger line in `docs/06` §4; it sits after the §4 table. (b) Removing
 the `push && ref != main` clause of `linux-full` is the direct consequence of `push: branches: [main]` (the clause
 could no longer be true); no other workflow change. (c) ADR-038 (3) now carries the reviewer's amendment line
-(warm-up, batch median, 10 % margin, < 80 → NOT_MEASURABLE), implemented in `19f5700`.
+(warm-up, batch median, 10 % margin, < 80 → NOT_MEASURABLE), implemented in `19f5700`. (d) Steps 9–12 as
+planned; how they were built, for the reviewer: the vector cross-generation covers the positive rows (plan step
+10 wording; the negatives are checked by rejection, §8 Q-5); the Kani harnesses stub the `secmp-crypto` key checks
+and, for the frame harnesses, `unpad`, which is proven on its own for sizes ≤ 32; documented Kani bounds, each
+measured (§8 Q-6): the frames' re-encoding property is not in the frame harnesses (CBMC's solver exceeded 7 min;
+covered by the `frames` property test, fuzzing and the vectors), the request side is one harness per opcode plus a
+glue harness (symbolic execution over a symbolic opcode did not finish in 7 min), `FETCH_MULTI` for counts ≤ 8 and
+> 32 (the loop body is the same for each entry), unknown opcodes by the unit test over all 256 values; `codec::pad` was
+rewritten without a fill loop (behaviour unchanged) and `cfg(kani)` declared in the workspace lint table (a
+declaration, no lint relaxed); the fuzz targets are one per Appendix D section with a selector byte, not one
+per decoder (every decoder reachable; 12 targets × 2 min in ci-full instead of 42).
 
 ## 6. Dependencies added or bumped
 
 | Crate | Version | ADR | Vet record | Reason |
 |---|---|---|---|---|
 | `secmp-crypto` (path) | workspace | docs/02 §3 | — (first party) | `secmp-proto`'s only allowed workspace dependency |
-| `serde_json` (dev, `secmp-proto`) | 1.0.151 (already in the lock) | ADR-040 (Proposed) | trust `dtolnay` (ADR-031) | reading the `encodings` vector file in tests |
+| `serde_json` (dev, `secmp-proto`) | 1.0.151 (already in the lock) | ADR-040 (Accepted) | trust `dtolnay` (ADR-031) | reading the `encodings` vector file in tests |
+| `rand` (dev, `secmp-proto`) | =0.10.3, `default-features = false`, `std_rng` (already in the lock) | ADR-040 (Accepted) | existing record | seeded generators of the property tests (`d8d8851`) |
+| `secmp-crypto` feature `kat` (dev, `secmp-proto`) | workspace | — (first party) | — | `VectorStream` and the derandomised signers for the vector generator |
+| `secmp-proto` (path, `fuzz/`) | workspace | — (first party) | — | the `proto_*` fuzz targets; `fuzz/Cargo.lock` gains only this path entry |
 
-`rand` (dev, for step 9) is covered by ADR-040 but not added yet. `proptest` is not used (WEISUNG M2-1). No new
-crate entered `Cargo.lock` (the only lock change is `secmp-proto`'s two dependency edges).
+`proptest` is not used (WEISUNG M2-1). No new crate entered `Cargo.lock` or `fuzz/Cargo.lock` (only edges of
+first-party crates changed).
 
 ## 7. Open risks and known limitations
 
@@ -221,6 +282,32 @@ Linux (e.g. an A/A control with identical inputs in both classes, to measure the
 on this runner type), or another decision under ADR-038? The PR runs of later heads will run the same gate on the
 same unchanged code; M2's own code (`secmp-proto`) has no secret-dependent paths and is not measured.
 
+**ct gate diagnosis (WEISUNG M2-2 C, a diagnosis, not a decision).** Evidence: `M02-evidence/ct-diagnosis/`
+(`summary.md`: every verdict and the per-class percentiles of every failing target; `README.md`: the C.5 harness
+reading M1 vs current and the findings). Linux `linux-ct` dispatches, three per arm, refs alternated, one at a time
+per ref; nothing in thresholds, samples, control or verdict was changed:
+
+| arm (ref, commit) | classes differ in | run ids (gate verdict) | Linux | macOS (local) |
+|---|---|---|---|---|
+| head `diag/ct-head` `4e582cb` | contents and source buffer | 36569276354 FAIL, 36569537981 FAIL, 36569851004 FAIL | 3/3 FAIL | M2-1 run 1 FAIL (samekey) |
+| M1 harness `diag/ct-harness-m1` `5866132` | contents and source buffer | 36569280552 FAIL, 36569607551 PASS, 36569911754 FAIL | 2/3 FAIL | — |
+| A/A `diag/ct-aa` `dbbfd25` | nothing | 36569285346 PASS, 36569611898 PASS, 36569854770 PASS | 3/3 PASS | 3/3 PASS |
+| A/A′ `diag/ct-aa2` `2139e38` | source buffer only | 36569831144 FAIL, 36570578827 FAIL, 36571035269 PASS | 2/3 FAIL | — |
+| fix `diag/ct-fix` `f7b3066` | contents only | 36571079144 FAIL, 36571807564 FAIL, 36572303711 FAIL | 3/3 FAIL | 3/3 FAIL (`caead_derive` I→F) |
+
+Findings: (1) F8 is not the cause — the M1 harness fails too. (2) A harness artefact exists and is removed: with
+identical contents, a separate class-1 source buffer alone fails the gate (A/A′), one source for both labels passes
+every run (A/A); `prepare` read a per-class source buffer right before the timed window (e.g. `caead_open_reject`:
+`if c == 0 { (&other, &sealed) } else { (&k, &tampered) }`), so each timed call started from a class-dependent cache
+state; `f7b3066` builds both classes from one common source (`blend`: `*o = b ^ (d & mask)`, mask from the class
+without a branch). (3) The gate still fails after the fix (Linux 3/3, macOS 3/3), on targets that are constant-time
+by construction (`caead_derive`, `caead_aead_reject`, `caead_open_reject_samekey`), with per-class percentiles that
+agree to the tick almost everywhere — sub-quantum shifts summed over 10⁶ samples. (4) Several large |t| flip sign
+between the two measurements of one process (e.g. A/A′ run 36571035269 `msg_open_reject` p95 −5.0 then +48.2). (5)
+C.7: the macOS run-1 `caead_open_reject_samekey` FAIL (per-class sources) is consistent with finding 2 — samekey
+passes 3/3 in the macOS A/A runs and 3/3 with the fixed harness on macOS. No second harness defect that can be
+named with a diff line was found, so nothing else was changed.
+
 Decisions of WEISUNG M2-1 (2026-09-29), applied:
 
 - Q-1 (F8 margin): **10 %** — `k = ceil(110 · quantum / median)`, realised count recorded, < 80 quanta →
@@ -244,11 +331,25 @@ Decisions of WEISUNG M2-1 (2026-09-29), applied:
 
 Open questions:
 
-- Q-3: ADR-040 (Proposed) — `serde_json` is in use as a dev-dependency of `secmp-proto` for the reference-file test
-  (same crate/version/use as `secmp-crypto`'s, ADR-037); `rand` follows in step 9 per WEISUNG M2-1. Acceptance
-  requested.
-- No App. D reading was unsettled in steps 1–8: every rule implemented is in rev 2.3, ADR-039, the SQ answers or
-  the SCHEMA-4.8 contract, and no row of the reference file disagreed with the decoders.
+- Q-3 (ADR-040): answered — Accepted (WEISUNG M2-2 B, `6beb30e`); `rand` added in `d8d8851`.
+- **Q-4 (ct gate, for the reviewer):** the gate fails on Linux (and on macOS for `caead_derive`) after the harness
+  artefact is removed, with the pattern of findings 3–4 above. Is this a property of the fixed-vs-fixed statistic at
+  10⁶ samples on these runners, to be decided under ADR-038, or does the reviewer want a further isolation step?
+  Every PR run's `linux-full` will fail at step `ct` until then (PR run 36564976761: only `ct` failed).
+- Q-5 (vectors): `cargo xtask vectors` cross-generates the 85 positive rows (all agree); the 547 negative rows are
+  the reference file's manipulations, checked by rejection (every one rejected by the Rust decoders, run before the
+  freeze). Is a Rust-side regeneration of the negative rows wanted as well (a second implementation of the
+  SCHEMA-4.8 manipulations)?
+- Q-6 (Kani design and bounds): the harnesses replace the `secmp-crypto` key checks by nondeterministic
+  accept/reject stubs (the checks are covered by Wycheproof, KATs and the vectors) and, in the frame harnesses,
+  `unpad` by an over-approximation (any proper prefix or reject); `unpad`/`pad` are proven on their own for every
+  size ≤ 32 — a symbolic 4336-byte marker scan did not finish in CI time (≈ 500 of 4336 loop steps in two
+  minutes). Further documented bounds (§5 (d)): no re-encoding property in the frame harnesses, requests split per
+  opcode, `FETCH_MULTI` counts ≤ 8 and > 32. Acceptable, or should any of them run unbounded as a long,
+  non-gating job? ci-full step 9 now runs 15 harnesses (≈ 7 min locally, sum of the verification times).
+- No App. D reading was unsettled in steps 1–12: every rule implemented is in rev 2.3, ADR-039, the SQ answers or
+  the SCHEMA-4.8 contract, no row of the reference file disagreed with the decoders, and the Rust generator agreed
+  with every positive row.
 
 Other notes:
 

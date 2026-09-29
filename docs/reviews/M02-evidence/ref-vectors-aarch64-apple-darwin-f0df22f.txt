@@ -1,0 +1,3 @@
+=== step summary (host aarch64-apple-darwin, strict: false) ===
+ 12a ref-vectors     PASS          0s  9 frozen suites (750 cases) structurally identical to vectors/ref (ADR-026); pending freeze: none
+step: PASS

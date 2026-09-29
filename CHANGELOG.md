@@ -88,3 +88,12 @@ All notable changes to this project are documented in this file. The format foll
   Appendix D structure (records, frame plaintexts with the complete opcode table, invitation and link data,
   handshake envelope, ratchet cell/header/content and bodies, signed command messages); every row of the
   `encodings` reference file decodes (positives, byte-exact) or is rejected (547 negatives).
+- M2 `secmp-proto`: canonicality property tests on seeded `rand` generators (ADR-040); the Rust generator of the
+  `encodings` positives (SCHEMA §2 streams via `secmp_crypto::VectorStream`, feature `kat`) agrees with the
+  reference file, and `vectors/encodings.json` is frozen (`cargo xtask vectors` compares the positive rows and
+  requires every negative row to be rejected); Kani harnesses for `Cell`, `HeaderV1`, the padding and both
+  frame-plaintext directions; fuzz targets `proto_records`, `proto_frames`, `proto_invitation`,
+  `proto_handshake`, `proto_cell` for every Appendix D decoder, seeded from the vectors.
+- Constant-time harness (WEISUNG M2-2 C.6): both classes' inputs are built from one common source per target
+  (branch-free blend), removing a class-dependent source-buffer artefact; a dispatch-only `linux-ct` CI job and
+  per-class sample percentiles in the report support the diagnosis (`docs/reviews/M02-evidence/ct-diagnosis/`).

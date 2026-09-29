@@ -200,6 +200,27 @@ impl Ed25519VerifyingKey {
     }
 }
 
+/// The message-free checks of an Ed25519 signature `R ‖ S` that a decoder applies (spec §4.1 decoder obligation
+/// (b)): `R` canonical (y < p), not of small order and a point on the curve (RFC 8032 §5.1.3 decoding succeeds),
+/// and `S < L`. A signature refused here is refused by [`Ed25519VerifyingKey::verify`] as well, which repeats the
+/// byte rules before it checks the equation, so the check at decode changes no end-to-end outcome.
+///
+/// # Errors
+/// [`Error::Rejected`] unless `sig` is 64 bytes long and passes these checks.
+pub fn check_ed25519_signature_encoding(sig: &[u8]) -> Result<()> {
+    let sig: [u8; ED25519_SIG_LEN] = sig.try_into().map_err(|_| Error::Rejected)?;
+    let (r, s) = sig.split_at(32);
+    let r: [u8; 32] = r.try_into().map_err(|_| Error::Rejected)?;
+    let s: [u8; 32] = s.try_into().map_err(|_| Error::Rejected)?;
+    if !strict::signature_ok(&r, &s) {
+        return Err(Error::Rejected);
+    }
+    // RFC 8032 §5.1.3: `R` decodes to a curve point (point decompression; the byte rules above already hold)
+    ed25519_dalek::VerifyingKey::from_bytes(&r)
+        .map(|_| ())
+        .map_err(|_| Error::Rejected)
+}
+
 impl fmt::Debug for Ed25519VerifyingKey {
     /// Redacted: key bytes never reach logs (docs/04 CS-2.5).
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -422,6 +443,47 @@ mod tests {
             unhex_n::<32>("f0ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f");
         assert!(!strict::signature_ok(&non_canonical, &s), "R with y >= p");
         assert!(!strict::signature_ok(&identity, &strict::L_BYTES));
+        Ok(())
+    }
+
+    /// Spec §4.1 decoder obligation (b): the message-free signature check accepts a real signature and refuses
+    /// every byte-rule violation, an `R` that is canonical but not a curve point (y = 2), and a wrong length.
+    #[test]
+    fn signature_encoding_check() -> Result<()> {
+        let (_, _, sig) = signed()?;
+        check_ed25519_signature_encoding(&sig)?;
+        let with_r = |r: &str| {
+            let mut out = sig;
+            out[..32].copy_from_slice(&unhex_n::<32>(r));
+            out
+        };
+        for bad_r in [
+            // identity, order 2, order 4, order 8 (both x signs)
+            "0100000000000000000000000000000000000000000000000000000000000000",
+            "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+            "0000000000000000000000000000000000000000000000000000000000000000",
+            "26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05",
+            "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa",
+            // y = p + 3 (non-canonical), y = 2 (canonical, not on the curve)
+            "f0ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+            "0200000000000000000000000000000000000000000000000000000000000000",
+        ] {
+            assert_eq!(
+                check_ed25519_signature_encoding(&with_r(bad_r)),
+                Err(Error::Rejected),
+                "{bad_r}"
+            );
+        }
+        let mut big_s = sig;
+        big_s[32..].copy_from_slice(&strict::L_BYTES);
+        assert_eq!(
+            check_ed25519_signature_encoding(&big_s),
+            Err(Error::Rejected)
+        );
+        assert_eq!(
+            check_ed25519_signature_encoding(&sig[..63]),
+            Err(Error::Rejected)
+        );
         Ok(())
     }
 }

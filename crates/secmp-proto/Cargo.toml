@@ -12,8 +12,10 @@ publish.workspace = true
 [dependencies]
 secmp-crypto.workspace = true
 
-# ADR-040: test-only (the vector files).
+# ADR-040: test-only (the vector files). `secmp-crypto`'s `kat` feature (the SCHEMA §2 streams and the
+# derandomised signers) is enabled for the tests and the `gen-encodings` example only.
 [dev-dependencies]
+secmp-crypto = { workspace = true, features = ["kat"] }
 serde_json.workspace = true
 rand.workspace = true
 

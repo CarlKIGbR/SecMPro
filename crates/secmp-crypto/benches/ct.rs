@@ -171,16 +171,103 @@ fn analyse(samples: &[(usize, f64)]) -> Vec<(String, f64)> {
     results
 }
 
+/// Where the Linux clocksource is published (sysfs).
+const CLOCKSOURCE_DIR: &str = "/sys/devices/system/clocksource/clocksource0";
+
+/// The clock the samples are taken with (M1 review C4 diagnosis): the clocksource (Linux; `"n/a"` elsewhere) and
+/// the resolution of `Instant` as seen by `measure`, estimated from back-to-back `Instant::now()` pairs.
+struct Clock {
+    current_clocksource: String,
+    available_clocksource: String,
+    /// The smallest non-zero delta of 10⁶ back-to-back pairs, in ns.
+    resolution_ns: Option<f64>,
+    /// The median non-zero delta of the same pairs, in ns.
+    median_delta_ns: Option<f64>,
+}
+
+impl Clock {
+    fn probe() -> Self {
+        let read = |file: &str| {
+            std::fs::read_to_string(format!("{CLOCKSOURCE_DIR}/{file}"))
+                .map_or_else(|_| "n/a".to_owned(), |s| s.trim().to_owned())
+        };
+        let mut deltas: Vec<f64> = (0..1_000_000)
+            .filter_map(|_| {
+                let a = Instant::now();
+                let b = Instant::now();
+                let d = b.duration_since(a).as_secs_f64() * 1e9;
+                (d > 0.0).then_some(d)
+            })
+            .collect();
+        deltas.sort_by(f64::total_cmp);
+        Self {
+            current_clocksource: read("current_clocksource"),
+            available_clocksource: read("available_clocksource"),
+            resolution_ns: deltas.first().copied(),
+            median_delta_ns: deltas.get(deltas.len() / 2).copied(),
+        }
+    }
+
+    fn json(&self) -> String {
+        serde_json::json!({
+            "current_clocksource": self.current_clocksource,
+            "available_clocksource": self.available_clocksource,
+            "resolution_ns": self.resolution_ns,
+            "median_delta_ns": self.median_delta_ns,
+            "arch": std::env::consts::ARCH,
+        })
+        .to_string()
+    }
+}
+
+/// How finely the samples of one target are resolved: the number of distinct timing values and the median.
+struct Quantisation {
+    distinct: usize,
+    median_ns: f64,
+}
+
+impl Quantisation {
+    fn of(samples: &[(usize, f64)]) -> Self {
+        let mut sorted: Vec<f64> = samples.iter().map(|(_, x)| *x).collect();
+        sorted.sort_by(f64::total_cmp);
+        let median_ns = sorted.get(sorted.len() / 2).copied().unwrap_or(0.0);
+        sorted.dedup_by_key(|x| x.to_bits());
+        Self {
+            distinct: sorted.len(),
+            median_ns,
+        }
+    }
+}
+
 struct Outcome {
     name: &'static str,
     /// What class 0 and class 1 measure.
     classes: [&'static str; 2],
     samples: usize,
     ts: Vec<(String, f64)>,
+    quantisation: Quantisation,
     control: bool,
 }
 
 impl Outcome {
+    /// The verdict inputs (`analyse`) and the quantisation figures of one target's samples.
+    fn new(
+        name: &'static str,
+        classes: [&'static str; 2],
+        samples: usize,
+        data: &[(usize, f64)],
+        control: bool,
+    ) -> Self {
+        Self {
+            name,
+            classes,
+            samples,
+            ts: analyse(data),
+            quantisation: Quantisation::of(data),
+            control,
+        }
+    }
+
     fn max_abs_t(&self) -> f64 {
         self.ts.iter().map(|(_, t)| t.abs()).fold(0.0, f64::max)
     }
@@ -193,15 +280,22 @@ impl Outcome {
         }
     }
 
-    fn json(&self) -> String {
+    fn json(&self, resolution_ns: Option<f64>) -> String {
         let ts: Vec<String> = self
             .ts
             .iter()
             .map(|(k, t)| format!("\"{k}\":{t:.3}"))
             .collect();
         let [class0, class1] = self.classes;
+        let Quantisation {
+            distinct,
+            median_ns,
+        } = self.quantisation;
+        let per_resolution = resolution_ns
+            .filter(|r| *r > 0.0)
+            .map_or_else(|| "null".to_owned(), |r| format!("{:.1}", median_ns / r));
         format!(
-            "{{\"name\":\"{}\",\"class0\":\"{class0}\",\"class1\":\"{class1}\",\"samples\":{},\"control\":{},\"max_abs_t\":{:.3},\"passed\":{},\"t\":{{{}}}}}",
+            "{{\"name\":\"{}\",\"class0\":\"{class0}\",\"class1\":\"{class1}\",\"samples\":{},\"distinct\":{distinct},\"median_ns\":{median_ns:.1},\"median_per_resolution\":{per_resolution},\"control\":{},\"max_abs_t\":{:.3},\"passed\":{},\"t\":{{{}}}}}",
             self.name,
             self.samples,
             self.control,
@@ -502,7 +596,8 @@ fn sas(n: usize, stream: &mut Stream) -> Result<Vec<(usize, f64)>, secmp_crypto:
     ))
 }
 
-fn run() -> Result<Vec<Outcome>, secmp_crypto::Error> {
+fn run() -> Result<(Clock, Vec<Outcome>), secmp_crypto::Error> {
+    let clock = Clock::probe();
     let scale: usize = std::env::var("SECMP_CT_SCALE")
         .ok()
         .and_then(|s| s.parse().ok())
@@ -511,91 +606,92 @@ fn run() -> Result<Vec<Outcome>, secmp_crypto::Error> {
     let mut stream = Stream::new()?;
     let mut out = Vec::new();
     let n = 1_000_000_usize.checked_div(scale).unwrap_or(1);
-    out.push(Outcome {
-        name: "control_variable_time_compare",
-        classes: ["tag differs in byte 0", "tag differs in byte 31"],
-        samples: n,
-        ts: analyse(&tag_compare(n, &mut stream, true)),
-        control: true,
-    });
-    out.push(Outcome {
-        name: "tag_compare",
-        classes: ["tag differs in byte 0", "tag differs in byte 31"],
-        samples: n,
-        ts: analyse(&tag_compare(n, &mut stream, false)),
-        control: false,
-    });
-    out.push(Outcome {
-        name: "msg_open_reject",
-        classes: ["tag wrong in its first byte", "tag wrong in its last byte"],
-        samples: n,
-        ts: analyse(&msg_open_reject(n, &mut stream)?),
-        control: false,
-    });
-    out.push(Outcome {
-        name: "caead_open_reject",
-        classes: [
+    out.push(Outcome::new(
+        "control_variable_time_compare",
+        ["tag differs in byte 0", "tag differs in byte 31"],
+        n,
+        &tag_compare(n, &mut stream, true),
+        true,
+    ));
+    out.push(Outcome::new(
+        "tag_compare",
+        ["tag differs in byte 0", "tag differs in byte 31"],
+        n,
+        &tag_compare(n, &mut stream, false),
+        false,
+    ));
+    out.push(Outcome::new(
+        "msg_open_reject",
+        ["tag wrong in its first byte", "tag wrong in its last byte"],
+        n,
+        &msg_open_reject(n, &mut stream)?,
+        false,
+    ));
+    out.push(Outcome::new(
+        "caead_open_reject",
+        [
             "wrong key (COM and tag fail)",
             "right key, tampered at byte 100 (COM ok, tag fails)",
         ],
-        samples: n,
-        ts: analyse(&caead_open_reject(n, &mut stream)?),
-        control: false,
-    });
+        n,
+        &caead_open_reject(n, &mut stream)?,
+        false,
+    ));
     let n_sas = 20_000_usize.checked_div(scale).unwrap_or(1);
-    out.push(Outcome {
-        name: "sas",
-        classes: ["fixed fingerprint pair", "random fingerprint pairs"],
-        samples: n_sas,
-        ts: analyse(&sas(n_sas, &mut stream)?),
-        control: false,
-    });
-    out.push(Outcome {
-        name: "caead_derive",
-        classes: ["wrong key", "right key"],
-        samples: n,
-        ts: analyse(&caead_derive(n, &mut stream)?),
-        control: false,
-    });
-    out.push(Outcome {
-        name: "caead_aead_reject",
-        classes: [
+    out.push(Outcome::new(
+        "sas",
+        ["fixed fingerprint pair", "random fingerprint pairs"],
+        n_sas,
+        &sas(n_sas, &mut stream)?,
+        false,
+    ));
+    out.push(Outcome::new(
+        "caead_derive",
+        ["wrong key", "right key"],
+        n,
+        &caead_derive(n, &mut stream)?,
+        false,
+    ));
+    out.push(Outcome::new(
+        "caead_aead_reject",
+        [
             "K_enc of the wrong key, same tampered C",
             "K_enc of the right key, same tampered C",
         ],
-        samples: n,
-        ts: analyse(&caead_aead_reject(n, &mut stream)?),
-        control: false,
-    });
-    out.push(Outcome {
-        name: "caead_com_compare",
-        classes: ["COM mismatch (wrong key)", "COM match (right key)"],
-        samples: n,
-        ts: analyse(&caead_com_compare(n, &mut stream)?),
-        control: false,
-    });
-    out.push(Outcome {
-        name: "caead_open_reject_samekey",
-        classes: [
+        n,
+        &caead_aead_reject(n, &mut stream)?,
+        false,
+    ));
+    out.push(Outcome::new(
+        "caead_com_compare",
+        ["COM mismatch (wrong key)", "COM match (right key)"],
+        n,
+        &caead_com_compare(n, &mut stream)?,
+        false,
+    ));
+    out.push(Outcome::new(
+        "caead_open_reject_samekey",
+        [
             "right key, tampered at byte 100",
             "right key, tampered at byte 300",
         ],
-        samples: n,
-        ts: analyse(&caead_open_reject_samekey(n, &mut stream)?),
-        control: false,
-    });
-    Ok(out)
+        n,
+        &caead_open_reject_samekey(n, &mut stream)?,
+        false,
+    ));
+    Ok((clock, out))
 }
 
 fn main() -> ExitCode {
-    let Ok(outcomes) = run() else {
+    let Ok((clock, outcomes)) = run() else {
         return ExitCode::FAILURE;
     };
     let json = format!(
-        "{{\"threshold\":{T_THRESHOLD},\"sign\":\"{SIGN}\",\"results\":[{}]}}",
+        "{{\"threshold\":{T_THRESHOLD},\"sign\":\"{SIGN}\",\"clock\":{},\"results\":[{}]}}",
+        clock.json(),
         outcomes
             .iter()
-            .map(Outcome::json)
+            .map(|o| o.json(clock.resolution_ns))
             .collect::<Vec<_>>()
             .join(",")
     );

@@ -48,11 +48,21 @@ pub(crate) const AUDIT_IGNORES: &[(&str, &str)] = &[(
 /// Packages exposing the `kat` feature (docs/06 §5 step 5): external KATs, differential tests, vector checks.
 pub(crate) const KAT_PACKAGES: &[&str] = &["secmp-crypto", "secmp-testkit"];
 
-/// ADR-038 (2): the two-tier verdict of the `ct` gate on max |t| over raw + 5 crops — `(pass, fail)`: ≤ pass →
-/// PASS, > fail → FAIL, in between one confirmatory re-measurement. Fixed by the ADR. The bench reads this line
-/// (and the next constant) from this file at compile time, and the gate checks the report echoes both, so the
-/// values are written down exactly once. Keep each on one line.
-pub(crate) const CT_THRESHOLDS: (f64, f64) = (4.5, 10.0);
+/// ADR-041 (1), replacing the two tiers of ADR-038 (2): the |t| threshold of the `ct` gate — a target's shift counts
+/// as reproduced if |t| exceeds it in both measurements at the same crop with the same sign; the positive control
+/// must exceed it. (The immediate-FAIL tier above 10 is withdrawn.) The bench reads this line and the `CT_*` lines
+/// below from this file at compile time, and the gate checks that the report echoes every one, so the values are
+/// written down exactly once. Keep each on one line.
+pub(crate) const CT_THRESHOLDS: f64 = 4.5;
+
+/// ADR-041 (2): a reproduced shift fails only if |Δ| of the cropped class means is at least this many effective
+/// quanta (the lattice spacing of the samples, measured from the data); below it the report says "sub-quantum
+/// shift".
+pub(crate) const CT_EFFECT_FLOOR_QUANTA: f64 = 1.0;
+
+/// ADR-041 (3): the inline A/A control of a run passes if its |t| is at most this at every crop of every target;
+/// otherwise the run is `CONTROL_FAIL`.
+pub(crate) const CT_AA_MAX_T: f64 = 4.5;
 
 /// ADR-038 (3): the timer resolution may be at most this fraction of a sample's median; where a single call is
 /// too short, one sample batches `k = ceil(quantum / (fraction · median))` calls.

@@ -188,7 +188,7 @@ pub(crate) fn kat(ctx: &Ctx) -> Result<Outcome> {
 }
 
 /// The `ct` report (`target/ct-report.json`, written by `crates/secmp-crypto/benches/ct.rs`) as the gate reads it
-/// (ADR-038): one line per target, and the targets that fail or are not measurable on this runner.
+/// (ADR-038, ADR-041): one line per target, and the targets that fail or are not measurable on this runner.
 #[derive(Debug, Default)]
 pub(crate) struct CtTable {
     pub(crate) lines: Vec<String>,
@@ -196,16 +196,19 @@ pub(crate) struct CtTable {
     pub(crate) not_measurable: Vec<String>,
 }
 
-/// The verdicts a report may carry and whether each passes (ADR-038 (2)–(4)).
+/// The verdicts a report may carry per target and whether each passes (ADR-041; `NOT_MEASURABLE` per ADR-038 (3)).
 const CT_VERDICTS: &[(&str, bool)] = &[
     ("PASS", true),
-    ("INCONCLUSIVE→PASS", true),
+    ("SUB_QUANTUM_SHIFT", true),
     ("FAIL", false),
-    ("INCONCLUSIVE→FAIL", false),
     ("NOT_MEASURABLE", false),
+    ("CONTROL_FAIL", false),
 ];
 
-/// `max |t| = x (crop), batch median y ns, realised r quanta` of one measurement object.
+/// The run verdicts a report may carry (ADR-041 (3)).
+const CT_RUN_VERDICTS: &[&str] = &["PASS", "FAIL", "CONTROL_FAIL"];
+
+/// `max |t| = x (crop), batch median y ns, q_eff q ticks (source), realised r quanta` of one measurement object.
 fn ct_measurement(m: &Value) -> String {
     let t = m
         .get("max_abs_t")
@@ -216,11 +219,95 @@ fn ct_measurement(m: &Value) -> String {
         .get("median_ns")
         .and_then(Value::as_f64)
         .unwrap_or(f64::NAN);
+    let q = m
+        .get("q_eff_ticks")
+        .and_then(Value::as_f64)
+        .map_or_else(|| "?".to_owned(), |q| format!("{q:.1}"));
+    let source = m.get("q_eff_source").and_then(Value::as_str).unwrap_or("?");
     let realised = m
         .get("realised_quanta")
         .and_then(Value::as_f64)
         .map_or_else(|| "?".to_owned(), |r| format!("{r:.1}"));
-    format!("max |t| = {t:.2} ({at}), batch median {median:.1} ns, realised {realised} quanta")
+    format!(
+        "max |t| = {t:.2} ({at}), batch median {median:.1} ns, q_eff {q} ticks ({source}), realised {realised} quanta"
+    )
+}
+
+/// The report must echo exactly the parameters of `expect.rs` (the bench reads them from there).
+fn ct_check_parameters(v: &Value) -> Result<()> {
+    let th = v
+        .get("thresholds")
+        .ok_or_else(|| Error("ct report: no thresholds".to_owned()))?;
+    let num = |k: &str| th.get(k).and_then(Value::as_f64).map(f64::to_bits);
+    if num("pass") != Some(expect::CT_THRESHOLDS.to_bits())
+        || num("max_resolution_fraction") != Some(expect::CT_RESOLUTION_MAX_FRACTION.to_bits())
+        || th.get("max_batch").and_then(Value::as_u64) != Some(u64::from(expect::CT_MAX_BATCH))
+        || num("batch_margin") != Some(expect::CT_BATCH_MARGIN.to_bits())
+        || th.get("min_realised_quanta").and_then(Value::as_u64)
+            != Some(expect::CT_MIN_REALISED_QUANTA)
+        || num("effect_floor_quanta") != Some(expect::CT_EFFECT_FLOOR_QUANTA.to_bits())
+        || num("aa_max_t") != Some(expect::CT_AA_MAX_T.to_bits())
+    {
+        bail!(
+            "ct report: parameters {th} differ from expect::CT_THRESHOLDS {} / CT_RESOLUTION_MAX_FRACTION {} / \
+             CT_MAX_BATCH {} / CT_BATCH_MARGIN {} / CT_MIN_REALISED_QUANTA {} / CT_EFFECT_FLOOR_QUANTA {} / \
+             CT_AA_MAX_T {}",
+            expect::CT_THRESHOLDS,
+            expect::CT_RESOLUTION_MAX_FRACTION,
+            expect::CT_MAX_BATCH,
+            expect::CT_BATCH_MARGIN,
+            expect::CT_MIN_REALISED_QUANTA,
+            expect::CT_EFFECT_FLOOR_QUANTA,
+            expect::CT_AA_MAX_T
+        );
+    }
+    Ok(())
+}
+
+/// One target's line: verdict (with the deciding crop), `k`, calibration, both measurements and the A/A control.
+fn ct_line(r: &Value) -> (String, String, bool) {
+    let name = r.get("name").and_then(Value::as_str).unwrap_or("?");
+    let verdict = r.get("verdict").and_then(Value::as_str).unwrap_or("?");
+    let control = r.get("control").and_then(Value::as_bool).unwrap_or(false);
+    let n = r.get("samples").and_then(Value::as_u64).unwrap_or(0);
+    let k = r
+        .get("k")
+        .and_then(Value::as_u64)
+        .map_or_else(|| "-".to_owned(), |k| k.to_string());
+    let calibration = r.get("calibration_median_ns").and_then(Value::as_f64);
+    let ns = |x: Option<f64>| x.map_or_else(|| "?".to_owned(), |x| format!("{x:.1}"));
+    let measurement = |key: &str, label: &str| {
+        r.get(key)
+            .filter(|m| !m.is_null())
+            .map(|m| format!("; {label} {}", ct_measurement(m)))
+            .unwrap_or_default()
+    };
+    let decisive = r
+        .get("decisive_crop")
+        .and_then(Value::as_str)
+        .map(|c| format!(" at {c}"))
+        .unwrap_or_default();
+    let line = format!(
+        "{name}: {verdict}{decisive} — k={k}, calibration median {} ns, {n} samples{}{}{}{}",
+        ns(calibration),
+        measurement("first", "first"),
+        measurement("second", "second"),
+        measurement("aa_control", "A/A"),
+        if control {
+            " (positive control, must be detected)"
+        } else {
+            ""
+        }
+    );
+    let passes = CT_VERDICTS
+        .iter()
+        .find(|(v, _)| *v == verdict)
+        .is_some_and(|(_, ok)| *ok);
+    (
+        line,
+        format!("{name} (median {} ns)", ns(calibration)),
+        passes,
+    )
 }
 
 pub(crate) fn ct_table(json: &str) -> Result<CtTable> {
@@ -228,33 +315,15 @@ pub(crate) fn ct_table(json: &str) -> Result<CtTable> {
     if let Some(e) = v.get("error").and_then(Value::as_str) {
         bail!("ct report: {e}");
     }
-    // the bench reads the ADR-038 parameters from expect.rs; the report must echo exactly them
-    let th = v
-        .get("thresholds")
-        .ok_or_else(|| Error("ct report: no thresholds".to_owned()))?;
-    let num = |k: &str| th.get(k).and_then(Value::as_f64).map(f64::to_bits);
-    let (pass, fail) = expect::CT_THRESHOLDS;
-    if num("pass") != Some(pass.to_bits())
-        || num("fail") != Some(fail.to_bits())
-        || num("max_resolution_fraction") != Some(expect::CT_RESOLUTION_MAX_FRACTION.to_bits())
-        || th.get("max_batch").and_then(Value::as_u64) != Some(u64::from(expect::CT_MAX_BATCH))
-        || num("batch_margin") != Some(expect::CT_BATCH_MARGIN.to_bits())
-        || th.get("min_realised_quanta").and_then(Value::as_u64)
-            != Some(expect::CT_MIN_REALISED_QUANTA)
-    {
-        bail!(
-            "ct report: thresholds {th} differ from expect::CT_THRESHOLDS {:?} / CT_RESOLUTION_MAX_FRACTION {} / \
-             CT_MAX_BATCH {} / CT_BATCH_MARGIN {} / CT_MIN_REALISED_QUANTA {}",
-            expect::CT_THRESHOLDS,
-            expect::CT_RESOLUTION_MAX_FRACTION,
-            expect::CT_MAX_BATCH,
-            expect::CT_BATCH_MARGIN,
-            expect::CT_MIN_REALISED_QUANTA
-        );
-    }
+    ct_check_parameters(&v)?;
+    let run_verdict = v
+        .get("run_verdict")
+        .and_then(Value::as_str)
+        .filter(|rv| CT_RUN_VERDICTS.contains(rv))
+        .ok_or_else(|| Error("ct report: no known run_verdict".to_owned()))?;
     let resolution = v
         .get("clock")
-        .and_then(|c| c.get("resolution_ns"))
+        .and_then(|c| c.get("q_eff_ns"))
         .and_then(Value::as_f64);
     let results = v
         .get("results")
@@ -266,56 +335,40 @@ pub(crate) fn ct_table(json: &str) -> Result<CtTable> {
             .failed
             .push("ct report: no target was measured".to_owned());
     }
+    if run_verdict == "CONTROL_FAIL" {
+        // ADR-041 (3): the harness or the runner is unsound; no target verdict counts
+        let reason = v.get("run_reason").and_then(Value::as_str).unwrap_or("?");
+        table.failed.push(format!("CONTROL_FAIL — {reason}"));
+    }
     for r in results {
-        let name = r.get("name").and_then(Value::as_str).unwrap_or("?");
+        let (line, not_measurable, passes) = ct_line(r);
         let verdict = r.get("verdict").and_then(Value::as_str).unwrap_or("?");
-        let control = r.get("control").and_then(Value::as_bool).unwrap_or(false);
-        let n = r.get("samples").and_then(Value::as_u64).unwrap_or(0);
-        let k = r
-            .get("k")
-            .and_then(Value::as_u64)
-            .map_or_else(|| "-".to_owned(), |k| k.to_string());
-        let calibration = r.get("calibration_median_ns").and_then(Value::as_f64);
-        let ns = |x: Option<f64>| x.map_or_else(|| "?".to_owned(), |x| format!("{x:.1}"));
-        let measurement = |key: &str| {
-            r.get(key)
-                .filter(|m| !m.is_null())
-                .map(|m| format!("; {key} {}", ct_measurement(m)))
-                .unwrap_or_default()
-        };
-        let line = format!(
-            "{name}: {verdict} — k={k}, calibration median {} ns, {n} samples{}{}{}",
-            ns(calibration),
-            measurement("first"),
-            measurement("second"),
-            if control {
-                " (control, must be detected)"
-            } else {
-                ""
+        if run_verdict != "CONTROL_FAIL" {
+            if verdict == "NOT_MEASURABLE" {
+                table.not_measurable.push(format!(
+                    "{not_measurable}, effective quantum {} ns",
+                    resolution.map_or_else(|| "?".to_owned(), |x| format!("{x:.1}"))
+                ));
+            } else if !passes {
+                table.failed.push(line.clone());
             }
-        );
-        let passes = CT_VERDICTS
-            .iter()
-            .find(|(v, _)| *v == verdict)
-            .is_some_and(|(_, ok)| *ok);
-        if verdict == "NOT_MEASURABLE" {
-            table.not_measurable.push(format!(
-                "{name} (resolution {} ns, median {} ns)",
-                ns(resolution),
-                ns(calibration)
-            ));
-        } else if !passes {
-            table.failed.push(line.clone());
         }
         table.lines.push(line);
+    }
+    if run_verdict == "PASS" && !(table.failed.is_empty() && table.not_measurable.is_empty()) {
+        table
+            .failed
+            .push("ct report: run verdict PASS with a failing target".to_owned());
     }
     Ok(table)
 }
 
-/// dudect-style constant-time tests (docs/06 §2, §4; ADR-038): `cargo bench --bench ct` in the release profile,
-/// timed with the CPU counter; per target ≤ pass → PASS, > fail → FAIL, in between one re-measurement; the
-/// variable-time control must be detected; a target the runner's timer cannot resolve is NOT MEASURABLE, which
-/// fails the gate with that wording.
+/// dudect-style constant-time tests (docs/06 §2, §4; ADR-038, ADR-041): `cargo bench --bench ct` in the release
+/// profile, timed with the CPU counter; per target two measurements, FAIL only for a shift reproduced at the same
+/// crop and sign (|t| > 4.5) of at least one effective quantum, a reproduced smaller shift reported as
+/// `SUB_QUANTUM_SHIFT`; the positive control must be detected; a failing inline A/A control makes the run
+/// `CONTROL_FAIL`; a target the runner's timer cannot resolve is NOT MEASURABLE. All but PASS and
+/// `SUB_QUANTUM_SHIFT` fail the gate with their wording.
 pub(crate) fn ct(ctx: &Ctx) -> Result<Outcome> {
     let report = ctx.root.join("target").join("ct-report.json");
     if report.exists() {
@@ -1069,15 +1122,18 @@ mod tests {
         assert!(undocumented_survivors("", accepted).is_empty());
     }
 
-    /// A report in the ADR-038 format with the given results, the parameters of `expect.rs` and a 0.5 ns clock.
-    fn ct_report(results: &str) -> String {
-        let (pass, fail) = expect::CT_THRESHOLDS;
+    /// A report in the ADR-041 format with the given run verdict and results, the parameters of `expect.rs` and a
+    /// 0.5 ns clock.
+    fn ct_report(run_verdict: &str, results: &str) -> String {
         format!(
-            r#"{{"thresholds":{{"pass":{pass},"fail":{fail},"max_resolution_fraction":{},"max_batch":{},"batch_margin":{},"min_realised_quanta":{}}},"sign":"t < 0: class 0 faster","clock":{{"timer":"rdtscp","tick_ns":0.5,"resolution_ns":0.5}},"results":[{results}]}}"#,
+            r#"{{"thresholds":{{"pass":{},"max_resolution_fraction":{},"max_batch":{},"batch_margin":{},"min_realised_quanta":{},"effect_floor_quanta":{},"aa_max_t":{}}},"sign":"t < 0: class 0 faster","clock":{{"timer":"rdtscp","tick_ns":0.5,"resolution_ns":0.5,"q_eff_ns":0.5}},"run_verdict":"{run_verdict}","run_reason":null,"results":[{results}]}}"#,
+            expect::CT_THRESHOLDS,
             expect::CT_RESOLUTION_MAX_FRACTION,
             expect::CT_MAX_BATCH,
             expect::CT_BATCH_MARGIN,
-            expect::CT_MIN_REALISED_QUANTA
+            expect::CT_MIN_REALISED_QUANTA,
+            expect::CT_EFFECT_FLOOR_QUANTA,
+            expect::CT_AA_MAX_T
         )
     }
 
@@ -1091,12 +1147,18 @@ mod tests {
     ) -> String {
         let m = |t: f64| {
             format!(
-                r#"{{"max_abs_t":{t},"max_at":"p90","t":{{}},"distinct":900,"median_ticks":6000,"median_ns":3000.0,"median_per_resolution":6000.0,"class_median_ticks":6000,"realised_quanta":6000.0}}"#
+                r#"{{"max_abs_t":{t},"max_at":"p90","t":{{}},"crops":{{}},"q_eff_ticks":1.0,"q_eff_source":"clock","distinct":900,"median_ticks":6000,"median_ns":3000.0,"class_median_ticks":6000,"realised_quanta":6000.0}}"#
             )
         };
         let k = if first.is_some() { "2" } else { "null" };
+        let decisive = if matches!(verdict, "FAIL" | "SUB_QUANTUM_SHIFT") {
+            r#""p90""#
+        } else {
+            "null"
+        };
         format!(
-            r#"{{"name":"{name}","samples":10,"control":{control},"k":{k},"calibration_median_ticks":3000,"calibration_median_ns":1500.0,"verdict":"{verdict}","passed":false,"first":{},"second":{}}}"#,
+            r#"{{"name":"{name}","samples":10,"control":{control},"k":{k},"calibration_median_ticks":3000,"calibration_median_ns":1500.0,"verdict":"{verdict}","passed":false,"decisive_crop":{decisive},"aa_passed":true,"aa_control":{},"first":{},"second":{}}}"#,
+            first.map_or_else(|| "null".to_owned(), |_| m(1.25)),
             first.map_or_else(|| "null".to_owned(), m),
             second.map_or_else(|| "null".to_owned(), m)
         )
@@ -1105,10 +1167,11 @@ mod tests {
     #[test]
     fn ct_report_table() -> Result<()> {
         let ok = ct_report(
+            "PASS",
             &[
                 ct_target("control", true, "PASS", Some(99.0), None),
-                ct_target("tag", false, "PASS", Some(1.25), None),
-                ct_target("msg", false, "INCONCLUSIVE→PASS", Some(6.0), Some(1.5)),
+                ct_target("tag", false, "PASS", Some(1.25), Some(0.5)),
+                ct_target("msg", false, "SUB_QUANTUM_SHIFT", Some(30.0), Some(25.0)),
             ]
             .join(","),
         );
@@ -1118,52 +1181,70 @@ mod tests {
         assert!(
             t.lines
                 .iter()
-                .any(|l| l.contains("control, must be detected"))
+                .any(|l| l.contains("positive control, must be detected"))
         );
-        // k, the calibration median and both measurements (with their batch medians) are printed
+        // k, the calibration median, both measurements (with q_eff and the realised quanta), the deciding crop and
+        // the A/A control are printed
         assert!(
-            t.lines
-                .iter()
-                .any(|l| l.contains("k=2, calibration median 1500.0 ns")
-                    && l.contains(
-                        "first max |t| = 6.00 (p90), batch median 3000.0 ns, realised 6000.0 quanta"
-                    )
-                    && l.contains(
-                        "second max |t| = 1.50 (p90), batch median 3000.0 ns, realised 6000.0 quanta"
-                    )),
+            t.lines.iter().any(|l| l.starts_with("msg: SUB_QUANTUM_SHIFT at p90 — k=2, calibration median 1500.0 ns")
+                && l.contains("first max |t| = 30.00 (p90), batch median 3000.0 ns, q_eff 1.0 ticks (clock), realised 6000.0 quanta")
+                && l.contains("second max |t| = 25.00 (p90)")
+                && l.contains("A/A max |t| = 1.25 (p90)")),
             "{t:?}"
         );
 
-        // FAIL and INCONCLUSIVE→FAIL fail the gate; so does an unknown verdict (fail closed)
-        for bad in ["FAIL", "INCONCLUSIVE→FAIL", "MAYBE"] {
-            let t = ct_table(&ct_report(&ct_target(
-                "tag",
-                false,
-                bad,
-                Some(7.0),
-                Some(6.0),
-            )))?;
+        // FAIL fails the gate; so does a verdict ADR-041 withdrew and an unknown one (fail closed)
+        for bad in ["FAIL", "INCONCLUSIVE→FAIL", "INCONCLUSIVE→PASS", "MAYBE"] {
+            let t = ct_table(&ct_report(
+                "FAIL",
+                &ct_target("tag", false, bad, Some(30.0), Some(20.0)),
+            ))?;
             assert_eq!(t.failed.len(), 1, "{bad}: {t:?}");
         }
 
-        // NOT_MEASURABLE (k > max_batch: no measurement) is reported separately, with resolution and median
-        let t = ct_table(&ct_report(&ct_target(
-            "derive",
-            false,
-            "NOT_MEASURABLE",
-            None,
-            None,
-        )))?;
+        // NOT_MEASURABLE (k > max_batch: no measurement) is reported separately
+        let t = ct_table(&ct_report(
+            "FAIL",
+            &ct_target("derive", false, "NOT_MEASURABLE", None, None),
+        ))?;
         assert!(t.failed.is_empty(), "{t:?}");
         assert_eq!(
             t.not_measurable,
-            vec!["derive (resolution 0.5 ns, median 1500.0 ns)".to_owned()]
+            vec!["derive (median 1500.0 ns), effective quantum 0.5 ns".to_owned()]
         );
         assert!(t.lines.iter().any(|l| l.contains("k=-")), "{t:?}");
 
+        // CONTROL_FAIL: the run fails with the reason, no target verdict counts
+        let control_fail = ct_report(
+            "CONTROL_FAIL",
+            &[
+                ct_target("control", true, "CONTROL_FAIL", Some(99.0), None),
+                ct_target("tag", false, "CONTROL_FAIL", Some(1.0), Some(1.0)),
+            ]
+            .join(","),
+        )
+        .replacen(
+            r#""run_reason":null"#,
+            r#""run_reason":"inline A/A control above 4.5: tag |t| = 6.00 at p50""#,
+            1,
+        );
+        let t = ct_table(&control_fail)?;
+        assert_eq!(
+            t.failed,
+            vec!["CONTROL_FAIL — inline A/A control above 4.5: tag |t| = 6.00 at p50".to_owned()]
+        );
+        assert_eq!(t.lines.len(), 2);
+
+        // a PASS run verdict next to a failing target is refused as inconsistent
+        let t = ct_table(&ct_report(
+            "PASS",
+            &ct_target("tag", false, "FAIL", Some(30.0), Some(20.0)),
+        ))?;
+        assert_eq!(t.failed.len(), 2, "{t:?}");
+
         // parameters that differ from expect.rs are refused
         for (from, to) in [
-            (r#""fail":10"#, r#""fail":12"#),
+            (r#""pass":4.5"#, r#""pass":10"#),
             (r#""max_batch":64"#, r#""max_batch":128"#),
             (
                 r#""max_resolution_fraction":0.01"#,
@@ -1171,6 +1252,8 @@ mod tests {
             ),
             (r#""batch_margin":1.1"#, r#""batch_margin":1"#),
             (r#""min_realised_quanta":80"#, r#""min_realised_quanta":40"#),
+            (r#""effect_floor_quanta":1"#, r#""effect_floor_quanta":2"#),
+            (r#""aa_max_t":4.5"#, r#""aa_max_t":9"#),
         ] {
             let tuned = ok.replacen(from, to, 1);
             assert_ne!(tuned, ok, "{from}");
@@ -1183,11 +1266,16 @@ mod tests {
             ct_table(&ok.replacen(without, "{", 1)).is_err(),
             "no thresholds"
         );
+        // a missing or unknown run verdict is refused
+        assert!(ct_table(&ok.replacen(r#""run_verdict":"PASS","#, "", 1)).is_err());
+        assert!(
+            ct_table(&ok.replacen(r#""run_verdict":"PASS""#, r#""run_verdict":"OK""#, 1)).is_err()
+        );
 
         // an error report, an empty report, a malformed report
         assert!(ct_table(r#"{"error":"thresholds not readable"}"#).is_err());
         assert_eq!(
-            ct_table(&ct_report(""))?.failed.len(),
+            ct_table(&ct_report("FAIL", ""))?.failed.len(),
             1,
             "an empty report never passes"
         );

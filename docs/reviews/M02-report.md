@@ -146,7 +146,8 @@ Commit-1 evidence:
 | Windows (`windows-native`, `xwin-cross`) | open |
 | `cargo xtask ci-fast` (macOS arm64) | PASS on `9835bb3` (§3); fmt/clippy/policy/nextest/ref-vectors PASS on `168ede0` |
 | KATs / differential | PASS in `ci-fast` (§3); differential 4/4 in release after F1 |
-| Constant time (`ct`, M1 code) | macOS arm64 PASS on `168ede0` and `9835bb3` (§3); on `19f5700` (margin): run 1 **FAIL** (`caead_open_reject_samekey` 18.39 at p50, raw −0.80), runs 2 and 3 PASS (2.95, 0.91) — §8 Blocked; Linux: in the PR run's `linux-full`, report uploaded as artefact |
+| Constant time (`ct`, M1 code) | macOS arm64 PASS on `168ede0` and `9835bb3` (§3); on `19f5700` (margin): run 1 **FAIL** (`caead_open_reject_samekey` 18.39 at p50, raw −0.80), runs 2 and 3 PASS (2.95, 0.91); **Linux x86_64, PR run 36556788827 on `b8ffb1c`: FAIL** (`msg_open_reject` 82.17, `caead_open_reject` 25.66, `caead_aead_reject` 12.51, `caead_open_reject_samekey` 14.56; `tsc`/`rdtscp`, k = 1) — both in §8 Blocked |
+| PR run 36556788827 (`b8ffb1c`, commit 1) | `windows-native` ✅, `xwin-cross` ✅, `linux-fast` ✅, `linux-full` ❌ — only step `ct` failed (`M02-evidence/ci-full-x86_64-linux-pr-run-36556788827-b8ffb1c.txt`) |
 | Fuzz smoke | open |
 | Mutation | gate in step 13; local look-ahead (`M02-evidence/mutants-local-steps1-8.txt`): `cargo mutants -p secmp-proto` first pass 343 mutants — 258 caught, 75 unviable, **10 missed** (four untested accessors, three `FragmentPayload` inner-type arms, `Profile::name`, and `FETCH_MULTI` `count == 0 \|\| count > 32` → `&&`, which the reference-file test missed because it judged negatives after re-encoding and the encoder enforces the same rule). Fixed by tests, and the reference test now judges every negative on the decoder alone: second pass **268 caught, 75 unviable, 0 missed**; the changed `secmp-crypto` files (`x25519.rs`, `ed25519.rs`, feature `kat`): 47 mutants, 28 caught, 19 unviable, 0 missed |
 | Coverage | local gate `cargo xtask step coverage` on `9125c42`: **PASS** — `secmp-proto` 2414/2423 lines = 99.6 %, `secmp-crypto` 1830/1838 = 99.6 % (min 90 %) (`M02-evidence/coverage-aarch64-apple-darwin-9125c42.txt`); earlier on `d90f3b7` 98.88 % for `secmp-proto` |
@@ -198,6 +199,27 @@ run1-FAIL.json`, `…-run2.json`, `…-run3.json` and the three gate logs. **Que
 as instrument noise (the ADR-038 verdict has no re-measurement above 10), or should the target be isolated further
 (e.g. a same-key/same-position A/A control on this host)? The M2 decoder work below does not touch `Caead` or any
 measured code and continued.
+
+**Blocked (ct gate on Linux, M1 code — docs/06 §4 STOP rule, second event):** the PR run **36556788827** on
+`b8ffb1c` (commit 1; completed 2026-09-29 11:55 UTC) is green on `windows-native`, `xwin-cross`, `linux-fast` and on
+every `linux-full` step except **`ct` FAIL**: `msg_open_reject` max |t| **82.17** (p90; raw 0.22, p50 −6.2, p75 −56.2,
+p95 −63.2, p99 −20.4), `caead_open_reject` **25.66** (p95; raw 2.34, crops +11.8 … +25.7), `caead_aead_reject`
+**12.51** (p95; raw 1.14, crops +7.3 … +12.5), `caead_open_reject_samekey` **14.56** (p95; raw 1.28, crops −4.2 …
+−14.6); control detected (58 661), `tag_compare` 0.83, `sas` 0.70, `caead_derive` 1.29, `caead_com_compare` 0.69.
+Clock: x86_64, clocksource **`tsc`**, timer `rdtscp`, tick 0.41 ns, resolution 1 tick, k = 1 for every target (so
+the F8 calibration rounds did not apply; the harness differs from the M1-approved one only by the discarded warm-up
+pass). Every other `linux-full` step passed (kat 893 s, fuzz 891 s, coverage, mutants 534 s, miri 1096 s, kani,
+proverif, ref-vectors, sbom, systemd). Root-cause step in the code under test first: `MsgEncrypt::open` and
+`Caead::open` are unchanged since M1 (`b24bcfa`), `caead_aead_reject` measures `chacha20poly1305` alone; no
+class-dependent path is visible in them. Pattern: raw t ≈ 0 with large, crop-dependent values of consistent sign per
+target, now **on a fine timer** — this is not explained by timer quantisation (the working hypothesis of M1 review
+C4 / ADR-038), and the isolating AEAD-only target is among the failures. Nothing was changed (thresholds, samples,
+control, verdict untouched). Evidence: `M02-evidence/ct-report-x86_64-linux-pr-run-36556788827-b8ffb1c-FAIL.json`
+(full per-crop values and clock metadata), `M02-evidence/ci-full-x86_64-linux-pr-run-36556788827-b8ffb1c.txt`; the
+run's `ct-report` artefact. **Question for the reviewer:** how to proceed with the `ct` gate — further isolation on
+Linux (e.g. an A/A control with identical inputs in both classes, to measure the harness's own false-positive rate
+on this runner type), or another decision under ADR-038? The PR runs of later heads will run the same gate on the
+same unchanged code; M2's own code (`secmp-proto`) has no secret-dependent paths and is not measured.
 
 Decisions of WEISUNG M2-1 (2026-09-29), applied:
 

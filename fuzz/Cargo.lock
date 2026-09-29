@@ -804,6 +804,14 @@ version = "0.0.0"
 dependencies = [
  "libfuzzer-sys",
  "secmp-crypto",
+ "secmp-proto",
+]
+
+[[package]]
+name = "secmp-proto"
+version = "0.0.0"
+dependencies = [
+ "secmp-crypto",
 ]
 
 [[package]]

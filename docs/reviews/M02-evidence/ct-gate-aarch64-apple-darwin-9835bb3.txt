@@ -1,0 +1,18 @@
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.16s
+     Running `target/debug/xtask step ct`
+
+=== [5] ct ===
+$ /Users/c.carl/.rustup/toolchains/1.98.1-aarch64-apple-darwin/bin/cargo bench --locked --package secmp-crypto --features kat --bench ct
+  ct control_variable_time_compare: PASS — k=3, calibration median 1902.8 ns, 1000000 samples; first max |t| = 31670.34 (p75), batch median 791.7 ns (control, must be detected)
+  ct tag_compare: PASS — k=1, calibration median 5958.3 ns, 1000000 samples; first max |t| = 1.85 (p95), batch median 6291.7 ns
+  ct msg_open_reject: PASS — k=2, calibration median 2500.0 ns, 1000000 samples; first max |t| = 1.79 (p50), batch median 5166.7 ns
+  ct caead_open_reject: PASS — k=1, calibration median 8208.3 ns, 1000000 samples; first max |t| = 4.13 (p90), batch median 8208.3 ns
+  ct sas: PASS — k=1, calibration median 897833.5 ns, 20000 samples; first max |t| = 1.54 (p90), batch median 838625.2 ns
+  ct caead_derive: PASS — k=14, calibration median 297.6 ns, 1000000 samples; first max |t| = 2.90 (p75), batch median 4041.7 ns
+  ct caead_aead_reject: PASS — k=2, calibration median 3500.0 ns, 1000000 samples; first max |t| = 1.31 (p95), batch median 7250.0 ns
+  ct caead_com_compare: PASS — k=1, calibration median 5916.7 ns, 1000000 samples; first max |t| = 2.00 (p75), batch median 6125.0 ns
+  ct caead_open_reject_samekey: INCONCLUSIVE→PASS — k=1, calibration median 7708.3 ns, 1000000 samples; first max |t| = 6.68 (p50), batch median 7916.7 ns; second max |t| = 3.74 (p95), batch median 7958.3 ns
+
+=== step summary (host aarch64-apple-darwin, strict: false) ===
+   5 ct              PASS         97s  control_variable_time_compare: PASS — k=3, calibration median 1902.8 ns, 1000000 samples; first max |t| = 31670.34 (p75), batch median 791.7 ns (control, must be detected); tag_compare: PASS — k=1, calibration median 5958.3 ns, 1000000 samples; first max |t| = 1.85 (p95), batch median 6291.7 ns; msg_open_reject: PASS — k=2, calibration median 2500.0 ns, 1000000 samples; first max |t| = 1.79 (p50), batch median 5166.7 ns; caead_open_reject: PASS — k=1, calibration median 8208.3 ns, 1000000 samples; first max |t| = 4.13 (p90), batch median 8208.3 ns; sas: PASS — k=1, calibration median 897833.5 ns, 20000 samples; first max |t| = 1.54 (p90), batch median 838625.2 ns; caead_derive: PASS — k=14, calibration median 297.6 ns, 1000000 samples; first max |t| = 2.90 (p75), batch median 4041.7 ns; caead_aead_reject: PASS — k=2, calibration median 3500.0 ns, 1000000 samples; first max |t| = 1.31 (p95), batch median 7250.0 ns; caead_com_compare: PASS — k=1, calibration median 5916.7 ns, 1000000 samples; first max |t| = 2.00 (p75), batch median 6125.0 ns; caead_open_reject_samekey: INCONCLUSIVE→PASS — k=1, calibration median 7708.3 ns, 1000000 samples; first max |t| = 6.68 (p50), batch median 7916.7 ns; second max |t| = 3.74 (p95), batch median 7958.3 ns
+step: PASS

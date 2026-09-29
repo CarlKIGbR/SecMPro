@@ -1,0 +1,7 @@
+=== step summary (host aarch64-apple-darwin, strict: false) ===
+   1 fmt             PASS          0s  rustfmt: no changes
+   2 clippy          PASS          0s  clippy --all-features -D warnings on aarch64-apple-darwin (12 crates)
+   2 policy          PASS          0s  unsafe-attrs: 19 target roots forbid, 2 sys library roots allow, 1 ADR-038 bench root allows (crates/secmp-crypto/benches/ct.rs), 2 secmp-ui roots deny, 2 secmp-ui files without `unsafe`; lints-table: 12 manifests; lint-allows: 19 relaxing attributes (all sanctioned); build-scripts: 12 crates, none; spdx: 90 files; secmp-crypto/secmp-proto normal closure (x86_64-unknown-linux-gnu, x86_64-pc-windows-msvc, aarch64-apple-darwin): 52 external crates, 0 exempted; tracked exemptions elsewhere: 25; workflows: 2 files, triggers/SHA pins/continue-on-error ok
+   4 nextest         PASS          5s  cargo nextest run --workspace
+ 12a ref-vectors     PASS          0s  8 frozen suites (118 cases) structurally identical to vectors/ref (ADR-026); pending freeze: encodings (632 cases, reference only)
+step: PASS

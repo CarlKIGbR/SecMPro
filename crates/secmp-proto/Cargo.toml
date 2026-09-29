@@ -9,5 +9,12 @@ license.workspace = true
 repository.workspace = true
 publish.workspace = true
 
+[dependencies]
+secmp-crypto.workspace = true
+
+# ADR-040: test-only (the vector files).
+[dev-dependencies]
+serde_json.workspace = true
+
 [lints]
 workspace = true

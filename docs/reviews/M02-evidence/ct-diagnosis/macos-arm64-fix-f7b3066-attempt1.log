@@ -1,0 +1,10 @@
+  ct control_variable_time_compare: PASS — k=28, calibration median 178.6 ns, 1000000 samples; first max |t| = 26859.28 (p75), batch median 53291.7 ns, realised 118.0 quanta (control, must be detected)
+  ct tag_compare: PASS — k=1, calibration median 6083.3 ns, 1000000 samples; first max |t| = 1.67 (p95), batch median 5916.7 ns, realised 142.0 quanta
+  ct msg_open_reject: FAIL — k=2, calibration median 2479.2 ns, 1000000 samples; first max |t| = 10.61 (p75), batch median 5041.7 ns, realised 121.0 quanta
+  ct caead_open_reject: PASS — k=1, calibration median 8000.0 ns, 1000000 samples; first max |t| = 1.35 (p90), batch median 7958.3 ns, realised 191.0 quanta
+  ct sas: PASS — k=1, calibration median 800750.2 ns, 20000 samples; first max |t| = 1.94 (p75), batch median 799750.2 ns, realised 19192.0 quanta
+  ct caead_derive: INCONCLUSIVE→FAIL — k=16, calibration median 294.3 ns, 1000000 samples; first max |t| = 9.44 (p75), batch median 4500.0 ns, realised 108.0 quanta; second max |t| = 8.38 (p99), batch median 4541.7 ns, realised 109.0 quanta
+  ct caead_aead_reject: PASS — k=2, calibration median 3604.2 ns, 1000000 samples; first max |t| = 1.80 (raw), batch median 7250.0 ns, realised 174.0 quanta
+  ct caead_com_compare: PASS — k=1, calibration median 6125.0 ns, 1000000 samples; first max |t| = 1.05 (raw), batch median 6083.3 ns, realised 146.0 quanta
+  ct caead_open_reject_samekey: PASS — k=1, calibration median 8125.0 ns, 1000000 samples; first max |t| = 1.30 (p50), batch median 7958.3 ns, realised 191.0 quanta
+exit 1

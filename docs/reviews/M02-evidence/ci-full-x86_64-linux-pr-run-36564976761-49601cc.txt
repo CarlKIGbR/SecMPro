@@ -1,0 +1,22 @@
+   1 fmt             PASS          0s  rustfmt: no changes
+   2 clippy          PASS         26s  clippy --all-features -D warnings on x86_64-unknown-linux-gnu (12 crates)
+   2 policy          PASS          0s  unsafe-attrs: 20 target roots forbid, 2 sys library roots allow, 1 ADR-038 bench root allows (crates/secmp-crypto/benches/ct.rs), 2 secmp-ui roots deny, 2 secmp-ui files without `unsafe`; lints-table: 12 manifests; lint-allows: 21 relaxing attributes (all sanctioned); build-scripts: 12 crates, none; spdx: 102 files; secmp-crypto/secmp-proto normal closure (x86_64-unknown-linux-gnu, x86_64-pc-windows-msvc, aarch64-apple-darwin): 52 external crates, 0 exempted; tracked exemptions elsewhere: 25; workflows: 2 files, triggers/SHA pins/continue-on-error ok
+   3 deny            PASS          0s  advisories, bans, licenses, sources: ok
+   3 vet             PASS          0s  secmp-crypto/secmp-proto normal closure (x86_64-unknown-linux-gnu, x86_64-pc-windows-msvc, aarch64-apple-darwin): 52 external crates, 0 exempted; tracked exemptions elsewhere: 25
+   3 audit           PASS          4s  RustSec: no advisories (warnings denied); ignored with an ADR: RUSTSEC-2026-0173
+   3 cooldown        PASS          9s  119 registry packages (Cargo.lock, fuzz/Cargo.lock), all ≥ 7 days old; youngest: rand 0.10.3, 9 days
+   4 nextest         PASS         42s  cargo nextest run --workspace
+   4 doctest         PASS          0s  cargo test --doc
+   4 hello           PASS          0s  secmp-relay 0.0.0 (M0 skeleton: no functionality) | secmp-cli 0.0.0 (M0 skeleton: no functionality) | secmp-ui 0.0.0 (M0 skeleton: no functionality)
+   5 kat             PASS        950s  KAT/differential packages: secmp-crypto, secmp-testkit (expected set matches); ML-KEM KATs and frozen vectors also with libcrux's portable backend
+   5 ct              FAIL        124s  constant-time test failed: caead_open_reject: INCONCLUSIVE→FAIL — k=1, calibration median 8432.5 ns, 1000000 samples; first max |t| = 7.22 (p95), batch median 8432.5 ns, realised 842.0 quanta; second max |t| = 10.96 (p95), batch median 8462.5 ns, realised 845.0 quanta
+   6 fuzz            PASS        889s  fuzz smoke, 120 s per target: caead_open, ed25519_verify, hybrid_sign_verify, mldsa65_verify, mlkem_parse, msg_open, x25519_dh (expected set matches)
+   7 coverage        PASS         46s  secmp-cli: 5/6 lines = 83.3 % (min 80 %); secmp-client-core: no code; secmp-crypto: 1830/1838 lines = 99.6 % (min 90 %); secmp-proto: 2414/2423 lines = 99.6 % (min 90 %); secmp-relay: 5/6 lines = 83.3 % (min 80 %); secmp-store: no code; secmp-sys-desktop: no code; secmp-sys-mem: 234/246 lines = 95.1 % (min 80 %); secmp-testkit: 172/172 lines = 100.0 % (min 80 %); secmp-transport: no code; secmp-ui: 5/6 lines = 83.3 % (min 80 %) (xtask not measured)
+   8 mutants         PASS        859s  secmp-crypto, secmp-proto: 584 mutants tested in 14m: 1 missed, 419 caught, 164 unviable; survivors documented in docs/mutants-accepted.md: 1
+   9 miri            PASS       1176s  Miri (nightly-2026-09-21, interpreting aarch64-unknown-linux-gnu, libcrux portable backend): secmp-sys-mem, secmp-sys-desktop, secmp-crypto; skipped test modules: mldsa::, hybrid_sign::, sas::
+   9 kani            PASS          0s  Kani 0.68.0: harness packages none (expected set matches)
+  10 proverif        PASS          0s  ProVerif 2.05 self-test [true, false] ok; models: none (expected set matches)
+  11 linux-target    PASS          0s  host is x86_64-unknown-linux-gnu: every step above ran natively
+ 12a ref-vectors     PASS          0s  8 frozen suites (118 cases) structurally identical to vectors/ref (ADR-026); pending freeze: encodings (632 cases, reference only)
+  13 sbom            PASS          5s  12 CycloneDX SBOMs in target/sbom; auditable release builds (x86_64-unknown-linux-gnu, remapped paths) read back by `cargo audit bin`: target/release/secmp-relay, target/release/secmp-cli, target/release/secmp-ui
+  14 systemd         PASS          0s  systemd 255 (255.4-1ubuntu8.17); self-test: unhardened fixture 9.4 > 2 rejected; units: none (deploy/secmp-relay.service arrives in M10)

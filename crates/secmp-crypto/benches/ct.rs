@@ -51,7 +51,10 @@
 //!   (`median_ticks`). A measurement whose class median is below `CT_MIN_REALISED_QUANTA` quanta is NOT
 //!   MEASURABLE; so is a target that would need `k > CT_MAX_BATCH`, whose quantum is unknown or that is still short
 //!   of the target after the rounds. The quantum of these rules is the **effective quantum** (below): the
-//!   calibration uses the clock's, a measurement's realised count uses its own.
+//!   calibration uses the clock's, a measurement's realised count uses its own; where a measurement's samples show
+//!   a lattice coarser than the clock's quantum (by more than `REQUANTISE_FACTOR`, i.e. the clock's probe missed
+//!   it), `k` is derived again with the samples' quantum and the target is measured again (`requantised` in the
+//!   report's calibration).
 //!
 //! ADR-041 (the verdict):
 //! - **Effective quantum `q_eff`.** The spacing of the lattice the samples lie on, measured from the data
@@ -129,6 +132,9 @@ const LATTICE_SAMPLES: usize = 100_000;
 const LATTICE_WORK: u64 = 2_000;
 /// Runs of consecutive values needed before a lattice is recognised (fewer: no lattice).
 const LATTICE_MIN_RUNS: usize = 4;
+/// A measurement whose samples show an effective quantum more than this factor above the clock's is batched again
+/// with it (`evaluate`).
+const REQUANTISE_FACTOR: f64 = 1.5;
 
 // ---- parameters (ADR-038 (3), ADR-041): read from xtask/src/expect.rs --------------------------------------------
 
@@ -281,16 +287,32 @@ fn f64_of_usize(n: usize) -> f64 {
     f64_of(u64::try_from(n).unwrap_or(u64::MAX))
 }
 
-/// The lattice spacing of `sorted` sample values (ADR-041 (2); method in the module documentation), `None` if the
-/// data show no lattice (too few samples, dense, or irregular).
-fn lattice_spacing(sorted: &[u64]) -> Option<f64> {
+/// What `lattice` found in a set of sample values (ADR-041 (2); method in the module documentation).
+#[derive(Clone, Copy, Default)]
+struct Lattice {
+    /// Runs of consecutive values among the distinct values of the central 90 %.
+    runs: usize,
+    /// The median gap between run starts, in ticks.
+    median_gap: u64,
+    /// The share of those gaps within half and one and a half times the median.
+    regular: f64,
+    /// The lattice spacing (`None`: too few samples, dense, or irregular).
+    spacing: Option<f64>,
+}
+
+/// The lattice of `sorted` sample values (ADR-041 (2)).
+fn lattice(sorted: &[u64]) -> Lattice {
+    let mut found = Lattice::default();
     let n = sorted.len();
     if n < 1_000 {
-        return None;
+        return found;
     }
     let lo = n.saturating_mul(5) / 100;
     let hi = n.saturating_mul(95) / 100;
-    let mut central: Vec<u64> = sorted.get(lo..=hi.min(n.saturating_sub(1)))?.to_vec();
+    let Some(central) = sorted.get(lo..=hi.min(n.saturating_sub(1))) else {
+        return found;
+    };
+    let mut central = central.to_vec();
     central.dedup();
     // starts of the runs of consecutive values
     let starts: Vec<u64> = central
@@ -299,9 +321,7 @@ fn lattice_spacing(sorted: &[u64]) -> Option<f64> {
         .filter(|(v, prev)| prev.is_none_or(|p| p.checked_add(1) != Some(**v)))
         .map(|(v, _)| *v)
         .collect();
-    if starts.len() < LATTICE_MIN_RUNS {
-        return None;
-    }
+    found.runs = starts.len();
     let gaps: Vec<u64> = starts
         .windows(2)
         .filter_map(|w| match w {
@@ -309,20 +329,29 @@ fn lattice_spacing(sorted: &[u64]) -> Option<f64> {
             _ => None,
         })
         .collect();
-    let median = median_of(gaps.clone());
-    if median < 2 {
-        return None;
+    if gaps.is_empty() {
+        return found;
     }
-    let (low, high) = (f64_of(median) * 0.5, f64_of(median) * 1.5);
+    found.median_gap = median_of(gaps.clone());
+    let (low, high) = (
+        f64_of(found.median_gap) * 0.5,
+        f64_of(found.median_gap) * 1.5,
+    );
     let regular: Vec<f64> = gaps
         .iter()
         .map(|g| f64_of(*g))
         .filter(|g| *g >= low && *g <= high)
         .collect();
-    if f64_of_usize(regular.len()) < 0.9 * f64_of_usize(gaps.len()) {
-        return None;
+    found.regular = f64_of_usize(regular.len()) / f64_of_usize(gaps.len());
+    if found.runs >= LATTICE_MIN_RUNS && found.median_gap >= 2 && found.regular >= 0.9 {
+        found.spacing = Some(regular.iter().sum::<f64>() / f64_of_usize(regular.len()));
     }
-    Some(regular.iter().sum::<f64>() / f64_of_usize(regular.len()))
+    found
+}
+
+/// The lattice spacing of `sorted` sample values, if they show one.
+fn lattice_spacing(sorted: &[u64]) -> Option<f64> {
+    lattice(sorted).spacing
 }
 
 /// A fixed workload for the clock's lattice: `LATTICE_WORK` dependent multiply-adds.
@@ -354,8 +383,8 @@ struct Clock {
     overhead_ticks: Option<u64>,
     /// The median back-to-back difference, in ticks.
     median_delta_ticks: Option<u64>,
-    /// The lattice spacing of `LATTICE_SAMPLES` timings of `workload` (`None`: no lattice).
-    lattice_ticks: Option<f64>,
+    /// The lattice of `LATTICE_SAMPLES` timings of `workload`.
+    lattice: Lattice,
 }
 
 impl Clock {
@@ -416,14 +445,14 @@ impl Clock {
             resolution_ticks,
             overhead_ticks,
             median_delta_ticks,
-            lattice_ticks: lattice_spacing(&timings),
+            lattice: lattice(&timings),
         }
     }
 
     /// The clock's effective quantum in ticks: its lattice spacing, never below the reported resolution; the
     /// reported resolution where there is no lattice; `None` if neither is known.
     fn quantum(&self) -> Option<f64> {
-        match (self.resolution_ticks.map(f64_of), self.lattice_ticks) {
+        match (self.resolution_ticks.map(f64_of), self.lattice.spacing) {
             (Some(r), Some(l)) => Some(r.max(l)),
             (r, l) => r.or(l),
         }
@@ -448,7 +477,12 @@ impl Clock {
             "overhead_ns": self.ns(self.overhead_ticks),
             "median_delta_ticks": self.median_delta_ticks,
             "median_delta_ns": self.ns(self.median_delta_ticks),
-            "lattice_ticks": self.lattice_ticks,
+            "lattice_ticks": self.lattice.spacing,
+            "lattice_probe": {
+                "runs": self.lattice.runs,
+                "median_gap": self.lattice.median_gap,
+                "regular": self.lattice.regular,
+            },
             "q_eff_ticks": self.quantum(),
             "q_eff_ns": self.quantum().map(|q| q * self.tick_ns),
         })
@@ -806,6 +840,9 @@ struct Calibration {
     rounds: Vec<(u32, u64)>,
     /// The batch size (`None`: NOT MEASURABLE).
     k: Option<u32>,
+    /// Set when the first measurement's samples showed a coarser lattice than the clock's quantum: that effective
+    /// quantum and the batch size derived with it (`evaluate`).
+    requantised: Option<(f64, u32)>,
 }
 
 impl Calibration {
@@ -828,8 +865,12 @@ impl Calibration {
                 )
             })
             .collect();
+        let requantised = self.requantised.map_or_else(
+            || "null".to_owned(),
+            |(q, k)| format!("{{\"q_eff_ticks\":{q:.3},\"k\":{k}}}"),
+        );
         format!(
-            "{{\"warmup_calls\":{},\"single_median_ticks\":{},\"single_median_ns\":{:.1},\"rounds\":[{}]}}",
+            "{{\"warmup_calls\":{},\"single_median_ticks\":{},\"single_median_ns\":{:.1},\"rounds\":[{}],\"requantised\":{requantised}}}",
             CALIBRATION_SAMPLES,
             self.single_median_ticks,
             f64_of(self.single_median_ticks) * clock.tick_ns,
@@ -858,6 +899,7 @@ fn calibrate(
         single_median_ticks,
         rounds: Vec::new(),
         k: None,
+        requantised: None,
     };
     let Some(quantum) = clock.quantum() else {
         return Ok(calibration);
@@ -955,17 +997,33 @@ fn evaluate(
     let (Some(k), Some(quantum)) = (outcome.calibration.k, clock.quantum()) else {
         return Ok(outcome);
     };
-    let batch = usize::try_from(k).unwrap_or(1);
     let measure_once =
-        |stream: &mut Stream, t: &Target| -> Result<Measurement, secmp_crypto::Error> {
+        |stream: &mut Stream, t: &Target, k: u32| -> Result<Measurement, secmp_crypto::Error> {
             Ok(Measurement::of(
-                &(t.run)(t.samples, batch, stream)?,
+                &(t.run)(t.samples, usize::try_from(k).unwrap_or(1), stream)?,
                 quantum,
                 clock.resolution_ticks,
             ))
         };
     let too_coarse = |m: &Measurement| rules.too_coarse(m.q_eff, m.class_median_ticks);
-    let first = measure_once(stream, &outcome.target)?;
+    let mut first = measure_once(stream, &outcome.target, k)?;
+    // the samples show a coarser lattice than the calibration assumed (the clock's probe missed it): the batch
+    // size is derived again with the samples' effective quantum (ADR-038 (3) with ADR-041 (2)) and the target is
+    // measured again
+    if first.q_eff > quantum * REQUANTISE_FACTOR {
+        let per_call = outcome.calibration.per_call_ticks();
+        let Some(k2) = rules.batch(first.q_eff, per_call) else {
+            outcome.calibration.k = None;
+            outcome.first = Some(first);
+            return Ok(outcome);
+        };
+        outcome.calibration.requantised = Some((first.q_eff, k2));
+        if k2 != k {
+            outcome.calibration.k = Some(k2);
+            first = measure_once(stream, &outcome.target, k2)?;
+        }
+    }
+    let k = outcome.calibration.k.unwrap_or(k);
     if too_coarse(&first) {
         outcome.first = Some(first);
         return Ok(outcome);
@@ -979,7 +1037,7 @@ fn evaluate(
         outcome.first = Some(first);
         return Ok(outcome);
     }
-    let second = measure_once(stream, &outcome.target)?;
+    let second = measure_once(stream, &outcome.target, k)?;
     if !too_coarse(&second) {
         let (verdict, crop) = decide(&first, &second, rules);
         outcome.verdict = verdict;

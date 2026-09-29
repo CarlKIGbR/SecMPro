@@ -103,6 +103,20 @@ impl Caead {
             Err(Error::Rejected)
         }
     }
+
+    /// The private `derive` of [`Caead::open`] on its own, for the constant-time bench (feature `kat`; M1
+    /// review C4 diagnosis).
+    ///
+    /// # Errors
+    /// As `derive`: none in practice (the lengths are fixed).
+    #[cfg(feature = "kat")]
+    #[doc(hidden)]
+    pub fn derive_kat(
+        k: &SecretBytes<32>,
+        nonce: &[u8; NONCE_LEN],
+    ) -> Result<(XChaCha20Poly1305, [u8; COM_LEN])> {
+        derive(k, nonce)
+    }
 }
 
 #[cfg(test)]
@@ -195,6 +209,18 @@ mod tests {
             rej,
             "shorter than COM"
         );
+        Ok(())
+    }
+
+    /// `derive_kat` is `derive`: its `COM` is the one `seal` emits.
+    #[cfg(feature = "kat")]
+    #[test]
+    fn derive_kat_is_derive() -> Result<()> {
+        let n = Nonce24::random()?;
+        let nb = *n.as_bytes();
+        let sealed = Caead::seal(&key(5)?, n, b"", b"p")?;
+        let (_, com) = Caead::derive_kat(&key(5)?, &nb)?;
+        assert_eq!(sealed.get(..COM_LEN), Some(&com[..]));
         Ok(())
     }
 

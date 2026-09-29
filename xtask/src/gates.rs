@@ -582,7 +582,18 @@ pub(crate) fn mutants(ctx: &Ctx) -> Result<Outcome> {
     )))
 }
 
+/// Miri in `ci-full`: the bounded scope, skipping the test modules of `expect::MIRI_SKIP` (docs/06 §4).
 pub(crate) fn miri(ctx: &Ctx) -> Result<Outcome> {
+    miri_with(ctx, expect::MIRI_SKIP)
+}
+
+/// `miri-full` (on demand; the weekly `miri-full` workflow, docs/06 §4, M1 review F3): the complete set, no skip
+/// list.
+pub(crate) fn miri_full(ctx: &Ctx) -> Result<Outcome> {
+    miri_with(ctx, &[])
+}
+
+fn miri_with(ctx: &Ctx, skip: &[(&str, &str)]) -> Result<Outcome> {
     tools::require_nightly(&["miri", "rust-src"])?;
     Cmd::cargo_on(tools::NIGHTLY)
         .args(["miri", "setup", "--target", expect::MIRI_TARGET])
@@ -606,20 +617,20 @@ pub(crate) fn miri(ctx: &Ctx) -> Result<Outcome> {
         c = c.args(["--package", p]);
     }
     c = c.arg("--");
-    for (filter, _) in expect::MIRI_SKIP {
+    for (filter, _) in skip {
         c = c.args(["--skip", filter]);
     }
     c.run()?;
+    let skipped = if skip.is_empty() {
+        "none (complete set)".to_owned()
+    } else {
+        skip.iter().map(|(f, _)| *f).collect::<Vec<_>>().join(", ")
+    };
     Ok(Outcome::Pass(format!(
-        "Miri ({}, interpreting {}, libcrux portable backend): {}; skipped test modules: {}",
+        "Miri ({}, interpreting {}, libcrux portable backend): {}; skipped test modules: {skipped}",
         tools::NIGHTLY,
         expect::MIRI_TARGET,
         expect::MIRI_PACKAGES.join(", "),
-        expect::MIRI_SKIP
-            .iter()
-            .map(|(f, _)| *f)
-            .collect::<Vec<_>>()
-            .join(", ")
     )))
 }
 

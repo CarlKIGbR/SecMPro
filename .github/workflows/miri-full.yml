@@ -1,0 +1,36 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Weekly Miri run over the complete test set (docs/06 §4 Miri row, M1 review F3). `ci-full` runs Miri in a
+# bounded scope that skips the test modules of `expect::MIRI_SKIP` (runtime); this job runs every test, those
+# modules included, with a 6-hour timeout. Not a required check. Hygiene as in ci.yml (checked by
+# `cargo xtask policy`): only schedule/workflow_dispatch triggers, actions pinned by commit SHA, read-only token.
+name: miri-full
+
+on:
+  schedule:
+    - cron: "41 3 * * 0"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: miri-full-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  miri-full:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Pinned toolchain (rust-toolchain.toml)
+        run: rustup toolchain install && rustc -vV
+      - name: Pinned nightly with Miri
+        run: cargo xtask install-tools --set miri --nightly
+      - name: Miri, complete set (no skip list)
+        run: cargo xtask step --strict miri-full

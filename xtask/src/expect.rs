@@ -12,6 +12,11 @@
 /// not listed here or in `UNSAFE_DENY_ONLY`.
 pub(crate) const UNSAFE_ALLOWED: &[&str] = &["secmp-sys-mem", "secmp-sys-desktop"];
 
+/// The one target root outside the two sys crates that may relax `unsafe_code` (ADR-038 (1)): the constant-time
+/// bench reads the CPU cycle counter (`rdtscp` / `cntvct_el0`). Matched path-exactly (relative to the workspace
+/// root) by the `policy` step; its header must carry `#![allow(unsafe_code)]` at the file top, nothing else.
+pub(crate) const UNSAFE_EXEMPT_ROOT: &str = "crates/secmp-crypto/benches/ct.rs";
+
 /// Crates that carry `#![deny(unsafe_code)]` instead of `forbid`, because `slint::slint!` expansions contain
 /// `#[allow(unsafe_code)]` (E0453 under `forbid`; docs/06 §2 (b), ADR-033). Their own `.rs` files may contain
 /// neither the token `unsafe` nor any relaxation of `unsafe_code`.
@@ -42,6 +47,19 @@ pub(crate) const AUDIT_IGNORES: &[(&str, &str)] = &[(
 
 /// Packages exposing the `kat` feature (docs/06 §5 step 5): external KATs, differential tests, vector checks.
 pub(crate) const KAT_PACKAGES: &[&str] = &["secmp-crypto", "secmp-testkit"];
+
+/// ADR-038 (2): the two-tier verdict of the `ct` gate on max |t| over raw + 5 crops — `(pass, fail)`: ≤ pass →
+/// PASS, > fail → FAIL, in between one confirmatory re-measurement. Fixed by the ADR. The bench reads this line
+/// (and the next constant) from this file at compile time, and the gate checks the report echoes both, so the
+/// values are written down exactly once. Keep each on one line.
+pub(crate) const CT_THRESHOLDS: (f64, f64) = (4.5, 10.0);
+
+/// ADR-038 (3): the timer resolution may be at most this fraction of a sample's median; where a single call is
+/// too short, one sample batches `k = ceil(quantum / (fraction · median))` calls.
+pub(crate) const CT_RESOLUTION_MAX_FRACTION: f64 = 0.01;
+
+/// ADR-038 (3): the largest batch size; a target that would need more is NOT MEASURABLE on that runner.
+pub(crate) const CT_MAX_BATCH: u32 = 64;
 
 /// cargo-fuzz targets under `fuzz/fuzz_targets/` (docs/06 §5 step 6): M1 key, ciphertext and signature parsers
 /// and the two openers of `secmp-crypto`.

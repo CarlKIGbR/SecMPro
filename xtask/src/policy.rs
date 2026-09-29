@@ -6,7 +6,9 @@
 //!   `secmp-sys-mem`/`secmp-sys-desktop`, which declares `#![allow(unsafe_code)]` — the only relaxation of
 //!   `unsafe_code` first-party code may contain, anywhere — and (b) the roots of `secmp-ui`, which declare
 //!   `#![deny(unsafe_code)]` (or `forbid`) while the crate's own `.rs` files contain neither the token `unsafe`
-//!   nor any relaxation of `unsafe_code` (ADR-033: only `slint!` expansions may carry one).
+//!   nor any relaxation of `unsafe_code` (ADR-033: only `slint!` expansions may carry one), and (c) the one
+//!   target root `expect::UNSAFE_EXEMPT_ROOT` (the constant-time bench, ADR-038), matched path-exactly, which
+//!   declares `#![allow(unsafe_code)]` to read the CPU cycle counter.
 //! * `lints-table`: every member manifest inherits `[lints] workspace = true` and declares no lints of its own.
 //! * `lint-allows`: no attribute relaxes a lint unless sanctioned (`expect::LINT_ALLOWANCES`, docs/06 §2);
 //!   `unsafe_code` is owned by `unsafe-attrs`.
@@ -93,9 +95,19 @@ pub(crate) struct Root {
     pub(crate) src: String,
 }
 
+/// True for exactly the target root that ADR-038 lets relax `unsafe_code` (`expect::UNSAFE_EXEMPT_ROOT`); `path`
+/// is relative to the workspace root, as `rel` produces it.
+pub(crate) fn unsafe_exempt_root(path: &str) -> bool {
+    path == expect::UNSAFE_EXEMPT_ROOT
+}
+
 /// The header finding for one target root, if any.
 pub(crate) fn root_finding(r: &Root) -> Option<String> {
     let (ok, wanted) = match unsafe_rule(&r.krate) {
+        _ if unsafe_exempt_root(&r.path) => (
+            header_declares(&r.src, ALLOW_UNSAFE),
+            format!("#![{ALLOW_UNSAFE}] (the ADR-038 bench root)"),
+        ),
         UnsafeRule::SysAllow if r.lib => (
             header_declares(&r.src, ALLOW_UNSAFE),
             format!("#![{ALLOW_UNSAFE}] (library root of a secmp-sys-* crate)"),
@@ -138,12 +150,13 @@ pub(crate) fn unsafe_token_lines(src: &str) -> Vec<usize> {
 }
 
 /// `unsafe_code` findings for one first-party `.rs` file (`path` relative to the workspace root): every
-/// relaxation of `unsafe_code` except the exact `#![allow(unsafe_code)]` at the top of a `SysAllow` library
-/// root, and — in a `UiDeny` crate — every line holding the token `unsafe`.
+/// relaxation of `unsafe_code` except the exact `#![allow(unsafe_code)]` at the top of a sanctioned root (the
+/// library root of a `SysAllow` crate, or the ADR-038 bench root), and — in a `UiDeny` crate — every line
+/// holding the token `unsafe`.
 pub(crate) fn unsafe_source_findings(
     path: &str,
     src: &str,
-    sys_lib_root: bool,
+    sanctioned_root: bool,
     ui: bool,
 ) -> Vec<String> {
     let mut out = Vec::new();
@@ -151,13 +164,14 @@ pub(crate) fn unsafe_source_findings(
         if r.lint != "unsafe_code" {
             continue;
         }
-        if sys_lib_root && r.file_top && r.attr == ALLOW_UNSAFE {
+        if sanctioned_root && r.file_top && r.attr == ALLOW_UNSAFE {
             continue;
         }
         out.push(format!(
             "unsafe-attrs: {path} relaxes `unsafe_code` with `{}` (docs/06 §2: only `#![{ALLOW_UNSAFE}]` at the \
-             library root of secmp-sys-mem/secmp-sys-desktop{})",
+             library root of secmp-sys-mem/secmp-sys-desktop and at {} (ADR-038){})",
             r.attr,
+            expect::UNSAFE_EXEMPT_ROOT,
             if ui {
                 "; secmp-ui tolerates only the one inside `slint!` expansions, ADR-033"
             } else {
@@ -182,6 +196,8 @@ struct UnsafeCounts {
     sys_allow: usize,
     ui_deny: usize,
     ui_files: usize,
+    /// Target roots matching `expect::UNSAFE_EXEMPT_ROOT` (must be exactly one).
+    exempt_allow: usize,
 }
 
 fn check_unsafe_attrs(
@@ -221,6 +237,9 @@ fn check_unsafe_attrs(
                 src: std::fs::read_to_string(&t.src_path)?,
             };
             match rule {
+                _ if unsafe_exempt_root(&root.path) => {
+                    counts.exempt_allow = counts.exempt_allow.saturating_add(1);
+                }
                 UnsafeRule::SysAllow if lib => {
                     counts.sys_allow = counts.sys_allow.saturating_add(1);
                     sys_lib_roots.insert(root.path.clone());
@@ -249,8 +268,15 @@ fn check_unsafe_attrs(
         findings.extend(unsafe_source_findings(
             &path,
             &src,
-            sys_lib_roots.contains(&path),
+            sys_lib_roots.contains(&path) || unsafe_exempt_root(&path),
             ui,
+        ));
+    }
+    if counts.exempt_allow != 1 {
+        findings.push(format!(
+            "unsafe-attrs: expect::UNSAFE_EXEMPT_ROOT ({}) must name exactly one target root (ADR-038); it names {}",
+            expect::UNSAFE_EXEMPT_ROOT,
+            counts.exempt_allow
         ));
     }
     Ok(counts)
@@ -646,11 +672,14 @@ pub(crate) fn run(ws: &Workspace) -> Result<String> {
         sys_allow,
         ui_deny,
         ui_files,
+        exempt_allow,
     } = unsafe_counts;
     Ok(format!(
-        "unsafe-attrs: {forbid} target roots forbid, {sys_allow} sys library roots allow, {ui_deny} secmp-ui roots deny, \
-         {ui_files} secmp-ui files without `unsafe`; lints-table: {manifests} manifests; lint-allows: {relaxations} \
-         relaxing attributes (all sanctioned); build-scripts: {crates} crates, none; spdx: {spdx} files; {}",
+        "unsafe-attrs: {forbid} target roots forbid, {sys_allow} sys library roots allow, {exempt_allow} ADR-038 \
+         bench root allows ({}), {ui_deny} secmp-ui roots deny, {ui_files} secmp-ui files without `unsafe`; \
+         lints-table: {manifests} manifests; lint-allows: {relaxations} relaxing attributes (all sanctioned); \
+         build-scripts: {crates} crates, none; spdx: {spdx} files; {}",
+        expect::UNSAFE_EXEMPT_ROOT,
         vet.unwrap_or_default()
     ))
 }
@@ -901,6 +930,61 @@ mod tests {
         );
     }
 
+    /// Rule (ADR-038): exactly `expect::UNSAFE_EXEMPT_ROOT` carries `#![allow(unsafe_code)]` besides the sys
+    /// library roots; the match is on the exact relative path, nothing near it.
+    #[test]
+    fn adr038_exemption_is_path_exact() {
+        let exempt = expect::UNSAFE_EXEMPT_ROOT;
+        assert_eq!(exempt, "crates/secmp-crypto/benches/ct.rs");
+        assert!(unsafe_exempt_root(exempt));
+        for near in [
+            "crates/secmp-crypto/benches/ct2.rs",
+            "crates/secmp-crypto/benches/ct.rs.orig",
+            "crates/secmp-crypto/benches/ct.rs/",
+            "crates/secmp-crypto/benches/CT.rs",
+            "crates/secmp-crypto/benches/ct/main.rs",
+            "./crates/secmp-crypto/benches/ct.rs",
+            "/crates/secmp-crypto/benches/ct.rs",
+            "x/crates/secmp-crypto/benches/ct.rs",
+            "crates\\secmp-crypto\\benches\\ct.rs",
+            "crates/secmp-proto/benches/ct.rs",
+            "crates/secmp-crypto/src/lib.rs",
+            "crates/secmp-crypto/tests/ct.rs",
+            "",
+        ] {
+            assert!(!unsafe_exempt_root(near), "{near}");
+        }
+        let allow = "// SPDX\n//! doc\n#![ALLOW(unsafe_code)]\n";
+        let bench = |path: &str, text: &str| Root {
+            krate: "secmp-crypto".to_owned(),
+            target: "ct [bench]".to_owned(),
+            path: path.to_owned(),
+            lib: false,
+            src: src(text),
+        };
+        // the exempt root must carry the allow; `forbid` there is a finding (the exemption is not optional)
+        assert_eq!(root_finding(&bench(exempt, allow)), None);
+        assert!(root_finding(&bench(exempt, FORBID_SRC)).is_some());
+        assert!(root_finding(&bench(exempt, "// SPDX\n#![EXPECT(unsafe_code)]\n")).is_some());
+        // any other bench root of the same crate still forbids
+        let other = "crates/secmp-crypto/benches/other.rs";
+        assert!(root_finding(&bench(other, allow)).is_some());
+        assert_eq!(root_finding(&bench(other, FORBID_SRC)), None);
+        // sources: only the exact form at the file top of the exempt root
+        assert!(unsafe_source_findings(exempt, &src(allow), true, false).is_empty());
+        for bad in [
+            "#![EXPECT(unsafe_code)]\n",
+            "#![ALLOW(unsafe_code, reason = \"x\")]\n",
+            "fn f() {}\n#[ALLOW(unsafe_code)]\nfn g() {}\n",
+        ] {
+            assert_eq!(
+                unsafe_source_findings(exempt, &src(bad), true, false).len(),
+                1,
+                "{bad}"
+            );
+        }
+    }
+
     #[test]
     fn unsafe_token_boundaries() {
         assert_eq!(unsafe_token_lines("unsafe { x }"), vec![1]);
@@ -1107,6 +1191,99 @@ mod tests {
                 .any(|f| f.contains("crates/with-build/build.rs exists"))
         );
         assert!(!findings.iter().any(|f| f.contains("clean")));
+        Ok(())
+    }
+
+    /// The ADR-038 exemption on a real directory tree and `cargo metadata`-shaped workspace: it covers the one
+    /// bench root and nothing else — not another bench of the same crate, not the same file name in another crate.
+    #[test]
+    fn fixture_adr038_unsafe_exemption() -> Result<()> {
+        let allow = "#![ALLOW(unsafe_code)]\nfn main() {}\n";
+        let forbid = "#![forbid(unsafe_code)]\nfn main() {}\n";
+        let tree = Tree::new(
+            "adr038",
+            &[
+                ("crates/secmp-crypto/src/lib.rs", forbid),
+                ("crates/secmp-crypto/benches/ct.rs", allow),
+                ("crates/secmp-crypto/benches/other.rs", allow),
+                ("crates/secmp-proto/src/lib.rs", forbid),
+                ("crates/secmp-proto/benches/ct.rs", allow),
+            ],
+        )?;
+        let root = tree.0.to_string_lossy().replace('\\', "/");
+        let metadata = |with_ct: bool| {
+            let ct = if with_ct {
+                format!(
+                    r#"{{"name": "ct", "kind": ["bench"], "src_path": "{root}/crates/secmp-crypto/benches/ct.rs"}},"#
+                )
+            } else {
+                String::new()
+            };
+            format!(
+                r#"{{"workspace_root": "{root}",
+                  "workspace_members": ["c#0", "p#0"],
+                  "packages": [
+                    {{"id": "c#0", "name": "secmp-crypto", "version": "0.0.0", "features": {{}},
+                      "manifest_path": "{root}/crates/secmp-crypto/Cargo.toml",
+                      "targets": [{{"name": "secmp_crypto", "kind": ["lib"], "src_path": "{root}/crates/secmp-crypto/src/lib.rs"}},
+                                  {ct}
+                                  {{"name": "other", "kind": ["bench"], "src_path": "{root}/crates/secmp-crypto/benches/other.rs"}}]}},
+                    {{"id": "p#0", "name": "secmp-proto", "version": "0.0.0", "features": {{}},
+                      "manifest_path": "{root}/crates/secmp-proto/Cargo.toml",
+                      "targets": [{{"name": "secmp_proto", "kind": ["lib"], "src_path": "{root}/crates/secmp-proto/src/lib.rs"}},
+                                  {{"name": "ct", "kind": ["bench"], "src_path": "{root}/crates/secmp-proto/benches/ct.rs"}}]}}],
+                  "resolve": {{"nodes": [{{"id": "c#0", "deps": []}}, {{"id": "p#0", "deps": []}}]}}}}"#
+            )
+        };
+        let files = tree.files(&[
+            "crates/secmp-crypto/src/lib.rs",
+            "crates/secmp-crypto/benches/ct.rs",
+            "crates/secmp-crypto/benches/other.rs",
+            "crates/secmp-proto/src/lib.rs",
+            "crates/secmp-proto/benches/ct.rs",
+        ]);
+        let about = |findings: &[String], path: &str| {
+            findings
+                .iter()
+                .filter(|f| f.starts_with(&format!("unsafe-attrs: {path} ")))
+                .count()
+        };
+
+        let ws = Workspace::parse(&metadata(true))?;
+        let mut findings = Vec::new();
+        let counts = check_unsafe_attrs(&ws, &files, &mut findings)?;
+        assert_eq!(counts.exempt_allow, 1);
+        assert_eq!(
+            about(&findings, expect::UNSAFE_EXEMPT_ROOT),
+            0,
+            "{findings:?}"
+        );
+        // a root finding (header) and a source finding (relaxation) each
+        assert_eq!(
+            about(&findings, "crates/secmp-crypto/benches/other.rs"),
+            2,
+            "{findings:?}"
+        );
+        assert_eq!(
+            about(&findings, "crates/secmp-proto/benches/ct.rs"),
+            2,
+            "{findings:?}"
+        );
+        assert!(!findings.iter().any(|f| f.contains("must name exactly one")));
+
+        // the exemption must point at an existing target root, or the check fails closed
+        let ws = Workspace::parse(&metadata(false))?;
+        let mut findings = Vec::new();
+        assert_eq!(
+            check_unsafe_attrs(&ws, &files, &mut findings)?.exempt_allow,
+            0
+        );
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.contains("must name exactly one target root")),
+            "{findings:?}"
+        );
         Ok(())
     }
 

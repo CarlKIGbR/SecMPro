@@ -2,12 +2,22 @@
 
 Branch: `m02-proto` · Base: `main` at `bc8d6d559795cf515bcf08f63fcfe0b9eb3058d9` (M1 squash merge) · Author: Claude Code (Opus 5.5) · Date: 2026-09-29
 
-Status: **STOP (WEISUNG M2-4 C) — the PR run 36651079069 on `0804f60` passes every step except `ct`, where five
-targets FAIL under ADR-041 on a fine-timer runner (§8 Blocked); PR #3 stays a draft.** All plan steps are done. Commit 1 (`9f20b95` … `168ede0`); WEISUNG M2-1 (`d09666a` …
+Status: **Ready for review (WEISUNG M2-6).**
+
+- All plan steps are done.
+- The ct gate follows ADR-041 with Amendment 1: effect floor `max(1 q_eff, 10 ns)` and a mandatory sensitivity
+  control; the owner accepted it on 2026-09-30.
+- Q-9 is closed and §8 has nothing blocking.
+- PR run 36679963223 on the code head `6b9da3b` is green on every job.
+
+Commits: commit 1 (`9f20b95` … `168ede0`); WEISUNG M2-1 (`d09666a` …
 `ffe0612`); steps 1–8 (`86830da`, `b2e3319`, `d90f3b7`); WEISUNG M2-2 (`68ac537`, `6beb30e`, `4e582cb`, `f7b3066`,
 `916bbf6`); steps 9–12 (`d8d8851`, `e4da4a1`, `94b14cf`, `45d28e1`, `f0df22f`); WEISUNG M2-3 (`e230c6e`, `774e04a`);
 WEISUNG M2-4: ADR-041 (`f537714`), its implementation (`bdf10db`, `b8a7915`), the evidence (`9ba8328`), two gate
-fixes (`f5855db`, `631506e`), the `header_v1` Kani split (commit after `631506e`) and steps 13–14 (`7413e23`). The ct gate follows ADR-041 (accepted by the owner, 2026-09-29).** Inputs:
+fixes (`f5855db`, `631506e`), the `header_v1` Kani split (`0804f60`) and steps 13–14 (`7413e23`); the STOP report
+(`355d641`); WEISUNG M2-5: the Q-7 note (`b355587`) and the key-swap evidence (`d07bba3`, `2cab912`); WEISUNG
+M2-6: the Amendment 1 text (`ae2ac52`), its implementation (`31d13de`), a gate fix found by the evidence
+(`6b9da3b`), and the evidence and this report (the commit after `6b9da3b`). Inputs:
 `docs/07` M2, spec rev 2.3 (ADR-039), `vectors/SCHEMA.md` rev 3 with the §4.8 case table
 `vectors/SCHEMA-4.8-encodings.md` (decoding contract D-1 … D-13), `docs/reviews/ref-spec-questions-M2.md` (SQ-12 …
 SQ-21, binding readings), `docs/reviews/M01-review.md` §G/§H, and the reviewer's M2 brief. `ref/`, `vectors/ref/`,
@@ -205,8 +215,8 @@ WEISUNG M2-3 and M2-4:
 |---|---|---|
 | `decode(encode(x)) == x` and `encode(decode(b)) == b` for all structures | `cargo nextest run -p secmp-proto --test canonical` (8 tests: `records`, `frames`, `invitation_and_link_data`, `handshake_envelope`, `ratchet_cell_content_and_bodies`, `edge_counters`, `edge_lengths`, `edge_enum_variants`); `--test encodings_ref` (`every_row_of_the_encodings_file`: each positive decodes to exactly its `value` and re-encodes to its bytes); Kani harnesses (below) | pass — `M02-evidence/secmp-proto-tests-f0df22f.txt` (51/51) |
 | every negative vector rejected with the uniform error | `cargo nextest run -p secmp-proto --test encodings_ref` (`every_row_of_the_encodings_file`; since `94b14cf` on the frozen `vectors/encodings.json`, SHA-256 `9a1d5995…` = the reference file; before on the reference file SHA-256 `9abd63d7…`); also run by `cargo xtask vectors` before the freeze | **547/547 negatives rejected by the decoder itself with `Error::Rejected`** (since `05b6807` judged on the decode result alone, not after re-encoding); 78/78 decodable positives decode and re-encode byte-for-byte (frames to the named command); 7 `Signed/*` rows encode-only (step 10; their exact message layouts are unit-tested in `signed::tests::exact_contents`). Frozen in `94b14cf`. Evidence `M02-evidence/secmp-proto-tests-05b6807.txt`, `M02-evidence/secmp-proto-tests-f0df22f.txt` (51/51) |
-| Kani proofs pass | `cargo kani --package secmp-proto -Z stubbing` (ci-full step 9; the `-Z` from the package's Kani metadata) | pass — 15/15 harnesses verified, 0 failures (Kani 0.68.0, macOS arm64, on the tree of `45d28e1`): `padding` 47.7 s, `cell` 9.7 s, `header_v1` 218.0 s, `response_frame` 30.5 s, `request_frame` 4.9 s, the ten per-opcode request harnesses 0.3–85.4 s (`request_fetch_multi` 68.2 s); each run in the foreground with `--harness-timeout`; bounds and the attempts that exceeded them in the evidence file and §5 (d). Evidence `M02-evidence/kani-aarch64-apple-darwin-45d28e1.txt`; again 15/15 with the gate's corrected command in the local ci-full on `f5855db` (`M02-evidence/ci-full-aarch64-apple-darwin-f5855db.txt`). The CI run 36614956208 on `774e04a` failed this step because the gate's `--package` invocation did not enable stubbing (fixed in `f5855db`) |
-| fuzzers run 2 min without findings | `cargo +nightly-2026-09-21 fuzz run --fuzz-dir fuzz <target> -- -max_total_time=120` for the five `proto_*` targets (ci-full step 6 runs all twelve) | pass — all five: exit 0, no findings; `proto_records` 4 570 298 runs, `proto_frames` 3 879 394, `proto_invitation` 4 182 508, `proto_handshake` 5 768 752, `proto_cell` 6 393 524, each in 121 s; libFuzzer's `max_len` reached each target's largest seed (4338, 12 362, 12 020, 65 559 B). Evidence `M02-evidence/fuzz-proto-aarch64-apple-darwin-f0df22f.txt` |
+| Kani proofs pass | `cargo kani --package secmp-proto -Z stubbing` (ci-full step 9; the `-Z` from the package's Kani metadata) | pass — 15/15 harnesses verified, 0 failures (Kani 0.68.0, macOS arm64, on the tree of `45d28e1`): `padding` 47.7 s, `cell` 9.7 s, `header_v1` 218.0 s, `response_frame` 30.5 s, `request_frame` 4.9 s, the ten per-opcode request harnesses 0.3–85.4 s (`request_fetch_multi` 68.2 s); each run in the foreground with `--harness-timeout`; bounds and the attempts that exceeded them in the evidence file and §5 (d). Evidence `M02-evidence/kani-aarch64-apple-darwin-45d28e1.txt`; again 15/15 with the gate's corrected command in the local ci-full on `f5855db` (`M02-evidence/ci-full-aarch64-apple-darwin-f5855db.txt`); after the `header_v1` split **16/16** through the gate itself (`cargo xtask step --strict kani`) in the local ci-full on `6b9da3b` (405 s) and in PR run 36679963223 (659 s). The CI run 36614956208 on `774e04a` failed this step because the gate's `--package` invocation did not enable stubbing (fixed in `f5855db`) |
+| fuzzers run 2 min without findings | `cargo +nightly-2026-09-21 fuzz run --fuzz-dir fuzz <target> -- -max_total_time=120` for the five `proto_*` targets (ci-full step 6 runs all twelve) | pass — all five: exit 0, no findings; `proto_records` 4 570 298 runs, `proto_frames` 3 879 394, `proto_invitation` 4 182 508, `proto_handshake` 5 768 752, `proto_cell` 6 393 524, each in 121 s; libFuzzer's `max_len` reached each target's largest seed (4338, 12 362, 12 020, 65 559 B). Evidence `M02-evidence/fuzz-proto-aarch64-apple-darwin-f0df22f.txt`. All 12 targets again without findings in the local ci-full on `6b9da3b` and in PR run 36679963223 (1498 s) |
 | Rust and `ref/` encodings identical | `cargo xtask vectors`; test `encodings_ref::the_rust_generator_reproduces_every_positive_row` (every target) | pass — "encodings: agrees with ref; frozen as vectors/encodings.json", "9 suites identical to vectors/ref (structural, SCHEMA §1; positive rows of encodings)"; all 85 generated positives agreed at the first comparison (ADR-026 as amended: structural; the frozen file is the verbatim reference file). The 547 negatives are the reference file's rows, each rejected by the Rust decoders (M2 deliverables: cross-generated *positive* vectors) — §8 Q-5 |
 | `expect::VECTOR_REF_PENDING` empty at the DoD (condition on `285cb17`, WEISUNG M2-1) | `cargo xtask step ref-vectors` | pass — "9 frozen suites (750 cases) structurally identical to vectors/ref (ADR-026); pending freeze: none" (`94b14cf`) |
 | Review focus: sizes match Appendix B | `crates/secmp-proto/src/sizes.rs` compile-time assertions (every App. B size re-derived from its App. D field list, frame payload maxima < 4336, agreement with `secmp-crypto`) | compiles (a wrong size is a build error); per-structure unit tests assert the encoded lengths (e.g. `relay_info_and_its_record` 1741/1744, `iks_bundle_link_data_blob` 2017/7775/12288/12360, `outer_is_padded_to_three_chunks` 12018, `every_request_round_trips_at_frame_size` 4336) |
@@ -231,12 +241,14 @@ Commit-1 evidence:
 
 | Gate | Result |
 |---|---|
-| `cargo xtask ci-full` (macOS arm64, local) | **every step on `f5855db`**, as foreground chunks: steps 1–4, kat, ct (ADR-041 PASS), coverage, proverif, windows-cross, linux-target, ref-vectors, sbom PASS; fuzz 12 × 120 s without findings; mutants 588 in 4 shards, 1 documented survivor; Miri every group of the gate's scope PASS; Kani 15/15; repro STUB (M11); windows-native and systemd host-bound SKIP (their CI jobs run them) — `M02-evidence/ci-full-aarch64-apple-darwin-f5855db.txt` |
-| `cargo xtask ci` (Linux, PR run) | the PR run of the final head: id and result in the PR description |
+| `cargo xtask ci-full` (macOS arm64, local) | **every step on `6b9da3b`** (the code head; `kat` on `31d13de`, whose crates are identical), as foreground chunks of the gates' own commands: steps 1–4, kat, ct (ADR-041 Amendment 1 PASS), coverage, proverif, windows-cross, linux-target, ref-vectors, sbom PASS; fuzz 12 × 120 s without findings; mutants 588 in 4 shards, 1 documented survivor; Miri every group of the gate's scope PASS; Kani 16/16 through `cargo xtask step --strict kani`; repro STUB (M11); windows-native and systemd host-bound SKIP — `M02-evidence/ci-full-aarch64-apple-darwin-6b9da3b.txt`. Before: **every step on `f5855db`**, as foreground chunks: steps 1–4, kat, ct (ADR-041 PASS), coverage, proverif, windows-cross, linux-target, ref-vectors, sbom PASS; fuzz 12 × 120 s without findings; mutants 588 in 4 shards, 1 documented survivor; Miri every group of the gate's scope PASS; Kani 15/15; repro STUB (M11); windows-native and systemd host-bound SKIP (their CI jobs run them) — `M02-evidence/ci-full-aarch64-apple-darwin-f5855db.txt` |
+| `cargo xtask ci` (Linux, PR run) | **PR run 36679963223 on `6b9da3b` (the code head): ✅ every job** — `windows-native` ✅, `xwin-cross` ✅, `linux-fast` ✅, `linux-full` ✅ with every ci-full step PASS (kat 755 s, ct under Amendment 1 on a lattice runner, fuzz 1498 s, coverage 99.6 %, mutants 588 / 1 documented, Miri 1144 s, Kani 16/16 659 s, systemd) — `M02-evidence/ci-full-x86_64-linux-pr-run-36679963223-6b9da3b.txt`, `…/ct-report-x86_64-linux-pr-run-36679963223-6b9da3b.json`. The PR run of the report commit on top (docs and evidence only): id and result in the PR description |
+| PR run 36677647769 (`31d13de`) | cancelled deliberately by my push of `6b9da3b`, during `linux-full`: its head carried the gate's rounding defect (§5 (h)), so its `ct` step could fail on a lattice runner without any finding, and the head was superseded; `windows-native`, `xwin-cross`, `linux-fast` had passed |
+| PR runs 36657972510 (`355d641`), 36665048318 (`2cab912`) | ✅ every job (ADR-041 before the amendment; `ct` on a lattice runner each time) |
 | Windows (`windows-native`, `xwin-cross`) | ✅ in every PR run of M2 (36556788827, 36564976761, 36614956208) |
 | `cargo xtask ci-fast` (macOS arm64) | PASS on `9835bb3` (§3); fmt/clippy/policy/nextest/ref-vectors PASS on `168ede0`; **PASS on the tree of `f0df22f`** — every `ci-fast` step (fmt … hello, kat 303 s), run as two foreground `cargo xtask step` calls (`M02-evidence/ci-fast-aarch64-apple-darwin-f0df22f.txt`); `ref-vectors` "pending freeze: none" (`M02-evidence/ref-vectors-aarch64-apple-darwin-f0df22f.txt`) |
 | KATs / differential | PASS in `ci-fast` (§3); differential 4/4 in release after F1 |
-| Constant time (`ct`) | **ADR-041 (from `bdf10db`/`b8a7915`): 6/6 PASS** — Linux `linux-ct` 36621138939, 36621645926, 36622240073 and 3 local macOS runs on `b8a7915`: positive control detected, A/A ≤ 2.8, every reproduced shift below one effective quantum (`M02-evidence/ct-adr041/README.md`). Before ADR-041: macOS arm64 PASS on `168ede0` and `9835bb3` (§3); on `19f5700` (margin): run 1 **FAIL** (`caead_open_reject_samekey` 18.39 at p50, raw −0.80), runs 2 and 3 PASS (2.95, 0.91); **Linux x86_64, PR run 36556788827 on `b8ffb1c`: FAIL** (`msg_open_reject` 82.17, `caead_open_reject` 25.66, `caead_aead_reject` 12.51, `caead_open_reject_samekey` 14.56; `tsc`/`rdtscp`, k = 1) — both in §8 Blocked |
+| Constant time (`ct`) | **ADR-041 Amendment 1 (from `31d13de`/`6b9da3b`): 14/14 reports PASS.** Linux `linux-ct` 8 dispatches (36677648129, 36678360108, 36678826377 on `31d13de`; 36679955738, 36680376550, 36680797237, 36681396211, 36681989835 on `6b9da3b`) and 6 local macOS runs. Positive control detected; A/A ≤ 3.16; `min_leak_control` reached the floor in every run (3.7–45.1 floors); no reproduced Δ ≥ floor (largest sub-floor shift 0.53 floors). No dispatch drew a fine-timer runner; recomputed from the recorded samples, every FAIL of PR run 36651079069 is a sub-floor shift (≤ 0.77 floors). Evidence: `M02-evidence/ct-adr041-amendment1/README.md`. Before the amendment: **ADR-041 (from `bdf10db`/`b8a7915`): 6/6 PASS** — Linux `linux-ct` 36621138939, 36621645926, 36622240073 and 3 local macOS runs on `b8a7915`: positive control detected, A/A ≤ 2.8, every reproduced shift below one effective quantum (`M02-evidence/ct-adr041/README.md`). Before ADR-041: macOS arm64 PASS on `168ede0` and `9835bb3` (§3); on `19f5700` (margin): run 1 **FAIL** (`caead_open_reject_samekey` 18.39 at p50, raw −0.80), runs 2 and 3 PASS (2.95, 0.91); **Linux x86_64, PR run 36556788827 on `b8ffb1c`: FAIL** (`msg_open_reject` 82.17, `caead_open_reject` 25.66, `caead_aead_reject` 12.51, `caead_open_reject_samekey` 14.56; `tsc`/`rdtscp`, k = 1) — both in §8 Blocked |
 | PR run 36556788827 (`b8ffb1c`, commit 1) | `windows-native` ✅, `xwin-cross` ✅, `linux-fast` ✅, `linux-full` ❌ — only step `ct` failed (`M02-evidence/ci-full-x86_64-linux-pr-run-36556788827-b8ffb1c.txt`) |
 | PR run 36564976761 (`49601cc`, WEISUNG M2-1 head) | `windows-native` ✅, `xwin-cross` ✅, `linux-fast` ✅, `linux-full` ❌ — only step `ct` failed: `caead_open_reject` INCONCLUSIVE→FAIL, 7.22 then 10.96 at p95 (runner resolution 26 ticks); every other step PASS incl. mutants (584 tested, 1 documented survivor), coverage (`secmp-proto` 99.6 %), miri, fuzz, kat (`M02-evidence/ci-full-x86_64-linux-pr-run-36564976761-49601cc.txt`, `…/ct-report-x86_64-linux-pr-run-36564976761-49601cc-FAIL.json`) |
 | PR run 36608427671 (`954f694`) | cancelled by my push of `e230c6e` during step 6 (fuzz); it had passed steps 1–5 except `ct` (old verdict: `tag_compare` 14.78) |
@@ -278,7 +290,27 @@ lattice runner, run 36620324956); the method of estimating the lattice is in the
 (`f5855db` and the `kani` invocation after `7413e23`, §2) — the gates' checks are unchanged; one gate now invokes Kani correctly, the other no longer
 mutates code that no test build contains. (g) The local ci-full ran as foreground chunks of the gates' own
 commands where a step exceeds 10 minutes (fuzz, mutants, Miri, Kani); `docs/06` §5 names the steps, not the
-chunking.
+chunking. (h) ADR-041 Amendment 1 as implemented (`31d13de`, `6b9da3b`). Readings for the reviewer to confirm:
+- The floor `max(CT_EFFECT_FLOOR_QUANTA × q_eff, CT_EFFECT_FLOOR_NS)` applies to the same per-sample Δ as ADR-041
+  (2). With `k > 1` that is a batch of `k` calls. In the Linux evidence only `caead_derive` (k = 2–4) and the
+  positive control (k = 4–7, on the resolution-26 runners) are batched; every other target and the sensitivity
+  control have `k = 1`.
+- The sensitivity control's raw Δ must reach the floor *with its sign*, since class 0 takes the extra byte step.
+  A control that cannot be measured (`tag_compare` without a batch size, or no tick length) is `CONTROL_FAIL`.
+- The informative verdict is renamed `SUB_FLOOR_SHIFT` (was `SUB_QUANTUM_SHIFT`). The gate refuses the old name
+  like any unknown verdict.
+- The gate re-checks the control from the report (`reached`, raw Δ ≥ floor, floor ≥ 10 ns and ≥ one q_eff) rather
+  than taking the bench's word.
+- In `docs/06` §4, besides the sensitivity sentence the WEISUNG asked for, the same row's floor wording now reads
+  "one effective quantum or 10 ns, whichever is larger" and names the sensitivity control and the sub-floor shift;
+  otherwise the row would contradict the amendment. CHANGELOG entry added.
+
+A defect of my own was found by the evidence and fixed in `6b9da3b`:
+
+- The gate's first recheck compared `floor_ns` (4 decimals) with `q_eff_ticks` (3 decimals) × tick, with 1 ppm of
+  slack. On the lattice runners the floor equals one q_eff, so rounding alone failed the comparison: `linux-ct`
+  36678826377 reported PASS and the gate refused it.
+- The recheck now works in ticks within exactly the printed rounding. The regression test uses the run's numbers.
 
 ## 6. Dependencies added or bumped
 
@@ -298,15 +330,25 @@ first-party crates changed).
 - The weekly `miri-full` job cannot be exercised before the workflow is on `main` (`schedule`/`workflow_dispatch`
   only run for workflows on the default branch); its xtask step is the same code path as `miri` with an empty skip
   list.
-- ADR-041 does not catch data-dependent timing below one effective quantum (hardware effects such as DMP and
-  DVFS; sub-quantum shifts are reported). The margin to the floor is not large on the ≈ 24.5-tick Linux runners:
-  `caead_open_reject` reached Δ = 0.81 / 0.63 quanta (|t| 284 / 217) in run 36620324956, while the final runs stay
-  ≤ 0.29.
+- By ADR-041 Amendment 1, the gate does not catch data-dependent timing below 10 ns in composed operations
+  (`msg_open_*`, `caead_open_*`), including hardware effects such as DMP and DVFS; sub-floor shifts are reported.
+  Bundled comparisons (×256) still expose a single-byte early exit, and `min_leak_control` reaches 3.7–45 floors.
+  Margin in the evidence: the largest sub-floor shift is 0.53 floors on Linux; recomputed on the fine timer of PR
+  run 36651079069 it is 0.77 floors (`caead_open_reject_samekey`, p99).
+- None of the 8 evidence dispatches drew a fine-timer runner (5 × tick 0.385 ns with resolution 26, 3 × a ≈ 24.5-tick
+  lattice). The fine-timer behaviour under the amendment is shown by recomputation from recorded samples only, and
+  by whatever runner future PR runs draw.
 - The effective quantum falls back to the clock's (and to the reported resolution) where a target's samples show no
-  lattice (e.g. the bimodal positive control, `tag_compare` on a lattice runner); that fallback is the strict
-  direction (a smaller quantum makes a FAIL likelier, not rarer).
+  lattice (e.g. the bimodal positive control, `tag_compare` on a lattice runner). On Linux the 10 ns term of the
+  floor now dominates either way; on macOS the floor is one 41.67 ns tick.
 
 ## 8. Blocked / questions for the reviewer or owner
+
+**Nothing is blocked (WEISUNG M2-6).** The Blocked entries below are kept as the record:
+
+- The two ct events on M1 code were closed by ADR-041 (Q-4).
+- The STOP of WEISUNG M2-4 C (PR run 36651079069) was closed by ADR-041 Amendment 1 (Q-9). Recomputed from its
+  recorded samples, all five FAILs are sub-floor shifts (`M02-evidence/ct-adr041-amendment1/README.md`).
 
 **Blocked (ct gate, M1 code — docs/06 §4 STOP rule):** `cargo xtask step ct` on `19f5700` (macOS arm64,
 `cntvct_el0`, 41.67 ns) failed once: `caead_open_reject_samekey` FAIL, max |t| **18.39 at p50** (raw −0.80; p75
@@ -387,7 +429,8 @@ within a process 22 of 33 excursions above 10 reproduce with the same sign at th
 understates the effective quantum (samples on a ≈ 24.5-tick lattice, ≈ 10 ns). Thresholds, samples, control and
 verdict unchanged.
 
-**Blocked — STOP (WEISUNG M2-4 C: "If any target FAILs under ADR-041 … STOP, report").** The PR run
+**Blocked — STOP (WEISUNG M2-4 C: "If any target FAILs under ADR-041 … STOP, report") — closed by ADR-041
+Amendment 1 (WEISUNG M2-6).** The PR run
 **36651079069** on `0804f60` ran the ct gate on a runner type none of the six evidence runs hit: `tsc`/`rdtscp`,
 tick 0.358 ns, reported resolution 2 ticks, samples on a 2-tick lattice (q_eff = 0.72 ns; the evidence runs had
 q_eff 24.5–26 ticks ≈ 10 ns on Linux and 41.67 ns on macOS). The inline A/A control passed (≤ 2.66), the positive
@@ -506,10 +549,12 @@ Open questions:
   M2-5): yes.** The reviewer's note is recorded under ADR-041 (2) (`b355587`).
 - Q-8 (margin): on the ≈ 24.5-tick Linux runners one superseded run showed `caead_open_reject` at 0.81 quanta
   (sub-quantum, passes). No action proposed; noted for the M3 DIT ADR. **Noted by the reviewer (WEISUNG M2-5).**
-- Q-9 (ct FAIL on a fine timer): open. The key-swap experiment and the code reading are above ("Key-swap
-  experiment for Q-9"). The gate is unchanged; PR #3 stays a draft. PR run 36657972510 on `355d641` passed every
-  step, including `ct`, on a ≈ 24.5-tick lattice runner. That shows only which runner type it drew, not that Q-9 is
-  resolved.
+- **Q-9 (ct FAIL on a fine timer) — closed by ADR-041 Amendment 1** (owner, 2026-09-30):
+  - Recorded in `docs/08` (`ae2ac52`) and implemented in `31d13de`/`6b9da3b`.
+  - The M2-5 report was accepted: no code finding; the sign does not follow the semantics; `Caead::open` and the
+    AEAD path are class-symmetric.
+  - The key-swap experiment and the code reading are above ("Key-swap experiment for Q-9").
+  - Evidence under the amendment: `M02-evidence/ct-adr041-amendment1/`.
 - Q-3 (ADR-040): answered — Accepted (WEISUNG M2-2 B, `6beb30e`); `rand` added in `d8d8851`.
 - **Q-4 (ct gate) — closed by ADR-041** (owner, 2026-09-29; `f537714`, implemented in `bdf10db`/`b8a7915`, evidence `M02-evidence/ct-adr041/`). Original question: the gate fails on Linux (and on macOS for `caead_derive`) after the harness
   artefact is removed, with the pattern of findings 3–4 above. Is this a property of the fixed-vs-fixed statistic at
@@ -548,15 +593,18 @@ Other notes:
 ## 9. Checklist before requesting review
 
 - [x] All acceptance criteria evidenced above
-- [ ] `cargo xtask ci` green on CI:
-  - PR run 36651079069 (`0804f60`): every step except `ct` (ADR-041 FAIL on a fine-timer runner, §8 Blocked).
+- [x] `cargo xtask ci` green on CI:
+  - **PR run 36679963223 (`6b9da3b`, the code head): every job green**, every ci-full step PASS (§4).
+  - The PR run of the report commit (docs and evidence only) is in the PR description.
+  - `cargo xtask ci-full` is green locally on `6b9da3b` (every step; host-bound SKIPs).
+  - Earlier: PR run 36651079069 (`0804f60`) passed every step except `ct` (ADR-041 FAIL on a fine-timer runner,
+    closed by Amendment 1).
   - PR run 36657972510 (`355d641`): every job and every ci-full step PASS, including Kani (677 s). `ct` PASS on a
     ≈ 24.5-tick lattice runner, so it did not meet the fine-timer case. Evidence:
     `M02-evidence/ci-full-x86_64-linux-pr-run-36657972510-355d641.txt` and
     `ct-report-x86_64-linux-pr-run-36657972510-355d641.json`.
-  - Left unchecked while Q-9 is open. `cargo xtask ci-full` is green locally on `f5855db` (every step;
-    host-bound SKIPs).
 - [x] No `#[ignore]`, no lint allowances added for security lints, no disabled gates (the mutation gate leaves out `cfg(kani)`-only code, which no test build compiles; Kani runs it)
 - [x] Vectors frozen (`vectors/encodings.json`, verbatim reference file) — reviewed in M2-2s
 - [x] Docs/CHANGELOG updated
-- [x] Threat model untouched; spec changed only per ADR-039 (rev 2.3); ADR-041 added (owner-accepted)
+- [x] Threat model untouched; spec changed only per ADR-039 (rev 2.3); ADR-041 and its Amendment 1 added (both
+  owner-accepted)

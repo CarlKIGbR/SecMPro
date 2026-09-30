@@ -2,10 +2,38 @@
 
 One target for every decoder, the HX/TR/LINK state machines (message sequences) and the relay command
 executor (docs/06 §4). Corpora are committed (`fuzz/corpus/<target>/`, minimised with `cargo fuzz cmin`).
-`ci-full` runs every target for 120 s (fuzz smoke, step 6) with the pinned nightly (`xtask/src/tools.rs`)
-and a per-target `-max_len` (`FUZZ_MAX_LEN`). The nightly 4 h campaign of docs/06 §4 does not exist yet; a
-scheduled, non-required job arrives in M3 (M2 review F2). The gate runs exactly the targets listed in
-`xtask/src/expect.rs` (`FUZZ_TARGETS`), so a removed target fails CI.
+The gates run exactly the targets listed in `xtask/src/expect.rs` (`FUZZ_TARGETS`), so a removed target fails
+CI, with the pinned nightly (`xtask/src/tools.rs`) and a per-target `-max_len` (`FUZZ_MAX_LEN`).
+
+- **Fuzz smoke** (`ci-full` step 6, `cargo xtask step fuzz`, every PR): every target for 120 s
+  (`FUZZ_SMOKE_SECONDS`).
+- **Nightly campaign** (`.github/workflows/fuzz-nightly.yml`, daily at 00:23 UTC and on dispatch; not a
+  required check; `cargo xtask step fuzz-nightly`): 4 h (`FUZZ_NIGHTLY_SECONDS` = 14 400 s) shared equally by
+  the targets (1 200 s each with the 12 targets of M2). The workflow uploads the scratch corpus and any crash
+  inputs as artefacts; taking inputs into `fuzz/corpus/` (after `cargo fuzz cmin`) is a manual, reviewed commit.
+  The same workflow runs the `secmp-proto` tests with `SECMP_PROPTEST_SEED` set to the run id, so the seeded
+  property tests explore a new seed every night.
+
+Both run each target as `cargo fuzz run --fuzz-dir fuzz <t> target/fuzz-corpus/<t> fuzz/corpus/<t> --
+-max_total_time=<s> -max_len=<n>` (M2 review F7): libFuzzer writes new inputs only into the first corpus
+directory, the scratch corpus under `target/`, so a gate never changes the tracked corpus; crash inputs go to
+`fuzz/artifacts/<t>/`. Before each target runs, a seeding step deletes and re-creates
+`target/fuzz-corpus/<t>/` and writes the inputs derived from the frozen vectors into it
+(`xtask/src/fuzzseed.rs`, keyed by target):
+
+| Target | Frozen suite | Seeds |
+|---|---|---|
+| `msg_open` | `msgencrypt` | seal cases in mode 1 (seal, open, flip) and their `C ‖ TAG` in mode 0; open cases in mode 0 |
+| `caead_open` | `caead` | seal cases in mode 1 and their `COM ‖ C` in mode 0; open cases in mode 0 |
+| `mlkem_parse` | `hybridkem-768`, `hybridkem-1024` | every `ek`, `ct` and 64-byte seed behind its mode byte |
+| `x25519_dh` | `hybridkem-768`, `hybridkem-1024` | the case's X25519 secrets and each of its public keys |
+| `ed25519_verify` | `hybridsign` | `pk_ed` (and `ed_seed`) ‖ the Ed25519 half of `sig` ‖ `msg` |
+| `hybrid_sign_verify` | `hybridsign` | key import (mode 0), `sig ‖ msg` (mode 1), signing `msg` (mode 2) |
+| `mldsa65_verify` | `hybridsign` | key import (mode 0), the ML-DSA-65 half of `sig` (mode 1) |
+| `proto_*` | `encodings` | every decodable row (positives and negatives) as selector ‖ bytes, by structure (below) |
+
+A seed longer than the target's `-max_len` is cut to it; an AD above 255 bytes to the targets' one-byte length.
+A target without a seeding rule relies on its tracked corpus.
 
 This directory is its own Cargo workspace with its own `Cargo.lock` (seeded from the workspace lockfile so
 shared crates keep their vetted, cooled-down versions; `cargo xtask cooldown` checks both lockfiles). Its only
@@ -43,4 +71,6 @@ input (total, exact-fit, canonical). The key and signature checks of `secmp-cryp
 
 Seed corpora: every row of the frozen `vectors/encodings.json` except the encode-only `Signed/*` rows (78
 positives, 547 negatives), each as `selector ‖ bytes` in the target of its structure, file name the SHA-1 of the
-content (the libFuzzer convention); `Response/CELLR` rows go to the selector of their `context`.
+content (the libFuzzer convention); `Response/CELLR` rows go to the selector of their `context`, the other
+`Response/*` rows to selector 1 (`FETCH`). The gates' seeding step writes the same rows into the scratch corpus on
+every run (`fuzzseed::encodings_target`), so the tracked corpus holds what `cargo fuzz cmin` kept.

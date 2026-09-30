@@ -260,35 +260,109 @@ fn file_stems(dir: &Path, ext: &str) -> Result<BTreeSet<String>> {
     )
 }
 
+/// Step 6, the fuzz smoke (docs/06 §4): every target of `expect::FUZZ_TARGETS` for `expect::FUZZ_SMOKE_SECONDS`.
+///
+/// Per target (M2 review F7): the seeding step (`fuzzseed::seed_scratch_corpus`) deletes and re-creates the scratch
+/// corpus `target/fuzz-corpus/<t>/` and writes the inputs derived from the frozen vectors into it (the mapping from
+/// suites to targets and layouts is the table of `fuzzseed.rs`: `msg_open` ← `msgencrypt`, `caead_open` ← `caead`,
+/// `mlkem_parse` and `x25519_dh` ← `hybridkem-768`/`-1024`, `ed25519_verify`, `hybrid_sign_verify` and
+/// `mldsa65_verify` ← `hybridsign`, the five `proto_*` targets ← every decodable `encodings` row by structure →
+/// selector; a target without a rule relies on its tracked corpus); then libFuzzer runs on the scratch corpus
+/// **first** and the tracked `fuzz/corpus/<t>/` second (`fuzz_args`). libFuzzer writes new inputs only into the
+/// first corpus directory, so the gate never changes the tracked corpus; crashes go to `fuzz/artifacts/<t>/`.
+/// `-max_len` comes from `expect::FUZZ_MAX_LEN` (M2 review C4, F18). Every target runs even after a failure, so the
+/// log shows all of them.
 pub(crate) fn fuzz(ctx: &Ctx) -> Result<Outcome> {
+    let (targets, seeds) = fuzz_with(ctx, expect::FUZZ_SMOKE_SECONDS)?;
+    Ok(Outcome::Pass(format!(
+        "fuzz smoke, {} s per target on the vector-seeded scratch corpus plus the tracked corpus (read-only), \
+         -max_len from expect::FUZZ_MAX_LEN: {targets} (expected set matches); vector seeds: {seeds}",
+        expect::FUZZ_SMOKE_SECONDS
+    )))
+}
+
+/// The scheduled campaign (`.github/workflows/fuzz-nightly.yml`, docs/06 §4 "nightly 4 h", M2 review F2): the gate
+/// of [`fuzz`] with `expect::FUZZ_NIGHTLY_SECONDS` shared equally by the targets (`nightly_seconds_per_target`).
+/// Not part of `ci-full`; the workflow uploads the scratch corpus and any crash artefacts.
+pub(crate) fn fuzz_nightly(ctx: &Ctx) -> Result<Outcome> {
+    let seconds =
+        nightly_seconds_per_target(expect::FUZZ_NIGHTLY_SECONDS, expect::FUZZ_TARGETS.len())?;
+    let (targets, seeds) = fuzz_with(ctx, seconds)?;
+    Ok(Outcome::Pass(format!(
+        "fuzz campaign, {} s in total, {seconds} s per target on the vector-seeded scratch corpus plus the tracked \
+         corpus (read-only), -max_len from expect::FUZZ_MAX_LEN: {targets}; vector seeds: {seeds}; new inputs in \
+         target/fuzz-corpus/",
+        expect::FUZZ_NIGHTLY_SECONDS
+    )))
+}
+
+/// Each target's share of a campaign of `total` seconds; never below the per-PR smoke.
+pub(crate) fn nightly_seconds_per_target(total: u64, targets: usize) -> Result<u64> {
+    let n = u64::try_from(targets).map_err(|_| Error("too many fuzz targets".to_owned()))?;
+    match total.checked_div(n) {
+        Some(s) if s >= expect::FUZZ_SMOKE_SECONDS => Ok(s),
+        Some(s) => bail!(
+            "fuzz campaign: {s} s per target is below the per-PR smoke of {} s",
+            expect::FUZZ_SMOKE_SECONDS
+        ),
+        None => bail!("fuzz campaign: no targets"),
+    }
+}
+
+/// Seed and fuzz every target for `seconds`; returns the target list and the seed counts for the summary.
+fn fuzz_with(ctx: &Ctx, seconds: u64) -> Result<(String, String)> {
     tools::require(tools::FUZZ)?;
     tools::require_nightly(&[])?;
     let found = file_stems(&ctx.root.join("fuzz").join("fuzz_targets"), "rs")?;
     same_set("fuzz targets", &found, expect::FUZZ_TARGETS)?;
+    let mut seeded = Vec::new();
+    let mut failed = Vec::new();
     for t in &found {
-        let max_len = fuzz_max_len(t)?;
-        Cmd::cargo_on(tools::NIGHTLY)
-            .args([
-                "fuzz",
-                "run",
-                "--fuzz-dir",
-                "fuzz",
-                t,
-                "--",
-                "-max_total_time=120",
-            ])
-            .arg(format!("-max_len={max_len}"))
+        let n = crate::fuzzseed::seed_scratch_corpus(&ctx.root, t)?;
+        say(&format!(
+            "  {t}: {n} vector seeds in target/fuzz-corpus/{t}/"
+        ));
+        seeded.push(format!("{t} {n}"));
+        let run = Cmd::cargo_on(tools::NIGHTLY)
+            .args(fuzz_args(t, seconds)?)
             .dir(&ctx.root)
-            .run()?;
+            .run();
+        if let Err(e) = run {
+            say(&format!("  FAIL {t}: {e}"));
+            failed.push(t.clone());
+        }
     }
-    Ok(Outcome::Pass(format!(
-        "fuzz smoke, 120 s per target, -max_len from expect::FUZZ_MAX_LEN: {} (expected set matches)",
-        list(&found)
-    )))
+    if !failed.is_empty() {
+        bail!(
+            "fuzz: {} of {} targets failed: {} (inputs in fuzz/artifacts/<target>/)",
+            failed.len(),
+            found.len(),
+            failed.join(", ")
+        );
+    }
+    Ok((list(&found), seeded.join(", ")))
+}
+
+/// The arguments of `cargo fuzz run` for target `t` (M2 review F7, F18): the scratch corpus first (libFuzzer's
+/// output directory), the tracked corpus second (read only), then the libFuzzer options — the time budget and the
+/// target's `-max_len`. Paths are relative to the workspace root, where the command runs.
+pub(crate) fn fuzz_args(t: &str, seconds: u64) -> Result<Vec<String>> {
+    Ok(vec![
+        "fuzz".to_owned(),
+        "run".to_owned(),
+        "--fuzz-dir".to_owned(),
+        "fuzz".to_owned(),
+        t.to_owned(),
+        format!("target/fuzz-corpus/{t}"),
+        format!("fuzz/corpus/{t}"),
+        "--".to_owned(),
+        format!("-max_total_time={seconds}"),
+        format!("-max_len={}", fuzz_max_len(t)?),
+    ])
 }
 
 /// The libFuzzer `-max_len` of target `t` (`expect::FUZZ_MAX_LEN`, M2 review C4); a target without one is refused.
-fn fuzz_max_len(t: &str) -> Result<usize> {
+pub(crate) fn fuzz_max_len(t: &str) -> Result<usize> {
     expect::FUZZ_MAX_LEN
         .iter()
         .find(|(name, _)| *name == t)
@@ -1426,6 +1500,110 @@ mod tests {
         assert_eq!(expect::FUZZ_MAX_LEN.len(), expect::FUZZ_TARGETS.len());
         assert_eq!(fuzz_max_len("proto_cell")?, 65_644);
         assert!(fuzz_max_len("unknown").is_err());
+        Ok(())
+    }
+
+    /// M2 review F7, F18: the exact `cargo fuzz run` arguments — the scratch corpus first (libFuzzer writes new
+    /// inputs only there), the tracked corpus second, the time budget and the target's `-max_len`.
+    #[test]
+    fn fuzz_command_line() -> Result<()> {
+        assert_eq!(
+            fuzz_args("proto_cell", expect::FUZZ_SMOKE_SECONDS)?,
+            [
+                "fuzz",
+                "run",
+                "--fuzz-dir",
+                "fuzz",
+                "proto_cell",
+                "target/fuzz-corpus/proto_cell",
+                "fuzz/corpus/proto_cell",
+                "--",
+                "-max_total_time=120",
+                "-max_len=65644",
+            ]
+        );
+        for (t, max_len) in expect::FUZZ_MAX_LEN {
+            let args = fuzz_args(t, 1200)?;
+            assert_eq!(
+                args.get(5..7),
+                Some(
+                    [
+                        format!("target/fuzz-corpus/{t}"),
+                        format!("fuzz/corpus/{t}")
+                    ]
+                    .as_slice()
+                )
+            );
+            assert_eq!(
+                args.get(8..),
+                Some(
+                    [
+                        "-max_total_time=1200".to_owned(),
+                        format!("-max_len={max_len}")
+                    ]
+                    .as_slice()
+                )
+            );
+        }
+        assert!(fuzz_args("unknown", 120).is_err());
+        Ok(())
+    }
+
+    /// M2 review F2, F10: the committed `fuzz-nightly.yml` passes the workflow hygiene, is no required check (one job,
+    /// `fuzz-nightly`), runs on a schedule and on dispatch only, runs the campaign step and the property tests with a
+    /// fresh seed, and has the time for a 4 h campaign.
+    #[test]
+    fn the_nightly_workflow() {
+        let nightly = include_str!("../../.github/workflows/fuzz-nightly.yml");
+        assert!(workflow_findings("fuzz-nightly.yml", nightly).is_empty());
+        let files = vec![
+            (
+                expect::REQUIRED_WORKFLOW.to_owned(),
+                include_str!("../../.github/workflows/ci.yml").to_owned(),
+            ),
+            (
+                ".github/workflows/fuzz-nightly.yml".to_owned(),
+                nightly.to_owned(),
+            ),
+        ];
+        assert!(required_job_findings(&files).is_empty());
+        assert_eq!(job_names(nightly), vec!["fuzz-nightly".to_owned()]);
+        for needle in [
+            "on:\n  schedule:\n",
+            "  workflow_dispatch:\n",
+            "permissions:\n  contents: read\n",
+            "SECMP_PROPTEST_SEED: ${{ github.run_id }}",
+            "cargo nextest run --locked -p secmp-proto",
+            "run: cargo xtask step --strict fuzz-nightly",
+            "path: target/fuzz-corpus/",
+            "path: fuzz/artifacts/",
+        ] {
+            assert!(nightly.contains(needle), "{needle}");
+        }
+        assert!(!nightly.contains("pull_request") && !nightly.contains("push:"));
+        let timeout: Option<u64> = nightly
+            .lines()
+            .find_map(|l| l.trim().strip_prefix("timeout-minutes:"))
+            .and_then(|m| m.trim().parse().ok());
+        assert!(
+            timeout
+                .is_some_and(|m| m >= 300 && m.saturating_mul(60) > expect::FUZZ_NIGHTLY_SECONDS),
+            "{timeout:?}"
+        );
+    }
+
+    /// M2 review F2: the campaign's budget is shared equally by the targets, and never below the per-PR smoke.
+    #[test]
+    fn nightly_budget_per_target() -> Result<()> {
+        assert_eq!(expect::FUZZ_NIGHTLY_SECONDS, 14_400);
+        assert_eq!(
+            nightly_seconds_per_target(expect::FUZZ_NIGHTLY_SECONDS, expect::FUZZ_TARGETS.len())?,
+            14_400 / 12
+        );
+        assert_eq!(nightly_seconds_per_target(14_400, 14)?, 1028);
+        assert!(nightly_seconds_per_target(14_400, 0).is_err());
+        assert!(nightly_seconds_per_target(14_400, 121).is_err());
+        assert_eq!(nightly_seconds_per_target(14_400, 120)?, 120);
         Ok(())
     }
 }

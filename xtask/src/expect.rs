@@ -127,6 +127,14 @@ pub(crate) const FUZZ_TARGETS: &[&str] = &[
     "x25519_dh",
 ];
 
+/// Seconds per fuzz target of the `fuzz` gate (ci-full step 6, docs/06 §4: "≈2 min per target on every PR").
+pub(crate) const FUZZ_SMOKE_SECONDS: u64 = 120;
+
+/// Seconds of the scheduled campaign (`.github/workflows/fuzz-nightly.yml`, docs/06 §4 "nightly 4 h"; M2 review F2),
+/// shared equally by the fuzz targets: each gets `FUZZ_NIGHTLY_SECONDS / FUZZ_TARGETS.len()` seconds (M2: 12
+/// targets, 1200 s each).
+pub(crate) const FUZZ_NIGHTLY_SECONDS: u64 = 14_400;
+
 /// libFuzzer `-max_len` per fuzz target (M2 review C4: without it libFuzzer caps inputs at the largest corpus file,
 /// 5 397 B for `proto_cell` after `cargo fuzz cmin`). Each value is the target's largest valid input plus one byte
 /// (so the too-long rejection is reached): the selector/mode bytes and split fields of the target, and each decoder

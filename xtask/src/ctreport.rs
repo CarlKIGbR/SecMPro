@@ -4,8 +4,10 @@
 //!
 //! The gate does not take the bench's word (M2 review C3). Besides the parameters the report must echo, it
 //! re-derives from the recorded per-crop statistics, `q_eff_ticks` and `tick_ns`:
-//! - every target's verdict (`decide` of the bench);
-//! - the positive control's presence and detection, and the inline A/A control;
+//! - every target's verdict (`decide` of the bench), with each measurement's `q_eff_ticks` bounded above by the
+//!   clock (M2 review F17, [`q_eff_bound`]);
+//! - the positive control's presence and detection (whatever its label says, M2 review F15), and the inline A/A
+//!   control;
 //! - the sensitivity control, bound to `tag_compare`'s batch size and sample count;
 //! - the target set and the sample counts; a shortened run (`secmp_ct_scale`) is refused.
 //!
@@ -137,6 +139,28 @@ fn q_eff(m: &Value) -> Option<f64> {
     m.get("q_eff_ticks")
         .and_then(Value::as_f64)
         .filter(|q| q.is_finite() && *q >= 1.0)
+}
+
+/// The largest effective quantum (ticks) a target's measurement may carry (M2 review F17): the timer's quantum as the
+/// clock probe measured it independently of the targets (`clock.q_eff_ticks`: the reported resolution, or the lattice
+/// of the fixed workload where coarser), or the absolute floor `CT_EFFECT_FLOOR_NS` in ticks, whichever is larger,
+/// plus one tick. Reasoning: the effect floor is `max(q_eff, 10 ns)` (ADR-041 Amendment 1), and a larger `q_eff`
+/// raises it, so an inflated `q_eff` could turn a FAIL into `SUB_FLOOR_SHIFT`. A measurement's own lattice is a
+/// property of the timer, not of the code under test; ADR-041 Amendment 1 sets the 10 ns part of the floor at the
+/// coarse lattice seen on the fine-counter runners (≈ 24.5 ticks = 10.0 ns, which the clock probe does not see), and
+/// a coarse counter shows its coarseness in the probe (26 ticks = 10.0 ns; 1 tick = 41.7 ns on Apple Silicon). The
+/// one tick absorbs the estimate of a lattice from integer sample values (observed 24.25–24.6 ticks for the 24.46-tick
+/// lattice). A lattice coarser than both would be a runner the ADR did not anticipate: the report is refused (fail
+/// closed) rather than judged with a floor that nothing independent of the targets confirms. `None` without a
+/// readable clock quantum and tick length: every measured target is then refused.
+fn q_eff_bound(report: &Value) -> Option<f64> {
+    let tick = tick_ns(report)?;
+    let clock = report
+        .get("clock")
+        .and_then(|c| c.get("q_eff_ticks"))
+        .and_then(Value::as_f64)
+        .filter(|q| q.is_finite() && *q >= 1.0)?;
+    Some(clock.max(expect::CT_EFFECT_FLOOR_NS / tick) + 1.0)
 }
 
 /// The effect floor in ticks for an effective quantum `q` (ticks) on a clock of `tick` ns (ADR-041 Amendment 1).
@@ -363,7 +387,12 @@ fn set_findings(report: &Value, results: &[Value]) -> Vec<String> {
     out
 }
 
-/// M2 review C3 (a): exactly one positive control, `expect::CT_POSITIVE_CONTROL`, detected when it passes.
+/// The verdicts the bench can give the positive control: measured once, PASS if detected, FAIL if not, or not
+/// measurable (`evaluate`).
+const CT_CONTROL_VERDICTS: &[&str] = &["PASS", "FAIL", "NOT_MEASURABLE"];
+
+/// M2 review C3 (a): exactly one positive control, `expect::CT_POSITIVE_CONTROL`, detected; F15: detected whatever its
+/// label says (in a run that is not `CONTROL_FAIL`), and labelled with a verdict the bench can give it.
 fn control_findings(results: &[Value], run_verdict: &str) -> Vec<String> {
     let controls: Vec<&Value> = results
         .iter()
@@ -383,18 +412,26 @@ fn control_findings(results: &[Value], run_verdict: &str) -> Vec<String> {
             expect::CT_POSITIVE_CONTROL
         )];
     }
+    let mut out = Vec::new();
+    let verdict = text(control, "verdict");
+    if run_verdict != "CONTROL_FAIL" && !CT_CONTROL_VERDICTS.contains(&verdict) {
+        out.push(format!(
+            "ct report: the positive control {} is {verdict}; it can only be {CT_CONTROL_VERDICTS:?}",
+            expect::CT_POSITIVE_CONTROL
+        ));
+    }
     let detected = control
         .get("first")
         .and_then(max_abs_t)
         .is_some_and(|t| t + HALF_T > expect::CT_THRESHOLDS);
-    if run_verdict != "CONTROL_FAIL" && text(control, "verdict") == "PASS" && !detected {
-        return vec![format!(
-            "ct report: {} PASS, but its crops do not exceed |t| {}",
+    if run_verdict != "CONTROL_FAIL" && !detected {
+        out.push(format!(
+            "ct report: {} {verdict}, but its crops do not exceed |t| {} (the positive control must be detected)",
             expect::CT_POSITIVE_CONTROL,
             expect::CT_THRESHOLDS
-        )];
+        ));
     }
-    Vec::new()
+    out
 }
 
 /// M2 review C3 (b): the sensitivity control runs with `tag_compare`'s batch size and sample count.
@@ -422,10 +459,12 @@ fn binding_findings(report: &Value, results: &[Value]) -> Vec<String> {
 }
 
 /// M2 review C3 (a), (f): per measured target, a quiet inline A/A control, and a verdict (with its deciding crop)
-/// that the recorded crops, `q_eff_ticks` and `tick_ns` give.
+/// that the recorded crops, `q_eff_ticks` and `tick_ns` give; F17: both measurements' `q_eff_ticks` within
+/// [`q_eff_bound`].
 fn target_findings(report: &Value, results: &[Value], run_verdict: &str) -> Vec<String> {
     let mut out = Vec::new();
     let tick = tick_ns(report);
+    let q_bound = q_eff_bound(report);
     for r in results {
         let (name, verdict) = (text(r, "name"), text(r, "verdict"));
         if verdict == "NOT_MEASURABLE" {
@@ -447,6 +486,24 @@ fn target_findings(report: &Value, results: &[Value], run_verdict: &str) -> Vec<
             || !matches!(verdict, "PASS" | "SUB_FLOOR_SHIFT" | "FAIL")
         {
             continue;
+        }
+        // F17: an effective quantum above the clock's bound would raise the floor; refused, whatever the verdict
+        for key in ["first", "second"] {
+            let q = r.get(key).and_then(q_eff);
+            match (q, q_bound) {
+                (Some(q), Some(bound)) if q - HALF_Q <= bound => {}
+                (Some(q), Some(bound)) => out.push(format!(
+                    "ct report: {name} {key} q_eff_ticks {q} above the bound {bound:.3} (max(clock q_eff, {} ns) + 1 \
+                     tick)",
+                    expect::CT_EFFECT_FLOOR_NS
+                )),
+                // an unreadable q_eff is refused below
+                (None, _) => {}
+                (Some(_), None) => out.push(format!(
+                    "ct report: {name} {verdict}, but the clock has no readable q_eff_ticks and tick_ns to bound its \
+                     effective quantum"
+                )),
+            }
         }
         let possible = match (r.get("first"), r.get("second"), tick) {
             (Some(first), Some(second), Some(tick)) => possible_verdicts(first, second, tick),
@@ -648,7 +705,7 @@ mod tests {
                 "effect_floor_quanta": expect::CT_EFFECT_FLOOR_QUANTA, "effect_floor_ns": expect::CT_EFFECT_FLOOR_NS,
                 "aa_max_t": expect::CT_AA_MAX_T, "samples": expect::CT_SAMPLES, "sas_samples": expect::CT_SAS_SAMPLES},
             "sign": "t < 0: class 0 faster",
-            "clock": {"timer": "rdtscp", "tick_ns": 0.5, "resolution_ns": 0.5, "q_eff_ns": 0.5},
+            "clock": {"timer": "rdtscp", "tick_ns": 0.5, "resolution_ns": 0.5, "q_eff_ticks": 1.0, "q_eff_ns": 0.5},
             "run_verdict": "PASS", "run_reason": null,
             "sensitivity_control": {"name": "min_leak_control", "k": 1, "samples": expect::CT_SAMPLES,
                 "floor_ticks": 20.0, "floor_ns": 10.0, "raw_delta_ticks": 900.0, "raw_delta_ns": 450.0,
@@ -685,6 +742,61 @@ mod tests {
     fn refused(v: &Value, needle: &str) -> Result<bool> {
         let t = table(v)?;
         Ok(t.failed.iter().any(|f| f.contains(needle)))
+    }
+
+    /// A measurement with `q_eff` ticks: `t` and Δ per crop as given, every other crop at t 1, Δ 0.1.
+    fn measurement_with(crops: &[(&str, f64, f64)], q_eff: f64) -> Value {
+        let mut m = measurement(1.0, 0.1);
+        for (crop, t, delta) in crops {
+            set(&mut m, &["crops", crop, "t"], Value::from(*t));
+            set(&mut m, &["crops", crop, "delta"], Value::from(*delta));
+        }
+        set(&mut m, &["q_eff_ticks"], Value::from(q_eff));
+        m
+    }
+
+    /// The refusals of a report, without the one derived from them ("run verdict PASS with a failing target"), and
+    /// with nothing reported as not measurable: a fixture whose refusals are exactly one check's findings passes
+    /// once that check is removed.
+    fn refusals(v: &Value) -> Result<Vec<String>> {
+        let t = table(v)?;
+        assert!(t.not_measurable.is_empty(), "{t:?}");
+        Ok(t.failed
+            .into_iter()
+            .filter(|f| f != "ct report: run verdict PASS with a failing target")
+            .collect())
+    }
+
+    /// `tag_compare` with both measurements as given, its verdict and deciding crop; the run verdict follows.
+    fn tag_compare_with(first: Value, second: Value, verdict: &str, crop: Option<&str>) -> Value {
+        let mut v = report();
+        if verdict == "FAIL" {
+            set(&mut v, &["run_verdict"], Value::from("FAIL"));
+        }
+        let tag = at(&mut v, "tag_compare");
+        set(tag, &["first"], first);
+        set(tag, &["second"], second);
+        set(tag, &["verdict"], Value::from(verdict));
+        set(
+            tag,
+            &["decisive_crop"],
+            crop.map_or(Value::Null, Value::from),
+        );
+        v
+    }
+
+    /// Whether the gate accepts `tag_compare` with t `t1`/`t2` and Δ `delta` ticks at every crop (effective quantum
+    /// `q`) under `verdict` (a FAIL counts as accepted when its only refusal is the failing target itself).
+    fn accepts(t1: f64, t2: f64, delta: f64, q: f64, verdict: &str) -> Result<bool> {
+        let all = |t: f64| {
+            let crops: Vec<(&str, f64, f64)> = CROPS.iter().map(|c| (*c, t, delta)).collect();
+            measurement_with(&crops, q)
+        };
+        let crop = (verdict != "PASS").then_some("p90");
+        let v = tag_compare_with(all(t1), all(t2), verdict, crop);
+        Ok(refusals(&v)?
+            .iter()
+            .all(|f| f.starts_with("tag_compare: FAIL at p90")))
     }
 
     #[test]
@@ -830,6 +942,246 @@ mod tests {
             measurement(3.0, 500.0),
         );
         assert!(refused(&v, "PASS, but its crops do not exceed")?);
+        Ok(())
+    }
+
+    /// F15: the positive control is checked for detection whatever its label says, and its label must be one the
+    /// bench can give it. Each fixture sits on one check's edge: its refusals are that check's finding alone.
+    #[test]
+    fn the_positive_control_is_checked_whatever_its_label() -> Result<()> {
+        let control = expect::CT_POSITIVE_CONTROL;
+        // a passing label the bench never gives the control, detected: the label check alone
+        let mut v = report();
+        set(
+            at(&mut v, control),
+            &["verdict"],
+            Value::from("SUB_FLOOR_SHIFT"),
+        );
+        assert_eq!(
+            refusals(&v)?,
+            vec![format!(
+                "ct report: the positive control {control} is SUB_FLOOR_SHIFT; it can only be [\"PASS\", \"FAIL\", \"NOT_MEASURABLE\"]"
+            )]
+        );
+        // the same label, not detected: both checks (before F15 this report passed the gate)
+        set(at(&mut v, control), &["first"], measurement(3.0, 500.0));
+        assert_eq!(refusals(&v)?.len(), 2, "{:?}", refusals(&v)?);
+        assert!(refused(
+            &v,
+            "SUB_FLOOR_SHIFT, but its crops do not exceed |t| 4.5"
+        )?);
+        // PASS at the edge of the printed rounding: 4.5 may be 4.5004 > 4.5; 4.4994 is at most 4.4999
+        let mut v = report();
+        set(at(&mut v, control), &["first"], measurement(4.4996, 500.0));
+        assert!(refusals(&v)?.is_empty());
+        set(at(&mut v, control), &["first"], measurement(4.4994, 500.0));
+        assert_eq!(
+            refusals(&v)?,
+            vec![format!(
+                "ct report: {control} PASS, but its crops do not exceed |t| 4.5 (the positive control must be detected)"
+            )]
+        );
+        // NOT_MEASURABLE or FAIL: still checked (the gate fails on those labels anyway)
+        for label in ["FAIL", "NOT_MEASURABLE"] {
+            let mut v = report();
+            set(&mut v, &["run_verdict"], Value::from("FAIL"));
+            set(at(&mut v, control), &["verdict"], Value::from(label));
+            set(at(&mut v, control), &["first"], measurement(3.0, 500.0));
+            assert!(refused(
+                &v,
+                &format!("{control} {label}, but its crops do not exceed")
+            )?);
+        }
+        // in a CONTROL_FAIL run no target verdict counts, the control's neither
+        let mut v = report();
+        set(&mut v, &["run_verdict"], Value::from("CONTROL_FAIL"));
+        for name in expect::CT_TARGETS {
+            set(at(&mut v, name), &["verdict"], Value::from("CONTROL_FAIL"));
+        }
+        set(at(&mut v, control), &["first"], measurement(3.0, 500.0));
+        assert_eq!(table(&v)?.failed, vec!["CONTROL_FAIL — ?".to_owned()]);
+        Ok(())
+    }
+
+    /// F16: a `SUB_FLOOR_SHIFT` is refused when another crop reproduces a shift surely at or above the floor (the
+    /// `!fail_sure` condition of `possible_verdicts`); the report's refusals are that finding alone, and the
+    /// deciding crop of such a report can only be a FAIL.
+    #[test]
+    fn refuses_a_sub_floor_shift_next_to_a_relevant_crop() -> Result<()> {
+        let first = measurement_with(&[("p50", 30.0, 30.0), ("p90", 30.0, 5.0)], 1.0);
+        let second = measurement_with(&[("p50", 25.0, 30.0), ("p90", 25.0, 5.0)], 1.0);
+        let v = tag_compare_with(
+            first.clone(),
+            second.clone(),
+            "SUB_FLOOR_SHIFT",
+            Some("p90"),
+        );
+        assert_eq!(
+            refusals(&v)?,
+            vec![
+                "ct report: tag_compare SUB_FLOOR_SHIFT, but its recorded crops give {\"FAIL\"}"
+                    .to_owned()
+            ]
+        );
+        // the same crops without the relevant p50 give a sub-floor shift
+        let sub_first = measurement_with(&[("p90", 30.0, 5.0)], 1.0);
+        let sub_second = measurement_with(&[("p90", 25.0, 5.0)], 1.0);
+        assert!(
+            refusals(&tag_compare_with(
+                sub_first,
+                sub_second,
+                "SUB_FLOOR_SHIFT",
+                Some("p90")
+            ))?
+            .is_empty()
+        );
+        // and the mixed crops as FAIL at p50: accepted
+        let v = tag_compare_with(first, second, "FAIL", Some("p50"));
+        assert_eq!(
+            refusals(&v)?.len(),
+            1,
+            "only the failing target itself: {:?}",
+            refusals(&v)?
+        );
+        Ok(())
+    }
+
+    /// F16: the effect floor of a target is tight on both sides of the printed rounding, for its 10 ns part (`q_eff` 1
+    /// tick on a 0.5 ns clock: 20 ticks) and for its `q_eff` part (20.5 ticks): each edge is probed 1e-5 ticks on
+    /// either side (literal values, so that a changed constant cannot move the probes with it). A floor scaled by 1.4
+    /// or by 0.99, and a rounding allowance of Δ (5e-5) or of `q_eff` (5e-4) changed by more than 1e-5, fail this
+    /// test.
+    #[test]
+    fn the_effect_floor_is_tight_on_both_sides() -> Result<()> {
+        // (q_eff, FAIL edge = floor − q rounding − Δ rounding, SUB_FLOOR_SHIFT edge = floor + both)
+        for (q, fail_edge, sub_edge) in [
+            // 10 ns on a 0.5 ns clock: 20 ticks, whatever the rounding of q_eff 1
+            (1.0, 19.999_95, 20.000_05),
+            // one q_eff of 20.5 ticks: 20.5 ∓ 5e-4 ∓ 5e-5
+            (20.5, 20.499_45, 20.500_55),
+        ] {
+            // FAIL needs a crop that may reach the floor
+            assert!(!accepts(30.0, 25.0, fail_edge - 1e-5, q, "FAIL")?, "q {q}");
+            assert!(accepts(30.0, 25.0, fail_edge + 1e-5, q, "FAIL")?, "q {q}");
+            assert!(accepts(30.0, 25.0, fail_edge - 1e-5, q, "SUB_FLOOR_SHIFT")?);
+            // SUB_FLOOR_SHIFT needs no crop that surely reaches it
+            assert!(
+                accepts(30.0, 25.0, sub_edge - 1e-5, q, "SUB_FLOOR_SHIFT")?,
+                "q {q}"
+            );
+            assert!(
+                !accepts(30.0, 25.0, sub_edge + 1e-5, q, "SUB_FLOOR_SHIFT")?,
+                "q {q}"
+            );
+            assert!(accepts(30.0, 25.0, sub_edge + 1e-5, q, "FAIL")?);
+        }
+        Ok(())
+    }
+
+    /// F16: the t threshold is tight on both sides of the printed rounding (t to 3 decimals, ±5e-4): a shift at
+    /// |t| 4.4994 is never reproduced, one at 4.4996 may be; one at 4.5006 surely is, one at 4.5004 may not be.
+    #[test]
+    fn the_t_threshold_is_tight_on_both_sides() -> Result<()> {
+        // literal values (4.5 ∓ 5e-4 ± 1e-4), so that a changed constant cannot move the probes with it
+        assert!(!accepts(4.4994, 25.0, 30.0, 1.0, "FAIL")?);
+        assert!(!accepts(25.0, 4.4994, 30.0, 1.0, "FAIL")?);
+        assert!(accepts(4.4996, 25.0, 30.0, 1.0, "FAIL")?);
+        assert!(accepts(25.0, 4.4996, 30.0, 1.0, "FAIL")?);
+        assert!(accepts(4.4994, 25.0, 30.0, 1.0, "PASS")?);
+        assert!(accepts(4.5004, 25.0, 30.0, 1.0, "PASS")?);
+        assert!(!accepts(4.5006, 25.0, 30.0, 1.0, "PASS")?);
+        assert!(!accepts(25.0, 4.5006, 30.0, 1.0, "PASS")?);
+        // opposite signs never reproduce
+        assert!(accepts(-30.0, 25.0, 30.0, 1.0, "PASS")?);
+        assert!(!accepts(-30.0, 25.0, 30.0, 1.0, "FAIL")?);
+        Ok(())
+    }
+
+    /// F16: the positive control must be `expect::CT_POSITIVE_CONTROL`: another target flagged as the one control,
+    /// detected, with the real control measured like a passing target, is refused by the name check alone.
+    #[test]
+    fn refuses_another_target_as_the_positive_control() -> Result<()> {
+        let mut v = report();
+        let control = at(&mut v, expect::CT_POSITIVE_CONTROL);
+        set(control, &["control"], Value::from(false));
+        set(control, &["second"], measurement(1.0, 0.1));
+        let sas = at(&mut v, "sas");
+        set(sas, &["control"], Value::from(true));
+        set(sas, &["first"], measurement(99.0, 500.0));
+        assert_eq!(
+            refusals(&v)?,
+            vec![format!(
+                "ct report: the positive control is sas, expected {}",
+                expect::CT_POSITIVE_CONTROL
+            )]
+        );
+        Ok(())
+    }
+
+    /// F16: a target measured twice is refused by the duplicate check alone (the set of names is still
+    /// `expect::CT_TARGETS`).
+    #[test]
+    fn refuses_a_duplicated_target() -> Result<()> {
+        let mut v = report();
+        let sas = at(&mut v, "sas").clone();
+        if let Some(r) = v.get_mut("results").and_then(Value::as_array_mut) {
+            r.push(sas);
+        }
+        let found = refusals(&v)?;
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(
+            found
+                .iter()
+                .all(|f| f.contains("differ from expect::CT_TARGETS") && f.contains("\"sas\"]"))
+        );
+        Ok(())
+    }
+
+    /// F17: a target's `q_eff_ticks` is bounded by `max(clock q_eff, 10 ns) + 1 tick`, so an inflated quantum cannot
+    /// turn a FAIL into a `SUB_FLOOR_SHIFT`: t 30/25 and Δ 30 ticks with `q_eff` 40 claimed as sub-floor is refused
+    /// by the bound alone; the bound is tight to the printed rounding for both of its parts.
+    #[test]
+    fn refuses_an_effective_quantum_above_the_clock_bound() -> Result<()> {
+        let all = |t: f64, q: f64| {
+            let crops: Vec<(&str, f64, f64)> = CROPS.iter().map(|c| (*c, t, 30.0)).collect();
+            measurement_with(&crops, q)
+        };
+        let v = tag_compare_with(
+            all(30.0, 40.0),
+            all(25.0, 40.0),
+            "SUB_FLOOR_SHIFT",
+            Some("p90"),
+        );
+        assert_eq!(
+            refusals(&v)?,
+            vec![
+                "ct report: tag_compare first q_eff_ticks 40 above the bound 21.000 (max(clock q_eff, 10 ns) + 1 tick)"
+                    .to_owned(),
+                "ct report: tag_compare second q_eff_ticks 40 above the bound 21.000 (max(clock q_eff, 10 ns) + 1 tick)"
+                    .to_owned()
+            ]
+        );
+        // the 10 ns part: tick 0.5 ns, clock q_eff 1 → bound 21 ticks
+        let at_q = |q: f64, clock_q: f64, tick: f64| -> Result<Vec<String>> {
+            let mut v = tag_compare_with(all(30.0, q), all(25.0, q), "FAIL", Some("p90"));
+            set(&mut v, &["clock", "q_eff_ticks"], Value::from(clock_q));
+            set(&mut v, &["clock", "tick_ns"], Value::from(tick));
+            Ok(refusals(&v)?
+                .into_iter()
+                .filter(|f| f.contains("above the bound"))
+                .collect())
+        };
+        assert!(at_q(21.0004, 1.0, 0.5)?.is_empty());
+        assert_eq!(at_q(21.0006, 1.0, 0.5)?.len(), 2);
+        // the clock part: 26 ticks of 0.385 ns (10.01 ns, above 10 ns) → bound 27 ticks
+        assert!(at_q(27.0004, 26.0, 0.385)?.is_empty());
+        assert_eq!(at_q(27.0006, 26.0, 0.385)?.len(), 2);
+        // no clock quantum: the measurement cannot be bounded and is refused
+        let mut v = report();
+        if let Some(clock) = v.get_mut("clock").and_then(Value::as_object_mut) {
+            clock.remove("q_eff_ticks");
+        }
+        assert!(refused(&v, "the clock has no readable q_eff_ticks")?);
         Ok(())
     }
 

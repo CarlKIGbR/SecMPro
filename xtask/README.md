@@ -12,7 +12,7 @@ Build, CI, supply-chain and release automation (docs/06 §5). The alias lives in
 | `win-test --backend github\|libvirt [--rerun\|--dispatch]` | the Windows gate (below) |
 | `install-tools [--set fast\|windows\|xwin\|miri\|fuzz\|full\|all] [--nightly]` | install the pinned tools (`src/tools.rs`); `SECMP_TOOLS_ROOT` sets `cargo install --root` |
 | `vectors`, `repro-check`, `ops-check` | documented stubs until M1, M11 and M10; they exit non-zero |
-| `ct-check REPORT…` | the `ct` gate's reading of saved ct reports (`target/ct-report.json` or committed evidence): re-derives every verdict and control from the recorded statistics (M2 review C3); fails unless every report passes |
+| `ct-check [--targets current\|m2] REPORT…` | the `ct` gate's reading of saved ct reports (`target/ct-report.json` or committed evidence): re-derives every verdict and control from the recorded statistics (M2 review C3, F15–F17); fails unless every report passes. `--targets m2` reads the committed M2 reports against the target set they were written with (before ADR-042 added `aa_prime_control`) |
 
 Every step ends as PASS, FAIL, SKIP (not applicable on this host, e.g. `systemd-analyze` on macOS), DELEGATED
 (handed to another CI job with `--delegated`) or STUB. All steps run and a summary table is printed. **CI always

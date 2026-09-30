@@ -66,6 +66,11 @@ NEUTRALISATIONS = [
         "Some(f64::INFINITY.max(clock + tick))",
     ),
     (
+        "ADR-042: an A/A' placement control FAIL accepted outside a CONTROL_FAIL run",
+        'if name == expect::CT_AA_PRIME_CONTROL && verdict == "FAIL" {',
+        "if false {",
+    ),
+    (
         "F17: the bound's one-tick allowance doubled",
         "Some(clock.max(expect::CT_EFFECT_FLOOR_NS / tick) + 1.0)",
         "Some(clock.max(expect::CT_EFFECT_FLOOR_NS / tick) + 2.0)",

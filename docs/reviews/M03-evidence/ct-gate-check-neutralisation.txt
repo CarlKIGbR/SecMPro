@@ -14,5 +14,6 @@ F16: q_eff rounding margin halved (HALF_Q 2.5e-4): failing tests = ctreport::tes
 F16: control-name check removed: failing tests = ctreport::tests::refuses_another_target_as_the_positive_control
 F16: duplicate-target check removed: failing tests = ctreport::tests::refuses_a_duplicated_target
 F17: no upper bound on a target's q_eff_ticks: failing tests = ctreport::tests::refuses_an_effective_quantum_above_the_clock_bound
+ADR-042: an A/A' placement control FAIL accepted outside a CONTROL_FAIL run: failing tests = ctreport::tests::the_aa_prime_control_fails_the_run_as_control_fail
 F17: the bound's one-tick allowance doubled: failing tests = ctreport::tests::refuses_an_effective_quantum_above_the_clock_bound
-16 neutralisations, 16 caught
+17 neutralisations, 17 caught

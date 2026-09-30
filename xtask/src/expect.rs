@@ -95,7 +95,7 @@ pub(crate) const CT_SAMPLES: usize = 1_000_000;
 pub(crate) const CT_SAS_SAMPLES: usize = 20_000;
 
 /// The ct targets (M2 review C3 (a)): the gate refuses a report whose target set differs. Exactly one of them, the
-/// positive control, is measured once and must be detected.
+/// positive control, is measured once and must be detected. M3: the A/A′ placement control (ADR-042).
 pub(crate) const CT_TARGETS: &[&str] = &[
     "control_variable_time_compare",
     "tag_compare",
@@ -106,10 +106,15 @@ pub(crate) const CT_TARGETS: &[&str] = &[
     "caead_aead_reject",
     "caead_com_compare",
     "caead_open_reject_samekey",
+    "aa_prime_control",
 ];
 
 /// The positive control among [`CT_TARGETS`].
 pub(crate) const CT_POSITIVE_CONTROL: &str = "control_variable_time_compare";
+
+/// The A/A′ placement control among [`CT_TARGETS`] (ADR-042 (2), M2 review F6): judged like a target; a FAIL makes the
+/// run `CONTROL_FAIL`, PASS and `SUB_FLOOR_SHIFT` pass. Not the positive control.
+pub(crate) const CT_AA_PRIME_CONTROL: &str = "aa_prime_control";
 
 /// cargo-fuzz targets under `fuzz/fuzz_targets/` (docs/06 §5 step 6): M1 key, ciphertext and signature parsers
 /// and the two openers of `secmp-crypto`; M2 every `secmp-proto` decoder, one target per Appendix D section

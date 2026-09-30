@@ -258,6 +258,8 @@ fn ct_line(r: &Value) -> (String, String, bool) {
         measurement("aa_control", "A/A"),
         if control {
             " (positive control, must be detected)"
+        } else if name == expect::CT_AA_PRIME_CONTROL {
+            " (A/A′ placement control: a FAIL makes the run CONTROL_FAIL)"
         } else {
             ""
         }
@@ -352,9 +354,40 @@ fn possible_verdicts(first: &Value, second: &Value, tick: f64) -> Option<Possibl
     Some(possible)
 }
 
-/// M2 review C3 (a), (c): the target set is `expect::CT_TARGETS`, each measured with the sample count of
-/// `expect.rs`, and the run was not shortened.
-fn set_findings(report: &Value, results: &[Value]) -> Vec<String> {
+/// A target set a report is read against: `expect::CT_TARGETS` (the gate) or the set a committed report was written
+/// with (`cargo xtask ct-check --targets m2`).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct TargetSet {
+    label: &'static str,
+    names: &'static [&'static str],
+}
+
+/// The gate's target set.
+pub(crate) const CURRENT_TARGETS: TargetSet = TargetSet {
+    label: "expect::CT_TARGETS",
+    names: expect::CT_TARGETS,
+};
+
+/// The target set of the reports written before ADR-042 added `aa_prime_control` (M2; the committed evidence under
+/// `docs/reviews/M02-evidence/`), for re-reading them with `cargo xtask ct-check --targets m2`.
+pub(crate) const M2_TARGETS: TargetSet = TargetSet {
+    label: "the M2 target set",
+    names: &[
+        "control_variable_time_compare",
+        "tag_compare",
+        "msg_open_reject",
+        "caead_open_reject",
+        "sas",
+        "caead_derive",
+        "caead_aead_reject",
+        "caead_com_compare",
+        "caead_open_reject_samekey",
+    ],
+};
+
+/// M2 review C3 (a), (c): the target set is `targets` (the gate: `expect::CT_TARGETS`), each measured with the sample
+/// count of `expect.rs`, and the run was not shortened.
+fn set_findings(report: &Value, results: &[Value], targets: TargetSet) -> Vec<String> {
     let mut out = Vec::new();
     if let Some(scale) = report.get("secmp_ct_scale") {
         out.push(format!(
@@ -363,11 +396,11 @@ fn set_findings(report: &Value, results: &[Value]) -> Vec<String> {
     }
     let names: Vec<&str> = results.iter().map(|r| text(r, "name")).collect();
     let set: BTreeSet<&str> = names.iter().copied().collect();
-    let expected: BTreeSet<&str> = expect::CT_TARGETS.iter().copied().collect();
+    let expected: BTreeSet<&str> = targets.names.iter().copied().collect();
     if set.len() != names.len() || set != expected {
         out.push(format!(
-            "ct report: targets {names:?} differ from expect::CT_TARGETS {:?}",
-            expect::CT_TARGETS
+            "ct report: targets {names:?} differ from {} {:?}",
+            targets.label, targets.names
         ));
     }
     for r in results {
@@ -529,14 +562,26 @@ fn target_findings(report: &Value, results: &[Value], run_verdict: &str) -> Vec<
                 ));
             }
         }
+        // ADR-042 (2): the A/A′ placement control at or above the floor makes the run CONTROL_FAIL, never FAIL
+        if name == expect::CT_AA_PRIME_CONTROL && verdict == "FAIL" {
+            out.push(format!(
+                "ct report: {name} FAIL in a {run_verdict} run: the A/A′ placement control reached the effect floor, \
+                 which makes the run CONTROL_FAIL (ADR-042)"
+            ));
+        }
     }
     out
 }
 
-/// M2 review C3 (a)–(c), (f): the re-derivation of a report. Every finding is a refusal. In a `CONTROL_FAIL` run no
-/// target verdict counts, and each must say `CONTROL_FAIL`.
-fn rederive(report: &Value, run_verdict: &str, results: &[Value]) -> Vec<String> {
-    let mut out = set_findings(report, results);
+/// M2 review C3 (a)–(c), (f): the re-derivation of a report against the target set `targets`. Every finding is a
+/// refusal. In a `CONTROL_FAIL` run no target verdict counts, and each must say `CONTROL_FAIL`.
+fn rederive(
+    report: &Value,
+    run_verdict: &str,
+    results: &[Value],
+    targets: TargetSet,
+) -> Vec<String> {
+    let mut out = set_findings(report, results, targets);
     out.extend(control_findings(results, run_verdict));
     out.extend(binding_findings(report, results));
     if run_verdict == "CONTROL_FAIL" {
@@ -558,7 +603,13 @@ fn rederive(report: &Value, run_verdict: &str, results: &[Value]) -> Vec<String>
     out
 }
 
+/// The gate's reading of a report (`expect::CT_TARGETS`).
 pub(crate) fn ct_table(json: &str) -> Result<CtTable> {
+    ct_table_for(json, CURRENT_TARGETS)
+}
+
+/// The gate's reading of a report against the target set `targets`.
+pub(crate) fn ct_table_for(json: &str, targets: TargetSet) -> Result<CtTable> {
     let v: Value = serde_json::from_str(json).map_err(|e| Error(format!("ct report: {e}")))?;
     if let Some(e) = v.get("error").and_then(Value::as_str) {
         bail!("ct report: {e}");
@@ -618,7 +669,9 @@ pub(crate) fn ct_table(json: &str) -> Result<CtTable> {
         ));
     }
     table.lines.push(sensitivity);
-    table.failed.extend(rederive(&v, run_verdict, results));
+    table
+        .failed
+        .extend(rederive(&v, run_verdict, results, targets));
     if run_verdict == "PASS" && !(table.failed.is_empty() && table.not_measurable.is_empty()) {
         table
             .failed
@@ -627,16 +680,35 @@ pub(crate) fn ct_table(json: &str) -> Result<CtTable> {
     Ok(table)
 }
 
-/// `cargo xtask ct-check <report>…`: the gate's reading of saved reports (M2 review C3: every committed report of
-/// the ADR-041 Amendment 1 format must still pass). Fails unless every report passes.
-pub(crate) fn check_files(args: &[String]) -> Result<()> {
-    if args.is_empty() {
-        bail!("usage: cargo xtask ct-check <ct-report.json>…");
+/// The arguments of `ct-check`: an optional `--targets m2` (the target set of the committed M2 reports, before
+/// ADR-042) or `--targets current` (the default, `expect::CT_TARGETS`), then the report files.
+fn check_args(args: &[String]) -> Result<(TargetSet, &[String])> {
+    let usage = "usage: cargo xtask ct-check [--targets current|m2] <ct-report.json>…";
+    let (targets, files) = match args {
+        [flag, set, files @ ..] if flag == "--targets" => match set.as_str() {
+            "current" => (CURRENT_TARGETS, files),
+            "m2" => (M2_TARGETS, files),
+            other => bail!("ct-check: unknown target set {other:?}; {usage}"),
+        },
+        [flag, ..] if flag.starts_with('-') => bail!("ct-check: unknown option {flag:?}; {usage}"),
+        files => (CURRENT_TARGETS, files),
+    };
+    if files.is_empty() {
+        bail!("{usage}");
     }
+    Ok((targets, files))
+}
+
+/// `cargo xtask ct-check [--targets current|m2] <report>…`: the gate's reading of saved reports (M2 review C3: every
+/// committed report of the ADR-041 Amendment 1 format must still pass; the M2 reports are read against the M2 target
+/// set). Fails unless every report passes.
+pub(crate) fn check_files(args: &[String]) -> Result<()> {
+    let (targets, args) = check_args(args)?;
+    say(&format!("ct-check against {}", targets.label));
     let mut refused = 0_usize;
     for file in args {
         let json = std::fs::read_to_string(file)?;
-        match ct_table(&json) {
+        match ct_table_for(&json, targets) {
             Ok(t) if t.failed.is_empty() && t.not_measurable.is_empty() => {
                 say(&format!("PASS {file}"));
             }
@@ -1480,7 +1552,8 @@ mod tests {
     }
 
     /// C3 acceptance: the reports of the ADR-041 Amendment 1 format committed under `docs/reviews/M02-evidence/`
-    /// pass the gate as it reads them now.
+    /// pass the gate as it reads them now, against the M2 target set they were written with (ADR-042); against the
+    /// current set they lack `aa_prime_control` and are refused for that alone.
     #[test]
     fn the_committed_amendment_1_reports_pass() -> Result<()> {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -1495,13 +1568,145 @@ mod tests {
         files.push(root.join("ct-report-x86_64-linux-pr-run-36679963223-6b9da3b.json"));
         assert_eq!(files.len(), 15);
         for f in &files {
-            let t = ct_table(&std::fs::read_to_string(f)?)?;
+            let json = std::fs::read_to_string(f)?;
+            let t = ct_table_for(&json, M2_TARGETS)?;
             assert!(
                 t.failed.is_empty() && t.not_measurable.is_empty(),
                 "{}: {t:?}",
                 f.display()
             );
+            let now = ct_table(&json)?;
+            assert!(
+                now.failed.len() == 2
+                    && now
+                        .failed
+                        .iter()
+                        .any(|l| l.contains("differ from expect::CT_TARGETS")),
+                "{}: {now:?}",
+                f.display()
+            );
         }
+        Ok(())
+    }
+
+    /// ADR-042 (2): the A/A′ placement control is judged like a target — PASS and a sub-floor shift pass; a FAIL
+    /// outside a `CONTROL_FAIL` run is refused (the bench must have made the run `CONTROL_FAIL`), and so is a label
+    /// its crops do not give; a `CONTROL_FAIL` run naming it fails with its reason alone; it is not the positive
+    /// control.
+    #[test]
+    fn the_aa_prime_control_fails_the_run_as_control_fail() -> Result<()> {
+        let aa = expect::CT_AA_PRIME_CONTROL;
+        assert!(expect::CT_TARGETS.contains(&aa));
+        let all = |t: f64, delta: f64| {
+            let crops: Vec<(&str, f64, f64)> = CROPS.iter().map(|c| (*c, t, delta)).collect();
+            measurement_with(&crops, 1.0)
+        };
+        let with = |first: Value, second: Value, verdict: &str, run: &str| {
+            let mut v = report();
+            set(&mut v, &["run_verdict"], Value::from(run));
+            let target = at(&mut v, aa);
+            set(target, &["first"], first);
+            set(target, &["second"], second);
+            set(target, &["verdict"], Value::from(verdict));
+            set(
+                target,
+                &["decisive_crop"],
+                if verdict == "PASS" {
+                    Value::Null
+                } else {
+                    Value::from("p90")
+                },
+            );
+            v
+        };
+        // PASS (the fixture) and a sub-floor shift (reproduced, Δ 5 ticks < floor 20) pass the gate
+        let t = table(&report())?;
+        assert!(t.failed.is_empty(), "{t:?}");
+        assert!(
+            t.lines
+                .iter()
+                .any(|l| l.starts_with("aa_prime_control: PASS")
+                    && l.ends_with("(A/A′ placement control: a FAIL makes the run CONTROL_FAIL)"))
+        );
+        let sub = with(all(30.0, 5.0), all(25.0, 5.0), "SUB_FLOOR_SHIFT", "PASS");
+        assert!(refusals(&sub)?.is_empty());
+        // a reproduced shift at the floor, labelled FAIL in a FAIL run: refused (only CONTROL_FAIL is consistent)
+        let fail = with(all(30.0, 30.0), all(25.0, 30.0), "FAIL", "FAIL");
+        let found = refusals(&fail)?;
+        assert_eq!(found.len(), 2, "{found:?}");
+        assert!(
+            found
+                .iter()
+                .any(|f| f.starts_with("aa_prime_control: FAIL at p90"))
+        );
+        assert!(found.contains(
+            &"ct report: aa_prime_control FAIL in a FAIL run: the A/A′ placement control reached the effect floor, which makes the run CONTROL_FAIL (ADR-042)"
+                .to_owned()
+        ));
+        // the same crops labelled as a sub-floor shift: refused by the re-derivation
+        let hidden = with(all(30.0, 30.0), all(25.0, 30.0), "SUB_FLOOR_SHIFT", "PASS");
+        assert_eq!(
+            refusals(&hidden)?,
+            vec!["ct report: aa_prime_control SUB_FLOOR_SHIFT, but its recorded crops give {\"FAIL\"}".to_owned()]
+        );
+        // the CONTROL_FAIL run the bench writes for it: its reason is the one finding
+        let mut control_fail = with(
+            all(30.0, 30.0),
+            all(25.0, 30.0),
+            "CONTROL_FAIL",
+            "CONTROL_FAIL",
+        );
+        let reason = "A/A′ placement control aa_prime_control FAIL at p90: identical contents copied from two source \
+                      allocations shift the class means by 1.50 / 1.50 effect floors";
+        set(&mut control_fail, &["run_reason"], Value::from(reason));
+        for name in expect::CT_TARGETS {
+            set(
+                at(&mut control_fail, name),
+                &["verdict"],
+                Value::from("CONTROL_FAIL"),
+            );
+        }
+        assert_eq!(
+            table(&control_fail)?.failed,
+            vec![format!("CONTROL_FAIL — {reason}")]
+        );
+        // it is not the positive control
+        let mut two = report();
+        set(at(&mut two, aa), &["control"], Value::from(true));
+        assert!(refused(&two, "2 positive controls")?);
+        Ok(())
+    }
+
+    /// `ct-check --targets m2|current`: the target set is chosen explicitly; the M2 set is the nine targets of M2, all
+    /// still in `expect::CT_TARGETS`, without `aa_prime_control`; a report of the current set is refused against it.
+    #[test]
+    fn ct_check_reads_reports_against_a_chosen_target_set() -> Result<()> {
+        let args = |a: &[&str]| a.iter().map(|s| (*s).to_owned()).collect::<Vec<String>>();
+        let m2 = args(&["--targets", "m2", "a.json", "b.json"]);
+        let (set, files) = check_args(&m2)?;
+        assert_eq!((set.label, files.len()), ("the M2 target set", 2));
+        let plain = args(&["a.json"]);
+        let (set, files) = check_args(&plain)?;
+        assert_eq!((set.label, files.len()), ("expect::CT_TARGETS", 1));
+        assert!(check_args(&args(&["--targets", "current", "a.json"])).is_ok());
+        assert!(check_args(&args(&["--targets", "m3"])).is_err());
+        assert!(check_args(&args(&["--targets", "m2"])).is_err());
+        assert!(check_args(&args(&["--target", "m2", "a.json"])).is_err());
+        assert!(check_args(&[]).is_err());
+        assert_eq!(M2_TARGETS.names.len(), 9);
+        assert!(
+            M2_TARGETS
+                .names
+                .iter()
+                .all(|t| expect::CT_TARGETS.contains(t) && *t != expect::CT_AA_PRIME_CONTROL)
+        );
+        let json = report().to_string();
+        assert!(
+            ct_table_for(&json, M2_TARGETS)?
+                .failed
+                .iter()
+                .any(|f| f.contains("differ from the M2 target set"))
+        );
         Ok(())
     }
 }

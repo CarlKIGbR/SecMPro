@@ -46,7 +46,7 @@ usage: cargo xtask <command> [options]
   win-test --backend github|libvirt         Windows gate (github: windows-latest; libvirt: from M9)
   install-tools [--set NAME] [--nightly]    install the pinned tools (fast | windows | xwin | miri | fuzz | full | all)
   vectors                                   generate the Rust vectors, compare with vectors/ref, freeze
-  ct-check REPORT...                        the ct gate's reading of saved ct reports
+  ct-check [--targets current|m2] REPORT... the ct gate's reading of saved ct reports
   repro-check | ops-check                   documented stubs until M11 / M10";
 
 fn run(args: &[String]) -> Result<()> {

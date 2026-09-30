@@ -30,6 +30,11 @@
 //! - `caead_open_reject_samekey`: `Caead::open` with the right key in both classes, ciphertext tampered at byte
 //!   100 vs byte 300 (`COM` matches and the tag fails in both).
 //!
+//! The A/A′ placement control `aa_prime_control` (ADR-042 (2), M2 review F6) is measured and judged like a target:
+//! `MsgEncrypt::open` rejecting a tag wrong in its last byte with identical contents in both classes, class 0 copied
+//! from one source allocation and class 1 from another — the one deliberate exception to the source rule below. If it
+//! FAILs (a reproduced shift at or above the effect floor), the run is `CONTROL_FAIL`.
+//!
 //! Sign: `t = (mean(class 0) − mean(class 1)) / SE` (Welch), so **`t < 0` means class 0 is faster**; the report
 //! states it once (`sign`) and names both classes of every target (`class0`, `class1`).
 //!
@@ -82,7 +87,8 @@
 //!   inputs under both labels; if any of its crops exceeds `CT_AA_MAX_T`, the run is `CONTROL_FAIL`. The
 //!   sensitivity control (Amendment 1 (2)) is measured once after the A/A control with `tag_compare`'s batch size
 //!   and sample count; if its raw Δ (class 0 slower) is below its effect floor, or it cannot be measured, the run is
-//!   `CONTROL_FAIL`. A `CONTROL_FAIL` run fails the gate and gives no target verdict (every target shows
+//!   `CONTROL_FAIL`; so it is if the A/A′ placement control FAILs (ADR-042). A `CONTROL_FAIL` run fails the gate and
+//!   gives no target verdict (every target shows
 //!   `CONTROL_FAIL`). `NOT_MEASURABLE` fails the gate as before. A clock without a positive, finite tick length
 //!   makes every target NOT MEASURABLE (the floor in ticks needs it).
 //! - The parameters are read from `xtask/src/expect.rs` (`CT_THRESHOLDS`, `CT_RESOLUTION_MAX_FRACTION`,
@@ -1304,6 +1310,40 @@ fn msg_open_reject(
     ))
 }
 
+/// The A/A′ placement control (ADR-042 (2), M2 review F6): `MsgEncrypt::open` rejecting a tag wrong in its last byte,
+/// as `msg_open_reject` — with **identical contents** in both classes, class 0 copied from one source allocation and
+/// class 1 from its own, separate allocation. This is deliberately the per-class-source pattern that `blend` exists to
+/// avoid (M1 review F9; the comment above `blend`): the classes differ only in where their source lives. A reproduced
+/// shift at or above the effect floor means the placement artefact alone reaches the floor on this runner, and the
+/// run is `CONTROL_FAIL` (`placement_failure`).
+fn aa_prime_control(
+    n: usize,
+    k: usize,
+    stream: &mut Stream,
+) -> Result<Samples, secmp_crypto::Error> {
+    let mut mk = [0_u8; 32];
+    stream.fill(&mut mk);
+    let mut body = vec![0_u8; BODY_LEN];
+    stream.fill(&mut body);
+    let ad = vec![0x5a_u8; 2401];
+    let mut last = MsgEncrypt::seal(SecretBytes::from_slice(&mk)?, &ad, &body)?;
+    if let Some(b) = last.last_mut() {
+        *b ^= 1;
+    }
+    // two allocations with the same contents, one per class (never `blend`: the placement is what is measured)
+    let sources = [last.clone(), last];
+    let key = SecretBytes::<32>::from_slice(&mk)?;
+    Ok(measure(
+        n,
+        k,
+        stream,
+        |c, _| sources.get(c).cloned().unwrap_or_default(),
+        |ct| {
+            black_box(MsgEncrypt::open(&key, &ad, black_box(ct)).is_ok());
+        },
+    ))
+}
+
 fn caead_open_reject(
     n: usize,
     batch: usize,
@@ -1552,18 +1592,9 @@ fn ct_scale() -> Option<String> {
     std::env::var("SECMP_CT_SCALE").ok()
 }
 
-/// Every target (`evaluate`), then the inline A/A control over the full target set (ADR-041 (3)) and the
-/// sensitivity control (Amendment 1 (2)); the third value is the reason of a `CONTROL_FAIL` run (either control
-/// failed; every target verdict is then `CONTROL_FAIL`).
-fn run(
-    rules: Rules,
-) -> Result<(Clock, Vec<Outcome>, Option<String>, Sensitivity), secmp_crypto::Error> {
-    let clock = Clock::probe();
-    let scale: usize = ct_scale().and_then(|s| s.parse().ok()).unwrap_or(1).max(1);
-    let mut stream = Stream::new()?;
-    let n = rules.samples.checked_div(scale).unwrap_or(1);
-    let n_sas = rules.sas_samples.checked_div(scale).unwrap_or(1);
-    let targets = [
+/// The targets in measurement order, `n` samples per measurement (`n_sas` for `sas`).
+fn targets(n: usize, n_sas: usize) -> [Target; 10] {
+    [
         Target {
             name: "control_variable_time_compare",
             classes: ["tag differs in byte 0", "tag differs in byte 31"],
@@ -1636,15 +1667,39 @@ fn run(
             control: false,
             run: caead_open_reject_samekey,
         },
-    ];
+        Target {
+            name: AA_PRIME,
+            classes: [
+                "tag wrong in its last byte, copied from source allocation 0",
+                "the same bytes, copied from source allocation 1",
+            ],
+            samples: n,
+            control: false,
+            run: aa_prime_control,
+        },
+    ]
+}
+
+/// Every target (`evaluate`), then the inline A/A control over the full target set (ADR-041 (3)) and the
+/// sensitivity control (Amendment 1 (2)); the third value is the reason of a `CONTROL_FAIL` run (either control
+/// failed, or the A/A′ placement control gave FAIL, ADR-042; every target verdict is then `CONTROL_FAIL`).
+fn run(
+    rules: Rules,
+) -> Result<(Clock, Vec<Outcome>, Option<String>, Sensitivity), secmp_crypto::Error> {
+    let clock = Clock::probe();
+    let scale: usize = ct_scale().and_then(|s| s.parse().ok()).unwrap_or(1).max(1);
+    let mut stream = Stream::new()?;
+    let n = rules.samples.checked_div(scale).unwrap_or(1);
+    let n_sas = rules.sas_samples.checked_div(scale).unwrap_or(1);
     let mut out = Vec::new();
-    for target in targets {
+    for target in targets(n, n_sas) {
         out.push(evaluate(target, &mut stream, &clock, rules)?);
     }
     let aa_fail = aa_control(&mut out, &mut stream, &clock, rules)?;
     let sensitivity = sensitivity_control(&out, &mut stream, &clock, rules);
     let mut reasons: Vec<String> = aa_fail.into_iter().collect();
     reasons.extend(sensitivity.failure(rules));
+    reasons.extend(placement_failure(&out, &clock, rules));
     let control_fail = (!reasons.is_empty()).then(|| reasons.join("; "));
     if control_fail.is_some() {
         for outcome in &mut out {
@@ -1735,6 +1790,35 @@ fn sensitivity_control(
         sensitivity.measurement = Some(m);
     }
     sensitivity
+}
+
+/// The name of the A/A′ placement control (ADR-042 (2); `expect::CT_TARGETS`).
+const AA_PRIME: &str = "aa_prime_control";
+
+/// ADR-042 (2): the A/A′ placement control is judged like a target; if its verdict is FAIL, the placement artefact
+/// alone reaches the effect floor on this runner and the run is `CONTROL_FAIL` with this reason (its Δ at the
+/// deciding crop in effect floors of each measurement). `None` if it passed, showed a sub-floor shift or was not
+/// measured (NOT MEASURABLE fails the run on its own).
+fn placement_failure(out: &[Outcome], clock: &Clock, rules: Rules) -> Option<String> {
+    let o = out.iter().find(|o| o.target.name == AA_PRIME)?;
+    if o.verdict != Verdict::Fail {
+        return None;
+    }
+    let crop = o.decisive_crop.as_deref().unwrap_or("?");
+    let floors = |m: Option<&Measurement>| {
+        m.and_then(|m| {
+            let s = m.crops.iter().find(|(k, _)| k == crop)?;
+            Some(s.1.delta() / rules.floor_ticks(m.q_eff, clock.tick_ns))
+        })
+        .map_or_else(|| "?".to_owned(), |f| format!("{f:.2}"))
+    };
+    Some(format!(
+        "A/A′ placement control {AA_PRIME} FAIL at {crop}: identical contents copied from two source allocations \
+         shift the class means by {} / {} effect floors — the placement artefact of M1 review F9 reaches the floor on \
+         this runner (ADR-042)",
+        floors(o.first.as_ref()),
+        floors(o.second.as_ref())
+    ))
 }
 
 /// ADR-041 (3): the inline A/A control — every measurable target once more, with its `k`, class-0 inputs under

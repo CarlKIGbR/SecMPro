@@ -142,6 +142,15 @@ impl Writer {
         Self::default()
     }
 
+    /// An empty writer whose buffer holds `capacity` bytes before it grows: one zeroizing allocation for an encoding
+    /// of known maximum size (the SecMP-TR state, `tr::RatchetState::to_bytes`).
+    #[must_use]
+    pub(crate) fn with_capacity(capacity: usize) -> Self {
+        Self {
+            buf: Zeroizing::new(Vec::with_capacity(capacity)),
+        }
+    }
+
     /// Make room for `additional` more bytes: if the buffer is too small, its bytes move into a new zeroizing
     /// buffer of at least twice their length (the length of a full buffer is its capacity; sizing from the length
     /// keeps a wrongly repeated growth linear, M2 mutation gate) and the old one is wiped as it drops.

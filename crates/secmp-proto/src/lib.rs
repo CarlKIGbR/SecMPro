@@ -13,6 +13,9 @@
 //! [`keys`] (the key and signature fields with the decoder obligations of spec §4.1) and [`wire`] (every
 //! Appendix D structure). Every failure is [`Error::Rejected`].
 //!
+//! **M3 (ratchet).** [`tr`]: SecMP-TR (spec §7) — state, persistence, encrypt/decrypt, DH ratchet with the KEM in
+//! both halves, skipped keys, content handling. [`Error::Unavailable`] is the one non-input failure (M3 plan D1).
+//!
 //! Arithmetic: the workspace denies `clippy::arithmetic_side_effects`, `indexing_slicing` and `as_conversions`
 //! (docs/06 §2); this crate repeats the deny set so that it holds even if the workspace table changes. Lengths
 //! are split off the input or converted with `try_from`; sizes are compile-time constants.
@@ -32,6 +35,7 @@ mod error;
 mod kani_proofs;
 pub mod keys;
 pub mod sizes;
+pub mod tr;
 pub mod wire;
 
 pub use codec::{Decode, Encode};

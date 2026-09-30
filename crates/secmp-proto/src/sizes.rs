@@ -3,7 +3,7 @@
 //! primitive sizes checked against `secmp-crypto`. A wrong constant or field list is a compile error.
 
 /// The sum of field widths, or `usize::MAX` on overflow (which fails every assertion below).
-const fn sum(mut parts: &[usize]) -> usize {
+pub(crate) const fn sum(mut parts: &[usize]) -> usize {
     let mut acc: usize = 0;
     while let Some((first, rest)) = parts.split_first() {
         acc = match acc.checked_add(*first) {

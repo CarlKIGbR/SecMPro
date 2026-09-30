@@ -15,11 +15,12 @@ from .primitives import sha256, shake256
 
 SCHEMA = 2
 # SCHEMA §1 (REF-M2-1 correction 2): encodings.json is "schema": 3, for its nested `value` objects and
-# arrays and the ASCII fields `structure`/`context`; the M1 files keep 2.
-SUITE_SCHEMA = {"encodings": 3}
+# arrays and the ASCII fields `structure`/`context`; the M1 files keep 2. Brief REF-M3: tr.json is
+# "schema": 4, for its case-level fields (SCHEMA §4.9).
+SUITE_SCHEMA = {"encodings": 3, "tr": 4}
 SPEC = "SecMP/1 rev 2.2"
 # Weisung REF-M2-3: encodings.json names spec rev 2.3 (ADR-039); the M1 files keep rev 2.2.
-SUITE_SPEC = {"encodings": "SecMP/1 rev 2.3"}
+SUITE_SPEC = {"encodings": "SecMP/1 rev 2.3", "tr": "SecMP/1 rev 2.3"}
 GENERATOR = "ref-python"
 
 
@@ -41,6 +42,7 @@ SUITE_TAGS = {
     "fingerprint": "fp",
     "sas": "sas",
     "encodings": "enc",                      # brief REF-M2 / proposal SCHEMA-4.8-encodings.md
+    "tr": "tr",                              # brief REF-M3 / proposal SCHEMA-4.9-tr.md
 }
 
 # SCHEMA §1 / SQ-04: the operation names (encode/decode: proposal SCHEMA-4.8).
@@ -79,11 +81,14 @@ class CaseStream:
 
 
 class Case(NamedTuple):
-    """One case before encoding. outputs None means "expect": "reject"."""
+    """One case before encoding. outputs None means "expect": "reject". `fields` holds case-level
+    fields besides id/op/inputs/outputs (tr, SCHEMA §4.9: party, msg, from, count, manipulation, and
+    `expect` for a recv-reject, which also has outputs)."""
     i: int
     op: str
     inputs: dict
     outputs: dict | None
+    fields: dict | None = None
 
 
 # ---------------------------------------------------------------------------------------------
@@ -143,6 +148,7 @@ def suite_document(suite: str, cases: list[Case]) -> dict:
     for case in sorted(cases, key=lambda c: c.i):
         entry = {"id": case_id(suite, case.i), "op": case.op,
                  "inputs": {k: encode_value(v) for k, v in case.inputs.items()}}
+        entry.update(case.fields or {})
         if case.outputs is None:
             entry["expect"] = "reject"
         else:
@@ -195,12 +201,58 @@ def _check_field(name, value):
         raise ValueError(f"field {name!r}: bad value {value!r}")
 
 
+# SCHEMA §4.9 (tr, "schema": 4): the case-level keys per op, and the output keys.
+TR_CASE_KEYS = {
+    "init": ({"party"}, {"state_post_A", "state_post_B"}),
+    "send": ({"party", "msg"}, {"cell", "state_pre", "state_post"}),
+    "recv": ({"party", "msg", "from"}, {"content", "state_pre", "state_post"}),
+    "advance": ({"party", "count"}, {"state_pre", "state_post"}),
+    "recv-reject": ({"party", "msg", "from", "manipulation", "expect"}, {"state_pre", "state_post"}),
+}
+MSG_RE = re.compile(r"^m[0-9]{2}$")
+
+
+def _validate_tr_case(case: dict, earlier_ids: set) -> None:
+    op = case.get("op")
+    if op not in TR_CASE_KEYS:
+        raise ValueError(f"{case['id']}: op {op!r}")
+    extra, outputs = TR_CASE_KEYS[op]
+    if set(case) != {"id", "op", "inputs", "outputs"} | extra:
+        raise ValueError(f"{case['id']}: keys {sorted(case)}")
+    if set(case["outputs"]) != outputs:
+        raise ValueError(f"{case['id']}: output keys {sorted(case['outputs'])}")
+    if case["party"] not in (("AB",) if op == "init" else ("A", "B")):
+        raise ValueError(f"{case['id']}: party {case['party']!r}")
+    if "msg" in case and not (isinstance(case["msg"], str) and MSG_RE.match(case["msg"])):
+        raise ValueError(f"{case['id']}: msg {case['msg']!r}")
+    if "from" in case and case["from"] not in earlier_ids:
+        raise ValueError(f"{case['id']}: from {case['from']!r} is not an earlier case")
+    if "count" in case and (isinstance(case["count"], bool) or not isinstance(case["count"], int)
+                            or case["count"] < 1):
+        raise ValueError(f"{case['id']}: count {case['count']!r}")
+    if "manipulation" in case and not (isinstance(case["manipulation"], str) and case["manipulation"].isascii()):
+        raise ValueError(f"{case['id']}: manipulation {case['manipulation']!r}")
+    if "expect" in case and case["expect"] != "reject":
+        raise ValueError(f"{case['id']}: expect {case['expect']!r}")
+    for name, value in [*case["inputs"].items(), *case["outputs"].items()]:
+        if not (isinstance(value, str) and HEX_RE.match(value)):
+            raise ValueError(f"{case['id']}: field {name!r} is not a byte string")
+
+
 def validate_document(doc: dict) -> None:
     """Raises ValueError unless doc has the SCHEMA §1 shape."""
     if set(doc) != {"schema", "suite", "spec", "generator", "cases"}:
         raise ValueError(f"top-level keys {sorted(doc)}")
     if doc["suite"] not in SUITE_TAGS or doc["schema"] != schema_of(doc["suite"]):
         raise ValueError("schema or suite")
+    if doc["suite"] == "tr":
+        seen = set()
+        for n, case in enumerate(doc["cases"], start=1):
+            if case.get("id") != case_id("tr", n):
+                raise ValueError(f"case {n}: id {case.get('id')!r} (ids start at 0001, no gaps, in order)")
+            _validate_tr_case(case, seen)
+            seen.add(case["id"])
+        return
     for n, case in enumerate(doc["cases"], start=1):
         if case.get("id") != case_id(doc["suite"], n):
             raise ValueError(f"case {n}: id {case.get('id')!r} (ids start at 0001, no gaps, in order)")

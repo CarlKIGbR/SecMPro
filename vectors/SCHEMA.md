@@ -1,4 +1,6 @@
-# Test-vector schema — revision 3 (normative for `ref/` and for `secmp-crypto`/`secmp-proto`)
+# Test-vector schema — revision 4 (normative for `ref/` and for `secmp-crypto`/`secmp-proto`)
+
+Revision 4 (2026-09-30, brief REF-M3) adds §4.9 `tr` (its case table is `SCHEMA-4.9-tr.md`), the suite tag `tr` (§3) and the JSON shapes that suite needs (§1). The M1 and M2 files are unchanged and keep `"schema": 2` and `"schema": 3`.
 
 Revision 3 (2026-09-29, Weisung REF-M2-1, ADR-039) adds §4.8 `encodings` (its case table is `SCHEMA-4.8-encodings.md`), the suite tag `enc` (§3) and the JSON shapes that suite needs (§1). The M1 files are unchanged and keep `"schema": 2`.
 
@@ -21,6 +23,7 @@ Revision 2 (2026-09-28) answers the reference implementation's questions SQ-01�
 
 - **Byte strings** are lowercase hex JSON strings. **Integers** are JSON numbers. **Labels** are JSON strings holding the ASCII label (e.g. `"SecMP-TR/1 rk"`). **Digit strings** (SAS) are JSON strings, leading zeros kept. **Booleans** are JSON booleans. `mode`/`op` are JSON strings.
 - **`"schema": 3`** is the header of `encodings.json` (§4.8): its `inputs.value` holds nested JSON objects (sub-structures) and arrays (repeated fields), and its inputs carry the ASCII strings `structure` and `context`. The M1 files keep `"schema": 2`. `op` and `mode` are JSON strings wherever they occur, also inside `inputs.value` (the frame opcode by its D.2 name, the LINK_GET mode as `"consume"` or `"owner-status"`). Boolean `u8` fields of a structure value (`*_present`, `one_time`, `consumed`) are JSON numbers 0/1; `verify` (§4.5) stays a JSON boolean. Normative spelling (SQ-21): `value.op` is the D.2 command name exactly as App. D spells it (`"QUEUE_NEW"`, `"OK_SEND"`, `"CELLR"`, …; `"CONT"` in both directions), and `value.mode` is `"consume"` or `"owner-status"`.
+- **`"schema": 4`** is the header of `tr.json` (§4.9). Its cases carry case-level fields besides `id`, `op`, `inputs` and `outputs`: `party` (`"A"`, `"B"`, or `"AB"` for `init`), `msg` (`"m01"` … `"m40"`), `from` (the id of an earlier case), `manipulation` (ASCII strings) and `count` (a JSON number). Its `op` values are `init`, `send`, `recv`, `advance` and `recv-reject`. A `recv-reject` case carries both `"expect": "reject"` and `outputs` (the unchanged state digests). The cases are in event order, so the `recv-reject` cases are interleaved with the others. Every `inputs`/`outputs` value is a byte string.
 - Every case has `id`, `op`, `inputs`, and either `outputs` or `"expect": "reject"`. Cases are ordered by `id`; the index starts at `0001`; negative cases continue the same sequence after the positive ones.
 - Files are written canonically: keys sorted by code point at every level, `separators=(",", ":")`, ASCII only, no trailing newline. **Comparison is structural**: both files are parsed, `generator` is removed, and the resulting JSON values must be equal. No case-folding of any string. A validator additionally checks that every byte-string field matches `^([0-9a-f]{2})*$`.
 - Rejected cases MUST be rejected with the implementation's single uniform error for that construction.
@@ -48,6 +51,7 @@ Key material derived from the stream: an X25519 secret is 32 raw stream bytes (c
 | `fingerprint` | `fp` |
 | `sas` | `sas` |
 | `encodings` | `enc` |
+| `tr` | `tr` |
 
 ## 4. M1 suites — inputs, outputs and case tables
 
@@ -199,9 +203,13 @@ Negative cases (`op` = `"verify"`, `expect: reject`): inputs `pk_ed`, `pk_mldsa`
 
 The case table, the value representation, the decoding contract D-1 … D-13 and the manipulations are in `SCHEMA-4.8-encodings.md` (adopted, ADR-039; generated from `ref/secmp_ref/encodings_cases.py`).
 
+### 4.9 `tr` — SecMP-TR transcript (spec §7)
+
+The case shape, the obligations per op, the state digest `StateDigestV1`, the Content per message, the negative events and the transcript (one case per event) are in `SCHEMA-4.9-tr.md` (proposal of brief REF-M3; generated from `ref/secmp_ref/tr_cases.py`).
+
 ## 5. Later suites (M2–M5)
 
-`encodings` (one case per structure in App. D, positive and ≥ 200 negatives incl. wrong padding, wrong `ver`, low-order `ik_dh`), `hx` (full run with fixed seeds; outputs `sk`, `transcript`, `k_id`, the three handshake cells), `tr` (40-message transcript; each case = one message with SHA-256 of the serialised pre/post state), `link` (HS1/HS2 and the first three frames each direction). Their case tables are added to this file by the reviewer before the milestone starts.
+`encodings` (one case per structure in App. D, positive and ≥ 200 negatives incl. wrong padding, wrong `ver`, low-order `ik_dh`), `hx` (full run with fixed seeds; outputs `sk`, `transcript`, `k_id`, the three handshake cells), `link` (HS1/HS2 and the first three frames each direction). Their case tables are added to this file by the reviewer before the milestone starts.
 
 ## 6. Library independence
 

@@ -1006,9 +1006,44 @@ fn job_names(text: &str) -> Vec<String> {
     out
 }
 
+/// The job-level `if:` of every job of a workflow: (job id, the condition as written after `if:`, trimmed), `None`
+/// for a job without one. Step-level conditions (deeper indentation) are not job conditions.
+fn job_conditions(text: &str) -> Vec<(String, Option<String>)> {
+    let mut out: Vec<(String, Option<String>)> = Vec::new();
+    let mut in_jobs = false;
+    for line in text.lines() {
+        if line.trim_start().starts_with('#') {
+            continue;
+        }
+        if line.starts_with("jobs:") {
+            in_jobs = true;
+            continue;
+        }
+        if !line.starts_with(' ') && !line.trim().is_empty() {
+            in_jobs = false;
+        }
+        if !in_jobs {
+            continue;
+        }
+        if let Some(id) = line.strip_prefix("  ").and_then(|l| l.strip_suffix(':'))
+            && !id.starts_with(' ')
+        {
+            out.push((id.to_owned(), None));
+        } else if let Some(cond) = line.strip_prefix("    if:")
+            && let Some((_, slot)) = out.last_mut()
+        {
+            *slot = Some(cond.trim().to_owned());
+        }
+    }
+    out
+}
+
 /// M2 review C2: the required job names exist only in `expect::REQUIRED_WORKFLOW`, all of them, and that workflow
 /// has no `workflow_dispatch` trigger (a dispatch would add `skipped` check runs under the required names, and
-/// GitHub counts a skipped check as passing). `files`: (repository-relative path, text).
+/// GitHub counts a skipped check as passing). F19 (external review EXT-1): the job-level `if:` of each required job
+/// is exactly the one pinned in `expect::REQUIRED_JOB_CONDITIONS` (or absent where that says `None`), so no later
+/// condition can skip a required check on a pull request while it reports green. `files`: (repository-relative
+/// path, text).
 pub(crate) fn required_job_findings(files: &[(String, String)]) -> Vec<String> {
     let mut out = Vec::new();
     let mut seen_required = false;
@@ -1027,6 +1062,25 @@ pub(crate) fn required_job_findings(files: &[(String, String)]) -> Vec<String> {
             for required in expect::REQUIRED_JOBS {
                 if !jobs.iter().any(|j| j == required) {
                     out.push(format!("{name}: required job `{required}` missing"));
+                }
+            }
+            let conditions = job_conditions(text);
+            for (job, found) in &conditions {
+                if !expect::REQUIRED_JOBS.contains(&job.as_str()) {
+                    continue;
+                }
+                let pinned = expect::REQUIRED_JOB_CONDITIONS
+                    .iter()
+                    .find(|(j, _)| j == job)
+                    .map(|(_, c)| *c);
+                match pinned {
+                    Some(pinned) if pinned == found.as_deref() => {}
+                    Some(pinned) => out.push(format!(
+                        "{name}: required job `{job}` has the condition {found:?}, pinned {pinned:?}"
+                    )),
+                    None => out.push(format!(
+                        "{name}: required job `{job}` has no pinned condition in expect::REQUIRED_JOB_CONDITIONS"
+                    )),
                 }
             }
         } else {
@@ -1067,7 +1121,7 @@ fn workflows(root: &Path) -> Result<String> {
         bail!("{} CI-hygiene finding(s)", findings.len());
     }
     Ok(format!(
-        "workflows: {} files, triggers/SHA pins/continue-on-error ok; required checks only in ci.yml, no dispatch there",
+        "workflows: {} files, triggers/SHA pins/continue-on-error ok; required checks only in ci.yml, no dispatch there, job conditions as pinned",
         files.len()
     ))
 }
@@ -1193,7 +1247,7 @@ mod tests {
     /// M2 review C2: the required job names only in ci.yml, all four there, and no dispatch trigger in ci.yml.
     #[test]
     fn required_checks_only_in_the_pull_request_workflow() {
-        let ci = "on:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  linux-fast:\n    runs-on: x\n  windows-native:\n    runs-on: x\n  xwin-cross:\n    runs-on: x\n  linux-full:\n    runs-on: x\n";
+        let ci = "on:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  linux-fast:\n    runs-on: x\n  windows-native:\n    runs-on: x\n  xwin-cross:\n    runs-on: x\n  linux-full:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n";
         let dispatch = "on:\n  workflow_dispatch:\njobs:\n  dispatch-ct:\n    runs-on: x\n  dispatch-full:\n    runs-on: x\n";
         let files = |ci: &str, other: &str| {
             vec![
@@ -1226,6 +1280,57 @@ mod tests {
             required_job_findings(&[("other.yml".to_owned(), dispatch.to_owned())]).len(),
             1
         );
+    }
+
+    /// F19 (external review EXT-1): a job-level `if:` on a required job other than the pinned one is refused — a
+    /// new condition, a changed one, a removed pinned one; step-level conditions and other jobs are not affected.
+    #[test]
+    fn required_jobs_keep_their_pinned_conditions() {
+        let ci = "on:\n  pull_request:\njobs:\n  linux-fast:\n    runs-on: x\n    steps:\n      - if: always()\n        run: x\n  windows-native:\n    runs-on: x\n  xwin-cross:\n    runs-on: x\n  linux-full:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n  extra:\n    if: false\n    runs-on: x\n";
+        let dispatch = "on:\n  workflow_dispatch:\njobs:\n  dispatch-ct:\n    runs-on: x\n";
+        let files = |ci: &str| {
+            vec![
+                (expect::REQUIRED_WORKFLOW.to_owned(), ci.to_owned()),
+                (
+                    ".github/workflows/ci-dispatch.yml".to_owned(),
+                    dispatch.to_owned(),
+                ),
+            ]
+        };
+        assert!(required_job_findings(&files(ci)).is_empty());
+        // a condition on a job that has none pinned
+        let skipped_fast = ci.replace(
+            "  linux-fast:\n    runs-on: x\n",
+            "  linux-fast:\n    if: github.event_name == 'push'\n    runs-on: x\n",
+        );
+        let found = required_job_findings(&files(&skipped_fast));
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found.iter().any(|f| f.contains("`linux-fast`")));
+        // the pinned condition changed, or removed
+        let changed = ci.replace("|| github.event_name == 'pull_request'", "");
+        assert_eq!(required_job_findings(&files(&changed)).len(), 1);
+        let removed = ci.replace(
+            "    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n",
+            "",
+        );
+        assert_eq!(required_job_findings(&files(&removed)).len(), 1);
+        // the conditions as parsed
+        let parsed = job_conditions(ci);
+        assert_eq!(parsed.len(), 5);
+        assert_eq!(parsed.first(), Some(&("linux-fast".to_owned(), None)));
+        assert_eq!(
+            parsed.get(4),
+            Some(&("extra".to_owned(), Some("false".to_owned())))
+        );
+        // the real ci.yml keeps its pinned conditions
+        let real = include_str!("../../.github/workflows/ci.yml");
+        for (job, cond) in expect::REQUIRED_JOB_CONDITIONS {
+            let found = job_conditions(real)
+                .into_iter()
+                .find(|(j, _)| j == job)
+                .map(|(_, c)| c);
+            assert_eq!(found, Some(cond.map(str::to_owned)), "{job}");
+        }
     }
 
     /// M2 review C3 (d): exit 2 or 3 of cargo-mutants without its survivor listing is refused, not read as "no

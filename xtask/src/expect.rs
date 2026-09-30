@@ -188,8 +188,13 @@ pub(crate) const MUTANT_EXCLUDE_FILES: &[&str] = &["crates/secmp-proto/src/kani_
 /// Mutant names (regex, `cargo mutants --exclude-re`) excluded for the reason above.
 pub(crate) const MUTANT_EXCLUDE_RE: &[&str] = &["kani_stubs::"];
 
-/// Packages run under Miri (docs/06 §4).
-pub(crate) const MIRI_PACKAGES: &[&str] = &["secmp-sys-mem", "secmp-sys-desktop", "secmp-crypto"];
+/// Packages run under Miri (docs/06 §4); M3: `secmp-proto` (M2 review F3).
+pub(crate) const MIRI_PACKAGES: &[&str] = &[
+    "secmp-sys-mem",
+    "secmp-sys-desktop",
+    "secmp-crypto",
+    "secmp-proto",
+];
 
 /// The target Miri interprets, on every host. `libcrux-ml-kem` selects its backend at run time through
 /// `libcrux-platform`, which executes `cpuid` (inline assembly, unsupported by Miri) on `x86`/`x86_64`; on `AArch64` the
@@ -197,18 +202,107 @@ pub(crate) const MIRI_PACKAGES: &[&str] = &["secmp-sys-mem", "secmp-sys-desktop"
 /// SIMD intrinsics). `secmp-sys-mem` uses its heap backend under Miri on every target.
 pub(crate) const MIRI_TARGET: &str = "aarch64-unknown-linux-gnu";
 
-/// Test-name filters excluded from the Miri run only (docs/06 §4: "under Miri (where feasible)"), as (filter,
-/// reason). The tests still run natively on every target. Measured M1 (macOS arm64, nightly-2026-09-21): one
-/// ML-DSA-65 test takes about 25 minutes under Miri, the two modules together several hours.
-pub(crate) const MIRI_SKIP: &[(&str, &str)] = &[
+/// Tests excluded from the `ci-full` Miri run for their run time (docs/06 §4: "under Miri (where feasible)"), as
+/// (package, filter, reason); the weekly `miri-full` runs them, and they run natively on every target. The gate runs
+/// Miri per package of [`MIRI_PACKAGES`] (`gates::miri_runs`), so a filter applies to its own package only. A filter
+/// is either a libtest `--skip` substring of the test path (`module::tests::name`, or the function name of an
+/// integration test; choose it so that it matches no other test of the package), or `test-target:<name>`, which
+/// leaves out the whole integration-test target `tests/<name>.rs` (it must exist). To add an entry: measure the test
+/// under Miri (`cargo +nightly-2026-09-21 miri test --locked --target aarch64-unknown-linux-gnu --package <p>
+/// [--lib | --test <t>] <name> -- --exact --test-threads=1` with `LIBCRUX_DISABLE_SIMD128=1 LIBCRUX_DISABLE_SIMD256=1
+/// CARGO_TARGET_DIR=target/miri-portable`; libtest's own `--report-time` shows Miri's virtual clock, not the host's)
+/// and write the measured time into the reason. Measured M1 (macOS arm64, nightly-2026-09-21): one ML-DSA-65 test
+/// takes about 25 minutes under Miri, the two modules together several hours. Measured M3 for `secmp-proto` (macOS
+/// arm64, nightly-2026-09-21, host wall time per test with `--test-threads=1` on a shared machine;
+/// `docs/reviews/M03-evidence/miri-secmp-proto-aarch64-apple-darwin.txt`): every test of 60 s or more is skipped
+/// here — `secmp-proto` has no `unsafe` (`forbid(unsafe_code)`), so under Miri its tests re-check the dependencies'
+/// `unsafe` code, which the kept tests reach on shorter inputs; the kept lib tests take about 5.4 min together.
+pub(crate) const MIRI_SKIP: &[(&str, &str, &str)] = &[
     (
+        "secmp-crypto",
         "mldsa::",
         "ML-DSA-65 key generation and signing take ~25 min per test under Miri",
     ),
-    ("hybrid_sign::", "HybridSign runs ML-DSA-65 (as above)"),
     (
+        "secmp-crypto",
+        "hybrid_sign::",
+        "HybridSign runs ML-DSA-65 (as above)",
+    ),
+    (
+        "secmp-crypto",
         "sas::",
         "5200 SHA-256 iterations per half take ~10 min per test under Miri; SHA-256 itself runs under Miri in hash::",
+    ),
+    (
+        "secmp-proto",
+        "wire::inv::tests::iks_bundle_link_data_blob",
+        "963 s under Miri (M3): prekey bundles with ML-KEM-768/1024 key generation and a HybridSign signature \
+         (ML-DSA-65 key generation and signing)",
+    ),
+    (
+        "secmp-proto",
+        "wire::frame::tests::reserved_and_foreign_opcodes_reject",
+        "444 s under Miri (M3): all 256 opcodes in both directions, each in a full 4336-byte frame",
+    ),
+    (
+        "secmp-proto",
+        "wire::cell::tests::fragment_payload_inner_types",
+        "360 s under Miri (M3): a KeyChange payload with a HybridSign signature (ML-DSA-65 key generation and \
+         signing) and every inner type",
+    ),
+    (
+        "secmp-proto",
+        "wire::cell::tests::key_change_receipt_control",
+        "216 s under Miri (M3): a KeyChange body with a HybridSign signature (ML-DSA-65) and 255-entry receipts",
+    ),
+    (
+        "secmp-proto",
+        "wire::inv::tests::largest_link_data_fits_its_padding",
+        "187 s under Miri (M3): a maximal LinkDataV1 with its prekey bundle (as iks_bundle_link_data_blob)",
+    ),
+    (
+        "secmp-proto",
+        "wire::frame::tests::fetch_multi_count_and_link_get_rules",
+        "102 s under Miri (M3)",
+    ),
+    (
+        "secmp-proto",
+        "wire::frame::tests::every_request_round_trips_at_frame_size",
+        "101 s under Miri (M3)",
+    ),
+    (
+        "secmp-proto",
+        "wire::frame::tests::every_response_round_trips_at_frame_size",
+        "79 s under Miri (M3)",
+    ),
+    (
+        "secmp-proto",
+        "test-target:canonical",
+        "the canonicality property tests (48 random values per structure, and the edge cases): edge_counters 508 s, \
+         edge_enum_variants 764 s, edge_lengths 1561 s under Miri (M3); frames, handshake_envelope and \
+         ratchet_cell_content_and_bodies had not finished after 50 min each when measured",
+    ),
+    (
+        "secmp-proto",
+        "canonical_writer_is_stable",
+        "4082 s under Miri (M3): generates the 78 positive rows of the encodings suite",
+    ),
+];
+
+/// Tests Miri cannot run at all, left out of `miri` and `miri-full` alike, as (package, filter, reason); same filter
+/// rules as [`MIRI_SKIP`].
+pub(crate) const MIRI_UNSUPPORTED: &[(&str, &str, &str)] = &[
+    (
+        "secmp-proto",
+        "every_row_of_the_encodings_file",
+        "reads vectors/encodings.json at run time: Miri's isolation refuses the file access (`statx` not available \
+         when isolation is enabled) and aborts the test binary (M3); the rows run natively in nextest and kat",
+    ),
+    (
+        "secmp-proto",
+        "the_rust_generator_reproduces_every_positive_row",
+        "reads vectors/encodings.json before anything else (by reading the test; Miri never reached it, since the \
+         refused file access of every_row_of_the_encodings_file aborted the test binary first)",
     ),
 ];
 

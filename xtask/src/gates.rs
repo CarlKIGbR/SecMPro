@@ -588,52 +588,150 @@ pub(crate) fn mutants(ctx: &Ctx) -> Result<Outcome> {
     )))
 }
 
-/// Miri in `ci-full`: the bounded scope, skipping the test modules of `expect::MIRI_SKIP` (docs/06 §4).
+/// Miri in `ci-full`: the bounded scope, skipping the tests of `expect::MIRI_SKIP` (runtime) and
+/// `expect::MIRI_UNSUPPORTED` (docs/06 §4).
 pub(crate) fn miri(ctx: &Ctx) -> Result<Outcome> {
-    miri_with(ctx, expect::MIRI_SKIP)
+    miri_with(ctx, &[expect::MIRI_SKIP, expect::MIRI_UNSUPPORTED].concat())
 }
 
-/// `miri-full` (on demand; the weekly `miri-full` workflow, docs/06 §4, M1 review F3): the complete set, no skip
-/// list.
+/// `miri-full` (on demand; the weekly `miri-full` workflow, docs/06 §4, M1 review F3): the complete set, without
+/// the runtime skips; only the tests Miri cannot run at all (`expect::MIRI_UNSUPPORTED`) are left out.
 pub(crate) fn miri_full(ctx: &Ctx) -> Result<Outcome> {
-    miri_with(ctx, &[])
+    miri_with(ctx, expect::MIRI_UNSUPPORTED)
 }
 
-fn miri_with(ctx: &Ctx, skip: &[(&str, &str)]) -> Result<Outcome> {
+/// The filter prefix of a `MIRI_SKIP` / `MIRI_UNSUPPORTED` entry that leaves out a whole integration-test target
+/// (`tests/<name>.rs`) rather than tests by name.
+pub(crate) const MIRI_TEST_TARGET: &str = "test-target:";
+
+/// The `cargo miri test` invocations for one package of `expect::MIRI_PACKAGES` (its test targets `test_targets`,
+/// `has_lib` if it has a library): the package's entries of `skip` are libtest `--skip <filter>` arguments (a
+/// substring of the test path, applied to every test binary of the package) or, prefixed `test-target:`, an
+/// integration-test target that is not run at all. Without such a target: one run over the package's default
+/// targets. With one: a run over `--lib`, `--bins` and each remaining `--test` target, and a separate `--doc` run
+/// (cargo does not combine `--doc` with target selection). A named test target that does not exist is refused.
+pub(crate) fn miri_runs(
+    package: &str,
+    test_targets: &[String],
+    has_lib: bool,
+    skip: &[(&str, &str, &str)],
+) -> Result<Vec<Vec<String>>> {
+    let entries: Vec<&str> = skip
+        .iter()
+        .filter(|(p, _, _)| *p == package)
+        .map(|(_, f, _)| *f)
+        .collect();
+    let excluded: Vec<&str> = entries
+        .iter()
+        .filter_map(|f| f.strip_prefix(MIRI_TEST_TARGET))
+        .collect();
+    if let Some(t) = excluded
+        .iter()
+        .find(|t| !test_targets.iter().any(|x| x == *t))
+    {
+        bail!("miri: {package} has no test target {t:?} (expect::MIRI_SKIP / MIRI_UNSUPPORTED)");
+    }
+    let base = |extra: &[&str]| -> Vec<String> {
+        [
+            "miri",
+            "test",
+            "--locked",
+            "--target",
+            expect::MIRI_TARGET,
+            "--package",
+            package,
+        ]
+        .iter()
+        .chain(extra)
+        .map(|s| (*s).to_owned())
+        .collect()
+    };
+    let filters = || {
+        let mut args = vec!["--".to_owned()];
+        for f in entries.iter().filter(|f| !f.starts_with(MIRI_TEST_TARGET)) {
+            args.push("--skip".to_owned());
+            args.push((*f).to_owned());
+        }
+        args
+    };
+    if excluded.is_empty() {
+        return Ok(vec![[base(&[]), filters()].concat()]);
+    }
+    let mut selection: Vec<&str> = Vec::new();
+    if has_lib {
+        selection.push("--lib");
+    }
+    selection.push("--bins");
+    for t in test_targets
+        .iter()
+        .filter(|t| !excluded.contains(&t.as_str()))
+    {
+        selection.push("--test");
+        selection.push(t);
+    }
+    let mut runs = vec![[base(&selection), filters()].concat()];
+    if has_lib {
+        runs.push([base(&["--doc"]), filters()].concat());
+    }
+    Ok(runs)
+}
+
+fn miri_with(ctx: &Ctx, skip: &[(&str, &str, &str)]) -> Result<Outcome> {
     tools::require_nightly(&["miri", "rust-src"])?;
+    if let Some((p, f, _)) = skip
+        .iter()
+        .find(|(p, _, _)| !expect::MIRI_PACKAGES.contains(p))
+    {
+        bail!("miri: the skip filter {f:?} names {p}, which is not in expect::MIRI_PACKAGES");
+    }
     Cmd::cargo_on(tools::NIGHTLY)
         .args(["miri", "setup", "--target", expect::MIRI_TARGET])
         .dir(&ctx.root)
         .run()?;
-    // Miri cannot execute SIMD intrinsics: libcrux is built with its portable backend (own target directory,
-    // because libcrux's build scripts do not declare these variables and Cargo would reuse a stale build).
-    let mut c = Cmd::cargo_on(tools::NIGHTLY)
-        .args(["miri", "test", "--locked", "--target", expect::MIRI_TARGET])
-        .env("LIBCRUX_DISABLE_SIMD128", "1")
-        .env("LIBCRUX_DISABLE_SIMD256", "1")
-        .env(
-            "CARGO_TARGET_DIR",
-            ctx.root
-                .join("target")
-                .join("miri-portable")
-                .to_string_lossy(),
-        )
-        .dir(&ctx.root);
+    // One run per package (two where a test target is left out), so that each package's filters apply to its own
+    // tests only. Miri cannot execute SIMD intrinsics: libcrux is built with its portable backend (own target
+    // directory, because libcrux's build scripts do not declare these variables and Cargo would reuse a stale build).
     for p in expect::MIRI_PACKAGES {
-        c = c.args(["--package", p]);
+        let package = ctx
+            .ws
+            .member(p)
+            .ok_or_else(|| Error(format!("miri: {p} is not a workspace member")))?;
+        let test_targets: Vec<String> = package
+            .targets
+            .iter()
+            .filter(|t| t.kinds.iter().any(|k| k == "test"))
+            .map(|t| t.name.clone())
+            .collect();
+        let has_lib = package
+            .targets
+            .iter()
+            .any(|t| t.kinds.iter().any(|k| k == "lib"));
+        for args in miri_runs(p, &test_targets, has_lib, skip)? {
+            Cmd::cargo_on(tools::NIGHTLY)
+                .args(args)
+                .env("LIBCRUX_DISABLE_SIMD128", "1")
+                .env("LIBCRUX_DISABLE_SIMD256", "1")
+                .env(
+                    "CARGO_TARGET_DIR",
+                    ctx.root
+                        .join("target")
+                        .join("miri-portable")
+                        .to_string_lossy(),
+                )
+                .dir(&ctx.root)
+                .run()?;
+        }
     }
-    c = c.arg("--");
-    for (filter, _) in skip {
-        c = c.args(["--skip", filter]);
-    }
-    c.run()?;
     let skipped = if skip.is_empty() {
         "none (complete set)".to_owned()
     } else {
-        skip.iter().map(|(f, _)| *f).collect::<Vec<_>>().join(", ")
+        skip.iter()
+            .map(|(p, f, _)| format!("{p}: {f}"))
+            .collect::<Vec<_>>()
+            .join(", ")
     };
     Ok(Outcome::Pass(format!(
-        "Miri ({}, interpreting {}, libcrux portable backend): {}; skipped test modules: {skipped}",
+        "Miri ({}, interpreting {}, libcrux portable backend): {}; skipped tests: {skipped}",
         tools::NIGHTLY,
         expect::MIRI_TARGET,
         expect::MIRI_PACKAGES.join(", "),
@@ -1590,6 +1688,75 @@ mod tests {
                 .is_some_and(|m| m >= 300 && m.saturating_mul(60) > expect::FUZZ_NIGHTLY_SECONDS),
             "{timeout:?}"
         );
+    }
+
+    /// M2 review F3: Miri runs per package, each with only its own skip filters; a `test-target:` entry leaves out
+    /// that integration-test target (the rest by explicit selection, doctests in their own run) and must name an
+    /// existing one; every entry of `expect.rs` names a Miri package and carries a reason.
+    #[test]
+    fn miri_runs_each_package_with_its_own_filters() -> Result<()> {
+        let skip = [
+            ("secmp-crypto", "mldsa::", "slow"),
+            ("secmp-proto", "wire::cell::tests::x", "slow"),
+            ("secmp-proto", "test-target:props", "slow"),
+        ];
+        let head = |extra: &[&str]| -> Vec<String> {
+            [
+                "miri",
+                "test",
+                "--locked",
+                "--target",
+                expect::MIRI_TARGET,
+                "--package",
+                "secmp-proto",
+            ]
+            .iter()
+            .chain(extra)
+            .map(|s| (*s).to_owned())
+            .collect()
+        };
+        let tail = ["--", "--skip", "wire::cell::tests::x"].map(str::to_owned);
+        let targets = ["a".to_owned(), "props".to_owned(), "b".to_owned()];
+        assert_eq!(
+            miri_runs("secmp-proto", &targets, true, &skip)?,
+            vec![
+                [
+                    head(&["--lib", "--bins", "--test", "a", "--test", "b"]),
+                    tail.to_vec()
+                ]
+                .concat(),
+                [head(&["--doc"]), tail.to_vec()].concat(),
+            ]
+        );
+        // without an excluded target: one run over the default targets
+        let names_only = [("secmp-proto", "wire::cell::tests::x", "slow")];
+        assert_eq!(
+            miri_runs("secmp-proto", &targets, true, &names_only)?,
+            vec![[head(&[]), tail.to_vec()].concat()]
+        );
+        // another package's filters do not apply; a missing test target is refused
+        assert_eq!(
+            miri_runs("secmp-sys-mem", &[], true, &skip)?
+                .first()
+                .and_then(|r| r.last())
+                .map(String::as_str),
+            Some("--")
+        );
+        assert!(miri_runs("secmp-proto", &["a".to_owned()], true, &skip).is_err());
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        for (p, f, reason) in expect::MIRI_SKIP.iter().chain(expect::MIRI_UNSUPPORTED) {
+            assert!(expect::MIRI_PACKAGES.contains(p), "{p}");
+            assert!(!f.is_empty() && !reason.is_empty(), "{p} {f}");
+            if let Some(t) = f.strip_prefix(MIRI_TEST_TARGET) {
+                let file = root
+                    .join("crates")
+                    .join(p)
+                    .join("tests")
+                    .join(format!("{t}.rs"));
+                assert!(file.exists(), "{}", file.display());
+            }
+        }
+        Ok(())
     }
 
     /// M2 review F2: the campaign's budget is shared equally by the targets, and never below the per-PR smoke.

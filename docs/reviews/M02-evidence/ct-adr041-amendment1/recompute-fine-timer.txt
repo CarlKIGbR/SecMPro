@@ -1,0 +1,19 @@
+| report | target | ADR-041 verdict (recorded) | Amendment 1 verdict (recomputed) | crop | Δ1 / Δ2 (ns) | floor (ns) | Δ1 / Δ2 (floors) |
+|---|---|---|---|---|---|---|---|
+| PR 36651079069 (0804f60) | `tag_compare` | FAIL | SUB_FLOOR_SHIFT | p50 | -1.16 / -1.14 | 10.00 / 10.00 | -0.116 / -0.114 |
+| PR 36651079069 (0804f60) | `msg_open_reject` | FAIL | SUB_FLOOR_SHIFT | p99 | -0.99 / -0.97 | 10.00 / 10.00 | -0.099 / -0.097 |
+| PR 36651079069 (0804f60) | `caead_open_reject` | FAIL | SUB_FLOOR_SHIFT | p50 | +4.97 / +4.71 | 10.00 / 10.00 | +0.497 / +0.471 |
+| PR 36651079069 (0804f60) | `sas` | PASS | PASS | — | — | — | — |
+| PR 36651079069 (0804f60) | `caead_derive` | SUB_QUANTUM_SHIFT | SUB_FLOOR_SHIFT | p75 | -0.07 / -0.07 | 10.00 / 10.00 | -0.007 / -0.007 |
+| PR 36651079069 (0804f60) | `caead_aead_reject` | SUB_QUANTUM_SHIFT | SUB_FLOOR_SHIFT | p99 | +0.45 / +0.50 | 10.00 / 10.00 | +0.045 / +0.050 |
+| PR 36651079069 (0804f60) | `caead_com_compare` | FAIL | SUB_FLOOR_SHIFT | p50 | -1.67 / -2.03 | 10.00 / 10.00 | -0.167 / -0.203 |
+| PR 36651079069 (0804f60) | `caead_open_reject_samekey` | FAIL | SUB_FLOOR_SHIFT | p99 | +7.70 / +2.20 | 10.00 / 10.00 | +0.770 / +0.220 |
+| linux-ct 36660962382 (a2095a9) | `tag_compare` | FAIL | SUB_FLOOR_SHIFT | p75 | -0.83 / -1.09 | 10.00 / 10.00 | -0.083 / -0.109 |
+| linux-ct 36660962382 (a2095a9) | `msg_open_reject` | SUB_QUANTUM_SHIFT | SUB_FLOOR_SHIFT | p75 | +0.29 / +1.24 | 10.00 / 10.00 | +0.029 / +0.124 |
+| linux-ct 36660962382 (a2095a9) | `caead_open_reject` | SUB_QUANTUM_SHIFT | SUB_FLOOR_SHIFT | p50 | +0.19 / +0.11 | 10.00 / 10.00 | +0.019 / +0.011 |
+| linux-ct 36660962382 (a2095a9) | `sas` | PASS | PASS | — | — | — | — |
+| linux-ct 36660962382 (a2095a9) | `caead_derive` | SUB_QUANTUM_SHIFT | SUB_FLOOR_SHIFT | p75 | +0.07 / +0.06 | 10.00 / 10.00 | +0.007 / +0.006 |
+| linux-ct 36660962382 (a2095a9) | `caead_aead_reject` | PASS | PASS | — | — | — | — |
+| linux-ct 36660962382 (a2095a9) | `caead_com_compare` | PASS | PASS | — | — | — | — |
+| linux-ct 36660962382 (a2095a9) | `caead_open_reject_samekey` | PASS | PASS | — | — | — | — |
+| linux-ct 36660962382 (a2095a9) | `min_leak_control` | (report only) | reached | raw | +132.84 | 10.00 | +13.28 |

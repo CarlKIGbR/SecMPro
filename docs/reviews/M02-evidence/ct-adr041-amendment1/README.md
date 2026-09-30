@@ -111,6 +111,8 @@ The verdict of Amendment 1 is applied to the per-crop class statistics already r
 
 The rule is the one `decide` applies: a crop is reproduced if |t| > 4.5 in both measurements with the same sign, and
 relevant if |Δ| ≥ `max(1 q_eff, 10 ns)` in both. The numbers below are the reports' own `crops` values.
+The table is re-created by `python3 docs/reviews/M02-evidence/ct-adr041-amendment1/recompute-fine-timer.py` (run from
+the repository root; standard library only), whose output is committed as `recompute-fine-timer.txt` (M2 review F13).
 
 | report | target | ADR-041 verdict (recorded) | Amendment 1 verdict (recomputed) | crop | Δ1 / Δ2 (ns) | floor (ns) | Δ1 / Δ2 (floors) |
 |---|---|---|---|---|---|---|---|

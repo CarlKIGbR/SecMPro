@@ -6,7 +6,7 @@ Status: **all plan steps done — ready for review.** Commit 1 (`9f20b95` … `1
 `ffe0612`); steps 1–8 (`86830da`, `b2e3319`, `d90f3b7`); WEISUNG M2-2 (`68ac537`, `6beb30e`, `4e582cb`, `f7b3066`,
 `916bbf6`); steps 9–12 (`d8d8851`, `e4da4a1`, `94b14cf`, `45d28e1`, `f0df22f`); WEISUNG M2-3 (`e230c6e`, `774e04a`);
 WEISUNG M2-4: ADR-041 (`f537714`), its implementation (`bdf10db`, `b8a7915`), the evidence (`9ba8328`), two gate
-fixes (`f5855db`, `kani` again in the commit after `7413e23`) and steps 13–14 (`7413e23`). The ct gate follows ADR-041 (accepted by the owner, 2026-09-29).** Inputs:
+fixes (`f5855db`, `631506e`), the `header_v1` Kani split (commit after `631506e`) and steps 13–14 (`7413e23`). The ct gate follows ADR-041 (accepted by the owner, 2026-09-29).** Inputs:
 `docs/07` M2, spec rev 2.3 (ADR-039), `vectors/SCHEMA.md` rev 3 with the §4.8 case table
 `vectors/SCHEMA-4.8-encodings.md` (decoding contract D-1 … D-13), `docs/reviews/ref-spec-questions-M2.md` (SQ-12 …
 SQ-21, binding readings), `docs/reviews/M01-review.md` §G/§H, and the reviewer's M2 brief. `ref/`, `vectors/ref/`,
@@ -190,6 +190,13 @@ WEISUNG M2-3 and M2-4:
   and passes the package's `[package.metadata.kani.unstable]` features itself as `-Z` (read from `cargo
   metadata`: `meta::Package::kani_unstable`; test `kani_unstable_features_come_from_the_package_metadata`); the
   command form verified locally with the toolchain's cargo.
+- Commit after `631506e`: the PR run 36642147335 on `631506e` passed steps 1–9 up to Kani, which ran with the
+  corrected command and verified 13 harnesses, then the runner was shut down ("received a shutdown signal")
+  during `header_v1`, whose formula had reached 54 M clauses — the runner's memory. `header_v1` is split into
+  `header_v1` (0…2315 bytes: no panic, exact fit, `ver` = 1, `flags` = 0; 8 s, 1.7 GiB locally) and
+  `header_v1_reencodes` (2314 bytes: re-encodes to itself; 46 s, 4.9 GiB); same coverage, 16 harnesses. The
+  complete gate (`cargo xtask step --strict kani`, i.e. `cargo kani --package secmp-proto -Z stubbing`) passes
+  locally: 16/16 in 355 s, largest process 6.7 GiB.
 
 ## 3. Evidence per acceptance criterion
 
@@ -234,12 +241,13 @@ Commit-1 evidence:
 | PR run 36608427671 (`954f694`) | cancelled by my push of `e230c6e` during step 6 (fuzz); it had passed steps 1–5 except `ct` (old verdict: `tag_compare` 14.78) |
 | PR run 36611775212 (`e230c6e`) | cancelled by my push of `774e04a` |
 | PR run 36614956208 (`774e04a`) | `windows-native` ✅, `xwin-cross` ✅, `linux-fast` ✅, `linux-full` ❌ — `ct` (old verdict, replaced by ADR-041), `mutants` (52 survivors in `cfg(kani)` code) and `kani` (stubbing not enabled by the gate's command) failed; both gate faults fixed in `f5855db`; every other step PASS |
+| PR run 36642147335 (`631506e`) | `windows-native` ✅, `xwin-cross` ✅, `linux-fast` ✅, `linux-full` cancelled — the runner was shut down during Kani (`header_v1`, 54 M clauses: out of memory) after steps 1–8 and Miri passed and 13 harnesses verified; `header_v1` split in the next commit |
 | PR run 36633643390 (`7413e23`) | `windows-native` ✅, `xwin-cross` ✅, `linux-fast` ✅, `linux-full` ❌ — every step PASS (incl. **`ct` under ADR-041**, mutants 588 / 1 documented survivor, Miri 1166 s, fuzz 12 targets 1498 s, coverage 99.6 %, systemd) except `kani`: `cargo-kani --manifest-path` could not start `cargo metadata` on the runner; gate fixed in the next commit (`M02-evidence/ci-full-x86_64-linux-pr-run-36633643390-7413e23.txt`) |
 | ct diagnosis (15 `linux-ct` dispatches, 6 local macOS runs) | `M02-evidence/ct-diagnosis/summary.md` (every verdict, per-class percentiles), `README.md` (harness reading, findings); §8 |
 | Fuzz smoke | M1 targets: PASS in every `linux-full` run; M2 targets: 5/5 without findings locally (`M02-evidence/fuzz-proto-aarch64-apple-darwin-f0df22f.txt`); all 12 in the PR run 36614956208 (1483 s) and in the local ci-full on `f5855db`, without findings |
 | Mutation | step 13: local ci-full on `f5855db` — 588 mutants (4 shards; `cfg(kani)` code excluded, `f5855db`), 1 survivor, documented (`SecretBytes::drop`, `docs/mutants-accepted.md`); earlier local look-ahead (`M02-evidence/mutants-local-steps1-8.txt`): `cargo mutants -p secmp-proto` first pass 343 mutants — 258 caught, 75 unviable, **10 missed** (four untested accessors, three `FragmentPayload` inner-type arms, `Profile::name`, and `FETCH_MULTI` `count == 0 \|\| count > 32` → `&&`, which the reference-file test missed because it judged negatives after re-encoding and the encoder enforces the same rule). Fixed by tests, and the reference test now judges every negative on the decoder alone: second pass **268 caught, 75 unviable, 0 missed**; the changed `secmp-crypto` files (`x25519.rs`, `ed25519.rs`, feature `kat`): 47 mutants, 28 caught, 19 unviable, 0 missed |
 | Coverage | local ci-full on `f5855db`: **PASS** — `secmp-proto` 2413/2422 = 99.6 %, `secmp-crypto` 1867/1875 = 99.6 %; before, local gate `cargo xtask step coverage` on `9125c42`: **PASS** — `secmp-proto` 2414/2423 lines = 99.6 %, `secmp-crypto` 1830/1838 = 99.6 % (min 90 %) (`M02-evidence/coverage-aarch64-apple-darwin-9125c42.txt`); earlier on `d90f3b7` 98.88 % for `secmp-proto` |
-| Kani / Miri | Kani: 15/15 verified locally (`M02-evidence/kani-aarch64-apple-darwin-45d28e1.txt`), 15/15 with the gate's corrected command in the local ci-full on `f5855db`; Miri: every group of the gate's scope PASS in the local ci-full on `f5855db` (sys crates 7, `secmp-crypto` 52 unit tests in five groups); PR run 36614956208: PASS (668 s); earlier local `cargo xtask step miri` on `665d5af` **PASS** in 850 s — `secmp-crypto` 52 tests (incl. the new decode-check tests; 11 skipped by `MIRI_SKIP`), `secmp-sys-mem` 7 (`M02-evidence/miri-aarch64-apple-darwin-665d5af.txt`); weekly `miri-full` workflow added (runs on `main` once merged: `schedule` works only on the default branch) |
+| Kani / Miri | Kani: 15/15 verified locally (`M02-evidence/kani-aarch64-apple-darwin-45d28e1.txt`), 15/15 in the local ci-full on `f5855db`, 16/16 (after the `header_v1` split) with the complete gate `cargo xtask step --strict kani` locally (355 s, largest process 6.7 GiB); Miri: every group of the gate's scope PASS in the local ci-full on `f5855db` (sys crates 7, `secmp-crypto` 52 unit tests in five groups); PR run 36614956208: PASS (668 s); earlier local `cargo xtask step miri` on `665d5af` **PASS** in 850 s — `secmp-crypto` 52 tests (incl. the new decode-check tests; 11 skipped by `MIRI_SKIP`), `secmp-sys-mem` 7 (`M02-evidence/miri-aarch64-apple-darwin-665d5af.txt`); weekly `miri-full` workflow added (runs on `main` once merged: `schedule` works only on the default branch) |
 | `cargo xtask ci-fast` on `d90f3b7` (macOS arm64) | **PASS** — every step, nextest over the workspace, kat 368 s (`M02-evidence/ci-fast-aarch64-apple-darwin-d90f3b7.txt`) |
 | `cargo deny` / `cargo vet` / `cargo audit` / cooldown | PASS in local `ci-fast` on `d90f3b7` (vet: 92 fully audited, 1 partially, 24 exempted — normal `secmp-crypto`/`secmp-proto` closure: 52 external crates, 0 exempted; cooldown: 119 packages ≥ 7 days) |
 | `secmp-proto` unit + reference tests | 40/40 on `d90f3b7` (`M02-evidence/secmp-proto-tests-d90f3b7.txt`); 41/41 on `05b6807` after the survivor tests (`M02-evidence/secmp-proto-tests-05b6807.txt`) |

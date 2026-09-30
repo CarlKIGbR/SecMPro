@@ -5,7 +5,7 @@
 //!
 //! Every harness decodes symbolic input, so a proof covers every byte string it allows: the decoder does not panic
 //! (Kani checks every panic, arithmetic overflow and out-of-bounds access on the way) and accepts only the exact
-//! size. `cell`, `header_v1` and `padding` also prove that an accepted input re-encodes to itself (lengths
+//! size. `cell`, `header_v1_reencodes` and `padding` also prove that an accepted input re-encodes to itself (lengths
 //! compared, then the bytes at one symbolic index, which stands for every index).
 //!
 //! The Frame (4352 B) is the AEAD seal of a padded 4336-byte plaintext (spec §8.3): parsing a frame is `unpad`, then
@@ -72,7 +72,8 @@ fn cell() {
 }
 
 /// `HeaderV1` (D.5, 2314 bytes): every input of 0…2315 bytes; accepted only at exactly 2314 bytes with `ver` = 1
-/// and `flags` = 0.
+/// and `flags` = 0. The re-encoding property is `header_v1_reencodes` (one harness with both did not fit a CI
+/// runner's memory: the runner was shut down at 54 M clauses, run 36642147335).
 #[kani::proof]
 #[kani::stub(
     crate::keys::MlKem768Ek::from_bytes,
@@ -83,11 +84,24 @@ fn header_v1() {
     let len: usize = kani::any();
     kani::assume(len <= HEADER_LEN + 1);
     let input = bytes.get(..len).unwrap_or_default();
-    if let Ok(h) = HeaderV1::decode(input) {
+    if HeaderV1::decode(input).is_ok() {
         assert!(len == HEADER_LEN);
         assert!(input.first() == Some(&1));
         assert!(input.get(1) == Some(&0));
-        reencodes_to(h.encode(), input);
+    }
+}
+
+/// `HeaderV1` of exactly 2314 bytes (every other length is rejected, `header_v1`): an accepted input re-encodes to
+/// itself.
+#[kani::proof]
+#[kani::stub(
+    crate::keys::MlKem768Ek::from_bytes,
+    crate::keys::kani_stubs::mlkem768_ek
+)]
+fn header_v1_reencodes() {
+    let bytes: [u8; HEADER_LEN] = kani::any();
+    if let Ok(h) = HeaderV1::decode(&bytes) {
+        reencodes_to(h.encode(), &bytes);
     }
 }
 

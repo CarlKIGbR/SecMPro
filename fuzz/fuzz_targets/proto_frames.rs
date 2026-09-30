@@ -16,7 +16,7 @@ fuzz_target!(|data: &[u8]| {
     let context = match selector % 3 {
         0 => {
             if let Ok(r) = Request::decode(bytes) {
-                assert_eq!(r.encode().unwrap(), bytes);
+                assert_eq!(r.encode().unwrap().as_slice(), bytes);
             }
             return;
         }
@@ -24,6 +24,6 @@ fuzz_target!(|data: &[u8]| {
         _ => CellrContext::FetchMulti,
     };
     if let Ok(r) = Response::decode(bytes, context) {
-        assert_eq!(r.encode().unwrap(), bytes);
+        assert_eq!(r.encode().unwrap().as_slice(), bytes);
     }
 });

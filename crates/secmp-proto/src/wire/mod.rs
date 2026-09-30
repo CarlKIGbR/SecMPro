@@ -146,7 +146,7 @@ pub(crate) mod testutil {
     /// `decode(encode(x)) == x` and `encode(decode(b)) == b`; returns the encoding.
     pub(crate) fn round_trip<T: Encode + Decode + PartialEq + core::fmt::Debug>(
         x: &T,
-    ) -> Result<Vec<u8>> {
+    ) -> Result<secmp_crypto::Zeroizing<Vec<u8>>> {
         let bytes = x.encode()?;
         let back = T::decode(&bytes)?;
         assert_eq!(&back, x);
@@ -156,7 +156,9 @@ pub(crate) mod testutil {
 
     /// The same for types without `PartialEq` (secret fields): the encoding is injective, so equal encodings
     /// mean equal values.
-    pub(crate) fn round_trip_bytes<T: Encode + Decode>(x: &T) -> Result<Vec<u8>> {
+    pub(crate) fn round_trip_bytes<T: Encode + Decode>(
+        x: &T,
+    ) -> Result<secmp_crypto::Zeroizing<Vec<u8>>> {
         let bytes = x.encode()?;
         assert_eq!(T::decode(&bytes)?.encode()?, bytes);
         Ok(bytes)

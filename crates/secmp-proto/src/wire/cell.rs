@@ -13,7 +13,9 @@
 
 use secmp_crypto::SecretBytes;
 
-use crate::codec::{Decode, Encode, Reader, Writer, boxed, decode_padded, encode_padded};
+use crate::codec::{
+    Decode, Encode, Reader, Writer, Zeroizing, boxed, decode_padded, encode_padded,
+};
 use crate::error::{Error, Result};
 use crate::keys::{HybridSig, MlKem768Ek, X25519Pk};
 use crate::sizes::{
@@ -284,7 +286,8 @@ impl Decode for BatchBody {
 
 /// `Fragment = msg_id[16] ‖ idx u16 ‖ total u16 ‖ chunk`: `idx` < `total`, 2 ≤ `total` ≤ 64, `chunk` ≥ 1 byte
 /// (rev 2.3). The chunk runs to the end of the enclosing structure; chunk sizing and consistency across fragments
-/// are reassembly rules.
+/// are reassembly rules. A chunk of a fragmented `RouteUpdate` carries `send_seed` bytes, so it is zeroized on drop
+/// (review C1).
 #[derive(Clone, PartialEq, Eq)]
 #[cfg_attr(test, derive(Debug))]
 pub struct Fragment {
@@ -294,8 +297,8 @@ pub struct Fragment {
     pub idx: u16,
     /// Number of fragments.
     pub total: u16,
-    /// This fragment's bytes.
-    pub chunk: Vec<u8>,
+    /// This fragment's bytes (zeroized on drop).
+    pub chunk: Zeroizing<Vec<u8>>,
 }
 
 impl Fragment {
@@ -327,7 +330,7 @@ impl Decode for Fragment {
         let msg_id = r.array()?;
         let idx = r.u16()?;
         let total = r.u16()?;
-        let chunk = r.rest().to_vec();
+        let chunk = Zeroizing::new(r.rest().to_vec());
         Self::check(idx, total, &chunk)?;
         Ok(Self {
             msg_id,
@@ -382,8 +385,9 @@ pub enum RouteDescriptor {
     Unknown {
         /// The kind byte (never 0x01).
         kind: u8,
-        /// The blob, at most 65535 bytes.
-        blob: Vec<u8>,
+        /// The blob, at most 65535 bytes; zeroized on drop, since a future kind may carry a sender capability as
+        /// `RelayQueue` does (review C1).
+        blob: Zeroizing<Vec<u8>>,
     },
 }
 
@@ -416,7 +420,7 @@ impl Decode for RouteDescriptor {
         } else {
             Ok(Self::Unknown {
                 kind,
-                blob: blob.to_vec(),
+                blob: Zeroizing::new(blob.to_vec()),
             })
         }
     }
@@ -637,9 +641,10 @@ impl ContentBody {
         }
     }
 
-    fn encode_body(&self) -> Result<Vec<u8>> {
+    /// The encoded body, zeroized on drop (a Handshake or `RouteUpdate` body carries `send_seed`, review C1).
+    fn encode_body(&self) -> Result<Zeroizing<Vec<u8>>> {
         match self {
-            Self::Dummy => Ok(Vec::new()),
+            Self::Dummy => Ok(Zeroizing::new(Vec::new())),
             Self::Handshake(b) => b.encode(),
             Self::Batch(b) => b.encode(),
             Self::Fragment(b) => b.encode(),
@@ -785,10 +790,12 @@ impl Decode for FragmentPayload {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // the real type, not the crate's alias (which is a stand-in under Kani)
     use crate::wire::inv::tests::{iks, relay_ref};
     use crate::wire::testutil::{
         ek768, exact_fit, hybrid_sig, round_trip, round_trip_bytes, x25519,
     };
+    use secmp_crypto::Zeroizing;
 
     #[test]
     fn cell_parts() -> Result<()> {
@@ -810,7 +817,7 @@ mod tests {
         let joined = [p.hdr_nonce, p.hdr_ct, p.body_ct, p.tag].concat();
         assert_eq!(joined, bytes);
         assert_eq!(cell.as_bytes().as_slice(), bytes.as_slice());
-        assert_eq!(round_trip(&cell)?, bytes);
+        assert_eq!(*round_trip(&cell)?, bytes);
         exact_fit::<Cell>(&bytes);
         Ok(())
     }
@@ -853,6 +860,76 @@ mod tests {
         })
     }
 
+    /// Review C1: every structure that carries a `send_seed` encodes into a `Zeroizing<Vec<u8>>` (a change of a
+    /// return type fails to compile here) and the seed is in each of these buffers; fragment chunks and unknown
+    /// route blobs, which may carry one, are `Zeroizing<Vec<u8>>` fields.
+    #[test]
+    fn secret_bearing_encodings_are_zeroizing() -> Result<()> {
+        let route = || -> Result<RouteDescriptor> {
+            Ok(RouteDescriptor::RelayQueue(relay_queue(
+                false,
+                Period::S20,
+            )?))
+        };
+        let update = || -> Result<RouteUpdateBody> {
+            Ok(RouteUpdateBody {
+                routes: vec![route()?],
+            })
+        };
+        let handshake = || -> Result<HandshakeBody> {
+            Ok(HandshakeBody {
+                profile: Profile::new("a", None)?,
+                routes: vec![route()?],
+            })
+        };
+        let queue: Zeroizing<Vec<u8>> = relay_queue(false, Period::S20)?.encode()?;
+        let descriptor: Zeroizing<Vec<u8>> = route()?.encode()?;
+        let update_body: Zeroizing<Vec<u8>> = update()?.encode()?;
+        let handshake_body: Zeroizing<Vec<u8>> = handshake()?.encode()?;
+        let content_body: Zeroizing<Vec<u8>> = ContentBody::RouteUpdate(update()?).encode_body()?;
+        let route_update: Zeroizing<Vec<u8>> = Content {
+            seq: 1,
+            ts: 2,
+            body: ContentBody::RouteUpdate(update()?),
+        }
+        .encode()?;
+        let handshake_content: Zeroizing<Vec<u8>> = Content {
+            seq: 1,
+            ts: 2,
+            body: ContentBody::Handshake(handshake()?),
+        }
+        .encode()?;
+        let fragment_payload: Zeroizing<Vec<u8>> =
+            FragmentPayload::RouteUpdate(update()?).encode()?;
+        for (what, bytes) in [
+            ("RelayQueue", &queue),
+            ("RouteDescriptor", &descriptor),
+            ("RouteUpdateBody", &update_body),
+            ("HandshakeBody", &handshake_body),
+            ("ContentBody", &content_body),
+            ("Content{RouteUpdate}", &route_update),
+            ("Content{Handshake}", &handshake_content),
+            ("FragmentPayload", &fragment_payload),
+        ] {
+            assert!(bytes.windows(32).any(|w| w == [8; 32]), "{what}");
+        }
+        // a Content is written in one piece: one allocation of its fixed size, no growth step left a copy behind
+        assert_eq!(route_update.capacity(), BODY_LEN);
+        assert_eq!(handshake_content.capacity(), BODY_LEN);
+        let Fragment { chunk, .. } =
+            Fragment::decode(&[[1; 16].as_slice(), &[0, 0, 0, 2, 5]].concat())?;
+        let chunk: Zeroizing<Vec<u8>> = chunk;
+        assert_eq!(*chunk, [5]);
+        // kind 2 is an unknown route
+        let RouteDescriptor::Unknown { blob, .. } = RouteDescriptor::decode(&[1, 2, 0, 1, 7])?
+        else {
+            return Err(Error::Rejected);
+        };
+        let blob: Zeroizing<Vec<u8>> = blob;
+        assert_eq!(*blob, [7]);
+        Ok(())
+    }
+
     #[test]
     fn app_message_and_batch() -> Result<()> {
         for kind in AppKind::ALL {
@@ -879,7 +956,7 @@ mod tests {
             msg_id: [1; 16],
             idx,
             total,
-            chunk: vec![7; chunk],
+            chunk: Zeroizing::new(vec![7; chunk]),
         };
         for ok in [f(0, 2, 1), f(1, 2, 100), f(63, 64, 1669)] {
             round_trip(&ok)?;
@@ -898,7 +975,7 @@ mod tests {
             w.u16(bad.idx);
             w.u16(bad.total);
             w.bytes(&bad.chunk);
-            assert_eq!(Fragment::decode(&w.into_vec()), Err(Error::Rejected));
+            assert_eq!(Fragment::decode(&w.into_bytes()), Err(Error::Rejected));
         }
         Ok(())
     }
@@ -911,13 +988,13 @@ mod tests {
         }
         let unknown = RouteDescriptor::Unknown {
             kind: 0x7e,
-            blob: vec![5; 65_535],
+            blob: Zeroizing::new(vec![5; 65_535]),
         };
         assert_eq!(round_trip_bytes(&unknown)?.len(), 65_539);
         assert!(
             RouteDescriptor::Unknown {
                 kind: ROUTE_KIND_RELAY_QUEUE,
-                blob: vec![]
+                blob: Zeroizing::new(vec![])
             }
             .encode()
             .is_err()
@@ -927,7 +1004,7 @@ mod tests {
                 RouteDescriptor::RelayQueue(relay_queue(false, Period::S10)?),
                 RouteDescriptor::Unknown {
                     kind: 0x02,
-                    blob: vec![1],
+                    blob: Zeroizing::new(vec![1]),
                 },
             ],
         };
@@ -1008,7 +1085,7 @@ mod tests {
                 msg_id: [1; 16],
                 idx: 1,
                 total: 3,
-                chunk: vec![2; CONTENT_BODY_MAX - 20],
+                chunk: Zeroizing::new(vec![2; CONTENT_BODY_MAX - 20]),
             }),
             ContentBody::Receipt(ReceiptBody {
                 kind: ReceiptKind::Delivered,
@@ -1025,7 +1102,7 @@ mod tests {
                 profile: Profile::new("x", None)?,
                 routes: vec![RouteDescriptor::Unknown {
                     kind: 0x10,
-                    blob: vec![1; 40],
+                    blob: Zeroizing::new(vec![1; 40]),
                 }],
             }),
         ];
@@ -1047,7 +1124,7 @@ mod tests {
                 msg_id: [1; 16],
                 idx: 0,
                 total: 2,
-                chunk: vec![2; CONTENT_BODY_MAX - 19],
+                chunk: Zeroizing::new(vec![2; CONTENT_BODY_MAX - 19]),
             }),
         };
         assert!(too_big.encode().is_err());
@@ -1059,7 +1136,7 @@ mod tests {
             w.u64(0);
             w.u64(0);
             w.u16(0);
-            let bytes = crate::codec::pad(&w.into_vec(), BODY_LEN)?;
+            let bytes = crate::codec::pad(&w.into_bytes(), BODY_LEN)?;
             assert!(Content::decode(&bytes).is_err(), "{t}");
         }
         Ok(())

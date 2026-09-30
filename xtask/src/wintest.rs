@@ -2,20 +2,38 @@
 //! `cargo xtask win-test --backend github|libvirt` — run the Windows gate (docs/06 §4 "Platform", Amendment A1
 //! §2, ADR-029).
 //!
-//! * `github` (M0–M8): the `windows-native` job of `.github/workflows/ci.yml` on GitHub-hosted `windows-latest`
-//!   (native MSVC build, clippy, tests, KATs, hello-world binaries) for the **pushed commit** of the current
-//!   branch. By default the run that the push triggered is used (waiting for that job if it is still running);
-//!   `--rerun` re-executes that run's `windows-native` job; `--dispatch` starts a new `workflow_dispatch` run
-//!   with `suite=windows` (GitHub only allows this once `ci.yml` exists on the default branch). The job log is
-//!   saved under `target/win-test/`; the command fails unless the job concluded `success`.
+//! * `github` (M0–M8): the Windows gate on GitHub-hosted `windows-latest` (native MSVC build, clippy, tests, KATs,
+//!   hello-world binaries) for the **pushed commit** of the current branch. By default the `windows-native` job of
+//!   the `.github/workflows/ci.yml` run for that commit (the pull-request or push run) is used, waiting for the
+//!   job if it is still running; `--rerun` re-executes that job; `--dispatch` starts `.github/workflows/ci-dispatch.yml`
+//!   with `suite=windows` and reads its `dispatch-windows` job (GitHub only allows this once `ci-dispatch.yml`
+//!   exists on the default branch). The required job names live in `ci.yml` only (M2 review C2), so a dispatch never
+//!   adds a check run under a required name. The job log is saved under `target/win-test/`; the command fails
+//!   unless the job concluded `success`.
 //! * `libvirt` (required from M9, deferred by owner decision A1): documented in `xtask/README.md`, not active.
 
 use serde_json::Value;
 
 use crate::util::{Cmd, Error, Result, bail, say};
 
-const WORKFLOW: &str = "ci.yml";
-const JOB: &str = "windows-native";
+/// Where the Windows gate of a run lives: the workflow file and the job name.
+#[derive(Clone, Copy)]
+struct Source {
+    workflow: &'static str,
+    job: &'static str,
+}
+
+/// The pull-request/push run: the required check `windows-native`.
+const CI: Source = Source {
+    workflow: "ci.yml",
+    job: "windows-native",
+};
+
+/// A dispatched run (`--dispatch`): `ci-dispatch.yml`, whose job names are not required-check names (review C2).
+const DISPATCH: Source = Source {
+    workflow: "ci-dispatch.yml",
+    job: "dispatch-windows",
+};
 
 fn git(args: &[&str]) -> Result<String> {
     Ok(Cmd::new("git")
@@ -50,9 +68,16 @@ pub(crate) fn parse_runs(json: &str) -> Result<Vec<Run>> {
         .collect())
 }
 
-fn runs(branch: &str) -> Result<Vec<Run>> {
+fn runs(branch: &str, source: Source) -> Result<Vec<Run>> {
     let json = Cmd::new("gh")
-        .args(["run", "list", "--workflow", WORKFLOW, "--branch", branch])
+        .args([
+            "run",
+            "list",
+            "--workflow",
+            source.workflow,
+            "--branch",
+            branch,
+        ])
         .args(["--limit", "30", "--json", "databaseId,headSha,event"])
         .read()?;
     parse_runs(&json)
@@ -94,12 +119,12 @@ pub(crate) fn job(json: &str, name: &str) -> Result<Job> {
     })
 }
 
-fn job_of_run(run: &str) -> Result<Job> {
+fn job_of_run(run: &str, source: Source) -> Result<Job> {
     job(
         &Cmd::new("gh")
             .args(["run", "view", run, "--json", "jobs"])
             .read()?,
-        JOB,
+        source.job,
     )
 }
 
@@ -132,7 +157,7 @@ enum Mode {
 fn wait_for_new_run(branch: &str, sha: &str, newer_than: u64) -> Result<u64> {
     for _ in 0..60 {
         std::thread::sleep(std::time::Duration::from_secs(5));
-        if let Some(r) = runs(branch)?
+        if let Some(r) = runs(branch, DISPATCH)?
             .into_iter()
             .find(|r| r.id > newer_than && r.head_sha == sha)
         {
@@ -155,7 +180,8 @@ fn github(branch_arg: Option<&str>, mode: Mode) -> Result<()> {
             "origin/{branch} is at {remote_sha:?}, local {branch} at {local}: push first so the tested commit is known"
         );
     }
-    let listed = runs(&branch)?;
+    let source = if mode == Mode::Dispatch { DISPATCH } else { CI };
+    let listed = runs(&branch, source)?;
     let newest_for_head = listed
         .iter()
         .filter(|r| r.head_sha == local)
@@ -168,7 +194,7 @@ fn github(branch_arg: Option<&str>, mode: Mode) -> Result<()> {
                 .args([
                     "workflow",
                     "run",
-                    WORKFLOW,
+                    DISPATCH.workflow,
                     "--ref",
                     &branch,
                     "-f",
@@ -178,14 +204,17 @@ fn github(branch_arg: Option<&str>, mode: Mode) -> Result<()> {
             wait_for_new_run(&branch, &local, before)?
         }
         (_, None) => {
-            bail!("no {WORKFLOW} run exists for {local}; push the branch (or use --dispatch)")
+            bail!(
+                "no {} run exists for {local}; push the branch (or use --dispatch)",
+                CI.workflow
+            )
         }
         (Mode::Rerun, Some(id)) => {
             // Wait for the run to finish first: GitHub only re-runs jobs of completed runs.
             let _ = Cmd::new("gh")
                 .args(["run", "watch", &id.to_string(), "--interval", "30"])
                 .run();
-            let job_id = job_of_run(&id.to_string())?.id;
+            let job_id = job_of_run(&id.to_string(), CI)?.id;
             Cmd::new("gh")
                 .args([
                     "run",
@@ -200,27 +229,28 @@ fn github(branch_arg: Option<&str>, mode: Mode) -> Result<()> {
         }
         (Mode::Existing, Some(id)) => id,
     };
-    collect(id, &branch, &local)
+    collect(id, &branch, &local, source)
 }
 
-/// Wait for job `windows-native` of run `id`, save its log and fail unless it succeeded.
-fn collect(id: u64, branch: &str, local: &str) -> Result<()> {
+/// Wait for the Windows job of run `id`, save its log and fail unless it succeeded.
+fn collect(id: u64, branch: &str, local: &str, source: Source) -> Result<()> {
+    let Source { workflow, job } = source;
     let id_s = id.to_string();
     say(&format!(
-        "win-test: {WORKFLOW} run {id} for {branch} @ {local}; waiting for job {JOB}"
+        "win-test: {workflow} run {id} for {branch} @ {local}; waiting for job {job}"
     ));
     // Wait for the job only (not the whole run): the jobs-log API serves a finished job's log at once.
-    let mut state = job_of_run(&id_s)?;
+    let mut state = job_of_run(&id_s, source)?;
     for _ in 0..240 {
         if state.status == "completed" {
             break;
         }
         std::thread::sleep(std::time::Duration::from_secs(30));
-        state = job_of_run(&id_s)?;
+        state = job_of_run(&id_s, source)?;
     }
     if state.status != "completed" {
         bail!(
-            "job {JOB} did not complete within 2 hours (status {:?})",
+            "job {job} did not complete within 2 hours (status {:?})",
             state.status
         );
     }
@@ -248,13 +278,13 @@ fn collect(id: u64, branch: &str, local: &str) -> Result<()> {
         }
     }
     say(&format!(
-        "win-test: job {JOB} ({}) of run {id} concluded {:?}; log: {}",
+        "win-test: job {job} ({}) of run {id} concluded {:?}; log: {}",
         state.id,
         state.conclusion,
         path.display()
     ));
     if state.conclusion != "success" {
-        bail!("{JOB} concluded {:?}", state.conclusion);
+        bail!("{job} concluded {:?}", state.conclusion);
     }
     Ok(())
 }

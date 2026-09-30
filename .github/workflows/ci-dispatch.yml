@@ -1,39 +1,37 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# SecMPro CI (docs/06 §5, ADR-029). Every job runs `cargo xtask`, so local and CI gates are the same code.
-# The four jobs below are the required checks of the `main-protection` ruleset. Their names exist only in this
-# workflow, and it has no manual-dispatch trigger (M2 review C2): a dispatch would add `skipped` check runs
-# under the required names, which count as passing. On-demand runs use `ci-dispatch.yml`.
-# Checked by `cargo xtask policy` (`workflow_findings`, `workflows`): no `pull_request_target`/`workflow_run`
-# trigger; every action pinned by full commit SHA; no `continue-on-error`; no plain-scalar `run:` that YAML would
-# misparse; no manual-dispatch trigger here and the required job names in no other workflow. By convention, not
-# checked: a read-only token and checkout without persisted credentials. `--strict` turns every skipped step into a
-# failure. Caches hold only the pinned tools and are keyed by this workflow; release workflows (M11) must not
-# restore them.
-name: ci
+# On-demand runs of single SecMPro gates (`workflow_dispatch` only; M2 review C2). The job names differ from the
+# four required checks of `ci.yml` (`linux-fast`, `windows-native`, `xwin-cross`, `linux-full`), so a dispatch on a
+# pull-request head never adds a check run under a required name. The jobs run the same `cargo xtask` steps as their
+# `ci.yml` counterparts. `cargo xtask win-test --backend github --dispatch` starts `suite: windows`.
+# Checked by `cargo xtask policy` as every workflow (see the header of ci.yml). By convention, not checked: a
+# read-only token and checkout without persisted credentials.
+name: ci-dispatch
 
 on:
-  pull_request:
-  # push runs only for main; every PR head is covered by its pull_request run, whose jobs are the required checks
-  # of the `main-protection` ruleset (docs/06 §4; a cancelled push run on 7d4e4f0 left `cancelled` check runs under
-  # the required names and blocked the merge)
-  push:
-    branches: [main]
-  schedule:
-    - cron: "17 2 * * *"
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: "Jobs to run (fast = steps 1–5, 13, 14; full = ci-full and the xwin cross-build; windows = the Windows gate; ct = the constant-time gate alone; all = every job)"
+        type: choice
+        options: [all, fast, full, windows, ct]
+        default: ct
 
 permissions:
   contents: read
 
+# A second dispatch of the same suite on the same ref cancels the running one (`cancel-in-progress`): start the next
+# only after the previous run has finished.
 concurrency:
-  group: ci-${{ github.event_name }}-${{ github.ref }}
+  group: ci-dispatch-${{ github.ref }}-${{ inputs.suite }}
   cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # docs/06 §5 steps 1–5 (ci-fast), 13 (SBOM) and 14 (systemd exposure) on every push and pull request.
-  linux-fast:
+  # docs/06 §5 steps 1–5 (ci-fast), 13 (SBOM) and 14 (systemd exposure).
+  dispatch-fast:
+    if: inputs.suite == 'all' || inputs.suite == 'fast'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
@@ -71,8 +69,9 @@ jobs:
           path: target/sbom/
           if-no-files-found: error
 
-  # The Windows gate for M0–M8 (Amendment A1 §2): native MSVC build, clippy, tests, KATs, hello-world binaries.
-  windows-native:
+  # The Windows gate (Amendment A1 §2): native MSVC build, clippy, tests, KATs, hello-world binaries.
+  dispatch-windows:
+    if: inputs.suite == 'all' || inputs.suite == 'windows'
     runs-on: windows-latest
     timeout-minutes: 90
     steps:
@@ -102,9 +101,9 @@ jobs:
       - name: Windows gate
         run: cargo xtask step --strict clippy nextest doctest kat hello
 
-  # docs/06 §5 step 11: cargo-xwin cross-build, a compile-compatibility check only (ADR-034; Windows release
-  # builds are native). A hard gate since M1 (M0 review, condition C1).
-  xwin-cross:
+  # docs/06 §5 step 11: the cargo-xwin cross-build (ADR-034).
+  dispatch-xwin:
+    if: inputs.suite == 'all' || inputs.suite == 'full'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -138,10 +137,30 @@ jobs:
       - name: Cross-build for x86_64-pc-windows-msvc
         run: cargo xtask step --strict windows-cross
 
-  # docs/06 §5 steps 1–14 (ci-full): nightly on main and on every pull request (the gate before a milestone report);
-  # on demand through `ci-dispatch.yml`. The Windows steps are covered by the two jobs above.
-  linux-full:
-    if: github.event_name == 'schedule' || github.event_name == 'pull_request'
+  # The constant-time gate alone (docs/06 §4, ADR-038, ADR-041): re-measurements on the GitHub-hosted runner type.
+  dispatch-ct:
+    if: inputs.suite == 'all' || inputs.suite == 'ct'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Pinned toolchain (rust-toolchain.toml)
+        run: rustup toolchain install && rustc -vV
+      - name: Constant-time gate (step 5 ct)
+        run: cargo xtask step --strict ct
+      - name: Upload the constant-time report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ct-report-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}-${{ github.run_id }}
+          path: target/ct-report.json
+          if-no-files-found: error
+
+  # docs/06 §5 steps 1–14 (ci-full).
+  dispatch-full:
+    if: inputs.suite == 'all' || inputs.suite == 'full'
     runs-on: ubuntu-latest
     timeout-minutes: 240
     steps:

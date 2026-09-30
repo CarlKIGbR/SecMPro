@@ -311,7 +311,7 @@ mod tests {
     #[test]
     fn hello() -> Result<()> {
         let bytes = round_trip(&Hello)?;
-        assert_eq!(bytes, [0, 7, 1, b'S', b'E', b'C', b'M', b'P', 1]);
+        assert_eq!(*bytes, [0, 7, 1, b'S', b'E', b'C', b'M', b'P', 1]);
         exact_fit::<Hello>(&bytes);
         for bad in [
             [0, 6, 1, b'S', b'E', b'C', b'M', b'P', 1],

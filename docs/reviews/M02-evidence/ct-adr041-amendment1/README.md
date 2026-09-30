@@ -13,7 +13,9 @@ in this directory is stored as written by the bench (`target/ct-report.json`).
 ## Runs
 
 - **Linux, `linux-ct`:** dispatched on `m02-proto` (`gh workflow run ci.yml --ref m02-proto -f suite=ct`), one at a
-  time, 8 dispatches (the WEISUNG's maximum):
+  time, 8 dispatches (the WEISUNG's maximum). Since M2 review C2 the dispatch lives in its own workflow and the job
+  is `dispatch-ct`: `gh workflow run ci-dispatch.yml --ref <branch> -f suite=ct` (dispatchable once the file is on
+  `main`); `ci.yml` no longer has a dispatch trigger.
   - 3 on `31d13de`: 36677648129, 36678360108, 36678826377;
   - 5 on `6b9da3b`: 36679955738, 36680376550, 36680797237, 36681396211, 36681989835.
 - **macOS arm64, local `cargo xtask step ct`:** 3 on `31d13de` and 3 on `6b9da3b`. The second of the `6b9da3b`

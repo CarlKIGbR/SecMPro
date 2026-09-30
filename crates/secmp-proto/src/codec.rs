@@ -6,8 +6,23 @@
 //! lengths are only ever split off the remaining input (`split_at_checked`) or converted with `try_from`, never
 //! computed with unchecked arithmetic. [`Decode::decode`] requires the input to be consumed exactly (spec §4.1
 //! consistency rule), so a structure has exactly one encoding.
+//!
+//! Encoding buffers are zeroized (M2 review C1, CLAUDE.md §1.6): an encoding may carry `send_seed`, `link_key` or
+//! `inv_send_seed` (`RelayQueue`, `InvitationV1` and everything that embeds them), so the [`Writer`], every
+//! [`Encode::encode`] result, [`pad`] and `encode_padded` hold their bytes in `Zeroizing<Vec<u8>>`, and the
+//! [`Writer`] grows by copying into a new zeroizing buffer — a `Vec` reallocation would free the old block without
+//! wiping it. One rule for every structure, secret-bearing or not.
 
 use crate::error::{Error, Result};
+
+/// The zeroizing buffer of the encodings: `secmp_crypto::Zeroizing` (review C1). Under Kani only, a transparent
+/// stand-in with the same interface (`kani_stubs::Zeroizing`): Kani cannot execute `zeroize`, whose optimisation
+/// barrier is inline assembly ("`TerminatorKind::InlineAsm` is not currently supported"), and wiping on drop is not
+/// among the properties the harnesses prove (no panic, exact fit, re-encoding).
+#[cfg(kani)]
+pub(crate) use kani_stubs::Zeroizing;
+#[cfg(not(kani))]
+pub(crate) use secmp_crypto::Zeroizing;
 
 /// The ISO/IEC 7816-4 padding marker (spec §4.1).
 const PAD_MARKER: u8 = 0x80;
@@ -111,20 +126,49 @@ pub(crate) fn boxed<const N: usize>(bytes: &[u8]) -> Result<Box<[u8; N]>> {
         .map_err(|_| Error::Rejected)
 }
 
-/// An encoding being built.
+/// The first allocation of a [`Writer`] that grows (it doubles from here).
+const WRITER_INITIAL_CAPACITY: usize = 256;
+
+/// An encoding being built, in a zeroizing buffer that never reallocates in place (module docs).
 #[derive(Default)]
 pub struct Writer {
-    buf: Vec<u8>,
+    buf: Zeroizing<Vec<u8>>,
 }
 
 impl Writer {
     /// An empty writer.
     #[must_use]
-    pub const fn new() -> Self {
-        Self { buf: Vec::new() }
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Make room for `additional` more bytes: if the buffer is too small, its bytes move into a new zeroizing
+    /// buffer of at least twice their length (the length of a full buffer is its capacity; sizing from the length
+    /// keeps a wrongly repeated growth linear, M2 mutation gate) and the old one is wiped as it drops.
+    /// `extend_from_slice` within the capacity then never reallocates.
+    ///
+    /// Not under Kani: CBMC does not finish on a buffer allocated ahead of its writes (measured 2026-09-30: the `cell`
+    /// harness verifies in 9 s when `extend_from_slice` grows the `Vec`, and times out after 4 min with
+    /// `Vec::with_capacity` or `reserve_exact`), so the Kani builds grow as a plain `Vec` does. What the harnesses
+    /// prove does not depend on the allocation; the zeroizing growth is unit-tested (`writer_grows_without_losing_bytes`).
+    fn reserve(&mut self, additional: usize) {
+        if cfg!(kani) {
+            return;
+        }
+        let needed = self.buf.len().saturating_add(additional);
+        if needed <= self.buf.capacity() {
+            return;
+        }
+        let capacity = needed
+            .max(self.buf.len().saturating_mul(2))
+            .max(WRITER_INITIAL_CAPACITY);
+        let mut grown = Zeroizing::new(Vec::with_capacity(capacity));
+        grown.extend_from_slice(&self.buf);
+        self.buf = grown;
     }
 
     pub(crate) fn bytes(&mut self, bytes: &[u8]) {
+        self.reserve(bytes.len());
         self.buf.extend_from_slice(bytes);
     }
 
@@ -163,9 +207,9 @@ impl Writer {
         Ok(())
     }
 
-    /// The bytes written so far.
+    /// The bytes written so far (zeroized on drop).
     #[must_use]
-    pub fn into_vec(self) -> Vec<u8> {
+    pub fn into_bytes(self) -> Zeroizing<Vec<u8>> {
         self.buf
     }
 }
@@ -179,14 +223,14 @@ pub trait Encode {
     /// its fixed size).
     fn encode_to(&self, w: &mut Writer) -> Result<()>;
 
-    /// The encoding.
+    /// The encoding, zeroized on drop (review C1: it may carry a `send_seed`, `link_key` or `inv_send_seed`).
     ///
     /// # Errors
     /// As [`Encode::encode_to`].
-    fn encode(&self) -> Result<Vec<u8>> {
+    fn encode(&self) -> Result<Zeroizing<Vec<u8>>> {
         let mut w = Writer::new();
         self.encode_to(&mut w)?;
-        Ok(w.into_vec())
+        Ok(w.into_bytes())
     }
 }
 
@@ -210,14 +254,15 @@ pub trait Decode: Sized {
     }
 }
 
-/// ISO/IEC 7816-4 padding (spec §4.1): `fields ‖ 0x80 ‖ 0x00…` to exactly `size` bytes.
+/// ISO/IEC 7816-4 padding (spec §4.1): `fields ‖ 0x80 ‖ 0x00…` to exactly `size` bytes, in one zeroizing
+/// allocation of exactly `size` bytes (review C1).
 ///
 /// # Errors
 /// [`Error::Rejected`] if the fields leave no room for the marker.
-pub fn pad(fields: &[u8], size: usize) -> Result<Vec<u8>> {
+pub fn pad(fields: &[u8], size: usize) -> Result<Zeroizing<Vec<u8>>> {
     // zeros of the full size, then the fields and the marker over their front (no fill loop: the Kani harnesses
     // re-encode 4336-byte frames)
-    let mut out = vec![0; size];
+    let mut out = Zeroizing::new(vec![0; size]);
     let (head, tail) = out
         .split_at_mut_checked(fields.len())
         .ok_or(Error::Rejected)?;
@@ -260,10 +305,33 @@ pub(crate) mod kani_stubs {
         kani::assume(n < size);
         bytes.get(..n).ok_or(Error::Rejected)
     }
+
+    /// `Zeroizing` without the wipe on drop, for the Kani builds only (see `codec::Zeroizing`).
+    #[derive(Default, Clone, PartialEq, Eq)]
+    pub struct Zeroizing<Z>(Z);
+
+    impl<Z> Zeroizing<Z> {
+        pub fn new(value: Z) -> Self {
+            Self(value)
+        }
+    }
+
+    impl<Z> core::ops::Deref for Zeroizing<Z> {
+        type Target = Z;
+        fn deref(&self) -> &Z {
+            &self.0
+        }
+    }
+
+    impl<Z> core::ops::DerefMut for Zeroizing<Z> {
+        fn deref_mut(&mut self) -> &mut Z {
+            &mut self.0
+        }
+    }
 }
 
-/// `value` encoded and padded to `size`.
-pub(crate) fn encode_padded(value: &impl Encode, size: usize) -> Result<Vec<u8>> {
+/// `value` encoded and padded to `size`; the unpadded encoding is wiped when it drops here (review C1).
+pub(crate) fn encode_padded(value: &impl Encode, size: usize) -> Result<Zeroizing<Vec<u8>>> {
     pad(&value.encode()?, size)
 }
 
@@ -275,6 +343,8 @@ pub(crate) fn decode_padded<T: Decode>(bytes: &[u8], size: usize) -> Result<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // the real type, not the crate's alias (which is a stand-in under Kani)
+    use secmp_crypto::Zeroizing;
 
     #[test]
     fn reader_is_bounded_and_exact() {
@@ -312,7 +382,7 @@ mod tests {
         assert!(w.prefixed_u8(&[5; 256]).is_err());
         w.prefixed_u16(&[6; 3]).unwrap_or_default();
         assert!(Writer::new().prefixed_u16(&vec![0; 65_536]).is_err());
-        let bytes = w.into_vec();
+        let bytes = w.into_bytes();
         let mut r = Reader::new(&bytes);
         assert_eq!(r.prefixed_u8().map(<[u8]>::len), Ok(255));
         assert_eq!(r.prefixed_u16(), Ok(&[6_u8, 6, 6][..]));
@@ -325,7 +395,7 @@ mod tests {
     #[test]
     fn padding_round_trip_and_rejections() {
         let p = pad(&[1, 2, 3], 8).unwrap_or_default();
-        assert_eq!(p, vec![1, 2, 3, 0x80, 0, 0, 0, 0]);
+        assert_eq!(*p, vec![1, 2, 3, 0x80, 0, 0, 0, 0]);
         assert_eq!(unpad(&p, 8), Ok(&[1_u8, 2, 3][..]));
         // fields ending in 0x80 0x00 stay unambiguous: the last non-zero byte is the marker
         let q = pad(&[0x80, 0], 4).unwrap_or_default();
@@ -345,6 +415,79 @@ mod tests {
         assert_eq!(unpad(&[1, 0x80, 0, 1], 4), Err(Error::Rejected));
         assert_eq!(unpad(&[0, 0, 0, 0], 4), Err(Error::Rejected));
         assert_eq!(unpad(&[], 0), Err(Error::Rejected));
+    }
+
+    /// Review C1: the writer's buffer, every encoding, `pad` and `encode_padded` are `Zeroizing<Vec<u8>>` (a
+    /// change of any of these types fails to compile here).
+    #[test]
+    fn encoding_buffers_are_zeroizing() -> Result<()> {
+        struct Bytes(Vec<u8>);
+        impl Encode for Bytes {
+            fn encode_to(&self, w: &mut Writer) -> Result<()> {
+                w.bytes(&self.0);
+                Ok(())
+            }
+        }
+        let writer: Zeroizing<Vec<u8>> = Writer::new().into_bytes();
+        let encoded: Zeroizing<Vec<u8>> = Bytes(vec![1, 2]).encode()?;
+        let padded: Zeroizing<Vec<u8>> = pad(&[1, 2], 4)?;
+        let encoded_padded: Zeroizing<Vec<u8>> = encode_padded(&Bytes(vec![1, 2]), 4)?;
+        assert!(writer.is_empty());
+        assert_eq!(*encoded, [1, 2]);
+        assert_eq!(*padded, [1, 2, 0x80, 0]);
+        assert_eq!(padded, encoded_padded);
+        // `pad` allocates exactly the padded size (no spare capacity to hold stale bytes)
+        assert_eq!(padded.capacity(), 4);
+        Ok(())
+    }
+
+    /// Review C1: the growth policy of `reserve` — the first write allocates at least the initial capacity (or
+    /// exactly its size, if larger), a write that fits never moves the buffer, a write that does not moves it to
+    /// twice the capacity (a plain `Vec` would start at 8 bytes and reallocate in place).
+    #[test]
+    fn writer_growth_policy() {
+        let mut w = Writer::new();
+        assert_eq!(w.buf.capacity(), 0);
+        w.bytes(&[1]);
+        assert_eq!(w.buf.capacity(), WRITER_INITIAL_CAPACITY);
+        // a write that fits leaves the buffer where it is
+        let before = w.buf.as_ptr();
+        w.bytes(&[2]);
+        assert_eq!(w.buf.as_ptr(), before);
+        assert_eq!(w.buf.capacity(), WRITER_INITIAL_CAPACITY);
+        w.bytes(&vec![3; WRITER_INITIAL_CAPACITY.saturating_sub(2)]);
+        assert_eq!(w.buf.len(), WRITER_INITIAL_CAPACITY);
+        assert_eq!(w.buf.capacity(), WRITER_INITIAL_CAPACITY);
+        w.bytes(&[4]);
+        assert_eq!(w.buf.capacity(), WRITER_INITIAL_CAPACITY.saturating_mul(2));
+        let mut big = Writer::new();
+        big.bytes(&[5; 1000]);
+        assert_eq!(big.buf.capacity(), 1000);
+        big.bytes(&[]);
+        assert_eq!(big.buf.capacity(), 1000);
+    }
+
+    /// Review C1: the writer grows by moving into a new, larger zeroizing buffer; the bytes stay exact across every
+    /// growth step (1 … 3 × the initial capacity, in pieces of every size up to 300 bytes).
+    #[test]
+    fn writer_grows_without_losing_bytes() {
+        for piece in [1_usize, 7, 255, 256, 257, 300] {
+            let mut w = Writer::new();
+            let mut expected = Vec::new();
+            let mut i = 0_u8;
+            while expected.len() < WRITER_INITIAL_CAPACITY.saturating_mul(3) {
+                let chunk: Vec<u8> = (0..piece)
+                    .map(|_| {
+                        i = i.wrapping_add(1);
+                        i
+                    })
+                    .collect();
+                w.bytes(&chunk);
+                expected.extend_from_slice(&chunk);
+                assert!(w.buf.capacity() >= w.buf.len());
+            }
+            assert_eq!(*w.into_bytes(), expected, "piece {piece}");
+        }
     }
 
     #[test]

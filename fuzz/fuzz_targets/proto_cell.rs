@@ -17,7 +17,7 @@ use secmp_proto::{Decode, Encode};
 /// Decode as `T`; an accepted input re-encodes to itself.
 fn canonical<T: Decode + Encode>(bytes: &[u8]) {
     if let Ok(v) = T::decode(bytes) {
-        assert_eq!(v.encode().unwrap(), bytes);
+        assert_eq!(v.encode().unwrap().as_slice(), bytes);
     }
 }
 

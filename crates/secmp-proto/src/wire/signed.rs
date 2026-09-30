@@ -35,7 +35,7 @@ pub fn queue_new(
     w.bytes(recv_pk.as_bytes());
     w.bytes(send_pk.as_bytes());
     w.bytes(token);
-    w.into_vec()
+    w.into_bytes().to_vec()
 }
 
 /// `SEND`: `… ‖ sid ‖ cell`, signed by the send key.
@@ -44,7 +44,7 @@ pub fn send(sess_id: &Id, cmd_seq: u32, sid: &Id, cell: &Cell) -> Vec<u8> {
     let mut w = message(Label::QSend, sess_id, cmd_seq);
     w.bytes(sid);
     w.bytes(cell.as_bytes());
-    w.into_vec()
+    w.into_bytes().to_vec()
 }
 
 /// `FETCH`: `… ‖ rid ‖ ack`, signed by the recv key.
@@ -53,7 +53,7 @@ pub fn fetch(sess_id: &Id, cmd_seq: u32, rid: &Id, ack: u64) -> Vec<u8> {
     let mut w = message(Label::QFetch, sess_id, cmd_seq);
     w.bytes(rid);
     w.u64(ack);
-    w.into_vec()
+    w.into_bytes().to_vec()
 }
 
 /// One `FETCH_MULTI` entry: label `MFETCH`, `… ‖ rid ‖ ack`, signed by that queue's recv key.
@@ -62,7 +62,7 @@ pub fn fetch_multi_entry(sess_id: &Id, cmd_seq: u32, rid: &Id, ack: u64) -> Vec<
     let mut w = message(Label::QMfetch, sess_id, cmd_seq);
     w.bytes(rid);
     w.u64(ack);
-    w.into_vec()
+    w.into_bytes().to_vec()
 }
 
 /// `QUEUE_DEL`: `… ‖ rid`, signed by the recv key.
@@ -70,7 +70,7 @@ pub fn fetch_multi_entry(sess_id: &Id, cmd_seq: u32, rid: &Id, ack: u64) -> Vec<
 pub fn queue_del(sess_id: &Id, cmd_seq: u32, rid: &Id) -> Vec<u8> {
     let mut w = message(Label::QQueueDel, sess_id, cmd_seq);
     w.bytes(rid);
-    w.into_vec()
+    w.into_bytes().to_vec()
 }
 
 /// The `LINK_PUT` fields its signature covers besides the blob hash.
@@ -105,7 +105,7 @@ pub fn link_put(
     w.bytes(fields.owner_pk.as_bytes());
     w.bytes(fields.token);
     w.bytes(&secmp_crypto::sha256(&[&blob.encode()?]));
-    Ok(w.into_vec())
+    Ok(w.into_bytes().to_vec())
 }
 
 /// `LINK_GET` in owner-status mode (the only signed mode): `… ‖ ld_id ‖ mode (0x01)`, signed by the owner key.
@@ -114,7 +114,7 @@ pub fn link_get_owner_status(sess_id: &Id, cmd_seq: u32, ld_id: &Id) -> Vec<u8> 
     let mut w = message(Label::QLinkGet, sess_id, cmd_seq);
     w.bytes(ld_id);
     w.u8(1);
-    w.into_vec()
+    w.into_bytes().to_vec()
 }
 
 #[cfg(test)]

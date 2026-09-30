@@ -303,7 +303,7 @@ mod tests {
             .as_bytes();
         let pk = X25519Pk::decode(&real)?;
         assert_eq!(pk.as_bytes(), &real);
-        assert_eq!(pk.encode()?, real.to_vec());
+        assert_eq!(*pk.encode()?, real.to_vec());
         assert_eq!(format!("{pk:?}"), "X25519Pk(..)");
         assert_eq!(X25519Pk::decode(&[0; 32]), Err(Error::Rejected));
         assert_eq!(X25519Pk::decode(&real[..31]), Err(Error::Rejected));
@@ -314,7 +314,7 @@ mod tests {
     fn ed25519_fields() -> Result<()> {
         let sk = secmp_crypto::Ed25519SigningKey::from_seed(&[3; 32])?;
         let pk = Ed25519Pk::decode(sk.verifying_key().as_bytes())?;
-        assert_eq!(pk.encode()?, sk.verifying_key().as_bytes().to_vec());
+        assert_eq!(*pk.encode()?, sk.verifying_key().as_bytes().to_vec());
         assert_eq!(
             Ed25519Pk::decode(&unhex::<32>(
                 "0100000000000000000000000000000000000000000000000000000000000000"
@@ -324,7 +324,7 @@ mod tests {
         let sig = sk.sign(b"m");
         let s = Ed25519Sig::decode(&sig)?;
         assert_eq!(s.as_bytes(), &sig);
-        assert_eq!(s.encode()?, sig.to_vec());
+        assert_eq!(*s.encode()?, sig.to_vec());
         let mut bad = sig;
         bad[..32].copy_from_slice(&unhex::<32>(
             "0200000000000000000000000000000000000000000000000000000000000000",
@@ -340,7 +340,7 @@ mod tests {
         let mut bytes = vec![0xa5_u8; HYBRID_SIG_LEN];
         overwrite(&mut bytes, &sk.sign(b"m"));
         let sig = HybridSig::decode(&bytes)?;
-        assert_eq!(sig.encode()?, bytes);
+        assert_eq!(*sig.encode()?, bytes);
         assert_eq!(sig.as_bytes().as_slice(), bytes.as_slice());
         assert_eq!(format!("{sig:?}"), "HybridSig(..)");
         // an arbitrary (never sigDecoded) ML-DSA half is kept; a bad Ed25519 R is refused
@@ -357,7 +357,7 @@ mod tests {
     fn mlkem_fields() -> Result<()> {
         let ek768 = secmp_crypto::MlKem768Dk::from_seed(&[5; 64])?.encapsulation_key();
         let ek = MlKem768Ek::decode(ek768.as_bytes())?;
-        assert_eq!(ek.encode()?, ek768.as_bytes().to_vec());
+        assert_eq!(*ek.encode()?, ek768.as_bytes().to_vec());
         let mut bad = ek768.as_bytes().to_vec();
         overwrite(&mut bad, &[0xff; 3]);
         assert_eq!(MlKem768Ek::decode(&bad), Err(Error::Rejected));

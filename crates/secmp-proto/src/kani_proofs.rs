@@ -48,7 +48,7 @@ fn same_bytes(a: &[u8], b: &[u8]) {
 }
 
 /// An accepted value re-encodes to exactly its input.
-fn reencodes_to(encoded: crate::Result<Vec<u8>>, input: &[u8]) {
+fn reencodes_to(encoded: crate::Result<crate::codec::Zeroizing<Vec<u8>>>, input: &[u8]) {
     assert!(encoded.is_ok());
     if let Ok(e) = encoded {
         same_bytes(&e, input);

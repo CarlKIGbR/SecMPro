@@ -288,7 +288,7 @@ mod tests {
             w.u8(i);
             w.u8(total);
             w.bytes(&[0; HANDSHAKE_CHUNK_LEN]);
-            assert!(HandshakeCellPlaintext::decode(&w.into_vec()).is_err());
+            assert!(HandshakeCellPlaintext::decode(&w.into_bytes()).is_err());
         }
         Ok(())
     }

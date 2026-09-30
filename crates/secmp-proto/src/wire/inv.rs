@@ -611,6 +611,10 @@ pub(crate) mod tests {
             inv_period_s: Period::S80,
             expires: u64::MAX,
         };
+        // review C1: the encoding carries `link_key` and `inv_send_seed` and is a `Zeroizing<Vec<u8>>`
+        let encoded: secmp_crypto::Zeroizing<Vec<u8>> = inv.encode()?;
+        assert!(encoded.windows(32).any(|w| w == [6; 32]));
+        assert!(encoded.windows(32).any(|w| w == [9; 32]));
         let bytes = round_trip_bytes(&inv)?;
         assert_eq!(bytes.len(), crate::sizes::INVITATION_NO_DIRECT_LEN);
         exact_fit::<InvitationV1>(&bytes);
@@ -645,7 +649,7 @@ pub(crate) mod tests {
             let mut w = Writer::new();
             w.prefixed_u8(bad)?;
             w.u8(0);
-            assert!(Profile::decode(&w.into_vec()).is_err());
+            assert!(Profile::decode(&w.into_bytes()).is_err());
         }
         Ok(())
     }

@@ -12,6 +12,7 @@ Build, CI, supply-chain and release automation (docs/06 §5). The alias lives in
 | `win-test --backend github\|libvirt [--rerun\|--dispatch]` | the Windows gate (below) |
 | `install-tools [--set fast\|windows\|xwin\|full\|all] [--nightly]` | install the pinned tools (`src/tools.rs`); `SECMP_TOOLS_ROOT` sets `cargo install --root` |
 | `vectors`, `repro-check`, `ops-check` | documented stubs until M1, M11 and M10; they exit non-zero |
+| `ct-check REPORT…` | the `ct` gate's reading of saved ct reports (`target/ct-report.json` or committed evidence): re-derives every verdict and control from the recorded statistics (M2 review C3); fails unless every report passes |
 
 Every step ends as PASS, FAIL, SKIP (not applicable on this host, e.g. `systemd-analyze` on macOS), DELEGATED
 (handed to another CI job with `--delegated`) or STUB. All steps run and a summary table is printed. **CI always
@@ -52,11 +53,12 @@ check. Replaced by Cargo's `global-min-publish-age` once it is stable (docs/06 �
 
 1. Requires `gh` (authenticated) and that `origin/<branch>` equals the local branch head, so the tested commit
    is known.
-2. Selects the `ci.yml` run for exactly that commit: by default the run the push triggered (waiting while it
-   is in progress); `--rerun` re-executes that run's `windows-native` job; `--dispatch` starts a new
-   `workflow_dispatch` run with `suite=windows` (GitHub accepts dispatches only for workflows that exist on the
-   default branch, i.e. after M0 is merged).
-3. Waits for the run (`gh run watch`), saves the `windows-native` job log to
+2. Selects the run for exactly that commit: by default the `ci.yml` run of the push or pull request (waiting
+   while it is in progress); `--rerun` re-executes that run's `windows-native` job; `--dispatch` starts a new
+   `ci-dispatch.yml` run with `suite=windows` and reads its `dispatch-windows` job (GitHub accepts dispatches only
+   for workflows that exist on the default branch). The required job names exist only in `ci.yml`, which has no
+   dispatch trigger (M2 review C2).
+3. Waits for the run (`gh run watch`), saves the job log (`windows-native` or `dispatch-windows`) to
    `target/win-test/run-<run>-job-<job>.log`, prints the hello-world banners and the step summary, and fails
    unless the job concluded `success`.
 

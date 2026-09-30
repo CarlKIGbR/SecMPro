@@ -422,7 +422,7 @@ impl Encode for Request {
         fields.u8(self.cmd.op());
         fields.u32(self.cmd_seq);
         self.cmd.encode_fields(&mut fields)?;
-        w.bytes(&pad(&fields.into_vec(), FRAME_PLAINTEXT_LEN)?);
+        w.bytes(&pad(&fields.into_bytes(), FRAME_PLAINTEXT_LEN)?);
         Ok(())
     }
 }
@@ -721,7 +721,7 @@ impl Encode for Response {
         fields.u8(self.cmd.op());
         fields.u32(self.cmd_seq);
         self.cmd.encode_fields(&mut fields)?;
-        w.bytes(&pad(&fields.into_vec(), FRAME_PLAINTEXT_LEN)?);
+        w.bytes(&pad(&fields.into_bytes(), FRAME_PLAINTEXT_LEN)?);
         Ok(())
     }
 }
@@ -953,7 +953,7 @@ mod tests {
             f.bytes(&[rid; 16]);
             f.u64(cell_id);
             f.bytes(&[0; crate::sizes::CELL_LEN]);
-            let bytes = pad(&f.into_vec(), FRAME_PLAINTEXT_LEN)?;
+            let bytes = pad(&f.into_bytes(), FRAME_PLAINTEXT_LEN)?;
             for ctx in [CellrContext::Fetch, CellrContext::FetchMulti] {
                 assert_eq!(Response::decode(&bytes, ctx), Err(Error::Rejected));
             }
@@ -967,7 +967,7 @@ mod tests {
             let mut f = Writer::new();
             f.u8(op);
             f.u32(0);
-            let bytes = pad(&f.into_vec(), FRAME_PLAINTEXT_LEN)?;
+            let bytes = pad(&f.into_bytes(), FRAME_PLAINTEXT_LEN)?;
             // only PING and OK have no fields; everything else here is short, reserved or foreign
             assert_eq!(Request::decode(&bytes).is_ok(), op == opcode::PING, "{op}");
             assert_eq!(
@@ -1016,7 +1016,7 @@ mod tests {
                 f.u64(0);
                 f.bytes(sig(i)?.as_bytes());
             }
-            let bytes = pad(&f.into_vec(), FRAME_PLAINTEXT_LEN)?;
+            let bytes = pad(&f.into_bytes(), FRAME_PLAINTEXT_LEN)?;
             assert_eq!(
                 Request::decode(&bytes),
                 Err(Error::Rejected),
@@ -1030,14 +1030,14 @@ mod tests {
         f.bytes(&[0; 16]);
         f.u8(0);
         f.bytes(sig(1)?.as_bytes());
-        assert!(Request::decode(&pad(&f.into_vec(), FRAME_PLAINTEXT_LEN)?).is_err());
+        assert!(Request::decode(&pad(&f.into_bytes(), FRAME_PLAINTEXT_LEN)?).is_err());
         let mut f = Writer::new();
         f.u8(opcode::LINK_GET);
         f.u32(0);
         f.bytes(&[0; 16]);
         f.u8(2);
         f.bytes(sig(1)?.as_bytes());
-        assert!(Request::decode(&pad(&f.into_vec(), FRAME_PLAINTEXT_LEN)?).is_err());
+        assert!(Request::decode(&pad(&f.into_bytes(), FRAME_PLAINTEXT_LEN)?).is_err());
         Ok(())
     }
 

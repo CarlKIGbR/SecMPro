@@ -87,7 +87,8 @@
 //!   makes every target NOT MEASURABLE (the floor in ticks needs it).
 //! - The parameters are read from `xtask/src/expect.rs` (`CT_THRESHOLDS`, `CT_RESOLUTION_MAX_FRACTION`,
 //!   `CT_MAX_BATCH`, `CT_BATCH_MARGIN`, `CT_MIN_REALISED_QUANTA`, `CT_EFFECT_FLOOR_QUANTA`, `CT_EFFECT_FLOOR_NS`,
-//!   `CT_AA_MAX_T`) — this file contains no copy of them — and echoed in the report, which the gate checks.
+//!   `CT_AA_MAX_T`, `CT_SAMPLES`, `CT_SAS_SAMPLES`) — this file contains no copy of them — and echoed in the report,
+//!   which the gate checks; the gate also re-derives every verdict from the report (M2 review C3).
 //!
 //! The report carries the clock (arch, Linux clocksource, timer, tick, reported resolution, overhead, the clock's
 //! lattice and quantum), the run verdict and, per target, `k`, the calibration, both measurements (per crop: n,
@@ -97,8 +98,9 @@
 //! Δ, whether it reached the floor, its measurement).
 //!
 //! Run by `cargo xtask step ct` (ci-full) as `cargo bench -p secmp-crypto --features kat --bench ct`; the results
-//! are written to `target/ct-report.json` and the exit status is the verdict. `SECMP_CT_SCALE` (a divisor, default
-//! 1) shortens every sample count for quick local runs.
+//! are written to `target/ct-report.json` and the exit status is the verdict. `SECMP_CT_SCALE`, a divisor of every
+//! sample count (default 1), shortens quick local runs; the report then carries `secmp_ct_scale`, which the gate
+//! refuses (M2 review C3 (c)), and the gate unsets the variable for its own run.
 
 // ADR-038 (1): the cycle-counter read in `now_ticks` is the only `unsafe` code in the bench. `xtask policy`
 // sanctions this attribute at exactly this path (`expect::UNSAFE_EXEMPT_ROOT`).
@@ -171,6 +173,10 @@ struct Rules {
     effect_floor_ns: f64,
     /// ADR-041 (3): the inline A/A control passes if every |t| is at most this.
     aa_max_t: f64,
+    /// Samples per measurement of every target but `sas` (M2 review C3 (c)).
+    samples: usize,
+    /// Samples per measurement of `sas`.
+    sas_samples: usize,
 }
 
 /// The value text of the one-line `pub(crate) const <name>: … = <value>;` in `EXPECT_RS`.
@@ -183,17 +189,24 @@ fn const_value(name: &str) -> Option<&'static str> {
     value.trim().strip_suffix(';').map(str::trim)
 }
 
+/// The value of `name` in `EXPECT_RS`, parsed (digit separators `_` removed first).
+fn parsed<T: std::str::FromStr>(name: &str) -> Option<T> {
+    const_value(name)?.replace('_', "").parse().ok()
+}
+
 impl Rules {
     fn from_expect() -> Option<Self> {
         let rules = Self {
-            pass: const_value("CT_THRESHOLDS")?.parse().ok()?,
-            max_resolution_fraction: const_value("CT_RESOLUTION_MAX_FRACTION")?.parse().ok()?,
-            max_batch: const_value("CT_MAX_BATCH")?.parse().ok()?,
-            margin: const_value("CT_BATCH_MARGIN")?.parse().ok()?,
-            min_realised_quanta: const_value("CT_MIN_REALISED_QUANTA")?.parse().ok()?,
-            effect_floor: const_value("CT_EFFECT_FLOOR_QUANTA")?.parse().ok()?,
-            effect_floor_ns: const_value("CT_EFFECT_FLOOR_NS")?.parse().ok()?,
-            aa_max_t: const_value("CT_AA_MAX_T")?.parse().ok()?,
+            pass: parsed("CT_THRESHOLDS")?,
+            max_resolution_fraction: parsed("CT_RESOLUTION_MAX_FRACTION")?,
+            max_batch: parsed("CT_MAX_BATCH")?,
+            margin: parsed("CT_BATCH_MARGIN")?,
+            min_realised_quanta: parsed("CT_MIN_REALISED_QUANTA")?,
+            effect_floor: parsed("CT_EFFECT_FLOOR_QUANTA")?,
+            effect_floor_ns: parsed("CT_EFFECT_FLOOR_NS")?,
+            aa_max_t: parsed("CT_AA_MAX_T")?,
+            samples: parsed("CT_SAMPLES")?,
+            sas_samples: parsed("CT_SAS_SAMPLES")?,
         };
         let sane = rules.pass > 0.0
             && rules.max_resolution_fraction > 0.0
@@ -204,7 +217,9 @@ impl Rules {
             && rules.effect_floor > 0.0
             && rules.effect_floor_ns > 0.0
             && rules.effect_floor_ns.is_finite()
-            && rules.aa_max_t > 0.0;
+            && rules.aa_max_t > 0.0
+            && rules.samples > 0
+            && rules.sas_samples > 0;
         sane.then_some(rules)
     }
 
@@ -237,7 +252,7 @@ impl Rules {
 
     fn json(self) -> String {
         format!(
-            "{{\"pass\":{},\"max_resolution_fraction\":{},\"max_batch\":{},\"batch_margin\":{},\"min_realised_quanta\":{},\"effect_floor_quanta\":{},\"effect_floor_ns\":{},\"aa_max_t\":{}}}",
+            "{{\"pass\":{},\"max_resolution_fraction\":{},\"max_batch\":{},\"batch_margin\":{},\"min_realised_quanta\":{},\"effect_floor_quanta\":{},\"effect_floor_ns\":{},\"aa_max_t\":{},\"samples\":{},\"sas_samples\":{}}}",
             self.pass,
             self.max_resolution_fraction,
             self.max_batch,
@@ -245,7 +260,9 @@ impl Rules {
             self.min_realised_quanta,
             self.effect_floor,
             self.effect_floor_ns,
-            self.aa_max_t
+            self.aa_max_t,
+            self.samples,
+            self.sas_samples
         )
     }
 }
@@ -1529,6 +1546,11 @@ fn sas(n: usize, k: usize, stream: &mut Stream) -> Samples {
     )
 }
 
+/// `SECMP_CT_SCALE` if set (local quick runs only; echoed in the report, refused by the gate).
+fn ct_scale() -> Option<String> {
+    std::env::var("SECMP_CT_SCALE").ok()
+}
+
 /// Every target (`evaluate`), then the inline A/A control over the full target set (ADR-041 (3)) and the
 /// sensitivity control (Amendment 1 (2)); the third value is the reason of a `CONTROL_FAIL` run (either control
 /// failed; every target verdict is then `CONTROL_FAIL`).
@@ -1536,14 +1558,10 @@ fn run(
     rules: Rules,
 ) -> Result<(Clock, Vec<Outcome>, Option<String>, Sensitivity), secmp_crypto::Error> {
     let clock = Clock::probe();
-    let scale: usize = std::env::var("SECMP_CT_SCALE")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(1)
-        .max(1);
+    let scale: usize = ct_scale().and_then(|s| s.parse().ok()).unwrap_or(1).max(1);
     let mut stream = Stream::new()?;
-    let n = 1_000_000_usize.checked_div(scale).unwrap_or(1);
-    let n_sas = 20_000_usize.checked_div(scale).unwrap_or(1);
+    let n = rules.samples.checked_div(scale).unwrap_or(1);
+    let n_sas = rules.sas_samples.checked_div(scale).unwrap_or(1);
     let targets = [
         Target {
             name: "control_variable_time_compare",
@@ -1755,7 +1773,7 @@ fn main() -> ExitCode {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/ct-report.json");
     let Some(rules) = Rules::from_expect() else {
         // written for the gate to print; the bench itself may not print (docs/06 §2)
-        let error = "{\"error\":\"CT_THRESHOLDS / CT_RESOLUTION_MAX_FRACTION / CT_MAX_BATCH / CT_BATCH_MARGIN / CT_MIN_REALISED_QUANTA / CT_EFFECT_FLOOR_QUANTA / CT_EFFECT_FLOOR_NS / CT_AA_MAX_T not readable from xtask/src/expect.rs\"}";
+        let error = "{\"error\":\"CT_THRESHOLDS / CT_RESOLUTION_MAX_FRACTION / CT_MAX_BATCH / CT_BATCH_MARGIN / CT_MIN_REALISED_QUANTA / CT_EFFECT_FLOOR_QUANTA / CT_EFFECT_FLOOR_NS / CT_AA_MAX_T / CT_SAMPLES / CT_SAS_SAMPLES not readable from xtask/src/expect.rs\"}";
         let _ = std::fs::write(path, error);
         return ExitCode::FAILURE;
     };
@@ -1772,8 +1790,13 @@ fn main() -> ExitCode {
         "FAIL"
     };
     let json = format!(
-        "{{\"thresholds\":{},\"sign\":\"{SIGN}\",\"clock\":{},\"run_verdict\":\"{run_verdict}\",\"run_reason\":{},\"sensitivity_control\":{},\"results\":[{}]}}",
+        "{{\"thresholds\":{},{}\"sign\":\"{SIGN}\",\"clock\":{},\"run_verdict\":\"{run_verdict}\",\"run_reason\":{},\"sensitivity_control\":{},\"results\":[{}]}}",
         rules.json(),
+        // M2 review C3 (c): a shortened run says so, and the gate refuses it
+        ct_scale().map_or_else(String::new, |s| format!(
+            "\"secmp_ct_scale\":{},",
+            serde_json::Value::from(s)
+        )),
         clock.json(),
         serde_json::Value::from(control_fail),
         sensitivity.json(&clock, rules),

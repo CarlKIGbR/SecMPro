@@ -20,7 +20,7 @@ use std::num::NonZeroU16;
 use rand::rngs::StdRng;
 use rand::{RngExt, SeedableRng};
 
-use secmp_crypto::SecretBytes;
+use secmp_crypto::{SecretBytes, Zeroizing};
 use secmp_proto::keys::{Ed25519Pk, Ed25519Sig, HybridSig, MlKem768Ek, MlKem1024Ek, X25519Pk};
 use secmp_proto::sizes::{
     BLOB_PART_LEN, CELL_LEN, CONT_DATA_LEN, CONTENT_BODY_MAX, HANDSHAKE_CELL_CT_LEN,
@@ -301,7 +301,7 @@ impl Gen {
             let n = self.len(0, max_blob);
             RouteDescriptor::Unknown {
                 kind,
-                blob: self.bytes(n),
+                blob: Zeroizing::new(self.bytes(n)),
             }
         }
     }
@@ -351,7 +351,7 @@ impl Gen {
             msg_id: self.arr(),
             idx,
             total,
-            chunk: self.bytes(n),
+            chunk: Zeroizing::new(self.bytes(n)),
         }
     }
 
@@ -583,7 +583,7 @@ fn check<T: Encode + Decode + PartialEq>(g: &mut Gen, what: &str, case: usize, x
     assert!(y == *x, "{what} case {case}: decode(encode(x)) != x");
     assert_eq!(y.encode().unwrap(), bytes, "{what} case {case}");
     mutants_are_canonical(g, what, case, &bytes, |b| {
-        T::decode(b).ok().map(|v| v.encode().unwrap())
+        T::decode(b).ok().map(|v| v.encode().unwrap().to_vec())
     });
 }
 
@@ -598,7 +598,7 @@ fn check_bytes<T: Encode + Decode>(g: &mut Gen, what: &str, case: usize, x: &T) 
         .unwrap();
     assert_eq!(y.encode().unwrap(), bytes, "{what} case {case}");
     mutants_are_canonical(g, what, case, &bytes, |b| {
-        T::decode(b).ok().map(|v| v.encode().unwrap())
+        T::decode(b).ok().map(|v| v.encode().unwrap().to_vec())
     });
 }
 
@@ -656,7 +656,9 @@ fn frames() {
         assert!(back == resp, "Response case {case}");
         assert_eq!(back.encode().unwrap(), bytes);
         mutants_are_canonical(&mut g, "Response", case, &bytes, |b| {
-            Response::decode(b, ctx).ok().map(|v| v.encode().unwrap())
+            Response::decode(b, ctx)
+                .ok()
+                .map(|v| v.encode().unwrap().to_vec())
         });
     }
     exercised(&g, "frames");
@@ -870,7 +872,7 @@ fn edge_lengths() {
         0,
         &RouteDescriptor::Unknown {
             kind: 0xff,
-            blob: vec![7; 65_535],
+            blob: Zeroizing::new(vec![7; 65_535]),
         },
     );
     check(
@@ -915,7 +917,7 @@ fn edge_lengths() {
             msg_id: [2; 16],
             idx,
             total,
-            chunk: vec![5; CONTENT_BODY_MAX - 20],
+            chunk: Zeroizing::new(vec![5; CONTENT_BODY_MAX - 20]),
         });
         check_bytes(
             &mut g,
@@ -977,7 +979,10 @@ fn edge_enum_variants() {
             &mut g,
             "RouteDescriptor kind",
             usize::from(kind),
-            &RouteDescriptor::Unknown { kind, blob: vec![] },
+            &RouteDescriptor::Unknown {
+                kind,
+                blob: Zeroizing::new(vec![]),
+            },
         );
     }
 }

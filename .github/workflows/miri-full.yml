@@ -1,8 +1,10 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Weekly Miri run over the complete test set (docs/06 §4 Miri row, M1 review F3). `ci-full` runs Miri in a
 # bounded scope that skips the test modules of `expect::MIRI_SKIP` (runtime); this job runs every test, those
-# modules included, with a 6-hour timeout. Not a required check. Hygiene as in ci.yml (checked by
-# `cargo xtask policy`): only schedule/workflow_dispatch triggers, actions pinned by commit SHA, read-only token.
+# modules included, with a 6-hour timeout. Not a required check; its job name is not a required-check name.
+# Checked by `cargo xtask policy` as every workflow (see the header of ci.yml): no `pull_request_target`/
+# `workflow_run` trigger, actions pinned by commit SHA, no `continue-on-error`. By convention, not checked: the
+# schedule/workflow_dispatch triggers only and a read-only token.
 name: miri-full
 
 on:

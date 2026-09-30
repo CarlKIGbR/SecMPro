@@ -22,7 +22,7 @@ use serde_json::{Map, Value, json};
 
 use secmp_crypto::{
     Ed25519SigningKey, Fingerprint, HybridSigningKey, Label, SecretBytes, VectorStream,
-    X25519Secret,
+    X25519Secret, Zeroizing,
 };
 use secmp_proto::keys::{Ed25519Pk, Ed25519Sig, HybridSig, MlKem768Ek, MlKem1024Ek, X25519Pk};
 use secmp_proto::sizes::{BLOB_PART_LEN, CELL_LEN, CONT_DATA_LEN, MLDSA65_PK_LEN};
@@ -96,7 +96,7 @@ fn name_of(table: &[(u8, &'static str)], op: u8) -> &'static str {
 }
 
 fn encoded<T: Encode>(x: &T) -> Vec<u8> {
-    x.encode().unwrap()
+    x.encode().unwrap().to_vec()
 }
 
 /// `len` and `type` of a record: the body length after the 2-byte `len`, and the byte after it.
@@ -527,7 +527,7 @@ pub struct Decoded {
 fn via<T: Decode + Encode>(bytes: &[u8], json: fn(&T) -> Value) -> Result<Decoded, Error> {
     T::decode(bytes).map(|x| Decoded {
         value: json(&x),
-        again: x.encode(),
+        again: x.encode().map(|e| e.to_vec()),
     })
 }
 
@@ -549,7 +549,7 @@ pub fn decode(
         };
         return Some(Response::decode(bytes, ctx).map(|x| Decoded {
             value: response_json(&x),
-            again: x.encode(),
+            again: x.encode().map(|e| e.to_vec()),
         }));
     }
     Some(match structure {
@@ -976,7 +976,7 @@ fn fragment(s: &mut In, idx: u16, total: u16, chunk: usize) -> Fragment {
         msg_id: s.arr(),
         idx,
         total,
-        chunk: s.take(chunk),
+        chunk: Zeroizing::new(s.take(chunk)),
     }
 }
 
@@ -998,7 +998,7 @@ fn control_row(i: u32, s: &mut In, code: ControlCode, arg: usize) -> Value {
 fn route_unknown(s: &mut In, kind: u8, n: usize) -> RouteDescriptor {
     RouteDescriptor::Unknown {
         kind,
-        blob: s.take(n),
+        blob: Zeroizing::new(s.take(n)),
     }
 }
 

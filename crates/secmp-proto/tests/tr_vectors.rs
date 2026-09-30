@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-#![cfg(feature = "kat")]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 #![forbid(unsafe_code)]
 //! The `tr` vector suite (`vectors/SCHEMA.md` §4.9, `vectors/SCHEMA-4.9-tr.md`) replayed against SecMP-TR: the 96

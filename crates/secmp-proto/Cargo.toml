@@ -24,6 +24,11 @@ secmp-crypto = { workspace = true, features = ["kat"] }
 serde_json.workspace = true
 rand.workspace = true
 
+# The `tr` vectors need the derandomised entry points (feature `kat`); run by the `kat` step.
+[[test]]
+name = "tr_vectors"
+required-features = ["kat"]
+
 [lints]
 workspace = true
 

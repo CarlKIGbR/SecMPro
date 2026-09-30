@@ -39,13 +39,28 @@ use crate::wire::cell::{Cell, Content, HeaderV1};
 
 /// The decrypted padded Content of a cell (1710 bytes), wiped on drop. Decode it with [`Plaintext::content`]; the
 /// Content decoder is outside the decrypt transaction (plan D6).
-pub struct Plaintext(SecretBytes<BODY_LEN>);
+pub struct Plaintext {
+    bytes: SecretBytes<BODY_LEN>,
+    /// SHA-256 of the message key that opened the body (feature `kat`: the property tests track every key).
+    #[cfg(feature = "kat")]
+    mk_digest: [u8; 32],
+}
 
 impl Plaintext {
+    fn new(bytes: SecretBytes<BODY_LEN>, mk: &SecretBytes<32>) -> Self {
+        #[cfg(not(feature = "kat"))]
+        let _ = mk;
+        Self {
+            bytes,
+            #[cfg(feature = "kat")]
+            mk_digest: mk_digest(mk),
+        }
+    }
+
     /// The padded Content bytes.
     #[must_use]
     pub fn as_bytes(&self) -> &[u8; BODY_LEN] {
-        self.0.expose_secret()
+        self.bytes.expose_secret()
     }
 
     /// The Content (spec §7.6).
@@ -53,8 +68,22 @@ impl Plaintext {
     /// # Errors
     /// [`Error::Rejected`] if the plaintext is not exactly one padded Content.
     pub fn content(&self) -> Result<Content> {
-        Content::decode(self.0.expose_secret())
+        Content::decode(self.bytes.expose_secret())
     }
+
+    /// SHA-256 of the message key that opened this cell (feature `kat`; the property tests check that no message
+    /// key is ever used twice).
+    #[cfg(feature = "kat")]
+    #[must_use]
+    pub fn message_key_digest_kat(&self) -> [u8; 32] {
+        self.mk_digest
+    }
+}
+
+/// SHA-256 of a message key (feature `kat`).
+#[cfg(feature = "kat")]
+fn mk_digest(mk: &SecretBytes<32>) -> [u8; 32] {
+    secmp_crypto::sha256(&[mk.expose_secret()])
 }
 
 /// A refused `encrypt` or `decrypt`: the state, unchanged, and the error — [`Error::Rejected`] for every
@@ -98,9 +127,19 @@ pub struct Sealed {
     state: RatchetState,
     state_bytes: Zeroizing<Vec<u8>>,
     cell: Cell,
+    /// SHA-256 of the message key of the cell (feature `kat`).
+    #[cfg(feature = "kat")]
+    mk_digest: [u8; 32],
 }
 
 impl Sealed {
+    /// SHA-256 of the message key that sealed the cell (feature `kat`; the property tests track every key).
+    #[cfg(feature = "kat")]
+    #[must_use]
+    pub fn message_key_digest_kat(&self) -> [u8; 32] {
+        self.mk_digest
+    }
+
     /// Persist-before-send: `persist` receives the serialised new state (`RatchetStateV1`) and must make it durable;
     /// only if it returns `Ok` are the new state and the cell released. On `Err` both are dropped and the error is
     /// returned: the durable state is the previous one, and no cell of the new one left the process.
@@ -348,10 +387,12 @@ impl RatchetState {
         content: &Content,
         entropy: &mut impl Entropy,
     ) -> core::result::Result<Sealed, Refused> {
-        let (ck_s, n_s, cell) = match self.seal(content, entropy) {
+        let (ck_s, n_s, cell, digest) = match self.seal(content, entropy) {
             Ok(x) => x,
             Err(error) => return Err(Refused::new(self, error)),
         };
+        #[cfg(not(feature = "kat"))]
+        let _ = digest;
         self.ck_s = Some(ck_s);
         self.n_s = n_s;
         // cannot fail: `skipped` is untouched and within its bound
@@ -360,17 +401,20 @@ impl RatchetState {
                 state: self,
                 state_bytes,
                 cell,
+                #[cfg(feature = "kat")]
+                mk_digest: digest,
             }),
             Err(error) => Err(Refused::new(self, error)),
         }
     }
 
-    /// §7.3 on the borrowed state: the new `ck_s`, the new `n_s` and the cell.
+    /// §7.3 on the borrowed state: the new `ck_s`, the new `n_s`, the cell, and (feature `kat`, otherwise zeros)
+    /// the digest of the message key.
     fn seal(
         &self,
         content: &Content,
         entropy: &mut impl Entropy,
-    ) -> Result<(SecretBytes<32>, u32, Cell)> {
+    ) -> Result<(SecretBytes<32>, u32, Cell, [u8; 32])> {
         let (Some(chain), Some(header_key), Some(chain_ct)) = (&self.ck_s, &self.hk_s, &self.ct_s)
         else {
             return Err(Error::Rejected);
@@ -394,11 +438,15 @@ impl RatchetState {
         let nonce = entropy.nonce()?;
         let hdr_nonce = *nonce.as_bytes();
         let hdr_ct = Aead::seal(header_key, nonce, &header_ad(&self.sb), &header)?;
+        #[cfg(feature = "kat")]
+        let digest = mk_digest(&mk);
+        #[cfg(not(feature = "kat"))]
+        let digest = [0_u8; 32];
         // body = MsgEncrypt(mk, "SecMP-TR/1 body" ‖ sb ‖ hdr_nonce ‖ hdr_ct, pad(content, BODY_LEN))
         let sealed_body = MsgEncrypt::seal(mk, &body_ad(&self.sb, &hdr_nonce, &hdr_ct), &body)?;
         // Cell = hdr_nonce ‖ hdr_ct ‖ body (§7.5)
         let cell = [hdr_nonce.as_slice(), &hdr_ct, &sealed_body].concat();
-        Ok((ck_next, n_next, Cell::from_bytes(&cell)?))
+        Ok((ck_next, n_next, Cell::from_bytes(&cell)?, digest))
     }
 
     /// Spec §7.4 `Decrypt(state, cell)`: `cell` is the received bytes (any length; not 4096 → rejected). New keys of
@@ -508,7 +556,8 @@ impl RatchetState {
             Path::Skipped => {
                 let at = usize::try_from(found_at).map_err(|_| Error::Rejected)?;
                 let entry = self.skipped.get(at).ok_or(Error::Rejected)?;
-                let plaintext = MsgEncrypt::open(&entry.mk, &body_ad, body)?;
+                let plaintext =
+                    Plaintext::new(MsgEncrypt::open(&entry.mk, &body_ad, body)?, &entry.mk);
                 Ok((
                     Update {
                         remove: Some(at),
@@ -516,7 +565,7 @@ impl RatchetState {
                         chain: None,
                         step: None,
                     },
-                    Plaintext(plaintext),
+                    plaintext,
                 ))
             }
             Path::Chain => self.open_chain(&HeaderV1::decode(&current_header)?, &body_ad, body),
@@ -547,7 +596,7 @@ impl RatchetState {
         // (ck_r, mk) = KDF_CK(ck_r); n_r += 1
         let (ck_next, mk) = kdf_ck(&ck)?;
         let n_r = header.n.checked_add(1).ok_or(Error::Rejected)?;
-        let plaintext = MsgEncrypt::open(&mk, body_ad, body)?;
+        let plaintext = Plaintext::new(MsgEncrypt::open(&mk, body_ad, body)?, &mk);
         Ok((
             Update {
                 remove: None,
@@ -555,7 +604,7 @@ impl RatchetState {
                 chain: Some((ck_next, n_r)),
                 step: None,
             },
-            Plaintext(plaintext),
+            plaintext,
         ))
     }
 
@@ -598,7 +647,7 @@ impl RatchetState {
         added.extend(new_chain);
         let (ck_next, mk) = kdf_ck(&ck)?;
         let n_r = header.n.checked_add(1).ok_or(Error::Rejected)?;
-        let plaintext = MsgEncrypt::open(&mk, body_ad, body)?;
+        let plaintext = Plaintext::new(MsgEncrypt::open(&mk, body_ad, body)?, &mk);
         // the body MAC verified: DHRatchet, sending half — dh_s = X25519.keygen(); kem_s = ML-KEM-768.keygen();
         // (ct_s, ss_pq_send) = ML-KEM-768.Encaps(kem_r); (rk, ck_s, nhk_s) = KDF_RK(rk, X25519(dh_s, dh_r) ‖ ss)
         let dh_s = DhPair::new(entropy.x25519()?)?;
@@ -628,7 +677,7 @@ impl RatchetState {
                     nhk_s: send_next_header,
                 }),
             },
-            Plaintext(plaintext),
+            plaintext,
         ))
     }
 

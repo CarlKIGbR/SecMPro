@@ -134,7 +134,6 @@ impl Entropy for FixedEntropy {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::Error;
     use secmp_crypto::ConstantTimeEq;
 
     #[test]
@@ -154,6 +153,7 @@ mod tests {
     #[cfg(feature = "kat")]
     #[test]
     fn fixed_entropy_reads_in_order() -> Result<()> {
+        use crate::error::Error;
         let bytes: Vec<u8> = (0..=255_u8).cycle().take(32 + 64 + 32 + 24).collect();
         let mut e = FixedEntropy::new(&bytes);
         assert_eq!(e.remaining(), 152);

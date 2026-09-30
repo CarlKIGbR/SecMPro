@@ -12,6 +12,10 @@
 //! 3. On agreement the reference file is frozen verbatim as `vectors/<suite>.json`. An existing frozen file is
 //!    never overwritten: if it differs, the command fails (frozen vectors change only with a spec revision).
 //!
+//! CI step 12a (`check_frozen_against_ref`) re-checks every frozen file against its reference file without running
+//! a generator: structurally, and byte for byte (M2 review F8; ADR-026 as amended: the frozen file is a verbatim
+//! copy).
+//!
 //! A mismatch is reported with suite, case id, field and both values; the Rust side is never adjusted to match.
 
 use std::path::Path;
@@ -283,8 +287,51 @@ pub(crate) fn run(root: &Path) -> Result<()> {
     Ok(())
 }
 
-/// ci-full step 12a: every frozen file equals its reference file structurally, both validate, and exactly the
-/// expected suites exist in both directories.
+/// ADR-026 as amended 2026-09-29 (M2 review F8): the frozen `vectors/<suite>.json` is a verbatim copy of
+/// `vectors/ref/<suite>.json`. `None` if the two are byte-identical, else where they first differ.
+pub(crate) fn byte_difference(frozen: &[u8], reference: &[u8]) -> Option<String> {
+    if frozen == reference {
+        return None;
+    }
+    let at = frozen
+        .iter()
+        .zip(reference)
+        .position(|(a, b)| a != b)
+        .unwrap_or_else(|| frozen.len().min(reference.len()));
+    Some(format!(
+        "not a verbatim copy of the reference file (ADR-026): first difference at byte {at} ({} vs {} bytes)",
+        frozen.len(),
+        reference.len()
+    ))
+}
+
+/// One frozen suite against its reference file (step 12a): the frozen file validates (SCHEMA §1), equals the
+/// reference structurally, and is byte-identical to it (M2 review F8). Returns the number of cases.
+pub(crate) fn check_frozen_suite(suite: &str, frozen: &[u8], reference: &[u8]) -> Result<usize> {
+    let parse_bytes = |what: &str, bytes: &[u8]| -> Result<Value> {
+        serde_json::from_slice(bytes).map_err(|e| Error(format!("{suite} ({what}): {e}")))
+    };
+    let (frozen_doc, reference_doc) = (
+        parse_bytes("frozen", frozen)?,
+        parse_bytes("ref", reference)?,
+    );
+    let bad: Vec<String> = hex_violations(&frozen_doc)
+        .into_iter()
+        .chain(differences(&frozen_doc, &reference_doc))
+        .chain(byte_difference(frozen, reference))
+        .collect();
+    if !bad.is_empty() {
+        bail!("{suite}: {}", bad.join("; "));
+    }
+    Ok(frozen_doc
+        .get("cases")
+        .and_then(Value::as_array)
+        .map_or(0, Vec::len))
+}
+
+/// ci-full step 12a: every frozen file equals its reference file structurally and byte for byte, both validate,
+/// and exactly the expected suites exist in both directories; the reference files pending freeze
+/// (`expect::VECTOR_REF_PENDING`) are checked for shape only.
 pub(crate) fn check_frozen_against_ref(root: &Path) -> Result<String> {
     if let Some(both) = expect::VECTOR_REF_PENDING
         .iter()
@@ -325,29 +372,20 @@ pub(crate) fn check_frozen_against_ref(root: &Path) -> Result<String> {
     }
     let mut cases = 0_usize;
     for suite in expect::VECTOR_SUITES {
-        let frozen = parse(&root.join("vectors").join(format!("{suite}.json")))?;
-        let reference = parse(
-            &root
-                .join("vectors")
+        let read = |path: std::path::PathBuf| {
+            std::fs::read(&path).map_err(|e| Error(format!("{}: {e}", path.display())))
+        };
+        let frozen = read(root.join("vectors").join(format!("{suite}.json")))?;
+        let reference = read(
+            root.join("vectors")
                 .join("ref")
                 .join(format!("{suite}.json")),
         )?;
-        let bad: Vec<String> = hex_violations(&frozen)
-            .into_iter()
-            .chain(differences(&frozen, &reference))
-            .collect();
-        if !bad.is_empty() {
-            bail!("{suite}: {}", bad.join("; "));
-        }
-        cases = cases.saturating_add(
-            frozen
-                .get("cases")
-                .and_then(Value::as_array)
-                .map_or(0, Vec::len),
-        );
+        cases = cases.saturating_add(check_frozen_suite(suite, &frozen, &reference)?);
     }
     Ok(format!(
-        "{} frozen suites ({cases} cases) structurally identical to vectors/ref (ADR-026); pending freeze: {}",
+        "{} frozen suites ({cases} cases) structurally and byte-identical to vectors/ref (ADR-026); pending freeze \
+         (shape only): {}",
         expect::VECTOR_SUITES.len(),
         if pending.is_empty() {
             "none".to_owned()
@@ -444,6 +482,64 @@ mod tests {
         assert!(pending_cases("encodings", &empty).is_err());
         let missing = doc(r#"{"suite":"encodings"}"#);
         assert!(pending_cases("encodings", &missing).is_err());
+    }
+
+    /// M2 review F8: step 12a refuses a frozen file that is structurally equal to its reference file but not a
+    /// verbatim copy of it (key order, whitespace, one byte); the structural comparison alone accepts each fixture,
+    /// so it is the byte check that refuses them.
+    #[test]
+    fn step_12a_refuses_a_frozen_file_that_is_not_a_verbatim_copy() -> Result<()> {
+        let reference =
+            br#"{"schema":2,"suite":"x","cases":[{"id":"x-0001","inputs":{"k":"00","n":1}}]}
+"#;
+        assert_eq!(check_frozen_suite("x", reference, reference)?, 1);
+        let reordered =
+            br#"{"suite":"x","schema":2,"cases":[{"id":"x-0001","inputs":{"n":1,"k":"00"}}]}
+"#;
+        let spaced =
+            br#"{"schema": 2,"suite":"x","cases":[{"id":"x-0001","inputs":{"k":"00","n":1}}]}
+"#;
+        let no_newline = reference.strip_suffix(b"\n").unwrap_or_default();
+        let crlf = [no_newline, b"\r\n".as_slice()].concat();
+        for (what, frozen) in [
+            ("key order", reordered.as_slice()),
+            ("whitespace", spaced.as_slice()),
+            ("final newline", no_newline),
+            ("one byte (LF -> CR LF)", crlf.as_slice()),
+        ] {
+            let (a, b): (Value, Value) = (
+                serde_json::from_slice(frozen).map_err(|e| Error(e.to_string()))?,
+                serde_json::from_slice(reference).map_err(|e| Error(e.to_string()))?,
+            );
+            assert!(differences(&a, &b).is_empty(), "{what}: structurally equal");
+            let refused = check_frozen_suite("x", frozen, reference);
+            assert!(
+                refused
+                    .as_ref()
+                    .is_err_and(|e| e.0.contains("not a verbatim copy")),
+                "{what}: {:?}",
+                refused.map_err(|e| e.0)
+            );
+        }
+        assert_eq!(
+            byte_difference(b"abcd", b"abXd").as_deref(),
+            Some(
+                "not a verbatim copy of the reference file (ADR-026): first difference at byte 2 (4 vs 4 bytes)"
+            )
+        );
+        assert!(
+            byte_difference(b"abc", b"abcd")
+                .is_some_and(|d| d.contains("at byte 3 (3 vs 4 bytes)"))
+        );
+        // a structural difference is still reported first, with the byte difference
+        let changed =
+            br#"{"schema":2,"suite":"x","cases":[{"id":"x-0001","inputs":{"k":"01","n":1}}]}
+"#;
+        assert!(
+            check_frozen_suite("x", changed, reference)
+                .is_err_and(|e| e.0.contains("[x-0001]/inputs/k") && e.0.contains("at byte 64"))
+        );
+        Ok(())
     }
 
     #[test]

@@ -816,9 +816,9 @@ pub(crate) fn linux_target(ctx: &Ctx) -> Result<Outcome> {
 
 // ---- steps 12–14 -----------------------------------------------------------------------------------------
 
-/// Step 12a: the frozen SecMP vectors equal the committed reference files of the independent `ref/` session
-/// (ADR-026; CI compares with the committed `vectors/ref/*.json` and never runs the Python generator, M1 brief
-/// Q-4). The Rust side is re-checked against the frozen files by the `kat` step (`tests/vectors.rs`).
+/// Step 12a: the frozen SecMP vectors equal the committed reference files of the independent `ref/` session,
+/// structurally and byte for byte (ADR-026 as amended; M2 review F8; CI compares with the committed
+/// `vectors/ref/*.json` and never runs the Python generator, M1 brief Q-4). The Rust side is re-checked against the frozen files by the `kat` step (`tests/vectors.rs`).
 pub(crate) fn ref_vectors(ctx: &Ctx) -> Result<Outcome> {
     Ok(Outcome::Pass(crate::vectors::check_frozen_against_ref(
         &ctx.root,

@@ -1333,6 +1333,29 @@ mod tests {
         }
     }
 
+    /// M2 review F5: every uploaded ct report carries the run attempt in its artefact name, so a re-run attempt of the
+    /// same run (same SHA, same run id) uploads under a new name instead of failing on the existing one.
+    #[test]
+    fn ct_report_artefact_names_are_unique_per_attempt() {
+        for (file, text) in [
+            ("ci.yml", include_str!("../../.github/workflows/ci.yml")),
+            (
+                "ci-dispatch.yml",
+                include_str!("../../.github/workflows/ci-dispatch.yml"),
+            ),
+        ] {
+            let names: Vec<&str> = text
+                .lines()
+                .map(str::trim)
+                .filter(|l| l.starts_with("name: ct-report-"))
+                .collect();
+            assert!(!names.is_empty(), "{file}");
+            for n in names {
+                assert!(n.ends_with("-${{ github.run_attempt }}"), "{file}: {n}");
+            }
+        }
+    }
+
     /// M2 review C3 (d): exit 2 or 3 of cargo-mutants without its survivor listing is refused, not read as "no
     /// survivors"; with the listing (or exit 0) the survivors are read.
     #[test]

@@ -278,6 +278,7 @@ Superseded in part 2026-09-29: the verdict rule (2), including the immediate-FAI
 **Alternatives.** A higher t threshold (rejected: it still grows with √N and hides nothing about magnitude); fewer samples (rejected: loses sensitivity to real leaks); keeping ADR-038 (2) (rejected: every PR run fails on shifts the instrument cannot resolve).
 **Consequences.** Real leaks stay caught: a secret-dependent branch shifts the class means by many quanta, as the positive control does (Δ of hundreds of quanta, |t| in the tens of thousands). Not caught: hardware data-dependent timing below one quantum (data memory-dependent prefetchers, DVFS) — outside software control; data-independent timing (DIT) on Apple Silicon is a separate M3 ADR.
 **Status.** Accepted 2026-09-29 (owner: Christopher Carl, on the reviewer's proposal).
+Note to (2), 2026-09-30 (reviewer, WEISUNG M2-5, Q-7): the effective quantum is also the quantum of ADR-038 (3)'s batching calibration, and a target whose samples show a coarser lattice than the clock's probe is batched again with its samples' quantum (`b8a7915`).
 
 ---
 

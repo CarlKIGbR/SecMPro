@@ -97,10 +97,11 @@
 //! maximum, the deciding crop and the A/A measurement; and the sensitivity control (`k`, sample count, floor, raw
 //! Δ, whether it reached the floor, its measurement).
 //!
-//! Run by `cargo xtask step ct` (ci-full) as `cargo bench -p secmp-crypto --features kat --bench ct`; the results
-//! are written to `target/ct-report.json` and the exit status is the verdict. `SECMP_CT_SCALE`, a divisor of every
-//! sample count (default 1), shortens quick local runs; the report then carries `secmp_ct_scale`, which the gate
-//! refuses (M2 review C3 (c)), and the gate unsets the variable for its own run.
+//! Run by `cargo xtask step ct` (ci-full) as `cargo bench -p secmp-testkit --features kat --bench ct` (ADR-042 moved
+//! the bench here from `secmp-crypto`, so that it can measure `secmp-proto` too); the results are written to
+//! `target/ct-report.json` and the exit status is the verdict. `SECMP_CT_SCALE`, a divisor of every sample count
+//! (default 1), shortens quick local runs; the report then carries `secmp_ct_scale`, which the gate refuses (M2
+//! review C3 (c)), and the gate unsets the variable for its own run.
 
 // ADR-038 (1): the cycle-counter read in `now_ticks` is the only `unsafe` code in the bench. `xtask policy`
 // sanctions this attribute at exactly this path (`expect::UNSAFE_EXEMPT_ROOT`).

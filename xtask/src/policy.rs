@@ -930,33 +930,35 @@ mod tests {
         );
     }
 
-    /// Rule (ADR-038): exactly `expect::UNSAFE_EXEMPT_ROOT` carries `#![allow(unsafe_code)]` besides the sys
-    /// library roots; the match is on the exact relative path, nothing near it.
+    /// Rule (ADR-038, path moved by ADR-042): exactly `expect::UNSAFE_EXEMPT_ROOT` carries `#![allow(unsafe_code)]`
+    /// besides the sys library roots; the match is on the exact relative path, nothing near it — the old path in
+    /// `secmp-crypto` included.
     #[test]
     fn adr038_exemption_is_path_exact() {
         let exempt = expect::UNSAFE_EXEMPT_ROOT;
-        assert_eq!(exempt, "crates/secmp-crypto/benches/ct.rs");
+        assert_eq!(exempt, "crates/secmp-testkit/benches/ct.rs");
         assert!(unsafe_exempt_root(exempt));
         for near in [
-            "crates/secmp-crypto/benches/ct2.rs",
-            "crates/secmp-crypto/benches/ct.rs.orig",
-            "crates/secmp-crypto/benches/ct.rs/",
-            "crates/secmp-crypto/benches/CT.rs",
-            "crates/secmp-crypto/benches/ct/main.rs",
-            "./crates/secmp-crypto/benches/ct.rs",
-            "/crates/secmp-crypto/benches/ct.rs",
-            "x/crates/secmp-crypto/benches/ct.rs",
-            "crates\\secmp-crypto\\benches\\ct.rs",
+            "crates/secmp-crypto/benches/ct.rs",
+            "crates/secmp-testkit/benches/ct2.rs",
+            "crates/secmp-testkit/benches/ct.rs.orig",
+            "crates/secmp-testkit/benches/ct.rs/",
+            "crates/secmp-testkit/benches/CT.rs",
+            "crates/secmp-testkit/benches/ct/main.rs",
+            "./crates/secmp-testkit/benches/ct.rs",
+            "/crates/secmp-testkit/benches/ct.rs",
+            "x/crates/secmp-testkit/benches/ct.rs",
+            "crates\\secmp-testkit\\benches\\ct.rs",
             "crates/secmp-proto/benches/ct.rs",
-            "crates/secmp-crypto/src/lib.rs",
-            "crates/secmp-crypto/tests/ct.rs",
+            "crates/secmp-testkit/src/lib.rs",
+            "crates/secmp-testkit/tests/ct.rs",
             "",
         ] {
             assert!(!unsafe_exempt_root(near), "{near}");
         }
         let allow = "// SPDX\n//! doc\n#![ALLOW(unsafe_code)]\n";
         let bench = |path: &str, text: &str| Root {
-            krate: "secmp-crypto".to_owned(),
+            krate: "secmp-testkit".to_owned(),
             target: "ct [bench]".to_owned(),
             path: path.to_owned(),
             lib: false,
@@ -967,7 +969,7 @@ mod tests {
         assert!(root_finding(&bench(exempt, FORBID_SRC)).is_some());
         assert!(root_finding(&bench(exempt, "// SPDX\n#![EXPECT(unsafe_code)]\n")).is_some());
         // any other bench root of the same crate still forbids
-        let other = "crates/secmp-crypto/benches/other.rs";
+        let other = "crates/secmp-testkit/benches/other.rs";
         assert!(root_finding(&bench(other, allow)).is_some());
         assert_eq!(root_finding(&bench(other, FORBID_SRC)), None);
         // sources: only the exact form at the file top of the exempt root
@@ -1194,8 +1196,9 @@ mod tests {
         Ok(())
     }
 
-    /// The ADR-038 exemption on a real directory tree and `cargo metadata`-shaped workspace: it covers the one
-    /// bench root and nothing else — not another bench of the same crate, not the same file name in another crate.
+    /// The ADR-038 exemption (at its ADR-042 path) on a real directory tree and `cargo metadata`-shaped workspace: it
+    /// covers the one bench root and nothing else — not another bench of the same crate, not the same file name in
+    /// another crate (the bench's old path in `secmp-crypto`).
     #[test]
     fn fixture_adr038_unsafe_exemption() -> Result<()> {
         let allow = "#![ALLOW(unsafe_code)]\nfn main() {}\n";
@@ -1203,44 +1206,44 @@ mod tests {
         let tree = Tree::new(
             "adr038",
             &[
+                ("crates/secmp-testkit/src/lib.rs", forbid),
+                ("crates/secmp-testkit/benches/ct.rs", allow),
+                ("crates/secmp-testkit/benches/other.rs", allow),
                 ("crates/secmp-crypto/src/lib.rs", forbid),
                 ("crates/secmp-crypto/benches/ct.rs", allow),
-                ("crates/secmp-crypto/benches/other.rs", allow),
-                ("crates/secmp-proto/src/lib.rs", forbid),
-                ("crates/secmp-proto/benches/ct.rs", allow),
             ],
         )?;
         let root = tree.0.to_string_lossy().replace('\\', "/");
         let metadata = |with_ct: bool| {
             let ct = if with_ct {
                 format!(
-                    r#"{{"name": "ct", "kind": ["bench"], "src_path": "{root}/crates/secmp-crypto/benches/ct.rs"}},"#
+                    r#"{{"name": "ct", "kind": ["bench"], "src_path": "{root}/crates/secmp-testkit/benches/ct.rs"}},"#
                 )
             } else {
                 String::new()
             };
             format!(
                 r#"{{"workspace_root": "{root}",
-                  "workspace_members": ["c#0", "p#0"],
+                  "workspace_members": ["t#0", "c#0"],
                   "packages": [
+                    {{"id": "t#0", "name": "secmp-testkit", "version": "0.0.0", "features": {{}},
+                      "manifest_path": "{root}/crates/secmp-testkit/Cargo.toml",
+                      "targets": [{{"name": "secmp_testkit", "kind": ["lib"], "src_path": "{root}/crates/secmp-testkit/src/lib.rs"}},
+                                  {ct}
+                                  {{"name": "other", "kind": ["bench"], "src_path": "{root}/crates/secmp-testkit/benches/other.rs"}}]}},
                     {{"id": "c#0", "name": "secmp-crypto", "version": "0.0.0", "features": {{}},
                       "manifest_path": "{root}/crates/secmp-crypto/Cargo.toml",
                       "targets": [{{"name": "secmp_crypto", "kind": ["lib"], "src_path": "{root}/crates/secmp-crypto/src/lib.rs"}},
-                                  {ct}
-                                  {{"name": "other", "kind": ["bench"], "src_path": "{root}/crates/secmp-crypto/benches/other.rs"}}]}},
-                    {{"id": "p#0", "name": "secmp-proto", "version": "0.0.0", "features": {{}},
-                      "manifest_path": "{root}/crates/secmp-proto/Cargo.toml",
-                      "targets": [{{"name": "secmp_proto", "kind": ["lib"], "src_path": "{root}/crates/secmp-proto/src/lib.rs"}},
-                                  {{"name": "ct", "kind": ["bench"], "src_path": "{root}/crates/secmp-proto/benches/ct.rs"}}]}}],
-                  "resolve": {{"nodes": [{{"id": "c#0", "deps": []}}, {{"id": "p#0", "deps": []}}]}}}}"#
+                                  {{"name": "ct", "kind": ["bench"], "src_path": "{root}/crates/secmp-crypto/benches/ct.rs"}}]}}],
+                  "resolve": {{"nodes": [{{"id": "t#0", "deps": []}}, {{"id": "c#0", "deps": []}}]}}}}"#
             )
         };
         let files = tree.files(&[
+            "crates/secmp-testkit/src/lib.rs",
+            "crates/secmp-testkit/benches/ct.rs",
+            "crates/secmp-testkit/benches/other.rs",
             "crates/secmp-crypto/src/lib.rs",
             "crates/secmp-crypto/benches/ct.rs",
-            "crates/secmp-crypto/benches/other.rs",
-            "crates/secmp-proto/src/lib.rs",
-            "crates/secmp-proto/benches/ct.rs",
         ]);
         let about = |findings: &[String], path: &str| {
             findings
@@ -1260,12 +1263,12 @@ mod tests {
         );
         // a root finding (header) and a source finding (relaxation) each
         assert_eq!(
-            about(&findings, "crates/secmp-crypto/benches/other.rs"),
+            about(&findings, "crates/secmp-testkit/benches/other.rs"),
             2,
             "{findings:?}"
         );
         assert_eq!(
-            about(&findings, "crates/secmp-proto/benches/ct.rs"),
+            about(&findings, "crates/secmp-crypto/benches/ct.rs"),
             2,
             "{findings:?}"
         );

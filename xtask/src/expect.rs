@@ -14,8 +14,9 @@ pub(crate) const UNSAFE_ALLOWED: &[&str] = &["secmp-sys-mem", "secmp-sys-desktop
 
 /// The one target root outside the two sys crates that may relax `unsafe_code` (ADR-038 (1)): the constant-time
 /// bench reads the CPU cycle counter (`rdtscp` / `cntvct_el0`). Matched path-exactly (relative to the workspace
-/// root) by the `policy` step; its header must carry `#![allow(unsafe_code)]` at the file top, nothing else.
-pub(crate) const UNSAFE_EXEMPT_ROOT: &str = "crates/secmp-crypto/benches/ct.rs";
+/// root) by the `policy` step; its header must carry `#![allow(unsafe_code)]` at the file top, nothing else. Moved
+/// with the bench from `crates/secmp-crypto/benches/ct.rs` by ADR-042 (M3).
+pub(crate) const UNSAFE_EXEMPT_ROOT: &str = "crates/secmp-testkit/benches/ct.rs";
 
 /// Crates that carry `#![deny(unsafe_code)]` instead of `forbid`, because `slint::slint!` expansions contain
 /// `#[allow(unsafe_code)]` (E0453 under `forbid`; docs/06 §2 (b), ADR-033). Their own `.rs` files may contain
@@ -45,8 +46,9 @@ pub(crate) const AUDIT_IGNORES: &[(&str, &str)] = &[(
      and is never compiled for any target; cargo deny, which evaluates the per-target graph, does not report it",
 )];
 
-/// Packages exposing the `kat` feature (docs/06 §5 step 5): external KATs, differential tests, vector checks.
-pub(crate) const KAT_PACKAGES: &[&str] = &["secmp-crypto", "secmp-testkit"];
+/// Packages exposing the `kat` feature (docs/06 §5 step 5): external KATs, differential tests, vector checks; M3:
+/// `secmp-proto` (derandomised TR entry points for the vectors and the ct bench, ADR-042).
+pub(crate) const KAT_PACKAGES: &[&str] = &["secmp-crypto", "secmp-proto", "secmp-testkit"];
 
 /// ADR-041 (1), replacing the two tiers of ADR-038 (2): the |t| threshold of the `ct` gate — a target's shift counts
 /// as reproduced if |t| exceeds it in both measurements at the same crop with the same sign; the positive control

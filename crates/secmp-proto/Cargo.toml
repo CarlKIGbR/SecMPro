@@ -9,6 +9,11 @@ license.workspace = true
 repository.workspace = true
 publish.workspace = true
 
+# Derandomised entry points for the vectors and the constant-time bench (docs/06 §5 step 5; plan M3 D12, ADR-042);
+# never enabled in a shipped build. It enables `secmp-crypto`'s `kat`.
+[features]
+kat = ["secmp-crypto/kat"]
+
 [dependencies]
 secmp-crypto.workspace = true
 

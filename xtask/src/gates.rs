@@ -188,13 +188,13 @@ pub(crate) fn kat(ctx: &Ctx) -> Result<Outcome> {
     )))
 }
 
-/// dudect-style constant-time tests (docs/06 §2, §4; ADR-038, ADR-041 with Amendment 1): `cargo bench --bench ct`
-/// in the release profile, timed with the CPU counter; per target two measurements, FAIL only for a shift
-/// reproduced at the same crop and sign (|t| > 4.5) that reaches the effect floor (one effective quantum, at least
-/// 10 ns), a reproduced smaller shift reported as `SUB_FLOOR_SHIFT`; the positive control must be detected; a
-/// failing inline A/A control or a sensitivity control (`min_leak_control`) below the floor makes the run
-/// `CONTROL_FAIL`; a target the runner's timer cannot resolve is NOT MEASURABLE. All but PASS and
-/// `SUB_FLOOR_SHIFT` fail the gate with their wording.
+/// dudect-style constant-time tests (docs/06 §2, §4; ADR-038, ADR-041 with Amendment 1): `cargo bench --package
+/// secmp-testkit --features kat --bench ct` (`crates/secmp-testkit/benches/ct.rs`, ADR-042) in the release profile,
+/// timed with the CPU counter; per target two measurements, FAIL only for a shift reproduced at the same crop and
+/// sign (|t| > 4.5) that reaches the effect floor (one effective quantum, at least 10 ns), a reproduced smaller shift
+/// reported as `SUB_FLOOR_SHIFT`; the positive control must be detected; a failing inline A/A control or a
+/// sensitivity control (`min_leak_control`) below the floor makes the run `CONTROL_FAIL`; a target the runner's timer
+/// cannot resolve is NOT MEASURABLE. All but PASS and `SUB_FLOOR_SHIFT` fail the gate with their wording.
 pub(crate) fn ct(ctx: &Ctx) -> Result<Outcome> {
     let report = ctx.root.join("target").join("ct-report.json");
     if report.exists() {
@@ -206,7 +206,7 @@ pub(crate) fn ct(ctx: &Ctx) -> Result<Outcome> {
             "bench",
             "--locked",
             "--package",
-            "secmp-crypto",
+            "secmp-testkit",
             "--features",
             "kat",
             "--bench",

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! The `ct` report (`target/ct-report.json`, written by `crates/secmp-crypto/benches/ct.rs`) as the gate reads it
+//! The `ct` report (`target/ct-report.json`, written by `crates/secmp-testkit/benches/ct.rs`) as the gate reads it
 //! (ADR-038, ADR-041 with Amendment 1).
 //!
 //! The gate does not take the bench's word (M2 review C3). Besides the parameters the report must echo, it

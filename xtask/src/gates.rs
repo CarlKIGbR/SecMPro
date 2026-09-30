@@ -270,8 +270,14 @@ fn ct_check_parameters(v: &Value) -> Result<()> {
 /// The sensitivity control `min_leak_control` (ADR-041 Amendment 1 (2)): its line and whether it reached the
 /// effect floor. The gate does not take the bench's word for it: the report's `reached` must be true **and** the
 /// raw Δ must be at least the floor, which must be at least `CT_EFFECT_FLOOR_NS` and one effective quantum of the
-/// control's measurement. A missing or incomplete control never reaches the floor.
+/// control's measurement. A missing or incomplete control never reaches the floor. The comparisons are in ticks
+/// and allow exactly the report's rounding (`floor_ticks` and `raw_delta_ticks` to 4 decimals, `q_eff_ticks` to
+/// 3): the floor of linux-ct run 36678826377 equals one `q_eff` (24.4928 ticks printed next to 24.493), which a
+/// comparison of the rounded values in ns refused.
 fn ct_sensitivity(report: &Value) -> (String, bool) {
+    // half a unit in the last printed place
+    const HALF_4: f64 = 5e-5;
+    const HALF_3: f64 = 5e-4;
     let Some(control) = report.get("sensitivity_control").filter(|c| c.is_object()) else {
         return (
             "min_leak_control: missing from the report (sensitivity control, must reach the floor)"
@@ -283,21 +289,24 @@ fn ct_sensitivity(report: &Value) -> (String, bool) {
     let tick_ns = report
         .get("clock")
         .and_then(|clock| clock.get("tick_ns"))
-        .and_then(Value::as_f64);
-    let q_eff_ns = control
+        .and_then(Value::as_f64)
+        .filter(|t| t.is_finite() && *t > 0.0);
+    let q_eff_ticks = control
         .get("measurement")
         .and_then(|m| m.get("q_eff_ticks"))
-        .and_then(Value::as_f64)
-        .zip(tick_ns)
-        .map(|(q, tick)| q * tick);
-    // 1 ppm of slack for the report's rounding of the floor
-    let slack = 1.0 - 1e-6;
+        .and_then(Value::as_f64);
     let reached = control.get("reached").and_then(Value::as_bool) == Some(true)
-        && match (num("raw_delta_ns"), num("floor_ns"), q_eff_ns) {
-            (Some(delta), Some(floor), Some(q)) => {
-                delta >= floor
-                    && floor >= expect::CT_EFFECT_FLOOR_NS * slack
-                    && floor >= expect::CT_EFFECT_FLOOR_QUANTA * q * slack
+        && match (
+            num("raw_delta_ticks"),
+            num("floor_ticks"),
+            q_eff_ticks,
+            tick_ns,
+        ) {
+            (Some(delta), Some(floor), Some(q), Some(tick)) => {
+                delta + 2.0 * HALF_4 >= floor
+                    && (floor + HALF_4) * tick >= expect::CT_EFFECT_FLOOR_NS
+                    && floor + HALF_4 + HALF_3 * expect::CT_EFFECT_FLOOR_QUANTA
+                        >= expect::CT_EFFECT_FLOOR_QUANTA * q
             }
             _ => false,
         };
@@ -1301,12 +1310,14 @@ mod tests {
         );
         for (from, to) in [
             (r#""reached":true"#, r#""reached":false"#),
-            (r#""raw_delta_ns":450.0"#, r#""raw_delta_ns":9.5"#),
-            (r#""floor_ns":10.0"#, r#""floor_ns":5.0"#),
+            // raw Δ 9.5 ns, a floor of 5 ns, a floor below one q_eff of 84 ticks, no tick length
+            (r#""raw_delta_ticks":900.0"#, r#""raw_delta_ticks":19.0"#),
+            (r#""floor_ticks":20.0"#, r#""floor_ticks":10.0"#),
             (
                 r#""q_eff_ticks":1.0,"q_eff_source":"clock","distinct":900,"median_ticks":20000"#,
                 r#""q_eff_ticks":84.0,"q_eff_source":"samples","distinct":900,"median_ticks":20000"#,
             ),
+            (r#""tick_ns":0.5"#, r#""tick_ns":null"#),
             (r#""measurement":{"#, r#""measurement":null,"unused":{"#),
             (CT_SENSITIVITY, "null"),
         ] {
@@ -1321,6 +1332,30 @@ mod tests {
             );
         }
 
+        // linux-ct run 36678826377 (31d13de): a floor of exactly one q_eff, printed as 24.4928 ticks next to a
+        // q_eff of 24.493, reaches the floor
+        let rounded = ok
+            .replacen(r#""tick_ns":0.5"#, r#""tick_ns":0.4089279764385591"#, 1)
+            .replacen(
+                r#""floor_ticks":20.0,"floor_ns":10.0,"raw_delta_ticks":900.0,"raw_delta_ns":450.0"#,
+                r#""floor_ticks":24.4928,"floor_ns":10.0158,"raw_delta_ticks":1100.5041,"raw_delta_ns":450.0269"#,
+                1,
+            )
+            .replacen(
+                r#""q_eff_ticks":1.0,"q_eff_source":"clock","distinct":900,"median_ticks":20000"#,
+                r#""q_eff_ticks":24.493,"q_eff_source":"samples","distinct":900,"median_ticks":20000"#,
+                1,
+            );
+        assert_ne!(rounded, ok);
+        let t = ct_table(&rounded)?;
+        assert!(t.failed.is_empty(), "{t:?}");
+        assert!(
+            t.lines
+                .iter()
+                .any(|l| l
+                    .starts_with("min_leak_control: REACHED — raw Δ 450.03 ns, floor 10.02 ns")),
+            "{t:?}"
+        );
         Ok(())
     }
 

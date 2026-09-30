@@ -1,0 +1,157 @@
+Repository security settings, WEISUNG M2-1 (owner decision 2026-09-29: the repository stays public; enable every
+free security feature). Executed by the implementer with `gh` 's keyring login (account CarlKIGbR, token scopes
+gist, read:org, repo, workflow); no token was written anywhere. Read-only first, then enable, then re-read.
+Timestamps UTC. No other setting and no ruleset was changed.
+
+== state before ==
+[2026-09-29T10:54:50Z] $ gh api repos/CarlKIGbR/SecMPro --jq {visibility: .visibility, security_and_analysis: .security_and_analysis}
+  exit status: 0
+  response: {
+    "security_and_analysis": {
+      "dependabot_security_updates": {
+        "status": "enabled"
+      },
+      "secret_scanning": {
+        "status": "disabled"
+      },
+      "secret_scanning_non_provider_patterns": {
+        "status": "disabled"
+      },
+      "secret_scanning_push_protection": {
+        "status": "disabled"
+      },
+      "secret_scanning_validity_checks": {
+        "status": "disabled"
+      }
+    },
+    "visibility": "public"
+  }
+
+[2026-09-29T10:54:50Z] $ gh api repos/CarlKIGbR/SecMPro/code-scanning/default-setup
+  exit status: 0
+  response: {
+    "languages": [
+      "actions",
+      "rust"
+    ],
+    "query_suite": "default",
+    "runner_label": null,
+    "runner_type": "standard",
+    "schedule": null,
+    "state": "not-configured",
+    "threat_model": "remote",
+    "updated_at": null
+  }
+
+[2026-09-29T10:54:51Z] $ gh api repos/CarlKIGbR/SecMPro/private-vulnerability-reporting
+  exit status: 0
+  response: {
+    "enabled": true
+  }
+
+[2026-09-29T10:54:51Z] $ gh api repos/CarlKIGbR/SecMPro/vulnerability-alerts
+  exit status: 0
+  (no body: HTTP 204 / success)
+
+== (a) secret scanning and push protection ==
+[2026-09-29T10:54:52Z] $ gh api --method PATCH repos/CarlKIGbR/SecMPro --input - --jq {visibility: .visibility, security_and_analysis: .security_and_analysis}
+  request body: {
+    "security_and_analysis": {
+      "secret_scanning": {
+        "status": "enabled"
+      },
+      "secret_scanning_push_protection": {
+        "status": "enabled"
+      }
+    }
+  }
+  exit status: 0
+  response: {
+    "security_and_analysis": {
+      "dependabot_security_updates": {
+        "status": "enabled"
+      },
+      "secret_scanning": {
+        "status": "enabled"
+      },
+      "secret_scanning_non_provider_patterns": {
+        "status": "disabled"
+      },
+      "secret_scanning_push_protection": {
+        "status": "enabled"
+      },
+      "secret_scanning_validity_checks": {
+        "status": "disabled"
+      }
+    },
+    "visibility": "public"
+  }
+
+== (b) code scanning default setup (CodeQL, Rust) ==
+[2026-09-29T10:54:52Z] $ gh api --method PATCH repos/CarlKIGbR/SecMPro/code-scanning/default-setup --input -
+  request body: {
+    "state": "configured",
+    "query_suite": "default",
+    "languages": [
+      "rust"
+    ]
+  }
+  exit status: 1
+  response: {
+    "documentation_url": "https://docs.github.com/rest/code-scanning/code-scanning#update-a-code-scanning-default-setup-configuration",
+    "message": "Invalid request.\n\nInvalid property /languages/0: `rust` is not a possible value. Must be one of the following: actions, c-cpp, csharp, go, java-kotlin, javascript-typescript, python, ruby, swift.",
+    "status": "422"
+  }
+  stderr: gh: Invalid request.
+  
+  Invalid property /languages/0: `rust` is not a possible value. Must be one of the following: actions, c-cpp, csharp, go, java-kotlin, javascript-typescript, python, ruby, swift. (HTTP 422)
+
+== state after (includes (c): private vulnerability reporting and vulnerability alerts) ==
+[2026-09-29T10:54:53Z] $ gh api repos/CarlKIGbR/SecMPro --jq {visibility: .visibility, security_and_analysis: .security_and_analysis}
+  exit status: 0
+  response: {
+    "security_and_analysis": {
+      "dependabot_security_updates": {
+        "status": "enabled"
+      },
+      "secret_scanning": {
+        "status": "enabled"
+      },
+      "secret_scanning_non_provider_patterns": {
+        "status": "disabled"
+      },
+      "secret_scanning_push_protection": {
+        "status": "enabled"
+      },
+      "secret_scanning_validity_checks": {
+        "status": "disabled"
+      }
+    },
+    "visibility": "public"
+  }
+
+[2026-09-29T10:54:53Z] $ gh api repos/CarlKIGbR/SecMPro/code-scanning/default-setup
+  exit status: 0
+  response: {
+    "languages": [
+      "actions",
+      "rust"
+    ],
+    "query_suite": "default",
+    "runner_label": null,
+    "runner_type": "standard",
+    "schedule": null,
+    "state": "not-configured",
+    "threat_model": "remote",
+    "updated_at": null
+  }
+
+[2026-09-29T10:54:54Z] $ gh api repos/CarlKIGbR/SecMPro/private-vulnerability-reporting
+  exit status: 0
+  response: {
+    "enabled": true
+  }
+
+[2026-09-29T10:54:54Z] $ gh api repos/CarlKIGbR/SecMPro/vulnerability-alerts
+  exit status: 0
+  (no body: HTTP 204 / success)

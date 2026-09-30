@@ -64,6 +64,51 @@ impl X25519Secret {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct X25519Public([u8; X25519_LEN]);
 
+/// The low-order u-coordinates after RFC 7748 decoding with bit 255 cleared: 0, 1, p − 1, the two points of order
+/// 8, and the non-canonical encodings p (≡ 0) and p + 1 (≡ 1) — every other reduced value is not of low order and
+/// every other non-canonical value (u ≥ p + 2) reduces to 2 … 18, which are not low order either. With bit 255 set
+/// or clear these are the 14 encodings of spec §4.1 decoder obligation (a) (`vectors/SCHEMA-4.8-encodings.md`
+/// D-9). Little-endian.
+const LOW_ORDER_MASKED: [[u8; X25519_LEN]; 7] = [
+    // 0
+    [0; 32],
+    // 1
+    [
+        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0,
+    ],
+    // p − 1
+    [
+        0xec, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ],
+    // order 8
+    [
+        0xe0, 0xeb, 0x7a, 0x7c, 0x3b, 0x41, 0xb8, 0xae, 0x16, 0x56, 0xe3, 0xfa, 0xf1, 0x9f, 0xc4,
+        0x6a, 0xda, 0x09, 0x8d, 0xeb, 0x9c, 0x32, 0xb1, 0xfd, 0x86, 0x62, 0x05, 0x16, 0x5f, 0x49,
+        0xb8, 0x00,
+    ],
+    // order 8
+    [
+        0x5f, 0x9c, 0x95, 0xbc, 0xa3, 0x50, 0x8c, 0x24, 0xb1, 0xd0, 0xb1, 0x55, 0x9c, 0x83, 0xef,
+        0x5b, 0x04, 0x44, 0x5c, 0xc4, 0x58, 0x1c, 0x8e, 0x86, 0xd8, 0x22, 0x4e, 0xdd, 0xd0, 0x9f,
+        0x11, 0x57,
+    ],
+    // p (≡ 0)
+    [
+        0xed, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ],
+    // p + 1 (≡ 1)
+    [
+        0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ],
+];
+
 impl X25519Public {
     /// The public key with these 32 bytes.
     ///
@@ -71,6 +116,26 @@ impl X25519Public {
     /// [`Error::Rejected`] unless `bytes` is 32 bytes long.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
         Ok(Self(bytes.try_into().map_err(|_| Error::Rejected)?))
+    }
+
+    /// The public key with these 32 bytes, as a decoder receives it (spec §4.1 decoder obligation (a)): a
+    /// low-order value — after RFC 7748 decoding (bit 255 masked, u reduced mod p) u ∈ {0, 1, p − 1, the two
+    /// u-coordinates of order 8} — is refused; every other value, non-canonical u and bit 255 set included, is
+    /// kept as received. A key refused here is exactly one whose X25519 output is all zero for every scalar, so
+    /// the check at use ([`X25519Secret::diffie_hellman`]) stays in force and agrees with it.
+    ///
+    /// # Errors
+    /// [`Error::Rejected`] unless `bytes` is 32 bytes long and not of low order.
+    pub fn from_bytes_checked(bytes: &[u8]) -> Result<Self> {
+        let key = Self::from_bytes(bytes)?;
+        let mut masked = key.0;
+        if let Some(top) = masked.last_mut() {
+            *top &= 0x7f;
+        }
+        if LOW_ORDER_MASKED.contains(&masked) {
+            return Err(Error::Rejected);
+        }
+        Ok(key)
     }
 
     /// The 32 bytes.
@@ -152,6 +217,51 @@ mod tests {
             let p = X25519Public::from_bytes(&unhex_n::<32>(u))?;
             assert_eq!(k.diffie_hellman(&p).err(), Some(Error::Rejected), "{u}");
         }
+        Ok(())
+    }
+
+    /// Spec §4.1 decoder obligation (a): the 14 low-order encodings (the seven masked values of
+    /// `LOW_ORDER_MASKED`, bit 255 clear and set) are refused at decode, and each of them is exactly an input
+    /// whose X25519 output is all zero; everything else is kept as received.
+    #[test]
+    fn decode_refuses_exactly_the_low_order_encodings() -> Result<()> {
+        let k = X25519Secret::generate()?;
+        let mut refused = 0_usize;
+        for masked in LOW_ORDER_MASKED {
+            for top in [0x00_u8, 0x80] {
+                let mut u = masked;
+                u[31] |= top;
+                assert_eq!(
+                    X25519Public::from_bytes_checked(&u).err(),
+                    Some(Error::Rejected)
+                );
+                let p = X25519Public::from_bytes(&u)?;
+                assert_eq!(k.diffie_hellman(&p).err(), Some(Error::Rejected));
+                refused = refused.saturating_add(1);
+            }
+        }
+        assert_eq!(refused, 14);
+        // accepted and kept as received: a real key, the same key with bit 255 set, u = 2, u = p + 2 (≡ 2),
+        // u = 2^255 − 1 (≡ 18), u = 9
+        let real = *k.public_key().as_bytes();
+        let mut real_top = real;
+        real_top[31] |= 0x80;
+        for u in [
+            real,
+            real_top,
+            unhex_n::<32>("0200000000000000000000000000000000000000000000000000000000000000"),
+            unhex_n::<32>("efffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f"),
+            unhex_n::<32>("ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f"),
+            unhex_n::<32>("0900000000000000000000000000000000000000000000000000000000000000"),
+        ] {
+            let p = X25519Public::from_bytes_checked(&u)?;
+            assert_eq!(p.as_bytes(), &u);
+            assert!(k.diffie_hellman(&p).is_ok());
+        }
+        assert_eq!(
+            X25519Public::from_bytes_checked(&real[..31]).err(),
+            Some(Error::Rejected)
+        );
         Ok(())
     }
 

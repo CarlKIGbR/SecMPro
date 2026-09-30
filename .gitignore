@@ -11,3 +11,7 @@
 .claude/settings.local.json
 # Rust-generated SecMP vectors (compared with vectors/ref/ by `cargo xtask vectors`; the frozen files are vectors/*.json)
 /vectors/rust/
+# Python reference implementation (ref/): virtualenv, caches
+ref/.venv/
+ref/.pytest_cache/
+__pycache__/

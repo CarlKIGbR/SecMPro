@@ -1,0 +1,20 @@
+# cargo xtask ci-fast step list on the tree of f0df22f (macOS arm64, 2026-09-29), run as two foreground calls to
+# stay inside a 10-minute tool limit: `cargo xtask step fmt clippy policy deny vet audit cooldown nextest doctest
+# hello` and `cargo xtask step kat` (the FAST list of xtask/src/ci.rs, in order)
+
+=== step summary (host aarch64-apple-darwin, strict: false) ===
+   1 fmt             PASS          0s  rustfmt: no changes
+   2 clippy          PASS          1s  clippy --all-features -D warnings on aarch64-apple-darwin (12 crates)
+   2 policy          PASS          0s  unsafe-attrs: 22 target roots forbid, 2 sys library roots allow, 1 ADR-038 bench root allows (crates/secmp-crypto/benches/ct.rs), 2 secmp-ui roots deny, 2 secmp-ui files without `unsafe`; lints-table: 12 manifests; lint-allows: 35 relaxing attributes (all sanctioned); build-scripts: 12 crates, none; spdx: 147 files; secmp-crypto/secmp-proto normal closure (x86_64-unknown-linux-gnu, x86_64-pc-windows-msvc, aarch64-apple-darwin): 52 external crates, 0 exempted; tracked exemptions elsewhere: 25; workflows: 2 files, triggers/SHA pins/continue-on-error ok
+   3 deny            PASS          1s  advisories, bans, licenses, sources: ok
+   3 vet             PASS          0s  secmp-crypto/secmp-proto normal closure (x86_64-unknown-linux-gnu, x86_64-pc-windows-msvc, aarch64-apple-darwin): 52 external crates, 0 exempted; tracked exemptions elsewhere: 25
+   3 audit           PASS          1s  RustSec: no advisories (warnings denied); ignored with an ADR: RUSTSEC-2026-0173
+   3 cooldown        PASS         23s  119 registry packages (Cargo.lock, fuzz/Cargo.lock), all ≥ 7 days old; youngest: rand 0.10.3, 9 days
+   4 nextest         PASS         18s  cargo nextest run --workspace
+   4 doctest         PASS          0s  cargo test --doc
+   4 hello           PASS          0s  secmp-relay 0.0.0 (M0 skeleton: no functionality) | secmp-cli 0.0.0 (M0 skeleton: no functionality) | secmp-ui 0.0.0 (M0 skeleton: no functionality)
+step: PASS
+
+=== step summary (host aarch64-apple-darwin, strict: false) ===
+   5 kat             PASS        303s  KAT/differential packages: secmp-crypto, secmp-testkit (expected set matches); ML-KEM KATs and frozen vectors also with libcrux's portable backend
+step: PASS

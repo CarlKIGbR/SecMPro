@@ -1,6 +1,8 @@
 # SecMP/1 — Protocol Specification (normative)
 
-Status: **v1 design freeze candidate, revision 2.2** (2026-09-28; rev 2.1 of 2026-09-25 after adversarial review and verification pass, see `docs/reviews/plan-review-2026-09-25.md`; rev 2.2 answers the reference implementation's spec questions, see `docs/reviews/ref-spec-questions-M1.md` and ADR-035). Changes to this document require an ADR (see `08-decisions.md`) and a reviewer sign-off.
+Status: **v1 design freeze candidate, revision 2.3** (2026-09-29; rev 2.1 of 2026-09-25 after adversarial review and verification pass, see `docs/reviews/plan-review-2026-09-25.md`; rev 2.2 of 2026-09-28 answers the reference implementation's spec questions, see `docs/reviews/ref-spec-questions-M1.md` and ADR-035; rev 2.3 clarifies Appendix D for the M2 encodings — decoder obligations, the `ver` rule, `RelayRef` validity, Handshake `caps`, list minimums, Fragment rules and the §7.6 body layouts — see `docs/reviews/ref-spec-questions-M2.md` and ADR-039). Changes to this document require an ADR (see `08-decisions.md`) and a reviewer sign-off.
+
+Changelog: **rev 2.3** (2026-09-29, ADR-039) — §4.1 `ver` rule reworded and decoder obligations added; §5.3 `onion` validity (rend-spec-v3); §7.6 `caps`, list counts, Fragment rules, KeyChange never unfragmented, `payload`/`arg` opaque at the encoding layer; D.3 `RelayRef.direct` host and port; D.5 `caps (0)`, `count (1..=255)`, Fragment rules and the Batch, RouteUpdate, reassembled-Fragment and Dummy layouts. No byte layout changed. **rev 2.2** (2026-09-28, ADR-035) — label renames, `MFETCH`, answers SQ-01 … SQ-11. **rev 2.1** (2026-09-25) — after the adversarial plan review.
 Audience: the implementer (Claude Code / Opus), the reviewer, and future auditors.
 
 The words MUST / MUST NOT / SHOULD / MAY are used as in RFC 2119.
@@ -145,8 +147,9 @@ HybridVerify(pk, label, M, sig): both components MUST verify.
 
 - Fixed-layout, big-endian, hand-encoded. No serde-derived wire formats, no maps, no floats, no varints.
 - Variable-length fields carry a `u16` (or `u8` where stated) length prefix. **Consistency rule:** every length must be consistent with the enclosing structure, and the enclosing structure (cell, frame, blob or record) must be fully consumed; padding (where the layout says "pad") is ISO/IEC 7816-4 (`0x80` then zeros to the fixed length) and MUST be verified on decode.
-- Every top-level structure starts with `ver: u8 = 0x01`. Any other value is a hard error.
+- `ver: u8 = 0x01` (`PROTO_VER`). Every structure that App. D gives a `ver` field checks it on decode (reject on any other value); a structure without a `ver` field in App. D takes its version from the enclosing structure or the transport unit.
 - Optional fields: `present: u8 ∈ {0x00, 0x01}` then the field iff present.
+- **Decoder obligations** (rev 2.3, ADR-039). Besides widths, lengths, padding and the value rules of Appendix D, a decoder MUST check every public key and signature field on the encoded bytes, without a message: (a) every X25519 field (`relay_dh_pk`, `e_c`, `pk_e1`, `e_r`, `ik_dh`, `spk_dh`, `opk_dh`, `ek_I`, `dh_pk`) rejects a low-order value — after RFC 7748 decoding (top bit masked, u reduced mod p) u ∈ {0, 1, p − 1, the two u-coordinates of order 8} — and keeps every other value as received (§3); (b) every Ed25519 key (`relay_sig_pk`, `ik_ed25519`, `recv_pk`, `send_pk`, `owner_pk`) and the `R` of every Ed25519 signature (every D.2 `sig`, `RelayInfoV1.sig`, and the first 64 bytes of every `HybridSig`) reject under the §3.5 byte rules — y ≥ p or a point of order dividing 8 — and when they are not a curve point (RFC 8032 §5.1.3 decoding fails); the `S` of every such signature rejects when `S ≥ L`; (c) every ML-KEM encapsulation key (`relay_kem_ek`, `ek_c`, `spk_kem`, `rpk_kem`, `opk_kem`, `ek_pq`) passes the FIPS 203 §7.2 modulus check. A decoder MUST NOT run ML-DSA sigDecode (it is part of verification, FIPS 204 Alg. 8). Signatures, MACs and tags are verified at use, not at decode; the checks at use (§3, §3.5, §6.6, §7.4) remain.
 - Decoders MUST be total (never panic), fuzzed, and tested with the negative vectors in `vectors/`.
 - Encodings are canonical: decode-then-encode reproduces the input byte-for-byte (property-tested).
 - All byte layouts are in Appendix D; a structure not listed there does not exist on the wire.
@@ -220,6 +223,8 @@ RelayRef {
   direct:     Option<{ host_len: u16, host: [u8; host_len], port: u16, spki_sha256: [u8; 32] }>
 }
 ```
+
+`onion` is the decoded v3 onion address `PUBKEY[32] ‖ CHECKSUM[2] ‖ VERSION[1]` as defined by Tor's rend-spec-v3 §6 (onion-address encoding), with `CHECKSUM = SHA3-256(".onion checksum" ‖ PUBKEY ‖ VERSION)[0..2]`. A decoder MUST reject `onion` unless `VERSION = 0x03` and `CHECKSUM` is valid; `PUBKEY` is not otherwise checked (rev 2.3, ADR-039). The `direct` host and port rules are in D.3.
 
 `akc` lets a user verify that the operator handed everyone the *same* access key (a per-user key would be an identifier). A client that holds an access key for `relay_fp` and sees a different `akc` MUST refuse the relay and warn.
 
@@ -487,15 +492,17 @@ type: 0x00 Dummy · 0x01 Handshake · 0x02 Batch · 0x03 Fragment · 0x04 RouteU
 
 - `seq` is a per-session application sequence (dedup/ordering, gaps ⇒ "messages may be missing"); `ts` is the sender's clock. Both exist only inside E2E.
 - **Dummy**: empty body; discarded silently after decryption.
-- **Handshake** (first message only): `Profile ‖ caps: u32 (= 0) ‖ routes: u8 count ‖ RouteDescriptor[]` — the initiator's reply route(s).
-- **Batch**: `count: u8 ‖ AppMessage[]`.
-- **Fragment**: `msg_id [16] ‖ idx: u16 ‖ total: u16 (≤ 64) ‖ chunk`; reassembled bytes are `inner_type: u8 ‖ inner_body` and are processed as a Content of that type (so large `KeyChange`/`RouteUpdate`/`Batch` contents are fragmented like anything else).
-- **RouteUpdate**: `count: u8 ‖ RouteDescriptor[]` replacing the routes by which the peer reaches us.
-- **KeyChange**: `new IKSPublic ‖ HybridSign(old IK_sig, "SecMP-TR/1 keychange", fingerprint(new))` (5390 B ⇒ always fragmented).
-- **Receipt**: `kind: u8 (1 = delivered, 2 = read) ‖ count: u8 ‖ msg_id[16]×count`.
+- **Handshake** (first message only): `Profile ‖ caps: u32 (= 0) ‖ routes: u8 count (1..=255) ‖ RouteDescriptor[]` — the initiator's reply route(s). `caps` MUST be 0 in v1; any other value rejects (rev 2.3).
+- **Batch**: `count: u8 (1..=255) ‖ AppMessage[]`.
+- **Fragment**: `msg_id [16] ‖ idx: u16 ‖ total: u16 (≤ 64) ‖ chunk`; reassembled bytes are `inner_type: u8 ‖ inner_body` and are processed as a Content of that type (so large `KeyChange`/`RouteUpdate`/`Batch` contents are fragmented like anything else). `idx` counts from 0 and `idx < total`; `2 ≤ total ≤ 64` (`total = 1` would be a second encoding of an unfragmented Content, §4.1); `chunk` is at least 1 byte; `inner_type ∈ {0x02, 0x04, 0x05, 0x06, 0x07}` (0x00, 0x01 and 0x03 reject). Chunk sizing and consistency across the fragments of one `msg_id` are reassembly rules, not encoding rules (rev 2.3).
+- **RouteUpdate**: `count: u8 (1..=255) ‖ RouteDescriptor[]` replacing the routes by which the peer reaches us.
+- **KeyChange**: `new IKSPublic ‖ HybridSign(old IK_sig, "SecMP-TR/1 keychange", fingerprint(new))` (5390 B ⇒ always fragmented; an unfragmented Content of type 0x05 rejects).
+- **Receipt**: `kind: u8 (1 = delivered, 2 = read) ‖ count: u8 (1..=255) ‖ msg_id[16]×count`.
 - **Control**: `code: u8 ‖ arg_len: u16 ‖ arg` — codes: 1 contact-removed, 2 session-reset-request.
 
 `AppMessage { msg_id [16], kind: u8 (1 text, 2 attachment-inline, 3 view-once-text, 4 reaction, 5 edit, 6 delete), expire_after: u32, payload_len: u16, payload }`. Text ≤ 16 KiB UTF-8; inline attachments ≤ `MAX_MSG_BYTES`.
+
+At the encoding layer `AppMessage.payload` and `Control.arg` are opaque length-prefixed bytes (rev 2.3, ADR-039): their layouts, and the UTF-8 and 16 KiB checks for text, are defined by an application-layer ADR before M7. `Profile.name` is checked as UTF-8 at decode (D.3); the asymmetry is intended.
 
 ### 7.7 Key change (identity succession)
 
@@ -837,6 +844,8 @@ IKSPublic    = ver ‖ ik_ed25519[32] ‖ ik_mldsa65[1952] ‖ ik_dh[32]
 PrekeyBundle = ver ‖ spk_id u32 ‖ spk_dh[32] ‖ spk_kem[1568] ‖ rpk_kem[1184] ‖ spk_expiry u64 ‖ opk_present u8 ‖ opk_id u32 ‖ opk_dh[32] ‖ opk_kem[1568] ‖ sig[3373]
 ```
 
+`RelayRef.direct` (rev 2.3, ADR-039): `host` is 1..=253 bytes (`host_len` 1..=253), each byte in 0x21..=0x7E, and `port ≠ 0`; any other value rejects. `onion` validity: §5.3.
+
 ### D.4 Handshake envelope
 
 ```
@@ -854,11 +863,17 @@ Content   = ver ‖ type u8 ‖ seq u64 ‖ ts u64 ‖ body_len u16 ‖ body ‖
 AppMessage = msg_id[16] ‖ kind u8 ‖ expire_after u32 ‖ payload_len u16 ‖ payload
 Fragment  = msg_id[16] ‖ idx u16 ‖ total u16 ‖ chunk
 RouteDescriptor = ver ‖ kind u8 ‖ len u16 ‖ blob ;  RelayQueue blob = RelayRef ‖ sid[16] ‖ send_seed[32] ‖ period_s u16
-Handshake body  = Profile ‖ caps u32 ‖ route_count u8 ‖ RouteDescriptor[]
+Dummy body      = (empty)
+Handshake body  = Profile ‖ caps u32 (0) ‖ route_count u8 (1..=255) ‖ RouteDescriptor[]
+Batch body      = count u8 (1..=255) ‖ AppMessage[] × count
+RouteUpdate body = count u8 (1..=255) ‖ RouteDescriptor[] × count
 KeyChange body  = IKSPublic[2017] ‖ sig[3373]
-Receipt body    = kind u8 ‖ count u8 ‖ msg_id[16] × count
+Receipt body    = kind u8 ‖ count u8 (1..=255) ‖ msg_id[16] × count
 Control body    = code u8 ‖ arg_len u16 ‖ arg
+Reassembled Fragment = inner_type u8 ‖ inner_body
 ```
+
+Rules added in rev 2.3 (ADR-039): `caps` MUST be 0 and any other value rejects. Fragment: `idx` counts from 0 with `idx < total`, `2 ≤ total ≤ 64`, `chunk` ≥ 1 byte; the reassembled `inner_type` ∈ {0x02, 0x04, 0x05, 0x06, 0x07} (0x00, 0x01 and 0x03 reject); chunk sizing and consistency across fragments are reassembly rules, not encoding rules. Content type 0x05 (KeyChange) never appears unfragmented: an unfragmented Content of type 0x05 rejects. `AppMessage.payload` and `Control body.arg` are opaque at the encoding layer (§7.6).
 
 ### D.6 Signatures over commands
 

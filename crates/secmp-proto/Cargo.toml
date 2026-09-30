@@ -9,5 +9,20 @@ license.workspace = true
 repository.workspace = true
 publish.workspace = true
 
+[dependencies]
+secmp-crypto.workspace = true
+
+# ADR-040: test-only (the vector files). `secmp-crypto`'s `kat` feature (the SCHEMA §2 streams and the
+# derandomised signers) is enabled for the tests and the `gen-encodings` example only.
+[dev-dependencies]
+secmp-crypto = { workspace = true, features = ["kat"] }
+serde_json.workspace = true
+rand.workspace = true
+
 [lints]
 workspace = true
+
+# Kani (docs/06 §4; `src/kani_proofs.rs`): the harnesses replace the `secmp-crypto` key checks with
+# nondeterministic outcomes (`keys::kani_stubs`), which needs Kani's function stubbing (RFC 0002).
+[package.metadata.kani.unstable]
+stubbing = true

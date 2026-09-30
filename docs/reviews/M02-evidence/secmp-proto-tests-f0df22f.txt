@@ -1,0 +1,52 @@
+PASS [   0.019s] ( 1/51) secmp-proto codec::tests::flags_and_expected_bytes
+PASS [   0.019s] ( 2/51) secmp-proto codec::tests::padding_round_trip_and_rejections
+PASS [   0.019s] ( 3/51) secmp-proto codec::tests::reader_is_bounded_and_exact
+PASS [   0.019s] ( 4/51) secmp-proto error::tests::display_carries_no_detail
+PASS [   0.020s] ( 5/51) secmp-proto codec::tests::boxed_arrays_need_the_exact_length
+PASS [   0.020s] ( 6/51) secmp-proto keys::tests::hybrid_sig_checks_only_the_ed25519_half
+PASS [   0.020s] ( 7/51) secmp-proto keys::tests::x25519_field
+PASS [   0.020s] ( 8/51) secmp-proto keys::tests::ed25519_fields
+PASS [   0.020s] ( 9/51) secmp-proto codec::tests::length_prefixes
+PASS [   0.025s] (10/51) secmp-proto keys::tests::mlkem_fields
+PASS [   0.013s] (11/51) secmp-proto wire::cell::tests::cell_parts
+PASS [   0.014s] (12/51) secmp-proto wire::cell::tests::app_message_and_batch
+PASS [   0.013s] (13/51) secmp-proto wire::cell::tests::handshake_body_caps_and_routes
+PASS [   0.015s] (14/51) secmp-proto wire::cell::tests::content_types_padding_and_limits
+PASS [   0.016s] (15/51) secmp-proto sizes::tests::sum_saturates_to_max_on_overflow
+PASS [   0.015s] (16/51) secmp-proto wire::cell::tests::fragment_rules
+PASS [   0.016s] (17/51) secmp-proto wire::cell::tests::header
+PASS [   0.014s] (18/51) secmp-proto wire::cell::tests::routes
+PASS [   0.011s] (19/51) secmp-proto wire::frame::tests::cellr_context_and_zero_rules
+PASS [   0.011s] (20/51) secmp-proto wire::frame::tests::opcode_table_equals_appendix_d2
+PASS [   0.014s] (21/51) secmp-proto wire::frame::tests::every_response_round_trips_at_frame_size
+PASS [   0.010s] (22/51) secmp-proto wire::hx::tests::opaque_and_inner_structures
+PASS [   0.016s] (23/51) secmp-proto wire::hx::tests::cell_plaintext_index_and_total
+PASS [   0.012s] (24/51) secmp-proto wire::hx::tests::outer_is_padded_to_three_chunks
+PASS [   0.009s] (25/51) secmp-proto wire::inv::tests::invitation
+PASS [   0.013s] (26/51) secmp-proto wire::inv::tests::onion_checksum_and_version
+PASS [   0.031s] (27/51) secmp-proto wire::frame::tests::every_request_round_trips_at_frame_size
+PASS [   0.029s] (28/51) secmp-proto wire::frame::tests::reserved_and_foreign_opcodes_reject
+PASS [   0.009s] (29/51) secmp-proto wire::inv::tests::relay_ref_with_and_without_direct
+PASS [   0.031s] (30/51) secmp-proto wire::frame::tests::fetch_multi_count_and_link_get_rules
+PASS [   0.011s] (31/51) secmp-proto wire::record::tests::handshake_records
+PASS [   0.018s] (32/51) secmp-proto wire::inv::tests::profile_names
+PASS [   0.009s] (33/51) secmp-proto wire::record::tests::hello
+PASS [   0.053s] (34/51) secmp-proto wire::cell::tests::fragment_payload_inner_types
+PASS [   0.010s] (35/51) secmp-proto wire::signed::tests::exact_contents
+PASS [   0.055s] (36/51) secmp-proto wire::cell::tests::key_change_receipt_control
+PASS [   0.013s] (37/51) secmp-proto wire::record::tests::relay_info_and_its_record
+PASS [   0.014s] (38/51) secmp-proto wire::signed::tests::lengths_and_labels
+PASS [   0.013s] (39/51) secmp-proto wire::tests::periods
+PASS [   0.075s] (40/51) secmp-proto::canonical edge_lengths
+PASS [   0.105s] (41/51) secmp-proto wire::inv::tests::iks_bundle_link_data_blob
+PASS [   0.088s] (42/51) secmp-proto::canonical edge_counters
+PASS [   0.085s] (43/51) secmp-proto::canonical edge_enum_variants
+PASS [   0.164s] (44/51) secmp-proto::canonical handshake_envelope
+PASS [   0.152s] (45/51) secmp-proto::encodings_ref every_row_of_the_encodings_file
+PASS [   0.258s] (46/51) secmp-proto::canonical frames
+PASS [   0.291s] (47/51) secmp-proto::canonical records
+PASS [   0.313s] (48/51) secmp-proto::encodings_ref canonical_writer_is_stable
+PASS [   0.271s] (49/51) secmp-proto::encodings_ref the_rust_generator_reproduces_every_positive_row
+PASS [   0.361s] (50/51) secmp-proto::canonical ratchet_cell_content_and_bodies
+PASS [   0.450s] (51/51) secmp-proto::canonical invitation_and_link_data
+Summary [   0.526s] 51 tests run: 51 passed, 0 skipped

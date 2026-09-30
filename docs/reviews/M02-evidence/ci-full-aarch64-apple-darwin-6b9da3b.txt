@@ -1,0 +1,95 @@
+# cargo xtask ci-full, local, macOS arm64 (aarch64-apple-darwin), 2026-09-30, tree of 6b9da3b
+# Run as foreground chunks (a tool call is capped at 10 min): the xtask steps where they fit; for fuzz,
+# mutants and miri the gate's own commands (xtask/src/gates.rs), split by target / shard / test group. Every
+# step of ci-full ran; windows-native and systemd are host-bound (SKIP on macOS; their CI jobs windows-native
+# and linux-full run them).
+
+## steps 1-4 (cargo xtask step --strict fmt clippy policy deny vet audit cooldown nextest doctest hello)
+=== step summary (host aarch64-apple-darwin, strict: true) ===
+   1 fmt             PASS          0s  rustfmt: no changes
+   2 clippy          PASS          0s  clippy --all-features -D warnings on aarch64-apple-darwin (12 crates)
+   2 policy          PASS          0s  unsafe-attrs: 22 target roots forbid, 2 sys library roots allow, 1 ADR-038 bench root allows (crates/secmp-crypto/benches/ct.rs), 2 secmp-ui roots deny, 2 secmp-ui files without `unsafe`; lints-table: 12 manifests; lint-allows: 35 relaxing attributes (all sanctioned); build-scripts: 12 crates, none; spdx: 147 files; secmp-crypto/secmp-proto normal closure (x8 …
+   3 deny            PASS          1s  advisories, bans, licenses, sources: ok
+   3 vet             PASS          0s  secmp-crypto/secmp-proto normal closure (x86_64-unknown-linux-gnu, x86_64-pc-windows-msvc, aarch64-apple-darwin): 52 external crates, 0 exempted; tracked exemptions elsewhere: 25
+   3 audit           PASS          1s  RustSec: no advisories (warnings denied); ignored with an ADR: RUSTSEC-2026-0173
+   3 cooldown        PASS         21s  119 registry packages (Cargo.lock, fuzz/Cargo.lock), all ≥ 7 days old; youngest: rand 0.10.3, 10 days
+   4 nextest         PASS          4s  cargo nextest run --workspace
+   4 doctest         PASS          0s  cargo test --doc
+   4 hello           PASS          0s  secmp-relay 0.0.0 (M0 skeleton: no functionality) | secmp-cli 0.0.0 (M0 skeleton: no functionality) | secmp-ui 0.0.0 (M0 skeleton: no functionality)
+step: PASS
+
+## step 5 kat (cargo xtask step --strict kat; tree 31d13de — crates identical to 6b9da3b, which changes only
+##   the ct gate's sensitivity recheck in xtask/src/gates.rs)
+=== step summary (host aarch64-apple-darwin, strict: true) ===
+   5 kat             PASS        297s  KAT/differential packages: secmp-crypto, secmp-testkit (expected set matches); ML-KEM KATs and frozen vectors also with libcrux's portable backend
+step: PASS
+
+## steps 5 ct, 7 coverage (cargo xtask step --strict ct coverage)
+=== step summary (host aarch64-apple-darwin, strict: true) ===
+   5 ct              PASS        226s  control_variable_time_compare: PASS — k=28, calibration median 171.1 ns, 1000000 samples; first max |t| = 123771.15 (p50), batch median 53291.7 ns, q_eff 1.0 ticks (clock), realised 114.0 quanta; A/A max |t| = 0.77 (raw), batch median 4791.7 ns, q_eff 1.0 ticks (clock), realised 115.0 quanta (positive control, must be detected); tag_compare: PASS — k=1, calib …
+   7 coverage        PASS         16s  secmp-cli: 5/6 lines = 83.3 % (min 80 %); secmp-client-core: no code; secmp-crypto: 1867/1875 lines = 99.6 % (min 90 %); secmp-proto: 2413/2422 lines = 99.6 % (min 90 %); secmp-relay: 5/6 lines = 83.3 % (min 80 %); secmp-store: no code; secmp-sys-desktop: no code; secmp-sys-mem: 175/183 lines = 95.6 % (min 80 %); secmp-testkit: 172/172 lines = 100.0 % (min 80 …
+step: PASS
+
+## step 6 fuzz — the gate's command per target: cargo +nightly-2026-09-21 fuzz run --fuzz-dir fuzz <t> -- -max_total_time=120
+caead_open: 3030816 runs in 121 s; findings: 0
+ed25519_verify: 254629 runs in 121 s; findings: 0
+hybrid_sign_verify: 57594 runs in 121 s; findings: 0
+mldsa65_verify: 9189333 runs in 121 s; findings: 0
+mlkem_parse: 2063282 runs in 121 s; findings: 0
+msg_open: 9111145 runs in 121 s; findings: 0
+x25519_dh: 274571 runs in 121 s; findings: 0
+proto_cell: 6740827 runs in 121 s; findings: 0
+proto_frames: 3261514 runs in 121 s; findings: 0
+proto_handshake: 6051165 runs in 121 s; findings: 0
+proto_invitation: 5306734 runs in 121 s; findings: 0
+proto_records: 5063043 runs in 121 s; findings: 0
+(12 targets = expect::FUZZ_TARGETS; every run exit 0)
+
+## step 8 mutants — the gate's command in 4 shards: cargo mutants --no-shuffle --features secmp-crypto/kat
+##   --package secmp-crypto --package secmp-proto --exclude crates/secmp-proto/src/kani_proofs.rs --exclude-re kani_stubs:: --shard k/4
+shard 0/4: 147 mutants tested in 5m: 93 caught, 54 unviable
+shard 1/4: 147 mutants tested in 6m: 1 missed, 110 caught, 36 unviable
+shard 2/4: 147 mutants tested in 3m: 104 caught, 43 unviable
+shard 3/4: 147 mutants tested in 3m: 116 caught, 31 unviable
+survivors (missed + timeout, all shards): crates/secmp-crypto/src/secret.rs:59:9: replace <impl Drop for SecretBytes<N>>::drop with ()
+  -> documented in docs/mutants-accepted.md; undocumented survivors: 0
+
+## step 9 miri — the gate's command (nightly-2026-09-21, --target aarch64-unknown-linux-gnu, LIBCRUX_DISABLE_SIMD128/256=1,
+##   CARGO_TARGET_DIR=target/miri-portable, skip list mldsa:: hybrid_sign:: sas::) split by package and test group
+secmp-sys-mem + secmp-sys-desktop: 7 passed, 0 failed
+secmp-crypto lib: hybrid_kem::: 5 passed, 0 failed
+secmp-crypto lib: mlkem::: 5 passed, 0 failed
+secmp-crypto lib: x25519:: ed25519::: 13 passed, 0 failed
+secmp-crypto lib: caead:: msg:: kdf:: hash:: fingerprint::: 14 passed, 0 failed
+secmp-crypto lib: error:: label:: nonce:: rng:: secret:: test_util::: 15 passed, 0 failed
+secmp-crypto integration test targets (no `kat` feature, as in the gate: 0 tests): 0 passed, 0 failed
+secmp-crypto doctests: 0 passed, 0 failed
+(secmp-crypto unit tests: 52 run = 63 - 11 in the skip list)
+
+## step 9 kani (cargo xtask step --strict kani: cargo kani --package secmp-proto -Z stubbing)
+Complete - 16 successfully verified harnesses, 0 failures, 16 total.
+=== step summary (host aarch64-apple-darwin, strict: true) ===
+   9 kani            PASS        405s  Kani 0.68.0: harness packages secmp-proto (expected set matches)
+step: PASS
+
+## step 11 windows-cross (cargo xtask step --strict windows-cross)
+=== step summary (host aarch64-apple-darwin, strict: true) ===
+  11 windows-cross   PASS          1s  cargo xwin build --all-targets for x86_64-pc-windows-msvc
+step: PASS
+
+## steps 10, 11, 12a, 12, 13, 14 (cargo xtask step --strict proverif windows-native linux-target ref-vectors repro sbom systemd)
+=== step summary (host aarch64-apple-darwin, strict: true) ===
+  10 proverif        PASS          0s  ProVerif 2.05 self-test [true, false] ok; models: none (expected set matches)
+  11 windows-native  FAIL          0s  skipped under --strict: Windows tests run on windows-latest (A1 §2): `cargo xtask win-test --backend github` or CI job windows-native
+  11 linux-target    PASS          2s  cargo zigbuild --all-targets for x86_64-unknown-linux-gnu (build only, A1 §3)
+ 12a ref-vectors     PASS          0s  9 frozen suites (750 cases) structurally identical to vectors/ref (ADR-026); pending freeze: none
+  12 repro           STUB          0s  two-builder reproducibility check becomes real in M11 (`cargo xtask repro-check`)
+  13 sbom            PASS          2s  12 CycloneDX SBOMs in target/sbom; auditable release builds (aarch64-apple-darwin, remapped paths) read back by `cargo audit bin`: target/release/secmp-relay, target/release/secmp-cli, target/release/secmp-ui
+  14 systemd         FAIL          0s  skipped under --strict: systemd-analyze is Linux-only (CI jobs linux-fast/linux-full run it)
+xtask: error: step: 2 step(s) failed
+
+## the two host-bound steps without --strict (their standard outcome on macOS)
+=== step summary (host aarch64-apple-darwin, strict: false) ===
+  11 windows-native  SKIP          0s  Windows tests run on windows-latest (A1 §2): `cargo xtask win-test --backend github` or CI job windows-native
+  14 systemd         SKIP          0s  systemd-analyze is Linux-only (CI jobs linux-fast/linux-full run it)
+step: PASS with 2 host-specific skip(s) — not allowed with --strict (CI)

@@ -166,6 +166,13 @@ const FULL_EXTRA: &[Step] = &[
     },
 ];
 
+/// Steps outside `ci-full`, run only by `cargo xtask step <id>` (their own workflows).
+const ON_DEMAND: &[Step] = &[Step {
+    num: "9",
+    id: "miri-full",
+    run: gates::miri_full,
+}];
+
 struct Options {
     strict: bool,
     delegated: Vec<String>,
@@ -283,11 +290,12 @@ pub(crate) fn full(args: &[String]) -> Result<()> {
     execute(&steps, &opts, "ci-full")
 }
 
-/// `cargo xtask step [--strict] ID...` — run selected steps in the given order.
+/// `cargo xtask step [--strict] ID...` — run selected steps (of `ci-full` or on demand) in the given order.
 pub(crate) fn step(args: &[String]) -> Result<()> {
     let opts = parse(args, true)?;
+    let selectable = || all_steps().chain(ON_DEMAND.iter());
     if opts.ids.is_empty() {
-        let ids: Vec<&str> = all_steps().map(|s| s.id).collect();
+        let ids: Vec<&str> = selectable().map(|s| s.id).collect();
         bail!(
             "usage: cargo xtask step [--strict] ID...; ids: {}",
             ids.join(" ")
@@ -295,7 +303,7 @@ pub(crate) fn step(args: &[String]) -> Result<()> {
     }
     let mut steps = Vec::new();
     for id in &opts.ids {
-        match all_steps().find(|s| s.id == id) {
+        match selectable().find(|s| s.id == id) {
             Some(s) => steps.push(s),
             None => bail!("unknown step {id:?}"),
         }
@@ -309,7 +317,7 @@ mod tests {
 
     #[test]
     fn step_ids_are_unique() {
-        let mut ids: Vec<&str> = all_steps().map(|s| s.id).collect();
+        let mut ids: Vec<&str> = all_steps().chain(ON_DEMAND.iter()).map(|s| s.id).collect();
         let n = ids.len();
         ids.sort_unstable();
         ids.dedup();

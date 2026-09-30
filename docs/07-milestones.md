@@ -36,7 +36,7 @@ v1.1: M16 → M17 → M18 → M19 → M20 (release)
 
 ### M1 — `secmp-crypto`: typed primitives and constructions (M)
 
-**Status (2026-09-29).** Reviewed — `docs/reviews/M01-review.md`: approved with conditions C1–C3 (final PR run green, `shake` removed, owner approval of the delta audits/ADR-037); PR #2 is squash-merged on the reviewer's GO after C3. M2 starts on `m02-proto` stacked on `m01-crypto` (sequential rule kept: the M1 review is recorded).
+**Status (2026-09-29).** Merged as `bc8d6d5` (2026-09-29, PR #2, reviewer GO) — `docs/reviews/M01-review.md`: approved; conditions met. Follow-ups F1, F3, §E 5.7 and F8 are carried into the first M2 commits.
 
 **Deliverables.**
 - Types: `X25519{Secret,Public}`, `MlKem{768,1024}{Dk,Ek,Ct}`, `HybridKem{768,1024}` (spec §3.2), `Ed25519`, `MlDsa65`, `HybridSigningKey/VerifyingKey/Signature` (§3.5), `MsgEncrypt` (§3.3), `Caead` (§3.4), HKDF helpers with the label enum from Appendix A, `Sas` (§6.7), `Fingerprint`, `SecretBytes<N>` (zeroizing, no Debug/PartialEq/Clone), `Nonce24`/`Counter64` (consumed by value).
@@ -52,6 +52,8 @@ v1.1: M16 → M17 → M18 → M19 → M20 (release)
 ---
 
 ### M2 — `secmp-proto`: encodings, cells, frames, command types (M)
+
+**Status (2026-09-30).** Started 2026-09-29 on branch `m02-proto` from `main` at `bc8d6d559795cf515bcf08f63fcfe0b9eb3058d9`; spec rev 2.3 (ADR-039) and the `encodings` reference file were committed first. Reviewed 2026-09-30 (`docs/reviews/M02-review.md`, APPROVED WITH CONDITIONS; conditions met in `b75679d`), merged <pending>.
 
 **Deliverables.** `Encode`/`Decode` for every structure in Appendix D; padding helpers; size constants with compile-time assertions; property tests (canonicality), ≥ 200 negative vectors, Kani harnesses for `Cell`/`Frame`/`HeaderV1`/frame-plaintext parsing, fuzz targets for every decoder; `ref/` encoders for cross-generated positive vectors.
 

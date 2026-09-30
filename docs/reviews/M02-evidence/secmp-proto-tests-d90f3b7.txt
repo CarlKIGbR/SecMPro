@@ -1,0 +1,41 @@
+        PASS ( 1/40) secmp-proto codec::tests::reader_is_bounded_and_exact
+        PASS ( 2/40) secmp-proto codec::tests::boxed_arrays_need_the_exact_length
+        PASS ( 3/40) secmp-proto error::tests::display_carries_no_detail
+        PASS ( 4/40) secmp-proto codec::tests::flags_and_expected_bytes
+        PASS ( 5/40) secmp-proto codec::tests::padding_round_trip_and_rejections
+        PASS ( 6/40) secmp-proto keys::tests::ed25519_fields
+        PASS ( 7/40) secmp-proto keys::tests::hybrid_sig_checks_only_the_ed25519_half
+        PASS ( 8/40) secmp-proto keys::tests::x25519_field
+        PASS ( 9/40) secmp-proto codec::tests::length_prefixes
+        PASS (10/40) secmp-proto keys::tests::mlkem_fields
+        PASS (11/40) secmp-proto wire::cell::tests::fragment_rules
+        PASS (12/40) secmp-proto wire::cell::tests::cell_parts
+        PASS (13/40) secmp-proto wire::cell::tests::app_message_and_batch
+        PASS (14/40) secmp-proto sizes::tests::sum_saturates_to_max_on_overflow
+        PASS (15/40) secmp-proto wire::cell::tests::content_types_padding_and_limits
+        PASS (16/40) secmp-proto wire::cell::tests::header
+        PASS (17/40) secmp-proto wire::frame::tests::cellr_context_and_zero_rules
+        PASS (18/40) secmp-proto wire::cell::tests::handshake_body_caps_and_routes
+        PASS (19/40) secmp-proto wire::cell::tests::routes
+        PASS (20/40) secmp-proto wire::cell::tests::fragment_payload_inner_types
+        PASS (21/40) secmp-proto wire::frame::tests::every_request_round_trips_at_frame_size
+        PASS (22/40) secmp-proto wire::frame::tests::fetch_multi_count_and_link_get_rules
+        PASS (23/40) secmp-proto wire::frame::tests::opcode_table_equals_appendix_d2
+        PASS (24/40) secmp-proto wire::hx::tests::opaque_and_inner_structures
+        PASS (25/40) secmp-proto wire::frame::tests::every_response_round_trips_at_frame_size
+        PASS (26/40) secmp-proto wire::hx::tests::cell_plaintext_index_and_total
+        PASS (27/40) secmp-proto wire::hx::tests::outer_is_padded_to_three_chunks
+        PASS (28/40) secmp-proto wire::cell::tests::key_change_receipt_control
+        PASS (29/40) secmp-proto wire::inv::tests::invitation
+        PASS (30/40) secmp-proto wire::inv::tests::profile_names
+        PASS (31/40) secmp-proto wire::frame::tests::reserved_and_foreign_opcodes_reject
+        PASS (32/40) secmp-proto wire::record::tests::handshake_records
+        PASS (33/40) secmp-proto wire::record::tests::hello
+        PASS (34/40) secmp-proto wire::signed::tests::lengths_and_labels
+        PASS (35/40) secmp-proto wire::inv::tests::onion_checksum_and_version
+        PASS (36/40) secmp-proto wire::inv::tests::relay_ref_with_and_without_direct
+        PASS (37/40) secmp-proto wire::record::tests::relay_info_and_its_record
+        PASS (38/40) secmp-proto wire::tests::periods
+        PASS (39/40) secmp-proto wire::inv::tests::iks_bundle_link_data_blob
+        PASS (40/40) secmp-proto::encodings_ref every_row_of_the_encodings_file
+     Summary 40 tests run: 40 passed, 0 skipped

@@ -1,0 +1,28 @@
+tag_compare FAIL at p50 (k=1)
+   first: t -422.5, n0/n1 182703/252908, mean0 23996.87, mean1 24000.12, delta -3.254 ticks = -1.165 ns = -1.63 q_eff (q_eff 2.0 samples), sd 2.34; median 8593 ns
+   second: t -412.5, n0/n1 181987/257672, mean0 23996.89, mean1 24000.08, delta -3.192 ticks = -1.143 ns = -1.60 q_eff (q_eff 2.0 samples), sd 2.35; median 8593 ns
+   A/A: max |t| 1.21 at p90
+msg_open_reject FAIL at p99 (k=1)
+   first: t -25.1, n0/n1 495440/494467, mean0 11671.84, mean1 11674.60, delta -2.752 ticks = -0.985 ns = -1.38 q_eff (q_eff 2.0 samples), sd 54.59; median 4180 ns
+   second: t -25.0, n0/n1 495299/494565, mean0 11671.45, mean1 11674.16, delta -2.709 ticks = -0.970 ns = -1.35 q_eff (q_eff 2.0 samples), sd 53.95; median 4180 ns
+   A/A: max |t| 1.64 at p75
+caead_open_reject FAIL at p50 (k=1)
+   first: t +81.1, n0/n1 244552/254906, mean0 16143.16, mean1 16129.27, delta +13.889 ticks = +4.972 ns = +6.94 q_eff (q_eff 2.0 samples), sd 60.66; median 5818 ns
+   second: t +77.5, n0/n1 241235/256407, mean0 16179.36, mean1 16166.20, delta +13.157 ticks = +4.710 ns = +6.58 q_eff (q_eff 2.0 samples), sd 60.04; median 5829 ns
+   A/A: max |t| 1.58 at p90
+caead_derive SUB_QUANTUM_SHIFT at p75 (k=1)
+   first: t -11.0, n0/n1 374535/371701, mean0 1461.59, mean1 1461.78, delta -0.188 ticks = -0.067 ns = -0.09 q_eff (q_eff 2.0 samples), sd 7.38; median 525 ns
+   second: t -11.3, n0/n1 362276/360677, mean0 1460.90, mean1 1461.08, delta -0.189 ticks = -0.068 ns = -0.09 q_eff (q_eff 2.0 samples), sd 7.11; median 525 ns
+   A/A: max |t| 0.67 at p90
+caead_aead_reject SUB_QUANTUM_SHIFT at p99 (k=1)
+   first: t +4.9, n0/n1 495863/494050, mean0 7785.26, mean1 7784.01, delta +1.252 ticks = +0.448 ns = +0.63 q_eff (q_eff 2.0 samples), sd 127.84; median 2778 ns
+   second: t +5.4, n0/n1 496274/493695, mean0 7787.00, mean1 7785.61, delta +1.388 ticks = +0.497 ns = +0.69 q_eff (q_eff 2.0 samples), sd 127.75; median 2778 ns
+   A/A: max |t| 1.19 at p90
+caead_com_compare FAIL at p50 (k=1)
+   first: t -75.6, n0/n1 230805/250501, mean0 24614.80, mean1 24619.47, delta -4.670 ticks = -1.672 ns = -2.34 q_eff (q_eff 2.0 samples), sd 21.59; median 8830 ns
+   second: t -89.5, n0/n1 225822/247410, mean0 24614.78, mean1 24620.46, delta -5.675 ticks = -2.032 ns = -2.84 q_eff (q_eff 2.0 samples), sd 22.03; median 8830 ns
+   A/A: max |t| 1.70 at p75
+caead_open_reject_samekey FAIL at p99 (k=1)
+   first: t +19.3, n0/n1 494947/495014, mean0 16977.56, mean1 16956.04, delta +21.515 ticks = +7.702 ns = +10.76 q_eff (q_eff 2.0 samples), sd 553.22; median 6187 ns
+   second: t +5.6, n0/n1 495535/494437, mean0 16682.77, mean1 16676.61, delta +6.159 ticks = +2.205 ns = +3.08 q_eff (q_eff 2.0 samples), sd 550.88; median 5856 ns
+   A/A: max |t| 2.66 at p75

@@ -58,6 +58,9 @@ windows-sys = { version = "=0.61.2", default-features = false, features = ["Win3
 ml-kem = { version = "=0.3.2", default-features = false }
 aws-lc-rs = { version = "=1.18.1", default-features = false, features = ["aws-lc-sys", "alloc"] }
 
+# ADR-040: seeded generators for the property tests of secmp-proto (dev-dependency only; never key material).
+rand = { version = "=0.10.3", default-features = false, features = ["std_rng"] }
+
 # Workspace crates (path dependencies; docs/02 §3 fixes who may depend on whom).
 secmp-crypto = { path = "crates/secmp-crypto" }
 secmp-sys-mem = { path = "crates/secmp-sys-mem" }
@@ -68,6 +71,7 @@ unsafe_code = "deny"              # every crate except secmp-sys-* additionally 
                                   # a workspace-level "forbid" cannot be relaxed per crate (E0453), hence deny + per-crate forbid
 missing_docs = "warn"
 unused_must_use = "deny"
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(kani)"] }  # declares `cfg(kani)`: the Kani harnesses (docs/06 §4) compile only under `cargo kani`
 
 [workspace.lints.clippy]
 all = { level = "deny", priority = -1 }

@@ -1,0 +1,69 @@
+=== ci-full summary (host x86_64-unknown-linux-gnu, strict: true) ===
+   1 fmt             PASS          0s  rustfmt: no changes
+   2 clippy          PASS         26s  clippy --all-features -D warnings on x86_64-unknown-linux-gnu (12 crates)
+   2 policy          PASS          0s  unsafe-attrs: 19 target roots forbid, 2 sys library roots allow, 1 ADR-038 bench root allows (crates/secmp-crypto/benches/ct.rs), 2 secmp-ui roots deny, 2 secmp-ui files without `unsafe`; lints-table: 12 manifests; lint-allows: 19 relaxing attributes (all sanctioned); build-scripts: 12 crates, none; spdx: 90 files; secmp-crypto/secmp-proto normal closure (x86
+   3 deny            PASS          0s  advisories, bans, licenses, sources: ok
+   3 vet             PASS          0s  secmp-crypto/secmp-proto normal closure (x86_64-unknown-linux-gnu, x86_64-pc-windows-msvc, aarch64-apple-darwin): 52 external crates, 0 exempted; tracked exemptions elsewhere: 25
+xtask: error: ci-full: 1 step(s) failed
+   3 audit           PASS          5s  RustSec: no advisories (warnings denied); ignored with an ADR: RUSTSEC-2026-0173
+   3 cooldown        PASS          3s  119 registry packages (Cargo.lock, fuzz/Cargo.lock), all ≥ 7 days old; youngest: rand 0.10.3, 9 days
+   4 nextest         PASS         40s  cargo nextest run --workspace
+   4 doctest         PASS          0s  cargo test --doc
+   4 hello           PASS          0s  secmp-relay 0.0.0 (M0 skeleton: no functionality) | secmp-cli 0.0.0 (M0 skeleton: no functionality) | secmp-ui 0.0.0 (M0 skeleton: no functionality)
+   5 kat             PASS        893s  KAT/differential packages: secmp-crypto, secmp-testkit (expected set matches); ML-KEM KATs and frozen vectors also with libcrux's portable backend
+   5 ct              FAIL         99s  constant-time test failed: msg_open_reject: FAIL — k=1, calibration median 3596.5 ns, 1000000 samples; first max |t| = 82.17 (p90), batch median 3586.7 ns; caead_open_reject: FAIL — k=1, calibration median 6371.9 ns, 1000000 samples; first max |t| = 25.66 (p95), batch median 6402.1 ns; caead_aead_reject: FAIL — k=1, calibration median 3175.7 ns, 1000000 sampl
+   6 fuzz            PASS        891s  fuzz smoke, 120 s per target: caead_open, ed25519_verify, hybrid_sign_verify, mldsa65_verify, mlkem_parse, msg_open, x25519_dh (expected set matches)
+   7 coverage        PASS         44s  secmp-cli: 5/6 lines = 83.3 % (min 80 %); secmp-client-core: no code; secmp-crypto: 1746/1754 lines = 99.5 % (min 90 %); secmp-proto: no code; secmp-relay: 5/6 lines = 83.3 % (min 80 %); secmp-store: no code; secmp-sys-desktop: no code; secmp-sys-mem: 234/246 lines = 95.1 % (min 80 %); secmp-testkit: 172/172 lines = 100.0 % (min 80 %); secmp-transport: no cod
+   8 mutants         PASS        534s  secmp-crypto, secmp-proto: 237 mutants tested in 9m: 1 missed, 148 caught, 88 unviable; survivors documented in docs/mutants-accepted.md: 1
+   9 miri            PASS       1096s  Miri (nightly-2026-09-21, interpreting aarch64-unknown-linux-gnu, libcrux portable backend): secmp-sys-mem, secmp-sys-desktop, secmp-crypto; skipped test modules: mldsa::, hybrid_sign::, sas::
+   9 kani            PASS          0s  Kani 0.68.0: harness packages none (expected set matches)
+  10 proverif        PASS          0s  ProVerif 2.05 self-test [true, false] ok; models: none (expected set matches)
+  11 windows-cross   DELEGATED     0s  handed to another CI job with --delegated
+  11 windows-native  DELEGATED     0s  handed to another CI job with --delegated
+  11 linux-target    PASS          0s  host is x86_64-unknown-linux-gnu: every step above ran natively
+ 12a ref-vectors     PASS          0s  8 frozen suites (118 cases) structurally identical to vectors/ref (ADR-026); pending freeze: encodings (632 cases, reference only)
+  12 repro           STUB          0s  two-builder reproducibility check becomes real in M11 (`cargo xtask repro-check`)
+  13 sbom            PASS          5s  12 CycloneDX SBOMs in target/sbom; auditable release builds (x86_64-unknown-linux-gnu, remapped paths) read back by `cargo audit bin`: target/release/secmp-relay, target/release/secmp-cli, target/release/secmp-ui
+  14 systemd         PASS          0s  systemd 255 (255.4-1ubuntu8.17); self-test: unhardened fixture 9.4 > 2 rejected; units: none (deploy/secmp-relay.service arrives in M10)
+##[error]Process completed with exit code 1.
+##[group]Run actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+with:
+  name: ct-report-Linux-X64-1fa564951dc3455ed93c60cbdff1f5ee96806e51
+  path: target/ct-report.json
+  if-no-files-found: error
+  compression-level: 6
+  overwrite: false
+  include-hidden-files: false
+  archive: true
+env:
+  CARGO_TERM_COLOR: always
+  SECMP_TOOLS_ROOT: /home/runner/.secmp-tools
+##[endgroup]
+With the provided path, there will be 1 file uploaded
+Artifact name is valid!
+Root directory input is valid!
+Uploading artifact: ct-report-Linux-X64-1fa564951dc3455ed93c60cbdff1f5ee96806e51.zip
+Beginning upload of artifact content to blob storage
+Uploaded bytes 1583
+Finished uploading artifact content to blob storage!
+SHA256 digest of uploaded artifact is 7e96dc722de43ce602bfc807828124bac412481a960346d84067e9a08e69216e
+Finalizing artifact upload
+Artifact ct-report-Linux-X64-1fa564951dc3455ed93c60cbdff1f5ee96806e51 successfully finalized. Artifact ID 11030884475
+Artifact ct-report-Linux-X64-1fa564951dc3455ed93c60cbdff1f5ee96806e51 has been successfully uploaded! Final size is 1583 bytes. Artifact ID is 11030884475
+Artifact download URL: https://github.com/CarlKIGbR/SecMPro/actions/runs/36556788827/artifacts/11030884475
+Post job cleanup.
+[command]/usr/bin/git version
+git version 2.55.0
+Temporarily overriding HOME='/home/runner/work/_temp/bbd6f4e0-b3b0-4d88-8dc5-e58d57472095' before making global git config changes
+Adding repository directory to the temporary git global config as a safe directory
+[command]/usr/bin/git config --global --add safe.directory /home/runner/work/SecMPro/SecMPro
+Removing SSH command configuration
+[command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+[command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+Removing HTTP extra header
+[command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+[command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+Removing includeIf entries pointing to credentials config files
+[command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+[command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+Cleaning up orphan processes

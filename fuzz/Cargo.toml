@@ -15,6 +15,7 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = { version = "=0.4.13" }
 secmp-crypto = { path = "../crates/secmp-crypto" }
+secmp-proto = { path = "../crates/secmp-proto" }
 
 [workspace]
 members = ["."]
@@ -64,6 +65,41 @@ bench = false
 [[bin]]
 name = "caead_open"
 path = "fuzz_targets/caead_open.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "proto_records"
+path = "fuzz_targets/proto_records.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "proto_frames"
+path = "fuzz_targets/proto_frames.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "proto_invitation"
+path = "fuzz_targets/proto_invitation.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "proto_handshake"
+path = "fuzz_targets/proto_handshake.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "proto_cell"
+path = "fuzz_targets/proto_cell.rs"
 test = false
 doc = false
 bench = false

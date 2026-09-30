@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Exact pins for the reference implementation (Python >= 3.12). Each primitive library is
+# qualified against official vectors in tests/test_kat_*.py before use.
+kyber-py==1.2.0        # ML-KEM (FIPS 203)
+dilithium-py==1.4.0    # ML-DSA (FIPS 204)
+PyNaCl==1.6.2          # X25519, Ed25519, XChaCha20-Poly1305 (bundled libsodium 1.0.20-stable)
+cryptography==50.0.1   # ChaCha20, HMAC-SHA-256, HKDF-SHA-256
+pytest==9.1.1
+# transitive (pinned for reproducibility)
+cffi==2.1.1
+pycparser==3.0
+iniconfig==2.3.0
+packaging==26.3
+pluggy==1.6.0
+pygments==2.21.0

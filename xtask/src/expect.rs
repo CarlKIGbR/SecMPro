@@ -48,11 +48,26 @@ pub(crate) const AUDIT_IGNORES: &[(&str, &str)] = &[(
 /// Packages exposing the `kat` feature (docs/06 §5 step 5): external KATs, differential tests, vector checks.
 pub(crate) const KAT_PACKAGES: &[&str] = &["secmp-crypto", "secmp-testkit"];
 
-/// ADR-038 (2): the two-tier verdict of the `ct` gate on max |t| over raw + 5 crops — `(pass, fail)`: ≤ pass →
-/// PASS, > fail → FAIL, in between one confirmatory re-measurement. Fixed by the ADR. The bench reads this line
-/// (and the next constant) from this file at compile time, and the gate checks the report echoes both, so the
-/// values are written down exactly once. Keep each on one line.
-pub(crate) const CT_THRESHOLDS: (f64, f64) = (4.5, 10.0);
+/// ADR-041 (1), replacing the two tiers of ADR-038 (2): the |t| threshold of the `ct` gate — a target's shift counts
+/// as reproduced if |t| exceeds it in both measurements at the same crop with the same sign; the positive control
+/// must exceed it. (The immediate-FAIL tier above 10 is withdrawn.) The bench reads this line and the `CT_*` lines
+/// below from this file at compile time, and the gate checks that the report echoes every one, so the values are
+/// written down exactly once. Keep each on one line.
+pub(crate) const CT_THRESHOLDS: f64 = 4.5;
+
+/// ADR-041 (2) with Amendment 1 (1): a reproduced shift fails only if |Δ| of the cropped class means reaches the
+/// effect floor `max(CT_EFFECT_FLOOR_QUANTA × q_eff, CT_EFFECT_FLOOR_NS)` (`q_eff`: the lattice spacing of the
+/// samples, measured from the data); below it the report says `SUB_FLOOR_SHIFT`.
+pub(crate) const CT_EFFECT_FLOOR_QUANTA: f64 = 1.0;
+
+/// ADR-041 Amendment 1 (1): the absolute part of the effect floor, in ns (≈ one coarse timer lattice, ≈ 25 cycles);
+/// the sensitivity control `min_leak_control` must reach the same floor in every run (Amendment 1 (2)), otherwise
+/// the run is `CONTROL_FAIL`.
+pub(crate) const CT_EFFECT_FLOOR_NS: f64 = 10.0;
+
+/// ADR-041 (3): the inline A/A control of a run passes if its |t| is at most this at every crop of every target;
+/// otherwise the run is `CONTROL_FAIL`.
+pub(crate) const CT_AA_MAX_T: f64 = 4.5;
 
 /// ADR-038 (3): the timer resolution may be at most this fraction of a sample's median; where a single call is
 /// too short, one sample batches `k = ceil(quantum / (fraction · median))` calls.
@@ -61,8 +76,42 @@ pub(crate) const CT_RESOLUTION_MAX_FRACTION: f64 = 0.01;
 /// ADR-038 (3): the largest batch size; a target that would need more is NOT MEASURABLE on that runner.
 pub(crate) const CT_MAX_BATCH: u32 = 64;
 
+/// ADR-038 (3), amended 2026-09-29 (M1 review F8): the calibration aims at this multiple of the resolution bound,
+/// a 10 % margin: `k = ceil(110 · quantum / median)` with the 1 % fraction above.
+pub(crate) const CT_BATCH_MARGIN: f64 = 1.1;
+
+/// ADR-038 (3), amended 2026-09-29: a measurement whose realised batch median is below this many timer quanta
+/// is NOT MEASURABLE for that target (from here up to 100 the realised count is informative only).
+pub(crate) const CT_MIN_REALISED_QUANTA: u64 = 80;
+
+/// Samples per measurement of every ct target but `sas` (docs/06 §4; M2 review C3 (c): fixed here, echoed by the
+/// report, checked per target by the gate). `SECMP_CT_SCALE` may shorten them in local runs only: the report then
+/// carries `secmp_ct_scale`, which the gate refuses, and the gate unsets the variable for its own run.
+pub(crate) const CT_SAMPLES: usize = 1_000_000;
+
+/// Samples per measurement of `sas` (`SafetyNumber::new`, Argon2id: about a millisecond per call).
+pub(crate) const CT_SAS_SAMPLES: usize = 20_000;
+
+/// The ct targets (M2 review C3 (a)): the gate refuses a report whose target set differs. Exactly one of them, the
+/// positive control, is measured once and must be detected.
+pub(crate) const CT_TARGETS: &[&str] = &[
+    "control_variable_time_compare",
+    "tag_compare",
+    "msg_open_reject",
+    "caead_open_reject",
+    "sas",
+    "caead_derive",
+    "caead_aead_reject",
+    "caead_com_compare",
+    "caead_open_reject_samekey",
+];
+
+/// The positive control among [`CT_TARGETS`].
+pub(crate) const CT_POSITIVE_CONTROL: &str = "control_variable_time_compare";
+
 /// cargo-fuzz targets under `fuzz/fuzz_targets/` (docs/06 §5 step 6): M1 key, ciphertext and signature parsers
-/// and the two openers of `secmp-crypto`.
+/// and the two openers of `secmp-crypto`; M2 every `secmp-proto` decoder, one target per Appendix D section
+/// (`proto_*`, a selector byte picks the decoder).
 pub(crate) const FUZZ_TARGETS: &[&str] = &[
     "caead_open",
     "ed25519_verify",
@@ -70,11 +119,59 @@ pub(crate) const FUZZ_TARGETS: &[&str] = &[
     "mldsa65_verify",
     "mlkem_parse",
     "msg_open",
+    "proto_cell",
+    "proto_frames",
+    "proto_handshake",
+    "proto_invitation",
+    "proto_records",
     "x25519_dh",
+];
+
+/// libFuzzer `-max_len` per fuzz target (M2 review C4: without it libFuzzer caps inputs at the largest corpus file,
+/// 5 397 B for `proto_cell` after `cargo fuzz cmin`). Each value is the target's largest valid input plus one byte
+/// (so the too-long rejection is reached): the selector/mode bytes and split fields of the target, and each decoder
+/// at its maximum with every length field at its maximum and every list at one element (a list of 255 maximal
+/// elements would be megabytes). `crates/secmp-proto/tests/fuzz_max_len.rs` recomputes every entry from `sizes.rs`
+/// and the `secmp-crypto` constants; one entry per line, as that test parses them.
+/// - `caead_open`: mode 1 + nonce 24 + `ad_len` 1 + AD 255 + the largest `COM ‖ C` of the protocol (`LinkBlob`:
+///   32 + 12288 + 16) = 12617.
+/// - `ed25519_verify`: key 32 + signature 64 + the largest Ed25519-signed message (D.6 `SEND`, 4146) = 4242.
+/// - `hybrid_sign_verify`: mode 1 + label 1 + `HybridSig` 3373 + the largest HybridSign message (the bundle's signed
+///   fields 4402 ‖ `ik_dh` 32) = 7809.
+/// - `mldsa65_verify`: mode 1 + the larger of a key (1952) and `ctx_len` 1 + context 255 + signature 3309 = 3566.
+/// - `mlkem_parse`: mode 1 + the largest key or ciphertext (ML-KEM-1024, 1568) = 1569.
+/// - `msg_open`: mode 1 + `ad_len` 1 + AD 255 + `C ‖ TAG` 1742 = 1999.
+/// - `x25519_dh`: two secrets and a public key, 3 × 32 = 96.
+/// - `proto_cell`: selector 1 + `HandshakeBody` (Profile 98 + `caps` 4 + count 1 + a `RouteDescriptor` of kind ≠ 1
+///   with a 65535-byte blob, 65539) = 65643.
+/// - `proto_frames`: selector 1 + a frame plaintext 4336 = 4337.
+/// - `proto_handshake`: selector 1 + `Outer` 12018 = 12019.
+/// - `proto_invitation`: selector 1 + `LinkBlob` 12360 = 12361.
+/// - `proto_records`: selector 1 + the HS1 record (`len` 2 + type 1 + 2853) = 2857.
+pub(crate) const FUZZ_MAX_LEN: &[(&str, usize)] = &[
+    ("caead_open", 12_618),
+    ("ed25519_verify", 4_243),
+    ("hybrid_sign_verify", 7_810),
+    ("mldsa65_verify", 3_567),
+    ("mlkem_parse", 1_570),
+    ("msg_open", 2_000),
+    ("proto_cell", 65_644),
+    ("proto_frames", 4_338),
+    ("proto_handshake", 12_020),
+    ("proto_invitation", 12_362),
+    ("proto_records", 2_858),
+    ("x25519_dh", 97),
 ];
 
 /// Packages under the mutation gate (docs/06 §4, §5 step 8).
 pub(crate) const MUTANT_PACKAGES: &[&str] = &["secmp-crypto", "secmp-proto"];
+
+/// Code compiled only under Kani (`#[cfg(kani)]`: `secmp-proto`'s harnesses and the `kani_stubs` modules), kept out
+/// of the mutation gate by file and by mutant name: no test build contains it, so every mutant of it would survive
+/// (M2: 52 such survivors in the CI run on `774e04a`); Kani runs it (ci-full step 9).
+pub(crate) const MUTANT_EXCLUDE_FILES: &[&str] = &["crates/secmp-proto/src/kani_proofs.rs"];
+/// Mutant names (regex, `cargo mutants --exclude-re`) excluded for the reason above.
+pub(crate) const MUTANT_EXCLUDE_RE: &[&str] = &["kani_stubs::"];
 
 /// Packages run under Miri (docs/06 §4).
 pub(crate) const MIRI_PACKAGES: &[&str] = &["secmp-sys-mem", "secmp-sys-desktop", "secmp-crypto"];
@@ -100,13 +197,36 @@ pub(crate) const MIRI_SKIP: &[(&str, &str)] = &[
     ),
 ];
 
-/// Packages containing Kani harnesses (docs/06 §4). M2 adds `secmp-proto`.
-pub(crate) const KANI_PACKAGES: &[&str] = &[];
+/// Packages containing Kani harnesses (docs/06 §4). M2: `secmp-proto` (`src/kani_proofs.rs`).
+pub(crate) const KANI_PACKAGES: &[&str] = &["secmp-proto"];
+
+/// The Kani harnesses (M2 review C5): the gate refuses a run unless Kani reports exactly these as successfully
+/// verified ("Complete - N successfully verified harnesses, 0 failures, N total." with N = this count), so a
+/// deleted or renamed harness fails the gate instead of passing silently.
+pub(crate) const KANI_HARNESSES: &[&str] = &[
+    "kani_proofs::cell",
+    "kani_proofs::header_v1",
+    "kani_proofs::header_v1_reencodes",
+    "kani_proofs::padding",
+    "kani_proofs::request_cont",
+    "kani_proofs::request_fetch",
+    "kani_proofs::request_fetch_multi",
+    "kani_proofs::request_frame",
+    "kani_proofs::request_link_get",
+    "kani_proofs::request_link_put",
+    "kani_proofs::request_ping",
+    "kani_proofs::request_queue_del",
+    "kani_proofs::request_queue_new",
+    "kani_proofs::request_send",
+    "kani_proofs::request_skey",
+    "kani_proofs::response_frame",
+];
 
 /// The SecMP vector suites (`vectors/SCHEMA.md` §3): frozen as `vectors/<suite>.json`, reference files
 /// `vectors/ref/<suite>.json`, Rust files `vectors/rust/<suite>.json` (docs/06 §5 step 12a). M2–M5 add suites.
 pub(crate) const VECTOR_SUITES: &[&str] = &[
     "caead",
+    "encodings",
     "fingerprint",
     "hkdf-labels",
     "hybridkem-1024",
@@ -115,6 +235,17 @@ pub(crate) const VECTOR_SUITES: &[&str] = &[
     "msgencrypt",
     "sas",
 ];
+
+/// Reference files committed before their suite is generated by the Rust side and frozen: present as
+/// `vectors/ref/<suite>.json`, absent from `vectors/`. The `ref-vectors` step requires each to be present and
+/// well-formed (JSON, `suite` = its name, a non-empty `cases` array) and compares nothing yet. Moving a suite from
+/// here to `VECTOR_SUITES` is its freeze step (M2: `encodings`, frozen in `docs/reviews/M02-report.md` plan step 10).
+pub(crate) const VECTOR_REF_PENDING: &[&str] = &[];
+
+/// Suites whose Rust generator writes the positive rows only (M2 cross-generates the `encodings` positives, docs/07
+/// M2 deliverables): `cargo xtask vectors` compares the header and the positive rows, and requires the decoders to
+/// reject every other row of the reference file (`secmp-proto` test `encodings_ref`) before the freeze.
+pub(crate) const VECTOR_POSITIVE_ONLY: &[&str] = &["encodings"];
 
 /// ProVerif models under `formal/` (docs/06 §5 step 10). M3 adds `tr.pv`, M4 `hx.pv`, M5 `link.pv`.
 pub(crate) const PROVERIF_MODELS: &[&str] = &[];
@@ -150,3 +281,11 @@ pub(crate) const TEST_FILE_PREFIXES: &[&str] = &["fuzz/", "crates/secmp-testkit/
 /// CI jobs that may use `continue-on-error: true`. None: Amendment A1 §5 allowed it for the cargo-xwin
 /// cross-build in M0 only, and the M0 review (condition C1) made that job a hard gate from M1 on.
 pub(crate) const CONTINUE_ON_ERROR_JOBS: &[&str] = &[];
+
+/// The workflow that holds the required checks of the `main-protection` ruleset (docs/06 §4).
+pub(crate) const REQUIRED_WORKFLOW: &str = ".github/workflows/ci.yml";
+
+/// The job names of the required checks (M2 review C2): they exist only in [`REQUIRED_WORKFLOW`], which has no
+/// `workflow_dispatch` trigger, so no dispatch can add a `skipped` (= passing) check run under a required name.
+pub(crate) const REQUIRED_JOBS: &[&str] =
+    &["linux-fast", "windows-native", "xwin-cross", "linux-full"];

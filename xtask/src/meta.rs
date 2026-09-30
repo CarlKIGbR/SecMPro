@@ -24,6 +24,9 @@ pub(crate) struct Package {
     pub(crate) manifest_path: PathBuf,
     pub(crate) targets: Vec<Target>,
     pub(crate) features: BTreeSet<String>,
+    /// The Kani unstable features the package enables (`[package.metadata.kani.unstable]`, the keys set to
+    /// `true`), passed as `-Z` by the `kani` gate.
+    pub(crate) kani_unstable: Vec<String>,
 }
 
 /// The workspace as seen by Cargo.
@@ -112,12 +115,25 @@ impl Workspace {
                 .and_then(Value::as_object)
                 .map(|m| m.keys().cloned().collect())
                 .unwrap_or_default();
+            let kani_unstable = p
+                .get("metadata")
+                .and_then(|m| m.get("kani"))
+                .and_then(|k| k.get("unstable"))
+                .and_then(Value::as_object)
+                .map(|u| {
+                    u.iter()
+                        .filter(|(_, on)| on.as_bool() == Some(true))
+                        .map(|(k, _)| k.clone())
+                        .collect()
+                })
+                .unwrap_or_default();
             members.push(Package {
                 id,
                 name,
                 manifest_path: PathBuf::from(s(p, "manifest_path")?),
                 targets,
                 features,
+                kani_unstable,
             });
         }
         members.sort_by(|a, b| a.name.cmp(&b.name));
@@ -201,6 +217,22 @@ fn is_normal_edge(dep: &Value) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The `kani` gate passes a harness package's `[package.metadata.kani.unstable]` as `-Z`: `secmp-proto`'s stubbed
+    /// harnesses need `stubbing` (M2), and no other member enables anything.
+    #[test]
+    fn kani_unstable_features_come_from_the_package_metadata() -> Result<()> {
+        let ws = Workspace::load()?;
+        for p in &ws.members {
+            let expected: &[&str] = if p.name == "secmp-proto" {
+                &["stubbing"]
+            } else {
+                &[]
+            };
+            assert_eq!(p.kani_unstable, expected, "{}", p.name);
+        }
+        Ok(())
+    }
 
     const SAMPLE: &str = r#"{
       "workspace_root": "/w",

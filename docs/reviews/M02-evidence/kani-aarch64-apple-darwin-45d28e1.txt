@@ -1,0 +1,38 @@
+# Kani 0.68.0 (CBMC 6.11.0), macOS arm64, tree of 45d28e1 (src/kani_proofs.rs final). Command per run: cargo kani --package secmp-proto -Z stubbing -Z unstable-options --harness-timeout T --exact --harness kani_proofs::NAME ... (stubbing = the crate's [package.metadata.kani.unstable]; the timeout flag needs -Z unstable-options, which replaces the manifest's -Z list, hence -Z stubbing explicitly).
+
+kani_proofs::padding: SUCCESSFUL; 47.73568 s; 0 of 512 checks failed
+kani_proofs::cell: SUCCESSFUL; 9.6932125 s; 0 of 571 checks failed
+(kani-final-a.log) Complete - 2 verified, 0 failures, 2 total
+kani_proofs::header_v1: SUCCESSFUL; 218.04706 s; 0 of 879 checks failed
+(kani-final-b.log) Complete - 1 verified, 0 failures, 1 total
+kani_proofs::request_fetch: SUCCESSFUL; 3.7728937 s; 0 of 738 checks failed
+(kani-rq-fetch2.log) Complete - 1 verified, 0 failures, 1 total
+kani_proofs::request_fetch_multi: SUCCESSFUL; 68.16365 s; 0 of 2370 checks failed
+kani_proofs::request_ping: SUCCESSFUL; 0.38065508 s; 0 of 738 checks failed
+kani_proofs::request_cont: SUCCESSFUL; 2.2605727 s; 0 of 738 checks failed
+kani_proofs::request_skey: SUCCESSFUL; 0.28566113 s; 0 of 738 checks failed
+kani_proofs::request_link_put: SUCCESSFUL; 12.819033 s; 0 of 738 checks failed
+kani_proofs::request_link_get: SUCCESSFUL; 85.3785 s; 0 of 738 checks failed
+kani_proofs::request_send: SUCCESSFUL; 9.622822 s; 0 of 738 checks failed
+kani_proofs::request_queue_new: SUCCESSFUL; 4.2647095 s; 0 of 738 checks failed
+kani_proofs::request_queue_del: SUCCESSFUL; 8.616189 s; 0 of 738 checks failed
+(kani-rq-ops.log) Complete - 9 verified, 0 failures, 9 total
+kani_proofs::response_frame: SUCCESSFUL; 30.500925 s; 0 of 862 checks failed
+kani_proofs::request_frame: SUCCESSFUL; 4.904769 s; 0 of 266 checks failed
+(kani-glue.log) Complete - 2 verified, 0 failures, 2 total
+
+Wall time per invocation (build + all listed harnesses, 2026-09-29, local): cell+padding 19:42:27-19:43:28;
+header_v1 19:43:32-19:47:12; request_fetch 19:37:58-19:38:03; the other nine request harnesses 19:38:11-19:41:34;
+response_frame+request_frame 19:41:39-19:42:17. All exit 0. 15 harnesses, 15 verified, 0 failures.
+
+Attempts that exceeded their bound before the final design (kept for the record; each led to a documented bound in
+src/kani_proofs.rs, nothing removed or ignored):
+- padding without #[kani::unwind]: CBMC unrolled the unpad scan past 1243 iterations (symbolic-length slice) ->
+  unwind(34) for sizes <= 32; verified.
+- response_frame with the re-encoding check: symex 17.8 s, 4555 VCCs, SAT solving timed out at 7 min -> the
+  frames' re-encoding property left to the property test, fuzzing and vectors; verified in 56.8 s (fixed length),
+  then 30.5 s (4335/4336/4337 bytes).
+- request_frame over every opcode (symbolic op; also with op != FETCH_MULTI assumed, and with the op byte
+  written concretely into the input): symex did not finish in 7 min, still unrolling the FETCH_MULTI entry loop
+  (27 iterations) -> one harness per opcode on RequestCmd::decode_fields with the opcode as a concrete argument,
+  FETCH_MULTI counts <= 8 and > 32, plus a glue harness with the command decoder stubbed.

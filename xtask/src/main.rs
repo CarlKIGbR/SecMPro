@@ -14,6 +14,7 @@
 
 mod ci;
 mod cooldown;
+mod ctreport;
 mod expect;
 mod gates;
 mod meta;
@@ -44,6 +45,7 @@ usage: cargo xtask <command> [options]
   win-test --backend github|libvirt         Windows gate (github: windows-latest; libvirt: from M9)
   install-tools [--set NAME] [--nightly]    install the pinned tools (fast | windows | xwin | full | all)
   vectors                                   generate the Rust vectors, compare with vectors/ref, freeze
+  ct-check REPORT...                        the ct gate's reading of saved ct reports
   repro-check | ops-check                   documented stubs until M11 / M10";
 
 fn run(args: &[String]) -> Result<()> {
@@ -66,6 +68,7 @@ fn run(args: &[String]) -> Result<()> {
         "win-test" => wintest::run(rest),
         "install-tools" => tools::install(rest),
         "vectors" => vectors::run(root),
+        "ct-check" => ctreport::check_files(rest),
         "repro-check" => stubs::repro_check(),
         "ops-check" => stubs::ops_check(),
         "help" | "--help" | "-h" => {

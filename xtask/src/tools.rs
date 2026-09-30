@@ -91,6 +91,8 @@ pub(crate) fn set(name: &str) -> Result<Vec<CargoTool>> {
         "fast" => vec![NEXTEST, DENY, VET, AUDIT, AUDITABLE, CYCLONEDX],
         "windows" => vec![NEXTEST],
         "xwin" => vec![XWIN],
+        // the weekly `miri-full` workflow needs only the pinned nightly (`--nightly`)
+        "miri" => vec![],
         "full" => vec![
             NEXTEST, DENY, VET, AUDIT, AUDITABLE, CYCLONEDX, FUZZ, MUTANTS, LLVM_COV, XWIN, KANI,
         ],
@@ -98,7 +100,7 @@ pub(crate) fn set(name: &str) -> Result<Vec<CargoTool>> {
             NEXTEST, DENY, VET, AUDIT, AUDITABLE, CYCLONEDX, FUZZ, MUTANTS, LLVM_COV, XWIN,
             ZIGBUILD, KANI,
         ],
-        other => bail!("unknown tool set {other:?} (fast | windows | xwin | full | all)"),
+        other => bail!("unknown tool set {other:?} (fast | windows | xwin | miri | full | all)"),
     })
 }
 

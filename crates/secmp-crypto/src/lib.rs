@@ -39,11 +39,14 @@ mod sas;
 mod secret;
 #[cfg(test)]
 mod test_util;
+#[cfg(feature = "kat")]
+mod vector_stream;
 mod x25519;
 
 pub use caead::{AEAD_TAG_LEN, COM_LEN, Caead, NONCE_LEN};
 pub use ed25519::{
     ED25519_PK_LEN, ED25519_SEED_LEN, ED25519_SIG_LEN, Ed25519SigningKey, Ed25519VerifyingKey,
+    check_ed25519_signature_encoding,
 };
 pub use error::{Error, Result};
 pub use fingerprint::{FINGERPRINT_LEN, Fingerprint, IKS_PUBLIC_LEN};
@@ -69,5 +72,7 @@ pub use msg::{BODY_LEN, MSG_SEALED_LEN, MSG_TAG_LEN, MsgEncrypt};
 pub use nonce::{Counter64, Nonce24};
 pub use sas::{SAS_DIGITS, SAS_HALF_DIGITS, SAS_ITERATIONS, SafetyNumber};
 pub use secret::{LockedSecret, SecretBytes};
+#[cfg(feature = "kat")]
+pub use vector_stream::VectorStream;
 pub use x25519::{X25519_LEN, X25519Public, X25519Secret};
 pub use zeroize::Zeroizing;

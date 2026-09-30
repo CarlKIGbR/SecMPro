@@ -1,0 +1,216 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# On-demand runs of single SecMPro gates (`workflow_dispatch` only; M2 review C2). The job names differ from the
+# four required checks of `ci.yml` (`linux-fast`, `windows-native`, `xwin-cross`, `linux-full`), so a dispatch on a
+# pull-request head never adds a check run under a required name. The jobs run the same `cargo xtask` steps as their
+# `ci.yml` counterparts. `cargo xtask win-test --backend github --dispatch` starts `suite: windows`.
+# Checked by `cargo xtask policy` as every workflow (see the header of ci.yml). By convention, not checked: a
+# read-only token and checkout without persisted credentials.
+name: ci-dispatch
+
+on:
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: "Jobs to run (fast = steps 1–5, 13, 14; full = ci-full and the xwin cross-build; windows = the Windows gate; ct = the constant-time gate alone; all = every job)"
+        type: choice
+        options: [all, fast, full, windows, ct]
+        default: ct
+
+permissions:
+  contents: read
+
+# A second dispatch of the same suite on the same ref cancels the running one (`cancel-in-progress`): start the next
+# only after the previous run has finished.
+concurrency:
+  group: ci-dispatch-${{ github.ref }}-${{ inputs.suite }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # docs/06 §5 steps 1–5 (ci-fast), 13 (SBOM) and 14 (systemd exposure).
+  dispatch-fast:
+    if: inputs.suite == 'all' || inputs.suite == 'fast'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Pinned toolchain (rust-toolchain.toml)
+        run: rustup toolchain install && rustc -vV
+      - name: Tool install root
+        run: |
+          echo "SECMP_TOOLS_ROOT=$HOME/.secmp-tools" >> "$GITHUB_ENV"
+          echo "$HOME/.secmp-tools/bin" >> "$GITHUB_PATH"
+      - name: Restore pinned tools
+        id: tools-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.secmp-tools
+          key: ci-tools-fast-${{ runner.os }}-${{ hashFiles('xtask/src/tools.rs', 'rust-toolchain.toml') }}
+      - name: Install pinned tools
+        run: cargo xtask install-tools --set fast
+      - name: Save pinned tools (right after installing, so a later failing step cannot lose the cache)
+        if: steps.tools-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.secmp-tools
+          key: ${{ steps.tools-cache.outputs.cache-primary-key }}
+      - name: ci-fast (steps 1–5)
+        run: cargo xtask ci-fast --strict
+      - name: SBOM (step 13) and systemd exposure (step 14)
+        run: cargo xtask step --strict sbom systemd
+      - name: Upload SBOMs
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sbom-${{ github.sha }}
+          path: target/sbom/
+          if-no-files-found: error
+
+  # The Windows gate (Amendment A1 §2): native MSVC build, clippy, tests, KATs, hello-world binaries.
+  dispatch-windows:
+    if: inputs.suite == 'all' || inputs.suite == 'windows'
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Pinned toolchain (rust-toolchain.toml)
+        run: rustup toolchain install; rustc -vV
+      - name: Tool install root
+        run: |
+          "SECMP_TOOLS_ROOT=$env:USERPROFILE\.secmp-tools" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "$env:USERPROFILE\.secmp-tools\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+      - name: Restore pinned tools
+        id: tools-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.secmp-tools
+          key: ci-tools-windows-${{ runner.os }}-${{ hashFiles('xtask/src/tools.rs', 'rust-toolchain.toml') }}
+      - name: Install pinned tools
+        run: cargo xtask install-tools --set windows
+      - name: Save pinned tools (right after installing, so a later failing step cannot lose the cache)
+        if: steps.tools-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.secmp-tools
+          key: ${{ steps.tools-cache.outputs.cache-primary-key }}
+      - name: Windows gate
+        run: cargo xtask step --strict clippy nextest doctest kat hello
+
+  # docs/06 §5 step 11: the cargo-xwin cross-build (ADR-034).
+  dispatch-xwin:
+    if: inputs.suite == 'all' || inputs.suite == 'full'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Pinned toolchain (rust-toolchain.toml)
+        run: rustup toolchain install && rustc -vV
+      - name: Tool install root
+        run: |
+          echo "SECMP_TOOLS_ROOT=$HOME/.secmp-tools" >> "$GITHUB_ENV"
+          echo "$HOME/.secmp-tools/bin" >> "$GITHUB_PATH"
+      - name: LLVM tools for clang-cl / lld-link / llvm-lib
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends clang lld llvm
+      - name: NASM (aws-lc-sys assembles its x86_64 Windows objects with it; M0 spike (b))
+        run: sudo apt-get install -y --no-install-recommends nasm && nasm -v
+      - name: Restore pinned tools
+        id: tools-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.secmp-tools
+          key: ci-tools-xwin-${{ runner.os }}-${{ hashFiles('xtask/src/tools.rs', 'rust-toolchain.toml') }}
+      - name: Install pinned tools
+        run: cargo xtask install-tools --set xwin
+      - name: Save pinned tools (right after installing, so a later failing step cannot lose the cache)
+        if: steps.tools-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.secmp-tools
+          key: ${{ steps.tools-cache.outputs.cache-primary-key }}
+      - name: Cross-build for x86_64-pc-windows-msvc
+        run: cargo xtask step --strict windows-cross
+
+  # The constant-time gate alone (docs/06 §4, ADR-038, ADR-041): re-measurements on the GitHub-hosted runner type.
+  dispatch-ct:
+    if: inputs.suite == 'all' || inputs.suite == 'ct'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Pinned toolchain (rust-toolchain.toml)
+        run: rustup toolchain install && rustc -vV
+      - name: Constant-time gate (step 5 ct)
+        run: cargo xtask step --strict ct
+      - name: Upload the constant-time report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ct-report-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}-${{ github.run_id }}
+          path: target/ct-report.json
+          if-no-files-found: error
+
+  # docs/06 §5 steps 1–14 (ci-full).
+  dispatch-full:
+    if: inputs.suite == 'all' || inputs.suite == 'full'
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Pinned toolchain (rust-toolchain.toml)
+        run: rustup toolchain install && rustc -vV
+      - name: Tool install root
+        run: |
+          echo "SECMP_TOOLS_ROOT=$HOME/.secmp-tools" >> "$GITHUB_ENV"
+          echo "$HOME/.secmp-tools/bin" >> "$GITHUB_PATH"
+      - name: Restore pinned tools
+        id: tools-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.secmp-tools
+            ~/.kani
+          key: ci-tools-full-${{ runner.os }}-${{ hashFiles('xtask/src/tools.rs', 'rust-toolchain.toml') }}
+      - name: Install pinned tools and nightly (Miri, fuzz)
+        run: cargo xtask install-tools --set full --nightly
+      - name: ProVerif 2.05 from source (sha256 as recorded by opam)
+        run: |
+          if [ ! -x "$HOME/.secmp-tools/bin/proverif" ]; then
+            sudo apt-get update && sudo apt-get install -y --no-install-recommends ocaml-nox ocaml-findlib ocamlbuild
+            cd "$RUNNER_TEMP"
+            curl --fail --silent --show-error --location -o proverif2.05.tar.gz https://proverif.inria.fr/proverif2.05.tar.gz
+            echo "4871f53c32ab4a04669a060c4886ba5d9080496963fb980a9a62d2c429ceabc4  proverif2.05.tar.gz" | sha256sum -c -
+            tar xzf proverif2.05.tar.gz
+            cd proverif2.05 && ./build -nointeract
+            install -m 0755 proverif "$HOME/.secmp-tools/bin/proverif"
+          fi
+          proverif -help | head -1
+      - name: Save pinned tools (right after installing, so a later failing step cannot lose the cache)
+        if: steps.tools-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.secmp-tools
+            ~/.kani
+          key: ${{ steps.tools-cache.outputs.cache-primary-key }}
+      - name: ci-full (steps 1–14)
+        run: cargo xtask ci-full --strict --delegated windows-native --delegated windows-cross
+      # The report of the `ct` step (ADR-038 runner metadata and per-target t values), kept with every run so a
+      # verdict can be re-read without the job log (M1 review §E 5.7).
+      - name: Upload the constant-time report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ct-report-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
+          path: target/ct-report.json
+          if-no-files-found: error

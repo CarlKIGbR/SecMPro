@@ -1,0 +1,38 @@
+# cargo-mutants, the gate's command in 4 shards (macOS arm64):
+# cargo mutants --no-shuffle --output target/mutants-sK --features secmp-crypto/kat --package secmp-crypto
+#   --package secmp-proto --exclude crates/secmp-proto/src/kani_proofs.rs --exclude-re kani_stubs:: --shard K/4
+
+## shard 0/4
+Found 157 mutants to test
+ok       Unmutated baseline in 7s build + 8s test
+ INFO Auto-set test timeout to 44s
+157 mutants tested in 5m: 101 caught, 56 unviable
+missed.txt: (empty)
+timeout.txt: (empty)
+
+## shard 1/4
+Found 157 mutants to test
+ok       Unmutated baseline in 7s build + 11s test
+ INFO Auto-set test timeout to 56s
+MISSED   crates/secmp-crypto/src/secret.rs:59:9: replace <impl Drop for SecretBytes<N>>::drop with () in 1s build + 8s test
+157 mutants tested in 6m: 1 missed, 112 caught, 44 unviable
+missed.txt: crates/secmp-crypto/src/secret.rs:59:9: replace <impl Drop for SecretBytes<N>>::drop with ()
+timeout.txt: (empty)
+
+## shard 2/4
+Found 157 mutants to test
+ok       Unmutated baseline in 7s build + 3s test
+ INFO Auto-set test timeout to 20s
+157 mutants tested in 3m: 105 caught, 52 unviable
+missed.txt: (empty)
+timeout.txt: (empty)
+
+## shard 3/4
+Found 154 mutants to test
+ok       Unmutated baseline in 6s build + 3s test
+ INFO Auto-set test timeout to 20s
+154 mutants tested in 4m: 122 caught, 32 unviable
+missed.txt: (empty)
+timeout.txt: (empty)
+
+total: 625 mutants (157 + 157 + 157 + 154), 1 missed — crates/secmp-crypto/src/secret.rs:59:9 `replace <impl Drop for SecretBytes<N>>::drop with ()`, documented in docs/mutants-accepted.md (M1) — 0 timeouts; undocumented survivors: 0

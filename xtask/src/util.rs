@@ -52,6 +52,7 @@ pub(crate) struct Cmd {
     args: Vec<String>,
     dir: Option<PathBuf>,
     envs: Vec<(String, String)>,
+    removed: Vec<String>,
 }
 
 /// Captured result of a command that is allowed to fail.
@@ -69,6 +70,7 @@ impl Cmd {
             args: Vec::new(),
             dir: None,
             envs: Vec::new(),
+            removed: Vec::new(),
         }
     }
 
@@ -107,8 +109,19 @@ impl Cmd {
         self
     }
 
+    /// Run without the environment variable `key` (whatever the caller's environment holds).
+    pub(crate) fn env_remove(mut self, key: impl Into<String>) -> Self {
+        self.removed.push(key.into());
+        self
+    }
+
     fn display(&self) -> String {
         let mut s = String::new();
+        for k in &self.removed {
+            s.push_str("-u ");
+            s.push_str(k);
+            s.push(' ');
+        }
         for (k, v) in &self.envs {
             s.push_str(k);
             s.push('=');
@@ -132,6 +145,9 @@ impl Cmd {
     fn command(&self) -> Command {
         let mut c = Command::new(OsStr::new(&self.program));
         c.args(&self.args);
+        for k in &self.removed {
+            c.env_remove(k);
+        }
         c.envs(self.envs.iter().map(|(k, v)| (k.as_str(), v.as_str())));
         if let Some(d) = &self.dir {
             c.current_dir(d);

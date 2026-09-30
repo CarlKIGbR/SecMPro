@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 use crate::ci::{Ctx, Outcome};
+use crate::ctreport;
 use crate::expect;
 use crate::tools;
 use crate::util::{Cmd, Error, Result, bail, rel, say, walk_files};
@@ -187,131 +188,19 @@ pub(crate) fn kat(ctx: &Ctx) -> Result<Outcome> {
     )))
 }
 
-/// The `ct` report (`target/ct-report.json`, written by `crates/secmp-crypto/benches/ct.rs`) as the gate reads it
-/// (ADR-038): one line per target, and the targets that fail or are not measurable on this runner.
-#[derive(Debug, Default)]
-pub(crate) struct CtTable {
-    pub(crate) lines: Vec<String>,
-    pub(crate) failed: Vec<String>,
-    pub(crate) not_measurable: Vec<String>,
-}
-
-/// The verdicts a report may carry and whether each passes (ADR-038 (2)–(4)).
-const CT_VERDICTS: &[(&str, bool)] = &[
-    ("PASS", true),
-    ("INCONCLUSIVE→PASS", true),
-    ("FAIL", false),
-    ("INCONCLUSIVE→FAIL", false),
-    ("NOT_MEASURABLE", false),
-];
-
-/// `max |t| = x (crop), batch median y ns` of one measurement object.
-fn ct_measurement(m: &Value) -> String {
-    let t = m
-        .get("max_abs_t")
-        .and_then(Value::as_f64)
-        .unwrap_or(f64::NAN);
-    let at = m.get("max_at").and_then(Value::as_str).unwrap_or("?");
-    let median = m
-        .get("median_ns")
-        .and_then(Value::as_f64)
-        .unwrap_or(f64::NAN);
-    format!("max |t| = {t:.2} ({at}), batch median {median:.1} ns")
-}
-
-pub(crate) fn ct_table(json: &str) -> Result<CtTable> {
-    let v: Value = serde_json::from_str(json).map_err(|e| Error(format!("ct report: {e}")))?;
-    if let Some(e) = v.get("error").and_then(Value::as_str) {
-        bail!("ct report: {e}");
-    }
-    // the bench reads the ADR-038 parameters from expect.rs; the report must echo exactly them
-    let th = v
-        .get("thresholds")
-        .ok_or_else(|| Error("ct report: no thresholds".to_owned()))?;
-    let num = |k: &str| th.get(k).and_then(Value::as_f64).map(f64::to_bits);
-    let (pass, fail) = expect::CT_THRESHOLDS;
-    if num("pass") != Some(pass.to_bits())
-        || num("fail") != Some(fail.to_bits())
-        || num("max_resolution_fraction") != Some(expect::CT_RESOLUTION_MAX_FRACTION.to_bits())
-        || th.get("max_batch").and_then(Value::as_u64) != Some(u64::from(expect::CT_MAX_BATCH))
-    {
-        bail!(
-            "ct report: thresholds {th} differ from expect::CT_THRESHOLDS {:?} / CT_RESOLUTION_MAX_FRACTION {} / \
-             CT_MAX_BATCH {}",
-            expect::CT_THRESHOLDS,
-            expect::CT_RESOLUTION_MAX_FRACTION,
-            expect::CT_MAX_BATCH
-        );
-    }
-    let resolution = v
-        .get("clock")
-        .and_then(|c| c.get("resolution_ns"))
-        .and_then(Value::as_f64);
-    let results = v
-        .get("results")
-        .and_then(Value::as_array)
-        .ok_or_else(|| Error("ct report: no results".to_owned()))?;
-    let mut table = CtTable::default();
-    if results.is_empty() {
-        table
-            .failed
-            .push("ct report: no target was measured".to_owned());
-    }
-    for r in results {
-        let name = r.get("name").and_then(Value::as_str).unwrap_or("?");
-        let verdict = r.get("verdict").and_then(Value::as_str).unwrap_or("?");
-        let control = r.get("control").and_then(Value::as_bool).unwrap_or(false);
-        let n = r.get("samples").and_then(Value::as_u64).unwrap_or(0);
-        let k = r
-            .get("k")
-            .and_then(Value::as_u64)
-            .map_or_else(|| "-".to_owned(), |k| k.to_string());
-        let calibration = r.get("calibration_median_ns").and_then(Value::as_f64);
-        let ns = |x: Option<f64>| x.map_or_else(|| "?".to_owned(), |x| format!("{x:.1}"));
-        let measurement = |key: &str| {
-            r.get(key)
-                .filter(|m| !m.is_null())
-                .map(|m| format!("; {key} {}", ct_measurement(m)))
-                .unwrap_or_default()
-        };
-        let line = format!(
-            "{name}: {verdict} — k={k}, calibration median {} ns, {n} samples{}{}{}",
-            ns(calibration),
-            measurement("first"),
-            measurement("second"),
-            if control {
-                " (control, must be detected)"
-            } else {
-                ""
-            }
-        );
-        let passes = CT_VERDICTS
-            .iter()
-            .find(|(v, _)| *v == verdict)
-            .is_some_and(|(_, ok)| *ok);
-        if verdict == "NOT_MEASURABLE" {
-            table.not_measurable.push(format!(
-                "{name} (resolution {} ns, median {} ns)",
-                ns(resolution),
-                ns(calibration)
-            ));
-        } else if !passes {
-            table.failed.push(line.clone());
-        }
-        table.lines.push(line);
-    }
-    Ok(table)
-}
-
-/// dudect-style constant-time tests (docs/06 §2, §4; ADR-038): `cargo bench --bench ct` in the release profile,
-/// timed with the CPU counter; per target ≤ pass → PASS, > fail → FAIL, in between one re-measurement; the
-/// variable-time control must be detected; a target the runner's timer cannot resolve is NOT MEASURABLE, which
-/// fails the gate with that wording.
+/// dudect-style constant-time tests (docs/06 §2, §4; ADR-038, ADR-041 with Amendment 1): `cargo bench --bench ct`
+/// in the release profile, timed with the CPU counter; per target two measurements, FAIL only for a shift
+/// reproduced at the same crop and sign (|t| > 4.5) that reaches the effect floor (one effective quantum, at least
+/// 10 ns), a reproduced smaller shift reported as `SUB_FLOOR_SHIFT`; the positive control must be detected; a
+/// failing inline A/A control or a sensitivity control (`min_leak_control`) below the floor makes the run
+/// `CONTROL_FAIL`; a target the runner's timer cannot resolve is NOT MEASURABLE. All but PASS and
+/// `SUB_FLOOR_SHIFT` fail the gate with their wording.
 pub(crate) fn ct(ctx: &Ctx) -> Result<Outcome> {
     let report = ctx.root.join("target").join("ct-report.json");
     if report.exists() {
         std::fs::remove_file(&report)?;
     }
+    // M2 review C3 (c): the full sample counts of expect.rs, whatever the caller's environment says
     let cap = Cmd::cargo()
         .args([
             "bench",
@@ -323,6 +212,7 @@ pub(crate) fn ct(ctx: &Ctx) -> Result<Outcome> {
             "--bench",
             "ct",
         ])
+        .env_remove("SECMP_CT_SCALE")
         .capture()?;
     let json = std::fs::read_to_string(&report).map_err(|e| {
         say(cap.stderr.trim_end());
@@ -330,7 +220,7 @@ pub(crate) fn ct(ctx: &Ctx) -> Result<Outcome> {
     })?;
     // the whole report first (clock, both measurements, per-crop t), so a CI log carries it even on failure
     say(&format!("  ct report: {}", json.trim_end()));
-    let table = ct_table(&json)?;
+    let table = ctreport::ct_table(&json)?;
     for l in &table.lines {
         say(&format!("  ct {l}"));
     }
@@ -376,6 +266,7 @@ pub(crate) fn fuzz(ctx: &Ctx) -> Result<Outcome> {
     let found = file_stems(&ctx.root.join("fuzz").join("fuzz_targets"), "rs")?;
     same_set("fuzz targets", &found, expect::FUZZ_TARGETS)?;
     for t in &found {
+        let max_len = fuzz_max_len(t)?;
         Cmd::cargo_on(tools::NIGHTLY)
             .args([
                 "fuzz",
@@ -386,13 +277,27 @@ pub(crate) fn fuzz(ctx: &Ctx) -> Result<Outcome> {
                 "--",
                 "-max_total_time=120",
             ])
+            .arg(format!("-max_len={max_len}"))
             .dir(&ctx.root)
             .run()?;
     }
     Ok(Outcome::Pass(format!(
-        "fuzz smoke, 120 s per target: {} (expected set matches)",
+        "fuzz smoke, 120 s per target, -max_len from expect::FUZZ_MAX_LEN: {} (expected set matches)",
         list(&found)
     )))
+}
+
+/// The libFuzzer `-max_len` of target `t` (`expect::FUZZ_MAX_LEN`, M2 review C4); a target without one is refused.
+fn fuzz_max_len(t: &str) -> Result<usize> {
+    expect::FUZZ_MAX_LEN
+        .iter()
+        .find(|(name, _)| *name == t)
+        .map(|(_, n)| *n)
+        .ok_or_else(|| {
+            Error(format!(
+                "fuzz target {t} has no -max_len in expect::FUZZ_MAX_LEN"
+            ))
+        })
 }
 
 /// Per-crate line coverage from a `cargo llvm-cov --json --summary-only` export.
@@ -524,6 +429,27 @@ pub(crate) fn undocumented_survivors(listing: &str, accepted: &str) -> Vec<Strin
         .collect()
 }
 
+/// The survivors of a cargo-mutants run (`missed.txt` and `timeout.txt` of `mutants.out`), refusing a listing that
+/// the exit code says must exist and does not (M2 review C3 (d): exit 2 means missed mutants, 3 timeouts; a
+/// missing file must not read as "no survivors").
+pub(crate) fn mutant_survivors(
+    code: Option<i32>,
+    missed: Option<String>,
+    timeout: Option<String>,
+) -> Result<String> {
+    if code == Some(2) && missed.is_none() {
+        bail!("cargo mutants exited 2 (missed mutants) but mutants.out/missed.txt is missing");
+    }
+    if code == Some(3) && timeout.is_none() {
+        bail!("cargo mutants exited 3 (timeouts) but mutants.out/timeout.txt is missing");
+    }
+    Ok(format!(
+        "{}\n{}",
+        missed.unwrap_or_default(),
+        timeout.unwrap_or_default()
+    ))
+}
+
 pub(crate) fn mutants(ctx: &Ctx) -> Result<Outcome> {
     tools::require(tools::MUTANTS)?;
     // With feature `kat` the external KATs and the frozen-vector test join the unit tests in killing mutants.
@@ -538,12 +464,18 @@ pub(crate) fn mutants(ctx: &Ctx) -> Result<Outcome> {
     for p in expect::MUTANT_PACKAGES {
         c = c.args(["--package", p]);
     }
+    for f in expect::MUTANT_EXCLUDE_FILES {
+        c = c.args(["--exclude", f]);
+    }
+    for re in expect::MUTANT_EXCLUDE_RE {
+        c = c.args(["--exclude-re", re]);
+    }
     let cap = c.dir(&ctx.root).capture()?;
     say(cap.stdout.trim_end());
     let out = ctx.root.join("target").join("mutants.out");
-    let read = |name: &str| std::fs::read_to_string(out.join(name)).unwrap_or_default();
+    let read = |name: &str| std::fs::read_to_string(out.join(name)).ok();
     let accepted = std::fs::read_to_string(ctx.root.join("docs").join("mutants-accepted.md"))?;
-    let survivors = format!("{}\n{}", read("missed.txt"), read("timeout.txt"));
+    let survivors = mutant_survivors(cap.code, read("missed.txt"), read("timeout.txt"))?;
     let undocumented = undocumented_survivors(&survivors, &accepted);
     let documented = survivors
         .lines()
@@ -582,7 +514,18 @@ pub(crate) fn mutants(ctx: &Ctx) -> Result<Outcome> {
     )))
 }
 
+/// Miri in `ci-full`: the bounded scope, skipping the test modules of `expect::MIRI_SKIP` (docs/06 §4).
 pub(crate) fn miri(ctx: &Ctx) -> Result<Outcome> {
+    miri_with(ctx, expect::MIRI_SKIP)
+}
+
+/// `miri-full` (on demand; the weekly `miri-full` workflow, docs/06 §4, M1 review F3): the complete set, no skip
+/// list.
+pub(crate) fn miri_full(ctx: &Ctx) -> Result<Outcome> {
+    miri_with(ctx, &[])
+}
+
+fn miri_with(ctx: &Ctx, skip: &[(&str, &str)]) -> Result<Outcome> {
     tools::require_nightly(&["miri", "rust-src"])?;
     Cmd::cargo_on(tools::NIGHTLY)
         .args(["miri", "setup", "--target", expect::MIRI_TARGET])
@@ -606,49 +549,131 @@ pub(crate) fn miri(ctx: &Ctx) -> Result<Outcome> {
         c = c.args(["--package", p]);
     }
     c = c.arg("--");
-    for (filter, _) in expect::MIRI_SKIP {
+    for (filter, _) in skip {
         c = c.args(["--skip", filter]);
     }
     c.run()?;
+    let skipped = if skip.is_empty() {
+        "none (complete set)".to_owned()
+    } else {
+        skip.iter().map(|(f, _)| *f).collect::<Vec<_>>().join(", ")
+    };
     Ok(Outcome::Pass(format!(
-        "Miri ({}, interpreting {}, libcrux portable backend): {}; skipped test modules: {}",
+        "Miri ({}, interpreting {}, libcrux portable backend): {}; skipped test modules: {skipped}",
         tools::NIGHTLY,
         expect::MIRI_TARGET,
         expect::MIRI_PACKAGES.join(", "),
-        expect::MIRI_SKIP
-            .iter()
-            .map(|(f, _)| *f)
-            .collect::<Vec<_>>()
-            .join(", ")
     )))
 }
 
 pub(crate) fn kani(ctx: &Ctx) -> Result<Outcome> {
     tools::require(tools::KANI)?;
     let mut found = BTreeSet::new();
+    let mut packages = Vec::new();
     for p in &ctx.ws.members {
         let Some(dir) = p.manifest_path.parent() else {
             continue;
         };
         for f in walk_files(dir, &|x: &Path| x.extension().is_some_and(|e| e == "rs"))? {
             // spelled in two parts so that this file does not count as a harness
-            if std::fs::read_to_string(&f)?.contains(concat!("#[kani", "::proof]")) {
-                found.insert(p.name.clone());
+            if std::fs::read_to_string(&f)?.contains(concat!("#[kani", "::proof]"))
+                && found.insert(p.name.clone())
+            {
+                packages.push(p);
             }
         }
     }
     same_set("Kani harness packages", &found, expect::KANI_PACKAGES)?;
-    for p in &found {
-        Cmd::cargo()
-            .args(["kani", "--package", p])
-            .dir(&ctx.root)
-            .run()?;
+    // `cargo kani --package` from the workspace root does not apply the package's `[package.metadata.kani]` (M2: the
+    // stubbed harnesses did not compile in CI run 36614956208), and `--manifest-path` could not start `cargo
+    // metadata` on the CI runner (run 36633643390): the gate passes the package's unstable features as `-Z` itself
+    let mut output = String::new();
+    for p in &packages {
+        let mut c = Cmd::cargo().args(["kani", "--package", &p.name]);
+        for feature in &p.kani_unstable {
+            c = c.args(["-Z", feature]);
+        }
+        let cap = c.dir(&ctx.root).capture()?;
+        // the harness verdicts and Kani's summary into the log (the full output only on failure)
+        for line in cap.stdout.lines().filter(|l| {
+            l.starts_with("Checking harness")
+                || l.starts_with("VERIFICATION:-")
+                || l.starts_with("Verification Time")
+                || l.starts_with("Complete -")
+        }) {
+            say(&format!("  {line}"));
+        }
+        if !cap.success {
+            say(cap.stdout.trim_end());
+            say(cap.stderr.trim_end());
+            bail!("cargo kani --package {} failed", p.name);
+        }
+        output.push_str(&cap.stdout);
     }
+    let verified = kani_verified(&output)?;
     Ok(Outcome::Pass(format!(
-        "Kani {}: harness packages {} (expected set matches)",
+        "Kani {}: harness packages {} (expected set matches); {}/{} harnesses verified (expect::KANI_HARNESSES): {}",
         tools::KANI.version,
-        list(&found)
+        list(&found),
+        verified.len(),
+        expect::KANI_HARNESSES.len(),
+        verified.join(", ")
     )))
+}
+
+/// M2 review C5: the harnesses a Kani run verified. Refuses the run unless every "Complete - N successfully verified
+/// harnesses, M failures, T total." line has M = 0 and N = T, the N add up to `expect::KANI_HARNESSES.len()`, and
+/// the harnesses reported `VERIFICATION:- SUCCESSFUL` are exactly `expect::KANI_HARNESSES` (none missing, none
+/// unknown, none twice).
+pub(crate) fn kani_verified(output: &str) -> Result<Vec<String>> {
+    let mut current: Option<&str> = None;
+    let mut verified: Vec<String> = Vec::new();
+    let mut total = 0_usize;
+    let mut summaries = 0_usize;
+    for line in output.lines() {
+        if let Some(name) = line
+            .strip_prefix("Checking harness ")
+            .and_then(|n| n.strip_suffix("..."))
+        {
+            current = Some(name);
+        } else if line.starts_with("VERIFICATION:- SUCCESSFUL") {
+            let name =
+                current.ok_or_else(|| Error("kani: a verdict before any harness".to_owned()))?;
+            verified.push(name.to_owned());
+        } else if let Some(summary) = line.strip_prefix("Complete - ") {
+            let numbers: Vec<usize> = summary
+                .split(|c: char| !c.is_ascii_digit())
+                .filter(|s| !s.is_empty())
+                .filter_map(|s| s.parse().ok())
+                .collect();
+            let [ok, failures, all] = numbers.as_slice() else {
+                bail!("kani: cannot read the summary {line:?}");
+            };
+            if *failures != 0 || ok != all {
+                bail!("kani: {line}");
+            }
+            total = total.saturating_add(*ok);
+            summaries = summaries.saturating_add(1);
+        }
+    }
+    if summaries == 0 {
+        bail!("kani: no \"Complete - …\" summary in the output");
+    }
+    let mut sorted = verified.clone();
+    sorted.sort();
+    sorted.dedup();
+    let expected: BTreeSet<&str> = expect::KANI_HARNESSES.iter().copied().collect();
+    let got: BTreeSet<&str> = sorted.iter().map(String::as_str).collect();
+    if total != expect::KANI_HARNESSES.len() || sorted.len() != verified.len() || got != expected {
+        let missing: Vec<&str> = expected.difference(&got).copied().collect();
+        let unknown: Vec<&str> = got.difference(&expected).copied().collect();
+        bail!(
+            "kani: {total} harnesses verified, expected the {} of expect::KANI_HARNESSES; missing: {missing:?}; \
+             unknown: {unknown:?}",
+            expect::KANI_HARNESSES.len()
+        );
+    }
+    Ok(sorted)
 }
 
 /// The `RESULT ...` verdicts of a ProVerif run, in order: `Some(true)` = "is true.", `Some(false)` = "is
@@ -950,18 +975,91 @@ pub(crate) fn workflow_findings(name: &str, text: &str) -> Vec<String> {
     out
 }
 
+/// The job ids of a workflow and the `name:` of each job (a check run carries the name, or the id without one).
+fn job_names(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut in_jobs = false;
+    for line in text.lines() {
+        if line.trim_start().starts_with('#') {
+            continue;
+        }
+        if line.starts_with("jobs:") {
+            in_jobs = true;
+            continue;
+        }
+        if !line.starts_with(' ') && !line.trim().is_empty() {
+            in_jobs = false;
+        }
+        if !in_jobs {
+            continue;
+        }
+        if let Some(id) = line.strip_prefix("  ").and_then(|l| l.strip_suffix(':'))
+            && !id.starts_with(' ')
+        {
+            out.push(id.to_owned());
+        } else if let Some(name) = line.strip_prefix("    name:")
+            && !line.starts_with("     ")
+        {
+            out.push(name.trim().trim_matches(['"', '\'']).to_owned());
+        }
+    }
+    out
+}
+
+/// M2 review C2: the required job names exist only in `expect::REQUIRED_WORKFLOW`, all of them, and that workflow
+/// has no `workflow_dispatch` trigger (a dispatch would add `skipped` check runs under the required names, and
+/// GitHub counts a skipped check as passing). `files`: (repository-relative path, text).
+pub(crate) fn required_job_findings(files: &[(String, String)]) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut seen_required = false;
+    for (name, text) in files {
+        let jobs = job_names(text);
+        if name == expect::REQUIRED_WORKFLOW {
+            seen_required = true;
+            if text
+                .lines()
+                .any(|l| !l.trim_start().starts_with('#') && l.contains("workflow_dispatch"))
+            {
+                out.push(format!(
+                    "{name}: a `workflow_dispatch` trigger next to the required checks"
+                ));
+            }
+            for required in expect::REQUIRED_JOBS {
+                if !jobs.iter().any(|j| j == required) {
+                    out.push(format!("{name}: required job `{required}` missing"));
+                }
+            }
+        } else {
+            for j in jobs
+                .iter()
+                .filter(|j| expect::REQUIRED_JOBS.contains(&j.as_str()))
+            {
+                out.push(format!(
+                    "{name}: job `{j}` uses a required-check name outside {}",
+                    expect::REQUIRED_WORKFLOW
+                ));
+            }
+        }
+    }
+    if !seen_required {
+        out.push(format!("{} missing", expect::REQUIRED_WORKFLOW));
+    }
+    out
+}
+
 fn workflows(root: &Path) -> Result<String> {
     let dir = root.join(".github").join("workflows");
     let files = walk_files(&dir, &|p: &Path| {
         p.extension().is_some_and(|e| e == "yml" || e == "yaml")
     })?;
     let mut findings = Vec::new();
+    let mut texts = Vec::new();
     for f in &files {
-        findings.extend(workflow_findings(
-            &rel(root, f),
-            &std::fs::read_to_string(f)?,
-        ));
+        let text = std::fs::read_to_string(f)?;
+        findings.extend(workflow_findings(&rel(root, f), &text));
+        texts.push((rel(root, f), text));
     }
+    findings.extend(required_job_findings(&texts));
     for f in &findings {
         say(&format!("  FINDING {f}"));
     }
@@ -969,7 +1067,7 @@ fn workflows(root: &Path) -> Result<String> {
         bail!("{} CI-hygiene finding(s)", findings.len());
     }
     Ok(format!(
-        "workflows: {} files, triggers/SHA pins/continue-on-error ok",
+        "workflows: {} files, triggers/SHA pins/continue-on-error ok; required checks only in ci.yml, no dispatch there",
         files.len()
     ))
 }
@@ -1049,124 +1147,6 @@ mod tests {
         assert!(undocumented_survivors("", accepted).is_empty());
     }
 
-    /// A report in the ADR-038 format with the given results, the parameters of `expect.rs` and a 0.5 ns clock.
-    fn ct_report(results: &str) -> String {
-        let (pass, fail) = expect::CT_THRESHOLDS;
-        format!(
-            r#"{{"thresholds":{{"pass":{pass},"fail":{fail},"max_resolution_fraction":{},"max_batch":{}}},"sign":"t < 0: class 0 faster","clock":{{"timer":"rdtscp","tick_ns":0.5,"resolution_ns":0.5}},"results":[{results}]}}"#,
-            expect::CT_RESOLUTION_MAX_FRACTION,
-            expect::CT_MAX_BATCH
-        )
-    }
-
-    /// One target; `first: None` means no measurement (NOT MEASURABLE, `k` null).
-    fn ct_target(
-        name: &str,
-        control: bool,
-        verdict: &str,
-        first: Option<f64>,
-        second: Option<f64>,
-    ) -> String {
-        let m = |t: f64| {
-            format!(
-                r#"{{"max_abs_t":{t},"max_at":"p90","t":{{}},"distinct":900,"median_ticks":6000,"median_ns":3000.0,"median_per_resolution":6000.0}}"#
-            )
-        };
-        let k = if first.is_some() { "2" } else { "null" };
-        format!(
-            r#"{{"name":"{name}","samples":10,"control":{control},"k":{k},"calibration_median_ticks":3000,"calibration_median_ns":1500.0,"verdict":"{verdict}","passed":false,"first":{},"second":{}}}"#,
-            first.map_or_else(|| "null".to_owned(), m),
-            second.map_or_else(|| "null".to_owned(), m)
-        )
-    }
-
-    #[test]
-    fn ct_report_table() -> Result<()> {
-        let ok = ct_report(
-            &[
-                ct_target("control", true, "PASS", Some(99.0), None),
-                ct_target("tag", false, "PASS", Some(1.25), None),
-                ct_target("msg", false, "INCONCLUSIVE→PASS", Some(6.0), Some(1.5)),
-            ]
-            .join(","),
-        );
-        let t = ct_table(&ok)?;
-        assert!(t.failed.is_empty() && t.not_measurable.is_empty(), "{t:?}");
-        assert_eq!(t.lines.len(), 3);
-        assert!(
-            t.lines
-                .iter()
-                .any(|l| l.contains("control, must be detected"))
-        );
-        // k, the calibration median and both measurements (with their batch medians) are printed
-        assert!(
-            t.lines
-                .iter()
-                .any(|l| l.contains("k=2, calibration median 1500.0 ns")
-                    && l.contains("first max |t| = 6.00 (p90), batch median 3000.0 ns")
-                    && l.contains("second max |t| = 1.50 (p90), batch median 3000.0 ns")),
-            "{t:?}"
-        );
-
-        // FAIL and INCONCLUSIVE→FAIL fail the gate; so does an unknown verdict (fail closed)
-        for bad in ["FAIL", "INCONCLUSIVE→FAIL", "MAYBE"] {
-            let t = ct_table(&ct_report(&ct_target(
-                "tag",
-                false,
-                bad,
-                Some(7.0),
-                Some(6.0),
-            )))?;
-            assert_eq!(t.failed.len(), 1, "{bad}: {t:?}");
-        }
-
-        // NOT_MEASURABLE (k > max_batch: no measurement) is reported separately, with resolution and median
-        let t = ct_table(&ct_report(&ct_target(
-            "derive",
-            false,
-            "NOT_MEASURABLE",
-            None,
-            None,
-        )))?;
-        assert!(t.failed.is_empty(), "{t:?}");
-        assert_eq!(
-            t.not_measurable,
-            vec!["derive (resolution 0.5 ns, median 1500.0 ns)".to_owned()]
-        );
-        assert!(t.lines.iter().any(|l| l.contains("k=-")), "{t:?}");
-
-        // parameters that differ from expect.rs are refused
-        for (from, to) in [
-            (r#""fail":10"#, r#""fail":12"#),
-            (r#""max_batch":64"#, r#""max_batch":128"#),
-            (
-                r#""max_resolution_fraction":0.01"#,
-                r#""max_resolution_fraction":0.1"#,
-            ),
-        ] {
-            let tuned = ok.replacen(from, to, 1);
-            assert_ne!(tuned, ok, "{from}");
-            assert!(ct_table(&tuned).is_err(), "{from}");
-        }
-        let (without, _) = ok
-            .split_once(r#""sign""#)
-            .ok_or_else(|| Error("fixture".to_owned()))?;
-        assert!(
-            ct_table(&ok.replacen(without, "{", 1)).is_err(),
-            "no thresholds"
-        );
-
-        // an error report, an empty report, a malformed report
-        assert!(ct_table(r#"{"error":"thresholds not readable"}"#).is_err());
-        assert_eq!(
-            ct_table(&ct_report(""))?.failed.len(),
-            1,
-            "an empty report never passes"
-        );
-        assert!(ct_table("{}").is_err());
-        Ok(())
-    }
-
     #[test]
     fn proverif_verdicts() {
         let out = "Verification summary:\nRESULT not attacker(s[]) is true.\nRESULT not attacker(p[]) is false.\nRESULT event(x) ==> event(y) cannot be proved.\n";
@@ -1208,5 +1188,116 @@ mod tests {
         assert_eq!(workflow_findings("w", bad).len(), 4);
         let yaml_trap = "jobs:\n  a:\n    steps:\n      - run: echo \"done: ok\"\n      - run: |\n          echo \"done: ok\"\n";
         assert_eq!(workflow_findings("w", yaml_trap).len(), 1);
+    }
+
+    /// M2 review C2: the required job names only in ci.yml, all four there, and no dispatch trigger in ci.yml.
+    #[test]
+    fn required_checks_only_in_the_pull_request_workflow() {
+        let ci = "on:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  linux-fast:\n    runs-on: x\n  windows-native:\n    runs-on: x\n  xwin-cross:\n    runs-on: x\n  linux-full:\n    runs-on: x\n";
+        let dispatch = "on:\n  workflow_dispatch:\njobs:\n  dispatch-ct:\n    runs-on: x\n  dispatch-full:\n    runs-on: x\n";
+        let files = |ci: &str, other: &str| {
+            vec![
+                (expect::REQUIRED_WORKFLOW.to_owned(), ci.to_owned()),
+                (
+                    ".github/workflows/ci-dispatch.yml".to_owned(),
+                    other.to_owned(),
+                ),
+            ]
+        };
+        assert!(required_job_findings(&files(ci, dispatch)).is_empty());
+        // the pre-C2 ci.yml: a dispatch trigger next to the required jobs
+        let with_dispatch = ci.replace("  push:\n", "  workflow_dispatch:\n  push:\n");
+        assert_eq!(
+            required_job_findings(&files(&with_dispatch, dispatch)).len(),
+            1
+        );
+        // a required name in another workflow, as a job id or as a job's `name:`
+        let reuse_id = dispatch.replace("dispatch-full:", "linux-full:");
+        assert_eq!(required_job_findings(&files(ci, &reuse_id)).len(), 1);
+        let reuse_name = dispatch.replace(
+            "  dispatch-ct:\n    runs-on: x\n",
+            "  dispatch-ct:\n    name: windows-native\n    runs-on: x\n",
+        );
+        assert_eq!(required_job_findings(&files(ci, &reuse_name)).len(), 1);
+        // a required job missing from ci.yml, or ci.yml missing
+        let missing = ci.replace("  xwin-cross:\n    runs-on: x\n", "");
+        assert_eq!(required_job_findings(&files(&missing, dispatch)).len(), 1);
+        assert_eq!(
+            required_job_findings(&[("other.yml".to_owned(), dispatch.to_owned())]).len(),
+            1
+        );
+    }
+
+    /// M2 review C3 (d): exit 2 or 3 of cargo-mutants without its survivor listing is refused, not read as "no
+    /// survivors"; with the listing (or exit 0) the survivors are read.
+    #[test]
+    fn mutants_refuses_a_missing_survivor_listing() -> Result<()> {
+        assert!(mutant_survivors(Some(2), None, Some(String::new())).is_err());
+        assert!(mutant_survivors(Some(3), Some(String::new()), None).is_err());
+        let line = "crates/a.rs:1:1: replace f with ()";
+        assert_eq!(
+            mutant_survivors(Some(2), Some(line.to_owned()), None)?.trim(),
+            line
+        );
+        assert_eq!(mutant_survivors(Some(0), None, None)?.trim(), "");
+        Ok(())
+    }
+
+    /// A Kani log verifying `names`, with the summary line Kani prints.
+    fn kani_log(names: &[&str], failures: usize) -> String {
+        let harnesses: Vec<String> = names
+            .iter()
+            .map(|n| {
+                format!(
+                    "Checking harness {n}...\nVERIFICATION:- SUCCESSFUL\nVerification Time: 1.0s\n"
+                )
+            })
+            .collect();
+        let summary = format!(
+            "Complete - {} successfully verified harnesses, {failures} failures, {} total.\n",
+            names.len(),
+            names.len().saturating_add(failures)
+        );
+        [harnesses.concat(), summary].concat()
+    }
+
+    /// M2 review C5: Kani must verify exactly the harnesses of `expect::KANI_HARNESSES`.
+    #[test]
+    fn kani_refuses_fifteen_harnesses() -> Result<()> {
+        let all = expect::KANI_HARNESSES;
+        assert_eq!(all.len(), 16);
+        assert_eq!(kani_verified(&kani_log(all, 0))?.len(), 16);
+        // a deleted harness: 15 verified, and Kani's own summary says 15 of 15
+        let fifteen = all.get(1..).unwrap_or_default();
+        assert!(kani_verified(&kani_log(fifteen, 0)).is_err());
+        // a renamed harness, a failure, a harness counted twice, no summary
+        let renamed: Vec<&str> = fifteen
+            .iter()
+            .copied()
+            .chain(["kani_proofs::renamed"])
+            .collect();
+        assert!(kani_verified(&kani_log(&renamed, 0)).is_err());
+        assert!(kani_verified(&kani_log(all, 1)).is_err());
+        let twice: Vec<&str> = fifteen
+            .iter()
+            .copied()
+            .chain(fifteen.first().copied())
+            .collect();
+        assert!(kani_verified(&kani_log(&twice, 0)).is_err());
+        let no_summary = kani_log(all, 0).replace("Complete - ", "Done - ");
+        assert!(kani_verified(&no_summary).is_err());
+        Ok(())
+    }
+
+    /// M2 review C4: every fuzz target has a `-max_len`, and nothing else does.
+    #[test]
+    fn fuzz_max_len_covers_every_target() -> Result<()> {
+        let targets: BTreeSet<&str> = expect::FUZZ_TARGETS.iter().copied().collect();
+        let with_len: BTreeSet<&str> = expect::FUZZ_MAX_LEN.iter().map(|(t, _)| *t).collect();
+        assert_eq!(targets, with_len);
+        assert_eq!(expect::FUZZ_MAX_LEN.len(), expect::FUZZ_TARGETS.len());
+        assert_eq!(fuzz_max_len("proto_cell")?, 65_644);
+        assert!(fuzz_max_len("unknown").is_err());
+        Ok(())
     }
 }

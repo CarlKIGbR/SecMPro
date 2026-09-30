@@ -1,0 +1,93 @@
+# cargo xtask ci-full, local, macOS arm64 (aarch64-apple-darwin), 2026-09-29, tree of f5855db
+# Run as foreground chunks (a tool call is capped at 10 min): the xtask steps where they fit; for fuzz,
+# mutants, miri and kani the gate's own commands (xtask/src/gates.rs), split by target / shard / test group /
+# harness group. Every step of ci-full ran; windows-native and systemd are host-bound (SKIP on macOS;
+# their CI jobs windows-native and linux-full run them).
+
+## steps 1-4 (cargo xtask step --strict fmt clippy policy deny vet audit cooldown nextest doctest hello)
+=== step summary (host aarch64-apple-darwin, strict: true) ===
+   1 fmt             PASS          0s  rustfmt: no changes
+   2 clippy          PASS          0s  clippy --all-features -D warnings on aarch64-apple-darwin (12 crates)
+   2 policy          PASS          0s  unsafe-attrs: 22 target roots forbid, 2 sys library roots allow, 1 ADR-038 bench root allows (crates/secmp-crypto/benches/ct.rs), 2 secmp-ui roots deny, 2 secmp-ui files without `unsafe`; lints-table: 12 manifests; lint-allows: 35 relaxing attributes (all sanctioned); build-scripts: 12 crates, none; spdx: 147 files; secmp-crypto/secmp-proto normal closure (x86_64-unknown-linux-gnu, x86_64-pc-windows-msvc, aarch64-apple-darwin): 52 external crates, 0 exempted; tracked exemptions elsewhere: 25; workflows: 2 files, triggers/SHA pins/continue-on-error ok
+   3 deny            PASS          1s  advisories, bans, licenses, sources: ok
+   3 vet             PASS          0s  secmp-crypto/secmp-proto normal closure (x86_64-unknown-linux-gnu, x86_64-pc-windows-msvc, aarch64-apple-darwin): 52 external crates, 0 exempted; tracked exemptions elsewhere: 25
+   3 audit           PASS          1s  RustSec: no advisories (warnings denied); ignored with an ADR: RUSTSEC-2026-0173
+   3 cooldown        PASS         25s  119 registry packages (Cargo.lock, fuzz/Cargo.lock), all ≥ 7 days old; youngest: rand 0.10.3, 9 days
+   4 nextest         PASS          6s  cargo nextest run --workspace
+   4 doctest         PASS          0s  cargo test --doc
+   4 hello           PASS          0s  secmp-relay 0.0.0 (M0 skeleton: no functionality) | secmp-cli 0.0.0 (M0 skeleton: no functionality) | secmp-ui 0.0.0 (M0 skeleton: no functionality)
+step: PASS
+
+## step 5 kat (cargo xtask step --strict kat; tree 9ba8328, crate code identical to f5855db)
+=== step summary (host aarch64-apple-darwin, strict: true) ===
+   5 kat             PASS        298s  KAT/differential packages: secmp-crypto, secmp-testkit (expected set matches); ML-KEM KATs and frozen vectors also with libcrux's portable backend
+step: PASS
+
+## steps 5 ct, 7 coverage (cargo xtask step --strict ct coverage; tree 9ba8328, crate code identical)
+=== step summary (host aarch64-apple-darwin, strict: true) ===
+   5 ct              PASS        227s  control_variable_time_compare: PASS — k=28, calibration median 174.1 ns, 1000000 samples; first max |t| = 44983.52 (p75), batch median 44166.7 ns, q_eff 1.0 ticks (clock), realised 115.0 quanta; A/A max |t| = 2.31 (raw), batch median 4958.3 ns, q_eff 1.0 ticks (clock), realised 119.0 quanta (positive control, must be detected); tag_compare: PASS — k=1, calibration median 5708.3 ns, 1000000 samples; first max |t| = 2.46 (p75), batch median 5750.0 ns, q_eff 1.0 ticks (clock), realised 138.0 quanta; second max |t| = 1.54 (p75), batch median 5791.7 ns, q_eff 1.0 ticks (clock), realised 139.0 quanta; A/A max |t| = 0.68 (p50), batch median 5916.7 ns, q_eff 1.0 ticks (clock), realised 142.0 quanta; msg_open_reject: PASS — k=2, calibration median 2479.2 ns, 1000000 samples; first max |t| = 1.96 (p50), batch median 4916.7 ns, q_eff 1.0 ticks (clock), realised 118.0 quanta; second max |t| = 2.88 (p75), batch median 4916.7 ns, q_eff 1.0 ticks (clock), realised 118.0 quanta; A/A max |t| = 1.94 (p99), batch median 5041.7 ns, q_eff 1.0 ticks (clock), realised 121.0 quanta; caead_open_reject: PASS — k=1, calibration median 7791.7 ns, 1000000 samples; first max |t| = 1.41 (p75), batch median 7791.7 ns, q_eff 1.0 ticks (clock), realised 187.0 quanta; second max |t| = 1.66 (p75), batch median 7750.0 ns, q_eff 1.0 ticks (clock), realised 186.0 quanta; A/A max |t| = 2.16 (p75), batch median 7958.3 ns, q_eff 1.0 ticks (clock), realised 191.0 quanta; sas: PASS — k=1, calibration median 782875.0 ns, 20000 samples; first max |t| = 0.97 (raw), batch median 782416.7 ns, q_eff 1.0 ticks (clock), realised 18774.0 quanta; second max |t| = 1.49 (p99), batch median 775916.7 ns, q_eff 1.0 ticks (clock), realised 18618.0 quanta; A/A max |t| = 1.87 (raw), batch median 796125.0 ns, q_eff 1.0 ticks (clock), realised 19106.0 quanta; caead_derive: SUB_QUANTUM_SHIFT at p75 — k=17, calibration median 272.1 ns, 1000000 samples; first max |t| = 6.63 (p75), batch median 4625.0 ns, q_eff 1.0 ticks (clock), realised 111.0 quanta; second max |t| = 6.42 (p75), batch median 4666.7 ns, q_eff 1.0 ticks (clock), realised 112.0 quanta; A/A max |t| = 1.18 (p50), batch median 4750.0 ns, q_eff 1.0 ticks (clock), realised 114.0 quanta; caead_aead_reject: PASS — k=2, calibration median 3520.8 ns, 1000000 samples; first max |t| = 3.12 (p90), batch median 7041.7 ns, q_eff 1.0 ticks (clock), realised 169.0 quanta; second max |t| = 1.60 (raw), batch median 7041.7 ns, q_eff 1.0 ticks (clock), realised 169.0 quanta; A/A max |t| = 1.00 (p75), batch median 7250.0 ns, q_eff 1.0 ticks (clock), realised 174.0 quanta; caead_com_compare: PASS — k=1, calibration median 5916.7 ns, 1000000 samples; first max |t| = 2.21 (p95), batch median 5958.3 ns, q_eff 1.0 ticks (clock), realised 143.0 quanta; second max |t| = 1.74 (p95), batch median 5958.3 ns, q_eff 1.0 ticks (clock), realised 143.0 quanta; A/A max |t| = 1.96 (raw), batch median 5958.3 ns, q_eff 1.0 ticks (clock), realised 143.0 quanta; caead_open_reject_samekey: PASS — k=1, calibration median 7750.0 ns, 1000000 samples; first max |t| = 1.50 (p75), batch median 7958.3 ns, q_eff 1.0 ticks (clock), realised 191.0 quanta; second max |t| = 2.14 (p75), batch median 7958.3 ns, q_eff 1.0 ticks (clock), realised 191.0 quanta; A/A max |t| = 1.28 (p95), batch median 7750.0 ns, q_eff 1.0 ticks (clock), realised 186.0 quanta
+   7 coverage        PASS         18s  secmp-cli: 5/6 lines = 83.3 % (min 80 %); secmp-client-core: no code; secmp-crypto: 1867/1875 lines = 99.6 % (min 90 %); secmp-proto: 2413/2422 lines = 99.6 % (min 90 %); secmp-relay: 5/6 lines = 83.3 % (min 80 %); secmp-store: no code; secmp-sys-desktop: no code; secmp-sys-mem: 175/183 lines = 95.6 % (min 80 %); secmp-testkit: 172/172 lines = 100.0 % (min 80 %); secmp-transport: no code; secmp-ui: 5/6 lines = 83.3 % (min 80 %) (xtask not measured)
+step: PASS
+
+## step 6 fuzz — the gate's command per target: cargo +nightly-2026-09-21 fuzz run --fuzz-dir fuzz <t> -- -max_total_time=120
+caead_open: 2970347 runs in 121 s; findings: 0
+ed25519_verify: 249117 runs in 121 s; findings: 0
+hybrid_sign_verify: 55003 runs in 121 s; findings: 0
+mldsa65_verify: 8950164 runs in 121 s; findings: 0
+mlkem_parse: 2013159 runs in 121 s; findings: 0
+msg_open: 9057990 runs in 121 s; findings: 0
+x25519_dh: 275324 runs in 121 s; findings: 0
+proto_cell: 6506830 runs in 121 s; findings: 0
+proto_frames: 3821737 runs in 121 s; findings: 0
+proto_handshake: 6026728 runs in 121 s; findings: 0
+proto_invitation: 4848441 runs in 121 s; findings: 0
+proto_records: 5021284 runs in 121 s; findings: 0
+(12 targets = expect::FUZZ_TARGETS; every run exit 0)
+
+## step 8 mutants — the gate's command in 4 shards: cargo mutants --no-shuffle --features secmp-crypto/kat
+##   --package secmp-crypto --package secmp-proto --exclude crates/secmp-proto/src/kani_proofs.rs --exclude-re kani_stubs:: --shard k/4
+shard 0/4: 147 mutants tested in 5m: 93 caught, 54 unviable
+shard 1/4: 147 mutants tested in 6m: 1 missed, 110 caught, 36 unviable
+shard 2/4: 147 mutants tested in 3m: 104 caught, 43 unviable
+shard 3/4: 147 mutants tested in 3m: 116 caught, 31 unviable
+survivors (missed + timeout, all shards): crates/secmp-crypto/src/secret.rs:59:9: replace <impl Drop for SecretBytes<N>>::drop with ()
+  -> documented in docs/mutants-accepted.md (M1); undocumented survivors: 0
+
+## step 9 miri — the gate's command (nightly-2026-09-21, --target aarch64-unknown-linux-gnu, LIBCRUX_DISABLE_SIMD128/256=1,
+##   CARGO_TARGET_DIR=target/miri-portable, skip list mldsa:: hybrid_sign:: sas::) split by package and test group
+secmp-sys-mem + secmp-sys-desktop: 7 passed, 0 failed
+secmp-crypto lib: hybrid_kem::: 5 passed, 0 failed
+secmp-crypto lib: mlkem::: 5 passed, 0 failed
+secmp-crypto lib: x25519:: ed25519::: 13 passed, 0 failed
+secmp-crypto lib: caead:: msg:: kdf:: hash:: fingerprint::: 14 passed, 0 failed
+secmp-crypto lib: error:: label:: nonce:: rng:: secret:: test_util::: 15 passed, 0 failed
+secmp-crypto integration test targets: 0 passed, 0 failed
+secmp-crypto doctests: 0 passed, 0 failed
+(secmp-crypto unit tests: 52 run = 63 - 11 in the skip list)
+
+## step 9 kani — the gate's command: cargo kani --manifest-path crates/secmp-proto/Cargo.toml (+ -Z unstable-options --harness-timeout)
+cf-kani-a.log: Complete - 1 successfully verified harnesses, 0 failures, 1 total.
+cf-kani-b.log: Complete - 14 successfully verified harnesses, 0 failures, 14 total.
+(15 harnesses = kani_proofs.rs; KANI_PACKAGES = [secmp-proto])
+
+## step 11 windows-cross (cargo xtask step --strict windows-cross)
+=== step summary (host aarch64-apple-darwin, strict: true) ===
+  11 windows-cross   PASS          5s  cargo xwin build --all-targets for x86_64-pc-windows-msvc
+step: PASS
+
+## steps 10, 11, 12a, 12, 13, 14 (cargo xtask step --strict proverif windows-native linux-target ref-vectors repro sbom systemd)
+=== step summary (host aarch64-apple-darwin, strict: true) ===
+  10 proverif        PASS          0s  ProVerif 2.05 self-test [true, false] ok; models: none (expected set matches)
+  11 windows-native  FAIL          0s  skipped under --strict: Windows tests run on windows-latest (A1 §2): `cargo xtask win-test --backend github` or CI job windows-native
+  11 linux-target    PASS          6s  cargo zigbuild --all-targets for x86_64-unknown-linux-gnu (build only, A1 §3)
+ 12a ref-vectors     PASS          0s  9 frozen suites (750 cases) structurally identical to vectors/ref (ADR-026); pending freeze: none
+  12 repro           STUB          0s  two-builder reproducibility check becomes real in M11 (`cargo xtask repro-check`)
+  13 sbom            PASS          4s  12 CycloneDX SBOMs in target/sbom; auditable release builds (aarch64-apple-darwin, remapped paths) read back by `cargo audit bin`: target/release/secmp-relay, target/release/secmp-cli, target/release/secmp-ui
+  14 systemd         FAIL          0s  skipped under --strict: systemd-analyze is Linux-only (CI jobs linux-fast/linux-full run it)
+xtask: error: step: 2 step(s) failed
+
+## the two host-bound steps without --strict (their standard outcome on macOS)
+=== step summary (host aarch64-apple-darwin, strict: false) ===
+  11 windows-native  SKIP          0s  Windows tests run on windows-latest (A1 §2): `cargo xtask win-test --backend github` or CI job windows-native
+  14 systemd         SKIP          0s  systemd-analyze is Linux-only (CI jobs linux-fast/linux-full run it)
+step: PASS with 2 host-specific skip(s) — not allowed with --strict (CI)

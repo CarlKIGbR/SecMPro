@@ -1,30 +1,31 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # SecMPro CI (docs/06 §5, ADR-029). Every job runs `cargo xtask`, so local and CI gates are the same code.
-# Hygiene (checked by `cargo xtask policy`): only pull_request/push/schedule/workflow_dispatch triggers; every
-# action pinned by full commit SHA; read-only token; checkout without persisted credentials; `--strict` turns
-# every skipped step into a failure. Caches hold only the pinned tools and are keyed by this workflow; release
-# workflows (M11) must not restore them.
+# The four jobs below are the required checks of the `main-protection` ruleset. Their names exist only in this
+# workflow, and it has no manual-dispatch trigger (M2 review C2): a dispatch would add `skipped` check runs
+# under the required names, which count as passing. On-demand runs use `ci-dispatch.yml`.
+# Checked by `cargo xtask policy` (`workflow_findings`, `workflows`): no `pull_request_target`/`workflow_run`
+# trigger; every action pinned by full commit SHA; no `continue-on-error`; no plain-scalar `run:` that YAML would
+# misparse; no manual-dispatch trigger here and the required job names in no other workflow. By convention, not
+# checked: a read-only token and checkout without persisted credentials. `--strict` turns every skipped step into a
+# failure. Caches hold only the pinned tools and are keyed by this workflow; release workflows (M11) must not
+# restore them.
 name: ci
 
 on:
   pull_request:
+  # push runs only for main; every PR head is covered by its pull_request run, whose jobs are the required checks
+  # of the `main-protection` ruleset (docs/06 §4; a cancelled push run on 7d4e4f0 left `cancelled` check runs under
+  # the required names and blocked the merge)
   push:
-    branches: [main, "m[0-9][0-9]-*"]
+    branches: [main]
   schedule:
     - cron: "17 2 * * *"
-  workflow_dispatch:
-    inputs:
-      suite:
-        description: "Jobs to run (windows = the Windows gate used by `cargo xtask win-test --backend github`)"
-        type: choice
-        options: [all, fast, full, windows]
-        default: all
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.event_name }}-${{ github.ref }}-${{ inputs.suite }}
+  group: ci-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -33,7 +34,6 @@ env:
 jobs:
   # docs/06 §5 steps 1–5 (ci-fast), 13 (SBOM) and 14 (systemd exposure) on every push and pull request.
   linux-fast:
-    if: github.event_name != 'workflow_dispatch' || inputs.suite == 'all' || inputs.suite == 'fast'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
@@ -73,7 +73,6 @@ jobs:
 
   # The Windows gate for M0–M8 (Amendment A1 §2): native MSVC build, clippy, tests, KATs, hello-world binaries.
   windows-native:
-    if: github.event_name != 'workflow_dispatch' || inputs.suite == 'all' || inputs.suite == 'windows'
     runs-on: windows-latest
     timeout-minutes: 90
     steps:
@@ -106,7 +105,6 @@ jobs:
   # docs/06 §5 step 11: cargo-xwin cross-build, a compile-compatibility check only (ADR-034; Windows release
   # builds are native). A hard gate since M1 (M0 review, condition C1).
   xwin-cross:
-    if: github.event_name != 'workflow_dispatch' || inputs.suite == 'all' || inputs.suite == 'full'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -140,13 +138,10 @@ jobs:
       - name: Cross-build for x86_64-pc-windows-msvc
         run: cargo xtask step --strict windows-cross
 
-  # docs/06 §5 steps 1–14 (ci-full): nightly on main, on every pull request and milestone-branch push (the gate
-  # before a milestone report), and on demand. The Windows steps are covered by the two jobs above.
+  # docs/06 §5 steps 1–14 (ci-full): nightly on main and on every pull request (the gate before a milestone report);
+  # on demand through `ci-dispatch.yml`. The Windows steps are covered by the two jobs above.
   linux-full:
-    if: >-
-      github.event_name == 'schedule' || github.event_name == 'pull_request' ||
-      (github.event_name == 'push' && github.ref != 'refs/heads/main') ||
-      (github.event_name == 'workflow_dispatch' && (inputs.suite == 'all' || inputs.suite == 'full'))
+    if: github.event_name == 'schedule' || github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 240
     steps:
@@ -191,3 +186,12 @@ jobs:
           key: ${{ steps.tools-cache.outputs.cache-primary-key }}
       - name: ci-full (steps 1–14)
         run: cargo xtask ci-full --strict --delegated windows-native --delegated windows-cross
+      # The report of the `ct` step (ADR-038 runner metadata and per-target t values), kept with every run so a
+      # verdict can be re-read without the job log (M1 review §E 5.7).
+      - name: Upload the constant-time report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ct-report-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
+          path: target/ct-report.json
+          if-no-files-found: error

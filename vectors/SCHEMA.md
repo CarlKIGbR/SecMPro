@@ -1,4 +1,6 @@
-# Test-vector schema — revision 2 (normative for `ref/` and for `secmp-crypto`/`secmp-proto`)
+# Test-vector schema — revision 3 (normative for `ref/` and for `secmp-crypto`/`secmp-proto`)
+
+Revision 3 (2026-09-29, Weisung REF-M2-1, ADR-039) adds §4.8 `encodings` (its case table is `SCHEMA-4.8-encodings.md`), the suite tag `enc` (§3) and the JSON shapes that suite needs (§1). The M1 files are unchanged and keep `"schema": 2`.
 
 Revision 2 (2026-09-28) answers the reference implementation's questions SQ-01–SQ-11 (`docs/reviews/ref-spec-questions-M1.md`) and applies to spec **revision 2.2**. Defined by the reviewer so that neither implementation invents the format. Both the Python reference implementation (`ref/`, ADR-026) and the Rust implementation generate vectors in exactly this shape; `cargo xtask vectors` compares them and freezes the agreed files under `vectors/<suite>.json`.
 
@@ -18,6 +20,7 @@ Revision 2 (2026-09-28) answers the reference implementation's questions SQ-01�
 ```
 
 - **Byte strings** are lowercase hex JSON strings. **Integers** are JSON numbers. **Labels** are JSON strings holding the ASCII label (e.g. `"SecMP-TR/1 rk"`). **Digit strings** (SAS) are JSON strings, leading zeros kept. **Booleans** are JSON booleans. `mode`/`op` are JSON strings.
+- **`"schema": 3`** is the header of `encodings.json` (§4.8): its `inputs.value` holds nested JSON objects (sub-structures) and arrays (repeated fields), and its inputs carry the ASCII strings `structure` and `context`. The M1 files keep `"schema": 2`. `op` and `mode` are JSON strings wherever they occur, also inside `inputs.value` (the frame opcode by its D.2 name, the LINK_GET mode as `"consume"` or `"owner-status"`). Boolean `u8` fields of a structure value (`*_present`, `one_time`, `consumed`) are JSON numbers 0/1; `verify` (§4.5) stays a JSON boolean. Normative spelling (SQ-21): `value.op` is the D.2 command name exactly as App. D spells it (`"QUEUE_NEW"`, `"OK_SEND"`, `"CELLR"`, …; `"CONT"` in both directions), and `value.mode` is `"consume"` or `"owner-status"`.
 - Every case has `id`, `op`, `inputs`, and either `outputs` or `"expect": "reject"`. Cases are ordered by `id`; the index starts at `0001`; negative cases continue the same sequence after the positive ones.
 - Files are written canonically: keys sorted by code point at every level, `separators=(",", ":")`, ASCII only, no trailing newline. **Comparison is structural**: both files are parsed, `generator` is removed, and the resulting JSON values must be equal. No case-folding of any string. A validator additionally checks that every byte-string field matches `^([0-9a-f]{2})*$`.
 - Rejected cases MUST be rejected with the implementation's single uniform error for that construction.
@@ -44,6 +47,7 @@ Key material derived from the stream: an X25519 secret is 32 raw stream bytes (c
 | `hybridsign` | `hsig` |
 | `fingerprint` | `fp` |
 | `sas` | `sas` |
+| `encodings` | `enc` |
 
 ## 4. M1 suites — inputs, outputs and case tables
 
@@ -190,6 +194,10 @@ Negative cases (`op` = `"verify"`, `expect: reject`): inputs `pk_ed`, `pk_mldsa`
 ### 4.7 `sas` (spec §6.7)
 
 `op` = `"sas"`: inputs (stream order) `fp_a` (32), `fp_b` (32); outputs `half_a`, `half_b` (30-digit strings), `safety_number` (60-digit string). Rows 1–8 from the stream; row 9: `fp_b` := `fp_a` (equal fingerprints); row 10: `fp_a`, `fp_b` swapped relative to row 1 (must give the same `safety_number` as row 1).
+
+### 4.8 `encodings` — byte layouts of Appendix D (spec App. B, D)
+
+The case table, the value representation, the decoding contract D-1 … D-13 and the manipulations are in `SCHEMA-4.8-encodings.md` (adopted, ADR-039; generated from `ref/secmp_ref/encodings_cases.py`).
 
 ## 5. Later suites (M2–M5)
 

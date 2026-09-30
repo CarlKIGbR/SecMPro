@@ -179,8 +179,8 @@ impl Decode for RelayInfoRecord {
 
 /// `HS1 = 0x03 ‖ ver ‖ kid u32 ‖ e_c[32] ‖ ek_c[1184] ‖ pk_e1[32] ‖ ct_kem[1568] ‖ mac1[32]` (spec §8.3; `len` =
 /// 2854).
-#[derive(Clone, PartialEq, Eq)]
-#[cfg_attr(test, derive(Debug))]
+#[derive(Clone)]
+#[cfg_attr(test, derive(PartialEq, Eq, Debug))]
 pub struct Hs1 {
     /// The relay key generation the client encapsulates to.
     pub kid: u32,
@@ -238,8 +238,8 @@ impl Decode for Hs1 {
 }
 
 /// `HS2 = 0x04 ‖ ver ‖ e_r[32] ‖ ct_c[1088] ‖ mac2[32]` (spec §8.3; `len` = 1154).
-#[derive(Clone, PartialEq, Eq)]
-#[cfg_attr(test, derive(Debug))]
+#[derive(Clone)]
+#[cfg_attr(test, derive(PartialEq, Eq, Debug))]
 pub struct Hs2 {
     /// Relay ephemeral X25519 key (the X25519 part of the `HybridKEM-768` ciphertext).
     pub e_r: X25519Pk,

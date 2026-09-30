@@ -74,6 +74,54 @@ fn sas() {
     check("sas");
 }
 
+/// `kdf_rk` (spec §7.2) reproduces the frozen `hkdf-labels` row with its shape: label `"SecMP-TR/1 rk"`, a 32-byte
+/// salt (= `rk`), a 64-byte IKM (= `dh ‖ ss`: first 32 bytes `dh`, next 32 `ss`), no extra info, L = 96 (row 6).
+/// The only other `"SecMP-TR/1 rk"` row (12: empty IKM, L = 1) is a length edge case that `kdf_rk` cannot express;
+/// the `"SecMP-TR/1 init"` row (5) has a random salt, while `tr_init`'s salt is fixed at 0^32 — both are covered by
+/// the independent recomputations in `tr_kdf`'s unit tests.
+#[test]
+fn kdf_rk_reproduces_the_frozen_hkdf_rows() {
+    use secmp_crypto::{SecretBytes, kdf_rk};
+    use secmp_testkit::kat::hex;
+    let doc = secmp_testkit::kat::load("hkdf-labels.json");
+    let text = |v: &Value, k: &str| v.get(k).and_then(Value::as_str).unwrap().to_owned();
+    let mut checked = Vec::new();
+    for case in doc.get("cases").and_then(Value::as_array).unwrap() {
+        let inputs = case.get("inputs").unwrap();
+        if text(inputs, "label") != "SecMP-TR/1 rk" {
+            continue;
+        }
+        let (salt, ikm, extra) = (
+            hex(&text(inputs, "salt")),
+            hex(&text(inputs, "ikm")),
+            hex(&text(inputs, "extra_info")),
+        );
+        let len = inputs.get("len").and_then(Value::as_u64).unwrap();
+        let mode = text(inputs, "mode");
+        if salt.len() != 32 || ikm.len() != 64 || !extra.is_empty() || len != 96 {
+            continue;
+        }
+        assert_eq!(mode, "extract-expand");
+        let (dh, ss) = ikm.split_at(32);
+        let (rk2, ck, nhk) = kdf_rk(
+            &SecretBytes::from_slice(&salt).unwrap(),
+            &SecretBytes::from_slice(dh).unwrap(),
+            &SecretBytes::from_slice(ss).unwrap(),
+        )
+        .unwrap();
+        let okm = [
+            &rk2.expose_secret()[..],
+            &ck.expose_secret()[..],
+            &nhk.expose_secret()[..],
+        ]
+        .concat();
+        let expected = text(case.get("outputs").unwrap(), "okm");
+        assert_eq!(vectors::hex(&okm), expected, "{}", text(case, "id"));
+        checked.push(text(case, "id"));
+    }
+    assert_eq!(checked, ["hkdf-0006"]);
+}
+
 #[test]
 fn canonical_writer_is_stable() {
     // the Rust writer produces the canonical form of SCHEMA §1 (sorted keys, compact, ASCII, no newline)

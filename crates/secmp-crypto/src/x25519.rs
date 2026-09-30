@@ -36,6 +36,14 @@ impl X25519Secret {
         Ok(Self(LockedSecret::from_slice(bytes)?))
     }
 
+    /// The raw 32 bytes as stored (before clamping; [`X25519Secret::from_bytes`] of them is this key), for the
+    /// persistence encoding of long-lived protocol state (spec §7.1 `RatchetState`); the caller keeps any copy in
+    /// a zeroizing buffer.
+    #[must_use]
+    pub fn expose_secret(&self) -> &[u8; X25519_LEN] {
+        self.0.expose_secret()
+    }
+
     fn dalek(&self) -> StaticSecret {
         StaticSecret::from(*self.0.expose_secret())
     }
@@ -262,6 +270,25 @@ mod tests {
             X25519Public::from_bytes_checked(&real[..31]).err(),
             Some(Error::Rejected)
         );
+        Ok(())
+    }
+
+    /// `expose_secret` returns the bytes as stored — unclamped — and `from_bytes` of them is the same key
+    /// (persistence round trip, spec §7.1).
+    #[test]
+    fn expose_secret_round_trips_through_from_bytes() -> Result<()> {
+        // 0xff…ff is changed by clamping; the stored bytes are not
+        let raw = X25519Secret::from_bytes(&[0xff; 32])?;
+        assert_eq!(raw.expose_secret(), &[0xff; 32]);
+        let peer = X25519Secret::generate()?.public_key();
+        for k in [raw, X25519Secret::generate()?] {
+            let back = X25519Secret::from_bytes(k.expose_secret())?;
+            assert_eq!(back.expose_secret(), k.expose_secret());
+            assert_eq!(back.public_key(), k.public_key());
+            assert!(bool::from(
+                back.diffie_hellman(&peer)?.ct_eq(&k.diffie_hellman(&peer)?)
+            ));
+        }
         Ok(())
     }
 

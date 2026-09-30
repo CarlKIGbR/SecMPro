@@ -78,6 +78,74 @@ fn wycheproof_xchacha20_poly1305() {
     );
 }
 
+/// The same Wycheproof XChaCha20-Poly1305 file through the SecMP wrapper `Aead` (ratchet headers, spec §7.5; link
+/// frames, §8.4): every case with a 24-byte nonce — valid ones seal to `ct ‖ tag`, open to `msg` and open under
+/// `open_ct` with `Choice` 1; invalid ones (modified tags) are `Rejected` by `open` and give `Choice` 0 with an
+/// all-zero `out` under `open_ct`. The nine cases with another nonce size cannot be expressed: the nonce is a
+/// `[u8; 24]`.
+#[test]
+fn wycheproof_xchacha20_poly1305_through_aead() {
+    use secmp_crypto::{Aead, Error, Nonce24, SecretBytes};
+    let doc = load("external/wycheproof/xchacha20_poly1305_test.json");
+    let mut tally = Tally::default();
+    let (mut valid, mut invalid) = (0_usize, 0_usize);
+    for c in wycheproof_cases(&doc) {
+        let (key, iv, assoc) = (
+            hex_field(c.test, "key"),
+            hex_field(c.test, "iv"),
+            hex_field(c.test, "aad"),
+        );
+        let (msg, ct, tag) = (
+            hex_field(c.test, "msg"),
+            hex_field(c.test, "ct"),
+            hex_field(c.test, "tag"),
+        );
+        let Ok(nonce) = <[u8; 24]>::try_from(iv.as_slice()) else {
+            assert_eq!(c.verdict, Verdict::Invalid, "tcId {}", c.tc_id);
+            tally.skip(c.tc_id, "nonce size is not 24 bytes");
+            continue;
+        };
+        let key = SecretBytes::<32>::from_slice(&key).unwrap();
+        let sealed = [ct.as_slice(), tag.as_slice()].concat();
+        let mut out = vec![0xaa_u8; msg.len()];
+        let ok = bool::from(Aead::open_ct(&key, &nonce, &assoc, &sealed, &mut out));
+        match c.verdict {
+            Verdict::Valid => {
+                let opened = Aead::open(&key, &nonce, &assoc, &sealed).unwrap();
+                assert_eq!(to_hex(&opened), to_hex(&msg), "tcId {}", c.tc_id);
+                assert!(ok, "tcId {}", c.tc_id);
+                assert_eq!(to_hex(&out), to_hex(&msg), "tcId {}", c.tc_id);
+                let resealed =
+                    Aead::seal(&key, Nonce24::from_bytes_kat(nonce), &assoc, &msg).unwrap();
+                assert_eq!(to_hex(&resealed), to_hex(&sealed), "tcId {}", c.tc_id);
+                valid = valid.saturating_add(1);
+            }
+            Verdict::Invalid => {
+                assert_eq!(
+                    Aead::open(&key, &nonce, &assoc, &sealed).err(),
+                    Some(Error::Rejected),
+                    "tcId {}",
+                    c.tc_id
+                );
+                assert!(!ok, "tcId {}", c.tc_id);
+                assert!(out.iter().all(|b| *b == 0), "tcId {}", c.tc_id);
+                invalid = invalid.saturating_add(1);
+            }
+            Verdict::Acceptable => {
+                tally.skip(c.tc_id, "acceptable");
+                continue;
+            }
+        }
+        tally.check();
+    }
+    assert_eq!(
+        (tally.checked, valid, invalid, tally.skipped.len()),
+        (306, 246, 60, 9),
+        "{}",
+        tally.summary("xchacha20-poly1305 through Aead")
+    );
+}
+
 /// The ChaCha20 stream as `MsgEncrypt` uses it (IETF variant, 96-bit nonce): the RFC 8439 AEAD encrypts with
 /// the keystream from block 1, so for every valid Wycheproof ChaCha20-Poly1305 case with a 12-byte nonce,
 /// `msg ⊕ keystream[64..]` must equal `ct`.

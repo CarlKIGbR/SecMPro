@@ -269,6 +269,7 @@ Superseded in part 2026-09-29: the verdict rule (2), including the immediate-FAI
 **Alternatives.** `proptest` (rejected in WEISUNG M2-1: a new dependency tree); a hand-written JSON reader (ADR-031 reasoning); a PRNG built from `secmp_crypto::sha256` in counter mode (possible, but the reviewer named `rand`).
 **Consequences.** `cargo vet`: both crates already covered (trust `dtolnay`; delta audit `rand` 0.10.1 → 0.10.3, owner-approved 2026-09-29); the zero-exemption rule for the normal closure of `secmp-crypto`/`secmp-proto` is unaffected (dev edges only).
 **Status.** Accepted 2026-09-29 (reviewer, under the owner's delegation of 2026-09-29: dev-dependencies only, no new crate in `Cargo.lock`, supply-chain closure of the shipped targets unchanged).
+Note 2026-09-30 (M2 review C6 (b)): `rand` is pulled with `default-features = false, features = ["std_rng"]` (workspace `Cargo.toml`; the seeded `StdRng` of the property tests). Its delta audit 0.10.1 → 0.10.3 in `supply-chain/audits.toml` was written by the implementer (`who = "Claude Code (Opus 5.5), SecMPro implementer"`) and read by the reviewer; docs/06 §3's rule that a local audit needs a named human reviewer is met by the owner's approval recorded in that entry ("Owner approval: Christopher Carl, 2026-09-29 (M1 review §D)", ADR-036 (3)).
 
 ---
 

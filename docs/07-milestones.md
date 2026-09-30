@@ -53,7 +53,7 @@ v1.1: M16 → M17 → M18 → M19 → M20 (release)
 
 ### M2 — `secmp-proto`: encodings, cells, frames, command types (M)
 
-**Status (2026-09-29).** Started on branch `m02-proto` from `main` at `bc8d6d559795cf515bcf08f63fcfe0b9eb3058d9`; spec rev 2.3 (ADR-039) and the `encodings` reference file are committed first.
+**Status (2026-09-30).** Started 2026-09-29 on branch `m02-proto` from `main` at `bc8d6d559795cf515bcf08f63fcfe0b9eb3058d9`; spec rev 2.3 (ADR-039) and the `encodings` reference file were committed first. Reviewed 2026-09-30 (`docs/reviews/M02-review.md`, APPROVED WITH CONDITIONS; conditions met in `b75679d`), merged <pending>.
 
 **Deliverables.** `Encode`/`Decode` for every structure in Appendix D; padding helpers; size constants with compile-time assertions; property tests (canonicality), ≥ 200 negative vectors, Kani harnesses for `Cell`/`Frame`/`HeaderV1`/frame-plaintext parsing, fuzz targets for every decoder; `ref/` encoders for cross-generated positive vectors.
 

@@ -1,0 +1,8 @@
+baseline (all checks in place): failing tests = none
+C3 (a)-(c), (f): no re-derivation: failing tests = ['ctreport::tests::control_fail_runs', 'ctreport::tests::refuses_a_missing_or_undetected_positive_control', 'ctreport::tests::refuses_a_sensitivity_control_not_bound_to_tag_compare', 'ctreport::tests::refuses_a_verdict_the_crops_do_not_give', 'ctreport::tests::refuses_an_aa_control_above_its_threshold', 'ctreport::tests::refuses_an_effective_quantum_below_one_tick', 'ctreport::tests::refuses_another_target_set', 'ctreport::tests::refuses_short_sample_counts_and_a_scaled_run']
+C3 (e): FAIL run without a failing target accepted: failing tests = ['ctreport::tests::refuses_a_fail_run_without_a_failing_target']
+C3 (f): sensitivity q_eff not bounded below: failing tests = ['ctreport::tests::refuses_an_effective_quantum_below_one_tick']
+C3 (d): missing survivor listing read as none: failing tests = ['gates::tests::mutants_refuses_a_missing_survivor_listing']
+C3 (d): missing timeout listing read as none: failing tests = ['gates::tests::mutants_refuses_a_missing_survivor_listing']
+C5: harness set not checked: failing tests = ['gates::tests::kani_refuses_fifteen_harnesses']
+C2: required job names not checked: failing tests = ['gates::tests::required_checks_only_in_the_pull_request_workflow']

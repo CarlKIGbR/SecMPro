@@ -1,0 +1,91 @@
+# PR run 36742805570, head b75679d9c534329855d3004f625c8db0532a9a55, job linux-full 109981286684: success
+# jobs: windows-native=success (2026-09-30T16:14:59Z → 2026-09-30T16:37:51Z), linux-full=success (2026-09-30T16:15:00Z → 2026-09-30T17:47:33Z), linux-fast=success (2026-09-30T16:17:09Z → 2026-09-30T16:32:22Z), xwin-cross=success (2026-09-30T16:14:59Z → 2026-09-30T16:17:31Z)
+# Azure Region: westcentralus
+# Image: ubuntu-24.04
+# Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20260927.320
+
+## step 6 fuzz — the gate's command lines (one per target, -max_len from expect::FUZZ_MAX_LEN)
+$ rustup run nightly-2026-09-21 cargo fuzz run --fuzz-dir fuzz caead_open -- -max_total_time=120 -max_len=12618
+Done 2161685 runs in 121 second(s)
+$ rustup run nightly-2026-09-21 cargo fuzz run --fuzz-dir fuzz ed25519_verify -- -max_total_time=120 -max_len=4243
+Done 197295 runs in 121 second(s)
+$ rustup run nightly-2026-09-21 cargo fuzz run --fuzz-dir fuzz hybrid_sign_verify -- -max_total_time=120 -max_len=7810
+Done 30915 runs in 121 second(s)
+$ rustup run nightly-2026-09-21 cargo fuzz run --fuzz-dir fuzz mldsa65_verify -- -max_total_time=120 -max_len=3567
+Done 56564954 runs in 121 second(s)
+$ rustup run nightly-2026-09-21 cargo fuzz run --fuzz-dir fuzz mlkem_parse -- -max_total_time=120 -max_len=1570
+Done 1368509 runs in 121 second(s)
+$ rustup run nightly-2026-09-21 cargo fuzz run --fuzz-dir fuzz msg_open -- -max_total_time=120 -max_len=2000
+Done 49959839 runs in 121 second(s)
+$ rustup run nightly-2026-09-21 cargo fuzz run --fuzz-dir fuzz proto_cell -- -max_total_time=120 -max_len=65644
+Done 8146560 runs in 121 second(s)
+$ rustup run nightly-2026-09-21 cargo fuzz run --fuzz-dir fuzz proto_frames -- -max_total_time=120 -max_len=4338
+Done 3895121 runs in 121 second(s)
+$ rustup run nightly-2026-09-21 cargo fuzz run --fuzz-dir fuzz proto_handshake -- -max_total_time=120 -max_len=12020
+Done 7613458 runs in 121 second(s)
+$ rustup run nightly-2026-09-21 cargo fuzz run --fuzz-dir fuzz proto_invitation -- -max_total_time=120 -max_len=12362
+Done 4832399 runs in 121 second(s)
+$ rustup run nightly-2026-09-21 cargo fuzz run --fuzz-dir fuzz proto_records -- -max_total_time=120 -max_len=2858
+Done 4987229 runs in 121 second(s)
+$ rustup run nightly-2026-09-21 cargo fuzz run --fuzz-dir fuzz x25519_dh -- -max_total_time=120 -max_len=97
+Done 155099 runs in 121 second(s)
+
+## step 9 kani — harness verdicts and Kani's summary (expect::KANI_HARNESSES pins 16)
+Checking harness kani_proofs::response_frame...
+VERIFICATION:- SUCCESSFUL
+Checking harness kani_proofs::request_fetch_multi...
+VERIFICATION:- SUCCESSFUL
+Checking harness kani_proofs::request_fetch...
+VERIFICATION:- SUCCESSFUL
+Checking harness kani_proofs::request_queue_del...
+VERIFICATION:- SUCCESSFUL
+Checking harness kani_proofs::request_ping...
+VERIFICATION:- SUCCESSFUL
+Checking harness kani_proofs::request_link_get...
+VERIFICATION:- SUCCESSFUL
+Checking harness kani_proofs::request_send...
+VERIFICATION:- SUCCESSFUL
+Checking harness kani_proofs::request_cont...
+VERIFICATION:- SUCCESSFUL
+Checking harness kani_proofs::request_skey...
+VERIFICATION:- SUCCESSFUL
+Checking harness kani_proofs::request_link_put...
+VERIFICATION:- SUCCESSFUL
+Checking harness kani_proofs::request_queue_new...
+VERIFICATION:- SUCCESSFUL
+Checking harness kani_proofs::request_frame...
+VERIFICATION:- SUCCESSFUL
+Checking harness kani_proofs::padding...
+VERIFICATION:- SUCCESSFUL
+Checking harness kani_proofs::header_v1_reencodes...
+VERIFICATION:- SUCCESSFUL
+Checking harness kani_proofs::header_v1...
+VERIFICATION:- SUCCESSFUL
+Checking harness kani_proofs::cell...
+VERIFICATION:- SUCCESSFUL
+Complete - 16 successfully verified harnesses, 0 failures, 16 total.
+
+## ci-full step summary
+   1 fmt             PASS          0s  rustfmt: no changes
+   2 clippy          PASS         27s  clippy --all-features -D warnings on x86_64-unknown-linux-gnu (12 crates)
+   2 policy          PASS          0s  unsafe-attrs: 23 target roots forbid, 2 sys library roots allow, 1 ADR-038 bench root allows (crates/secmp-crypto/benches/ct.rs), 2 secmp-ui roots deny, 2 secmp-ui files without `unsafe`; lints-table: 12 manifests; lint-allows: 35 relaxing attributes (all sanctioned); build-scripts: 12 crates, none; spdx: 150 files; secmp-crypto/secmp-proto normal closure (x86_64-unknown-linux-gnu, x86_64-pc-windows-msvc, aarch64-apple-darwin): 52 external crates, 0 exempted; tracked exemptions elsewhere: 25; workflows: 3 files, triggers/SHA pins/continue-on-error ok; required checks only in ci.yml, no dispatch there
+   3 deny            PASS          1s  advisories, bans, licenses, sources: ok
+   3 vet             PASS          0s  secmp-crypto/secmp-proto normal closure (x86_64-unknown-linux-gnu, x86_64-pc-windows-msvc, aarch64-apple-darwin): 52 external crates, 0 exempted; tracked exemptions elsewhere: 25
+   3 audit           PASS          5s  RustSec: no advisories (warnings denied); ignored with an ADR: RUSTSEC-2026-0173
+   3 cooldown        PASS          9s  119 registry packages (Cargo.lock, fuzz/Cargo.lock), all ≥ 7 days old; youngest: rand 0.10.3, 10 days
+   4 nextest         PASS         46s  cargo nextest run --workspace
+   4 doctest         PASS          0s  cargo test --doc
+   4 hello           PASS          0s  secmp-relay 0.0.0 (M0 skeleton: no functionality) | secmp-cli 0.0.0 (M0 skeleton: no functionality) | secmp-ui 0.0.0 (M0 skeleton: no functionality)
+   5 kat             PASS        858s  KAT/differential packages: secmp-crypto, secmp-testkit (expected set matches); ML-KEM KATs and frozen vectors also with libcrux's portable backend
+   5 ct              PASS        261s  control_variable_time_compare: PASS — k=1, calibration median 260.5 ns, 1000000 samples; first max |t| = 59738.92 (p75), batch median 1973.5 ns, q_eff 1.0 ticks (clock), realised 637.0 quanta; A/A max |t| = 2.32 (p50), batch median 260.5 ns, q_eff 1.0 ticks (clock), realised 637.0 quanta (positive control, must be detected); tag_compare: PASS — k=1, calibration median 11691.7 ns, 1000000 samples; first max |t| = 5.50 (p50), batch median 11691.7 ns, q_eff 1.0 ticks (clock), realised 28591.0 quanta; second max |t| = 2.80 (p50), batch median 11691.7 ns, q_eff 1.0 ticks (clock), realised 28591.0 quanta; A/A max |t| = 0.87 (raw), batch median 11691.7 ns, q_eff 1.0 ticks (clock), realised 28591.0 quanta; msg_open_reject: SUB_FLOOR_SHIFT at p95 — k=1, calibration median 3576.9 ns, 1000000 samples; first max |t| = 230.96 (p95), batch median 3576.9 ns, q_eff 24.5 ticks (samples), realised 357.0 quanta; second max |t| = 85.48 (p95), batch median 3596.5 ns, q_eff 24.5 ticks (samples), realised 359.0 quanta; A/A max |t| = 2.06 (raw), batch median 3576.9 ns, q_eff 24.5 ticks (samples), realised 357.0 quanta; caead_open_reject: PASS — k=1, calibration median 6572.3 ns, 1000000 samples; first max |t| = 2.16 (p75), batch median 6562.5 ns, q_eff 24.5 ticks (samples), realised 655.0 quanta; second max |t| = 2.19 (p90), batch median 6562.1 ns, q_eff 24.5 ticks (samples), realised 655.0 quanta; A/A max |t| = 1.89 (p95), batch median 6481.9 ns, q_eff 24.5 ticks (samples), realised 647.7 quanta; sas: PASS — k=1, calibration median 1339839.3 ns, 20000 samples; first max |t| = 1.82 (p50), batch median 1340069.6 ns, q_eff 24.5 ticks (samples), realised 133755.8 quanta; second max |t| = 1.65 (p90), batch median 1339558.4 ns, q_eff 24.5 ticks (samples), realised 133700.5 quanta; A/A max |t| = 1.01 (p50), batch median 1339428.4 ns, q_eff 24.5 ticks (samples), realised 133681.3 quanta; caead_derive: SUB_FLOOR_SHIFT at p99 — k=1, calibration median 471.1 ns, 1000000 samples; first max |t| = 19.05 (p99), batch median 471.1 ns, q_eff 1.0 ticks (clock), realised 1152.0 quanta; second max |t| = 11.10 (p99), batch median 471.1 ns, q_eff 1.0 ticks (clock), realised 1152.0 quanta; A/A max |t| = 0.64 (raw), batch median 471.1 ns, q_eff 1.0 ticks (clock), realised 1152.0 quanta; caead_aead_reject: SUB_FLOOR_SHIFT at p50 — k=1, calibration median 3196.2 ns, 1000000 samples; first max |t| = 21.69 (p99), batch median 3196.2 ns, q_eff 24.6 ticks (samples), realised 318.1 quanta; second max |t| = 6.39 (p50), batch median 3206.0 ns, q_eff 24.6 ticks (samples), realised 319.1 quanta; A/A max |t| = 0.93 (p50), batch median 3215.8 ns, q_eff 24.5 ticks (samples), realised 321.0 quanta; caead_com_compare: PASS — k=1, calibration median 11771.8 ns, 1000000 samples; first max |t| = 1.79 (p99), batch median 11771.8 ns, q_eff 24.6 ticks (samples), realised 1170.2 quanta; second max |t| = 2.15 (p75), batch median 11771.8 ns, q_eff 24.6 ticks (samples), realised 1170.2 quanta; A/A max |t| = 3.20 (p95), batch median 11771.8 ns, q_eff 24.6 ticks (samples), realised 1170.2 quanta; caead_open_reject_samekey: PASS — k=1, calibration median 6452.1 ns, 1000000 samples; first max |t| = 2.03 (p95), batch median 6452.1 ns, q_eff 24.5 ticks (samples), realised 642.6 quanta; second max |t| = 5.40 (p50), batch median 6432.0 ns, q_eff 24.5 ticks (samples), realised 642.0 quanta; A/A max |t| = 3.04 (p95), batch median 6482.3 ns, q_eff 24.5 ticks (samples), realised 647.6 quanta; min_leak_control: REACHED — raw Δ 449.06 ns, floor 10.02 ns (44.82 floors), k=1, 1000000 samples; max |t| = 1483.63 (p50), batch median 14156.3 ns, q_eff 24.5 ticks (samples), realised 1374.0 quanta (sensitivity control, must reach the floor)
+   6 fuzz            PASS       1499s  fuzz smoke, 120 s per target, -max_len from expect::FUZZ_MAX_LEN: caead_open, ed25519_verify, hybrid_sign_verify, mldsa65_verify, mlkem_parse, msg_open, proto_cell, proto_frames, proto_handshake, proto_invitation, proto_records, x25519_dh (expected set matches)
+   7 coverage        PASS         51s  secmp-cli: 5/6 lines = 83.3 % (min 80 %); secmp-client-core: no code; secmp-crypto: 1867/1875 lines = 99.6 % (min 90 %); secmp-proto: 2540/2552 lines = 99.5 % (min 90 %); secmp-relay: 5/6 lines = 83.3 % (min 80 %); secmp-store: no code; secmp-sys-desktop: no code; secmp-sys-mem: 234/246 lines = 95.1 % (min 80 %); secmp-testkit: 172/172 lines = 100.0 % (min 80 %); secmp-transport: no code; secmp-ui: 5/6 lines = 83.3 % (min 80 %) (xtask not measured)
+   8 mutants         PASS        934s  secmp-crypto, secmp-proto: 625 mutants tested in 16m: 1 missed, 440 caught, 184 unviable; survivors documented in docs/mutants-accepted.md: 1
+   9 miri            PASS       1131s  Miri (nightly-2026-09-21, interpreting aarch64-unknown-linux-gnu, libcrux portable backend): secmp-sys-mem, secmp-sys-desktop, secmp-crypto; skipped test modules: mldsa::, hybrid_sign::, sas::
+   9 kani            PASS        670s  Kani 0.68.0: harness packages secmp-proto (expected set matches); 16/16 harnesses verified (expect::KANI_HARNESSES): kani_proofs::cell, kani_proofs::header_v1, kani_proofs::header_v1_reencodes, kani_proofs::padding, kani_proofs::request_cont, kani_proofs::request_fetch, kani_proofs::request_fetch_multi, kani_proofs::request_frame, kani_proofs::request_link_get, kani_proofs::request_link_put, kani_proofs::request_ping, kani_proofs::request_queue_del, kani_proofs::request_queue_new, kani_proofs::request_send, kani_proofs::request_skey, kani_proofs::response_frame
+  10 proverif        PASS          0s  ProVerif 2.05 self-test [true, false] ok; models: none (expected set matches)
+  11 linux-target    PASS          0s  host is x86_64-unknown-linux-gnu: every step above ran natively
+ 12a ref-vectors     PASS          0s  9 frozen suites (750 cases) structurally identical to vectors/ref (ADR-026); pending freeze: none
+  13 sbom            PASS          5s  12 CycloneDX SBOMs in target/sbom; auditable release builds (x86_64-unknown-linux-gnu, remapped paths) read back by `cargo audit bin`: target/release/secmp-relay, target/release/secmp-cli, target/release/secmp-ui
+  14 systemd         PASS          0s  systemd 255 (255.4-1ubuntu8.17); self-test: unhardened fixture 9.4 > 2 rejected; units: none (deploy/secmp-relay.service arrives in M10)
+ci-full: PASS

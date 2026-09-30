@@ -83,7 +83,7 @@ All notable changes to this project are documented in this file. The format foll
 - M2 `secmp-crypto`: decode-time checks for spec §4.1 — `X25519Public::from_bytes_checked` (low-order encodings)
   and `check_ed25519_signature_encoding` (`R` canonical, not small order, on the curve; `S < L`), cross-checked
   against Wycheproof.
-- M2 `secmp-proto` (in progress): bounded reader/writer, ISO/IEC 7816-4 padding, Appendix B sizes checked at compile
+- M2 `secmp-proto`: bounded reader/writer, ISO/IEC 7816-4 padding, Appendix B sizes checked at compile
   time, key and signature fields with the decoder obligations of spec §4.1, and `Encode`/`Decode` for every
   Appendix D structure (records, frame plaintexts with the complete opcode table, invitation and link data,
   handshake envelope, ratchet cell/header/content and bodies, signed command messages); every row of the
@@ -110,3 +110,20 @@ All notable changes to this project are documented in this file. The format foll
   - The sensitivity control `min_leak_control` (a 32-byte comparison exiting one byte early, 256 per sample,
     `tag_compare`'s `k` and N) is mandatory. Its raw Δ must reach the floor in every run, otherwise the run is
     `CONTROL_FAIL`; the gate re-checks this from the report.
+- `ref/`: the Python reference implementation's tree is committed (`68ac537`, external review M1 EXT-1): the
+  encoders and the renderer of `vectors/SCHEMA-4.8-encodings.md` (`ref/tools/render_schema_4_8.py`); the reference
+  `vectors/ref/encodings.json` carries the rev 2.3 `"spec"` header.
+- M2 review conditions C1–C5 (`b75679d`):
+  - `secmp-proto` keeps every encoding buffer in `secmp_crypto::Zeroizing<Vec<u8>>`: the `Writer` (it grows by
+    moving into a new zeroizing buffer), `Encode::encode`, `pad`, `encode_padded`, `Fragment.chunk` and
+    `RouteDescriptor::Unknown.blob`. No freed heap block keeps a `send_seed`, `link_key` or `inv_send_seed`.
+  - CI: `ci.yml` has no `workflow_dispatch`; on-demand suites run from `ci-dispatch.yml` under `dispatch-*` job
+    names, so a dispatch never adds a check run under a required name. Policy enforces this.
+  - The `ct` gate re-derives every verdict, the controls, the target set and the sample counts from the report
+    (`xtask/src/ctreport.rs`, `cargo xtask ct-check`). The bench echoes `CT_SAMPLES`/`CT_SAS_SAMPLES`, and a
+    shortened run (`SECMP_CT_SCALE`) is refused.
+  - The mutants gate refuses a missing survivor listing; fuzzing passes `-max_len` per target
+    (`FUZZ_MAX_LEN`); the Kani gate pins the 16 harnesses (`KANI_HARNESSES`).
+- Docs (M2 review C6): report corrections, the evidence of `b75679d`, the ADR-040 note on `std_rng` and the owner's
+  approval of the `rand` delta audit, `CLAUDE.md`'s statement of who approves which ADR, and `fuzz/README.md` without
+  the nightly-campaign claim.

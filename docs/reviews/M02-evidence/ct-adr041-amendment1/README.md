@@ -28,8 +28,8 @@ in this directory is stored as written by the bench (`target/ct-report.json`).
 | tick 0.385 ns, resolution 26 | 36677648129, 36679955738, 36680376550, 36680797237, 36681396211 | 10.0 ns |
 | tick 0.409 ns, resolution 1 | 36678360108, 36678826377, 36681989835 | the samples lie on a ≈ 24.5-tick lattice (10.0 ns) |
 
-For the fine-timer case, the section "Fine-timer case" below recomputes the verdict from the recorded samples of the
-two earlier fine-timer reports. That is a recomputation, not a new measurement.
+For the fine-timer case, the section "Fine-timer case" below recomputes the verdict from the recorded per-crop
+statistics of the two earlier fine-timer reports. That is a recomputation, not a new measurement.
 
 **Gate defect found by this evidence, and fixed in `6b9da3b`.** Run 36678826377 on `31d13de` wrote run verdict PASS
 with `min_leak_control` raw Δ 450.0 ns against a floor of 10.02 ns. The gate refused the report: "run verdict PASS
@@ -47,10 +47,15 @@ run's numbers. The bench and the verdict did not change, so the three `31d13de` 
 ## Summary
 
 - Run verdict PASS in all 14 reports, and every gate step on `6b9da3b` passed (5 Linux, 3 macOS).
-- No target has a reproduced Δ ≥ floor anywhere (no FAIL, no STOP). The largest sub-floor shifts:
+- No target has a reproduced Δ ≥ floor anywhere (no FAIL, no STOP). The largest sub-floor shifts at the deciding
+  crop:
   - `msg_open_reject`: 0.53 floors (p95, 36678826377, second measurement; the first was 0.01);
   - `caead_open_reject_samekey`: 0.49 floors (p99, 36680797237).
-- Inline A/A control: max |t| ≤ 3.16 in every run (threshold 4.5).
+
+  Over all reproduced crops the largest is 0.62 floors (36680797237, `caead_open_reject_samekey`, raw crop; review
+  C6).
+- Inline A/A control: max |t| ≤ 3.16 in every run (threshold 4.5; macOS). The Linux maximum is 2.49 in the reports
+  here, and 2.55 on PR run 36689454147.
 - `min_leak_control` reached the floor in every run:
   - macOS: raw Δ ≈ 154 ns on a 41.67 ns floor (3.7–3.8 floors);
   - resolution-26 runners: 218–282 ns (21.8–28.1 floors);
@@ -96,7 +101,7 @@ Column notes:
 - The per-run table lists non-PASS targets with Δ at the deciding crop in floors (first / second measurement).
 - The per-target table gives, for a sub-floor shift, the larger |Δ| of the two measurements in floors.
 
-## Fine-timer case (recomputed from recorded samples)
+## Fine-timer case (recomputed from recorded per-crop statistics)
 
 The verdict of Amendment 1 is applied to the per-crop class statistics already recorded in two fine-timer reports:
 
@@ -128,5 +133,7 @@ relevant if |Δ| ≥ `max(1 q_eff, 10 ns)` in both. The numbers below are the re
 | linux-ct 36660962382 (a2095a9) | `min_leak_control` | (report only) | reached | raw | +132.84 | 10.00 | +13.28 |
 
 Every target that failed under ADR-041 on the fine timer is a `SUB_FLOOR_SHIFT` under Amendment 1, as the WEISUNG
-expected. The largest are `caead_open_reject_samekey` at 0.77 / 0.22 floors (p99) and `caead_open_reject` at
-0.50 / 0.47 floors. On the fine runner the sensitivity control's raw Δ was 13.3 floors.
+expected. At the deciding crops the largest are `caead_open_reject_samekey` at 0.77 / 0.22 floors (p99) and
+`caead_open_reject` at 0.50 / 0.47 floors. Over all reproduced crops the largest is `caead_open_reject` at p99 with
+0.86 / 0.61 floors, a margin of ≈ 1.65× to the floor in the smaller of the two measurements (review C6). On the fine
+runner the sensitivity control's raw Δ was 13.3 floors.

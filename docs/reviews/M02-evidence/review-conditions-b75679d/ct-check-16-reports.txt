@@ -1,0 +1,20 @@
+   Compiling xtask v0.0.0 (/Users/c.carl/coding/claude_code/SecMPro/xtask)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.13s
+     Running `target/debug/xtask ct-check docs/reviews/M02-evidence/ct-adr041-amendment1/linux-31d13de-run36677648129.json docs/reviews/M02-evidence/ct-adr041-amendment1/linux-31d13de-run36678360108.json docs/reviews/M02-evidence/ct-adr041-amendment1/linux-31d13de-run36678826377.json docs/reviews/M02-evidence/ct-adr041-amendment1/linux-6b9da3b-run36679955738.json docs/reviews/M02-evidence/ct-adr041-amendment1/linux-6b9da3b-run36680376550.json docs/reviews/M02-evidence/ct-adr041-amendment1/linux-6b9da3b-run36680797237.json docs/reviews/M02-evidence/ct-adr041-amendment1/linux-6b9da3b-run36681396211.json docs/reviews/M02-evidence/ct-adr041-amendment1/linux-6b9da3b-run36681989835.json docs/reviews/M02-evidence/ct-adr041-amendment1/macos-arm64-31d13de-run1.json docs/reviews/M02-evidence/ct-adr041-amendment1/macos-arm64-31d13de-run2.json docs/reviews/M02-evidence/ct-adr041-amendment1/macos-arm64-31d13de-run3.json docs/reviews/M02-evidence/ct-adr041-amendment1/macos-arm64-6b9da3b-run1.json docs/reviews/M02-evidence/ct-adr041-amendment1/macos-arm64-6b9da3b-run2.json docs/reviews/M02-evidence/ct-adr041-amendment1/macos-arm64-6b9da3b-run3.json docs/reviews/M02-evidence/ct-report-x86_64-linux-pr-run-36679963223-6b9da3b.json target/tmp/ct-report-pr-36689454147.json`
+PASS docs/reviews/M02-evidence/ct-adr041-amendment1/linux-31d13de-run36677648129.json
+PASS docs/reviews/M02-evidence/ct-adr041-amendment1/linux-31d13de-run36678360108.json
+PASS docs/reviews/M02-evidence/ct-adr041-amendment1/linux-31d13de-run36678826377.json
+PASS docs/reviews/M02-evidence/ct-adr041-amendment1/linux-6b9da3b-run36679955738.json
+PASS docs/reviews/M02-evidence/ct-adr041-amendment1/linux-6b9da3b-run36680376550.json
+PASS docs/reviews/M02-evidence/ct-adr041-amendment1/linux-6b9da3b-run36680797237.json
+PASS docs/reviews/M02-evidence/ct-adr041-amendment1/linux-6b9da3b-run36681396211.json
+PASS docs/reviews/M02-evidence/ct-adr041-amendment1/linux-6b9da3b-run36681989835.json
+PASS docs/reviews/M02-evidence/ct-adr041-amendment1/macos-arm64-31d13de-run1.json
+PASS docs/reviews/M02-evidence/ct-adr041-amendment1/macos-arm64-31d13de-run2.json
+PASS docs/reviews/M02-evidence/ct-adr041-amendment1/macos-arm64-31d13de-run3.json
+PASS docs/reviews/M02-evidence/ct-adr041-amendment1/macos-arm64-6b9da3b-run1.json
+PASS docs/reviews/M02-evidence/ct-adr041-amendment1/macos-arm64-6b9da3b-run2.json
+PASS docs/reviews/M02-evidence/ct-adr041-amendment1/macos-arm64-6b9da3b-run3.json
+PASS docs/reviews/M02-evidence/ct-report-x86_64-linux-pr-run-36679963223-6b9da3b.json
+PASS target/tmp/ct-report-pr-36689454147.json
+ct-check: 16 reports pass

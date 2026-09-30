@@ -2,9 +2,10 @@
 
 One target for every decoder, the HX/TR/LINK state machines (message sequences) and the relay command
 executor (docs/06 §4). Corpora are committed (`fuzz/corpus/<target>/`, minimised with `cargo fuzz cmin`).
-`ci-full` runs every target for 120 s (fuzz smoke, step 6) with the pinned nightly (`xtask/src/tools.rs`);
-nightly CI runs 4 h campaigns. The gate runs exactly the targets listed in `xtask/src/expect.rs`
-(`FUZZ_TARGETS`), so a removed target fails CI.
+`ci-full` runs every target for 120 s (fuzz smoke, step 6) with the pinned nightly (`xtask/src/tools.rs`)
+and a per-target `-max_len` (`FUZZ_MAX_LEN`). The nightly 4 h campaign of docs/06 §4 does not exist yet; a
+scheduled, non-required job arrives in M3 (M2 review F2). The gate runs exactly the targets listed in
+`xtask/src/expect.rs` (`FUZZ_TARGETS`), so a removed target fails CI.
 
 This directory is its own Cargo workspace with its own `Cargo.lock` (seeded from the workspace lockfile so
 shared crates keep their vetted, cooled-down versions; `cargo xtask cooldown` checks both lockfiles). Its only

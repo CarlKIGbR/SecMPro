@@ -1,0 +1,94 @@
+# ci-full step 6 `fuzz` on b26e9e9 (M2 review F7, F18), macOS arm64, clean worktree of b26e9e9
+# command: cargo xtask step --strict fuzz   (in `git worktree add --detach target/wt-fuzz b26e9e9`)
+# lines kept from the gate log: seeding, the cargo fuzz command line, libFuzzer's corpus INFO lines, Done, the summary
+
+  caead_open: 25 vector seeds in target/fuzz-corpus/caead_open/
+$ rustup run nightly-2026-09-21 cargo fuzz run --fuzz-dir fuzz caead_open target/fuzz-corpus/caead_open fuzz/corpus/caead_open -- -max_total_time=120 -max_len=12618
+INFO:       25 files found in target/fuzz-corpus/caead_open
+INFO:       74 files found in fuzz/corpus/caead_open
+INFO: seed corpus: files: 99 min: 25b max: 12617b total: 66773b rss: 37Mb
+Done 2249929 runs in 121 second(s)
+  ed25519_verify: 25 vector seeds in target/fuzz-corpus/ed25519_verify/
+$ rustup run nightly-2026-09-21 cargo fuzz run --fuzz-dir fuzz ed25519_verify target/fuzz-corpus/ed25519_verify fuzz/corpus/ed25519_verify -- -max_total_time=120 -max_len=4243
+INFO:       25 files found in target/fuzz-corpus/ed25519_verify
+INFO:      136 files found in fuzz/corpus/ed25519_verify
+INFO: seed corpus: files: 161 min: 32b max: 4243b total: 32280b rss: 37Mb
+Done 244126 runs in 121 second(s)
+  hybrid_sign_verify: 42 vector seeds in target/fuzz-corpus/hybrid_sign_verify/
+$ rustup run nightly-2026-09-21 cargo fuzz run --fuzz-dir fuzz hybrid_sign_verify target/fuzz-corpus/hybrid_sign_verify fuzz/corpus/hybrid_sign_verify -- -max_total_time=120 -max_len=7810
+INFO:       42 files found in target/fuzz-corpus/hybrid_sign_verify
+INFO:       77 files found in fuzz/corpus/hybrid_sign_verify
+INFO: seed corpus: files: 119 min: 2b max: 7809b total: 112219b rss: 36Mb
+Done 48770 runs in 121 second(s)
+  mldsa65_verify: 34 vector seeds in target/fuzz-corpus/mldsa65_verify/
+$ rustup run nightly-2026-09-21 cargo fuzz run --fuzz-dir fuzz mldsa65_verify target/fuzz-corpus/mldsa65_verify fuzz/corpus/mldsa65_verify -- -max_total_time=120 -max_len=3567
+INFO:       34 files found in target/fuzz-corpus/mldsa65_verify
+INFO:        3 files found in fuzz/corpus/mldsa65_verify
+INFO: seed corpus: files: 37 min: 1b max: 3311b total: 89499b rss: 36Mb
+Done 1992200 runs in 121 second(s)
+  mlkem_parse: 86 vector seeds in target/fuzz-corpus/mlkem_parse/
+$ rustup run nightly-2026-09-21 cargo fuzz run --fuzz-dir fuzz mlkem_parse target/fuzz-corpus/mlkem_parse fuzz/corpus/mlkem_parse -- -max_total_time=120 -max_len=1570
+INFO:       86 files found in target/fuzz-corpus/mlkem_parse
+INFO:      140 files found in fuzz/corpus/mlkem_parse
+INFO: seed corpus: files: 226 min: 1b max: 1569b total: 83557b rss: 37Mb
+Done 2382662 runs in 121 second(s)
+  msg_open: 24 vector seeds in target/fuzz-corpus/msg_open/
+$ rustup run nightly-2026-09-21 cargo fuzz run --fuzz-dir fuzz msg_open target/fuzz-corpus/msg_open fuzz/corpus/msg_open -- -max_total_time=120 -max_len=2000
+INFO:       24 files found in target/fuzz-corpus/msg_open
+INFO:        3 files found in fuzz/corpus/msg_open
+INFO: seed corpus: files: 27 min: 2b max: 1999b total: 42041b rss: 36Mb
+Done 5054672 runs in 121 second(s)
+  proto_cell: 190 vector seeds in target/fuzz-corpus/proto_cell/
+$ rustup run nightly-2026-09-21 cargo fuzz run --fuzz-dir fuzz proto_cell target/fuzz-corpus/proto_cell fuzz/corpus/proto_cell -- -max_total_time=120 -max_len=65644
+INFO:      190 files found in target/fuzz-corpus/proto_cell
+INFO:      405 files found in fuzz/corpus/proto_cell
+INFO: seed corpus: files: 595 min: 1b max: 65559b total: 686570b rss: 37Mb
+Done 5800756 runs in 121 second(s)
+  proto_frames: 182 vector seeds in target/fuzz-corpus/proto_frames/
+$ rustup run nightly-2026-09-21 cargo fuzz run --fuzz-dir fuzz proto_frames target/fuzz-corpus/proto_frames fuzz/corpus/proto_frames -- -max_total_time=120 -max_len=4338
+INFO:      182 files found in target/fuzz-corpus/proto_frames
+INFO:      157 files found in fuzz/corpus/proto_frames
+INFO: seed corpus: files: 339 min: 1b max: 4338b total: 1448601b rss: 37Mb
+Done 3357802 runs in 121 second(s)
+  proto_handshake: 40 vector seeds in target/fuzz-corpus/proto_handshake/
+$ rustup run nightly-2026-09-21 cargo fuzz run --fuzz-dir fuzz proto_handshake target/fuzz-corpus/proto_handshake fuzz/corpus/proto_handshake -- -max_total_time=120 -max_len=12020
+INFO:       40 files found in target/fuzz-corpus/proto_handshake
+INFO:       86 files found in fuzz/corpus/proto_handshake
+INFO: seed corpus: files: 126 min: 1b max: 12020b total: 562211b rss: 37Mb
+Done 5469460 runs in 121 second(s)
+  proto_invitation: 132 vector seeds in target/fuzz-corpus/proto_invitation/
+$ rustup run nightly-2026-09-21 cargo fuzz run --fuzz-dir fuzz proto_invitation target/fuzz-corpus/proto_invitation fuzz/corpus/proto_invitation -- -max_total_time=120 -max_len=12362
+INFO:      132 files found in target/fuzz-corpus/proto_invitation
+INFO:      263 files found in fuzz/corpus/proto_invitation
+INFO: seed corpus: files: 395 min: 1b max: 12362b total: 963113b rss: 37Mb
+Done 4115863 runs in 121 second(s)
+  proto_records: 81 vector seeds in target/fuzz-corpus/proto_records/
+$ rustup run nightly-2026-09-21 cargo fuzz run --fuzz-dir fuzz proto_records target/fuzz-corpus/proto_records fuzz/corpus/proto_records -- -max_total_time=120 -max_len=2858
+INFO:       81 files found in target/fuzz-corpus/proto_records
+INFO:      199 files found in fuzz/corpus/proto_records
+INFO: seed corpus: files: 280 min: 1b max: 2864b total: 417319b rss: 37Mb
+Done 4876747 runs in 121 second(s)
+  x25519_dh: 54 vector seeds in target/fuzz-corpus/x25519_dh/
+$ rustup run nightly-2026-09-21 cargo fuzz run --fuzz-dir fuzz x25519_dh target/fuzz-corpus/x25519_dh fuzz/corpus/x25519_dh -- -max_total_time=120 -max_len=97
+INFO:       54 files found in target/fuzz-corpus/x25519_dh
+INFO:        3 files found in fuzz/corpus/x25519_dh
+INFO: seed corpus: files: 57 min: 32b max: 96b total: 5376b rss: 36Mb
+Done 296331 runs in 121 second(s)
+=== step summary (host aarch64-apple-darwin, strict: true) ===
+   6 fuzz            PASS       1501s  fuzz smoke, 120 s per target on the vector-seeded scratch corpus plus the tracked corpus (read-only), -max_len from expect::FUZZ_MAX_LEN: caead_open, ed25519_verify, hybrid_sign_verify, mldsa65_verify, mlkem_parse, msg_open, proto_cell, proto_frames, proto_handshake, proto_invitation, proto_records, x25519_dh (expected set matches); vector seeds: caead_open 25, ed25519_verify 25, hybrid_sign_verify 42, mldsa65_verify 34, mlkem_parse 86, msg_open 24, proto_cell 190, proto_frames 182, proto_handshake 40, proto_invitation 132, proto_records 81, x25519_dh 54
+step: PASS
+
+# after the run
+git status --short in the worktree (tracked fuzz/corpus unchanged): clean
+caead_open: scratch corpus 60 files (vector seeds + new inputs), tracked corpus 74 files (unchanged), crash artefacts 0
+ed25519_verify: scratch corpus 205 files (vector seeds + new inputs), tracked corpus 136 files (unchanged), crash artefacts 0
+hybrid_sign_verify: scratch corpus 155 files (vector seeds + new inputs), tracked corpus 77 files (unchanged), crash artefacts 0
+mldsa65_verify: scratch corpus 62 files (vector seeds + new inputs), tracked corpus 3 files (unchanged), crash artefacts 0
+mlkem_parse: scratch corpus 200 files (vector seeds + new inputs), tracked corpus 140 files (unchanged), crash artefacts 0
+msg_open: scratch corpus 28 files (vector seeds + new inputs), tracked corpus 3 files (unchanged), crash artefacts 0
+proto_cell: scratch corpus 423 files (vector seeds + new inputs), tracked corpus 405 files (unchanged), crash artefacts 0
+proto_frames: scratch corpus 202 files (vector seeds + new inputs), tracked corpus 157 files (unchanged), crash artefacts 0
+proto_handshake: scratch corpus 43 files (vector seeds + new inputs), tracked corpus 86 files (unchanged), crash artefacts 0
+proto_invitation: scratch corpus 277 files (vector seeds + new inputs), tracked corpus 263 files (unchanged), crash artefacts 0
+proto_records: scratch corpus 166 files (vector seeds + new inputs), tracked corpus 199 files (unchanged), crash artefacts 0
+x25519_dh: scratch corpus 55 files (vector seeds + new inputs), tracked corpus 3 files (unchanged), crash artefacts 0

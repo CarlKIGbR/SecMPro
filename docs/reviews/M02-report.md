@@ -416,6 +416,60 @@ proceed — is a reproduced shift of ≥ 1 quantum on a fine-grained timer a fin
 `caead_open_reject` first, per observation 3), or does the effect floor need an absolute component (an ADR
 change I have not made)?
 
+**Key-swap experiment for Q-9 (WEISUNG M2-5 A, B; report only).** Method, run list, both tables (every runner's
+timer), pooled sign counts and the reading are in `M02-evidence/ct-keyswap/README.md`, next to the nine reports. The
+experiment ran on the throwaway branch `diag/ct-keyswap` at `a2095a9` (this branch at `355d641` plus two
+experiment targets and the sensitivity control), which is not merged. Runs: macOS local 3×, and Linux `linux-ct`
+36660962382, 36661346822, 36661863996, 36662314808, 36662991110 and 36663462640. One of the six Linux runs had a
+fine timer (0.385 ns tick, q_eff 0.77 ns). None hit the 0.358 ns-tick type of the PR FAIL. The gate targets passed
+in 8 of 9 runs; the fine-timer run failed on `tag_compare` only (−1.08 / −1.42 q_eff).
+
+Findings:
+
+- The sign does not follow the semantics. `caead_open_reject` and `caead_open_reject_keyswap` (the same semantics
+  with the key roles exchanged) lean in opposite directions on Linux: at p75, significant measurements are 9+/2−
+  vs 2+/8−.
+- Within one run, measurements flip sign (e.g. `keyswap` +86.4 / −82.8).
+- `caead_open_reject` reproduced with class 0 *faster* once (36662991110, −5.9 / −31.4). This corrects observation
+  (3) of the STOP entry above.
+- `wrongkey_only`, whose classes differ in key contents only, shows reproduced shifts of the same size, with both
+  signs, in 5 of 6 Linux runs.
+- The bench draws `k` afresh for every measurement from a per-run random seed (`benches/ct.rs:567–572`,
+  `1001–1003`). In this bench the swap is therefore a relabelling with the same input distribution, not a test of
+  fixed key contents. Pinning the contents would need a fixed shared `k`, which I have not built.
+- All shifts are ≤ 0.46 q_eff (≤ 4.6 ns) on the ≈ 10 ns runners and ≤ 0.33 q_eff on the fine runner. Nothing
+  reproduces on macOS.
+- Sensitivity control `min_leak_control`: detected on every runner (max |t| 691–4437; raw Δ 28–173 q_eff per
+  sample of 256 comparisons). Derived per comparison, a one-byte early exit costs 0.52–1.80 ns, which is 0.015–0.18
+  q_eff on macOS and the ≈ 10 ns runners and 0.67 q_eff on the fine runner. A single such exit per call is below
+  the 1-quantum floor on every runner seen.
+
+**Code reading for Q-9: `Caead::open` and the AEAD decrypt, wrong key (class 0) vs tampered ciphertext under the
+right key (class 1).** Both classes follow the same path.
+
+1. Split and length checks depend on lengths only (`crates/secmp-crypto/src/caead.rs:80–84`).
+2. `derive` runs the same HKDF-Expand and `XChaCha20Poly1305::new` (`caead.rs:34–43`, called at `:85`).
+3. The COM compare is `subtle`'s `ct_eq`, whose result is kept as a `Choice` with no branch (`:87`).
+4. The allocation is one `Zeroizing<Vec>` of the same size in both classes (`:89`). `Tag::try_from` is
+   length-only (`:90`).
+5. `decrypt_inout_detached` (`:91–93`) goes through `target/vendor/chacha20poly1305-0.11.0/src/lib.rs:272–279`.
+   It builds `Cipher::new(C::new(key, nonce))` (`src/cipher.rs:34–50`): one keystream block for the Poly1305 key,
+   `Poly1305::new`, zeroize of the MAC key, and a seek to block 1.
+6. It then checks the length (`cipher.rs:81–83`) and runs Poly1305 over the AD, the whole ciphertext and the
+   lengths (`:85–87`, `:101–111`).
+7. `mac.verify(tag)` is `finalize().ct_eq(expected)` (`universal-hash-0.6.1/src/lib.rs:136–142`). It fails in
+   *both* classes, so the early return `Err(Error)` (`cipher.rs:95–96`) is taken in both, and the keystream pass
+   over the body (`:93`) runs in neither.
+8. The verdict `com_ok & Choice::from(tag_ok)` is 0 in both classes and gives a single branch (`caead.rs:98–99`).
+   The reject path is `buf.zeroize()` plus `Err(Error::Rejected)` in both (`:102–103`). The `Drop` impls of the
+   AEAD key (`chacha20poly1305 src/lib.rs:296–306`) and of the Poly1305 state (`poly1305-0.9.1/src/lib.rs:122–129`)
+   run identically in both classes.
+9. The deprecated `AeadInPlace::decrypt_in_place_detached` (`aead-0.6.1/src/lib.rs:363`, blanket impl `:401–409`)
+   only forwards to `decrypt_inout_detached`, and SecMPro does not call it.
+
+The classes differ only in data values: the key, the derived `K_enc`/`COM`/Poly1305 key, and byte 100 of the
+ciphertext. No branch, address or length depends on them, so I found no class-dependent path.
+
 **ct gate under ADR-041 (WEISUNG M2-4 C).** `M02-evidence/ct-adr041/README.md`. On `b8a7915`: Linux `linux-ct`
 36621138939, 36621645926, 36622240073 and three local macOS runs — 6/6 run verdict PASS, positive control detected,
 A/A ≤ 2.8, every reproduced shift `SUB_QUANTUM_SHIFT` (Δ ≤ 0.29 quanta); no target FAILs under ADR-041. Superseded
@@ -448,9 +502,12 @@ Open questions:
 
 - Q-7 (ADR-041 implementation, §5 (e)): the effective quantum also drives the ADR-038 (3) batching calibration and
   a re-batching when a target's samples reveal a coarser lattice than the clock's probe. Confirm as the intended
-  reading of "batching unchanged" (the rule is unchanged; its quantum is the measured one).
+  reading of "batching unchanged" (the rule is unchanged; its quantum is the measured one). **Answered (WEISUNG
+  M2-5): yes.** The reviewer's note is recorded under ADR-041 (2) (`b355587`).
 - Q-8 (margin): on the ≈ 24.5-tick Linux runners one superseded run showed `caead_open_reject` at 0.81 quanta
-  (sub-quantum, passes). No action proposed; noted for the M3 DIT ADR.
+  (sub-quantum, passes). No action proposed; noted for the M3 DIT ADR. **Noted by the reviewer (WEISUNG M2-5).**
+- Q-9 (ct FAIL on a fine timer): open. The key-swap experiment and the code reading are above ("Key-swap
+  experiment for Q-9"). The gate is unchanged; PR #3 stays a draft.
 - Q-3 (ADR-040): answered — Accepted (WEISUNG M2-2 B, `6beb30e`); `rand` added in `d8d8851`.
 - **Q-4 (ct gate) — closed by ADR-041** (owner, 2026-09-29; `f537714`, implemented in `bdf10db`/`b8a7915`, evidence `M02-evidence/ct-adr041/`). Original question: the gate fails on Linux (and on macOS for `caead_derive`) after the harness
   artefact is removed, with the pattern of findings 3–4 above. Is this a property of the fixed-vs-fixed statistic at

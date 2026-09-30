@@ -2,7 +2,8 @@
 
 Branch: `m02-proto` · Base: `main` at `bc8d6d559795cf515bcf08f63fcfe0b9eb3058d9` (M1 squash merge) · Author: Claude Code (Opus 5.5) · Date: 2026-09-29
 
-Status: **all plan steps done — ready for review.** Commit 1 (`9f20b95` … `168ede0`); WEISUNG M2-1 (`d09666a` …
+Status: **STOP (WEISUNG M2-4 C) — the PR run 36651079069 on `0804f60` passes every step except `ct`, where five
+targets FAIL under ADR-041 on a fine-timer runner (§8 Blocked); PR #3 stays a draft.** All plan steps are done. Commit 1 (`9f20b95` … `168ede0`); WEISUNG M2-1 (`d09666a` …
 `ffe0612`); steps 1–8 (`86830da`, `b2e3319`, `d90f3b7`); WEISUNG M2-2 (`68ac537`, `6beb30e`, `4e582cb`, `f7b3066`,
 `916bbf6`); steps 9–12 (`d8d8851`, `e4da4a1`, `94b14cf`, `45d28e1`, `f0df22f`); WEISUNG M2-3 (`e230c6e`, `774e04a`);
 WEISUNG M2-4: ADR-041 (`f537714`), its implementation (`bdf10db`, `b8a7915`), the evidence (`9ba8328`), two gate
@@ -241,6 +242,7 @@ Commit-1 evidence:
 | PR run 36608427671 (`954f694`) | cancelled by my push of `e230c6e` during step 6 (fuzz); it had passed steps 1–5 except `ct` (old verdict: `tag_compare` 14.78) |
 | PR run 36611775212 (`e230c6e`) | cancelled by my push of `774e04a` |
 | PR run 36614956208 (`774e04a`) | `windows-native` ✅, `xwin-cross` ✅, `linux-fast` ✅, `linux-full` ❌ — `ct` (old verdict, replaced by ADR-041), `mutants` (52 survivors in `cfg(kani)` code) and `kani` (stubbing not enabled by the gate's command) failed; both gate faults fixed in `f5855db`; every other step PASS |
+| PR run 36651079069 (`0804f60`) | `windows-native` ✅, `xwin-cross` ✅, `linux-fast` ✅, `linux-full` ❌ — every step PASS (Kani 16/16 in 634 s, mutants 588 / 1 documented, Miri 960 s, fuzz, coverage, systemd, …) except **`ct`: FAIL under ADR-041** on a runner with a 0.358 ns tick and a 2-tick lattice (q_eff 0.72 ns): `tag_compare`, `msg_open_reject`, `caead_open_reject`, `caead_com_compare`, `caead_open_reject_samekey` (§8 Blocked; `M02-evidence/ci-full-x86_64-linux-pr-run-36651079069-0804f60.txt`, `…/ct-report-x86_64-linux-pr-run-36651079069-0804f60-FAIL.json`, `…/ct-adr041/pr-run-36651079069-0804f60-FAIL-detail.txt`) |
 | PR run 36642147335 (`631506e`) | `windows-native` ✅, `xwin-cross` ✅, `linux-fast` ✅, `linux-full` cancelled — the runner was shut down during Kani (`header_v1`, 54 M clauses: out of memory) after steps 1–8 and Miri passed and 13 harnesses verified; `header_v1` split in the next commit |
 | PR run 36633643390 (`7413e23`) | `windows-native` ✅, `xwin-cross` ✅, `linux-fast` ✅, `linux-full` ❌ — every step PASS (incl. **`ct` under ADR-041**, mutants 588 / 1 documented survivor, Miri 1166 s, fuzz 12 targets 1498 s, coverage 99.6 %, systemd) except `kani`: `cargo-kani --manifest-path` could not start `cargo metadata` on the runner; gate fixed in the next commit (`M02-evidence/ci-full-x86_64-linux-pr-run-36633643390-7413e23.txt`) |
 | ct diagnosis (15 `linux-ct` dispatches, 6 local macOS runs) | `M02-evidence/ct-diagnosis/summary.md` (every verdict, per-class percentiles), `README.md` (harness reading, findings); §8 |
@@ -385,6 +387,35 @@ within a process 22 of 33 excursions above 10 reproduce with the same sign at th
 understates the effective quantum (samples on a ≈ 24.5-tick lattice, ≈ 10 ns). Thresholds, samples, control and
 verdict unchanged.
 
+**Blocked — STOP (WEISUNG M2-4 C: "If any target FAILs under ADR-041 … STOP, report").** The PR run
+**36651079069** on `0804f60` ran the ct gate on a runner type none of the six evidence runs hit: `tsc`/`rdtscp`,
+tick 0.358 ns, reported resolution 2 ticks, samples on a 2-tick lattice (q_eff = 0.72 ns; the evidence runs had
+q_eff 24.5–26 ticks ≈ 10 ns on Linux and 41.67 ns on macOS). The inline A/A control passed (≤ 2.66), the positive
+control was detected; five targets FAIL (reproduced, same crop and sign, |Δ| ≥ 1 q_eff in both measurements):
+
+| target | crop | t1 / t2 | Δ1 / Δ2 (ns) | Δ1 / Δ2 (q_eff) | sd (ticks) | sample median |
+|---|---|---|---|---|---|---|
+| `tag_compare` (256 compares per sample) | p50 | −422.5 / −412.5 | −1.17 / −1.14 | −1.63 / −1.60 | 2.3 | 8.6 µs |
+| `msg_open_reject` | p99 | −25.1 / −25.0 | −0.99 / −0.97 | −1.38 / −1.35 | 54 | 4.2 µs |
+| `caead_open_reject` | p50 | +81.1 / +77.5 | +4.97 / +4.71 | +6.94 / +6.58 | 60 | 5.8 µs |
+| `caead_com_compare` (256 compares per sample) | p50 | −75.6 / −89.5 | −1.67 / −2.03 | −2.34 / −2.84 | 22 | 8.8 µs |
+| `caead_open_reject_samekey` | p99 | +19.3 / +5.6 | +7.70 / +2.21 | +10.8 / +3.1 | 553 | 6.2 µs |
+
+(`caead_derive` and `caead_aead_reject`: `SUB_QUANTUM_SHIFT`, 0.09 and 0.63–0.69 q_eff.) Nothing was changed
+(thresholds, samples, controls, verdict rules, code). Observations for the reviewer, not decisions: (1) the
+shifts are 1–8 ns on 4–9 µs calls (0.01–0.13 %); the same magnitudes are sub-quantum on the ≈ 10 ns-lattice
+runners and on macOS, so the ADR-041 verdict depends on the runner's timer granularity; (2) the two compare targets
+differ by 4–8 ps per 32-byte comparison (a fraction of a cycle); (3) `caead_open_reject` (class 0: wrong key, `COM`
+and tag fail; class 1: right key, tampered, tag fails) has had class 0 slower in every run where it was significant:
+`ct-verdict` default arm Linux +78.8 / +69.7 / +36.9 (Δ 3.2 / 2.9 / 1.7 ns) and macOS +84.0 / +34.9 / +28.1 (Δ 4.5 /
+1.7 / 1.5 ns), ADR-041 Linux run 36621645926 +20.8 / +17.6 (≈ 1 ns), and here +81.1 / +77.5 (≈ 5 ns) — a consistent
+sign across platforms and runs, unlike the sign-flipping shifts of the other targets. Evidence:
+`M02-evidence/ct-report-x86_64-linux-pr-run-36651079069-0804f60-FAIL.json`,
+`M02-evidence/ct-adr041/pr-run-36651079069-0804f60-FAIL-detail.txt`. **Question Q-9 (reviewer/owner):** how to
+proceed — is a reproduced shift of ≥ 1 quantum on a fine-grained timer a finding in the code under test (then
+`caead_open_reject` first, per observation 3), or does the effect floor need an absolute component (an ADR
+change I have not made)?
+
 **ct gate under ADR-041 (WEISUNG M2-4 C).** `M02-evidence/ct-adr041/README.md`. On `b8a7915`: Linux `linux-ct`
 36621138939, 36621645926, 36622240073 and three local macOS runs — 6/6 run verdict PASS, positive control detected,
 A/A ≤ 2.8, every reproduced shift `SUB_QUANTUM_SHIFT` (Δ ≤ 0.29 quanta); no target FAILs under ADR-041. Superseded
@@ -458,7 +489,7 @@ Other notes:
 ## 9. Checklist before requesting review
 
 - [x] All acceptance criteria evidenced above
-- [x] `cargo xtask ci-full` green locally on `f5855db` (every step; host-bound SKIPs); the Linux PR run of the final head in the PR description
+- [ ] `cargo xtask ci` green on CI — PR run 36651079069: every step except `ct` (ADR-041 FAIL on a fine-timer runner, §8 Blocked); `cargo xtask ci-full` green locally on `f5855db` (every step; host-bound SKIPs)
 - [x] No `#[ignore]`, no lint allowances added for security lints, no disabled gates (the mutation gate leaves out `cfg(kani)`-only code, which no test build compiles; Kani runs it)
 - [x] Vectors frozen (`vectors/encodings.json`, verbatim reference file) — reviewed in M2-2s
 - [x] Docs/CHANGELOG updated

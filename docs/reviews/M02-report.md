@@ -507,7 +507,9 @@ Open questions:
 - Q-8 (margin): on the ≈ 24.5-tick Linux runners one superseded run showed `caead_open_reject` at 0.81 quanta
   (sub-quantum, passes). No action proposed; noted for the M3 DIT ADR. **Noted by the reviewer (WEISUNG M2-5).**
 - Q-9 (ct FAIL on a fine timer): open. The key-swap experiment and the code reading are above ("Key-swap
-  experiment for Q-9"). The gate is unchanged; PR #3 stays a draft.
+  experiment for Q-9"). The gate is unchanged; PR #3 stays a draft. PR run 36657972510 on `355d641` passed every
+  step, including `ct`, on a ≈ 24.5-tick lattice runner. That shows only which runner type it drew, not that Q-9 is
+  resolved.
 - Q-3 (ADR-040): answered — Accepted (WEISUNG M2-2 B, `6beb30e`); `rand` added in `d8d8851`.
 - **Q-4 (ct gate) — closed by ADR-041** (owner, 2026-09-29; `f537714`, implemented in `bdf10db`/`b8a7915`, evidence `M02-evidence/ct-adr041/`). Original question: the gate fails on Linux (and on macOS for `caead_derive`) after the harness
   artefact is removed, with the pattern of findings 3–4 above. Is this a property of the fixed-vs-fixed statistic at
@@ -546,7 +548,14 @@ Other notes:
 ## 9. Checklist before requesting review
 
 - [x] All acceptance criteria evidenced above
-- [ ] `cargo xtask ci` green on CI — PR run 36651079069: every step except `ct` (ADR-041 FAIL on a fine-timer runner, §8 Blocked); `cargo xtask ci-full` green locally on `f5855db` (every step; host-bound SKIPs)
+- [ ] `cargo xtask ci` green on CI:
+  - PR run 36651079069 (`0804f60`): every step except `ct` (ADR-041 FAIL on a fine-timer runner, §8 Blocked).
+  - PR run 36657972510 (`355d641`): every job and every ci-full step PASS, including Kani (677 s). `ct` PASS on a
+    ≈ 24.5-tick lattice runner, so it did not meet the fine-timer case. Evidence:
+    `M02-evidence/ci-full-x86_64-linux-pr-run-36657972510-355d641.txt` and
+    `ct-report-x86_64-linux-pr-run-36657972510-355d641.json`.
+  - Left unchecked while Q-9 is open. `cargo xtask ci-full` is green locally on `f5855db` (every step;
+    host-bound SKIPs).
 - [x] No `#[ignore]`, no lint allowances added for security lints, no disabled gates (the mutation gate leaves out `cfg(kani)`-only code, which no test build compiles; Kani runs it)
 - [x] Vectors frozen (`vectors/encodings.json`, verbatim reference file) — reviewed in M2-2s
 - [x] Docs/CHANGELOG updated

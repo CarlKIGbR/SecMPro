@@ -7,7 +7,10 @@
 //! the raw timings and on timings cropped at several percentiles of the pooled distribution. A deliberately
 //! variable-time comparison is measured as a **positive control**: it must be detected, otherwise the harness is
 //! not sensitive enough and the run fails. An inline **A/A control** repeats every target with the same inputs
-//! under both labels: it must stay quiet, otherwise the harness or the runner is unsound.
+//! under both labels: it must stay quiet, otherwise the harness or the runner is unsound. The **sensitivity
+//! control** `min_leak_control` (ADR-041 Amendment 1 (2)) measures the smallest leak the gate must see — a 32-byte
+//! comparison that exits one byte early for class 1 — and must reach the effect floor, otherwise the run is
+//! `CONTROL_FAIL`; it records the gate's sensitivity per run.
 //!
 //! Targets:
 //! - `tag_compare`: the tag comparison used by `MsgEncrypt` (`subtle::ConstantTimeEq` on 32 bytes), tags that
@@ -66,24 +69,32 @@
 //!   irregular data show no lattice. A measurement's `q_eff` is its own lattice spacing where its samples show one,
 //!   else the clock's (`Clock::quantum`: the lattice of `LATTICE_SAMPLES` timings of a fixed workload, else the
 //!   reported resolution), never below the reported resolution.
+//! - **Effect floor** (Amendment 1 (1)). `max(CT_EFFECT_FLOOR_QUANTA × q_eff, CT_EFFECT_FLOOR_NS)`, in ticks of
+//!   the measurement (`Rules::floor_ticks`): one effective quantum, but never less than 10 ns, so that fine- and
+//!   coarse-timer runners reach the same verdict. It applies to the per-sample Δ (a batch of `k` calls), the same
+//!   statistic as ADR-041 (2).
 //! - **Verdict.** Every non-control target is measured twice (fresh class sequences and inputs from the stream).
 //!   Per crop (raw and the five percentiles), a shift is *reproduced* if |t| > `CT_THRESHOLDS` in both measurements
-//!   with the same sign, and *relevant* if in both measurements the cropped class means differ by at least
-//!   `CT_EFFECT_FLOOR_QUANTA` × `q_eff`. FAIL if a crop is reproduced and relevant; `SUB_QUANTUM_SHIFT`
-//!   (informative, passes) if a crop is reproduced but no reproduced crop is relevant; PASS otherwise. The
-//!   positive control is measured once and must exceed `CT_THRESHOLDS` (FAIL otherwise). The inline A/A control
-//!   measures every target once more with class-0 inputs under both labels; if any of its crops exceeds
-//!   `CT_AA_MAX_T`, the run is `CONTROL_FAIL`: the gate fails and no target verdict is given (every target shows
-//!   `CONTROL_FAIL`). `NOT_MEASURABLE` fails the gate as before.
+//!   with the same sign, and *relevant* if in both measurements the cropped class means differ by at least the
+//!   effect floor. FAIL if a crop is reproduced and relevant; `SUB_FLOOR_SHIFT` (informative, passes) if a crop is
+//!   reproduced but no reproduced crop is relevant; PASS otherwise. The positive control is measured once and must
+//!   exceed `CT_THRESHOLDS` (FAIL otherwise). The inline A/A control measures every target once more with class-0
+//!   inputs under both labels; if any of its crops exceeds `CT_AA_MAX_T`, the run is `CONTROL_FAIL`. The
+//!   sensitivity control (Amendment 1 (2)) is measured once after the A/A control with `tag_compare`'s batch size
+//!   and sample count; if its raw Δ (class 0 slower) is below its effect floor, or it cannot be measured, the run is
+//!   `CONTROL_FAIL`. A `CONTROL_FAIL` run fails the gate and gives no target verdict (every target shows
+//!   `CONTROL_FAIL`). `NOT_MEASURABLE` fails the gate as before. A clock without a positive, finite tick length
+//!   makes every target NOT MEASURABLE (the floor in ticks needs it).
 //! - The parameters are read from `xtask/src/expect.rs` (`CT_THRESHOLDS`, `CT_RESOLUTION_MAX_FRACTION`,
-//!   `CT_MAX_BATCH`, `CT_BATCH_MARGIN`, `CT_MIN_REALISED_QUANTA`, `CT_EFFECT_FLOOR_QUANTA`, `CT_AA_MAX_T`) — this
-//!   file contains no copy of them — and echoed in the report, which the gate checks.
+//!   `CT_MAX_BATCH`, `CT_BATCH_MARGIN`, `CT_MIN_REALISED_QUANTA`, `CT_EFFECT_FLOOR_QUANTA`, `CT_EFFECT_FLOOR_NS`,
+//!   `CT_AA_MAX_T`) — this file contains no copy of them — and echoed in the report, which the gate checks.
 //!
 //! The report carries the clock (arch, Linux clocksource, timer, tick, reported resolution, overhead, the clock's
 //! lattice and quantum), the run verdict and, per target, `k`, the calibration, both measurements (per crop: n,
-//! class means, Δ in ticks and in `q_eff`, pooled sd, t; the class medians, the realised quanta, `q_eff` and where
-//! it came from, per-class percentiles), `t1`/`t2` at the first measurement's maximum, the deciding crop and the A/A
-//! measurement.
+//! class means, Δ in ticks, in `q_eff` and in effect floors, pooled sd, t; the class medians, the realised quanta,
+//! `q_eff` and where it came from, the effect floor, per-class percentiles), `t1`/`t2` at the first measurement's
+//! maximum, the deciding crop and the A/A measurement; and the sensitivity control (`k`, sample count, floor, raw
+//! Δ, whether it reached the floor, its measurement).
 //!
 //! Run by `cargo xtask step ct` (ci-full) as `cargo bench -p secmp-crypto --features kat --bench ct`; the results
 //! are written to `target/ct-report.json` and the exit status is the verdict. `SECMP_CT_SCALE` (a divisor, default
@@ -154,8 +165,10 @@ struct Rules {
     margin: f64,
     /// A measurement whose realised median is below this many quanta is NOT MEASURABLE.
     min_realised_quanta: u64,
-    /// ADR-041 (2): a reproduced shift fails only if |Δ| ≥ this many effective quanta.
+    /// ADR-041 (2): a reproduced shift fails only if |Δ| ≥ this many effective quanta (and ≥ `effect_floor_ns`).
     effect_floor: f64,
+    /// ADR-041 Amendment 1 (1): the absolute part of the effect floor, in ns.
+    effect_floor_ns: f64,
     /// ADR-041 (3): the inline A/A control passes if every |t| is at most this.
     aa_max_t: f64,
 }
@@ -179,6 +192,7 @@ impl Rules {
             margin: const_value("CT_BATCH_MARGIN")?.parse().ok()?,
             min_realised_quanta: const_value("CT_MIN_REALISED_QUANTA")?.parse().ok()?,
             effect_floor: const_value("CT_EFFECT_FLOOR_QUANTA")?.parse().ok()?,
+            effect_floor_ns: const_value("CT_EFFECT_FLOOR_NS")?.parse().ok()?,
             aa_max_t: const_value("CT_AA_MAX_T")?.parse().ok()?,
         };
         let sane = rules.pass > 0.0
@@ -188,8 +202,16 @@ impl Rules {
             && rules.margin >= 1.0
             && rules.min_realised_quanta >= 1
             && rules.effect_floor > 0.0
+            && rules.effect_floor_ns > 0.0
+            && rules.effect_floor_ns.is_finite()
             && rules.aa_max_t > 0.0;
         sane.then_some(rules)
+    }
+
+    /// The effect floor of a measurement with effective quantum `q_eff` (ticks) on a clock with tick length
+    /// `tick_ns`, in ticks (ADR-041 (2) with Amendment 1 (1)): `max(effect_floor · q_eff, effect_floor_ns)`.
+    fn floor_ticks(self, q_eff: f64, tick_ns: f64) -> f64 {
+        (self.effect_floor * q_eff).max(self.effect_floor_ns / tick_ns)
     }
 
     /// The batch size for a target with median call duration `per_call_ticks` on a timer with quantum
@@ -215,13 +237,14 @@ impl Rules {
 
     fn json(self) -> String {
         format!(
-            "{{\"pass\":{},\"max_resolution_fraction\":{},\"max_batch\":{},\"batch_margin\":{},\"min_realised_quanta\":{},\"effect_floor_quanta\":{},\"aa_max_t\":{}}}",
+            "{{\"pass\":{},\"max_resolution_fraction\":{},\"max_batch\":{},\"batch_margin\":{},\"min_realised_quanta\":{},\"effect_floor_quanta\":{},\"effect_floor_ns\":{},\"aa_max_t\":{}}}",
             self.pass,
             self.max_resolution_fraction,
             self.max_batch,
             self.margin,
             self.min_realised_quanta,
             self.effect_floor,
+            self.effect_floor_ns,
             self.aa_max_t
         )
     }
@@ -458,6 +481,12 @@ impl Clock {
         }
     }
 
+    /// The tick length in ns if the calibration produced a positive, finite one (the effect floor in ticks needs
+    /// it; without it every target is NOT MEASURABLE and the sensitivity control fails).
+    fn tick(&self) -> Option<f64> {
+        (self.tick_ns.is_finite() && self.tick_ns > 0.0).then_some(self.tick_ns)
+    }
+
     fn ns(&self, ticks: Option<u64>) -> Option<f64> {
         ticks.map(|t| f64_of(t) * self.tick_ns)
     }
@@ -545,15 +574,16 @@ impl Stats {
         ((s0 + s1) / (n0 + n1 - 2.0)).sqrt()
     }
 
-    /// `{"n0":…,"n1":…,"mean0":…,"mean1":…,"delta":…,"delta_q":…,"sd":…,"t":…}` (`delta` in ticks, `delta_q` in
-    /// effective quanta).
-    fn json(&self, q_eff: f64) -> String {
+    /// `{"n0":…,"n1":…,"mean0":…,"mean1":…,"delta":…,"delta_q":…,"delta_floor":…,"sd":…,"t":…}` (`delta` in
+    /// ticks, `delta_q` in effective quanta, `delta_floor` in effect floors of `floor` ticks).
+    fn json(&self, q_eff: f64, floor: f64) -> String {
         let [n0, n1] = self.n;
         let [m0, m1] = self.mean;
         let delta = self.delta();
         format!(
-            "{{\"n0\":{n0},\"n1\":{n1},\"mean0\":{m0:.3},\"mean1\":{m1:.3},\"delta\":{delta:.4},\"delta_q\":{:.4},\"sd\":{:.3},\"t\":{:.3}}}",
+            "{{\"n0\":{n0},\"n1\":{n1},\"mean0\":{m0:.3},\"mean1\":{m1:.3},\"delta\":{delta:.4},\"delta_q\":{:.4},\"delta_floor\":{:.4},\"sd\":{:.3},\"t\":{:.3}}}",
             delta / q_eff,
+            delta / floor,
             self.pooled_sd(),
             self.t()
         )
@@ -763,25 +793,32 @@ impl Measurement {
         f64_of(self.class_median_ticks) / self.q_eff
     }
 
-    fn json(&self, clock: &Clock) -> String {
+    /// The raw (uncropped) class statistics.
+    fn raw(&self) -> Option<&Stats> {
+        self.crops.iter().find(|(k, _)| k == "raw").map(|(_, s)| s)
+    }
+
+    fn json(&self, clock: &Clock, rules: Rules) -> String {
         let ts: Vec<String> = self
             .crops
             .iter()
             .map(|(k, s)| format!("\"{k}\":{:.3}", s.t()))
             .collect();
+        let floor = rules.floor_ticks(self.q_eff, clock.tick_ns);
         let crops: Vec<String> = self
             .crops
             .iter()
-            .map(|(k, s)| format!("\"{k}\":{}", s.json(self.q_eff)))
+            .map(|(k, s)| format!("\"{k}\":{}", s.json(self.q_eff, floor)))
             .collect();
         let (max, at) = self.max();
         let median_ns = f64_of(self.median_ticks) * clock.tick_ns;
         format!(
-            "{{\"max_abs_t\":{max:.3},\"max_at\":\"{at}\",\"t\":{{{}}},\"crops\":{{{}}},\"q_eff_ticks\":{:.3},\"q_eff_source\":\"{}\",\"distinct\":{},\"median_ticks\":{},\"median_ns\":{median_ns:.1},\"class_median_ticks\":{},\"realised_quanta\":{:.1},\"shape\":{{\"class0\":{},\"class1\":{}}}}}",
+            "{{\"max_abs_t\":{max:.3},\"max_at\":\"{at}\",\"t\":{{{}}},\"crops\":{{{}}},\"q_eff_ticks\":{:.3},\"q_eff_source\":\"{}\",\"floor_ticks\":{floor:.3},\"floor_ns\":{:.3},\"distinct\":{},\"median_ticks\":{},\"median_ns\":{median_ns:.1},\"class_median_ticks\":{},\"realised_quanta\":{:.1},\"shape\":{{\"class0\":{},\"class1\":{}}}}}",
             ts.join(","),
             crops.join(","),
             self.q_eff,
             self.q_eff_source,
+            floor * clock.tick_ns,
             self.distinct,
             self.median_ticks,
             self.class_median_ticks,
@@ -797,8 +834,8 @@ impl Measurement {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Verdict {
     Pass,
-    /// A reproduced shift below one effective quantum (informative; passes).
-    SubQuantumShift,
+    /// A reproduced shift below the effect floor (informative; passes).
+    SubFloorShift,
     Fail,
     NotMeasurable,
     /// The run's inline A/A control failed: no target verdict.
@@ -809,7 +846,7 @@ impl Verdict {
     fn as_str(self) -> &'static str {
         match self {
             Self::Pass => "PASS",
-            Self::SubQuantumShift => "SUB_QUANTUM_SHIFT",
+            Self::SubFloorShift => "SUB_FLOOR_SHIFT",
             Self::Fail => "FAIL",
             Self::NotMeasurable => "NOT_MEASURABLE",
             Self::ControlFail => "CONTROL_FAIL",
@@ -817,7 +854,7 @@ impl Verdict {
     }
 
     fn passed(self) -> bool {
-        matches!(self, Self::Pass | Self::SubQuantumShift)
+        matches!(self, Self::Pass | Self::SubFloorShift)
     }
 }
 
@@ -934,8 +971,13 @@ fn calibrate(
 }
 
 /// The ADR-041 decision on two measurements: per crop, reproduced (|t| > pass in both, same sign) and relevant
-/// (|Δ| ≥ floor · `q_eff` in both); the verdict and the deciding crop.
-fn decide(first: &Measurement, second: &Measurement, rules: Rules) -> (Verdict, Option<String>) {
+/// (|Δ| ≥ the effect floor of each measurement, `Rules::floor_ticks`, in both); the verdict and the deciding crop.
+fn decide(
+    first: &Measurement,
+    second: &Measurement,
+    rules: Rules,
+    tick_ns: f64,
+) -> (Verdict, Option<String>) {
     let mut reproduced: Option<(f64, &str)> = None;
     let mut relevant: Option<(f64, &str)> = None;
     for ((crop, s1), (crop2, s2)) in first.crops.iter().zip(&second.crops) {
@@ -951,14 +993,15 @@ fn decide(first: &Measurement, second: &Measurement, rules: Rules) -> (Verdict, 
         if reproduced.is_none_or(|(s, _)| strength > s) {
             reproduced = Some((strength, crop));
         }
-        let big = |s: &Stats, m: &Measurement| s.delta().abs() >= rules.effect_floor * m.q_eff;
+        let big =
+            |s: &Stats, m: &Measurement| s.delta().abs() >= rules.floor_ticks(m.q_eff, tick_ns);
         if big(s1, first) && big(s2, second) && relevant.is_none_or(|(s, _)| strength > s) {
             relevant = Some((strength, crop));
         }
     }
     match (relevant, reproduced) {
         (Some((_, crop)), _) => (Verdict::Fail, Some(crop.to_owned())),
-        (None, Some((_, crop))) => (Verdict::SubQuantumShift, Some(crop.to_owned())),
+        (None, Some((_, crop))) => (Verdict::SubFloorShift, Some(crop.to_owned())),
         (None, None) => (Verdict::Pass, None),
     }
 }
@@ -967,7 +1010,7 @@ struct Outcome {
     target: Target,
     calibration: Calibration,
     verdict: Verdict,
-    /// The crop that decided a FAIL or a sub-quantum shift.
+    /// The crop that decided a FAIL or a sub-floor shift.
     decisive_crop: Option<String>,
     first: Option<Measurement>,
     second: Option<Measurement>,
@@ -994,7 +1037,9 @@ fn evaluate(
         second: None,
         aa: None,
     };
-    let (Some(k), Some(quantum)) = (outcome.calibration.k, clock.quantum()) else {
+    let (Some(k), Some(quantum), Some(tick_ns)) =
+        (outcome.calibration.k, clock.quantum(), clock.tick())
+    else {
         return Ok(outcome);
     };
     let measure_once =
@@ -1039,7 +1084,7 @@ fn evaluate(
     }
     let second = measure_once(stream, &outcome.target, k)?;
     if !too_coarse(&second) {
-        let (verdict, crop) = decide(&first, &second, rules);
+        let (verdict, crop) = decide(&first, &second, rules, tick_ns);
         outcome.verdict = verdict;
         outcome.decisive_crop = crop;
     }
@@ -1052,7 +1097,7 @@ impl Outcome {
     fn json(&self, clock: &Clock, rules: Rules) -> String {
         let [class0, class1] = self.target.classes;
         let measurement =
-            |m: Option<&Measurement>| m.map_or_else(|| "null".to_owned(), |m| m.json(clock));
+            |m: Option<&Measurement>| m.map_or_else(|| "null".to_owned(), |m| m.json(clock, rules));
         let per_call_ticks = self.calibration.per_call_ticks();
         // t1 and t2 (sign kept) at the crop of the first measurement's maximum
         let t1_t2 = match (&self.first, &self.second) {
@@ -1168,6 +1213,42 @@ fn tag_compare(n: usize, k: usize, stream: &mut Stream, variable_time: bool) -> 
                     )
                 };
                 black_box(eq);
+            }
+        },
+    )
+}
+
+/// The sensitivity control `min_leak_control` (ADR-041 Amendment 1 (2)): the smallest software leak the gate must
+/// see — a 32-byte comparison with a byte-wise early exit (each byte read through `black_box`, so no vectorised
+/// comparison hides the exit), class 0 differing in byte 31 (32 byte steps), class 1 in byte 30 (31 byte steps,
+/// one byte early); 256 comparisons per call as in `tag_compare`, so class 0 is slower by 256 byte steps.
+fn min_leak(n: usize, k: usize, stream: &mut Stream) -> Samples {
+    let mut expected = [0_u8; 32];
+    stream.fill(&mut expected);
+    let mut at_31 = expected;
+    at_31[31] ^= 1;
+    let mut at_30 = expected;
+    at_30[30] ^= 1;
+    let delta = xor(&at_31, &at_30);
+    measure(
+        n,
+        k,
+        stream,
+        |c, _| {
+            let mut tag = [0_u8; 32];
+            blend(&at_30, &delta, c, &mut tag);
+            tag
+        },
+        |tag| {
+            for _ in 0..256 {
+                let mut equal = true;
+                for (a, b) in black_box(&expected).iter().zip(black_box(tag)) {
+                    if black_box(*a) != black_box(*b) {
+                        equal = false;
+                        break;
+                    }
+                }
+                black_box(equal);
             }
         },
     )
@@ -1448,9 +1529,12 @@ fn sas(n: usize, k: usize, stream: &mut Stream) -> Samples {
     )
 }
 
-/// Every target (`evaluate`), then the inline A/A control over the full target set (ADR-041 (3)); the third value
-/// is the reason of a `CONTROL_FAIL` run (every target verdict is then `CONTROL_FAIL`).
-fn run(rules: Rules) -> Result<(Clock, Vec<Outcome>, Option<String>), secmp_crypto::Error> {
+/// Every target (`evaluate`), then the inline A/A control over the full target set (ADR-041 (3)) and the
+/// sensitivity control (Amendment 1 (2)); the third value is the reason of a `CONTROL_FAIL` run (either control
+/// failed; every target verdict is then `CONTROL_FAIL`).
+fn run(
+    rules: Rules,
+) -> Result<(Clock, Vec<Outcome>, Option<String>, Sensitivity), secmp_crypto::Error> {
     let clock = Clock::probe();
     let scale: usize = std::env::var("SECMP_CT_SCALE")
         .ok()
@@ -1538,12 +1622,104 @@ fn run(rules: Rules) -> Result<(Clock, Vec<Outcome>, Option<String>), secmp_cryp
     for target in targets {
         out.push(evaluate(target, &mut stream, &clock, rules)?);
     }
-    let control_fail = aa_control(&mut out, &mut stream, &clock, rules)?;
-    Ok((clock, out, control_fail))
+    let aa_fail = aa_control(&mut out, &mut stream, &clock, rules)?;
+    let sensitivity = sensitivity_control(&out, &mut stream, &clock, rules);
+    let mut reasons: Vec<String> = aa_fail.into_iter().collect();
+    reasons.extend(sensitivity.failure(rules));
+    let control_fail = (!reasons.is_empty()).then(|| reasons.join("; "));
+    if control_fail.is_some() {
+        for outcome in &mut out {
+            outcome.verdict = Verdict::ControlFail;
+        }
+    }
+    Ok((clock, out, control_fail, sensitivity))
+}
+
+/// The sensitivity control of a run (ADR-041 Amendment 1 (2)): `min_leak` with `tag_compare`'s batch size and
+/// sample count, and its effect floor. `measurement` is `None` if it could not be measured (`tag_compare` without
+/// a batch size, or a clock without a quantum or a tick length) — which fails the run like a missed floor.
+struct Sensitivity {
+    k: Option<u32>,
+    samples: usize,
+    measurement: Option<Measurement>,
+    /// The effect floor of the measurement, in ticks.
+    floor_ticks: Option<f64>,
+}
+
+impl Sensitivity {
+    /// The raw Δ (class 0 − class 1, in ticks) if measured.
+    fn raw_delta(&self) -> Option<f64> {
+        self.measurement.as_ref()?.raw().map(Stats::delta)
+    }
+
+    /// Whether the raw Δ reaches the floor with the expected sign (class 0, 32 byte steps, is the slower one).
+    fn reached(&self) -> bool {
+        matches!((self.raw_delta(), self.floor_ticks), (Some(d), Some(f)) if d >= f)
+    }
+
+    /// The `CONTROL_FAIL` reason, if the control did not reach its floor.
+    fn failure(&self, rules: Rules) -> Option<String> {
+        if self.reached() {
+            return None;
+        }
+        Some(match (self.raw_delta(), self.floor_ticks) {
+            (Some(d), Some(f)) => format!(
+                "sensitivity control min_leak_control below the effect floor: raw Δ {d:.2} ticks < floor {f:.2} ticks ({} q_eff, {} ns)",
+                rules.effect_floor, rules.effect_floor_ns
+            ),
+            _ => "sensitivity control min_leak_control not measured".to_owned(),
+        })
+    }
+
+    fn json(&self, clock: &Clock, rules: Rules) -> String {
+        let num = |x: Option<f64>| x.map_or_else(|| "null".to_owned(), |x| format!("{x:.4}"));
+        let ns = |x: Option<f64>| num(x.map(|x| x * clock.tick_ns));
+        let raw = self.raw_delta();
+        let ratio = raw.zip(self.floor_ticks).map(|(d, f)| d / f);
+        format!(
+            "{{\"name\":\"min_leak_control\",\"class0\":\"tag differs in byte 31 (32 byte steps)\",\"class1\":\"tag differs in byte 30 (exits one byte early)\",\"comparisons_per_call\":256,\"k\":{},\"samples\":{},\"floor_ticks\":{},\"floor_ns\":{},\"raw_delta_ticks\":{},\"raw_delta_ns\":{},\"raw_delta_floor\":{},\"reached\":{},\"measurement\":{}}}",
+            self.k.map_or_else(|| "null".to_owned(), |k| k.to_string()),
+            self.samples,
+            num(self.floor_ticks),
+            ns(self.floor_ticks),
+            num(raw),
+            ns(raw),
+            num(ratio),
+            self.reached(),
+            self.measurement
+                .as_ref()
+                .map_or_else(|| "null".to_owned(), |m| m.json(clock, rules))
+        )
+    }
+}
+
+/// ADR-041 Amendment 1 (2): the sensitivity control, measured once after the A/A control with `tag_compare`'s
+/// batch size (after any re-batching) and sample count.
+fn sensitivity_control(
+    out: &[Outcome],
+    stream: &mut Stream,
+    clock: &Clock,
+    rules: Rules,
+) -> Sensitivity {
+    let tag = out.iter().find(|o| o.target.name == "tag_compare");
+    let mut sensitivity = Sensitivity {
+        k: tag.and_then(|t| t.calibration.k),
+        samples: tag.map_or(0, |t| t.target.samples),
+        measurement: None,
+        floor_ticks: None,
+    };
+    if let (Some(k), Some(quantum), Some(tick_ns)) = (sensitivity.k, clock.quantum(), clock.tick())
+    {
+        let samples = min_leak(sensitivity.samples, usize::try_from(k).unwrap_or(1), stream);
+        let m = Measurement::of(&samples, quantum, clock.resolution_ticks);
+        sensitivity.floor_ticks = Some(rules.floor_ticks(m.q_eff, tick_ns));
+        sensitivity.measurement = Some(m);
+    }
+    sensitivity
 }
 
 /// ADR-041 (3): the inline A/A control — every measurable target once more, with its `k`, class-0 inputs under
-/// both labels. Returns the reason of a `CONTROL_FAIL` run (then every target verdict becomes `CONTROL_FAIL`).
+/// both labels. Returns the reason of a `CONTROL_FAIL` run (`run` then sets every target verdict to it).
 fn aa_control(
     out: &mut [Outcome],
     stream: &mut Stream,
@@ -1566,33 +1742,28 @@ fn aa_control(
         outcome.aa = Some(aa);
     }
     AA_PASS.store(false, Ordering::Relaxed);
-    let control_fail = (!aa_failures.is_empty()).then(|| {
+    Ok((!aa_failures.is_empty()).then(|| {
         format!(
             "inline A/A control above {}: {}",
             rules.aa_max_t,
             aa_failures.join(", ")
         )
-    });
-    if control_fail.is_some() {
-        for outcome in out.iter_mut() {
-            outcome.verdict = Verdict::ControlFail;
-        }
-    }
-    Ok(control_fail)
+    }))
 }
 
 fn main() -> ExitCode {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/ct-report.json");
     let Some(rules) = Rules::from_expect() else {
         // written for the gate to print; the bench itself may not print (docs/06 §2)
-        let error = "{\"error\":\"CT_THRESHOLDS / CT_RESOLUTION_MAX_FRACTION / CT_MAX_BATCH / CT_BATCH_MARGIN / CT_MIN_REALISED_QUANTA / CT_EFFECT_FLOOR_QUANTA / CT_AA_MAX_T not readable from xtask/src/expect.rs\"}";
+        let error = "{\"error\":\"CT_THRESHOLDS / CT_RESOLUTION_MAX_FRACTION / CT_MAX_BATCH / CT_BATCH_MARGIN / CT_MIN_REALISED_QUANTA / CT_EFFECT_FLOOR_QUANTA / CT_EFFECT_FLOOR_NS / CT_AA_MAX_T not readable from xtask/src/expect.rs\"}";
         let _ = std::fs::write(path, error);
         return ExitCode::FAILURE;
     };
-    let Ok((clock, outcomes, control_fail)) = run(rules) else {
+    let Ok((clock, outcomes, control_fail, sensitivity)) = run(rules) else {
         return ExitCode::FAILURE;
     };
-    // the run verdict (ADR-041): CONTROL_FAIL if the inline A/A control failed, else PASS iff every target passed
+    // the run verdict (ADR-041, Amendment 1): CONTROL_FAIL if the inline A/A control or the sensitivity control
+    // failed, else PASS iff every target passed
     let run_verdict = if control_fail.is_some() {
         "CONTROL_FAIL"
     } else if outcomes.iter().all(|o| o.verdict.passed()) {
@@ -1601,10 +1772,11 @@ fn main() -> ExitCode {
         "FAIL"
     };
     let json = format!(
-        "{{\"thresholds\":{},\"sign\":\"{SIGN}\",\"clock\":{},\"run_verdict\":\"{run_verdict}\",\"run_reason\":{},\"results\":[{}]}}",
+        "{{\"thresholds\":{},\"sign\":\"{SIGN}\",\"clock\":{},\"run_verdict\":\"{run_verdict}\",\"run_reason\":{},\"sensitivity_control\":{},\"results\":[{}]}}",
         rules.json(),
         clock.json(),
         serde_json::Value::from(control_fail),
+        sensitivity.json(&clock, rules),
         outcomes
             .iter()
             .map(|o| o.json(&clock, rules))

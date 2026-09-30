@@ -196,10 +196,11 @@ pub(crate) struct CtTable {
     pub(crate) not_measurable: Vec<String>,
 }
 
-/// The verdicts a report may carry per target and whether each passes (ADR-041; `NOT_MEASURABLE` per ADR-038 (3)).
+/// The verdicts a report may carry per target and whether each passes (ADR-041 with Amendment 1; `NOT_MEASURABLE`
+/// per ADR-038 (3)).
 const CT_VERDICTS: &[(&str, bool)] = &[
     ("PASS", true),
-    ("SUB_QUANTUM_SHIFT", true),
+    ("SUB_FLOOR_SHIFT", true),
     ("FAIL", false),
     ("NOT_MEASURABLE", false),
     ("CONTROL_FAIL", false),
@@ -246,22 +247,87 @@ fn ct_check_parameters(v: &Value) -> Result<()> {
         || th.get("min_realised_quanta").and_then(Value::as_u64)
             != Some(expect::CT_MIN_REALISED_QUANTA)
         || num("effect_floor_quanta") != Some(expect::CT_EFFECT_FLOOR_QUANTA.to_bits())
+        || num("effect_floor_ns") != Some(expect::CT_EFFECT_FLOOR_NS.to_bits())
         || num("aa_max_t") != Some(expect::CT_AA_MAX_T.to_bits())
     {
         bail!(
             "ct report: parameters {th} differ from expect::CT_THRESHOLDS {} / CT_RESOLUTION_MAX_FRACTION {} / \
              CT_MAX_BATCH {} / CT_BATCH_MARGIN {} / CT_MIN_REALISED_QUANTA {} / CT_EFFECT_FLOOR_QUANTA {} / \
-             CT_AA_MAX_T {}",
+             CT_EFFECT_FLOOR_NS {} / CT_AA_MAX_T {}",
             expect::CT_THRESHOLDS,
             expect::CT_RESOLUTION_MAX_FRACTION,
             expect::CT_MAX_BATCH,
             expect::CT_BATCH_MARGIN,
             expect::CT_MIN_REALISED_QUANTA,
             expect::CT_EFFECT_FLOOR_QUANTA,
+            expect::CT_EFFECT_FLOOR_NS,
             expect::CT_AA_MAX_T
         );
     }
     Ok(())
+}
+
+/// The sensitivity control `min_leak_control` (ADR-041 Amendment 1 (2)): its line and whether it reached the
+/// effect floor. The gate does not take the bench's word for it: the report's `reached` must be true **and** the
+/// raw Δ must be at least the floor, which must be at least `CT_EFFECT_FLOOR_NS` and one effective quantum of the
+/// control's measurement. A missing or incomplete control never reaches the floor.
+fn ct_sensitivity(report: &Value) -> (String, bool) {
+    let Some(control) = report.get("sensitivity_control").filter(|c| c.is_object()) else {
+        return (
+            "min_leak_control: missing from the report (sensitivity control, must reach the floor)"
+                .to_owned(),
+            false,
+        );
+    };
+    let num = |key: &str| control.get(key).and_then(Value::as_f64);
+    let tick_ns = report
+        .get("clock")
+        .and_then(|clock| clock.get("tick_ns"))
+        .and_then(Value::as_f64);
+    let q_eff_ns = control
+        .get("measurement")
+        .and_then(|m| m.get("q_eff_ticks"))
+        .and_then(Value::as_f64)
+        .zip(tick_ns)
+        .map(|(q, tick)| q * tick);
+    // 1 ppm of slack for the report's rounding of the floor
+    let slack = 1.0 - 1e-6;
+    let reached = control.get("reached").and_then(Value::as_bool) == Some(true)
+        && match (num("raw_delta_ns"), num("floor_ns"), q_eff_ns) {
+            (Some(delta), Some(floor), Some(q)) => {
+                delta >= floor
+                    && floor >= expect::CT_EFFECT_FLOOR_NS * slack
+                    && floor >= expect::CT_EFFECT_FLOOR_QUANTA * q * slack
+            }
+            _ => false,
+        };
+    let two_places =
+        |value: Option<f64>| value.map_or_else(|| "?".to_owned(), |v| format!("{v:.2}"));
+    let batch = control
+        .get("k")
+        .and_then(Value::as_u64)
+        .map_or_else(|| "-".to_owned(), |k| k.to_string());
+    let samples = control.get("samples").and_then(Value::as_u64).unwrap_or(0);
+    let measurement = control
+        .get("measurement")
+        .filter(|m| !m.is_null())
+        .map(|m| format!("; {}", ct_measurement(m)))
+        .unwrap_or_default();
+    let state = if reached {
+        "REACHED"
+    } else {
+        "BELOW THE FLOOR"
+    };
+    (
+        format!(
+            "min_leak_control: {state} — raw Δ {} ns, floor {} ns ({} floors), k={batch}, {samples} samples\
+             {measurement} (sensitivity control, must reach the floor)",
+            two_places(num("raw_delta_ns")),
+            two_places(num("floor_ns")),
+            two_places(num("raw_delta_floor"))
+        ),
+        reached,
+    )
 }
 
 /// One target's line: verdict (with the deciding crop), `k`, calibration, both measurements and the A/A control.
@@ -355,6 +421,15 @@ pub(crate) fn ct_table(json: &str) -> Result<CtTable> {
         }
         table.lines.push(line);
     }
+    // ADR-041 Amendment 1 (2): a control below the floor must have made the run CONTROL_FAIL
+    let (sensitivity, reached) = ct_sensitivity(&v);
+    if !reached && run_verdict != "CONTROL_FAIL" {
+        table.failed.push(format!(
+            "ct report: run verdict {run_verdict} although the sensitivity control did not reach the floor — \
+             {sensitivity}"
+        ));
+    }
+    table.lines.push(sensitivity);
     if run_verdict == "PASS" && !(table.failed.is_empty() && table.not_measurable.is_empty()) {
         table
             .failed
@@ -363,12 +438,13 @@ pub(crate) fn ct_table(json: &str) -> Result<CtTable> {
     Ok(table)
 }
 
-/// dudect-style constant-time tests (docs/06 §2, §4; ADR-038, ADR-041): `cargo bench --bench ct` in the release
-/// profile, timed with the CPU counter; per target two measurements, FAIL only for a shift reproduced at the same
-/// crop and sign (|t| > 4.5) of at least one effective quantum, a reproduced smaller shift reported as
-/// `SUB_QUANTUM_SHIFT`; the positive control must be detected; a failing inline A/A control makes the run
+/// dudect-style constant-time tests (docs/06 §2, §4; ADR-038, ADR-041 with Amendment 1): `cargo bench --bench ct`
+/// in the release profile, timed with the CPU counter; per target two measurements, FAIL only for a shift
+/// reproduced at the same crop and sign (|t| > 4.5) that reaches the effect floor (one effective quantum, at least
+/// 10 ns), a reproduced smaller shift reported as `SUB_FLOOR_SHIFT`; the positive control must be detected; a
+/// failing inline A/A control or a sensitivity control (`min_leak_control`) below the floor makes the run
 /// `CONTROL_FAIL`; a target the runner's timer cannot resolve is NOT MEASURABLE. All but PASS and
-/// `SUB_QUANTUM_SHIFT` fail the gate with their wording.
+/// `SUB_FLOOR_SHIFT` fail the gate with their wording.
 pub(crate) fn ct(ctx: &Ctx) -> Result<Outcome> {
     let report = ctx.root.join("target").join("ct-report.json");
     if report.exists() {
@@ -1135,17 +1211,21 @@ mod tests {
         assert!(undocumented_survivors("", accepted).is_empty());
     }
 
-    /// A report in the ADR-041 format with the given run verdict and results, the parameters of `expect.rs` and a
-    /// 0.5 ns clock.
+    /// The sensitivity control of the fixtures: raw Δ 450 ns against a 10 ns floor (`q_eff` 1 tick = 0.5 ns).
+    const CT_SENSITIVITY: &str = r#"{"name":"min_leak_control","k":1,"samples":10,"floor_ticks":20.0,"floor_ns":10.0,"raw_delta_ticks":900.0,"raw_delta_ns":450.0,"raw_delta_floor":45.0,"reached":true,"measurement":{"max_abs_t":1500.0,"max_at":"p50","t":{},"crops":{},"q_eff_ticks":1.0,"q_eff_source":"clock","distinct":900,"median_ticks":20000,"median_ns":10000.0,"class_median_ticks":20000,"realised_quanta":20000.0}}"#;
+
+    /// A report in the ADR-041 format (with Amendment 1) with the given run verdict and results, the parameters of
+    /// `expect.rs`, a 0.5 ns clock and a sensitivity control that reaches the floor.
     fn ct_report(run_verdict: &str, results: &str) -> String {
         format!(
-            r#"{{"thresholds":{{"pass":{},"max_resolution_fraction":{},"max_batch":{},"batch_margin":{},"min_realised_quanta":{},"effect_floor_quanta":{},"aa_max_t":{}}},"sign":"t < 0: class 0 faster","clock":{{"timer":"rdtscp","tick_ns":0.5,"resolution_ns":0.5,"q_eff_ns":0.5}},"run_verdict":"{run_verdict}","run_reason":null,"results":[{results}]}}"#,
+            r#"{{"thresholds":{{"pass":{},"max_resolution_fraction":{},"max_batch":{},"batch_margin":{},"min_realised_quanta":{},"effect_floor_quanta":{},"effect_floor_ns":{},"aa_max_t":{}}},"sign":"t < 0: class 0 faster","clock":{{"timer":"rdtscp","tick_ns":0.5,"resolution_ns":0.5,"q_eff_ns":0.5}},"run_verdict":"{run_verdict}","run_reason":null,"sensitivity_control":{CT_SENSITIVITY},"results":[{results}]}}"#,
             expect::CT_THRESHOLDS,
             expect::CT_RESOLUTION_MAX_FRACTION,
             expect::CT_MAX_BATCH,
             expect::CT_BATCH_MARGIN,
             expect::CT_MIN_REALISED_QUANTA,
             expect::CT_EFFECT_FLOOR_QUANTA,
+            expect::CT_EFFECT_FLOOR_NS,
             expect::CT_AA_MAX_T
         )
     }
@@ -1164,7 +1244,7 @@ mod tests {
             )
         };
         let k = if first.is_some() { "2" } else { "null" };
-        let decisive = if matches!(verdict, "FAIL" | "SUB_QUANTUM_SHIFT") {
+        let decisive = if matches!(verdict, "FAIL" | "SUB_FLOOR_SHIFT") {
             r#""p90""#
         } else {
             "null"
@@ -1177,6 +1257,109 @@ mod tests {
         )
     }
 
+    /// ADR-041 Amendment 1 (2): the sensitivity control in the gate.
+    #[test]
+    fn ct_report_sensitivity_control() -> Result<()> {
+        let ok = ct_report(
+            "PASS",
+            &ct_target("tag", false, "PASS", Some(1.25), Some(0.5)),
+        );
+        let t = ct_table(&ok)?;
+        assert!(t.failed.is_empty(), "{t:?}");
+        assert!(
+            t.lines.iter().any(|l| l.starts_with(
+                "min_leak_control: REACHED — raw Δ 450.00 ns, floor 10.00 ns (45.00 floors), k=1, 10 samples; max |t| = 1500.00 (p50)"
+            )),
+            "{t:?}"
+        );
+        // the sensitivity control below the floor: CONTROL_FAIL with its reason; a run verdict that ignores it, a
+        // missing control, a `reached` the numbers contradict and a floor below 10 ns or one quantum are refused
+        let below = ct_report(
+            "CONTROL_FAIL",
+            &ct_target("tag", false, "CONTROL_FAIL", Some(1.0), Some(1.0)),
+        )
+        .replacen(
+            r#""run_reason":null"#,
+            r#""run_reason":"sensitivity control min_leak_control below the effect floor""#,
+            1,
+        )
+        .replacen(r#""raw_delta_ns":450.0"#, r#""raw_delta_ns":8.0"#, 1)
+        .replacen(r#""reached":true"#, r#""reached":false"#, 1);
+        let t = ct_table(&below)?;
+        assert_eq!(
+            t.failed,
+            vec![
+                "CONTROL_FAIL — sensitivity control min_leak_control below the effect floor"
+                    .to_owned()
+            ]
+        );
+        assert!(
+            t.lines
+                .iter()
+                .any(|l| l.starts_with("min_leak_control: BELOW THE FLOOR — raw Δ 8.00 ns")),
+            "{t:?}"
+        );
+        for (from, to) in [
+            (r#""reached":true"#, r#""reached":false"#),
+            (r#""raw_delta_ns":450.0"#, r#""raw_delta_ns":9.5"#),
+            (r#""floor_ns":10.0"#, r#""floor_ns":5.0"#),
+            (
+                r#""q_eff_ticks":1.0,"q_eff_source":"clock","distinct":900,"median_ticks":20000"#,
+                r#""q_eff_ticks":84.0,"q_eff_source":"samples","distinct":900,"median_ticks":20000"#,
+            ),
+            (r#""measurement":{"#, r#""measurement":null,"unused":{"#),
+            (CT_SENSITIVITY, "null"),
+        ] {
+            let broken = ok.replacen(from, to, 1);
+            assert_ne!(broken, ok, "{from}");
+            let t = ct_table(&broken)?;
+            assert!(
+                t.failed
+                    .iter()
+                    .any(|f| f.contains("sensitivity control did not reach the floor")),
+                "{from}: {t:?}"
+            );
+        }
+
+        Ok(())
+    }
+
+    /// The report must echo the parameters of `expect.rs` exactly.
+    #[test]
+    fn ct_report_parameters() -> Result<()> {
+        let ok = ct_report(
+            "PASS",
+            &ct_target("tag", false, "PASS", Some(1.25), Some(0.5)),
+        );
+        assert!(ct_table(&ok)?.failed.is_empty());
+        // parameters that differ from expect.rs are refused
+        for (from, to) in [
+            (r#""pass":4.5"#, r#""pass":10"#),
+            (r#""max_batch":64"#, r#""max_batch":128"#),
+            (
+                r#""max_resolution_fraction":0.01"#,
+                r#""max_resolution_fraction":0.1"#,
+            ),
+            (r#""batch_margin":1.1"#, r#""batch_margin":1"#),
+            (r#""min_realised_quanta":80"#, r#""min_realised_quanta":40"#),
+            (r#""effect_floor_quanta":1"#, r#""effect_floor_quanta":2"#),
+            (r#""effect_floor_ns":10"#, r#""effect_floor_ns":20"#),
+            (r#""aa_max_t":4.5"#, r#""aa_max_t":9"#),
+        ] {
+            let tuned = ok.replacen(from, to, 1);
+            assert_ne!(tuned, ok, "{from}");
+            assert!(ct_table(&tuned).is_err(), "{from}");
+        }
+        let (without, _) = ok
+            .split_once(r#""sign""#)
+            .ok_or_else(|| Error("fixture".to_owned()))?;
+        assert!(
+            ct_table(&ok.replacen(without, "{", 1)).is_err(),
+            "no thresholds"
+        );
+        Ok(())
+    }
+
     #[test]
     fn ct_report_table() -> Result<()> {
         let ok = ct_report(
@@ -1184,13 +1367,13 @@ mod tests {
             &[
                 ct_target("control", true, "PASS", Some(99.0), None),
                 ct_target("tag", false, "PASS", Some(1.25), Some(0.5)),
-                ct_target("msg", false, "SUB_QUANTUM_SHIFT", Some(30.0), Some(25.0)),
+                ct_target("msg", false, "SUB_FLOOR_SHIFT", Some(30.0), Some(25.0)),
             ]
             .join(","),
         );
         let t = ct_table(&ok)?;
         assert!(t.failed.is_empty() && t.not_measurable.is_empty(), "{t:?}");
-        assert_eq!(t.lines.len(), 3);
+        assert_eq!(t.lines.len(), 4);
         assert!(
             t.lines
                 .iter()
@@ -1199,15 +1382,21 @@ mod tests {
         // k, the calibration median, both measurements (with q_eff and the realised quanta), the deciding crop and
         // the A/A control are printed
         assert!(
-            t.lines.iter().any(|l| l.starts_with("msg: SUB_QUANTUM_SHIFT at p90 — k=2, calibration median 1500.0 ns")
+            t.lines.iter().any(|l| l.starts_with("msg: SUB_FLOOR_SHIFT at p90 — k=2, calibration median 1500.0 ns")
                 && l.contains("first max |t| = 30.00 (p90), batch median 3000.0 ns, q_eff 1.0 ticks (clock), realised 6000.0 quanta")
                 && l.contains("second max |t| = 25.00 (p90)")
                 && l.contains("A/A max |t| = 1.25 (p90)")),
             "{t:?}"
         );
 
-        // FAIL fails the gate; so does a verdict ADR-041 withdrew and an unknown one (fail closed)
-        for bad in ["FAIL", "INCONCLUSIVE→FAIL", "INCONCLUSIVE→PASS", "MAYBE"] {
+        // FAIL fails the gate; so do verdicts ADR-041 and its Amendment 1 withdrew and an unknown one (fail closed)
+        for bad in [
+            "FAIL",
+            "INCONCLUSIVE→FAIL",
+            "INCONCLUSIVE→PASS",
+            "SUB_QUANTUM_SHIFT",
+            "MAYBE",
+        ] {
             let t = ct_table(&ct_report(
                 "FAIL",
                 &ct_target("tag", false, bad, Some(30.0), Some(20.0)),
@@ -1246,7 +1435,7 @@ mod tests {
             t.failed,
             vec!["CONTROL_FAIL — inline A/A control above 4.5: tag |t| = 6.00 at p50".to_owned()]
         );
-        assert_eq!(t.lines.len(), 2);
+        assert_eq!(t.lines.len(), 3);
 
         // a PASS run verdict next to a failing target is refused as inconsistent
         let t = ct_table(&ct_report(
@@ -1255,30 +1444,6 @@ mod tests {
         ))?;
         assert_eq!(t.failed.len(), 2, "{t:?}");
 
-        // parameters that differ from expect.rs are refused
-        for (from, to) in [
-            (r#""pass":4.5"#, r#""pass":10"#),
-            (r#""max_batch":64"#, r#""max_batch":128"#),
-            (
-                r#""max_resolution_fraction":0.01"#,
-                r#""max_resolution_fraction":0.1"#,
-            ),
-            (r#""batch_margin":1.1"#, r#""batch_margin":1"#),
-            (r#""min_realised_quanta":80"#, r#""min_realised_quanta":40"#),
-            (r#""effect_floor_quanta":1"#, r#""effect_floor_quanta":2"#),
-            (r#""aa_max_t":4.5"#, r#""aa_max_t":9"#),
-        ] {
-            let tuned = ok.replacen(from, to, 1);
-            assert_ne!(tuned, ok, "{from}");
-            assert!(ct_table(&tuned).is_err(), "{from}");
-        }
-        let (without, _) = ok
-            .split_once(r#""sign""#)
-            .ok_or_else(|| Error("fixture".to_owned()))?;
-        assert!(
-            ct_table(&ok.replacen(without, "{", 1)).is_err(),
-            "no thresholds"
-        );
         // a missing or unknown run verdict is refused
         assert!(ct_table(&ok.replacen(r#""run_verdict":"PASS","#, "", 1)).is_err());
         assert!(

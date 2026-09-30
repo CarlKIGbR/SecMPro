@@ -55,10 +55,15 @@ pub(crate) const KAT_PACKAGES: &[&str] = &["secmp-crypto", "secmp-testkit"];
 /// written down exactly once. Keep each on one line.
 pub(crate) const CT_THRESHOLDS: f64 = 4.5;
 
-/// ADR-041 (2): a reproduced shift fails only if |Δ| of the cropped class means is at least this many effective
-/// quanta (the lattice spacing of the samples, measured from the data); below it the report says "sub-quantum
-/// shift".
+/// ADR-041 (2) with Amendment 1 (1): a reproduced shift fails only if |Δ| of the cropped class means reaches the
+/// effect floor `max(CT_EFFECT_FLOOR_QUANTA × q_eff, CT_EFFECT_FLOOR_NS)` (`q_eff`: the lattice spacing of the
+/// samples, measured from the data); below it the report says `SUB_FLOOR_SHIFT`.
 pub(crate) const CT_EFFECT_FLOOR_QUANTA: f64 = 1.0;
+
+/// ADR-041 Amendment 1 (1): the absolute part of the effect floor, in ns (≈ one coarse timer lattice, ≈ 25 cycles);
+/// the sensitivity control `min_leak_control` must reach the same floor in every run (Amendment 1 (2)), otherwise
+/// the run is `CONTROL_FAIL`.
+pub(crate) const CT_EFFECT_FLOOR_NS: f64 = 10.0;
 
 /// ADR-041 (3): the inline A/A control of a run passes if its |t| is at most this at every crop of every target;
 /// otherwise the run is `CONTROL_FAIL`.

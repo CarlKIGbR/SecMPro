@@ -104,3 +104,9 @@ All notable changes to this project are documented in this file. The format foll
   withdrawn (`CT_EFFECT_FLOOR_QUANTA`, `CT_AA_MAX_T` in `xtask/src/expect.rs`).
 - xtask: the `kani` gate passes a harness package's Kani unstable features (`[package.metadata.kani.unstable]`,
   e.g. stubbing) as `-Z`; the `mutants` gate leaves out code compiled only under Kani.
+- Constant-time gate per ADR-041 Amendment 1 (owner-accepted 2026-09-30):
+  - The effect floor is one effective quantum or 10 ns, whichever is larger (`CT_EFFECT_FLOOR_NS`). A reproduced
+    shift below it is reported as `SUB_FLOOR_SHIFT`, which replaces `SUB_QUANTUM_SHIFT`.
+  - The sensitivity control `min_leak_control` (a 32-byte comparison exiting one byte early, 256 per sample,
+    `tag_compare`'s `k` and N) is mandatory. Its raw Δ must reach the floor in every run, otherwise the run is
+    `CONTROL_FAIL`; the gate re-checks this from the report.

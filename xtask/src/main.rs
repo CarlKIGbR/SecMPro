@@ -22,6 +22,7 @@ mod meta;
 mod policy;
 mod sbom;
 mod stubs;
+mod summary;
 mod time;
 mod tools;
 mod util;

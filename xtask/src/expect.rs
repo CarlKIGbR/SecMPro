@@ -393,9 +393,7 @@ pub(crate) const KANI_PACKAGES: &[&str] = &["secmp-proto"];
 /// The Kani harnesses (M2 review C5): the gate refuses a run unless Kani reports exactly these as successfully
 /// verified ("Complete - N successfully verified harnesses, 0 failures, N total." with N = this count), so a
 /// deleted or renamed harness fails the gate instead of passing silently. M3 (plan step 9): the three `tr_*`
-/// harnesses of the SecMP-TR decisions (`tr::select`). M4: the five `kani_*` harnesses of SecMP-HX, and (WEISUNG
-/// M4-3) `kani_outer_fields_total` (the former `kani_outer_unpad_total`, `unpad` stubbed, renamed when that name moved
-/// to the real scan).
+/// harnesses of the SecMP-TR decisions (`tr::select`). M4: the five `kani_*` harnesses of SecMP-HX.
 pub(crate) const KANI_HARNESSES: &[&str] = &[
     "kani_proofs::cell",
     "kani_proofs::header_v1",
@@ -404,7 +402,6 @@ pub(crate) const KANI_HARNESSES: &[&str] = &[
     "kani_proofs::kani_cell_plaintext_decode_total",
     "kani_proofs::kani_hx_chunk_bounds",
     "kani_proofs::kani_hx_grouping",
-    "kani_proofs::kani_outer_fields_total",
     "kani_proofs::kani_outer_unpad_total",
     "kani_proofs::padding",
     "kani_proofs::request_cont",

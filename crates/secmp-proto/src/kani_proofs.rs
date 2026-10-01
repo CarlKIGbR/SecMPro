@@ -374,7 +374,7 @@ use crate::error::{Error, Result};
 use crate::hx::responder::{Groups, MAX_PARTIAL_GROUPS, drive, insert};
 use crate::prekeys::{OpkSecrets, PrekeyStore, SpkGeneration};
 use crate::sizes::{
-    HANDSHAKE_CELL_PT_LEN, HANDSHAKE_CHUNK_LEN, HANDSHAKE_CHUNKS, OUTER_LEN, OUTER_PADDED_LEN,
+    HANDSHAKE_CELL_PT_LEN, HANDSHAKE_CHUNK_LEN, HANDSHAKE_CHUNKS, OUTER_PADDED_LEN,
 };
 use crate::wire::hx::{HandshakeCellPlaintext, Outer};
 
@@ -399,13 +399,12 @@ fn kani_hx_chunk_bounds() {
     assert!(chunk * HANDSHAKE_CHUNK_LEN + offset == j);
 }
 
-/// `Outer` (D.4) on every input of 0…12019 bytes, with the ISO/IEC 7816-4 scan stubbed by an over-approximation (any
-/// proper prefix, or a rejection; the real scan is `kani_outer_unpad_total`): the field decoder never panics on any
-/// field string, and the decoder accepts only an input of exactly 12018 bytes. (Before WEISUNG M4-3 this harness was
-/// `kani_outer_unpad_total`; it is kept for the field strings and lengths the real-scan harness does not reach.)
+/// `Outer` (D.4) on every 12018-byte input and its neighbours, with the ISO/IEC 7816-4 scan stubbed by an
+/// over-approximation (any proper prefix, or a rejection; `unpad` itself is proven by `padding`): the decoder never
+/// panics, and accepts only an input of exactly 12018 bytes.
 #[kani::proof]
 #[kani::stub(crate::codec::unpad, crate::codec::kani_stubs::unpad)]
-fn kani_outer_fields_total() {
+fn kani_outer_unpad_total() {
     let bytes: [u8; OUTER_PADDED_LEN + 1] = kani::any();
     let len: usize = kani::any();
     kani::assume(len <= OUTER_PADDED_LEN + 1);
@@ -413,71 +412,6 @@ fn kani_outer_fields_total() {
     if Outer::decode(input).is_ok() {
         assert!(len == OUTER_PADDED_LEN);
     }
-}
-
-/// `kani_outer_unpad_total`: the symbolic tail of the 12018-byte input — the last 44 field bytes, the marker position
-/// 9362 and all 2655 pad bytes after it; the 9318 bytes before it are [`outer_fields`].
-const OUTER_TAIL: usize = 2700;
-
-/// A fixed `Outer` field string the decoder accepts: `ver` = 1, `EK_I` = the X25519 base point (u = 9, not of low
-/// order), every other byte 0x5a (ids, ciphertexts, nonce and commitment are not checked by the decoder; 0x5a is
-/// neither the marker nor zero, so a scan that reaches these bytes stops at the first one).
-fn outer_fields() -> [u8; OUTER_PADDED_LEN + 1] {
-    let mut b = [0x5a_u8; OUTER_PADDED_LEN + 1];
-    b[0] = 1;
-    b[1] = 9;
-    b[2..33].fill(0);
-    b
-}
-
-/// `Outer::decode(input)` through the real ISO/IEC 7816-4 scan (`unpad`, spec §4.1; nothing stubbed): no panic; an
-/// accepted input has exactly 12018 bytes, byte 9362 is the marker 0x80 and bytes 9363…12017 are 0x00 (one symbolic
-/// index stands for every index) — so the last non-zero byte is at 9362 and the `unpad` output the decoder consumed
-/// in full is the first 9362 bytes, the `Outer` fields (a second `unpad` call in the harness to measure that length
-/// would repeat the scan, whose cost is quadratic in its length; see `outer_tail`). A rejection is the uniform
-/// `Rejected`. Returns whether `input` was accepted.
-fn outer_accepts_exact_padding(input: &[u8]) -> bool {
-    match Outer::decode(input) {
-        Ok(_) => {
-            assert!(input.len() == OUTER_PADDED_LEN);
-            assert!(input.get(OUTER_LEN) == Some(&0x80));
-            let j: usize = kani::any();
-            kani::assume(j > OUTER_LEN && j < OUTER_PADDED_LEN);
-            assert!(input.get(j) == Some(&0));
-            true
-        }
-        Err(e) => {
-            assert!(e == Error::Rejected);
-            false
-        }
-    }
-}
-
-/// [`outer_accepts_exact_padding`] on every 12018-byte input whose last `TAIL` bytes are symbolic, after the fixed
-/// [`outer_fields`] prefix. An accepted input has its marker in the tail: the scan reaches the prefix only through an
-/// all-zero tail (more than `TAIL` trailing zero bytes), and such an input is rejected. One scan per input: Kani's
-/// unwinding of the scan costs time roughly quadratic in its length (M4 report §11).
-fn outer_tail<const TAIL: usize>() {
-    let prefix = OUTER_PADDED_LEN - TAIL;
-    let mut bytes = outer_fields();
-    let tail: [u8; TAIL] = kani::any();
-    bytes[prefix..OUTER_PADDED_LEN].copy_from_slice(&tail);
-    let accepted = outer_accepts_exact_padding(&bytes[..OUTER_PADDED_LEN]);
-    if accepted {
-        assert!(OUTER_LEN.checked_sub(prefix).and_then(|k| tail.get(k)) == Some(&0x80));
-    }
-    kani::cover!(accepted, "an input is accepted");
-}
-
-/// K2a. `Outer` (D.4) through the real `unpad` on every 12018-byte input whose last 2700 bytes are symbolic (every
-/// field-string length from 9318 bytes up, every marker position from 9318, every pad content) after a fixed valid
-/// field prefix: see [`outer_tail`]. Not covered: other contents of the first 9318 bytes, among them an all-zero
-/// input (a scan over more than the last 2700 bytes did not finish within 30 minutes; `kani_outer_fields_total`
-/// covers every field string and length with the scan stubbed).
-#[kani::proof]
-#[kani::unwind(2702)] // the marker scan over the 2700 symbolic bytes and the first prefix byte (non-zero)
-fn kani_outer_unpad_total() {
-    outer_tail::<OUTER_TAIL>();
 }
 
 /// `kani_hx_grouping` bound (WEISUNG M4-3 fallback): at the production bound [`MAX_PARTIAL_GROUPS`] = 8 with 9 ids

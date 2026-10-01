@@ -1,0 +1,77 @@
+# ci-full step 9 `kani` (M3 plan step 9), macOS arm64 (aarch64-apple-darwin), Kani 0.68.0 (CBMC 6.11.0), 2026-10-01
+# command: env PATH=/Users/c.carl/.cargo/bin:/Users/c.carl/.local/bin:/usr/bin:/bin cargo xtask step --strict kani
+# tree: HEAD e154473 plus UNCOMMITTED M3 changes in the working tree (this session: the harnesses tr_header_selection,
+#   tr_skip_plan, tr_eviction in crates/secmp-proto/src/kani_proofs.rs, expect::KANI_HARNESSES, and the Kani-only
+#   type fix of `Zeroizing` in tr/{state,content,ratchet}.rs; concurrently other agents' uncommitted M3 work on
+#   tr/*.rs, tests, examples, the ct bench and xtask) - the run is evidence for that working tree, not for e154473.
+# full output of the step follows (the gate prints the harness verdict lines and its summary)
+
+   Compiling xtask v0.0.0 (/Users/c.carl/coding/claude_code/SecMPro/xtask)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.50s
+     Running `target/debug/xtask step --strict kani`
+
+=== [9] kani ===
+$ /Users/c.carl/.rustup/toolchains/1.98.1-aarch64-apple-darwin/bin/cargo kani --package secmp-proto -Z stubbing
+  Checking harness kani_proofs::tr_eviction...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 0.22922958s
+  Checking harness kani_proofs::tr_skip_plan...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 0.2638772s
+  Checking harness kani_proofs::tr_header_selection...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 108.60853s
+  Checking harness kani_proofs::response_frame...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 36.72298s
+  Checking harness kani_proofs::request_fetch_multi...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 75.232765s
+  Checking harness kani_proofs::request_send...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 5.231184s
+  Checking harness kani_proofs::request_skey...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 0.3534255s
+  Checking harness kani_proofs::request_link_get...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 45.6988s
+  Checking harness kani_proofs::request_queue_del...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 3.4587617s
+  Checking harness kani_proofs::request_cont...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 2.5375507s
+  Checking harness kani_proofs::request_ping...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 0.513663s
+  Checking harness kani_proofs::request_queue_new...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 4.763441s
+  Checking harness kani_proofs::request_link_put...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 13.534264s
+  Checking harness kani_proofs::request_fetch...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 4.0665216s
+  Checking harness kani_proofs::request_frame...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 9.097708s
+  Checking harness kani_proofs::padding...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 46.282177s
+  Checking harness kani_proofs::header_v1_reencodes...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 50.643593s
+  Checking harness kani_proofs::header_v1...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 9.718462s
+  Checking harness kani_proofs::cell...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 9.31194s
+  Complete - 19 successfully verified harnesses, 0 failures, 19 total.
+
+=== step summary (host aarch64-apple-darwin, strict: true) ===
+   9 kani            PASS        447s  Kani 0.68.0: harness packages secmp-proto (expected set matches); 19/19 harnesses verified (expect::KANI_HARNESSES): kani_proofs::cell, kani_proofs::header_v1, kani_proofs::header_v1_reencodes, kani_proofs::padding, kani_proofs::request_cont, kani_proofs::request_fetch, kani_proofs::request_fetch_multi, kani_proofs::request_frame, kani_proofs::request_link_get, kani_proofs::request_link_put, kani_proofs::request_ping, kani_proofs::request_queue_del, kani_proofs::request_queue_new, kani_proofs::request_send, kani_proofs::request_skey, kani_proofs::response_frame, kani_proofs::tr_eviction, kani_proofs::tr_header_selection, kani_proofs::tr_skip_plan
+step: PASS
+exit=0

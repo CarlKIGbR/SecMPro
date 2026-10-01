@@ -1,0 +1,43 @@
+# fuzz smoke of the M3 targets tr_decrypt and tr_state (M3 plan step 10), macOS arm64 (aarch64-apple-darwin), nightly-2026-09-21, cargo-fuzz (ASan), 2026-10-01
+# tree: HEAD e154473 plus UNCOMMITTED M3 changes in the working tree (this session: the two targets, fuzz/common/tr_fixture.rs, the tracked seeds,
+#   the xtask registration; concurrently other agents' uncommitted M3 work) - evidence for that working tree, not for e154473.
+# Run by hand exactly as the gate runs each target (xtask/src/gates.rs fuzz_args): the scratch corpus target/fuzz-corpus/<t>/ first (deleted,
+#   re-created and filled with the xtask vector seeds of fuzzseed.rs: tr_decrypt 53 cells of vectors/tr.json, tr_state 1 state from its init case;
+#   written by target/tmp/tr_scratch_seed.py, a transcription of the two rules - the full 14-target gate was not run), the tracked corpus fuzz/corpus/<t>/
+#   second (read-only: libFuzzer writes new inputs only into the first directory; checked afterwards with git status: no change under fuzz/corpus/),
+#   120 s, -max_len from expect::FUZZ_MAX_LEN, -timeout = expect::FUZZ_INPUT_TIMEOUT_SECONDS.
+# command: env PATH=/Users/c.carl/.cargo/bin:/Users/c.carl/.local/bin:/usr/bin:/bin cargo +nightly-2026-09-21 fuzz run --fuzz-dir fuzz <t> target/fuzz-corpus/<t> fuzz/corpus/<t> -- -max_total_time=120 -max_len=<n> -timeout=60
+# lines kept from each log: the binary's command line, libFuzzer's INFO lines, the final DONE status, Done, the exit code; fuzz/artifacts/<t>/ empty after both runs
+
+== tr_decrypt ==
+     Running `fuzz/target/aarch64-apple-darwin/release/tr_decrypt -artifact_prefix=fuzz/artifacts/tr_decrypt/ -max_total_time=120 -max_len=4098 -timeout=60 target/fuzz-corpus/tr_decrypt fuzz/corpus/tr_decrypt`
+INFO: Running with entropic power schedule (0xFF, 100).
+INFO: Seed: 3229039915
+INFO: Loaded 1 modules   (58383 inline 8-bit counters): 58383 [0x10263ae30, 0x10264923f), 
+INFO: Loaded 1 PC tables (58383 PCs): 58383 [0x102649240,0x10272d330), 
+INFO:       53 files found in target/fuzz-corpus/tr_decrypt
+INFO:        9 files found in fuzz/corpus/tr_decrypt
+INFO: seed corpus: files: 62 min: 2315b max: 4098b total: 246886b rss: 37Mb
+#48681	DONE   cov: 3451 ft: 8938 corp: 81/73Kb lim: 4098 exec/s: 402 rss: 733Mb
+Done 48681 runs in 121 second(s)
+exit=0
+
+== tr_state ==
+     Running `fuzz/target/aarch64-apple-darwin/release/tr_state -artifact_prefix=fuzz/artifacts/tr_state/ -max_total_time=120 -max_len=38587 -timeout=60 target/fuzz-corpus/tr_state fuzz/corpus/tr_state`
+INFO: Running with entropic power schedule (0xFF, 100).
+INFO: Seed: 3372767682
+INFO: Loaded 1 modules   (55975 inline 8-bit counters): 55975 [0x1045bb970, 0x1045c9417), 
+INFO: Loaded 1 PC tables (55975 PCs): 55975 [0x1045c9418,0x1046a3e88), 
+INFO:        1 files found in target/fuzz-corpus/tr_state
+INFO:        5 files found in fuzz/corpus/tr_state
+INFO: seed corpus: files: 6 min: 3b max: 3974b total: 7133b rss: 36Mb
+#4024051	DONE   cov: 1437 ft: 2512 corp: 323/254Kb lim: 38587 exec/s: 33256 rss: 604Mb
+Done 4024051 runs in 121 second(s)
+exit=0
+
+== per-input time of the slowest legitimate tr_decrypt inputs (for expect::FUZZ_INPUT_TIMEOUT_SECONDS) ==
+# the honest mode-2 header with pn = n_r + 2^20 = 1048578 and n = 2^20 (DH step: 2 x 2^20 KDF_CK), and the honest mode-1 header with n = n_r + 2^20 (2^20 KDF_CK);
+# both refused with Rejected and the state unchanged (the target's assertions held; by construction the failing check is the body MAC, whose AD binds the changed header); the first input includes building the fixture; a Kani run loaded the machine
+# command: ... cargo +nightly-2026-09-21 fuzz run --fuzz-dir fuzz tr_decrypt target/tmp/tr-worst/step-max target/tmp/tr-worst/chain-max
+Executed target/tmp/tr-worst/step-max in 6530 ms
+Executed target/tmp/tr-worst/chain-max in 1688 ms

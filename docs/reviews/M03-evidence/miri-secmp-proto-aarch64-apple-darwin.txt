@@ -142,3 +142,15 @@ lib tests kept in ci-full: 323 s together in this measurement
 [  1240.2 +    0.0] test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
 [  1240.2 +    0.0]    9 miri            PASS       1239s  Miri (nightly-2026-09-21, interpreting aarch64-unknown-linux-gnu, libcrux portable backend): secmp-sys-mem, secmp-sys-desktop, secmp-crypto, secmp-proto; skipped tests: secmp-crypto: mldsa::, secmp-crypto: hybrid_sign::, secmp-crypto: sas::, secmp-proto: wire::inv::tests::iks_bundle_link_data_blob, secmp-proto: wire::frame::tests::reserved_and_foreign_opcodes_reject, secmp-proto: wire::cell::tests::fragment_payload_inner_types, secmp-proto: wire::cell::tests::key_change_receipt_control, secmp-proto: wire::inv::tests::largest_link_data_fits_its_padding, secmp-proto: wire::frame::tests::fetch_multi_count_and_link_get_rules, secmp-proto: wire::frame::tests::every_request_round_trips_at_frame_size, secmp-proto: wire::frame::tests::every_response_round_trips_at_frame_size, secmp-proto: test-target:canonical, secmp-proto: canonical_writer_is_stable, secmp-proto: every_row_of_the_encodings_file, secmp-proto: the_rust_generator_reproduces_every_positive_row
 [  1240.2 +    0.0] step: PASS
+
+M3 TR tests under Miri (macOS arm64, nightly-2026-09-21, LIBCRUX_DISABLE_SIMD128=1 LIBCRUX_DISABLE_SIMD256=1,
+CARGO_TARGET_DIR=target/miri-portable, --target aarch64-unknown-linux-gnu; host wall time from
+target/tmp/peakrss.py; 2026-10-01, working tree after the TR core commits e154473 + uncommitted M3 test work):
+- `--lib tr:: -- --skip tr::tests:: --skip tr::entropy::` (tr::select: 2 tests): 13 s host wall (libtest 28.09 s), ok.
+- `--lib tr::entropy::` (2 tests): 63 s host wall (libtest 203.51 s), ok — kept.
+- `--lib tr::tests::reject_cell_length -- --exact` (1 test, the lightest ratchet unit test): 125 s host wall (libtest
+  419.14 s), ok — the 51 tests of tr::tests together ≈ 1.8 h → expect::MIRI_SKIP `tr::tests::`.
+- `--test tr_smoke` (1 test: both roles, 6 encrypts, 6 decrypts with 3 DH steps, reordering, a rejected replay,
+  persistence round trip): 360 s host wall (libtest 1153.59 s), ok — kept as the representative TR run.
+- The `kat`-only targets tr_vectors, tr_generator, tr_properties (required-features = ["kat"]) are not built by the
+  Miri run (gates::miri_with filters test targets with required-features); they run natively in the kat step.

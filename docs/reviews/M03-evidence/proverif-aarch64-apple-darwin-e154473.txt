@@ -1,0 +1,63 @@
+# ci-full step 10 `proverif` on e154473 plus uncommitted M3 work in the tree (formal/tr.pv, not yet committed; the
+# gate change of plan step 12: expect::PROVERIF_MODELS = ["tr"], expect::PROVERIF_EXPECTED, gates::proverif_check;
+# other agents' uncommitted M3 work was in the tree as well), macOS arm64, ProVerif 2.05,
+# `env PATH=/Users/c.carl/.cargo/bin:/Users/c.carl/.local/bin:/usr/bin:/bin cargo xtask step --strict proverif`.
+# The machine was shared with four other agents. Result: PASS, 72 s.
+
+   Compiling xtask v0.0.0 (/Users/c.carl/coding/claude_code/SecMPro/xtask)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.11s
+     Running `target/debug/xtask step --strict proverif`
+
+=== [10] proverif ===
+$ proverif -help
+$ proverif /Users/c.carl/coding/claude_code/SecMPro/xtask/fixtures/proverif/selftest.pv
+$ proverif /Users/c.carl/coding/claude_code/SecMPro/formal/tr.pv
+  formal/tr.pv: 39 RESULT lines as expected — T1 true ×6, T2 true ×2, T3 true ×4, T4 true ×2, T5 true ×2, T6 true ×2, T7 false ×2, an attack as expected, T8 true ×12, T9 true ×4, T10 false ×1, an attack as expected, T11 true ×1, T12 false ×1, informative (72 s)
+
+=== step summary (host aarch64-apple-darwin, strict: true) ===
+  10 proverif        PASS         72s  ProVerif 2.05 self-test [true, false] ok; models: tr (expected set matches); formal/tr.pv: 39 RESULT lines as expected — T1 true ×6, T2 true ×2, T3 true ×4, T4 true ×2, T5 true ×2, T6 true ×2, T7 false ×2, an attack as expected, T8 true ×12, T9 true ×4, T10 false ×1, an attack as expected, T11 true ×1, T12 false ×1, informative (72 s)
+step: PASS
+
+# The 39 RESULT lines of an earlier direct run on the same model file
+# (`env PATH=/Users/c.carl/.local/bin:/usr/bin:/bin proverif formal/tr.pv`, 66 s wall time), which fixed the order in
+# expect::PROVERIF_EXPECTED; the CLAIMS ID of each line on the right.
+
+RESULT not attacker_p1(content(sClean,st1,c0)) is true.                                      T1
+RESULT not attacker_p1(content(sClean,st1,c1)) is true.                                      T1
+RESULT not attacker_p1(content(sClean,st2,c0)) is true.                                      T1
+RESULT not attacker_p1(content(sClean,st2,c1)) is true.                                      T1
+RESULT not attacker_p1(content(sClean,st3,c0)) is true.                                      T1
+RESULT not attacker_p1(content(sClean,st3,c1)) is true.                                      T1
+RESULT inj-event(Recv(sClean,pB,i,n,x)) ==> inj-event(Send(sClean,pA,i,n,x)) is true.        T2
+RESULT inj-event(Recv(sClean,pA,i,n,x)) ==> inj-event(Send(sClean,pB,i,n,x)) is true.        T2
+RESULT not attacker_p1(content(sFS,st1,c0)) is true.                                         T3
+RESULT not attacker_p1(content(sFS,st1,c1)) is true.                                         T3
+RESULT not attacker_p1(content(sFS,st2,c0)) is true.                                         T3
+RESULT not attacker_p1(content(sFS,st2,c1)) is true.                                         T3
+RESULT not attacker_p1(content(sPCS,st3,c0)) is true.                                        T4
+RESULT not attacker_p1(content(sPCS,st3,c1)) is true.                                        T4
+RESULT not attacker_p1(content(sPCSdh,st3,c0)) is true.                                      T5
+RESULT not attacker_p1(content(sPCSdh,st3,c1)) is true.                                      T5
+RESULT not attacker_p1(content(sPCSkem,st3,c0)) is true.                                     T6
+RESULT not attacker_p1(content(sPCSkem,st3,c1)) is true.                                     T6
+RESULT not attacker_p1(content(sPCSboth,st3,c0)) is false.                                   T7
+RESULT not attacker_p1(content(sPCSboth,st3,c1)) is false.                                   T7
+RESULT not attacker_p1(exp(g,dhsk(sClean,kA1))) is true.                                     T8
+RESULT not attacker_p1(pk(kemsk(sClean,kA1))) is true.                                       T8
+RESULT not attacker_p1(nmark(sClean,st1,c0)) is true.                                        T8
+RESULT not attacker_p1(nmark(sClean,st1,c1)) is true.                                        T8
+RESULT not attacker_p1(exp(g,dhsk(sClean,kB2))) is true.                                     T8
+RESULT not attacker_p1(pk(kemsk(sClean,kB2))) is true.                                       T8
+RESULT not attacker_p1(nmark(sClean,st2,c0)) is true.                                        T8
+RESULT not attacker_p1(nmark(sClean,st2,c1)) is true.                                        T8
+RESULT not attacker_p1(exp(g,dhsk(sClean,kA3))) is true.                                     T8
+RESULT not attacker_p1(pk(kemsk(sClean,kA3))) is true.                                       T8
+RESULT not attacker_p1(nmark(sClean,st3,c0)) is true.                                        T8
+RESULT not attacker_p1(nmark(sClean,st3,c1)) is true.                                        T8
+RESULT not attacker_p1(exp(g,dhsk(sHFS,kA1))) is true.                                       T9
+RESULT not attacker_p1(pk(kemsk(sHFS,kA1))) is true.                                         T9
+RESULT not attacker_p1(nmark(sHFS,st1,c0)) is true.                                          T9
+RESULT not attacker_p1(nmark(sHFS,st1,c1)) is true.                                          T9
+RESULT not attacker_p1(content(sPCS,st1,c1)) is false.                                       T10
+RESULT event(RecvKem(s_14,p,i,n,x,ct)) ==> event(ChainKem(s_14,p,i,ct)) is true.             T11
+RESULT event(HdrOpenTwice(k1_1,k2_1,h)) ==> k1_1 = k2_1 is false.                            T12

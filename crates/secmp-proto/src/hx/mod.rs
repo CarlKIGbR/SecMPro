@@ -22,6 +22,8 @@ pub(crate) mod responder;
 
 pub use derive::{Shared, TranscriptInputs, k_id, session_key, transcript};
 pub use initiator::Initiator;
+#[cfg(feature = "kat")]
+pub use responder::ACCEPT_SITE_KAT;
 pub use responder::{Accepted, Responder};
 
 use secmp_crypto::{SecretBytes, X25519Public, X25519Secret};
@@ -148,6 +150,8 @@ pub struct ResponderKeys<'a> {
 /// 32 bytes of `peer`. The decoders already refuse a low-order point (§4.1 (a)); this is the second line of
 /// defence for values that did not come through a decoder.
 pub(crate) fn dh_checked(secret: &X25519Secret, peer: &[u8]) -> Result<SecretBytes<32>> {
+    #[cfg(feature = "kat")]
+    responder::ACCEPT_SITE_KAT.set(Some("x25519"));
     Ok(secret.diffie_hellman(&X25519Public::from_bytes(peer)?)?)
 }
 

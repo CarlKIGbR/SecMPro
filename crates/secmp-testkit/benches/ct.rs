@@ -49,6 +49,24 @@
 //!   `skipped`, and the skipped path's body MAC rejects (spec §7.4; the constant-time candidate scan and entry
 //!   lookup of M3 review J9).
 //!
+//! SecMP-INV/HX targets (M4, TEST-SPEC-M4 (f)), measured after the TR targets on the product path:
+//! - `inv_fingerprint_compare`: `inv::invitee_check` with an issued blob, the invitation's `inviter_fp` changed in
+//!   byte 0 vs byte 31 (spec §5.5 step 3; the blob opens and decodes in both classes);
+//! - `x25519_zero_check`: `X25519Secret::diffie_hellman` (the helper of DH1–DH4) on two fixed pairs whose output is
+//!   non-zero in byte 0 only vs in byte 31 only (spec §3, §6.4; the all-zero test passes in both classes);
+//! - `hx_accept_reject_inner`: `Responder::accept`, `inner_ct` under a wrong key vs under `K_id` with its tag flipped
+//!   (spec §6.6 step 2, after the real DH/KEM work);
+//! - `hx_accept_reject_first_msg`: `Responder::accept`, `first_msg`'s body tag wrong in byte 0 vs byte 31 (spec §6.6
+//!   step 3: §7.4 Decrypt on R's fresh state, the step path).
+//!
+//! Per-class pre-check (M4; M3 review R-45, F19): before every measurement of a TR, INV or HX target (and of the
+//! same-content control), on the very fixture that is measured, each class's input passes once through the measured
+//! call and must give what the target claims — `Err(Rejected)`, and for `Responder::accept` its `kat` reject-site tag
+//! (`hx::ACCEPT_SITE_KAT`) at the claimed site; `Ok` with the class's output for `x25519_zero_check`; the unmodified
+//! input passes (INV, HX). A mismatch aborts the run with target, class, expected and observed outcome in the
+//! report's `error`. SecMP-TR and SecMP-INV have no reject-site tag (`tr/ratchet.rs`, `inv.rs`): their pre-check
+//! is `Err(Rejected)` only. The report carries `site` and `precheck` per target.
+//!
 //! The same-content control `same_content_control` (ADR-042 Amendment 2) is measured and judged like a target, after
 //! the TR targets: `tr_decrypt_reject` on the `tr_decrypt_reject_body_tag` fixture (the largest cell) with identical
 //! contents in both classes — its class-1 cell, the body tag wrong in byte 31 — through the real per-class
@@ -1287,8 +1305,10 @@ impl Outcome {
             || "null".to_owned(),
             |m| (m.max().0 <= rules.aa_max_t).to_string(),
         );
+        // M3 review R-45 (F19): the claimed reject site and the per-class pre-check, `null` for a target without one
+        let (site, precheck) = claim_json(self.target.name);
         format!(
-            "{{\"name\":\"{}\",\"class0\":\"{class0}\",\"class1\":\"{class1}\",\"samples\":{},\"control\":{},\"k\":{},\"requantised\":{},\"k_initial\":{},\"calibration_median_ticks\":{per_call_ticks:.2},\"calibration_median_ns\":{:.1},\"calibration\":{},\"verdict\":\"{}\",\"passed\":{},\"decisive_crop\":{},\"t1_t2\":{t1_t2},\"aa_passed\":{aa_passed},\"aa_control\":{},\"first\":{},\"second\":{}}}",
+            "{{\"name\":\"{}\",\"class0\":\"{class0}\",\"class1\":\"{class1}\",\"samples\":{},\"control\":{},\"site\":{site},\"precheck\":{precheck},\"k\":{},\"requantised\":{},\"k_initial\":{},\"calibration_median_ticks\":{per_call_ticks:.2},\"calibration_median_ns\":{:.1},\"calibration\":{},\"verdict\":\"{}\",\"passed\":{},\"decisive_crop\":{},\"t1_t2\":{t1_t2},\"aa_passed\":{aa_passed},\"aa_control\":{},\"first\":{},\"second\":{}}}",
             self.target.name,
             self.target.samples,
             self.target.control,
@@ -1786,6 +1806,265 @@ fn sas(n: usize, k: usize, stream: &mut Stream) -> Samples {
     )
 }
 
+// ---- reject sites and per-class pre-checks (M4; M3 review R-45, F19) ---------------------------------------------
+//
+// Every SecMP-TR, -INV and -HX target (and the same-content control, which measures the TR body-tag cell) claims where
+// both of its classes end. Before each measurement — on the very fixture that is measured, every time a target is
+// run (calibration, the pair, the A/A control) — each class's input is passed once through the measured call and the
+// outcome is compared with the claim: `Err(Rejected)` and, where the product has a `kat` reject-site tag
+// (`secmp_proto::hx::ACCEPT_SITE_KAT`), that tag; for `x25519_zero_check`, `Ok` and the output's shape. A mismatch
+// aborts the run, and `main` writes target, class, expected and observed outcome into the report's `error`, which
+// fails the gate. The report carries `site` and `precheck` per target; the gate appends the site to the target's
+// verdict line.
+
+/// How a target's pre-check verifies its claim on each class.
+#[derive(Clone, Copy)]
+enum SiteCheck {
+    /// `Err(Rejected)` and the product's `kat` reject-site tag equal to the claimed site (`Responder::accept`).
+    Tagged,
+    /// `Err(Rejected)` only: the product has no reject-site tag on this path (SecMP-TR: `tr/ratchet.rs`; SecMP-INV:
+    /// `inv.rs`).
+    Untagged,
+    /// `Ok`, with the class's output (not a reject target).
+    Output,
+}
+
+impl SiteCheck {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Tagged => "Err(Rejected) and the kat reject-site tag",
+            Self::Untagged => "Err(Rejected) only: no reject-site tag on this path",
+            Self::Output => "Ok and the class's output",
+        }
+    }
+}
+
+/// What a target claims: its name and classes, the site where both classes end, and how the pre-check verifies it.
+#[derive(Clone, Copy)]
+struct Claim {
+    target: &'static str,
+    classes: [&'static str; 2],
+    site: &'static str,
+    check: SiteCheck,
+}
+
+const CLAIM_TR_HDR_KEY: Claim = Claim {
+    target: "tr_decrypt_reject_hdr_key",
+    classes: [
+        "header sealed under a wrong key",
+        "header sealed under hk_r, its tag's last byte flipped",
+    ],
+    site: "§7.4 header trial decryption (no candidate key opens)",
+    check: SiteCheck::Untagged,
+};
+const CLAIM_TR_BODY_TAG: Claim = Claim {
+    target: "tr_decrypt_reject_body_tag",
+    classes: ["body tag wrong in byte 0", "body tag wrong in byte 31"],
+    site: "§7.4 chain path: body MAC",
+    check: SiteCheck::Untagged,
+};
+const CLAIM_TR_CT_PQ: Claim = Claim {
+    target: "tr_decrypt_reject_ct_pq",
+    classes: [
+        "ct_pq differs from last_ct_r in byte 0",
+        "ct_pq differs from last_ct_r in byte 1087",
+    ],
+    site: "§7.4 chain path: KEM constancy",
+    check: SiteCheck::Untagged,
+};
+const CLAIM_TR_SKIPPED: Claim = Claim {
+    target: "tr_decrypt_reject_skipped",
+    classes: [
+        "header under the first distinct skipped key (n in skipped), body tag wrong in byte 0",
+        "header under the last distinct skipped key (n in skipped), body tag wrong in byte 0",
+    ],
+    site: "§7.4 skipped path: body MAC",
+    check: SiteCheck::Untagged,
+};
+const CLAIM_SAME_CONTENT: Claim = Claim {
+    target: SAME_CONTENT,
+    classes: [
+        "the class-1 cell of tr_decrypt_reject_body_tag (body tag wrong in byte 31)",
+        "the same cell",
+    ],
+    site: "§7.4 chain path: body MAC",
+    check: SiteCheck::Untagged,
+};
+const CLAIM_INV_FP: Claim = Claim {
+    target: "inv_fingerprint_compare",
+    classes: [
+        "inviter_fp differs from the IKS fingerprint in byte 0",
+        "inviter_fp differs from the IKS fingerprint in byte 31",
+    ],
+    site: "§5.5 step 3: fingerprint comparison",
+    check: SiteCheck::Untagged,
+};
+const CLAIM_X25519: Claim = Claim {
+    target: "x25519_zero_check",
+    classes: [
+        "X25519 output 9 (non-zero in byte 0 only)",
+        "X25519 output 49·2^248 (non-zero in byte 31 only)",
+    ],
+    site: "§3/§6.4 all-zero check of the output (passes: not a reject target)",
+    check: SiteCheck::Output,
+};
+const CLAIM_HX_INNER: Claim = Claim {
+    target: "hx_accept_reject_inner",
+    classes: [
+        "inner_ct sealed under a wrong key (wrong K_id: COM and tag fail)",
+        "inner_ct under K_id, its tag's last byte flipped (COM ok, tag fails)",
+    ],
+    site: "inner open",
+    check: SiteCheck::Tagged,
+};
+const CLAIM_HX_FIRST_MSG: Claim = Claim {
+    target: "hx_accept_reject_first_msg",
+    classes: [
+        "first_msg body tag wrong in byte 0",
+        "first_msg body tag wrong in byte 31",
+    ],
+    site: "first_msg decrypt",
+    check: SiteCheck::Tagged,
+};
+
+/// Every claim, for the report (`claim_json`).
+const CLAIMS: [Claim; 9] = [
+    CLAIM_TR_HDR_KEY,
+    CLAIM_TR_BODY_TAG,
+    CLAIM_TR_CT_PQ,
+    CLAIM_TR_SKIPPED,
+    CLAIM_SAME_CONTENT,
+    CLAIM_INV_FP,
+    CLAIM_X25519,
+    CLAIM_HX_INNER,
+    CLAIM_HX_FIRST_MSG,
+];
+
+/// A target built from its claim (name and classes from the claim).
+fn claimed(
+    claim: Claim,
+    samples: usize,
+    run: fn(usize, usize, &mut Stream) -> Result<Samples, secmp_crypto::Error>,
+) -> Target {
+    Target {
+        name: claim.target,
+        classes: claim.classes,
+        samples,
+        control: false,
+        run,
+    }
+}
+
+/// A target's pre-check as recorded for the report: how many fixtures it ran on, and what the first gave.
+struct PreCheck {
+    target: &'static str,
+    fixtures: u64,
+    expected: [String; 2],
+    observed: [String; 2],
+    /// The positive twin (the unmodified input through the same call), where the target has one: (expected, observed).
+    twin: Option<(String, String)>,
+}
+
+std::thread_local! {
+    /// The pre-checks of the run, one per target (`precheck`).
+    static PRECHECKS: RefCell<Vec<PreCheck>> = const { RefCell::new(Vec::new()) };
+}
+
+/// A call's outcome as the pre-check states it: `Ok` or `Err(<error>)`.
+fn outcome<T>(r: &Result<T, secmp_proto::Error>) -> String {
+    match r {
+        Ok(_) => "Ok".to_owned(),
+        Err(e) => format!("Err({e:?})"),
+    }
+}
+
+/// What a class of a rejecting target must give: `Err(Rejected)`, with the site where the product tags it.
+fn expected_rejection(claim: Claim) -> String {
+    match claim.check {
+        SiteCheck::Tagged => format!("Err(Rejected), site {}", claim.site),
+        SiteCheck::Untagged | SiteCheck::Output => "Err(Rejected)".to_owned(),
+    }
+}
+
+/// The pre-check of `claim` on one fixture: class `c` gave `observed[c]` where the claim says `expected[c]`; `twin`
+/// is (expected, observed) of the unmodified input, where the target has one. A mismatch aborts the run (`abort`)
+/// with target, class, expected and observed; otherwise the check is recorded (the first fixture's outcomes, and the
+/// number of fixtures).
+fn precheck(
+    claim: Claim,
+    expected: [String; 2],
+    observed: [String; 2],
+    twin: Option<(String, String)>,
+) -> Result<(), secmp_crypto::Error> {
+    for (c, ((want, seen), class)) in expected
+        .iter()
+        .zip(&observed)
+        .zip(claim.classes)
+        .enumerate()
+    {
+        if want != seen {
+            return Err(abort(format!(
+                "pre-check failed (M3 review R-45): target {}, class {c} ({class}): expected {want}, observed {seen} \
+                 (claimed site: {})",
+                claim.target, claim.site
+            )));
+        }
+    }
+    if let Some((want, seen)) = &twin
+        && want != seen
+    {
+        return Err(abort(format!(
+            "pre-check failed (M3 review R-45): target {}, positive twin (the unmodified input): expected {want}, \
+             observed {seen}",
+            claim.target
+        )));
+    }
+    PRECHECKS.with(|p| {
+        let Ok(mut p) = p.try_borrow_mut() else {
+            return;
+        };
+        if let Some(known) = p.iter_mut().find(|k| k.target == claim.target) {
+            known.fixtures = known.fixtures.saturating_add(1);
+        } else {
+            p.push(PreCheck {
+                target: claim.target,
+                fixtures: 1,
+                expected,
+                observed,
+                twin,
+            });
+        }
+    });
+    Ok(())
+}
+
+/// The report's `site` and `precheck` of the target `name` (JSON; both `null` for a target without a claim, and
+/// `precheck` `null` if it never ran).
+fn claim_json(name: &str) -> (String, String) {
+    let Some(claim) = CLAIMS.iter().find(|c| c.target == name) else {
+        return ("null".to_owned(), "null".to_owned());
+    };
+    let precheck = PRECHECKS.with(|p| {
+        p.try_borrow().ok().and_then(|p| {
+            p.iter().find(|k| k.target == name).map(|k| {
+                serde_json::json!({
+                    "check": claim.check.as_str(),
+                    "passed": true,
+                    "fixtures": k.fixtures,
+                    "expected": k.expected,
+                    "observed": k.observed,
+                    "twin": k.twin.as_ref().map(|(want, seen)| serde_json::json!({"expected": want, "observed": seen})),
+                })
+                .to_string()
+            })
+        })
+    });
+    (
+        serde_json::Value::from(claim.site).to_string(),
+        precheck.unwrap_or_else(|| "null".to_owned()),
+    )
+}
+
 // ---- SecMP-TR targets (M3 plan D9) -----------------------------------------------------------------------------
 
 /// Randomness of A (`FixedEntropy`, SCHEMA-4.9 order): `init_initiator` (X25519 secret 32, ML-KEM-768 seed 64,
@@ -2134,11 +2413,12 @@ fn tr_decrypt_reject(
     n: usize,
     k: usize,
     stream: &mut Stream,
+    claim: Claim,
     classes: TrClasses,
 ) -> Result<Samples, secmp_crypto::Error> {
     let session = tr_session(stream).map_err(crypto_error)?;
     let [class0, class1] = classes(&session, stream).map_err(crypto_error)?;
-    tr_measure(n, k, stream, session.receiver, &class0, &class1)
+    tr_measure(n, k, stream, claim, session.receiver, &class0, &class1)
 }
 
 /// `tr_decrypt_reject_skipped` (M3 review R-04, F2): `RatchetState::decrypt_with` on the receiver of
@@ -2150,19 +2430,50 @@ fn tr_decrypt_reject_skipped(
 ) -> Result<Samples, secmp_crypto::Error> {
     let fixture = tr_skipped_session(stream).map_err(crypto_error)?;
     let [class0, class1] = tr_skipped_classes(&fixture).map_err(crypto_error)?;
-    tr_measure(n, k, stream, fixture.receiver, &class0, &class1)
+    tr_measure(
+        n,
+        k,
+        stream,
+        CLAIM_TR_SKIPPED,
+        fixture.receiver,
+        &class0,
+        &class1,
+    )
 }
 
-/// The measurement of a TR target on `receiver`: `n` samples of `k` calls, every input built from one common source
-/// with `blend` (class 1 the base). Aborts (`TR_ACCEPTED`) if any call accepted its cell.
+/// The measurement of a TR target on `receiver`: first the pre-check (M3 review R-45, F19) — each class's cell
+/// decrypted once on `receiver` must give `Err(Rejected)`, the unchanged state handed back (SecMP-TR has no
+/// reject-site tag: the §7.4 sites are in `tr/ratchet.rs`; the honest cell of the fixture opens, `tr_session`,
+/// `tr_skipped_session`) — then `n` samples of `k` calls, every input built from one common source with `blend`
+/// (class 1 the base). Aborts (`TR_ACCEPTED`) if any call accepted its cell.
 fn tr_measure(
     n: usize,
     k: usize,
     stream: &mut Stream,
+    claim: Claim,
     receiver: RatchetState,
     class0: &[u8],
     class1: &[u8],
 ) -> Result<Samples, secmp_crypto::Error> {
+    let mut receiver = Some(receiver);
+    let mut observed = [String::new(), String::new()];
+    for (seen, cell) in observed.iter_mut().zip([class0, class1]) {
+        // an accepted cell takes the state with it: the next class finds none, and the pre-check fails
+        let Some(state) = receiver.take() else {
+            break;
+        };
+        *seen = match state.decrypt_with(cell, &mut FixedEntropy::new(&[])) {
+            Ok(_) => "Ok (accepted)".to_owned(),
+            Err(refused) => {
+                let (state, error) = refused.into_parts();
+                receiver = Some(state);
+                outcome::<()>(&Err(error))
+            }
+        };
+    }
+    let expected = expected_rejection(claim);
+    precheck(claim, [expected.clone(), expected], observed, None)?;
+    let receiver = receiver.ok_or(secmp_crypto::Error::Rejected)?;
     let delta = Deltas::new(class0, class1);
     let slot = RefCell::new(Some(receiver));
     let mut entropy = FixedEntropy::new(&[]);
@@ -2289,7 +2600,8 @@ fn inv_fp_classes(invitation: &[u8]) -> Result<[Zeroizing<Vec<u8>>; 2], secmp_pr
 /// `inv_fingerprint_compare` (TEST-SPEC-M4 (f); spec §5.5 step 3): `inv::invitee_check` on the issued blob at
 /// `HX_NOW`, the invitation of class 0 vs class 1 (`inv_fp_classes`), each a fresh decode of a `blend`ed encoding
 /// (class 1 the base), taken by value by the call. The blob opens under `K_ld` and decodes in both classes; the
-/// fingerprint comparison refuses. Aborts if any call accepted.
+/// fingerprint comparison refuses. Pre-check (M3 review R-45, F19; `inv.rs` has no reject-site tag): each class gives
+/// `Err(Rejected)` and the unmodified invitation passes the same call. Aborts if any measured call accepted.
 fn inv_fingerprint_compare(
     n: usize,
     k: usize,
@@ -2297,6 +2609,19 @@ fn inv_fingerprint_compare(
 ) -> Result<Samples, secmp_crypto::Error> {
     let inviter = hx_inviter(stream).map_err(crypto_error)?;
     let [class0, class1] = inv_fp_classes(&inviter.invitation).map_err(crypto_error)?;
+    let check = |invitation: &[u8]| {
+        outcome(
+            &InvitationV1::decode(invitation)
+                .and_then(|invitation| invitee_check(invitation, &inviter.blob, HX_NOW)),
+        )
+    };
+    let expected = expected_rejection(CLAIM_INV_FP);
+    precheck(
+        CLAIM_INV_FP,
+        [expected.clone(), expected],
+        [check(&class0), check(&class1)],
+        Some(("Ok".to_owned(), check(&inviter.invitation))),
+    )?;
     let delta = Deltas::new(&class0, &class1);
     let blob = inviter.blob;
     let mut accepted = false;
@@ -2353,15 +2678,64 @@ const X25519_PEER_1: [u8; 32] = [
     0x91, 0x15, 0x7a, 0xb0, 0xb2, 0xb2, 0xbf, 0x4b, 0xdb, 0xe4, 0x05, 0x3a, 0xc4, 0x40, 0x4e, 0x70,
     0x7a, 0x15, 0x07, 0x9e, 0x8e, 0xf0, 0xc6, 0x39, 0x63, 0x8d, 0xd8, 0xef, 0xc8, 0x4d, 0xde, 0x61,
 ];
+/// `x25519_zero_check` class 0: the output, u = 9.
+const X25519_OUT_0: [u8; 32] = [
+    9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+];
+/// `x25519_zero_check` class 1: the output, u = 49·2^248.
+const X25519_OUT_1: [u8; 32] = [
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0x31,
+];
+
+/// The pre-check's statement of an X25519 result: `Ok` with the positions of the output's non-zero bytes, and
+/// whether the output is `want` (compared in constant time), or the error.
+fn x25519_outcome(r: &Result<SecretBytes<32>, secmp_crypto::Error>, want: &[u8; 32]) -> String {
+    match r {
+        Ok(out) => {
+            let nonzero: Vec<usize> = out
+                .expose_secret()
+                .iter()
+                .enumerate()
+                .filter(|(_, b)| **b != 0)
+                .map(|(i, _)| i)
+                .collect();
+            let value = if bool::from(out.expose_secret().ct_eq(want)) {
+                "the class's value"
+            } else {
+                "another value"
+            };
+            format!("Ok, non-zero output bytes {nonzero:?}, {value}")
+        }
+        Err(e) => format!("Err({e:?})"),
+    }
+}
 
 /// `x25519_zero_check`: `X25519Secret::diffie_hellman` (the helper `hx::dh_checked` calls for DH1–DH4 on both sides,
 /// and the ratchet's DH steps) on the class's fixed pair, both from one `blend`ed `secret ‖ peer` (class 1 the
-/// base); the all-zero test of the output passes in both classes. Aborts if any call refused.
+/// base); the all-zero test of the output passes in both classes. Pre-check (M3 review R-45, F19): each class's pair
+/// gives `Ok` with the class's output — non-zero in byte 0 only (9) vs in byte 31 only (49·2^248), read with
+/// `expose_secret`. Aborts if any measured call refused.
 fn x25519_zero_check(
     n: usize,
     k: usize,
     stream: &mut Stream,
 ) -> Result<Samples, secmp_crypto::Error> {
+    let dh = |secret: &[u8; 32], peer: &[u8; 32]| {
+        X25519Secret::from_bytes(secret)?.diffie_hellman(&X25519Public::from_bytes(peer)?)
+    };
+    precheck(
+        CLAIM_X25519,
+        [
+            "Ok, non-zero output bytes [0], the class's value".to_owned(),
+            "Ok, non-zero output bytes [31], the class's value".to_owned(),
+        ],
+        [
+            x25519_outcome(&dh(&X25519_SECRET_0, &X25519_PEER_0), &X25519_OUT_0),
+            x25519_outcome(&dh(&X25519_SECRET_1, &X25519_PEER_1), &X25519_OUT_1),
+        ],
+        None,
+    )?;
     let class0 = [X25519_SECRET_0, X25519_PEER_0].concat();
     let class1 = [X25519_SECRET_1, X25519_PEER_1].concat();
     let delta = Deltas::new(&class0, &class1);
@@ -2620,24 +2994,63 @@ fn hx_cells(bytes: &[u8]) -> Vec<Cell> {
 /// and identity, the three cells of class 0 vs class 1 of `classes`, each a fresh `Vec<Cell>` from a `blend`ed
 /// source (class 1 the base). A rejection keeps the OPK and leaves the store unchanged (§6.6), so the one store
 /// serves every call; no call draws randomness (a rejection before the first message's MAC draws none), so the
-/// entropy is empty. Aborts if any call accepted or the store's digest changed.
+/// entropy is empty. Pre-check (M3 review R-45, F19): each class's cells, passed once through the same call on the
+/// same store, give `Err(Rejected)` with `hx::ACCEPT_SITE_KAT` at the claimed site and the store unchanged; the
+/// honest cells are accepted on a copy of the store (`duplicate_kat`). Aborts if any measured call accepted or the
+/// store's digest changed.
 fn hx_accept_reject(
     n: usize,
     k: usize,
     stream: &mut Stream,
+    claim: Claim,
     classes: HxClasses,
 ) -> Result<Samples, secmp_crypto::Error> {
     let session = hx_session(stream).map_err(crypto_error)?;
     let [class0, class1] = classes(&session, stream).map_err(crypto_error)?;
-    let delta = Deltas::new(&class0, &class1);
+    let twin_entropy = drawn(stream, HX_RANDOMNESS);
     let HxSession {
         responder,
         mut store,
         record,
+        honest,
         ..
     } = session;
     let keys = responder.responder_keys();
     let before = store.digest_kat();
+    let mut accept_once = |cells: &[u8]| {
+        let r = Responder::accept(
+            &hx_cells(cells),
+            &record,
+            &mut store,
+            &keys,
+            &mut FixedEntropy::new(&[]),
+        );
+        let site = secmp_proto::hx::ACCEPT_SITE_KAT.get().unwrap_or("none");
+        format!("{}, site {site}", outcome(&r))
+    };
+    let observed = [accept_once(&class0), accept_once(&class1)];
+    let kept = bool::from(store.digest_kat().as_slice().ct_eq(before.as_slice()));
+    let twin = Responder::accept(
+        &hx_cells(&honest),
+        &record,
+        &mut store.duplicate_kat().map_err(crypto_error)?,
+        &keys,
+        &mut FixedEntropy::new(&twin_entropy),
+    );
+    let expected = expected_rejection(claim);
+    precheck(
+        claim,
+        [expected.clone(), expected],
+        observed.map(|seen| {
+            if kept {
+                seen
+            } else {
+                format!("{seen}, prekey store changed")
+            }
+        }),
+        Some(("Ok".to_owned(), outcome(&twin))),
+    )?;
+    let delta = Deltas::new(&class0, &class1);
     let mut entropy = FixedEntropy::new(&[]);
     let mut accepted = false;
     let samples = measure(
@@ -2665,46 +3078,14 @@ fn hx_accept_reject(
 /// The SecMP-INV/HX targets (TEST-SPEC-M4 (f)), measured after `tr_targets`, `n` samples per measurement.
 fn hx_targets(n: usize) -> [Target; 4] {
     [
-        Target {
-            name: "inv_fingerprint_compare",
-            classes: [
-                "inviter_fp differs from the IKS fingerprint in byte 0",
-                "inviter_fp differs from the IKS fingerprint in byte 31",
-            ],
-            samples: n,
-            control: false,
-            run: inv_fingerprint_compare,
-        },
-        Target {
-            name: "x25519_zero_check",
-            classes: [
-                "X25519 output 9 (non-zero in byte 0 only)",
-                "X25519 output 49·2^248 (non-zero in byte 31 only)",
-            ],
-            samples: n,
-            control: false,
-            run: x25519_zero_check,
-        },
-        Target {
-            name: "hx_accept_reject_inner",
-            classes: [
-                "inner_ct sealed under a wrong key (wrong K_id: COM and tag fail)",
-                "inner_ct under K_id, its tag's last byte flipped (COM ok, tag fails)",
-            ],
-            samples: n,
-            control: false,
-            run: |n, k, s| hx_accept_reject(n, k, s, hx_inner_classes),
-        },
-        Target {
-            name: "hx_accept_reject_first_msg",
-            classes: [
-                "first_msg body tag wrong in byte 0",
-                "first_msg body tag wrong in byte 31",
-            ],
-            samples: n,
-            control: false,
-            run: |n, k, s| hx_accept_reject(n, k, s, hx_first_msg_classes),
-        },
+        claimed(CLAIM_INV_FP, n, inv_fingerprint_compare),
+        claimed(CLAIM_X25519, n, x25519_zero_check),
+        claimed(CLAIM_HX_INNER, n, |n, k, s| {
+            hx_accept_reject(n, k, s, CLAIM_HX_INNER, hx_inner_classes)
+        }),
+        claimed(CLAIM_HX_FIRST_MSG, n, |n, k, s| {
+            hx_accept_reject(n, k, s, CLAIM_HX_FIRST_MSG, hx_first_msg_classes)
+        }),
     ]
 }
 
@@ -2805,53 +3186,19 @@ fn targets(n: usize, n_sas: usize) -> [Target; 10] {
 /// (ADR-042 Amendment 2), measured after `targets`, `n` samples per measurement.
 fn tr_targets(n: usize) -> [Target; 5] {
     [
-        Target {
-            name: "tr_decrypt_reject_hdr_key",
-            classes: [
-                "header sealed under a wrong key",
-                "header sealed under hk_r, its tag's last byte flipped",
-            ],
-            samples: n,
-            control: false,
-            run: |n, k, s| tr_decrypt_reject(n, k, s, tr_hdr_key_classes),
-        },
-        Target {
-            name: "tr_decrypt_reject_body_tag",
-            classes: ["body tag wrong in byte 0", "body tag wrong in byte 31"],
-            samples: n,
-            control: false,
-            run: |n, k, s| tr_decrypt_reject(n, k, s, tr_body_tag_classes),
-        },
-        Target {
-            name: "tr_decrypt_reject_ct_pq",
-            classes: [
-                "ct_pq differs from last_ct_r in byte 0",
-                "ct_pq differs from last_ct_r in byte 1087",
-            ],
-            samples: n,
-            control: false,
-            run: |n, k, s| tr_decrypt_reject(n, k, s, tr_ct_pq_classes),
-        },
-        Target {
-            name: "tr_decrypt_reject_skipped",
-            classes: [
-                "header under the first distinct skipped key (n in skipped), body tag wrong in byte 0",
-                "header under the last distinct skipped key (n in skipped), body tag wrong in byte 0",
-            ],
-            samples: n,
-            control: false,
-            run: tr_decrypt_reject_skipped,
-        },
-        Target {
-            name: SAME_CONTENT,
-            classes: [
-                "the class-1 cell of tr_decrypt_reject_body_tag (body tag wrong in byte 31)",
-                "the same cell",
-            ],
-            samples: n,
-            control: false,
-            run: |n, k, s| tr_decrypt_reject(n, k, s, tr_same_content_classes),
-        },
+        claimed(CLAIM_TR_HDR_KEY, n, |n, k, s| {
+            tr_decrypt_reject(n, k, s, CLAIM_TR_HDR_KEY, tr_hdr_key_classes)
+        }),
+        claimed(CLAIM_TR_BODY_TAG, n, |n, k, s| {
+            tr_decrypt_reject(n, k, s, CLAIM_TR_BODY_TAG, tr_body_tag_classes)
+        }),
+        claimed(CLAIM_TR_CT_PQ, n, |n, k, s| {
+            tr_decrypt_reject(n, k, s, CLAIM_TR_CT_PQ, tr_ct_pq_classes)
+        }),
+        claimed(CLAIM_TR_SKIPPED, n, tr_decrypt_reject_skipped),
+        claimed(CLAIM_SAME_CONTENT, n, |n, k, s| {
+            tr_decrypt_reject(n, k, s, CLAIM_SAME_CONTENT, tr_same_content_classes)
+        }),
     ]
 }
 

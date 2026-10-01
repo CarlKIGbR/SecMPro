@@ -240,10 +240,11 @@ pub(crate) fn ct(ctx: &Ctx) -> Result<Outcome> {
     // the whole report first (clock, both measurements, per-crop t), so a CI log carries it even on failure
     say(&format!("  ct report: {}", json.trim_end()));
     let table = ctreport::ct_table(&json)?;
-    for l in &table.lines {
+    // M3 review R-45 (F19): each target's claimed reject site on its verdict line; a missing or failed pre-check fails
+    let (lines, mut problems) = ct_site_lines(&json, &table.lines)?;
+    for l in &lines {
         say(&format!("  ct {l}"));
     }
-    let mut problems = Vec::new();
     if !table.not_measurable.is_empty() {
         problems.push(format!(
             "ct: not measurable on this runner: {}",
@@ -262,7 +263,76 @@ pub(crate) fn ct(ctx: &Ctx) -> Result<Outcome> {
     if !problems.is_empty() {
         bail!("{}", problems.join("; "));
     }
-    Ok(Outcome::Pass(table.lines.join("; ")))
+    Ok(Outcome::Pass(lines.join("; ")))
+}
+
+/// The `ct` gate's reading of the reject sites (M3 review R-45, F19; the bench's per-class pre-checks). Each target
+/// line of `lines` (from [`ctreport::ct_table`], which ignores the report's `site` and `precheck`) gets ` — site
+/// <site>` at the end of its first `; `-segment — the segment with the target's name and verdict, which is one row
+/// of the step's summary (ADR-045, `summary::step_rows`). Problems: a target with a site but no passed pre-check, and
+/// a target of the pre-checked set without a site. (A pre-check that fails aborts the bench, whose report then
+/// carries only `error`, which [`ctreport::ct_table`] refuses.)
+fn ct_site_lines(json: &str, lines: &[String]) -> Result<(Vec<String>, Vec<String>)> {
+    /// The targets whose report entry must carry a site and a passed pre-check: the SecMP-TR targets, the
+    /// same-content control (it measures the TR body-tag cell), and the SecMP-INV/HX targets of TEST-SPEC-M4 (f).
+    const PRECHECKED: &[&str] = &[
+        "tr_decrypt_reject_hdr_key",
+        "tr_decrypt_reject_body_tag",
+        "tr_decrypt_reject_ct_pq",
+        "tr_decrypt_reject_skipped",
+        "same_content_control",
+        "inv_fingerprint_compare",
+        "x25519_zero_check",
+        "hx_accept_reject_inner",
+        "hx_accept_reject_first_msg",
+    ];
+    let v: Value = serde_json::from_str(json).map_err(|e| Error(format!("ct report: {e}")))?;
+    let results = v
+        .get("results")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    let mut problems = Vec::new();
+    let mut sites: Vec<(String, &str)> = Vec::new();
+    for r in results {
+        let name = r.get("name").and_then(Value::as_str).unwrap_or("?");
+        let passed = r
+            .get("precheck")
+            .and_then(|p| p.get("passed"))
+            .and_then(Value::as_bool)
+            == Some(true);
+        match r.get("site").and_then(Value::as_str) {
+            Some(site) => {
+                if !passed {
+                    problems.push(format!(
+                        "ct: {name} claims the reject site {site:?} without a passed per-class pre-check (M3 \
+                         review R-45)"
+                    ));
+                }
+                sites.push((format!("{name}: "), site));
+            }
+            None if PRECHECKED.contains(&name) => problems.push(format!(
+                "ct: {name} has no reject site and per-class pre-check in the report (M3 review R-45)"
+            )),
+            None => {}
+        }
+    }
+    let lines = lines
+        .iter()
+        .map(|l| {
+            let Some((_, site)) = sites
+                .iter()
+                .find(|(prefix, _)| l.starts_with(prefix.as_str()))
+            else {
+                return l.clone();
+            };
+            match l.split_once("; ") {
+                Some((head, tail)) => format!("{head} — site {site}; {tail}"),
+                None => format!("{l} — site {site}"),
+            }
+        })
+        .collect();
+    Ok((lines, problems))
 }
 
 /// docs/07 M3 acceptance "encrypt+decrypt of a message < 3 ms" (M3 plan D11): `cargo run --release --locked -p
@@ -2777,5 +2847,129 @@ mod tests {
         assert!(nightly_seconds_per_target(14_400, 121).is_err());
         assert_eq!(nightly_seconds_per_target(14_400, 120)?, 120);
         Ok(())
+    }
+
+    /// The M3 final ct report (`linux-full` dispatch 36840478213) as read, and with `site` and `precheck` written into
+    /// every result as the bench writes them since M4 (M3 review R-45): `sites` lists (target, site, pre-check
+    /// passed); every other target gets `null` for both.
+    fn ct_report_with_sites(sites: &[(&str, &str, bool)]) -> Result<(String, String)> {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../docs/reviews/M03-evidence/ct-report-linux-dispatch-36840478213.json");
+        let plain = std::fs::read_to_string(&path).map_err(|e| Error(e.to_string()))?;
+        let mut v: Value = serde_json::from_str(&plain).map_err(|e| Error(e.to_string()))?;
+        let results = v
+            .get_mut("results")
+            .and_then(Value::as_array_mut)
+            .ok_or_else(|| Error("ct report: no results".to_owned()))?;
+        for r in results.iter_mut() {
+            let name = r
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("?")
+                .to_owned();
+            let claim = sites.iter().find(|(n, _, _)| *n == name);
+            let r = r
+                .as_object_mut()
+                .ok_or_else(|| Error("ct report: a result is no object".to_owned()))?;
+            r.insert(
+                "site".to_owned(),
+                claim.map_or(Value::Null, |(_, site, _)| Value::from(*site)),
+            );
+            r.insert(
+                "precheck".to_owned(),
+                claim.map_or(Value::Null, |(_, _, passed)| {
+                    serde_json::json!({"check": "Err(Rejected) only: no reject-site tag on this path",
+                        "passed": passed, "fixtures": 5, "expected": ["Err(Rejected)", "Err(Rejected)"],
+                        "observed": ["Err(Rejected)", "Err(Rejected)"], "twin": null})
+                }),
+            );
+        }
+        Ok((plain, v.to_string()))
+    }
+
+    /// The M3 TR targets and the same-content control with a site each (all pre-checks passed).
+    const M3_SITES: [(&str, &str, bool); 4] = [
+        ("tr_decrypt_reject_hdr_key", "site one", true),
+        ("tr_decrypt_reject_body_tag", "site two", true),
+        ("tr_decrypt_reject_ct_pq", "site three", true),
+        ("same_content_control", "site four", true),
+    ];
+
+    /// M3 review R-45 (F19): the gate's report reader (`ctreport::ct_table`, unchanged) accepts the `site` and
+    /// `precheck` fields of every result and reads the report exactly as without them.
+    #[test]
+    fn the_ct_reader_accepts_site_and_precheck() -> Result<()> {
+        let (plain, with) = ct_report_with_sites(&M3_SITES)?;
+        let (a, b) = (ctreport::ct_table(&plain)?, ctreport::ct_table(&with)?);
+        assert_eq!(a.lines, b.lines);
+        assert_eq!(a.failed, b.failed);
+        assert_eq!(a.not_measurable, b.not_measurable);
+        assert!(!b.lines.is_empty());
+        Ok(())
+    }
+
+    /// M3 review R-45 (F19), ADR-045: each claimed site is appended to its target's verdict segment, which is one row
+    /// of the step summary; every other line is unchanged.
+    #[test]
+    fn ct_sites_go_on_the_verdict_row() -> Result<()> {
+        let (_, json) = ct_report_with_sites(&M3_SITES)?;
+        let table = ctreport::ct_table(&json)?;
+        let (lines, problems) = ct_site_lines(&json, &table.lines)?;
+        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(lines.len(), table.lines.len());
+        let line = lines
+            .iter()
+            .find(|l| l.starts_with("tr_decrypt_reject_body_tag: PASS"))
+            .ok_or_else(|| Error("no body-tag line".to_owned()))?;
+        let (head, _) = line
+            .split_once("; ")
+            .ok_or_else(|| Error("one segment only".to_owned()))?;
+        assert!(head.ends_with(" — site site two"), "{head}");
+        let rows = crate::summary::step_rows("PASS", 1, &lines.join("; "));
+        assert!(
+            rows.iter()
+                .any(|(_, r)| r.starts_with("tr_decrypt_reject_body_tag: PASS")
+                    && r.ends_with(" — site site two"))
+        );
+        let changed = lines.iter().zip(&table.lines).filter(|(a, b)| a != b);
+        assert_eq!(changed.count(), M3_SITES.len());
+        Ok(())
+    }
+
+    /// M3 review R-45 (F19): a site without a passed pre-check, and a pre-checked target without a site, fail the gate.
+    #[test]
+    fn ct_sites_need_a_passed_precheck() -> Result<()> {
+        let mut failed = M3_SITES;
+        if let Some(body) = failed.get_mut(1) {
+            body.2 = false;
+        }
+        let (plain, json) = ct_report_with_sites(&failed)?;
+        let (_, problems) = ct_site_lines(&json, &[])?;
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(
+            problems
+                .iter()
+                .all(|p| p.contains("tr_decrypt_reject_body_tag")
+                    && p.contains("without a passed per-class pre-check"))
+        );
+        // the M3 report itself: four pre-checked targets without a site
+        let (_, problems) = ct_site_lines(&plain, &[])?;
+        assert_eq!(problems.len(), M3_SITES.len(), "{problems:?}");
+        assert!(problems.iter().all(|p| p.contains("has no reject site")));
+        Ok(())
+    }
+
+    /// M3 review R-45 (F19): a failed pre-check aborts the bench, which writes target, class, expected and observed
+    /// outcome into `error`; the gate's reader refuses such a report with that text.
+    #[test]
+    fn a_failed_precheck_fails_the_gate() {
+        let reason = "pre-check failed (M3 review R-45): target hx_accept_reject_inner, class 1 (inner_ct under K_id, \
+                      its tag's last byte flipped (COM ok, tag fails)): expected Err(Rejected), site inner open, \
+                      observed Err(Rejected), site inner checks (claimed site: inner open)";
+        let report = serde_json::json!({ "error": reason }).to_string();
+        assert!(
+            matches!(ctreport::ct_table(&report), Err(Error(e)) if e.contains(reason)),
+            "{report}"
+        );
     }
 }

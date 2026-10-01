@@ -97,6 +97,10 @@ pub struct Shared {
 /// # Errors
 /// [`crate::Error::Rejected`] only if the KDF refuses its length (never).
 pub fn session_key(s: &Shared, transcript: &[u8; HASH_LEN]) -> Result<SecretBytes<32>> {
+    // feature `kat`: the reject-site tag of `Responder::accept` (this KDF cannot fail; the next step that can is the
+    // Decrypt of `first_msg`)
+    #[cfg(feature = "kat")]
+    super::responder::ACCEPT_SITE_KAT.set(Some("first_msg decrypt"));
     let mut ikm = Zeroizing::new(Vec::with_capacity(32 + 6 * 32));
     ikm.extend_from_slice(&[0xff; 32]);
     for part in [&s.dh1, &s.dh2, &s.dh3, &s.dh4, &s.ss_spk, &s.ss_opk] {
@@ -119,6 +123,10 @@ pub fn k_id(
     dh4: &SecretBytes<32>,
     kem_onetime: &SecretBytes<32>,
 ) -> Result<SecretBytes<32>> {
+    // feature `kat`: the reject-site tag of `Responder::accept` (this KDF cannot fail; the next step that can is
+    // `CAEAD.Open` of `inner_ct`)
+    #[cfg(feature = "kat")]
+    super::responder::ACCEPT_SITE_KAT.set(Some("inner open"));
     let mut ikm = Zeroizing::new(Vec::with_capacity(5 * 32));
     for part in [link_key, dh3, kem_signed, dh4, kem_onetime] {
         ikm.extend_from_slice(part.expose_secret());

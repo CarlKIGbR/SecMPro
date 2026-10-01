@@ -27,6 +27,34 @@ use crate::wire::inv::{IksPublic, Profile};
 /// At most this many partially received envelopes are held while grouping; the oldest is evicted (ADR-044 (c)).
 pub const MAX_PARTIAL_GROUPS: usize = 8;
 
+#[cfg(feature = "kat")]
+std::thread_local! {
+    /// The reject-site tag of the last [`Responder::accept`] on this thread (feature `kat`; M3 review R-45, F19), read
+    /// with `ACCEPT_SITE_KAT.get()`: the constant-time bench checks before measuring that each class of a target is
+    /// refused at the step the target claims. The tag names the step that was running when `accept` returned; it is
+    /// set when a step begins, so after a rejection it names the step that rejected:
+    ///
+    /// - `"no complete group"` — set by `accept` first: §6.5 trial-opening and grouping (no group completed);
+    /// - `"outer"` — `drive`, before §6.6 step 1 on a complete group: `Outer`, `spk_id`/`opk_id`, the prekeys;
+    /// - `"x25519"` — on entry to `dh_checked` (DH3, DH4 in step 2; DH1, DH2 in step 3; the all-zero check of
+    ///   §6.4); the decapsulations after DH4 cannot fail;
+    /// - `"inner open"` — on entry to [`crate::hx::k_id`], whose KDF cannot fail: `CAEAD.Open` of `inner_ct` under
+    ///   `K_id` (step 2);
+    /// - `"inner checks"` — after that open: the `Inner` decoder and the reflected-identity check (ADR-044 (f));
+    /// - `"first_msg decrypt"` — on entry to [`crate::hx::session_key`], whose KDF cannot fail: the prekey copies
+    ///   (`Unavailable` only), the TR responder initialisation (§7.2; never `Rejected` for stored keys) and §7.4
+    ///   Decrypt of `first_msg` (step 3);
+    /// - `"first_msg checks"` — after that Decrypt: the counters, the commit, the Content and the routes (ADR-044
+    ///   (e));
+    /// - `"opk delete"` — `drive`, step 4 (`commit_accept`).
+    ///
+    /// `k_id`, `session_key` and `dh_checked` set it on the initiator's side too; it is meaningful after `accept`
+    /// only. `None` before the first call on this thread. Without `kat` neither the tag nor any statement setting it
+    /// exists. (A thread-local rather than accessor functions: the mutation gate builds this crate without `kat`, so
+    /// the body of a `kat`-only function would only add surviving mutants.)
+    pub static ACCEPT_SITE_KAT: core::cell::Cell<Option<&'static str>> = const { core::cell::Cell::new(None) };
+}
+
 /// What a successful [`Responder::accept`] yields (§6.6 step 4).
 pub struct Accepted {
     /// The ratchet state after decrypting `first_msg` (§7.4): the responder side of the session. It holds none
@@ -169,9 +197,13 @@ pub(crate) fn drive<K: PartialEq, C, T, S: PrekeyStore>(
         let Some(group) = groups.remove(done) else {
             continue;
         };
+        #[cfg(feature = "kat")]
+        ACCEPT_SITE_KAT.set(Some("outer"));
         match process(&group, &*store) {
             Ok(accepted) => {
                 // step 4: delete the OPK and consume the record (`commit_accept`) — the last operation; a failure keeps it and rejects
+                #[cfg(feature = "kat")]
+                ACCEPT_SITE_KAT.set(Some("opk delete"));
                 store
                     .commit_accept(opk_id, ld_id)
                     .map_err(|_| Error::Rejected)?;
@@ -208,6 +240,8 @@ impl Responder {
         own_keys: &ResponderKeys<'_>,
         entropy: &mut impl Entropy,
     ) -> Result<Accepted> {
+        #[cfg(feature = "kat")]
+        ACCEPT_SITE_KAT.set(Some("no complete group"));
         let k_inv = derive_k_inv(&record.ld_id, &record.link_key)?;
         let ad_cell = [Label::HxInitcell.as_bytes(), record.ld_id.as_slice()].concat();
         // trial-open every cell with K_inv; anything that does not open or parse is ignored (garbage may come from
@@ -280,6 +314,8 @@ fn process(
     let ad_inner = [Label::HxInner.as_bytes(), record.ld_id.as_slice()].concat();
     let com_ct = [outer.inner_ct.com.as_slice(), outer.inner_ct.ct.as_slice()].concat();
     let inner_bytes = Caead::open(&k_id, &outer.inner_ct.n2, &ad_inner, &com_ct)?;
+    #[cfg(feature = "kat")]
+    ACCEPT_SITE_KAT.set(Some("inner checks"));
     // IKSPublic_I decodable with `ik_dh` not low-order; `first_msg` is a 4096-byte cell
     let inner = Inner::decode(&inner_bytes)?;
     // ADR-044 (f): a reflected identity is rejected
@@ -326,6 +362,8 @@ fn process(
     let opened = state
         .decrypt_with(inner.first_msg.as_bytes(), entropy)
         .map_err(|refused| refused.error())?;
+    #[cfg(feature = "kat")]
+    ACCEPT_SITE_KAT.set(Some("first_msg checks"));
     // ADR-044 (e): the first message carries n = 0 and pn = 0
     if opened.header_counters() != (0, 0) {
         return Err(Error::Rejected);

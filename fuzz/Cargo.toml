@@ -15,7 +15,9 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = { version = "=0.4.13" }
 secmp-crypto = { path = "../crates/secmp-crypto" }
-secmp-proto = { path = "../crates/secmp-proto" }
+# `kat` (M3): the `tr_decrypt` target builds its fixed session with `FixedEntropy` and seals headers under the
+# receiver's keys (`RatchetState::hk_s_kat`, `receiving_header_keys_kat`, `Nonce24::from_bytes_kat`).
+secmp-proto = { path = "../crates/secmp-proto", features = ["kat"] }
 
 [workspace]
 members = ["."]
@@ -100,6 +102,20 @@ bench = false
 [[bin]]
 name = "proto_cell"
 path = "fuzz_targets/proto_cell.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "tr_decrypt"
+path = "fuzz_targets/tr_decrypt.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "tr_state"
+path = "fuzz_targets/tr_state.rs"
 test = false
 doc = false
 bench = false

@@ -7,10 +7,13 @@
 
 use secmp_crypto::{MLDSA65_PK_LEN, MLDSA65_SIG_LEN, MSG_SEALED_LEN, Zeroizing};
 use secmp_proto::sizes::{
-    CELL_LEN, ED25519_PK_LEN, ED25519_SIG_LEN, FRAME_PLAINTEXT_LEN, HS1_LEN, HYBRID_SIG_LEN,
-    LINK_BLOB_LEN, MAX_MSG_BYTES, MLKEM1024_CT_LEN, MLKEM1024_EK_LEN, NAME_MAX, NONCE_LEN,
-    OUTER_PADDED_LEN, PREKEY_BUNDLE_LEN, X25519_PK_LEN,
+    CELL_LEN, CONTENT_BODY_MAX, ED25519_PK_LEN, ED25519_SIG_LEN, FRAGMENT_HEADER_LEN,
+    FRAME_PLAINTEXT_LEN, HEADER_LEN, HS1_LEN, HYBRID_SIG_LEN, ID_LEN, LINK_BLOB_LEN, MAX_MSG_BYTES,
+    MLKEM1024_CT_LEN, MLKEM1024_EK_LEN, NAME_MAX, NONCE_LEN, OUTER_PADDED_LEN, PREKEY_BUNDLE_LEN,
+    X25519_PK_LEN,
 };
+use secmp_proto::tr::RatchetState;
+use secmp_proto::tr::content::Inbox;
 use secmp_proto::wire::cell::{Cell, HandshakeBody, RouteDescriptor};
 use secmp_proto::wire::inv::Profile;
 use secmp_proto::wire::signed;
@@ -58,7 +61,20 @@ fn fuzz_max_len_is_the_largest_valid_input_plus_one() -> Result<(), Error> {
         PREKEY_BUNDLE_LEN.saturating_sub(HYBRID_SIG_LEN),
         X25519_PK_LEN,
     ]);
-    let expected: [(&str, usize); 12] = [
+    // the largest `InboxV1` with one message of one chunk: fmt, count 1, msg_id, total 2, present 1, idx 0, a
+    // maximal chunk (the Content body limit minus the fragment header) — decoded and re-encoded live
+    let chunk = CONTENT_BODY_MAX.saturating_sub(FRAGMENT_HEADER_LEN);
+    let chunk_len = u16::try_from(chunk).map_err(|_| Error::Rejected)?;
+    let inbox_bytes = [
+        &[1_u8, 1][..],
+        &[0; ID_LEN],
+        &[0, 2, 1, 0, 0],
+        &chunk_len.to_be_bytes(),
+        &vec![7; chunk],
+    ]
+    .concat();
+    let inbox = Inbox::from_bytes(&inbox_bytes)?.to_bytes()?.len();
+    let expected: [(&str, usize); 14] = [
         // mode, nonce, ad_len, AD, `COM ‖ C` of a LinkBlob
         (
             "caead_open",
@@ -100,9 +116,18 @@ fn fuzz_max_len_is_the_largest_valid_input_plus_one() -> Result<(), Error> {
         ("proto_invitation", sum(&[1, LINK_BLOB_LEN])),
         // selector, record `len` u16, type byte, HS1 fields
         ("proto_records", sum(&[1, 2, 1, HS1_LEN])),
+        // mode, then a cell (mode 0) or a header plaintext (modes 1–4)
+        ("tr_decrypt", sum(&[1, CELL_LEN.max(HEADER_LEN)])),
+        // selector, then `RatchetStateV1` or `InboxV1`
+        (
+            "tr_state",
+            sum(&[1, RatchetState::MAX_ENCODED_LEN.max(inbox)]),
+        ),
     ];
     assert_eq!(handshake, 65_642);
     assert_eq!(send, 4_146);
+    assert_eq!(inbox, 1_694);
+    assert_eq!(RatchetState::MAX_ENCODED_LEN, 38_585);
     let table = table();
     assert_eq!(table.len(), expected.len(), "{table:?}");
     for (name, largest) in expected {

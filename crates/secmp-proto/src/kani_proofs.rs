@@ -27,9 +27,18 @@
 //! Key and signature fields use `keys::kani_stubs` (a nondeterministic accept/reject in place of the `secmp-crypto`
 //! check); X25519 fields keep the real low-order check (byte comparisons only). Harnesses with a loop whose bound
 //! depends on the input carry `#[kani::unwind]`; Kani then also proves the bound sufficient (unwinding assertions).
+//!
+//! M3 (plan step 9): the pure decisions of SecMP-TR decryption (`tr::select`, spec §7.4) — `tr_header_selection`
+//! (the constant-time header-key selection equals the sequential pseudocode), `tr_skip_plan` (the bounds of
+//! `skip_message_keys`) and `tr_eviction` (the bound on `skipped`). They run on the real `subtle::Choice` (re-exported
+//! by `secmp-crypto`): its optimisation barrier is a volatile read, which Kani executes as a read, so nothing is
+//! stubbed.
+
+use secmp_crypto::Choice;
 
 use crate::codec::{Decode, Encode, Reader, pad, unpad};
 use crate::sizes::{CELL_LEN, FRAME_PLAINTEXT_LEN, HEADER_LEN};
+use crate::tr::select::{self, MAX_FF, MAX_SKIPPED, Path, SKIP_WINDOW};
 use crate::wire::cell::{Cell, HeaderV1};
 use crate::wire::frame::{CellrContext, Request, RequestCmd, Response, opcode};
 
@@ -232,4 +241,129 @@ fn response_frame() {
         assert!(len == FRAME_PLAINTEXT_LEN);
         assert!(bytes.first() == Some(&r.cmd.op()));
     }
+}
+
+/// `tr_header_selection` covers every number of distinct skipped header keys `k` in `0..=TR_SKIPPED_KEYS`.
+const TR_SKIPPED_KEYS: usize = 4;
+
+fn choice(b: bool) -> Choice {
+    Choice::from(u8::from(b))
+}
+
+/// Spec §7.4 steps 1–2 as written, sequentially: the reference `tr_header_selection` compares with.
+/// `opened[i]`: the i-th distinct skipped header key (first-seen order) opened the header; `found[i]`: `(hk_i,
+/// header.n)` is in `skipped`; `current`/`next`: `hk_r`/`nhk_r` opened the header.
+fn sequential_path(opened: &[bool], found: &[bool], current: bool, next: bool) -> Path {
+    for (o, f) in opened.iter().zip(found) {
+        if *o {
+            if *f {
+                return Path::Skipped;
+            }
+            break;
+        }
+    }
+    if current {
+        Path::Chain
+    } else if next {
+        Path::Step
+    } else {
+        Path::Reject
+    }
+}
+
+/// The constant-time header-key selection (plan D3): for every `k ≤ TR_SKIPPED_KEYS` distinct skipped header keys
+/// and every combination of per-key results (opened, found), of `hk_r` and `nhk_r` opening, and of the lookup's value
+/// when no skipped key opened (`RatchetState::open` then looks up the all-zero key with `n` = 0, which may match):
+/// [`select::first_opened`] is one-hot on the lowest opened index (so the `conditional_assign` loop of `open` selects
+/// exactly that key's header and key) and says whether any opened, and [`select::decide`] on the lookup of the
+/// selected key equals the sequential pseudocode.
+#[kani::proof]
+#[kani::unwind(6)] // TR_SKIPPED_KEYS + 2
+fn tr_header_selection() {
+    let opened_all: [bool; TR_SKIPPED_KEYS] = kani::any();
+    let found_all: [bool; TR_SKIPPED_KEYS] = kani::any();
+    let k: usize = kani::any();
+    kani::assume(k <= TR_SKIPPED_KEYS);
+    let opened = opened_all.get(..k).unwrap_or_default();
+    let found = found_all.get(..k).unwrap_or_default();
+    let results: Vec<Choice> = opened.iter().map(|o| choice(*o)).collect();
+    let (first, any) = select::first_opened(&results);
+    assert!(first.len() == k);
+    let lowest = opened.iter().position(|o| *o);
+    for (i, f) in first.iter().enumerate() {
+        assert!(bool::from(*f) == (Some(i) == lowest));
+    }
+    assert!(bool::from(any) == lowest.is_some());
+    // the lookup of `open`: of the selected (first opened) key; arbitrary if none opened
+    let mut found_first = Choice::from(0);
+    for (f, x) in first.iter().zip(found) {
+        found_first |= *f & choice(*x);
+    }
+    let spurious: bool = kani::any();
+    found_first |= !any & choice(spurious);
+    let current: bool = kani::any();
+    let next: bool = kani::any();
+    assert!(
+        select::decide(any, found_first, choice(current), choice(next))
+            == sequential_path(opened, found, current, next)
+    );
+}
+
+/// `skip_message_keys(until)` on a chain at `n_r` (spec §7.4), for every `n_r` and `until`: [`select::skip_plan`]
+/// rejects exactly when `until < n_r` or the gap exceeds `MAX_FF`; otherwise it derives `until − n_r` keys (the
+/// position counter of `derive_skipped` reaches `until` without overflow), stores from `max(n_r, until −
+/// SKIP_WINDOW)`, i.e. exactly the last `min(gap, SKIP_WINDOW)` positions, and a position `p` in `n_r .. until` is
+/// stored iff `until − p ≤ SKIP_WINDOW`.
+#[kani::proof]
+fn tr_skip_plan() {
+    let n_r: u32 = kani::any();
+    let until: u32 = kani::any();
+    let gap = until.checked_sub(n_r);
+    match select::skip_plan(n_r, until) {
+        Err(_) => assert!(gap.is_none_or(|g| g > MAX_FF)),
+        Ok(plan) => {
+            assert!(gap == Some(plan.steps) && plan.steps <= MAX_FF);
+            assert!(n_r.checked_add(plan.steps) == Some(until));
+            assert!(plan.store_from == until.saturating_sub(SKIP_WINDOW).max(n_r));
+            assert!(n_r <= plan.store_from && plan.store_from <= until);
+            let stored = until.checked_sub(plan.store_from);
+            assert!(stored == Some(plan.steps.min(SKIP_WINDOW)));
+            let p: u32 = kani::any();
+            if n_r <= p && p < until {
+                let distance = until.checked_sub(p);
+                assert!((p >= plan.store_from) == distance.is_some_and(|d| d <= SKIP_WINDOW));
+            }
+        }
+    }
+}
+
+/// The bound on `skipped` (spec §7.4 "evict earliest-inserted entries so |skipped| ≤ 2 × `SKIP_WINDOW`"), for every
+/// length: [`select::evicted`] never exceeds the length (`drain(..evicted)` in `RatchetState::apply` stays in
+/// bounds), leaves at most `MAX_SKIPPED` entries, evicts nothing up to `MAX_SKIPPED` and exactly `len − MAX_SKIPPED`
+/// above. And the lengths `apply` produces — at most `MAX_SKIPPED` before, at most one entry removed (step 1), at
+/// most `2 × SKIP_WINDOW` inserted (two `skip_message_keys` calls on a DH step, each storing at most `SKIP_WINDOW`,
+/// `tr_skip_plan`) — are at most `2 × MAX_SKIPPED` and computed without overflow. Which entries leave is the front of
+/// the insertion-ordered `VecDeque` (`drain(..n)`); the `tr` vector tr-0070 and the property tests check it.
+#[kani::proof]
+fn tr_eviction() {
+    let len: usize = kani::any();
+    let evicted = select::evicted(len);
+    let kept = len.checked_sub(evicted);
+    assert!(kept.is_some_and(|k| k <= MAX_SKIPPED));
+    if len <= MAX_SKIPPED {
+        assert!(evicted == 0);
+    } else {
+        assert!(len.checked_sub(MAX_SKIPPED) == Some(evicted));
+        assert!(kept == Some(MAX_SKIPPED));
+    }
+    let window = usize::try_from(SKIP_WINDOW).unwrap_or(usize::MAX);
+    let before: usize = kani::any();
+    let removed: usize = kani::any();
+    let added: usize = kani::any();
+    kani::assume(before <= MAX_SKIPPED && removed <= 1 && removed <= before);
+    kani::assume(added <= window.saturating_mul(2));
+    let after = before
+        .checked_sub(removed)
+        .and_then(|b| b.checked_add(added));
+    assert!(after.is_some_and(|a| a <= MAX_SKIPPED.saturating_mul(2)));
 }

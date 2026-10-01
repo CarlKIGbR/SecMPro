@@ -20,6 +20,8 @@
 //! | `hybrid_sign_verify` | `hybridsign` | mode 0 ‖ label 0 ‖ `pk_ed` ‖ `pk_mldsa`; mode 1 ‖ label 0 ‖ `sig` ‖ `msg`; for `sign` also mode 2 ‖ label 0 ‖ `msg` |
 //! | `mldsa65_verify` | `hybridsign` | mode 0 ‖ `pk_mldsa`; mode 1 ‖ `ctx_len` 0 ‖ the ML-DSA half of `sig` |
 //! | `proto_records`, `proto_frames`, `proto_invitation`, `proto_handshake`, `proto_cell` | `encodings` | every decodable row (positive: `outputs.bytes`, negative: `inputs.bytes`) as selector ‖ bytes in the target of its structure ([`encodings_target`]); the encode-only `Signed/*` rows have no decoder |
+//! | `tr_decrypt` | `tr` | the `cell` of every `send` case (`outputs`) and `recv-reject` case (`inputs`, incl. the 4095- and 4097-byte ones) as mode 0 ‖ cell (they are sealed under the vector session's keys: the fixed receiver of the target rejects them) |
+//! | `tr_state` | `tr` | the `init` case: selector 0 ‖ a `RatchetStateV1` of the §7.2 responder's shape filled with the case's bytes ([`tr_state`]) |
 //!
 //! The label byte of `hybrid_sign_verify` is 0 for every seed: the target picks `Label::ALL[byte % len]`, and its
 //! verification seeds are rejected under its fixed key whatever the label; the fuzzer varies the byte.
@@ -109,6 +111,16 @@ pub(crate) const SEED_RULES: &[SeedRule] = &[
         target: "proto_records",
         suite: "encodings",
         seeds: proto_records,
+    },
+    SeedRule {
+        target: "tr_decrypt",
+        suite: "tr",
+        seeds: tr_decrypt,
+    },
+    SeedRule {
+        target: "tr_state",
+        suite: "tr",
+        seeds: tr_state,
     },
     SeedRule {
         target: "x25519_dh",
@@ -418,6 +430,53 @@ fn proto_cell(case: &Value) -> Result<Vec<(&'static str, Vec<u8>)>> {
     encodings_seed("proto_cell", case)
 }
 
+/// `tr_decrypt`: mode 0 ‖ the case's `cell` (a `send` case's output, a `recv-reject` case's input), any length.
+fn tr_decrypt(case: &Value) -> Result<Vec<(&'static str, Vec<u8>)>> {
+    Ok(field(case, "cell")?
+        .map(|cell| vec![("cell", cat(&[&[0], &cell]))])
+        .unwrap_or_default())
+}
+
+/// `tr_state`, from the `init` case: selector 0 ‖ `RatchetStateV1` (`secmp-proto` `tr/state.rs`) in the shape of
+/// the §7.2 responder — `sb`, `rk`, `dh_s.sk` = `spk_dh_sk`, no `dh_r`, `kem_s.seed` = `rpk_kem_seed`, no
+/// `kem_r`/`last_ct_r`/`ct_s`, no chain or header keys but `nhk_s` and `nhk_r`, counters 0, no skipped keys. xtask
+/// computes no HKDF, so the three derived keys `rk`, `nhk_s`, `nhk_r` are filled with the case's `sk`, `m` and
+/// `dh_s_sk` (the decoder checks the shape, not the derivation): an input the decoder accepts, which the fuzzer
+/// mutates from there.
+fn tr_state(case: &Value) -> Result<Vec<(&'static str, Vec<u8>)>> {
+    let get = |key: &str, len: usize| -> Result<Option<Vec<u8>>> {
+        Ok(field(case, key)?.filter(|v| v.len() == len))
+    };
+    let (Some(sb), Some(sk), Some(spk), Some(seed), Some(m), Some(dh)) = (
+        get("sb", 32)?,
+        get("sk", 32)?,
+        get("spk_dh_sk", 32)?,
+        get("rpk_kem_seed", 64)?,
+        get("m", 32)?,
+        get("dh_s_sk", 32)?,
+    ) else {
+        return Ok(Vec::new());
+    };
+    // fmt, then: dh_r absent; kem_r, last_ct_r, ct_s absent; ck_s, ck_r, hk_s, hk_r absent; nhk_s, nhk_r present;
+    // n_s, n_r, pn = 0; count = 0
+    Ok(vec![(
+        "responder-state",
+        cat(&[
+            &[0, 1],
+            &sb,
+            &sk,
+            &spk,
+            &[0],
+            &seed,
+            &[0, 0, 0, 0, 0, 0, 0, 1],
+            &m,
+            &[1],
+            &dh,
+            &[0; 14],
+        ]),
+    )])
+}
+
 /// The seeds of `target` from the frozen suites, read through `read_suite` (the parsed `vectors/<suite>.json`).
 /// Names are `<suite>-<case id>-<what>`; a case whose fields do not fit the target's layout gives no seed. A seed
 /// longer than the target's `-max_len` is cut to it (libFuzzer reads no more of a corpus file; the long messages of
@@ -519,6 +578,9 @@ mod tests {
             ("proto_handshake", 40),
             ("proto_invitation", 132),
             ("proto_records", 81),
+            // 40 `send` cells and 13 `recv-reject` cells; one state from the `init` case
+            ("tr_decrypt", 53),
+            ("tr_state", 1),
             ("x25519_dh", 54),
         ];
         let mut total_proto = 0_usize;
@@ -613,6 +675,38 @@ mod tests {
             mldsa65_verify(&sign)?,
             vec![("import", vec![0, 7, 8]), ("verify", vec![1, 0, 9, 9])]
         );
+        let send = serde_json::json!({"id": "tr-0002", "op": "send", "inputs": {"hdr_nonce": "00"},
+            "outputs": {"cell": "0a0b"}});
+        assert_eq!(tr_decrypt(&send)?, vec![("cell", vec![0, 0x0a, 0x0b])]);
+        let init = serde_json::json!({"id": "tr-0001", "op": "init", "inputs": {"sk": "01".repeat(32),
+            "sb": "02".repeat(32), "spk_dh_sk": "03".repeat(32), "rpk_kem_seed": "04".repeat(64),
+            "dh_s_sk": "05".repeat(32), "kem_s_seed": "06".repeat(64), "m": "07".repeat(32)}});
+        assert!(tr_decrypt(&init)?.is_empty());
+        let state = tr_state(&init)?;
+        let [(label, bytes)] = state.as_slice() else {
+            return Err(Error("tr_state: one seed expected".to_owned()));
+        };
+        // selector 0, then RatchetStateV1 of the responder's shape: 249 bytes
+        assert_eq!(*label, "responder-state");
+        assert_eq!(
+            *bytes,
+            cat(&[
+                &[0, 1],
+                &[2; 32],
+                &[1; 32],
+                &[3; 32],
+                &[0],
+                &[4; 64],
+                &[0; 7],
+                &[1],
+                &[7; 32],
+                &[1],
+                &[5; 32],
+                &[0; 14]
+            ])
+        );
+        assert_eq!(bytes.len(), 250);
+        assert!(tr_state(&send)?.is_empty());
         Ok(())
     }
 

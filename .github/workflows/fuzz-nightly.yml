@@ -6,7 +6,7 @@
 #   the seeded property tests explore a new seed every night; the seed is printed first, and a failure is reproduced
 #   by running the tests locally with the same value.
 # - Fuzz campaign: `cargo xtask step --strict fuzz-nightly` gives every fuzz target `expect::FUZZ_NIGHTLY_SECONDS /
-#   number of targets` seconds (14 400 s / 12 targets = 1 200 s in M3), on a scratch corpus seeded from the frozen
+#   number of targets` seconds (14 400 s / 14 targets = 1 028 s in M3), on a scratch corpus seeded from the frozen
 #   vectors plus the tracked corpus, which the campaign only reads (as the per-PR smoke of ci-full step 6). The scratch
 #   corpus (with the inputs libFuzzer added) and any crash inputs are uploaded as artefacts; taking inputs into
 #   `fuzz/corpus/` (after `cargo fuzz cmin`) is a manual, reviewed commit.

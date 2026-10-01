@@ -370,8 +370,13 @@ fn tr_eviction() {
 
 // ---- M4: SecMP-HX (spec §6.5, §6.6; ADR-044 (c)) --------------------------------------------------------------------
 
-use crate::sizes::{HANDSHAKE_CHUNK_LEN, HANDSHAKE_CHUNKS, OUTER_PADDED_LEN};
-use crate::wire::hx::Outer;
+use crate::error::{Error, Result};
+use crate::hx::responder::{Groups, drive, insert};
+use crate::prekeys::{OpkSecrets, PrekeyStore, SpkGeneration};
+use crate::sizes::{
+    HANDSHAKE_CELL_PT_LEN, HANDSHAKE_CHUNK_LEN, HANDSHAKE_CHUNKS, OUTER_PADDED_LEN,
+};
+use crate::wire::hx::{HandshakeCellPlaintext, Outer};
 
 /// The three chunks of `Padded` (§6.5: 3 × 4006 = 12018): for every chunk index `i` < 3, `i · 4006 + 4006` does not
 /// overflow and does not exceed 12018, the chunks tile `Padded` exactly (`as_chunks` leaves no remainder), and
@@ -406,5 +411,165 @@ fn kani_outer_unpad_total() {
     let input = bytes.get(..len).unwrap_or_default();
     if Outer::decode(input).is_ok() {
         assert!(len == OUTER_PADDED_LEN);
+    }
+}
+
+/// The grouping of §6.5 with ADR-044 (c) over the fixed-array `Groups` (no `Vec`), on every sequence of at most 4
+/// chunks `(init_id, i)` over 3 init_ids with a symbolic `u8` payload and a bound of `N` = 2 partial groups (the
+/// logic is the same for every `N`; the production bound `MAX_PARTIAL_GROUPS` = 8 is tested by
+/// `group_partial_store_bound_8_evicts_oldest`): at most `N` groups are stored, never more than the chunks seen; at
+/// most one group per init_id; `insert` answers with a group index exactly when that group is complete (chunks 0, 1
+/// and 2); a duplicate `(init_id, i)` never replaces the stored chunk (first-seen wins); a chunk of a new init_id
+/// with `N` groups held evicts exactly the oldest; an index of 3 or more changes nothing.
+#[kani::proof]
+#[kani::unwind(6)]
+fn kani_hx_grouping() {
+    const N: usize = 2;
+    let mut groups: Groups<u8, u8, N> = Groups::new();
+    let steps: usize = kani::any();
+    kani::assume(steps <= 4);
+    for step in 0..steps {
+        let id: u8 = kani::any();
+        kani::assume(id <= 2);
+        let i: usize = kani::any();
+        kani::assume(i <= 3);
+        let value: u8 = kani::any();
+        let find = |g: &Groups<u8, u8, N>, id: u8| {
+            (0..g.len()).find(|k| g.get(*k).is_some_and(|x| x.init_id == id))
+        };
+        let known = find(&groups, id);
+        let old = known
+            .and_then(|k| groups.get(k))
+            .and_then(|g| g.chunks.get(i).copied().flatten());
+        let held = groups.len();
+        let oldest = groups.get(0).map(|g| g.init_id);
+        let done = insert(&mut groups, id, i, value);
+        assert!(groups.len() <= N && groups.len() <= step + 1);
+        if i >= 3 {
+            assert!(done.is_none() && groups.len() == held);
+            continue;
+        }
+        let at = find(&groups, id);
+        assert!(at.is_some());
+        let at = at.unwrap_or(0);
+        let count = (0..groups.len())
+            .filter(|k| groups.get(*k).is_some_and(|x| x.init_id == id))
+            .count();
+        assert!(count == 1);
+        let group = groups.get(at);
+        assert!(group.is_some_and(|g| done == g.complete().then_some(at)));
+        let stored = group.and_then(|g| g.chunks.get(i).copied().flatten());
+        assert!(stored == Some(old.unwrap_or(value)));
+        if known.is_none() && held >= N {
+            assert!(groups.len() == N);
+            assert!(oldest.is_some_and(|o| find(&groups, o).is_none()));
+        }
+    }
+}
+
+/// A prekey store that only counts: no keys; `commit_accept` records the call and either commits (the OPK flag goes
+/// false) or fails and keeps the OPK.
+struct CountingStore {
+    opk_present: bool,
+    commits: u8,
+    fail_commit: bool,
+}
+
+impl PrekeyStore for CountingStore {
+    fn spk(&self, _spk_id: u32) -> Option<&SpkGeneration> {
+        None
+    }
+
+    fn opk(&self, _opk_id: u32) -> Option<&OpkSecrets> {
+        None
+    }
+
+    fn delete_opk(&mut self, _opk_id: u32) -> Result<()> {
+        Err(Error::Rejected)
+    }
+
+    fn commit_accept(&mut self, _opk_id: u32, _ld_id: &[u8; 16]) -> Result<()> {
+        self.commits = self.commits.saturating_add(1);
+        if self.fail_commit {
+            Err(Error::Rejected)
+        } else {
+            self.opk_present = false;
+            Ok(())
+        }
+    }
+}
+
+/// `drive` (the only caller of `commit_accept`) with the cryptographic steps replaced by a nondeterministic outcome
+/// per step, over every sequence of at most 4 chunks of 3 init_ids (group bound 8, as in production): the commit is
+/// called at most once, only after the processing of a group succeeded; `Ok` leaves the OPK committed; every `Err`
+/// leaves it in place (a failed commit keeps it by the store's contract); `Unavailable` never commits.
+#[kani::proof]
+#[kani::unwind(10)]
+fn kani_accept_opk_delete_only_on_success() {
+    let mut store = CountingStore {
+        opk_present: true,
+        commits: 0,
+        fail_commit: kani::any(),
+    };
+    let n: usize = kani::any();
+    kani::assume(n <= 4);
+    let items: [(u8, usize, ()); 4] = core::array::from_fn(|_| {
+        let id: u8 = kani::any();
+        kani::assume(id <= 2);
+        let i: usize = kani::any();
+        kani::assume(i < 3);
+        (id, i, ())
+    });
+    let processed_ok = core::cell::Cell::new(false);
+    let result = drive(
+        items.into_iter().take(n),
+        &mut store,
+        42,
+        &[0; 16],
+        |_group, _store| {
+            // the steps of §6.6 (outer decode, id checks, K_id, inner open, transcript, TR decrypt, Content checks):
+            // each succeeds or fails, arbitrarily
+            for _ in 0..4 {
+                if kani::any() {
+                    return Err(if kani::any() {
+                        Error::Rejected
+                    } else {
+                        Error::Unavailable
+                    });
+                }
+            }
+            processed_ok.set(true);
+            Ok(())
+        },
+    );
+    assert!(store.commits <= 1);
+    if store.commits == 1 {
+        assert!(processed_ok.get());
+    }
+    match result {
+        Ok(()) => assert!(store.commits == 1 && !store.fail_commit && !store.opk_present),
+        Err(e) => {
+            assert!(store.opk_present);
+            if e == Error::Unavailable {
+                assert!(store.commits == 0);
+            }
+        }
+    }
+}
+
+/// `HandshakeCellPlaintext` (D.4) on every input of 4023…4025 bytes (the exact size and its neighbours): the decoder
+/// never panics; an accepted input has exactly 4024 bytes with `i` ≤ 2 and `total` = 3, and re-encodes to itself.
+#[kani::proof]
+#[kani::unwind(4010)]
+fn kani_cell_plaintext_decode_total() {
+    let bytes: [u8; HANDSHAKE_CELL_PT_LEN + 1] = kani::any();
+    let len: usize = kani::any();
+    kani::assume(len >= HANDSHAKE_CELL_PT_LEN - 1 && len <= HANDSHAKE_CELL_PT_LEN + 1);
+    let input = bytes.get(..len).unwrap_or_default();
+    if let Ok(p) = HandshakeCellPlaintext::decode(input) {
+        assert!(len == HANDSHAKE_CELL_PT_LEN);
+        assert!(p.i < HANDSHAKE_CHUNKS);
+        assert!(input.get(17) == Some(&HANDSHAKE_CHUNKS));
+        reencodes_to(p.encode(), input);
     }
 }

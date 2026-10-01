@@ -9,11 +9,11 @@
 //! [`Error::Unavailable`] occurs only if the ratchet's sending half could not draw randomness after the
 //! `first_msg` MAC verified (the caller neither acknowledges nor deletes anything and retries).
 
-use secmp_crypto::{Caead, ConstantTimeEq, Label, MlKem1024Ct, SecretBytes, Zeroizing};
+use secmp_crypto::{Caead, ConstantTimeEq, Label, MlKem1024Ct, SecretBytes};
 
 use super::derive::{Shared, TranscriptInputs, k_id, session_key, transcript};
 use super::{ResponderKeys, dh_checked};
-use crate::codec::{Decode, Encode};
+use crate::codec::{Decode, Encode, Zeroizing};
 use crate::error::{Error, Result};
 use crate::inv::derive_k_inv;
 use crate::prekeys::{InvitationRecord, PrekeyStore};
@@ -56,32 +56,85 @@ impl<K, C> Group<K, C> {
     }
 }
 
+/// The partial groups held while grouping: a fixed array of `N` slots in arrival order (oldest first), no `Vec`
+/// (the Kani harnesses of the grouping and of `drive` unroll it with a small `N`).
+pub(crate) struct Groups<K, C, const N: usize> {
+    slots: [Option<Group<K, C>>; N],
+    len: usize,
+}
+
+impl<K: PartialEq, C, const N: usize> Groups<K, C, N> {
+    pub(crate) fn new() -> Self {
+        Self {
+            slots: core::array::from_fn(|_| None),
+            len: 0,
+        }
+    }
+
+    pub(crate) const fn len(&self) -> usize {
+        self.len
+    }
+
+    #[cfg(kani)]
+    pub(crate) fn get(&self, at: usize) -> Option<&Group<K, C>> {
+        self.slots.get(at)?.as_ref()
+    }
+
+    fn position(&self, init_id: &K) -> Option<usize> {
+        self.slots
+            .iter()
+            .take(self.len)
+            .position(|g| g.as_ref().is_some_and(|g| g.init_id == *init_id))
+    }
+
+    /// Remove slot `at`, shifting the younger groups down (order kept).
+    fn remove(&mut self, at: usize) -> Option<Group<K, C>> {
+        if at >= self.len {
+            return None;
+        }
+        let removed = self.slots.get_mut(at)?.take();
+        let mut i = at;
+        while i.checked_add(1)? < self.len {
+            let next = self.slots.get_mut(i.checked_add(1)?)?.take();
+            *self.slots.get_mut(i)? = next;
+            i = i.checked_add(1)?;
+        }
+        self.len = self.len.checked_sub(1)?;
+        removed
+    }
+
+    fn push(&mut self, group: Group<K, C>) -> Option<usize> {
+        let at = self.len;
+        *self.slots.get_mut(at)? = Some(group);
+        self.len = self.len.checked_add(1)?;
+        Some(at)
+    }
+}
+
 /// Add chunk `i` (< 3) of `init_id` (§6.5, ADR-044 (c)): a duplicate `(init_id, i)` is ignored whatever its bytes
-/// (identical: nothing to do; differing: first-seen wins); a new `init_id` evicts the oldest partial group once
-/// [`MAX_PARTIAL_GROUPS`] are held. Returns the index of the group if it is now complete.
-pub(crate) fn insert<K: PartialEq, C>(
-    groups: &mut Vec<Group<K, C>>,
+/// (identical: nothing to do; differing: first-seen wins); a new `init_id` evicts the oldest partial group once the
+/// `N` slots ([`MAX_PARTIAL_GROUPS`]) are full. Returns the index of the group if it is now complete.
+pub(crate) fn insert<K: PartialEq, C, const N: usize>(
+    groups: &mut Groups<K, C, N>,
     init_id: K,
     i: usize,
     chunk: C,
-    max_groups: usize,
 ) -> Option<usize> {
     if i >= 3 {
         return None;
     }
-    let at = if let Some(at) = groups.iter().position(|g| g.init_id == init_id) {
+    let at = if let Some(at) = groups.position(&init_id) {
         at
     } else {
-        if groups.len() >= max_groups {
+        if groups.len() >= N {
             groups.remove(0);
         }
         groups.push(Group {
             init_id,
             chunks: [None, None, None],
-        });
-        groups.len().checked_sub(1)?
+        })?
     };
-    let group = groups.get_mut(at)?;
+    let group = groups.slots.get_mut(at)?.as_mut()?;
     let slot = group.chunks.get_mut(i)?;
     if slot.is_none() {
         *slot = Some(chunk);
@@ -102,12 +155,14 @@ pub(crate) fn drive<K: PartialEq, C, T, S: PrekeyStore>(
     ld_id: &Id,
     mut process: impl FnMut(&Group<K, C>, &S) -> Result<T>,
 ) -> Result<T> {
-    let mut groups: Vec<Group<K, C>> = Vec::new();
+    let mut groups: Groups<K, C, MAX_PARTIAL_GROUPS> = Groups::new();
     for (init_id, i, chunk) in items {
-        let Some(done) = insert(&mut groups, init_id, i, chunk, MAX_PARTIAL_GROUPS) else {
+        let Some(done) = insert(&mut groups, init_id, i, chunk) else {
             continue;
         };
-        let group = groups.remove(done);
+        let Some(group) = groups.remove(done) else {
+            continue;
+        };
         match process(&group, &*store) {
             Ok(accepted) => {
                 // step 4: delete the OPK and consume the record (`commit_accept`) — the last operation; a failure keeps it and rejects

@@ -47,12 +47,12 @@ ADR-044 (b)–(f) are enforced in this milestone.
 | B2 | `tr.pv` F5 (M3 R-12) | not started (brief §1: no B2 after a B1 STOP) |
 | B3 | `tr.pv` F34 / CLAIMS T13 | not started |
 | B4 | ProVerif gate F7 | not started |
-| B5 | ct `tr_decrypt_reject_skipped` (F2) | prepared: branch `worktree-agent-a77420be221171832` `32005b0`; not on `m04-hx` |
-| B6 | ct `inv_fingerprint_compare`, `x25519_zero_check`, `hx_accept_reject_inner`, `hx_accept_reject_first_msg` | prepared: same branch `1f3e113`; not on `m04-hx` |
-| B7 | F19 pre-checks + reject sites | prepared: same branch `4d92ec2`; not on `m04-hx`; TR/INV site tags blocked (§8.1) |
-| B8 | F1 branch-free `any_skipped` | prepared: branch `worktree-agent-a4a02fcd8ae0c8aac` `2a93d6c`; not on `m04-hx`; deviation (§5.2) |
+| B5 | ct `tr_decrypt_reject_skipped` (F2) | on `m04-hx` as `5005399` (WEISUNG M4-4); respecified in `8077590` (§12) |
+| B6 | ct `inv_fingerprint_compare`, `x25519_zero_check`, `hx_accept_reject_inner`, `hx_accept_reject_first_msg` | on `m04-hx` as `67dc5cb` |
+| B7 | F19 pre-checks + reject sites | on `m04-hx` as `260b4bd`; TR/INV site tags added in `db6d085`, pre-checks assert them in `8077590` (§12) |
+| B8 | F1 branch-free `any_skipped` | on `m04-hx` as `e48a99d`; deviation (§5.2) accepted by WEISUNG M4-4 |
 
-Both branches are based on `2e5953e` (worktrees `.claude/worktrees/agent-a77420be221171832`, `…/agent-a4a02fcd8ae0c8aac`).
+The two worktree branches were deleted after the cherry-picks (WEISUNG M4-4 Part A, §12).
 
 ## 2. What was built (Phase A, WEISUNG M4-1 applied; local HEAD see §9)
 
@@ -149,6 +149,10 @@ B8 (`2a93d6c`): `cargo nextest run -p secmp-proto` 125 → 128, `--features kat`
 `any_skipped_single_conversion`, `undecodable_skipped_header_rejects_on_every_path`, `header_n_reads_bytes_38_to_42`;
 `vectors/tr.json` sha256 `01a6d161…a837` before and after (`cargo xtask vectors`: 11 suites agree, no file changed).
 
+The FAIL above is diagnosed (reviewer, WEISUNG M4-4) as the position of the opening trial (trial 0 vs trial 2 of 5)
+— R-59, accepted under R-15 — plus a secret-indexed `mk` load (R-58, fixed); the target is respecified and re-run:
+§12.3.
+
 ## 8. Open / Phase B
 ct targets (f), `formal/hx.pv`, F1, F2, F5, F6, F7, F19, F34, F16 (after ratification), F10 hosts/msg_ids, F12 heap probe.
 
@@ -171,10 +175,11 @@ ct targets (f), `formal/hx.pv`, F1, F2, F5, F6, F7, F19, F34, F16 (after ratific
 3. **F19 TR reject-site tag:** needs `crates/secmp-proto/src/tr/ratchet.rs` (the §7.4 reject sites are there; no
    tag exists) — outside §0 (ratchet.rs is F1-only). The TR targets are pre-checked for `Err(Rejected)` only.
    **INV:** `inv_fingerprint_compare` has no site tag (`crates/secmp-proto/src/inv.rs` outside §0); pre-check is
-   `Err(Rejected)` plus the unmodified invitation accepted.
+   `Err(Rejected)` plus the unmodified invitation accepted. — *Resolved by WEISUNG M4-4 Part E (§12.4).*
 4. **Pre-push check fails on the unchanged Phase-A head `2e5953e`:** `cargo clippy --workspace --all-targets -- -D
    warnings` → `error: missing documentation for the crate` at `crates/secmp-testkit/tests/differential.rs:2`
-   (built without `kat`; outside §0). The gate's form (`--all-features --locked`) passes.
+   (built without `kat`; outside §0). The gate's form (`--all-features --locked`) passes. — *Resolved by WEISUNG
+   M4-4 Part F (§12.5).*
 
 Question: how is `formal/hx.pv` to be run within the gate's time (scope or bound of the sessions/attacker roles),
 and how is the injectivity of H5/H9b/H10 to be obtained, given item 2?
@@ -259,3 +264,142 @@ Gate: `cargo xtask step --strict kani` on `648bd3f`: PASS, 24/24 harnesses verif
 no other CBMC run in parallel; K2 46 s, K3 275 s, K4a 293 s, K5 41 s (`kani-xtask-step-648bd3f.txt`).
 Push: `gh run list --branch m04-hx --limit 3` at 23:43 CEST showed no run `in_progress`/`queued` (36885710027 and
 36862814521 completed): pushed with this commit.
+
+## 12. WEISUNG M4-4 (B5–B8 landed, R-58, F2 respecified, F19 site tags)
+
+§1 state at start: head `812e1bd`; `git log origin/m04-hx..HEAD` = 0 commits; status: only untracked `.claude/`;
+`worktree-agent-a4a02fcd8ae0c8aac` (`2a93d6c`) and `worktree-agent-a77420be221171832` (`4d92ec2`), each checked out in
+its worktree under `.claude/worktrees/`. WEISUNG M4-3 had committed and pushed (`812e1bd`).
+
+Commits: `5005399`, `67dc5cb`, `260b4bd`, `e48a99d` (Part A), `db6d085` (Parts B, D, E: product and unit tests),
+`8077590` (Parts C, E: bench), `2b6373d` (Part F.3), `14e55da` (mutation-gate exclusion, §12.3), and this report.
+
+### 12.1 Part A — the prepared commits
+`32005b0` → `5005399`, `1f3e113` → `67dc5cb`, `4d92ec2` → `260b4bd`, `2a93d6c` → `e48a99d`, in that order; **no
+conflicts** (git auto-merged `xtask/src/expect.rs`, `hx/mod.rs`, `hx/responder.rs`, `tr/ratchet.rs`). F9 is intact
+(`decrypt_with`, `ratchet.rs:721-753`: the post-step state is built and serialised before it replaces `self`), F10
+untouched (other files). The F1 deviation (§5.2) is kept with `undecodable_skipped_header_rejects_on_every_path`
+(passes). `git branch -D` refuses a branch checked out in a worktree, so both worktrees (no uncommitted changes) were
+removed with `git worktree remove` first; then both branches were deleted. Nothing else was deleted.
+
+### 12.2 Part B — R-58: `mk` selected by masks
+The entry scan is `lookup_skipped` (`ratchet.rs:372-395`, called at `:460`): for every entry, `hit` =
+`ct_eq(hk) & ct_eq(n)`; `found |= hit`; `hit.assign(found_at, j)`; and (new, `:386-388`) each byte of the entry's
+`mk` is `conditional_assign`ed under `hit` into a `Zeroizing<[u8; 32]>` (all-zero on a miss). `Selected::Skipped`
+carries that key; the `Path::Skipped` arm (`:801-805`) passes it to `MsgEncrypt::open` and no longer calls
+`self.skipped.get(at)`; `found_at` is used only by `Update { remove: Some(at) }`, applied after the MAC verified.
+Doc comment as dictated ("mk selected by masks over every entry (R-58): no secret-indexed load before the body MAC").
+Test `skipped_mk_is_selected_without_indexing` (`:1341`): seven entries over three keys, matches at index 0, 2, 3
+(middle) and 6 (last) give `found`, the index and the entry's key; four misses and an empty `skipped` give the
+all-zero key and index 0. A hook on `VecDeque::get` is not possible (std), so the brief's fallback applies: this test,
+the visit counter of Part D (every entry, every call) and the mutants run. `vectors/tr.json` sha256
+`01a6d161138508af8fedd27df0fe5c62d473dbbf27530accbe6cde293201a837` before and after (`cargo xtask vectors`: 11 suites
+agree with ref, every frozen file unchanged).
+
+### 12.3 Parts C and D — `tr_decrypt_reject_skipped` respecified; the early-exit detector as a count
+
+**R-58 / R-59 (reviewer's diagnosis, binding).** The M3-dictated classes (first vs last distinct skipped key) differ
+in the trial at which the one header open succeeds (trial 0 vs 2 of 5); the position of the single succeeding
+tag-check branch of the AEAD library among five shifts branch prediction — the −1.41 / −1.42-floor (≈ −59 ns) shift of
+§7.1, reproduced on two fixtures. That is the position leak M3 accepted under R-15 (R-59: accepted; hardening =
+branch-free trial opens, F-M5, not M4), and not the early exit F2 was for (whole AEAD opens, ≈ µs). The second,
+unaccepted dependence — `entry.mk` loaded by the secret-derived index (R-58) — is fixed (§12.2).
+
+**Fixture and classes (Part C).** Chain 1 with 5 skipped keys (n = 0…4), chains 2 and 3 with 2 each: 9 entries,
+3 distinct header keys, 5 candidates (`hk_1`, `hk_2`, `hk_3`, `hk_r`, `nhk_r`); chain 4 is B's current chain; the
+fixture checks the four header keys pairwise distinct, `hk_r`/`nhk_r` not a skipped chain's key, and that all nine
+undelivered cells open on a copy of B. Class 0 = A's cell `(hk_1, n = 0)` (entry 0), class 1 = `(hk_1, n = 4)`
+(entry 4); both open at trial 0; both with the body tag wrong in byte 0; claimed site "body MAC". The target's doc
+comment carries the dictated sentence verbatim.
+
+**Local run at the gate's scale** (`M04-evidence/ct-local-14e55da.txt`): `cargo xtask step ct` (full sample counts,
+`SECMP_CT_SCALE` removed by the step) on this Mac, background run with no build or test in parallel: **run verdict
+PASS**, step 2677 s (≤ 60 min, so the gate scale, not scale 6). Clock `cntvct_el0`, 1 tick = 41.667 ns = effect
+floor, k = 1 for all five, 1 000 000 samples each; Δ = class 0 − class 1 at the decisive or largest-|t| crop.
+
+| Target | Verdict | First: max \|t\| (crop, Δ floors) | Second | A/A max \|t\| | Pre-check (site) |
+|---|---|---|---|---|---|
+| `tr_decrypt_reject_skipped` | **PASS** | 1.00 (p99, −0.023) | 2.31 (raw, +0.099) | 2.11 | both Err(Rejected), "body MAC" |
+| `inv_fingerprint_compare` | PASS | 2.40 (p75, −0.013) | 0.93 (p75, −0.005) | 1.96 | both "fingerprint"; twin Ok |
+| `x25519_zero_check` | PASS | 2.15 (p90, +0.018) | 2.28 (p75, −0.010) | 2.28 | Ok, bytes [0] / [31] |
+| `hx_accept_reject_inner` | SUB_FLOOR_SHIFT | 44.48 (p50, +0.354) | 40.10 (p50, +0.324) | 2.19 | both "inner open"; twin Ok |
+| `hx_accept_reject_first_msg` | SUB_FLOOR_SHIFT | 6.32 (p50, −0.512) | 7.62 (p50, −0.598) | 2.25 | both "first_msg decrypt"; twin Ok |
+
+`tr_decrypt_reject_skipped` before → after: FAIL, Δ −1.41 / −1.42 floors (old classes, scale 6, §7.1) → PASS,
+|Δ| ≤ 0.10 floors (new classes, full scale), median 30 083 ns. Controls: positive control PASS (max |t| 105 938);
+`min_leak_control` REACHED (raw Δ 2.86 floors); A/A′ placement PASS (1.53 / 0.99); same-content control
+SUB_FLOOR_SHIFT (31.56 / 29.84 at p75 / p50, Δ +0.079 / +0.059 floors — identical inputs in both classes; it is a
+control only for FAIL); other TR targets: `_hdr_key` SUB_FLOOR_SHIFT (Δ +0.107 / +0.042), `_body_tag` PASS, `_ct_pq`
+SUB_FLOOR_SHIFT (Δ +0.059 / +0.046); every M1–M3 target PASS. The two HX sub-floor shifts (+0.35 and −0.51 / −0.60
+floors, reproduced) were PASS in the scale-6 run of §7.1; nothing was tuned.
+
+**Counting test (Part D).** `TRIAL_COUNTS_KAT` (thread-local, `#[cfg(any(test, feature = "kat"))]`): header trial
+decryptions (`open_header`) and entries visited by `lookup_skipped`, reset when a 4096-byte cell's processing begins.
+`trial_opens_every_candidate_every_call` (`ratchet.rs:1454`): receivers with 1, 3 and 6 distinct skipped keys (2
+entries each); for each, cells opening at the first, the middle (`distinct / 2`) and the last skipped candidate
+(accepted), the last one with its body tag flipped (rejected at the MAC), under `hk_r`, under `nhk_r` (accepted) and
+under no key (rejected) — after every `decrypt` the counters are `(distinct + 2, 2 · distinct)`: (3, 2), (5, 6), (8, 12).
+Hand mutants, applied, run, reverted: (1) the skipped trials as a loop that `break`s after the first trial that opened
+→ 119 of 120 lib tests pass, `trial_opens_every_candidate_every_call` fails (`3 keys, first skipped candidate`: left
+(3, 6), right (5, 6)); (2) `lookup_skipped` `break`s at the first hit → the same single failure (`1 keys, first
+skipped candidate`: left (3, 1), right (3, 2)). No other test catches either.
+
+Deviation from the letter: the counter is `cfg(any(test, feature = "kat"))`, not `kat` alone, and the test is a
+unit test (`#[cfg(test)]`): the mutation gate builds `secmp-proto` without `kat`, so a `kat`-only test would not run
+there; under `kat` the counter exists too (exported as `tr::TRIAL_COUNTS_KAT`).
+
+**Mutants** (`M04-evidence/mutants-tr-2b6373d.txt`): `cargo mutants` with the gate's flags (`--features
+secmp-crypto/kat`, the gate's `--exclude-re` list) restricted to `-f tr/ratchet.rs -f tr/select.rs`, three shards:
+107 mutants — **53 caught, 1 missed, 53 unviable, 0 timeouts**. Missed: `ratchet.rs:631:9 replace
+RatchetState::encrypt_padded_kat -> … with Ok(Default::default())` — a `kat`-only function (since `c6a80ca`), not built
+by the gate, in neither `MUTANT_EXCLUDE_RE` nor `docs/mutants-accepted.md`, so the CI mutants gate would report it as
+undocumented: added to `MUTANT_EXCLUDE_RE` with the other `kat`-only `RatchetState` accessors (`14e55da`; the hx
+generator exercises it under the `kat` step). Every mutant of `lookup_skipped`, `open_header`, `first_opened`,
+`decide` is caught or unviable. (A `kat`-only helper `select::reject_site_kat` was replaced by an inline `kat`
+statement after the listing showed it would add two unkillable mutants to the gate.)
+
+### 12.4 Part E — F19 reject-site tags
+Mechanism of `hx::ACCEPT_SITE_KAT`: a `kat`-only thread-local set when a step begins; every added non-test line is a
+`#[cfg(feature = "kat")]` statement or item, so the build without `kat` is unchanged.
+
+- `tr::DECRYPT_SITE_KAT` (`tr/ratchet.rs`): `"cell length"`, `"header: no key opened"`, `"skipped: (hk, n) not
+  stored"`, `"header decode"`, `"kem constancy"`, `"counter rule"`, `"dh_pk"`, `"body MAC"`, `"body decode"` (set by
+  `Plaintext::content`). The `Path::Reject` site (no key vs a skipped key opened without `(hk, n)` stored) is
+  selected with a mask on `any_skipped` — no `kat` branch on it.
+- `inv::INVITEE_SITE_KAT` (`inv.rs`; set also by the `InvitationV1` and `PrekeyBundle` decoders in `wire/inv.rs`):
+  `"uri"`, `"invitation decode"`, `"expired"`, `"blob open"`, `"linkdata decode"`, `"opk_present"`, `"fingerprint"`,
+  `"bundle signature"`, `"bundle expired"`.
+- Unit evidence, one input per site: `tr::tests::reject_sites_are_tagged` (all nine TR sites; body MAC on the step,
+  chain and skipped paths) and `hx inv::invitee_reject_sites_are_tagged` (all nine INV sites, plus the control).
+- Pre-checks now assert the site (`SiteCheck::Untagged` removed): `tr_decrypt_reject_hdr_key` → "header: no key
+  opened"; `tr_decrypt_reject_body_tag` → "body MAC"; `tr_decrypt_reject_ct_pq` → "kem constancy";
+  `tr_decrypt_reject_skipped` → "body MAC"; `same_content_control` → "body MAC"; `inv_fingerprint_compare` →
+  "fingerprint" (twin: the unmodified invitation `Ok`); HX unchanged ("inner open", "first_msg decrypt").
+
+### 12.5 Part F — docs and hygiene
+1. `docs/01-threat-model.md` §7: the dictated "Opening-trial position (R-59, M4)" paragraph, verbatim, below the
+   register table (the table's severity column has no dictated value).
+2. This section and §7.1.
+3. `crates/secmp-testkit/tests/differential.rs`: the `//!` crate documentation now precedes `#![cfg(feature =
+   "kat")]`, so it survives without `kat`. Also `crates/secmp-proto/src/prekeys.rs`: the `sha256` import, used only by
+   `digest_kat`, is gated like it — `cargo clippy -p secmp-proto --all-targets -- -D warnings` (no `kat`) failed on it
+   as an unused import. Both forms clean: `cargo clippy --workspace --all-targets -- -D warnings` and `cargo clippy
+   --workspace --all-targets --all-features --locked -- -D warnings`; also the package form without `kat`
+   (`-p secmp-proto`; the workspace form unifies `secmp-proto/kat` on through `secmp-testkit`).
+
+### 12.6 Checks
+`cargo fmt --all --check` clean; both clippy forms clean (and `-p secmp-proto` without `kat`).
+`cargo nextest run -p secmp-proto --all-features`: 253 passed of 253 (`#[test]` items 246 at `812e1bd` → 253: +3 from
+`e48a99d` — `any_skipped_single_conversion`, `undecodable_skipped_header_rejects_on_every_path`,
+`header_n_reads_bytes_38_to_42` — and +4 here — `skipped_mk_is_selected_without_indexing`,
+`trial_opens_every_candidate_every_call`, `reject_sites_are_tagged`, `invitee_reject_sites_are_tagged`); without
+`kat` 134 of 134; `cargo nextest run -p xtask` 104 of 104 (the four `ct_site*`/pre-check tests came with `260b4bd`).
+`cargo xtask vectors`: 11 suites agree with ref, no frozen file changed.
+
+### 12.7 Push
+`gh run list --branch m04-hx --limit 3` at 2026-10-02 00:53 CEST: PR run 36930469555 (head `812e1bd`) `in_progress`
+(`linux-full` running since 23:42 CEST; linux-fast, windows-native, xwin-cross succeeded): **not pushed**, so no
+`ci-dispatch.yml -f suite=ct` was started (it would have measured `812e1bd`). Unpushed on `m04-hx`: `5005399`,
+`67dc5cb`, `260b4bd`, `e48a99d`, `db6d085`, `8077590`, `2b6373d`, `14e55da` and this report commit.
+
+STOP: none.

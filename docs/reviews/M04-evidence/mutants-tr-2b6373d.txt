@@ -1,0 +1,142 @@
+WEISUNG M4-4 Part D: cargo mutants on tr/ratchet.rs and tr/select.rs (secmp-proto), tree of 2b6373d
+
+Command (the gate's flags of xtask/src/gates.rs `mutants`, restricted to the two files; 3 shards, -j 3):
+  cargo mutants --no-shuffle --output target/mutants-tr-sK --features secmp-crypto/kat --package secmp-proto \
+    -f crates/secmp-proto/src/tr/ratchet.rs -f crates/secmp-proto/src/tr/select.rs \
+    --exclude-re kani_stubs:: --exclude-re FixedEntropy --exclude-re message_key_digest_kat \
+    --exclude-re 'replace mk_digest ' \
+    --exclude-re 'RatchetState::(hk_s_kat|receiving_header_keys_kat|sb_kat)' -j 3 --shard K/3   (K = 0, 1, 2)
+  (secmp-proto is built WITHOUT its feature `kat`, as in the gate; the counting test is #[cfg(test)].)
+
+Shard summaries:
+  ok       Unmutated baseline in 8s build + 4s test
+  36 mutants tested in 47s: 15 caught, 21 unviable
+  ok       Unmutated baseline in 7s build + 4s test
+  36 mutants tested in 47s: 1 missed, 12 caught, 23 unviable
+  ok       Unmutated baseline in 7s build + 4s test
+  35 mutants tested in 71s: 26 caught, 9 unviable
+
+Total: 107 mutants: 53 caught, 1 missed, 53 unviable, 0 timeout
+
+Missed (the only survivor; kat-only code, not built by the gate; added to MUTANT_EXCLUDE_RE in xtask/src/expect.rs
+with this run, so the gate's set is 106 mutants):
+  crates/secmp-proto/src/tr/ratchet.rs:631:9: replace RatchetState::encrypt_padded_kat -> core::result::Result<Sealed, Refused> with Ok(Default::default())
+
+Hand mutants (the early exit F2 / M3 R-04 is about; applied to the working tree, run, reverted):
+  1. RatchetState::open: the skipped trials as a loop that `break`s after the first trial that opened
+     -> cargo nextest run -p secmp-proto --lib: 120 tests, 119 passed, 1 failed:
+        tr::ratchet::trial_work::trial_opens_every_candidate_every_call
+        '3 keys, first skipped candidate: (header trials, entries visited)' left: (3, 6) right: (5, 6)
+  2. lookup_skipped: `break` after the first hit
+     -> 120 tests, 119 passed, 1 failed: trial_opens_every_candidate_every_call
+        '1 keys, first skipped candidate: (header trials, entries visited)' left: (3, 1) right: (3, 2)
+
+Caught:
+  crates/secmp-proto/src/tr/ratchet.rs:234:9: replace Opened::header_counters -> (u32, u32) with (0, 0)
+  crates/secmp-proto/src/tr/ratchet.rs:234:9: replace Opened::header_counters -> (u32, u32) with (0, 1)
+  crates/secmp-proto/src/tr/ratchet.rs:234:9: replace Opened::header_counters -> (u32, u32) with (1, 0)
+  crates/secmp-proto/src/tr/ratchet.rs:234:9: replace Opened::header_counters -> (u32, u32) with (1, 1)
+  crates/secmp-proto/src/tr/ratchet.rs:289:5: replace header_ad -> Vec<u8> with vec![0]
+  crates/secmp-proto/src/tr/ratchet.rs:289:5: replace header_ad -> Vec<u8> with vec![1]
+  crates/secmp-proto/src/tr/ratchet.rs:289:5: replace header_ad -> Vec<u8> with vec![]
+  crates/secmp-proto/src/tr/ratchet.rs:294:5: replace body_ad -> Vec<u8> with vec![0]
+  crates/secmp-proto/src/tr/ratchet.rs:294:5: replace body_ad -> Vec<u8> with vec![1]
+  crates/secmp-proto/src/tr/ratchet.rs:294:5: replace body_ad -> Vec<u8> with vec![]
+  crates/secmp-proto/src/tr/ratchet.rs:311:14: replace >= with < in derive_skipped
+  crates/secmp-proto/src/tr/ratchet.rs:365:30: replace & with ^ in open_header
+  crates/secmp-proto/src/tr/ratchet.rs:365:30: replace & with | in open_header
+  crates/secmp-proto/src/tr/ratchet.rs:383:67: replace & with ^ in lookup_skipped
+  crates/secmp-proto/src/tr/ratchet.rs:383:67: replace & with | in lookup_skipped
+  crates/secmp-proto/src/tr/ratchet.rs:407:5: replace header_n -> Result<u32> with Ok(0)
+  crates/secmp-proto/src/tr/ratchet.rs:407:5: replace header_n -> Result<u32> with Ok(1)
+  crates/secmp-proto/src/tr/ratchet.rs:677:23: replace != with == in RatchetState::seal
+  crates/secmp-proto/src/tr/ratchet.rs:759:9: replace RatchetState::distinct_skipped_keys -> Vec<&SecretBytes<32>> with vec![]
+  crates/secmp-proto/src/tr/ratchet.rs:763:36: delete ! in RatchetState::distinct_skipped_keys
+  crates/secmp-proto/src/tr/ratchet.rs:775:23: replace != with == in RatchetState::open
+  crates/secmp-proto/src/tr/ratchet.rs:78:9: replace Plaintext::as_bytes -> &[u8; BODY_LEN] with Box::leak(Box::new([0; BODY_LEN]))
+  crates/secmp-proto/src/tr/ratchet.rs:78:9: replace Plaintext::as_bytes -> &[u8; BODY_LEN] with Box::leak(Box::new([1; BODY_LEN]))
+  crates/secmp-proto/src/tr/ratchet.rs:838:13: replace & with ^ in RatchetState::open_chain
+  crates/secmp-proto/src/tr/ratchet.rs:838:13: replace & with | in RatchetState::open_chain
+  crates/secmp-proto/src/tr/ratchet.rs:839:12: delete ! in RatchetState::open_chain
+  crates/secmp-proto/src/tr/ratchet.rs:950:9: replace RatchetState::apply with ()
+  crates/secmp-proto/src/tr/select.rs:111:16: replace |= with &= in <impl core::ops::BitOrAssign for CellChoice>::bitor_assign
+  crates/secmp-proto/src/tr/select.rs:111:9: replace <impl core::ops::BitOrAssign for CellChoice>::bitor_assign with ()
+  crates/secmp-proto/src/tr/select.rs:190:14: replace > with < in skip_plan
+  crates/secmp-proto/src/tr/select.rs:190:14: replace > with == in skip_plan
+  crates/secmp-proto/src/tr/select.rs:190:14: replace > with >= in skip_plan
+  crates/secmp-proto/src/tr/select.rs:202:5: replace evicted -> usize with 0
+  crates/secmp-proto/src/tr/select.rs:202:5: replace evicted -> usize with 1
+  crates/secmp-proto/src/tr/select.rs:50:23: replace & with ^ in first_opened
+  crates/secmp-proto/src/tr/select.rs:50:23: replace & with | in first_opened
+  crates/secmp-proto/src/tr/select.rs:50:25: delete ! in first_opened
+  crates/secmp-proto/src/tr/select.rs:51:20: replace |= with &= in first_opened
+  crates/secmp-proto/src/tr/select.rs:74:31: replace & with ^ in decide
+  crates/secmp-proto/src/tr/select.rs:74:31: replace & with | in decide
+  crates/secmp-proto/src/tr/select.rs:75:17: delete ! in decide
+  crates/secmp-proto/src/tr/select.rs:75:26: replace & with ^ in decide
+  crates/secmp-proto/src/tr/select.rs:75:26: replace & with | in decide
+  crates/secmp-proto/src/tr/select.rs:76:16: delete ! in decide
+  crates/secmp-proto/src/tr/select.rs:76:25: replace & with ^ in decide
+  crates/secmp-proto/src/tr/select.rs:76:25: replace & with | in decide
+  crates/secmp-proto/src/tr/select.rs:76:27: delete ! in decide
+  crates/secmp-proto/src/tr/select.rs:76:43: replace & with ^ in decide
+  crates/secmp-proto/src/tr/select.rs:76:43: replace & with | in decide
+  crates/secmp-proto/src/tr/select.rs:82:9: delete match arm 1 in decide
+  crates/secmp-proto/src/tr/select.rs:83:9: delete match arm 2 in decide
+  crates/secmp-proto/src/tr/select.rs:84:9: delete match arm 3 in decide
+  crates/secmp-proto/src/tr/select.rs:99:9: replace CellChoice::assign with ()
+
+Unviable:
+  crates/secmp-proto/src/tr/ratchet.rs:163:9: replace Refused::error -> Error with Default::default()
+  crates/secmp-proto/src/tr/ratchet.rs:169:9: replace Refused::into_state -> RatchetState with Default::default()
+  crates/secmp-proto/src/tr/ratchet.rs:175:9: replace Refused::into_parts -> (RatchetState, Error) with (Default::default(), Default::default())
+  crates/secmp-proto/src/tr/ratchet.rs:208:9: replace Sealed::persist -> core::result::Result<(RatchetState, Cell), E> with Ok((Default::default(), Default::default()))
+  crates/secmp-proto/src/tr/ratchet.rs:227:9: replace Opened::plaintext -> &Plaintext with Box::leak(Box::new(Default::default()))
+  crates/secmp-proto/src/tr/ratchet.rs:248:9: replace Opened::commit -> core::result::Result<(RatchetState, Plaintext), E> with Ok((Default::default(), Default::default()))
+  crates/secmp-proto/src/tr/ratchet.rs:284:5: replace copy32 -> Result<SecretBytes<32>> with Ok(Default::default())
+  crates/secmp-proto/src/tr/ratchet.rs:306:5: replace derive_skipped -> Result<(SecretBytes<32>, Vec<SkippedKey>)> with Ok((Default::default(), vec![Default::default()]))
+  crates/secmp-proto/src/tr/ratchet.rs:306:5: replace derive_skipped -> Result<(SecretBytes<32>, Vec<SkippedKey>)> with Ok((Default::default(), vec![]))
+  crates/secmp-proto/src/tr/ratchet.rs:357:5: replace open_header -> Trial with Default::default()
+  crates/secmp-proto/src/tr/ratchet.rs:377:5: replace lookup_skipped -> (CellChoice, u32, Zeroizing<[u8; 32]>) with (Default::default(), 0, Zeroizing::from([0; 32]))
+  crates/secmp-proto/src/tr/ratchet.rs:377:5: replace lookup_skipped -> (CellChoice, u32, Zeroizing<[u8; 32]>) with (Default::default(), 0, Zeroizing::from([1; 32]))
+  crates/secmp-proto/src/tr/ratchet.rs:377:5: replace lookup_skipped -> (CellChoice, u32, Zeroizing<[u8; 32]>) with (Default::default(), 0, Zeroizing::from_iter([[0; 32]]))
+  crates/secmp-proto/src/tr/ratchet.rs:377:5: replace lookup_skipped -> (CellChoice, u32, Zeroizing<[u8; 32]>) with (Default::default(), 0, Zeroizing::from_iter([[1; 32]]))
+  crates/secmp-proto/src/tr/ratchet.rs:377:5: replace lookup_skipped -> (CellChoice, u32, Zeroizing<[u8; 32]>) with (Default::default(), 0, Zeroizing::new())
+  crates/secmp-proto/src/tr/ratchet.rs:377:5: replace lookup_skipped -> (CellChoice, u32, Zeroizing<[u8; 32]>) with (Default::default(), 0, Zeroizing::new([0; 32]))
+  crates/secmp-proto/src/tr/ratchet.rs:377:5: replace lookup_skipped -> (CellChoice, u32, Zeroizing<[u8; 32]>) with (Default::default(), 0, Zeroizing::new([1; 32]))
+  crates/secmp-proto/src/tr/ratchet.rs:377:5: replace lookup_skipped -> (CellChoice, u32, Zeroizing<[u8; 32]>) with (Default::default(), 1, Zeroizing::from([0; 32]))
+  crates/secmp-proto/src/tr/ratchet.rs:377:5: replace lookup_skipped -> (CellChoice, u32, Zeroizing<[u8; 32]>) with (Default::default(), 1, Zeroizing::from([1; 32]))
+  crates/secmp-proto/src/tr/ratchet.rs:377:5: replace lookup_skipped -> (CellChoice, u32, Zeroizing<[u8; 32]>) with (Default::default(), 1, Zeroizing::from_iter([[0; 32]]))
+  crates/secmp-proto/src/tr/ratchet.rs:377:5: replace lookup_skipped -> (CellChoice, u32, Zeroizing<[u8; 32]>) with (Default::default(), 1, Zeroizing::from_iter([[1; 32]]))
+  crates/secmp-proto/src/tr/ratchet.rs:377:5: replace lookup_skipped -> (CellChoice, u32, Zeroizing<[u8; 32]>) with (Default::default(), 1, Zeroizing::new())
+  crates/secmp-proto/src/tr/ratchet.rs:377:5: replace lookup_skipped -> (CellChoice, u32, Zeroizing<[u8; 32]>) with (Default::default(), 1, Zeroizing::new([0; 32]))
+  crates/secmp-proto/src/tr/ratchet.rs:377:5: replace lookup_skipped -> (CellChoice, u32, Zeroizing<[u8; 32]>) with (Default::default(), 1, Zeroizing::new([1; 32]))
+  crates/secmp-proto/src/tr/ratchet.rs:384:15: replace |= with &= in lookup_skipped
+  crates/secmp-proto/src/tr/ratchet.rs:438:5: replace select_header -> Result<Selected> with Ok(Default::default())
+  crates/secmp-proto/src/tr/ratchet.rs:510:9: replace RatchetState::init_initiator -> Result<Self> with Ok(Default::default())
+  crates/secmp-proto/src/tr/ratchet.rs:526:9: replace RatchetState::init_initiator_with -> Result<Self> with Ok(Default::default())
+  crates/secmp-proto/src/tr/ratchet.rs:570:9: replace RatchetState::init_responder -> Result<Self> with Ok(Default::default())
+  crates/secmp-proto/src/tr/ratchet.rs:601:9: replace RatchetState::encrypt -> core::result::Result<Sealed, Refused> with Ok(Default::default())
+  crates/secmp-proto/src/tr/ratchet.rs:614:9: replace RatchetState::encrypt_with -> core::result::Result<Sealed, Refused> with Ok(Default::default())
+  crates/secmp-proto/src/tr/ratchet.rs:639:9: replace RatchetState::encrypt_body -> core::result::Result<Sealed, Refused> with Ok(Default::default())
+  crates/secmp-proto/src/tr/ratchet.rs:671:9: replace RatchetState::seal -> Result<(SecretBytes<32>, u32, Cell, [u8; 32])> with Ok((Default::default(), 0, Default::default(), [0; 32]))
+  crates/secmp-proto/src/tr/ratchet.rs:671:9: replace RatchetState::seal -> Result<(SecretBytes<32>, u32, Cell, [u8; 32])> with Ok((Default::default(), 0, Default::default(), [1; 32]))
+  crates/secmp-proto/src/tr/ratchet.rs:671:9: replace RatchetState::seal -> Result<(SecretBytes<32>, u32, Cell, [u8; 32])> with Ok((Default::default(), 1, Default::default(), [0; 32]))
+  crates/secmp-proto/src/tr/ratchet.rs:671:9: replace RatchetState::seal -> Result<(SecretBytes<32>, u32, Cell, [u8; 32])> with Ok((Default::default(), 1, Default::default(), [1; 32]))
+  crates/secmp-proto/src/tr/ratchet.rs:714:9: replace RatchetState::decrypt -> core::result::Result<Opened, Refused> with Ok(Default::default())
+  crates/secmp-proto/src/tr/ratchet.rs:726:9: replace RatchetState::decrypt_with -> core::result::Result<Opened, Refused> with Ok(Default::default())
+  crates/secmp-proto/src/tr/ratchet.rs:759:9: replace RatchetState::distinct_skipped_keys -> Vec<&SecretBytes<32>> with vec![Box::leak(Box::new(Default::default()))]
+  crates/secmp-proto/src/tr/ratchet.rs:773:9: replace RatchetState::open -> Result<(Update, Plaintext)> with Ok((Default::default(), Default::default()))
+  crates/secmp-proto/src/tr/ratchet.rs:829:9: replace RatchetState::open_chain -> Result<(Update, Plaintext)> with Ok((Default::default(), Default::default()))
+  crates/secmp-proto/src/tr/ratchet.rs:86:9: replace Plaintext::content -> Result<Content> with Ok(Default::default())
+  crates/secmp-proto/src/tr/ratchet.rs:874:9: replace RatchetState::open_step -> Result<(Update, Plaintext)> with Ok((Default::default(), Default::default()))
+  crates/secmp-proto/src/tr/ratchet.rs:878:13: replace && with || in RatchetState::open_step
+  crates/secmp-proto/src/tr/select.rs:105:9: replace <impl From<Choice> for CellChoice>::from -> Self with Default::default()
+  crates/secmp-proto/src/tr/select.rs:117:5: replace first_opened_cell -> (Vec<CellChoice>, CellChoice) with (vec![Default::default()], Default::default())
+  crates/secmp-proto/src/tr/select.rs:117:5: replace first_opened_cell -> (Vec<CellChoice>, CellChoice) with (vec![], Default::default())
+  crates/secmp-proto/src/tr/select.rs:131:5: replace path -> Path with Default::default()
+  crates/secmp-proto/src/tr/select.rs:189:5: replace skip_plan -> Result<SkipPlan> with Ok(Default::default())
+  crates/secmp-proto/src/tr/select.rs:24:27: replace << with >>
+  crates/secmp-proto/src/tr/select.rs:46:5: replace first_opened -> (Vec<Choice>, Choice) with (vec![Default::default()], Default::default())
+  crates/secmp-proto/src/tr/select.rs:46:5: replace first_opened -> (Vec<Choice>, Choice) with (vec![], Default::default())
+  crates/secmp-proto/src/tr/select.rs:74:5: replace decide -> Path with Default::default()

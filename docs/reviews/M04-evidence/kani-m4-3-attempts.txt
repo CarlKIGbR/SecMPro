@@ -1,0 +1,134 @@
+WEISUNG M4-3 — Kani attempts for K2, K3, K4a (single-harness runs before the gate run)
+Date 2026-10-01, this Mac (M1 Pro, aarch64-apple-darwin), Kani 0.68.0 / CBMC 6.11.0. Every run below shared the CPU
+with 1–3 other CBMC runs, so wall times are upper bounds of an idle machine's. Command per run:
+  cargo kani --package secmp-proto -Z stubbing --exact --harness kani_proofs::<name>
+wrapped in target/tmp/peakrss.py (exit code, wall time). Times "cap" = the run was stopped at its time limit.
+
+K2 — Outer through the real unpad (spec §4.1 scan over 12018 bytes)
+  1. full buffer, as first written: [u8; 12019] symbolic, symbolic len 0..=12019, unwind 12020, unpad called a
+     second time on Ok. 20:37:51 → cap 1900 s; no verdict; Kani's symbolic execution was unwinding the rposition
+     loop of unpad at iteration 1720 of 12018 (first scan).
+  2. full buffer, exactly as the brief: [u8; 12018] symbolic, fixed length, one scan, unwind 12020
+     (probe_full_fixed). 21:18:52 → cap 1830 s; no verdict; rposition iteration 2138 of 12018.
+     → > 30 min twice: split per the brief.
+  Calibration (same scan, fixed length, symbolic last 600 bytes, one scan): SUCCESSFUL, symex 153 s, 273 s total.
+  Symex time grows roughly quadratically with the number of scanned bytes (symbolic or concrete alike, see K2b).
+  3. K2a kani_outer_unpad_total: last 2700 bytes symbolic after a fixed valid field prefix, one scan, unwind 2702.
+     21:18:53 → cap 7200 s (2 h, 23:18:53); no verdict. The scan's unwinding reached iteration 2700 at 22:13; after
+     that CBMC wrote nothing and printed no "Runtime Symex" line (symbolic execution unfinished after 65 min more).
+     The same harness inside a gate run started 22:41 (e1630b1) was reached at ≈ 22:55 and stopped at 23:23.
+     → K2 cannot be met in time either way: STOP (M04-report §11.1); kani_outer_unpad_total is the harness of
+       69d1320 again (commit 648bd3f). The K2a source as committed in e1630b1 is at the end of this file.
+  4. K2b kani_outer_unpad_boundaries (concrete boundary cases over the whole 12018 bytes):
+     a. with a symbolic short input (len < 12018) as well: CBMC unwound the scan over symbolic bytes on the
+        infeasible path past `take(12018)` (2692 iterations after ≈ 24 min); stopped.
+     b. concrete cases only (all-zero 12018 bytes; marker at 9361/9362/9363; 12019 bytes): 21:51:20 → stopped
+        22:09:02 (≈ 18 min) at rposition iteration 2370 of the all-zero buffer's 12018-byte scan.
+     → not added: each case scans ≥ 2656 bytes (the marker cases) or 12018 bytes (all-zero). The marker cases are
+       inputs of K2a (prefix bytes 0…9317 = outer_fields, the rest in K2a's symbolic tail); length 12019 is
+       covered for every content by the stubbed K2 (kept unchanged).
+
+K3 — kani_hx_grouping
+  1. N = MAX_PARTIAL_GROUPS = 8, 9 ids, ≤ 10 inserts, model removal by copy_within, unwind 11. 20:44:06 → cap
+     1900 s; symex 1716.51 s, 154917 VCCs (40153 after simplification), killed while solving.
+  2. Fallback N = 3, 4 ids, ≤ 6 inserts, copy_within model, unwind 7: FAILED in 447 s,
+     "assertion failed: now[k] == expected" (kani_proofs.rs:610). Concrete playback (also with
+     -Z unstable-options --no-slice-formula, 1018 s) gives ids [235, 255, 189, 171] and the inserts
+     (255,0,245) (171,0,131) (235,1,80) (189,1,113). That sequence does NOT fail: natively (a standalone copy of
+     responder.rs's Groups/insert/remove plus the model, target/tmp/k3repro.rs: implementation = model after every
+     step) nor under Kani with the values concrete (probe_k3_concrete: SUCCESSFUL, 6.5 s). The model's
+     `order.copy_within` (ptr::copy over a symbolic count) was replaced by an element loop (drop_at), same meaning.
+  3. Fallback with the element loop: SUCCESSFUL in 529 s (symex 141 s, 38187 VCCs). ← the committed K3
+  4. N = 8 again with the element loop, unwind 11: 22:09:45 → cap 1830 s, still in symbolic execution.
+     → bound used: the brief's fallback N = 3, 4 ids, ≤ 6 inserts.
+
+K4a — kani_accept_opk_delete_only_on_success (≤ 6 chunks, 3 init_ids, contract store)
+  1. unwind 10: FAILED in 521 s only on "unwinding assertion loop 0" of memcmp (the 16-byte ld_id compare).
+  2. unwind 17: stopped after ≈ 40 min still in symex (Groups::remove's loop unrolled to 16 on infeasible paths).
+  3. unwind 10, ld_id compared at one symbolic index (same_bytes): SUCCESSFUL in 651 s (symex 386 s, 31350 VCCs);
+     cover "a rejected complete group, then a group of another init_id commits": SATISFIED. ← the committed K4a
+
+K4b and the real-store part of K4a: STOP — kani-k4-store-probe.txt.
+
+---- K2a source as committed in e1630b1 (removed again in 648bd3f) ----
+/// `Outer` (D.4) on every input of 0…12019 bytes, with the ISO/IEC 7816-4 scan stubbed by an over-approximation (any
+/// proper prefix, or a rejection; the real scan is `kani_outer_unpad_total`): the field decoder never panics on any
+/// field string, and the decoder accepts only an input of exactly 12018 bytes. (Before WEISUNG M4-3 this harness was
+/// `kani_outer_unpad_total`; it is kept for the field strings and lengths the real-scan harness does not reach.)
+#[kani::proof]
+#[kani::stub(crate::codec::unpad, crate::codec::kani_stubs::unpad)]
+fn kani_outer_fields_total() {
+    let bytes: [u8; OUTER_PADDED_LEN + 1] = kani::any();
+    let len: usize = kani::any();
+    kani::assume(len <= OUTER_PADDED_LEN + 1);
+    let input = bytes.get(..len).unwrap_or_default();
+    if Outer::decode(input).is_ok() {
+        assert!(len == OUTER_PADDED_LEN);
+    }
+}
+
+/// `kani_outer_unpad_total`: the symbolic tail of the 12018-byte input — the last 44 field bytes, the marker position
+/// 9362 and all 2655 pad bytes after it; the 9318 bytes before it are [`outer_fields`].
+const OUTER_TAIL: usize = 2700;
+
+/// A fixed `Outer` field string the decoder accepts: `ver` = 1, `EK_I` = the X25519 base point (u = 9, not of low
+/// order), every other byte 0x5a (ids, ciphertexts, nonce and commitment are not checked by the decoder; 0x5a is
+/// neither the marker nor zero, so a scan that reaches these bytes stops at the first one).
+fn outer_fields() -> [u8; OUTER_PADDED_LEN + 1] {
+    let mut b = [0x5a_u8; OUTER_PADDED_LEN + 1];
+    b[0] = 1;
+    b[1] = 9;
+    b[2..33].fill(0);
+    b
+}
+
+/// `Outer::decode(input)` through the real ISO/IEC 7816-4 scan (`unpad`, spec §4.1; nothing stubbed): no panic; an
+/// accepted input has exactly 12018 bytes, byte 9362 is the marker 0x80 and bytes 9363…12017 are 0x00 (one symbolic
+/// index stands for every index) — so the last non-zero byte is at 9362 and the `unpad` output the decoder consumed
+/// in full is the first 9362 bytes, the `Outer` fields (a second `unpad` call in the harness to measure that length
+/// would repeat the scan, whose cost is quadratic in its length; see `outer_tail`). A rejection is the uniform
+/// `Rejected`. Returns whether `input` was accepted.
+fn outer_accepts_exact_padding(input: &[u8]) -> bool {
+    match Outer::decode(input) {
+        Ok(_) => {
+            assert!(input.len() == OUTER_PADDED_LEN);
+            assert!(input.get(OUTER_LEN) == Some(&0x80));
+            let j: usize = kani::any();
+            kani::assume(j > OUTER_LEN && j < OUTER_PADDED_LEN);
+            assert!(input.get(j) == Some(&0));
+            true
+        }
+        Err(e) => {
+            assert!(e == Error::Rejected);
+            false
+        }
+    }
+}
+
+/// [`outer_accepts_exact_padding`] on every 12018-byte input whose last `TAIL` bytes are symbolic, after the fixed
+/// [`outer_fields`] prefix. An accepted input has its marker in the tail: the scan reaches the prefix only through an
+/// all-zero tail (more than `TAIL` trailing zero bytes), and such an input is rejected. One scan per input: Kani's
+/// unwinding of the scan costs time roughly quadratic in its length (M4 report §11).
+fn outer_tail<const TAIL: usize>() {
+    let prefix = OUTER_PADDED_LEN - TAIL;
+    let mut bytes = outer_fields();
+    let tail: [u8; TAIL] = kani::any();
+    bytes[prefix..OUTER_PADDED_LEN].copy_from_slice(&tail);
+    let accepted = outer_accepts_exact_padding(&bytes[..OUTER_PADDED_LEN]);
+    if accepted {
+        assert!(OUTER_LEN.checked_sub(prefix).and_then(|k| tail.get(k)) == Some(&0x80));
+    }
+    kani::cover!(accepted, "an input is accepted");
+}
+
+/// K2a. `Outer` (D.4) through the real `unpad` on every 12018-byte input whose last 2700 bytes are symbolic (every
+/// field-string length from 9318 bytes up, every marker position from 9318, every pad content) after a fixed valid
+/// field prefix: see [`outer_tail`]. Not covered: other contents of the first 9318 bytes, among them an all-zero
+/// input (a scan over more than the last 2700 bytes did not finish within 30 minutes; `kani_outer_fields_total`
+/// covers every field string and length with the scan stubbed).
+#[kani::proof]
+#[kani::unwind(2702)] // the marker scan over the 2700 symbolic bytes and the first prefix byte (non-zero)
+fn kani_outer_unpad_total() {
+    outer_tail::<OUTER_TAIL>();
+}
+

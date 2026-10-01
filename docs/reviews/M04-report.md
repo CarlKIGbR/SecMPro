@@ -65,7 +65,7 @@ Both branches are based on `2e5953e` (worktrees `.claude/worktrees/agent-a77420b
 
 ## 3. Evidence (docs/reviews/M04-evidence/)
 `ci-fast-aarch64-apple-darwin-local.txt` (PASS), `vectors-xtask.txt` (11 suites identical), `kani-xtask-step.txt` (`cargo xtask step --strict kani`: 24/24 harnesses verified, 847 s, Kani 0.68.0), `kani-k5-first-run-harness-overflow.txt` (first K5 run: failing check `kani_cell_plaintext_decode_total.assertion.1` = `attempt to add with overflow` at `len + 1` in the HARNESS' own assumption, not the decoder; fixed by `len >= PT_LEN - 1`; V-3 decoder unit tests `cell_plaintext_decode_rejects_i_ge_total` / `_total_ne_3` pass, the M2 decoder already rejects both), `fuzz-m4-local-120s.txt` (7 targets × 120 s, no findings).
-Kani bounds: K1 none; K2 `unpad` stubbed (any proper prefix or rejection); K3 `Groups<u8,u8,2>`, ≤ 4 chunks over 3 init_ids, unwind 6 (44 s); K4 production bound 8 slots, ≤ 4 chunks over 3 init_ids, unwind 10 (250 s); K5 unwind 4010 (50 s).
+Kani bounds (before WEISUNG M4-3): K1 none; K2 `unpad` stubbed (any proper prefix or rejection); K3 `Groups<u8,u8,2>`, ≤ 4 chunks over 3 init_ids, unwind 6 (44 s); K4 production bound 8 slots, ≤ 4 chunks over 3 init_ids, unwind 10 (250 s); K5 unwind 4010 (50 s). Current bounds and uncovered regions of K2–K4: §11.
 
 ### 3.1 ProVerif — `formal/hx.pv` (Phase B, B1)
 
@@ -193,3 +193,69 @@ Phase B (BRIEF M4-PV): run 36885710027 was `in_progress` at the start (Part 0) a
 - D (F10): `Accepted.routes: Zeroizing<Vec<RouteDescriptor>>`, `InviteeAccepted.invitation: Zeroizing<InvitationV1>`, `Host` holds `Zeroizing<Vec<u8>>`; `Zeroize` impls for `RelayRef`/`RelayQueue`/`RouteDescriptor`/`InvitationV1` (host, onion, akc, relay_fp, sid, ld_id, inv_sid); `secmp-crypto` re-exports `Zeroize` (no new dependency). msg-id fields are not held by `Accepted`/`InviteeAccepted`: nothing to wrap there.
 - E: `delete_opk` hits remaining: the method itself and its impls (`prekeys.rs:330,721,724`) and the Kani stub (`kani_proofs.rs:487`).
 - Unpushed: PR run 36885710027 `in_progress`.
+
+## 11. WEISUNG M4-3 (Kani K2, K3, K4 strengthened)
+§1 state at start: head `69d1320`; `git log origin/m04-hx..HEAD` = 11 commits; status: only untracked `.claude/`.
+Commits: `e1630b1` (harnesses, xtask list), `648bd3f` (K2 back to the stubbed scan after K2a gave no verdict in 2 h),
+then this report. Evidence: `M04-evidence/kani-m4-3-attempts.txt` (every single-harness attempt with its time, and the
+K2a source), `kani-k4-store-probe.txt` (the K4b STOP), `kani-xtask-step-648bd3f.txt` (the gate run). The single runs
+shared the CPU with 1–3 other CBMC runs.
+
+| Harness | Result | Bound used | Not covered |
+|---|---|---|---|
+| K2 `kani_outer_unpad_total` | unchanged (STOP §11.1) | as before: `unpad` stubbed (any proper prefix or rejection); every input of 0…12019 bytes | the real ISO/IEC 7816-4 scan at 12018 bytes, and the assertion that an accepted input's field string is the 9362-byte `Outer` (the scan itself is proven by `padding` for sizes ≤ 32) |
+| K2 full buffer | no verdict, 2 attempts | real `unpad`, 12018 symbolic bytes, unwind 12020 | — |
+| K2a (last 2700 bytes symbolic) | no verdict in 2 h | real `unpad`, fixed valid field prefix + 2700 symbolic bytes, unwind 2702 | — |
+| K2b | not added | — | each case scans ≥ 2656 bytes, concrete or not |
+| K3 `kani_hx_grouping` | VERIFIED, 275 s in the gate (529 s alone, shared CPU) | **fallback** N = 3 slots, 4 distinct symbolic ids, ≤ 6 inserts `(init_id, i ≤ 2, symbolic u8 tag)`; independent model (arrival order, first-seen tag per `i`); a completed group removed by `Groups::remove` as `drive` does; unwind 7 | N = 4…8, more ids or inserts; the 4006-byte chunk type (u8 stand-in) |
+| K4a `kani_accept_opk_delete_only_on_success` | VERIFIED, 293 s in the gate (651 s alone, shared CPU) | `drive` with the production 8 slots; ≤ 6 chunks of 3 init_ids (two complete groups); 4 nondeterministic step outcomes per group; symbolic `opk_id`, `ld_id` and store state (OPK present, record present, commit durable); commit ⇔ a processed group passed every step, no processing after it; the store untouched at every processing; `Ok` ⇔ the commit succeeded, then OPK and record gone; `Err` ⇒ store as before; cover "a rejected complete group, then a group of another init_id commits" SATISFIED; unwind 10 | the real `MemoryPrekeyStore` (§11.1); > 6 chunks |
+| K4b `kani_commit_accept_atomic` | not added — STOP §11.1 | — | `MemoryPrekeyStore::commit_accept` (concrete tests: `accept_success_deletes_exactly_that_opk`, `accept_success_consumes_record_and_opk`) |
+
+Harness count 24 → 24 (K3 and K4a changed in place; K2 unchanged). Times of the attempts that did not finish
+(`kani-m4-3-attempts.txt`): K2 full buffer — 1900 s cap at unwinding iteration 1720 of 12018 (first form, symbolic
+length), 1830 s cap at iteration 2138 of 12018 (exactly as the brief: fixed 12018 bytes, one scan); K2a — 7200 s cap,
+the scan unwound by 22:13 (54 min), then no verdict; K2b — ≈ 18 min for 2370 of the all-zero buffer's 12018 scan
+iterations; K3 at N = 8, 9 ids, 10 inserts — 1900 s cap (symex 1716 s, 40153 VCCs left) and, with the corrected
+model, 1830 s cap still in symex. Kani's symbolic execution of the `unpad` scan (`iter().rposition`) costs time
+roughly quadratic in the scanned length, for symbolic and concrete bytes alike (600 symbolic bytes: 273 s), and every
+accepted input needs a scan of 2656 bytes (from byte 12017 down to the marker at 9362).
+
+Deviations from the brief:
+1. `crates/secmp-proto/src/hx/responder.rs` (outside the file list): `#[cfg(kani)] Groups::remove_completed`, which
+   calls the private `Groups::remove` — the function `drive` removes a completed group with, which the brief requires
+   K3 to call. Compiled only under Kani, like the existing `#[cfg(kani)] Groups::get`; no product build changes.
+2. K3's model removes entries with an element loop: with `copy_within` (a `ptr::copy` over a symbolic count) Kani
+   reported a counterexample (`now[k] == expected`) whose inputs pass natively and under Kani with the same values
+   concrete — a spurious result in the harness's model, not in `insert`/`remove` (attempts file, K3 2–3).
+3. K4a compares the 16-byte `ld_id` at one symbolic index (`same_bytes`, as the M2 harnesses do): a `==` on the
+   array is a `memcmp` loop that needs unwind 17, and unwind 17 made `Groups::remove`'s loop unroll to 16 (> 40 min).
+
+### 11.1 Blocked — WEISUNG M4-3 (STOP)
+1. **K2: the real scan at 12018 bytes does not finish in time.** Harness: K2 `kani_outer_unpad_total` (full buffer)
+   and its fallback K2a. Failing check: none — no verdict (full buffer: > 30 min twice; K2a: > 2 h, symbolic execution
+   unfinished). Property: not contradicted, not proven. K2b is not feasible either (above). K2 stays as in `69d1320`.
+   Options: (a) a one-off K2a run outside the gate with a longer limit, if the evidence may come from outside CI;
+   (b) a hand-written marker scan in `codec::unpad` with a Kani loop contract (`-Z loop-contracts`), proven once
+   for all sizes — a product-code change; (c) accept `padding` (the size-generic `pad`/`unpad` for every size ≤ 32)
+   plus the stubbed K2 as the coverage.
+2. **K4b and the real store of K4a.** Harness: K4b `kani_commit_accept_atomic`, and K4a's "the store in the harness
+   is the real `MemoryPrekeyStore`". Failing check: `secmp_sys_mem::secret_page::os::Mapping::new.unsupported_construct.1`
+   — "call to foreign "C" function `mmap` is not currently supported by Kani" (probe
+   `MemoryPrekeyStore::starting_at(1, 1).issue_opk(&mut OsEntropy)`); harness-file stubs of the libc calls are not
+   applied by Kani to foreign functions; with `-Z c-ffi`: "Function `mmap` with missing definition is unreachable"
+   (`kani-k4-store-probe.txt`). Property: not contradicted — the store cannot be built under Kani: every OPK, SPK
+   generation and record comes through the sealed `Entropy` (only `OsEntropy` without `kat`) into `LockedSecret` =
+   `secmp_sys_mem::SecretPage` (mmap + mlock; on Linux first the variadic `syscall(memfd_secret)`), all with private
+   fields, so no stub in `secmp-proto` can construct them. What would unblock it (a product change, not made): a
+   `cfg(kani)` heap backend in `secmp-sys-mem` beside its `cfg(miri)` one (`secret_page/heap.rs`), or `cfg(kani)`
+   constructors of `OpkSecrets`/`SpkGeneration`. K4a was strengthened with a store model that keeps
+   `commit_accept`'s contract instead.
+
+Questions: K2 — which of (a)–(c)? K4 — may `secmp-sys-mem` get a `cfg(kani)` heap backend (as for Miri) so that K4b
+and K4a run on the real `MemoryPrekeyStore`, or are K4a's contract model plus the two concrete `commit_accept` tests
+the accepted coverage?
+
+Gate: `cargo xtask step --strict kani` on `648bd3f`: PASS, 24/24 harnesses verified, 1084 s (step), peak RSS 6.64 GiB,
+no other CBMC run in parallel; K2 46 s, K3 275 s, K4a 293 s, K5 41 s (`kani-xtask-step-648bd3f.txt`).
+Push: `gh run list --branch m04-hx --limit 3` at 23:43 CEST showed no run `in_progress`/`queued` (36885710027 and
+36862814521 completed): pushed with this commit.

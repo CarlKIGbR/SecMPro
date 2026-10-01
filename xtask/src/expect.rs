@@ -258,17 +258,19 @@ pub(crate) const MUTANT_PACKAGES: &[&str] = &["secmp-crypto", "secmp-proto"];
 pub(crate) const MUTANT_EXCLUDE_FILES: &[&str] = &["crates/secmp-proto/src/kani_proofs.rs"];
 /// Mutant names (regex, `cargo mutants --exclude-re`) excluded: `kani_stubs::` for the reason above; and (M3) the
 /// `secmp-proto` code compiled only with `secmp-proto`'s own feature `kat` — the vector, test and bench tooling of
-/// SecMP-TR (`tr::FixedEntropy`, the message-key digests, the header-key and `sb` accessors), never in a shipped
-/// build. The gate builds `secmp-proto` without that feature (its `kat` tests — the `tr` vectors, generator and
-/// property tests — take minutes, per mutant), so every mutant of that code would survive unbuilt (M3 local run: 27
-/// such survivors). The `kat` step runs it: `tests/tr_vectors.rs` and `tests/tr_generator.rs` reproduce every byte
-/// `FixedEntropy` supplies, the property tests check the digests.
+/// SecMP-TR (`tr::FixedEntropy`, the message-key digests, the header-key and `sb` accessors, and (M4)
+/// `encrypt_padded_kat`), never in a shipped build. The gate builds `secmp-proto` without that feature (its `kat`
+/// tests — the `tr` vectors, generator and property tests — take minutes, per mutant), so every mutant of that code
+/// would survive unbuilt (M3 local run: 27 such survivors; M4 local run on `tr/ratchet.rs` 2026-10-02: 1,
+/// `encrypt_padded_kat`). The `kat` step runs it: `tests/tr_vectors.rs` and `tests/tr_generator.rs` reproduce every
+/// byte `FixedEntropy` supplies, the `hx` suite's generator (`tests/common/hx_gen.rs`) seals its padded first
+/// messages with `encrypt_padded_kat`, the property tests check the digests.
 pub(crate) const MUTANT_EXCLUDE_RE: &[&str] = &[
     "kani_stubs::",
     "FixedEntropy",
     "message_key_digest_kat",
     "replace mk_digest ",
-    "RatchetState::(hk_s_kat|receiving_header_keys_kat|sb_kat)",
+    "RatchetState::(hk_s_kat|receiving_header_keys_kat|sb_kat|encrypt_padded_kat)",
 ];
 
 /// Packages run under Miri (docs/06 §4); M3: `secmp-proto` (M2 review F3).

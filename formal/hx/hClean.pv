@@ -1,0 +1,96 @@
+(* SPDX-License-Identifier: AGPL-3.0-or-later *)
+(* formal/hx/hClean.pv — session hClean of CLAIMS §HX, one file per session (O-18, ADR-046) over the library
+   formal/hx.pvl (model, abstractions, devices: its header). Run: proverif -lib formal/hx.pvl formal/hx/hClean.pv
+
+   Row (formal/hx.pvl 3.): I's inv. c · PubIKS yes · LeakInv ph 0 · RevealLT(R) - · RevealLT(I) - · RevealSPK - ·
+   RevealOPK - · DHO - · KEMO - · layers plain (O-17).
+   Queries (RESULT lines in this order; expected per the CLAIMS gate rule):
+     no begin event:    H1 (2) true · H11 (4) false
+     begin BundleSigned: H6a (1) true
+     begin IStart:      H5 (1) true
+     begin RAccept/IConfirm: H6b (1) true
+     begin InvIssued:   H10 (1) true
+   — 10 RESULT lines.
+*)
+
+const hClean: tagt.
+
+(* Secrecy assumptions (formal/hx.pvl 7.): the keys this session never reveals, and those it reveals only in
+   phase 1 (phase 0) *)
+not x: bitstring; attacker(dhsk(hClean, eph(x))).
+not x: bitstring; attacker(kemsk(hClean, eph(x))).
+not attacker(iksig(hClean, pR)).
+not attacker(dhsk(hClean, kIKR)).
+not attacker(iksig(hClean, pI)).
+not attacker(dhsk(hClean, kIKI)).
+not attacker(dhsk(hClean, kSPK)).
+not attacker(kemsk(hClean, kSPK)).
+not attacker(kemsk(hClean, kRPK)).
+
+(* Queries (CLAIMS.md §HX), grouped by begin event (O-19); IKSPublic of the honest parties:
+   iks(vk(iksig(s, pR)), exp(g, dhsk(s, kIKR))) and iks(vk(iksig(s, pI)), exp(g, dhsk(s, kIKI))). *)
+
+query iI: bitstring, iR: bitstring, b: bitstring, tr: bitstring, rt: bitstring, sk: key, ld: bitstring,
+      oid: bitstring, s2: tagt;
+      (* H1 (i): SK secrecy, classical, I side, iks_R honest *)
+      event(IStart(hClean, iI, iks(vk(iksig(hClean, pR)), exp(g, dhsk(hClean, kIKR))), b, tr, rt, sk)) && attacker(sk);
+      (* H1 (ii): R side, iks_I honest *)
+      event(RAccept(hClean, iR, iks(vk(iksig(hClean, pI)), exp(g, dhsk(hClean, kIKI))), ld, oid, tr, rt, sk))
+        && attacker(sk);
+      (* H11: reachability sanity: IStart, BundleSigned, the honest pair, IConfirm — IStart *)
+      event(IStart(hClean, iks(vk(iksig(hClean, pI)), exp(g, dhsk(hClean, kIKI))),
+                   iks(vk(iksig(hClean, pR)), exp(g, dhsk(hClean, kIKR))), b, tr, rt, sk));
+      (* H11: BundleSigned *)
+      event(BundleSigned(hClean, iR, b));
+      (* H11: the honest pair *)
+      event(RAccept(hClean, iR, iks(vk(iksig(hClean, pI)), exp(g, dhsk(hClean, kIKI))), ld, oid, tr, rt, sk))
+        && event(IStart(hClean, iks(vk(iksig(hClean, pI)), exp(g, dhsk(hClean, kIKI))), iR, b, tr, rt, sk));
+      (* H11: IConfirm *)
+      event(IConfirm(hClean, iks(vk(iksig(hClean, pI)), exp(g, dhsk(hClean, kIKI))),
+                     iks(vk(iksig(hClean, pR)), exp(g, dhsk(hClean, kIKR))), tr, sk)).
+
+query iI: bitstring, iR: bitstring, b: bitstring, tr: bitstring, rt: bitstring, sk: key, ld: bitstring,
+      oid: bitstring, s2: tagt;
+      (* H6a: bundle origin authentication *)
+      event(IStart(hClean, iI, iks(vk(iksig(hClean, pR)), exp(g, dhsk(hClean, kIKR))), b, tr, rt, sk))
+        ==> event(BundleSigned(s2, iks(vk(iksig(hClean, pR)), exp(g, dhsk(hClean, kIKR))), b)).
+
+query iI: bitstring, iR: bitstring, b: bitstring, tr: bitstring, rt: bitstring, sk: key, ld: bitstring,
+      oid: bitstring, s2: tagt;
+      (* H5: injective agreement of R with I on transcript, SK and reply route, iks_I honest *)
+      inj-event(RAccept(hClean, iR, iks(vk(iksig(hClean, pI)), exp(g, dhsk(hClean, kIKI))), ld, oid, tr, rt, sk))
+        ==> inj-event(IStart(hClean, iks(vk(iksig(hClean, pI)), exp(g, dhsk(hClean, kIKI))), iR, b, tr, rt, sk)).
+
+query iI: bitstring, iR: bitstring, b: bitstring, tr: bitstring, rt: bitstring, sk: key, ld: bitstring,
+      oid: bitstring, s2: tagt;
+      (* H6b: key confirmation at I's first decrypted reply, iks_R honest *)
+      inj-event(IConfirm(hClean, iI, iks(vk(iksig(hClean, pR)), exp(g, dhsk(hClean, kIKR))), tr, sk))
+        ==> inj-event(RAccept(hClean, iks(vk(iksig(hClean, pR)), exp(g, dhsk(hClean, kIKR))), iI, ld, oid, tr, rt, sk)).
+
+query iI: bitstring, iR: bitstring, b: bitstring, tr: bitstring, rt: bitstring, sk: key, ld: bitstring,
+      oid: bitstring, s2: tagt;
+      (* H10: OPK single use, replayed envelope not accepted *)
+      inj-event(RAccept(hClean, iR, iI, ld, oid, tr, rt, sk)) ==> inj-event(InvIssued(hClean, iR, ld, oid)).
+
+(* One invitation j issued by R (formal/hx.pvl 1.): OPK_j, bundle, InvitationV1, blob, the one acceptance
+   attempt (O-13), and this session's compromise of the invitation *)
+let Invitation(s: tagt) =
+  new o[]: bitstring;
+  new ld[]: bitstring;
+  new lk[]: key;
+  new opkid[]: bitstring;
+  let b = bundle(s, opkid, o) in
+  event BundleSigned(s, riks(s), b);
+  event InvIssued(s, riks(s), ld, opkid);
+  out(c, ld);
+  out(c, BlobP(s, ld, b));
+  (
+    AcceptP(s, ld, lk, opkid, o)
+  | Leak(s, ld, lk)
+  ).
+
+process
+    out(c, riks(hClean))
+  | ! Invitation(hClean)
+  | ! ProcIP(hClean, c)
+  | PubI(hClean)

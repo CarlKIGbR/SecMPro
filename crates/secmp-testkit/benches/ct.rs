@@ -8,9 +8,10 @@
 //! variable-time comparison is measured as a **positive control**: it must be detected, otherwise the harness is
 //! not sensitive enough and the run fails. An inline **A/A control** repeats every target with the same inputs
 //! under both labels: it must stay quiet, otherwise the harness or the runner is unsound. The **sensitivity
-//! control** `min_leak_control` (ADR-041 Amendment 1 (2)) measures the smallest leak the gate must see — a 32-byte
-//! comparison that exits one byte early for class 1 — and must reach the effect floor, otherwise the run is
-//! `CONTROL_FAIL`; it records the gate's sensitivity per run.
+//! control** `min_leak_control` (ADR-041 Amendment 1 (2)) measures the smallest leak the gate must see — the work
+//! of a 32-byte comparison that exits one byte early for class 1, in one out-of-line function whose instruction
+//! stream is the same for both classes (ADR-042 Amendment 1) — and must reach the effect floor with class 0 the
+//! slower, otherwise the run is `CONTROL_FAIL`; it records the gate's sensitivity per run.
 //!
 //! Targets:
 //! - `tag_compare`: the tag comparison used by `MsgEncrypt` (`subtle::ConstantTimeEq` on 32 bytes), tags that
@@ -1260,39 +1261,63 @@ fn tag_compare(n: usize, k: usize, stream: &mut Stream, variable_time: bool) -> 
     )
 }
 
-/// The sensitivity control `min_leak_control` (ADR-041 Amendment 1 (2)): the smallest software leak the gate must
-/// see — a 32-byte comparison with a byte-wise early exit (each byte read through `black_box`, so no vectorised
-/// comparison hides the exit), class 0 differing in byte 31 (32 byte steps), class 1 in byte 30 (31 byte steps,
-/// one byte early); 256 comparisons per call as in `tag_compare`, so class 0 is slower by 256 byte steps.
+/// The input of one call of the sensitivity control (ADR-042 Amendment 1): the number of byte steps of the
+/// early-exit comparison the call stands for — 32 for class 0 (a mismatch in byte 31), 31 for class 1 (a mismatch in
+/// byte 30: it exits one byte early) — and the 32 bytes the steps read, in one 64-byte-aligned block, so that both
+/// classes read the same cache line at the same offsets.
+#[repr(C, align(64))]
+struct LeakInput {
+    steps: u8,
+    bytes: [u8; 32],
+}
+
+/// The sensitivity control's work for one call: 256 times, `input.steps` byte steps (a load through `black_box` and
+/// an xor each). One out-of-line function, so its code is the same for every caller and both classes execute the
+/// identical instruction stream; they differ only in the step count, a value read from the input. The loop counter
+/// passes through `black_box`, so the compiler cannot unroll the loop or split off a remainder whose shape would
+/// depend on the count (an early-exit `break` at byte 30 vs 31 left a class-dependent branch/layout artefact
+/// larger than the leak itself: run 36800231503, ADR-042 Amendment 1).
+#[inline(never)]
+fn min_leak_call(input: &LeakInput) {
+    for _ in 0..256 {
+        let steps = usize::from(black_box(input.steps));
+        let mut acc = 0_u8;
+        let mut i = 0_usize;
+        while black_box(i) < steps {
+            acc ^= black_box(input.bytes.get(i).copied().unwrap_or(0));
+            i = i.wrapping_add(1);
+        }
+        black_box(acc);
+    }
+}
+
+/// The sensitivity control `min_leak_control` (ADR-041 Amendment 1 (2); layout-independent since ADR-042 Amendment
+/// 1): the smallest software leak the gate must see — the work of a 32-byte early-exit comparison, class 0 with 32
+/// byte steps, class 1 with 31 (one byte early); 256 comparisons per call as in `tag_compare`, so class 0 is slower
+/// by 256 byte steps. Both classes' inputs are built from one common source (`blend`, the F9 rule).
 fn min_leak(n: usize, k: usize, stream: &mut Stream) -> Samples {
-    let mut expected = [0_u8; 32];
-    stream.fill(&mut expected);
-    let mut at_31 = expected;
-    at_31[31] ^= 1;
-    let mut at_30 = expected;
-    at_30[30] ^= 1;
-    let delta = xor(&at_31, &at_30);
+    let mut bytes = [0_u8; 32];
+    stream.fill(&mut bytes);
+    // source: `steps ‖ bytes`; class 1 (the base) 31 steps, class 0 32 steps
+    let class1: Vec<u8> = [31_u8].iter().chain(bytes.iter()).copied().collect();
+    let class0: Vec<u8> = [32_u8].iter().chain(bytes.iter()).copied().collect();
+    let delta = xor(&class0, &class1);
     measure(
         n,
         k,
         stream,
         |c, _| {
-            let mut tag = [0_u8; 32];
-            blend(&at_30, &delta, c, &mut tag);
-            tag
+            let mut raw = [0_u8; 33];
+            blend(&class1, &delta, c, &mut raw);
+            let (steps, rest) = raw.split_first().map_or((0, &[][..]), |(s, r)| (*s, r));
+            let mut input = LeakInput {
+                steps,
+                bytes: [0; 32],
+            };
+            input.bytes.copy_from_slice(rest);
+            input
         },
-        |tag| {
-            for _ in 0..256 {
-                let mut equal = true;
-                for (a, b) in black_box(&expected).iter().zip(black_box(tag)) {
-                    if black_box(*a) != black_box(*b) {
-                        equal = false;
-                        break;
-                    }
-                }
-                black_box(equal);
-            }
-        },
+        min_leak_call,
     )
 }
 
@@ -2032,7 +2057,7 @@ impl Sensitivity {
         let raw = self.raw_delta();
         let ratio = raw.zip(self.floor_ticks).map(|(d, f)| d / f);
         format!(
-            "{{\"name\":\"min_leak_control\",\"class0\":\"tag differs in byte 31 (32 byte steps)\",\"class1\":\"tag differs in byte 30 (exits one byte early)\",\"comparisons_per_call\":256,\"k\":{},\"samples\":{},\"floor_ticks\":{},\"floor_ns\":{},\"raw_delta_ticks\":{},\"raw_delta_ns\":{},\"raw_delta_floor\":{},\"reached\":{},\"measurement\":{}}}",
+            "{{\"name\":\"min_leak_control\",\"class0\":\"32 byte steps (an early-exit comparison mismatching in byte 31)\",\"class1\":\"31 byte steps (mismatch in byte 30: exits one byte early)\",\"comparisons_per_call\":256,\"k\":{},\"samples\":{},\"floor_ticks\":{},\"floor_ns\":{},\"raw_delta_ticks\":{},\"raw_delta_ns\":{},\"raw_delta_floor\":{},\"reached\":{},\"measurement\":{}}}",
             self.k.map_or_else(|| "null".to_owned(), |k| k.to_string()),
             self.samples,
             num(self.floor_ticks),

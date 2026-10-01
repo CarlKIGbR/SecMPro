@@ -1431,7 +1431,10 @@ fn ratchet_dummies_take_the_same_path() -> Result<()> {
 }
 
 /// Exactly `MAX_FF` positions are fast-forwarded on the current chain, `MAX_FF + 1` are not; both cells honest
-/// (2 × 2^20 `KDF_CK`: seconds).
+/// (2 × 2^20 `KDF_CK`: ≈ 20 s in a debug build). Feature `kat` only, i.e. in the `kat` step and not for every
+/// mutant of the mutation gate; the same bound is checked quickly by `select::tests::skip_plan_bounds`, the Kani
+/// harness `tr_skip_plan`, vector N10 and the property tests' `MAX_FF` gaps.
+#[cfg(feature = "kat")]
 #[test]
 fn ratchet_fast_forward_bound_on_the_chain() -> Result<()> {
     let (a, b) = session()?;
@@ -1458,7 +1461,9 @@ fn ratchet_fast_forward_bound_on_the_chain() -> Result<()> {
 }
 
 /// A DH step fast-forwards `MAX_FF` positions on the old chain (`pn`) and `MAX_FF` on the new one (`n`) — the worst
-/// case of §7.4 note (a) — and refuses `MAX_FF + 1` on either; all cells honest (3 × 2^20 `KDF_CK`: seconds).
+/// case of §7.4 note (a) — and refuses `MAX_FF + 1` on either; all cells honest (3 × 2^20 `KDF_CK`: ≈ 30 s in a
+/// debug build). Feature `kat` only, as `ratchet_fast_forward_bound_on_the_chain`.
+#[cfg(feature = "kat")]
 #[test]
 fn ratchet_fast_forward_bound_on_a_step() -> Result<()> {
     let (a, b) = session()?;

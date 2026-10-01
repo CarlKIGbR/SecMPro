@@ -1,0 +1,710 @@
+(* SPDX-License-Identifier: AGPL-3.0-or-later *)
+(* formal/tr.pv — SecMP-TR, the hybrid Double Ratchet with header encryption (docs/03 §7), bounded to three
+   DH-ratchet steps. Query set: formal/CLAIMS.md §TR (T1–T12, fixed by the reviewer; ADR-026, docs/03 §11.2).
+   Properties: docs/03 §11.1 row "TR". Run: proverif formal/tr.pv (ProVerif 2.05).
+
+   ---------------------------------------------------------------------------------------------------------------
+   1. What is modelled (docs/03 §7.1–§7.5)
+   ---------------------------------------------------------------------------------------------------------------
+   Two honest parties A (initiator, §7.2 "Alice role") and B (responder) share SK (HX is out of scope: SK is a
+   private value per session) and the transcript sb. The run is bounded to three DH-ratchet steps, n = 0 and n = 1
+   on every chain:
+     step 1 = A's first sending chain (A -> B), step 2 = B's reply chain (B -> A), step 3 = A's second chain (A -> B).
+   - §7.2 init: (RK, HK_A, NHK_B) = hkdf_init(SK); A: dh_s = a1, kem_s = dkA1, (ct_s, ss) = Encaps(RPK_kem_B),
+     (rk, ck_s, nhk_s) = KDF_RK(RK, X25519(a1, SPK_dh_B) ‖ ss), hk_s = HK_A, nhk_r = NHK_B;
+     B: rk = RK, dh_s = b0 (SPK_dh), kem_s = dk0 (RPK_kem), nhk_s = NHK_B, nhk_r = HK_A, everything else None.
+     B's prekeys exp(g,b0), pk(dk0) are public (out on c) and known authentically to A (prekey bundle).
+   - §7.3 Encrypt: (ck_s, mk) = KDF_CK(ck_s); header = (dh_pk, pn, n, ek_pq, ct_pq); hdr_ct = hseal(hk_s,
+     hdr_nonce, "SecMP-TR/1 hdr" ‖ sb, header); body = bseal(mk, "SecMP-TR/1 body" ‖ sb ‖ hdr_nonce ‖ hdr_ct,
+     content); cell = (hdr_nonce, hdr_ct, body). The constant fields ver and flags carry no information and are
+     omitted.
+   - §7.4 Decrypt: the receiver tries hk_r, then nhk_r. hk_r => same chain: ek_pq = kem_r and ct_pq = last_ct_r
+     are checked (KEM constancy), then the counter. nhk_r => DH step: reject if dh_pk = dh_r; skip_message_keys(pn)
+     on the old chain; DHRatchet exactly as §7.4 (pn = n_s; hk_s = nhk_s; hk_r = nhk_r; dh_r, kem_r, last_ct_r from
+     the header; ss_recv = Decaps(kem_s, ct_pq); (rk, ck_r, nhk_r) = KDF_RK(rk, X25519(dh_s, dh_r) ‖ ss_recv);
+     fresh dh_s, kem_s; (ct_s, ss_send) = Encaps(kem_r); (rk, ck_s, nhk_s) = KDF_RK(rk, X25519(dh_s, dh_r) ‖
+     ss_send)). Then KDF_CK to position n and bopen with the body AD; a failed check rejects (the process stops;
+     state changes are discarded, §7.4 note (c)). B's DHRatchet on step 3 also derives its step-4 sending half
+     (b4, dkB4, ct_s, rk, ck_s, nhk_s), so that Compromise(B,3) publishes B's real state.
+   - Bounded in-order run (CLAIMS: "in-order runs", skipped map empty). Every receive slot accepts exactly the
+     message the in-order run expects there: header.n must equal n_r (a smaller n is the §7.4 replay/stale reject;
+     a larger n, or a header that opens only under the other key, belongs to skip/step branches beyond the bound)
+     and at the step slot of B's second receiving chain the old chain key hk_r = HK_A is tried first as in §7.4 —
+     a cell it opens is a replay or a chain-1 message beyond the bound, and the run stops. A receiver whose ck_r is
+     None ignores pn (skip_message_keys returns at once, §7.4); B at step 3 requires pn = 2 = its n_r on the old
+     chain. Rejecting is silent and leaves the state unchanged, so stopping instead of waiting for the next cell
+     loses no attacker behaviour: the attacker can always deliver the accepted cell directly.
+
+   ---------------------------------------------------------------------------------------------------------------
+   2. Abstractions (exactly those of CLAIMS.md; nothing else about a primitive is assumed)
+   ---------------------------------------------------------------------------------------------------------------
+     hkdf_init(SK) -> (RK, HK_A, NHK_B)   three independent constructors init_rk, init_hka, init_nhkb      §7.2
+     kdf_rk(rk, dh, ss) -> (rk', ck, nhk) three independent constructors rk_rk, rk_ck, rk_nhk             §7.2
+     kdf_ck(ck) -> (ck', mk)              two independent constructors ck_ck, ck_mk                        §7.2
+     X25519                               exp with the equation exp(exp(g,a),b) = exp(exp(g,b),a)          §3
+     ML-KEM-768                           pk, encaps_ct, encaps_ss, destructor
+                                          decaps(dk, encaps_ct(pk(dk), r)) = encaps_ss(pk(dk), r)          §3
+                                          (implicit rejection is not modelled: a wrong ct makes decaps fail;
+                                          in the real protocol the resulting wrong keys make the body MAC fail,
+                                          §7.4 note (b) — the same reject)
+     header AEAD (XChaCha20-Poly1305)     hseal/hopen, AD checked; plus hseal2 (T12, see 7.)               §7.3
+     MsgEncrypt (body)                    bseal/bopen, AD checked (the AD contains hdr_nonce ‖ hdr_ct)     §3.3
+     pad/unpad                            identity on the modelled content.
+   Honest secrets are private constructors applied to (session tag, public index): skey(s) = SK, dhsk(s, k) =
+   X25519 secret keys, kemsk(s, k) = ML-KEM decapsulation keys, kemr(s, k) = Encaps randomness, content(s, i, n) =
+   the content of message (i, n), nmark(s, i, n) = the name standing for the header's n field (T8/T9). The model has
+   no replication, so each such term is generated exactly once per session and is exactly a fresh private name;
+   the constructor form lets one process macro serve every session and lets the queries name the secrets.
+   sb is public (sbind(s), a public constructor): the transcript's secrecy is never relied upon (conservative).
+
+   ---------------------------------------------------------------------------------------------------------------
+   3. Sessions (the claims' scenarios run as independent parallel sessions of one process)
+   ---------------------------------------------------------------------------------------------------------------
+     tag       mode    compromise                                  oracle        queries
+     sClean    mClean  none                                        none          T1, T2, T8, T11
+     sFS       mFS     phase 1: Compromise(A,2), Compromise(B,2);  none          T3, T11
+                       the session runs steps 1–2 only (phase 0)
+     sPCS      mPCS    Compromise(A,1); honest steps 2 and 3       none          T4, T10, T11
+     sPCSdh    mPCS    as sPCS                                     DHO           T5, T11
+     sPCSkem   mPCS    as sPCS                                     KEMO          T6, T11
+     sPCSboth  mPCS    as sPCS                                     DHO + KEMO    T7, T11
+     sHFS      mHFS    phase 1: Compromise(A,3), Compromise(B,3)   none          T9, T11
+   plus the T12 probe (7.). Sessions share no private value: every secret is a private constructor applied to the
+   session's tag, and the private channels are per tag. The only shared symbols are public (g, labels, counters,
+   party/step constants, tags) and the oracle destructors, which are scoped per session (4.). Hence removing the
+   other sessions from the process only removes attacker capabilities, so a query proved true here also holds in a
+   model that contains its scenario alone; the attacks reported for the false queries were checked to use only
+   their own session.
+   Events carry the session tag as first argument (Send(s, P, i, n, c), Recv(s, P, i, n, c)): T2's assumption "no
+   compromise of the sender's state at or before (i,n)" holds in sClean, so T2 is stated for sClean; T11 has no
+   assumption and is stated for every session (s is universally quantified).
+
+   ---------------------------------------------------------------------------------------------------------------
+   4. Oracles, "enabled per query" (CLAIMS: DHO, KEMO)
+   ---------------------------------------------------------------------------------------------------------------
+   DHO:  dh_break(exp(g, dhsk(s,x)), exp(g, dhsk(s,y))) = exp(exp(g, dhsk(s,x)), dhsk(s,y))  for s in {sPCSdh, sPCSboth}
+   KEMO: kem_break(encaps_ct(ek, kemr(s,r))) = encaps_ss(ek, kemr(s,r))                     for s in {sPCSkem, sPCSboth}
+   Both are public destructors. Soundness of the scoping: inside its session the scoped oracle is exactly as strong
+   as the global one of CLAIMS. Every X25519 exponent occurring in the session is either an honest dhsk(s, _) or
+   known to the attacker; for a pair where the attacker knows one exponent, dh_break's result is computable without
+   the oracle (exp(X, b), or exp(Y, a) by the DH equation); every pair of honest exponents is covered by the rule.
+   Likewise every KEM ciphertext is either an honest encaps_ct(_, kemr(s, _)) — covered — or one the attacker built
+   from randomness it knows, whose shared secret encaps_ss(ek, r) it computes itself. Outside its session the
+   oracle applies to nothing: dhsk/kemr are private constructors, so no term of another session matches. So each
+   oracle is present in exactly the sessions of the claims that enable it (T5, T6, T7) and absent elsewhere.
+
+   ---------------------------------------------------------------------------------------------------------------
+   5. Compromise(P, i)
+   ---------------------------------------------------------------------------------------------------------------
+   Publishes P's entire RatchetState (§7.1, in this field order): (sb, rk, dh_s secret, dh_r, kem_s dk, kem_r,
+   last_ct_r, ct_s, ck_s, ck_r, hk_s, hk_r, nhk_s, nhk_r, n_s, n_r, pn, skipped); None is the constant none,
+   skipped is the constant empty (in-order runs). An event Compromise(s, P, i) marks the point.
+   - T3 (sFS): after all sends/receives of steps 1–2, "phase 1; out(c, state)" for A and B; the phase-0 processes
+     are discarded when the attacker enters phase 1, so the state is always the post-step-2 state.
+   - T9 (sHFS): the same after step 3.
+   - T4–T7, T10 (the four mPCS sessions): A's state is published right after A's chain 1 is established and
+     message (1, 0) is sent, i.e. before (1, 1) is sent — T10 requires that (1, 1) is "sent after the compromise on
+     the same chain"; for T4–T7 the position inside chain 1 is immaterial (steps 2 and 3 re-key the root). The
+     publication runs in parallel with A's continuation; it contains the values of that point (ck_s at position 1,
+     n_s = 1).
+
+   ---------------------------------------------------------------------------------------------------------------
+   6. Honest steps (T4–T7, T10)
+   ---------------------------------------------------------------------------------------------------------------
+   CLAIMS: "Compromise(A,1) then step 2 (B's honest step) and step 3 (A's honest step)". Post-compromise security
+   needs a passive healing round: an attacker holding A's state could otherwise open NHK_B-sealed traffic, inject
+   its own step-2 keys to A and read everything after. Modelling (standard): in the mPCS sessions the ratchet
+   messages of the healing round — (1,0), the input of B's DH step, and the cells of step 2 (B -> A) and step 3
+   (A -> B) — are output on the public channel c AND delivered to the receiver over a private per-session channel
+   (pch_ab(s), pch_ba(s)); the receiver reads them only from the private channel. So the attacker sees every one of
+   them but cannot replace it. Replacing (1,0) (possible in reality after the compromise, by withholding the honest
+   one) is an active attack on B's step, which "B's honest step" excludes; it would not help the attacker anyway:
+   B's step-1 keys come from RK, which is not in A's post-step-1 state, and A rejects the resulting step 2. Message
+   (1,1) — a non-step message on the compromised chain — stays on c, so the attacker can forge it with A's chain
+   key; this is the slot where T11's KEM-constancy check is exercised. In all other sessions both delivery channels
+   are c (the extra copy on c is harmless), i.e. the attacker controls all delivery.
+
+   ---------------------------------------------------------------------------------------------------------------
+   7. Header fields (T8, T9) and header commitment (T12)
+   ---------------------------------------------------------------------------------------------------------------
+   T8/T9 query the header fields dh_pk and ek_pq by their actual values exp(g, dhsk(s,k)) and pk(kemsk(s,k)) (one
+   value per chain: both are constant within a chain; secrecy of the value implies that the header does not reveal
+   it, and more). The counter n is a public constant, so each header also carries a private name nmark(s, i, n)
+   bound into the sealed header next to n, standing for the n field; the receiver ignores it. not attacker(nmark)
+   is "the header's n field is not revealed".
+   T12: XChaCha20-Poly1305 is not key-committing (docs/03 §3.4 last sentence: ratchet headers use plain
+   XChaCha20-Poly1305, no commitment; §11.1: "header confidentiality (not commitment)"). A plain symmetric-encryption
+   destructor is committing in the symbolic model, so the attacker additionally gets hseal2(k1, k2, nonce, ad, m),
+   a ciphertext that opens to m under both k1 and k2. Building it needs both keys and opening it needs one of them,
+   so it gives nothing beyond hseal with a known key except the two-key ciphertext itself (in particular, B tries
+   hk_r before nhk_r as in §7.4). The T12 probe lets the attacker submit (k1, k2, nonce, ad, hdr_ct) and emits
+   HdrOpenTwice(k1, k2, h) when hopen succeeds under both keys with the same header h; the query
+   HdrOpenTwice(k1, k2, h) ==> k1 = k2 is expected false (informative, not a gate). Checked during modelling: with
+   the two hseal2 rules removed, T12 is proved true (the committing abstraction) and every other verdict is
+   unchanged; with B's (1,1) ct_pq check removed, T11 is false (an attacker holding A's chain-1 keys forges (1,1)).
+
+   ---------------------------------------------------------------------------------------------------------------
+   8. Devices that keep the analysis tractable (none changes the model's semantics or weakens a query)
+   ---------------------------------------------------------------------------------------------------------------
+   - Secrecy assumptions (not attacker(M) / not attacker(M) phase 0): ProVerif proves each one in every run and
+     aborts with an error if one cannot be proved ("ok, secrecy assumption verified" in the log); it uses them only to
+     discard clauses whose hypotheses can never hold. They state what the attacker never learns in a session given
+     its compromise pattern (5.), plus: the private channels are never known, and no hseal2 ciphertext under a header
+     key that is secret in that session (and phase) is ever known — honest parties never output hseal2 and the
+     attacker needs both keys to build one.
+   - Nonce names carry no arguments (new nn[]): with no replication each `new` runs at most once per trace, so the
+     only effect is that ProVerif's abstraction merges names across traces, an over-approximation (the nonces are
+     public anyway).
+   - Each X25519 value is bound once with let and reused: ProVerif closes every syntactic occurrence of exp under the
+     DH equation separately; binding it once yields the same terms without the exponential number of forms.
+   - set selFun = Term: a resolution strategy; it affects termination/performance only.
+   - Two query declarations (T1–T2 and T3–T12, in ID order, a "Tk" comment above each query): ProVerif
+     saturates the clause set once per declaration, and T2's injective events are the expensive part.
+
+   ---------------------------------------------------------------------------------------------------------------
+   9. Expected verdicts (CLAIMS gate rule), RESULT lines in file order
+   ---------------------------------------------------------------------------------------------------------------
+   T1 (6 lines) true · T2 (2) true · T3 (4) true · T4 (2) true · T5 (2) true · T6 (2) true · T7 (2) false ·
+   T8 (12) true · T9 (4) true · T10 (1) false · T11 (1) true · T12 (1) false (informative) — 39 RESULT lines.
+*)
+
+set selFun = Term.
+
+(* ---------------------------------------------------------------- channels, types, constants ------------------ *)
+
+free c: channel.
+
+type key.        (* 32-byte symmetric keys: SK, RK, rk, ck, mk, hk, nhk *)
+type exponent.   (* X25519 secret *)
+type G.          (* X25519 public key / shared secret *)
+type kemdk.      (* ML-KEM-768 decapsulation key *)
+type kemek.      (* ML-KEM-768 encapsulation key *)
+type kemct.      (* ML-KEM-768 ciphertext *)
+type coins.      (* Encaps randomness *)
+type nonce.      (* hdr_nonce, 24 B *)
+type tagt.       (* session (scenario) tag *)
+
+const sClean, sFS, sPCS, sPCSdh, sPCSkem, sPCSboth, sHFS: tagt.
+const mClean, mFS, mPCS, mHFS: bitstring.                (* session modes *)
+const pA, pB: bitstring.                                  (* parties *)
+const st1, st2, st3: bitstring.                           (* DH-ratchet step (chain) i *)
+const c0, c1, c2: bitstring.                              (* counter values 0, 1, 2 (n, pn, n_s, n_r) *)
+const kB0, kA1, kB2, kA3, kB4: bitstring.                 (* key-generation indices *)
+const lbl_hdr, lbl_body: bitstring.                       (* "SecMP-TR/1 hdr", "SecMP-TR/1 body" (App. A) *)
+const none, empty: bitstring.                             (* Option::None; empty skipped map *)
+
+(* ---------------------------------------------------------------- honest secrets (2.) ------------------------ *)
+
+fun skey(tagt): key [private].                            (* SK of the session (HX out of scope) *)
+fun dhsk(tagt, bitstring): exponent [private].            (* X25519.keygen() *)
+fun kemsk(tagt, bitstring): kemdk [private].              (* ML-KEM-768.keygen() (seed) *)
+fun kemr(tagt, bitstring): coins [private].               (* ML-KEM-768.Encaps randomness *)
+fun content(tagt, bitstring, bitstring): bitstring [private].   (* content of message (i, n) *)
+fun nmark(tagt, bitstring, bitstring): bitstring [private].     (* name standing for header field n (T8/T9) *)
+fun sbind(tagt): bitstring.                               (* sb = HX transcript: public (conservative) *)
+fun pch_ba(tagt): channel [private].                      (* honest-step delivery B -> A (6.) *)
+fun pch_ab(tagt): channel [private].                      (* honest-step delivery A -> B (6.) *)
+
+(* ---------------------------------------------------------------- primitives (CLAIMS abstractions) ----------- *)
+
+(* §7.2 hkdf_init(SK) -> (RK, HK_A, NHK_B), three independent outputs *)
+fun init_rk(key): key.
+fun init_hka(key): key.
+fun init_nhkb(key): key.
+
+(* §7.2 KDF_RK(rk, dh ‖ ss) -> (rk', ck, nhk) *)
+fun rk_rk(key, G, bitstring): key.
+fun rk_ck(key, G, bitstring): key.
+fun rk_nhk(key, G, bitstring): key.
+
+(* §7.2 KDF_CK(ck) -> (ck', mk) *)
+fun ck_ck(key): key.
+fun ck_mk(key): key.
+
+(* §3 X25519 (classical DH) *)
+const g: G.
+fun exp(G, exponent): G.
+equation forall x: exponent, y: exponent; exp(exp(g, x), y) = exp(exp(g, y), x).
+
+(* §3 ML-KEM-768 *)
+fun pk(kemdk): kemek.
+fun encaps_ct(kemek, coins): kemct.
+fun encaps_ss(kemek, coins): bitstring.
+reduc forall dk: kemdk, r: coins; decaps(dk, encaps_ct(pk(dk), r)) = encaps_ss(pk(dk), r).
+
+(* §7.3 header: XChaCha20-Poly1305(hk, hdr_nonce, AD, header). hseal2: the non-committing two-key ciphertext,
+   §3.4 last sentence / §11.1 "header confidentiality (not commitment)" (7.) *)
+fun hseal(key, nonce, bitstring, bitstring): bitstring.
+fun hseal2(key, key, nonce, bitstring, bitstring): bitstring.
+reduc forall k: key, n: nonce, ad: bitstring, m: bitstring;
+        hopen(k, n, ad, hseal(k, n, ad, m)) = m;
+      forall k1: key, k2: key, n: nonce, ad: bitstring, m: bitstring;
+        hopen(k1, n, ad, hseal2(k1, k2, n, ad, m)) = m;
+      forall k1: key, k2: key, n: nonce, ad: bitstring, m: bitstring;
+        hopen(k2, n, ad, hseal2(k1, k2, n, ad, m)) = m.
+
+(* §3.3 MsgEncrypt(mk, AD, pad(content)) *)
+fun bseal(key, bitstring, bitstring): bitstring.
+reduc forall k: key, ad: bitstring, m: bitstring; bopen(k, ad, bseal(k, ad, m)) = m.
+
+(* ---------------------------------------------------------------- oracles (4.) ------------------------------- *)
+
+(* DHO, enabled for T5 (sPCSdh) and T7 (sPCSboth) *)
+reduc forall x: bitstring, y: bitstring;
+        dh_break(exp(g, dhsk(sPCSdh, x)), exp(g, dhsk(sPCSdh, y))) = exp(exp(g, dhsk(sPCSdh, x)), dhsk(sPCSdh, y));
+      forall x: bitstring, y: bitstring;
+        dh_break(exp(g, dhsk(sPCSboth, x)), exp(g, dhsk(sPCSboth, y))) = exp(exp(g, dhsk(sPCSboth, x)), dhsk(sPCSboth, y)).
+
+(* KEMO, enabled for T6 (sPCSkem) and T7 (sPCSboth) *)
+reduc forall ek: kemek, r: bitstring;
+        kem_break(encaps_ct(ek, kemr(sPCSkem, r))) = encaps_ss(ek, kemr(sPCSkem, r));
+      forall ek: kemek, r: bitstring;
+        kem_break(encaps_ct(ek, kemr(sPCSboth, r))) = encaps_ss(ek, kemr(sPCSboth, r)).
+
+(* ---------------------------------------------------------------- events ------------------------------------- *)
+
+event Send(tagt, bitstring, bitstring, bitstring, bitstring).        (* Send(s, sender, i, n, c) *)
+event Recv(tagt, bitstring, bitstring, bitstring, bitstring).        (* Recv(s, receiver, i, n, c) *)
+event ChainKem(tagt, bitstring, bitstring, kemct).                   (* receiver's last_ct_r for chain i is set *)
+event RecvKem(tagt, bitstring, bitstring, bitstring, bitstring, kemct).  (* accepted (i, n) had header ct_pq *)
+event Compromise(tagt, bitstring, bitstring).                        (* Compromise(s, P, i) *)
+event HdrOpenTwice(key, key, bitstring).                             (* T12 probe *)
+
+(* ---------------------------------------------------------------- secrecy assumptions (8.) -------------------- *)
+
+(* The honest-step delivery channels. *)
+not s: tagt; attacker(pch_ba(s)).
+not s: tagt; attacker(pch_ab(s)).
+
+(* hseal2 ciphertexts under a header key the attacker does not have in that session/phase (it builds hseal2 only
+   with both keys; honest parties never output hseal2). Header keys: HK_A, NHK_B, and rk_nhk(RK, _, _) (nhk_s1 =
+   B's nhk_r1, the header key of step 3). *)
+not k: key, n: nonce, ad: bitstring, m: bitstring; attacker(hseal2(init_hka(skey(sClean)), k, n, ad, m)).
+not k: key, n: nonce, ad: bitstring, m: bitstring; attacker(hseal2(k, init_hka(skey(sClean)), n, ad, m)).
+not k: key, n: nonce, ad: bitstring, m: bitstring; attacker(hseal2(init_nhkb(skey(sClean)), k, n, ad, m)).
+not k: key, n: nonce, ad: bitstring, m: bitstring; attacker(hseal2(k, init_nhkb(skey(sClean)), n, ad, m)).
+not x: G, y: bitstring, k: key, n: nonce, ad: bitstring, m: bitstring;
+    attacker(hseal2(rk_nhk(init_rk(skey(sClean)), x, y), k, n, ad, m)).
+not x: G, y: bitstring, k: key, n: nonce, ad: bitstring, m: bitstring;
+    attacker(hseal2(k, rk_nhk(init_rk(skey(sClean)), x, y), n, ad, m)).
+not k: key, n: nonce, ad: bitstring, m: bitstring; attacker(hseal2(init_hka(skey(sFS)), k, n, ad, m)) phase 0.
+not k: key, n: nonce, ad: bitstring, m: bitstring; attacker(hseal2(k, init_hka(skey(sFS)), n, ad, m)) phase 0.
+not k: key, n: nonce, ad: bitstring, m: bitstring; attacker(hseal2(init_nhkb(skey(sFS)), k, n, ad, m)) phase 0.
+not k: key, n: nonce, ad: bitstring, m: bitstring; attacker(hseal2(k, init_nhkb(skey(sFS)), n, ad, m)) phase 0.
+not x: G, y: bitstring, k: key, n: nonce, ad: bitstring, m: bitstring;
+    attacker(hseal2(rk_nhk(init_rk(skey(sFS)), x, y), k, n, ad, m)) phase 0.
+not x: G, y: bitstring, k: key, n: nonce, ad: bitstring, m: bitstring;
+    attacker(hseal2(k, rk_nhk(init_rk(skey(sFS)), x, y), n, ad, m)) phase 0.
+not k: key, n: nonce, ad: bitstring, m: bitstring; attacker(hseal2(init_hka(skey(sHFS)), k, n, ad, m)).
+not k: key, n: nonce, ad: bitstring, m: bitstring; attacker(hseal2(k, init_hka(skey(sHFS)), n, ad, m)).
+not k: key, n: nonce, ad: bitstring, m: bitstring; attacker(hseal2(init_nhkb(skey(sHFS)), k, n, ad, m)) phase 0.
+not k: key, n: nonce, ad: bitstring, m: bitstring; attacker(hseal2(k, init_nhkb(skey(sHFS)), n, ad, m)) phase 0.
+not x: G, y: bitstring, k: key, n: nonce, ad: bitstring, m: bitstring;
+    attacker(hseal2(rk_nhk(init_rk(skey(sHFS)), x, y), k, n, ad, m)) phase 0.
+not x: G, y: bitstring, k: key, n: nonce, ad: bitstring, m: bitstring;
+    attacker(hseal2(k, rk_nhk(init_rk(skey(sHFS)), x, y), n, ad, m)) phase 0.
+
+(* sClean: no compromise, no oracle. *)
+not attacker(skey(sClean)).
+not attacker(init_rk(skey(sClean))).
+not attacker(init_hka(skey(sClean))).
+not attacker(init_nhkb(skey(sClean))).
+not x: G, y: bitstring; attacker(rk_rk(init_rk(skey(sClean)), x, y)).
+not x: G, y: bitstring; attacker(rk_ck(init_rk(skey(sClean)), x, y)).
+not x: G, y: bitstring; attacker(rk_nhk(init_rk(skey(sClean)), x, y)).
+not x: bitstring; attacker(dhsk(sClean, x)).
+not x: bitstring; attacker(kemsk(sClean, x)).
+not x: bitstring; attacker(kemr(sClean, x)).
+
+(* sFS: phase 1 publishes A's and B's states after step 2 (rk3, rk2, nhk_s1, NHK_B, HK_A, nhk_s2, ... are known). *)
+not attacker(skey(sFS)).
+not attacker(init_rk(skey(sFS))).
+not x: G, y: bitstring; attacker(rk_rk(init_rk(skey(sFS)), x, y)).
+not x: G, y: bitstring; attacker(rk_ck(init_rk(skey(sFS)), x, y)).
+not x: G, y: bitstring, z: G, w: bitstring; attacker(rk_ck(rk_rk(init_rk(skey(sFS)), x, y), z, w)).
+not attacker(dhsk(sFS, kB0)).
+not attacker(dhsk(sFS, kA1)).
+not attacker(kemsk(sFS, kB0)).
+not attacker(kemsk(sFS, kA1)).
+not x: bitstring; attacker(kemr(sFS, x)).
+(* sFS in phase 0 (before the compromise). *)
+not attacker(init_hka(skey(sFS))) phase 0.
+not attacker(init_nhkb(skey(sFS))) phase 0.
+not x: G, y: bitstring; attacker(rk_nhk(init_rk(skey(sFS)), x, y)) phase 0.
+not x: bitstring; attacker(dhsk(sFS, x)) phase 0.
+not x: bitstring; attacker(kemsk(sFS, x)) phase 0.
+
+(* The mPCS sessions: A's state after (1,0) is published (rk1, a1, dkA1, HK_A, nhk_s1, NHK_B, ... are known). *)
+not attacker(skey(sPCS)).
+not attacker(init_rk(skey(sPCS))).
+not attacker(dhsk(sPCS, kB0)).
+not attacker(dhsk(sPCS, kB2)).
+not attacker(dhsk(sPCS, kA3)).
+not attacker(dhsk(sPCS, kB4)).
+not attacker(kemsk(sPCS, kB0)).
+not attacker(kemsk(sPCS, kB2)).
+not attacker(kemsk(sPCS, kA3)).
+not attacker(kemsk(sPCS, kB4)).
+not x: bitstring; attacker(kemr(sPCS, x)).
+not attacker(skey(sPCSdh)).
+not attacker(init_rk(skey(sPCSdh))).
+not attacker(dhsk(sPCSdh, kB0)).
+not attacker(dhsk(sPCSdh, kB2)).
+not attacker(dhsk(sPCSdh, kA3)).
+not attacker(dhsk(sPCSdh, kB4)).
+not attacker(kemsk(sPCSdh, kB0)).
+not attacker(kemsk(sPCSdh, kB2)).
+not attacker(kemsk(sPCSdh, kA3)).
+not attacker(kemsk(sPCSdh, kB4)).
+not x: bitstring; attacker(kemr(sPCSdh, x)).
+not attacker(skey(sPCSkem)).
+not attacker(init_rk(skey(sPCSkem))).
+not attacker(dhsk(sPCSkem, kB0)).
+not attacker(dhsk(sPCSkem, kB2)).
+not attacker(dhsk(sPCSkem, kA3)).
+not attacker(dhsk(sPCSkem, kB4)).
+not attacker(kemsk(sPCSkem, kB0)).
+not attacker(kemsk(sPCSkem, kB2)).
+not attacker(kemsk(sPCSkem, kA3)).
+not attacker(kemsk(sPCSkem, kB4)).
+not x: bitstring; attacker(kemr(sPCSkem, x)).
+not attacker(skey(sPCSboth)).
+not attacker(init_rk(skey(sPCSboth))).
+not attacker(dhsk(sPCSboth, kB0)).
+not attacker(dhsk(sPCSboth, kB2)).
+not attacker(dhsk(sPCSboth, kA3)).
+not attacker(dhsk(sPCSboth, kB4)).
+not attacker(kemsk(sPCSboth, kB0)).
+not attacker(kemsk(sPCSboth, kB2)).
+not attacker(kemsk(sPCSboth, kA3)).
+not attacker(kemsk(sPCSboth, kB4)).
+not x: bitstring; attacker(kemr(sPCSboth, x)).
+
+(* sHFS: phase 1 publishes A's and B's states after step 3 (rk3, rk4, NHK_B, nhk_s1..4, a3, dkA3, b4, dkB4 are
+   known; HK_A, rk1, rk2 and the step-1/2 secrets are not). *)
+not attacker(skey(sHFS)).
+not attacker(init_rk(skey(sHFS))).
+not attacker(init_hka(skey(sHFS))).
+not x: G, y: bitstring; attacker(rk_rk(init_rk(skey(sHFS)), x, y)).
+not x: G, y: bitstring; attacker(rk_ck(init_rk(skey(sHFS)), x, y)).
+not x: G, y: bitstring, z: G, w: bitstring; attacker(rk_rk(rk_rk(init_rk(skey(sHFS)), x, y), z, w)).
+not x: G, y: bitstring, z: G, w: bitstring; attacker(rk_ck(rk_rk(init_rk(skey(sHFS)), x, y), z, w)).
+not attacker(dhsk(sHFS, kB0)).
+not attacker(dhsk(sHFS, kA1)).
+not attacker(dhsk(sHFS, kB2)).
+not attacker(kemsk(sHFS, kB0)).
+not attacker(kemsk(sHFS, kA1)).
+not attacker(kemsk(sHFS, kB2)).
+not x: bitstring; attacker(kemr(sHFS, x)).
+(* sHFS in phase 0 (before the compromise). *)
+not attacker(init_nhkb(skey(sHFS))) phase 0.
+not x: G, y: bitstring; attacker(rk_nhk(init_rk(skey(sHFS)), x, y)) phase 0.
+not x: bitstring; attacker(dhsk(sHFS, x)) phase 0.
+not x: bitstring; attacker(kemsk(sHFS, x)) phase 0.
+
+(* ---------------------------------------------------------------- queries (CLAIMS.md §TR, in ID order) ------- *)
+
+(* Two declarations (8.): T1–T2, then T3–T12. Every query (one RESULT line each) has its "Tk" comment directly
+   above it; the RESULT lines appear in this order. *)
+
+query i: bitstring, n: bitstring, x: bitstring;
+      (* T1: body secrecy — not attacker(c) for every honest content c; no compromise, no oracle (sClean). *)
+      attacker(content(sClean, st1, c0));
+      (* T1 *) attacker(content(sClean, st1, c1));
+      (* T1 *) attacker(content(sClean, st2, c0));
+      (* T1 *) attacker(content(sClean, st2, c1));
+      (* T1 *) attacker(content(sClean, st3, c0));
+      (* T1 *) attacker(content(sClean, st3, c1));
+      (* T2: authenticity, integrity, replay — injective agreement, B receiving from A and A receiving from B; no
+         compromise of the sender's state at or before (i,n) (sClean). *)
+      inj-event(Recv(sClean, pB, i, n, x)) ==> inj-event(Send(sClean, pA, i, n, x));
+      (* T2 *) inj-event(Recv(sClean, pA, i, n, x)) ==> inj-event(Send(sClean, pB, i, n, x)).
+
+query s: tagt, p: bitstring, i: bitstring, n: bitstring, x: bitstring, ct: kemct, k1: key, k2: key, h: bitstring;
+      (* T3: forward secrecy per message — phase 0 steps 1–2, phase 1 Compromise(A,2) and Compromise(B,2);
+         not attacker(c) for c of steps 1–2 (sFS). *)
+      attacker(content(sFS, st1, c0));
+      (* T3 *) attacker(content(sFS, st1, c1));
+      (* T3 *) attacker(content(sFS, st2, c0));
+      (* T3 *) attacker(content(sFS, st2, c1));
+      (* T4: post-compromise security, hybrid — Compromise(A,1), honest steps 2 and 3, no oracle;
+         not attacker(c) for c of step 3 (sPCS). *)
+      attacker(content(sPCS, st3, c0));
+      (* T4 *) attacker(content(sPCS, st3, c1));
+      (* T5: PCS with the classical break — as T4 with DHO, KEM honest (sPCSdh). *)
+      attacker(content(sPCSdh, st3, c0));
+      (* T5 *) attacker(content(sPCSdh, st3, c1));
+      (* T6: PCS with the PQ break — as T4 with KEMO, DH honest (sPCSkem). *)
+      attacker(content(sPCSkem, st3, c0));
+      (* T6 *) attacker(content(sPCSkem, st3, c1));
+      (* T7: sanity, both breaks defeat PCS — as T4 with DHO and KEMO (sPCSboth); expected false. *)
+      attacker(content(sPCSboth, st3, c0));
+      (* T7 *) attacker(content(sPCSboth, st3, c1));
+      (* T8: header confidentiality — not attacker(dh_pk_i), not attacker(ek_pq_i), not attacker(n_i) for every
+         header of steps 1–3; no compromise (sClean). Per step: dh_pk, ek_pq (constant within the chain), n of
+         (i,0) and (i,1). *)
+      attacker(exp(g, dhsk(sClean, kA1)));
+      (* T8 *) attacker(pk(kemsk(sClean, kA1)));
+      (* T8 *) attacker(nmark(sClean, st1, c0));
+      (* T8 *) attacker(nmark(sClean, st1, c1));
+      (* T8 *) attacker(exp(g, dhsk(sClean, kB2)));
+      (* T8 *) attacker(pk(kemsk(sClean, kB2)));
+      (* T8 *) attacker(nmark(sClean, st2, c0));
+      (* T8 *) attacker(nmark(sClean, st2, c1));
+      (* T8 *) attacker(exp(g, dhsk(sClean, kA3)));
+      (* T8 *) attacker(pk(kemsk(sClean, kA3)));
+      (* T8 *) attacker(nmark(sClean, st3, c0));
+      (* T8 *) attacker(nmark(sClean, st3, c1));
+      (* T9: header forward secrecy — phase 1 Compromise(A,3) and Compromise(B,3); not attacker(header fields of
+         step 1): dh_pk, ek_pq, n of (1,0) and (1,1) (sHFS). *)
+      attacker(exp(g, dhsk(sHFS, kA1)));
+      (* T9 *) attacker(pk(kemsk(sHFS, kA1)));
+      (* T9 *) attacker(nmark(sHFS, st1, c0));
+      (* T9 *) attacker(nmark(sHFS, st1, c1));
+      (* T10: sanity, no healing without a step — Compromise(A,1); attacker(c) for c of step 1, n = 1 (sent after
+         the compromise on the same chain) (sPCS); expected false (the attacker learns c). *)
+      attacker(content(sPCS, st1, c1));
+      (* T11: KEM constancy is enforced — whenever P accepts message (i, n) of a chain, the header's ct_pq equals
+         the last_ct_r that P set for chain i at its DH step; every session, every receiver (B on chains 1 and 3,
+         A on chain 2). *)
+      event(RecvKem(s, p, i, n, x, ct)) ==> event(ChainKem(s, p, i, ct));
+      (* T12: sanity, header keys are not committing — hopen(hk1, …) = header && hopen(hk2, …) = header
+         ==> hk1 = hk2; expected false or unprovable (informative, not a gate). *)
+      event(HdrOpenTwice(k1, k2, h)) ==> k1 = k2.
+
+(* ---------------------------------------------------------------- processes --------------------------------- *)
+
+(* §7.3 Encrypt, given the chain key ck at position n: returns the cell hdr_nonce ‖ hdr_ct ‖ body *)
+letfun mkcell(hk: key, ck: key, sb: bitstring, header: bitstring, m: bitstring) =
+  new nn[]: nonce;
+  let hc = hseal(hk, nn, (lbl_hdr, sb), header) in
+  (nn, hc, bseal(ck_mk(ck), (lbl_body, sb, nn, hc), m)).
+
+(* Party A (initiator). dA: channel on which A receives step 2; dB: second delivery channel of step 3 (6.). *)
+let ProcA(s: tagt, mode: bitstring, dA: channel, dB: channel) =
+  let sb = sbind(s) in
+  (* §7.2 *)
+  let RK = init_rk(skey(s)) in
+  let HKA = init_hka(skey(s)) in
+  let NHKB = init_nhkb(skey(s)) in
+  let spk = exp(g, dhsk(s, kB0)) in                   (* dh_r = SPK_dh_R *)
+  let rpk = pk(kemsk(s, kB0)) in                      (* kem_r = RPK_kem_R *)
+  let a1 = dhsk(s, kA1) in
+  let dka1 = kemsk(s, kA1) in
+  let ct1 = encaps_ct(rpk, kemr(s, kA1)) in
+  let ss1 = encaps_ss(rpk, kemr(s, kA1)) in
+  let dh1 = exp(spk, a1) in                           (* each X25519 value is bound once (8.) *)
+  let rk1 = rk_rk(RK, dh1, ss1) in
+  let cks1 = rk_ck(RK, dh1, ss1) in
+  let nhks1 = rk_nhk(RK, dh1, ss1) in
+  (* §7.3 step 1, n = 0 (hk_s = HK_A, pn = 0) *)
+  let m10 = content(s, st1, c0) in
+  event Send(s, pA, st1, c0, m10);
+  let cell10 = mkcell(HKA, cks1, sb, (exp(g, a1), c0, c0, pk(dka1), ct1, nmark(s, st1, c0)), m10) in
+  out(c, cell10);
+  out(dB, cell10);
+  let cks1b = ck_ck(cks1) in
+  (
+    (* Compromise(A,1) in the mPCS sessions: A's state after step 1 was set up and (1,0) was sent (5.) *)
+    (if mode = mPCS then
+       event Compromise(s, pA, st1);
+       out(c, (sb, rk1, a1, spk, dka1, rpk, none, ct1, cks1b, none, HKA, none, nhks1, NHKB, c1, c0, c0, empty)))
+  |
+    (* §7.3 step 1, n = 1 *)
+    let m11 = content(s, st1, c1) in
+    event Send(s, pA, st1, c1, m11);
+    out(c, mkcell(HKA, cks1b, sb, (exp(g, a1), c0, c1, pk(dka1), ct1, nmark(s, st1, c1)), m11));
+    let cks1c = ck_ck(cks1b) in
+    (* §7.4 step 2, n = 0: hk_r = None, so only nhk_r = NHK_B opens => DH step *)
+    in(dA, (nn20: nonce, hc20: bitstring, bd20: bitstring));
+    let (dhpk2: G, pn20: bitstring, n20: bitstring, ek2: kemek, ct2: kemct, mk20: bitstring) =
+      hopen(NHKB, nn20, (lbl_hdr, sb), hc20) in
+    if dhpk2 = spk then 0 else                        (* a step must carry a new ratchet key *)
+    (* skip_message_keys(pn): ck_r = None => no-op. DHRatchet: pn = 2, n_s = n_r = 0, hk_s = nhk_s1, hk_r = NHK_B,
+       dh_r = dhpk2, kem_r = ek2, last_ct_r = ct2 *)
+    let ssr2 = decaps(dka1, ct2) in
+    let dhr2 = exp(dhpk2, a1) in
+    let rk2 = rk_rk(rk1, dhr2, ssr2) in
+    let ckr2 = rk_ck(rk1, dhr2, ssr2) in
+    let nhkr2 = rk_nhk(rk1, dhr2, ssr2) in
+    let a3 = dhsk(s, kA3) in
+    let dka3 = kemsk(s, kA3) in
+    let ct3 = encaps_ct(ek2, kemr(s, kA3)) in
+    let ss3 = encaps_ss(ek2, kemr(s, kA3)) in
+    let dh3 = exp(dhpk2, a3) in
+    let rk3 = rk_rk(rk2, dh3, ss3) in
+    let cks3 = rk_ck(rk2, dh3, ss3) in
+    let nhks3 = rk_nhk(rk2, dh3, ss3) in
+    if n20 = c0 then
+    let x20 = bopen(ck_mk(ckr2), (lbl_body, sb, nn20, hc20), bd20) in
+    event ChainKem(s, pA, st2, ct2);
+    event RecvKem(s, pA, st2, c0, x20, ct2);
+    event Recv(s, pA, st2, c0, x20);
+    let ckr2b = ck_ck(ckr2) in
+    (* §7.4 step 2, n = 1: hk_r = NHK_B opens => same chain; KEM constancy *)
+    in(dA, (nn21: nonce, hc21: bitstring, bd21: bitstring));
+    let (dhpk21: G, pn21: bitstring, n21: bitstring, ek21: kemek, ct21: kemct, mk21: bitstring) =
+      hopen(NHKB, nn21, (lbl_hdr, sb), hc21) in
+    if ek21 = ek2 then
+    if ct21 = ct2 then
+    if n21 = c1 then
+    let x21 = bopen(ck_mk(ckr2b), (lbl_body, sb, nn21, hc21), bd21) in
+    event RecvKem(s, pA, st2, c1, x21, ct21);
+    event Recv(s, pA, st2, c1, x21);
+    let ckr2c = ck_ck(ckr2b) in
+    if mode = mFS then (
+      (* Compromise(A,2), phase 1 (T3) *)
+      phase 1;
+      event Compromise(s, pA, st2);
+      out(c, (sb, rk3, a3, dhpk2, dka3, ek2, ct2, ct3, cks3, ckr2c, nhks1, NHKB, nhks3, nhkr2, c0, c2, c2, empty))
+    ) else (
+      (* §7.3 step 3, n = 0 and n = 1 (hk_s = nhk_s1, pn = 2) *)
+      let m30 = content(s, st3, c0) in
+      event Send(s, pA, st3, c0, m30);
+      let cell30 = mkcell(nhks1, cks3, sb, (exp(g, a3), c2, c0, pk(dka3), ct3, nmark(s, st3, c0)), m30) in
+      out(c, cell30);
+      out(dB, cell30);
+      let cks3b = ck_ck(cks3) in
+      let m31 = content(s, st3, c1) in
+      event Send(s, pA, st3, c1, m31);
+      let cell31 = mkcell(nhks1, cks3b, sb, (exp(g, a3), c2, c1, pk(dka3), ct3, nmark(s, st3, c1)), m31) in
+      out(c, cell31);
+      out(dB, cell31);
+      let cks3c = ck_ck(cks3b) in
+      if mode = mHFS then (
+        (* Compromise(A,3), phase 1 (T9) *)
+        phase 1;
+        event Compromise(s, pA, st3);
+        out(c, (sb, rk3, a3, dhpk2, dka3, ek2, ct2, ct3, cks3c, ckr2c, nhks1, NHKB, nhks3, nhkr2, c2, c2, c2, empty))
+      )
+    )
+  ).
+
+(* Party B (responder). dA: second delivery channel of step 2; dB: channel on which B receives step 3 (6.). *)
+let ProcB(s: tagt, mode: bitstring, dA: channel, dB: channel) =
+  let sb = sbind(s) in
+  (* §7.2 *)
+  let RK = init_rk(skey(s)) in
+  let HKA = init_hka(skey(s)) in
+  let NHKB = init_nhkb(skey(s)) in
+  let b0 = dhsk(s, kB0) in                            (* dh_s = SPK_dh_R keypair *)
+  let dk0 = kemsk(s, kB0) in                          (* kem_s = RPK_kem_R keypair *)
+  out(c, (exp(g, b0), pk(dk0)));                      (* the prekeys are public *)
+  (* §7.4 step 1, n = 0: hk_r = None, nhk_r = HK_A opens => DH step; dh_r = None (no dh_pk check), ck_r = None
+     (skip_message_keys(pn) is a no-op). DHRatchet: pn = 0, hk_s = NHK_B, hk_r = HK_A. Read from dB: the step-1
+     ratchet message (1,0) is the input of B's honest step in the mPCS sessions (6.) *)
+  in(dB, (nn10: nonce, hc10: bitstring, bd10: bitstring));
+  let (dhpk1: G, pn10: bitstring, n10: bitstring, ek1: kemek, ct1: kemct, mk10: bitstring) =
+    hopen(HKA, nn10, (lbl_hdr, sb), hc10) in
+  let ssr1 = decaps(dk0, ct1) in
+  let dhr1 = exp(dhpk1, b0) in                        (* each X25519 value is bound once (8.) *)
+  let rk1 = rk_rk(RK, dhr1, ssr1) in
+  let ckr1 = rk_ck(RK, dhr1, ssr1) in
+  let nhkr1 = rk_nhk(RK, dhr1, ssr1) in
+  let b2 = dhsk(s, kB2) in
+  let dkb2 = kemsk(s, kB2) in
+  let ct2 = encaps_ct(ek1, kemr(s, kB2)) in
+  let ss2 = encaps_ss(ek1, kemr(s, kB2)) in
+  let dh2 = exp(dhpk1, b2) in
+  let rk2 = rk_rk(rk1, dh2, ss2) in
+  let cks2 = rk_ck(rk1, dh2, ss2) in
+  let nhks2 = rk_nhk(rk1, dh2, ss2) in
+  if n10 = c0 then
+  let x10 = bopen(ck_mk(ckr1), (lbl_body, sb, nn10, hc10), bd10) in
+  event ChainKem(s, pB, st1, ct1);
+  event RecvKem(s, pB, st1, c0, x10, ct1);
+  event Recv(s, pB, st1, c0, x10);
+  let ckr1b = ck_ck(ckr1) in
+  (* §7.4 step 1, n = 1: hk_r = HK_A opens => same chain; KEM constancy *)
+  in(c, (nn11: nonce, hc11: bitstring, bd11: bitstring));
+  let (dhpk11: G, pn11: bitstring, n11: bitstring, ek11: kemek, ct11: kemct, mk11: bitstring) =
+    hopen(HKA, nn11, (lbl_hdr, sb), hc11) in
+  if ek11 = ek1 then
+  if ct11 = ct1 then
+  if n11 = c1 then
+  let x11 = bopen(ck_mk(ckr1b), (lbl_body, sb, nn11, hc11), bd11) in
+  event RecvKem(s, pB, st1, c1, x11, ct11);
+  event Recv(s, pB, st1, c1, x11);
+  let ckr1c = ck_ck(ckr1b) in
+  (* §7.3 step 2, n = 0 and n = 1 (hk_s = NHK_B, pn = 0) *)
+  let m20 = content(s, st2, c0) in
+  event Send(s, pB, st2, c0, m20);
+  let cell20 = mkcell(NHKB, cks2, sb, (exp(g, b2), c0, c0, pk(dkb2), ct2, nmark(s, st2, c0)), m20) in
+  out(c, cell20);
+  out(dA, cell20);
+  let cks2b = ck_ck(cks2) in
+  let m21 = content(s, st2, c1) in
+  event Send(s, pB, st2, c1, m21);
+  let cell21 = mkcell(NHKB, cks2b, sb, (exp(g, b2), c0, c1, pk(dkb2), ct2, nmark(s, st2, c1)), m21) in
+  out(c, cell21);
+  out(dA, cell21);
+  let cks2c = ck_ck(cks2b) in
+  if mode = mFS then (
+    (* Compromise(B,2), phase 1 (T3) *)
+    phase 1;
+    event Compromise(s, pB, st2);
+    out(c, (sb, rk2, b2, dhpk1, dkb2, ek1, ct1, ct2, cks2c, ckr1c, NHKB, HKA, nhks2, nhkr1, c2, c2, c0, empty))
+  ) else (
+    (* §7.4 step 3, n = 0: hk_r = HK_A is tried first — a cell it opens is a replay or a chain-1 message beyond
+       the bound, so the run stops; otherwise nhk_r = nhk_r1 opens => DH step *)
+    in(dB, (nn30: nonce, hc30: bitstring, bd30: bitstring));
+    let hx30 = hopen(HKA, nn30, (lbl_hdr, sb), hc30) in 0 else
+    let (dhpk3: G, pn30: bitstring, n30: bitstring, ek3: kemek, ct3: kemct, mk30: bitstring) =
+      hopen(nhkr1, nn30, (lbl_hdr, sb), hc30) in
+    if dhpk3 = dhpk1 then 0 else                      (* a step must carry a new ratchet key *)
+    if pn30 = c2 then                                 (* skip_message_keys(pn) on the old chain, in order *)
+    (* DHRatchet: pn = 2, n_s = n_r = 0, hk_s = nhk_s2, hk_r = nhk_r1, dh_r = dhpk3, kem_r = ek3, last_ct_r = ct3 *)
+    let ssr3 = decaps(dkb2, ct3) in
+    let dhr3 = exp(dhpk3, b2) in
+    let rk3 = rk_rk(rk2, dhr3, ssr3) in
+    let ckr3 = rk_ck(rk2, dhr3, ssr3) in
+    let nhkr3 = rk_nhk(rk2, dhr3, ssr3) in
+    let b4 = dhsk(s, kB4) in
+    let dkb4 = kemsk(s, kB4) in
+    let ct4 = encaps_ct(ek3, kemr(s, kB4)) in
+    let ss4 = encaps_ss(ek3, kemr(s, kB4)) in
+    let dh4 = exp(dhpk3, b4) in
+    let rk4 = rk_rk(rk3, dh4, ss4) in
+    let cks4 = rk_ck(rk3, dh4, ss4) in
+    let nhks4 = rk_nhk(rk3, dh4, ss4) in
+    if n30 = c0 then
+    let x30 = bopen(ck_mk(ckr3), (lbl_body, sb, nn30, hc30), bd30) in
+    event ChainKem(s, pB, st3, ct3);
+    event RecvKem(s, pB, st3, c0, x30, ct3);
+    event Recv(s, pB, st3, c0, x30);
+    let ckr3b = ck_ck(ckr3) in
+    (* §7.4 step 3, n = 1: hk_r = nhk_r1 opens => same chain; KEM constancy *)
+    in(dB, (nn31: nonce, hc31: bitstring, bd31: bitstring));
+    let (dhpk31: G, pn31: bitstring, n31: bitstring, ek31: kemek, ct31: kemct, mk31: bitstring) =
+      hopen(nhkr1, nn31, (lbl_hdr, sb), hc31) in
+    if ek31 = ek3 then
+    if ct31 = ct3 then
+    if n31 = c1 then
+    let x31 = bopen(ck_mk(ckr3b), (lbl_body, sb, nn31, hc31), bd31) in
+    event RecvKem(s, pB, st3, c1, x31, ct31);
+    event Recv(s, pB, st3, c1, x31);
+    let ckr3c = ck_ck(ckr3b) in
+    if mode = mHFS then (
+      (* Compromise(B,3), phase 1 (T9) *)
+      phase 1;
+      event Compromise(s, pB, st3);
+      out(c, (sb, rk4, b4, dhpk3, dkb4, ek3, ct3, ct4, cks4, ckr3c, nhks2, nhkr1, nhks4, nhkr3, c0, c2, c2, empty))
+    )
+  ).
+
+(* T12 probe: an honest opener that tries two keys on one header ciphertext (7.) *)
+let ProbeT12 =
+  in(c, (k1: key, k2: key, nn: nonce, ad: bitstring, hc: bitstring));
+  let h1 = hopen(k1, nn, ad, hc) in
+  let h2 = hopen(k2, nn, ad, hc) in
+  if h1 = h2 then event HdrOpenTwice(k1, k2, h1).
+
+process
+    (ProcA(sClean, mClean, c, c) | ProcB(sClean, mClean, c, c))
+  | (ProcA(sFS, mFS, c, c) | ProcB(sFS, mFS, c, c))
+  | (ProcA(sPCS, mPCS, pch_ba(sPCS), pch_ab(sPCS)) | ProcB(sPCS, mPCS, pch_ba(sPCS), pch_ab(sPCS)))
+  | (ProcA(sPCSdh, mPCS, pch_ba(sPCSdh), pch_ab(sPCSdh)) | ProcB(sPCSdh, mPCS, pch_ba(sPCSdh), pch_ab(sPCSdh)))
+  | (ProcA(sPCSkem, mPCS, pch_ba(sPCSkem), pch_ab(sPCSkem)) | ProcB(sPCSkem, mPCS, pch_ba(sPCSkem), pch_ab(sPCSkem)))
+  | (ProcA(sPCSboth, mPCS, pch_ba(sPCSboth), pch_ab(sPCSboth)) | ProcB(sPCSboth, mPCS, pch_ba(sPCSboth), pch_ab(sPCSboth)))
+  | (ProcA(sHFS, mHFS, c, c) | ProcB(sHFS, mHFS, c, c))
+  | ProbeT12

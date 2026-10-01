@@ -15,4 +15,10 @@ The gate (`cargo xtask step proverif`, part of `ci-full`) requires ProVerif 2.05
 a self-test with one query that must be true and one that must be false, and runs exactly the models listed in
 `xtask/src/expect.rs` (`PROVERIF_MODELS`). Model files start with `(* SPDX-License-Identifier: AGPL-3.0-or-later *)`.
 
-Status: empty in M0.
+For each model the gate compares the verdicts of its `RESULT` lines, in order, with `expect::PROVERIF_EXPECTED`
+(runs of `CLAIMS.md` IDs with their expected verdict): the number of lines must match, a query expected true must be
+proved, a query expected false must be refuted (ProVerif reports an attack), an informative query may give anything;
+a unit test checks the table against the "Expected" column of `CLAIMS.md`.
+
+Status: M3 — `tr.pv` (39 `RESULT` lines: T1–T6, T8, T9, T11 true; T7, T10 false; T12 informative, false) is in
+`PROVERIF_MODELS` and checked by the gate; `hx.pv` and `link.pv` follow in M4 and M5.

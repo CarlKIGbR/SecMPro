@@ -1,8 +1,10 @@
 # Milestone report — M03 SecMP-TR hybrid ratchet (sans-IO) + ProVerif model
 
-Branch: `m03-tr` · Base: `main` at `e4a3d55bb1f67db83ed4d6346e40d6404ba7dffd` (M2 squash merge) · Author: Claude Code (Opus 5.5) · Date: 2026-09-30
+Branch: `m03-tr` · Base: `main` at `e4a3d55bb1f67db83ed4d6346e40d6404ba7dffd` (M2 squash merge) · Commit range: `bb33d6c` … the head of the PR · Author: Claude Code (Opus 5.5) · Date: 2026-09-30 – 2026-10-01
 
-Status: **in progress** (plan written before any M3 code; §2–§9 are filled in as the steps land).
+Status: **ready for review** — every plan step is done and evidenced locally (macOS arm64); the PR run on the head is the
+Linux/Windows evidence (§4). Nothing is blocked; three spec readings are raised as SQ-25 … SQ-27 (§8), none touches a
+vector. The reference's Python TR code was never read (§8).
 
 Inputs: `docs/07` M3; spec `docs/03` rev 2.3 §7 (7.1–7.8, the pseudocode is normative), §3.3–3.4, App. A/B/D.5;
 `docs/06` §4 (gates incl. Formal), §8, §9; `docs/08` ADR-004, ADR-026, ADR-038, ADR-041 with Amendment 1;
@@ -29,27 +31,27 @@ semantics (M7). `secmp-proto` stays sans-IO; every cryptographic operation goes 
 |---|---|---|---|
 | 0a | Reference file verified: `vectors/ref/tr.json` SHA-256 `01a6d161…201a837`, `"schema": 4`, `"spec": "SecMP/1 rev 2.3"`, 96 cases (1 init, 40 send, 40 recv, 2 advance, 13 recv-reject) | precondition | done (before any change) |
 | 0b | Commit 1: the inherited reference files unchanged (`ref/` TR files, `vectors/ref/tr.json`, `vectors/SCHEMA.md` rev 4, `vectors/SCHEMA-4.9-tr.md`, `docs/reviews/ref-spec-questions-M3.md`); `formal/CLAIMS.md` §TR verbatim; this plan; `expect::VECTOR_REF_PENDING` = [`tr`] (the reference file is committed before its freeze, as in M2 step 0j); **F19** — the policy check refuses a job-level `if:` on the four required jobs other than the one pinned in `expect::REQUIRED_JOB_CONDITIONS`, with a test (`required_jobs_keep_their_pinned_conditions`) | brief commit 1 | done (commit 1) |
-| 0c | **F1** `PartialEq`/`Eq` only under `cfg_attr(test, …)` on the types carrying MACs, commitments, tokens or tags (`Hs1`, `Hs2`, `RequestCmd`, `LinkBlob`, `InnerCt`, `HandshakeCell`, `Cell`) and on the types that contain them (`Request`, `Cellr`, `ResponseCmd`, `Response`, `Outer`); the integration tests compare encodings for them (`check_bytes`) | M2 review F1 | open |
-| 0d | **F9** `const` assertion LinkDataV1 maximum fields 9899 ≤ 12288 (`sizes.rs`); **F20** `wire/signed.rs` returns `Zeroizing<Vec<u8>>` | F9, F20 | open |
-| 0e | **F3** `secmp-proto` in `MIRI_PACKAGES` (heavy TR tests in `MIRI_SKIP` with the measured reason); **F5** `${{ github.run_attempt }}` in the `linux-full` ct artefact name | F3, F5 | open |
-| 0f | **F2 + F10** scheduled, non-required `fuzz-nightly.yml` (4 h, scratch corpus, per-target budget = 4 h / number of targets, the `fuzz/README.md` claim made true) with an env-seeded property run (`SECMP_PROPTEST_SEED` from the run, printed); **F7** the fuzz gate fuzzes a scratch corpus under `target/` seeded from `fuzz/corpus/<t>` (read-only) plus a seeding step from the frozen vectors, so the tracked corpus is never written by a gate; **F18** a unit test for the `-max_len` argument of the fuzz command | F2, F7, F10, F18 | open |
-| 0g | **F8** CI step 12a byte-compares `vectors/<suite>.json` with `vectors/ref/<suite>.json` | F8 | open |
-| 0h | **F13** the fine-timer recomputation as a committed script under `docs/reviews/M02-evidence/ct-adr041-amendment1/` (input: the recorded per-crop statistics of PR run 36651079069; output: the table of `README.md` l. 97–130), with its output checked against the README | F13 | open |
-| 0i | **F15–F17** ct gate: the positive control's detection checked for any verdict label; refusal tests for the checks that can currently be removed unnoticed (mixed-crop `!fail_sure`, target floor × 1.4, t-rounding margin, control name, duplicate target); an upper bound on a target's `q_eff_ticks` | F15, F16, F17 | open |
-| 1 | `secmp-crypto` additions (all spec-defined, no new construction): `Aead` — plain XChaCha20-Poly1305 for ratchet headers (§7.3, §7.5; §8.4 frames in M5) with `seal`, `open` and a constant-time `open_ct` returning a `Choice`; `tr_init`, `kdf_rk`, `kdf_ck` (§7.2); `X25519Secret::expose_secret` and `MlKem{768,1024}Dk::expose_seed` for the persistence encoding; re-export of `subtle::{Choice, ConditionallySelectable, ConstantTimeEq}` so that `secmp-proto` keeps no direct crypto dependency. Tests: draft-irtf-cfrg-xchacha A.3.1 vector, RFC 4231 HMAC vectors through `kdf_ck`, the frozen `hkdf-labels` rows 5/6 through `tr_init`/`kdf_rk`, every failure path | foundation; review focus L3 | open |
-| 2 | **F4** (design D1 below): `secmp_proto::Error::Unavailable`, distinct from `Rejected`, never produced by a wire decoder | F4 | open |
-| 3 | `tr::RatchetState` (§7.1 exactly) and its versioned persistence encoding `RatchetStateV1` (D5), zeroizing; `from_bytes` total, canonical and restricted to reachable shapes | deliverable "serialisable, zeroizing"; property "state round-trips at every step" | open |
-| 4 | `init_initiator`/`init_responder` (§7.2), `encrypt` (§7.3, persist-before-send by construction, D4), `decrypt` (§7.4, transactional, D2/D3), `DHRatchet` with the KEM in both halves, `skip_message_keys` (`SKIP_WINDOW` 256, `MAX_FF` 2^20, earliest-inserted eviction, total ≤ 512), skipped-key lookup over every distinct `hk`, the `dh_pk == dh_r` rejection, KEM constancy on non-step messages, u32 counters with `checked_add` | review focus: header-key rotation, KEM constancy, fast-forward bounds, transactional decrypt | open |
-| 5 | `tr::content` (D6, D7): dummy generation, Batch, Fragment reassembly (≤ 64 fragments, same `msg_id`), `KeyChange` verified with the old `IK_sig` (§7.7: contact unverified, outgoing real messages blocked; unverifiable → session frozen), `RouteUpdate`; **F21** decrypted Content, `AppMessage.payload`, `Control.arg` and reassembly buffers are `Zeroizing` | deliverable "dummy generation, fragment/batch/KeyChange/RouteUpdate content handling"; F21 | open |
-| 6 | `tr` suite: `tests/tr_vectors.rs` replays the 96 events with both states, checking every `state_pre`/`state_post` (`StateDigestV1` implemented in the test crate from the documented persistence layout), every `cell`, every `content`, every rejection with an unchanged state; Rust generator (`examples/gen-tr.rs`, no vector file read) and `cargo xtask vectors` freeze `vectors/tr.json` byte-identical to `vectors/ref/tr.json`; `VECTOR_SUITES` += `tr` | "Vectors … pass"; frozen vectors (40 messages, two round trips, out-of-order, dropped first message of a chain, 10 000 gap; negatives) | open |
-| 7 | Negative unit tests, one per rejection path of §7.4 (cell length, no header key incl. absent keys, header decode, step with `dh_pk == dh_r`, KEM constancy `ek_pq` and `ct_pq`, replay below `n_r` on a chain and on a skipped key, gap > `MAX_FF` on `pn` and on `n`, `n_r` at `u32::MAX`, body MAC on the chain / skipped / step paths, wrong `sb`), each asserting the uniform error and the byte-identical state; encrypt refusals (no sending chain, `n_s` at `u32::MAX`) | "negative tests for every rejection path of §7.4" | open |
-| 8 | Property tests (`rand`, fixed seed, `SECMP_PROPTEST_SEED` override): random interleavings with drops, duplicates, reorders and gaps up to and beyond `MAX_FF`; every message key tracked (never reused), never a panic, state round-trips through `to_bytes`/`from_bytes` after every event, every rejection leaves the state byte-identical | property criterion | open |
-| 9 | Kani: `tr_header_selection` (the constant-time selection equals the §7.4 sequential pseudocode for every combination of opened keys and lookups, up to 4 distinct skipped header keys), `tr_skip_plan` (per-call bounds: rejection below `n_r` and above `MAX_FF`, at most `SKIP_WINDOW` stored, the stored positions are exactly the last `min(gap, 256)`, no overflow), `tr_eviction` (total ≤ 512, earliest first); `KANI_HARNESSES` extended | brief: Kani for header-decrypt selection and skip bounds | open |
-| 10 | Fuzz: `tr_decrypt` (selector: raw cell bytes of any length; a header plaintext sealed under the receiver's `hk_r` or `nhk_r` with an honest body — reaches decode, constancy, step and skip) and `tr_state` (`from_bytes` never panics; an accepted input re-encodes to itself); corpora seeded from the vectors; `FUZZ_TARGETS`/`FUZZ_MAX_LEN` extended | fuzz obligation (CLAUDE.md §2.4) | open |
-| 11 | ct gate (D8, D9): targets `tr_decrypt_reject_hdr_key`, `tr_decrypt_reject_body_tag`, `tr_decrypt_reject_ct_pq` and the inline A/A′ control `aa_prime_control` (F6) in `expect::CT_TARGETS`; the bench moves to `secmp-testkit` so it can call `secmp-proto` (ADR-042, engineering) | brief ct item; F6 | open |
-| 12 | `formal/tr.pv` with exactly the queries of `CLAIMS.md` §TR and its abstractions; the ProVerif gate compares every `RESULT` with the expected verdict (`expect::PROVERIF_EXPECTED`: T1–T6, T8, T9, T11 true; T7, T10 false; T12 informative); `PROVERIF_MODELS` += `tr` | "ProVerif green on the fixed query set" | open |
-| 13 | Performance (D11): `cargo xtask step perf` runs a release measurement of encrypt + decrypt (a chain message and a DH-step message), fails at ≥ 3 ms; recorded locally and from the CI Linux runner in `M03-evidence/` | "encrypt+decrypt of a message < 3 ms" | open |
-| 14 | Mutants (`secmp-crypto`, `secmp-proto`: zero survivors or documented), coverage ≥ 90 %, Miri, Kani, fuzz, ProVerif, ct; local `ci-full` chunks and the PR run; gate logs under `docs/reviews/M03-evidence/`; CHANGELOG; report; PR | `docs/06` §8 DoD | open |
+| 0c | **F1** `PartialEq`/`Eq` only under `cfg_attr(test, …)` on the types carrying MACs, commitments, tokens or tags (`Hs1`, `Hs2`, `RequestCmd`, `LinkBlob`, `InnerCt`, `HandshakeCell`, `Cell`) and on the types that contain them (`Request`, `Cellr`, `ResponseCmd`, `Response`, `Outer`); the integration tests compare encodings for them (`check_bytes`) | M2 review F1 | done `9eeb2f9` (13 types incl. `Inner`; `canonical.rs` compile-time check `structures_with_macs_commitments_tokens_or_tags_have_no_partial_eq`) |
+| 0d | **F9** `const` assertion LinkDataV1 maximum fields 9899 ≤ 12288 (`sizes.rs`); **F20** `wire/signed.rs` returns `Zeroizing<Vec<u8>>` | F9, F20 | done `9eeb2f9` (F9: Profile max 98, LinkDataV1 max 9899, 9899 + 1 ≤ 12288; F20: every `wire::signed` builder; test `signed_messages_are_zeroizing`) |
+| 0e | **F3** `secmp-proto` in `MIRI_PACKAGES` (heavy TR tests in `MIRI_SKIP` with the measured reason); **F5** `${{ github.run_attempt }}` in the `linux-full` ct artefact name | F3, F5 | done: F5 `73f41cb`; F3 `f31445d`, `f918703` (per-package Miri runs and skips, measured; §4) |
+| 0f | **F2 + F10** scheduled, non-required `fuzz-nightly.yml` (4 h, scratch corpus, per-target budget = 4 h / number of targets, the `fuzz/README.md` claim made true) with an env-seeded property run (`SECMP_PROPTEST_SEED` from the run, printed); **F7** the fuzz gate fuzzes a scratch corpus under `target/` seeded from `fuzz/corpus/<t>` (read-only) plus a seeding step from the frozen vectors, so the tracked corpus is never written by a gate; **F18** a unit test for the `-max_len` argument of the fuzz command | F2, F7, F10, F18 | done `b26e9e9` (`xtask/src/fuzzseed.rs`, `fuzz_args`, `fuzz-nightly` step and workflow, `fuzz/README.md`); the TR targets' seeds `4c501d8` |
+| 0g | **F8** CI step 12a byte-compares `vectors/<suite>.json` with `vectors/ref/<suite>.json` | F8 | done `8426c27` (test `step_12a_refuses_a_frozen_file_that_is_not_a_verbatim_copy`) |
+| 0h | **F13** the fine-timer recomputation as a committed script under `docs/reviews/M02-evidence/ct-adr041-amendment1/` (input: the recorded per-crop statistics of PR run 36651079069; output: the table of `README.md` l. 97–130), with its output checked against the README | F13 | done `ad22be4` (script output byte-identical to the README table, which now sits at README l. 117–135) |
+| 0i | **F15–F17** ct gate: the positive control's detection checked for any verdict label; refusal tests for the checks that can currently be removed unnoticed (mixed-crop `!fail_sure`, target floor × 1.4, t-rounding margin, control name, duplicate target); an upper bound on a target's `q_eff_ticks` | F15, F16, F17 | done `4f98eeb` (17 of 17 checks fail a test when neutralised: `M03-evidence/ct-gate-check-neutralisation.txt`; F17 bound `q_eff_ticks ≤ max(clock q_eff, 10 ns) + 1 tick`) |
+| 1 | `secmp-crypto` additions (all spec-defined, no new construction): `Aead` — plain XChaCha20-Poly1305 for ratchet headers (§7.3, §7.5; §8.4 frames in M5) with `seal`, `open` and a constant-time `open_ct` returning a `Choice`; `tr_init`, `kdf_rk`, `kdf_ck` (§7.2); `X25519Secret::expose_secret` and `MlKem{768,1024}Dk::expose_seed` for the persistence encoding; re-export of `subtle::{Choice, ConditionallySelectable, ConstantTimeEq}` so that `secmp-proto` keeps no direct crypto dependency. Tests: draft-irtf-cfrg-xchacha A.3.1 vector, RFC 4231 HMAC vectors through `kdf_ck`, the frozen `hkdf-labels` rows 5/6 through `tr_init`/`kdf_rk`, every failure path | foundation; review focus L3 | done `fb936c2` (tests: draft-irtf-cfrg-xchacha-03 §A.3.1 = Wycheproof tcId 1, 306 Wycheproof XChaCha20-Poly1305 cases through `Aead`, frozen `hkdf-labels` row 6 through `kdf_rk`; `tr_init`/`kdf_ck` against a hand-composed HMAC/HKDF anchored to RFC 4231 cases 1–4 — row 5 has a stream salt, so it cannot go through `tr_init`, and `kdf_ck`'s messages are fixed) |
+| 2 | **F4** (design D1 below): `secmp_proto::Error::Unavailable`, distinct from `Rejected`, never produced by a wire decoder | F4 | done `9eeb2f9` |
+| 3 | `tr::RatchetState` (§7.1 exactly) and its versioned persistence encoding `RatchetStateV1` (D5), zeroizing; `from_bytes` total, canonical and restricted to reachable shapes | deliverable "serialisable, zeroizing"; property "state round-trips at every step" | done `c6847cd` (fix `8b8eed1`) |
+| 4 | `init_initiator`/`init_responder` (§7.2), `encrypt` (§7.3, persist-before-send by construction, D4), `decrypt` (§7.4, transactional, D2/D3), `DHRatchet` with the KEM in both halves, `skip_message_keys` (`SKIP_WINDOW` 256, `MAX_FF` 2^20, earliest-inserted eviction, total ≤ 512), skipped-key lookup over every distinct `hk`, the `dh_pk == dh_r` rejection, KEM constancy on non-step messages, u32 counters with `checked_add` | review focus: header-key rotation, KEM constancy, fast-forward bounds, transactional decrypt | done `c6847cd`, `e154473`, `8b8eed1` |
+| 5 | `tr::content` (D6, D7): dummy generation, Batch, Fragment reassembly (≤ 64 fragments, same `msg_id`), `KeyChange` verified with the old `IK_sig` (§7.7: contact unverified, outgoing real messages blocked; unverifiable → session frozen), `RouteUpdate`; **F21** decrypted Content, `AppMessage.payload`, `Control.arg` and reassembly buffers are `Zeroizing` | deliverable "dummy generation, fragment/batch/KeyChange/RouteUpdate content handling"; F21 | done `c6847cd`, `8b8eed1` (F21 types `9eeb2f9`) |
+| 6 | `tr` suite: `tests/tr_vectors.rs` replays the 96 events with both states, checking every `state_pre`/`state_post` (`StateDigestV1` implemented in the test crate from the documented persistence layout), every `cell`, every `content`, every rejection with an unchanged state; Rust generator (`examples/gen-tr.rs`, no vector file read) and `cargo xtask vectors` freeze `vectors/tr.json` byte-identical to `vectors/ref/tr.json`; `VECTOR_SUITES` += `tr` | "Vectors … pass"; frozen vectors (40 messages, two round trips, out-of-order, dropped first message of a chain, 10 000 gap; negatives) | done: replay `c6847cd`; generator and freeze `13b2d80` (`vectors/tr.json` byte-identical to the reference, SHA-256 `01a6d161…201a837`) |
+| 7 | Negative unit tests, one per rejection path of §7.4 (cell length, no header key incl. absent keys, header decode, step with `dh_pk == dh_r`, KEM constancy `ek_pq` and `ct_pq`, replay below `n_r` on a chain and on a skipped key, gap > `MAX_FF` on `pn` and on `n`, `n_r` at `u32::MAX`, body MAC on the chain / skipped / step paths, wrong `sb`), each asserting the uniform error and the byte-identical state; encrypt refusals (no sending chain, `n_s` at `u32::MAX`) | "negative tests for every rejection path of §7.4" | done `2b4e18a` (51 tests), `4bb7edc` |
+| 8 | Property tests (`rand`, fixed seed, `SECMP_PROPTEST_SEED` override): random interleavings with drops, duplicates, reorders and gaps up to and beyond `MAX_FF`; every message key tracked (never reused), never a panic, state round-trips through `to_bytes`/`from_bytes` after every event, every rejection leaves the state byte-identical | property criterion | done `8f438de` |
+| 9 | Kani: `tr_header_selection` (the constant-time selection equals the §7.4 sequential pseudocode for every combination of opened keys and lookups, up to 4 distinct skipped header keys), `tr_skip_plan` (per-call bounds: rejection below `n_r` and above `MAX_FF`, at most `SKIP_WINDOW` stored, the stored positions are exactly the last `min(gap, 256)`, no overflow), `tr_eviction` (total ≤ 512, earliest first); `KANI_HARNESSES` extended | brief: Kani for header-decrypt selection and skip bounds | done `4c501d8` (Kani 19/19) |
+| 10 | Fuzz: `tr_decrypt` (selector: raw cell bytes of any length; a header plaintext sealed under the receiver's `hk_r` or `nhk_r` with an honest body — reaches decode, constancy, step and skip) and `tr_state` (`from_bytes` never panics; an accepted input re-encodes to itself); corpora seeded from the vectors; `FUZZ_TARGETS`/`FUZZ_MAX_LEN` extended | fuzz obligation (CLAUDE.md §2.4) | done `4c501d8` |
+| 11 | ct gate (D8, D9): targets `tr_decrypt_reject_hdr_key`, `tr_decrypt_reject_body_tag`, `tr_decrypt_reject_ct_pq` and the inline A/A′ control `aa_prime_control` (F6) in `expect::CT_TARGETS`; the bench moves to `secmp-testkit` so it can call `secmp-proto` (ADR-042, engineering) | brief ct item; F6 | done: bench move and A/A′ `966ed91`, `7e3e549`; TR targets `f918703` |
+| 12 | `formal/tr.pv` with exactly the queries of `CLAIMS.md` §TR and its abstractions; the ProVerif gate compares every `RESULT` with the expected verdict (`expect::PROVERIF_EXPECTED`: T1–T6, T8, T9, T11 true; T7, T10 false; T12 informative); `PROVERIF_MODELS` += `tr` | "ProVerif green on the fixed query set" | done: model `1f96126`; gate `f918703` |
+| 13 | Performance (D11): `cargo xtask step perf` runs a release measurement of encrypt + decrypt (a chain message and a DH-step message), fails at ≥ 3 ms; recorded locally and from the CI Linux runner in `M03-evidence/` | "encrypt+decrypt of a message < 3 ms" | done `f918703` (§3) |
+| 14 | Mutants (`secmp-crypto`, `secmp-proto`: zero survivors or documented), coverage ≥ 90 %, Miri, Kani, fuzz, ProVerif, ct; local `ci-full` chunks and the PR run; gate logs under `docs/reviews/M03-evidence/`; CHANGELOG; report; PR | `docs/06` §8 DoD | done locally (§4); the PR run is the CI evidence |
 
 ### 1.2 Design decisions (brief: F4, F6, persistence and incremental API are decided here)
 
@@ -173,41 +175,159 @@ the SCHEMA §2 byte stream in the order of SCHEMA-4.9 (X25519 secret 32 B, ML-KE
 
 ## 2. What was built
 
-(filled in as the steps land)
+Commits (in order): commit 1 `bb33d6c` (plan, CLAIMS §TR, reference TR files, F19); M2 follow-ups `73f41cb` (F5),
+`8426c27` (F8), `4f98eeb` (F15–F17), `ad22be4` (F13), `b26e9e9` (F7, F18, F2, F10), `966ed91`, `7e3e549` (ADR-042,
+F6), `46dd070`, `801476b` (evidence), `f31445d` (F3); M3 code `fb936c2` (crypto), `9eeb2f9` (F1, F4, F9, F10, F20,
+F21), `c6847cd` (TR core), `e154473` (kat digests), `8b8eed1` (fixes), `2b4e18a` (unit tests), `8f438de` (property
+tests), `13b2d80` (generator, freeze), `4c501d8` (Kani, fuzz), `1f96126` (ProVerif model), `f918703` (gate wiring),
+`fb751ac` (evidence), `4bb7edc`, `c907881` (mutation-gate runtime and survivors), and the docs commit with this report.
+
+- **`secmp-crypto`** (spec §3 table, §7.2): `Aead` — plain XChaCha20-Poly1305 for ratchet headers (§7.3/§7.5; link
+  frames §8.4 later) with `seal`, `open` (zeroizing plaintext) and `open_ct` (constant-work trial opening, `Choice`
+  result, zeros selected without a branch on a rejection); `tr_init`, `kdf_rk`, `kdf_ck` (HMAC keyed once per call
+  for the fast-forward); `X25519Secret::expose_secret`, `MlKem{768,1024}Dk::expose_seed` (persistence); re-exports
+  of `subtle::{Choice, ConditionallySelectable, ConstantTimeEq}`. No new construction, no new dependency.
+- **`secmp-proto::tr`** (spec §7.1–§7.7): `RatchetState` with the fields of §7.1 exactly and the persistence encoding
+  `RatchetStateV1` (`tr/state.rs` documents it byte by byte; ≤ 38 585 B; decoding total, canonical, reachable shapes
+  only); `init_initiator`/`init_responder` (§7.2); `encrypt` → `Sealed` (the cell leaves only through
+  `Sealed::persist`); `decrypt` → `Opened` (`Opened::commit`), both consuming the state and handing it back unchanged
+  in `Refused`; `DHRatchet` with ML-KEM-768 in both halves, the sending half after the body MAC (D2);
+  `skip_message_keys` with `SKIP_WINDOW` 256, `MAX_FF` 2^20, total 512, earliest-first eviction; the header opened
+  under every distinct skipped header key, `hk_r` and `nhk_r` with constant work and the §7.4 case selected by
+  `tr::select` (D3); the `dh_pk == dh_r` rejection; KEM constancy on non-step messages; `checked_add` counters;
+  `tr::Entropy` (sealed; `OsEntropy`; `FixedEntropy` under `kat`); `tr::content` (`dummy()`, `Inbox` with delivery,
+  reassembly and persistence, key changes with `Trust`, D6/D7). `secmp_proto::Error::Unavailable` (D1).
+- **Tests and vectors**: `tests/tr_vectors.rs` (the 96 events), `tests/tr_generator.rs` + `tests/common/tr.rs` +
+  `examples/gen-tr.rs` (the Rust generator; `vectors/tr.json` frozen), `tests/tr_properties.rs`, `src/tr/tests.rs`
+  (51 unit tests), `tests/tr_smoke.rs`; Kani `tr_header_selection`, `tr_skip_plan`, `tr_eviction`; fuzz `tr_decrypt`,
+  `tr_state` (with `fuzz/common/tr_fixture.rs` and seed corpora); ct targets `tr_decrypt_reject_{hdr_key, body_tag,
+  ct_pq}` and `aa_prime_control`; `examples/tr-perf.rs` and the `perf` step; `formal/tr.pv`.
+- **Gates and CI** (`xtask`, workflows): the M2 follow-ups of the plan table; `PROVERIF_EXPECTED` and the positional
+  verdict check; `KANI_HARNESSES` 19; `FUZZ_TARGETS` 14 with `-max_len` and a per-input timeout; `CT_TARGETS` 13;
+  `TR_PERF_MAX_MS`; `tr` frozen (`VECTOR_SUITES`), also checked with libcrux's portable backend; Miri over
+  `secmp-proto` without the `kat`-only targets; `MUTANT_EXCLUDE_RE` for the `kat`-only TR code.
+- **Docs**: ADR-042 (proposed), the ADR-038 note, `docs/06` §2/§4 rows (ct bench location and TR targets, Miri set,
+  the `perf` check), `docs/07` status lines, `formal/README.md`, `fuzz/README.md`, `xtask/README.md`, CHANGELOG,
+  SQ-25 … SQ-27 (`docs/reviews/ref-spec-questions-M3.md`), evidence under `docs/reviews/M03-evidence/`.
 
 ## 3. Evidence per acceptance criterion
 
-(filled in as the steps land)
+All local numbers are from macOS arm64 (the development host). The Linux and Windows evidence is the PR run on the
+head (§4).
+
+| Criterion (`docs/07` M3) | Test / command | Result |
+|---|---|---|
+| Vectors pass (40-message bidirectional transcript, two round trips, out of order, dropped first message of a chain, 10 000 gap; negatives: bad KEM ct, replay, truncated, wrong `sb`, KEM material changed mid-chain) | `cargo nextest run -p secmp-proto --features kat --test tr_vectors` (`every_event_of_the_tr_file`) | 96/96 events: 1 init, 40 send (cell byte-exact), 40 recv (content byte-exact), 2 advance (10 000 and 300), 13 recv-reject (uniform `Rejected`, state byte-identical); every `state_pre`/`state_post` digest equal; 14.0 s (debug). Also with libcrux's portable backend (`kat` step). The first run of the Rust implementation against the reference file passed; nothing was adjusted to it. |
+| Rust and `ref/` vectors identical; frozen | `cargo xtask vectors`; `tests/tr_generator.rs` | `tr: agrees with ref; frozen as vectors/tr.json`; `cmp vectors/tr.json vectors/ref/tr.json` identical, SHA-256 `01a6d161138508af8fedd27df0fe5c62d473dbbf27530accbe6cde293201a837`; the generator reads no vector file and reproduced the reference on its first run; `ref-vectors`: 10 frozen suites (846 cases) structurally and byte-identical |
+| Properties pass: interleavings with drops/dups/reorders/gaps never reuse a message key (all keys tracked) or panic; state round-trips at every step | `cargo nextest run -p secmp-proto --features kat --test tr_properties` | default seed: 2400 events, 1227 sealing-key digests all distinct, 883 deliveries (729 accepted: 152 in order, 112 ahead, 167 DH steps, 298 late; 154 rejected: 136 replays, 16 late beyond the window, 2 beyond `MAX_FF`), 102 tampered cells rejected, two `MAX_FF` gaps (on `n` and on `pn`: `MAX_FF + d` rejected, `MAX_FF` accepted), 1840 round trips, 631 reloads, `skipped` reached 512 with 6270 evictions; every delivery's outcome equal to the §7.4 model; 56.5 s; seeds 1 and 20261001 pass |
+| ProVerif green on the fixed query set | `cargo xtask step --strict proverif` (`M03-evidence/proverif-aarch64-apple-darwin-e154473.txt`) | 39 RESULT lines in `PROVERIF_EXPECTED` order: T1 (6), T2 (2), T3 (4), T4–T6 (2 each), T8 (12), T9 (4), T11 (1) true; T7 (2) and T10 (1) false (attack found); T12 false (informative); 72 s |
+| Encrypt + decrypt of a message < 3 ms | `cargo xtask step --strict perf` (`M03-evidence/tr-perf-aarch64-apple-darwin-e154473.txt`; and the local run on `c907881`'s tree) | per message encrypt + persist + decrypt + commit, 200 per kind: chain median 63.4–141.3 µs, max 69.8–246.3 µs; DH step median 219.1–220.1 µs, max 232.9–324.4 µs (three runs; the higher values with other jobs on the machine) — every maximum ≤ 0.33 ms; CI Linux: the `perf` step of the PR run |
+
+| Review focus (`docs/07` M3) | Evidence |
+|---|---|
+| Header-key rotation exactly per §7.2–7.4 | `tr::tests::ratchet_header_keys_rotate_per_spec`; every vector state digest (the digest covers `hk_s`, `hk_r`, `nhk_s`, `nhk_r`); the property model checks that a new sending chain's `hk_s` equals the peer's `nhk_r`; ProVerif T8/T9 |
+| KEM material constant within a chain and rejected otherwise | `ratchet_kem_material_constant_within_a_chain_fresh_at_every_step`, `reject_kem_material_that_changes_within_a_chain` (`ek_pq`, `ct_pq`, both); vectors N2, N3; ProVerif T11 (true in every session; false when the check is removed); ct target `tr_decrypt_reject_ct_pq` |
+| Persist-before-send/ack possible with the API | `Sealed::persist`, `Opened::commit` (D4); `encrypt_persist_and_commit_errors_are_returned`; the property tests assert that the bytes handed to `persist`/`commit` are the new state's encoding |
+| Fast-forward bounds | `select::tests::skip_plan_bounds`; Kani `tr_skip_plan` (all `n_r`, `until`), `tr_eviction` (all lengths); `ratchet_fast_forward_bound_on_the_chain`/`_on_a_step` (`MAX_FF` accepted, `MAX_FF + 1` rejected, on `n`, `pn` and a step's new chain; feature `kat`); `ratchet_skip_stores_exactly_the_last_min_gap_256_keys`; `ratchet_skipped_bound_evicts_the_earliest_inserted`; vector N10 and the 10 000 gap (256 keys stored), tr-0070 (eviction) |
+| Transactional decrypt | every refusal test asserts the uniform error, a byte-identical `to_bytes()` and no randomness drawn (`TestEntropy` counts calls); `unavailable_step_consumes_nothing` (D1/D2); property (4); fuzz `tr_decrypt` asserts it for every input; the 13 negative vectors |
+
+| Brief item | Evidence |
+|---|---|
+| Negative tests for every rejection path of §7.4 | `tr::tests::reject_*` (16 tests: cell length, no header key, wrong `sb`, absent/unknown keys incl. the masked dummy key, undecodable header on the chain/step/skipped path, step with the old `dh_pk`, KEM constancy, replay on the chain and of a consumed skipped key, gap over `MAX_FF`, `n_r` overflow, body MAC on every path, wrong body or `ct_pq` on a step) and `encrypt_*` (6) |
+| Kani: header-decrypt selection, `skip_message_keys` bounds | `cargo xtask step --strict kani`: `Complete - 19 successfully verified harnesses, 0 failures, 19 total.` (`tr_header_selection` k ≤ 4 in 108.6 s, `tr_skip_plan` 0.26 s, `tr_eviction` 0.23 s; no stubs; a deliberately broken reference made Kani report FAILED) |
+| Fuzz targets for `decrypt` and state deserialisation | `tr_decrypt` 120 s: 48 681 runs, cov 3451, ft 8938, no finding; `tr_state` 120 s: 4 024 051 runs, cov 1437, ft 2512, no finding (`M03-evidence/fuzz-tr-aarch64-apple-darwin-e154473.txt`); the 12 earlier targets with the seeded scratch corpus at `b26e9e9`: PASS, 0 findings (`fuzz-gate-aarch64-apple-darwin-b26e9e9.txt`) |
+| ct: `tr_decrypt_reject` classes and the A/A′ control | `cargo xtask step --strict ct` (`M03-evidence/ct-gate-aarch64-apple-darwin-e154473.txt`): run PASS; `tr_decrypt_reject_hdr_key` PASS (max \|t\| 7.38 / 4.15, not reproduced, Δ ≤ 0.025 floors), `tr_decrypt_reject_body_tag` PASS (3.68 / 5.21, Δ ≤ 0.043 floors), `tr_decrypt_reject_ct_pq` PASS (2.58 / 0.89); A/A′ `aa_prime_control` PASS (1.44 / 0.75); inline A/A max 2.81; sensitivity control 3.77 floors; positive control 65 186.9 |
+| Mutants and coverage as in M2 | local shards (`M03-evidence/mutants-local-shards.txt`): 923 mutants, survivors = the documented `SecretBytes::drop`, one real gap (`Writer::with_capacity`, killed in `c907881`) and 27 in `kat`-only code (excluded, `expect::MUTANT_EXCLUDE_RE`, reason there); coverage `secmp-proto` 3624/3642 = 99.5 %, `secmp-crypto` 2309/2320 = 99.5 % |
+| M2 follow-ups F1–F10, F13, F15–F21 | plan table rows 0b–0i, 1, 2, 5 |
 
 ## 4. Gates
 
-(filled in as the steps land)
+| Gate | Result |
+|---|---|
+| Local steps 1–5 on the final code (`fmt clippy policy deny vet audit cooldown nextest doctest kat`) | PASS (nextest 76 s; kat 367 s incl. the `tr` suites and the portable-backend re-run of `tr_vectors`) |
+| perf | PASS (§3) |
+| ProVerif | PASS, 39/39 as expected, 72 s |
+| Kani | PASS 19/19, 447 s |
+| Fuzz | the two TR targets 120 s each, no finding; the 12 earlier ones at `b26e9e9`, no finding |
+| Mutation | local shards: as §3; the PR run's `mutants` step is the gate |
+| Coverage | PASS (§3) |
+| Miri | `secmp-proto` lib tests and `tr_smoke` (360 s), `tr::select`, `tr::entropy` measured (`M03-evidence/miri-secmp-proto-aarch64-apple-darwin.txt`); `tr::tests::` skipped for run time (125 s per test, ≈ 1.8 h); the `kat`-only targets are not part of a Miri run; `cargo xtask step --strict miri` PASS at `f31445d` (1239 s) |
+| ct | PASS (§3) |
+| `cargo deny` / `vet` / `audit` / cooldown | PASS (no new crate; three new dev-dependency edges of `secmp-testkit` on workspace crates) |
+| Windows (`windows-latest`), xwin cross-build, `linux-full` on Linux | the PR run on the head (required checks `linux-fast`, `windows-native`, `xwin-cross`, `linux-full`); its id and state are in the final message of the session and the PR |
+| Reproducible build | unchanged (no release artefact changes in M3) |
 
 ## 5. Deviations from spec / plan
 
-(filled in as the steps land)
+From the spec: **none**. Spec rev 2.3 is unchanged; every construction is §7's.
+
+From the plan, each recorded where it happened:
+- Step 1: the frozen `hkdf-labels` row 5 cannot go through `tr_init` (its salt is a stream value, `tr_init`'s is
+  0^32) and RFC 4231 cases cannot go through `kdf_ck` (its messages are fixed): row 6 goes through `kdf_rk`, and
+  `tr_init`/`kdf_ck` are checked against a hand-composed HMAC/HKDF anchored to RFC 4231 cases 1–4.
+- The two 2^20 fast-forward unit tests run under feature `kat` only (`4bb7edc`), so the mutation gate does not rerun
+  them per mutant; the bound is also covered by `skip_plan_bounds`, Kani, N10 and the property tests.
+- The mutation gate excludes `secmp-proto`'s `kat`-only code (`c907881`; reason in `expect.rs`).
+- The property tests advance a gap of more than 32 cells by stepping the sender's chain key in its saved state
+  instead of encrypting every dropped cell; a dedicated test shows the result is byte-identical (k = 1, 2, 3, 257).
+- ProVerif modelling choices (header of `formal/tr.pv`): events carry a session argument, T2 is stated for the
+  uncompromised session (its CLAIMS assumption), T11 for every session; T8/T9 query the header values themselves
+  besides the n-markers; the healing round of the PCS sessions — including (1,0), the input of B's step — is
+  delivered authentically, as "B's honest step" requires; implicit rejection is not modelled (a wrong ciphertext
+  makes `decaps` fail; in the protocol the resulting keys fail the body MAC — the same rejection, §7.4 note (b)).
+- ADR-042 moves the ct bench to `secmp-testkit` (plan D9) and is *proposed*, for the reviewer's acceptance.
 
 ## 6. Dependencies added or bumped
 
-None planned (no new crate; `secmp-proto` gains a `kat` feature; the ct bench's dev-dependencies are existing
-workspace crates).
+| Crate | Version | ADR | Vet record | Reason |
+|---|---|---|---|---|
+| — | — | — | — | No new crate and no bump. `secmp-testkit` gains dev-dependency edges on `secmp-proto` (workspace), `chacha20poly1305`, `subtle`, `sha3` (already in the graph) for the moved ct bench (ADR-042); the fuzz crate enables `secmp-proto`'s `kat`. |
 
 ## 7. Open risks and known limitations
 
-(filled in as the steps land)
+- **Locked memory per session.** Every `RatchetState` holds two `LockedSecret` pages (`dh_s`, `kem_s`); a client with
+  many sessions (M7) must budget `RLIMIT_MEMLOCK` (Linux) / the working set (Windows). Exhaustion is
+  `Error::Unavailable` and never a rejection (D1).
+- **Trial-decryption cost** grows with the number of distinct header keys in `skipped`: ≤ 3 in practice, ≤ 512 only
+  for a peer that steps after every message and skips one each time (≈ 1 ms per cell). Constant work means every cell
+  pays it.
+- **Worst-case fast-forward** is 3 × 2^20 `KDF_CK` for one message (§7.4 note (a): "a few seconds"); measured ≈ 30 s in
+  a debug build; the release figure is not gated (the `perf` step measures the usual cases).
+- **ct sensitivity.** The TR targets are composed operations: checked against the effect floor only (ADR-041
+  Amendment 1 (3)); data-dependent effects below 10 ns are out of reach. The macOS timer is 41.67 ns.
+- **Kani bound**: the header selection is proved for up to 4 distinct skipped header keys (the unit test is exhaustive
+  to the same bound; the property tests and fuzzing go beyond it).
+- **Miri**: the 51 TR unit tests are skipped in `ci-full` (run time); `tr_smoke` and `tr::select`/`tr::entropy` run.
+  The weekly `miri-full` now also covers the canonicality tests and may exceed its 360-minute timeout (§8 Q-4).
+- **Persistence of the content layer**: `Inbox` and `Trust` are serialisable/plain values; storing them atomically
+  with the ratchet state is M7's.
+- **T12** reports that header keys are not committing — informative, as CLAIMS fixes it.
 
 ## 8. Blocked / questions for the reviewer or owner
 
-- Q-1 (ADR-041, Consequences): "data-independent timing (DIT) on Apple Silicon is a separate M3 ADR". The M3 brief
+Nothing is blocked.
+
+- **Q-1 (ADR-041 Consequences).** "Data-independent timing (DIT) on Apple Silicon is a separate M3 ADR"; the M3 brief
   does not list it. Setting the `DIT` bit is an `msr` instruction (`unsafe`, only in `secmp-sys-*`) and a client
-  hardening measure; I propose it becomes an ADR drafted with M9 (client hardening) unless the reviewer wants it in
-  M3.
+  hardening measure. Proposal: an ADR drafted with M9 (client hardening), unless the reviewer wants it in M3.
+- **Q-2 (SQ-25 … SQ-27).** Three spec readings, recorded in `docs/reviews/ref-spec-questions-M3.md` with the reading
+  in place: fragment-reassembly rules, key-change semantics (`Trust`), `seq`/`ts` of a dummy. None touches a vector.
+- **Q-3 (ADR-042).** Proposed: the ct bench in `secmp-testkit` with the A/A′ control; for acceptance as an
+  engineering ADR. The F17 bound refuses (fail-closed) a runner whose sample lattice is coarser than both its
+  reported resolution and 10 ns — please confirm.
+- **Q-4 (`miri-full`).** The weekly job now includes the `secmp-proto` canonicality tests (hours under Miri) on top of
+  ML-DSA; it may exceed 360 minutes. Proposal: one job per package in `miri-full.yml` (not changed in M3).
+- **Independence (ADR-026).** `ref/secmp_ref/tr.py`, `tr_cases.py` and `ref/tests/test_tr.py` were never read by this
+  session; the Rust replay and the Rust generator both matched `vectors/ref/tr.json` on their first run, so the
+  reference file was not consulted to localise a difference either.
+- **`dispatch-ct` policy.** On-demand ct runs use `ci-dispatch.yml` (`dispatch-ct`) only, never `ci.yml`; no dispatch
+  was made in this session.
 
 ## 9. Checklist before requesting review
 
-- [ ] All acceptance criteria evidenced above
-- [ ] `cargo xtask ci` green on a clean checkout
-- [ ] No `#[ignore]`, no lint allowances added for security lints, no disabled gates
-- [ ] Vectors frozen and reviewed (if changed)
-- [ ] Docs/CHANGELOG updated
-- [ ] Threat model and spec untouched (or ADR'd)
+- [x] All acceptance criteria evidenced above (Linux/Windows: the PR run)
+- [x] `cargo xtask ci` steps green locally (macOS); the PR run is the clean-checkout evidence
+- [x] No `#[ignore]`, no lint allowances added for security lints, no disabled gates
+- [x] Vectors frozen (`vectors/tr.json`, byte-identical to the reference) — for review
+- [x] Docs/CHANGELOG updated
+- [x] Threat model and spec untouched

@@ -8,14 +8,16 @@
 use secmp_crypto::{MLDSA65_PK_LEN, MLDSA65_SIG_LEN, MSG_SEALED_LEN, Zeroizing};
 use secmp_proto::sizes::{
     CELL_LEN, CONTENT_BODY_MAX, ED25519_PK_LEN, ED25519_SIG_LEN, FRAGMENT_HEADER_LEN,
-    FRAME_PLAINTEXT_LEN, HEADER_LEN, HS1_LEN, HYBRID_SIG_LEN, ID_LEN, LINK_BLOB_LEN, MAX_MSG_BYTES,
+    FRAME_PLAINTEXT_LEN, HANDSHAKE_CELL_PT_LEN, HEADER_LEN, HOST_MAX, HS1_LEN, HYBRID_SIG_LEN,
+    ID_LEN, INNER_LEN, LINK_BLOB_LEN, LINKDATA_PADDED_LEN, MAX_MSG_BYTES,
     MLKEM1024_CT_LEN, MLKEM1024_EK_LEN, NAME_MAX, NONCE_LEN, OUTER_PADDED_LEN, PREKEY_BUNDLE_LEN,
     X25519_PK_LEN,
 };
 use secmp_proto::tr::RatchetState;
 use secmp_proto::tr::content::Inbox;
 use secmp_proto::wire::cell::{Cell, HandshakeBody, RouteDescriptor};
-use secmp_proto::wire::inv::Profile;
+use secmp_proto::wire::inv::{Direct, Host, InvitationV1, Onion, Profile, RelayRef};
+use secmp_proto::wire::Period;
 use secmp_proto::wire::signed;
 use secmp_proto::{Encode, Error};
 
@@ -74,7 +76,28 @@ fn fuzz_max_len_is_the_largest_valid_input_plus_one() -> Result<(), Error> {
     ]
     .concat();
     let inbox = Inbox::from_bytes(&inbox_bytes)?.to_bytes()?.len();
-    let expected: [(&str, usize); 14] = [
+    // the largest invitation: a `direct` endpoint with a 253-byte host; its URI is the prefix and the unpadded base64url
+    let invitation = InvitationV1 {
+        relay: RelayRef {
+            relay_fp: [0; 32],
+            onion: Onion::from_pubkey(&[0; 32]),
+            akc: [0; 32],
+            direct: Some(Direct {
+                host: Host::from_bytes(&vec![b'a'; HOST_MAX])?,
+                port: core::num::NonZeroU16::MIN,
+                spki_sha256: [0; 32],
+            }),
+        },
+        ld_id: [0; 16],
+        link_key: secmp_crypto::SecretBytes::from_slice(&[0; 32])?,
+        inviter_fp: [0; 32],
+        inv_sid: [0; 16],
+        inv_send_seed: secmp_crypto::SecretBytes::from_slice(&[0; 32])?,
+        inv_period_s: Period::S10,
+        expires: 0,
+    };
+    let uri = secmp_proto::inv::invitation_uri(&invitation)?.len();
+    let expected: [(&str, usize); 21] = [
         // mode, nonce, ad_len, AD, `COM ‖ C` of a LinkBlob
         (
             "caead_open",
@@ -110,6 +133,20 @@ fn fuzz_max_len_is_the_largest_valid_input_plus_one() -> Result<(), Error> {
             "x25519_dh",
             sum(&[X25519_PK_LEN, X25519_PK_LEN, X25519_PK_LEN]),
         ),
+        // the URI of the largest invitation
+        ("inv_uri", uri),
+        // mode, then an opened `LinkDataV1` (mode 0) or a blob (mode 1)
+        (
+            "inv_linkdata",
+            sum(&[1, LINKDATA_PADDED_LEN.max(LINK_BLOB_LEN)]),
+        ),
+        ("hx_outer", OUTER_PADDED_LEN),
+        ("hx_inner", INNER_LEN),
+        ("hx_cell_plaintext", HANDSHAKE_CELL_PT_LEN),
+        // count, then 12 cells of selector 3 ‖ 4096 raw bytes
+        ("hx_accept_raw", sum(&[1, 12 * (1 + 4096)])),
+        // selector, then `Padded`, `Inner` or the `Outer` head (the fields before `inner_ct`)
+        ("hx_accept_structured", sum(&[1, OUTER_PADDED_LEN.max(INNER_LEN)])),
         ("proto_cell", sum(&[1, handshake])),
         ("proto_frames", sum(&[1, FRAME_PLAINTEXT_LEN])),
         ("proto_handshake", sum(&[1, OUTER_PADDED_LEN])),
@@ -127,6 +164,7 @@ fn fuzz_max_len_is_the_largest_valid_input_plus_one() -> Result<(), Error> {
     assert_eq!(handshake, 65_642);
     assert_eq!(send, 4_146);
     assert_eq!(inbox, 1_694);
+    assert_eq!(uri, 717);
     assert_eq!(RatchetState::MAX_ENCODED_LEN, 38_585);
     let table = table();
     assert_eq!(table.len(), expected.len(), "{table:?}");

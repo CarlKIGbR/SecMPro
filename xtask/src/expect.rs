@@ -142,11 +142,20 @@ pub(crate) const TR_PERF_KINDS: &[&str] = &["chain", "step"];
 /// cargo-fuzz targets under `fuzz/fuzz_targets/` (docs/06 §5 step 6): M1 key, ciphertext and signature parsers
 /// and the two openers of `secmp-crypto`; M2 every `secmp-proto` decoder, one target per Appendix D section
 /// (`proto_*`, a selector byte picks the decoder); M3 SecMP-TR `Decrypt` on a fixed receiver state (`tr_decrypt`)
-/// and the TR persistence decoders (`tr_state`).
+/// and the TR persistence decoders (`tr_state`); M4 the invitation URI (`inv_uri`), the link data (`inv_linkdata`),
+/// the three handshake structures (`hx_outer`, `hx_inner`, `hx_cell_plaintext`) and `Responder::accept` on raw and
+/// on structurally mutated envelopes (`hx_accept_raw`, `hx_accept_structured`).
 pub(crate) const FUZZ_TARGETS: &[&str] = &[
     "caead_open",
     "ed25519_verify",
+    "hx_accept_raw",
+    "hx_accept_structured",
+    "hx_cell_plaintext",
+    "hx_inner",
+    "hx_outer",
     "hybrid_sign_verify",
+    "inv_linkdata",
+    "inv_uri",
     "mldsa65_verify",
     "mlkem_parse",
     "msg_open",
@@ -199,10 +208,24 @@ pub(crate) const FUZZ_NIGHTLY_SECONDS: u64 = 14_400;
 /// - `tr_decrypt`: mode 1 + the larger of a cell (4096) and a header plaintext (2314; mode ≠ 0) = 4097.
 /// - `tr_state`: selector 1 + the larger of `RatchetStateV1` at its maximum (38 585, `skipped` full) and `InboxV1`
 ///   with one message of one maximal chunk (1694) = 38586.
+/// - `inv_uri`: the URI of the largest `InvitationV1` (a 253-byte `direct` host: 530 B → 707 characters, 10 for the
+///   prefix) = 717.
+/// - `inv_linkdata`: mode 1 + the larger of an opened `LinkDataV1` (12288) and a `LinkBlob` (12360) = 12361.
+/// - `hx_outer`: the padded `Outer` = 12018. `hx_inner`: `Inner` = 6113. `hx_cell_plaintext`: 4024.
+/// - `hx_accept_raw`: count 1 + 12 cells of (selector 1 + 4096 raw bytes) = 49165.
+/// - `hx_accept_structured`: selector 1 + the larger of `Padded` (12018), `Inner` (6113) and the `Outer` head (3177)
+///   = 12019.
 pub(crate) const FUZZ_MAX_LEN: &[(&str, usize)] = &[
     ("caead_open", 12_618),
     ("ed25519_verify", 4_243),
+    ("hx_accept_raw", 49_166),
+    ("hx_accept_structured", 12_020),
+    ("hx_cell_plaintext", 4_025),
+    ("hx_inner", 6_114),
+    ("hx_outer", 12_019),
     ("hybrid_sign_verify", 7_810),
+    ("inv_linkdata", 12_362),
+    ("inv_uri", 718),
     ("mldsa65_verify", 3_567),
     ("mlkem_parse", 1_570),
     ("msg_open", 2_000),

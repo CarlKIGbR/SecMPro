@@ -2272,7 +2272,7 @@ mod tests {
         assert_eq!(expect::FUZZ_NIGHTLY_SECONDS, 14_400);
         assert_eq!(
             nightly_seconds_per_target(expect::FUZZ_NIGHTLY_SECONDS, expect::FUZZ_TARGETS.len())?,
-            14_400 / 14
+            14_400 / 21
         );
         assert_eq!(nightly_seconds_per_target(14_400, 14)?, 1028);
         assert!(nightly_seconds_per_target(14_400, 0).is_err());

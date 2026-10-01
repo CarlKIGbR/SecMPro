@@ -54,13 +54,11 @@
 //! **Seeds and budget.** The master seed is [`DEFAULT_SEED`], or the decimal `u64` in `SECMP_PROPTEST_SEED` if set
 //! and not empty (as in `canonical.rs`); `SECMP_PROPTEST_CASES` (decimal) replaces the number of sessions
 //! [`DEFAULT_CASES`]. The default run takes about a minute in the debug profile; each of its two `MAX_FF` gaps
-//! costs 2^20 chain steps at the sender and 2^20 at the receiver (about 10 µs each in debug). A summary line with
-//! the seed, the counters and the time is written to stderr.
+//! costs 2^20 chain steps at the sender and 2^20 at the receiver (about 10 µs each in debug). The seed and the
+//! counters are in every assertion message; the test reads no clock (docs/06 §4).
 
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::io::Write as _;
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::time::{Duration, Instant};
 
 use rand::rngs::StdRng;
 use rand::{RngExt, SeedableRng};
@@ -440,8 +438,6 @@ struct Stats {
     big_gaps: u64,
     big_gaps_on_n: u64,
     big_gaps_on_pn: u64,
-    /// Wall time of the scheduled big gaps (their chain-key derivations dominate the run).
-    big_gap_time: Duration,
 }
 
 struct World {
@@ -1237,14 +1233,8 @@ impl World {
             let outcome = catch_unwind(AssertUnwindSafe(|| {
                 match big {
                     Some(on_pn) if event >= big_from && !self.big_gap_senders(on_pn).is_empty() => {
-                        let started = Instant::now();
                         self.big_gap(on_pn);
                         big = None;
-                        self.stats.big_gap_time = self
-                            .stats
-                            .big_gap_time
-                            .checked_add(started.elapsed())
-                            .unwrap();
                     }
                     _ => self.random_event(),
                 }
@@ -1267,18 +1257,11 @@ impl World {
 fn random_interleavings_follow_spec_7_4_and_never_reuse_a_key() {
     let seed = master_seed();
     let cases = env_number("SECMP_PROPTEST_CASES").unwrap_or(DEFAULT_CASES);
-    let started = Instant::now();
     let mut w = World::new(seed);
     for case in 0..cases {
         w.run_case(case);
     }
     let s = &w.stats;
-    let _ = writeln!(
-        std::io::stderr().lock(),
-        "tr_properties: SECMP_PROPTEST_SEED={seed} cases={cases} key digests={} time={:?} {s:?}",
-        w.sealed.len(),
-        started.elapsed()
-    );
     let ctx = format!("SECMP_PROPTEST_SEED={seed}, {cases} cases: {s:?}");
     assert_eq!(
         u64::try_from(w.sealed.len()).unwrap(),

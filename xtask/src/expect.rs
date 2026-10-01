@@ -96,8 +96,8 @@ pub(crate) const CT_SAS_SAMPLES: usize = 20_000;
 
 /// The ct targets (M2 review C3 (a)): the gate refuses a report whose target set differs. Exactly one of them, the
 /// positive control, is measured once and must be detected. M3: the three SecMP-TR rejection targets
-/// `tr_decrypt_reject_*` (plan D9: `RatchetState::decrypt_with` on one fixed receiver state) and the A/A′ placement
-/// control (ADR-042).
+/// `tr_decrypt_reject_*` (plan D9: `RatchetState::decrypt_with` on one fixed receiver state), the A/A′ placement
+/// control (ADR-042) and the same-content control (ADR-042 Amendment 2).
 pub(crate) const CT_TARGETS: &[&str] = &[
     "control_variable_time_compare",
     "tag_compare",
@@ -112,6 +112,7 @@ pub(crate) const CT_TARGETS: &[&str] = &[
     "tr_decrypt_reject_hdr_key",
     "tr_decrypt_reject_body_tag",
     "tr_decrypt_reject_ct_pq",
+    "same_content_control",
 ];
 
 /// The positive control among [`CT_TARGETS`].
@@ -120,6 +121,11 @@ pub(crate) const CT_POSITIVE_CONTROL: &str = "control_variable_time_compare";
 /// The A/A′ placement control among [`CT_TARGETS`] (ADR-042 (2), M2 review F6): judged like a target; a FAIL makes the
 /// run `CONTROL_FAIL`, PASS and `SUB_FLOOR_SHIFT` pass. Not the positive control.
 pub(crate) const CT_AA_PRIME_CONTROL: &str = "aa_prime_control";
+
+/// The same-content control among [`CT_TARGETS`] (ADR-042 Amendment 2): identical contents in both classes through
+/// the per-class preparation path, judged like a target; a FAIL makes the run `CONTROL_FAIL`, PASS and
+/// `SUB_FLOOR_SHIFT` pass. Not the positive control.
+pub(crate) const CT_SAME_CONTENT_CONTROL: &str = "same_content_control";
 
 /// docs/07 M3 acceptance "encrypt+decrypt of a message < 3 ms" (M3 plan D11): the `perf` step fails if the maximum of
 /// a kind of `crates/secmp-proto/examples/tr-perf.rs` (release profile; encrypt, persist, decrypt and commit of one

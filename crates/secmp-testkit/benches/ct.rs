@@ -43,14 +43,11 @@
 //! - `tr_decrypt_reject_ct_pq`: a header under `hk_r` whose `ct_pq` differs from `last_ct_r` in byte 0 vs byte 1087,
 //!   the body unchanged (the KEM-constancy check rejects).
 //!
-//! Diagnostic targets (M3 review C7, WEISUNG M3-5; to be removed or promoted by a later decision), measured with
-//! `evaluate` and `tr_decrypt_reject` like `tr_decrypt_reject_body_tag`, after every gated target and both controls
-//! (the gated sequence is unchanged), and written to the report's `diagnostics` — not to `results`: they take no
-//! part in the gate's target set, the run verdict or the exit status:
-//! - `diag_tr_body_tag_same`: the class-1 cell of `tr_decrypt_reject_body_tag` (the body tag wrong in byte 31)
-//!   under both labels — `delta` all zero, the real labels and the real `blend` path, no content difference;
-//! - `diag_tr_body_tag_swapped`: the classes of `tr_decrypt_reject_body_tag` swapped — class 0 the body tag wrong
-//!   in byte 31, class 1 in byte 0.
+//! The same-content control `same_content_control` (ADR-042 Amendment 2) is measured and judged like a target, after
+//! the TR targets: `tr_decrypt_reject` on the `tr_decrypt_reject_body_tag` fixture (the largest cell) with identical
+//! contents in both classes — its class-1 cell, the body tag wrong in byte 31 — through the real per-class
+//! preparation path (`blend`). It sees what neither the inline A/A control (one class under both labels) nor the A/A′
+//! control (no `blend`) can: a preparation path that differs by class. If it FAILs, the run is `CONTROL_FAIL`.
 //!
 //! The A/A′ placement control `aa_prime_control` (ADR-042 (2), M2 review F6) is measured and judged like a target:
 //! `MsgEncrypt::open` rejecting a tag wrong in its last byte with identical contents in both classes, class 0 copied
@@ -62,8 +59,9 @@
 //!
 //! The classes may differ only in their contents, never in where the inputs live: every measured input is a
 //! fresh copy made by `prepare` (by value or in a new allocation, identical sequence for both classes), so buffer
-//! placement cannot correlate with the class (M1 review F7); and the fresh copies are made from one common source
-//! per target (F9, `f7b3066`; the targets section below).
+//! placement cannot correlate with the class (M1 review F7); the fresh copies are made from one common source
+//! per target (F9, `f7b3066`; the targets section below); and the preparation runs the same code for both classes
+//! (`blend`, ADR-042 Amendment 2).
 //!
 //! ADR-038 (the instrument):
 //! - **Timer (1).** Each call is timed with the CPU counter — `rdtscp` on `x86_64`, `cntvct_el0` on `aarch64`,
@@ -1203,31 +1201,48 @@ impl Outcome {
 // every run — the M1 review F7 rule ("the classes may differ only in their contents, never in where the inputs
 // live") applied one step earlier, to the sources the fresh copies are made from.
 
-/// `out = base ^ (delta & mask)`: `base` for class 1, `base ^ delta` for class 0. Reads `base` and `delta` in full
-/// for both classes; the mask is `0x00`/`0xff` from the class without a branch.
-fn blend(base: &[u8], delta: &[u8], class: usize, out: &mut [u8]) {
-    let mask = u8::from(class == 0).wrapping_neg();
-    for ((o, b), d) in out.iter_mut().zip(base).zip(delta) {
-        *o = b ^ (d & mask);
+/// The per-class deltas of `blend` (ADR-042 Amendment 2), indexed by the class: class 0's `class0 ^ class1` and
+/// class 1's all-zero delta of the same length.
+struct Deltas([Vec<u8>; 2]);
+
+impl Deltas {
+    /// The deltas that turn the base (`class1`) into `class0` for class 0 and leave it unchanged for class 1.
+    fn new(class0: &[u8], class1: &[u8]) -> Self {
+        let delta = xor(class0, class1);
+        let zero = vec![0_u8; delta.len()];
+        Self([delta, zero])
     }
 }
 
-/// `a ^ b`, bytewise (the `delta` of `blend`).
+/// `out = base ^ deltas[class]`: `base ^ (class0 ^ class1)` for class 0, `base` for class 1 (ADR-042 Amendment 2).
+/// One out-of-line XOR loop for both classes: the class only selects the delta buffer by index, and the selected
+/// buffer passes through `black_box`, so the compiler can neither branch on the class nor split the loop by it. The
+/// mask form `base ^ (delta & mask)` it replaces was split into a `memcpy` for class 1 and an XOR loop for class 0,
+/// both before the timed window (`docs/reviews/M03-evidence/ct-blend-disasm-aarch64-bc5088b.txt`).
+#[inline(never)]
+fn blend(base: &[u8], deltas: &Deltas, class: usize, out: &mut [u8]) {
+    let delta = black_box(deltas.0.get(class & 1).map_or(&[][..], Vec::as_slice));
+    for ((o, b), d) in out.iter_mut().zip(base).zip(delta) {
+        *o = b ^ d;
+    }
+}
+
+/// `a ^ b`, bytewise (class 0's delta of `Deltas`).
 fn xor(a: &[u8], b: &[u8]) -> Vec<u8> {
     a.iter().zip(b).map(|(x, y)| x ^ y).collect()
 }
 
 /// A fresh `Vec` input of class `class` (see `blend`).
-fn blended_vec(base: &[u8], delta: &[u8], class: usize) -> Vec<u8> {
+fn blended_vec(base: &[u8], deltas: &Deltas, class: usize) -> Vec<u8> {
     let mut v = vec![0_u8; base.len()];
-    blend(base, delta, class, &mut v);
+    blend(base, deltas, class, &mut v);
     v
 }
 
 /// A fresh 32-byte key of class `class` (see `blend`), built on the stack and copied into a `SecretBytes`.
-fn blended_key(base: &[u8; 32], delta: &[u8], class: usize) -> Option<SecretBytes<32>> {
+fn blended_key(base: &[u8; 32], deltas: &Deltas, class: usize) -> Option<SecretBytes<32>> {
     let mut key = [0_u8; 32];
-    blend(base, delta, class, &mut key);
+    blend(base, deltas, class, &mut key);
     SecretBytes::from_slice(&key).ok()
 }
 
@@ -1239,7 +1254,7 @@ fn tag_compare(n: usize, k: usize, stream: &mut Stream, variable_time: bool) -> 
     first[0] ^= 1;
     let mut last = expected;
     last[31] ^= 1;
-    let delta = xor(&first, &last);
+    let delta = Deltas::new(&first, &last);
     measure(
         n,
         k,
@@ -1310,7 +1325,7 @@ fn min_leak(n: usize, k: usize, stream: &mut Stream) -> Samples {
     // source: `steps ‖ bytes`; class 1 (the base) 31 steps, class 0 32 steps
     let class1: Vec<u8> = [31_u8].iter().chain(bytes.iter()).copied().collect();
     let class0: Vec<u8> = [32_u8].iter().chain(bytes.iter()).copied().collect();
-    let delta = xor(&class0, &class1);
+    let delta = Deltas::new(&class0, &class1);
     measure(
         n,
         k,
@@ -1349,7 +1364,7 @@ fn msg_open_reject(
     if let Some(b) = last.last_mut() {
         *b ^= 1;
     }
-    let delta = xor(&first, &last);
+    let delta = Deltas::new(&first, &last);
     let key = SecretBytes::<32>::from_slice(&mk)?;
     Ok(measure(
         n,
@@ -1420,8 +1435,8 @@ fn caead_open_reject(
         *b ^= 1;
     }
     // class 0: wrong key (COM and tag fail); class 1: right key, tampered ciphertext (COM ok, tag fails)
-    let key_delta = xor(&other, &k);
-    let ct_delta = xor(&sealed, &tampered);
+    let key_delta = Deltas::new(&other, &k);
+    let ct_delta = Deltas::new(&sealed, &tampered);
     Ok(measure(
         n,
         batch,
@@ -1492,7 +1507,7 @@ impl CaeadInputs {
 /// `derive` alone: class 0 wrong key, class 1 right key.
 fn caead_derive(n: usize, k: usize, stream: &mut Stream) -> Result<Samples, secmp_crypto::Error> {
     let io = CaeadInputs::new(stream)?;
-    let key_delta = xor(&io.other, &io.k);
+    let key_delta = Deltas::new(&io.other, &io.k);
     Ok(measure(
         n,
         k,
@@ -1517,7 +1532,7 @@ fn caead_aead_reject(
     let io = CaeadInputs::new(stream)?;
     let (k_enc_other, _) = io.derived(&io.other)?;
     let (k_enc_k, _) = io.derived(&io.k)?;
-    let k_enc_delta = xor(&k_enc_other, &k_enc_k);
+    let k_enc_delta = Deltas::new(&k_enc_other, &k_enc_k);
     let tampered = io.tampered(100);
     let c = tampered.get(COM_LEN..).unwrap_or_default();
     let (body, tag) = c.split_at(c.len().saturating_sub(AEAD_TAG_LEN));
@@ -1555,7 +1570,7 @@ fn caead_com_compare(
     let io = CaeadInputs::new(stream)?;
     let (_, expected_other) = io.derived(&io.other)?;
     let (_, expected_k) = io.derived(&io.k)?;
-    let expected_delta = xor(&expected_other, &expected_k);
+    let expected_delta = Deltas::new(&expected_other, &expected_k);
     let com: [u8; COM_LEN] = io
         .sealed
         .get(..COM_LEN)
@@ -1588,7 +1603,7 @@ fn caead_open_reject_samekey(
     let io = CaeadInputs::new(stream)?;
     let at_100 = io.tampered(100);
     let at_300 = io.tampered(300);
-    let ct_delta = xor(&at_100, &at_300);
+    let ct_delta = Deltas::new(&at_100, &at_300);
     Ok(measure(
         n,
         k,
@@ -1623,7 +1638,7 @@ fn sas(n: usize, k: usize, stream: &mut Stream) -> Samples {
         |c, i| {
             let random_pair = random.get(i).copied().unwrap_or(fixed);
             // base = the random pair (class 1), delta = fixed XOR random (class 0 gets the fixed pair)
-            let delta = xor(&fixed, &random_pair);
+            let delta = Deltas::new(&fixed, &random_pair);
             let mut pair = [0_u8; 64];
             blend(&random_pair, &delta, c, &mut pair);
             let (first, second) = pair.split_at(32);
@@ -1810,24 +1825,14 @@ fn tr_body_tag_classes(s: &TrSession, _: &mut Stream) -> Result<[Vec<u8>; 2], se
     Ok([class0, class1])
 }
 
-/// `diag_tr_body_tag_same` (diagnostic, WEISUNG M3-5): the class-1 cell of `tr_body_tag_classes` (the body tag
-/// wrong in byte 31) for both classes.
-fn tr_body_tag_same_classes(
+/// `same_content_control` (ADR-042 Amendment 2): the class-1 cell of `tr_body_tag_classes` (the body tag wrong in
+/// byte 31) for both classes.
+fn tr_same_content_classes(
     s: &TrSession,
     stream: &mut Stream,
 ) -> Result<[Vec<u8>; 2], secmp_proto::Error> {
     let [_, class1] = tr_body_tag_classes(s, stream)?;
     Ok([class1.clone(), class1])
-}
-
-/// `diag_tr_body_tag_swapped` (diagnostic, WEISUNG M3-5): the classes of `tr_body_tag_classes` swapped — class 0
-/// the body tag wrong in byte 31, class 1 in byte 0.
-fn tr_body_tag_swapped_classes(
-    s: &TrSession,
-    stream: &mut Stream,
-) -> Result<[Vec<u8>; 2], secmp_proto::Error> {
-    let [class0, class1] = tr_body_tag_classes(s, stream)?;
-    Ok([class1, class0])
 }
 
 /// `tr_decrypt_reject_ct_pq`: the honest header with `ct_pq` changed in byte 0 (class 0) vs byte 1087 (class 1),
@@ -1872,7 +1877,7 @@ fn tr_decrypt_reject(
 ) -> Result<Samples, secmp_crypto::Error> {
     let session = tr_session(stream).map_err(crypto_error)?;
     let [class0, class1] = classes(&session, stream).map_err(crypto_error)?;
-    let delta = xor(&class0, &class1);
+    let delta = Deltas::new(&class0, &class1);
     let slot = RefCell::new(Some(session.receiver));
     let mut entropy = FixedEntropy::new(&[]);
     let samples = measure(
@@ -1982,8 +1987,9 @@ fn targets(n: usize, n_sas: usize) -> [Target; 10] {
     ]
 }
 
-/// The SecMP-TR targets (M3 plan D9), measured after `targets`, `n` samples per measurement.
-fn tr_targets(n: usize) -> [Target; 3] {
+/// The SecMP-TR targets (M3 plan D9) and the same-content control (ADR-042 Amendment 2), measured after `targets`,
+/// `n` samples per measurement.
+fn tr_targets(n: usize) -> [Target; 4] {
     [
         Target {
             name: "tr_decrypt_reject_hdr_key",
@@ -2012,48 +2018,26 @@ fn tr_targets(n: usize) -> [Target; 3] {
             control: false,
             run: |n, k, s| tr_decrypt_reject(n, k, s, tr_ct_pq_classes),
         },
-    ]
-}
-
-/// The diagnostic targets (M3 review C7, WEISUNG M3-5; module docs), `n` samples per measurement: measured after
-/// the gated targets and both controls, reported in `diagnostics`.
-fn diag_targets(n: usize) -> [Target; 2] {
-    [
         Target {
-            name: "diag_tr_body_tag_same",
+            name: SAME_CONTENT,
             classes: [
-                "body tag wrong in byte 31",
-                "body tag wrong in byte 31 (the same cell)",
+                "the class-1 cell of tr_decrypt_reject_body_tag (body tag wrong in byte 31)",
+                "the same cell",
             ],
             samples: n,
             control: false,
-            run: |n, k, s| tr_decrypt_reject(n, k, s, tr_body_tag_same_classes),
-        },
-        Target {
-            name: "diag_tr_body_tag_swapped",
-            classes: ["body tag wrong in byte 31", "body tag wrong in byte 0"],
-            samples: n,
-            control: false,
-            run: |n, k, s| tr_decrypt_reject(n, k, s, tr_body_tag_swapped_classes),
+            run: |n, k, s| tr_decrypt_reject(n, k, s, tr_same_content_classes),
         },
     ]
 }
 
-/// What `run` measured: the gated outcomes, the reason of a `CONTROL_FAIL` run, the sensitivity control and the
-/// diagnostic outcomes (WEISUNG M3-5).
-struct RunOutput {
-    clock: Clock,
-    outcomes: Vec<Outcome>,
-    control_fail: Option<String>,
-    sensitivity: Sensitivity,
-    diagnostics: Vec<Outcome>,
-}
-
 /// Every target (`evaluate`), then the inline A/A control over the full target set (ADR-041 (3)) and the
-/// sensitivity control (Amendment 1 (2)); `control_fail` is the reason of a `CONTROL_FAIL` run (either control
-/// failed, or the A/A′ placement control gave FAIL, ADR-042; every target verdict is then `CONTROL_FAIL`). Then the
-/// diagnostic targets, which keep their own verdicts and decide nothing.
-fn run(rules: Rules) -> Result<RunOutput, secmp_crypto::Error> {
+/// sensitivity control (Amendment 1 (2)); the third value is the reason of a `CONTROL_FAIL` run (either control
+/// failed, or the A/A′ placement control or the same-content control gave FAIL, ADR-042 and its Amendment 2; every
+/// target verdict is then `CONTROL_FAIL`).
+fn run(
+    rules: Rules,
+) -> Result<(Clock, Vec<Outcome>, Option<String>, Sensitivity), secmp_crypto::Error> {
     let clock = Clock::probe();
     let scale: usize = ct_scale().and_then(|s| s.parse().ok()).unwrap_or(1).max(1);
     let mut stream = Stream::new()?;
@@ -2065,26 +2049,17 @@ fn run(rules: Rules) -> Result<RunOutput, secmp_crypto::Error> {
     }
     let aa_fail = aa_control(&mut out, &mut stream, &clock, rules)?;
     let sensitivity = sensitivity_control(&out, &mut stream, &clock, rules);
-    let mut diagnostics = Vec::new();
-    for target in diag_targets(n) {
-        diagnostics.push(evaluate(target, &mut stream, &clock, rules)?);
-    }
     let mut reasons: Vec<String> = aa_fail.into_iter().collect();
     reasons.extend(sensitivity.failure(rules));
     reasons.extend(placement_failure(&out, &clock, rules));
+    reasons.extend(same_content_failure(&out, &clock, rules));
     let control_fail = (!reasons.is_empty()).then(|| reasons.join("; "));
     if control_fail.is_some() {
         for outcome in &mut out {
             outcome.verdict = Verdict::ControlFail;
         }
     }
-    Ok(RunOutput {
-        clock,
-        outcomes: out,
-        control_fail,
-        sensitivity,
-        diagnostics,
-    })
+    Ok((clock, out, control_fail, sensitivity))
 }
 
 /// The sensitivity control of a run (ADR-041 Amendment 1 (2)): `min_leak` with `tag_compare`'s batch size and
@@ -2199,6 +2174,35 @@ fn placement_failure(out: &[Outcome], clock: &Clock, rules: Rules) -> Option<Str
     ))
 }
 
+/// The name of the same-content control (ADR-042 Amendment 2; `expect::CT_TARGETS`).
+const SAME_CONTENT: &str = "same_content_control";
+
+/// ADR-042 Amendment 2: the same-content control is judged like a target; if its verdict is FAIL, a preparation path
+/// that differs by class alone reaches the effect floor and the run is `CONTROL_FAIL` with this reason (its Δ at the
+/// deciding crop in effect floors of each measurement). `None` if it passed, showed a sub-floor shift or was not
+/// measured (NOT MEASURABLE fails the run on its own).
+fn same_content_failure(out: &[Outcome], clock: &Clock, rules: Rules) -> Option<String> {
+    let o = out.iter().find(|o| o.target.name == SAME_CONTENT)?;
+    if o.verdict != Verdict::Fail {
+        return None;
+    }
+    let crop = o.decisive_crop.as_deref().unwrap_or("?");
+    let floors = |m: Option<&Measurement>| {
+        m.and_then(|m| {
+            let s = m.crops.iter().find(|(k, _)| k == crop)?;
+            Some(s.1.delta() / rules.floor_ticks(m.q_eff, clock.tick_ns))
+        })
+        .map_or_else(|| "?".to_owned(), |f| format!("{f:.2}"))
+    };
+    Some(format!(
+        "same-content control {SAME_CONTENT} FAIL at {crop}: identical contents through the per-class preparation \
+         path shift the class means by {} / {} effect floors — the preparation path differs by class (ADR-042 \
+         Amendment 2)",
+        floors(o.first.as_ref()),
+        floors(o.second.as_ref())
+    ))
+}
+
 /// ADR-041 (3): the inline A/A control — every measurable target once more, with its `k`, class-0 inputs under
 /// both labels. Returns the reason of a `CONTROL_FAIL` run (`run` then sets every target verdict to it).
 fn aa_control(
@@ -2240,14 +2244,7 @@ fn main() -> ExitCode {
         let _ = std::fs::write(path, error);
         return ExitCode::FAILURE;
     };
-    let Ok(RunOutput {
-        clock,
-        outcomes,
-        control_fail,
-        sensitivity,
-        diagnostics,
-    }) = run(rules)
-    else {
+    let Ok((clock, outcomes, control_fail, sensitivity)) = run(rules) else {
         // the gate prints the reason of an aborted run (`ctreport::ct_table_for` reads `error`)
         let error = if TR_ACCEPTED.load(Ordering::Relaxed) {
             "{\"error\":\"bench aborted: RatchetState::decrypt_with accepted a cell of a TR target, which must be rejected in both classes\"}"
@@ -2267,7 +2264,7 @@ fn main() -> ExitCode {
         "FAIL"
     };
     let json = format!(
-        "{{\"thresholds\":{},{}\"sign\":\"{SIGN}\",\"clock\":{},\"run_verdict\":\"{run_verdict}\",\"run_reason\":{},\"sensitivity_control\":{},\"results\":[{}],\"diagnostics\":[{}]}}",
+        "{{\"thresholds\":{},{}\"sign\":\"{SIGN}\",\"clock\":{},\"run_verdict\":\"{run_verdict}\",\"run_reason\":{},\"sensitivity_control\":{},\"results\":[{}]}}",
         rules.json(),
         // M2 review C3 (c): a shortened run says so, and the gate refuses it
         ct_scale().map_or_else(String::new, |s| format!(
@@ -2278,11 +2275,6 @@ fn main() -> ExitCode {
         serde_json::Value::from(control_fail),
         sensitivity.json(&clock, rules),
         outcomes
-            .iter()
-            .map(|o| o.json(&clock, rules))
-            .collect::<Vec<_>>()
-            .join(","),
-        diagnostics
             .iter()
             .map(|o| o.json(&clock, rules))
             .collect::<Vec<_>>()

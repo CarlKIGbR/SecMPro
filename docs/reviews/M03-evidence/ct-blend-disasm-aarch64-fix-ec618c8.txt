@@ -1,0 +1,35 @@
+Disassembly check (WEISUNG M3-8 step 4, ADR-042 Amendment 2): the fixed preparation path, aarch64-apple-darwin.
+
+Source: the bench of the commit that adds this file (parent ec618c8; its own SHA cannot be named inside it). Binary:
+`cargo bench --locked --package secmp-testkit --features kat --bench ct --no-run --target-dir target/disasm` with
+CARGO_PROFILE_RELEASE_STRIP=none and CARGO_PROFILE_BENCH_STRIP=none (the release profile strips the symbols;
+everything else is the gate's profile: opt-level 3, fat LTO, codegen-units 1, panic abort) →
+target/disasm/release/deps/ct-46c3d08297ea7114; `llvm-objdump -d -C --no-show-raw-insn` (LLVM 22.1.8, rustup
+llvm-tools of 1.98.1). Stubs via `llvm-objdump --macho -d --section=__TEXT,__stubs`: 0x10008210c → _calloc.
+The mask form before the fix: ct-blend-disasm-aarch64-bc5088b.txt.
+
+12 lines quoted verbatim; the annotations after `//` are mine.
+
+`ct::blend` (0x100016e4c, one symbol, no clone):
+100016e4c:     	and	x8, x3, #0x1                     // class & 1 (x3 = class)
+100016e50:     	mov	w9, #0x18                        // size of a Vec
+100016e54:     	umaddl	x8, w8, w9, x2                   // &deltas.0[class & 1] — the class is an index only
+100016e58:     	ldp	x9, x8, [x8, #0x8]               // that delta's pointer and length
+100016e5c:     	stp	x9, x8, [sp, #-0x10]!            // black_box: the selected slice goes through memory
+100016ec8:     	eor.16b	v0, v4, v0                       // the XOR loop (64 B per step; 8-B and 1-B tails), every class
+
+The prepare loop of `ct::tr_decrypt_reject` before the timed window:
+10000e348:     	ldr	w8, [sp, #0x50]                  // the A/A flag
+10000e350:     	ldr	x8, [sp, #0x60]                  // the sample's class
+10000e354:     	csel	x25, x8, xzr, eq                 // input class = A/A ? 0 : class, a select, no branch
+10000e394:     	bl	0x10008210c <dyld_stub_binder+0x10008210c>   // _calloc(len, 1), every class
+10000e3b8:     	bl	0x100016e4c <ct::blend>              // blend(base, deltas, x25, out), every class
+10000e408:     	mrs	x8, CNTVCT_EL0                   // after the loop: the timed window opens (isb at 0x10000e404)
+
+Finding: the prepare path is one instruction stream for both classes. `blend` is a single out-of-line function
+(34 call sites in the binary, 4 in `tr_decrypt_reject`); the class enters it only as an array index (`and` +
+`umaddl`) that selects the delta buffer, whose slice then passes through `black_box`; its conditional branches test
+the loop length (the minimum of the three slice lengths, the same for both classes: class 1's zero delta has the
+length of class 0's delta). No `memcpy` call in the prepare loop and no branch on the class: in the caller, the
+input class is a `csel` of the A/A flag, and the only branch before `calloc` (`cbz x24` at 0x10000e388) tests the
+input length.

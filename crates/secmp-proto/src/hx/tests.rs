@@ -67,3 +67,28 @@ fn accept_zero_dh_rejects_and_keeps_opk() {
         assert_eq!(dh_checked(&secret, &v).err(), Some(Error::Rejected));
     }
 }
+
+/// V-8 / M3 F12 (matrix (e)), the crate-private part of `hx_secrets_are_zeroizing_types`: the store's secrets and
+/// the persisted cells/state are held in zeroizing types; a signature change breaks these ascriptions.
+#[test]
+fn hx_store_and_persisted_bytes_are_zeroizing_types() {
+    use secmp_crypto::{MlKem768Dk, MlKem1024Dk, Zeroizing as Z};
+
+    use crate::prekeys::{OpkSecrets, SpkGeneration};
+    // the secrets' own types are locked, wiped-on-drop types (secmp-crypto): X25519Secret, ML-KEM seeds
+    fn pin(spk: &SpkGeneration, opk: &OpkSecrets) {
+        let _spk_dh: &X25519Secret = spk.dh_secret();
+        let _spk_kem: &MlKem1024Dk = spk.kem_secret();
+        let _rpk_kem: Result<MlKem768Dk> = spk.rpk_copy();
+        let _opk_dh: &X25519Secret = opk.dh_secret();
+        let _opk_kem: &MlKem1024Dk = opk.kem_secret();
+    }
+    // persisted bytes: the return types of `to_bytes` and the `state_bytes` field
+    fn pin_bytes(cells: &HandshakeCells, restored: &PersistedCells) {
+        let _cells: Z<Vec<u8>> = cells.to_bytes();
+        let state: &Z<Vec<u8>> = &cells.state_bytes;
+        let _ = state;
+        let _restored: Z<Vec<u8>> = restored.to_bytes();
+    }
+    let _ = (pin, pin_bytes);
+}

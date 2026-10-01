@@ -184,3 +184,12 @@ PR run 36885710027 (head 50cfca3) was still running at the end of this session: 
 Phase B (BRIEF M4-PV): run 36885710027 was `in_progress` at the start (Part 0) and at 2026-10-01 20:23 CEST; no push window
 (after B4 / after B8) was reached because of the B1 STOP — nothing pushed. Unpushed on `m04-hx`: 8455f93, b552682,
 98b6b22, 268bb1d, 2e5953e (Phase A), e42c854 (B1), and the Phase-B report commit.
+
+## 10. WEISUNG M4-2 (Phase A closure items)
+§1 state at start: head `3a02557`; `git log origin/m04-hx..HEAD` = 7 commits; status: only untracked `.claude/`.
+- A (V-6): `HandshakeCells::to_bytes` is `pub(crate)`; doc-test `compile_fail` on `HandshakeCells` (`hx/mod.rs`, named `handshake_cells_expose_no_cells_before_release` in its text); the external test that read the cell bytes now captures them through `release`.
+- B (V-8): module doc matches `initiator.rs:31-32, 192-193`; `hx_store_and_persisted_bytes_are_zeroizing_types` (crate-private pins: SPK_dh/SPK_kem/RPK_kem/OPK_dh/OPK_kem, `to_bytes`, `state_bytes`) next to `hx_secrets_are_zeroizing_types`.
+- C (F9): `decrypt_with` builds `next` (round trip `to_bytes`/`from_bytes`, since `RatchetState` has no `Clone`), serialises it, then replaces; tests `receive_persist_bytes_equal_state_after_swap`, `receive_error_leaves_state_unchanged`. Removed: the pre-check `after = skipped.len() - remove + added; if after.saturating_sub(select::evicted(after)) > MAX_SKIPPED` (dead).
+- D (F10): `Accepted.routes: Zeroizing<Vec<RouteDescriptor>>`, `InviteeAccepted.invitation: Zeroizing<InvitationV1>`, `Host` holds `Zeroizing<Vec<u8>>`; `Zeroize` impls for `RelayRef`/`RelayQueue`/`RouteDescriptor`/`InvitationV1` (host, onion, akc, relay_fp, sid, ld_id, inv_sid); `secmp-crypto` re-exports `Zeroize` (no new dependency). msg-id fields are not held by `Accepted`/`InviteeAccepted`: nothing to wrap there.
+- E: `delete_opk` hits remaining: the method itself and its impls (`prekeys.rs:330,721,724`) and the Kani stub (`kani_proofs.rs:487`).
+- Unpushed: PR run 36885710027 `in_progress`.

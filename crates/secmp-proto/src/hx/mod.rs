@@ -4,11 +4,12 @@
 //!
 //! - [`Initiator::start`] (invitee): §6.4 key agreement, §7.2 initiator initialisation, the `first_msg` (§7.3
 //!   Encrypt of the Handshake Content) and the three sealed cells (§6.5). There is **no signature by the initiator**
-//!   (deniability, §6.6): no signing key reaches `start`. `EK_I`'s secret is zeroized inside `start`, immediately
-//!   after the cells are sealed (ADR-044 (b)); it is neither returned nor persisted.
+//!   (deniability, §6.6): no signing key reaches `start`. `EK_I`'s secret is a local of `agree` (the §6.4 derivation) and is
+//!   zeroized when `agree` returns — after `SK` and `K_id` are derived, before the ratchet is initialised and the cells
+//!   are sealed (ADR-044 (b)); it is neither returned nor persisted.
 //! - [`Responder::accept`] (inviter): §6.5 trial-opening, grouping and §6.6 steps 1–4. Garbage is ignored, never
 //!   fatal; a rejection returns the uniform [`crate::Error::Rejected`] and leaves the prekey store untouched (the OPK
-//!   is kept); the OPK is deleted only after step 3 succeeded.
+//!   is kept); the OPK is deleted (with the record's consumption, `PrekeyStore::commit_accept`) only after step 3 succeeded.
 //!
 //! **Persist-before-send (CLAUDE.md §1.7).** `start` returns the three cells as [`HandshakeCells`] and the
 //! post-`first_msg` [`RatchetState`]. The cells leave the process only through [`HandshakeCells::release`], which
@@ -36,7 +37,15 @@ use crate::wire::inv::IksPublic;
 /// The three handshake cells of one envelope (§6.5), generated once, together with the serialisation of the
 /// initiator's state after `first_msg`: the cells are released only with the state in the same persist call
 /// ([`HandshakeCells::release`]), so a caller cannot make the cells durable without the state (M4 verifier V-6,
-/// M3 review F13).
+/// M3 review F13). The cells are reachable only through `release`:
+///
+/// ```compile_fail
+/// fn bypass(cells: secmp_proto::hx::HandshakeCells) {
+///     let _ = cells.to_bytes();
+/// }
+/// ```
+///
+/// (test `handshake_cells_expose_no_cells_before_release`)
 pub struct HandshakeCells {
     cells: [Cell; 3],
     state_bytes: Zeroizing<Vec<u8>>,
@@ -61,13 +70,13 @@ impl HandshakeCells {
     }
 
     /// The persistence encoding of the cells: 3 × 4096 bytes. (They are ciphertext; the buffer is wiped on drop for
-    /// hygiene.)
+    /// hygiene.) Crate-private: [`HandshakeCells::release`] is the only way out (persist-before-send).
     #[must_use]
-    pub fn to_bytes(&self) -> Zeroizing<Vec<u8>> {
+    pub(crate) fn to_bytes(&self) -> Zeroizing<Vec<u8>> {
         join_cells(&self.cells)
     }
 
-    /// Persist-before-send: `persist` receives the cells ([`HandshakeCells::to_bytes`]) and the serialised
+    /// The only way to obtain the cells; `persist` must return `Ok` first. Persist-before-send: `persist` receives the cells ([`HandshakeCells::to_bytes`]) and the serialised
     /// initiator state (`RatchetStateV1`) and must make **both** durable in one transaction; only if it returns
     /// `Ok` are the cells released. On `Err` they are dropped.
     ///

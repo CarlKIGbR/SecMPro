@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! The responder of SecMP-HX (spec §6.5 grouping, §6.6 steps 1–4): the inviter's side.
 //!
-//! **Atomicity.** Everything `accept` computes lives on working copies; the only side effect is the OPK deletion of
-//! step 4, which is the last operation. Every rejection therefore leaves the store, the record and the caller's
+//! **Atomicity.** Everything `accept` computes lives on working copies; the only side effect is the commit of
+//! step 4 (`commit_accept`: OPK deletion and record consumption), which is the last operation. Every rejection therefore leaves the store, the record and the caller's
 //! state as they were, and "log nothing identifying" (§6.6 step 3) holds because nothing here logs.
 //!
 //! **One uniform error.** Every rejection of untrusted input is [`Error::Rejected`], whichever check failed;
@@ -35,7 +35,7 @@ pub struct Accepted {
     /// `IKSPublic_I`: the contact is stored as **unverified**.
     pub peer: IksPublic,
     /// The initiator's reply routes from `first_msg`'s Handshake content, byte-identical to what it sent (§6.5).
-    pub routes: Vec<RouteDescriptor>,
+    pub routes: Zeroizing<Vec<RouteDescriptor>>,
     /// The initiator's profile from the Handshake content.
     pub profile: Profile,
 }
@@ -147,7 +147,7 @@ pub(crate) fn insert<K: PartialEq, C, const N: usize>(
 /// the store); the first group `process` accepts is the session: the OPK is deleted and the record consumed — the only call of
 /// `commit_accept`, after `process` succeeded — and `process`'s value returned. A group `process` rejects is discarded
 /// and the OPK kept; later groups are still processed. If none is accepted the result is [`Error::Rejected`];
-/// [`Error::Unavailable`] from `process` is passed up at once. A failing `delete_opk` rejects, the OPK kept.
+/// [`Error::Unavailable`] from `process` is passed up at once. A failing `commit_accept` rejects, the OPK kept.
 pub(crate) fn drive<K: PartialEq, C, T, S: PrekeyStore>(
     items: impl IntoIterator<Item = (K, usize, C)>,
     store: &mut S,
@@ -182,8 +182,8 @@ pub(crate) fn drive<K: PartialEq, C, T, S: PrekeyStore>(
 impl Responder {
     /// §6.5 and §6.6: trial-open every cell of `cells` (the cells fetched from the invitation queue and retained
     /// for it) with `K_inv`; ignore what does not open or parse; group the chunks by `init_id`; for each group that
-    /// completes, in the order of completion, run steps 1–3 — and on the first group that passes, step 4: delete
-    /// the OPK, and return the session.
+    /// completes, in the order of completion, run steps 1–3 — and on the first group that passes, step 4
+    /// (`commit_accept`: delete the OPK, consume the record), and return the session.
     ///
     /// `record` is the invitation's record (§5.2). Expiry is the record lifecycle's: the caller offers only
     /// unexpired records ([`crate::prekeys::MemoryPrekeyStore::offered_records`], ADR-044 (d)).
@@ -342,7 +342,7 @@ fn process(
     Ok(Accepted {
         state,
         peer: inner.iks,
-        routes: handshake.routes,
+        routes: Zeroizing::new(handshake.routes),
         profile: handshake.profile,
     })
 }

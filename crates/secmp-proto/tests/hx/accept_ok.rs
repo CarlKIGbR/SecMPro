@@ -531,7 +531,13 @@ fn initiator_start_output_and_state_contain_no_ek_secret() {
     // structural: the outputs are `HandshakeCells` and `RatchetState`, neither has an EK field; by content: the
     // serialised state and the cells do not contain the scalar (nor its clamped form)
     let state_bytes = state.to_bytes().unwrap().to_vec();
-    let cell_bytes = cells.to_bytes().to_vec();
+    let mut cell_bytes = Vec::new();
+    cells
+        .release(|c, _| {
+            cell_bytes = c.to_vec();
+            Ok::<(), ()>(())
+        })
+        .unwrap();
     let mut clamped = ek_sk.clone();
     *clamped.first_mut().unwrap() &= 0xf8;
     *clamped.last_mut().unwrap() &= 0x7f;
@@ -1186,6 +1192,12 @@ fn hx_secrets_are_zeroizing_types() {
     let invitation = secmp_proto::wire::inv::InvitationV1::decode(&lib.w.invitation).unwrap();
     let _uri: secmp_crypto::Zeroizing<String> =
         secmp_proto::inv::invitation_uri(&invitation).unwrap();
+
+    // decoded values held by `Accepted` (F10 / M3 R-23); the store's secrets and the persisted bytes are pinned
+    // in `hx::tests::hx_store_and_persisted_bytes_are_zeroizing_types` (crate-private accessors)
+    let mut store = lib.store();
+    let accepted = lib.accept(&mut store, &lib.honest()).unwrap();
+    let _routes: &secmp_crypto::Zeroizing<Vec<RouteDescriptor>> = &accepted.routes;
 }
 
 /// V-6: `start`'s cells are released only through `release`; a persist that fails returns its error and hands out

@@ -11,7 +11,7 @@
 //!   (re-sealed): the id checks, the DH operations and `K_id`.
 //!
 //! Invariants: no panic; every `Err` is the uniform `Rejected` and leaves the store digest unchanged with the OPK in
-//! place; an `Ok` (only for an input that reproduces the honest envelope's content) leaves exactly the OPK deleted.
+//! place; an `Ok` (only for an input that reproduces the honest envelope's content) leaves exactly the OPK deleted and the record consumed.
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
@@ -57,7 +57,9 @@ fuzz_target!(|data: &[u8]| {
     ) {
         Ok(_) => {
             let mut reference = f.store.duplicate_kat().unwrap();
-            reference.delete_opk(f.record.opk_id).unwrap();
+            reference
+                .commit_accept(f.record.opk_id, &f.record.ld_id)
+                .unwrap();
             assert_eq!(store.digest_kat(), reference.digest_kat());
         }
         Err(e) => {

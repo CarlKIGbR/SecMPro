@@ -4,9 +4,9 @@
 //! Every function here is a direct transcription of the §6.4 formulas; nothing is optional and nothing is
 //! derived from anything the spec does not list (CLAUDE.md §5).
 
-use secmp_crypto::{Label, SecretBytes, Zeroizing, hkdf, sha256};
+use secmp_crypto::{Label, SecretBytes, hkdf, sha256};
 
-use crate::codec::Encode;
+use crate::codec::{Encode, Zeroizing};
 use crate::error::Result;
 use crate::keys::{MlKem768Ek, MlKem1024Ek, X25519Pk};
 use crate::sizes::{HASH_LEN, MLKEM1024_CT_LEN};

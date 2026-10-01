@@ -639,7 +639,12 @@ fn batch_findings(r: &Value) -> Vec<String> {
         if key == "aa_control" {
             continue;
         }
+        // M3 review F-ctreport: a measurement without a readable median cannot be shown to realise the minimum, so
+        // it is refused (this function runs only for the target sets of the ADR-041 Amendment 2 record format)
         let median = m.get("class_median_ticks").and_then(Value::as_f64);
+        if median.is_none() {
+            out.push(format!("ct report: {name} {key} has no class_median_ticks"));
+        }
         if let (Some(median), Some(q)) = (median, q_eff(m))
             && median < min * (q - HALF_Q)
         {
@@ -1951,6 +1956,34 @@ mod tests {
                 .failed
                 .iter()
                 .any(|f| f.contains("which is no first pair or one re-batch"))
+        );
+        Ok(())
+    }
+
+    /// M3 review (ct report hardening): a judged measurement without a `class_median_ticks` is refused for a report of
+    /// the Amendment 2 record format, not skipped; the M2 set, whose reports predate the record, is not asked for it.
+    #[test]
+    fn a_missing_class_median_is_refused() -> Result<()> {
+        let mut v = report();
+        assert!(table(&v)?.failed.is_empty());
+        let t = at(&mut v, "caead_derive");
+        if let Some(m) = t.get_mut("second").and_then(Value::as_object_mut) {
+            m.remove("class_median_ticks");
+        }
+        assert!(refused(
+            &v,
+            "ct report: caead_derive second has no class_median_ticks"
+        )?);
+        let t = at(&mut v, "caead_derive");
+        if let Some(t) = t.as_object_mut() {
+            t.remove("k_initial");
+            t.remove("requantised");
+        }
+        assert!(
+            !ct_table_for(&v.to_string(), M2_TARGETS)?
+                .failed
+                .iter()
+                .any(|f| f.contains("has no class_median_ticks"))
         );
         Ok(())
     }

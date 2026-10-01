@@ -6,7 +6,7 @@
 //! 0–2 name the fixture's honest cell 0, 1 or 2 — so the fuzzer can place the honest cells anywhere among raw ones.
 //!
 //! Invariants: no panic; `Ok` only if all three honest cells are in the list (nothing else opens under `K_inv`),
-//! and then exactly the OPK is gone from the store; every `Err` is the uniform `Rejected` and leaves the store
+//! and then exactly the OPK is gone and the record consumed; every `Err` is the uniform `Rejected` and leaves the store
 //! digest unchanged with the OPK in place.
 #![no_main]
 
@@ -57,7 +57,9 @@ fuzz_target!(|data: &[u8]| {
             }
             assert!(store.opk(f.record.opk_id).is_none());
             let mut reference = f.store.duplicate_kat().unwrap();
-            reference.delete_opk(f.record.opk_id).unwrap();
+            reference
+                .commit_accept(f.record.opk_id, &f.record.ld_id)
+                .unwrap();
             assert_eq!(store.digest_kat(), reference.digest_kat());
         }
         Err(e) => {

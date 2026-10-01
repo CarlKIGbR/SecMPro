@@ -1898,6 +1898,39 @@ fn state_rejects_noncanonical_skipped() -> Result<()> {
     Ok(())
 }
 
+/// Entries no run can produce are refused (M3 review F8): `(hk_r, n >= n_r)` and any `(nhk_r, *)`; the controls
+/// are `(hk_r, n < n_r)` and an unrelated key.
+#[test]
+fn state_rejects_unreachable_skipped_entries() -> Result<()> {
+    let (_, full, _) = old_skipped()?;
+    assert!(full.n_r >= 1);
+    edit_rejected(&full, "(hk_r, n_r)", |r| {
+        let n_r = r.n_r;
+        r.skipped = vec![(r.hk_r.clone().unwrap_or_default(), n_r, vec![9; 32])];
+    })?;
+    edit_rejected(&full, "(hk_r, n_r + 1)", |r| {
+        let n_r = r.n_r.saturating_add(1);
+        r.skipped = vec![(r.hk_r.clone().unwrap_or_default(), n_r, vec![9; 32])];
+    })?;
+    edit_rejected(&full, "(nhk_r, 0)", |r| {
+        r.skipped = vec![(r.nhk_r.clone().unwrap_or_default(), 0, vec![9; 32])];
+    })?;
+    edit_rejected(&full, "(nhk_r, after a valid group)", |r| {
+        r.skipped = vec![
+            (vec![1; 32], 0, vec![9; 32]),
+            (r.nhk_r.clone().unwrap_or_default(), 3, vec![9; 32]),
+        ];
+    })?;
+    edit_accepted(&full, "control: (hk_r, n_r - 1)", |r| {
+        let n = r.n_r.saturating_sub(1);
+        r.skipped = vec![(r.hk_r.clone().unwrap_or_default(), n, vec![9; 32])];
+    })?;
+    edit_accepted(&full, "control: unrelated key with a large n", |r| {
+        r.skipped = vec![(vec![1; 32], u32::MAX, vec![9; 32])];
+    })?;
+    Ok(())
+}
+
 // ------------------------------------------------------------------------------ 6. the content layer
 
 /// A contact's identity signing key and its `IKSPublic` (§6.2).

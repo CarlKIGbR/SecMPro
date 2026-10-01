@@ -1,0 +1,5 @@
+cargo xtask ci-fast on aarch64-apple-darwin, working tree after Parts B-E (local, before push):
+ 1 fmt PASS | 2 clippy PASS | 2 policy PASS | 3 deny PASS | 3 vet PASS | 3 audit PASS | 3 cooldown PASS (119 packages)
+ 4 nextest PASS 91 s (cargo nextest run --workspace; cargo nextest run --package secmp-proto (non-kat)) | 4 doctest PASS | 4 hello PASS
+ 5 kat PASS 384 s
+ci-fast: PASS

@@ -104,12 +104,24 @@ pub(crate) fn cooldown(ctx: &Ctx) -> Result<Outcome> {
     Ok(Outcome::Pass(crate::cooldown::run(&ctx.root)?))
 }
 
+/// The workspace `cargo nextest` arguments (feature unification enables `kat` of `secmp-proto` through `secmp-testkit`).
+pub(crate) fn nextest_args() -> Vec<&'static str> {
+    vec!["nextest", "run", "--workspace", "--locked"]
+}
+
+/// M3 review F20 (R-48): the non-kat run of the shipped configuration of `secmp-proto`. `--workspace` unifies the
+/// `kat` feature, so the package is selected alone, without `--features kat`.
+pub(crate) fn nextest_nonkat_args() -> Vec<&'static str> {
+    vec!["nextest", "run", "--locked", "--package", "secmp-proto"]
+}
+
 pub(crate) fn nextest(_: &Ctx) -> Result<Outcome> {
     tools::require(tools::NEXTEST)?;
-    Cmd::cargo()
-        .args(["nextest", "run", "--workspace", "--locked"])
-        .run()?;
-    Ok(Outcome::Pass("cargo nextest run --workspace".into()))
+    Cmd::cargo().args(nextest_args()).run()?;
+    Cmd::cargo().args(nextest_nonkat_args()).run()?;
+    Ok(Outcome::Pass(
+        "cargo nextest run --workspace; cargo nextest run --package secmp-proto (non-kat)".into(),
+    ))
 }
 
 pub(crate) fn doctest(_: &Ctx) -> Result<Outcome> {
@@ -576,21 +588,35 @@ fn percent(covered: u64, count: u64) -> f64 {
     if n > 0.0 { c * 100.0 / n } else { 100.0 }
 }
 
+/// Files that are test code and not measured (M3 review F18, R-42): the denominator must not contain
+/// `src/**/tests.rs` or `kani_proofs.rs`.
+pub(crate) const COVERAGE_IGNORE_RE: &str = r"(/tests\.rs|/kani_proofs\.rs)$";
+
+/// The `cargo llvm-cov` arguments.
+pub(crate) fn coverage_args(out_path: &str) -> Vec<String> {
+    [
+        "llvm-cov",
+        "nextest",
+        "--workspace",
+        "--locked",
+        "--json",
+        "--summary-only",
+        "--ignore-filename-regex",
+        COVERAGE_IGNORE_RE,
+        "--output-path",
+        out_path,
+    ]
+    .iter()
+    .map(|s| (*s).to_owned())
+    .collect()
+}
+
 pub(crate) fn coverage(ctx: &Ctx) -> Result<Outcome> {
     tools::require(tools::LLVM_COV)?;
     tools::require(tools::NEXTEST)?;
     let out_path = ctx.root.join("target").join("llvm-cov-summary.json");
     Cmd::cargo()
-        .args([
-            "llvm-cov",
-            "nextest",
-            "--workspace",
-            "--locked",
-            "--json",
-            "--summary-only",
-            "--output-path",
-        ])
-        .arg(out_path.to_string_lossy())
+        .args(coverage_args(&out_path.to_string_lossy()))
         .run()?;
     let crates: Vec<(String, PathBuf)> = ctx
         .ws
@@ -746,13 +772,23 @@ pub(crate) fn mutants(ctx: &Ctx) -> Result<Outcome> {
 /// Miri in `ci-full`: the bounded scope, skipping the tests of `expect::MIRI_SKIP` (runtime) and
 /// `expect::MIRI_UNSUPPORTED` (docs/06 §4).
 pub(crate) fn miri(ctx: &Ctx) -> Result<Outcome> {
-    miri_with(ctx, &[expect::MIRI_SKIP, expect::MIRI_UNSUPPORTED].concat())
+    miri_with(
+        ctx,
+        &[expect::MIRI_SKIP, expect::MIRI_UNSUPPORTED].concat(),
+        None,
+    )
 }
 
 /// `miri-full` (on demand; the weekly `miri-full` workflow, docs/06 §4, M1 review F3): the complete set, without
 /// the runtime skips; only the tests Miri cannot run at all (`expect::MIRI_UNSUPPORTED`) are left out.
 pub(crate) fn miri_full(ctx: &Ctx) -> Result<Outcome> {
-    miri_with(ctx, expect::MIRI_UNSUPPORTED)
+    miri_with(ctx, expect::MIRI_UNSUPPORTED, None)
+}
+
+/// `miri-full-<package>` (M3 review F22, Q-4): the same complete set for one package, one job each in the weekly
+/// workflow, so that a package's run time does not share the 6-hour limit.
+pub(crate) fn miri_full_package(ctx: &Ctx, package: &str) -> Result<Outcome> {
+    miri_with(ctx, expect::MIRI_UNSUPPORTED, Some(package))
 }
 
 /// The filter prefix of a `MIRI_SKIP` / `MIRI_UNSUPPORTED` entry that leaves out a whole integration-test target
@@ -831,7 +867,7 @@ pub(crate) fn miri_runs(
     Ok(runs)
 }
 
-fn miri_with(ctx: &Ctx, skip: &[(&str, &str, &str)]) -> Result<Outcome> {
+fn miri_with(ctx: &Ctx, skip: &[(&str, &str, &str)], only: Option<&str>) -> Result<Outcome> {
     tools::require_nightly(&["miri", "rust-src"])?;
     if let Some((p, f, _)) = skip
         .iter()
@@ -846,7 +882,15 @@ fn miri_with(ctx: &Ctx, skip: &[(&str, &str, &str)]) -> Result<Outcome> {
     // One run per package (two where a test target is left out), so that each package's filters apply to its own
     // tests only. Miri cannot execute SIMD intrinsics: libcrux is built with its portable backend (own target
     // directory, because libcrux's build scripts do not declare these variables and Cargo would reuse a stale build).
-    for p in expect::MIRI_PACKAGES {
+    if let Some(o) = only
+        && !expect::MIRI_PACKAGES.contains(&o)
+    {
+        bail!("miri: {o} is not in expect::MIRI_PACKAGES");
+    }
+    for p in expect::MIRI_PACKAGES
+        .iter()
+        .filter(|p| only.is_none_or(|o| o == **p))
+    {
         let package = ctx
             .ws
             .member(p)
@@ -892,7 +936,7 @@ fn miri_with(ctx: &Ctx, skip: &[(&str, &str, &str)]) -> Result<Outcome> {
         "Miri ({}, interpreting {}, libcrux portable backend): {}; skipped tests: {skipped}",
         tools::NIGHTLY,
         expect::MIRI_TARGET,
-        expect::MIRI_PACKAGES.join(", "),
+        only.map_or_else(|| expect::MIRI_PACKAGES.join(", "), str::to_owned),
     )))
 }
 
@@ -1328,27 +1372,16 @@ pub(crate) fn systemd(ctx: &Ctx) -> Result<Outcome> {
 
 // ---- CI hygiene --------------------------------------------------------------------------------------------
 
-/// Findings for one workflow file: forbidden triggers, actions not pinned to a full commit SHA, and
-/// `continue-on-error` outside the jobs allowed by `expect::CONTINUE_ON_ERROR_JOBS`.
+/// Findings for one workflow file: forbidden triggers, actions not pinned to a full commit SHA,
+/// `continue-on-error` outside the jobs allowed by `expect::CONTINUE_ON_ERROR_JOBS`, and artefact names without the
+/// run attempt. An accident guard against careless workflow edits, not a tamper-proof control: the real control is
+/// review (M3 review F23, R-08).
 pub(crate) fn workflow_findings(name: &str, text: &str) -> Vec<String> {
     let mut out = Vec::new();
-    let mut job: Option<String> = None;
-    let mut in_jobs = false;
     for line in text.lines() {
         let t = line.trim();
         if t.starts_with('#') {
             continue;
-        }
-        if line.starts_with("jobs:") {
-            in_jobs = true;
-        } else if !line.starts_with(' ') && !t.is_empty() {
-            in_jobs = false;
-        }
-        if in_jobs
-            && let Some(id) = line.strip_prefix("  ").and_then(|l| l.strip_suffix(':'))
-            && !id.starts_with(' ')
-        {
-            job = Some(id.to_owned());
         }
         for trigger in ["pull_request_target", "workflow_run"] {
             if t.contains(trigger) {
@@ -1377,46 +1410,268 @@ pub(crate) fn workflow_findings(name: &str, text: &str) -> Vec<String> {
                 ));
             }
         }
-        if t.starts_with("continue-on-error:") && !t.ends_with("false") {
-            let ok = job
+    }
+    // F3 (R-09): the value is read as YAML would (`true # false` is `true`; `"continue-on-error"` and any
+    // indentation are the same key)
+    let lines = yaml_lines(text);
+    for l in &lines {
+        if l.key == "continue-on-error" && l.value != "false" {
+            let ok = l
+                .job
                 .as_deref()
                 .is_some_and(|j| expect::CONTINUE_ON_ERROR_JOBS.contains(&j));
             if !ok {
                 out.push(format!(
-                    "{name}: continue-on-error in job {job:?} is not allowed"
+                    "{name}: continue-on-error in job {:?} is not allowed",
+                    l.job
                 ));
             }
+        }
+    }
+    // F21 (R-49): every uploaded artefact name ends with the run attempt, so a re-run of the same run (same SHA,
+    // same run id) uploads under a new name instead of failing on the existing one
+    for n in upload_artifact_names(&lines) {
+        match n {
+            Some(n) if n.ends_with(ARTEFACT_SUFFIX) => {}
+            other => out.push(format!(
+                "{name}: upload-artifact name {other:?} does not end with `{ARTEFACT_SUFFIX}`"
+            )),
         }
     }
     out
 }
 
+/// The end of every artefact name (M2 review F5, M3 review F21).
+pub(crate) const ARTEFACT_SUFFIX: &str = "-${{ github.run_attempt }}";
+
+/// The `with: name:` of every `actions/upload-artifact` step (`None`: the step has no name).
+fn upload_artifact_names(lines: &[YLine]) -> Vec<Option<String>> {
+    let mut out = Vec::new();
+    for (i, uses) in lines.iter().enumerate() {
+        if uses.key != "uses" || !uses.value.starts_with("actions/upload-artifact@") {
+            continue;
+        }
+        let mut in_with = false;
+        let mut found = None;
+        for x in lines.iter().skip(i.saturating_add(1)) {
+            if x.dash.is_some() || x.col < uses.col {
+                break;
+            }
+            if x.col == uses.col {
+                in_with = x.key == "with";
+            } else if in_with && x.key == "name" {
+                found = Some(x.value.clone());
+                break;
+            }
+        }
+        out.push(found);
+    }
+    out
+}
+
+// A minimal reader for the block-style subset of YAML the workflows use (no YAML crate is a dependency). It
+// normalises what a line-syntactic match missed (M3 review F3, R-09): `if : false`, `"if": false`, any indentation
+// width, trailing comments, block scalars. It is an accident guard, not a YAML implementation: flow-style jobs
+// (`job: {if: false}`) are refused for the required jobs rather than parsed.
+
+/// One logical line of a workflow: the column of its key, the column of a leading `- `, the unquoted key, the
+/// scalar value without a trailing comment, and the job it belongs to (the job id itself for a job header).
+struct YLine {
+    col: usize,
+    dash: Option<usize>,
+    key: String,
+    value: String,
+    job: Option<String>,
+    header: bool,
+}
+
+/// A scalar without quotes and without a trailing ` # comment`.
+fn yaml_scalar(v: &str) -> String {
+    let v = v.trim();
+    for q in ['"', '\''] {
+        if let Some(rest) = v.strip_prefix(q)
+            && let Some((inner, after)) = rest.split_once(q)
+        {
+            let after = after.trim();
+            if after.is_empty() || after.starts_with('#') {
+                return inner.to_owned();
+            }
+        }
+    }
+    if v.starts_with('#') {
+        return String::new();
+    }
+    v.split(" #").next().unwrap_or_default().trim().to_owned()
+}
+
+/// `key: value` of a line with its dash removed; no key (a plain list item) gives an empty key.
+fn yaml_key_value(rest: &str) -> (String, String) {
+    for q in ['"', '\''] {
+        if let Some(r) = rest.strip_prefix(q)
+            && let Some((k, after)) = r.split_once(q)
+            && let Some(v) = after.trim_start().strip_prefix(':')
+            && (v.is_empty() || v.starts_with(' '))
+        {
+            return (k.trim().to_owned(), yaml_scalar(v));
+        }
+    }
+    if let Some((k, v)) = rest.split_once(": ") {
+        return (k.trim().to_owned(), yaml_scalar(v));
+    }
+    if let Some(k) = rest.strip_suffix(':') {
+        return (k.trim().to_owned(), String::new());
+    }
+    (String::new(), yaml_scalar(rest))
+}
+
+fn yaml_lines(text: &str) -> Vec<YLine> {
+    let mut out = Vec::new();
+    let mut in_jobs = false;
+    let mut job_col: Option<usize> = None;
+    let mut job: Option<String> = None;
+    let mut block: Option<usize> = None;
+    for raw in text.lines() {
+        let raw = raw.trim_end();
+        let body = raw.trim_start_matches(' ');
+        let lead = raw.len().saturating_sub(body.len());
+        if let Some(c) = block {
+            if body.is_empty() || lead > c {
+                continue;
+            }
+            block = None;
+        }
+        if body.is_empty() || body.starts_with('#') {
+            continue;
+        }
+        let item = if body == "-" {
+            Some("")
+        } else {
+            body.strip_prefix("- ")
+        };
+        let (dash, rest, col) = match item {
+            Some(r) => {
+                let r = r.trim_start_matches(' ');
+                (
+                    Some(lead),
+                    r,
+                    lead.saturating_add(body.len().saturating_sub(r.len())),
+                )
+            }
+            None => (None, body, lead),
+        };
+        let (key, value) = yaml_key_value(rest);
+        if value.starts_with(['|', '>']) {
+            block = Some(col);
+        }
+        let mut header = false;
+        let mut current = None;
+        if col == 0 && dash.is_none() {
+            in_jobs = key == "jobs";
+            job_col = None;
+            job = None;
+        } else if in_jobs {
+            if job_col.is_none() && dash.is_none() {
+                job_col = Some(col);
+            }
+            if dash.is_none() && Some(col) == job_col {
+                job = Some(key.clone());
+                header = true;
+            }
+            current.clone_from(&job);
+        }
+        out.push(YLine {
+            col,
+            dash,
+            key,
+            value,
+            job: current,
+            header,
+        });
+    }
+    out
+}
+
+/// A job of a workflow: its id, whether its header carries an inline value (flow style), its direct properties
+/// (key, value) and the direct properties of each of its steps.
+struct YJob {
+    id: String,
+    inline: bool,
+    props: Vec<(String, String)>,
+    steps: Vec<Vec<(String, String)>>,
+}
+
+impl YJob {
+    fn prop(&self, key: &str) -> Option<&str> {
+        self.props
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.as_str())
+    }
+}
+
+fn yaml_jobs(text: &str) -> Vec<YJob> {
+    let mut jobs: Vec<YJob> = Vec::new();
+    let mut prop_col: Option<usize> = None;
+    let mut cur_prop = String::new();
+    let mut step_dash: Option<usize> = None;
+    let mut step_col: Option<usize> = None;
+    for l in yaml_lines(text) {
+        let Some(id) = &l.job else {
+            continue;
+        };
+        if l.header {
+            jobs.push(YJob {
+                id: id.clone(),
+                inline: !l.value.is_empty(),
+                props: Vec::new(),
+                steps: Vec::new(),
+            });
+            prop_col = None;
+            cur_prop.clear();
+            step_dash = None;
+            step_col = None;
+            continue;
+        }
+        let Some(j) = jobs.last_mut() else {
+            continue;
+        };
+        if prop_col.is_none() && l.dash.is_none() {
+            prop_col = Some(l.col);
+        }
+        if l.dash.is_none() && Some(l.col) == prop_col {
+            cur_prop.clone_from(&l.key);
+            j.props.push((l.key, l.value));
+            step_dash = None;
+            step_col = None;
+            continue;
+        }
+        if cur_prop != "steps" {
+            continue;
+        }
+        if let Some(d) = l.dash {
+            if step_dash.is_none() {
+                step_dash = Some(d);
+                step_col = Some(l.col);
+            }
+            if Some(d) == step_dash {
+                j.steps.push(vec![(l.key, l.value)]);
+            }
+        } else if Some(l.col) == step_col
+            && let Some(step) = j.steps.last_mut()
+        {
+            step.push((l.key, l.value));
+        }
+    }
+    jobs
+}
+
 /// The job ids of a workflow and the `name:` of each job (a check run carries the name, or the id without one).
 fn job_names(text: &str) -> Vec<String> {
     let mut out = Vec::new();
-    let mut in_jobs = false;
-    for line in text.lines() {
-        if line.trim_start().starts_with('#') {
-            continue;
-        }
-        if line.starts_with("jobs:") {
-            in_jobs = true;
-            continue;
-        }
-        if !line.starts_with(' ') && !line.trim().is_empty() {
-            in_jobs = false;
-        }
-        if !in_jobs {
-            continue;
-        }
-        if let Some(id) = line.strip_prefix("  ").and_then(|l| l.strip_suffix(':'))
-            && !id.starts_with(' ')
-        {
-            out.push(id.to_owned());
-        } else if let Some(name) = line.strip_prefix("    name:")
-            && !line.starts_with("     ")
-        {
-            out.push(name.trim().trim_matches(['"', '\'']).to_owned());
+    for j in yaml_jobs(text) {
+        out.push(j.id.clone());
+        if let Some(n) = j.prop("name") {
+            out.push(n.to_owned());
         }
     }
     out
@@ -1425,30 +1680,78 @@ fn job_names(text: &str) -> Vec<String> {
 /// The job-level `if:` of every job of a workflow: (job id, the condition as written after `if:`, trimmed), `None`
 /// for a job without one. Step-level conditions (deeper indentation) are not job conditions.
 fn job_conditions(text: &str) -> Vec<(String, Option<String>)> {
-    let mut out: Vec<(String, Option<String>)> = Vec::new();
-    let mut in_jobs = false;
-    for line in text.lines() {
-        if line.trim_start().starts_with('#') {
+    yaml_jobs(text)
+        .into_iter()
+        .map(|j| {
+            let cond = j.prop("if").map(str::to_owned);
+            (j.id, cond)
+        })
+        .collect()
+}
+
+/// A step that runs a `cargo xtask` gate (not the tool installation).
+fn is_gate_run(run: &str) -> bool {
+    run.contains("cargo xtask") && !run.contains("install-tools")
+}
+
+/// F3 (R-09): structural findings for the required jobs of the required workflow — a `needs:` (a skipped or
+/// failing dependency would skip the job), flow-style or renamed or doubly conditioned jobs, and a step-level `if:`
+/// on a gate step. An accident guard (see [`required_job_findings`]).
+fn required_job_structure_findings(name: &str, text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for j in yaml_jobs(text) {
+        if !expect::REQUIRED_JOBS.contains(&j.id.as_str()) {
             continue;
         }
-        if line.starts_with("jobs:") {
-            in_jobs = true;
+        let id = &j.id;
+        if j.inline {
+            out.push(format!("{name}: required job `{id}` is in flow style"));
+        }
+        for (key, why) in [
+            ("needs", "a `needs:` can skip the job"),
+            ("name", "a `name:` changes the check-run name"),
+        ] {
+            if j.props.iter().any(|(k, _)| k == key) {
+                out.push(format!("{name}: required job `{id}`: {why}"));
+            }
+        }
+        if j.props.iter().filter(|(k, _)| k == "if").count() > 1 {
+            out.push(format!("{name}: required job `{id}` has two `if:`"));
+        }
+        for step in &j.steps {
+            let gate = step.iter().any(|(k, v)| k == "run" && is_gate_run(v));
+            if gate && step.iter().any(|(k, _)| k == "if") {
+                out.push(format!(
+                    "{name}: required job `{id}`: a gate step has a step-level `if:`"
+                ));
+            }
+        }
+    }
+    out
+}
+
+/// F3 (R-09): the `cargo xtask` gate `run:` lines of every required job are exactly those pinned in
+/// `expect::REQUIRED_GATE_RUNS` (an appended `|| true`, a changed step list or a missing gate is a finding).
+/// `name`/`text`: the required workflow.
+pub(crate) fn required_gate_findings(name: &str, text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let jobs = yaml_jobs(text);
+    for (job, pinned) in expect::REQUIRED_GATE_RUNS {
+        let Some(j) = jobs.iter().find(|j| j.id.as_str() == *job) else {
+            out.push(format!("{name}: required job `{job}` missing"));
             continue;
-        }
-        if !line.starts_with(' ') && !line.trim().is_empty() {
-            in_jobs = false;
-        }
-        if !in_jobs {
-            continue;
-        }
-        if let Some(id) = line.strip_prefix("  ").and_then(|l| l.strip_suffix(':'))
-            && !id.starts_with(' ')
-        {
-            out.push((id.to_owned(), None));
-        } else if let Some(cond) = line.strip_prefix("    if:")
-            && let Some((_, slot)) = out.last_mut()
-        {
-            *slot = Some(cond.trim().to_owned());
+        };
+        let found: Vec<&str> = j
+            .steps
+            .iter()
+            .flat_map(|s| s.iter())
+            .filter(|(k, v)| k == "run" && is_gate_run(v))
+            .map(|(_, v)| v.as_str())
+            .collect();
+        if found.as_slice() != *pinned {
+            out.push(format!(
+                "{name}: required job `{job}` runs the gates {found:?}, pinned {pinned:?}"
+            ));
         }
     }
     out
@@ -1458,8 +1761,13 @@ fn job_conditions(text: &str) -> Vec<(String, Option<String>)> {
 /// has no `workflow_dispatch` trigger (a dispatch would add `skipped` check runs under the required names, and
 /// GitHub counts a skipped check as passing). F19 (external review EXT-1): the job-level `if:` of each required job
 /// is exactly the one pinned in `expect::REQUIRED_JOB_CONDITIONS` (or absent where that says `None`), so no later
-/// condition can skip a required check on a pull request while it reports green. `files`: (repository-relative
-/// path, text).
+/// condition can skip a required check on a pull request while it reports green. F3 (R-09): also no `needs:` on a
+/// required job and no step-level `if:` on a gate step ([`required_job_structure_findings`]).
+///
+/// This is an accident guard: it catches a careless edit of the workflow, it is not a tamper-proof control (a
+/// determined change of the workflow, of this check or of `expect.rs` removes it, and the check itself runs inside
+/// the jobs it guards). The real control is review of `.github/workflows/**` and `xtask/src/{expect,gates,ci}.rs`
+/// (M3 review F23, R-08). `files`: (repository-relative path, text).
 pub(crate) fn required_job_findings(files: &[(String, String)]) -> Vec<String> {
     let mut out = Vec::new();
     let mut seen_required = false;
@@ -1480,6 +1788,7 @@ pub(crate) fn required_job_findings(files: &[(String, String)]) -> Vec<String> {
                     out.push(format!("{name}: required job `{required}` missing"));
                 }
             }
+            out.extend(required_job_structure_findings(name, text));
             let conditions = job_conditions(text);
             for (job, found) in &conditions {
                 if !expect::REQUIRED_JOBS.contains(&job.as_str()) {
@@ -1530,6 +1839,9 @@ fn workflows(root: &Path) -> Result<String> {
         texts.push((rel(root, f), text));
     }
     findings.extend(required_job_findings(&texts));
+    if let Some((_, text)) = texts.iter().find(|(n, _)| n == expect::REQUIRED_WORKFLOW) {
+        findings.extend(required_gate_findings(expect::REQUIRED_WORKFLOW, text));
+    }
     for f in &findings {
         say(&format!("  FINDING {f}"));
     }
@@ -1537,7 +1849,7 @@ fn workflows(root: &Path) -> Result<String> {
         bail!("{} CI-hygiene finding(s)", findings.len());
     }
     Ok(format!(
-        "workflows: {} files, triggers/SHA pins/continue-on-error ok; required checks only in ci.yml, no dispatch there, job conditions as pinned",
+        "workflows: {} files, triggers/SHA pins/continue-on-error ok; required checks only in ci.yml, no dispatch there, job conditions, needs and gate run lines as pinned (accident guard, not tamper-proof)",
         files.len()
     ))
 }
@@ -1998,27 +2310,213 @@ mod tests {
         }
     }
 
-    /// M2 review F5: every uploaded ct report carries the run attempt in its artefact name, so a re-run attempt of the
-    /// same run (same SHA, same run id) uploads under a new name instead of failing on the existing one.
+    /// M2 review F5, M3 review F21 (R-49): every uploaded artefact of every workflow (the ct reports, the SBOMs, the
+    /// fuzz corpus and artefacts) carries the run attempt in its name, so a re-run attempt of the same run (same SHA,
+    /// same run id) uploads under a new name instead of failing on the existing one.
     #[test]
-    fn ct_report_artefact_names_are_unique_per_attempt() {
+    fn every_artefact_name_is_unique_per_attempt() {
         for (file, text) in [
             ("ci.yml", include_str!("../../.github/workflows/ci.yml")),
             (
                 "ci-dispatch.yml",
                 include_str!("../../.github/workflows/ci-dispatch.yml"),
             ),
+            (
+                "fuzz-nightly.yml",
+                include_str!("../../.github/workflows/fuzz-nightly.yml"),
+            ),
         ] {
-            let names: Vec<&str> = text
-                .lines()
-                .map(str::trim)
-                .filter(|l| l.starts_with("name: ct-report-"))
-                .collect();
+            let names = upload_artifact_names(&yaml_lines(text));
             assert!(!names.is_empty(), "{file}");
-            for n in names {
-                assert!(n.ends_with("-${{ github.run_attempt }}"), "{file}: {n}");
+            for n in &names {
+                assert!(
+                    n.as_deref()
+                        .is_some_and(|n| n.ends_with("-${{ github.run_attempt }}")),
+                    "{file}: {n:?}"
+                );
             }
+            assert!(workflow_findings(file, text).is_empty(), "{file}");
+            // the same file with one name lacking the suffix, or without a name, is a finding
+            let first = names.first().cloned().flatten().unwrap_or_default();
+            let stripped = text.replacen(
+                &first,
+                first.trim_end_matches("-${{ github.run_attempt }}"),
+                1,
+            );
+            assert_eq!(workflow_findings(file, &stripped).len(), 1, "{file}");
         }
+        let nameless = "jobs:\n  a:\n    steps:\n      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1\n        with:\n          path: x\n";
+        assert_eq!(workflow_findings("w", nameless).len(), 1);
+    }
+
+    /// The four required jobs with their gate steps; `fast` is spliced into `linux-fast` after its `runs-on`,
+    /// `fast_step` replaces its first gate step line.
+    fn gate_ci(fast: &str, fast_step: &str) -> String {
+        format!(
+            "on:\n  pull_request:\njobs:\n  linux-fast:\n    runs-on: x\n{fast}    steps:\n      - uses: actions/cache/save@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6\n        if: steps.c.outputs.hit != 'true'\n{fast_step}      - run: cargo xtask step --strict sbom systemd\n  windows-native:\n    runs-on: x\n    steps:\n      - run: cargo xtask install-tools --set windows\n      - run: cargo xtask step --strict clippy nextest doctest kat hello\n  xwin-cross:\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict windows-cross\n  linux-full:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask ci-full --strict --delegated windows-native --delegated windows-cross\n"
+        )
+    }
+
+    /// Every check of the policy step on one `ci.yml` text (the dispatch workflow is the clean fixture).
+    fn all_ci_findings(ci: &str) -> Vec<String> {
+        let dispatch = "on:\n  workflow_dispatch:\njobs:\n  dispatch-ct:\n    runs-on: x\n";
+        let mut out = workflow_findings(expect::REQUIRED_WORKFLOW, ci);
+        out.extend(required_job_findings(&[
+            (expect::REQUIRED_WORKFLOW.to_owned(), ci.to_owned()),
+            (
+                ".github/workflows/ci-dispatch.yml".to_owned(),
+                dispatch.to_owned(),
+            ),
+        ]));
+        out.extend(required_gate_findings(expect::REQUIRED_WORKFLOW, ci));
+        out
+    }
+
+    /// F3 (R-09), the cases 2–7 of the review's parser replica: each bypass of the F19 condition pin or of the
+    /// hygiene rules now yields a finding, as do `needs:`, a step-level `if` on a gate step and a changed gate line.
+    #[test]
+    fn required_job_bypasses_are_findings() {
+        let gate = "      - run: cargo xtask ci-fast --strict\n";
+        let good = gate_ci("", gate);
+        assert_eq!(all_ci_findings(&good), Vec::<String>::new());
+        // 2: `if : false`
+        let case2 = gate_ci("    if : false\n", gate);
+        assert!(!all_ci_findings(&case2).is_empty(), "case 2");
+        // 3: a quoted key
+        let case3 = gate_ci("    \"if\": false\n", gate);
+        assert!(!all_ci_findings(&case3).is_empty(), "case 3");
+        let case3b = gate_ci("    'if': false\n", gate);
+        assert!(!all_ci_findings(&case3b).is_empty(), "case 3b");
+        // 4: another indentation width on the job's property (the job keeps the pinned shape, the property moves)
+        let case4 = good.replace(
+            "  linux-fast:\n    runs-on: x\n",
+            "  linux-fast:\n      if: false\n      runs-on: x\n",
+        );
+        assert!(!all_ci_findings(&case4).is_empty(), "case 4");
+        // 5: `needs:` on a required job (on a job that is skipped)
+        let case5 = gate_ci("    needs: [linux-full]\n", gate);
+        assert!(
+            all_ci_findings(&case5).iter().any(|f| f.contains("needs")),
+            "case 5"
+        );
+        let case5b = gate_ci("    needs:\n      - linux-full\n", gate);
+        assert!(!all_ci_findings(&case5b).is_empty(), "case 5b");
+        // 6: a step-level `if` on a gate step
+        let case6 = gate_ci(
+            "",
+            "      - if: false\n        run: cargo xtask ci-fast --strict\n",
+        );
+        assert!(
+            all_ci_findings(&case6)
+                .iter()
+                .any(|f| f.contains("step-level")),
+            "case 6"
+        );
+        let case6b = gate_ci(
+            "",
+            "      - run: cargo xtask ci-fast --strict\n        if: false\n",
+        );
+        assert!(!all_ci_findings(&case6b).is_empty(), "case 6b");
+        // 7: `continue-on-error: true # false`, and the quoted-key and expression forms
+        for coe in [
+            "    continue-on-error: true # false\n",
+            "    \"continue-on-error\": true\n",
+            "    continue-on-error: ${{ true }}\n",
+        ] {
+            assert!(!all_ci_findings(&gate_ci(coe, gate)).is_empty(), "{coe}");
+        }
+        let case7 = gate_ci(
+            "",
+            "      - run: cargo xtask ci-fast --strict\n        continue-on-error: true # false\n",
+        );
+        assert!(!all_ci_findings(&case7).is_empty(), "case 7 step");
+        // a flow-style job and a renamed check run
+        let flow = good.replace(
+            "  xwin-cross:\n    runs-on: x\n",
+            "  xwin-cross: {if: false, runs-on: x}\n    runs-on: x\n",
+        );
+        assert!(!all_ci_findings(&flow).is_empty(), "flow style");
+        let renamed = gate_ci("    name: other\n", gate);
+        assert!(!all_ci_findings(&renamed).is_empty(), "name");
+        // the gate lines are pinned: a changed flag, an appended `|| true`, a missing gate
+        for line in [
+            "      - run: cargo xtask ci-fast\n",
+            "      - run: cargo xtask ci-fast --strict || true\n",
+            "      - run: cargo xtask ci-fast --strict --delegated clippy\n",
+            "",
+        ] {
+            let found = all_ci_findings(&gate_ci("", line));
+            assert!(
+                found.iter().any(|f| f.contains("gates")),
+                "{line:?}: {found:?}"
+            );
+        }
+        // an `if` text inside a block scalar is content, not a key
+        let block = gate_ci(
+            "",
+            "      - run: cargo xtask ci-fast --strict\n      - run: |\n          if: false\n          echo done\n",
+        );
+        assert_eq!(all_ci_findings(&block), Vec::<String>::new());
+        // the real ci.yml passes every check
+        let real = include_str!("../../.github/workflows/ci.yml");
+        assert_eq!(all_ci_findings(real), Vec::<String>::new());
+    }
+
+    /// F22 (Q-4): `miri-full.yml` has one job per package of `MIRI_PACKAGES`, each running its own `miri-full-<p>`
+    /// step, and is no required check.
+    #[test]
+    fn miri_full_workflow_has_one_job_per_package() {
+        let text = include_str!("../../.github/workflows/miri-full.yml");
+        let jobs = yaml_jobs(text);
+        assert_eq!(jobs.len(), expect::MIRI_PACKAGES.len());
+        for p in expect::MIRI_PACKAGES {
+            let id = format!("miri-full-{p}");
+            let job = jobs.iter().find(|j| j.id == id);
+            let run = format!("cargo xtask step --strict {id}");
+            assert!(
+                job.is_some_and(|j| j
+                    .steps
+                    .iter()
+                    .flat_map(|s| s.iter())
+                    .any(|(k, v)| k == "run" && *v == run)),
+                "{id}"
+            );
+        }
+        assert!(workflow_findings("miri-full.yml", text).is_empty());
+    }
+
+    /// F18 (R-42): the coverage run leaves test-only files out of the denominator.
+    #[test]
+    fn coverage_ignores_test_files() {
+        let args = coverage_args("out.json");
+        let at = args
+            .iter()
+            .position(|a| a == "--ignore-filename-regex")
+            .unwrap_or(usize::MAX);
+        assert_eq!(
+            args.get(at.saturating_add(1)).map(String::as_str),
+            Some(r"(/tests\.rs|/kani_proofs\.rs)$")
+        );
+        assert_eq!(args.last().map(String::as_str), Some("out.json"));
+        // the regex's two alternatives name the files of the secmp-proto test code
+        assert!(
+            COVERAGE_IGNORE_RE.contains("/tests") && COVERAGE_IGNORE_RE.contains("/kani_proofs")
+        );
+    }
+
+    /// F20 (R-48): step 4 runs the workspace nextest and, after it, a non-kat run of `secmp-proto` alone.
+    #[test]
+    fn nextest_has_a_non_kat_run() {
+        assert_eq!(
+            nextest_args(),
+            ["nextest", "run", "--workspace", "--locked"]
+        );
+        let nonkat = nextest_nonkat_args();
+        assert_eq!(
+            nonkat,
+            ["nextest", "run", "--locked", "--package", "secmp-proto"]
+        );
+        assert!(!nonkat.contains(&"--workspace") && !nonkat.iter().any(|a| a.contains("kat")));
     }
 
     /// M2 review C3 (d): exit 2 or 3 of cargo-mutants without its survivor listing is refused, not read as "no
@@ -2058,8 +2556,8 @@ mod tests {
     #[test]
     fn kani_refuses_fifteen_harnesses() -> Result<()> {
         let all = expect::KANI_HARNESSES;
-        assert_eq!(all.len(), 21);
-        assert_eq!(kani_verified(&kani_log(all, 0))?.len(), 21);
+        assert_eq!(all.len(), 24);
+        assert_eq!(kani_verified(&kani_log(all, 0))?.len(), 24);
         // a deleted harness: 18 verified, and Kani's own summary says 18 of 18
         let fifteen = all.get(1..).unwrap_or_default();
         assert!(kani_verified(&kani_log(fifteen, 0)).is_err());

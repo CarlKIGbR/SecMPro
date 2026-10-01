@@ -19,11 +19,11 @@ use std::collections::HashMap;
 
 use serde_json::Value;
 
-use secmp_crypto::{MlKem768Dk, SecretBytes, X25519Secret};
+use secmp_crypto::{HybridSigningKey, MlKem768Dk, SecretBytes, X25519Secret};
 use secmp_proto::codec::{pad, unpad};
 use secmp_proto::keys::{MlKem768Ek, X25519Pk};
 use secmp_proto::sizes::BODY_LEN;
-use secmp_proto::tr::content::dummy;
+use secmp_proto::tr::content::{Delivery, Inbox, Trust, dummy};
 use secmp_proto::tr::{FixedEntropy, RatchetState};
 use secmp_proto::wire::cell::Content;
 use secmp_proto::{Decode, Encode, Error};
@@ -138,7 +138,23 @@ fn send(
     st
 }
 
-fn recv(st: RatchetState, id: &str, case: &Value, cells: &Cells) -> RatchetState {
+/// The receive side of the `KeyChange` fragments (m18-m21, tr-0049..0052): B's inbox, its trust in A, A's old `IK_sig`
+/// (from the seeds in tr-0049's inputs) and what each fragment delivered (M3 review F14).
+struct KeyChangeRx {
+    inbox: Inbox,
+    trust: Trust,
+    old_ik: Option<secmp_crypto::HybridVerifyingKey>,
+    delivered: Vec<&'static str>,
+    new_iks: Option<secmp_proto::wire::inv::IksPublic>,
+}
+
+fn recv(
+    st: RatchetState,
+    id: &str,
+    case: &Value,
+    cells: &Cells,
+    rx: &mut KeyChangeRx,
+) -> RatchetState {
     let (inputs, outputs) = (case.get("inputs").unwrap(), case.get("outputs").unwrap());
     let cell = cells.get(text(case, "from")).unwrap();
     let mut e = entropy(inputs, &["dh_sk", "kem_seed", "m"]);
@@ -150,6 +166,23 @@ fn recv(st: RatchetState, id: &str, case: &Value, cells: &Cells) -> RatchetState
         .unwrap()
         .to_vec();
     assert_eq!(hex(&content), text(outputs, "content"), "{id} content");
+    if matches!(
+        text(case, "from"),
+        "tr-0049" | "tr-0050" | "tr-0051" | "tr-0052"
+    ) {
+        let old = rx
+            .old_ik
+            .as_ref()
+            .expect("tr-0049 carries the old IK_sig seeds");
+        match rx.inbox.receive(opened.plaintext(), old, &mut rx.trust) {
+            Delivery::Partial => rx.delivered.push("Partial"),
+            Delivery::KeyChange(iks) => {
+                rx.delivered.push("KeyChange");
+                rx.new_iks = Some(iks);
+            }
+            _ => rx.delivered.push("other"),
+        }
+    }
     let (st, _) = opened.commit(|_| Ok::<(), ()>(())).unwrap();
     assert_eq!(e.remaining(), 0, "{id}: DH-step randomness used exactly");
     st
@@ -213,9 +246,25 @@ fn every_event_of_the_tr_file() {
     let mut p = Parties::default();
     let mut cells = Cells::new();
     let mut counts: HashMap<String, usize> = HashMap::new();
+    let mut rx = KeyChangeRx {
+        inbox: Inbox::new(),
+        trust: Trust::Verified,
+        old_ik: None,
+        delivered: Vec::new(),
+        new_iks: None,
+    };
     for case in cases {
         let id = text(case, "id");
         let op = text(case, "op");
+        if id == "tr-0049" {
+            let i = case.get("inputs").unwrap();
+            let sk = HybridSigningKey::from_seeds(
+                &bytes(i, "old_ik_ed_seed"),
+                &bytes(i, "old_ik_mldsa_xi"),
+            )
+            .unwrap();
+            rx.old_ik = Some(sk.verifying_key());
+        }
         *counts.entry(op.to_owned()).or_default() += 1;
         let inputs = case.get("inputs").unwrap();
         let outputs = case.get("outputs").unwrap();
@@ -228,7 +277,7 @@ fn every_event_of_the_tr_file() {
         assert_eq!(digest(&st), text(outputs, "state_pre"), "{id} pre");
         let st = match op {
             "send" => send(st, id, inputs, outputs, &mut cells),
-            "recv" => recv(st, id, case, &cells),
+            "recv" => recv(st, id, case, &cells, &mut rx),
             "advance" => advance(st, case, inputs),
             _ => {
                 assert_eq!(op, "recv-reject", "{id}");
@@ -248,4 +297,14 @@ fn every_event_of_the_tr_file() {
     for (op, n) in expected {
         assert_eq!(counts.get(op).copied(), Some(n), "{op}");
     }
+    // F14: the vector KeyChange (signed by the Python reference under the old key) reassembles from tr-0049..0052,
+    // verifies, and moves the trust to KeyChanged
+    assert_eq!(
+        rx.delivered,
+        ["Partial", "Partial", "Partial", "KeyChange"],
+        "the four KeyChange fragments"
+    );
+    assert_eq!(rx.trust, Trust::KeyChanged);
+    assert_eq!(rx.inbox.partials(), 0);
+    assert!(rx.new_iks.is_some());
 }

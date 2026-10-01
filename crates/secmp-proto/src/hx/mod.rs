@@ -23,9 +23,9 @@ pub use derive::{Shared, TranscriptInputs, k_id, session_key, transcript};
 pub use initiator::Initiator;
 pub use responder::{Accepted, Responder};
 
-use secmp_crypto::{SecretBytes, X25519Public, X25519Secret, Zeroizing};
+use secmp_crypto::{SecretBytes, X25519Public, X25519Secret};
 
-use crate::codec::{Decode, Encode};
+use crate::codec::{Decode, Encode, Zeroizing};
 use crate::error::{Error, Result};
 use crate::prekeys::IkDhSecret;
 use crate::sizes::{CELL_LEN, HANDSHAKE_CHUNKS};

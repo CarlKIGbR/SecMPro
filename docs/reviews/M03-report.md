@@ -359,6 +359,7 @@ Nothing is blocked.
 - **Q-1 (ADR-041 Consequences).** "Data-independent timing (DIT) on Apple Silicon is a separate M3 ADR"; the M3 brief
   does not list it. Setting the `DIT` bit is an `msr` instruction (`unsafe`, only in `secmp-sys-*`) and a client
   hardening measure. Proposal: an ADR drafted with M9 (client hardening), unless the reviewer wants it in M3.
+  Decision (M3 review §E Q-1, 2026-10-01): deferral to M9 accepted; ADR-041's wording now reads "deferred to M9" (aligned, M4 follow-up R-46).
 - **Q-2 (SQ-25 … SQ-27).** Three spec readings, recorded in `docs/reviews/ref-spec-questions-M3.md` with the reading
   in place: fragment-reassembly rules, key-change semantics (`Trust`), `seq`/`ts` of a dummy. None touches a vector.
 - **Q-3 (ADR-042).** Proposed: the ct bench in `secmp-testkit` with the A/A′ control; for acceptance as an

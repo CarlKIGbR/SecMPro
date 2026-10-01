@@ -519,8 +519,18 @@ impl RatchetState {
             Err(error) => return Err(Refused::new(self, error)),
         };
         let counters = update.counters;
+        // `to_bytes` fails only if `skipped` exceeds its bound; `apply` evicts to the bound, so check the post-apply
+        // length first and hand back the genuinely unchanged state, before anything is swapped in
+        let after = self
+            .skipped
+            .len()
+            .saturating_sub(usize::from(update.remove.is_some()))
+            .saturating_add(update.added.len());
+        if after.saturating_sub(select::evicted(after)) > select::MAX_SKIPPED {
+            return Err(Refused::new(self, Error::Rejected));
+        }
         self.apply(update);
-        // cannot fail: `apply` evicts `skipped` to its bound
+        // cannot fail: the bound was checked above
         match self.to_bytes() {
             Ok(state_bytes) => Ok(Opened {
                 state: self,
@@ -786,5 +796,53 @@ impl RatchetState {
     #[must_use]
     pub fn sb_kat(&self) -> &[u8; HASH_LEN] {
         &self.sb
+    }
+}
+
+/// M3 review F12: the zeroizing field types of everything that holds a secret are pinned at compile time; changing
+/// one to a plain `[u8; N]` / `Vec<u8>` fails here.
+#[cfg(test)]
+mod zeroizing_field_types {
+    use secmp_crypto::{MlKem768Dk, SecretBytes, X25519Secret};
+
+    use super::{Opened, Plaintext, Sealed, StepUpdate};
+    use crate::codec::Zeroizing;
+    use crate::sizes::BODY_LEN;
+    use crate::tr::state::{RatchetState, SkippedKey};
+
+    fn pins(
+        s: &RatchetState,
+        k: &SkippedKey,
+        p: &Plaintext,
+        sealed: &Sealed,
+        opened: &Opened,
+        u: &StepUpdate,
+    ) {
+        let _: &SecretBytes<32> = &s.rk;
+        let _: &X25519Secret = &s.dh_s.sk;
+        let _: &MlKem768Dk = &s.kem_s.dk;
+        for key in [&s.ck_s, &s.ck_r, &s.hk_s, &s.hk_r, &s.nhk_s, &s.nhk_r] {
+            let _: &Option<SecretBytes<32>> = key;
+        }
+        let _: &SecretBytes<32> = &k.hk;
+        let _: &SecretBytes<32> = &k.mk;
+        let _: &SecretBytes<BODY_LEN> = &p.bytes;
+        let _: &Zeroizing<Vec<u8>> = &sealed.state_bytes;
+        let _: &Zeroizing<Vec<u8>> = &opened.state_bytes;
+        let _: &SecretBytes<BODY_LEN> = &opened.plaintext.bytes;
+        let _: &SecretBytes<32> = &u.hk_s;
+        let _: &SecretBytes<32> = &u.hk_r;
+        let _: &SecretBytes<32> = &u.rk;
+        let _: &SecretBytes<32> = &u.nhk_r;
+        let _: &SecretBytes<32> = &u.ck_s;
+        let _: &SecretBytes<32> = &u.nhk_s;
+        let _: &X25519Secret = &u.dh_s.sk;
+        let _: &MlKem768Dk = &u.kem_s.dk;
+    }
+
+    #[test]
+    fn secret_fields_are_zeroizing_types() {
+        // the body is type-checked; the pointer proves `pins` is used
+        let _: fn(&RatchetState, &SkippedKey, &Plaintext, &Sealed, &Opened, &StepUpdate) = pins;
     }
 }

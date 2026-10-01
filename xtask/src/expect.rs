@@ -398,7 +398,10 @@ pub(crate) const KANI_HARNESSES: &[&str] = &[
     "kani_proofs::cell",
     "kani_proofs::header_v1",
     "kani_proofs::header_v1_reencodes",
+    "kani_proofs::kani_accept_opk_delete_only_on_success",
+    "kani_proofs::kani_cell_plaintext_decode_total",
     "kani_proofs::kani_hx_chunk_bounds",
+    "kani_proofs::kani_hx_grouping",
     "kani_proofs::kani_outer_unpad_total",
     "kani_proofs::padding",
     "kani_proofs::request_cont",
@@ -532,8 +535,30 @@ pub(crate) const REQUIRED_WORKFLOW: &str = ".github/workflows/ci.yml";
 pub(crate) const REQUIRED_JOBS: &[&str] =
     &["linux-fast", "windows-native", "xwin-cross", "linux-full"];
 
+/// The `cargo xtask` gate `run:` lines of each required job, in order (M3 review F3, R-09; `install-tools` aside).
+/// The policy step refuses any other gate line, a missing one and an appended `|| true`. An accident guard (the
+/// real control is review of the workflow and of this file), not a tamper-proof one.
+pub(crate) const REQUIRED_GATE_RUNS: &[(&str, &[&str])] = &[
+    (
+        "linux-fast",
+        &[
+            "cargo xtask ci-fast --strict",
+            "cargo xtask step --strict sbom systemd",
+        ],
+    ),
+    (
+        "windows-native",
+        &["cargo xtask step --strict clippy nextest doctest kat hello"],
+    ),
+    ("xwin-cross", &["cargo xtask step --strict windows-cross"]),
+    (
+        "linux-full",
+        &["cargo xtask ci-full --strict --delegated windows-native --delegated windows-cross"],
+    ),
+];
+
 /// The job-level `if:` of every required job, `None` for none (external review EXT-1, M3 follow-up F19): the policy
-/// step refuses any other condition — a condition that evaluates to false on `pull_request` would leave a `skipped`
+/// step (an accident guard, not a tamper-proof control; the real control is review, M3 review F23) refuses any other condition — a condition that evaluates to false on `pull_request` would leave a `skipped`
 /// check run under a required name, which GitHub counts as passing. `linux-full` excludes only `push` (on `main`),
 /// by design since the M2 workflow change; the other three run on every event.
 pub(crate) const REQUIRED_JOB_CONDITIONS: &[(&str, Option<&str>)] = &[

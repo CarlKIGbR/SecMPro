@@ -14,11 +14,9 @@
 //! checks failed is not observable. The inviter's own misuse is [`IssueError`], a local error that never reaches
 //! the wire.
 
-use secmp_crypto::{
-    Caead, ConstantTimeEq, Fingerprint, Label, Nonce24, SecretBytes, Zeroizing, hkdf,
-};
+use secmp_crypto::{Caead, ConstantTimeEq, Fingerprint, Label, Nonce24, SecretBytes, hkdf};
 
-use crate::codec::{Decode, Encode};
+use crate::codec::{Decode, Encode, Zeroizing};
 use crate::error::{Error, Result};
 use crate::sizes::{COM_LEN, HASH_LEN, LINK_BLOB_LEN, NONCE_LEN};
 use crate::wire::Id;

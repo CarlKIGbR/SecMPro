@@ -24,7 +24,8 @@
 //! present; the sending group `ck_s, hk_s, ct_s, kem_r, dh_r` all present or all absent, likewise the receiving
 //! group `ck_r, hk_r, last_ct_r`; a receiving group only with a sending group; without a receiving group `n_r =
 //! pn = 0` and `skipped` empty; without a sending group `n_s = 0`; `skipped` grouped by header key in insertion
-//! order, `n` strictly increasing within a group, no group's key repeated in a later group. A malformed encoding
+//! order, `n` strictly increasing within a group, no group's key repeated in a later group, no entry `(hk_r, n ≥ n_r)`
+//! and none keyed by `nhk_r`. A malformed encoding
 //! is [`Error::Rejected`]; [`Error::Unavailable`] only if locked memory is unavailable for `dh_s`/`kem_s`.
 
 use std::collections::VecDeque;
@@ -293,7 +294,10 @@ impl RatchetState {
             && (has_sending || !has_receiving)
             && (has_receiving || (n_r == 0 && pn == 0 && skipped.is_empty()))
             && (has_sending || n_s == 0);
-        if !shape_ok || !skipped_is_canonical(&skipped) {
+        if !shape_ok
+            || !skipped_is_canonical(&skipped)
+            || !skipped_is_reachable(&skipped, hk_r.as_ref(), nhk_r.as_ref(), n_r)
+        {
             return Err(Error::Rejected);
         }
         // locked memory last: a malformed encoding is rejected before any fallible allocation
@@ -320,6 +324,27 @@ impl RatchetState {
             skipped,
         })
     }
+}
+
+/// No skipped entry that cannot arise: `(hk_r, n)` is stored only for `n < n_r` (positions already passed on the
+/// current receiving chain), and `nhk_r` never keys an entry (a chain's header key becomes `hk_r` only at a step,
+/// and then the entries of the old chain carry the old `hk_r`). Keys are compared in constant time.
+fn skipped_is_reachable(
+    skipped: &VecDeque<SkippedKey>,
+    hk_r: Option<&SecretBytes<32>>,
+    nhk_r: Option<&SecretBytes<32>>,
+    n_r: u32,
+) -> bool {
+    let mut bad = Choice::from(0);
+    for e in skipped {
+        if let Some(k) = hk_r {
+            bad |= k.ct_eq(&e.hk) & Choice::from(u8::from(e.n >= n_r));
+        }
+        if let Some(k) = nhk_r {
+            bad |= k.ct_eq(&e.hk);
+        }
+    }
+    !bool::from(bad)
 }
 
 /// `skipped` as insertion can produce it: entries grouped by header key, `n` strictly increasing within a group, no

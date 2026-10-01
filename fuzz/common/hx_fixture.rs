@@ -117,10 +117,10 @@ impl Fixture {
             &mut FixedEntropy::new(&draws),
         )
         .unwrap();
-        let cells = hc.release(|_| Ok::<(), ()>(())).unwrap().to_vec();
+        let cells = hc.release(|_, _| Ok::<(), ()>(())).unwrap().to_vec();
         // K_id from the initiator's values: DH3 = EK × SPK_dh, DH4 = EK × OPK_dh, ss_spk and ss_opk from the
         // encapsulation randomness
-        let bundle = &accepted.link_data.bundle;
+        let bundle = &accepted.link_data().bundle;
         let ek = X25519Secret::from_bytes(&draws[..32]).unwrap();
         let pk = |b: &[u8]| X25519Public::from_bytes(b).unwrap();
         let dh3 = ek.diffie_hellman(&pk(bundle.spk_dh.as_bytes())).unwrap();

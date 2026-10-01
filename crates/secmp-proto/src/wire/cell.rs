@@ -208,8 +208,8 @@ impl AppKind {
 
 /// `AppMessage = msg_id[16] ‖ kind u8 ‖ expire_after u32 ‖ payload_len u16 ‖ payload` (payload opaque). The
 /// payload is decrypted message content, confidential: it is zeroized on drop (external review EXT-5, F21).
-#[derive(Clone, PartialEq, Eq)]
-#[cfg_attr(test, derive(Debug))]
+#[derive(Clone)]
+#[cfg_attr(test, derive(PartialEq, Eq, Debug))]
 pub struct AppMessage {
     /// Message id (dedup).
     pub msg_id: Id,
@@ -259,8 +259,8 @@ fn read_count(r: &mut Reader<'_>) -> Result<usize> {
 }
 
 /// `Batch body = count u8 (1..=255) ‖ AppMessage[] × count`.
-#[derive(Clone, PartialEq, Eq)]
-#[cfg_attr(test, derive(Debug))]
+#[derive(Clone)]
+#[cfg_attr(test, derive(PartialEq, Eq, Debug))]
 pub struct BatchBody {
     /// 1..=255 messages.
     pub messages: Vec<AppMessage>,
@@ -290,8 +290,8 @@ impl Decode for BatchBody {
 /// (rev 2.3). The chunk runs to the end of the enclosing structure; chunk sizing and consistency across fragments
 /// are reassembly rules. A chunk of a fragmented `RouteUpdate` carries `send_seed` bytes, so it is zeroized on drop
 /// (review C1).
-#[derive(Clone, PartialEq, Eq)]
-#[cfg_attr(test, derive(Debug))]
+#[derive(Clone)]
+#[cfg_attr(test, derive(PartialEq, Eq, Debug))]
 pub struct Fragment {
     /// The fragmented message's id.
     pub msg_id: Id,
@@ -578,8 +578,8 @@ pub enum ControlCode {
 
 /// `Control body = code u8 ‖ arg_len u16 ‖ arg` (arg opaque; decrypted content, zeroized on drop — external review
 /// EXT-5, F21).
-#[derive(Clone, PartialEq, Eq)]
-#[cfg_attr(test, derive(Debug))]
+#[derive(Clone)]
+#[cfg_attr(test, derive(PartialEq, Eq, Debug))]
 pub struct ControlBody {
     /// The code.
     pub code: ControlCode,

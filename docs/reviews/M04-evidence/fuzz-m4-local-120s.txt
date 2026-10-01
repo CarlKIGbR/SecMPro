@@ -1,0 +1,9 @@
+Local fuzz runs, 120 s per target (cargo +nightly-2026-09-21 fuzz run --fuzz-dir fuzz <t> -- -max_total_time=120 -timeout=60 -max_len=<FUZZ_MAX_LEN>); no findings. hx_accept_raw found one harness bug at its first run (reference store used delete_opk instead of commit_accept), fixed.
+
+hx_accept_raw: Done 154189 runs in 121 second(s) | ?
+hx_accept_structured: Done 115346 runs in 121 second(s) | ?
+inv_linkdata: Done 5529275 runs in 121 second(s) | ?
+inv_uri: Done 6965286 runs in 121 second(s) | ?
+hx_outer: Done 7302507 runs in 121 second(s) | ?
+hx_inner: Done 5238496 runs in 121 second(s) | ?
+hx_cell_plaintext: Done 7320293 runs in 121 second(s) | ?

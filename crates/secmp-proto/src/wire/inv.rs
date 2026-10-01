@@ -13,7 +13,9 @@ use core::num::NonZeroU16;
 
 use secmp_crypto::SecretBytes;
 
-use crate::codec::{Decode, Encode, Reader, Writer, boxed, decode_padded, encode_padded};
+use crate::codec::{
+    Decode, Encode, Reader, Writer, Zeroizing, boxed, decode_padded, encode_padded,
+};
 use crate::error::{Error, Result};
 use crate::keys::{Ed25519Pk, HybridSig, MlKem768Ek, MlKem1024Ek, X25519Pk};
 use crate::sizes::{
@@ -227,10 +229,12 @@ impl Decode for InvitationV1 {
 }
 
 /// `Profile = name_len u8 ‖ name (UTF-8, ≤ 64) ‖ avatar_present u8 ‖ [avatar_sha256[32]]` (D.3).
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone)]
 #[cfg_attr(test, derive(Debug))]
 pub struct Profile {
-    name: String,
+    /// Held wiped-on-drop: it comes out of a decrypted Handshake (M3 review F10). Not a secret in the comparison
+    /// sense (display name), so `PartialEq` below compares the strings.
+    name: Zeroizing<String>,
     /// SHA-256 of the avatar, if any.
     pub avatar_sha256: Option<[u8; HASH_LEN]>,
 }
@@ -245,7 +249,7 @@ impl Profile {
             return Err(Error::Rejected);
         }
         Ok(Self {
-            name: name.to_owned(),
+            name: Zeroizing::new(name.to_owned()),
             avatar_sha256,
         })
     }
@@ -253,9 +257,17 @@ impl Profile {
     /// The display name.
     #[must_use]
     pub fn name(&self) -> &str {
-        &self.name
+        self.name.as_str()
     }
 }
+
+impl PartialEq for Profile {
+    fn eq(&self, other: &Self) -> bool {
+        *self.name == *other.name && self.avatar_sha256 == other.avatar_sha256
+    }
+}
+
+impl Eq for Profile {}
 
 impl Encode for Profile {
     fn encode_to(&self, w: &mut Writer) -> Result<()> {
@@ -281,7 +293,7 @@ impl Decode for Profile {
         let name = core::str::from_utf8(name).map_err(|_| Error::Rejected)?;
         let avatar_sha256 = if r.flag()? { Some(r.array()?) } else { None };
         Ok(Self {
-            name: name.to_owned(),
+            name: Zeroizing::new(name.to_owned()),
             avatar_sha256,
         })
     }

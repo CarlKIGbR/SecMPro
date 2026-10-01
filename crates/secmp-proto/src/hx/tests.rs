@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! Unit tests of the SecMP-HX helpers.
 
 use super::*;
@@ -37,7 +36,11 @@ fn low_order() -> Vec<[u8; 32]> {
 /// error is the uniform one and `start` has produced nothing (it returns before any cell is sealed).
 #[test]
 fn start_zero_dh_rejects_and_sends_nothing() {
-    let secret = X25519Secret::from_bytes(&[7; 32]).unwrap();
+    let secret = X25519Secret::from_bytes(&[7; 32]);
+    assert!(secret.is_ok(), "key construction must not fail");
+    let Ok(secret) = secret else {
+        return;
+    };
     for v in low_order() {
         assert_eq!(dh_checked(&secret, &v).err(), Some(Error::Rejected));
     }
@@ -55,7 +58,11 @@ fn start_zero_dh_rejects_and_sends_nothing() {
 /// N-41: the same helper on the responder's DH1…DH4.
 #[test]
 fn accept_zero_dh_rejects_and_keeps_opk() {
-    let secret = X25519Secret::from_bytes(&[0x42; 32]).unwrap();
+    let secret = X25519Secret::from_bytes(&[0x42; 32]);
+    assert!(secret.is_ok(), "key construction must not fail");
+    let Ok(secret) = secret else {
+        return;
+    };
     for v in low_order() {
         assert_eq!(dh_checked(&secret, &v).err(), Some(Error::Rejected));
     }

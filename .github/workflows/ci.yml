@@ -3,9 +3,12 @@
 # The four jobs below are the required checks of the `main-protection` ruleset. Their names exist only in this
 # workflow, and it has no manual-dispatch trigger (M2 review C2): a dispatch would add `skipped` check runs
 # under the required names, which count as passing. On-demand runs use `ci-dispatch.yml`.
-# Checked by `cargo xtask policy` (`workflow_findings`, `workflows`): no `pull_request_target`/`workflow_run`
-# trigger; every action pinned by full commit SHA; no `continue-on-error`; no plain-scalar `run:` that YAML would
-# misparse; no manual-dispatch trigger here and the required job names in no other workflow. By convention, not
+# Checked by `cargo xtask policy` (`workflow_findings`, `workflows`) as an accident guard against careless edits, not
+# a tamper-proof control (the check runs inside the jobs it guards; the real control is review of this file and of
+# `xtask/src/{expect,gates,ci}.rs`): no `pull_request_target`/`workflow_run` trigger; every action pinned by full
+# commit SHA; no `continue-on-error`; no plain-scalar `run:` that YAML would misparse; no manual-dispatch trigger
+# here and the required job names in no other workflow; job conditions pinned, no `needs:` on a required job, the
+# `cargo xtask` gate lines pinned; every artefact name ends with the run attempt. By convention, not
 # checked: a read-only token and checkout without persisted credentials. `--strict` turns every skipped step into a
 # failure. Caches hold only the pinned tools and are keyed by this workflow; release workflows (M11) must not
 # restore them.
@@ -67,7 +70,7 @@ jobs:
       - name: Upload SBOMs
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: sbom-${{ github.sha }}
+          name: sbom-${{ github.sha }}-${{ github.run_attempt }}
           path: target/sbom/
           if-no-files-found: error
 
@@ -141,6 +144,7 @@ jobs:
   # docs/06 §5 steps 1–14 (ci-full): nightly on main and on every pull request (the gate before a milestone report);
   # on demand through `ci-dispatch.yml`. The Windows steps are covered by the two jobs above.
   linux-full:
+    # pinned by `expect::REQUIRED_JOB_CONDITIONS` (accident guard); a skipped job counts as passing
     if: github.event_name == 'schedule' || github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 240

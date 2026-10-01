@@ -895,10 +895,13 @@ name = "secmp-testkit"
 version = "0.0.0"
 dependencies = [
  "aws-lc-rs",
+ "chacha20poly1305",
  "ml-kem",
  "secmp-crypto",
+ "secmp-proto",
  "serde_json",
  "sha3",
+ "subtle",
 ]
 
 [[package]]

@@ -1,0 +1,65 @@
+Dispatch run 36819503957 (`ci-dispatch.yml`, suite=ct, workflow_dispatch), job dispatch-ct (110231810664),
+head bc5088b9a506ffa0ced492b12a51ae8c632fb026; conclusion failure (exit code 1). WEISUNG M3-4 step 1.
+Extracted from `gh run view 36819503957 --log-failed` (2026-10-01); timestamps, ANSI colour codes and the
+crates.io download/compile lines removed; the one-line JSON report is replaced by a pointer to the artefact copy
+(artefact ct-report-Linux-X64-bc5088b9a506ffa0ced492b12a51ae8c632fb026-36819503957-1, sha256 of ct-report.json
+ebf495f69b35dc1c3afc034f6d59dca6b6c49fa62b8dbfbbef084ff982af67e5).
+
+Runner timer: rdtscp, clocksource tsc (available: tsc hyperv_clocksource_tsc_page hyperv_clocksource_msr acpi_pm), tick 0.385186 ns (TSC 2.5962 GHz), q_eff 26.0 ticks (lattice probe: median gap 26 ticks, regular 1.0), reported resolution 26 ticks.
+Run verdict: FAIL
+
+== the step's log ==
+##[group]Run cargo xtask step --strict ct
+cargo xtask step --strict ct
+shell: /usr/bin/bash -e {0}
+env:
+  CARGO_TERM_COLOR: always
+##[endgroup]
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3.81s
+     Running `target/debug/xtask step --strict ct`
+
+=== [5] ct ===
+$ -u SECMP_CT_SCALE /home/runner/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/cargo bench --locked --package secmp-testkit --features kat --bench ct
+  ct report: {…} (the full report: ct-report-linux-dispatch-36819503957.json)
+FAIL [5] ct: constant-time test failed: tr_decrypt_reject_body_tag: FAIL at p95 — k=1, calibration median 16684.7 ns, 1000000 samples; first max |t| = 214.18 (p95), batch median 16664.7 ns, q_eff 26.0 ticks (samples), realised 1663.0 quanta; second max |t| = 302.24 (p95), batch median 16724.8 ns, q_eff 26.0 ticks (samples), realised 1668.0 quanta; A/A max |t| = 2.00 (p95), batch median 16714.7 ns, q_eff 26.0 ticks (samples), realised 1669.0 quanta
+xtask: error: step: 1 step(s) failed
+  ct control_variable_time_compare: PASS — k=6, calibration median 215.3 ns, 1000000 samples; first max |t| = 29838.58 (p99), batch median 10856.1 ns, q_eff 26.0 ticks (clock), realised 129.0 quanta; A/A max |t| = 1.46 (p90), batch median 1291.9 ns, q_eff 26.0 ticks (clock), realised 129.0 quanta (positive control, must be detected)
+  ct tag_compare: SUB_FLOOR_SHIFT at p95 — k=1, calibration median 10185.1 ns, 1000000 samples; first max |t| = 57.20 (p95), batch median 10185.1 ns, q_eff 26.0 ticks (samples), realised 1017.0 quanta; second max |t| = 43.91 (p95), batch median 10185.1 ns, q_eff 26.0 ticks (samples), realised 1017.0 quanta; A/A max |t| = 1.00 (p50), batch median 10185.1 ns, q_eff 26.0 ticks (clock), realised 1017.0 quanta
+  ct msg_open_reject: PASS — k=1, calibration median 3204.7 ns, 1000000 samples; first max |t| = 14.99 (p99), batch median 3184.7 ns, q_eff 26.0 ticks (samples), realised 318.0 quanta; second max |t| = 88.69 (p75), batch median 3204.7 ns, q_eff 26.0 ticks (samples), realised 319.0 quanta; A/A max |t| = 1.75 (raw), batch median 3224.8 ns, q_eff 26.0 ticks (samples), realised 322.0 quanta
+  ct caead_open_reject: PASS — k=1, calibration median 5478.1 ns, 1000000 samples; first max |t| = 3.75 (p50), batch median 5478.1 ns, q_eff 26.0 ticks (samples), realised 547.0 quanta; second max |t| = 37.82 (p95), batch median 5498.1 ns, q_eff 26.0 ticks (samples), realised 549.0 quanta; A/A max |t| = 1.38 (p99), batch median 5518.2 ns, q_eff 26.0 ticks (samples), realised 551.0 quanta
+  ct sas: PASS — k=1, calibration median 1313124.3 ns, 20000 samples; first max |t| = 0.64 (raw), batch median 1313104.3 ns, q_eff 26.0 ticks (samples), realised 131113.0 quanta; second max |t| = 0.80 (p99), batch median 1313074.2 ns, q_eff 26.0 ticks (samples), realised 131110.0 quanta; A/A max |t| = 1.17 (p50), batch median 1313384.7 ns, q_eff 26.0 ticks (samples), realised 131141.0 quanta
+  ct caead_derive: PASS — k=3, calibration median 434.0 ns, 1000000 samples; first max |t| = 2.74 (p99), batch median 1301.9 ns, q_eff 26.0 ticks (samples), realised 130.0 quanta; second max |t| = 8.00 (p75), batch median 1291.9 ns, q_eff 26.0 ticks (samples), realised 129.0 quanta; A/A max |t| = 0.52 (p75), batch median 1291.9 ns, q_eff 26.0 ticks (samples), realised 129.0 quanta
+  ct caead_aead_reject: SUB_FLOOR_SHIFT at p90 — k=1, calibration median 2704.0 ns, 1000000 samples; first max |t| = 57.30 (p95), batch median 2704.0 ns, q_eff 26.0 ticks (samples), realised 270.0 quanta; second max |t| = 78.97 (p90), batch median 2704.0 ns, q_eff 26.0 ticks (samples), realised 270.0 quanta; A/A max |t| = 1.48 (p50), batch median 2704.0 ns, q_eff 26.0 ticks (samples), realised 270.0 quanta
+  ct caead_com_compare: SUB_FLOOR_SHIFT at p75 — k=1, calibration median 10245.2 ns, 1000000 samples; first max |t| = 10.70 (p75), batch median 10245.2 ns, q_eff 26.0 ticks (clock), realised 1023.0 quanta; second max |t| = 14.29 (p75), batch median 10245.2 ns, q_eff 26.0 ticks (clock), realised 1023.0 quanta; A/A max |t| = 1.00 (p50), batch median 10245.2 ns, q_eff 26.0 ticks (clock), realised 1023.0 quanta
+  ct caead_open_reject_samekey: SUB_FLOOR_SHIFT at p95 — k=1, calibration median 5508.2 ns, 1000000 samples; first max |t| = 30.01 (p95), batch median 5508.2 ns, q_eff 26.0 ticks (samples), realised 550.0 quanta; second max |t| = 50.06 (p95), batch median 5518.2 ns, q_eff 26.0 ticks (samples), realised 551.0 quanta; A/A max |t| = 2.86 (p75), batch median 5498.1 ns, q_eff 26.0 ticks (samples), realised 549.0 quanta
+  ct aa_prime_control: PASS — k=1, calibration median 3174.7 ns, 1000000 samples; first max |t| = 64.48 (p99), batch median 3184.7 ns, q_eff 26.0 ticks (samples), realised 318.0 quanta; second max |t| = 35.24 (p99), batch median 3194.7 ns, q_eff 26.0 ticks (samples), realised 319.0 quanta; A/A max |t| = 0.87 (p99), batch median 3184.7 ns, q_eff 26.0 ticks (samples), realised 318.0 quanta (A/A′ placement control: a FAIL makes the run CONTROL_FAIL)
+  ct tr_decrypt_reject_hdr_key: SUB_FLOOR_SHIFT at p50 — k=1, calibration median 7961.8 ns, 1000000 samples; first max |t| = 140.67 (p90), batch median 7961.8 ns, q_eff 26.0 ticks (samples), realised 794.0 quanta; second max |t| = 33.85 (p95), batch median 7961.8 ns, q_eff 26.0 ticks (samples), realised 795.0 quanta; A/A max |t| = 1.74 (p99), batch median 7921.7 ns, q_eff 26.0 ticks (samples), realised 791.0 quanta
+  ct tr_decrypt_reject_body_tag: FAIL at p95 — k=1, calibration median 16684.7 ns, 1000000 samples; first max |t| = 214.18 (p95), batch median 16664.7 ns, q_eff 26.0 ticks (samples), realised 1663.0 quanta; second max |t| = 302.24 (p95), batch median 16724.8 ns, q_eff 26.0 ticks (samples), realised 1668.0 quanta; A/A max |t| = 2.00 (p95), batch median 16714.7 ns, q_eff 26.0 ticks (samples), realised 1669.0 quanta
+  ct tr_decrypt_reject_ct_pq: SUB_FLOOR_SHIFT at p95 — k=1, calibration median 13079.4 ns, 1000000 samples; first max |t| = 61.41 (p95), batch median 12999.2 ns, q_eff 26.0 ticks (samples), realised 1298.0 quanta; second max |t| = 117.07 (p95), batch median 13099.4 ns, q_eff 26.0 ticks (samples), realised 1308.0 quanta; A/A max |t| = 0.99 (p99), batch median 13009.3 ns, q_eff 26.0 ticks (samples), realised 1299.0 quanta
+  ct min_leak_control: REACHED — raw Δ 144.39 ns, floor 10.01 ns (14.42 floors), k=1, 1000000 samples; max |t| = 17074.03 (p75), batch median 4646.9 ns, q_eff 26.0 ticks (samples), realised 451.0 quanta (sensitivity control, must reach the floor)
+
+=== step summary (host x86_64-unknown-linux-gnu, strict: true) ===
+   5 ct              FAIL        395s  constant-time test failed: tr_decrypt_reject_body_tag: FAIL at p95 — k=1, calibration median 16684.7 ns, 1000000 samples; first max |t| = 214.18 (p95), batch median 16664.7 ns, q_eff 26.0 ticks (samples), realised 1663.0 quanta; second max |t| = 302.24 (p95), batch median 16724.8 ns, q_eff 26.0 ticks (samples), realised 1668.0 quanta; A/A max |t| = 2.00 (p95), batch median 16714.7 ns, q_eff 26.0 ticks (samples), realised 1669.0 quanta
+##[error]Process completed with exit code 1.
+
+== every target re-derived from the report (target/tmp/ct_shifts.py: a crop is reproduced if |t| > 4.5 in both
+   measurements with the same sign; relevant if both |Δ| reach the floor) ==
+control_variable_time_compare    measured once (control)
+tag_compare                      reproduced at 1 crop(s); largest min |Δ| 0.058 floors at p95 (t -57.2/-43.9); relevant: False
+msg_open_reject                  no reproduced shift (max |t| 14.995 / 88.688)
+caead_open_reject                no reproduced shift (max |t| 3.751 / 37.821)
+sas                              no reproduced shift (max |t| 0.635 / 0.797)
+caead_derive                     no reproduced shift (max |t| 2.742 / 7.996)
+caead_aead_reject                reproduced at 2 crop(s); largest min |Δ| 0.11 floors at p95 (t 57.3/24.6); relevant: False
+caead_com_compare                reproduced at 3 crop(s); largest min |Δ| 0.009 floors at p75 (t 10.7/14.3); relevant: False
+caead_open_reject_samekey        reproduced at 5 crop(s); largest min |Δ| 0.159 floors at p99 (t 19.7/44.8); relevant: False
+aa_prime_control                 no reproduced shift (max |t| 64.478 / 35.244)
+tr_decrypt_reject_hdr_key        reproduced at 2 crop(s); largest min |Δ| 0.085 floors at p50 (t 74.2/30.3); relevant: False
+tr_decrypt_reject_body_tag       reproduced at 6 crop(s); largest min |Δ| 2.176 floors at raw (t 10.5/9.9); relevant: True
+tr_decrypt_reject_ct_pq          reproduced at 5 crop(s); largest min |Δ| 0.607 floors at p99 (t 7.0/7.1); relevant: False
+
+== tr_decrypt_reject_body_tag per crop (t, Δ in floors; positive = class 0, the tag wrong in byte 0, slower) ==
+  first: raw t=10.5 Δ=56.6 ticks (2.18 floors)  p50 t=100.3 Δ=18.8 ticks (0.72 floors)  p75 t=161.2 Δ=30.7 ticks (1.18 floors)  p90 t=192.2 Δ=39.5 ticks (1.52 floors)  p95 t=214.2 Δ=48.0 ticks (1.84 floors)  p99 t=14.4 Δ=45.5 ticks (1.75 floors)
+  second: raw t=9.9 Δ=79.5 ticks (3.06 floors)  p50 t=151.7 Δ=28.4 ticks (1.09 floors)  p75 t=208.4 Δ=39.7 ticks (1.53 floors)  p90 t=260.1 Δ=53.1 ticks (2.04 floors)  p95 t=302.2 Δ=66.5 ticks (2.56 floors)  p99 t=20.4 Δ=66.6 ticks (2.56 floors)
+  first shape (ticks) class0 p1/p50/p95 43056/43290/43550, class1 43004/43238/43524
+  second shape (ticks) class0 p1/p50/p95 43186/43446/43706, class1 43134/43368/43628

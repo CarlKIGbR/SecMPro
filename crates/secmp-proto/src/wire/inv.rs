@@ -456,8 +456,8 @@ impl Decode for LinkDataV1 {
 }
 
 /// `LinkBlob = N[24] ‖ COM[32] ‖ ct[12288 + 16]` (12360 B, opaque: length only).
-#[derive(Clone, PartialEq, Eq)]
-#[cfg_attr(test, derive(Debug))]
+#[derive(Clone)]
+#[cfg_attr(test, derive(PartialEq, Eq, Debug))]
 pub struct LinkBlob {
     /// CAEAD nonce.
     pub n: [u8; NONCE_LEN],
@@ -693,6 +693,30 @@ pub(crate) mod tests {
         exact_fit::<LinkDataV1>(&bytes);
         let blob = LinkBlob::from_parts(&[1; 24], &[2; COM_LEN + LINK_BLOB_CT_LEN])?;
         assert_eq!(round_trip(&blob)?.len(), crate::sizes::LINK_BLOB_LEN);
+        Ok(())
+    }
+
+    /// M2 review F9: the largest `LinkDataV1` (a 64-byte name and an avatar hash) has 9899 bytes of fields, so its
+    /// padding marker sits at offset 9899 of the 12288 bytes — the bound `sizes` asserts at compile time.
+    #[test]
+    fn largest_link_data_fits_its_padding() -> Result<()> {
+        let ld = LinkDataV1 {
+            inviter_iks: iks(5)?,
+            bundle: bundle()?,
+            profile: Profile::new(&"a".repeat(64), Some([6; 32]))?,
+            created: u64::MAX,
+        };
+        let bytes = round_trip(&ld)?;
+        assert_eq!(bytes.len(), LINKDATA_PADDED_LEN);
+        assert_eq!(bytes.get(9898), Some(&0xff), "the last byte of `created`");
+        assert_eq!(bytes.get(9899), Some(&0x80), "the marker");
+        assert!(
+            bytes
+                .get(9900..)
+                .unwrap_or_default()
+                .iter()
+                .all(|b| *b == 0)
+        );
         Ok(())
     }
 }

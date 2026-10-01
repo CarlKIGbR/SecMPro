@@ -1,0 +1,83 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Daily fuzz campaign and seeded property run (docs/06 §4 Fuzzing "nightly 4 h", Property; M2 review F2, F10). Not a
+# required check; its job name is not a required-check name (`cargo xtask policy` checks that the four required names
+# exist only in ci.yml).
+# - Property tests: `cargo nextest run -p secmp-proto --features kat` (the TR property and vector tests need `kat`;
+#   M3 review C5) with `SECMP_PROPTEST_SEED` set to the run id (a decimal u64), so
+#   the seeded property tests explore a new seed every night; the seed is printed first, and a failure is reproduced
+#   by running the tests locally with the same value.
+# - Fuzz campaign: `cargo xtask step --strict fuzz-nightly` gives every fuzz target `expect::FUZZ_NIGHTLY_SECONDS /
+#   number of targets` seconds (14 400 s / 14 targets = 1 028 s in M3), on a scratch corpus seeded from the frozen
+#   vectors plus the tracked corpus, which the campaign only reads (as the per-PR smoke of ci-full step 6). The scratch
+#   corpus (with the inputs libFuzzer added) and any crash inputs are uploaded as artefacts; taking inputs into
+#   `fuzz/corpus/` (after `cargo fuzz cmin`) is a manual, reviewed commit.
+# Checked by `cargo xtask policy` as every workflow (see the header of ci.yml). By convention, not checked: the
+# schedule/workflow_dispatch triggers only and a read-only token.
+name: fuzz-nightly
+
+on:
+  schedule:
+    - cron: "23 0 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fuzz-nightly-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fuzz-nightly:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Pinned toolchain (rust-toolchain.toml)
+        run: rustup toolchain install && rustc -vV
+      - name: Tool install root
+        run: |
+          echo "SECMP_TOOLS_ROOT=$HOME/.secmp-tools" >> "$GITHUB_ENV"
+          echo "$HOME/.secmp-tools/bin" >> "$GITHUB_PATH"
+      - name: Restore pinned tools
+        id: tools-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.secmp-tools
+          key: ci-tools-fuzz-${{ runner.os }}-${{ hashFiles('xtask/src/tools.rs', 'rust-toolchain.toml') }}
+      - name: Install pinned tools and nightly (cargo-fuzz, cargo-nextest)
+        run: cargo xtask install-tools --set fuzz --nightly
+      - name: Save pinned tools (right after installing, so a later failing step cannot lose the cache)
+        if: steps.tools-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.secmp-tools
+          key: ${{ steps.tools-cache.outputs.cache-primary-key }}
+      - name: Property tests of secmp-proto with a fresh seed (M2 review F10)
+        env:
+          SECMP_PROPTEST_SEED: ${{ github.run_id }}
+        run: |
+          echo "SECMP_PROPTEST_SEED=$SECMP_PROPTEST_SEED"
+          cargo nextest run --locked -p secmp-proto --features kat
+      - name: Fuzz campaign, 4 h shared by every target (M2 review F2)
+        if: ${{ !cancelled() }}
+        run: cargo xtask step --strict fuzz-nightly
+      - name: Upload the scratch corpus
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fuzz-corpus-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: target/fuzz-corpus/
+          if-no-files-found: error
+      - name: Upload crash inputs
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fuzz-artifacts-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: fuzz/artifacts/
+          if-no-files-found: ignore

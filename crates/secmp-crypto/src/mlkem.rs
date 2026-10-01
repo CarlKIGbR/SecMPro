@@ -53,6 +53,14 @@ macro_rules! ml_kem {
                 Ok(Self(LockedSecret::from_slice(seed)?))
             }
 
+            /// The 64-byte seed `d ‖ z` ([`Self::from_seed`] of it is this key), for the persistence encoding of
+            /// long-lived protocol state (spec §7.1 `RatchetState`); the caller keeps any copy in a zeroizing
+            /// buffer.
+            #[must_use]
+            pub fn expose_seed(&self) -> &[u8; MLKEM_SEED_LEN] {
+                self.0.expose_secret()
+            }
+
             /// Expand the seed, run `f` on the key pair, zeroise the expanded decapsulation key.
             fn with_key_pair<T>(
                 &self,
@@ -242,6 +250,28 @@ mod tests {
             MlKem1024Dk::from_seed(&[0; 65]).err(),
             Some(Error::Rejected)
         );
+        Ok(())
+    }
+
+    /// `expose_seed` returns the seed `d ‖ z` as given, and `from_seed` of it is the same key (persistence round
+    /// trip, spec §7.1): same seed, same encapsulation key, same decapsulation.
+    #[test]
+    fn expose_seed_round_trips_through_from_seed() -> Result<()> {
+        let seed: [u8; MLKEM_SEED_LEN] = core::array::from_fn(|i| u8::try_from(i).unwrap_or(0));
+        assert_eq!(MlKem768Dk::from_seed(&seed)?.expose_seed(), &seed);
+        assert_eq!(MlKem1024Dk::from_seed(&seed)?.expose_seed(), &seed);
+        let dk = MlKem768Dk::generate()?;
+        let back = MlKem768Dk::from_seed(dk.expose_seed())?;
+        assert_eq!(back.expose_seed(), dk.expose_seed());
+        assert_eq!(back.encapsulation_key(), dk.encapsulation_key());
+        let (ct, ss) = dk.encapsulation_key().encapsulate()?;
+        assert!(bool::from(back.decapsulate(&ct).ct_eq(&ss)));
+        let dk = MlKem1024Dk::generate()?;
+        let back = MlKem1024Dk::from_seed(dk.expose_seed())?;
+        assert_eq!(back.expose_seed(), dk.expose_seed());
+        assert_eq!(back.encapsulation_key(), dk.encapsulation_key());
+        let (ct, ss) = dk.encapsulation_key().encapsulate()?;
+        assert!(bool::from(back.decapsulate(&ct).ct_eq(&ss)));
         Ok(())
     }
 

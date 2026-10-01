@@ -152,8 +152,8 @@ impl Cont {
 }
 
 /// A request command and its fields (D.2).
-#[derive(Clone, PartialEq, Eq)]
-#[cfg_attr(test, derive(Debug))]
+#[derive(Clone)]
+#[cfg_attr(test, derive(PartialEq, Eq, Debug))]
 pub enum RequestCmd {
     /// `0x01 QUEUE_NEW recv_pk[32] ‖ send_pk[32] ‖ token[32] ‖ sig[64]`.
     QueueNew {
@@ -407,8 +407,8 @@ pub(crate) mod kani_stubs {
 }
 
 /// A request frame plaintext.
-#[derive(Clone, PartialEq, Eq)]
-#[cfg_attr(test, derive(Debug))]
+#[derive(Clone)]
+#[cfg_attr(test, derive(PartialEq, Eq, Debug))]
 pub struct Request {
     /// Per-link command sequence number (spec §9.2).
     pub cmd_seq: u32,
@@ -505,8 +505,8 @@ pub enum CellrError {
 }
 
 /// A `CELLR` response `present u8 ‖ rid[16] ‖ cell_id u64 ‖ cell[4096]` (D.2).
-#[derive(Clone, PartialEq, Eq)]
-#[cfg_attr(test, derive(Debug))]
+#[derive(Clone)]
+#[cfg_attr(test, derive(PartialEq, Eq, Debug))]
 pub enum Cellr {
     /// `present = 0`: a dummy — `rid` and `cell_id` zero, `cell` random.
     Dummy {
@@ -593,8 +593,8 @@ impl Cellr {
 }
 
 /// A response command and its fields (D.2).
-#[derive(Clone, PartialEq, Eq)]
-#[cfg_attr(test, derive(Debug))]
+#[derive(Clone)]
+#[cfg_attr(test, derive(PartialEq, Eq, Debug))]
 pub enum ResponseCmd {
     /// `0x80 OK`.
     Ok,
@@ -706,8 +706,8 @@ impl ResponseCmd {
 }
 
 /// A response frame plaintext.
-#[derive(Clone, PartialEq, Eq)]
-#[cfg_attr(test, derive(Debug))]
+#[derive(Clone)]
+#[cfg_attr(test, derive(PartialEq, Eq, Debug))]
 pub struct Response {
     /// Echoes the request's `cmd_seq`.
     pub cmd_seq: u32,

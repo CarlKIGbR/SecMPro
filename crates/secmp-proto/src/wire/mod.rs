@@ -12,6 +12,11 @@
 //!   no `Clone`, `PartialEq` or `Debug`.
 //! - `Debug` is available on the other structures only in this crate's unit tests (docs/04 CS-2.5: ids, cells
 //!   and keys never reach logs).
+//! - `PartialEq`/`Eq` (`==` is variable-time) exist only in this crate's unit tests on the structures that carry a
+//!   MAC, a CAEAD commitment, an access token or a tag — `Hs1`, `Hs2`, `RequestCmd`, `LinkBlob`, `InnerCt`,
+//!   `HandshakeCell`, `Cell` — and on those that contain one (`Request`, `Cellr`, `ResponseCmd`, `Response`,
+//!   `Outer`, `Inner`) (M2 review F1). Elsewhere they are compared through their encodings or with `ct_eq`; the
+//!   integration test `canonical.rs` fails to compile if one of them gains `PartialEq` outside tests.
 
 pub mod cell;
 pub mod frame;

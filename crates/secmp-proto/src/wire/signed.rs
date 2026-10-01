@@ -3,10 +3,14 @@
 //! cmd_seq u32 ‖ <fields in D.2 order, excluding sig and the blob parts; SHA-256(blob) for LINK_PUT>`, where the
 //! label is the Appendix A label of the command (`MFETCH` for `FETCH_MULTI`). Encode only: a signed message is
 //! computed by both sides and never parsed.
+//!
+//! Every message is returned in the zeroizing buffer of the encodings (external review EXT-2 / M2 follow-up F20),
+//! like every other encoding of this crate: `QUEUE_NEW` and `LINK_PUT` carry the access `token`, and one rule for
+//! all builders leaves no exception to track.
 
 use secmp_crypto::Label;
 
-use crate::codec::{Encode, Writer};
+use crate::codec::{Encode, Writer, Zeroizing};
 use crate::error::Result;
 use crate::keys::Ed25519Pk;
 use crate::sizes::HASH_LEN;
@@ -30,47 +34,47 @@ pub fn queue_new(
     recv_pk: &Ed25519Pk,
     send_pk: &Ed25519Pk,
     token: &[u8; HASH_LEN],
-) -> Vec<u8> {
+) -> Zeroizing<Vec<u8>> {
     let mut w = message(Label::QQueueNew, sess_id, cmd_seq);
     w.bytes(recv_pk.as_bytes());
     w.bytes(send_pk.as_bytes());
     w.bytes(token);
-    w.into_bytes().to_vec()
+    w.into_bytes()
 }
 
 /// `SEND`: `… ‖ sid ‖ cell`, signed by the send key.
 #[must_use]
-pub fn send(sess_id: &Id, cmd_seq: u32, sid: &Id, cell: &Cell) -> Vec<u8> {
+pub fn send(sess_id: &Id, cmd_seq: u32, sid: &Id, cell: &Cell) -> Zeroizing<Vec<u8>> {
     let mut w = message(Label::QSend, sess_id, cmd_seq);
     w.bytes(sid);
     w.bytes(cell.as_bytes());
-    w.into_bytes().to_vec()
+    w.into_bytes()
 }
 
 /// `FETCH`: `… ‖ rid ‖ ack`, signed by the recv key.
 #[must_use]
-pub fn fetch(sess_id: &Id, cmd_seq: u32, rid: &Id, ack: u64) -> Vec<u8> {
+pub fn fetch(sess_id: &Id, cmd_seq: u32, rid: &Id, ack: u64) -> Zeroizing<Vec<u8>> {
     let mut w = message(Label::QFetch, sess_id, cmd_seq);
     w.bytes(rid);
     w.u64(ack);
-    w.into_bytes().to_vec()
+    w.into_bytes()
 }
 
 /// One `FETCH_MULTI` entry: label `MFETCH`, `… ‖ rid ‖ ack`, signed by that queue's recv key.
 #[must_use]
-pub fn fetch_multi_entry(sess_id: &Id, cmd_seq: u32, rid: &Id, ack: u64) -> Vec<u8> {
+pub fn fetch_multi_entry(sess_id: &Id, cmd_seq: u32, rid: &Id, ack: u64) -> Zeroizing<Vec<u8>> {
     let mut w = message(Label::QMfetch, sess_id, cmd_seq);
     w.bytes(rid);
     w.u64(ack);
-    w.into_bytes().to_vec()
+    w.into_bytes()
 }
 
 /// `QUEUE_DEL`: `… ‖ rid`, signed by the recv key.
 #[must_use]
-pub fn queue_del(sess_id: &Id, cmd_seq: u32, rid: &Id) -> Vec<u8> {
+pub fn queue_del(sess_id: &Id, cmd_seq: u32, rid: &Id) -> Zeroizing<Vec<u8>> {
     let mut w = message(Label::QQueueDel, sess_id, cmd_seq);
     w.bytes(rid);
-    w.into_bytes().to_vec()
+    w.into_bytes()
 }
 
 /// The `LINK_PUT` fields its signature covers besides the blob hash.
@@ -97,7 +101,7 @@ pub fn link_put(
     cmd_seq: u32,
     fields: &LinkPutFields<'_>,
     blob: &LinkBlob,
-) -> Result<Vec<u8>> {
+) -> Result<Zeroizing<Vec<u8>>> {
     let mut w = message(Label::QLinkPut, sess_id, cmd_seq);
     w.bytes(fields.ld_id);
     w.flag(fields.one_time);
@@ -105,16 +109,16 @@ pub fn link_put(
     w.bytes(fields.owner_pk.as_bytes());
     w.bytes(fields.token);
     w.bytes(&secmp_crypto::sha256(&[&blob.encode()?]));
-    Ok(w.into_bytes().to_vec())
+    Ok(w.into_bytes())
 }
 
 /// `LINK_GET` in owner-status mode (the only signed mode): `… ‖ ld_id ‖ mode (0x01)`, signed by the owner key.
 #[must_use]
-pub fn link_get_owner_status(sess_id: &Id, cmd_seq: u32, ld_id: &Id) -> Vec<u8> {
+pub fn link_get_owner_status(sess_id: &Id, cmd_seq: u32, ld_id: &Id) -> Zeroizing<Vec<u8>> {
     let mut w = message(Label::QLinkGet, sess_id, cmd_seq);
     w.bytes(ld_id);
     w.u8(1);
-    w.into_bytes().to_vec()
+    w.into_bytes()
 }
 
 #[cfg(test)]
@@ -122,6 +126,11 @@ mod tests {
     use super::*;
     use crate::sizes::{CELL_LEN, COM_LEN, LINK_BLOB_CT_LEN};
     use crate::wire::testutil::ed25519;
+    // the real type, not the crate's alias (which is a stand-in under Kani)
+    use secmp_crypto::Zeroizing;
+
+    /// A message, its label prefix and its length.
+    type Case = (Zeroizing<Vec<u8>>, &'static [u8], usize);
 
     /// The message lengths of `SCHEMA-4.8` rows 79–85 and their label prefixes.
     #[test]
@@ -130,7 +139,7 @@ mod tests {
         let pk = ed25519(2)?;
         let blob = LinkBlob::from_parts(&[3; 24], &[4; COM_LEN + LINK_BLOB_CT_LEN])?;
         let cell = Cell::from_bytes(&[5; CELL_LEN])?;
-        let cases: [(Vec<u8>, &[u8], usize); 7] = [
+        let cases: [Case; 7] = [
             (
                 queue_new(&s, 1, &pk, &pk, &[6; 32]),
                 b"SecMP-Q/1 QUEUE_NEW",
@@ -169,6 +178,39 @@ mod tests {
         Ok(())
     }
 
+    /// F20 (external review EXT-2): every builder returns a `Zeroizing<Vec<u8>>` (a change of a return type fails
+    /// to compile here); `QUEUE_NEW` and `LINK_PUT` carry the access token.
+    #[test]
+    fn signed_messages_are_zeroizing() -> Result<()> {
+        let s = [1_u8; 16];
+        let pk = ed25519(2)?;
+        let token = [0x5a_u8; 32];
+        let blob = LinkBlob::from_parts(&[3; 24], &[4; COM_LEN + LINK_BLOB_CT_LEN])?;
+        let fields = LinkPutFields {
+            ld_id: &s,
+            one_time: false,
+            expires_bucket: 8,
+            owner_pk: &pk,
+            token: &token,
+        };
+        let with_token: [Zeroizing<Vec<u8>>; 2] = [
+            queue_new(&s, 1, &pk, &pk, &token),
+            link_put(&s, 1, &fields, &blob)?,
+        ];
+        for m in &with_token {
+            assert!(m.windows(32).any(|w| w == token));
+        }
+        let others: [Zeroizing<Vec<u8>>; 5] = [
+            send(&s, 1, &s, &Cell::from_bytes(&[5; CELL_LEN])?),
+            fetch(&s, 1, &s, 7),
+            fetch_multi_entry(&s, 1, &s, 7),
+            queue_del(&s, 1, &s),
+            link_get_owner_status(&s, 1, &s),
+        ];
+        assert!(others.iter().all(|m| !m.is_empty()));
+        Ok(())
+    }
+
     /// The full messages, field by field in D.2 order (spec §9.2, D.6), with distinct field values.
     #[test]
     fn exact_contents() -> Result<()> {
@@ -181,7 +223,7 @@ mod tests {
         let ack = 0x0a0b_0c0d_0e0f_1011_u64.to_be_bytes();
         let cat = |parts: &[&[u8]]| parts.concat();
         assert_eq!(
-            queue_new(&sess, 0x0102_0304, &recv, &send_pk, &[0x66; 32]),
+            *queue_new(&sess, 0x0102_0304, &recv, &send_pk, &[0x66; 32]),
             cat(&[
                 b"SecMP-Q/1 QUEUE_NEW",
                 &sess,
@@ -192,19 +234,19 @@ mod tests {
             ])
         );
         assert_eq!(
-            send(&sess, 0x0102_0304, &id, &cell),
+            *send(&sess, 0x0102_0304, &id, &cell),
             cat(&[b"SecMP-Q/1 SEND", &sess, &seq, &id, cell.as_bytes()])
         );
         assert_eq!(
-            fetch(&sess, 0x0102_0304, &id, 0x0a0b_0c0d_0e0f_1011),
+            *fetch(&sess, 0x0102_0304, &id, 0x0a0b_0c0d_0e0f_1011),
             cat(&[b"SecMP-Q/1 FETCH", &sess, &seq, &id, &ack])
         );
         assert_eq!(
-            fetch_multi_entry(&sess, 0x0102_0304, &id, 0x0a0b_0c0d_0e0f_1011),
+            *fetch_multi_entry(&sess, 0x0102_0304, &id, 0x0a0b_0c0d_0e0f_1011),
             cat(&[b"SecMP-Q/1 MFETCH", &sess, &seq, &id, &ack])
         );
         assert_eq!(
-            queue_del(&sess, 0x0102_0304, &id),
+            *queue_del(&sess, 0x0102_0304, &id),
             cat(&[b"SecMP-Q/1 QUEUE_DEL", &sess, &seq, &id])
         );
         for one_time in [false, true] {
@@ -216,7 +258,7 @@ mod tests {
                 token: &[0x77; 32],
             };
             assert_eq!(
-                link_put(&sess, 0x0102_0304, &fields, &blob)?,
+                *link_put(&sess, 0x0102_0304, &fields, &blob)?,
                 cat(&[
                     b"SecMP-Q/1 LINK_PUT",
                     &sess,
@@ -231,7 +273,7 @@ mod tests {
             );
         }
         assert_eq!(
-            link_get_owner_status(&sess, 0x0102_0304, &id),
+            *link_get_owner_status(&sess, 0x0102_0304, &id),
             cat(&[b"SecMP-Q/1 LINK_GET", &sess, &seq, &id, &[1]])
         );
         Ok(())

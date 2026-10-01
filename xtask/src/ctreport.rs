@@ -1,13 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! The `ct` report (`target/ct-report.json`, written by `crates/secmp-crypto/benches/ct.rs`) as the gate reads it
+//! The `ct` report (`target/ct-report.json`, written by `crates/secmp-testkit/benches/ct.rs`) as the gate reads it
 //! (ADR-038, ADR-041 with Amendment 1).
 //!
 //! The gate does not take the bench's word (M2 review C3). Besides the parameters the report must echo, it
 //! re-derives from the recorded per-crop statistics, `q_eff_ticks` and `tick_ns`:
-//! - every target's verdict (`decide` of the bench);
-//! - the positive control's presence and detection, and the inline A/A control;
+//! - every target's verdict (`decide` of the bench), with each measurement's `q_eff_ticks` bounded above by the
+//!   clock (M2 review F17, [`q_eff_bound`]);
+//! - the positive control's presence and detection (whatever its label says, M2 review F15), and the inline A/A
+//!   control;
 //! - the sensitivity control, bound to `tag_compare`'s batch size and sample count;
-//! - the target set and the sample counts; a shortened run (`secmp_ct_scale`) is refused.
+//! - the target set and the sample counts; a shortened run (`secmp_ct_scale`) is refused;
+//! - the batch sizes (ADR-041 Amendment 2, M3 review R-57): every measurement taken with the target's recorded `k`,
+//!   the `requantised` flag consistent with `k_initial` and `k`, and each judged measurement realising at least
+//!   `CT_MIN_REALISED_QUANTA` effective quanta ([`batch_findings`]).
 //!
 //! The bench prints rounded values: t to 3 decimals, Δ and the floors in ticks to 4, `q_eff_ticks` to 3; `tick_ns`
 //! is exact. Every comparison allows exactly that rounding, so a report is refused only if no values within it give
@@ -139,6 +144,28 @@ fn q_eff(m: &Value) -> Option<f64> {
         .filter(|q| q.is_finite() && *q >= 1.0)
 }
 
+/// The largest effective quantum (ticks) a target's measurement may carry (M2 review F17): the timer's quantum as the
+/// clock probe measured it independently of the targets (`clock.q_eff_ticks`: the reported resolution, or the lattice
+/// of the fixed workload where coarser), or the absolute floor `CT_EFFECT_FLOOR_NS` in ticks, whichever is larger,
+/// plus one tick. Reasoning: the effect floor is `max(q_eff, 10 ns)` (ADR-041 Amendment 1), and a larger `q_eff`
+/// raises it, so an inflated `q_eff` could turn a FAIL into `SUB_FLOOR_SHIFT`. A measurement's own lattice is a
+/// property of the timer, not of the code under test; ADR-041 Amendment 1 sets the 10 ns part of the floor at the
+/// coarse lattice seen on the fine-counter runners (≈ 24.5 ticks = 10.0 ns, which the clock probe does not see), and
+/// a coarse counter shows its coarseness in the probe (26 ticks = 10.0 ns; 1 tick = 41.7 ns on Apple Silicon). The
+/// one tick absorbs the estimate of a lattice from integer sample values (observed 24.25–24.6 ticks for the 24.46-tick
+/// lattice). A lattice coarser than both would be a runner the ADR did not anticipate: the report is refused (fail
+/// closed) rather than judged with a floor that nothing independent of the targets confirms. `None` without a
+/// readable clock quantum and tick length: every measured target is then refused.
+fn q_eff_bound(report: &Value) -> Option<f64> {
+    let tick = tick_ns(report)?;
+    let clock = report
+        .get("clock")
+        .and_then(|c| c.get("q_eff_ticks"))
+        .and_then(Value::as_f64)
+        .filter(|q| q.is_finite() && *q >= 1.0)?;
+    Some(clock.max(expect::CT_EFFECT_FLOOR_NS / tick) + 1.0)
+}
+
 /// The effect floor in ticks for an effective quantum `q` (ticks) on a clock of `tick` ns (ADR-041 Amendment 1).
 fn floor_ticks(q: f64, tick: f64) -> f64 {
     (expect::CT_EFFECT_FLOOR_QUANTA * q).max(expect::CT_EFFECT_FLOOR_NS / tick)
@@ -213,6 +240,13 @@ fn ct_line(r: &Value) -> (String, String, bool) {
         .get("k")
         .and_then(Value::as_u64)
         .map_or_else(|| "-".to_owned(), |k| k.to_string());
+    let k = match (
+        r.get("requantised").and_then(Value::as_bool),
+        r.get("k_initial").and_then(Value::as_u64),
+    ) {
+        (Some(true), Some(k0)) => format!("{k} (re-batched from k={k0})"),
+        _ => k,
+    };
     let calibration = r.get("calibration_median_ns").and_then(Value::as_f64);
     let ns = |x: Option<f64>| x.map_or_else(|| "?".to_owned(), |x| format!("{x:.1}"));
     let measurement = |key: &str, label: &str| {
@@ -234,6 +268,10 @@ fn ct_line(r: &Value) -> (String, String, bool) {
         measurement("aa_control", "A/A"),
         if control {
             " (positive control, must be detected)"
+        } else if name == expect::CT_AA_PRIME_CONTROL {
+            " (A/A′ placement control: a FAIL makes the run CONTROL_FAIL)"
+        } else if name == expect::CT_SAME_CONTENT_CONTROL {
+            " (same-content control: a FAIL makes the run CONTROL_FAIL)"
         } else {
             ""
         }
@@ -328,9 +366,45 @@ fn possible_verdicts(first: &Value, second: &Value, tick: f64) -> Option<Possibl
     Some(possible)
 }
 
-/// M2 review C3 (a), (c): the target set is `expect::CT_TARGETS`, each measured with the sample count of
-/// `expect.rs`, and the run was not shortened.
-fn set_findings(report: &Value, results: &[Value]) -> Vec<String> {
+/// A target set a report is read against: `expect::CT_TARGETS` (the gate) or the set a committed report was written
+/// with (`cargo xtask ct-check --targets m2`).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct TargetSet {
+    label: &'static str,
+    names: &'static [&'static str],
+    /// Whether its reports record `k` per measurement, `requantised` and `k_initial` (ADR-041 Amendment 2); the
+    /// reports of the M2 set predate it.
+    batch_record: bool,
+}
+
+/// The gate's target set.
+pub(crate) const CURRENT_TARGETS: TargetSet = TargetSet {
+    label: "expect::CT_TARGETS",
+    names: expect::CT_TARGETS,
+    batch_record: true,
+};
+
+/// The target set of the reports written before ADR-042 added `aa_prime_control` (M2; the committed evidence under
+/// `docs/reviews/M02-evidence/`), for re-reading them with `cargo xtask ct-check --targets m2`.
+pub(crate) const M2_TARGETS: TargetSet = TargetSet {
+    label: "the M2 target set",
+    names: &[
+        "control_variable_time_compare",
+        "tag_compare",
+        "msg_open_reject",
+        "caead_open_reject",
+        "sas",
+        "caead_derive",
+        "caead_aead_reject",
+        "caead_com_compare",
+        "caead_open_reject_samekey",
+    ],
+    batch_record: false,
+};
+
+/// M2 review C3 (a), (c): the target set is `targets` (the gate: `expect::CT_TARGETS`), each measured with the sample
+/// count of `expect.rs`, and the run was not shortened.
+fn set_findings(report: &Value, results: &[Value], targets: TargetSet) -> Vec<String> {
     let mut out = Vec::new();
     if let Some(scale) = report.get("secmp_ct_scale") {
         out.push(format!(
@@ -339,11 +413,11 @@ fn set_findings(report: &Value, results: &[Value]) -> Vec<String> {
     }
     let names: Vec<&str> = results.iter().map(|r| text(r, "name")).collect();
     let set: BTreeSet<&str> = names.iter().copied().collect();
-    let expected: BTreeSet<&str> = expect::CT_TARGETS.iter().copied().collect();
+    let expected: BTreeSet<&str> = targets.names.iter().copied().collect();
     if set.len() != names.len() || set != expected {
         out.push(format!(
-            "ct report: targets {names:?} differ from expect::CT_TARGETS {:?}",
-            expect::CT_TARGETS
+            "ct report: targets {names:?} differ from {} {:?}",
+            targets.label, targets.names
         ));
     }
     for r in results {
@@ -363,7 +437,12 @@ fn set_findings(report: &Value, results: &[Value]) -> Vec<String> {
     out
 }
 
-/// M2 review C3 (a): exactly one positive control, `expect::CT_POSITIVE_CONTROL`, detected when it passes.
+/// The verdicts the bench can give the positive control: measured once, PASS if detected, FAIL if not, or not
+/// measurable (`evaluate`).
+const CT_CONTROL_VERDICTS: &[&str] = &["PASS", "FAIL", "NOT_MEASURABLE"];
+
+/// M2 review C3 (a): exactly one positive control, `expect::CT_POSITIVE_CONTROL`, detected; F15: detected whatever its
+/// label says (in a run that is not `CONTROL_FAIL`), and labelled with a verdict the bench can give it.
 fn control_findings(results: &[Value], run_verdict: &str) -> Vec<String> {
     let controls: Vec<&Value> = results
         .iter()
@@ -383,18 +462,26 @@ fn control_findings(results: &[Value], run_verdict: &str) -> Vec<String> {
             expect::CT_POSITIVE_CONTROL
         )];
     }
+    let mut out = Vec::new();
+    let verdict = text(control, "verdict");
+    if run_verdict != "CONTROL_FAIL" && !CT_CONTROL_VERDICTS.contains(&verdict) {
+        out.push(format!(
+            "ct report: the positive control {} is {verdict}; it can only be {CT_CONTROL_VERDICTS:?}",
+            expect::CT_POSITIVE_CONTROL
+        ));
+    }
     let detected = control
         .get("first")
         .and_then(max_abs_t)
         .is_some_and(|t| t + HALF_T > expect::CT_THRESHOLDS);
-    if run_verdict != "CONTROL_FAIL" && text(control, "verdict") == "PASS" && !detected {
-        return vec![format!(
-            "ct report: {} PASS, but its crops do not exceed |t| {}",
+    if run_verdict != "CONTROL_FAIL" && !detected {
+        out.push(format!(
+            "ct report: {} {verdict}, but its crops do not exceed |t| {} (the positive control must be detected)",
             expect::CT_POSITIVE_CONTROL,
             expect::CT_THRESHOLDS
-        )];
+        ));
     }
-    Vec::new()
+    out
 }
 
 /// M2 review C3 (b): the sensitivity control runs with `tag_compare`'s batch size and sample count.
@@ -422,10 +509,17 @@ fn binding_findings(report: &Value, results: &[Value]) -> Vec<String> {
 }
 
 /// M2 review C3 (a), (f): per measured target, a quiet inline A/A control, and a verdict (with its deciding crop)
-/// that the recorded crops, `q_eff_ticks` and `tick_ns` give.
-fn target_findings(report: &Value, results: &[Value], run_verdict: &str) -> Vec<String> {
+/// that the recorded crops, `q_eff_ticks` and `tick_ns` give; F17: both measurements' `q_eff_ticks` within
+/// [`q_eff_bound`].
+fn target_findings(
+    report: &Value,
+    results: &[Value],
+    run_verdict: &str,
+    targets: TargetSet,
+) -> Vec<String> {
     let mut out = Vec::new();
     let tick = tick_ns(report);
+    let q_bound = q_eff_bound(report);
     for r in results {
         let (name, verdict) = (text(r, "name"), text(r, "verdict"));
         if verdict == "NOT_MEASURABLE" {
@@ -443,10 +537,31 @@ fn target_findings(report: &Value, results: &[Value], run_verdict: &str) -> Vec<
             )),
             None => out.push(format!("ct report: {name} has no readable A/A measurement")),
         }
+        if targets.batch_record && matches!(verdict, "PASS" | "SUB_FLOOR_SHIFT" | "FAIL") {
+            out.extend(batch_findings(r));
+        }
         if r.get("control").and_then(Value::as_bool) == Some(true)
             || !matches!(verdict, "PASS" | "SUB_FLOOR_SHIFT" | "FAIL")
         {
             continue;
+        }
+        // F17: an effective quantum above the clock's bound would raise the floor; refused, whatever the verdict
+        for key in ["first", "second"] {
+            let q = r.get(key).and_then(q_eff);
+            match (q, q_bound) {
+                (Some(q), Some(bound)) if q - HALF_Q <= bound => {}
+                (Some(q), Some(bound)) => out.push(format!(
+                    "ct report: {name} {key} q_eff_ticks {q} above the bound {bound:.3} (max(clock q_eff, {} ns) + 1 \
+                     tick)",
+                    expect::CT_EFFECT_FLOOR_NS
+                )),
+                // an unreadable q_eff is refused below
+                (None, _) => {}
+                (Some(_), None) => out.push(format!(
+                    "ct report: {name} {verdict}, but the clock has no readable q_eff_ticks and tick_ns to bound its \
+                     effective quantum"
+                )),
+            }
         }
         let possible = match (r.get("first"), r.get("second"), tick) {
             (Some(first), Some(second), Some(tick)) => possible_verdicts(first, second, tick),
@@ -472,14 +587,80 @@ fn target_findings(report: &Value, results: &[Value], run_verdict: &str) -> Vec<
                 ));
             }
         }
+        // ADR-042 (2): the A/A′ placement control at or above the floor makes the run CONTROL_FAIL, never FAIL
+        if name == expect::CT_AA_PRIME_CONTROL && verdict == "FAIL" {
+            out.push(format!(
+                "ct report: {name} FAIL in a {run_verdict} run: the A/A′ placement control reached the effect floor, \
+                 which makes the run CONTROL_FAIL (ADR-042)"
+            ));
+        }
+        // ADR-042 Amendment 2: so does the same-content control
+        if name == expect::CT_SAME_CONTENT_CONTROL && verdict == "FAIL" {
+            out.push(format!(
+                "ct report: {name} FAIL in a {run_verdict} run: the same-content control reached the effect floor, \
+                 which makes the run CONTROL_FAIL (ADR-042 Amendment 2)"
+            ));
+        }
     }
     out
 }
 
-/// M2 review C3 (a)–(c), (f): the re-derivation of a report. Every finding is a refusal. In a `CONTROL_FAIL` run no
-/// target verdict counts, and each must say `CONTROL_FAIL`.
-fn rederive(report: &Value, run_verdict: &str, results: &[Value]) -> Vec<String> {
-    let mut out = set_findings(report, results);
+/// ADR-041 Amendment 2 (M3 review R-57): the batch sizes of a judged target as the report records them — every
+/// measurement (the pair and the A/A measurement) taken with the target's `k`; `requantised` consistent with the two
+/// batch sizes (`k_initial < k` after the one re-batch, `k_initial = k` without); and each measurement of the pair
+/// realising at least `CT_MIN_REALISED_QUANTA` effective quanta (class median / `q_eff_ticks`; refused only if surely
+/// below within the printed rounding of `q_eff_ticks`), which the bench requires of a pair it judges. An unreadable
+/// `q_eff_ticks` is refused by `target_findings`.
+fn batch_findings(r: &Value) -> Vec<String> {
+    let name = text(r, "name");
+    let mut out = Vec::new();
+    let k = r.get("k").and_then(Value::as_u64);
+    let k_initial = r.get("k_initial").and_then(Value::as_u64);
+    let requantised = r.get("requantised").and_then(Value::as_bool);
+    match (k, k_initial, requantised) {
+        (Some(k), Some(k0), Some(true)) if k0 < k => {}
+        (Some(k), Some(k0), Some(false)) if k0 == k => {}
+        _ => out.push(format!(
+            "ct report: {name} records k {k:?}, k_initial {k_initial:?} and requantised {requantised:?}, which is no \
+             first pair or one re-batch (ADR-041 Amendment 2)"
+        )),
+    }
+    let min = u32::try_from(expect::CT_MIN_REALISED_QUANTA).map_or(f64::INFINITY, f64::from);
+    for key in ["first", "second", "aa_control"] {
+        let Some(m) = r.get(key).filter(|m| !m.is_null()) else {
+            continue;
+        };
+        let taken = m.get("k").and_then(Value::as_u64);
+        if taken.is_none() || taken != k {
+            out.push(format!(
+                "ct report: {name} {key} taken with k {taken:?}, not the target's k {k:?}"
+            ));
+        }
+        if key == "aa_control" {
+            continue;
+        }
+        let median = m.get("class_median_ticks").and_then(Value::as_f64);
+        if let (Some(median), Some(q)) = (median, q_eff(m))
+            && median < min * (q - HALF_Q)
+        {
+            out.push(format!(
+                "ct report: {name} {key} realises fewer than {min} quanta (class median {median} ticks, q_eff {q} \
+                 ticks): a pair the bench cannot judge (ADR-041 Amendment 2 (3))"
+            ));
+        }
+    }
+    out
+}
+
+/// M2 review C3 (a)–(c), (f): the re-derivation of a report against the target set `targets`. Every finding is a
+/// refusal. In a `CONTROL_FAIL` run no target verdict counts, and each must say `CONTROL_FAIL`.
+fn rederive(
+    report: &Value,
+    run_verdict: &str,
+    results: &[Value],
+    targets: TargetSet,
+) -> Vec<String> {
+    let mut out = set_findings(report, results, targets);
     out.extend(control_findings(results, run_verdict));
     out.extend(binding_findings(report, results));
     if run_verdict == "CONTROL_FAIL" {
@@ -496,12 +677,18 @@ fn rederive(report: &Value, run_verdict: &str, results: &[Value]) -> Vec<String>
                 }),
         );
     } else {
-        out.extend(target_findings(report, results, run_verdict));
+        out.extend(target_findings(report, results, run_verdict, targets));
     }
     out
 }
 
+/// The gate's reading of a report (`expect::CT_TARGETS`).
 pub(crate) fn ct_table(json: &str) -> Result<CtTable> {
+    ct_table_for(json, CURRENT_TARGETS)
+}
+
+/// The gate's reading of a report against the target set `targets`.
+pub(crate) fn ct_table_for(json: &str, targets: TargetSet) -> Result<CtTable> {
     let v: Value = serde_json::from_str(json).map_err(|e| Error(format!("ct report: {e}")))?;
     if let Some(e) = v.get("error").and_then(Value::as_str) {
         bail!("ct report: {e}");
@@ -561,7 +748,9 @@ pub(crate) fn ct_table(json: &str) -> Result<CtTable> {
         ));
     }
     table.lines.push(sensitivity);
-    table.failed.extend(rederive(&v, run_verdict, results));
+    table
+        .failed
+        .extend(rederive(&v, run_verdict, results, targets));
     if run_verdict == "PASS" && !(table.failed.is_empty() && table.not_measurable.is_empty()) {
         table
             .failed
@@ -570,16 +759,35 @@ pub(crate) fn ct_table(json: &str) -> Result<CtTable> {
     Ok(table)
 }
 
-/// `cargo xtask ct-check <report>…`: the gate's reading of saved reports (M2 review C3: every committed report of
-/// the ADR-041 Amendment 1 format must still pass). Fails unless every report passes.
-pub(crate) fn check_files(args: &[String]) -> Result<()> {
-    if args.is_empty() {
-        bail!("usage: cargo xtask ct-check <ct-report.json>…");
+/// The arguments of `ct-check`: an optional `--targets m2` (the target set of the committed M2 reports, before
+/// ADR-042) or `--targets current` (the default, `expect::CT_TARGETS`), then the report files.
+fn check_args(args: &[String]) -> Result<(TargetSet, &[String])> {
+    let usage = "usage: cargo xtask ct-check [--targets current|m2] <ct-report.json>…";
+    let (targets, files) = match args {
+        [flag, set, files @ ..] if flag == "--targets" => match set.as_str() {
+            "current" => (CURRENT_TARGETS, files),
+            "m2" => (M2_TARGETS, files),
+            other => bail!("ct-check: unknown target set {other:?}; {usage}"),
+        },
+        [flag, ..] if flag.starts_with('-') => bail!("ct-check: unknown option {flag:?}; {usage}"),
+        files => (CURRENT_TARGETS, files),
+    };
+    if files.is_empty() {
+        bail!("{usage}");
     }
+    Ok((targets, files))
+}
+
+/// `cargo xtask ct-check [--targets current|m2] <report>…`: the gate's reading of saved reports (M2 review C3: every
+/// committed report of the ADR-041 Amendment 1 format must still pass; the M2 reports are read against the M2 target
+/// set). Fails unless every report passes.
+pub(crate) fn check_files(args: &[String]) -> Result<()> {
+    let (targets, args) = check_args(args)?;
+    say(&format!("ct-check against {}", targets.label));
     let mut refused = 0_usize;
     for file in args {
         let json = std::fs::read_to_string(file)?;
-        match ct_table(&json) {
+        match ct_table_for(&json, targets) {
             Ok(t) if t.failed.is_empty() && t.not_measurable.is_empty() => {
                 say(&format!("PASS {file}"));
             }
@@ -619,7 +827,8 @@ mod tests {
             .collect();
         serde_json::json!({"max_abs_t": t.abs(), "max_at": "p90", "t": {}, "crops": crops, "q_eff_ticks": 1.0,
             "q_eff_source": "clock", "floor_ticks": 20.0, "floor_ns": 10.0, "distinct": 900,
-            "median_ticks": 6000, "median_ns": 3000.0, "class_median_ticks": 6000, "realised_quanta": 6000.0})
+            "median_ticks": 6000, "median_ns": 3000.0, "class_median_ticks": 6000, "realised_quanta": 6000.0,
+            "k": 1})
     }
 
     /// A PASS target (t 1, Δ 0.1 tick in both measurements, A/A t 1.25).
@@ -631,7 +840,8 @@ mod tests {
             expect::CT_SAMPLES
         };
         serde_json::json!({"name": name, "class0": "a", "class1": "b", "samples": samples, "control": control,
-            "k": 1, "calibration_median_ticks": 3000, "calibration_median_ns": 1500.0, "verdict": "PASS",
+            "k": 1, "requantised": false, "k_initial": 1, "calibration_median_ticks": 3000,
+            "calibration_median_ns": 1500.0, "verdict": "PASS",
             "passed": true, "decisive_crop": null, "aa_passed": true, "aa_control": measurement(1.25, 0.1),
             "first": if control { measurement(99.0, 500.0) } else { measurement(1.0, 0.1) },
             "second": if control { Value::Null } else { measurement(1.0, 0.1) }})
@@ -648,7 +858,7 @@ mod tests {
                 "effect_floor_quanta": expect::CT_EFFECT_FLOOR_QUANTA, "effect_floor_ns": expect::CT_EFFECT_FLOOR_NS,
                 "aa_max_t": expect::CT_AA_MAX_T, "samples": expect::CT_SAMPLES, "sas_samples": expect::CT_SAS_SAMPLES},
             "sign": "t < 0: class 0 faster",
-            "clock": {"timer": "rdtscp", "tick_ns": 0.5, "resolution_ns": 0.5, "q_eff_ns": 0.5},
+            "clock": {"timer": "rdtscp", "tick_ns": 0.5, "resolution_ns": 0.5, "q_eff_ticks": 1.0, "q_eff_ns": 0.5},
             "run_verdict": "PASS", "run_reason": null,
             "sensitivity_control": {"name": "min_leak_control", "k": 1, "samples": expect::CT_SAMPLES,
                 "floor_ticks": 20.0, "floor_ns": 10.0, "raw_delta_ticks": 900.0, "raw_delta_ns": 450.0,
@@ -685,6 +895,61 @@ mod tests {
     fn refused(v: &Value, needle: &str) -> Result<bool> {
         let t = table(v)?;
         Ok(t.failed.iter().any(|f| f.contains(needle)))
+    }
+
+    /// A measurement with `q_eff` ticks: `t` and Δ per crop as given, every other crop at t 1, Δ 0.1.
+    fn measurement_with(crops: &[(&str, f64, f64)], q_eff: f64) -> Value {
+        let mut m = measurement(1.0, 0.1);
+        for (crop, t, delta) in crops {
+            set(&mut m, &["crops", crop, "t"], Value::from(*t));
+            set(&mut m, &["crops", crop, "delta"], Value::from(*delta));
+        }
+        set(&mut m, &["q_eff_ticks"], Value::from(q_eff));
+        m
+    }
+
+    /// The refusals of a report, without the one derived from them ("run verdict PASS with a failing target"), and
+    /// with nothing reported as not measurable: a fixture whose refusals are exactly one check's findings passes
+    /// once that check is removed.
+    fn refusals(v: &Value) -> Result<Vec<String>> {
+        let t = table(v)?;
+        assert!(t.not_measurable.is_empty(), "{t:?}");
+        Ok(t.failed
+            .into_iter()
+            .filter(|f| f != "ct report: run verdict PASS with a failing target")
+            .collect())
+    }
+
+    /// `tag_compare` with both measurements as given, its verdict and deciding crop; the run verdict follows.
+    fn tag_compare_with(first: Value, second: Value, verdict: &str, crop: Option<&str>) -> Value {
+        let mut v = report();
+        if verdict == "FAIL" {
+            set(&mut v, &["run_verdict"], Value::from("FAIL"));
+        }
+        let tag = at(&mut v, "tag_compare");
+        set(tag, &["first"], first);
+        set(tag, &["second"], second);
+        set(tag, &["verdict"], Value::from(verdict));
+        set(
+            tag,
+            &["decisive_crop"],
+            crop.map_or(Value::Null, Value::from),
+        );
+        v
+    }
+
+    /// Whether the gate accepts `tag_compare` with t `t1`/`t2` and Δ `delta` ticks at every crop (effective quantum
+    /// `q`) under `verdict` (a FAIL counts as accepted when its only refusal is the failing target itself).
+    fn accepts(t1: f64, t2: f64, delta: f64, q: f64, verdict: &str) -> Result<bool> {
+        let all = |t: f64| {
+            let crops: Vec<(&str, f64, f64)> = CROPS.iter().map(|c| (*c, t, delta)).collect();
+            measurement_with(&crops, q)
+        };
+        let crop = (verdict != "PASS").then_some("p90");
+        let v = tag_compare_with(all(t1), all(t2), verdict, crop);
+        Ok(refusals(&v)?
+            .iter()
+            .all(|f| f.starts_with("tag_compare: FAIL at p90")))
     }
 
     #[test]
@@ -830,6 +1095,246 @@ mod tests {
             measurement(3.0, 500.0),
         );
         assert!(refused(&v, "PASS, but its crops do not exceed")?);
+        Ok(())
+    }
+
+    /// F15: the positive control is checked for detection whatever its label says, and its label must be one the
+    /// bench can give it. Each fixture sits on one check's edge: its refusals are that check's finding alone.
+    #[test]
+    fn the_positive_control_is_checked_whatever_its_label() -> Result<()> {
+        let control = expect::CT_POSITIVE_CONTROL;
+        // a passing label the bench never gives the control, detected: the label check alone
+        let mut v = report();
+        set(
+            at(&mut v, control),
+            &["verdict"],
+            Value::from("SUB_FLOOR_SHIFT"),
+        );
+        assert_eq!(
+            refusals(&v)?,
+            vec![format!(
+                "ct report: the positive control {control} is SUB_FLOOR_SHIFT; it can only be [\"PASS\", \"FAIL\", \"NOT_MEASURABLE\"]"
+            )]
+        );
+        // the same label, not detected: both checks (before F15 this report passed the gate)
+        set(at(&mut v, control), &["first"], measurement(3.0, 500.0));
+        assert_eq!(refusals(&v)?.len(), 2, "{:?}", refusals(&v)?);
+        assert!(refused(
+            &v,
+            "SUB_FLOOR_SHIFT, but its crops do not exceed |t| 4.5"
+        )?);
+        // PASS at the edge of the printed rounding: 4.5 may be 4.5004 > 4.5; 4.4994 is at most 4.4999
+        let mut v = report();
+        set(at(&mut v, control), &["first"], measurement(4.4996, 500.0));
+        assert!(refusals(&v)?.is_empty());
+        set(at(&mut v, control), &["first"], measurement(4.4994, 500.0));
+        assert_eq!(
+            refusals(&v)?,
+            vec![format!(
+                "ct report: {control} PASS, but its crops do not exceed |t| 4.5 (the positive control must be detected)"
+            )]
+        );
+        // NOT_MEASURABLE or FAIL: still checked (the gate fails on those labels anyway)
+        for label in ["FAIL", "NOT_MEASURABLE"] {
+            let mut v = report();
+            set(&mut v, &["run_verdict"], Value::from("FAIL"));
+            set(at(&mut v, control), &["verdict"], Value::from(label));
+            set(at(&mut v, control), &["first"], measurement(3.0, 500.0));
+            assert!(refused(
+                &v,
+                &format!("{control} {label}, but its crops do not exceed")
+            )?);
+        }
+        // in a CONTROL_FAIL run no target verdict counts, the control's neither
+        let mut v = report();
+        set(&mut v, &["run_verdict"], Value::from("CONTROL_FAIL"));
+        for name in expect::CT_TARGETS {
+            set(at(&mut v, name), &["verdict"], Value::from("CONTROL_FAIL"));
+        }
+        set(at(&mut v, control), &["first"], measurement(3.0, 500.0));
+        assert_eq!(table(&v)?.failed, vec!["CONTROL_FAIL — ?".to_owned()]);
+        Ok(())
+    }
+
+    /// F16: a `SUB_FLOOR_SHIFT` is refused when another crop reproduces a shift surely at or above the floor (the
+    /// `!fail_sure` condition of `possible_verdicts`); the report's refusals are that finding alone, and the
+    /// deciding crop of such a report can only be a FAIL.
+    #[test]
+    fn refuses_a_sub_floor_shift_next_to_a_relevant_crop() -> Result<()> {
+        let first = measurement_with(&[("p50", 30.0, 30.0), ("p90", 30.0, 5.0)], 1.0);
+        let second = measurement_with(&[("p50", 25.0, 30.0), ("p90", 25.0, 5.0)], 1.0);
+        let v = tag_compare_with(
+            first.clone(),
+            second.clone(),
+            "SUB_FLOOR_SHIFT",
+            Some("p90"),
+        );
+        assert_eq!(
+            refusals(&v)?,
+            vec![
+                "ct report: tag_compare SUB_FLOOR_SHIFT, but its recorded crops give {\"FAIL\"}"
+                    .to_owned()
+            ]
+        );
+        // the same crops without the relevant p50 give a sub-floor shift
+        let sub_first = measurement_with(&[("p90", 30.0, 5.0)], 1.0);
+        let sub_second = measurement_with(&[("p90", 25.0, 5.0)], 1.0);
+        assert!(
+            refusals(&tag_compare_with(
+                sub_first,
+                sub_second,
+                "SUB_FLOOR_SHIFT",
+                Some("p90")
+            ))?
+            .is_empty()
+        );
+        // and the mixed crops as FAIL at p50: accepted
+        let v = tag_compare_with(first, second, "FAIL", Some("p50"));
+        assert_eq!(
+            refusals(&v)?.len(),
+            1,
+            "only the failing target itself: {:?}",
+            refusals(&v)?
+        );
+        Ok(())
+    }
+
+    /// F16: the effect floor of a target is tight on both sides of the printed rounding, for its 10 ns part (`q_eff` 1
+    /// tick on a 0.5 ns clock: 20 ticks) and for its `q_eff` part (20.5 ticks): each edge is probed 1e-5 ticks on
+    /// either side (literal values, so that a changed constant cannot move the probes with it). A floor scaled by 1.4
+    /// or by 0.99, and a rounding allowance of Δ (5e-5) or of `q_eff` (5e-4) changed by more than 1e-5, fail this
+    /// test.
+    #[test]
+    fn the_effect_floor_is_tight_on_both_sides() -> Result<()> {
+        // (q_eff, FAIL edge = floor − q rounding − Δ rounding, SUB_FLOOR_SHIFT edge = floor + both)
+        for (q, fail_edge, sub_edge) in [
+            // 10 ns on a 0.5 ns clock: 20 ticks, whatever the rounding of q_eff 1
+            (1.0, 19.999_95, 20.000_05),
+            // one q_eff of 20.5 ticks: 20.5 ∓ 5e-4 ∓ 5e-5
+            (20.5, 20.499_45, 20.500_55),
+        ] {
+            // FAIL needs a crop that may reach the floor
+            assert!(!accepts(30.0, 25.0, fail_edge - 1e-5, q, "FAIL")?, "q {q}");
+            assert!(accepts(30.0, 25.0, fail_edge + 1e-5, q, "FAIL")?, "q {q}");
+            assert!(accepts(30.0, 25.0, fail_edge - 1e-5, q, "SUB_FLOOR_SHIFT")?);
+            // SUB_FLOOR_SHIFT needs no crop that surely reaches it
+            assert!(
+                accepts(30.0, 25.0, sub_edge - 1e-5, q, "SUB_FLOOR_SHIFT")?,
+                "q {q}"
+            );
+            assert!(
+                !accepts(30.0, 25.0, sub_edge + 1e-5, q, "SUB_FLOOR_SHIFT")?,
+                "q {q}"
+            );
+            assert!(accepts(30.0, 25.0, sub_edge + 1e-5, q, "FAIL")?);
+        }
+        Ok(())
+    }
+
+    /// F16: the t threshold is tight on both sides of the printed rounding (t to 3 decimals, ±5e-4): a shift at
+    /// |t| 4.4994 is never reproduced, one at 4.4996 may be; one at 4.5006 surely is, one at 4.5004 may not be.
+    #[test]
+    fn the_t_threshold_is_tight_on_both_sides() -> Result<()> {
+        // literal values (4.5 ∓ 5e-4 ± 1e-4), so that a changed constant cannot move the probes with it
+        assert!(!accepts(4.4994, 25.0, 30.0, 1.0, "FAIL")?);
+        assert!(!accepts(25.0, 4.4994, 30.0, 1.0, "FAIL")?);
+        assert!(accepts(4.4996, 25.0, 30.0, 1.0, "FAIL")?);
+        assert!(accepts(25.0, 4.4996, 30.0, 1.0, "FAIL")?);
+        assert!(accepts(4.4994, 25.0, 30.0, 1.0, "PASS")?);
+        assert!(accepts(4.5004, 25.0, 30.0, 1.0, "PASS")?);
+        assert!(!accepts(4.5006, 25.0, 30.0, 1.0, "PASS")?);
+        assert!(!accepts(25.0, 4.5006, 30.0, 1.0, "PASS")?);
+        // opposite signs never reproduce
+        assert!(accepts(-30.0, 25.0, 30.0, 1.0, "PASS")?);
+        assert!(!accepts(-30.0, 25.0, 30.0, 1.0, "FAIL")?);
+        Ok(())
+    }
+
+    /// F16: the positive control must be `expect::CT_POSITIVE_CONTROL`: another target flagged as the one control,
+    /// detected, with the real control measured like a passing target, is refused by the name check alone.
+    #[test]
+    fn refuses_another_target_as_the_positive_control() -> Result<()> {
+        let mut v = report();
+        let control = at(&mut v, expect::CT_POSITIVE_CONTROL);
+        set(control, &["control"], Value::from(false));
+        set(control, &["second"], measurement(1.0, 0.1));
+        let sas = at(&mut v, "sas");
+        set(sas, &["control"], Value::from(true));
+        set(sas, &["first"], measurement(99.0, 500.0));
+        assert_eq!(
+            refusals(&v)?,
+            vec![format!(
+                "ct report: the positive control is sas, expected {}",
+                expect::CT_POSITIVE_CONTROL
+            )]
+        );
+        Ok(())
+    }
+
+    /// F16: a target measured twice is refused by the duplicate check alone (the set of names is still
+    /// `expect::CT_TARGETS`).
+    #[test]
+    fn refuses_a_duplicated_target() -> Result<()> {
+        let mut v = report();
+        let sas = at(&mut v, "sas").clone();
+        if let Some(r) = v.get_mut("results").and_then(Value::as_array_mut) {
+            r.push(sas);
+        }
+        let found = refusals(&v)?;
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(
+            found
+                .iter()
+                .all(|f| f.contains("differ from expect::CT_TARGETS") && f.contains("\"sas\"]"))
+        );
+        Ok(())
+    }
+
+    /// F17: a target's `q_eff_ticks` is bounded by `max(clock q_eff, 10 ns) + 1 tick`, so an inflated quantum cannot
+    /// turn a FAIL into a `SUB_FLOOR_SHIFT`: t 30/25 and Δ 30 ticks with `q_eff` 40 claimed as sub-floor is refused
+    /// by the bound alone; the bound is tight to the printed rounding for both of its parts.
+    #[test]
+    fn refuses_an_effective_quantum_above_the_clock_bound() -> Result<()> {
+        let all = |t: f64, q: f64| {
+            let crops: Vec<(&str, f64, f64)> = CROPS.iter().map(|c| (*c, t, 30.0)).collect();
+            measurement_with(&crops, q)
+        };
+        let v = tag_compare_with(
+            all(30.0, 40.0),
+            all(25.0, 40.0),
+            "SUB_FLOOR_SHIFT",
+            Some("p90"),
+        );
+        assert_eq!(
+            refusals(&v)?,
+            vec![
+                "ct report: tag_compare first q_eff_ticks 40 above the bound 21.000 (max(clock q_eff, 10 ns) + 1 tick)"
+                    .to_owned(),
+                "ct report: tag_compare second q_eff_ticks 40 above the bound 21.000 (max(clock q_eff, 10 ns) + 1 tick)"
+                    .to_owned()
+            ]
+        );
+        // the 10 ns part: tick 0.5 ns, clock q_eff 1 → bound 21 ticks
+        let at_q = |q: f64, clock_q: f64, tick: f64| -> Result<Vec<String>> {
+            let mut v = tag_compare_with(all(30.0, q), all(25.0, q), "FAIL", Some("p90"));
+            set(&mut v, &["clock", "q_eff_ticks"], Value::from(clock_q));
+            set(&mut v, &["clock", "tick_ns"], Value::from(tick));
+            Ok(refusals(&v)?
+                .into_iter()
+                .filter(|f| f.contains("above the bound"))
+                .collect())
+        };
+        assert!(at_q(21.0004, 1.0, 0.5)?.is_empty());
+        assert_eq!(at_q(21.0006, 1.0, 0.5)?.len(), 2);
+        // the clock part: 26 ticks of 0.385 ns (10.01 ns, above 10 ns) → bound 27 ticks
+        assert!(at_q(27.0004, 26.0, 0.385)?.is_empty());
+        assert_eq!(at_q(27.0006, 26.0, 0.385)?.len(), 2);
+        // no clock quantum: the measurement cannot be bounded and is refused
+        let mut v = report();
+        if let Some(clock) = v.get_mut("clock").and_then(Value::as_object_mut) {
+            clock.remove("q_eff_ticks");
+        }
+        assert!(refused(&v, "the clock has no readable q_eff_ticks")?);
         Ok(())
     }
 
@@ -1128,7 +1633,9 @@ mod tests {
     }
 
     /// C3 acceptance: the reports of the ADR-041 Amendment 1 format committed under `docs/reviews/M02-evidence/`
-    /// pass the gate as it reads them now.
+    /// pass the gate as it reads them now, against the M2 target set they were written with (ADR-042); against the
+    /// current set they lack `aa_prime_control` and `same_content_control` and the batch record of ADR-041
+    /// Amendment 2, and are refused for that alone.
     #[test]
     fn the_committed_amendment_1_reports_pass() -> Result<()> {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -1143,13 +1650,341 @@ mod tests {
         files.push(root.join("ct-report-x86_64-linux-pr-run-36679963223-6b9da3b.json"));
         assert_eq!(files.len(), 15);
         for f in &files {
-            let t = ct_table(&std::fs::read_to_string(f)?)?;
+            let json = std::fs::read_to_string(f)?;
+            let t = ct_table_for(&json, M2_TARGETS)?;
             assert!(
                 t.failed.is_empty() && t.not_measurable.is_empty(),
                 "{}: {t:?}",
                 f.display()
             );
+            let now = ct_table(&json)?;
+            assert!(
+                now.failed
+                    .iter()
+                    .any(|l| l.contains("differ from expect::CT_TARGETS"))
+                    && now.failed.iter().all(|l| {
+                        l.contains("differ from expect::CT_TARGETS")
+                            || l == "ct report: run verdict PASS with a failing target"
+                            || l.contains("which is no first pair or one re-batch")
+                            || l.contains("taken with k None")
+                    }),
+                "{}: {now:?}",
+                f.display()
+            );
         }
+        Ok(())
+    }
+
+    /// ADR-042 (2): the A/A′ placement control is judged like a target — PASS and a sub-floor shift pass; a FAIL
+    /// outside a `CONTROL_FAIL` run is refused (the bench must have made the run `CONTROL_FAIL`), and so is a label
+    /// its crops do not give; a `CONTROL_FAIL` run naming it fails with its reason alone; it is not the positive
+    /// control.
+    #[test]
+    fn the_aa_prime_control_fails_the_run_as_control_fail() -> Result<()> {
+        let aa = expect::CT_AA_PRIME_CONTROL;
+        assert!(expect::CT_TARGETS.contains(&aa));
+        let all = |t: f64, delta: f64| {
+            let crops: Vec<(&str, f64, f64)> = CROPS.iter().map(|c| (*c, t, delta)).collect();
+            measurement_with(&crops, 1.0)
+        };
+        let with = |first: Value, second: Value, verdict: &str, run: &str| {
+            let mut v = report();
+            set(&mut v, &["run_verdict"], Value::from(run));
+            let target = at(&mut v, aa);
+            set(target, &["first"], first);
+            set(target, &["second"], second);
+            set(target, &["verdict"], Value::from(verdict));
+            set(
+                target,
+                &["decisive_crop"],
+                if verdict == "PASS" {
+                    Value::Null
+                } else {
+                    Value::from("p90")
+                },
+            );
+            v
+        };
+        // PASS (the fixture) and a sub-floor shift (reproduced, Δ 5 ticks < floor 20) pass the gate
+        let t = table(&report())?;
+        assert!(t.failed.is_empty(), "{t:?}");
+        assert!(
+            t.lines
+                .iter()
+                .any(|l| l.starts_with("aa_prime_control: PASS")
+                    && l.ends_with("(A/A′ placement control: a FAIL makes the run CONTROL_FAIL)"))
+        );
+        let sub = with(all(30.0, 5.0), all(25.0, 5.0), "SUB_FLOOR_SHIFT", "PASS");
+        assert!(refusals(&sub)?.is_empty());
+        // a reproduced shift at the floor, labelled FAIL in a FAIL run: refused (only CONTROL_FAIL is consistent)
+        let fail = with(all(30.0, 30.0), all(25.0, 30.0), "FAIL", "FAIL");
+        let found = refusals(&fail)?;
+        assert_eq!(found.len(), 2, "{found:?}");
+        assert!(
+            found
+                .iter()
+                .any(|f| f.starts_with("aa_prime_control: FAIL at p90"))
+        );
+        assert!(found.contains(
+            &"ct report: aa_prime_control FAIL in a FAIL run: the A/A′ placement control reached the effect floor, which makes the run CONTROL_FAIL (ADR-042)"
+                .to_owned()
+        ));
+        // the same crops labelled as a sub-floor shift: refused by the re-derivation
+        let hidden = with(all(30.0, 30.0), all(25.0, 30.0), "SUB_FLOOR_SHIFT", "PASS");
+        assert_eq!(
+            refusals(&hidden)?,
+            vec!["ct report: aa_prime_control SUB_FLOOR_SHIFT, but its recorded crops give {\"FAIL\"}".to_owned()]
+        );
+        // the CONTROL_FAIL run the bench writes for it: its reason is the one finding
+        let mut control_fail = with(
+            all(30.0, 30.0),
+            all(25.0, 30.0),
+            "CONTROL_FAIL",
+            "CONTROL_FAIL",
+        );
+        let reason = "A/A′ placement control aa_prime_control FAIL at p90: identical contents copied from two source \
+                      allocations shift the class means by 1.50 / 1.50 effect floors";
+        set(&mut control_fail, &["run_reason"], Value::from(reason));
+        for name in expect::CT_TARGETS {
+            set(
+                at(&mut control_fail, name),
+                &["verdict"],
+                Value::from("CONTROL_FAIL"),
+            );
+        }
+        assert_eq!(
+            table(&control_fail)?.failed,
+            vec![format!("CONTROL_FAIL — {reason}")]
+        );
+        // it is not the positive control
+        let mut two = report();
+        set(at(&mut two, aa), &["control"], Value::from(true));
+        assert!(refused(&two, "2 positive controls")?);
+        Ok(())
+    }
+
+    /// ADR-042 Amendment 2: the same-content control is judged like a target and wired like the A/A′ control — PASS
+    /// and a sub-floor shift pass; a FAIL outside a `CONTROL_FAIL` run is refused, and so is a label its crops do not
+    /// give; a `CONTROL_FAIL` run naming it fails with its reason alone; it is not the positive control.
+    #[test]
+    fn the_same_content_control_fails_the_run_as_control_fail() -> Result<()> {
+        let same = expect::CT_SAME_CONTENT_CONTROL;
+        assert!(expect::CT_TARGETS.contains(&same));
+        assert_ne!(same, expect::CT_AA_PRIME_CONTROL);
+        let all = |t: f64, delta: f64| {
+            let crops: Vec<(&str, f64, f64)> = CROPS.iter().map(|c| (*c, t, delta)).collect();
+            measurement_with(&crops, 1.0)
+        };
+        let with = |first: Value, second: Value, verdict: &str, run: &str| {
+            let mut v = report();
+            set(&mut v, &["run_verdict"], Value::from(run));
+            let target = at(&mut v, same);
+            set(target, &["first"], first);
+            set(target, &["second"], second);
+            set(target, &["verdict"], Value::from(verdict));
+            set(
+                target,
+                &["decisive_crop"],
+                if verdict == "PASS" {
+                    Value::Null
+                } else {
+                    Value::from("p90")
+                },
+            );
+            v
+        };
+        let t = table(&report())?;
+        assert!(t.failed.is_empty(), "{t:?}");
+        assert!(
+            t.lines
+                .iter()
+                .any(|l| l.starts_with("same_content_control: PASS")
+                    && l.ends_with("(same-content control: a FAIL makes the run CONTROL_FAIL)"))
+        );
+        let sub = with(all(30.0, 5.0), all(25.0, 5.0), "SUB_FLOOR_SHIFT", "PASS");
+        assert!(refusals(&sub)?.is_empty());
+        // a reproduced shift at the floor, labelled FAIL in a FAIL run: refused (only CONTROL_FAIL is consistent)
+        let fail = with(all(30.0, 30.0), all(25.0, 30.0), "FAIL", "FAIL");
+        let found = refusals(&fail)?;
+        assert_eq!(found.len(), 2, "{found:?}");
+        assert!(
+            found
+                .iter()
+                .any(|f| f.starts_with("same_content_control: FAIL at p90"))
+        );
+        assert!(found.contains(
+            &"ct report: same_content_control FAIL in a FAIL run: the same-content control reached the effect floor, which makes the run CONTROL_FAIL (ADR-042 Amendment 2)"
+                .to_owned()
+        ));
+        // the same crops labelled as a sub-floor shift: refused by the re-derivation
+        let hidden = with(all(30.0, 30.0), all(25.0, 30.0), "SUB_FLOOR_SHIFT", "PASS");
+        assert_eq!(
+            refusals(&hidden)?,
+            vec!["ct report: same_content_control SUB_FLOOR_SHIFT, but its recorded crops give {\"FAIL\"}".to_owned()]
+        );
+        // the CONTROL_FAIL run the bench writes for it: its reason is the one finding
+        let mut control_fail = with(
+            all(30.0, 30.0),
+            all(25.0, 30.0),
+            "CONTROL_FAIL",
+            "CONTROL_FAIL",
+        );
+        let reason = "same-content control same_content_control FAIL at p90: identical contents through the \
+                      per-class preparation path shift the class means by 1.50 / 1.50 effect floors";
+        set(&mut control_fail, &["run_reason"], Value::from(reason));
+        for name in expect::CT_TARGETS {
+            set(
+                at(&mut control_fail, name),
+                &["verdict"],
+                Value::from("CONTROL_FAIL"),
+            );
+        }
+        assert_eq!(
+            table(&control_fail)?.failed,
+            vec![format!("CONTROL_FAIL — {reason}")]
+        );
+        // it is not the positive control
+        let mut two = report();
+        set(at(&mut two, same), &["control"], Value::from(true));
+        assert!(refused(&two, "2 positive controls")?);
+        Ok(())
+    }
+
+    /// ADR-041 Amendment 2 (M3 review R-57): a requantised record — `k_initial` 1, `k` 3, every measurement taken
+    /// with k 3 — passes and its line names the re-batch; the gate reads `k` per measurement and the flag: a
+    /// measurement taken with another `k`, a flag that does not fit the two batch sizes, a missing record, and a
+    /// judged measurement realising fewer than `CT_MIN_REALISED_QUANTA` quanta are refused; the M2 set, whose
+    /// reports predate the record, is not asked for it.
+    #[test]
+    fn reads_the_batch_sizes_of_a_requantised_record() -> Result<()> {
+        let rebatched = || {
+            let mut v = report();
+            let t = at(&mut v, "caead_derive");
+            set(t, &["k"], Value::from(3));
+            set(t, &["k_initial"], Value::from(1));
+            set(t, &["requantised"], Value::from(true));
+            for m in ["first", "second", "aa_control"] {
+                set(t, &[m, "k"], Value::from(3));
+            }
+            v
+        };
+        let t = table(&rebatched())?;
+        assert!(t.failed.is_empty(), "{t:?}");
+        assert!(
+            t.lines
+                .iter()
+                .any(|l| l.starts_with("caead_derive: PASS — k=3 (re-batched from k=1),"))
+        );
+        // the second measurement taken with the first pair's k
+        let mut v = rebatched();
+        set(at(&mut v, "caead_derive"), &["second", "k"], Value::from(1));
+        assert_eq!(
+            refusals(&v)?,
+            vec![
+                "ct report: caead_derive second taken with k Some(1), not the target's k Some(3)"
+                    .to_owned()
+            ]
+        );
+        // a flag that does not fit the batch sizes, both ways
+        let mut v = rebatched();
+        set(
+            at(&mut v, "caead_derive"),
+            &["requantised"],
+            Value::from(false),
+        );
+        assert!(refused(
+            &v,
+            "caead_derive records k Some(3), k_initial Some(1) and requantised Some(false)"
+        )?);
+        let mut v = report();
+        set(
+            at(&mut v, "caead_derive"),
+            &["requantised"],
+            Value::from(true),
+        );
+        assert!(refused(
+            &v,
+            "caead_derive records k Some(1), k_initial Some(1) and requantised Some(true)"
+        )?);
+        // no record at all
+        let mut v = report();
+        if let Some(t) = at(&mut v, "caead_derive").as_object_mut() {
+            t.remove("k_initial");
+        }
+        if let Some(m) = at(&mut v, "caead_derive")
+            .get_mut("first")
+            .and_then(Value::as_object_mut)
+        {
+            m.remove("k");
+        }
+        let found = refusals(&v)?;
+        assert_eq!(found.len(), 2, "{found:?}");
+        assert!(
+            found.contains(
+                &"ct report: caead_derive first taken with k None, not the target's k Some(1)"
+                    .to_owned()
+            )
+        );
+        // a judged measurement short of the minimum: 79 quanta of 24.5 ticks (1935.5 ticks) refused, 80 accepted
+        let mut v = rebatched();
+        let t = at(&mut v, "caead_derive");
+        set(t, &["second", "q_eff_ticks"], Value::from(20.5));
+        set(t, &["second", "class_median_ticks"], Value::from(1619));
+        assert!(refused(
+            &v,
+            "caead_derive second realises fewer than 80 quanta"
+        )?);
+        set(
+            at(&mut v, "caead_derive"),
+            &["second", "class_median_ticks"],
+            Value::from(1640),
+        );
+        assert!(table(&v)?.failed.is_empty());
+        // the M2 set predates the record
+        let mut v = report();
+        if let Some(t) = at(&mut v, "caead_derive").as_object_mut() {
+            t.remove("k_initial");
+            t.remove("requantised");
+        }
+        assert!(
+            !ct_table_for(&v.to_string(), M2_TARGETS)?
+                .failed
+                .iter()
+                .any(|f| f.contains("which is no first pair or one re-batch"))
+        );
+        Ok(())
+    }
+
+    /// `ct-check --targets m2|current`: the target set is chosen explicitly; the M2 set is the nine targets of M2, all
+    /// still in `expect::CT_TARGETS`, without `aa_prime_control`; a report of the current set is refused against it.
+    #[test]
+    fn ct_check_reads_reports_against_a_chosen_target_set() -> Result<()> {
+        let args = |a: &[&str]| a.iter().map(|s| (*s).to_owned()).collect::<Vec<String>>();
+        let m2 = args(&["--targets", "m2", "a.json", "b.json"]);
+        let (set, files) = check_args(&m2)?;
+        assert_eq!((set.label, files.len()), ("the M2 target set", 2));
+        let plain = args(&["a.json"]);
+        let (set, files) = check_args(&plain)?;
+        assert_eq!((set.label, files.len()), ("expect::CT_TARGETS", 1));
+        assert!(check_args(&args(&["--targets", "current", "a.json"])).is_ok());
+        assert!(check_args(&args(&["--targets", "m3"])).is_err());
+        assert!(check_args(&args(&["--targets", "m2"])).is_err());
+        assert!(check_args(&args(&["--target", "m2", "a.json"])).is_err());
+        assert!(check_args(&[]).is_err());
+        assert_eq!(M2_TARGETS.names.len(), 9);
+        assert!(
+            M2_TARGETS
+                .names
+                .iter()
+                .all(|t| expect::CT_TARGETS.contains(t) && *t != expect::CT_AA_PRIME_CONTROL)
+        );
+        let json = report().to_string();
+        assert!(
+            ct_table_for(&json, M2_TARGETS)?
+                .failed
+                .iter()
+                .any(|f| f.contains("differ from the M2 target set"))
+        );
         Ok(())
     }
 }

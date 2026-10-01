@@ -1,0 +1,74 @@
+Dispatch run 36836225296 (`ci-dispatch.yml`, suite=ct, workflow_dispatch), job dispatch-ct (110284181779), head
+363c54a05035fb2b4bf5c7e431ae185ffc132a3a; conclusion failure (exit code 1). WEISUNG M3-9 part A.
+Extracted from the job log `gh api repos/CarlKIGbR/SecMPro/actions/jobs/110284181779/logs` (2026-10-01): the step
+`Constant-time gate (step 5 ct)` only; timestamps, ANSI colour codes and the crates.io download/compile lines
+removed; the one-line JSON report is replaced by a pointer to the artefact copy (artefact ct-report-Linux-X64-363c54a05035fb2b4bf5c7e431ae185ffc132a3a-36836225296-1,
+sha256 of ct-report.json 63ccdf848a54b130b0809c8e5f66ded9953319555916fcf81febea81cb9d92dc).
+
+== the step's log ==
+##[group]Run cargo xtask step --strict ct
+cargo xtask step --strict ct
+shell: /usr/bin/bash -e {0}
+env:
+  CARGO_TERM_COLOR: always
+##[endgroup]
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.99s
+     Running `target/debug/xtask step --strict ct`
+
+=== [5] ct ===
+$ -u SECMP_CT_SCALE /home/runner/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/cargo bench --locked --package secmp-testkit --features kat --bench ct
+  ct report: {…} (the full report: ct-report-linux-dispatch-36836225296.json)
+FAIL [5] ct: ct: not measurable on this runner: caead_derive (median 480.9 ns), effective quantum 0.4 ns
+xtask: error: step: 1 step(s) failed
+  ct control_variable_time_compare: PASS — k=1, calibration median 260.5 ns, 1000000 samples; first max |t| = 59861.61 (p75), batch median 651.0 ns, q_eff 1.0 ticks (clock), realised 637.0 quanta; A/A max |t| = 1.32 (p75), batch median 250.7 ns, q_eff 1.0 ticks (clock), realised 613.0 quanta (positive control, must be detected)
+  ct tag_compare: PASS — k=1, calibration median 11691.5 ns, 1000000 samples; first max |t| = 1.06 (p75), batch median 11691.5 ns, q_eff 1.0 ticks (clock), realised 28591.0 quanta; second max |t| = 2.10 (p75), batch median 11691.5 ns, q_eff 1.0 ticks (clock), realised 28591.0 quanta; A/A max |t| = 1.21 (p75), batch median 11691.5 ns, q_eff 1.0 ticks (clock), realised 28591.0 quanta
+  ct msg_open_reject: PASS — k=1, calibration median 3586.7 ns, 1000000 samples; first max |t| = 2.37 (raw), batch median 3586.7 ns, q_eff 24.3 ticks (samples), realised 360.5 quanta; second max |t| = 0.91 (p50), batch median 3606.7 ns, q_eff 24.5 ticks (samples), realised 360.0 quanta; A/A max |t| = 2.05 (p99), batch median 3596.9 ns, q_eff 24.5 ticks (samples), realised 359.0 quanta
+  ct caead_open_reject: PASS — k=1, calibration median 6351.8 ns, 1000000 samples; first max |t| = 2.35 (p75), batch median 6351.8 ns, q_eff 24.5 ticks (samples), realised 634.0 quanta; second max |t| = 3.20 (p99), batch median 6351.8 ns, q_eff 24.5 ticks (samples), realised 634.0 quanta; A/A max |t| = 1.48 (p90), batch median 6362.0 ns, q_eff 24.4 ticks (samples), realised 636.5 quanta
+  ct sas: PASS — k=1, calibration median 1370503.6 ns, 20000 samples; first max |t| = 0.56 (p50), batch median 1370744.1 ns, q_eff 24.5 ticks (samples), realised 136798.8 quanta; second max |t| = 1.48 (p75), batch median 1370623.8 ns, q_eff 24.5 ticks (samples), realised 136809.7 quanta; A/A max |t| = 2.95 (p99), batch median 1370583.8 ns, q_eff 24.5 ticks (samples), realised 136781.3 quanta
+  ct caead_derive: NOT_MEASURABLE — k=1, calibration median 480.9 ns, 1000000 samples; first max |t| = 8.48 (p95), batch median 480.9 ns, q_eff 1.0 ticks (clock), realised 1176.0 quanta; second max |t| = 8.20 (p99), batch median 480.9 ns, q_eff 24.3 ticks (samples), realised 48.3 quanta; A/A max |t| = 1.00 (p90), batch median 480.9 ns, q_eff 1.0 ticks (clock), realised 1176.0 quanta
+  ct caead_aead_reject: PASS — k=1, calibration median 3155.7 ns, 1000000 samples; first max |t| = 2.22 (p75), batch median 3165.9 ns, q_eff 24.5 ticks (samples), realised 316.0 quanta; second max |t| = 16.83 (p90), batch median 3156.1 ns, q_eff 24.4 ticks (samples), realised 316.6 quanta; A/A max |t| = 1.53 (p90), batch median 3165.9 ns, q_eff 24.5 ticks (samples), realised 316.0 quanta
+  ct caead_com_compare: PASS — k=1, calibration median 11691.5 ns, 1000000 samples; first max |t| = 20.05 (p90), batch median 11691.5 ns, q_eff 24.4 ticks (samples), realised 1171.8 quanta; second max |t| = 1.14 (p99), batch median 11691.5 ns, q_eff 24.4 ticks (samples), realised 1171.8 quanta; A/A max |t| = 0.77 (p99), batch median 11691.5 ns, q_eff 24.3 ticks (samples), realised 1175.0 quanta
+  ct caead_open_reject_samekey: PASS — k=1, calibration median 6321.5 ns, 1000000 samples; first max |t| = 9.78 (p95), batch median 6331.8 ns, q_eff 24.5 ticks (samples), realised 632.0 quanta; second max |t| = 1.80 (p90), batch median 6321.9 ns, q_eff 24.5 ticks (samples), realised 631.0 quanta; A/A max |t| = 1.24 (raw), batch median 6341.6 ns, q_eff 24.5 ticks (samples), realised 633.0 quanta
+  ct aa_prime_control: PASS — k=1, calibration median 3596.9 ns, 1000000 samples; first max |t| = 19.33 (p75), batch median 3586.7 ns, q_eff 24.4 ticks (samples), realised 359.0 quanta; second max |t| = 2.12 (p90), batch median 3616.5 ns, q_eff 24.5 ticks (samples), realised 361.0 quanta; A/A max |t| = 1.60 (p95), batch median 3586.7 ns, q_eff 24.4 ticks (samples), realised 359.0 quanta (A/A′ placement control: a FAIL makes the run CONTROL_FAIL)
+  ct tr_decrypt_reject_hdr_key: PASS — k=1, calibration median 9287.0 ns, 1000000 samples; first max |t| = 4.19 (p50), batch median 9297.3 ns, q_eff 24.6 ticks (samples), realised 925.9 quanta; second max |t| = 2.01 (p95), batch median 9307.1 ns, q_eff 24.5 ticks (samples), realised 929.0 quanta; A/A max |t| = 1.34 (p75), batch median 9297.3 ns, q_eff 24.5 ticks (samples), realised 928.0 quanta
+  ct tr_decrypt_reject_body_tag: PASS — k=1, calibration median 19867.1 ns, 1000000 samples; first max |t| = 2.20 (p90), batch median 19917.0 ns, q_eff 24.5 ticks (samples), realised 1990.4 quanta; second max |t| = 4.59 (p90), batch median 19927.2 ns, q_eff 24.4 ticks (samples), realised 1993.1 quanta; A/A max |t| = 1.64 (p75), batch median 19876.9 ns, q_eff 24.5 ticks (samples), realised 1986.4 quanta
+  ct tr_decrypt_reject_ct_pq: PASS — k=1, calibration median 15889.5 ns, 1000000 samples; first max |t| = 3.61 (p75), batch median 15849.4 ns, q_eff 24.5 ticks (samples), realised 1584.2 quanta; second max |t| = 10.40 (p95), batch median 15829.4 ns, q_eff 24.5 ticks (samples), realised 1580.0 quanta; A/A max |t| = 0.84 (p99), batch median 15879.7 ns, q_eff 24.5 ticks (samples), realised 1587.5 quanta
+  ct same_content_control: PASS — k=1, calibration median 19776.7 ns, 1000000 samples; first max |t| = 2.79 (p90), batch median 19827.0 ns, q_eff 24.5 ticks (samples), realised 1979.0 quanta; second max |t| = 14.56 (p95), batch median 19836.8 ns, q_eff 24.5 ticks (samples), realised 1980.0 quanta; A/A max |t| = 1.39 (p95), batch median 19957.0 ns, q_eff 24.5 ticks (samples), realised 1994.4 quanta (same-content control: a FAIL makes the run CONTROL_FAIL)
+  ct min_leak_control: REACHED — raw Δ 175.47 ns, floor 10.02 ns (17.52 floors), k=1, 1000000 samples; max |t| = 3476.44 (p75), batch median 5730.6 ns, q_eff 24.5 ticks (samples), realised 558.2 quanta (sensitivity control, must reach the floor)
+
+=== step summary (host x86_64-unknown-linux-gnu, strict: true) ===
+   5 ct              FAIL        510s  ct: not measurable on this runner: caead_derive (median 480.9 ns), effective quantum 0.4 ns
+##[error]Process completed with exit code 1.
+
+== from the report (target/tmp/m3_8_numbers.py; a crop is reproduced if |t| > 4.5 in both measurements with the
+   same sign; positive Δ = class 0 slower) ==
+clock rdtscp tick 0.4089 ns q_eff 1.0; run_verdict FAIL reason None; keys ['clock', 'results', 'run_reason', 'run_verdict', 'sensitivity_control', 'sign', 'thresholds']
+min_leak_control reached True raw Δ +429.1138 ticks (+175.47 ns) = +17.521 floors
+positive control PASS max |t| 59861.612
+== aa_prime_control: PASS (decisive None), k=1, A/A max |t| 1.602
+   first: max |t| 19.332 at p75; raw: Δ +0.654 ticks = +0.027 floors (t +0.21); p95: Δ -0.755 ticks = -0.031 floors (t -17.36)
+   second: max |t| 2.123 at p90; raw: Δ +0.987 ticks = +0.040 floors (t +0.36); p95: Δ +0.085 ticks = +0.004 floors (t +2.10)
+   reproduced: none
+== same_content_control: PASS (decisive None), k=1, A/A max |t| 1.393
+   first: max |t| 2.787 at p90; raw: Δ +6.787 ticks = +0.277 floors (t +0.87); p95: Δ +0.556 ticks = +0.023 floors (t +2.59)
+   second: max |t| 14.565 at p95; raw: Δ +3.270 ticks = +0.134 floors (t +0.40); p95: Δ +2.773 ticks = +0.113 floors (t +14.56)
+   reproduced: none
+== tr_decrypt_reject_hdr_key: PASS (decisive None), k=1, A/A max |t| 1.336
+   first: max |t| 4.188 at p50; raw: Δ -2.057 ticks = -0.084 floors (t -0.45); p95: Δ +0.180 ticks = +0.007 floors (t +1.66)
+   second: max |t| 2.009 at p95; raw: Δ -0.755 ticks = -0.031 floors (t -0.15); p95: Δ +0.239 ticks = +0.010 floors (t +2.01)
+   reproduced: none
+== tr_decrypt_reject_body_tag: PASS (decisive None), k=1, A/A max |t| 1.641
+   first: max |t| 2.2 at p90; raw: Δ +7.219 ticks = +0.295 floors (t +1.01); p95: Δ +0.421 ticks = +0.017 floors (t +2.06)
+   second: max |t| 4.595 at p90; raw: Δ -1.060 ticks = -0.043 floors (t -0.10); p95: Δ +0.928 ticks = +0.038 floors (t +4.38)
+   reproduced: none
+== tr_decrypt_reject_ct_pq: PASS (decisive None), k=1, A/A max |t| 0.837
+   first: max |t| 3.612 at p75; raw: Δ +13.957 ticks = +0.570 floors (t +1.92); p95: Δ -0.473 ticks = -0.019 floors (t -2.66)
+   second: max |t| 10.396 at p95; raw: Δ -4.355 ticks = -0.178 floors (t -0.66); p95: Δ -1.792 ticks = -0.073 floors (t -10.40)
+   reproduced: none
+
+== caead_derive, the NOT_MEASURABLE target (from the report) ==
+  k=1 (no requantisation); clock q_eff 1 tick (tick 0.408922 ns, TSC 2.4455 GHz; lattice probe median gap 25),
+  effect floor 24.455 ticks (10 ns); CT_MIN_REALISED_QUANTA 80.
+  first:  q_eff 1.0 tick (clock),    class median 1176 ticks (480.9 ns), realised 1176.0 quanta, 320 distinct values
+  second: q_eff 24.333 ticks (samples), class median 1176 ticks (480.9 ns), realised 48.3 quanta (< 80: too coarse),
+          362 distinct values

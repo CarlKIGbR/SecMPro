@@ -20,8 +20,8 @@ use crate::wire::inv::IksPublic;
 use crate::wire::{Id, read_ver, write_ver};
 
 /// `inner_ct = N2[24] ‖ COM[32] ‖ ct[6129]` (6185 B).
-#[derive(Clone, PartialEq, Eq)]
-#[cfg_attr(test, derive(Debug))]
+#[derive(Clone)]
+#[cfg_attr(test, derive(PartialEq, Eq, Debug))]
 pub struct InnerCt {
     /// CAEAD nonce.
     pub n2: [u8; NONCE_LEN],
@@ -51,8 +51,8 @@ impl Decode for InnerCt {
 }
 
 /// `Outer` (spec §6.5), padded to 12018 bytes.
-#[derive(Clone, PartialEq, Eq)]
-#[cfg_attr(test, derive(Debug))]
+#[derive(Clone)]
+#[cfg_attr(test, derive(PartialEq, Eq, Debug))]
 pub struct Outer {
     /// The initiator's ephemeral X25519 key.
     pub ek_i: X25519Pk,
@@ -113,8 +113,8 @@ impl Decode for Outer {
 }
 
 /// `Inner = IKSPublic ‖ first_msg` (6113 B): the initiator's identity and its first TR cell.
-#[derive(Clone, PartialEq, Eq)]
-#[cfg_attr(test, derive(Debug))]
+#[derive(Clone)]
+#[cfg_attr(test, derive(PartialEq, Eq, Debug))]
 pub struct Inner {
     /// `IKSPublic_I`.
     pub iks: IksPublic,
@@ -139,8 +139,8 @@ impl Decode for Inner {
 }
 
 /// `HandshakeCell_i = N_i[24] ‖ COM[32] ‖ ct[4040]` (4096 B).
-#[derive(Clone, PartialEq, Eq)]
-#[cfg_attr(test, derive(Debug))]
+#[derive(Clone)]
+#[cfg_attr(test, derive(PartialEq, Eq, Debug))]
 pub struct HandshakeCell {
     /// CAEAD nonce.
     pub n: [u8; NONCE_LEN],

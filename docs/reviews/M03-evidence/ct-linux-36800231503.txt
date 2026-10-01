@@ -1,0 +1,81 @@
+PR #4, PR run 36800231503 (pull_request), job linux-full (110172679379), head 665e84e1bc4ee0b6961107e6f5926dc057d22924; the ct gate (ci-full step 5).
+Extracted from `gh run view 36800231503 --job <id> --log` after the run completed (2026-10-01 03:24 UTC);
+timestamps and ANSI colour codes removed. M3 review C7 (first half: the reviewed head's run).
+
+Runner timer: rdtscp, clocksource tsc (available: tsc hyperv_clocksource_tsc_page hyperv_clocksource_msr acpi_pm), tick 0.384613 ns (TSC 2.6000 GHz), q_eff 2.0 ticks, reported resolution 2 ticks.
+Run verdict: CONTROL_FAIL — sensitivity control min_leak_control below the effect floor: raw Δ -589.64 ticks < floor 26.00 ticks (1 q_eff, 10 ns)
+
+== the gate's lines (the full report is ct-report-linux-36800231503.json) ==
+=== [5] ct ===
+$ -u SECMP_CT_SCALE /home/runner/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/cargo bench --locked --package secmp-testkit --features kat --bench ct
+FAIL [5] ct: constant-time test failed: CONTROL_FAIL — sensitivity control min_leak_control below the effect floor: raw Δ -589.64 ticks < floor 26.00 ticks (1 q_eff, 10 ns)
+  ct control_variable_time_compare: CONTROL_FAIL — k=1, calibration median 140.8 ns, 1000000 samples; first max |t| = 50044.11 (p50), batch median 1356.9 ns, q_eff 2.0 ticks (clock), realised 184.0 quanta; A/A max |t| = 2.09 (p75), batch median 140.0 ns, q_eff 2.0 ticks (samples), realised 182.0 quanta (positive control, must be detected)
+  ct tag_compare: CONTROL_FAIL at p50 — k=1, calibration median 7705.3 ns, 1000000 samples; first max |t| = 18.13 (p75), batch median 7647.6 ns, q_eff 2.0 ticks (samples), realised 9941.0 quanta; second max |t| = 11.99 (p75), batch median 6621.5 ns, q_eff 2.0 ticks (samples), realised 8607.0 quanta; A/A max |t| = 2.38 (p50), batch median 6617.6 ns, q_eff 2.0 ticks (samples), realised 8603.0 quanta
+  ct msg_open_reject: CONTROL_FAIL at p75 — k=1, calibration median 2844.6 ns, 1000000 samples; first max |t| = 9.10 (p90), batch median 2846.1 ns, q_eff 2.0 ticks (samples), realised 3700.0 quanta; second max |t| = 7.38 (p75), batch median 2852.3 ns, q_eff 2.0 ticks (samples), realised 3707.0 quanta; A/A max |t| = 0.96 (p95), batch median 2851.5 ns, q_eff 2.0 ticks (samples), realised 3706.0 quanta
+  ct caead_open_reject: CONTROL_FAIL — k=1, calibration median 4279.2 ns, 1000000 samples; first max |t| = 9.56 (p95), batch median 4281.5 ns, q_eff 2.0 ticks (samples), realised 5566.0 quanta; second max |t| = 1.95 (p95), batch median 4288.4 ns, q_eff 2.0 ticks (samples), realised 5575.0 quanta; A/A max |t| = 2.27 (p99), batch median 4291.5 ns, q_eff 2.0 ticks (samples), realised 5579.0 quanta
+  ct sas: CONTROL_FAIL — k=1, calibration median 1083958.8 ns, 20000 samples; first max |t| = 1.45 (p75), batch median 1084237.3 ns, q_eff 2.0 ticks (clock), realised 1409513.0 quanta; second max |t| = 2.49 (raw), batch median 1084170.4 ns, q_eff 2.0 ticks (clock), realised 1409416.0 quanta; A/A max |t| = 2.57 (p50), batch median 1084208.1 ns, q_eff 2.0 ticks (clock), realised 1409459.0 quanta
+  ct caead_derive: CONTROL_FAIL — k=1, calibration median 379.2 ns, 1000000 samples; first max |t| = 3.30 (p90), batch median 379.2 ns, q_eff 2.0 ticks (samples), realised 493.0 quanta; second max |t| = 10.56 (p90), batch median 379.2 ns, q_eff 2.0 ticks (samples), realised 493.0 quanta; A/A max |t| = 2.47 (raw), batch median 379.2 ns, q_eff 2.0 ticks (samples), realised 493.0 quanta
+  ct caead_aead_reject: CONTROL_FAIL — k=1, calibration median 2188.4 ns, 1000000 samples; first max |t| = 5.37 (p90), batch median 2188.4 ns, q_eff 2.0 ticks (samples), realised 2845.0 quanta; second max |t| = 3.29 (p75), batch median 2188.4 ns, q_eff 2.0 ticks (samples), realised 2845.0 quanta; A/A max |t| = 1.57 (p95), batch median 2187.7 ns, q_eff 2.0 ticks (samples), realised 2844.0 quanta
+  ct caead_com_compare: CONTROL_FAIL at p90 — k=1, calibration median 6735.3 ns, 1000000 samples; first max |t| = 12.33 (p95), batch median 6734.6 ns, q_eff 2.0 ticks (samples), realised 8754.0 quanta; second max |t| = 11.10 (p90), batch median 6735.3 ns, q_eff 2.0 ticks (samples), realised 8755.0 quanta; A/A max |t| = 1.32 (raw), batch median 6735.3 ns, q_eff 2.0 ticks (samples), realised 8756.0 quanta
+  ct caead_open_reject_samekey: CONTROL_FAIL — k=1, calibration median 4275.4 ns, 1000000 samples; first max |t| = 4.51 (p95), batch median 4275.4 ns, q_eff 2.0 ticks (samples), realised 5558.0 quanta; second max |t| = 8.66 (p50), batch median 4280.7 ns, q_eff 2.0 ticks (samples), realised 5565.0 quanta; A/A max |t| = 2.53 (p95), batch median 4279.2 ns, q_eff 2.0 ticks (samples), realised 5563.0 quanta
+  ct aa_prime_control: CONTROL_FAIL — k=1, calibration median 2837.7 ns, 1000000 samples; first max |t| = 1.50 (p50), batch median 2883.1 ns, q_eff 2.0 ticks (samples), realised 3747.0 quanta; second max |t| = 0.89 (raw), batch median 2843.1 ns, q_eff 2.0 ticks (samples), realised 3696.0 quanta; A/A max |t| = 2.69 (p75), batch median 2843.1 ns, q_eff 2.0 ticks (samples), realised 3696.0 quanta (A/A′ placement control: a FAIL makes the run CONTROL_FAIL)
+  ct tr_decrypt_reject_hdr_key: CONTROL_FAIL at p50 — k=1, calibration median 6267.6 ns, 1000000 samples; first max |t| = 56.46 (p95), batch median 6256.9 ns, q_eff 2.0 ticks (samples), realised 8132.0 quanta; second max |t| = 28.48 (p50), batch median 6262.3 ns, q_eff 2.0 ticks (samples), realised 8140.0 quanta; A/A max |t| = 0.82 (p99), batch median 6249.2 ns, q_eff 2.0 ticks (samples), realised 8124.0 quanta
+  ct tr_decrypt_reject_body_tag: CONTROL_FAIL at p50 — k=1, calibration median 14032.2 ns, 1000000 samples; first max |t| = 39.41 (p50), batch median 12631.5 ns, q_eff 2.0 ticks (samples), realised 16417.0 quanta; second max |t| = 50.99 (p75), batch median 12613.0 ns, q_eff 2.0 ticks (samples), realised 16393.0 quanta; A/A max |t| = 1.50 (p50), batch median 12723.0 ns, q_eff 2.0 ticks (samples), realised 16540.0 quanta
+  ct tr_decrypt_reject_ct_pq: CONTROL_FAIL at p75 — k=1, calibration median 9439.2 ns, 1000000 samples; first max |t| = 51.62 (p75), batch median 9460.7 ns, q_eff 2.0 ticks (samples), realised 12295.0 quanta; second max |t| = 42.88 (p75), batch median 9461.5 ns, q_eff 2.0 ticks (samples), realised 12296.0 quanta; A/A max |t| = 1.76 (p75), batch median 9510.7 ns, q_eff 2.0 ticks (samples), realised 12364.0 quanta
+  ct min_leak_control: BELOW THE FLOOR — raw Δ -226.78 ns, floor 10.00 ns (-22.68 floors), k=1, 1000000 samples; max |t| = 470.35 (p75), batch median 5750.0 ns, q_eff 2.0 ticks (samples), realised 7178.0 quanta (sensitivity control, must reach the floor)
+
+
+== every target re-derived without the control failure (target/tmp/ct_shifts.py: a crop is reproduced if |t| > 4.5
+   in both measurements with the same sign; relevant if both |Δ| reach the floor) ==
+control_variable_time_compare    measured once (control)
+tag_compare                      reproduced at 1 crop(s); largest min |Δ| 0.039 floors at p50 (t 7.4/5.3); relevant: False
+msg_open_reject                  reproduced at 1 crop(s); largest min |Δ| 0.012 floors at p75 (t -4.6/-7.4); relevant: False
+caead_open_reject                no reproduced shift (max |t| 9.56 / 1.953)
+sas                              no reproduced shift (max |t| 1.446 / 2.492)
+caead_derive                     no reproduced shift (max |t| 3.304 / 10.563)
+caead_aead_reject                no reproduced shift (max |t| 5.365 / 3.294)
+caead_com_compare                reproduced at 1 crop(s); largest min |Δ| 0.05 floors at p90 (t -7.7/-11.1); relevant: False
+caead_open_reject_samekey        no reproduced shift (max |t| 4.514 / 8.659)
+aa_prime_control                 no reproduced shift (max |t| 1.498 / 0.889)
+tr_decrypt_reject_hdr_key        reproduced at 1 crop(s); largest min |Δ| 0.082 floors at p50 (t 31.5/28.5); relevant: False
+tr_decrypt_reject_body_tag       reproduced at 1 crop(s); largest min |Δ| 0.237 floors at p50 (t 39.4/33.2); relevant: False
+tr_decrypt_reject_ct_pq          reproduced at 2 crop(s); largest min |Δ| 0.317 floors at p75 (t 51.6/42.9); relevant: False
+
+== this run (linux-full) vs the dispatch ct run 36801281974 on the same head (PASS) ==
+== linux-full of PR run 36800231503: run_verdict CONTROL_FAIL | sensitivity control min_leak_control below the effect floor: raw Δ -589.64 ticks < floor 26.00 ticks (1 q_eff, 10 ns)
+   clock: rdtscp tsc tick_ns 0.3846 q_eff_ticks 2.0
+   min_leak_control: k 1 raw_delta_ticks -589.6353 floor 26.0002 reached False
+      raw mean0 14996.424 mean1 15586.059 delta -589.6353 t -162.214
+      p50 mean0 14315.641 mean1 14614.179 delta -298.5376 t -329.493
+      p75 mean0 14461.657 mean1 14911.544 delta -449.8871 t -470.354
+      p90 mean0 14790.795 mean1 15137.597 delta -346.8025 t -223.457
+      p95 mean0 14857.621 mean1 15275.606 delta -417.9845 t -242.311
+      p99 mean0 14873.466 mean1 15453.911 delta -580.4447 t -303.915
+   target control_variable_time_compare verdict CONTROL_FAIL k 1 first max|t| 50044.109 aa_passed True
+   target tag_compare verdict CONTROL_FAIL k 1 first max|t| 18.127 aa_passed True
+   target aa_prime_control verdict CONTROL_FAIL k 1 first max|t| 1.498 aa_passed True
+   target tr_decrypt_reject_hdr_key verdict CONTROL_FAIL k 1 first max|t| 56.462 aa_passed True
+   target tr_decrypt_reject_body_tag verdict CONTROL_FAIL k 1 first max|t| 39.415 aa_passed True
+   target tr_decrypt_reject_ct_pq verdict CONTROL_FAIL k 1 first max|t| 51.616 aa_passed True
+== dispatch-ct of run 36801281974 (same head): run_verdict PASS | None
+   clock: rdtscp tsc tick_ns 0.4089 q_eff_ticks 1.0
+   min_leak_control: k 1 raw_delta_ticks 1110.3396 floor 24.5 reached True
+      raw mean0 35592.777 mean1 34482.437 delta 1110.3396 t 195.072
+      p50 mean0 34560.688 mean1 33733.181 delta 827.5069 t 1530.56
+      p75 mean0 34658.893 mean1 33930.512 delta 728.3805 t 849.129
+      p90 mean0 34955.253 mean1 34034.319 delta 920.9343 t 732.709
+      p95 mean0 35116.861 mean1 34070.338 delta 1046.5232 t 715.726
+      p99 mean0 35306.57 mean1 34321.896 delta 984.674 t 305.743
+   target control_variable_time_compare verdict PASS k 1 first max|t| 80985.357 aa_passed True
+   target tag_compare verdict PASS k 1 first max|t| 2.535 aa_passed True
+   target aa_prime_control verdict PASS k 1 first max|t| 1.248 aa_passed True
+   target tr_decrypt_reject_hdr_key verdict PASS k 1 first max|t| 42.848 aa_passed True
+   target tr_decrypt_reject_body_tag verdict SUB_FLOOR_SHIFT k 1 first max|t| 46.221 aa_passed True
+   target tr_decrypt_reject_ct_pq verdict SUB_FLOOR_SHIFT k 1 first max|t| 60.139 aa_passed True
+
+== the sensitivity control on the same runner type (TSC 2.596 GHz) in M2, bench in secmp-crypto (committed reports) ==
+  linux-31d13de-run36677648129: mean0 16825.3, mean1 16251.0 ticks, raw Δ +574.37 (reached)
+  linux-6b9da3b-run36679955738: mean0 16808.8, mean1 16242.1 ticks, raw Δ +566.74 (reached)
+  ct-report-x86_64-linux-pr-run-36689454147-b36d252: mean0 21707.6, mean1 20980.0 ticks, raw Δ +727.65 (reached)
+  this run (bench in secmp-testkit, ADR-042): mean0 14996.4, mean1 15586.1 ticks, raw Δ -589.64 (class 0 faster at
+  every crop: Δ -298.5 … -589.6 ticks, t -162 … -470) — the sign of the control's effect is reversed.

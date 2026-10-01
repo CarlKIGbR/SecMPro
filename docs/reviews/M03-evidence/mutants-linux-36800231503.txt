@@ -1,0 +1,13 @@
+PR #4, PR run 36800231503 (pull_request), job linux-full (110172679379), head 665e84e1bc4ee0b6961107e6f5926dc057d22924; the mutation gate (ci-full step 8).
+Extracted from `gh run view 36800231503 --job <id> --log` after the run completed (2026-10-01 03:24 UTC);
+timestamps and ANSI colour codes removed. M3 review C7 (first half: the reviewed head's run).
+
+=== [8] mutants ===
+$ /home/runner/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/cargo mutants --no-shuffle --output target --features secmp-crypto/kat --package secmp-crypto --package secmp-proto --exclude crates/secmp-proto/src/kani_proofs.rs --exclude-re kani_stubs:: --exclude-re FixedEntropy --exclude-re message_key_digest_kat --exclude-re 'replace mk_digest ' --exclude-re RatchetState::(hk_s_kat|receiving_header_keys_kat|sb_kat)
+Found 896 mutants to test
+ok       Unmutated baseline in 12s build + 13s test
+MISSED   crates/secmp-crypto/src/secret.rs:59:9: replace <impl Drop for SecretBytes<N>>::drop with () in 0s build + 9s test
+##[warning] replace <impl Drop for SecretBytes<N>>::drop with ()
+896 mutants tested in 25m: 1 missed, 612 caught, 283 unviable
+
+   8 mutants         PASS       1529s  secmp-crypto, secmp-proto: 896 mutants tested in 25m: 1 missed, 612 caught, 283 unviable; survivors documented in docs/mutants-accepted.md: 1

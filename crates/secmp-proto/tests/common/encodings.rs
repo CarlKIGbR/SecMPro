@@ -717,7 +717,7 @@ impl In {
             msg_id: self.arr(),
             expire_after: self.u32(),
             kind,
-            payload: self.text(text_bytes).into_bytes(),
+            payload: Zeroizing::new(self.text(text_bytes).into_bytes()),
         }
     }
 
@@ -990,7 +990,7 @@ fn receipt(s: &mut In, kind: ReceiptKind, count: usize) -> ReceiptBody {
 fn control_row(i: u32, s: &mut In, code: ControlCode, arg: usize) -> Value {
     let c = ControlBody {
         code,
-        arg: s.take(arg),
+        arg: Zeroizing::new(s.take(arg)),
     };
     row_of(i, "ControlBody", &c, control_json)
 }
@@ -1412,7 +1412,7 @@ fn envelope_and_content(i: u32, s: &mut In) -> Value {
         58 => content_row(i, s, false, |_| {
             ContentBody::Control(ControlBody {
                 code: ControlCode::SessionResetRequest,
-                arg: vec![],
+                arg: Zeroizing::new(vec![]),
             })
         }),
         59 => content_row(i, s, true, |_| ContentBody::Dummy),
@@ -1434,7 +1434,7 @@ fn bodies(i: u32, s: &mut In) -> Value {
                 msg_id: s.arr(),
                 kind: AppKind::AttachmentInline,
                 expire_after: u32::MAX,
-                payload: s.take(65_535),
+                payload: Zeroizing::new(s.take(65_535)),
             };
             row_of(i, "AppMessage", &m, app_message_json)
         }

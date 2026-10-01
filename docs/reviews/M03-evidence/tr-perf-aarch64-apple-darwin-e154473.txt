@@ -1,0 +1,51 @@
+# ci-full step `perf` (M3 plan D11, docs/07 M3 "encrypt+decrypt of a message < 3 ms") on e154473 plus uncommitted M3
+# work in the tree (crates/secmp-proto/examples/tr-perf.rs, the `perf` step in xtask, and other agents' uncommitted M3
+# work), macOS arm64 (Apple M1 Pro), release profile, OS randomness,
+# `env PATH=/Users/c.carl/.cargo/bin:/Users/c.carl/.local/bin:/usr/bin:/bin cargo xtask step --strict perf`, run twice
+# back to back. The machine was shared with four other agents. Each time is encrypt + persist + decrypt + commit of one
+# message (persist/commit: a no-op closure, the serialisation included); 200 timed messages per kind after 20 warm-up
+# messages; the gate fails if a kind's maximum reaches 3 ms (expect::TR_PERF_MAX_MS). Both runs: PASS.
+
+## Run 1
+
+   Compiling xtask v0.0.0 (/Users/c.carl/coding/claude_code/SecMPro/xtask)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.42s
+     Running `target/debug/xtask step --strict perf`
+
+=== [5] perf ===
+$ /Users/c.carl/.rustup/toolchains/1.98.1-aarch64-apple-darwin/bin/cargo run --release --locked -p secmp-proto --example tr-perf -- target/tr-perf.txt
+    Finished `release` profile [optimized] target(s) in 0.07s
+     Running `target/release/examples/tr-perf target/tr-perf.txt`
+  tr-perf host=aarch64-apple-darwin
+  tr-perf n=200
+  tr-perf warmup=20
+  tr-perf chain_median_us=63.5
+  tr-perf chain_max_us=69.8
+  tr-perf step_median_us=220.0
+  tr-perf step_max_us=232.9
+
+=== step summary (host aarch64-apple-darwin, strict: true) ===
+   5 perf            PASS          0s  encrypt+persist+decrypt+commit per message, 200 messages per kind on aarch64-apple-darwin: chain: median 63.5 µs, max 69.8 µs; step: median 220.0 µs, max 232.9 µs; every maximum below 3 ms
+step: PASS
+
+## Run 2
+
+   Compiling xtask v0.0.0 (/Users/c.carl/coding/claude_code/SecMPro/xtask)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.42s
+     Running `target/debug/xtask step --strict perf`
+
+=== [5] perf ===
+$ /Users/c.carl/.rustup/toolchains/1.98.1-aarch64-apple-darwin/bin/cargo run --release --locked -p secmp-proto --example tr-perf -- target/tr-perf.txt
+    Finished `release` profile [optimized] target(s) in 0.04s
+     Running `target/release/examples/tr-perf target/tr-perf.txt`
+  tr-perf host=aarch64-apple-darwin
+  tr-perf n=200
+  tr-perf warmup=20
+  tr-perf chain_median_us=63.4
+  tr-perf chain_max_us=72.5
+  tr-perf step_median_us=219.1
+  tr-perf step_max_us=301.5
+
+=== step summary (host aarch64-apple-darwin, strict: true) ===
+   5 perf            PASS          0s  encrypt+persist+decrypt+commit per message, 200 messages per kind on aarch64-apple-darwin: chain: median 63.4 µs, max 72.5 µs; step: median 219.1 µs, max 301.5 µs; every maximum below 3 ms
+step: PASS

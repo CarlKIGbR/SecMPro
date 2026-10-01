@@ -28,12 +28,17 @@ and why, and the suites it blocks. A blocked suite is not written until the answ
 | SQ-19 | AppMessage payloads and Control arguments have no layout | — (no row depends on it) | answered 2026-09-29 |
 | SQ-20 | Weisung addition 1 ("top-level" `ver`) vs App. D: `RouteDescriptor.ver`, frames, Cell, records | — (written per App. D; the 50 rows stand) | answered 2026-09-29 |
 | SQ-21 | Content of the `op`/`mode` JSON strings inside `value` (correction 1) | — (representation only; bytes unaffected) | answered 2026-09-29 |
+| SQ-22 | m05 "Batch L=1689" does not fit one cell | `tr`: 2 cases (written with L = 1665) | answered 2026-09-30 |
+| SQ-23 | N9 "sealed under the sender's `nhk_s`" | `tr`: 1 case (written under the m16 key) | answered 2026-09-30 |
+| SQ-24 | The state-digest label is not in App. A | — (confirmation) | answered 2026-09-30 |
 
 **State 2026-09-28 (brief REF-M1):** all answers applied; `BLOCKED_BY` is empty; the eight M1 files are written to `vectors/`. No new question was raised by the rev 2.2 spec or SCHEMA rev 2. The readings applied to the new SCHEMA §4 tables are listed at the end ("Readings adopted without a question — SCHEMA rev 2 §4") for the reviewer to veto.
 
 **State 2026-09-29 (brief REF-M2):** `vectors/encodings.json` is written from the case-table proposal `SCHEMA-4.8-encodings.md` (71 positive, 517 negative rows). SQ-12 … SQ-19 are new. None blocks the suite, so `BLOCKED_BY` stays empty. Every row whose outcome depends on an answer is **withheld**: 22 rows, listed in SCHEMA-4.8 with their outcome under the proposed reading. Every written row holds under every reading: the generator decodes each row twice, once with the proposed readings and once with the most permissive reading of every open question, and requires the same result both times. The M2 readings adopted without a question are listed at the end ("Readings adopted without a question — REF-M2").
 
 **State 2026-09-29 (Weisung REF-M2-1):** every answer to SQ-12 … SQ-19 and every SCHEMA-4.8 correction is applied (see "Applied: Weisung REF-M2-1" at the end). The file is renumbered and re-seeded once: 85 positive and 547 negative rows, `"schema": 3`. No row is withheld any more, and the generator's lenient mode is gone. Applying the Weisung raised two questions. Neither blocks a row, because the file follows App. D and SCHEMA §1 literally where they apply: SQ-20 (addition 1 against App. D) and SQ-21 (the content of the `op`/`mode` strings).
+
+**State 2026-09-30 (brief REF-M3):** spec rev 2.3; SCHEMA is rev 4, with the §4.9 proposal `SCHEMA-4.9-tr.md`. `vectors/tr.json` is written: 96 cases (1 init, 40 send, 40 recv, 2 advance, 13 recv-reject). There are three new questions, and none blocks the suite, so `BLOCKED_BY` stays empty. SQ-22 (the length of m05) touches 2 cases and SQ-23 (the key of N9) touches 1; their bytes follow the pinned reading, and no state digest depends on either. SQ-24 is a confirmation. The readings adopted without a question are listed at the end ("Readings adopted without a question — REF-M3"). The M1 and M2 files are unchanged.
 
 ---
 
@@ -262,6 +267,30 @@ These are the §3.5 byte rules, which need no message. Any key that fails them i
 
 **Answer** (reviewer, 2026-09-29, Weisung REF-M2-2): **Keep the names used.** `op` holds the D.2 command name exactly as App. D spells it (e.g. `"QUEUE_NEW"`, `"OK_SEND"`, `"CELLR"`); `mode` holds `"consume"` / `"owner-status"`. SCHEMA §1 records this as the normative spelling. No row's JSON representation changes beyond what REF-M2-1 already wrote, and no byte changes.
 
+## SQ-22 — m05 "Batch L=1689" does not fit one cell (brief REF-M3; §7.6, D.5)
+
+**Quote (brief):** "2. B→A m04 Batch L=100, m05 Batch L=1689, m06 Dummy" and "*Batch* = `count = 1 ‖ AppMessage{ msg_id (16, stream), kind = 1, expire_after = 0, payload_len = L, payload (L, stream) }`". **§7.6:** "Content (padded to 1710) { ver: u8, type: u8, seq: u64, ts: u64, body_len: u16, body } ; body ≤ 1689 B".
+**Problem.** A Batch body with one AppMessage is 1 + 16 + 1 + 4 + 2 + L = 24 + L bytes. With L = 1689 the body is 1713 B, which is more than 1689. The Content cannot be encoded: its 20-byte header plus the body plus at least the 0x80 marker exceed `BODY_LEN`. The possible readings are (A) L = 1665, the largest payload of a one-cell Batch (`body_len` = 1689, so the brief meant a maximal body); (B) `body_len` = 1689, which is the same bytes as (A); (C) m05 is fragmented. (C) contradicts the transcript, in which m05 is one message and one cell: fragmenting would add messages and shift m06 … m40.
+**Reading used:** (A)/(B): **L = 1665**. The Content is then exactly 1709 B, so the padding is the 0x80 marker alone.
+**Blocks:** nothing is withheld. Only tr-0013 (send m05: `payload`, the stream position of `hdr_nonce`, `content`, `cell`) and tr-0017 (recv m05: `content`) depend on it. No state digest does, because the Content bytes never enter the state.
+**Answer** (reviewer, 2026-09-30, Weisung REF-M3-1): the brief's "L = 1689" was the reviewer's slip (1689 is the Content body limit, not the payload); L = 1665 (body filled exactly: 24 + 1665) is the reading, as the §4.9 table says.
+
+## SQ-23 — N9 "sealed under the sender's `nhk_s`" (brief REF-M3; §7.4)
+
+**Quote (brief):** "N9 `step-without-new-dh`: before A's `recv m16` — a header sealed under the sender's `nhk_s` carrying `dh_pk = A.dh_r` (the old key), `pn`/`n` as m16, `ek_pq`/`ct_pq` as m16; rejected before any KDF."
+**Problem.** At that point B has already stepped (on m14). B's `hk_s` is the header key of the chain m16–m17, which A holds as `nhk_r`. B's `nhk_s` is the key of B's *next* chain, and A does not hold it yet. Sealed under the literal B `nhk_s`, the header opens under none of A's keys (the skipped hks, `hk_r`, `nhk_r`). N9 would then test "no header key opens", like N8 and N13, and would never reach the §7.4 check `header.dh_pk == dh_r` that its name describes.
+**Reading used:** the key m16 is sealed under: B's `hk_s` at m16, which is A's `nhk_r` and was B's `nhk_s` until B's step on m14 (so "the sender's `nhk_s`" is read as of the sender's previous chain). The header opens under A's `nhk_r`, the step branch is taken, and `dh_pk == dh_r` rejects before `skip_message_keys`, DHRatchet or any KDF. The generator asserts that m16's key equals A's `nhk_r` and that this check is the one that fires.
+**Blocks:** nothing is withheld. Only the `cell` of tr-0044 depends on it. Under either reading the case is a rejection with the state unchanged.
+**Answer** (reviewer, 2026-09-30, Weisung REF-M3-1): the ref's reading is the intended one: the N9 header is sealed under the key m16 is sealed under (B's current `hk_s` = A's `nhk_r`), so A opens it via `nhk_r` and the `dh_pk == dh_r` check rejects; the §4.9 row now reads "under the sender's current `hk_s` (the key the receiver opens with `nhk_r`)".
+
+## SQ-24 — The state-digest label is not in App. A (SCHEMA §4.9; App. A)
+
+**Quote (App. A):** "Domain-separation labels (exhaustive)" … "`"SecMP-vectors/1"` (test-vector seed derivation only, vectors/SCHEMA.md)" … "Any new label requires a spec change and an ADR." **Brief:** "`StateDigestV1 = SHA-256( "SecMP-TR/1 state-digest" ‖ sb ‖ …`".
+**Problem.** The digest label lies in the protocol namespace `"SecMP-TR/1 "`, but App. A does not list it. So neither implementation's App. A unit test sees it, and a later protocol label such as `"SecMP-TR/1 state"` could break prefix-freeness unnoticed. Today the set stays prefix-free: no App. A label is a prefix of it, and it is a prefix of none (`ref/tests/test_tr.py`). A rename into the vectors namespace (`"SecMP-vectors/1 …"`) is not an option, because `"SecMP-vectors/1"` would then be a prefix of it.
+**Question:** should App. A list `"SecMP-TR/1 state-digest"` beside `"SecMP-vectors/1"`, with a note such as "(test-vector state digest only, vectors/SCHEMA.md §4.9)"?
+**Reading used:** the label as the brief gives it. **Blocks:** nothing (confirmation only); listing it changes no byte.
+**Answer** (reviewer, 2026-09-30, Weisung REF-M3-1): yes. `"SecMP-TR/1 state-digest"` is a test-construct label like `"SecMP-vectors/1"`; it is recorded in SCHEMA §4.9 now and will be listed in App. A with the next spec revision (reviewer's ADR); the ref's prefix-freedom test is the guard until then.
+
 ---
 
 ## Readings adopted without a question (for the reviewer to veto)
@@ -360,3 +389,22 @@ These concern the `encodings` suite and its proposal `SCHEMA-4.8-encodings.md`, 
 - **Addition 3:** `SCHEMA.md` is rev 3. §1 records `"schema": 3`, the `op`/`mode` strings and boolean `u8` fields as 0/1; §3 lists the tag `enc`; §4.8 points to `SCHEMA-4.8-encodings.md`.
 - **Result:** 85 positive + 547 negative = 632 rows. `vectors/encodings.json` SHA-256 is `9abd63d7ea5c35c0a9731f91ab7584de57890de728f8799ad3dae30f380131b8`. It was written twice, from fresh processes, byte-identical. The M1 files are unchanged.
 - **Rows whose outcome changed:** only the 22 formerly withheld rows, now written. One of them differs from the proposal's reading: `Fragment` `total` := 1, `idx` := 0 was proposed as accept and now rejects (SQ-18 (2)). Every case of the proposal's file (`f2166aa9…`) was decoded again under the answered rules, and none changed outcome.
+
+## Readings adopted without a question — REF-M3 (for the reviewer to veto)
+
+These concern `ref/secmp_ref/tr.py` (spec §7) and the `tr` suite (`SCHEMA-4.9-tr.md`). An identical wrong reading on both sides would pass the comparison. Items 1–8 are about the ratchet, and items 9–14 about the vector file.
+
+1. **KDF splits (§7.2).** `(RK ‖ HK_A ‖ NHK_B)` and `KDF_RK → (rk', ck, nhk)` are bytes 0–31, 32–63 and 64–95 of the HKDF output. `KDF_CK` is HMAC-SHA-256 keyed with `ck`, over the one byte 0x02 (the next chain key) or 0x01 (the message key). The `KDF_RK` input is `X25519(dh_s, dh_r) ‖ ss_pq`, with the DH output first.
+2. **ADs (§7.3).** The header AD is `"SecMP-TR/1 hdr" ‖ sb`. The body AD is `"SecMP-TR/1 body" ‖ sb ‖ hdr_nonce ‖ hdr_ct`, where `hdr_ct` includes its 16-byte tag (2330 B). Decrypt uses the same body AD in both paths.
+3. **Randomness order.** Encrypt draws only `hdr_nonce`, after `KDF_CK`. The initiator's init and DHRatchet draw the dh secret 32, the ML-KEM seed `d ‖ z` 64 and the Encaps `m` 32, in the order of the §7.2/§7.4 lines (keygen, keygen, Encaps). The decapsulation in DHRatchet draws nothing.
+4. **Open() includes HeaderV1 decoding** (App. D, §4.1 decoder obligations, `flags` = 0 by §7.5). A header that authenticates under a key but does not decode rejects the cell at once (N11). Treating it as "did not open" and trying the next key gives the same outcome, because the AEAD opens under at most one key.
+5. **The §7.4 step-1 path** (skipped keys) is followed as written. It tries the distinct `hk` in order of first insertion (which order is used cannot change the outcome), and it checks neither KEM constancy nor `dh_pk`. The entry is removed only after the MAC has verified, so a MAC failure leaves it in place (tested). Once a header opens under a skipped `hk` without a matching `(hk, n)`, step 2 follows.
+6. **The transaction ends at MsgDecrypt.** Decrypt returns the padded Content; decoding the Content (and checking its ISO/IEC 7816-4 padding) comes after it and is not part of the transaction. No case depends on this.
+7. **Counters.** Encrypt aborts (a local error, not the uniform Reject) when `n_s` = 2^32 − 1, before any state change. Decrypt rejects when `n_r` would pass 2^32 − 1 (`n_r` is a u32, §7.1). No case reaches either.
+8. **Transactional decrypt** works on a copy of the state and commits every field at once after the MAC. The test compares the full digest preimage, which holds every §7.1 field, before and after each rejection.
+9. **Interleaving** (SCHEMA-4.9 "Transcript"). Within a phase the `send` events come first, in send order, then the deliveries; phases 5 and 9 follow the brief's order. The case indices, and so the streams, follow from this.
+10. **Re-sealed headers** (N1–N3, N8–N11) keep the base cell's `hdr_nonce` and body, and are sealed with the sender's header key of the base message.
+11. **`advance` Dummy Content:** `ver` 1, `type` 0x00, `seq` 0, `ts` 0, empty body. The cells are discarded, so no byte of the file depends on it. The nonces are listed as `hdr_nonces` (24 × `count` bytes), because SCHEMA §2 lists every stream-derived value.
+12. **N1 lists `dh_sk`, `kem_seed`, `m`:** it is rejected by the body MAC after DHRatchet has run on the working copy, so it draws DHRatchet's randomness like a `recv`. No other negative draws anything, except N2's `ek_pq_seed`.
+13. **Case shape:** `party` = `"AB"` for `init`; a `recv-reject` also carries `msg` and `from` (the base message and its `send` case); digests are in `outputs`, and so is the pair of a `recv-reject` next to `expect`. The Batch `payload` is L raw stream bytes (opaque, SQ-19), not the hex text of the §4.8 text rows. The RouteUpdate descriptor is the §4.8 row `rd_relayqueue`.
+14. **"No `mk` used twice"** is checked as follows: across the whole run, no message key encrypts twice and none decrypts twice, and each decryption uses the key that encrypted that same message. The run has 10 340 encryptions (40 messages + 10 300 advance cells) and 40 decryptions, so 10 340 distinct keys are tracked.

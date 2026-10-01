@@ -3,9 +3,10 @@
 //!
 //! **Responsibility.** The only crate that uses cryptographic crates for SecMP constructions (CLAUDE.md §1.6,
 //! docs/06 §2–3): typed keys, nonces and counters; `HybridKEM` (spec §3.2), `MsgEncrypt` (§3.3), `CAEAD` (§3.4),
-//! `HybridSign` (§3.5), HKDF helpers with the labels of spec Appendix A, the safety number (§6.7) and
-//! fingerprints (§6.2). No primitive is implemented here; constructions only compose allowlisted crates exactly
-//! as the spec defines them.
+//! `HybridSign` (§3.5), plain XChaCha20-Poly1305 for ratchet headers and link frames ([`Aead`], §3 table, §7.5,
+//! §8.4), HKDF helpers with the labels of spec Appendix A, the SecMP-TR key derivations (§7.2), the safety number
+//! (§6.7) and fingerprints (§6.2). No primitive is implemented here; constructions only compose allowlisted crates
+//! exactly as the spec defines them.
 //!
 //! **Allowed dependencies** (docs/02 §3, docs/06 §3): `secmp-sys-mem`; the allowlisted crypto crates of docs/06 §3
 //! (`libcrux-ml-kem`, `ml-kem` for differential tests, `ml-dsa`, `aws-lc-rs` for differential tests,
@@ -21,6 +22,7 @@
 //! ciphertext and fingerprint types is redacted.
 #![forbid(unsafe_code)]
 
+mod aead;
 mod caead;
 mod ed25519;
 mod error;
@@ -39,10 +41,12 @@ mod sas;
 mod secret;
 #[cfg(test)]
 mod test_util;
+mod tr_kdf;
 #[cfg(feature = "kat")]
 mod vector_stream;
 mod x25519;
 
+pub use aead::Aead;
 pub use caead::{AEAD_TAG_LEN, COM_LEN, Caead, NONCE_LEN};
 pub use ed25519::{
     ED25519_PK_LEN, ED25519_SEED_LEN, ED25519_SIG_LEN, Ed25519SigningKey, Ed25519VerifyingKey,
@@ -72,6 +76,10 @@ pub use msg::{BODY_LEN, MSG_SEALED_LEN, MSG_TAG_LEN, MsgEncrypt};
 pub use nonce::{Counter64, Nonce24};
 pub use sas::{SAS_DIGITS, SAS_HALF_DIGITS, SAS_ITERATIONS, SafetyNumber};
 pub use secret::{LockedSecret, SecretBytes};
+/// Constant-time comparison and selection, re-exported so that `secmp-proto` compares and selects secrets in
+/// constant time without a direct dependency on a crypto crate (CLAUDE.md §1.6).
+pub use subtle::{Choice, ConditionallySelectable, ConstantTimeEq};
+pub use tr_kdf::{kdf_ck, kdf_rk, tr_init};
 #[cfg(feature = "kat")]
 pub use vector_stream::VectorStream;
 pub use x25519::{X25519_LEN, X25519Public, X25519Secret};

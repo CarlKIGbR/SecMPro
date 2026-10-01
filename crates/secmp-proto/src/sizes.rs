@@ -3,7 +3,7 @@
 //! primitive sizes checked against `secmp-crypto`. A wrong constant or field list is a compile error.
 
 /// The sum of field widths, or `usize::MAX` on overflow (which fails every assertion below).
-const fn sum(mut parts: &[usize]) -> usize {
+pub(crate) const fn sum(mut parts: &[usize]) -> usize {
     let mut acc: usize = 0;
     while let Some((first, rest)) = parts.split_first() {
         acc = match acc.checked_add(*first) {
@@ -69,6 +69,10 @@ pub const PREKEY_BUNDLE_LEN: usize = sum(&[
 ]);
 /// `LinkDataV1` padded (App. B 12288).
 pub const LINKDATA_PADDED_LEN: usize = 12_288;
+/// The largest `Profile` (D.3): `name_len ‖ name[64] ‖ avatar_present ‖ avatar_sha256[32]` (98).
+const PROFILE_MAX_LEN: usize = sum(&[1, NAME_MAX, 1, HASH_LEN]);
+/// The largest `LinkDataV1` fields (D.3): `ver ‖ IKSPublic ‖ PrekeyBundle ‖ Profile ‖ created` (9899).
+const LINKDATA_MAX_LEN: usize = sum(&[1, IKS_PUBLIC_LEN, PREKEY_BUNDLE_LEN, PROFILE_MAX_LEN, 8]);
 /// `LinkBlob` (App. B 12360).
 pub const LINK_BLOB_LEN: usize = sum(&[NONCE_LEN, COM_LEN, LINKDATA_PADDED_LEN, AEAD_TAG_LEN]);
 /// The CAEAD ciphertext inside a `LinkBlob`.
@@ -210,6 +214,10 @@ const _: () = assert!(INVITATION_NO_DIRECT_LEN == 241 && RELAYREF_NO_DIRECT_LEN 
 // spec §4.2 / §7.6: the largest body leaves room for the header and the padding marker
 const _: () = assert!(sum(&[CONTENT_HEADER_LEN, CONTENT_BODY_MAX, 1]) == BODY_LEN);
 const _: () = assert!(KEYCHANGE_BODY_LEN == 5390 && KEYCHANGE_BODY_LEN > CONTENT_BODY_MAX);
+// D.3 / spec §5.4 (M2 review F9): the largest LinkDataV1 (1 + 2017 + 7775 + 98 + 8 = 9899) leaves room for the
+// 0x80 marker in its 12288-byte padding, so `pad` never refuses a LinkDataV1
+const _: () = assert!(PROFILE_MAX_LEN == 98 && LINKDATA_MAX_LEN == 9899);
+const _: () = assert!(sum(&[LINKDATA_MAX_LEN, 1]) <= LINKDATA_PADDED_LEN);
 // D.2: the blob travels in three frames; every frame's fields leave room for the marker
 const _: () = assert!(sum(&[BLOB_PART_LEN, CONT_DATA_LEN, CONT_DATA_LEN]) == LINK_BLOB_LEN);
 const _: () = assert!(

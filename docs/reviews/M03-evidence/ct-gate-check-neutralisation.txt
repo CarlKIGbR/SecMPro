@@ -1,0 +1,19 @@
+baseline (all checks in place): failing tests = none
+F15: the positive control's label is not checked: failing tests = ctreport::tests::the_positive_control_is_checked_whatever_its_label
+F15: detection checked only when the control's label is PASS (the M2 rule): failing tests = ctreport::tests::the_positive_control_is_checked_whatever_its_label
+F16: mixed crops - SUB_FLOOR_SHIFT possible next to a surely relevant crop (`!fail_sure` removed): failing tests = ctreport::tests::refuses_a_sub_floor_shift_next_to_a_relevant_crop
+F16: the target floor scaled by 1.4: failing tests = ctreport::tests::the_effect_floor_is_tight_on_both_sides
+F16: the target floor scaled by 0.99: failing tests = ctreport::tests::the_effect_floor_is_tight_on_both_sides
+F16: t-rounding margin doubled (HALF_T 1e-3): failing tests = ctreport::tests::the_positive_control_is_checked_whatever_its_label, ctreport::tests::the_t_threshold_is_tight_on_both_sides
+F16: t-rounding margin halved (HALF_T 2.5e-4): failing tests = ctreport::tests::the_positive_control_is_checked_whatever_its_label, ctreport::tests::the_t_threshold_is_tight_on_both_sides
+F16: t-rounding margin removed (HALF_T 0): failing tests = ctreport::tests::refuses_a_verdict_the_crops_do_not_give, ctreport::tests::the_positive_control_is_checked_whatever_its_label, ctreport::tests::the_t_threshold_is_tight_on_both_sides
+F16: Δ rounding margin doubled (HALF_4 1e-4): failing tests = ctreport::tests::the_effect_floor_is_tight_on_both_sides
+F16: Δ rounding margin halved (HALF_4 2.5e-5): failing tests = ctreport::tests::sensitivity_rounding_edges, ctreport::tests::the_effect_floor_is_tight_on_both_sides
+F16: q_eff rounding margin doubled (HALF_Q 1e-3): failing tests = ctreport::tests::refuses_an_effective_quantum_above_the_clock_bound, ctreport::tests::the_effect_floor_is_tight_on_both_sides
+F16: q_eff rounding margin halved (HALF_Q 2.5e-4): failing tests = ctreport::tests::refuses_an_effective_quantum_above_the_clock_bound, ctreport::tests::sensitivity_rounding_edges, ctreport::tests::the_effect_floor_is_tight_on_both_sides
+F16: control-name check removed: failing tests = ctreport::tests::refuses_another_target_as_the_positive_control
+F16: duplicate-target check removed: failing tests = ctreport::tests::refuses_a_duplicated_target
+F17: no upper bound on a target's q_eff_ticks: failing tests = ctreport::tests::refuses_an_effective_quantum_above_the_clock_bound
+ADR-042: an A/A' placement control FAIL accepted outside a CONTROL_FAIL run: failing tests = ctreport::tests::the_aa_prime_control_fails_the_run_as_control_fail
+F17: the bound's one-tick allowance doubled: failing tests = ctreport::tests::refuses_an_effective_quantum_above_the_clock_bound
+17 neutralisations, 17 caught

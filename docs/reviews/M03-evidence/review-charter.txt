@@ -1,0 +1,64 @@
+# M3 review charter — SecMP-TR hybrid ratchet (sans-IO) + ProVerif model
+
+Reviewer: Fable (judge). Mode A (milestone review, mandatory directorate for M3). Date 2026-10-01.
+
+## Pin (verified by the judge — do not re-verify, do not read anything newer)
+
+- Commit `665e84e1bc4ee0b6961107e6f5926dc057d22924`, tree `66e7dd819cd138c67adac5b52bd38be91c0228c6`, parent `45e6d40`, committed 2026-10-01T01:15:08Z.
+- Base `main = e4a3d55bb1f67db83ed4d6346e40d6404ba7dffd` (M2 squash). 28 commits, 118 files, +17 567 / −387. Branch `m03-tr`, PR CarlKIGbR/SecMPro#4.
+- CI: PR run 36800231503 (pull_request, in progress at charter time: xwin-cross success 4m36s; linux-fast, windows-native, linux-full pending). Dispatch run 36801281974 (ci-dispatch.yml, `dispatch-ct`). The judge reads the run pages; agents do not have network for GitHub.
+- Frozen check done by the judge: `docs/03`, `docs/01` untouched; `vectors/tr.json` is new and byte-identical to `vectors/ref/tr.json` (SHA-256 `01a6d161…`); `formal/CLAIMS.md` is verbatim the brief's text (40 lines).
+- Cite every claim as `path:line@665e84e`. Report, commit messages and prior reviews are claims to verify, never truth.
+
+## Files (all under `/home/claude/m03/`; agents read only here)
+
+- `src/` — the complete tree at the pin (2021 files). Code under test: `src/crates/secmp-proto/src/tr/{mod,state,ratchet,select,content,entropy,tests}.rs`, `src/crates/secmp-proto/src/{codec,error,sizes,kani_proofs,lib}.rs`, `src/crates/secmp-crypto/src/` (new: `tr_kdf.rs`, Aead, persistence accessors), tests `src/crates/secmp-proto/tests/{tr_vectors,tr_properties,tr_generator,tr_smoke,fuzz_max_len}.rs` + `tests/common/{tr,tr_digest}.rs`, examples `tr-perf.rs`, `gen-tr.rs`, fuzz `src/fuzz/fuzz_targets/`, gates `src/xtask/src/{gates,expect,vectors,tools}.rs`, workflows `src/.github/workflows/{ci,ci-dispatch,fuzz-nightly}.yml`, formal `src/formal/{CLAIMS.md,tr.pv,README.md}`, bench `src/crates/secmp-testkit/benches/ct.rs`.
+- `pin.diff` — `git diff e4a3d55..665e84e` (3.3 MB; read with `grep -n`/`sed -n`, never whole). `files.txt` — the 118 changed paths.
+- `brief.md` — BRIEF_M3 (the task). `postbote-report.md` — the run's final message. `src/docs/reviews/M03-report.md` — the milestone report (333 lines: §1 plan + design decisions D1–D12, §2 built, §3 evidence, §4 gates, §5 deviations, §6 deps, §7 risks, §8 questions Q-1…Q-4, §9 checklist). Evidence files: `src/docs/reviews/M03-evidence/` (ct, Kani, fuzz, ProVerif, perf, Miri, mutants, ci-fast).
+- Spec: `src/docs/03-protocol-spec.md` §7 SecMP-TR (lines 368–516: 7.1 state, 7.2 init, 7.3 encrypt, 7.4 decrypt, 7.5 cell format, 7.6 content, 7.7 key change, 7.8 reset), §3.3 MsgEncrypt, §3.4 CAEAD, §4.1 encoding/decoder obligations, App. A labels (748), App. B sizes (766), App. D.5 cell/content layouts (857). Threat model `src/docs/01-threat-model.md`. Standards `src/docs/06-engineering-standards.md` §3 supply chain, §4 gates, §8 DoD, §9 guardrails for AI-written crypto code. Milestone `src/docs/07-milestones.md` §M3 (lines 66–81). `src/CLAUDE.md` §1 invariants, §5 crypto rules, §6 STOP. ADRs `src/docs/08-decisions.md` (ADR-004, 026, 036, 038, 039, 040, 041 + Amendment 1, ADR-042 proposed at line ~290). Previous review `src/docs/reviews/M02-review.md` (F1–F21 carried into M3; C1–C6 done) and `M02-review-ext-glm.md`.
+- Reference implementation (Python, independent): `src/ref/secmp_ref/tr.py`, `tr_cases.py`, vectors `src/vectors/ref/tr.json` (96 events), case table `src/vectors/SCHEMA-4.9-tr.md`, `src/vectors/SCHEMA.md` §2 (seed/stream derivation), reviewer answers `src/docs/reviews/ref-spec-questions-M3.md` (SQ-22…24; main added SQ-25…27 in this milestone — those three are main's own readings, not yet adjudicated).
+- Toolchain in this container: `cargo 1.95` (a `cargo fetch` was started in the background — check `/home/claude/m03/cargo_fetch.log`; if the registry is reachable, `cargo test -p secmp-proto --features kat --test tr_vectors` etc. may work; try once, do not fight the network), `python3` with pynacl, kyber-py, dilithium-py, cryptography, pytest (the reference suite `src/ref/tests/` should run: `cd src/ref && python3 -m pytest -q tests/test_tr.py`).
+
+## Scope (docs/07 §M3)
+
+Deliverables: `secmp-proto::tr` (`RatchetState` serialisable/zeroizing/incremental-persistence API, `init_initiator`/`init_responder` §7.2, `encrypt`, transactional `decrypt`, `DHRatchet` with KEM in both halves, `skip_message_keys` with `SKIP_WINDOW = 256`/`MAX_FF = 2^20`, dummy generation, content handling Batch/Fragment/KeyChange/RouteUpdate); `ref/` TR + frozen vectors; property tests (no message-key reuse, no panic, serialisation round-trip at every step); `formal/CLAIMS.md` + `formal/tr.pv` (bounded 3 steps).
+Acceptance: vectors and properties pass; ProVerif green on the fixed query set; encrypt+decrypt of a message < 3 ms.
+Review focus: header-key rotation exactly per §7.2–7.4; KEM material constant within a chain and rejected otherwise; persist-before-send/ack possible with the API; fast-forward bounds; transactional decrypt.
+Carried from M2 (each must be present and correct at the pin): F1 PartialEq on tag types test-only; F2 fuzz-nightly.yml; F3 secmp-proto in MIRI_PACKAGES; F4 Error::Unavailable; F5 run_attempt in ct artefact name; F6 inline A/A′ control; F7 scratch corpus seeded from vectors; F8 byte-compare vectors vs vectors/ref in CI step 12a; F9 const assertion LinkDataV1 ≤ 12288; F10 env-seeded property run nightly; F13 fine-timer recomputation script; F15–F18 (gate checks positive control for any verdict label; refusal tests for removable gate checks; upper bound on q_eff_ticks; unit test for -max_len); F19 policy check rejects job-level `if:` on required jobs; F20 signed.rs returns Zeroizing; F21 decrypted Content/payload/arg/reassembly buffers Zeroizing.
+
+## Judge's pre-noted items (each lens checks the ones in its lane; verifiers get them as candidates)
+
+- J1 Feature `kat` gates `tr_vectors`, `tr_properties`, the 2^20 fast-forward unit tests and the generator (`crates/secmp-proto/Cargo.toml` required-features). Which CI job runs `--features kat`, on which OS, and is it one of the four required jobs? A vector test that no required job runs is not an acceptance proof.
+- J2 Mutation testing excludes "secmp-proto's kat-only code" (`xtask/src/expect.rs`, commit c907881) — is the excluded set only test helpers, or does it hide ratchet code behind `cfg(feature = "kat")`? Any production code path compiled only under `kat`?
+- J3 main edited `docs/06-engineering-standards.md` and `docs/07-milestones.md` (commit 405ecd0) — list the exact hunks from `pin.diff`; allowed are status/gate-description updates, not weakened requirements.
+- J4 ADR-042 (proposed): ct bench moves to `secmp-testkit`; the A/A′ control becomes a target of every run. Judge decides acceptance; lenses report whether the move changes what the ct gate measures (same targets, same method per ADR-038/041).
+- J5 `Error::Unavailable` (F4): must never be produced from attacker-controlled input; must not be distinguishable from `Rejected` on the wire/transport path.
+- J6 ProVerif model `formal/tr.pv`: report §5 says PCS scenarios deliver the healing messages authentically. Does any modelling choice make a query (T4–T6 PCS, T7/T10 expected-false) trivially true/false? Are the 39 results exactly as CLAIMS.md expects and does the gate check them (not just "ProVerif ran")?
+- J7 Property test shortcut: long gaps are simulated by advancing the sender's chain in its saved state instead of encrypting every dropped cell; a separate test shows byte-identity. Is the shortcut sound (same `n_s`, `ck_s`, `pn` evolution) and is the equivalence test adequate?
+- J8 Transactional decrypt: "a rejected cell gives the state back byte-identical and draws no randomness; the new keys of a ratchet step are generated only after the body MAC checks out". Verify on every reject path of §7.4 (header fails under all keys; dh_pk == dh_r on a step; KEM-constancy on non-step; gap > MAX_FF; eviction bookkeeping; replay; body MAC).
+- J9 Header-key selection (`select.rs`): tried under every candidate key on every call — which keys (hk_r, nhk_r, every distinct hk in `skipped`), in which order, and is the choice constant-time/does it leak which key matched via timing or error?
+- J10 Eviction: total ≤ 2 × SKIP_WINDOW = 512 across chains, earliest-inserted first; lookup over every distinct hk (§7.4 step 1; the vectors' late-delivery m11 case).
+- J11 Persist-before-send / -ack API (`Sealed::persist`, `Opened::commit`): can a caller obtain the cell without the state, or ack without the state? Is the full-state serialisation versioned and does deserialisation reject malformed input totally (fuzz target tr_state)?
+- J12 Report oddities: the postbote report ends with a line about "Canva, Postman, Privacy.com and Windsor.ai connectors" — noise from the executing environment, not a finding; a `gh run watch` slip was reported and stopped.
+- J13 SQ-25…27 (main's own readings in `docs/reviews/ref-spec-questions-M3.md`): fragment reassembly, key-change semantics, sequence number of a dummy — are they spec-consistent and do they affect any vector or ref behaviour?
+
+## Finding schema
+
+`FID · blocker|major|minor|nit|note · location (path:line@665e84e or docs/03 §) · obligation violated (spec §, CLAUDE.md §1/§5, docs/06 §, ADR) · reasoning/counter-example with bytes and numbers · repro · impact · smallest fix · CONFIRMED|PLAUSIBLE|REFUTED · confidence`.
+CONFIRMED only with a reproduction (test run, Python recomputation, evidence file) or a deterministic code reading; otherwise PLAUSIBLE with the missing proof named. Refute your own strongest hypothesis before filing it. Honest grading: nothing inflated, nothing softened.
+
+## Coverage table (lens ↔ docs/06 §9 ↔ review focus ↔ acceptance)
+
+| Lens | docs/06 §9 guardrail | review focus / acceptance | judge items |
+|---|---|---|---|
+| L1 spec conformance | byte-exact layouts, labels, lengths, checked arithmetic, Option strictness, uniform errors | header-key rotation §7.2–7.4; KEM constancy; vectors pass | J8, J9, J10, J13 |
+| L2 threat model | fail-closed, indistinguishable errors, no identifiers to transport, metadata | §7.4 rejections uniform; dummies; docs/01 claims | J5, J8 |
+| L3 constant time | no secret-dependent branches/indices/early returns; Choice discipline; ct gate method ADR-038/041 | ct gate incl. three TR reject targets and A/A′ control | J4, J9 |
+| L4 memory hygiene | zeroize on all paths incl. error/panic; no Clone/Debug/PartialEq on secrets; Zeroizing buffers; Miri scope | persistence record; F1, F20, F21 | J11 |
+| L5 supply chain | docs/06 §3, Cargo.lock delta, cargo vet (ADR-036), deny.toml, actions pinned, workflows | F2 fuzz-nightly, F5, F19 policy check, ci-dispatch | J1, J3 |
+| L6 test adequacy | KATs exact, property tests (seed, iterations), fuzz reaches parser, Kani bounds, mutants, coverage; "when would it fail?" | vectors+properties pass; perf < 3 ms; F6–F10, F13, F15–F18 | J1, J2, J7, J11 |
+| L7 ProVerif ↔ code | queries fixed before modelling; every field/KDF input/transition has a counterpart; no abstraction trivialises a query; expected-false really false | ProVerif green on fixed set | J6 |
+
+## Output rules
+
+Each lens writes `/home/claude/m03/findings/L<n>.md` (full findings in the schema) and returns a balance ≤ 500 words: counts per severity, the sharpest ≤ 7 findings with FID and `path:line`, the invariants confirmed, and fan-out items (hypotheses needing a verifier). Planning cells write `/home/claude/m03/A<n>.md` and return ≤ 400 words. No document content in the return beyond the balance. Read-only: never modify `src/`.

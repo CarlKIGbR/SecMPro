@@ -93,6 +93,8 @@ pub(crate) fn set(name: &str) -> Result<Vec<CargoTool>> {
         "xwin" => vec![XWIN],
         // the weekly `miri-full` workflow needs only the pinned nightly (`--nightly`)
         "miri" => vec![],
+        // the daily `fuzz-nightly` workflow: the campaign (with `--nightly`) and the seeded property run
+        "fuzz" => vec![NEXTEST, FUZZ],
         "full" => vec![
             NEXTEST, DENY, VET, AUDIT, AUDITABLE, CYCLONEDX, FUZZ, MUTANTS, LLVM_COV, XWIN, KANI,
         ],
@@ -100,7 +102,9 @@ pub(crate) fn set(name: &str) -> Result<Vec<CargoTool>> {
             NEXTEST, DENY, VET, AUDIT, AUDITABLE, CYCLONEDX, FUZZ, MUTANTS, LLVM_COV, XWIN,
             ZIGBUILD, KANI,
         ],
-        other => bail!("unknown tool set {other:?} (fast | windows | xwin | miri | full | all)"),
+        other => {
+            bail!("unknown tool set {other:?} (fast | windows | xwin | miri | fuzz | full | all)")
+        }
     })
 }
 
@@ -245,5 +249,10 @@ mod tests {
     fn unknown_set_is_rejected() {
         assert!(set("nope").is_err());
         assert!(set("fast").is_ok());
+        // the fuzz-nightly workflow's set: the campaign and the seeded property run
+        assert!(
+            set("fuzz").is_ok_and(|s| s.iter().any(|t| t.krate == FUZZ.krate)
+                && s.iter().any(|t| t.krate == NEXTEST.krate))
+        );
     }
 }

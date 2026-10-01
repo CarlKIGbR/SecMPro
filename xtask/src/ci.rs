@@ -94,6 +94,12 @@ const FAST: &[Step] = &[
 ];
 
 const FULL_EXTRA: &[Step] = &[
+    // docs/07 M3 "encrypt+decrypt of a message < 3 ms" (M3 plan D11), right after the KATs
+    Step {
+        num: "5",
+        id: "perf",
+        run: gates::perf,
+    },
     Step {
         num: "5",
         id: "ct",
@@ -166,12 +172,20 @@ const FULL_EXTRA: &[Step] = &[
     },
 ];
 
-/// Steps outside `ci-full`, run only by `cargo xtask step <id>` (their own workflows).
-const ON_DEMAND: &[Step] = &[Step {
-    num: "9",
-    id: "miri-full",
-    run: gates::miri_full,
-}];
+/// Steps outside `ci-full`, run only by `cargo xtask step <id>` (their own workflows: `miri-full.yml`,
+/// `fuzz-nightly.yml`).
+const ON_DEMAND: &[Step] = &[
+    Step {
+        num: "9",
+        id: "miri-full",
+        run: gates::miri_full,
+    },
+    Step {
+        num: "6",
+        id: "fuzz-nightly",
+        run: gates::fuzz_nightly,
+    },
+];
 
 struct Options {
     strict: bool,

@@ -1,0 +1,156 @@
+# Miri: every secmp-proto test, host wall time per test (M2 review F3)
+# macOS arm64 (Apple Silicon), nightly-2026-09-21, interpreting aarch64-unknown-linux-gnu;
+# env LIBCRUX_DISABLE_SIMD128=1 LIBCRUX_DISABLE_SIMD256=1 CARGO_TARGET_DIR=target/miri-portable;
+# cargo +nightly-2026-09-21 miri test --locked --no-fail-fast --target aarch64-unknown-linux-gnu --package secmp-proto
+#   [--lib | --test canonical | --test encodings_ref --test fuzz_max_len | --doc] -- --test-threads=1 [--exact <names>]
+# A test's wall time is the time between its result line and the previous output line (a timestamping wrapper,
+# target/tmp/tsrun.py); libtest's --report-time shows Miri's virtual clock under isolation, not the host's.
+# Measured on the working tree of m03-tr, 2026-09-30/10-01 (commits up to 801476b plus the other agents'
+# uncommitted secmp-proto/secmp-crypto work), on a shared machine (up to five Miri processes and two other agents
+# at the same time): the times are upper bounds. Rule of expect::MIRI_SKIP: 60 s or more -> skipped in ci-full
+# (miri-full runs it); tests Miri cannot run -> expect::MIRI_UNSUPPORTED.
+
+## lib (unittests src/lib.rs)
+          running 48 tests
+     0.1 s  ok  codec::tests::boxed_arrays_need_the_exact_length  runs in ci-full
+     0.1 s  ok  codec::tests::encoding_buffers_are_zeroizing  runs in ci-full
+     0.1 s  ok  codec::tests::flags_and_expected_bytes  runs in ci-full
+     0.2 s  ok  codec::tests::length_prefixes  runs in ci-full
+     0.1 s  ok  codec::tests::padding_round_trip_and_rejections  runs in ci-full
+     0.0 s  ok  codec::tests::reader_is_bounded_and_exact  runs in ci-full
+     3.4 s  ok  codec::tests::writer_grows_without_losing_bytes  runs in ci-full
+     0.3 s  ok  codec::tests::writer_growth_policy  runs in ci-full
+     0.1 s  ok  error::tests::crypto_errors_keep_their_kind  runs in ci-full
+     0.0 s  ok  error::tests::display_carries_no_detail  runs in ci-full
+     2.9 s  ok  keys::tests::ed25519_fields  runs in ci-full
+     1.9 s  ok  keys::tests::hybrid_sig_checks_only_the_ed25519_half  runs in ci-full
+    23.8 s  ok  keys::tests::mlkem_fields  runs in ci-full
+     0.7 s  ok  keys::tests::x25519_field  runs in ci-full
+     0.0 s  ok  sizes::tests::sum_saturates_to_max_on_overflow  runs in ci-full
+    58.4 s  ok  wire::cell::tests::app_message_and_batch  runs in ci-full
+     1.8 s  ok  wire::cell::tests::cell_parts  runs in ci-full
+    15.7 s  ok  wire::cell::tests::content_types_padding_and_limits  runs in ci-full
+   360.1 s  ok  wire::cell::tests::fragment_payload_inner_types  skip in ci-full (MIRI_SKIP)
+     1.5 s  ok  wire::cell::tests::fragment_rules  runs in ci-full
+     1.7 s  ok  wire::cell::tests::handshake_body_caps_and_routes  runs in ci-full
+    13.6 s  ok  wire::cell::tests::header  runs in ci-full
+   215.5 s  ok  wire::cell::tests::key_change_receipt_control  skip in ci-full (MIRI_SKIP)
+     0.1 s  ok  wire::cell::tests::plaintext_fields_are_zeroizing  runs in ci-full
+    51.7 s  ok  wire::cell::tests::routes  runs in ci-full
+     9.2 s  ok  wire::cell::tests::secret_bearing_encodings_are_zeroizing  runs in ci-full
+     7.7 s  ok  wire::frame::tests::cellr_context_and_zero_rules  runs in ci-full
+   100.6 s  ok  wire::frame::tests::every_request_round_trips_at_frame_size  skip in ci-full (MIRI_SKIP)
+    78.7 s  ok  wire::frame::tests::every_response_round_trips_at_frame_size  skip in ci-full (MIRI_SKIP)
+   102.1 s  ok  wire::frame::tests::fetch_multi_count_and_link_get_rules  skip in ci-full (MIRI_SKIP)
+     2.3 s  ok  wire::frame::tests::opcode_table_equals_appendix_d2  runs in ci-full
+   444.0 s  ok  wire::frame::tests::reserved_and_foreign_opcodes_reject  skip in ci-full (MIRI_SKIP)
+     6.6 s  ok  wire::hx::tests::cell_plaintext_index_and_total  runs in ci-full
+     8.3 s  ok  wire::hx::tests::opaque_and_inner_structures  runs in ci-full
+    15.0 s  ok  wire::hx::tests::outer_is_padded_to_three_chunks  runs in ci-full
+   963.0 s  ok  wire::inv::tests::iks_bundle_link_data_blob  skip in ci-full (MIRI_SKIP)
+     2.2 s  ok  wire::inv::tests::invitation  runs in ci-full
+   187.0 s  ok  wire::inv::tests::largest_link_data_fits_its_padding  skip in ci-full (MIRI_SKIP)
+     1.1 s  ok  wire::inv::tests::onion_checksum_and_version  runs in ci-full
+     0.5 s  ok  wire::inv::tests::profile_names  runs in ci-full
+     5.1 s  ok  wire::inv::tests::relay_ref_with_and_without_direct  runs in ci-full
+    17.3 s  ok  wire::record::tests::handshake_records  runs in ci-full
+     0.1 s  ok  wire::record::tests::hello  runs in ci-full
+    24.1 s  ok  wire::record::tests::relay_info_and_its_record  runs in ci-full
+    28.7 s  ok  wire::signed::tests::exact_contents  runs in ci-full
+     8.2 s  ok  wire::signed::tests::lengths_and_labels  runs in ci-full
+     8.3 s  ok  wire::signed::tests::signed_messages_are_zeroizing  runs in ci-full
+     0.1 s  ok  wire::tests::periods  runs in ci-full
+          test result: ok. 48 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7361.17s
+          running 9 tests
+          (this run was stopped after the lib tests; its integration tests were measured in the runs below)
+
+## tests/canonical.rs (run 1: all tests in order)
+          running 9 tests
+   508.2 s  ok  edge_counters
+   764.4 s  ok  edge_enum_variants
+  1560.9 s  ok  edge_lengths
+          (still running when this file was written: the current test had run 55 min)
+
+## tests/canonical.rs (run 2, in parallel: --exact ratchet_cell_content_and_bodies records structures_with_...)
+          running 3 tests
+          (still running when this file was written: the current test had run 64 min)
+
+## tests/canonical.rs (run 3, in parallel: --exact handshake_envelope invitation_and_link_data)
+          running 2 tests
+          (still running when this file was written: the current test had run 54 min)
+
+## tests/encodings_ref.rs, tests/fuzz_max_len.rs
+          running 3 tests
+  4082.3 s  ok  canonical_writer_is_stable
+     0.1 s  error: unsupported operation: `statx` not available when isolation is enabled  every_row_of_the_encodings_file
+          running 1 test
+    22.7 s  ok  fuzz_max_len_is_the_largest_valid_input_plus_one
+          test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 71.05s
+          exit 101
+
+## tests/encodings_ref.rs --exact every_row_of_the_encodings_file, tests/fuzz_max_len.rs
+          running 1 test
+     0.1 s  error: unsupported operation: `statx` not available when isolation is enabled  every_row_of_the_encodings_file
+          running 1 test
+    23.5 s  ok  fuzz_max_len_is_the_largest_valid_input_plus_one
+          test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 71.07s
+          exit 101
+
+## doctests
+          running 0 tests
+          test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+          exit 0
+
+lib tests kept in ci-full: 323 s together in this measurement
+
+## The gate with these skips: cargo xtask step --strict miri (per package, same working tree)
+[     0.1 +    0.0]      Running `target/debug/xtask step --strict miri`
+[     0.7 +    0.0] $ LIBCRUX_DISABLE_SIMD128=1 LIBCRUX_DISABLE_SIMD256=1 CARGO_TARGET_DIR=/Users/c.carl/coding/claude_code/SecMPro/target/miri-portable rustup run nightly-2026-09-21 cargo miri test --locked --target aarch64-unknown-linux-gnu --package secmp-sys-mem --
+[     0.8 +    0.0]      Running unittests src/lib.rs (target/miri-portable/miri/aarch64-unknown-linux-gnu/debug/build/secmp-sys-mem/6f3692733721f462/out/secmp_sys_mem-6f3692733721f462)
+[     2.5 +    0.0] test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.10s
+[     2.6 +    0.0]    Doc-tests secmp_sys_mem
+[     2.6 +    0.0] test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+[     2.6 +    0.0] $ LIBCRUX_DISABLE_SIMD128=1 LIBCRUX_DISABLE_SIMD256=1 CARGO_TARGET_DIR=/Users/c.carl/coding/claude_code/SecMPro/target/miri-portable rustup run nightly-2026-09-21 cargo miri test --locked --target aarch64-unknown-linux-gnu --package secmp-sys-desktop --
+[     2.8 +    0.0]      Running unittests src/lib.rs (target/miri-portable/miri/aarch64-unknown-linux-gnu/debug/build/secmp-sys-desktop/f0e062453cf31cd2/out/secmp_sys_desktop-f0e062453cf31cd2)
+[     3.2 +    0.0] test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+[     3.2 +    0.0]    Doc-tests secmp_sys_desktop
+[     3.2 +    0.0] test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+[     3.2 +    0.0] $ LIBCRUX_DISABLE_SIMD128=1 LIBCRUX_DISABLE_SIMD256=1 CARGO_TARGET_DIR=/Users/c.carl/coding/claude_code/SecMPro/target/miri-portable rustup run nightly-2026-09-21 cargo miri test --locked --target aarch64-unknown-linux-gnu --package secmp-crypto -- --skip mldsa:: --skip hybrid_sign:: --skip sas::
+[     3.8 +    0.0]      Running unittests src/lib.rs (target/miri-portable/miri/aarch64-unknown-linux-gnu/debug/build/secmp-crypto/0708081e9731f67f/out/secmp_crypto-0708081e9731f67f)
+[   894.9 +    0.0] test result: ok. 65 passed; 0 failed; 0 ignored; 0 measured; 11 filtered out; finished in 2629.64s
+[   894.9 +    0.1]      Running tests/kat_curve25519.rs (target/miri-portable/miri/aarch64-unknown-linux-gnu/debug/build/secmp-crypto/de36867a918f8526/out/kat_curve25519-de36867a918f8526)
+[   895.4 +    0.0] test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+[   895.4 +    0.0]      Running tests/kat_mldsa.rs (target/miri-portable/miri/aarch64-unknown-linux-gnu/debug/build/secmp-crypto/e9ac7b85e6302d5e/out/kat_mldsa-e9ac7b85e6302d5e)
+[   895.8 +    0.0] test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+[   895.9 +    0.0]      Running tests/kat_mlkem.rs (target/miri-portable/miri/aarch64-unknown-linux-gnu/debug/build/secmp-crypto/7ec526eb9e68429e/out/kat_mlkem-7ec526eb9e68429e)
+[   896.3 +    0.0] test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+[   896.3 +    0.0]      Running tests/kat_symmetric.rs (target/miri-portable/miri/aarch64-unknown-linux-gnu/debug/build/secmp-crypto/af55788ae07d9bb8/out/kat_symmetric-af55788ae07d9bb8)
+[   896.8 +    0.0] test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+[   896.8 +    0.0]      Running tests/vectors.rs (target/miri-portable/miri/aarch64-unknown-linux-gnu/debug/build/secmp-crypto/7d50c879322992d4/out/vectors-7d50c879322992d4)
+[   897.2 +    0.0] test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+[   897.2 +    0.0]    Doc-tests secmp_crypto
+[   897.3 +    0.0] test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+[   897.3 +    0.0] $ LIBCRUX_DISABLE_SIMD128=1 LIBCRUX_DISABLE_SIMD256=1 CARGO_TARGET_DIR=/Users/c.carl/coding/claude_code/SecMPro/target/miri-portable rustup run nightly-2026-09-21 cargo miri test --locked --target aarch64-unknown-linux-gnu --package secmp-proto --lib --bins --test encodings_ref --test fuzz_max_len -- --skip wire::inv::tests::iks_bundle_link_data_blob --skip wire::frame::tests::reserved_and_foreign_opcodes_reject --skip wire::cell::tests::fragment_payload_inner_types --skip wire::cell::tests::key_change_receipt_control --skip wire::inv::tests::largest_link_data_fits_its_padding --skip wire::frame::tests::fetch_multi_count_and_link_get_rules --skip wire::frame::tests::every_request_round_trips_at_frame_size --skip wire::frame::tests::every_response_round_trips_at_frame_size --skip canonical_writer_is_stable --skip every_row_of_the_encodings_file --skip the_rust_generator_reproduces_every_positive_row
+[   897.7 +    0.0]      Running unittests src/lib.rs (target/miri-portable/miri/aarch64-unknown-linux-gnu/debug/build/secmp-proto/201b21115578f6aa/out/secmp_proto-201b21115578f6aa)
+[  1215.3 +    0.0] test result: ok. 40 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 967.74s
+[  1215.4 +    0.1]      Running tests/encodings_ref.rs (target/miri-portable/miri/aarch64-unknown-linux-gnu/debug/build/secmp-proto/0efcdd1abb4c08a7/out/encodings_ref-0efcdd1abb4c08a7)
+[  1216.2 +    0.0] test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.03s
+[  1216.3 +    0.0]      Running tests/fuzz_max_len.rs (target/miri-portable/miri/aarch64-unknown-linux-gnu/debug/build/secmp-proto/495df24c9dc27785/out/fuzz_max_len-495df24c9dc27785)
+[  1239.8 +    0.0] test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 71.07s
+[  1239.9 +    0.0] $ LIBCRUX_DISABLE_SIMD128=1 LIBCRUX_DISABLE_SIMD256=1 CARGO_TARGET_DIR=/Users/c.carl/coding/claude_code/SecMPro/target/miri-portable rustup run nightly-2026-09-21 cargo miri test --locked --target aarch64-unknown-linux-gnu --package secmp-proto --doc -- --skip wire::inv::tests::iks_bundle_link_data_blob --skip wire::frame::tests::reserved_and_foreign_opcodes_reject --skip wire::cell::tests::fragment_payload_inner_types --skip wire::cell::tests::key_change_receipt_control --skip wire::inv::tests::largest_link_data_fits_its_padding --skip wire::frame::tests::fetch_multi_count_and_link_get_rules --skip wire::frame::tests::every_request_round_trips_at_frame_size --skip wire::frame::tests::every_response_round_trips_at_frame_size --skip canonical_writer_is_stable --skip every_row_of_the_encodings_file --skip the_rust_generator_reproduces_every_positive_row
+[  1240.1 +    0.0]    Doc-tests secmp_proto
+[  1240.2 +    0.0] test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+[  1240.2 +    0.0]    9 miri            PASS       1239s  Miri (nightly-2026-09-21, interpreting aarch64-unknown-linux-gnu, libcrux portable backend): secmp-sys-mem, secmp-sys-desktop, secmp-crypto, secmp-proto; skipped tests: secmp-crypto: mldsa::, secmp-crypto: hybrid_sign::, secmp-crypto: sas::, secmp-proto: wire::inv::tests::iks_bundle_link_data_blob, secmp-proto: wire::frame::tests::reserved_and_foreign_opcodes_reject, secmp-proto: wire::cell::tests::fragment_payload_inner_types, secmp-proto: wire::cell::tests::key_change_receipt_control, secmp-proto: wire::inv::tests::largest_link_data_fits_its_padding, secmp-proto: wire::frame::tests::fetch_multi_count_and_link_get_rules, secmp-proto: wire::frame::tests::every_request_round_trips_at_frame_size, secmp-proto: wire::frame::tests::every_response_round_trips_at_frame_size, secmp-proto: test-target:canonical, secmp-proto: canonical_writer_is_stable, secmp-proto: every_row_of_the_encodings_file, secmp-proto: the_rust_generator_reproduces_every_positive_row
+[  1240.2 +    0.0] step: PASS
+
+M3 TR tests under Miri (macOS arm64, nightly-2026-09-21, LIBCRUX_DISABLE_SIMD128=1 LIBCRUX_DISABLE_SIMD256=1,
+CARGO_TARGET_DIR=target/miri-portable, --target aarch64-unknown-linux-gnu; host wall time from
+target/tmp/peakrss.py; 2026-10-01, working tree after the TR core commits e154473 + uncommitted M3 test work):
+- `--lib tr:: -- --skip tr::tests:: --skip tr::entropy::` (tr::select: 2 tests): 13 s host wall (libtest 28.09 s), ok.
+- `--lib tr::entropy::` (2 tests): 63 s host wall (libtest 203.51 s), ok — kept.
+- `--lib tr::tests::reject_cell_length -- --exact` (1 test, the lightest ratchet unit test): 125 s host wall (libtest
+  419.14 s), ok — the 51 tests of tr::tests together ≈ 1.8 h → expect::MIRI_SKIP `tr::tests::`.
+- `--test tr_smoke` (1 test: both roles, 6 encrypts, 6 decrypts with 3 DH steps, reordering, a rejected replay,
+  persistence round trip): 360 s host wall (libtest 1153.59 s), ok — kept as the representative TR run.
+- The `kat`-only targets tr_vectors, tr_generator, tr_properties (required-features = ["kat"]) are not built by the
+  Miri run (gates::miri_with filters test targets with required-features); they run natively in the kat step.

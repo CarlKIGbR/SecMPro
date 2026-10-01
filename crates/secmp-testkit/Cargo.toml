@@ -10,17 +10,30 @@ repository.workspace = true
 publish.workspace = true
 
 [features]
-# The differential tests (tests/differential.rs): secmp-crypto against ml-kem and aws-lc-rs (docs/06 §4).
+# The differential tests (tests/differential.rs): secmp-crypto against ml-kem and aws-lc-rs (docs/06 §4); the
+# constant-time bench (benches/ct.rs).
 kat = []
 
 [dependencies]
 serde_json.workspace = true
 
+# Test-only. `chacha20poly1305`, `subtle` and `sha3` serve the constant-time bench (its isolating CAEAD targets and
+# its input stream), `secmp-proto` its TR targets (ADR-042); all are workspace crates of the vetted closure.
 [dev-dependencies]
 secmp-crypto = { workspace = true, features = ["kat"] }
+secmp-proto = { workspace = true, features = ["kat"] }
 ml-kem.workspace = true
 aws-lc-rs.workspace = true
 sha3.workspace = true
+chacha20poly1305.workspace = true
+subtle.workspace = true
+
+# dudect-style constant-time tests (release profile), run by `cargo xtask step ct` (ADR-038, ADR-041); moved here from
+# secmp-crypto by ADR-042.
+[[bench]]
+name = "ct"
+harness = false
+required-features = ["kat"]
 
 [lints]
 workspace = true

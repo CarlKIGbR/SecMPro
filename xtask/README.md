@@ -6,13 +6,13 @@ Build, CI, supply-chain and release automation (docs/06 §5). The alias lives in
 | Command | What it does |
 |---|---|
 | `ci-fast [--strict]` | docs/06 §5 steps 1–5: `fmt`, `clippy`, `policy`, `deny`, `vet`, `audit`, `cooldown`, `nextest`, `doctest`, `hello`, `kat` |
-| `ci-full [--strict] [--delegated ID]…` (`ci`) | steps 1–14: the above plus `fuzz`, `coverage`, `mutants`, `miri`, `kani`, `proverif`, `windows-cross`, `windows-native`, `linux-target`, `ref-vectors`, `repro`, `sbom`, `systemd` |
-| `step [--strict] ID…` | run selected steps |
+| `ci-full [--strict] [--delegated ID]…` (`ci`) | steps 1–14: the above plus `perf` (M3: TR encrypt+decrypt < 3 ms), `ct`, `fuzz`, `coverage`, `mutants`, `miri`, `kani`, `proverif`, `windows-cross`, `windows-native`, `linux-target`, `ref-vectors`, `repro`, `sbom`, `systemd` |
+| `step [--strict] ID…` | run selected steps, also the on-demand steps outside `ci-full`: `miri-full` (weekly workflow `miri-full.yml`) and `fuzz-nightly` (the 4 h campaign of the daily workflow `fuzz-nightly.yml`) |
 | `policy`, `cooldown`, `sbom` | shortcuts for single steps |
 | `win-test --backend github\|libvirt [--rerun\|--dispatch]` | the Windows gate (below) |
-| `install-tools [--set fast\|windows\|xwin\|full\|all] [--nightly]` | install the pinned tools (`src/tools.rs`); `SECMP_TOOLS_ROOT` sets `cargo install --root` |
+| `install-tools [--set fast\|windows\|xwin\|miri\|fuzz\|full\|all] [--nightly]` | install the pinned tools (`src/tools.rs`); `SECMP_TOOLS_ROOT` sets `cargo install --root` |
 | `vectors`, `repro-check`, `ops-check` | documented stubs until M1, M11 and M10; they exit non-zero |
-| `ct-check REPORT…` | the `ct` gate's reading of saved ct reports (`target/ct-report.json` or committed evidence): re-derives every verdict and control from the recorded statistics (M2 review C3); fails unless every report passes |
+| `ct-check [--targets current\|m2] REPORT…` | the `ct` gate's reading of saved ct reports (`target/ct-report.json` or committed evidence): re-derives every verdict and control from the recorded statistics (M2 review C3, F15–F17); fails unless every report passes. `--targets m2` reads the committed M2 reports against the target set they were written with (before ADR-042 added `aa_prime_control`) |
 
 Every step ends as PASS, FAIL, SKIP (not applicable on this host, e.g. `systemd-analyze` on macOS), DELEGATED
 (handed to another CI job with `--delegated`) or STUB. All steps run and a summary table is printed. **CI always

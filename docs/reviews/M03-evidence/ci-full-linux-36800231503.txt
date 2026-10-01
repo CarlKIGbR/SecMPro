@@ -1,0 +1,74 @@
+PR #4, PR run 36800231503 (pull_request), job linux-full (110172679379), head 665e84e1bc4ee0b6961107e6f5926dc057d22924; the ci-full step summary.
+Extracted from `gh run view 36800231503 --job <id> --log` after the run completed (2026-10-01 03:24 UTC);
+timestamps and ANSI colour codes removed. M3 review C7 (first half: the reviewed head's run).
+
+=== ci-full summary (host x86_64-unknown-linux-gnu, strict: true) ===
+   1 fmt             PASS          0s  rustfmt: no changes
+   2 clippy          PASS         21s  clippy --all-features -D warnings on x86_64-unknown-linux-gnu (12 crates)
+   2 policy          PASS          0s  unsafe-attrs: 29 target roots forbid, 2 sys library roots allow, 1 ADR-038 bench root allows (crates/secmp-testkit/benches/ct.rs), 2 secmp-ui roots deny, 2 secmp-ui files without `unsafe`; lints-table: 12 manifests; lint-allows: 53 relaxing attributes (all sanctioned); build-scripts: 12 crates, none; spdx: 177 files; secmp-crypto/secmp-proto normal closure (x86_64-unknown-linux-gnu, x86_64-pc-windows-msvc, aarch64-apple-darwin): 52 external crates, 0 exempted; tracked exemptions elsewhere: 25; workflows: 4 files, triggers/SHA pins/continue-on-error ok; required checks only in ci.yml, no dispatch there, job conditions as pinned
+   3 deny            PASS          0s  advisories, bans, licenses, sources: ok
+   3 vet             PASS          0s  secmp-crypto/secmp-proto normal closure (x86_64-unknown-linux-gnu, x86_64-pc-windows-msvc, aarch64-apple-darwin): 52 external crates, 0 exempted; tracked exemptions elsewhere: 25
+   3 audit           PASS          3s  RustSec: no advisories (warnings denied); ignored with an ADR: RUSTSEC-2026-0173
+   3 cooldown        PASS          5s  119 registry packages (Cargo.lock, fuzz/Cargo.lock), all ≥ 7 days old; youngest: rand 0.10.3, 10 days
+   4 nextest         PASS        125s  cargo nextest run --workspace
+   4 doctest         PASS          0s  cargo test --doc
+   4 hello           PASS          0s  secmp-relay 0.0.0 (M0 skeleton: no functionality) | secmp-cli 0.0.0 (M0 skeleton: no functionality) | secmp-ui 0.0.0 (M0 skeleton: no functionality)
+   5 kat             PASS        692s  KAT/differential packages: secmp-crypto, secmp-proto, secmp-testkit (expected set matches); ML-KEM KATs and frozen vectors (M1 suites, tr) also with libcrux's portable backend
+   5 perf            PASS         17s  encrypt+persist+decrypt+commit per message, 200 messages per kind on x86_64-unknown-linux-gnu: chain: median 36.4 µs, max 64.4 µs; step: median 254.6 µs, max 305.0 µs; every maximum below 3 ms
+   5 ct              FAIL        303s  constant-time test failed: CONTROL_FAIL — sensitivity control min_leak_control below the effect floor: raw Δ -589.64 ticks < floor 26.00 ticks (1 q_eff, 10 ns)
+   6 fuzz            PASS       1731s  fuzz smoke, 120 s per target on the vector-seeded scratch corpus plus the tracked corpus (read-only), -max_len from expect::FUZZ_MAX_LEN: caead_open, ed25519_verify, hybrid_sign_verify, mldsa65_verify, mlkem_parse, msg_open, proto_cell, proto_frames, proto_handshake, proto_invitation, proto_records, tr_decrypt, tr_state, x25519_dh (expected set matches); vector seeds: caead_open 25, ed25519_verify 25, hybrid_sign_verify 42, mldsa65_verify 34, mlkem_parse 86, msg_open 24, proto_cell 190, proto_frames 182, proto_handshake 40, proto_invitation 132, proto_records 81, tr_decrypt 53, tr_state 1, x25519_dh 54
+   7 coverage        PASS        132s  secmp-cli: 5/6 lines = 83.3 % (min 80 %); secmp-client-core: no code; secmp-crypto: 2309/2320 lines = 99.5 % (min 90 %); secmp-proto: 3624/3642 lines = 99.5 % (min 90 %); secmp-relay: 5/6 lines = 83.3 % (min 80 %); secmp-store: no code; secmp-sys-desktop: no code; secmp-sys-mem: 234/246 lines = 95.1 % (min 80 %); secmp-testkit: 172/172 lines = 100.0 % (min 80 %); secmp-transport: no code; secmp-ui: 5/6 lines = 83.3 % (min 80 %) (xtask not measured)
+   8 mutants         PASS       1529s  secmp-crypto, secmp-proto: 896 mutants tested in 25m: 1 missed, 612 caught, 283 unviable; survivors documented in docs/mutants-accepted.md: 1
+   9 miri            PASS       1621s  Miri (nightly-2026-09-21, interpreting aarch64-unknown-linux-gnu, libcrux portable backend): secmp-sys-mem, secmp-sys-desktop, secmp-crypto, secmp-proto; skipped tests: secmp-crypto: mldsa::, secmp-crypto: hybrid_sign::, secmp-crypto: sas::, secmp-proto: wire::inv::tests::iks_bundle_link_data_blob, secmp-proto: wire::frame::tests::reserved_and_foreign_opcodes_reject, secmp-proto: wire::cell::tests::fragment_payload_inner_types, secmp-proto: wire::cell::tests::key_change_receipt_control, secmp-proto: wire::inv::tests::largest_link_data_fits_its_padding, secmp-proto: wire::frame::tests::fetch_multi_count_and_link_get_rules, secmp-proto: wire::frame::tests::every_request_round_trips_at_frame_size, secmp-proto: wire::frame::tests::every_response_round_trips_at_frame_size, secmp-proto: tr::tests::, secmp-proto: test-target:canonical, secmp-proto: canonical_writer_is_stable, secmp-proto: every_row_of_the_encodings_file, secmp-proto: the_rust_generator_reproduces_every_positive_row
+   9 kani            PASS        669s  Kani 0.68.0: harness packages secmp-proto (expected set matches); 19/19 harnesses verified (expect::KANI_HARNESSES): kani_proofs::cell, kani_proofs::header_v1, kani_proofs::header_v1_reencodes, kani_proofs::padding, kani_proofs::request_cont, kani_proofs::request_fetch, kani_proofs::request_fetch_multi, kani_proofs::request_frame, kani_proofs::request_link_get, kani_proofs::request_link_put, kani_proofs::request_ping, kani_proofs::request_queue_del, kani_proofs::request_queue_new, kani_proofs::request_send, kani_proofs::request_skey, kani_proofs::response_frame, kani_proofs::tr_eviction, kani_proofs::tr_header_selection, kani_proofs::tr_skip_plan
+  10 proverif        PASS         80s  ProVerif 2.05 self-test [true, false] ok; models: tr (expected set matches); formal/tr.pv: 39 RESULT lines as expected — T1 true ×6, T2 true ×2, T3 true ×4, T4 true ×2, T5 true ×2, T6 true ×2, T7 false ×2, an attack as expected, T8 true ×12, T9 true ×4, T10 false ×1, an attack as expected, T11 true ×1, T12 false ×1, informative (80 s)
+  11 windows-cross   DELEGATED     0s  handed to another CI job with --delegated
+  11 windows-native  DELEGATED     0s  handed to another CI job with --delegated
+  11 linux-target    PASS          0s  host is x86_64-unknown-linux-gnu: every step above ran natively
+ 12a ref-vectors     PASS          0s  10 frozen suites (846 cases) structurally and byte-identical to vectors/ref (ADR-026); pending freeze (shape only): none
+  12 repro           STUB          0s  two-builder reproducibility check becomes real in M11 (`cargo xtask repro-check`)
+  13 sbom            PASS          4s  12 CycloneDX SBOMs in target/sbom; auditable release builds (x86_64-unknown-linux-gnu, remapped paths) read back by `cargo audit bin`: target/release/secmp-relay, target/release/secmp-cli, target/release/secmp-ui
+  14 systemd         PASS          0s  systemd 255 (255.4-1ubuntu8.17); self-test: unhardened fixture 9.4 > 2 rejected; units: none (deploy/secmp-relay.service arrives in M10)
+xtask: error: ci-full: 1 step(s) failed
+##[error]Process completed with exit code 1.
+﻿2026-10-01T03:24:12.3845618Z ##[group]Run actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+with:
+  name: ct-report-Linux-X64-d25f1a11300af5af2dd903791b82704d533c6e6d-1
+  path: target/ct-report.json
+  if-no-files-found: error
+  compression-level: 6
+  overwrite: false
+  include-hidden-files: false
+  archive: true
+env:
+  CARGO_TERM_COLOR: always
+  SECMP_TOOLS_ROOT: /home/runner/.secmp-tools
+##[endgroup]
+With the provided path, there will be 1 file uploaded
+Artifact name is valid!
+Root directory input is valid!
+Uploading artifact: ct-report-Linux-X64-d25f1a11300af5af2dd903791b82704d533c6e6d-1.zip
+Beginning upload of artifact content to blob storage
+Uploaded bytes 16490
+Finished uploading artifact content to blob storage!
+SHA256 digest of uploaded artifact is ce53940161192d635ef61102a2ef69db4fdf2fe19a1944d8004421e79228f161
+Finalizing artifact upload
+Artifact ct-report-Linux-X64-d25f1a11300af5af2dd903791b82704d533c6e6d-1 successfully finalized. Artifact ID 11139073694
+Artifact ct-report-Linux-X64-d25f1a11300af5af2dd903791b82704d533c6e6d-1 has been successfully uploaded! Final size is 16490 bytes. Artifact ID is 11139073694
+Artifact download URL: https://github.com/CarlKIGbR/SecMPro/actions/runs/36800231503/artifacts/11139073694
+﻿2026-10-01T03:24:13.5240931Z Post job cleanup.
+[command]/usr/bin/git version
+git version 2.55.0
+Temporarily overriding HOME='/home/runner/work/_temp/c8023611-b8fd-4aae-9466-aacff5ab630e' before making global git config changes
+Adding repository directory to the temporary git global config as a safe directory
+[command]/usr/bin/git config --global --add safe.directory /home/runner/work/SecMPro/SecMPro
+Removing SSH command configuration
+[command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+[command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+Removing HTTP extra header
+[command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+[command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+Removing includeIf entries pointing to credentials config files
+[command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+[command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+﻿2026-10-01T03:24:13.6676530Z Cleaning up orphan processes

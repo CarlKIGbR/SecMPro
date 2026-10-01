@@ -1,0 +1,17 @@
+PR #4, PR run 36800231503 (pull_request), job linux-full (110172679379), head 665e84e1bc4ee0b6961107e6f5926dc057d22924; the perf step.
+Extracted from `gh run view 36800231503 --job <id> --log` after the run completed (2026-10-01 03:24 UTC);
+timestamps and ANSI colour codes removed. M3 review C7 (first half: the reviewed head's run).
+
+=== [5] perf ===
+$ /home/runner/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/cargo run --release --locked -p secmp-proto --example tr-perf -- target/tr-perf.txt
+    Finished `release` profile [optimized] target(s) in 17.81s
+     Running `target/release/examples/tr-perf target/tr-perf.txt`
+  tr-perf host=x86_64-unknown-linux-gnu
+  tr-perf n=200
+  tr-perf warmup=20
+  tr-perf chain_median_us=36.4
+  tr-perf chain_max_us=64.4
+  tr-perf step_median_us=254.6
+  tr-perf step_max_us=305.0
+
+   5 perf            PASS         17s  encrypt+persist+decrypt+commit per message, 200 messages per kind on x86_64-unknown-linux-gnu: chain: median 36.4 µs, max 64.4 µs; step: median 254.6 µs, max 305.0 µs; every maximum below 3 ms

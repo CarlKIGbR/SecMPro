@@ -53,7 +53,7 @@ v1.1: M16 → M17 → M18 → M19 → M20 (release)
 
 ### M2 — `secmp-proto`: encodings, cells, frames, command types (M)
 
-**Status (2026-09-30).** Started 2026-09-29 on branch `m02-proto` from `main` at `bc8d6d559795cf515bcf08f63fcfe0b9eb3058d9`; spec rev 2.3 (ADR-039) and the `encodings` reference file were committed first. Reviewed 2026-09-30 (`docs/reviews/M02-review.md`, APPROVED WITH CONDITIONS; conditions met in `b75679d`), merged <pending>.
+**Status (2026-09-30).** Started 2026-09-29 on branch `m02-proto` from `main` at `bc8d6d559795cf515bcf08f63fcfe0b9eb3058d9`; spec rev 2.3 (ADR-039) and the `encodings` reference file were committed first. Reviewed 2026-09-30 (`docs/reviews/M02-review.md`, APPROVED WITH CONDITIONS; conditions met in `b75679d`), merged as `e4a3d55` (PR #3).
 
 **Deliverables.** `Encode`/`Decode` for every structure in Appendix D; padding helpers; size constants with compile-time assertions; property tests (canonicality), ≥ 200 negative vectors, Kani harnesses for `Cell`/`Frame`/`HeaderV1`/frame-plaintext parsing, fuzz targets for every decoder; `ref/` encoders for cross-generated positive vectors.
 
@@ -64,6 +64,8 @@ v1.1: M16 → M17 → M18 → M19 → M20 (release)
 ---
 
 ### M3 — SecMP-TR hybrid ratchet (sans-IO) + ProVerif model (L)
+
+**Status (2026-10-01).** Started 2026-09-30 on branch `m03-tr` from `main` at `e4a3d55bb1f67db83ed4d6346e40d6404ba7dffd`; the reference implementation's TR files and `formal/CLAIMS.md` §TR were committed first. Report: `docs/reviews/M03-report.md`; review pending.
 
 **Goal.** The Double Ratchet (header-encryption variant) with hybrid KEM steps, robust to loss, reordering, huge gaps and restarts, initialised from a supplied `SK` (HX comes in M4).
 

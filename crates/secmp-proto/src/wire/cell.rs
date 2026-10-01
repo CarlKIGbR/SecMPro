@@ -7,7 +7,8 @@
 //! - Bodies: Handshake (`caps` = 0, 1..=255 routes), Batch (1..=255 messages), Fragment (`idx` < `total`,
 //!   2 ≤ `total` ≤ 64, `chunk` ≥ 1 B), `RouteUpdate` (1..=255 routes), `KeyChange`, Receipt (1..=255 ids), Control;
 //!   the reassembled Fragment payload `inner_type ‖ inner_body` with `inner_type` ∈ {0x02, 0x04, 0x05, 0x06, 0x07}.
-//! - `AppMessage.payload` and `Control.arg` are opaque length-prefixed bytes (spec §7.6, rev 2.3).
+//! - `AppMessage.payload` and `Control.arg` are opaque length-prefixed bytes (spec §7.6, rev 2.3); as decrypted
+//!   content they are held in zeroizing buffers (external review EXT-5, F21).
 //! - `RouteDescriptor`: kind 0x01 is a `RelayQueue`; every other kind is kept as opaque bytes (spec §9.8: v1
 //!   clients ignore unknown kinds; keeping them makes re-encoding canonical).
 
@@ -27,8 +28,8 @@ use crate::wire::{Id, Period, read_ver, write_ver};
 
 /// A ratchet cell `hdr_nonce[24] ‖ hdr_ct[2330] ‖ body_ct[1710] ‖ tag[32]` (4096 B). Opaque here: only its length
 /// is checked (`SCHEMA-4.8` D-13); the parts are views.
-#[derive(Clone, PartialEq, Eq)]
-#[cfg_attr(test, derive(Debug))]
+#[derive(Clone)]
+#[cfg_attr(test, derive(PartialEq, Eq, Debug))]
 pub struct Cell(Box<[u8; CELL_LEN]>);
 
 impl Cell {
@@ -205,7 +206,8 @@ impl AppKind {
     }
 }
 
-/// `AppMessage = msg_id[16] ‖ kind u8 ‖ expire_after u32 ‖ payload_len u16 ‖ payload` (payload opaque).
+/// `AppMessage = msg_id[16] ‖ kind u8 ‖ expire_after u32 ‖ payload_len u16 ‖ payload` (payload opaque). The
+/// payload is decrypted message content, confidential: it is zeroized on drop (external review EXT-5, F21).
 #[derive(Clone, PartialEq, Eq)]
 #[cfg_attr(test, derive(Debug))]
 pub struct AppMessage {
@@ -215,8 +217,8 @@ pub struct AppMessage {
     pub kind: AppKind,
     /// Seconds until expiry (0: none).
     pub expire_after: u32,
-    /// Opaque payload, at most 65535 bytes.
-    pub payload: Vec<u8>,
+    /// Opaque payload, at most 65535 bytes (zeroized on drop).
+    pub payload: Zeroizing<Vec<u8>>,
 }
 
 impl Encode for AppMessage {
@@ -234,7 +236,7 @@ impl Decode for AppMessage {
             msg_id: r.array()?,
             kind: AppKind::from_byte(r.u8()?)?,
             expire_after: r.u32()?,
-            payload: r.prefixed_u16()?.to_vec(),
+            payload: Zeroizing::new(r.prefixed_u16()?.to_vec()),
         })
     }
 }
@@ -574,14 +576,15 @@ pub enum ControlCode {
     SessionResetRequest,
 }
 
-/// `Control body = code u8 ‖ arg_len u16 ‖ arg` (arg opaque).
+/// `Control body = code u8 ‖ arg_len u16 ‖ arg` (arg opaque; decrypted content, zeroized on drop — external review
+/// EXT-5, F21).
 #[derive(Clone, PartialEq, Eq)]
 #[cfg_attr(test, derive(Debug))]
 pub struct ControlBody {
     /// The code.
     pub code: ControlCode,
-    /// Opaque argument, at most 65535 bytes.
-    pub arg: Vec<u8>,
+    /// Opaque argument, at most 65535 bytes (zeroized on drop).
+    pub arg: Zeroizing<Vec<u8>>,
 }
 
 impl Encode for ControlBody {
@@ -603,7 +606,7 @@ impl Decode for ControlBody {
         };
         Ok(Self {
             code,
-            arg: r.prefixed_u16()?.to_vec(),
+            arg: Zeroizing::new(r.prefixed_u16()?.to_vec()),
         })
     }
 }
@@ -847,7 +850,7 @@ mod tests {
             msg_id: [kind.byte(); 16],
             kind,
             expire_after: 60,
-            payload: vec![0x61; len],
+            payload: Zeroizing::new(vec![0x61; len]),
         }
     }
 
@@ -927,6 +930,19 @@ mod tests {
         };
         let blob: Zeroizing<Vec<u8>> = blob;
         assert_eq!(*blob, [7]);
+        Ok(())
+    }
+
+    /// F21 (external review EXT-5): the decrypted plaintext fields `AppMessage.payload` and `ControlBody.arg` are
+    /// `Zeroizing<Vec<u8>>`, decoded values included (a change of either field type fails to compile here).
+    #[test]
+    fn plaintext_fields_are_zeroizing() -> Result<()> {
+        let m = AppMessage::decode(&round_trip(&message(AppKind::Text, 3))?)?;
+        let payload: &Zeroizing<Vec<u8>> = &m.payload;
+        assert_eq!(**payload, [0x61; 3]);
+        let c = ControlBody::decode(&[1, 0, 2, 9, 9])?;
+        let arg: &Zeroizing<Vec<u8>> = &c.arg;
+        assert_eq!(**arg, [9, 9]);
         Ok(())
     }
 
@@ -1066,7 +1082,7 @@ mod tests {
         ] {
             let c = ControlBody {
                 code,
-                arg: vec![4; 16],
+                arg: Zeroizing::new(vec![4; 16]),
             };
             exact_fit::<ControlBody>(&round_trip(&c)?);
         }
@@ -1093,7 +1109,7 @@ mod tests {
             }),
             ContentBody::Control(ControlBody {
                 code: ControlCode::SessionResetRequest,
-                arg: vec![],
+                arg: Zeroizing::new(vec![]),
             }),
             ContentBody::RouteUpdate(RouteUpdateBody {
                 routes: vec![RouteDescriptor::RelayQueue(relay_queue(true, Period::S40)?)],
@@ -1175,7 +1191,7 @@ mod tests {
                 content_type::CONTROL,
                 FragmentPayload::Control(ControlBody {
                     code: ControlCode::ContactRemoved,
-                    arg: vec![5; 2_000],
+                    arg: Zeroizing::new(vec![5; 2_000]),
                 }),
             ),
         ];

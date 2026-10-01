@@ -1,0 +1,44 @@
+PR #4, PR run 36800231503 (pull_request), job linux-full (110172679379), head 665e84e1bc4ee0b6961107e6f5926dc057d22924; the Miri gate (ci-full step 9): the invocations per package and the summary.
+Extracted from `gh run view 36800231503 --job <id> --log` after the run completed (2026-10-01 03:24 UTC);
+timestamps and ANSI colour codes removed. M3 review C7 (first half: the reviewed head's run).
+
+$ rustup component list --installed --toolchain nightly-2026-09-21
+$ rustup run nightly-2026-09-21 cargo miri setup --target aarch64-unknown-linux-gnu
+$ LIBCRUX_DISABLE_SIMD128=1 LIBCRUX_DISABLE_SIMD256=1 CARGO_TARGET_DIR=/home/runner/work/SecMPro/SecMPro/target/miri-portable rustup run nightly-2026-09-21 cargo miri test --locked --target aarch64-unknown-linux-gnu --package secmp-sys-mem --
+running 7 tests
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.10s
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+$ LIBCRUX_DISABLE_SIMD128=1 LIBCRUX_DISABLE_SIMD256=1 CARGO_TARGET_DIR=/home/runner/work/SecMPro/SecMPro/target/miri-portable rustup run nightly-2026-09-21 cargo miri test --locked --target aarch64-unknown-linux-gnu --package secmp-sys-desktop --
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+$ LIBCRUX_DISABLE_SIMD128=1 LIBCRUX_DISABLE_SIMD256=1 CARGO_TARGET_DIR=/home/runner/work/SecMPro/SecMPro/target/miri-portable rustup run nightly-2026-09-21 cargo miri test --locked --target aarch64-unknown-linux-gnu --package secmp-crypto -- --skip mldsa:: --skip hybrid_sign:: --skip sas::
+running 65 tests
+test result: ok. 65 passed; 0 failed; 0 ignored; 0 measured; 11 filtered out; finished in 2625.93s
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+$ LIBCRUX_DISABLE_SIMD128=1 LIBCRUX_DISABLE_SIMD256=1 CARGO_TARGET_DIR=/home/runner/work/SecMPro/SecMPro/target/miri-portable rustup run nightly-2026-09-21 cargo miri test --locked --target aarch64-unknown-linux-gnu --package secmp-proto --lib --bins --test encodings_ref --test fuzz_max_len --test tr_smoke -- --skip wire::inv::tests::iks_bundle_link_data_blob --skip wire::frame::tests::reserved_and_foreign_opcodes_reject --skip wire::cell::tests::fragment_payload_inner_types --skip wire::cell::tests::key_change_receipt_control --skip wire::inv::tests::largest_link_data_fits_its_padding --skip wire::frame::tests::fetch_multi_count_and_link_get_rules --skip wire::frame::tests::every_request_round_trips_at_frame_size --skip wire::frame::tests::every_response_round_trips_at_frame_size --skip tr::tests:: --skip canonical_writer_is_stable --skip every_row_of_the_encodings_file --skip the_rust_generator_reproduces_every_positive_row
+running 45 tests
+test result: ok. 45 passed; 0 failed; 0 ignored; 0 measured; 56 filtered out; finished in 1204.93s
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.03s
+running 1 test
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 73.09s
+running 1 test
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1160.07s
+$ LIBCRUX_DISABLE_SIMD128=1 LIBCRUX_DISABLE_SIMD256=1 CARGO_TARGET_DIR=/home/runner/work/SecMPro/SecMPro/target/miri-portable rustup run nightly-2026-09-21 cargo miri test --locked --target aarch64-unknown-linux-gnu --package secmp-proto --doc -- --skip wire::inv::tests::iks_bundle_link_data_blob --skip wire::frame::tests::reserved_and_foreign_opcodes_reject --skip wire::cell::tests::fragment_payload_inner_types --skip wire::cell::tests::key_change_receipt_control --skip wire::inv::tests::largest_link_data_fits_its_padding --skip wire::frame::tests::fetch_multi_count_and_link_get_rules --skip wire::frame::tests::every_request_round_trips_at_frame_size --skip wire::frame::tests::every_response_round_trips_at_frame_size --skip tr::tests:: --skip canonical_writer_is_stable --skip every_row_of_the_encodings_file --skip the_rust_generator_reproduces_every_positive_row
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+   9 miri            PASS       1621s  Miri (nightly-2026-09-21, interpreting aarch64-unknown-linux-gnu, libcrux portable backend): secmp-sys-mem, secmp-sys-desktop, secmp-crypto, secmp-proto; skipped tests: secmp-crypto: mldsa::, secmp-crypto: hybrid_sign::, secmp-crypto: sas::, secmp-proto: wire::inv::tests::iks_bundle_link_data_blob, secmp-proto: wire::frame::tests::reserved_and_foreign_opcodes_reject, secmp-proto: wire::cell::tests::fragment_payload_inner_types, secmp-proto: wire::cell::tests::key_change_receipt_control, secmp-proto: wire::inv::tests::largest_link_data_fits_its_padding, secmp-proto: wire::frame::tests::fetch_multi_count_and_link_get_rules, secmp-proto: wire::frame::tests::every_request_round_trips_at_frame_size, secmp-proto: wire::frame::tests::every_response_round_trips_at_frame_size, secmp-proto: tr::tests::, secmp-proto: test-target:canonical, secmp-proto: canonical_writer_is_stable, secmp-proto: every_row_of_the_encodings_file, secmp-proto: the_rust_generator_reproduces_every_positive_row

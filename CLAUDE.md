@@ -71,7 +71,7 @@ Install once: `cargo install cargo-nextest cargo-deny cargo-vet cargo-audit carg
 - Use the exact labels from spec Appendix A. Adding a label = spec change.
 - Bind every public key, ciphertext and version byte into the transcript/AD exactly as the spec lists them.
 - Check every X25519 output for all-zero; use `verify_strict`; validate ML-KEM encapsulation keys on import; store decapsulation keys as seeds.
-- Counters: `checked_add`, abort on overflow; strict `+1` on receive.
+- Counters: `checked_add`, abort on overflow; strict `+1` on receive. Note (ADR-043 (k), M3 review R-54): "strict +1 on receive" applies to LINK frame counters (§8.4), not to TR message numbers (§7.4).
 - Trial decryption and MAC checks must do constant work regardless of outcome; compare tags with `subtle`.
 - Tests that only round-trip your own code do not count; use Wycheproof/ACVP/RFC vectors and the frozen SecMP vectors.
 

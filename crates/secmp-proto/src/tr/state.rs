@@ -31,10 +31,10 @@ use std::collections::VecDeque;
 
 use secmp_crypto::{
     Choice, ConstantTimeEq, MlKem768Ct, MlKem768Dk, MlKem768Ek, SecretBytes, X25519Secret,
-    Zeroizing,
 };
 
-use crate::codec::{Reader, Writer};
+// the encodings' zeroizing buffer (`secmp_crypto::Zeroizing`; a stand-in under Kani, see `codec`)
+use crate::codec::{Reader, Writer, Zeroizing};
 use crate::error::{Error, Result};
 use crate::keys::{self, X25519Pk};
 use crate::sizes::{HASH_LEN, MLKEM768_CT_LEN, MLKEM768_EK_LEN, X25519_PK_LEN, sum};

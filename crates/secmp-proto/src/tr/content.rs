@@ -22,11 +22,10 @@
 
 use std::collections::VecDeque;
 
-use secmp_crypto::{
-    ConstantTimeEq, Fingerprint, HybridSignature, HybridVerifyingKey, Label, Zeroizing,
-};
+use secmp_crypto::{ConstantTimeEq, Fingerprint, HybridSignature, HybridVerifyingKey, Label};
 
-use crate::codec::{Decode, Encode, Reader, Writer};
+// the encodings' zeroizing buffer (`secmp_crypto::Zeroizing`; a stand-in under Kani, see `codec`)
+use crate::codec::{Decode, Encode, Reader, Writer, Zeroizing};
 use crate::error::{Error, Result};
 use crate::sizes::{
     CONTENT_BODY_MAX, FRAGMENT_HEADER_LEN, FRAGMENT_TOTAL_MAX, FRAGMENT_TOTAL_MIN, ID_LEN,
@@ -245,7 +244,13 @@ impl Inbox {
         let Some(done) = self.partials.remove(at) else {
             return Delivery::Malformed;
         };
-        let mut whole = Zeroizing::new(Vec::new());
+        // one allocation of the full length: a growing `Vec` would free its earlier blocks unwiped (`codec` docs)
+        let len = done
+            .chunks
+            .iter()
+            .flatten()
+            .fold(0_usize, |len, chunk| len.saturating_add(chunk.len()));
+        let mut whole = Zeroizing::new(Vec::with_capacity(len));
         for chunk in done.chunks.iter().flatten() {
             whole.extend_from_slice(chunk);
         }

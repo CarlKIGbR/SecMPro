@@ -25,10 +25,11 @@
 
 use secmp_crypto::{
     Aead, Choice, ConditionallySelectable, ConstantTimeEq, Label, MlKem768Ct, MlKem768Ek,
-    MsgEncrypt, SecretBytes, X25519Public, X25519Secret, Zeroizing, kdf_ck, kdf_rk, tr_init,
+    MsgEncrypt, SecretBytes, X25519Public, X25519Secret, kdf_ck, kdf_rk, tr_init,
 };
 
-use crate::codec::{Decode, Encode};
+// the encodings' zeroizing buffer (`secmp_crypto::Zeroizing`; a stand-in under Kani, see `codec`)
+use crate::codec::{Decode, Encode, Zeroizing};
 use crate::error::{Error, Result};
 use crate::keys::{self, X25519Pk};
 use crate::sizes::{BODY_LEN, CELL_LEN, HASH_LEN, HDR_CT_LEN, HEADER_LEN, NONCE_LEN};
@@ -393,9 +394,10 @@ impl RatchetState {
         };
         #[cfg(not(feature = "kat"))]
         let _ = digest;
-        self.ck_s = Some(ck_s);
+        let previous = (self.ck_s.replace(ck_s), self.n_s);
         self.n_s = n_s;
-        // cannot fail: `skipped` is untouched and within its bound
+        // cannot fail for a state of this module (`skipped` is untouched and within its bound); if it does, the
+        // state is handed back as it was
         match self.to_bytes() {
             Ok(state_bytes) => Ok(Sealed {
                 state: self,
@@ -404,7 +406,10 @@ impl RatchetState {
                 #[cfg(feature = "kat")]
                 mk_digest: digest,
             }),
-            Err(error) => Err(Refused::new(self, error)),
+            Err(error) => {
+                (self.ck_s, self.n_s) = previous;
+                Err(Refused::new(self, error))
+            }
         }
     }
 

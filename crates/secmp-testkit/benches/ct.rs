@@ -42,6 +42,12 @@
 //!   MAC rejects);
 //! - `tr_decrypt_reject_ct_pq`: a header under `hk_r` whose `ct_pq` differs from `last_ct_r` in byte 0 vs byte 1087,
 //!   the body unchanged (the KEM-constancy check rejects).
+//! - `tr_decrypt_reject_skipped` (M4, M3 review R-04, F2): on its own receiver state, which holds skipped message keys
+//!   of three earlier chains of A (two each, n = 0 and 1) and whose current receiving chain is a fourth one: A's
+//!   undelivered cell n = 0 of the **first** skipped chain vs of the **last** skipped chain, each with its body tag
+//!   wrong in byte 0 — the header opens under the first vs the last distinct skipped header key, `(hk, 0)` is in
+//!   `skipped`, and the skipped path's body MAC rejects (spec §7.4; the constant-time candidate scan and entry
+//!   lookup of M3 review J9).
 //!
 //! The same-content control `same_content_control` (ADR-042 Amendment 2) is measured and judged like a target, after
 //! the TR targets: `tr_decrypt_reject` on the `tr_decrypt_reject_body_tag` fixture (the largest cell) with identical
@@ -1971,6 +1977,135 @@ fn tr_ct_pq_classes(s: &TrSession, _: &mut Stream) -> Result<[Vec<u8>; 2], secmp
     ])
 }
 
+/// Randomness of each party of the skipped-keys fixture (`FixedEntropy`, more than either draws): A's
+/// initialisation (128), ten header nonces (10 × 24) and three DH steps (3 × 128); B's four DH steps (4 × 128) and
+/// three header nonces (3 × 24).
+const TR_SKIPPED_RANDOMNESS: usize = 2048;
+
+/// The chains of A of which B holds skipped message keys (`tr_decrypt_reject_skipped`, M3 review R-04: at least 3).
+const TR_SKIPPED_CHAINS: usize = 3;
+
+/// The fixture of `tr_decrypt_reject_skipped` (M3 review R-04, F2): B's state with skipped message keys of three of
+/// A's chains, and A's undelivered cell n = 0 of each of them, in the order the chains were skipped.
+struct TrSkipped {
+    /// B after the four chains (`tr_skipped_session`): `skipped` = `(hk_1, 0)`, `(hk_1, 1)`, `(hk_2, 0)`,
+    /// `(hk_2, 1)`, `(hk_3, 0)`, `(hk_3, 1)` in insertion order; `hk_r` is chain 4's header key.
+    receiver: RatchetState,
+    /// A's honest cells n = 0 of chains 1, 2 and 3, not delivered.
+    undelivered: Vec<Vec<u8>>,
+}
+
+/// `state` encrypts a Dummy and persists (a no-op); the new state and the cell's bytes.
+fn tr_send(
+    state: RatchetState,
+    entropy: &mut FixedEntropy,
+) -> Result<(RatchetState, Vec<u8>), secmp_proto::Error> {
+    let (next, cell) = state
+        .encrypt_with(&dummy(), entropy)
+        .map_err(|r| r.error())?
+        .persist(|_| Ok::<(), secmp_proto::Error>(()))?;
+    Ok((next, cell.as_bytes().to_vec()))
+}
+
+/// `state` decrypts `cell` and commits (a no-op); the new state.
+fn tr_receive(
+    state: RatchetState,
+    cell: &[u8],
+    entropy: &mut FixedEntropy,
+) -> Result<RatchetState, secmp_proto::Error> {
+    let (next, _) = state
+        .decrypt_with(cell, entropy)
+        .map_err(|r| r.error())?
+        .commit(|_| Ok::<(), secmp_proto::Error>(()))?;
+    Ok(next)
+}
+
+/// A copy of a 32-byte header key.
+fn key_copy(key: Option<&SecretBytes<32>>) -> Result<SecretBytes<32>, secmp_proto::Error> {
+    Ok(SecretBytes::<32>::from_slice(
+        key.ok_or(secmp_proto::Error::Rejected)?.expose_secret(),
+    )?)
+}
+
+/// A → B over four of A's sending chains (keys and randomness from the stream, as `tr_session`). On each of chains
+/// 1–3, A sends n = 0, 1, 2 and B receives only n = 2: its DH step stores the skipped keys `(hk_i, 0)` and
+/// `(hk_i, 1)` (spec §7.4 `skip_message_keys(header.n)` on the new chain); B then replies and A's DH step on the reply
+/// starts the next chain (`pn` = 3 = B's `n_r` of the old chain: nothing more is skipped). Chain 4's first cell makes
+/// it B's current receiving chain. Checks that the four header keys are pairwise distinct, that B's `hk_r` is chain
+/// 4's and that neither `hk_r` nor `nhk_r` is a skipped chain's key — so a cell under `hk_1` … `hk_3` can open only
+/// on the skipped path — and that each undelivered cell n = 0 opens on a copy of B (its `(hk_i, 0)` is in
+/// `skipped`).
+fn tr_skipped_session(stream: &mut Stream) -> Result<TrSkipped, secmp_proto::Error> {
+    let sk = SecretBytes::<32>::from_slice(&drawn(stream, 32))?;
+    let mut sb = [0_u8; 32];
+    stream.fill(&mut sb);
+    let spk = X25519Secret::from_bytes(&drawn(stream, 32))?;
+    let rpk = MlKem768Dk::from_seed(&drawn(stream, 64))?;
+    let spk_pub = X25519Pk::from_bytes(spk.public_key().as_bytes())?;
+    let rpk_ek = MlKem768Ek::from_bytes(rpk.encapsulation_key().as_bytes())?;
+    let mut a_entropy = FixedEntropy::new(&drawn(stream, TR_SKIPPED_RANDOMNESS));
+    let mut b_entropy = FixedEntropy::new(&drawn(stream, TR_SKIPPED_RANDOMNESS));
+    let mut a = RatchetState::init_initiator_with(&sk, &sb, &spk_pub, &rpk_ek, &mut a_entropy)?;
+    let mut b = RatchetState::init_responder(&sk, &sb, spk, rpk)?;
+    let mut chain_keys = Vec::new();
+    let mut undelivered = Vec::new();
+    for _ in 0..TR_SKIPPED_CHAINS {
+        chain_keys.push(key_copy(a.hk_s_kat())?);
+        let (a1, first) = tr_send(a, &mut a_entropy)?;
+        let (a2, _) = tr_send(a1, &mut a_entropy)?;
+        let (a3, last) = tr_send(a2, &mut a_entropy)?;
+        b = tr_receive(b, &last, &mut b_entropy)?;
+        undelivered.push(first);
+        let (b_next, reply) = tr_send(b, &mut b_entropy)?;
+        b = b_next;
+        a = tr_receive(a3, &reply, &mut a_entropy)?;
+    }
+    let current = key_copy(a.hk_s_kat())?;
+    let (_, cell) = tr_send(a, &mut a_entropy)?;
+    b = tr_receive(b, &cell, &mut b_entropy)?;
+    let (Some(hk_r), Some(nhk_r)) = b.receiving_header_keys_kat() else {
+        return Err(secmp_proto::Error::Rejected);
+    };
+    let mut distinct = bool::from(hk_r.ct_eq(&current));
+    for (i, key) in chain_keys.iter().enumerate() {
+        distinct &= !bool::from(key.ct_eq(hk_r) | key.ct_eq(nhk_r) | key.ct_eq(&current));
+        for other in chain_keys.iter().skip(i.saturating_add(1)) {
+            distinct &= !bool::from(key.ct_eq(other));
+        }
+    }
+    if !distinct {
+        return Err(secmp_proto::Error::Rejected);
+    }
+    for cell in &undelivered {
+        RatchetState::from_bytes(&b.to_bytes()?)?
+            .decrypt_with(cell, &mut FixedEntropy::new(&[]))
+            .map_err(|r| r.error())?;
+    }
+    Ok(TrSkipped {
+        receiver: b,
+        undelivered,
+    })
+}
+
+/// `tr_decrypt_reject_skipped`: A's undelivered cell n = 0 of the first (class 0) vs the last (class 1) skipped
+/// chain, each with its body tag (the last `MSG_TAG_LEN` bytes) wrong in byte 0.
+fn tr_skipped_classes(fixture: &TrSkipped) -> Result<[Vec<u8>; 2], secmp_proto::Error> {
+    let (Some(first), Some(last)) = (fixture.undelivered.first(), fixture.undelivered.last())
+    else {
+        return Err(secmp_proto::Error::Rejected);
+    };
+    let wrong_tag = |cell: &[u8]| {
+        let mut cell = cell.to_vec();
+        let tag_at = cell
+            .len()
+            .checked_sub(MSG_TAG_LEN)
+            .ok_or(secmp_proto::Error::Rejected)?;
+        flip(&mut cell, tag_at)?;
+        Ok::<_, secmp_proto::Error>(cell)
+    };
+    Ok([wrong_tag(first)?, wrong_tag(last)?])
+}
+
 /// One call of a TR target: take the receiver's state out of `slot`, decrypt `cell`, put back the unchanged state
 /// of the refusal. An accepted cell leaves the slot empty (every later call finds no state), which
 /// `tr_decrypt_reject` turns into an abort.
@@ -1996,14 +2131,39 @@ fn tr_decrypt_reject(
 ) -> Result<Samples, secmp_crypto::Error> {
     let session = tr_session(stream).map_err(crypto_error)?;
     let [class0, class1] = classes(&session, stream).map_err(crypto_error)?;
-    let delta = Deltas::new(&class0, &class1);
-    let slot = RefCell::new(Some(session.receiver));
+    tr_measure(n, k, stream, session.receiver, &class0, &class1)
+}
+
+/// `tr_decrypt_reject_skipped` (M3 review R-04, F2): `RatchetState::decrypt_with` on the receiver of
+/// `tr_skipped_session`, the classes of `tr_skipped_classes`, measured as every TR target (`tr_measure`).
+fn tr_decrypt_reject_skipped(
+    n: usize,
+    k: usize,
+    stream: &mut Stream,
+) -> Result<Samples, secmp_crypto::Error> {
+    let fixture = tr_skipped_session(stream).map_err(crypto_error)?;
+    let [class0, class1] = tr_skipped_classes(&fixture).map_err(crypto_error)?;
+    tr_measure(n, k, stream, fixture.receiver, &class0, &class1)
+}
+
+/// The measurement of a TR target on `receiver`: `n` samples of `k` calls, every input built from one common source
+/// with `blend` (class 1 the base). Aborts (`TR_ACCEPTED`) if any call accepted its cell.
+fn tr_measure(
+    n: usize,
+    k: usize,
+    stream: &mut Stream,
+    receiver: RatchetState,
+    class0: &[u8],
+    class1: &[u8],
+) -> Result<Samples, secmp_crypto::Error> {
+    let delta = Deltas::new(class0, class1);
+    let slot = RefCell::new(Some(receiver));
     let mut entropy = FixedEntropy::new(&[]);
     let samples = measure(
         n,
         k,
         stream,
-        |c, _| blended_vec(&class1, &delta, c),
+        |c, _| blended_vec(class1, &delta, c),
         |cell| tr_decrypt(&slot, &mut entropy, cell),
     );
     if slot.into_inner().is_none() {
@@ -2106,9 +2266,9 @@ fn targets(n: usize, n_sas: usize) -> [Target; 10] {
     ]
 }
 
-/// The SecMP-TR targets (M3 plan D9) and the same-content control (ADR-042 Amendment 2), measured after `targets`,
-/// `n` samples per measurement.
-fn tr_targets(n: usize) -> [Target; 4] {
+/// The SecMP-TR targets (M3 plan D9; `tr_decrypt_reject_skipped` M4, M3 review R-04) and the same-content control
+/// (ADR-042 Amendment 2), measured after `targets`, `n` samples per measurement.
+fn tr_targets(n: usize) -> [Target; 5] {
     [
         Target {
             name: "tr_decrypt_reject_hdr_key",
@@ -2136,6 +2296,16 @@ fn tr_targets(n: usize) -> [Target; 4] {
             samples: n,
             control: false,
             run: |n, k, s| tr_decrypt_reject(n, k, s, tr_ct_pq_classes),
+        },
+        Target {
+            name: "tr_decrypt_reject_skipped",
+            classes: [
+                "header under the first distinct skipped key (n in skipped), body tag wrong in byte 0",
+                "header under the last distinct skipped key (n in skipped), body tag wrong in byte 0",
+            ],
+            samples: n,
+            control: false,
+            run: tr_decrypt_reject_skipped,
         },
         Target {
             name: SAME_CONTENT,

@@ -97,7 +97,8 @@ pub(crate) const CT_SAS_SAMPLES: usize = 20_000;
 /// The ct targets (M2 review C3 (a)): the gate refuses a report whose target set differs. Exactly one of them, the
 /// positive control, is measured once and must be detected. M3: the three SecMP-TR rejection targets
 /// `tr_decrypt_reject_*` (plan D9: `RatchetState::decrypt_with` on one fixed receiver state), the A/A′ placement
-/// control (ADR-042) and the same-content control (ADR-042 Amendment 2).
+/// control (ADR-042) and the same-content control (ADR-042 Amendment 2). M4: `tr_decrypt_reject_skipped` (M3 review
+/// R-04, F2: the skipped path, first vs last of three distinct skipped header keys).
 pub(crate) const CT_TARGETS: &[&str] = &[
     "control_variable_time_compare",
     "tag_compare",
@@ -112,6 +113,7 @@ pub(crate) const CT_TARGETS: &[&str] = &[
     "tr_decrypt_reject_hdr_key",
     "tr_decrypt_reject_body_tag",
     "tr_decrypt_reject_ct_pq",
+    "tr_decrypt_reject_skipped",
     "same_content_control",
 ];
 

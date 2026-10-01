@@ -9,7 +9,8 @@
 //!   delivers. Fragments are reassembled; a reassembled message is processed as a Content of its `inner_type`.
 //! - `KeyChange` (§7.7): verified with the *old* `IK_sig` over `fingerprint(new IKSPublic)` under
 //!   `"SecMP-TR/1 keychange"`. Valid: the contact becomes unverified and real outgoing messages are blocked until it
-//!   is re-verified ([`Trust::KeyChanged`]). Unverifiable: the session is frozen with a warning ([`Trust::Frozen`]).
+//!   is re-verified ([`Trust::KeyChanged`]). Unverifiable — a wrong signature, or a reassembled `0x05` payload that does
+//!   not decode as `IKSPublic ‖ HybridSig` (M3 review C3) — the session is frozen with a warning ([`Trust::Frozen`]).
 //!   There is no accept path. Dummies continue in every [`Trust`] state (the traffic pattern never depends on it).
 //!
 //! **Reassembly rules** (§7.6 leaves them to reassembly; readings raised as SQ-25): the fragments of one `msg_id`
@@ -34,7 +35,7 @@ use crate::tr::ratchet::Plaintext;
 use crate::wire::Id;
 use crate::wire::cell::{
     AppMessage, Content, ContentBody, ControlBody, Fragment, FragmentPayload, HandshakeBody,
-    KeyChangeBody, ReceiptBody, RouteDescriptor,
+    KeyChangeBody, ReceiptBody, RouteDescriptor, content_type,
 };
 use crate::wire::inv::IksPublic;
 
@@ -260,6 +261,13 @@ impl Inbox {
             Ok(FragmentPayload::Receipt(b)) => Delivery::Receipt(b),
             Ok(FragmentPayload::Control(b)) => Delivery::Control(b),
             Ok(FragmentPayload::KeyChange(kc)) => key_change(kc, peer_ik_sig, trust),
+            // a reassembled KeyChange that does not decode as `IKSPublic ‖ HybridSig` (a bad length, an Ed25519 key or
+            // signature refused by the §3.5 byte rules, a low-order `ik_dh`) cannot be verified: §7.7 "unverifiable
+            // changes freeze the session" (M3 review C3, reading of SQ-26)
+            Err(_) if whole.first() == Some(&content_type::KEY_CHANGE) => {
+                *trust = Trust::Frozen;
+                Delivery::KeyChangeRefused
+            }
             Err(_) => Delivery::Malformed,
         }
     }

@@ -185,11 +185,14 @@ fn reject(st: RatchetState, id: &str, case: &Value) -> RatchetState {
     );
     let before = st.to_bytes().unwrap().to_vec();
     let mut e = entropy(inputs, &["dh_sk", "kem_seed", "m"]);
+    let supplied = e.remaining();
     let refused = st
         .decrypt_with(&bytes(inputs, "cell"), &mut e)
         .err()
         .expect(id);
     assert_eq!(refused.error(), Error::Rejected, "{id}: the uniform error");
+    // a rejection draws no randomness (plan D2; M3 review C4): N1 lists the step randomness, none of it is used
+    assert_eq!(e.remaining(), supplied, "{id}: a rejection drew randomness");
     let st = refused.into_state();
     assert_eq!(
         *st.to_bytes().unwrap(),

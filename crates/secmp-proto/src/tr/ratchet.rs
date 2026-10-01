@@ -20,8 +20,11 @@
 //!
 //! **Constant work in trial decryption (plan D3).** The header is opened under every candidate key — each distinct
 //! header key of `skipped`, `hk_r`, `nhk_r`, an absent key replaced by a dummy key whose result is masked — as
-//! `Choice`s ([`Aead::open_ct`]); [`select::first_opened`] and [`select::decide`] reduce them to the §7.4 case with
-//! one conversion to a branch. Keys, KEM material and ratchet keys are compared with `ct_eq`, never `==`.
+//! `Choice`s ([`Aead::open_ct`]); [`select::first_opened`] and [`select::decide`] reduce them to the §7.4 case.
+//! There are two conversions to a branch, not one (M3 review C6): `any_skipped` becomes a `bool` early, to decode
+//! the selected skipped header for the `(hk, n)` lookup, and `decide`'s case code is the final one; the branch-free
+//! variant is an M4 follow-up (review F1). Keys, KEM material and ratchet keys are compared with `ct_eq`, never
+//! `==`.
 
 use secmp_crypto::{
     Aead, Choice, ConditionallySelectable, ConstantTimeEq, Label, MlKem768Ct, MlKem768Ek,

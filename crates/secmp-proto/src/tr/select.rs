@@ -4,7 +4,11 @@
 //! - [`first_opened`] and [`decide`]: the header-key selection. The header is opened under *every* candidate key
 //!   (the distinct header keys of `skipped` in first-seen order, `hk_r`, `nhk_r`), each result a `Choice`; these
 //!   two functions reduce the results to the §7.4 case — a skipped key hit, the current chain, a DH step, or a
-//!   rejection — with `Choice` arithmetic and one conversion at the end (docs/06 §9, review focus L3).
+//!   rejection — with `Choice` arithmetic and a conversion to a branch at the end (docs/06 §9, review focus L3).
+//!   The caller makes one conversion before that (M3 review C6): `RatchetState::open` turns `any_skipped` into a
+//!   `bool` to decode the selected skipped header (spec §7.4: `Open` includes decoding, and `n` is needed for the
+//!   lookup) — two conversions in all. The branch-free variant (read `n` from the plaintext, decode only on
+//!   `Path::Skipped`) is an M4 follow-up (review F1).
 //! - [`skip_plan`]: the bounds of `skip_message_keys(until)` — which positions are derived and which are stored.
 //! - [`evicted`]: how many earliest-inserted entries leave `skipped` after an insertion.
 

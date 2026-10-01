@@ -83,8 +83,10 @@ every call: each distinct header key of `skipped` (first-seen order), `hk_r`, `n
 a fixed dummy key and its result masked to "not opened". Each attempt yields a `Choice` (`Aead::open_ct`); the
 header of the first successful key is selected with `ConditionallySelectable`; the `(hk, n)` lookup scans every
 skipped entry with `ct_eq` on `hk` and `n`. The §7.4 case analysis (skipped hit / skipped key opened but no entry →
-fall through to `hk_r`, `nhk_r` / chain / step / reject) is computed on `Choice`s and converted to a `bool` exactly
-once, at the final branch. Comparisons of keys, `ek_pq`, `ct_pq`, `dh_pk` use `ct_eq`, never `==`. The
+fall through to `hk_r`, `nhk_r` / chain / step / reject) is computed on `Choice`s and converted to a branch at the
+end — with one earlier conversion (corrected after the M3 review, C6): `any_skipped` becomes a `bool` so that the
+selected skipped header is decoded for the `(hk, n)` lookup (§7.4: `Open` includes decoding); two conversions in
+all, the branch-free variant is an M4 follow-up (review F1). Comparisons of keys, `ek_pq`, `ct_pq`, `dh_pk` use `ct_eq`, never `==`. The
 selection function is a pure function of the per-key results so that Kani can prove it equal to the sequential
 pseudocode (step 9).
 

@@ -14,8 +14,8 @@
 //!   ciphertext).
 //!
 //! Invariants: no panic; a refusal is the uniform `Rejected` (never `Unavailable`: every call gets the randomness of
-//! a DH step's sending half) and hands back the state byte-identical; an accepted cell's committed state is the
-//! state's own encoding, and it decodes and re-encodes to itself.
+//! a DH step's sending half), draws none of that randomness, and hands back the state byte-identical; an accepted
+//! cell's committed state is the state's own encoding, and it decodes and re-encodes to itself.
 //!
 //! A header with a large `pn`/`n` (up to `MAX_FF` = 2^20 beyond `n_r`) makes the receiver derive that many chain
 //! keys, twice on a DH step: legitimate §7.4 behaviour that takes up to seconds per input; the gates run libFuzzer
@@ -45,6 +45,7 @@ fuzz_target!(|data: &[u8]| {
     };
     let state = RatchetState::from_bytes(&fixture.receiver).unwrap();
     let mut entropy = Fixture::step_entropy();
+    let supplied = entropy.remaining();
     match state.decrypt_with(&cell, &mut entropy) {
         Ok(opened) => {
             let mut committed = Zeroizing::new(Vec::new());
@@ -62,6 +63,8 @@ fuzz_target!(|data: &[u8]| {
         Err(refused) => {
             let (state, error) = refused.into_parts();
             assert_eq!(error, Error::Rejected);
+            // a rejection draws no randomness (M3 plan D2, review C4)
+            assert_eq!(entropy.remaining(), supplied);
             assert_eq!(
                 state.to_bytes().unwrap().as_slice(),
                 fixture.receiver.as_slice()

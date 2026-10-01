@@ -30,8 +30,8 @@ use crate::codec::{Decode, Encode, pad};
 use crate::error::{Error, Result};
 use crate::keys::{Ed25519Pk, HybridSig, MlKem768Ek, X25519Pk};
 use crate::sizes::{
-    BODY_LEN, BODY_TAG_LEN, CELL_LEN, ED25519_SIG_LEN, HDR_CT_LEN, HEADER_LEN, IKS_PUBLIC_LEN,
-    MLKEM768_CT_LEN, NONCE_LEN, sum,
+    BODY_LEN, BODY_TAG_LEN, CELL_LEN, ED25519_SIG_LEN, HDR_CT_LEN, HEADER_LEN, HYBRID_SIG_LEN,
+    IKS_PUBLIC_LEN, MLKEM768_CT_LEN, NONCE_LEN, sum,
 };
 use crate::wire::cell::{
     AppKind, AppMessage, BatchBody, Content, ContentBody, ControlBody, ControlCode, Fragment,
@@ -144,6 +144,16 @@ fn flipped(bytes: &[u8], at: usize) -> Vec<u8> {
     let mut out = bytes.to_vec();
     flip(&mut out, at);
     out
+}
+
+/// A copy of `bytes` with `with` written at `at` (the length is kept).
+fn overwrite(bytes: &[u8], at: usize, with: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
+    let mut out = Zeroizing::new(bytes.to_vec());
+    let end = at.checked_add(with.len()).ok_or(Error::Rejected)?;
+    out.get_mut(at..end)
+        .ok_or(Error::Rejected)?
+        .copy_from_slice(with);
+    Ok(out)
 }
 
 /// A copy of a present key.
@@ -611,6 +621,33 @@ fn reject_undecodable_header_under_a_skipped_key() -> Result<()> {
     let mut sender = copy(&start)?;
     let control = forge(&mut sender, |_| {}, &body)?;
     assert_eq!(recv_seq(b, &control)?.1, 0, "control: the current chain");
+    Ok(())
+}
+
+/// A DH step whose `pn` lies below the receiver's `n_r` on the old chain is a stale counter: §7.4
+/// `skip_message_keys(header.pn)` rejects `until < n_r` before `DHRatchet` (honest body under the step's message
+/// key, so only `pn` decides); the control `pn = n_r` is accepted (M3 review C4, R-10). Run once on 2026-10-01 with
+/// the hand mutant `select::skip_plan(self.n_r, header.pn.max(self.n_r))` in `RatchetState::open_step`
+/// (`ratchet.rs:638` at `665e84e`), which survives every other TR test and the vectors: this test fails on it — the
+/// mutated decrypt passes the body MAC and reaches the step's sending half, so the refusal is `Unavailable` (from
+/// the zero-budget test entropy) instead of `Rejected` (assertion message `pn = n_r - 1`, `left: Unavailable`) — and
+/// passes again without it.
+#[test]
+fn reject_step_with_pn_below_n_r() -> Result<()> {
+    let (a, b) = session()?;
+    let (a, b) = exchange(a, b, &text(0))?;
+    let (_, b) = exchange(a, b, &text(1))?;
+    assert_eq!(b.n_r, 2);
+    let nhk_r = key(b.nhk_r.as_ref())?;
+    let below = b.n_r.checked_sub(1).ok_or(Error::Rejected)?;
+    let mut header = new_step_header(below, 0)?;
+    let cell = seal(&nhk_r, &header, step_mk(&b, &header)?, &text(2))?;
+    let b = rejects(b, &cell, "pn = n_r - 1")?;
+    header.pn = b.n_r;
+    let cell = seal(&nhk_r, &header, step_mk(&b, &header)?, &text(2))?;
+    let (b, got) = recv_seq(b, &cell)?;
+    assert_eq!(got, 2, "control: pn = n_r");
+    assert_eq!((b.pn, b.n_r), (0, 1), "the step was taken");
     Ok(())
 }
 
@@ -2177,7 +2214,8 @@ fn content_partials_evict_the_oldest() -> Result<()> {
 }
 
 /// A reassembled message is processed as a Content of its `inner_type` (§7.6): Batch, `RouteUpdate`, Receipt,
-/// Control, `KeyChange`; an inner type outside {2, 4, 5, 6, 7} or an undecodable body is `Malformed`.
+/// Control, `KeyChange`; an inner type outside {2, 4, 5, 6, 7} or an undecodable body is `Malformed` — except an
+/// undecodable `KeyChange`, which is unverifiable and freezes (M3 review C3).
 #[test]
 fn content_reassembled_inner_types() -> Result<()> {
     let (old_sk, old_iks) = identity(1)?;
@@ -2224,8 +2262,9 @@ fn content_reassembled_inner_types() -> Result<()> {
         ("Malformed", Zeroizing::new(vec![0x03, 0, 0])),
         ("Malformed", Zeroizing::new(vec![0x08, 0])),
         ("Malformed", Zeroizing::new(vec![0x02, 0])),
+        // a truncated KeyChange does not decode: unverifiable, so it freezes (M3 review C3, reading of SQ-26)
         (
-            "Malformed",
+            "KeyChangeRefused",
             Zeroizing::new(kc.get(..5000).ok_or(Error::Rejected)?.to_vec()),
         ),
     ];
@@ -2254,7 +2293,7 @@ fn content_reassembled_inner_types() -> Result<()> {
             .map_or("Partial", |(k, _)| *k);
         assert_eq!(kind(d), expected, "delivery {i}");
     }
-    assert_eq!((trust, inbox.partials()), (Trust::KeyChanged, 0));
+    assert_eq!((trust, inbox.partials()), (Trust::Frozen, 0));
     Ok(())
 }
 
@@ -2293,8 +2332,9 @@ fn content_verified_key_change() -> Result<()> {
 }
 
 /// An unverifiable `KeyChange` (§7.7) — signed by another key, under another label, over another identity, or with
-/// its ML-DSA half damaged — is refused and freezes the session: every later Content is `Frozen`, `verify()` keeps
-/// it frozen, and no real message may be sent. There is no accept path.
+/// its ML-DSA half damaged, and (M3 review C3) a reassembled `0x05` payload that does not decode: an all-zero
+/// signature, Ed25519 `S = L`, a small-order `R`, a low-order `ik_dh` — is refused and freezes the session: every
+/// later Content is `Frozen`, `verify()` keeps it frozen, and no real message may be sent. There is no accept path.
 #[test]
 fn content_unverifiable_key_change_freezes() -> Result<()> {
     let (old_sk, old_iks) = identity(1)?;
@@ -2311,7 +2351,44 @@ fn content_unverifiable_key_change_freezes() -> Result<()> {
         msg_ids: vec![[1; 16]],
     })
     .encode()?;
-    for (what, payload) in [
+    // M3 review C3 (reading of SQ-26): a reassembled 0x05 payload that does not decode as `IKSPublic ‖ HybridSig` is
+    // unverifiable and freezes as well — `0x05 ‖ IKSPublic[2017] ‖ HybridSig[3373]`, with `ik_dh` the last 32 bytes
+    // of the IKSPublic and the Ed25519 `R ‖ S` the first 64 bytes of the HybridSig
+    let good = key_change(&old_sk, Label::TrKeychange, &new_iks, &new_iks)?;
+    let sig_at = sum(&[1, IKS_PUBLIC_LEN]);
+    let ik_dh_at = sig_at.checked_sub(32).ok_or(Error::Rejected)?;
+    let s_at = sum(&[sig_at, 32]);
+    // L = 2^252 + 27742317777372353535851937790883648493, little-endian
+    let l_le: [u8; 32] = [
+        0xed, 0xd3, 0xf5, 0x5c, 0x1a, 0x63, 0x12, 0x58, 0xd6, 0x9c, 0xf7, 0xa2, 0xde, 0xf9, 0xde,
+        0x14, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x10,
+    ];
+    let mut identity_point = [0_u8; 32];
+    identity_point[0] = 1;
+    let undecodable = [
+        (
+            "all-zero signature",
+            overwrite(&good, sig_at, &[0; HYBRID_SIG_LEN])?,
+        ),
+        ("Ed25519 S = L", overwrite(&good, s_at, &l_le)?),
+        (
+            "small-order R (the identity)",
+            overwrite(&good, sig_at, &identity_point)?,
+        ),
+        (
+            "low-order ik_dh (u = 0)",
+            overwrite(&good, ik_dh_at, &[0; 32])?,
+        ),
+    ];
+    for (what, payload) in &undecodable {
+        assert_eq!(payload.first(), Some(&0x05), "{what}");
+        assert_eq!(payload.len(), good.len(), "{what}");
+        assert!(
+            FragmentPayload::decode(payload).is_err(),
+            "{what}: must not decode"
+        );
+    }
+    for (what, payload) in undecodable.into_iter().chain([
         (
             "another key",
             key_change(&other_sk, Label::TrKeychange, &new_iks, &new_iks)?,
@@ -2325,7 +2402,7 @@ fn content_unverifiable_key_change_freezes() -> Result<()> {
             key_change(&old_sk, Label::TrKeychange, &other_iks, &new_iks)?,
         ),
         ("ML-DSA half damaged", damaged),
-    ] {
+    ]) {
         let mut contents = fragments(1, &payload, 1669)?;
         contents.extend([text(9), content::dummy()]);
         contents.extend(fragments(2, &receipt, 10)?);

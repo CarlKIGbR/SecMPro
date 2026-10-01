@@ -1,0 +1,88 @@
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.04s
+     Running `target/debug/xtask step --strict kani perf proverif`
+
+=== [9] kani ===
+$ /Users/c.carl/.rustup/toolchains/1.98.1-aarch64-apple-darwin/bin/cargo kani --package secmp-proto -Z stubbing
+  Checking harness kani_proofs::tr_eviction...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 0.2290258s
+  Checking harness kani_proofs::tr_skip_plan...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 0.25621682s
+  Checking harness kani_proofs::tr_header_selection...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 102.38022s
+  Checking harness kani_proofs::response_frame...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 40.624886s
+  Checking harness kani_proofs::request_fetch_multi...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 69.79301s
+  Checking harness kani_proofs::request_queue_del...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 3.3830752s
+  Checking harness kani_proofs::request_cont...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 2.4710832s
+  Checking harness kani_proofs::request_link_put...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 13.366956s
+  Checking harness kani_proofs::request_queue_new...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 4.6710887s
+  Checking harness kani_proofs::request_send...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 4.833596s
+  Checking harness kani_proofs::request_link_get...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 42.351017s
+  Checking harness kani_proofs::request_ping...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 0.39612737s
+  Checking harness kani_proofs::request_fetch...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 3.9245112s
+  Checking harness kani_proofs::request_skey...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 0.35591257s
+  Checking harness kani_proofs::request_frame...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 8.793883s
+  Checking harness kani_proofs::padding...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 45.5238s
+  Checking harness kani_proofs::header_v1_reencodes...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 45.218876s
+  Checking harness kani_proofs::header_v1...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 8.487474s
+  Checking harness kani_proofs::cell...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 9.0440235s
+  Complete - 19 successfully verified harnesses, 0 failures, 19 total.
+
+=== [5] perf ===
+$ /Users/c.carl/.rustup/toolchains/1.98.1-aarch64-apple-darwin/bin/cargo run --release --locked -p secmp-proto --example tr-perf -- target/tr-perf.txt
+   Compiling secmp-proto v0.0.0 (/Users/c.carl/coding/claude_code/SecMPro/crates/secmp-proto)
+    Finished `release` profile [optimized] target(s) in 6.27s
+     Running `target/release/examples/tr-perf target/tr-perf.txt`
+  tr-perf host=aarch64-apple-darwin
+  tr-perf n=200
+  tr-perf warmup=20
+  tr-perf chain_median_us=67.4
+  tr-perf chain_max_us=202.8
+  tr-perf step_median_us=251.5
+  tr-perf step_max_us=388.8
+
+=== [10] proverif ===
+$ proverif -help
+$ proverif /Users/c.carl/coding/claude_code/SecMPro/xtask/fixtures/proverif/selftest.pv
+$ proverif /Users/c.carl/coding/claude_code/SecMPro/formal/tr.pv
+  formal/tr.pv: 39 RESULT lines as expected — T1 true ×6, T2 true ×2, T3 true ×4, T4 true ×2, T5 true ×2, T6 true ×2, T7 false ×2, an attack as expected, T8 true ×12, T9 true ×4, T10 false ×1, an attack as expected, T11 true ×1, T12 false ×1, informative (65 s)
+
+=== step summary (host aarch64-apple-darwin, strict: true) ===
+   9 kani            PASS        426s  Kani 0.68.0: harness packages secmp-proto (expected set matches); 19/19 harnesses verified (expect::KANI_HARNESSES): kani_proofs::cell, kani_proofs::header_v1, kani_proofs::header_v1_reencodes, kani_proofs::padding, kani_proofs::request_cont, kani_proofs::request_fetch, kani_proofs::request_fetch_multi, kani_proofs::request_frame, kani_proofs::request_link_get, kani_proofs::request_link_put, kani_proofs::request_ping, kani_proofs::request_queue_del, kani_proofs::request_queue_new, kani_proofs::request_send, kani_proofs::request_skey, kani_proofs::response_frame, kani_proofs::tr_eviction, kani_proofs::tr_header_selection, kani_proofs::tr_skip_plan
+   5 perf            PASS          6s  encrypt+persist+decrypt+commit per message, 200 messages per kind on aarch64-apple-darwin: chain: median 67.4 µs, max 202.8 µs; step: median 251.5 µs, max 388.8 µs; every maximum below 3 ms
+  10 proverif        PASS         65s  ProVerif 2.05 self-test [true, false] ok; models: tr (expected set matches); formal/tr.pv: 39 RESULT lines as expected — T1 true ×6, T2 true ×2, T3 true ×4, T4 true ×2, T5 true ×2, T6 true ×2, T7 false ×2, an attack as expected, T8 true ×12, T9 true ×4, T10 false ×1, an attack as expected, T11 true ×1, T12 false ×1, informative (65 s)
+step: PASS

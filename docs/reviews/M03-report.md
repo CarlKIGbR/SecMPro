@@ -221,7 +221,7 @@ head (§4).
 | Rust and `ref/` vectors identical; frozen | `cargo xtask vectors`; `tests/tr_generator.rs` | `tr: agrees with ref; frozen as vectors/tr.json`; `cmp vectors/tr.json vectors/ref/tr.json` identical, SHA-256 `01a6d161138508af8fedd27df0fe5c62d473dbbf27530accbe6cde293201a837`; the generator reads no vector file and reproduced the reference on its first run; `ref-vectors`: 10 frozen suites (846 cases) structurally and byte-identical |
 | Properties pass: interleavings with drops/dups/reorders/gaps never reuse a message key (all keys tracked) or panic; state round-trips at every step | `cargo nextest run -p secmp-proto --features kat --test tr_properties` | default seed: 2400 events, 1227 sealing-key digests all distinct, 883 deliveries (729 accepted: 152 in order, 112 ahead, 167 DH steps, 298 late; 154 rejected: 136 replays, 16 late beyond the window, 2 beyond `MAX_FF`), 102 tampered cells rejected, two `MAX_FF` gaps (on `n` and on `pn`: `MAX_FF + d` rejected, `MAX_FF` accepted), 1840 round trips, 631 reloads, `skipped` reached 512 with 6270 evictions; every delivery's outcome equal to the §7.4 model; 56.5 s; seeds 1 and 20261001 pass |
 | ProVerif green on the fixed query set | `cargo xtask step --strict proverif` (`M03-evidence/proverif-aarch64-apple-darwin-e154473.txt`) | 39 RESULT lines in `PROVERIF_EXPECTED` order: T1 (6), T2 (2), T3 (4), T4–T6 (2 each), T8 (12), T9 (4), T11 (1) true; T7 (2) and T10 (1) false (attack found); T12 false (informative); 72 s |
-| Encrypt + decrypt of a message < 3 ms | `cargo xtask step --strict perf` (`M03-evidence/tr-perf-aarch64-apple-darwin-e154473.txt`; and the local run on `c907881`'s tree) | per message encrypt + persist + decrypt + commit, 200 per kind: chain median 63.4–141.3 µs, max 69.8–246.3 µs; DH step median 219.1–220.1 µs, max 232.9–324.4 µs (three runs; the higher values with other jobs on the machine) — every maximum ≤ 0.33 ms; CI Linux: the `perf` step of the PR run |
+| Encrypt + decrypt of a message < 3 ms | `cargo xtask step --strict perf` (`M03-evidence/tr-perf-aarch64-apple-darwin-e154473.txt`; and the local run on `c907881`'s tree) | per message encrypt + persist + decrypt + commit, 200 per kind: chain median 63.4–141.3 µs, max 69.8–246.3 µs; DH step median 219.1–251.5 µs, max 232.9–388.8 µs (four runs, the last on `405ecd0`; the higher values with other jobs on the machine) — every maximum ≤ 0.39 ms; CI Linux: the `perf` step of the PR run |
 
 | Review focus (`docs/07` M3) | Evidence |
 |---|---|
@@ -244,10 +244,10 @@ head (§4).
 
 | Gate | Result |
 |---|---|
-| Local steps 1–5 on the final code (`fmt clippy policy deny vet audit cooldown nextest doctest kat`) | PASS (nextest 76 s; kat 367 s incl. the `tr` suites and the portable-backend re-run of `tr_vectors`) |
-| perf | PASS (§3) |
-| ProVerif | PASS, 39/39 as expected, 72 s |
-| Kani | PASS 19/19, 447 s |
+| `cargo xtask ci-fast --strict` on `405ecd0` (`M03-evidence/ci-fast-aarch64-apple-darwin-405ecd0.txt`) | PASS: fmt, clippy, policy, deny, vet (52 crates in the crypto/proto closure, 0 exempted), audit, cooldown (119 packages ≥ 7 days), nextest 67 s, doctest, hello, kat 372 s (incl. the `tr` suites and the portable-backend re-run of `tr_vectors`) |
+| perf | PASS on `405ecd0`: chain median 67.4 µs, max 202.8 µs; DH step median 251.5 µs, max 388.8 µs (`M03-evidence/kani-perf-proverif-aarch64-apple-darwin-405ecd0.txt`) |
+| ProVerif | PASS on `405ecd0`, 39/39 as expected, 65 s |
+| Kani | PASS on `405ecd0`: `Complete - 19 successfully verified harnesses, 0 failures, 19 total.`, 426 s, peak 5.9 GiB |
 | Fuzz | the two TR targets 120 s each, no finding; the 12 earlier ones at `b26e9e9`, no finding |
 | Mutation | local shards: as §3; the PR run's `mutants` step is the gate |
 | Coverage | PASS (§3) |

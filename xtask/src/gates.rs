@@ -2165,7 +2165,7 @@ mod tests {
             "  workflow_dispatch:\n",
             "permissions:\n  contents: read\n",
             "SECMP_PROPTEST_SEED: ${{ github.run_id }}",
-            "cargo nextest run --locked -p secmp-proto",
+            "cargo nextest run --locked -p secmp-proto --features kat\n",
             "run: cargo xtask step --strict fuzz-nightly",
             "path: target/fuzz-corpus/",
             "path: fuzz/artifacts/",

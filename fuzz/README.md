@@ -11,8 +11,9 @@ CI, with the pinned nightly (`xtask/src/tools.rs`) and a per-target `-max_len` (
   required check; `cargo xtask step fuzz-nightly`): 4 h (`FUZZ_NIGHTLY_SECONDS` = 14 400 s) shared equally by
   the targets (1 200 s each with the 12 targets of M2, 1 028 s with the 14 of M3). The workflow uploads the scratch corpus and any crash
   inputs as artefacts; taking inputs into `fuzz/corpus/` (after `cargo fuzz cmin`) is a manual, reviewed commit.
-  The same workflow runs the `secmp-proto` tests with `SECMP_PROPTEST_SEED` set to the run id, so the seeded
-  property tests explore a new seed every night.
+  The same workflow runs the `secmp-proto` tests with feature `kat` (`cargo nextest run -p secmp-proto --features
+  kat`, which builds the `kat`-only TR property test `tr_properties` and the `canonical` property tests) with
+  `SECMP_PROPTEST_SEED` set to the run id, so the seeded property tests explore a new seed every night.
 
 Both run each target as `cargo fuzz run --fuzz-dir fuzz <t> target/fuzz-corpus/<t> fuzz/corpus/<t> --
 -max_total_time=<s> -max_len=<n> -timeout=60` (M2 review F7): libFuzzer writes new inputs only into the first corpus

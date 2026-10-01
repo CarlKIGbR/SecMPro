@@ -2,7 +2,8 @@
 # Daily fuzz campaign and seeded property run (docs/06 §4 Fuzzing "nightly 4 h", Property; M2 review F2, F10). Not a
 # required check; its job name is not a required-check name (`cargo xtask policy` checks that the four required names
 # exist only in ci.yml).
-# - Property tests: `cargo nextest run -p secmp-proto` with `SECMP_PROPTEST_SEED` set to the run id (a decimal u64), so
+# - Property tests: `cargo nextest run -p secmp-proto --features kat` (the TR property and vector tests need `kat`;
+#   M3 review C5) with `SECMP_PROPTEST_SEED` set to the run id (a decimal u64), so
 #   the seeded property tests explore a new seed every night; the seed is printed first, and a failure is reproduced
 #   by running the tests locally with the same value.
 # - Fuzz campaign: `cargo xtask step --strict fuzz-nightly` gives every fuzz target `expect::FUZZ_NIGHTLY_SECONDS /
@@ -62,7 +63,7 @@ jobs:
           SECMP_PROPTEST_SEED: ${{ github.run_id }}
         run: |
           echo "SECMP_PROPTEST_SEED=$SECMP_PROPTEST_SEED"
-          cargo nextest run --locked -p secmp-proto
+          cargo nextest run --locked -p secmp-proto --features kat
       - name: Fuzz campaign, 4 h shared by every target (M2 review F2)
         if: ${{ !cancelled() }}
         run: cargo xtask step --strict fuzz-nightly

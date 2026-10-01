@@ -98,7 +98,8 @@ pub(crate) const CT_SAS_SAMPLES: usize = 20_000;
 /// positive control, is measured once and must be detected. M3: the three SecMP-TR rejection targets
 /// `tr_decrypt_reject_*` (plan D9: `RatchetState::decrypt_with` on one fixed receiver state), the A/A′ placement
 /// control (ADR-042) and the same-content control (ADR-042 Amendment 2). M4: `tr_decrypt_reject_skipped` (M3 review
-/// R-04, F2: the skipped path, first vs last of three distinct skipped header keys) and the INV/HX targets of
+/// R-04, F2; WEISUNG M4-4: the skipped path, entry 0 vs entry 4 of nine under the first of three distinct skipped
+/// header keys — the opening trial is the same, R-59) and the INV/HX targets of
 /// TEST-SPEC-M4 (f): `inv_fingerprint_compare` (`inv::invitee_check`, §5.5 step 3), `x25519_zero_check`
 /// (`X25519Secret::diffie_hellman`, §3, §6.4), `hx_accept_reject_inner` and `hx_accept_reject_first_msg`
 /// (`Responder::accept`, §6.6 steps 2 and 3).

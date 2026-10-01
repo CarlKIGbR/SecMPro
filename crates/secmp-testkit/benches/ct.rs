@@ -42,12 +42,14 @@
 //!   MAC rejects);
 //! - `tr_decrypt_reject_ct_pq`: a header under `hk_r` whose `ct_pq` differs from `last_ct_r` in byte 0 vs byte 1087,
 //!   the body unchanged (the KEM-constancy check rejects).
-//! - `tr_decrypt_reject_skipped` (M4, M3 review R-04, F2): on its own receiver state, which holds skipped message keys
-//!   of three earlier chains of A (two each, n = 0 and 1) and whose current receiving chain is a fourth one: A's
-//!   undelivered cell n = 0 of the **first** skipped chain vs of the **last** skipped chain, each with its body tag
-//!   wrong in byte 0 — the header opens under the first vs the last distinct skipped header key, `(hk, 0)` is in
-//!   `skipped`, and the skipped path's body MAC rejects (spec §7.4; the constant-time candidate scan and entry
-//!   lookup of M3 review J9).
+//! - `tr_decrypt_reject_skipped` (M4, M3 review R-04, F2, respecified by WEISUNG M4-4 after R-58/R-59): on its own
+//!   receiver state, which holds nine skipped message keys of three earlier chains of A (chain 1: n = 0 … 4;
+//!   chains 2 and 3: n = 0 and 1; so 3 distinct header keys, 5 candidates) and whose current receiving chain is a
+//!   fourth one: A's undelivered cell `(hk_1, n = 0)` (entry 0) vs `(hk_1, n = 4)` (entry 4), each with its body
+//!   tag wrong in byte 0 — both headers open at trial 0, `(hk, n)` is in `skipped`, and the skipped path's body MAC
+//!   rejects. The classes differ in the entry index alone: the lookup visits every entry and selects the message key
+//!   with masks (M4 review R-58). The position of the opening trial is not a class difference (R-59); the
+//!   early-exit regression is caught by the unit test `trial_opens_every_candidate_every_call`.
 //!
 //! SecMP-INV/HX targets (M4, TEST-SPEC-M4 (f)), measured after the TR targets on the product path:
 //! - `inv_fingerprint_compare`: `inv::invitee_check` with an issued blob, the invitation's `inviter_fp` changed in
@@ -61,11 +63,10 @@
 //!
 //! Per-class pre-check (M4; M3 review R-45, F19): before every measurement of a TR, INV or HX target (and of the
 //! same-content control), on the very fixture that is measured, each class's input passes once through the measured
-//! call and must give what the target claims — `Err(Rejected)`, and for `Responder::accept` its `kat` reject-site tag
-//! (`hx::ACCEPT_SITE_KAT`) at the claimed site; `Ok` with the class's output for `x25519_zero_check`; the unmodified
-//! input passes (INV, HX). A mismatch aborts the run with target, class, expected and observed outcome in the
-//! report's `error`. SecMP-TR and SecMP-INV have no reject-site tag (`tr/ratchet.rs`, `inv.rs`): their pre-check
-//! is `Err(Rejected)` only. The report carries `site` and `precheck` per target.
+//! call and must give what the target claims — `Err(Rejected)` and the product's `kat` reject-site tag at the claimed
+//! site (`tr::DECRYPT_SITE_KAT`, `inv::INVITEE_SITE_KAT`, `hx::ACCEPT_SITE_KAT`); `Ok` with the class's output for
+//! `x25519_zero_check`; the unmodified input passes (INV, HX). A mismatch aborts the run with target, class, expected
+//! and observed outcome in the report's `error`. The report carries `site` and `precheck` per target.
 //!
 //! The same-content control `same_content_control` (ADR-042 Amendment 2) is measured and judged like a target, after
 //! the TR targets: `tr_decrypt_reject` on the `tr_decrypt_reject_body_tag` fixture (the largest cell) with identical
@@ -1811,8 +1812,9 @@ fn sas(n: usize, k: usize, stream: &mut Stream) -> Samples {
 // Every SecMP-TR, -INV and -HX target (and the same-content control, which measures the TR body-tag cell) claims where
 // both of its classes end. Before each measurement — on the very fixture that is measured, every time a target is
 // run (calibration, the pair, the A/A control) — each class's input is passed once through the measured call and the
-// outcome is compared with the claim: `Err(Rejected)` and, where the product has a `kat` reject-site tag
-// (`secmp_proto::hx::ACCEPT_SITE_KAT`), that tag; for `x25519_zero_check`, `Ok` and the output's shape. A mismatch
+// outcome is compared with the claim: `Err(Rejected)` and the product's `kat` reject-site tag of the path
+// (`secmp_proto::tr::DECRYPT_SITE_KAT`, `secmp_proto::inv::INVITEE_SITE_KAT`, `secmp_proto::hx::ACCEPT_SITE_KAT`);
+// for `x25519_zero_check`, `Ok` and the output's shape. A mismatch
 // aborts the run, and `main` writes target, class, expected and observed outcome into the report's `error`, which
 // fails the gate. The report carries `site` and `precheck` per target; the gate appends the site to the target's
 // verdict line.
@@ -1820,11 +1822,10 @@ fn sas(n: usize, k: usize, stream: &mut Stream) -> Samples {
 /// How a target's pre-check verifies its claim on each class.
 #[derive(Clone, Copy)]
 enum SiteCheck {
-    /// `Err(Rejected)` and the product's `kat` reject-site tag equal to the claimed site (`Responder::accept`).
+    /// `Err(Rejected)` and the product's `kat` reject-site tag equal to the claimed site (`RatchetState::decrypt`:
+    /// `tr::DECRYPT_SITE_KAT`; `inv::invitee_check`: `inv::INVITEE_SITE_KAT`; `Responder::accept`:
+    /// `hx::ACCEPT_SITE_KAT`).
     Tagged,
-    /// `Err(Rejected)` only: the product has no reject-site tag on this path (SecMP-TR: `tr/ratchet.rs`; SecMP-INV:
-    /// `inv.rs`).
-    Untagged,
     /// `Ok`, with the class's output (not a reject target).
     Output,
 }
@@ -1833,7 +1834,6 @@ impl SiteCheck {
     fn as_str(self) -> &'static str {
         match self {
             Self::Tagged => "Err(Rejected) and the kat reject-site tag",
-            Self::Untagged => "Err(Rejected) only: no reject-site tag on this path",
             Self::Output => "Ok and the class's output",
         }
     }
@@ -1854,14 +1854,14 @@ const CLAIM_TR_HDR_KEY: Claim = Claim {
         "header sealed under a wrong key",
         "header sealed under hk_r, its tag's last byte flipped",
     ],
-    site: "§7.4 header trial decryption (no candidate key opens)",
-    check: SiteCheck::Untagged,
+    site: "header: no key opened",
+    check: SiteCheck::Tagged,
 };
 const CLAIM_TR_BODY_TAG: Claim = Claim {
     target: "tr_decrypt_reject_body_tag",
     classes: ["body tag wrong in byte 0", "body tag wrong in byte 31"],
-    site: "§7.4 chain path: body MAC",
-    check: SiteCheck::Untagged,
+    site: "body MAC",
+    check: SiteCheck::Tagged,
 };
 const CLAIM_TR_CT_PQ: Claim = Claim {
     target: "tr_decrypt_reject_ct_pq",
@@ -1869,17 +1869,17 @@ const CLAIM_TR_CT_PQ: Claim = Claim {
         "ct_pq differs from last_ct_r in byte 0",
         "ct_pq differs from last_ct_r in byte 1087",
     ],
-    site: "§7.4 chain path: KEM constancy",
-    check: SiteCheck::Untagged,
+    site: "kem constancy",
+    check: SiteCheck::Tagged,
 };
 const CLAIM_TR_SKIPPED: Claim = Claim {
     target: "tr_decrypt_reject_skipped",
     classes: [
-        "header under the first distinct skipped key (n in skipped), body tag wrong in byte 0",
-        "header under the last distinct skipped key (n in skipped), body tag wrong in byte 0",
+        "header under hk_1, n = 0 (trial 0; entry 0 of 9), body tag wrong in byte 0",
+        "header under hk_1, n = 4 (trial 0; entry 4 of 9), body tag wrong in byte 0",
     ],
-    site: "§7.4 skipped path: body MAC",
-    check: SiteCheck::Untagged,
+    site: "body MAC",
+    check: SiteCheck::Tagged,
 };
 const CLAIM_SAME_CONTENT: Claim = Claim {
     target: SAME_CONTENT,
@@ -1887,8 +1887,8 @@ const CLAIM_SAME_CONTENT: Claim = Claim {
         "the class-1 cell of tr_decrypt_reject_body_tag (body tag wrong in byte 31)",
         "the same cell",
     ],
-    site: "§7.4 chain path: body MAC",
-    check: SiteCheck::Untagged,
+    site: "body MAC",
+    check: SiteCheck::Tagged,
 };
 const CLAIM_INV_FP: Claim = Claim {
     target: "inv_fingerprint_compare",
@@ -1896,8 +1896,8 @@ const CLAIM_INV_FP: Claim = Claim {
         "inviter_fp differs from the IKS fingerprint in byte 0",
         "inviter_fp differs from the IKS fingerprint in byte 31",
     ],
-    site: "§5.5 step 3: fingerprint comparison",
-    check: SiteCheck::Untagged,
+    site: "fingerprint",
+    check: SiteCheck::Tagged,
 };
 const CLAIM_X25519: Claim = Claim {
     target: "x25519_zero_check",
@@ -1982,7 +1982,7 @@ fn outcome<T>(r: &Result<T, secmp_proto::Error>) -> String {
 fn expected_rejection(claim: Claim) -> String {
     match claim.check {
         SiteCheck::Tagged => format!("Err(Rejected), site {}", claim.site),
-        SiteCheck::Untagged | SiteCheck::Output => "Err(Rejected)".to_owned(),
+        SiteCheck::Output => "Err(Rejected)".to_owned(),
     }
 }
 
@@ -2264,21 +2264,25 @@ fn tr_ct_pq_classes(s: &TrSession, _: &mut Stream) -> Result<[Vec<u8>; 2], secmp
 }
 
 /// Randomness of each party of the skipped-keys fixture (`FixedEntropy`, more than either draws): A's
-/// initialisation (128), ten header nonces (10 × 24) and three DH steps (3 × 128); B's four DH steps (4 × 128) and
-/// three header nonces (3 × 24).
+/// initialisation (128), thirteen header nonces (13 × 24) and three DH steps (3 × 128); B's four DH steps (4 × 128)
+/// and three header nonces (3 × 24).
 const TR_SKIPPED_RANDOMNESS: usize = 2048;
 
-/// The chains of A of which B holds skipped message keys (`tr_decrypt_reject_skipped`, M3 review R-04: at least 3).
-const TR_SKIPPED_CHAINS: usize = 3;
+/// The skipped message keys B holds per skipped chain of A (`tr_decrypt_reject_skipped`; M3 review R-04: at least 3
+/// chains; WEISUNG M4-4 Part C: 5 + 2 + 2 = 9 entries, 3 distinct header keys, 5 trial candidates).
+const TR_SKIPPED_PER_CHAIN: [usize; 3] = [5, 2, 2];
 
-/// The fixture of `tr_decrypt_reject_skipped` (M3 review R-04, F2): B's state with skipped message keys of three of
-/// A's chains, and A's undelivered cell n = 0 of each of them, in the order the chains were skipped.
+/// The entry of chain 1 that class 1 is under (`(hk_1, 4)`, entry 4 of 9; class 0 is `(hk_1, 0)`, entry 0).
+const TR_SKIPPED_CLASS1_N: usize = 4;
+
+/// The fixture of `tr_decrypt_reject_skipped` (M3 review R-04, F2; WEISUNG M4-4 Part C): B's state with skipped
+/// message keys of three of A's chains, and A's undelivered cells of each, in the order the chains were skipped.
 struct TrSkipped {
-    /// B after the four chains (`tr_skipped_session`): `skipped` = `(hk_1, 0)`, `(hk_1, 1)`, `(hk_2, 0)`,
+    /// B after the four chains (`tr_skipped_session`): `skipped` = `(hk_1, 0)` … `(hk_1, 4)`, `(hk_2, 0)`,
     /// `(hk_2, 1)`, `(hk_3, 0)`, `(hk_3, 1)` in insertion order; `hk_r` is chain 4's header key.
     receiver: RatchetState,
-    /// A's honest cells n = 0 of chains 1, 2 and 3, not delivered.
-    undelivered: Vec<Vec<u8>>,
+    /// A's honest undelivered cells per skipped chain, n = 0, 1, …: 5, 2 and 2 of them.
+    undelivered: Vec<Vec<Vec<u8>>>,
 }
 
 /// `state` encrypts a Dummy and persists (a no-op); the new state and the cell's bytes.
@@ -2314,13 +2318,13 @@ fn key_copy(key: Option<&SecretBytes<32>>) -> Result<SecretBytes<32>, secmp_prot
 }
 
 /// A → B over four of A's sending chains (keys and randomness from the stream, as `tr_session`). On each of chains
-/// 1–3, A sends n = 0, 1, 2 and B receives only n = 2: its DH step stores the skipped keys `(hk_i, 0)` and
-/// `(hk_i, 1)` (spec §7.4 `skip_message_keys(header.n)` on the new chain); B then replies and A's DH step on the reply
-/// starts the next chain (`pn` = 3 = B's `n_r` of the old chain: nothing more is skipped). Chain 4's first cell makes
-/// it B's current receiving chain. Checks that the four header keys are pairwise distinct, that B's `hk_r` is chain
-/// 4's and that neither `hk_r` nor `nhk_r` is a skipped chain's key — so a cell under `hk_1` … `hk_3` can open only
-/// on the skipped path — and that each undelivered cell n = 0 opens on a copy of B (its `(hk_i, 0)` is in
-/// `skipped`).
+/// 1–3, A sends n = 0 … `c_i` and B receives only n = `c_i` (c = 5, 2, 2: `TR_SKIPPED_PER_CHAIN`): its DH step stores
+/// the skipped keys `(hk_i, 0)` … `(hk_i, c_i − 1)` (spec §7.4 `skip_message_keys(header.n)` on the new chain); B then
+/// replies and A's DH step on the reply starts the next chain (`pn` = `c_i` + 1 = B's `n_r` of the old chain: nothing
+/// more is skipped). Chain 4's first cell makes it B's current receiving chain. Checks that the four header keys are
+/// pairwise distinct, that B's `hk_r` is chain 4's and that neither `hk_r` nor `nhk_r` is a skipped chain's key — so
+/// a cell under `hk_1` … `hk_3` can open only on the skipped path — and that each of the nine undelivered cells
+/// opens on a copy of B (its `(hk_i, n)` is in `skipped`).
 fn tr_skipped_session(stream: &mut Stream) -> Result<TrSkipped, secmp_proto::Error> {
     let sk = SecretBytes::<32>::from_slice(&drawn(stream, 32))?;
     let mut sb = [0_u8; 32];
@@ -2335,16 +2339,20 @@ fn tr_skipped_session(stream: &mut Stream) -> Result<TrSkipped, secmp_proto::Err
     let mut b = RatchetState::init_responder(&sk, &sb, spk, rpk)?;
     let mut chain_keys = Vec::new();
     let mut undelivered = Vec::new();
-    for _ in 0..TR_SKIPPED_CHAINS {
+    for count in TR_SKIPPED_PER_CHAIN {
         chain_keys.push(key_copy(a.hk_s_kat())?);
-        let (a1, first) = tr_send(a, &mut a_entropy)?;
-        let (a2, _) = tr_send(a1, &mut a_entropy)?;
-        let (a3, last) = tr_send(a2, &mut a_entropy)?;
+        let mut cells = Vec::new();
+        for _ in 0..count {
+            let (next, cell) = tr_send(a, &mut a_entropy)?;
+            a = next;
+            cells.push(cell);
+        }
+        let (a_last, last) = tr_send(a, &mut a_entropy)?;
         b = tr_receive(b, &last, &mut b_entropy)?;
-        undelivered.push(first);
+        undelivered.push(cells);
         let (b_next, reply) = tr_send(b, &mut b_entropy)?;
         b = b_next;
-        a = tr_receive(a3, &reply, &mut a_entropy)?;
+        a = tr_receive(a_last, &reply, &mut a_entropy)?;
     }
     let current = key_copy(a.hk_s_kat())?;
     let (_, cell) = tr_send(a, &mut a_entropy)?;
@@ -2362,7 +2370,7 @@ fn tr_skipped_session(stream: &mut Stream) -> Result<TrSkipped, secmp_proto::Err
     if !distinct {
         return Err(secmp_proto::Error::Rejected);
     }
-    for cell in &undelivered {
+    for cell in undelivered.iter().flatten() {
         RatchetState::from_bytes(&b.to_bytes()?)?
             .decrypt_with(cell, &mut FixedEntropy::new(&[]))
             .map_err(|r| r.error())?;
@@ -2373,11 +2381,15 @@ fn tr_skipped_session(stream: &mut Stream) -> Result<TrSkipped, secmp_proto::Err
     })
 }
 
-/// `tr_decrypt_reject_skipped`: A's undelivered cell n = 0 of the first (class 0) vs the last (class 1) skipped
-/// chain, each with its body tag (the last `MSG_TAG_LEN` bytes) wrong in byte 0.
+/// `tr_decrypt_reject_skipped` (WEISUNG M4-4 Part C): A's undelivered cell `(hk_1, n = 0)` (class 0, entry 0) vs
+/// `(hk_1, n = 4)` (class 1, entry 4) of the first skipped chain, each with its body tag (the last `MSG_TAG_LEN`
+/// bytes) wrong in byte 0. Both headers open at trial 0 (`hk_1` is the first distinct skipped key).
 fn tr_skipped_classes(fixture: &TrSkipped) -> Result<[Vec<u8>; 2], secmp_proto::Error> {
-    let (Some(first), Some(last)) = (fixture.undelivered.first(), fixture.undelivered.last())
-    else {
+    let chain1 = fixture
+        .undelivered
+        .first()
+        .ok_or(secmp_proto::Error::Rejected)?;
+    let (Some(first), Some(last)) = (chain1.first(), chain1.get(TR_SKIPPED_CLASS1_N)) else {
         return Err(secmp_proto::Error::Rejected);
     };
     let wrong_tag = |cell: &[u8]| {
@@ -2421,8 +2433,14 @@ fn tr_decrypt_reject(
     tr_measure(n, k, stream, claim, session.receiver, &class0, &class1)
 }
 
-/// `tr_decrypt_reject_skipped` (M3 review R-04, F2): `RatchetState::decrypt_with` on the receiver of
-/// `tr_skipped_session`, the classes of `tr_skipped_classes`, measured as every TR target (`tr_measure`).
+/// `tr_decrypt_reject_skipped` (M3 review R-04, F2; respecified by WEISUNG M4-4 Part C): `RatchetState::decrypt_with`
+/// on the receiver of `tr_skipped_session` (9 entries, 3 distinct header keys, 5 candidates), the classes of
+/// `tr_skipped_classes`, measured as every TR target (`tr_measure`). The measured difference is the entry index alone
+/// (M4 review R-58: the lookup selects the message key with masks over every entry).
+///
+/// Classes share the opening trial on purpose: the position of the succeeding trial leaks ≈ 1 floor through the AEAD
+/// library's tag-check branch (R-59, accepted under R-15, hardening F-M5); the early-exit regression F2 was meant for
+/// is caught by `trial_opens_every_candidate_every_call`.
 fn tr_decrypt_reject_skipped(
     n: usize,
     k: usize,
@@ -2442,10 +2460,10 @@ fn tr_decrypt_reject_skipped(
 }
 
 /// The measurement of a TR target on `receiver`: first the pre-check (M3 review R-45, F19) — each class's cell
-/// decrypted once on `receiver` must give `Err(Rejected)`, the unchanged state handed back (SecMP-TR has no
-/// reject-site tag: the §7.4 sites are in `tr/ratchet.rs`; the honest cell of the fixture opens, `tr_session`,
-/// `tr_skipped_session`) — then `n` samples of `k` calls, every input built from one common source with `blend`
-/// (class 1 the base). Aborts (`TR_ACCEPTED`) if any call accepted its cell.
+/// decrypted once on `receiver` must give `Err(Rejected)` with `tr::DECRYPT_SITE_KAT` at the claimed §7.4 site, the
+/// unchanged state handed back (the honest cell of the fixture opens, `tr_session`, `tr_skipped_session`) — then `n`
+/// samples of `k` calls, every input built from one common source with `blend` (class 1 the base). Aborts
+/// (`TR_ACCEPTED`) if any call accepted its cell.
 fn tr_measure(
     n: usize,
     k: usize,
@@ -2467,7 +2485,8 @@ fn tr_measure(
             Err(refused) => {
                 let (state, error) = refused.into_parts();
                 receiver = Some(state);
-                outcome::<()>(&Err(error))
+                let site = secmp_proto::tr::DECRYPT_SITE_KAT.get().unwrap_or("none");
+                format!("{}, site {site}", outcome::<()>(&Err(error)))
             }
         };
     }
@@ -2600,8 +2619,9 @@ fn inv_fp_classes(invitation: &[u8]) -> Result<[Zeroizing<Vec<u8>>; 2], secmp_pr
 /// `inv_fingerprint_compare` (TEST-SPEC-M4 (f); spec §5.5 step 3): `inv::invitee_check` on the issued blob at
 /// `HX_NOW`, the invitation of class 0 vs class 1 (`inv_fp_classes`), each a fresh decode of a `blend`ed encoding
 /// (class 1 the base), taken by value by the call. The blob opens under `K_ld` and decodes in both classes; the
-/// fingerprint comparison refuses. Pre-check (M3 review R-45, F19; `inv.rs` has no reject-site tag): each class gives
-/// `Err(Rejected)` and the unmodified invitation passes the same call. Aborts if any measured call accepted.
+/// fingerprint comparison refuses. Pre-check (M3 review R-45, F19): each class gives `Err(Rejected)` with
+/// `inv::INVITEE_SITE_KAT` at "fingerprint", and the unmodified invitation passes the same call. Aborts if any
+/// measured call accepted.
 fn inv_fingerprint_compare(
     n: usize,
     k: usize,
@@ -2615,11 +2635,16 @@ fn inv_fingerprint_compare(
                 .and_then(|invitation| invitee_check(invitation, &inviter.blob, HX_NOW)),
         )
     };
+    let rejected = |invitation: &[u8]| {
+        let seen = check(invitation);
+        let site = secmp_proto::inv::INVITEE_SITE_KAT.get().unwrap_or("none");
+        format!("{seen}, site {site}")
+    };
     let expected = expected_rejection(CLAIM_INV_FP);
     precheck(
         CLAIM_INV_FP,
         [expected.clone(), expected],
-        [check(&class0), check(&class1)],
+        [rejected(&class0), rejected(&class1)],
         Some(("Ok".to_owned(), check(&inviter.invitation))),
     )?;
     let delta = Deltas::new(&class0, &class1);

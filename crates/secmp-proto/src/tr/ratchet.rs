@@ -166,6 +166,7 @@ pub struct Opened {
     state: RatchetState,
     state_bytes: Zeroizing<Vec<u8>>,
     plaintext: Plaintext,
+    counters: (u32, u32),
 }
 
 impl Opened {
@@ -173,6 +174,13 @@ impl Opened {
     #[must_use]
     pub fn plaintext(&self) -> &Plaintext {
         &self.plaintext
+    }
+
+    /// `(n, pn)` of the opened cell's header (§7.3). SecMP-HX requires `(0, 0)` of the first message
+    /// (ADR-044 (e)).
+    #[must_use]
+    pub const fn header_counters(&self) -> (u32, u32) {
+        self.counters
     }
 
     /// Persist-before-ack: `commit` receives the serialised new state and must durably write it (with the message
@@ -217,6 +225,8 @@ struct Update {
     /// The receiving chain after this message: `(ck_r, n_r)`.
     chain: Option<(SecretBytes<32>, u32)>,
     step: Option<StepUpdate>,
+    /// `(header.n, header.pn)` of the accepted cell (ADR-044 (e): the handshake's first message carries both 0).
+    counters: (u32, u32),
 }
 
 fn copy32(k: &SecretBytes<32>) -> Result<SecretBytes<32>> {
@@ -387,11 +397,37 @@ impl RatchetState {
     /// # Errors
     /// As [`RatchetState::encrypt`].
     pub fn encrypt_with(
-        mut self,
+        self,
         content: &Content,
         entropy: &mut impl Entropy,
     ) -> core::result::Result<Sealed, Refused> {
-        let (ck_s, n_s, cell, digest) = match self.seal(content, entropy) {
+        // pad(content, BODY_LEN)
+        match content.encode() {
+            Ok(body) => self.encrypt_body(&body, entropy),
+            Err(error) => Err(Refused::new(self, error)),
+        }
+    }
+
+    /// [`RatchetState::encrypt_with`] of an already padded body (1710 bytes), for the vector generator, which
+    /// builds Contents the encoder refuses (a non-zero `caps`, SCHEMA-4.10 R9). Feature `kat` only.
+    ///
+    /// # Errors
+    /// As [`RatchetState::encrypt`]; also [`Error::Rejected`] unless `body` is 1710 bytes.
+    #[cfg(feature = "kat")]
+    pub fn encrypt_padded_kat(
+        self,
+        body: &[u8],
+        entropy: &mut impl Entropy,
+    ) -> core::result::Result<Sealed, Refused> {
+        self.encrypt_body(body, entropy)
+    }
+
+    fn encrypt_body(
+        mut self,
+        body: &[u8],
+        entropy: &mut impl Entropy,
+    ) -> core::result::Result<Sealed, Refused> {
+        let (ck_s, n_s, cell, digest) = match self.seal(body, entropy) {
             Ok(x) => x,
             Err(error) => return Err(Refused::new(self, error)),
         };
@@ -420,7 +456,7 @@ impl RatchetState {
     /// the digest of the message key.
     fn seal(
         &self,
-        content: &Content,
+        body: &[u8],
         entropy: &mut impl Entropy,
     ) -> Result<(SecretBytes<32>, u32, Cell, [u8; 32])> {
         let (Some(chain), Some(header_key), Some(chain_ct)) = (&self.ck_s, &self.hk_s, &self.ct_s)
@@ -429,8 +465,9 @@ impl RatchetState {
         };
         // n_s += 1: checked_add; abort at u32::MAX
         let n_next = self.n_s.checked_add(1).ok_or(Error::Rejected)?;
-        // pad(content, BODY_LEN)
-        let body = content.encode()?;
+        if body.len() != BODY_LEN {
+            return Err(Error::Rejected);
+        }
         // (ck_s, mk) = KDF_CK(ck_s)
         let (ck_next, mk) = kdf_ck(chain)?;
         // header = HeaderV1{ dh_pk = dh_s.pk, pn, n = n_s, ek_pq = kem_s.ek, ct_pq = ct_s }
@@ -451,7 +488,7 @@ impl RatchetState {
         #[cfg(not(feature = "kat"))]
         let digest = [0_u8; 32];
         // body = MsgEncrypt(mk, "SecMP-TR/1 body" ‖ sb ‖ hdr_nonce ‖ hdr_ct, pad(content, BODY_LEN))
-        let sealed_body = MsgEncrypt::seal(mk, &body_ad(&self.sb, &hdr_nonce, &hdr_ct), &body)?;
+        let sealed_body = MsgEncrypt::seal(mk, &body_ad(&self.sb, &hdr_nonce, &hdr_ct), body)?;
         // Cell = hdr_nonce ‖ hdr_ct ‖ body (§7.5)
         let cell = [hdr_nonce.as_slice(), &hdr_ct, &sealed_body].concat();
         Ok((ck_next, n_next, Cell::from_bytes(&cell)?, digest))
@@ -481,6 +518,7 @@ impl RatchetState {
             Ok(x) => x,
             Err(error) => return Err(Refused::new(self, error)),
         };
+        let counters = update.counters;
         self.apply(update);
         // cannot fail: `apply` evicts `skipped` to its bound
         match self.to_bytes() {
@@ -488,6 +526,7 @@ impl RatchetState {
                 state: self,
                 state_bytes,
                 plaintext,
+                counters,
             }),
             Err(error) => Err(Refused::new(self, error)),
         }
@@ -572,6 +611,7 @@ impl RatchetState {
                         added: Vec::new(),
                         chain: None,
                         step: None,
+                        counters: skipped_decoded.as_ref().map_or((0, 0), |h| (h.n, h.pn)),
                     },
                     plaintext,
                 ))
@@ -611,6 +651,7 @@ impl RatchetState {
                 added,
                 chain: Some((ck_next, n_r)),
                 step: None,
+                counters: (header.n, header.pn),
             },
             plaintext,
         ))
@@ -668,6 +709,7 @@ impl RatchetState {
                 remove: None,
                 added,
                 chain: Some((ck_next, n_r)),
+                counters: (header.n, header.pn),
                 step: Some(StepUpdate {
                     // pn = n_s; n_s = 0; hk_s = nhk_s; hk_r = nhk_r
                     pn: self.n_s,

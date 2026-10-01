@@ -54,6 +54,8 @@ pub fn canonical(v: &Value) -> String {
 struct Stream {
     s: VectorStream,
     inputs: Map<String, Value>,
+    /// Every byte drawn, in stream order.
+    drawn: Vec<u8>,
 }
 
 impl Stream {
@@ -61,11 +63,13 @@ impl Stream {
         Self {
             s: VectorStream::new(SUITE, i),
             inputs: Map::new(),
+            drawn: Vec::new(),
         }
     }
 
     fn draw(&mut self, name: &str, n: usize) -> Vec<u8> {
         let v = self.s.take(n);
+        self.drawn.extend_from_slice(&v);
         self.list(name, &v);
         v
     }
@@ -118,19 +122,19 @@ fn onion(pubkey: &[u8; 32]) -> Vec<u8> {
 }
 
 /// `InvitationV1` (§5.2) bytes, 241 B.
-struct Invitation {
-    relay_fp: [u8; 32],
-    onion_pubkey: [u8; 32],
-    akc: [u8; 32],
-    ld_id: [u8; 16],
-    link_key: [u8; 32],
-    inviter_fp: [u8; 32],
-    inv_sid: [u8; 16],
-    inv_send_seed: [u8; 32],
+pub struct Invitation {
+    pub relay_fp: [u8; 32],
+    pub onion_pubkey: [u8; 32],
+    pub akc: [u8; 32],
+    pub ld_id: [u8; 16],
+    pub link_key: [u8; 32],
+    pub inviter_fp: [u8; 32],
+    pub inv_sid: [u8; 16],
+    pub inv_send_seed: [u8; 32],
 }
 
 impl Invitation {
-    fn encode(&self, ver: u8, kind: u8, expires: u64) -> Vec<u8> {
+    pub fn encode(&self, ver: u8, kind: u8, expires: u64) -> Vec<u8> {
         let mut b = vec![ver, kind, 0x01];
         b.extend_from_slice(&self.relay_fp);
         b.extend_from_slice(&onion(&self.onion_pubkey));
@@ -150,31 +154,6 @@ impl Invitation {
 
 fn uri(invitation: &[u8]) -> String {
     format!("secmp://i/{}", secmp_proto::inv::base64url_encode(invitation))
-}
-
-/// The values the later cases build on.
-struct Base {
-    r: Identity,
-    i: Identity,
-    keys: Prekeys,
-    bundle: Vec<u8>,
-    inv: Invitation,
-    invitation: Vec<u8>,
-    uri: String,
-    linkdata: Vec<u8>,
-    blob: Vec<u8>,
-    k_ld: SecretBytes<32>,
-    k_inv: SecretBytes<32>,
-    // case 6
-    a: Agreement,
-    first_msg: Vec<u8>,
-    inner: Vec<u8>,
-    inner_ct: Vec<u8>,
-    outer: Vec<u8>,
-    init_id: [u8; 16],
-    cells: [Vec<u8>; 3],
-    content: Vec<u8>,
-    i_after_init: RatchetState,
 }
 
 fn flip_last_bit(mut b: Vec<u8>, at: usize) -> Vec<u8> {
@@ -223,25 +202,28 @@ fn case1() -> (Base1, Value) {
         "bundle": hex(&bundle),
         "opks_post": [OPK_ID],
     });
+    let seed = s.drawn.clone();
     let case = s.finish(1, "keys-R", "R", vec![("outputs", outputs)]);
-    (Base1 { r, keys, bundle }, case)
+    (Base1 { r, keys, bundle, seed }, case)
 }
 
 struct Base1 {
     r: Identity,
     keys: Prekeys,
     bundle: Vec<u8>,
+    seed: Vec<u8>,
 }
 
-fn case2() -> (Identity, Value) {
+fn case2() -> (Identity, Vec<u8>, Value) {
     let mut s = Stream::new(2);
     let xi = s.draw("ik_mldsa_xi", 32);
     let ed = s.draw("ik_ed_seed", 32);
     let dh = s.draw("ik_dh_sk", 32);
     let i = identity(&xi, &ed, &dh);
     let outputs = json!({"iks": hex(&i.iks_bytes), "fp": hex(&i.fp)});
+    let seed = s.drawn.clone();
     let case = s.finish(2, "keys-I", "I", vec![("outputs", outputs)]);
-    (i, case)
+    (i, seed, case)
 }
 
 fn case3(r: &Identity) -> (Invitation, Vec<u8>, String, Value) {
@@ -303,6 +285,7 @@ fn case6(b: &Base0) -> (Base6, Value) {
     let m_tr = s.draw("m_tr", 32);
     let avatar: [u8; 32] = s.arr("avatar_sha256");
     let route = relay_queue(&mut s);
+    let route_encoded = route.encode().unwrap().to_vec();
     let hdr_nonce = s.draw("hdr_nonce", 24);
     let inner_nonce = s.draw("inner_nonce", 24);
     let init_id: [u8; 16] = s.arr("init_id");
@@ -366,6 +349,22 @@ fn case6(b: &Base0) -> (Base6, Value) {
         "cell_0": hex(&cells_bytes[0]), "cell_1": hex(&cells_bytes[1]), "cell_2": hex(&cells_bytes[2]),
         "state_post_I": digest(&state),
     });
+    let entropy = [
+        ek_sk.as_slice(),
+        &m_spk,
+        &m_opk,
+        &dh_s_sk,
+        &kem_s_seed,
+        &m_tr,
+        &hdr_nonce,
+        &inner_nonce,
+        &init_id,
+        &cell_nonces[0],
+        &cell_nonces[1],
+        &cell_nonces[2],
+    ]
+    .concat();
+    let route_bytes = route_encoded;
     let case = s.finish(6, "initiate", "I", vec![("outputs", outputs)]);
     (
         Base6 {
@@ -378,6 +377,12 @@ fn case6(b: &Base0) -> (Base6, Value) {
             cells: cells_bytes,
             content: content_bytes,
             i_after_init,
+            entropy,
+            route: route_bytes,
+            avatar,
+            hdr_nonce,
+            inner_nonce,
+            cell_nonces,
         },
         case,
     )
@@ -390,16 +395,26 @@ struct Base0<'a> {
     inv: &'a Invitation,
 }
 
-struct Base6 {
-    a: Agreement,
-    first_msg: Vec<u8>,
-    inner: Vec<u8>,
-    inner_ct: Vec<u8>,
-    outer: Vec<u8>,
-    init_id: [u8; 16],
-    cells: [Vec<u8>; 3],
-    content: Vec<u8>,
-    i_after_init: RatchetState,
+/// Case 6 and what the negative cases build on.
+pub struct Base6 {
+    pub a: Agreement,
+    pub first_msg: Vec<u8>,
+    pub inner: Vec<u8>,
+    pub inner_ct: Vec<u8>,
+    pub outer: Vec<u8>,
+    pub init_id: [u8; 16],
+    pub cells: [Vec<u8>; 3],
+    pub content: Vec<u8>,
+    pub i_after_init: RatchetState,
+    /// The randomness of `Initiator::start` in the library's draw order (`ek_sk` … `cell_nonce_2`).
+    pub entropy: Vec<u8>,
+    /// The Handshake's route, encoded (155 B), and the profile's avatar hash.
+    pub route: Vec<u8>,
+    pub avatar: [u8; 32],
+    /// `hdr_nonce`, `inner_nonce` and the cell nonces (the same values as in `entropy`).
+    pub hdr_nonce: Vec<u8>,
+    pub inner_nonce: Vec<u8>,
+    pub cell_nonces: [Vec<u8>; 3],
 }
 
 /// R's processing of an honest group (§6.5, §6.6 steps 1–4) from `fetched`, with the DH-step randomness `step`.
@@ -847,13 +862,36 @@ fn r_cases(re: &Re<'_>) -> Vec<(u32, Value)> {
     out
 }
 
-/// The complete `hx` file (the Rust side of `cargo xtask vectors`).
-pub fn generate() -> Value {
+/// The values through case 6 and case 7's randomness: the scenario the negative tests build on.
+pub struct World {
+    pub r: Identity,
+    pub i: Identity,
+    pub keys: Prekeys,
+    /// The stream of case 1 (`ik_mldsa_xi` … `rnd`) and of case 2, in draw order: the entropy of
+    /// `IdentityKeys::generate` (and, for R, the prekeys and the bundle signature).
+    pub r_seed: Vec<u8>,
+    pub i_seed: Vec<u8>,
+    pub bundle: Vec<u8>,
+    pub inv: Invitation,
+    pub invitation: Vec<u8>,
+    pub uri: String,
+    pub linkdata: Vec<u8>,
+    pub blob: Vec<u8>,
+    pub k_ld: SecretBytes<32>,
+    pub k_inv: SecretBytes<32>,
+    pub b6: Base6,
+    /// Case 7's DH-step randomness (`dh_sk` ‖ `kem_seed` ‖ `m`).
+    pub step: Vec<u8>,
+    cases: Vec<(u32, Value)>,
+}
+
+/// Cases 1–8 and everything the later cases build on.
+pub fn world() -> World {
     let (b1, case1) = case1();
-    let (i, case2) = case2();
+    let (i, i_seed, case2) = case2();
     let (inv, invitation, uri_text, case3) = case3(&b1.r);
     let (linkdata, sealed_blob, k_ld_value, case4) = case4(&b1, &inv);
-    let (_k_inv, case5) = case5(&inv, &k_ld_value);
+    let (k_inv_value, case5) = case5(&inv, &k_ld_value);
     let base0 = Base0 {
         r: &b1.r,
         i: &i,
@@ -863,15 +901,8 @@ pub fn generate() -> Value {
     let (b6, case6) = case6(&base0);
     let case7 = case7(&base0, &b6);
     let case8 = case8(&base0, &b6);
-    let _ = (&uri_text, &sealed_blob, &b6.a.sk);
-
-    let pos = Pos {
-        base: &base0,
-        bundle: &b1.bundle,
-        linkdata: &linkdata,
-        invitation: &invitation,
-    };
-    let mut numbered: Vec<(u32, Value)> = vec![
+    let step = Stream::new(7).dh_step();
+    let cases = vec![
         (1, case1),
         (2, case2),
         (3, case3),
@@ -881,10 +912,46 @@ pub fn generate() -> Value {
         (7, case7),
         (8, case8),
     ];
+    World {
+        r: b1.r,
+        i,
+        keys: b1.keys,
+        r_seed: b1.seed,
+        i_seed,
+        bundle: b1.bundle,
+        inv,
+        invitation,
+        uri: uri_text,
+        linkdata,
+        blob: sealed_blob,
+        k_ld: k_ld_value,
+        k_inv: k_inv_value,
+        b6,
+        step,
+        cases,
+    }
+}
+
+/// The complete `hx` file (the Rust side of `cargo xtask vectors`).
+pub fn generate() -> Value {
+    let w = world();
+    let base0 = Base0 {
+        r: &w.r,
+        i: &w.i,
+        keys: &w.keys,
+        inv: &w.inv,
+    };
+    let pos = Pos {
+        base: &base0,
+        bundle: &w.bundle,
+        linkdata: &w.linkdata,
+        invitation: &w.invitation,
+    };
+    let mut numbered: Vec<(u32, Value)> = w.cases.clone();
     numbered.extend(v_cases(&pos));
     numbered.extend(r_cases(&Re {
         base: &base0,
-        b6: &b6,
+        b6: &w.b6,
     }));
     // SCHEMA order: positives, V1–V8 (9–16), R1–R12 (17–28), V9 (29), R13 (30)
     numbered.sort_by_key(|(i, _)| *i);

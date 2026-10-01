@@ -94,15 +94,8 @@ pub struct Prekeys {
     pub opk_kem: MlKem1024Dk,
 }
 
-/// The bundle bytes (§6.3, 7775 B) with `spk_expiry`, `opk_present` and the signature over the encoded fields
-/// before `sig` ‖ `ik_dh` of `signer`, hedged with `rnd`.
-pub fn bundle_bytes(
-    signer: &Identity,
-    keys: &Prekeys,
-    spk_expiry: u64,
-    opk_present: u8,
-    rnd: &[u8; 32],
-) -> Vec<u8> {
+/// The bundle fields before `sig` (§6.3, 4402 B) with `spk_expiry` and `opk_present`.
+pub fn bundle_fields(keys: &Prekeys, spk_expiry: u64, opk_present: u8) -> Vec<u8> {
     let mut b = vec![0x01];
     b.extend_from_slice(&SPK_ID.to_be_bytes());
     b.extend_from_slice(keys.spk_dh.public_key().as_bytes());
@@ -114,9 +107,38 @@ pub fn bundle_bytes(
     b.extend_from_slice(keys.opk_dh.public_key().as_bytes());
     b.extend_from_slice(keys.opk_kem.encapsulation_key().as_bytes());
     assert_eq!(b.len(), 7775 - 3373);
-    let message = [b.as_slice(), signer.iks.ik_dh.as_bytes()].concat();
-    let sig = signer.sig.sign_kat(Label::HxBundle, &message, rnd).unwrap();
-    b.extend_from_slice(sig.as_bytes().as_slice());
+    b
+}
+
+/// `fields ‖ HybridSign(signer, label, fields ‖ ik_dh)`, ML-DSA hedged with `rnd`.
+pub fn sign_fields(
+    signer: &Identity,
+    fields: &[u8],
+    ik_dh: &[u8],
+    rnd: &[u8; 32],
+    label: Label,
+) -> Vec<u8> {
+    let message = [fields, ik_dh].concat();
+    let sig = signer.sig.sign_kat(label, &message, rnd).unwrap();
+    [fields, sig.as_bytes().as_slice()].concat()
+}
+
+/// The bundle bytes (§6.3, 7775 B) with `spk_expiry`, `opk_present` and the signature over the encoded fields
+/// before `sig` ‖ `ik_dh` of `signer`, hedged with `rnd`.
+pub fn bundle_bytes(
+    signer: &Identity,
+    keys: &Prekeys,
+    spk_expiry: u64,
+    opk_present: u8,
+    rnd: &[u8; 32],
+) -> Vec<u8> {
+    let b = sign_fields(
+        signer,
+        &bundle_fields(keys, spk_expiry, opk_present),
+        signer.iks.ik_dh.as_bytes(),
+        rnd,
+        Label::HxBundle,
+    );
     assert_eq!(b.len(), 7775);
     b
 }

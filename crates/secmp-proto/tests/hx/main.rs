@@ -16,4 +16,7 @@ mod hx_gen;
 mod fixture;
 mod flow;
 mod generator;
+mod inv;
+mod layout;
+mod scenario;
 mod vectors;

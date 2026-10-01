@@ -80,6 +80,12 @@ impl<K: PartialEq, C, const N: usize> Groups<K, C, N> {
         self.slots.get(at)?.as_ref()
     }
 
+    /// [`Groups::remove`] for the grouping harness, which removes a completed group as [`drive`] does.
+    #[cfg(kani)]
+    pub(crate) fn remove_completed(&mut self, at: usize) -> Option<Group<K, C>> {
+        self.remove(at)
+    }
+
     fn position(&self, init_id: &K) -> Option<usize> {
         self.slots
             .iter()

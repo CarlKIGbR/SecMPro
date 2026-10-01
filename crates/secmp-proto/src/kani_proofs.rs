@@ -371,10 +371,10 @@ fn tr_eviction() {
 // ---- M4: SecMP-HX (spec §6.5, §6.6; ADR-044 (c)) --------------------------------------------------------------------
 
 use crate::error::{Error, Result};
-use crate::hx::responder::{Groups, drive, insert};
+use crate::hx::responder::{Groups, MAX_PARTIAL_GROUPS, drive, insert};
 use crate::prekeys::{OpkSecrets, PrekeyStore, SpkGeneration};
 use crate::sizes::{
-    HANDSHAKE_CELL_PT_LEN, HANDSHAKE_CHUNK_LEN, HANDSHAKE_CHUNKS, OUTER_PADDED_LEN,
+    HANDSHAKE_CELL_PT_LEN, HANDSHAKE_CHUNK_LEN, HANDSHAKE_CHUNKS, OUTER_LEN, OUTER_PADDED_LEN,
 };
 use crate::wire::hx::{HandshakeCellPlaintext, Outer};
 
@@ -399,12 +399,13 @@ fn kani_hx_chunk_bounds() {
     assert!(chunk * HANDSHAKE_CHUNK_LEN + offset == j);
 }
 
-/// `Outer` (D.4) on every 12018-byte input and its neighbours, with the ISO/IEC 7816-4 scan stubbed by an
-/// over-approximation (any proper prefix, or a rejection; `unpad` itself is proven by `padding`): the decoder never
-/// panics, and accepts only an input of exactly 12018 bytes.
+/// `Outer` (D.4) on every input of 0…12019 bytes, with the ISO/IEC 7816-4 scan stubbed by an over-approximation (any
+/// proper prefix, or a rejection; the real scan is `kani_outer_unpad_total`): the field decoder never panics on any
+/// field string, and the decoder accepts only an input of exactly 12018 bytes. (Before WEISUNG M4-3 this harness was
+/// `kani_outer_unpad_total`; it is kept for the field strings and lengths the real-scan harness does not reach.)
 #[kani::proof]
 #[kani::stub(crate::codec::unpad, crate::codec::kani_stubs::unpad)]
-fn kani_outer_unpad_total() {
+fn kani_outer_fields_total() {
     let bytes: [u8; OUTER_PADDED_LEN + 1] = kani::any();
     let len: usize = kani::any();
     kani::assume(len <= OUTER_PADDED_LEN + 1);
@@ -414,68 +415,203 @@ fn kani_outer_unpad_total() {
     }
 }
 
-/// The grouping of §6.5 with ADR-044 (c) over the fixed-array `Groups` (no `Vec`), on every sequence of at most 4
-/// chunks `(init_id, i)` over 3 init_ids with a symbolic `u8` payload and a bound of `N` = 2 partial groups (the
-/// logic is the same for every `N`; the production bound `MAX_PARTIAL_GROUPS` = 8 is tested by
-/// `group_partial_store_bound_8_evicts_oldest`): at most `N` groups are stored, never more than the chunks seen; at
-/// most one group per init_id; `insert` answers with a group index exactly when that group is complete (chunks 0, 1
-/// and 2); a duplicate `(init_id, i)` never replaces the stored chunk (first-seen wins); a chunk of a new init_id
-/// with `N` groups held evicts exactly the oldest; an index of 3 or more changes nothing.
-#[kani::proof]
-#[kani::unwind(6)]
-fn kani_hx_grouping() {
-    const N: usize = 2;
-    let mut groups: Groups<u8, u8, N> = Groups::new();
-    let steps: usize = kani::any();
-    kani::assume(steps <= 4);
-    for step in 0..steps {
-        let id: u8 = kani::any();
-        kani::assume(id <= 2);
-        let i: usize = kani::any();
-        kani::assume(i <= 3);
-        let value: u8 = kani::any();
-        let find = |g: &Groups<u8, u8, N>, id: u8| {
-            (0..g.len()).find(|k| g.get(*k).is_some_and(|x| x.init_id == id))
-        };
-        let known = find(&groups, id);
-        let old = known
-            .and_then(|k| groups.get(k))
-            .and_then(|g| g.chunks.get(i).copied().flatten());
-        let held = groups.len();
-        let oldest = groups.get(0).map(|g| g.init_id);
-        let done = insert(&mut groups, id, i, value);
-        assert!(groups.len() <= N && groups.len() <= step + 1);
-        if i >= 3 {
-            assert!(done.is_none() && groups.len() == held);
-            continue;
+/// `kani_outer_unpad_total`: the symbolic tail of the 12018-byte input — the last 44 field bytes, the marker position
+/// 9362 and all 2655 pad bytes after it; the 9318 bytes before it are [`outer_fields`].
+const OUTER_TAIL: usize = 2700;
+
+/// A fixed `Outer` field string the decoder accepts: `ver` = 1, `EK_I` = the X25519 base point (u = 9, not of low
+/// order), every other byte 0x5a (ids, ciphertexts, nonce and commitment are not checked by the decoder; 0x5a is
+/// neither the marker nor zero, so a scan that reaches these bytes stops at the first one).
+fn outer_fields() -> [u8; OUTER_PADDED_LEN + 1] {
+    let mut b = [0x5a_u8; OUTER_PADDED_LEN + 1];
+    b[0] = 1;
+    b[1] = 9;
+    b[2..33].fill(0);
+    b
+}
+
+/// `Outer::decode(input)` through the real ISO/IEC 7816-4 scan (`unpad`, spec §4.1; nothing stubbed): no panic; an
+/// accepted input has exactly 12018 bytes, byte 9362 is the marker 0x80 and bytes 9363…12017 are 0x00 (one symbolic
+/// index stands for every index) — so the last non-zero byte is at 9362 and the `unpad` output the decoder consumed
+/// in full is the first 9362 bytes, the `Outer` fields (a second `unpad` call in the harness to measure that length
+/// would repeat the scan, whose cost is quadratic in its length; see `outer_tail`). A rejection is the uniform
+/// `Rejected`. Returns whether `input` was accepted.
+fn outer_accepts_exact_padding(input: &[u8]) -> bool {
+    match Outer::decode(input) {
+        Ok(_) => {
+            assert!(input.len() == OUTER_PADDED_LEN);
+            assert!(input.get(OUTER_LEN) == Some(&0x80));
+            let j: usize = kani::any();
+            kani::assume(j > OUTER_LEN && j < OUTER_PADDED_LEN);
+            assert!(input.get(j) == Some(&0));
+            true
         }
-        let at = find(&groups, id);
-        assert!(at.is_some());
-        let at = at.unwrap_or(0);
-        let count = (0..groups.len())
-            .filter(|k| groups.get(*k).is_some_and(|x| x.init_id == id))
-            .count();
-        assert!(count == 1);
-        let group = groups.get(at);
-        assert!(group.is_some_and(|g| done == g.complete().then_some(at)));
-        let stored = group.and_then(|g| g.chunks.get(i).copied().flatten());
-        assert!(stored == Some(old.unwrap_or(value)));
-        if known.is_none() && held >= N {
-            assert!(groups.len() == N);
-            assert!(oldest.is_some_and(|o| find(&groups, o).is_none()));
+        Err(e) => {
+            assert!(e == Error::Rejected);
+            false
         }
     }
 }
 
-/// A prekey store that only counts: no keys; `commit_accept` records the call and either commits (the OPK flag goes
-/// false) or fails and keeps the OPK.
-struct CountingStore {
-    opk_present: bool,
-    commits: u8,
-    fail_commit: bool,
+/// [`outer_accepts_exact_padding`] on every 12018-byte input whose last `TAIL` bytes are symbolic, after the fixed
+/// [`outer_fields`] prefix. An accepted input has its marker in the tail: the scan reaches the prefix only through an
+/// all-zero tail (more than `TAIL` trailing zero bytes), and such an input is rejected. One scan per input: Kani's
+/// unwinding of the scan costs time roughly quadratic in its length (M4 report §11).
+fn outer_tail<const TAIL: usize>() {
+    let prefix = OUTER_PADDED_LEN - TAIL;
+    let mut bytes = outer_fields();
+    let tail: [u8; TAIL] = kani::any();
+    bytes[prefix..OUTER_PADDED_LEN].copy_from_slice(&tail);
+    let accepted = outer_accepts_exact_padding(&bytes[..OUTER_PADDED_LEN]);
+    if accepted {
+        assert!(OUTER_LEN.checked_sub(prefix).and_then(|k| tail.get(k)) == Some(&0x80));
+    }
+    kani::cover!(accepted, "an input is accepted");
 }
 
-impl PrekeyStore for CountingStore {
+/// K2a. `Outer` (D.4) through the real `unpad` on every 12018-byte input whose last 2700 bytes are symbolic (every
+/// field-string length from 9318 bytes up, every marker position from 9318, every pad content) after a fixed valid
+/// field prefix: see [`outer_tail`]. Not covered: other contents of the first 9318 bytes, among them an all-zero
+/// input (a scan over more than the last 2700 bytes did not finish within 30 minutes; `kani_outer_fields_total`
+/// covers every field string and length with the scan stubbed).
+#[kani::proof]
+#[kani::unwind(2702)] // the marker scan over the 2700 symbolic bytes and the first prefix byte (non-zero)
+fn kani_outer_unpad_total() {
+    outer_tail::<OUTER_TAIL>();
+}
+
+/// `kani_hx_grouping` bound (WEISUNG M4-3 fallback): at the production bound [`MAX_PARTIAL_GROUPS`] = 8 with 9 ids
+/// and 10 inserts, Kani gave no result within 30 minutes, twice (M4 report §11). The same code runs here with 3
+/// slots, 4 distinct ids (one more than the slots, so a new id with every slot held — eviction — is reachable) and at
+/// most 6 inserts.
+const GROUPING_SLOTS: usize = 3;
+const GROUPING_IDS: usize = GROUPING_SLOTS + 1;
+const GROUPING_STEPS: usize = 6;
+const _: () = assert!(GROUPING_SLOTS < MAX_PARTIAL_GROUPS);
+
+/// The slots of `groups` as values, oldest first: `(init_id, chunks)` of each held group.
+fn slots<const N: usize>(groups: &Groups<u8, u8, N>) -> [Option<(u8, [Option<u8>; 3])>; N] {
+    core::array::from_fn(|k| groups.get(k).map(|g| (g.init_id, g.chunks)))
+}
+
+/// The model's removal of entry `p` of the first `held` entries of `order`, the later ones moving down one place (an
+/// element loop: with `copy_within`, i.e. `ptr::copy` over a symbolic count, Kani reported a counterexample that
+/// the same inputs do not reproduce natively or under Kani with concrete values; M4 report §11).
+fn drop_at(order: &mut [usize], p: usize, held: usize) {
+    for j in p..held.saturating_sub(1) {
+        order[j] = order[j + 1];
+    }
+}
+
+/// The grouping of §6.5 with ADR-044 (c) over `N` slots, on every sequence of at most `steps` chunks
+/// `(init_id, i, chunk_tag)` with `init_id` one of `IDS` distinct symbolic ids, `i` ≤ 2 and a symbolic tag, against
+/// an independent model (the held ids in arrival order, and per id the first-seen tag of each `i`). A group that
+/// completes is removed from the slots by the function `drive` removes it with (`Groups::remove`). After every
+/// insert: the slots hold exactly the model's groups in arrival order, each with the model's chunks (at most one
+/// group per id, at most 3 chunks, the first-seen tag per `i`), and at most `N` groups; `insert` answers with a
+/// group exactly when the model has seen `i` = 0, 1 and 2 for that id, and that group carries the first-seen tags;
+/// a duplicate `(init_id, i)`, identical or differing, leaves the slots unchanged; a new id with `N` groups held
+/// evicts the model's oldest id (the one that arrived first, not the implementation's slot 0).
+fn grouping<const N: usize, const IDS: usize>(steps: usize) {
+    let ids: [u8; IDS] = kani::any();
+    for a in 0..IDS {
+        for b in 0..a {
+            kani::assume(ids[a] != ids[b]);
+        }
+    }
+    // the model: the held ids (indices into `ids`), oldest first, and per id the first-seen tag of each `i`
+    let mut order = [0_usize; N];
+    let mut held = 0_usize;
+    let mut seen = [[None::<u8>; 3]; IDS];
+    let mut groups: Groups<u8, u8, N> = Groups::new();
+    for _ in 0..steps {
+        let w: usize = kani::any();
+        kani::assume(w < IDS);
+        let i: usize = kani::any();
+        kani::assume(i <= 2);
+        let tag: u8 = kani::any();
+        let id = ids[w];
+        let before = slots(&groups);
+
+        // the model's step
+        let known = order[..held].contains(&w);
+        let duplicate = known && seen[w][i].is_some();
+        let mut evicted = None;
+        if !known {
+            if held == N {
+                let oldest = order[0];
+                seen[oldest] = [None; 3];
+                drop_at(&mut order, 0, held);
+                held -= 1;
+                evicted = Some(ids[oldest]);
+            }
+            order[held] = w;
+            held += 1;
+        }
+        if seen[w][i].is_none() {
+            seen[w][i] = Some(tag);
+        }
+        let chunks = seen[w];
+        let complete = chunks.iter().all(Option::is_some);
+
+        // the implementation's step
+        let done = insert(&mut groups, id, i, tag);
+        assert!(done.is_some() == complete);
+        if duplicate {
+            assert!(slots(&groups) == before);
+        }
+        if let Some(e) = evicted {
+            assert!(slots(&groups).iter().all(|s| s.is_none_or(|(x, _)| x != e)));
+        }
+        if let Some(at) = done {
+            // the responder's next step (`drive`): the completed group leaves the slots
+            let group = groups.remove_completed(at);
+            assert!(group.is_some_and(|g| g.init_id == id && g.chunks == chunks));
+            let p = order[..held].iter().position(|x| *x == w).unwrap_or(held);
+            drop_at(&mut order, p, held);
+            held -= 1;
+            seen[w] = [None; 3];
+        }
+
+        // the slots are the model
+        assert!(groups.len() == held && held <= N);
+        let now = slots(&groups);
+        for k in 0..N {
+            let expected = (k < held).then(|| (ids[order[k]], seen[order[k]]));
+            assert!(now[k] == expected);
+        }
+        assert!(
+            now.iter()
+                .filter(|s| s.is_some_and(|(x, _)| x == id))
+                .count()
+                <= 1
+        );
+    }
+}
+
+/// K3: [`grouping`] with [`GROUPING_SLOTS`] slots, [`GROUPING_IDS`] ids and up to [`GROUPING_STEPS`] inserts (the
+/// bound and why it is not the production 8: [`GROUPING_SLOTS`]).
+#[kani::proof]
+#[kani::unwind(7)] // GROUPING_STEPS + 1; the other loops run over at most GROUPING_IDS or GROUPING_SLOTS
+fn kani_hx_grouping() {
+    let steps: usize = kani::any();
+    kani::assume(steps <= GROUPING_STEPS);
+    grouping::<GROUPING_SLOTS, GROUPING_IDS>(steps);
+}
+
+/// A prekey store without keys that keeps the contract of [`PrekeyStore::commit_accept`]: the OPK and the record are
+/// removed together (`Ok`), or nothing changes (`Err`: either is absent, or the commit could not be made durable).
+/// It counts the calls and keeps their arguments. (`MemoryPrekeyStore` cannot hold an OPK or a record under Kani:
+/// their secrets live in `secmp-sys-mem` pages, whose `mmap` Kani does not execute; see the M4 report.)
+struct ContractStore {
+    opk_present: bool,
+    record_present: bool,
+    durable: bool,
+    commits: u8,
+    committed_with: Option<(u32, [u8; 16])>,
+}
+
+impl PrekeyStore for ContractStore {
     fn spk(&self, _spk_id: u32) -> Option<&SpkGeneration> {
         None
     }
@@ -488,73 +624,122 @@ impl PrekeyStore for CountingStore {
         Err(Error::Rejected)
     }
 
-    fn commit_accept(&mut self, _opk_id: u32, _ld_id: &[u8; 16]) -> Result<()> {
+    fn commit_accept(&mut self, opk_id: u32, ld_id: &[u8; 16]) -> Result<()> {
         self.commits = self.commits.saturating_add(1);
-        if self.fail_commit {
-            Err(Error::Rejected)
-        } else {
+        self.committed_with = Some((opk_id, *ld_id));
+        if self.opk_present && self.record_present && self.durable {
             self.opk_present = false;
+            self.record_present = false;
             Ok(())
+        } else {
+            Err(Error::Rejected)
         }
     }
 }
 
-/// `drive` (the only caller of `commit_accept`) with the cryptographic steps replaced by a nondeterministic outcome
-/// per step, over every sequence of at most 4 chunks of 3 init_ids (group bound 8, as in production): the commit is
-/// called at most once, only after the processing of a group succeeded; `Ok` leaves the OPK committed; every `Err`
-/// leaves it in place (a failed commit keeps it by the store's contract); `Unavailable` never commits.
+/// `kani_accept_opk_delete_only_on_success`: chunks per run (two complete groups fit).
+const DRIVE_CHUNKS: usize = 6;
+
+/// `drive` (the only caller of `commit_accept`; group bound 8, as in production) with the cryptographic steps of
+/// §6.6 replaced by a nondeterministic outcome per step, over every sequence of at most 6 chunks of 3 init_ids,
+/// every `opk_id`/`ld_id` and every store state (OPK and record present or not, commit durable or not): only
+/// complete groups are processed; `commit_accept` is called (once, with the record's `opk_id` and `ld_id`) **if and
+/// only if** a processed group passed every step, and no group is processed after that; every processing sees the
+/// store untouched, so a rejected complete group leaves it as it was and a later group can still commit (the cover
+/// property: a first group rejected, a group of another init_id committed); `Ok` ⇔ that commit succeeded, and then
+/// the OPK and the record are gone; every `Err` leaves the store as it was; `Unavailable` comes only from a step and
+/// never commits.
 #[kani::proof]
-#[kani::unwind(10)]
+#[kani::unwind(10)] // DRIVE_CHUNKS + 1 items; the 8 slots; 4 steps
 fn kani_accept_opk_delete_only_on_success() {
-    let mut store = CountingStore {
-        opk_present: true,
+    let opk_present: bool = kani::any();
+    let record_present: bool = kani::any();
+    let mut store = ContractStore {
+        opk_present,
+        record_present,
+        durable: kani::any(),
         commits: 0,
-        fail_commit: kani::any(),
+        committed_with: None,
     };
+    let opk_id: u32 = kani::any();
+    let ld_id: [u8; 16] = kani::any();
     let n: usize = kani::any();
-    kani::assume(n <= 4);
-    let items: [(u8, usize, ()); 4] = core::array::from_fn(|_| {
+    kani::assume(n <= DRIVE_CHUNKS);
+    let items: [(u8, usize, ()); DRIVE_CHUNKS] = core::array::from_fn(|_| {
         let id: u8 = kani::any();
         kani::assume(id <= 2);
         let i: usize = kani::any();
         kani::assume(i < 3);
         (id, i, ())
     });
-    let processed_ok = core::cell::Cell::new(false);
+    // per call of `process`: the calls so far, the init_id of the first, the call that passed every step, and
+    // whether a step was `Unavailable`
+    let calls = core::cell::Cell::new(0_u8);
+    let first_id = core::cell::Cell::new(None::<u8>);
+    let accepted = core::cell::Cell::new(None::<(u8, u8)>);
+    let unavailable = core::cell::Cell::new(false);
     let result = drive(
         items.into_iter().take(n),
         &mut store,
-        42,
-        &[0; 16],
-        |_group, _store| {
+        opk_id,
+        &ld_id,
+        |group, store| {
+            assert!(group.complete());
+            assert!(accepted.get().is_none() && !unavailable.get());
+            assert!(store.commits == 0);
+            assert!(store.opk_present == opk_present && store.record_present == record_present);
+            let call = calls.get();
+            calls.set(call.saturating_add(1));
+            if call == 0 {
+                first_id.set(Some(group.init_id));
+            }
             // the steps of §6.6 (outer decode, id checks, K_id, inner open, transcript, TR decrypt, Content checks):
             // each succeeds or fails, arbitrarily
             for _ in 0..4 {
                 if kani::any() {
-                    return Err(if kani::any() {
+                    let e = if kani::any() {
                         Error::Rejected
                     } else {
+                        unavailable.set(true);
                         Error::Unavailable
-                    });
+                    };
+                    return Err(e);
                 }
             }
-            processed_ok.set(true);
-            Ok(())
+            accepted.set(Some((call, group.init_id)));
+            Ok(call)
         },
     );
     assert!(store.commits <= 1);
-    if store.commits == 1 {
-        assert!(processed_ok.get());
+    assert!((store.commits == 1) == accepted.get().is_some());
+    if let Some((o, l)) = store.committed_with {
+        // the record's `opk_id` and `ld_id` (one symbolic index stands for every index: no 16-byte `memcmp` loop)
+        assert!(o == opk_id);
+        same_bytes(&l, &ld_id);
     }
+    let ok = result.is_ok();
     match result {
-        Ok(()) => assert!(store.commits == 1 && !store.fail_commit && !store.opk_present),
+        Ok(call) => {
+            assert!(accepted.get().is_some_and(|(c, _)| c == call));
+            assert!(opk_present && record_present && store.durable);
+            assert!(!store.opk_present && !store.record_present);
+        }
         Err(e) => {
-            assert!(store.opk_present);
+            assert!(store.opk_present == opk_present && store.record_present == record_present);
             if e == Error::Unavailable {
-                assert!(store.commits == 0);
+                assert!(unavailable.get() && store.commits == 0);
+            } else {
+                assert!(e == Error::Rejected);
             }
         }
     }
+    kani::cover!(
+        ok && calls.get() == 2
+            && accepted
+                .get()
+                .is_some_and(|(c, id)| c == 1 && first_id.get() != Some(id)),
+        "a rejected complete group, then a group of another init_id commits"
+    );
 }
 
 /// `HandshakeCellPlaintext` (D.4) on every input of 4023…4025 bytes (the exact size and its neighbours): the decoder

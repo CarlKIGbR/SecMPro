@@ -17,9 +17,9 @@
 //! and the record's consumption durable together with the new session state, and a failed `commit_accept` leaves the OPK in place (the handshake is
 //! then rejected and the invitee's byte-identical retry is processed again, §6.5).
 
-use secmp_crypto::{
-    HybridSigningKey, Label, MlKem768Dk, MlKem1024Dk, SecretBytes, X25519Secret, sha256,
-};
+#[cfg(any(test, feature = "kat"))]
+use secmp_crypto::sha256;
+use secmp_crypto::{HybridSigningKey, Label, MlKem768Dk, MlKem1024Dk, SecretBytes, X25519Secret};
 
 use crate::codec::Encode;
 use crate::error::{Error, Result};

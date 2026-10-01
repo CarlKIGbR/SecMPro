@@ -1,7 +1,4 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-#![cfg(feature = "kat")]
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-#![forbid(unsafe_code)]
 //! Differential tests (docs/06 §4, M1 acceptance "differential tests pass 10 000 iterations"; feature `kat` of
 //! `secmp-testkit`, which enables `secmp-crypto/kat`). They live here, not in `secmp-crypto`, so that the test
 //! graph of `secmp-crypto` stays pure Rust (Miri; no C build per mutant):
@@ -16,6 +13,12 @@
 //! Inputs come from SHAKE-256(master seed ‖ u32be(iteration)); the master seed is random per run (or
 //! `SECMP_DIFF_SEED`, 64 hex digits) and is part of every assertion message, so a failure is reproducible.
 //! `SECMP_DIFF_ITERATIONS` overrides the iteration count (default 10 000).
+//!
+//! Without feature `kat` the crate is empty; this documentation comes before the `cfg` so that it stays (the
+//! workspace's `missing_docs` applies to the empty crate too).
+#![cfg(feature = "kat")]
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![forbid(unsafe_code)]
 
 use aws_lc_rs::signature::{
     ED25519, Ed25519KeyPair, KeyPair, ML_DSA_65, ML_DSA_65_SIGNING, PqdsaKeyPair, UnparsedPublicKey,

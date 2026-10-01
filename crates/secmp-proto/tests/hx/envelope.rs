@@ -19,7 +19,7 @@ impl Lib {
         sb_override: Option<[u8; 32]>,
     ) -> Vec<Vec<u8>> {
         let e = &self.w.b6.entropy;
-        let at = |from: usize, to: usize| &e[from..to];
+        let at = |from: usize, to: usize| e.get(from..to).unwrap();
         let a = agree(&AgreeIn {
             i: initiator,
             r: &self.w.r,
@@ -35,8 +35,8 @@ impl Lib {
         let rpk =
             MlKem768Ek::from_bytes(self.w.keys.rpk_kem.encapsulation_key().as_bytes()).unwrap();
         let mut tr_entropy = FixedEntropy::new(at(96, 224));
-        let state = RatchetState::init_initiator_with(&a.sk, &sb, &spk_dh, &rpk, &mut tr_entropy)
-            .unwrap();
+        let state =
+            RatchetState::init_initiator_with(&a.sk, &sb, &spk_dh, &rpk, &mut tr_entropy).unwrap();
         let first_msg = state
             .encrypt_padded_kat(content, &mut FixedEntropy::new(at(224, 248)))
             .map_err(|r| r.error())

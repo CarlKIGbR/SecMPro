@@ -8,16 +8,16 @@
 //! The library types used here are the wire structures of Appendix D (decoders) and `RatchetState` (SecMP-TR).
 
 use secmp_crypto::{
-    Caead, Fingerprint, HybridSigningKey, Label, MlKem768Dk, MlKem1024Dk, Nonce24,
-    SecretBytes, X25519Public, X25519Secret, hkdf, sha256,
+    Caead, Fingerprint, HybridSigningKey, Label, MlKem768Dk, MlKem1024Dk, Nonce24, SecretBytes,
+    X25519Public, X25519Secret, hkdf, sha256,
 };
+use secmp_proto::Encode;
 use secmp_proto::codec::{pad, unpad};
 use secmp_proto::keys::{Ed25519Pk, MlKem768Ek, X25519Pk};
 use secmp_proto::sizes::{BODY_LEN, CELL_LEN};
 use secmp_proto::tr::{FixedEntropy, RatchetState};
 use secmp_proto::wire::cell::{Content, ContentBody, HandshakeBody, RouteDescriptor};
 use secmp_proto::wire::inv::{IksPublic, Profile};
-use secmp_proto::Encode;
 
 pub const CREATED: u64 = 1_700_000_000;
 pub const NOW: u64 = 1_700_000_100;
@@ -144,7 +144,11 @@ pub fn bundle_bytes(
 }
 
 pub fn profile_bytes(name: &str, avatar: Option<[u8; 32]>) -> Vec<u8> {
-    Profile::new(name, avatar).unwrap().encode().unwrap().to_vec()
+    Profile::new(name, avatar)
+        .unwrap()
+        .encode()
+        .unwrap()
+        .to_vec()
 }
 
 /// `LinkDataV1` without padding: `ver ‖ IKSPublic ‖ bundle ‖ Profile ‖ created` (§5.4).
@@ -204,7 +208,16 @@ pub fn transcript(c: [&[u8]; 13]) -> [u8; 32] {
 
 /// `SK = HKDF(0^32, 0xFF^32 ‖ DH1 ‖ DH2 ‖ DH3 ‖ DH4 ‖ ss_spk ‖ ss_opk, "SecMP-HX/1 sk" ‖ transcript, 32)`.
 pub fn sk(parts: [&[u8]; 6], transcript: &[u8; 32]) -> SecretBytes<32> {
-    let ikm = [&[0xff_u8; 32][..], parts[0], parts[1], parts[2], parts[3], parts[4], parts[5]].concat();
+    let ikm = [
+        &[0xff_u8; 32][..],
+        parts[0],
+        parts[1],
+        parts[2],
+        parts[3],
+        parts[4],
+        parts[5],
+    ]
+    .concat();
     hkdf::<32>(&[0; 32], &ikm, Label::HxSk, &[transcript]).unwrap()
 }
 
@@ -213,11 +226,11 @@ pub fn k_id(
     ld_id: &[u8; 16],
     link_key: &[u8; 32],
     dh3: &[u8],
-    ss_spk: &[u8],
+    ss_signed: &[u8],
     dh4: &[u8],
-    ss_opk: &[u8],
+    ss_onetime: &[u8],
 ) -> SecretBytes<32> {
-    let ikm = [link_key.as_slice(), dh3, ss_spk, dh4, ss_opk].concat();
+    let ikm = [link_key.as_slice(), dh3, ss_signed, dh4, ss_onetime].concat();
     hkdf::<32>(ld_id, &ikm, Label::HxIdkey, &[]).unwrap()
 }
 
@@ -225,7 +238,11 @@ pub fn k_id(
 pub fn inner_ct(k_id: &SecretBytes<32>, ld_id: &[u8; 16], n2: &[u8], inner: &[u8]) -> Vec<u8> {
     assert_eq!(inner.len(), INNER_LEN);
     let ad = [Label::HxInner.as_bytes(), ld_id.as_slice()].concat();
-    let out = [n2, Caead::seal(k_id, nonce(n2), &ad, inner).unwrap().as_slice()].concat();
+    let out = [
+        n2,
+        Caead::seal(k_id, nonce(n2), &ad, inner).unwrap().as_slice(),
+    ]
+    .concat();
     assert_eq!(out.len(), INNER_CT_LEN);
     out
 }
@@ -235,16 +252,16 @@ pub fn outer(
     ek: &[u8],
     spk_id: u32,
     opk_id: u32,
-    ct_spk: &[u8],
-    ct_opk: &[u8],
+    ct_signed: &[u8],
+    ct_onetime: &[u8],
     inner_ct: &[u8],
 ) -> Vec<u8> {
     let mut o = vec![0x01];
     o.extend_from_slice(ek);
     o.extend_from_slice(&spk_id.to_be_bytes());
     o.extend_from_slice(&opk_id.to_be_bytes());
-    o.extend_from_slice(ct_spk);
-    o.extend_from_slice(ct_opk);
+    o.extend_from_slice(ct_signed);
+    o.extend_from_slice(ct_onetime);
     o.extend_from_slice(inner_ct);
     assert_eq!(o.len(), OUTER_LEN);
     o
@@ -254,7 +271,13 @@ pub fn outer(
 /// plaintext `init_id ‖ i ‖ total ‖ chunk`.
 pub fn cell_raw(k_inv: &SecretBytes<32>, ld_id: &[u8; 16], n: &[u8], plaintext: &[u8]) -> Vec<u8> {
     let ad = [Label::HxInitcell.as_bytes(), ld_id.as_slice()].concat();
-    let out = [n, Caead::seal(k_inv, nonce(n), &ad, plaintext).unwrap().as_slice()].concat();
+    let out = [
+        n,
+        Caead::seal(k_inv, nonce(n), &ad, plaintext)
+            .unwrap()
+            .as_slice(),
+    ]
+    .concat();
     assert_eq!(out.len(), 4096);
     out
 }
@@ -274,10 +297,15 @@ pub fn cells(
     outer: &[u8],
 ) -> [Vec<u8>; 3] {
     let padded = pad(outer, PADDED_LEN).unwrap();
-    let chunk = |i: usize| &padded[i * CHUNK..(i + 1) * CHUNK];
+    let chunk = |i: usize| padded.chunks(CHUNK).nth(i).unwrap();
     let make = |i: usize| {
         let i8 = u8::try_from(i).unwrap();
-        cell_raw(k_inv, ld_id, nonces[i], &cell_plaintext(init_id, i8, 3, chunk(i)))
+        cell_raw(
+            k_inv,
+            ld_id,
+            nonces.get(i).unwrap(),
+            &cell_plaintext(init_id, i8, 3, chunk(i)),
+        )
     };
     [make(0), make(1), make(2)]
 }
@@ -285,7 +313,7 @@ pub fn cells(
 /// The padded chunk `i` of `outer`.
 pub fn chunk_of(outer: &[u8], i: usize) -> Vec<u8> {
     let padded = pad(outer, PADDED_LEN).unwrap();
-    padded[i * CHUNK..(i + 1) * CHUNK].to_vec()
+    padded.chunks(CHUNK).nth(i).unwrap().to_vec()
 }
 
 /// A Handshake Content as the unpadded bytes (§7.6, D.5) and its encoding.
@@ -336,8 +364,8 @@ pub fn agree(x: &AgreeIn<'_>) -> Agreement {
     let (i, r, keys) = (x.i, x.r, x.keys);
     let ek = X25519Secret::from_bytes(x.ek_sk).unwrap();
     let ek_pk = *ek.public_key().as_bytes();
-    let (ct_spk, ss_spk) = keys.spk_kem.encapsulation_key().encapsulate_kat(x.m_spk);
-    let (ct_opk, ss_opk) = keys.opk_kem.encapsulation_key().encapsulate_kat(x.m_opk);
+    let (ct_signed, ss_signed) = keys.spk_kem.encapsulation_key().encapsulate_kat(x.m_spk);
+    let (ct_onetime, ss_onetime) = keys.opk_kem.encapsulation_key().encapsulate_kat(x.m_opk);
     let pk = |s: &X25519Secret| X25519Public::from_bytes(s.public_key().as_bytes()).unwrap();
     let dh1 = i.dh.diffie_hellman(&pk(&keys.spk_dh)).unwrap();
     let dh2 = ek.diffie_hellman(&pk(&r.dh)).unwrap();
@@ -354,8 +382,8 @@ pub fn agree(x: &AgreeIn<'_>) -> Agreement {
         keys.opk_kem.encapsulation_key().as_bytes(),
         &i.iks_bytes,
         &ek_pk,
-        ct_spk.as_bytes(),
-        ct_opk.as_bytes(),
+        ct_signed.as_bytes(),
+        ct_onetime.as_bytes(),
         x.ld_id,
     ]);
     let sk_value = sk(
@@ -364,8 +392,8 @@ pub fn agree(x: &AgreeIn<'_>) -> Agreement {
             dh2.expose_secret(),
             dh3.expose_secret(),
             dh4.expose_secret(),
-            ss_spk.expose_secret(),
-            ss_opk.expose_secret(),
+            ss_signed.expose_secret(),
+            ss_onetime.expose_secret(),
         ],
         &tr,
     );
@@ -373,9 +401,9 @@ pub fn agree(x: &AgreeIn<'_>) -> Agreement {
         x.ld_id,
         x.link_key,
         dh3.expose_secret(),
-        ss_spk.expose_secret(),
+        ss_signed.expose_secret(),
         dh4.expose_secret(),
-        ss_opk.expose_secret(),
+        ss_onetime.expose_secret(),
     );
     Agreement {
         ek_pk,
@@ -385,10 +413,10 @@ pub fn agree(x: &AgreeIn<'_>) -> Agreement {
             dh3.expose_secret().to_vec(),
             dh4.expose_secret().to_vec(),
         ],
-        ct_spk: ct_spk.as_bytes().to_vec(),
-        ss_spk: ss_spk.expose_secret().to_vec(),
-        ct_opk: ct_opk.as_bytes().to_vec(),
-        ss_opk: ss_opk.expose_secret().to_vec(),
+        ct_spk: ct_signed.as_bytes().to_vec(),
+        ss_spk: ss_signed.expose_secret().to_vec(),
+        ct_opk: ct_onetime.as_bytes().to_vec(),
+        ss_opk: ss_onetime.expose_secret().to_vec(),
         transcript: tr,
         sk: sk_value,
         k_id: k_id_value,
@@ -411,7 +439,8 @@ pub fn tr_initiator(
     let spk_dh = X25519Pk::from_bytes(keys.spk_dh.public_key().as_bytes()).unwrap();
     let rpk = MlKem768Ek::from_bytes(keys.rpk_kem.encapsulation_key().as_bytes()).unwrap();
     let mut e = fixed(&[dh_s_sk, kem_s_seed, m_tr]);
-    let state = RatchetState::init_initiator_with(&a.sk, &a.transcript, &spk_dh, &rpk, &mut e).unwrap();
+    let state =
+        RatchetState::init_initiator_with(&a.sk, &a.transcript, &spk_dh, &rpk, &mut e).unwrap();
     assert_eq!(e.remaining(), 0);
     state
 }

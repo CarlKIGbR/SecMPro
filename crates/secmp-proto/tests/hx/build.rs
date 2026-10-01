@@ -3,14 +3,13 @@
 //! (the outer layer) and `K_id` (the inner layer) with the independent harness, from the scenario's own values.
 
 use secmp_crypto::{Aead, Label, Nonce24, SecretBytes, VectorStream};
+use secmp_proto::Encode;
 use secmp_proto::codec::pad;
 use secmp_proto::tr::FixedEntropy;
 use secmp_proto::wire::cell::{Cell, Content, ContentBody, RouteDescriptor};
-use secmp_proto::Encode;
 
 use crate::hx_gen::harness::{
-    self, CHUNK, OPK_ID, PADDED_LEN, SPK_ID, cell_plaintext, cell_raw, inner_ct, outer,
-    snapshot,
+    self, CHUNK, OPK_ID, PADDED_LEN, SPK_ID, cell_plaintext, cell_raw, inner_ct, outer, snapshot,
 };
 use crate::hx_gen::tr_digest::{StateFields, fields};
 use crate::scenario::Lib;
@@ -60,7 +59,7 @@ impl Lib {
                     &self.w.k_inv,
                     &self.w.inv.ld_id,
                     &[tag.wrapping_add(i); 24],
-                    &cell_plaintext(&init_id, i, 3, &padded[k * CHUNK..(k + 1) * CHUNK]),
+                    &cell_plaintext(&init_id, i, 3, padded.chunks(CHUNK).nth(k).unwrap()),
                 )
             })
             .collect()
@@ -81,7 +80,14 @@ impl Lib {
     /// An `Outer` carrying `inner_ct` (the honest ephemeral key and ciphertexts).
     pub fn outer_of(&self, inner_ct_bytes: &[u8]) -> Vec<u8> {
         let a = &self.w.b6.a;
-        outer(&a.ek_pk, SPK_ID, OPK_ID, &a.ct_spk, &a.ct_opk, inner_ct_bytes)
+        outer(
+            &a.ek_pk,
+            SPK_ID,
+            OPK_ID,
+            &a.ct_spk,
+            &a.ct_opk,
+            inner_ct_bytes,
+        )
     }
 
     /// An envelope whose `Inner` is `inner`, sealed under the right `K_id`, in three cells.
@@ -92,6 +98,7 @@ impl Lib {
 
     /// `Inner = IKSPublic_I ‖ first_msg`.
     pub fn inner_with(&self, iks: &[u8], first_msg: &[u8]) -> Vec<u8> {
+        let _ = self; // a method for call-site symmetry with the other `Lib` helpers
         [iks, first_msg].concat()
     }
 
@@ -133,7 +140,12 @@ impl Lib {
             )
             .map_err(|r| r.error())
             .unwrap();
-        sealed.persist(|_| Ok::<(), ()>(())).unwrap().1.as_bytes().to_vec()
+        sealed
+            .persist(|_| Ok::<(), ()>(()))
+            .unwrap()
+            .1
+            .as_bytes()
+            .to_vec()
     }
 
     /// The honest Content, padded to 1710.
@@ -151,7 +163,7 @@ impl Lib {
         self.first_msg_variant(tag, &self.first_msg_of(body, tag))
     }
 
-    /// A Handshake Content with these routes (encoded RouteDescriptors).
+    /// A Handshake Content with these routes (encoded `RouteDescriptor`s).
     pub fn handshake_with_routes(&self, routes: &[Vec<u8>]) -> Vec<u8> {
         raw_content(1, 1, &handshake_body(self, 0, routes))
     }
@@ -177,12 +189,13 @@ impl Lib {
     /// Another valid `RelayQueue` route (one byte of `relay_fp` changed).
     pub fn other_route(&self) -> Vec<u8> {
         let mut r = self.w.b6.route.clone();
-        r[10] ^= 1;
+        *r.get_mut(10).unwrap() ^= 1;
         r
     }
 
     /// A route of an unknown kind (0x02) with a short blob.
     pub fn unknown_route(&self) -> Vec<u8> {
+        let _ = self; // a method for call-site symmetry with the other `Lib` helpers
         RouteDescriptor::Unknown {
             kind: 2,
             blob: secmp_crypto::Zeroizing::new(vec![7; 10]),
@@ -195,6 +208,7 @@ impl Lib {
     /// A Batch Content of one `AppMessage` (type 0x02), padded.
     pub fn batch_content(&self) -> Vec<u8> {
         use secmp_proto::wire::cell::{AppKind, AppMessage, BatchBody};
+        let _ = self; // a method for call-site symmetry with the other `Lib` helpers
         Content {
             seq: 1,
             ts: 1_700_000_001,
@@ -214,12 +228,18 @@ impl Lib {
 
     /// A Dummy Content (type 0x00, empty body), padded.
     pub fn dummy_content(&self) -> Vec<u8> {
+        let _ = self; // a method for call-site symmetry with the other `Lib` helpers
         raw_content(1, 0, &[])
     }
 
     /// A random `IKSPublic`-sized identity: another valid identity's `IKSPublic`.
     pub fn other_identity(&self, tag: u8) -> harness::Identity {
-        harness::identity(&[tag; 32], &[tag.wrapping_add(1); 32], &[tag.wrapping_add(2); 32])
+        let _ = self; // a method for call-site symmetry with the other `Lib` helpers
+        harness::identity(
+            &[tag; 32],
+            &[tag.wrapping_add(1); 32],
+            &[tag.wrapping_add(2); 32],
+        )
     }
 }
 

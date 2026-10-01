@@ -398,6 +398,8 @@ pub(crate) const KANI_HARNESSES: &[&str] = &[
     "kani_proofs::cell",
     "kani_proofs::header_v1",
     "kani_proofs::header_v1_reencodes",
+    "kani_proofs::kani_hx_chunk_bounds",
+    "kani_proofs::kani_outer_unpad_total",
     "kani_proofs::padding",
     "kani_proofs::request_cont",
     "kani_proofs::request_fetch",

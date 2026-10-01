@@ -7,7 +7,6 @@
 //! Reads the frozen `vectors/hx.json` (ADR-026: a verbatim copy of the reference file) and the reference file
 //! `vectors/ref/hx.json` while the suite is not frozen yet.
 
-
 use std::collections::BTreeMap;
 
 use crate::hx_gen::harness::{CREATED, EXPIRES, NOW, OPK_ID, SPK_ID, hex};
@@ -16,24 +15,22 @@ use secmp_crypto::{Nonce24, SecretBytes};
 use secmp_proto::codec::unpad;
 use secmp_proto::hx::{self, Initiator, Responder, Shared, TranscriptInputs};
 use secmp_proto::inv::{
-    derive_k_inv, derive_k_ld, invitation_uri, invitee_accept, seal_blob,
+    InviteeAccepted, derive_k_inv, derive_k_ld, invitation_uri, invitee_accept, seal_blob,
 };
 use secmp_proto::keys::X25519Pk;
 use secmp_proto::prekeys::{IdentityKeys, InvitationRecord, MemoryPrekeyStore};
 use secmp_proto::sizes::MLKEM1024_CT_LEN;
 use secmp_proto::tr::FixedEntropy;
-use secmp_proto::wire::cell::{Cell, RelayQueue, RouteDescriptor};
-use secmp_proto::wire::inv::{
-    InvitationV1, LinkDataV1, Onion, PrekeyBundle, Profile, RelayRef,
-};
 use secmp_proto::wire::Period;
+use secmp_proto::wire::cell::{Cell, RelayQueue, RouteDescriptor};
+use secmp_proto::wire::inv::{InvitationV1, LinkDataV1, Onion, PrekeyBundle, Profile, RelayRef};
 use secmp_proto::{Decode, Encode, Error};
 use serde_json::Value;
 
 fn unhex(s: &str) -> Vec<u8> {
-    (0..s.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+    s.as_bytes()
+        .chunks(2)
+        .map(|p| u8::from_str_radix(std::str::from_utf8(p).unwrap(), 16).unwrap())
         .collect()
 }
 
@@ -65,15 +62,15 @@ impl Case {
                 .unwrap_or_default()
         };
         Self {
-            id: v["id"].as_str().unwrap().to_owned(),
-            op: v["op"].as_str().unwrap().to_owned(),
+            id: v.get("id").unwrap().as_str().unwrap().to_owned(),
+            op: v.get("op").unwrap().as_str().unwrap().to_owned(),
             inputs: map("inputs"),
             outputs: map("outputs"),
         }
     }
 
     fn input(&self, name: &str) -> Vec<u8> {
-        unhex(self.inputs[name].as_str().unwrap())
+        unhex(self.inputs.get(name).unwrap().as_str().unwrap())
     }
 
     fn has_input(&self, name: &str) -> bool {
@@ -81,16 +78,31 @@ impl Case {
     }
 
     fn output(&self, name: &str) -> Vec<u8> {
-        unhex(self.outputs[name].as_str().unwrap())
+        unhex(self.outputs.get(name).unwrap().as_str().unwrap())
     }
 
     fn list(&self, key: &str) -> Vec<Vec<u8>> {
-        self.inputs[key]
+        self.inputs
+            .get(key)
+            .unwrap()
             .as_array()
             .unwrap()
             .iter()
             .map(|x| unhex(x.as_str().unwrap()))
             .collect()
+    }
+
+    fn out_str(&self, name: &str) -> &str {
+        self.outputs.get(name).unwrap().as_str().unwrap()
+    }
+
+    fn in_str(&self, name: &str) -> &str {
+        self.inputs.get(name).unwrap().as_str().unwrap()
+    }
+
+    /// `got` equals the output `name`, message `"<id> <name>"`.
+    fn expect(&self, name: &str, got: &[u8]) {
+        assert_eq!(hex(got), hex(&self.output(name)), "{} {name}", self.id);
     }
 
     fn array(&self, name: &str) -> [u8; 32] {
@@ -136,21 +148,24 @@ fn route(c: &Case) -> RouteDescriptor {
     })
 }
 
+fn by_id<'a>(cases: &'a [Case], id: &str) -> &'a Case {
+    cases.iter().find(|c| c.id == id).unwrap()
+}
+
 fn cells_of(list: &[Vec<u8>]) -> Vec<Cell> {
     list.iter().map(|c| Cell::from_bytes(c).unwrap()).collect()
 }
 
-#[test]
-fn hx_vectors() {
-    let file = vector_file();
-    assert_eq!(file["schema"], 5);
-    assert_eq!(file["suite"], "hx");
-    let cases: Vec<Case> = file["cases"].as_array().unwrap().iter().map(Case::new).collect();
-    assert_eq!(cases.len(), 30);
-    let by_id = |id: &str| cases.iter().find(|c| c.id == id).unwrap();
+/// Cases 1–2: the responder's and the initiator's identities, the bundle, the opks.
+struct Identities {
+    r_identity: IdentityKeys,
+    i_identity: IdentityKeys,
+    store_seed: Vec<u8>,
+    bundle: PrekeyBundle,
+}
 
-    // cases 1–2: identities, the bundle, the opks
-    let c1 = by_id("hx-0001");
+fn case_identities(cases: &[Case]) -> Identities {
+    let c1 = by_id(cases, "hx-0001");
     let seed1 = [
         c1.input("ik_mldsa_xi"),
         c1.input("ik_ed_seed"),
@@ -165,7 +180,7 @@ fn hx_vectors() {
     .concat();
     let mut e = FixedEntropy::new(&seed1);
     let r_identity = IdentityKeys::generate(&mut e).unwrap();
-    let store_seed = seed1[96..96 + 32 + 64 + 64 + 32 + 64].to_vec();
+    let store_seed = seed1.get(96..96 + 32 + 64 + 64 + 32 + 64).unwrap().to_vec();
     let mut store = MemoryPrekeyStore::starting_at(SPK_ID, OPK_ID);
     store.create_spk(CREATED, &mut e).unwrap();
     store.issue_opk(&mut e).unwrap();
@@ -173,19 +188,31 @@ fn hx_vectors() {
         .bundle(&r_identity, SPK_ID, OPK_ID, EXPIRES, &mut e)
         .unwrap();
     assert_eq!(e.remaining(), 0, "{}: every draw consumed", c1.id);
-    assert_eq!(hex(&r_identity.public().encode().unwrap()), hex(&c1.output("iks")), "{} iks", c1.id);
-    assert_eq!(hex(&r_identity.fingerprint().unwrap()), hex(&c1.output("fp")), "{} fp", c1.id);
-    assert_eq!(hex(&bundle.encode().unwrap()), hex(&c1.output("bundle")), "{} bundle", c1.id);
+    c1.expect("iks", &r_identity.public().encode().unwrap());
+    c1.expect("fp", &r_identity.fingerprint().unwrap());
+    c1.expect("bundle", &bundle.encode().unwrap());
     assert_eq!(store.opk_ids(), vec![OPK_ID], "{} opks_post", c1.id);
 
-    let c2 = by_id("hx-0002");
-    let seed2 = [c2.input("ik_mldsa_xi"), c2.input("ik_ed_seed"), c2.input("ik_dh_sk")].concat();
+    let c2 = by_id(cases, "hx-0002");
+    let seed2 = [
+        c2.input("ik_mldsa_xi"),
+        c2.input("ik_ed_seed"),
+        c2.input("ik_dh_sk"),
+    ]
+    .concat();
     let i_identity = IdentityKeys::generate(&mut FixedEntropy::new(&seed2)).unwrap();
-    assert_eq!(hex(&i_identity.public().encode().unwrap()), hex(&c2.output("iks")), "{} iks", c2.id);
-    assert_eq!(hex(&i_identity.fingerprint().unwrap()), hex(&c2.output("fp")), "{} fp", c2.id);
+    c2.expect("iks", &i_identity.public().encode().unwrap());
+    c2.expect("fp", &i_identity.fingerprint().unwrap());
+    Identities {
+        r_identity,
+        i_identity,
+        store_seed,
+        bundle,
+    }
+}
 
-    // case 3: the invitation and its URI
-    let c3 = by_id("hx-0003");
+/// Case 3: the invitation and its URI.
+fn case_invitation(c3: &Case, r_identity: &IdentityKeys) -> (InvitationV1, Vec<u8>, String) {
     let invitation = InvitationV1 {
         relay: RelayRef {
             relay_fp: c3.array("relay_fp"),
@@ -203,14 +230,20 @@ fn hx_vectors() {
     };
     let invitation_bytes = invitation.encode().unwrap().to_vec();
     let uri = invitation_uri(&invitation).unwrap();
-    assert_eq!(hex(&invitation_bytes), hex(&c3.output("invitation")), "{} invitation", c3.id);
-    assert_eq!(uri, c3.outputs["uri"].as_str().unwrap(), "{} uri", c3.id);
+    c3.expect("invitation", &invitation_bytes);
+    assert_eq!(uri, c3.out_str("uri"), "{} uri", c3.id);
+    (invitation, invitation_bytes, uri)
+}
 
-    // case 4: the link data and its blob
-    let c4 = by_id("hx-0004");
+/// Case 4: the link data and its blob.
+fn case_blob(
+    c4: &Case,
+    ids: &Identities,
+    invitation: &InvitationV1,
+) -> (LinkDataV1, Vec<u8>, SecretBytes<32>) {
     let link_data = LinkDataV1 {
-        inviter_iks: r_identity.public().clone(),
-        bundle: PrekeyBundle::decode(&bundle.encode().unwrap()).unwrap(),
+        inviter_iks: ids.r_identity.public().clone(),
+        bundle: PrekeyBundle::decode(&ids.bundle.encode().unwrap()).unwrap(),
         profile: Profile::new("bob", None).unwrap(),
         created: CREATED,
     };
@@ -223,25 +256,23 @@ fn hx_vectors() {
     .unwrap();
     let blob_bytes = blob.encode().unwrap().to_vec();
     let k_ld = derive_k_ld(&invitation.ld_id, &invitation.link_key).unwrap();
-    assert_eq!(hex(k_ld.expose_secret()), hex(&c4.output("k_ld")), "{} k_ld", c4.id);
-    assert_eq!(
-        hex(&unpad(&link_data.encode().unwrap(), 12_288).unwrap().to_vec()),
-        hex(&c4.output("linkdata")),
-        "{} linkdata",
-        c4.id
+    c4.expect("k_ld", k_ld.expose_secret());
+    c4.expect(
+        "linkdata",
+        unpad(&link_data.encode().unwrap(), 12_288).unwrap(),
     );
-    assert_eq!(hex(&blob_bytes), hex(&c4.output("blob")), "{} blob", c4.id);
+    c4.expect("blob", &blob_bytes);
+    (link_data, blob_bytes, k_ld)
+}
 
-    // case 5: the invitee's checks
-    let c5 = by_id("hx-0005");
-    let accepted = invitee_accept(&uri, &blob_bytes, NOW).unwrap_or_else(|_| panic!("{} accept", c5.id));
-    let k_inv = derive_k_inv(&invitation.ld_id, &invitation.link_key).unwrap();
-    assert_eq!(hex(k_ld.expose_secret()), hex(&c5.output("k_ld")), "{} k_ld", c5.id);
-    assert_eq!(hex(k_inv.expose_secret()), hex(&c5.output("k_inv")), "{} k_inv", c5.id);
-    assert_eq!(c5.outputs["accept"], true, "{} accept", c5.id);
-
-    // case 6: the initiator
-    let c6 = by_id("hx-0006");
+/// Case 6: the initiator.
+fn case_initiator(
+    c6: &Case,
+    ids: &Identities,
+    link_data: &LinkDataV1,
+    invitation: &InvitationV1,
+    accepted: &InviteeAccepted,
+) {
     let routes = [route(c6)];
     let mut e = fixed(&[
         &c6.input("ek_sk"),
@@ -257,48 +288,42 @@ fn hx_vectors() {
         &c6.input("cell_nonce_1"),
         &c6.input("cell_nonce_2"),
     ]);
-    let (handshake_cells, i_state) = Initiator::start(
+    let started = Initiator::start(
         &accepted.invitation,
         &accepted.link_data,
-        &i_identity.initiator_keys(),
+        &ids.i_identity.initiator_keys(),
         &routes,
         &Profile::new("alice", Some(c6.array("avatar_sha256"))).unwrap(),
         1_700_000_001,
         &mut e,
-    )
-    .unwrap_or_else(|_| panic!("{} start", c6.id));
+    );
+    assert!(started.is_ok(), "{} start", c6.id);
+    let (handshake_cells, i_state) = started.unwrap();
     assert_eq!(e.remaining(), 0, "{}: every draw consumed", c6.id);
     let sent = handshake_cells.release(|_| Ok::<(), ()>(())).unwrap();
     for (k, cell) in sent.iter().enumerate() {
-        assert_eq!(
-            hex(cell.as_bytes()),
-            hex(&c6.output(&format!("cell_{k}"))),
-            "{} cell_{k}",
-            c6.id
-        );
+        c6.expect(&format!("cell_{k}"), cell.as_bytes());
     }
-    assert_eq!(digest(&i_state), hex(&c6.output("state_post_I")), "{} state_post_I", c6.id);
-    assert_eq!(hex(i_state.sb_kat()), hex(&c6.output("transcript")), "{} transcript (sb)", c6.id);
-    derive_checks(c6, &r_identity, &i_identity, &link_data, &invitation);
+    assert_eq!(
+        digest(&i_state),
+        hex(&c6.output("state_post_I")),
+        "{} state_post_I",
+        c6.id
+    );
+    assert_eq!(
+        hex(i_state.sb_kat()),
+        hex(&c6.output("transcript")),
+        "{} transcript (sb)",
+        c6.id
+    );
+    derive_checks(c6, &ids.r_identity, &ids.i_identity, link_data, invitation);
+}
 
-    // cases 7 and 8: the responder, from the state after cases 1–4
-    let world = World {
-        r_identity,
-        store_seed,
-        record: InvitationRecord {
-            ld_id: invitation.ld_id,
-            link_key: SecretBytes::from_slice(invitation.link_key.expose_secret()).unwrap(),
-            spk_id: SPK_ID,
-            opk_id: OPK_ID,
-            expires: EXPIRES,
-        },
-        invitation: invitation_bytes,
-        uri,
-        blob: blob_bytes,
-    };
+/// Cases 7 and 8: the responder, from the state after cases 1–4; returns the store after case 7.
+fn case_responder(cases: &[Case], world: &World) -> MemoryPrekeyStore {
     let mut after_7 = None;
     for id in ["hx-0007", "hx-0008"] {
-        let c = by_id(id);
+        let c = by_id(cases, id);
         let mut store = store_from(&world.store_seed);
         let fetched = cells_of(&c.list("fetched"));
         let mut e = fixed(&[&c.input("dh_sk"), &c.input("kem_seed"), &c.input("m")]);
@@ -308,37 +333,62 @@ fn hx_vectors() {
             &mut store,
             &world.r_identity.responder_keys(),
             &mut e,
-        )
-        .unwrap_or_else(|_| panic!("{} accept", c.id));
+        );
+        assert!(accepted.is_ok(), "{} accept", c.id);
+        let accepted = accepted.unwrap();
         assert_eq!(e.remaining(), 0, "{}: DH-step draws consumed", c.id);
-        assert_eq!(hex(&accepted.peer.encode().unwrap()), hex(&c.output("peer_iks")), "{} peer_iks", c.id);
-        assert_eq!(hex(&accepted.profile.encode().unwrap()), hex(&c.output("profile")), "{} profile", c.id);
-        let routes: Vec<String> = accepted.routes.iter().map(|r| hex(&r.encode().unwrap())).collect();
-        let listed: Vec<String> = c.outputs["routes"]
+        c.expect("peer_iks", &accepted.peer.encode().unwrap());
+        c.expect("profile", &accepted.profile.encode().unwrap());
+        let routes: Vec<String> = accepted
+            .routes
+            .iter()
+            .map(|r| hex(&r.encode().unwrap()))
+            .collect();
+        let listed: Vec<String> = c
+            .outputs
+            .get("routes")
+            .unwrap()
             .as_array()
             .unwrap()
             .iter()
             .map(|x| x.as_str().unwrap().to_owned())
             .collect();
         assert_eq!(routes, listed, "{} routes", c.id);
-        assert_eq!(digest(&accepted.state), hex(&c.output("state_post_R")), "{} state_post_R", c.id);
-        assert_eq!(hex(accepted.state.sb_kat()), hex(&c.output("transcript")), "{} transcript (sb)", c.id);
+        assert_eq!(
+            digest(&accepted.state),
+            hex(&c.output("state_post_R")),
+            "{} state_post_R",
+            c.id
+        );
+        assert_eq!(
+            hex(accepted.state.sb_kat()),
+            hex(&c.output("transcript")),
+            "{} transcript (sb)",
+            c.id
+        );
         assert_eq!(store.opk_ids(), Vec::<u32>::new(), "{} opks_post", c.id);
         if id == "hx-0007" {
             after_7 = Some(store);
         }
     }
+    after_7.unwrap()
+}
 
-    // invitee-reject (V1–V9) and respond-reject (R1–R13)
-    for c in &cases {
+/// The invitee-reject (V1–V9) and respond-reject (R1–R13) cases.
+fn case_rejects(cases: &[Case], world: &World, mut after_7: MemoryPrekeyStore) {
+    for c in cases {
         match c.op.as_str() {
             "invitee-reject" => {
                 let uri = if c.has_input("uri") {
-                    c.inputs["uri"].as_str().unwrap().to_owned()
+                    c.in_str("uri").to_owned()
                 } else {
                     world.uri.clone()
                 };
-                let blob = if c.has_input("blob") { c.input("blob") } else { world.blob.clone() };
+                let blob = if c.has_input("blob") {
+                    c.input("blob")
+                } else {
+                    world.blob.clone()
+                };
                 let _ = &world.invitation;
                 assert_eq!(
                     invitee_accept(&uri, &blob, NOW).err(),
@@ -350,7 +400,7 @@ fn hx_vectors() {
             "respond-reject" => {
                 let mut fresh = store_from(&world.store_seed);
                 let store = if c.id == "hx-0019" {
-                    after_7.as_mut().unwrap()
+                    &mut after_7
                 } else {
                     &mut fresh
                 };
@@ -375,7 +425,10 @@ fn hx_vectors() {
                     c.id
                 );
                 assert_eq!(store.digest_kat(), before, "{}: store unchanged", c.id);
-                let expected: Vec<u32> = c.outputs["opks_post"]
+                let expected: Vec<u32> = c
+                    .outputs
+                    .get("opks_post")
+                    .unwrap()
                     .as_array()
                     .unwrap()
                     .iter()
@@ -388,6 +441,62 @@ fn hx_vectors() {
     }
 }
 
+#[test]
+fn hx_vectors() {
+    let file = vector_file();
+    assert_eq!(file.get("schema").unwrap(), 5);
+    assert_eq!(file.get("suite").unwrap(), "hx");
+    let cases: Vec<Case> = file
+        .get("cases")
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(Case::new)
+        .collect();
+    assert_eq!(cases.len(), 30);
+
+    let ids = case_identities(&cases);
+    let (invitation, invitation_bytes, uri) =
+        case_invitation(by_id(&cases, "hx-0003"), &ids.r_identity);
+    let (link_data, blob_bytes, k_ld) = case_blob(by_id(&cases, "hx-0004"), &ids, &invitation);
+
+    // case 5: the invitee's checks
+    let c5 = by_id(&cases, "hx-0005");
+    let accepted = invitee_accept(&uri, &blob_bytes, NOW);
+    assert!(accepted.is_ok(), "{} accept", c5.id);
+    let accepted = accepted.unwrap();
+    let k_inv = derive_k_inv(&invitation.ld_id, &invitation.link_key).unwrap();
+    c5.expect("k_ld", k_ld.expose_secret());
+    c5.expect("k_inv", k_inv.expose_secret());
+    assert_eq!(c5.outputs.get("accept").unwrap(), true, "{} accept", c5.id);
+
+    case_initiator(
+        by_id(&cases, "hx-0006"),
+        &ids,
+        &link_data,
+        &invitation,
+        &accepted,
+    );
+
+    let world = World {
+        r_identity: ids.r_identity,
+        store_seed: ids.store_seed,
+        record: InvitationRecord {
+            ld_id: invitation.ld_id,
+            link_key: SecretBytes::from_slice(invitation.link_key.expose_secret()).unwrap(),
+            spk_id: SPK_ID,
+            opk_id: OPK_ID,
+            expires: EXPIRES,
+        },
+        invitation: invitation_bytes,
+        uri,
+        blob: blob_bytes,
+    };
+    let after_7 = case_responder(&cases, &world);
+    case_rejects(&cases, &world, after_7);
+}
+
 /// The `hx::derive` functions against the values of case 6: `transcript`, `SK` and `K_id` from the listed DH
 /// outputs and shared secrets (§6.4).
 fn derive_checks(
@@ -398,8 +507,8 @@ fn derive_checks(
     invitation: &InvitationV1,
 ) {
     let bundle = &link_data.bundle;
-    let ct_spk: [u8; MLKEM1024_CT_LEN] = c6.output("ct_spk").try_into().unwrap();
-    let ct_opk: [u8; MLKEM1024_CT_LEN] = c6.output("ct_opk").try_into().unwrap();
+    let ct_signed: [u8; MLKEM1024_CT_LEN] = c6.output("ct_spk").try_into().unwrap();
+    let ct_onetime: [u8; MLKEM1024_CT_LEN] = c6.output("ct_opk").try_into().unwrap();
     let ek_i = X25519Pk::from_bytes(&c6.output("ek_pk")).unwrap();
     let tr = hx::transcript(&TranscriptInputs {
         iks_r: r.public(),
@@ -412,12 +521,17 @@ fn derive_checks(
         opk_kem: &bundle.opk_kem,
         iks_i: i.public(),
         ek_i: &ek_i,
-        ct_spk: &ct_spk,
-        ct_opk: &ct_opk,
+        ct_spk: &ct_signed,
+        ct_opk: &ct_onetime,
         ld_id: &invitation.ld_id,
     })
     .unwrap();
-    assert_eq!(hex(&tr), hex(&c6.output("transcript")), "{} transcript", c6.id);
+    assert_eq!(
+        hex(&tr),
+        hex(&c6.output("transcript")),
+        "{} transcript",
+        c6.id
+    );
     let secret = |name: &str| SecretBytes::<32>::from_slice(&c6.output(name)).unwrap();
     let sk = hx::session_key(
         &Shared {
@@ -431,7 +545,12 @@ fn derive_checks(
         &tr,
     )
     .unwrap();
-    assert_eq!(hex(sk.expose_secret()), hex(&c6.output("sk")), "{} sk", c6.id);
+    assert_eq!(
+        hex(sk.expose_secret()),
+        hex(&c6.output("sk")),
+        "{} sk",
+        c6.id
+    );
     let k_id = hx::k_id(
         &invitation.ld_id,
         &invitation.link_key,
@@ -441,5 +560,10 @@ fn derive_checks(
         &secret("ss_opk"),
     )
     .unwrap();
-    assert_eq!(hex(k_id.expose_secret()), hex(&c6.output("k_id")), "{} k_id", c6.id);
+    assert_eq!(
+        hex(k_id.expose_secret()),
+        hex(&c6.output("k_id")),
+        "{} k_id",
+        c6.id
+    );
 }

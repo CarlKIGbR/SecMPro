@@ -367,3 +367,44 @@ fn tr_eviction() {
         .and_then(|b| b.checked_add(added));
     assert!(after.is_some_and(|a| a <= MAX_SKIPPED.saturating_mul(2)));
 }
+
+// ---- M4: SecMP-HX (spec §6.5, §6.6; ADR-044 (c)) --------------------------------------------------------------------
+
+use crate::sizes::{HANDSHAKE_CHUNK_LEN, HANDSHAKE_CHUNKS, OUTER_PADDED_LEN};
+use crate::wire::hx::Outer;
+
+/// The three chunks of `Padded` (§6.5: 3 × 4006 = 12018): for every chunk index `i` < 3, `i · 4006 + 4006` does not
+/// overflow and does not exceed 12018, the chunks tile `Padded` exactly (`as_chunks` leaves no remainder), and
+/// splitting and joining is the identity at every byte index (the chunk `j / 4006` at offset `j % 4006` is byte `j`).
+#[kani::proof]
+fn kani_hx_chunk_bounds() {
+    assert!(usize::from(HANDSHAKE_CHUNKS) * HANDSHAKE_CHUNK_LEN == OUTER_PADDED_LEN);
+    let i: u8 = kani::any();
+    kani::assume(i < HANDSHAKE_CHUNKS);
+    let start = usize::from(i).checked_mul(HANDSHAKE_CHUNK_LEN);
+    let end = start.and_then(|s| s.checked_add(HANDSHAKE_CHUNK_LEN));
+    assert!(start.is_some() && end.is_some_and(|e| e <= OUTER_PADDED_LEN));
+    let padded = [0_u8; OUTER_PADDED_LEN];
+    let (chunks, rest) = padded.as_chunks::<HANDSHAKE_CHUNK_LEN>();
+    assert!(chunks.len() == usize::from(HANDSHAKE_CHUNKS) && rest.is_empty());
+    let j: usize = kani::any();
+    kani::assume(j < OUTER_PADDED_LEN);
+    let (chunk, offset) = (j / HANDSHAKE_CHUNK_LEN, j % HANDSHAKE_CHUNK_LEN);
+    assert!(chunk < usize::from(HANDSHAKE_CHUNKS));
+    assert!(chunk * HANDSHAKE_CHUNK_LEN + offset == j);
+}
+
+/// `Outer` (D.4) on every 12018-byte input and its neighbours, with the ISO/IEC 7816-4 scan stubbed by an
+/// over-approximation (any proper prefix, or a rejection; `unpad` itself is proven by `padding`): the decoder never
+/// panics, and accepts only an input of exactly 12018 bytes.
+#[kani::proof]
+#[kani::stub(crate::codec::unpad, crate::codec::kani_stubs::unpad)]
+fn kani_outer_unpad_total() {
+    let bytes: [u8; OUTER_PADDED_LEN + 1] = kani::any();
+    let len: usize = kani::any();
+    kani::assume(len <= OUTER_PADDED_LEN + 1);
+    let input = bytes.get(..len).unwrap_or_default();
+    if Outer::decode(input).is_ok() {
+        assert!(len == OUTER_PADDED_LEN);
+    }
+}

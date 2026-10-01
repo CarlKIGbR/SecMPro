@@ -33,13 +33,11 @@ impl Lib {
 
     /// R's store after cases 1–4: the SPK 7, the OPK 42 and the invitation's record.
     pub fn store(&self) -> MemoryPrekeyStore {
-        let mut e = FixedEntropy::new(&self.w.r_seed.get(96..).unwrap().to_vec());
+        let mut e = FixedEntropy::new(self.w.r_seed.get(96..).unwrap());
         let mut store = MemoryPrekeyStore::starting_at(SPK_ID, OPK_ID);
         store.create_spk(CREATED, &mut e).unwrap();
         store.issue_opk(&mut e).unwrap();
-        store
-            .add_record(self.record())
-            .unwrap();
+        store.add_record(self.record()).unwrap();
         store
     }
 
@@ -78,18 +76,24 @@ impl Lib {
         let mut store = self.store();
         let before = store.digest_kat();
         let result = self.accept(&mut store, cells);
-        assert_eq!(result.err(), Some(Error::Rejected), "{what}: uniform Rejected");
+        assert_eq!(
+            result.err(),
+            Some(Error::Rejected),
+            "{what}: uniform Rejected"
+        );
         assert_eq!(store.digest_kat(), before, "{what}: the store is unchanged");
         assert!(store.opk_ids().contains(&OPK_ID), "{what}: the OPK is kept");
     }
 
     /// The invitee's check at `NOW`.
     pub fn invitee(&self, uri: &str, blob: &[u8]) -> Result<(), Error> {
+        let _ = self; // a method for call-site symmetry with the other `Lib` helpers
         invitee_accept(uri, blob, NOW).map(|_| ())
     }
 
     /// The URI of invitation bytes.
     pub fn uri_of(&self, invitation: &[u8]) -> String {
+        let _ = self; // a method for call-site symmetry with the other `Lib` helpers
         format!(
             "secmp://i/{}",
             secmp_proto::inv::base64url_encode(invitation)
@@ -103,11 +107,13 @@ impl Lib {
 
     /// `LinkDataV1` bytes with the given IKS and bundle.
     pub fn linkdata_of(&self, iks: &[u8], bundle: &[u8]) -> Vec<u8> {
+        let _ = self; // a method for call-site symmetry with the other `Lib` helpers
         harness::linkdata_bytes(iks, bundle, &harness::profile_bytes("bob", None), CREATED)
     }
 
     /// Whether the library decodes `linkdata` (padded) — used to confirm a mutation really is a decoder case.
     pub fn decodes(&self, padded: &[u8]) -> bool {
+        let _ = self; // a method for call-site symmetry with the other `Lib` helpers
         LinkDataV1::decode(padded).is_ok()
     }
 }

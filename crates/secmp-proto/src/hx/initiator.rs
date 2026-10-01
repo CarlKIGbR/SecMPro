@@ -238,7 +238,9 @@ impl Initiator {
             .persist(|_| Ok::<(), Error>(()))
             .map_err(|_: Error| Error::Rejected)?;
 
-        let cells = seal_envelope(invitation, link_data, own_keys, &agreement, first_msg, entropy)?;
+        let cells = seal_envelope(
+            invitation, link_data, own_keys, &agreement, first_msg, entropy,
+        )?;
         Ok((cells, state))
     }
 }

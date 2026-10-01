@@ -12,29 +12,37 @@
 //! Shared by the `gen-hx` example (which writes `vectors/rust/hx.json` for `cargo xtask vectors`) and the
 //! `hx_generator` test.
 
+use std::slice::SliceIndex;
+
 use serde_json::{Map, Value, json};
 
 use secmp_crypto::{
-    Caead, Ed25519SigningKey, Label, MlKem1024Ct, MlKem1024Dk, MlKem768Dk, SecretBytes,
+    Caead, Ed25519SigningKey, Label, MlKem768Dk, MlKem1024Ct, MlKem1024Dk, SecretBytes,
     VectorStream, X25519Public, X25519Secret, sha3_256,
 };
+use secmp_proto::Encode;
 use secmp_proto::codec::{pad, unpad};
 use secmp_proto::keys::Ed25519Pk;
 use secmp_proto::sizes::BODY_LEN;
 use secmp_proto::tr::RatchetState;
+use secmp_proto::wire::Period;
 use secmp_proto::wire::cell::{
     AppKind, AppMessage, BatchBody, Content, ContentBody, RelayQueue, RouteDescriptor,
 };
 use secmp_proto::wire::inv::{Onion, Profile, RelayRef};
-use secmp_proto::wire::Period;
-use secmp_proto::Encode;
 
 #[path = "hx_harness.rs"]
 pub mod harness;
 #[path = "tr_digest.rs"]
 pub mod tr_digest;
 
-use harness::*;
+use harness::{
+    AgreeIn, Agreement, CREATED, EXPIRES, IKS_LEN, INNER_LEN, Identity, LOW_ORDER_8, NOW,
+    OFF_CT_OPK, OFF_CT_SPK, OFF_EK, OFF_INNER_CT, OFF_OPK_ID, OFF_SPK_ID, OPK_ID, OUTER_LEN,
+    PADDED_LEN, Prekeys, SPK_ID, agree, blob, bundle_bytes, cell_plaintext, cell_raw, cells,
+    chunk_of, fixed, handshake_content, hex, identity, inner_ct, k_id, k_inv, k_ld, linkdata_bytes,
+    outer, profile_bytes, sk, snapshot, tr_initiator, tr_responder, transcript, unpadded_content,
+};
 use tr_digest::digest;
 
 /// The suite name (SCHEMA §3).
@@ -153,12 +161,30 @@ impl Invitation {
 }
 
 fn uri(invitation: &[u8]) -> String {
-    format!("secmp://i/{}", secmp_proto::inv::base64url_encode(invitation))
+    format!(
+        "secmp://i/{}",
+        secmp_proto::inv::base64url_encode(invitation)
+    )
 }
 
 fn flip_last_bit(mut b: Vec<u8>, at: usize) -> Vec<u8> {
-    b[at] ^= 1;
+    *byte_mut(&mut b, at) ^= 1;
     b
+}
+
+/// `b[at]` for a mutable byte; the generator's offsets are constants, so a miss is a bug in the generator.
+fn byte_mut(b: &mut [u8], at: usize) -> &mut u8 {
+    b.get_mut(at).unwrap()
+}
+
+/// `&b[r]`.
+fn sl<R: SliceIndex<[u8], Output = [u8]>>(b: &[u8], r: R) -> &[u8] {
+    b.get(r).unwrap()
+}
+
+/// `&mut b[r]`.
+fn sl_mut<R: SliceIndex<[u8], Output = [u8]>>(b: &mut [u8], r: R) -> &mut [u8] {
+    b.get_mut(r).unwrap()
 }
 
 /// The relay queue of the Handshake's route as the §4.8 row `rd_relayqueue`: `relay_fp` 32, `onion_seed` 32
@@ -204,7 +230,15 @@ fn case1() -> (Base1, Value) {
     });
     let seed = s.drawn.clone();
     let case = s.finish(1, "keys-R", "R", vec![("outputs", outputs)]);
-    (Base1 { r, keys, bundle, seed }, case)
+    (
+        Base1 {
+            r,
+            keys,
+            bundle,
+            seed,
+        },
+        case,
+    )
 }
 
 struct Base1 {
@@ -258,7 +292,8 @@ fn case4(b1: &Base1, inv: &Invitation) -> (Vec<u8>, Vec<u8>, SecretBytes<32>, Va
     );
     assert_eq!(linkdata.len(), 9806);
     let sealed = blob(&k, &inv.ld_id, &n, &linkdata);
-    let outputs = json!({"k_ld": hex(k.expose_secret()), "linkdata": hex(&linkdata), "blob": hex(&sealed)});
+    let outputs =
+        json!({"k_ld": hex(k.expose_secret()), "linkdata": hex(&linkdata), "blob": hex(&sealed)});
     let case = s.finish(4, "linkdata", "R", vec![("outputs", outputs)]);
     (linkdata, sealed, k, case)
 }
@@ -271,69 +306,77 @@ fn case5(inv: &Invitation, k: &SecretBytes<32>) -> (SecretBytes<32>, Value) {
         "k_inv": hex(k_inv_value.expose_secret()),
         "accept": true,
     });
-    (k_inv_value, s.finish(5, "invitee-accept", "I", vec![("outputs", outputs)]))
+    (
+        k_inv_value,
+        s.finish(5, "invitee-accept", "I", vec![("outputs", outputs)]),
+    )
 }
 
-/// Case 6 (`initiate`): §6.4, §6.5, §7.2 initiator, §7.3 Encrypt of the Handshake Content.
-fn case6(b: &Base0) -> (Base6, Value) {
-    let mut s = Stream::new(6);
-    let ek_sk = s.draw("ek_sk", 32);
-    let m_spk: [u8; 32] = s.arr("m_spk");
-    let m_opk: [u8; 32] = s.arr("m_opk");
-    let dh_s_sk = s.draw("dh_s_sk", 32);
-    let kem_s_seed = s.draw("kem_s_seed", 64);
-    let m_tr = s.draw("m_tr", 32);
-    let avatar: [u8; 32] = s.arr("avatar_sha256");
-    let route = relay_queue(&mut s);
-    let route_encoded = route.encode().unwrap().to_vec();
-    let hdr_nonce = s.draw("hdr_nonce", 24);
-    let inner_nonce = s.draw("inner_nonce", 24);
-    let init_id: [u8; 16] = s.arr("init_id");
-    let cell_nonces = [
-        s.draw("cell_nonce_0", 24),
-        s.draw("cell_nonce_1", 24),
-        s.draw("cell_nonce_2", 24),
-    ];
+/// The stream draws of case 6 (`initiate`), in SCHEMA order.
+struct Draws6 {
+    ek_sk: Vec<u8>,
+    m_signed: [u8; 32],
+    m_onetime: [u8; 32],
+    dh_s_sk: Vec<u8>,
+    kem_s_seed: Vec<u8>,
+    m_tr: Vec<u8>,
+    avatar: [u8; 32],
+    route: RouteDescriptor,
+    hdr_nonce: Vec<u8>,
+    inner_nonce: Vec<u8>,
+    init_id: [u8; 16],
+    cell_nonces: [Vec<u8>; 3],
+}
 
-    let a = agree(&AgreeIn {
-        i: b.i,
-        r: b.r,
-        keys: b.keys,
-        ld_id: &b.inv.ld_id,
-        link_key: &b.inv.link_key,
-        ek_sk: &ek_sk,
-        m_spk: &m_spk,
-        m_opk: &m_opk,
-    });
-    let k_inv_value = k_inv(&b.inv.ld_id, &b.inv.link_key);
-    let state = tr_initiator(&a, b.keys, &dh_s_sk, &kem_s_seed, &m_tr);
-    let i_after_init = snapshot(&state);
-    let content = handshake_content(
-        Profile::new("alice", Some(avatar)).unwrap(),
-        vec![route],
-        1,
-        1_700_000_001,
-    );
-    let content_bytes = unpadded_content(&content);
-    assert_eq!(content_bytes.len(), 219);
-    let (state, cell) = state
-        .encrypt_with(&content, &mut fixed(&[&hdr_nonce]))
-        .map_err(|r| r.error())
-        .unwrap()
-        .persist(|_| Ok::<(), ()>(()))
-        .unwrap();
-    let first_msg = cell.as_bytes().to_vec();
-    let inner = [b.i.iks_bytes.as_slice(), &first_msg].concat();
-    let inner_ct_bytes = inner_ct(&a.k_id, &b.inv.ld_id, &inner_nonce, &inner);
-    let outer_bytes = outer(&a.ek_pk, SPK_ID, OPK_ID, &a.ct_spk, &a.ct_opk, &inner_ct_bytes);
-    let cells_bytes = cells(
-        &k_inv_value,
-        &b.inv.ld_id,
-        &init_id,
-        [&cell_nonces[0], &cell_nonces[1], &cell_nonces[2]],
-        &outer_bytes,
-    );
-    let outputs = json!({
+fn draws6(s: &mut Stream) -> Draws6 {
+    Draws6 {
+        ek_sk: s.draw("ek_sk", 32),
+        m_signed: s.arr("m_spk"),
+        m_onetime: s.arr("m_opk"),
+        dh_s_sk: s.draw("dh_s_sk", 32),
+        kem_s_seed: s.draw("kem_s_seed", 64),
+        m_tr: s.draw("m_tr", 32),
+        avatar: s.arr("avatar_sha256"),
+        route: relay_queue(s),
+        hdr_nonce: s.draw("hdr_nonce", 24),
+        inner_nonce: s.draw("inner_nonce", 24),
+        init_id: s.arr("init_id"),
+        cell_nonces: [
+            s.draw("cell_nonce_0", 24),
+            s.draw("cell_nonce_1", 24),
+            s.draw("cell_nonce_2", 24),
+        ],
+    }
+}
+
+/// The randomness of `Initiator::start` in the library's draw order (`ek_sk` ... `cell_nonce_2`).
+fn entropy6(d: &Draws6) -> Vec<u8> {
+    [
+        d.ek_sk.as_slice(),
+        &d.m_signed,
+        &d.m_onetime,
+        &d.dh_s_sk,
+        &d.kem_s_seed,
+        &d.m_tr,
+        &d.hdr_nonce,
+        &d.inner_nonce,
+        &d.init_id,
+        &d.cell_nonces[0],
+        &d.cell_nonces[1],
+        &d.cell_nonces[2],
+    ]
+    .concat()
+}
+
+/// The `outputs` of case 6.
+fn outputs6(
+    b6: &Base6,
+    k_inv_value: &SecretBytes<32>,
+    inner_ct_bytes: &[u8],
+    state: &RatchetState,
+) -> Value {
+    let a = &b6.a;
+    json!({
         "ek_pk": hex(&a.ek_pk),
         "dh1": hex(&a.dh[0]), "dh2": hex(&a.dh[1]), "dh3": hex(&a.dh[2]), "dh4": hex(&a.dh[3]),
         "ct_spk": hex(&a.ct_spk), "ss_spk": hex(&a.ss_spk),
@@ -342,50 +385,82 @@ fn case6(b: &Base0) -> (Base6, Value) {
         "sk": hex(a.sk.expose_secret()),
         "k_id": hex(a.k_id.expose_secret()),
         "k_inv": hex(k_inv_value.expose_secret()),
-        "content": hex(&content_bytes),
-        "first_msg": hex(&first_msg),
-        "inner_ct": hex(&inner_ct_bytes),
-        "outer": hex(&outer_bytes),
-        "cell_0": hex(&cells_bytes[0]), "cell_1": hex(&cells_bytes[1]), "cell_2": hex(&cells_bytes[2]),
-        "state_post_I": digest(&state),
+        "content": hex(&b6.content),
+        "first_msg": hex(&b6.first_msg),
+        "inner_ct": hex(inner_ct_bytes),
+        "outer": hex(&b6.outer),
+        "cell_0": hex(&b6.cells[0]), "cell_1": hex(&b6.cells[1]), "cell_2": hex(&b6.cells[2]),
+        "state_post_I": digest(state),
+    })
+}
+
+/// Case 6 (`initiate`): §6.4, §6.5, §7.2 initiator, §7.3 Encrypt of the Handshake Content.
+fn case6(b: &Base0) -> (Base6, Value) {
+    let mut s = Stream::new(6);
+    let d = draws6(&mut s);
+    let route_encoded = d.route.encode().unwrap().to_vec();
+    let entropy = entropy6(&d);
+    let a = agree(&AgreeIn {
+        i: b.i,
+        r: b.r,
+        keys: b.keys,
+        ld_id: &b.inv.ld_id,
+        link_key: &b.inv.link_key,
+        ek_sk: &d.ek_sk,
+        m_spk: &d.m_signed,
+        m_opk: &d.m_onetime,
     });
-    let entropy = [
-        ek_sk.as_slice(),
-        &m_spk,
-        &m_opk,
-        &dh_s_sk,
-        &kem_s_seed,
-        &m_tr,
-        &hdr_nonce,
-        &inner_nonce,
-        &init_id,
-        &cell_nonces[0],
-        &cell_nonces[1],
-        &cell_nonces[2],
-    ]
-    .concat();
-    let route_bytes = route_encoded;
+    let k_inv_value = k_inv(&b.inv.ld_id, &b.inv.link_key);
+    let state = tr_initiator(&a, b.keys, &d.dh_s_sk, &d.kem_s_seed, &d.m_tr);
+    let i_after_init = snapshot(&state);
+    let content = handshake_content(
+        Profile::new("alice", Some(d.avatar)).unwrap(),
+        vec![d.route],
+        1,
+        1_700_000_001,
+    );
+    let content_bytes = unpadded_content(&content);
+    assert_eq!(content_bytes.len(), 219);
+    let (state, cell) = state
+        .encrypt_with(&content, &mut fixed(&[&d.hdr_nonce]))
+        .map_err(|r| r.error())
+        .unwrap()
+        .persist(|_| Ok::<(), ()>(()))
+        .unwrap();
+    let first_msg = cell.as_bytes().to_vec();
+    let inner = [b.i.iks_bytes.as_slice(), &first_msg].concat();
+    let inner_ct_bytes = inner_ct(&a.k_id, &b.inv.ld_id, &d.inner_nonce, &inner);
+    let outer_bytes = outer(
+        &a.ek_pk,
+        SPK_ID,
+        OPK_ID,
+        &a.ct_spk,
+        &a.ct_opk,
+        &inner_ct_bytes,
+    );
+    let cells_bytes = cells(
+        &k_inv_value,
+        &b.inv.ld_id,
+        &d.init_id,
+        [&d.cell_nonces[0], &d.cell_nonces[1], &d.cell_nonces[2]],
+        &outer_bytes,
+    );
+    let b6 = Base6 {
+        a,
+        first_msg,
+        inner,
+        outer: outer_bytes,
+        init_id: d.init_id,
+        cells: cells_bytes,
+        content: content_bytes,
+        i_after_init,
+        entropy,
+        route: route_encoded,
+        avatar: d.avatar,
+    };
+    let outputs = outputs6(&b6, &k_inv_value, &inner_ct_bytes, &state);
     let case = s.finish(6, "initiate", "I", vec![("outputs", outputs)]);
-    (
-        Base6 {
-            a,
-            first_msg,
-            inner,
-            inner_ct: inner_ct_bytes,
-            outer: outer_bytes,
-            init_id,
-            cells: cells_bytes,
-            content: content_bytes,
-            i_after_init,
-            entropy,
-            route: route_bytes,
-            avatar,
-            hdr_nonce,
-            inner_nonce,
-            cell_nonces,
-        },
-        case,
-    )
+    (b6, case)
 }
 
 struct Base0<'a> {
@@ -400,7 +475,6 @@ pub struct Base6 {
     pub a: Agreement,
     pub first_msg: Vec<u8>,
     pub inner: Vec<u8>,
-    pub inner_ct: Vec<u8>,
     pub outer: Vec<u8>,
     pub init_id: [u8; 16],
     pub cells: [Vec<u8>; 3],
@@ -411,10 +485,6 @@ pub struct Base6 {
     /// The Handshake's route, encoded (155 B), and the profile's avatar hash.
     pub route: Vec<u8>,
     pub avatar: [u8; 32],
-    /// `hdr_nonce`, `inner_nonce` and the cell nonces (the same values as in `entropy`).
-    pub hdr_nonce: Vec<u8>,
-    pub inner_nonce: Vec<u8>,
-    pub cell_nonces: [Vec<u8>; 3],
 }
 
 /// R's processing of an honest group (§6.5, §6.6 steps 1–4) from `fetched`, with the DH-step randomness `step`.
@@ -429,49 +499,67 @@ struct Responded {
     state_digest: String,
 }
 
-fn respond(b: &Base0, fetched: &[Vec<u8>], step: &[u8]) -> Responded {
+/// Trial-opens every fetched cell (those that do not open are ignored), reassembles the three chunks and
+/// unpads them to the unpadded `Outer`.
+fn reassemble(b: &Base0, fetched: &[Vec<u8>]) -> Vec<u8> {
     let k_inv_value = k_inv(&b.inv.ld_id, &b.inv.link_key);
     let ad = [Label::HxInitcell.as_bytes(), b.inv.ld_id.as_slice()].concat();
-    // trial-open every cell; ignore those that do not open
     let mut chunks: [Option<Vec<u8>>; 3] = [None, None, None];
     for cell in fetched {
         let (n, rest) = cell.split_at(24);
         let Ok(pt) = Caead::open(&k_inv_value, n.try_into().unwrap(), &ad, rest) else {
             continue;
         };
-        if pt.len() != 4024 || pt[17] != 3 || pt[16] > 2 {
+        // plaintext: init_id (16) || i || total || chunk
+        let (Some(&idx), Some(&total)) = (pt.get(16), pt.get(17)) else {
+            continue;
+        };
+        if pt.len() != 4024 || total != 3 || idx > 2 {
             continue;
         }
-        let slot = &mut chunks[usize::from(pt[16])];
+        let Some(slot) = chunks.get_mut(usize::from(idx)) else {
+            continue;
+        };
         if slot.is_none() {
-            *slot = Some(pt[18..].to_vec());
+            *slot = Some(sl(&pt, 18..).to_vec());
         }
     }
     let padded: Vec<u8> = chunks.into_iter().flat_map(|c| c.unwrap()).collect();
     let outer_bytes = unpad(&padded, PADDED_LEN).unwrap().to_vec();
     assert_eq!(outer_bytes.len(), OUTER_LEN);
-    let ek = &outer_bytes[OFF_EK..OFF_EK + 32];
-    let ct_spk = &outer_bytes[OFF_CT_SPK..OFF_CT_OPK];
-    let ct_opk = &outer_bytes[OFF_CT_OPK..OFF_INNER_CT];
-    let inner_ct_bytes = &outer_bytes[OFF_INNER_CT..];
+    outer_bytes
+}
+
+fn respond(b: &Base0, fetched: &[Vec<u8>], step: &[u8]) -> Responded {
+    let outer_bytes = reassemble(b, fetched);
+    let ek = sl(&outer_bytes, OFF_EK..OFF_EK + 32);
+    let ct_signed = sl(&outer_bytes, OFF_CT_SPK..OFF_CT_OPK);
+    let ct_onetime = sl(&outer_bytes, OFF_CT_OPK..OFF_INNER_CT);
+    let inner_ct_bytes = sl(&outer_bytes, OFF_INNER_CT..);
     let ek_pub = X25519Public::from_bytes(ek).unwrap();
     let dh3 = b.keys.spk_dh.diffie_hellman(&ek_pub).unwrap();
     let dh4 = b.keys.opk_dh.diffie_hellman(&ek_pub).unwrap();
-    let ss_spk = b.keys.spk_kem.decapsulate(&MlKem1024Ct::from_bytes(ct_spk).unwrap());
-    let ss_opk = b.keys.opk_kem.decapsulate(&MlKem1024Ct::from_bytes(ct_opk).unwrap());
+    let ss_signed = b
+        .keys
+        .spk_kem
+        .decapsulate(&MlKem1024Ct::from_bytes(ct_signed).unwrap());
+    let ss_onetime = b
+        .keys
+        .opk_kem
+        .decapsulate(&MlKem1024Ct::from_bytes(ct_onetime).unwrap());
     let k_id_value = k_id(
         &b.inv.ld_id,
         &b.inv.link_key,
         dh3.expose_secret(),
-        ss_spk.expose_secret(),
+        ss_signed.expose_secret(),
         dh4.expose_secret(),
-        ss_opk.expose_secret(),
+        ss_onetime.expose_secret(),
     );
     let ad_inner = [Label::HxInner.as_bytes(), b.inv.ld_id.as_slice()].concat();
     let (n2, rest) = inner_ct_bytes.split_at(24);
     let inner = Caead::open(&k_id_value, n2.try_into().unwrap(), &ad_inner, rest).unwrap();
     let (iks_i, first_msg) = inner.split_at(IKS_LEN);
-    let iks_i_pub = X25519Public::from_bytes(&iks_i[IKS_LEN - 32..]).unwrap();
+    let iks_i_pub = X25519Public::from_bytes(sl(iks_i, IKS_LEN - 32..)).unwrap();
     let dh1 = b.keys.spk_dh.diffie_hellman(&iks_i_pub).unwrap();
     let dh2 = b.r.dh.diffie_hellman(&ek_pub).unwrap();
     let tr = transcript([
@@ -485,8 +573,8 @@ fn respond(b: &Base0, fetched: &[Vec<u8>], step: &[u8]) -> Responded {
         b.keys.opk_kem.encapsulation_key().as_bytes(),
         iks_i,
         ek,
-        ct_spk,
-        ct_opk,
+        ct_signed,
+        ct_onetime,
         &b.inv.ld_id,
     ]);
     let sk_value = sk(
@@ -495,8 +583,8 @@ fn respond(b: &Base0, fetched: &[Vec<u8>], step: &[u8]) -> Responded {
             dh2.expose_secret(),
             dh3.expose_secret(),
             dh4.expose_secret(),
-            ss_spk.expose_secret(),
-            ss_opk.expose_secret(),
+            ss_signed.expose_secret(),
+            ss_onetime.expose_secret(),
         ],
         &tr,
     );
@@ -508,11 +596,17 @@ fn respond(b: &Base0, fetched: &[Vec<u8>], step: &[u8]) -> Responded {
         .unwrap()
         .commit(|_| Ok::<(), ()>(()))
         .unwrap();
-    assert_eq!(e.remaining(), 0, "R's DH step draws exactly the step randomness");
+    assert_eq!(
+        e.remaining(),
+        0,
+        "R's DH step draws exactly the step randomness"
+    );
     let content = plaintext.content().unwrap();
-    let ContentBody::Handshake(handshake) = &content.body else {
-        panic!("the first message is a Handshake");
-    };
+    let handshake = match &content.body {
+        ContentBody::Handshake(h) => Some(h),
+        _ => None,
+    }
+    .expect("the first message is a Handshake");
     Responded {
         transcript: tr,
         sk: sk_value,
@@ -576,7 +670,10 @@ fn reject_i(s: Stream, i: u32, manipulation: &str) -> Value {
         i,
         "invitee-reject",
         "I",
-        vec![("manipulation", json!(manipulation)), ("expect", json!("reject"))],
+        vec![
+            ("manipulation", json!(manipulation)),
+            ("expect", json!("reject")),
+        ],
     )
 }
 
@@ -587,10 +684,10 @@ struct Pos<'a> {
     invitation: &'a [u8],
 }
 
-fn v_invitation(p: &Pos<'_>, i: u32, manipulation: &str, mutated: Vec<u8>) -> Value {
+fn v_invitation(p: &Pos<'_>, i: u32, manipulation: &str, mutated: &[u8]) -> Value {
     let mut s = Stream::new(i);
-    s.list("invitation", &mutated);
-    s.list_value("uri", json!(uri(&mutated)));
+    s.list("invitation", mutated);
+    s.list_value("uri", json!(uri(mutated)));
     let _ = p;
     reject_i(s, i, manipulation)
 }
@@ -600,10 +697,17 @@ fn seal_linkdata(p: &Pos<'_>, n: &[u8], linkdata: &[u8]) -> Vec<u8> {
     blob(&k, &p.base.inv.ld_id, n, linkdata)
 }
 
-/// V4–V7, V9: a LinkDataV1 variant, sealed under the case 3 `K_ld` with the stream's `n`.
-fn v_linkdata(p: &Pos<'_>, i: u32, manipulation: &str, mut s: Stream, n: &[u8], linkdata: Vec<u8>) -> Value {
-    let sealed = seal_linkdata(p, n, &linkdata);
-    s.list("linkdata", &linkdata);
+/// V4–V7, V9: a `LinkDataV1` variant, sealed under the case 3 `K_ld` with the stream's `n`.
+fn v_linkdata(
+    p: &Pos<'_>,
+    i: u32,
+    manipulation: &str,
+    mut s: Stream,
+    n: &[u8],
+    linkdata: &[u8],
+) -> Value {
+    let sealed = seal_linkdata(p, n, linkdata);
+    s.list("linkdata", linkdata);
     s.list("blob", &sealed);
     reject_i(s, i, manipulation)
 }
@@ -618,14 +722,14 @@ fn v_cases(p: &Pos<'_>) -> Vec<(u32, Value)> {
     let mut inv = p.invitation.to_vec();
     inv.truncate(233);
     inv.extend_from_slice(&(NOW - 1).to_be_bytes());
-    out.push((9, v_invitation(p, 9, "inv-expired", inv)));
+    out.push((9, v_invitation(p, 9, "inv-expired", &inv)));
     // V2 kind := 0x02, V3 ver := 0x02
     let mut inv = p.invitation.to_vec();
-    inv[1] = 2;
-    out.push((10, v_invitation(p, 10, "inv-kind-multi", inv)));
+    *byte_mut(&mut inv, 1) = 2;
+    out.push((10, v_invitation(p, 10, "inv-kind-multi", &inv)));
     let mut inv = p.invitation.to_vec();
-    inv[0] = 2;
-    out.push((11, v_invitation(p, 11, "inv-ver", inv)));
+    *byte_mut(&mut inv, 0) = 2;
+    out.push((11, v_invitation(p, 11, "inv-ver", &inv)));
 
     // V4 fingerprint mismatch: a fresh IKS, bundle unchanged
     let mut s = Stream::new(12);
@@ -634,37 +738,57 @@ fn v_cases(p: &Pos<'_>) -> Vec<(u32, Value)> {
     let dh = s.draw("ik_dh_sk", 32);
     let n = s.draw("n", 24);
     let fresh = identity(&xi, &ed, &dh);
-    let linkdata = linkdata_bytes(&fresh.iks_bytes, p.bundle, &profile_bytes("bob", None), CREATED);
-    out.push((12, v_linkdata(p, 12, "ld-fp-mismatch", s, &n, linkdata)));
+    let linkdata = linkdata_bytes(
+        &fresh.iks_bytes,
+        p.bundle,
+        &profile_bytes("bob", None),
+        CREATED,
+    );
+    out.push((12, v_linkdata(p, 12, "ld-fp-mismatch", s, &n, &linkdata)));
 
     // V5 bad signature (ML-DSA part): bit 0 of the last byte of `bundle.sig`
     let mut s = Stream::new(13);
     let n = s.draw("n", 24);
     let linkdata = flip_last_bit(p.linkdata.to_vec(), bundle_end - 1);
-    out.push((13, v_linkdata(p, 13, "ld-bad-sig", s, &n, linkdata)));
+    out.push((13, v_linkdata(p, 13, "ld-bad-sig", s, &n, &linkdata)));
 
     // V6 bundle expired: spk_expiry := now − 1, re-signed
     let mut s = Stream::new(14);
     let rnd: [u8; 32] = s.arr("rnd");
     let n = s.draw("n", 24);
     let bundle = bundle_bytes(p.base.r, p.base.keys, NOW - 1, 1, &rnd);
-    let linkdata = linkdata_bytes(&p.base.r.iks_bytes, &bundle, &profile_bytes("bob", None), CREATED);
-    out.push((14, v_linkdata(p, 14, "ld-bundle-expired", s, &n, linkdata)));
+    let linkdata = linkdata_bytes(
+        &p.base.r.iks_bytes,
+        &bundle,
+        &profile_bytes("bob", None),
+        CREATED,
+    );
+    out.push((14, v_linkdata(p, 14, "ld-bundle-expired", s, &n, &linkdata)));
 
     // V7 opk_present := 0x00, re-signed
     let mut s = Stream::new(15);
     let rnd: [u8; 32] = s.arr("rnd");
     let n = s.draw("n", 24);
     let bundle = bundle_bytes(p.base.r, p.base.keys, EXPIRES, 0, &rnd);
-    let linkdata = linkdata_bytes(&p.base.r.iks_bytes, &bundle, &profile_bytes("bob", None), CREATED);
-    out.push((15, v_linkdata(p, 15, "ld-opk-absent", s, &n, linkdata)));
+    let linkdata = linkdata_bytes(
+        &p.base.r.iks_bytes,
+        &bundle,
+        &profile_bytes("bob", None),
+        CREATED,
+    );
+    out.push((15, v_linkdata(p, 15, "ld-opk-absent", s, &n, &linkdata)));
 
     // V8 wrong key: K_ld of link_key with bit 0 of byte 0 flipped
     let mut s = Stream::new(16);
     let n = s.draw("n", 24);
     let mut wrong = p.base.inv.link_key;
     wrong[0] ^= 1;
-    let sealed = blob(&k_ld(&p.base.inv.ld_id, &wrong), &p.base.inv.ld_id, &n, p.linkdata);
+    let sealed = blob(
+        &k_ld(&p.base.inv.ld_id, &wrong),
+        &p.base.inv.ld_id,
+        &n,
+        p.linkdata,
+    );
     s.list("blob", &sealed);
     out.push((16, reject_i(s, 16, "ld-wrong-key")));
 
@@ -672,7 +796,7 @@ fn v_cases(p: &Pos<'_>) -> Vec<(u32, Value)> {
     let mut s = Stream::new(29);
     let n = s.draw("n", 24);
     let linkdata = flip_last_bit(p.linkdata.to_vec(), sig_at);
-    out.push((29, v_linkdata(p, 29, "ld-bad-sig-ed", s, &n, linkdata)));
+    out.push((29, v_linkdata(p, 29, "ld-bad-sig-ed", s, &n, &linkdata)));
     out
 }
 
@@ -683,7 +807,13 @@ struct Re<'a> {
     b6: &'a Base6,
 }
 
-fn reject_r(mut s: Stream, i: u32, manipulation: &str, fetched: &[Vec<u8>], opks_post: &[u32]) -> Value {
+fn reject_r(
+    mut s: Stream,
+    i: u32,
+    manipulation: &str,
+    fetched: &[Vec<u8>],
+    opks_post: &[u32],
+) -> Value {
     s.list_value("fetched", hex_array(fetched));
     s.finish(
         i,
@@ -723,23 +853,17 @@ fn outer_case(re: &Re<'_>, i: u32, manipulation: &str, mutate: impl FnOnce(&mut 
 
 /// A case that changes `Inner` (and so `inner_ct` and `Outer`): stream = `inner_nonce`, the re-seal draws,
 /// optionally the DH-step draws; `inner` and `outer` are listed after them.
-fn inner_case(
-    re: &Re<'_>,
-    i: u32,
-    manipulation: &str,
-    with_step: bool,
-    inner: Vec<u8>,
-) -> Value {
+fn inner_case(re: &Re<'_>, i: u32, manipulation: &str, with_step: bool, inner: &[u8]) -> Value {
     let mut s = Stream::new(i);
     let inner_nonce = s.draw("inner_nonce", 24);
     let a = &re.b6.a;
-    let ict = inner_ct(&a.k_id, &re.base.inv.ld_id, &inner_nonce, &inner);
+    let ict = inner_ct(&a.k_id, &re.base.inv.ld_id, &inner_nonce, inner);
     let outer_bytes = outer(&a.ek_pk, SPK_ID, OPK_ID, &a.ct_spk, &a.ct_opk, &ict);
     let fetched = reseal(re, &mut s, &outer_bytes);
     if with_step {
         let _ = s.dh_step();
     }
-    s.list("inner", &inner);
+    s.list("inner", inner);
     s.list("outer", &outer_bytes);
     reject_r(s, i, manipulation, &fetched, &[OPK_ID])
 }
@@ -781,48 +905,67 @@ fn r_cases(re: &Re<'_>) -> Vec<(u32, Value)> {
     let b6 = re.b6;
     let mut out = Vec::new();
     // R1 opk-unknown: opk_id := 43; R2 spk-unknown: spk_id := 8
-    out.push((17, outer_case(re, 17, "opk-unknown", |o| {
-        o[OFF_OPK_ID..OFF_OPK_ID + 4].copy_from_slice(&43_u32.to_be_bytes());
-    })));
-    out.push((18, outer_case(re, 18, "spk-unknown", |o| {
-        o[OFF_SPK_ID..OFF_SPK_ID + 4].copy_from_slice(&8_u32.to_be_bytes());
-    })));
+    out.push((
+        17,
+        outer_case(re, 17, "opk-unknown", |o| {
+            sl_mut(o, OFF_OPK_ID..OFF_OPK_ID + 4).copy_from_slice(&43_u32.to_be_bytes());
+        }),
+    ));
+    out.push((
+        18,
+        outer_case(re, 18, "spk-unknown", |o| {
+            sl_mut(o, OFF_SPK_ID..OFF_SPK_ID + 4).copy_from_slice(&8_u32.to_be_bytes());
+        }),
+    ));
     // R3 replay: case 6's cells again, to R after case 7
     let s = Stream::new(19);
     out.push((19, reject_r(s, 19, "replay", &b6.cells, &[])));
     // R4 zero-ek
-    out.push((20, outer_case(re, 20, "zero-ek", |o| o[OFF_EK..OFF_EK + 32].fill(0))));
+    out.push((
+        20,
+        outer_case(re, 20, "zero-ek", |o| {
+            sl_mut(o, OFF_EK..OFF_EK + 32).fill(0);
+        }),
+    ));
     // R5 low-order ik_dh in Inner
     let mut inner = b6.inner.clone();
-    inner[IKS_LEN - 32..IKS_LEN].copy_from_slice(&LOW_ORDER_8);
-    out.push((21, inner_case(re, 21, "low-order-ik-dh", false, inner)));
+    sl_mut(&mut inner, IKS_LEN - 32..IKS_LEN).copy_from_slice(&LOW_ORDER_8);
+    out.push((21, inner_case(re, 21, "low-order-ik-dh", false, &inner)));
     // R6 tampered chunk: cell_1 with bit 0 of its last byte flipped
     let s = Stream::new(22);
-    let mut fetched = b6.cells.to_vec();
+    let mut fetched = b6.cells.clone();
     fetched[1] = flip_last_bit(fetched[1].clone(), 4095);
     out.push((22, reject_r(s, 22, "tampered-chunk", &fetched, &[OPK_ID])));
     // R7 inner-tag-flip
-    out.push((23, outer_case(re, 23, "inner-tag-flip", |o| {
-        let last = o.len() - 1;
-        o[last] ^= 1;
-    })));
+    out.push((
+        23,
+        outer_case(re, 23, "inner-tag-flip", |o| {
+            *o.last_mut().unwrap() ^= 1;
+        }),
+    ));
     // R8 first-msg-flip: bit 0 of the last byte of first_msg in Inner
     let inner = flip_last_bit(b6.inner.clone(), INNER_LEN - 1);
-    out.push((24, inner_case(re, 24, "first-msg-flip", true, inner)));
+    out.push((24, inner_case(re, 24, "first-msg-flip", true, &inner)));
     // R9 caps-nonzero: caps := 1 in case 6's Content
-    out.push((25, first_msg_case(re, 25, "caps-nonzero", |_| {
-        let mut content = b6.content.clone();
-        // ver 1, type 1, seq 8, ts 8, body_len 2, Profile (39), then caps u32
-        content[20 + 39 + 3] = 1;
-        pad(&content, BODY_LEN).unwrap().to_vec()
-    })));
+    out.push((
+        25,
+        first_msg_case(re, 25, "caps-nonzero", |_| {
+            let mut content = b6.content.clone();
+            // ver 1, type 1, seq 8, ts 8, body_len 2, Profile (39), then caps u32
+            *byte_mut(&mut content, 20 + 39 + 3) = 1;
+            pad(&content, BODY_LEN).unwrap().to_vec()
+        }),
+    ));
     // R10 ct-spk-flip
-    out.push((26, outer_case(re, 26, "ct-spk-flip", |o| o[OFF_CT_SPK] ^= 1)));
+    out.push((
+        26,
+        outer_case(re, 26, "ct-spk-flip", |o| *byte_mut(o, OFF_CT_SPK) ^= 1),
+    ));
     // R11 total-not-3: cell_0 re-sealed with total := 2
     let mut s = Stream::new(27);
     let n0 = s.draw("cell_nonce_0", 24);
     let k = k_inv(&re.base.inv.ld_id, &re.base.inv.link_key);
-    let mut fetched = b6.cells.to_vec();
+    let mut fetched = b6.cells.clone();
     fetched[0] = cell_raw(
         &k,
         &re.base.inv.ld_id,
@@ -833,7 +976,7 @@ fn r_cases(re: &Re<'_>) -> Vec<(u32, Value)> {
     // R12 idx-dup: cell_1 re-sealed with i := 0
     let mut s = Stream::new(28);
     let n1 = s.draw("cell_nonce_1", 24);
-    let mut fetched = b6.cells.to_vec();
+    let mut fetched = b6.cells.clone();
     fetched[1] = cell_raw(
         &k,
         &re.base.inv.ld_id,
@@ -842,23 +985,26 @@ fn r_cases(re: &Re<'_>) -> Vec<(u32, Value)> {
     );
     out.push((28, reject_r(s, 28, "idx-dup", &fetched, &[OPK_ID])));
     // R13 first-msg-not-handshake: a Batch of one AppMessage
-    out.push((30, first_msg_case(re, 30, "first-msg-not-handshake", |s| {
-        let msg_id: [u8; 16] = s.arr("msg_id");
-        let payload = s.draw("payload", 8);
-        let content = Content {
-            seq: 1,
-            ts: 1_700_000_001,
-            body: ContentBody::Batch(BatchBody {
-                messages: vec![AppMessage {
-                    msg_id,
-                    kind: AppKind::Text,
-                    expire_after: 0,
-                    payload: secmp_crypto::Zeroizing::new(payload),
-                }],
-            }),
-        };
-        content.encode().unwrap().to_vec()
-    })));
+    out.push((
+        30,
+        first_msg_case(re, 30, "first-msg-not-handshake", |s| {
+            let msg_id: [u8; 16] = s.arr("msg_id");
+            let payload = s.draw("payload", 8);
+            let content = Content {
+                seq: 1,
+                ts: 1_700_000_001,
+                body: ContentBody::Batch(BatchBody {
+                    messages: vec![AppMessage {
+                        msg_id,
+                        kind: AppKind::Text,
+                        expire_after: 0,
+                        payload: secmp_crypto::Zeroizing::new(payload),
+                    }],
+                }),
+            };
+            content.encode().unwrap().to_vec()
+        }),
+    ));
     out
 }
 
@@ -902,7 +1048,7 @@ pub fn world() -> World {
     let case7 = case7(&base0, &b6);
     let case8 = case8(&base0, &b6);
     let step = Stream::new(7).dh_step();
-    let cases = vec![
+    let positives = vec![
         (1, case1),
         (2, case2),
         (3, case3),
@@ -928,13 +1074,35 @@ pub fn world() -> World {
         k_inv: k_inv_value,
         b6,
         step,
-        cases,
+        cases: positives,
     }
+}
+
+/// Cross-checks the values `world()` hands to the tests against the ones the cases were built from.
+fn check_world(w: &World) {
+    assert_eq!(w.r_seed.len(), 384);
+    assert_eq!(w.i_seed.len(), 96);
+    assert_eq!(w.uri, uri(&w.invitation));
+    assert_eq!(
+        hex(w.k_ld.expose_secret()),
+        hex(k_ld(&w.inv.ld_id, &w.inv.link_key).expose_secret())
+    );
+    assert_eq!(
+        hex(w.k_inv.expose_secret()),
+        hex(k_inv(&w.inv.ld_id, &w.inv.link_key).expose_secret())
+    );
+    assert!(w.blob.len() > w.linkdata.len());
+    assert_eq!(w.step.len(), 128);
+    assert_eq!(w.b6.entropy.len(), 360);
+    assert_eq!(w.b6.route.len(), 155);
+    assert_eq!(w.b6.first_msg.len(), 4096);
+    assert!(w.b6.content.windows(32).any(|c| c == w.b6.avatar));
 }
 
 /// The complete `hx` file (the Rust side of `cargo xtask vectors`).
 pub fn generate() -> Value {
     let w = world();
+    check_world(&w);
     let base0 = Base0 {
         r: &w.r,
         i: &w.i,

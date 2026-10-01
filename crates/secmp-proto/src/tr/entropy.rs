@@ -77,12 +77,8 @@ pub trait Entropy: sealed::Sealed {
     /// # Errors
     /// [`crate::Error::Unavailable`] if randomness is unavailable; [`crate::Error::Rejected`] if the message is
     /// refused by the signer.
-    fn sign(
-        &mut self,
-        key: &HybridSigningKey,
-        label: Label,
-        msg: &[u8],
-    ) -> Result<HybridSignature>;
+    fn sign(&mut self, key: &HybridSigningKey, label: Label, msg: &[u8])
+    -> Result<HybridSignature>;
 }
 
 /// The operating system CSPRNG (the only [`Entropy`] of a shipped build).

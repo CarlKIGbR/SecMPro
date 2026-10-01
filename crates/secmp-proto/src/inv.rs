@@ -19,8 +19,8 @@ use secmp_crypto::{Caead, ConstantTimeEq, Fingerprint, Label, Nonce24, SecretByt
 use crate::codec::{Decode, Encode};
 use crate::error::{Error, Result};
 use crate::sizes::{COM_LEN, HASH_LEN, LINK_BLOB_LEN, NONCE_LEN};
-use crate::wire::inv::{InvitationV1, LinkBlob, LinkDataV1};
 use crate::wire::Id;
+use crate::wire::inv::{InvitationV1, LinkBlob, LinkDataV1};
 
 /// The URI scheme and path of an invitation (§5.2): `secmp://i/` followed by the unpadded base64url encoding.
 pub const URI_PREFIX: &str = "secmp://i/";
@@ -254,11 +254,7 @@ pub fn seal_blob(
 /// # Errors
 /// [`Error::Rejected`] — uniformly — for a wrong length, a wrong key or AD, a tampered byte, bad padding or an
 /// undecodable `LinkDataV1`.
-pub fn open_blob(
-    ld_id: &Id,
-    link_key: &SecretBytes<HASH_LEN>,
-    blob: &[u8],
-) -> Result<LinkDataV1> {
+pub fn open_blob(ld_id: &Id, link_key: &SecretBytes<HASH_LEN>, blob: &[u8]) -> Result<LinkDataV1> {
     if blob.len() != LINK_BLOB_LEN {
         return Err(Error::Rejected);
     }
@@ -376,7 +372,8 @@ mod tests {
     #[test]
     fn base64url_is_canonical() {
         for bad in [
-            "Zg==", "Zm9v+", "Zm9v/", "Z", "Zm9vY", "Zh", "Zm9", "Zm 9v", " Zm9v", "Zm9v\n", "Zm9vé",
+            "Zg==", "Zm9v+", "Zm9v/", "Z", "Zm9vY", "Zh", "Zm9", "Zm 9v", " Zm9v", "Zm9v\n",
+            "Zm9vé",
         ] {
             assert_eq!(base64url_decode(bad), Err(Error::Rejected), "{bad:?}");
         }

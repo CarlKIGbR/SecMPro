@@ -28,7 +28,7 @@ use crate::keys::{self, Ed25519Pk, HybridSig, X25519Pk};
 use crate::sizes::HASH_LEN;
 use crate::tr::Entropy;
 use crate::wire::inv::{
-    InvitationV1, IksPublic, LinkBlob, LinkDataV1, PrekeyBundle, Profile, RelayRef,
+    IksPublic, InvitationV1, LinkBlob, LinkDataV1, PrekeyBundle, Profile, RelayRef,
 };
 use crate::wire::{Id, Period, write_ver};
 
@@ -413,7 +413,9 @@ impl MemoryPrekeyStore {
         if due {
             self.create_spk(now, entropy)
         } else {
-            self.current_spk().map(SpkGeneration::id).ok_or(Error::Rejected)
+            self.current_spk()
+                .map(SpkGeneration::id)
+                .ok_or(Error::Rejected)
         }
     }
 

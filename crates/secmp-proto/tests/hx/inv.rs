@@ -9,8 +9,8 @@
 use secmp_crypto::{Caead, Label, Nonce24};
 use secmp_proto::codec::pad;
 use secmp_proto::inv::{
-    base64url_decode, derive_k_inv, derive_k_ld, invitation_qr_text,
-    invitation_uri, invitee_accept, parse_invitation_uri,
+    base64url_decode, derive_k_inv, derive_k_ld, invitation_qr_text, invitation_uri,
+    invitee_accept, parse_invitation_uri,
 };
 use secmp_proto::wire::inv::InvitationV1;
 use secmp_proto::{Decode, Encode, Error};
@@ -22,7 +22,11 @@ use crate::layout::*;
 use crate::scenario::Lib;
 
 fn rejects(lib: &Lib, uri: &str, blob: &[u8], what: &str) {
-    assert_eq!(lib.invitee(uri, blob).err(), Some(Error::Rejected), "{what}");
+    assert_eq!(
+        lib.invitee(uri, blob).err(),
+        Some(Error::Rejected),
+        "{what}"
+    );
 }
 
 fn accepts(lib: &Lib, uri: &str, blob: &[u8], what: &str) {
@@ -30,9 +34,20 @@ fn accepts(lib: &Lib, uri: &str, blob: &[u8], what: &str) {
 }
 
 fn flip(mut b: Vec<u8>, at: usize) -> Vec<u8> {
-    b[at] ^= 1;
+    *b.get_mut(at).unwrap() ^= 1;
     b
 }
+
+/// Overwrite `buf[at .. at + src.len()]` with `src`.
+fn put(buf: &mut [u8], at: usize, src: &[u8]) {
+    buf.get_mut(at..)
+        .unwrap()
+        .get_mut(..src.len())
+        .unwrap()
+        .copy_from_slice(src);
+}
+
+const ALPHABET: &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 
 // ---- (a) positive INV tests ---------------------------------------------------------------------------------
 
@@ -47,7 +62,11 @@ fn inv_uri_roundtrip() {
     let back = parse_invitation_uri(&uri).unwrap();
     assert_eq!(back.encode().unwrap().to_vec(), lib.w.invitation);
     // no padding, URL-safe alphabet only
-    assert!(uri[10..].bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_'));
+    assert!(
+        uri[10..]
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')
+    );
 }
 
 #[test]
@@ -75,13 +94,9 @@ fn inv_blob_len_and_keys() {
         &[],
     )
     .unwrap();
-    let expected_inv = secmp_crypto::hkdf::<32>(
-        &lib.w.inv.ld_id,
-        &lib.w.inv.link_key,
-        Label::HxInitkey,
-        &[],
-    )
-    .unwrap();
+    let expected_inv =
+        secmp_crypto::hkdf::<32>(&lib.w.inv.ld_id, &lib.w.inv.link_key, Label::HxInitkey, &[])
+            .unwrap();
     assert_eq!(k_ld.expose_secret(), expected_ld.expose_secret());
     assert_eq!(k_inv.expose_secret(), expected_inv.expose_secret());
     assert_eq!(Label::InvLinkdata.as_bytes(), b"SecMP-INV/1 linkdata");
@@ -129,7 +144,6 @@ fn invitee_uri_noncanonical_base64_rejects() {
     // non-zero unused low bits in the last character: 241 B = 80 · 3 + 1, so the last of 322 characters carries 6 data
     // bits of which only the top 2 are used; of the 64 possible last characters exactly the 4 whose low 4 bits are
     // zero are canonical
-    const ALPHABET: &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
     let prefix = &tail[..tail.len() - 1];
     let mut canonical = 0;
     for (value, c) in ALPHABET.chars().enumerate() {
@@ -138,7 +152,11 @@ fn invitee_uri_noncanonical_base64_rejects() {
         assert_eq!(ok, value % 16 == 0, "last character {c}");
         canonical += usize::from(ok);
         let uri = format!("secmp://i/{text}");
-        assert_eq!(parse_invitation_uri(&uri).is_ok(), ok, "uri with last character {c}");
+        assert_eq!(
+            parse_invitation_uri(&uri).is_ok(),
+            ok,
+            "uri with last character {c}"
+        );
     }
     assert_eq!(canonical, 4);
     assert_eq!(base64url_decode("Zh").err(), Some(Error::Rejected));
@@ -149,7 +167,7 @@ fn invitee_uri_noncanonical_base64_rejects() {
 fn invitee_invitation_wrong_ver_rejects() {
     let lib = Lib::new();
     let mut inv = lib.w.invitation.clone();
-    inv[INV_VER] = 2;
+    *inv.get_mut(INV_VER).unwrap() = 2;
     rejects(&lib, &lib.uri_of(&inv), &lib.w.blob, "ver 0x02");
     // vector V3 (hx-0011): the same mutation
 }
@@ -159,8 +177,13 @@ fn invitee_invitation_kind_not_one_time_rejects() {
     let lib = Lib::new();
     for kind in [0x02_u8, 0x00, 0x03] {
         let mut inv = lib.w.invitation.clone();
-        inv[INV_KIND] = kind;
-        rejects(&lib, &lib.uri_of(&inv), &lib.w.blob, &format!("kind {kind:#04x}"));
+        *inv.get_mut(INV_KIND).unwrap() = kind;
+        rejects(
+            &lib,
+            &lib.uri_of(&inv),
+            &lib.w.blob,
+            &format!("kind {kind:#04x}"),
+        );
     }
 }
 
@@ -169,8 +192,13 @@ fn invitee_invitation_bad_period_rejects() {
     let lib = Lib::new();
     for period in [0_u16, 9, 15, 30, 160, 0xffff] {
         let mut inv = lib.w.invitation.clone();
-        inv[INV_PERIOD..INV_PERIOD + 2].copy_from_slice(&period.to_be_bytes());
-        rejects(&lib, &lib.uri_of(&inv), &lib.w.blob, &format!("period {period}"));
+        put(&mut inv, INV_PERIOD, &period.to_be_bytes());
+        rejects(
+            &lib,
+            &lib.uri_of(&inv),
+            &lib.w.blob,
+            &format!("period {period}"),
+        );
     }
 }
 
@@ -179,7 +207,9 @@ fn invitee_expired_invitation_rejects() {
     let lib = Lib::new();
     let with_expiry = |e: u64| {
         let mut inv = lib.w.invitation.clone();
-        inv[INV_EXPIRES..].copy_from_slice(&e.to_be_bytes());
+        inv.get_mut(INV_EXPIRES..)
+            .unwrap()
+            .copy_from_slice(&e.to_be_bytes());
         lib.uri_of(&inv)
     };
     // reading 3: `now` = `expires` is expired
@@ -208,7 +238,12 @@ fn invitee_blob_wrong_link_key_rejects() {
     wrong[0] ^= 1;
     let k = harness::k_ld(&lib.w.inv.ld_id, &wrong);
     let blob = harness::blob(&k, &lib.w.inv.ld_id, &[3; 24], &lib.w.linkdata);
-    rejects(&lib, &lib.w.uri, &blob, "K_ld from a flipped link_key (vector V8)");
+    rejects(
+        &lib,
+        &lib.w.uri,
+        &blob,
+        "K_ld from a flipped link_key (vector V8)",
+    );
 }
 
 #[test]
@@ -226,7 +261,12 @@ fn invitee_blob_tampered_rejects() {
     let lib = Lib::new();
     // N = 0..24, COM = 24..56, ct = 56..12344, tag = 12344..12360
     for at in [0_usize, 23, 24, 55, 56, 5000, 12_343, 12_344, 12_359] {
-        rejects(&lib, &lib.w.uri, &flip(lib.w.blob.clone(), at), &format!("flip byte {at}"));
+        rejects(
+            &lib,
+            &lib.w.uri,
+            &flip(lib.w.blob.clone(), at),
+            &format!("flip byte {at}"),
+        );
     }
     let mut longer = lib.w.blob.clone();
     longer.push(0);
@@ -234,7 +274,7 @@ fn invitee_blob_tampered_rejects() {
     rejects(
         &lib,
         &lib.w.uri,
-        &lib.w.blob[..lib.w.blob.len() - 1],
+        lib.w.blob.split_last().unwrap().1,
         "length 12359",
     );
     rejects(&lib, &lib.w.uri, &[], "empty blob");
@@ -245,19 +285,25 @@ fn invitee_linkdata_bad_padding_rejects() {
     let lib = Lib::new();
     let seal = |padded: &[u8]| {
         let ad = [Label::InvBlob.as_bytes(), lib.w.inv.ld_id.as_slice()].concat();
-        let sealed = Caead::seal(&lib.w.k_ld, Nonce24::from_bytes_kat([5; 24]), &ad, padded).unwrap();
+        let sealed =
+            Caead::seal(&lib.w.k_ld, Nonce24::from_bytes_kat([5; 24]), &ad, padded).unwrap();
         [[5_u8; 24].as_slice(), sealed.as_slice()].concat()
     };
     let good = pad(&lib.w.linkdata, 12_288).unwrap().to_vec();
     accepts(&lib, &lib.w.uri, &seal(&good), "control: correct padding");
     // no 0x80 after the fields: zeros only
     let mut no_marker = good.clone();
-    no_marker[lib.w.linkdata.len()] = 0;
+    *no_marker.get_mut(lib.w.linkdata.len()).unwrap() = 0;
     rejects(&lib, &lib.w.uri, &seal(&no_marker), "no 0x80 marker");
     // a non-zero byte after the marker
     let mut dirty = good.clone();
-    dirty[12_287] = 1;
-    rejects(&lib, &lib.w.uri, &seal(&dirty), "non-zero byte after the marker");
+    *dirty.get_mut(12_287).unwrap() = 1;
+    rejects(
+        &lib,
+        &lib.w.uri,
+        &seal(&dirty),
+        "non-zero byte after the marker",
+    );
     // all zero
     rejects(&lib, &lib.w.uri, &seal(&[0; 12_288]), "all zero");
 }
@@ -269,7 +315,12 @@ fn invitee_wrong_fingerprint_rejects_and_sends_nothing() {
     let lib = Lib::new();
     for at in [INV_FP, INV_FP + 31] {
         let inv = flip(lib.w.invitation.clone(), at);
-        rejects(&lib, &lib.uri_of(&inv), &lib.w.blob, &format!("inviter_fp byte {}", at - INV_FP));
+        rejects(
+            &lib,
+            &lib.uri_of(&inv),
+            &lib.w.blob,
+            &format!("inviter_fp byte {}", at - INV_FP),
+        );
     }
 }
 
@@ -280,11 +331,21 @@ fn invitee_substituted_inviter_iks_rejects() {
     let other = identity(&[0x61; 32], &[0x62; 32], &[0x63; 32]);
     let bundle = bundle_bytes(&other, &lib.w.keys, EXPIRES, 1, &[7; 32]);
     let linkdata = lib.linkdata_of(&other.iks_bytes, &bundle);
-    rejects(&lib, &lib.w.uri, &lib.blob_of(&linkdata, 6), "substituted IKS");
+    rejects(
+        &lib,
+        &lib.w.uri,
+        &lib.blob_of(&linkdata, 6),
+        "substituted IKS",
+    );
     // control: the same link data with the matching fingerprint is accepted
     let mut inv = lib.w.invitation.clone();
-    inv[INV_FP..INV_FP + 32].copy_from_slice(&other.fp);
-    accepts(&lib, &lib.uri_of(&inv), &lib.blob_of(&linkdata, 6), "control: matching fingerprint");
+    put(&mut inv, INV_FP, &other.fp);
+    accepts(
+        &lib,
+        &lib.uri_of(&inv),
+        &lib.blob_of(&linkdata, 6),
+        "control: matching fingerprint",
+    );
 }
 
 fn bundle_variant(lib: &Lib, mutate: impl FnOnce(&mut Vec<u8>)) -> Vec<u8> {
@@ -302,7 +363,11 @@ fn reject_bundle(lib: &Lib, bundle: &[u8], what: &str) {
 fn invitee_bundle_bad_sig_ed25519_rejects() {
     let lib = Lib::new();
     // bit 0 of byte 0 of the signature: the Ed25519 R, still a valid encoding (vector V9)
-    reject_bundle(&lib, &bundle_variant(&lib, |b| b[B_SIG] ^= 1), "Ed25519 R bit flipped");
+    reject_bundle(
+        &lib,
+        &bundle_variant(&lib, |b| *b.get_mut(B_SIG).unwrap() ^= 1),
+        "Ed25519 R bit flipped",
+    );
 }
 
 #[test]
@@ -310,7 +375,11 @@ fn invitee_bundle_bad_sig_mldsa_rejects() {
     let lib = Lib::new();
     // the ML-DSA half starts after the 64-byte Ed25519 signature (vector V5: last byte)
     for at in [B_SIG + 64, B_SIG + 64 + 1000, 7774] {
-        reject_bundle(&lib, &bundle_variant(&lib, |b| b[at] ^= 1), &format!("ML-DSA byte {at}"));
+        reject_bundle(
+            &lib,
+            &bundle_variant(&lib, |b| *b.get_mut(at).unwrap() ^= 1),
+            &format!("ML-DSA byte {at}"),
+        );
     }
 }
 
@@ -329,14 +398,22 @@ fn invitee_bundle_field_tampered_rejects() {
         ("spk_id", B_SPK_ID + 3),
         ("spk_dh", B_SPK_DH),
     ] {
-        reject_bundle(&lib, &bundle_variant(&lib, |b| b[at] ^= 1), name);
+        reject_bundle(
+            &lib,
+            &bundle_variant(&lib, |b| *b.get_mut(at).unwrap() ^= 1),
+            name,
+        );
     }
 }
 
 #[test]
 fn invitee_bundle_signed_over_other_ik_dh_rejects() {
     let lib = Lib::new();
-    let other_dh = identity(&lib.w.r_seed[..32], &lib.w.r_seed[32..64], &[0x77; 32]);
+    let other_dh = identity(
+        lib.w.r_seed.get(..32).unwrap(),
+        lib.w.r_seed.get(32..64).unwrap(),
+        &[0x77; 32],
+    );
     let fields = bundle_fields(&lib.w.keys, EXPIRES, 1);
     let bundle = sign_fields(
         &lib.w.r,
@@ -347,7 +424,13 @@ fn invitee_bundle_signed_over_other_ik_dh_rejects() {
     );
     reject_bundle(&lib, &bundle, "signature over fields ‖ a different ik_dh");
     // control: over the right ik_dh
-    let good = sign_fields(&lib.w.r, &fields, lib.w.r.iks.ik_dh.as_bytes(), &[9; 32], Label::HxBundle);
+    let good = sign_fields(
+        &lib.w.r,
+        &fields,
+        lib.w.r.iks.ik_dh.as_bytes(),
+        &[9; 32],
+        Label::HxBundle,
+    );
     let linkdata = lib.linkdata_of(&lib.w.r.iks_bytes, &good);
     accepts(&lib, &lib.w.uri, &lib.blob_of(&linkdata, 8), "control");
 }
@@ -373,7 +456,12 @@ fn invitee_bundle_expired_rejects() {
     reject_bundle(&lib, &signed(NOW - 1), "spk_expiry = now − 1 (vector V6)");
     reject_bundle(&lib, &signed(NOW), "spk_expiry = now (boundary rejects)");
     let linkdata = lib.linkdata_of(&lib.w.r.iks_bytes, &signed(NOW + 1));
-    accepts(&lib, &lib.w.uri, &lib.blob_of(&linkdata, 8), "control: spk_expiry = now + 1");
+    accepts(
+        &lib,
+        &lib.w.uri,
+        &lib.blob_of(&linkdata, 8),
+        "control: spk_expiry = now + 1",
+    );
 }
 
 #[test]
@@ -384,12 +472,22 @@ fn invitee_bundle_without_opk_rejects() {
     let linkdata = lib.linkdata_of(&lib.w.r.iks_bytes, &bundle);
     let padded = pad(&linkdata, 12_288).unwrap();
     assert!(!lib.decodes(&padded), "the decoder refuses opk_present = 0");
-    rejects(&lib, &lib.w.uri, &lib.blob_of(&linkdata, 8), "opk_present = 0");
+    rejects(
+        &lib,
+        &lib.w.uri,
+        &lib.blob_of(&linkdata, 8),
+        "opk_present = 0",
+    );
     // any other value as well
     for present in [2_u8, 0xff] {
         let bundle = bundle_bytes(&lib.w.r, &lib.w.keys, EXPIRES, present, &[11; 32]);
         let linkdata = lib.linkdata_of(&lib.w.r.iks_bytes, &bundle);
-        rejects(&lib, &lib.w.uri, &lib.blob_of(&linkdata, 8), "opk_present ≠ 1");
+        rejects(
+            &lib,
+            &lib.w.uri,
+            &lib.blob_of(&linkdata, 8),
+            "opk_present ≠ 1",
+        );
     }
 }
 
@@ -397,7 +495,13 @@ fn invitee_bundle_without_opk_rejects() {
 fn resigned(lib: &Lib, patch: impl FnOnce(&mut Vec<u8>)) -> Vec<u8> {
     let mut fields = bundle_fields(&lib.w.keys, EXPIRES, 1);
     patch(&mut fields);
-    sign_fields(&lib.w.r, &fields, lib.w.r.iks.ik_dh.as_bytes(), &[12; 32], Label::HxBundle)
+    sign_fields(
+        &lib.w.r,
+        &fields,
+        lib.w.r.iks.ik_dh.as_bytes(),
+        &[12; 32],
+        Label::HxBundle,
+    )
 }
 
 #[test]
@@ -405,14 +509,19 @@ fn invitee_low_order_x25519_rejects() {
     let lib = Lib::new();
     for value in low_order_values() {
         for (name, at) in [("spk_dh", B_SPK_DH), ("opk_dh", B_OPK_DH)] {
-            let bundle = resigned(&lib, |f| f[at..at + 32].copy_from_slice(&value));
+            let bundle = resigned(&lib, |f| put(f, at, &value));
             reject_bundle(&lib, &bundle, &format!("{name} = {}", harness::hex(&value)));
         }
         // ik_dh of the IKS (the blob's IKS and the fingerprint follow: re-pin the invitation to it)
         let mut iks = lib.w.r.iks_bytes.clone();
-        iks[IKS_DH..IKS_DH + 32].copy_from_slice(&value);
+        put(&mut iks, IKS_DH, &value);
         let linkdata = lib.linkdata_of(&iks, &lib.w.bundle);
-        rejects(&lib, &lib.w.uri, &lib.blob_of(&linkdata, 8), "ik_dh low order");
+        rejects(
+            &lib,
+            &lib.w.uri,
+            &lib.blob_of(&linkdata, 8),
+            "ik_dh low order",
+        );
     }
     assert!(low_order_values().contains(&LOW_ORDER_8));
 }
@@ -421,8 +530,12 @@ fn invitee_low_order_x25519_rejects() {
 fn invitee_kem_modulus_rejects() {
     let lib = Lib::new();
     // a 12-bit coefficient ≥ q = 3329 (here 4095) fails the FIPS 203 §7.2 modulus check
-    for (name, at) in [("spk_kem", B_SPK_KEM), ("rpk_kem", B_RPK_KEM), ("opk_kem", B_OPK_KEM)] {
-        let bundle = resigned(&lib, |f| f[at..at + 3].copy_from_slice(&[0xff, 0xff, 0xff]));
+    for (name, at) in [
+        ("spk_kem", B_SPK_KEM),
+        ("rpk_kem", B_RPK_KEM),
+        ("opk_kem", B_OPK_KEM),
+    ] {
+        let bundle = resigned(&lib, |f| put(f, at, &[0xff, 0xff, 0xff]));
         reject_bundle(&lib, &bundle, name);
     }
 }
@@ -437,7 +550,7 @@ fn invitee_bad_ed25519_identity_rejects() {
     y_ge_p[31] = 0x7f;
     for (name, bytes) in [("identity point", identity_point), ("y ≥ p", y_ge_p)] {
         let mut iks = lib.w.r.iks_bytes.clone();
-        iks[IKS_ED..IKS_ED + 32].copy_from_slice(&bytes);
+        put(&mut iks, IKS_ED, &bytes);
         let linkdata = lib.linkdata_of(&iks, &lib.w.bundle);
         rejects(&lib, &lib.w.uri, &lib.blob_of(&linkdata, 8), name);
     }
@@ -450,12 +563,24 @@ fn invitee_does_not_check_inviter_bounds() {
     let lib = Lib::new();
     // `expires` beyond creation + 30 days (the invitation has no creation time; the link data has `created`)
     let mut inv = lib.w.invitation.clone();
-    inv[INV_EXPIRES..].copy_from_slice(&(NOW + 90 * 24 * 3600).to_be_bytes());
-    accepts(&lib, &lib.uri_of(&inv), &lib.w.blob, "expires > created + 30 d is accepted");
+    inv.get_mut(INV_EXPIRES..)
+        .unwrap()
+        .copy_from_slice(&(NOW + 90 * 24 * 3600).to_be_bytes());
+    accepts(
+        &lib,
+        &lib.uri_of(&inv),
+        &lib.w.blob,
+        "expires > created + 30 d is accepted",
+    );
     // `spk_expiry` < the invitation's `expires` (but > now)
     let bundle = bundle_bytes(&lib.w.r, &lib.w.keys, NOW + 10, 1, &[13; 32]);
     let linkdata = lib.linkdata_of(&lib.w.r.iks_bytes, &bundle);
-    accepts(&lib, &lib.w.uri, &lib.blob_of(&linkdata, 8), "spk_expiry < expires is accepted");
+    accepts(
+        &lib,
+        &lib.w.uri,
+        &lib.blob_of(&linkdata, 8),
+        "spk_expiry < expires is accepted",
+    );
 }
 
 fn low_order_values() -> Vec<[u8; 32]> {

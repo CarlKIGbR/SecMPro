@@ -13,10 +13,6 @@ pub const INV_EXPIRES: usize = 241 - 8;
 pub const IKS_ED: usize = 1;
 pub const IKS_DH: usize = 2017 - 32;
 
-/// `LinkDataV1` unpadded: `ver ‖ IKSPublic ‖ PrekeyBundle ‖ Profile ‖ created`.
-pub const LD_IKS: usize = 1;
-pub const LD_BUNDLE: usize = 1 + 2017;
-
 /// `PrekeyBundle` (7775 B).
 pub const B_SPK_ID: usize = 1;
 pub const B_SPK_DH: usize = 5;
@@ -28,8 +24,6 @@ pub const B_OPK_ID: usize = B_OPK_PRESENT + 1;
 pub const B_OPK_DH: usize = B_OPK_ID + 4;
 pub const B_OPK_KEM: usize = B_OPK_DH + 32;
 pub const B_SIG: usize = 7775 - 3373;
-/// The bundle fields before `sig`.
-pub const B_FIELDS: usize = B_SIG;
 
 /// Low-order X25519 `u` values and non-canonical encodings of them (spec §4.1 (a), RFC 7748 §5): 0, 1, `p − 1`,
 /// the two points of order 8, `p` (≡ 0), `p + 1` (≡ 1) and 0 with bit 255 set.
@@ -51,5 +45,7 @@ pub fn low_order_values() -> Vec<[u8; 32]> {
         0x5b, 0x04, 0x44, 0x5c, 0xc4, 0x58, 0x1c, 0x8e, 0x86, 0xd8, 0x22, 0x4e, 0xdd, 0xd0, 0x9f,
         0x11, 0x57,
     ];
-    vec![[0; 32], one, p_minus_1, order8_a, order8_b, p, p_plus_1, zero_high]
+    vec![
+        [0; 32], one, p_minus_1, order8_a, order8_b, p, p_plus_1, zero_high,
+    ]
 }

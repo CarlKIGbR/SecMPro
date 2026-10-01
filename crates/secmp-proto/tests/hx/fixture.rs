@@ -3,15 +3,16 @@
 //! and the honest initiator run. Built only from the library's public API; the independent re-computations the
 //! negative tests need live in `hx_harness.rs`.
 
-use secmp_crypto::{SecretBytes, X25519Secret};
-use secmp_proto::hx::{HandshakeCells, Initiator, ResponderKeys};
+use secmp_crypto::SecretBytes;
+use secmp_proto::hx::{HandshakeCells, Initiator};
 use secmp_proto::inv::{invitation_uri, invitee_accept};
-use secmp_proto::keys::X25519Pk;
-use secmp_proto::prekeys::{IdentityKeys, InvitationRecord, IssueParams, Issued, MemoryPrekeyStore};
-use secmp_proto::tr::{Entropy, RatchetState};
-use secmp_proto::wire::cell::{Cell, RelayQueue, RouteDescriptor};
-use secmp_proto::wire::inv::{InvitationV1, LinkDataV1, Onion, Profile, RelayRef};
+use secmp_proto::prekeys::{
+    IdentityKeys, InvitationRecord, IssueParams, Issued, MemoryPrekeyStore,
+};
+use secmp_proto::tr::Entropy;
 use secmp_proto::wire::Period;
+use secmp_proto::wire::cell::{Cell, RelayQueue, RouteDescriptor};
+use secmp_proto::wire::inv::{Onion, Profile, RelayRef};
 
 pub const CREATED: u64 = 1_700_000_000;
 pub const NOW: u64 = 1_700_000_100;
@@ -73,26 +74,18 @@ impl Inviter {
     pub fn record(&self) -> &InvitationRecord {
         self.store.record(&self.issued.invitation.ld_id).unwrap()
     }
-
-    pub fn keys(&self) -> ResponderKeys<'_> {
-        self.identity.responder_keys()
-    }
 }
 
-/// The honest initiator run: invitee identity, the verified invitation and link data, the three cells and the
-/// initiator's state.
+/// The honest initiator run: invitee identity and the three cells.
 pub struct Invitee {
     pub identity: IdentityKeys,
-    pub invitation: InvitationV1,
-    pub link_data: LinkDataV1,
     pub cells: Vec<Cell>,
-    pub state: RatchetState,
 }
 
 pub fn invitee_run(inviter: &Inviter, entropy: &mut impl Entropy) -> Invitee {
     let identity = IdentityKeys::generate(entropy).unwrap();
     let accepted = invitee_accept(&inviter.uri, &blob_bytes(&inviter.issued), NOW).unwrap();
-    let (cells, state) = Initiator::start(
+    let (cells, _state) = Initiator::start(
         &accepted.invitation,
         &accepted.link_data,
         &identity.initiator_keys(),
@@ -103,13 +96,7 @@ pub fn invitee_run(inviter: &Inviter, entropy: &mut impl Entropy) -> Invitee {
     )
     .unwrap();
     let cells = release(cells);
-    Invitee {
-        identity,
-        invitation: accepted.invitation,
-        link_data: accepted.link_data,
-        cells,
-        state,
-    }
+    Invitee { identity, cells }
 }
 
 pub fn release(cells: HandshakeCells) -> Vec<Cell> {
@@ -119,8 +106,4 @@ pub fn release(cells: HandshakeCells) -> Vec<Cell> {
 pub fn blob_bytes(issued: &Issued) -> Vec<u8> {
     use secmp_proto::Encode;
     issued.blob.encode().unwrap().to_vec()
-}
-
-pub fn x25519_pk(secret: &X25519Secret) -> X25519Pk {
-    X25519Pk::from_bytes(secret.public_key().as_bytes()).unwrap()
 }

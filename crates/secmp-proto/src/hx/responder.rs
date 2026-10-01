@@ -19,10 +19,10 @@ use crate::inv::derive_k_inv;
 use crate::prekeys::{InvitationRecord, PrekeyStore};
 use crate::sizes::{HANDSHAKE_CHUNK_LEN, HANDSHAKE_CHUNKS, NONCE_LEN};
 use crate::tr::{Entropy, RatchetState};
+use crate::wire::Id;
 use crate::wire::cell::{Cell, ContentBody, RouteDescriptor};
 use crate::wire::hx::{HandshakeCellPlaintext, Inner, Outer};
 use crate::wire::inv::{IksPublic, Profile};
-use crate::wire::Id;
 
 /// At most this many partially received envelopes are held while grouping; the oldest is evicted (ADR-044 (c)).
 pub const MAX_PARTIAL_GROUPS: usize = 8;
@@ -43,41 +43,82 @@ pub struct Accepted {
 /// The responder (the inviter).
 pub struct Responder;
 
-/// The chunks received so far for one `init_id`.
-struct Group {
-    init_id: Id,
-    chunks: [Option<Box<[u8; HANDSHAKE_CHUNK_LEN]>>; 3],
+/// The chunks received so far for one `init_id`, of any chunk type `C` (the responder stores the 4006-byte chunks;
+/// the Kani harnesses of the grouping and of `drive` use a small stand-in, which is why they are generic).
+pub(crate) struct Group<K, C> {
+    pub(crate) init_id: K,
+    pub(crate) chunks: [Option<C>; 3],
 }
 
-impl Group {
-    fn complete(&self) -> bool {
+impl<K, C> Group<K, C> {
+    pub(crate) fn complete(&self) -> bool {
         self.chunks.iter().all(Option::is_some)
     }
 }
 
-/// Add a chunk (§6.5, ADR-044 (c)): a duplicate `(init_id, i)` is ignored whatever its bytes (identical: nothing to
-/// do; differing: first-seen wins); a new `init_id` evicts the oldest partial group once [`MAX_PARTIAL_GROUPS`] are
-/// held. Returns the index of the group if it is now complete.
-fn insert(groups: &mut Vec<Group>, plaintext: HandshakeCellPlaintext) -> Option<usize> {
-    let slot = usize::from(plaintext.i);
-    let at = if let Some(at) = groups.iter().position(|g| g.init_id == plaintext.init_id) {
+/// Add chunk `i` (< 3) of `init_id` (§6.5, ADR-044 (c)): a duplicate `(init_id, i)` is ignored whatever its bytes
+/// (identical: nothing to do; differing: first-seen wins); a new `init_id` evicts the oldest partial group once
+/// [`MAX_PARTIAL_GROUPS`] are held. Returns the index of the group if it is now complete.
+pub(crate) fn insert<K: PartialEq, C>(
+    groups: &mut Vec<Group<K, C>>,
+    init_id: K,
+    i: usize,
+    chunk: C,
+    max_groups: usize,
+) -> Option<usize> {
+    if i >= 3 {
+        return None;
+    }
+    let at = if let Some(at) = groups.iter().position(|g| g.init_id == init_id) {
         at
     } else {
-        if groups.len() >= MAX_PARTIAL_GROUPS {
+        if groups.len() >= max_groups {
             groups.remove(0);
         }
         groups.push(Group {
-            init_id: plaintext.init_id,
+            init_id,
             chunks: [None, None, None],
         });
         groups.len().checked_sub(1)?
     };
     let group = groups.get_mut(at)?;
-    let cell = group.chunks.get_mut(slot)?;
-    if cell.is_none() {
-        *cell = Some(plaintext.chunk);
+    let slot = group.chunks.get_mut(i)?;
+    if slot.is_none() {
+        *slot = Some(chunk);
     }
     group.complete().then_some(at)
+}
+
+/// The driver of §6.5 and §6.6 step 4 over already opened chunks `(init_id, i, chunk)`, in fetch order: group them
+/// ([`insert`]); for each group that completes, in the order of completion, `process` it (§6.6 steps 1–3, reading
+/// the store); the first group `process` accepts is the session: the OPK is deleted — the only call of
+/// `delete_opk`, after `process` succeeded — and `process`'s value returned. A group `process` rejects is discarded
+/// and the OPK kept; later groups are still processed. If none is accepted the result is [`Error::Rejected`];
+/// [`Error::Unavailable`] from `process` is passed up at once. A failing `delete_opk` rejects, the OPK kept.
+pub(crate) fn drive<K: PartialEq, C, T, S: PrekeyStore>(
+    items: impl IntoIterator<Item = (K, usize, C)>,
+    store: &mut S,
+    opk_id: u32,
+    mut process: impl FnMut(&Group<K, C>, &S) -> Result<T>,
+) -> Result<T> {
+    let mut groups: Vec<Group<K, C>> = Vec::new();
+    for (init_id, i, chunk) in items {
+        let Some(done) = insert(&mut groups, init_id, i, chunk, MAX_PARTIAL_GROUPS) else {
+            continue;
+        };
+        let group = groups.remove(done);
+        match process(&group, &*store) {
+            Ok(accepted) => {
+                // step 4: delete the OPK — the last operation; a failure keeps it and rejects
+                store.delete_opk(opk_id).map_err(|_| Error::Rejected)?;
+                return Ok(accepted);
+            }
+            Err(Error::Unavailable) => return Err(Error::Unavailable),
+            // a rejected complete group is discarded; the OPK is kept (§6.6 step 3)
+            Err(_) => {}
+        }
+    }
+    Err(Error::Rejected)
 }
 
 impl Responder {
@@ -105,39 +146,21 @@ impl Responder {
     ) -> Result<Accepted> {
         let k_inv = derive_k_inv(&record.ld_id, &record.link_key)?;
         let ad_cell = [Label::HxInitcell.as_bytes(), record.ld_id.as_slice()].concat();
-        let mut groups: Vec<Group> = Vec::new();
-        for cell in cells {
-            // trial-open every cell with K_inv; anything that does not open or parse is ignored (garbage may come
-            // from the relay or an invitation thief; it is never fatal)
-            let Some(plaintext) = open_cell(&k_inv, &ad_cell, cell) else {
-                continue;
-            };
-            let Some(done) = insert(&mut groups, plaintext) else {
-                continue;
-            };
-            let group = groups.remove(done);
-            match process(&group, record, &*store, own_keys, entropy) {
-                Ok(accepted) => {
-                    // step 4: delete the OPK — the last operation; a failure keeps it and rejects
-                    store.delete_opk(record.opk_id).map_err(|_| Error::Rejected)?;
-                    return Ok(accepted);
-                }
-                Err(Error::Unavailable) => return Err(Error::Unavailable),
-                // a rejected complete group is discarded; the OPK is kept (§6.6 step 3)
-                Err(_) => {}
-            }
-        }
-        Err(Error::Rejected)
+        // trial-open every cell with K_inv; anything that does not open or parse is ignored (garbage may come from
+        // the relay or an invitation thief; it is never fatal)
+        let opened = cells.iter().filter_map(|cell| {
+            let p = open_cell(&k_inv, &ad_cell, cell)?;
+            Some((p.init_id, usize::from(p.i), p.chunk))
+        });
+        drive(opened, store, record.opk_id, |group, store| {
+            process(group, record, store, own_keys, entropy)
+        })
     }
 }
 
 /// `CAEAD.Open(K_inv, N_i, "SecMP-HX/1 initcell" ‖ ld_id, …)` and the `HandshakeCellPlaintext` decoder (`total` = 3,
 /// `i` ≤ 2). `None` for a cell that does not open or parse.
-fn open_cell(
-    k_inv: &SecretBytes<32>,
-    ad: &[u8],
-    cell: &Cell,
-) -> Option<HandshakeCellPlaintext> {
+fn open_cell(k_inv: &SecretBytes<32>, ad: &[u8], cell: &Cell) -> Option<HandshakeCellPlaintext> {
     let (n, com_ct) = cell.as_bytes().split_first_chunk::<NONCE_LEN>()?;
     let plaintext = Caead::open(k_inv, n, ad, com_ct).ok()?;
     HandshakeCellPlaintext::decode(&plaintext).ok()
@@ -145,7 +168,7 @@ fn open_cell(
 
 /// §6.6 steps 1–3 on a complete group; no side effect.
 fn process(
-    group: &Group,
+    group: &Group<Id, Box<[u8; HANDSHAKE_CHUNK_LEN]>>,
     record: &InvitationRecord,
     store: &impl PrekeyStore,
     own_keys: &ResponderKeys<'_>,

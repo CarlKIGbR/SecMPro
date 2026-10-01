@@ -530,7 +530,9 @@ fn hx_cell_plaintext(case: &Value) -> Result<Vec<(&'static str, Vec<u8>)>> {
     };
     let padded = iso_pad(&outer, HX_PADDED);
     Ok(padded
-        .chunks_exact(4006)
+        .as_chunks::<4006>()
+        .0
+        .iter()
         .zip([("chunk0", 0_u8), ("chunk1", 1), ("chunk2", 2)])
         .map(|(chunk, (name, i))| (name, cat(&[&init_id, &[i, 3], chunk])))
         .collect())
@@ -538,9 +540,13 @@ fn hx_cell_plaintext(case: &Value) -> Result<Vec<(&'static str, Vec<u8>)>> {
 
 /// `inv_uri`: the case's `uri` as its ASCII bytes.
 fn inv_uri(case: &Value) -> Result<Vec<(&'static str, Vec<u8>)>> {
-    Ok(text_field(case, "uri")
-        .map(|uri| vec![("uri", uri.as_bytes().to_vec())])
-        .unwrap_or_default())
+    let Some(uri) = text_field(case, "uri") else {
+        return Ok(Vec::new());
+    };
+    if !uri.is_ascii() {
+        bail!("hx: a `uri` that is not ASCII");
+    }
+    Ok(vec![("uri", uri.as_bytes().to_vec())])
 }
 
 /// `inv_linkdata`: mode 0 ‖ the padded `LinkDataV1` of a case, and mode 1 ‖ its blob.

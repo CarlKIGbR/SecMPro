@@ -1,0 +1,34 @@
+E1 (WEISUNG M3-5, M3 review C7): how `blend` (crates/secmp-testkit/benches/ct.rs:1199-1204, via `blended_vec`
+ct.rs:1212-1216) is compiled in the instance `tr_decrypt_reject` uses, aarch64-apple-darwin.
+
+Bench source: bc5088b (identical in e625c79, the tree the binary was built from). Binary: `cargo bench --locked
+--package secmp-testkit --features kat --bench ct --no-run --target-dir target/disasm` with
+CARGO_PROFILE_RELEASE_STRIP=none and CARGO_PROFILE_BENCH_STRIP=none (the workspace release profile strips the
+symbols; everything else is the gate's profile: opt-level 3, fat LTO, codegen-units 1, panic abort) →
+target/disasm/release/deps/ct-46c3d08297ea7114; `llvm-objdump -d -C --no-show-raw-insn` (LLVM 22.1.8, rustup
+llvm-tools of 1.98.1). `blend` and `blended_vec` have no symbol of their own: they are inlined, with `measure`,
+into `ct::tr_decrypt_reject` (0x10000caa8). The stubs resolve via `llvm-objdump --macho -d --section=__TEXT,__stubs`:
+0x10008259c → _calloc, 0x100082674 → _memcpy.
+
+The per-sample prepare loop (one fresh `vec![0; len]` = calloc(len, 1) per input), then the timed window — 12 lines
+quoted verbatim; the annotations after `//` are mine:
+
+10000efa8:     	ldr	w8, [sp, #0x30]                  // the A/A flag (inline A/A: class 0 input under both labels)
+10000efac:     	cmp	w8, #0x0
+10000efb0:     	ldr	x8, [sp, #0x50]                  // the sample's class
+10000efb4:     	ccmp	x8, #0x0, #0x4, eq
+10000efb8:     	cset	w20, eq                          // w20 = A/A flag set || class == 0
+10000f008:     	cbz	w20, 0x10000f01c                 // class 1 → 0x10000f01c
+10000f020:     	ldr	x1, [sp, #0x70]                  // (class 1) source = base (the class-1 cell)
+10000f028:     	bl	0x100082674 <dyld_stub_binder+0x100082674>   // (class 1) _memcpy(out, base, len)
+10000f058:     	ldp	q0, q1, [x9, #-0x20]             // (class 0) delta, 64 B per iteration
+10000f060:     	ldp	q4, q5, [x10, #-0x20]            // (class 0) base
+10000f068:     	eor.16b	v0, v4, v0                       // (class 0) out = base ^ delta (NEON loop, then 8-B and 1-B tails)
+10000f144:     	mrs	x8, CNTVCT_EL0                   // after the prepare loop: the timed window opens (isb at 0x10000f140)
+
+Finding: the mask `u8::from(class == 0).wrapping_neg()` does not survive as a mask. LLVM unswitches the loop on it:
+a branch on the class (w20) selects, per input, `memcpy(out, base, len)` for class 1 (reads one buffer) or a NEON
+XOR loop over `base` and `delta` for class 0 (reads two buffers, 4096 B each for the TR cells). Both run before the
+timed window opens. A second prepare instance in the same function (0x10000ece8: `cbnz w8` on the A/A flag, `cbz x20`
+on the class → `bl _memcpy`, else the XOR loop at 0x10000ed50) has the same split. The third `eor.16b` loop in the
+function (0x10000e5b4) was not attributed.

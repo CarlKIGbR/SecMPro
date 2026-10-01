@@ -43,6 +43,15 @@
 //! - `tr_decrypt_reject_ct_pq`: a header under `hk_r` whose `ct_pq` differs from `last_ct_r` in byte 0 vs byte 1087,
 //!   the body unchanged (the KEM-constancy check rejects).
 //!
+//! Diagnostic targets (M3 review C7, WEISUNG M3-5; to be removed or promoted by a later decision), measured with
+//! `evaluate` and `tr_decrypt_reject` like `tr_decrypt_reject_body_tag`, after every gated target and both controls
+//! (the gated sequence is unchanged), and written to the report's `diagnostics` — not to `results`: they take no
+//! part in the gate's target set, the run verdict or the exit status:
+//! - `diag_tr_body_tag_same`: the class-1 cell of `tr_decrypt_reject_body_tag` (the body tag wrong in byte 31)
+//!   under both labels — `delta` all zero, the real labels and the real `blend` path, no content difference;
+//! - `diag_tr_body_tag_swapped`: the classes of `tr_decrypt_reject_body_tag` swapped — class 0 the body tag wrong
+//!   in byte 31, class 1 in byte 0.
+//!
 //! The A/A′ placement control `aa_prime_control` (ADR-042 (2), M2 review F6) is measured and judged like a target:
 //! `MsgEncrypt::open` rejecting a tag wrong in its last byte with identical contents in both classes, class 0 copied
 //! from one source allocation and class 1 from another — the one deliberate exception to the source rule below. If it
@@ -1801,6 +1810,26 @@ fn tr_body_tag_classes(s: &TrSession, _: &mut Stream) -> Result<[Vec<u8>; 2], se
     Ok([class0, class1])
 }
 
+/// `diag_tr_body_tag_same` (diagnostic, WEISUNG M3-5): the class-1 cell of `tr_body_tag_classes` (the body tag
+/// wrong in byte 31) for both classes.
+fn tr_body_tag_same_classes(
+    s: &TrSession,
+    stream: &mut Stream,
+) -> Result<[Vec<u8>; 2], secmp_proto::Error> {
+    let [_, class1] = tr_body_tag_classes(s, stream)?;
+    Ok([class1.clone(), class1])
+}
+
+/// `diag_tr_body_tag_swapped` (diagnostic, WEISUNG M3-5): the classes of `tr_body_tag_classes` swapped — class 0
+/// the body tag wrong in byte 31, class 1 in byte 0.
+fn tr_body_tag_swapped_classes(
+    s: &TrSession,
+    stream: &mut Stream,
+) -> Result<[Vec<u8>; 2], secmp_proto::Error> {
+    let [class0, class1] = tr_body_tag_classes(s, stream)?;
+    Ok([class1, class0])
+}
+
 /// `tr_decrypt_reject_ct_pq`: the honest header with `ct_pq` changed in byte 0 (class 0) vs byte 1087 (class 1),
 /// re-sealed under `hk_r` with the cell's nonce; the body unchanged.
 fn tr_ct_pq_classes(s: &TrSession, _: &mut Stream) -> Result<[Vec<u8>; 2], secmp_proto::Error> {
@@ -1986,12 +2015,45 @@ fn tr_targets(n: usize) -> [Target; 3] {
     ]
 }
 
+/// The diagnostic targets (M3 review C7, WEISUNG M3-5; module docs), `n` samples per measurement: measured after
+/// the gated targets and both controls, reported in `diagnostics`.
+fn diag_targets(n: usize) -> [Target; 2] {
+    [
+        Target {
+            name: "diag_tr_body_tag_same",
+            classes: [
+                "body tag wrong in byte 31",
+                "body tag wrong in byte 31 (the same cell)",
+            ],
+            samples: n,
+            control: false,
+            run: |n, k, s| tr_decrypt_reject(n, k, s, tr_body_tag_same_classes),
+        },
+        Target {
+            name: "diag_tr_body_tag_swapped",
+            classes: ["body tag wrong in byte 31", "body tag wrong in byte 0"],
+            samples: n,
+            control: false,
+            run: |n, k, s| tr_decrypt_reject(n, k, s, tr_body_tag_swapped_classes),
+        },
+    ]
+}
+
+/// What `run` measured: the gated outcomes, the reason of a `CONTROL_FAIL` run, the sensitivity control and the
+/// diagnostic outcomes (WEISUNG M3-5).
+struct RunOutput {
+    clock: Clock,
+    outcomes: Vec<Outcome>,
+    control_fail: Option<String>,
+    sensitivity: Sensitivity,
+    diagnostics: Vec<Outcome>,
+}
+
 /// Every target (`evaluate`), then the inline A/A control over the full target set (ADR-041 (3)) and the
-/// sensitivity control (Amendment 1 (2)); the third value is the reason of a `CONTROL_FAIL` run (either control
-/// failed, or the A/A′ placement control gave FAIL, ADR-042; every target verdict is then `CONTROL_FAIL`).
-fn run(
-    rules: Rules,
-) -> Result<(Clock, Vec<Outcome>, Option<String>, Sensitivity), secmp_crypto::Error> {
+/// sensitivity control (Amendment 1 (2)); `control_fail` is the reason of a `CONTROL_FAIL` run (either control
+/// failed, or the A/A′ placement control gave FAIL, ADR-042; every target verdict is then `CONTROL_FAIL`). Then the
+/// diagnostic targets, which keep their own verdicts and decide nothing.
+fn run(rules: Rules) -> Result<RunOutput, secmp_crypto::Error> {
     let clock = Clock::probe();
     let scale: usize = ct_scale().and_then(|s| s.parse().ok()).unwrap_or(1).max(1);
     let mut stream = Stream::new()?;
@@ -2003,6 +2065,10 @@ fn run(
     }
     let aa_fail = aa_control(&mut out, &mut stream, &clock, rules)?;
     let sensitivity = sensitivity_control(&out, &mut stream, &clock, rules);
+    let mut diagnostics = Vec::new();
+    for target in diag_targets(n) {
+        diagnostics.push(evaluate(target, &mut stream, &clock, rules)?);
+    }
     let mut reasons: Vec<String> = aa_fail.into_iter().collect();
     reasons.extend(sensitivity.failure(rules));
     reasons.extend(placement_failure(&out, &clock, rules));
@@ -2012,7 +2078,13 @@ fn run(
             outcome.verdict = Verdict::ControlFail;
         }
     }
-    Ok((clock, out, control_fail, sensitivity))
+    Ok(RunOutput {
+        clock,
+        outcomes: out,
+        control_fail,
+        sensitivity,
+        diagnostics,
+    })
 }
 
 /// The sensitivity control of a run (ADR-041 Amendment 1 (2)): `min_leak` with `tag_compare`'s batch size and
@@ -2168,7 +2240,14 @@ fn main() -> ExitCode {
         let _ = std::fs::write(path, error);
         return ExitCode::FAILURE;
     };
-    let Ok((clock, outcomes, control_fail, sensitivity)) = run(rules) else {
+    let Ok(RunOutput {
+        clock,
+        outcomes,
+        control_fail,
+        sensitivity,
+        diagnostics,
+    }) = run(rules)
+    else {
         // the gate prints the reason of an aborted run (`ctreport::ct_table_for` reads `error`)
         let error = if TR_ACCEPTED.load(Ordering::Relaxed) {
             "{\"error\":\"bench aborted: RatchetState::decrypt_with accepted a cell of a TR target, which must be rejected in both classes\"}"
@@ -2188,7 +2267,7 @@ fn main() -> ExitCode {
         "FAIL"
     };
     let json = format!(
-        "{{\"thresholds\":{},{}\"sign\":\"{SIGN}\",\"clock\":{},\"run_verdict\":\"{run_verdict}\",\"run_reason\":{},\"sensitivity_control\":{},\"results\":[{}]}}",
+        "{{\"thresholds\":{},{}\"sign\":\"{SIGN}\",\"clock\":{},\"run_verdict\":\"{run_verdict}\",\"run_reason\":{},\"sensitivity_control\":{},\"results\":[{}],\"diagnostics\":[{}]}}",
         rules.json(),
         // M2 review C3 (c): a shortened run says so, and the gate refuses it
         ct_scale().map_or_else(String::new, |s| format!(
@@ -2199,6 +2278,11 @@ fn main() -> ExitCode {
         serde_json::Value::from(control_fail),
         sensitivity.json(&clock, rules),
         outcomes
+            .iter()
+            .map(|o| o.json(&clock, rules))
+            .collect::<Vec<_>>()
+            .join(","),
+        diagnostics
             .iter()
             .map(|o| o.json(&clock, rules))
             .collect::<Vec<_>>()

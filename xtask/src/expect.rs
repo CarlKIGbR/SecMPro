@@ -412,8 +412,8 @@ pub(crate) const VECTOR_SUITES: &[&str] = &[
 /// `vectors/ref/<suite>.json`, absent from `vectors/`. The `ref-vectors` step requires each to be present and
 /// well-formed (JSON, `suite` = its name, a non-empty `cases` array) and compares nothing yet. Moving a suite from
 /// here to `VECTOR_SUITES` is its freeze step (M2: `encodings`, frozen in `docs/reviews/M02-report.md` plan step 10;
-/// M3: `tr`, committed with the M3 brief and frozen in `docs/reviews/M03-report.md` plan step 6). None pending.
-pub(crate) const VECTOR_REF_PENDING: &[&str] = &[];
+/// M3: `tr`, committed with the M3 brief and frozen in `docs/reviews/M03-report.md` plan step 6). Pending: `hx` (M4: the reference file is committed with the plan commit, frozen at plan step 5).
+pub(crate) const VECTOR_REF_PENDING: &[&str] = &["hx"];
 
 /// Suites whose Rust generator writes the positive rows only (M2 cross-generates the `encodings` positives, docs/07
 /// M2 deliverables): `cargo xtask vectors` compares the header and the positive rows, and requires the decoders to

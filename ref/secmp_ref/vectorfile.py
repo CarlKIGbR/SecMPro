@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The vector-file format of SCHEMA.md rev 3 (rev 2 for the M1 files) and the per-case input randomness.
+"""The vector-file format of SCHEMA.md rev 5 (rev 2 for the M1 files) and the per-case input randomness.
 
 SCHEMA §1: file shape, value encodings, canonical writer, structural comparison.
 SCHEMA §2: seed_i and stream_i (SQ-01, Reading A). SCHEMA §3: suite tags (SQ-02, Reading A).
@@ -16,11 +16,11 @@ from .primitives import sha256, shake256
 SCHEMA = 2
 # SCHEMA §1 (REF-M2-1 correction 2): encodings.json is "schema": 3, for its nested `value` objects and
 # arrays and the ASCII fields `structure`/`context`; the M1 files keep 2. Brief REF-M3: tr.json is
-# "schema": 4, for its case-level fields (SCHEMA §4.9).
-SUITE_SCHEMA = {"encodings": 3, "tr": 4}
+# "schema": 4, for its case-level fields (SCHEMA §4.9). Brief REF-M4: hx.json is "schema": 5 (SCHEMA §4.10).
+SUITE_SCHEMA = {"encodings": 3, "tr": 4, "hx": 5}
 SPEC = "SecMP/1 rev 2.2"
 # Weisung REF-M2-3: encodings.json names spec rev 2.3 (ADR-039); the M1 files keep rev 2.2.
-SUITE_SPEC = {"encodings": "SecMP/1 rev 2.3", "tr": "SecMP/1 rev 2.3"}
+SUITE_SPEC = {"encodings": "SecMP/1 rev 2.3", "tr": "SecMP/1 rev 2.3", "hx": "SecMP/1 rev 2.3"}
 GENERATOR = "ref-python"
 
 
@@ -43,6 +43,7 @@ SUITE_TAGS = {
     "sas": "sas",
     "encodings": "enc",                      # brief REF-M2 / proposal SCHEMA-4.8-encodings.md
     "tr": "tr",                              # brief REF-M3 / proposal SCHEMA-4.9-tr.md
+    "hx": "hx",                              # brief REF-M4 / proposal SCHEMA-4.10-hx.md
 }
 
 # SCHEMA §1 / SQ-04: the operation names (encode/decode: proposal SCHEMA-4.8).
@@ -239,18 +240,86 @@ def _validate_tr_case(case: dict, earlier_ids: set) -> None:
             raise ValueError(f"{case['id']}: field {name!r} is not a byte string")
 
 
+# SCHEMA §4.10 (hx, "schema": 5): per op the party and the output keys (None: `"expect": "reject"`
+# and no outputs); the fields that are not byte strings.
+_HX_RESPOND_OUT = {"transcript", "sk", "k_id", "peer_iks", "content", "profile", "routes", "state_post_R", "opks_post"}
+HX_CASE_KEYS = {
+    "keys-R": ("R", {"iks", "fp", "bundle", "opks_post"}),
+    "keys-I": ("I", {"iks", "fp"}),
+    "invite": ("R", {"invitation", "uri"}),
+    "linkdata": ("R", {"k_ld", "linkdata", "blob"}),
+    "invitee-accept": ("I", {"k_ld", "k_inv", "accept"}),
+    "initiate": ("I", {"ek_pk", "dh1", "dh2", "dh3", "dh4", "ct_spk", "ss_spk", "ct_opk", "ss_opk", "transcript",
+                       "sk", "k_id", "k_inv", "content", "first_msg", "inner_ct", "outer", "cell_0", "cell_1",
+                       "cell_2", "state_post_I"}),
+    "respond": ("R", _HX_RESPOND_OUT),
+    "respond-garbage": ("R", _HX_RESPOND_OUT),
+    "invitee-reject": ("I", None),
+    "respond-reject": ("R", {"opks_post"}),
+}
+HX_ASCII = {"uri"}                                # the §5.2 URI, an ASCII string
+HX_BOOL = {"accept"}
+HX_INT_LIST = {"opks_post"}                       # the remaining opk_ids, ascending
+HX_BYTES_LIST = {"fetched", "routes"}             # arrays of byte strings, in order
+
+
+def _check_hx_field(case_id_, name, value):
+    if name in HX_ASCII:
+        ok = isinstance(value, str) and value.isascii()
+    elif name in HX_BOOL:
+        ok = isinstance(value, bool)
+    elif name in HX_INT_LIST:
+        ok = isinstance(value, list) and all(isinstance(x, int) and not isinstance(x, bool) and x >= 0 for x in value)
+    elif name in HX_BYTES_LIST:
+        ok = isinstance(value, list) and all(isinstance(x, str) and HEX_RE.match(x) for x in value)
+    else:
+        ok = isinstance(value, str) and HEX_RE.match(value) is not None
+    if not ok:
+        raise ValueError(f"{case_id_}: field {name!r}: bad value {value!r}")
+
+
+def _validate_hx_case(case: dict) -> None:
+    op = case.get("op")
+    if op not in HX_CASE_KEYS:
+        raise ValueError(f"{case['id']}: op {op!r}")
+    party, outputs = HX_CASE_KEYS[op]
+    keys = {"id", "op", "party", "inputs"}
+    if op == "invitee-reject":
+        keys |= {"manipulation", "expect"}
+    elif op == "respond-reject":
+        keys |= {"manipulation", "expect", "outputs"}
+    else:
+        keys |= {"outputs"}
+    if set(case) != keys:
+        raise ValueError(f"{case['id']}: keys {sorted(case)}")
+    if case["party"] != party:
+        raise ValueError(f"{case['id']}: party {case['party']!r}")
+    if "expect" in case and case["expect"] != "reject":
+        raise ValueError(f"{case['id']}: expect {case['expect']!r}")
+    if "manipulation" in case and not (isinstance(case["manipulation"], str) and case["manipulation"].isascii()
+                                       and case["manipulation"]):
+        raise ValueError(f"{case['id']}: manipulation {case['manipulation']!r}")
+    if outputs is not None and set(case["outputs"]) != outputs:
+        raise ValueError(f"{case['id']}: output keys {sorted(case['outputs'])}")
+    for name, value in [*case["inputs"].items(), *case.get("outputs", {}).items()]:
+        _check_hx_field(case["id"], name, value)
+
+
 def validate_document(doc: dict) -> None:
     """Raises ValueError unless doc has the SCHEMA §1 shape."""
     if set(doc) != {"schema", "suite", "spec", "generator", "cases"}:
         raise ValueError(f"top-level keys {sorted(doc)}")
     if doc["suite"] not in SUITE_TAGS or doc["schema"] != schema_of(doc["suite"]):
         raise ValueError("schema or suite")
-    if doc["suite"] == "tr":
+    if doc["suite"] in ("tr", "hx"):
         seen = set()
         for n, case in enumerate(doc["cases"], start=1):
-            if case.get("id") != case_id("tr", n):
+            if case.get("id") != case_id(doc["suite"], n):
                 raise ValueError(f"case {n}: id {case.get('id')!r} (ids start at 0001, no gaps, in order)")
-            _validate_tr_case(case, seen)
+            if doc["suite"] == "tr":
+                _validate_tr_case(case, seen)
+            else:
+                _validate_hx_case(case)
             seen.add(case["id"])
         return
     for n, case in enumerate(doc["cases"], start=1):

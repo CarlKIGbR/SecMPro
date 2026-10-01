@@ -83,9 +83,11 @@ v1.1: M16 → M17 → M18 → M19 → M20 (release)
 
 ### M4 — SecMP-HX handshake + SecMP-INV (sans-IO) + ProVerif model (M/L)
 
+**Status (2026-10-01).** Started 2026-10-01 on branch `m04-hx` from `main` at `836a94e4f8abec27d877740291ecbe9957c10177`; plan, `formal/CLAIMS.md` §HX, ADR-044 (proposed), ADR-045 and the reference HX/INV files were committed first. Report: `docs/reviews/M04-report.md`.
+
 **Deliverables.**
 - `secmp-proto::inv`: invitation create/parse, `LinkDataV1` sealing/opening, `K_ld`/`K_inv` derivation, QR/URI text.
-- `secmp-proto::hx`: `Initiator::start(bundle, own_iks, reply_routes, profile) -> (three HandshakeCells, RatchetState)` and `Responder::accept(cells, own_keys) -> (RatchetState, peer_iks, routes, profile)` per §6.4–6.6 (outer/inner layers, `K_id`, OPK bookkeeping).
+- `secmp-proto::hx`: `Initiator::start(invitation, link_data /* verified per §5.5 */, own_ik_dh, own_iks, reply_routes, profile, entropy) -> (three HandshakeCells, RatchetState)` (no signing key; EK_I zeroized inside, ADR-044 (b)) and `Responder::accept(cells, record, store, own_keys, entropy) -> Accepted { state, peer, routes, profile }` per §6.4–6.6 (outer/inner layers, `K_id`, OPK bookkeeping; uniform `Error::Rejected`, state and store unchanged on rejection). The API follows §6.4–§6.6, not the earlier sketch (reviewer decision O-12, 2026-10-01).
 - Prekey store trait with in-memory implementation (SPK weekly, retention rule, OPK single use, RPK).
 - `ref/` HX; frozen vectors for a full run with fixed randomness (identical `SK`, `transcript`, `K_id`, cells); negative tests: wrong fingerprint, expired bundle, bad signature, missing/used OPK, zero DH, tampered chunk, garbage cells interleaved, replayed envelope.
 - `formal/hx.pv`: SK secrecy (classical and with the DH oracle broken), injective agreement on the transcript, identity confidentiality of I under `K_id`, plus the reviewer's expected-false queries (PQ authentication, KCI).

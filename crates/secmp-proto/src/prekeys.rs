@@ -609,6 +609,44 @@ impl MemoryPrekeyStore {
         Ok(Issued { invitation, blob })
     }
 
+    /// A deep copy, for tests: duplicates every secret into locked memory (feature `kat` or tests only: a shipped
+    /// build has no way to copy prekey secrets out of a store).
+    ///
+    /// # Errors
+    /// [`Error::Unavailable`] without locked memory.
+    #[cfg(any(test, feature = "kat"))]
+    pub fn duplicate_kat(&self) -> Result<Self> {
+        let mut generations = Vec::new();
+        for g in &self.generations {
+            generations.push(SpkGeneration {
+                id: g.id,
+                created: g.created,
+                dh: X25519Secret::from_bytes(g.dh.expose_secret())?,
+                kem: MlKem1024Dk::from_seed(g.kem.expose_seed())?,
+                rpk: g.rpk_copy()?,
+            });
+        }
+        let mut opks = Vec::new();
+        for o in &self.opks {
+            opks.push(OpkSecrets {
+                id: o.id,
+                dh: X25519Secret::from_bytes(o.dh.expose_secret())?,
+                kem: MlKem1024Dk::from_seed(o.kem.expose_seed())?,
+            });
+        }
+        let mut records = Vec::new();
+        for r in &self.records {
+            records.push(r.duplicate()?);
+        }
+        Ok(Self {
+            generations,
+            opks,
+            records,
+            next_spk_id: self.next_spk_id,
+            next_opk_id: self.next_opk_id,
+        })
+    }
+
     /// A digest of everything the store holds — ids and secret bytes of every SPK generation, RPK and OPK, and
     /// every record — for the tests' "unchanged" assertions (feature `kat` or tests only: it hashes secrets).
     #[cfg(any(test, feature = "kat"))]

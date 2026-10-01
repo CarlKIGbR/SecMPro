@@ -22,6 +22,7 @@ mod flow;
 mod generator;
 mod inv;
 mod layout;
+mod props;
 mod scenario;
 mod store;
 mod vectors;

@@ -220,13 +220,13 @@ head (§4).
 | Vectors pass (40-message bidirectional transcript, two round trips, out of order, dropped first message of a chain, 10 000 gap; negatives: bad KEM ct, replay, truncated, wrong `sb`, KEM material changed mid-chain) | `cargo nextest run -p secmp-proto --features kat --test tr_vectors` (`every_event_of_the_tr_file`) | 96/96 events: 1 init, 40 send (cell byte-exact), 40 recv (content byte-exact), 2 advance (10 000 and 300), 13 recv-reject (uniform `Rejected`, state byte-identical); every `state_pre`/`state_post` digest equal; 14.0 s (debug). Also with libcrux's portable backend (`kat` step). The first run of the Rust implementation against the reference file passed; nothing was adjusted to it. |
 | Rust and `ref/` vectors identical; frozen | `cargo xtask vectors`; `tests/tr_generator.rs` | `tr: agrees with ref; frozen as vectors/tr.json`; `cmp vectors/tr.json vectors/ref/tr.json` identical, SHA-256 `01a6d161138508af8fedd27df0fe5c62d473dbbf27530accbe6cde293201a837`; the generator reads no vector file and reproduced the reference on its first run; `ref-vectors`: 10 frozen suites (846 cases) structurally and byte-identical |
 | Properties pass: interleavings with drops/dups/reorders/gaps never reuse a message key (all keys tracked) or panic; state round-trips at every step | `cargo nextest run -p secmp-proto --features kat --test tr_properties` | default seed: 2400 events, 1227 sealing-key digests all distinct, 883 deliveries (729 accepted: 152 in order, 112 ahead, 167 DH steps, 298 late; 154 rejected: 136 replays, 16 late beyond the window, 2 beyond `MAX_FF`), 102 tampered cells rejected, two `MAX_FF` gaps (on `n` and on `pn`: `MAX_FF + d` rejected, `MAX_FF` accepted), 1840 round trips, 631 reloads, `skipped` reached 512 with 6270 evictions; every delivery's outcome equal to the §7.4 model; 56.5 s; seeds 1 and 20261001 pass |
-| ProVerif green on the fixed query set | `cargo xtask step --strict proverif` (`M03-evidence/proverif-aarch64-apple-darwin-e154473.txt`) | 39 RESULT lines in `PROVERIF_EXPECTED` order: T1 (6), T2 (2), T3 (4), T4–T6 (2 each), T8 (12), T9 (4), T11 (1) true; T7 (2) and T10 (1) false (attack found); T12 false (informative); 72 s |
+| ProVerif green on the fixed query set | `cargo xtask step --strict proverif` (`M03-evidence/proverif-aarch64-apple-darwin-e154473.txt`) | 39 RESULT lines in `PROVERIF_EXPECTED` order: T1 (6), T2 (2), T3 (4), T4–T6 (2 each), T8 (12), T9 (4), T11 (1) true; T7 (2) and T10 (1) false (attack found); T12 false (informative); 72 s. **T11 as first fixed was false for the specified protocol** (M3 review R-01, C2): a late message accepted under a skipped key (§7.4 step 1, reading 4) is never checked for KEM constancy, and the model's "true" came from its single in-order schedule, which never takes that path; CLAIMS errata 2026-10-01 scopes T11 to the chain and step paths, which the model proves (re-run after the errata: 39 results as expected, evidence below §4) |
 | Encrypt + decrypt of a message < 3 ms | `cargo xtask step --strict perf` (`M03-evidence/tr-perf-aarch64-apple-darwin-e154473.txt`; and the local run on `c907881`'s tree) | per message encrypt + persist + decrypt + commit, 200 per kind: chain median 63.4–141.3 µs, max 69.8–246.3 µs; DH step median 219.1–251.5 µs, max 232.9–388.8 µs (four runs, the last on `405ecd0`; the higher values with other jobs on the machine) — every maximum ≤ 0.39 ms; CI Linux: the `perf` step of the PR run |
 
 | Review focus (`docs/07` M3) | Evidence |
 |---|---|
 | Header-key rotation exactly per §7.2–7.4 | `tr::tests::ratchet_header_keys_rotate_per_spec`; every vector state digest (the digest covers `hk_s`, `hk_r`, `nhk_s`, `nhk_r`); the property model checks that a new sending chain's `hk_s` equals the peer's `nhk_r`; ProVerif T8/T9 |
-| KEM material constant within a chain and rejected otherwise | `ratchet_kem_material_constant_within_a_chain_fresh_at_every_step`, `reject_kem_material_that_changes_within_a_chain` (`ek_pq`, `ct_pq`, both); vectors N2, N3; ProVerif T11 (true in every session; false when the check is removed); ct target `tr_decrypt_reject_ct_pq` |
+| KEM material constant within a chain and rejected otherwise | `ratchet_kem_material_constant_within_a_chain_fresh_at_every_step`, `reject_kem_material_that_changes_within_a_chain` (`ek_pq`, `ct_pq`, both); vectors N2, N3; ProVerif T11 on the chain and step paths (CLAIMS errata 2026-10-01; true in every session of the single in-order schedule, false when the check is removed) — a message accepted under a skipped key is not checked (§7.4 step 1, reading 4; `ratchet_skipped_path_checks_neither_kem_constancy_nor_dh_pk`); ct target `tr_decrypt_reject_ct_pq` |
 | Persist-before-send/ack possible with the API | `Sealed::persist`, `Opened::commit` (D4); `encrypt_persist_and_commit_errors_are_returned`; the property tests assert that the bytes handed to `persist`/`commit` are the new state's encoding |
 | Fast-forward bounds | `select::tests::skip_plan_bounds`; Kani `tr_skip_plan` (all `n_r`, `until`), `tr_eviction` (all lengths); `ratchet_fast_forward_bound_on_the_chain`/`_on_a_step` (`MAX_FF` accepted, `MAX_FF + 1` rejected, on `n`, `pn` and a step's new chain; feature `kat`); `ratchet_skip_stores_exactly_the_last_min_gap_256_keys`; `ratchet_skipped_bound_evicts_the_earliest_inserted`; vector N10 and the 10 000 gap (256 keys stored), tr-0070 (eviction) |
 | Transactional decrypt | every refusal test asserts the uniform error, a byte-identical `to_bytes()` and no randomness drawn (`TestEntropy` counts calls); `unavailable_step_consumes_nothing` (D1/D2); property (4); fuzz `tr_decrypt` asserts it for every input; the 13 negative vectors |
@@ -275,6 +275,26 @@ From the plan, each recorded where it happened:
   besides the n-markers; the healing round of the PCS sessions — including (1,0), the input of B's step — is
   delivered authentically, as "B's honest step" requires; implicit rejection is not modelled (a wrong ciphertext
   makes `decaps` fail; in the protocol the resulting keys fail the body MAC — the same rejection, §7.4 note (b)).
+- **Single-schedule restriction of the model** (M3 review R-12, C2): `formal/tr.pv` models one in-order schedule
+  (every receive slot accepts exactly the message the in-order run expects). The skipped-key path, reordering,
+  prefix loss, the stale-counter rejection and the `MAX_FF`/eviction bounds are outside every M3 query; the spec's
+  reorder and prefix-loss claims (§11.1) therefore have no formal counterpart in M3 (they rest on the vectors, the
+  unit and the property tests). The model header said "loses no attacker behaviour"; that was false and is
+  corrected (§F.2 of the review). The out-of-order branch is an M4 model deliverable (review F5).
+- **Missed STOP** (M3 review R-01, process finding): the brief made "a query of CLAIMS.md is false or needs
+  weakening" a STOP condition. T11 as first fixed is false for the specified protocol inside the bound — a late
+  (1,1) with foreign `ek_pq`/`ct_pq` is accepted through the skipped path, which checks no constancy (§7.4 step 1,
+  reading 4). Both halves were in this session's hands (the test
+  `ratchet_skipped_path_checks_neither_kem_constancy_nor_dh_pk` and the model header on the in-order schedule), and I
+  reported "true in every session" instead of stopping. Corrected by the reviewer's CLAIMS errata (T11 scoped to
+  the chain and step paths) and the rewording here; the model logic is unchanged.
+- **windows-native failure of PR run 36800231503** (M3 review C1): `xtask/src/gates.rs:2174` at `665e84e`, the
+  assertion of the xtask unit test `gates::tests::the_nightly_workflow`. The test searched the compiled-in
+  `fuzz-nightly.yml` (`include_str!`) for multi-line needles written with `\n`; the Windows runner checks the
+  repository out with CRLF line endings, so the needle `"on:\n  schedule:\n"` could not match. A harness defect in
+  an xtask test, no product code involved; fixed by normalising line endings in the test and running the checks
+  on a CRLF copy as well (`M03-evidence/windows-native-36800231503-failed.txt`). The failure cancelled 39 xtask unit
+  tests in that job (fail-fast); every `secmp-*` test ran, and the `kat` step passed.
 - ADR-042 moves the ct bench to `secmp-testkit` (plan D9) and is *proposed*, for the reviewer's acceptance.
 
 ## 6. Dependencies added or bumped

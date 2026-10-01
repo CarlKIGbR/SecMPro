@@ -33,10 +33,10 @@
      a cell it opens is a replay or a chain-1 message beyond the bound, and the run stops. A receiver whose ck_r is
      None ignores pn (skip_message_keys returns at once, §7.4); B at step 3 requires pn = 2 = its n_r on the old
      chain. Rejecting is silent and leaves the state unchanged, so stopping instead of waiting for the next cell
-     loses no attacker behaviour: the attacker can always deliver the accepted cell directly.
+     models one in-order schedule; the skipped-key path, reordering and prefix loss are outside every M3 query (M4 extension): the attacker can always deliver the accepted cell directly.
 
    ---------------------------------------------------------------------------------------------------------------
-   2. Abstractions (exactly those of CLAIMS.md; nothing else about a primitive is assumed)
+   2. Abstractions (plus hseal2 (CLAIMS errata 2026-10-01) those of CLAIMS.md; nothing else about a primitive is assumed)
    ---------------------------------------------------------------------------------------------------------------
      hkdf_init(SK) -> (RK, HK_A, NHK_B)   three independent constructors init_rk, init_hka, init_nhkb      §7.2
      kdf_rk(rk, dh, ss) -> (rk', ck, nhk) three independent constructors rk_rk, rk_ck, rk_nhk             §7.2

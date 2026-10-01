@@ -76,13 +76,16 @@
 //!   `CALIBRATION_SAMPLES` single calls for a first estimate of `k`; where that is above 1, `k` is derived from the
 //!   median of *batches* of `k` calls, re-derived until the batch median reaches the target, at most
 //!   `CALIBRATION_ROUNDS` times. Every median of these rules is the smaller of the two class medians
-//!   (`median_ticks`). A measurement whose class median is below `CT_MIN_REALISED_QUANTA` quanta is NOT
-//!   MEASURABLE; so is a target that would need `k > CT_MAX_BATCH`, whose quantum is unknown or that is still short
-//!   of the target after the rounds. The quantum of these rules is the **effective quantum** (below): the
-//!   calibration uses the clock's, a measurement's realised count uses its own; where a measurement's samples show
-//!   a lattice coarser than the clock's quantum (by more than `REQUANTISE_FACTOR`, i.e. the clock's probe missed
-//!   it), `k` is derived again with the samples' quantum and the target is measured again (`requantised` in the
-//!   report's calibration).
+//!   (`median_ticks`). The quantum of the calibration is the coarsest lattice observed before the first
+//!   measurement (ADR-041 Amendment 2 (1)): the clock's effective quantum (below), the median gap of the clock
+//!   probe's lattice — also where the probe saw too few runs to recognise one — and the lattice of the calibration's
+//!   own samples (`batch_quantum` in the report's calibration); so a sample of `k` calls spans at least
+//!   `CT_MIN_REALISED_QUANTA` quanta of that lattice. A measurement's realised count uses its own effective quantum.
+//!   If a measurement of the pair realises fewer than `CT_MIN_REALISED_QUANTA` quanta, `k` is derived again from
+//!   that measurement's effective quantum and per-call duration and the pair is measured once more (Amendment 2 (2):
+//!   `requantised`, `k_initial` and `k` in the report; every measurement records the `k` it was taken with). A pair
+//!   still short of the minimum is NOT MEASURABLE (Amendment 2 (3)); so is a target that would need
+//!   `k > CT_MAX_BATCH`, whose quantum is unknown or that is still short of the target after the rounds.
 //!
 //! ADR-041 (the verdict):
 //! - **Effective quantum `q_eff`.** The spacing of the lattice the samples lie on, measured from the data
@@ -178,9 +181,6 @@ const LATTICE_SAMPLES: usize = 100_000;
 const LATTICE_WORK: u64 = 2_000;
 /// Runs of consecutive values needed before a lattice is recognised (fewer: no lattice).
 const LATTICE_MIN_RUNS: usize = 4;
-/// A measurement whose samples show an effective quantum more than this factor above the clock's is batched again
-/// with it (`evaluate`).
-const REQUANTISE_FACTOR: f64 = 1.5;
 
 // ---- parameters (ADR-038 (3), ADR-041): read from xtask/src/expect.rs --------------------------------------------
 
@@ -782,6 +782,8 @@ fn class_shape(samples: &[(usize, u64)], class: usize) -> String {
 /// One measurement of one target: the class statistics per crop, its effective quantum and how finely its samples
 /// (batch durations) are resolved.
 struct Measurement {
+    /// The batch size the measurement was taken with (ADR-041 Amendment 2 (2)).
+    k: u32,
     /// Per crop (`raw`, `p50` … `p99`): the class statistics.
     crops: Vec<(String, Stats)>,
     distinct: usize,
@@ -797,9 +799,9 @@ struct Measurement {
 }
 
 impl Measurement {
-    /// The measurement of `samples`; `clock_quantum` is the fallback effective quantum and its floor comes from the
-    /// reported resolution (`reported`).
-    fn of(samples: &[(usize, u64)], clock_quantum: f64, reported: Option<u64>) -> Self {
+    /// The measurement of `samples`, taken with batch size `k`; `clock_quantum` is the fallback effective quantum
+    /// and its floor comes from the reported resolution (`reported`).
+    fn of(samples: &[(usize, u64)], clock_quantum: f64, reported: Option<u64>, k: u32) -> Self {
         let mut sorted: Vec<u64> = samples.iter().map(|(_, x)| *x).collect();
         sorted.sort_unstable();
         let median = sorted.get(sorted.len() / 2).copied().unwrap_or(0);
@@ -809,6 +811,7 @@ impl Measurement {
             .map_or((clock_quantum, "clock"), |q| (q.max(floor), "samples"));
         sorted.dedup();
         Self {
+            k,
             crops,
             distinct: sorted.len(),
             median_ticks: median,
@@ -863,7 +866,8 @@ impl Measurement {
         let (max, at) = self.max();
         let median_ns = f64_of(self.median_ticks) * clock.tick_ns;
         format!(
-            "{{\"max_abs_t\":{max:.3},\"max_at\":\"{at}\",\"t\":{{{}}},\"crops\":{{{}}},\"q_eff_ticks\":{:.3},\"q_eff_source\":\"{}\",\"floor_ticks\":{floor:.3},\"floor_ns\":{:.3},\"distinct\":{},\"median_ticks\":{},\"median_ns\":{median_ns:.1},\"class_median_ticks\":{},\"realised_quanta\":{:.1},\"shape\":{{\"class0\":{},\"class1\":{}}}}}",
+            "{{\"k\":{},\"max_abs_t\":{max:.3},\"max_at\":\"{at}\",\"t\":{{{}}},\"crops\":{{{}}},\"q_eff_ticks\":{:.3},\"q_eff_source\":\"{}\",\"floor_ticks\":{floor:.3},\"floor_ns\":{:.3},\"distinct\":{},\"median_ticks\":{},\"median_ns\":{median_ns:.1},\"class_median_ticks\":{},\"realised_quanta\":{:.1},\"shape\":{{\"class0\":{},\"class1\":{}}}}}",
+            self.k,
             ts.join(","),
             crops.join(","),
             self.q_eff,
@@ -925,11 +929,53 @@ struct Calibration {
     single_median_ticks: u64,
     /// The batched rounds, as (batch size, median batch duration in ticks).
     rounds: Vec<(u32, u64)>,
-    /// The batch size (`None`: NOT MEASURABLE).
+    /// The batch size of the measurements (`None`: NOT MEASURABLE); after a re-batch, the re-derived one.
     k: Option<u32>,
-    /// Set when the first measurement's samples showed a coarser lattice than the clock's quantum: that effective
-    /// quantum and the batch size derived with it (`evaluate`).
-    requantised: Option<(f64, u32)>,
+    /// The quantum the batch size was derived with (`None`: the clock has no quantum).
+    batch_quantum: Option<BatchQuantum>,
+    /// Set when a measurement of the first pair realised too few quanta and the pair was measured again (`evaluate`).
+    requantised: Option<Requantised>,
+}
+
+/// The quantum of the batch-size rules (ADR-041 Amendment 2 (1)): the coarsest lattice observed before the first
+/// measurement.
+#[derive(Clone, Copy)]
+struct BatchQuantum {
+    /// The clock's effective quantum (`Clock::quantum`).
+    clock: f64,
+    /// The median gap of the clock probe's lattice, in ticks, also where it saw too few runs to recognise one.
+    clock_gap: u64,
+    /// The coarsest lattice spacing the calibration's own samples showed, if any.
+    samples: Option<f64>,
+}
+
+impl BatchQuantum {
+    /// The coarsest of the three, in ticks.
+    fn ticks(self) -> f64 {
+        self.clock
+            .max(f64_of(self.clock_gap))
+            .max(self.samples.unwrap_or(0.0))
+    }
+
+    fn json(self) -> String {
+        format!(
+            "{{\"clock_q_eff_ticks\":{:.3},\"clock_lattice_gap_ticks\":{},\"samples_lattice_ticks\":{},\"ticks\":{:.3}}}",
+            self.clock,
+            self.clock_gap,
+            self.samples
+                .map_or_else(|| "null".to_owned(), |q| format!("{q:.3}")),
+            self.ticks()
+        )
+    }
+}
+
+/// The one re-batch of a target (ADR-041 Amendment 2 (2)).
+#[derive(Clone, Copy)]
+struct Requantised {
+    /// The batch size of the first pair.
+    k_initial: u32,
+    /// The coarsest effective quantum among the measurements of that pair that realised too few quanta.
+    q_eff: f64,
 }
 
 impl Calibration {
@@ -954,20 +1000,35 @@ impl Calibration {
             .collect();
         let requantised = self.requantised.map_or_else(
             || "null".to_owned(),
-            |(q, k)| format!("{{\"q_eff_ticks\":{q:.3},\"k\":{k}}}"),
+            |r| {
+                format!(
+                    "{{\"q_eff_ticks\":{:.3},\"k_initial\":{}}}",
+                    r.q_eff, r.k_initial
+                )
+            },
         );
         format!(
-            "{{\"warmup_calls\":{},\"single_median_ticks\":{},\"single_median_ns\":{:.1},\"rounds\":[{}],\"requantised\":{requantised}}}",
+            "{{\"warmup_calls\":{},\"single_median_ticks\":{},\"single_median_ns\":{:.1},\"batch_quantum\":{},\"rounds\":[{}],\"requantised\":{requantised}}}",
             CALIBRATION_SAMPLES,
             self.single_median_ticks,
             f64_of(self.single_median_ticks) * clock.tick_ns,
+            self.batch_quantum
+                .map_or_else(|| "null".to_owned(), BatchQuantum::json),
             rounds.join(",")
         )
     }
 }
 
+/// The lattice spacing of a set of samples, if they show one (ADR-041 (2)).
+fn sample_lattice(samples: &[(usize, u64)]) -> Option<f64> {
+    let mut sorted: Vec<u64> = samples.iter().map(|(_, x)| *x).collect();
+    sorted.sort_unstable();
+    lattice_spacing(&sorted)
+}
+
 /// The batch size of `target` (ADR-038 (3) as amended; M1 review F8: warm-up, then `k` from the median of
-/// *batches* with a 10 % margin), with the clock's effective quantum: a warm-up pass whose timings are discarded;
+/// *batches* with a 10 % margin), with the coarsest lattice observed before the first measurement (ADR-041
+/// Amendment 2 (1), `BatchQuantum`; the batched rounds' samples count too): a warm-up pass whose timings are discarded;
 /// single calls give the first estimate; while the median batch duration of `k` calls misses the target (`margin
 /// · quantum > fraction · median`), `k` is re-derived from that batch median divided by `k` (at most
 /// `CALIBRATION_ROUNDS` batched rounds; a call shorter than one quantum starts at `max_batch`). NOT MEASURABLE when
@@ -981,18 +1042,26 @@ fn calibrate(
     let n = CALIBRATION_SAMPLES.min(target.samples);
     // warm-up: timings discarded
     (target.run)(n, 1, stream)?;
-    let single_median_ticks = median_ticks(&(target.run)(n, 1, stream)?);
+    let singles = (target.run)(n, 1, stream)?;
+    let single_median_ticks = median_ticks(&singles);
     let mut calibration = Calibration {
         single_median_ticks,
         rounds: Vec::new(),
         k: None,
+        batch_quantum: None,
         requantised: None,
     };
-    let Some(quantum) = clock.quantum() else {
+    let Some(clock_quantum) = clock.quantum() else {
         return Ok(calibration);
     };
+    let mut quantum = BatchQuantum {
+        clock: clock_quantum,
+        clock_gap: clock.lattice.median_gap,
+        samples: sample_lattice(&singles),
+    };
+    calibration.batch_quantum = Some(quantum);
     // a call shorter than one quantum (single-call median 0) is probed with the largest batch
-    let first = match rules.batch(quantum, f64_of(single_median_ticks)) {
+    let first = match rules.batch(quantum.ticks(), f64_of(single_median_ticks)) {
         None if single_median_ticks == 0 => Some(rules.max_batch),
         first => first,
     };
@@ -1005,14 +1074,20 @@ fn calibrate(
         return Ok(calibration);
     }
     for _ in 0..CALIBRATION_ROUNDS {
-        let median = median_ticks(&(target.run)(n, usize::try_from(k).unwrap_or(1), stream)?);
+        let batches = (target.run)(n, usize::try_from(k).unwrap_or(1), stream)?;
+        let median = median_ticks(&batches);
         calibration.rounds.push((k, median));
-        if rules.resolved(quantum, median) {
+        // a round's samples may show a coarser lattice than the single calls
+        if let Some(q) = sample_lattice(&batches) {
+            quantum.samples = Some(quantum.samples.map_or(q, |s| s.max(q)));
+            calibration.batch_quantum = Some(quantum);
+        }
+        if rules.resolved(quantum.ticks(), median) {
             calibration.k = Some(k);
             return Ok(calibration);
         }
         // not resolved ⇒ the estimate from this batch median is larger than `k`, or none fits
-        match rules.batch(quantum, calibration.per_call_ticks()) {
+        match rules.batch(quantum.ticks(), calibration.per_call_ticks()) {
             Some(next) if next > k => k = next,
             _ => return Ok(calibration),
         }
@@ -1068,9 +1143,11 @@ struct Outcome {
     aa: Option<Measurement>,
 }
 
-/// Measure `target` and decide (ADR-041): the calibration sets the batch size `k`; NOT MEASURABLE if none up to
-/// `max_batch` suffices or a measurement is too coarse; the positive control is measured once and must exceed
-/// `pass`; every other target is measured twice and judged by `decide`. The A/A control runs later (`run`).
+/// Measure `target` and decide (ADR-041): the calibration sets the batch size `k`; the positive control is measured
+/// once and must exceed `pass`; every other target is measured twice (the pair) and judged by `decide`. If a
+/// measurement of the pair realises too few quanta, `k` is derived again from it and the pair is measured once more
+/// (ADR-041 Amendment 2 (2)); NOT MEASURABLE if no `k` up to `max_batch` suffices or the pair is still too coarse.
+/// The A/A control runs later (`run`).
 fn evaluate(
     target: Target,
     stream: &mut Stream,
@@ -1098,29 +1175,62 @@ fn evaluate(
                 &(t.run)(t.samples, usize::try_from(k).unwrap_or(1), stream)?,
                 quantum,
                 clock.resolution_ticks,
+                k,
             ))
         };
+    // the pair: two measurements, one for the positive control
+    let measure_pair = |stream: &mut Stream,
+                        t: &Target,
+                        k: u32|
+     -> Result<(Measurement, Option<Measurement>), secmp_crypto::Error> {
+        let first = measure_once(stream, t, k)?;
+        let second = if t.control {
+            None
+        } else {
+            Some(measure_once(stream, t, k)?)
+        };
+        Ok((first, second))
+    };
     let too_coarse = |m: &Measurement| rules.too_coarse(m.q_eff, m.class_median_ticks);
-    let mut first = measure_once(stream, &outcome.target, k)?;
-    // the samples show a coarser lattice than the calibration assumed (the clock's probe missed it): the batch
-    // size is derived again with the samples' effective quantum (ADR-038 (3) with ADR-041 (2)) and the target is
-    // measured again
-    if first.q_eff > quantum * REQUANTISE_FACTOR {
-        let per_call = outcome.calibration.per_call_ticks();
-        let Some(k2) = rules.batch(first.q_eff, per_call) else {
+    let (mut first, mut second) = measure_pair(stream, &outcome.target, k)?;
+    // ADR-041 Amendment 2 (2): a measurement short of the minimum realised quanta derives the batch size again from
+    // its own effective quantum and per-call duration (the larger if both are short), and the pair is measured once
+    // more
+    let shortfall = {
+        let short: Vec<&Measurement> = [Some(&first), second.as_ref()]
+            .into_iter()
+            .flatten()
+            .filter(|m| too_coarse(m))
+            .collect();
+        (!short.is_empty()).then(|| {
+            let q_eff = short.iter().map(|m| m.q_eff).fold(0.0, f64::max);
+            let next = short
+                .iter()
+                .map(|m| rules.batch(m.q_eff, f64_of(m.class_median_ticks) / f64::from(k)))
+                .collect::<Option<Vec<u32>>>()
+                .and_then(|ks| ks.into_iter().max());
+            (q_eff, next)
+        })
+    };
+    if let Some((q_eff, next)) = shortfall {
+        outcome.calibration.requantised = Some(Requantised {
+            k_initial: k,
+            q_eff,
+        });
+        let Some(k2) = next else {
+            // no batch size up to `max_batch` reaches the minimum: NOT MEASURABLE
             outcome.calibration.k = None;
             outcome.first = Some(first);
+            outcome.second = second;
             return Ok(outcome);
         };
-        outcome.calibration.requantised = Some((first.q_eff, k2));
-        if k2 != k {
-            outcome.calibration.k = Some(k2);
-            first = measure_once(stream, &outcome.target, k2)?;
-        }
+        outcome.calibration.k = Some(k2);
+        (first, second) = measure_pair(stream, &outcome.target, k2)?;
     }
-    let k = outcome.calibration.k.unwrap_or(k);
-    if too_coarse(&first) {
+    // ADR-041 Amendment 2 (3): a pair still short of the minimum is NOT MEASURABLE
+    if too_coarse(&first) || second.as_ref().is_some_and(too_coarse) {
         outcome.first = Some(first);
+        outcome.second = second;
         return Ok(outcome);
     }
     if outcome.target.control {
@@ -1132,14 +1242,13 @@ fn evaluate(
         outcome.first = Some(first);
         return Ok(outcome);
     }
-    let second = measure_once(stream, &outcome.target, k)?;
-    if !too_coarse(&second) {
-        let (verdict, crop) = decide(&first, &second, rules, tick_ns);
+    if let Some(second) = &second {
+        let (verdict, crop) = decide(&first, second, rules, tick_ns);
         outcome.verdict = verdict;
         outcome.decisive_crop = crop;
     }
     outcome.first = Some(first);
-    outcome.second = Some(second);
+    outcome.second = second;
     Ok(outcome)
 }
 
@@ -1166,12 +1275,18 @@ impl Outcome {
             |m| (m.max().0 <= rules.aa_max_t).to_string(),
         );
         format!(
-            "{{\"name\":\"{}\",\"class0\":\"{class0}\",\"class1\":\"{class1}\",\"samples\":{},\"control\":{},\"k\":{},\"calibration_median_ticks\":{per_call_ticks:.2},\"calibration_median_ns\":{:.1},\"calibration\":{},\"verdict\":\"{}\",\"passed\":{},\"decisive_crop\":{},\"t1_t2\":{t1_t2},\"aa_passed\":{aa_passed},\"aa_control\":{},\"first\":{},\"second\":{}}}",
+            "{{\"name\":\"{}\",\"class0\":\"{class0}\",\"class1\":\"{class1}\",\"samples\":{},\"control\":{},\"k\":{},\"requantised\":{},\"k_initial\":{},\"calibration_median_ticks\":{per_call_ticks:.2},\"calibration_median_ns\":{:.1},\"calibration\":{},\"verdict\":\"{}\",\"passed\":{},\"decisive_crop\":{},\"t1_t2\":{t1_t2},\"aa_passed\":{aa_passed},\"aa_control\":{},\"first\":{},\"second\":{}}}",
             self.target.name,
             self.target.samples,
             self.target.control,
             self.calibration
                 .k
+                .map_or_else(|| "null".to_owned(), |k| k.to_string()),
+            self.calibration.requantised.is_some(),
+            self.calibration
+                .requantised
+                .map(|r| r.k_initial)
+                .or(self.calibration.k)
                 .map_or_else(|| "null".to_owned(), |k| k.to_string()),
             per_call_ticks * clock.tick_ns,
             self.calibration.json(clock),
@@ -1189,17 +1304,21 @@ impl Outcome {
 
 // ---- targets --------------------------------------------------------------------------------------------------
 //
-// Input preparation (M2 finding, WEISUNG M2-2 C): every measured input is built from **one common source per
-// target** — `base ^ (delta & mask)`, `base` the class-1 input, `delta` = class 0 XOR class 1, `mask` all-ones
-// for class 0 and zero for class 1, computed without a branch — so that preparing an input reads and writes the
-// same memory for both classes and the classes differ only in the contents of the fresh copy. Before, `prepare`
-// copied each input from a per-class source buffer (`inputs[c]`, `&sealed` vs `&tampered`, `&at_100` vs
-// `&at_300`, `&other` vs `&k`), right before the timed window: the class-dependent source address left a
-// class-dependent cache footprint at the start of every timed call. An A/A′ control (identical contents, the
-// class-1 source only moved to its own allocation) failed with it on GitHub-hosted Linux (`msg_open_reject`
-// 13.0, `caead_open_reject` 50.1, run 36569831144), while the A/A control (one source for both labels) passed in
-// every run — the M1 review F7 rule ("the classes may differ only in their contents, never in where the inputs
-// live") applied one step earlier, to the sources the fresh copies are made from.
+// Input preparation (M2 finding, WEISUNG M2-2 C; ADR-042 Amendment 2): every measured input is built from **one
+// common source per target**, `base` (the class-1 input), as `base ^ deltas[class]` — `Deltas` holds class 0's
+// delta (class 0 XOR class 1) and class 1's all-zero delta of the same length, in two buffers selected by index —
+// by one out-of-line XOR loop (`blend`) that runs the same instructions for both classes; the classes differ in the
+// contents of the fresh copy and in which of the two delta buffers the loop reads (the one class-dependent address
+// left in the preparation). History: before M2, `prepare` copied each input from a per-class source buffer
+// (`inputs[c]`, `&sealed` vs `&tampered`, `&at_100` vs `&at_300`, `&other` vs `&k`) right before the timed window,
+// and the class-dependent source address left a class-dependent cache footprint at the start of every timed call:
+// an A/A′ control (identical contents, the class-1 source only moved to its own allocation) failed with it on
+// GitHub-hosted Linux (`msg_open_reject` 13.0, `caead_open_reject` 50.1, run 36569831144), while the A/A control
+// (one source for both labels) passed in every run — the M1 review F7 rule ("the classes may differ only in their
+// contents, never in where the inputs live") applied one step earlier. The M2 form `base ^ (delta & mask)` was
+// then split by the compiler into a `memcpy` for class 1 and an XOR loop for class 0 (ADR-042 Amendment 2). The
+// same-content control `same_content_control` measures this whole preparation path with identical contents in
+// both classes.
 
 /// The per-class deltas of `blend` (ADR-042 Amendment 2), indexed by the class: class 0's `class0 ^ class1` and
 /// class 1's all-zero delta of the same length.
@@ -2138,7 +2257,7 @@ fn sensitivity_control(
     if let (Some(k), Some(quantum), Some(tick_ns)) = (sensitivity.k, clock.quantum(), clock.tick())
     {
         let samples = min_leak(sensitivity.samples, usize::try_from(k).unwrap_or(1), stream);
-        let m = Measurement::of(&samples, quantum, clock.resolution_ticks);
+        let m = Measurement::of(&samples, quantum, clock.resolution_ticks, k);
         sensitivity.floor_ticks = Some(rules.floor_ticks(m.q_eff, tick_ns));
         sensitivity.measurement = Some(m);
     }
@@ -2219,7 +2338,7 @@ fn aa_control(
         };
         let batch = usize::try_from(k).unwrap_or(1);
         let samples = (outcome.target.run)(outcome.target.samples, batch, stream)?;
-        let aa = Measurement::of(&samples, quantum, clock.resolution_ticks);
+        let aa = Measurement::of(&samples, quantum, clock.resolution_ticks, k);
         let (max, at) = aa.max();
         if max > rules.aa_max_t {
             aa_failures.push(format!("{} |t| = {max:.2} at {at}", outcome.target.name));

@@ -9,7 +9,10 @@
 //! - the positive control's presence and detection (whatever its label says, M2 review F15), and the inline A/A
 //!   control;
 //! - the sensitivity control, bound to `tag_compare`'s batch size and sample count;
-//! - the target set and the sample counts; a shortened run (`secmp_ct_scale`) is refused.
+//! - the target set and the sample counts; a shortened run (`secmp_ct_scale`) is refused;
+//! - the batch sizes (ADR-041 Amendment 2, M3 review R-57): every measurement taken with the target's recorded `k`,
+//!   the `requantised` flag consistent with `k_initial` and `k`, and each judged measurement realising at least
+//!   `CT_MIN_REALISED_QUANTA` effective quanta ([`batch_findings`]).
 //!
 //! The bench prints rounded values: t to 3 decimals, Δ and the floors in ticks to 4, `q_eff_ticks` to 3; `tick_ns`
 //! is exact. Every comparison allows exactly that rounding, so a report is refused only if no values within it give
@@ -237,6 +240,13 @@ fn ct_line(r: &Value) -> (String, String, bool) {
         .get("k")
         .and_then(Value::as_u64)
         .map_or_else(|| "-".to_owned(), |k| k.to_string());
+    let k = match (
+        r.get("requantised").and_then(Value::as_bool),
+        r.get("k_initial").and_then(Value::as_u64),
+    ) {
+        (Some(true), Some(k0)) => format!("{k} (re-batched from k={k0})"),
+        _ => k,
+    };
     let calibration = r.get("calibration_median_ns").and_then(Value::as_f64);
     let ns = |x: Option<f64>| x.map_or_else(|| "?".to_owned(), |x| format!("{x:.1}"));
     let measurement = |key: &str, label: &str| {
@@ -362,12 +372,16 @@ fn possible_verdicts(first: &Value, second: &Value, tick: f64) -> Option<Possibl
 pub(crate) struct TargetSet {
     label: &'static str,
     names: &'static [&'static str],
+    /// Whether its reports record `k` per measurement, `requantised` and `k_initial` (ADR-041 Amendment 2); the
+    /// reports of the M2 set predate it.
+    batch_record: bool,
 }
 
 /// The gate's target set.
 pub(crate) const CURRENT_TARGETS: TargetSet = TargetSet {
     label: "expect::CT_TARGETS",
     names: expect::CT_TARGETS,
+    batch_record: true,
 };
 
 /// The target set of the reports written before ADR-042 added `aa_prime_control` (M2; the committed evidence under
@@ -385,6 +399,7 @@ pub(crate) const M2_TARGETS: TargetSet = TargetSet {
         "caead_com_compare",
         "caead_open_reject_samekey",
     ],
+    batch_record: false,
 };
 
 /// M2 review C3 (a), (c): the target set is `targets` (the gate: `expect::CT_TARGETS`), each measured with the sample
@@ -496,7 +511,12 @@ fn binding_findings(report: &Value, results: &[Value]) -> Vec<String> {
 /// M2 review C3 (a), (f): per measured target, a quiet inline A/A control, and a verdict (with its deciding crop)
 /// that the recorded crops, `q_eff_ticks` and `tick_ns` give; F17: both measurements' `q_eff_ticks` within
 /// [`q_eff_bound`].
-fn target_findings(report: &Value, results: &[Value], run_verdict: &str) -> Vec<String> {
+fn target_findings(
+    report: &Value,
+    results: &[Value],
+    run_verdict: &str,
+    targets: TargetSet,
+) -> Vec<String> {
     let mut out = Vec::new();
     let tick = tick_ns(report);
     let q_bound = q_eff_bound(report);
@@ -516,6 +536,9 @@ fn target_findings(report: &Value, results: &[Value], run_verdict: &str) -> Vec<
                 expect::CT_AA_MAX_T
             )),
             None => out.push(format!("ct report: {name} has no readable A/A measurement")),
+        }
+        if targets.batch_record && matches!(verdict, "PASS" | "SUB_FLOOR_SHIFT" | "FAIL") {
+            out.extend(batch_findings(r));
         }
         if r.get("control").and_then(Value::as_bool) == Some(true)
             || !matches!(verdict, "PASS" | "SUB_FLOOR_SHIFT" | "FAIL")
@@ -582,6 +605,53 @@ fn target_findings(report: &Value, results: &[Value], run_verdict: &str) -> Vec<
     out
 }
 
+/// ADR-041 Amendment 2 (M3 review R-57): the batch sizes of a judged target as the report records them — every
+/// measurement (the pair and the A/A measurement) taken with the target's `k`; `requantised` consistent with the two
+/// batch sizes (`k_initial < k` after the one re-batch, `k_initial = k` without); and each measurement of the pair
+/// realising at least `CT_MIN_REALISED_QUANTA` effective quanta (class median / `q_eff_ticks`; refused only if surely
+/// below within the printed rounding of `q_eff_ticks`), which the bench requires of a pair it judges. An unreadable
+/// `q_eff_ticks` is refused by `target_findings`.
+fn batch_findings(r: &Value) -> Vec<String> {
+    let name = text(r, "name");
+    let mut out = Vec::new();
+    let k = r.get("k").and_then(Value::as_u64);
+    let k_initial = r.get("k_initial").and_then(Value::as_u64);
+    let requantised = r.get("requantised").and_then(Value::as_bool);
+    match (k, k_initial, requantised) {
+        (Some(k), Some(k0), Some(true)) if k0 < k => {}
+        (Some(k), Some(k0), Some(false)) if k0 == k => {}
+        _ => out.push(format!(
+            "ct report: {name} records k {k:?}, k_initial {k_initial:?} and requantised {requantised:?}, which is no \
+             first pair or one re-batch (ADR-041 Amendment 2)"
+        )),
+    }
+    let min = u32::try_from(expect::CT_MIN_REALISED_QUANTA).map_or(f64::INFINITY, f64::from);
+    for key in ["first", "second", "aa_control"] {
+        let Some(m) = r.get(key).filter(|m| !m.is_null()) else {
+            continue;
+        };
+        let taken = m.get("k").and_then(Value::as_u64);
+        if taken.is_none() || taken != k {
+            out.push(format!(
+                "ct report: {name} {key} taken with k {taken:?}, not the target's k {k:?}"
+            ));
+        }
+        if key == "aa_control" {
+            continue;
+        }
+        let median = m.get("class_median_ticks").and_then(Value::as_f64);
+        if let (Some(median), Some(q)) = (median, q_eff(m))
+            && median < min * (q - HALF_Q)
+        {
+            out.push(format!(
+                "ct report: {name} {key} realises fewer than {min} quanta (class median {median} ticks, q_eff {q} \
+                 ticks): a pair the bench cannot judge (ADR-041 Amendment 2 (3))"
+            ));
+        }
+    }
+    out
+}
+
 /// M2 review C3 (a)–(c), (f): the re-derivation of a report against the target set `targets`. Every finding is a
 /// refusal. In a `CONTROL_FAIL` run no target verdict counts, and each must say `CONTROL_FAIL`.
 fn rederive(
@@ -607,7 +677,7 @@ fn rederive(
                 }),
         );
     } else {
-        out.extend(target_findings(report, results, run_verdict));
+        out.extend(target_findings(report, results, run_verdict, targets));
     }
     out
 }
@@ -757,7 +827,8 @@ mod tests {
             .collect();
         serde_json::json!({"max_abs_t": t.abs(), "max_at": "p90", "t": {}, "crops": crops, "q_eff_ticks": 1.0,
             "q_eff_source": "clock", "floor_ticks": 20.0, "floor_ns": 10.0, "distinct": 900,
-            "median_ticks": 6000, "median_ns": 3000.0, "class_median_ticks": 6000, "realised_quanta": 6000.0})
+            "median_ticks": 6000, "median_ns": 3000.0, "class_median_ticks": 6000, "realised_quanta": 6000.0,
+            "k": 1})
     }
 
     /// A PASS target (t 1, Δ 0.1 tick in both measurements, A/A t 1.25).
@@ -769,7 +840,8 @@ mod tests {
             expect::CT_SAMPLES
         };
         serde_json::json!({"name": name, "class0": "a", "class1": "b", "samples": samples, "control": control,
-            "k": 1, "calibration_median_ticks": 3000, "calibration_median_ns": 1500.0, "verdict": "PASS",
+            "k": 1, "requantised": false, "k_initial": 1, "calibration_median_ticks": 3000,
+            "calibration_median_ns": 1500.0, "verdict": "PASS",
             "passed": true, "decisive_crop": null, "aa_passed": true, "aa_control": measurement(1.25, 0.1),
             "first": if control { measurement(99.0, 500.0) } else { measurement(1.0, 0.1) },
             "second": if control { Value::Null } else { measurement(1.0, 0.1) }})
@@ -1562,7 +1634,8 @@ mod tests {
 
     /// C3 acceptance: the reports of the ADR-041 Amendment 1 format committed under `docs/reviews/M02-evidence/`
     /// pass the gate as it reads them now, against the M2 target set they were written with (ADR-042); against the
-    /// current set they lack `aa_prime_control` and are refused for that alone.
+    /// current set they lack `aa_prime_control` and `same_content_control` and the batch record of ADR-041
+    /// Amendment 2, and are refused for that alone.
     #[test]
     fn the_committed_amendment_1_reports_pass() -> Result<()> {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -1586,11 +1659,15 @@ mod tests {
             );
             let now = ct_table(&json)?;
             assert!(
-                now.failed.len() == 2
-                    && now
-                        .failed
-                        .iter()
-                        .any(|l| l.contains("differ from expect::CT_TARGETS")),
+                now.failed
+                    .iter()
+                    .any(|l| l.contains("differ from expect::CT_TARGETS"))
+                    && now.failed.iter().all(|l| {
+                        l.contains("differ from expect::CT_TARGETS")
+                            || l == "ct report: run verdict PASS with a failing target"
+                            || l.contains("which is no first pair or one re-batch")
+                            || l.contains("taken with k None")
+                    }),
                 "{}: {now:?}",
                 f.display()
             );
@@ -1770,6 +1847,111 @@ mod tests {
         let mut two = report();
         set(at(&mut two, same), &["control"], Value::from(true));
         assert!(refused(&two, "2 positive controls")?);
+        Ok(())
+    }
+
+    /// ADR-041 Amendment 2 (M3 review R-57): a requantised record — `k_initial` 1, `k` 3, every measurement taken
+    /// with k 3 — passes and its line names the re-batch; the gate reads `k` per measurement and the flag: a
+    /// measurement taken with another `k`, a flag that does not fit the two batch sizes, a missing record, and a
+    /// judged measurement realising fewer than `CT_MIN_REALISED_QUANTA` quanta are refused; the M2 set, whose
+    /// reports predate the record, is not asked for it.
+    #[test]
+    fn reads_the_batch_sizes_of_a_requantised_record() -> Result<()> {
+        let rebatched = || {
+            let mut v = report();
+            let t = at(&mut v, "caead_derive");
+            set(t, &["k"], Value::from(3));
+            set(t, &["k_initial"], Value::from(1));
+            set(t, &["requantised"], Value::from(true));
+            for m in ["first", "second", "aa_control"] {
+                set(t, &[m, "k"], Value::from(3));
+            }
+            v
+        };
+        let t = table(&rebatched())?;
+        assert!(t.failed.is_empty(), "{t:?}");
+        assert!(
+            t.lines
+                .iter()
+                .any(|l| l.starts_with("caead_derive: PASS — k=3 (re-batched from k=1),"))
+        );
+        // the second measurement taken with the first pair's k
+        let mut v = rebatched();
+        set(at(&mut v, "caead_derive"), &["second", "k"], Value::from(1));
+        assert_eq!(
+            refusals(&v)?,
+            vec![
+                "ct report: caead_derive second taken with k Some(1), not the target's k Some(3)"
+                    .to_owned()
+            ]
+        );
+        // a flag that does not fit the batch sizes, both ways
+        let mut v = rebatched();
+        set(
+            at(&mut v, "caead_derive"),
+            &["requantised"],
+            Value::from(false),
+        );
+        assert!(refused(
+            &v,
+            "caead_derive records k Some(3), k_initial Some(1) and requantised Some(false)"
+        )?);
+        let mut v = report();
+        set(
+            at(&mut v, "caead_derive"),
+            &["requantised"],
+            Value::from(true),
+        );
+        assert!(refused(
+            &v,
+            "caead_derive records k Some(1), k_initial Some(1) and requantised Some(true)"
+        )?);
+        // no record at all
+        let mut v = report();
+        if let Some(t) = at(&mut v, "caead_derive").as_object_mut() {
+            t.remove("k_initial");
+        }
+        if let Some(m) = at(&mut v, "caead_derive")
+            .get_mut("first")
+            .and_then(Value::as_object_mut)
+        {
+            m.remove("k");
+        }
+        let found = refusals(&v)?;
+        assert_eq!(found.len(), 2, "{found:?}");
+        assert!(
+            found.contains(
+                &"ct report: caead_derive first taken with k None, not the target's k Some(1)"
+                    .to_owned()
+            )
+        );
+        // a judged measurement short of the minimum: 79 quanta of 24.5 ticks (1935.5 ticks) refused, 80 accepted
+        let mut v = rebatched();
+        let t = at(&mut v, "caead_derive");
+        set(t, &["second", "q_eff_ticks"], Value::from(20.5));
+        set(t, &["second", "class_median_ticks"], Value::from(1619));
+        assert!(refused(
+            &v,
+            "caead_derive second realises fewer than 80 quanta"
+        )?);
+        set(
+            at(&mut v, "caead_derive"),
+            &["second", "class_median_ticks"],
+            Value::from(1640),
+        );
+        assert!(table(&v)?.failed.is_empty());
+        // the M2 set predates the record
+        let mut v = report();
+        if let Some(t) = at(&mut v, "caead_derive").as_object_mut() {
+            t.remove("k_initial");
+            t.remove("requantised");
+        }
+        assert!(
+            !ct_table_for(&v.to_string(), M2_TARGETS)?
+                .failed
+                .iter()
+                .any(|f| f.contains("which is no first pair or one re-batch"))
+        );
         Ok(())
     }
 

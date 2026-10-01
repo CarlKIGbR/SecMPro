@@ -131,10 +131,86 @@ impl Entropy for FixedEntropy {
     }
 }
 
+/// Test randomness (unit tests only, with or without feature `kat`): the OS source for the first `ok` draws, then
+/// [`crate::Error::Unavailable`]; every draw is counted, so a test can assert that a path drew nothing (plan D2).
+#[cfg(test)]
+pub(crate) struct TestEntropy {
+    /// Draws that succeed.
+    ok: usize,
+    /// Draws attempted so far (successful or not).
+    pub(crate) calls: usize,
+}
+
+#[cfg(test)]
+impl TestEntropy {
+    /// `ok` successful draws, then `Unavailable`.
+    pub(crate) const fn failing_after(ok: usize) -> Self {
+        Self { ok, calls: 0 }
+    }
+
+    fn draw(&mut self) -> Result<()> {
+        self.calls = self.calls.saturating_add(1);
+        if self.calls > self.ok {
+            Err(crate::error::Error::Unavailable)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[cfg(test)]
+impl sealed::Sealed for TestEntropy {}
+
+#[cfg(test)]
+impl Entropy for TestEntropy {
+    fn x25519(&mut self) -> Result<X25519Secret> {
+        self.draw()?;
+        OsEntropy.x25519()
+    }
+
+    fn mlkem768(&mut self) -> Result<MlKem768Dk> {
+        self.draw()?;
+        OsEntropy.mlkem768()
+    }
+
+    fn encaps(&mut self, ek: &MlKem768Ek) -> Result<(MlKem768Ct, SecretBytes<32>)> {
+        self.draw()?;
+        OsEntropy.encaps(ek)
+    }
+
+    fn nonce(&mut self) -> Result<Nonce24> {
+        self.draw()?;
+        OsEntropy.nonce()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use secmp_crypto::ConstantTimeEq;
+
+    /// The test source: `ok` draws of any kind, then `Unavailable` for every kind; every call counted.
+    #[test]
+    fn test_entropy_fails_after_its_budget() -> Result<()> {
+        use crate::error::Error;
+        let mut e = TestEntropy::failing_after(4);
+        let dk = e.mlkem768()?;
+        e.encaps(&dk.encapsulation_key())?;
+        e.x25519()?;
+        e.nonce()?;
+        assert_eq!(e.nonce().err(), Some(Error::Unavailable));
+        assert_eq!(e.x25519().err(), Some(Error::Unavailable));
+        assert_eq!(e.mlkem768().err(), Some(Error::Unavailable));
+        assert_eq!(
+            e.encaps(&dk.encapsulation_key()).err(),
+            Some(Error::Unavailable)
+        );
+        assert_eq!(e.calls, 8);
+        let mut none = TestEntropy::failing_after(0);
+        assert_eq!(none.nonce().err(), Some(Error::Unavailable));
+        assert_eq!(none.calls, 1);
+        Ok(())
+    }
 
     #[test]
     fn os_entropy_draws_fresh_values() -> Result<()> {

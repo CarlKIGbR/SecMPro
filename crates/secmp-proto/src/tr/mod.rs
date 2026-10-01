@@ -18,6 +18,8 @@ mod entropy;
 mod ratchet;
 pub(crate) mod select;
 mod state;
+#[cfg(test)]
+mod tests;
 
 #[cfg(feature = "kat")]
 pub use entropy::FixedEntropy;

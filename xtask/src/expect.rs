@@ -95,7 +95,9 @@ pub(crate) const CT_SAMPLES: usize = 1_000_000;
 pub(crate) const CT_SAS_SAMPLES: usize = 20_000;
 
 /// The ct targets (M2 review C3 (a)): the gate refuses a report whose target set differs. Exactly one of them, the
-/// positive control, is measured once and must be detected. M3: the A/A′ placement control (ADR-042).
+/// positive control, is measured once and must be detected. M3: the three SecMP-TR rejection targets
+/// `tr_decrypt_reject_*` (plan D9: `RatchetState::decrypt_with` on one fixed receiver state) and the A/A′ placement
+/// control (ADR-042).
 pub(crate) const CT_TARGETS: &[&str] = &[
     "control_variable_time_compare",
     "tag_compare",
@@ -107,6 +109,9 @@ pub(crate) const CT_TARGETS: &[&str] = &[
     "caead_com_compare",
     "caead_open_reject_samekey",
     "aa_prime_control",
+    "tr_decrypt_reject_hdr_key",
+    "tr_decrypt_reject_body_tag",
+    "tr_decrypt_reject_ct_pq",
 ];
 
 /// The positive control among [`CT_TARGETS`].
@@ -116,9 +121,22 @@ pub(crate) const CT_POSITIVE_CONTROL: &str = "control_variable_time_compare";
 /// run `CONTROL_FAIL`, PASS and `SUB_FLOOR_SHIFT` pass. Not the positive control.
 pub(crate) const CT_AA_PRIME_CONTROL: &str = "aa_prime_control";
 
+/// docs/07 M3 acceptance "encrypt+decrypt of a message < 3 ms" (M3 plan D11): the `perf` step fails if the maximum of
+/// a kind of `crates/secmp-proto/examples/tr-perf.rs` (release profile; encrypt, persist, decrypt and commit of one
+/// message) reaches this many milliseconds.
+pub(crate) const TR_PERF_MAX_MS: f64 = 3.0;
+
+/// The messages per kind of the `perf` report (`n=`, the example's `N`); a report with another count is refused.
+pub(crate) const TR_PERF_MESSAGES: usize = 200;
+
+/// The kinds of the `perf` report, each with `<kind>_median_us` and `<kind>_max_us`: a message on an established
+/// chain, and a message that makes the receiver perform a DH step.
+pub(crate) const TR_PERF_KINDS: &[&str] = &["chain", "step"];
+
 /// cargo-fuzz targets under `fuzz/fuzz_targets/` (docs/06 §5 step 6): M1 key, ciphertext and signature parsers
 /// and the two openers of `secmp-crypto`; M2 every `secmp-proto` decoder, one target per Appendix D section
-/// (`proto_*`, a selector byte picks the decoder).
+/// (`proto_*`, a selector byte picks the decoder); M3 SecMP-TR `Decrypt` on a fixed receiver state (`tr_decrypt`)
+/// and the TR persistence decoders (`tr_state`).
 pub(crate) const FUZZ_TARGETS: &[&str] = &[
     "caead_open",
     "ed25519_verify",
@@ -131,15 +149,24 @@ pub(crate) const FUZZ_TARGETS: &[&str] = &[
     "proto_handshake",
     "proto_invitation",
     "proto_records",
+    "tr_decrypt",
+    "tr_state",
     "x25519_dh",
 ];
 
 /// Seconds per fuzz target of the `fuzz` gate (ci-full step 6, docs/06 §4: "≈2 min per target on every PR").
 pub(crate) const FUZZ_SMOKE_SECONDS: u64 = 120;
 
+/// libFuzzer's per-input `-timeout` in seconds for every target (M3; libFuzzer's default is 1200 s). The slowest
+/// legitimate input is a `tr_decrypt` header that makes the receiver derive `MAX_FF` = 2^20 chain keys twice (a DH
+/// step with the largest `pn` and `n`): 6.5 s measured on the M1 Pro in the fuzz build with the address sanitizer
+/// (while a Kani run loaded the machine), so the cap leaves about a factor of 9; every other target's inputs take
+/// milliseconds.
+pub(crate) const FUZZ_INPUT_TIMEOUT_SECONDS: u64 = 60;
+
 /// Seconds of the scheduled campaign (`.github/workflows/fuzz-nightly.yml`, docs/06 §4 "nightly 4 h"; M2 review F2),
 /// shared equally by the fuzz targets: each gets `FUZZ_NIGHTLY_SECONDS / FUZZ_TARGETS.len()` seconds (M2: 12
-/// targets, 1200 s each).
+/// targets, 1200 s each; M3: 14 targets, 1028 s each).
 pub(crate) const FUZZ_NIGHTLY_SECONDS: u64 = 14_400;
 
 /// libFuzzer `-max_len` per fuzz target (M2 review C4: without it libFuzzer caps inputs at the largest corpus file,
@@ -163,6 +190,9 @@ pub(crate) const FUZZ_NIGHTLY_SECONDS: u64 = 14_400;
 /// - `proto_handshake`: selector 1 + `Outer` 12018 = 12019.
 /// - `proto_invitation`: selector 1 + `LinkBlob` 12360 = 12361.
 /// - `proto_records`: selector 1 + the HS1 record (`len` 2 + type 1 + 2853) = 2857.
+/// - `tr_decrypt`: mode 1 + the larger of a cell (4096) and a header plaintext (2314; mode ≠ 0) = 4097.
+/// - `tr_state`: selector 1 + the larger of `RatchetStateV1` at its maximum (38 585, `skipped` full) and `InboxV1`
+///   with one message of one maximal chunk (1694) = 38586.
 pub(crate) const FUZZ_MAX_LEN: &[(&str, usize)] = &[
     ("caead_open", 12_618),
     ("ed25519_verify", 4_243),
@@ -175,6 +205,8 @@ pub(crate) const FUZZ_MAX_LEN: &[(&str, usize)] = &[
     ("proto_handshake", 12_020),
     ("proto_invitation", 12_362),
     ("proto_records", 2_858),
+    ("tr_decrypt", 4_098),
+    ("tr_state", 38_587),
     ("x25519_dh", 97),
 ];
 
@@ -277,6 +309,14 @@ pub(crate) const MIRI_SKIP: &[(&str, &str, &str)] = &[
     ),
     (
         "secmp-proto",
+        "tr::tests::",
+        "the SecMP-TR unit tests (M3): each builds a session — X25519 and ML-KEM-768 key generation, encapsulation \
+         and decapsulation at every step — `reject_cell_length`, the lightest, takes 125 s under Miri, the 51 \
+         together about 1.8 h (two fast-forward tests derive 2^20 chain keys each); `tests/tr_smoke.rs` (360 s) and \
+         `tr::select`, `tr::entropy` stay under Miri",
+    ),
+    (
+        "secmp-proto",
         "test-target:canonical",
         "the canonicality property tests (48 random values per structure, and the edge cases): edge_counters 508 s, \
          edge_enum_variants 764 s, edge_lengths 1561 s under Miri (M3); frames, handshake_envelope and \
@@ -311,7 +351,8 @@ pub(crate) const KANI_PACKAGES: &[&str] = &["secmp-proto"];
 
 /// The Kani harnesses (M2 review C5): the gate refuses a run unless Kani reports exactly these as successfully
 /// verified ("Complete - N successfully verified harnesses, 0 failures, N total." with N = this count), so a
-/// deleted or renamed harness fails the gate instead of passing silently.
+/// deleted or renamed harness fails the gate instead of passing silently. M3 (plan step 9): the three `tr_*`
+/// harnesses of the SecMP-TR decisions (`tr::select`).
 pub(crate) const KANI_HARNESSES: &[&str] = &[
     "kani_proofs::cell",
     "kani_proofs::header_v1",
@@ -329,6 +370,9 @@ pub(crate) const KANI_HARNESSES: &[&str] = &[
     "kani_proofs::request_send",
     "kani_proofs::request_skey",
     "kani_proofs::response_frame",
+    "kani_proofs::tr_eviction",
+    "kani_proofs::tr_header_selection",
+    "kani_proofs::tr_skip_plan",
 ];
 
 /// The SecMP vector suites (`vectors/SCHEMA.md` §3): frozen as `vectors/<suite>.json`, reference files
@@ -343,14 +387,15 @@ pub(crate) const VECTOR_SUITES: &[&str] = &[
     "hybridsign",
     "msgencrypt",
     "sas",
+    "tr",
 ];
 
 /// Reference files committed before their suite is generated by the Rust side and frozen: present as
 /// `vectors/ref/<suite>.json`, absent from `vectors/`. The `ref-vectors` step requires each to be present and
 /// well-formed (JSON, `suite` = its name, a non-empty `cases` array) and compares nothing yet. Moving a suite from
 /// here to `VECTOR_SUITES` is its freeze step (M2: `encodings`, frozen in `docs/reviews/M02-report.md` plan step 10;
-/// M3: `tr`, committed with the M3 brief and frozen in `docs/reviews/M03-report.md` plan step 6).
-pub(crate) const VECTOR_REF_PENDING: &[&str] = &["tr"];
+/// M3: `tr`, committed with the M3 brief and frozen in `docs/reviews/M03-report.md` plan step 6). None pending.
+pub(crate) const VECTOR_REF_PENDING: &[&str] = &[];
 
 /// Suites whose Rust generator writes the positive rows only (M2 cross-generates the `encodings` positives, docs/07
 /// M2 deliverables): `cargo xtask vectors` compares the header and the positive rows, and requires the decoders to
@@ -358,7 +403,49 @@ pub(crate) const VECTOR_REF_PENDING: &[&str] = &["tr"];
 pub(crate) const VECTOR_POSITIVE_ONLY: &[&str] = &["encodings"];
 
 /// ProVerif models under `formal/` (docs/06 §5 step 10). M3 adds `tr.pv`, M4 `hx.pv`, M5 `link.pv`.
-pub(crate) const PROVERIF_MODELS: &[&str] = &[];
+pub(crate) const PROVERIF_MODELS: &[&str] = &["tr"];
+
+/// What one ProVerif `RESULT` line must say (`formal/CLAIMS.md`, gate rule).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Proved {
+    /// "… is true.": the property is proved.
+    True,
+    /// "… is false.": ProVerif reports an attack (the sanity queries).
+    False,
+    /// Any outcome (documented, not a gate).
+    Informative,
+}
+
+/// The expected `RESULT` lines of one model: runs of (CLAIMS ID, number of lines, expected verdict), in order.
+pub(crate) type ProverifRuns = &'static [(&'static str, usize, Proved)];
+
+/// The expected `RESULT` lines of each model of [`PROVERIF_MODELS`], in the order ProVerif prints them, as runs of
+/// (`formal/CLAIMS.md` ID, number of lines, expected verdict). The `proverif` step expands the runs and compares line
+/// by line (`gates::proverif_check`, M3 plan D10): the number of lines must match, a `True` line must be proved, a
+/// `False` line must be an attack, an `Informative` line may say anything; a test checks the verdicts against the
+/// "Expected" column of `formal/CLAIMS.md`.
+///
+/// `tr` (M3, 39 lines; CLAIMS §TR gate rule: T1–T6, T8, T9, T11 true, T7 and T10 false, T12 informative): T1 the six
+/// contents of steps 1–3 (n = 0, 1); T2 both directions; T3 the four contents of steps 1–2; T4, T5, T6 and T7 the two
+/// contents of step 3 each; T8 per step `dh_pk` and `ek_pq` of its header and `n` of both messages (twelve); T9 the
+/// same four fields of step 1; T10 one content; T11 and T12 one query each (T12: the model gives false).
+pub(crate) const PROVERIF_EXPECTED: &[(&str, ProverifRuns)] = &[(
+    "tr",
+    &[
+        ("T1", 6, Proved::True),
+        ("T2", 2, Proved::True),
+        ("T3", 4, Proved::True),
+        ("T4", 2, Proved::True),
+        ("T5", 2, Proved::True),
+        ("T6", 2, Proved::True),
+        ("T7", 2, Proved::False),
+        ("T8", 12, Proved::True),
+        ("T9", 4, Proved::True),
+        ("T10", 1, Proved::False),
+        ("T11", 1, Proved::True),
+        ("T12", 1, Proved::Informative),
+    ],
+)];
 
 /// systemd units under `deploy/` checked with `systemd-analyze security --offline` (docs/06 §5 step 14,
 /// exposure ≤ 2.0). M10 adds `secmp-relay.service`.

@@ -14,6 +14,8 @@ pub(crate) struct Target {
     pub(crate) name: String,
     pub(crate) kinds: Vec<String>,
     pub(crate) src_path: PathBuf,
+    /// The target's `required-features` (empty if none): it is built only when they are enabled.
+    pub(crate) required_features: Vec<String>,
 }
 
 /// One workspace member.
@@ -108,6 +110,16 @@ impl Workspace {
                         .map(str::to_owned)
                         .collect(),
                     src_path: PathBuf::from(s(t, "src_path")?),
+                    required_features: t
+                        .get("required-features")
+                        .and_then(Value::as_array)
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(Value::as_str)
+                                .map(str::to_owned)
+                                .collect()
+                        })
+                        .unwrap_or_default(),
                 });
             }
             let features = p

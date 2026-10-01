@@ -94,6 +94,12 @@ const FAST: &[Step] = &[
 ];
 
 const FULL_EXTRA: &[Step] = &[
+    // docs/07 M3 "encrypt+decrypt of a message < 3 ms" (M3 plan D11), right after the KATs
+    Step {
+        num: "5",
+        id: "perf",
+        run: gates::perf,
+    },
     Step {
         num: "5",
         id: "ct",

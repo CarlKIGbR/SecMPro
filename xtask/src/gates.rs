@@ -162,28 +162,35 @@ pub(crate) fn kat(ctx: &Ctx) -> Result<Outcome> {
     // libcrux's build scripts compile its SIMD backends on aarch64 (NEON) and x86_64 (AVX2, chosen at run time),
     // so the run above tests the backend this host uses. A CPU without AVX2 runs the portable backend: the ML-KEM
     // KATs and the frozen vectors run again with the SIMD backends compiled out (own target directory, because
-    // the build scripts do not declare the variables and Cargo would reuse a stale build).
+    // the build scripts do not declare the variables and Cargo would reuse a stale build) — `secmp-crypto`'s M1
+    // suites and, from M3, the `tr` suite of `secmp-proto` (ML-KEM-768 at every ratchet step; docs/06 §5).
     let portable_dir = ctx.root.join("target").join("kat-portable");
-    Cmd::cargo()
-        .args([
+    for (package, tests) in [
+        ("secmp-crypto", &["kat_mlkem", "vectors"][..]),
+        ("secmp-proto", &["tr_vectors"][..]),
+    ] {
+        let mut args = vec![
             "nextest",
             "run",
             "--locked",
             "--package",
-            "secmp-crypto",
+            package,
             "--features",
             "kat",
-            "--test",
-            "kat_mlkem",
-            "--test",
-            "vectors",
-        ])
-        .env("LIBCRUX_DISABLE_SIMD128", "1")
-        .env("LIBCRUX_DISABLE_SIMD256", "1")
-        .env("CARGO_TARGET_DIR", portable_dir.to_string_lossy())
-        .run()?;
+        ];
+        for t in tests {
+            args.push("--test");
+            args.push(t);
+        }
+        Cmd::cargo()
+            .args(args)
+            .env("LIBCRUX_DISABLE_SIMD128", "1")
+            .env("LIBCRUX_DISABLE_SIMD256", "1")
+            .env("CARGO_TARGET_DIR", portable_dir.to_string_lossy())
+            .run()?;
+    }
     Ok(Outcome::Pass(format!(
-        "KAT/differential packages: {} (expected set matches); ML-KEM KATs and frozen vectors also with libcrux's portable backend",
+        "KAT/differential packages: {} (expected set matches); ML-KEM KATs and frozen vectors (M1 suites, tr) also with libcrux's portable backend",
         list(&found)
     )))
 }
@@ -244,6 +251,152 @@ pub(crate) fn ct(ctx: &Ctx) -> Result<Outcome> {
         bail!("{}", problems.join("; "));
     }
     Ok(Outcome::Pass(table.lines.join("; ")))
+}
+
+/// docs/07 M3 acceptance "encrypt+decrypt of a message < 3 ms" (M3 plan D11): `cargo run --release --locked -p
+/// secmp-proto --example tr-perf -- target/tr-perf.txt` (`crates/secmp-proto/examples/tr-perf.rs`: one session with
+/// OS randomness, `expect::TR_PERF_MESSAGES` timed messages of each kind of `expect::TR_PERF_KINDS`, each encrypt,
+/// persist, decrypt and commit), then the report is read (`tr_perf`) and every kind's **maximum** must stay below
+/// `expect::TR_PERF_MAX_MS` (`tr_perf_verdict`).
+pub(crate) fn perf(ctx: &Ctx) -> Result<Outcome> {
+    let report = ctx.root.join("target").join("tr-perf.txt");
+    if report.exists() {
+        std::fs::remove_file(&report)?;
+    }
+    let run = Cmd::cargo()
+        .args([
+            "run",
+            "--release",
+            "--locked",
+            "-p",
+            "secmp-proto",
+            "--example",
+            "tr-perf",
+            "--",
+            "target/tr-perf.txt",
+        ])
+        .dir(&ctx.root)
+        .run();
+    let text = match std::fs::read_to_string(&report) {
+        Ok(text) => text,
+        Err(e) => {
+            // a build failure or a crash: its error first
+            run?;
+            bail!("perf: no report written ({e})");
+        }
+    };
+    for line in text.lines() {
+        say(&format!("  tr-perf {line}"));
+    }
+    // an `error=` line (the example's reason) before the bare exit status
+    let perf = tr_perf(&text)?;
+    run?;
+    Ok(Outcome::Pass(tr_perf_verdict(&perf)?))
+}
+
+/// The `perf` report of `tr-perf`: the host triple, the message count and, per kind of `expect::TR_PERF_KINDS`,
+/// (kind, median µs, maximum µs).
+#[derive(Debug, PartialEq)]
+pub(crate) struct TrPerf {
+    pub(crate) host: String,
+    pub(crate) n: usize,
+    pub(crate) kinds: Vec<(String, f64, f64)>,
+}
+
+/// Read the `key=value` lines of a `tr-perf` report: exactly the keys `host`, `n`, `warmup` and, for every kind of
+/// `expect::TR_PERF_KINDS`, `<kind>_median_us` and `<kind>_max_us`, each once; `n` = `expect::TR_PERF_MESSAGES`; every
+/// time finite, non-negative and the median at most the maximum. An `error=` line is the example's failure.
+pub(crate) fn tr_perf(text: &str) -> Result<TrPerf> {
+    let mut values = std::collections::BTreeMap::new();
+    for line in text.lines().filter(|l| !l.trim().is_empty()) {
+        let Some((key, value)) = line.split_once('=') else {
+            bail!("tr-perf: not a key=value line: {line:?}");
+        };
+        if key == "error" {
+            bail!("tr-perf failed: {value}");
+        }
+        if values.insert(key, value).is_some() {
+            bail!("tr-perf: {key} given twice");
+        }
+    }
+    let mut keys = vec!["host".to_owned(), "n".to_owned(), "warmup".to_owned()];
+    for kind in expect::TR_PERF_KINDS {
+        keys.push(format!("{kind}_median_us"));
+        keys.push(format!("{kind}_max_us"));
+    }
+    let found: BTreeSet<String> = values.keys().map(|k| (*k).to_owned()).collect();
+    same_set(
+        "tr-perf report keys",
+        &found,
+        &keys.iter().map(String::as_str).collect::<Vec<_>>(),
+    )?;
+    let get = |key: &str| values.get(key).copied().unwrap_or_default();
+    let n: usize = get("n")
+        .parse()
+        .map_err(|_| Error(format!("tr-perf: n = {:?} is not a count", get("n"))))?;
+    if n != expect::TR_PERF_MESSAGES {
+        bail!(
+            "tr-perf: {n} messages per kind, expect::TR_PERF_MESSAGES is {}",
+            expect::TR_PERF_MESSAGES
+        );
+    }
+    get("warmup").parse::<usize>().map_err(|_| {
+        Error(format!(
+            "tr-perf: warmup = {:?} is not a count",
+            get("warmup")
+        ))
+    })?;
+    let micros = |key: String| -> Result<f64> {
+        match get(&key).parse::<f64>() {
+            Ok(x) if x.is_finite() && x >= 0.0 => Ok(x),
+            _ => bail!("tr-perf: {key} = {:?} is not a time in µs", get(&key)),
+        }
+    };
+    let mut kinds = Vec::new();
+    for kind in expect::TR_PERF_KINDS {
+        let median = micros(format!("{kind}_median_us"))?;
+        let max = micros(format!("{kind}_max_us"))?;
+        if median > max {
+            bail!("tr-perf: {kind} median {median} µs above its maximum {max} µs");
+        }
+        kinds.push(((*kind).to_owned(), median, max));
+    }
+    Ok(TrPerf {
+        host: get("host").to_owned(),
+        n,
+        kinds,
+    })
+}
+
+/// The `perf` verdict: every kind's maximum below `expect::TR_PERF_MAX_MS` (a maximum of exactly the limit fails).
+pub(crate) fn tr_perf_verdict(perf: &TrPerf) -> Result<String> {
+    let limit_us = expect::TR_PERF_MAX_MS * 1000.0;
+    let rows: Vec<String> = perf
+        .kinds
+        .iter()
+        .map(|(kind, median, max)| format!("{kind}: median {median:.1} µs, max {max:.1} µs"))
+        .collect();
+    let slow: Vec<String> = perf
+        .kinds
+        .iter()
+        .filter(|(_, _, max)| *max >= limit_us)
+        .map(|(kind, _, max)| format!("{kind} maximum {max:.1} µs"))
+        .collect();
+    if !slow.is_empty() {
+        bail!(
+            "encrypt+decrypt of a message must stay below {} ms (docs/07 M3): {} ({})",
+            expect::TR_PERF_MAX_MS,
+            slow.join(", "),
+            rows.join("; ")
+        );
+    }
+    Ok(format!(
+        "encrypt+persist+decrypt+commit per message, {} messages per kind on {}: {}; every maximum below {} ms",
+        perf.n,
+        perf.host,
+        rows.join("; "),
+        expect::TR_PERF_MAX_MS
+    ))
 }
 
 // ---- steps 6–10 ------------------------------------------------------------------------------------------
@@ -344,8 +497,9 @@ fn fuzz_with(ctx: &Ctx, seconds: u64) -> Result<(String, String)> {
 }
 
 /// The arguments of `cargo fuzz run` for target `t` (M2 review F7, F18): the scratch corpus first (libFuzzer's
-/// output directory), the tracked corpus second (read only), then the libFuzzer options — the time budget and the
-/// target's `-max_len`. Paths are relative to the workspace root, where the command runs.
+/// output directory), the tracked corpus second (read only), then the libFuzzer options — the time budget, the
+/// target's `-max_len` and the per-input `-timeout` (`expect::FUZZ_INPUT_TIMEOUT_SECONDS`, M3). Paths are relative
+/// to the workspace root, where the command runs.
 pub(crate) fn fuzz_args(t: &str, seconds: u64) -> Result<Vec<String>> {
     Ok(vec![
         "fuzz".to_owned(),
@@ -358,6 +512,7 @@ pub(crate) fn fuzz_args(t: &str, seconds: u64) -> Result<Vec<String>> {
         "--".to_owned(),
         format!("-max_total_time={seconds}"),
         format!("-max_len={}", fuzz_max_len(t)?),
+        format!("-timeout={}", expect::FUZZ_INPUT_TIMEOUT_SECONDS),
     ])
 }
 
@@ -696,10 +851,13 @@ fn miri_with(ctx: &Ctx, skip: &[(&str, &str, &str)]) -> Result<Outcome> {
             .ws
             .member(p)
             .ok_or_else(|| Error(format!("miri: {p} is not a workspace member")))?;
+        // Test targets with `required-features` (M3: the `kat`-only `tr` vector, generator and property suites) are
+        // not built by a Miri run without features; they run natively in the `kat` step. Naming one with `--test`
+        // would make cargo refuse the whole run.
         let test_targets: Vec<String> = package
             .targets
             .iter()
-            .filter(|t| t.kinds.iter().any(|k| k == "test"))
+            .filter(|t| t.kinds.iter().any(|k| k == "test") && t.required_features.is_empty())
             .map(|t| t.name.clone())
             .collect();
         let has_lib = package
@@ -900,23 +1058,109 @@ pub(crate) fn proverif(ctx: &Ctx) -> Result<Outcome> {
     }
     let models = file_stems(&ctx.root.join("formal"), "pv")?;
     same_set("ProVerif models", &models, expect::PROVERIF_MODELS)?;
+    let mut summaries = Vec::new();
     for m in &models {
-        // M3+: each model's verdicts are compared with formal/CLAIMS.md (fixed by the reviewer).
+        // each model's verdicts against formal/CLAIMS.md (fixed by the reviewer), as expect::PROVERIF_EXPECTED
         let path = ctx.root.join("formal").join(format!("{m}.pv"));
+        let started = std::time::Instant::now();
         let cap = proverif_cmd().arg(path.to_string_lossy()).capture()?;
+        let seconds = started.elapsed().as_secs();
         if !cap.success {
+            say(cap.stderr.trim_end());
             bail!("ProVerif failed on formal/{m}.pv");
         }
-        say(&format!(
-            "  formal/{m}.pv: {:?}",
-            proverif_results(&cap.stdout)
-        ));
+        let checked = proverif_check(m, &cap.stdout);
+        if checked.is_err() {
+            for line in cap
+                .stdout
+                .lines()
+                .filter(|l| l.trim_start().starts_with("RESULT"))
+            {
+                say(&format!("  {line}"));
+            }
+        }
+        let summary = format!("{} ({seconds} s)", checked?);
+        say(&format!("  {summary}"));
+        summaries.push(summary);
     }
     Ok(Outcome::Pass(format!(
-        "ProVerif {} self-test [true, false] ok; models: {} (expected set matches)",
+        "ProVerif {} self-test [true, false] ok; models: {} (expected set matches); {}",
         tools::PROVERIF_VERSION,
-        list(&models)
+        list(&models),
+        summaries.join("; ")
     )))
+}
+
+/// Step 10 per model (M3 plan D10): the verdicts of one ProVerif run's `RESULT` lines (`proverif_results`) against
+/// the model's runs in `expect::PROVERIF_EXPECTED`, line by line — the number of lines must match; a line expected
+/// true must say "is true.", a line expected false "is false." (ProVerif reports an attack); an informative line may
+/// say anything. Every other outcome fails, naming the line and its `formal/CLAIMS.md` ID. Returns the summary per ID.
+pub(crate) fn proverif_check(model: &str, output: &str) -> Result<String> {
+    use expect::Proved;
+    let Some((_, runs)) = expect::PROVERIF_EXPECTED.iter().find(|(m, _)| *m == model) else {
+        bail!("formal/{model}.pv: no expected verdicts in expect::PROVERIF_EXPECTED");
+    };
+    let expected: Vec<(&str, Proved)> = runs
+        .iter()
+        .flat_map(|(id, lines, proved)| std::iter::repeat_n((*id, *proved), *lines))
+        .collect();
+    let got = proverif_results(output);
+    let said = |v: Option<bool>| match v {
+        Some(true) => "true",
+        Some(false) => "false",
+        None => "neither true nor false (e.g. cannot be proved)",
+    };
+    let mut problems = Vec::new();
+    if got.len() != expected.len() {
+        problems.push(format!(
+            "{} RESULT lines, expected {}",
+            got.len(),
+            expected.len()
+        ));
+    }
+    for (line, ((id, want), verdict)) in (1_usize..).zip(expected.iter().zip(&got)) {
+        let wanted = match want {
+            Proved::True if *verdict != Some(true) => Some("true (proved)"),
+            Proved::False if *verdict != Some(false) => Some("false (ProVerif reports an attack)"),
+            _ => None,
+        };
+        if let Some(wanted) = wanted {
+            problems.push(format!(
+                "RESULT line {line} ({id}) is {}, expected {wanted}",
+                said(*verdict)
+            ));
+        }
+    }
+    if !problems.is_empty() {
+        bail!(
+            "formal/{model}.pv against expect::PROVERIF_EXPECTED: {}",
+            problems.join("; ")
+        );
+    }
+    let mut at = 0_usize;
+    let mut per_id = Vec::new();
+    for (id, lines, proved) in *runs {
+        let end = at.saturating_add(*lines);
+        let mut verdicts: Vec<&str> = got
+            .get(at..end)
+            .unwrap_or_default()
+            .iter()
+            .map(|v| said(*v))
+            .collect();
+        verdicts.dedup();
+        let note = match proved {
+            Proved::True => "",
+            Proved::False => ", an attack as expected",
+            Proved::Informative => ", informative",
+        };
+        per_id.push(format!("{id} {} ×{lines}{note}", verdicts.join("/")));
+        at = end;
+    }
+    Ok(format!(
+        "formal/{model}.pv: {} RESULT lines as expected — {}",
+        got.len(),
+        per_id.join(", ")
+    ))
 }
 
 // ---- step 11: Windows and Linux targets -----------------------------------------------------------------------
@@ -1379,6 +1623,255 @@ mod tests {
         assert_eq!(proverif_results(out), vec![Some(true), Some(false), None]);
     }
 
+    /// A ProVerif output whose `RESULT` lines say `verdicts` (`None`: "cannot be proved"), with the other lines a run
+    /// prints around them (the summary repeats every query as `Query …`, which the gate does not read).
+    fn proverif_output(verdicts: &[Option<bool>]) -> String {
+        let said = |v: &Option<bool>| match v {
+            Some(true) => "is true.",
+            Some(false) => "is false.",
+            None => "cannot be proved.",
+        };
+        let queries = verdicts.iter().enumerate().map(|(i, v)| {
+            format!(
+                "-- Query not attacker_p1(content(s,st{i},c0)) in process 1.\nRESULT not attacker_p1(content(s,st{i},c0)) {}",
+                said(v)
+            )
+        });
+        let summary = verdicts
+            .iter()
+            .enumerate()
+            .map(|(i, v)| format!("\nQuery not attacker_p1(content(s,st{i},c0)) {}", said(v)));
+        std::iter::once("Process 0 (that is, the initial process):".to_owned())
+            .chain(queries)
+            .chain(std::iter::once(
+                "--------------------------------------------------------------\nVerification summary:".to_owned(),
+            ))
+            .chain(summary)
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// The verdicts `formal/tr.pv` gives: every line as `expect::PROVERIF_EXPECTED` says, T12 false.
+    fn tr_verdicts() -> Vec<Option<bool>> {
+        let mut v = Vec::new();
+        for (id, lines, proved) in expect::PROVERIF_EXPECTED
+            .iter()
+            .filter(|(m, _)| *m == "tr")
+            .flat_map(|(_, runs)| runs.iter())
+        {
+            let verdict = match proved {
+                expect::Proved::True => Some(true),
+                expect::Proved::False => Some(false),
+                expect::Proved::Informative => {
+                    assert_eq!(*id, "T12");
+                    Some(false)
+                }
+            };
+            v.extend(std::iter::repeat_n(verdict, *lines));
+        }
+        v
+    }
+
+    /// M3 plan D10: `formal/tr.pv`'s 39 `RESULT` lines are compared positionally with `expect::PROVERIF_EXPECTED` —
+    /// the correct output passes with a summary per ID; a true query turning false, a false query turning true, a
+    /// "cannot be proved" line, a missing and an extra line are each refused, naming the ID; the informative T12 may
+    /// say anything; a model without a table is refused.
+    #[test]
+    fn proverif_verdicts_against_the_claims_table() -> Result<()> {
+        let good = tr_verdicts();
+        assert_eq!(good.len(), 39);
+        let summary = proverif_check("tr", &proverif_output(&good))?;
+        assert!(
+            summary.starts_with(
+                "formal/tr.pv: 39 RESULT lines as expected — T1 true ×6, T2 true ×2, T3 true ×4"
+            ) && summary.contains("T7 false ×2, an attack as expected")
+                && summary.contains(
+                    "T8 true ×12, T9 true ×4, T10 false ×1, an attack as expected, T11 true ×1"
+                )
+                && summary.ends_with("T12 false ×1, informative"),
+            "{summary}"
+        );
+        let refused = |verdicts: &[Option<bool>], expected: &str| -> Result<()> {
+            match proverif_check("tr", &proverif_output(verdicts)) {
+                Ok(s) => bail!("accepted: {s}"),
+                Err(e) if e.0.contains(expected) => Ok(()),
+                Err(e) => bail!("refused for another reason: {e}"),
+            }
+        };
+        // T1 (line 1) turns false
+        let mut v = good.clone();
+        *v.first_mut().ok_or_else(|| Error("empty".into()))? = Some(false);
+        refused(&v, "RESULT line 1 (T1) is false, expected true (proved)")?;
+        // T7 (line 19) turns true: the attack is no longer found
+        let mut v = good.clone();
+        *v.get_mut(18).ok_or_else(|| Error("short".into()))? = Some(true);
+        refused(
+            &v,
+            "RESULT line 19 (T7) is true, expected false (ProVerif reports an attack)",
+        )?;
+        // T10 (line 37) turns true
+        let mut v = good.clone();
+        *v.get_mut(36).ok_or_else(|| Error("short".into()))? = Some(true);
+        refused(&v, "RESULT line 37 (T10) is true, expected false")?;
+        // T11 (line 38) cannot be proved; so can a sanity query (T7) not be decided
+        let mut v = good.clone();
+        *v.get_mut(37).ok_or_else(|| Error("short".into()))? = None;
+        refused(
+            &v,
+            "RESULT line 38 (T11) is neither true nor false (e.g. cannot be proved), expected true",
+        )?;
+        let mut v = good.clone();
+        *v.get_mut(19).ok_or_else(|| Error("short".into()))? = None;
+        refused(&v, "RESULT line 20 (T7) is neither true nor false")?;
+        // a missing line (the last one, T12) and an extra line
+        let mut v = good.clone();
+        v.pop();
+        refused(&v, "38 RESULT lines, expected 39")?;
+        let mut v = good.clone();
+        v.push(Some(true));
+        refused(&v, "40 RESULT lines, expected 39")?;
+        // a line missing in the middle shifts every later one: refused by the count and by the first shifted ID
+        let mut v = good.clone();
+        v.remove(18);
+        refused(&v, "38 RESULT lines, expected 39")?;
+        refused(&v, "RESULT line 20 (T7) is true, expected false")?;
+        refused(&v, "RESULT line 36 (T9) is false, expected true")?;
+        // the informative T12 may say anything
+        for t12 in [Some(true), None] {
+            let mut v = good.clone();
+            *v.last_mut().ok_or_else(|| Error("empty".into()))? = t12;
+            assert!(proverif_check("tr", &proverif_output(&v))?.ends_with(", informative"));
+        }
+        // no RESULT line at all, and a model without an expected table
+        refused(&[], "0 RESULT lines, expected 39")?;
+        assert!(proverif_check("hx", &proverif_output(&good)).is_err());
+        Ok(())
+    }
+
+    /// `expect::PROVERIF_EXPECTED` covers exactly `expect::PROVERIF_MODELS`, and the `tr` table follows the rows of
+    /// `formal/CLAIMS.md` §TR: the IDs in order, each once, and each run's verdict as the row's "Expected" column says
+    /// ("true"; "**false**", possibly with a remark; "… not a gate" for the informative T12).
+    #[test]
+    fn proverif_table_follows_the_claims() -> Result<()> {
+        let tables: BTreeSet<String> = expect::PROVERIF_EXPECTED
+            .iter()
+            .map(|(m, _)| (*m).to_owned())
+            .collect();
+        same_set("PROVERIF_EXPECTED", &tables, expect::PROVERIF_MODELS)?;
+        let claims = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../formal/CLAIMS.md"),
+        )?;
+        let rows: Vec<(String, expect::Proved)> = claims
+            .lines()
+            .filter(|l| l.starts_with("| T"))
+            .map(|l| {
+                let cells: Vec<&str> = l.split('|').map(str::trim).collect();
+                let id = cells.get(1).copied().unwrap_or_default().to_owned();
+                let column = cells.iter().rev().find(|c| !c.is_empty()).copied();
+                let proved = match column {
+                    Some("true") => Ok(expect::Proved::True),
+                    Some(c) if c.contains("not a gate") => Ok(expect::Proved::Informative),
+                    Some(c) if c.starts_with("**false**") => Ok(expect::Proved::False),
+                    other => Err(Error(format!("{id}: unknown Expected column {other:?}"))),
+                };
+                proved.map(|p| (id, p))
+            })
+            .collect::<Result<_>>()?;
+        let table: Vec<(String, expect::Proved)> = expect::PROVERIF_EXPECTED
+            .iter()
+            .filter(|(m, _)| *m == "tr")
+            .flat_map(|(_, runs)| runs.iter())
+            .map(|(id, lines, proved)| {
+                assert!(*lines >= 1, "{id}: no line");
+                ((*id).to_owned(), *proved)
+            })
+            .collect();
+        assert_eq!(rows.len(), 12);
+        assert_eq!(table, rows);
+        Ok(())
+    }
+
+    /// A `tr-perf` report as the example writes it.
+    const TR_PERF: &str = "host=aarch64-apple-darwin\nn=200\nwarmup=20\nchain_median_us=62.5\nchain_max_us=86.2\nstep_median_us=227.4\nstep_max_us=383.3\n";
+
+    /// M3 plan D11: the `perf` report is read strictly and every kind's maximum must stay below 3 ms.
+    #[test]
+    fn tr_perf_report_and_verdict() -> Result<()> {
+        let perf = tr_perf(TR_PERF)?;
+        assert_eq!(
+            perf,
+            TrPerf {
+                host: "aarch64-apple-darwin".to_owned(),
+                n: 200,
+                kinds: vec![
+                    ("chain".to_owned(), 62.5, 86.2),
+                    ("step".to_owned(), 227.4, 383.3)
+                ],
+            }
+        );
+        let verdict = tr_perf_verdict(&perf)?;
+        assert!(
+            verdict.contains(
+                "chain: median 62.5 µs, max 86.2 µs; step: median 227.4 µs, max 383.3 µs"
+            ) && verdict.ends_with("every maximum below 3 ms"),
+            "{verdict}"
+        );
+        // the verdict is on the maximum: 2999.9 µs passes, 3000.0 µs (= 3 ms) fails, whatever the median
+        let with = |key: &str, value: &str| -> String {
+            TR_PERF
+                .lines()
+                .map(|l| match l.split_once('=') {
+                    Some((k, _)) if k == key => format!("{k}={value}"),
+                    _ => l.to_owned(),
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        assert!(tr_perf_verdict(&tr_perf(&with("step_max_us", "2999.9"))?).is_ok());
+        let slow = tr_perf_verdict(&tr_perf(&with("step_max_us", "3000.0"))?);
+        assert!(
+            slow.as_ref().is_err_and(
+                |e| e.0.contains("below 3 ms") && e.0.contains("step maximum 3000.0 µs")
+            ),
+            "{slow:?}"
+        );
+        assert!(tr_perf_verdict(&tr_perf(&with("chain_max_us", "12000"))?).is_err());
+        // refused reports
+        for (bad, why) in [
+            (with("n", "20"), "20 messages per kind"),
+            (with("n", "x"), "is not a count"),
+            (with("warmup", "-1"), "is not a count"),
+            (with("chain_max_us", "NaN"), "is not a time"),
+            (with("chain_max_us", "-1"), "is not a time"),
+            (
+                with("step_median_us", "400"),
+                "median 400 µs above its maximum",
+            ),
+            (
+                TR_PERF.replace("step_max_us=383.3\n", ""),
+                "missing: [\"step_max_us\"]",
+            ),
+            (
+                format!("{TR_PERF}extra_us=1\n"),
+                "unexpected: [\"extra_us\"]",
+            ),
+            (format!("{TR_PERF}n=200\n"), "n given twice"),
+            (format!("{TR_PERF}garbage\n"), "not a key=value line"),
+            (
+                "error=encrypt refused\n".to_owned(),
+                "tr-perf failed: encrypt refused",
+            ),
+            (String::new(), "missing"),
+        ] {
+            let got = tr_perf(&bad);
+            assert!(
+                got.as_ref().is_err_and(|e| e.0.contains(why)),
+                "{why}: {got:?}"
+            );
+        }
+        Ok(())
+    }
+
     #[test]
     fn systemd_levels() {
         let out = "  NAME  DESCRIPTION  EXPOSURE\n→ Overall exposure level for weak.service: 9.6 UNSAFE 😨\n";
@@ -1565,9 +2058,9 @@ mod tests {
     #[test]
     fn kani_refuses_fifteen_harnesses() -> Result<()> {
         let all = expect::KANI_HARNESSES;
-        assert_eq!(all.len(), 16);
-        assert_eq!(kani_verified(&kani_log(all, 0))?.len(), 16);
-        // a deleted harness: 15 verified, and Kani's own summary says 15 of 15
+        assert_eq!(all.len(), 19);
+        assert_eq!(kani_verified(&kani_log(all, 0))?.len(), 19);
+        // a deleted harness: 18 verified, and Kani's own summary says 18 of 18
         let fifteen = all.get(1..).unwrap_or_default();
         assert!(kani_verified(&kani_log(fifteen, 0)).is_err());
         // a renamed harness, a failure, a harness counted twice, no summary
@@ -1618,6 +2111,7 @@ mod tests {
                 "--",
                 "-max_total_time=120",
                 "-max_len=65644",
+                "-timeout=60",
             ]
         );
         for (t, max_len) in expect::FUZZ_MAX_LEN {
@@ -1637,7 +2131,8 @@ mod tests {
                 Some(
                     [
                         "-max_total_time=1200".to_owned(),
-                        format!("-max_len={max_len}")
+                        format!("-max_len={max_len}"),
+                        "-timeout=60".to_owned()
                     ]
                     .as_slice()
                 )
@@ -1765,7 +2260,7 @@ mod tests {
         assert_eq!(expect::FUZZ_NIGHTLY_SECONDS, 14_400);
         assert_eq!(
             nightly_seconds_per_target(expect::FUZZ_NIGHTLY_SECONDS, expect::FUZZ_TARGETS.len())?,
-            14_400 / 12
+            14_400 / 14
         );
         assert_eq!(nightly_seconds_per_target(14_400, 14)?, 1028);
         assert!(nightly_seconds_per_target(14_400, 0).is_err());

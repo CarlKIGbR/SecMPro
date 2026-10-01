@@ -29,6 +29,27 @@ rand.workspace = true
 name = "tr_vectors"
 required-features = ["kat"]
 
+# The `tr` property tests track every message key (`message_key_digest_kat`) and derandomise the ratchet
+# (`FixedEntropy`): feature `kat`.
+[[test]]
+name = "tr_properties"
+required-features = ["kat"]
+
+# The Rust generator of the `tr` vectors (`tests/common/tr.rs`) against the vector file, and the example that writes
+# `vectors/rust/tr.json` for `cargo xtask vectors`; both need feature `kat`.
+[[test]]
+name = "tr_generator"
+required-features = ["kat"]
+
+[[example]]
+name = "gen-tr"
+required-features = ["kat"]
+
+# The performance measurement of M3 (plan D11: encrypt + decrypt < 3 ms), OS randomness, feature `kat` off; run in
+# the release profile by `cargo xtask step perf`.
+[[example]]
+name = "tr-perf"
+
 [lints]
 workspace = true
 

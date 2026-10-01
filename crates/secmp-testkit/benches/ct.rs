@@ -30,6 +30,18 @@
 //! - `caead_open_reject_samekey`: `Caead::open` with the right key in both classes, ciphertext tampered at byte
 //!   100 vs byte 300 (`COM` matches and the tag fails in both).
 //!
+//! SecMP-TR targets (M3 plan D9): `RatchetState::decrypt_with` rejecting a cell, on one fixed receiver state with a
+//! current receiving chain (A → B, two messages delivered; the states built with `FixedEntropy` from the bench's
+//! stream). The state lives outside the timed input: every call takes it, decrypts and puts back the unchanged state
+//! of the refusal (an accepted cell aborts the bench). The cells of both classes are built from A's next, not yet
+//! delivered cell of that chain (n = 2):
+//! - `tr_decrypt_reject_hdr_key`: the header sealed under a wrong key vs sealed under `hk_r` with the last byte of
+//!   the header tag flipped (no candidate key opens it in either class; spec §7.4 trial decryption);
+//! - `tr_decrypt_reject_body_tag`: the honest header under `hk_r`, the body tag wrong in byte 0 vs byte 31 (the body
+//!   MAC rejects);
+//! - `tr_decrypt_reject_ct_pq`: a header under `hk_r` whose `ct_pq` differs from `last_ct_r` in byte 0 vs byte 1087,
+//!   the body unchanged (the KEM-constancy check rejects).
+//!
 //! The A/A′ placement control `aa_prime_control` (ADR-042 (2), M2 review F6) is measured and judged like a target:
 //! `MsgEncrypt::open` rejecting a tag wrong in its last byte with identical contents in both classes, class 0 copied
 //! from one source allocation and class 1 from another — the one deliberate exception to the source rule below. If it
@@ -122,9 +134,15 @@ use std::time::{Duration, Instant};
 use chacha20poly1305::aead::AeadInOut;
 use chacha20poly1305::{KeyInit, Tag, XChaCha20Poly1305, XNonce};
 use secmp_crypto::{
-    AEAD_TAG_LEN, BODY_LEN, COM_LEN, Caead, Fingerprint, Label, MsgEncrypt, Nonce24, SafetyNumber,
-    SecretBytes, hkdf_expand,
+    AEAD_TAG_LEN, Aead, BODY_LEN, COM_LEN, Caead, Fingerprint, Label, MSG_TAG_LEN, MlKem768Dk,
+    MsgEncrypt, Nonce24, SafetyNumber, SecretBytes, X25519Secret, Zeroizing, hkdf_expand,
 };
+use secmp_proto::keys::{MlKem768Ek, X25519Pk};
+use secmp_proto::sizes::{HDR_CT_LEN, NONCE_LEN};
+use secmp_proto::tr::content::dummy;
+use secmp_proto::tr::{FixedEntropy, RatchetState};
+use secmp_proto::wire::cell::HeaderV1;
+use secmp_proto::{Decode, Encode};
 use sha3::Shake256;
 use sha3::digest::{ExtendableOutput, Update, XofReader};
 use subtle::ConstantTimeEq;
@@ -1587,6 +1605,236 @@ fn sas(n: usize, k: usize, stream: &mut Stream) -> Samples {
     )
 }
 
+// ---- SecMP-TR targets (M3 plan D9) -----------------------------------------------------------------------------
+
+/// Randomness of A (`FixedEntropy`, SCHEMA-4.9 order): `init_initiator` (X25519 secret 32, ML-KEM-768 seed 64,
+/// `Encaps` 32) and three header nonces (24 each).
+const TR_A_RANDOMNESS: usize = 200;
+/// Randomness of B: the sending half of its DH step on A's first message (32 + 64 + 32).
+const TR_B_RANDOMNESS: usize = 128;
+
+/// Set when a TR target's cell was accepted: the bench aborts (`main` writes the reason instead of a report).
+static TR_ACCEPTED: AtomicBool = AtomicBool::new(false);
+
+/// The fixture of the TR targets: B's state with a current receiving chain and A's next cell of that chain.
+struct TrSession {
+    /// B after A's messages n = 0 (B's DH step) and n = 1: `hk_r`, `ck_r`, `last_ct_r` of A's chain, `n_r = 2`.
+    receiver: RatchetState,
+    /// A's honest cell n = 2 of that chain, not delivered.
+    cell: Vec<u8>,
+    /// A's `hk_s` (= B's `hk_r`).
+    hk: SecretBytes<32>,
+    /// The header's `AD = "SecMP-TR/1 hdr" ‖ sb` (spec §7.3).
+    hdr_ad: Vec<u8>,
+}
+
+/// A secmp-proto error as the bench's error.
+fn crypto_error(e: secmp_proto::Error) -> secmp_crypto::Error {
+    match e {
+        secmp_proto::Error::Rejected => secmp_crypto::Error::Rejected,
+        secmp_proto::Error::Unavailable => secmp_crypto::Error::Unavailable,
+    }
+}
+
+/// `n` random bytes from the stream.
+fn drawn(stream: &mut Stream, n: usize) -> Zeroizing<Vec<u8>> {
+    let mut bytes = Zeroizing::new(vec![0_u8; n]);
+    stream.fill(&mut bytes);
+    bytes
+}
+
+/// A → B, three cells; B receives the first two. `SK`, `sb`, B's prekeys and both parties' randomness come from the
+/// stream (`FixedEntropy`: the states are a deterministic function of it). Checks that B's `hk_r` is A's `hk_s` and
+/// that the undelivered cell opens on a copy of B, so that each class below is refused for its manipulation alone.
+fn tr_session(stream: &mut Stream) -> Result<TrSession, secmp_proto::Error> {
+    let sk = SecretBytes::<32>::from_slice(&drawn(stream, 32))?;
+    let mut sb = [0_u8; 32];
+    stream.fill(&mut sb);
+    let spk = X25519Secret::from_bytes(&drawn(stream, 32))?;
+    let rpk = MlKem768Dk::from_seed(&drawn(stream, 64))?;
+    let spk_pub = X25519Pk::from_bytes(spk.public_key().as_bytes())?;
+    let rpk_ek = MlKem768Ek::from_bytes(rpk.encapsulation_key().as_bytes())?;
+    let mut a_entropy = FixedEntropy::new(&drawn(stream, TR_A_RANDOMNESS));
+    let mut b_entropy = FixedEntropy::new(&drawn(stream, TR_B_RANDOMNESS));
+    let mut a = RatchetState::init_initiator_with(&sk, &sb, &spk_pub, &rpk_ek, &mut a_entropy)?;
+    let mut b = RatchetState::init_responder(&sk, &sb, spk, rpk)?;
+    let mut cells = Vec::new();
+    for _ in 0..3 {
+        let (next, cell) = a
+            .encrypt_with(&dummy(), &mut a_entropy)
+            .map_err(|r| r.error())?
+            .persist(|_| Ok::<(), secmp_proto::Error>(()))?;
+        a = next;
+        cells.push(cell);
+    }
+    let [c0, c1, c2] = cells.as_slice() else {
+        return Err(secmp_proto::Error::Rejected);
+    };
+    for cell in [c0, c1] {
+        (b, _) = b
+            .decrypt_with(cell.as_bytes(), &mut b_entropy)
+            .map_err(|r| r.error())?
+            .commit(|_| Ok::<(), secmp_proto::Error>(()))?;
+    }
+    let (Some(hk_s), (Some(hk_r), _)) = (a.hk_s_kat(), b.receiving_header_keys_kat()) else {
+        return Err(secmp_proto::Error::Rejected);
+    };
+    if !bool::from(hk_s.ct_eq(hk_r)) {
+        return Err(secmp_proto::Error::Rejected);
+    }
+    let hk = SecretBytes::<32>::from_slice(hk_s.expose_secret())?;
+    let copy = RatchetState::from_bytes(&b.to_bytes()?)?;
+    copy.decrypt_with(c2.as_bytes(), &mut FixedEntropy::new(&[]))
+        .map_err(|r| r.error())?;
+    let hdr_ad = [Label::TrHdr.as_bytes(), b.sb_kat().as_slice()].concat();
+    Ok(TrSession {
+        receiver: b,
+        cell: c2.as_bytes().to_vec(),
+        hk,
+        hdr_ad,
+    })
+}
+
+/// `bytes[at] ^= 1`.
+fn flip(bytes: &mut [u8], at: usize) -> Result<(), secmp_proto::Error> {
+    let b = bytes.get_mut(at).ok_or(secmp_proto::Error::Rejected)?;
+    *b ^= 1;
+    Ok(())
+}
+
+/// A cell's `hdr_nonce`, `hdr_ct` and body (spec §7.5).
+type CellParts<'a> = (&'a [u8; NONCE_LEN], &'a [u8], &'a [u8]);
+
+impl TrSession {
+    /// The cell's `hdr_nonce`, `hdr_ct` and body.
+    fn parts(&self) -> Result<CellParts<'_>, secmp_proto::Error> {
+        let (nonce, rest) = self
+            .cell
+            .split_first_chunk::<NONCE_LEN>()
+            .ok_or(secmp_proto::Error::Rejected)?;
+        let (hdr_ct, body) = rest
+            .split_at_checked(HDR_CT_LEN)
+            .ok_or(secmp_proto::Error::Rejected)?;
+        Ok((nonce, hdr_ct, body))
+    }
+
+    /// The honest header plaintext, opened under `hk`.
+    fn header(&self) -> Result<Zeroizing<Vec<u8>>, secmp_proto::Error> {
+        let (nonce, hdr_ct, _) = self.parts()?;
+        Ok(Aead::open(&self.hk, nonce, &self.hdr_ad, hdr_ct)?)
+    }
+
+    /// The cell with `header` sealed under `key` with the cell's nonce, and the cell's body.
+    fn resealed(
+        &self,
+        key: &SecretBytes<32>,
+        header: &[u8],
+    ) -> Result<Vec<u8>, secmp_proto::Error> {
+        let (nonce, _, body) = self.parts()?;
+        let hdr_ct = Aead::seal(key, Nonce24::from_bytes_kat(*nonce), &self.hdr_ad, header)?;
+        Ok([nonce.as_slice(), &hdr_ct, body].concat())
+    }
+}
+
+/// The two classes of a TR target, class 0 first.
+type TrClasses = fn(&TrSession, &mut Stream) -> Result<[Vec<u8>; 2], secmp_proto::Error>;
+
+/// `tr_decrypt_reject_hdr_key`: class 0 the honest header sealed under a wrong key (from the stream), class 1 the
+/// honest cell with the last byte of the header tag flipped; nonce and body as the honest cell's.
+fn tr_hdr_key_classes(
+    s: &TrSession,
+    stream: &mut Stream,
+) -> Result<[Vec<u8>; 2], secmp_proto::Error> {
+    let wrong = SecretBytes::<32>::from_slice(&drawn(stream, 32))?;
+    let class0 = s.resealed(&wrong, &s.header()?)?;
+    let mut class1 = s.cell.clone();
+    let tag_end = NONCE_LEN
+        .checked_add(HDR_CT_LEN)
+        .and_then(|end| end.checked_sub(1))
+        .ok_or(secmp_proto::Error::Rejected)?;
+    flip(&mut class1, tag_end)?;
+    Ok([class0, class1])
+}
+
+/// `tr_decrypt_reject_body_tag`: the honest cell with the body tag (its last `MSG_TAG_LEN` bytes) wrong in byte 0
+/// (class 0) vs byte 31 (class 1).
+fn tr_body_tag_classes(s: &TrSession, _: &mut Stream) -> Result<[Vec<u8>; 2], secmp_proto::Error> {
+    let tag_at = s
+        .cell
+        .len()
+        .checked_sub(MSG_TAG_LEN)
+        .ok_or(secmp_proto::Error::Rejected)?;
+    let last = s
+        .cell
+        .len()
+        .checked_sub(1)
+        .ok_or(secmp_proto::Error::Rejected)?;
+    let mut class0 = s.cell.clone();
+    flip(&mut class0, tag_at)?;
+    let mut class1 = s.cell.clone();
+    flip(&mut class1, last)?;
+    Ok([class0, class1])
+}
+
+/// `tr_decrypt_reject_ct_pq`: the honest header with `ct_pq` changed in byte 0 (class 0) vs byte 1087 (class 1),
+/// re-sealed under `hk_r` with the cell's nonce; the body unchanged.
+fn tr_ct_pq_classes(s: &TrSession, _: &mut Stream) -> Result<[Vec<u8>; 2], secmp_proto::Error> {
+    let header = s.header()?;
+    let mut first = HeaderV1::decode(&header)?;
+    let mut last = HeaderV1::decode(&header)?;
+    *first
+        .ct_pq
+        .first_mut()
+        .ok_or(secmp_proto::Error::Rejected)? ^= 1;
+    *last.ct_pq.last_mut().ok_or(secmp_proto::Error::Rejected)? ^= 1;
+    Ok([
+        s.resealed(&s.hk, &first.encode()?)?,
+        s.resealed(&s.hk, &last.encode()?)?,
+    ])
+}
+
+/// One call of a TR target: take the receiver's state out of `slot`, decrypt `cell`, put back the unchanged state
+/// of the refusal. An accepted cell leaves the slot empty (every later call finds no state), which
+/// `tr_decrypt_reject` turns into an abort.
+fn tr_decrypt(slot: &RefCell<Option<RatchetState>>, entropy: &mut FixedEntropy, cell: &[u8]) {
+    let Ok(mut slot) = slot.try_borrow_mut() else {
+        return;
+    };
+    if let Some(state) = slot.take()
+        && let Err(refused) = black_box(state.decrypt_with(black_box(cell), entropy))
+    {
+        *slot = Some(refused.into_state());
+    }
+}
+
+/// A TR target: `RatchetState::decrypt_with` on one receiver state (`tr_session`), class 0 vs class 1 of
+/// `classes`, every input built from one common source with `blend` (class 1 the base). No call draws randomness
+/// (a rejection draws none, plan D2), so the entropy is empty. Aborts (`TR_ACCEPTED`) if any call accepted its cell.
+fn tr_decrypt_reject(
+    n: usize,
+    k: usize,
+    stream: &mut Stream,
+    classes: TrClasses,
+) -> Result<Samples, secmp_crypto::Error> {
+    let session = tr_session(stream).map_err(crypto_error)?;
+    let [class0, class1] = classes(&session, stream).map_err(crypto_error)?;
+    let delta = xor(&class0, &class1);
+    let slot = RefCell::new(Some(session.receiver));
+    let mut entropy = FixedEntropy::new(&[]);
+    let samples = measure(
+        n,
+        k,
+        stream,
+        |c, _| blended_vec(&class1, &delta, c),
+        |cell| tr_decrypt(&slot, &mut entropy, cell),
+    );
+    if slot.into_inner().is_none() {
+        TR_ACCEPTED.store(true, Ordering::Relaxed);
+        return Err(secmp_crypto::Error::Rejected);
+    }
+    Ok(samples)
+}
+
 /// `SECMP_CT_SCALE` if set (local quick runs only; echoed in the report, refused by the gate).
 fn ct_scale() -> Option<String> {
     std::env::var("SECMP_CT_SCALE").ok()
@@ -1680,6 +1928,39 @@ fn targets(n: usize, n_sas: usize) -> [Target; 10] {
     ]
 }
 
+/// The SecMP-TR targets (M3 plan D9), measured after `targets`, `n` samples per measurement.
+fn tr_targets(n: usize) -> [Target; 3] {
+    [
+        Target {
+            name: "tr_decrypt_reject_hdr_key",
+            classes: [
+                "header sealed under a wrong key",
+                "header sealed under hk_r, its tag's last byte flipped",
+            ],
+            samples: n,
+            control: false,
+            run: |n, k, s| tr_decrypt_reject(n, k, s, tr_hdr_key_classes),
+        },
+        Target {
+            name: "tr_decrypt_reject_body_tag",
+            classes: ["body tag wrong in byte 0", "body tag wrong in byte 31"],
+            samples: n,
+            control: false,
+            run: |n, k, s| tr_decrypt_reject(n, k, s, tr_body_tag_classes),
+        },
+        Target {
+            name: "tr_decrypt_reject_ct_pq",
+            classes: [
+                "ct_pq differs from last_ct_r in byte 0",
+                "ct_pq differs from last_ct_r in byte 1087",
+            ],
+            samples: n,
+            control: false,
+            run: |n, k, s| tr_decrypt_reject(n, k, s, tr_ct_pq_classes),
+        },
+    ]
+}
+
 /// Every target (`evaluate`), then the inline A/A control over the full target set (ADR-041 (3)) and the
 /// sensitivity control (Amendment 1 (2)); the third value is the reason of a `CONTROL_FAIL` run (either control
 /// failed, or the A/A′ placement control gave FAIL, ADR-042; every target verdict is then `CONTROL_FAIL`).
@@ -1692,7 +1973,7 @@ fn run(
     let n = rules.samples.checked_div(scale).unwrap_or(1);
     let n_sas = rules.sas_samples.checked_div(scale).unwrap_or(1);
     let mut out = Vec::new();
-    for target in targets(n, n_sas) {
+    for target in targets(n, n_sas).into_iter().chain(tr_targets(n)) {
         out.push(evaluate(target, &mut stream, &clock, rules)?);
     }
     let aa_fail = aa_control(&mut out, &mut stream, &clock, rules)?;
@@ -1863,6 +2144,13 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     };
     let Ok((clock, outcomes, control_fail, sensitivity)) = run(rules) else {
+        // the gate prints the reason of an aborted run (`ctreport::ct_table_for` reads `error`)
+        let error = if TR_ACCEPTED.load(Ordering::Relaxed) {
+            "{\"error\":\"bench aborted: RatchetState::decrypt_with accepted a cell of a TR target, which must be rejected in both classes\"}"
+        } else {
+            "{\"error\":\"bench aborted: OS randomness or locked memory unavailable, or an input of the bench itself was refused\"}"
+        };
+        let _ = std::fs::write(path, error);
         return ExitCode::FAILURE;
     };
     // the run verdict (ADR-041, Amendment 1): CONTROL_FAIL if the inline A/A control or the sensitivity control

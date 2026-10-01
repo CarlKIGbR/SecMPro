@@ -5,7 +5,7 @@
 //! **Lifecycle (§6.1).** A new SPK generation (`SPK_dh`, `SPK_kem`, and its `RPK_kem`) every 7 days
 //! ([`SPK_ROTATION_S`]); generations are kept by `spk_id`, and **a generation referenced by an unexpired
 //! invitation is retained until that invitation expires** ([`MemoryPrekeyStore::retire_expired`]); its `RPK_kem`
-//! has the same lifetime. An OPK is used for exactly one invitation and deleted by [`PrekeyStore::delete_opk`]
+//! has the same lifetime. An OPK is used for exactly one invitation and deleted by [`PrekeyStore::commit_accept`]
 //! when a handshake with it succeeded (§6.6 step 4) or when its invitation expires.
 //!
 //! **Expiry is the record lifecycle's, not `accept`'s (ADR-044 (d)).** [`crate::hx::Responder::accept`] takes no
@@ -13,8 +13,8 @@
 //! each record that [`MemoryPrekeyStore::retire_expired`] returns.
 //!
 //! **Persistence.** The in-memory store is the reference for the trait; the encrypted store of M7 implements the
-//! same trait. `delete_opk` is the commit point of an accepted handshake: an implementation makes the deletion
-//! durable together with the new session state, and a failed `delete_opk` leaves the OPK in place (the handshake is
+//! same trait. `commit_accept` is the commit point of an accepted handshake: an implementation makes the deletion
+//! and the record's consumption durable together with the new session state, and a failed `commit_accept` leaves the OPK in place (the handshake is
 //! then rejected and the invitee's byte-identical retry is processed again, §6.5).
 
 use secmp_crypto::{
@@ -322,7 +322,7 @@ pub trait PrekeyStore {
     /// The unused one-time prekey `opk_id`.
     fn opk(&self, opk_id: u32) -> Option<&OpkSecrets>;
 
-    /// Delete the one-time prekey (§6.6 step 4: the commit of an accepted handshake).
+    /// Delete the one-time prekey (the OPK half of [`PrekeyStore::commit_accept`], §6.6 step 4).
     ///
     /// # Errors
     /// [`Error::Rejected`] if there is no such unused OPK (a second delete), or the deletion could not be made

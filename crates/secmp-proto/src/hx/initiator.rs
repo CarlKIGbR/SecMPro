@@ -199,14 +199,14 @@ impl Initiator {
     /// # Errors
     /// [`Error::Rejected`] if an input is refused (a zero X25519 output, an undecodable route, a Content beyond
     /// its bound); [`Error::Unavailable`] without randomness or locked memory. Nothing is sent or persisted.
-    pub fn start(
+    pub fn start<E: Entropy>(
         invitation: &InvitationV1,
         link_data: &LinkDataV1,
         own_keys: &InitiatorKeys<'_>,
         reply_routes: &[RouteDescriptor],
         profile: &Profile,
         now: u64,
-        entropy: &mut impl Entropy,
+        entropy: &mut E,
     ) -> Result<(HandshakeCells, RatchetState)> {
         let bundle = &link_data.bundle;
         let agreement = agree(invitation, link_data, own_keys, entropy)?;

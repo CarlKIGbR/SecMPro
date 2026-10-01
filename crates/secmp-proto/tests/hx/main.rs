@@ -13,10 +13,15 @@
 #[path = "../common/hx_gen.rs"]
 mod hx_gen;
 
+mod accept;
+mod accept_ok;
+mod build;
+mod envelope;
 mod fixture;
 mod flow;
 mod generator;
 mod inv;
 mod layout;
 mod scenario;
+mod store;
 mod vectors;

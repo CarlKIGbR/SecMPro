@@ -111,3 +111,53 @@ pub(crate) fn dh_checked(secret: &X25519Secret, peer: &[u8]) -> Result<SecretByt
 pub(crate) fn copy_route(route: &RouteDescriptor) -> Result<RouteDescriptor> {
     RouteDescriptor::decode(&route.encode()?)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// u = 0, 1, p − 1 and the two points of order 8 (RFC 7748 §6.1; spec §3, §4.1 (a)).
+    fn low_order() -> Vec<[u8; 32]> {
+        let hex = |s: &str| -> [u8; 32] {
+            let mut out = [0_u8; 32];
+            for (i, b) in out.iter_mut().enumerate() {
+                *b = u8::from_str_radix(&s[2 * i..2 * i + 2], 16).unwrap_or(0);
+            }
+            out
+        };
+        vec![
+            [0; 32],
+            hex("0100000000000000000000000000000000000000000000000000000000000000"),
+            hex("ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f"),
+            hex("e0eb7a7c3b41b8ae1656e3faf19fc46ada098deb9c32b1fd866205165f49b800"),
+            hex("5f9c95bca3508c24b1d0b1559c83ef5b04445cc4581c8e86d8224eddd09f1157"),
+        ]
+    }
+
+    /// N-24: the initiator's DH helper (DH1…DH4 of §6.4) refuses an all-zero output, bypassing the decoders; the
+    /// error is the uniform one and `start` has produced nothing (it returns before any cell is sealed).
+    #[test]
+    fn start_zero_dh_rejects_and_sends_nothing() {
+        let secret = X25519Secret::from_bytes(&[7; 32]);
+        let Ok(secret) = secret else {
+            return;
+        };
+        for v in low_order() {
+            assert_eq!(dh_checked(&secret, &v).err(), Some(Error::Rejected));
+        }
+        assert!(dh_checked(&secret, &[9; 32]).is_ok(), "control: an ordinary point");
+        assert_eq!(dh_checked(&secret, &[9; 31]).err(), Some(Error::Rejected), "length");
+    }
+
+    /// N-41: the same helper on the responder's DH1…DH4.
+    #[test]
+    fn accept_zero_dh_rejects_and_keeps_opk() {
+        let secret = X25519Secret::from_bytes(&[0x42; 32]);
+        let Ok(secret) = secret else {
+            return;
+        };
+        for v in low_order() {
+            assert_eq!(dh_checked(&secret, &v).err(), Some(Error::Rejected));
+        }
+    }
+}

@@ -404,9 +404,14 @@ mod tests {
             check_issue_bounds(created, created, max),
             Err(IssueError::AlreadyExpired)
         );
+        // creation + 30 days overflows: refused, not wrapped
+        assert_eq!(
+            check_issue_bounds(u64::MAX - 5, u64::MAX, u64::MAX),
+            Err(IssueError::ExpiresTooLate)
+        );
         assert_eq!(
             check_issue_bounds(u64::MAX, u64::MAX, u64::MAX),
-            Err(IssueError::ExpiresTooLate)
+            Err(IssueError::AlreadyExpired)
         );
     }
 }

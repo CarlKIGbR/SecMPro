@@ -14,7 +14,9 @@
 //! checks failed is not observable. The inviter's own misuse is [`IssueError`], a local error that never reaches
 //! the wire.
 
-use secmp_crypto::{Caead, ConstantTimeEq, Fingerprint, Label, Nonce24, SecretBytes, hkdf};
+use secmp_crypto::{
+    Caead, ConstantTimeEq, Fingerprint, Label, Nonce24, SecretBytes, Zeroizing, hkdf,
+};
 
 use crate::codec::{Decode, Encode};
 use crate::error::{Error, Result};
@@ -91,66 +93,88 @@ pub fn check_issue_bounds(
     Ok(())
 }
 
-const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-
-fn sextet(group: u32, shift: u32) -> char {
-    let index = usize::try_from((group >> shift) & 0x3f).unwrap_or(0);
-    char::from(B64.get(index).copied().unwrap_or(b'A'))
+/// An arithmetic right shift by 8: `-1` for a negative `x`, else `0` (the mask of the constant-time base64 below).
+const fn mask(x: i16) -> i16 {
+    x.wrapping_shr(8)
 }
 
-/// base64url (RFC 4648 §5) without padding.
+/// The URL-safe base64 character of a sextet `v` < 64, by arithmetic only (no table lookup, no branch on `v`: an
+/// invitation is a secret, M4 verifier V-5; the construction of `base64ct`).
+fn encode_sextet(v: u8) -> u8 {
+    let src = i16::from(v);
+    let mut diff = 0x41_i16;
+    diff = diff.wrapping_add(mask(25_i16.wrapping_sub(src)) & 0x06);
+    diff = diff.wrapping_sub(mask(51_i16.wrapping_sub(src)) & 0x4b);
+    diff = diff.wrapping_sub(mask(61_i16.wrapping_sub(src)) & 0x0d);
+    diff = diff.wrapping_add(mask(62_i16.wrapping_sub(src)) & 0x31);
+    u8::try_from(src.wrapping_add(diff)).unwrap_or(0)
+}
+
+/// The sextet of a URL-safe base64 character `c`, or a negative value for any other byte; by arithmetic only.
+fn decode_sextet(c: u8) -> i16 {
+    let src = i16::from(c);
+    let mut ret = -1_i16;
+    ret = ret.wrapping_add(
+        mask(0x40_i16.wrapping_sub(src) & src.wrapping_sub(0x5b)) & src.wrapping_sub(0x40),
+    );
+    ret = ret.wrapping_add(
+        mask(0x60_i16.wrapping_sub(src) & src.wrapping_sub(0x7b)) & src.wrapping_sub(0x46),
+    );
+    ret = ret.wrapping_add(
+        mask(0x2f_i16.wrapping_sub(src) & src.wrapping_sub(0x3a)) & src.wrapping_add(5),
+    );
+    ret = ret.wrapping_add(mask(0x2c_i16.wrapping_sub(src) & src.wrapping_sub(0x2e)) & 0x3f);
+    ret.wrapping_add(mask(0x5e_i16.wrapping_sub(src) & src.wrapping_sub(0x60)) & 0x40)
+}
+
+/// base64url (RFC 4648 §5) without padding, in constant time in the bytes (the result is held in `Zeroizing`).
 #[must_use]
-pub fn base64url_encode(bytes: &[u8]) -> String {
-    let mut out = String::with_capacity(bytes.len().saturating_mul(4).div_ceil(3));
+pub fn base64url_encode(bytes: &[u8]) -> Zeroizing<String> {
+    let mut out = Zeroizing::new(String::with_capacity(
+        bytes.len().saturating_mul(4).div_ceil(3),
+    ));
     for chunk in bytes.chunks(3) {
         let b0 = u32::from(chunk.first().copied().unwrap_or(0));
         let b1 = u32::from(chunk.get(1).copied().unwrap_or(0));
         let b2 = u32::from(chunk.get(2).copied().unwrap_or(0));
         let group = (b0 << 16) | (b1 << 8) | b2;
-        out.push(sextet(group, 18));
-        out.push(sextet(group, 12));
+        let emit = |out: &mut Zeroizing<String>, shift: u32| {
+            let v = u8::try_from((group >> shift) & 0x3f).unwrap_or(0);
+            out.push(char::from(encode_sextet(v)));
+        };
+        emit(&mut out, 18);
+        emit(&mut out, 12);
         if chunk.len() > 1 {
-            out.push(sextet(group, 6));
+            emit(&mut out, 6);
         }
         if chunk.len() > 2 {
-            out.push(sextet(group, 0));
+            emit(&mut out, 0);
         }
     }
     out
 }
 
-fn sextet_value(c: u8) -> Option<u32> {
-    let v = match c {
-        b'A'..=b'Z' => c.checked_sub(b'A')?,
-        b'a'..=b'z' => c.checked_sub(b'a')?.checked_add(26)?,
-        b'0'..=b'9' => c.checked_sub(b'0')?.checked_add(52)?,
-        b'-' => 62,
-        b'_' => 63,
-        _ => return None,
-    };
-    Some(u32::from(v))
-}
-
 /// The strict inverse of [`base64url_encode`]: only the URL-safe alphabet, no padding, no whitespace, a length
 /// that is not 1 modulo 4, and zero unused low bits in the last character — so every byte string has exactly one
-/// text (spec §4.1 canonicality; SPEC-QUESTIONS reading 4).
+/// text (spec §4.1 canonicality; SPEC-QUESTIONS reading 4). The characters are mapped without a table or a branch
+/// on their value; the result is held in `Zeroizing`.
 ///
 /// # Errors
 /// [`Error::Rejected`] for any other input.
-pub fn base64url_decode(text: &str) -> Result<Vec<u8>> {
+pub fn base64url_decode(text: &str) -> Result<Zeroizing<Vec<u8>>> {
     let bytes = text.as_bytes();
     if bytes.len() % 4 == 1 {
         return Err(Error::Rejected);
     }
-    let mut out = Vec::with_capacity(bytes.len().saturating_mul(3) / 4);
+    let mut out = Zeroizing::new(Vec::with_capacity(bytes.len().saturating_mul(3) / 4));
+    let mut invalid = 0_i16;
+    let mut dirty = 0_u32;
     for chunk in bytes.chunks(4) {
         let mut group = 0_u32;
         for i in 0..4 {
-            let v = match chunk.get(i) {
-                Some(c) => sextet_value(*c).ok_or(Error::Rejected)?,
-                None => 0,
-            };
-            group = (group << 6) | v;
+            let v = chunk.get(i).map_or(0, |c| decode_sextet(*c));
+            invalid |= v;
+            group = (group << 6) | u32::from(u8::try_from(v & 0x3f).unwrap_or(0));
         }
         // the unused low bits of a short last group must be zero
         let unused_mask = match chunk.len() {
@@ -158,9 +182,7 @@ pub fn base64url_decode(text: &str) -> Result<Vec<u8>> {
             3 => 0x0000_00ff,
             _ => 0,
         };
-        if group & unused_mask != 0 {
-            return Err(Error::Rejected);
-        }
+        dirty |= group & unused_mask;
         let be = group.to_be_bytes();
         let used = match chunk.len() {
             2 => 1,
@@ -169,6 +191,9 @@ pub fn base64url_decode(text: &str) -> Result<Vec<u8>> {
         };
         out.extend_from_slice(be.get(1..=used).ok_or(Error::Rejected)?);
     }
+    if invalid < 0 || dirty != 0 {
+        return Err(Error::Rejected);
+    }
     Ok(out)
 }
 
@@ -176,16 +201,19 @@ pub fn base64url_decode(text: &str) -> Result<Vec<u8>> {
 ///
 /// # Errors
 /// [`Error::Rejected`] if the invitation has no encoding.
-pub fn invitation_uri(invitation: &InvitationV1) -> Result<String> {
+pub fn invitation_uri(invitation: &InvitationV1) -> Result<Zeroizing<String>> {
     let encoded = invitation.encode()?;
-    Ok(format!("{URI_PREFIX}{}", base64url_encode(&encoded)))
+    Ok(Zeroizing::new(format!(
+        "{URI_PREFIX}{}",
+        base64url_encode(&encoded).as_str()
+    )))
 }
 
 /// The text of the QR code (§5.2: "same string, byte mode"): identical to [`invitation_uri`].
 ///
 /// # Errors
 /// As [`invitation_uri`].
-pub fn invitation_qr_text(invitation: &InvitationV1) -> Result<String> {
+pub fn invitation_qr_text(invitation: &InvitationV1) -> Result<Zeroizing<String>> {
     invitation_uri(invitation)
 }
 
@@ -268,10 +296,22 @@ pub fn open_blob(ld_id: &Id, link_key: &SecretBytes<HASH_LEN>, blob: &[u8]) -> R
 
 /// What the invitee holds after §5.5 steps 1–4: the invitation and the verified link data.
 pub struct InviteeAccepted {
+    invitation: InvitationV1,
+    link_data: LinkDataV1,
+}
+
+impl InviteeAccepted {
     /// The parsed invitation (a secret: `link_key`, `inv_send_seed`).
-    pub invitation: InvitationV1,
+    #[must_use]
+    pub const fn invitation(&self) -> &InvitationV1 {
+        &self.invitation
+    }
+
     /// The inviter's link data; its fingerprint matched `inviter_fp` and its bundle signature verified.
-    pub link_data: LinkDataV1,
+    #[must_use]
+    pub const fn link_data(&self) -> &LinkDataV1 {
+        &self.link_data
+    }
 }
 
 /// §5.5 steps 1, 3 and 4 on the parsed `invitation` and the `blob` that `LINK_GET` returned (step 2's transport),
@@ -364,8 +404,11 @@ mod tests {
             (b"foobar", "Zm9vYmFy"),
             (&[0xfb, 0xff, 0xbf], "-_-_"),
         ] {
-            assert_eq!(base64url_encode(plain), text);
-            assert_eq!(base64url_decode(text).as_deref(), Ok(plain));
+            assert_eq!(base64url_encode(plain).as_str(), text);
+            assert_eq!(
+                base64url_decode(text).ok().as_deref().map(Vec::as_slice),
+                Some(plain)
+            );
         }
     }
 
@@ -380,7 +423,10 @@ mod tests {
         // every 1-byte and 2-byte string round-trips and no other text decodes to it
         for a in 0..=255_u8 {
             let t = base64url_encode(&[a]);
-            assert_eq!(base64url_decode(&t).ok(), Some(vec![a]));
+            assert_eq!(
+                base64url_decode(&t).ok().as_deref().map(Vec::as_slice),
+                Some([a].as_slice())
+            );
         }
     }
 

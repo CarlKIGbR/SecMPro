@@ -5,11 +5,13 @@
 
 use secmp_crypto::SecretBytes;
 use secmp_proto::codec::{Decode, Encode};
-use secmp_proto::hx::{HandshakeCells, Initiator, InitiatorKeys, Shared, TranscriptInputs};
+use secmp_proto::hx::{
+    HandshakeCells, Initiator, InitiatorKeys, PersistedCells, Responder, Shared, TranscriptInputs,
+};
 use secmp_proto::keys::{MlKem768Ek, MlKem1024Ek, X25519Pk};
 use secmp_proto::prekeys::{MemoryPrekeyStore, PrekeyStore};
 use secmp_proto::tr::{FixedEntropy, RatchetState};
-use secmp_proto::wire::cell::RouteDescriptor;
+use secmp_proto::wire::cell::{Cell, RouteDescriptor};
 use secmp_proto::wire::hx::{Inner, Outer};
 use secmp_proto::wire::inv::{IksPublic, LinkDataV1, Profile};
 use secmp_proto::{Error, hx};
@@ -50,8 +52,7 @@ fn put(buf: &mut [u8], at: usize, src: &[u8]) {
 }
 
 type StartFn = fn(
-    &secmp_proto::wire::inv::InvitationV1,
-    &LinkDataV1,
+    &secmp_proto::inv::InviteeAccepted,
     &InitiatorKeys<'_>,
     &[RouteDescriptor],
     &Profile,
@@ -432,7 +433,7 @@ fn accept_success_deletes_exactly_that_opk() {
     reference
         .issue_opk(&mut FixedEntropy::new(&random_bytes(4, 96)))
         .unwrap();
-    reference.delete_opk(OPK_ID).unwrap();
+    reference.commit_accept(OPK_ID, &lib.w.inv.ld_id).unwrap();
     lib.accept(&mut store, &lib.honest()).unwrap();
     assert_eq!(store.opk_ids(), vec![OPK_ID + 1]);
     assert_eq!(store.spk_ids(), vec![SPK_ID]);
@@ -519,8 +520,7 @@ fn initiator_start_output_and_state_contain_no_ek_secret() {
     let accepted = secmp_proto::inv::invitee_accept(&lib.w.uri, &lib.w.blob, NOW).unwrap();
     let route = RouteDescriptor::decode(&lib.route()).unwrap();
     let (cells, state) = Initiator::start(
-        &accepted.invitation,
-        &accepted.link_data,
+        &accepted,
         &lib.i_id.initiator_keys(),
         &[route],
         &Profile::new("alice", Some(lib.w.b6.avatar)).unwrap(),
@@ -587,8 +587,7 @@ fn hybridsign_not_called_by_initiator() {
     let mut e = FixedEntropy::new(&lib.w.b6.entropy);
     let route = RouteDescriptor::decode(&lib.route()).unwrap();
     Initiator::start(
-        &accepted.invitation,
-        &accepted.link_data,
+        &accepted,
         &lib.i_id.initiator_keys(),
         &[route],
         &Profile::new("alice", Some(lib.w.b6.avatar)).unwrap(),
@@ -603,8 +602,7 @@ fn hybridsign_not_called_by_initiator() {
     let mut e = FixedEntropy::new(&extra);
     let route = RouteDescriptor::decode(&lib.route()).unwrap();
     Initiator::start(
-        &accepted.invitation,
-        &accepted.link_data,
+        &accepted,
         &lib.i_id.initiator_keys(),
         &[route],
         &Profile::new("alice", Some(lib.w.b6.avatar)).unwrap(),
@@ -621,8 +619,7 @@ fn initiator_cells_persisted_with_state() {
     let accepted = secmp_proto::inv::invitee_accept(&lib.w.uri, &lib.w.blob, NOW).unwrap();
     let route = RouteDescriptor::decode(&lib.route()).unwrap();
     let (cells, state) = Initiator::start(
-        &accepted.invitation,
-        &accepted.link_data,
+        &accepted,
         &lib.i_id.initiator_keys(),
         &[route],
         &Profile::new("alice", Some(lib.w.b6.avatar)).unwrap(),
@@ -631,20 +628,35 @@ fn initiator_cells_persisted_with_state() {
     )
     .unwrap();
     // a failing persist releases nothing
-    let failed = HandshakeCells::from_bytes(&cells.to_bytes())
-        .unwrap()
-        .release(|_| Err::<(), &str>("disk full"));
+    let failed = Initiator::start(
+        &accepted,
+        &lib.i_id.initiator_keys(),
+        &[RouteDescriptor::decode(&lib.route()).unwrap()],
+        &Profile::new("alice", Some(lib.w.b6.avatar)).unwrap(),
+        1_700_000_001,
+        &mut FixedEntropy::new(&lib.w.b6.entropy),
+    )
+    .unwrap()
+    .0
+    .release(|_, _| Err::<(), &str>("disk full"));
     assert_eq!(failed.err(), Some("disk full"));
-    // the cells and the state are persisted before any cell is handed out
+    // the cells and the state are handed to one persist call, before any cell is handed out
     let state_bytes = state.to_bytes().unwrap().to_vec();
     let mut durable: Option<Vec<u8>> = None;
+    let mut durable_state: Option<Vec<u8>> = None;
     let released = cells
-        .release(|bytes| {
+        .release(|bytes, state_in_call| {
             durable = Some(bytes.to_vec());
+            durable_state = Some(state_in_call.to_vec());
             Ok::<(), ()>(())
         })
         .unwrap();
     let durable = durable.expect("persist was called before the release");
+    assert_eq!(
+        durable_state.as_deref(),
+        Some(state_bytes.as_slice()),
+        "the state is in the same call"
+    );
     assert_eq!(durable.len(), 3 * 4096);
     assert_eq!(released.len(), 3);
     for (cell, chunk) in released.iter().zip(durable.chunks(4096)) {
@@ -663,25 +675,18 @@ fn initiator_retry_resends_identical_cells() {
     // a retry restores the persisted cells and re-sends them byte-identical: no sealing, no randomness (the
     // restoring functions take no entropy source)
     for _ in 0..3 {
-        let again = HandshakeCells::from_bytes(&persisted).unwrap();
-        let sent = again
-            .release(|b| {
-                if b == persisted.as_slice() {
-                    Ok(())
-                } else {
-                    Err(())
-                }
-            })
-            .unwrap();
+        let again = PersistedCells::from_bytes(&persisted).unwrap();
+        assert_eq!(again.to_bytes().as_slice(), persisted.as_slice());
+        let sent = again.into_cells();
         let joined: Vec<u8> = sent.iter().flat_map(|c| c.as_bytes().to_vec()).collect();
         assert_eq!(joined, persisted);
     }
     assert_eq!(
-        HandshakeCells::from_bytes(persisted.get(..8191).unwrap()).err(),
+        PersistedCells::from_bytes(persisted.get(..8191).unwrap()).err(),
         Some(Error::Rejected)
     );
     assert_eq!(
-        HandshakeCells::from_bytes(&[persisted.clone(), vec![0]].concat()).err(),
+        PersistedCells::from_bytes(&[persisted.clone(), vec![0]].concat()).err(),
         Some(Error::Rejected)
     );
 }
@@ -1078,4 +1083,132 @@ fn k_inv_k_ld_k_id_distinct() {
     );
     assert_eq!(secmp_crypto::Label::HxIdkey.as_bytes(), b"SecMP-HX/1 idkey");
     let _ = (fixed(&[]), CREATED);
+}
+
+/// V-1 (verifier): the first-message counter rules (ADR-044 (e)) are what rejects N-68/N-69. The body MAC verifies
+/// (the cell is sealed under the right message key), so the ratchet's DH step drew its whole randomness
+/// (`remaining() == 0`) and only the counter check after the decryption refuses; state and OPK are unchanged. The
+/// control with n = 0, pn = 0 accepts.
+#[test]
+fn accept_counter_rules_reject_after_a_valid_mac() {
+    let lib = Lib::new();
+    let run = |n: u32, pn: u32| {
+        let cells = lib.first_msg_variant(23, &lib.first_msg_with_counters(n, pn, 23));
+        let cells: Vec<Cell> = cells.iter().map(|c| Cell::from_bytes(c).unwrap()).collect();
+        let mut store = lib.store();
+        let before = store.digest_kat();
+        let mut entropy = FixedEntropy::new(&lib.w.step);
+        let result = Responder::accept(
+            &cells,
+            &lib.record(),
+            &mut store,
+            &lib.r_id.responder_keys(),
+            &mut entropy,
+        );
+        (
+            result.err(),
+            entropy.remaining(),
+            store.digest_kat() == before,
+        )
+    };
+    assert_eq!(run(0, 0).0, None, "control: n = 0, pn = 0 accepts");
+    for (n, pn) in [(1, 0), (7, 0), (0, 5)] {
+        let (error, remaining, unchanged) = run(n, pn);
+        assert_eq!(error, Some(Error::Rejected), "n = {n}, pn = {pn}");
+        assert_eq!(
+            remaining, 0,
+            "n = {n}, pn = {pn}: the MAC verified (the DH step drew its randomness)"
+        );
+        assert!(unchanged, "n = {n}, pn = {pn}: store unchanged, OPK kept");
+    }
+}
+
+/// V-7: a successful `accept` consumes the invitation's record together with the OPK (one commit point), and a
+/// store that cannot commit rejects with the OPK kept.
+#[test]
+fn accept_success_consumes_record_and_opk() {
+    let lib = Lib::new();
+    let mut store = lib.store();
+    assert!(store.record(&lib.w.inv.ld_id).is_some());
+    lib.accept(&mut store, &lib.honest()).unwrap();
+    assert!(
+        store.record(&lib.w.inv.ld_id).is_none(),
+        "the record is consumed"
+    );
+    assert!(store.opk(OPK_ID).is_none(), "the OPK is deleted");
+    // a store without the record cannot commit: Rejected, the OPK kept
+    let mut no_record = lib.store();
+    no_record.consume_record(&lib.w.inv.ld_id).unwrap();
+    let before = no_record.digest_kat();
+    assert_eq!(
+        lib.accept(&mut no_record, &lib.honest()).err(),
+        Some(Error::Rejected)
+    );
+    assert_eq!(no_record.digest_kat(), before);
+    assert!(no_record.opk(OPK_ID).is_some());
+}
+
+/// V-8 / M3 F12 (matrix (e)): the secrets of HX are held in zeroizing types — a signature change breaks these
+/// ascriptions. `EK_I` is an `X25519Secret` (locked memory, wiped on drop) that `Initiator::start` drops at the end
+/// of `agree`.
+#[test]
+fn hx_secrets_are_zeroizing_types() {
+    let lib = Lib::new();
+    let secret = |b: &[u8]| SecretBytes::<32>::from_slice(b).unwrap();
+    let a = &lib.w.b6.a;
+    let link = secret(&lib.w.inv.link_key);
+    let _k_id: SecretBytes<32> = hx::k_id(
+        &lib.w.inv.ld_id,
+        &link,
+        &secret(&a.dh[2]),
+        &secret(&a.ss_spk),
+        &secret(&a.dh[3]),
+        &secret(&a.ss_opk),
+    )
+    .unwrap();
+    let _sk: SecretBytes<32> = hx::session_key(
+        &Shared {
+            dh1: secret(&a.dh[0]),
+            dh2: secret(&a.dh[1]),
+            dh3: secret(&a.dh[2]),
+            dh4: secret(&a.dh[3]),
+            ss_spk: secret(&a.ss_spk),
+            ss_opk: secret(&a.ss_opk),
+        },
+        &a.transcript,
+    )
+    .unwrap();
+    let _k_inv: SecretBytes<32> = secmp_proto::inv::derive_k_inv(&lib.w.inv.ld_id, &link).unwrap();
+    let _k_ld: SecretBytes<32> = secmp_proto::inv::derive_k_ld(&lib.w.inv.ld_id, &link).unwrap();
+    let _ek: secmp_crypto::X25519Secret =
+        secmp_proto::tr::Entropy::x25519(&mut FixedEntropy::new(&[5; 32])).unwrap();
+    let _opk_kem: &secmp_crypto::MlKem1024Dk = &lib.w.keys.opk_kem;
+    let invitation = secmp_proto::wire::inv::InvitationV1::decode(&lib.w.invitation).unwrap();
+    let _uri: secmp_crypto::Zeroizing<String> =
+        secmp_proto::inv::invitation_uri(&invitation).unwrap();
+}
+
+/// V-6: `start`'s cells are released only through `release`; a persist that fails returns its error and hands out
+/// nothing (the cells are dropped), and the closure sees cells and state together.
+#[test]
+fn start_persist_error_is_returned_and_nothing_sent() {
+    let lib = Lib::new();
+    let accepted = secmp_proto::inv::invitee_accept(&lib.w.uri, &lib.w.blob, NOW).unwrap();
+    let route = RouteDescriptor::decode(&lib.route()).unwrap();
+    let (cells, state) = Initiator::start(
+        &accepted,
+        &lib.i_id.initiator_keys(),
+        &[route],
+        &Profile::new("alice", Some(lib.w.b6.avatar)).unwrap(),
+        1_700_000_001,
+        &mut FixedEntropy::new(&lib.w.b6.entropy),
+    )
+    .unwrap();
+    let mut seen = (0, 0);
+    let result = cells.release(|c, st| {
+        seen = (c.len(), st.len());
+        Err::<(), &str>("disk full")
+    });
+    assert_eq!(result.err(), Some("disk full"));
+    assert_eq!(seen, (3 * 4096, state.to_bytes().unwrap().len()));
 }

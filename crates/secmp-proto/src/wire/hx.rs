@@ -292,4 +292,34 @@ mod tests {
         }
         Ok(())
     }
+
+    fn plaintext_bytes(i: u8, total: u8) -> Vec<u8> {
+        let mut w = Writer::new();
+        w.bytes(&[0x11; 16]);
+        w.u8(i);
+        w.u8(total);
+        w.bytes(&[0; HANDSHAKE_CHUNK_LEN]);
+        w.into_bytes().to_vec()
+    }
+
+    /// V-3: `i` = `total` = 3 (an index outside 0..=2) is rejected by the decoder.
+    #[test]
+    fn cell_plaintext_decode_rejects_i_ge_total() {
+        assert_eq!(
+            HandshakeCellPlaintext::decode(&plaintext_bytes(3, 3)).err(),
+            Some(Error::Rejected)
+        );
+        assert!(HandshakeCellPlaintext::decode(&plaintext_bytes(2, 3)).is_ok());
+    }
+
+    /// V-3: `total` ≠ 3 is rejected whatever `i` is.
+    #[test]
+    fn cell_plaintext_decode_rejects_total_ne_3() {
+        for total in [0_u8, 2, 4, 0xff] {
+            assert_eq!(
+                HandshakeCellPlaintext::decode(&plaintext_bytes(0, total)).err(),
+                Some(Error::Rejected)
+            );
+        }
+    }
 }

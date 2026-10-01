@@ -127,6 +127,15 @@ impl Lib {
         let mut f = fields(&self.w.b6.i_after_init);
         f.n_s = n_s;
         f.pn = pn;
+        // the cell is sealed under message key n_s of the chain: advance `ck_s` n_s times, so that the receiver's
+        // `skip_message_keys` derives the same key and the body MAC verifies (only the counter rule can reject)
+        let mut ck =
+            secmp_crypto::SecretBytes::<32>::from_slice(f.keys.first().unwrap().as_ref().unwrap())
+                .unwrap();
+        for _ in 0..n_s {
+            ck = secmp_crypto::kdf_ck(&ck).unwrap().0;
+        }
+        f.keys[0] = Some(ck.expose_secret().to_vec());
         if pn != 0 {
             f.keys[1] = Some(vec![1; 32]);
             f.keys[3] = Some(vec![2; 32]);

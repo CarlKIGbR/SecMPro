@@ -7,7 +7,7 @@ use super::derive::{Shared, TranscriptInputs, k_id, session_key, transcript};
 use super::{HandshakeCells, InitiatorKeys, copy_route, dh_checked};
 use crate::codec::{Decode, Encode};
 use crate::error::{Error, Result};
-use crate::inv::derive_k_inv;
+use crate::inv::{InviteeAccepted, derive_k_inv};
 use crate::keys::X25519Pk;
 use crate::sizes::{COM_LEN, HANDSHAKE_CHUNK_LEN, HANDSHAKE_CHUNKS, HASH_LEN, MLKEM1024_CT_LEN};
 use crate::tr::{Entropy, RatchetState};
@@ -119,7 +119,7 @@ fn seal_envelope(
     agreement: &Agreement,
     first_msg: Cell,
     entropy: &mut impl Entropy,
-) -> Result<HandshakeCells> {
+) -> Result<[Cell; 3]> {
     let bundle = &link_data.bundle;
     let ld_id = invitation.ld_id.as_slice();
     let k_inv = derive_k_inv(&invitation.ld_id, &invitation.link_key)?;
@@ -179,18 +179,18 @@ fn seal_envelope(
         cells.push(Cell::decode(&cell.encode()?)?);
     }
     let [c0, c1, c2]: [Cell; 3] = cells.try_into().map_err(|_| Error::Rejected)?;
-    Ok(HandshakeCells::new([c0, c1, c2]))
+    Ok([c0, c1, c2])
 }
 
 impl Initiator {
-    /// §6.4–§6.5 and §7.2–§7.3: from a **verified** invitation and link data (§5.5 steps 1, 3, 4:
-    /// [`crate::inv::invitee_check`]), derive `SK`, `K_id` and `K_inv`, initialise the ratchet as initiator, encrypt
+    /// §6.4–§6.5 and §7.2–§7.3: from the result of the invitee's checks (§5.5 steps 1, 3, 4:
+    /// [`crate::inv::invitee_check`] — the only way to obtain an [`InviteeAccepted`]), derive `SK`, `K_id` and `K_inv`, initialise the ratchet as initiator, encrypt
     /// the Handshake Content (`profile`, `caps = 0`, `reply_routes`) as `first_msg` (`seq` 1, `ts` = `now`), seal
     /// `Inner`, `Outer` and the three cells. Returns the cells and the post-`first_msg` ratchet state; the caller
     /// persists both before any cell leaves the process ([`HandshakeCells::release`]).
     ///
     /// No signing key is a parameter: the envelope contains no signature by the initiator (§6.6). `EK_I`'s secret
-    /// is zeroized before this function returns (ADR-044 (b)); the state holds none of it.
+    /// is zeroized at the end of `agree`, before the ratchet is initialised and anything is sealed (ADR-044 (b)); the state holds none of it.
     ///
     /// Randomness is drawn in this order: `EK_I`; `Encaps` randomness for `SPK_kem` and for `OPK_kem`; the ratchet
     /// initialisation (`dh_s`, `kem_s`, `Encaps` randomness); the `first_msg` header nonce; `N2`; `init_id`;
@@ -200,14 +200,14 @@ impl Initiator {
     /// [`Error::Rejected`] if an input is refused (a zero X25519 output, an undecodable route, a Content beyond
     /// its bound); [`Error::Unavailable`] without randomness or locked memory. Nothing is sent or persisted.
     pub fn start<E: Entropy>(
-        invitation: &InvitationV1,
-        link_data: &LinkDataV1,
+        accepted: &InviteeAccepted,
         own_keys: &InitiatorKeys<'_>,
         reply_routes: &[RouteDescriptor],
         profile: &Profile,
         now: u64,
         entropy: &mut E,
     ) -> Result<(HandshakeCells, RatchetState)> {
+        let (invitation, link_data) = (accepted.invitation(), accepted.link_data());
         let bundle = &link_data.bundle;
         let agreement = agree(invitation, link_data, own_keys, entropy)?;
 
@@ -241,6 +241,6 @@ impl Initiator {
         let cells = seal_envelope(
             invitation, link_data, own_keys, &agreement, first_msg, entropy,
         )?;
-        Ok((cells, state))
+        Ok((HandshakeCells::new(cells, &state)?, state))
     }
 }

@@ -21,7 +21,7 @@ use secmp_crypto::{
     HybridSigningKey, Label, MlKem768Dk, MlKem1024Dk, SecretBytes, X25519Secret, sha256,
 };
 
-use crate::codec::{Encode, Writer};
+use crate::codec::Encode;
 use crate::error::{Error, Result};
 use crate::inv::{self, IssueError};
 use crate::keys::{self, Ed25519Pk, HybridSig, X25519Pk};
@@ -30,7 +30,7 @@ use crate::tr::Entropy;
 use crate::wire::inv::{
     IksPublic, InvitationV1, LinkBlob, LinkDataV1, PrekeyBundle, Profile, RelayRef,
 };
-use crate::wire::{Id, Period, write_ver};
+use crate::wire::{Id, Period};
 
 /// A signed-prekey generation lasts 7 days (§6.1).
 pub const SPK_ROTATION_S: u64 = 7 * 24 * 60 * 60;
@@ -328,6 +328,15 @@ pub trait PrekeyStore {
     /// [`Error::Rejected`] if there is no such unused OPK (a second delete), or the deletion could not be made
     /// durable; nothing is deleted then.
     fn delete_opk(&mut self, opk_id: u32) -> Result<()>;
+
+    /// The commit point of an accepted handshake (§6.6 step 4, §5.2 "until the invitation is consumed"): delete
+    /// the one-time prekey **and** consume the invitation record of `ld_id`, both or neither (one durable
+    /// transaction in a persistent store).
+    ///
+    /// # Errors
+    /// [`Error::Rejected`] if the OPK or the record is absent or the commit could not be made durable; nothing is
+    /// changed then.
+    fn commit_accept(&mut self, opk_id: u32, ld_id: &Id) -> Result<()>;
 }
 
 /// An issued invitation: what goes to the invitee out of band and to the relay.
@@ -452,23 +461,15 @@ impl MemoryPrekeyStore {
         let rpk_kem = spk.rpk_public()?;
         let opk_dh = opk.dh_public()?;
         let opk_kem = opk.kem_public()?;
-        // the signed message: the encoded fields before `sig` ‖ the signer's `ik_dh` (§6.3)
-        let mut w = Writer::new();
-        write_ver(&mut w);
-        w.u32(spk_id);
-        spk_dh.encode_to(&mut w)?;
-        spk_kem.encode_to(&mut w)?;
-        rpk_kem.encode_to(&mut w)?;
-        w.u64(spk_expiry);
-        // `opk_present` = 0x01: v1 requires the OPK
-        w.u8(1);
-        w.u32(opk_id);
-        opk_dh.encode_to(&mut w)?;
-        opk_kem.encode_to(&mut w)?;
-        w.bytes(identity.public().ik_dh.as_bytes());
-        let message = w.into_bytes();
-        let sig = entropy.sign(&identity.sig, Label::HxBundle, &message)?;
-        Ok(PrekeyBundle {
+        // the signed message is the one layout of the wire type (`PrekeyBundle::signed_fields`, §6.3): the bundle is
+        // built with a placeholder signature (the Ed25519 base point as `R`, `S` = 0: a valid encoding), which the
+        // signed fields do not cover, and then given its real signature
+        let mut placeholder = [0_u8; crate::sizes::HYBRID_SIG_LEN];
+        placeholder[0] = 0x58;
+        for b in placeholder.iter_mut().take(32).skip(1) {
+            *b = 0x66;
+        }
+        let unsigned = PrekeyBundle {
             spk_id,
             spk_dh,
             spk_kem,
@@ -477,7 +478,13 @@ impl MemoryPrekeyStore {
             opk_id,
             opk_dh,
             opk_kem,
+            sig: HybridSig::from_bytes(&placeholder)?,
+        };
+        let message = inv::bundle_signed_message(&unsigned, identity.public())?;
+        let sig = entropy.sign(&identity.sig, Label::HxBundle, &message)?;
+        Ok(PrekeyBundle {
             sig: HybridSig::from_bytes(sig.as_bytes())?,
+            ..unsigned
         })
     }
 
@@ -500,6 +507,22 @@ impl MemoryPrekeyStore {
     #[must_use]
     pub fn record(&self, ld_id: &Id) -> Option<&InvitationRecord> {
         self.records.iter().find(|r| &r.ld_id == ld_id)
+    }
+
+    /// Consume the record of `ld_id` (the invitation was used, §5.2): it is no longer offered and its link key is
+    /// dropped (zeroized). The signed-prekey generation it referenced stays until [`Self::retire_expired`] finds
+    /// no other unexpired reference.
+    ///
+    /// # Errors
+    /// [`Error::Rejected`] if there is no such record.
+    pub fn consume_record(&mut self, ld_id: &Id) -> Result<()> {
+        let at = self
+            .records
+            .iter()
+            .position(|r| &r.ld_id == ld_id)
+            .ok_or(Error::Rejected)?;
+        self.records.remove(at);
+        Ok(())
     }
 
     /// The records of unexpired invitations (`expires` > `now`): the only ones offered to `accept` (ADR-044 (d)).
@@ -687,6 +710,15 @@ impl PrekeyStore for MemoryPrekeyStore {
 
     fn opk(&self, opk_id: u32) -> Option<&OpkSecrets> {
         self.opks.iter().find(|o| o.id == opk_id)
+    }
+
+    fn commit_accept(&mut self, opk_id: u32, ld_id: &Id) -> Result<()> {
+        // both must exist before either is touched
+        if self.opk(opk_id).is_none() || self.record(ld_id).is_none() {
+            return Err(Error::Rejected);
+        }
+        self.consume_record(ld_id)?;
+        self.delete_opk(opk_id)
     }
 
     fn delete_opk(&mut self, opk_id: u32) -> Result<()> {

@@ -67,7 +67,7 @@ impl Inviter {
             identity,
             store,
             issued,
-            uri,
+            uri: uri.to_string(),
         }
     }
 
@@ -86,8 +86,7 @@ pub fn invitee_run(inviter: &Inviter, entropy: &mut impl Entropy) -> Invitee {
     let identity = IdentityKeys::generate(entropy).unwrap();
     let accepted = invitee_accept(&inviter.uri, &blob_bytes(&inviter.issued), NOW).unwrap();
     let (cells, _state) = Initiator::start(
-        &accepted.invitation,
-        &accepted.link_data,
+        &accepted,
         &identity.initiator_keys(),
         &[route(20)],
         &Profile::new("alice", Some([9; 32])).unwrap(),
@@ -100,7 +99,7 @@ pub fn invitee_run(inviter: &Inviter, entropy: &mut impl Entropy) -> Invitee {
 }
 
 pub fn release(cells: HandshakeCells) -> Vec<Cell> {
-    cells.release(|_| Ok::<(), ()>(())).unwrap().to_vec()
+    cells.release(|_, _| Ok::<(), ()>(())).unwrap().to_vec()
 }
 
 pub fn blob_bytes(issued: &Issued) -> Vec<u8> {

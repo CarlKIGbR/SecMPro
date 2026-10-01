@@ -611,7 +611,10 @@ impl RatchetState {
                         added: Vec::new(),
                         chain: None,
                         step: None,
-                        counters: skipped_decoded.as_ref().map_or((0, 0), |h| (h.n, h.pn)),
+                        counters: skipped_decoded
+                            .as_ref()
+                            .map(|h| (h.n, h.pn))
+                            .ok_or(Error::Rejected)?,
                     },
                     plaintext,
                 ))

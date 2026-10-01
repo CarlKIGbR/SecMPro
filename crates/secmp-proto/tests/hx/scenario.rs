@@ -96,7 +96,7 @@ impl Lib {
         let _ = self; // a method for call-site symmetry with the other `Lib` helpers
         format!(
             "secmp://i/{}",
-            secmp_proto::inv::base64url_encode(invitation)
+            secmp_proto::inv::base64url_encode(invitation).as_str()
         )
     }
 

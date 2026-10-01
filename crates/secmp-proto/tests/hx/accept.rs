@@ -570,6 +570,10 @@ fn accept_reject_is_uniform_and_transactional() {
             self.deletes += 1;
             self.inner.delete_opk(id)
         }
+        fn commit_accept(&mut self, opk_id: u32, ld_id: &[u8; 16]) -> secmp_proto::Result<()> {
+            self.deletes += 1;
+            self.inner.commit_accept(opk_id, ld_id)
+        }
     }
 
     let lib = Lib::new();

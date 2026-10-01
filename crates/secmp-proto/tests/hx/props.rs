@@ -16,7 +16,7 @@ use rand::{RngExt, SeedableRng};
 use secmp_crypto::{Caead, Label, SecretBytes, X25519Secret, Zeroizing};
 use secmp_proto::Error;
 use secmp_proto::codec::{Decode, Encode};
-use secmp_proto::hx::{self, HandshakeCells, Initiator, Responder, Shared, TranscriptInputs};
+use secmp_proto::hx::{self, Initiator, PersistedCells, Responder, Shared, TranscriptInputs};
 use secmp_proto::inv::{
     InviteeAccepted, invitation_uri, invitee_accept, open_blob, parse_invitation_uri,
 };
@@ -172,8 +172,7 @@ fn make_run(seed: u64) -> Run {
         .map(|r| RouteDescriptor::decode(r).unwrap())
         .collect();
     let (cells, state_i) = Initiator::start(
-        &accepted.invitation,
-        &accepted.link_data,
+        &accepted,
         &guest.initiator_keys(),
         &descriptors,
         &profile,
@@ -182,7 +181,7 @@ fn make_run(seed: u64) -> Run {
     )
     .unwrap();
     let cells = cells
-        .release(|_| Ok::<(), ()>(()))
+        .release(|_, _| Ok::<(), ()>(()))
         .unwrap()
         .iter()
         .map(|c| c.as_bytes().to_vec())
@@ -195,7 +194,7 @@ fn make_run(seed: u64) -> Run {
         store,
         record,
         accepted,
-        uri,
+        uri: uri.to_string(),
         blob,
         routes,
         profile,
@@ -372,8 +371,7 @@ fn prop_opk_consumed_exactly_once() {
             .map(|r| RouteDescriptor::decode(r).unwrap())
             .collect();
         let (b, _) = Initiator::start(
-            &run.accepted.invitation,
-            &run.accepted.link_data,
+            &run.accepted,
             &other.initiator_keys(),
             &descriptors,
             &run.profile,
@@ -382,7 +380,7 @@ fn prop_opk_consumed_exactly_once() {
         )
         .unwrap();
         let cells_b: Vec<Vec<u8>> = b
-            .release(|_| Ok::<(), ()>(()))
+            .release(|_, _| Ok::<(), ()>(()))
             .unwrap()
             .iter()
             .map(|c| c.as_bytes().to_vec())
@@ -763,7 +761,7 @@ fn prop_transcript_component_sensitivity() {
     for (k, run) in runs(8).enumerate() {
         let mut rng = rng_for(tag_for(800, k));
         let ctx = format!("SECMP_PROPTEST_SEED={} run {}", master_seed(), run.seed);
-        let link = &run.accepted.link_data;
+        let link = &run.accepted.link_data();
         let other =
             IdentityKeys::generate(&mut FixedEntropy::new(&random_bytes(&mut rng, 96))).unwrap();
         let ek = X25519Pk::from_bytes(
@@ -922,16 +920,20 @@ fn prop_inv_hx_canonical() {
     for run in runs(10) {
         let ctx = format!("SECMP_PROPTEST_SEED={} run {}", master_seed(), run.seed);
         // InvitationV1 and its URI
-        let inv_bytes = run.accepted.invitation.encode().unwrap();
+        let inv_bytes = run.accepted.invitation().encode().unwrap();
         assert_eq!(
             InvitationV1::decode(&inv_bytes).unwrap().encode().unwrap(),
             inv_bytes,
             "{ctx}: InvitationV1"
         );
         let parsed = parse_invitation_uri(&run.uri).unwrap();
-        assert_eq!(invitation_uri(&parsed).unwrap(), run.uri, "{ctx}: URI");
+        assert_eq!(
+            invitation_uri(&parsed).unwrap().as_str(),
+            run.uri,
+            "{ctx}: URI"
+        );
         // LinkDataV1 (padded)
-        let padded = run.accepted.link_data.encode().unwrap();
+        let padded = run.accepted.link_data().encode().unwrap();
         assert_eq!(
             LinkDataV1::decode(&padded).unwrap().encode().unwrap(),
             padded,
@@ -968,11 +970,11 @@ fn prop_inv_hx_canonical() {
             "{ctx}: Inner"
         );
         // HandshakeCells persistence
-        let hc = HandshakeCells::from_bytes(&run.cells.concat()).unwrap();
+        let hc = PersistedCells::from_bytes(&run.cells.concat()).unwrap();
         assert_eq!(
             hc.to_bytes().to_vec(),
             run.cells.concat(),
-            "{ctx}: HandshakeCells"
+            "{ctx}: PersistedCells"
         );
     }
 }

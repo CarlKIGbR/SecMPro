@@ -14,9 +14,9 @@ fuzz_target!(|data: &[u8]| {
         return;
     };
     if let Ok(invitation) = parse_invitation_uri(text) {
-        assert_eq!(invitation_uri(&invitation).unwrap(), text);
+        assert_eq!(invitation_uri(&invitation).unwrap().as_str(), text);
     }
     if let Ok(bytes) = base64url_decode(text) {
-        assert_eq!(base64url_encode(&bytes), text);
+        assert_eq!(base64url_encode(&bytes).as_str(), text);
     }
 });

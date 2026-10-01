@@ -95,7 +95,7 @@ impl Fixture {
                 &mut FixedEntropy::new(&constant("hx-fuzz issue", 600)),
             )
             .unwrap();
-        let uri = invitation_uri(&issued.invitation).unwrap();
+        let uri = invitation_uri(&issued.invitation).unwrap().to_string();
         let blob = issued.blob.encode().unwrap().to_vec();
         let record = store.record(&issued.invitation.ld_id).unwrap().duplicate().unwrap();
         let accepted = invitee_accept(&uri, &blob, NOW).unwrap();
@@ -109,8 +109,7 @@ impl Fixture {
         // N2 24, init_id 16, N_0..N_2
         let draws = constant("hx-fuzz start", 360);
         let (hc, _state) = Initiator::start(
-            &accepted.invitation,
-            &accepted.link_data,
+            &accepted,
             &invitee.initiator_keys(),
             &[route],
             &Profile::new("alice", None).unwrap(),

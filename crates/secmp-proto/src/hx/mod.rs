@@ -12,9 +12,8 @@
 //!
 //! **Persist-before-send (CLAUDE.md §1.7).** `start` returns the three cells as [`HandshakeCells`] and the
 //! post-`first_msg` [`RatchetState`]. The cells leave the process only through [`HandshakeCells::release`], which
-//! first hands their serialisation to the caller's durable write; the caller persists the state
-//! ([`RatchetState::to_bytes`]) in the same transaction, and on a retry re-sends the persisted bytes
-//! ([`HandshakeCells::from_bytes`]) without sealing again (§6.5).
+//! first hands their serialisation **and the serialised state** to the caller's durable write (one transaction),
+//! and on a retry re-sends the persisted bytes ([`PersistedCells::from_bytes`]) without sealing again (§6.5).
 
 mod derive;
 mod initiator;
@@ -30,33 +29,66 @@ use crate::codec::{Decode, Encode};
 use crate::error::{Error, Result};
 use crate::prekeys::IkDhSecret;
 use crate::sizes::{CELL_LEN, HANDSHAKE_CHUNKS};
+use crate::tr::RatchetState;
 use crate::wire::cell::{Cell, RouteDescriptor};
 use crate::wire::inv::IksPublic;
 
-/// The three handshake cells of one envelope (§6.5), generated once.
+/// The three handshake cells of one envelope (§6.5), generated once, together with the serialisation of the
+/// initiator's state after `first_msg`: the cells are released only with the state in the same persist call
+/// ([`HandshakeCells::release`]), so a caller cannot make the cells durable without the state (M4 verifier V-6,
+/// M3 review F13).
 pub struct HandshakeCells {
     cells: [Cell; 3],
+    state_bytes: Zeroizing<Vec<u8>>,
+}
+
+fn join_cells(cells: &[Cell; 3]) -> Zeroizing<Vec<u8>> {
+    let mut out = Zeroizing::new(Vec::with_capacity(
+        CELL_LEN.saturating_mul(usize::from(HANDSHAKE_CHUNKS)),
+    ));
+    for c in cells {
+        out.extend_from_slice(c.as_bytes());
+    }
+    out
 }
 
 impl HandshakeCells {
-    pub(crate) const fn new(cells: [Cell; 3]) -> Self {
-        Self { cells }
+    pub(crate) fn new(cells: [Cell; 3], state: &RatchetState) -> Result<Self> {
+        Ok(Self {
+            cells,
+            state_bytes: state.to_bytes()?,
+        })
     }
 
-    /// The persistence encoding: the three cells, 3 × 4096 bytes. (They are ciphertext; the buffer is wiped on
-    /// drop for hygiene.)
+    /// The persistence encoding of the cells: 3 × 4096 bytes. (They are ciphertext; the buffer is wiped on drop for
+    /// hygiene.)
     #[must_use]
     pub fn to_bytes(&self) -> Zeroizing<Vec<u8>> {
-        let mut out = Zeroizing::new(Vec::with_capacity(
-            CELL_LEN.saturating_mul(usize::from(HANDSHAKE_CHUNKS)),
-        ));
-        for c in &self.cells {
-            out.extend_from_slice(c.as_bytes());
-        }
-        out
+        join_cells(&self.cells)
     }
 
-    /// Restore persisted cells for a retry: byte-identical, no sealing, no randomness (§6.5).
+    /// Persist-before-send: `persist` receives the cells ([`HandshakeCells::to_bytes`]) and the serialised
+    /// initiator state (`RatchetStateV1`) and must make **both** durable in one transaction; only if it returns
+    /// `Ok` are the cells released. On `Err` they are dropped.
+    ///
+    /// # Errors
+    /// The error of `persist`.
+    pub fn release<E>(
+        self,
+        persist: impl FnOnce(&[u8], &[u8]) -> core::result::Result<(), E>,
+    ) -> core::result::Result<[Cell; 3], E> {
+        persist(&self.to_bytes(), &self.state_bytes)?;
+        Ok(self.cells)
+    }
+}
+
+/// Handshake cells restored from durable storage for a retry (§6.5): byte-identical, no sealing, no randomness.
+pub struct PersistedCells {
+    cells: [Cell; 3],
+}
+
+impl PersistedCells {
+    /// Restore persisted cells.
     ///
     /// # Errors
     /// [`Error::Rejected`] unless exactly three cells.
@@ -72,17 +104,16 @@ impl HandshakeCells {
         })
     }
 
-    /// Persist-before-send: `persist` receives [`HandshakeCells::to_bytes`] and must make it durable (with the
-    /// state, in one transaction); only if it returns `Ok` are the cells released. On `Err` they are dropped.
-    ///
-    /// # Errors
-    /// The error of `persist`.
-    pub fn release<E>(
-        self,
-        persist: impl FnOnce(&[u8]) -> core::result::Result<(), E>,
-    ) -> core::result::Result<[Cell; 3], E> {
-        persist(&self.to_bytes())?;
-        Ok(self.cells)
+    /// The cells to send again.
+    #[must_use]
+    pub fn into_cells(self) -> [Cell; 3] {
+        self.cells
+    }
+
+    /// The persistence encoding (equal to the bytes restored).
+    #[must_use]
+    pub fn to_bytes(&self) -> Zeroizing<Vec<u8>> {
+        join_cells(&self.cells)
     }
 }
 
@@ -117,60 +148,4 @@ pub(crate) fn copy_route(route: &RouteDescriptor) -> Result<RouteDescriptor> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// u = 0, 1, p − 1 and the two points of order 8 (RFC 7748 §6.1; spec §3, §4.1 (a)).
-    fn low_order() -> Vec<[u8; 32]> {
-        let mut one = [0_u8; 32];
-        one[0] = 1;
-        let mut p_minus_1 = [0xff_u8; 32];
-        p_minus_1[0] = 0xec;
-        p_minus_1[31] = 0x7f;
-        let order8_a: [u8; 32] = [
-            0xe0, 0xeb, 0x7a, 0x7c, 0x3b, 0x41, 0xb8, 0xae, 0x16, 0x56, 0xe3, 0xfa, 0xf1, 0x9f,
-            0xc4, 0x6a, 0xda, 0x09, 0x8d, 0xeb, 0x9c, 0x32, 0xb1, 0xfd, 0x86, 0x62, 0x05, 0x16,
-            0x5f, 0x49, 0xb8, 0x00,
-        ];
-        let order8_b: [u8; 32] = [
-            0x5f, 0x9c, 0x95, 0xbc, 0xa3, 0x50, 0x8c, 0x24, 0xb1, 0xd0, 0xb1, 0x55, 0x9c, 0x83,
-            0xef, 0x5b, 0x04, 0x44, 0x5c, 0xc4, 0x58, 0x1c, 0x8e, 0x86, 0xd8, 0x22, 0x4e, 0xdd,
-            0xd0, 0x9f, 0x11, 0x57,
-        ];
-        vec![[0; 32], one, p_minus_1, order8_a, order8_b]
-    }
-
-    /// N-24: the initiator's DH helper (DH1…DH4 of §6.4) refuses an all-zero output, bypassing the decoders; the
-    /// error is the uniform one and `start` has produced nothing (it returns before any cell is sealed).
-    #[test]
-    fn start_zero_dh_rejects_and_sends_nothing() {
-        let secret = X25519Secret::from_bytes(&[7; 32]);
-        let Ok(secret) = secret else {
-            return;
-        };
-        for v in low_order() {
-            assert_eq!(dh_checked(&secret, &v).err(), Some(Error::Rejected));
-        }
-        assert!(
-            dh_checked(&secret, &[9; 32]).is_ok(),
-            "control: an ordinary point"
-        );
-        assert_eq!(
-            dh_checked(&secret, &[9; 31]).err(),
-            Some(Error::Rejected),
-            "length"
-        );
-    }
-
-    /// N-41: the same helper on the responder's DH1…DH4.
-    #[test]
-    fn accept_zero_dh_rejects_and_keeps_opk() {
-        let secret = X25519Secret::from_bytes(&[0x42; 32]);
-        let Ok(secret) = secret else {
-            return;
-        };
-        for v in low_order() {
-            assert_eq!(dh_checked(&secret, &v).err(), Some(Error::Rejected));
-        }
-    }
-}
+mod tests;

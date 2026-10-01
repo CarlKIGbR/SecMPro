@@ -91,14 +91,15 @@ pub(crate) fn insert<K: PartialEq, C>(
 
 /// The driver of §6.5 and §6.6 step 4 over already opened chunks `(init_id, i, chunk)`, in fetch order: group them
 /// ([`insert`]); for each group that completes, in the order of completion, `process` it (§6.6 steps 1–3, reading
-/// the store); the first group `process` accepts is the session: the OPK is deleted — the only call of
-/// `delete_opk`, after `process` succeeded — and `process`'s value returned. A group `process` rejects is discarded
+/// the store); the first group `process` accepts is the session: the OPK is deleted and the record consumed — the only call of
+/// `commit_accept`, after `process` succeeded — and `process`'s value returned. A group `process` rejects is discarded
 /// and the OPK kept; later groups are still processed. If none is accepted the result is [`Error::Rejected`];
 /// [`Error::Unavailable`] from `process` is passed up at once. A failing `delete_opk` rejects, the OPK kept.
 pub(crate) fn drive<K: PartialEq, C, T, S: PrekeyStore>(
     items: impl IntoIterator<Item = (K, usize, C)>,
     store: &mut S,
     opk_id: u32,
+    ld_id: &Id,
     mut process: impl FnMut(&Group<K, C>, &S) -> Result<T>,
 ) -> Result<T> {
     let mut groups: Vec<Group<K, C>> = Vec::new();
@@ -109,8 +110,10 @@ pub(crate) fn drive<K: PartialEq, C, T, S: PrekeyStore>(
         let group = groups.remove(done);
         match process(&group, &*store) {
             Ok(accepted) => {
-                // step 4: delete the OPK — the last operation; a failure keeps it and rejects
-                store.delete_opk(opk_id).map_err(|_| Error::Rejected)?;
+                // step 4: delete the OPK and consume the record (`commit_accept`) — the last operation; a failure keeps it and rejects
+                store
+                    .commit_accept(opk_id, ld_id)
+                    .map_err(|_| Error::Rejected)?;
                 return Ok(accepted);
             }
             Err(Error::Unavailable) => return Err(Error::Unavailable),
@@ -152,9 +155,13 @@ impl Responder {
             let p = open_cell(&k_inv, &ad_cell, cell)?;
             Some((p.init_id, usize::from(p.i), p.chunk))
         });
-        drive(opened, store, record.opk_id, |group, store| {
-            process(group, record, store, own_keys, entropy)
-        })
+        drive(
+            opened,
+            store,
+            record.opk_id,
+            &record.ld_id,
+            |group, store| process(group, record, store, own_keys, entropy),
+        )
     }
 }
 

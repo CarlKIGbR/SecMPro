@@ -163,7 +163,7 @@ impl Invitation {
 fn uri(invitation: &[u8]) -> String {
     format!(
         "secmp://i/{}",
-        secmp_proto::inv::base64url_encode(invitation)
+        secmp_proto::inv::base64url_encode(invitation).as_str()
     )
 }
 

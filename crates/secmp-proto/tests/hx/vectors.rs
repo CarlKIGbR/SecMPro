@@ -231,8 +231,8 @@ fn case_invitation(c3: &Case, r_identity: &IdentityKeys) -> (InvitationV1, Vec<u
     let invitation_bytes = invitation.encode().unwrap().to_vec();
     let uri = invitation_uri(&invitation).unwrap();
     c3.expect("invitation", &invitation_bytes);
-    assert_eq!(uri, c3.out_str("uri"), "{} uri", c3.id);
-    (invitation, invitation_bytes, uri)
+    assert_eq!(uri.as_str(), c3.out_str("uri"), "{} uri", c3.id);
+    (invitation, invitation_bytes, uri.to_string())
 }
 
 /// Case 4: the link data and its blob.
@@ -289,8 +289,7 @@ fn case_initiator(
         &c6.input("cell_nonce_2"),
     ]);
     let started = Initiator::start(
-        &accepted.invitation,
-        &accepted.link_data,
+        accepted,
         &ids.i_identity.initiator_keys(),
         &routes,
         &Profile::new("alice", Some(c6.array("avatar_sha256"))).unwrap(),
@@ -300,7 +299,7 @@ fn case_initiator(
     assert!(started.is_ok(), "{} start", c6.id);
     let (handshake_cells, i_state) = started.unwrap();
     assert_eq!(e.remaining(), 0, "{}: every draw consumed", c6.id);
-    let sent = handshake_cells.release(|_| Ok::<(), ()>(())).unwrap();
+    let sent = handshake_cells.release(|_, _| Ok::<(), ()>(())).unwrap();
     for (k, cell) in sent.iter().enumerate() {
         c6.expect(&format!("cell_{k}"), cell.as_bytes());
     }
@@ -325,6 +324,7 @@ fn case_responder(cases: &[Case], world: &World) -> MemoryPrekeyStore {
     for id in ["hx-0007", "hx-0008"] {
         let c = by_id(cases, id);
         let mut store = store_from(&world.store_seed);
+        store.add_record(world.record.duplicate().unwrap()).unwrap();
         let fetched = cells_of(&c.list("fetched"));
         let mut e = fixed(&[&c.input("dh_sk"), &c.input("kem_seed"), &c.input("m")]);
         let accepted = Responder::accept(
@@ -399,6 +399,7 @@ fn case_rejects(cases: &[Case], world: &World, mut after_7: MemoryPrekeyStore) {
             }
             "respond-reject" => {
                 let mut fresh = store_from(&world.store_seed);
+                fresh.add_record(world.record.duplicate().unwrap()).unwrap();
                 let store = if c.id == "hx-0019" {
                     &mut after_7
                 } else {

@@ -57,7 +57,7 @@ fn inv_uri_roundtrip() {
     let invitation = InvitationV1::decode(&lib.w.invitation).unwrap();
     let uri = invitation_uri(&invitation).unwrap();
     assert!(uri.starts_with("secmp://i/"));
-    assert_eq!(uri, lib.w.uri);
+    assert_eq!(uri.as_str(), lib.w.uri);
     assert_eq!(uri.len(), 332, "10 + ceil(241 * 4 / 3)");
     let back = parse_invitation_uri(&uri).unwrap();
     assert_eq!(back.encode().unwrap().to_vec(), lib.w.invitation);

@@ -1,0 +1,103 @@
+PR #4, run 36800231503, job windows-native (id 110172679658), head 665e84e1bc4ee0b6961107e6f5926dc057d22924.
+`gh run view 36800231503 --job 110172679658 --log-failed` answered "run 36800231503 is still in progress; logs will
+be available when it is complete" (linux-full still running), so the finished job's log was read with
+`gh api repos/CarlKIGbR/SecMPro/actions/jobs/110172679658/logs` (2099 lines; ANSI colour codes removed below).
+
+== the failing test (nextest, step 4) ==
+2026-10-01T01:27:58.9595995Z         PASS [   0.011s] (303/346) xtask::bin/xtask gates::tests::systemd_levels
+2026-10-01T01:27:58.9707767Z         FAIL [   0.012s] (304/346) xtask::bin/xtask gates::tests::the_nightly_workflow
+2026-10-01T01:27:58.9709337Z   stdout ───
+2026-10-01T01:27:58.9709876Z 
+2026-10-01T01:27:58.9710188Z     running 1 test
+2026-10-01T01:27:58.9711308Z     test gates::tests::the_nightly_workflow ... FAILED
+2026-10-01T01:27:58.9711855Z 
+2026-10-01T01:27:58.9712176Z     failures:
+2026-10-01T01:27:58.9712555Z 
+2026-10-01T01:27:58.9712841Z     failures:
+2026-10-01T01:27:58.9713435Z         gates::tests::the_nightly_workflow
+2026-10-01T01:27:58.9713916Z 
+2026-10-01T01:27:58.9714576Z     test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 89 filtered out; finished in 0.00s
+2026-10-01T01:27:58.9715640Z     
+2026-10-01T01:27:58.9716374Z   stderr ───
+2026-10-01T01:27:58.9716875Z 
+2026-10-01T01:27:58.9717793Z     thread 'gates::tests::the_nightly_workflow' (4448) panicked at xtask\src\gates.rs:2174:13:
+2026-10-01T01:27:58.9718883Z     on:
+2026-10-01T01:27:58.9719425Z       schedule:
+2026-10-01T01:27:58.9719899Z 
+2026-10-01T01:27:58.9720609Z     note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+2026-10-01T01:27:58.9721337Z 
+2026-10-01T01:27:58.9722037Z   Cancelling due to test failure: 3 tests still running
+2026-10-01T01:28:06.0640440Z         PASS [  36.143s] (305/346) secmp-proto::tr_vectors every_event_of_the_tr_file
+2026-10-01T01:28:22.5431214Z         PASS [ 104.498s] (306/346) secmp-proto tr::tests::ratchet_fast_forward_bound_on_a_step
+2026-10-01T01:28:54.6572027Z         SLOW [>120.000s] (───────) secmp-proto::tr_properties random_interleavings_follow_spec_7_4_and_never_reuse_a_key
+2026-10-01T01:29:30.1636736Z         PASS [ 155.524s] (307/346) secmp-proto::tr_properties random_interleavings_follow_spec_7_4_and_never_reuse_a_key
+2026-10-01T01:29:30.1638036Z ────────────
+2026-10-01T01:29:30.1639524Z      Summary [ 182.873s] 307/346 tests run: 306 passed (3 slow), 1 failed, 0 skipped
+2026-10-01T01:29:30.1641250Z         FAIL [   0.012s] (304/346) xtask::bin/xtask gates::tests::the_nightly_workflow
+2026-10-01T01:29:30.1642315Z warning: 39/346 tests were not run due to test failure (run with --no-fail-fast to run all tests, or run with --max-fail)
+2026-10-01T01:29:30.1647470Z error: test run failed
+
+== step summary ==
+2026-10-01T01:51:45.9543901Z === step summary (host x86_64-pc-windows-msvc, strict: true) ===
+2026-10-01T01:51:45.9544560Z    2 clippy          PASS         70s  clippy --all-features -D warnings on x86_64-pc-windows-msvc (12 crates)
+2026-10-01T01:51:45.9546067Z    4 nextest         FAIL        285s  `C:\Users\runneradmin\.rustup\toolchains\1.98.1-x86_64-pc-windows-msvc\bin\cargo.exe nextest run --workspace --locked` failed with exit code: 100
+2026-10-01T01:51:45.9547459Z    4 doctest         PASS          0s  cargo test --doc
+2026-10-01T01:51:45.9548695Z    5 kat             PASS       1334s  KAT/differential packages: secmp-crypto, secmp-proto, secmp-testkit (expected set matches); ML-KEM KATs and frozen vectors (M1 suites, tr) also with libcrux's portable backend
+2026-10-01T01:51:45.9550038Z    4 hello           PASS          0s  secmp-relay 0.0.0 (M0 skeleton: no functionality) | secmp-cli 0.0.0 (M0 skeleton: no functionality) | secmp-ui 0.0.0 (M0 skeleton: no functionality)
+2026-10-01T01:51:45.9550959Z xtask: error: step: 1 step(s) failed
+2026-10-01T01:51:45.9579880Z error: process didn't exit successfully: `target\debug\xtask.exe step --strict clippy nextest doctest kat hello` (exit code: 1)
+2026-10-01T01:51:46.0810375Z ##[error]Process completed with exit code 1.
+
+== root cause (M3 review C1) ==
+xtask/src/gates.rs (test `gates::tests::the_nightly_workflow`, the assertion at :2174 at 665e84e): the test searches
+include_str!(".github/workflows/fuzz-nightly.yml") for multi-line needles written with \n ("on:\n  schedule:\n").
+GitHub's Windows images check the repository out with core.autocrlf=true, so the compiled-in file holds \r\n and
+the needle cannot match; the panic message prints that needle ("on:" / "  schedule:"). Linux and macOS check out
+LF, so the test passed there (linux-fast success). A harness defect in an xtask unit test: no product code and no
+gate behaviour is involved (the workflow parsers of the policy step read line by line and are CRLF-safe).
+Fix: the test normalises CRLF to LF before matching and also runs every check on a CRLF copy of the file, so the
+Windows condition is exercised on every host; with the normalisation removed, the CRLF arm fails exactly as
+windows-native did (verified locally on macOS).
+
+== tests the Windows nextest step did not run (fail-fast cancelled 39 of 346 after the failure) ==
+All 39 are xtask unit tests; every secmp-* test ran in that step, and the `kat` step (PASS, 1334 s) ran the
+secmp-crypto, secmp-proto and secmp-testkit suites in full. The list (from `cargo nextest list --workspace`):
+  xtask::bin/xtask gates::tests::tr_perf_report_and_verdict
+  xtask::bin/xtask gates::tests::workflow_fixture_files
+  xtask::bin/xtask gates::tests::workflow_hygiene
+  xtask::bin/xtask meta::tests::closure_is_transitive_and_external_only
+  xtask::bin/xtask meta::tests::kani_unstable_features_come_from_the_package_metadata
+  xtask::bin/xtask meta::tests::parses_members_targets_features
+  xtask::bin/xtask meta::tests::rejects_garbage
+  xtask::bin/xtask policy::tests::adr038_exemption_is_path_exact
+  xtask::bin/xtask policy::tests::exemption_names
+  xtask::bin/xtask policy::tests::file_top_is_tracked
+  xtask::bin/xtask policy::tests::fixture_adr038_unsafe_exemption
+  xtask::bin/xtask policy::tests::fixture_build_scripts
+  xtask::bin/xtask policy::tests::fixture_missing_or_wrong_spdx
+  xtask::bin/xtask policy::tests::fixture_unsanctioned_lint_allowances
+  xtask::bin/xtask policy::tests::fixture_vet_exemptions
+  xtask::bin/xtask policy::tests::forbid_header_detection
+  xtask::bin/xtask policy::tests::forbid_rule_rejects_weaker_or_missing_headers
+  xtask::bin/xtask policy::tests::manifest_lints_table
+  xtask::bin/xtask policy::tests::relaxations_are_found
+  xtask::bin/xtask policy::tests::rules_follow_expect_lists
+  xtask::bin/xtask policy::tests::sys_rule_requires_allow_at_the_library_root_only
+  xtask::bin/xtask policy::tests::ui_rule_requires_deny_and_no_unsafe_token_or_relaxation
+  xtask::bin/xtask policy::tests::unsafe_token_boundaries
+  xtask::bin/xtask sbom::tests::toml_escaping
+  xtask::bin/xtask time::tests::epoch_and_known_dates
+  xtask::bin/xtask time::tests::http_date_matches_rfc3339
+  xtask::bin/xtask time::tests::malformed_inputs_are_rejected
+  xtask::bin/xtask tools::tests::install_list_parsing
+  xtask::bin/xtask tools::tests::unknown_set_is_rejected
+  xtask::bin/xtask vectors::tests::hex_validator
+  xtask::bin/xtask vectors::tests::pending_reference_files_must_name_their_suite_and_have_cases
+  xtask::bin/xtask vectors::tests::positive_view_keeps_the_header_and_the_positive_rows
+  xtask::bin/xtask vectors::tests::step_12a_refuses_a_frozen_file_that_is_not_a_verbatim_copy
+  xtask::bin/xtask vectors::tests::structural_comparison_ignores_generator_only
+  xtask::bin/xtask vectors::tests::the_committed_vector_files_match_the_expected_sets
+  xtask::bin/xtask wintest::tests::ansi_is_stripped
+  xtask::bin/xtask wintest::tests::backend_is_required
+  xtask::bin/xtask wintest::tests::job_lookup
+  xtask::bin/xtask wintest::tests::run_listing

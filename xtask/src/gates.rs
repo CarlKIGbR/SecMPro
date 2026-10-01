@@ -2142,13 +2142,12 @@ mod tests {
         Ok(())
     }
 
-    /// M2 review F2, F10: the committed `fuzz-nightly.yml` passes the workflow hygiene, is no required check (one job,
-    /// `fuzz-nightly`), runs on a schedule and on dispatch only, runs the campaign step and the property tests with a
-    /// fresh seed, and has the time for a 4 h campaign.
-    #[test]
-    fn the_nightly_workflow() {
-        let nightly = include_str!("../../.github/workflows/fuzz-nightly.yml");
-        assert!(workflow_findings("fuzz-nightly.yml", nightly).is_empty());
+    /// The checks of `the_nightly_workflow` on one text of `fuzz-nightly.yml`. Line endings are normalised first: the
+    /// Windows runner checks the repository out with CRLF (`core.autocrlf`), so `include_str!` holds `\r\n` there and a
+    /// multi-line needle written with `\n` would never match (PR run 36800231503, `windows-native`).
+    fn check_nightly(text: &str) {
+        let nightly = text.replace("\r\n", "\n");
+        assert!(workflow_findings("fuzz-nightly.yml", &nightly).is_empty());
         let files = vec![
             (
                 expect::REQUIRED_WORKFLOW.to_owned(),
@@ -2156,11 +2155,11 @@ mod tests {
             ),
             (
                 ".github/workflows/fuzz-nightly.yml".to_owned(),
-                nightly.to_owned(),
+                nightly.clone(),
             ),
         ];
         assert!(required_job_findings(&files).is_empty());
-        assert_eq!(job_names(nightly), vec!["fuzz-nightly".to_owned()]);
+        assert_eq!(job_names(&nightly), vec!["fuzz-nightly".to_owned()]);
         for needle in [
             "on:\n  schedule:\n",
             "  workflow_dispatch:\n",
@@ -2183,6 +2182,19 @@ mod tests {
                 .is_some_and(|m| m >= 300 && m.saturating_mul(60) > expect::FUZZ_NIGHTLY_SECONDS),
             "{timeout:?}"
         );
+    }
+
+    /// M2 review F2, F10: the committed `fuzz-nightly.yml` passes the workflow hygiene, is no required check (one job,
+    /// `fuzz-nightly`), runs on a schedule and on dispatch only, runs the campaign step and the property tests with a
+    /// fresh seed, and has the time for a 4 h campaign — with the checkout's line endings on every host: the file as
+    /// compiled in, and the same file with CRLF line endings as a Windows checkout has it (M3 review C1).
+    #[test]
+    fn the_nightly_workflow() {
+        let nightly = include_str!("../../.github/workflows/fuzz-nightly.yml");
+        check_nightly(nightly);
+        let crlf = nightly.replace("\r\n", "\n").replace('\n', "\r\n");
+        assert!(crlf.contains("on:\r\n  schedule:\r\n"));
+        check_nightly(&crlf);
     }
 
     /// M2 review F3: Miri runs per package, each with only its own skip filters; a `test-target:` entry leaves out

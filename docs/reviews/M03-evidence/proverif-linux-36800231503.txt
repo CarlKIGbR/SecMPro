@@ -1,0 +1,14 @@
+PR #4, PR run 36800231503 (pull_request), job linux-full (110172679379), head 665e84e1bc4ee0b6961107e6f5926dc057d22924; the ProVerif gate (ci-full step 10).
+Extracted from `gh run view 36800231503 --job <id> --log` after the run completed (2026-10-01 03:24 UTC);
+timestamps and ANSI colour codes removed. M3 review C7 (first half: the reviewed head's run).
+
+sha256(formal/tr.pv @665e84e) = 2e5045dca84ab630d696ad783a4dd563c2e813b43112eae6d153c2d0036f01c3
+(the RESULT lines themselves are not printed by the gate on success; F7 of the M3 review adds them in M4)
+
+=== [10] proverif ===
+$ proverif -help
+$ proverif /home/runner/work/SecMPro/SecMPro/xtask/fixtures/proverif/selftest.pv
+$ proverif /home/runner/work/SecMPro/SecMPro/formal/tr.pv
+  formal/tr.pv: 39 RESULT lines as expected — T1 true ×6, T2 true ×2, T3 true ×4, T4 true ×2, T5 true ×2, T6 true ×2, T7 false ×2, an attack as expected, T8 true ×12, T9 true ×4, T10 false ×1, an attack as expected, T11 true ×1, T12 false ×1, informative (80 s)
+
+  10 proverif        PASS         80s  ProVerif 2.05 self-test [true, false] ok; models: tr (expected set matches); formal/tr.pv: 39 RESULT lines as expected — T1 true ×6, T2 true ×2, T3 true ×4, T4 true ×2, T5 true ×2, T6 true ×2, T7 false ×2, an attack as expected, T8 true ×12, T9 true ×4, T10 false ×1, an attack as expected, T11 true ×1, T12 false ×1, informative (80 s)

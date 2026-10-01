@@ -1,0 +1,303 @@
+PR #4, PR run 36800231503 (pull_request), job linux-fast (110172679267), head 665e84e1bc4ee0b6961107e6f5926dc057d22924; the kat step's test listing (docs/06 §5 step 5).
+Extracted from `gh run view 36800231503 --job <id> --log` after the run completed (2026-10-01 03:24 UTC);
+timestamps and ANSI colour codes removed. M3 review C7 (first half: the reviewed head's run).
+
+$ /home/runner/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/cargo nextest run --locked --package secmp-crypto --features kat
+        PASS [   0.004s] (  1/116) secmp-crypto aead::tests::draft_xchacha_a31_opens
+        PASS [   0.004s] (  2/116) secmp-crypto aead::tests::draft_xchacha_a31_seals
+        PASS [   0.004s] (  3/116) secmp-crypto aead::tests::every_failure_is_the_same_rejection
+        PASS [   0.006s] (  4/116) secmp-crypto aead::tests::empty_plaintext
+        PASS [   0.004s] (  5/116) secmp-crypto aead::tests::open_ct_needs_the_exact_out_length
+        PASS [   0.004s] (  6/116) secmp-crypto aead::tests::the_aead_verifies_before_it_decrypts
+        PASS [   0.004s] (  7/116) secmp-crypto aead::tests::seal_is_the_crate_aead_and_round_trips
+        PASS [   0.007s] (  8/116) secmp-crypto caead::tests::derive_kat_is_derive
+        PASS [   0.004s] (  9/116) secmp-crypto caead::tests::matches_the_definition
+        PASS [   0.004s] ( 10/116) secmp-crypto caead::tests::every_failure_is_the_same_rejection
+        PASS [   0.005s] ( 11/116) secmp-crypto caead::tests::round_trip_and_layout
+        PASS [   0.004s] ( 12/116) secmp-crypto caead::tests::tag_valid_but_commitment_wrong
+        PASS [   0.005s] ( 13/116) secmp-crypto ed25519::tests::bad_r_is_rejected
+        PASS [   0.006s] ( 14/116) secmp-crypto ed25519::tests::canonical_edges
+        PASS [   0.004s] ( 15/116) secmp-crypto ed25519::tests::s_plus_l_is_rejected
+        PASS [   0.005s] ( 16/116) secmp-crypto ed25519::tests::signature_byte_rules
+        PASS [   0.004s] ( 17/116) secmp-crypto ed25519::tests::signature_encoding_check
+        PASS [   0.006s] ( 18/116) secmp-crypto ed25519::tests::small_order_and_non_canonical_keys_are_refused
+        PASS [   0.004s] ( 19/116) secmp-crypto error::tests::display_carries_no_detail
+        PASS [   0.004s] ( 20/116) secmp-crypto error::tests::locked_memory_failure_maps_to_unavailable
+        PASS [   0.007s] ( 21/116) secmp-crypto fingerprint::tests::definition_and_lengths
+        PASS [   0.005s] ( 22/116) secmp-crypto hash::tests::sha256_fips180_vectors
+        PASS [   0.004s] ( 23/116) secmp-crypto hash::tests::sha3_256_fips202_vectors
+        PASS [   0.025s] ( 24/116) secmp-crypto ed25519::tests::rfc8032_vectors
+        PASS [   0.008s] ( 25/116) secmp-crypto hybrid_kem::tests::debug_is_redacted
+        PASS [   0.016s] ( 26/116) secmp-crypto hybrid_kem::tests::low_order_keys_are_rejected_on_both_sides
+        PASS [   0.021s] ( 27/116) secmp-crypto hybrid_kem::tests::combiner_order_and_label
+        PASS [   0.039s] ( 28/116) secmp-crypto ed25519::tests::wrong_message_signature_or_length
+        PASS [   0.022s] ( 29/116) secmp-crypto hybrid_kem::tests::tampering_changes_the_secret_without_error
+        PASS [   0.034s] ( 30/116) secmp-crypto hybrid_kem::tests::round_trips
+        PASS [   0.051s] ( 31/116) secmp-crypto hybrid_sign::tests::import_lengths_and_debug
+        PASS [   0.061s] ( 32/116) secmp-crypto hybrid_sign::tests::matches_the_definition
+        PASS [   0.004s] ( 33/116) secmp-crypto kdf::tests::empty_salt_equals_zero_salt
+        PASS [   0.004s] ( 34/116) secmp-crypto kdf::tests::info_is_label_then_context_unframed
+        PASS [   0.011s] ( 35/116) secmp-crypto kdf::tests::length_limits
+        PASS [   0.005s] ( 36/116) secmp-crypto kdf::tests::matches_manual_hmac_composition
+        PASS [   0.004s] ( 37/116) secmp-crypto label::tests::enum_equals_appendix_a_of_the_spec
+        PASS [   0.005s] ( 38/116) secmp-crypto label::tests::exactly_two_hybrid_sign_labels
+        PASS [   0.007s] ( 39/116) secmp-crypto label::tests::label_set_is_prefix_free
+        PASS [   0.121s] ( 40/116) secmp-crypto hybrid_sign::tests::either_component_failing_rejects
+        PASS [   0.004s] ( 41/116) secmp-crypto label::tests::labels_are_ascii_and_round_trip
+        PASS [   0.040s] ( 42/116) secmp-crypto mldsa::tests::seed_determines_key_and_import_round_trips
+        PASS [   0.045s] ( 43/116) secmp-crypto mldsa::tests::context_message_and_signature_are_bound
+        PASS [   0.006s] ( 44/116) secmp-crypto mlkem::tests::ciphertext_lengths_and_debug
+        PASS [   0.149s] ( 45/116) secmp-crypto hybrid_sign::tests::other_labels_are_refused
+        PASS [   0.009s] ( 46/116) secmp-crypto mlkem::tests::encapsulation_key_import_is_validated
+        PASS [   0.127s] ( 47/116) secmp-crypto hybrid_sign::tests::sign_and_verify_with_both_labels
+        PASS [   0.017s] ( 48/116) secmp-crypto mlkem::tests::implicit_rejection_on_a_flipped_ciphertext
+        PASS [   0.023s] ( 49/116) secmp-crypto mlkem::tests::round_trip_768_and_1024
+        PASS [   0.034s] ( 50/116) secmp-crypto mlkem::tests::expose_seed_round_trips_through_from_seed
+        PASS [   0.013s] ( 51/116) secmp-crypto mlkem::tests::seed_is_the_key
+        PASS [   0.006s] ( 52/116) secmp-crypto msg::tests::every_failure_is_the_same_rejection
+        PASS [   0.006s] ( 53/116) secmp-crypto msg::tests::matches_the_definition
+        PASS [   0.005s] ( 54/116) secmp-crypto msg::tests::round_trip
+        PASS [   0.004s] ( 55/116) secmp-crypto nonce::tests::counter_never_wraps
+        PASS [   0.004s] ( 56/116) secmp-crypto nonce::tests::counter_receives_strictly_plus_one
+        PASS [   0.004s] ( 57/116) secmp-crypto nonce::tests::counter_sends_in_order
+        PASS [   0.004s] ( 58/116) secmp-crypto nonce::tests::nonces_are_random
+        PASS [   0.006s] ( 59/116) secmp-crypto rng::tests::fills_and_differs
+        PASS [   0.006s] ( 60/116) secmp-crypto sas::tests::constant_time_order
+        PASS [   0.004s] ( 61/116) secmp-crypto secret::tests::locked_secret_basics
+        PASS [   0.004s] ( 62/116) secmp-crypto secret::tests::secret_bytes_basics
+        PASS [   0.004s] ( 63/116) secmp-crypto secret::tests::secret_bytes_zeroise_on_drop_step
+        PASS [   0.004s] ( 64/116) secmp-crypto test_util::hex_round_trip
+        PASS [   0.006s] ( 65/116) secmp-crypto tr_kdf::tests::kdf_ck_matches_manual_hmac
+        PASS [   0.004s] ( 66/116) secmp-crypto tr_kdf::tests::kdf_rk_matches_manual_composition
+        PASS [   0.004s] ( 67/116) secmp-crypto tr_kdf::tests::manual_hmac_matches_rfc4231
+        PASS [   0.004s] ( 68/116) secmp-crypto tr_kdf::tests::outputs_are_distinct_and_bound_to_every_input
+        PASS [   0.004s] ( 69/116) secmp-crypto tr_kdf::tests::tr_init_matches_manual_composition
+        PASS [   0.004s] ( 70/116) secmp-crypto vector_stream::tests::matches_the_schema_rule_and_chunking
+        PASS [   0.055s] ( 71/116) secmp-crypto sas::tests::half_matches_the_definition
+        PASS [   0.011s] ( 72/116) secmp-crypto x25519::tests::decode_refuses_exactly_the_low_order_encodings
+        PASS [   0.007s] ( 73/116) secmp-crypto x25519::tests::expose_secret_round_trips_through_from_bytes
+        PASS [   0.006s] ( 74/116) secmp-crypto x25519::tests::lengths_and_debug
+        PASS [   0.006s] ( 75/116) secmp-crypto x25519::tests::low_order_inputs_are_rejected
+        PASS [   0.007s] ( 76/116) secmp-crypto x25519::tests::rfc7748_diffie_hellman
+        PASS [   0.005s] ( 77/116) secmp-crypto x25519::tests::rfc7748_top_bit_masked
+        PASS [   0.165s] ( 78/116) secmp-crypto mldsa::tests::sign_verify_and_hedging
+        PASS [   0.211s] ( 79/116) secmp-crypto sas::tests::symmetric_sorted_and_grouped
+        PASS [   0.186s] ( 80/116) secmp-crypto::kat_curve25519 wycheproof_x25519
+        PASS [   0.313s] ( 81/116) secmp-crypto::kat_curve25519 rfc7748_iterations
+        PASS [   0.194s] ( 82/116) secmp-crypto::kat_mldsa acvp_sigver
+        PASS [   0.359s] ( 83/116) secmp-crypto::kat_mldsa acvp_keygen
+        PASS [   0.146s] ( 84/116) secmp-crypto::kat_mlkem mlkem1024::acvp_encap_decap
+        PASS [   0.674s] ( 85/116) secmp-crypto::kat_curve25519 wycheproof_ed25519_strict
+        PASS [   0.143s] ( 86/116) secmp-crypto::kat_mlkem mlkem1024::acvp_keygen
+        PASS [   0.516s] ( 87/116) secmp-crypto::kat_mlkem mlkem1024::wycheproof_encaps
+        PASS [   0.561s] ( 88/116) secmp-crypto::kat_mlkem mlkem1024::wycheproof_keygen_seed
+        PASS [   0.027s] ( 89/116) secmp-crypto::kat_mlkem mlkem1024::wycheproof_semi_expanded_decaps_library
+        PASS [   0.117s] ( 90/116) secmp-crypto::kat_mlkem mlkem768::acvp_encap_decap
+        PASS [   0.110s] ( 91/116) secmp-crypto::kat_mlkem mlkem768::acvp_keygen
+        PASS [   1.516s] ( 92/116) secmp-crypto::kat_mlkem mlkem1024::wycheproof_decaps_from_seed
+        PASS [   2.143s] ( 93/116) secmp-crypto::kat_mldsa wycheproof_verify
+        PASS [   0.396s] ( 94/116) secmp-crypto::kat_mlkem mlkem768::wycheproof_encaps
+        PASS [   0.022s] ( 95/116) secmp-crypto::kat_mlkem mlkem768::wycheproof_semi_expanded_decaps_library
+        PASS [   0.004s] ( 96/116) secmp-crypto::kat_symmetric chacha20_block_zero
+        PASS [   0.034s] ( 97/116) secmp-crypto::kat_symmetric chacha20_stream_from_wycheproof_aead_cases
+        PASS [   0.004s] ( 98/116) secmp-crypto::kat_symmetric rfc4231
+        PASS [   0.006s] ( 99/116) secmp-crypto::kat_symmetric rfc5869
+        PASS [   0.028s] (100/116) secmp-crypto::kat_symmetric wycheproof_hkdf_sha256
+        PASS [   0.012s] (101/116) secmp-crypto::kat_symmetric wycheproof_hmac_sha256
+        PASS [   0.064s] (102/116) secmp-crypto::kat_symmetric wycheproof_xchacha20_poly1305
+        PASS [   0.086s] (103/116) secmp-crypto::kat_symmetric wycheproof_xchacha20_poly1305_through_aead
+        PASS [   0.026s] (104/116) secmp-crypto::vectors caead
+        PASS [   0.428s] (105/116) secmp-crypto::kat_mlkem mlkem768::wycheproof_keygen_seed
+        PASS [   0.124s] (106/116) secmp-crypto::vectors fingerprint
+        PASS [   0.010s] (107/116) secmp-crypto::vectors hkdf_labels
+        PASS [   1.112s] (108/116) secmp-crypto::kat_mlkem mlkem768::wycheproof_decaps_from_seed
+        PASS [   0.233s] (109/116) secmp-crypto::vectors hybridkem_1024
+        PASS [   0.182s] (110/116) secmp-crypto::vectors hybridkem_768
+        PASS [   0.005s] (111/116) secmp-crypto::vectors kdf_rk_reproduces_the_frozen_hkdf_rows
+        PASS [   0.033s] (112/116) secmp-crypto::vectors msgencrypt
+        PASS [   1.072s] (113/116) secmp-crypto::vectors canonical_writer_is_stable
+        PASS [   1.033s] (114/116) secmp-crypto::vectors hybridsign
+        PASS [   1.023s] (115/116) secmp-crypto::vectors sas
+        PASS [   5.508s] (116/116) secmp-crypto::kat_mldsa wycheproof_sign_seed
+     Summary [   6.173s] 116 tests run: 116 passed, 0 skipped
+$ /home/runner/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/cargo nextest run --locked --package secmp-proto --features kat
+        PASS [   0.004s] (  1/123) secmp-proto codec::tests::boxed_arrays_need_the_exact_length
+        PASS [   0.004s] (  2/123) secmp-proto codec::tests::length_prefixes
+        PASS [   0.005s] (  3/123) secmp-proto codec::tests::flags_and_expected_bytes
+        PASS [   0.005s] (  4/123) secmp-proto codec::tests::encoding_buffers_are_zeroizing
+        PASS [   0.004s] (  5/123) secmp-proto codec::tests::padding_round_trip_and_rejections
+        PASS [   0.005s] (  6/123) secmp-proto codec::tests::reader_is_bounded_and_exact
+        PASS [   0.004s] (  7/123) secmp-proto codec::tests::writer_growth_policy
+        PASS [   0.005s] (  8/123) secmp-proto codec::tests::writer_grows_without_losing_bytes
+        PASS [   0.004s] (  9/123) secmp-proto codec::tests::writer_with_capacity_allocates_once
+        PASS [   0.004s] ( 10/123) secmp-proto error::tests::crypto_errors_keep_their_kind
+        PASS [   0.005s] ( 11/123) secmp-proto error::tests::display_carries_no_detail
+        PASS [   0.005s] ( 12/123) secmp-proto keys::tests::ed25519_fields
+        PASS [   0.005s] ( 13/123) secmp-proto keys::tests::hybrid_sig_checks_only_the_ed25519_half
+        PASS [   0.005s] ( 14/123) secmp-proto keys::tests::x25519_field
+        PASS [   0.005s] ( 15/123) secmp-proto sizes::tests::sum_saturates_to_max_on_overflow
+        PASS [   0.010s] ( 16/123) secmp-proto keys::tests::mlkem_fields
+        PASS [   0.006s] ( 17/123) secmp-proto tr::select::tests::constant_time_selection_equals_the_pseudocode
+        PASS [   0.013s] ( 18/123) secmp-proto tr::entropy::tests::fixed_entropy_reads_in_order
+        PASS [   0.011s] ( 19/123) secmp-proto tr::entropy::tests::test_entropy_fails_after_its_budget
+        PASS [   0.014s] ( 20/123) secmp-proto tr::entropy::tests::os_entropy_draws_fresh_values
+        PASS [   0.004s] ( 21/123) secmp-proto tr::select::tests::skip_plan_bounds
+        PASS [   0.006s] ( 22/123) secmp-proto tr::tests::content_inbox_rejects_every_noncanonical_encoding
+        PASS [   0.068s] ( 23/123) secmp-proto tr::tests::content_fragments_reassemble_in_any_order
+        PASS [   0.068s] ( 24/123) secmp-proto tr::tests::content_inbox_round_trips_and_resumes
+        PASS [   0.076s] ( 25/123) secmp-proto tr::tests::content_every_type_is_delivered
+        PASS [   0.074s] ( 26/123) secmp-proto tr::tests::content_inconsistent_fragments_are_discarded
+        PASS [   0.088s] ( 27/123) secmp-proto tr::tests::content_undecodable_content_is_consumed_and_malformed
+        PASS [   0.137s] ( 28/123) secmp-proto tr::tests::content_partials_evict_the_oldest
+        PASS [   0.020s] ( 29/123) secmp-proto tr::tests::encrypt_aborts_at_n_s_max
+        PASS [   0.021s] ( 30/123) secmp-proto tr::tests::encrypt_content_without_an_encoding
+        PASS [   0.208s] ( 31/123) secmp-proto tr::tests::content_reassembled_inner_types
+        PASS [   0.057s] ( 32/123) secmp-proto tr::tests::encrypt_persist_and_commit_errors_are_returned
+        PASS [   0.154s] ( 33/123) secmp-proto tr::tests::content_verified_key_change
+        PASS [   0.018s] ( 34/123) secmp-proto tr::tests::encrypt_unavailable_without_a_nonce
+        PASS [   0.063s] ( 35/123) secmp-proto tr::tests::encrypt_refused_after_sealing_hands_back_the_old_state
+        PASS [   0.033s] ( 36/123) secmp-proto tr::tests::encrypt_without_a_sending_chain
+        PASS [   0.074s] ( 37/123) secmp-proto tr::tests::ratchet_any_message_of_a_new_chain_steps
+        PASS [   0.062s] ( 38/123) secmp-proto tr::tests::ratchet_dummies_take_the_same_path
+        PASS [   0.074s] ( 39/123) secmp-proto tr::tests::ratchet_header_keys_rotate_per_spec
+        PASS [   0.027s] ( 40/123) secmp-proto tr::tests::ratchet_kat_accessors
+        PASS [   0.110s] ( 41/123) secmp-proto tr::tests::ratchet_kem_material_constant_within_a_chain_fresh_at_every_step
+        PASS [   0.535s] ( 42/123) secmp-proto tr::tests::content_unverifiable_key_change_freezes
+        PASS [   0.085s] ( 43/123) secmp-proto tr::tests::ratchet_pn_is_the_previous_chain_length
+        PASS [   0.134s] ( 44/123) secmp-proto tr::tests::ratchet_skipped_bound_evicts_the_earliest_inserted
+        PASS [   0.278s] ( 45/123) secmp-proto tr::tests::ratchet_skip_stores_exactly_the_last_min_gap_256_keys
+        PASS [   0.124s] ( 46/123) secmp-proto tr::tests::ratchet_skipped_keys_found_under_three_header_keys
+        PASS [   0.097s] ( 47/123) secmp-proto tr::tests::ratchet_skipped_path_checks_neither_kem_constancy_nor_dh_pk
+        PASS [   0.035s] ( 48/123) secmp-proto tr::tests::reject_absent_and_unknown_keys
+        PASS [   0.032s] ( 49/123) secmp-proto tr::tests::reject_cell_length
+        PASS [   0.100s] ( 50/123) secmp-proto tr::tests::reject_body_mac_failure
+        PASS [   0.089s] ( 51/123) secmp-proto tr::tests::reject_gap_over_max_ff
+        PASS [   0.041s] ( 52/123) secmp-proto tr::tests::reject_kem_material_that_changes_within_a_chain
+        PASS [   0.034s] ( 53/123) secmp-proto tr::tests::reject_n_r_overflow
+        PASS [   0.097s] ( 54/123) secmp-proto tr::tests::reject_replay_of_a_consumed_skipped_key
+        PASS [   0.147s] ( 55/123) secmp-proto tr::tests::reject_no_header_key
+        PASS [   0.042s] ( 56/123) secmp-proto tr::tests::reject_replay_on_the_current_chain
+        PASS [   0.053s] ( 57/123) secmp-proto tr::tests::reject_step_that_repeats_the_ratchet_key
+        PASS [   0.101s] ( 58/123) secmp-proto tr::tests::reject_step_with_a_wrong_body_or_ct_pq
+        PASS [   0.078s] ( 59/123) secmp-proto tr::tests::reject_undecodable_header_on_the_chain_path
+        PASS [   0.080s] ( 60/123) secmp-proto tr::tests::reject_undecodable_header_on_the_step_path
+        PASS [   0.046s] ( 61/123) secmp-proto tr::tests::reject_unreachable_shapes_fail_closed
+        PASS [   0.048s] ( 62/123) secmp-proto tr::tests::reject_wrong_session_binding
+        PASS [   0.175s] ( 63/123) secmp-proto tr::tests::reject_undecodable_header_under_a_skipped_key
+        PASS [   0.070s] ( 64/123) secmp-proto tr::tests::state_rejects_noncanonical_skipped
+        PASS [   0.065s] ( 65/123) secmp-proto tr::tests::state_rejects_refused_keys
+        PASS [   0.231s] ( 66/123) secmp-proto tr::tests::state_rejects_malformed_encodings
+        PASS [   0.074s] ( 67/123) secmp-proto tr::tests::state_rejects_unreachable_shapes
+        PASS [   0.062s] ( 68/123) secmp-proto tr::tests::state_skipped_count_bound
+        PASS [   0.115s] ( 69/123) secmp-proto tr::tests::state_round_trips_in_every_shape
+        PASS [   0.012s] ( 70/123) secmp-proto wire::cell::tests::app_message_and_batch
+        PASS [   0.004s] ( 71/123) secmp-proto wire::cell::tests::cell_parts
+        PASS [   0.006s] ( 72/123) secmp-proto wire::cell::tests::content_types_padding_and_limits
+        PASS [   0.092s] ( 73/123) secmp-proto tr::tests::unavailable_step_consumes_nothing
+        PASS [   0.023s] ( 74/123) secmp-proto wire::cell::tests::fragment_payload_inner_types
+        PASS [   0.005s] ( 75/123) secmp-proto wire::cell::tests::fragment_rules
+        PASS [   0.006s] ( 76/123) secmp-proto wire::cell::tests::handshake_body_caps_and_routes
+        PASS [   0.008s] ( 77/123) secmp-proto wire::cell::tests::header
+        PASS [   0.004s] ( 78/123) secmp-proto wire::cell::tests::plaintext_fields_are_zeroizing
+        PASS [   0.011s] ( 79/123) secmp-proto wire::cell::tests::routes
+        PASS [   0.006s] ( 80/123) secmp-proto wire::cell::tests::secret_bearing_encodings_are_zeroizing
+        PASS [   0.005s] ( 81/123) secmp-proto wire::frame::tests::cellr_context_and_zero_rules
+        PASS [   0.031s] ( 82/123) secmp-proto wire::cell::tests::key_change_receipt_control
+        PASS [   0.016s] ( 83/123) secmp-proto wire::frame::tests::every_response_round_trips_at_frame_size
+        PASS [   0.025s] ( 84/123) secmp-proto wire::frame::tests::every_request_round_trips_at_frame_size
+        PASS [   0.004s] ( 85/123) secmp-proto wire::frame::tests::opcode_table_equals_appendix_d2
+        PASS [   0.028s] ( 86/123) secmp-proto wire::frame::tests::fetch_multi_count_and_link_get_rules
+        PASS [   0.009s] ( 87/123) secmp-proto wire::hx::tests::cell_plaintext_index_and_total
+        PASS [   0.006s] ( 88/123) secmp-proto wire::hx::tests::opaque_and_inner_structures
+        PASS [   0.006s] ( 89/123) secmp-proto wire::hx::tests::outer_is_padded_to_three_chunks
+        PASS [   0.050s] ( 90/123) secmp-proto wire::frame::tests::reserved_and_foreign_opcodes_reject
+        PASS [   0.004s] ( 91/123) secmp-proto wire::inv::tests::invitation
+        PASS [   0.065s] ( 92/123) secmp-proto wire::inv::tests::largest_link_data_fits_its_padding
+        PASS [   0.004s] ( 93/123) secmp-proto wire::inv::tests::onion_checksum_and_version
+        PASS [   0.004s] ( 94/123) secmp-proto wire::inv::tests::profile_names
+        PASS [   0.005s] ( 95/123) secmp-proto wire::inv::tests::relay_ref_with_and_without_direct
+        PASS [   0.008s] ( 96/123) secmp-proto wire::record::tests::handshake_records
+        PASS [   0.004s] ( 97/123) secmp-proto wire::record::tests::hello
+        PASS [   0.110s] ( 98/123) secmp-proto wire::inv::tests::iks_bundle_link_data_blob
+        PASS [   0.007s] ( 99/123) secmp-proto wire::signed::tests::exact_contents
+        PASS [   0.010s] (100/123) secmp-proto wire::record::tests::relay_info_and_its_record
+        PASS [   0.007s] (101/123) secmp-proto wire::signed::tests::lengths_and_labels
+        PASS [   0.007s] (102/123) secmp-proto wire::signed::tests::signed_messages_are_zeroizing
+        PASS [   0.004s] (103/123) secmp-proto wire::tests::periods
+        PASS [   0.159s] (104/123) secmp-proto::canonical edge_counters
+        PASS [   0.161s] (105/123) secmp-proto::canonical edge_enum_variants
+        PASS [   0.289s] (106/123) secmp-proto::canonical edge_lengths
+        PASS [   0.859s] (107/123) secmp-proto::canonical frames
+        PASS [   0.823s] (108/123) secmp-proto::canonical handshake_envelope
+        PASS [   1.335s] (109/123) secmp-proto::canonical invitation_and_link_data
+        PASS [   1.318s] (110/123) secmp-proto::canonical ratchet_cell_content_and_bodies
+        PASS [   0.005s] (111/123) secmp-proto::canonical structures_with_macs_commitments_tokens_or_tags_have_no_partial_eq
+        PASS [   0.527s] (112/123) secmp-proto::canonical records
+        PASS [   0.202s] (113/123) secmp-proto::encodings_ref every_row_of_the_encodings_file
+        PASS [   0.552s] (114/123) secmp-proto::encodings_ref canonical_writer_is_stable
+        PASS [   0.008s] (115/123) secmp-proto::fuzz_max_len fuzz_max_len_is_the_largest_valid_input_plus_one
+        PASS [   0.523s] (116/123) secmp-proto::encodings_ref the_rust_generator_reproduces_every_positive_row
+        PASS [   0.934s] (117/123) secmp-proto::tr_properties advancing_the_sending_chain_equals_encrypting_and_dropping
+        PASS [  17.809s] (118/123) secmp-proto::tr_generator the_rust_generator_reproduces_the_tr_file
+        PASS [   0.080s] (119/123) secmp-proto::tr_smoke both_directions_steps_and_reordering
+        PASS [  37.091s] (120/123) secmp-proto tr::tests::ratchet_fast_forward_bound_on_the_chain
+        PASS [  16.466s] (121/123) secmp-proto::tr_vectors every_event_of_the_tr_file
+        PASS [  49.193s] (122/123) secmp-proto tr::tests::ratchet_fast_forward_bound_on_a_step
+        SLOW [> 60.000s] (───────) secmp-proto::tr_properties random_interleavings_follow_spec_7_4_and_never_reuse_a_key
+        PASS [  74.897s] (123/123) secmp-proto::tr_properties random_interleavings_follow_spec_7_4_and_never_reuse_a_key
+     Summary [  81.657s] 123 tests run: 123 passed (1 slow), 0 skipped
+$ /home/runner/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/cargo nextest run --locked --package secmp-testkit --features kat
+        PASS [   0.004s] ( 1/10) secmp-testkit kat::tests::acvp_shape_and_fields
+        PASS [   0.004s] ( 2/10) secmp-testkit kat::tests::hex_codec
+        PASS [   0.005s] ( 3/10) secmp-testkit kat::tests::tally_summary
+        PASS [   0.004s] ( 4/10) secmp-testkit kat::tests::wrong_count_is_malformed
+        PASS [   0.006s] ( 5/10) secmp-testkit kat::tests::wycheproof_shape
+        PASS [   0.014s] ( 6/10) secmp-testkit kat::tests::external_files_are_present
+        SLOW [> 60.000s] (─────) secmp-testkit::differential ed25519_dalek_awslc
+        SLOW [> 60.000s] (─────) secmp-testkit::differential mlkem1024_libcrux_rustcrypto_awslc
+        SLOW [> 60.000s] (─────) secmp-testkit::differential mldsa65_rustcrypto_awslc
+        SLOW [> 60.000s] (─────) secmp-testkit::differential mlkem768_libcrux_rustcrypto_awslc
+        PASS [  73.631s] ( 7/10) secmp-testkit::differential ed25519_dalek_awslc
+        SLOW [>120.000s] (─────) secmp-testkit::differential mlkem1024_libcrux_rustcrypto_awslc
+        SLOW [>120.000s] (─────) secmp-testkit::differential mldsa65_rustcrypto_awslc
+        SLOW [>120.000s] (─────) secmp-testkit::differential mlkem768_libcrux_rustcrypto_awslc
+        SLOW [>180.000s] (─────) secmp-testkit::differential mlkem1024_libcrux_rustcrypto_awslc
+        SLOW [>180.000s] (─────) secmp-testkit::differential mldsa65_rustcrypto_awslc
+        SLOW [>180.000s] (─────) secmp-testkit::differential mlkem768_libcrux_rustcrypto_awslc
+        SLOW [>240.000s] (─────) secmp-testkit::differential mlkem1024_libcrux_rustcrypto_awslc
+        SLOW [>240.000s] (─────) secmp-testkit::differential mldsa65_rustcrypto_awslc
+        SLOW [>240.000s] (─────) secmp-testkit::differential mlkem768_libcrux_rustcrypto_awslc
+        PASS [ 256.187s] ( 8/10) secmp-testkit::differential mlkem768_libcrux_rustcrypto_awslc
+        PASS [ 271.813s] ( 9/10) secmp-testkit::differential mlkem1024_libcrux_rustcrypto_awslc
+        SLOW [>300.000s] (─────) secmp-testkit::differential mldsa65_rustcrypto_awslc
+        SLOW [>360.000s] (─────) secmp-testkit::differential mldsa65_rustcrypto_awslc
+        SLOW [>420.000s] (─────) secmp-testkit::differential mldsa65_rustcrypto_awslc
+        PASS [ 452.850s] (10/10) secmp-testkit::differential mldsa65_rustcrypto_awslc
+     Summary [ 452.859s] 10 tests run: 10 passed (4 slow), 0 skipped
+$ LIBCRUX_DISABLE_SIMD128=1 LIBCRUX_DISABLE_SIMD256=1 CARGO_TARGET_DIR=/home/runner/work/SecMPro/SecMPro/target/kat-portable /home/runner/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/cargo nextest run --locked --package secmp-crypto --features kat --test kat_mlkem --test vectors
+        PASS [   0.144s] ( 1/22) secmp-crypto::kat_mlkem mlkem1024::acvp_keygen
+        PASS [   0.151s] ( 2/22) secmp-crypto::kat_mlkem mlkem1024::acvp_encap_decap
+        PASS [   0.027s] ( 3/22) secmp-crypto::kat_mlkem mlkem1024::wycheproof_semi_expanded_decaps_library
+        PASS [   0.108s] ( 4/22) secmp-crypto::kat_mlkem mlkem768::acvp_encap_decap
+        PASS [   0.091s] ( 5/22) secmp-crypto::kat_mlkem mlkem768::acvp_keygen
+        PASS [   0.503s] ( 6/22) secmp-crypto::kat_mlkem mlkem1024::wycheproof_encaps
+        PASS [   0.555s] ( 7/22) secmp-crypto::kat_mlkem mlkem1024::wycheproof_keygen_seed
+        PASS [   0.349s] ( 8/22) secmp-crypto::kat_mlkem mlkem768::wycheproof_encaps
+        PASS [   0.020s] ( 9/22) secmp-crypto::kat_mlkem mlkem768::wycheproof_semi_expanded_decaps_library
+        PASS [   0.027s] (10/22) secmp-crypto::vectors caead
+        PASS [   0.359s] (11/22) secmp-crypto::kat_mlkem mlkem768::wycheproof_keygen_seed
+        PASS [   0.128s] (12/22) secmp-crypto::vectors fingerprint
+        PASS [   0.010s] (13/22) secmp-crypto::vectors hkdf_labels
+        PASS [   0.932s] (14/22) secmp-crypto::kat_mlkem mlkem768::wycheproof_decaps_from_seed
+        PASS [   0.230s] (15/22) secmp-crypto::vectors hybridkem_1024
+        PASS [   0.156s] (16/22) secmp-crypto::vectors hybridkem_768
+        PASS [   0.004s] (17/22) secmp-crypto::vectors kdf_rk_reproduces_the_frozen_hkdf_rows
+        PASS [   1.472s] (18/22) secmp-crypto::kat_mlkem mlkem1024::wycheproof_decaps_from_seed
+        PASS [   0.032s] (19/22) secmp-crypto::vectors msgencrypt
+        PASS [   1.097s] (20/22) secmp-crypto::vectors canonical_writer_is_stable
+        PASS [   0.683s] (21/22) secmp-crypto::vectors sas
+        PASS [   0.872s] (22/22) secmp-crypto::vectors hybridsign
+     Summary [   2.299s] 22 tests run: 22 passed, 0 skipped
+$ LIBCRUX_DISABLE_SIMD128=1 LIBCRUX_DISABLE_SIMD256=1 CARGO_TARGET_DIR=/home/runner/work/SecMPro/SecMPro/target/kat-portable /home/runner/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/cargo nextest run --locked --package secmp-proto --features kat --test tr_vectors
+        PASS [  11.396s] (1/1) secmp-proto::tr_vectors every_event_of_the_tr_file
+     Summary [  11.397s] 1 test run: 1 passed, 0 skipped

@@ -256,7 +256,8 @@ head (§4).
 | Miri | `secmp-proto` lib tests and `tr_smoke` (360 s), `tr::select`, `tr::entropy` measured (`M03-evidence/miri-secmp-proto-aarch64-apple-darwin.txt`); `tr::tests::` skipped for run time (125 s per test, ≈ 1.8 h); the `kat`-only targets are not part of a Miri run; `cargo xtask step --strict miri` PASS at `f31445d` (1239 s) |
 | ct | PASS (§3) |
 | `cargo deny` / `vet` / `audit` / cooldown | PASS (no new crate; three new dev-dependency edges of `secmp-testkit` on workspace crates) |
-| Windows (`windows-latest`), xwin cross-build, `linux-full` on Linux | the PR run on the head (required checks `linux-fast`, `windows-native`, `xwin-cross`, `linux-full`); its id and state are in the final message of the session and the PR |
+| PR run 36800231503 on `665e84e` (the reviewed head) | `xwin-cross` success; `linux-fast` success (kat step: `M03-evidence/kat-linux-fast-36800231503.txt`); `windows-native` **failure** — an xtask test, root cause in §5 (fixed in `1ae977f`); `linux-full` **failure in one step: ct `CONTROL_FAIL`** (§8 Blocked) — every other step passed: kat 692 s, perf (chain max 64.4 µs, step max 305.0 µs), fuzz 14 × 120 s without finding (`tr_decrypt` 48 551 runs, `tr_state` 5 346 958), coverage 99.5 %, mutants 896 tested / 612 caught / 283 unviable / 1 missed (`SecretBytes::drop`, documented), Miri on the four packages, Kani 19/19, ProVerif 39 as expected (80 s), ref-vectors, SBOM, systemd. Evidence: `M03-evidence/*-linux-36800231503*` |
+| Dispatch run 36801281974 (`ci-dispatch.yml`, `suite=ct`, same head) | `dispatch-ct` PASS: TR targets PASS / SUB_FLOOR_SHIFT / SUB_FLOOR_SHIFT, `aa_prime_control` PASS, `min_leak_control` raw Δ +1110 ticks (reached); `M03-evidence/ct-report-linux-dispatch-36801281974.json` |
 | Reproducible build | unchanged (no release artefact changes in M3) |
 
 ## 5. Deviations from spec / plan
@@ -327,7 +328,31 @@ From the plan, each recorded where it happened:
 
 ## 8. Blocked / questions for the reviewer or owner
 
-Nothing is blocked.
+**Blocked (2026-10-01, fix round of WEISUNG M3-2): the ct gate of `linux-full`, PR run 36800231503 — a gate
+criterion I cannot change.** The run's verdict is `CONTROL_FAIL`: the sensitivity control `min_leak_control` (ADR-041
+Amendment 1 (2): a 32-byte comparison exiting one byte early for class 1, ×256 per sample; its raw Δ must reach the
+floor, class 0 slower) measured class 0 *faster* at every crop — raw Δ −589.64 ticks (−226.8 ns, −22.7 floors),
+crops −298.5 … −589.6 ticks, |t| 162 … 470 — on a runner with TSC 2.600 GHz (`M03-evidence/ct-linux-36800231503.txt`,
+`ct-report-linux-36800231503.json`). Diagnosis:
+- Not noise: the reversed effect is large and consistent across all crops (not an outlier in the raw mean).
+- Runner-type and code-layout dependent: the same 2.596 GHz runner type reached the floor with the positive sign in
+  every committed M2 run (raw Δ +566.7 … +727.7 ticks at ≈ 16 800–21 700 ticks per sample, bench in `secmp-crypto`);
+  here the control takes ≈ 15 000 ticks per sample with the sign reversed, after the bench moved to `secmp-testkit`
+  (ADR-042: a different binary, so a different code layout of the same control function). The dispatch ct run on the
+  same head (2.445 GHz runner) reached the floor with the expected sign (raw Δ +1110 ticks).
+- Not product code: the control is the bench's own synthetic comparison; the code under test is untouched by it.
+  With the control failure set aside, every target's re-derived verdict is PASS or `SUB_FLOOR_SHIFT` — the TR
+  targets' reproduced shifts are 0.08, 0.24 and 0.32 floors (≤ 3.2 ns); no shift reaches the floor.
+- Every other step of that `linux-full` passed (§4).
+The rule is that the control, the thresholds and the samples are never changed to make the gate pass (docs/06 §4), so
+this needs a reviewer decision. Options as I see them: (a) an ADR-041 amendment that the sensitivity control must reach
+the floor in |raw Δ| (sign-agnostic: the gate's verdict on targets is already sign-agnostic, and a reversed effect of
+22.7 floors still shows the gate resolves a one-byte early exit); (b) pin the control's code layout (e.g. an
+`#[inline(never)]` aligned function) — a change of the control's implementation; (c) a re-run on another runner, which
+would only move the question. I recommend (a). The fix-round commits are local and **not pushed** (WEISUNG M3-2 stop
+rule for a cause that needs a gate decision).
+
+Nothing else is blocked.
 
 - **Q-1 (ADR-041 Consequences).** "Data-independent timing (DIT) on Apple Silicon is a separate M3 ADR"; the M3 brief
   does not list it. Setting the `DIT` bit is an `msr` instruction (`unsafe`, only in `secmp-sys-*`) and a client

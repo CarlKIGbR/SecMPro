@@ -1,0 +1,48 @@
+PR #4, PR run 36800231503 (pull_request), job linux-full (110172679379), head 665e84e1bc4ee0b6961107e6f5926dc057d22924; the fuzz smoke (ci-full step 6): every invocation and libFuzzer's final lines; tr_decrypt and tr_state are the M3 targets.
+Extracted from `gh run view 36800231503 --job <id> --log` after the run completed (2026-10-01 03:24 UTC);
+timestamps and ANSI colour codes removed. M3 review C7 (first half: the reviewed head's run).
+
+$ rustup component list --installed --toolchain nightly-2026-09-21
+$ rustup run nightly-2026-09-21 cargo fuzz run --fuzz-dir fuzz caead_open target/fuzz-corpus/caead_open fuzz/corpus/caead_open -- -max_total_time=120 -max_len=12618 -timeout=60
+#2474255 DONE   cov: 749 ft: 2138 corp: 85/78Kb lim: 12618 exec/s: 20448 rss: 454Mb
+Done 2474255 runs in 121 second(s)
+$ rustup run nightly-2026-09-21 cargo fuzz run --fuzz-dir fuzz ed25519_verify target/fuzz-corpus/ed25519_verify fuzz/corpus/ed25519_verify -- -max_total_time=120 -max_len=4243 -timeout=60
+#287740 DONE   cov: 1093 ft: 2206 corp: 179/34Kb lim: 4243 exec/s: 2378 rss: 198Mb
+Done 287740 runs in 121 second(s)
+$ rustup run nightly-2026-09-21 cargo fuzz run --fuzz-dir fuzz hybrid_sign_verify target/fuzz-corpus/hybrid_sign_verify fuzz/corpus/hybrid_sign_verify -- -max_total_time=120 -max_len=7810 -timeout=60
+#38341 DONE   cov: 2109 ft: 4031 corp: 168/22Kb lim: 3496 exec/s: 316 rss: 295Mb
+Done 38341 runs in 121 second(s)
+$ rustup run nightly-2026-09-21 cargo fuzz run --fuzz-dir fuzz mldsa65_verify target/fuzz-corpus/mldsa65_verify fuzz/corpus/mldsa65_verify -- -max_total_time=120 -max_len=3567 -timeout=60
+#1765941 DONE   cov: 728 ft: 936 corp: 51/144Kb lim: 3567 exec/s: 14594 rss: 391Mb
+Done 1765941 runs in 121 second(s)
+$ rustup run nightly-2026-09-21 cargo fuzz run --fuzz-dir fuzz mlkem_parse target/fuzz-corpus/mlkem_parse fuzz/corpus/mlkem_parse -- -max_total_time=120 -max_len=1570 -timeout=60
+#2837587 DONE   cov: 1556 ft: 2759 corp: 109/110Kb lim: 1570 exec/s: 23451 rss: 431Mb
+Done 2837587 runs in 121 second(s)
+$ rustup run nightly-2026-09-21 cargo fuzz run --fuzz-dir fuzz msg_open target/fuzz-corpus/msg_open fuzz/corpus/msg_open -- -max_total_time=120 -max_len=2000 -timeout=60
+#9277622 DONE   cov: 445 ft: 642 corp: 14/17Kb lim: 2000 exec/s: 76674 rss: 400Mb
+Done 9277622 runs in 121 second(s)
+$ rustup run nightly-2026-09-21 cargo fuzz run --fuzz-dir fuzz proto_cell target/fuzz-corpus/proto_cell fuzz/corpus/proto_cell -- -max_total_time=120 -max_len=65644 -timeout=60
+#10989076 DONE   cov: 1919 ft: 4939 corp: 692/772Kb lim: 65644 exec/s: 90818 rss: 535Mb
+Done 10989076 runs in 121 second(s)
+$ rustup run nightly-2026-09-21 cargo fuzz run --fuzz-dir fuzz proto_frames target/fuzz-corpus/proto_frames fuzz/corpus/proto_frames -- -max_total_time=120 -max_len=4338 -timeout=60
+#3926743 DONE   cov: 811 ft: 2012 corp: 210/876Kb lim: 4338 exec/s: 32452 rss: 425Mb
+Done 3926743 runs in 121 second(s)
+$ rustup run nightly-2026-09-21 cargo fuzz run --fuzz-dir fuzz proto_handshake target/fuzz-corpus/proto_handshake fuzz/corpus/proto_handshake -- -max_total_time=120 -max_len=12020 -timeout=60
+#12512286 DONE   cov: 570 ft: 670 corp: 91/334Kb lim: 12020 exec/s: 103407 rss: 434Mb
+Done 12512286 runs in 121 second(s)
+$ rustup run nightly-2026-09-21 cargo fuzz run --fuzz-dir fuzz proto_invitation target/fuzz-corpus/proto_invitation fuzz/corpus/proto_invitation -- -max_total_time=120 -max_len=12362 -timeout=60
+#7045471 DONE   cov: 1070 ft: 1866 corp: 275/645Kb lim: 12362 exec/s: 58227 rss: 489Mb
+Done 7045471 runs in 121 second(s)
+$ rustup run nightly-2026-09-21 cargo fuzz run --fuzz-dir fuzz proto_records target/fuzz-corpus/proto_records fuzz/corpus/proto_records -- -max_total_time=120 -max_len=2858 -timeout=60
+#7262197 DONE   cov: 783 ft: 1461 corp: 214/316Kb lim: 2858 exec/s: 60018 rss: 459Mb
+Done 7262197 runs in 121 second(s)
+$ rustup run nightly-2026-09-21 cargo fuzz run --fuzz-dir fuzz tr_decrypt target/fuzz-corpus/tr_decrypt fuzz/corpus/tr_decrypt -- -max_total_time=120 -max_len=4098 -timeout=60
+#48551 DONE   cov: 3491 ft: 8606 corp: 84/62Kb lim: 4097 exec/s: 401 rss: 595Mb
+Done 48551 runs in 121 second(s)
+$ rustup run nightly-2026-09-21 cargo fuzz run --fuzz-dir fuzz tr_state target/fuzz-corpus/tr_state fuzz/corpus/tr_state -- -max_total_time=120 -max_len=38587 -timeout=60
+#5346958 DONE   cov: 1489 ft: 2619 corp: 306/255Kb lim: 38587 exec/s: 44189 rss: 542Mb
+Done 5346958 runs in 121 second(s)
+$ rustup run nightly-2026-09-21 cargo fuzz run --fuzz-dir fuzz x25519_dh target/fuzz-corpus/x25519_dh fuzz/corpus/x25519_dh -- -max_total_time=120 -max_len=97 -timeout=60
+#238769 DONE   cov: 468 ft: 504 corp: 4/193b lim: 97 exec/s: 1973 rss: 97Mb
+Done 238769 runs in 121 second(s)
+   6 fuzz            PASS       1731s  fuzz smoke, 120 s per target on the vector-seeded scratch corpus plus the tracked corpus (read-only), -max_len from expect::FUZZ_MAX_LEN: caead_open, ed25519_verify, hybrid_sign_verify, mldsa65_verify, mlkem_parse, msg_open, proto_cell, proto_frames, proto_handshake, proto_invitation, proto_records, tr_decrypt, tr_state, x25519_dh (expected set matches); vector seeds: caead_open 25, ed25519_verify 25, hybrid_sign_verify 42, mldsa65_verify 34, mlkem_parse 86, msg_open 24, proto_cell 190, proto_frames 182, proto_handshake 40, proto_invitation 132, proto_records 81, tr_decrypt 53, tr_state 1, x25519_dh 54

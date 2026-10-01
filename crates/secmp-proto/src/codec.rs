@@ -453,6 +453,19 @@ mod tests {
     /// Review C1: the growth policy of `reserve` — the first write allocates at least the initial capacity (or
     /// exactly its size, if larger), a write that fits never moves the buffer, a write that does not moves it to
     /// twice the capacity (a plain `Vec` would start at 8 bytes and reallocate in place).
+    /// `with_capacity` allocates its buffer once: writes within the capacity never move it (the state encoding is
+    /// written in one zeroizing allocation, `tr::RatchetState::to_bytes`).
+    #[test]
+    fn writer_with_capacity_allocates_once() {
+        let mut w = Writer::with_capacity(1000);
+        assert!(w.buf.capacity() >= 1000);
+        let before = w.buf.as_ptr();
+        w.bytes(&[7; 1000]);
+        assert_eq!(w.buf.as_ptr(), before, "no growth within the capacity");
+        assert_eq!(w.buf.len(), 1000);
+        assert_eq!(Writer::with_capacity(0).buf.capacity(), 0);
+    }
+
     #[test]
     fn writer_growth_policy() {
         let mut w = Writer::new();

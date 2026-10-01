@@ -1,0 +1,45 @@
+M3 local mutation run (cargo-mutants 27.1.0, macOS arm64), 2026-10-01, on 4bb7edc (before the with_capacity test
+and the kat-only exclusions): cargo mutants --no-shuffle --output target/mutants-sK --features secmp-crypto/kat
+--package secmp-crypto --package secmp-proto --exclude crates/secmp-proto/src/kani_proofs.rs --exclude-re kani_stubs::
+--shard K/6, K = 0..5 (923 mutants).
+
+shard 0/6: 154 mutants tested in 5m: 95 caught, 59 unviable
+shard 1/6: 154 mutants tested in 6m: 2 missed, 112 caught, 40 unviable
+  MISSED crates/secmp-crypto/src/secret.rs:59:9: replace <impl Drop for SecretBytes<N>>::drop with ()
+  MISSED crates/secmp-proto/src/codec.rs:149:9: replace Writer::with_capacity -> Self with Default::default()
+shard 2/6: 154 mutants tested in 5m: 13 missed, 91 caught, 50 unviable
+  MISSED crates/secmp-proto/src/tr/entropy.rs:93:9: replace FixedEntropy::remaining -> usize with 0
+  MISSED crates/secmp-proto/src/tr/entropy.rs:93:9: replace FixedEntropy::remaining -> usize with 1
+  MISSED crates/secmp-proto/src/tr/entropy.rs:97:9: replace FixedEntropy::take -> Result<secmp_crypto::Zeroizing<[u8; N]>> with Ok(Zeroizing::new())
+  MISSED crates/secmp-proto/src/tr/entropy.rs:97:9: replace FixedEntropy::take -> Result<secmp_crypto::Zeroizing<[u8; N]>> with Ok(Zeroizing::from_iter([[0; N]]))
+  MISSED crates/secmp-proto/src/tr/entropy.rs:97:9: replace FixedEntropy::take -> Result<secmp_crypto::Zeroizing<[u8; N]>> with Ok(Zeroizing::new([0; N]))
+  MISSED crates/secmp-proto/src/tr/entropy.rs:97:9: replace FixedEntropy::take -> Result<secmp_crypto::Zeroizing<[u8; N]>> with Ok(Zeroizing::from([0; N]))
+  MISSED crates/secmp-proto/src/tr/entropy.rs:97:9: replace FixedEntropy::take -> Result<secmp_crypto::Zeroizing<[u8; N]>> with Ok(Zeroizing::from_iter([[1; N]]))
+  MISSED crates/secmp-proto/src/tr/entropy.rs:97:9: replace FixedEntropy::take -> Result<secmp_crypto::Zeroizing<[u8; N]>> with Ok(Zeroizing::new([1; N]))
+  MISSED crates/secmp-proto/src/tr/entropy.rs:97:9: replace FixedEntropy::take -> Result<secmp_crypto::Zeroizing<[u8; N]>> with Ok(Zeroizing::from([1; N]))
+  MISSED crates/secmp-proto/src/tr/entropy.rs:118:9: replace <impl Entropy for FixedEntropy>::x25519 -> Result<X25519Secret> with Ok(Default::default())
+  MISSED crates/secmp-proto/src/tr/entropy.rs:122:9: replace <impl Entropy for FixedEntropy>::mlkem768 -> Result<MlKem768Dk> with Ok(Default::default())
+  MISSED crates/secmp-proto/src/tr/entropy.rs:126:9: replace <impl Entropy for FixedEntropy>::encaps -> Result<(MlKem768Ct, SecretBytes<32>)> with Ok((Default::default(), Default::default()))
+  MISSED crates/secmp-proto/src/tr/entropy.rs:130:9: replace <impl Entropy for FixedEntropy>::nonce -> Result<Nonce24> with Ok(Default::default())
+shard 3/6: 154 mutants tested in 6m: 14 missed, 92 caught, 48 unviable
+  MISSED crates/secmp-proto/src/tr/ratchet.rs:80:9: replace Plaintext::message_key_digest_kat -> [u8; 32] with [0; 32]
+  MISSED crates/secmp-proto/src/tr/ratchet.rs:80:9: replace Plaintext::message_key_digest_kat -> [u8; 32] with [1; 32]
+  MISSED crates/secmp-proto/src/tr/ratchet.rs:87:5: replace mk_digest -> [u8; 32] with [0; 32]
+  MISSED crates/secmp-proto/src/tr/ratchet.rs:87:5: replace mk_digest -> [u8; 32] with [1; 32]
+  MISSED crates/secmp-proto/src/tr/ratchet.rs:141:9: replace Sealed::message_key_digest_kat -> [u8; 32] with [0; 32]
+  MISSED crates/secmp-proto/src/tr/ratchet.rs:141:9: replace Sealed::message_key_digest_kat -> [u8; 32] with [1; 32]
+  MISSED crates/secmp-proto/src/tr/ratchet.rs:724:9: replace RatchetState::hk_s_kat -> Option<&SecretBytes<32>> with None
+  MISSED crates/secmp-proto/src/tr/ratchet.rs:724:9: replace RatchetState::hk_s_kat -> Option<&SecretBytes<32>> with Some(Box::leak(Box::new(Default::default())))
+  MISSED crates/secmp-proto/src/tr/ratchet.rs:733:9: replace RatchetState::receiving_header_keys_kat -> (Option<&SecretBytes<32>>, Option<&SecretBytes<32>>) with (None, None)
+  MISSED crates/secmp-proto/src/tr/ratchet.rs:733:9: replace RatchetState::receiving_header_keys_kat -> (Option<&SecretBytes<32>>, Option<&SecretBytes<32>>) with (None, Some(Box::leak(Box::new(Default::default()))))
+  MISSED crates/secmp-proto/src/tr/ratchet.rs:733:9: replace RatchetState::receiving_header_keys_kat -> (Option<&SecretBytes<32>>, Option<&SecretBytes<32>>) with (Some(Box::leak(Box::new(Default::default()))), None)
+  MISSED crates/secmp-proto/src/tr/ratchet.rs:733:9: replace RatchetState::receiving_header_keys_kat -> (Option<&SecretBytes<32>>, Option<&SecretBytes<32>>) with (Some(Box::leak(Box::new(Default::default()))), Some(Box::leak(Box::new(Default::default()))))
+  MISSED crates/secmp-proto/src/tr/ratchet.rs:740:9: replace RatchetState::sb_kat -> &[u8; HASH_LEN] with Box::leak(Box::new([0; HASH_LEN]))
+  MISSED crates/secmp-proto/src/tr/ratchet.rs:740:9: replace RatchetState::sb_kat -> &[u8; HASH_LEN] with Box::leak(Box::new([1; HASH_LEN]))
+shard 4/6: 154 mutants tested in 5m: 123 caught, 31 unviable
+shard 5/6: 153 mutants tested in 4m: 98 caught, 55 unviable
+
+Disposition: secret.rs Drop — documented in docs/mutants-accepted.md (M1). Writer::with_capacity — killed by
+codec::tests::writer_with_capacity_allocates_once (re-run: 1 mutant tested, 1 caught). The 27 tr/entropy.rs and
+tr/ratchet.rs survivors are kat-only code (not compiled in the mutation build) — excluded by
+expect::MUTANT_EXCLUDE_RE with the reason there; the list then has 896 mutants.

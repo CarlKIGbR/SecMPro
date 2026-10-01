@@ -519,25 +519,26 @@ impl RatchetState {
             Err(error) => return Err(Refused::new(self, error)),
         };
         let counters = update.counters;
-        // `to_bytes` fails only if `skipped` exceeds its bound; `apply` evicts to the bound, so check the post-apply
-        // length first and hand back the genuinely unchanged state, before anything is swapped in
-        let after = self
-            .skipped
-            .len()
-            .saturating_sub(usize::from(update.remove.is_some()))
-            .saturating_add(update.added.len());
-        if after.saturating_sub(select::evicted(after)) > select::MAX_SKIPPED {
-            return Err(Refused::new(self, Error::Rejected));
-        }
-        self.apply(update);
-        // cannot fail: the bound was checked above
-        match self.to_bytes() {
-            Ok(state_bytes) => Ok(Opened {
-                state: self,
-                state_bytes,
-                plaintext,
-                counters,
-            }),
+        // build the post-step state aside and serialise it *before* it replaces the live one: any error up to here
+        // hands back the genuinely unchanged `self`
+        let built = self
+            .to_bytes()
+            .and_then(|live| RatchetState::from_bytes(&live));
+        let mut next = match built {
+            Ok(next) => next,
+            Err(error) => return Err(Refused::new(self, error)),
+        };
+        next.apply(update);
+        match next.to_bytes() {
+            Ok(state_bytes) => {
+                self = next;
+                Ok(Opened {
+                    state: self,
+                    state_bytes,
+                    plaintext,
+                    counters,
+                })
+            }
             Err(error) => Err(Refused::new(self, error)),
         }
     }

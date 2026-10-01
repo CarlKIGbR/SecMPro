@@ -2593,3 +2593,44 @@ fn content_inbox_rejects_every_noncanonical_encoding() -> Result<()> {
     }
     Ok(())
 }
+
+/// F9 (M3 R-19): the bytes handed to `commit` are the serialisation of the state `commit` returns (they are
+/// produced from the post-step state before it replaces the live one).
+#[test]
+fn receive_persist_bytes_equal_state_after_swap() -> Result<()> {
+    let (a, b) = session()?;
+    let (a, m0) = send(a, &text(0))?;
+    let (_a, m1) = send(a, &text(1))?;
+    // m1 first: a skipped key is stored; then m0 consumes it (both a chain step and a skipped lookup)
+    let mut b = b;
+    for cell in [&m1, &m0] {
+        let mut handed = Vec::new();
+        let (state, _) = b
+            .decrypt(cell.as_slice())
+            .map_err(|r| r.error())?
+            .commit(|bytes| {
+                handed = bytes.to_vec();
+                Ok::<(), Error>(())
+            })?;
+        assert_eq!(handed.as_slice(), state.to_bytes()?.as_slice());
+        b = state;
+    }
+    Ok(())
+}
+
+/// F9: a rejected cell leaves the state byte-identical (the state is handed back unchanged).
+#[test]
+fn receive_error_leaves_state_unchanged() -> Result<()> {
+    let (a, b) = session()?;
+    let (_a, mut cell) = send(a, &text(0))?;
+    let last = cell.len().saturating_sub(1);
+    if let Some(byte) = cell.get_mut(last) {
+        *byte ^= 1;
+    }
+    let before = b.to_bytes()?;
+    let refusal = b.decrypt(&cell).err();
+    let (b, error) = refusal.ok_or(Error::Rejected)?.into_parts();
+    assert_eq!(error, Error::Rejected);
+    assert_eq!(*b.to_bytes()?, *before);
+    Ok(())
+}

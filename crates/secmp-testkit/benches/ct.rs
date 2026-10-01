@@ -152,13 +152,20 @@ use chacha20poly1305::aead::AeadInOut;
 use chacha20poly1305::{KeyInit, Tag, XChaCha20Poly1305, XNonce};
 use secmp_crypto::{
     AEAD_TAG_LEN, Aead, BODY_LEN, COM_LEN, Caead, Fingerprint, Label, MSG_TAG_LEN, MlKem768Dk,
-    MsgEncrypt, Nonce24, SafetyNumber, SecretBytes, X25519Secret, Zeroizing, hkdf_expand,
+    MsgEncrypt, Nonce24, SafetyNumber, SecretBytes, X25519Public, X25519Secret, Zeroizing,
+    hkdf_expand,
 };
+use secmp_proto::hx::{Initiator, Responder};
+use secmp_proto::inv::{derive_k_inv, invitee_check};
 use secmp_proto::keys::{MlKem768Ek, X25519Pk};
-use secmp_proto::sizes::{HDR_CT_LEN, NONCE_LEN};
+use secmp_proto::prekeys::{IdentityKeys, InvitationRecord, IssueParams, MemoryPrekeyStore};
+use secmp_proto::sizes::{CELL_LEN, HANDSHAKE_CHUNK_LEN, HDR_CT_LEN, NONCE_LEN};
 use secmp_proto::tr::content::dummy;
 use secmp_proto::tr::{FixedEntropy, RatchetState};
-use secmp_proto::wire::cell::HeaderV1;
+use secmp_proto::wire::cell::{Cell, HeaderV1, RelayQueue, RouteDescriptor};
+use secmp_proto::wire::hx::{HandshakeCellPlaintext, Outer};
+use secmp_proto::wire::inv::{InvitationV1, Onion, Profile, RelayRef};
+use secmp_proto::wire::{Id, Period};
 use secmp_proto::{Decode, Encode};
 use sha3::Shake256;
 use sha3::digest::{ExtendableOutput, Update, XofReader};
@@ -2173,6 +2180,534 @@ fn tr_measure(
     Ok(samples)
 }
 
+// ---- SecMP-INV/HX targets (M4, TEST-SPEC-M4 (f)) --------------------------------------------------------------
+
+std::thread_local! {
+    /// Why an INV/HX/X25519 target aborted the run (a call gave the outcome both classes must not give, or the prekey
+    /// store changed); `main` writes it into the report as `error`, which fails the gate.
+    static ABORT: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
+/// Record `reason` as the run's abort reason (the first is kept) and return the bench's error.
+fn abort(reason: String) -> secmp_crypto::Error {
+    ABORT.with(|a| {
+        if let Ok(mut a) = a.try_borrow_mut()
+            && a.is_none()
+        {
+            *a = Some(reason);
+        }
+    });
+    secmp_crypto::Error::Rejected
+}
+
+/// The abort reason of the run, if a target set one.
+fn abort_reason() -> Option<String> {
+    ABORT.with(|a| a.try_borrow().ok().and_then(|a| a.clone()))
+}
+
+/// Creation time of the invitation (Unix seconds; the values of the hx test fixture).
+const HX_CREATED: u64 = 1_700_000_000;
+/// The invitee's `now` (§5.5): before `expires` and `spk_expiry`.
+const HX_NOW: u64 = 1_700_000_100;
+/// `expires` and `spk_expiry`: creation + 30 days (§5.2, §6.3).
+const HX_EXPIRES: u64 = 1_702_592_000;
+/// Randomness per party and step of the INV/HX fixture (`FixedEntropy`, more than any of them draws).
+const HX_RANDOMNESS: usize = 4096;
+/// The last byte of a fingerprint (`inv_fingerprint_compare` class 1).
+const FP_LAST: usize = 31;
+
+/// The inviter of the INV/HX targets: identity, prekey store (one SPK generation, one OPK, the record) and the
+/// issued invitation (§5.2, §5.4, §6.3), built by `MemoryPrekeyStore::issue_invitation` with randomness from the
+/// stream.
+struct HxInviter {
+    store: MemoryPrekeyStore,
+    identity: IdentityKeys,
+    /// The invitation's encoding (a secret).
+    invitation: Zeroizing<Vec<u8>>,
+    /// The sealed link data (what `LINK_GET` returns, §5.5 step 2).
+    blob: Vec<u8>,
+}
+
+/// A relay reference with fixed fields (the hx test fixture's `relay_ref`).
+fn relay_ref(seed: u8) -> RelayRef {
+    RelayRef {
+        relay_fp: [seed; 32],
+        onion: Onion::from_pubkey(&[seed.wrapping_add(1); 32]),
+        akc: [seed.wrapping_add(2); 32],
+        direct: None,
+    }
+}
+
+/// A reply route with fixed fields (the hx test fixture's `route`).
+fn hx_route(seed: u8) -> Result<RouteDescriptor, secmp_proto::Error> {
+    Ok(RouteDescriptor::RelayQueue(RelayQueue {
+        relay: relay_ref(seed),
+        sid: [seed.wrapping_add(3); 16],
+        send_seed: SecretBytes::from_slice(&[seed.wrapping_add(4); 32])?,
+        period_s: Period::S20,
+    }))
+}
+
+/// The inviter: `IdentityKeys::generate`, then `issue_invitation` at `HX_CREATED`, expiring at `HX_EXPIRES`.
+fn hx_inviter(stream: &mut Stream) -> Result<HxInviter, secmp_proto::Error> {
+    let mut entropy = FixedEntropy::new(&drawn(stream, HX_RANDOMNESS));
+    let identity = IdentityKeys::generate(&mut entropy)?;
+    let mut store = MemoryPrekeyStore::default();
+    let issued = store
+        .issue_invitation(
+            &identity,
+            IssueParams {
+                relay: relay_ref(10),
+                inv_period: Period::S20,
+                profile: Profile::new("bob", None)?,
+                now: HX_CREATED,
+                expires: HX_EXPIRES,
+                spk_expiry: HX_EXPIRES,
+            },
+            &mut entropy,
+        )
+        .map_err(|_| secmp_proto::Error::Rejected)?;
+    Ok(HxInviter {
+        store,
+        identity,
+        invitation: issued.invitation.encode()?,
+        blob: issued.blob.encode()?.to_vec(),
+    })
+}
+
+/// `inv_fingerprint_compare`: the invitation with `inviter_fp` changed in byte 0 (class 0) vs byte 31 (class 1);
+/// everything else as issued, so both are refused by the comparison of §5.5 step 3 alone.
+fn inv_fp_classes(invitation: &[u8]) -> Result<[Zeroizing<Vec<u8>>; 2], secmp_proto::Error> {
+    let changed = |at: usize| {
+        let mut changed = InvitationV1::decode(invitation)?;
+        flip(&mut changed.inviter_fp, at)?;
+        changed.encode()
+    };
+    Ok([changed(0)?, changed(FP_LAST)?])
+}
+
+/// `inv_fingerprint_compare` (TEST-SPEC-M4 (f); spec §5.5 step 3): `inv::invitee_check` on the issued blob at
+/// `HX_NOW`, the invitation of class 0 vs class 1 (`inv_fp_classes`), each a fresh decode of a `blend`ed encoding
+/// (class 1 the base), taken by value by the call. The blob opens under `K_ld` and decodes in both classes; the
+/// fingerprint comparison refuses. Aborts if any call accepted.
+fn inv_fingerprint_compare(
+    n: usize,
+    k: usize,
+    stream: &mut Stream,
+) -> Result<Samples, secmp_crypto::Error> {
+    let inviter = hx_inviter(stream).map_err(crypto_error)?;
+    let [class0, class1] = inv_fp_classes(&inviter.invitation).map_err(crypto_error)?;
+    let delta = Deltas::new(&class0, &class1);
+    let blob = inviter.blob;
+    let mut accepted = false;
+    let samples = measure(
+        n,
+        k,
+        stream,
+        |c, _| {
+            let bytes = Zeroizing::new(blended_vec(&class1, &delta, c));
+            RefCell::new(InvitationV1::decode(&bytes).ok())
+        },
+        |invitation| {
+            if let Some(invitation) = invitation.try_borrow_mut().ok().and_then(|mut i| i.take()) {
+                accepted |= black_box(invitee_check(invitation, black_box(&blob), HX_NOW).is_ok());
+            }
+        },
+    );
+    if accepted {
+        return Err(abort(
+            "bench aborted: inv::invitee_check accepted an invitation of inv_fingerprint_compare, which must be \
+             rejected in both classes"
+                .to_owned(),
+        ));
+    }
+    Ok(samples)
+}
+
+// `x25519_zero_check` (TEST-SPEC-M4 (f); spec §3, §6.4): two fixed (secret, peer) pairs whose X25519 output has the
+// class shape, computed offline (no dependency) with an RFC 7748 X25519 checked against RFC 7748 §5.2 (the first test
+// vector, 1 and 1 000 iterations) and the 487 Wycheproof cases with a non-zero shared secret of
+// `vectors/external/wycheproof/x25519_test.json`: for a u-coordinate `u` of a point of prime order ℓ and an
+// RFC 7748-clamped scalar `c` (clamping is then a no-op; c = clamp(SHA-256("SecMPro ct x25519_zero_check class 0"))
+// resp. "… class 1"), the peer is `P = x((c⁻¹ mod ℓ)·u)` by an x-only Montgomery ladder, so `X25519(c, P) = u`.
+// Class 0: u = 9 (the base point; output `09 00 … 00`, non-zero in byte 0 only). Class 1: u = 49·2^248 (on the
+// curve, order ℓ; output `00 … 00 31`, non-zero in byte 31 only). Both peers are of order ℓ (not low order).
+
+/// `x25519_zero_check` class 0: the secret.
+const X25519_SECRET_0: [u8; 32] = [
+    0x70, 0x90, 0x49, 0xef, 0x8c, 0xcd, 0xaf, 0x82, 0xba, 0xed, 0x44, 0x23, 0x23, 0x97, 0x71, 0x47,
+    0x25, 0xf6, 0x29, 0xe8, 0xc0, 0x7b, 0xfe, 0x46, 0xfd, 0x7b, 0x22, 0xcd, 0x06, 0x8d, 0x8a, 0x5c,
+];
+/// `x25519_zero_check` class 0: the peer (`X25519(X25519_SECRET_0, X25519_PEER_0)` = 9).
+const X25519_PEER_0: [u8; 32] = [
+    0x6f, 0x29, 0x8d, 0x50, 0x90, 0xb5, 0xae, 0xe6, 0x88, 0x87, 0xa6, 0x61, 0xed, 0xa0, 0x07, 0x5d,
+    0x11, 0x5c, 0x5c, 0x65, 0xef, 0xc5, 0xdb, 0xbf, 0xdf, 0x2a, 0xd0, 0x0a, 0x40, 0x2e, 0xd8, 0x00,
+];
+/// `x25519_zero_check` class 1: the secret.
+const X25519_SECRET_1: [u8; 32] = [
+    0x70, 0xa0, 0xd1, 0x3f, 0xd5, 0x93, 0xc2, 0x43, 0x5b, 0xfc, 0x2a, 0x95, 0x37, 0xf2, 0xe7, 0x4b,
+    0x27, 0x85, 0xc3, 0x80, 0x1c, 0x32, 0x07, 0x1b, 0x99, 0xca, 0xb0, 0x96, 0xe9, 0xc7, 0xa5, 0x4d,
+];
+/// `x25519_zero_check` class 1: the peer (`X25519(X25519_SECRET_1, X25519_PEER_1)` = 49·2^248).
+const X25519_PEER_1: [u8; 32] = [
+    0x91, 0x15, 0x7a, 0xb0, 0xb2, 0xb2, 0xbf, 0x4b, 0xdb, 0xe4, 0x05, 0x3a, 0xc4, 0x40, 0x4e, 0x70,
+    0x7a, 0x15, 0x07, 0x9e, 0x8e, 0xf0, 0xc6, 0x39, 0x63, 0x8d, 0xd8, 0xef, 0xc8, 0x4d, 0xde, 0x61,
+];
+
+/// `x25519_zero_check`: `X25519Secret::diffie_hellman` (the helper `hx::dh_checked` calls for DH1–DH4 on both sides,
+/// and the ratchet's DH steps) on the class's fixed pair, both from one `blend`ed `secret ‖ peer` (class 1 the
+/// base); the all-zero test of the output passes in both classes. Aborts if any call refused.
+fn x25519_zero_check(
+    n: usize,
+    k: usize,
+    stream: &mut Stream,
+) -> Result<Samples, secmp_crypto::Error> {
+    let class0 = [X25519_SECRET_0, X25519_PEER_0].concat();
+    let class1 = [X25519_SECRET_1, X25519_PEER_1].concat();
+    let delta = Deltas::new(&class0, &class1);
+    let mut refused = false;
+    let samples = measure(
+        n,
+        k,
+        stream,
+        |c, _| {
+            let mut raw = Zeroizing::new([0_u8; 64]);
+            blend(&class1, &delta, c, raw.as_mut_slice());
+            let (secret, peer) = raw.split_at(32);
+            X25519Secret::from_bytes(secret)
+                .ok()
+                .zip(X25519Public::from_bytes(peer).ok())
+        },
+        |pair| {
+            if let Some((secret, peer)) = pair {
+                refused |= black_box(secret.diffie_hellman(black_box(peer)).is_err());
+            }
+        },
+    );
+    if refused {
+        return Err(abort(
+            "bench aborted: X25519Secret::diffie_hellman refused a pair of x25519_zero_check, whose outputs are not \
+             all zero"
+                .to_owned(),
+        ));
+    }
+    Ok(samples)
+}
+
+/// The fixture of the HX targets (§6.4–§6.6): the inviter's identity, store and record, and the honest envelope of
+/// `Initiator::start` taken apart so that the classes are re-sealed with the public constructions — `K_inv`
+/// (`inv::derive_k_inv`), `K_id` (`hx::k_id` of DH3, DH4 and the two encapsulations, recomputed from the initiator's
+/// fixed randomness), the cells' nonces and `init_id`, `Outer` and the `Inner` bytes.
+struct HxSession {
+    responder: IdentityKeys,
+    /// The inviter's store: SPK, OPK and the record; every call of a target must leave it unchanged.
+    store: MemoryPrekeyStore,
+    record: InvitationRecord,
+    ld_id: Id,
+    k_inv: SecretBytes<32>,
+    k_id: SecretBytes<32>,
+    init_id: Id,
+    /// `N_0`, `N_1`, `N_2` of the honest cells.
+    nonces: Vec<[u8; NONCE_LEN]>,
+    outer: Outer,
+    /// The honest `Inner` (`IKSPublic_I ‖ first_msg`).
+    inner: Zeroizing<Vec<u8>>,
+    /// The three honest cells (3 × 4096 bytes).
+    honest: Vec<u8>,
+}
+
+impl HxSession {
+    /// `"SecMP-HX/1 inner" ‖ ld_id` (§6.5).
+    fn inner_ad(&self) -> Vec<u8> {
+        [Label::HxInner.as_bytes(), self.ld_id.as_slice()].concat()
+    }
+
+    /// The honest `Outer` with `inner_ct = N2 ‖ CAEAD.Seal(key, N2, "SecMP-HX/1 inner" ‖ ld_id, inner)` (§6.5; `N2`
+    /// the honest one).
+    fn with_inner(&self, key: &SecretBytes<32>, inner: &[u8]) -> Result<Outer, secmp_proto::Error> {
+        let com_ct = Caead::seal(
+            key,
+            Nonce24::from_bytes_kat(self.outer.inner_ct.n2),
+            &self.inner_ad(),
+            inner,
+        )?;
+        let (com, ct) = com_ct
+            .split_first_chunk::<COM_LEN>()
+            .ok_or(secmp_proto::Error::Rejected)?;
+        let mut outer = self.outer.clone();
+        outer.inner_ct.com = *com;
+        outer.inner_ct.ct = Box::new(ct.try_into().map_err(|_| secmp_proto::Error::Rejected)?);
+        Ok(outer)
+    }
+
+    /// The three cells of `outer` (§6.5): `N_i ‖ CAEAD.Seal(K_inv, N_i, "SecMP-HX/1 initcell" ‖ ld_id, init_id ‖ i ‖ 3
+    /// ‖ Padded[i·4006 .. (i+1)·4006])` with the honest `N_i` and `init_id`.
+    fn cells(&self, outer: &Outer) -> Result<Vec<u8>, secmp_proto::Error> {
+        let padded = outer.encode()?;
+        let ad = [Label::HxInitcell.as_bytes(), self.ld_id.as_slice()].concat();
+        let mut cells = Vec::with_capacity(self.honest.len());
+        for ((i, chunk), n) in (0_u8..)
+            .zip(padded.chunks(HANDSHAKE_CHUNK_LEN))
+            .zip(&self.nonces)
+        {
+            let plaintext = HandshakeCellPlaintext {
+                init_id: self.init_id,
+                i,
+                chunk: Box::new(chunk.try_into().map_err(|_| secmp_proto::Error::Rejected)?),
+            }
+            .encode()?;
+            cells.extend_from_slice(n);
+            cells.extend_from_slice(&Caead::seal(
+                &self.k_inv,
+                Nonce24::from_bytes_kat(*n),
+                &ad,
+                &plaintext,
+            )?);
+        }
+        if cells.len() != self.honest.len() {
+            return Err(secmp_proto::Error::Rejected);
+        }
+        Ok(cells)
+    }
+}
+
+/// The inviter (`hx_inviter`), the invitee's §5.5 checks (`inv::invitee_check`) and `Initiator::start` with fixed
+/// randomness from the stream (its first draws: `EK_I`, then the `Encaps` randomness of `SPK_kem` and of `OPK_kem`),
+/// the cells released; then the envelope taken apart (`K_inv` opens the cells; `Outer` decodes; `K_id` from DH3, DH4
+/// and the recomputed encapsulations — whose ciphertexts must be `Outer`'s — opens `inner_ct`). Checks that the
+/// builders (`HxSession::with_inner`, `HxSession::cells`) reproduce the honest cells byte for byte.
+fn hx_session(stream: &mut Stream) -> Result<HxSession, secmp_proto::Error> {
+    let inviter = hx_inviter(stream)?;
+    let invitation = InvitationV1::decode(&inviter.invitation)?;
+    let ld_id = invitation.ld_id;
+    let link_key = SecretBytes::<32>::from_slice(invitation.link_key.expose_secret())?;
+    let record = inviter
+        .store
+        .record(&ld_id)
+        .ok_or(secmp_proto::Error::Rejected)?
+        .duplicate()?;
+    let accepted = invitee_check(invitation, &inviter.blob, HX_NOW)?;
+    let guest = IdentityKeys::generate(&mut FixedEntropy::new(&drawn(stream, HX_RANDOMNESS)))?;
+    let start = drawn(stream, HX_RANDOMNESS);
+    let (cells, _) = Initiator::start(
+        &accepted,
+        &guest.initiator_keys(),
+        &[hx_route(20)?],
+        &Profile::new("alice", None)?,
+        HX_NOW.saturating_add(1),
+        &mut FixedEntropy::new(&start),
+    )?;
+    let honest: Vec<u8> = cells
+        .release(|_, _| Ok::<(), secmp_proto::Error>(()))?
+        .iter()
+        .flat_map(|c| c.as_bytes().iter().copied())
+        .collect();
+    let k_inv = derive_k_inv(&ld_id, &link_key)?;
+    let ad_cell = [Label::HxInitcell.as_bytes(), ld_id.as_slice()].concat();
+    let mut padded = Zeroizing::new(Vec::new());
+    let mut nonces = Vec::new();
+    let mut init_id = None;
+    for (i, cell) in (0_u8..).zip(honest.chunks(CELL_LEN)) {
+        let (n, com_ct) = cell
+            .split_first_chunk::<NONCE_LEN>()
+            .ok_or(secmp_proto::Error::Rejected)?;
+        let p = HandshakeCellPlaintext::decode(&Caead::open(&k_inv, n, &ad_cell, com_ct)?)?;
+        if p.i != i || init_id.is_some_and(|id| id != p.init_id) {
+            return Err(secmp_proto::Error::Rejected);
+        }
+        init_id = Some(p.init_id);
+        padded.extend_from_slice(p.chunk.as_slice());
+        nonces.push(*n);
+    }
+    let outer = Outer::decode(&padded)?;
+    // spec §6.4: K_id = HKDF(ld_id, link_key ‖ DH3 ‖ ss_spk ‖ DH4 ‖ ss_opk, "SecMP-HX/1 idkey"), from the initiator's
+    // side
+    let (ek, rest) = start
+        .split_first_chunk::<32>()
+        .ok_or(secmp_proto::Error::Rejected)?;
+    let (m_signed, rest) = rest
+        .split_first_chunk::<32>()
+        .ok_or(secmp_proto::Error::Rejected)?;
+    let (m_onetime, _) = rest
+        .split_first_chunk::<32>()
+        .ok_or(secmp_proto::Error::Rejected)?;
+    let bundle = &accepted.link_data().bundle;
+    let ek = X25519Secret::from_bytes(ek)?;
+    let dh3 = ek.diffie_hellman(&X25519Public::from_bytes(bundle.spk_dh.as_bytes())?)?;
+    let dh4 = ek.diffie_hellman(&X25519Public::from_bytes(bundle.opk_dh.as_bytes())?)?;
+    let (ct_signed, ss_signed) =
+        secmp_crypto::MlKem1024Ek::from_bytes(bundle.spk_kem.as_bytes())?.encapsulate_kat(m_signed);
+    let (ct_onetime, ss_onetime) =
+        secmp_crypto::MlKem1024Ek::from_bytes(bundle.opk_kem.as_bytes())?
+            .encapsulate_kat(m_onetime);
+    if ct_signed.as_bytes() != outer.ct_spk.as_ref()
+        || ct_onetime.as_bytes() != outer.ct_opk.as_ref()
+    {
+        return Err(secmp_proto::Error::Rejected);
+    }
+    let k_id = secmp_proto::hx::k_id(&ld_id, &link_key, &dh3, &ss_signed, &dh4, &ss_onetime)?;
+    let inner_ct = [outer.inner_ct.com.as_slice(), outer.inner_ct.ct.as_slice()].concat();
+    let ad_inner = [Label::HxInner.as_bytes(), ld_id.as_slice()].concat();
+    let inner = Caead::open(&k_id, &outer.inner_ct.n2, &ad_inner, &inner_ct)?;
+    let session = HxSession {
+        responder: inviter.identity,
+        store: inviter.store,
+        record,
+        ld_id,
+        k_inv,
+        k_id,
+        init_id: init_id.ok_or(secmp_proto::Error::Rejected)?,
+        nonces,
+        outer,
+        inner,
+        honest,
+    };
+    if session.cells(&session.with_inner(&session.k_id, &session.inner)?)? != session.honest {
+        return Err(secmp_proto::Error::Rejected);
+    }
+    Ok(session)
+}
+
+/// The two classes of an HX target, class 0 first: each the three cells of one envelope (3 × 4096 bytes).
+type HxClasses = fn(&HxSession, &mut Stream) -> Result<[Vec<u8>; 2], secmp_proto::Error>;
+
+/// `hx_accept_reject_inner`: `inner_ct` sealed under a wrong key from the stream (class 0: `COM` and the tag fail)
+/// vs the honest `inner_ct` with its tag's last byte flipped (class 1: `COM` matches, the tag fails); `Outer`
+/// otherwise honest, the cells re-sealed under `K_inv`. Both pass step 1 and the real DH/KEM work of step 2.
+fn hx_inner_classes(
+    s: &HxSession,
+    stream: &mut Stream,
+) -> Result<[Vec<u8>; 2], secmp_proto::Error> {
+    let wrong = SecretBytes::<32>::from_slice(&drawn(stream, 32))?;
+    let class0 = s.cells(&s.with_inner(&wrong, &s.inner)?)?;
+    let mut outer = s.outer.clone();
+    let last = outer
+        .inner_ct
+        .ct
+        .len()
+        .checked_sub(1)
+        .ok_or(secmp_proto::Error::Rejected)?;
+    flip(outer.inner_ct.ct.as_mut_slice(), last)?;
+    Ok([class0, s.cells(&outer)?])
+}
+
+/// `hx_accept_reject_first_msg`: the honest `Inner` with `first_msg`'s body tag (the last `MSG_TAG_LEN` bytes of the
+/// cell, which ends `Inner`) wrong in byte 0 (class 0) vs byte 31 (class 1), sealed under the right `K_id`; the cells
+/// re-sealed. Both pass steps 1 and 2 and reach §7.4 Decrypt of `first_msg` on R's fresh state (empty `skipped`;
+/// the header opens under `nhk_r`: the step path).
+fn hx_first_msg_classes(s: &HxSession, _: &mut Stream) -> Result<[Vec<u8>; 2], secmp_proto::Error> {
+    let wrong_tag = |from_end: usize| {
+        let mut inner = Zeroizing::new(s.inner.to_vec());
+        let at = inner
+            .len()
+            .checked_sub(from_end)
+            .ok_or(secmp_proto::Error::Rejected)?;
+        flip(&mut inner, at)?;
+        s.cells(&s.with_inner(&s.k_id, &inner)?)
+    };
+    Ok([wrong_tag(MSG_TAG_LEN)?, wrong_tag(1)?])
+}
+
+/// Cells from their bytes (3 × 4096).
+fn hx_cells(bytes: &[u8]) -> Vec<Cell> {
+    bytes
+        .chunks(CELL_LEN)
+        .filter_map(|c| Cell::from_bytes(c).ok())
+        .collect()
+}
+
+/// An HX target: `Responder::accept` (the product path, §6.5 grouping and §6.6) with the inviter's record, store
+/// and identity, the three cells of class 0 vs class 1 of `classes`, each a fresh `Vec<Cell>` from a `blend`ed
+/// source (class 1 the base). A rejection keeps the OPK and leaves the store unchanged (§6.6), so the one store
+/// serves every call; no call draws randomness (a rejection before the first message's MAC draws none), so the
+/// entropy is empty. Aborts if any call accepted or the store's digest changed.
+fn hx_accept_reject(
+    n: usize,
+    k: usize,
+    stream: &mut Stream,
+    classes: HxClasses,
+) -> Result<Samples, secmp_crypto::Error> {
+    let session = hx_session(stream).map_err(crypto_error)?;
+    let [class0, class1] = classes(&session, stream).map_err(crypto_error)?;
+    let delta = Deltas::new(&class0, &class1);
+    let HxSession {
+        responder,
+        mut store,
+        record,
+        ..
+    } = session;
+    let keys = responder.responder_keys();
+    let before = store.digest_kat();
+    let mut entropy = FixedEntropy::new(&[]);
+    let mut accepted = false;
+    let samples = measure(
+        n,
+        k,
+        stream,
+        |c, _| hx_cells(&blended_vec(&class1, &delta, c)),
+        |cells| {
+            accepted |= black_box(
+                Responder::accept(black_box(cells), &record, &mut store, &keys, &mut entropy)
+                    .is_ok(),
+            );
+        },
+    );
+    if accepted || !bool::from(store.digest_kat().as_slice().ct_eq(before.as_slice())) {
+        return Err(abort(
+            "bench aborted: Responder::accept accepted an envelope of an HX target or changed the prekey store; both \
+             classes must be rejected with the store unchanged"
+                .to_owned(),
+        ));
+    }
+    Ok(samples)
+}
+
+/// The SecMP-INV/HX targets (TEST-SPEC-M4 (f)), measured after `tr_targets`, `n` samples per measurement.
+fn hx_targets(n: usize) -> [Target; 4] {
+    [
+        Target {
+            name: "inv_fingerprint_compare",
+            classes: [
+                "inviter_fp differs from the IKS fingerprint in byte 0",
+                "inviter_fp differs from the IKS fingerprint in byte 31",
+            ],
+            samples: n,
+            control: false,
+            run: inv_fingerprint_compare,
+        },
+        Target {
+            name: "x25519_zero_check",
+            classes: [
+                "X25519 output 9 (non-zero in byte 0 only)",
+                "X25519 output 49·2^248 (non-zero in byte 31 only)",
+            ],
+            samples: n,
+            control: false,
+            run: x25519_zero_check,
+        },
+        Target {
+            name: "hx_accept_reject_inner",
+            classes: [
+                "inner_ct sealed under a wrong key (wrong K_id: COM and tag fail)",
+                "inner_ct under K_id, its tag's last byte flipped (COM ok, tag fails)",
+            ],
+            samples: n,
+            control: false,
+            run: |n, k, s| hx_accept_reject(n, k, s, hx_inner_classes),
+        },
+        Target {
+            name: "hx_accept_reject_first_msg",
+            classes: [
+                "first_msg body tag wrong in byte 0",
+                "first_msg body tag wrong in byte 31",
+            ],
+            samples: n,
+            control: false,
+            run: |n, k, s| hx_accept_reject(n, k, s, hx_first_msg_classes),
+        },
+    ]
+}
+
 /// `SECMP_CT_SCALE` if set (local quick runs only; echoed in the report, refused by the gate).
 fn ct_scale() -> Option<String> {
     std::env::var("SECMP_CT_SCALE").ok()
@@ -2333,7 +2868,11 @@ fn run(
     let n = rules.samples.checked_div(scale).unwrap_or(1);
     let n_sas = rules.sas_samples.checked_div(scale).unwrap_or(1);
     let mut out = Vec::new();
-    for target in targets(n, n_sas).into_iter().chain(tr_targets(n)) {
+    for target in targets(n, n_sas)
+        .into_iter()
+        .chain(tr_targets(n))
+        .chain(hx_targets(n))
+    {
         out.push(evaluate(target, &mut stream, &clock, rules)?);
     }
     let aa_fail = aa_control(&mut out, &mut stream, &clock, rules)?;
@@ -2536,11 +3075,13 @@ fn main() -> ExitCode {
     let Ok((clock, outcomes, control_fail, sensitivity)) = run(rules) else {
         // the gate prints the reason of an aborted run (`ctreport::ct_table_for` reads `error`)
         let error = if TR_ACCEPTED.load(Ordering::Relaxed) {
-            "{\"error\":\"bench aborted: RatchetState::decrypt_with accepted a cell of a TR target, which must be rejected in both classes\"}"
+            "bench aborted: RatchetState::decrypt_with accepted a cell of a TR target, which must be rejected in both classes".to_owned()
+        } else if let Some(reason) = abort_reason() {
+            reason
         } else {
-            "{\"error\":\"bench aborted: OS randomness or locked memory unavailable, or an input of the bench itself was refused\"}"
+            "bench aborted: OS randomness or locked memory unavailable, or an input of the bench itself was refused".to_owned()
         };
-        let _ = std::fs::write(path, error);
+        let _ = std::fs::write(path, serde_json::json!({ "error": error }).to_string());
         return ExitCode::FAILURE;
     };
     // the run verdict (ADR-041, Amendment 1): CONTROL_FAIL if the inline A/A control or the sensitivity control

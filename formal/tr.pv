@@ -26,14 +26,24 @@
      ss_send)). Then KDF_CK to position n and bopen with the body AD; a failed check rejects (the process stops;
      state changes are discarded, §7.4 note (c)). B's DHRatchet on step 3 also derives its step-4 sending half
      (b4, dkB4, ct_s, rk, ck_s, nhk_s), so that Compromise(B,3) publishes B's real state.
-   - Bounded in-order run (CLAIMS: "in-order runs", skipped map empty). Every receive slot accepts exactly the
-     message the in-order run expects there: header.n must equal n_r (a smaller n is the §7.4 replay/stale reject;
-     a larger n, or a header that opens only under the other key, belongs to skip/step branches beyond the bound)
-     and at the step slot of B's second receiving chain the old chain key hk_r = HK_A is tried first as in §7.4 —
-     a cell it opens is a replay or a chain-1 message beyond the bound, and the run stops. A receiver whose ck_r is
-     None ignores pn (skip_message_keys returns at once, §7.4); B at step 3 requires pn = 2 = its n_r on the old
-     chain. Rejecting is silent and leaves the state unchanged, so stopping instead of waiting for the next cell
-     models one in-order schedule; the skipped-key path, reordering and prefix loss are outside every M3 query (M4 extension): the attacker can always deliver the accepted cell directly.
+   - sFS and sHFS (T3, T9: "in-order delivery", skipped map empty) run the bounded in-order schedule (ProcA,
+     ProcB): every receive slot accepts exactly the message the in-order run expects there: header.n must equal
+     n_r (a smaller n is the §7.4 replay/stale reject; a larger n, or a header that opens only under the other key,
+     belongs to skip/step branches beyond the bound) and at the step slot of B's second receiving chain the old
+     chain key hk_r = HK_A is tried first as in §7.4 — a cell it opens is a replay or a chain-1 message beyond the
+     bound, and the run stops. A receiver whose ck_r is None ignores pn (skip_message_keys returns at once, §7.4); B
+     at step 3 requires pn = 2 = its n_r on the old chain.
+   - 1a. sClean and the mPCS sessions (F5, M3 R-12) run ProcA5, ProcB5: at the first cell of every received chain
+     (the DH step) the cell is either (i,0) (in order) or (i,1) (other first: skip_message_keys(1) stores mk(i,0)
+     under (hk_r, 0)); at a later slot of the chain the header's n must equal n_r, a smaller n is rejected (stale
+     reject, §7.4 skip_message_keys "until < n_r"). B's step-2 send runs in parallel with B's next receive after its
+     chain-1 step, so A's step 3 can reach B before (1,1): that receive is either (1,1) on the chain path or the
+     step-3 cell first, whose skip_message_keys(pn = 2) stores mk(1,1) under (HK_A, 1) (prefix loss; the attacker
+     chooses the alternative with an input sel, as it chooses the delivery order). A stored key is the process
+     Skipped: §7.4 step 1, one cell opening under its hk with header.n = its n, decrypted under its mk without the
+     KEM-constancy check (T11 scope: no RecvKem on this path), then removed (the process ends). Rejecting is silent
+     and leaves the state unchanged, so a stopped attempt is the trace in which the rejected cell was not delivered;
+     MAX_FF, SKIP_WINDOW and eviction are not reached inside the bound (tests).
 
    ---------------------------------------------------------------------------------------------------------------
    2. Abstractions (plus hseal2 (CLAIMS errata 2026-10-01) those of CLAIMS.md; nothing else about a primitive is assumed)
@@ -61,14 +71,14 @@
    3. Sessions (the claims' scenarios run as independent parallel sessions of one process)
    ---------------------------------------------------------------------------------------------------------------
      tag       mode    compromise                                  oracle        queries
-     sClean    mClean  none                                        none          T1, T2, T8, T11
-     sFS       mFS     phase 1: Compromise(A,2), Compromise(B,2);  none          T3, T11
+     sClean    mClean  none                                        none          T1, T2, T8, T11, T13   (1a.)
+     sFS       mFS     phase 1: Compromise(A,2), Compromise(B,2);  none          T3, T11, T13           (in order)
                        the session runs steps 1–2 only (phase 0)
-     sPCS      mPCS    Compromise(A,1); honest steps 2 and 3       none          T4, T10, T11
-     sPCSdh    mPCS    as sPCS                                     DHO           T5, T11
-     sPCSkem   mPCS    as sPCS                                     KEMO          T6, T11
-     sPCSboth  mPCS    as sPCS                                     DHO + KEMO    T7, T11
-     sHFS      mHFS    phase 1: Compromise(A,3), Compromise(B,3)   none          T9, T11
+     sPCS      mPCS    Compromise(A,1); honest steps 2 and 3       none          T4, T10, T11, T13      (1a.)
+     sPCSdh    mPCS    as sPCS                                     DHO           T5, T11, T13           (1a.)
+     sPCSkem   mPCS    as sPCS                                     KEMO          T6, T11, T13           (1a.)
+     sPCSboth  mPCS    as sPCS                                     DHO + KEMO    T7, T11, T13           (1a.)
+     sHFS      mHFS    phase 1: Compromise(A,3), Compromise(B,3)   none          T9, T11, T13           (in order)
    plus the T12 probe (7.). Sessions share no private value: every secret is a private constructor applied to the
    session's tag, and the private channels are per tag. The only shared symbols are public (g, labels, counters,
    party/step constants, tags) and the oracle destructors, which are scoped per session (4.). Hence removing the
@@ -122,7 +132,9 @@
    B's step-1 keys come from RK, which is not in A's post-step-1 state, and A rejects the resulting step 2. Message
    (1,1) — a non-step message on the compromised chain — stays on c, so the attacker can forge it with A's chain
    key; this is the slot where T11's KEM-constancy check is exercised. In all other sessions both delivery channels
-   are c (the extra copy on c is harmless), i.e. the attacker controls all delivery.
+   are c (the extra copy on c is harmless), i.e. the attacker controls all delivery. F5 (1a.): the private delivery
+   of the step-2 and step-3 cells is offered in parallel (each cell once), so the receiver may take (i,1) before
+   (i,0); an output on a private channel blocks until it is read, and sequential outputs would fix the order.
 
    ---------------------------------------------------------------------------------------------------------------
    7. Header fields (T8, T9) and header commitment (T12)
@@ -158,17 +170,23 @@
    - Each X25519 value is bound once with let and reused: ProVerif closes every syntactic occurrence of exp under the
      DH equation separately; binding it once yields the same terms without the exponential number of forms.
    - set selFun = Term: a resolution strategy; it affects termination/performance only.
-   - Two query declarations (T1–T2 and T3–T12, in ID order, a "Tk" comment above each query): ProVerif
+   - set preciseActions = true (F5): ProVerif records that an input or a test of a process copy has one outcome, so
+     the in-order and other-first branches of one slot (exclusive: one header n) are not combined in one derivation;
+     a more precise clause translation of the same process (without it, T2's first line "cannot be proved": the
+     Recv of (1,0) at the step and at the skipped key counted as two receptions; T7 had no reconstructable trace).
+   - Two query declarations (T1–T2 and T3–T13, in ID order, a "Tk" comment above each query): ProVerif
      saturates the clause set once per declaration, and T2's injective events are the expensive part.
 
    ---------------------------------------------------------------------------------------------------------------
    9. Expected verdicts (CLAIMS gate rule), RESULT lines in file order
    ---------------------------------------------------------------------------------------------------------------
    T1 (6 lines) true · T2 (2) true · T3 (4) true · T4 (2) true · T5 (2) true · T6 (2) true · T7 (2) false ·
-   T8 (12) true · T9 (4) true · T10 (1) false · T11 (1) true · T12 (1) false (informative) — 39 RESULT lines.
+   T8 (12) true · T9 (4) true · T10 (1) false · T11 (1) true · T12 (1) false (informative) · T13 (7) false —
+   46 RESULT lines.
 *)
 
 set selFun = Term.
+set preciseActions = true.
 
 (* ---------------------------------------------------------------- channels, types, constants ------------------ *)
 
@@ -192,6 +210,7 @@ const c0, c1, c2: bitstring.                              (* counter values 0, 1
 const kB0, kA1, kB2, kA3, kB4: bitstring.                 (* key-generation indices *)
 const lbl_hdr, lbl_body: bitstring.                       (* "SecMP-TR/1 hdr", "SecMP-TR/1 body" (App. A) *)
 const none, empty: bitstring.                             (* Option::None; empty skipped map *)
+const yes, no, selChain: bitstring.                       (* F5: skip flag; receive alternative chosen by the attacker *)
 
 (* ---------------------------------------------------------------- honest secrets (2.) ------------------------ *)
 
@@ -470,7 +489,16 @@ query s: tagt, p: bitstring, i: bitstring, n: bitstring, x: bitstring, ct: kemct
       event(RecvKem(s, p, i, n, x, ct)) ==> event(ChainKem(s, p, i, ct));
       (* T12: sanity, header keys are not committing — hopen(hk1, …) = header && hopen(hk2, …) = header
          ==> hk1 = hk2; expected false or unprovable (informative, not a gate). *)
-      event(HdrOpenTwice(k1, k2, h)) ==> k1 = k2.
+      event(HdrOpenTwice(k1, k2, h)) ==> k1 = k2;
+      (* T13: reachability sanity, one query per honest session (M3 R-52, EXT-1): the session's final honest accept
+         with the honest content — B's (3,1), in sFS (steps 1–2 only) A's (2,1); expected false (reachable). *)
+      event(Recv(sClean, pB, st3, c1, content(sClean, st3, c1)));
+      (* T13 *) event(Recv(sFS, pA, st2, c1, content(sFS, st2, c1)));
+      (* T13 *) event(Recv(sPCS, pB, st3, c1, content(sPCS, st3, c1)));
+      (* T13 *) event(Recv(sPCSdh, pB, st3, c1, content(sPCSdh, st3, c1)));
+      (* T13 *) event(Recv(sPCSkem, pB, st3, c1, content(sPCSkem, st3, c1)));
+      (* T13 *) event(Recv(sPCSboth, pB, st3, c1, content(sPCSboth, st3, c1)));
+      (* T13 *) event(Recv(sHFS, pB, st3, c1, content(sHFS, st3, c1))).
 
 (* ---------------------------------------------------------------- processes --------------------------------- *)
 
@@ -692,6 +720,251 @@ let ProcB(s: tagt, mode: bitstring, dA: channel, dB: channel) =
     )
   ).
 
+(* ---------------------------------------------------------------- F5 receive branches (1a.) ------------------- *)
+
+(* §7.4 step 1, one skipped key: (hk, n) -> mk stored by skip_message_keys. The entry accepts one cell whose header
+   opens under hk with header.n = n, under mk (no KEM-constancy check on this path: T11 scope), then is removed. *)
+let Skipped(s: tagt, p: bitstring, i: bitstring, n: bitstring, hk: key, mk: key, sb: bitstring, ch: channel) =
+  in(ch, (nns: nonce, hcs: bitstring, bds: bitstring));
+  let (dhs: G, pns: bitstring, =n, eks: kemek, cts: kemct, mks: bitstring) = hopen(hk, nns, (lbl_hdr, sb), hcs) in
+  let xs = bopen(mk, (lbl_body, sb, nns, hcs), bds) in
+  event Recv(s, p, i, n, xs).
+
+(* §7.3 B's step 2, n = 0 and n = 1 (hk_s = NHK_B, pn = 0) *)
+let SendStep2(s: tagt, sb: bitstring, NHKB: key, cks2: key, b2: exponent, dkb2: kemdk, ct2: kemct, dA: channel) =
+  let m20 = content(s, st2, c0) in
+  event Send(s, pB, st2, c0, m20);
+  let cell20 = mkcell(NHKB, cks2, sb, (exp(g, b2), c0, c0, pk(dkb2), ct2, nmark(s, st2, c0)), m20) in
+  out(c, cell20);
+  (
+    out(dA, cell20)                                   (* offered in parallel: the receiver may take (2,1) first *)
+  |
+    let cks2b = ck_ck(cks2) in
+    let m21 = content(s, st2, c1) in
+    event Send(s, pB, st2, c1, m21);
+    let cell21 = mkcell(NHKB, cks2b, sb, (exp(g, b2), c0, c1, pk(dkb2), ct2, nmark(s, st2, c1)), m21) in
+    out(c, cell21);
+    out(dA, cell21)
+  ).
+
+(* §7.3 A's step 3, n = 0 and n = 1 (hk_s = nhk_s1, pn = 2) *)
+let SendStep3(s: tagt, sb: bitstring, nhks1: key, cks3: key, a3: exponent, dka3: kemdk, ct3: kemct, dB: channel) =
+  let m30 = content(s, st3, c0) in
+  event Send(s, pA, st3, c0, m30);
+  let cell30 = mkcell(nhks1, cks3, sb, (exp(g, a3), c2, c0, pk(dka3), ct3, nmark(s, st3, c0)), m30) in
+  out(c, cell30);
+  (
+    out(dB, cell30)                                   (* offered in parallel: the receiver may take (3,1) first *)
+  |
+    let cks3b = ck_ck(cks3) in
+    let m31 = content(s, st3, c1) in
+    event Send(s, pA, st3, c1, m31);
+    let cell31 = mkcell(nhks1, cks3b, sb, (exp(g, a3), c2, c1, pk(dka3), ct3, nmark(s, st3, c1)), m31) in
+    out(c, cell31);
+    out(dB, cell31)
+  ).
+
+(* §7.4 B's step 3. hk_r = HK_A is tried first (a cell it opens is a chain-1 cell: stale or beyond the bound, the
+   attempt stops); nhk_r = nhk_r1 opens => DH step with pn = 2. skip11 = yes: B's chain-1 n_r is 1, so
+   skip_message_keys(2) stores mk(1,1) = mk11 under (HK_A, 1) once the step-3 cell is accepted (prefix loss of
+   (1,1), F5); skip11 = no: n_r = 2 = pn, nothing is stored. The step-3 cell is (3,0) (in order) or (3,1) (other
+   first: mk(3,0) is stored under (nhk_r1, 0)). Second chain-3 slot: n = 1 accepted, n = 0 stale (rejected). *)
+let RecvStep3(s: tagt, sb: bitstring, HKA: key, nhkr1: key, dhpk1: G, rk2: key, b2: exponent, dkb2: kemdk,
+              dB: channel, skip11: bitstring, mk11: key) =
+  in(dB, (nn3f: nonce, hc3f: bitstring, bd3f: bitstring));
+  let hx3f = hopen(HKA, nn3f, (lbl_hdr, sb), hc3f) in 0 else
+  let (dhpk3: G, pn3f: bitstring, n3f: bitstring, ek3: kemek, ct3: kemct, mk3f: bitstring) =
+    hopen(nhkr1, nn3f, (lbl_hdr, sb), hc3f) in
+  if dhpk3 = dhpk1 then 0 else                        (* a step must carry a new ratchet key *)
+  if pn3f = c2 then
+  (* DHRatchet receiving half (B's step-4 sending half is not used in these sessions: no Compromise(B,3)) *)
+  let ssr3 = decaps(dkb2, ct3) in
+  let dhr3 = exp(dhpk3, b2) in
+  let ckr3 = rk_ck(rk2, dhr3, ssr3) in
+  if n3f = c0 then (
+    let x30 = bopen(ck_mk(ckr3), (lbl_body, sb, nn3f, hc3f), bd3f) in
+    event ChainKem(s, pB, st3, ct3);
+    event RecvKem(s, pB, st3, c0, x30, ct3);
+    event Recv(s, pB, st3, c0, x30);
+    let ckr3b = ck_ck(ckr3) in
+    (
+      (if skip11 = yes then Skipped(s, pB, st1, c1, HKA, mk11, sb, c))
+    |
+      (* §7.4 step 3, second cell: hk_r = nhk_r1 opens => same chain; KEM constancy; n = 0 stale *)
+      in(dB, (nn31: nonce, hc31: bitstring, bd31: bitstring));
+      let (dhpk31: G, pn31: bitstring, n31: bitstring, ek31: kemek, ct31: kemct, mk31: bitstring) =
+        hopen(nhkr1, nn31, (lbl_hdr, sb), hc31) in
+      if ek31 = ek3 then
+      if ct31 = ct3 then
+      if n31 = c1 then
+      let x31 = bopen(ck_mk(ckr3b), (lbl_body, sb, nn31, hc31), bd31) in
+      event RecvKem(s, pB, st3, c1, x31, ct31);
+      event Recv(s, pB, st3, c1, x31)
+    )
+  ) else if n3f = c1 then (
+    (* other first: skip_message_keys(1) stores mk(3,0) *)
+    let ckr3b = ck_ck(ckr3) in
+    let x31 = bopen(ck_mk(ckr3b), (lbl_body, sb, nn3f, hc3f), bd3f) in
+    event ChainKem(s, pB, st3, ct3);
+    event RecvKem(s, pB, st3, c1, x31, ct3);
+    event Recv(s, pB, st3, c1, x31);
+    (
+      (if skip11 = yes then Skipped(s, pB, st1, c1, HKA, mk11, sb, c))
+    | Skipped(s, pB, st3, c0, nhkr1, ck_mk(ckr3), sb, dB)
+    )
+  ).
+
+(* Party A with the F5 receive branches (sClean, mPCS): as ProcA up to (1,1); chain 2 per slot in order or other
+   first, stale reject; step 3 sent after A's second chain-2 acceptance. *)
+let ProcA5(s: tagt, mode: bitstring, dA: channel, dB: channel) =
+  let sb = sbind(s) in
+  (* §7.2 *)
+  let RK = init_rk(skey(s)) in
+  let HKA = init_hka(skey(s)) in
+  let NHKB = init_nhkb(skey(s)) in
+  let spk = exp(g, dhsk(s, kB0)) in                   (* dh_r = SPK_dh_R *)
+  let rpk = pk(kemsk(s, kB0)) in                      (* kem_r = RPK_kem_R *)
+  let a1 = dhsk(s, kA1) in
+  let dka1 = kemsk(s, kA1) in
+  let ct1 = encaps_ct(rpk, kemr(s, kA1)) in
+  let ss1 = encaps_ss(rpk, kemr(s, kA1)) in
+  let dh1 = exp(spk, a1) in
+  let rk1 = rk_rk(RK, dh1, ss1) in
+  let cks1 = rk_ck(RK, dh1, ss1) in
+  let nhks1 = rk_nhk(RK, dh1, ss1) in
+  (* §7.3 step 1, n = 0 (hk_s = HK_A, pn = 0) *)
+  let m10 = content(s, st1, c0) in
+  event Send(s, pA, st1, c0, m10);
+  let cell10 = mkcell(HKA, cks1, sb, (exp(g, a1), c0, c0, pk(dka1), ct1, nmark(s, st1, c0)), m10) in
+  out(c, cell10);
+  out(dB, cell10);
+  let cks1b = ck_ck(cks1) in
+  (
+    (* Compromise(A,1) in the mPCS sessions (5.) *)
+    (if mode = mPCS then
+       event Compromise(s, pA, st1);
+       out(c, (sb, rk1, a1, spk, dka1, rpk, none, ct1, cks1b, none, HKA, none, nhks1, NHKB, c1, c0, c0, empty)))
+  |
+    (* §7.3 step 1, n = 1 *)
+    let m11 = content(s, st1, c1) in
+    event Send(s, pA, st1, c1, m11);
+    out(c, mkcell(HKA, cks1b, sb, (exp(g, a1), c0, c1, pk(dka1), ct1, nmark(s, st1, c1)), m11));
+    (* §7.4 chain 2, first cell: hk_r = None, nhk_r = NHK_B opens => DH step; (2,0) in order or (2,1) first *)
+    in(dA, (nn2f: nonce, hc2f: bitstring, bd2f: bitstring));
+    let (dhpk2: G, pn2f: bitstring, n2f: bitstring, ek2: kemek, ct2: kemct, mk2f: bitstring) =
+      hopen(NHKB, nn2f, (lbl_hdr, sb), hc2f) in
+    if dhpk2 = spk then 0 else                        (* a step must carry a new ratchet key *)
+    (* skip_message_keys(pn): ck_r = None => no-op. DHRatchet *)
+    let ssr2 = decaps(dka1, ct2) in
+    let dhr2 = exp(dhpk2, a1) in
+    let rk2 = rk_rk(rk1, dhr2, ssr2) in
+    let ckr2 = rk_ck(rk1, dhr2, ssr2) in
+    let a3 = dhsk(s, kA3) in
+    let dka3 = kemsk(s, kA3) in
+    let ct3 = encaps_ct(ek2, kemr(s, kA3)) in
+    let ss3 = encaps_ss(ek2, kemr(s, kA3)) in
+    let dh3 = exp(dhpk2, a3) in
+    let cks3 = rk_ck(rk2, dh3, ss3) in
+    if n2f = c0 then (
+      let x20 = bopen(ck_mk(ckr2), (lbl_body, sb, nn2f, hc2f), bd2f) in
+      event ChainKem(s, pA, st2, ct2);
+      event RecvKem(s, pA, st2, c0, x20, ct2);
+      event Recv(s, pA, st2, c0, x20);
+      let ckr2b = ck_ck(ckr2) in
+      (* §7.4 chain 2, second cell: hk_r = NHK_B opens => same chain; KEM constancy; n = 0 stale *)
+      in(dA, (nn21: nonce, hc21: bitstring, bd21: bitstring));
+      let (dhpk21: G, pn21: bitstring, n21: bitstring, ek21: kemek, ct21: kemct, mk21: bitstring) =
+        hopen(NHKB, nn21, (lbl_hdr, sb), hc21) in
+      if ek21 = ek2 then
+      if ct21 = ct2 then
+      if n21 = c1 then
+      let x21 = bopen(ck_mk(ckr2b), (lbl_body, sb, nn21, hc21), bd21) in
+      event RecvKem(s, pA, st2, c1, x21, ct21);
+      event Recv(s, pA, st2, c1, x21);
+      SendStep3(s, sb, nhks1, cks3, a3, dka3, ct3, dB)
+    ) else if n2f = c1 then (
+      (* other first: skip_message_keys(1) stores mk(2,0) under (NHK_B, 0) *)
+      let ckr2b = ck_ck(ckr2) in
+      let x21 = bopen(ck_mk(ckr2b), (lbl_body, sb, nn2f, hc2f), bd2f) in
+      event ChainKem(s, pA, st2, ct2);
+      event RecvKem(s, pA, st2, c1, x21, ct2);
+      event Recv(s, pA, st2, c1, x21);
+      (
+        Skipped(s, pA, st2, c0, NHKB, ck_mk(ckr2), sb, dA)
+      | SendStep3(s, sb, nhks1, cks3, a3, dka3, ct3, dB)
+      )
+    )
+  ).
+
+(* Party B with the F5 receive branches (sClean, mPCS): chain 1 per slot in order or other first; B's step-2 send
+   runs in parallel with its next receive, which is (1,1) on the chain path (stale n = 0 rejected) or the step-3
+   cell first (sel, chosen by the attacker: the two are alternatives of one receive, §7.4) *)
+let ProcB5(s: tagt, mode: bitstring, dA: channel, dB: channel) =
+  let sb = sbind(s) in
+  (* §7.2 *)
+  let RK = init_rk(skey(s)) in
+  let HKA = init_hka(skey(s)) in
+  let NHKB = init_nhkb(skey(s)) in
+  let b0 = dhsk(s, kB0) in                            (* dh_s = SPK_dh_R keypair *)
+  let dk0 = kemsk(s, kB0) in                          (* kem_s = RPK_kem_R keypair *)
+  out(c, (exp(g, b0), pk(dk0)));                      (* the prekeys are public *)
+  (* §7.4 chain 1, first cell: hk_r = None, nhk_r = HK_A opens => DH step; (1,0) in order or (1,1) first *)
+  in(dB, (nn1f: nonce, hc1f: bitstring, bd1f: bitstring));
+  let (dhpk1: G, pn1f: bitstring, n1f: bitstring, ek1: kemek, ct1: kemct, mk1f: bitstring) =
+    hopen(HKA, nn1f, (lbl_hdr, sb), hc1f) in
+  let ssr1 = decaps(dk0, ct1) in
+  let dhr1 = exp(dhpk1, b0) in
+  let rk1 = rk_rk(RK, dhr1, ssr1) in
+  let ckr1 = rk_ck(RK, dhr1, ssr1) in
+  let nhkr1 = rk_nhk(RK, dhr1, ssr1) in
+  let b2 = dhsk(s, kB2) in
+  let dkb2 = kemsk(s, kB2) in
+  let ct2 = encaps_ct(ek1, kemr(s, kB2)) in
+  let ss2 = encaps_ss(ek1, kemr(s, kB2)) in
+  let dh2 = exp(dhpk1, b2) in
+  let rk2 = rk_rk(rk1, dh2, ss2) in
+  let cks2 = rk_ck(rk1, dh2, ss2) in
+  if n1f = c0 then (
+    let x10 = bopen(ck_mk(ckr1), (lbl_body, sb, nn1f, hc1f), bd1f) in
+    event ChainKem(s, pB, st1, ct1);
+    event RecvKem(s, pB, st1, c0, x10, ct1);
+    event Recv(s, pB, st1, c0, x10);
+    let ckr1b = ck_ck(ckr1) in
+    (
+      SendStep2(s, sb, NHKB, cks2, b2, dkb2, ct2, dA)
+    |
+      in(c, sel: bitstring);
+      if sel = selChain then (
+        (* §7.4 chain 1, second cell: hk_r = HK_A opens => same chain; KEM constancy; n = 0 stale *)
+        in(c, (nn11: nonce, hc11: bitstring, bd11: bitstring));
+        let (dhpk11: G, pn11: bitstring, n11: bitstring, ek11: kemek, ct11: kemct, mk11: bitstring) =
+          hopen(HKA, nn11, (lbl_hdr, sb), hc11) in
+        if ek11 = ek1 then
+        if ct11 = ct1 then
+        if n11 = c1 then
+        let x11 = bopen(ck_mk(ckr1b), (lbl_body, sb, nn11, hc11), bd11) in
+        event RecvKem(s, pB, st1, c1, x11, ct11);
+        event Recv(s, pB, st1, c1, x11);
+        RecvStep3(s, sb, HKA, nhkr1, dhpk1, rk2, b2, dkb2, dB, no, ckr1b)
+      ) else (
+        (* the step-3 cell first: (1,1) is skipped into (HK_A, 1) *)
+        RecvStep3(s, sb, HKA, nhkr1, dhpk1, rk2, b2, dkb2, dB, yes, ck_mk(ckr1b))
+      )
+    )
+  ) else if n1f = c1 then (
+    (* other first: skip_message_keys(1) stores mk(1,0) under (HK_A, 0) *)
+    let ckr1b = ck_ck(ckr1) in
+    let x11 = bopen(ck_mk(ckr1b), (lbl_body, sb, nn1f, hc1f), bd1f) in
+    event ChainKem(s, pB, st1, ct1);
+    event RecvKem(s, pB, st1, c1, x11, ct1);
+    event Recv(s, pB, st1, c1, x11);
+    (
+      Skipped(s, pB, st1, c0, HKA, ck_mk(ckr1), sb, dB)
+    | SendStep2(s, sb, NHKB, cks2, b2, dkb2, ct2, dA)
+    | RecvStep3(s, sb, HKA, nhkr1, dhpk1, rk2, b2, dkb2, dB, no, ckr1b)
+    )
+  ).
+
 (* T12 probe: an honest opener that tries two keys on one header ciphertext (7.) *)
 let ProbeT12 =
   in(c, (k1: key, k2: key, nn: nonce, ad: bitstring, hc: bitstring));
@@ -700,11 +973,11 @@ let ProbeT12 =
   if h1 = h2 then event HdrOpenTwice(k1, k2, h1).
 
 process
-    (ProcA(sClean, mClean, c, c) | ProcB(sClean, mClean, c, c))
+    (ProcA5(sClean, mClean, c, c) | ProcB5(sClean, mClean, c, c))
   | (ProcA(sFS, mFS, c, c) | ProcB(sFS, mFS, c, c))
-  | (ProcA(sPCS, mPCS, pch_ba(sPCS), pch_ab(sPCS)) | ProcB(sPCS, mPCS, pch_ba(sPCS), pch_ab(sPCS)))
-  | (ProcA(sPCSdh, mPCS, pch_ba(sPCSdh), pch_ab(sPCSdh)) | ProcB(sPCSdh, mPCS, pch_ba(sPCSdh), pch_ab(sPCSdh)))
-  | (ProcA(sPCSkem, mPCS, pch_ba(sPCSkem), pch_ab(sPCSkem)) | ProcB(sPCSkem, mPCS, pch_ba(sPCSkem), pch_ab(sPCSkem)))
-  | (ProcA(sPCSboth, mPCS, pch_ba(sPCSboth), pch_ab(sPCSboth)) | ProcB(sPCSboth, mPCS, pch_ba(sPCSboth), pch_ab(sPCSboth)))
+  | (ProcA5(sPCS, mPCS, pch_ba(sPCS), pch_ab(sPCS)) | ProcB5(sPCS, mPCS, pch_ba(sPCS), pch_ab(sPCS)))
+  | (ProcA5(sPCSdh, mPCS, pch_ba(sPCSdh), pch_ab(sPCSdh)) | ProcB5(sPCSdh, mPCS, pch_ba(sPCSdh), pch_ab(sPCSdh)))
+  | (ProcA5(sPCSkem, mPCS, pch_ba(sPCSkem), pch_ab(sPCSkem)) | ProcB5(sPCSkem, mPCS, pch_ba(sPCSkem), pch_ab(sPCSkem)))
+  | (ProcA5(sPCSboth, mPCS, pch_ba(sPCSboth), pch_ab(sPCSboth)) | ProcB5(sPCSboth, mPCS, pch_ba(sPCSboth), pch_ab(sPCSboth)))
   | (ProcA(sHFS, mHFS, c, c) | ProcB(sHFS, mHFS, c, c))
   | ProbeT12

@@ -36,32 +36,33 @@ ADR-044 (b)–(f) are enforced in this milestone.
 | 9 | M3 follow-ups F1, F3, F4, F6–F14, F16 (after ratification), F17–F23, ctreport `class_median` refusal, ADR-041 Amendment 2 status line, M03-report §8 Q-1 text | F-ids | open |
 | 10 | Report evidence, push, PR | Phase-A closing message | open |
 
-## 2. What was built (state at the end of this session; local commits, not pushed)
+## 2. What was built (Phase A, WEISUNG M4-1 applied; local HEAD see §9)
 
-- `secmp-proto::inv` (URI/QR text, strict base64url, blob seal/open, `K_ld`/`K_inv`, `invitee_check`/`invitee_accept` per §5.5 steps 1, 3, 4, `IssueError` bounds), `secmp-proto::hx` (`transcript`, `session_key`, `k_id`, `Initiator::start`, `HandshakeCells` with `release`/`from_bytes`, `Responder::accept` with grouping per ADR-044 (c), `drive`), `secmp-proto::prekeys` (`IdentityKeys`, `PrekeyStore`, `MemoryPrekeyStore`: SPK generations by id with retention, OPK single use, RPK, records, `issue_invitation`, `retire_expired`).
-- `tr`: `Entropy` extended (ML-KEM-1024, secrets, `IK_sig` generation, hedged signing); `Opened::header_counters` (ADR-044 (e)); `RatchetState::encrypt_padded_kat` (kat).
-- Vectors: `vectors/hx.json` frozen = `vectors/ref/hx.json`, sha256 `a33cf162e36969dc4bd70114a7c1b0ae3a97e09a187cd210c47dc374f436e7d2`, 30 cases; Rust generator (`tests/common/hx_gen.rs`, independent harness `hx_harness.rs`) reproduces it byte for byte; `hx_vectors` replays all 30 cases through the library; `xtask vectors` cross-generates it (`gen-hx`).
-- Tests: test crate `tests/hx/` (105 tests: INV rows, accept rows, grouping, store, properties P1–P11, vectors, generator, flow) + unit tests (`hx::tests`, `inv::tests`); fuzz targets F1–F7 (`inv_uri`, `inv_linkdata`, `hx_outer`, `hx_inner`, `hx_cell_plaintext`, `hx_accept_raw`, `hx_accept_structured`), each run 20–40 s locally without findings, seeds from the frozen suite (`fuzzseed.rs`), `FUZZ_MAX_LEN`, nightly budget 685 s.
-- Kani: `kani_hx_chunk_bounds` (verified), `kani_outer_unpad_total` (needs `-Z stubbing` through xtask; not yet run).
-- Note: `Initiator::start` takes `now` (the Handshake `ts`) and `InitiatorKeys` (iks + ik_dh) instead of two separate key parameters (7-parameter lint limit); no signing key reaches it.
+- `secmp-proto::inv`: URI/QR text with constant-time, `Zeroizing` base64url (V-5), blob seal/open, `K_ld`/`K_inv`, `invitee_check` → `InviteeAccepted` (private fields, accessors; V-12), `IssueError` bounds.
+- `secmp-proto::hx`: `transcript`, `session_key`, `k_id`; `Initiator::start(&InviteeAccepted, &InitiatorKeys, routes, profile, now, entropy)`; `HandshakeCells::release(persist(cells, state))` and `PersistedCells` for retry (V-6); `Responder::accept` over the array-based `Groups`/`drive` (ADR-044 (c)) with one `commit_accept` (OPK deleted and record consumed, V-7).
+- `secmp-proto::prekeys`: `IdentityKeys`, `PrekeyStore` (+`commit_accept`), `MemoryPrekeyStore` (SPK generations by id with retention, OPK single use, RPK, records, `consume_record`, `issue_invitation`, `retire_expired`); bundle signing now uses `PrekeyBundle::signed_fields` (V-11).
+- `tr`: `Opened::header_counters` (V-10: no fail-open default), entropy extensions, `encrypt_padded_kat`.
+- Vectors: `vectors/hx.json` frozen (sha256 `a33cf162…`), generator and replay as before.
+- Tests: `tests/hx/` 109 tests + 16 lib unit tests in `inv`/`hx`/`prekeys`; proptest-style properties P1–P11; fuzz F1–F7; Kani K1–K5.
 
-## 3. Evidence
-- `cargo xtask ci-fast`: PASS locally (fmt, clippy, policy, deny, vet, audit, cooldown, nextest, doctest, kat 380 s).
-- `cargo xtask vectors`: 11 suites identical to `vectors/ref`; `hx` frozen.
+## 3. Evidence (docs/reviews/M04-evidence/)
+`ci-fast-aarch64-apple-darwin-local.txt` (PASS), `vectors-xtask.txt` (11 suites identical), `kani-xtask-step.txt` (`cargo xtask step --strict kani`: 24/24 harnesses verified, 847 s, Kani 0.68.0), `kani-k5-first-run-harness-overflow.txt` (first K5 run: failing check `kani_cell_plaintext_decode_total.assertion.1` = `attempt to add with overflow` at `len + 1` in the HARNESS' own assumption, not the decoder; fixed by `len >= PT_LEN - 1`; V-3 decoder unit tests `cell_plaintext_decode_rejects_i_ge_total` / `_total_ne_3` pass, the M2 decoder already rejects both), `fuzz-m4-local-120s.txt` (7 targets × 120 s, no findings).
+Kani bounds: K1 none; K2 `unpad` stubbed (any proper prefix or rejection); K3 `Groups<u8,u8,2>`, ≤ 4 chunks over 3 init_ids, unwind 6 (44 s); K4 production bound 8 slots, ≤ 4 chunks over 3 init_ids, unwind 10 (250 s); K5 unwind 4010 (50 s).
 
-## 4. Not done in this session (open)
-- Kani K3 `kani_hx_grouping`, K4 `kani_accept_opk_delete_only_on_success`: harnesses over the `Vec`-based grouping/`drive` did not finish in 9 minutes (bounds down to 3 chunks, bound 2); K5 `kani_cell_plaintext_decode_total` fails an assertion (cause not located). All three removed from the source; `expect::KANI_HARNESSES` lists K1, K2 only.
-- ct targets (f), ADR-045 job-summary tables, M3 follow-ups F1–F23 (except as noted), F-id closure list, M04-evidence files, PROVERIF untouched, push of the branch (the PR run 36862814521 of the plan commit was still running; nothing pushed after the plan commit).
-- TEST-SPEC rows not implemented as named: `transcript_*` ok; N-24/N-41 are helper-level unit tests (`start_zero_dh_rejects_and_sends_nothing`, `accept_zero_dh_rejects_and_keeps_opk`).
+## 4. Verifier findings
+V-1 done (`accept_counter_rules_reject_after_a_valid_mac`: MAC verifies, `remaining()==0`, store/OPK unchanged, control 0/0 accepts; `first_msg_with_counters` advances `ck_s`). V-3 done (two named decoder tests). V-5 done (arithmetic base64, `Zeroizing`). V-6 done (`start_persist_error_is_returned_and_nothing_sent`). V-7 done (`accept_success_consumes_record_and_opk`). V-8 done (docs; `hx_secrets_are_zeroizing_types` type ascription). V-9 done (hard assertions, `low_order()` extended to 8 values, moved to `hx/tests.rs`). V-10 done. V-11 done. V-12 done (`docs/07` API line updated).
 
-## 5. Deviations from the spec
-None.
+## 5. M3 follow-ups (Part E)
+F3 done (dependency-free YAML-aware reader, `required_job_bypasses_are_findings`) · F6 not done: formal (`tr.pv`) — Phase B · F8 done · F9 done (bound check before `apply`; the post-apply error arm is provably unreachable) · F10 partly (`Profile.name` is `Zeroizing<String>`; hosts/msg_ids unchanged) · F11 done · F12 partly (type-pin test in `tr/ratchet.rs`; no heap-probe pattern in testkit) · F14 done · F18 done · F20 done (ADR-042 consequence sentence + non-kat nextest in step 4) · F21 done · F22 done (`miri-full.yml` one job per package; required jobs unchanged) · F23 done · ctreport `class_median` refusal done (Amendment-2 format reports only) · ADR-041 Amendment 2 status line, M03-report Q-1 text done. F16 waits for ADR-043 ratification (after 2026-10-02 02:45 UTC). F4, F17 skipped (optional).
 
-## 6. Open risks
-None recorded.
+## 6. ADR-045
+`xtask/src/summary.rs`; every step of `ci-full`/`ci-fast` appends a table (`status`, one row per verdict line; for `ct` the run verdict, runner timer, every target/control row from the gate's reading; for `proverif` the sha256 of the models) to `$GITHUB_STEP_SUMMARY`, else stdout. Test `summary::tests::the_ct_table_comes_from_a_recorded_report` (run 36840478213 report: 18 rows). A run page with the table is the next push's PR run.
 
-## 7. Questions
-None.
+## 7. Test counts per spec section (implemented / passing / extra)
+(a) positives + vectors: 8 listed + `hx_vectors`, generator, flow, builder controls → all pass; extras: `builders_reproduce_an_accepted_envelope`, `accept_counter_rules_reject_after_a_valid_mac`, `accept_success_consumes_record_and_opk`, `hx_secrets_are_zeroizing_types`, `start_persist_error_is_returned_and_nothing_sent`. (b) negatives N-1…N-72 (N-58 withdrawn): all rows named, all pass. (c) P1–P11 pass. (d) F1–F7 implemented, 120 s each, K1–K5 verified. (e) all named assertions pass. (f) ct targets: Phase B (not started). (g) F10–F12 per §5.
 
-## 8. Blocked
-K3/K4/K5 as in §4.
+## 8. Open / Phase B
+ct targets (f), `formal/hx.pv`, F1, F2, F5, F6, F7, F19, F34, F16 (after ratification), F10 hosts/msg_ids, F12 heap probe.
+
+## 9. Push state
+PR run 36885710027 (head 50cfca3) was still running at the end of this session: the 4 later commits are NOT pushed.

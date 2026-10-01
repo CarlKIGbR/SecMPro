@@ -5,17 +5,21 @@
 //! events in order with both parties' states — every `state_pre`/`state_post` digest, every `cell`, every
 //! `content`, every rejection with the uniform error and a byte-identical state.
 //!
-//! `StateDigestV1` is the suite's comparison construct (SCHEMA-4.9), not the persistence format: it is computed
-//! here, in the test crate, by parsing the documented `RatchetStateV1` encoding field by field.
+//! `StateDigestV1` is the suite's comparison construct (SCHEMA-4.9), not the persistence format: it is computed in
+//! the test crate (`tests/common/tr_digest.rs`, shared with the generator) by parsing the documented
+//! `RatchetStateV1` encoding field by field.
 //!
 //! Reads the frozen `vectors/tr.json` (ADR-026: a verbatim copy of the reference file), and the reference file
 //! `vectors/ref/tr.json` while the suite is not frozen yet.
+
+#[path = "common/tr_digest.rs"]
+mod tr_digest;
 
 use std::collections::HashMap;
 
 use serde_json::Value;
 
-use secmp_crypto::{MlKem768Dk, SecretBytes, X25519Secret, sha256};
+use secmp_crypto::{MlKem768Dk, SecretBytes, X25519Secret};
 use secmp_proto::codec::{pad, unpad};
 use secmp_proto::keys::{MlKem768Ek, X25519Pk};
 use secmp_proto::sizes::BODY_LEN;
@@ -24,19 +28,13 @@ use secmp_proto::tr::{FixedEntropy, RatchetState};
 use secmp_proto::wire::cell::Content;
 use secmp_proto::{Decode, Encode, Error};
 
+use tr_digest::{digest, hex};
+
 fn unhex(s: &str) -> Vec<u8> {
     s.as_bytes()
         .chunks(2)
         .map(|p| u8::from_str_radix(std::str::from_utf8(p).unwrap(), 16).unwrap())
         .collect()
-}
-
-fn hex(b: &[u8]) -> String {
-    use std::fmt::Write as _;
-    b.iter().fold(String::new(), |mut s, x| {
-        let _ = write!(s, "{x:02x}");
-        s
-    })
 }
 
 fn text<'a>(v: &'a Value, key: &str) -> &'a str {
@@ -56,58 +54,6 @@ fn vector_file() -> Value {
         root.join("ref").join("tr.json")
     };
     serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
-}
-
-/// A cursor over the `RatchetStateV1` encoding.
-struct Fields<'a>(&'a [u8]);
-
-impl<'a> Fields<'a> {
-    fn take(&mut self, n: usize) -> &'a [u8] {
-        let (head, tail) = self.0.split_at(n);
-        self.0 = tail;
-        head
-    }
-
-    /// `opt(x)`: the presence byte and, if present, `n` bytes — returned as written (the digest's `opt` is the same).
-    fn opt(&mut self, n: usize) -> Vec<u8> {
-        let flag = self.take(1).first().copied().unwrap();
-        assert!(flag <= 1, "presence byte");
-        let mut out = vec![flag];
-        if flag == 1 {
-            out.extend_from_slice(self.take(n));
-        }
-        out
-    }
-}
-
-/// `StateDigestV1` (SCHEMA-4.9): SHA-256 of `"SecMP-TR/1 state-digest" ‖ sb ‖ rk ‖ dh_s.sk ‖ opt(dh_r) ‖
-/// kem_s.seed ‖ opt(kem_r) ‖ opt(last_ct_r) ‖ opt(ct_s) ‖ opt(ck_s) ‖ opt(ck_r) ‖ opt(hk_s) ‖ opt(hk_r) ‖
-/// opt(nhk_s) ‖ opt(nhk_r) ‖ u32(n_s) ‖ u32(n_r) ‖ u32(pn) ‖ u32(|skipped|) ‖ (hk ‖ u32(n) ‖ mk)*`, read from the
-/// state's `RatchetStateV1` encoding.
-fn digest(state: &RatchetState) -> String {
-    let encoded = state.to_bytes().unwrap();
-    let mut f = Fields(&encoded);
-    assert_eq!(f.take(1), [1], "RatchetStateV1 format byte");
-    let mut pre = b"SecMP-TR/1 state-digest".to_vec();
-    pre.extend_from_slice(f.take(32)); // sb
-    pre.extend_from_slice(f.take(32)); // rk
-    pre.extend_from_slice(f.take(32)); // dh_s.sk
-    pre.extend(f.opt(32)); // dh_r
-    pre.extend_from_slice(f.take(64)); // kem_s seed
-    pre.extend(f.opt(1184)); // kem_r
-    pre.extend(f.opt(1088)); // last_ct_r
-    pre.extend(f.opt(1088)); // ct_s
-    for _ in 0..6 {
-        pre.extend(f.opt(32)); // ck_s, ck_r, hk_s, hk_r, nhk_s, nhk_r
-    }
-    pre.extend_from_slice(f.take(12)); // n_s, n_r, pn
-    let count = u16::from_be_bytes(f.take(2).try_into().unwrap());
-    pre.extend_from_slice(&u32::from(count).to_be_bytes());
-    for _ in 0..count {
-        pre.extend_from_slice(f.take(68)); // hk ‖ n ‖ mk
-    }
-    assert!(f.0.is_empty(), "RatchetStateV1 fully consumed");
-    hex(&sha256(&[&pre]))
 }
 
 /// The typed Content of an unpadded encoding (the vector's `content`), which must re-encode to it.

@@ -2,7 +2,8 @@
 //! `cargo xtask vectors` and the reference cross-check (docs/06 §5 step 12a, ADR-026, `vectors/SCHEMA.md` §1).
 //!
 //! 1. The Rust generators write `vectors/rust/<suite>.json` (gitignored): the `secmp-crypto` example `gen-vectors`
-//!    (feature `kat`) the M1 suites, the `secmp-proto` example `gen-encodings` the positive rows of `encodings`.
+//!    (feature `kat`) the M1 suites, the `secmp-proto` example `gen-encodings` the positive rows of `encodings`, the
+//!    `secmp-proto` example `gen-tr` (feature `kat`) the complete `tr` suite (M3).
 //! 2. Each file is compared **structurally** with the committed reference file `vectors/ref/<suite>.json`
 //!    (written by the independent `ref/` session): both are parsed, `generator` is removed, the values must be
 //!    equal — no case folding. Every byte-string field must match `^([0-9a-f]{2})*$`. For the suites of
@@ -157,7 +158,7 @@ pub(crate) fn hex_violations(doc: &Value) -> Vec<String> {
     out
 }
 
-/// Step 1: both Rust generators write `rust_dir`; the decoders must reject every negative row of the
+/// Step 1: the Rust generators write `rust_dir`; the decoders must reject every negative row of the
 /// positive-only suites.
 fn generate(rust_dir: &Path) -> Result<()> {
     Cmd::cargo()
@@ -186,6 +187,22 @@ fn generate(rust_dir: &Path) -> Result<()> {
             "secmp-proto",
             "--example",
             "gen-encodings",
+            "--",
+        ])
+        .arg(rust_dir.to_string_lossy())
+        .run()?;
+    Cmd::cargo()
+        .args([
+            "run",
+            "--release",
+            "--locked",
+            "--quiet",
+            "--package",
+            "secmp-proto",
+            "--features",
+            "kat",
+            "--example",
+            "gen-tr",
             "--",
         ])
         .arg(rust_dir.to_string_lossy())

@@ -28,6 +28,29 @@ pub const URI_PREFIX: &str = "secmp://i/";
 /// The inviter's bound on an invitation's life (§5.2): `expires` ≤ creation + 30 days.
 pub const MAX_INVITATION_LIFE_S: u64 = 30 * 24 * 60 * 60;
 
+#[cfg(feature = "kat")]
+std::thread_local! {
+    /// The reject-site tag of the last [`invitee_accept`] / [`parse_invitation_uri`] / [`invitee_check`] on this
+    /// thread (feature `kat`; M3 review R-45, F19), read with `INVITEE_SITE_KAT.get()`: the constant-time bench checks
+    /// before measuring that each class of an INV target is refused at the step of §5.5 the target claims. The tag is
+    /// set when a step begins, so after a rejection it names the step that rejected:
+    ///
+    /// - `"uri"` — set by [`parse_invitation_uri`] first: the prefix `secmp://i/` and canonical base64url;
+    /// - `"invitation decode"` — set by the `InvitationV1` decoder first: version, kind, period, `RelayRef`;
+    /// - `"expired"` — set by [`invitee_check`] first: `now` ≥ `expires`;
+    /// - `"blob open"` — set by [`open_blob`] first: the blob's length and `CAEAD.Open` under `K_ld`;
+    /// - `"linkdata decode"` — the padding and the `LinkDataV1` decoder, except the `opk_present` byte;
+    /// - `"opk_present"` — the bundle decoder's `opk_present = 0x01` (set back to `"linkdata decode"` after it);
+    /// - `"fingerprint"` — `fingerprint(inviter_iks) = inviter_fp`, compared in constant time;
+    /// - `"bundle signature"` — `HybridVerify` of the bundle under `inviter_iks.IK_sig`;
+    /// - `"bundle expired"` — `spk_expiry` > `now`.
+    ///
+    /// `open_blob` and the invitation and bundle decoders set it outside the invitee's processing too; it is meaningful after the invitee's
+    /// processing only. `None` before the first call on this thread. Without `kat` neither the tag nor any statement
+    /// setting it exists (the `hx::ACCEPT_SITE_KAT` mechanism).
+    pub static INVITEE_SITE_KAT: core::cell::Cell<Option<&'static str>> = const { core::cell::Cell::new(None) };
+}
+
 /// An inviter-side misuse (§5.2, §6.3): a local error, never produced for untrusted input.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IssueError {
@@ -221,6 +244,8 @@ pub fn invitation_qr_text(invitation: &InvitationV1) -> Result<Zeroizing<String>
 /// # Errors
 /// [`Error::Rejected`] for anything else.
 pub fn parse_invitation_uri(uri: &str) -> Result<InvitationV1> {
+    #[cfg(feature = "kat")]
+    INVITEE_SITE_KAT.set(Some("uri"));
     let text = uri.strip_prefix(URI_PREFIX).ok_or(Error::Rejected)?;
     InvitationV1::decode(&base64url_decode(text)?)
 }
@@ -281,6 +306,8 @@ pub fn seal_blob(
 /// [`Error::Rejected`] — uniformly — for a wrong length, a wrong key or AD, a tampered byte, bad padding or an
 /// undecodable `LinkDataV1`.
 pub fn open_blob(ld_id: &Id, link_key: &SecretBytes<HASH_LEN>, blob: &[u8]) -> Result<LinkDataV1> {
+    #[cfg(feature = "kat")]
+    INVITEE_SITE_KAT.set(Some("blob open"));
     if blob.len() != LINK_BLOB_LEN {
         return Err(Error::Rejected);
     }
@@ -289,6 +316,8 @@ pub fn open_blob(ld_id: &Id, link_key: &SecretBytes<HASH_LEN>, blob: &[u8]) -> R
         .split_first_chunk::<NONCE_LEN>()
         .ok_or(Error::Rejected)?;
     let padded = Caead::open(&k_ld, n, &blob_ad(ld_id), com_ct)?;
+    #[cfg(feature = "kat")]
+    INVITEE_SITE_KAT.set(Some("linkdata decode"));
     LinkDataV1::decode(&padded)
 }
 
@@ -326,12 +355,16 @@ impl InviteeAccepted {
 /// # Errors
 /// The uniform [`Error::Rejected`].
 pub fn invitee_check(invitation: InvitationV1, blob: &[u8], now: u64) -> Result<InviteeAccepted> {
+    #[cfg(feature = "kat")]
+    INVITEE_SITE_KAT.set(Some("expired"));
     // step 1: expired (reading 3: the boundary `now = expires` is expired)
     if now >= invitation.expires {
         return Err(Error::Rejected);
     }
     // step 2
     let link_data = open_blob(&invitation.ld_id, &invitation.link_key, blob)?;
+    #[cfg(feature = "kat")]
+    INVITEE_SITE_KAT.set(Some("fingerprint"));
     // step 3: `inviter_fp` (secret: it is in the invitation) against the fingerprint of the decrypted IKS
     let iks_bytes = link_data.inviter_iks.encode()?;
     let fp = Fingerprint::of_encoded_iks(&iks_bytes)?;
@@ -358,11 +391,15 @@ pub fn invitee_accept(uri: &str, blob: &[u8], now: u64) -> Result<InviteeAccepte
 /// (§5.5 step 4, §6.3). The expiry is checked after the signature, so a forged bundle and an expired one are
 /// indistinguishable.
 fn verify_bundle(link_data: &LinkDataV1, now: u64) -> Result<()> {
+    #[cfg(feature = "kat")]
+    INVITEE_SITE_KAT.set(Some("bundle signature"));
     let bundle = &link_data.bundle;
     let signed = bundle_signed_message(bundle, &link_data.inviter_iks)?;
     let vk = crate::tr::content::ik_sig(&link_data.inviter_iks)?;
     let sig = secmp_crypto::HybridSignature::from_bytes(bundle.sig.as_bytes())?;
     vk.verify(Label::HxBundle, &signed, &sig)?;
+    #[cfg(feature = "kat")]
+    INVITEE_SITE_KAT.set(Some("bundle expired"));
     if bundle.spk_expiry <= now {
         return Err(Error::Rejected);
     }

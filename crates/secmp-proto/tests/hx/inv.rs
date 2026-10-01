@@ -586,3 +586,62 @@ fn invitee_does_not_check_inviter_bounds() {
 fn low_order_values() -> Vec<[u8; 32]> {
     crate::layout::low_order_values()
 }
+
+// ---- F19: the reject-site tags ----------------------------------------------------------------------------------
+
+/// `rejects`, and the `kat` reject-site tag (`inv::INVITEE_SITE_KAT`) names `site`.
+fn rejects_at(lib: &Lib, uri: &str, blob: &[u8], site: &str) {
+    rejects(lib, uri, blob, site);
+    assert_eq!(secmp_proto::inv::INVITEE_SITE_KAT.get(), Some(site));
+}
+
+/// M3 review R-45, F19 (WEISUNG M4-4 Part E): each reject site of §5.5 sets its tag, on one input each — the names
+/// the constant-time bench's pre-check of `inv_fingerprint_compare` claims ("fingerprint").
+#[test]
+fn invitee_reject_sites_are_tagged() {
+    let lib = Lib::new();
+    let blob = &lib.w.blob;
+    let tail = &lib.w.uri[10..];
+    rejects_at(&lib, &format!("secmp://I/{tail}"), blob, "uri");
+    let mut inv = lib.w.invitation.clone();
+    *inv.get_mut(INV_VER).unwrap() = 2;
+    rejects_at(&lib, &lib.uri_of(&inv), blob, "invitation decode");
+    let mut inv = lib.w.invitation.clone();
+    put(&mut inv, INV_EXPIRES, &NOW.to_be_bytes());
+    rejects_at(&lib, &lib.uri_of(&inv), blob, "expired");
+    rejects_at(&lib, &lib.w.uri, &flip(blob.clone(), 5000), "blob open");
+    let mut no_marker = pad(&lib.w.linkdata, 12_288).unwrap().to_vec();
+    *no_marker.get_mut(lib.w.linkdata.len()).unwrap() = 0;
+    let ad = [Label::InvBlob.as_bytes(), lib.w.inv.ld_id.as_slice()].concat();
+    let sealed = Caead::seal(
+        &lib.w.k_ld,
+        Nonce24::from_bytes_kat([5; 24]),
+        &ad,
+        &no_marker,
+    )
+    .unwrap();
+    let unpadded = [[5_u8; 24].as_slice(), sealed.as_slice()].concat();
+    rejects_at(&lib, &lib.w.uri, &unpadded, "linkdata decode");
+    let bundle = bundle_bytes(&lib.w.r, &lib.w.keys, EXPIRES, 0, &[11; 32]);
+    let linkdata = lib.linkdata_of(&lib.w.r.iks_bytes, &bundle);
+    rejects_at(&lib, &lib.w.uri, &lib.blob_of(&linkdata, 8), "opk_present");
+    let inv = flip(lib.w.invitation.clone(), INV_FP);
+    rejects_at(&lib, &lib.uri_of(&inv), blob, "fingerprint");
+    let bundle = bundle_variant(&lib, |b| *b.get_mut(B_SIG).unwrap() ^= 1);
+    let linkdata = lib.linkdata_of(&lib.w.r.iks_bytes, &bundle);
+    rejects_at(
+        &lib,
+        &lib.w.uri,
+        &lib.blob_of(&linkdata, 8),
+        "bundle signature",
+    );
+    let bundle = bundle_bytes(&lib.w.r, &lib.w.keys, NOW, 1, &[10; 32]);
+    let linkdata = lib.linkdata_of(&lib.w.r.iks_bytes, &bundle);
+    rejects_at(
+        &lib,
+        &lib.w.uri,
+        &lib.blob_of(&linkdata, 8),
+        "bundle expired",
+    );
+    accepts(&lib, &lib.w.uri, blob, "control");
+}

@@ -242,6 +242,9 @@ impl Encode for InvitationV1 {
 
 impl Decode for InvitationV1 {
     fn decode_from(r: &mut Reader<'_>) -> Result<Self> {
+        // feature `kat`: the invitee's reject-site tag (`inv::INVITEE_SITE_KAT`)
+        #[cfg(feature = "kat")]
+        crate::inv::INVITEE_SITE_KAT.set(Some("invitation decode"));
         read_ver(r)?;
         // one-time only; 0x02 (multi-use) is reserved and v1 clients MUST reject it (spec §5.2)
         r.expect(INVITATION_ONE_TIME)?;
@@ -413,7 +416,11 @@ impl Decode for PrekeyBundle {
         let rpk_kem = MlKem768Ek::decode_from(r)?;
         let spk_expiry = r.u64()?;
         // `opk_present` MUST be 0x01 in v1 (spec §6.3)
+        #[cfg(feature = "kat")]
+        crate::inv::INVITEE_SITE_KAT.set(Some("opk_present"));
         r.expect(1)?;
+        #[cfg(feature = "kat")]
+        crate::inv::INVITEE_SITE_KAT.set(Some("linkdata decode"));
         Ok(Self {
             spk_id,
             spk_dh,

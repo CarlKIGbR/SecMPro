@@ -879,6 +879,71 @@ fn reject_unreachable_shapes_fail_closed() -> Result<()> {
     Ok(())
 }
 
+/// `rejects`, and the `kat` reject-site tag names `site`.
+#[cfg(feature = "kat")]
+fn rejects_at(s: RatchetState, cell: &[u8], site: &str) -> Result<RatchetState> {
+    let s = rejects(s, cell, site)?;
+    assert_eq!(super::DECRYPT_SITE_KAT.get(), Some(site));
+    Ok(s)
+}
+
+/// Feature `kat` (M3 review R-45, F19; WEISUNG M4-4 Part E): each reject site of §7.4 sets its tag
+/// (`DECRYPT_SITE_KAT`), on one cell each — the names the constant-time bench's pre-checks claim; the body MAC on the
+/// step, chain and skipped paths.
+#[cfg(feature = "kat")]
+#[test]
+fn reject_sites_are_tagged() -> Result<()> {
+    // the step path (B's first message), then the chain path at n_r = 1
+    let (a, b) = session()?;
+    let (_, first) = send(copy(&a)?, &text(0))?;
+    let b = rejects_at(b, &flipped(&first, C_LAST), "body MAC")?;
+    let (a, b) = exchange(a, b, &text(0))?;
+    let (a1, m1) = send(copy(&a)?, &text(1))?;
+    let b = rejects_at(b, m1.get(..C_LAST).ok_or(Error::Rejected)?, "cell length")?;
+    let b = rejects_at(b, &random_cell()?, "header: no key opened")?;
+    let mut sender = copy(&a)?;
+    let undecodable = forge(&mut sender, |h| put(h, H_FLAGS, &[1]), &text(1).encode()?)?;
+    let b = rejects_at(b, &undecodable, "header decode")?;
+    let mut header = header_of(&a)?;
+    flip(header.ct_pq.as_mut_slice(), 1000);
+    let changed = seal(&key(a.hk_s.as_ref())?, &header, chain_mk(&b, 1)?, &text(1))?;
+    let b = rejects_at(b, &changed, "kem constancy")?;
+    let b = rejects_at(b, &flipped(&m1, C_LAST), "body MAC")?;
+    let (b, _) = recv(b, &m1)?;
+    let b = rejects_at(b, &m1, "counter rule")?;
+    // a step under nhk_r that repeats the ratchet key
+    let mut header = header_of(&a1)?;
+    header.pn = b.n_r;
+    header.n = 0;
+    let repeated = seal(
+        &key(b.nhk_r.as_ref())?,
+        &header,
+        step_mk(&b, &header)?,
+        &text(2),
+    )?;
+    rejects_at(b, &repeated, "dh_pk")?;
+    // skipped keys (hk_1, 0) and (hk_1, 1) of an old chain: the body MAC under one; a replay of the consumed other
+    let (a, b) = session()?;
+    let (a, m0) = send(a, &text(0))?;
+    let (a, m1) = send(a, &text(1))?;
+    let (a, b) = exchange(a, b, &text(2))?;
+    let (b, a) = exchange(b, a, &text(100))?;
+    let (_, b) = exchange(a, b, &text(3))?;
+    let b = rejects_at(b, &flipped(&m1, C_LAST), "body MAC")?;
+    let (b, _) = recv(b, &m0)?;
+    rejects_at(b, &m0, "skipped: (hk, n) not stored")?;
+    // the Content decoder (outside the transaction): an accepted cell whose padded body is no Content
+    let (a, b) = session()?;
+    let (_, cell) = a
+        .encrypt_padded_kat(&[0xff; BODY_LEN], &mut super::OsEntropy)
+        .map_err(|r| r.error())?
+        .persist(|_| Ok::<(), Error>(()))?;
+    let (_, pt) = recv(b, cell.as_bytes())?;
+    assert_eq!(pt.content().err(), Some(Error::Rejected));
+    assert_eq!(super::DECRYPT_SITE_KAT.get(), Some("body decode"));
+    Ok(())
+}
+
 // ----------------------------------------------------------------------------- 2. encrypt refusals
 
 /// `encrypt_with` is refused with `expected` and hands back the byte-identical state.

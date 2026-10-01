@@ -30,7 +30,8 @@
 //! falls back to the header of `hk_r` or `nhk_r`, so that needs no branch on `any_skipped` either. The one other
 //! `Choice` → `bool` conversion before `decide`, in `distinct_skipped_keys`, compares the state's own header keys
 //! with each other: it does not depend on the cell. Keys, KEM material and ratchet keys are compared with `ct_eq`,
-//! never `==`.
+//! never `==`. The `(hk, n)` lookup visits every entry of `skipped` and selects the entry's message key with masks
+//! (`lookup_skipped`, M4 review R-58): the skipped path loads no entry by its index before the body MAC.
 
 use std::collections::VecDeque;
 
@@ -82,6 +83,8 @@ impl Plaintext {
     /// # Errors
     /// [`Error::Rejected`] if the plaintext is not exactly one padded Content.
     pub fn content(&self) -> Result<Content> {
+        #[cfg(feature = "kat")]
+        DECRYPT_SITE_KAT.set(Some("body decode"));
         Content::decode(self.bytes.expose_secret())
     }
 
@@ -98,6 +101,44 @@ impl Plaintext {
 #[cfg(feature = "kat")]
 fn mk_digest(mk: &SecretBytes<32>) -> [u8; 32] {
     secmp_crypto::sha256(&[mk.expose_secret()])
+}
+
+#[cfg(feature = "kat")]
+std::thread_local! {
+    /// The reject-site tag of the last [`RatchetState::decrypt`] on this thread (feature `kat`; M3 review R-45, F19),
+    /// read with `DECRYPT_SITE_KAT.get()`: the constant-time bench checks before measuring that each class of a TR
+    /// target is refused at the step of §7.4 the target claims. The tag is set when a step begins, so after a
+    /// rejection it names the step that rejected:
+    ///
+    /// - `"cell length"` — set by `decrypt` first: the cell is not 4096 bytes;
+    /// - `"header: no key opened"` — the trial decryptions under every candidate key and the selection; at
+    ///   `Path::Reject` no skipped key, `hk_r` or `nhk_r` opened the header;
+    /// - `"skipped: (hk, n) not stored"` — at `Path::Reject`, a skipped key opened the header but `(hk, n)` is not in
+    ///   `skipped`, and neither `hk_r` nor `nhk_r` opened it;
+    /// - `"header decode"` — after the selection: the header the key opened does not decode (ADR-043 (b));
+    /// - `"kem constancy"` — chain path: `ek_pq`/`ct_pq` differ from `kem_r`/`last_ct_r`;
+    /// - `"counter rule"` — `skip_message_keys` (`until < n_r`, a gap beyond `MAX_FF`, a counter overflow) and
+    ///   `n_r = header.n + 1`;
+    /// - `"dh_pk"` — step path: `dh_pk` equals `dh_r` (no new ratchet key), and the receiving half of `DHRatchet`
+    ///   with it (the X25519 all-zero check; the KEM imports and `Decaps` cannot fail after the header decoder);
+    /// - `"body MAC"` — `MsgDecrypt` of the body under the message key, on every path; after it the step path's
+    ///   sending half (`Unavailable` only) and the serialisation of the new state;
+    /// - `"body decode"` — set by [`Plaintext::content`]: the Content decoder (outside the decrypt transaction, plan
+    ///   D6).
+    ///
+    /// `None` before the first call on this thread. Without `kat` neither the tag nor any statement setting it
+    /// exists (the `hx::ACCEPT_SITE_KAT` mechanism).
+    pub static DECRYPT_SITE_KAT: core::cell::Cell<Option<&'static str>> = const { core::cell::Cell::new(None) };
+}
+
+#[cfg(any(test, feature = "kat"))]
+std::thread_local! {
+    /// The work of the last [`RatchetState::decrypt`] on this thread (feature `kat` and the unit tests; M3 review
+    /// R-04): `(header trial decryptions, skipped entries visited by the (hk, n) lookup)`. Reset when a 4096-byte
+    /// cell's processing begins; test `trial_opens_every_candidate_every_call` checks `distinct + 2` and
+    /// `|skipped|` on every path — an early exit from the trial loop or the lookup changes them. Without `kat` and
+    /// outside the tests neither the counters nor any statement updating them exists.
+    pub static TRIAL_COUNTS_KAT: core::cell::Cell<(u32, u32)> = const { core::cell::Cell::new((0, 0)) };
 }
 
 /// A refused `encrypt` or `decrypt`: the state, unchanged, and the error — [`Error::Rejected`] for every
@@ -296,8 +337,9 @@ struct Trials {
 
 /// The §7.4 case of an accepted header, with the decoded header.
 enum Selected {
-    /// Step 1: the entry of `skipped` at this index, and the header the skipped key opened.
-    Skipped(usize, HeaderV1),
+    /// Step 1: the entry of `skipped` at this index (removed only after the body MAC verified), the header the
+    /// skipped key opened, and the entry's message key, selected by masks over every entry (`lookup_skipped`).
+    Skipped(usize, HeaderV1, SecretBytes<32>),
     /// Step 2 with `step = false`: the header `hk_r` opened.
     Chain(HeaderV1),
     /// Step 2 with `step = true`: the header `nhk_r` opened.
@@ -312,10 +354,46 @@ fn open_header(
     ad: &[u8],
     hdr_ct: &[u8],
 ) -> Trial {
+    #[cfg(any(test, feature = "kat"))]
+    TRIAL_COUNTS_KAT.with(|c| {
+        let (opens, visited) = c.get();
+        c.set((opens.saturating_add(1), visited));
+    });
     let mut out = Zeroizing::new(vec![0_u8; HEADER_LEN]);
     let present = Choice::from(u8::from(key.is_some()));
     let opened = Aead::open_ct(key.unwrap_or(dummy), hdr_nonce, ad, hdr_ct, &mut out);
     (CellChoice::from(opened & present), out)
+}
+
+/// The `(hk, n)` lookup of §7.4 step 1, comparing every entry of `skipped` in constant time: whether `(hk, n)` is
+/// stored, the index of the match (used only after the body MAC verified, `Update::remove`) and the match's message
+/// key, all-zero if none matched. mk selected by masks over every entry (R-58): no secret-indexed load before the
+/// body MAC.
+fn lookup_skipped(
+    skipped: &VecDeque<SkippedKey>,
+    hk: &[u8; 32],
+    n: u32,
+) -> (CellChoice, u32, Zeroizing<[u8; 32]>) {
+    let mut found = CellChoice::from(Choice::from(0));
+    let mut found_at = 0_u32;
+    let mut mk = Zeroizing::new([0_u8; 32]);
+    #[cfg(any(test, feature = "kat"))]
+    let mut visited = 0_u32;
+    for (j, e) in (0_u32..).zip(skipped) {
+        let hit = CellChoice::from(e.hk.expose_secret().ct_eq(hk) & e.n.ct_eq(&n));
+        found |= hit;
+        hit.assign(&mut found_at, &j);
+        for (dst, src) in mk.iter_mut().zip(e.mk.expose_secret()) {
+            hit.assign(dst, src);
+        }
+        #[cfg(any(test, feature = "kat"))]
+        {
+            visited = visited.saturating_add(1);
+        }
+    }
+    #[cfg(any(test, feature = "kat"))]
+    TRIAL_COUNTS_KAT.with(|c| c.set((c.get().0, visited)));
+    (found, found_at, mk)
 }
 
 /// The offset of `n` in an encoded header: `HeaderV1 = ver ‖ flags u8 ‖ dh_pk[32] ‖ pn u32 ‖ n u32 ‖ …` (spec §7.5,
@@ -339,8 +417,9 @@ fn header_n(header: &[u8]) -> Result<u32> {
 ///
 /// Up to [`select::path`] every cell-dependent result is a [`CellChoice`] and nothing branches on one: the first
 /// skipped key that opened the header is selected with the one-hot `first` vector — its key, its `n` (read with
-/// [`header_n`], not decoded) and its plaintext —, `(hk, n)` is looked up in `skipped` comparing every entry, and
-/// `path` converts once. Only then are headers decoded. `Open` includes decoding (ADR-043 (b)): if a skipped key
+/// [`header_n`], not decoded) and its plaintext —, `(hk, n)` is looked up in `skipped` comparing every entry and
+/// selecting the entry's message key with masks ([`lookup_skipped`], R-58), and `path` converts once. Only then are
+/// headers decoded. `Open` includes decoding (ADR-043 (b)): if a skipped key
 /// opened the header, the first one's plaintext must decode, whichever path follows — at `Path::Chain` and
 /// `Path::Step` too, where `(hk, n)` was not found. The plaintext selected for that falls back to the header `hk_r`
 /// opened, else the one `nhk_r` opened, so decoding it on every accepting path needs no branch on `any_skipped`: at
@@ -377,20 +456,31 @@ fn select_header(
         }
         f.assign(&mut n, &header_n(header)?);
     }
-    // (hk, n) ∈ skipped? — every entry compared, in constant time
-    let mut found = CellChoice::from(Choice::from(0));
-    let mut found_at = 0_u32;
-    for (j, e) in (0_u32..).zip(skipped) {
-        let hit = CellChoice::from(e.hk.expose_secret().ct_eq(&*skipped_hk) & e.n.ct_eq(&n));
-        found |= hit;
-        hit.assign(&mut found_at, &j);
-    }
+    // (hk, n) ∈ skipped? — every entry compared, its mk selected with masks, in constant time (R-58)
+    let (found, found_at, mk) = lookup_skipped(skipped, &skipped_hk, n);
+    // feature `kat`: the site of a `Path::Reject` (`DECRYPT_SITE_KAT`) — whether a skipped key opened — selected with a
+    // mask, so the `kat` build adds no branch on `any_skipped` either
+    #[cfg(feature = "kat")]
+    let reject_site = {
+        let mut at = 0_u8;
+        any_skipped.assign(&mut at, &1);
+        ["header: no key opened", "skipped: (hk, n) not stored"]
+            .get(usize::from(at))
+            .copied()
+    };
     // the one conversion to a branch; then Open() includes decoding (ADR-043 (b))
-    match select::path(any_skipped, found, *current_opened, *next_opened) {
+    let path = select::path(any_skipped, found, *current_opened, *next_opened);
+    #[cfg(feature = "kat")]
+    DECRYPT_SITE_KAT.set(match path {
+        Path::Reject => reject_site,
+        Path::Skipped | Path::Chain | Path::Step => Some("header decode"),
+    });
+    match path {
         Path::Reject => Err(Error::Rejected),
         Path::Skipped => Ok(Selected::Skipped(
             usize::try_from(found_at).map_err(|_| Error::Rejected)?,
             HeaderV1::decode(&selected)?,
+            SecretBytes::from_slice(&*mk)?,
         )),
         Path::Chain => {
             let _first_opened = HeaderV1::decode(&selected)?;
@@ -680,9 +770,15 @@ impl RatchetState {
 
     /// Everything of §7.4 that decides acceptance, on the borrowed state (plan D2, D3).
     fn open(&self, cell: &[u8], entropy: &mut impl Entropy) -> Result<(Update, Plaintext)> {
+        #[cfg(feature = "kat")]
+        DECRYPT_SITE_KAT.set(Some("cell length"));
         if cell.len() != CELL_LEN {
             return Err(Error::Rejected);
         }
+        #[cfg(feature = "kat")]
+        DECRYPT_SITE_KAT.set(Some("header: no key opened"));
+        #[cfg(any(test, feature = "kat"))]
+        TRIAL_COUNTS_KAT.set((0, 0));
         let (hdr_nonce, rest) = cell
             .split_first_chunk::<NONCE_LEN>()
             .ok_or(Error::Rejected)?;
@@ -702,10 +798,11 @@ impl RatchetState {
             next: open_header(self.nhk_r.as_ref(), &dummy, hdr_nonce, &hdr_ad, hdr_ct),
         };
         match select_header(&self.skipped, &distinct, &trials)? {
-            Selected::Skipped(at, header) => {
-                let entry = self.skipped.get(at).ok_or(Error::Rejected)?;
-                let plaintext =
-                    Plaintext::new(MsgEncrypt::open(&entry.mk, &body_ad, body)?, &entry.mk);
+            Selected::Skipped(at, header, mk) => {
+                // the entry's mk as `lookup_skipped` selected it: `skipped` is not indexed before the body MAC (R-58)
+                #[cfg(feature = "kat")]
+                DECRYPT_SITE_KAT.set(Some("body MAC"));
+                let plaintext = Plaintext::new(MsgEncrypt::open(&mk, &body_ad, body)?, &mk);
                 Ok((
                     Update {
                         remove: Some(at),
@@ -729,6 +826,8 @@ impl RatchetState {
         body_ad: &[u8],
         body: &[u8],
     ) -> Result<(Update, Plaintext)> {
+        #[cfg(feature = "kat")]
+        DECRYPT_SITE_KAT.set(Some("kem constancy"));
         let (Some(kem_r), Some(last_ct_r), Some(ck_r), Some(hk_r)) =
             (&self.kem_r, &self.last_ct_r, &self.ck_r, &self.hk_r)
         else {
@@ -740,11 +839,15 @@ impl RatchetState {
         if !bool::from(constant) {
             return Err(Error::Rejected);
         }
+        #[cfg(feature = "kat")]
+        DECRYPT_SITE_KAT.set(Some("counter rule"));
         let plan = select::skip_plan(self.n_r, header.n)?;
         let (ck, added) = derive_skipped(ck_r, hk_r, self.n_r, plan)?;
         // (ck_r, mk) = KDF_CK(ck_r); n_r += 1
         let (ck_next, mk) = kdf_ck(&ck)?;
         let n_r = header.n.checked_add(1).ok_or(Error::Rejected)?;
+        #[cfg(feature = "kat")]
+        DECRYPT_SITE_KAT.set(Some("body MAC"));
         let plaintext = Plaintext::new(MsgEncrypt::open(&mk, body_ad, body)?, &mk);
         Ok((
             Update {
@@ -768,6 +871,8 @@ impl RatchetState {
         body: &[u8],
         entropy: &mut impl Entropy,
     ) -> Result<(Update, Plaintext)> {
+        #[cfg(feature = "kat")]
+        DECRYPT_SITE_KAT.set(Some("dh_pk"));
         // a step must carry a new ratchet key
         if let Some(dh_r) = &self.dh_r
             && bool::from(header.dh_pk.as_bytes().ct_eq(dh_r.as_bytes()))
@@ -777,12 +882,16 @@ impl RatchetState {
         let (Some(nhk_s), Some(nhk_r)) = (&self.nhk_s, &self.nhk_r) else {
             return Err(Error::Rejected);
         };
+        #[cfg(feature = "kat")]
+        DECRYPT_SITE_KAT.set(Some("counter rule"));
         // skip_message_keys(header.pn) on the *old* receiving chain (none yet: nothing to skip)
         let mut added = Vec::new();
         if let (Some(ck_r), Some(hk_r)) = (&self.ck_r, &self.hk_r) {
             let plan = select::skip_plan(self.n_r, header.pn)?;
             added = derive_skipped(ck_r, hk_r, self.n_r, plan)?.1;
         }
+        #[cfg(feature = "kat")]
+        DECRYPT_SITE_KAT.set(Some("dh_pk"));
         // DHRatchet, receiving half: dh_r = header.dh_pk; kem_r = header.ek_pq; last_ct_r = header.ct_pq;
         // ss_pq_recv = ML-KEM-768.Decaps(kem_s, header.ct_pq); (rk, ck_r, nhk_r) = KDF_RK(rk, X25519(dh_s, dh_r) ‖ ss)
         let dh_r = X25519Public::from_bytes(header.dh_pk.as_bytes())?;
@@ -791,12 +900,16 @@ impl RatchetState {
         let ss_recv = self.kem_s.dk.decapsulate(&last_ct_r);
         let dh_recv = self.dh_s.sk.diffie_hellman(&dh_r)?;
         let (rk_recv, ck_r, nhk_r_next) = kdf_rk(&self.rk, &dh_recv, &ss_recv)?;
+        #[cfg(feature = "kat")]
+        DECRYPT_SITE_KAT.set(Some("counter rule"));
         // skip_message_keys(header.n) on the new chain (n_r = 0, hk_r = the old nhk_r)
         let plan = select::skip_plan(0, header.n)?;
         let (ck, new_chain) = derive_skipped(&ck_r, nhk_r, 0, plan)?;
         added.extend(new_chain);
         let (ck_next, mk) = kdf_ck(&ck)?;
         let n_r = header.n.checked_add(1).ok_or(Error::Rejected)?;
+        #[cfg(feature = "kat")]
+        DECRYPT_SITE_KAT.set(Some("body MAC"));
         let plaintext = Plaintext::new(MsgEncrypt::open(&mk, body_ad, body)?, &mk);
         // the body MAC verified: DHRatchet, sending half — dh_s = X25519.keygen(); kem_s = ML-KEM-768.keygen();
         // (ct_s, ss_pq_send) = ML-KEM-768.Encaps(kem_r); (rk, ck_s, nhk_s) = KDF_RK(rk, X25519(dh_s, dh_r) ‖ ss)
@@ -968,7 +1081,7 @@ mod single_conversion {
     const SB: [u8; 32] = [7; 32];
 
     /// A fresh session (§7.2): the initiator and the responder.
-    fn session() -> Result<(RatchetState, RatchetState)> {
+    pub(super) fn session() -> Result<(RatchetState, RatchetState)> {
         let sk = SecretBytes::random()?;
         let spk = X25519Secret::generate()?;
         let rpk = MlKem768Dk::generate()?;
@@ -980,7 +1093,7 @@ mod single_conversion {
     }
 
     /// The sender's next cell (a Dummy).
-    fn send(s: RatchetState) -> Result<(RatchetState, Vec<u8>)> {
+    pub(super) fn send(s: RatchetState) -> Result<(RatchetState, Vec<u8>)> {
         let (s, cell) = s
             .encrypt(&content::dummy())
             .map_err(|r| r.error())?
@@ -1074,7 +1187,7 @@ mod selection {
 
     use secmp_crypto::{Choice, SecretBytes};
 
-    use super::{Selected, Trial, Trials, header_n, select_header};
+    use super::{Selected, Trial, Trials, header_n, lookup_skipped, select_header};
     use crate::codec::{Decode, Encode, Zeroizing};
     use crate::error::{Error, Result};
     use crate::sizes::{HEADER_LEN, PROTO_VER};
@@ -1135,8 +1248,9 @@ mod selection {
         let selected = select_header(&skipped, &[&k], &trials);
         assert_eq!(select::hook::take(), (1, 1), "(selections, conversions)");
         Ok(match selected {
-            Ok(Selected::Skipped(at, h)) => {
+            Ok(Selected::Skipped(at, h, mk)) => {
                 assert_eq!(at, 0);
+                assert_eq!(mk.expose_secret(), &[3; 32], "the entry's mk");
                 Some(("skipped", h.n))
             }
             Ok(Selected::Chain(h)) => Some(("chain", h.n)),
@@ -1215,6 +1329,165 @@ mod selection {
         assert_eq!(case(None, None, Some(header(0, 9)))?, Some(("step", 9)));
         assert_eq!(case(None, None, Some(undecodable(9)))?, None);
         assert_eq!(case(None, None, None)?, None);
+        Ok(())
+    }
+
+    /// M4 review R-58: `lookup_skipped` selects the matching entry's message key with masks over every entry — at
+    /// index 0, in the middle and last — and gives the all-zero key on a miss; the index comes back for
+    /// `Update::remove` only, and `RatchetState::open` passes the selected key to the body MAC (`Selected::Skipped`
+    /// carries it), so `skipped` is not indexed before the MAC. A `VecDeque::get` cannot be hooked; this test, the
+    /// counter of `trial_opens_every_candidate_every_call` (every entry visited) and the mutants run stand for it.
+    #[test]
+    fn skipped_mk_is_selected_without_indexing() -> Result<()> {
+        // seven entries over three header keys, (hk_i, n) → mk = [10·i + n; 32]
+        let mut skipped = VecDeque::new();
+        for (i, n) in [
+            (1_u8, 0_u32),
+            (1, 1),
+            (1, 4),
+            (2, 0),
+            (2, 3),
+            (3, 0),
+            (3, 1),
+        ] {
+            let mk = i
+                .checked_mul(10)
+                .and_then(|x| x.checked_add(u8::try_from(n).ok()?))
+                .ok_or(Error::Rejected)?;
+            skipped.push_back(SkippedKey {
+                hk: SecretBytes::from_slice(&[i; 32])?,
+                n,
+                mk: SecretBytes::from_slice(&[mk; 32])?,
+            });
+        }
+        let found = |c: CellChoice| {
+            let mut f = 0_u8;
+            c.assign(&mut f, &1);
+            f
+        };
+        for (hk, n, at, mk) in [(1, 0, 0, 10), (2, 0, 3, 20), (3, 1, 6, 31), (1, 4, 2, 14)] {
+            let (hit, index, key) = lookup_skipped(&skipped, &[hk; 32], n);
+            assert_eq!(found(hit), 1, "({hk}, {n})");
+            assert_eq!(index, at, "({hk}, {n})");
+            assert_eq!(*key, [mk; 32], "({hk}, {n})");
+        }
+        // misses: a stored hk with another n, a stored n under another hk, an unknown key, an empty `skipped`
+        for (hk, n) in [(1, 2), (2, 1), (3, 4), (4, 0)] {
+            let (hit, index, key) = lookup_skipped(&skipped, &[hk; 32], n);
+            assert_eq!(found(hit), 0, "({hk}, {n})");
+            assert_eq!(index, 0, "({hk}, {n})");
+            assert_eq!(*key, [0; 32], "({hk}, {n})");
+        }
+        let (hit, _, key) = lookup_skipped(&VecDeque::new(), &[1; 32], 0);
+        assert_eq!((found(hit), *key), (0, [0; 32]));
+        Ok(())
+    }
+}
+
+/// M3 review R-04 (WEISUNG M4-4 Part D): the early-exit detector of the trial decryption, as a count. The constant-time
+/// target `tr_decrypt_reject_skipped` no longer separates the opening trial's position (R-59); this test does.
+#[cfg(test)]
+mod trial_work {
+    use secmp_crypto::MSG_TAG_LEN;
+
+    use super::TRIAL_COUNTS_KAT;
+    use super::single_conversion::{send, session};
+    use crate::error::{Error, Result};
+    use crate::sizes::CELL_LEN;
+    use crate::tr::state::RatchetState;
+
+    /// `state` decrypts `cell` and commits.
+    fn receive(state: RatchetState, cell: &[u8]) -> Result<RatchetState> {
+        let opened = state.decrypt(cell).map_err(|r| r.error())?;
+        Ok(opened.commit(|_| Ok::<(), Error>(()))?.0)
+    }
+
+    /// B holding skipped keys of `chains` of A's chains, and A's cells for every candidate of B's trial decryption.
+    struct Fixture {
+        /// `skipped` = `(hk_i, 0)`, `(hk_i, 1)` for i = 1 … `chains`; `hk_r` is chain `chains + 1`.
+        b: RatchetState,
+        /// A's undelivered cell n = 0 of chain i (opens under the i-th distinct skipped key).
+        skipped: Vec<Vec<u8>>,
+        /// A's cell n = 1 of chain `chains + 1` (opens under `hk_r`).
+        current: Vec<u8>,
+        /// A's cell n = 0 of chain `chains + 2` (opens under `nhk_r`).
+        next: Vec<u8>,
+    }
+
+    /// On each of A's chains 1 … `chains`, A sends n = 0, 1, 2 and B receives n = 2 (its DH step stores `(hk_i, 0)`
+    /// and `(hk_i, 1)`), then B replies and A's DH step starts the next chain. B receives chain `chains + 1`'s n = 0
+    /// (its current chain) and replies once more, so A's chain `chains + 2` is under B's `nhk_r`.
+    fn fixture(chains: usize) -> Result<Fixture> {
+        let (mut a, mut b) = session()?;
+        let mut skipped = Vec::new();
+        for _ in 0..chains {
+            let (a1, first) = send(a)?;
+            let (a2, _) = send(a1)?;
+            let (a3, last) = send(a2)?;
+            b = receive(b, &last)?;
+            skipped.push(first);
+            let (b1, reply) = send(b)?;
+            b = b1;
+            a = receive(a3, &reply)?;
+        }
+        let (a1, d0) = send(a)?;
+        let (a2, current) = send(a1)?;
+        b = receive(b, &d0)?;
+        let (b1, reply) = send(b)?;
+        let a3 = receive(a2, &reply)?;
+        let (_, next) = send(a3)?;
+        Ok(Fixture {
+            b: b1,
+            skipped,
+            current,
+            next,
+        })
+    }
+
+    /// For `distinct` = 1, 3 and 6 distinct skipped header keys (2 entries each), cells opening at the first, a
+    /// middle and the last skipped candidate (accepted; and the last one with its body tag wrong: rejected at the
+    /// MAC), under `hk_r`, under `nhk_r` and under no key: every `decrypt` performs `distinct + 2` header trial
+    /// decryptions and visits every entry of `skipped` (`TRIAL_COUNTS_KAT`). A trial loop or lookup that stops after
+    /// the first key that opened (the regression M3 review R-04 is about) counts fewer for every cell that opens
+    /// before the last candidate.
+    #[test]
+    fn trial_opens_every_candidate_every_call() -> Result<()> {
+        for distinct in [1_usize, 3, 6] {
+            let f = fixture(distinct)?;
+            assert_eq!(f.b.skipped.len(), 2 * distinct);
+            let middle = f.skipped.get(distinct / 2).ok_or(Error::Rejected)?;
+            let first = f.skipped.first().ok_or(Error::Rejected)?;
+            let last = f.skipped.last().ok_or(Error::Rejected)?;
+            let mut wrong_tag = last.clone();
+            let tag = wrong_tag
+                .get_mut(CELL_LEN - MSG_TAG_LEN)
+                .ok_or(Error::Rejected)?;
+            *tag ^= 1;
+            let none = vec![0x5a; CELL_LEN];
+            let want = (
+                u32::try_from(distinct + 2).map_err(|_| Error::Rejected)?,
+                u32::try_from(2 * distinct).map_err(|_| Error::Rejected)?,
+            );
+            for (what, cell, accepted) in [
+                ("first skipped candidate", first, true),
+                ("middle skipped candidate", middle, true),
+                ("last skipped candidate", last, true),
+                ("last skipped candidate, body tag wrong", &wrong_tag, false),
+                ("hk_r", &f.current, true),
+                ("nhk_r", &f.next, true),
+                ("no key", &none, false),
+            ] {
+                let b = RatchetState::from_bytes(&f.b.to_bytes()?)?;
+                TRIAL_COUNTS_KAT.set((u32::MAX, u32::MAX));
+                let result = b.decrypt(cell);
+                assert_eq!(result.is_ok(), accepted, "{distinct} keys, {what}");
+                assert_eq!(
+                    TRIAL_COUNTS_KAT.get(),
+                    want,
+                    "{distinct} keys, {what}: (header trials, entries visited)"
+                );
+            }
+        }
         Ok(())
     }
 }

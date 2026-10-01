@@ -4,11 +4,13 @@
 //! - [`first_opened`] and [`decide`]: the header-key selection. The header is opened under *every* candidate key
 //!   (the distinct header keys of `skipped` in first-seen order, `hk_r`, `nhk_r`), each result a `Choice`; these
 //!   two functions reduce the results to the §7.4 case — a skipped key hit, the current chain, a DH step, or a
-//!   rejection — with `Choice` arithmetic and a conversion to a branch at the end (docs/06 §9, review focus L3).
-//!   The caller makes one conversion before that (M3 review C6): `RatchetState::open` turns `any_skipped` into a
-//!   `bool` to decode the selected skipped header (spec §7.4: `Open` includes decoding, and `n` is needed for the
-//!   lookup) — two conversions in all. The branch-free variant (read `n` from the plaintext, decode only on
-//!   `Path::Skipped`) is an M4 follow-up (review F1).
+//!   rejection — with `Choice` arithmetic and one conversion to a branch, `decide`'s case code (docs/06 §9, review
+//!   focus L3). The caller holds every cell-dependent result as a [`CellChoice`], which has no conversion to `bool`,
+//!   and reaches them only through [`first_opened_cell`] and [`path`]; it reads `n` for the `(hk, n)` lookup from the
+//!   header plaintext bytes `[38..42]` of every skipped candidate, selected with the one-hot `first` vector, and
+//!   decodes headers only after `decide` (`ratchet::select_header`; M3 review C6/F1). So `decide`'s case code is the
+//!   only conversion of a cell-dependent `Choice` to a branch up to and including `decide` (test
+//!   `any_skipped_single_conversion`).
 //! - [`skip_plan`]: the bounds of `skip_message_keys(until)` — which positions are derived and which are stored.
 //! - [`evicted`]: how many earliest-inserted entries leave `skipped` after an insertion.
 
@@ -81,6 +83,83 @@ pub(crate) fn decide(
         2 => Path::Chain,
         3 => Path::Step,
         _ => Path::Reject,
+    }
+}
+
+/// A cell-dependent `Choice` of the header selection (M3 review F1): a trial decryption's result, an element of the
+/// one-hot `first` vector, `any_skipped`, a hit of the `(hk, n)` lookup. It has no conversion to `bool`, `u8` or
+/// `Choice` and no `PartialEq`, and its field is private to this module, so the only branch on it is [`path`] —
+/// [`decide`]'s case code. It is combined with `|=` and selects with [`CellChoice::assign`].
+#[derive(Clone, Copy)]
+pub(crate) struct CellChoice(Choice);
+
+impl CellChoice {
+    /// `dst = src` if set, else `dst` unchanged, in constant time (`ConditionallySelectable::conditional_assign`).
+    pub(crate) fn assign<T: ConditionallySelectable>(self, dst: &mut T, src: &T) {
+        dst.conditional_assign(src, self.0);
+    }
+}
+
+impl From<Choice> for CellChoice {
+    fn from(choice: Choice) -> Self {
+        Self(choice)
+    }
+}
+
+impl core::ops::BitOrAssign for CellChoice {
+    fn bitor_assign(&mut self, rhs: Self) {
+        self.0 |= rhs.0;
+    }
+}
+
+/// [`first_opened`] on [`CellChoice`]s.
+pub(crate) fn first_opened_cell(opened: &[CellChoice]) -> (Vec<CellChoice>, CellChoice) {
+    #[cfg(test)]
+    hook::selection();
+    let choices: Vec<Choice> = opened.iter().map(|c| c.0).collect();
+    let (first, any) = first_opened(&choices);
+    (first.into_iter().map(CellChoice).collect(), CellChoice(any))
+}
+
+/// [`decide`] on [`CellChoice`]s: the one conversion of the header selection to a branch (docs/06 §9).
+pub(crate) fn path(
+    any_skipped: CellChoice,
+    found: CellChoice,
+    current_opened: CellChoice,
+    next_opened: CellChoice,
+) -> Path {
+    #[cfg(test)]
+    hook::conversion();
+    decide(any_skipped.0, found.0, current_opened.0, next_opened.0)
+}
+
+/// Test hook of `any_skipped_single_conversion` (M3 review F1): per thread, the calls of [`first_opened_cell`] (the
+/// selection on [`CellChoice`]s) and of [`path`] (the conversion to a branch).
+#[cfg(test)]
+pub(crate) mod hook {
+    use core::cell::Cell;
+
+    thread_local! {
+        static COUNTS: Cell<(u32, u32)> = const { Cell::new((0, 0)) };
+    }
+
+    pub(super) fn selection() {
+        COUNTS.with(|c| {
+            let (selections, conversions) = c.get();
+            c.set((selections.saturating_add(1), conversions));
+        });
+    }
+
+    pub(super) fn conversion() {
+        COUNTS.with(|c| {
+            let (selections, conversions) = c.get();
+            c.set((selections, conversions.saturating_add(1)));
+        });
+    }
+
+    /// `(selections, conversions)` on this thread since the last call; both are reset.
+    pub(crate) fn take() -> (u32, u32) {
+        COUNTS.with(|c| c.replace((0, 0)))
     }
 }
 

@@ -19,25 +19,35 @@
 //! nothing, allocates no locked memory and draws no randomness.
 //!
 //! **Constant work in trial decryption (plan D3).** The header is opened under every candidate key — each distinct
-//! header key of `skipped`, `hk_r`, `nhk_r`, an absent key replaced by a dummy key whose result is masked — as
-//! `Choice`s ([`Aead::open_ct`]); [`select::first_opened`] and [`select::decide`] reduce them to the §7.4 case.
-//! There are two conversions to a branch, not one (M3 review C6): `any_skipped` becomes a `bool` early, to decode
-//! the selected skipped header for the `(hk, n)` lookup, and `decide`'s case code is the final one; the branch-free
-//! variant is an M4 follow-up (review F1). Keys, KEM material and ratchet keys are compared with `ct_eq`, never
-//! `==`.
+//! header key of `skipped`, `hk_r`, `nhk_r`, an absent key replaced by a dummy key whose result is masked — and each
+//! result ([`Aead::open_ct`]) is held as a [`select::CellChoice`], which has no conversion to `bool`;
+//! `select_header` reduces them to the §7.4 case with [`select::first_opened`] and [`select::decide`], whose case
+//! code is the one conversion to a branch up to and including `decide` (docs/06 §9; M3 review C6/F1, test
+//! `any_skipped_single_conversion`). The `n` of the `(hk, n)` lookup is read from the plaintext bytes `[38..42]` of
+//! every skipped candidate and selected with the one-hot `first` vector, so no header is decoded before `decide`.
+//! After it, the first skipped key's header is decoded on every accepting path — `Open` includes decoding, and a
+//! skipped key's header that opens but does not decode rejects the cell (ADR-043 (b)) — through a selection that
+//! falls back to the header of `hk_r` or `nhk_r`, so that needs no branch on `any_skipped` either. The one other
+//! `Choice` → `bool` conversion before `decide`, in `distinct_skipped_keys`, compares the state's own header keys
+//! with each other: it does not depend on the cell. Keys, KEM material and ratchet keys are compared with `ct_eq`,
+//! never `==`.
+
+use std::collections::VecDeque;
 
 use secmp_crypto::{
-    Aead, Choice, ConditionallySelectable, ConstantTimeEq, Label, MlKem768Ct, MlKem768Ek,
-    MsgEncrypt, SecretBytes, X25519Public, X25519Secret, kdf_ck, kdf_rk, tr_init,
+    Aead, Choice, ConstantTimeEq, Label, MlKem768Ct, MlKem768Ek, MsgEncrypt, SecretBytes,
+    X25519Public, X25519Secret, kdf_ck, kdf_rk, tr_init,
 };
 
 // the encodings' zeroizing buffer (`secmp_crypto::Zeroizing`; a stand-in under Kani, see `codec`)
 use crate::codec::{Decode, Encode, Zeroizing};
 use crate::error::{Error, Result};
 use crate::keys::{self, X25519Pk};
-use crate::sizes::{BODY_LEN, CELL_LEN, HASH_LEN, HDR_CT_LEN, HEADER_LEN, NONCE_LEN};
+use crate::sizes::{
+    BODY_LEN, CELL_LEN, HASH_LEN, HDR_CT_LEN, HEADER_LEN, NONCE_LEN, X25519_PK_LEN, sum,
+};
 use crate::tr::entropy::{Entropy, OsEntropy};
-use crate::tr::select::{self, Path, SkipPlan};
+use crate::tr::select::{self, CellChoice, Path, SkipPlan};
 use crate::tr::state::{DhPair, KemPair, RatchetState, SkippedKey};
 use crate::wire::cell::{Cell, Content, HeaderV1};
 
@@ -270,6 +280,30 @@ fn derive_skipped(
     Ok((ck, stored))
 }
 
+/// One trial decryption of the header (spec §7.4, plan D3): whether the key opened it, and the plaintext
+/// (`HEADER_LEN` bytes, all zero if the tag did not verify; [`Aead::open_ct`]).
+type Trial = (CellChoice, Zeroizing<Vec<u8>>);
+
+/// The trial decryptions of one header under every candidate key — all of them, every time (spec §7.4, plan D3).
+struct Trials {
+    /// Under each distinct header key of `skipped`, in first-seen order.
+    skipped: Vec<Trial>,
+    /// Under `hk_r`.
+    current: Trial,
+    /// Under `nhk_r`.
+    next: Trial,
+}
+
+/// The §7.4 case of an accepted header, with the decoded header.
+enum Selected {
+    /// Step 1: the entry of `skipped` at this index, and the header the skipped key opened.
+    Skipped(usize, HeaderV1),
+    /// Step 2 with `step = false`: the header `hk_r` opened.
+    Chain(HeaderV1),
+    /// Step 2 with `step = true`: the header `nhk_r` opened.
+    Step(HeaderV1),
+}
+
 /// `Open(key, hdr_nonce, hdr_ct)` with constant work: an absent key is replaced by `dummy` and its result masked.
 fn open_header(
     key: Option<&SecretBytes<32>>,
@@ -277,11 +311,96 @@ fn open_header(
     hdr_nonce: &[u8; NONCE_LEN],
     ad: &[u8],
     hdr_ct: &[u8],
-) -> (Choice, Zeroizing<Vec<u8>>) {
+) -> Trial {
     let mut out = Zeroizing::new(vec![0_u8; HEADER_LEN]);
     let present = Choice::from(u8::from(key.is_some()));
     let opened = Aead::open_ct(key.unwrap_or(dummy), hdr_nonce, ad, hdr_ct, &mut out);
-    (opened & present, out)
+    (CellChoice::from(opened & present), out)
+}
+
+/// The offset of `n` in an encoded header: `HeaderV1 = ver ‖ flags u8 ‖ dh_pk[32] ‖ pn u32 ‖ n u32 ‖ …` (spec §7.5,
+/// App. D.5).
+const HEADER_N_AT: usize = sum(&[1, 1, X25519_PK_LEN, 4]);
+const _: () = assert!(HEADER_N_AT == 38);
+
+/// `n` of an encoded header without decoding it: the big-endian `u32` at bytes `[38..42]` (spec §4.1, App. D.5).
+/// Constant work. Every trial-decryption plaintext has `HEADER_LEN` bytes, so the error is unreachable for them.
+fn header_n(header: &[u8]) -> Result<u32> {
+    let (_, rest) = header
+        .split_at_checked(HEADER_N_AT)
+        .ok_or(Error::Rejected)?;
+    Ok(u32::from_be_bytes(
+        *rest.first_chunk::<4>().ok_or(Error::Rejected)?,
+    ))
+}
+
+/// Spec §7.4's choice among the trial decryptions (plan D3; M3 review C6/F1). `skipped` are the state's skipped keys,
+/// `distinct` their distinct header keys in first-seen order, in which `trials.skipped` tried them.
+///
+/// Up to [`select::path`] every cell-dependent result is a [`CellChoice`] and nothing branches on one: the first
+/// skipped key that opened the header is selected with the one-hot `first` vector — its key, its `n` (read with
+/// [`header_n`], not decoded) and its plaintext —, `(hk, n)` is looked up in `skipped` comparing every entry, and
+/// `path` converts once. Only then are headers decoded. `Open` includes decoding (ADR-043 (b)): if a skipped key
+/// opened the header, the first one's plaintext must decode, whichever path follows — at `Path::Chain` and
+/// `Path::Step` too, where `(hk, n)` was not found. The plaintext selected for that falls back to the header `hk_r`
+/// opened, else the one `nhk_r` opened, so decoding it on every accepting path needs no branch on `any_skipped`: at
+/// `Path::Skipped` it is the skipped key's header (used for the counters); at `Path::Chain` / `Path::Step` it is the
+/// skipped key's header if one opened — the same plaintext as the path's for a skipped key of the current chain (that
+/// key is `hk_r`), a different one only for a header ciphertext that opens under two keys, which a contact holding
+/// both can craft — and otherwise the path's own header, which is then decoded again for the path.
+///
+/// # Errors
+/// The uniform [`Error::Rejected`] if no key's case applies (`Path::Reject`) or a header to decode does not decode.
+fn select_header(
+    skipped: &VecDeque<SkippedKey>,
+    distinct: &[&SecretBytes<32>],
+    trials: &Trials,
+) -> Result<Selected> {
+    let (current_opened, current_header) = &trials.current;
+    let (next_opened, next_header) = &trials.next;
+    // the first skipped key that opened, selected without a branch: its key, its n, its plaintext — the latter
+    // falling back to hk_r's plaintext if hk_r opened, else to nhk_r's
+    let opened: Vec<CellChoice> = trials.skipped.iter().map(|(o, _)| *o).collect();
+    let (first, any_skipped) = select::first_opened_cell(&opened);
+    let mut selected = Zeroizing::new(next_header.to_vec());
+    for (dst, src) in selected.iter_mut().zip(current_header.iter()) {
+        current_opened.assign(dst, src);
+    }
+    let mut skipped_hk = Zeroizing::new([0_u8; 32]);
+    let mut n = 0_u32;
+    for ((f, (_, header)), hk) in first.iter().zip(&trials.skipped).zip(distinct) {
+        for (dst, src) in selected.iter_mut().zip(header.iter()) {
+            f.assign(dst, src);
+        }
+        for (dst, src) in skipped_hk.iter_mut().zip(hk.expose_secret()) {
+            f.assign(dst, src);
+        }
+        f.assign(&mut n, &header_n(header)?);
+    }
+    // (hk, n) ∈ skipped? — every entry compared, in constant time
+    let mut found = CellChoice::from(Choice::from(0));
+    let mut found_at = 0_u32;
+    for (j, e) in (0_u32..).zip(skipped) {
+        let hit = CellChoice::from(e.hk.expose_secret().ct_eq(&*skipped_hk) & e.n.ct_eq(&n));
+        found |= hit;
+        hit.assign(&mut found_at, &j);
+    }
+    // the one conversion to a branch; then Open() includes decoding (ADR-043 (b))
+    match select::path(any_skipped, found, *current_opened, *next_opened) {
+        Path::Reject => Err(Error::Rejected),
+        Path::Skipped => Ok(Selected::Skipped(
+            usize::try_from(found_at).map_err(|_| Error::Rejected)?,
+            HeaderV1::decode(&selected)?,
+        )),
+        Path::Chain => {
+            let _first_opened = HeaderV1::decode(&selected)?;
+            Ok(Selected::Chain(HeaderV1::decode(current_header)?))
+        }
+        Path::Step => {
+            let _first_opened = HeaderV1::decode(&selected)?;
+            Ok(Selected::Step(HeaderV1::decode(next_header)?))
+        }
+    }
 }
 
 impl RatchetState {
@@ -544,7 +663,8 @@ impl RatchetState {
     }
 
     /// The distinct header keys of `skipped`, in first-seen order (the entries of a chain are contiguous, see
-    /// `state::skipped_is_canonical`).
+    /// `state::skipped_is_canonical`). The `ct_eq` → `bool` here compares the state's own keys with each other; it
+    /// does not depend on the cell.
     fn distinct_skipped_keys(&self) -> Vec<&SecretBytes<32>> {
         let mut keys: Vec<&SecretBytes<32>> = Vec::new();
         for e in &self.skipped {
@@ -573,46 +693,16 @@ impl RatchetState {
 
         // 1. every distinct header key of `skipped`, then 2. hk_r and nhk_r — all of them, every time
         let distinct = self.distinct_skipped_keys();
-        let (opened, headers): (Vec<Choice>, Vec<Zeroizing<Vec<u8>>>) = distinct
-            .iter()
-            .map(|hk| open_header(Some(hk), &dummy, hdr_nonce, &hdr_ad, hdr_ct))
-            .unzip();
-        let (current_opened, current_header) =
-            open_header(self.hk_r.as_ref(), &dummy, hdr_nonce, &hdr_ad, hdr_ct);
-        let (next_opened, next_header) =
-            open_header(self.nhk_r.as_ref(), &dummy, hdr_nonce, &hdr_ad, hdr_ct);
-
-        // the first skipped key that opened, its header and its key, selected without a branch
-        let (first, any_skipped) = select::first_opened(&opened);
-        let mut skipped_header = Zeroizing::new(vec![0_u8; HEADER_LEN]);
-        let mut skipped_hk = Zeroizing::new([0_u8; 32]);
-        for ((f, header), hk) in first.iter().zip(&headers).zip(&distinct) {
-            for (dst, src) in skipped_header.iter_mut().zip(header.iter()) {
-                dst.conditional_assign(src, *f);
-            }
-            for (dst, src) in skipped_hk.iter_mut().zip(hk.expose_secret()) {
-                dst.conditional_assign(src, *f);
-            }
-        }
-        // Open() includes decoding (reference reading 3): a skipped key's header must decode to be looked up
-        let skipped_decoded = if bool::from(any_skipped) {
-            Some(HeaderV1::decode(&skipped_header)?)
-        } else {
-            None
+        let trials = Trials {
+            skipped: distinct
+                .iter()
+                .map(|hk| open_header(Some(hk), &dummy, hdr_nonce, &hdr_ad, hdr_ct))
+                .collect(),
+            current: open_header(self.hk_r.as_ref(), &dummy, hdr_nonce, &hdr_ad, hdr_ct),
+            next: open_header(self.nhk_r.as_ref(), &dummy, hdr_nonce, &hdr_ad, hdr_ct),
         };
-        // (hk, header.n) ∈ skipped? — every entry compared, in constant time
-        let n = skipped_decoded.as_ref().map_or(0, |h| h.n);
-        let mut found = Choice::from(0);
-        let mut found_at = 0_u32;
-        for (j, e) in (0_u32..).zip(&self.skipped) {
-            let hit = e.hk.expose_secret().ct_eq(&*skipped_hk) & e.n.ct_eq(&n);
-            found |= hit;
-            found_at.conditional_assign(&j, hit);
-        }
-        match select::decide(any_skipped, found, current_opened, next_opened) {
-            Path::Reject => Err(Error::Rejected),
-            Path::Skipped => {
-                let at = usize::try_from(found_at).map_err(|_| Error::Rejected)?;
+        match select_header(&self.skipped, &distinct, &trials)? {
+            Selected::Skipped(at, header) => {
                 let entry = self.skipped.get(at).ok_or(Error::Rejected)?;
                 let plaintext =
                     Plaintext::new(MsgEncrypt::open(&entry.mk, &body_ad, body)?, &entry.mk);
@@ -622,16 +712,13 @@ impl RatchetState {
                         added: Vec::new(),
                         chain: None,
                         step: None,
-                        counters: skipped_decoded
-                            .as_ref()
-                            .map(|h| (h.n, h.pn))
-                            .ok_or(Error::Rejected)?,
+                        counters: (header.n, header.pn),
                     },
                     plaintext,
                 ))
             }
-            Path::Chain => self.open_chain(&HeaderV1::decode(&current_header)?, &body_ad, body),
-            Path::Step => self.open_step(&HeaderV1::decode(&next_header)?, &body_ad, body, entropy),
+            Selected::Chain(header) => self.open_chain(&header, &body_ad, body),
+            Selected::Step(header) => self.open_step(&header, &body_ad, body, entropy),
         }
     }
 
@@ -845,5 +932,289 @@ mod zeroizing_field_types {
     fn secret_fields_are_zeroizing_types() {
         // the body is type-checked; the pointer proves `pins` is used
         let _: fn(&RatchetState, &SkippedKey, &Plaintext, &Sealed, &Opened, &StepUpdate) = pins;
+    }
+}
+
+/// M3 review F1 (R-03 (b)): up to and including `decide`, the header selection converts one cell-dependent `Choice`
+/// to a branch — `decide`'s case code — on every path of §7.4.
+#[cfg(test)]
+mod single_conversion {
+    use secmp_crypto::{Choice, ConstantTimeEq, MlKem768Dk, SecretBytes, X25519Secret};
+
+    use crate::error::{Error, Result};
+    use crate::keys::{MlKem768Ek, X25519Pk};
+    use crate::sizes::CELL_LEN;
+    use crate::tr::content;
+    use crate::tr::select::{self, CellChoice};
+    use crate::tr::state::RatchetState;
+
+    /// `<S as NotInto<T, _>>::check` names one item if `S: Into<T>` does not hold: the impl with `A = ()` always
+    /// applies, the one with `A = u8` only if the conversion exists — then `_` is ambiguous and the call does not
+    /// compile (the construction of `static_assertions::assert_not_impl_any`).
+    trait NotInto<T, A> {
+        fn check() {}
+    }
+    impl<S, T> NotInto<T, ()> for S {}
+    impl<S: Into<T>, T> NotInto<T, u8> for S {}
+
+    /// As [`NotInto`], for `PartialEq` (`==` on two `CellChoice`s would be a conversion to `bool`).
+    trait NotPartialEq<A> {
+        fn check() {}
+    }
+    impl<S> NotPartialEq<()> for S {}
+    impl<S: PartialEq> NotPartialEq<u8> for S {}
+
+    /// The session binding.
+    const SB: [u8; 32] = [7; 32];
+
+    /// A fresh session (§7.2): the initiator and the responder.
+    fn session() -> Result<(RatchetState, RatchetState)> {
+        let sk = SecretBytes::random()?;
+        let spk = X25519Secret::generate()?;
+        let rpk = MlKem768Dk::generate()?;
+        let spk_pub = X25519Pk::from_bytes(spk.public_key().as_bytes())?;
+        let rpk_ek = MlKem768Ek::from_bytes(rpk.encapsulation_key().as_bytes())?;
+        let a = RatchetState::init_initiator(&sk, &SB, &spk_pub, &rpk_ek)?;
+        let b = RatchetState::init_responder(&sk, &SB, spk, rpk)?;
+        Ok((a, b))
+    }
+
+    /// The sender's next cell (a Dummy).
+    fn send(s: RatchetState) -> Result<(RatchetState, Vec<u8>)> {
+        let (s, cell) = s
+            .encrypt(&content::dummy())
+            .map_err(|r| r.error())?
+            .persist(|_| Ok::<(), Error>(()))?;
+        Ok((s, cell.as_bytes().to_vec()))
+    }
+
+    /// `cell` is accepted with header counters `(n, pn)`, after one selection and one conversion.
+    fn accepts(
+        s: RatchetState,
+        cell: &[u8],
+        counters: (u32, u32),
+        what: &str,
+    ) -> Result<RatchetState> {
+        let _ = select::hook::take();
+        let opened = s.decrypt(cell).map_err(|r| r.error())?;
+        assert_eq!(
+            select::hook::take(),
+            (1, 1),
+            "{what}: (selections, conversions)"
+        );
+        assert_eq!(opened.header_counters(), counters, "{what}");
+        Ok(opened.commit(|_| Ok::<(), Error>(()))?.0)
+    }
+
+    /// `cell` is refused with the uniform error, after one selection and one conversion.
+    fn refuses(s: RatchetState, cell: &[u8], what: &str) -> Result<RatchetState> {
+        let _ = select::hook::take();
+        let refusal = s.decrypt(cell).err();
+        assert_eq!(
+            select::hook::take(),
+            (1, 1),
+            "{what}: (selections, conversions)"
+        );
+        assert!(refusal.is_some(), "{what}: accepted");
+        let (s, error) = refusal.ok_or(Error::Rejected)?.into_parts();
+        assert_eq!(error, Error::Rejected, "{what}");
+        Ok(s)
+    }
+
+    /// Type level: a [`CellChoice`] has no conversion to `bool`, `u8` or `Choice` and no `==`, and `RatchetState::open`
+    /// holds every cell-dependent result as one. Run time: every 4096-byte cell — on each path of §7.4: skipped key,
+    /// current chain, DH step, rejection — goes through exactly one selection on `CellChoice`s
+    /// (`select::first_opened_cell`) and one conversion (`select::path`, i.e. `decide`), counted by `select::hook`.
+    /// Selecting on raw `Choice`s again (as M3 did, `bool::from(any_skipped)` before `decide`) counts `(0, 0)`;
+    /// converting a `CellChoice` does not compile.
+    #[test]
+    fn any_skipped_single_conversion() -> Result<()> {
+        <CellChoice as NotInto<bool, _>>::check();
+        <CellChoice as NotInto<u8, _>>::check();
+        <CellChoice as NotInto<Choice, _>>::check();
+        <CellChoice as NotPartialEq<_>>::check();
+
+        let (a, b) = session()?;
+        let (a, m0) = send(a)?;
+        let (a, m1) = send(a)?;
+        let b = accepts(b, &m1, (1, 0), "step (nhk_r opens; position 0 skipped)")?;
+        assert_eq!(b.skipped.len(), 1);
+        let b = accepts(b, &m0, (0, 0), "skipped")?;
+        let (a, m2) = send(a)?;
+        let b = accepts(b, &m2, (2, 0), "chain")?;
+        let (a, m3) = send(a)?;
+        let (a, m4) = send(a)?;
+        let b = accepts(b, &m4, (4, 0), "chain (position 3 skipped)")?;
+        // the skipped key of the current chain is hk_r: it opens the next header too, and (hk_r, 5) is not in
+        // `skipped` — any_skipped and not found, the case M3 converted (and decoded) before `decide`
+        let hk_r = b.hk_r.as_ref().ok_or(Error::Rejected)?;
+        let front = b.skipped.front().ok_or(Error::Rejected)?;
+        assert!(bool::from(front.hk.ct_eq(hk_r)) && front.n == 3);
+        let (_, m5) = send(a)?;
+        let b = accepts(b, &m5, (5, 0), "chain while a skipped key opens too")?;
+        let b = accepts(b, &m3, (3, 0), "skipped (current chain)")?;
+        let b = refuses(b, &[0x5a; CELL_LEN], "no key opens")?;
+        let b = refuses(b, &m5, "replay on the chain")?;
+        let b = refuses(b, &m3, "replay of a consumed skipped key")?;
+        // the cell length is public and checked before any trial decryption
+        let short = m5
+            .get(..CELL_LEN.saturating_sub(1))
+            .ok_or(Error::Rejected)?;
+        let _ = select::hook::take();
+        assert!(b.decrypt(short).is_err(), "4095 bytes");
+        assert_eq!(select::hook::take(), (0, 0), "4095 bytes");
+        Ok(())
+    }
+}
+
+/// `header_n` and `select_header` on trial results built by hand (M3 review F1; ADR-043 (b)).
+#[cfg(test)]
+mod selection {
+    use std::collections::VecDeque;
+
+    use secmp_crypto::{Choice, SecretBytes};
+
+    use super::{Selected, Trial, Trials, header_n, select_header};
+    use crate::codec::{Decode, Encode, Zeroizing};
+    use crate::error::{Error, Result};
+    use crate::sizes::{HEADER_LEN, PROTO_VER};
+    use crate::tr::select::{self, CellChoice};
+    use crate::tr::state::SkippedKey;
+    use crate::wire::cell::HeaderV1;
+
+    /// A decodable encoded header (spec §7.5): `dh_pk` the base point u = 9, `ek_pq` all zero (every coefficient
+    /// 0 < q), `ct_pq` all zero.
+    fn header(pn: u32, n: u32) -> Zeroizing<Vec<u8>> {
+        let mut h = Zeroizing::new(Vec::with_capacity(HEADER_LEN));
+        h.extend_from_slice(&[PROTO_VER, 0, 9]);
+        h.extend_from_slice(&[0; 31]);
+        h.extend_from_slice(&pn.to_be_bytes());
+        h.extend_from_slice(&n.to_be_bytes());
+        h.resize(HEADER_LEN, 0);
+        h
+    }
+
+    /// [`header`] with `flags` = 1: opens, but does not decode (spec §7.5).
+    fn undecodable(n: u32) -> Zeroizing<Vec<u8>> {
+        let mut h = header(0, n);
+        if let Some(flags) = h.get_mut(1) {
+            *flags = 1;
+        }
+        h
+    }
+
+    /// A trial decryption that opened `plaintext`, or (`None`) did not open (all zero).
+    fn trial(plaintext: Option<Zeroizing<Vec<u8>>>) -> Trial {
+        let opened = Choice::from(u8::from(plaintext.is_some()));
+        (
+            CellChoice::from(opened),
+            plaintext.unwrap_or_else(|| Zeroizing::new(vec![0; HEADER_LEN])),
+        )
+    }
+
+    /// `select_header` for a state with the one skipped entry `(K, 5)` on the trial results under K (`skipped_key`),
+    /// `hk_r` (`current`) and `nhk_r` (`next`): the case and its header's `n`, `None` if rejected (with the uniform
+    /// error). Every call selects and converts exactly once.
+    fn case(
+        skipped_key: Option<Zeroizing<Vec<u8>>>,
+        current: Option<Zeroizing<Vec<u8>>>,
+        next: Option<Zeroizing<Vec<u8>>>,
+    ) -> Result<Option<(&'static str, u32)>> {
+        let k = SecretBytes::<32>::from_slice(&[1; 32])?;
+        let skipped = VecDeque::from([SkippedKey {
+            hk: SecretBytes::from_slice(&[1; 32])?,
+            n: 5,
+            mk: SecretBytes::from_slice(&[3; 32])?,
+        }]);
+        let trials = Trials {
+            skipped: vec![trial(skipped_key)],
+            current: trial(current),
+            next: trial(next),
+        };
+        let _ = select::hook::take();
+        let selected = select_header(&skipped, &[&k], &trials);
+        assert_eq!(select::hook::take(), (1, 1), "(selections, conversions)");
+        Ok(match selected {
+            Ok(Selected::Skipped(at, h)) => {
+                assert_eq!(at, 0);
+                Some(("skipped", h.n))
+            }
+            Ok(Selected::Chain(h)) => Some(("chain", h.n)),
+            Ok(Selected::Step(h)) => Some(("step", h.n)),
+            Err(error) => {
+                assert_eq!(error, Error::Rejected);
+                None
+            }
+        })
+    }
+
+    /// `n` sits at bytes `[38..42]` of the encoding, big-endian (spec App. D.5): `header_n` agrees with the decoder
+    /// and the encoder.
+    #[test]
+    fn header_n_reads_bytes_38_to_42() -> Result<()> {
+        for (pn, n) in [(0, 0), (7, 1), (u32::MAX, 0x0102_0304), (1, u32::MAX)] {
+            let bytes = header(pn, n);
+            let decoded = HeaderV1::decode(&bytes)?;
+            assert_eq!((decoded.pn, decoded.n), (pn, n));
+            assert_eq!(*decoded.encode()?, *bytes);
+            assert_eq!(bytes.get(38..42), Some(n.to_be_bytes().as_slice()));
+            assert_eq!(header_n(&bytes), Ok(n));
+            assert_eq!(header_n(&undecodable(n)), Ok(n));
+        }
+        assert_eq!(header_n(&[0; 41]), Err(Error::Rejected));
+        assert_eq!(header_n(&[0, 0, 1, 2, 3, 4]), Err(Error::Rejected));
+        Ok(())
+    }
+
+    /// ADR-043 (b) — `Open` includes decoding; a header a skipped key opens but that does not decode rejects the cell,
+    /// no further key is tried — without a branch on `any_skipped` (M3 review F1): `n` is read undecoded for the
+    /// lookup, and the first skipped key's header is decoded after `decide` on every accepting path. The first rows are
+    /// trial results no honest cell yields — K's plaintext differs from the one `hk_r` or `nhk_r` opened, as only a
+    /// header ciphertext that opens under two keys (crafted by a contact who holds both) can make it — on which reading
+    /// `n` without decoding must not let the cell fall through to `hk_r`/`nhk_r`.
+    #[test]
+    fn undecodable_skipped_header_rejects_on_every_path() -> Result<()> {
+        // K opened a header that does not decode: rejected, whatever else opened and whether (K, n) is in skipped
+        assert_eq!(
+            case(Some(undecodable(7)), Some(header(0, 8)), None)?,
+            None,
+            "hk_r opened too, (K, 7) not in skipped"
+        );
+        assert_eq!(
+            case(Some(undecodable(7)), None, Some(header(0, 9)))?,
+            None,
+            "nhk_r opened too, (K, 7) not in skipped"
+        );
+        assert_eq!(
+            case(Some(undecodable(5)), Some(header(0, 8)), None)?,
+            None,
+            "(K, 5) in skipped"
+        );
+        assert_eq!(case(Some(undecodable(5)), None, None)?, None, "K alone");
+        // controls: the same with a decodable header under K
+        assert_eq!(
+            case(Some(header(0, 7)), Some(header(0, 8)), None)?,
+            Some(("chain", 8))
+        );
+        assert_eq!(
+            case(Some(header(0, 7)), None, Some(header(0, 9)))?,
+            Some(("step", 9))
+        );
+        assert_eq!(
+            case(Some(header(0, 5)), Some(header(0, 8)), None)?,
+            Some(("skipped", 5))
+        );
+        assert_eq!(case(Some(header(0, 7)), None, None)?, None, "not found");
+        // no skipped key opened: the path's own header decides
+        assert_eq!(case(None, Some(header(0, 8)), None)?, Some(("chain", 8)));
+        assert_eq!(
+            case(None, Some(header(0, 8)), Some(header(0, 9)))?,
+            Some(("chain", 8))
+        );
+        assert_eq!(case(None, Some(undecodable(8)), None)?, None);
+        assert_eq!(case(None, None, Some(header(0, 9)))?, Some(("step", 9)));
+        assert_eq!(case(None, None, Some(undecodable(9)))?, None);
+        assert_eq!(case(None, None, None)?, None);
+        Ok(())
     }
 }

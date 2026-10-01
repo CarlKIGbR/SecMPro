@@ -11,7 +11,7 @@
 
 use core::num::NonZeroU16;
 
-use secmp_crypto::SecretBytes;
+use secmp_crypto::{SecretBytes, Zeroize};
 
 use crate::codec::{
     Decode, Encode, Reader, Writer, Zeroizing, boxed, decode_padded, encode_padded,
@@ -80,7 +80,7 @@ impl Onion {
 /// `RelayRef.direct.host`: 1..=253 bytes, each in 0x21..=0x7E (a DNS name or an IP literal; rev 2.3).
 #[derive(Clone, PartialEq, Eq)]
 #[cfg_attr(test, derive(Debug))]
-pub struct Host(Vec<u8>);
+pub struct Host(crate::codec::Zeroizing<Vec<u8>>);
 
 impl Host {
     /// The host with these bytes.
@@ -90,7 +90,7 @@ impl Host {
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
         if (1..=HOST_MAX).contains(&bytes.len()) && bytes.iter().all(|b| (0x21..=0x7e).contains(b))
         {
-            Ok(Self(bytes.to_vec()))
+            Ok(Self(crate::codec::Zeroizing::new(bytes.to_vec())))
         } else {
             Err(Error::Rejected)
         }
@@ -100,6 +100,12 @@ impl Host {
     #[must_use]
     pub fn as_bytes(&self) -> &[u8] {
         &self.0
+    }
+}
+
+impl Zeroize for Host {
+    fn zeroize(&mut self) {
+        self.0.zeroize();
     }
 }
 
@@ -127,6 +133,18 @@ pub struct RelayRef {
     pub akc: [u8; HASH_LEN],
     /// Direct TLS endpoint, if offered.
     pub direct: Option<Direct>,
+}
+
+impl Zeroize for RelayRef {
+    fn zeroize(&mut self) {
+        self.relay_fp.zeroize();
+        self.onion.0.zeroize();
+        self.akc.zeroize();
+        if let Some(d) = &mut self.direct {
+            d.host.zeroize();
+            d.spki_sha256.zeroize();
+        }
+    }
 }
 
 impl Encode for RelayRef {
@@ -192,6 +210,18 @@ pub struct InvitationV1 {
     pub inv_period_s: Period,
     /// Unix seconds.
     pub expires: u64,
+}
+
+/// Wiped by `Zeroizing<InvitationV1>` (held so by [`crate::inv::InviteeAccepted`]): the relay reference and the ids;
+/// the two seeds are `SecretBytes` and wipe themselves.
+impl Zeroize for InvitationV1 {
+    fn zeroize(&mut self) {
+        self.relay.zeroize();
+        self.ld_id.zeroize();
+        self.inviter_fp.zeroize();
+        self.inv_sid.zeroize();
+        self.expires = 0;
+    }
 }
 
 impl Encode for InvitationV1 {
@@ -261,6 +291,7 @@ impl Profile {
     }
 }
 
+// display data; variable-time comparison is acceptable (reviewer 2026-10-01)
 impl PartialEq for Profile {
     fn eq(&self, other: &Self) -> bool {
         *self.name == *other.name && self.avatar_sha256 == other.avatar_sha256

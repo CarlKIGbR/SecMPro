@@ -294,14 +294,14 @@ pub fn open_blob(ld_id: &Id, link_key: &SecretBytes<HASH_LEN>, blob: &[u8]) -> R
 
 /// What the invitee holds after §5.5 steps 1–4: the invitation and the verified link data.
 pub struct InviteeAccepted {
-    invitation: InvitationV1,
+    invitation: Zeroizing<InvitationV1>,
     link_data: LinkDataV1,
 }
 
 impl InviteeAccepted {
     /// The parsed invitation (a secret: `link_key`, `inv_send_seed`).
     #[must_use]
-    pub const fn invitation(&self) -> &InvitationV1 {
+    pub fn invitation(&self) -> &InvitationV1 {
         &self.invitation
     }
 
@@ -341,7 +341,7 @@ pub fn invitee_check(invitation: InvitationV1, blob: &[u8], now: u64) -> Result<
     // step 4
     verify_bundle(&link_data, now)?;
     Ok(InviteeAccepted {
-        invitation,
+        invitation: Zeroizing::new(invitation),
         link_data,
     })
 }
@@ -454,5 +454,19 @@ mod tests {
             check_issue_bounds(u64::MAX, u64::MAX, u64::MAX),
             Err(IssueError::AlreadyExpired)
         );
+    }
+}
+
+#[cfg(test)]
+mod zeroizing_pins {
+    use super::*;
+
+    /// F10 / M3 R-23: the invitation held by `InviteeAccepted` is wiped on drop; a type change breaks this.
+    #[test]
+    fn invitee_accepted_holds_the_invitation_zeroizing() {
+        fn pin(a: &InviteeAccepted) {
+            let _: &Zeroizing<InvitationV1> = &a.invitation;
+        }
+        let _ = pin;
     }
 }

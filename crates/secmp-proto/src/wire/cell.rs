@@ -12,7 +12,7 @@
 //! - `RouteDescriptor`: kind 0x01 is a `RelayQueue`; every other kind is kept as opaque bytes (spec §9.8: v1
 //!   clients ignore unknown kinds; keeping them makes re-encoding canonical).
 
-use secmp_crypto::SecretBytes;
+use secmp_crypto::{SecretBytes, Zeroize};
 
 use crate::codec::{
     Decode, Encode, Reader, Writer, Zeroizing, boxed, decode_padded, encode_padded,
@@ -356,6 +356,14 @@ pub struct RelayQueue {
     pub period_s: Period,
 }
 
+impl Zeroize for RelayQueue {
+    fn zeroize(&mut self) {
+        self.relay.zeroize();
+        self.sid.zeroize();
+        // `send_seed` is a `SecretBytes`: wiped on drop
+    }
+}
+
 impl Encode for RelayQueue {
     fn encode_to(&self, w: &mut Writer) -> Result<()> {
         self.relay.encode_to(w)?;
@@ -391,6 +399,19 @@ pub enum RouteDescriptor {
         /// `RelayQueue` does (review C1).
         blob: Zeroizing<Vec<u8>>,
     },
+}
+
+/// Wiped by `Zeroizing<Vec<RouteDescriptor>>` (held so by [`crate::hx::Accepted`]).
+impl Zeroize for RouteDescriptor {
+    fn zeroize(&mut self) {
+        match self {
+            Self::RelayQueue(q) => q.zeroize(),
+            Self::Unknown { kind, blob } => {
+                *kind = 0;
+                blob.zeroize();
+            }
+        }
+    }
 }
 
 impl Encode for RouteDescriptor {

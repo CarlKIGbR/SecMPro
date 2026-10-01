@@ -45,6 +45,18 @@ required-features = ["kat"]
 name = "gen-tr"
 required-features = ["kat"]
 
+# The `hx` suite: the Rust generator (`tests/common/hx_gen.rs`, an independent construction of SecMP-INV/HX) against
+# the vector file, the replay of the file through the library, and the example that writes `vectors/rust/hx.json`
+# for `cargo xtask vectors`; all need feature `kat`.
+[[test]]
+name = "hx"
+path = "tests/hx/main.rs"
+required-features = ["kat"]
+
+[[example]]
+name = "gen-hx"
+required-features = ["kat"]
+
 # The performance measurement of M3 (plan D11: encrypt + decrypt < 3 ms), OS randomness, feature `kat` off; run in
 # the release profile by `cargo xtask step perf`.
 [[example]]

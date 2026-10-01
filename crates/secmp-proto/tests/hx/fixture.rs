@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! Fixtures of the SecMP-INV/HX tests: an inviter with its store and one issued invitation, an invitee identity,
 //! and the honest initiator run. Built only from the library's public API; the independent re-computations the
 //! negative tests need live in `hx_harness.rs`.

@@ -1,12 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-#![forbid(unsafe_code)]
 //! SecMP-INV/HX end to end with OS randomness (TEST-SPEC-M4 (a) `hx_roundtrip_os_rng`).
 
-#[path = "common/hx_fixture.rs"]
-mod fixture;
-
-use fixture::{Inviter, invitee_run};
+use crate::fixture::{Inviter, invitee_run};
 use secmp_proto::hx::Responder;
 use secmp_proto::prekeys::PrekeyStore;
 use secmp_proto::tr::OsEntropy;

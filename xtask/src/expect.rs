@@ -462,8 +462,26 @@ pub(crate) const VECTOR_REF_PENDING: &[&str] = &[];
 /// reject every other row of the reference file (`secmp-proto` test `encodings_ref`) before the freeze.
 pub(crate) const VECTOR_POSITIVE_ONLY: &[&str] = &["encodings"];
 
-/// ProVerif models under `formal/` (docs/06 §5 step 10). M3 adds `tr.pv`, M4 `hx.pv`, M5 `link.pv`.
+/// The single-file ProVerif models `formal/<name>.pv` (docs/06 §5 step 10): M3 `tr.pv`; M5 adds `link.pv`. The `proverif`
+/// step refuses any other `formal/*.pv`. M4 (WEISUNG M4-5 §4, gate F7, M3 review R-14): the SecMP-HX model is not one of
+/// them — it is the library [`PROVERIF_HX_LIB`] and one model per session under [`PROVERIF_HX_DIR`] (the files of
+/// [`PROVERIF_EXPECTED_HX`]), each run as `proverif -lib formal/hx.pvl formal/hx/<session>.pv`; the old joint model
+/// `formal/hx.pv` must not exist.
 pub(crate) const PROVERIF_MODELS: &[&str] = &["tr"];
+
+/// The SecMP-HX ProVerif library (M4, WEISUNG M4-5): required whenever the `hx` models run.
+pub(crate) const PROVERIF_HX_LIB: &str = "formal/hx.pvl";
+
+/// The directory of the SecMP-HX session models `<session>.pv` (M4, WEISUNG M4-5): its set of `.pv` stems must equal
+/// the set of files of [`PROVERIF_EXPECTED_HX`].
+pub(crate) const PROVERIF_HX_DIR: &str = "formal/hx";
+
+/// Seconds one ProVerif process may run (WEISUNG M4-5 §4, gate F7): a run still going after this is killed, and the
+/// gate fails naming the file and its last progress line (`… rules inserted. …`). Applies to every model file.
+pub(crate) const PROVERIF_TIMEOUT_SECONDS: u64 = 1800;
+
+/// The largest number of parallel ProVerif processes (`--jobs N`), and the cap of the default (the available cores).
+pub(crate) const PROVERIF_MAX_JOBS: usize = 4;
 
 /// What one ProVerif `RESULT` line must say (`formal/CLAIMS.md`, gate rule).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -488,7 +506,9 @@ pub(crate) type ProverifRuns = &'static [(&'static str, usize, Proved)];
 /// `tr` (M3, 39 lines; CLAIMS §TR gate rule: T1–T6, T8, T9, T11 true, T7 and T10 false, T12 informative): T1 the six
 /// contents of steps 1–3 (n = 0, 1); T2 both directions; T3 the four contents of steps 1–2; T4, T5, T6 and T7 the two
 /// contents of step 3 each; T8 per step `dh_pk` and `ek_pq` of its header and `n` of both messages (twelve); T9 the
-/// same four fields of step 1; T10 one content; T11 and T12 one query each (T12: the model gives false).
+/// same four fields of step 1; T10 one content; T11 and T12 one query each (T12: the model gives false). M4 (WEISUNG
+/// M4-5, M3 review R-52, EXT-1): T13, reachability sanity, one query per honest session of the model (sClean, sFS,
+/// sPCS, sPCSdh, sPCSkem, sPCSboth, sHFS), each false (the honest run completes) — 46 lines.
 pub(crate) const PROVERIF_EXPECTED: &[(&str, ProverifRuns)] = &[(
     "tr",
     &[
@@ -504,8 +524,117 @@ pub(crate) const PROVERIF_EXPECTED: &[(&str, ProverifRuns)] = &[(
         ("T10", 1, Proved::False),
         ("T11", 1, Proved::True),
         ("T12", 1, Proved::Informative),
+        ("T13", 7, Proved::False),
     ],
 )];
+
+/// One expected `RESULT` line of a SecMP-HX session model: (file stem under [`PROVERIF_HX_DIR`], `formal/CLAIMS.md` ID,
+/// query text, expected verdict). The query text is what ProVerif prints between `RESULT ` and the final ` is true.`,
+/// ` is false.` or ` cannot be proved.`; the `RESULT (but …)` remark ProVerif adds under an injective query is not a
+/// `RESULT` line of its own.
+pub(crate) type HxExpected = (&'static str, &'static str, &'static str, Proved);
+
+/// The expected `RESULT` lines of every SecMP-HX session model (WEISUNG M4-5 §4, gate F7), in the order ProVerif prints
+/// them within each file. The `proverif` step (`gates::proverif_check_hx`) matches the lines by query text, not by
+/// position: a missing, an extra or a re-ordered `RESULT` line fails, as does a verdict other than the expected one (a
+/// `True` line must say "is true.", a `False` line "is false.") and an `hx/*.pv` file without entries here.
+///
+/// Derived from the session files' queries in ProVerif 2.05's display form (spaces removed; `b_2`, `tr_2`, `rt_2`,
+/// `sk_2`, `ld_N` with N = 4 + the `Leak`/`RevOPK` calls of the file's `Invitation`; `attacker_p1` in files with a
+/// phase 1; `not (…)` for reachability queries); 63 rows equal a printed `RESULT` line of the WEISUNG M4-5 runs, the
+/// 24 rows of declarations no run reached are derived by the same rules. Expected verdict: the `formal/CLAIMS.md`
+/// gate rule. One entry per line;
+/// `rustfmt` leaves the table alone.
+#[rustfmt::skip]
+pub(crate) const PROVERIF_EXPECTED_HX: &[HxExpected] = &[
+    ("hClean", "H1 (i)", "not (event(IStart(hClean,iI,iks(vk(iksig(hClean,pR)),exp(g,dhsk(hClean,kIKR))),b_2,tr_2,rt_2,sk_2)) && attacker(sk_2))", Proved::True),
+    ("hClean", "H1 (ii)", "not (event(RAccept(hClean,iR,iks(vk(iksig(hClean,pI)),exp(g,dhsk(hClean,kIKI))),ld_5,oid,tr_2,rt_2,sk_2)) && attacker(sk_2))", Proved::True),
+    ("hClean", "H11", "not event(IStart(hClean,iks(vk(iksig(hClean,pI)),exp(g,dhsk(hClean,kIKI))),iks(vk(iksig(hClean,pR)),exp(g,dhsk(hClean,kIKR))),b_2,tr_2,rt_2,sk_2))", Proved::False),
+    ("hClean", "H11", "not event(BundleSigned(hClean,iR,b_2))", Proved::False),
+    ("hClean", "H11", "not (event(RAccept(hClean,iR,iks(vk(iksig(hClean,pI)),exp(g,dhsk(hClean,kIKI))),ld_5,oid,tr_2,rt_2,sk_2)) && event(IStart(hClean,iks(vk(iksig(hClean,pI)),exp(g,dhsk(hClean,kIKI))),iR,b_2,tr_2,rt_2,sk_2)))", Proved::False),
+    ("hClean", "H11", "not event(IConfirm(hClean,iks(vk(iksig(hClean,pI)),exp(g,dhsk(hClean,kIKI))),iks(vk(iksig(hClean,pR)),exp(g,dhsk(hClean,kIKR))),tr_2,sk_2))", Proved::False),
+    ("hClean", "H6a", "event(IStart(hClean,iI,iks(vk(iksig(hClean,pR)),exp(g,dhsk(hClean,kIKR))),b_2,tr_2,rt_2,sk_2)) ==> event(BundleSigned(s2,iks(vk(iksig(hClean,pR)),exp(g,dhsk(hClean,kIKR))),b_2))", Proved::True),
+    ("hClean", "H5", "inj-event(RAccept(hClean,iR,iks(vk(iksig(hClean,pI)),exp(g,dhsk(hClean,kIKI))),ld_5,oid,tr_2,rt_2,sk_2)) ==> inj-event(IStart(hClean,iks(vk(iksig(hClean,pI)),exp(g,dhsk(hClean,kIKI))),iR,b_2,tr_2,rt_2,sk_2))", Proved::True),
+    ("hClean", "H6b", "inj-event(IConfirm(hClean,iI,iks(vk(iksig(hClean,pR)),exp(g,dhsk(hClean,kIKR))),tr_2,sk_2)) ==> inj-event(RAccept(hClean,iks(vk(iksig(hClean,pR)),exp(g,dhsk(hClean,kIKR))),iI,ld_5,oid,tr_2,rt_2,sk_2))", Proved::True),
+    ("hClean", "H10", "inj-event(RAccept(hClean,iR,iI,ld_5,oid,tr_2,rt_2,sk_2)) ==> inj-event(InvIssued(hClean,iR,ld_5,oid))", Proved::True),
+    ("hDH", "H2 (i)", "not (event(IStart(hDH,iI,iks(vk(iksig(hDH,pR)),exp(g,dhsk(hDH,kIKR))),b_2,tr_2,rt_2,sk_2)) && attacker(sk_2))", Proved::True),
+    ("hDH", "H2 (ii)", "not (event(RAccept(hDH,iR,iks(vk(iksig(hDH,pI)),exp(g,dhsk(hDH,kIKI))),ld_5,oid,tr_2,rt_2,sk_2)) && event(IStart(hDH,iks(vk(iksig(hDH,pI)),exp(g,dhsk(hDH,kIKI))),iR,b_2,tr_2,rt_2,sk_2)) && attacker(sk_2))", Proved::True),
+    ("hDH", "H11", "not event(IStart(hDH,iks(vk(iksig(hDH,pI)),exp(g,dhsk(hDH,kIKI))),iks(vk(iksig(hDH,pR)),exp(g,dhsk(hDH,kIKR))),b_2,tr_2,rt_2,sk_2))", Proved::False),
+    ("hDH", "H11", "not event(BundleSigned(hDH,iR,b_2))", Proved::False),
+    ("hDH", "H11", "not (event(RAccept(hDH,iR,iks(vk(iksig(hDH,pI)),exp(g,dhsk(hDH,kIKI))),ld_5,oid,tr_2,rt_2,sk_2)) && event(IStart(hDH,iks(vk(iksig(hDH,pI)),exp(g,dhsk(hDH,kIKI))),iR,b_2,tr_2,rt_2,sk_2)))", Proved::False),
+    ("hDH", "H11", "not event(IConfirm(hDH,iks(vk(iksig(hDH,pI)),exp(g,dhsk(hDH,kIKI))),iks(vk(iksig(hDH,pR)),exp(g,dhsk(hDH,kIKR))),tr_2,sk_2))", Proved::False),
+    ("hDH", "H8", "inj-event(RAccept(hDH,iR,iks(vk(iksig(hDH,pI)),exp(g,dhsk(hDH,kIKI))),ld_5,oid,tr_2,rt_2,sk_2)) ==> inj-event(IStart(hDH,iks(vk(iksig(hDH,pI)),exp(g,dhsk(hDH,kIKI))),iR,b_2,tr_2,rt_2,sk_2))", Proved::False),
+    ("hKEM", "H3 (i)", "not (event(IStart(hKEM,iI,iks(vk(iksig(hKEM,pR)),exp(g,dhsk(hKEM,kIKR))),b_2,tr_2,rt_2,sk_2)) && attacker(sk_2))", Proved::True),
+    ("hKEM", "H3 (ii)", "not (event(RAccept(hKEM,iR,iks(vk(iksig(hKEM,pI)),exp(g,dhsk(hKEM,kIKI))),ld_5,oid,tr_2,rt_2,sk_2)) && attacker(sk_2))", Proved::True),
+    ("hKEM", "H11", "not event(IStart(hKEM,iks(vk(iksig(hKEM,pI)),exp(g,dhsk(hKEM,kIKI))),iks(vk(iksig(hKEM,pR)),exp(g,dhsk(hKEM,kIKR))),b_2,tr_2,rt_2,sk_2))", Proved::False),
+    ("hKEM", "H11", "not event(BundleSigned(hKEM,iR,b_2))", Proved::False),
+    ("hKEM", "H11", "not (event(RAccept(hKEM,iR,iks(vk(iksig(hKEM,pI)),exp(g,dhsk(hKEM,kIKI))),ld_5,oid,tr_2,rt_2,sk_2)) && event(IStart(hKEM,iks(vk(iksig(hKEM,pI)),exp(g,dhsk(hKEM,kIKI))),iR,b_2,tr_2,rt_2,sk_2)))", Proved::False),
+    ("hKEM", "H11", "not event(IConfirm(hKEM,iks(vk(iksig(hKEM,pI)),exp(g,dhsk(hKEM,kIKI))),iks(vk(iksig(hKEM,pR)),exp(g,dhsk(hKEM,kIKR))),tr_2,sk_2))", Proved::False),
+    ("hKEM", "H5", "inj-event(RAccept(hKEM,iR,iks(vk(iksig(hKEM,pI)),exp(g,dhsk(hKEM,kIKI))),ld_5,oid,tr_2,rt_2,sk_2)) ==> inj-event(IStart(hKEM,iks(vk(iksig(hKEM,pI)),exp(g,dhsk(hKEM,kIKI))),iR,b_2,tr_2,rt_2,sk_2))", Proved::True),
+    ("hBoth", "H4", "not (event(IStart(hBoth,iI,iks(vk(iksig(hBoth,pR)),exp(g,dhsk(hBoth,kIKR))),b_2,tr_2,rt_2,sk_2)) && attacker(sk_2))", Proved::False),
+    ("hBoth", "H11", "not event(IStart(hBoth,iks(vk(iksig(hBoth,pI)),exp(g,dhsk(hBoth,kIKI))),iks(vk(iksig(hBoth,pR)),exp(g,dhsk(hBoth,kIKR))),b_2,tr_2,rt_2,sk_2))", Proved::False),
+    ("hBoth", "H11", "not event(BundleSigned(hBoth,iR,b_2))", Proved::False),
+    ("hBoth", "H11", "not (event(RAccept(hBoth,iR,iks(vk(iksig(hBoth,pI)),exp(g,dhsk(hBoth,kIKI))),ld_5,oid,tr_2,rt_2,sk_2)) && event(IStart(hBoth,iks(vk(iksig(hBoth,pI)),exp(g,dhsk(hBoth,kIKI))),iR,b_2,tr_2,rt_2,sk_2)))", Proved::False),
+    ("hBoth", "H11", "not event(IConfirm(hBoth,iks(vk(iksig(hBoth,pI)),exp(g,dhsk(hBoth,kIKI))),iks(vk(iksig(hBoth,pR)),exp(g,dhsk(hBoth,kIKR))),tr_2,sk_2))", Proved::False),
+    ("hId", "H7a", "not attacker(exp(g,dhsk(hId,kIKI)))", Proved::True),
+    ("hId", "H7a", "not attacker(vk(iksig(hId,pI)))", Proved::True),
+    ("hId", "H11", "not event(IStart(hId,iks(vk(iksig(hId,pI)),exp(g,dhsk(hId,kIKI))),iks(vk(iksig(hId,pR)),exp(g,dhsk(hId,kIKR))),b_2,tr_2,rt_2,sk_2))", Proved::False),
+    ("hId", "H11", "not event(BundleSigned(hId,iR,b_2))", Proved::False),
+    ("hId", "H11", "not (event(RAccept(hId,iR,iks(vk(iksig(hId,pI)),exp(g,dhsk(hId,kIKI))),ld_4,oid,tr_2,rt_2,sk_2)) && event(IStart(hId,iks(vk(iksig(hId,pI)),exp(g,dhsk(hId,kIKI))),iR,b_2,tr_2,rt_2,sk_2)))", Proved::False),
+    ("hId", "H11", "not event(IConfirm(hId,iks(vk(iksig(hId,pI)),exp(g,dhsk(hId,kIKI))),iks(vk(iksig(hId,pR)),exp(g,dhsk(hId,kIKR))),tr_2,sk_2))", Proved::False),
+    ("hId", "H6a", "event(IStart(hId,iI,iks(vk(iksig(hId,pR)),exp(g,dhsk(hId,kIKR))),b_2,tr_2,rt_2,sk_2)) ==> event(BundleSigned(s2,iks(vk(iksig(hId,pR)),exp(g,dhsk(hId,kIKR))),b_2))", Proved::True),
+    ("hIdThief", "H7b", "not attacker(exp(g,dhsk(hIdThief,kIKI)))", Proved::True),
+    ("hIdThief", "H7b", "not attacker(vk(iksig(hIdThief,pI)))", Proved::True),
+    ("hIdThief", "H11", "not event(IStart(hIdThief,iks(vk(iksig(hIdThief,pI)),exp(g,dhsk(hIdThief,kIKI))),iks(vk(iksig(hIdThief,pR)),exp(g,dhsk(hIdThief,kIKR))),b_2,tr_2,rt_2,sk_2))", Proved::False),
+    ("hIdThief", "H11", "not event(BundleSigned(hIdThief,iR,b_2))", Proved::False),
+    ("hIdThief", "H11", "not (event(RAccept(hIdThief,iR,iks(vk(iksig(hIdThief,pI)),exp(g,dhsk(hIdThief,kIKI))),ld_5,oid,tr_2,rt_2,sk_2)) && event(IStart(hIdThief,iks(vk(iksig(hIdThief,pI)),exp(g,dhsk(hIdThief,kIKI))),iR,b_2,tr_2,rt_2,sk_2)))", Proved::False),
+    ("hIdThief", "H11", "not event(IConfirm(hIdThief,iks(vk(iksig(hIdThief,pI)),exp(g,dhsk(hIdThief,kIKI))),iks(vk(iksig(hIdThief,pR)),exp(g,dhsk(hIdThief,kIKR))),tr_2,sk_2))", Proved::False),
+    ("hIdLater", "H7c", "not attacker_p1(exp(g,dhsk(hIdLater,kIKI)))", Proved::True),
+    ("hIdLater", "H7c", "not attacker_p1(vk(iksig(hIdLater,pI)))", Proved::True),
+    ("hIdLater", "H11", "not event(IStart(hIdLater,iks(vk(iksig(hIdLater,pI)),exp(g,dhsk(hIdLater,kIKI))),iks(vk(iksig(hIdLater,pR)),exp(g,dhsk(hIdLater,kIKR))),b_2,tr_2,rt_2,sk_2))", Proved::False),
+    ("hIdLater", "H11", "not event(BundleSigned(hIdLater,iR,b_2))", Proved::False),
+    ("hIdLater", "H11", "not (event(RAccept(hIdLater,iR,iks(vk(iksig(hIdLater,pI)),exp(g,dhsk(hIdLater,kIKI))),ld_5,oid,tr_2,rt_2,sk_2)) && event(IStart(hIdLater,iks(vk(iksig(hIdLater,pI)),exp(g,dhsk(hIdLater,kIKI))),iR,b_2,tr_2,rt_2,sk_2)))", Proved::False),
+    ("hIdLater", "H11", "not event(IConfirm(hIdLater,iks(vk(iksig(hIdLater,pI)),exp(g,dhsk(hIdLater,kIKI))),iks(vk(iksig(hIdLater,pR)),exp(g,dhsk(hIdLater,kIKR))),tr_2,sk_2))", Proved::False),
+    ("hIdLaterOPK", "H7d", "not attacker_p1(exp(g,dhsk(hIdLaterOPK,kIKI)))", Proved::False),
+    ("hIdLaterOPK", "H7d", "not attacker_p1(vk(iksig(hIdLaterOPK,pI)))", Proved::False),
+    ("hIdLaterOPK", "H11", "not event(IStart(hIdLaterOPK,iks(vk(iksig(hIdLaterOPK,pI)),exp(g,dhsk(hIdLaterOPK,kIKI))),iks(vk(iksig(hIdLaterOPK,pR)),exp(g,dhsk(hIdLaterOPK,kIKR))),b_2,tr_2,rt_2,sk_2))", Proved::False),
+    ("hIdLaterOPK", "H11", "not event(BundleSigned(hIdLaterOPK,iR,b_2))", Proved::False),
+    ("hIdLaterOPK", "H11", "not (event(RAccept(hIdLaterOPK,iR,iks(vk(iksig(hIdLaterOPK,pI)),exp(g,dhsk(hIdLaterOPK,kIKI))),ld_6,oid,tr_2,rt_2,sk_2)) && event(IStart(hIdLaterOPK,iks(vk(iksig(hIdLaterOPK,pI)),exp(g,dhsk(hIdLaterOPK,kIKI))),iR,b_2,tr_2,rt_2,sk_2)))", Proved::False),
+    ("hIdLaterOPK", "H11", "not event(IConfirm(hIdLaterOPK,iks(vk(iksig(hIdLaterOPK,pI)),exp(g,dhsk(hIdLaterOPK,kIKI))),iks(vk(iksig(hIdLaterOPK,pR)),exp(g,dhsk(hIdLaterOPK,kIKR))),tr_2,sk_2))", Proved::False),
+    ("hKCI", "H11", "not event(IStart(hKCI,iks(vk(iksig(hKCI,pI)),exp(g,dhsk(hKCI,kIKI))),iks(vk(iksig(hKCI,pR)),exp(g,dhsk(hKCI,kIKR))),b_2,tr_2,rt_2,sk_2))", Proved::False),
+    ("hKCI", "H11", "not event(BundleSigned(hKCI,iR,b_2))", Proved::False),
+    ("hKCI", "H11", "not (event(RAccept(hKCI,iR,iks(vk(iksig(hKCI,pI)),exp(g,dhsk(hKCI,kIKI))),ld_5,oid,tr_2,rt_2,sk_2)) && event(IStart(hKCI,iks(vk(iksig(hKCI,pI)),exp(g,dhsk(hKCI,kIKI))),iR,b_2,tr_2,rt_2,sk_2)))", Proved::False),
+    ("hKCI", "H11", "not event(IConfirm(hKCI,iks(vk(iksig(hKCI,pI)),exp(g,dhsk(hKCI,kIKI))),iks(vk(iksig(hKCI,pR)),exp(g,dhsk(hKCI,kIKR))),tr_2,sk_2))", Proved::False),
+    ("hKCI", "H9", "inj-event(RAccept(hKCI,iR,iks(vk(iksig(hKCI,pI)),exp(g,dhsk(hKCI,kIKI))),ld_5,oid,tr_2,rt_2,sk_2)) ==> inj-event(IStart(hKCI,iks(vk(iksig(hKCI,pI)),exp(g,dhsk(hKCI,kIKI))),iR,b_2,tr_2,rt_2,sk_2))", Proved::False),
+    ("hKCIlt", "H11", "not event(IStart(hKCIlt,iks(vk(iksig(hKCIlt,pI)),exp(g,dhsk(hKCIlt,kIKI))),iks(vk(iksig(hKCIlt,pR)),exp(g,dhsk(hKCIlt,kIKR))),b_2,tr_2,rt_2,sk_2))", Proved::False),
+    ("hKCIlt", "H11", "not event(BundleSigned(hKCIlt,iR,b_2))", Proved::False),
+    ("hKCIlt", "H11", "not (event(RAccept(hKCIlt,iR,iks(vk(iksig(hKCIlt,pI)),exp(g,dhsk(hKCIlt,kIKI))),ld_5,oid,tr_2,rt_2,sk_2)) && event(IStart(hKCIlt,iks(vk(iksig(hKCIlt,pI)),exp(g,dhsk(hKCIlt,kIKI))),iR,b_2,tr_2,rt_2,sk_2)))", Proved::False),
+    ("hKCIlt", "H11", "not event(IConfirm(hKCIlt,iks(vk(iksig(hKCIlt,pI)),exp(g,dhsk(hKCIlt,kIKI))),iks(vk(iksig(hKCIlt,pR)),exp(g,dhsk(hKCIlt,kIKR))),tr_2,sk_2))", Proved::False),
+    ("hKCIlt", "H9b", "inj-event(RAccept(hKCIlt,iR,iks(vk(iksig(hKCIlt,pI)),exp(g,dhsk(hKCIlt,kIKI))),ld_5,oid,tr_2,rt_2,sk_2)) ==> inj-event(IStart(hKCIlt,iks(vk(iksig(hKCIlt,pI)),exp(g,dhsk(hKCIlt,kIKI))),iR,b_2,tr_2,rt_2,sk_2))", Proved::True),
+    ("hKCIi", "H9c", "not (event(IStart(hKCIi,iI,iks(vk(iksig(hKCIi,pR)),exp(g,dhsk(hKCIi,kIKR))),b_2,tr_2,rt_2,sk_2)) && attacker(sk_2))", Proved::True),
+    ("hKCIi", "H11", "not event(IStart(hKCIi,iks(vk(iksig(hKCIi,pI)),exp(g,dhsk(hKCIi,kIKI))),iks(vk(iksig(hKCIi,pR)),exp(g,dhsk(hKCIi,kIKR))),b_2,tr_2,rt_2,sk_2))", Proved::False),
+    ("hKCIi", "H11", "not event(BundleSigned(hKCIi,iR,b_2))", Proved::False),
+    ("hKCIi", "H11", "not (event(RAccept(hKCIi,iR,iks(vk(iksig(hKCIi,pI)),exp(g,dhsk(hKCIi,kIKI))),ld_5,oid,tr_2,rt_2,sk_2)) && event(IStart(hKCIi,iks(vk(iksig(hKCIi,pI)),exp(g,dhsk(hKCIi,kIKI))),iR,b_2,tr_2,rt_2,sk_2)))", Proved::False),
+    ("hKCIi", "H11", "not event(IConfirm(hKCIi,iks(vk(iksig(hKCIi,pI)),exp(g,dhsk(hKCIi,kIKI))),iks(vk(iksig(hKCIi,pR)),exp(g,dhsk(hKCIi,kIKR))),tr_2,sk_2))", Proved::False),
+    ("hFS", "H11", "not event(IStart(hFS,iks(vk(iksig(hFS,pI)),exp(g,dhsk(hFS,kIKI))),iks(vk(iksig(hFS,pR)),exp(g,dhsk(hFS,kIKR))),b_2,tr_2,rt_2,sk_2))", Proved::False),
+    ("hFS", "H11", "not event(BundleSigned(hFS,iR,b_2))", Proved::False),
+    ("hFS", "H11", "not (event(RAccept(hFS,iR,iks(vk(iksig(hFS,pI)),exp(g,dhsk(hFS,kIKI))),ld_5,oid,tr_2,rt_2,sk_2)) && event(IStart(hFS,iks(vk(iksig(hFS,pI)),exp(g,dhsk(hFS,kIKI))),iR,b_2,tr_2,rt_2,sk_2)))", Proved::False),
+    ("hFS", "H11", "not event(IConfirm(hFS,iks(vk(iksig(hFS,pI)),exp(g,dhsk(hFS,kIKI))),iks(vk(iksig(hFS,pR)),exp(g,dhsk(hFS,kIKR))),tr_2,sk_2))", Proved::False),
+    ("hFS", "H12 (i)", "not (event(IStart(hFS,iI,iks(vk(iksig(hFS,pR)),exp(g,dhsk(hFS,kIKR))),b_2,tr_2,rt_2,sk_2)) && attacker_p1(sk_2))", Proved::True),
+    ("hFS", "H12 (ii)", "not (event(RAccept(hFS,iR,iks(vk(iksig(hFS,pI)),exp(g,dhsk(hFS,kIKI))),ld_5,oid,tr_2,rt_2,sk_2)) && attacker_p1(sk_2))", Proved::True),
+    ("hFSOPK", "H11", "not event(IStart(hFSOPK,iks(vk(iksig(hFSOPK,pI)),exp(g,dhsk(hFSOPK,kIKI))),iks(vk(iksig(hFSOPK,pR)),exp(g,dhsk(hFSOPK,kIKR))),b_2,tr_2,rt_2,sk_2))", Proved::False),
+    ("hFSOPK", "H11", "not event(BundleSigned(hFSOPK,iR,b_2))", Proved::False),
+    ("hFSOPK", "H11", "not (event(RAccept(hFSOPK,iR,iks(vk(iksig(hFSOPK,pI)),exp(g,dhsk(hFSOPK,kIKI))),ld_6,oid,tr_2,rt_2,sk_2)) && event(IStart(hFSOPK,iks(vk(iksig(hFSOPK,pI)),exp(g,dhsk(hFSOPK,kIKI))),iR,b_2,tr_2,rt_2,sk_2)))", Proved::False),
+    ("hFSOPK", "H11", "not event(IConfirm(hFSOPK,iks(vk(iksig(hFSOPK,pI)),exp(g,dhsk(hFSOPK,kIKI))),iks(vk(iksig(hFSOPK,pR)),exp(g,dhsk(hFSOPK,kIKR))),tr_2,sk_2))", Proved::False),
+    ("hFSOPK", "H12b (i)", "not (event(IStart(hFSOPK,iI,iks(vk(iksig(hFSOPK,pR)),exp(g,dhsk(hFSOPK,kIKR))),b_2,tr_2,rt_2,sk_2)) && attacker_p1(sk_2))", Proved::False),
+    ("hFSOPK", "H12b (ii)", "not (event(RAccept(hFSOPK,iR,iks(vk(iksig(hFSOPK,pI)),exp(g,dhsk(hFSOPK,kIKI))),ld_6,oid,tr_2,rt_2,sk_2)) && attacker_p1(sk_2))", Proved::False),
+    ("hFSDH", "H11", "not event(IStart(hFSDH,iks(vk(iksig(hFSDH,pI)),exp(g,dhsk(hFSDH,kIKI))),iks(vk(iksig(hFSDH,pR)),exp(g,dhsk(hFSDH,kIKR))),b_2,tr_2,rt_2,sk_2))", Proved::False),
+    ("hFSDH", "H11", "not event(BundleSigned(hFSDH,iR,b_2))", Proved::False),
+    ("hFSDH", "H11", "not (event(RAccept(hFSDH,iR,iks(vk(iksig(hFSDH,pI)),exp(g,dhsk(hFSDH,kIKI))),ld_5,oid,tr_2,rt_2,sk_2)) && event(IStart(hFSDH,iks(vk(iksig(hFSDH,pI)),exp(g,dhsk(hFSDH,kIKI))),iR,b_2,tr_2,rt_2,sk_2)))", Proved::False),
+    ("hFSDH", "H11", "not event(IConfirm(hFSDH,iks(vk(iksig(hFSDH,pI)),exp(g,dhsk(hFSDH,kIKI))),iks(vk(iksig(hFSDH,pR)),exp(g,dhsk(hFSDH,kIKR))),tr_2,sk_2))", Proved::False),
+    ("hFSDH", "H12c (i)", "not (event(IStart(hFSDH,iI,iks(vk(iksig(hFSDH,pR)),exp(g,dhsk(hFSDH,kIKR))),b_2,tr_2,rt_2,sk_2)) && attacker_p1(sk_2))", Proved::True),
+    ("hFSDH", "H12c (ii)", "not (event(RAccept(hFSDH,iR,iks(vk(iksig(hFSDH,pI)),exp(g,dhsk(hFSDH,kIKI))),ld_5,oid,tr_2,rt_2,sk_2)) && attacker_p1(sk_2))", Proved::True),
+];
 
 /// systemd units under `deploy/` checked with `systemd-analyze security --offline` (docs/06 §5 step 14,
 /// exposure ≤ 2.0). M10 adds `secmp-relay.service`.
@@ -565,7 +694,10 @@ pub(crate) const REQUIRED_GATE_RUNS: &[(&str, &[&str])] = &[
     ("xwin-cross", &["cargo xtask step --strict windows-cross"]),
     (
         "linux-full",
-        &["cargo xtask ci-full --strict --delegated windows-native --delegated windows-cross"],
+        // the SecMP-HX models run in their own job `proverif-hx` (WEISUNG M4-5 §5)
+        &[
+            "cargo xtask ci-full --strict --delegated windows-native --delegated windows-cross --models tr",
+        ],
     ),
 ];
 

@@ -1139,11 +1139,350 @@ pub(crate) fn proverif_results(output: &str) -> Vec<Option<bool>> {
         .collect()
 }
 
-fn proverif_cmd() -> Cmd {
-    Cmd::new(std::env::var("SECMP_PROVERIF").unwrap_or_else(|_| "proverif".to_owned()))
+/// Which ProVerif models the `proverif` step runs (WEISUNG M4-5 §4 (a), gate F7, M3 review R-14): `--models tr|hx|all`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ProverifModels {
+    /// The single-file models of `expect::PROVERIF_MODELS` (M4: `formal/tr.pv`).
+    Tr,
+    /// Every `formal/hx/*.pv`, each with `-lib formal/hx.pvl`.
+    Hx,
+    /// Both (the default).
+    All,
 }
 
-pub(crate) fn proverif(ctx: &Ctx) -> Result<Outcome> {
+impl ProverifModels {
+    /// The value of `--models`; anything but `tr`, `hx` and `all` is refused.
+    pub(crate) fn parse(s: &str) -> Result<Self> {
+        match s {
+            "tr" => Ok(Self::Tr),
+            "hx" => Ok(Self::Hx),
+            "all" => Ok(Self::All),
+            other => bail!("--models {other:?}: expected tr, hx or all"),
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::Tr => "tr",
+            Self::Hx => "hx",
+            Self::All => "all",
+        }
+    }
+
+    fn single_files(self) -> bool {
+        matches!(self, Self::Tr | Self::All)
+    }
+
+    fn hx(self) -> bool {
+        matches!(self, Self::Hx | Self::All)
+    }
+}
+
+/// The options of the `proverif` step, taken from the command line of `ci-full`/`step` by `main.rs`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ProverifOptions {
+    pub(crate) models: ProverifModels,
+    /// `--jobs N` (1 to `expect::PROVERIF_MAX_JOBS`); `None`: the available cores, at most that cap.
+    pub(crate) jobs: Option<usize>,
+}
+
+/// The process-wide ProVerif options (set at most once, before any step runs); unset: every model, default jobs.
+static PROVERIF_OPTIONS: std::sync::OnceLock<ProverifOptions> = std::sync::OnceLock::new();
+
+/// Record the ProVerif options of this invocation (`main.rs`); a second call is refused.
+pub(crate) fn set_proverif_options(o: ProverifOptions) -> Result<()> {
+    PROVERIF_OPTIONS
+        .set(o)
+        .map_err(|_| Error("the ProVerif options can be set once".to_owned()))
+}
+
+/// The value of `--jobs`: a number from 1 to `expect::PROVERIF_MAX_JOBS`.
+pub(crate) fn parse_proverif_jobs(s: &str) -> Result<usize> {
+    match s.parse::<usize>() {
+        Ok(n) if (1..=expect::PROVERIF_MAX_JOBS).contains(&n) => Ok(n),
+        _ => bail!(
+            "--jobs {s:?}: expected a number from 1 to {}",
+            expect::PROVERIF_MAX_JOBS
+        ),
+    }
+}
+
+fn proverif_jobs(o: ProverifOptions) -> usize {
+    o.jobs.unwrap_or_else(|| {
+        std::thread::available_parallelism()
+            .map_or(1, std::num::NonZero::get)
+            .min(expect::PROVERIF_MAX_JOBS)
+    })
+}
+
+fn proverif_program() -> String {
+    std::env::var("SECMP_PROVERIF").unwrap_or_else(|_| "proverif".to_owned())
+}
+
+fn proverif_cmd() -> Cmd {
+    Cmd::new(proverif_program())
+}
+
+/// The stems of the `*.<ext>` files directly in `dir` (not below it); empty if `dir` does not exist.
+fn dir_stems(dir: &Path, ext: &str) -> Result<BTreeSet<String>> {
+    let mut out = BTreeSet::new();
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return Ok(out);
+    };
+    for entry in rd {
+        let p = entry?.path();
+        if p.is_file()
+            && p.extension().is_some_and(|e| e == ext)
+            && let Some(s) = p.file_stem()
+        {
+            out.insert(s.to_string_lossy().into_owned());
+        }
+    }
+    Ok(out)
+}
+
+/// The files of a SecMP-HX expectation table.
+fn hx_table_files(table: &[expect::HxExpected]) -> BTreeSet<String> {
+    table.iter().map(|(f, ..)| (*f).to_owned()).collect()
+}
+
+/// WEISUNG M4-5 §4 (a): the discovered `formal/hx/*.pv` stems are exactly the files of the table — an `hx` file without
+/// expected entries fails, and so does a file of the table that does not exist.
+pub(crate) fn hx_set_check(found: &BTreeSet<String>, table: &[expect::HxExpected]) -> Result<()> {
+    let want = hx_table_files(table);
+    let without: Vec<&String> = found.difference(&want).collect();
+    let absent: Vec<&String> = want.difference(found).collect();
+    if !without.is_empty() || !absent.is_empty() {
+        bail!(
+            "{}/*.pv against expect::PROVERIF_EXPECTED_HX: files without expected entries: {without:?}; expected files \
+             that do not exist: {absent:?}",
+            expect::PROVERIF_HX_DIR
+        );
+    }
+    Ok(())
+}
+
+/// The input set of the `proverif` step for `models` (WEISUNG M4-5 §4 (a)): the old joint model `formal/hx.pv` must
+/// not exist; the single-file models `formal/*.pv` are exactly `expect::PROVERIF_MODELS`; for `hx`, `formal/hx.pvl`
+/// exists and `formal/hx/*.pv` matches `expect::PROVERIF_EXPECTED_HX` ([`hx_set_check`]). Returns the single-file
+/// models and the HX sessions to run.
+fn proverif_inputs(root: &Path, models: ProverifModels) -> Result<(Vec<String>, Vec<String>)> {
+    if root.join("formal").join("hx.pv").exists() {
+        bail!(
+            "formal/hx.pv (the old joint SecMP-HX model) must not exist: the model is {} and {}/*.pv",
+            expect::PROVERIF_HX_LIB,
+            expect::PROVERIF_HX_DIR
+        );
+    }
+    let single = dir_stems(&root.join("formal"), "pv")?;
+    same_set(
+        "ProVerif single-file models (formal/*.pv)",
+        &single,
+        expect::PROVERIF_MODELS,
+    )?;
+    let single = if models.single_files() {
+        single.into_iter().collect()
+    } else {
+        Vec::new()
+    };
+    let mut hx = Vec::new();
+    if models.hx() {
+        if !root.join(expect::PROVERIF_HX_LIB).is_file() {
+            bail!(
+                "{} is missing (the library of every {}/*.pv)",
+                expect::PROVERIF_HX_LIB,
+                expect::PROVERIF_HX_DIR
+            );
+        }
+        let found = dir_stems(&root.join(expect::PROVERIF_HX_DIR), "pv")?;
+        hx_set_check(&found, expect::PROVERIF_EXPECTED_HX)?;
+        hx = found.into_iter().collect();
+    }
+    Ok((single, hx))
+}
+
+/// The last progress line ProVerif printed (`… rules inserted. Base: … Queue: … rules.`), if any.
+fn last_progress_line(log: &str) -> Option<&str> {
+    log.lines()
+        .rev()
+        .find(|l| l.contains("rules inserted"))
+        .map(str::trim)
+}
+
+/// How often a running ProVerif process is polled.
+const PROVERIF_POLL: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// Run `program args` with stdin closed and stdout and stderr into `log` (created or truncated), polling until it exits
+/// or `timeout` has passed (WEISUNG M4-5 §4 (a)). A timeout kills the process and fails, naming `file` and the last
+/// progress line of the log; a non-zero exit fails, naming `file` and the log, after printing the log's last lines.
+/// Returns the log.
+pub(crate) fn run_logged(
+    program: &str,
+    args: &[String],
+    log: &Path,
+    timeout: std::time::Duration,
+    file: &str,
+) -> Result<String> {
+    use std::process::Stdio;
+    if let Some(dir) = log.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let out = std::fs::File::create(log)?;
+    let err = out.try_clone()?;
+    say(&format!(
+        "$ {program} {} > {}",
+        args.join(" "),
+        log.display()
+    ));
+    let started = std::time::Instant::now();
+    let deadline = started
+        .checked_add(timeout)
+        .ok_or_else(|| Error(format!("{file}: the timeout is out of range")))?;
+    let mut child = std::process::Command::new(program)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(out))
+        .stderr(Stdio::from(err))
+        .spawn()
+        .map_err(|e| Error(format!("{file}: cannot start `{program}`: {e}")))?;
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        if std::time::Instant::now() >= deadline {
+            // the process may have exited since `try_wait`: a failed kill is then harmless, `wait` reaps it either way
+            let _ = child.kill();
+            child.wait()?;
+            let text = String::from_utf8_lossy(&std::fs::read(log)?).into_owned();
+            let progress = last_progress_line(&text).map_or_else(
+                || "none (no \"rules inserted\" line in the log)".to_owned(),
+                |l| format!("`{l}`"),
+            );
+            bail!(
+                "{file}: timeout, killed after {} s; last progress line: {progress}; log {}",
+                timeout.as_secs(),
+                log.display()
+            );
+        }
+        std::thread::sleep(PROVERIF_POLL);
+    };
+    let text = String::from_utf8_lossy(&std::fs::read(log)?).into_owned();
+    if !status.success() {
+        let lines: Vec<&str> = text.lines().collect();
+        for l in lines.iter().skip(lines.len().saturating_sub(20)) {
+            say(&format!("  {l}"));
+        }
+        bail!("{file}: ProVerif failed ({status}); log {}", log.display());
+    }
+    Ok(text)
+}
+
+/// The model a ProVerif process checks.
+enum ProverifModel {
+    /// A single-file model of `expect::PROVERIF_EXPECTED` (`formal/<name>.pv`).
+    Single(String),
+    /// An HX session file of `expect::PROVERIF_EXPECTED_HX` (`formal/hx/<session>.pv`).
+    Hx(String),
+}
+
+/// One ProVerif process of the step.
+struct ProverifTask {
+    /// The model file as shown (`formal/tr.pv`, `formal/hx/<session>.pv`).
+    file: String,
+    model: ProverifModel,
+    log: PathBuf,
+    args: Vec<String>,
+}
+
+/// The end of one ProVerif process: its log or its failure, and its wall time in seconds.
+type ProverifEnd = (Result<String>, f64);
+
+/// Run every task, at most `jobs` at a time, each under `timeout`; returns the end of each task, in the order of
+/// `tasks`. Every task runs even after another one failed.
+fn run_pool(tasks: &[ProverifTask], jobs: usize, timeout: std::time::Duration) -> Vec<ProverifEnd> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let program = proverif_program();
+    let next = AtomicUsize::new(0);
+    let done: std::sync::Mutex<Vec<Option<ProverifEnd>>> =
+        std::sync::Mutex::new(tasks.iter().map(|_| None).collect());
+    std::thread::scope(|s| {
+        for _ in 0..jobs.min(tasks.len()).max(1) {
+            s.spawn(|| {
+                loop {
+                    let i = next.fetch_add(1, Ordering::Relaxed);
+                    let Some(t) = tasks.get(i) else {
+                        break;
+                    };
+                    let started = std::time::Instant::now();
+                    let r = run_logged(&program, &t.args, &t.log, timeout, &t.file);
+                    let secs = started.elapsed().as_secs_f64();
+                    let how = if r.is_ok() { "finished" } else { "FAILED" };
+                    say(&format!("  {}: {how} after {secs:.1} s", t.file));
+                    if let Ok(mut d) = done.lock()
+                        && let Some(slot) = d.get_mut(i)
+                    {
+                        *slot = Some((r, secs));
+                    }
+                }
+            });
+        }
+    });
+    done.into_inner()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .into_iter()
+        .map(|r| r.unwrap_or_else(|| (Err(Error("not run".to_owned())), 0.0)))
+        .collect()
+}
+
+/// What a file contributes to the evidence of the step (WEISUNG M4-5 §4 (c), (d)).
+struct ProverifRecord {
+    file: String,
+    results: usize,
+    secrecy: usize,
+    secs: f64,
+    /// The check's summary per ID, or the failure.
+    checked: Result<String>,
+    /// The results-table rows of the file.
+    rows: Vec<crate::summary::ProverifRow>,
+}
+
+/// The evidence file `target/proverif/summary.txt`: the options, the SHA-256 of every model file, and per file the
+/// `RESULT` lines, the "secrecy assumption verified" lines, the wall time and the verdict.
+fn proverif_evidence(
+    header: &str,
+    shas: &[(String, Option<String>)],
+    records: &[ProverifRecord],
+) -> String {
+    let mut lines = vec![header.to_owned(), "sha256 of the model files:".to_owned()];
+    lines.extend(shas.iter().map(|(f, h)| {
+        format!(
+            "{}  {f}",
+            h.as_deref().unwrap_or("(no sha256 tool on this host)")
+        )
+    }));
+    lines.push(
+        "per file: RESULT lines, \"secrecy assumption verified\" lines, wall time, verdict:"
+            .to_owned(),
+    );
+    lines.extend(records.iter().map(|r| {
+        format!(
+            "{}: {} RESULT lines, {} secrecy assumptions verified, wall {:.1} s, {}",
+            r.file,
+            r.results,
+            r.secrecy,
+            r.secs,
+            match &r.checked {
+                Ok(_) => "PASS".to_owned(),
+                Err(e) => format!("FAIL: {e}"),
+            }
+        )
+    }));
+    lines.push(String::new());
+    lines.join("\n")
+}
+
+/// The ProVerif version and the gate's self-test (`xtask/fixtures/proverif/selftest.pv`: one query true, one false).
+fn proverif_preflight(root: &Path) -> Result<()> {
     let help = proverif_cmd().arg("-help").capture().map_err(|e| {
         Error(format!(
             "ProVerif {} is required and missing ({e}); see README.md",
@@ -1158,8 +1497,7 @@ pub(crate) fn proverif(ctx: &Ctx) -> Result<Outcome> {
             banner.lines().next().unwrap_or_default()
         );
     }
-    let fixture = ctx
-        .root
+    let fixture = root
         .join("xtask")
         .join("fixtures")
         .join("proverif")
@@ -1170,39 +1508,485 @@ pub(crate) fn proverif(ctx: &Ctx) -> Result<Outcome> {
         say(cap.stdout.trim_end());
         bail!("ProVerif self-test: expected [true, false], got {verdicts:?}");
     }
-    let models = file_stems(&ctx.root.join("formal"), "pv")?;
-    same_set("ProVerif models", &models, expect::PROVERIF_MODELS)?;
-    let mut summaries = Vec::new();
-    for m in &models {
-        // each model's verdicts against formal/CLAIMS.md (fixed by the reviewer), as expect::PROVERIF_EXPECTED
-        let path = ctx.root.join("formal").join(format!("{m}.pv"));
-        let started = std::time::Instant::now();
-        let cap = proverif_cmd().arg(path.to_string_lossy()).capture()?;
-        let seconds = started.elapsed().as_secs();
-        if !cap.success {
-            say(cap.stderr.trim_end());
-            bail!("ProVerif failed on formal/{m}.pv");
-        }
-        let checked = proverif_check(m, &cap.stdout);
-        if checked.is_err() {
-            for line in cap
-                .stdout
+    Ok(())
+}
+
+/// The processes of the step: each single-file model `formal/<m>.pv` (log `target/proverif/<m>.log`) and each HX
+/// session `formal/hx/<s>.pv` with `-lib formal/hx.pvl` (log `target/proverif/hx-<s>.log`).
+fn proverif_tasks(
+    root: &Path,
+    out_dir: &Path,
+    single: &[String],
+    hx: &[String],
+) -> Vec<ProverifTask> {
+    let path_arg = |p: &str| root.join(p).to_string_lossy().into_owned();
+    let mut tasks = Vec::new();
+    for m in single {
+        let file = format!("formal/{m}.pv");
+        tasks.push(ProverifTask {
+            args: vec![path_arg(&file)],
+            file,
+            model: ProverifModel::Single(m.clone()),
+            log: out_dir.join(format!("{m}.log")),
+        });
+    }
+    for s in hx {
+        let file = format!("{}/{s}.pv", expect::PROVERIF_HX_DIR);
+        tasks.push(ProverifTask {
+            args: vec![
+                "-lib".to_owned(),
+                path_arg(expect::PROVERIF_HX_LIB),
+                path_arg(&file),
+            ],
+            file,
+            model: ProverifModel::Hx(s.clone()),
+            log: out_dir.join(format!("hx-{s}.log")),
+        });
+    }
+    tasks
+}
+
+/// Judge one finished process: its verdicts against `formal/CLAIMS.md` (fixed by the reviewer), as `expect.rs` lists
+/// them, and its contribution to the evidence. On a failed check, its `RESULT` lines are printed.
+fn proverif_record(root: &Path, t: &ProverifTask, end: ProverifEnd) -> ProverifRecord {
+    let (run, secs) = end;
+    let output = run.as_ref().ok().map(String::as_str);
+    let checked = match (&run, &t.model) {
+        (Err(e), _) => Err(Error(e.0.clone())),
+        (Ok(out), ProverifModel::Single(m)) => proverif_check(m, out),
+        (Ok(out), ProverifModel::Hx(s)) => proverif_check_hx(s, out),
+    };
+    let text = output.unwrap_or_default();
+    match &checked {
+        Ok(summary) => say(&format!("  {summary} ({secs:.1} s)")),
+        Err(_) => {
+            for line in text
                 .lines()
                 .filter(|l| l.trim_start().starts_with("RESULT"))
             {
                 say(&format!("  {line}"));
             }
         }
-        let summary = format!("{} ({seconds} s)", checked?);
-        say(&format!("  {summary}"));
-        summaries.push(summary);
     }
+    let sha = crate::summary::file_sha256(&root.join(&t.file));
+    let sha12 = sha
+        .as_deref()
+        .map_or("-", |h| h.get(..12).unwrap_or(h))
+        .to_owned();
+    let rows = match &t.model {
+        ProverifModel::Single(m) => single_rows(m, output),
+        ProverifModel::Hx(s) => hx_rows(expect::PROVERIF_EXPECTED_HX, s, output),
+    };
+    ProverifRecord {
+        file: t.file.clone(),
+        results: proverif_result_lines(text).len(),
+        secrecy: text
+            .lines()
+            .filter(|l| l.contains("secrecy assumption verified"))
+            .count(),
+        secs,
+        checked,
+        rows: rows
+            .into_iter()
+            .map(|(id, verdict, expected)| crate::summary::ProverifRow {
+                file: t.file.clone(),
+                id,
+                verdict,
+                expected,
+                wall_s: secs,
+                sha12: sha12.clone(),
+            })
+            .collect(),
+    }
+}
+
+/// `docs/06 §5 step 10` (M3 plan D10; M4 WEISUNG M4-5 §4, gate F7): the ProVerif version and the self-test, then the
+/// models selected by `--models` — the single-file models (`formal/tr.pv`) and every SecMP-HX session file
+/// (`formal/hx/<session>.pv` with `-lib formal/hx.pvl`) — as `--jobs` parallel processes, each under
+/// `expect::PROVERIF_TIMEOUT_SECONDS`, with its output in `target/proverif/<tr | hx-<session>>.log`. Each output is
+/// checked against `expect::PROVERIF_EXPECTED` (positional, [`proverif_check`]) or `expect::PROVERIF_EXPECTED_HX` (by
+/// query text, [`proverif_check_hx`]). Writes `target/proverif/summary.txt` (SHA-256 of every model file, per file the
+/// `RESULT` count, the "secrecy assumption verified" count and the wall time) and `target/proverif/results.tsv` (one
+/// row per (file, CLAIMS ID), the ADR-045 summary table), on failure too.
+pub(crate) fn proverif(ctx: &Ctx) -> Result<Outcome> {
+    let opts = PROVERIF_OPTIONS.get().copied().unwrap_or(ProverifOptions {
+        models: ProverifModels::All,
+        jobs: None,
+    });
+    let jobs = proverif_jobs(opts);
+    let out_dir = ctx.root.join("target").join("proverif");
+    for stale in ["summary.txt", "results.tsv"] {
+        let p = out_dir.join(stale);
+        if p.exists() {
+            std::fs::remove_file(&p)?;
+        }
+    }
+    proverif_preflight(&ctx.root)?;
+    let (single, hx) = proverif_inputs(&ctx.root, opts.models)?;
+    let tasks = proverif_tasks(&ctx.root, &out_dir, &single, &hx);
+    let options = format!(
+        "--models {}, {jobs} parallel processes, timeout {} s per file",
+        opts.models.name(),
+        expect::PROVERIF_TIMEOUT_SECONDS
+    );
+    say(&format!("  ProVerif: {} files, {options}", tasks.len()));
+    let timeout = std::time::Duration::from_secs(expect::PROVERIF_TIMEOUT_SECONDS);
+    let ends = run_pool(&tasks, jobs, timeout);
+    let records: Vec<ProverifRecord> = tasks
+        .iter()
+        .zip(ends)
+        .map(|(t, end)| proverif_record(&ctx.root, t, end))
+        .collect();
+    let shas: Vec<(String, Option<String>)> = crate::summary::proverif_model_files(&ctx.root)
+        .into_iter()
+        .map(|f| {
+            let h = crate::summary::file_sha256(&ctx.root.join(&f));
+            (f, h)
+        })
+        .collect();
+    let header = format!("ProVerif {} gate: {options}", tools::PROVERIF_VERSION);
+    let evidence = proverif_evidence(&header, &shas, &records);
+    let rows: Vec<crate::summary::ProverifRow> = records
+        .iter()
+        .flat_map(|r| r.rows.iter().cloned())
+        .collect();
+    std::fs::create_dir_all(&out_dir)?;
+    std::fs::write(out_dir.join("summary.txt"), &evidence)?;
+    std::fs::write(
+        out_dir.join("results.tsv"),
+        crate::summary::proverif_tsv(&rows),
+    )?;
+    say(evidence.trim_end());
+    let failures: Vec<&str> = records
+        .iter()
+        .filter_map(|r| r.checked.as_ref().err().map(|e| e.0.as_str()))
+        .collect();
+    if !failures.is_empty() {
+        bail!(
+            "{} of {} ProVerif files failed: {}",
+            failures.len(),
+            tasks.len(),
+            failures.join("; ")
+        );
+    }
+    let summaries: Vec<String> = records
+        .iter()
+        .filter_map(|r| {
+            r.checked
+                .as_ref()
+                .ok()
+                .map(|s| format!("{s} ({:.1} s)", r.secs))
+        })
+        .collect();
+    let none_or = |v: String| if v.is_empty() { "none".to_owned() } else { v };
     Ok(Outcome::Pass(format!(
-        "ProVerif {} self-test [true, false] ok; models: {} (expected set matches); {}",
+        "ProVerif {} self-test [true, false] ok; {options}; single-file models: {} (expected set matches); HX \
+         sessions over {}: {} (= the files of expect::PROVERIF_EXPECTED_HX); {}; evidence target/proverif/summary.txt, \
+         results.tsv and one log per file",
         tools::PROVERIF_VERSION,
-        list(&models),
+        none_or(single.join(", ")),
+        expect::PROVERIF_HX_LIB,
+        none_or(hx.join(", ")),
         summaries.join("; ")
     )))
+}
+
+/// The `RESULT` lines of a ProVerif output in order, skipping the `RESULT (but …)` remark ProVerif prints under an
+/// injective query (it qualifies the line above and is no result of its own).
+pub(crate) fn proverif_result_lines(output: &str) -> Vec<ResultLine> {
+    output
+        .lines()
+        .filter_map(|l| l.trim().strip_prefix("RESULT "))
+        .filter(|r| !r.starts_with("(but "))
+        .map(|r| {
+            for (suffix, verdict) in [
+                (" is true.", PvVerdict::True),
+                (" is false.", PvVerdict::False),
+                (" cannot be proved.", PvVerdict::CannotBeProved),
+            ] {
+                if let Some(query) = r.strip_suffix(suffix) {
+                    return ResultLine {
+                        query: query.to_owned(),
+                        verdict,
+                    };
+                }
+            }
+            ResultLine {
+                query: r.to_owned(),
+                verdict: PvVerdict::Unreadable,
+            }
+        })
+        .collect()
+}
+
+/// What ProVerif says about one query.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PvVerdict {
+    /// "… is true.": proved.
+    True,
+    /// "… is false.": ProVerif found a trace (an attack, or for a reachability query: the event is reachable).
+    False,
+    /// "… cannot be proved.".
+    CannotBeProved,
+    /// None of the three endings.
+    Unreadable,
+}
+
+impl PvVerdict {
+    fn word(self) -> &'static str {
+        match self {
+            Self::True => "true",
+            Self::False => "false",
+            Self::CannotBeProved => "cannot be proved",
+            Self::Unreadable => "unreadable",
+        }
+    }
+}
+
+/// One `RESULT` line: the query text (between `RESULT ` and the verdict) and the verdict.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ResultLine {
+    pub(crate) query: String,
+    pub(crate) verdict: PvVerdict,
+}
+
+/// The expected entries of one SecMP-HX file: (CLAIMS ID, query text, verdict), in table order.
+fn hx_expected<'a>(
+    table: &'a [expect::HxExpected],
+    file: &str,
+) -> Vec<(&'a str, &'a str, expect::Proved)> {
+    table
+        .iter()
+        .filter(|(f, ..)| *f == file)
+        .map(|(_, id, query, proved)| (*id, *query, *proved))
+        .collect()
+}
+
+/// For every `RESULT` line, the index of the expected entry with the same query text (`None`: an extra line). Each
+/// entry matches at most one line: the entry at the line's own position if its text is the same, else the first unused
+/// entry with that text.
+fn hx_match(expected: &[(&str, &str, expect::Proved)], got: &[ResultLine]) -> Vec<Option<usize>> {
+    let mut used = vec![false; expected.len()];
+    let mut out = Vec::new();
+    for (i, g) in got.iter().enumerate() {
+        let free = |j: usize, used: &[bool]| {
+            expected.get(j).is_some_and(|e| e.1 == g.query) && used.get(j) == Some(&false)
+        };
+        let j = if free(i, &used) {
+            Some(i)
+        } else {
+            (0..expected.len()).find(|j| free(*j, &used))
+        };
+        if let Some(slot) = j.and_then(|j| used.get_mut(j)) {
+            *slot = true;
+        }
+        out.push(j);
+    }
+    out
+}
+
+/// WEISUNG M4-5 §4 (b): the `RESULT` lines of one SecMP-HX session file (`formal/hx/<file>.pv`) against its entries
+/// in `expect::PROVERIF_EXPECTED_HX`, matched by query text, not by position ([`proverif_check_hx_in`]).
+pub(crate) fn proverif_check_hx(file: &str, output: &str) -> Result<String> {
+    proverif_check_hx_in(expect::PROVERIF_EXPECTED_HX, file, output)
+}
+
+/// [`proverif_check_hx`] against `table`: the file must have entries; every `RESULT` line must match an entry by its
+/// query text (else "extra"), every entry a line (else "missing"), the matched entries must come in table order (else
+/// "re-ordered") and their number must be the same; a `True` entry's line must say "is true.", a `False` entry's
+/// line "is false.", anything else fails, naming the file, the CLAIMS ID and the query text. Returns the summary per
+/// ID.
+pub(crate) fn proverif_check_hx_in(
+    table: &[expect::HxExpected],
+    file: &str,
+    output: &str,
+) -> Result<String> {
+    use expect::Proved;
+    let path = format!("{}/{file}.pv", expect::PROVERIF_HX_DIR);
+    let expected = hx_expected(table, file);
+    if expected.is_empty() {
+        bail!("{path}: no expected entries in expect::PROVERIF_EXPECTED_HX");
+    }
+    let got = proverif_result_lines(output);
+    let matched = hx_match(&expected, &got);
+    let mut problems = Vec::new();
+    if got.len() != expected.len() {
+        problems.push(format!(
+            "{} RESULT lines, expected {}",
+            got.len(),
+            expected.len()
+        ));
+    }
+    let mut furthest: Option<usize> = None;
+    for (line, (g, m)) in (1_usize..).zip(got.iter().zip(&matched)) {
+        let Some((j, (id, _, want))) = m.and_then(|j| expected.get(j).map(|e| (j, e))) else {
+            problems.push(format!(
+                "extra RESULT line {line} (no such query in the table), {}: {}",
+                g.verdict.word(),
+                g.query
+            ));
+            continue;
+        };
+        if furthest.is_some_and(|f| j < f) {
+            problems.push(format!(
+                "RESULT line {line} ({id}) is re-ordered: the table has it as entry {} of the file, before the entry of \
+                 an earlier line: {}",
+                j.saturating_add(1),
+                g.query
+            ));
+        }
+        furthest = Some(furthest.map_or(j, |f| f.max(j)));
+        let wanted = match want {
+            Proved::True if g.verdict != PvVerdict::True => Some("true (proved)"),
+            Proved::False if g.verdict != PvVerdict::False => {
+                Some("false (ProVerif finds the trace)")
+            }
+            _ => None,
+        };
+        if let Some(wanted) = wanted {
+            problems.push(format!(
+                "RESULT line {line} ({id}) is {}, expected {wanted}: {}",
+                g.verdict.word(),
+                g.query
+            ));
+        }
+    }
+    for (j, (id, query, _)) in expected.iter().enumerate() {
+        if !matched.contains(&Some(j)) {
+            problems.push(format!(
+                "missing RESULT line for {id} (entry {} of the file): {query}",
+                j.saturating_add(1)
+            ));
+        }
+    }
+    if !problems.is_empty() {
+        bail!(
+            "{path} against expect::PROVERIF_EXPECTED_HX: {}",
+            problems.join("; ")
+        );
+    }
+    let mut groups: Vec<(&str, &str, usize)> = Vec::new();
+    for ((id, ..), g) in expected.iter().zip(&got) {
+        match groups.last_mut() {
+            Some((last, word, n)) if last == id && *word == g.verdict.word() => {
+                *n = n.saturating_add(1);
+            }
+            _ => groups.push((*id, g.verdict.word(), 1)),
+        }
+    }
+    Ok(format!(
+        "{path}: {} RESULT lines as expected — {}",
+        got.len(),
+        groups
+            .iter()
+            .map(|(id, word, n)| format!("{id} {word} ×{n}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    ))
+}
+
+/// The expected verdict of a table entry as a word of the results table.
+fn expected_word(p: expect::Proved) -> &'static str {
+    match p {
+        expect::Proved::True => "true",
+        expect::Proved::False => "false",
+        expect::Proved::Informative => "any (informative)",
+    }
+}
+
+/// `words` counted in the order of their first appearance: "false ×4", "true ×5, missing ×1".
+fn counted(words: &[&str]) -> String {
+    let mut counts: Vec<(&str, usize)> = Vec::new();
+    for w in words {
+        match counts.iter_mut().find(|(x, _)| x == w) {
+            Some((_, n)) => *n = n.saturating_add(1),
+            None => counts.push((w, 1)),
+        }
+    }
+    counts
+        .iter()
+        .map(|(w, n)| format!("{w} ×{n}"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Group (ID, verdict word, expected word) triples into one (ID, verdicts, expected) row per ID, in the order of the
+/// IDs' first appearance.
+fn group_rows(entries: &[(&str, &str, &str)]) -> Vec<(String, String, String)> {
+    let mut ids: Vec<&str> = Vec::new();
+    for (id, ..) in entries {
+        if !ids.contains(id) {
+            ids.push(*id);
+        }
+    }
+    ids.iter()
+        .map(|id| {
+            let of_id: Vec<&(&str, &str, &str)> = entries.iter().filter(|e| e.0 == *id).collect();
+            let got: Vec<&str> = of_id.iter().map(|e| e.1).collect();
+            let want: Vec<&str> = of_id.iter().map(|e| e.2).collect();
+            ((*id).to_owned(), counted(&got), counted(&want))
+        })
+        .collect()
+}
+
+/// The results-table rows (ADR-045) of a single-file model: per run of `expect::PROVERIF_EXPECTED` the verdicts of its
+/// lines, by position; `output` `None`: the run failed ("no result").
+fn single_rows(model: &str, output: Option<&str>) -> Vec<(String, String, String)> {
+    let Some((_, runs)) = expect::PROVERIF_EXPECTED.iter().find(|(m, _)| *m == model) else {
+        return Vec::new();
+    };
+    let got = output.map(proverif_results);
+    let mut entries = Vec::new();
+    let mut at = 0_usize;
+    for (id, lines, proved) in *runs {
+        for _ in 0..*lines {
+            let word = match got.as_ref().map(|g| g.get(at)) {
+                None => "no result",
+                Some(None) => "missing",
+                Some(Some(Some(true))) => "true",
+                Some(Some(Some(false))) => "false",
+                Some(Some(None)) => "neither true nor false",
+            };
+            entries.push((*id, word, expected_word(*proved)));
+            at = at.saturating_add(1);
+        }
+    }
+    let extra = got.as_ref().map_or(0, |g| g.len().saturating_sub(at));
+    for _ in 0..extra {
+        entries.push(("(extra line)", "extra", "none"));
+    }
+    group_rows(&entries)
+}
+
+/// The results-table rows (ADR-045) of a SecMP-HX file: per CLAIMS ID the verdicts of its lines, matched by query text
+/// like [`proverif_check_hx_in`] ("missing" for an entry without a line, a row "(not in the table)" for extra lines);
+/// `output` `None`: the run failed ("no result").
+fn hx_rows(
+    table: &[expect::HxExpected],
+    file: &str,
+    output: Option<&str>,
+) -> Vec<(String, String, String)> {
+    let expected = hx_expected(table, file);
+    let got = output.map(proverif_result_lines);
+    let matched = got.as_ref().map(|g| hx_match(&expected, g));
+    let mut entries = Vec::new();
+    for (j, (id, _, proved)) in expected.iter().enumerate() {
+        let word = match (&got, &matched) {
+            (Some(g), Some(m)) => m
+                .iter()
+                .position(|x| *x == Some(j))
+                .and_then(|i| g.get(i))
+                .map_or("missing", |l| l.verdict.word()),
+            _ => "no result",
+        };
+        entries.push((*id, word, expected_word(*proved)));
+    }
+    if let (Some(g), Some(m)) = (&got, &matched) {
+        for (l, _) in g.iter().zip(m).filter(|(_, x)| x.is_none()) {
+            entries.push(("(not in the table)", l.verdict.word(), "none"));
+        }
+    }
+    group_rows(&entries)
 }
 
 /// Step 10 per model (M3 plan D10): the verdicts of one ProVerif run's `RESULT` lines (`proverif_results`) against
@@ -2003,6 +2787,22 @@ mod tests {
     fn proverif_verdicts() {
         let out = "Verification summary:\nRESULT not attacker(s[]) is true.\nRESULT not attacker(p[]) is false.\nRESULT event(x) ==> event(y) cannot be proved.\n";
         assert_eq!(proverif_results(out), vec![Some(true), Some(false), None]);
+        let lines = proverif_result_lines(&format!(
+            "{out}RESULT (but event(x) ==> event(y) is true.)\n  RESULT not attacker(q[]) is maybe.\n"
+        ));
+        let got: Vec<(&str, PvVerdict)> = lines
+            .iter()
+            .map(|l| (l.query.as_str(), l.verdict))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                ("not attacker(s[])", PvVerdict::True),
+                ("not attacker(p[])", PvVerdict::False),
+                ("event(x) ==> event(y)", PvVerdict::CannotBeProved),
+                ("not attacker(q[]) is maybe.", PvVerdict::Unreadable),
+            ]
+        );
     }
 
     /// A ProVerif output whose `RESULT` lines say `verdicts` (`None`: "cannot be proved"), with the other lines a run
@@ -2054,31 +2854,130 @@ mod tests {
         v
     }
 
-    /// M3 plan D10: `formal/tr.pv`'s 39 `RESULT` lines are compared positionally with `expect::PROVERIF_EXPECTED` —
-    /// the correct output passes with a summary per ID; a true query turning false, a false query turning true, a
-    /// "cannot be proved" line, a missing and an extra line are each refused, naming the ID; the informative T12 may
-    /// say anything; a model without a table is refused.
+    /// The ending ProVerif prints for an expected verdict (an informative line: "cannot be proved.").
+    fn ending(p: expect::Proved) -> &'static str {
+        match p {
+            expect::Proved::True => "is true.",
+            expect::Proved::False => "is false.",
+            expect::Proved::Informative => "cannot be proved.",
+        }
+    }
+
+    /// The opposite verdict of a gate line.
+    fn flipped(p: expect::Proved) -> &'static str {
+        match p {
+            expect::Proved::True => "is false.",
+            expect::Proved::False | expect::Proved::Informative => "is true.",
+        }
+    }
+
+    /// A ProVerif output of an HX session file whose `RESULT` lines are `lines` (query text, ending), with the lines a
+    /// run prints around them: progress, secrecy assumptions, the `RESULT (but …)` remark under an injective query
+    /// (not a line of its own), and the summary (`Query …`, not read by the gate).
+    fn hx_output(lines: &[(&str, &str)]) -> String {
+        let mut out = vec![
+            "Process 0 (that is, the initial process):".to_owned(),
+            "200 rules inserted. Base: 190 rules (10 with conclusion selected). Queue: 30 rules."
+                .to_owned(),
+            "ok, secrecy assumption verified: fact unreachable attacker(dhsk(hA,kIKR))".to_owned(),
+        ];
+        for (query, end) in lines {
+            out.push(format!("-- Query {query} in process 1."));
+            out.push(format!("RESULT {query} {end}"));
+            if query.starts_with("inj-event") && *end != "is true." {
+                out.push(
+                    "RESULT (but event(RAccept(x,y)) ==> event(IStart(x,y)) is true.)".to_owned(),
+                );
+            }
+        }
+        out.push("--------------------------------------------------------------".to_owned());
+        out.push("Verification summary:".to_owned());
+        for (query, end) in lines {
+            out.push(format!("Query {query} {end}"));
+        }
+        out.join("\n")
+    }
+
+    /// The lines of `file` as `table` expects them (query text, ending).
+    fn hx_lines<'a>(table: &'a [expect::HxExpected], file: &str) -> Vec<(&'a str, &'static str)> {
+        table
+            .iter()
+            .filter(|(f, ..)| *f == file)
+            .map(|(_, _, q, p)| (*q, ending(*p)))
+            .collect()
+    }
+
+    /// A synthetic HX table (independent of the measured one in `expect.rs`): two files, the first with four lines, two
+    /// of them under the same ID.
+    const HX_TABLE: &[expect::HxExpected] = &[
+        (
+            "hA",
+            "H1 (i)",
+            "not (event(IStart(hA,iI,b_2,sk_2)) && attacker(sk_2))",
+            expect::Proved::True,
+        ),
+        (
+            "hA",
+            "H11",
+            "not event(IStart(hA,iI,iR,b_3,sk_4))",
+            expect::Proved::False,
+        ),
+        (
+            "hA",
+            "H11",
+            "not event(BundleSigned(hA,iR,b_3))",
+            expect::Proved::False,
+        ),
+        (
+            "hA",
+            "H5",
+            "inj-event(RAccept(hA,iR,iI,sk)) ==> inj-event(IStart(hA,iI,iR,sk))",
+            expect::Proved::True,
+        ),
+        (
+            "hB",
+            "H4",
+            "not (event(IStart(hB,iI,b_2,sk_2)) && attacker(sk_2))",
+            expect::Proved::False,
+        ),
+    ];
+
+    /// `check(output)` is refused with a message containing each of `expected`.
+    fn refused_with(got: Result<String>, expected: &[&str]) -> Result<()> {
+        match got {
+            Ok(s) => bail!("accepted: {s}"),
+            Err(e) if expected.iter().all(|x| e.0.contains(x)) => Ok(()),
+            Err(e) => bail!("refused, but not with {expected:?}: {e}"),
+        }
+    }
+
+    /// M3 plan D10: `formal/tr.pv`'s 46 `RESULT` lines (M4: T13 appended, WEISUNG M4-5) are compared positionally with
+    /// `expect::PROVERIF_EXPECTED` — the correct output passes with a summary per ID; a true query turning false, a false
+    /// query turning true, a "cannot be proved" line, a missing and an extra line are each refused, naming the ID; the
+    /// informative T12 may say anything; a model without a table is refused. WEISUNG M4-5 §4 (b), (e): every HX session
+    /// file of `expect::PROVERIF_EXPECTED_HX` passes with the output its entries describe (the `RESULT (but …)` remark
+    /// is no line of its own), and a flipped or undecided verdict is refused naming the file, the ID and the query.
     #[test]
     fn proverif_verdicts_against_the_claims_table() -> Result<()> {
         let good = tr_verdicts();
-        assert_eq!(good.len(), 39);
+        assert_eq!(good.len(), 46);
         let summary = proverif_check("tr", &proverif_output(&good))?;
         assert!(
             summary.starts_with(
-                "formal/tr.pv: 39 RESULT lines as expected — T1 true ×6, T2 true ×2, T3 true ×4"
+                "formal/tr.pv: 46 RESULT lines as expected — T1 true ×6, T2 true ×2, T3 true ×4"
             ) && summary.contains("T7 false ×2, an attack as expected")
                 && summary.contains(
                     "T8 true ×12, T9 true ×4, T10 false ×1, an attack as expected, T11 true ×1"
                 )
-                && summary.ends_with("T12 false ×1, informative"),
+                && summary.contains("T12 false ×1, informative")
+                && summary.ends_with("T13 false ×7, an attack as expected"),
             "{summary}"
         );
         let refused = |verdicts: &[Option<bool>], expected: &str| -> Result<()> {
-            match proverif_check("tr", &proverif_output(verdicts)) {
-                Ok(s) => bail!("accepted: {s}"),
-                Err(e) if e.0.contains(expected) => Ok(()),
-                Err(e) => bail!("refused for another reason: {e}"),
-            }
+            refused_with(
+                proverif_check("tr", &proverif_output(verdicts)),
+                &[expected],
+            )
         };
         // T1 (line 1) turns false
         let mut v = good.clone();
@@ -2105,34 +3004,352 @@ mod tests {
         let mut v = good.clone();
         *v.get_mut(19).ok_or_else(|| Error("short".into()))? = None;
         refused(&v, "RESULT line 20 (T7) is neither true nor false")?;
-        // a missing line (the last one, T12) and an extra line
+        // a T13 session whose honest run no longer completes (line 46: the event is unreachable)
+        let mut v = good.clone();
+        *v.last_mut().ok_or_else(|| Error("empty".into()))? = Some(true);
+        refused(&v, "RESULT line 46 (T13) is true, expected false")?;
+        // a missing line (the last one, T13) and an extra line
         let mut v = good.clone();
         v.pop();
-        refused(&v, "38 RESULT lines, expected 39")?;
+        refused(&v, "45 RESULT lines, expected 46")?;
         let mut v = good.clone();
         v.push(Some(true));
-        refused(&v, "40 RESULT lines, expected 39")?;
+        refused(&v, "47 RESULT lines, expected 46")?;
         // a line missing in the middle shifts every later one: refused by the count and by the first shifted ID
         let mut v = good.clone();
         v.remove(18);
-        refused(&v, "38 RESULT lines, expected 39")?;
+        refused(&v, "45 RESULT lines, expected 46")?;
         refused(&v, "RESULT line 20 (T7) is true, expected false")?;
         refused(&v, "RESULT line 36 (T9) is false, expected true")?;
-        // the informative T12 may say anything
+        // the informative T12 (line 39) may say anything
         for t12 in [Some(true), None] {
             let mut v = good.clone();
-            *v.last_mut().ok_or_else(|| Error("empty".into()))? = t12;
-            assert!(proverif_check("tr", &proverif_output(&v))?.ends_with(", informative"));
+            *v.get_mut(38).ok_or_else(|| Error("short".into()))? = t12;
+            assert!(proverif_check("tr", &proverif_output(&v))?.contains(", informative"));
         }
         // no RESULT line at all, and a model without an expected table
-        refused(&[], "0 RESULT lines, expected 39")?;
+        refused(&[], "0 RESULT lines, expected 46")?;
         assert!(proverif_check("hx", &proverif_output(&good)).is_err());
+        hx_verdicts_against_the_table()
+    }
+
+    /// The HX half of `proverif_verdicts_against_the_claims_table`: every file of `expect::PROVERIF_EXPECTED_HX` passes
+    /// with the output its entries describe, a flipped or undecided verdict is refused naming the file, the ID and the
+    /// query; the summary groups the lines per ID; the `RESULT (but …)` remark is no line of its own.
+    fn hx_verdicts_against_the_table() -> Result<()> {
+        let files = hx_table_files(expect::PROVERIF_EXPECTED_HX);
+        assert_eq!(files.len(), 14, "{files:?}");
+        for file in &files {
+            let lines = hx_lines(expect::PROVERIF_EXPECTED_HX, file);
+            let summary = proverif_check_hx(file, &hx_output(&lines))?;
+            assert!(
+                summary.starts_with(&format!(
+                    "formal/hx/{file}.pv: {} RESULT lines as expected — ",
+                    lines.len()
+                )),
+                "{summary}"
+            );
+            // each entry's verdict flipped, and undecided, is refused naming the file, the ID and the query
+            for (k, (_, id, query, proved)) in expect::PROVERIF_EXPECTED_HX
+                .iter()
+                .filter(|(f, ..)| f == file)
+                .enumerate()
+            {
+                for wrong in [flipped(*proved), "cannot be proved."] {
+                    let mut bad = lines.clone();
+                    if let Some(l) = bad.get_mut(k) {
+                        l.1 = wrong;
+                    }
+                    refused_with(
+                        proverif_check_hx(file, &hx_output(&bad)),
+                        &[
+                            &format!("formal/hx/{file}.pv against expect::PROVERIF_EXPECTED_HX"),
+                            &format!("RESULT line {} ({id}) is ", k.saturating_add(1)),
+                            &format!(", expected {}", expected_word(*proved)),
+                            query,
+                        ],
+                    )?;
+                }
+            }
+        }
+        // the synthetic table: the summary groups consecutive lines of one ID; the remark under an injective query
+        // that is not proved does not count as a line, so the refusal names the query, not an extra line
+        let lines = hx_lines(HX_TABLE, "hA");
+        assert_eq!(
+            proverif_check_hx_in(HX_TABLE, "hA", &hx_output(&lines))?,
+            "formal/hx/hA.pv: 4 RESULT lines as expected — H1 (i) true ×1, H11 false ×2, H5 true ×1"
+        );
+        let mut bad = lines.clone();
+        if let Some(l) = bad.get_mut(3) {
+            l.1 = "cannot be proved.";
+        }
+        let got = proverif_check_hx_in(HX_TABLE, "hA", &hx_output(&bad));
+        refused_with(
+            got,
+            &[
+                "RESULT line 4 (H5) is cannot be proved, expected true (proved): inj-event(RAccept(hA",
+            ],
+        )?;
+        let got = proverif_check_hx_in(HX_TABLE, "hA", &hx_output(&bad));
+        assert!(
+            got.is_err_and(|e| !e.0.contains("extra") && !e.0.contains("RESULT lines, expected"))
+        );
+        // a verdict line ProVerif never prints is unreadable
+        let unreadable = hx_output(&lines).replace(
+            "RESULT not event(BundleSigned(hA,iR,b_3)) is false.",
+            "RESULT not event(BundleSigned(hA,iR,b_3)) is perhaps.",
+        );
+        refused_with(
+            proverif_check_hx_in(HX_TABLE, "hA", &unreadable),
+            &[
+                "extra RESULT line 3",
+                "missing RESULT line for H11 (entry 3 of the file)",
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// WEISUNG M4-5 §4 (b), (e): HX `RESULT` lines are matched by query text, so two lines in another order than the
+    /// table's are refused as re-ordered (not as missing or extra), whatever their verdicts.
+    #[test]
+    fn proverif_gate_rejects_reordered_result_lines() -> Result<()> {
+        let lines = hx_lines(HX_TABLE, "hA");
+        proverif_check_hx_in(HX_TABLE, "hA", &hx_output(&lines))?;
+        // the two H11 lines swapped
+        let mut swapped = lines.clone();
+        swapped.swap(1, 2);
+        let got = proverif_check_hx_in(HX_TABLE, "hA", &hx_output(&swapped));
+        refused_with(
+            got,
+            &[
+                "formal/hx/hA.pv against expect::PROVERIF_EXPECTED_HX",
+                "RESULT line 3 (H11) is re-ordered: the table has it as entry 2 of the file",
+                "not event(IStart(hA,iI,iR,b_3,sk_4))",
+            ],
+        )?;
+        let got = proverif_check_hx_in(HX_TABLE, "hA", &hx_output(&swapped));
+        assert!(got.is_err_and(|e| !e.0.contains("missing") && !e.0.contains("extra")));
+        // the first and the last line swapped: the moved lines are re-ordered, the verdicts are still checked
+        let mut swapped = lines.clone();
+        swapped.swap(0, 3);
+        refused_with(
+            proverif_check_hx_in(HX_TABLE, "hA", &hx_output(&swapped)),
+            &["(H11) is re-ordered", "(H1 (i)) is re-ordered"],
+        )?;
+        if let Some(l) = swapped.first_mut() {
+            l.1 = "is false.";
+        }
+        refused_with(
+            proverif_check_hx_in(HX_TABLE, "hA", &hx_output(&swapped)),
+            &["re-ordered", "RESULT line 1 (H5) is false, expected true"],
+        )?;
+        // the measured table: in every file with two lines of different text, the first two swapped
+        for file in hx_table_files(expect::PROVERIF_EXPECTED_HX) {
+            let mut lines = hx_lines(expect::PROVERIF_EXPECTED_HX, &file);
+            if lines.len() < 2 || lines.first().map(|l| l.0) == lines.get(1).map(|l| l.0) {
+                continue;
+            }
+            lines.swap(0, 1);
+            refused_with(
+                proverif_check_hx(&file, &hx_output(&lines)),
+                &[
+                    &format!("formal/hx/{file}.pv"),
+                    "RESULT line 2",
+                    "is re-ordered",
+                ],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// WEISUNG M4-5 §4 (a), (b), (e): a missing HX `RESULT` line is refused naming the file, the ID and the query (and
+    /// does not make the later lines "re-ordered"); so are an extra line, a duplicated line, an output without any line,
+    /// a file without entries in the table, and a `formal/hx/*.pv` set that differs from the table's files.
+    #[test]
+    fn proverif_gate_rejects_missing_hx_line() -> Result<()> {
+        let lines = hx_lines(HX_TABLE, "hA");
+        // the second line missing
+        let mut short = lines.clone();
+        short.remove(1);
+        let got = proverif_check_hx_in(HX_TABLE, "hA", &hx_output(&short));
+        refused_with(
+            got,
+            &[
+                "formal/hx/hA.pv against expect::PROVERIF_EXPECTED_HX",
+                "3 RESULT lines, expected 4",
+                "missing RESULT line for H11 (entry 2 of the file): not event(IStart(hA,iI,iR,b_3,sk_4))",
+            ],
+        )?;
+        let got = proverif_check_hx_in(HX_TABLE, "hA", &hx_output(&short));
+        assert!(got.is_err_and(|e| !e.0.contains("re-ordered") && !e.0.contains("extra")));
+        // the last line missing; no line at all
+        let mut short = lines.clone();
+        short.pop();
+        refused_with(
+            proverif_check_hx_in(HX_TABLE, "hA", &hx_output(&short)),
+            &["missing RESULT line for H5 (entry 4 of the file)"],
+        )?;
+        refused_with(
+            proverif_check_hx_in(HX_TABLE, "hA", &hx_output(&[])),
+            &[
+                "0 RESULT lines, expected 4",
+                "missing RESULT line for H1 (i)",
+            ],
+        )?;
+        // an extra line, and a duplicated one
+        let mut long = lines.clone();
+        long.push(("not attacker(sk[])", "is true."));
+        refused_with(
+            proverif_check_hx_in(HX_TABLE, "hA", &hx_output(&long)),
+            &[
+                "5 RESULT lines, expected 4",
+                "extra RESULT line 5 (no such query in the table), true: not attacker(sk[])",
+            ],
+        )?;
+        let mut long = lines.clone();
+        long.insert(1, ("not event(BundleSigned(hA,iR,b_3))", "is false."));
+        refused_with(
+            proverif_check_hx_in(HX_TABLE, "hA", &hx_output(&long)),
+            &["5 RESULT lines, expected 4", "extra RESULT line"],
+        )?;
+        // a file without entries (even with RESULT lines); the other file's lines are not this file's
+        refused_with(
+            proverif_check_hx_in(HX_TABLE, "hC", &hx_output(&lines)),
+            &["formal/hx/hC.pv: no expected entries in expect::PROVERIF_EXPECTED_HX"],
+        )?;
+        refused_with(
+            proverif_check_hx_in(HX_TABLE, "hB", &hx_output(&lines)),
+            &["missing RESULT line for H4", "extra RESULT line 1"],
+        )?;
+        // the measured table: every file with its last line missing
+        for file in hx_table_files(expect::PROVERIF_EXPECTED_HX) {
+            let mut lines = hx_lines(expect::PROVERIF_EXPECTED_HX, &file);
+            lines.pop();
+            refused_with(
+                proverif_check_hx(&file, &hx_output(&lines)),
+                &[&format!("formal/hx/{file}.pv"), "missing RESULT line for "],
+            )?;
+        }
+        // the input set: formal/hx/*.pv equals the table's files, in both directions
+        let set = |names: &[&str]| -> BTreeSet<String> {
+            names.iter().map(|n| (*n).to_owned()).collect()
+        };
+        hx_set_check(&set(&["hA", "hB"]), HX_TABLE)?;
+        assert!(
+            hx_set_check(&set(&["hA", "hB", "hC"]), HX_TABLE)
+                .is_err_and(|e| e.0.contains("files without expected entries: [\"hC\"]"))
+        );
+        assert!(
+            hx_set_check(&set(&["hA"]), HX_TABLE)
+                .is_err_and(|e| e.0.contains("expected files that do not exist: [\"hB\"]"))
+        );
+        // the results table: per (file, ID), a missing line shows as such
+        let mut short = lines.clone();
+        short.remove(1);
+        assert_eq!(
+            hx_rows(HX_TABLE, "hA", Some(&hx_output(&short))),
+            vec![
+                (
+                    "H1 (i)".to_owned(),
+                    "true ×1".to_owned(),
+                    "true ×1".to_owned()
+                ),
+                (
+                    "H11".to_owned(),
+                    "missing ×1, false ×1".to_owned(),
+                    "false ×2".to_owned()
+                ),
+                ("H5".to_owned(), "true ×1".to_owned(), "true ×1".to_owned()),
+            ]
+        );
+        assert_eq!(
+            hx_rows(HX_TABLE, "hB", None),
+            vec![(
+                "H4".to_owned(),
+                "no result ×1".to_owned(),
+                "false ×1".to_owned()
+            )]
+        );
+        Ok(())
+    }
+
+    /// WEISUNG M4-5 §4 (a), (e): a ProVerif process still running at its timeout is killed and fails the gate, naming
+    /// the file and the last progress line of its log; a process that ends in time passes with its log, one that exits
+    /// non-zero fails naming the file.
+    #[test]
+    fn proverif_gate_timeout_is_a_fail() -> Result<()> {
+        use std::time::Duration;
+        let progress =
+            "123 rules inserted. Base: 1 rules (0 with conclusion selected). Queue: 2 rules.";
+        let dir = std::env::temp_dir().join(format!(
+            "secmp-xtask-proverif-timeout-{}",
+            std::process::id()
+        ));
+        let log = dir.join("hx-hSlow.log");
+        #[cfg(not(windows))]
+        let (program, slow, quick, failing) = (
+            "/bin/sh",
+            format!("echo '{progress}'; exec sleep 30"),
+            "echo 'RESULT not attacker(s[]) is true.'".to_owned(),
+            "exit 3".to_owned(),
+        );
+        #[cfg(windows)]
+        let (program, slow, quick, failing) = (
+            "cmd.exe",
+            format!("echo {progress}&& ping -n 30 127.0.0.1"),
+            "echo RESULT not attacker(s[]) is true.".to_owned(),
+            "exit 3".to_owned(),
+        );
+        let flag = if cfg!(windows) { "/C" } else { "-c" };
+        let file = "formal/hx/hSlow.pv";
+        let started = std::time::Instant::now();
+        let got = run_logged(
+            program,
+            &[flag.to_owned(), slow],
+            &log,
+            Duration::from_secs(2),
+            file,
+        );
+        let elapsed = started.elapsed();
+        refused_with(
+            got,
+            &[
+                "formal/hx/hSlow.pv: timeout, killed after 2 s",
+                &format!("last progress line: `{progress}`"),
+            ],
+        )?;
+        assert!(elapsed < Duration::from_secs(20), "not killed: {elapsed:?}");
+        let out = run_logged(
+            program,
+            &[flag.to_owned(), quick],
+            &dir.join("quick.log"),
+            Duration::from_secs(60),
+            file,
+        )?;
+        assert!(out.contains("RESULT not attacker(s[]) is true."), "{out}");
+        let got = run_logged(
+            program,
+            &[flag.to_owned(), failing],
+            &dir.join("failing.log"),
+            Duration::from_secs(60),
+            file,
+        );
+        refused_with(got, &["formal/hx/hSlow.pv: ProVerif failed"])?;
+        // each run has its own log; the cleanup may fail on Windows while the orphaned `ping` still holds the first
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(
+            last_progress_line(&format!("x\n  {progress}  \nRESULT y is true.\n")),
+            Some(progress)
+        );
+        assert_eq!(last_progress_line("RESULT y is true."), None);
         Ok(())
     }
 
     /// `expect::PROVERIF_EXPECTED` covers exactly `expect::PROVERIF_MODELS`, and the `tr` table follows the rows of
     /// `formal/CLAIMS.md` §TR: the IDs in order, each once, and each run's verdict as the row's "Expected" column says
-    /// ("true"; "**false**", possibly with a remark; "… not a gate" for the informative T12).
+    /// ("true"; "**false**", possibly with a remark; "… not a gate" for the informative T12). M4 (WEISUNG M4-5): the
+    /// files of `expect::PROVERIF_EXPECTED_HX` are exactly `formal/hx/*.pv`, and every entry's ID (up to its first
+    /// space: "H1 (i)" is row H1) is a row of CLAIMS §HX whose "Expected" column gives the entry's verdict.
     #[test]
     fn proverif_table_follows_the_claims() -> Result<()> {
         let tables: BTreeSet<String> = expect::PROVERIF_EXPECTED
@@ -2140,25 +3357,33 @@ mod tests {
             .map(|(m, _)| (*m).to_owned())
             .collect();
         same_set("PROVERIF_EXPECTED", &tables, expect::PROVERIF_MODELS)?;
-        let claims = std::fs::read_to_string(
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../formal/CLAIMS.md"),
-        )?;
-        let rows: Vec<(String, expect::Proved)> = claims
-            .lines()
-            .filter(|l| l.starts_with("| T"))
-            .map(|l| {
-                let cells: Vec<&str> = l.split('|').map(str::trim).collect();
-                let id = cells.get(1).copied().unwrap_or_default().to_owned();
-                let column = cells.iter().rev().find(|c| !c.is_empty()).copied();
-                let proved = match column {
-                    Some("true") => Ok(expect::Proved::True),
-                    Some(c) if c.contains("not a gate") => Ok(expect::Proved::Informative),
-                    Some(c) if c.starts_with("**false**") => Ok(expect::Proved::False),
-                    other => Err(Error(format!("{id}: unknown Expected column {other:?}"))),
-                };
-                proved.map(|p| (id, p))
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let claims = std::fs::read_to_string(root.join("formal/CLAIMS.md"))?;
+        // (ID, the verdict of the "Expected" column; None: neither true nor false, e.g. H6 "not claimed")
+        let claim_rows = |prefix: &str| -> Vec<(String, Option<expect::Proved>)> {
+            claims
+                .lines()
+                .filter(|l| l.starts_with(prefix))
+                .map(|l| {
+                    let cells: Vec<&str> = l.split('|').map(str::trim).collect();
+                    let id = cells.get(1).copied().unwrap_or_default().to_owned();
+                    let proved = match cells.iter().rev().find(|c| !c.is_empty()).copied() {
+                        Some("true") => Some(expect::Proved::True),
+                        Some(c) if c.contains("not a gate") => Some(expect::Proved::Informative),
+                        Some(c) if c.starts_with("**false**") => Some(expect::Proved::False),
+                        _ => None,
+                    };
+                    (id, proved)
+                })
+                .collect()
+        };
+        let rows = claim_rows("| T")
+            .into_iter()
+            .map(|(id, p)| {
+                p.map(|p| (id.clone(), p))
+                    .ok_or_else(|| Error(format!("{id}: unknown Expected column")))
             })
-            .collect::<Result<_>>()?;
+            .collect::<Result<Vec<_>>>()?;
         let table: Vec<(String, expect::Proved)> = expect::PROVERIF_EXPECTED
             .iter()
             .filter(|(m, _)| *m == "tr")
@@ -2168,8 +3393,25 @@ mod tests {
                 ((*id).to_owned(), *proved)
             })
             .collect();
-        assert_eq!(rows.len(), 12);
+        assert_eq!(rows.len(), 13);
         assert_eq!(table, rows);
+        // HX
+        hx_set_check(
+            &dir_stems(&root.join(expect::PROVERIF_HX_DIR), "pv")?,
+            expect::PROVERIF_EXPECTED_HX,
+        )?;
+        let hx_claims = claim_rows("| H");
+        assert!(hx_claims.len() >= 20, "{hx_claims:?}");
+        for (file, id, query, proved) in expect::PROVERIF_EXPECTED_HX {
+            let row = id.split(' ').next().unwrap_or_default();
+            let claimed = hx_claims.iter().find(|(r, _)| r == row).map(|(_, p)| *p);
+            assert_eq!(
+                claimed,
+                Some(Some(*proved)),
+                "{file} {id}: CLAIMS row {row} expects {claimed:?}, the table {proved:?}: {query}"
+            );
+            assert!(!query.is_empty() && !query.contains('\n'), "{file} {id}");
+        }
         Ok(())
     }
 
@@ -2423,7 +3665,7 @@ mod tests {
     /// `fast_step` replaces its first gate step line.
     fn gate_ci(fast: &str, fast_step: &str) -> String {
         format!(
-            "on:\n  pull_request:\njobs:\n  linux-fast:\n    runs-on: x\n{fast}    steps:\n      - uses: actions/cache/save@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6\n        if: steps.c.outputs.hit != 'true'\n{fast_step}      - run: cargo xtask step --strict sbom systemd\n  windows-native:\n    runs-on: x\n    steps:\n      - run: cargo xtask install-tools --set windows\n      - run: cargo xtask step --strict clippy nextest doctest kat hello\n  xwin-cross:\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict windows-cross\n  linux-full:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask ci-full --strict --delegated windows-native --delegated windows-cross\n"
+            "on:\n  pull_request:\njobs:\n  linux-fast:\n    runs-on: x\n{fast}    steps:\n      - uses: actions/cache/save@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6\n        if: steps.c.outputs.hit != 'true'\n{fast_step}      - run: cargo xtask step --strict sbom systemd\n  windows-native:\n    runs-on: x\n    steps:\n      - run: cargo xtask install-tools --set windows\n      - run: cargo xtask step --strict clippy nextest doctest kat hello\n  xwin-cross:\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict windows-cross\n  linux-full:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask ci-full --strict --delegated windows-native --delegated windows-cross --models tr\n"
         )
     }
 

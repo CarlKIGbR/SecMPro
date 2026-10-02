@@ -1,8 +1,8 @@
 # SecMP/1 — Protocol Specification (normative)
 
-Status: **v1 design freeze candidate, revision 2.4** (2026-10-02; rev 2.1 of 2026-09-25 after adversarial review and verification pass, see `docs/reviews/plan-review-2026-09-25.md`; rev 2.2 of 2026-09-28 answers the reference implementation's spec questions, see `docs/reviews/ref-spec-questions-M1.md` and ADR-035; rev 2.3 clarifies Appendix D for the M2 encodings — decoder obligations, the `ver` rule, `RelayRef` validity, Handshake `caps`, list minimums, Fragment rules and the §7.6 body layouts — see `docs/reviews/ref-spec-questions-M2.md` and ADR-039; rev 2.4 applies ADR-043 (a)–(k), the clarifications of the M3 and M4 reviews). Changes to this document require an ADR (see `08-decisions.md`) and a reviewer sign-off.
+Status: **v1 design freeze candidate, revision 2.5** (2026-10-02; rev 2.1 of 2026-09-25 after adversarial review and verification pass, see `docs/reviews/plan-review-2026-09-25.md`; rev 2.2 of 2026-09-28 answers the reference implementation's spec questions, see `docs/reviews/ref-spec-questions-M1.md` and ADR-035; rev 2.3 clarifies Appendix D for the M2 encodings — decoder obligations, the `ver` rule, `RelayRef` validity, Handshake `caps`, list minimums, Fragment rules and the §7.6 body layouts — see `docs/reviews/ref-spec-questions-M2.md` and ADR-039; rev 2.4 applies ADR-043 (a)–(k), the clarifications of the M3 and M4 reviews; rev 2.5 applies ADR-044 (a)–(f), the clarifications of the M4 planning). Changes to this document require an ADR (see `08-decisions.md`) and a reviewer sign-off.
 
-Changelog: **rev 2.4** (2026-10-02): ADR-043 (a)–(k). **rev 2.3** (2026-09-29, ADR-039) — §4.1 `ver` rule reworded and decoder obligations added; §5.3 `onion` validity (rend-spec-v3); §7.6 `caps`, list counts, Fragment rules, KeyChange never unfragmented, `payload`/`arg` opaque at the encoding layer; D.3 `RelayRef.direct` host and port; D.5 `caps (0)`, `count (1..=255)`, Fragment rules and the Batch, RouteUpdate, reassembled-Fragment and Dummy layouts. No byte layout changed. **rev 2.2** (2026-09-28, ADR-035) — label renames, `MFETCH`, answers SQ-01 … SQ-11. **rev 2.1** (2026-09-25) — after the adversarial plan review.
+Changelog: **rev 2.5** (2026-10-02): ADR-044 (a)–(f). **rev 2.4** (2026-10-02): ADR-043 (a)–(k). **rev 2.3** (2026-09-29, ADR-039) — §4.1 `ver` rule reworded and decoder obligations added; §5.3 `onion` validity (rend-spec-v3); §7.6 `caps`, list counts, Fragment rules, KeyChange never unfragmented, `payload`/`arg` opaque at the encoding layer; D.3 `RelayRef.direct` host and port; D.5 `caps (0)`, `count (1..=255)`, Fragment rules and the Batch, RouteUpdate, reassembled-Fragment and Dummy layouts. No byte layout changed. **rev 2.2** (2026-09-28, ADR-035) — label renames, `MFETCH`, answers SQ-01 … SQ-11. **rev 2.1** (2026-09-25) — after the adversarial plan review.
 Audience: the implementer (Claude Code / Opus), the reviewer, and future auditors.
 
 The words MUST / MUST NOT / SHOULD / MAY are used as in RFC 2119.
@@ -210,7 +210,7 @@ URI: `secmp://i/` + base64url (no padding) of the encoding (≈ 322 chars). QR: 
 
 The inviter persists, per issued invitation: `ld_id`, `link_key`, the link-data owner key, the invitation queue's recipient key, `spk_id`/`opk_id`, and `expires`, until the invitation is consumed or expired.
 
-Invitations are **secrets**: anyone holding an unconsumed one can become the invitee. One-time link data is consumed on first `LINK_GET` (§9.4). The inviter's client polls the invitation queue at the queue's period like any other recv-queue; if the link data is reported consumed (via the owner status query, §9.4) and no valid handshake arrives before `expires`, the UI shows "invitation used by someone else".
+Invitations are **secrets**: anyone holding an unconsumed one can become the invitee. One-time link data is consumed on first `LINK_GET` (§9.4). Expiry at the responder is enforced by this record lifecycle, not by §6.6 (rev 2.5). The inviter's client polls the invitation queue at the queue's period like any other recv-queue; if the link data is reported consumed (via the owner status query, §9.4) and no valid handshake arrives before `expires`, the UI shows "invitation used by someone else".
 
 ### 5.3 `RelayRef`
 
@@ -322,7 +322,7 @@ SK  = HKDF-SHA-256(salt = 0^32, IKM, info = "SecMP-HX/1 sk" ‖ transcript, L = 
 K_id = HKDF-SHA-256(salt = ld_id, IKM = link_key ‖ DH3 ‖ ss_spk ‖ DH4 ‖ ss_opk, info = "SecMP-HX/1 idkey", L = 32)
 ```
 
-`SK` initialises SecMP-TR (§7.2). `transcript` is stored by both sides as the session binding `SB`. `K_id` protects the initiator's identity inside the handshake envelope (§6.5); the responder can compute it before knowing `IKSPublic_I`, and it is forward-secret once `OPK` is deleted and `EK_I` discarded.
+`SK` initialises SecMP-TR (§7.2). `transcript` is stored by both sides as the session binding `SB`. `K_id` protects the initiator's identity inside the handshake envelope (§6.5); the responder can compute it before knowing `IKSPublic_I`, and it is forward-secret once `OPK` is deleted and `EK_I` discarded. The initiator MUST zeroize `EK_I`'s secret immediately after the three cells are sealed and the initiator RatchetState is initialised; `Initiator::start` returns no EK secret; the persisted initiator state after `start` contains no `EK_I` secret (rev 2.5).
 
 ### 6.5 Handshake envelope (initiator → responder, three cells on the invitation queue)
 
@@ -339,17 +339,19 @@ cell_i (i = 0,1,2) = N_i (24, random) ‖ CAEAD.Seal(K_inv, N_i, AD = "SecMP-HX/
                    = 24 + 32 (COM) + (16 + 1 + 1 + 4006) + 16 (tag) = 4096 B
 ```
 
-Rules: the initiator generates all three cells once, persists them, and re-sends them **byte-identical** on retry (never re-seals). It sends them at `inv_period_s` like any other cells (§10). **Until the initiator has decrypted a first message from R, every other cell it sends on the invitation queue is a dummy**; real messages stay in the outbox (a real cell sent before the handshake cells would be acked and discarded by R without the sender learning it). The responder trial-opens every cell fetched from the invitation queue with `K_inv`; cells that fail to open are ignored (they may be garbage from the relay or from an invitation thief); chunks are grouped by `init_id`, and the first `init_id` for which all three chunks open is processed. `N_i` random ⇒ no nonce reuse; `init_id`/`i`/`total` inside the ciphertext ⇒ the relay sees three uniform cells.
+Rules: the initiator generates all three cells once, persists them, and re-sends them **byte-identical** on retry (never re-seals). It sends them at `inv_period_s` like any other cells (§10). **Until the initiator has decrypted a first message from R, every other cell it sends on the invitation queue is a dummy**; real messages stay in the outbox (a real cell sent before the handshake cells would be acked and discarded by R without the sender learning it). The responder trial-opens every cell fetched from the invitation queue with `K_inv`; cells that fail to open are ignored (they may be garbage from the relay or from an invitation thief); chunks are grouped by `init_id`, and the first `init_id` for which all three chunks open is processed. A duplicate (`init_id`, `i`) with identical bytes is ignored; with differing bytes the later one is discarded (first-seen wins); after a rejected complete group that group is discarded, the OPK is kept and later groups with other `init_id`s are processed; at most 8 partial groups are stored, the oldest evicted (rev 2.5). The `first_msg` header MUST carry `n = 0` and `pn = 0`; R rejects otherwise (uniform error, OPK kept); `seq`/`ts` follow §7.6 without further constraint; the Handshake content MUST contain at least one route of a known kind, else R rejects (uniform error, OPK kept) (rev 2.5). `N_i` random ⇒ no nonce reuse; `init_id`/`i`/`total` inside the ciphertext ⇒ the relay sees three uniform cells.
 
 `reply_route` (how R reaches I) lives inside `first_msg`'s Handshake content and is therefore bound to `SK`.
 
 ### 6.6 Responder processing and authentication semantics
 
 1. Open outer chunks with `K_inv`; parse `Outer`; `spk_id`/`opk_id` MUST be the ids recorded for this invitation's bundle; an unknown or already used `opk_id` ⇒ reject.
-2. Compute `DH3`, `DH4`, `ss_spk`, `ss_opk` → `K_id`; open `inner_ct` → `IKSPublic_I` (well-formedness: decodable, `ik_dh` not low-order) and `first_msg`.
+2. Compute `DH3`, `DH4`, `ss_spk`, `ss_opk` → `K_id`; open `inner_ct` → `IKSPublic_I` (well-formedness: decodable, `ik_dh` not low-order) and `first_msg`; R MUST reject an envelope whose `IKSPublic_I` equals `IKSPublic_R` (reflection), uniform error, OPK kept; an IKS equal to an existing contact's is client-core policy, not a handshake rejection (rev 2.5).
 3. Compute `DH1`, `DH2`, `transcript`, `SK`; initialise TR as responder (§7.2); decrypt `first_msg`, which MUST decrypt to a Content of type 0x01 Handshake with `caps = 0`; anything else rejects the envelope. On any failure: discard everything, keep the OPK, log nothing identifying.
 4. On success: delete the OPK; store the contact as **unverified** with the routes from the Handshake content; start sending to I's reply route; the first reply carries a `RouteUpdate` with a pooled queue replacing the invitation queue; **retire the invitation queue per §10.6 rules 4–5** (keep fetching it and processing its cells as TR cells of this session for U[1 h, 24 h], then `QUEUE_DEL` on a one-shot link).
 5. Display the safety number (§6.7); the contact becomes *verified* only after user confirmation.
+
+Expiry (rev 2.5): §6.6 takes no time; expiry is enforced by the invitation-record lifecycle (§5.2): the client MUST NOT call `accept` for an expired record and retires its queue; `accept` has no clock parameter.
 
 Authentication: R is authenticated to I by `DH2`/`DH3` and by the bundle signature under `IK_sig_R`, pinned via `inviter_fp`. I is authenticated to R by `DH1`. PQ confidentiality comes from `ss_spk`/`ss_opk`. PQ authentication is not provided (industry-standard choice; `01-threat-model.md` §3.8). Deniability: no party signs a message; the envelope contains no signature by I.
 
@@ -639,7 +641,7 @@ kind 0x02 OnionEndpoint { onion [35], client_auth [32], cap [32] }              
 kind 0x03 Mailbox       { relay: RelayRef, sid, send_seed, period_s }                              ; v1.1
 ```
 
-`period_s` is the send period the recipient asks the sender to use for this queue (§10.2). v1 clients MUST ignore unknown kinds.
+`period_s` is the send period the recipient asks the sender to use for this queue (§10.2). v1 clients MUST ignore unknown kinds. The Handshake content of a `first_msg` MUST contain at least one route of a known kind (§6.5, rev 2.5).
 
 ---
 
@@ -698,7 +700,7 @@ Constant rate hides *what* and *how much*; the following rules blur *when* links
 
 | Layer | Property | Against |
 |---|---|---|
-| HX | SK secrecy incl. forward secrecy (OPK, EK) and PQ confidentiality; mutual classical authentication (injective agreement on `transcript`); identity confidentiality of I against the relay and against a later invitation leak (`K_id`); transcript binding; offline deniability | Network attacker, relay, HNDL quantum |
+| HX | SK secrecy incl. forward secrecy (OPK, EK) and PQ confidentiality; mutual classical authentication (I→R: injective agreement on `transcript` (H5); R→I: implicit through DH2/DH3 and the bundle signature, plus key confirmation on the first decrypted reply (H6b)); identity confidentiality of I against the relay and against a later invitation leak (`K_id`); transcript binding; offline deniability | Network attacker, relay, HNDL quantum |
 | TR | Body confidentiality/integrity with key commitment; header confidentiality (not commitment); forward secrecy per message; post-compromise security after one hybrid step (classical and PQ); replay/reorder resistance; robustness to loss of any prefix of a chain | Network attacker, relay, HNDL |
 | LINK | Relay authentication; PQ confidentiality/integrity of commands; forward secrecy; client anonymity; replay resistance | Network attacker, Tor relays, HNDL |
 | Q | Capability-only access; unlinkability of `rid`/`sid`; deterministic re-creation; indistinguishability of real vs dummy cells; detectability of per-user access keys (`akc`) | Relay operator |

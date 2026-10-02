@@ -312,7 +312,7 @@ Consequence added at M4 (M3 review F20): workspace test builds and the coverage 
 
 ### ADR-044 — Spec clarifications rev 2.5 from the M4 planning (HX/INV)
 
-**Status:** Proposed 2026-10-01 (reviewer, M4 planning); owner ratification per mandate §0(b), default ratify 2026-10-02 ~11:00 UTC
+**Status:** Accepted — owner ratification by default 2026-10-02 11:00 UTC (mandate §0(b)); recorded by the reviewer. (Proposed 2026-10-01 (reviewer, M4 planning); owner ratification per mandate §0(b), default ratify 2026-10-02 ~11:00 UTC)
 
 **Context.** The M4 query set (`formal/CLAIMS.md` §HX) and test matrix (TEST-MATRIX-M4) were drawn from `docs/03` rev 2.3/2.4. They found six points that the spec states ambiguously or not at all. Each item below names its source.
 

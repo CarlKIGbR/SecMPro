@@ -10,7 +10,9 @@
 //! identifying" holds structurally). The rows share one table (`table`) so that N-60 can run all of them.
 
 use secmp_crypto::{SecretBytes, X25519Secret};
-use secmp_proto::tr::FixedEntropy;
+use secmp_proto::Error;
+use secmp_proto::hx::ACCEPT_SITE_KAT;
+use secmp_proto::tr::{FixedEntropy, OsEntropy};
 
 use crate::build::{garbage, handshake_body, raw_content};
 use crate::hx_gen::harness::{
@@ -650,4 +652,33 @@ fn accept_reject_is_uniform_and_transactional() {
     )
     .unwrap();
     assert_eq!(store.deletes, 1);
+}
+
+/// The reject site of `accept` on `cells` against a store that also holds SPK generation 8 and OPK 43 (so that the
+/// ids of N-36/N-37 name keys that exist: only the §6.6 step 1 comparison with the record's ids can refuse them
+/// there, and a refusal anywhere later names a different site).
+fn reject_site_with_extra_keys(lib: &Lib, cells: &[Vec<u8>]) -> &'static str {
+    let mut store = lib.store();
+    assert_eq!(store.create_spk(harness::CREATED, &mut OsEntropy), Ok(8));
+    assert_eq!(store.issue_opk(&mut OsEntropy), Ok(43));
+    let before = store.digest_kat();
+    assert_eq!(lib.accept(&mut store, cells).err(), Some(Error::Rejected));
+    assert_eq!(store.digest_kat(), before, "the store is unchanged");
+    ACCEPT_SITE_KAT.get().unwrap()
+}
+
+#[test]
+fn accept_wrong_spk_id_rejects_at_the_id_check() {
+    let lib = Lib::new();
+    // spk_id 8 (held), opk_id correct
+    let cells = lib.outer_variant(5, |o| put(o, OFF_SPK_ID, &8_u32.to_be_bytes()));
+    assert_eq!(reject_site_with_extra_keys(&lib, &cells), "outer");
+}
+
+#[test]
+fn accept_wrong_opk_id_rejects_at_the_id_check() {
+    let lib = Lib::new();
+    // opk_id 43 (held), spk_id correct
+    let cells = lib.outer_variant(6, |o| put(o, OFF_OPK_ID, &43_u32.to_be_bytes()));
+    assert_eq!(reject_site_with_extra_keys(&lib, &cells), "outer");
 }

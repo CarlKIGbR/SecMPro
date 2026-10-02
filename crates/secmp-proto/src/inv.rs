@@ -158,6 +158,8 @@ pub fn base64url_encode(bytes: &[u8]) -> Zeroizing<String> {
         let b0 = u32::from(chunk.first().copied().unwrap_or(0));
         let b1 = u32::from(chunk.get(1).copied().unwrap_or(0));
         let b2 = u32::from(chunk.get(2).copied().unwrap_or(0));
+        // the operands of `|` occupy disjoint bits (b0 << 16: bits 16..24, b1 << 8: bits 8..16, b2: bits 0..8, each
+        // byte <= 0xff), so `|` = `^` = `+` here (M4-12: the `|` -> `^` mutants are equivalent)
         let group = (b0 << 16) | (b1 << 8) | b2;
         let emit = |out: &mut Zeroizing<String>, shift: u32| {
             let v = u8::try_from((group >> shift) & 0x3f).unwrap_or(0);
@@ -195,6 +197,8 @@ pub fn base64url_decode(text: &str) -> Result<Zeroizing<Vec<u8>>> {
         for i in 0..4 {
             let v = chunk.get(i).map_or(0, |c| decode_sextet(*c));
             invalid |= v;
+            // `group << 6` has bits 0..6 clear and the appended value is `v & 0x3f` (bits 0..6): disjoint, so `|` = `^`
+            // (M4-12: the `|` -> `^` mutant is equivalent)
             group = (group << 6) | u32::from(u8::try_from(v & 0x3f).unwrap_or(0));
         }
         // the unused low bits of a short last group must be zero

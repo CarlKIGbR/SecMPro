@@ -390,3 +390,64 @@ fn process(
         profile: handshake.profile,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{Groups, MAX_PARTIAL_GROUPS, insert};
+
+    type G = Groups<u8, u8, MAX_PARTIAL_GROUPS>;
+
+    /// `n` partial groups (chunk 0 only) with `init_id` 1…`n`, in insertion order.
+    fn partial(n: u8) -> G {
+        let mut groups = G::new();
+        for k in 1..=n {
+            assert_eq!(insert(&mut groups, k, 0, k), None, "a partial group");
+        }
+        assert_eq!(groups.len(), usize::from(n));
+        groups
+    }
+
+    /// The `init_id`s of the held groups, in slot order; a hole inside `len` shows as a short list.
+    fn ids(groups: &G) -> Vec<u8> {
+        groups
+            .slots
+            .iter()
+            .take(groups.len())
+            .filter_map(|g| g.as_ref().map(|g| g.init_id))
+            .collect()
+    }
+
+    #[test]
+    fn groups_remove_shifts_later_slots_in_order() {
+        for n in [1_u8, 3, 8] {
+            for at in 0..n {
+                let mut groups = partial(n);
+                let gone = at.saturating_add(1);
+                let removed = groups.remove(usize::from(at));
+                assert_eq!(removed.map(|g| g.init_id), Some(gone), "n={n} at={at}");
+                let expected: Vec<u8> = (1..=n).filter(|k| *k != gone).collect();
+                assert_eq!(ids(&groups), expected, "n={n} at={at}: order kept");
+                assert_eq!(groups.len(), usize::from(n.saturating_sub(1)));
+                assert!(
+                    groups.slots.iter().skip(groups.len()).all(Option::is_none),
+                    "n={n} at={at}: the freed slots are at the end"
+                );
+                // the chunk of every survivor moved with its group
+                for g in groups.slots.iter().flatten() {
+                    assert_eq!(g.chunks.first().and_then(Option::as_ref), Some(&g.init_id));
+                }
+            }
+            let mut groups = partial(n);
+            assert!(groups.remove(usize::from(n)).is_none(), "past the end");
+            assert_eq!(groups.len(), usize::from(n));
+        }
+    }
+
+    #[test]
+    fn groups_remove_on_empty_store_is_none() {
+        let mut groups = G::new();
+        assert!(groups.remove(0).is_none());
+        assert!(groups.remove(7).is_none());
+        assert_eq!(groups.len(), 0);
+    }
+}

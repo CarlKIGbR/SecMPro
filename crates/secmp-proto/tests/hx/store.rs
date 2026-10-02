@@ -2,11 +2,13 @@
 //! The prekey store and the invitation records (TEST-SPEC-M4 N-25, N-61 … N-65, N-72; spec §5.2, §6.1, §6.3,
 //! ADR-044 (d)).
 
+use secmp_crypto::SecretBytes;
 use secmp_proto::inv::{IssueError, MAX_INVITATION_LIFE_S};
 use secmp_proto::prekeys::{
-    IdentityKeys, IssueParams, Issued, MemoryPrekeyStore, PrekeyStore, SPK_ROTATION_S,
+    IdentityKeys, InvitationRecord, IssueParams, Issued, MemoryPrekeyStore, PrekeyStore,
+    SPK_ROTATION_S, SpkGeneration,
 };
-use secmp_proto::tr::OsEntropy;
+use secmp_proto::tr::{FixedEntropy, OsEntropy};
 use secmp_proto::wire::Period;
 use secmp_proto::wire::inv::{LinkDataV1, Profile};
 
@@ -265,4 +267,162 @@ fn expired_invitation_record_is_not_offered_to_accept() {
     assert!(store.record(&a.invitation.ld_id).is_none());
     assert!(store.opk(opk_a).is_none());
     assert!(store.record(&b.invitation.ld_id).is_some());
+}
+
+// ---- M4-12: the HX mutants of R-60 ----
+
+/// A store with SPK generation 1 and OPKs 1 and 2 (ids from `starting_at(1, 1)`), no records.
+fn plain_store() -> MemoryPrekeyStore {
+    let mut store = MemoryPrekeyStore::default();
+    store.create_spk(CREATED, &mut OsEntropy).unwrap();
+    store.issue_opk(&mut OsEntropy).unwrap();
+    store.issue_opk(&mut OsEntropy).unwrap();
+    store
+}
+
+fn record(ld: u8, spk_id: u32, opk_id: u32) -> InvitationRecord {
+    InvitationRecord {
+        ld_id: [ld; 16],
+        link_key: SecretBytes::from_slice(&[0x5a; 32]).unwrap(),
+        spk_id,
+        opk_id,
+        expires: EXPIRES,
+    }
+}
+
+#[test]
+fn spk_rotation_is_seven_days() {
+    assert_eq!(SPK_ROTATION_S, 604_800);
+}
+
+#[test]
+fn spk_generation_created_is_the_issue_time() {
+    let mut store = MemoryPrekeyStore::default();
+    store.create_spk(CREATED, &mut OsEntropy).unwrap();
+    assert_eq!(store.current_spk().unwrap().created(), CREATED);
+    let later = CREATED + SPK_ROTATION_S + 5;
+    store.rotate_if_due(later, &mut OsEntropy).unwrap();
+    assert_eq!(store.current_spk().unwrap().created(), later);
+    let direct = SpkGeneration::generate(9, 123_456_789, &mut OsEntropy).unwrap();
+    assert_eq!(direct.created(), 123_456_789);
+    // the store exposes no retention path that reads `created`: `retire_expired` keeps a generation by the current
+    // generation and by record references only (§6.1), so the accessor is checked on its own
+}
+
+fn assert_add_rejected(store: &mut MemoryPrekeyStore, rec: InvitationRecord) {
+    let before = store.digest_kat();
+    assert_eq!(
+        store.add_record(rec).err(),
+        Some(secmp_proto::Error::Rejected)
+    );
+    assert_eq!(store.digest_kat(), before, "a rejected add changes nothing");
+}
+
+#[test]
+fn add_record_rejects_unknown_spk_alone() {
+    let mut store = plain_store();
+    assert_add_rejected(&mut store, record(1, 99, 1));
+    store.add_record(record(1, 1, 1)).unwrap();
+}
+
+#[test]
+fn add_record_rejects_unknown_opk_alone() {
+    let mut store = plain_store();
+    assert_add_rejected(&mut store, record(1, 1, 99));
+    store.add_record(record(1, 1, 1)).unwrap();
+}
+
+#[test]
+fn add_record_rejects_duplicate_ld_id_alone() {
+    let mut store = plain_store();
+    store.add_record(record(1, 1, 1)).unwrap();
+    assert_add_rejected(&mut store, record(1, 1, 2));
+    store.add_record(record(2, 1, 2)).unwrap();
+}
+
+/// A deterministic entropy stream long enough for one `issue_invitation` after the SPK exists.
+fn stream() -> Vec<u8> {
+    (0..16_384_u32)
+        .map(|i| u8::try_from(i.wrapping_mul(31).wrapping_add(7) % 251).unwrap())
+        .collect()
+}
+
+#[test]
+fn issue_invitation_failure_removes_only_that_opk() {
+    let id = identity();
+    let mut store = MemoryPrekeyStore::default();
+    store.create_spk(CREATED, &mut OsEntropy).unwrap();
+    // the first issuance consumes a prefix of the stream and records `ld_id` L with OPK 1
+    let first = store
+        .issue_invitation(
+            &id,
+            params(CREATED, EXPIRES, EXPIRES),
+            &mut FixedEntropy::new(&stream()),
+        )
+        .unwrap();
+    assert_eq!(store.opk_ids(), vec![1]);
+    // the same stream again: OPK 2 is taken, then `ld_id` = L collides with the recorded one
+    let err = store
+        .issue_invitation(
+            &id,
+            params(CREATED, EXPIRES, EXPIRES),
+            &mut FixedEntropy::new(&stream()),
+        )
+        .err();
+    assert!(err.is_some(), "a duplicate ld_id fails the issuance");
+    assert_eq!(
+        store.opk_ids(),
+        vec![1],
+        "the failed issuance's OPK 2 is gone, the earlier invitation's OPK 1 stays"
+    );
+    assert!(store.record(&first.invitation.ld_id).is_some());
+}
+
+fn store_with_record_naming(named: u32) -> MemoryPrekeyStore {
+    let mut store = plain_store();
+    store.add_record(record(1, 1, named)).unwrap();
+    store
+}
+
+#[test]
+fn commit_accept_rejects_missing_opk_alone() {
+    let mut store = store_with_record_naming(1);
+    store.delete_opk(1).unwrap();
+    let before = store.digest_kat();
+    assert_eq!(
+        store.commit_accept(1, &[1; 16]).err(),
+        Some(secmp_proto::Error::Rejected)
+    );
+    assert_eq!(store.digest_kat(), before, "the record is not consumed");
+    assert!(store.record(&[1; 16]).is_some());
+}
+
+#[test]
+fn commit_accept_rejects_missing_record_alone() {
+    let mut store = store_with_record_naming(1);
+    let before = store.digest_kat();
+    assert_eq!(
+        store.commit_accept(1, &[7; 16]).err(),
+        Some(secmp_proto::Error::Rejected)
+    );
+    assert_eq!(store.digest_kat(), before);
+    assert!(store.opk(1).is_some());
+}
+
+#[test]
+fn commit_accept_rejects_mismatched_opk() {
+    // R-64: the record of `ld_id` names OPK 1; the call names OPK 2, which is held too
+    let mut store = store_with_record_naming(1);
+    let before = store.digest_kat();
+    assert_eq!(
+        store.commit_accept(2, &[1; 16]).err(),
+        Some(secmp_proto::Error::Rejected)
+    );
+    assert_eq!(store.digest_kat(), before, "nothing changed");
+    assert!(store.opk(1).is_some() && store.opk(2).is_some());
+    assert!(store.record(&[1; 16]).is_some());
+    // and the matching call commits both
+    store.commit_accept(1, &[1; 16]).unwrap();
+    assert!(store.opk(1).is_none() && store.opk(2).is_some());
+    assert!(store.record(&[1; 16]).is_none());
 }

@@ -912,6 +912,79 @@ None from the spec. From the letter of the WEISUNG:
 `gh run list --branch m04-hx --limit 2` at 2026-10-02 19:27 CEST: PR run 37038178041 (head `4a0960e`) `in_progress`
 — **not pushed** (window rule). Unpushed on `m04-hx`: `744d3cd`, `569c2e2` and the docs commit.
 
+## M4-12 — WEISUNG M4-12 (R-60 closed, R-61, R-63, R-64, mutants-job runtime)
+
+Start (§1 record): head `67bce1a` (`docs(m4): report M4-9`), 0 commits unpushed (`origin/m04-hx` = HEAD), tree clean,
+2026-10-02. Commits (head `d176e95` before this report commit): `51f05f4` R-64, `b1a6a51` R-61, `357fde8` R-60 tests,
+`d176e95` R-63 + `-j 3`.
+
+### A. The 22 missed HX mutants (`M04-evidence/mutants-hx-bc17190.txt`)
+
+| # | Mutant(s) | Closed by |
+|---|---|---|
+| 1 | `prekeys.rs:36` ×5 | `store::spk_rotation_is_seven_days` (`SPK_ROTATION_S == 604_800`) |
+| 2 | `prekeys.rs:184` `created` | `store::spk_generation_created_is_the_issue_time`. The store has no retention path that reads `created` (`retire_expired` keeps by current generation and record references; `rotate_if_due` reads the field directly), so the accessor test stands alone, as the WEISUNG allows. |
+| 3 | `prekeys.rs:497-498` | `store::add_record_rejects_unknown_spk_alone`, `…_unknown_opk_alone`, `…_duplicate_ld_id_alone` (each: `Err(Rejected)`, digest unchanged, then the valid add succeeds) |
+| 4 | `prekeys.rs:590` | `store::issue_invitation_failure_removes_only_that_opk`. Names differ from the WEISUNG's {1, 2}: the first issuance (OPK 1) stays; the second takes OPK 2, and `FixedEntropy` replays the same stream so that its `ld_id` collides with the recorded one. Result: OPK 1 present, OPK 2 (the failed issuance's) absent. |
+| 5 | `prekeys.rs:717` + R-64 | `commit_accept` now: record of `ld_id` must exist, `record.opk_id == opk_id`, and the OPK must be held, else `Err(Rejected)` with the store unchanged. Tests `store::commit_accept_rejects_missing_opk_alone`, `…_missing_record_alone`, `…_mismatched_opk`. K4b `kani_commit_accept_atomic`: `ok == (held(opk_id) && ld_id == [1; 16] && opk_id == named)`; both stores of the harness now include a mismatch case. `cargo xtask step --strict kani`: PASS, 25/25 harnesses, 1585 s; **K4b 424.1 s** (304.3 s in M4-8). Evidence `kani-m4-12.log`. |
+| 6 | `responder.rs:108`, `:114` | `MUTANT_EXCLUDE_RE` gets `Groups<.*>::(get\|remove_completed) ` with the comment "cfg(kani)-only helpers (M4-12)". The literal pattern `Groups::get\|Groups::remove_completed` would not match cargo-mutants' names (`Groups<K, C, N>::get`), so the type parameters are matched. |
+| 7 | `responder.rs:131` | `hx::responder::tests::groups_remove_shifts_later_slots_in_order` (N ∈ {1, 3, 8}, every slot; order, `len`, freed slots at the end, chunk of each survivor), `groups_remove_on_empty_store_is_none` (unit tests in `responder.rs`: `Groups::remove` is private) |
+| 8 | `responder.rs:290` | `accept::accept_wrong_spk_id_rejects_at_the_id_check`, `accept_wrong_opk_id_rejects_at_the_id_check`. The site tag of §6.6 step 1 is `"outer"`; with only `Rejected` asserted the `&&` mutant also ends at `"outer"` when the wrong id names no key, so the store also holds SPK 8 and OPK 43: with `&&` the check passes and the group dies at `"inner open"`. Both tests fail with the mutation applied by hand (checked), pass without. |
+| 9 | `inv.rs:81` | `MUTANT_EXCLUDE_RE`: `impl (core::fmt::)?Display for \w+Error>::fmt` ("error text, no logic (M4-12)") |
+| 10 | `inv.rs:161` ×2, `:198` | Equivalent: operands are disjoint. `(b0 << 16) \| (b1 << 8) \| b2`: bits 16..24, 8..16, 0..8 (bytes ≤ 0xff). `(group << 6) \| (v & 0x3f)`: bits 0..6 clear vs bits 0..6 set. Masks stated in a comment at each line; two rows in `docs/mutants-accepted.md` (path + description, as the gate matches them). |
+
+**Re-run** (the M4-10 command, `-j 3`, plus the two new exclusions; `M04-evidence/mutants-hx-m4-12.txt`, head `d176e95`):
+331 mutants tested in 67 min: **235 caught, 3 missed, 93 unviable, 0 timeouts.** The 3 missed are exactly the documented
+equivalents of item 10 (`inv.rs:163:44`, `:163:32` `base64url_encode`; `:202:34` `base64url_decode`; lines moved by the
+two comment lines). A second run on the new `Drop`/`Zeroize`/`wipe_seed` code of `wire/inv.rs` and `wire/cell.rs`
+(`--re 'Drop for|wipe_seed|Zeroize for'`, which the HX command does not cover): 10 mutants, 10 caught, 5 min.
+
+### B. R-61 — wipe on drop
+
+`RelayRef`, `RelayQueue`, `RouteDescriptor`, `InvitationV1` have a `Drop` calling their `Zeroize` (hand-written, not
+`ZeroizeOnDrop`: `secmp-proto` has no direct `zeroize` dependency). `SecretBytes` has no in-place wipe, so `zeroize()` of
+`InvitationV1` and `RelayQueue` replaces `link_key`, `inv_send_seed`, `send_seed` with a zero value (`wipe_seed`); the
+old allocation is wiped by `SecretBytes::drop`. A test in `wire/cell.rs` that moved a field out of a `RouteDescriptor`
+now borrows it. Tests (`wire::cell::wipe_tests`): `zeroize_clears_every_byte_field` (relay_fp, onion, akc, host,
+spki, sid, ld_id, link_key, inviter_fp, inv_sid, inv_send_seed, send_seed, `Unknown.blob`/`kind`, `expires`: all zero),
+`dropped_invitation_is_wiped`. No testkit pattern for a runtime drop-wipe exists (only type pins, e.g.
+`hx_secrets_are_zeroizing_types`), and reading freed memory needs `unsafe`, so the second test observes **that** the
+`Drop` ran: a `cfg(test)` log of the type names (`wire::wipe_log`), asserted for a plain drop, for `invitee_check`
+on an expired invitation (the rejection path) and for each route variant. Vectors unchanged (`cargo xtask vectors`:
+11 suites identical).
+
+### C. R-63 — known ct sites
+
+`expect::KNOWN_SITES` (TR 8, INV 9, HX 8 names and the Output claim of `x25519_zero_check`); `ct_site_lines` reports
+`ct: <target> claims the unknown reject site "<site>" …` as a problem, which fails the gate. `gates::tests::ct_gate_rejects_unknown_site`
+(an unknown site fails and names target and site; every listed site passes). The `M3_SITES` fixtures of the existing
+tests now use real site names (they were "site one"…); the summary row keeps `— site <site>`.
+
+### D. mutants job
+
+`cargo mutants -j 3` in the step, `timeout-minutes: 240` on the `mutants` job, ADR-047 Consequences: "`-j 3`; budget 240 min".
+**Local time of the full two-crate step: not measured.** `cargo mutants --list` with the gate's flags gives 1281
+mutants; the HX subset (331) alone took 67 min at `-j 3`, so the step is well over the 90-minute limit and was not
+started locally. If cost scaled with the count the step would need about 4 h at `-j 3`, i.e. the 240-min budget
+could be tight; crypto's tests are faster than the proto suite, so this is an upper estimate. The CI run measures it.
+
+### E. Checks
+
+`cargo fmt --check` ok; `cargo clippy --workspace --all-targets -- -D warnings`, `-p secmp-proto --all-targets`, and
+`--all-features`: clean; `cargo nextest run -p secmp-proto --all-features`: 280 passed (before R-63; xtask 110
+passed after); `cargo xtask vectors`: 11 suites identical; `cargo xtask step --strict policy`: PASS; Kani: above.
+
+### Open / deviations
+No deviation from the spec. From the letter of the WEISUNG: item 6's pattern (type parameters added, see table); item 4's
+OPK numbering; `MUTANT_EXCLUDE_RE` additions sit in the same file as `KNOWN_SITES` (`expect.rs`), committed with
+`xtask(m4): known ct sites (R-63), mutants -j3`. Risk: the full mutants step runtime (D). Totals: 22 missed → 3 missed
+(documented equivalents); unviable 93 (was 93); caught 220 → 235 (the mutant set changed with the exclusions and new code).
+
+### Push
+At the end of the session PR run 37041956810 (head `67bce1a`, `linux-full` and `mutants` in progress since 17:37 UTC)
+was still running: **not pushed** (window rule; a push cancels the run). Unpushed on `m04-hx`: `51f05f4`, `b1a6a51`,
+`357fde8`, `d176e95` and the report commit.
+
 ## M4-10 — R-60 (mutants gate builds secmp-proto with kat)
 
 The mutants step now passes `--features secmp-crypto/kat,secmp-proto/kat`, so the HX integration suite counts. Measured on bc17190 (HX files; command and full list in `M04-evidence/mutants-hx-bc17190.txt`): 335 mutants, 220 caught, 22 missed, 93 unviable, 0 timeouts; 67 min with -j3 (serial estimate ~3 h). Baseline test run is now ~130 s per mutant build: the full two-crate gate must be re-timed against the 180-min job budget. The 22 survivors are not fixed or excluded; the reviewer decides per mutant.

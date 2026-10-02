@@ -777,14 +777,14 @@ pub(crate) fn mutant_survivors(
 
 pub(crate) fn mutants(ctx: &Ctx) -> Result<Outcome> {
     tools::require(tools::MUTANTS)?;
-    // With feature `kat` the external KATs and the frozen-vector test join the unit tests in killing mutants.
+    // With features `kat` (crypto and proto: R-60, the HX integration suite) the external KATs and the frozen-vector tests join the unit tests in killing mutants.
     let mut c = Cmd::cargo().args([
         "mutants",
         "--no-shuffle",
         "--output",
         "target",
         "--features",
-        "secmp-crypto/kat",
+        "secmp-crypto/kat,secmp-proto/kat",
     ]);
     for p in expect::MUTANT_PACKAGES {
         c = c.args(["--package", p]);

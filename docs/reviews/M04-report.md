@@ -777,3 +777,7 @@ listed files but forced by the dictated 19-file table; `ci-dispatch.yml` not cha
 #### 13.11.8 Push
 `gh run list --branch m04-hx --limit 3` at 2026-10-02 12:59 CEST: PR run 36983733373 (head `2c23c0f`) `in_progress`
 — **not pushed** (WEISUNG M4-7). Unpushed on `m04-hx`: `4f5562d`, `7c235d2` and this report commit.
+
+## M4-10 — R-60 (mutants gate builds secmp-proto with kat)
+
+The mutants step now passes `--features secmp-crypto/kat,secmp-proto/kat`, so the HX integration suite counts. Measured on bc17190 (HX files; command and full list in `M04-evidence/mutants-hx-bc17190.txt`): 335 mutants, 220 caught, 22 missed, 93 unviable, 0 timeouts; 67 min with -j3 (serial estimate ~3 h). Baseline test run is now ~130 s per mutant build: the full two-crate gate must be re-timed against the 180-min job budget. The 22 survivors are not fixed or excluded; the reviewer decides per mutant.

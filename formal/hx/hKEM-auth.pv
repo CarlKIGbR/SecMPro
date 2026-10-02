@@ -2,14 +2,20 @@
 (* formal/hx/hKEM-auth.pv — session hKEM of CLAIMS §HX, its begin-IStart declaration (O-22) over the library
    formal/hx.pvl (model, abstractions, devices: its header). Run: proverif -lib formal/hx.pvl formal/hx/hKEM-auth.pv
 
-   Row (formal/hx.pvl 3.): as hKEM.pv plus the attacker as inviter: I on c with event IStartA (ProcIPA, O-20,
-   O-21), only on bundles that verify under IK_sig_R (O-23).
+   Row (formal/hx.pvl 3.): as hKEM.pv plus the attacker as inviter: I on c with event IStart (ProcIPA, O-20;
+   O-21 withdrawn), only on bundles that verify under IK_sig_R (O-23); search devices (O-24).
    Queries (RESULT lines in this order; expected per the CLAIMS gate rule):
      begin IStart:      H5 (1) true
    — 1 RESULT line. The other declarations of the session are in hKEM.pv.
 *)
 
 const hKEM: tagt.
+
+(* O-24 search devices (CLAIMS §HX "Model devices"): resolution hints only; the queries, the oracle and
+   compromise scope and the secrecy assumptions are unchanged *)
+select k: key, l: bitstring, m: bitstring; attacker(caead_seal( *k, nz, (lbl_inner, *l), *m))/5000.
+nounif p: bitstring, r: coins; attacker(encaps_ct1024( *p, *r)) [ignoreAFewTimes].
+nounif x: exponent; attacker(exp(g, x)) [ignoreAFewTimes].
 
 (* KEMO, phase 0 (formal/hx.pvl 4.) *)
 reduc forall ek: bitstring, r: bitstring;

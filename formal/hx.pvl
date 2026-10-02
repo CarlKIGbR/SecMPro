@@ -86,8 +86,8 @@
    plus H11 (four lines) in every base file; H6a in hClean and hId (O-19). "I's inv.": where I takes invitations from;
    pinv = I runs only on R's invitations (O-20); "(+c)": the session has a second file <tag>-auth.pv (O-22) that adds
    the attacker as inviter — I on c (ProcIPA) with its own identity and every leaked invitation of R, begin event
-   IStartA (O-21), only on R-signed bundles (O-23) — and holds only the begin-IStart declaration (the query after
-   ";"); the base file <tag>.pv holds
+   IStart (O-21 withdrawn), only on R-signed bundles (O-23) — and holds only the begin-IStart declaration (the query
+   after ";"); the base file <tag>.pv holds
    the queries before ";" and has no attacker-as-inviter process. With LeakInv in phase 0, I on pinv(s) keeps the
    plaintext layers (O-17): K_ld and K_inv are attacker knowledge; in hId* files IKS_I is never output in clear (H7:
    an inviter learns I's identity by design). hKCIi's row in CLAIMS names no invitation leak; LeakInv ph 0 is added
@@ -138,6 +138,8 @@
    - new e[ld, lk] (I's names indexed by the invitation): precision devices, no change to queries, oracles or compromise.
    - set unifyDerivation = false: precision devices, no change to queries, oracles or compromise.
    - M4-7: I's names also carry the bundle I verified (new e[ld, lk, b]): precision device of the same kind (see below).
+   - O-24 (M4-11): the <tag>-auth.pv files carry search hints (one select, two nounif [ignoreAFewTimes]; hDH-auth a
+     third nounif): search strategy only, no change to queries, oracles, compromise or secrecy assumptions.
    In detail:
    - Each X25519 value is bound once with let and reused (formal/tr.pv §8).
    - Names carry no message arguments (new n[]): each name depends only on the replication indices above it, not on
@@ -247,7 +249,6 @@ reduc forall k: key, m: bitstring; topen(k, tseal(k, m)) = m.
 event BundleSigned(tagt, bitstring, bitstring).                                   (* (s, iks_R, b) *)
 event InvIssued(tagt, bitstring, bitstring, bitstring).                           (* (s, iks_R, ld_id, opk_id) *)
 event IStart(tagt, bitstring, bitstring, bitstring, bitstring, bitstring, key).   (* (s, iks_I, iks_R, b, tr, rt, sk) *)
-event IStartA(tagt, bitstring, bitstring, bitstring, bitstring, bitstring, key).  (* as IStart; ProcIPA (O-21), no query *)
 event RAccept(tagt, bitstring, bitstring, bitstring, bitstring, bitstring, bitstring, key).
                                                                   (* (s, iks_R, iks_I, ld_id, opk_id, tr, rt, sk) *)
 event IConfirm(tagt, bitstring, bitstring, bitstring, key).                       (* (s, iks_I, iks_R, tr, sk) *)
@@ -372,10 +373,10 @@ let ProcIP(s: tagt, ich: channel) =
   let ack = topen(tkey_r(sk, ss1), rx) in
   event IConfirm(s, iksI, iksR, tr, sk).
 
-(* The attacker as inviter (O-20, O-21, O-23): I of session s on invitations from ich = c (the attacker's own and
-   every leaked invitation of R), plaintext layers; ProcIP with the begin event IStartA instead of IStart (IStartA
-   appears in no query) and, O-23, only on bundles that verify under IK_sig_R. Only in the files <session>-auth.pv
-   (O-22). *)
+(* The attacker as inviter (O-20, O-23; O-21 withdrawn): I of session s on invitations from ich = c (the attacker's
+   own and every leaked invitation of R), plaintext layers; ProcIP with, O-23, only bundles that verify under
+   IK_sig_R. It emits IStart: a run on R's own leaked invitation is an honest start on R's invitation. Only in the
+   files <session>-auth.pv (O-22). *)
 let ProcIPA(s: tagt, ich: channel) =
   let ikI = dhsk(s, kIKI) in
   let iksI = iiks(s) in
@@ -415,7 +416,7 @@ let ProcIPA(s: tagt, ich: channel) =
   let rt = (profI, routes) in
   let fm = (ct1, tseal(tkey(sk, ss1), (c0, c0, rt))) in
   (* §6.5 Inner, inner_ct, Outer: one plaintext cell (ld_id, Outer) *)
-  event IStartA(s, iksI, iksR, b, tr, rt, sk);
+  event IStart(s, iksI, iksR, b, tr, rt, sk);
   out(c, (ld, (ekpub, spkid, opkid, ctspk, ctopk, caead_seal(kid, nz, (lbl_inner, ld), (iksI, fm)))));
   (* R's one reply *)
   in(c, rx: bitstring);

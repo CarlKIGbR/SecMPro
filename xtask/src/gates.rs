@@ -1691,13 +1691,14 @@ pub(crate) fn proverif(ctx: &Ctx) -> Result<Outcome> {
     )))
 }
 
-/// The `RESULT` lines of a ProVerif output in order, skipping the `RESULT (but …)` remark ProVerif prints under an
-/// injective query (it qualifies the line above and is no result of its own).
+/// The `RESULT` lines of a ProVerif output in order, skipping the `RESULT (but …)` / `RESULT (even …)` remark ProVerif
+/// prints under an injective query that does not hold (it states the non-injective version's verdict, qualifies the
+/// line above and is no result of its own; `(even …)` when that version is false too, first seen with H8/H9, M4-11).
 pub(crate) fn proverif_result_lines(output: &str) -> Vec<ResultLine> {
     output
         .lines()
         .filter_map(|l| l.trim().strip_prefix("RESULT "))
-        .filter(|r| !r.starts_with("(but "))
+        .filter(|r| !r.starts_with("(but ") && !r.starts_with("(even "))
         .map(|r| {
             for (suffix, verdict) in [
                 (" is true.", PvVerdict::True),
@@ -2788,7 +2789,8 @@ mod tests {
         let out = "Verification summary:\nRESULT not attacker(s[]) is true.\nRESULT not attacker(p[]) is false.\nRESULT event(x) ==> event(y) cannot be proved.\n";
         assert_eq!(proverif_results(out), vec![Some(true), Some(false), None]);
         let lines = proverif_result_lines(&format!(
-            "{out}RESULT (but event(x) ==> event(y) is true.)\n  RESULT not attacker(q[]) is maybe.\n"
+            "{out}RESULT (but event(x) ==> event(y) is true.)\nRESULT (even event(x) ==> event(y) is false.)\n  \
+             RESULT not attacker(q[]) is maybe.\n"
         ));
         let got: Vec<(&str, PvVerdict)> = lines
             .iter()
@@ -2872,8 +2874,9 @@ mod tests {
     }
 
     /// A ProVerif output of an HX session file whose `RESULT` lines are `lines` (query text, ending), with the lines a
-    /// run prints around them: progress, secrecy assumptions, the `RESULT (but …)` remark under an injective query
-    /// (not a line of its own), and the summary (`Query …`, not read by the gate).
+    /// run prints around them: progress, secrecy assumptions, the remark under an injective query that does not hold
+    /// (not a line of its own: `RESULT (even …)` under a false one, as ProVerif 2.05 prints for H8/H9, `RESULT (but
+    /// …)` otherwise), and the summary (`Query …`, not read by the gate).
     fn hx_output(lines: &[(&str, &str)]) -> String {
         let mut out = vec![
             "Process 0 (that is, the initial process):".to_owned(),
@@ -2884,7 +2887,11 @@ mod tests {
         for (query, end) in lines {
             out.push(format!("-- Query {query} in process 1."));
             out.push(format!("RESULT {query} {end}"));
-            if query.starts_with("inj-event") && *end != "is true." {
+            if query.starts_with("inj-event") && *end == "is false." {
+                out.push(
+                    "RESULT (even event(RAccept(x,y)) ==> event(IStart(x,y)) is false.)".to_owned(),
+                );
+            } else if query.starts_with("inj-event") && *end != "is true." {
                 out.push(
                     "RESULT (but event(RAccept(x,y)) ==> event(IStart(x,y)) is true.)".to_owned(),
                 );
@@ -2955,8 +2962,9 @@ mod tests {
     /// `expect::PROVERIF_EXPECTED` — the correct output passes with a summary per ID; a true query turning false, a false
     /// query turning true, a "cannot be proved" line, a missing and an extra line are each refused, naming the ID; the
     /// informative T12 may say anything; a model without a table is refused. WEISUNG M4-5 §4 (b), (e): every HX session
-    /// file of `expect::PROVERIF_EXPECTED_HX` passes with the output its entries describe (the `RESULT (but …)` remark
-    /// is no line of its own), and a flipped or undecided verdict is refused naming the file, the ID and the query.
+    /// file of `expect::PROVERIF_EXPECTED_HX` passes with the output its entries describe (the `RESULT (but …)` /
+    /// `RESULT (even …)` remark is no line of its own), and a flipped or undecided verdict is refused naming the file,
+    /// the ID and the query.
     #[test]
     fn proverif_verdicts_against_the_claims_table() -> Result<()> {
         let good = tr_verdicts();
@@ -3035,7 +3043,7 @@ mod tests {
 
     /// The HX half of `proverif_verdicts_against_the_claims_table`: every file of `expect::PROVERIF_EXPECTED_HX` passes
     /// with the output its entries describe, a flipped or undecided verdict is refused naming the file, the ID and the
-    /// query; the summary groups the lines per ID; the `RESULT (but …)` remark is no line of its own.
+    /// query; the summary groups the lines per ID; the `RESULT (but …)` / `RESULT (even …)` remark is no line of its own.
     fn hx_verdicts_against_the_table() -> Result<()> {
         let files = hx_table_files(expect::PROVERIF_EXPECTED_HX);
         assert_eq!(files.len(), 19, "{files:?}");

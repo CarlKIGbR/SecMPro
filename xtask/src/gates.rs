@@ -3038,7 +3038,7 @@ mod tests {
     /// query; the summary groups the lines per ID; the `RESULT (but …)` remark is no line of its own.
     fn hx_verdicts_against_the_table() -> Result<()> {
         let files = hx_table_files(expect::PROVERIF_EXPECTED_HX);
-        assert_eq!(files.len(), 14, "{files:?}");
+        assert_eq!(files.len(), 19, "{files:?}");
         for file in &files {
             let lines = hx_lines(expect::PROVERIF_EXPECTED_HX, file);
             let summary = proverif_check_hx(file, &hx_output(&lines))?;

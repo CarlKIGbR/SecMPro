@@ -802,7 +802,8 @@ fn kani_commit_on(named: u32, delete: u32) {
     let result = store.commit_accept(opk_id, &ld_id);
 
     let ok = result.is_ok();
-    assert!(ok == (held(opk_id) && ld_id == [1; 16]));
+    // Ok <=> both are held and the record names exactly `opk_id` (R-64)
+    assert!(ok == (held(opk_id) && ld_id == [1; 16] && opk_id == named));
     assert!(ok || result == Err(Error::Rejected));
     for (k, before) in (1..=2_u32).zip(opks_before) {
         assert!(before.is_some() == held(k));

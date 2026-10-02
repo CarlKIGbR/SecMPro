@@ -334,8 +334,8 @@ pub trait PrekeyStore {
     /// transaction in a persistent store).
     ///
     /// # Errors
-    /// [`Error::Rejected`] if the OPK or the record is absent or the commit could not be made durable; nothing is
-    /// changed then.
+    /// [`Error::Rejected`] if the OPK or the record is absent, the record does not name exactly `opk_id`, or the
+    /// commit could not be made durable; nothing is changed then.
     fn commit_accept(&mut self, opk_id: u32, ld_id: &Id) -> Result<()>;
 }
 
@@ -713,8 +713,11 @@ impl PrekeyStore for MemoryPrekeyStore {
     }
 
     fn commit_accept(&mut self, opk_id: u32, ld_id: &Id) -> Result<()> {
-        // both must exist before either is touched
-        if self.opk(opk_id).is_none() || self.record(ld_id).is_none() {
+        // both must exist, and the record must name exactly this OPK, before either is touched (M4 review R-64)
+        let Some(record) = self.record(ld_id) else {
+            return Err(Error::Rejected);
+        };
+        if record.opk_id != opk_id || self.opk(opk_id).is_none() {
             return Err(Error::Rejected);
         }
         self.consume_record(ld_id)?;

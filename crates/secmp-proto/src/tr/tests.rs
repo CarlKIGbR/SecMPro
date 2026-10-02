@@ -2056,6 +2056,11 @@ fn fragments(msg_id: u8, payload: &[u8], chunk: usize) -> Result<Vec<Content>> {
         .collect())
 }
 
+/// `payload` fragmented under `msg_id` in the canonical shape (spec §7.6 rev 2.4): maximal chunks, remainder last.
+fn fragments_canonical(msg_id: u8, payload: &[u8]) -> Result<Vec<Content>> {
+    fragments(msg_id, payload, 1669)
+}
+
 /// The Contents as the responder of one session decrypts them.
 fn plaintexts(contents: &[Content]) -> Result<Vec<Plaintext>> {
     let (mut a, mut b) = session()?;
@@ -2222,18 +2227,14 @@ fn content_fragments_reassemble_in_any_order() -> Result<()> {
             msg_id: [5; 16],
             kind: AppKind::AttachmentInline,
             expire_after: 9,
-            payload: Zeroizing::new(vec![0x5a; 2500]),
+            payload: Zeroizing::new(vec![0x5a; 4000]),
         }],
     };
     let payload = FragmentPayload::Batch(batch.clone()).encode()?;
-    let pts = plaintexts(&fragments(1, &payload, 700)?)?;
-    assert_eq!(pts.len(), 4);
+    let pts = plaintexts(&fragments_canonical(1, &payload)?)?;
+    assert_eq!(pts.len(), 3);
     let peer = peer(1)?;
-    for order in [
-        &[0, 1, 2, 3][..],
-        &[3, 0, 2, 1][..],
-        &[0, 0, 1, 1, 3, 3, 2][..],
-    ] {
+    for order in [&[0, 1, 2][..], &[2, 0, 1][..], &[0, 0, 1, 1, 2][..]] {
         let mut inbox = Inbox::new();
         let mut trust = Trust::Verified;
         let ds = receive_all(&mut inbox, &pts, order, &peer, &mut trust)?;
@@ -2287,10 +2288,10 @@ fn content_partials_evict_the_oldest() -> Result<()> {
     for id in 10..19_u8 {
         let payload = FragmentPayload::Receipt(ReceiptBody {
             kind: ReceiptKind::Read,
-            msg_ids: vec![[id; 16]],
+            msg_ids: vec![[id; 16]; 120],
         })
         .encode()?;
-        let mut parts = fragments(id, &payload, 10)?.into_iter();
+        let mut parts = fragments_canonical(id, &payload)?.into_iter();
         firsts.push(parts.next().ok_or(Error::Rejected)?);
         seconds.push(parts.next().ok_or(Error::Rejected)?);
         assert!(parts.next().is_none());
@@ -2319,22 +2320,24 @@ fn content_reassembled_inner_types() -> Result<()> {
     let (old_sk, old_iks) = identity(1)?;
     let (_, new_iks) = identity(2)?;
     let kc = key_change(&old_sk, Label::TrKeychange, &new_iks, &new_iks)?;
-    let route = RouteDescriptor::Unknown {
-        kind: 3,
-        blob: Zeroizing::new(vec![1; 5]),
-    };
+    let long = |head: &[u8]| Zeroizing::new([head, &[0; 1700]].concat());
     let payloads = [
         (
             "Messages",
             FragmentPayload::Batch(BatchBody {
-                messages: vec![message(1)],
+                messages: (1..=100).map(message).collect(),
             })
             .encode()?,
         ),
         (
             "Routes",
             FragmentPayload::RouteUpdate(RouteUpdateBody {
-                routes: vec![route],
+                routes: (0..200)
+                    .map(|_| RouteDescriptor::Unknown {
+                        kind: 3,
+                        blob: Zeroizing::new(vec![1; 5]),
+                    })
+                    .collect(),
             })
             .encode()?,
         ),
@@ -2342,7 +2345,7 @@ fn content_reassembled_inner_types() -> Result<()> {
             "Receipt",
             FragmentPayload::Receipt(ReceiptBody {
                 kind: ReceiptKind::Delivered,
-                msg_ids: vec![[4; 16]],
+                msg_ids: vec![[4; 16]; 120],
             })
             .encode()?,
         ),
@@ -2350,16 +2353,16 @@ fn content_reassembled_inner_types() -> Result<()> {
             "Control",
             FragmentPayload::Control(ControlBody {
                 code: ControlCode::SessionResetRequest,
-                arg: Zeroizing::new(vec![]),
+                arg: Zeroizing::new(vec![0; 1700]),
             })
             .encode()?,
         ),
         ("KeyChange", kc.clone()),
-        ("Malformed", Zeroizing::new(vec![0x00, 0])),
-        ("Malformed", Zeroizing::new(vec![0x01, 0, 0])),
-        ("Malformed", Zeroizing::new(vec![0x03, 0, 0])),
-        ("Malformed", Zeroizing::new(vec![0x08, 0])),
-        ("Malformed", Zeroizing::new(vec![0x02, 0])),
+        ("Malformed", long(&[0x00])),
+        ("Malformed", long(&[0x01])),
+        ("Malformed", long(&[0x03])),
+        ("Malformed", long(&[0x08])),
+        ("Malformed", long(&[0x02])),
         // a truncated KeyChange does not decode: unverifiable, so it freezes (M3 review C3, reading of SQ-26)
         (
             "KeyChangeRefused",
@@ -2369,7 +2372,7 @@ fn content_reassembled_inner_types() -> Result<()> {
     let mut contents = Vec::new();
     let mut last_of = Vec::new();
     for (id, (_, payload)) in (1_u8..).zip(&payloads) {
-        contents.extend(fragments(id, payload, payload.len().div_ceil(2).min(1669))?);
+        contents.extend(fragments_canonical(id, payload)?);
         last_of.push(contents.len().saturating_sub(1));
     }
     let pts = plaintexts(&contents)?;
@@ -2520,17 +2523,217 @@ fn content_unverifiable_key_change_freezes() -> Result<()> {
     Ok(())
 }
 
+/// Spec §7.6 rev 2.4 (ADR-043 (j)): a Dummy carries `seq = 0` and `ts = 0`, also after the trip through a cell.
+#[test]
+fn dummy_carries_seq_zero_ts_zero() -> Result<()> {
+    let d = content::dummy();
+    assert_eq!((d.seq, d.ts), (0, 0));
+    assert!(matches!(d.body, ContentBody::Dummy));
+    let (a, b) = session()?;
+    let (_, cell) = send(a, &d)?;
+    let (_, pt) = recv(b, &cell)?;
+    let got = pt.content()?;
+    assert_eq!((got.seq, got.ts), (0, 0));
+    assert!(matches!(got.body, ContentBody::Dummy));
+    Ok(())
+}
+
+/// A Control payload (`inner_type ‖ code ‖ arg_len ‖ arg`) of exactly `len` ≥ 4 bytes, ready to be fragmented.
+fn control_payload(len: usize) -> Result<Zeroizing<Vec<u8>>> {
+    let arg = len.checked_sub(4).ok_or(Error::Rejected)?;
+    let payload = FragmentPayload::Control(ControlBody {
+        code: ControlCode::SessionResetRequest,
+        arg: Zeroizing::new(vec![0x61; arg]),
+    })
+    .encode()?;
+    assert_eq!(payload.len(), len);
+    Ok(payload)
+}
+
+/// The chunks of `payload` cut at `cuts` (cumulative offsets), as Fragment Contents of `total = cuts.len() + 1`.
+fn fragments_cut(msg_id: u8, payload: &[u8], cuts: &[usize]) -> Result<Vec<Content>> {
+    let mut parts = Vec::new();
+    let mut from = 0;
+    for to in cuts.iter().copied().chain([payload.len()]) {
+        parts.push(payload.get(from..to).ok_or(Error::Rejected)?);
+        from = to;
+    }
+    let total = u16::try_from(parts.len()).map_err(|_| Error::Rejected)?;
+    Ok(parts
+        .into_iter()
+        .zip(0_u16..)
+        .map(|(part, idx)| fragment(msg_id, idx, total, part))
+        .collect())
+}
+
+/// What the Contents deliver, one by one, through a fresh session and inbox.
+fn deliver_contents(contents: &[Content]) -> Result<Vec<&'static str>> {
+    let pts = plaintexts(contents)?;
+    let order: Vec<usize> = (0..pts.len()).collect();
+    let mut trust = Trust::Verified;
+    let ds = receive_all(&mut Inbox::new(), &pts, &order, &peer(1)?, &mut trust)?;
+    Ok(kinds(&ds))
+}
+
+/// Spec §7.6 rev 2.4 (ADR-043 (f)): the encoder cuts `len` bytes into `total = ⌈len/1669⌉` chunks (1 for `len ≤ 1669`),
+/// every chunk but the last exactly 1669 bytes, the last `len − 1669·(total − 1)`.
+#[test]
+fn content_chunk_shape_encoder_matches_rule() -> Result<()> {
+    for len in [0_usize, 1, 1668, 1669, 1670, 3338, 3339, 10_000] {
+        let bytes = vec![7_u8; len];
+        let chunks = content::split_chunks(&bytes);
+        let total = if len == 0 { 1 } else { len.div_ceil(1669) };
+        assert_eq!(chunks.len(), total, "{len}: total");
+        assert_eq!(content::chunk_total(len), total, "{len}: chunk_total");
+        let (last, init) = chunks.split_last().ok_or(Error::Rejected)?;
+        assert!(init.iter().all(|c| c.len() == 1669), "{len}: non-last");
+        let before_last = total.checked_sub(1).ok_or(Error::Rejected)?;
+        let rest = len
+            .checked_sub(before_last.checked_mul(1669).ok_or(Error::Rejected)?)
+            .ok_or(Error::Rejected)?;
+        assert_eq!(last.len(), rest, "{len}: last");
+        assert_eq!(chunks.concat(), bytes, "{len}: concatenation");
+    }
+    Ok(())
+}
+
+/// A non-last chunk shorter than 1669 bytes rejects the message, however the rest is cut — the payload decodes
+/// fine, so only the shape rule can reject it.
+#[test]
+fn content_reassembly_rejects_short_nonlast_chunk() -> Result<()> {
+    let payload = control_payload(3000)?;
+    assert_eq!(
+        deliver_contents(&fragments_cut(1, &payload, &[1669])?)?,
+        ["Partial", "Control"],
+        "control: the canonical cut delivers"
+    );
+    for cuts in [vec![1668], vec![1500], vec![1000, 2000], vec![1669, 2000]] {
+        let contents = fragments_cut(1, &payload, &cuts)?;
+        let kinds = deliver_contents(&contents)?;
+        let (last, earlier) = kinds.split_last().ok_or(Error::Rejected)?;
+        assert!(earlier.iter().all(|k| *k == "Partial"), "{cuts:?}");
+        assert_eq!(*last, "Malformed", "{cuts:?}");
+    }
+    Ok(())
+}
+
+/// A last chunk longer than 1669 bytes cannot be carried by a cell (a Fragment's body is at most 1689 B including its
+/// 20-byte header), so the reassembler's upper bound is a second line; what the wire can do is refused before it:
+/// the encoder and the padding. A last chunk of exactly 1669 bytes is canonical and delivers.
+#[test]
+fn content_reassembly_rejects_long_last_chunk() -> Result<()> {
+    let long = fragment(1, 1, 2, &[0x61; 1670]);
+    assert_eq!(long.encode().err(), Some(Error::Rejected));
+    let too_long = [
+        vec![1_u8, 0x03],
+        vec![0; 16],
+        vec![0x06, 0x92],
+        vec![0; 1690],
+    ]
+    .concat();
+    assert!(pad(&too_long, BODY_LEN).is_err());
+    let payload = control_payload(3338)?;
+    assert_eq!(
+        deliver_contents(&fragments_cut(1, &payload, &[1669])?)?,
+        ["Partial", "Control"]
+    );
+    Ok(())
+}
+
+/// An empty last chunk with `total ≥ 2` — a cell forged by hand, as no encoder produces it — is refused and the
+/// message is not delivered, although its first chunk is full and the whole decodes.
+#[test]
+fn content_reassembly_rejects_empty_last_chunk_with_total_ge_2() -> Result<()> {
+    assert_eq!(fragment(1, 1, 2, &[]).encode().err(), Some(Error::Rejected));
+    let payload = control_payload(1669)?;
+    let fields = |idx: u16, chunk: &[u8]| -> Result<Zeroizing<Vec<u8>>> {
+        let mut body = vec![1_u8; 16];
+        body.extend_from_slice(&idx.to_be_bytes());
+        body.extend_from_slice(&2_u16.to_be_bytes());
+        body.extend_from_slice(chunk);
+        let mut f = vec![1_u8, 0x03];
+        f.extend_from_slice(&[0; 16]);
+        f.extend_from_slice(
+            &u16::try_from(body.len())
+                .map_err(|_| Error::Rejected)?
+                .to_be_bytes(),
+        );
+        f.extend_from_slice(&body);
+        pad(&f, BODY_LEN)
+    };
+    let (mut a, mut b) = session()?;
+    let mut trust = Trust::Verified;
+    let mut inbox = Inbox::new();
+    let mut seen = Vec::new();
+    for body in [fields(0, &payload)?, fields(1, &[])?] {
+        let cell = forge(&mut a, |_| {}, &body)?;
+        let (next, pt) = recv(b, &cell)?;
+        b = next;
+        seen.push(kind(&inbox.receive(&pt, &peer(1)?, &mut trust)));
+    }
+    assert_eq!(seen, ["Partial", "Malformed"]);
+    Ok(())
+}
+
+/// A message of at most 1669 bytes is never fragmented (`total = 1`): split in two it rejects, whatever the cut.
+#[test]
+fn content_reassembly_rejects_two_chunks_for_short_message() -> Result<()> {
+    for len in [4_usize, 100, 1668, 1669] {
+        let payload = control_payload(len)?;
+        for cut in [1, len / 2, len.saturating_sub(1)] {
+            let contents = fragments_cut(1, &payload, &[cut])?;
+            assert_eq!(
+                deliver_contents(&contents)?,
+                ["Partial", "Malformed"],
+                "len {len}, cut {cut}"
+            );
+        }
+    }
+    Ok(())
+}
+
+/// The canonical shape delivers, for every `len` of the encoder test that a Fragment can carry (`len ≥ 1670`,
+/// `total ≥ 2`); the unfragmented neighbours (`total = 1`) deliver as plain Contents.
+#[test]
+fn content_reassembly_accepts_canonical_shape() -> Result<()> {
+    for len in [1668_usize, 1669, 1670, 3338, 3339, 10_000] {
+        let payload = control_payload(len)?;
+        let chunks = content::split_chunks(&payload);
+        let total = chunks.len();
+        assert_eq!(total, content::chunk_total(len));
+        if total == 1 {
+            let c = Content {
+                seq: 0,
+                ts: 0,
+                body: ContentBody::Control(ControlBody {
+                    code: ControlCode::SessionResetRequest,
+                    arg: Zeroizing::new(vec![0x61; len.saturating_sub(4)]),
+                }),
+            };
+            // the Content body limit is 1689 B: a 1669-byte payload fits unfragmented
+            assert_eq!(deliver_contents(&[c])?, ["Control"], "len {len}");
+            continue;
+        }
+        let ds = deliver_contents(&fragments_canonical(1, &payload)?)?;
+        let (last, earlier) = ds.split_last().ok_or(Error::Rejected)?;
+        assert_eq!(earlier.len(), total.saturating_sub(1), "len {len}");
+        assert!(earlier.iter().all(|k| *k == "Partial"), "len {len}");
+        assert_eq!(*last, "Control", "len {len}");
+    }
+    Ok(())
+}
+
 /// `Inbox::to_bytes` writes the documented `InboxV1` layout; `from_bytes` restores an inbox that re-encodes
 /// identically and resumes the reassembly.
 #[test]
 fn content_inbox_round_trips_and_resumes() -> Result<()> {
     assert_eq!(*Inbox::new().to_bytes()?, [1, 0]);
     let payload = FragmentPayload::Batch(BatchBody {
-        messages: vec![message(1)],
+        messages: (1..=120).map(message).collect(),
     })
     .encode()?;
-    let parts: Vec<&[u8]> = payload.chunks(12).collect();
-    let mut contents = fragments(1, &payload, 12)?;
+    let parts = content::split_chunks(&payload);
+    let mut contents = fragments_canonical(1, &payload)?;
     assert_eq!(contents.len(), 3);
     contents.push(fragment(2, 1, 2, &[7, 7]));
     let pts = plaintexts(&contents)?;

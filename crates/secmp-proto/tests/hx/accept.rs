@@ -341,6 +341,14 @@ fn table_content(lib: &Lib) -> Vec<Entry> {
         ),
     ));
     t.push(entry(
+        "N-55",
+        "caps 0x80",
+        lib.content_variant(
+            21,
+            &raw_content(1, 1, &handshake_body(lib, 0x80, &[lib.route()])),
+        ),
+    ));
+    t.push(entry(
         "N-56",
         "route count 0",
         lib.content_variant(22, &raw_content(1, 1, &handshake_body(lib, 0, &[]))),
@@ -517,6 +525,12 @@ fn accept_first_msg_not_handshake_rejects_and_keeps_opk() {
 
 #[test]
 fn accept_first_msg_caps_nonzero_rejects_and_keeps_opk() {
+    check_row("N-55");
+}
+
+/// ADR-043 (g): `first_msg` must decrypt to a Handshake with `caps = 0`; caps = 1 and caps = 0x80 reject (N-55).
+#[test]
+fn accept_handshake_caps_nonzero_rejects_and_keeps_opk() {
     check_row("N-55");
 }
 

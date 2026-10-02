@@ -360,7 +360,16 @@ impl Zeroize for RelayQueue {
     fn zeroize(&mut self) {
         self.relay.zeroize();
         self.sid.zeroize();
-        // `send_seed` is a `SecretBytes`: wiped on drop
+        crate::wire::inv::wipe_seed(&mut self.send_seed);
+    }
+}
+
+/// A decoded route that a rejected `process` drops is wiped (M4 review R-61).
+impl Drop for RelayQueue {
+    fn drop(&mut self) {
+        self.zeroize();
+        #[cfg(test)]
+        crate::wire::wipe_log::note("RelayQueue");
     }
 }
 
@@ -411,6 +420,14 @@ impl Zeroize for RouteDescriptor {
                 blob.zeroize();
             }
         }
+    }
+}
+
+impl Drop for RouteDescriptor {
+    fn drop(&mut self) {
+        self.zeroize();
+        #[cfg(test)]
+        crate::wire::wipe_log::note("RouteDescriptor");
     }
 }
 
@@ -945,12 +962,12 @@ mod tests {
         let chunk: Zeroizing<Vec<u8>> = chunk;
         assert_eq!(*chunk, [5]);
         // kind 2 is an unknown route
-        let RouteDescriptor::Unknown { blob, .. } = RouteDescriptor::decode(&[1, 2, 0, 1, 7])?
-        else {
+        let route = RouteDescriptor::decode(&[1, 2, 0, 1, 7])?;
+        let RouteDescriptor::Unknown { blob, .. } = &route else {
             return Err(Error::Rejected);
         };
-        let blob: Zeroizing<Vec<u8>> = blob;
-        assert_eq!(*blob, [7]);
+        let blob: &Zeroizing<Vec<u8>> = blob;
+        assert_eq!(**blob, [7]);
         Ok(())
     }
 
@@ -1235,6 +1252,129 @@ mod tests {
         for t in [0x00_u8, 0x01, 0x03, 0x08] {
             assert!(FragmentPayload::decode(&[t, 1, 1]).is_err(), "{t}");
         }
+        Ok(())
+    }
+}
+
+/// M4-12 (M4 review R-61): the hand-written `Zeroize` of `RelayRef`, `RelayQueue`, `RouteDescriptor` and
+/// `InvitationV1` clears every byte field, and their `Drop` runs it.
+#[cfg(test)]
+mod wipe_tests {
+    use super::*;
+    use crate::wire::Period;
+    use crate::wire::inv::InvitationV1;
+    use crate::wire::inv::tests::relay_ref;
+    use crate::wire::wipe_log;
+
+    fn all_zero(b: &[u8]) -> bool {
+        b.iter().all(|x| *x == 0)
+    }
+
+    fn relay_clear(r: &RelayRef) -> bool {
+        all_zero(&r.relay_fp)
+            && all_zero(r.onion.as_bytes())
+            && all_zero(&r.akc)
+            && r.direct
+                .as_ref()
+                .is_none_or(|d| all_zero(d.host.as_bytes()) && all_zero(&d.spki_sha256))
+    }
+
+    fn queue() -> Result<RelayQueue> {
+        Ok(RelayQueue {
+            relay: relay_ref(true)?,
+            sid: [0x11; 16],
+            send_seed: SecretBytes::from_slice(&[0x22; 32])?,
+            period_s: Period::S20,
+        })
+    }
+
+    fn invitation() -> Result<InvitationV1> {
+        Ok(InvitationV1 {
+            relay: relay_ref(true)?,
+            ld_id: [5; 16],
+            link_key: SecretBytes::from_slice(&[6; 32])?,
+            inviter_fp: [7; 32],
+            inv_sid: [8; 16],
+            inv_send_seed: SecretBytes::from_slice(&[9; 32])?,
+            inv_period_s: Period::S80,
+            expires: u64::MAX,
+        })
+    }
+
+    #[test]
+    fn zeroize_clears_every_byte_field() -> Result<()> {
+        // RelayRef: relay_fp, onion, akc, direct.host, direct.spki_sha256
+        let mut r = relay_ref(true)?;
+        assert!(!relay_clear(&r) && r.direct.is_some());
+        r.zeroize();
+        assert!(relay_clear(&r));
+
+        // RelayQueue: the relay reference, sid, send_seed
+        let mut q = queue()?;
+        q.zeroize();
+        assert!(relay_clear(&q.relay));
+        assert!(all_zero(&q.sid));
+        assert!(all_zero(q.send_seed.expose_secret()));
+
+        // RouteDescriptor: both variants
+        let mut route = RouteDescriptor::RelayQueue(queue()?);
+        route.zeroize();
+        let RouteDescriptor::RelayQueue(q) = &route else {
+            return Err(Error::Rejected);
+        };
+        assert!(relay_clear(&q.relay) && all_zero(&q.sid) && all_zero(q.send_seed.expose_secret()));
+        let mut unknown = RouteDescriptor::Unknown {
+            kind: 7,
+            blob: Zeroizing::new(vec![0xaa; 40]),
+        };
+        unknown.zeroize();
+        let RouteDescriptor::Unknown { kind, blob } = &unknown else {
+            return Err(Error::Rejected);
+        };
+        assert_eq!(*kind, 0);
+        assert!(all_zero(blob));
+
+        // InvitationV1: relay, ld_id, link_key, inviter_fp, inv_sid, inv_send_seed, expires
+        let mut inv = invitation()?;
+        inv.zeroize();
+        assert!(relay_clear(&inv.relay));
+        assert!(all_zero(&inv.ld_id) && all_zero(&inv.inviter_fp) && all_zero(&inv.inv_sid));
+        assert!(all_zero(inv.link_key.expose_secret()));
+        assert!(all_zero(inv.inv_send_seed.expose_secret()));
+        assert_eq!(inv.expires, 0);
+        Ok(())
+    }
+
+    /// The `Drop` of each type runs its wipe (no safe way to read freed memory, so the test observes the call, which
+    /// `zeroize_clears_every_byte_field` shows is a complete wipe): a value that is dropped on a rejection path —
+    /// `invitee_check` on an expired invitation, a route list a rejected `process` drops — is wiped.
+    #[test]
+    fn dropped_invitation_is_wiped() -> Result<()> {
+        wipe_log::take();
+        drop(invitation()?);
+        assert_eq!(wipe_log::take(), ["InvitationV1", "RelayRef"]);
+
+        // the rejection path: expired (step 1), the invitation is dropped inside `invitee_check`
+        let inv = invitation()?;
+        let expires = inv.expires;
+        assert_eq!(
+            crate::inv::invitee_check(inv, &[], expires).err(),
+            Some(Error::Rejected)
+        );
+        assert_eq!(wipe_log::take(), ["InvitationV1", "RelayRef"]);
+
+        drop(RouteDescriptor::RelayQueue(queue()?));
+        assert_eq!(
+            wipe_log::take(),
+            ["RouteDescriptor", "RelayQueue", "RelayRef"]
+        );
+        drop(RouteDescriptor::Unknown {
+            kind: 2,
+            blob: Zeroizing::new(vec![1]),
+        });
+        assert_eq!(wipe_log::take(), ["RouteDescriptor"]);
+        drop(relay_ref(true)?);
+        assert_eq!(wipe_log::take(), ["RelayRef"]);
         Ok(())
     }
 }

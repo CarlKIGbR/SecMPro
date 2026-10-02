@@ -147,6 +147,23 @@ impl Zeroize for RelayRef {
     }
 }
 
+/// A decoded or rejected `RelayRef` is wiped when it goes out of scope (M4 review R-61).
+impl Drop for RelayRef {
+    fn drop(&mut self) {
+        self.zeroize();
+        #[cfg(test)]
+        crate::wire::wipe_log::note("RelayRef");
+    }
+}
+
+/// `SecretBytes` has no in-place wipe: a zero value replaces the seed, and the old allocation is wiped by its own
+/// `Drop`. (`from_slice` fails only on a wrong length, which `HASH_LEN` is not.)
+pub(crate) fn wipe_seed(seed: &mut SecretBytes<HASH_LEN>) {
+    if let Ok(zero) = SecretBytes::from_slice(&[0; HASH_LEN]) {
+        *seed = zero;
+    }
+}
+
 impl Encode for RelayRef {
     fn encode_to(&self, w: &mut Writer) -> Result<()> {
         write_ver(w);
@@ -212,15 +229,25 @@ pub struct InvitationV1 {
     pub expires: u64,
 }
 
-/// Wiped by `Zeroizing<InvitationV1>` (held so by [`crate::inv::InviteeAccepted`]): the relay reference and the ids;
-/// the two seeds are `SecretBytes` and wipe themselves.
+/// Wiped explicitly, by `Zeroizing<InvitationV1>` (held so by [`crate::inv::InviteeAccepted`]) and, since R-61, by its
+/// own `Drop` (so a rejected invitation is wiped too): the relay reference, the ids and both seeds.
 impl Zeroize for InvitationV1 {
     fn zeroize(&mut self) {
         self.relay.zeroize();
         self.ld_id.zeroize();
+        wipe_seed(&mut self.link_key);
         self.inviter_fp.zeroize();
         self.inv_sid.zeroize();
+        wipe_seed(&mut self.inv_send_seed);
         self.expires = 0;
+    }
+}
+
+impl Drop for InvitationV1 {
+    fn drop(&mut self) {
+        self.zeroize();
+        #[cfg(test)]
+        crate::wire::wipe_log::note("InvitationV1");
     }
 }
 

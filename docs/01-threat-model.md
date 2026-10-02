@@ -184,5 +184,6 @@ Linkability: queues unlinkable in Strict mode; identity keys never on the relay.
 | RR-8 | Unaudited pure-Rust ML-DSA / ML-KEM crates | Medium | Differential tests vs second implementations; KATs on every target; external audit before 1.0 |
 | RR-9 | Accessibility trade-off (screen readers vs scraping) | Medium | Explicit opt-in mode with warning; consult a11y users before 1.0 |
 | RR-10 | Invitation shared over a compromised channel | Medium | One-time + expiry + SAS mandatory |
+| RR-15 | **LinkDataV1 profile/created and bundle metadata not transcript-bound (O-10, M4).** `Profile_R`/`created` in LinkDataV1 and `spk_expiry`/`opk_present`/`sig` are bound only by K_ld and the bundle signature, not by the HX transcript; an invitation holder can substitute the inviter's Profile. Accepted for v1; binding at the next breaking spec revision (v2). | Low (accepted for v1) | Binding at the next breaking spec revision (v2) |
 
 **Opening-trial position (R-59, M4).** On the TR receive path the position of the header-key trial that opens leaks ≈ 1 timer floor through the AEAD library's tag-check branch (measured 2026-10-01, M1: −1.4 floors first vs last candidate, reject path). Accepted under R-15 (ack timing masks processing time); hardening scheduled: branch-free trial opens (F-M5).

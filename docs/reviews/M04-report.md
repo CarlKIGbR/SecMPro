@@ -13,6 +13,9 @@ CI job `proverif-hx`, ADR-046 done.
 **WEISUNG M4-7 (2026-10-02, §13.11):** O-20…O-23 applied (O-23 in all five auth files): 14 session files pass the
 gate (82 / 82 lines as expected, hBoth 1043.5 s the longest); the 5 `-auth` files (H5, H5, H8, H9, H9b) STOP at the
 30-min cap (§13.11.5) — the stall also occurs without the attacker as inviter (§13.11.4).
+**WEISUNG M4-8 (2026-10-02, §11.2):** K2 option (c) (`prop_outer_unpad_total_12018`); `secmp-sys-mem` `cfg(kani)`
+backend (the Miri file); K4b on the real store VERIFIED for two one-record stores — the M4-3 bound (≤ 2 records)
+STOPs (§11.3); K4a keeps its store model (real store > 30 min). Kani gate 25/25, 1422 s.
 
 Inputs: `docs/07` §M4; spec `docs/03` §5, §6 (+ §7.2–7.4, §7.6 for `first_msg`), App. A/B/D; `CLAUDE.md`; `docs/06` §8;
 `docs/08` ADR-043, ADR-044 (proposed), ADR-045; `docs/reviews/M04-planning/TEST-SPEC-M4.md` (115 dictated rows),
@@ -270,6 +273,87 @@ Gate: `cargo xtask step --strict kani` on `648bd3f`: PASS, 24/24 harnesses verif
 no other CBMC run in parallel; K2 46 s, K3 275 s, K4a 293 s, K5 41 s (`kani-xtask-step-648bd3f.txt`).
 Push: `gh run list --branch m04-hx --limit 3` at 23:43 CEST showed no run `in_progress`/`queued` (36885710027 and
 36862814521 completed): pushed with this commit.
+
+### 11.2 WEISUNG M4-8 (K2 option (c); `cfg(kani)` backend; K4b and K4a on the real store)
+§1 state at start: head `8434372`; `git log origin/m04-hx..HEAD` = 3 commits (`4f5562d`, `7c235d2`, `8434372`);
+status clean. Commits: `13640ac` (sys-mem backend), `15b7b3b` (K4b, K4a doc, harness list), `80f1f5b` (property
+test), then this report. Evidence: `M04-evidence/kani-m4-8-attempts.txt` (every attempt with time and memory; the
+backend-absence proof), `kani-xtask-step-80f1f5b.txt` (the gate run).
+
+**K2 — option (c).** Not proven by Kani: the scan at full size; covered by `padding` (≤ 32 B) and
+`prop_outer_unpad_total_12018`. `kani_outer_unpad_total` stays the stubbed K2 of `69d1320`.
+`prop_outer_unpad_total_12018` (`tests/hx/props.rs`, seeded like M3: `DEFAULT_SEED`, or `SECMP_PROPTEST_SEED`,
+which CI sets to the run id): 450 buffers of 12018 bytes, 64 each with the 0x80 marker at 9362 (valid), 0, 1, 9361,
+9363 and 12017 (random bytes before it, zeros after it, half of them with version byte 1), the all-zero and the
+all-0x80 buffer, and 64 fully random buffers. Invariant: never panics; `unpad` returns exactly the bytes before the
+last non-zero byte if that byte is 0x80 (reference: a forward scan), else `Rejected`; `Outer::decode` returns `Ok`
+exactly when the marker is at 9362, `ver` = 1 and `ek_I` passes the X25519 key check, and then the field string is
+9362 bytes, `buf[9362]` = 0x80, `buf[9363..]` all zero and the `Outer` re-encodes to `buf`; otherwise
+`Err(Rejected)`; at least 8 valid buffers accepted. PASS in 0.30 s with the default seed and with
+`SECMP_PROPTEST_SEED=36885710027`.
+
+**Backend.** `secret_page.rs` selects `secret_page/heap.rs` under `cfg(any(miri, kani))` and the unix/windows
+backends under `not(any(miri, kani))`: the Kani backend is the Miri backend file (a `Box` of one 4096-byte page,
+zeroised by `SecretPage::drop`, no `mmap`/`mlock`), no new `unsafe`; crate root documents it as "the verification
+backend (Kani), like the Miri one". Miri: same code under `cfg(miri)`, only doc comments changed. Absent from
+non-Kani builds: no `--cfg kani`/`--cfg miri` in any `secmp_sys_mem` rustc invocation of `cargo build --release` and
+`cargo test --no-run`; `nm -u` of the native test binary shows the unix backend's `_mmap _mlock _mprotect _munlock
+_munmap`; the new test `heap_backend_only_under_miri_or_kani` (backend is `Heap` ⇔ `cfg!(any(miri, kani))`) passes.
+
+| Harness | Result | Bound used | Not covered |
+|---|---|---|---|
+| K4b `kani_commit_accept_atomic` | VERIFIED, 304.3 s in the gate | real `MemoryPrekeyStore`; two stores: SPK 1, OPKs 1 and 2, record `[1; 16]` naming OPK 1 — or naming OPK 2, then OPK 2 deleted; arbitrary `created`/`expires`; every `(opk_id, ld_id)`; one arbitrary probe id per kind; unwind 3 | the WEISUNG M4-3 bound: every store of ≤ 2 OPKs and ≤ 2 records with arbitrary ids (STOP §11.3); a second record |
+| K4a `kani_accept_opk_delete_only_on_success` | VERIFIED, 306.1 s in the gate | unchanged: the store model (`ContractStore`), ≤ 6 chunks, 3 init_ids, 8 slots, unwind 10 | the real store: no verdict in 30 min (below) |
+| K2 `kani_outer_unpad_total` | VERIFIED, 58.6 s | unchanged (stubbed scan) | the full-size scan → `prop_outer_unpad_total_12018` |
+
+K4b checks: no panic; `Ok` ⇔ the OPK `opk_id` and the record `ld_id` are both held, and then both are gone;
+otherwise `Err(Rejected)`; each other OPK, the record (if not consumed) and the SPK generation keep their tag (fields
+and the first secret byte, which names the key: the RNG stub makes draw *d* the byte *d* repeated); the probe ids:
+present after exactly as before unless removed, same tag — nothing else removed, changed or added; cover "a
+commit" satisfied. Stubs (in `kani_proofs.rs`, K4b only, none in the store's logic): `secmp_crypto::rng::fill`
+(Kani executes no `getentropy`), `zeroize::optimization_barrier` (inline `asm!`), zeroize's `[Z; N]` wipe as one
+assignment of zeros, and `[u8; 16] ==` (Kani's `memcmp` model) without a loop — the last two are loops of 64 and
+16 steps, and `#[kani::unwind]` bounds every loop of a harness: with them CBMC unrolled each loop over the store's
+vectors 64 or 16 times (no verdict in 30 min).
+
+K4a on the real store: no (kept the model, as the WEISUNG allows). `drive` on `MemoryPrekeyStore` with the K4a
+bound gave no verdict in 30 min three times: unwind 65 without stubs (1811 s, CBMC timed out), unwind 17 with the
+wipe stub (stopped at ~27 min, symex unfinished), unwind 10 with both stubs (1803 s, CBMC timed out).
+
+Harness count 24 → 25. Gate: `cargo xtask step --strict kani` on `80f1f5b`: PASS, 25/25 verified, 1422 s (step),
+wall 1423 s, peak RSS 6.33 GiB, nothing else running; K4b 304.3 s, K4a 306.1 s, K3 279.0 s, K2 58.6 s.
+Other checks: `cargo nextest run -p secmp-proto --all-features` 257/257 PASS (81.5 s); `cargo xtask step --strict
+fmt clippy policy` PASS; `cargo clippy -p secmp-proto -p secmp-sys-mem --all-targets -D warnings` clean (no `kat`);
+`cargo nextest run -p xtask kani` 2/2 PASS (harness list test now 25).
+
+Deviations from the brief:
+1. K4b's bound is two concrete stores with one record, not every store of ≤ 2 OPKs and ≤ 2 records (STOP §11.3).
+2. The four stubs above, and the RNG stub's concrete secrets (the store never reads them; symbolic secrets only
+   added solver time).
+3. Files beyond "the `cfg(kani)` backend only" in `secmp-sys-mem/src`: the absence test and the
+   `cfg(not(any(miri, kani)))` on the OS-view test (`secret_page.rs`), and the backend's doc comments.
+4. `kani_proofs.rs` imports `core::cmp::PartialEq` explicitly: Kani resolves the stub path neither through the
+   prelude nor through `core::cmp::PartialEq` (the derive macro).
+
+### 11.3 Blocked — WEISUNG M4-8 (STOP)
+1. **K4b at the WEISUNG M4-3 bound.** Harness: `kani_commit_accept_atomic` with a symbolic store (arbitrary first
+   ids, optional SPK, ≤ 2 OPKs, ≤ 2 records with arbitrary `ld_id`/`spk_id`/`opk_id`, optional `delete_opk` of an
+   arbitrary id), and also as 28 concrete store shapes. Failing check: none — no verdict. Best runs: with all four
+   stubs, unwind 3: symex 47 s (337 518 steps, 8 794 VCCs), then "CBMC appears to have run out of memory" in the
+   propositional reduction (1194 s, 3.06 GiB; again alone with concrete secrets: 800 s, 3.00 GiB); without the
+   `==` stub (unwind 17): CBMC timed out at 30 min. Property: not contradicted, not proven. Bisection on concrete
+   stores (presence checks only): 1 OPK + 1 record 13.1 s, 2 OPKs + 1 record 39–46 s, **any store with a second
+   record: no verdict in 9–20 min** (2 OPKs + 2 records with the full checks: 20-min cap, 5.30 GiB) — a second
+   record makes `consume_record` a `Vec::remove` of an `InvitationRecord` at a symbolic index. A symbolic store
+   with ≤ 2 OPKs and ≤ 1 record did not finish in 9 min either (3 runs at once). Options: (a) accept K4b as committed (two
+   concrete one-record stores) plus the concrete tests of two records (`accept_success_deletes_exactly_that_opk`,
+   `accept_success_consumes_record_and_opk`); (b) a one-off run of one two-record store outside the gate with a
+   longer limit (not tried beyond 20 min; memory grew to 5.3 GiB of 16); (c) leave K4b at the model level (K4a).
+   Question: which of (a)–(c)?
+
+Push: `gh run list --branch m04-hx --limit 4` at 2026-10-02 17:17 CEST showed no run `in_progress`/`queued` (last PR
+run 36983733373, head `2c23c0f`, completed `failure`): pushed with this commit (`13640ac`…this commit, together with
+the earlier unpushed `4f5562d`, `7c235d2`, `8434372`).
 
 ## 12. WEISUNG M4-4 (B5–B8 landed, R-58, F2 respecified, F19 site tags)
 

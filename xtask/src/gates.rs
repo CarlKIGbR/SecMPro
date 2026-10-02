@@ -3868,8 +3868,8 @@ mod tests {
     #[test]
     fn kani_refuses_fifteen_harnesses() -> Result<()> {
         let all = expect::KANI_HARNESSES;
-        assert_eq!(all.len(), 24);
-        assert_eq!(kani_verified(&kani_log(all, 0))?.len(), 24);
+        assert_eq!(all.len(), 25);
+        assert_eq!(kani_verified(&kani_log(all, 0))?.len(), 25);
         // a deleted harness: 18 verified, and Kani's own summary says 18 of 18
         let fifteen = all.get(1..).unwrap_or_default();
         assert!(kani_verified(&kani_log(fifteen, 0)).is_err());

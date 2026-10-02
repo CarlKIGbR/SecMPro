@@ -535,8 +535,9 @@ fn kani_hx_grouping() {
 
 /// A prekey store without keys that keeps the contract of [`PrekeyStore::commit_accept`]: the OPK and the record are
 /// removed together (`Ok`), or nothing changes (`Err`: either is absent, or the commit could not be made durable).
-/// It counts the calls and keeps their arguments. (`MemoryPrekeyStore` cannot hold an OPK or a record under Kani:
-/// their secrets live in `secmp-sys-mem` pages, whose `mmap` Kani does not execute; see the M4 report.)
+/// It counts the calls and keeps their arguments. (On the real `MemoryPrekeyStore`, which Kani runs since
+/// `secmp-sys-mem` has a `cfg(kani)` heap backend, this harness gave no verdict in 30 minutes, with or without the
+/// K4b stubs; K4b proves `commit_accept` on the real store. M4 report §11.2.)
 struct ContractStore {
     opk_present: bool,
     record_present: bool,
@@ -674,6 +675,185 @@ fn kani_accept_opk_delete_only_on_success() {
                 .is_some_and(|(c, id)| c == 1 && first_id.get() != Some(id)),
         "a rejected complete group, then a group of another init_id commits"
     );
+}
+
+// ---- K4b: `commit_accept` on the real `MemoryPrekeyStore` (WEISUNG M4-8) --------------------------------------------
+//
+// The store's secrets live in `secmp-sys-mem` pages, which run on that crate's heap backend under Kani (`cfg(kani)`,
+// the Miri backend). Four stubs, none in the store's logic: the OS randomness, zeroize's `asm!` barrier, zeroize's
+// per-element wipe loop and the `memcmp` model of `[u8; 16] ==`. The last two are loops of 64 and 16 steps; as
+// `#[kani::unwind]` bounds every loop of a harness, they would make CBMC unroll each loop over the store's vectors
+// 64 or 16 times (no verdict in 30 minutes; M4 report §11.2).
+
+use crate::prekeys::{InvitationRecord, MemoryPrekeyStore};
+use crate::tr::OsEntropy;
+use core::cmp::PartialEq; // named by the stub path below: Kani resolves neither the prelude nor `core::cmp::PartialEq`
+
+/// The draws of [`kani_fill`] so far.
+static KANI_DRAWS: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(1);
+
+/// `secmp-crypto`'s operating-system randomness under Kani, which does not execute `getentropy`/`getrandom`: draw
+/// `d` (1, 2, …) is the byte `d` repeated (a draw of the store is at most 64 bytes, an ML-KEM seed). Different keys
+/// get different bytes, so the harness can tell them apart by their first byte; the bytes are concrete because the
+/// store never reads them.
+fn kani_fill(buf: &mut [u8]) -> secmp_crypto::Result<()> {
+    let d = KANI_DRAWS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+    let bytes = [d; 64];
+    let src = bytes
+        .get(..buf.len())
+        .ok_or(secmp_crypto::Error::Unavailable)?;
+    buf.copy_from_slice(src);
+    Ok(())
+}
+
+/// zeroize's optimisation barrier is an inline `asm!` comment, which Kani does not execute.
+fn kani_no_barrier<T: ?Sized>(_val: &T) {}
+
+/// zeroize's wipe of a fixed-size array (one volatile write per element) as one assignment of the same zeros. The
+/// wipe itself is checked by Miri and the `secmp-sys-mem` unit tests.
+fn kani_zeroize_array<Z: Default + Copy, const N: usize>(a: &mut [Z; N]) {
+    *a = [Z::default(); N];
+}
+
+/// Element `k` of `a` and `b` is equal (or both arrays are shorter).
+fn kani_eq_at<T: PartialEq<U>, U>(a: &[T], b: &[U], k: usize) -> bool {
+    match (a.get(k), b.get(k)) {
+        (Some(x), Some(y)) => x == y,
+        _ => true,
+    }
+}
+
+/// Array equality `[T; N] == [U; N]` without a loop: a 16-byte array as one `u128` comparison, any other array of
+/// at most 16 elements as the conjunction of the element comparisons (asserted: a larger array fails the proof).
+fn kani_array_eq<T: PartialEq<U> + 'static, U: 'static, const N: usize>(
+    a: &[T; N],
+    b: &[U; N],
+) -> bool {
+    let (x, y): (&dyn core::any::Any, &dyn core::any::Any) = (a, b);
+    if let (Some(x), Some(y)) = (x.downcast_ref::<[u8; 16]>(), y.downcast_ref::<[u8; 16]>()) {
+        return u128::from_ne_bytes(*x) == u128::from_ne_bytes(*y);
+    }
+    assert!(N <= 16);
+    kani_eq_at(a, b, 0)
+        & kani_eq_at(a, b, 1)
+        & kani_eq_at(a, b, 2)
+        & kani_eq_at(a, b, 3)
+        & kani_eq_at(a, b, 4)
+        & kani_eq_at(a, b, 5)
+        & kani_eq_at(a, b, 6)
+        & kani_eq_at(a, b, 7)
+        & kani_eq_at(a, b, 8)
+        & kani_eq_at(a, b, 9)
+        & kani_eq_at(a, b, 10)
+        & kani_eq_at(a, b, 11)
+        & kani_eq_at(a, b, 12)
+        & kani_eq_at(a, b, 13)
+        & kani_eq_at(a, b, 14)
+        & kani_eq_at(a, b, 15)
+}
+
+/// The first byte of a held OPK's `OPK_dh`: it names the key ([`kani_fill`]).
+fn kani_opk_tag(store: &MemoryPrekeyStore, id: u32) -> Option<u8> {
+    store.opk(id).map(|o| o.dh_secret().expose_secret()[0])
+}
+
+/// A held record's `spk_id`, `opk_id`, `expires` and the first byte of its link key.
+fn kani_record_tag(store: &MemoryPrekeyStore, ld_id: &[u8; 16]) -> Option<(u32, u32, u64, u8)> {
+    store
+        .record(ld_id)
+        .map(|r| (r.spk_id, r.opk_id, r.expires, r.link_key.expose_secret()[0]))
+}
+
+/// [`kani_commit_accept_atomic`] on one store: SPK generation 1 (arbitrary `created`), OPKs 1 and 2, the record
+/// `[1; 16]` naming OPK `named` (arbitrary `expires`), then `delete_opk(delete)` unless `delete` is 0.
+fn kani_commit_on(named: u32, delete: u32) {
+    let mut store = MemoryPrekeyStore::starting_at(1, 1);
+    assert!(store.create_spk(kani::any(), &mut OsEntropy) == Ok(1));
+    assert!(store.issue_opk(&mut OsEntropy) == Ok(1));
+    assert!(store.issue_opk(&mut OsEntropy) == Ok(2));
+    let link_key = secmp_crypto::SecretBytes::from_slice(&[0xa5; 32]);
+    assert!(link_key.is_ok());
+    if let Ok(link_key) = link_key {
+        let record = InvitationRecord {
+            ld_id: [1; 16],
+            link_key,
+            spk_id: 1,
+            opk_id: named,
+            expires: kani::any(),
+        };
+        assert!(store.add_record(record).is_ok());
+    }
+    if delete != 0 {
+        assert!(store.delete_opk(delete).is_ok());
+    }
+
+    let opk_id: u32 = kani::any();
+    let ld_id: [u8; 16] = kani::any();
+    // one arbitrary id of each kind stands for every id
+    let (probe_opk, probe_ld): (u32, [u8; 16]) = (kani::any(), kani::any());
+    let held = |k: u32| (k == 1 || k == 2) && k != delete;
+    let opks_before = [kani_opk_tag(&store, 1), kani_opk_tag(&store, 2)];
+    let record_before = kani_record_tag(&store, &[1; 16]);
+    let spk_before = store.spk(1).map(|g| g.dh_secret().expose_secret()[0]);
+    let probe_opk_before = kani_opk_tag(&store, probe_opk);
+    let probe_ld_before = kani_record_tag(&store, &probe_ld);
+    assert!(spk_before.is_some() && record_before.is_some());
+
+    let result = store.commit_accept(opk_id, &ld_id);
+
+    let ok = result.is_ok();
+    assert!(ok == (held(opk_id) && ld_id == [1; 16]));
+    assert!(ok || result == Err(Error::Rejected));
+    for (k, before) in (1..=2_u32).zip(opks_before) {
+        assert!(before.is_some() == held(k));
+        let after = kani_opk_tag(&store, k);
+        if ok && k == opk_id {
+            assert!(after.is_none());
+        } else {
+            assert!(after == before);
+        }
+    }
+    let record_after = kani_record_tag(&store, &[1; 16]);
+    assert!(if ok {
+        record_after.is_none()
+    } else {
+        record_after == record_before
+    });
+    assert!(store.spk(1).map(|g| g.dh_secret().expose_secret()[0]) == spk_before);
+    let opk_after = kani_opk_tag(&store, probe_opk);
+    assert!(if ok && probe_opk == opk_id {
+        opk_after.is_none()
+    } else {
+        opk_after == probe_opk_before
+    });
+    let ld_after = kani_record_tag(&store, &probe_ld);
+    assert!(if ok && probe_ld == ld_id {
+        ld_after.is_none()
+    } else {
+        ld_after == probe_ld_before
+    });
+    kani::cover!(ok, "a commit");
+    // the store's drop is not part of the property
+    core::mem::forget(store);
+}
+
+/// K4b: [`PrekeyStore::commit_accept`] of the real [`MemoryPrekeyStore`] is atomic, for every `(opk_id, ld_id)` on
+/// two stores of SPK generation 1, OPKs 1 and 2 and one record: the record names OPK 1; or it names OPK 2, which is
+/// then deleted (a record whose OPK is gone). No panic; `Ok` exactly when the OPK `opk_id` and the record `ld_id`
+/// are both held, and then both are gone; otherwise `Err(Rejected)`. Every other OPK, the record if not consumed
+/// and the SPK generation are unchanged (the first secret byte names the key, [`kani_fill`]), and an arbitrary probe
+/// id of each kind — present after exactly as before unless it is the removed one, with the same tag — shows that
+/// nothing else is removed, changed or added. Bound (WEISUNG M4-3 asked for every store of ≤ 2 OPKs and ≤ 2 records
+/// with arbitrary ids; M4 report §11.2): no proof with a second record or a symbolic store finished in 9–30 minutes.
+#[kani::proof]
+#[kani::stub(secmp_crypto::rng::fill, kani_fill)]
+#[kani::stub(zeroize::optimization_barrier, kani_no_barrier)]
+#[kani::stub(<[u8; 64] as zeroize::Zeroize>::zeroize, kani_zeroize_array)]
+#[kani::stub(<[u8; 16] as PartialEq<[u8; 16]>>::eq, kani_array_eq)]
+#[kani::unwind(3)] // the vectors hold at most 2 entries
+fn kani_commit_accept_atomic() {
+    kani_commit_on(1, 0);
+    kani_commit_on(2, 2);
 }
 
 /// `HandshakeCellPlaintext` (D.4) on every input of 4023…4025 bytes (the exact size and its neighbours): the decoder

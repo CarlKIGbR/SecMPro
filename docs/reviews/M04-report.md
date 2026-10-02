@@ -915,3 +915,22 @@ None from the spec. From the letter of the WEISUNG:
 ## M4-10 — R-60 (mutants gate builds secmp-proto with kat)
 
 The mutants step now passes `--features secmp-crypto/kat,secmp-proto/kat`, so the HX integration suite counts. Measured on bc17190 (HX files; command and full list in `M04-evidence/mutants-hx-bc17190.txt`): 335 mutants, 220 caught, 22 missed, 93 unviable, 0 timeouts; 67 min with -j3 (serial estimate ~3 h). Baseline test run is now ~130 s per mutant build: the full two-crate gate must be re-timed against the 180-min job budget. The 22 survivors are not fixed or excluded; the reviewer decides per mutant.
+
+## M4-9 — WEISUNG M4-9 (ADR-043 ratified → rev 2.4, F16, ADR-044 → rev 2.5, O-10)
+
+Start (§1 record): head `b204a8b`, 3 commits unpushed (`ahead 3`), tree clean, 2026-10-02 17:27 UTC (≥ 11:00 UTC: Part D due).
+End: head `2af7924`.
+
+- **A.** ADR-043 Status → Accepted (owner ratification by default 2026-10-02 02:45 UTC). `docs/03` rev 2.4, items (a)–(k)
+  (k = `CLAUDE.md` §5, already in place since the M3 docs commit).
+- **B.** `tr/content.rs`: `chunk_total`, `split_chunks` (the encoder shape), `canonical_shape` checked when a group completes;
+  4 existing content tests rewritten to canonical chunking; 6 new tests in `tr/tests.rs`. Empty last chunk and over-long last
+  chunk are already refused earlier (Fragment decoder `chunk ≥ 1`; the cell geometry limits a chunk to 1669 B), so those two tests do
+  not depend on the new check; the other four fail without it (checked by disabling the check). `vectors/tr.json` unchanged.
+- **C.** (g) `accept_handshake_caps_nonzero_rejects_and_keeps_opk` added (N-55: caps 1 and 0x80). (j) `dummy_carries_seq_zero_ts_zero`
+  added (`content::dummy()` exists).
+- **D.** ADR-044 Status → Accepted (11:00 UTC default). `docs/03` rev 2.5, items (a)–(f). Existing tests: (b) `initiator_start_output_and_state_contain_no_ek_secret`;
+  (c) `group_rejected_then_other_init_id_accepts`, `group_duplicate_chunk_differing_first_seen_wins`, `group_duplicate_chunk_identical_ignored`,
+  `group_partial_store_bound_8_evicts_oldest`; (d) `expired_invitation_record_is_not_offered_to_accept`; (e) `accept_first_msg_n_nonzero_rejects_and_keeps_opk`,
+  `accept_first_msg_pn_nonzero_rejects_and_keeps_opk`, `accept_handshake_without_known_route_rejects_and_keeps_opk`; (f) `accept_reflected_own_iks_rejects_and_keeps_opk`.
+- **E.** `docs/01` §7 row RR-15 (O-10).

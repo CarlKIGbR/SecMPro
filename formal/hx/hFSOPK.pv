@@ -2,7 +2,7 @@
 (* formal/hx/hFSOPK.pv — session hFSOPK of CLAIMS §HX, one file per session (O-18, ADR-046) over the library
    formal/hx.pvl (model, abstractions, devices: its header). Run: proverif -lib formal/hx.pvl formal/hx/hFSOPK.pv
 
-   Row (formal/hx.pvl 3.): I's inv. pinv and c · PubIKS yes · LeakInv ph 1 · RevealLT(R) ph 1 · RevealLT(I) ph 1 · RevealSPK ph 1 ·
+   Row (formal/hx.pvl 3.): I's inv. pinv · PubIKS yes · LeakInv ph 1 · RevealLT(R) ph 1 · RevealLT(I) ph 1 · RevealSPK ph 1 ·
    RevealOPK ph 1 · DHO - · KEMO - · layers sealed (O-17).
    Queries (RESULT lines in this order; expected per the CLAIMS gate rule):
      no begin event:    H11 (4) false · H12b (2) false
@@ -66,7 +66,6 @@ process
     out(c, riks(hFSOPK))
   | ! Invitation(hFSOPK)
   | ! ProcIS(hFSOPK, pinv(hFSOPK))
-  | ! ProcIS(hFSOPK, c)
   | PubI(hFSOPK)
   | (phase 1; RevLT(hFSOPK, pR, kIKR))
   | (phase 1; RevLT(hFSOPK, pI, kIKI))

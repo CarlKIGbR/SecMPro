@@ -2,7 +2,7 @@
 (* formal/hx/hKCIi.pv — session hKCIi of CLAIMS §HX, one file per session (O-18, ADR-046) over the library
    formal/hx.pvl (model, abstractions, devices: its header). Run: proverif -lib formal/hx.pvl formal/hx/hKCIi.pv
 
-   Row (formal/hx.pvl 3.): I's inv. c · PubIKS yes · LeakInv ph 0 · RevealLT(R) - · RevealLT(I) ph 0 · RevealSPK - ·
+   Row (formal/hx.pvl 3.): I's inv. pinv · PubIKS yes · LeakInv ph 0 · RevealLT(R) - · RevealLT(I) ph 0 · RevealSPK - ·
    RevealOPK - · DHO - · KEMO - · layers plain (O-17).
    Queries (RESULT lines in this order; expected per the CLAIMS gate rule):
      no begin event:    H9c (1) true · H11 (4) false
@@ -40,8 +40,8 @@ query iI: bitstring, iR: bitstring, b: bitstring, tr: bitstring, rt: bitstring, 
       event(IConfirm(hKCIi, iks(vk(iksig(hKCIi, pI)), exp(g, dhsk(hKCIi, kIKI))),
                      iks(vk(iksig(hKCIi, pR)), exp(g, dhsk(hKCIi, kIKR))), tr, sk)).
 
-(* One invitation j issued by R (formal/hx.pvl 1.): OPK_j, bundle, InvitationV1, blob, the one acceptance
-   attempt (O-13), and this session's compromise of the invitation *)
+(* One invitation j issued by R (formal/hx.pvl 1.): OPK_j, bundle, InvitationV1 (to I on pinv), blob, the one
+   acceptance attempt (O-13), and this session's compromise of the invitation *)
 let Invitation(s: tagt) =
   new o[]: bitstring;
   new ld[]: bitstring;
@@ -54,12 +54,13 @@ let Invitation(s: tagt) =
   out(c, BlobP(s, ld, b));
   (
     AcceptP(s, ld, lk, opkid, o)
+  | out(pinv(s), (ld, lk, fp(riks(s))))
   | Leak(s, ld, lk)
   ).
 
 process
     out(c, riks(hKCIi))
   | ! Invitation(hKCIi)
-  | ! ProcIP(hKCIi, c)
+  | ! ProcIP(hKCIi, pinv(hKCIi))
   | PubI(hKCIi)
   | RevLT(hKCIi, pI, kIKI)

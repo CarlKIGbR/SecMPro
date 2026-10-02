@@ -1,13 +1,12 @@
 (* SPDX-License-Identifier: AGPL-3.0-or-later *)
-(* formal/hx/hKEM.pv — session hKEM of CLAIMS §HX, one file per session (O-18, ADR-046) over the library
-   formal/hx.pvl (model, abstractions, devices: its header). Run: proverif -lib formal/hx.pvl formal/hx/hKEM.pv
+(* formal/hx/hKEM-auth.pv — session hKEM of CLAIMS §HX, its begin-IStart declaration (O-22) over the library
+   formal/hx.pvl (model, abstractions, devices: its header). Run: proverif -lib formal/hx.pvl formal/hx/hKEM-auth.pv
 
-   Row (formal/hx.pvl 3.): I's inv. pinv · PubIKS yes · LeakInv ph 0 · RevealLT(R) - · RevealLT(I) - · RevealSPK - ·
-   RevealOPK - · DHO - · KEMO ph 0 · layers plain (O-17).
-   Base file (O-22): no attacker-as-inviter process; the begin-IStart declaration (H5) is in hKEM-auth.pv.
+   Row (formal/hx.pvl 3.): as hKEM.pv plus the attacker as inviter: I on c with event IStartA (ProcIPA, O-20,
+   O-21), only on bundles that verify under IK_sig_R (O-23).
    Queries (RESULT lines in this order; expected per the CLAIMS gate rule):
-     no begin event:    H3 (2) true · H11 (4) false
-   — 6 RESULT lines.
+     begin IStart:      H5 (1) true
+   — 1 RESULT line. The other declarations of the session are in hKEM.pv.
 *)
 
 const hKEM: tagt.
@@ -35,22 +34,9 @@ not attacker(kemsk(hKEM, kRPK)).
 
 query iI: bitstring, iR: bitstring, b: bitstring, tr: bitstring, rt: bitstring, sk: key, ld: bitstring,
       oid: bitstring, s2: tagt;
-      (* H3 (i): SK secrecy with the KEM oracle, I side, iks_R honest *)
-      event(IStart(hKEM, iI, iks(vk(iksig(hKEM, pR)), exp(g, dhsk(hKEM, kIKR))), b, tr, rt, sk)) && attacker(sk);
-      (* H3 (ii): R side, unmatched *)
-      event(RAccept(hKEM, iR, iks(vk(iksig(hKEM, pI)), exp(g, dhsk(hKEM, kIKI))), ld, oid, tr, rt, sk))
-        && attacker(sk);
-      (* H11: reachability sanity: IStart, BundleSigned, the honest pair, IConfirm — IStart *)
-      event(IStart(hKEM, iks(vk(iksig(hKEM, pI)), exp(g, dhsk(hKEM, kIKI))),
-                   iks(vk(iksig(hKEM, pR)), exp(g, dhsk(hKEM, kIKR))), b, tr, rt, sk));
-      (* H11: BundleSigned *)
-      event(BundleSigned(hKEM, iR, b));
-      (* H11: the honest pair *)
-      event(RAccept(hKEM, iR, iks(vk(iksig(hKEM, pI)), exp(g, dhsk(hKEM, kIKI))), ld, oid, tr, rt, sk))
-        && event(IStart(hKEM, iks(vk(iksig(hKEM, pI)), exp(g, dhsk(hKEM, kIKI))), iR, b, tr, rt, sk));
-      (* H11: IConfirm *)
-      event(IConfirm(hKEM, iks(vk(iksig(hKEM, pI)), exp(g, dhsk(hKEM, kIKI))),
-                     iks(vk(iksig(hKEM, pR)), exp(g, dhsk(hKEM, kIKR))), tr, sk)).
+      (* H5: injective agreement of R with I on transcript, SK and reply route, iks_I honest *)
+      inj-event(RAccept(hKEM, iR, iks(vk(iksig(hKEM, pI)), exp(g, dhsk(hKEM, kIKI))), ld, oid, tr, rt, sk))
+        ==> inj-event(IStart(hKEM, iks(vk(iksig(hKEM, pI)), exp(g, dhsk(hKEM, kIKI))), iR, b, tr, rt, sk)).
 
 (* One invitation j issued by R (formal/hx.pvl 1.): OPK_j, bundle, InvitationV1 (to I on pinv), blob, the one
    acceptance attempt (O-13), and this session's compromise of the invitation *)
@@ -74,4 +60,5 @@ process
     out(c, riks(hKEM))
   | ! Invitation(hKEM)
   | ! ProcIP(hKEM, pinv(hKEM))
+  | ! ProcIPA(hKEM, c)
   | PubI(hKEM)

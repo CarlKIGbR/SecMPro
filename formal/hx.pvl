@@ -3,8 +3,9 @@
    SecMP-TR cell (§7.2–§7.4, abstracted, O-15) as used by the handshake. Query set: formal/CLAIMS.md §HX (H1–H12c,
    fixed by the reviewer; ADR-026, docs/03 §11.2; reviewer decisions O-13…O-19). Properties: docs/03 §11.1 row "HX".
    One model file per session (O-18, ADR-046): formal/hx/<session>.pv holds the session's instantiation, compromise,
-   oracles, phases and queries; this library holds types, constructors, equations, events and process macros.
-   Run: proverif -lib formal/hx.pvl formal/hx/<session>.pv (ProVerif 2.05).
+   oracles, phases and queries (five sessions also have formal/hx/<session>-auth.pv with the begin-IStart declaration,
+   O-22); this library holds types, constructors, equations, events and process macros.
+   Run: proverif -lib formal/hx.pvl formal/hx/<file>.pv (ProVerif 2.05).
 
    ---------------------------------------------------------------------------------------------------------------
    1. What is modelled (CLAIMS §HX "Model")
@@ -68,29 +69,31 @@
    3. Sessions (one file each, O-18)
    ---------------------------------------------------------------------------------------------------------------
      tag          I's inv.     PubIKS  LeakInv  RevealLT(R)  RevealLT(I)  RevealSPK  RevealOPK  DHO   KEMO   layers  queries
-     hClean       c            yes     ph 0     -            -            -          -          -     -      plain   H1, H5, H6a, H6b, H10
-     hDH          c            yes     ph 0     -            -            -          -          ph 0  -      plain   H2, H8
-     hKEM         c            yes     ph 0     -            -            -          -          -     ph 0   plain   H3, H5
-     hBoth        c            yes     ph 0     -            -            -          -          ph 0  ph 0   plain   H4
+     hClean       pinv (+c)    yes     ph 0     -            -            -          -          -     -      plain   H1, H6a, H6b, H10; H5
+     hDH          pinv (+c)    yes     ph 0     -            -            -          -          ph 0  -      plain   H2; H8
+     hKEM         pinv (+c)    yes     ph 0     -            -            -          -          -     ph 0   plain   H3; H5
+     hBoth        pinv         yes     ph 0     -            -            -          -          ph 0  ph 0   plain   H4
      hId          pinv         -       -        -            -            -          -          -     -      sealed  H6a, H7a
      hIdThief     pinv         -       ph 0     -            -            -          -          -     -      plain   H7b
      hIdLater     pinv         -       ph 1     ph 1         -            ph 1       -          ph 1  -      sealed  H7c
      hIdLaterOPK  pinv         -       ph 1     ph 1         -            ph 1       ph 1       ph 1  -      sealed  H7d
-     hKCI         c            yes     ph 0     -            -            ph 0       -          -     -      plain   H9
-     hKCIlt       c            yes     ph 0     ph 0         -            -          -          -     -      plain   H9b
-     hKCIi        c            yes     ph 0     -            ph 0         -          -          -     -      plain   H9c
-     hFS          pinv and c   yes     ph 1     ph 1         ph 1         ph 1       -          -     -      sealed  H12
-     hFSOPK       pinv and c   yes     ph 1     ph 1         ph 1         ph 1       ph 1       -     -      sealed  H12b
-     hFSDH        pinv and c   yes     ph 1     ph 1         ph 1         ph 1       -          ph 1  -      sealed  H12c
-   plus H11 (four lines) in every file; H6a in hClean and hId (O-19). "I's inv.": where I takes invitations from;
-   c = the attacker as inviter with its own identity and every leaked invitation of R (O-17: with LeakInv in phase 0
-   every invitation of R is on c, so every trace of I on pinv(s) is a trace of I on c); in hId* files I runs only on
-   R's invitations (pinv(s)) and IKS_I is never output in clear (H7: an inviter learns I's identity by design), so
-   hIdThief keeps I on pinv(s) — its leaked invitations still make K_ld and K_inv attacker knowledge, hence the
-   plaintext layers. hKCIi's row in CLAIMS names no invitation leak; LeakInv ph 0 is added (H9c is H1 (i), whose
-   assumptions include it; it only strengthens the attacker). In every file the attacker may send R init cells under
-   its own identity (R reads cells from c). Each file contains one session; sessions share no private value and each
-   claim is about its own scenario (O-18).
+     hKCI         pinv (+c)    yes     ph 0     -            -            ph 0       -          -     -      plain   ; H9
+     hKCIlt       pinv (+c)    yes     ph 0     ph 0         -            -          -          -     -      plain   ; H9b
+     hKCIi        pinv         yes     ph 0     -            ph 0         -          -          -     -      plain   H9c
+     hFS          pinv         yes     ph 1     ph 1         ph 1         ph 1       -          -     -      sealed  H12
+     hFSOPK       pinv         yes     ph 1     ph 1         ph 1         ph 1       ph 1       -     -      sealed  H12b
+     hFSDH        pinv         yes     ph 1     ph 1         ph 1         ph 1       -          ph 1  -      sealed  H12c
+   plus H11 (four lines) in every base file; H6a in hClean and hId (O-19). "I's inv.": where I takes invitations from;
+   pinv = I runs only on R's invitations (O-20); "(+c)": the session has a second file <tag>-auth.pv (O-22) that adds
+   the attacker as inviter — I on c (ProcIPA) with its own identity and every leaked invitation of R, begin event
+   IStartA (O-21), only on R-signed bundles (O-23) — and holds only the begin-IStart declaration (the query after
+   ";"); the base file <tag>.pv holds
+   the queries before ";" and has no attacker-as-inviter process. With LeakInv in phase 0, I on pinv(s) keeps the
+   plaintext layers (O-17): K_ld and K_inv are attacker knowledge; in hId* files IKS_I is never output in clear (H7:
+   an inviter learns I's identity by design). hKCIi's row in CLAIMS names no invitation leak; LeakInv ph 0 is added
+   (H9c is H1 (i), whose assumptions include it; it only strengthens the attacker). In every file the attacker may
+   send R init cells under its own identity (R reads cells from c). Each file contains one session; sessions share
+   no private value and each claim is about its own scenario (O-18).
    Events carry the session tag as first argument; every query names its tag.
 
    ---------------------------------------------------------------------------------------------------------------
@@ -131,13 +134,21 @@
    ---------------------------------------------------------------------------------------------------------------
    7. Devices (none changes the model's semantics or weakens a query)
    ---------------------------------------------------------------------------------------------------------------
+   Model devices (CLAIMS §HX "Model devices"; reviewer adjudication of M4-5):
+   - new e[ld, lk] (I's names indexed by the invitation): precision devices, no change to queries, oracles or compromise.
+   - set unifyDerivation = false: precision devices, no change to queries, oracles or compromise.
+   - M4-7: I's names also carry the bundle I verified (new e[ld, lk, b]): precision device of the same kind (see below).
+   In detail:
    - Each X25519 value is bound once with let and reused (formal/tr.pv §8).
    - Names carry no message arguments (new n[]): each name depends only on the replication indices above it, not on
      the messages received before it (formal/tr.pv §8; an over-approximation), except I's names (EK_I, the Encaps
-     randomness, routes_I), which carry the invitation I took (new e[ld, lk]): with plaintext layers (O-17) ProVerif
-     decomposes the Outer tuple, and a derivation built from components of different runs of one merged I copy has
-     no trace (H11 "cannot be proved", measured on hClean); indexing by the invitation separates those runs. Both
-     forms over-approximate the same process; a name's arguments never change the process semantics.
+     randomness, routes_I), which carry the invitation I took and the bundle it verified (new e[ld, lk, b]): with
+     plaintext layers (O-17) ProVerif decomposes the Outer tuple, and a derivation built from components of different
+     runs of one merged I copy has no trace (H11 "cannot be proved", measured on hClean); indexing by the invitation
+     separates those runs. With I only on R's invitations (O-20) and R's IK_sig revealed (hKCIlt), the runs of one
+     invitation with different attacker-signed bundles merged the same way (H11 IConfirm "cannot be proved", M4-7);
+     indexing also by the bundle separates them. Every form over-approximates the same process (ProVerif's default
+     `new e` carries every message received before it); a name's arguments never change the process semantics.
    - set unifyDerivation = false: trace reconstruction only (the H11 honest-pair line, measured on hClean); it does
      not change the clauses or any "true" result, and every "false" result comes with a trace ProVerif executed.
    - Ephemeral key indices are eph(fresh name) and long-term ones are constants, so the secrecy assumptions can name
@@ -145,8 +156,9 @@
      proves each one and aborts if one cannot be proved ("ok, secrecy assumption verified"), and uses them only to
      discard clauses whose hypotheses can never hold.
    - set selFun = Term (formal/tr.pv §8): resolution strategy, termination/performance only.
-   - Query declarations grouped by begin event (O-19): no-begin queries first, then BundleSigned, IStart,
-     RAccept/IConfirm, InvIssued; CLAIMS ID order within a group; a "Hk" comment directly above every query.
+   - Query declarations ordered by cost (O-22): no-begin queries first, then RAccept/IConfirm (H6b), InvIssued (H10),
+     BundleSigned (H6a); the begin-IStart declaration (H5/H8/H9/H9b) is alone in <tag>-auth.pv; CLAIMS ID order
+     within a group; a "Hk" comment directly above every query.
 *)
 
 (* ---------------------------------------------------------------- channels, types, constants ------------------ *)
@@ -235,6 +247,7 @@ reduc forall k: key, m: bitstring; topen(k, tseal(k, m)) = m.
 event BundleSigned(tagt, bitstring, bitstring).                                   (* (s, iks_R, b) *)
 event InvIssued(tagt, bitstring, bitstring, bitstring).                           (* (s, iks_R, ld_id, opk_id) *)
 event IStart(tagt, bitstring, bitstring, bitstring, bitstring, bitstring, key).   (* (s, iks_I, iks_R, b, tr, rt, sk) *)
+event IStartA(tagt, bitstring, bitstring, bitstring, bitstring, bitstring, key).  (* as IStart; ProcIPA (O-21), no query *)
 event RAccept(tagt, bitstring, bitstring, bitstring, bitstring, bitstring, bitstring, key).
                                                                   (* (s, iks_R, iks_I, ld_id, opk_id, tr, rt, sk) *)
 event IConfirm(tagt, bitstring, bitstring, bitstring, key).                       (* (s, iks_I, iks_R, tr, sk) *)
@@ -328,9 +341,9 @@ let ProcIP(s: tagt, ich: channel) =
        opkdh: G, opkkem: bitstring) = b in
   if hverify(vkR, lbl_bundle, (b, ikdhR), sig) = true then
   (* §6.4 *)
-  new e[ld, lk]: bitstring;
-  new r1[ld, lk]: bitstring;
-  new r2[ld, lk]: bitstring;
+  new e[ld, lk, b]: bitstring;
+  new r1[ld, lk, b]: bitstring;
+  new r2[ld, lk, b]: bitstring;
   let ek = dhsk(s, eph(e)) in
   let ekpub = exp(g, ek) in
   let dh1 = exp(spkdh, ikI) in
@@ -345,16 +358,66 @@ let ProcIP(s: tagt, ich: channel) =
   let sk = hx_sk(dh1, dh2, dh3, dh4, ssspk, ssopk, tr) in
   let kid = hx_kid(ld, lk, dh3, ssspk, dh4, ssopk) in
   (* O-15: first_msg = (ct1, tseal(tkey(SK, ss1), (n = 0, pn = 0, rt))), rt = (Profile_I, routes_I) *)
-  new r3[ld, lk]: bitstring;
+  new r3[ld, lk, b]: bitstring;
   let ct1 = encaps_ct768(rpkkem, kemr(s, r3)) in
   let ss1 = encaps_ss768(rpkkem, kemr(s, r3)) in
-  new routes[ld, lk]: bitstring;
+  new routes[ld, lk, b]: bitstring;
   let rt = (profI, routes) in
   let fm = (ct1, tseal(tkey(sk, ss1), (c0, c0, rt))) in
   (* §6.5 Inner, inner_ct, Outer: one plaintext cell (ld_id, Outer) *)
   event IStart(s, iksI, iksR, b, tr, rt, sk);
   out(c, (ld, (ekpub, spkid, opkid, ctspk, ctopk, caead_seal(kid, nz, (lbl_inner, ld), (iksI, fm)))));
   (* H6b: R's one reply *)
+  in(c, rx: bitstring);
+  let ack = topen(tkey_r(sk, ss1), rx) in
+  event IConfirm(s, iksI, iksR, tr, sk).
+
+(* The attacker as inviter (O-20, O-21, O-23): I of session s on invitations from ich = c (the attacker's own and
+   every leaked invitation of R), plaintext layers; ProcIP with the begin event IStartA instead of IStart (IStartA
+   appears in no query) and, O-23, only on bundles that verify under IK_sig_R. Only in the files <session>-auth.pv
+   (O-22). *)
+let ProcIPA(s: tagt, ich: channel) =
+  let ikI = dhsk(s, kIKI) in
+  let iksI = iiks(s) in
+  (* §5.5 step 1: the invitation; step 2: the blob of ld_id *)
+  in(ich, (ld: bitstring, lk: key, fpR: bitstring));
+  in(c, (=ld, (iksR: bitstring, b: bitstring, sig: bitstring, profx: bitstring, createdx: bitstring)));
+  (* step 3: fingerprint pin; step 4: bundle signature, opk_present *)
+  if fp(iksR) = fpR then
+  let iks(vkR: bitstring, ikdhR: G) = iksR in
+  let (spkid: bitstring, spkdh: G, spkkem: bitstring, rpkkem: bitstring, spkexp: bitstring, =opk1, opkid: bitstring,
+       opkdh: G, opkkem: bitstring) = b in
+  if hverify(vkR, lbl_bundle, (b, ikdhR), sig) = true then
+  (* O-23 (applied: every auth file exceeded 30 min with O-20–O-22, M4-7): only bundles that verify under IK_sig_R *)
+  if hverify(vk(iksig(s, pR)), lbl_bundle, (b, ikdhR), sig) = true then
+  (* §6.4 *)
+  new e[ld, lk, b]: bitstring;
+  new r1[ld, lk, b]: bitstring;
+  new r2[ld, lk, b]: bitstring;
+  let ek = dhsk(s, eph(e)) in
+  let ekpub = exp(g, ek) in
+  let dh1 = exp(spkdh, ikI) in
+  let dh2 = exp(ikdhR, ek) in
+  let dh3 = exp(spkdh, ek) in
+  let dh4 = exp(opkdh, ek) in
+  let ctspk = encaps_ct1024(spkkem, kemr(s, r1)) in
+  let ssspk = encaps_ss1024(spkkem, kemr(s, r1)) in
+  let ctopk = encaps_ct1024(opkkem, kemr(s, r2)) in
+  let ssopk = encaps_ss1024(opkkem, kemr(s, r2)) in
+  let tr = th(iksR, spkid, spkdh, h(spkkem), h(rpkkem), opkid, opkdh, h(opkkem), iksI, ekpub, h(ctspk), h(ctopk), ld) in
+  let sk = hx_sk(dh1, dh2, dh3, dh4, ssspk, ssopk, tr) in
+  let kid = hx_kid(ld, lk, dh3, ssspk, dh4, ssopk) in
+  (* O-15: first_msg = (ct1, tseal(tkey(SK, ss1), (n = 0, pn = 0, rt))), rt = (Profile_I, routes_I) *)
+  new r3[ld, lk, b]: bitstring;
+  let ct1 = encaps_ct768(rpkkem, kemr(s, r3)) in
+  let ss1 = encaps_ss768(rpkkem, kemr(s, r3)) in
+  new routes[ld, lk, b]: bitstring;
+  let rt = (profI, routes) in
+  let fm = (ct1, tseal(tkey(sk, ss1), (c0, c0, rt))) in
+  (* §6.5 Inner, inner_ct, Outer: one plaintext cell (ld_id, Outer) *)
+  event IStartA(s, iksI, iksR, b, tr, rt, sk);
+  out(c, (ld, (ekpub, spkid, opkid, ctspk, ctopk, caead_seal(kid, nz, (lbl_inner, ld), (iksI, fm)))));
+  (* R's one reply *)
   in(c, rx: bitstring);
   let ack = topen(tkey_r(sk, ss1), rx) in
   event IConfirm(s, iksI, iksR, tr, sk).
@@ -375,9 +438,9 @@ let ProcIS(s: tagt, ich: channel) =
        opkdh: G, opkkem: bitstring) = b in
   if hverify(vkR, lbl_bundle, (b, ikdhR), sig) = true then
   (* §6.4 *)
-  new e[ld, lk]: bitstring;
-  new r1[ld, lk]: bitstring;
-  new r2[ld, lk]: bitstring;
+  new e[ld, lk, b]: bitstring;
+  new r1[ld, lk, b]: bitstring;
+  new r2[ld, lk, b]: bitstring;
   let ek = dhsk(s, eph(e)) in
   let ekpub = exp(g, ek) in
   let dh1 = exp(spkdh, ikI) in
@@ -392,10 +455,10 @@ let ProcIS(s: tagt, ich: channel) =
   let sk = hx_sk(dh1, dh2, dh3, dh4, ssspk, ssopk, tr) in
   let kid = hx_kid(ld, lk, dh3, ssspk, dh4, ssopk) in
   (* O-15: first_msg = (ct1, tseal(tkey(SK, ss1), (n = 0, pn = 0, rt))), rt = (Profile_I, routes_I) *)
-  new r3[ld, lk]: bitstring;
+  new r3[ld, lk, b]: bitstring;
   let ct1 = encaps_ct768(rpkkem, kemr(s, r3)) in
   let ss1 = encaps_ss768(rpkkem, kemr(s, r3)) in
-  new routes[ld, lk]: bitstring;
+  new routes[ld, lk, b]: bitstring;
   let rt = (profI, routes) in
   let fm = (ct1, tseal(tkey(sk, ss1), (c0, c0, rt))) in
   (* §6.5 Inner, inner_ct, Outer: one cell under K_inv *)

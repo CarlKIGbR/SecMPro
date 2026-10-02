@@ -1,13 +1,12 @@
 (* SPDX-License-Identifier: AGPL-3.0-or-later *)
-(* formal/hx/hKCIlt.pv — session hKCIlt of CLAIMS §HX, one file per session (O-18, ADR-046) over the library
-   formal/hx.pvl (model, abstractions, devices: its header). Run: proverif -lib formal/hx.pvl formal/hx/hKCIlt.pv
+(* formal/hx/hKCIlt-auth.pv — session hKCIlt of CLAIMS §HX, its begin-IStart declaration (O-22) over the library
+   formal/hx.pvl (model, abstractions, devices: its header). Run: proverif -lib formal/hx.pvl formal/hx/hKCIlt-auth.pv
 
-   Row (formal/hx.pvl 3.): I's inv. pinv · PubIKS yes · LeakInv ph 0 · RevealLT(R) ph 0 · RevealLT(I) - · RevealSPK - ·
-   RevealOPK - · DHO - · KEMO - · layers plain (O-17).
-   Base file (O-22): no attacker-as-inviter process; the begin-IStart declaration (H9b) is in hKCIlt-auth.pv.
+   Row (formal/hx.pvl 3.): as hKCIlt.pv plus the attacker as inviter: I on c with event IStartA (ProcIPA, O-20,
+   O-21), only on bundles that verify under IK_sig_R (O-23).
    Queries (RESULT lines in this order; expected per the CLAIMS gate rule):
-     no begin event:    H11 (4) false
-   — 4 RESULT lines.
+     begin IStart:      H9b (1) true
+   — 1 RESULT line. The other declarations of the session are in hKCIlt.pv.
 *)
 
 const hKCIlt: tagt.
@@ -27,17 +26,9 @@ not attacker(kemsk(hKCIlt, kRPK)).
 
 query iI: bitstring, iR: bitstring, b: bitstring, tr: bitstring, rt: bitstring, sk: key, ld: bitstring,
       oid: bitstring, s2: tagt;
-      (* H11: reachability sanity: IStart, BundleSigned, the honest pair, IConfirm — IStart *)
-      event(IStart(hKCIlt, iks(vk(iksig(hKCIlt, pI)), exp(g, dhsk(hKCIlt, kIKI))),
-                   iks(vk(iksig(hKCIlt, pR)), exp(g, dhsk(hKCIlt, kIKR))), b, tr, rt, sk));
-      (* H11: BundleSigned *)
-      event(BundleSigned(hKCIlt, iR, b));
-      (* H11: the honest pair *)
-      event(RAccept(hKCIlt, iR, iks(vk(iksig(hKCIlt, pI)), exp(g, dhsk(hKCIlt, kIKI))), ld, oid, tr, rt, sk))
-        && event(IStart(hKCIlt, iks(vk(iksig(hKCIlt, pI)), exp(g, dhsk(hKCIlt, kIKI))), iR, b, tr, rt, sk));
-      (* H11: IConfirm *)
-      event(IConfirm(hKCIlt, iks(vk(iksig(hKCIlt, pI)), exp(g, dhsk(hKCIlt, kIKI))),
-                     iks(vk(iksig(hKCIlt, pR)), exp(g, dhsk(hKCIlt, kIKR))), tr, sk)).
+      (* H9b: boundary, R's identity keys alone give no KCI: H5's correspondence *)
+      inj-event(RAccept(hKCIlt, iR, iks(vk(iksig(hKCIlt, pI)), exp(g, dhsk(hKCIlt, kIKI))), ld, oid, tr, rt, sk))
+        ==> inj-event(IStart(hKCIlt, iks(vk(iksig(hKCIlt, pI)), exp(g, dhsk(hKCIlt, kIKI))), iR, b, tr, rt, sk)).
 
 (* One invitation j issued by R (formal/hx.pvl 1.): OPK_j, bundle, InvitationV1 (to I on pinv), blob, the one
    acceptance attempt (O-13), and this session's compromise of the invitation *)
@@ -61,5 +52,6 @@ process
     out(c, riks(hKCIlt))
   | ! Invitation(hKCIlt)
   | ! ProcIP(hKCIlt, pinv(hKCIlt))
+  | ! ProcIPA(hKCIlt, c)
   | PubI(hKCIlt)
   | RevLT(hKCIlt, pR, kIKR)

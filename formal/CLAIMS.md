@@ -60,8 +60,9 @@ a cell from c and performs §6.6 steps 1–3, one acceptance attempt per OPK_j (
 once (step 4 "delete the OPK"), a failed attempt is silent (step 3 "keep the OPK").
 `first_msg` is abstracted (O-15): (ct1, tseal(tkey(SK, ss1), (n = 0, pn = 0, rt))), rt = (Profile_I, routes_I) of
 the Handshake content (§7.6); R's one reply (H6b) is tseal(tkey_r(SK, ss1), ack). The attacker may also play
-either role with its own identity and keys: it may issue its own invitations to I (scenarios that query I's
-identity exclude this, H7) and may send R envelopes under its own identity once it holds an invitation. I sessions
+either role with its own identity and keys: it may issue its own invitations to I (only in the auth files of the
+sessions whose queries need the misbinding case, O-20–O-22; scenarios that query I's identity exclude this, H7) and
+may send R envelopes under its own identity once it holds an invitation. I sessions
 and invitations are replicated, so injectivity must come from the OPK bookkeeping and not from process structure
 (M3 R-13; O-13). One model file per session (O-18).
 Abstractions (each is a ProVerif constructor with the listed equation;
@@ -154,8 +155,9 @@ Events:
 Gate rule: H1, H2, H3, H5, H6a, H6b, H7a–H7c, H9b, H9c, H10, H12 and H12c must be proved true; H4, H7d, H8, H9,
 H12b and every H11 line must be false (ProVerif reports an attack / reachability); H6 is not claimed; H10 is a
 query (O-13). A model change requires a spec reference (formal/README.md).
-Every session file `formal/hx/<session>.pv` is verified separately over `formal/hx.pvl`, each capped at 30 minutes
-(a timeout fails); every false verdict uses only its own session by construction (O-18, ADR-046).
+Every model file `formal/hx/<file>.pv` — the 14 session files and the five auth files `<session>-auth.pv` of hClean,
+hKEM, hDH, hKCI, hKCIlt that carry H5/H8/H9/H9b (O-22) — is verified separately over `formal/hx.pvl`, each capped at
+30 minutes (a timeout fails); every false verdict uses only its own session by construction (O-18, ADR-046).
 
 ### Paths the model covers / excludes (every path of §5.5, §6.4–§6.6 named; M3 R-01/R-12 lesson)
 
@@ -252,7 +254,8 @@ Amendments (WEISUNG M4-5, reviewer termination diagnosis 2026-10-01; O-7 is repl
 - **O-17.** In a session whose LeakInv is in phase 0, K_ld, K_inv and link_key are attacker knowledge from the start; a
   committing AEAD layer under an attacker-known key is attacker-transparent (every honest sealed value is openable,
   every value is sealable), so those sessions carry LinkDataV1 and Outer as plaintext tuples whose AD field (ld_id) is
-  a tuple component that I/R check, and I takes the invitation from the public channel. Sessions without a leak or
+  a tuple component that I/R check, and I takes the invitation from the public channel, except hId* sessions, where I
+  runs only on R's invitation (H7 excludes the attacker as inviter by definition). Sessions without a leak or
   with a phase-1 leak (hId, hIdLater, hIdLaterOPK, hFS, hFSOPK, hFSDH) keep the sealed layers and the private
   invitation channel.
 - **O-18.** One model file per session: `formal/hx.pvl` (library: types, constructors, equations, events, process
@@ -263,7 +266,22 @@ Amendments (WEISUNG M4-5, reviewer termination diagnosis 2026-10-01; O-7 is repl
 - **O-19.** H6a is claimed in hClean and hId (one leak-phase-0 session, one no-leak session); the property is
   session-independent (HybridSign unforgeability + inviter_fp pinning). H11 stays four lines per session in every file.
 - Query declarations inside a file are grouped by begin event — no-begin queries first, then BundleSigned, IStart,
-  RAccept/IConfirm, InvIssued — ID order within a group; the expected list is per (file, ID, query text).
+  RAccept/IConfirm, InvIssued — ID order within a group; the expected list is per (file, ID, query text). (Order
+  replaced by O-22.)
+
+Amendments (WEISUNG M4-7, reviewer decisions O-20…O-23 on the M4-5 report, 2026-10-02):
+
+- **O-20 (attacker as inviter only where a query needs it).** The attacker-as-inviter process for I exists only in the files whose queries need the identity-misbinding case — hClean (H5), hKEM (H5), hDH (H8), hKCI (H9), hKCIlt (H9b). In hBoth, hFS, hFSOPK, hFSDH and hKCIi, I runs only on R's invitations. Justification: every query of those files is a secrecy/forward-secrecy query over an honest session (IStart/RAccept with iks_R = R); an I session on an attacker invitation yields a SK the attacker is entitled to, which no such query covers; the attacker gains nothing from such a session that it cannot compute itself — DH1 = X25519(IK_dh_I, SPK_dh_A) is exp(pk_I, spk_A) with its own spk_A, and DH2–DH4, ss_spk, ss_opk, K_id, K_inv follow from its own secrets and the public values in Outer. Measured (M4-5 report §7): hFS 0.7 s, hBoth 290 s with this change.
+- **O-21 (IStart only on R's invitation).** In the five files with the attacker-as-inviter process, that process emits the event `IStartA` (same arguments) instead of `IStart`; `IStartA` appears in no query. H5/H8/H9/H9b thus read "R accepts I ⇒ I started on R's own invitation", which is the stronger statement: an envelope that I produced on an attacker invitation and that R nevertheless accepts (misbinding) would yield RAccept without IStart and come out false. The begin fact IStart is then carried only by derivations from I's run on R's invitation.
+- **O-22 (declaration order by cost; auth files).** Query declarations are ordered: no-begin queries, then IConfirm/RAccept-begin (H6b), InvIssued-begin (H10), BundleSigned-begin (H6a), IStart-begin (H5/H8/H9/H9b) last. For the five O-20 files the IStart-begin declaration lives in a separate file `formal/hx/<session>-auth.pv` (same session, same processes incl. the attacker-as-inviter; only that declaration); the base file `<session>.pv` carries the other declarations and no attacker-as-inviter process. The gate's expected table is per (file, ID); a capped auth file never hides the base file's verdicts.
+- **O-23 (fallback for the auth files, applied only if an auth file still exceeds 30 min with O-20–O-22, and then named in the report).** The attacker-as-inviter process accepts only bundles that verify under IK_sig_R (R-signed bundles, replayable by anyone who holds them): a bundle signed by the attacker's own key gives it nothing it cannot compute itself (O-20 argument), so the only capability that matters is presenting R's genuine bundle under its own ld_id/link_key — the misbinding case H5 must exclude.
+
+### Model devices
+
+- `new e[ld, lk]` (I's names indexed by the invitation): precision devices, no change to queries, oracles or compromise.
+- `set unifyDerivation = false`: precision devices, no change to queries, oracles or compromise.
+- `new e[ld, lk, b]` (M4-7: I's names indexed also by the bundle I verified; for the reviewer): precision device of
+  the same kind, no change to queries, oracles or compromise (`formal/hx.pvl` header 7.).
 
 Open SQ entries for HX/INV: none. SPEC-QUESTIONS.md (state "Weisung REF-M4-1": "No open questions") marks every
 HX/INV-related entry answered — SQ-10 (fingerprint input), SQ-12 (decoder checks), SQ-13/14 (RelayRef), SQ-15

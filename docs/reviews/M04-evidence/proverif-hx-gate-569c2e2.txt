@@ -1,0 +1,238 @@
+# cargo xtask step --strict proverif --models all --jobs 4 — models of commit 569c2e2; ProVerif 2.05, this Mac (M1 Pro), no other ProVerif run alongside (WEISUNG M4-11)
+
+   Compiling xtask v0.0.0 (/Users/c.carl/coding/claude_code/SecMPro/xtask)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.90s
+     Running `target/debug/xtask step --strict proverif --models all --jobs 4`
+
+=== [10] proverif ===
+$ proverif -help
+$ proverif /Users/c.carl/coding/claude_code/SecMPro/xtask/fixtures/proverif/selftest.pv
+  ProVerif: 20 files, --models all, 4 parallel processes, timeout 1800 s per file
+$ proverif -lib /Users/c.carl/coding/claude_code/SecMPro/formal/hx.pvl /Users/c.carl/coding/claude_code/SecMPro/formal/hx/hClean-auth.pv > /Users/c.carl/coding/claude_code/SecMPro/target/proverif/hx-hClean-auth.log
+$ proverif -lib /Users/c.carl/coding/claude_code/SecMPro/formal/hx.pvl /Users/c.carl/coding/claude_code/SecMPro/formal/hx/hClean.pv > /Users/c.carl/coding/claude_code/SecMPro/target/proverif/hx-hClean.log
+$ proverif /Users/c.carl/coding/claude_code/SecMPro/formal/tr.pv > /Users/c.carl/coding/claude_code/SecMPro/target/proverif/tr.log
+$ proverif -lib /Users/c.carl/coding/claude_code/SecMPro/formal/hx.pvl /Users/c.carl/coding/claude_code/SecMPro/formal/hx/hBoth.pv > /Users/c.carl/coding/claude_code/SecMPro/target/proverif/hx-hBoth.log
+  formal/hx/hClean-auth.pv: finished after 2.5 s
+$ proverif -lib /Users/c.carl/coding/claude_code/SecMPro/formal/hx.pvl /Users/c.carl/coding/claude_code/SecMPro/formal/hx/hDH.pv > /Users/c.carl/coding/claude_code/SecMPro/target/proverif/hx-hDH.log
+  formal/hx/hDH.pv: finished after 33.7 s
+$ proverif -lib /Users/c.carl/coding/claude_code/SecMPro/formal/hx.pvl /Users/c.carl/coding/claude_code/SecMPro/formal/hx/hDH-auth.pv > /Users/c.carl/coding/claude_code/SecMPro/target/proverif/hx-hDH-auth.log
+  formal/hx/hClean.pv: finished after 37.5 s
+$ proverif -lib /Users/c.carl/coding/claude_code/SecMPro/formal/hx.pvl /Users/c.carl/coding/claude_code/SecMPro/formal/hx/hFS.pv > /Users/c.carl/coding/claude_code/SecMPro/target/proverif/hx-hFS.log
+  formal/hx/hFS.pv: finished after 1.1 s
+$ proverif -lib /Users/c.carl/coding/claude_code/SecMPro/formal/hx.pvl /Users/c.carl/coding/claude_code/SecMPro/formal/hx/hFSDH.pv > /Users/c.carl/coding/claude_code/SecMPro/target/proverif/hx-hFSDH.log
+  formal/hx/hFSDH.pv: finished after 1.0 s
+$ proverif -lib /Users/c.carl/coding/claude_code/SecMPro/formal/hx.pvl /Users/c.carl/coding/claude_code/SecMPro/formal/hx/hFSOPK.pv > /Users/c.carl/coding/claude_code/SecMPro/target/proverif/hx-hFSOPK.log
+  formal/hx/hFSOPK.pv: finished after 1.9 s
+$ proverif -lib /Users/c.carl/coding/claude_code/SecMPro/formal/hx.pvl /Users/c.carl/coding/claude_code/SecMPro/formal/hx/hId.pv > /Users/c.carl/coding/claude_code/SecMPro/target/proverif/hx-hId.log
+  formal/hx/hId.pv: finished after 0.7 s
+$ proverif -lib /Users/c.carl/coding/claude_code/SecMPro/formal/hx.pvl /Users/c.carl/coding/claude_code/SecMPro/formal/hx/hIdLater.pv > /Users/c.carl/coding/claude_code/SecMPro/target/proverif/hx-hIdLater.log
+  formal/hx/hIdLater.pv: finished after 0.5 s
+$ proverif -lib /Users/c.carl/coding/claude_code/SecMPro/formal/hx.pvl /Users/c.carl/coding/claude_code/SecMPro/formal/hx/hIdLaterOPK.pv > /Users/c.carl/coding/claude_code/SecMPro/target/proverif/hx-hIdLaterOPK.log
+  formal/hx/hIdLaterOPK.pv: finished after 0.8 s
+$ proverif -lib /Users/c.carl/coding/claude_code/SecMPro/formal/hx.pvl /Users/c.carl/coding/claude_code/SecMPro/formal/hx/hIdThief.pv > /Users/c.carl/coding/claude_code/SecMPro/target/proverif/hx-hIdThief.log
+  formal/hx/hDH-auth.pv: finished after 10.4 s
+$ proverif -lib /Users/c.carl/coding/claude_code/SecMPro/formal/hx.pvl /Users/c.carl/coding/claude_code/SecMPro/formal/hx/hKCI.pv > /Users/c.carl/coding/claude_code/SecMPro/target/proverif/hx-hKCI.log
+  formal/hx/hIdThief.pv: finished after 6.5 s
+$ proverif -lib /Users/c.carl/coding/claude_code/SecMPro/formal/hx.pvl /Users/c.carl/coding/claude_code/SecMPro/formal/hx/hKCI-auth.pv > /Users/c.carl/coding/claude_code/SecMPro/target/proverif/hx-hKCI-auth.log
+  formal/hx/hKCI-auth.pv: finished after 6.5 s
+$ proverif -lib /Users/c.carl/coding/claude_code/SecMPro/formal/hx.pvl /Users/c.carl/coding/claude_code/SecMPro/formal/hx/hKCIi.pv > /Users/c.carl/coding/claude_code/SecMPro/target/proverif/hx-hKCIi.log
+  formal/hx/hKCI.pv: finished after 20.3 s
+$ proverif -lib /Users/c.carl/coding/claude_code/SecMPro/formal/hx.pvl /Users/c.carl/coding/claude_code/SecMPro/formal/hx/hKCIlt.pv > /Users/c.carl/coding/claude_code/SecMPro/target/proverif/hx-hKCIlt.log
+  formal/hx/hKCIi.pv: finished after 12.7 s
+$ proverif -lib /Users/c.carl/coding/claude_code/SecMPro/formal/hx.pvl /Users/c.carl/coding/claude_code/SecMPro/formal/hx/hKCIlt-auth.pv > /Users/c.carl/coding/claude_code/SecMPro/target/proverif/hx-hKCIlt-auth.log
+  formal/hx/hKCIlt.pv: finished after 44.3 s
+$ proverif -lib /Users/c.carl/coding/claude_code/SecMPro/formal/hx.pvl /Users/c.carl/coding/claude_code/SecMPro/formal/hx/hKEM.pv > /Users/c.carl/coding/claude_code/SecMPro/target/proverif/hx-hKEM.log
+  formal/hx/hKEM.pv: finished after 22.7 s
+$ proverif -lib /Users/c.carl/coding/claude_code/SecMPro/formal/hx.pvl /Users/c.carl/coding/claude_code/SecMPro/formal/hx/hKEM-auth.pv > /Users/c.carl/coding/claude_code/SecMPro/target/proverif/hx-hKEM-auth.log
+  formal/hx/hKEM-auth.pv: finished after 4.8 s
+  formal/tr.pv: finished after 169.6 s
+  formal/hx/hKCIlt-auth.pv: finished after 307.5 s
+  formal/hx/hBoth.pv: finished after 474.9 s
+  formal/tr.pv: 46 RESULT lines as expected — T1 true ×6, T2 true ×2, T3 true ×4, T4 true ×2, T5 true ×2, T6 true ×2, T7 false ×2, an attack as expected, T8 true ×12, T9 true ×4, T10 false ×1, an attack as expected, T11 true ×1, T12 false ×1, informative, T13 false ×7, an attack as expected (169.6 s)
+  formal/hx/hBoth.pv: 5 RESULT lines as expected — H4 false ×1, H11 false ×4 (474.9 s)
+  formal/hx/hClean.pv: 9 RESULT lines as expected — H1 (i) true ×1, H1 (ii) true ×1, H11 false ×4, H6b true ×1, H10 true ×1, H6a true ×1 (37.5 s)
+  formal/hx/hClean-auth.pv: 1 RESULT lines as expected — H5 true ×1 (2.5 s)
+  formal/hx/hDH.pv: 6 RESULT lines as expected — H2 (i) true ×1, H2 (ii) true ×1, H11 false ×4 (33.7 s)
+  formal/hx/hDH-auth.pv: 1 RESULT lines as expected — H8 false ×1 (10.4 s)
+  formal/hx/hFS.pv: 6 RESULT lines as expected — H11 false ×4, H12 (i) true ×1, H12 (ii) true ×1 (1.1 s)
+  formal/hx/hFSDH.pv: 6 RESULT lines as expected — H11 false ×4, H12c (i) true ×1, H12c (ii) true ×1 (1.0 s)
+  formal/hx/hFSOPK.pv: 6 RESULT lines as expected — H11 false ×4, H12b (i) false ×1, H12b (ii) false ×1 (1.9 s)
+  formal/hx/hId.pv: 7 RESULT lines as expected — H7a true ×2, H11 false ×4, H6a true ×1 (0.7 s)
+  formal/hx/hIdLater.pv: 6 RESULT lines as expected — H7c true ×2, H11 false ×4 (0.5 s)
+  formal/hx/hIdLaterOPK.pv: 6 RESULT lines as expected — H7d false ×2, H11 false ×4 (0.8 s)
+  formal/hx/hIdThief.pv: 6 RESULT lines as expected — H7b true ×2, H11 false ×4 (6.5 s)
+  formal/hx/hKCI.pv: 4 RESULT lines as expected — H11 false ×4 (20.3 s)
+  formal/hx/hKCI-auth.pv: 1 RESULT lines as expected — H9 false ×1 (6.5 s)
+  formal/hx/hKCIi.pv: 5 RESULT lines as expected — H9c true ×1, H11 false ×4 (12.7 s)
+  formal/hx/hKCIlt.pv: 4 RESULT lines as expected — H11 false ×4 (44.3 s)
+  formal/hx/hKCIlt-auth.pv: 1 RESULT lines as expected — H9b true ×1 (307.5 s)
+  formal/hx/hKEM.pv: 6 RESULT lines as expected — H3 (i) true ×1, H3 (ii) true ×1, H11 false ×4 (22.7 s)
+  formal/hx/hKEM-auth.pv: 1 RESULT lines as expected — H5 true ×1 (4.8 s)
+ProVerif 2.05 gate: --models all, 4 parallel processes, timeout 1800 s per file
+sha256 of the model files:
+09ba6cbb57f05de142cc18cdae2694c826ea7ecdf03b411c505945492957a1ef  formal/tr.pv
+885adf37f8e24ea48aba117ef893db8ed2f45af919c4c91c864de78a3aa0c867  formal/hx.pvl
+6a606316c7401a7924b8894bb7893b9551a477a2cfb25051edca7cea67cf4ef8  formal/hx/hBoth.pv
+7439c394a99aae7566cf5447b0babd53c0a87a7e0d78bb1830f9ad3991b1cc57  formal/hx/hClean-auth.pv
+c18c398e3d46b96e79ad45d8750d15aec50758cf6e18b976baedc842d7690fbd  formal/hx/hClean.pv
+49a3fad652cf4e18f112b6ba862c26e2af42edcb6c506ba0b8aa9fc628eef3e5  formal/hx/hDH-auth.pv
+28ed0e6819a164cd0829f0b0705e061643ec910209c31872bae12fe5e5a1f018  formal/hx/hDH.pv
+f21c9d1f5a4e9190ffbe539ff3fe44bebe87cfbc08e6b5e0c704af10993fb15f  formal/hx/hFS.pv
+dc87046c29964180e4ceae349b9fef6fc12dcbb4c279a22312aa3e72bbc3a0ec  formal/hx/hFSDH.pv
+ac8df3c07a2cb1212e99d60e4e9434ce0565bd7c580f33822a41acb6857e8e75  formal/hx/hFSOPK.pv
+4ed5e5205221c86e6466f090eb6f633341ddc6958b967ead56406d996fda3c52  formal/hx/hId.pv
+2c6b2265c7b7af98682cd63aac9daf20918cadeab2377c814d88c954d98d53fa  formal/hx/hIdLater.pv
+43b483e056a221ca357ade4989739caeaaaffad0a2e9eb7b61b3a217b956b85e  formal/hx/hIdLaterOPK.pv
+a2c855940c688a0481ea7267e45f3314c898c68c749de8111975984c4f48abe5  formal/hx/hIdThief.pv
+8522b9cd5498383881db47f166976d5bf79c1c4a5fbf9252426e8660e425d3a8  formal/hx/hKCI-auth.pv
+eaf38619a061040a35770e3a486d5f85e2055d4a6c8c792fe5c867d941188113  formal/hx/hKCI.pv
+df6fe825f759a5c43d481e0bc6c5a595195864fa1acccb81c5bdea744dce84e9  formal/hx/hKCIi.pv
+c2f9a718b3711ee570b0e5c40ca9ab407c54c03904e1241931e56ffa83f8a0bb  formal/hx/hKCIlt-auth.pv
+7157b89d3d9cab0cf5d673f2476b506fd32a3b4aeada6373ab1e174b1a6bab4c  formal/hx/hKCIlt.pv
+c7cdd46c57d744a6630e2a3f3cc0fd355a69ce670f7492f494d5a6c4fe4978b9  formal/hx/hKEM-auth.pv
+016d5c86fb75efaf6706034fb4d6e0d7f3a7316c45667fedb6e6c227e8c3a967  formal/hx/hKEM.pv
+per file: RESULT lines, "secrecy assumption verified" lines, wall time, verdict:
+formal/tr.pv: 46 RESULT lines, 390 secrecy assumptions verified, wall 169.6 s, PASS
+formal/hx/hBoth.pv: 5 RESULT lines, 13 secrecy assumptions verified, wall 474.9 s, PASS
+formal/hx/hClean.pv: 9 RESULT lines, 52 secrecy assumptions verified, wall 37.5 s, PASS
+formal/hx/hClean-auth.pv: 1 RESULT lines, 13 secrecy assumptions verified, wall 2.5 s, PASS
+formal/hx/hDH.pv: 6 RESULT lines, 13 secrecy assumptions verified, wall 33.7 s, PASS
+formal/hx/hDH-auth.pv: 1 RESULT lines, 13 secrecy assumptions verified, wall 10.4 s, PASS
+formal/hx/hFS.pv: 6 RESULT lines, 17 secrecy assumptions verified, wall 1.1 s, PASS
+formal/hx/hFSDH.pv: 6 RESULT lines, 17 secrecy assumptions verified, wall 1.0 s, PASS
+formal/hx/hFSOPK.pv: 6 RESULT lines, 13 secrecy assumptions verified, wall 1.9 s, PASS
+formal/hx/hId.pv: 7 RESULT lines, 26 secrecy assumptions verified, wall 0.7 s, PASS
+formal/hx/hIdLater.pv: 6 RESULT lines, 19 secrecy assumptions verified, wall 0.5 s, PASS
+formal/hx/hIdLaterOPK.pv: 6 RESULT lines, 15 secrecy assumptions verified, wall 0.8 s, PASS
+formal/hx/hIdThief.pv: 6 RESULT lines, 13 secrecy assumptions verified, wall 6.5 s, PASS
+formal/hx/hKCI.pv: 4 RESULT lines, 10 secrecy assumptions verified, wall 20.3 s, PASS
+formal/hx/hKCI-auth.pv: 1 RESULT lines, 10 secrecy assumptions verified, wall 6.5 s, PASS
+formal/hx/hKCIi.pv: 5 RESULT lines, 11 secrecy assumptions verified, wall 12.7 s, PASS
+formal/hx/hKCIlt.pv: 4 RESULT lines, 11 secrecy assumptions verified, wall 44.3 s, PASS
+formal/hx/hKCIlt-auth.pv: 1 RESULT lines, 11 secrecy assumptions verified, wall 307.5 s, PASS
+formal/hx/hKEM.pv: 6 RESULT lines, 13 secrecy assumptions verified, wall 22.7 s, PASS
+formal/hx/hKEM-auth.pv: 1 RESULT lines, 13 secrecy assumptions verified, wall 4.8 s, PASS
+### gate `proverif`
+
+| item | verdict |
+|---|---|
+| status | PASS (475 s) |
+| line 1 | ProVerif 2.05 self-test [true, false] ok |
+| line 2 | --models all, 4 parallel processes, timeout 1800 s per file |
+| line 3 | single-file models: tr (expected set matches) |
+| line 4 | HX sessions over formal/hx.pvl: hBoth, hClean, hClean-auth, hDH, hDH-auth, hFS, hFSDH, hFSOPK, hId, hIdLater, hIdLaterOPK, hIdThief, hKCI, hKCI-auth, hKCIi, hKCIlt, hKCIlt-auth, hKEM, hKEM-auth (= the files of expect::PROVERIF_EXPECTED_HX) |
+| line 5 | formal/tr.pv: 46 RESULT lines as expected — T1 true ×6, T2 true ×2, T3 true ×4, T4 true ×2, T5 true ×2, T6 true ×2, T7 false ×2, an attack as expected, T8 true ×12, T9 true ×4, T10 false ×1, an attack as expected, T11 true ×1, T12 false ×1, informative, T13 false ×7, an attack as expected (169.6 s) |
+| line 6 | formal/hx/hBoth.pv: 5 RESULT lines as expected — H4 false ×1, H11 false ×4 (474.9 s) |
+| line 7 | formal/hx/hClean.pv: 9 RESULT lines as expected — H1 (i) true ×1, H1 (ii) true ×1, H11 false ×4, H6b true ×1, H10 true ×1, H6a true ×1 (37.5 s) |
+| line 8 | formal/hx/hClean-auth.pv: 1 RESULT lines as expected — H5 true ×1 (2.5 s) |
+| line 9 | formal/hx/hDH.pv: 6 RESULT lines as expected — H2 (i) true ×1, H2 (ii) true ×1, H11 false ×4 (33.7 s) |
+| line 10 | formal/hx/hDH-auth.pv: 1 RESULT lines as expected — H8 false ×1 (10.4 s) |
+| line 11 | formal/hx/hFS.pv: 6 RESULT lines as expected — H11 false ×4, H12 (i) true ×1, H12 (ii) true ×1 (1.1 s) |
+| line 12 | formal/hx/hFSDH.pv: 6 RESULT lines as expected — H11 false ×4, H12c (i) true ×1, H12c (ii) true ×1 (1.0 s) |
+| line 13 | formal/hx/hFSOPK.pv: 6 RESULT lines as expected — H11 false ×4, H12b (i) false ×1, H12b (ii) false ×1 (1.9 s) |
+| line 14 | formal/hx/hId.pv: 7 RESULT lines as expected — H7a true ×2, H11 false ×4, H6a true ×1 (0.7 s) |
+| line 15 | formal/hx/hIdLater.pv: 6 RESULT lines as expected — H7c true ×2, H11 false ×4 (0.5 s) |
+| line 16 | formal/hx/hIdLaterOPK.pv: 6 RESULT lines as expected — H7d false ×2, H11 false ×4 (0.8 s) |
+| line 17 | formal/hx/hIdThief.pv: 6 RESULT lines as expected — H7b true ×2, H11 false ×4 (6.5 s) |
+| line 18 | formal/hx/hKCI.pv: 4 RESULT lines as expected — H11 false ×4 (20.3 s) |
+| line 19 | formal/hx/hKCI-auth.pv: 1 RESULT lines as expected — H9 false ×1 (6.5 s) |
+| line 20 | formal/hx/hKCIi.pv: 5 RESULT lines as expected — H9c true ×1, H11 false ×4 (12.7 s) |
+| line 21 | formal/hx/hKCIlt.pv: 4 RESULT lines as expected — H11 false ×4 (44.3 s) |
+| line 22 | formal/hx/hKCIlt-auth.pv: 1 RESULT lines as expected — H9b true ×1 (307.5 s) |
+| line 23 | formal/hx/hKEM.pv: 6 RESULT lines as expected — H3 (i) true ×1, H3 (ii) true ×1, H11 false ×4 (22.7 s) |
+| line 24 | formal/hx/hKEM-auth.pv: 1 RESULT lines as expected — H5 true ×1 (4.8 s) |
+| line 25 | evidence target/proverif/summary.txt, results.tsv and one log per file |
+
+
+### ProVerif results (per file and CLAIMS ID)
+
+| file | ID | verdict | expected | wall time of the file | sha256 |
+| --- | --- | --- | --- | --- | --- |
+| formal/tr.pv | T1 | true ×6 | true ×6 | 169.6 s | 09ba6cbb57f0 |
+| formal/tr.pv | T2 | true ×2 | true ×2 | 169.6 s | 09ba6cbb57f0 |
+| formal/tr.pv | T3 | true ×4 | true ×4 | 169.6 s | 09ba6cbb57f0 |
+| formal/tr.pv | T4 | true ×2 | true ×2 | 169.6 s | 09ba6cbb57f0 |
+| formal/tr.pv | T5 | true ×2 | true ×2 | 169.6 s | 09ba6cbb57f0 |
+| formal/tr.pv | T6 | true ×2 | true ×2 | 169.6 s | 09ba6cbb57f0 |
+| formal/tr.pv | T7 | false ×2 | false ×2 | 169.6 s | 09ba6cbb57f0 |
+| formal/tr.pv | T8 | true ×12 | true ×12 | 169.6 s | 09ba6cbb57f0 |
+| formal/tr.pv | T9 | true ×4 | true ×4 | 169.6 s | 09ba6cbb57f0 |
+| formal/tr.pv | T10 | false ×1 | false ×1 | 169.6 s | 09ba6cbb57f0 |
+| formal/tr.pv | T11 | true ×1 | true ×1 | 169.6 s | 09ba6cbb57f0 |
+| formal/tr.pv | T12 | false ×1 | any (informative) ×1 | 169.6 s | 09ba6cbb57f0 |
+| formal/tr.pv | T13 | false ×7 | false ×7 | 169.6 s | 09ba6cbb57f0 |
+| formal/hx/hBoth.pv | H4 | false ×1 | false ×1 | 474.9 s | 6a606316c740 |
+| formal/hx/hBoth.pv | H11 | false ×4 | false ×4 | 474.9 s | 6a606316c740 |
+| formal/hx/hClean.pv | H1 (i) | true ×1 | true ×1 | 37.5 s | c18c398e3d46 |
+| formal/hx/hClean.pv | H1 (ii) | true ×1 | true ×1 | 37.5 s | c18c398e3d46 |
+| formal/hx/hClean.pv | H11 | false ×4 | false ×4 | 37.5 s | c18c398e3d46 |
+| formal/hx/hClean.pv | H6b | true ×1 | true ×1 | 37.5 s | c18c398e3d46 |
+| formal/hx/hClean.pv | H10 | true ×1 | true ×1 | 37.5 s | c18c398e3d46 |
+| formal/hx/hClean.pv | H6a | true ×1 | true ×1 | 37.5 s | c18c398e3d46 |
+| formal/hx/hClean-auth.pv | H5 | true ×1 | true ×1 | 2.5 s | 7439c394a99a |
+| formal/hx/hDH.pv | H2 (i) | true ×1 | true ×1 | 33.7 s | 28ed0e6819a1 |
+| formal/hx/hDH.pv | H2 (ii) | true ×1 | true ×1 | 33.7 s | 28ed0e6819a1 |
+| formal/hx/hDH.pv | H11 | false ×4 | false ×4 | 33.7 s | 28ed0e6819a1 |
+| formal/hx/hDH-auth.pv | H8 | false ×1 | false ×1 | 10.4 s | 49a3fad652cf |
+| formal/hx/hFS.pv | H11 | false ×4 | false ×4 | 1.1 s | f21c9d1f5a4e |
+| formal/hx/hFS.pv | H12 (i) | true ×1 | true ×1 | 1.1 s | f21c9d1f5a4e |
+| formal/hx/hFS.pv | H12 (ii) | true ×1 | true ×1 | 1.1 s | f21c9d1f5a4e |
+| formal/hx/hFSDH.pv | H11 | false ×4 | false ×4 | 1.0 s | dc87046c2996 |
+| formal/hx/hFSDH.pv | H12c (i) | true ×1 | true ×1 | 1.0 s | dc87046c2996 |
+| formal/hx/hFSDH.pv | H12c (ii) | true ×1 | true ×1 | 1.0 s | dc87046c2996 |
+| formal/hx/hFSOPK.pv | H11 | false ×4 | false ×4 | 1.9 s | ac8df3c07a2c |
+| formal/hx/hFSOPK.pv | H12b (i) | false ×1 | false ×1 | 1.9 s | ac8df3c07a2c |
+| formal/hx/hFSOPK.pv | H12b (ii) | false ×1 | false ×1 | 1.9 s | ac8df3c07a2c |
+| formal/hx/hId.pv | H7a | true ×2 | true ×2 | 0.7 s | 4ed5e5205221 |
+| formal/hx/hId.pv | H11 | false ×4 | false ×4 | 0.7 s | 4ed5e5205221 |
+| formal/hx/hId.pv | H6a | true ×1 | true ×1 | 0.7 s | 4ed5e5205221 |
+| formal/hx/hIdLater.pv | H7c | true ×2 | true ×2 | 0.5 s | 2c6b2265c7b7 |
+| formal/hx/hIdLater.pv | H11 | false ×4 | false ×4 | 0.5 s | 2c6b2265c7b7 |
+| formal/hx/hIdLaterOPK.pv | H7d | false ×2 | false ×2 | 0.8 s | 43b483e056a2 |
+| formal/hx/hIdLaterOPK.pv | H11 | false ×4 | false ×4 | 0.8 s | 43b483e056a2 |
+| formal/hx/hIdThief.pv | H7b | true ×2 | true ×2 | 6.5 s | a2c855940c68 |
+| formal/hx/hIdThief.pv | H11 | false ×4 | false ×4 | 6.5 s | a2c855940c68 |
+| formal/hx/hKCI.pv | H11 | false ×4 | false ×4 | 20.3 s | eaf38619a061 |
+| formal/hx/hKCI-auth.pv | H9 | false ×1 | false ×1 | 6.5 s | 8522b9cd5498 |
+| formal/hx/hKCIi.pv | H9c | true ×1 | true ×1 | 12.7 s | df6fe825f759 |
+| formal/hx/hKCIi.pv | H11 | false ×4 | false ×4 | 12.7 s | df6fe825f759 |
+| formal/hx/hKCIlt.pv | H11 | false ×4 | false ×4 | 44.3 s | 7157b89d3d9c |
+| formal/hx/hKCIlt-auth.pv | H9b | true ×1 | true ×1 | 307.5 s | c2f9a718b371 |
+| formal/hx/hKEM.pv | H3 (i) | true ×1 | true ×1 | 22.7 s | 016d5c86fb75 |
+| formal/hx/hKEM.pv | H3 (ii) | true ×1 | true ×1 | 22.7 s | 016d5c86fb75 |
+| formal/hx/hKEM.pv | H11 | false ×4 | false ×4 | 22.7 s | 016d5c86fb75 |
+| formal/hx/hKEM-auth.pv | H5 | true ×1 | true ×1 | 4.8 s | c7cdd46c57d7 |
+
+
+### ProVerif models
+
+| item | verdict |
+|---|---|
+| formal/tr.pv | sha256 09ba6cbb57f05de142cc18cdae2694c826ea7ecdf03b411c505945492957a1ef |
+| formal/hx.pvl | sha256 885adf37f8e24ea48aba117ef893db8ed2f45af919c4c91c864de78a3aa0c867 |
+| formal/hx/hBoth.pv | sha256 6a606316c7401a7924b8894bb7893b9551a477a2cfb25051edca7cea67cf4ef8 |
+| formal/hx/hClean-auth.pv | sha256 7439c394a99aae7566cf5447b0babd53c0a87a7e0d78bb1830f9ad3991b1cc57 |
+| formal/hx/hClean.pv | sha256 c18c398e3d46b96e79ad45d8750d15aec50758cf6e18b976baedc842d7690fbd |
+| formal/hx/hDH-auth.pv | sha256 49a3fad652cf4e18f112b6ba862c26e2af42edcb6c506ba0b8aa9fc628eef3e5 |
+| formal/hx/hDH.pv | sha256 28ed0e6819a164cd0829f0b0705e061643ec910209c31872bae12fe5e5a1f018 |
+| formal/hx/hFS.pv | sha256 f21c9d1f5a4e9190ffbe539ff3fe44bebe87cfbc08e6b5e0c704af10993fb15f |
+| formal/hx/hFSDH.pv | sha256 dc87046c29964180e4ceae349b9fef6fc12dcbb4c279a22312aa3e72bbc3a0ec |
+| formal/hx/hFSOPK.pv | sha256 ac8df3c07a2cb1212e99d60e4e9434ce0565bd7c580f33822a41acb6857e8e75 |
+| formal/hx/hId.pv | sha256 4ed5e5205221c86e6466f090eb6f633341ddc6958b967ead56406d996fda3c52 |
+| formal/hx/hIdLater.pv | sha256 2c6b2265c7b7af98682cd63aac9daf20918cadeab2377c814d88c954d98d53fa |
+| formal/hx/hIdLaterOPK.pv | sha256 43b483e056a221ca357ade4989739caeaaaffad0a2e9eb7b61b3a217b956b85e |
+| formal/hx/hIdThief.pv | sha256 a2c855940c688a0481ea7267e45f3314c898c68c749de8111975984c4f48abe5 |
+| formal/hx/hKCI-auth.pv | sha256 8522b9cd5498383881db47f166976d5bf79c1c4a5fbf9252426e8660e425d3a8 |
+| formal/hx/hKCI.pv | sha256 eaf38619a061040a35770e3a486d5f85e2055d4a6c8c792fe5c867d941188113 |
+| formal/hx/hKCIi.pv | sha256 df6fe825f759a5c43d481e0bc6c5a595195864fa1acccb81c5bdea744dce84e9 |
+| formal/hx/hKCIlt-auth.pv | sha256 c2f9a718b3711ee570b0e5c40ca9ab407c54c03904e1241931e56ffa83f8a0bb |
+| formal/hx/hKCIlt.pv | sha256 7157b89d3d9cab0cf5d673f2476b506fd32a3b4aeada6373ab1e174b1a6bab4c |
+| formal/hx/hKEM-auth.pv | sha256 c7cdd46c57d744a6630e2a3f3cc0fd355a69ce670f7492f494d5a6c4fe4978b9 |
+| formal/hx/hKEM.pv | sha256 016d5c86fb75efaf6706034fb4d6e0d7f3a7316c45667fedb6e6c227e8c3a967 |
+
+
+
+=== step summary (host aarch64-apple-darwin, strict: true) ===
+  10 proverif        PASS        475s  ProVerif 2.05 self-test [true, false] ok; --models all, 4 parallel processes, timeout 1800 s per file; single-file models: tr (expected set matches); HX sessions over formal/hx.pvl: hBoth, hClean, hClean-auth, hDH, hDH-auth, hFS, hFSDH, hFSOPK, hId, hIdLater, hIdLaterOPK, hIdThief, hKCI, hKCI-auth, hKCIi, hKCIlt, hKCIlt-auth, hKEM, hKEM-auth (= the files of expect::PROVERIF_EXPECTED_HX); formal/tr.pv: 46 RESULT lines as expected — T1 true ×6, T2 true ×2, T3 true ×4, T4 true ×2, T5 true ×2, T6 true ×2, T7 false ×2, an attack as expected, T8 true ×12, T9 true ×4, T10 false ×1, an attack as expected, T11 true ×1, T12 false ×1, informative, T13 false ×7, an attack as expected (169.6 s); formal/hx/hBoth.pv: 5 RESULT lines as expected — H4 false ×1, H11 false ×4 (474.9 s); formal/hx/hClean.pv: 9 RESULT lines as expected — H1 (i) true ×1, H1 (ii) true ×1, H11 false ×4, H6b true ×1, H10 true ×1, H6a true ×1 (37.5 s); formal/hx/hClean-auth.pv: 1 RESULT lines as expected — H5 true ×1 (2.5 s); formal/hx/hDH.pv: 6 RESULT lines as expected — H2 (i) true ×1, H2 (ii) true ×1, H11 false ×4 (33.7 s); formal/hx/hDH-auth.pv: 1 RESULT lines as expected — H8 false ×1 (10.4 s); formal/hx/hFS.pv: 6 RESULT lines as expected — H11 false ×4, H12 (i) true ×1, H12 (ii) true ×1 (1.1 s); formal/hx/hFSDH.pv: 6 RESULT lines as expected — H11 false ×4, H12c (i) true ×1, H12c (ii) true ×1 (1.0 s); formal/hx/hFSOPK.pv: 6 RESULT lines as expected — H11 false ×4, H12b (i) false ×1, H12b (ii) false ×1 (1.9 s); formal/hx/hId.pv: 7 RESULT lines as expected — H7a true ×2, H11 false ×4, H6a true ×1 (0.7 s); formal/hx/hIdLater.pv: 6 RESULT lines as expected — H7c true ×2, H11 false ×4 (0.5 s); formal/hx/hIdLaterOPK.pv: 6 RESULT lines as expected — H7d false ×2, H11 false ×4 (0.8 s); formal/hx/hIdThief.pv: 6 RESULT lines as expected — H7b true ×2, H11 false ×4 (6.5 s); formal/hx/hKCI.pv: 4 RESULT lines as expected — H11 false ×4 (20.3 s); formal/hx/hKCI-auth.pv: 1 RESULT lines as expected — H9 false ×1 (6.5 s); formal/hx/hKCIi.pv: 5 RESULT lines as expected — H9c true ×1, H11 false ×4 (12.7 s); formal/hx/hKCIlt.pv: 4 RESULT lines as expected — H11 false ×4 (44.3 s); formal/hx/hKCIlt-auth.pv: 1 RESULT lines as expected — H9b true ×1 (307.5 s); formal/hx/hKEM.pv: 6 RESULT lines as expected — H3 (i) true ×1, H3 (ii) true ×1, H11 false ×4 (22.7 s); formal/hx/hKEM-auth.pv: 1 RESULT lines as expected — H5 true ×1 (4.8 s); evidence target/proverif/summary.txt, results.tsv and one log per file
+step: PASS
+exit=0

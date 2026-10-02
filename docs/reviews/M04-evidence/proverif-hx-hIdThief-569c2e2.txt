@@ -1,0 +1,52 @@
+# ProVerif 2.05 — formal/hx/hIdThief.pv over formal/hx.pvl (WEISUNG M4-11), models of commit 569c2e2
+# command: cargo xtask step --strict proverif --models all --jobs 4 (proverif -lib formal/hx.pvl formal/hx/hIdThief.pv, 1800 s cap; 4 files in parallel on this Mac (M1 Pro), no other ProVerif run alongside)
+# sha256 formal/hx.pvl 885adf37f8e24ea48aba117ef893db8ed2f45af919c4c91c864de78a3aa0c867
+# sha256 formal/hx/hIdThief.pv a2c855940c688a0481ea7267e45f3314c898c68c749de8111975984c4f48abe5
+# gate: finished after 6.5 s · RESULT lines 6 of 6 expected · secrecy assumptions verified 13 · O-24: n/a
+# finished: yes · last progress line: 13600 rules inserted. Base: 5716 rules (211 with conclusion selected). Queue: 1 rules.
+# session tags in the log other than the file's: none (one session per file, O-18)
+
+| # | CLAIMS ID | expected | verdict | trace (false verdicts): found · event tags · events |
+|---|---|---|---|---|
+| 1 | H7b | true | true |  |
+| 2 | H7b | true | true |  |
+| 3 | H11 | false | false | yes · hIdThief · BundleSigned×5 IStart×1 InvIssued×5 LeakInv×5 |
+| 4 | H11 | false | false | yes · hIdThief · BundleSigned×1 |
+| 5 | H11 | false | false | yes · hIdThief · BundleSigned×4 IStart×1 InvIssued×4 LeakInv×4 RAccept×1 |
+| 6 | H11 | false | false | yes · hIdThief · BundleSigned×4 IConfirm×1 IStart×1 InvIssued×4 LeakInv×4 RAccept×1 |
+
+Query texts (as ProVerif prints them, = expect::PROVERIF_EXPECTED_HX):
+1. H7b `not attacker(exp(g,dhsk(hIdThief,kIKI)))`
+2. H7b `not attacker(vk(iksig(hIdThief,pI)))`
+3. H11 `not event(IStart(hIdThief,iks(vk(iksig(hIdThief,pI)),exp(g,dhsk(hIdThief,kIKI))),iks(vk(iksig(hIdThief,pR)),exp(g,dhsk(hIdThief,kIKR))),b_2,tr_2,rt_2,sk_2))`
+4. H11 `not event(BundleSigned(hIdThief,iR,b_2))`
+5. H11 `not (event(RAccept(hIdThief,iR,iks(vk(iksig(hIdThief,pI)),exp(g,dhsk(hIdThief,kIKI))),ld_5,oid,tr_2,rt_2,sk_2)) && event(IStart(hIdThief,iks(vk(iksig(hIdThief,pI)),exp(g,dhsk(hIdThief,kIKI))),iR,b_2,tr_2,rt_2,sk_2)))`
+6. H11 `not event(IConfirm(hIdThief,iks(vk(iksig(hIdThief,pI)),exp(g,dhsk(hIdThief,kIKI))),iks(vk(iksig(hIdThief,pR)),exp(g,dhsk(hIdThief,kIKR))),tr_2,sk_2))`
+
+RESULT lines and the last 20 progress lines of the log:
+RESULT not attacker(exp(g,dhsk(hIdThief,kIKI))) is true.
+RESULT not attacker(vk(iksig(hIdThief,pI))) is true.
+RESULT not event(IStart(hIdThief,iks(vk(iksig(hIdThief,pI)),exp(g,dhsk(hIdThief,kIKI))),iks(vk(iksig(hIdThief,pR)),exp(g,dhsk(hIdThief,kIKR))),b_2,tr_2,rt_2,sk_2)) is false.
+RESULT not event(BundleSigned(hIdThief,iR,b_2)) is false.
+RESULT not (event(RAccept(hIdThief,iR,iks(vk(iksig(hIdThief,pI)),exp(g,dhsk(hIdThief,kIKI))),ld_5,oid,tr_2,rt_2,sk_2)) && event(IStart(hIdThief,iks(vk(iksig(hIdThief,pI)),exp(g,dhsk(hIdThief,kIKI))),iR,b_2,tr_2,rt_2,sk_2))) is false.
+RESULT not event(IConfirm(hIdThief,iks(vk(iksig(hIdThief,pI)),exp(g,dhsk(hIdThief,kIKI))),iks(vk(iksig(hIdThief,pR)),exp(g,dhsk(hIdThief,kIKR))),tr_2,sk_2)) is false.
+9800 rules inserted. Base: 4615 rules (141 with conclusion selected). Queue: 595 rules.
+10000 rules inserted. Base: 4589 rules (141 with conclusion selected). Queue: 508 rules.
+10200 rules inserted. Base: 4683 rules (141 with conclusion selected). Queue: 486 rules.
+10400 rules inserted. Base: 4793 rules (141 with conclusion selected). Queue: 461 rules.
+10600 rules inserted. Base: 4960 rules (141 with conclusion selected). Queue: 314 rules.
+10800 rules inserted. Base: 5034 rules (141 with conclusion selected). Queue: 278 rules.
+11000 rules inserted. Base: 5164 rules (141 with conclusion selected). Queue: 184 rules.
+11200 rules inserted. Base: 5275 rules (141 with conclusion selected). Queue: 136 rules.
+11400 rules inserted. Base: 5425 rules (141 with conclusion selected). Queue: 126 rules.
+11600 rules inserted. Base: 5575 rules (141 with conclusion selected). Queue: 114 rules.
+11800 rules inserted. Base: 5645 rules (141 with conclusion selected). Queue: 70 rules.
+12000 rules inserted. Base: 5675 rules (157 with conclusion selected). Queue: 54 rules.
+12200 rules inserted. Base: 5678 rules (157 with conclusion selected). Queue: 54 rules.
+12400 rules inserted. Base: 5708 rules (157 with conclusion selected). Queue: 54 rules.
+12600 rules inserted. Base: 5723 rules (157 with conclusion selected). Queue: 54 rules.
+12800 rules inserted. Base: 5721 rules (157 with conclusion selected). Queue: 54 rules.
+13000 rules inserted. Base: 5734 rules (157 with conclusion selected). Queue: 54 rules.
+13200 rules inserted. Base: 5742 rules (159 with conclusion selected). Queue: 53 rules.
+13400 rules inserted. Base: 5683 rules (173 with conclusion selected). Queue: 46 rules.
+13600 rules inserted. Base: 5716 rules (211 with conclusion selected). Queue: 1 rules.

@@ -1,0 +1,42 @@
+# ProVerif 2.05 — formal/hx/hIdLater.pv over formal/hx.pvl (WEISUNG M4-11), models of commit 569c2e2
+# command: cargo xtask step --strict proverif --models all --jobs 4 (proverif -lib formal/hx.pvl formal/hx/hIdLater.pv, 1800 s cap; 4 files in parallel on this Mac (M1 Pro), no other ProVerif run alongside)
+# sha256 formal/hx.pvl 885adf37f8e24ea48aba117ef893db8ed2f45af919c4c91c864de78a3aa0c867
+# sha256 formal/hx/hIdLater.pv 2c6b2265c7b7af98682cd63aac9daf20918cadeab2377c814d88c954d98d53fa
+# gate: finished after 0.5 s · RESULT lines 6 of 6 expected · secrecy assumptions verified 19 · O-24: n/a
+# finished: yes · last progress line: 2000 rules inserted. Base: 1390 rules (237 with conclusion selected). Queue: 75 rules.
+# session tags in the log other than the file's: none (one session per file, O-18)
+
+| # | CLAIMS ID | expected | verdict | trace (false verdicts): found · event tags · events |
+|---|---|---|---|---|
+| 1 | H7c | true | true |  |
+| 2 | H7c | true | true |  |
+| 3 | H11 | false | false | yes · hIdLater · BundleSigned×1 IStart×1 InvIssued×1 |
+| 4 | H11 | false | false | yes · hIdLater · BundleSigned×1 |
+| 5 | H11 | false | false | yes · hIdLater · BundleSigned×1 IStart×1 InvIssued×1 RAccept×1 |
+| 6 | H11 | false | false | yes · hIdLater · BundleSigned×1 IConfirm×1 IStart×1 InvIssued×1 RAccept×1 |
+
+Query texts (as ProVerif prints them, = expect::PROVERIF_EXPECTED_HX):
+1. H7c `not attacker_p1(exp(g,dhsk(hIdLater,kIKI)))`
+2. H7c `not attacker_p1(vk(iksig(hIdLater,pI)))`
+3. H11 `not event(IStart(hIdLater,iks(vk(iksig(hIdLater,pI)),exp(g,dhsk(hIdLater,kIKI))),iks(vk(iksig(hIdLater,pR)),exp(g,dhsk(hIdLater,kIKR))),b_2,tr_2,rt_2,sk_2))`
+4. H11 `not event(BundleSigned(hIdLater,iR,b_2))`
+5. H11 `not (event(RAccept(hIdLater,iR,iks(vk(iksig(hIdLater,pI)),exp(g,dhsk(hIdLater,kIKI))),ld_5,oid,tr_2,rt_2,sk_2)) && event(IStart(hIdLater,iks(vk(iksig(hIdLater,pI)),exp(g,dhsk(hIdLater,kIKI))),iR,b_2,tr_2,rt_2,sk_2)))`
+6. H11 `not event(IConfirm(hIdLater,iks(vk(iksig(hIdLater,pI)),exp(g,dhsk(hIdLater,kIKI))),iks(vk(iksig(hIdLater,pR)),exp(g,dhsk(hIdLater,kIKR))),tr_2,sk_2))`
+
+RESULT lines and the last 20 progress lines of the log:
+RESULT not attacker_p1(exp(g,dhsk(hIdLater,kIKI))) is true.
+RESULT not attacker_p1(vk(iksig(hIdLater,pI))) is true.
+RESULT not event(IStart(hIdLater,iks(vk(iksig(hIdLater,pI)),exp(g,dhsk(hIdLater,kIKI))),iks(vk(iksig(hIdLater,pR)),exp(g,dhsk(hIdLater,kIKR))),b_2,tr_2,rt_2,sk_2)) is false.
+RESULT not event(BundleSigned(hIdLater,iR,b_2)) is false.
+RESULT not (event(RAccept(hIdLater,iR,iks(vk(iksig(hIdLater,pI)),exp(g,dhsk(hIdLater,kIKI))),ld_5,oid,tr_2,rt_2,sk_2)) && event(IStart(hIdLater,iks(vk(iksig(hIdLater,pI)),exp(g,dhsk(hIdLater,kIKI))),iR,b_2,tr_2,rt_2,sk_2))) is false.
+RESULT not event(IConfirm(hIdLater,iks(vk(iksig(hIdLater,pI)),exp(g,dhsk(hIdLater,kIKI))),iks(vk(iksig(hIdLater,pR)),exp(g,dhsk(hIdLater,kIKR))),tr_2,sk_2)) is false.
+200 rules inserted. Base: 200 rules (117 with conclusion selected). Queue: 105 rules.
+400 rules inserted. Base: 369 rules (125 with conclusion selected). Queue: 133 rules.
+600 rules inserted. Base: 543 rules (166 with conclusion selected). Queue: 186 rules.
+800 rules inserted. Base: 719 rules (190 with conclusion selected). Queue: 277 rules.
+1000 rules inserted. Base: 865 rules (190 with conclusion selected). Queue: 304 rules.
+1200 rules inserted. Base: 1017 rules (190 with conclusion selected). Queue: 278 rules.
+1400 rules inserted. Base: 1145 rules (201 with conclusion selected). Queue: 213 rules.
+1600 rules inserted. Base: 1203 rules (220 with conclusion selected). Queue: 165 rules.
+1800 rules inserted. Base: 1298 rules (234 with conclusion selected). Queue: 106 rules.
+2000 rules inserted. Base: 1390 rules (237 with conclusion selected). Queue: 75 rules.

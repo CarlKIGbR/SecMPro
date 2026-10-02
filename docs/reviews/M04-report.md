@@ -778,6 +778,140 @@ listed files but forced by the dictated 19-file table; `ci-dispatch.yml` not cha
 `gh run list --branch m04-hx --limit 3` at 2026-10-02 12:59 CEST: PR run 36983733373 (head `2c23c0f`) `in_progress`
 — **not pushed** (WEISUNG M4-7). Unpushed on `m04-hx`: `4f5562d`, `7c235d2` and this report commit.
 
+### 13.12 WEISUNG M4-11 — formal round 3: O-21 withdrawn, O-24 search devices; all 19 hx files terminate
+
+Start: HEAD `4a0960e`, 0 commits not on `origin/m04-hx`, working tree clean; PR run 37038178041 (head `4a0960e`)
+`in_progress`. Adjudication of M4-7 (WEISUNG §0) recorded: 14 session files with 82/82 lines accepted; the device
+`new e[ld, lk, b]` and the `gates.rs:3041` count fix accepted (CLAIMS "Model devices" now says so); Q-3/Q-4 answered
+by the reviewer's measurements; O-21 withdrawn.
+
+#### 13.12.1 What was changed (`744d3cd` formal, `569c2e2` xtask, the docs commit)
+- `formal/hx.pvl`: the event `IStartA` is removed; `ProcIPA` (the attacker as inviter) emits `IStart`. The O-20 scope
+  (only in the five auth files) and the O-23 check stay as they were. Header 3. and 7. and the `ProcIPA` comment are
+  updated to match.
+- The five auth files: the three O-24 lines verbatim, plus the fourth in `hDH-auth.pv`. The auth files have no `set`
+  line: the two `set` lines are in `hx.pvl`. So the lines go where the reviewer's measured files (`T-*.pv`,
+  `S*-*.pv`) put them: directly after `const <tag>: tagt.`, before the oracle and secrecy declarations and the process.
+  Where a declaration sits does not change what it means to ProVerif. The row comment "with event IStartA (…, O-21)"
+  now reads "with event IStart (…; O-21 withdrawn) … ; search devices (O-24)". No query, process or secrecy assumption
+  changed: `git diff 4a0960e 744d3cd -- formal/hx/` shows only that comment and the inserted lines.
+- `expect::PROVERIF_EXPECTED_HX` is unchanged: 19 files, 87 rows. The query texts of the five auth rows (`ld_6`,
+  `b_3`, `tr_3`, `rt_3`, `sk_3`) equal the RESULT lines of the gate run, so the O-24 declarations do not shift
+  ProVerif's variable renaming.
+- **Gate parser** (`xtask/src/gates.rs`, outside the WEISUNG's file list, see §13.12.6). H8 and H9 are now decided for
+  the first time. Under a false injective query whose non-injective version is false too, ProVerif 2.05 prints an
+  extra remark line, `RESULT (even event(…) ==> event(…) is false.)`. `proverif_result_lines` skipped only the
+  `RESULT (but …)` form. It counted the `(even …)` remark as an extra, unreadable line, so it failed hDH-auth and
+  hKCI-auth although their verdicts were right. The first gate run at `744d3cd` shows this:
+  `M04-evidence/proverif-hx-gate-744d3cd-run1.txt`, "2 of 20 ProVerif files failed … extra RESULT line 2 (no such
+  query in the table), unreadable: (even …)"; every other file passed there.
+  - Fix: both remark forms are skipped.
+  - Tests: `gates::tests::proverif_verdicts` checks that both forms are skipped. In
+    `gates::tests::proverif_verdicts_against_the_claims_table`, the hx output fixture now emits `(even …)` under a
+    false injective query and `(but …)` under an undecided one.
+  - Checks: `cargo nextest run -p xtask` 109/109; `cargo fmt --all --check` and `cargo clippy -p xtask --all-targets
+    -- -D warnings` clean.
+- `formal/CLAIMS.md` §HX:
+  - "O-21 withdrawn" and O-24 are added verbatim under "Reviewer decisions", in a new amendments block (WEISUNG M4-11).
+  - The O-21 bullet is marked "Withdrawn 2026-10-02".
+  - "Model devices": the M4-7 device line now says "accepted by the reviewer, M4-11 §0", and a fourth line names O-24.
+
+#### 13.12.2 Runs (gate run `cargo xtask step --strict proverif --models all --jobs 4` at `569c2e2`, whose models are those of `744d3cd`; 1800 s cap per file; 4 files in parallel; nothing else running)
+
+| file | wall | RESULT | finished | M4-7 (`7c235d2`) |
+|---|---|---|---|---|
+| `tr.pv` | 169.6 s | 46 / 46 | yes | 91.6 s (`--models tr`, alone) |
+| `hx/hClean.pv` | 37.5 s | 9 / 9 | yes | 33.1 s |
+| `hx/hClean-auth.pv` | 2.5 s | 1 / 1 | yes | capped (0 / 1) |
+| `hx/hDH.pv` | 33.7 s | 6 / 6 | yes | 28.7 s |
+| `hx/hDH-auth.pv` | 10.4 s | 1 / 1 | yes | capped (0 / 1) |
+| `hx/hKEM.pv` | 22.7 s | 6 / 6 | yes | 21.7 s |
+| `hx/hKEM-auth.pv` | 4.8 s | 1 / 1 | yes | capped (0 / 1) |
+| `hx/hBoth.pv` | 474.9 s | 5 / 5 | yes | 1043.5 s |
+| `hx/hId.pv` | 0.7 s | 7 / 7 | yes | 0.6 s |
+| `hx/hIdThief.pv` | 6.5 s | 6 / 6 | yes | 6.0 s |
+| `hx/hIdLater.pv` | 0.5 s | 6 / 6 | yes | 0.5 s |
+| `hx/hIdLaterOPK.pv` | 0.8 s | 6 / 6 | yes | 0.7 s |
+| `hx/hKCI.pv` | 20.3 s | 4 / 4 | yes | 18.4 s |
+| `hx/hKCI-auth.pv` | 6.5 s | 1 / 1 | yes | capped (0 / 1) |
+| `hx/hKCIlt.pv` | 44.3 s | 4 / 4 | yes | 48.6 s |
+| `hx/hKCIlt-auth.pv` | 307.5 s | 1 / 1 | yes | capped (0 / 1) |
+| `hx/hKCIi.pv` | 12.7 s | 5 / 5 | yes | 14.5 s |
+| `hx/hFS.pv` | 1.1 s | 6 / 6 | yes | 1.0 s |
+| `hx/hFSOPK.pv` | 1.9 s | 6 / 6 | yes | 1.9 s |
+| `hx/hFSDH.pv` | 1.0 s | 6 / 6 | yes | 1.1 s |
+
+The gate's step line reads `10 proverif PASS 475s`, `step: PASS`: 20 of 20 files, hx 87 / 87 lines as expected
+(82 session-file lines + 5 auth lines), tr 46 / 46.
+- hBoth.pv is byte-identical to M4-7 (same sha256). `hx.pvl` changed only in `ProcIPA`/`IStartA`, which hBoth does not
+  use. In the M4-7 run the capped auth files ran alongside it for 30 min each. These are measurements; I give no
+  further cause.
+- hKCIlt-auth: 307.5 s here. The reviewer measured 506.7 s in its container with both `nounif` lines *without*
+  `[ignoreAFewTimes]` (S0); S5 on hKCIlt was unmeasured there. This run uses the dictated O-24 lines, with the option.
+
+Evidence (all in `M04-evidence/`):
+- per file, `proverif-hx-<file>-569c2e2.txt`: query, ID, expected and actual verdict; for each false verdict whether a
+  trace was found, the session tags and the events of the trace; the RESULT lines; the last 20 progress lines.
+- `proverif-tr-569c2e2.txt`.
+- the gate output `proverif-hx-gate-569c2e2.txt`, incl. the ADR-045 table and the sha256 of every model file.
+- the sha256 list `proverif-569c2e2.sha256`. Against `proverif-7c235d2.sha256` only `hx.pvl` and the five auth files
+  differ.
+
+#### 13.12.3 Verdicts (no mismatch)
+
+| file | ID | verdict | expected | wall |
+|---|---|---|---|---|
+| `hClean-auth` | H5 | true | true | 2.5 s |
+| `hKEM-auth` | H5 | true | true | 4.8 s |
+| `hDH-auth` | H8 | false, with a trace | false | 10.4 s |
+| `hKCI-auth` | H9 | false, with a trace | false | 6.5 s |
+| `hKCIlt-auth` | H9b | true | true | 307.5 s |
+
+The 14 session files give the verdicts of §13.11.3 again (82 / 82).
+
+There are 63 false verdicts: H11 ×56 (four in each of the 14 session files), H4 (hBoth), H7d ×2 (hIdLaterOPK), H8
+(hDH-auth), H9 (hKCI-auth) and H12b (i)/(ii) (hFSOPK). For each, ProVerif reports "A trace has been found.", and every
+event in the trace carries the file's own session tag. Source: `target/tmp/m411_evidence.py` over the gate logs; one
+column per verdict in the per-file evidence.
+- **H8 trace (hDH-auth, session hDH):**
+  1. PubIKS(hDH, pI); R issues its invitations; LeakInv(hDH, ld_10).
+  2. The attacker sends R, on ld_10, an Outer built from its own EK (= g), its own encapsulations ct_spk and ct_opk
+     (coins a_4, a_5) and its own ct1 (a_6), inner IKS_I, with DH1 = dh_break(IK_dh_I, SPK_dh_R) (the DH oracle).
+  3. RAccept(hDH, IKS_R, IKS_I, ld_10, opkid_9, …).
+
+  The trace contains no IStart. This is the CLAIMS H8 attack: with a classical break, I's authentication to R rests
+  on the PQ part alone, and that part does not authenticate I.
+- **H9 trace (hKCI-auth, session hKCI):**
+  1. RevealSPK(hKCI, pR) puts the secrets of SPK_dh, SPK_kem and RPK_kem on c; PubIKS(hKCI, pI); LeakInv(hKCI, ld_12).
+  2. R reaches RAccept(hKCI, IKS_R, IKS_I, ld_12, opkid_10, …) on an Outer that has:
+     - the attacker's own EK (= g), its own ct_opk (a_10) and its own ct1 (a_11);
+     - DH1 = X25519(IK_dh_I, the revealed SPK_dh secret);
+     - a ct_spk the attacker took from I's init cell in an attacker-as-inviter run and decapsulated with the revealed
+       SPK_kem. That run is IStart(hKCI, IKS_I, IKS_R, …) on the attacker's own invitation a_5 with R's genuine bundle
+       of opkid_12 (O-23). Its tr contains ld_id a_5 ≠ ld_12, so it does not match the RAccept.
+
+  The trace has no event of another session. It differs from the reviewer's trace in one point: ct_spk is replayed
+  from I's run instead of being the attacker's own encapsulation. The attacker could have made its own, since
+  SPK_kem is public.
+
+#### 13.12.4 Gate
+PASS: 20 / 20 files, 475 s wall time for the `--jobs 4` step; hx 87 lines as expected (82 + 5), tr 46.
+
+#### 13.12.5 Blocked
+STOP: none.
+
+#### 13.12.6 Deviations
+None from the spec. From the letter of the WEISUNG:
+- the gate parser fix in `xtask/src/gates.rs` (§13.12.1), outside the listed files. It was forced by the dictated
+  "19/19 pass, 87 hx lines": without it the gate fails on correct verdicts. It is a third commit, `569c2e2`.
+- where the O-24 lines sit: the auth files have no `set` line, so the lines are placed as in the reviewer's measured
+  files.
+- the row comment in each auth file, which named the removed `IStartA`.
+
+#### 13.12.7 Push
+`gh run list --branch m04-hx --limit 2` at 2026-10-02 19:27 CEST: PR run 37038178041 (head `4a0960e`) `in_progress`
+— **not pushed** (window rule). Unpushed on `m04-hx`: `744d3cd`, `569c2e2` and the docs commit.
+
 ## M4-10 — R-60 (mutants gate builds secmp-proto with kat)
 
 The mutants step now passes `--features secmp-crypto/kat,secmp-proto/kat`, so the HX integration suite counts. Measured on bc17190 (HX files; command and full list in `M04-evidence/mutants-hx-bc17190.txt`): 335 mutants, 220 caught, 22 missed, 93 unviable, 0 timeouts; 67 min with -j3 (serial estimate ~3 h). Baseline test run is now ~130 s per mutant build: the full two-crate gate must be re-timed against the 180-min job budget. The 22 survivors are not fixed or excluded; the reviewer decides per mutant.

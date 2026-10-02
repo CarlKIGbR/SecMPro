@@ -272,16 +272,28 @@ Amendments (WEISUNG M4-5, reviewer termination diagnosis 2026-10-01; O-7 is repl
 Amendments (WEISUNG M4-7, reviewer decisions O-20…O-23 on the M4-5 report, 2026-10-02):
 
 - **O-20 (attacker as inviter only where a query needs it).** The attacker-as-inviter process for I exists only in the files whose queries need the identity-misbinding case — hClean (H5), hKEM (H5), hDH (H8), hKCI (H9), hKCIlt (H9b). In hBoth, hFS, hFSOPK, hFSDH and hKCIi, I runs only on R's invitations. Justification: every query of those files is a secrecy/forward-secrecy query over an honest session (IStart/RAccept with iks_R = R); an I session on an attacker invitation yields a SK the attacker is entitled to, which no such query covers; the attacker gains nothing from such a session that it cannot compute itself — DH1 = X25519(IK_dh_I, SPK_dh_A) is exp(pk_I, spk_A) with its own spk_A, and DH2–DH4, ss_spk, ss_opk, K_id, K_inv follow from its own secrets and the public values in Outer. Measured (M4-5 report §7): hFS 0.7 s, hBoth 290 s with this change.
-- **O-21 (IStart only on R's invitation).** In the five files with the attacker-as-inviter process, that process emits the event `IStartA` (same arguments) instead of `IStart`; `IStartA` appears in no query. H5/H8/H9/H9b thus read "R accepts I ⇒ I started on R's own invitation", which is the stronger statement: an envelope that I produced on an attacker invitation and that R nevertheless accepts (misbinding) would yield RAccept without IStart and come out false. The begin fact IStart is then carried only by derivations from I's run on R's invitation.
+- **O-21 (IStart only on R's invitation).** In the five files with the attacker-as-inviter process, that process emits the event `IStartA` (same arguments) instead of `IStart`; `IStartA` appears in no query. H5/H8/H9/H9b thus read "R accepts I ⇒ I started on R's own invitation", which is the stronger statement: an envelope that I produced on an attacker invitation and that R nevertheless accepts (misbinding) would yield RAccept without IStart and come out false. The begin fact IStart is then carried only by derivations from I's run on R's invitation. (Withdrawn 2026-10-02, see "O-21 withdrawn" below.)
 - **O-22 (declaration order by cost; auth files).** Query declarations are ordered: no-begin queries, then IConfirm/RAccept-begin (H6b), InvIssued-begin (H10), BundleSigned-begin (H6a), IStart-begin (H5/H8/H9/H9b) last. For the five O-20 files the IStart-begin declaration lives in a separate file `formal/hx/<session>-auth.pv` (same session, same processes incl. the attacker-as-inviter; only that declaration); the base file `<session>.pv` carries the other declarations and no attacker-as-inviter process. The gate's expected table is per (file, ID); a capped auth file never hides the base file's verdicts.
 - **O-23 (fallback for the auth files, applied only if an auth file still exceeds 30 min with O-20–O-22, and then named in the report).** The attacker-as-inviter process accepts only bundles that verify under IK_sig_R (R-signed bundles, replayable by anyone who holds them): a bundle signed by the attacker's own key gives it nothing it cannot compute itself (O-20 argument), so the only capability that matters is presenting R's genuine bundle under its own ld_id/link_key — the misbinding case H5 must exclude.
+
+Amendments (WEISUNG M4-11, reviewer decisions on the M4-7 report, 2026-10-02):
+
+- **O-21 withdrawn (2026-10-02).** Both I processes emit `IStart`; `IStartA` is removed. Reason: R's own leaked invitation re-sent on the public channel reaches the attacker-as-inviter process; a run on it is an honest start on R's invitation and must count as `IStart`, and no sound process-level exclusion of R's invitations exists. Nothing is lost against the misbinding case: under O-23 every attacker-as-inviter run has iks_R = IKS_R and tr contains ld_id, so an envelope produced under the attacker's (ld_A, lk_A) has no IStart matching R's RAccept on ld_j.
+- **O-24 (search devices, "Model devices").** The auth files carry ProVerif resolution hints that change only the search strategy, never the queries, the oracle or compromise scope or the secrecy assumptions (ProVerif stays sound: a hint can make a proof fail or a trace unavailable, never produce a wrong verdict; `[ignoreAFewTimes]` keeps attack reconstruction possible). The lines, verbatim:
+  `select k: key, l: bitstring, m: bitstring; attacker(caead_seal( *k, nz, (lbl_inner, *l), *m))/5000.`
+  `nounif p: bitstring, r: coins; attacker(encaps_ct1024( *p, *r)) [ignoreAFewTimes].`
+  `nounif x: exponent; attacker(exp(g, x)) [ignoreAFewTimes].`
+  and, in hDH-auth only (lazy DH oracle): `nounif x: bitstring; attacker(exp(g, dhsk(hDH, x))) [ignoreAFewTimes].`
+  Measured effect (reviewer, 2026-10-02): H5/H8/H9/H9b from > 30 min to seconds–minutes; every false trace checked to use only its own session's events.
 
 ### Model devices
 
 - `new e[ld, lk]` (I's names indexed by the invitation): precision devices, no change to queries, oracles or compromise.
 - `set unifyDerivation = false`: precision devices, no change to queries, oracles or compromise.
-- `new e[ld, lk, b]` (M4-7: I's names indexed also by the bundle I verified; for the reviewer): precision device of
-  the same kind, no change to queries, oracles or compromise (`formal/hx.pvl` header 7.).
+- `new e[ld, lk, b]` (M4-7: I's names indexed also by the bundle I verified; accepted by the reviewer, M4-11 §0):
+  precision device of the same kind, no change to queries, oracles or compromise (`formal/hx.pvl` header 7.).
+- O-24 (M4-11): the search devices of the five auth files (one `select`, two `nounif … [ignoreAFewTimes]`; hDH-auth
+  a third, the lazy DH oracle), verbatim under "Reviewer decisions" above: search strategy only.
 
 Open SQ entries for HX/INV: none. SPEC-QUESTIONS.md (state "Weisung REF-M4-1": "No open questions") marks every
 HX/INV-related entry answered — SQ-10 (fingerprint input), SQ-12 (decoder checks), SQ-13/14 (RelayRef), SQ-15

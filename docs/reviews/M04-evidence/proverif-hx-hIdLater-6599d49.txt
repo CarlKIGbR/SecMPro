@@ -1,0 +1,34 @@
+# ProVerif 2.05 — formal/hx/hIdLater.pv over formal/hx.pvl (WEISUNG M4-5 §2), models as of 6599d49
+# command: timeout 1800 proverif -lib formal/hx.pvl formal/hx/hIdLater.pv  (target/tmp/runq.py, 4 files in parallel on this Mac, M1 Pro 10 cores / 16 GB, other ProVerif runs alongside)
+# sha256 formal/hx.pvl f358ca8ea48f2e7c45cf0303a436e43f9f2a3ba72b180100805bab4c9ebeceff
+# sha256 formal/hx/hIdLater.pv 2c6b2265c7b7af98682cd63aac9daf20918cadeab2377c814d88c954d98d53fa
+# exit: 0 · wall 2.0 s · RESULT lines 6 of 6 expected · secrecy assumptions verified 19
+# finished: yes · last progress line: 2000 rules inserted. Base: 1390 rules (237 with conclusion selected). Queue: 75 rules.
+# session tags in the log other than hIdLater: none (one session per file, O-18)
+
+| # | CLAIMS ID | expected | verdict | query (as ProVerif prints it) |
+|---|---|---|---|---|
+| 1 | H7c | true | true | `not attacker_p1(exp(g,dhsk(hIdLater,kIKI)))` |
+| 2 | H7c | true | true | `not attacker_p1(vk(iksig(hIdLater,pI)))` |
+| 3 | H11 | false | false | `not event(IStart(hIdLater,iks(vk(iksig(hIdLater,pI)),exp(g,dhsk(hIdLater,kIKI))),iks(vk(iksig(hIdLater,pR)),exp(g,dhsk(hIdLater,kIKR))),b_2,tr_2,rt_2,sk_2))` |
+| 4 | H11 | false | false | `not event(BundleSigned(hIdLater,iR,b_2))` |
+| 5 | H11 | false | false | `not (event(RAccept(hIdLater,iR,iks(vk(iksig(hIdLater,pI)),exp(g,dhsk(hIdLater,kIKI))),ld_5,oid,tr_2,rt_2,sk_2)) && event(IStart(hIdLater,iks(vk(iksig(hIdLater,pI)),exp(g,dhsk(hIdLater,kIKI))),iR,b_2,tr_2,rt_2,sk_2)))` |
+| 6 | H11 | false | false | `not event(IConfirm(hIdLater,iks(vk(iksig(hIdLater,pI)),exp(g,dhsk(hIdLater,kIKI))),iks(vk(iksig(hIdLater,pR)),exp(g,dhsk(hIdLater,kIKR))),tr_2,sk_2))` |
+
+RESULT lines and the 20 progress lines before the end of the log:
+RESULT not attacker_p1(exp(g,dhsk(hIdLater,kIKI))) is true.
+RESULT not attacker_p1(vk(iksig(hIdLater,pI))) is true.
+RESULT not event(IStart(hIdLater,iks(vk(iksig(hIdLater,pI)),exp(g,dhsk(hIdLater,kIKI))),iks(vk(iksig(hIdLater,pR)),exp(g,dhsk(hIdLater,kIKR))),b_2,tr_2,rt_2,sk_2)) is false.
+RESULT not event(BundleSigned(hIdLater,iR,b_2)) is false.
+RESULT not (event(RAccept(hIdLater,iR,iks(vk(iksig(hIdLater,pI)),exp(g,dhsk(hIdLater,kIKI))),ld_5,oid,tr_2,rt_2,sk_2)) && event(IStart(hIdLater,iks(vk(iksig(hIdLater,pI)),exp(g,dhsk(hIdLater,kIKI))),iR,b_2,tr_2,rt_2,sk_2))) is false.
+RESULT not event(IConfirm(hIdLater,iks(vk(iksig(hIdLater,pI)),exp(g,dhsk(hIdLater,kIKI))),iks(vk(iksig(hIdLater,pR)),exp(g,dhsk(hIdLater,kIKR))),tr_2,sk_2)) is false.
+200 rules inserted. Base: 200 rules (117 with conclusion selected). Queue: 105 rules.
+400 rules inserted. Base: 369 rules (125 with conclusion selected). Queue: 133 rules.
+600 rules inserted. Base: 543 rules (166 with conclusion selected). Queue: 186 rules.
+800 rules inserted. Base: 719 rules (190 with conclusion selected). Queue: 277 rules.
+1000 rules inserted. Base: 865 rules (190 with conclusion selected). Queue: 304 rules.
+1200 rules inserted. Base: 1017 rules (190 with conclusion selected). Queue: 278 rules.
+1400 rules inserted. Base: 1145 rules (201 with conclusion selected). Queue: 213 rules.
+1600 rules inserted. Base: 1203 rules (220 with conclusion selected). Queue: 165 rules.
+1800 rules inserted. Base: 1298 rules (234 with conclusion selected). Queue: 106 rules.
+2000 rules inserted. Base: 1390 rules (237 with conclusion selected). Queue: 75 rules.

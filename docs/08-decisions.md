@@ -346,6 +346,14 @@ Note: the SQ-25 follow-up (§5.5 clarification) is carried by ADR-043 (h); nothi
 
 ---
 
+### ADR-046 — ProVerif per-session model files and a dedicated CI job
+**Status.** Accepted (Reviewer, Owner-Delegation 30.09.2026) — 2026-10-01.
+**Context.** The joint SecMP-HX model (`formal/hx.pv`, 14 sessions, 98 queries) does not terminate; the measured cost is superlinear in the number of sessions and dominated by correspondence declarations; sessions share no private value (CLAIMS §HX O-18).
+**Decision.** The HX claims are verified as one ProVerif file per session (`formal/hx/<session>.pv` over the library `formal/hx.pvl`), each capped at 30 minutes; the xtask `proverif --models hx` step runs them in parallel and fails on a timeout; CI gets a job `proverif-hx` (ubuntu-latest, `--jobs 4`) that runs this step; `linux-full` keeps `proverif --models tr`. The job is reviewer-required for GO until the owner adds it to the Required set.
+**Consequences.** ≈ 14 files × ≤ 30 min / 4 ≤ 105 min wall; evidence per file under `docs/reviews/MNN-evidence/`.
+
+---
+
 *Template for new entries:*
 
 ### ADR-0NN — Title

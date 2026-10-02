@@ -7,6 +7,9 @@ Phase B (`formal/hx.pv`, F5, F34, F2 ct target) is a separate conversation on Op
 **Phase B (BRIEF M4-PV, 2026-10-01): STOP at B1** — `formal/hx.pv` (e42c854) gives no RESULT within 30 min, nor
 does its O-7 bounded variant (§3.1, §8.1). B2–B4 not started; B5–B8 prepared on two worktree branches, not on
 `m04-hx` (§1.2).
+**WEISUNG M4-5 (2026-10-02, §13):** `formal/hx.pvl` + 14 session files (O-13…O-19): 5 files finish with every
+verdict as expected, 9 files STOP at the 30-min cap (§13.7); `tr.pv` F5 + T13 done (46 lines as expected); gate F7,
+CI job `proverif-hx`, ADR-046 done.
 
 Inputs: `docs/07` §M4; spec `docs/03` §5, §6 (+ §7.2–7.4, §7.6 for `first_msg`), App. A/B/D; `CLAUDE.md`; `docs/06` §8;
 `docs/08` ADR-043, ADR-044 (proposed), ADR-045; `docs/reviews/M04-planning/TEST-SPEC-M4.md` (115 dictated rows),
@@ -43,10 +46,10 @@ ADR-044 (b)–(f) are enforced in this milestone.
 
 | Item | What | State |
 |---|---|---|
-| B1 | `formal/hx.pv` (CLAIMS §HX) | committed `e42c854`; **STOP** (§8.1) |
-| B2 | `tr.pv` F5 (M3 R-12) | not started (brief §1: no B2 after a B1 STOP) |
-| B3 | `tr.pv` F34 / CLAIMS T13 | not started |
-| B4 | ProVerif gate F7 | not started |
+| B1 | `formal/hx.pv` (CLAIMS §HX) | committed `e42c854`; **STOP** (§8.1); replaced by `formal/hx.pvl` + `formal/hx/*.pv` (`79f4705`, WEISUNG M4-5): 9 of 14 files **STOP** (§13.7) |
+| B2 | `tr.pv` F5 (M3 R-12) | done `ea071c3` (§13.4) |
+| B3 | `tr.pv` F34 / CLAIMS T13 | done `ea071c3` (T13 false ×7) |
+| B4 | ProVerif gate F7 | done `5bf47a1`, CI `6599d49` (§13.5) |
 | B5 | ct `tr_decrypt_reject_skipped` (F2) | on `m04-hx` as `5005399` (WEISUNG M4-4); respecified in `8077590` (§12) |
 | B6 | ct `inv_fingerprint_compare`, `x25519_zero_check`, `hx_accept_reject_inner`, `hx_accept_reject_first_msg` | on `m04-hx` as `67dc5cb` |
 | B7 | F19 pre-checks + reject sites | on `m04-hx` as `260b4bd`; TR/INV site tags added in `db6d085`, pre-checks assert them in `8077590` (§12) |
@@ -403,3 +406,129 @@ Mechanism of `hx::ACCEPT_SITE_KAT`: a `kat`-only thread-local set when a step be
 `67dc5cb`, `260b4bd`, `e48a99d`, `db6d085`, `8077590`, `2b6373d`, `14e55da` and this report commit.
 
 STOP: none.
+
+## 13. WEISUNG M4-5 (Phase B resumed: per-session HX models, tr.pv F5/T13, gate F7, ADR-046)
+
+Start: HEAD `c1c1b1f`, 9 commits not on `origin/m04-hx` (`git log origin/m04-hx..HEAD`). Diagnosis read in full
+(`DIAG-hx-termination.md`, `hx-1s-V9b.pv`, `hx-proto.pv`, `toy-seq.pv`; copied to `target/tmp/m4-5/`, not committed).
+
+### 13.1 What was built
+- `formal/hx.pv` removed; `formal/hx.pvl` (library: types, constructors, equations, events, letfuns, macros
+  `Accept23`/`AcceptP`/`AcceptS`, `ProcIP`/`ProcIS`, compromise macros without phases) and `formal/hx/<session>.pv`
+  × 14 (tag, oracles, secrecy assumptions, grouped queries, the session's `Invitation` with its compromise tail and
+  phases, `process`) — O-13…O-19 applied as dictated (`79f4705`). CLAIMS §HX amended: O-13…O-19 verbatim under
+  "Reviewer decisions" (O-7 marked replaced); Model, abstraction block, events, H5/H6a/H10/H11 rows, gate rule, paths.
+- Reading of O-17 for `hIdThief` (Q-1 below): plaintext layers (its invitations are leaked in phase 0), but I keeps
+  taking invitations from `pinv(hIdThief)`. O-17's "I takes the invitation from the public channel" is the dropdup
+  step (every trace of I on `pinv` is one of I on `c`), which holds only where I already runs on `c`; in hId* CLAIMS
+  excludes the attacker as inviter (H7). Measured: with I on `c`, H7b is false ×2 (diagnostics §E).
+- Two devices (library header 7.), forced by O-17 together with `new n[]`: I's names carry the invitation
+  (`new e[ld, lk]`, also r1, r2, r3, routes) and `set unifyDerivation = false`. Without them hClean's H11 honest-pair
+  and IConfirm lines "cannot be proved" (no trace reconstructed: ProVerif decomposes the plaintext Outer tuple and
+  takes its components from different runs of one merged I copy); matrix in diagnostics §A. Neither changes the
+  process semantics; every "false" comes with a trace ProVerif executed.
+
+### 13.2 Runs (ProVerif 2.05, `timeout 1800 proverif -lib formal/hx.pvl formal/hx/<s>.pv`, 4 in parallel, this Mac)
+
+| file | lines | wall | RESULT | finished | last progress line (if not) |
+|---|---|---|---|---|---|
+| `tr.pv` (gate, `--models tr`) | 983 | 87.4 s | 46 / 46 | yes | — |
+| `hx/hClean.pv` | 96 | 1801.7 s | 7 / 10 | no | `11800 rules inserted. Base: 7259 rules (108 with conclusion selected). Queue: 50455 rules.` |
+| `hx/hDH.pv` | 80 | 1802.6 s | 6 / 7 | no | `11800 rules inserted. Base: 7299 rules (128 with conclusion selected). Queue: 50635 rules.` |
+| `hx/hKEM.pv` | 82 | 1802.2 s | 6 / 7 | no | `11800 rules inserted. Base: 7267 rules (111 with conclusion selected). Queue: 50453 rules.` |
+| `hx/hBoth.pv` | 76 | 1802.9 s | 0 / 5 | no | `318400 rules inserted. Base: 72756 rules (4192 with conclusion selected). Queue: 21436 rules.` |
+| `hx/hId.pv` | 74 | 2.0 s | 7 / 7 | yes | — |
+| `hx/hIdThief.pv` | 68 | 4.0 s | 6 / 6 | yes | — |
+| `hx/hIdLater.pv` | 76 | 2.0 s | 6 / 6 | yes | — |
+| `hx/hIdLaterOPK.pv` | 75 | 2.0 s | 6 / 6 | yes | — |
+| `hx/hKCI.pv` | 69 | 1802.4 s | 4 / 5 | no | `11800 rules inserted. Base: 7262 rules (110 with conclusion selected). Queue: 50455 rules.` |
+| `hx/hKCIlt.pv` | 70 | 1803.0 s | 4 / 5 | no | `11800 rules inserted. Base: 7260 rules (109 with conclusion selected). Queue: 50455 rules.` |
+| `hx/hKCIi.pv` | 65 | 26.1 s | 5 / 5 | yes | — |
+| `hx/hFS.pv` | 74 | 1803.0 s | 0 / 6 | no | `23400 rules inserted. Base: 10053 rules (1144 with conclusion selected). Queue: 1949 rules.` |
+| `hx/hFSOPK.pv` | 73 | 1801.1 s | 0 / 6 | no | `24600 rules inserted. Base: 10309 rules (1163 with conclusion selected). Queue: 2201 rules.` |
+| `hx/hFSDH.pv` | 80 | 1800.5 s | 0 / 6 | no | `28000 rules inserted. Base: 10784 rules (1160 with conclusion selected). Queue: 3080 rules.` |
+
+`formal/hx.pvl`: 430 lines. Every verdict obtained (57 of the 87 HX lines) is the one the gate rule expects; 30 were
+not reached. Per file: `M04-evidence/proverif-hx-<session>-6599d49.txt` (query, ID, expected, verdict, last 20
+progress lines); sha256 of the 16 model files: `M04-evidence/proverif-6599d49.sha256`; tr gate:
+`M04-evidence/proverif-tr-6599d49.txt`. Wall times of the HX files are with 4 ProVerif processes in parallel and
+other runs alongside.
+
+### 13.3 Verdicts (no mismatch; session of every false trace = the file's: one session per file, no other tag in any log)
+hClean: H1 (i) true · H1 (ii) true · H11 false ×4 · H6a true · H5, H6b, H10 not reached. hDH: H2 (i), (ii) true ·
+H11 false ×4 · H8 not reached. hKEM: H3 (i), (ii) true · H11 false ×4 · H5 not reached. hBoth: H4, H11 ×4 not
+reached. hId: H7a true ×2 · H11 false ×4 · H6a true. hIdThief: H7b true ×2 · H11 false ×4. hIdLater: H7c true ×2 ·
+H11 false ×4. hIdLaterOPK: H7d false ×2 · H11 false ×4. hKCI: H11 false ×4 · H9 not reached. hKCIlt: H11 false ×4 ·
+H9b not reached. hKCIi: H9c true · H11 false ×4. hFS, hFSOPK, hFSDH: nothing reached.
+
+### 13.4 tr.pv — F5 and T13 (`ea071c3`)
+F5 as dictated, in `ProcA5`/`ProcB5` for sClean and the four mPCS sessions (header 1a.); sFS/sHFS keep `ProcA`/`ProcB`
+(T3/T9 in order). The first F5 version changed three of the 39 verdicts (T2 line 1 "cannot be proved", its
+non-injective form true; T7 ×2 "cannot be proved"); both were ProVerif imprecision, not attacks, fixed without touching
+a query: `set preciseActions = true` (the in-order and other-first branches of one input are exclusive; T2's
+derivation paired the Recv of (1,0) at the step and at the skipped key, "We have @occ141_1 ≠ @occ294_1", no trace)
+and the private healing-round delivery offered in parallel (a blocking private output fixed the order, so T7's
+other-first derivation had no trace). Final: 46 RESULT lines, the 39 previous verdicts unchanged, T13 false ×7 (one
+per honest session: sClean, sFS, sPCS, sPCSdh, sPCSkem, sPCSboth, sHFS), 87.4 s. `tr.pv` at `ea071c3`: +290 / −23
+lines (306 changed lines incl. the header); CLAIMS: T13 row, gate rule, F5 note. Settings matrix: diagnostics §B.
+
+### 13.5 Gate F7, CI, ADR-046
+`cargo xtask step proverif [--models tr|hx|all] [--jobs N]` (`5bf47a1`): pool of ≤ 4 processes, 1800 s each, a
+timeout fails naming the file and its last progress line; `expect::PROVERIF_EXPECTED` = tr runs + T13 (46 lines);
+`expect::PROVERIF_EXPECTED_HX` = 87 rows (63 equal a printed RESULT line; the 24 of unreached declarations derived by
+the same display rules, stated above the table); evidence `target/proverif/summary.txt` and `results.tsv`, ADR-045
+table in `summary.rs`. Tests (`cargo nextest run -p xtask` 109/109): `proverif_verdicts_against_the_claims_table`,
+`proverif_gate_rejects_reordered_result_lines`, `proverif_gate_rejects_missing_hx_line`,
+`proverif_gate_timeout_is_a_fail`, plus the HX table checked against CLAIMS. Gate runs: `--models tr` PASS
+(`proverif-tr-6599d49.txt`); `--models hx` replayed over the recorded logs through a `SECMP_PROVERIF` wrapper
+(labelled, `proverif-hx-gate-replay-6599d49.txt`): the 5 finished files pass the check, the 9 capped files fail. CI
+(`6599d49`): job `proverif-hx` added; `linux-full` runs `ci-full … --models tr`; `cargo xtask step policy` passes.
+ADR-046 in `docs/08` verbatim. Not changed (outside the allowed files): `ci-dispatch.yml` still runs `ci-full` without
+`--models` (default all: all 14 HX files in that job); `xtask/README.md` does not list `--models`/`--jobs`.
+
+### 13.6 Diagnostics (`M04-evidence/proverif-m4-5-diagnostics-6599d49.txt`; scratch variants, nothing applied)
+- hClean's begin-IStart declaration, profile: the rules carry b-inj-event(IStart) for I on an attacker invitation;
+  each DH field of the attacker's bundle (`attacker(exp(g, ·))`) is resolved against every public key; ≈ 40 rules/s up
+  to 11800, then a few per minute; the same stall point in hClean, hKEM, hDH, hKCI, hKCIlt. H6b alone: true (14.4 s);
+  H10 alone: true (22.5 s); H5 with iR bound to IKSPublic_R: the same stall (600 s).
+- hFS without I on `c`: H11 false ×4, H12 true ×2 in 0.7 s. hBoth with I on `pinv(hBoth)`: H4 false, H11 false ×3,
+  IConfirm "cannot be proved", 290 s.
+
+### 13.7 Blocked — STOP (WEISUNG M4-5 §7: a file > 30 min after the §1 structure)
+- STOP hClean: begin-IStart declaration (H5) > 1800 s; last `11800 rules inserted. Base: 7259 rules (108 with
+  conclusion selected). Queue: 50455 rules.`; H5, H6b, H10 not reached (H6b and H10 alone: true).
+- STOP hKEM: begin-IStart (H5) > 1800 s; last `11800 rules inserted. Base: 7267 rules (111 with conclusion
+  selected). Queue: 50453 rules.`
+- STOP hDH: begin-IStart (H8) > 1800 s; last `11800 rules inserted. Base: 7299 rules (128 with conclusion selected).
+  Queue: 50635 rules.`
+- STOP hKCI: begin-IStart (H9) > 1800 s; last `11800 rules inserted. Base: 7262 rules (110 with conclusion selected).
+  Queue: 50455 rules.`
+- STOP hKCIlt: begin-IStart (H9b) > 1800 s; last `11800 rules inserted. Base: 7260 rules (109 with conclusion
+  selected). Queue: 50455 rules.`
+- STOP hBoth: no-begin declaration (H4, H11) > 1800 s; last `318400 rules inserted. Base: 72756 rules (4192 with
+  conclusion selected). Queue: 21436 rules.`
+- STOP hFS / hFSOPK / hFSDH: no-begin declaration (H11, H12 / H12b / H12c) > 1800 s; last `23400 rules inserted.
+  Base: 10053 rules (1144 …). Queue: 1949 rules.` / `24600 … Base: 10309 rules (1163 …). Queue: 2201 rules.` /
+  `28000 … Base: 10784 rules (1160 …). Queue: 3080 rules.`
+- Abstractions that would be needed (named, not applied): for hFS, hFSOPK, hFSDH and hBoth, I only on R's invitations
+  (no attacker as inviter; DIAG §5: H12/H4 use it only as an extra oracle) — measured in §13.6. For the begin-IStart
+  declarations (H5, H8, H9, H9b) none found inside §1: H5 needs the attacker as inviter (DIAG §5) and binding iR does
+  not help; candidates: DIAG 9 (c) (non-injective agreement + uniqueness lemma), or a reviewer decision on the
+  attacker-as-inviter's bundle fields.
+
+### 13.8 Questions
+- Q-1: O-17's "I takes the invitation from the public channel" for hIdThief — confirm the reading of §13.1 (I on
+  `pinv`, plaintext layers), or the literal reading (then H7b is false, as measured).
+- Q-2: the dictated declaration order puts begin-IStart before RAccept/InvIssued; in hClean, H6b and H10 are proved
+  alone but not reached in the file because H5 runs first. Keep the order (gate FAIL by timeout) or reorder?
+
+### 13.9 Deviations
+None from the spec. From the letter of the WEISUNG: the two HX devices of §13.1, `tr.pv`'s `preciseActions` and its
+parallel private delivery (precision / trace reconstruction only; no query, oracle or compromise touched), and the
+hIdThief reading (Q-1).
+
+### 13.10 Push
+`gh run list --branch m04-hx --limit 3` at 2026-10-02 02:46 CEST: PR run 36930469555 (head `812e1bd`) `in_progress` —
+**not pushed** (WEISUNG M4-5 §6). Unpushed on `m04-hx`: `5005399`, `67dc5cb`, `260b4bd`, `e48a99d`, `db6d085`,
+`8077590`, `2b6373d`, `14e55da`, `c1c1b1f`, `79f4705`, `ea071c3`, `5bf47a1`, `6599d49` and this report commit.
+

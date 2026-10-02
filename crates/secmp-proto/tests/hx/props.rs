@@ -1019,3 +1019,108 @@ fn prop_blob_flip_rejects() {
         assert!(open_blob(&run.record.ld_id, &run.record.link_key, &run.blob).is_ok());
     }
 }
+
+// ---- K2 option (c): the ISO/IEC 7816-4 scan of `Outer` at full size ------------------------------------------------
+
+/// Buffers per kind in `prop_outer_unpad_total_12018`.
+const UNPAD_CASES: usize = 64;
+
+/// The reference for the scan: the index of the last non-zero byte (a forward scan), if that byte is the 0x80
+/// marker.
+fn reference_marker(buf: &[u8]) -> Option<usize> {
+    let mut last = None;
+    for (i, b) in buf.iter().enumerate() {
+        if *b != 0 {
+            last = Some(i);
+        }
+    }
+    last.filter(|m| buf.get(*m) == Some(&0x80))
+}
+
+/// K2 option (c) (M4 report §11): the full-size scan, which Kani does not finish. `Outer::decode` and `unpad` on
+/// 12018-byte buffers — random bytes with the 0x80 marker at index 9362 (valid), 0, 1, 9361, 9363 or 12017 and zeros
+/// after it (before a marker > 0, half the buffers carry the version byte 1), the all-zero and the all-0x80 buffer,
+/// and fully random buffers: no panic; `unpad` returns exactly the bytes before the last non-zero byte if that byte
+/// is 0x80, else `Rejected`; `Outer::decode` accepts exactly when that marker is at 9362, the version byte is 1 and
+/// `ek_I` passes the X25519 key check, and then the field string is 9362 bytes, `buf[9362]` = 0x80, `buf[9363..]`
+/// is all zero and the `Outer` re-encodes to `buf`; every other result is `Err(Rejected)`.
+#[test]
+fn prop_outer_unpad_total_12018() {
+    use secmp_proto::codec::unpad;
+    use secmp_proto::sizes::{OUTER_LEN, OUTER_PADDED_LEN};
+    assert_eq!((OUTER_LEN, OUTER_PADDED_LEN), (9362, 12_018));
+
+    let mut rng = rng_for(1200);
+    let mut buffers: Vec<(Vec<u8>, String)> = vec![
+        (vec![0; OUTER_PADDED_LEN], "all zero".to_owned()),
+        (vec![0x80; OUTER_PADDED_LEN], "all 0x80".to_owned()),
+    ];
+    for k in 0..UNPAD_CASES {
+        for at in [
+            OUTER_LEN,
+            0,
+            1,
+            OUTER_LEN - 1,
+            OUTER_LEN + 1,
+            OUTER_PADDED_LEN - 1,
+        ] {
+            let mut buf = random_bytes(&mut rng, OUTER_PADDED_LEN);
+            if at > 0 && rng.random::<bool>() {
+                *buf.get_mut(0).unwrap() = 1;
+            }
+            *buf.get_mut(at).unwrap() = 0x80;
+            buf.get_mut(at.checked_add(1).unwrap()..).unwrap().fill(0);
+            buffers.push((buf, format!("case {k}: marker at {at}")));
+        }
+        buffers.push((
+            random_bytes(&mut rng, OUTER_PADDED_LEN),
+            format!("case {k}: random"),
+        ));
+    }
+
+    let mut accepted = 0_usize;
+    for (buf, what) in &buffers {
+        let ctx = format!("SECMP_PROPTEST_SEED={} {what}", master_seed());
+        let marker = reference_marker(buf);
+        // the scan
+        match unpad(buf, OUTER_PADDED_LEN) {
+            Ok(fields) => {
+                assert_eq!(Some(fields.len()), marker, "{ctx}");
+                assert!(buf.starts_with(fields), "{ctx}");
+            }
+            Err(e) => {
+                assert_eq!(e, Error::Rejected, "{ctx}");
+                assert_eq!(marker, None, "{ctx}");
+            }
+        }
+        // the decoder
+        let valid = marker == Some(OUTER_LEN)
+            && buf.first() == Some(&1)
+            && X25519Pk::from_bytes(buf.get(1..33).unwrap()).is_ok();
+        match Outer::decode(buf) {
+            Ok(outer) => {
+                assert!(valid, "{ctx}");
+                let encoded = outer.encode().unwrap();
+                assert_eq!(
+                    unpad(&encoded, OUTER_PADDED_LEN).unwrap().len(),
+                    OUTER_LEN,
+                    "{ctx}"
+                );
+                assert_eq!(buf.get(OUTER_LEN), Some(&0x80), "{ctx}");
+                assert!(
+                    buf.get(OUTER_LEN + 1..).unwrap().iter().all(|b| *b == 0),
+                    "{ctx}"
+                );
+                assert!(encoded.as_slice() == buf.as_slice(), "{ctx}");
+                accepted = accepted.checked_add(1).unwrap();
+            }
+            Err(e) => {
+                assert_eq!(e, Error::Rejected, "{ctx}");
+                assert!(!valid, "{ctx}");
+            }
+        }
+    }
+    assert_eq!(buffers.len(), 2 + UNPAD_CASES * 7);
+    // the valid placement with the version byte 1 is accepted (about half of the 64 buffers)
+    assert!(accepted >= UNPAD_CASES / 8, "accepted {accepted}");
+}

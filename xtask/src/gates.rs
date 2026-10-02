@@ -303,6 +303,11 @@ fn ct_site_lines(json: &str, lines: &[String]) -> Result<(Vec<String>, Vec<Strin
             == Some(true);
         match r.get("site").and_then(Value::as_str) {
             Some(site) => {
+                if !expect::KNOWN_SITES.contains(&site) {
+                    problems.push(format!(
+                        "ct: {name} claims the unknown reject site {site:?} (expect::KNOWN_SITES, M4 review R-63)"
+                    ));
+                }
                 if !passed {
                     problems.push(format!(
                         "ct: {name} claims the reject site {site:?} without a passed per-class pre-check (M3 \
@@ -781,6 +786,9 @@ pub(crate) fn mutants(ctx: &Ctx) -> Result<Outcome> {
     let mut c = Cmd::cargo().args([
         "mutants",
         "--no-shuffle",
+        // M4-12 (ADR-047): three mutants in parallel on the 4-core runner; serial, the HX part alone took about 3 h
+        "-j",
+        "3",
         "--output",
         "target",
         "--features",
@@ -4139,10 +4147,10 @@ mod tests {
 
     /// The M3 TR targets and the same-content control with a site each (all pre-checks passed).
     const M3_SITES: [(&str, &str, bool); 4] = [
-        ("tr_decrypt_reject_hdr_key", "site one", true),
-        ("tr_decrypt_reject_body_tag", "site two", true),
-        ("tr_decrypt_reject_ct_pq", "site three", true),
-        ("same_content_control", "site four", true),
+        ("tr_decrypt_reject_hdr_key", "header: no key opened", true),
+        ("tr_decrypt_reject_body_tag", "body MAC", true),
+        ("tr_decrypt_reject_ct_pq", "kem constancy", true),
+        ("same_content_control", "body MAC", true),
     ];
 
     /// M3 review R-45 (F19): the gate's report reader (`ctreport::ct_table`, unchanged) accepts the `site` and
@@ -4174,12 +4182,12 @@ mod tests {
         let (head, _) = line
             .split_once("; ")
             .ok_or_else(|| Error("one segment only".to_owned()))?;
-        assert!(head.ends_with(" — site site two"), "{head}");
+        assert!(head.ends_with(" — site body MAC"), "{head}");
         let rows = crate::summary::step_rows("PASS", 1, &lines.join("; "));
         assert!(
             rows.iter()
                 .any(|(_, r)| r.starts_with("tr_decrypt_reject_body_tag: PASS")
-                    && r.ends_with(" — site site two"))
+                    && r.ends_with(" — site body MAC"))
         );
         let changed = lines.iter().zip(&table.lines).filter(|(a, b)| a != b);
         assert_eq!(changed.count(), M3_SITES.len());
@@ -4206,6 +4214,38 @@ mod tests {
         let (_, problems) = ct_site_lines(&plain, &[])?;
         assert_eq!(problems.len(), M3_SITES.len(), "{problems:?}");
         assert!(problems.iter().all(|p| p.contains("has no reject site")));
+        Ok(())
+    }
+
+    /// M4 review R-63: a target whose claimed site is in no `KNOWN_SITES` entry fails the gate, naming target and
+    /// site; every site the gate's own tests use, and every one in the list, is accepted.
+    #[test]
+    fn ct_gate_rejects_unknown_site() -> Result<()> {
+        let mut unknown = M3_SITES;
+        if let Some(t) = unknown.get_mut(1) {
+            t.1 = "body-MAC";
+        }
+        let (_, json) = ct_report_with_sites(&unknown)?;
+        let (_, problems) = ct_site_lines(&json, &[])?;
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(
+            problems
+                .iter()
+                .all(|p| p.contains("tr_decrypt_reject_body_tag")
+                    && p.contains("\"body-MAC\"")
+                    && p.contains("unknown reject site")),
+            "{problems:?}"
+        );
+        // every known site is accepted (the pre-check passed, the site is listed)
+        for site in expect::KNOWN_SITES {
+            let mut ok = M3_SITES;
+            if let Some(t) = ok.get_mut(1) {
+                t.1 = *site;
+            }
+            let (_, json) = ct_report_with_sites(&ok)?;
+            let (_, problems) = ct_site_lines(&json, &[])?;
+            assert!(problems.is_empty(), "{site}: {problems:?}");
+        }
         Ok(())
     }
 

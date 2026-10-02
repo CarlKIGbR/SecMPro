@@ -356,7 +356,7 @@ Note: the SQ-25 follow-up (§5.5 clarification) is carried by ADR-043 (h); nothi
 **Status.** Accepted (Reviewer, Owner-Delegation 30.09.2026) — 2026-10-02.
 **Context.** `linux-full` took 3 h 51 min on PR run 36930469555 (budget 240 min); mutation testing is the largest single step and independent of the other gates.
 **Decision.** A job `mutants` (ubuntu-latest, `timeout-minutes: 180`, same pins and permissions as `linux-full`, `cargo xtask step --strict mutants`, artefact `mutants-${{ github.run_attempt }}`) runs it; `linux-full` runs `ci-full … --delegated mutants`. The job is reviewer-required for GO until the owner adds it to the Required set.
-**Consequences.** `linux-full` returns under the budget; the mutants evidence is a separate artefact and job summary (ADR-045). The mutants step builds `secmp-proto` with `kat` so the HX integration suite (`required-features`) counts (R-60).
+**Consequences.** `linux-full` returns under the budget; the mutants evidence is a separate artefact and job summary (ADR-045). The mutants step builds `secmp-proto` with `kat` so the HX integration suite (`required-features`) counts (R-60). `-j 3`; budget 240 min (replaces the 180 above; M4-12: serial, the HX part alone took about 3 h).
 
 ---
 

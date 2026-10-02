@@ -210,7 +210,7 @@ jobs:
   mutants:
     if: github.event_name == 'schedule' || github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 240
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -239,7 +239,7 @@ jobs:
             ~/.secmp-tools
             ~/.kani
           key: ${{ steps.tools-cache.outputs.cache-primary-key }}
-      - name: Mutation testing (step 8)
+      - name: Mutation testing (step 8, `-j 3`)
         run: cargo xtask step --strict mutants
       - name: Upload the mutants evidence
         if: ${{ !cancelled() }}

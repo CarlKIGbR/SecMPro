@@ -271,6 +271,48 @@ pub(crate) const MUTANT_EXCLUDE_RE: &[&str] = &[
     "message_key_digest_kat",
     "replace mk_digest ",
     "RatchetState::(hk_s_kat|receiving_header_keys_kat|sb_kat|encrypt_padded_kat)",
+    // cfg(kani)-only helpers (M4-12): not compiled in the mutants build
+    "Groups<.*>::(get|remove_completed) ",
+    // error text, no logic (M4-12)
+    "impl (core::fmt::)?Display for \\w+Error>::fmt",
+];
+
+/// The reject sites a `ct` target may claim (M4 review R-63): every site name in use, in one place. The product tags
+/// them under feature `kat` (`tr::DECRYPT_SITE_KAT`, `inv::INVITEE_SITE_KAT`, `hx::ACCEPT_SITE_KAT`); the bench's
+/// claims (`crates/secmp-testkit/benches/ct.rs`) name one of them (the `x25519_zero_check` claim names the all-zero
+/// check, which passes: it is no reject target). A new site is added here with the code that sets it, so a claim with
+/// a misspelt or retired site fails the gate instead of being reported as it stands.
+pub(crate) const KNOWN_SITES: &[&str] = &[
+    // SecMP-TR (`tr::ratchet`, §7.4)
+    "cell length",
+    "header: no key opened",
+    "header decode",
+    "body MAC",
+    "kem constancy",
+    "counter rule",
+    "dh_pk",
+    "body decode",
+    // SecMP-INV (`inv`, `wire::inv`, §5.5)
+    "uri",
+    "invitation decode",
+    "blob open",
+    "linkdata decode",
+    "opk_present",
+    "expired",
+    "fingerprint",
+    "bundle signature",
+    "bundle expired",
+    // SecMP-HX (`hx`, §6.5, §6.6)
+    "no complete group",
+    "outer",
+    "x25519",
+    "inner open",
+    "inner checks",
+    "first_msg decrypt",
+    "first_msg checks",
+    "opk delete",
+    // the Output claim of `x25519_zero_check`
+    "§3/§6.4 all-zero check of the output (passes: not a reject target)",
 ];
 
 /// Packages run under Miri (docs/06 §4); M3: `secmp-proto` (M2 review F3).

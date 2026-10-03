@@ -516,11 +516,12 @@ fn invitee_low_order_x25519_rejects() {
         let mut iks = lib.w.r.iks_bytes.clone();
         put(&mut iks, IKS_DH, &value);
         let linkdata = lib.linkdata_of(&iks, &lib.w.bundle);
-        rejects(
+        // M4 review C-15 (R-31): the IKS decoder of the link data is what rejects (not a later backstop)
+        rejects_at(
             &lib,
             &lib.w.uri,
             &lib.blob_of(&linkdata, 8),
-            "ik_dh low order",
+            "linkdata decode",
         );
     }
     assert!(low_order_values().contains(&LOW_ORDER_8));
@@ -552,7 +553,14 @@ fn invitee_bad_ed25519_identity_rejects() {
         let mut iks = lib.w.r.iks_bytes.clone();
         put(&mut iks, IKS_ED, &bytes);
         let linkdata = lib.linkdata_of(&iks, &lib.w.bundle);
-        rejects(&lib, &lib.w.uri, &lib.blob_of(&linkdata, 8), name);
+        // M4 review C-15 (R-31): the IKS decoder of the link data is what rejects (not a later backstop)
+        let _ = name;
+        rejects_at(
+            &lib,
+            &lib.w.uri,
+            &lib.blob_of(&linkdata, 8),
+            "linkdata decode",
+        );
     }
 }
 

@@ -415,6 +415,26 @@ fn check_row(row: &str) {
     }
 }
 
+/// [`check_row`] with the reject site (M4 review C-15, R-31): every entry of `row` is rejected at `site`.
+fn check_row_at(row: &str, site: &str) {
+    let lib = Lib::new();
+    let entries: Vec<Entry> = table(&lib).into_iter().filter(|e| e.0 == row).collect();
+    assert!(!entries.is_empty(), "{row} has entries");
+    for (_, _, cells) in entries {
+        lib.assert_rejected_at(&cells, site);
+    }
+}
+
+/// M4 review C-15 (R-31): the check a row names is the one that rejects, not a backstop behind it — N-40 (a low-order
+/// `EK_I`) at the `Outer` decoder ("outer"), N-47 and N-48 (the `IKSPublic_I` of `Inner`) at the `Inner` decoder
+/// ("inner checks").
+#[test]
+fn accept_reject_sites_name_the_check_that_rejects() {
+    check_row_at("N-40", "outer");
+    check_row_at("N-47", "inner checks");
+    check_row_at("N-48", "inner checks");
+}
+
 #[test]
 fn accept_two_of_three_chunks_rejects_and_keeps_opk() {
     check_row("N-26");
@@ -457,7 +477,7 @@ fn accept_wrong_spk_id_rejects_and_keeps_opk() {
 
 #[test]
 fn accept_low_order_ek_i_rejects_and_keeps_opk() {
-    check_row("N-40");
+    check_row_at("N-40", "outer");
 }
 
 #[test]
@@ -487,12 +507,12 @@ fn accept_inner_tampered_rejects_and_keeps_opk() {
 
 #[test]
 fn accept_inner_iks_low_order_ik_dh_rejects_and_keeps_opk() {
-    check_row("N-47");
+    check_row_at("N-47", "inner checks");
 }
 
 #[test]
 fn accept_inner_iks_bad_ed25519_rejects_and_keeps_opk() {
-    check_row("N-48");
+    check_row_at("N-48", "inner checks");
 }
 
 #[test]

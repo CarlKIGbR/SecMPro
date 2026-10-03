@@ -85,6 +85,17 @@ impl Lib {
         assert!(store.opk_ids().contains(&OPK_ID), "{what}: the OPK is kept");
     }
 
+    /// [`Lib::assert_rejected`], and the reject site that `Responder::accept` tagged is `site` (M4 review C-15, R-31):
+    /// the check a row names is the one that rejected, not a later backstop.
+    pub fn assert_rejected_at(&self, cells: &[Vec<u8>], site: &str) {
+        self.assert_rejected(cells, site);
+        assert_eq!(
+            secmp_proto::hx::ACCEPT_SITE_KAT.get(),
+            Some(site),
+            "the reject site"
+        );
+    }
+
     /// The invitee's check at `NOW`.
     pub fn invitee(&self, uri: &str, blob: &[u8]) -> Result<(), Error> {
         let _ = self; // a method for call-site symmetry with the other `Lib` helpers

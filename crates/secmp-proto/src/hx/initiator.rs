@@ -220,15 +220,17 @@ impl Initiator {
             &bundle.rpk_kem,
             entropy,
         )?;
+        // the copies in a vector sized once (M4 review C-13: no growth leaves an unwiped block of routing metadata)
+        let mut routes = Vec::with_capacity(reply_routes.len());
+        for route in reply_routes {
+            routes.push(copy_route(route)?);
+        }
         let content = Content {
             seq: 1,
             ts: now,
             body: ContentBody::Handshake(HandshakeBody {
                 profile: profile.clone(),
-                routes: reply_routes
-                    .iter()
-                    .map(copy_route)
-                    .collect::<Result<Vec<_>>>()?,
+                routes,
             }),
         };
         let sealed = state

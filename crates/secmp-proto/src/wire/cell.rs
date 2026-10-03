@@ -474,11 +474,15 @@ fn write_routes(w: &mut Writer, routes: &[RouteDescriptor]) -> Result<()> {
     Ok(())
 }
 
+/// The routes of a body, in a vector sized exactly once (M4 review C-13: a growing vector would free its earlier
+/// blocks, which hold routing metadata, without wiping them; `codec.rs`'s rule).
 fn read_routes(r: &mut Reader<'_>) -> Result<Vec<RouteDescriptor>> {
     let count = read_count(r)?;
-    (0..count)
-        .map(|_| RouteDescriptor::decode_from(r))
-        .collect()
+    let mut routes = Vec::with_capacity(count);
+    for _ in 0..count {
+        routes.push(RouteDescriptor::decode_from(r)?);
+    }
+    Ok(routes)
 }
 
 /// `RouteUpdate body = count u8 (1..=255) ‖ RouteDescriptor[] × count`.
@@ -899,6 +903,28 @@ mod tests {
             send_seed: SecretBytes::from_slice(&[8; 32])?,
             period_s: period,
         })
+    }
+
+    /// M4 review C-13 (R-45): the decoded route vector is sized once — `capacity() == len()` for 1, 10 and 255
+    /// `RelayQueue` routes (no growth, so no unwiped earlier block).
+    #[test]
+    fn read_routes_pre_sizes_the_vector() -> Result<()> {
+        for n in [1_usize, 10, 255] {
+            let body = RouteUpdateBody {
+                routes: (0..n)
+                    .map(|_| {
+                        Ok(RouteDescriptor::RelayQueue(relay_queue(
+                            false,
+                            Period::S20,
+                        )?))
+                    })
+                    .collect::<Result<Vec<_>>>()?,
+            };
+            let decoded = RouteUpdateBody::decode(&body.encode()?)?;
+            assert_eq!(decoded.routes.len(), n);
+            assert_eq!(decoded.routes.capacity(), n, "{n} routes");
+        }
+        Ok(())
     }
 
     /// Review C1: every structure that carries a `send_seed` encodes into a `Zeroizing<Vec<u8>>` (a change of a

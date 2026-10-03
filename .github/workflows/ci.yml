@@ -196,11 +196,14 @@ jobs:
       # The report of the `ct` step (ADR-038 runner metadata and per-target t values), kept with every run so a
       # verdict can be re-read without the job log (M1 review §E 5.7).
       - name: Upload the constant-time report
-        if: ${{ !cancelled() }}
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ct-report-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}-${{ github.run_attempt }}
-          path: target/ct-report.json
+          path: |
+            target/ct-report.json
+            target/ct-progress.jsonl
+            target/ct-bench.log
           if-no-files-found: error
 
   # docs/06 §5 step 8 (mutation testing, secmp-crypto and secmp-proto) as its own job (ADR-047): on PR run
@@ -242,7 +245,7 @@ jobs:
       - name: Mutation testing (step 8, `-j 3`)
         run: cargo xtask step --strict mutants
       - name: Upload the mutants evidence
-        if: ${{ !cancelled() }}
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: mutants-${{ github.run_attempt }}
@@ -295,7 +298,7 @@ jobs:
       - name: ProVerif, SecMP-HX session models (step 10, --models hx)
         run: cargo xtask step --strict proverif --models hx --jobs 4
       - name: Upload the ProVerif logs and evidence
-        if: ${{ !cancelled() }}
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: proverif-hx-${{ github.sha }}-${{ github.run_attempt }}

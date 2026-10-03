@@ -151,11 +151,14 @@ jobs:
       - name: Constant-time gate (step 5 ct)
         run: cargo xtask step --strict ct
       - name: Upload the constant-time report
-        if: ${{ !cancelled() }}
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ct-report-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: target/ct-report.json
+          path: |
+            target/ct-report.json
+            target/ct-progress.jsonl
+            target/ct-bench.log
           if-no-files-found: error
 
   # docs/06 §5 steps 1–14 (ci-full).
@@ -208,9 +211,12 @@ jobs:
       # The report of the `ct` step (ADR-038 runner metadata and per-target t values), kept with every run so a
       # verdict can be re-read without the job log (M1 review §E 5.7).
       - name: Upload the constant-time report
-        if: ${{ !cancelled() }}
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ct-report-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}-${{ github.run_attempt }}
-          path: target/ct-report.json
+          path: |
+            target/ct-report.json
+            target/ct-progress.jsonl
+            target/ct-bench.log
           if-no-files-found: error

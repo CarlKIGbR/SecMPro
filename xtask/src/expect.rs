@@ -91,6 +91,12 @@ pub(crate) const CT_MIN_REALISED_QUANTA: u64 = 80;
 /// carries `secmp_ct_scale`, which the gate refuses, and the gate unsets the variable for its own run.
 pub(crate) const CT_SAMPLES: usize = 1_000_000;
 
+/// ADR-045 Amendment 1 (M4 review C-1): the wall-clock budget of the bench run of the `ct` step, in seconds. At
+/// expiry the gate kills the bench and fails naming the target and phase of the last line of
+/// `target/ct-progress.jsonl`. 290 min: 600 s below the 300 min of `ci-dispatch.yml` `dispatch-ct` and 40 min below
+/// the `ct` job of `ci.yml` (build and setup fit in the rest).
+pub(crate) const CT_STEP_TIMEOUT_SECONDS: u64 = 17_400;
+
 /// Samples per measurement of `sas` (`SafetyNumber::new`, Argon2id: about a millisecond per call).
 pub(crate) const CT_SAS_SAMPLES: usize = 20_000;
 

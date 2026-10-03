@@ -153,7 +153,10 @@
 //!
 //! Run by `cargo xtask step ct` (ci-full) as `cargo bench -p secmp-testkit --features kat --bench ct` (ADR-042 moved
 //! the bench here from `secmp-crypto`, so that it can measure `secmp-proto` too); the results are written to
-//! `target/ct-report.json` and the exit status is the verdict. `SECMP_CT_SCALE`, a divisor of every sample count
+//! `target/ct-report.json` and the exit status is the verdict. While it runs, the bench appends one JSON line per
+//! finished phase of a target (calibration, first, second, requantised, aa, sensitivity: target, phase, elapsed
+//! seconds, `k`, median ticks) to `target/ct-progress.jsonl`, which the gate echoes and names when it kills a run at
+//! its step budget (ADR-045 Amendment 1). `SECMP_CT_SCALE`, a divisor of every sample count
 //! (default 1), shortens quick local runs; the report then carries `secmp_ct_scale`, which the gate refuses (M2
 //! review C3 (c)), and the gate unsets the variable for its own run.
 
@@ -163,7 +166,9 @@
 
 use std::cell::RefCell;
 use std::hint::black_box;
+use std::io::Write as _;
 use std::process::ExitCode;
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
@@ -1011,6 +1016,16 @@ struct Requantised {
 }
 
 impl Calibration {
+    /// The progress line of the finished calibration (ADR-045 Amendment 1): its batch size and the median of its last
+    /// round (of the single calls if there was none).
+    fn progress(&self, target: &str) {
+        let median = self
+            .rounds
+            .last()
+            .map_or(self.single_median_ticks, |(_, median)| *median);
+        progress(target, "calibration", self.k, Some(median));
+    }
+
     /// The median duration of one call, in ticks, by the last round (the single calls if there was none).
     fn per_call_ticks(&self) -> f64 {
         self.rounds.last().map_or_else(
@@ -1187,6 +1202,7 @@ fn evaluate(
     rules: Rules,
 ) -> Result<Outcome, secmp_crypto::Error> {
     let calibration = calibrate(&target, stream, clock, rules)?;
+    calibration.progress(target.name);
     let mut outcome = Outcome {
         target,
         calibration,
@@ -1216,10 +1232,13 @@ fn evaluate(
                         k: u32|
      -> Result<(Measurement, Option<Measurement>), secmp_crypto::Error> {
         let first = measure_once(stream, t, k)?;
+        progress(t.name, "first", Some(k), Some(first.median_ticks));
         let second = if t.control {
             None
         } else {
-            Some(measure_once(stream, t, k)?)
+            let second = measure_once(stream, t, k)?;
+            progress(t.name, "second", Some(k), Some(second.median_ticks));
+            Some(second)
         };
         Ok((first, second))
     };
@@ -1249,6 +1268,8 @@ fn evaluate(
             k_initial: k,
             q_eff,
         });
+        // the new batch size (none: NOT MEASURABLE); the pair measured with it logs `first` and `second` again
+        progress(outcome.target.name, "requantised", next, None);
         let Some(k2) = next else {
             // no batch size up to `max_batch` reaches the minimum: NOT MEASURABLE
             outcome.calibration.k = None;
@@ -3339,6 +3360,12 @@ fn sensitivity_control(
     {
         let samples = min_leak(sensitivity.samples, usize::try_from(k).unwrap_or(1), stream);
         let m = Measurement::of(&samples, quantum, clock.resolution_ticks, k);
+        progress(
+            "min_leak_control",
+            "sensitivity",
+            Some(k),
+            Some(m.median_ticks),
+        );
         sensitivity.floor_ticks = Some(rules.floor_ticks(m.q_eff, tick_ns));
         sensitivity.measurement = Some(m);
     }
@@ -3420,6 +3447,7 @@ fn aa_control(
         let batch = usize::try_from(k).unwrap_or(1);
         let samples = (outcome.target.run)(outcome.target.samples, batch, stream)?;
         let aa = Measurement::of(&samples, quantum, clock.resolution_ticks, k);
+        progress(outcome.target.name, "aa", Some(k), Some(aa.median_ticks));
         let (max, at) = aa.max();
         if max > rules.aa_max_t {
             aa_failures.push(format!("{} |t| = {max:.2} at {at}", outcome.target.name));
@@ -3436,7 +3464,41 @@ fn aa_control(
     }))
 }
 
+/// When the bench started (`main`), for the elapsed seconds of the progress lines.
+static STARTED: OnceLock<Instant> = OnceLock::new();
+
+/// ADR-045 Amendment 1 (M4 review C-1): the progress file, next to the report.
+fn progress_path() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/ct-progress.jsonl")
+}
+
+/// Append the progress line of a finished `phase` of `target`: the seconds since the bench started, the batch size
+/// and the median batch duration in ticks (`null` where the phase has none). A file, never stdout (docs/06 §2); a
+/// failed write is ignored, since the lines are diagnosis only and the report carries the verdict.
+fn progress(target: &str, phase: &str, k: Option<u32>, median_ticks: Option<u64>) {
+    let elapsed = STARTED
+        .get()
+        .map_or(0.0, |t| (t.elapsed().as_secs_f64() * 10.0).round() / 10.0);
+    let line = serde_json::json!({
+        "target": target,
+        "phase": phase,
+        "elapsed_s": elapsed,
+        "k": k,
+        "median_ticks": median_ticks,
+    });
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(progress_path())
+    {
+        let _ = writeln!(f, "{line}");
+    }
+}
+
 fn main() -> ExitCode {
+    let _ = STARTED.set(Instant::now());
+    // a fresh progress file per run (the gate removes it as well)
+    let _ = std::fs::write(progress_path(), "");
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/ct-report.json");
     let Some(rules) = Rules::from_expect() else {
         // written for the gate to print; the bench itself may not print (docs/06 §2)

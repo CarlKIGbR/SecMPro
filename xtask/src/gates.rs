@@ -214,28 +214,44 @@ pub(crate) fn kat(ctx: &Ctx) -> Result<Outcome> {
 /// reported as `SUB_FLOOR_SHIFT`; the positive control must be detected; a failing inline A/A control or a
 /// sensitivity control (`min_leak_control`) below the floor makes the run `CONTROL_FAIL`; a target the runner's timer
 /// cannot resolve is NOT MEASURABLE. All but PASS and `SUB_FLOOR_SHIFT` fail the gate with their wording.
+///
+/// ADR-045 Amendment 1 (M4 review C-1): the bench is built first, then its executable runs with stdout and stderr in
+/// `target/ct-bench.log` while the gate echoes every line the bench appends to `target/ct-progress.jsonl` (one per
+/// finished phase of a target); after `expect::CT_STEP_TIMEOUT_SECONDS` the gate kills it and fails naming the target
+/// and phase of the last progress line. No target is ever skipped.
 pub(crate) fn ct(ctx: &Ctx) -> Result<Outcome> {
-    let report = ctx.root.join("target").join("ct-report.json");
-    if report.exists() {
-        std::fs::remove_file(&report)?;
+    let dir = ctx.root.join("target");
+    let report = dir.join("ct-report.json");
+    let progress = dir.join("ct-progress.jsonl");
+    let log = dir.join("ct-bench.log");
+    for f in [&report, &progress] {
+        if f.exists() {
+            std::fs::remove_file(f)?;
+        }
     }
-    // M2 review C3 (c): the full sample counts of expect.rs, whatever the caller's environment says
-    let cap = Cmd::cargo()
-        .args([
-            "bench",
-            "--locked",
-            "--package",
-            "secmp-testkit",
-            "--features",
-            "kat",
-            "--bench",
-            "ct",
-        ])
-        .env_remove("SECMP_CT_SCALE")
-        .capture()?;
+    let exe = ct_bench_executable()?;
+    // M2 review C3 (c): the full sample counts of expect.rs, whatever the caller's environment says; the arguments
+    // and working directory `cargo bench` gives a bench
+    let bench = Cmd::new(exe)
+        .arg("--bench")
+        .dir(ctx.root.join("crates").join("secmp-testkit"))
+        .env_remove("SECMP_CT_SCALE");
+    let success = run_ct_bench(
+        &bench,
+        &log,
+        &progress,
+        std::time::Duration::from_secs(expect::CT_STEP_TIMEOUT_SECONDS),
+    )?;
     let json = std::fs::read_to_string(&report).map_err(|e| {
-        say(cap.stderr.trim_end());
-        Error(format!("ct: no report written ({e})"))
+        let text = std::fs::read_to_string(&log).unwrap_or_default();
+        let lines: Vec<&str> = text.lines().collect();
+        for l in lines.iter().skip(lines.len().saturating_sub(20)) {
+            say(&format!("  {l}"));
+        }
+        Error(format!(
+            "ct: no report written ({e}); bench log {}",
+            log.display()
+        ))
     })?;
     // the whole report first (clock, both measurements, per-crop t), so a CI log carries it even on failure
     say(&format!("  ct report: {}", json.trim_end()));
@@ -257,13 +273,131 @@ pub(crate) fn ct(ctx: &Ctx) -> Result<Outcome> {
             table.failed.join("; ")
         ));
     }
-    if !cap.success && problems.is_empty() {
+    if !success && problems.is_empty() {
         problems.push("ct: the bench failed without a failing target in its report".to_owned());
     }
     if !problems.is_empty() {
         bail!("{}", problems.join("; "));
     }
     Ok(Outcome::Pass(lines.join("; ")))
+}
+
+/// Build the ct bench (`cargo bench --no-run`, release profile, feature `kat`) and return the path of its executable.
+/// The gate runs the executable itself, so a kill at the step budget stops the measurement, not only `cargo`.
+fn ct_bench_executable() -> Result<String> {
+    let out = Cmd::cargo()
+        .args([
+            "bench",
+            "--locked",
+            "--package",
+            "secmp-testkit",
+            "--features",
+            "kat",
+            "--bench",
+            "ct",
+            "--no-run",
+            "--message-format=json-render-diagnostics",
+        ])
+        .read()?;
+    ct_bench_executable_in(&out).ok_or_else(|| {
+        Error("ct: `cargo bench --no-run` named no executable of the bench `ct`".to_owned())
+    })
+}
+
+/// The executable of the bench `ct` among cargo's JSON messages.
+fn ct_bench_executable_in(messages: &str) -> Option<String> {
+    messages
+        .lines()
+        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+        .filter(|v| v.get("reason").and_then(Value::as_str) == Some("compiler-artifact"))
+        .filter(|v| {
+            let target = v.get("target");
+            target.and_then(|t| t.get("name")).and_then(Value::as_str) == Some("ct")
+                && target
+                    .and_then(|t| t.get("kind"))
+                    .and_then(Value::as_array)
+                    .is_some_and(|k| k.iter().any(|k| k.as_str() == Some("bench")))
+        })
+        .find_map(|v| {
+            v.get("executable")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        })
+}
+
+/// How often the ct gate polls the bench and its progress file: seldom, so the poll adds no load next to a timing
+/// measurement.
+const CT_POLL: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// ADR-045 Amendment 1 (M4 review C-1): run the ct bench `bench` with stdout and stderr in `log`, echo each new
+/// complete line of `progress` (the bench appends one JSON object per finished phase), and kill the bench once
+/// `timeout` has passed: the gate then fails naming the target and phase of the last progress line. Returns whether
+/// the bench exited successfully.
+pub(crate) fn run_ct_bench(
+    bench: &Cmd,
+    log: &Path,
+    progress: &Path,
+    timeout: std::time::Duration,
+) -> Result<bool> {
+    let deadline = std::time::Instant::now()
+        .checked_add(timeout)
+        .ok_or_else(|| Error("ct: the step budget is out of range".to_owned()))?;
+    let mut child = bench.spawn_logged(log)?;
+    let mut echoed = 0;
+    let mut last = None;
+    loop {
+        let status = child.try_wait()?;
+        echo_ct_progress(progress, &mut echoed, &mut last);
+        if let Some(status) = status {
+            return Ok(status.success());
+        }
+        if std::time::Instant::now() >= deadline {
+            // the bench may have exited since `try_wait`: a failed kill is then harmless, `wait` reaps it either way
+            let _ = child.kill();
+            child.wait()?;
+            echo_ct_progress(progress, &mut echoed, &mut last);
+            bail!(
+                "ct: timeout, killed after {} s; last progress: {}; bench log {}, progress {}",
+                timeout.as_secs(),
+                last.as_deref()
+                    .unwrap_or("none (no line in the progress file)"),
+                log.display(),
+                progress.display()
+            );
+        }
+        std::thread::sleep(CT_POLL);
+    }
+}
+
+/// Echo the complete lines of `progress` after its first `echoed` bytes and advance `echoed`; `last` becomes the
+/// `<target> <phase>` of the newest line (the raw line if it is not such an object). A missing file echoes nothing.
+fn echo_ct_progress(progress: &Path, echoed: &mut usize, last: &mut Option<String>) {
+    let Ok(bytes) = std::fs::read(progress) else {
+        return;
+    };
+    let Some(new) = bytes.get(*echoed..) else {
+        // truncated by a new run of the bench: start over
+        *echoed = 0;
+        return;
+    };
+    let Some(end) = new.iter().rposition(|b| *b == b'\n') else {
+        return;
+    };
+    let complete = new.get(..=end).unwrap_or_default();
+    for line in String::from_utf8_lossy(complete).lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        say(&format!("  ct progress {line}"));
+        let v: Option<Value> = serde_json::from_str(line).ok();
+        let field = |k: &str| v.as_ref().and_then(|v| v.get(k)).and_then(Value::as_str);
+        *last = Some(match (field("target"), field("phase")) {
+            (Some(t), Some(p)) => format!("{t} {p}"),
+            _ => line.to_owned(),
+        });
+    }
+    *echoed = echoed.saturating_add(complete.len());
 }
 
 /// The `ct` gate's reading of the reject sites (M3 review R-45, F19; the bench's per-class pre-checks). Each target
@@ -3359,6 +3493,110 @@ mod tests {
         );
         assert_eq!(last_progress_line("RESULT y is true."), None);
         Ok(())
+    }
+
+    /// ADR-045 Amendment 1 (M4 review C-1): a ct bench still running at the step budget is killed and fails the gate,
+    /// naming the target and phase of its last progress line; the progress lines are read as the bench appends them,
+    /// and a bench that ends in time returns its exit status.
+    #[test]
+    fn ct_gate_timeout_is_a_fail_naming_the_target() -> Result<()> {
+        use std::time::Duration;
+        let dir =
+            std::env::temp_dir().join(format!("secmp-xtask-ct-timeout-{}", std::process::id()));
+        std::fs::create_dir_all(&dir)?;
+        let progress = dir.join("ct-progress.jsonl");
+        let log = dir.join("ct-bench.log");
+        let line = r#"{"target":"hx_accept_reject_first_msg","phase":"first","elapsed_s":1.0,"k":1,"median_ticks":2}"#;
+        #[cfg(not(windows))]
+        let (program, flag, slow, quick, failing) = (
+            "/bin/sh",
+            "-c",
+            format!("echo '{line}' >> '{}'; exec sleep 30", progress.display()),
+            "echo bench output".to_owned(),
+            "exit 1".to_owned(),
+        );
+        #[cfg(windows)]
+        let (program, flag, slow, quick, failing) = (
+            "cmd.exe",
+            "/C",
+            format!(
+                "echo {line}>> \"{}\"&& ping -n 30 127.0.0.1",
+                progress.display()
+            ),
+            "echo bench output".to_owned(),
+            "exit 1".to_owned(),
+        );
+        let started = std::time::Instant::now();
+        let got = run_ct_bench(
+            &Cmd::new(program).args([flag, slow.as_str()]),
+            &log,
+            &progress,
+            Duration::from_secs(2),
+        );
+        let elapsed = started.elapsed();
+        refused_with(
+            got.map(|ok| ok.to_string()),
+            &[
+                "ct: timeout, killed after 2 s",
+                "last progress: hx_accept_reject_first_msg first",
+            ],
+        )?;
+        assert!(elapsed < Duration::from_secs(20), "not killed: {elapsed:?}");
+        assert!(run_ct_bench(
+            &Cmd::new(program).args([flag, quick.as_str()]),
+            &log,
+            &progress,
+            Duration::from_secs(60),
+        )?);
+        assert!(std::fs::read_to_string(&log)?.contains("bench output"));
+        assert!(!run_ct_bench(
+            &Cmd::new(program).args([flag, failing.as_str()]),
+            &log,
+            &progress,
+            Duration::from_secs(60),
+        )?);
+        // no progress line at all is named as such
+        std::fs::remove_file(&progress)?;
+        let got = run_ct_bench(
+            &Cmd::new(program).args([
+                flag,
+                if cfg!(windows) {
+                    "ping -n 30 127.0.0.1"
+                } else {
+                    "exec sleep 30"
+                },
+            ]),
+            &log,
+            &progress,
+            Duration::from_secs(1),
+        );
+        refused_with(
+            got.map(|ok| ok.to_string()),
+            &["ct: timeout, killed after 1 s; last progress: none"],
+        )?;
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok(())
+    }
+
+    /// The ct gate runs the bench's executable, which `cargo bench --no-run --message-format=json…` names.
+    #[test]
+    fn ct_bench_executable_is_read_from_cargo_messages() {
+        let messages = concat!(
+            r#"{"reason":"compiler-artifact","target":{"name":"secmp_testkit","kind":["lib"]},"executable":null}"#,
+            "\n",
+            r#"{"reason":"compiler-artifact","target":{"name":"ct","kind":["bench"]},"executable":"/t/release/deps/ct-0123"}"#,
+            "\n",
+            r#"{"reason":"build-finished","success":true}"#,
+            "\n"
+        );
+        assert_eq!(
+            ct_bench_executable_in(messages).as_deref(),
+            Some("/t/release/deps/ct-0123")
+        );
+        assert_eq!(
+            ct_bench_executable_in(r#"{"reason":"build-finished"}"#),
+            None
+        );
     }
 
     /// `expect::PROVERIF_EXPECTED` covers exactly `expect::PROVERIF_MODELS`, and the `tr` table follows the rows of

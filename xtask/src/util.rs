@@ -198,6 +198,23 @@ impl Cmd {
         })
     }
 
+    /// Start with stdin closed and stdout and stderr into `log` (created or truncated), echoing the command line;
+    /// the caller polls and reaps the child (ADR-045 Amendment 1: a gate with its own wall-clock budget).
+    pub(crate) fn spawn_logged(&self, log: &Path) -> Result<std::process::Child> {
+        if let Some(dir) = log.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        let out = std::fs::File::create(log)?;
+        let err = out.try_clone()?;
+        say(&format!("$ {} > {}", self.display(), log.display()));
+        self.command()
+            .stdin(Stdio::null())
+            .stdout(Stdio::from(out))
+            .stderr(Stdio::from(err))
+            .spawn()
+            .map_err(|e| Error(format!("cannot start `{}`: {e}", self.program)))
+    }
+
     /// True if the program can be started at all (used to detect missing tools).
     pub(crate) fn exists(&self) -> bool {
         self.command()

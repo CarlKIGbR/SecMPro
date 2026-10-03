@@ -197,22 +197,10 @@ pub(crate) fn proverif_model_files(root: &Path) -> Vec<String> {
     files
 }
 
-/// SHA-256 of a file by the host's tool (`sha256sum`, else `shasum -a 256`); `None` if neither is available.
+/// SHA-256 of a model file's committed text (CRLF read as LF; [`crate::sha256::text_file_hex`]), as
+/// `expect::PROVERIF_MODEL_SHA256` pins it; `None` if unreadable.
 pub(crate) fn file_sha256(path: &Path) -> Option<String> {
-    for (tool, args) in [("sha256sum", &[][..]), ("shasum", &["-a", "256"][..])] {
-        if let Ok(out) = std::process::Command::new(tool)
-            .args(args)
-            .arg(path)
-            .output()
-            && out.status.success()
-        {
-            return String::from_utf8_lossy(&out.stdout)
-                .split_whitespace()
-                .next()
-                .map(str::to_owned);
-        }
-    }
-    None
+    crate::sha256::text_file_hex(path)
 }
 
 /// Extra rows of particular steps: `proverif` the results table of the run (`target/proverif/results.tsv`, written by

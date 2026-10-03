@@ -2073,6 +2073,37 @@ pub(crate) fn run_logged(
     Ok(text)
 }
 
+/// ADR-046 Amendment 1 (1), M4 review C-7: the model files under `root` (`formal/*.pv`, `formal/hx.pvl`,
+/// `formal/hx/*.pv`) are exactly the files of `pins`, each with the pinned SHA-256 of its committed text
+/// ([`crate::sha256::text_file_hex`]); every difference is a finding naming the file.
+pub(crate) fn proverif_model_hash_findings(root: &Path, pins: &[(&str, &str)]) -> Vec<String> {
+    let mut found: BTreeSet<String> = BTreeSet::new();
+    for (dir, ext) in [
+        ("formal", "pv"),
+        ("formal", "pvl"),
+        (expect::PROVERIF_HX_DIR, "pv"),
+    ] {
+        if let Ok(stems) = dir_stems(&root.join(dir), ext) {
+            found.extend(stems.into_iter().map(|s| format!("{dir}/{s}.{ext}")));
+        }
+    }
+    let pinned: BTreeSet<String> = pins.iter().map(|(f, _)| (*f).to_owned()).collect();
+    let mut out: Vec<String> = found
+        .difference(&pinned)
+        .map(|f| format!("{f}: a model file without a pinned sha256"))
+        .collect();
+    for (file, want) in pins {
+        match crate::sha256::text_file_hex(&root.join(file)) {
+            None => out.push(format!("{file}: missing")),
+            Some(got) if got != *want => {
+                out.push(format!("{file}: sha256 {got}, pinned {want}"));
+            }
+            Some(_) => {}
+        }
+    }
+    out
+}
+
 /// The model a ProVerif process checks.
 enum ProverifModel {
     /// A single-file model of `expect::PROVERIF_EXPECTED` (`formal/<name>.pv`).
@@ -2300,8 +2331,9 @@ fn proverif_record(root: &Path, t: &ProverifTask, end: ProverifEnd) -> ProverifR
 /// models selected by `--models` — the single-file models (`formal/tr.pv`) and every SecMP-HX session file
 /// (`formal/hx/<session>.pv` with `-lib formal/hx.pvl`) — as `--jobs` parallel processes, each under
 /// `expect::PROVERIF_TIMEOUT_SECONDS`, with its output in `target/proverif/<tr | hx-<session>>.log`. Each output is
-/// checked against `expect::PROVERIF_EXPECTED` (positional, [`proverif_check`]) or `expect::PROVERIF_EXPECTED_HX` (by
-/// query text, [`proverif_check_hx`]). Writes `target/proverif/summary.txt` (SHA-256 of every model file, per file the
+/// checked against `expect::PROVERIF_EXPECTED` ([`proverif_check`]) or `expect::PROVERIF_EXPECTED_HX`
+/// ([`proverif_check_hx`]), both by query text (M4 review C-7); before any run, the model files must have the SHA-256 of
+/// `expect::PROVERIF_MODEL_SHA256`. Writes `target/proverif/summary.txt` (SHA-256 of every model file, per file the
 /// `RESULT` count, the "secrecy assumption verified" count and the wall time) and `target/proverif/results.tsv` (one
 /// row per (file, CLAIMS ID), the ADR-045 summary table), on failure too.
 pub(crate) fn proverif(ctx: &Ctx) -> Result<Outcome> {
@@ -2318,6 +2350,14 @@ pub(crate) fn proverif(ctx: &Ctx) -> Result<Outcome> {
         }
     }
     proverif_preflight(&ctx.root)?;
+    // ADR-046 Amendment 1 (1): only the reviewed models run
+    let hashes = proverif_model_hash_findings(&ctx.root, expect::PROVERIF_MODEL_SHA256);
+    if !hashes.is_empty() {
+        bail!(
+            "ProVerif models differ from expect::PROVERIF_MODEL_SHA256: {}",
+            hashes.join("; ")
+        );
+    }
     let (single, hx) = proverif_inputs(&ctx.root, opts.models)?;
     let tasks = proverif_tasks(&ctx.root, &out_dir, &single, &hx);
     let options = format!(
@@ -2376,10 +2416,13 @@ pub(crate) fn proverif(ctx: &Ctx) -> Result<Outcome> {
         .collect();
     let none_or = |v: String| if v.is_empty() { "none".to_owned() } else { v };
     Ok(Outcome::Pass(format!(
-        "ProVerif {} self-test [true, false] ok; {options}; single-file models: {} (expected set matches); HX \
-         sessions over {}: {} (= the files of expect::PROVERIF_EXPECTED_HX); {}; evidence target/proverif/summary.txt, \
-         results.tsv and one log per file",
+        "ProVerif {} self-test [true, false] ok; {options}; model hashes: {} of {} match \
+         expect::PROVERIF_MODEL_SHA256; single-file models: {} (expected set matches); HX sessions over {}: {} (= the \
+         files of expect::PROVERIF_EXPECTED_HX); {}; evidence target/proverif/summary.txt, results.tsv and one log per \
+         file",
         tools::PROVERIF_VERSION,
+        expect::PROVERIF_MODEL_SHA256.len(),
+        expect::PROVERIF_MODEL_SHA256.len(),
         none_or(single.join(", ")),
         expect::PROVERIF_HX_LIB,
         none_or(hx.join(", ")),
@@ -2491,18 +2534,27 @@ pub(crate) fn proverif_check_hx(file: &str, output: &str) -> Result<String> {
 /// [`proverif_check_hx`] against `table`: the file must have entries; every `RESULT` line must match an entry by its
 /// query text (else "extra"), every entry a line (else "missing"), the matched entries must come in table order (else
 /// "re-ordered") and their number must be the same; a `True` entry's line must say "is true.", a `False` entry's
-/// line "is false.", anything else fails, naming the file, the CLAIMS ID and the query text. Returns the summary per
-/// ID.
+/// line "is false." (an `Informative` entry's line may say anything), anything else fails, naming the file, the CLAIMS
+/// ID and the query text. Returns the summary per ID. Also the check of the single-file models (`file` one of
+/// `expect::PROVERIF_MODELS`, M4 review C-7).
 pub(crate) fn proverif_check_hx_in(
     table: &[expect::HxExpected],
     file: &str,
     output: &str,
 ) -> Result<String> {
     use expect::Proved;
-    let path = format!("{}/{file}.pv", expect::PROVERIF_HX_DIR);
+    // a single-file model (`formal/tr.pv`, rows of `expect::PROVERIF_EXPECTED`) or an HX session file
+    let (path, table_name) = if expect::PROVERIF_MODELS.contains(&file) {
+        (format!("formal/{file}.pv"), "expect::PROVERIF_EXPECTED")
+    } else {
+        (
+            format!("{}/{file}.pv", expect::PROVERIF_HX_DIR),
+            "expect::PROVERIF_EXPECTED_HX",
+        )
+    };
     let expected = hx_expected(table, file);
     if expected.is_empty() {
-        bail!("{path}: no expected entries in expect::PROVERIF_EXPECTED_HX");
+        bail!("{path}: no expected entries in {table_name}");
     }
     let got = proverif_result_lines(output);
     let matched = hx_match(&expected, &got);
@@ -2557,10 +2609,7 @@ pub(crate) fn proverif_check_hx_in(
         }
     }
     if !problems.is_empty() {
-        bail!(
-            "{path} against expect::PROVERIF_EXPECTED_HX: {}",
-            problems.join("; ")
-        );
+        bail!("{path} against {table_name}: {}", problems.join("; "));
     }
     let mut groups: Vec<(&str, &str, usize)> = Vec::new();
     for ((id, ..), g) in expected.iter().zip(&got) {
@@ -2626,33 +2675,14 @@ fn group_rows(entries: &[(&str, &str, &str)]) -> Vec<(String, String, String)> {
         .collect()
 }
 
-/// The results-table rows (ADR-045) of a single-file model: per run of `expect::PROVERIF_EXPECTED` the verdicts of its
-/// lines, by position; `output` `None`: the run failed ("no result").
+/// The results-table rows (ADR-045) of a single-file model: its rows of `expect::PROVERIF_EXPECTED`, matched by query
+/// text as [`hx_rows`] does; `output` `None`: the run failed ("no result").
 fn single_rows(model: &str, output: Option<&str>) -> Vec<(String, String, String)> {
-    let Some((_, runs)) = expect::PROVERIF_EXPECTED.iter().find(|(m, _)| *m == model) else {
-        return Vec::new();
-    };
-    let got = output.map(proverif_results);
-    let mut entries = Vec::new();
-    let mut at = 0_usize;
-    for (id, lines, proved) in *runs {
-        for _ in 0..*lines {
-            let word = match got.as_ref().map(|g| g.get(at)) {
-                None => "no result",
-                Some(None) => "missing",
-                Some(Some(Some(true))) => "true",
-                Some(Some(Some(false))) => "false",
-                Some(Some(None)) => "neither true nor false",
-            };
-            entries.push((*id, word, expected_word(*proved)));
-            at = at.saturating_add(1);
-        }
-    }
-    let extra = got.as_ref().map_or(0, |g| g.len().saturating_sub(at));
-    for _ in 0..extra {
-        entries.push(("(extra line)", "extra", "none"));
-    }
-    group_rows(&entries)
+    expect::PROVERIF_EXPECTED
+        .iter()
+        .find(|(m, _)| *m == model)
+        .map(|(_, rows)| hx_rows(rows, model, output))
+        .unwrap_or_default()
 }
 
 /// The results-table rows (ADR-045) of a SecMP-HX file: per CLAIMS ID the verdicts of its lines, matched by query text
@@ -2686,76 +2716,14 @@ fn hx_rows(
     group_rows(&entries)
 }
 
-/// Step 10 per model (M3 plan D10): the verdicts of one ProVerif run's `RESULT` lines (`proverif_results`) against
-/// the model's runs in `expect::PROVERIF_EXPECTED`, line by line — the number of lines must match; a line expected
-/// true must say "is true.", a line expected false "is false." (ProVerif reports an attack); an informative line may
-/// say anything. Every other outcome fails, naming the line and its `formal/CLAIMS.md` ID. Returns the summary per ID.
+/// Step 10 per single-file model (M3 plan D10; M4 review C-7, ADR-046 Amendment 1 (3)): the `RESULT` lines of one
+/// ProVerif run against the model's rows in `expect::PROVERIF_EXPECTED`, matched by query text like the HX files
+/// ([`proverif_check_hx_in`]); a model without rows is refused. Returns the summary per ID.
 pub(crate) fn proverif_check(model: &str, output: &str) -> Result<String> {
-    use expect::Proved;
-    let Some((_, runs)) = expect::PROVERIF_EXPECTED.iter().find(|(m, _)| *m == model) else {
+    let Some((_, rows)) = expect::PROVERIF_EXPECTED.iter().find(|(m, _)| *m == model) else {
         bail!("formal/{model}.pv: no expected verdicts in expect::PROVERIF_EXPECTED");
     };
-    let expected: Vec<(&str, Proved)> = runs
-        .iter()
-        .flat_map(|(id, lines, proved)| std::iter::repeat_n((*id, *proved), *lines))
-        .collect();
-    let got = proverif_results(output);
-    let said = |v: Option<bool>| match v {
-        Some(true) => "true",
-        Some(false) => "false",
-        None => "neither true nor false (e.g. cannot be proved)",
-    };
-    let mut problems = Vec::new();
-    if got.len() != expected.len() {
-        problems.push(format!(
-            "{} RESULT lines, expected {}",
-            got.len(),
-            expected.len()
-        ));
-    }
-    for (line, ((id, want), verdict)) in (1_usize..).zip(expected.iter().zip(&got)) {
-        let wanted = match want {
-            Proved::True if *verdict != Some(true) => Some("true (proved)"),
-            Proved::False if *verdict != Some(false) => Some("false (ProVerif reports an attack)"),
-            _ => None,
-        };
-        if let Some(wanted) = wanted {
-            problems.push(format!(
-                "RESULT line {line} ({id}) is {}, expected {wanted}",
-                said(*verdict)
-            ));
-        }
-    }
-    if !problems.is_empty() {
-        bail!(
-            "formal/{model}.pv against expect::PROVERIF_EXPECTED: {}",
-            problems.join("; ")
-        );
-    }
-    let mut at = 0_usize;
-    let mut per_id = Vec::new();
-    for (id, lines, proved) in *runs {
-        let end = at.saturating_add(*lines);
-        let mut verdicts: Vec<&str> = got
-            .get(at..end)
-            .unwrap_or_default()
-            .iter()
-            .map(|v| said(*v))
-            .collect();
-        verdicts.dedup();
-        let note = match proved {
-            Proved::True => "",
-            Proved::False => ", an attack as expected",
-            Proved::Informative => ", informative",
-        };
-        per_id.push(format!("{id} {} ×{lines}{note}", verdicts.join("/")));
-        at = end;
-    }
-    Ok(format!(
-        "formal/{model}.pv: {} RESULT lines as expected — {}",
-        got.len(),
-        per_id.join(", ")
-    ))
+    proverif_check_hx_in(rows, model, output)
 }
 
 // ---- step 11: Windows and Linux targets -----------------------------------------------------------------------
@@ -3638,55 +3606,6 @@ mod tests {
         );
     }
 
-    /// A ProVerif output whose `RESULT` lines say `verdicts` (`None`: "cannot be proved"), with the other lines a run
-    /// prints around them (the summary repeats every query as `Query …`, which the gate does not read).
-    fn proverif_output(verdicts: &[Option<bool>]) -> String {
-        let said = |v: &Option<bool>| match v {
-            Some(true) => "is true.",
-            Some(false) => "is false.",
-            None => "cannot be proved.",
-        };
-        let queries = verdicts.iter().enumerate().map(|(i, v)| {
-            format!(
-                "-- Query not attacker_p1(content(s,st{i},c0)) in process 1.\nRESULT not attacker_p1(content(s,st{i},c0)) {}",
-                said(v)
-            )
-        });
-        let summary = verdicts
-            .iter()
-            .enumerate()
-            .map(|(i, v)| format!("\nQuery not attacker_p1(content(s,st{i},c0)) {}", said(v)));
-        std::iter::once("Process 0 (that is, the initial process):".to_owned())
-            .chain(queries)
-            .chain(std::iter::once(
-                "--------------------------------------------------------------\nVerification summary:".to_owned(),
-            ))
-            .chain(summary)
-            .collect::<Vec<_>>()
-            .join("\n")
-    }
-
-    /// The verdicts `formal/tr.pv` gives: every line as `expect::PROVERIF_EXPECTED` says, T12 false.
-    fn tr_verdicts() -> Vec<Option<bool>> {
-        let mut v = Vec::new();
-        for (id, lines, proved) in expect::PROVERIF_EXPECTED
-            .iter()
-            .filter(|(m, _)| *m == "tr")
-            .flat_map(|(_, runs)| runs.iter())
-        {
-            let verdict = match proved {
-                expect::Proved::True => Some(true),
-                expect::Proved::False => Some(false),
-                expect::Proved::Informative => {
-                    assert_eq!(*id, "T12");
-                    Some(false)
-                }
-            };
-            v.extend(std::iter::repeat_n(verdict, *lines));
-        }
-        v
-    }
-
     /// The ending ProVerif prints for an expected verdict (an informative line: "cannot be proved.").
     fn ending(p: expect::Proved) -> &'static str {
         match p {
@@ -3789,87 +3708,129 @@ mod tests {
         }
     }
 
-    /// M3 plan D10: `formal/tr.pv`'s 46 `RESULT` lines (M4: T13 appended, WEISUNG M4-5) are compared positionally with
-    /// `expect::PROVERIF_EXPECTED` — the correct output passes with a summary per ID; a true query turning false, a false
-    /// query turning true, a "cannot be proved" line, a missing and an extra line are each refused, naming the ID; the
-    /// informative T12 may say anything; a model without a table is refused. WEISUNG M4-5 §4 (b), (e): every HX session
-    /// file of `expect::PROVERIF_EXPECTED_HX` passes with the output its entries describe (the `RESULT (but …)` /
-    /// `RESULT (even …)` remark is no line of its own), and a flipped or undecided verdict is refused naming the file,
-    /// the ID and the query.
+    /// M3 plan D10, M4 review C-7 (ADR-046 Amendment 1 (3)): `formal/tr.pv`'s 46 `RESULT` lines are matched by query
+    /// text against `expect::PROVERIF_EXPECTED` — the output the rows describe passes with a summary per ID; a true query
+    /// turning false, a false query turning true, a "cannot be proved" line, a missing and an extra line are each refused,
+    /// naming the line and the ID; the informative T12 may say anything; a model without rows is refused. WEISUNG M4-5
+    /// §4 (b), (e): every HX session file of `expect::PROVERIF_EXPECTED_HX` passes with the output its entries describe
+    /// (the `RESULT (but …)` / `RESULT (even …)` remark is no line of its own), and a flipped or undecided verdict is
+    /// refused naming the file, the ID and the query.
     #[test]
     fn proverif_verdicts_against_the_claims_table() -> Result<()> {
-        let good = tr_verdicts();
+        let good = hx_lines(expect::PROVERIF_EXPECTED_TR, "tr");
         assert_eq!(good.len(), 46);
-        let summary = proverif_check("tr", &proverif_output(&good))?;
+        let summary = proverif_check("tr", &hx_output(&good))?;
         assert!(
             summary.starts_with(
                 "formal/tr.pv: 46 RESULT lines as expected — T1 true ×6, T2 true ×2, T3 true ×4"
-            ) && summary.contains("T7 false ×2, an attack as expected")
-                && summary.contains(
-                    "T8 true ×12, T9 true ×4, T10 false ×1, an attack as expected, T11 true ×1"
-                )
-                && summary.contains("T12 false ×1, informative")
-                && summary.ends_with("T13 false ×7, an attack as expected"),
+            ) && summary.contains("T7 false ×2")
+                && summary.contains("T8 true ×12, T9 true ×4, T10 false ×1, T11 true ×1")
+                && summary.contains("T12 cannot be proved ×1")
+                && summary.ends_with("T13 false ×7"),
             "{summary}"
         );
-        let refused = |verdicts: &[Option<bool>], expected: &str| -> Result<()> {
-            refused_with(
-                proverif_check("tr", &proverif_output(verdicts)),
-                &[expected],
-            )
+        let with = |at: usize, end: &'static str| {
+            let mut v = good.clone();
+            if let Some(l) = v.get_mut(at) {
+                l.1 = end;
+            }
+            proverif_check("tr", &hx_output(&v))
         };
-        // T1 (line 1) turns false
-        let mut v = good.clone();
-        *v.first_mut().ok_or_else(|| Error("empty".into()))? = Some(false);
-        refused(&v, "RESULT line 1 (T1) is false, expected true (proved)")?;
-        // T7 (line 19) turns true: the attack is no longer found
-        let mut v = good.clone();
-        *v.get_mut(18).ok_or_else(|| Error("short".into()))? = Some(true);
-        refused(
-            &v,
-            "RESULT line 19 (T7) is true, expected false (ProVerif reports an attack)",
+        // T1 (line 1) turns false; T7 (line 19) and T10 (line 37) turn true; T11 (line 38) and T7 (line 20) undecided
+        refused_with(
+            with(0, "is false."),
+            &["RESULT line 1 (T1) is false, expected true (proved)"],
         )?;
-        // T10 (line 37) turns true
-        let mut v = good.clone();
-        *v.get_mut(36).ok_or_else(|| Error("short".into()))? = Some(true);
-        refused(&v, "RESULT line 37 (T10) is true, expected false")?;
-        // T11 (line 38) cannot be proved; so can a sanity query (T7) not be decided
-        let mut v = good.clone();
-        *v.get_mut(37).ok_or_else(|| Error("short".into()))? = None;
-        refused(
-            &v,
-            "RESULT line 38 (T11) is neither true nor false (e.g. cannot be proved), expected true",
+        refused_with(
+            with(18, "is true."),
+            &["RESULT line 19 (T7) is true, expected false (ProVerif finds the trace)"],
         )?;
-        let mut v = good.clone();
-        *v.get_mut(19).ok_or_else(|| Error("short".into()))? = None;
-        refused(&v, "RESULT line 20 (T7) is neither true nor false")?;
+        refused_with(
+            with(36, "is true."),
+            &["RESULT line 37 (T10) is true, expected false"],
+        )?;
+        refused_with(
+            with(37, "cannot be proved."),
+            &["RESULT line 38 (T11) is cannot be proved, expected true"],
+        )?;
+        refused_with(
+            with(19, "cannot be proved."),
+            &["RESULT line 20 (T7) is cannot be proved"],
+        )?;
         // a T13 session whose honest run no longer completes (line 46: the event is unreachable)
-        let mut v = good.clone();
-        *v.last_mut().ok_or_else(|| Error("empty".into()))? = Some(true);
-        refused(&v, "RESULT line 46 (T13) is true, expected false")?;
+        refused_with(
+            with(45, "is true."),
+            &["RESULT line 46 (T13) is true, expected false"],
+        )?;
         // a missing line (the last one, T13) and an extra line
         let mut v = good.clone();
         v.pop();
-        refused(&v, "45 RESULT lines, expected 46")?;
+        refused_with(
+            proverif_check("tr", &hx_output(&v)),
+            &[
+                "45 RESULT lines, expected 46",
+                "missing RESULT line for T13",
+            ],
+        )?;
         let mut v = good.clone();
-        v.push(Some(true));
-        refused(&v, "47 RESULT lines, expected 46")?;
-        // a line missing in the middle shifts every later one: refused by the count and by the first shifted ID
-        let mut v = good.clone();
-        v.remove(18);
-        refused(&v, "45 RESULT lines, expected 46")?;
-        refused(&v, "RESULT line 20 (T7) is true, expected false")?;
-        refused(&v, "RESULT line 36 (T9) is false, expected true")?;
+        v.push(("not attacker_p1(content(sX,st1,c0))", "is true."));
+        refused_with(
+            proverif_check("tr", &hx_output(&v)),
+            &["47 RESULT lines, expected 46", "extra RESULT line 47"],
+        )?;
         // the informative T12 (line 39) may say anything
-        for t12 in [Some(true), None] {
-            let mut v = good.clone();
-            *v.get_mut(38).ok_or_else(|| Error("short".into()))? = t12;
-            assert!(proverif_check("tr", &proverif_output(&v))?.contains(", informative"));
+        for t12 in ["is true.", "is false.", "cannot be proved."] {
+            assert!(with(38, t12)?.contains("T12"));
         }
         // no RESULT line at all, and a model without an expected table
-        refused(&[], "0 RESULT lines, expected 46")?;
-        assert!(proverif_check("hx", &proverif_output(&good)).is_err());
+        refused_with(proverif_check("tr", ""), &["0 RESULT lines, expected 46"])?;
+        assert!(proverif_check("hx", &hx_output(&good)).is_err());
         hx_verdicts_against_the_table()
+    }
+
+    /// M4 review C-7 (ADR-046 Amendment 1 (3), R-19): the `tr` gate matches by query text — the committed output of the
+    /// gate run on `569c2e2` passes; the same output with T4's query text swapped for another true query, with two
+    /// same-verdict lines of different queries reordered, or with a query text changed (same verdict) is refused.
+    #[test]
+    fn proverif_tr_gate_matches_by_query_text() -> Result<()> {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let committed = std::fs::read_to_string(
+            root.join("docs/reviews/M04-evidence/proverif-tr-569c2e2.txt"),
+        )?;
+        let summary = proverif_check("tr", &committed)?;
+        assert!(
+            summary.starts_with("formal/tr.pv: 46 RESULT lines as expected"),
+            "{summary}"
+        );
+        let t3 = "RESULT not attacker_p1(content(sFS,st1,c0)) is true.";
+        let t4 = "RESULT not attacker_p1(content(sPCS,st3,c0)) is true.";
+        let t5 = "RESULT not attacker_p1(content(sPCSdh,st3,c0)) is true.";
+        for line in [t3, t4, t5] {
+            assert_eq!(committed.matches(line).count(), 1, "{line}");
+        }
+        // T4's first query text replaced by T5's (another true query): T5's line is then extra, T4's missing
+        let swapped = committed.replacen(t4, t5, 1);
+        refused_with(
+            proverif_check("tr", &swapped),
+            &["missing RESULT line for T4"],
+        )?;
+        // the first lines of T3 and T4 (both true) exchanged
+        let reordered = committed
+            .replacen(t3, "@@T3@@", 1)
+            .replacen(t4, t3, 1)
+            .replacen("@@T3@@", t4, 1);
+        refused_with(proverif_check("tr", &reordered), &["is re-ordered"])?;
+        // a changed query text with the same verdict at the same position
+        let changed = committed.replacen(
+            t4,
+            "RESULT not attacker_p1(content(sPCS,st3,c2)) is true.",
+            1,
+        );
+        refused_with(
+            proverif_check("tr", &changed),
+            &["extra RESULT line", "missing RESULT line for T4"],
+        )?;
+        Ok(())
     }
 
     /// The HX half of `proverif_verdicts_against_the_claims_table`: every file of `expect::PROVERIF_EXPECTED_HX` passes
@@ -4288,11 +4249,91 @@ mod tests {
         );
     }
 
-    /// `expect::PROVERIF_EXPECTED` covers exactly `expect::PROVERIF_MODELS`, and the `tr` table follows the rows of
-    /// `formal/CLAIMS.md` §TR: the IDs in order, each once, and each run's verdict as the row's "Expected" column says
-    /// ("true"; "**false**", possibly with a remark; "… not a gate" for the informative T12). M4 (WEISUNG M4-5): the
-    /// files of `expect::PROVERIF_EXPECTED_HX` are exactly `formal/hx/*.pv`, and every entry's ID (up to its first
-    /// space: "H1 (i)" is row H1) is a row of CLAIMS §HX whose "Expected" column gives the entry's verdict.
+    /// The rows of `formal/CLAIMS.md` whose first cell starts with `prefix`: (ID, the verdict of the "Expected" column;
+    /// `None`: neither true nor false, e.g. H6 "not claimed").
+    fn claim_rows(claims: &str, prefix: &str) -> Vec<(String, Option<expect::Proved>)> {
+        claims
+            .lines()
+            .filter(|l| l.starts_with(prefix))
+            .map(|l| {
+                let cells: Vec<&str> = l.split('|').map(str::trim).collect();
+                let id = cells.get(1).copied().unwrap_or_default().to_owned();
+                let proved = match cells.iter().rev().find(|c| !c.is_empty()).copied() {
+                    Some("true") => Some(expect::Proved::True),
+                    Some(c) if c.contains("not a gate") => Some(expect::Proved::Informative),
+                    Some(c) if c.starts_with("**false**") => Some(expect::Proved::False),
+                    _ => None,
+                };
+                (id, proved)
+            })
+            .collect()
+    }
+
+    /// M4 review C-7 (ADR-046 Amendment 1 (2)): the expected tables against `formal/CLAIMS.md` in both directions —
+    /// `tr`: the IDs in order, each once, every line with its row's verdict; HX: every entry's ID (up to its first space:
+    /// "H1 (i)" is row H1) is a row of §HX with the entry's verdict, every §HX row expected true or false has at least
+    /// one entry, H11 has exactly four entries per base file (a file without `-auth`). Returns the findings.
+    fn claims_table_findings(
+        claims: &str,
+        tr: &[expect::HxExpected],
+        hx: &[expect::HxExpected],
+    ) -> Vec<String> {
+        let mut out = Vec::new();
+        let t_rows = claim_rows(claims, "| T");
+        let mut ids: Vec<&str> = Vec::new();
+        for (_, id, _, proved) in tr {
+            if ids.last() != Some(id) {
+                ids.push(id);
+            }
+            match t_rows.iter().find(|(r, _)| r == id) {
+                Some((_, Some(p))) if p == proved => {}
+                other => out.push(format!("tr {id}: CLAIMS {other:?}, the table {proved:?}")),
+            }
+        }
+        let t_ids: Vec<&str> = t_rows.iter().map(|(id, _)| id.as_str()).collect();
+        if ids != t_ids {
+            out.push(format!(
+                "tr: the table's IDs {ids:?} are not CLAIMS §TR's {t_ids:?}"
+            ));
+        }
+        let h_rows = claim_rows(claims, "| H");
+        for (file, id, query, proved) in hx {
+            let row = id.split(' ').next().unwrap_or_default();
+            match h_rows.iter().find(|(r, _)| r == row).map(|(_, p)| *p) {
+                Some(Some(p)) if p == *proved => {}
+                claimed => out.push(format!(
+                    "{file} {id}: CLAIMS row {row} expects {claimed:?}, the table {proved:?}: {query}"
+                )),
+            }
+        }
+        for (row, proved) in &h_rows {
+            if proved.is_some()
+                && !hx
+                    .iter()
+                    .any(|(_, id, ..)| id.split(' ').next() == Some(row.as_str()))
+            {
+                out.push(format!(
+                    "CLAIMS row {row} has no entry in expect::PROVERIF_EXPECTED_HX"
+                ));
+            }
+        }
+        for file in hx_table_files(hx).iter().filter(|f| !f.ends_with("-auth")) {
+            let n = hx
+                .iter()
+                .filter(|(f, id, ..)| f == file && *id == "H11")
+                .count();
+            if n != 4 {
+                out.push(format!(
+                    "{file}: {n} H11 entries, CLAIMS H11 has four per base file"
+                ));
+            }
+        }
+        out
+    }
+
+    /// `expect::PROVERIF_EXPECTED` covers exactly `expect::PROVERIF_MODELS`, the files of `expect::PROVERIF_EXPECTED_HX`
+    /// are exactly `formal/hx/*.pv`, and both tables follow `formal/CLAIMS.md` in both directions
+    /// ([`claims_table_findings`]).
     #[test]
     fn proverif_table_follows_the_claims() -> Result<()> {
         let tables: BTreeSet<String> = expect::PROVERIF_EXPECTED
@@ -4302,59 +4343,153 @@ mod tests {
         same_set("PROVERIF_EXPECTED", &tables, expect::PROVERIF_MODELS)?;
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
         let claims = std::fs::read_to_string(root.join("formal/CLAIMS.md"))?;
-        // (ID, the verdict of the "Expected" column; None: neither true nor false, e.g. H6 "not claimed")
-        let claim_rows = |prefix: &str| -> Vec<(String, Option<expect::Proved>)> {
-            claims
-                .lines()
-                .filter(|l| l.starts_with(prefix))
-                .map(|l| {
-                    let cells: Vec<&str> = l.split('|').map(str::trim).collect();
-                    let id = cells.get(1).copied().unwrap_or_default().to_owned();
-                    let proved = match cells.iter().rev().find(|c| !c.is_empty()).copied() {
-                        Some("true") => Some(expect::Proved::True),
-                        Some(c) if c.contains("not a gate") => Some(expect::Proved::Informative),
-                        Some(c) if c.starts_with("**false**") => Some(expect::Proved::False),
-                        _ => None,
-                    };
-                    (id, proved)
-                })
-                .collect()
-        };
-        let rows = claim_rows("| T")
-            .into_iter()
-            .map(|(id, p)| {
-                p.map(|p| (id.clone(), p))
-                    .ok_or_else(|| Error(format!("{id}: unknown Expected column")))
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let table: Vec<(String, expect::Proved)> = expect::PROVERIF_EXPECTED
-            .iter()
-            .filter(|(m, _)| *m == "tr")
-            .flat_map(|(_, runs)| runs.iter())
-            .map(|(id, lines, proved)| {
-                assert!(*lines >= 1, "{id}: no line");
-                ((*id).to_owned(), *proved)
-            })
-            .collect();
-        assert_eq!(rows.len(), 13);
-        assert_eq!(table, rows);
-        // HX
+        assert_eq!(claim_rows(&claims, "| T").len(), 13);
         hx_set_check(
             &dir_stems(&root.join(expect::PROVERIF_HX_DIR), "pv")?,
             expect::PROVERIF_EXPECTED_HX,
         )?;
-        let hx_claims = claim_rows("| H");
-        assert!(hx_claims.len() >= 20, "{hx_claims:?}");
-        for (file, id, query, proved) in expect::PROVERIF_EXPECTED_HX {
-            let row = id.split(' ').next().unwrap_or_default();
-            let claimed = hx_claims.iter().find(|(r, _)| r == row).map(|(_, p)| *p);
-            assert_eq!(
-                claimed,
-                Some(Some(*proved)),
-                "{file} {id}: CLAIMS row {row} expects {claimed:?}, the table {proved:?}: {query}"
-            );
-            assert!(!query.is_empty() && !query.contains('\n'), "{file} {id}");
+        assert!(claim_rows(&claims, "| H").len() >= 20);
+        assert_eq!(
+            claims_table_findings(
+                &claims,
+                expect::PROVERIF_EXPECTED_TR,
+                expect::PROVERIF_EXPECTED_HX
+            ),
+            Vec::<String>::new()
+        );
+        for (_, _, query, _) in expect::PROVERIF_EXPECTED_TR
+            .iter()
+            .chain(expect::PROVERIF_EXPECTED_HX)
+        {
+            assert!(!query.is_empty() && !query.contains('\n'), "{query}");
         }
+        Ok(())
+    }
+
+    /// M4 review C-7 (ADR-046 Amendment 1 (2), R-18): the HX table covers every CLAIMS §HX row expected true or false —
+    /// the H10 entry deleted, or the H10 row deleted, fails naming H10; H11 has four entries per base file.
+    #[test]
+    fn proverif_table_covers_every_claims_row() -> Result<()> {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let claims = std::fs::read_to_string(root.join("formal/CLAIMS.md"))?;
+        let tr = expect::PROVERIF_EXPECTED_TR;
+        let hx = expect::PROVERIF_EXPECTED_HX;
+        assert_eq!(claims_table_findings(&claims, tr, hx), Vec::<String>::new());
+        let without_h10: Vec<expect::HxExpected> = hx
+            .iter()
+            .copied()
+            .filter(|(_, id, ..)| *id != "H10")
+            .collect();
+        let found = claims_table_findings(&claims, tr, &without_h10);
+        assert_eq!(
+            found,
+            vec!["CLAIMS row H10 has no entry in expect::PROVERIF_EXPECTED_HX".to_owned()]
+        );
+        let no_h10_row = claims
+            .lines()
+            .filter(|l| !l.starts_with("| H10 "))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let found = claims_table_findings(&no_h10_row, tr, hx);
+        assert!(
+            !found.is_empty() && found.iter().all(|f| f.contains("H10")),
+            "{found:?}"
+        );
+        // H11: four per base file
+        let mut seen = false;
+        let three_h11: Vec<expect::HxExpected> = hx
+            .iter()
+            .copied()
+            .filter(|(f, id, ..)| {
+                let drop = !seen && *f == "hClean" && *id == "H11";
+                seen |= drop;
+                !drop
+            })
+            .collect();
+        assert_eq!(
+            claims_table_findings(&claims, tr, &three_h11),
+            vec!["hClean: 3 H11 entries, CLAIMS H11 has four per base file".to_owned()]
+        );
+        for file in hx_table_files(hx).iter().filter(|f| !f.ends_with("-auth")) {
+            assert_eq!(
+                hx.iter()
+                    .filter(|(f, id, ..)| f == file && *id == "H11")
+                    .count(),
+                4,
+                "{file}"
+            );
+        }
+        // a §TR row without its lines, and a verdict that differs from CLAIMS
+        let no_t12: Vec<expect::HxExpected> = tr
+            .iter()
+            .copied()
+            .filter(|(_, id, ..)| *id != "T12")
+            .collect();
+        assert!(!claims_table_findings(&claims, &no_t12, hx).is_empty());
+        Ok(())
+    }
+
+    /// M4 review C-7 (ADR-046 Amendment 1 (1), R-18): the model files are exactly the files of
+    /// `expect::PROVERIF_MODEL_SHA256` with their pinned SHA-256; a changed byte in any of them, a missing one and an
+    /// unpinned extra model file are findings naming the file.
+    #[test]
+    fn proverif_model_hashes_are_pinned() -> Result<()> {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let pins = expect::PROVERIF_MODEL_SHA256;
+        assert_eq!(pins.len(), 21);
+        assert_eq!(
+            proverif_model_hash_findings(&root, pins),
+            Vec::<String>::new()
+        );
+        // a copy of the models, then one changed byte per file
+        let dir =
+            std::env::temp_dir().join(format!("secmp-xtask-model-hashes-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(expect::PROVERIF_HX_DIR))?;
+        for (file, _) in pins {
+            std::fs::copy(root.join(file), dir.join(file))?;
+        }
+        assert_eq!(
+            proverif_model_hash_findings(&dir, pins),
+            Vec::<String>::new()
+        );
+        for (file, _) in pins {
+            let original = std::fs::read(dir.join(file))?;
+            let mut changed = original.clone();
+            if let Some(b) = changed.iter_mut().rev().find(|b| b.is_ascii_alphabetic()) {
+                *b ^= 0x20;
+            }
+            std::fs::write(dir.join(file), &changed)?;
+            let found = proverif_model_hash_findings(&dir, pins);
+            assert!(
+                found.len() == 1
+                    && found
+                        .iter()
+                        .all(|f| f.starts_with(&format!("{file}: sha256 "))),
+                "{file}: {found:?}"
+            );
+            std::fs::write(dir.join(file), &original)?;
+        }
+        // CRLF line ends (a Windows checkout) hash like the committed text
+        let crlf = std::fs::read_to_string(dir.join("formal/tr.pv"))?.replace('\n', "\r\n");
+        std::fs::write(dir.join("formal/tr.pv"), crlf)?;
+        assert_eq!(
+            proverif_model_hash_findings(&dir, pins),
+            Vec::<String>::new()
+        );
+        std::fs::write(
+            dir.join(expect::PROVERIF_HX_DIR).join("hNew.pv"),
+            "process 0\n",
+        )?;
+        assert_eq!(
+            proverif_model_hash_findings(&dir, pins),
+            vec!["formal/hx/hNew.pv: a model file without a pinned sha256".to_owned()]
+        );
+        std::fs::remove_file(dir.join("formal/hx.pvl"))?;
+        assert!(
+            proverif_model_hash_findings(&dir, pins).contains(&"formal/hx.pvl: missing".to_owned())
+        );
+        let _ = std::fs::remove_dir_all(&dir);
         Ok(())
     }
 

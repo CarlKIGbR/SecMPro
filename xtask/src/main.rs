@@ -21,6 +21,7 @@ mod gates;
 mod meta;
 mod policy;
 mod sbom;
+mod sha256;
 mod stubs;
 mod summary;
 mod time;

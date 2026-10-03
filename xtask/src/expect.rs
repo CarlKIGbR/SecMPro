@@ -607,39 +607,162 @@ pub(crate) enum Proved {
     Informative,
 }
 
-/// The expected `RESULT` lines of one model: runs of (CLAIMS ID, number of lines, expected verdict), in order.
-pub(crate) type ProverifRuns = &'static [(&'static str, usize, Proved)];
+/// The expected `RESULT` lines of each model of [`PROVERIF_MODELS`]: one row per line, (file stem, `formal/CLAIMS.md`
+/// ID, query text, expected verdict) in the order ProVerif prints them, matched by query text like the HX files
+/// (`gates::proverif_check_hx_in`, M4 review C-7, ADR-046 Amendment 1 (3); M3 plan D10 compared only count and
+/// verdict per position): a missing, an extra or a re-ordered line fails, as does a `True` line that is not "is true."
+/// and a `False` line that is not "is false."; an `Informative` line may say anything. A test checks the IDs and
+/// verdicts against the "Expected" column of `formal/CLAIMS.md`.
+pub(crate) const PROVERIF_EXPECTED: &[(&str, &[HxExpected])] = &[("tr", PROVERIF_EXPECTED_TR)];
 
-/// The expected `RESULT` lines of each model of [`PROVERIF_MODELS`], in the order ProVerif prints them, as runs of
-/// (`formal/CLAIMS.md` ID, number of lines, expected verdict). The `proverif` step expands the runs and compares line
-/// by line (`gates::proverif_check`, M3 plan D10): the number of lines must match, a `True` line must be proved, a
-/// `False` line must be an attack, an `Informative` line may say anything; a test checks the verdicts against the
-/// "Expected" column of `formal/CLAIMS.md`.
-///
 /// `tr` (M3, 39 lines; CLAIMS §TR gate rule: T1–T6, T8, T9, T11 true, T7 and T10 false, T12 informative): T1 the six
 /// contents of steps 1–3 (n = 0, 1); T2 both directions; T3 the four contents of steps 1–2; T4, T5, T6 and T7 the two
 /// contents of step 3 each; T8 per step `dh_pk` and `ek_pq` of its header and `n` of both messages (twelve); T9 the
 /// same four fields of step 1; T10 one content; T11 and T12 one query each (T12: the model gives false). M4 (WEISUNG
 /// M4-5, M3 review R-52, EXT-1): T13, reachability sanity, one query per honest session of the model (sClean, sFS,
-/// sPCS, sPCSdh, sPCSkem, sPCSboth, sHFS), each false (the honest run completes) — 46 lines.
-pub(crate) const PROVERIF_EXPECTED: &[(&str, ProverifRuns)] = &[(
-    "tr",
-    &[
-        ("T1", 6, Proved::True),
-        ("T2", 2, Proved::True),
-        ("T3", 4, Proved::True),
-        ("T4", 2, Proved::True),
-        ("T5", 2, Proved::True),
-        ("T6", 2, Proved::True),
-        ("T7", 2, Proved::False),
-        ("T8", 12, Proved::True),
-        ("T9", 4, Proved::True),
-        ("T10", 1, Proved::False),
-        ("T11", 1, Proved::True),
-        ("T12", 1, Proved::Informative),
-        ("T13", 7, Proved::False),
-    ],
-)];
+/// sPCS, sPCSdh, sPCSkem, sPCSboth, sHFS), each false (the honest run completes) — 46 lines. The query texts are the
+/// `RESULT` lines of the gate run on `569c2e2` (`docs/reviews/M04-evidence/proverif-tr-569c2e2.txt`). One entry per line;
+/// `rustfmt` leaves the table alone.
+#[rustfmt::skip]
+pub(crate) const PROVERIF_EXPECTED_TR: &[HxExpected] = &[
+    ("tr", "T1", "not attacker_p1(content(sClean,st1,c0))", Proved::True),
+    ("tr", "T1", "not attacker_p1(content(sClean,st1,c1))", Proved::True),
+    ("tr", "T1", "not attacker_p1(content(sClean,st2,c0))", Proved::True),
+    ("tr", "T1", "not attacker_p1(content(sClean,st2,c1))", Proved::True),
+    ("tr", "T1", "not attacker_p1(content(sClean,st3,c0))", Proved::True),
+    ("tr", "T1", "not attacker_p1(content(sClean,st3,c1))", Proved::True),
+    ("tr", "T2", "inj-event(Recv(sClean,pB,i_55,n_55,x)) ==> inj-event(Send(sClean,pA,i_55,n_55,x))", Proved::True),
+    ("tr", "T2", "inj-event(Recv(sClean,pA,i_55,n_55,x)) ==> inj-event(Send(sClean,pB,i_55,n_55,x))", Proved::True),
+    ("tr", "T3", "not attacker_p1(content(sFS,st1,c0))", Proved::True),
+    ("tr", "T3", "not attacker_p1(content(sFS,st1,c1))", Proved::True),
+    ("tr", "T3", "not attacker_p1(content(sFS,st2,c0))", Proved::True),
+    ("tr", "T3", "not attacker_p1(content(sFS,st2,c1))", Proved::True),
+    ("tr", "T4", "not attacker_p1(content(sPCS,st3,c0))", Proved::True),
+    ("tr", "T4", "not attacker_p1(content(sPCS,st3,c1))", Proved::True),
+    ("tr", "T5", "not attacker_p1(content(sPCSdh,st3,c0))", Proved::True),
+    ("tr", "T5", "not attacker_p1(content(sPCSdh,st3,c1))", Proved::True),
+    ("tr", "T6", "not attacker_p1(content(sPCSkem,st3,c0))", Proved::True),
+    ("tr", "T6", "not attacker_p1(content(sPCSkem,st3,c1))", Proved::True),
+    ("tr", "T7", "not attacker_p1(content(sPCSboth,st3,c0))", Proved::False),
+    ("tr", "T7", "not attacker_p1(content(sPCSboth,st3,c1))", Proved::False),
+    ("tr", "T8", "not attacker_p1(exp(g,dhsk(sClean,kA1)))", Proved::True),
+    ("tr", "T8", "not attacker_p1(pk(kemsk(sClean,kA1)))", Proved::True),
+    ("tr", "T8", "not attacker_p1(nmark(sClean,st1,c0))", Proved::True),
+    ("tr", "T8", "not attacker_p1(nmark(sClean,st1,c1))", Proved::True),
+    ("tr", "T8", "not attacker_p1(exp(g,dhsk(sClean,kB2)))", Proved::True),
+    ("tr", "T8", "not attacker_p1(pk(kemsk(sClean,kB2)))", Proved::True),
+    ("tr", "T8", "not attacker_p1(nmark(sClean,st2,c0))", Proved::True),
+    ("tr", "T8", "not attacker_p1(nmark(sClean,st2,c1))", Proved::True),
+    ("tr", "T8", "not attacker_p1(exp(g,dhsk(sClean,kA3)))", Proved::True),
+    ("tr", "T8", "not attacker_p1(pk(kemsk(sClean,kA3)))", Proved::True),
+    ("tr", "T8", "not attacker_p1(nmark(sClean,st3,c0))", Proved::True),
+    ("tr", "T8", "not attacker_p1(nmark(sClean,st3,c1))", Proved::True),
+    ("tr", "T9", "not attacker_p1(exp(g,dhsk(sHFS,kA1)))", Proved::True),
+    ("tr", "T9", "not attacker_p1(pk(kemsk(sHFS,kA1)))", Proved::True),
+    ("tr", "T9", "not attacker_p1(nmark(sHFS,st1,c0))", Proved::True),
+    ("tr", "T9", "not attacker_p1(nmark(sHFS,st1,c1))", Proved::True),
+    ("tr", "T10", "not attacker_p1(content(sPCS,st1,c1))", Proved::False),
+    ("tr", "T11", "event(RecvKem(s_14,p_55,i_55,n_55,x,ct)) ==> event(ChainKem(s_14,p_55,i_55,ct))", Proved::True),
+    ("tr", "T12", "event(HdrOpenTwice(k1_1,k2_1,h)) ==> k1_1 = k2_1", Proved::Informative),
+    ("tr", "T13", "not event(Recv(sClean,pB,st3,c1,content(sClean,st3,c1)))", Proved::False),
+    ("tr", "T13", "not event(Recv(sFS,pA,st2,c1,content(sFS,st2,c1)))", Proved::False),
+    ("tr", "T13", "not event(Recv(sPCS,pB,st3,c1,content(sPCS,st3,c1)))", Proved::False),
+    ("tr", "T13", "not event(Recv(sPCSdh,pB,st3,c1,content(sPCSdh,st3,c1)))", Proved::False),
+    ("tr", "T13", "not event(Recv(sPCSkem,pB,st3,c1,content(sPCSkem,st3,c1)))", Proved::False),
+    ("tr", "T13", "not event(Recv(sPCSboth,pB,st3,c1,content(sPCSboth,st3,c1)))", Proved::False),
+    ("tr", "T13", "not event(Recv(sHFS,pB,st3,c1,content(sHFS,st3,c1)))", Proved::False),
+];
+
+/// The SHA-256 of every ProVerif model file — `formal/tr.pv`, the library `formal/hx.pvl` and every `formal/hx/*.pv`
+/// (M4 review C-7, ADR-046 Amendment 1 (1)): the `proverif` step refuses to run on other content, and a test in
+/// `linux-fast` (`gates::tests::proverif_model_hashes_are_pinned`) fails on any byte changed, so a model change touches
+/// this table in the same reviewed commit. The digest is taken over the committed text (CRLF read as LF).
+pub(crate) const PROVERIF_MODEL_SHA256: &[(&str, &str)] = &[
+    (
+        "formal/tr.pv",
+        "09ba6cbb57f05de142cc18cdae2694c826ea7ecdf03b411c505945492957a1ef",
+    ),
+    (
+        "formal/hx.pvl",
+        "885adf37f8e24ea48aba117ef893db8ed2f45af919c4c91c864de78a3aa0c867",
+    ),
+    (
+        "formal/hx/hBoth.pv",
+        "6a606316c7401a7924b8894bb7893b9551a477a2cfb25051edca7cea67cf4ef8",
+    ),
+    (
+        "formal/hx/hClean-auth.pv",
+        "7439c394a99aae7566cf5447b0babd53c0a87a7e0d78bb1830f9ad3991b1cc57",
+    ),
+    (
+        "formal/hx/hClean.pv",
+        "c18c398e3d46b96e79ad45d8750d15aec50758cf6e18b976baedc842d7690fbd",
+    ),
+    (
+        "formal/hx/hDH-auth.pv",
+        "49a3fad652cf4e18f112b6ba862c26e2af42edcb6c506ba0b8aa9fc628eef3e5",
+    ),
+    (
+        "formal/hx/hDH.pv",
+        "28ed0e6819a164cd0829f0b0705e061643ec910209c31872bae12fe5e5a1f018",
+    ),
+    (
+        "formal/hx/hFS.pv",
+        "f21c9d1f5a4e9190ffbe539ff3fe44bebe87cfbc08e6b5e0c704af10993fb15f",
+    ),
+    (
+        "formal/hx/hFSDH.pv",
+        "dc87046c29964180e4ceae349b9fef6fc12dcbb4c279a22312aa3e72bbc3a0ec",
+    ),
+    (
+        "formal/hx/hFSOPK.pv",
+        "ac8df3c07a2cb1212e99d60e4e9434ce0565bd7c580f33822a41acb6857e8e75",
+    ),
+    (
+        "formal/hx/hId.pv",
+        "4ed5e5205221c86e6466f090eb6f633341ddc6958b967ead56406d996fda3c52",
+    ),
+    (
+        "formal/hx/hIdLater.pv",
+        "2c6b2265c7b7af98682cd63aac9daf20918cadeab2377c814d88c954d98d53fa",
+    ),
+    (
+        "formal/hx/hIdLaterOPK.pv",
+        "43b483e056a221ca357ade4989739caeaaaffad0a2e9eb7b61b3a217b956b85e",
+    ),
+    (
+        "formal/hx/hIdThief.pv",
+        "a2c855940c688a0481ea7267e45f3314c898c68c749de8111975984c4f48abe5",
+    ),
+    (
+        "formal/hx/hKCI-auth.pv",
+        "8522b9cd5498383881db47f166976d5bf79c1c4a5fbf9252426e8660e425d3a8",
+    ),
+    (
+        "formal/hx/hKCI.pv",
+        "eaf38619a061040a35770e3a486d5f85e2055d4a6c8c792fe5c867d941188113",
+    ),
+    (
+        "formal/hx/hKCIi.pv",
+        "df6fe825f759a5c43d481e0bc6c5a595195864fa1acccb81c5bdea744dce84e9",
+    ),
+    (
+        "formal/hx/hKCIlt-auth.pv",
+        "c2f9a718b3711ee570b0e5c40ca9ab407c54c03904e1241931e56ffa83f8a0bb",
+    ),
+    (
+        "formal/hx/hKCIlt.pv",
+        "7157b89d3d9cab0cf5d673f2476b506fd32a3b4aeada6373ab1e174b1a6bab4c",
+    ),
+    (
+        "formal/hx/hKEM-auth.pv",
+        "c7cdd46c57d744a6630e2a3f3cc0fd355a69ce670f7492f494d5a6c4fe4978b9",
+    ),
+    (
+        "formal/hx/hKEM.pv",
+        "016d5c86fb75efaf6706034fb4d6e0d7f3a7316c45667fedb6e6c227e8c3a967",
+    ),
+];
 
 /// One expected `RESULT` line of a SecMP-HX session model: (file stem under [`PROVERIF_HX_DIR`], `formal/CLAIMS.md` ID,
 /// query text, expected verdict). The query text is what ProVerif prints between `RESULT ` and the final ` is true.`,

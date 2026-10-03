@@ -1,12 +1,13 @@
 (* SPDX-License-Identifier: AGPL-3.0-or-later *)
-(* formal/hx/hKCIlt-auth.pv — session hKCIlt of CLAIMS §HX, its begin-IStart declaration (O-22) over the library
-   formal/hx.pvl (model, abstractions, devices: its header). Run: proverif -lib formal/hx.pvl formal/hx/hKCIlt-auth.pv
+(* formal/hx/hKCIlt-auth.pv — session hKCIlt of CLAIMS §HX, its begin-IStart declaration (O-22) and one H11 line over the
+   library formal/hx.pvl (model, abstractions, devices: its header). Run: proverif -lib formal/hx.pvl formal/hx/hKCIlt-auth.pv
 
    Row (formal/hx.pvl 3.): as hKCIlt.pv plus the attacker as inviter: I on c with event IStart (ProcIPA, O-20;
    O-21 withdrawn), only on bundles that verify under IK_sig_R (O-23); search devices (O-24).
    Queries (RESULT lines in this order; expected per the CLAIMS gate rule):
+     no begin event:    H11 (1) false (the honest pair completes in this file: M4 review C-7, erratum 5)
      begin IStart:      H9b (1) true
-   — 1 RESULT line. The other declarations of the session are in hKCIlt.pv.
+   — 2 RESULT lines. The other declarations of the session are in hKCIlt.pv.
 *)
 
 const hKCIlt: tagt.
@@ -29,6 +30,13 @@ not attacker(kemsk(hKCIlt, kRPK)).
 
 (* Queries (CLAIMS.md §HX), ordered by begin event (O-22); IKSPublic of the honest parties:
    iks(vk(iksig(s, pR)), exp(g, dhsk(s, kIKR))) and iks(vk(iksig(s, pI)), exp(g, dhsk(s, kIKI))). *)
+
+query iI: bitstring, iR: bitstring, b: bitstring, tr: bitstring, rt: bitstring, sk: key, ld: bitstring,
+      oid: bitstring, s2: tagt;
+      (* H11: reachability sanity of this file (CLAIMS H11, erratum 5): the honest pair completes, so the begin-IStart
+         declaration below is not vacuous *)
+      event(RAccept(hKCIlt, iR, iks(vk(iksig(hKCIlt, pI)), exp(g, dhsk(hKCIlt, kIKI))), ld, oid, tr, rt, sk))
+        && event(IStart(hKCIlt, iks(vk(iksig(hKCIlt, pI)), exp(g, dhsk(hKCIlt, kIKI))), iR, b, tr, rt, sk)).
 
 query iI: bitstring, iR: bitstring, b: bitstring, tr: bitstring, rt: bitstring, sk: key, ld: bitstring,
       oid: bitstring, s2: tagt;

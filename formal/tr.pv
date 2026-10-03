@@ -423,7 +423,7 @@ not x: bitstring; attacker(kemsk(sHFS, x)) phase 0.
 
 (* ---------------------------------------------------------------- queries (CLAIMS.md §TR, in ID order) ------- *)
 
-(* Two declarations (8.): T1–T2, then T3–T12. Every query (one RESULT line each) has its "Tk" comment directly
+(* Two declarations (8.): T1–T2, then T3–T13. Every query (one RESULT line each) has its "Tk" comment directly
    above it; the RESULT lines appear in this order. *)
 
 query i: bitstring, n: bitstring, x: bitstring;

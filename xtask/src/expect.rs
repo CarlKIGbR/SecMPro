@@ -680,11 +680,11 @@ pub(crate) const PROVERIF_EXPECTED_TR: &[HxExpected] = &[
 pub(crate) const PROVERIF_MODEL_SHA256: &[(&str, &str)] = &[
     (
         "formal/tr.pv",
-        "09ba6cbb57f05de142cc18cdae2694c826ea7ecdf03b411c505945492957a1ef",
+        "e613eceb4f776aaa73b78f6ae4af63c5cb65b48ae49997b2f02bc48929a2211f",
     ),
     (
         "formal/hx.pvl",
-        "885adf37f8e24ea48aba117ef893db8ed2f45af919c4c91c864de78a3aa0c867",
+        "a24b1a50637c7b13d22c8e23568d1d402d18b8e7650d4bd65b85261505f3d20b",
     ),
     (
         "formal/hx/hBoth.pv",
@@ -692,7 +692,7 @@ pub(crate) const PROVERIF_MODEL_SHA256: &[(&str, &str)] = &[
     ),
     (
         "formal/hx/hClean-auth.pv",
-        "7439c394a99aae7566cf5447b0babd53c0a87a7e0d78bb1830f9ad3991b1cc57",
+        "d7e0a63c0f5efa2c75ae63049ffe39b3b8aa81db62db2b6a1e36812609201d6e",
     ),
     (
         "formal/hx/hClean.pv",
@@ -700,7 +700,7 @@ pub(crate) const PROVERIF_MODEL_SHA256: &[(&str, &str)] = &[
     ),
     (
         "formal/hx/hDH-auth.pv",
-        "49a3fad652cf4e18f112b6ba862c26e2af42edcb6c506ba0b8aa9fc628eef3e5",
+        "1beed1798581053ce0f200da6f7bcba2296604334aff0485cdc906ac07babe59",
     ),
     (
         "formal/hx/hDH.pv",
@@ -736,7 +736,7 @@ pub(crate) const PROVERIF_MODEL_SHA256: &[(&str, &str)] = &[
     ),
     (
         "formal/hx/hKCI-auth.pv",
-        "8522b9cd5498383881db47f166976d5bf79c1c4a5fbf9252426e8660e425d3a8",
+        "d6c5870001a50f9f639a5571821ea96d1c1e1fd844ffd6a973a5437870b686d3",
     ),
     (
         "formal/hx/hKCI.pv",
@@ -748,7 +748,7 @@ pub(crate) const PROVERIF_MODEL_SHA256: &[(&str, &str)] = &[
     ),
     (
         "formal/hx/hKCIlt-auth.pv",
-        "c2f9a718b3711ee570b0e5c40ca9ab407c54c03904e1241931e56ffa83f8a0bb",
+        "3ddae9f7502f3b90851ac2e4ff574ccd0312928234d01e0ce3631d414021f812",
     ),
     (
         "formal/hx/hKCIlt.pv",
@@ -756,7 +756,7 @@ pub(crate) const PROVERIF_MODEL_SHA256: &[(&str, &str)] = &[
     ),
     (
         "formal/hx/hKEM-auth.pv",
-        "c7cdd46c57d744a6630e2a3f3cc0fd355a69ce670f7492f494d5a6c4fe4978b9",
+        "307f29dd51c29771404d930e44d640291263b2b133be711f39fcc75f724ccc76",
     ),
     (
         "formal/hx/hKEM.pv",
@@ -778,12 +778,13 @@ pub(crate) type HxExpected = (&'static str, &'static str, &'static str, Proved);
 /// Derived from the session files' queries in ProVerif 2.05's display form (spaces removed; `b_2`, `tr_2`, `rt_2`,
 /// `sk_2`, `ld_N` with N = 4 + the `Leak`/`RevOPK` calls of the file's `Invitation`; `attacker_p1` in files with a
 /// phase 1; `not (…)` for reachability queries). WEISUNG M4-7 (O-20…O-22): 19 files — the 14 session files and the
-/// auth files `hClean-auth`, `hKEM-auth`, `hDH-auth`, `hKCI-auth`, `hKCIlt-auth`, each with only the begin-`IStart`
-/// declaration (H5/H8/H9/H9b; `ld_6`, `b_3`, `tr_3`, `rt_3`, `sk_3`: the attacker-as-inviter process adds bindings);
-/// declarations ordered no-begin, H6b, H10, H6a. The 82 rows of the session files equal the printed `RESULT` lines of
-/// the M4-7 runs; the 5 auth rows equal the `-- Query` line ProVerif prints before solving (the same text as its
-/// `RESULT` line). Expected verdict: the `formal/CLAIMS.md` gate rule. One entry per line;
-/// `rustfmt` leaves the table alone.
+/// auth files `hClean-auth`, `hKEM-auth`, `hDH-auth`, `hKCI-auth`, `hKCIlt-auth`, each with the begin-`IStart`
+/// declaration (H5/H8/H9/H9b; `ld_6`, `b_3`, `tr_3`, `rt_3`, `sk_3`: the attacker-as-inviter process adds bindings)
+/// and, since the M4 review (C-7, erratum 5), one H11 line before it (the honest pair, same bindings); declarations
+/// ordered no-begin, H6b, H10, H6a. The 82 rows of the session files equal the printed `RESULT` lines of the M4-7 runs;
+/// the 10 auth rows equal the `RESULT` lines of the M4-fix run (`docs/reviews/M04-evidence/proverif-hx-<head>.txt`) —
+/// 92 in total. Expected verdict: the `formal/CLAIMS.md` gate rule. One entry per line; `rustfmt` leaves the table
+/// alone.
 #[rustfmt::skip]
 pub(crate) const PROVERIF_EXPECTED_HX: &[HxExpected] = &[
     ("hClean", "H1 (i)", "not (event(IStart(hClean,iI,iks(vk(iksig(hClean,pR)),exp(g,dhsk(hClean,kIKR))),b_2,tr_2,rt_2,sk_2)) && attacker(sk_2))", Proved::True),
@@ -795,6 +796,7 @@ pub(crate) const PROVERIF_EXPECTED_HX: &[HxExpected] = &[
     ("hClean", "H6b", "inj-event(IConfirm(hClean,iI,iks(vk(iksig(hClean,pR)),exp(g,dhsk(hClean,kIKR))),tr_2,sk_2)) ==> inj-event(RAccept(hClean,iks(vk(iksig(hClean,pR)),exp(g,dhsk(hClean,kIKR))),iI,ld_5,oid,tr_2,rt_2,sk_2))", Proved::True),
     ("hClean", "H10", "inj-event(RAccept(hClean,iR,iI,ld_5,oid,tr_2,rt_2,sk_2)) ==> inj-event(InvIssued(hClean,iR,ld_5,oid))", Proved::True),
     ("hClean", "H6a", "event(IStart(hClean,iI,iks(vk(iksig(hClean,pR)),exp(g,dhsk(hClean,kIKR))),b_2,tr_2,rt_2,sk_2)) ==> event(BundleSigned(s2,iks(vk(iksig(hClean,pR)),exp(g,dhsk(hClean,kIKR))),b_2))", Proved::True),
+    ("hClean-auth", "H11", "not (event(RAccept(hClean,iR,iks(vk(iksig(hClean,pI)),exp(g,dhsk(hClean,kIKI))),ld_6,oid,tr_3,rt_3,sk_3)) && event(IStart(hClean,iks(vk(iksig(hClean,pI)),exp(g,dhsk(hClean,kIKI))),iR,b_3,tr_3,rt_3,sk_3)))", Proved::False),
     ("hClean-auth", "H5", "inj-event(RAccept(hClean,iR,iks(vk(iksig(hClean,pI)),exp(g,dhsk(hClean,kIKI))),ld_6,oid,tr_3,rt_3,sk_3)) ==> inj-event(IStart(hClean,iks(vk(iksig(hClean,pI)),exp(g,dhsk(hClean,kIKI))),iR,b_3,tr_3,rt_3,sk_3))", Proved::True),
     ("hDH", "H2 (i)", "not (event(IStart(hDH,iI,iks(vk(iksig(hDH,pR)),exp(g,dhsk(hDH,kIKR))),b_2,tr_2,rt_2,sk_2)) && attacker(sk_2))", Proved::True),
     ("hDH", "H2 (ii)", "not (event(RAccept(hDH,iR,iks(vk(iksig(hDH,pI)),exp(g,dhsk(hDH,kIKI))),ld_5,oid,tr_2,rt_2,sk_2)) && event(IStart(hDH,iks(vk(iksig(hDH,pI)),exp(g,dhsk(hDH,kIKI))),iR,b_2,tr_2,rt_2,sk_2)) && attacker(sk_2))", Proved::True),
@@ -802,6 +804,7 @@ pub(crate) const PROVERIF_EXPECTED_HX: &[HxExpected] = &[
     ("hDH", "H11", "not event(BundleSigned(hDH,iR,b_2))", Proved::False),
     ("hDH", "H11", "not (event(RAccept(hDH,iR,iks(vk(iksig(hDH,pI)),exp(g,dhsk(hDH,kIKI))),ld_5,oid,tr_2,rt_2,sk_2)) && event(IStart(hDH,iks(vk(iksig(hDH,pI)),exp(g,dhsk(hDH,kIKI))),iR,b_2,tr_2,rt_2,sk_2)))", Proved::False),
     ("hDH", "H11", "not event(IConfirm(hDH,iks(vk(iksig(hDH,pI)),exp(g,dhsk(hDH,kIKI))),iks(vk(iksig(hDH,pR)),exp(g,dhsk(hDH,kIKR))),tr_2,sk_2))", Proved::False),
+    ("hDH-auth", "H11", "not (event(RAccept(hDH,iR,iks(vk(iksig(hDH,pI)),exp(g,dhsk(hDH,kIKI))),ld_6,oid,tr_3,rt_3,sk_3)) && event(IStart(hDH,iks(vk(iksig(hDH,pI)),exp(g,dhsk(hDH,kIKI))),iR,b_3,tr_3,rt_3,sk_3)))", Proved::False),
     ("hDH-auth", "H8", "inj-event(RAccept(hDH,iR,iks(vk(iksig(hDH,pI)),exp(g,dhsk(hDH,kIKI))),ld_6,oid,tr_3,rt_3,sk_3)) ==> inj-event(IStart(hDH,iks(vk(iksig(hDH,pI)),exp(g,dhsk(hDH,kIKI))),iR,b_3,tr_3,rt_3,sk_3))", Proved::False),
     ("hKEM", "H3 (i)", "not (event(IStart(hKEM,iI,iks(vk(iksig(hKEM,pR)),exp(g,dhsk(hKEM,kIKR))),b_2,tr_2,rt_2,sk_2)) && attacker(sk_2))", Proved::True),
     ("hKEM", "H3 (ii)", "not (event(RAccept(hKEM,iR,iks(vk(iksig(hKEM,pI)),exp(g,dhsk(hKEM,kIKI))),ld_5,oid,tr_2,rt_2,sk_2)) && attacker(sk_2))", Proved::True),
@@ -809,6 +812,7 @@ pub(crate) const PROVERIF_EXPECTED_HX: &[HxExpected] = &[
     ("hKEM", "H11", "not event(BundleSigned(hKEM,iR,b_2))", Proved::False),
     ("hKEM", "H11", "not (event(RAccept(hKEM,iR,iks(vk(iksig(hKEM,pI)),exp(g,dhsk(hKEM,kIKI))),ld_5,oid,tr_2,rt_2,sk_2)) && event(IStart(hKEM,iks(vk(iksig(hKEM,pI)),exp(g,dhsk(hKEM,kIKI))),iR,b_2,tr_2,rt_2,sk_2)))", Proved::False),
     ("hKEM", "H11", "not event(IConfirm(hKEM,iks(vk(iksig(hKEM,pI)),exp(g,dhsk(hKEM,kIKI))),iks(vk(iksig(hKEM,pR)),exp(g,dhsk(hKEM,kIKR))),tr_2,sk_2))", Proved::False),
+    ("hKEM-auth", "H11", "not (event(RAccept(hKEM,iR,iks(vk(iksig(hKEM,pI)),exp(g,dhsk(hKEM,kIKI))),ld_6,oid,tr_3,rt_3,sk_3)) && event(IStart(hKEM,iks(vk(iksig(hKEM,pI)),exp(g,dhsk(hKEM,kIKI))),iR,b_3,tr_3,rt_3,sk_3)))", Proved::False),
     ("hKEM-auth", "H5", "inj-event(RAccept(hKEM,iR,iks(vk(iksig(hKEM,pI)),exp(g,dhsk(hKEM,kIKI))),ld_6,oid,tr_3,rt_3,sk_3)) ==> inj-event(IStart(hKEM,iks(vk(iksig(hKEM,pI)),exp(g,dhsk(hKEM,kIKI))),iR,b_3,tr_3,rt_3,sk_3))", Proved::True),
     ("hBoth", "H4", "not (event(IStart(hBoth,iI,iks(vk(iksig(hBoth,pR)),exp(g,dhsk(hBoth,kIKR))),b_2,tr_2,rt_2,sk_2)) && attacker(sk_2))", Proved::False),
     ("hBoth", "H11", "not event(IStart(hBoth,iks(vk(iksig(hBoth,pI)),exp(g,dhsk(hBoth,kIKI))),iks(vk(iksig(hBoth,pR)),exp(g,dhsk(hBoth,kIKR))),b_2,tr_2,rt_2,sk_2))", Proved::False),
@@ -844,11 +848,13 @@ pub(crate) const PROVERIF_EXPECTED_HX: &[HxExpected] = &[
     ("hKCI", "H11", "not event(BundleSigned(hKCI,iR,b_2))", Proved::False),
     ("hKCI", "H11", "not (event(RAccept(hKCI,iR,iks(vk(iksig(hKCI,pI)),exp(g,dhsk(hKCI,kIKI))),ld_5,oid,tr_2,rt_2,sk_2)) && event(IStart(hKCI,iks(vk(iksig(hKCI,pI)),exp(g,dhsk(hKCI,kIKI))),iR,b_2,tr_2,rt_2,sk_2)))", Proved::False),
     ("hKCI", "H11", "not event(IConfirm(hKCI,iks(vk(iksig(hKCI,pI)),exp(g,dhsk(hKCI,kIKI))),iks(vk(iksig(hKCI,pR)),exp(g,dhsk(hKCI,kIKR))),tr_2,sk_2))", Proved::False),
+    ("hKCI-auth", "H11", "not (event(RAccept(hKCI,iR,iks(vk(iksig(hKCI,pI)),exp(g,dhsk(hKCI,kIKI))),ld_6,oid,tr_3,rt_3,sk_3)) && event(IStart(hKCI,iks(vk(iksig(hKCI,pI)),exp(g,dhsk(hKCI,kIKI))),iR,b_3,tr_3,rt_3,sk_3)))", Proved::False),
     ("hKCI-auth", "H9", "inj-event(RAccept(hKCI,iR,iks(vk(iksig(hKCI,pI)),exp(g,dhsk(hKCI,kIKI))),ld_6,oid,tr_3,rt_3,sk_3)) ==> inj-event(IStart(hKCI,iks(vk(iksig(hKCI,pI)),exp(g,dhsk(hKCI,kIKI))),iR,b_3,tr_3,rt_3,sk_3))", Proved::False),
     ("hKCIlt", "H11", "not event(IStart(hKCIlt,iks(vk(iksig(hKCIlt,pI)),exp(g,dhsk(hKCIlt,kIKI))),iks(vk(iksig(hKCIlt,pR)),exp(g,dhsk(hKCIlt,kIKR))),b_2,tr_2,rt_2,sk_2))", Proved::False),
     ("hKCIlt", "H11", "not event(BundleSigned(hKCIlt,iR,b_2))", Proved::False),
     ("hKCIlt", "H11", "not (event(RAccept(hKCIlt,iR,iks(vk(iksig(hKCIlt,pI)),exp(g,dhsk(hKCIlt,kIKI))),ld_5,oid,tr_2,rt_2,sk_2)) && event(IStart(hKCIlt,iks(vk(iksig(hKCIlt,pI)),exp(g,dhsk(hKCIlt,kIKI))),iR,b_2,tr_2,rt_2,sk_2)))", Proved::False),
     ("hKCIlt", "H11", "not event(IConfirm(hKCIlt,iks(vk(iksig(hKCIlt,pI)),exp(g,dhsk(hKCIlt,kIKI))),iks(vk(iksig(hKCIlt,pR)),exp(g,dhsk(hKCIlt,kIKR))),tr_2,sk_2))", Proved::False),
+    ("hKCIlt-auth", "H11", "not (event(RAccept(hKCIlt,iR,iks(vk(iksig(hKCIlt,pI)),exp(g,dhsk(hKCIlt,kIKI))),ld_6,oid,tr_3,rt_3,sk_3)) && event(IStart(hKCIlt,iks(vk(iksig(hKCIlt,pI)),exp(g,dhsk(hKCIlt,kIKI))),iR,b_3,tr_3,rt_3,sk_3)))", Proved::False),
     ("hKCIlt-auth", "H9b", "inj-event(RAccept(hKCIlt,iR,iks(vk(iksig(hKCIlt,pI)),exp(g,dhsk(hKCIlt,kIKI))),ld_6,oid,tr_3,rt_3,sk_3)) ==> inj-event(IStart(hKCIlt,iks(vk(iksig(hKCIlt,pI)),exp(g,dhsk(hKCIlt,kIKI))),iR,b_3,tr_3,rt_3,sk_3))", Proved::True),
     ("hKCIi", "H9c", "not (event(IStart(hKCIi,iI,iks(vk(iksig(hKCIi,pR)),exp(g,dhsk(hKCIi,kIKR))),b_2,tr_2,rt_2,sk_2)) && attacker(sk_2))", Proved::True),
     ("hKCIi", "H11", "not event(IStart(hKCIi,iks(vk(iksig(hKCIi,pI)),exp(g,dhsk(hKCIi,kIKI))),iks(vk(iksig(hKCIi,pR)),exp(g,dhsk(hKCIi,kIKR))),b_2,tr_2,rt_2,sk_2))", Proved::False),

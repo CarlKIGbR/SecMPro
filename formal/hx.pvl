@@ -1,7 +1,7 @@
 (* SPDX-License-Identifier: AGPL-3.0-or-later *)
 (* formal/hx.pvl — library of the SecMP-HX models: SecMP-HX (docs/03 §6) with SecMP-INV (§5.4, §5.5) and the first
    SecMP-TR cell (§7.2–§7.4, abstracted, O-15) as used by the handshake. Query set: formal/CLAIMS.md §HX (H1–H12c,
-   fixed by the reviewer; ADR-026, docs/03 §11.2; reviewer decisions O-13…O-19). Properties: docs/03 §11.1 row "HX".
+   fixed by the reviewer; ADR-026, docs/03 §11.2; reviewer decisions O-13…O-24). Properties: docs/03 §11.1 row "HX".
    One model file per session (O-18, ADR-046): formal/hx/<session>.pv holds the session's instantiation, compromise,
    oracles, phases and queries (five sessions also have formal/hx/<session>-auth.pv with the begin-IStart declaration,
    O-22); this library holds types, constructors, equations, events and process macros.

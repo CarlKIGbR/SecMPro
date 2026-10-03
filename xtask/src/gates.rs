@@ -4272,7 +4272,8 @@ mod tests {
     /// M4 review C-7 (ADR-046 Amendment 1 (2)): the expected tables against `formal/CLAIMS.md` in both directions —
     /// `tr`: the IDs in order, each once, every line with its row's verdict; HX: every entry's ID (up to its first space:
     /// "H1 (i)" is row H1) is a row of §HX with the entry's verdict, every §HX row expected true or false has at least
-    /// one entry, H11 has exactly four entries per base file (a file without `-auth`). Returns the findings.
+    /// one entry, H11 has exactly four entries per base file (a file without `-auth`) and one per auth file (erratum
+    /// 5). Returns the findings.
     fn claims_table_findings(
         claims: &str,
         tr: &[expect::HxExpected],
@@ -4317,15 +4318,18 @@ mod tests {
                 ));
             }
         }
-        for file in hx_table_files(hx).iter().filter(|f| !f.ends_with("-auth")) {
+        for file in hx_table_files(hx) {
             let n = hx
                 .iter()
-                .filter(|(f, id, ..)| f == file && *id == "H11")
+                .filter(|(f, id, ..)| *f == file && *id == "H11")
                 .count();
-            if n != 4 {
-                out.push(format!(
-                    "{file}: {n} H11 entries, CLAIMS H11 has four per base file"
-                ));
+            let (want, what) = if file.ends_with("-auth") {
+                (1, "one per auth file")
+            } else {
+                (4, "four per base file")
+            };
+            if n != want {
+                out.push(format!("{file}: {n} H11 entries, CLAIMS H11 has {what}"));
             }
         }
         out
@@ -4410,15 +4414,27 @@ mod tests {
             claims_table_findings(&claims, tr, &three_h11),
             vec!["hClean: 3 H11 entries, CLAIMS H11 has four per base file".to_owned()]
         );
-        for file in hx_table_files(hx).iter().filter(|f| !f.ends_with("-auth")) {
+        // ... and one per auth file (erratum 5): 92 entries in all
+        for file in hx_table_files(hx) {
+            let want = if file.ends_with("-auth") { 1 } else { 4 };
             assert_eq!(
                 hx.iter()
-                    .filter(|(f, id, ..)| f == file && *id == "H11")
+                    .filter(|(f, id, ..)| *f == file && *id == "H11")
                     .count(),
-                4,
+                want,
                 "{file}"
             );
         }
+        assert_eq!(hx.len(), 92);
+        let no_auth_h11: Vec<expect::HxExpected> = hx
+            .iter()
+            .copied()
+            .filter(|(f, id, ..)| !(*f == "hKEM-auth" && *id == "H11"))
+            .collect();
+        assert_eq!(
+            claims_table_findings(&claims, tr, &no_auth_h11),
+            vec!["hKEM-auth: 0 H11 entries, CLAIMS H11 has one per auth file".to_owned()]
+        );
         // a §TR row without its lines, and a verdict that differs from CLAIMS
         let no_t12: Vec<expect::HxExpected> = tr
             .iter()

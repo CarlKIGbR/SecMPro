@@ -197,7 +197,10 @@ The M4-fix round adds seven, named in its section: `accept_reject_sites_name_the
 
 Local run of that commit's bench, release, `SECMP_CT_SCALE=6` (166 666 samples per target, 537 s; a shortened run,
 refused by the gate's reader by design; the full local gate needs ≈ 50 min > the 10-min foreground cap):
-`M04-evidence/ct-local-4d92ec2-scale6.txt`. Clock `cntvct_el0`, 1 tick = 41.667 ns = effect floor, k = 1 for all five.
+`M04-evidence/ct-local-4d92ec2-scale6.txt`. Clock `cntvct_el0`, 1 tick = 41.667 ns = effect floor, k = 1 for all five
+targets of the table (erratum FIX-2: four M4 ct targets — `inv_fingerprint_compare`, `x25519_zero_check`,
+`hx_accept_reject_inner`, `hx_accept_reject_first_msg` — plus the respecified M3 target `tr_decrypt_reject_skipped`; the
+evidence file's "the five new targets" reads likewise).
 
 | Target | Pre-check (REACH) | Verdict | Max reproduced shift | Reject site, both classes |
 |---|---|---|---|---|
@@ -471,7 +474,9 @@ comment carries the dictated sentence verbatim.
 PASS on the Mac at `14e55da`** (effect floor 41.7 ns; M4 review E-18: a Linux runner's floor is 10 ns, where the
 reproduced HX shifts of the table below would FAIL — the Linux ct report of the fix head decides, C-2), step 2677 s (≤
 60 min, so the gate scale, not scale 6). Clock `cntvct_el0`, 1 tick = 41.667 ns = effect
-floor, k = 1 for all five, 1 000 000 samples each; Δ = class 0 − class 1 at the decisive or largest-|t| crop.
+floor, k = 1 for all five targets of the table (erratum FIX-2: four M4 ct targets plus the respecified M3 target
+`tr_decrypt_reject_skipped`; `ct-local-14e55da.txt`'s heading "the five M4 targets" reads likewise), 1 000 000 samples
+each; Δ = class 0 − class 1 at the decisive or largest-|t| crop.
 
 | Target | Verdict | First: max \|t\| (crop, Δ floors) | Second | A/A max \|t\| | Pre-check (site) |
 |---|---|---|---|---|---|
@@ -1113,7 +1118,7 @@ Gates and evidence (local, M1 Pro):
 | dictated tests by exact name | 32 + 2 compile_fail doctests PASS | `dictated-tests-0a5d2b6.txt` |
 | vectors | `cargo xtask vectors`: 11 suites identical, every frozen file unchanged; `step ref-vectors` PASS; `git diff e8359b1 -- vectors/` empty | — |
 | policy | PASS, 0 findings (4 workflows; pinned jobs linux-fast, windows-native, xwin-cross, linux-full, ct, mutants-shard, mutants, proverif-hx) | — |
-| Kani (`step --strict kani`) | 25/25 VERIFIED, 1791 s; covers: 2 harnesses, every cover SATISFIED; K4b with the R-64 comparison removed: VERIFICATION:- FAILED (290 s) | `kani-xtask-step-0a5d2b6.txt`, `kani-k4b-negative-control-e5779da.txt` |
+| Kani (`step --strict kani`) | 25/25 VERIFIED, 1791 s (K2a `kani_accept_opk_delete_only_on_success` 514.6 s, K3 `kani_hx_grouping` 348.0 s in this log; erratum VD2-8: REPORT_BRIEF_M4-FIX gave 485 s and 310 s, the single-harness runs during C-10, not this log); covers: 2 harnesses, every cover SATISFIED; K4b with the R-64 comparison removed: VERIFICATION:- FAILED (290 s) | `kani-xtask-step-0a5d2b6.txt`, `kani-k4b-negative-control-e5779da.txt` |
 | ProVerif (`step --strict proverif --models all`, 4 processes) | PASS, 466 s: HX 92/92 lines across 19 files (the five new H11 lines false), `tr` 46/46 by query text (191 s); model hashes 21/21 | `proverif-hx-1eeba8b.txt`, `proverif-tr-1eeba8b.txt`, `proverif-1eeba8b.sha256` |
 | ct (`step --strict ct`, unscaled, alone) | run verdict PASS, 3263 s (54.4 min); `hx_accept_reject_inner` PASS (p50 \|t\| 7.43 / 37.83 with opposite signs, Δ +31.7 / −27.1 ns), `hx_accept_reject_first_msg` PASS (p75 \|t\| 2.52 / 0.14), `hx_same_content_control` SUB_FLOOR_SHIFT (p50 \|t\| 9.38 / 14.90, Δ −4.3 / −7.0 ns, floor 41.7 ns); progress written per phase | `ct-local-0a5d2b6.txt`, `ct-progress-local-0a5d2b6.jsonl`, `ct-report-local-0a5d2b6.json` |
 | mutants, listing | `--list` with the gate selection: secmp-crypto 268, secmp-proto 1026 (1294; 1281 at the pin) | `mutants-list-0a5d2b6.txt` |
@@ -1144,3 +1149,46 @@ the owner's KCI entry, review §D (a)); (11) E-14: the extras counted here are 2
 
 Owner memos (review §D): `ct`, `mutants`, `proverif-hx` as required checks of `main-protection`; CODEOWNERS; docs/01
 RR-16 (KCI on the signed prekey) — RR-16 is left free for it, the three M3 rows are RR-17…RR-19.
+
+## M4-FIX-2 — delta-verifier and external-review items (WEISUNG M4-FIX-2, 2026-10-03)
+
+Head before `cac6eff` (= `origin/m04-hx`, PR #5); PR run 37127247911 live, so the commits stay local (no push). One
+commit per item, the `R-nn`/`VDn-n` tag in each message; no agent worktree; every commit on `m04-hx`. No budget, floor,
+threshold, exclusion or expected verdict changed; `kani_proofs.rs` unchanged, so no Kani run (Weisung).
+
+| Item | Commit | Files | Tests (all PASS) | Notes |
+|---|---|---|---|---|
+| 1 R-94 (Codex EXT-6) | `72d4c90` | `xtask/src/gates.rs` | `kat_portable_rerun_includes_the_hx_suite` | `KAT_PORTABLE_RERUN`: `secmp-proto` → `tr_vectors`, `hx` (the whole target: 129 tests, 12.6 s on the portable backend); comment and Pass text corrected; the ci-fast `kat` log shows `--test tr_vectors --test hx` under `target/kat-portable` |
+| 2 VD2-1 | `797528f` | `hx/responder.rs`, `tests/hx/accept_ok.rs`, report §5.3 | `fifty_rejected_groups_then_an_honest_group_still_accepts`, `drive_does_not_re_form_a_rejected_init_id`, `rejected_init_id_does_not_re_form_within_one_accept` | `MAX_PROCESSED_GROUPS` 42 → 50 = ⌊(128 + 24) / 3⌋, assert kept; one call processes at most 50 complete groups: 49 rejected + honest ⇒ `Ok`, 50 rejected + honest ⇒ `Rejected`, store unchanged (`Processed::is_full`); `accept`/`drive` docs; deviation row §5.3 |
+| 3 VD2-2, R-46 | `b3e3cc8` | `benches/ct.rs`, `tests/hx/accept_ok.rs` | `first_msg_with_nonzero_n_rejects_before_any_chain_step`, `accept_counter_rules_reject_n_before_and_pn_after_the_mac` (renamed from `accept_counter_rules_reject_after_a_valid_mac`) | n ≠ 0 rows: `tr::DECRYPT_SITE_KAT == "counter rule"` (reset before the call); the pn ≠ 0 row: "body MAC", then `ACCEPT_SITE_KAT` "first_msg checks"; ct pre-check of `hx_accept_reject_first_msg` requires "…, tr site body MAC" (scaled local bench run `SECMP_CT_SCALE=1000`: pre-check passed on 5 fixtures) |
+| 4 VD1-2, VD1-4 | `758cda3` | `ci-dispatch.yml`, `xtask/src/expect.rs` (comment), `xtask/src/gates.rs` | `policy_refuses_flow_style_jobs_line` | `dispatch-ct` 300 → 330 min (as `ct`; budget 17 400 s unchanged); a flow-style value on the `jobs:` line is a finding |
+| 5 VD1-5, VD1-6 | `ebfadd0` | `xtask/src/gates.rs`, `xtask/src/expect.rs`, `docs/06:82` | `kani_cover_count_is_pinned` (and `kani_gate_fails_on_an_unsatisfiable_cover` unchanged) | Kani's " (K unreachable)" summary suffix fails the cover check; `expect::KANI_COVERS` (2 harnesses × 1 cover) pinned, the gate fails on a missing, added or doubled summary; docs/06 Miri row per `MIRI_FEATURE_GATED`/`MIRI_UNSUPPORTED` |
+| 6 VD2-3…VD2-7 | `33e7405` | `inv.rs`, `hx/responder.rs`, `tests/hx/{accept,accept_ok,inv}.rs` | `base64url_decode_rejects_invalid_and_dirty_alike`, `accept_every_rejecting_row_counts_no_delete_and_no_draw`, `invitee_bad_ed25519_identity_rejects`, `start_persist_error_is_returned_and_nothing_sent` | invalid-only `"*A"`, `"AAA*"` next to dirty-only `"AB"`; `remaining() == full` (no `\|\| left == 0`); N-22 label via `rejects_at_as`; V-6 doc moved to its test; "spent after `Ok`, retried after `Unavailable`" |
+| 7 docs | this commit | `M04-external.md`, `M04-evidence/review-ext-{codex,glm}-e8359b1.md`, `docs/04:45`, this report, `M04-review.md` | — | docs/04:45 R-37 residual (`link_key` heap `SecretBytes`, ≤ 30 days, until M7); review §C R-94 row, §E D-20…D-26 line; errata below |
+
+Gates (local, M1 Pro, head `33e7405` before this docs commit):
+
+| Gate | Result |
+|---|---|
+| `cargo xtask ci-fast --strict` | PASS, 519 s (fmt, clippy, policy, deny, vet, audit, cooldown, nextest 94 s, doctest, hello, kat 386 s; the `kat` log runs `--test tr_vectors --test hx` under `target/kat-portable`: 131 passed) |
+| `cargo nextest run --workspace --all-features` | 564 passed, 0 failed, 0 skipped (560 at `cac6eff` + 4 new tests) |
+| new/changed tests by name | 13/13 PASS (`fix2-tests-33e7405.txt`) |
+| `cargo xtask step --strict policy` | PASS, 0 findings |
+| `git diff cac6eff -- vectors/ docs/03-protocol-spec.md docs/01-threat-model.md formal/` | empty |
+| `git branch --list 'worktree-agent-*'` | empty |
+
+Errata (FIX-2): VD2-8 — the Kani gate row of the M4-fix section now names K2a 514.6 s and K3 348.0 s from the committed
+`kani-xtask-step-0a5d2b6.txt` (REPORT_BRIEF_M4-FIX had 485 s and 310 s, single-harness runs during C-10); "five" ct
+targets at §7.1 and §12.3 = four M4 ct targets plus the respecified M3 target `tr_decrypt_reject_skipped`; the M4-fix
+C-10 row (`Processed<K, 42>`, "a 43rd rejected group") is superseded by VD2-1 (50, the 50th); the C-1 row's
+"600 s below `dispatch-ct`'s 300 min" by VD1-2 (40 min below 330 min).
+
+Open risk: `drive` (item 2) is inside Kani K2a `kani_accept_opk_delete_only_on_success`; `kani_proofs.rs` is unchanged,
+so per the Weisung Kani was not re-run on the new cap (`Processed` with 50 slots and `is_full`).
+
+Deviations from the Weisung: (1) item 2: its doc phrase "up to 50 rejected groups per call" and its test (50 rejected +
+1 honest ⇒ Rejected) differ by one; implemented as the test says (at most 50 complete groups per call, the 50th
+rejected stops it) and documented that way; (2) item 3: the renamed test also pins the pn ≠ 0 row's sites, beyond the
+n ≠ 0 rows; (3) item 3: the ct pre-check change was run only at `SECMP_CT_SCALE=1000` (no full ct run); (4) item 7
+VD2-8: the report had no K2a/K3 timing (485/310 s were in the chat report only), so the committed-log values were added
+to the Kani row with the erratum.

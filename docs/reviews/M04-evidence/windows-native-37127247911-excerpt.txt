@@ -1,0 +1,94 @@
+# windows-native job 111214947806, PR run 37127247911 (cac6eff): apilog-windows-native.log lines 1125-1145 and 1653-1720
+
+## lines 1125-1145 (clippy)
+2026-10-03T13:53:29.4628891Z [1m[92m   Compiling[0m aws-lc-sys v0.45.0
+2026-10-03T13:53:29.9333412Z [1m[92m    Checking[0m xtask v0.0.0 (D:\a\SecMPro\SecMPro\xtask)
+2026-10-03T13:53:30.2622949Z [1m[92m    Checking[0m secmp-proto v0.0.0 (D:\a\SecMPro\SecMPro\crates\secmp-proto)
+2026-10-03T13:53:32.3750947Z [1m[91merror[0m[1m[97m: constant `STOP_GRACE` is never used[0m
+2026-10-03T13:53:32.3907725Z    [1m[96m--> [0mxtask\src\gates.rs:414:7
+2026-10-03T13:53:32.3979096Z     [1m[96m|[0m
+2026-10-03T13:53:32.4031285Z [1m[96m414[0m [1m[96m|[0m const STOP_GRACE: std::time::Duration = std::time::Duration::from_secs(30);
+2026-10-03T13:53:32.4041729Z     [1m[96m|[0m       [1m[91m^^^^^^^^^^[0m
+2026-10-03T13:53:32.4084681Z     [1m[96m|[0m
+2026-10-03T13:53:32.4112377Z     [1m[96m= [0m[1m[97mnote[0m: `-D dead-code` implied by `-D warnings`
+2026-10-03T13:53:32.4115588Z     [1m[96m= [0m[1m[97mhelp[0m: to override `-D warnings` add `#[expect(dead_code)]` or `#[allow(dead_code)]`
+2026-10-03T13:53:32.4160534Z 
+2026-10-03T13:53:32.8657655Z [1m[91merror[0m: could not compile `xtask` (bin "xtask") due to 1 previous error
+2026-10-03T13:53:32.8665656Z [1m[93mwarning[0m: build failed, waiting for other jobs to finish...
+2026-10-03T13:54:22.4229226Z FAIL [2] clippy: `C:\Users\runneradmin\.rustup\toolchains\1.98.1-x86_64-pc-windows-msvc\bin\cargo.exe clippy --workspace --all-targets --all-features --locked -- -D warnings` failed with exit code: 101
+2026-10-03T13:54:22.4232766Z 
+2026-10-03T13:54:22.4233200Z === [4] nextest ===
+2026-10-03T13:54:22.4913107Z $ C:\Users\runneradmin\.rustup\toolchains\1.98.1-x86_64-pc-windows-msvc\bin\cargo.exe nextest run --workspace --locked
+2026-10-03T13:54:22.9768386Z [1m[92m   Compiling[0m zeroize v1.9.0
+2026-10-03T13:54:22.9769059Z [1m[92m   Compiling[0m cmov v0.5.4
+2026-10-03T13:54:22.9769592Z [1m[92m   Compiling[0m typenum v1.20.1
+
+## lines 1653-1720 (nextest)
+2026-10-03T13:58:18.2660781Z [32;1m        PASS[0m [   0.096s] (431/556) [35;1mxtask::bin/xtask[0m [36mctreport::tests[0m[36m::[0m[34;1mcontrol_fail_runs[0m
+2026-10-03T13:58:18.3140182Z [32;1m        PASS[0m [   0.048s] (432/556) [35;1mxtask::bin/xtask[0m [36mctreport::tests[0m[36m::[0m[34;1mct_check_reads_reports_against_a_chosen_target_set[0m
+2026-10-03T13:58:18.5315979Z [32;1m        PASS[0m [   0.217s] (433/556) [35;1mxtask::bin/xtask[0m [36mctreport::tests[0m[36m::[0m[34;1mfailing_and_unknown_verdicts_fail_the_gate[0m
+2026-10-03T13:58:18.9602664Z [32;1m        PASS[0m [   0.428s] (434/556) [35;1mxtask::bin/xtask[0m [36mctreport::tests[0m[36m::[0m[34;1mparameters_and_malformed_reports[0m
+2026-10-03T13:58:19.2215722Z [32;1m        PASS[0m [   0.263s] (435/556) [35;1mxtask::bin/xtask[0m [36mctreport::tests[0m[36m::[0m[34;1mreads_the_batch_sizes_of_a_requantised_record[0m
+2026-10-03T13:58:19.2719381Z [32;1m        PASS[0m [   0.048s] (436/556) [35;1mxtask::bin/xtask[0m [36mctreport::tests[0m[36m::[0m[34;1mrefuses_a_duplicated_target[0m
+2026-10-03T13:58:19.3598643Z [32;1m        PASS[0m [   0.088s] (437/556) [35;1mxtask::bin/xtask[0m [36mctreport::tests[0m[36m::[0m[34;1mrefuses_a_fail_run_without_a_failing_target[0m
+2026-10-03T13:58:19.4744724Z [32;1m        PASS[0m [   0.114s] (438/556) [35;1mxtask::bin/xtask[0m [36mctreport::tests[0m[36m::[0m[34;1mrefuses_a_missing_or_undetected_positive_control[0m
+2026-10-03T13:58:19.5895481Z [32;1m        PASS[0m [   0.115s] (439/556) [35;1mxtask::bin/xtask[0m [36mctreport::tests[0m[36m::[0m[34;1mrefuses_a_sensitivity_control_not_bound_to_tag_compare[0m
+2026-10-03T13:58:19.7079411Z [32;1m        PASS[0m [   0.121s] (440/556) [35;1mxtask::bin/xtask[0m [36mctreport::tests[0m[36m::[0m[34;1mrefuses_a_sub_floor_shift_next_to_a_relevant_crop[0m
+2026-10-03T13:58:19.9016270Z [32;1m        PASS[0m [   0.191s] (441/556) [35;1mxtask::bin/xtask[0m [36mctreport::tests[0m[36m::[0m[34;1mrefuses_a_verdict_the_crops_do_not_give[0m
+2026-10-03T13:58:20.0025374Z [32;1m        PASS[0m [   0.101s] (442/556) [35;1mxtask::bin/xtask[0m [36mctreport::tests[0m[36m::[0m[34;1mrefuses_an_aa_control_above_its_threshold[0m
+2026-10-03T13:58:20.2481632Z [32;1m        PASS[0m [   0.246s] (443/556) [35;1mxtask::bin/xtask[0m [36mctreport::tests[0m[36m::[0m[34;1mrefuses_an_effective_quantum_above_the_clock_bound[0m
+2026-10-03T13:58:20.3292189Z [32;1m        PASS[0m [   0.081s] (444/556) [35;1mxtask::bin/xtask[0m [36mctreport::tests[0m[36m::[0m[34;1mrefuses_an_effective_quantum_below_one_tick[0m
+2026-10-03T13:58:20.4094495Z [32;1m        PASS[0m [   0.080s] (445/556) [35;1mxtask::bin/xtask[0m [36mctreport::tests[0m[36m::[0m[34;1mrefuses_another_target_as_the_positive_control[0m
+2026-10-03T13:58:20.4911630Z [32;1m        PASS[0m [   0.082s] (446/556) [35;1mxtask::bin/xtask[0m [36mctreport::tests[0m[36m::[0m[34;1mrefuses_another_target_set[0m
+2026-10-03T13:58:20.6404604Z [32;1m        PASS[0m [   0.149s] (447/556) [35;1mxtask::bin/xtask[0m [36mctreport::tests[0m[36m::[0m[34;1mrefuses_short_sample_counts_and_a_scaled_run[0m
+2026-10-03T13:58:20.9207653Z [32;1m        PASS[0m [   0.281s] (448/556) [35;1mxtask::bin/xtask[0m [36mctreport::tests[0m[36m::[0m[34;1msensitivity_control[0m
+2026-10-03T13:58:21.2176169Z [32;1m        PASS[0m [   0.296s] (449/556) [35;1mxtask::bin/xtask[0m [36mctreport::tests[0m[36m::[0m[34;1msensitivity_rounding_edges[0m
+2026-10-03T13:58:21.4318735Z [32;1m        PASS[0m [   0.214s] (450/556) [35;1mxtask::bin/xtask[0m [36mctreport::tests[0m[36m::[0m[34;1mthe_aa_prime_control_fails_the_run_as_control_fail[0m
+2026-10-03T13:58:21.6521721Z [32;1m        PASS[0m [   0.220s] (451/556) [35;1mxtask::bin/xtask[0m [36mctreport::tests[0m[36m::[0m[34;1mthe_committed_amendment_1_reports_pass[0m
+2026-10-03T13:58:22.0824109Z [32;1m        PASS[0m [   0.430s] (452/556) [35;1mxtask::bin/xtask[0m [36mctreport::tests[0m[36m::[0m[34;1mthe_effect_floor_is_tight_on_both_sides[0m
+2026-10-03T13:58:22.3194253Z [32;1m        PASS[0m [   0.237s] (453/556) [35;1mxtask::bin/xtask[0m [36mctreport::tests[0m[36m::[0m[34;1mthe_hx_same_content_control_fails_the_run_as_control_fail[0m
+2026-10-03T13:58:22.5546027Z [32;1m        PASS[0m [   0.235s] (454/556) [35;1mxtask::bin/xtask[0m [36mctreport::tests[0m[36m::[0m[34;1mthe_positive_control_is_checked_whatever_its_label[0m
+2026-10-03T13:58:22.7908861Z [32;1m        PASS[0m [   0.236s] (455/556) [35;1mxtask::bin/xtask[0m [36mctreport::tests[0m[36m::[0m[34;1mthe_same_content_control_fails_the_run_as_control_fail[0m
+2026-10-03T13:58:23.1711401Z [32;1m        PASS[0m [   0.380s] (456/556) [35;1mxtask::bin/xtask[0m [36mctreport::tests[0m[36m::[0m[34;1mthe_t_threshold_is_tight_on_both_sides[0m
+2026-10-03T13:58:23.1844513Z [32;1m        PASS[0m [   0.013s] (457/556) [35;1mxtask::bin/xtask[0m [36mfuzzseed::tests[0m[36m::[0m[34;1mencodings_structures_map_to_selectors[0m
+2026-10-03T13:58:23.1979062Z [32;1m        PASS[0m [   0.014s] (458/556) [35;1mxtask::bin/xtask[0m [36mfuzzseed::tests[0m[36m::[0m[34;1mseeds_follow_the_target_layouts[0m
+2026-10-03T13:58:24.2676406Z [32;1m        PASS[0m [   1.069s] (459/556) [35;1mxtask::bin/xtask[0m [36mfuzzseed::tests[0m[36m::[0m[34;1mthe_frozen_vectors_seed_every_target[0m
+2026-10-03T13:58:24.2810341Z [32;1m        PASS[0m [   0.013s] (460/556) [35;1mxtask::bin/xtask[0m [36mfuzzseed::tests[0m[36m::[0m[34;1mthe_rules_name_listed_targets_and_frozen_suites[0m
+2026-10-03T13:58:24.2935517Z [32;1m        PASS[0m [   0.013s] (461/556) [35;1mxtask::bin/xtask[0m [36mgates::tests[0m[36m::[0m[34;1ma_failed_precheck_fails_the_gate[0m
+2026-10-03T13:58:24.3061815Z [32;1m        PASS[0m [   0.012s] (462/556) [35;1mxtask::bin/xtask[0m [36mgates::tests[0m[36m::[0m[34;1mcoverage_grouping[0m
+2026-10-03T13:58:24.3188860Z [32;1m        PASS[0m [   0.012s] (463/556) [35;1mxtask::bin/xtask[0m [36mgates::tests[0m[36m::[0m[34;1mcoverage_ignores_test_files[0m
+2026-10-03T13:58:24.3310129Z [32;1m        PASS[0m [   0.013s] (464/556) [35;1mxtask::bin/xtask[0m [36mgates::tests[0m[36m::[0m[34;1mct_bench_executable_is_read_from_cargo_messages[0m
+2026-10-03T13:58:25.0964951Z [32;1m        PASS[0m [   0.764s] (465/556) [35;1mxtask::bin/xtask[0m [36mgates::tests[0m[36m::[0m[34;1mct_gate_rejects_unknown_site[0m
+2026-10-03T13:58:26.1132099Z [31;1m        FAIL[0m [   1.017s] (466/556) [35;1mxtask::bin/xtask[0m [36mgates::tests[0m[36m::[0m[34;1mct_gate_timeout_is_a_fail_naming_the_target[0m
+2026-10-03T13:58:26.1134271Z [31;1m [0m [31;1mstdout[0m [31;1m───[0m
+2026-10-03T13:58:26.1134821Z 
+2026-10-03T13:58:26.1135145Z     running 1 test
+2026-10-03T13:58:26.1137125Z     $ cmd.exe /C 'echo {"target":"hx_accept_reject_first_msg","phase":"first","elapsed_s":1.0,"k":1,"median_ticks":2}>> "C:\Users\RUNNER~1\AppData\Local\Temp\secmp-xtask-ct-timeout-3256\ct-progress.jsonl"&& ping -n 30 127.0.0.1' > C:\Users\RUNNER~1\AppData\Local\Temp\secmp-xtask-ct-timeout-3256\ct-bench.log
+2026-10-03T13:58:26.1139501Z     test gates::tests::ct_gate_timeout_is_a_fail_naming_the_target ... FAILED
+2026-10-03T13:58:26.1140141Z 
+2026-10-03T13:58:26.1140386Z     failures:
+2026-10-03T13:58:26.1140696Z 
+2026-10-03T13:58:26.1140939Z     failures:
+2026-10-03T13:58:26.1141493Z         gates::tests::ct_gate_timeout_is_a_fail_naming_the_target
+2026-10-03T13:58:26.1142051Z 
+2026-10-03T13:58:26.1142646Z     test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 131 filtered out; finished in 1.01s
+2026-10-03T13:58:26.1143623Z     [0m
+2026-10-03T13:58:26.1144248Z [31;1m [0m [31;1mstderr[0m [31;1m───[0m
+2026-10-03T13:58:26.1144985Z     [0m[31;1mError: Error("accepted: false")[0m[0m
+2026-10-03T13:58:26.1145483Z 
+2026-10-03T13:58:26.1146071Z [31;1m  Cancelling[0m due to [31;1mtest failure[0m: [1m3[0m tests still running
+2026-10-03T13:58:28.9583632Z [32;1m        PASS[0m [  38.312s] (467/556) [35;1msecmp-proto::tr_generator[0m [34;1mthe_rust_generator_reproduces_the_tr_file[0m
+2026-10-03T13:58:30.5446881Z [32;1m        PASS[0m [  36.832s] (468/556) [35;1msecmp-proto::tr_vectors[0m [34;1mevery_event_of_the_tr_file[0m
+2026-10-03T13:58:52.8972791Z [33;1m        SLOW[0m [> 60.000s] (───────) [35;1msecmp-proto::tr_properties[0m [34;1mrandom_interleavings_follow_spec_7_4_and_never_reuse_a_key[0m
+2026-10-03T13:59:52.9009154Z [33;1m        SLOW[0m [>120.000s] (───────) [35;1msecmp-proto::tr_properties[0m [34;1mrandom_interleavings_follow_spec_7_4_and_never_reuse_a_key[0m
+2026-10-03T14:00:20.0794249Z [32;1m        PASS[0m [ 147.190s] (469/556) [35;1msecmp-proto::tr_properties[0m [34;1mrandom_interleavings_follow_spec_7_4_and_never_reuse_a_key[0m
+2026-10-03T14:00:20.0795673Z ────────────
+2026-10-03T14:00:20.0797654Z [31;1m     Summary[0m [ 250.079s] [1m469[0m/[1m556[0m tests run: [1m468[0m [32;1mpassed[0m ([1m3[0m [33;1mslow[0m), [1m1[0m [31;1mfailed[0m, [1m0[0m [33;1mskipped[0m
+2026-10-03T14:00:20.0799891Z [31;1m        FAIL[0m [   1.017s] (466/556) [35;1mxtask::bin/xtask[0m [36mgates::tests[0m[36m::[0m[34;1mct_gate_timeout_is_a_fail_naming_the_target[0m
+2026-10-03T14:00:20.0802070Z [33;1mwarning[0m: [1m87[0m/[1m556[0m tests were not run due to [33;1mtest failure[0m (run with [1m--no-fail-fast[0m to run all tests, or run with [1m--max-fail[0m)
+2026-10-03T14:00:20.0807664Z [31;1merror[0m: test run failed
+2026-10-03T14:00:20.0868318Z FAIL [4] nextest: `C:\Users\runneradmin\.rustup\toolchains\1.98.1-x86_64-pc-windows-msvc\bin\cargo.exe nextest run --workspace --locked` failed with exit code: 100
+2026-10-03T14:00:20.0870592Z 
+2026-10-03T14:00:20.0871031Z === [4] doctest ===
+2026-10-03T14:00:20.0872018Z $ C:\Users\runneradmin\.rustup\toolchains\1.98.1-x86_64-pc-windows-msvc\bin\cargo.exe test --workspace --locked --doc
+2026-10-03T14:00:20.3202507Z [1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 0.21s

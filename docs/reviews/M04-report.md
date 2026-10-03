@@ -149,7 +149,8 @@ every accepting path (used on Skipped; decoded and dropped on Chain/Step), selec
   processed, without a bound; `drive` processes at most `MAX_PROCESSED_GROUPS` = 50 = ⌊(128 + 24) / 3⌋ complete
   groups per `accept` call (a full fetch and the 24 retained cells of review RT-1): 49 rejected groups and then a good
   one accept, the 50th rejected group rejects the call (fail-closed). Minor; test
-  `fifty_rejected_groups_then_an_honest_group_still_accepts` (FIX-2, was 42 = ⌊128 / 3⌋ in C-10).
+  `fifty_rejected_groups_reject_the_call_and_forty_nine_do_not` (FIX-2 as `fifty_rejected_groups_then_an_honest_group_
+  still_accepts`, renamed in FIX-3 for VD3-2; was 42 = ⌊128 / 3⌋ in C-10).
 
 ## 6. ADR-045
 `xtask/src/summary.rs`; every step of `ci-full`/`ci-fast` appends a table (`status`, one row per verdict line; for `ct` the run verdict, runner timer, every target/control row from the gate's reading; for `proverif` the sha256 of the models) to `$GITHUB_STEP_SUMMARY`, else stdout. Test `summary::tests::the_ct_table_comes_from_a_recorded_report` (run 36840478213 report: 18 rows). A run page with the table is the next push's PR run.
@@ -1192,3 +1193,186 @@ rejected stops it) and documented that way; (2) item 3: the renamed test also pi
 n ≠ 0 rows; (3) item 3: the ct pre-check change was run only at `SECMP_CT_SCALE=1000` (no full ct run); (4) item 7
 VD2-8: the report had no K2a/K3 timing (485/310 s were in the chat report only), so the committed-log values were added
 to the Kani row with the erratum.
+
+## M4-FIX-3 — the three red gates of PR run 37127247911 (WEISUNG M4-FIX-3, 2026-10-03)
+
+Head before `062abe9` (7 FIX-2 commits ahead of `origin/m04-hx` = `cac6eff`); PR run 37127247911 on `cac6eff` red in
+`ct`, `mutants` (merge), `mutants-shard (5)`, `mutants-shard (7)` and `windows-native`. One commit per item, every
+commit on `m04-hx`, no agent worktree. Floor, t threshold, sample counts, sign rule, the other four ct controls,
+ProVerif hashes, Kani harness list, `docs/mutants-accepted.md`, `docs/03`, `docs/01`, `vectors/`, `formal/` unchanged.
+
+| Item | Commit | Files | Dictated tests (all PASS) |
+|---|---|---|---|
+| 2 `Profile::eq` (R-96) | `e918331` | `crates/secmp-proto/src/wire/inv.rs` | `profile_eq_distinguishes_name_and_avatar` (`wire/inv.rs:737`) |
+| 1a–c ct bench (ADR-041 Am. 3, R-95) | `59b1354` | `crates/secmp-testkit/benches/ct.rs` | — (the bench has `harness = false`; its rule is exercised by the xtask tests below and by the local runs of 1e) |
+| 1d, 3 xtask (ADR-041 Am. 3, ADR-047 Am. 2, R-95, R-97) | `7c19e76` | `xtask/src/ctreport.rs`, `xtask/src/gates.rs`, `xtask/src/expect.rs`, `.github/workflows/ci.yml` (comment), `M04-evidence/ct-report-linux-37127247911-cac6eff.json` | `sensitivity_control_passes_when_decide_catches_the_leak_at_a_crop` (`ctreport.rs:2526`), `sensitivity_control_fails_when_no_crop_reaches_the_floor` (`:2568`), `sensitivity_control_fails_when_class_one_is_slower` (`:2602`), `sensitivity_control_fails_when_the_leak_is_not_reproduced` (`:2634`), `ct_check_rederives_the_sensitivity_control_from_both_measurements` (`:2666`), `ct_report_carries_host_identity_and_histograms` (`:2734`); `mutants_merge_fails_when_the_caught_share_is_below_half` (`gates.rs:5923`), `mutants_merge_passes_the_crypto_tally_of_run_37127247911` (`:5966`), `mutants_merge_reports_every_shard_and_package_before_it_fails` (`:6017`) |
+| 4 Windows (R-98) | `aa43447` | `xtask/src/gates.rs` | `ct_gate_timeout_is_a_fail_naming_the_target` (`gates.rs:4360`; Unix path run here, Windows path only in CI) |
+| 7 nits VD3-2, VD3-8, VD3-9 | `e387c3e` | `tests/hx/accept_ok.rs`, `hx/responder.rs`, `xtask/src/gates.rs` | `fifty_rejected_groups_reject_the_call_and_forty_nine_do_not` (`accept_ok.rs:361`), `kani_gate_fails_on_an_unsatisfiable_cover` (`gates.rs:6095`) |
+| 5–7 docs | this commit | `docs/08-decisions.md`, `docs/06-engineering-standards.md:83`, this report, `M04-review.md`, `M04-evidence/` | — |
+
+### ct — run 37127247911 `CONTROL_FAIL`, ADR-041 Amendment 3
+
+Run 37127247911, job `ct` (111214947825, 2.600 GHz TSC runner, `q_eff` 2 ticks, floor 26 ticks = 10 ns):
+`run_verdict` `CONTROL_FAIL`, reason "sensitivity control min_leak_control below the effect floor: raw Δ -11.70 ticks <
+floor 26.00 ticks (1 q_eff, 10 ns)"; the same measurement shows the injected leak at p50 +161.8, p75 +162.9, p90 +80.0
+ticks (\|t\| 204/260/140 = 6.2/6.3/3.1 floors); class 1 (31 steps) has IQR 430 against class 0's 94
+(`M04-evidence/DIAG-ct-37127247911.md`). `ct-bench.log` holds only the bench's own output, which is empty unless it
+panics; the per-phase trace is `ct-progress.jsonl` (`M04-evidence/ct-progress-linux-37127247911.jsonl`).
+
+Re-derivation under the target rule (DIAG §Q3; floor 26 ticks, k = 1 for all):
+
+| Target | Re-derived | Deciding / largest-\|t\| crop: t1 / t2, Δ1 / Δ2 (ticks) |
+|---|---|---|
+| control_variable_time_compare (positive) | PASS (detected) | p75 \|t\| 73 642 |
+| tag_compare | PASS | max \|t\| 1.02 (p75) / 1.46 (p99); \|Δ\| ≤ 3.6 |
+| msg_open_reject | PASS | 1.24 (p50) / 1.46 (p90) |
+| caead_open_reject | PASS | 1.93 (raw) / 1.85 (p99) |
+| sas | PASS | 1.77 (p50) / 1.31 (p99) |
+| caead_derive | PASS | 2.04 (p95) / 1.37 (raw) |
+| caead_aead_reject | PASS | 1.94 (p75) / 0.65 |
+| caead_com_compare | PASS | 1.89 (p99) / 1.53 (p75) |
+| caead_open_reject_samekey | PASS | 2.16 (p50) / 1.01 |
+| aa_prime_control | PASS | 1.15 (p99) / 2.03 (p90); \|Δ\| ≤ 2.2 |
+| tr_decrypt_reject_hdr_key | PASS | p50 +0.7 / +8.25: not reproduced; Δ +0.1 / +0.9 |
+| tr_decrypt_reject_body_tag | PASS | p90 +2.69 / +0.46; Δ +6.3 / +0.4 |
+| tr_decrypt_reject_ct_pq | PASS | p50 +1.87 / −4.26: sign differs |
+| tr_decrypt_reject_skipped | PASS | p50/p75/p90 −7.3/−9.8/−9.95 in the first, +1.3/+2.9/+1.0 in the second: not reproduced; Δ ≤ 2.2 |
+| same_content_control | PASS | 2.17 (p95) / 1.75 (raw) |
+| inv_fingerprint_compare | **SUB_FLOOR_SHIFT** | p90 −5.22 / −4.62, Δ −5.4 / −5.4 (0.21 floor, −2.1 ns) |
+| x25519_zero_check | PASS | 0.94 / 0.65 |
+| hx_accept_reject_inner | PASS | max 1.10 / 1.44; Δ up to +46.6 / +38.5 at p95/p90 (1.8 / 1.5 floors) at \|t\| ≈ 1 |
+| hx_accept_reject_first_msg | PASS | p50 −1.38 / −0.35, Δ −99.3 / −25.1; low power, see S1 |
+| hx_same_content_control | PASS | p50 +4.77 / +2.39: not reproduced; Δ +23.1 / +13.2 (0.89 / 0.51 floor) |
+| A/A (inline) | pass | max \|t\| 2.44 (tr_decrypt_reject_ct_pq, raw) ≤ 4.5 |
+
+ADR-041 Amendment 3 (reviewer decision): `min_leak_control` is measured twice (first, second; `tag_compare`'s `k` and
+sample count) and is caught iff `decide` on the pair gives FAIL with class 0 slower at the deciding crop
+(`Sensitivity::reached`, `ct.rs:3389`); otherwise `CONTROL_FAIL` with a reason naming the deciding statistic ("not
+caught by the verdict rule (decide: …): no crop reproduces the injected leak at ≥ 1 floor with |t| > 4.5 in both
+measurements" or "caught with the wrong sign: class 1 slower at the deciding crop …"). The report records
+`decision`, `deciding_crop`, `first/second_delta_ticks`, `…_delta_floor`, `…_t`, `…_floor_ticks`, both raw Δ
+(`first/second_raw_delta_ticks`, `…_raw_delta_floor`, information), `reached`, both measurements, a 21-bin histogram
+per class of the first measurement's samples over [p1, p99] (counts outside clamped to the end bins, so they sum to
+n0/n1; `histogram`, `ct.rs:3503`), `host.cpu_model`/`host.microcode` (`/proc/cpuinfo`; macOS `sysctl -n
+machdep.cpu.brand_string`, microcode `unknown`; `ct.rs:3585`), `bench_sha256` (`ct.rs:3622`) and
+`min_leak_same_content` (both classes 32 steps through `blend` with two delta buffers, one measurement, no verdict;
+`ct.rs:1509`). The gate (`ctreport.rs`): a report whose `sensitivity_control` carries `second` is re-derived by the
+target rule at the recorded `deciding_crop` within the printed rounding (`ControlPair::judge`, `ctreport.rs:198`;
+`ct_sensitivity_pair`, `:284`) and must carry the Amendment 3 (2) evidence (`pair_record_findings`, `:449`); reports
+without `second` keep the raw rule (the committed report of run 37127247911 re-derives as its `CONTROL_FAIL`); the
+control's line in the job summary names the deciding crop, Δ (ns, floors) and t of both measurements; the
+same-content variant has an informative line (`ct_same_content_line`, `:407`).
+
+Local evidence (1e). Scaled (`SECMP_CT_SCALE=1000`, the bench run directly at `59b1354`): every field of 1a–1c present
+(table below). Unscaled `cargo xtask step --strict ct` at `e387c3e`, alone, 3 333 s (`ct-local-e387c3e.txt`,
+`ct-report-local-e387c3e.json`, `ct-progress-local-e387c3e.jsonl`; host `Apple M1 Pro`, microcode `unknown`,
+`bench_sha256` `be7df93d…5f6`): run verdict **PASS**; `ct-check` on the report PASS.
+
+| Item | Value (tick 41.67 ns, `q_eff` 1 tick, floor 1 tick = 41.7 ns) |
+|---|---|
+| `min_leak_control` | CAUGHT: `decide` FAIL at p99, class 0 slower; Δ 2.91 / 2.84 ticks = 121.4 / 118.1 ns (2.91 / 2.84 floors), t 778.97 / 601.60; raw Δ 3.00 / 2.91 ticks (information); `first`/`second` and `histogram` (21 bins over [92, 105] ticks; 500 096 / 499 904 = n0 / n1) recorded |
+| `min_leak_same_content` | p50 Δ −0.0003 ticks (−0.01 ns), t −0.41; raw Δ +0.002 ticks, t 0.18; max \|t\| 0.86 (p99); IQR 0 / 0 ticks (both classes inside one 41.7-ns lattice step: ratio undefined on this timer) |
+| HX targets | `hx_accept_reject_inner` SUB_FLOOR_SHIFT at p50 (t −14.52 / −35.59, Δ −21.0 / −17.4 ns, class 0 faster, 0.50 / 0.42 floor); `hx_accept_reject_first_msg` PASS (p50 t −3.14 / 0.88); `hx_same_content_control` PASS (p75 t 1.57 / −0.57); every other target PASS |
+
+### mutants — run 37127247911, ADR-047 Amendment 2
+
+Per package over the 8 shard artefacts (`M04-evidence/mutants-37127247911-shards.txt`,
+`mutants-37127247911-crypto-unviable.txt`):
+
+| Package | Mutants | Caught | Missed | Unviable | Caught share | Unviable share |
+|---|---|---|---|---|---|---|
+| secmp-crypto | 268 | 168 | 1 (accepted: `secret.rs` Drop) | 99 (all `FnValue`) | 62.7 % | 36.9 % (> 35 %: would have failed Am. 1 (4)) |
+| secmp-proto | 1026 | 727 | 5 (3 accepted base64url `\|`→`^`; 2 `Profile::eq`) | 294 | 70.9 % | 28.7 % |
+
+The two `Profile::eq` survivors (shard 5 `inv.rs:327:9` `eq -> bool with true`, shard 7 `inv.rs:327:35` `&& with
+\|\|`) are killed by `profile_eq_distinguishes_name_and_avatar`; filter run `cargo mutants -p secmp-proto --features kat
+-f crates/secmp-proto/src/wire/inv.rs -F 'impl PartialEq for Profile' -j 3 -- -- --skip …` (the gate's two skips):
+5 mutants, 5 caught (`M04-evidence/mutants-profile-eq-e918331.txt`). ADR-047 Amendment 2 (reviewer decision) in
+`mutants_floor` (`gates.rs:1352`), `merge_mutant_shards` (`:1445`), `merge_verdict` (`:1546`): per package FAIL iff
+caught = 0, or caught < 50 % of all generated mutants (`expect::MUTANT_MIN_CAUGHT_PERCENT`), or an unaccepted survivor
+(named with its package); unviable > 35 % (`expect::MUTANT_UNVIABLE_WARN_PERCENT`, was `MUTANT_MAX_UNVIABLE_PERCENT`) is
+a WARNING line; every shard and both packages are read and printed before the FAIL. Replay of the run's eight shard
+artefacts through the new merge (`cargo xtask step mutants-merge` on `target/mutants-shards/` = the downloaded
+artefacts; `M04-evidence/mutants-merge-replay-37127247911.txt`): 8 shard lines (5 and 7 FAIL), both package tallies,
+`WARNING secmp-crypto: unviable 36.9 % > 35 %`, then the two shard failures and the two survivors with their package.
+Re-pointed existing tests: `mutants_floor_fails_a_package_without_a_caught_mutant` (the two 36 % cases now assert the
+WARNING line and no failure; the line format names the caught share), `mutants_merge_needs_every_shard_with_a_pass_verdict`
+(the missing, failed, incomplete and mislabelled shards are now asserted as named merge failures, no longer as an
+early error); none deleted.
+
+### Windows — `windows-native` of run 37127247911
+
+(a) clippy `-D dead_code`: `STOP_GRACE` (`gates.rs:421`) is used only in the Unix branch of `stop_child` → now
+`#[cfg(unix)]`, doc links made plain text. `cargo clippy -p xtask --all-targets --target x86_64-pc-windows-msvc -- -D
+warnings` on the Mac: the error reproduces with `gates.rs` as of `7c19e76` and is gone at `aa43447`. (b) `ct_gate_timeout_is_a_fail_naming_the_target`: the Windows slow bench is `<dir>\slow.cmd` (`@echo
+<line>>> "<progress>"`, `@ping -n 30 127.0.0.1 >nul`) run as `cmd.exe /C <path>`; `quick`, `failing` and the
+expectations unchanged. Cannot be run on the Mac; the PR run's `windows-native` proves it
+(`M04-evidence/windows-native-37127247911-excerpt.txt` holds the failing lines).
+
+### Gates (local, M1 Pro)
+
+| Gate | Result |
+|---|---|
+| `cargo xtask ci-fast --strict` (head `e387c3e`) | PASS: fmt, clippy (12 crates, `--all-features`), policy, deny, vet, audit, cooldown, nextest 114 s, doctest, hello, kat 417 s (`kat-portable` incl. `--test tr_vectors --test hx`) |
+| `cargo nextest run --workspace --all-features` | 574 passed, 0 failed, 0 skipped (564 at FIX-2 + 10 new) |
+| dictated tests by name | 15/15 PASS (`fix3-tests-e387c3e.txt`: the 11 dictated incl. `ct_gate_timeout_…` on Unix, 2 re-pointed, 2 nit tests) |
+| `cargo xtask step --strict clippy policy` | PASS; policy: 4 workflows, pinned jobs as pinned, no finding |
+| `cargo clippy -p xtask --all-targets --target x86_64-pc-windows-msvc -- -D warnings` | PASS (FAIL with `gates.rs` of `7c19e76`: `STOP_GRACE` never used) |
+| mutants filter (`inv.rs`, `impl PartialEq for Profile`) | 5 mutants, 5 caught, 0 missed (`mutants-profile-eq-e918331.txt`) |
+| mutants-merge replay of run 37127247911's shards | FAIL as expected: 8 shard lines (5, 7 FAIL), both tallies, the crypto WARNING, the two `Profile::eq` survivors named with `secmp-proto` (`mutants-merge-replay-37127247911.txt`) |
+| ct scaled (`SECMP_CT_SCALE=1000`, bench directly, `59b1354`) | fields present: `sensitivity_control.first/second`, `decision` FAIL, `deciding_crop` p99, Δ/floors/t of both, raw Δ of both, `reached` true, `histogram` 21 bins (506/494 = n0/n1), `host` (`Apple M1 Pro`, microcode `unknown`), `bench_sha256`, `min_leak_same_content` (no verdict) |
+| ct unscaled (`step --strict ct`, `e387c3e`, 3 333 s) | run verdict PASS; control CAUGHT at p99: Δ 2.91 / 2.84 floors, \|t\| 778.97 / 601.60; `min_leak_same_content` p50 Δ −0.00 floor (t −0.41), IQR ratio undefined (0 / 0 ticks) |
+| `git diff 062abe9 -- vectors/ docs/03-protocol-spec.md docs/01-threat-model.md formal/` | empty |
+| `git branch --list 'worktree-agent-*'` | empty |
+
+### Evidence written (`docs/reviews/M04-evidence/`)
+
+`ct-report-linux-37127247911-cac6eff.json`, `ct-progress-linux-37127247911.jsonl`, `DIAG-ct-37127247911.md`,
+`VD3-fix2-delta-cac6eff..062abe9.md`, `mutants-37127247911-shards.txt`, `mutants-37127247911-crypto-unviable.txt`,
+`windows-native-37127247911-excerpt.txt`, `ct-report-local-e387c3e.json`, `ct-local-e387c3e.txt`, `ct-progress-local-e387c3e.jsonl`, `fix3-tests-e387c3e.txt`; beyond the list:
+`mutants-merge-replay-37127247911.txt`, `mutants-profile-eq-e918331.txt`, `linux-full-37127247911-miri-excerpt.txt`.
+
+### Deviations from the Weisung
+
+1. Item 1 tests: all six dictated ct tests are in `xtask/src/ctreport.rs`'s test module (beside the gate's copy of the
+   rule, `ControlPair::judge`/`possible_verdicts`); the bench has `harness = false` and no unit tests, its own rule is
+   exercised by the scaled and unscaled runs of 1e.
+2. Item 1b/1d: the gate also *requires* the Amendment 3 (2) fields in a report that carries both control measurements
+   (missing host, SHA-256, histogram or same-content variant = refusal; `unknown` accepted); the progress phases of
+   the control are `first`/`second` (`min_leak_same_content`: `first`), no longer `sensitivity`; the histogram is that
+   of the first measurement's samples.
+3. Item 2: the filter `-F 'impl PartialEq for Profile'` lists the five mutants of `eq` (`-> true`, `-> false`,
+   `&& -> ||`, `== -> !=` ×2), and without `-f` a sixth, `StructField` mutant of `prekeys.rs` that `--re` does not
+   exclude; run with `-f crates/secmp-proto/src/wire/inv.rs`, the gate's `-j 3` and skips: 5 caught. The test uses
+   `assert_eq!`/`assert_ne!` (clippy `manual_assert_eq` refused `assert!(a == b)` in the first local version); the fix
+   was folded into the R-96 commit before the push (`git commit --fixup` + `rebase --autosquash`), so the local SHAs of
+   the five code commits changed once (`afb0914 a8b6906 3b43feb a87616c 1b50e6e` → `e918331 59b1354 7c19e76 aa43447
+   e387c3e`).
+4. Item 3: an unaccepted survivor is also a failure line naming its package; `MUTANT_MAX_UNVIABLE_PERCENT` renamed
+   `MUTANT_UNVIABLE_WARN_PERCENT`, new `MUTANT_MIN_CAUGHT_PERCENT`; percentages printed rounded half up (62.7 %); the
+   `ci.yml` comment of the `mutants` job updated (no job change); `mutants_merge_needs_every_shard_with_a_pass_verdict`
+   (not a 35 % test) re-pointed as well, since a failed shard is no longer an early error.
+5. Item 4: (a) checked by the cross-target clippy only, (b) not runnable on the Mac.
+6. Item 6: `ct-report-linux-37127247911-cac6eff.json` landed in the xtask commit `7c19e76`, not the docs commit, because
+   `ct_check_rederives_the_sensitivity_control_from_both_measurements` reads it; three evidence files beyond the list
+   (`mutants-merge-replay-37127247911.txt`, `mutants-profile-eq-e918331.txt`, `linux-full-37127247911-miri-excerpt.txt`).
+7. Item 5: the ADR paragraphs are verbatim (the `<sha>` placeholder of Amendment 3's evidence sentence kept; the file is
+   `ct-report-local-e387c3e.json`); each is followed by the usual status line "Amended 2026-10-03 — Accepted
+   (Reviewer, Owner-Delegation 30.09.2026)". `docs/06:83` (sensitivity control "reaching the floor") updated to
+   Amendment 3, not in the item-7 list.
+8. Not in the Weisung: `linux-full` of run 37127247911 was cancelled at its 240-min limit inside ci-full step 9 (Miri),
+   see "Open" below.
+
+### Open — `linux-full` of run 37127247911 (not covered by the Weisung)
+
+`linux-full` (job 111214947831) ran 13:45:16–17:45:32 UTC and was cancelled at `timeout-minutes: 240` inside ci-full
+step [9] `miri` (started 15:12:48, 152.7 min until the cancel; `M04-evidence/linux-full-37127247911-miri-excerpt.txt`).
+The `secmp-proto` lib tests under Miri took 120.5 min (67 run, 67 filtered): `tr::ratchet::trial_work::
+trial_opens_every_candidate_every_call` ≈ 5 392 s, `wire::cell::tests::read_routes_pre_sizes_the_vector` ≈ 553 s,
+`tr::ratchet::single_conversion::any_skipped_single_conversion` ≈ 520 s, `wire::cell::tests::routes` ≈ 90 s,
+`app_message_and_batch` ≈ 85 s, `tr::entropy::tests::os_entropy_draws_fresh_values` ≈ 66 s (time between consecutive
+results); the cancel hit `tests/tr_smoke.rs`. `expect.rs:394` skips every `secmp-proto` test of 60 s or more under
+Miri after a local measurement; these M4 tests are not in `MIRI_SKIP`. Not changed here (outside the Weisung, a gate
+scope change): the next PR run's `linux-full` will most likely be cancelled the same way. Question to the reviewer:
+measure them locally and add `MIRI_SKIP` rows under the existing 60-s rule (the weekly `miri-full` keeps them), or
+another remedy.

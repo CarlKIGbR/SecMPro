@@ -1,0 +1,51 @@
+# cargo xtask step mutants-merge over the eight mutants-shard artefacts of PR run 37127247911 (cac6eff), copied to target/mutants-shards/; xtask at 7c19e76 (rebased from 3b43feb, same tree for xtask/) (ADR-047 Amendment 2), docs/mutants-accepted.md unchanged; M1 Pro, 2026-10-03
+
+   Compiling xtask v0.0.0 (/Users/c.carl/coding/claude_code/SecMPro/xtask)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.78s
+     Running `target/debug/xtask step mutants-merge`
+
+=== [8] mutants-merge ===
+  mutants shard 0/8: PASS — 162 mutants (mutants-0-1)
+  mutants shard 1/8: PASS — 162 mutants (mutants-1-1)
+  mutants shard 2/8: PASS — 162 mutants (mutants-2-1)
+  mutants shard 3/8: PASS — 162 mutants (mutants-3-1)
+  mutants shard 4/8: PASS — 162 mutants (mutants-4-1)
+  mutants shard 5/8: FAIL — 162 mutants (mutants-5-1)
+  mutants shard 6/8: PASS — 161 mutants (mutants-6-1)
+  mutants shard 7/8: FAIL — 161 mutants (mutants-7-1)
+  mutants secmp-crypto: caught 168, missed 1, timeout 0, unviable 99 of 268 (caught 62.7 %, at least 50 %, unviable 36.9 %)
+  mutants secmp-proto: caught 727, missed 5, timeout 0, unviable 294 of 1026 (caught 70.9 %, at least 50 %, unviable 28.7 %)
+  mutants WARNING secmp-crypto: unviable 36.9 % > 35 % (99 of 268 mutants, informative, ADR-047 Amendment 2)
+  mutants survivors documented in docs/mutants-accepted.md: 4, undocumented: 2
+  mutants FAIL shard 5/8: verdict FAIL for shard 5/8: cargo mutants (exit Some(2)): 1 undocumented survivor(s) (docs/mutants-accepted.md), log /home/runner/work/SecMPro/SecMPro/target/mutants-step.log
+  mutants FAIL shard 7/8: verdict FAIL for shard 7/8: cargo mutants (exit Some(2)): 1 undocumented survivor(s) (docs/mutants-accepted.md), log /home/runner/work/SecMPro/SecMPro/target/mutants-step.log
+  mutants FAIL secmp-proto: survivor not in docs/mutants-accepted.md: crates/secmp-proto/src/wire/inv.rs:327:9: replace <impl PartialEq for Profile>::eq -> bool with true
+  mutants FAIL secmp-proto: survivor not in docs/mutants-accepted.md: crates/secmp-proto/src/wire/inv.rs:327:35: replace && with || in <impl PartialEq for Profile>::eq
+FAIL [8] mutants-merge: mutants-merge: shard 0/8: PASS — 162 mutants (mutants-0-1); shard 1/8: PASS — 162 mutants (mutants-1-1); shard 2/8: PASS — 162 mutants (mutants-2-1); shard 3/8: PASS — 162 mutants (mutants-3-1); shard 4/8: PASS — 162 mutants (mutants-4-1); shard 5/8: FAIL — 162 mutants (mutants-5-1); shard 6/8: PASS — 161 mutants (mutants-6-1); shard 7/8: FAIL — 161 mutants (mutants-7-1); secmp-crypto: caught 168, missed 1, timeout 0, unviable 99 of 268 (caught 62.7 %, at least 50 %, unviable 36.9 %); secmp-proto: caught 727, missed 5, timeout 0, unviable 294 of 1026 (caught 70.9 %, at least 50 %, unviable 28.7 %); WARNING secmp-crypto: unviable 36.9 % > 35 % (99 of 268 mutants, informative, ADR-047 Amendment 2); survivors documented in docs/mutants-accepted.md: 4, undocumented: 2; FAIL shard 5/8: verdict FAIL for shard 5/8: cargo mutants (exit Some(2)): 1 undocumented survivor(s) (docs/mutants-accepted.md), log /home/runner/work/SecMPro/SecMPro/target/mutants-step.log; FAIL shard 7/8: verdict FAIL for shard 7/8: cargo mutants (exit Some(2)): 1 undocumented survivor(s) (docs/mutants-accepted.md), log /home/runner/work/SecMPro/SecMPro/target/mutants-step.log; FAIL secmp-proto: survivor not in docs/mutants-accepted.md: crates/secmp-proto/src/wire/inv.rs:327:9: replace <impl PartialEq for Profile>::eq -> bool with true; FAIL secmp-proto: survivor not in docs/mutants-accepted.md: crates/secmp-proto/src/wire/inv.rs:327:35: replace && with || in <impl PartialEq for Profile>::eq
+### gate `mutants-merge`
+
+| item | verdict |
+|---|---|
+| status | FAIL (0 s) |
+| line 1 | mutants-merge: shard 0/8: PASS — 162 mutants (mutants-0-1) |
+| line 2 | shard 1/8: PASS — 162 mutants (mutants-1-1) |
+| line 3 | shard 2/8: PASS — 162 mutants (mutants-2-1) |
+| line 4 | shard 3/8: PASS — 162 mutants (mutants-3-1) |
+| line 5 | shard 4/8: PASS — 162 mutants (mutants-4-1) |
+| line 6 | shard 5/8: FAIL — 162 mutants (mutants-5-1) |
+| line 7 | shard 6/8: PASS — 161 mutants (mutants-6-1) |
+| line 8 | shard 7/8: FAIL — 161 mutants (mutants-7-1) |
+| line 9 | secmp-crypto: caught 168, missed 1, timeout 0, unviable 99 of 268 (caught 62.7 %, at least 50 %, unviable 36.9 %) |
+| line 10 | secmp-proto: caught 727, missed 5, timeout 0, unviable 294 of 1026 (caught 70.9 %, at least 50 %, unviable 28.7 %) |
+| line 11 | WARNING secmp-crypto: unviable 36.9 % > 35 % (99 of 268 mutants, informative, ADR-047 Amendment 2) |
+| line 12 | survivors documented in docs/mutants-accepted.md: 4, undocumented: 2 |
+| line 13 | FAIL shard 5/8: verdict FAIL for shard 5/8: cargo mutants (exit Some(2)): 1 undocumented survivor(s) (docs/mutants-accepted.md), log /home/runner/work/SecMPro/SecMPro/target/mutants-step.log |
+| line 14 | FAIL shard 7/8: verdict FAIL for shard 7/8: cargo mutants (exit Some(2)): 1 undocumented survivor(s) (docs/mutants-accepted.md), log /home/runner/work/SecMPro/SecMPro/target/mutants-step.log |
+| line 15 | FAIL secmp-proto: survivor not in docs/mutants-accepted.md: crates/secmp-proto/src/wire/inv.rs:327:9: replace <impl PartialEq for Profile>::eq -> bool with true |
+| line 16 | FAIL secmp-proto: survivor not in docs/mutants-accepted.md: crates/secmp-proto/src/wire/inv.rs:327:35: replace && with \|\| in <impl PartialEq for Profile>::eq |
+
+
+
+=== step summary (host aarch64-apple-darwin, strict: false) ===
+   8 mutants-merge   FAIL          0s  mutants-merge: shard 0/8: PASS — 162 mutants (mutants-0-1); shard 1/8: PASS — 162 mutants (mutants-1-1); shard 2/8: PASS — 162 mutants (mutants-2-1); shard 3/8: PASS — 162 mutants (mutants-3-1); shard 4/8: PASS — 162 mutants (mutants-4-1); shard 5/8: FAIL — 162 mutants (mutants-5-1); shard 6/8: PASS — 161 mutants (mutants-6-1); shard 7/8: FAIL — 161 mutants (mutants-7-1); secmp-crypto: caught 168, missed 1, timeout 0, unviable 99 of 268 (caught 62.7 %, at least 50 %, unviable 36.9 %); secmp-proto: caught 727, missed 5, timeout 0, unviable 294 of 1026 (caught 70.9 %, at least 50 %, unviable 28.7 %); WARNING secmp-crypto: unviable 36.9 % > 35 % (99 of 268 mutants, informative, ADR-047 Amendment 2); survivors documented in docs/mutants-accepted.md: 4, undocumented: 2; FAIL shard 5/8: verdict FAIL for shard 5/8: cargo mutants (exit Some(2)): 1 undocumented survivor(s) (docs/mutants-accepted.md), log /home/runner/work/SecMPro/SecMPro/target/mutants-step.log; FAIL shard 7/8: verdict FAIL for shard 7/8: cargo mutants (exit Some(2)): 1 undocumented survivor(s) (docs/mutants-accepted.md), log /home/runner/work/SecMPro/SecMPro/target/mutants-step.log; FAIL secmp-proto: survivor not in docs/mutants-accepted.md: crates/secmp-proto/src/wire/inv.rs:327:9: replace <impl PartialEq for Profile>::eq -> bool with true; FAIL secmp-proto: survivor not in docs/mutants-accepted.md: crates/secmp-proto/src/wire/inv.rs:327:35: replace && with || in <impl PartialEq for Profile>::eq
+xtask: error: step: 1 step(s) failed

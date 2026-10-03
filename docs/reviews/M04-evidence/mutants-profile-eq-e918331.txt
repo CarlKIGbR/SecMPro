@@ -1,0 +1,21 @@
+# cargo mutants -p secmp-proto --features kat -f crates/secmp-proto/src/wire/inv.rs -F 'impl PartialEq for Profile' -j 3 --no-shuffle --output target/mutants-profile --caught --unviable -- -- --skip ratchet_fast_forward_bound_on_the_chain --skip ratchet_fast_forward_bound_on_a_step
+# head e918331 (test profile_eq_distinguishes_name_and_avatar), M1 Pro, 2026-10-03; the listing without -f adds a StructField mutant of prekeys.rs that --re does not filter out
+
+Found 5 mutants to test
+ok       Unmutated baseline in 10s build + 110s test
+ INFO Auto-set test timeout to 551s
+caught   crates/secmp-proto/src/wire/inv.rs:327:9: replace <impl PartialEq for Profile>::eq -> bool with true in 2s build + 1s test
+caught   crates/secmp-proto/src/wire/inv.rs:327:9: replace <impl PartialEq for Profile>::eq -> bool with false in 5s build + 3s test
+caught   crates/secmp-proto/src/wire/inv.rs:327:57: replace == with != in <impl PartialEq for Profile>::eq in 3s build + 3s test
+caught   crates/secmp-proto/src/wire/inv.rs:327:35: replace && with || in <impl PartialEq for Profile>::eq in 19s build + 1s test
+caught   crates/secmp-proto/src/wire/inv.rs:327:20: replace == with != in <impl PartialEq for Profile>::eq in 21s build + 1s test
+5 mutants tested in 3m: 5 caught
+
+## mutants.out/caught.txt
+crates/secmp-proto/src/wire/inv.rs:327:9: replace <impl PartialEq for Profile>::eq -> bool with true
+crates/secmp-proto/src/wire/inv.rs:327:9: replace <impl PartialEq for Profile>::eq -> bool with false
+crates/secmp-proto/src/wire/inv.rs:327:57: replace == with != in <impl PartialEq for Profile>::eq
+crates/secmp-proto/src/wire/inv.rs:327:35: replace && with || in <impl PartialEq for Profile>::eq
+crates/secmp-proto/src/wire/inv.rs:327:20: replace == with != in <impl PartialEq for Profile>::eq
+
+## mutants.out/missed.txt (empty)

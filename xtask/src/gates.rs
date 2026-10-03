@@ -6124,8 +6124,11 @@ mod tests {
             kani_covers(terse)
                 .is_err_and(|e| e.0.contains("kani_accept_opk_delete_only_on_success"))
         );
-        // no cover at all is no failure
-        assert!(kani_covers(&kani_log(expect::KANI_HARNESSES, 0))?.is_empty());
+        // a log without any cover is no failure of the parser; the gate fails it through `expect::KANI_COVERS`
+        // (`kani_cover_pin_findings`, delta review VD1-5)
+        let none = kani_covers(&kani_log(expect::KANI_HARNESSES, 0))?;
+        assert!(none.is_empty());
+        assert!(!kani_cover_pin_findings(&none).is_empty());
         Ok(())
     }
 

@@ -312,8 +312,7 @@ impl Responder {
     /// On `Ok` the caller persists the returned [`Accepted`] (state, peer, routes, profile) in the store transaction of
     /// the `commit_accept` writes before it acknowledges any cell and before it retires the invitation queue; between
     /// calls it retains at most the newest 24 unclassified cells, and a complete group is spent after one `accept`
-    /// (module documentation; M4 review C-12). A group is spent after `Ok`, retried after [`Error::Unavailable`]
-    /// (nothing was committed; delta review VD2-7).
+    /// (module documentation; M4 review C-12).
     ///
     /// # Errors
     /// The uniform [`Error::Rejected`]; [`Error::Unavailable`] as described in the module documentation (also when

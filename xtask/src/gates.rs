@@ -5199,6 +5199,109 @@ mod tests {
         assert!(!nonkat.contains(&"--workspace") && !nonkat.iter().any(|a| a.contains("kat")));
     }
 
+    /// The string literals of `text` (between unescaped double quotes; escapes are kept as written).
+    fn string_literals(text: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut chars = text.chars();
+        while let Some(c) = chars.next() {
+            if c != '"' {
+                continue;
+            }
+            let mut lit = String::new();
+            while let Some(d) = chars.next() {
+                match d {
+                    '"' => break,
+                    '\\' => {
+                        lit.push(d);
+                        if let Some(e) = chars.next() {
+                            lit.push(e);
+                        }
+                    }
+                    _ => lit.push(d),
+                }
+            }
+            out.push(lit);
+        }
+        out
+    }
+
+    /// The text from `start` to the parenthesis that closes the first `(` at or after it.
+    fn balanced_call(text: &str, start: usize) -> &str {
+        let rest = text.get(start..).unwrap_or_default();
+        let mut depth = 0_usize;
+        for (i, c) in rest.char_indices() {
+            match c {
+                '(' => depth = depth.saturating_add(1),
+                ')' => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        return rest.get(..=i).unwrap_or(rest);
+                    }
+                }
+                _ => {}
+            }
+        }
+        rest
+    }
+
+    /// The `let` statement at the start of `text`: up to its first `;` outside braces.
+    fn let_statement(text: &str) -> &str {
+        let mut depth = 0_usize;
+        for (i, c) in text.char_indices() {
+            match c {
+                '{' => depth = depth.saturating_add(1),
+                '}' => depth = depth.saturating_sub(1),
+                ';' if depth == 0 => return text.get(..=i).unwrap_or(text),
+                _ => {}
+            }
+        }
+        text
+    }
+
+    /// M4 review C-14 (R-27, R-63): the reject-site tags the product sets — every string literal in a
+    /// `…_SITE_KAT.set(…)` call of `crates/secmp-proto/src` outside its test modules, and in a `let` binding such a call
+    /// reads (the TR selection's `reject_site`) — are exactly `expect::KNOWN_SITES` without the `x25519_zero_check`
+    /// Output claim; a site added without its entry, or an entry no code sets, fails.
+    #[test]
+    fn known_sites_equal_the_product_site_tags() -> Result<()> {
+        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../crates/secmp-proto/src");
+        let mut tags: BTreeSet<String> = BTreeSet::new();
+        let mut calls = 0_usize;
+        for f in walk_files(&src, &|p: &Path| {
+            p.extension().is_some_and(|e| e == "rs") && !p.ends_with("tests.rs")
+        })? {
+            let full = std::fs::read_to_string(&f)?;
+            let text = full.split("#[cfg(test)]\nmod ").next().unwrap_or_default();
+            for (at, _) in text.match_indices("_SITE_KAT.set(") {
+                let call = balanced_call(text, at);
+                calls = calls.saturating_add(1);
+                tags.extend(string_literals(call));
+                // a binding the call reads (`.set(match path { Path::Reject => reject_site, … })`)
+                for word in call.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_')) {
+                    let decl = format!("let {word} = ");
+                    if word.len() > 2
+                        && let Some(d) = text.find(&decl)
+                    {
+                        tags.extend(string_literals(let_statement(
+                            text.get(d..).unwrap_or_default(),
+                        )));
+                    }
+                }
+            }
+        }
+        assert!(calls >= 30, "{calls} site-tag calls found");
+        let output_claim = "§3/§6.4 all-zero check of the output (passes: not a reject target)";
+        let known: BTreeSet<String> = expect::KNOWN_SITES
+            .iter()
+            .filter(|s| **s != output_claim)
+            .map(|s| (*s).to_owned())
+            .collect();
+        assert_eq!(known.len(), expect::KNOWN_SITES.len().saturating_sub(1));
+        assert_eq!(tags, known);
+        assert!(tags.contains("skipped: (hk, n) not stored"));
+        Ok(())
+    }
+
     /// M2 review C3 (d): exit 2 or 3 of cargo-mutants without its survivor listing is refused, not read as "no
     /// survivors"; with the listing (or exit 0) the survivors are read.
     #[test]

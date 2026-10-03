@@ -319,7 +319,8 @@ pub(crate) const MUTANT_EXCLUDE_RE: &[&str] = &[
     "impl (core::fmt::)?Display for \\w+Error>::fmt",
 ];
 
-/// The reject sites a `ct` target may claim (M4 review R-63): every site name in use, in one place. The product tags
+/// The reject sites a `ct` target may claim (M4 review R-63): every site name in use, in one place (M4 review C-14:
+/// `gates::tests::known_sites_equal_the_product_site_tags` checks the set against the product's tags). The product tags
 /// them under feature `kat` (`tr::DECRYPT_SITE_KAT`, `inv::INVITEE_SITE_KAT`, `hx::ACCEPT_SITE_KAT`); the bench's
 /// claims (`crates/secmp-testkit/benches/ct.rs`) name one of them (the `x25519_zero_check` claim names the all-zero
 /// check, which passes: it is no reject target). A new site is added here with the code that sets it, so a claim with
@@ -328,6 +329,7 @@ pub(crate) const KNOWN_SITES: &[&str] = &[
     // SecMP-TR (`tr::ratchet`, §7.4)
     "cell length",
     "header: no key opened",
+    "skipped: (hk, n) not stored",
     "header decode",
     "body MAC",
     "kem constancy",

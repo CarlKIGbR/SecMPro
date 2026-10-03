@@ -1,0 +1,15 @@
+# M4-fix C-4: hx_persist under Miri (as the miri gate runs it, ci-full scope)
+head: 7a38edd · host aarch64-apple-darwin (M1 Pro, macOS) · nightly-2026-09-21 · env LIBCRUX_DISABLE_SIMD128=1 LIBCRUX_DISABLE_SIMD256=1 CARGO_TARGET_DIR=target/miri-portable
+build: cargo +nightly-2026-09-21 miri test --locked --target aarch64-unknown-linux-gnu --package secmp-proto --test hx_persist --no-run -> exit 0 in 2 s
+run:   cargo +nightly-2026-09-21 miri test --locked --target aarch64-unknown-linux-gnu --package secmp-proto --test hx_persist -- --test-threads=1
+  |     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.04s
+  |      Running tests/hx_persist.rs (target/miri-portable/miri/aarch64-unknown-linux-gnu/debug/build/secmp-proto/641fe6e0b29dd959/out/hx_persist-641fe6e0b29dd959)
+  | 
+  running 3 tests
+  test persisted_cells_are_accepted_by_the_responder ... ok   [host wall 731 s]
+  test release_hands_persist_the_same_bytes_it_returns ... ok   [host wall 573 s]
+  test release_persists_exactly_the_three_cells ... ok   [host wall 699 s]
+  | 
+  test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5549.35s   [host wall 0 s]
+  | 
+exit 0 · total host wall time of the run 2003 s

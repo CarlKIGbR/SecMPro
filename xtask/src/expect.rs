@@ -464,6 +464,14 @@ pub(crate) const MIRI_SKIP: &[(&str, &str, &str)] = &[
         "canonical_writer_is_stable",
         "4082 s under Miri (M3): generates the 78 positive rows of the encodings suite",
     ),
+    (
+        "secmp-proto",
+        "test-target:hx_persist",
+        "731 s, 573 s and 699 s per test under Miri (M4-fix, measured on 7a38edd, 2003 s in all; \
+         docs/reviews/M04-evidence/miri-hx-persist-7a38edd.txt): each test generates two identities (ML-DSA-65 key \
+         generation) and runs a full handshake; the fourth test (release_persists_the_state_at_release_time, M4 \
+         review C-8) is of the same kind",
+    ),
 ];
 
 /// Integration-test targets with `required-features` that no Miri run builds (`miri` and `miri-full` run without

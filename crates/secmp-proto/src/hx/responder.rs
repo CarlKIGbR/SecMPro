@@ -40,11 +40,12 @@ use crate::wire::inv::{IksPublic, Profile};
 /// At most this many partially received envelopes are held while grouping; the oldest is evicted (ADR-044 (c)).
 pub const MAX_PARTIAL_GROUPS: usize = 8;
 
-/// At most this many complete groups are recorded as processed in one [`Responder::accept`] call (ADR-044 (c), M4
-/// review C-10): ⌊`QUEUE_CAPACITY` / 3⌋ = ⌊128 / 3⌋ (`docs/03:168`), the most complete groups one full invitation queue
-/// holds. A call that completes more stops there and rejects (fail-closed).
-pub const MAX_PROCESSED_GROUPS: usize = 42;
-const _: () = assert!(MAX_PROCESSED_GROUPS >= 128 / 3);
+/// At most this many complete groups are processed in one [`Responder::accept`] call (ADR-044 (c), M4 review C-10,
+/// delta review VD2-1): ⌊(`QUEUE_CAPACITY` + 24) / 3⌋ = ⌊(128 + 24) / 3⌋ (`docs/03:168`; the 24 retained cells of
+/// review RT-1), the most complete groups one full invitation queue and the retained cells hold. When the 50th
+/// processed group is rejected the call stops and rejects (fail-closed); 49 rejected groups and then a good one accept.
+pub const MAX_PROCESSED_GROUPS: usize = 50;
+const _: () = assert!(MAX_PROCESSED_GROUPS >= (128 + 24) / 3);
 
 #[cfg(feature = "kat")]
 std::thread_local! {
@@ -230,6 +231,11 @@ impl<K: PartialEq, const R: usize> Processed<K, R> {
         self.len = self.len.saturating_add(1);
         true
     }
+
+    /// All `R` slots are taken.
+    const fn is_full(&self) -> bool {
+        self.len >= R
+    }
 }
 
 /// The driver of §6.5 and §6.6 step 4 over already opened chunks `(init_id, i, chunk)`, in fetch order: group them
@@ -240,9 +246,9 @@ impl<K: PartialEq, const R: usize> Processed<K, R> {
 /// `process` rejects is discarded
 /// and the OPK kept; its `init_id` is recorded, and every later chunk of that `init_id` in this call is ignored — the
 /// first complete group of an `init_id` is the one that counts (first-seen wins, ADR-044 (c); M4 review C-10; the
-/// record lives for one call). Groups of other `init_id`s are still processed, up to [`MAX_PROCESSED_GROUPS`] rejected
-/// ones (then the call rejects). If none is accepted the result is [`Error::Rejected`]; [`Error::Unavailable`] from
-/// `process` is passed up at once.
+/// record lives for one call). Groups of other `init_id`s are still processed, up to [`MAX_PROCESSED_GROUPS`] groups
+/// in all (the call rejects when the last of them is rejected). If none is accepted the result is [`Error::Rejected`];
+/// [`Error::Unavailable`] from `process` is passed up at once.
 pub(crate) fn drive<K: PartialEq, C, T, S: PrekeyStore>(
     items: impl IntoIterator<Item = (K, usize, C)>,
     store: &mut S,
@@ -274,10 +280,10 @@ pub(crate) fn drive<K: PartialEq, C, T, S: PrekeyStore>(
                 return Ok(accepted);
             }
             Err(Error::Unavailable) => return Err(Error::Unavailable),
-            // a rejected complete group is discarded and its init_id recorded; the OPK is kept (§6.6 step 3). More
-            // rejected groups than a full queue holds: stop (fail-closed)
+            // a rejected complete group is discarded and its init_id recorded; the OPK is kept (§6.6 step 3). The
+            // MAX_PROCESSED_GROUPS-th processed group rejected: stop (fail-closed)
             Err(_) => {
-                if !processed.push(group.init_id) {
+                if !processed.push(group.init_id) || processed.is_full() {
                     return Err(Error::Rejected);
                 }
             }
@@ -295,9 +301,11 @@ impl Responder {
     /// `record` is the invitation's record (§5.2). Expiry is the record lifecycle's: the caller offers only
     /// unexpired records ([`crate::prekeys::MemoryPrekeyStore::offered_records`], ADR-044 (d)).
     ///
-    /// A group that completes but is rejected is discarded and the OPK kept; later groups are still processed. If
-    /// no group passes, the result is [`Error::Rejected`], whether `cells` held garbage only, an incomplete group
-    /// or a bad envelope.
+    /// A group that completes but is rejected is discarded and the OPK kept; later groups are still processed, up to
+    /// [`MAX_PROCESSED_GROUPS`] = 50 complete groups per call (the 128 fetched and 24 retained cells, review RT-1):
+    /// after 49 rejected groups a 50th is processed, and when it is rejected the call rejects (fail-closed; delta
+    /// review VD2-1). If no group passes, the result is [`Error::Rejected`], whether `cells` held garbage only, an
+    /// incomplete group or a bad envelope.
     ///
     /// On `Ok` the caller persists the returned [`Accepted`] (state, peer, routes, profile) in the store transaction of
     /// the `commit_accept` writes before it acknowledges any cell and before it retires the invitation queue; between
@@ -519,7 +527,7 @@ mod tests {
     /// M4 review C-10 (R-24): the same input as `rejected_init_id_does_not_re_form_within_one_accept` through `drive`
     /// with a counting `process`: `[bogus₁(X), h₀, h₁, h₂, h₀, h₁, h₂]` (the bogus chunk 1 first) completes X once,
     /// rejected — `process` runs exactly once and nothing is committed; another `init_id` after it is still processed;
-    /// more rejected groups than [`MAX_PROCESSED_GROUPS`] stop the call.
+    /// [`MAX_PROCESSED_GROUPS`] rejected groups stop the call, one fewer does not.
     #[test]
     fn drive_does_not_re_form_a_rejected_init_id() {
         let x = 7;
@@ -570,18 +578,18 @@ mod tests {
         ]
         .to_vec();
         assert_eq!(run(&again, &[5]), (Err(Error::Rejected), vec![3], 0));
-        // MAX_PROCESSED_GROUPS rejected groups are recorded; one more stops the call before a later good group
+        // MAX_PROCESSED_GROUPS rejected groups: the last of them stops the call before a later good group
         let limit = u8::try_from(MAX_PROCESSED_GROUPS).unwrap_or(u8::MAX);
-        let many: Vec<(u8, usize, u8)> = (0..=limit)
+        let many: Vec<(u8, usize, u8)> = (0..limit)
             .flat_map(|id| (0..3).map(move |i| (id, i, 5)))
             .chain([(200, 0, 0), (200, 1, 0), (200, 2, 0)])
             .collect();
         let (result, seen, commits) = run(&many, &[5]);
         assert_eq!(result.err(), Some(Error::Rejected));
-        assert_eq!(seen.len(), MAX_PROCESSED_GROUPS.saturating_add(1));
+        assert_eq!(seen.len(), MAX_PROCESSED_GROUPS);
         assert_eq!(commits, 0);
         // one rejected group fewer: the good group after them is processed and committed
-        let fewer: Vec<(u8, usize, u8)> = (0..limit)
+        let fewer: Vec<(u8, usize, u8)> = (1..limit)
             .flat_map(|id| (0..3).map(move |i| (id, i, 5)))
             .chain([(200, 0, 0), (200, 1, 0), (200, 2, 0)])
             .collect();

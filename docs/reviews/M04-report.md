@@ -145,6 +145,11 @@ every accepting path (used on Skipped; decoded and dropped on Chain/Step), selec
   {1, 2}: the first issuance keeps OPK 1, the failed second one takes OPK 2 (its `ld_id` collides through the replayed
   `FixedEntropy` stream).
 - **R-24** — the grouping deviation of `drive` from ADR-044 (c), resolved by C-10 (see M4-12 "Open / deviations").
+- **VD2-1 — processed-group cap.** ADR-044 (c) says a rejected group is discarded and later groups are still
+  processed, without a bound; `drive` processes at most `MAX_PROCESSED_GROUPS` = 50 = ⌊(128 + 24) / 3⌋ complete
+  groups per `accept` call (a full fetch and the 24 retained cells of review RT-1): 49 rejected groups and then a good
+  one accept, the 50th rejected group rejects the call (fail-closed). Minor; test
+  `fifty_rejected_groups_then_an_honest_group_still_accepts` (FIX-2, was 42 = ⌊128 / 3⌋ in C-10).
 
 ## 6. ADR-045
 `xtask/src/summary.rs`; every step of `ci-full`/`ci-fast` appends a table (`status`, one row per verdict line; for `ct` the run verdict, runner timer, every target/control row from the gate's reading; for `proverif` the sha256 of the models) to `$GITHUB_STEP_SUMMARY`, else stdout. Test `summary::tests::the_ct_table_comes_from_a_recorded_report` (run 36840478213 report: 18 rows). A run page with the table is the next push's PR run.

@@ -352,6 +352,31 @@ fn rejected_init_id_does_not_re_form_within_one_accept() {
     accepted_ok(&lib, &h, "control: [h₀, h₁, h₂]");
 }
 
+/// M4 delta review VD2-1 (ADR-044 (c), review RT-1): one call processes at most `MAX_PROCESSED_GROUPS` = 50 =
+/// ⌊(128 + 24) / 3⌋ complete groups, the most a full fetch and the 24 retained cells hold. 49 rejected groups (Outer
+/// ver 0x02, `init_id` `[1; 16]` … `[49; 16]`) and then the honest group: accepted; 50 rejected groups and then the
+/// honest group: `Rejected`, the store unchanged and the OPK kept (fail-closed).
+#[test]
+fn fifty_rejected_groups_then_an_honest_group_still_accepts() {
+    let lib = Lib::new();
+    let h = lib.honest();
+    let rejected = |n: u8| -> Vec<Vec<u8>> {
+        (1..=n)
+            .flat_map(|tag| lib.outer_variant(tag, |o| *o.get_mut(0).unwrap() = 2))
+            .collect()
+    };
+    assert!(!(1..=50).any(|tag| lib.w.b6.init_id == [tag; 16]));
+    accepted_ok(
+        &lib,
+        &[rejected(49), h.clone()].concat(),
+        "49 rejected groups, then the honest group",
+    );
+    lib.assert_rejected(
+        &[rejected(50), h].concat(),
+        "50 rejected groups, then the honest group",
+    );
+}
+
 #[test]
 fn group_duplicate_chunk_identical_ignored() {
     let lib = Lib::new();

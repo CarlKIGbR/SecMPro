@@ -135,7 +135,7 @@ fn invitee_uri_noncanonical_base64_rejects() {
         format!("secmp://i/{tail}="),
         format!("secmp://i/{}+{}", &tail[..5], &tail[6..]),
         format!("secmp://i/{}/{}", &tail[..5], &tail[6..]),
-        // length ≡ 1 (mod 4)
+        // length ≡ 3 (mod 4): a character too many; length ≡ 1 (mod 4): no encoding has it
         format!("secmp://i/{tail}A"),
         format!("secmp://i/{}", &tail[..tail.len() - 1]),
     ] {

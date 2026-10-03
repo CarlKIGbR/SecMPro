@@ -2,9 +2,10 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 #![forbid(unsafe_code)]
 //! The bytes `HandshakeCells::release` hands to `persist` (persist-before-send, V-6, M3 review F13): exactly the
-//! three released cells and the serialised initiator state. OS randomness and no feature `kat`, so that the
-//! mutation gate (which builds `secmp-proto` without `kat`) runs it: `HandshakeCells::to_bytes` and `join_cells`
-//! are otherwise checked only by the `kat`-gated `hx` suite (M4-6, PR run 36930469555: 9 missed mutants).
+//! three released cells and the serialised initiator state. OS randomness and no feature `kat`: it also runs in the
+//! non-`kat` `nextest -p secmp-proto` of step 4 (when it was written the mutation gate built `secmp-proto` without
+//! `kat`; it builds with `kat` since R-60): `HandshakeCells::to_bytes` and `join_cells` are otherwise checked only by
+//! the `kat`-gated `hx` suite (M4-6, PR run 36930469555: 9 missed mutants).
 
 use secmp_crypto::SecretBytes;
 use secmp_proto::Encode;

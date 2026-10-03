@@ -299,11 +299,12 @@ pub struct InvitationRecord {
 }
 
 impl InvitationRecord {
-    /// A copy (the link key is duplicated into locked memory): the caller that keeps its records in the same store
-    /// it hands to [`crate::hx::Responder::accept`] copies the record first.
+    /// A copy (the link key is duplicated into a zeroizing heap `SecretBytes`): the caller that keeps its records in
+    /// the same store it hands to [`crate::hx::Responder::accept`] copies the record first.
     ///
     /// # Errors
-    /// [`Error::Unavailable`] without locked memory.
+    /// None in practice: `SecretBytes::from_slice` refuses only a wrong length, and a link key is always 32 bytes
+    /// (M4 review R-37: no locked memory is involved, so the call cannot be `Unavailable`).
     pub fn duplicate(&self) -> Result<Self> {
         Ok(Self {
             ld_id: self.ld_id,
@@ -642,11 +643,12 @@ impl MemoryPrekeyStore {
         Ok(Issued { invitation, blob })
     }
 
-    /// A deep copy, for tests: duplicates every secret into locked memory (feature `kat` or tests only: a shipped
-    /// build has no way to copy prekey secrets out of a store).
+    /// A deep copy, for tests: duplicates every secret — the prekey secrets into locked memory, the records' link
+    /// keys into zeroizing heap copies (feature `kat` or tests only: a shipped build has no way to copy prekey secrets
+    /// out of a store).
     ///
     /// # Errors
-    /// [`Error::Unavailable`] without locked memory.
+    /// [`Error::Unavailable`] without locked memory (the prekey secrets; the records' copies cannot fail).
     #[cfg(any(test, feature = "kat"))]
     pub fn duplicate_kat(&self) -> Result<Self> {
         let mut generations = Vec::new();

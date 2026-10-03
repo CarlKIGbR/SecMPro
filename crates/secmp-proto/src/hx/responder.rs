@@ -5,6 +5,10 @@
 //! step 4 (`commit_accept`: OPK deletion and record consumption), which is the last operation. Every rejection therefore leaves the store, the record and the caller's
 //! state as they were, and "log nothing identifying" (§6.6 step 3) holds because nothing here logs.
 //!
+//! **Memory (M4 review R-52).** The `K_inv`-layer plaintext chunks held while grouping (at most 8 partial groups of
+//! three 4006-byte chunks) and the decoded `IKSPublic_I` are not treated as secrets in memory: they are freed without
+//! a wipe. No key material is among them; the `K_id`-layer, `SK` and ratchet keys are in zeroizing types.
+//!
 //! **One uniform error.** Every rejection of untrusted input is [`Error::Rejected`], whichever check failed.
 //! [`Error::Unavailable`] is the environment's, never the input's: the locked-memory copies of `SPK_dh` and `RPK_kem`
 //! for the ratchet (before `first_msg` is decrypted), the ratchet's sending half that draws randomness after the
@@ -65,8 +69,8 @@ std::thread_local! {
     ///
     /// `k_id`, `session_key` and `dh_checked` set it on the initiator's side too; it is meaningful after `accept`
     /// only. `None` before the first call on this thread. Without `kat` neither the tag nor any statement setting it
-    /// exists. (A thread-local rather than accessor functions: the mutation gate builds this crate without `kat`, so
-    /// the body of a `kat`-only function would only add surviving mutants.)
+    /// exists. (A thread-local rather than accessor functions: when the mutation gate built this crate without `kat`,
+    /// the body of a `kat`-only function only added surviving mutants; the gate builds with `kat` since R-60.)
     pub static ACCEPT_SITE_KAT: core::cell::Cell<Option<&'static str>> = const { core::cell::Cell::new(None) };
 }
 

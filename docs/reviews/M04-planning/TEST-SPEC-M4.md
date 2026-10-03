@@ -56,6 +56,9 @@ Test `hx_vectors` (one assertion message per case id) compares, byte for byte, e
 
 Cross-side equalities asserted in the same test: I.SK = R.SK; I.transcript = R.transcript = I.sb = R.sb; I.K_id =
 R.K_id (Appendix C `docs/03:784` "both sides derive identical `SK`, `transcript`, `K_id`").
+Amendment (M4 review R-50, 2026-10-03): as implemented, `hx_vectors` compares for case 6 the cells, the state digests
+and `sb`, and for cases 7–8 neither `sk`, `k_id` nor the content; the outputs not compared, and the cross-side `SK`/`K_id`
+equalities, are implied via the cells and the state digests, which depend on them.
 RNG order the `kat` RNG must reproduce (`hx.py:21-27`): sign_bundle `rnd` 32 · start `EK_I` 32, Encaps m (SPK) 32,
 Encaps m (OPK) 32, TR init `dh_s` 32, `kem_s` seed 64, m 32 · envelope `hdr_nonce` 24, N2 24, `init_id` 16, N_0 24,
 N_1 24, N_2 24 · respond DHRatchet `dh_s` 32, `kem_s` seed 64, m 32.

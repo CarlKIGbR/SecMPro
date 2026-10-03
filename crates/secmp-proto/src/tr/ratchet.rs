@@ -1378,8 +1378,10 @@ mod selection {
     /// M4 review R-58: `lookup_skipped` selects the matching entry's message key with masks over every entry — at
     /// index 0, in the middle and last — and gives the all-zero key on a miss; the index comes back for
     /// `Update::remove` only, and `RatchetState::open` passes the selected key to the body MAC (`Selected::Skipped`
-    /// carries it), so `skipped` is not indexed before the MAC. A `VecDeque::get` cannot be hooked; this test, the
-    /// counter of `trial_opens_every_candidate_every_call` (every entry visited) and the mutants run stand for it.
+    /// carries it), so `skipped` is not indexed before the MAC. A `VecDeque::get` cannot be hooked, and neither this
+    /// test nor the counter of `trial_opens_every_candidate_every_call` would detect a reintroduced secret-indexed `mk`
+    /// load (no M4 mutants run covered `tr/`): that absence is guarded by review only, until the counting accessor of
+    /// F-M5 (M4 review R-42).
     #[test]
     fn skipped_mk_is_selected_without_indexing() -> Result<()> {
         // seven entries over three header keys, (hk_i, n) → mk = [10·i + n; 32]

@@ -1,0 +1,27 @@
+# M4-fix C-2: local ct gate (`cargo xtask step --strict ct`, unscaled, 1 000 000 samples per target)
+# head 0a5d2b6 + the docs commit's comment-only changes; Apple M1 Pro, cntvct_el0, tick 41.667 ns, effect floor 41.7 ns; nothing else running
+# run verdict PASS; step 3263 s (54.4 min); progress file target/ct-progress.jsonl (ct-progress-local-0a5d2b6.jsonl)
+# sensitivity control min_leak_control: reached True, raw Δ 2.90 floors
+
+| Target | Verdict | Decisive / largest-|t| crop: |t| first / second, Δ (class 0 − class 1) | A/A max |t| | Claimed site |
+|---|---|---|---|---|
+| `control_variable_time_compare` | PASS | p75: |t| 111440.39, Δ -48926.8 ns | 2.32 | - |
+| `tag_compare` | PASS | p50: |t| 1.88 / 0.20, Δ +0.8 / +0.1 ns | 1.38 | - |
+| `msg_open_reject` | PASS | p90: |t| 1.89 / 0.27, Δ +0.1 / -0.1 ns | 1.58 | - |
+| `caead_open_reject` | PASS | p75: |t| 3.90 / 0.98, Δ +0.2 / +0.1 ns | 0.90 | - |
+| `sas` | PASS | p99: |t| 2.24 / 0.28, Δ +463.1 / +51.0 ns | 0.98 | - |
+| `caead_derive` | PASS | p75: |t| 2.57 / 0.41, Δ +0.2 / -0.1 ns | 0.82 | - |
+| `caead_aead_reject` | PASS | p99: |t| 1.15 / 0.58, Δ -0.3 / -0.1 ns | 2.39 | - |
+| `caead_com_compare` | PASS | p99: |t| 1.93 / 0.24, Δ +0.4 / +0.1 ns | 1.37 | - |
+| `caead_open_reject_samekey` | PASS | p50: |t| 1.15 / 1.56, Δ +0.2 / -0.4 ns | 1.80 | - |
+| `aa_prime_control` | PASS | p75: |t| 3.12 / 0.44, Δ -0.4 / -0.1 ns | 1.06 | - |
+| `tr_decrypt_reject_hdr_key` | PASS | p50: |t| 5.77 / 0.10, Δ +0.4 / +0.0 ns | 2.32 | header: no key opened |
+| `tr_decrypt_reject_body_tag` | SUB_FLOOR_SHIFT | p50: |t| 5.45 / 8.38, Δ -0.7 / -0.6 ns | 2.12 | body MAC |
+| `tr_decrypt_reject_ct_pq` | PASS | p75: |t| 4.99 / 0.95, Δ +0.7 / +0.1 ns | 1.13 | kem constancy |
+| `tr_decrypt_reject_skipped` | PASS | p75: |t| 4.24 / 0.22, Δ +0.7 / +0.1 ns | 1.63 | body MAC |
+| `same_content_control` | PASS | p75: |t| 1.44 / 4.10, Δ +0.8 / +2.5 ns | 2.26 | body MAC |
+| `inv_fingerprint_compare` | PASS | p50: |t| 3.02 / 0.47, Δ -0.6 / +0.1 ns | 0.75 | fingerprint |
+| `x25519_zero_check` | PASS | raw: |t| 0.99 / 1.54, Δ -4.4 / -10.3 ns | 1.34 | §3/§6.4 all-zero check of the output (passes: not a reject target) |
+| `hx_accept_reject_inner` | PASS | p50: |t| 7.43 / 37.83, Δ +31.7 / -27.1 ns | 1.98 | inner open |
+| `hx_accept_reject_first_msg` | PASS | p75: |t| 2.52 / 0.14, Δ +14.1 / +1.5 ns | 1.56 | first_msg decrypt |
+| `hx_same_content_control` | SUB_FLOOR_SHIFT | p50: |t| 9.38 / 14.90, Δ -4.3 / -7.0 ns | 1.23 | inner open |

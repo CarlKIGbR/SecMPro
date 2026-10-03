@@ -8,14 +8,18 @@ Phase B (`formal/hx.pv`, F5, F34, F2 ct target) is a separate conversation on Op
 does its O-7 bounded variant (§3.1, §8.1). B2–B4 not started; B5–B8 prepared on two worktree branches, not on
 `m04-hx` (§1.2).
 **WEISUNG M4-5 (2026-10-02, §13):** `formal/hx.pvl` + 14 session files (O-13…O-19): 5 files finish with every
-verdict as expected, 9 files STOP at the 30-min cap (§13.7); `tr.pv` F5 + T13 done (46 lines as expected); gate F7,
-CI job `proverif-hx`, ADR-046 done.
+verdict as expected, 9 files STOP at the 30-min cap (§13.7); `tr.pv` F5 + T13 done (46 lines as expected); gate F7
+done for hx; `tr` matched by count and verdict only (campaign R-65, C-7; by query text since the M4-fix round); CI job
+`proverif-hx`, ADR-046 done.
 **WEISUNG M4-7 (2026-10-02, §13.11):** O-20…O-23 applied (O-23 in all five auth files): 14 session files pass the
 gate (82 / 82 lines as expected, hBoth 1043.5 s the longest); the 5 `-auth` files (H5, H5, H8, H9, H9b) STOP at the
 30-min cap (§13.11.5) — the stall also occurs without the attacker as inviter (§13.11.4).
 **WEISUNG M4-8 (2026-10-02, §11.2):** K2 option (c) (`prop_outer_unpad_total_12018`); `secmp-sys-mem` `cfg(kani)`
 backend (the Miri file); K4b on the real store VERIFIED for two one-record stores — the M4-3 bound (≤ 2 records)
 STOPs (§11.3); K4a keeps its store model (real store > 30 min). Kani gate 25/25, 1422 s.
+
+**M4-fix (2026-10-03, last section):** the conditions C-1…C-15 of `docs/reviews/M04-review.md` landed (`558adc1…0a5d2b6`
+and the docs commit), with the local gates and evidence listed there.
 
 Inputs: `docs/07` §M4; spec `docs/03` §5, §6 (+ §7.2–7.4, §7.6 for `first_msg`), App. A/B/D; `CLAUDE.md`; `docs/06` §8;
 `docs/08` ADR-043, ADR-044 (proposed), ADR-045; `docs/reviews/M04-planning/TEST-SPEC-M4.md` (115 dictated rows),
@@ -34,6 +38,9 @@ are enforced only after ratification (default 2026-10-02 ~02:45 UTC): they land 
 ADR-044 (b)–(f) are enforced in this milestone.
 
 ### 1.1 Steps (Phase A)
+
+The Phase-A plan snapshot of 2026-10-01 (M4 review E-01): the statuses are those of the plan; steps 2–10 were done in
+the course of the milestone (§2, §10–§13, M4-9…M4-12).
 
 | Step | What | Test rows / F-ids closed | Status |
 |---|---|---|---|
@@ -55,7 +62,7 @@ ADR-044 (b)–(f) are enforced in this milestone.
 | B1 | `formal/hx.pv` (CLAIMS §HX) | committed `e42c854`; **STOP** (§8.1); replaced by `formal/hx.pvl` + `formal/hx/*.pv` (`79f4705`, WEISUNG M4-5): 9 of 14 files **STOP** (§13.7); WEISUNG M4-7 (`4f5562d`): 14 session files pass, 5 `-auth` files **STOP** (§13.11.5) |
 | B2 | `tr.pv` F5 (M3 R-12) | done `ea071c3` (§13.4) |
 | B3 | `tr.pv` F34 / CLAIMS T13 | done `ea071c3` (T13 false ×7) |
-| B4 | ProVerif gate F7 | done `5bf47a1`, CI `6599d49` (§13.5) |
+| B4 | ProVerif gate F7 | done `5bf47a1`, CI `6599d49` (§13.5): F7 done for hx; `tr` matched by count and verdict only (campaign R-65, C-7) |
 | B5 | ct `tr_decrypt_reject_skipped` (F2) | on `m04-hx` as `5005399` (WEISUNG M4-4); respecified in `8077590` (§12) |
 | B6 | ct `inv_fingerprint_compare`, `x25519_zero_check`, `hx_accept_reject_inner`, `hx_accept_reject_first_msg` | on `m04-hx` as `67dc5cb` |
 | B7 | F19 pre-checks + reject sites | on `m04-hx` as `260b4bd`; TR/INV site tags added in `db6d085`, pre-checks assert them in `8077590` (§12) |
@@ -70,7 +77,7 @@ The two worktree branches were deleted after the cherry-picks (WEISUNG M4-4 Part
 - `secmp-proto::prekeys`: `IdentityKeys`, `PrekeyStore` (+`commit_accept`), `MemoryPrekeyStore` (SPK generations by id with retention, OPK single use, RPK, records, `consume_record`, `issue_invitation`, `retire_expired`); bundle signing now uses `PrekeyBundle::signed_fields` (V-11).
 - `tr`: `Opened::header_counters` (V-10: no fail-open default), entropy extensions, `encrypt_padded_kat`.
 - Vectors: `vectors/hx.json` frozen (sha256 `a33cf162…`), generator and replay as before.
-- Tests: `tests/hx/` 109 tests + 16 lib unit tests in `inv`/`hx`/`prekeys`; proptest-style properties P1–P11; fuzz F1–F7; Kani K1–K5.
+- Tests (at the review pin `e8359b1`, M4 review E-03): `tests/hx/` 123 `#[test]`, 9 lib unit tests in `inv`/`hx`/`prekeys` (20 with `wire/hx`, `wire/inv`); proptest-style properties P1–P11; fuzz F1–F7; Kani K1–K5.
 
 ## 3. Evidence (docs/reviews/M04-evidence/)
 `ci-fast-aarch64-apple-darwin-local.txt` (PASS), `vectors-xtask.txt` (11 suites identical), `kani-xtask-step.txt` (`cargo xtask step --strict kani`: 24/24 harnesses verified, 847 s, Kani 0.68.0), `kani-k5-first-run-harness-overflow.txt` (first K5 run: failing check `kani_cell_plaintext_decode_total.assertion.1` = `attempt to add with overflow` at `len + 1` in the HARNESS' own assumption, not the decoder; fixed by `len >= PT_LEN - 1`; V-3 decoder unit tests `cell_plaintext_decode_rejects_i_ge_total` / `_total_ne_3` pass, the M2 decoder already rejects both), `fuzz-m4-local-120s.txt` (7 targets × 120 s, no findings).
@@ -99,7 +106,7 @@ lines of hClean "is false." in the unreplicated reduced instance, 5.8 s).
 V-1 done (`accept_counter_rules_reject_after_a_valid_mac`: MAC verifies, `remaining()==0`, store/OPK unchanged, control 0/0 accepts; `first_msg_with_counters` advances `ck_s`). V-3 done (two named decoder tests). V-5 done (arithmetic base64, `Zeroizing`). V-6 done (`start_persist_error_is_returned_and_nothing_sent`). V-7 done (`accept_success_consumes_record_and_opk`). V-8 done (docs; `hx_secrets_are_zeroizing_types` type ascription). V-9 done (hard assertions, `low_order()` extended to 8 values, moved to `hx/tests.rs`). V-10 done. V-11 done. V-12 done (`docs/07` API line updated).
 
 ## 5. M3 follow-ups (Part E)
-F3 done (dependency-free YAML-aware reader, `required_job_bypasses_are_findings`) · F6 not done: formal (`tr.pv`) — Phase B · F8 done · F9 done (bound check before `apply`; the post-apply error arm is provably unreachable) · F10 partly (`Profile.name` is `Zeroizing<String>`; hosts/msg_ids unchanged) · F11 done · F12 partly (type-pin test in `tr/ratchet.rs`; no heap-probe pattern in testkit) · F14 done · F18 done · F20 done (ADR-042 consequence sentence + non-kat nextest in step 4) · F21 done · F22 done (`miri-full.yml` one job per package; required jobs unchanged) · F23 done · ctreport `class_median` refusal done (Amendment-2 format reports only) · ADR-041 Amendment 2 status line, M03-report Q-1 text done. F16 waits for ADR-043 ratification (after 2026-10-02 02:45 UTC). F4, F17 skipped (optional).
+F3 done for the required jobs only (dependency-free YAML-aware reader, `required_job_bypasses_are_findings`; the `uses` check was line-syntactic and `mutants`/`proverif-hx` unpinned — closed in the M4-fix round, C-5) · F6 deferred to the M5 formal batch, reason "needs the F5 branch model; Opus task" (F-M5) · F8 done · F9 done (bound check before `apply`; the post-apply error arm is provably unreachable) · F10 hosts closed (`Host` in `Zeroizing`), msg_ids open (TR) · F11 done · F12 type pins delivered (`tr/ratchet.rs`), heap probe deferred (no testkit pattern; it would need an `unsafe` test root) · F14 done · F18 regex done, log pending the green run · F20 done (ADR-042 consequence sentence + non-kat nextest in step 4) · F21 done · F22 done (`miri-full.yml` one job per package; required jobs unchanged) · F23 rewording done, owner part (CODEOWNERS or "require workflows") open (review §D (c)) · ctreport `class_median` refusal done (Amendment-2 format reports only) · ADR-041 Amendment 2 status line, M03-report Q-1 text done. F16 waits for ADR-043 ratification (after 2026-10-02 02:45 UTC). F4, F17 harness skipped; the Kani negative-control log is owed (C-15; delivered in the M4-fix round, `M04-evidence/kani-k4b-negative-control-e5779da.txt`).
 
 ### 5.1 Model coverage — `formal/hx.pv` (Phase B)
 
@@ -126,11 +133,60 @@ every accepting path (used on Skipped; decoded and dropped on Chain/Step), selec
 `any_skipped`. Test `undecodable_skipped_header_rejects_on_every_path` pins the class (fails under the letter with
 `Some(("chain", 8))`); `any_skipped_single_conversion` pins one conversion up to and including `decide`.
 
+### 5.3 Deviations recorded by the M4 review (§E, accepted)
+
+- **R-90 — `inv_sid` drawn at random.** `MemoryPrekeyStore::issue_invitation` draws `inv_sid` at random, as the
+  reference and the frozen vectors do (`vectors/SCHEMA-4.10-hx.md:48-50`), whereas spec §9.1 derives every sid from
+  the queue keys ("derived, not chosen"): an issued InvitationV1 names a queue a §9.1 relay cannot have created.
+  Minor; F-M5 (ADR-048 and the `hx.json`/`ref/hx.json` re-freeze when the queue keys exist).
+- **M4-12 item 6** — `MUTANT_EXCLUDE_RE` matches `Groups<.*>::(get|remove_completed) ` with the type parameters
+  (cargo-mutants' names), not the literal pattern of the WEISUNG.
+- **M4-12 item 4** — `issue_invitation_failure_removes_only_that_opk` numbers the OPKs differently from the WEISUNG's
+  {1, 2}: the first issuance keeps OPK 1, the failed second one takes OPK 2 (its `ld_id` collides through the replayed
+  `FixedEntropy` stream).
+- **R-24** — the grouping deviation of `drive` from ADR-044 (c), resolved by C-10 (see M4-12 "Open / deviations").
+
 ## 6. ADR-045
 `xtask/src/summary.rs`; every step of `ci-full`/`ci-fast` appends a table (`status`, one row per verdict line; for `ct` the run verdict, runner timer, every target/control row from the gate's reading; for `proverif` the sha256 of the models) to `$GITHUB_STEP_SUMMARY`, else stdout. Test `summary::tests::the_ct_table_comes_from_a_recorded_report` (run 36840478213 report: 18 rows). A run page with the table is the next push's PR run.
 
 ## 7. Test counts per spec section (implemented / passing / extra)
-(a) positives + vectors: 8 listed + `hx_vectors`, generator, flow, builder controls → all pass; extras: `builders_reproduce_an_accepted_envelope`, `accept_counter_rules_reject_after_a_valid_mac`, `accept_success_consumes_record_and_opk`, `hx_secrets_are_zeroizing_types`, `start_persist_error_is_returned_and_nothing_sent`. (b) negatives N-1…N-72 (N-58 withdrawn): all rows named, all pass. (c) P1–P11 pass. (d) F1–F7 implemented, 120 s each, K1–K5 verified (K1 is a check of the chunking constants and their tiling, not of the split or the join; M4 review C-15, E-12). (e) all named assertions pass. (f) ct targets: Phase B (not started). (g) F10–F12 per §5.
+(a) positives + vectors: 8 listed + `hx_vectors`, generator, flow, builder controls → all pass; extras: `builders_reproduce_an_accepted_envelope`, `accept_counter_rules_reject_after_a_valid_mac`, `accept_success_consumes_record_and_opk`, `hx_secrets_are_zeroizing_types`, `start_persist_error_is_returned_and_nothing_sent`. (b) negatives N-1…N-72 (N-58 withdrawn): all rows named, all pass. (c) P1–P11 pass. (d) F1–F7 implemented; gate-path evidence pending (C-6); K2–K5 verified; K1 checks the tiling constants. (e) pass; E9 partly (type pin + `secret_page.rs:237`). (f) ct targets: Phase B (not started). (g) F10–F12 per §5.
+
+Extras (M4 review E-14, R-40): the `#[test]` functions of `tests/hx/` and `tests/hx_persist.rs` whose names
+TEST-SPEC-M4 does not contain — counted here at the pin `e8359b1`: 23 (the review's count, by its own method including
+lib unit tests: 32 extras, 8 named nowhere); "named" says where the report named it before this table.
+
+| Extra test | File | Named before |
+|---|---|---|
+| `accept_handshake_caps_nonzero_rejects_and_keeps_opk` | `accept.rs` | M4-9 |
+| `accept_wrong_spk_id_rejects_at_the_id_check` | `accept.rs` | nowhere |
+| `accept_wrong_opk_id_rejects_at_the_id_check` | `accept.rs` | M4-12 |
+| `builders_reproduce_an_accepted_envelope` | `accept_ok.rs` | §7 |
+| `accept_counter_rules_reject_after_a_valid_mac` | `accept_ok.rs` | §4, §7 |
+| `accept_success_consumes_record_and_opk` | `accept_ok.rs` | §4, §7 |
+| `hx_secrets_are_zeroizing_types` | `accept_ok.rs` | §7, §10 |
+| `start_persist_error_is_returned_and_nothing_sent` | `accept_ok.rs` | §4, §7 |
+| `the_rust_generator_reproduces_the_hx_file` | `generator.rs` | nowhere |
+| `invitee_reject_sites_are_tagged` | `inv.rs` | §12.4 |
+| `prop_outer_unpad_total_12018` | `props.rs` | §11.2 |
+| `spk_rotation_is_seven_days` | `store.rs` | nowhere |
+| `spk_generation_created_is_the_issue_time` | `store.rs` | nowhere |
+| `add_record_rejects_unknown_spk_alone` | `store.rs` | nowhere |
+| `add_record_rejects_unknown_opk_alone` | `store.rs` | nowhere |
+| `add_record_rejects_duplicate_ld_id_alone` | `store.rs` | nowhere |
+| `issue_invitation_failure_removes_only_that_opk` | `store.rs` | nowhere |
+| `commit_accept_rejects_missing_opk_alone` | `store.rs` | nowhere |
+| `commit_accept_rejects_missing_record_alone` | `store.rs` | nowhere |
+| `commit_accept_rejects_mismatched_opk` | `store.rs` | nowhere |
+| `release_persists_exactly_the_three_cells` | `hx_persist.rs` | nowhere |
+| `persisted_cells_are_accepted_by_the_responder` | `hx_persist.rs` | nowhere |
+| `release_hands_persist_the_same_bytes_it_returns` | `hx_persist.rs` | nowhere |
+
+The M4-fix round adds seven, named in its section: `accept_reject_sites_name_the_check_that_rejects`,
+`accept_every_rejecting_row_counts_no_delete_and_no_draw`, `accept_commit_unavailable_is_unavailable_and_changes_nothing`
+(`accept.rs`), `rejected_init_id_does_not_re_form_within_one_accept`, `first_msg_with_nonzero_n_rejects_before_any_chain_step`
+(`accept_ok.rs`), `add_record_rejects_duplicate_opk_id_alone` (`store.rs`), `release_persists_the_state_at_release_time`
+(`hx_persist.rs`).
 
 ### 7.1 ct targets (Phase B; prepared on `worktree-agent-a77420be221171832` `4d92ec2`, not on `m04-hx`)
 
@@ -163,7 +219,9 @@ The FAIL above is diagnosed (reviewer, WEISUNG M4-4) as the position of the open
 §12.3.
 
 ## 8. Open / Phase B
-ct targets (f), `formal/hx.pv`, F1, F2, F5, F6, F7, F19, F34, F16 (after ratification), F10 hosts/msg_ids, F12 heap probe.
+As of the M4 review (E-15): F6 deferred (F-M5 formal batch); F10 msg_ids open in TR (hosts closed); F12 heap probe
+deferred (an `unsafe` test root); F18 log pending the green run; F23 owner part open. Done since this list was first
+written: ct targets (f), the HX models (`formal/hx.pvl` + `formal/hx/*.pv`), F1, F2, F5, F7, F19, F34, F16.
 
 ### 8.1 Blocked — Phase B STOP (BRIEF M4-PV §7)
 
@@ -204,7 +262,7 @@ Phase B (BRIEF M4-PV): run 36885710027 was `in_progress` at the start (Part 0) a
 - A (V-6): `HandshakeCells::to_bytes` is `pub(crate)`; doc-test `compile_fail` on `HandshakeCells` (`hx/mod.rs`, named `handshake_cells_expose_no_cells_before_release` in its text); the external test that read the cell bytes now captures them through `release`.
 - B (V-8): module doc matches `initiator.rs:31-32, 192-193`; `hx_store_and_persisted_bytes_are_zeroizing_types` (crate-private pins: SPK_dh/SPK_kem/RPK_kem/OPK_dh/OPK_kem, `to_bytes`, `state_bytes`) next to `hx_secrets_are_zeroizing_types`.
 - C (F9): `decrypt_with` builds `next` (round trip `to_bytes`/`from_bytes`, since `RatchetState` has no `Clone`), serialises it, then replaces; tests `receive_persist_bytes_equal_state_after_swap`, `receive_error_leaves_state_unchanged`. Removed: the pre-check `after = skipped.len() - remove + added; if after.saturating_sub(select::evicted(after)) > MAX_SKIPPED` (dead).
-- D (F10): `Accepted.routes: Zeroizing<Vec<RouteDescriptor>>`, `InviteeAccepted.invitation: Zeroizing<InvitationV1>`, `Host` holds `Zeroizing<Vec<u8>>`; `Zeroize` impls for `RelayRef`/`RelayQueue`/`RouteDescriptor`/`InvitationV1` (host, onion, akc, relay_fp, sid, ld_id, inv_sid); `secmp-crypto` re-exports `Zeroize` (no new dependency). msg-id fields are not held by `Accepted`/`InviteeAccepted`: nothing to wrap there.
+- D (F10): `Accepted.routes: Zeroizing<Vec<RouteDescriptor>>`, `InviteeAccepted.invitation: Zeroizing<InvitationV1>`, `Host` holds `Zeroizing<Vec<u8>>`; `Zeroize` impls for `RelayRef`/`RelayQueue`/`RouteDescriptor`/`InvitationV1` (host, onion, akc, relay_fp, sid, ld_id, inv_sid); `secmp-crypto` re-exports `Zeroize` (no new dependency). msg-id fields are not held by `Accepted`/`InviteeAccepted`: nothing to wrap there (msg_ids open in TR).
 - E: `delete_opk` hits remaining: the method itself and its impls (`prekeys.rs:330,721,724`) and the Kani stub (`kani_proofs.rs:487`).
 - Unpushed: PR run 36885710027 `in_progress`.
 
@@ -381,8 +439,9 @@ carries that key; the `Path::Skipped` arm (`:801-805`) passes it to `MsgEncrypt:
 Doc comment as dictated ("mk selected by masks over every entry (R-58): no secret-indexed load before the body MAC").
 Test `skipped_mk_is_selected_without_indexing` (`:1341`): seven entries over three keys, matches at index 0, 2, 3
 (middle) and 6 (last) give `found`, the index and the entry's key; four misses and an empty `skipped` give the
-all-zero key and index 0. A hook on `VecDeque::get` is not possible (std), so the brief's fallback applies: this test,
-the visit counter of Part D (every entry, every call) and the mutants run. `vectors/tr.json` sha256
+all-zero key and index 0. A hook on `VecDeque::get` is not possible (std); the fix is guarded by review only (F-M5 counting accessor): neither
+this test nor the visit counter of Part D would detect a reintroduced secret-indexed load, and no M4 mutants run covered
+`tr/` (M4 review E-17, R-42). `vectors/tr.json` sha256
 `01a6d161138508af8fedd27df0fe5c62d473dbbf27530accbe6cde293201a837` before and after (`cargo xtask vectors`: 11 suites
 agree with ref, every frozen file unchanged).
 
@@ -404,7 +463,9 @@ comment carries the dictated sentence verbatim.
 
 **Local run at the gate's scale** (`M04-evidence/ct-local-14e55da.txt`): `cargo xtask step ct` (full sample counts,
 `SECMP_CT_SCALE` removed by the step) on this Mac, background run with no build or test in parallel: **run verdict
-PASS**, step 2677 s (≤ 60 min, so the gate scale, not scale 6). Clock `cntvct_el0`, 1 tick = 41.667 ns = effect
+PASS on the Mac at `14e55da`** (effect floor 41.7 ns; M4 review E-18: a Linux runner's floor is 10 ns, where the
+reproduced HX shifts of the table below would FAIL — the Linux ct report of the fix head decides, C-2), step 2677 s (≤
+60 min, so the gate scale, not scale 6). Clock `cntvct_el0`, 1 tick = 41.667 ns = effect
 floor, k = 1 for all five, 1 000 000 samples each; Δ = class 0 − class 1 at the decisive or largest-|t| crop.
 
 | Target | Verdict | First: max \|t\| (crop, Δ floors) | Second | A/A max \|t\| | Pre-check (site) |
@@ -412,8 +473,8 @@ floor, k = 1 for all five, 1 000 000 samples each; Δ = class 0 − class 1 at t
 | `tr_decrypt_reject_skipped` | **PASS** | 1.00 (p99, −0.023) | 2.31 (raw, +0.099) | 2.11 | both Err(Rejected), "body MAC" |
 | `inv_fingerprint_compare` | PASS | 2.40 (p75, −0.013) | 0.93 (p75, −0.005) | 1.96 | both "fingerprint"; twin Ok |
 | `x25519_zero_check` | PASS | 2.15 (p90, +0.018) | 2.28 (p75, −0.010) | 2.28 | Ok, bytes [0] / [31] |
-| `hx_accept_reject_inner` | SUB_FLOOR_SHIFT | 44.48 (p50, +0.354) | 40.10 (p50, +0.324) | 2.19 | both "inner open"; twin Ok |
-| `hx_accept_reject_first_msg` | SUB_FLOOR_SHIFT | 6.32 (p50, −0.512) | 7.62 (p50, −0.598) | 2.25 | both "first_msg decrypt"; twin Ok |
+| `hx_accept_reject_inner` | SUB_FLOOR_SHIFT | 44.48 (p50, +0.354 = +14.8 ns) | 40.10 (p50, +0.324 = +13.5 ns) | 2.19 | both "inner open"; twin Ok |
+| `hx_accept_reject_first_msg` | SUB_FLOOR_SHIFT | 6.32 (p50, −0.512 = −21.3 ns) | 7.62 (p50, −0.598 = −24.9 ns) | 2.25 | both "first_msg decrypt"; twin Ok |
 
 `tr_decrypt_reject_skipped` before → after: FAIL, Δ −1.41 / −1.42 floors (old classes, scale 6, §7.1) → PASS,
 |Δ| ≤ 0.10 floors (new classes, full scale), median 30 083 ns. Controls: positive control PASS (max |t| 105 938);
@@ -945,17 +1006,19 @@ two comment lines). A second run on the new `Drop`/`Zeroize`/`wipe_seed` code of
 `ZeroizeOnDrop`: `secmp-proto` has no direct `zeroize` dependency). `SecretBytes` has no in-place wipe, so `zeroize()` of
 `InvitationV1` and `RelayQueue` replaces `link_key`, `inv_send_seed`, `send_seed` with a zero value (`wipe_seed`); the
 old allocation is wiped by `SecretBytes::drop`. A test in `wire/cell.rs` that moved a field out of a `RouteDescriptor`
-now borrows it. Tests (`wire::cell::wipe_tests`): `zeroize_clears_every_byte_field` (relay_fp, onion, akc, host,
-spki, sid, ld_id, link_key, inviter_fp, inv_sid, inv_send_seed, send_seed, `Unknown.blob`/`kind`, `expires`: all zero),
-`dropped_invitation_is_wiped`. No testkit pattern for a runtime drop-wipe exists (only type pins, e.g.
-`hx_secrets_are_zeroizing_types`), and reading freed memory needs `unsafe`, so the second test observes **that** the
-`Drop` ran: a `cfg(test)` log of the type names (`wire::wipe_log`), asserted for a plain drop, for `invitee_check`
+now borrows it. Tests (`wire::cell::wipe_tests`): `zeroize_clears_every_byte_field` asserts relay_fp, onion, akc, spki, sid, ld_id,
+link_key, inviter_fp, inv_sid, inv_send_seed, send_seed, `Unknown.kind` and `expires` all zero, and the host and
+`Unknown.blob` wiped and empty (since the M4-fix round, C-14: an all-zero check over an empty slice proved nothing);
+`direct.port` and the periods (`period_s`, `inv_period_s`) are not wiped (M4 review E-19). `dropped_invitation_is_wiped`:
+no testkit pattern for a runtime drop-wipe exists (only type pins, e.g. `hx_secrets_are_zeroizing_types`), and a heap
+probe would need an `unsafe` test root (E-20), so the second test observes **that** the `Drop` ran: a `cfg(test)` log of the type names (`wire::wipe_log`), asserted for a plain drop, for `invitee_check`
 on an expired invitation (the rejection path) and for each route variant. Vectors unchanged (`cargo xtask vectors`:
 11 suites identical).
 
 ### C. R-63 — known ct sites
 
-`expect::KNOWN_SITES` (TR 8, INV 9, HX 8 names and the Output claim of `x25519_zero_check`); `ct_site_lines` reports
+`expect::KNOWN_SITES` (TR 8 at `e8359b1`, TR 9 after the M4-fix round added "skipped: (hk, n) not stored" (E-21,
+C-14); INV 9, HX 8 names and the Output claim of `x25519_zero_check`); `ct_site_lines` reports
 `ct: <target> claims the unknown reject site "<site>" …` as a problem, which fails the gate. `gates::tests::ct_gate_rejects_unknown_site`
 (an unknown site fails and names target and site; every listed site passes). The `M3_SITES` fixtures of the existing
 tests now use real site names (they were "site one"…); the summary row keeps `— site <site>`.
@@ -965,8 +1028,9 @@ tests now use real site names (they were "site one"…); the summary row keeps `
 `cargo mutants -j 3` in the step, `timeout-minutes: 240` on the `mutants` job, ADR-047 Consequences: "`-j 3`; budget 240 min".
 **Local time of the full two-crate step: not measured.** `cargo mutants --list` with the gate's flags gives 1281
 mutants; the HX subset (331) alone took 67 min at `-j 3`, so the step is well over the 90-minute limit and was not
-started locally. If cost scaled with the count the step would need about 4 h at `-j 3`, i.e. the 240-min budget
-could be tight; crypto's tests are faster than the proto suite, so this is an upper estimate. The CI run measures it.
+started locally. Corrected by the M4 review (E-22): the review's diagnosis estimates 7–26 h for the step (central
+13 h; every viable proto mutant paid the 49–110 s fast-forward tests), far beyond 240 min; ADR-047 Amendment 1
+replaces the single job by 8 shards with a merge verdict.
 
 ### E. Checks
 
@@ -975,7 +1039,9 @@ could be tight; crypto's tests are faster than the proto suite, so this is an up
 passed after); `cargo xtask vectors`: 11 suites identical; `cargo xtask step --strict policy`: PASS; Kani: above.
 
 ### Open / deviations
-No deviation from the spec. From the letter of the WEISUNG: item 6's pattern (type parameters added, see table); item 4's
+Deviation from the spec (M4 review E-23, R-24): `drive` let a rejected group's `init_id` form a new group later in
+the same `accept` call, against ADR-044 (c) "first-seen wins"; resolved in the M4-fix round (C-10: the code follows
+ADR-044 (c) within one call). From the letter of the WEISUNG: item 6's pattern (type parameters added, see table); item 4's
 OPK numbering; `MUTANT_EXCLUDE_RE` additions sit in the same file as `KNOWN_SITES` (`expect.rs`), committed with
 `xtask(m4): known ct sites (R-63), mutants -j3`. Risk: the full mutants step runtime (D). Totals: 22 missed → 3 missed
 (documented equivalents); unviable 93 (was 93); caught 220 → 235 (the mutant set changed with the exclusions and new code).
@@ -1002,8 +1068,74 @@ End: head `2af7924`.
   not depend on the new check; the other four fail without it (checked by disabling the check). `vectors/tr.json` unchanged.
 - **C.** (g) `accept_handshake_caps_nonzero_rejects_and_keeps_opk` added (N-55: caps 1 and 0x80). (j) `dummy_carries_seq_zero_ts_zero`
   added (`content::dummy()` exists).
-- **D.** ADR-044 Status → Accepted (11:00 UTC default). `docs/03` rev 2.5, items (a)–(f). Existing tests: (b) `initiator_start_output_and_state_contain_no_ek_secret`;
+- **D.** ADR-044 Status → Accepted (11:00 UTC default). `docs/03` rev 2.5, items (a)–(f). Existing tests: (b) `initiator_start_output_and_state_contain_no_ek_secret` (coverage partly: the structural part is a comment and the drop-wipe rests on `X25519Secret`/`SecretPage::drop`, tested in `secret_page.rs:237`; M4 review E-24);
   (c) `group_rejected_then_other_init_id_accepts`, `group_duplicate_chunk_differing_first_seen_wins`, `group_duplicate_chunk_identical_ignored`,
   `group_partial_store_bound_8_evicts_oldest`; (d) `expired_invitation_record_is_not_offered_to_accept`; (e) `accept_first_msg_n_nonzero_rejects_and_keeps_opk`,
   `accept_first_msg_pn_nonzero_rejects_and_keeps_opk`, `accept_handshake_without_known_route_rejects_and_keeps_opk`; (f) `accept_reflected_own_iks_rejects_and_keeps_opk`.
 - **E.** `docs/01` §7 row RR-15 (O-10).
+
+## M4-fix — fix round after the M04 review (conditions C-1…C-15)
+
+BRIEF M4-FIX (2026-10-03), appendix REMEDIATION-M4 (binding). Head before `e8359b1` (reviewed pin); commits
+`558adc1…0a5d2b6` (one or more per condition, messages from the appendix with the C-n tag) and the docs commit.
+Order: as the brief lists (C-1 … C-15); the measured `hx_persist` Miri row landed after C-9 (`14a88ce`) because the
+Miri run took 33 min. No agent worktree; every commit on `m04-hx`.
+
+| C-n | Commits | Dictated tests (all PASS) | Implementer decisions |
+|---|---|---|---|
+| C-1 | `558adc1` | `ct_gate_timeout_is_a_fail_naming_the_target` | `CT_STEP_TIMEOUT_SECONDS` = 17 400 s (290 min: 600 s below `dispatch-ct`'s 300 min, 40 min below the `ct` job); progress fields `target`, `phase`, `elapsed_s`, `k`, `median_ticks`; the gate builds the bench (`cargo bench --no-run`) and runs its executable, so a kill stops the measurement |
+| C-2 | `c6a9e58`, `cba105f` | `the_hx_same_content_control_fails_the_run_as_control_fail` | `ct` job `timeout-minutes: 330` (no CI measurement first: the brief allows one push and no waiting; the job's `ct-progress.jsonl` gives the per-target times) |
+| C-3 | `7a38edd` | `mutants_shard_option_comes_off_the_command_line`, `mutants_command_line_builds_with_features_kat`, `mutants_floor_fails_a_package_without_a_caught_mutant`, `mutants_skip_list_names_existing_tests` (+ `mutants_merge_needs_every_shard_with_a_pass_verdict`) | skip: `cargo mutants … -- -- --skip <name>` (shown in the probe's argv); package from the `package` field of `outcomes.json`, cross-checked with the `crates/<package>/` path, unknown = FAIL; shard jobs 300 min with a 280-min step budget (`MUTANTS_STEP_TIMEOUT_SECONDS`, SIGINT then kill); `actions/download-artifact` v8.0.1 `3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c`; `--sharding round-robin`, `--caught --unviable` (outcome lines in the step log); own cache key and tool set `mutants` |
+| C-4 | `39f2a9a`, `14a88ce` | `miri_feature_gated_targets_are_listed`, `dispatch_full_runs_the_linux_full_line` | dispatch-mutants as shards plus verdict (`dispatch-mutants-shard`, `dispatch-mutants`); `dispatch-ct` also runs for suite `full` (ct is delegated there) |
+| C-5 | `8734667` | `deleting_or_neutering_a_pinned_job_is_a_finding`, `flow_style_and_quoted_uses_are_findings`, `workflow_permissions_shell_and_prover_override_are_findings`, `delegations_map_to_pinned_jobs` | `PINNED_JOB_NEEDS` table; `mutants-shard` pinned too (its gate line and condition) |
+| C-6 | `26a681b` | `fuzz_corpus_exists_for_every_target` | the 10 padded vector `Outer`s (12 018 B each), named by SHA-1 |
+| C-7 | `4b5d3c3`, `1eeba8b` | `proverif_table_covers_every_claims_row`, `proverif_model_hashes_are_pinned`, `proverif_tr_gate_matches_by_query_text` | erratum 5 option (a): one honest-pair H11 line per auth file (92 lines); a std-only SHA-256 in xtask over the committed text (CRLF read as LF: Windows checkouts) |
+| C-8 | `a5a183c` | `release_persists_the_state_at_release_time` | `E: From<crate::Error>`: a serialisation failure is returned before `persist` is called |
+| C-9 | `004d7c6` | `first_msg_with_nonzero_n_rejects_before_any_chain_step` (updated `accept_counter_rules_reject_after_a_valid_mac`) | observable: thread-local `tr::SKIP_STEPS_KAT` (`cfg(any(test, feature = "kat"))`) counting `skip_message_keys` steps |
+| C-10 | `bf54cdd` | `rejected_init_id_does_not_re_form_within_one_accept` (+ unit `drive_does_not_re_form_a_rejected_init_id`) | `Processed<K, 42>` in `drive` (fixed array, `[const { None }; R]`); a 43rd rejected group stops the call (fail-closed) |
+| C-11 | `3a0cf5e` | `add_record_rejects_duplicate_opk_id_alone` | — |
+| C-12 | `1b4897f`, `0ed4869` | `accept_commit_unavailable_is_unavailable_and_changes_nothing` | — |
+| C-13 | `23367f7` | `read_routes_pre_sizes_the_vector` | — |
+| C-14 | `35e4971`, `9730a2d`, `24ea0a7`, `469e7f3` | `known_sites_equal_the_product_site_tags`, `base64url_decode_rejects_invalid_and_dirty_alike`, `wire_bodies_are_not_clone_outside_tests` (compile_fail doctests) | `(u8::from(invalid < 0) \| u8::from(dirty != 0)) != 0` |
+| C-15 | `74891ca`, `e5779da`, `5e1ba30`, `0a5d2b6` | `accept_reject_sites_name_the_check_that_rejects`, `accept_every_rejecting_row_counts_no_delete_and_no_draw`, `kani_gate_fails_on_an_unsatisfiable_cover` | covers parsed from the Kani log (Kani 0.68 has no `--fail-uncoverable`) |
+
+Gates and evidence (local, M1 Pro):
+
+| Gate | Result | Evidence |
+|---|---|---|
+| `cargo xtask ci-fast --strict` | PASS (fmt, clippy, policy, deny, vet, audit, cooldown, nextest 108 s, doctest, hello, kat 404 s) | this section |
+| `cargo nextest run --workspace --all-features` | 560 passed, 0 skipped | — |
+| dictated tests by exact name | 32 + 2 compile_fail doctests PASS | `dictated-tests-0a5d2b6.txt` |
+| vectors | `cargo xtask vectors`: 11 suites identical, every frozen file unchanged; `step ref-vectors` PASS; `git diff e8359b1 -- vectors/` empty | — |
+| policy | PASS, 0 findings (4 workflows; pinned jobs linux-fast, windows-native, xwin-cross, linux-full, ct, mutants-shard, mutants, proverif-hx) | — |
+| Kani (`step --strict kani`) | 25/25 VERIFIED, 1791 s; covers: 2 harnesses, every cover SATISFIED; K4b with the R-64 comparison removed: VERIFICATION:- FAILED (290 s) | `kani-xtask-step-0a5d2b6.txt`, `kani-k4b-negative-control-e5779da.txt` |
+| ProVerif (`step --strict proverif --models all`, 4 processes) | PASS, 466 s: HX 92/92 lines across 19 files (the five new H11 lines false), `tr` 46/46 by query text (191 s); model hashes 21/21 | `proverif-hx-1eeba8b.txt`, `proverif-tr-1eeba8b.txt`, `proverif-1eeba8b.sha256` |
+| ct (`step --strict ct`, unscaled, alone) | run verdict PASS, 3263 s (54.4 min); `hx_accept_reject_inner` PASS (p50 \|t\| 7.43 / 37.83 with opposite signs, Δ +31.7 / −27.1 ns), `hx_accept_reject_first_msg` PASS (p75 \|t\| 2.52 / 0.14), `hx_same_content_control` SUB_FLOOR_SHIFT (p50 \|t\| 9.38 / 14.90, Δ −4.3 / −7.0 ns, floor 41.7 ns); progress written per phase | `ct-local-0a5d2b6.txt`, `ct-progress-local-0a5d2b6.jsonl`, `ct-report-local-0a5d2b6.json` |
+| mutants, listing | `--list` with the gate selection: secmp-crypto 268, secmp-proto 1026 (1294; 1281 at the pin) | `mutants-list-0a5d2b6.txt` |
+| mutants, crypto probe | the gate's flags with `--file crates/secmp-crypto/src/kdf.rs`: 13 mutants, 5 caught, 0 missed, 8 unviable, 52 s; the test argv shows `--features=kat` and the forwarded `--skip` filters | `mutants-crypto-probe-7a38edd.txt` |
+| Miri `hx_persist` | 731 s, 573 s, 699 s per test (2003 s in all) → `MIRI_SKIP` row `test-target:hx_persist` | `miri-hx-persist-7a38edd.txt` |
+
+Risk (appendix C-3 item 6, reported, not absorbed): the M1 crypto run had 86 unviable of 241 mutants (35.7 %), the
+probe file 8 of 13; if the first sharded CI run measures more than 35 % unviable for `secmp-crypto`, the merge job
+fails naming the package, and the number goes to the reviewer (the cap is not changed here). Not run locally (brief):
+a full mutation run, the fuzz step through the gate path (the CI run's `linux-full` gives the `hx_outer` log), the
+Linux ct report (C-2's proof task: the PR run's `ct` job).
+
+Deviations from the brief and the appendix: (1) commit order as the brief lists it (C-1, C-2, C-3, C-4, C-5, …), not the appendix's landing order
+(C-1 → C-5 → C-2 → C-3 → C-4): C-5 pins `ct`, `mutants` and `proverif-hx` at once; the measured `hx_persist` row of
+C-4 landed after C-9; (2) conditions with several appendix messages landed as one commit per message (C-2, C-7, C-12,
+C-14, C-15), C-4 as two (lists, then the measurement); C-2 (c) "attach the Linux ct report" waits for the CI run;
+(3) C-2 item 3: the `ct` job's timeout was set without a prior dispatch measurement (one push, no waiting);
+(4) `cargo xtask step --strict vectors kat`: there is no step `vectors`; ran `cargo xtask vectors`, `step ref-vectors`
+and `kat` (in ci-fast); (5) the crypto probe adds `--output target/mutants-probe` and `--file` to the gate's flags;
+(6) C-15 item 2: N-41 through `Responder::accept` uses low-order values as `EK_I` and `IKSPublic_I.ik_dh`, which the
+decoders refuse before any DH; the helper's unit test stays; (7) C-10: the `drive` part of the dictated test is a unit
+test with its own name (`drive` is crate-private); (8) R-46 (listed under C-14 in the review's §G, absent from the
+appendix's C-14 changes) is not done; (9) CI details beyond the appendix's text, to make the shards workable: tool set
+`mutants` with its own cache key (R-54), `--sharding round-robin`, `--caught --unviable`, `mutants-shard` pinned with
+the other jobs, `dispatch-ct` also for suite `full`; (10) docs/01: the three M3 rows are RR-17…RR-19 (RR-16 left for
+the owner's KCI entry, review §D (a)); (11) E-14: the extras counted here are 23 (method stated), the review counted
+32.
+
+Owner memos (review §D): `ct`, `mutants`, `proverif-hx` as required checks of `main-protection`; CODEOWNERS; docs/01
+RR-16 (KCI on the signed prekey) — RR-16 is left free for it, the three M3 rows are RR-17…RR-19.

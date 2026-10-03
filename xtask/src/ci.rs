@@ -3,8 +3,8 @@
 //!
 //! Every step ends as PASS, FAIL, SKIP (not applicable on this host), DELEGATED (explicitly handed to another
 //! CI job with `--delegated <id>`) or STUB (a documented M0 stub). All steps run even after a failure so the
-//! summary is complete. With `--strict` (always used in CI) a SKIP is a failure, so nothing can be skipped
-//! silently.
+//! summary is complete. With `--strict` (always used in CI) a SKIP is a failure, and every delegated step runs in a
+//! job the policy step pins (`expect::DELEGATED_TO`, M4 review C-5), so nothing can be skipped silently.
 
 use std::path::PathBuf;
 use std::time::Instant;

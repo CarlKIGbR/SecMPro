@@ -10,8 +10,9 @@
 //! under both labels: it must stay quiet, otherwise the harness or the runner is unsound. The **sensitivity
 //! control** `min_leak_control` (ADR-041 Amendment 1 (2)) measures the smallest leak the gate must see — the work
 //! of a 32-byte comparison that exits one byte early for class 1, in one out-of-line function whose instruction
-//! stream is the same for both classes (ADR-042 Amendment 1) — and must reach the effect floor with class 0 the
-//! slower, otherwise the run is `CONTROL_FAIL`; it records the gate's sensitivity per run.
+//! stream is the same for both classes (ADR-042 Amendment 1) — and must be caught by the verdict rule it validates
+//! (`decide` on two measurements gives FAIL) with class 0 the slower at the deciding crop (ADR-041 Amendment 3),
+//! otherwise the run is `CONTROL_FAIL`; it records the gate's sensitivity per run.
 //!
 //! Targets:
 //! - `tag_compare`: the tag comparison used by `MsgEncrypt` (`subtle::ConstantTimeEq` on 32 bytes), tags that
@@ -133,12 +134,15 @@
 //!   reproduced but no reproduced crop is relevant; PASS otherwise. The positive control is measured once and must
 //!   exceed `CT_THRESHOLDS` (FAIL otherwise). The inline A/A control measures every target once more with class-0
 //!   inputs under both labels; if any of its crops exceeds `CT_AA_MAX_T`, the run is `CONTROL_FAIL`. The
-//!   sensitivity control (Amendment 1 (2)) is measured once after the A/A control with `tag_compare`'s batch size
-//!   and sample count; if its raw Δ (class 0 slower) is below its effect floor, or it cannot be measured, the run is
-//!   `CONTROL_FAIL`; so it is if the A/A′ placement control FAILs (ADR-042). A `CONTROL_FAIL` run fails the gate and
-//!   gives no target verdict (every target shows
+//!   sensitivity control (Amendment 1 (2), judged since Amendment 3 by the verdict rule it validates) is measured
+//!   twice after the A/A control with `tag_compare`'s batch size and sample count, like a target; unless `decide` on
+//!   the two measurements gives FAIL with class 0 the slower at the deciding crop, or if it cannot be measured, the
+//!   run is `CONTROL_FAIL`; so it is if the A/A′ placement control FAILs (ADR-042). A `CONTROL_FAIL` run fails the
+//!   gate and gives no target verdict (every target shows
 //!   `CONTROL_FAIL`). `NOT_MEASURABLE` fails the gate as before. A clock without a positive, finite tick length
-//!   makes every target NOT MEASURABLE (the floor in ticks needs it).
+//!   makes every target NOT MEASURABLE (the floor in ticks needs it). After it, the informative same-content variant
+//!   `min_leak_same_content` (Amendment 3 (2): both classes 32 byte steps through the same per-class preparation) is
+//!   measured once; it has no verdict and never fails the run.
 //! - The parameters are read from `xtask/src/expect.rs` (`CT_THRESHOLDS`, `CT_RESOLUTION_MAX_FRACTION`,
 //!   `CT_MAX_BATCH`, `CT_BATCH_MARGIN`, `CT_MIN_REALISED_QUANTA`, `CT_EFFECT_FLOOR_QUANTA`, `CT_EFFECT_FLOOR_NS`,
 //!   `CT_AA_MAX_T`, `CT_SAMPLES`, `CT_SAS_SAMPLES`) — this file contains no copy of them — and echoed in the report,
@@ -148,14 +152,18 @@
 //! lattice and quantum), the run verdict and, per target, `k`, the calibration, both measurements (per crop: n,
 //! class means, Δ in ticks, in `q_eff` and in effect floors, pooled sd, t; the class medians, the realised quanta,
 //! `q_eff` and where it came from, the effect floor, per-class percentiles), `t1`/`t2` at the first measurement's
-//! maximum, the deciding crop and the A/A measurement; and the sensitivity control (`k`, sample count, floor, raw
-//! Δ, whether it reached the floor, its measurement).
+//! maximum, the deciding crop and the A/A measurement; the sensitivity control (`k`, sample count, `decide`'s verdict
+//! and deciding crop, Δ in ticks and floors and t of both measurements there, both raw Δ as information, whether it
+//! was caught, both measurements and a 21-bin histogram per class of the first one's samples) and its same-content
+//! variant (one measurement and its histogram); and the host (CPU model and microcode) and the SHA-256 of the bench
+//! executable (Amendment 3 (2)), so that a layout or host effect can be told apart later.
 //!
 //! Run by `cargo xtask step ct` (ci-full) as `cargo bench -p secmp-testkit --features kat --bench ct` (ADR-042 moved
 //! the bench here from `secmp-crypto`, so that it can measure `secmp-proto` too); the results are written to
 //! `target/ct-report.json` and the exit status is the verdict. While it runs, the bench appends one JSON line per
-//! finished phase of a target (calibration, first, second, requantised, aa, sensitivity: target, phase, elapsed
-//! seconds, `k`, median ticks) to `target/ct-progress.jsonl`, which the gate echoes and names when it kills a run at
+//! finished phase of a target (calibration, first, second, requantised, aa; `first` and `second` of
+//! `min_leak_control`, `first` of `min_leak_same_content`: target, phase, elapsed seconds, `k`, median ticks) to
+//! `target/ct-progress.jsonl`, which the gate echoes and names when it kills a run at
 //! its step budget (ADR-045 Amendment 1). `SECMP_CT_SCALE`, a divisor of every sample count
 //! (default 1), shortens quick local runs; the report then carries `secmp_ct_scale`, which the gate refuses (M2
 //! review C3 (c)), and the gate unsets the variable for its own run.
@@ -165,6 +173,7 @@
 #![allow(unsafe_code)]
 
 use std::cell::RefCell;
+use std::fmt::Write as _;
 use std::hint::black_box;
 use std::io::Write as _;
 use std::process::ExitCode;
@@ -883,11 +892,6 @@ impl Measurement {
         f64_of(self.class_median_ticks) / self.q_eff
     }
 
-    /// The raw (uncropped) class statistics.
-    fn raw(&self) -> Option<&Stats> {
-        self.crops.iter().find(|(k, _)| k == "raw").map(|(_, s)| s)
-    }
-
     fn json(&self, clock: &Clock, rules: Rules) -> String {
         let ts: Vec<String> = self
             .crops
@@ -1495,11 +1499,26 @@ fn min_leak_call(input: &LeakInput) {
 /// byte steps, class 1 with 31 (one byte early); 256 comparisons per call as in `tag_compare`, so class 0 is slower
 /// by 256 byte steps. Both classes' inputs are built from one common source (`blend`, the F9 rule).
 fn min_leak(n: usize, k: usize, stream: &mut Stream) -> Samples {
+    min_leak_steps(n, k, stream, [32, 31])
+}
+
+/// The informative same-content variant `min_leak_same_content` of the sensitivity control (ADR-041 Amendment 3 (2)):
+/// both classes 32 byte steps, through the same per-class preparation as `min_leak` (`blend` with two delta buffers,
+/// class 1's all-zero, class 0's all-zero too). A class difference here follows the label or the preparation, not the
+/// step count — the falsifier of the loop-exit reading of run 37127247911 (`DIAG-ct-37127247911.md`).
+fn min_leak_same_content(n: usize, k: usize, stream: &mut Stream) -> Samples {
+    min_leak_steps(n, k, stream, [32, 32])
+}
+
+/// `min_leak_call` measured with `steps[c]` byte steps for class `c`; class 0's input is built from class 1's (the
+/// base) by `blend`.
+fn min_leak_steps(n: usize, k: usize, stream: &mut Stream, steps: [u8; 2]) -> Samples {
     let mut bytes = [0_u8; 32];
     stream.fill(&mut bytes);
-    // source: `steps ‖ bytes`; class 1 (the base) 31 steps, class 0 32 steps
-    let class1: Vec<u8> = [31_u8].iter().chain(bytes.iter()).copied().collect();
-    let class0: Vec<u8> = [32_u8].iter().chain(bytes.iter()).copied().collect();
+    let [steps0, steps1] = steps;
+    // source: `steps ‖ bytes`; class 1 (the base) `steps1` steps, class 0 `steps0` steps
+    let class1: Vec<u8> = [steps1].iter().chain(bytes.iter()).copied().collect();
+    let class0: Vec<u8> = [steps0].iter().chain(bytes.iter()).copied().collect();
     let delta = Deltas::new(&class0, &class1);
     measure(
         n,
@@ -3308,7 +3327,7 @@ fn run(
         out.push(evaluate(target, &mut stream, &clock, rules)?);
     }
     let aa_fail = aa_control(&mut out, &mut stream, &clock, rules)?;
-    let sensitivity = sensitivity_control(&out, &mut stream, &clock, rules);
+    let sensitivity = sensitivity_control(&out, &mut stream, &clock);
     let mut reasons: Vec<String> = aa_fail.into_iter().collect();
     reasons.extend(sensitivity.failure(rules));
     reasons.extend(placement_failure(&out, &clock, rules));
@@ -3335,93 +3354,281 @@ fn run(
     Ok((clock, out, control_fail, sensitivity))
 }
 
-/// The sensitivity control of a run (ADR-041 Amendment 1 (2)): `min_leak` with `tag_compare`'s batch size and
-/// sample count, and its effect floor. `measurement` is `None` if it could not be measured (`tag_compare` without
-/// a batch size, or a clock without a quantum or a tick length) — which fails the run like a missed floor.
+/// The sensitivity control of a run (ADR-041 Amendment 1 (2), judged since Amendment 3 by the verdict rule it
+/// validates): `min_leak` measured twice with `tag_compare`'s batch size and sample count, like a target. The
+/// measurements are `None` if they could not be taken (`tag_compare` without a batch size, or a clock without a
+/// quantum or a tick length) — which fails the run like a control that is not caught.
 struct Sensitivity {
     k: Option<u32>,
     samples: usize,
-    measurement: Option<Measurement>,
-    /// The effect floor of the measurement, in ticks.
-    floor_ticks: Option<f64>,
+    first: Option<Measurement>,
+    second: Option<Measurement>,
+    /// The per-class histogram of the first measurement's samples (Amendment 3 (2); `histogram`).
+    histogram: Option<String>,
+    /// The tick length the effect floors are computed with (`Clock::tick`).
+    tick_ns: Option<f64>,
+    /// The informative same-content variant (Amendment 3 (2)): one measurement and its histogram; no verdict.
+    same_content: Option<(Measurement, String)>,
 }
 
 impl Sensitivity {
-    /// The raw Δ (class 0 − class 1, in ticks) if measured.
-    fn raw_delta(&self) -> Option<f64> {
-        self.measurement.as_ref()?.raw().map(Stats::delta)
+    /// `decide` on the two measurements (ADR-041 Amendment 3 (1)): the verdict and the deciding crop; `None` if not
+    /// measured.
+    fn decision(&self, rules: Rules) -> Option<(Verdict, Option<String>)> {
+        let (first, second, tick_ns) = (self.first.as_ref()?, self.second.as_ref()?, self.tick_ns?);
+        Some(decide(first, second, rules, tick_ns))
     }
 
-    /// Whether the raw Δ reaches the floor with the expected sign (class 0, 32 byte steps, is the slower one).
-    fn reached(&self) -> bool {
-        matches!((self.raw_delta(), self.floor_ticks), (Some(d), Some(f)) if d >= f)
+    /// The class statistics of `m` at `crop`.
+    fn at<'a>(m: Option<&'a Measurement>, crop: &str) -> Option<&'a Stats> {
+        m?.crops.iter().find(|(k, _)| k == crop).map(|(_, s)| s)
     }
 
-    /// The `CONTROL_FAIL` reason, if the control did not reach its floor.
+    /// Whether the control is caught (Amendment 3 (1)): `decide` gives FAIL and class 0 (32 byte steps) is the slower
+    /// one at the deciding crop in both measurements (Δ > 0; `decide` already requires the same sign of t in both).
+    fn reached(&self, rules: Rules) -> bool {
+        match self.decision(rules) {
+            Some((Verdict::Fail, Some(crop))) => [self.first.as_ref(), self.second.as_ref()]
+                .into_iter()
+                .all(|m| Self::at(m, &crop).is_some_and(|s| s.delta() > 0.0)),
+            _ => false,
+        }
+    }
+
+    /// The `CONTROL_FAIL` reason, if the verdict rule did not catch the control with class 0 the slower, naming the
+    /// deciding statistic.
     fn failure(&self, rules: Rules) -> Option<String> {
-        if self.reached() {
+        if self.reached(rules) {
             return None;
         }
-        Some(match (self.raw_delta(), self.floor_ticks) {
-            (Some(d), Some(f)) => format!(
-                "sensitivity control min_leak_control below the effect floor: raw Δ {d:.2} ticks < floor {f:.2} ticks ({} q_eff, {} ns)",
-                rules.effect_floor, rules.effect_floor_ns
+        Some(match self.decision(rules) {
+            None => "sensitivity control min_leak_control not measured".to_owned(),
+            Some((Verdict::Fail, Some(crop))) => {
+                let stat = |m: Option<&Measurement>, f: fn(&Stats) -> f64| {
+                    Self::at(m, &crop).map_or_else(|| "?".to_owned(), |s| format!("{:.2}", f(s)))
+                };
+                format!(
+                    "sensitivity control min_leak_control caught with the wrong sign: class 1 slower at the deciding \
+                     crop {crop} (Δ {} / {} ticks, t {} / {}), where the injected leak makes class 0 slower \
+                     (ADR-041 Amendment 3)",
+                    stat(self.first.as_ref(), Stats::delta),
+                    stat(self.second.as_ref(), Stats::delta),
+                    stat(self.first.as_ref(), Stats::t),
+                    stat(self.second.as_ref(), Stats::t)
+                )
+            }
+            Some((verdict, crop)) => format!(
+                "sensitivity control min_leak_control not caught by the verdict rule (decide: {}{}): no crop \
+                 reproduces the injected leak at ≥ 1 floor with |t| > {} in both measurements (ADR-041 Amendment 3)",
+                verdict.as_str(),
+                crop.map(|c| format!(" at {c}")).unwrap_or_default(),
+                rules.pass
             ),
-            _ => "sensitivity control min_leak_control not measured".to_owned(),
         })
     }
 
     fn json(&self, clock: &Clock, rules: Rules) -> String {
         let num = |x: Option<f64>| x.map_or_else(|| "null".to_owned(), |x| format!("{x:.4}"));
-        let ns = |x: Option<f64>| num(x.map(|x| x * clock.tick_ns));
-        let raw = self.raw_delta();
-        let ratio = raw.zip(self.floor_ticks).map(|(d, f)| d / f);
+        let measurement =
+            |m: Option<&Measurement>| m.map_or_else(|| "null".to_owned(), |m| m.json(clock, rules));
+        let floor = |m: Option<&Measurement>| m.map(|m| rules.floor_ticks(m.q_eff, clock.tick_ns));
+        let decision = self.decision(rules);
+        let crop = decision.as_ref().and_then(|(_, c)| c.clone());
+        let (first, second) = (self.first.as_ref(), self.second.as_ref());
+        // at the deciding crop (none: null), and raw (information), per measurement
+        let delta_at = |m: Option<&Measurement>, crop: Option<&str>| {
+            crop.and_then(|c| Self::at(m, c)).map(Stats::delta)
+        };
+        let t_at = |m: Option<&Measurement>| {
+            num(crop.as_deref().and_then(|c| Self::at(m, c)).map(Stats::t))
+        };
+        let floors =
+            |d: Option<f64>, m: Option<&Measurement>| num(d.zip(floor(m)).map(|(d, f)| d / f));
+        let (d1, d2) = (
+            delta_at(first, crop.as_deref()),
+            delta_at(second, crop.as_deref()),
+        );
+        let (r1, r2) = (delta_at(first, Some("raw")), delta_at(second, Some("raw")));
         format!(
-            "{{\"name\":\"min_leak_control\",\"class0\":\"32 byte steps (an early-exit comparison mismatching in byte 31)\",\"class1\":\"31 byte steps (mismatch in byte 30: exits one byte early)\",\"comparisons_per_call\":256,\"k\":{},\"samples\":{},\"floor_ticks\":{},\"floor_ns\":{},\"raw_delta_ticks\":{},\"raw_delta_ns\":{},\"raw_delta_floor\":{},\"reached\":{},\"measurement\":{}}}",
+            "{{\"name\":\"min_leak_control\",\"class0\":\"32 byte steps (an early-exit comparison mismatching in byte 31)\",\"class1\":\"31 byte steps (mismatch in byte 30: exits one byte early)\",\"comparisons_per_call\":256,\"k\":{},\"samples\":{},\"rule\":\"ADR-041 Amendment 3: decide on the two measurements gives FAIL with class 0 slower at the deciding crop\",\"decision\":{},\"deciding_crop\":{},\"first_delta_ticks\":{},\"second_delta_ticks\":{},\"first_delta_floor\":{},\"second_delta_floor\":{},\"first_t\":{},\"second_t\":{},\"first_floor_ticks\":{},\"second_floor_ticks\":{},\"first_raw_delta_ticks\":{},\"second_raw_delta_ticks\":{},\"first_raw_delta_floor\":{},\"second_raw_delta_floor\":{},\"reached\":{},\"histogram\":{},\"first\":{},\"second\":{}}}",
             self.k.map_or_else(|| "null".to_owned(), |k| k.to_string()),
             self.samples,
-            num(self.floor_ticks),
-            ns(self.floor_ticks),
-            num(raw),
-            ns(raw),
-            num(ratio),
-            self.reached(),
-            self.measurement
+            decision
                 .as_ref()
-                .map_or_else(|| "null".to_owned(), |m| m.json(clock, rules))
+                .map_or_else(|| "null".to_owned(), |(v, _)| format!("\"{}\"", v.as_str())),
+            crop.as_ref()
+                .map_or_else(|| "null".to_owned(), |c| format!("\"{c}\"")),
+            num(d1),
+            num(d2),
+            floors(d1, first),
+            floors(d2, second),
+            t_at(first),
+            t_at(second),
+            num(floor(first)),
+            num(floor(second)),
+            num(r1),
+            num(r2),
+            floors(r1, first),
+            floors(r2, second),
+            self.reached(rules),
+            self.histogram.as_deref().unwrap_or("null"),
+            measurement(first),
+            measurement(second)
+        )
+    }
+
+    /// The informative same-content variant `min_leak_same_content` (ADR-041 Amendment 3 (2)): no verdict.
+    fn same_content_json(&self, clock: &Clock, rules: Rules) -> String {
+        format!(
+            "{{\"name\":\"min_leak_same_content\",\"class0\":\"32 byte steps\",\"class1\":\"32 byte steps (the same content through the same per-class preparation)\",\"comparisons_per_call\":256,\"k\":{},\"samples\":{},\"verdict\":null,\"informative\":true,\"histogram\":{},\"measurement\":{}}}",
+            self.k.map_or_else(|| "null".to_owned(), |k| k.to_string()),
+            self.samples,
+            self.same_content
+                .as_ref()
+                .map_or("null", |(_, h)| h.as_str()),
+            self.same_content
+                .as_ref()
+                .map_or_else(|| "null".to_owned(), |(m, _)| m.json(clock, rules))
         )
     }
 }
 
-/// ADR-041 Amendment 1 (2): the sensitivity control, measured once after the A/A control with `tag_compare`'s
-/// batch size (after any re-batching) and sample count.
-fn sensitivity_control(
-    out: &[Outcome],
-    stream: &mut Stream,
-    clock: &Clock,
-    rules: Rules,
-) -> Sensitivity {
+/// Bins of the per-class histograms of the sensitivity control and its same-content variant (ADR-041 Amendment 3
+/// (2)).
+const HISTOGRAM_BINS: usize = 21;
+
+/// ADR-041 Amendment 3 (2): per class, the counts of `samples` in `HISTOGRAM_BINS` equal-width bins over [p1, p99] of
+/// both classes together; a sample below p1 counts in the first bin and one above p99 in the last, so each class's
+/// counts sum to its sample count. `{"bins":21,"lo_ticks":…,"hi_ticks":…,"bin_ticks":…,"class0":[…],"class1":[…]}`.
+fn histogram(samples: &[(usize, u64)]) -> String {
+    let mut sorted: Vec<u64> = samples.iter().map(|(_, x)| *x).collect();
+    sorted.sort_unstable();
+    let at = |permille: usize| {
+        let idx = sorted.len().saturating_mul(permille) / 1000;
+        sorted
+            .get(idx.min(sorted.len().saturating_sub(1)))
+            .copied()
+            .unwrap_or(0)
+    };
+    let (lo, hi) = (at(10), at(990));
+    let span = u128::from(hi.saturating_sub(lo));
+    let bins = u128::try_from(HISTOGRAM_BINS).unwrap_or(1);
+    let last = HISTOGRAM_BINS.saturating_sub(1);
+    let bin = |x: u64| -> usize {
+        if x <= lo {
+            0
+        } else if x >= hi {
+            last
+        } else {
+            u128::from(x.saturating_sub(lo))
+                .saturating_mul(bins)
+                .checked_div(span)
+                .and_then(|b| usize::try_from(b).ok())
+                .map_or(last, |b| b.min(last))
+        }
+    };
+    let mut counts = [[0_u64; HISTOGRAM_BINS]; 2];
+    for (c, x) in samples {
+        if let Some(n) = counts.get_mut(c & 1).and_then(|row| row.get_mut(bin(*x))) {
+            *n = n.saturating_add(1);
+        }
+    }
+    let row =
+        |r: &[u64; HISTOGRAM_BINS]| r.iter().map(u64::to_string).collect::<Vec<_>>().join(",");
+    let [c0, c1] = &counts;
+    format!(
+        "{{\"bins\":{HISTOGRAM_BINS},\"lo_ticks\":{lo},\"hi_ticks\":{hi},\"bin_ticks\":{:.3},\"class0\":[{}],\"class1\":[{}]}}",
+        f64_of(hi.saturating_sub(lo)) / f64_of(u64::try_from(HISTOGRAM_BINS).unwrap_or(1)),
+        row(c0),
+        row(c1)
+    )
+}
+
+/// ADR-041 Amendment 1 (2) and Amendment 3: the sensitivity control, measured twice after the A/A control with
+/// `tag_compare`'s batch size (after any re-batching) and sample count, then its same-content variant once.
+fn sensitivity_control(out: &[Outcome], stream: &mut Stream, clock: &Clock) -> Sensitivity {
     let tag = out.iter().find(|o| o.target.name == "tag_compare");
     let mut sensitivity = Sensitivity {
         k: tag.and_then(|t| t.calibration.k),
         samples: tag.map_or(0, |t| t.target.samples),
-        measurement: None,
-        floor_ticks: None,
+        first: None,
+        second: None,
+        histogram: None,
+        tick_ns: clock.tick(),
+        same_content: None,
     };
-    if let (Some(k), Some(quantum), Some(tick_ns)) = (sensitivity.k, clock.quantum(), clock.tick())
-    {
-        let samples = min_leak(sensitivity.samples, usize::try_from(k).unwrap_or(1), stream);
+    let (Some(k), Some(quantum), Some(_)) = (sensitivity.k, clock.quantum(), clock.tick()) else {
+        return sensitivity;
+    };
+    let batch = usize::try_from(k).unwrap_or(1);
+    let mut measure = |run: fn(usize, usize, &mut Stream) -> Samples, target: &str, phase: &str| {
+        let samples = run(sensitivity.samples, batch, stream);
         let m = Measurement::of(&samples, quantum, clock.resolution_ticks, k);
-        progress(
-            "min_leak_control",
-            "sensitivity",
-            Some(k),
-            Some(m.median_ticks),
-        );
-        sensitivity.floor_ticks = Some(rules.floor_ticks(m.q_eff, tick_ns));
-        sensitivity.measurement = Some(m);
-    }
+        progress(target, phase, Some(k), Some(m.median_ticks));
+        (m, samples)
+    };
+    let (first, samples) = measure(min_leak, "min_leak_control", "first");
+    let histogram_first = histogram(&samples);
+    let (second, _) = measure(min_leak, "min_leak_control", "second");
+    let (same, samples) = measure(min_leak_same_content, "min_leak_same_content", "first");
+    let histogram_same = histogram(&samples);
+    sensitivity.first = Some(first);
+    sensitivity.second = Some(second);
+    sensitivity.histogram = Some(histogram_first);
+    sensitivity.same_content = Some((same, histogram_same));
     sensitivity
+}
+
+/// ADR-041 Amendment 3 (2): the CPU model and microcode of the host — Linux `/proc/cpuinfo` (`model name`,
+/// `microcode`), macOS `sysctl -n machdep.cpu.brand_string` (microcode unknown); `"unknown"` for anything not
+/// readable, which never fails the run.
+fn host_json() -> String {
+    let unknown = || "unknown".to_owned();
+    let (model, microcode) = match std::fs::read_to_string("/proc/cpuinfo") {
+        Ok(info) => {
+            let field = |key: &str| {
+                info.lines()
+                    .find_map(|l| {
+                        let (k, v) = l.split_once(':')?;
+                        (k.trim() == key).then(|| v.trim().to_owned())
+                    })
+                    .filter(|v| !v.is_empty())
+            };
+            (field("model name"), field("microcode"))
+        }
+        Err(_) => (
+            std::process::Command::new("/usr/sbin/sysctl")
+                .args(["-n", "machdep.cpu.brand_string"])
+                .stdin(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .output()
+                .ok()
+                .filter(|o| o.status.success())
+                .and_then(|o| String::from_utf8(o.stdout).ok())
+                .map(|s| s.trim().to_owned())
+                .filter(|s| !s.is_empty()),
+            None,
+        ),
+    };
+    serde_json::json!({
+        "cpu_model": model.unwrap_or_else(unknown),
+        "microcode": microcode.unwrap_or_else(unknown),
+    })
+    .to_string()
+}
+
+/// ADR-041 Amendment 3 (2): the SHA-256 of the running bench executable (`std::env::current_exe`), lowercase hex;
+/// `None` if it cannot be read.
+fn bench_sha256() -> Option<String> {
+    let bytes = std::fs::read(std::env::current_exe().ok()?).ok()?;
+    Some(
+        secmp_crypto::sha256(&[&bytes])
+            .iter()
+            .fold(String::new(), |mut hex, b| {
+                let _ = write!(hex, "{b:02x}");
+                hex
+            }),
+    )
 }
 
 /// The name of the A/A′ placement control (ADR-042 (2); `expect::CT_TARGETS`).
@@ -3589,7 +3796,7 @@ fn main() -> ExitCode {
         "FAIL"
     };
     let json = format!(
-        "{{\"thresholds\":{},{}\"sign\":\"{SIGN}\",\"clock\":{},\"run_verdict\":\"{run_verdict}\",\"run_reason\":{},\"sensitivity_control\":{},\"results\":[{}]}}",
+        "{{\"thresholds\":{},{}\"sign\":\"{SIGN}\",\"clock\":{},\"host\":{},\"bench_sha256\":{},\"run_verdict\":\"{run_verdict}\",\"run_reason\":{},\"sensitivity_control\":{},\"min_leak_same_content\":{},\"results\":[{}]}}",
         rules.json(),
         // M2 review C3 (c): a shortened run says so, and the gate refuses it
         ct_scale().map_or_else(String::new, |s| format!(
@@ -3597,8 +3804,11 @@ fn main() -> ExitCode {
             serde_json::Value::from(s)
         )),
         clock.json(),
+        host_json(),
+        serde_json::Value::from(bench_sha256()),
         serde_json::Value::from(control_fail),
         sensitivity.json(&clock, rules),
+        sensitivity.same_content_json(&clock, rules),
         outcomes
             .iter()
             .map(|o| o.json(&clock, rules))

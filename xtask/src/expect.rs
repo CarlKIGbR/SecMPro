@@ -394,6 +394,9 @@ pub(crate) const MIRI_TARGET: &str = "aarch64-unknown-linux-gnu";
 /// `docs/reviews/M03-evidence/miri-secmp-proto-aarch64-apple-darwin.txt`): every test of 60 s or more is skipped
 /// here — `secmp-proto` has no `unsafe` (`forbid(unsafe_code)`), so under Miri its tests re-check the dependencies'
 /// `unsafe` code, which the kept tests reach on shorter inputs; the kept lib tests take about 5.4 min together.
+/// Measured M4 (`x86_64` GitHub runner, `linux-full` run 37127247911;
+/// `docs/reviews/M04-evidence/linux-full-37127247911-miri-excerpt.txt`): the 67 kept `secmp-proto` lib tests took
+/// 7232 s, six of them 60 s or more, which the same 60-s rule skips.
 pub(crate) const MIRI_SKIP: &[(&str, &str, &str)] = &[
     (
         "secmp-crypto",
@@ -479,6 +482,54 @@ pub(crate) const MIRI_SKIP: &[(&str, &str, &str)] = &[
          docs/reviews/M04-evidence/miri-hx-persist-7a38edd.txt): each test generates two identities (ML-DSA-65 key \
          generation) and runs a full handshake; the fourth test (release_persists_the_state_at_release_time, M4 \
          review C-8) is of the same kind",
+    ),
+    (
+        "secmp-proto",
+        "tr::ratchet::trial_work::trial_opens_every_candidate_every_call",
+        "5392 s under Miri (M4, linux-full run 37127247911, x86_64 GitHub runner; \
+         docs/reviews/M04-evidence/linux-full-37127247911-miri-excerpt.txt): 3 fixtures x 7 cells, each decrypt \
+         trial-opens every skipped header key; the kept `tests/tr_smoke.rs` runs a session through the same \
+         AEAD, X25519 and ML-KEM code",
+    ),
+    (
+        "secmp-proto",
+        "wire::cell::tests::read_routes_pre_sizes_the_vector",
+        "553 s under Miri (M4, linux-full run 37127247911, x86_64 GitHub runner; \
+         docs/reviews/M04-evidence/linux-full-37127247911-miri-excerpt.txt): encodes and decodes 1, 10 and 255 \
+         relay-queue routes; `wire::cell::tests::handshake_body_caps_and_routes` decodes one route \
+         through the same `RouteDescriptor` and `Zeroizing` code",
+    ),
+    (
+        "secmp-proto",
+        "tr::ratchet::single_conversion::any_skipped_single_conversion",
+        "520 s under Miri (M4, linux-full run 37127247911, x86_64 GitHub runner; \
+         docs/reviews/M04-evidence/linux-full-37127247911-miri-excerpt.txt): a session with six cells through \
+         skipped-key, chain, step and rejection paths; the kept `tests/tr_smoke.rs` reaches the same \
+         `RatchetState::open` code and dependency `unsafe` code",
+    ),
+    (
+        "secmp-proto",
+        "wire::cell::tests::routes",
+        "90 s under Miri (M4, linux-full run 37127247911, x86_64 GitHub runner; \
+         docs/reviews/M04-evidence/linux-full-37127247911-miri-excerpt.txt): route descriptors up to a 65535-byte \
+         unknown blob and a route update; `wire::cell::tests::handshake_body_caps_and_routes` reaches the same \
+         route codec on shorter inputs",
+    ),
+    (
+        "secmp-proto",
+        "wire::cell::tests::app_message_and_batch",
+        "85 s under Miri (M4, linux-full run 37127247911, x86_64 GitHub runner; \
+         docs/reviews/M04-evidence/linux-full-37127247911-miri-excerpt.txt): every app kind, a 65535-byte message \
+         and batches; `wire::cell::tests::content_types_padding_and_limits` (26 s) and \
+         `wire::cell::tests::header` (22 s) reach the same codec code on shorter inputs",
+    ),
+    (
+        "secmp-proto",
+        "tr::entropy::tests::os_entropy_draws_fresh_values",
+        "66 s under Miri (M4, linux-full run 37127247911, x86_64 GitHub runner; \
+         docs/reviews/M04-evidence/linux-full-37127247911-miri-excerpt.txt): draws X25519, ML-KEM-768 and nonce \
+         values from the OS and runs one encapsulation; `test_entropy_fails_after_its_budget` (46 s) and \
+         `keys::tests::mlkem_fields` (40 s) reach the same ML-KEM code",
     ),
 ];
 

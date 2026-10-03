@@ -93,8 +93,8 @@ pub(crate) const CT_SAMPLES: usize = 1_000_000;
 
 /// ADR-045 Amendment 1 (M4 review C-1): the wall-clock budget of the bench run of the `ct` step, in seconds. At
 /// expiry the gate kills the bench and fails naming the target and phase of the last line of
-/// `target/ct-progress.jsonl`. 290 min: 600 s below the 300 min of `ci-dispatch.yml` `dispatch-ct` and 40 min below
-/// the `ct` job of `ci.yml` (build and setup fit in the rest).
+/// `target/ct-progress.jsonl`. 290 min: 40 min below the 330 min of the `ct` job of `ci.yml` and of `ci-dispatch.yml`
+/// `dispatch-ct` (build and setup fit in the rest; delta review VD1-2).
 pub(crate) const CT_STEP_TIMEOUT_SECONDS: u64 = 17_400;
 
 /// Samples per measurement of `sas` (`SafetyNumber::new`, Argon2id: about a millisecond per call).

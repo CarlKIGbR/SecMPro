@@ -2989,6 +2989,13 @@ pub(crate) fn workflow_findings(name: &str, text: &str) -> Vec<String> {
                 l.job, l.key, l.value
             ));
         }
+        // delta review VD1-4: nor on the `jobs:` line itself — `jobs: {a: {…}}` would hide every job from this reader
+        if l.col == 0 && l.dash.is_none() && l.key == "jobs" && !l.value.is_empty() {
+            out.push(format!(
+                "{name}: flow-style YAML on the `jobs:` line: jobs: {}",
+                l.value
+            ));
+        }
         if l.key == "uses" {
             let u = l.value.as_str();
             let pinned = u.split_once('@').is_some_and(|(_, r)| {
@@ -5066,6 +5073,36 @@ mod tests {
             ),
             Vec::<String>::new()
         );
+    }
+
+    /// M4 delta review VD1-4: a flow-style value on the `jobs:` line itself (quoted key or not) is a finding; the
+    /// block form, with or without a trailing comment, is none.
+    #[test]
+    fn policy_refuses_flow_style_jobs_line() {
+        let sha = "3d3c42e5aac5ba805825da76410c181273ba90b1";
+        for jobs in [
+            format!("jobs: {{a: {{runs-on: x, steps: [{{uses: evil/action@{sha}}}]}}}}"),
+            "jobs: {a: {if: false, runs-on: x}}".to_owned(),
+            "\"jobs\": {a: {runs-on: x}}".to_owned(),
+            "jobs: [a]".to_owned(),
+        ] {
+            let found = workflow_findings("w", &format!("on:\n  push:\n{jobs}\n"));
+            assert_eq!(found.len(), 1, "{jobs}: {found:?}");
+            assert!(
+                found.iter().all(|f| f.contains("on the `jobs:` line")),
+                "{found:?}"
+            );
+        }
+        for jobs in ["jobs:", "jobs: # the jobs", "\"jobs\":"] {
+            assert_eq!(
+                workflow_findings(
+                    "w",
+                    &format!("on:\n  push:\n{jobs}\n  a:\n    runs-on: x\n")
+                ),
+                Vec::<String>::new(),
+                "{jobs}"
+            );
+        }
     }
 
     /// M4 review C-5 (R-16): workflow permissions other than exactly `contents: read`, job-level permissions, a

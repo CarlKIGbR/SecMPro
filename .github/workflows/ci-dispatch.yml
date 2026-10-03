@@ -143,12 +143,13 @@ jobs:
         run: cargo xtask step --strict windows-cross
 
   # The constant-time gate alone (docs/06 §4, ADR-038, ADR-041): re-measurements on the GitHub-hosted runner type.
-  # 300 min (M4 review C-2, R-09): above the step budget `expect::CT_STEP_TIMEOUT_SECONDS` (290 min, ADR-045
-  # Amendment 1), so a run too long for it ends with the gate's own FAIL and its progress file, not a cancellation.
+  # 330 min (M4 review C-2, R-09; delta review VD1-2), as the `ct` job of ci.yml: 40 min above the step budget
+  # `expect::CT_STEP_TIMEOUT_SECONDS` (290 min, ADR-045 Amendment 1), so the build and setup fit and a run too long
+  # for the budget ends with the gate's own FAIL and its progress file, not a cancellation.
   dispatch-ct:
     if: inputs.suite == 'all' || inputs.suite == 'full' || inputs.suite == 'ct'
     runs-on: ubuntu-latest
-    timeout-minutes: 300
+    timeout-minutes: 330
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

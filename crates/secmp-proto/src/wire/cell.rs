@@ -208,7 +208,7 @@ impl AppKind {
 
 /// `AppMessage = msg_id[16] ‖ kind u8 ‖ expire_after u32 ‖ payload_len u16 ‖ payload` (payload opaque). The
 /// payload is decrypted message content, confidential: it is zeroized on drop (external review EXT-5, F21).
-#[derive(Clone)]
+#[cfg_attr(test, derive(Clone))]
 #[cfg_attr(test, derive(PartialEq, Eq, Debug))]
 pub struct AppMessage {
     /// Message id (dedup).
@@ -258,8 +258,29 @@ fn read_count(r: &mut Reader<'_>) -> Result<usize> {
     }
 }
 
+/// M4 review C-14 (R-30): the wire bodies `AppMessage`, `BatchBody`, `Fragment` and `ControlBody` are `Clone` only in
+/// this crate's own tests (`cfg_attr(test, derive(Clone))`), and `wire::inv::Onion` is not `Copy`. Outside the tests a
+/// body has no `clone()`:
+///
+/// ```compile_fail,E0599
+/// fn copy(body: &secmp_proto::wire::cell::BatchBody) -> secmp_proto::wire::cell::BatchBody {
+///     body.clone()
+/// }
+/// ```
+///
+/// and an `Onion` is moved, not copied:
+///
+/// ```compile_fail,E0382
+/// use secmp_proto::wire::inv::Onion;
+/// fn twice(onion: Onion) -> (Onion, Onion) {
+///     (onion, onion)
+/// }
+/// ```
+#[cfg(doctest)]
+pub mod wire_bodies_are_not_clone_outside_tests {}
+
 /// `Batch body = count u8 (1..=255) ‖ AppMessage[] × count`.
-#[derive(Clone)]
+#[cfg_attr(test, derive(Clone))]
 #[cfg_attr(test, derive(PartialEq, Eq, Debug))]
 pub struct BatchBody {
     /// 1..=255 messages.
@@ -290,7 +311,7 @@ impl Decode for BatchBody {
 /// (rev 2.3). The chunk runs to the end of the enclosing structure; chunk sizing and consistency across fragments
 /// are reassembly rules. A chunk of a fragmented `RouteUpdate` carries `send_seed` bytes, so it is zeroized on drop
 /// (review C1).
-#[derive(Clone)]
+#[cfg_attr(test, derive(Clone))]
 #[cfg_attr(test, derive(PartialEq, Eq, Debug))]
 pub struct Fragment {
     /// The fragmented message's id.
@@ -620,7 +641,7 @@ pub enum ControlCode {
 
 /// `Control body = code u8 ‖ arg_len u16 ‖ arg` (arg opaque; decrypted content, zeroized on drop — external review
 /// EXT-5, F21).
-#[derive(Clone)]
+#[cfg_attr(test, derive(Clone))]
 #[cfg_attr(test, derive(PartialEq, Eq, Debug))]
 pub struct ControlBody {
     /// The code.

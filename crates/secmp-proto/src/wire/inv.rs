@@ -30,7 +30,7 @@ const ONION_CHECKSUM_PREFIX: &[u8] = b".onion checksum";
 const ONION_VERSION: u8 = 0x03;
 
 /// A v3 onion service identity (the decoded 56-character address, spec §5.3).
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 #[cfg_attr(test, derive(Debug))]
 pub struct Onion([u8; ONION_LEN]);
 

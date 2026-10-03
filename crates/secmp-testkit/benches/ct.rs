@@ -2920,7 +2920,7 @@ fn hx_session(stream: &mut Stream) -> Result<HxSession, secmp_proto::Error> {
     let accepted = invitee_check(invitation, &inviter.blob, HX_NOW)?;
     let guest = IdentityKeys::generate(&mut FixedEntropy::new(&drawn(stream, HX_RANDOMNESS)))?;
     let start = drawn(stream, HX_RANDOMNESS);
-    let (cells, _) = Initiator::start(
+    let (cells, state) = Initiator::start(
         &accepted,
         &guest.initiator_keys(),
         &[hx_route(20)?],
@@ -2929,7 +2929,7 @@ fn hx_session(stream: &mut Stream) -> Result<HxSession, secmp_proto::Error> {
         &mut FixedEntropy::new(&start),
     )?;
     let honest: Vec<u8> = cells
-        .release(|_, _| Ok::<(), secmp_proto::Error>(()))?
+        .release(&state, |_, _| Ok::<(), secmp_proto::Error>(()))?
         .iter()
         .flat_map(|c| c.as_bytes().iter().copied())
         .collect();

@@ -12,9 +12,10 @@
 //!   is kept); the OPK is deleted (with the record's consumption, `PrekeyStore::commit_accept`) only after step 3 succeeded.
 //!
 //! **Persist-before-send (CLAUDE.md §1.7).** `start` returns the three cells as [`HandshakeCells`] and the
-//! post-`first_msg` [`RatchetState`]. The cells leave the process only through [`HandshakeCells::release`], which
-//! first hands their serialisation **and the serialised state** to the caller's durable write (one transaction),
-//! and on a retry re-sends the persisted bytes ([`PersistedCells::from_bytes`]) without sealing again (§6.5).
+//! post-`first_msg` [`RatchetState`]. The cells leave the process only through `release(state, persist)`
+//! ([`HandshakeCells::release`]), which first hands their serialisation **and the serialisation of the caller's live
+//! state at release time** to the caller's durable write (one transaction), and on a retry re-sends the persisted bytes
+//! ([`PersistedCells::from_bytes`]) without sealing again (§6.5).
 
 mod derive;
 mod initiator;
@@ -36,10 +37,11 @@ use crate::tr::RatchetState;
 use crate::wire::cell::{Cell, RouteDescriptor};
 use crate::wire::inv::IksPublic;
 
-/// The three handshake cells of one envelope (§6.5), generated once, together with the serialisation of the
-/// initiator's state after `first_msg`: the cells are released only with the state in the same persist call
-/// ([`HandshakeCells::release`]), so a caller cannot make the cells durable without the state (M4 verifier V-6,
-/// M3 review F13). The cells are reachable only through `release`:
+/// The three handshake cells of one envelope (§6.5), generated once: the cells are released only with the
+/// initiator's state in the same persist call (`release(state, persist)`, [`HandshakeCells::release`]), so a caller
+/// cannot make the cells durable without the state (M4 verifier V-6, M3 review F13). The state is the caller's live
+/// one at release time, not a snapshot taken at `start` (M4 review C-8, R-22). The cells are reachable only through
+/// `release`:
 ///
 /// ```compile_fail
 /// fn bypass(cells: secmp_proto::hx::HandshakeCells) {
@@ -50,7 +52,6 @@ use crate::wire::inv::IksPublic;
 /// (test `handshake_cells_expose_no_cells_before_release`)
 pub struct HandshakeCells {
     cells: [Cell; 3],
-    state_bytes: Zeroizing<Vec<u8>>,
 }
 
 fn join_cells(cells: &[Cell; 3]) -> Zeroizing<Vec<u8>> {
@@ -64,11 +65,8 @@ fn join_cells(cells: &[Cell; 3]) -> Zeroizing<Vec<u8>> {
 }
 
 impl HandshakeCells {
-    pub(crate) fn new(cells: [Cell; 3], state: &RatchetState) -> Result<Self> {
-        Ok(Self {
-            cells,
-            state_bytes: state.to_bytes()?,
-        })
+    pub(crate) fn new(cells: [Cell; 3]) -> Self {
+        Self { cells }
     }
 
     /// The persistence encoding of the cells: 3 × 4096 bytes. (They are ciphertext; the buffer is wiped on drop for
@@ -78,17 +76,22 @@ impl HandshakeCells {
         join_cells(&self.cells)
     }
 
-    /// The only way to obtain the cells; `persist` must return `Ok` first. Persist-before-send: `persist` receives the cells ([`HandshakeCells::to_bytes`]) and the serialised
-    /// initiator state (`RatchetStateV1`) and must make **both** durable in one transaction; only if it returns
-    /// `Ok` are the cells released. On `Err` they are dropped.
+    /// The only way to obtain the cells; `persist` must return `Ok` first. Persist-before-send: `persist` receives the
+    /// cells ([`HandshakeCells::to_bytes`]) and the serialisation (`RatchetStateV1`) of `state` — the caller's current
+    /// initiator state, serialised now, at release time (M4 review C-8, R-22: a dummy sealed after `start` has advanced
+    /// `n_s`, and a snapshot from `start` would roll it back) — and must make **both** durable in one transaction; only
+    /// if it returns `Ok` are the cells released. On `Err` they are dropped.
     ///
     /// # Errors
-    /// The error of `persist`.
-    pub fn release<E>(
+    /// The error of `persist`; `E::from` the error of [`RatchetState::to_bytes`] if `state` cannot be serialised — then `persist` is not
+    /// called and no cell is released.
+    pub fn release<E: From<Error>>(
         self,
+        state: &RatchetState,
         persist: impl FnOnce(&[u8], &[u8]) -> core::result::Result<(), E>,
     ) -> core::result::Result<[Cell; 3], E> {
-        persist(&self.to_bytes(), &self.state_bytes)?;
+        let state_bytes = state.to_bytes()?;
+        persist(&self.to_bytes(), &state_bytes)?;
         Ok(self.cells)
     }
 }

@@ -4,12 +4,13 @@
 //! negative tests need live in `hx_harness.rs`.
 
 use secmp_crypto::SecretBytes;
+use secmp_proto::Error;
 use secmp_proto::hx::{HandshakeCells, Initiator};
 use secmp_proto::inv::{invitation_uri, invitee_accept};
 use secmp_proto::prekeys::{
     IdentityKeys, InvitationRecord, IssueParams, Issued, MemoryPrekeyStore,
 };
-use secmp_proto::tr::Entropy;
+use secmp_proto::tr::{Entropy, RatchetState};
 use secmp_proto::wire::Period;
 use secmp_proto::wire::cell::{Cell, RelayQueue, RouteDescriptor};
 use secmp_proto::wire::inv::{Onion, Profile, RelayRef};
@@ -85,7 +86,7 @@ pub struct Invitee {
 pub fn invitee_run(inviter: &Inviter, entropy: &mut impl Entropy) -> Invitee {
     let identity = IdentityKeys::generate(entropy).unwrap();
     let accepted = invitee_accept(&inviter.uri, &blob_bytes(&inviter.issued), NOW).unwrap();
-    let (cells, _state) = Initiator::start(
+    let (cells, state) = Initiator::start(
         &accepted,
         &identity.initiator_keys(),
         &[route(20)],
@@ -94,12 +95,15 @@ pub fn invitee_run(inviter: &Inviter, entropy: &mut impl Entropy) -> Invitee {
         entropy,
     )
     .unwrap();
-    let cells = release(cells);
+    let cells = release(cells, &state);
     Invitee { identity, cells }
 }
 
-pub fn release(cells: HandshakeCells) -> Vec<Cell> {
-    cells.release(|_, _| Ok::<(), ()>(())).unwrap().to_vec()
+pub fn release(cells: HandshakeCells, state: &RatchetState) -> Vec<Cell> {
+    cells
+        .release(state, |_, _| Ok::<(), Error>(()))
+        .unwrap()
+        .to_vec()
 }
 
 pub fn blob_bytes(issued: &Issued) -> Vec<u8> {

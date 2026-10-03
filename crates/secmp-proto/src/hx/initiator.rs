@@ -187,7 +187,8 @@ impl Initiator {
     /// [`crate::inv::invitee_check`] — the only way to obtain an [`InviteeAccepted`]), derive `SK`, `K_id` and `K_inv`, initialise the ratchet as initiator, encrypt
     /// the Handshake Content (`profile`, `caps = 0`, `reply_routes`) as `first_msg` (`seq` 1, `ts` = `now`), seal
     /// `Inner`, `Outer` and the three cells. Returns the cells and the post-`first_msg` ratchet state; the caller
-    /// persists both before any cell leaves the process ([`HandshakeCells::release`]).
+    /// persists both before any cell leaves the process: `release(state, persist)` ([`HandshakeCells::release`]) with
+    /// its state as it is then (also after dummies sealed in the meantime).
     ///
     /// No signing key is a parameter: the envelope contains no signature by the initiator (§6.6). `EK_I`'s secret
     /// is zeroized at the end of `agree`, before the ratchet is initialised and anything is sealed (ADR-044 (b)); the state holds none of it.
@@ -233,7 +234,7 @@ impl Initiator {
         let sealed = state
             .encrypt_with(&content, entropy)
             .map_err(|refused| refused.error())?;
-        // the state is persisted by the caller together with the cells (`HandshakeCells::release`)
+        // the state is persisted by the caller together with the cells (`HandshakeCells::release(state, persist)`)
         let (state, first_msg) = sealed
             .persist(|_| Ok::<(), Error>(()))
             .map_err(|_: Error| Error::Rejected)?;
@@ -241,6 +242,6 @@ impl Initiator {
         let cells = seal_envelope(
             invitation, link_data, own_keys, &agreement, first_msg, entropy,
         )?;
-        Ok((HandshakeCells::new(cells, &state)?, state))
+        Ok((HandshakeCells::new(cells), state))
     }
 }

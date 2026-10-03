@@ -299,7 +299,9 @@ fn case_initiator(
     assert!(started.is_ok(), "{} start", c6.id);
     let (handshake_cells, i_state) = started.unwrap();
     assert_eq!(e.remaining(), 0, "{}: every draw consumed", c6.id);
-    let sent = handshake_cells.release(|_, _| Ok::<(), ()>(())).unwrap();
+    let sent = handshake_cells
+        .release(&i_state, |_, _| Ok::<(), Error>(()))
+        .unwrap();
     for (k, cell) in sent.iter().enumerate() {
         c6.expect(&format!("cell_{k}"), cell.as_bytes());
     }

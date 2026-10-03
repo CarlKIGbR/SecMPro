@@ -108,7 +108,7 @@ impl Fixture {
         // start's draws: EK_I 32, m_spk 32, m_opk 32, then the ratchet (dh_s 32, kem_s 64, m 32), header nonce 24,
         // N2 24, init_id 16, N_0..N_2
         let draws = constant("hx-fuzz start", 360);
-        let (hc, _state) = Initiator::start(
+        let (hc, state) = Initiator::start(
             &accepted,
             &invitee.initiator_keys(),
             &[route],
@@ -117,7 +117,10 @@ impl Fixture {
             &mut FixedEntropy::new(&draws),
         )
         .unwrap();
-        let cells = hc.release(|_, _| Ok::<(), ()>(())).unwrap().to_vec();
+        let cells = hc
+            .release(&state, |_, _| Ok::<(), secmp_proto::Error>(()))
+            .unwrap()
+            .to_vec();
         // K_id from the initiator's values: DH3 = EK × SPK_dh, DH4 = EK × OPK_dh, ss_spk and ss_opk from the
         // encapsulation randomness
         let bundle = &accepted.link_data().bundle;

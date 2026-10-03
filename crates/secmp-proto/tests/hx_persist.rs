@@ -120,9 +120,9 @@ fn release_persists_exactly_the_three_cells() {
     let mut captured: Option<(Vec<u8>, Vec<u8>)> = None;
     let released = r
         .cells
-        .release(|cells_bytes, state_bytes| {
+        .release(&r.state, |cells_bytes, state_bytes| {
             captured = Some((cells_bytes.to_vec(), state_bytes.to_vec()));
-            Ok::<(), ()>(())
+            Ok::<(), secmp_proto::Error>(())
         })
         .unwrap();
     let (cells_bytes, state_bytes) = captured.unwrap();
@@ -151,9 +151,9 @@ fn persisted_cells_are_accepted_by_the_responder() {
     let mut persisted_bytes = Vec::new();
     let released = r
         .cells
-        .release(|cells_bytes, _| {
+        .release(&r.state, |cells_bytes, _| {
             persisted_bytes = cells_bytes.to_vec();
-            Ok::<(), ()>(())
+            Ok::<(), secmp_proto::Error>(())
         })
         .unwrap();
     // the retry path: what comes back from the store is what was released
@@ -195,13 +195,51 @@ fn release_hands_persist_the_same_bytes_it_returns() {
     let mut captured = Vec::new();
     let released = r
         .cells
-        .release(|cells_bytes, _| {
+        .release(&r.state, |cells_bytes, _| {
             calls += 1;
             captured = cells_bytes.to_vec();
-            Ok::<(), ()>(())
+            Ok::<(), secmp_proto::Error>(())
         })
         .unwrap();
     assert_eq!(calls, 1);
     assert_eq!(captured, concat(&released));
     assert!(captured.iter().any(|&b| b != 0));
+}
+
+/// M4 review C-8 (R-22): `release` persists the initiator state as it is at release time. After `start`, one dummy is
+/// sealed with the returned state and persisted (`n_s` 1 → 2); `release(&state, …)` then hands `persist` the
+/// serialisation of that live state — not the one right after `start`, which would roll `n_s` back and make a restart
+/// reuse the message key of the dummy.
+#[test]
+fn release_persists_the_state_at_release_time() {
+    let r = run();
+    let after_start = r.state.to_bytes().unwrap().to_vec();
+    let sealed = r
+        .state
+        .encrypt(&secmp_proto::tr::content::dummy())
+        .map_err(|refused| refused.error())
+        .unwrap();
+    let (state, _dummy) = sealed
+        .persist(|_| Ok::<(), secmp_proto::Error>(()))
+        .unwrap();
+    let at_release = state.to_bytes().unwrap().to_vec();
+    assert_ne!(at_release, after_start, "the dummy advanced the state");
+    let mut persisted = None;
+    r.cells
+        .release(&state, |_, state_bytes| {
+            persisted = Some(state_bytes.to_vec());
+            Ok::<(), secmp_proto::Error>(())
+        })
+        .unwrap();
+    let persisted = persisted.unwrap();
+    assert_eq!(persisted, at_release);
+    assert_ne!(persisted, after_start);
+    assert_eq!(
+        RatchetState::from_bytes(&persisted)
+            .unwrap()
+            .to_bytes()
+            .unwrap()
+            .as_slice(),
+        at_release.as_slice()
+    );
 }

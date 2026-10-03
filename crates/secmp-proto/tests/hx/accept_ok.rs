@@ -533,9 +533,9 @@ fn initiator_start_output_and_state_contain_no_ek_secret() {
     let state_bytes = state.to_bytes().unwrap().to_vec();
     let mut cell_bytes = Vec::new();
     cells
-        .release(|c, _| {
+        .release(&state, |c, _| {
             cell_bytes = c.to_vec();
-            Ok::<(), ()>(())
+            Ok::<(), Error>(())
         })
         .unwrap();
     let mut clamped = ek_sk.clone();
@@ -634,7 +634,7 @@ fn initiator_cells_persisted_with_state() {
     )
     .unwrap();
     // a failing persist releases nothing
-    let failed = Initiator::start(
+    let (failed_cells, failed_state) = Initiator::start(
         &accepted,
         &lib.i_id.initiator_keys(),
         &[RouteDescriptor::decode(&lib.route()).unwrap()],
@@ -642,19 +642,20 @@ fn initiator_cells_persisted_with_state() {
         1_700_000_001,
         &mut FixedEntropy::new(&lib.w.b6.entropy),
     )
-    .unwrap()
-    .0
-    .release(|_, _| Err::<(), &str>("disk full"));
-    assert_eq!(failed.err(), Some("disk full"));
+    .unwrap();
+    let failed = failed_cells.release(&failed_state, |_, _| {
+        Err::<(), PersistError>(PersistError::DiskFull)
+    });
+    assert_eq!(failed.err(), Some(PersistError::DiskFull));
     // the cells and the state are handed to one persist call, before any cell is handed out
     let state_bytes = state.to_bytes().unwrap().to_vec();
     let mut durable: Option<Vec<u8>> = None;
     let mut durable_state: Option<Vec<u8>> = None;
     let released = cells
-        .release(|bytes, state_in_call| {
+        .release(&state, |bytes, state_in_call| {
             durable = Some(bytes.to_vec());
             durable_state = Some(state_in_call.to_vec());
-            Ok::<(), ()>(())
+            Ok::<(), Error>(())
         })
         .unwrap();
     let durable = durable.expect("persist was called before the release");
@@ -1202,6 +1203,19 @@ fn hx_secrets_are_zeroizing_types() {
 
 /// V-6: `start`'s cells are released only through `release`; a persist that fails returns its error and hands out
 /// nothing (the cells are dropped), and the closure sees cells and state together.
+/// A caller's persist error (`HandshakeCells::release` also returns the error of serialising the state, as `From`).
+#[derive(Debug, PartialEq, Eq)]
+enum PersistError {
+    DiskFull,
+    Proto(Error),
+}
+
+impl From<Error> for PersistError {
+    fn from(e: Error) -> Self {
+        Self::Proto(e)
+    }
+}
+
 #[test]
 fn start_persist_error_is_returned_and_nothing_sent() {
     let lib = Lib::new();
@@ -1217,10 +1231,10 @@ fn start_persist_error_is_returned_and_nothing_sent() {
     )
     .unwrap();
     let mut seen = (0, 0);
-    let result = cells.release(|c, st| {
+    let result = cells.release(&state, |c, st| {
         seen = (c.len(), st.len());
-        Err::<(), &str>("disk full")
+        Err::<(), PersistError>(PersistError::DiskFull)
     });
-    assert_eq!(result.err(), Some("disk full"));
+    assert_eq!(result.err(), Some(PersistError::DiskFull));
     assert_eq!(seen, (3 * 4096, state.to_bytes().unwrap().len()));
 }

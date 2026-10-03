@@ -83,11 +83,14 @@ fn hx_store_and_persisted_bytes_are_zeroizing_types() {
         let _opk_dh: &X25519Secret = opk.dh_secret();
         let _opk_kem: &MlKem1024Dk = opk.kem_secret();
     }
-    // persisted bytes: the return types of `to_bytes` and the `state_bytes` field
-    fn pin_bytes(cells: &HandshakeCells, restored: &PersistedCells) {
+    // persisted bytes: the return types of `to_bytes` and of the state serialised at release (M4 review C-8)
+    fn pin_bytes(
+        cells: &HandshakeCells,
+        state: &crate::tr::RatchetState,
+        restored: &PersistedCells,
+    ) {
         let _cells: Z<Vec<u8>> = cells.to_bytes();
-        let state: &Z<Vec<u8>> = &cells.state_bytes;
-        let _ = state;
+        let _state: Result<Z<Vec<u8>>> = state.to_bytes();
         let _restored: Z<Vec<u8>> = restored.to_bytes();
     }
     let _ = (pin, pin_bytes);

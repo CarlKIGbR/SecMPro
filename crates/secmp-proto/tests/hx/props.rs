@@ -181,7 +181,7 @@ fn make_run(seed: u64) -> Run {
     )
     .unwrap();
     let cells = cells
-        .release(|_, _| Ok::<(), ()>(()))
+        .release(&state_i, |_, _| Ok::<(), Error>(()))
         .unwrap()
         .iter()
         .map(|c| c.as_bytes().to_vec())
@@ -370,7 +370,7 @@ fn prop_opk_consumed_exactly_once() {
             .iter()
             .map(|r| RouteDescriptor::decode(r).unwrap())
             .collect();
-        let (b, _) = Initiator::start(
+        let (b, state_b) = Initiator::start(
             &run.accepted,
             &other.initiator_keys(),
             &descriptors,
@@ -380,7 +380,7 @@ fn prop_opk_consumed_exactly_once() {
         )
         .unwrap();
         let cells_b: Vec<Vec<u8>> = b
-            .release(|_, _| Ok::<(), ()>(()))
+            .release(&state_b, |_, _| Ok::<(), Error>(()))
             .unwrap()
             .iter()
             .map(|c| c.as_bytes().to_vec())

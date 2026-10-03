@@ -216,7 +216,8 @@ pub fn base64url_decode(text: &str) -> Result<Zeroizing<Vec<u8>>> {
         };
         out.extend_from_slice(be.get(1..=used).ok_or(Error::Rejected)?);
     }
-    if invalid < 0 || dirty != 0 {
+    // both conditions are evaluated, without a short-circuit on a value derived from the text (M4 review C-14)
+    if (u8::from(invalid < 0) | u8::from(dirty != 0)) != 0 {
         return Err(Error::Rejected);
     }
     Ok(out)
@@ -449,6 +450,26 @@ mod tests {
                 Some(plain)
             );
         }
+    }
+
+    /// M4 review C-14 (R-28): an invalid character and non-zero unused bits are refused alike: `"A*"` (an invalid
+    /// character, whose sextet also leaves unused bits set) and `"AB"` (valid characters, non-zero unused bits) are
+    /// `Rejected`; `"AA"` and an RFC 4648 vector decode.
+    #[test]
+    fn base64url_decode_rejects_invalid_and_dirty_alike() {
+        assert_eq!(base64url_decode("A*").err(), Some(Error::Rejected));
+        assert_eq!(base64url_decode("AB").err(), Some(Error::Rejected));
+        assert_eq!(
+            base64url_decode("AA").ok().as_deref().map(Vec::as_slice),
+            Some(&[0_u8][..])
+        );
+        assert_eq!(
+            base64url_decode("Zm9vYmE")
+                .ok()
+                .as_deref()
+                .map(Vec::as_slice),
+            Some(&b"fooba"[..])
+        );
     }
 
     #[test]

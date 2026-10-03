@@ -1,0 +1,19 @@
+# M4-fix C-15 (R-34): K4b negative control — kani_commit_accept_atomic with the M4 review R-64 comparison removed
+# head e5779da (product unchanged; the edit below was applied to the working tree for this run only and reverted:
+#   if record.opk_id != opk_id || self.opk(opk_id).is_none() {  ->  if self.opk(opk_id).is_none() {)
+# command: cargo kani --package secmp-proto -Z stubbing --harness kani_commit_accept_atomic · Kani 0.68.0 · M1 Pro · wall 290 s · exit 1
+# expected: VERIFICATION:- FAILED (a record that names another OPK is consumed with OPK opk_id)
+# working tree after the run: prekeys.rs unchanged (reverted)
+
+Checking harness kani_proofs::kani_commit_accept_atomic...
+ ** 1 of 1679 failed (7 unreachable)
+ ** 1 of 1 cover properties satisfied
+VERIFICATION:- FAILED
+Verification Time: 286.51508s
+Complete - 0 successfully verified harnesses, 1 failures, 1 total.
+
+# the failed checks:
+Check 77: kani_proofs::kani_commit_on.assertion.8
+	 - Status: FAILURE
+	 - Description: "assertion failed: ok == (held(opk_id) && ld_id == [1; 16] && opk_id == named)"
+	 - Location: crates/secmp-proto/src/kani_proofs.rs:816:5 in function kani_proofs::kani_commit_on

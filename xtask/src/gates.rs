@@ -1740,6 +1740,7 @@ pub(crate) fn kani(ctx: &Ctx) -> Result<Outcome> {
                 || l.starts_with("VERIFICATION:-")
                 || l.starts_with("Verification Time")
                 || l.starts_with("Complete -")
+                || l.contains("cover properties satisfied")
         }) {
             say(&format!("  {line}"));
         }
@@ -1751,14 +1752,68 @@ pub(crate) fn kani(ctx: &Ctx) -> Result<Outcome> {
         output.push_str(&cap.stdout);
     }
     let verified = kani_verified(&output)?;
+    let covers = kani_covers(&output)?;
+    for c in &covers {
+        say(&format!("  cover {c}"));
+    }
     Ok(Outcome::Pass(format!(
-        "Kani {}: harness packages {} (expected set matches); {}/{} harnesses verified (expect::KANI_HARNESSES): {}",
+        "Kani {}: harness packages {} (expected set matches); {}/{} harnesses verified (expect::KANI_HARNESSES): {}; \
+         every cover satisfied: {}",
         tools::KANI.version,
         list(&found),
         verified.len(),
         expect::KANI_HARNESSES.len(),
-        verified.join(", ")
+        verified.join(", "),
+        if covers.is_empty() {
+            "no cover".to_owned()
+        } else {
+            covers.join("; ")
+        }
     )))
+}
+
+/// M4 review C-15 (R-34): the `kani::cover!` results of a Kani run, per harness ("<harness>: N of M cover properties
+/// satisfied"). A cover Kani reports as not satisfied — `Status: UNSATISFIABLE` or `UNREACHABLE`, or a summary with
+/// fewer satisfied than there are — fails the gate naming the harness: a cover that cannot be reached shows a
+/// vacuous harness, which `VERIFICATION:- SUCCESSFUL` alone does not (Kani 0.68 has no flag that fails on it).
+pub(crate) fn kani_covers(output: &str) -> Result<Vec<String>> {
+    let mut current = "(no harness)";
+    let mut in_cover = false;
+    let mut lines = Vec::new();
+    let mut failed = Vec::new();
+    for line in output.lines() {
+        let t = line.trim();
+        if let Some(name) = t
+            .strip_prefix("Checking harness ")
+            .and_then(|n| n.strip_suffix("..."))
+        {
+            current = name;
+            in_cover = false;
+        } else if t.starts_with("Check ") {
+            in_cover = t.contains(".cover.");
+        } else if in_cover
+            && let Some(status) = t.strip_prefix("- Status: ")
+            && status != "SATISFIED"
+        {
+            failed.push(format!("{current}: a cover is {status}"));
+        } else if let Some(counts) = t
+            .strip_prefix("** ")
+            .and_then(|r| r.strip_suffix(" cover properties satisfied"))
+        {
+            let numbers: Vec<usize> = counts
+                .split(" of ")
+                .filter_map(|n| n.trim().parse().ok())
+                .collect();
+            match numbers.as_slice() {
+                [n, m] if n == m => lines.push(format!("{current}: {counts} satisfied")),
+                _ => failed.push(format!("{current}: {counts} cover properties satisfied")),
+            }
+        }
+    }
+    if !failed.is_empty() {
+        bail!("kani: a cover is not satisfied: {}", failed.join("; "));
+    }
+    Ok(lines)
 }
 
 /// M2 review C5: the harnesses a Kani run verified. Refuses the run unless every "Complete - N successfully verified
@@ -5593,6 +5648,46 @@ mod tests {
             names.len().saturating_add(failures)
         );
         [harnesses.concat(), summary].concat()
+    }
+
+    /// M4 review C-15 (R-34): a cover that Kani reports as UNSATISFIABLE (or UNREACHABLE, or a summary with fewer
+    /// satisfied than there are) fails the gate, naming the harness; SATISFIED covers pass and are listed per harness.
+    #[test]
+    fn kani_gate_fails_on_an_unsatisfiable_cover() -> Result<()> {
+        let cover = |status: &str, satisfied: usize| {
+            format!(
+                "Checking harness kani_proofs::kani_commit_accept_atomic...\nCheck 1: kani_proofs::kani_commit_accept_atomic.assertion.1\n\t - Status: SUCCESS\nCheck 7: kani_proofs::kani_commit_accept_atomic.cover.1\n\t - Status: {status}\n\t - Description: \"a commit\"\n\nSUMMARY:\n ** 0 of 7 failed\n\n ** {satisfied} of 1 cover properties satisfied\n\nVERIFICATION:- SUCCESSFUL\nVerification Time: 1.0s\n"
+            )
+        };
+        let mut good = kani_log(expect::KANI_HARNESSES, 0);
+        good.push_str(&cover("SATISFIED", 1));
+        assert_eq!(
+            kani_covers(&good)?,
+            vec!["kani_proofs::kani_commit_accept_atomic: 1 of 1 satisfied".to_owned()]
+        );
+        for (status, satisfied) in [("UNSATISFIABLE", 0), ("UNREACHABLE", 0)] {
+            let bad = format!(
+                "{}{}",
+                kani_log(expect::KANI_HARNESSES, 0),
+                cover(status, satisfied)
+            );
+            let got = kani_covers(&bad);
+            assert!(
+                got.as_ref()
+                    .is_err_and(|e| e.0.contains("kani_proofs::kani_commit_accept_atomic")
+                        && e.0.contains(status)),
+                "{status}: {got:?}"
+            );
+        }
+        // the summary alone, with a status line Kani did not print (terse output)
+        let terse = "Checking harness kani_proofs::kani_accept_opk_delete_only_on_success...\n ** 0 of 1 cover properties satisfied\nVERIFICATION:- SUCCESSFUL\n";
+        assert!(
+            kani_covers(terse)
+                .is_err_and(|e| e.0.contains("kani_accept_opk_delete_only_on_success"))
+        );
+        // no cover at all is no failure
+        assert!(kani_covers(&kani_log(expect::KANI_HARNESSES, 0))?.is_empty());
+        Ok(())
     }
 
     /// M2 review C5: Kani must verify exactly the harnesses of `expect::KANI_HARNESSES`.

@@ -1372,8 +1372,9 @@ impl Outcome {
 // (one source for both labels) passed in every run — the M1 review F7 rule ("the classes may differ only in their
 // contents, never in where the inputs live") applied one step earlier. The M2 form `base ^ (delta & mask)` was
 // then split by the compiler into a `memcpy` for class 1 and an XOR loop for class 0 (ADR-042 Amendment 2). The
-// same-content control `same_content_control` measures this whole preparation path with identical contents in
-// both classes.
+// same-content controls measure this preparation path with identical contents in both classes: `same_content_control`
+// on the 4096-byte TR cell, `hx_same_content_control` on the 12 288-byte HX blend and its three boxed cells (ADR-042
+// Amendment 3).
 
 /// The per-class deltas of `blend` (ADR-042 Amendment 2), indexed by the class: class 0's `class0 ^ class1` and
 /// class 1's all-zero delta of the same length.
@@ -1947,9 +1948,18 @@ const CLAIM_HX_FIRST_MSG: Claim = Claim {
     site: "first_msg decrypt",
     check: SiteCheck::Tagged,
 };
+const CLAIM_HX_SAME_CONTENT: Claim = Claim {
+    target: HX_SAME_CONTENT,
+    classes: [
+        "the class-1 cells of hx_accept_reject_inner (inner_ct under K_id, its tag's last byte flipped)",
+        "the same cells",
+    ],
+    site: "inner open",
+    check: SiteCheck::Tagged,
+};
 
 /// Every claim, for the report (`claim_json`).
-const CLAIMS: [Claim; 9] = [
+const CLAIMS: [Claim; 10] = [
     CLAIM_TR_HDR_KEY,
     CLAIM_TR_BODY_TAG,
     CLAIM_TR_CT_PQ,
@@ -1959,6 +1969,7 @@ const CLAIMS: [Claim; 9] = [
     CLAIM_X25519,
     CLAIM_HX_INNER,
     CLAIM_HX_FIRST_MSG,
+    CLAIM_HX_SAME_CONTENT,
 ];
 
 /// A target built from its claim (name and classes from the claim).
@@ -3028,6 +3039,17 @@ fn hx_first_msg_classes(s: &HxSession, _: &mut Stream) -> Result<[Vec<u8>; 2], s
     Ok([wrong_tag(MSG_TAG_LEN)?, wrong_tag(1)?])
 }
 
+/// `hx_same_content_control` (ADR-042 Amendment 3): the class-1 cells of `hx_inner_classes` (the honest `inner_ct` with
+/// its tag's last byte flipped) for both classes, through the HX preparation path of `hx_accept_reject` (a 12 288-byte
+/// `blended_vec` and three boxed cells per call, as for every HX target).
+fn hx_same_content_classes(
+    s: &HxSession,
+    stream: &mut Stream,
+) -> Result<[Vec<u8>; 2], secmp_proto::Error> {
+    let [_, class1] = hx_inner_classes(s, stream)?;
+    Ok([class1.clone(), class1])
+}
+
 /// Cells from their bytes (3 × 4096).
 fn hx_cells(bytes: &[u8]) -> Vec<Cell> {
     bytes
@@ -3121,8 +3143,9 @@ fn hx_accept_reject(
     Ok(samples)
 }
 
-/// The SecMP-INV/HX targets (TEST-SPEC-M4 (f)), measured after `tr_targets`, `n` samples per measurement.
-fn hx_targets(n: usize) -> [Target; 4] {
+/// The SecMP-INV/HX targets (TEST-SPEC-M4 (f)) and the HX same-content control (ADR-042 Amendment 3), measured after
+/// `tr_targets`, `n` samples per measurement.
+fn hx_targets(n: usize) -> [Target; 5] {
     [
         claimed(CLAIM_INV_FP, n, inv_fingerprint_compare),
         claimed(CLAIM_X25519, n, x25519_zero_check),
@@ -3131,6 +3154,9 @@ fn hx_targets(n: usize) -> [Target; 4] {
         }),
         claimed(CLAIM_HX_FIRST_MSG, n, |n, k, s| {
             hx_accept_reject(n, k, s, CLAIM_HX_FIRST_MSG, hx_first_msg_classes)
+        }),
+        claimed(CLAIM_HX_SAME_CONTENT, n, |n, k, s| {
+            hx_accept_reject(n, k, s, CLAIM_HX_SAME_CONTENT, hx_same_content_classes)
         }),
     ]
 }
@@ -3250,8 +3276,8 @@ fn tr_targets(n: usize) -> [Target; 5] {
 
 /// Every target (`evaluate`), then the inline A/A control over the full target set (ADR-041 (3)) and the
 /// sensitivity control (Amendment 1 (2)); the third value is the reason of a `CONTROL_FAIL` run (either control
-/// failed, or the A/A′ placement control or the same-content control gave FAIL, ADR-042 and its Amendment 2; every
-/// target verdict is then `CONTROL_FAIL`).
+/// failed, or the A/A′ placement control or one of the two same-content controls gave FAIL, ADR-042 and its
+/// Amendments 2 and 3; every target verdict is then `CONTROL_FAIL`).
 fn run(
     rules: Rules,
 ) -> Result<(Clock, Vec<Outcome>, Option<String>, Sensitivity), secmp_crypto::Error> {
@@ -3273,7 +3299,20 @@ fn run(
     let mut reasons: Vec<String> = aa_fail.into_iter().collect();
     reasons.extend(sensitivity.failure(rules));
     reasons.extend(placement_failure(&out, &clock, rules));
-    reasons.extend(same_content_failure(&out, &clock, rules));
+    reasons.extend(same_content_failure(
+        &out,
+        &clock,
+        rules,
+        SAME_CONTENT,
+        "ADR-042 Amendment 2",
+    ));
+    reasons.extend(same_content_failure(
+        &out,
+        &clock,
+        rules,
+        HX_SAME_CONTENT,
+        "ADR-042 Amendment 3",
+    ));
     let control_fail = (!reasons.is_empty()).then(|| reasons.join("; "));
     if control_fail.is_some() {
         for outcome in &mut out {
@@ -3404,12 +3443,22 @@ fn placement_failure(out: &[Outcome], clock: &Clock, rules: Rules) -> Option<Str
 /// The name of the same-content control (ADR-042 Amendment 2; `expect::CT_TARGETS`).
 const SAME_CONTENT: &str = "same_content_control";
 
-/// ADR-042 Amendment 2: the same-content control is judged like a target; if its verdict is FAIL, a preparation path
-/// that differs by class alone reaches the effect floor and the run is `CONTROL_FAIL` with this reason (its Δ at the
-/// deciding crop in effect floors of each measurement). `None` if it passed, showed a sub-floor shift or was not
-/// measured (NOT MEASURABLE fails the run on its own).
-fn same_content_failure(out: &[Outcome], clock: &Clock, rules: Rules) -> Option<String> {
-    let o = out.iter().find(|o| o.target.name == SAME_CONTENT)?;
+/// The name of the HX same-content control (ADR-042 Amendment 3; `expect::CT_TARGETS`).
+const HX_SAME_CONTENT: &str = "hx_same_content_control";
+
+/// ADR-042 Amendment 2 (`same_content_control`, the TR preparation path) and Amendment 3 (`hx_same_content_control`,
+/// the HX one; `adr` names the decision): a same-content control is judged like a target; if its verdict is FAIL, a
+/// preparation path that differs by class alone reaches the effect floor and the run is `CONTROL_FAIL` with this
+/// reason (its Δ at the deciding crop in effect floors of each measurement). `None` if it passed, showed a sub-floor
+/// shift or was not measured (NOT MEASURABLE fails the run on its own).
+fn same_content_failure(
+    out: &[Outcome],
+    clock: &Clock,
+    rules: Rules,
+    name: &str,
+    adr: &str,
+) -> Option<String> {
+    let o = out.iter().find(|o| o.target.name == name)?;
     if o.verdict != Verdict::Fail {
         return None;
     }
@@ -3422,9 +3471,8 @@ fn same_content_failure(out: &[Outcome], clock: &Clock, rules: Rules) -> Option<
         .map_or_else(|| "?".to_owned(), |f| format!("{f:.2}"))
     };
     Some(format!(
-        "same-content control {SAME_CONTENT} FAIL at {crop}: identical contents through the per-class preparation \
-         path shift the class means by {} / {} effect floors — the preparation path differs by class (ADR-042 \
-         Amendment 2)",
+        "same-content control {name} FAIL at {crop}: identical contents through the per-class preparation path \
+         shift the class means by {} / {} effect floors — the preparation path differs by class ({adr})",
         floors(o.first.as_ref()),
         floors(o.second.as_ref())
     ))

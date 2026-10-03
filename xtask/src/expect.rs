@@ -108,7 +108,7 @@ pub(crate) const CT_SAS_SAMPLES: usize = 20_000;
 /// header keys — the opening trial is the same, R-59) and the INV/HX targets of
 /// TEST-SPEC-M4 (f): `inv_fingerprint_compare` (`inv::invitee_check`, §5.5 step 3), `x25519_zero_check`
 /// (`X25519Secret::diffie_hellman`, §3, §6.4), `hx_accept_reject_inner` and `hx_accept_reject_first_msg`
-/// (`Responder::accept`, §6.6 steps 2 and 3).
+/// (`Responder::accept`, §6.6 steps 2 and 3); M4 review C-2: the HX same-content control (ADR-042 Amendment 3).
 pub(crate) const CT_TARGETS: &[&str] = &[
     "control_variable_time_compare",
     "tag_compare",
@@ -129,6 +129,7 @@ pub(crate) const CT_TARGETS: &[&str] = &[
     "x25519_zero_check",
     "hx_accept_reject_inner",
     "hx_accept_reject_first_msg",
+    "hx_same_content_control",
 ];
 
 /// The positive control among [`CT_TARGETS`].
@@ -142,6 +143,11 @@ pub(crate) const CT_AA_PRIME_CONTROL: &str = "aa_prime_control";
 /// the per-class preparation path, judged like a target; a FAIL makes the run `CONTROL_FAIL`, PASS and
 /// `SUB_FLOOR_SHIFT` pass. Not the positive control.
 pub(crate) const CT_SAME_CONTENT_CONTROL: &str = "same_content_control";
+
+/// The HX same-content control among [`CT_TARGETS`] (ADR-042 Amendment 3, M4 review C-2): the class-1 cells of
+/// `hx_accept_reject_inner` in both classes through the HX preparation path, judged like [`CT_SAME_CONTENT_CONTROL`]: a
+/// FAIL makes the run `CONTROL_FAIL`, PASS and `SUB_FLOOR_SHIFT` pass. Not the positive control.
+pub(crate) const CT_HX_SAME_CONTENT_CONTROL: &str = "hx_same_content_control";
 
 /// docs/07 M3 acceptance "encrypt+decrypt of a message < 3 ms" (M3 plan D11): the `perf` step fails if the maximum of
 /// a kind of `crates/secmp-proto/examples/tr-perf.rs` (release profile; encrypt, persist, decrypt and commit of one

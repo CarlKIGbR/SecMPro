@@ -272,6 +272,8 @@ fn ct_line(r: &Value) -> (String, String, bool) {
             " (A/A′ placement control: a FAIL makes the run CONTROL_FAIL)"
         } else if name == expect::CT_SAME_CONTENT_CONTROL {
             " (same-content control: a FAIL makes the run CONTROL_FAIL)"
+        } else if name == expect::CT_HX_SAME_CONTENT_CONTROL {
+            " (HX same-content control: a FAIL makes the run CONTROL_FAIL)"
         } else {
             ""
         }
@@ -599,6 +601,13 @@ fn target_findings(
             out.push(format!(
                 "ct report: {name} FAIL in a {run_verdict} run: the same-content control reached the effect floor, \
                  which makes the run CONTROL_FAIL (ADR-042 Amendment 2)"
+            ));
+        }
+        // ADR-042 Amendment 3 (M4 review C-2): so does the HX same-content control
+        if name == expect::CT_HX_SAME_CONTENT_CONTROL && verdict == "FAIL" {
+            out.push(format!(
+                "ct report: {name} FAIL in a {run_verdict} run: the HX same-content control reached the effect floor, \
+                 which makes the run CONTROL_FAIL (ADR-042 Amendment 3)"
             ));
         }
     }
@@ -1851,6 +1860,102 @@ mod tests {
         // it is not the positive control
         let mut two = report();
         set(at(&mut two, same), &["control"], Value::from(true));
+        assert!(refused(&two, "2 positive controls")?);
+        Ok(())
+    }
+
+    /// ADR-042 Amendment 3 (M4 review C-2): the HX same-content control is judged like `same_content_control` — PASS
+    /// and a sub-floor shift pass; a FAIL inside a FAIL run is refused (the bench must have made the run
+    /// `CONTROL_FAIL`), and so is a label its crops do not give; a `CONTROL_FAIL` run naming it fails with its reason
+    /// alone; it is not the positive control.
+    #[test]
+    fn the_hx_same_content_control_fails_the_run_as_control_fail() -> Result<()> {
+        let hx = expect::CT_HX_SAME_CONTENT_CONTROL;
+        assert!(expect::CT_TARGETS.contains(&hx));
+        assert_ne!(hx, expect::CT_SAME_CONTENT_CONTROL);
+        assert_ne!(hx, expect::CT_POSITIVE_CONTROL);
+        let all = |t: f64, delta: f64| {
+            let crops: Vec<(&str, f64, f64)> = CROPS.iter().map(|c| (*c, t, delta)).collect();
+            measurement_with(&crops, 1.0)
+        };
+        let with = |first: Value, second: Value, verdict: &str, run: &str| {
+            let mut v = report();
+            set(&mut v, &["run_verdict"], Value::from(run));
+            let target = at(&mut v, hx);
+            set(target, &["first"], first);
+            set(target, &["second"], second);
+            set(target, &["verdict"], Value::from(verdict));
+            set(
+                target,
+                &["decisive_crop"],
+                if verdict == "PASS" {
+                    Value::Null
+                } else {
+                    Value::from("p90")
+                },
+            );
+            v
+        };
+        let t = table(&report())?;
+        assert!(t.failed.is_empty(), "{t:?}");
+        assert!(
+            t.lines
+                .iter()
+                .any(|l| l.starts_with("hx_same_content_control: PASS")
+                    && l.ends_with("(HX same-content control: a FAIL makes the run CONTROL_FAIL)"))
+        );
+        // a reproduced shift below the floor (Δ 5 ticks < floor 20) passes as SUB_FLOOR_SHIFT
+        let sub = with(all(30.0, 5.0), all(25.0, 5.0), "SUB_FLOOR_SHIFT", "PASS");
+        assert!(refusals(&sub)?.is_empty());
+        assert!(table(&sub)?.failed.is_empty());
+        // a reproduced shift at the floor, labelled FAIL in a FAIL run: refused (only CONTROL_FAIL is consistent)
+        let fail = with(all(30.0, 30.0), all(25.0, 30.0), "FAIL", "FAIL");
+        let found = refusals(&fail)?;
+        assert_eq!(found.len(), 2, "{found:?}");
+        assert!(
+            found
+                .iter()
+                .any(|f| f.starts_with("hx_same_content_control: FAIL at p90"))
+        );
+        assert!(found.contains(
+            &"ct report: hx_same_content_control FAIL in a FAIL run: the HX same-content control reached the effect floor, which makes the run CONTROL_FAIL (ADR-042 Amendment 3)"
+                .to_owned()
+        ));
+        assert!(
+            found
+                .iter()
+                .any(|f| f.contains("which makes the run CONTROL_FAIL"))
+        );
+        // the same crops labelled as a sub-floor shift: refused by the re-derivation
+        let hidden = with(all(30.0, 30.0), all(25.0, 30.0), "SUB_FLOOR_SHIFT", "PASS");
+        assert_eq!(
+            refusals(&hidden)?,
+            vec!["ct report: hx_same_content_control SUB_FLOOR_SHIFT, but its recorded crops give {\"FAIL\"}".to_owned()]
+        );
+        // the CONTROL_FAIL run the bench writes for it: its reason is the one finding
+        let mut control_fail = with(
+            all(30.0, 30.0),
+            all(25.0, 30.0),
+            "CONTROL_FAIL",
+            "CONTROL_FAIL",
+        );
+        let reason = "same-content control hx_same_content_control FAIL at p90: identical contents through the \
+                      per-class preparation path shift the class means by 1.50 / 1.50 effect floors";
+        set(&mut control_fail, &["run_reason"], Value::from(reason));
+        for name in expect::CT_TARGETS {
+            set(
+                at(&mut control_fail, name),
+                &["verdict"],
+                Value::from("CONTROL_FAIL"),
+            );
+        }
+        assert_eq!(
+            table(&control_fail)?.failed,
+            vec![format!("CONTROL_FAIL — {reason}")]
+        );
+        // it is not the positive control
+        let mut two = report();
+        set(at(&mut two, hx), &["control"], Value::from(true));
         assert!(refused(&two, "2 positive controls")?);
         Ok(())
     }

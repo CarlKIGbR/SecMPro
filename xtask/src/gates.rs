@@ -408,7 +408,8 @@ fn echo_ct_progress(progress: &Path, echoed: &mut usize, last: &mut Option<Strin
 /// carries only `error`, which [`ctreport::ct_table`] refuses.)
 fn ct_site_lines(json: &str, lines: &[String]) -> Result<(Vec<String>, Vec<String>)> {
     /// The targets whose report entry must carry a site and a passed pre-check: the SecMP-TR targets, the
-    /// same-content control (it measures the TR body-tag cell), and the SecMP-INV/HX targets of TEST-SPEC-M4 (f).
+    /// same-content control (it measures the TR body-tag cell), the SecMP-INV/HX targets of TEST-SPEC-M4 (f) and the
+    /// HX same-content control (the class-1 cells of `hx_accept_reject_inner`, ADR-042 Amendment 3).
     const PRECHECKED: &[&str] = &[
         "tr_decrypt_reject_hdr_key",
         "tr_decrypt_reject_body_tag",
@@ -419,6 +420,7 @@ fn ct_site_lines(json: &str, lines: &[String]) -> Result<(Vec<String>, Vec<Strin
         "x25519_zero_check",
         "hx_accept_reject_inner",
         "hx_accept_reject_first_msg",
+        "hx_same_content_control",
     ];
     let v: Value = serde_json::from_str(json).map_err(|e| Error(format!("ct report: {e}")))?;
     let results = v

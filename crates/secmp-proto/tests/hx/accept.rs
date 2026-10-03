@@ -3,17 +3,22 @@
 //! N-26 … N-57, N-66 … N-71).
 //!
 //! Every negative row builds its cells with the independent harness (re-sealed under `K_inv` and, for the inner
-//! layer, `K_id`), runs `accept` on a fresh store and asserts the *same* four things (`"…_and_keeps_opk"`): the
-//! uniform `Rejected`, a store whose digest (SPK generations, RPK, every OPK, the records) is unchanged, the OPK
-//! still held, and no draw of randomness that a rejection could have caused (the entropy handed in is exactly the
-//! DH-step randomness; a rejection never consumes it — `secmp-proto` has no logging dependency, so "log nothing
-//! identifying" holds structurally). The rows share one table (`table`) so that N-60 can run all of them.
+//! layer, `K_id`), runs `accept` on a fresh store and asserts three things (`Lib::assert_rejected`,
+//! `"…_and_keeps_opk"`): the uniform `Rejected`, a store whose digest (SPK generations, RPK, every OPK, the records) is
+//! unchanged, and the OPK still held; rows that name a check also assert its reject site (`Lib::assert_rejected_at`).
+//! The fourth and fifth — no `delete_opk`/`commit_accept` call and no draw of randomness that a rejection could have
+//! caused (the entropy handed in is exactly the DH-step randomness) — are asserted for every row by N-60: over the
+//! shared table (`table`) by `accept_reject_is_uniform_and_transactional`, over the rejecting rows outside it by
+//! `accept_every_rejecting_row_counts_no_delete_and_no_draw` (M4 review C-15). `secmp-proto` has no logging
+//! dependency, so "log nothing identifying" holds structurally.
 
 use secmp_crypto::{SecretBytes, X25519Secret};
 use secmp_proto::Error;
 use secmp_proto::hx::ACCEPT_SITE_KAT;
 use secmp_proto::tr::{FixedEntropy, OsEntropy};
 
+use crate::accept_ok::{at, bogus_chunk, first_two};
+use crate::build::random_bytes;
 use crate::build::{garbage, handshake_body, raw_content};
 use crate::hx_gen::harness::{
     self, OFF_CT_OPK, OFF_CT_SPK, OFF_EK, OFF_INNER_CT, OFF_OPK_ID, OFF_SPK_ID,
@@ -730,6 +735,119 @@ fn accept_reject_is_uniform_and_transactional() {
     )
     .unwrap();
     assert_eq!(store.deletes, 1);
+}
+
+/// M4 review C-15 (R-33): the N-60 assertions — `Rejected`, no `delete_opk`/`commit_accept` call, the store digest
+/// unchanged, and no draw a rejection could cause (`remaining()` is the whole DH-step stream, or 0 when the first
+/// message decrypted) — over the rejecting rows outside `table()`: N-32, N-33, N-67, N-37 with a live OPK, N-38, N-39,
+/// N-71, and N-41 through `Responder::accept` (a low-order input of DH1–DH4: `EK_I` and `IKSPublic_I.ik_dh`; the
+/// decoders refuse it before any DH, the helper's own check is the unit test of the same name).
+#[test]
+fn accept_every_rejecting_row_counts_no_delete_and_no_draw() {
+    use secmp_proto::hx::Responder;
+    use secmp_proto::prekeys::MemoryPrekeyStore;
+    use secmp_proto::wire::cell::Cell;
+    let lib = Lib::new();
+    let h = lib.honest();
+    let check = |inner: MemoryPrekeyStore, cells: &[Vec<u8>], what: &str| {
+        let mut store = Counting { inner, deletes: 0 };
+        let before = store.inner.digest_kat();
+        let cells: Vec<Cell> = cells.iter().map(|c| Cell::from_bytes(c).unwrap()).collect();
+        let mut entropy = FixedEntropy::new(&lib.w.step);
+        let result = Responder::accept(
+            &cells,
+            &lib.record(),
+            &mut store,
+            &lib.r_id.responder_keys(),
+            &mut entropy,
+        );
+        assert_eq!(result.err(), Some(Error::Rejected), "{what}");
+        assert_eq!(store.deletes, 0, "{what}: no delete");
+        assert_eq!(store.inner.digest_kat(), before, "{what}: store digest");
+        let left = entropy.remaining();
+        assert!(
+            left == lib.w.step.len() || left == 0,
+            "{what}: a rejection draws nothing, or one whole DH step ({left} left)"
+        );
+    };
+    // N-32: chunk 1 under another invitation's K_inv, or with another ld_id in the AD
+    let chunk = harness::chunk_of(&lib.w.b6.outer, 1);
+    let mut other_key = lib.w.inv.link_key;
+    *other_key.first_mut().unwrap() ^= 1;
+    let other_k_inv = harness::k_inv(&lib.w.inv.ld_id, &other_key);
+    let plaintext = harness::cell_plaintext(&lib.w.b6.init_id, 1, 3, &chunk);
+    let mut other_ld = lib.w.inv.ld_id;
+    *other_ld.first_mut().unwrap() ^= 1;
+    for (what, bad) in [
+        (
+            "N-32 another K_inv",
+            harness::cell_raw(&other_k_inv, &lib.w.inv.ld_id, &[53; 24], &plaintext),
+        ),
+        (
+            "N-32 another ld_id",
+            harness::cell_raw(&lib.w.k_inv, &other_ld, &[54; 24], &plaintext),
+        ),
+    ] {
+        check(lib.store(), &[at(&h, 0), bad, at(&h, 2)], what);
+    }
+    // N-33: a differing duplicate of chunk 1 first
+    check(
+        lib.store(),
+        &[vec![bogus_chunk(&lib, 1, 55)], h.clone()].concat(),
+        "N-33 bogus before the honest chunk",
+    );
+    // N-67: nine partial groups, then the missing chunk of the evicted oldest
+    let partial = |k: u8| lib.reseal(&lib.w.b6.outer, k + 1);
+    let mut cells: Vec<Vec<u8>> = (0..9).flat_map(|k| first_two(&partial(k))).collect();
+    cells.push(at(&partial(0), 2));
+    check(lib.store(), &cells, "N-67 the oldest of nine is evicted");
+    // N-37: the opk_id of another live OPK
+    let mut store = lib.store();
+    let other = store
+        .issue_opk(&mut FixedEntropy::new(&random_bytes(3, 96)))
+        .unwrap();
+    let cells = lib.outer_variant(60, |o| put(o, OFF_OPK_ID, &other.to_be_bytes()));
+    check(store, &cells, "N-37 another live OPK");
+    // N-38: the OPK was consumed
+    let mut store = lib.store();
+    secmp_proto::prekeys::PrekeyStore::delete_opk(&mut store, harness::OPK_ID).unwrap();
+    check(store, &h, "N-38 used OPK");
+    // N-39: after a success, the same cells and the retransmitted copies
+    for (what, cells) in [
+        ("N-39 the same cells", h.clone()),
+        ("N-39 retransmitted copies", [h.clone(), h.clone()].concat()),
+    ] {
+        let mut store = lib.store();
+        lib.accept(&mut store, &h).unwrap();
+        check(store, &cells, what);
+    }
+    // N-71: the SPK generation was rotated out
+    let mut store = MemoryPrekeyStore::starting_at(harness::SPK_ID + 1, harness::OPK_ID);
+    let mut e = FixedEntropy::new(
+        &[
+            random_bytes(2, 160),
+            lib.w.r_seed.get(96 + 160..).unwrap().to_vec(),
+        ]
+        .concat(),
+    );
+    store.create_spk(harness::CREATED, &mut e).unwrap();
+    store.issue_opk(&mut e).unwrap();
+    check(store, &h, "N-71 rotated-out SPK");
+    // N-41 through accept: every low-order value as EK_I (DH2–DH4) and as IKSPublic_I.ik_dh (DH1)
+    for v in low_order_values() {
+        check(
+            lib.store(),
+            &lib.outer_variant(7, |o| put(o, OFF_EK, &v)),
+            "N-41 low-order EK_I",
+        );
+        let mut iks = lib.w.i.iks_bytes.clone();
+        put(&mut iks, IKS_DH, &v);
+        check(
+            lib.store(),
+            &lib.inner_variant(14, &lib.inner_with(&iks, &lib.w.b6.first_msg)),
+            "N-41 low-order ik_dh",
+        );
+    }
 }
 
 /// The reject site of `accept` on `cells` against a store that also holds SPK generation 8 and OPK 43 (so that the

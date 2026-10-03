@@ -28,7 +28,7 @@ fn contains(haystack: &[u8], needle: &[u8]) -> bool {
 }
 
 /// `v[i]`, cloned.
-fn at(v: &[Vec<u8>], i: usize) -> Vec<u8> {
+pub(crate) fn at(v: &[Vec<u8>], i: usize) -> Vec<u8> {
     v.get(i).unwrap().clone()
 }
 
@@ -38,7 +38,7 @@ fn tail(v: &[Vec<u8>], i: usize) -> Vec<Vec<u8>> {
 }
 
 /// The first two cells of `v`.
-fn first_two(v: &[Vec<u8>]) -> Vec<Vec<u8>> {
+pub(crate) fn first_two(v: &[Vec<u8>]) -> Vec<Vec<u8>> {
     v.get(..2).unwrap().to_vec()
 }
 
@@ -235,7 +235,7 @@ fn accept_with_rotated_out_spk_rejects_and_keeps_opk() {
 
 // ---- grouping (§6.5, ADR-044 (c)) ------------------------------------------------------------------------------
 
-fn bogus_chunk(lib: &Lib, i: u8, tag: u8) -> Vec<u8> {
+pub(crate) fn bogus_chunk(lib: &Lib, i: u8, tag: u8) -> Vec<u8> {
     cell_raw(
         &lib.w.k_inv,
         &lib.w.inv.ld_id,

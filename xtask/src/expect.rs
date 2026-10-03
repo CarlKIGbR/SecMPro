@@ -466,6 +466,33 @@ pub(crate) const MIRI_SKIP: &[(&str, &str, &str)] = &[
     ),
 ];
 
+/// Integration-test targets with `required-features` that no Miri run builds (`miri` and `miri-full` run without
+/// features; naming such a target would make cargo refuse the run), as (package, test target, reason). M4 review C-4
+/// (R-12): the Miri gate fails unless this list equals the package's test targets with `required-features`, in both
+/// directions; every one of them runs natively in the `kat` step (and `nextest`).
+pub(crate) const MIRI_FEATURE_GATED: &[(&str, &str, &str)] = &[
+    (
+        "secmp-proto",
+        "hx",
+        "required-features = [\"kat\"]: the SecMP-HX integration suite (M4), natively in the kat step",
+    ),
+    (
+        "secmp-proto",
+        "tr_generator",
+        "required-features = [\"kat\"]: the SecMP-TR vector generator test (M3), natively in the kat step",
+    ),
+    (
+        "secmp-proto",
+        "tr_properties",
+        "required-features = [\"kat\"]: the SecMP-TR property tests (M3), natively in the kat step",
+    ),
+    (
+        "secmp-proto",
+        "tr_vectors",
+        "required-features = [\"kat\"]: the frozen SecMP-TR vectors (M3), natively in the kat step",
+    ),
+];
+
 /// Tests Miri cannot run at all, left out of `miri` and `miri-full` alike, as (package, filter, reason); same filter
 /// rules as [`MIRI_SKIP`].
 pub(crate) const MIRI_UNSUPPORTED: &[(&str, &str, &str)] = &[

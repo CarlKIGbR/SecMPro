@@ -1502,6 +1502,44 @@ pub(crate) fn miri_full_package(ctx: &Ctx, package: &str) -> Result<Outcome> {
     miri_with(ctx, expect::MIRI_UNSUPPORTED, Some(package))
 }
 
+/// The integration-test targets of `package` that a Miri run builds: those without `required-features`. Test targets
+/// with `required-features` (M3: the `kat`-only `tr` vector, generator and property suites; M4: the `hx` suite) are not
+/// built by a Miri run without features — they run natively in the `kat` step — and naming one with `--test` would make
+/// cargo refuse the whole run. M4 review C-4 (R-12): they must be exactly the package's entries of `listed`
+/// (`expect::MIRI_FEATURE_GATED`), in both directions, so no suite leaves Miri unnamed.
+pub(crate) fn miri_test_targets(
+    package: &crate::meta::Package,
+    listed: &[(&str, &str, &str)],
+) -> Result<Vec<String>> {
+    let tests = package
+        .targets
+        .iter()
+        .filter(|t| t.kinds.iter().any(|k| k == "test"));
+    let gated: BTreeSet<String> = tests
+        .clone()
+        .filter(|t| !t.required_features.is_empty())
+        .map(|t| t.name.clone())
+        .collect();
+    let named: BTreeSet<String> = listed
+        .iter()
+        .filter(|(p, _, _)| *p == package.name)
+        .map(|(_, t, _)| (*t).to_owned())
+        .collect();
+    if gated != named {
+        let unlisted: Vec<&String> = gated.difference(&named).collect();
+        let ungated: Vec<&String> = named.difference(&gated).collect();
+        bail!(
+            "miri: {}: the test targets with required-features differ from expect::MIRI_FEATURE_GATED (not listed: \
+             {unlisted:?}; listed without required-features or absent: {ungated:?})",
+            package.name
+        );
+    }
+    Ok(tests
+        .filter(|t| t.required_features.is_empty())
+        .map(|t| t.name.clone())
+        .collect())
+}
+
 /// The filter prefix of a `MIRI_SKIP` / `MIRI_UNSUPPORTED` entry that leaves out a whole integration-test target
 /// (`tests/<name>.rs`) rather than tests by name.
 pub(crate) const MIRI_TEST_TARGET: &str = "test-target:";
@@ -1606,15 +1644,7 @@ fn miri_with(ctx: &Ctx, skip: &[(&str, &str, &str)], only: Option<&str>) -> Resu
             .ws
             .member(p)
             .ok_or_else(|| Error(format!("miri: {p} is not a workspace member")))?;
-        // Test targets with `required-features` (M3: the `kat`-only `tr` vector, generator and property suites) are
-        // not built by a Miri run without features; they run natively in the `kat` step. Naming one with `--test`
-        // would make cargo refuse the whole run.
-        let test_targets: Vec<String> = package
-            .targets
-            .iter()
-            .filter(|t| t.kinds.iter().any(|k| k == "test") && t.required_features.is_empty())
-            .map(|t| t.name.clone())
-            .collect();
+        let test_targets = miri_test_targets(package, expect::MIRI_FEATURE_GATED)?;
         let has_lib = package
             .targets
             .iter()
@@ -5018,6 +5048,124 @@ mod tests {
         let crlf = nightly.replace("\r\n", "\n").replace('\n', "\r\n");
         assert!(crlf.contains("on:\r\n  schedule:\r\n"));
         check_nightly(&crlf);
+    }
+
+    /// M4 review C-4 (R-14): every job of `ci-dispatch.yml` runs exactly the `cargo xtask` gate lines of its `ci.yml`
+    /// counterpart — `dispatch-full` the pinned `linux-full` line of `expect::REQUIRED_GATE_RUNS` (with the delegations
+    /// to `ct`, `mutants` and `proverif-hx`), and each delegated job has its dispatch twin.
+    #[test]
+    fn dispatch_full_runs_the_linux_full_line() -> Result<()> {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let ci = std::fs::read_to_string(root.join(".github/workflows/ci.yml"))?;
+        let dispatch = std::fs::read_to_string(root.join(".github/workflows/ci-dispatch.yml"))?;
+        let gate_lines = |text: &str, job: &str| -> Vec<String> {
+            yaml_jobs(text)
+                .into_iter()
+                .filter(|j| j.id == job)
+                .flat_map(|j| j.steps.into_iter().flatten())
+                .filter(|(k, v)| k == "run" && is_gate_run(v))
+                .map(|(_, v)| v)
+                .collect()
+        };
+        let pinned: Vec<String> = expect::REQUIRED_GATE_RUNS
+            .iter()
+            .find(|(j, _)| *j == "linux-full")
+            .map(|(_, lines)| lines.iter().map(|l| (*l).to_owned()).collect())
+            .unwrap_or_default();
+        assert_eq!(pinned.len(), 1);
+        assert_eq!(gate_lines(&dispatch, "dispatch-full"), pinned);
+        for (twin, job) in [
+            ("dispatch-fast", "linux-fast"),
+            ("dispatch-windows", "windows-native"),
+            ("dispatch-xwin", "xwin-cross"),
+            ("dispatch-full", "linux-full"),
+            ("dispatch-ct", "ct"),
+            ("dispatch-mutants-shard", "mutants-shard"),
+            ("dispatch-mutants", "mutants"),
+            ("dispatch-proverif-hx", "proverif-hx"),
+        ] {
+            let lines = gate_lines(&ci, job);
+            assert!(!lines.is_empty(), "{job}: no gate line in ci.yml");
+            assert_eq!(gate_lines(&dispatch, twin), lines, "{twin} vs {job}");
+        }
+        // every delegation of the linux-full line has its job in both workflows
+        for line in &pinned {
+            for d in line.split("--delegated ").skip(1) {
+                let step = d.split_whitespace().next().unwrap_or_default();
+                let job = match step {
+                    "windows-native" => "windows-native",
+                    "windows-cross" => "xwin-cross",
+                    other => other,
+                };
+                assert!(
+                    !gate_lines(&ci, job).is_empty(),
+                    "{step}: no job {job} in ci.yml"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// A package of `cargo metadata` with a library and the given test targets (name, required features).
+    fn fake_package(name: &str, tests: &[(&str, &[&str])]) -> crate::meta::Package {
+        let target = |n: &str, kind: &str, features: &[&str]| crate::meta::Target {
+            name: n.to_owned(),
+            kinds: vec![kind.to_owned()],
+            src_path: PathBuf::from(format!("/w/{n}.rs")),
+            required_features: features.iter().map(|f| (*f).to_owned()).collect(),
+        };
+        crate::meta::Package {
+            id: format!("{name}#0.0.0"),
+            name: name.to_owned(),
+            manifest_path: PathBuf::from("/w/Cargo.toml"),
+            targets: std::iter::once(target(name, "lib", &[]))
+                .chain(tests.iter().map(|(n, f)| target(n, "test", f)))
+                .collect(),
+            features: BTreeSet::new(),
+            kani_unstable: Vec::new(),
+        }
+    }
+
+    /// M4 review C-4 (R-12): the test targets with `required-features` that Miri cannot build must be exactly the
+    /// package's entries of `expect::MIRI_FEATURE_GATED` — an unlisted gated target, a listed target without
+    /// `required-features` and a listed target that does not exist are refused; the real workspace matches the list.
+    #[test]
+    fn miri_feature_gated_targets_are_listed() -> Result<()> {
+        let package = fake_package("p", &[("plain", &[]), ("gated", &["kat"])]);
+        let reason = "required-features";
+        assert_eq!(
+            miri_test_targets(&package, &[("p", "gated", reason)])?,
+            vec!["plain".to_owned()]
+        );
+        // a gated target nobody listed
+        let got = miri_test_targets(&package, &[]);
+        assert!(
+            got.as_ref()
+                .is_err_and(|e| e.0.contains("not listed: [\"gated\"]")),
+            "{got:?}"
+        );
+        // a listed target that has no required-features, and one that does not exist
+        assert!(
+            miri_test_targets(&package, &[("p", "gated", reason), ("p", "plain", reason)]).is_err()
+        );
+        assert!(
+            miri_test_targets(&package, &[("p", "gated", reason), ("p", "gone", reason)]).is_err()
+        );
+        // another package's entries do not count
+        assert!(miri_test_targets(&package, &[("q", "gated", reason)]).is_err());
+        // the workspace: every package of MIRI_PACKAGES matches, and every entry names one of them
+        let ws = crate::meta::Workspace::load()?;
+        for p in expect::MIRI_PACKAGES {
+            let member = ws
+                .member(p)
+                .ok_or_else(|| Error(format!("{p} is not a workspace member")))?;
+            miri_test_targets(member, expect::MIRI_FEATURE_GATED)?;
+        }
+        for (p, t, why) in expect::MIRI_FEATURE_GATED {
+            assert!(expect::MIRI_PACKAGES.contains(p), "{p} {t}");
+            assert!(!why.is_empty(), "{p} {t}");
+        }
+        Ok(())
     }
 
     /// M2 review F3: Miri runs per package, each with only its own skip filters; a `test-target:` entry leaves out

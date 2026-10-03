@@ -1,7 +1,10 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Weekly Miri run over the complete test set (docs/06 §4 Miri row, M1 review F3). `ci-full` runs Miri in a
-# bounded scope that skips the test modules of `expect::MIRI_SKIP` (runtime); these jobs run every test, those
-# modules included, with a 6-hour timeout each. One job per package of `expect::MIRI_PACKAGES` (M3 review F22, Q-4),
+# bounded scope that skips the test modules of `expect::MIRI_SKIP` (runtime); these jobs run every test that a build
+# without features contains, those modules included, with a 6-hour timeout each. Not run under Miri at all: the test
+# targets with `required-features = ["kat"]` (`hx`, `tr_vectors`, `tr_properties`, `tr_generator` of secmp-proto,
+# listed in `expect::MIRI_FEATURE_GATED` and checked by the gate; they run natively in the `kat` step) and the tests
+# of `expect::MIRI_UNSUPPORTED`. One job per package of `expect::MIRI_PACKAGES` (M3 review F22, Q-4),
 # so that a package's run time does not share the limit of the others (a test in `cargo xtask policy` pins the
 # set). Not required checks; the job names are not required-check names.
 # Checked by `cargo xtask policy` as every workflow (see the header of ci.yml): no `pull_request_target`/
@@ -78,5 +81,5 @@ jobs:
         run: rustup toolchain install && rustc -vV
       - name: Pinned nightly with Miri
         run: cargo xtask install-tools --set miri --nightly
-      - name: Miri, complete set of secmp-proto (no skip list)
+      - name: Miri, secmp-proto without the runtime skip list (the feature-gated suites of MIRI_FEATURE_GATED aside)
         run: cargo xtask step --strict miri-full-secmp-proto

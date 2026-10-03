@@ -140,6 +140,8 @@ v1.1: M16 → M17 → M18 → M19 → M20 (release)
 
 **Review focus.** Persist-before-send/ack enforced by construction; OPK deletion; unverified contacts cannot receive view-once messages; no identifiers reach `secmp-transport`; backup contains no ratchet material.
 
+**Obligation from the M4 review (F-M7, C-12).** The transactional store: `PrekeyStore::commit_accept` of the encrypted store stages the OPK deletion and the record's consumption in one store transaction, which the client commits together with the whole `hx::Accepted` (`state`, `peer`, `routes`, `profile`) before it acknowledges any cell of the invitation queue and before it retires that queue; a commit that cannot be made durable is `Error::Unavailable` and changes nothing (R-26). The client retains at most the newest 24 unclassified cells of an invitation queue between `accept` calls, and a complete group is spent after one `accept` (RT-1).
+
 ---
 
 ### M8 — Desktop UI (Slint) (L)

@@ -1283,7 +1283,10 @@ mod tests {
 }
 
 /// M4-12 (M4 review R-61): the hand-written `Zeroize` of `RelayRef`, `RelayQueue`, `RouteDescriptor` and
-/// `InvitationV1` clears every byte field, and their `Drop` runs it.
+/// `InvitationV1` clears every byte field, and their `Drop` runs it. A heap field (`direct.host`, an unknown route's
+/// `blob`) is wiped and then emptied, so the tests assert that it is empty (an all-zero check over an empty slice
+/// would pass whether or not it was wiped). Not wiped, by design: `direct.port` (a `NonZeroU16`, no zero value) and
+/// the periods (`period_s`, `inv_period_s`: enum values, not secrets) — M4 review C-14.
 #[cfg(test)]
 mod wipe_tests {
     use super::*;
@@ -1302,7 +1305,7 @@ mod wipe_tests {
             && all_zero(&r.akc)
             && r.direct
                 .as_ref()
-                .is_none_or(|d| all_zero(d.host.as_bytes()) && all_zero(&d.spki_sha256))
+                .is_none_or(|d| d.host.as_bytes().is_empty() && all_zero(&d.spki_sha256))
     }
 
     fn queue() -> Result<RelayQueue> {
@@ -1329,18 +1332,35 @@ mod wipe_tests {
 
     #[test]
     fn zeroize_clears_every_byte_field() -> Result<()> {
-        // RelayRef: relay_fp, onion, akc, direct.host, direct.spki_sha256
+        // RelayRef: relay_fp, onion, akc, direct.host (wiped and emptied), direct.spki_sha256; direct.port stays
         let mut r = relay_ref(true)?;
         assert!(!relay_clear(&r) && r.direct.is_some());
+        assert!(
+            r.direct
+                .as_ref()
+                .is_some_and(|d| !d.host.as_bytes().is_empty())
+        );
+        let port = r.direct.as_ref().map(|d| d.port);
         r.zeroize();
         assert!(relay_clear(&r));
+        assert!(
+            r.direct
+                .as_ref()
+                .is_some_and(|d| d.host.as_bytes().is_empty())
+        );
+        assert_eq!(
+            r.direct.as_ref().map(|d| d.port),
+            port,
+            "the port is not wiped"
+        );
 
-        // RelayQueue: the relay reference, sid, send_seed
+        // RelayQueue: the relay reference, sid, send_seed; period_s stays
         let mut q = queue()?;
         q.zeroize();
         assert!(relay_clear(&q.relay));
         assert!(all_zero(&q.sid));
         assert!(all_zero(q.send_seed.expose_secret()));
+        assert!(q.period_s == Period::S20, "the period is not wiped");
 
         // RouteDescriptor: both variants
         let mut route = RouteDescriptor::RelayQueue(queue()?);
@@ -1358,11 +1378,12 @@ mod wipe_tests {
             return Err(Error::Rejected);
         };
         assert_eq!(*kind, 0);
-        assert!(all_zero(blob));
+        assert!(blob.is_empty(), "the blob is wiped and emptied");
 
-        // InvitationV1: relay, ld_id, link_key, inviter_fp, inv_sid, inv_send_seed, expires
+        // InvitationV1: relay, ld_id, link_key, inviter_fp, inv_sid, inv_send_seed, expires; inv_period_s stays
         let mut inv = invitation()?;
         inv.zeroize();
+        assert!(inv.inv_period_s == Period::S80, "the period is not wiped");
         assert!(relay_clear(&inv.relay));
         assert!(all_zero(&inv.ld_id) && all_zero(&inv.inviter_fp) && all_zero(&inv.inv_sid));
         assert!(all_zero(inv.link_key.expose_secret()));
@@ -1372,8 +1393,9 @@ mod wipe_tests {
     }
 
     /// The `Drop` of each type runs its wipe (no safe way to read freed memory, so the test observes the call, which
-    /// `zeroize_clears_every_byte_field` shows is a complete wipe): a value that is dropped on a rejection path —
-    /// `invitee_check` on an expired invitation, a route list a rejected `process` drops — is wiped.
+    /// `zeroize_clears_every_byte_field` shows wipes every byte field): a dropped value, and an invitation that
+    /// `invitee_check` drops on its rejection path (expired). (Route lists dropped by a rejected `process` take the
+    /// same `Drop`; that path is not exercised here.)
     #[test]
     fn dropped_invitation_is_wiped() -> Result<()> {
         wipe_log::take();

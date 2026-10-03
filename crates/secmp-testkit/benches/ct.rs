@@ -3085,7 +3085,11 @@ fn hx_accept_reject(
     } = session;
     let keys = responder.responder_keys();
     let before = store.digest_kat();
+    // the first-message target also names the TR step that refuses (`tr::DECRYPT_SITE_KAT`, reset before each call;
+    // M4 delta review VD2-2): the body MAC, not the counter rule
+    let tr_site = (claim.target == CLAIM_HX_FIRST_MSG.target).then_some("body MAC");
     let mut accept_once = |cells: &[u8]| {
+        secmp_proto::tr::DECRYPT_SITE_KAT.set(None);
         let r = Responder::accept(
             &hx_cells(cells),
             &record,
@@ -3094,7 +3098,13 @@ fn hx_accept_reject(
             &mut FixedEntropy::new(&[]),
         );
         let site = secmp_proto::hx::ACCEPT_SITE_KAT.get().unwrap_or("none");
-        format!("{}, site {site}", outcome(&r))
+        let seen = format!("{}, site {site}", outcome(&r));
+        if tr_site.is_some() {
+            let tr = secmp_proto::tr::DECRYPT_SITE_KAT.get().unwrap_or("none");
+            format!("{seen}, tr site {tr}")
+        } else {
+            seen
+        }
     };
     let observed = [accept_once(&class0), accept_once(&class1)];
     let kept = bool::from(store.digest_kat().as_slice().ct_eq(before.as_slice()));
@@ -3105,7 +3115,10 @@ fn hx_accept_reject(
         &keys,
         &mut FixedEntropy::new(&twin_entropy),
     );
-    let expected = expected_rejection(claim);
+    let expected = match tr_site {
+        Some(tr) => format!("{}, tr site {tr}", expected_rejection(claim)),
+        None => expected_rejection(claim),
+    };
     precheck(
         claim,
         [expected.clone(), expected],

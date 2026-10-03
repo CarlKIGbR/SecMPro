@@ -1134,13 +1134,14 @@ fn k_inv_k_ld_k_id_distinct() {
 }
 
 /// V-1 (verifier): the first-message counter rules (ADR-044 (e)) are what rejects N-68/N-69; state and OPK are
-/// unchanged. Each cell is sealed under the right message key. `pn ≠ 0`: the body MAC verifies, so the ratchet's DH
-/// step drew its whole randomness (`remaining() == 0`) and only the counter check after the decryption refuses.
-/// `n ≠ 0` (M4 review C-9): the first message admits no fast-forward, so `skip_message_keys` rejects it before any
-/// chain step and the body MAC — no randomness is drawn (`remaining()` is the whole stream). The control with n = 0,
-/// pn = 0 accepts.
+/// unchanged. Each cell is sealed under the right message key. `n ≠ 0` (M4 review C-9): the first message admits no
+/// fast-forward, so `skip_message_keys` rejects it before any chain step and the body MAC — the TR site is the counter
+/// rule (`tr::DECRYPT_SITE_KAT`, delta review VD2-2) and no randomness is drawn (`remaining()` is the whole stream).
+/// `pn ≠ 0`: the body MAC verifies, so the ratchet's DH step drew its whole randomness (`remaining() == 0`) and only
+/// the responder's counter check after the decryption refuses (`hx::ACCEPT_SITE_KAT` = `"first_msg checks"`). The
+/// control with n = 0, pn = 0 accepts.
 #[test]
-fn accept_counter_rules_reject_after_a_valid_mac() {
+fn accept_counter_rules_reject_n_before_and_pn_after_the_mac() {
     let lib = Lib::new();
     let run = |n: u32, pn: u32| {
         let cells = lib.first_msg_variant(23, &lib.first_msg_with_counters(n, pn, 23));
@@ -1148,6 +1149,7 @@ fn accept_counter_rules_reject_after_a_valid_mac() {
         let mut store = lib.store();
         let before = store.digest_kat();
         let mut entropy = FixedEntropy::new(&lib.w.step);
+        secmp_proto::tr::DECRYPT_SITE_KAT.set(None);
         let result = Responder::accept(
             &cells,
             &lib.record(),
@@ -1159,26 +1161,33 @@ fn accept_counter_rules_reject_after_a_valid_mac() {
             result.err(),
             entropy.remaining(),
             store.digest_kat() == before,
+            (
+                secmp_proto::tr::DECRYPT_SITE_KAT.get(),
+                secmp_proto::hx::ACCEPT_SITE_KAT.get(),
+            ),
         )
     };
     assert_eq!(run(0, 0).0, None, "control: n = 0, pn = 0 accepts");
     let full = lib.w.step.len();
-    for (n, pn, drawn) in [(1, 0, 0), (7, 0, 0), (0, 5, full)] {
-        let (error, remaining, unchanged) = run(n, pn);
+    let n_rule = (Some("counter rule"), Some("first_msg decrypt"));
+    let pn_rule = (Some("body MAC"), Some("first_msg checks"));
+    for (n, pn, drawn, sites) in [(1, 0, 0, n_rule), (7, 0, 0, n_rule), (0, 5, full, pn_rule)] {
+        let (error, remaining, unchanged, seen) = run(n, pn);
         assert_eq!(error, Some(Error::Rejected), "n = {n}, pn = {pn}");
         assert_eq!(
             remaining,
             full - drawn,
             "n = {n}, pn = {pn}: n ≠ 0 draws nothing (rejected before the MAC); pn ≠ 0 after the MAC verified"
         );
+        assert_eq!(seen, sites, "n = {n}, pn = {pn}: the reject sites");
         assert!(unchanged, "n = {n}, pn = {pn}: store unchanged, OPK kept");
     }
 }
 
 /// M4 review C-9 (R-23): a first message with `n ≠ 0` (cell sealed under the right message key of position n) is
 /// rejected before any chain step — `skip_message_keys` admits no fast-forward on the first message, so not one
-/// `KDF_CK` step is derived (`SKIP_STEPS_KAT` = 0), even for n = 2^20; the store is unchanged and the OPK kept. The
-/// control n = 0 accepts.
+/// `KDF_CK` step is derived (`SKIP_STEPS_KAT` = 0), even for n = 2^20; the TR site is the counter rule
+/// (`tr::DECRYPT_SITE_KAT`, delta review VD2-2); the store is unchanged and the OPK kept. The control n = 0 accepts.
 #[test]
 fn first_msg_with_nonzero_n_rejects_before_any_chain_step() {
     let lib = Lib::new();
@@ -1189,6 +1198,7 @@ fn first_msg_with_nonzero_n_rejects_before_any_chain_step() {
         let before = store.digest_kat();
         let mut entropy = FixedEntropy::new(&lib.w.step);
         secmp_proto::tr::SKIP_STEPS_KAT.set(u32::MAX);
+        secmp_proto::tr::DECRYPT_SITE_KAT.set(None);
         let result = Responder::accept(
             &cells,
             &lib.record(),
@@ -1197,16 +1207,24 @@ fn first_msg_with_nonzero_n_rejects_before_any_chain_step() {
             &mut entropy,
         );
         let steps = secmp_proto::tr::SKIP_STEPS_KAT.get();
+        let site = secmp_proto::tr::DECRYPT_SITE_KAT.get();
         let kept = store.opk(lib.record().opk_id).is_some();
-        (result.err(), steps, store.digest_kat() == before, kept)
+        (
+            result.err(),
+            steps,
+            site,
+            store.digest_kat() == before,
+            kept,
+        )
     };
-    let (control, steps, _, _) = run(0);
+    let (control, steps, _, _, _) = run(0);
     assert_eq!(control, None, "control: n = 0 accepts");
     assert_eq!(steps, 0, "control: no fast-forward either");
     for n in [1_u32, 7, 1 << 20] {
-        let (error, steps, unchanged, kept) = run(n);
+        let (error, steps, site, unchanged, kept) = run(n);
         assert_eq!(error, Some(Error::Rejected), "n = {n}");
         assert_eq!(steps, 0, "n = {n}: no chain step derived");
+        assert_eq!(site, Some("counter rule"), "n = {n}: the TR reject site");
         assert!(unchanged, "n = {n}: store unchanged");
         assert!(kept, "n = {n}: OPK kept");
     }

@@ -1,0 +1,494 @@
+(* SPDX-License-Identifier: AGPL-3.0-or-later *)
+(* formal/hx.pvl — library of the SecMP-HX models: SecMP-HX (docs/03 §6) with SecMP-INV (§5.4, §5.5) and the first
+   SecMP-TR cell (§7.2–§7.4, abstracted, O-15) as used by the handshake. Query set: formal/CLAIMS.md §HX (H1–H12c,
+   fixed by the reviewer; ADR-026, docs/03 §11.2; reviewer decisions O-13…O-24). Properties: docs/03 §11.1 row "HX".
+   One model file per session (O-18, ADR-046): formal/hx/<session>.pv holds the session's instantiation, compromise,
+   oracles, phases and queries (five sessions also have formal/hx/<session>-auth.pv with the begin-IStart declaration,
+   O-22); this library holds types, constructors, equations, events and process macros.
+   Run: proverif -lib formal/hx.pvl formal/hx/<file>.pv (ProVerif 2.05).
+
+   ---------------------------------------------------------------------------------------------------------------
+   1. What is modelled (CLAIMS §HX "Model")
+   ---------------------------------------------------------------------------------------------------------------
+   An honest responder R (the inviter) and an honest initiator I (the invitee) in one session s.
+   R: IKS_R = (IK_sig_R, IK_dh_R), one signed-prekey generation (SPK_dh_R, SPK_kem_R, RPK_kem_R), published IKSPublic_R.
+   Per issued invitation (replicated, the session file's Invitation): a fresh OPK_j = (OPK_dh_R[j], OPK_kem_R[j]) with
+   opk_id_j, a fresh ld_id_j (relay-visible: output on c) and link_key_j; R signs the bundle (§6.3: HybridSign(IK_sig,
+   "SecMP-HX/1 bundle", all preceding fields ‖ ik_dh)) — event BundleSigned — and issues the invitation — event
+   InvIssued; InvitationV1_j (ld_id, link_key, inviter_fp = fingerprint(IKS_R), §5.2; the queue fields inv_sid /
+   inv_send_seed carry no HX key material and are not modelled) goes to I on the private out-of-band channel pinv(s)
+   or, if LeakInv is in phase 0, on c (O-17); the link-data blob CAEAD.Seal(K_ld, N, "SecMP-INV/1 blob" ‖ ld_id,
+   LinkDataV1(IKS_R, bundle, Profile_R, created)) (§5.4) is output on c. The attacker is Dolev–Yao on c and is the
+   relay: any cell may be delivered, dropped, replayed or injected.
+   I (replicated): takes an invitation, takes a blob from c, performs §5.5 steps 2–4 (open under K_ld;
+   fingerprint(inviter_iks) = inviter_fp; bundle signature under inviter_iks.IK_sig and opk_present = 0x01; expiry
+   checks are not modelled: no time), then §6.4 with a fresh EK_I and fresh Encaps randomness: DH1 = X25519(IK_dh_I,
+   SPK_dh_R), DH2 = X25519(EK_I, IK_dh_R), DH3 = X25519(EK_I, SPK_dh_R), DH4 = X25519(EK_I, OPK_dh_R), (ct_spk,
+   ss_spk), (ct_opk, ss_opk), transcript (13 components, `docs/03:313-316`), SK, K_id; first_msg (O-15); §6.5 Inner =
+   IKSPublic_I ‖ first_msg, inner_ct under K_id ("SecMP-HX/1 inner" ‖ ld_id), Outer = EK_I ‖ spk_id ‖ opk_id ‖ ct_spk
+   ‖ ct_opk ‖ inner_ct (ver is a constant, omitted), one cell under K_inv ("SecMP-HX/1 initcell" ‖ ld_id) (O-14).
+   Event IStart, then the cell is output on c. EK_I is never output and is not part of any later reveal (discarded
+   after IStart, ADR-044 (b)). I then waits for R's one reply (H6b), opens it under tkey_r(SK, ss1) — event IConfirm.
+   R (one acceptance attempt per invitation, O-13): takes a cell from c, performs §6.6 steps 1–3: open under K_inv,
+   parse Outer, spk_id/opk_id = this invitation's ids (step 1); DH3, DH4, ss_spk, ss_opk, K_id, open inner_ct →
+   IKSPublic_I (decodable: an iks(vk, G) term) and first_msg (step 2); DH1, DH2, transcript, SK, first_msg opened
+   under tkey(SK, Decaps(RPK_kem_R, ct1)) with n = 0, pn = 0 (ADR-044 (e)) (step 3). On success event RAccept and
+   R's one reply tseal(tkey_r(SK, ss1), ack) on c; a failed attempt is silent (no output; O-13).
+   Paths covered / excluded: CLAIMS §HX "Paths the model covers / excludes" (referenced, not repeated here).
+
+   ---------------------------------------------------------------------------------------------------------------
+   2. Abstractions (exactly those of CLAIMS §HX; nothing else about a primitive is assumed)
+   ---------------------------------------------------------------------------------------------------------------
+     X25519               exp with exp(exp(g,a),b) = exp(exp(g,b),a); the all-zero check is not modelled (test)  §3
+     ML-KEM-1024          pk1024/encaps_ct1024/encaps_ss1024, decaps1024(dk, encaps_ct1024(pk1024(dk), r)) =
+                          encaps_ss1024(pk1024(dk), r) (SPK_kem, OPK_kem; implicit rejection not modelled)      §3
+     ML-KEM-768           pk768/encaps_ct768/encaps_ss768/decaps768 (RPK_kem, the TR first step)               §3
+     h(x)                 SHA-256, public one-way; fp(iks) = h(("SecMP-FP/1", iks))                         §6.2
+     th(13 args)          the §6.4 transcript, a free public constructor                                       §6.4
+     hx_sk, hx_kid        SK = hx_sk(DH1, DH2, DH3, DH4, ss_spk, ss_opk, th); K_id = hx_kid(ld_id, link_key, DH3,
+                          ss_spk, DH4, ss_opk) (DH1, DH2 not inputs); salt/prefix constants omitted              §6.4
+     hx_kinv, inv_kld     K_inv = hx_kinv(ld_id, link_key) §6.5; K_ld = inv_kld(ld_id, link_key) §5.4
+     caead_seal/open      CAEAD (§3.4), AD checked, committing (blob, the init cell, inner_ct); every nonce is the
+                          public constant nz (O-16)
+     one init cell        Outer sealed as one cell under K_inv; no chunks, no init_id (O-14, O-16)            §6.5
+     plaintext layers     sessions with LeakInv in phase 0: LinkDataV1 and Outer as plaintext tuples (ld_id, ·),
+                          ld_id checked by I/R (O-17); macros ProcIP / AcceptP / BlobP
+     hsign/hverify        HybridSign as one unforgeable signature; hverify(vk(sk), l, m, hsign(sk, l, m)) = true §3.5
+     tkey, tkey_r, tseal/topen   the TR first message (O-15): first_msg = (ct1, tseal(tkey(SK, ss1), (n = 0, pn = 0,
+                          rt))), ct1/ss1 the ML-KEM-768 encapsulation to RPK_kem_R; R's one reply
+                          tseal(tkey_r(SK, ss1), ack); tkey, tkey_r free one-way, tseal/topen a committing AEAD
+     IKSPublic = iks(vk(IK_sig), exp(g, IK_dh)) (a data constructor); PrekeyBundle = the §6.3 field tuple; constant
+     ver fields omitted; spk_expiry, opk_present, Profile_R, created, Profile_I are public constants.
+   Honest secrets are private constructors applied to (session tag, index): dhsk(s, k) = X25519 secrets, kemsk(s, k)
+   = ML-KEM decapsulation keys, kemr(s, k) = Encaps randomness, iksig(s, P) = IK_sig. Fixed indices name the
+   long-term keys (kIKR, kIKI, kSPK, kRPK); per-invitation and per-I-session keys use a fresh name as index
+   (new o; dhsk(s, eph(o))), so every honest secret of session s has the form dhsk(s, _), kemsk(s, _), kemr(s, _) or
+   iksig(s, _).
+
+   ---------------------------------------------------------------------------------------------------------------
+   3. Sessions (one file each, O-18)
+   ---------------------------------------------------------------------------------------------------------------
+     tag          I's inv.     PubIKS  LeakInv  RevealLT(R)  RevealLT(I)  RevealSPK  RevealOPK  DHO   KEMO   layers  queries
+     hClean       pinv (+c)    yes     ph 0     -            -            -          -          -     -      plain   H1, H6a, H6b, H10; H5
+     hDH          pinv (+c)    yes     ph 0     -            -            -          -          ph 0  -      plain   H2; H8
+     hKEM         pinv (+c)    yes     ph 0     -            -            -          -          -     ph 0   plain   H3; H5
+     hBoth        pinv         yes     ph 0     -            -            -          -          ph 0  ph 0   plain   H4
+     hId          pinv         -       -        -            -            -          -          -     -      sealed  H6a, H7a
+     hIdThief     pinv         -       ph 0     -            -            -          -          -     -      plain   H7b
+     hIdLater     pinv         -       ph 1     ph 1         -            ph 1       -          ph 1  -      sealed  H7c
+     hIdLaterOPK  pinv         -       ph 1     ph 1         -            ph 1       ph 1       ph 1  -      sealed  H7d
+     hKCI         pinv (+c)    yes     ph 0     -            -            ph 0       -          -     -      plain   ; H9
+     hKCIlt       pinv (+c)    yes     ph 0     ph 0         -            -          -          -     -      plain   ; H9b
+     hKCIi        pinv         yes     ph 0     -            ph 0         -          -          -     -      plain   H9c
+     hFS          pinv         yes     ph 1     ph 1         ph 1         ph 1       -          -     -      sealed  H12
+     hFSOPK       pinv         yes     ph 1     ph 1         ph 1         ph 1       ph 1       -     -      sealed  H12b
+     hFSDH        pinv         yes     ph 1     ph 1         ph 1         ph 1       -          ph 1  -      sealed  H12c
+   plus H11 (four lines) in every base file; H6a in hClean and hId (O-19). "I's inv.": where I takes invitations from;
+   pinv = I runs only on R's invitations (O-20); "(+c)": the session has a second file <tag>-auth.pv (O-22) that adds
+   the attacker as inviter — I on c (ProcIPA) with its own identity and every leaked invitation of R, begin event
+   IStart (O-21 withdrawn), only on R-signed bundles (O-23) — and holds only the begin-IStart declaration (the query
+   after ";"); the base file <tag>.pv holds
+   the queries before ";" and has no attacker-as-inviter process. With LeakInv in phase 0, I on pinv(s) keeps the
+   plaintext layers (O-17): K_ld and K_inv are attacker knowledge; in hId* files IKS_I is never output in clear (H7:
+   an inviter learns I's identity by design). hKCIi's row in CLAIMS names no invitation leak; LeakInv ph 0 is added
+   (H9c is H1 (i), whose assumptions include it; it only strengthens the attacker). In every file the attacker may
+   send R init cells under its own identity (R reads cells from c). Each file contains one session; sessions share
+   no private value and each claim is about its own scenario (O-18).
+   Events carry the session tag as first argument; every query names its tag.
+
+   ---------------------------------------------------------------------------------------------------------------
+   4. Oracles, "enabled per query" and scoped per session as formal/tr.pv §4 (declared in the session file)
+   ---------------------------------------------------------------------------------------------------------------
+   DHO:  dh_break(exp(g, dhsk(s,x)), exp(g, dhsk(s,y))) = exp(exp(g, dhsk(s,x)), dhsk(s,y)) — every pair of honest
+         X25519 exponents of session s (IK_dh_I, IK_dh_R, SPK_dh_R, OPK_dh_R[j], EK_I). Phase 0 (public destructor
+         dh_break): hDH, hBoth. Phase 1 (private destructor dh_break1, offered by the process DHO1 from phase 1 on):
+         hIdLater, hIdLaterOPK, hFSDH.
+   KEMO: kem_break1024(encaps_ct1024(ek, kemr(s,r))) = encaps_ss1024(ek, kemr(s,r)) (ct_spk, ct_opk) and
+         kem_break768(encaps_ct768(ek, kemr(s,r))) = encaps_ss768(ek, kemr(s,r)) (ct1, the ML-KEM-768 encapsulation
+         to RPK_kem_R of the TR first step): hKEM, hBoth (phase 0, public).
+   Soundness of the scoping as formal/tr.pv §4: every exponent / ciphertext of a session is either honest (of the
+   form dhsk(s,_) / encaps_ct(_, kemr(s,_)), covered by the rule) or built by the attacker from values it knows (its
+   result computable without the oracle).
+
+   ---------------------------------------------------------------------------------------------------------------
+   5. Compromise (each emits its event and outputs the values on c, in the phase of the session's row)
+   ---------------------------------------------------------------------------------------------------------------
+     LeakInv(s, ld_id)       InvitationV1 (ld_id, link_key, inviter_fp), per invitation         macro Leak
+     RevealLT(s, P)          P's IK_sig and IK_dh secrets                                        macro RevLT
+     RevealSPK(s, pR)        SPK_dh_R secret, SPK_kem_R and RPK_kem_R decapsulation keys         macro RevSPK
+     RevealOPK(s, pR, ld_id) OPK_j secrets, per invitation (sanity: "the OPK was not deleted")   macro RevOPK
+     PubIKS(s, pI)           IKSPublic_I in clear                                                macro PubI
+   The macros contain no phase; the session file puts `phase 1;` in front where its row says ph 1, so phase 1 occurs
+   syntactically only in the files of sessions with a phase-1 compromise. Phase 1 discards every phase-0 process:
+   R's acceptance attempts, R's and I's sessions end; the queries' attacker facts are evaluated at the end of phase 1.
+
+   ---------------------------------------------------------------------------------------------------------------
+   6. OPK bookkeeping (CLAIMS O-13; M3 R-13)
+   ---------------------------------------------------------------------------------------------------------------
+   Each invitation j has exactly one acceptance attempt (AcceptP / AcceptS): it takes one cell from c and either
+   passes §6.6 steps 1–3 (event RAccept, R's reply) or stops silently. §6.6 step 3 makes a failed attempt silent (no
+   output, OPK kept), so "up to k sequential attempts, stop at the first success" has the event traces of one attempt;
+   the store's bookkeeping (delete only after success, exactly once) is proven by Kani K4/K4b and tested. Injectivity
+   of H5/H10 is not obtained from a bound on sessions: invitations and I sessions are replicated.
+
+   ---------------------------------------------------------------------------------------------------------------
+   7. Devices (none changes the model's semantics or weakens a query)
+   ---------------------------------------------------------------------------------------------------------------
+   Model devices (CLAIMS §HX "Model devices"; reviewer adjudication of M4-5):
+   - new e[ld, lk] (I's names indexed by the invitation): precision devices, no change to queries, oracles or compromise.
+   - set unifyDerivation = false: precision devices, no change to queries, oracles or compromise.
+   - M4-7: I's names also carry the bundle I verified (new e[ld, lk, b]): precision device of the same kind (see below).
+   - O-24 (M4-11): the <tag>-auth.pv files carry search hints (one select, two nounif [ignoreAFewTimes]; hDH-auth a
+     third nounif): search strategy only, no change to queries, oracles, compromise or secrecy assumptions.
+   In detail:
+   - Each X25519 value is bound once with let and reused (formal/tr.pv §8).
+   - Names carry no message arguments (new n[]): each name depends only on the replication indices above it, not on
+     the messages received before it (formal/tr.pv §8; an over-approximation), except I's names (EK_I, the Encaps
+     randomness, routes_I), which carry the invitation I took and the bundle it verified (new e[ld, lk, b]): with
+     plaintext layers (O-17) ProVerif decomposes the Outer tuple, and a derivation built from components of different
+     runs of one merged I copy has no trace (H11 "cannot be proved", measured on hClean); indexing by the invitation
+     separates those runs. With I only on R's invitations (O-20) and R's IK_sig revealed (hKCIlt), the runs of one
+     invitation with different attacker-signed bundles merged the same way (H11 IConfirm "cannot be proved", M4-7);
+     indexing also by the bundle separates them. Every form over-approximates the same process (ProVerif's default
+     `new e` carries every message received before it); a name's arguments never change the process semantics.
+   - set unifyDerivation = false: trace reconstruction only (the H11 honest-pair line, measured on hClean); it does
+     not change the clauses or any "true" result, and every "false" result comes with a trace ProVerif executed.
+   - Ephemeral key indices are eph(fresh name) and long-term ones are constants, so the secrecy assumptions can name
+     them; secrecy assumptions (not attacker(M) [phase 0]) state what a session's row (3.) never reveals; ProVerif
+     proves each one and aborts if one cannot be proved ("ok, secrecy assumption verified"), and uses them only to
+     discard clauses whose hypotheses can never hold.
+   - set selFun = Term (formal/tr.pv §8): resolution strategy, termination/performance only.
+   - Query declarations ordered by cost (O-22): no-begin queries first, then RAccept/IConfirm (H6b), InvIssued (H10),
+     BundleSigned (H6a); the begin-IStart declaration (H5/H8/H9/H9b) is alone in <tag>-auth.pv; CLAIMS ID order
+     within a group; a "Hk" comment directly above every query.
+*)
+
+(* ---------------------------------------------------------------- channels, types, constants ------------------ *)
+
+set selFun = Term.
+set unifyDerivation = false.
+
+free c: channel.
+
+type key.        (* 32-byte symmetric keys: SK, K_id, K_inv, K_ld, link_key, TR keys *)
+type exponent.   (* X25519 secret *)
+type G.          (* X25519 public key / shared secret *)
+type kemdk.      (* ML-KEM decapsulation key (seed) *)
+type coins.      (* Encaps randomness *)
+type nonce.      (* 24-byte nonces *)
+type sigsk.      (* IK_sig secret (Ed25519 ‖ ML-DSA-65) *)
+type tagt.       (* session (scenario) tag; each session file declares its own *)
+
+const pR, pI: bitstring.                                  (* parties *)
+const kIKR, kIKI, kSPK, kRPK: bitstring.                  (* long-term key indices *)
+const lbl_fp, lbl_bundle, lbl_blob, lbl_inner, lbl_initcell: bitstring.
+      (* "SecMP-FP/1", "SecMP-HX/1 bundle", "SecMP-INV/1 blob", "SecMP-HX/1 inner", "SecMP-HX/1 initcell" (App. A) *)
+const spkid0, spkexp0, opk1: bitstring.                   (* spk_id (one generation), spk_expiry, opk_present = 0x01 *)
+const profR, created0, profI: bitstring.                  (* Profile_R, created, Profile_I: public *)
+const c0: bitstring.                                      (* counter value 0 (n, pn) *)
+const nz: nonce.                                          (* the public constant CAEAD nonce (O-16) *)
+
+(* ---------------------------------------------------------------- honest secrets (2.) ------------------------ *)
+
+fun dhsk(tagt, bitstring): exponent [private].            (* X25519.keygen() *)
+fun kemsk(tagt, bitstring): kemdk [private].              (* ML-KEM keygen (seed) *)
+fun kemr(tagt, bitstring): coins [private].               (* Encaps randomness *)
+fun iksig(tagt, bitstring): sigsk [private].              (* IK_sig *)
+fun pinv(tagt): channel [private].                        (* out-of-band invitation channel R -> I *)
+fun eph(bitstring): bitstring [data].                     (* index of an ephemeral key *)
+
+(* ---------------------------------------------------------------- primitives (CLAIMS abstractions) ----------- *)
+
+(* §3 X25519 *)
+const g: G.
+fun exp(G, exponent): G.
+equation forall x: exponent, y: exponent; exp(exp(g, x), y) = exp(exp(g, y), x).
+
+(* §3 ML-KEM-1024 (SPK_kem, OPK_kem) *)
+fun pk1024(kemdk): bitstring.
+fun encaps_ct1024(bitstring, coins): bitstring.
+fun encaps_ss1024(bitstring, coins): bitstring.
+reduc forall dk: kemdk, r: coins; decaps1024(dk, encaps_ct1024(pk1024(dk), r)) = encaps_ss1024(pk1024(dk), r).
+
+(* §3 ML-KEM-768 (RPK_kem; the TR first step) *)
+fun pk768(kemdk): bitstring.
+fun encaps_ct768(bitstring, coins): bitstring.
+fun encaps_ss768(bitstring, coins): bitstring.
+reduc forall dk: kemdk, r: coins; decaps768(dk, encaps_ct768(pk768(dk), r)) = encaps_ss768(pk768(dk), r).
+
+(* §6.2 SHA-256, IKSPublic, fingerprint *)
+fun h(bitstring): bitstring.
+fun iks(bitstring, G): bitstring [data].
+letfun fp(x: bitstring) = h((lbl_fp, x)).
+
+(* §6.4 transcript (13 components), SK, K_id; §6.5 K_inv; §5.4 K_ld *)
+fun th(bitstring, bitstring, G, bitstring, bitstring, bitstring, G, bitstring, bitstring, G, bitstring, bitstring,
+       bitstring): bitstring.
+fun hx_sk(G, G, G, G, bitstring, bitstring, bitstring): key.
+fun hx_kid(bitstring, key, G, bitstring, G, bitstring): key.
+fun hx_kinv(bitstring, key): key.
+fun inv_kld(bitstring, key): key.
+
+(* §3.4 CAEAD *)
+fun caead_seal(key, nonce, bitstring, bitstring): bitstring.
+reduc forall k: key, n: nonce, ad: bitstring, m: bitstring; caead_open(k, n, ad, caead_seal(k, n, ad, m)) = m.
+
+(* §3.5 HybridSign *)
+fun vk(sigsk): bitstring.
+fun hsign(sigsk, bitstring, bitstring): bitstring.
+reduc forall sk: sigsk, l: bitstring, m: bitstring; hverify(vk(sk), l, m, hsign(sk, l, m)) = true.
+
+(* O-15: the TR first message and R's one reply (TR internals: formal/tr.pv, T1–T13) *)
+fun tkey(key, bitstring): key.
+fun tkey_r(key, bitstring): key.
+fun tseal(key, bitstring): bitstring.
+reduc forall k: key, m: bitstring; topen(k, tseal(k, m)) = m.
+
+(* ---------------------------------------------------------------- events ------------------------------------- *)
+
+event BundleSigned(tagt, bitstring, bitstring).                                   (* (s, iks_R, b) *)
+event InvIssued(tagt, bitstring, bitstring, bitstring).                           (* (s, iks_R, ld_id, opk_id) *)
+event IStart(tagt, bitstring, bitstring, bitstring, bitstring, bitstring, key).   (* (s, iks_I, iks_R, b, tr, rt, sk) *)
+event RAccept(tagt, bitstring, bitstring, bitstring, bitstring, bitstring, bitstring, key).
+                                                                  (* (s, iks_R, iks_I, ld_id, opk_id, tr, rt, sk) *)
+event IConfirm(tagt, bitstring, bitstring, bitstring, key).                       (* (s, iks_I, iks_R, tr, sk) *)
+event LeakInv(tagt, bitstring).                                                   (* (s, ld_id) *)
+event RevealLT(tagt, bitstring).                                                  (* (s, P) *)
+event RevealSPK(tagt, bitstring).                                                 (* (s, pR) *)
+event RevealOPK(tagt, bitstring, bitstring).                                      (* (s, pR, ld_id) *)
+event PubIKS(tagt, bitstring).                                                    (* (s, pI) *)
+
+(* ---------------------------------------------------------------- secrecy assumptions (7.) -------------------- *)
+
+(* Never output in any session: the invitation channel, the Encaps randomness, the ephemeral keys in phase 0. The
+   per-session assumptions are in the session files. *)
+not s: tagt; attacker(pinv(s)).
+not s: tagt, x: bitstring; attacker(kemr(s, x)).
+not s: tagt, x: bitstring; attacker(dhsk(s, eph(x))) phase 0.
+not s: tagt, x: bitstring; attacker(kemsk(s, eph(x))) phase 0.
+
+(* ---------------------------------------------------------------- terms of R's keys ------------------------- *)
+
+(* IKSPublic of the honest parties of session s *)
+letfun riks(s: tagt) = iks(vk(iksig(s, pR)), exp(g, dhsk(s, kIKR))).
+letfun iiks(s: tagt) = iks(vk(iksig(s, pI)), exp(g, dhsk(s, kIKI))).
+
+(* §6.3 bundle of invitation (opk_id, OPK index o) and its signature (all preceding fields ‖ ik_dh) *)
+letfun bundle(s: tagt, opkid: bitstring, o: bitstring) =
+  (spkid0, exp(g, dhsk(s, kSPK)), pk1024(kemsk(s, kSPK)), pk768(kemsk(s, kRPK)), spkexp0, opk1, opkid,
+   exp(g, dhsk(s, eph(o))), pk1024(kemsk(s, eph(o)))).
+letfun bsig(s: tagt, b: bitstring) = hsign(iksig(s, pR), lbl_bundle, (b, exp(g, dhsk(s, kIKR)))).
+
+(* §5.4 the link-data blob: sealed under K_ld, or the plaintext tuple (ld_id, LinkDataV1) (O-17) *)
+letfun BlobS(s: tagt, ld: bitstring, lk: key, b: bitstring) =
+  caead_seal(inv_kld(ld, lk), nz, (lbl_blob, ld), (riks(s), b, bsig(s, b), profR, created0)).
+letfun BlobP(s: tagt, ld: bitstring, b: bitstring) =
+  (ld, (riks(s), b, bsig(s, b), profR, created0)).
+
+(* ---------------------------------------------------------------- R: §6.6 ----------------------------------- *)
+
+(* §6.6 steps 2–3 for invitation (ld, lk, opk_id, OPK index o) on a parsed Outer (step 1 done by the caller); on
+   success event RAccept and R's one reply (H6b, O-15); any failing let stops the attempt silently (O-13) *)
+let Accept23(s: tagt, ld: bitstring, lk: key, opkid: bitstring, o: bitstring, ek: G, ctspk: bitstring,
+             ctopk: bitstring, xin: bitstring) =
+  let spk = dhsk(s, kSPK) in
+  let osk = dhsk(s, eph(o)) in
+  (* step 2: DH3, DH4, ss_spk, ss_opk -> K_id; inner_ct -> IKSPublic_I ‖ first_msg *)
+  let dh3 = exp(ek, spk) in
+  let dh4 = exp(ek, osk) in
+  let ssspk = decaps1024(kemsk(s, kSPK), ctspk) in
+  let ssopk = decaps1024(kemsk(s, eph(o)), ctopk) in
+  let kid = hx_kid(ld, lk, dh3, ssspk, dh4, ssopk) in
+  let (iksI: bitstring, (ct1: bitstring, fx: bitstring)) = caead_open(kid, nz, (lbl_inner, ld), xin) in
+  let iks(vkI: bitstring, ikdhI: G) = iksI in
+  (* step 3: DH1, DH2, transcript, SK; first_msg under tkey(SK, Decaps(RPK_kem_R, ct1)), n = 0, pn = 0 *)
+  let dh1 = exp(ikdhI, spk) in
+  let dh2 = exp(ek, dhsk(s, kIKR)) in
+  let tr = th(riks(s), spkid0, exp(g, spk), h(pk1024(kemsk(s, kSPK))), h(pk768(kemsk(s, kRPK))), opkid,
+              exp(g, osk), h(pk1024(kemsk(s, eph(o)))), iksI, ek, h(ctspk), h(ctopk), ld) in
+  let sk = hx_sk(dh1, dh2, dh3, dh4, ssspk, ssopk, tr) in
+  let ss1 = decaps768(kemsk(s, kRPK), ct1) in
+  let (=c0, =c0, rt: bitstring) = topen(tkey(sk, ss1), fx) in
+  event RAccept(s, riks(s), iksI, ld, opkid, tr, rt, sk);
+  (* §6.6 step 4 deletes the OPK (no further attempt exists, 6.); R's one reply *)
+  new ack[]: bitstring;
+  out(c, tseal(tkey_r(sk, ss1), ack)).
+
+(* The one acceptance attempt of invitation (ld, lk, opk_id, o), plaintext Outer (O-17): §6.6 step 1 *)
+let AcceptP(s: tagt, ld: bitstring, lk: key, opkid: bitstring, o: bitstring) =
+  in(c, (=ld, (ek: G, =spkid0, =opkid, ctspk: bitstring, ctopk: bitstring, xin: bitstring)));
+  Accept23(s, ld, lk, opkid, o, ek, ctspk, ctopk, xin).
+
+(* The one acceptance attempt, Outer sealed under K_inv (O-14): §6.6 step 1 *)
+let AcceptS(s: tagt, ld: bitstring, lk: key, opkid: bitstring, o: bitstring) =
+  in(c, cl: bitstring);
+  let (ek: G, =spkid0, =opkid, ctspk: bitstring, ctopk: bitstring, xin: bitstring) =
+    caead_open(hx_kinv(ld, lk), nz, (lbl_initcell, ld), cl) in
+  Accept23(s, ld, lk, opkid, o, ek, ctspk, ctopk, xin).
+
+(* ---------------------------------------------------------------- I: §5.5, §6.4, §6.5 ----------------------- *)
+
+(* Initiator I of session s, plaintext blob and Outer (O-17); ich: where I takes invitations from *)
+let ProcIP(s: tagt, ich: channel) =
+  let ikI = dhsk(s, kIKI) in
+  let iksI = iiks(s) in
+  (* §5.5 step 1: the invitation; step 2: the blob of ld_id *)
+  in(ich, (ld: bitstring, lk: key, fpR: bitstring));
+  in(c, (=ld, (iksR: bitstring, b: bitstring, sig: bitstring, profx: bitstring, createdx: bitstring)));
+  (* step 3: fingerprint pin; step 4: bundle signature, opk_present *)
+  if fp(iksR) = fpR then
+  let iks(vkR: bitstring, ikdhR: G) = iksR in
+  let (spkid: bitstring, spkdh: G, spkkem: bitstring, rpkkem: bitstring, spkexp: bitstring, =opk1, opkid: bitstring,
+       opkdh: G, opkkem: bitstring) = b in
+  if hverify(vkR, lbl_bundle, (b, ikdhR), sig) = true then
+  (* §6.4 *)
+  new e[ld, lk, b]: bitstring;
+  new r1[ld, lk, b]: bitstring;
+  new r2[ld, lk, b]: bitstring;
+  let ek = dhsk(s, eph(e)) in
+  let ekpub = exp(g, ek) in
+  let dh1 = exp(spkdh, ikI) in
+  let dh2 = exp(ikdhR, ek) in
+  let dh3 = exp(spkdh, ek) in
+  let dh4 = exp(opkdh, ek) in
+  let ctspk = encaps_ct1024(spkkem, kemr(s, r1)) in
+  let ssspk = encaps_ss1024(spkkem, kemr(s, r1)) in
+  let ctopk = encaps_ct1024(opkkem, kemr(s, r2)) in
+  let ssopk = encaps_ss1024(opkkem, kemr(s, r2)) in
+  let tr = th(iksR, spkid, spkdh, h(spkkem), h(rpkkem), opkid, opkdh, h(opkkem), iksI, ekpub, h(ctspk), h(ctopk), ld) in
+  let sk = hx_sk(dh1, dh2, dh3, dh4, ssspk, ssopk, tr) in
+  let kid = hx_kid(ld, lk, dh3, ssspk, dh4, ssopk) in
+  (* O-15: first_msg = (ct1, tseal(tkey(SK, ss1), (n = 0, pn = 0, rt))), rt = (Profile_I, routes_I) *)
+  new r3[ld, lk, b]: bitstring;
+  let ct1 = encaps_ct768(rpkkem, kemr(s, r3)) in
+  let ss1 = encaps_ss768(rpkkem, kemr(s, r3)) in
+  new routes[ld, lk, b]: bitstring;
+  let rt = (profI, routes) in
+  let fm = (ct1, tseal(tkey(sk, ss1), (c0, c0, rt))) in
+  (* §6.5 Inner, inner_ct, Outer: one plaintext cell (ld_id, Outer) *)
+  event IStart(s, iksI, iksR, b, tr, rt, sk);
+  out(c, (ld, (ekpub, spkid, opkid, ctspk, ctopk, caead_seal(kid, nz, (lbl_inner, ld), (iksI, fm)))));
+  (* H6b: R's one reply *)
+  in(c, rx: bitstring);
+  let ack = topen(tkey_r(sk, ss1), rx) in
+  event IConfirm(s, iksI, iksR, tr, sk).
+
+(* The attacker as inviter (O-20, O-23; O-21 withdrawn): I of session s on invitations from ich = c (the attacker's
+   own and every leaked invitation of R), plaintext layers; ProcIP with, O-23, only bundles that verify under
+   IK_sig_R. It emits IStart: a run on R's own leaked invitation is an honest start on R's invitation. Only in the
+   files <session>-auth.pv (O-22). *)
+let ProcIPA(s: tagt, ich: channel) =
+  let ikI = dhsk(s, kIKI) in
+  let iksI = iiks(s) in
+  (* §5.5 step 1: the invitation; step 2: the blob of ld_id *)
+  in(ich, (ld: bitstring, lk: key, fpR: bitstring));
+  in(c, (=ld, (iksR: bitstring, b: bitstring, sig: bitstring, profx: bitstring, createdx: bitstring)));
+  (* step 3: fingerprint pin; step 4: bundle signature, opk_present *)
+  if fp(iksR) = fpR then
+  let iks(vkR: bitstring, ikdhR: G) = iksR in
+  let (spkid: bitstring, spkdh: G, spkkem: bitstring, rpkkem: bitstring, spkexp: bitstring, =opk1, opkid: bitstring,
+       opkdh: G, opkkem: bitstring) = b in
+  if hverify(vkR, lbl_bundle, (b, ikdhR), sig) = true then
+  (* O-23 (applied: every auth file exceeded 30 min with O-20–O-22, M4-7): only bundles that verify under IK_sig_R *)
+  if hverify(vk(iksig(s, pR)), lbl_bundle, (b, ikdhR), sig) = true then
+  (* §6.4 *)
+  new e[ld, lk, b]: bitstring;
+  new r1[ld, lk, b]: bitstring;
+  new r2[ld, lk, b]: bitstring;
+  let ek = dhsk(s, eph(e)) in
+  let ekpub = exp(g, ek) in
+  let dh1 = exp(spkdh, ikI) in
+  let dh2 = exp(ikdhR, ek) in
+  let dh3 = exp(spkdh, ek) in
+  let dh4 = exp(opkdh, ek) in
+  let ctspk = encaps_ct1024(spkkem, kemr(s, r1)) in
+  let ssspk = encaps_ss1024(spkkem, kemr(s, r1)) in
+  let ctopk = encaps_ct1024(opkkem, kemr(s, r2)) in
+  let ssopk = encaps_ss1024(opkkem, kemr(s, r2)) in
+  let tr = th(iksR, spkid, spkdh, h(spkkem), h(rpkkem), opkid, opkdh, h(opkkem), iksI, ekpub, h(ctspk), h(ctopk), ld) in
+  let sk = hx_sk(dh1, dh2, dh3, dh4, ssspk, ssopk, tr) in
+  let kid = hx_kid(ld, lk, dh3, ssspk, dh4, ssopk) in
+  (* O-15: first_msg = (ct1, tseal(tkey(SK, ss1), (n = 0, pn = 0, rt))), rt = (Profile_I, routes_I) *)
+  new r3[ld, lk, b]: bitstring;
+  let ct1 = encaps_ct768(rpkkem, kemr(s, r3)) in
+  let ss1 = encaps_ss768(rpkkem, kemr(s, r3)) in
+  new routes[ld, lk, b]: bitstring;
+  let rt = (profI, routes) in
+  let fm = (ct1, tseal(tkey(sk, ss1), (c0, c0, rt))) in
+  (* §6.5 Inner, inner_ct, Outer: one plaintext cell (ld_id, Outer) *)
+  event IStart(s, iksI, iksR, b, tr, rt, sk);
+  out(c, (ld, (ekpub, spkid, opkid, ctspk, ctopk, caead_seal(kid, nz, (lbl_inner, ld), (iksI, fm)))));
+  (* R's one reply *)
+  in(c, rx: bitstring);
+  let ack = topen(tkey_r(sk, ss1), rx) in
+  event IConfirm(s, iksI, iksR, tr, sk).
+
+(* Initiator I of session s, blob sealed under K_ld and Outer sealed under K_inv (O-14); ich as ProcIP *)
+let ProcIS(s: tagt, ich: channel) =
+  let ikI = dhsk(s, kIKI) in
+  let iksI = iiks(s) in
+  (* §5.5 step 1: the invitation; step 2: a blob, opened under K_ld *)
+  in(ich, (ld: bitstring, lk: key, fpR: bitstring));
+  in(c, xb: bitstring);
+  let (iksR: bitstring, b: bitstring, sig: bitstring, profx: bitstring, createdx: bitstring) =
+    caead_open(inv_kld(ld, lk), nz, (lbl_blob, ld), xb) in
+  (* step 3: fingerprint pin; step 4: bundle signature, opk_present *)
+  if fp(iksR) = fpR then
+  let iks(vkR: bitstring, ikdhR: G) = iksR in
+  let (spkid: bitstring, spkdh: G, spkkem: bitstring, rpkkem: bitstring, spkexp: bitstring, =opk1, opkid: bitstring,
+       opkdh: G, opkkem: bitstring) = b in
+  if hverify(vkR, lbl_bundle, (b, ikdhR), sig) = true then
+  (* §6.4 *)
+  new e[ld, lk, b]: bitstring;
+  new r1[ld, lk, b]: bitstring;
+  new r2[ld, lk, b]: bitstring;
+  let ek = dhsk(s, eph(e)) in
+  let ekpub = exp(g, ek) in
+  let dh1 = exp(spkdh, ikI) in
+  let dh2 = exp(ikdhR, ek) in
+  let dh3 = exp(spkdh, ek) in
+  let dh4 = exp(opkdh, ek) in
+  let ctspk = encaps_ct1024(spkkem, kemr(s, r1)) in
+  let ssspk = encaps_ss1024(spkkem, kemr(s, r1)) in
+  let ctopk = encaps_ct1024(opkkem, kemr(s, r2)) in
+  let ssopk = encaps_ss1024(opkkem, kemr(s, r2)) in
+  let tr = th(iksR, spkid, spkdh, h(spkkem), h(rpkkem), opkid, opkdh, h(opkkem), iksI, ekpub, h(ctspk), h(ctopk), ld) in
+  let sk = hx_sk(dh1, dh2, dh3, dh4, ssspk, ssopk, tr) in
+  let kid = hx_kid(ld, lk, dh3, ssspk, dh4, ssopk) in
+  (* O-15: first_msg = (ct1, tseal(tkey(SK, ss1), (n = 0, pn = 0, rt))), rt = (Profile_I, routes_I) *)
+  new r3[ld, lk, b]: bitstring;
+  let ct1 = encaps_ct768(rpkkem, kemr(s, r3)) in
+  let ss1 = encaps_ss768(rpkkem, kemr(s, r3)) in
+  new routes[ld, lk, b]: bitstring;
+  let rt = (profI, routes) in
+  let fm = (ct1, tseal(tkey(sk, ss1), (c0, c0, rt))) in
+  (* §6.5 Inner, inner_ct, Outer: one cell under K_inv *)
+  event IStart(s, iksI, iksR, b, tr, rt, sk);
+  out(c, caead_seal(hx_kinv(ld, lk), nz, (lbl_initcell, ld),
+                    (ekpub, spkid, opkid, ctspk, ctopk, caead_seal(kid, nz, (lbl_inner, ld), (iksI, fm)))));
+  (* H6b: R's one reply *)
+  in(c, rx: bitstring);
+  let ack = topen(tkey_r(sk, ss1), rx) in
+  event IConfirm(s, iksI, iksR, tr, sk).
+
+(* ---------------------------------------------------------------- compromise macros (5.) -------------------- *)
+
+let Leak(s: tagt, ld: bitstring, lk: key) =
+  event LeakInv(s, ld);
+  out(c, (ld, lk, fp(riks(s)))).
+
+let RevOPK(s: tagt, ld: bitstring, o: bitstring) =
+  event RevealOPK(s, pR, ld);
+  out(c, (dhsk(s, eph(o)), kemsk(s, eph(o)))).
+
+let RevLT(s: tagt, p: bitstring, k: bitstring) =
+  event RevealLT(s, p);
+  out(c, (iksig(s, p), dhsk(s, k))).
+
+let RevSPK(s: tagt) =
+  event RevealSPK(s, pR);
+  out(c, (dhsk(s, kSPK), kemsk(s, kSPK), kemsk(s, kRPK))).
+
+let PubI(s: tagt) =
+  event PubIKS(s, pI);
+  out(c, iiks(s)).

@@ -1,0 +1,38 @@
+# ProVerif 2.05 — formal/hx/hFSOPK.pv over formal/hx.pvl (WEISUNG M4-5 §2), models as of 6599d49
+# command: timeout 1800 proverif -lib formal/hx.pvl formal/hx/hFSOPK.pv  (target/tmp/runq.py, 4 files in parallel on this Mac, M1 Pro 10 cores / 16 GB, other ProVerif runs alongside)
+# sha256 formal/hx.pvl f358ca8ea48f2e7c45cf0303a436e43f9f2a3ba72b180100805bab4c9ebeceff
+# sha256 formal/hx/hFSOPK.pv 43bb4318fe085741d55ba8c81563d9be96da4845dca660416a9f122e962018f3
+# exit: TIMEOUT · wall 1801.1 s · RESULT lines 0 of 6 expected · secrecy assumptions verified 0
+# finished: no (killed at the 1800 s cap) · last progress line: 24600 rules inserted. Base: 10309 rules (1163 with conclusion selected). Queue: 2201 rules.
+# session tags in the log other than hFSOPK: none (one session per file, O-18)
+
+| # | CLAIMS ID | expected | verdict | query (as ProVerif prints it) |
+|---|---|---|---|---|
+| 1 | H11 | false | not reached | `not event(IStart(hFSOPK,iks(vk(iksig(hFSOPK,pI)),exp(g,dhsk(hFSOPK,kIKI))),iks(vk(iksig(hFSOPK,pR)),exp(g,dhsk(hFSOPK,kIKR))),b_2,tr_2,rt_2,sk_2))` |
+| 2 | H11 | false | not reached | `not event(BundleSigned(hFSOPK,iR,b_2))` |
+| 3 | H11 | false | not reached | `not (event(RAccept(hFSOPK,iR,iks(vk(iksig(hFSOPK,pI)),exp(g,dhsk(hFSOPK,kIKI))),ld_6,oid,tr_2,rt_2,sk_2)) && event(IStart(hFSOPK,iks(vk(iksig(hFSOPK,pI)),exp(g,dhsk(hFSOPK,kIKI))),iR,b_2,tr_2,rt_2,sk_2)))` |
+| 4 | H11 | false | not reached | `not event(IConfirm(hFSOPK,iks(vk(iksig(hFSOPK,pI)),exp(g,dhsk(hFSOPK,kIKI))),iks(vk(iksig(hFSOPK,pR)),exp(g,dhsk(hFSOPK,kIKR))),tr_2,sk_2))` |
+| 5 | H12b (i) | false | not reached | `not (event(IStart(hFSOPK,iI,iks(vk(iksig(hFSOPK,pR)),exp(g,dhsk(hFSOPK,kIKR))),b_2,tr_2,rt_2,sk_2)) && attacker_p1(sk_2))` |
+| 6 | H12b (ii) | false | not reached | `not (event(RAccept(hFSOPK,iR,iks(vk(iksig(hFSOPK,pI)),exp(g,dhsk(hFSOPK,kIKI))),ld_6,oid,tr_2,rt_2,sk_2)) && attacker_p1(sk_2))` |
+
+RESULT lines and the 20 progress lines before the end of the log:
+20800 rules inserted. Base: 9081 rules (1125 with conclusion selected). Queue: 2004 rules.
+21000 rules inserted. Base: 9167 rules (1122 with conclusion selected). Queue: 1955 rules.
+21200 rules inserted. Base: 9303 rules (1122 with conclusion selected). Queue: 1897 rules.
+21400 rules inserted. Base: 9436 rules (1122 with conclusion selected). Queue: 1917 rules.
+21600 rules inserted. Base: 9466 rules (1126 with conclusion selected). Queue: 1952 rules.
+21800 rules inserted. Base: 9559 rules (1126 with conclusion selected). Queue: 1981 rules.
+22000 rules inserted. Base: 9563 rules (1130 with conclusion selected). Queue: 1999 rules.
+22200 rules inserted. Base: 9612 rules (1134 with conclusion selected). Queue: 2041 rules.
+22400 rules inserted. Base: 9654 rules (1139 with conclusion selected). Queue: 2065 rules.
+22600 rules inserted. Base: 9686 rules (1140 with conclusion selected). Queue: 2078 rules.
+22800 rules inserted. Base: 9704 rules (1141 with conclusion selected). Queue: 2117 rules.
+23000 rules inserted. Base: 9839 rules (1141 with conclusion selected). Queue: 2024 rules.
+23200 rules inserted. Base: 9975 rules (1141 with conclusion selected). Queue: 2034 rules.
+23400 rules inserted. Base: 10070 rules (1141 with conclusion selected). Queue: 2045 rules.
+23600 rules inserted. Base: 10141 rules (1149 with conclusion selected). Queue: 2085 rules.
+23800 rules inserted. Base: 10211 rules (1151 with conclusion selected). Queue: 2066 rules.
+24000 rules inserted. Base: 10206 rules (1154 with conclusion selected). Queue: 2105 rules.
+24200 rules inserted. Base: 10243 rules (1157 with conclusion selected). Queue: 2155 rules.
+24400 rules inserted. Base: 10272 rules (1161 with conclusion selected). Queue: 2190 rules.
+24600 rules inserted. Base: 10309 rules (1163 with conclusion selected). Queue: 2201 rules.

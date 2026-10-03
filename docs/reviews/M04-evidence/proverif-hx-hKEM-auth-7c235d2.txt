@@ -1,0 +1,33 @@
+# ProVerif 2.05 — formal/hx/hKEM-auth.pv over formal/hx.pvl (WEISUNG M4-7), models of commit 7c235d2
+# command: cargo xtask step --strict proverif --models hx --jobs 4 (proverif -lib formal/hx.pvl formal/hx/hKEM-auth.pv, 1800 s cap; 4 files in parallel on this Mac, M1 Pro)
+# sha256 formal/hx.pvl fd3b7aeaa42739a1757f82c718f703a41005fd67bed87120891a37ade6f57609
+# sha256 formal/hx/hKEM-auth.pv 1d64fb903bcf5290858df4eff266b631c32cccc5d5dc07e5682cdc366a5bd309
+# gate: FAILED after 1801.3 s · RESULT lines 0 of 1 expected · O-23: yes
+# finished: no · last progress line: 34400 rules inserted. Base: 27742 rules (176 with conclusion selected). Queue: 99810 rules.
+# session tags in the log other than the file's: none (one session per file, O-18)
+
+| # | CLAIMS ID | expected | verdict | query (as ProVerif prints it) |
+|---|---|---|---|---|
+| 1 | H5 | true | not reached | `inj-event(RAccept(hKEM,iR,iks(vk(iksig(hKEM,pI)),exp(g,dhsk(hKEM,kIKI))),ld_6,oid,tr_3,rt_3,sk_3)) ==> inj-event(IStart(hKEM,iks(vk(iksig(hKEM,pI)),exp(g,dhsk(hKEM,kIKI))),iR,b_3,tr_3,rt_3,sk_3))` |
+
+RESULT lines and the last 20 progress lines of the log:
+30600 rules inserted. Base: 23998 rules (170 with conclusion selected). Queue: 86697 rules.
+30800 rules inserted. Base: 24198 rules (170 with conclusion selected). Queue: 86588 rules.
+31000 rules inserted. Base: 24398 rules (170 with conclusion selected). Queue: 87377 rules.
+31200 rules inserted. Base: 24598 rules (170 with conclusion selected). Queue: 87553 rules.
+31400 rules inserted. Base: 24798 rules (170 with conclusion selected). Queue: 89896 rules.
+31600 rules inserted. Base: 24970 rules (171 with conclusion selected). Queue: 92246 rules.
+31800 rules inserted. Base: 25170 rules (173 with conclusion selected). Queue: 93154 rules.
+32000 rules inserted. Base: 25370 rules (173 with conclusion selected). Queue: 92954 rules.
+32200 rules inserted. Base: 25570 rules (173 with conclusion selected). Queue: 92817 rules.
+32400 rules inserted. Base: 25770 rules (173 with conclusion selected). Queue: 92714 rules.
+32600 rules inserted. Base: 25970 rules (173 with conclusion selected). Queue: 93509 rules.
+32800 rules inserted. Base: 26170 rules (173 with conclusion selected). Queue: 93684 rules.
+33000 rules inserted. Base: 26370 rules (173 with conclusion selected). Queue: 95925 rules.
+33200 rules inserted. Base: 26542 rules (174 with conclusion selected). Queue: 98157 rules.
+33400 rules inserted. Base: 26742 rules (176 with conclusion selected). Queue: 99286 rules.
+33600 rules inserted. Base: 26942 rules (176 with conclusion selected). Queue: 99086 rules.
+33800 rules inserted. Base: 27142 rules (176 with conclusion selected). Queue: 98936 rules.
+34000 rules inserted. Base: 27342 rules (176 with conclusion selected). Queue: 98846 rules.
+34200 rules inserted. Base: 27542 rules (176 with conclusion selected). Queue: 99641 rules.
+34400 rules inserted. Base: 27742 rules (176 with conclusion selected). Queue: 99810 rules.

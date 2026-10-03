@@ -1,0 +1,94 @@
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.13s
+     Running `target/debug/xtask step --strict kani`
+
+=== [9] kani ===
+$ /Users/c.carl/.rustup/toolchains/1.98.1-aarch64-apple-darwin/bin/cargo kani --package secmp-proto -Z stubbing
+  Checking harness kani_proofs::kani_cell_plaintext_decode_total...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 49.49447s
+  Checking harness kani_proofs::kani_commit_accept_atomic...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 424.10236s
+  Checking harness kani_proofs::kani_accept_opk_delete_only_on_success...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 321.17398s
+  Checking harness kani_proofs::kani_hx_grouping...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 305.86298s
+  Checking harness kani_proofs::kani_outer_unpad_total...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 47.037186s
+  Checking harness kani_proofs::kani_hx_chunk_bounds...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 0.14562437s
+  Checking harness kani_proofs::tr_eviction...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 0.23870234s
+  Checking harness kani_proofs::tr_skip_plan...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 0.27291626s
+  Checking harness kani_proofs::tr_header_selection...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 103.97021s
+  Checking harness kani_proofs::response_frame...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 31.818867s
+  Checking harness kani_proofs::request_fetch_multi...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 75.47236s
+  Checking harness kani_proofs::request_link_get...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 46.178226s
+  Checking harness kani_proofs::request_skey...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 0.35259005s
+  Checking harness kani_proofs::request_queue_new...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 4.69014s
+  Checking harness kani_proofs::request_ping...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 0.40352127s
+  Checking harness kani_proofs::request_link_put...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 13.249759s
+  Checking harness kani_proofs::request_cont...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 2.4078531s
+  Checking harness kani_proofs::request_send...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 4.8879623s
+  Checking harness kani_proofs::request_queue_del...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 3.2841997s
+  Checking harness kani_proofs::request_fetch...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 4.2670584s
+  Checking harness kani_proofs::request_frame...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 8.752504s
+  Checking harness kani_proofs::padding...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 45.85628s
+  Checking harness kani_proofs::header_v1_reencodes...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 46.61201s
+  Checking harness kani_proofs::header_v1...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 8.782829s
+  Checking harness kani_proofs::cell...
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 9.205679s
+  Complete - 25 successfully verified harnesses, 0 failures, 25 total.
+### gate `kani`
+
+| item | verdict |
+|---|---|
+| status | PASS (1585 s) |
+| line 1 | Kani 0.68.0: harness packages secmp-proto (expected set matches) |
+| line 2 | 25/25 harnesses verified (expect::KANI_HARNESSES): kani_proofs::cell, kani_proofs::header_v1, kani_proofs::header_v1_reencodes, kani_proofs::kani_accept_opk_delete_only_on_success, kani_proofs::kani_cell_plaintext_decode_total, kani_proofs::kani_commit_accept_atomic, kani_proofs::kani_hx_chunk_bounds, kani_proofs::kani_hx_grouping, kani_proofs::kani_outer_unpad_total, kani_proofs::padding, kani_proofs::request_cont, kani_proofs::request_fetch, kani_proofs::request_fetch_multi, kani_proofs::request_frame, kani_proofs::request_link_get, kani_proofs::request_link_put, kani_proofs::request_ping, kani_proofs::request_queue_del, kani_proofs::request_queue_new, kani_proofs::request_send, kani_proofs::request_skey, kani_proofs::response_frame, kani_proofs::tr_eviction, kani_proofs::tr_header_selection, kani_proofs::tr_skip_plan |
+
+
+
+=== step summary (host aarch64-apple-darwin, strict: true) ===
+   9 kani            PASS       1585s  Kani 0.68.0: harness packages secmp-proto (expected set matches); 25/25 harnesses verified (expect::KANI_HARNESSES): kani_proofs::cell, kani_proofs::header_v1, kani_proofs::header_v1_reencodes, kani_proofs::kani_accept_opk_delete_only_on_success, kani_proofs::kani_cell_plaintext_decode_total, kani_proofs::kani_commit_accept_atomic, kani_proofs::kani_hx_chunk_bounds, kani_proofs::kani_hx_grouping, kani_proofs::kani_outer_unpad_total, kani_proofs::padding, kani_proofs::request_cont, kani_proofs::request_fetch, kani_proofs::request_fetch_multi, kani_proofs::request_frame, kani_proofs::request_link_get, kani_proofs::request_link_put, kani_proofs::request_ping, kani_proofs::request_queue_del, kani_proofs::request_queue_new, kani_proofs::request_send, kani_proofs::request_skey, kani_proofs::response_frame, kani_proofs::tr_eviction, kani_proofs::tr_header_selection, kani_proofs::tr_skip_plan
+step: PASS

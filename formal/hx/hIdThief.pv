@@ -1,0 +1,68 @@
+(* SPDX-License-Identifier: AGPL-3.0-or-later *)
+(* formal/hx/hIdThief.pv — session hIdThief of CLAIMS §HX, one file per session (O-18, ADR-046) over the library
+   formal/hx.pvl (model, abstractions, devices: its header). Run: proverif -lib formal/hx.pvl formal/hx/hIdThief.pv
+
+   Row (formal/hx.pvl 3.): I's inv. pinv · PubIKS - · LeakInv ph 0 · RevealLT(R) - · RevealLT(I) - · RevealSPK - ·
+   RevealOPK - · DHO - · KEMO - · layers plain (O-17).
+   Queries (RESULT lines in this order; expected per the CLAIMS gate rule):
+     no begin event:    H7b (2) true · H11 (4) false
+   — 6 RESULT lines.
+*)
+
+const hIdThief: tagt.
+
+(* Secrecy assumptions (formal/hx.pvl 7.): the keys this session never reveals, and those it reveals only in
+   phase 1 (phase 0) *)
+not x: bitstring; attacker(dhsk(hIdThief, eph(x))).
+not x: bitstring; attacker(kemsk(hIdThief, eph(x))).
+not attacker(iksig(hIdThief, pR)).
+not attacker(dhsk(hIdThief, kIKR)).
+not attacker(iksig(hIdThief, pI)).
+not attacker(dhsk(hIdThief, kIKI)).
+not attacker(dhsk(hIdThief, kSPK)).
+not attacker(kemsk(hIdThief, kSPK)).
+not attacker(kemsk(hIdThief, kRPK)).
+
+(* Queries (CLAIMS.md §HX), grouped by begin event (O-19); IKSPublic of the honest parties:
+   iks(vk(iksig(s, pR)), exp(g, dhsk(s, kIKR))) and iks(vk(iksig(s, pI)), exp(g, dhsk(s, kIKI))). *)
+
+query iI: bitstring, iR: bitstring, b: bitstring, tr: bitstring, rt: bitstring, sk: key, ld: bitstring,
+      oid: bitstring, s2: tagt;
+      (* H7b: against an invitation thief — IK_dh_I public key *)
+      attacker(exp(g, dhsk(hIdThief, kIKI)));
+      (* H7b: IK_sig_I public key *)
+      attacker(vk(iksig(hIdThief, pI)));
+      (* H11: reachability sanity: IStart, BundleSigned, the honest pair, IConfirm — IStart *)
+      event(IStart(hIdThief, iks(vk(iksig(hIdThief, pI)), exp(g, dhsk(hIdThief, kIKI))),
+                   iks(vk(iksig(hIdThief, pR)), exp(g, dhsk(hIdThief, kIKR))), b, tr, rt, sk));
+      (* H11: BundleSigned *)
+      event(BundleSigned(hIdThief, iR, b));
+      (* H11: the honest pair *)
+      event(RAccept(hIdThief, iR, iks(vk(iksig(hIdThief, pI)), exp(g, dhsk(hIdThief, kIKI))), ld, oid, tr, rt, sk))
+        && event(IStart(hIdThief, iks(vk(iksig(hIdThief, pI)), exp(g, dhsk(hIdThief, kIKI))), iR, b, tr, rt, sk));
+      (* H11: IConfirm *)
+      event(IConfirm(hIdThief, iks(vk(iksig(hIdThief, pI)), exp(g, dhsk(hIdThief, kIKI))),
+                     iks(vk(iksig(hIdThief, pR)), exp(g, dhsk(hIdThief, kIKR))), tr, sk)).
+
+(* One invitation j issued by R (formal/hx.pvl 1.): OPK_j, bundle, InvitationV1, blob, the one acceptance
+   attempt (O-13), and this session's compromise of the invitation *)
+let Invitation(s: tagt) =
+  new o[]: bitstring;
+  new ld[]: bitstring;
+  new lk[]: key;
+  new opkid[]: bitstring;
+  let b = bundle(s, opkid, o) in
+  event BundleSigned(s, riks(s), b);
+  event InvIssued(s, riks(s), ld, opkid);
+  out(c, ld);
+  out(c, BlobP(s, ld, b));
+  (
+    AcceptP(s, ld, lk, opkid, o)
+  | out(pinv(s), (ld, lk, fp(riks(s))))
+  | Leak(s, ld, lk)
+  ).
+
+process
+    out(c, riks(hIdThief))
+  | ! Invitation(hIdThief)
+  | ! ProcIP(hIdThief, pinv(hIdThief))

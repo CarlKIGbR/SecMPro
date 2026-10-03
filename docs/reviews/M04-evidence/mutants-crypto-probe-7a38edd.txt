@@ -1,0 +1,26 @@
+# M4-fix C-3 crypto probe (brief: one short local run on one secmp-crypto file with the gate's flags)
+head: 7a38edd · host aarch64-apple-darwin (M1 Pro) · cargo-mutants 27.1.0
+command (gates::mutants_args(None) with --output target/mutants-probe and --file):
+  cargo mutants --no-shuffle -j 3 --output target/mutants-probe --features kat --caught --unviable --package secmp-crypto --package secmp-proto --exclude crates/secmp-proto/src/kani_proofs.rs --exclude-re kani_stubs:: --exclude-re FixedEntropy --exclude-re message_key_digest_kat --exclude-re 'replace mk_digest ' --exclude-re 'RatchetState::(hk_s_kat|receiving_header_keys_kat|sb_kat|encrypt_padded_kat)' --exclude-re 'Groups<.*>::(get|remove_completed) ' --exclude-re 'impl (core::fmt::)?Display for \w+Error>::fmt' --file crates/secmp-crypto/src/kdf.rs -- -- --skip ratchet_fast_forward_bound_on_the_chain --skip ratchet_fast_forward_bound_on_a_step
+exit code: 0 · wall time: 52 s
+outcomes (crates/secmp-crypto/src/kdf.rs): CaughtMutant 5, Unviable 8 · total_mutants 13
+caught: 5 · missed: 0 · unviable: 8 · timeout: 0
+test-phase argv of a mutant (shows --features=kat and the forwarded --skip filters):
+  /Users/c.carl/.rustup/toolchains/1.98.1-aarch64-apple-darwin/bin/cargo test --verbose --package=secmp-crypto@0.0.0 --features=kat -- --skip ratchet_fast_forward_bound_on_the_chain --skip ratchet_fast_forward_bound_on_a_step
+cargo-mutants output:
+  Found 13 mutants to test
+  ok       Unmutated baseline in 8s build + 8s test
+  caught   crates/secmp-crypto/src/kdf.rs:19:5: replace expand_into -> Result<()> with Ok(()) in 1s build + 0s test
+  unviable crates/secmp-crypto/src/kdf.rs:37:5: replace hkdf -> Result<SecretBytes<L>> with Ok(SecretBytes::new()) in 0s build
+  unviable crates/secmp-crypto/src/kdf.rs:37:5: replace hkdf -> Result<SecretBytes<L>> with Ok(SecretBytes::from_iter([Default::default()])) in 0s build
+  unviable crates/secmp-crypto/src/kdf.rs:37:5: replace hkdf -> Result<SecretBytes<L>> with Ok(SecretBytes::new(Default::default())) in 0s build
+  unviable crates/secmp-crypto/src/kdf.rs:37:5: replace hkdf -> Result<SecretBytes<L>> with Ok(SecretBytes::from(Default::default())) in 0s build
+  unviable crates/secmp-crypto/src/kdf.rs:52:5: replace hkdf_expand -> Result<SecretBytes<L>> with Ok(SecretBytes::new(Default::default())) in 0s build
+  unviable crates/secmp-crypto/src/kdf.rs:52:5: replace hkdf_expand -> Result<SecretBytes<L>> with Ok(SecretBytes::from(Default::default())) in 0s build
+  unviable crates/secmp-crypto/src/kdf.rs:52:5: replace hkdf_expand -> Result<SecretBytes<L>> with Ok(SecretBytes::from_iter([Default::default()])) in 7s build
+  unviable crates/secmp-crypto/src/kdf.rs:52:5: replace hkdf_expand -> Result<SecretBytes<L>> with Ok(SecretBytes::new()) in 8s build
+  caught   crates/secmp-crypto/src/kdf.rs:72:5: replace hkdf_kat -> Result<Vec<u8>> with Ok(vec![]) in 4s build + 10s test
+  caught   crates/secmp-crypto/src/kdf.rs:72:5: replace hkdf_kat -> Result<Vec<u8>> with Ok(vec![0]) in 3s build + 9s test
+  caught   crates/secmp-crypto/src/kdf.rs:72:5: replace hkdf_kat -> Result<Vec<u8>> with Ok(vec![1]) in 3s build + 9s test
+  caught   crates/secmp-crypto/src/kdf.rs:73:12: delete ! in hkdf_kat in 1s build + 8s test
+  13 mutants tested in 51s: 5 caught, 8 unviable

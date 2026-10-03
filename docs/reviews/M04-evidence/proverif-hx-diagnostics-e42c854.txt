@@ -1,0 +1,33 @@
+formal/hx.pv (e42c854, sha256 88054ef35a5d6cc45d4193c48158c513553e5efb4e40cb12186335551f9168a9) — termination diagnostics
+ProVerif 2.05, Apple M1 Pro (aarch64-apple-darwin), 2026-10-01, runs in parallel (up to 7 ProVerif processes).
+Variants are generated from formal/hx.pv by text replacement (scripts in target/tmp, not committed); "single session"
+= only Session(hClean, …) kept, queries reduced to H11's IConfirm line and H1 (i) for hClean.
+
+1. Honest-flow sanity (hx-tiny): hClean only, I takes invitations only from R, no LeakInv, no replication
+   (1 invitation, 1 attempt, 1 I session), queries = the four H11 lines for hClean:
+   rc=0, wall 5.8 s; all four RESULT lines "is false." (IStart, BundleSigned, honest pair, IConfirm reachable).
+   Output: proverif-hx-tiny-e42c854.txt.
+
+2. Single session hClean, all CLAIMS features (I also takes invitations from c, LeakInv phase 0, PubIKS), replicated:
+   variant                                  cap     last progress line at the cap
+   devices of e42c854 + maxDepth = 14       420 s   70600 rules inserted. Base: 31981 rules (1151 with conclusion selected). Queue: 6976 rules.
+   devices of e42c854 + maxDepth = 20       420 s   73000 rules inserted. Base: 32991 rules (1509 with conclusion selected). Queue: 14324 rules.
+   pre-device model + selFun = Term         480 s   94600 rules inserted. Base: 46660 rules (2316 with conclusion selected). Queue: 28752 rules.
+   pre-device model + nounif (2)            480 s   29200 rules inserted. Base: 11330 rules (3399 with conclusion selected). Queue: 9526 rules.
+   pre-device model + selFun = Term + nounif 480 s  94400 rules inserted. Base: 46722 rules (2267 with conclusion selected). Queue: 28713 rules.
+   O-7 bounded form (2 × (2+2) × 3)         420 s   216600 rules inserted. Base: 102689 rules (2900 with conclusion selected). Queue: 32266 rules.
+   ("pre-device model": new n[] and the equality-pattern OPK cell, without selFun/nounif/secrecy assumptions.)
+   None printed a RESULT line.
+
+3. Clause profile (verboseBase, 45 s, single session hClean, devices of e42c854): most selected hypotheses
+   2521 × attacker(caead_seal(inv_kld(ld,lk), n, (lbl_blob, ld), (iks(…), b, hsign(…), …))) with ld, lk unbound
+   (I's blob input in the sessions where I takes invitations from c), 1402 × attacker(hseal(init_nhkb(hx_sk(…)) …));
+   most frequent conclusions 4281 × event(IConfirm(hClean, …)), ≈ 2150 × each of I's three initcells,
+   1085 × event(IStart(hClean, …)): one I clause per combination of DH-equation variants of exp(X, ·) with X
+   received (spk_dh, opk_dh, ik_dh of the blob; dh_pk of the reply) and of blob/invitation sources.
+
+4. Model bug found by the diagnostics and fixed before e42c854: R's pattern for Inner was a flat 4-tuple while I
+   seals the pair (IKSPublic_I, first_msg); H11's IConfirm came out "is true." (unreachable). e42c854 contains the
+   pair pattern (hx.pv accept13); item 1 shows the flow reachable.
+
+5. Replicated full model and bounded full model, 1800 s each: proverif-hx-e42c854.txt, proverif-hx-bounded-e42c854.txt.

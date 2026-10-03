@@ -1,12 +1,20 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # SecMPro CI (docs/06 §5, ADR-029). Every job runs `cargo xtask`, so local and CI gates are the same code.
-# The four jobs below are the required checks of the `main-protection` ruleset. Their names exist only in this
-# workflow, and it has no manual-dispatch trigger (M2 review C2): a dispatch would add `skipped` check runs
-# under the required names, which count as passing. On-demand runs use `ci-dispatch.yml`.
-# Checked by `cargo xtask policy` (`workflow_findings`, `workflows`): no `pull_request_target`/`workflow_run`
-# trigger; every action pinned by full commit SHA; no `continue-on-error`; no plain-scalar `run:` that YAML would
-# misparse; no manual-dispatch trigger here and the required job names in no other workflow. By convention, not
-# checked: a read-only token and checkout without persisted credentials. `--strict` turns every skipped step into a
+# The first four jobs below are the required checks of the `main-protection` ruleset (`expect::REQUIRED_JOBS`); the
+# jobs `linux-full` delegates to — `ct`, `mutants-shard` with its verdict job `mutants`, and `proverif-hx` (M4) — are
+# pinned like them (`expect::PINNED_JOBS`, M4 review C-5) and are required checks once the owner adds `ct`, `mutants`
+# and `proverif-hx` to the ruleset. The pinned names exist only in this workflow, and it has no manual-dispatch trigger
+# (M2 review C2): a dispatch would add `skipped` check runs under them, which count as passing. On-demand runs use
+# `ci-dispatch.yml`.
+# Checked by `cargo xtask policy` (`workflow_findings`, `workflow_token_findings`, `workflows`) as an accident guard
+# against careless edits, not a tamper-proof control (the check runs inside the jobs it guards; the real control is
+# review of this file and of `xtask/src/{expect,gates,ci}.rs`): no `pull_request_target`/`workflow_run` trigger; every
+# action pinned by full commit SHA; no flow-style YAML inside `jobs:`; no `continue-on-error`; no plain-scalar `run:`
+# that YAML would misparse; workflow permissions exactly `contents: read` and none per job; no override of the prover; no
+# manual-dispatch trigger here and the pinned job names in no other workflow; job conditions pinned, no `needs:` on a
+# pinned job but the pinned one of `mutants`, no `defaults:` and no step `shell:`, the `cargo xtask` gate lines pinned
+# and every `--delegated` step mapped to a pinned job; every artefact name ends with the run attempt. By convention, not
+# checked: checkout without persisted credentials. `--strict` turns every skipped step into a
 # failure. Caches hold only the pinned tools and are keyed by this workflow; release workflows (M11) must not
 # restore them.
 name: ci
@@ -67,7 +75,7 @@ jobs:
       - name: Upload SBOMs
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: sbom-${{ github.sha }}
+          name: sbom-${{ github.sha }}-${{ github.run_attempt }}
           path: target/sbom/
           if-no-files-found: error
 
@@ -141,6 +149,7 @@ jobs:
   # docs/06 §5 steps 1–14 (ci-full): nightly on main and on every pull request (the gate before a milestone report);
   # on demand through `ci-dispatch.yml`. The Windows steps are covered by the two jobs above.
   linux-full:
+    # pinned by `expect::REQUIRED_JOB_CONDITIONS` (accident guard); a skipped job counts as passing
     if: github.event_name == 'schedule' || github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 240
@@ -184,14 +193,177 @@ jobs:
             ~/.secmp-tools
             ~/.kani
           key: ${{ steps.tools-cache.outputs.cache-primary-key }}
+      # step 10 runs `formal/tr.pv` here; the SecMP-HX models run in `proverif-hx` (WEISUNG M4-5, gate F7)
+      # step 8 (mutants) runs in the `mutants` job (ADR-047), step 5 `ct` in the `ct` job (ADR-047 Amendment 1)
       - name: ci-full (steps 1–14)
-        run: cargo xtask ci-full --strict --delegated windows-native --delegated windows-cross
-      # The report of the `ct` step (ADR-038 runner metadata and per-target t values), kept with every run so a
-      # verdict can be re-read without the job log (M1 review §E 5.7).
-      - name: Upload the constant-time report
-        if: ${{ !cancelled() }}
+        run: cargo xtask ci-full --strict --delegated windows-native --delegated windows-cross --delegated mutants --delegated ct --models tr
+
+  # docs/06 §5 step 5 `ct` (ADR-038, ADR-041) as its own job (ADR-047 Amendment 1, M4 review C-2): on PR run
+  # 37041956810 the step ran at least 216.7 min inside `linux-full` without a verdict, and `linux-full` delegates it
+  # here. The bench appends a line per finished phase to `target/ct-progress.jsonl` and the gate fails at its own budget
+  # `expect::CT_STEP_TIMEOUT_SECONDS` (290 min, ADR-045 Amendment 1), within this job's limit; the report (ADR-038
+  # runner metadata and per-target t values, M1 review §E 5.7), the progress file and the bench log are kept as an
+  # artefact in every case. Same events as `linux-full`.
+  ct:
+    if: github.event_name == 'schedule' || github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Pinned toolchain (rust-toolchain.toml)
+        run: rustup toolchain install && rustc -vV
+      - name: Constant-time gate (step 5 ct)
+        run: cargo xtask step --strict ct
+      - name: Upload the constant-time report, progress and bench log
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ct-report-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}-${{ github.run_attempt }}
-          path: target/ct-report.json
+          path: |
+            target/ct-report.json
+            target/ct-progress.jsonl
+            target/ct-bench.log
+          if-no-files-found: error
+
+  # docs/06 §5 step 8 (mutation testing, secmp-crypto and secmp-proto) outside `linux-full` (ADR-047), as 8 shards and
+  # a merge (ADR-047 Amendment 1, M4 review C-3): the two-crate run needs an estimated 7–26 h, more than any job. Each
+  # shard runs every eighth mutant (round-robin) with `-j 3` under the step budget `expect::MUTANTS_STEP_TIMEOUT_SECONDS`
+  # (280 min) and records its verdict in `mutants.out`, which with the step log are kept as an artefact in every
+  # case. Same events as `linux-full`.
+  mutants-shard:
+    if: github.event_name == 'schedule' || github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        shard:
+          - 0
+          - 1
+          - 2
+          - 3
+          - 4
+          - 5
+          - 6
+          - 7
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Pinned toolchain (rust-toolchain.toml)
+        run: rustup toolchain install && rustc -vV
+      - name: Tool install root
+        run: |
+          echo "SECMP_TOOLS_ROOT=$HOME/.secmp-tools" >> "$GITHUB_ENV"
+          echo "$HOME/.secmp-tools/bin" >> "$GITHUB_PATH"
+      - name: Restore pinned tools
+        id: tools-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.secmp-tools
+          key: ci-tools-mutants-${{ runner.os }}-${{ hashFiles('xtask/src/tools.rs', 'rust-toolchain.toml') }}
+      - name: Install pinned tools (cargo-mutants)
+        run: cargo xtask install-tools --set mutants
+      - name: Save pinned tools (right after installing, so a later failing step cannot lose the cache)
+        if: steps.tools-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.secmp-tools
+          key: ${{ steps.tools-cache.outputs.cache-primary-key }}
+      - name: Mutation testing, one shard of 8 (step 8, `-j 3`)
+        run: cargo xtask step --strict mutants --shard ${{ matrix.shard }}/8
+      - name: Upload the shard's mutants evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mutants-${{ matrix.shard }}-${{ github.run_attempt }}
+          path: |
+            target/mutants.out/
+            target/mutants-step.log
+          if-no-files-found: error
+
+  # The verdict of step 8 (ADR-047 Amendment 1 (2), Amendment 2): runs after the shards whatever their outcome,
+  # downloads their results, reports every shard and package, and fails unless all 8 passed, every survivor is
+  # documented in `docs/mutants-accepted.md` and each package has caught at least 50 % of its mutants
+  # (`expect::MUTANT_MIN_CAUGHT_PERCENT`); an unviable share above 35 % is a warning. The merged outcomes and the
+  # per-package counts are kept as an artefact. Same events as `linux-full`.
+  mutants:
+    needs: mutants-shard
+    if: always() && (github.event_name == 'schedule' || github.event_name == 'pull_request')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Pinned toolchain (rust-toolchain.toml)
+        run: rustup toolchain install && rustc -vV
+      - name: Download the shard results
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: mutants-*-${{ github.run_attempt }}
+          path: target/mutants-shards
+      - name: Mutation verdict over the 8 shards (step 8)
+        run: cargo xtask step --strict mutants-merge
+      - name: Upload the merged mutants evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mutation-verdict-${{ github.sha }}-${{ github.run_attempt }}
+          path: target/mutants-merged/
+          if-no-files-found: error
+
+  # docs/06 §5 step 10 for SecMP-HX (WEISUNG M4-5, gate F7, M3 review R-14): every session model `formal/hx/*.pv` over
+  # the library `formal/hx.pvl`, four ProVerif processes in parallel, each under the 1800 s timeout of
+  # `expect::PROVERIF_TIMEOUT_SECONDS`; the logs, `summary.txt` (sha256 of every model file, counts, wall times) and
+  # `results.tsv` (one row per file and CLAIMS ID) are kept as an artefact. Same events as `linux-full`.
+  proverif-hx:
+    if: github.event_name == 'schedule' || github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Pinned toolchain (rust-toolchain.toml)
+        run: rustup toolchain install && rustc -vV
+      - name: Tool install root
+        run: |
+          echo "SECMP_TOOLS_ROOT=$HOME/.secmp-tools" >> "$GITHUB_ENV"
+          echo "$HOME/.secmp-tools/bin" >> "$GITHUB_PATH"
+      - name: Restore pinned tools
+        id: tools-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.secmp-tools
+          key: ci-tools-proverif-${{ runner.os }}-${{ hashFiles('xtask/src/tools.rs', 'rust-toolchain.toml') }}
+      - name: ProVerif 2.05 from source (sha256 as recorded by opam)
+        run: |
+          if [ ! -x "$HOME/.secmp-tools/bin/proverif" ]; then
+            sudo apt-get update && sudo apt-get install -y --no-install-recommends ocaml-nox ocaml-findlib ocamlbuild
+            mkdir -p "$HOME/.secmp-tools/bin"
+            cd "$RUNNER_TEMP"
+            curl --fail --silent --show-error --location -o proverif2.05.tar.gz https://proverif.inria.fr/proverif2.05.tar.gz
+            echo "4871f53c32ab4a04669a060c4886ba5d9080496963fb980a9a62d2c429ceabc4  proverif2.05.tar.gz" | sha256sum -c -
+            tar xzf proverif2.05.tar.gz
+            cd proverif2.05 && ./build -nointeract
+            install -m 0755 proverif "$HOME/.secmp-tools/bin/proverif"
+          fi
+          proverif -help | head -1
+      - name: Save pinned tools (right after installing, so a later failing step cannot lose the cache)
+        if: steps.tools-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.secmp-tools
+          key: ${{ steps.tools-cache.outputs.cache-primary-key }}
+      - name: ProVerif, SecMP-HX session models (step 10, --models hx)
+        run: cargo xtask step --strict proverif --models hx --jobs 4
+      - name: Upload the ProVerif logs and evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: proverif-hx-${{ github.sha }}-${{ github.run_attempt }}
+          path: target/proverif/
           if-no-files-found: error

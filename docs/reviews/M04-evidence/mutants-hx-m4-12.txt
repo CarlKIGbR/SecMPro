@@ -1,0 +1,7 @@
+cargo mutants --no-shuffle -j 3 --output target/mutants-hx12 --features secmp-crypto/kat,secmp-proto/kat -p secmp-proto -f '**/src/hx/**' -f '**/src/inv.rs' -f '**/src/prekeys.rs' -f '**/src/wire/hx.rs' --exclude-re kani_stubs:: --exclude-re FixedEntropy --exclude-re message_key_digest_kat --exclude-re 'replace mk_digest ' --exclude-re 'RatchetState::(hk_s_kat|receiving_header_keys_kat|sb_kat|encrypt_padded_kat)' --exclude-re 'Groups<.*>::(get|remove_completed) ' --exclude-re 'impl (core::fmt::)?Display for \w+Error>::fmt'
+Head d176e95. 331 mutants tested in 67m: 3 missed, 235 caught, 93 unviable, 0 timeouts. Baseline 9s build + 126s test.
+
+MISSED (all three documented in docs/mutants-accepted.md):
+crates/secmp-proto/src/inv.rs:163:44: replace | with ^ in base64url_encode
+crates/secmp-proto/src/inv.rs:163:32: replace | with ^ in base64url_encode
+crates/secmp-proto/src/inv.rs:202:34: replace | with ^ in base64url_decode

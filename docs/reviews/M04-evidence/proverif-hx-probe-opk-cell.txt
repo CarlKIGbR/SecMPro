@@ -1,0 +1,213 @@
+Process 0 (that is, the initial process):
+{1}new pinv: channel;
+(
+    {2}!
+    {3}let pinv_1: channel = pinv in
+    {4}in(pinv_1, (o: bitstring,k: key));
+    {5}new ek[]: bitstring;
+    {6}event IStart(ek,o);
+    {7}out(c, senc((ek,o),k))
+) | (
+    {8}!
+    {9}let pinv_2: channel = pinv in
+    {10}new o_1[]: bitstring;
+    {11}new kinv[]: key;
+    {12}new cell[]: channel;
+    {13}event InvIssued(o_1);
+    (
+        {14}out(pinv_2, (o_1,kinv))
+    ) | (
+        {15}out(cell, o_1)
+    ) | (
+        {16}!
+        {17}let o_2: bitstring = o_1 in
+        {18}let kinv_1: key = kinv in
+        {19}let cell_1: channel = cell in
+        {20}in(c, m: bitstring);
+        {21}in(cell_1, =o_2);
+        {22}let (ek_1: bitstring,=o_2) = sdec(m,kinv_1) in
+            {23}event RAccept(ek_1,o_2)
+        else
+            {24}out(cell_1, o_2)
+    )
+)
+
+--  Process 1 (that is, process 0, with let moved downwards):
+{1}new pinv: channel;
+(
+    {2}!
+    {3}let pinv_1: channel = pinv in
+    {4}in(pinv_1, (o: bitstring,k: key));
+    {5}new ek[]: bitstring;
+    {6}event IStart(ek,o);
+    {7}out(c, senc((ek,o),k))
+) | (
+    {8}!
+    {10}new o_1[]: bitstring;
+    {11}new kinv[]: key;
+    {12}new cell[]: channel;
+    {13}event InvIssued(o_1);
+    (
+        {9}let pinv_2: channel = pinv in
+        {14}out(pinv_2, (o_1,kinv))
+    ) | (
+        {15}out(cell, o_1)
+    ) | (
+        {16}!
+        {20}in(c, m: bitstring);
+        {19}let cell_1: channel = cell in
+        {17}let o_2: bitstring = o_1 in
+        {21}in(cell_1, =o_2);
+        {18}let kinv_1: key = kinv in
+        {22}let (ek_1: bitstring,=o_2) = sdec(m,kinv_1) in
+            {23}event RAccept(ek_1,o_2)
+        else
+            {24}out(cell_1, o_2)
+    )
+)
+
+-- Query inj-event(RAccept(x,y)) ==> inj-event(IStart(x,y)) in process 1.
+Translating the process into Horn clauses...
+Completing...
+Starting query inj-event(RAccept(x,y)) ==> inj-event(IStart(x,y))
+goal reachable: @sid ≠ @sid_1 && b-inj-event(IStart(ek_2,o_3),@occ6_1) -> inj-event(RAccept(ek_2,o_3),@occ23_1) && inj-event(RAccept(ek_2,o_3),@occ23_2)
+Abbreviations:
+ek_2 = ek[!1 = @sid_2]
+o_3 = o_1[!1 = @sid_3]
+kinv_2 = kinv[!1 = @sid_3]
+@occ23_1 = @occ23[m = senc((ek_2,o_3),kinv_2),!2 = @sid,!1 = @sid_3]
+@occ23_2 = @occ23[m = senc((ek_2,o_3),kinv_2),!2 = @sid_1,!1 = @sid_3]
+@occ6_1 = @occ6[k = kinv_2,o = o_3,!1 = @sid_2]
+
+Derivation:
+Abbreviations:
+ek_2 = ek[!1 = @sid]
+o_3 = o_1[!1 = @sid_1]
+kinv_2 = kinv[!1 = @sid_1]
+@occ23_1 = @occ23[m = senc((ek_2,o_3),kinv_2),!2 = @sid_2,!1 = @sid_1]
+@occ23_2 = @occ23[m = senc((ek_2,o_3),kinv_2),!2 = @sid_3,!1 = @sid_1]
+cell_2 = cell[!1 = @sid_1]
+@occ6_1 = @occ6[k = kinv_2,o = o_3,!1 = @sid]
+
+1. The message (o_3,kinv_2) may be sent on channel pinv[] at output {14}.
+mess(pinv[],(o_3,kinv_2)).
+
+2. The message (o_3,kinv_2) that may be sent on channel pinv[] by 1 may be received at input {4}.
+The event IStart(ek_2,o_3) (with occurrence name @occ6_1) may be executed at {6}.
+So the message senc((ek_2,o_3),kinv_2) may be sent to the attacker at output {7}.
+attacker(senc((ek_2,o_3),kinv_2)).
+
+3. The message o_3 may be sent on channel cell_2 at output {15}.
+mess(cell_2,o_3).
+
+4. The message senc((ek_2,o_3),kinv_2) that the attacker may have by 2 may be received at input {20}.
+The message o_3 that may be sent on channel cell_2 by 3 may be received at input {21}.
+So event RAccept(ek_2,o_3) may be executed at {23} in session @sid_3.
+inj-event(RAccept(ek_2,o_3),@occ23_2).
+
+5. By 4, inj-event(RAccept(ek_2,o_3),@occ23_2).
+The goal is reached, represented in the following fact:
+inj-event(RAccept(ek_2,o_3),@occ23_2).
+
+6. The message senc((ek_2,o_3),kinv_2) that the attacker may have by 2 may be received at input {20}.
+The message o_3 that may be sent on channel cell_2 by 3 may be received at input {21}.
+So event RAccept(ek_2,o_3) may be executed at {23} in session @sid_2.
+inj-event(RAccept(ek_2,o_3),@occ23_1).
+
+7. By 6, inj-event(RAccept(ek_2,o_3),@occ23_1).
+The goal is reached, represented in the following fact:
+inj-event(RAccept(ek_2,o_3),@occ23_1).
+
+8. By 7, inj-event(RAccept(ek_2,o_3),@occ23_1).
+By 5, inj-event(RAccept(ek_2,o_3),@occ23_2).
+We have @occ23_1 ≠ @occ23_2.
+The goals for injectivity are reached, combined in the following fact:
+inj-event(RAccept(ek_2,o_3),@occ23_1) && inj-event(RAccept(ek_2,o_3),@occ23_2).
+
+
+Could not find a trace corresponding to this derivation.
+RESULT inj-event(RAccept(x,y)) ==> inj-event(IStart(x,y)) cannot be proved.
+RESULT (but event(RAccept(x,y)) ==> event(IStart(x,y)) is true.)
+-- Query inj-event(RAccept(x,y)) ==> inj-event(InvIssued(y)) in process 1.
+Translating the process into Horn clauses...
+Completing...
+Starting query inj-event(RAccept(x,y)) ==> inj-event(InvIssued(y))
+goal reachable: @sid ≠ @sid_1 && b-inj-event(InvIssued(o_3),@occ13_1) -> inj-event(RAccept(ek_2,o_3),@occ23_2) && inj-event(RAccept(ek_3,o_3),@occ23_3)
+Abbreviations:
+ek_2 = ek[!1 = @sid_2]
+o_3 = o_1[!1 = @sid_3]
+kinv_2 = kinv[!1 = @sid_3]
+@occ23_2 = @occ23_1[m = senc((ek_2,o_3),kinv_2),!2 = @sid,!1 = @sid_3]
+ek_3 = ek[!1 = @sid_4]
+@occ23_3 = @occ23_1[m = senc((ek_3,o_3),kinv_2),!2 = @sid_1,!1 = @sid_3]
+@occ13_1 = @occ13[!1 = @sid_3]
+
+Derivation:
+Abbreviations:
+ek_2 = ek[!1 = @sid]
+o_3 = o_1[!1 = @sid_1]
+kinv_2 = kinv[!1 = @sid_1]
+@occ23_2 = @occ23_1[m = senc((ek_2,o_3),kinv_2),!2 = @sid_2,!1 = @sid_1]
+ek_3 = ek[!1 = @sid_3]
+@occ23_3 = @occ23_1[m = senc((ek_3,o_3),kinv_2),!2 = @sid_4,!1 = @sid_1]
+cell_2 = cell[!1 = @sid_1]
+@occ13_1 = @occ13[!1 = @sid_1]
+
+1. The event InvIssued(o_3) (with occurrence name @occ13_1) may be executed at {13}.
+So the message (o_3,kinv_2) may be sent on channel pinv[] at output {14}.
+mess(pinv[],(o_3,kinv_2)).
+
+2. The message (o_3,kinv_2) that may be sent on channel pinv[] by 1 may be received at input {4}.
+So the message senc((ek_3,o_3),kinv_2) may be sent to the attacker at output {7}.
+attacker(senc((ek_3,o_3),kinv_2)).
+
+3. The event InvIssued(o_3) (with occurrence name @occ13_1) may be executed at {13}.
+So the message o_3 may be sent on channel cell_2 at output {15}.
+mess(cell_2,o_3).
+
+4. The event InvIssued(o_3) (with occurrence name @occ13_1) may be executed at {13}.
+The message senc((ek_3,o_3),kinv_2) that the attacker may have by 2 may be received at input {20}.
+The message o_3 that may be sent on channel cell_2 by 3 may be received at input {21}.
+So event RAccept(ek_3,o_3) may be executed at {23} in session @sid_4.
+inj-event(RAccept(ek_3,o_3),@occ23_3).
+
+5. By 4, inj-event(RAccept(ek_3,o_3),@occ23_3).
+The goal is reached, represented in the following fact:
+inj-event(RAccept(ek_3,o_3),@occ23_3).
+
+6. The message (o_3,kinv_2) that may be sent on channel pinv[] by 1 may be received at input {4}.
+So the message senc((ek_2,o_3),kinv_2) may be sent to the attacker at output {7}.
+attacker(senc((ek_2,o_3),kinv_2)).
+
+7. The event InvIssued(o_3) (with occurrence name @occ13_1) may be executed at {13}.
+The message senc((ek_2,o_3),kinv_2) that the attacker may have by 6 may be received at input {20}.
+The message o_3 that may be sent on channel cell_2 by 3 may be received at input {21}.
+So event RAccept(ek_2,o_3) may be executed at {23} in session @sid_2.
+inj-event(RAccept(ek_2,o_3),@occ23_2).
+
+8. By 7, inj-event(RAccept(ek_2,o_3),@occ23_2).
+The goal is reached, represented in the following fact:
+inj-event(RAccept(ek_2,o_3),@occ23_2).
+
+9. By 8, inj-event(RAccept(ek_2,o_3),@occ23_2).
+By 5, inj-event(RAccept(ek_3,o_3),@occ23_3).
+We have @occ23_2 ≠ @occ23_3.
+The goals for injectivity are reached, combined in the following fact:
+inj-event(RAccept(ek_2,o_3),@occ23_2) && inj-event(RAccept(ek_3,o_3),@occ23_3).
+
+
+Could not find a trace corresponding to this derivation.
+RESULT inj-event(RAccept(x,y)) ==> inj-event(InvIssued(y)) cannot be proved.
+RESULT (but event(RAccept(x,y)) ==> event(InvIssued(y)) is true.)
+
+--------------------------------------------------------------
+Verification summary:
+
+Query inj-event(RAccept(x,y)) ==> inj-event(IStart(x,y)) cannot be proved.
+
+Query inj-event(RAccept(x,y)) ==> inj-event(InvIssued(y)) cannot be proved.
+
+--------------------------------------------------------------
+
+
+--- runpv2: rc=0 wall=0.0s ---

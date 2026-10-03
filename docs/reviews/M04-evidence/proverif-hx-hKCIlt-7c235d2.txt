@@ -1,0 +1,40 @@
+# ProVerif 2.05 — formal/hx/hKCIlt.pv over formal/hx.pvl (WEISUNG M4-7), models of commit 7c235d2
+# command: cargo xtask step --strict proverif --models hx --jobs 4 (proverif -lib formal/hx.pvl formal/hx/hKCIlt.pv, 1800 s cap; 4 files in parallel on this Mac, M1 Pro)
+# sha256 formal/hx.pvl fd3b7aeaa42739a1757f82c718f703a41005fd67bed87120891a37ade6f57609
+# sha256 formal/hx/hKCIlt.pv 7157b89d3d9cab0cf5d673f2476b506fd32a3b4aeada6373ab1e174b1a6bab4c
+# gate: finished after 48.6 s · RESULT lines 4 of 4 expected · O-23: n/a
+# finished: yes · last progress line: 200 rules inserted. Base: 139 rules (138 with conclusion selected). Queue: 36 rules.
+# session tags in the log other than the file's: none (one session per file, O-18)
+
+| # | CLAIMS ID | expected | verdict | query (as ProVerif prints it) |
+|---|---|---|---|---|
+| 1 | H11 | false | false | `not event(IStart(hKCIlt,iks(vk(iksig(hKCIlt,pI)),exp(g,dhsk(hKCIlt,kIKI))),iks(vk(iksig(hKCIlt,pR)),exp(g,dhsk(hKCIlt,kIKR))),b_2,tr_2,rt_2,sk_2))` |
+| 2 | H11 | false | false | `not event(BundleSigned(hKCIlt,iR,b_2))` |
+| 3 | H11 | false | false | `not (event(RAccept(hKCIlt,iR,iks(vk(iksig(hKCIlt,pI)),exp(g,dhsk(hKCIlt,kIKI))),ld_5,oid,tr_2,rt_2,sk_2)) && event(IStart(hKCIlt,iks(vk(iksig(hKCIlt,pI)),exp(g,dhsk(hKCIlt,kIKI))),iR,b_2,tr_2,rt_2,sk_2)))` |
+| 4 | H11 | false | false | `not event(IConfirm(hKCIlt,iks(vk(iksig(hKCIlt,pI)),exp(g,dhsk(hKCIlt,kIKI))),iks(vk(iksig(hKCIlt,pR)),exp(g,dhsk(hKCIlt,kIKR))),tr_2,sk_2))` |
+
+RESULT lines and the last 20 progress lines of the log:
+RESULT not event(IStart(hKCIlt,iks(vk(iksig(hKCIlt,pI)),exp(g,dhsk(hKCIlt,kIKI))),iks(vk(iksig(hKCIlt,pR)),exp(g,dhsk(hKCIlt,kIKR))),b_2,tr_2,rt_2,sk_2)) is false.
+RESULT not event(BundleSigned(hKCIlt,iR,b_2)) is false.
+RESULT not (event(RAccept(hKCIlt,iR,iks(vk(iksig(hKCIlt,pI)),exp(g,dhsk(hKCIlt,kIKI))),ld_5,oid,tr_2,rt_2,sk_2)) && event(IStart(hKCIlt,iks(vk(iksig(hKCIlt,pI)),exp(g,dhsk(hKCIlt,kIKI))),iR,b_2,tr_2,rt_2,sk_2))) is false.
+RESULT not event(IConfirm(hKCIlt,iks(vk(iksig(hKCIlt,pI)),exp(g,dhsk(hKCIlt,kIKI))),iks(vk(iksig(hKCIlt,pR)),exp(g,dhsk(hKCIlt,kIKR))),tr_2,sk_2)) is false.
+36600 rules inserted. Base: 16132 rules (697 with conclusion selected). Queue: 285 rules.
+36800 rules inserted. Base: 16142 rules (703 with conclusion selected). Queue: 279 rules.
+37000 rules inserted. Base: 16157 rules (703 with conclusion selected). Queue: 279 rules.
+37200 rules inserted. Base: 16180 rules (705 with conclusion selected). Queue: 277 rules.
+37400 rules inserted. Base: 16172 rules (705 with conclusion selected). Queue: 277 rules.
+37600 rules inserted. Base: 16180 rules (705 with conclusion selected). Queue: 277 rules.
+37800 rules inserted. Base: 16193 rules (705 with conclusion selected). Queue: 277 rules.
+38000 rules inserted. Base: 16231 rules (705 with conclusion selected). Queue: 277 rules.
+38200 rules inserted. Base: 16237 rules (705 with conclusion selected). Queue: 275 rules.
+38400 rules inserted. Base: 16268 rules (705 with conclusion selected). Queue: 275 rules.
+38600 rules inserted. Base: 16253 rules (705 with conclusion selected). Queue: 270 rules.
+38800 rules inserted. Base: 16302 rules (707 with conclusion selected). Queue: 260 rules.
+39000 rules inserted. Base: 16232 rules (707 with conclusion selected). Queue: 248 rules.
+39200 rules inserted. Base: 16195 rules (707 with conclusion selected). Queue: 246 rules.
+39400 rules inserted. Base: 16177 rules (711 with conclusion selected). Queue: 227 rules.
+39600 rules inserted. Base: 16088 rules (713 with conclusion selected). Queue: 208 rules.
+39800 rules inserted. Base: 16029 rules (718 with conclusion selected). Queue: 162 rules.
+40000 rules inserted. Base: 15907 rules (725 with conclusion selected). Queue: 105 rules.
+40200 rules inserted. Base: 15846 rules (750 with conclusion selected). Queue: 38 rules.
+200 rules inserted. Base: 139 rules (138 with conclusion selected). Queue: 36 rules.

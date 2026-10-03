@@ -9,7 +9,7 @@ CI, with the pinned nightly (`xtask/src/tools.rs`) and a per-target `-max_len` (
   (`FUZZ_SMOKE_SECONDS`).
 - **Nightly campaign** (`.github/workflows/fuzz-nightly.yml`, daily at 00:23 UTC and on dispatch; not a
   required check; `cargo xtask step fuzz-nightly`): 4 h (`FUZZ_NIGHTLY_SECONDS` = 14 400 s) shared equally by
-  the targets (1 200 s each with the 12 targets of M2, 1 028 s with the 14 of M3). The workflow uploads the scratch corpus and any crash
+  the targets (1 200 s each with the 12 targets of M2, 1 028 s with the 14 of M3, 685 s with the 21 of M4). The workflow uploads the scratch corpus and any crash
   inputs as artefacts; taking inputs into `fuzz/corpus/` (after `cargo fuzz cmin`) is a manual, reviewed commit.
   The same workflow runs the `secmp-proto` tests with feature `kat` (`cargo nextest run -p secmp-proto --features
   kat`, which builds the `kat`-only TR property test `tr_properties` and the `canonical` property tests) with
@@ -104,3 +104,27 @@ throwaway helper and checked by it (every state and inbox decodes and re-encodes
 accepted): `tr_decrypt` — the five undelivered honest cells in mode 0 and the honest header of each header mode
 (9 files, 30 KB); `tr_state` — the receiver's state, a fresh initiator and a fresh responder state, an empty
 inbox and one with two stored fragments (5 files, 7 KB).
+
+## M4 targets (`secmp-proto::inv`, `secmp-proto::hx`)
+
+| Target | Input | Invariants |
+|---|---|---|
+| `inv_uri` | arbitrary bytes (UTF-8 text) | `parse_invitation_uri` never panics; whatever parses re-encodes (`invitation_uri`) to exactly the input; the same for `base64url_decode`/`base64url_encode` |
+| `inv_linkdata` | mode (modulo 2) ‖ rest: 0 an opened `LinkDataV1` (12288 B), 1 a blob handed to `invitee_accept` with the fixture's invitation | no panic; an accepted `LinkDataV1` re-encodes to its input; `invitee_accept` answers `Ok` (only for the fixture's own blob) or the uniform `Rejected` |
+| `hx_outer`, `hx_inner`, `hx_cell_plaintext` | the padded `Outer` (12018 B), `Inner` (6113 B), `HandshakeCellPlaintext` (4024 B) | total decoders; accepted input re-encodes to itself (`total` = 3 and `i` ≤ 2 enforced) |
+| `hx_accept_raw` | count (modulo 13) ‖ per cell a selector (modulo 4) — 0–2 the fixture's honest cell, 3 followed by 4096 raw bytes | no panic; `Ok` only if all three honest cells are in the list, and then exactly the OPK is deleted; every `Err` is the uniform `Rejected`, the store digest unchanged, the OPK kept |
+| `hx_accept_structured` | mode (modulo 3) ‖ rest: 0 `Padded` (12018 B) sealed under `K_inv`; 1 `Inner` (6113 B) sealed under `K_id` into the honest `Outer`, sealed under `K_inv`; 2 the `Outer` head (3177 B) in front of the honest `inner_ct` | as `hx_accept_raw`; random cells never open under `K_inv`, so the structured modes are what reaches steps 1–3 of §6.6 |
+
+`hx_accept_*` and `inv_linkdata` (mode 1) run against one fixture (`common/hx_fixture.rs`), built deterministically with
+`FixedEntropy` over constant bytes: an inviter identity, a prekey store with one invitation (SPK 7, OPK 42), the
+invitee's checks, `Initiator::start`, and `K_inv`/`K_id` recomputed from the initiator's values. Every input starts
+from a copy of the store (`MemoryPrekeyStore::duplicate_kat`, feature `kat`) and gets exactly the randomness of the
+responder's DH step.
+
+Seeds (`xtask/src/fuzzseed.rs`, from the frozen `hx` suite): `inv_uri` — the four `uri` strings; `inv_linkdata` — the
+six `linkdata` plaintexts (mode 0) and seven blobs (mode 1); `hx_outer` — the ten `outer` values padded; `hx_inner` —
+the four `inner` values; `hx_cell_plaintext` — the three chunk plaintexts of each of the ten `outer`s; `hx_accept_raw`
+— every `fetched` list as raw cells and the honest group of `initiate`; `hx_accept_structured` — the padded `outer`
+(mode 0), the `inner` (mode 1) and the `outer` head (mode 2). The vector scenario's keys are not the fixture's, so
+these seeds exercise the layouts and reject paths; the accepting path starts from the tracked corpus of
+`hx_accept_raw` (`[3, 0, 1, 2]`: the honest group).

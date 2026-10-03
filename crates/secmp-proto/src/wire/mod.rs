@@ -95,6 +95,26 @@ impl Decode for Period {
     }
 }
 
+/// Test hook (M4-12, R-61): which of the hand-written wiping `Drop`s ran on this thread, in order. Only this
+/// crate's unit tests have it; a shipped build has no trace of it.
+#[cfg(test)]
+pub(crate) mod wipe_log {
+    use std::cell::RefCell;
+
+    std::thread_local! {
+        static LOG: RefCell<Vec<&'static str>> = const { RefCell::new(Vec::new()) };
+    }
+
+    pub(crate) fn note(ty: &'static str) {
+        LOG.with(|l| l.borrow_mut().push(ty));
+    }
+
+    /// The names logged since the last call, oldest first.
+    pub(crate) fn take() -> Vec<&'static str> {
+        LOG.with(|l| std::mem::take(&mut *l.borrow_mut()))
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod testutil {
     //! Shared helpers of the unit tests: deterministic keys and the round-trip checks.

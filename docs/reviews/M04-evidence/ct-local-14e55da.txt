@@ -1,0 +1,110 @@
+# ct local run on 14e55da (m04-hx, WEISUNG M4-4), FULL gate scale (SECMP_CT_SCALE unset by the step)
+$ python3 target/tmp/peakrss.py target/ct-local-14e55da.log -- cargo xtask step ct
+exit 0; wall 2679 s (the step: PASS (2677 s)); this Mac (M1 Pro, aarch64-apple-darwin); no other build or test
+ran during the measurement. The ct code is that of 8077590 (14e55da changes only xtask/src/expect.rs).
+
+run_verdict: PASS | run_reason: None
+clock: {"arch": "aarch64", "available_clocksource": "n/a", "calibration_ns": 200000041.0, "calibration_ticks": 4799999, "current_clocksource": "n/a", "lattice_probe": {"median_gap": 0, "regular": 0.0, "runs": 1}, "lattice_ticks": null, "median_delta_ns": 0.0, "median_delta_ticks": 0, "overhead_ns": 41.66668388889248, "overhead_ticks": 1, "q_eff_ns": 41.66668388889248, "q_eff_ticks": 1.0, "resolution_ns": 41.66668388889248, "resolution_ticks": 1, "tick_ns": 41.66668388889248, "timer": "cntvct_el0"}
+sensitivity_control: {"name": "min_leak_control", "class0": "32 byte steps (an early-exit comparison mismatching in byte 31)", "class1": "31 byte steps (mismatch in byte 30: exits one byte early)", "comparisons_per_call": 256, "k": 1, "samples": 1000000, "floor_ticks": 1.0, "floor_ns": 41.6667, "raw_delta_ticks": 2.8564, "raw_delta_ns": 119.017, "raw_delta_floor": 2.8564, "reached": true, "measurement": {"k": 1, "max_abs_t": 1711.007, "max_at": "p50", "t": {"raw": 226.969, "p50": 1711.007, "p75": 1711.007, "p90": 1622.961, "p95": 1435.279, "p99": 924.383}, "crops": {"raw": {"n0": 499400, "n1": 500600, "mean0": 95.698, "mean1": 92.841, "delta": 2.8564, "delta_q": 2.8564, "delta_floor": 2.8564, "sd": 6.293, "t": 226.969}, "p50": {"n0": 59387, "n1": 431163, "mean0": 93.971, "mean1": 92.134, "delta": 1.8375, "delta_q": 1.8375, "delta_floor": 1.8375, "sd": 0.508, "t": 1711.007}, "p75": {"n0": 59387, "n1": 431163, "mean0": 93.971, "mean1": 92.134, "delta": 1.8375, "delta_q": 1.8375, "delta_floor": 1.8375, "sd": 0.508, "t": 1711.007}, "p90": {"n0": 418201, "n1": 468771, "mean0": 94.924, "mean1": 92.37, "delta": 2.5538, "delta_q": 2.5538, "delta_floor": 2.5538, "sd": 0.766, "t": 1622.961}, "p95": {"n0": 433472, "n1": 473932, "mean0": 94.997, "mean1": 92.421, "delta": 2.5766, "delta_q": 2.5766, "delta_floor": 2.5766, "sd": 0.874, "t": 1435.279}, "p99": {"n0": 472248, "n1": 498080, "mean0": 95.268, "mean1": 92.698, "delta": 2.5703, "delta_q": 2.5703, "delta_floor": 2.5703, "sd": 1.383, "t": 924.383}}, "q_eff_ticks": 1.0, "q_eff_source": "clock", "floor_ticks": 1.0, "floor_ns": 41.667, "distinct": 270, "median_ticks": 95, "median_ns": 3958.3, "class_median_ticks": 92, "realised_quanta": 92.0, "shape": {"class0": {"n": 499400, "p1": 94, "p5": 94, "p10": 94, "p25": 95, "p50": 95, "p75": 95, "p90": 98, "p95": 101, "p99": 102}, "class1": {"n": 500600, "p1": 91, "p5": 92, "p10": 92, "p25": 92, "p50": 92, "p75": 93, "p90": 95, "p95": 98, "p99": 99}}}}
+
+## the five M4 targets
+tr_decrypt_reject_skipped: PASS | k=1 median 30083.3 ns | floor 41.667 ns (1.0 ticks) | first max|t| 1.002 (p99, Δ -0.0230 floors) | second max|t| 2.309 (raw, Δ +0.0985 floors) | A/A max|t| 2.11 | decisive crop None
+   class0: header under hk_1, n = 0 (trial 0; entry 0 of 9), body tag wrong in byte 0
+   class1: header under hk_1, n = 4 (trial 0; entry 4 of 9), body tag wrong in byte 0
+   site body MAC | precheck observed ['Err(Rejected), site body MAC', 'Err(Rejected), site body MAC'] twin None fixtures 5
+inv_fingerprint_compare: PASS | k=1 median 40041.7 ns | floor 41.667 ns (1.0 ticks) | first max|t| 2.396 (p75, Δ -0.0125 floors) | second max|t| 0.927 (p75, Δ -0.0049 floors) | A/A max|t| 1.955 | decisive crop None
+   class0: inviter_fp differs from the IKS fingerprint in byte 0
+   class1: inviter_fp differs from the IKS fingerprint in byte 31
+   site fingerprint | precheck observed ['Err(Rejected), site fingerprint', 'Err(Rejected), site fingerprint'] twin {'expected': 'Ok', 'observed': 'Ok'} fixtures 5
+x25519_zero_check: PASS | k=1 median 34041.7 ns | floor 41.667 ns (1.0 ticks) | first max|t| 2.146 (p90, Δ +0.0183 floors) | second max|t| 2.275 (p75, Δ -0.0098 floors) | A/A max|t| 2.28 | decisive crop None
+   class0: X25519 output 9 (non-zero in byte 0 only)
+   class1: X25519 output 49·2^248 (non-zero in byte 31 only)
+   site §3/§6.4 all-zero check of the output (passes: not a reject target) | precheck observed ["Ok, non-zero output bytes [0], the class's value", "Ok, non-zero output bytes [31], the class's value"] twin None fixtures 5
+hx_accept_reject_inner: SUB_FLOOR_SHIFT | k=1 median 178458.4 ns | floor 41.667 ns (1.0 ticks) | first max|t| 44.484 (p50, Δ +0.3543 floors) | second max|t| 40.102 (p50, Δ +0.3238 floors) | A/A max|t| 2.186 | decisive crop p50
+   class0: inner_ct sealed under a wrong key (wrong K_id: COM and tag fail)
+   class1: inner_ct under K_id, its tag's last byte flipped (COM ok, tag fails)
+   site inner open | precheck observed ['Err(Rejected), site inner open', 'Err(Rejected), site inner open'] twin {'expected': 'Ok', 'observed': 'Ok'} fixtures 5
+hx_accept_reject_first_msg: SUB_FLOOR_SHIFT | k=1 median 447208.5 ns | floor 41.667 ns (1.0 ticks) | first max|t| 6.317 (p50, Δ -0.5118 floors) | second max|t| 7.616 (p50, Δ -0.5982 floors) | A/A max|t| 2.248 | decisive crop p50
+   class0: first_msg body tag wrong in byte 0
+   class1: first_msg body tag wrong in byte 31
+   site first_msg decrypt | precheck observed ['Err(Rejected), site first_msg decrypt', 'Err(Rejected), site first_msg decrypt'] twin {'expected': 'Ok', 'observed': 'Ok'} fixtures 5
+
+## every other target and control
+control_variable_time_compare: PASS | k=27 median 172.8 ns | floor 41.667 ns (1.0 ticks) | first max|t| 105937.537 (p50, Δ -1128.7315 floors) | second max|t| None (None, Δ +0.0000 floors) | A/A max|t| 2.401 | decisive crop None
+   class0: tag differs in byte 0
+   class1: tag differs in byte 31
+   site None | precheck observed None twin None fixtures None
+tag_compare: PASS | k=1 median 5458.3 ns | floor 41.667 ns (1.0 ticks) | first max|t| 1.342 (raw, Δ +0.0244 floors) | second max|t| 1.57 (p99, Δ -0.0036 floors) | A/A max|t| 0.936 | decisive crop None
+   class0: tag differs in byte 0
+   class1: tag differs in byte 31
+   site None | precheck observed None twin None fixtures None
+msg_open_reject: PASS | k=2 median 2541.7 ns | floor 41.667 ns (1.0 ticks) | first max|t| 3.04 (p75, Δ +0.0032 floors) | second max|t| 0.94 (p99, Δ -0.0039 floors) | A/A max|t| 2.572 | decisive crop None
+   class0: tag wrong in its first byte
+   class1: tag wrong in its last byte
+   site None | precheck observed None twin None fixtures None
+caead_open_reject: PASS | k=1 median 7708.3 ns | floor 41.667 ns (1.0 ticks) | first max|t| 168.487 (p90, Δ -0.3642 floors) | second max|t| 2.092 (raw, Δ -0.0437 floors) | A/A max|t| 1.646 | decisive crop None
+   class0: wrong key (COM and tag fail)
+   class1: right key, tampered at byte 100 (COM ok, tag fails)
+   site None | precheck observed None twin None fixtures None
+sas: PASS | k=1 median 768500.3 ns | floor 41.667 ns (1.0 ticks) | first max|t| 0.649 (p75, Δ -0.4795 floors) | second max|t| 0.882 (p75, Δ -0.7947 floors) | A/A max|t| 2.139 | decisive crop None
+   class0: fixed fingerprint pair
+   class1: random fingerprint pairs
+   site None | precheck observed None twin None fixtures None
+caead_derive: PASS | k=17 median 277.0 ns | floor 41.667 ns (1.0 ticks) | first max|t| 1.647 (p99, Δ -0.0059 floors) | second max|t| 1.557 (p99, Δ +0.0072 floors) | A/A max|t| 1.837 | decisive crop None
+   class0: wrong key
+   class1: right key
+   site None | precheck observed None twin None fixtures None
+caead_aead_reject: PASS | k=2 median 3520.8 ns | floor 41.667 ns (1.0 ticks) | first max|t| 1.928 (p90, Δ -0.0050 floors) | second max|t| 1.566 (p99, Δ +0.0071 floors) | A/A max|t| 1.115 | decisive crop None
+   class0: K_enc of the wrong key, same tampered C
+   class1: K_enc of the right key, same tampered C
+   site None | precheck observed None twin None fixtures None
+caead_com_compare: PASS | k=1 median 5666.7 ns | floor 41.667 ns (1.0 ticks) | first max|t| 1.933 (p99, Δ +0.0063 floors) | second max|t| 1.021 (p50, Δ +0.0013 floors) | A/A max|t| 0.764 | decisive crop None
+   class0: COM mismatch (wrong key)
+   class1: COM match (right key)
+   site None | precheck observed None twin None fixtures None
+caead_open_reject_samekey: PASS | k=1 median 7708.3 ns | floor 41.667 ns (1.0 ticks) | first max|t| 4.374 (p90, Δ -0.0079 floors) | second max|t| 6.975 (p75, Δ -0.0090 floors) | A/A max|t| 2.117 | decisive crop None
+   class0: right key, tampered at byte 100
+   class1: right key, tampered at byte 300
+   site None | precheck observed None twin None fixtures None
+aa_prime_control: PASS | k=2 median 2437.5 ns | floor 41.667 ns (1.0 ticks) | first max|t| 1.531 (p90, Δ -0.0039 floors) | second max|t| 0.988 (p95, Δ -0.0028 floors) | A/A max|t| 2.528 | decisive crop None
+   class0: tag wrong in its last byte, copied from source allocation 0
+   class1: the same bytes, copied from source allocation 1
+   site None | precheck observed None twin None fixtures None
+tr_decrypt_reject_hdr_key: SUB_FLOOR_SHIFT | k=1 median 9958.3 ns | floor 41.667 ns (1.0 ticks) | first max|t| 53.228 (p90, Δ +0.1068 floors) | second max|t| 29.411 (p75, Δ +0.0421 floors) | A/A max|t| 2.647 | decisive crop p75
+   class0: header sealed under a wrong key
+   class1: header sealed under hk_r, its tag's last byte flipped
+   site header: no key opened | precheck observed ['Err(Rejected), site header: no key opened', 'Err(Rejected), site header: no key opened'] twin None fixtures 5
+tr_decrypt_reject_body_tag: PASS | k=1 median 17500.0 ns | floor 41.667 ns (1.0 ticks) | first max|t| 1.665 (p50, Δ -0.0035 floors) | second max|t| 1.382 (raw, Δ -0.0578 floors) | A/A max|t| 2.276 | decisive crop None
+   class0: body tag wrong in byte 0
+   class1: body tag wrong in byte 31
+   site body MAC | precheck observed ['Err(Rejected), site body MAC', 'Err(Rejected), site body MAC'] twin None fixtures 5
+tr_decrypt_reject_ct_pq: SUB_FLOOR_SHIFT | k=1 median 14833.3 ns | floor 41.667 ns (1.0 ticks) | first max|t| 32.815 (p75, Δ +0.0592 floors) | second max|t| 20.968 (p50, Δ +0.0456 floors) | A/A max|t| 0.514 | decisive crop p75
+   class0: ct_pq differs from last_ct_r in byte 0
+   class1: ct_pq differs from last_ct_r in byte 1087
+   site kem constancy | precheck observed ['Err(Rejected), site kem constancy', 'Err(Rejected), site kem constancy'] twin None fixtures 5
+same_content_control: SUB_FLOOR_SHIFT | k=1 median 17500.0 ns | floor 41.667 ns (1.0 ticks) | first max|t| 31.557 (p75, Δ +0.0789 floors) | second max|t| 29.837 (p50, Δ +0.0589 floors) | A/A max|t| 0.991 | decisive crop p75
+   class0: the class-1 cell of tr_decrypt_reject_body_tag (body tag wrong in byte 31)
+   class1: the same cell
+   site body MAC | precheck observed ['Err(Rejected), site body MAC', 'Err(Rejected), site body MAC'] twin None fixtures 5
+
+## the gate's lines (cargo xtask step ct)
+  ct control_variable_time_compare: PASS — k=27, calibration median 172.8 ns, 1000000 samples; first max |t| = 105937.54 (p50), batch median 51666.7 ns, q_eff 1.0 ticks (clock), realised 109.0 quanta; A/A max |t| = 2.40 (p50), batch median 4666.7 ns, q_eff 1.0 ticks (clock), realised 112.0 quanta (positive control, must be detected)
+  ct tag_compare: PASS — k=1, calibration median 5458.3 ns, 1000000 samples; first max |t| = 1.34 (raw), batch median 5500.0 ns, q_eff 1.0 ticks (clock), realised 132.0 quanta; second max |t| = 1.57 (p99), batch median 5458.3 ns, q_eff 1.0 ticks (clock), realised 131.0 quanta; A/A max |t| = 0.94 (raw), batch median 5500.0 ns, q_eff 1.0 ticks (clock), realised 132.0 quanta
+  ct msg_open_reject: PASS — k=2, calibration median 2541.7 ns, 1000000 samples; first max |t| = 3.04 (p75), batch median 4875.0 ns, q_eff 1.0 ticks (clock), realised 117.0 quanta; second max |t| = 0.94 (p99), batch median 4916.7 ns, q_eff 1.0 ticks (clock), realised 118.0 quanta; A/A max |t| = 2.57 (p99), batch median 4875.0 ns, q_eff 1.0 ticks (clock), realised 117.0 quanta
+  ct caead_open_reject: PASS — k=1, calibration median 7708.3 ns, 1000000 samples; first max |t| = 168.49 (p90), batch median 7708.3 ns, q_eff 1.0 ticks (clock), realised 185.0 quanta; second max |t| = 2.09 (raw), batch median 7708.3 ns, q_eff 1.0 ticks (clock), realised 185.0 quanta; A/A max |t| = 1.65 (p90), batch median 7666.7 ns, q_eff 1.0 ticks (clock), realised 184.0 quanta
+  ct sas: PASS — k=1, calibration median 768500.3 ns, 20000 samples; first max |t| = 0.65 (p75), batch median 768750.3 ns, q_eff 1.0 ticks (clock), realised 18449.0 quanta; second max |t| = 0.88 (p75), batch median 769458.7 ns, q_eff 1.0 ticks (clock), realised 18467.0 quanta; A/A max |t| = 2.14 (raw), batch median 771208.7 ns, q_eff 1.0 ticks (clock), realised 18507.0 quanta
+  ct caead_derive: PASS — k=17, calibration median 277.0 ns, 1000000 samples; first max |t| = 1.65 (p99), batch median 4708.3 ns, q_eff 1.0 ticks (clock), realised 113.0 quanta; second max |t| = 1.56 (p99), batch median 4750.0 ns, q_eff 1.0 ticks (clock), realised 114.0 quanta; A/A max |t| = 1.84 (p50), batch median 4708.3 ns, q_eff 1.0 ticks (clock), realised 113.0 quanta
+  ct caead_aead_reject: PASS — k=2, calibration median 3520.8 ns, 1000000 samples; first max |t| = 1.93 (p90), batch median 7041.7 ns, q_eff 1.0 ticks (clock), realised 169.0 quanta; second max |t| = 1.57 (p99), batch median 7000.0 ns, q_eff 1.0 ticks (clock), realised 168.0 quanta; A/A max |t| = 1.11 (p95), batch median 7000.0 ns, q_eff 1.0 ticks (clock), realised 168.0 quanta
+  ct caead_com_compare: PASS — k=1, calibration median 5666.7 ns, 1000000 samples; first max |t| = 1.93 (p99), batch median 5666.7 ns, q_eff 1.0 ticks (clock), realised 136.0 quanta; second max |t| = 1.02 (p50), batch median 5708.3 ns, q_eff 1.0 ticks (clock), realised 137.0 quanta; A/A max |t| = 0.76 (p95), batch median 5708.3 ns, q_eff 1.0 ticks (clock), realised 137.0 quanta
+  ct caead_open_reject_samekey: PASS — k=1, calibration median 7708.3 ns, 1000000 samples; first max |t| = 4.37 (p90), batch median 7708.3 ns, q_eff 1.0 ticks (clock), realised 185.0 quanta; second max |t| = 6.97 (p75), batch median 7708.3 ns, q_eff 1.0 ticks (clock), realised 185.0 quanta; A/A max |t| = 2.12 (p50), batch median 7708.3 ns, q_eff 1.0 ticks (clock), realised 184.0 quanta
+  ct aa_prime_control: PASS — k=2, calibration median 2437.5 ns, 1000000 samples; first max |t| = 1.53 (p90), batch median 4916.7 ns, q_eff 1.0 ticks (clock), realised 118.0 quanta; second max |t| = 0.99 (p95), batch median 4875.0 ns, q_eff 1.0 ticks (clock), realised 117.0 quanta; A/A max |t| = 2.53 (p99), batch median 4875.0 ns, q_eff 1.0 ticks (clock), realised 117.0 quanta (A/A′ placement control: a FAIL makes the run CONTROL_FAIL)
+  ct tr_decrypt_reject_hdr_key: SUB_FLOOR_SHIFT at p75 — k=1, calibration median 9958.3 ns, 1000000 samples — site header: no key opened; first max |t| = 53.23 (p90), batch median 9333.3 ns, q_eff 1.0 ticks (clock), realised 224.0 quanta; second max |t| = 29.41 (p75), batch median 9375.0 ns, q_eff 1.0 ticks (clock), realised 225.0 quanta; A/A max |t| = 2.65 (p50), batch median 9375.0 ns, q_eff 1.0 ticks (clock), realised 225.0 quanta
+  ct tr_decrypt_reject_body_tag: PASS — k=1, calibration median 17500.0 ns, 1000000 samples — site body MAC; first max |t| = 1.67 (p50), batch median 17541.7 ns, q_eff 1.0 ticks (clock), realised 421.0 quanta; second max |t| = 1.38 (raw), batch median 17541.7 ns, q_eff 1.0 ticks (clock), realised 421.0 quanta; A/A max |t| = 2.28 (raw), batch median 17500.0 ns, q_eff 1.0 ticks (clock), realised 420.0 quanta
+  ct tr_decrypt_reject_ct_pq: SUB_FLOOR_SHIFT at p75 — k=1, calibration median 14833.3 ns, 1000000 samples — site kem constancy; first max |t| = 32.81 (p75), batch median 14791.7 ns, q_eff 1.0 ticks (clock), realised 355.0 quanta; second max |t| = 20.97 (p50), batch median 14833.3 ns, q_eff 1.0 ticks (clock), realised 356.0 quanta; A/A max |t| = 0.51 (p75), batch median 14833.3 ns, q_eff 1.0 ticks (clock), realised 356.0 quanta
+  ct tr_decrypt_reject_skipped: PASS — k=1, calibration median 30083.3 ns, 1000000 samples — site body MAC; first max |t| = 1.00 (p99), batch median 30041.7 ns, q_eff 1.0 ticks (clock), realised 721.0 quanta; second max |t| = 2.31 (raw), batch median 30041.7 ns, q_eff 1.0 ticks (clock), realised 721.0 quanta; A/A max |t| = 2.11 (p99), batch median 30000.0 ns, q_eff 1.0 ticks (clock), realised 720.0 quanta
+  ct same_content_control: SUB_FLOOR_SHIFT at p75 — k=1, calibration median 17500.0 ns, 1000000 samples — site body MAC; first max |t| = 31.56 (p75), batch median 17541.7 ns, q_eff 1.0 ticks (clock), realised 421.0 quanta; second max |t| = 29.84 (p50), batch median 17541.7 ns, q_eff 1.0 ticks (clock), realised 421.0 quanta; A/A max |t| = 0.99 (p95), batch median 17541.7 ns, q_eff 1.0 ticks (clock), realised 421.0 quanta (same-content control: a FAIL makes the run CONTROL_FAIL)
+  ct inv_fingerprint_compare: PASS — k=1, calibration median 40041.7 ns, 1000000 samples — site fingerprint; first max |t| = 2.40 (p75), batch median 40041.7 ns, q_eff 1.0 ticks (clock), realised 961.0 quanta; second max |t| = 0.93 (p75), batch median 40041.7 ns, q_eff 1.0 ticks (clock), realised 961.0 quanta; A/A max |t| = 1.96 (p90), batch median 40000.0 ns, q_eff 1.0 ticks (clock), realised 960.0 quanta
+  ct x25519_zero_check: PASS — k=1, calibration median 34041.7 ns, 1000000 samples — site §3/§6.4 all-zero check of the output (passes: not a reject target); first max |t| = 2.15 (p90), batch median 34041.7 ns, q_eff 1.0 ticks (clock), realised 817.0 quanta; second max |t| = 2.27 (p75), batch median 34083.3 ns, q_eff 1.0 ticks (clock), realised 818.0 quanta; A/A max |t| = 2.28 (p95), batch median 34083.3 ns, q_eff 1.0 ticks (clock), realised 818.0 quanta
+  ct hx_accept_reject_inner: SUB_FLOOR_SHIFT at p50 — k=1, calibration median 178458.4 ns, 1000000 samples — site inner open; first max |t| = 44.48 (p50), batch median 178541.7 ns, q_eff 1.0 ticks (clock), realised 4285.0 quanta; second max |t| = 40.10 (p50), batch median 177791.7 ns, q_eff 1.0 ticks (clock), realised 4267.0 quanta; A/A max |t| = 2.19 (p90), batch median 177833.4 ns, q_eff 1.0 ticks (clock), realised 4268.0 quanta
+  ct hx_accept_reject_first_msg: SUB_FLOOR_SHIFT at p50 — k=1, calibration median 447208.5 ns, 1000000 samples — site first_msg decrypt; first max |t| = 6.32 (p50), batch median 447125.2 ns, q_eff 1.0 ticks (clock), realised 10731.0 quanta; second max |t| = 7.62 (p50), batch median 446833.5 ns, q_eff 1.0 ticks (clock), realised 10724.0 quanta; A/A max |t| = 2.25 (p50), batch median 446958.5 ns, q_eff 1.0 ticks (clock), realised 10727.0 quanta
+  ct min_leak_control: REACHED — raw Δ 119.02 ns, floor 41.67 ns (2.86 floors), k=1, 1000000 samples; max |t| = 1711.01 (p50), batch median 3958.3 ns, q_eff 1.0 ticks (clock), realised 92.0 quanta (sensitivity control, must reach the floor)

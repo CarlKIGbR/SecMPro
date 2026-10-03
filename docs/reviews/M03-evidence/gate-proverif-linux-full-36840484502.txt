@@ -1,0 +1,10 @@
+Run 36840484502 (pull_request, m03-tr, linux-full job 110298554207), head a47cc21df822c23fcfba0855b37c55bb6ca10c9c.
+Extracted with: gh api --allow-escape-sequences repos/CarlKIGbR/SecMPro/actions/jobs/110298554207/logs ;
+timestamps and ANSI codes removed; step `proverif` of `cargo xtask ci-full` only.
+
+=== [10] proverif ===
+$ proverif -help
+$ proverif /home/runner/work/SecMPro/SecMPro/xtask/fixtures/proverif/selftest.pv
+$ proverif /home/runner/work/SecMPro/SecMPro/formal/tr.pv
+  formal/tr.pv: 39 RESULT lines as expected — T1 true ×6, T2 true ×2, T3 true ×4, T4 true ×2, T5 true ×2, T6 true ×2, T7 false ×2, an attack as expected, T8 true ×12, T9 true ×4, T10 false ×1, an attack as expected, T11 true ×1, T12 false ×1, informative (100 s)
+

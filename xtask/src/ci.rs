@@ -3,8 +3,8 @@
 //!
 //! Every step ends as PASS, FAIL, SKIP (not applicable on this host), DELEGATED (explicitly handed to another
 //! CI job with `--delegated <id>`) or STUB (a documented M0 stub). All steps run even after a failure so the
-//! summary is complete. With `--strict` (always used in CI) a SKIP is a failure, so nothing can be skipped
-//! silently.
+//! summary is complete. With `--strict` (always used in CI) a SKIP is a failure, and every delegated step runs in a
+//! job the policy step pins (`expect::DELEGATED_TO`, M4 review C-5), so nothing can be skipped silently.
 
 use std::path::PathBuf;
 use std::time::Instant;
@@ -46,6 +46,8 @@ const FAST: &[Step] = &[
         id: "clippy",
         run: gates::clippy,
     },
+    // an accident guard against careless edits of the workflows and lint relaxations, not a tamper-proof control; the
+    // real control is review (M3 review F23, R-08)
     Step {
         num: "2",
         id: "policy",
@@ -173,7 +175,7 @@ const FULL_EXTRA: &[Step] = &[
 ];
 
 /// Steps outside `ci-full`, run only by `cargo xtask step <id>` (their own workflows: `miri-full.yml`,
-/// `fuzz-nightly.yml`).
+/// `fuzz-nightly.yml`; the `mutants` job of `ci.yml`).
 const ON_DEMAND: &[Step] = &[
     Step {
         num: "9",
@@ -181,9 +183,35 @@ const ON_DEMAND: &[Step] = &[
         run: gates::miri_full,
     },
     Step {
+        num: "9",
+        id: "miri-full-secmp-sys-mem",
+        run: |c| gates::miri_full_package(c, "secmp-sys-mem"),
+    },
+    Step {
+        num: "9",
+        id: "miri-full-secmp-sys-desktop",
+        run: |c| gates::miri_full_package(c, "secmp-sys-desktop"),
+    },
+    Step {
+        num: "9",
+        id: "miri-full-secmp-crypto",
+        run: |c| gates::miri_full_package(c, "secmp-crypto"),
+    },
+    Step {
+        num: "9",
+        id: "miri-full-secmp-proto",
+        run: |c| gates::miri_full_package(c, "secmp-proto"),
+    },
+    Step {
         num: "6",
         id: "fuzz-nightly",
         run: gates::fuzz_nightly,
+    },
+    // ADR-047 Amendment 1 (2): the verdict over the shards of `step mutants --shard K/N` (the `mutants` job of ci.yml)
+    Step {
+        num: "8",
+        id: "mutants-merge",
+        run: gates::mutants_merge,
     },
 ];
 
@@ -260,13 +288,10 @@ fn execute(steps: &[&Step], opts: &Options, label: &str) -> Result<()> {
             failed = failed.saturating_add(1);
             warn(&format!("FAIL [{}] {}: {detail}", step.num, step.id));
         }
-        rows.push((
-            step.num,
-            step.id,
-            status,
-            started.elapsed().as_secs(),
-            detail,
-        ));
+        let secs = started.elapsed().as_secs();
+        // ADR-045: the verdict lines as a table in the job summary (stdout locally); informational only
+        crate::summary::step_summary(&ctx.root, step.id, status, secs, &detail);
+        rows.push((step.num, step.id, status, secs, detail));
     }
     say(&format!(
         "\n=== {label} summary (host {}, strict: {}) ===",
@@ -336,6 +361,22 @@ mod tests {
         ids.sort_unstable();
         ids.dedup();
         assert_eq!(ids.len(), n);
+    }
+
+    /// M3 review F22 (Q-4): one on-demand `miri-full-<package>` step per package of `MIRI_PACKAGES`.
+    #[test]
+    fn miri_full_has_one_step_per_package() {
+        for p in crate::expect::MIRI_PACKAGES {
+            let id = format!("miri-full-{p}");
+            assert_eq!(ON_DEMAND.iter().filter(|s| s.id == id).count(), 1, "{id}");
+        }
+        assert_eq!(
+            ON_DEMAND
+                .iter()
+                .filter(|s| s.id.starts_with("miri-full-"))
+                .count(),
+            crate::expect::MIRI_PACKAGES.len()
+        );
     }
 
     #[test]

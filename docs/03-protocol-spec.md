@@ -1,8 +1,8 @@
 # SecMP/1 — Protocol Specification (normative)
 
-Status: **v1 design freeze candidate, revision 2.3** (2026-09-29; rev 2.1 of 2026-09-25 after adversarial review and verification pass, see `docs/reviews/plan-review-2026-09-25.md`; rev 2.2 of 2026-09-28 answers the reference implementation's spec questions, see `docs/reviews/ref-spec-questions-M1.md` and ADR-035; rev 2.3 clarifies Appendix D for the M2 encodings — decoder obligations, the `ver` rule, `RelayRef` validity, Handshake `caps`, list minimums, Fragment rules and the §7.6 body layouts — see `docs/reviews/ref-spec-questions-M2.md` and ADR-039). Changes to this document require an ADR (see `08-decisions.md`) and a reviewer sign-off.
+Status: **v1 design freeze candidate, revision 2.5** (2026-10-02; rev 2.1 of 2026-09-25 after adversarial review and verification pass, see `docs/reviews/plan-review-2026-09-25.md`; rev 2.2 of 2026-09-28 answers the reference implementation's spec questions, see `docs/reviews/ref-spec-questions-M1.md` and ADR-035; rev 2.3 clarifies Appendix D for the M2 encodings — decoder obligations, the `ver` rule, `RelayRef` validity, Handshake `caps`, list minimums, Fragment rules and the §7.6 body layouts — see `docs/reviews/ref-spec-questions-M2.md` and ADR-039; rev 2.4 applies ADR-043 (a)–(k), the clarifications of the M3 and M4 reviews; rev 2.5 applies ADR-044 (a)–(f), the clarifications of the M4 planning). Changes to this document require an ADR (see `08-decisions.md`) and a reviewer sign-off.
 
-Changelog: **rev 2.3** (2026-09-29, ADR-039) — §4.1 `ver` rule reworded and decoder obligations added; §5.3 `onion` validity (rend-spec-v3); §7.6 `caps`, list counts, Fragment rules, KeyChange never unfragmented, `payload`/`arg` opaque at the encoding layer; D.3 `RelayRef.direct` host and port; D.5 `caps (0)`, `count (1..=255)`, Fragment rules and the Batch, RouteUpdate, reassembled-Fragment and Dummy layouts. No byte layout changed. **rev 2.2** (2026-09-28, ADR-035) — label renames, `MFETCH`, answers SQ-01 … SQ-11. **rev 2.1** (2026-09-25) — after the adversarial plan review.
+Changelog: **rev 2.5** (2026-10-02): ADR-044 (a)–(f). **rev 2.4** (2026-10-02): ADR-043 (a)–(k). **rev 2.3** (2026-09-29, ADR-039) — §4.1 `ver` rule reworded and decoder obligations added; §5.3 `onion` validity (rend-spec-v3); §7.6 `caps`, list counts, Fragment rules, KeyChange never unfragmented, `payload`/`arg` opaque at the encoding layer; D.3 `RelayRef.direct` host and port; D.5 `caps (0)`, `count (1..=255)`, Fragment rules and the Batch, RouteUpdate, reassembled-Fragment and Dummy layouts. No byte layout changed. **rev 2.2** (2026-09-28, ADR-035) — label renames, `MFETCH`, answers SQ-01 … SQ-11. **rev 2.1** (2026-09-25) — after the adversarial plan review.
 Audience: the implementer (Claude Code / Opus), the reviewer, and future auditors.
 
 The words MUST / MUST NOT / SHOULD / MAY are used as in RFC 2119.
@@ -101,7 +101,7 @@ Decaps(sk_peer = (sk_dh, dk_kem), ct = (pk_e, ct_kem)):
     ss     = SHA3-256( ... as above ... )
 ```
 
-The combiner binds the KEM ciphertext and encapsulation key, closing the ML-KEM "not MAL-BIND-K-CT with expanded keys" issue and the PQXDH re-encapsulation attack class. HybridKEM-1024 is used in the link handshake's static stage (§8.3); HybridKEM-768 in its ephemeral stage. The handshake (§6) and the ratchet (§7) mix raw X25519 and ML-KEM outputs directly into HKDF; there, the public keys and ciphertexts are bound through the transcript (§6.4) and through the header-in-AD rule (§7.5), which provides the same binding.
+The combiner binds the KEM ciphertext and encapsulation key, closing the ML-KEM "not MAL-BIND-K-CT with expanded keys" issue and the PQXDH re-encapsulation attack class. HybridKEM-1024 is used in the link handshake's static stage (§8.3); HybridKEM-768 in its ephemeral stage. The handshake (§6) and the ratchet (§7) mix raw X25519 and ML-KEM outputs directly into HKDF; there, the public keys and ciphertexts are bound through the transcript (§6.4) and through the header-in-AD rule (§7.3), which provides the same binding.
 
 ### 3.3 `MsgEncrypt` (E2E bodies)
 
@@ -166,7 +166,7 @@ HybridVerify(pk, label, M, sig): both components MUST verify.
 | `F` (`FETCH_BATCH`) | 4 | Cells per `FETCH` response. |
 | `F_M` (`FETCH_MULTI_BATCH`) | 8 | Cells per `FETCH_MULTI` response. |
 | `QUEUE_CAPACITY` | 128 cells | FIFO eviction with sender notification (§9.5). |
-| `SKIP_WINDOW` | 256 | Skipped message keys retained per receiving chain; total bound 2 × `SKIP_WINDOW` across chains (§7.4). |
+| `SKIP_WINDOW` | 256 | Skipped message keys retained per skip call; total bound 2 × `SKIP_WINDOW` across chains (§7.4). |
 | `MAX_FF` | 2^20 | Maximum chain fast-forward per received message (§7.4). |
 | `CELL_TTL` | 7 days | Relay expiry (hour buckets). |
 | `QUEUE_IDLE_TTL` | 30 days | |
@@ -210,7 +210,7 @@ URI: `secmp://i/` + base64url (no padding) of the encoding (≈ 322 chars). QR: 
 
 The inviter persists, per issued invitation: `ld_id`, `link_key`, the link-data owner key, the invitation queue's recipient key, `spk_id`/`opk_id`, and `expires`, until the invitation is consumed or expired.
 
-Invitations are **secrets**: anyone holding an unconsumed one can become the invitee. One-time link data is consumed on first `LINK_GET` (§9.4). The inviter's client polls the invitation queue at the queue's period like any other recv-queue; if the link data is reported consumed (via the owner status query, §9.4) and no valid handshake arrives before `expires`, the UI shows "invitation used by someone else".
+Invitations are **secrets**: anyone holding an unconsumed one can become the invitee. One-time link data is consumed on first `LINK_GET` (§9.4). Expiry at the responder is enforced by this record lifecycle, not by §6.6 (rev 2.5). The inviter's client polls the invitation queue at the queue's period like any other recv-queue; if the link data is reported consumed (via the owner status query, §9.4) and no valid handshake arrives before `expires`, the UI shows "invitation used by someone else".
 
 ### 5.3 `RelayRef`
 
@@ -255,6 +255,8 @@ All blobs are 12360 B; `LINK_PUT`/`LINKR` carry them in three frames (App. D).
 4. Verify `bundle.sig` under `inviter_iks.IK_sig`; reject expired bundles; v1 REQUIRES `opk` present.
 5. Take a reply queue from the local queue pool (§10.6) or create one on the invitee's relay.
 6. Run SecMP-HX as initiator (§6.4–6.5) and send the three handshake cells over the invitation queue.
+
+The invitee checks exactly steps 1, 3 and 4; the inviter-side bounds of §5.2 and §6.3 are not invitee checks (rev 2.4).
 
 ---
 
@@ -320,7 +322,7 @@ SK  = HKDF-SHA-256(salt = 0^32, IKM, info = "SecMP-HX/1 sk" ‖ transcript, L = 
 K_id = HKDF-SHA-256(salt = ld_id, IKM = link_key ‖ DH3 ‖ ss_spk ‖ DH4 ‖ ss_opk, info = "SecMP-HX/1 idkey", L = 32)
 ```
 
-`SK` initialises SecMP-TR (§7.2). `transcript` is stored by both sides as the session binding `SB`. `K_id` protects the initiator's identity inside the handshake envelope (§6.5); the responder can compute it before knowing `IKSPublic_I`, and it is forward-secret once `OPK` is deleted and `EK_I` discarded.
+`SK` initialises SecMP-TR (§7.2). `transcript` is stored by both sides as the session binding `SB`. `K_id` protects the initiator's identity inside the handshake envelope (§6.5); the responder can compute it before knowing `IKSPublic_I`, and it is forward-secret once `OPK` is deleted and `EK_I` discarded. The initiator MUST zeroize `EK_I`'s secret immediately after the three cells are sealed and the initiator RatchetState is initialised; `Initiator::start` returns no EK secret; the persisted initiator state after `start` contains no `EK_I` secret (rev 2.5).
 
 ### 6.5 Handshake envelope (initiator → responder, three cells on the invitation queue)
 
@@ -337,17 +339,19 @@ cell_i (i = 0,1,2) = N_i (24, random) ‖ CAEAD.Seal(K_inv, N_i, AD = "SecMP-HX/
                    = 24 + 32 (COM) + (16 + 1 + 1 + 4006) + 16 (tag) = 4096 B
 ```
 
-Rules: the initiator generates all three cells once, persists them, and re-sends them **byte-identical** on retry (never re-seals). It sends them at `inv_period_s` like any other cells (§10). **Until the initiator has decrypted a first message from R, every other cell it sends on the invitation queue is a dummy**; real messages stay in the outbox (a real cell sent before the handshake cells would be acked and discarded by R without the sender learning it). The responder trial-opens every cell fetched from the invitation queue with `K_inv`; cells that fail to open are ignored (they may be garbage from the relay or from an invitation thief); chunks are grouped by `init_id`, and the first `init_id` for which all three chunks open is processed. `N_i` random ⇒ no nonce reuse; `init_id`/`i`/`total` inside the ciphertext ⇒ the relay sees three uniform cells.
+Rules: the initiator generates all three cells once, persists them, and re-sends them **byte-identical** on retry (never re-seals). It sends them at `inv_period_s` like any other cells (§10). **Until the initiator has decrypted a first message from R, every other cell it sends on the invitation queue is a dummy**; real messages stay in the outbox (a real cell sent before the handshake cells would be acked and discarded by R without the sender learning it). The responder trial-opens every cell fetched from the invitation queue with `K_inv`; cells that fail to open are ignored (they may be garbage from the relay or from an invitation thief); chunks are grouped by `init_id`, and the first `init_id` for which all three chunks open is processed. A duplicate (`init_id`, `i`) with identical bytes is ignored; with differing bytes the later one is discarded (first-seen wins); after a rejected complete group that group is discarded, the OPK is kept and later groups with other `init_id`s are processed; at most 8 partial groups are stored, the oldest evicted (rev 2.5). The `first_msg` header MUST carry `n = 0` and `pn = 0`; R rejects otherwise (uniform error, OPK kept); `seq`/`ts` follow §7.6 without further constraint; the Handshake content MUST contain at least one route of a known kind, else R rejects (uniform error, OPK kept) (rev 2.5). `N_i` random ⇒ no nonce reuse; `init_id`/`i`/`total` inside the ciphertext ⇒ the relay sees three uniform cells.
 
 `reply_route` (how R reaches I) lives inside `first_msg`'s Handshake content and is therefore bound to `SK`.
 
 ### 6.6 Responder processing and authentication semantics
 
 1. Open outer chunks with `K_inv`; parse `Outer`; `spk_id`/`opk_id` MUST be the ids recorded for this invitation's bundle; an unknown or already used `opk_id` ⇒ reject.
-2. Compute `DH3`, `DH4`, `ss_spk`, `ss_opk` → `K_id`; open `inner_ct` → `IKSPublic_I` (well-formedness: decodable, `ik_dh` not low-order) and `first_msg`.
-3. Compute `DH1`, `DH2`, `transcript`, `SK`; initialise TR as responder (§7.2); decrypt `first_msg`. On any failure: discard everything, keep the OPK, log nothing identifying.
+2. Compute `DH3`, `DH4`, `ss_spk`, `ss_opk` → `K_id`; open `inner_ct` → `IKSPublic_I` (well-formedness: decodable, `ik_dh` not low-order) and `first_msg`; R MUST reject an envelope whose `IKSPublic_I` equals `IKSPublic_R` (reflection), uniform error, OPK kept; an IKS equal to an existing contact's is client-core policy, not a handshake rejection (rev 2.5).
+3. Compute `DH1`, `DH2`, `transcript`, `SK`; initialise TR as responder (§7.2); decrypt `first_msg`, which MUST decrypt to a Content of type 0x01 Handshake with `caps = 0`; anything else rejects the envelope. On any failure: discard everything, keep the OPK, log nothing identifying.
 4. On success: delete the OPK; store the contact as **unverified** with the routes from the Handshake content; start sending to I's reply route; the first reply carries a `RouteUpdate` with a pooled queue replacing the invitation queue; **retire the invitation queue per §10.6 rules 4–5** (keep fetching it and processing its cells as TR cells of this session for U[1 h, 24 h], then `QUEUE_DEL` on a one-shot link).
 5. Display the safety number (§6.7); the contact becomes *verified* only after user confirmation.
+
+Expiry (rev 2.5): §6.6 takes no time; expiry is enforced by the invitation-record lifecycle (§5.2): the client MUST NOT call `accept` for an expired record and retires its queue; `accept` has no clock parameter.
 
 Authentication: R is authenticated to I by `DH2`/`DH3` and by the bundle signature under `IK_sig_R`, pinned via `inviter_fp`. I is authenticated to R by `DH1`. PQ confidentiality comes from `ss_spk`/`ss_opk`. PQ authentication is not provided (industry-standard choice; `01-threat-model.md` §3.8). Deniability: no party signs a message; the envelope contains no signature by I.
 
@@ -433,13 +437,13 @@ Decrypt(state, cell):
     // 1. skipped keys: try every distinct hk in `skipped` (≤ 3 in practice), then look up (hk, header.n)
     for hk in distinct_header_keys(skipped):
         if header = Open(hk, hdr_nonce, hdr_ct): if mk = skipped.remove((hk, header.n)): return MsgDecrypt(mk, AD = ... ‖ hdr_nonce ‖ hdr_ct, body); else break
-    // Open() with an absent (None) key fails.
+    // Open() with an absent (None) key fails. Open includes decoding the header; a header that opens but does not decode rejects the cell — no further key is tried.
     // 2. current / next header key
     if header = Open(hk_r, ...):              step = false
     elif header = Open(nhk_r, ...):           step = true
     else: reject (uniform error)
     if step:
-        if header.dh_pk == dh_r: reject           ; a step must carry a new ratchet key
+        if header.dh_pk == dh_r: reject           ; a step must carry a new ratchet key; `dh_pk == dh_r` is byte equality of the encoded 32-byte key
         skip_message_keys(header.pn)               ; on the *old* receiving chain, bounded per below
         DHRatchet(state, header)
     elif header.ek_pq != kem_r or header.ct_pq != last_ct_r: reject   ; KEM material must be constant within a chain
@@ -470,7 +474,7 @@ skip_message_keys(until):
     evict earliest-inserted entries so |skipped| ≤ 2 × SKIP_WINDOW (total across chains)
 ```
 
-Notes. (a) Because constant-rate dummies advance chains by ~8 640 messages/day per queue, a returning recipient may face gaps far beyond a classic `MAX_SKIP`; fast-forwarding costs 2 HMACs per position and both `pn` and `n` may skip up to `MAX_FF` in one message (≤ 2^22 HMACs, a few seconds worst case); keys are stored only for positions that can still be delivered. `MAX_FF` at `P = 10 s` corresponds to ≈ 121 days of one-sided absence; beyond that the session must be re-invited (§7.8). (b) On a step message a wrong `ct_pq` makes the MAC fail (the message key depends on it); on a non-step message the explicit constancy check rejects it; all authentication failures are one uniform error. (c) State mutations are applied only after the body MAC verifies (transactional decrypt). (d) Every message carries its chain's KEM material; a recipient that missed the first message of a chain performs the step on whichever message arrives first.
+Notes. (a) Because constant-rate dummies advance chains by ~8 640 messages/day per queue, a returning recipient may face gaps far beyond a classic `MAX_SKIP`; fast-forwarding costs 2 HMACs per position and both `pn` and `n` may skip up to `MAX_FF` in one message (≤ 2^22 HMACs, a few seconds worst case); keys are stored only for positions that can still be delivered. `MAX_FF` at `P = 10 s` corresponds to ≈ 121 days of one-sided absence; beyond that the session must be re-invited (§7.8). (b) On a step message a wrong `ct_pq` makes the MAC fail (the message key depends on it); on a non-step message of the current chain the explicit constancy check rejects it — constancy is checked on the chain and step paths; a message accepted under a skipped key derives its message key before the header is read and performs no constancy check; all authentication failures are one uniform error. (c) State mutations are applied only after the body MAC verifies (transactional decrypt). (d) Every message carries its chain's KEM material; a recipient that missed the first message of a chain performs the step on whichever message arrives first.
 
 ### 7.5 Message and cell format
 
@@ -491,10 +495,10 @@ type: 0x00 Dummy · 0x01 Handshake · 0x02 Batch · 0x03 Fragment · 0x04 RouteU
 ```
 
 - `seq` is a per-session application sequence (dedup/ordering, gaps ⇒ "messages may be missing"); `ts` is the sender's clock. Both exist only inside E2E.
-- **Dummy**: empty body; discarded silently after decryption.
+- **Dummy**: empty body; discarded silently after decryption; it carries `seq = 0` and `ts = 0`.
 - **Handshake** (first message only): `Profile ‖ caps: u32 (= 0) ‖ routes: u8 count (1..=255) ‖ RouteDescriptor[]` — the initiator's reply route(s). `caps` MUST be 0 in v1; any other value rejects (rev 2.3).
 - **Batch**: `count: u8 (1..=255) ‖ AppMessage[]`.
-- **Fragment**: `msg_id [16] ‖ idx: u16 ‖ total: u16 (≤ 64) ‖ chunk`; reassembled bytes are `inner_type: u8 ‖ inner_body` and are processed as a Content of that type (so large `KeyChange`/`RouteUpdate`/`Batch` contents are fragmented like anything else). `idx` counts from 0 and `idx < total`; `2 ≤ total ≤ 64` (`total = 1` would be a second encoding of an unfragmented Content, §4.1); `chunk` is at least 1 byte; `inner_type ∈ {0x02, 0x04, 0x05, 0x06, 0x07}` (0x00, 0x01 and 0x03 reject). Chunk sizing and consistency across the fragments of one `msg_id` are reassembly rules, not encoding rules (rev 2.3).
+- **Fragment**: `msg_id [16] ‖ idx: u16 ‖ total: u16 (≤ 64) ‖ chunk`; reassembled bytes are `inner_type: u8 ‖ inner_body` and are processed as a Content of that type (so large `KeyChange`/`RouteUpdate`/`Batch` contents are fragmented like anything else). `idx` counts from 0 and `idx < total`; `2 ≤ total ≤ 64` (`total = 1` would be a second encoding of an unfragmented Content, §4.1); `chunk` is at least 1 byte; `inner_type ∈ {0x02, 0x04, 0x05, 0x06, 0x07}` (0x00, 0x01 and 0x03 reject). Chunk sizing and consistency across the fragments of one `msg_id` are reassembly rules, not encoding rules (rev 2.3). Chunk shape (rev 2.4): chunks are maximal (1669 B) with the remainder last, `total = ⌈len/1669⌉ ≥ 2` for the `len` reassembled bytes; any other chunk shape rejects (enforced from M4).
 - **RouteUpdate**: `count: u8 (1..=255) ‖ RouteDescriptor[]` replacing the routes by which the peer reaches us.
 - **KeyChange**: `new IKSPublic ‖ HybridSign(old IK_sig, "SecMP-TR/1 keychange", fingerprint(new))` (5390 B ⇒ always fragmented; an unfragmented Content of type 0x05 rejects).
 - **Receipt**: `kind: u8 (1 = delivered, 2 = read) ‖ count: u8 (1..=255) ‖ msg_id[16]×count`.
@@ -637,7 +641,7 @@ kind 0x02 OnionEndpoint { onion [35], client_auth [32], cap [32] }              
 kind 0x03 Mailbox       { relay: RelayRef, sid, send_seed, period_s }                              ; v1.1
 ```
 
-`period_s` is the send period the recipient asks the sender to use for this queue (§10.2). v1 clients MUST ignore unknown kinds.
+`period_s` is the send period the recipient asks the sender to use for this queue (§10.2). v1 clients MUST ignore unknown kinds. The Handshake content of a `first_msg` MUST contain at least one route of a known kind (§6.5, rev 2.5).
 
 ---
 
@@ -696,7 +700,7 @@ Constant rate hides *what* and *how much*; the following rules blur *when* links
 
 | Layer | Property | Against |
 |---|---|---|
-| HX | SK secrecy incl. forward secrecy (OPK, EK) and PQ confidentiality; mutual classical authentication (injective agreement on `transcript`); identity confidentiality of I against the relay and against a later invitation leak (`K_id`); transcript binding; offline deniability | Network attacker, relay, HNDL quantum |
+| HX | SK secrecy incl. forward secrecy (OPK, EK) and PQ confidentiality; mutual classical authentication (I→R: injective agreement on `transcript` (H5); R→I: implicit through DH2/DH3 and the bundle signature, plus key confirmation on the first decrypted reply (H6b)); identity confidentiality of I against the relay and against a later invitation leak (`K_id`); transcript binding; offline deniability | Network attacker, relay, HNDL quantum |
 | TR | Body confidentiality/integrity with key commitment; header confidentiality (not commitment); forward secrecy per message; post-compromise security after one hybrid step (classical and PQ); replay/reorder resistance; robustness to loss of any prefix of a chain | Network attacker, relay, HNDL |
 | LINK | Relay authentication; PQ confidentiality/integrity of commands; forward secrecy; client anonymity; replay resistance | Network attacker, Tor relays, HNDL |
 | Q | Capability-only access; unlinkability of `rid`/`sid`; deterministic re-creation; indistinguishability of real vs dummy cells; detectability of per-user access keys (`akc`) | Relay operator |
@@ -760,6 +764,8 @@ Arti 2.6.x (`arti-client` 0.46.x, features `onion-service-client`, `rustls`; **n
 "SecMP-STORE/1 outbox"  "SecMP-STORE/1 messages"  "SecMP-STORE/1 invitations"  "SecMP-STORE/1 settings"
 "SecMP-vectors/1"        (test-vector seed derivation only, vectors/SCHEMA.md)
 ```
+
+Test-only labels (such as "SecMP-TR/1 state-digest", vectors/SCHEMA-4.9-tr.md) are vector constructs, not wire labels, and are not part of this set (rev 2.4).
 
 Rules: labels are ASCII, used as raw bytes with no length prefix or terminator, and **the set is prefix-free** — no label is a prefix of another (rev 2.2 renamed `"SecMP-INV/1"` → `"SecMP-INV/1 blob"`, `"SecMP-HX/1 init"` → `"SecMP-HX/1 initcell"`, and gave `FETCH_MULTI` the label `MFETCH`; ADR-035). Both implementations carry a unit test that re-reads this list and checks prefix-freeness. `HybridSign` accepts only `"SecMP-HX/1 bundle"` and `"SecMP-TR/1 keychange"`. Any new label requires a spec change and an ADR.
 

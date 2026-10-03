@@ -1,0 +1,34 @@
+shard 0/8: 162 mutants tested in 19m: 1 missed, 115 caught, 46 unviable
+  missed.txt (1 lines):
+    crates/secmp-proto/src/inv.rs:202:34: replace | with ^ in base64url_decode
+  xtask-shard.json: shard 0/8 verdict PASS
+shard 1/8: 162 mutants tested in 22m: 102 caught, 60 unviable
+  missed.txt (0 lines):
+  xtask-shard.json: shard 1/8 verdict PASS
+shard 2/8: 162 mutants tested in 16m: 113 caught, 49 unviable
+  missed.txt (0 lines):
+  xtask-shard.json: shard 2/8 verdict PASS
+shard 3/8: 162 mutants tested in 28m: 1 missed, 110 caught, 51 unviable
+  missed.txt (1 lines):
+    crates/secmp-proto/src/inv.rs:163:44: replace | with ^ in base64url_encode
+  xtask-shard.json: shard 3/8 verdict PASS
+shard 4/8: 162 mutants tested in 23m: 107 caught, 55 unviable
+  missed.txt (0 lines):
+  xtask-shard.json: shard 4/8 verdict PASS
+shard 5/8: 162 mutants tested in 19m: 2 missed, 117 caught, 43 unviable
+  missed.txt (2 lines):
+    crates/secmp-proto/src/inv.rs:163:32: replace | with ^ in base64url_encode
+    crates/secmp-proto/src/wire/inv.rs:327:9: replace <impl PartialEq for Profile>::eq -> bool with true
+  xtask-shard.json: shard 5/8 verdict FAIL
+shard 6/8: 161 mutants tested in 26m: 1 missed, 110 caught, 50 unviable
+  missed.txt (1 lines):
+    crates/secmp-crypto/src/secret.rs:59:9: replace <impl Drop for SecretBytes<N>>::drop with ()
+  xtask-shard.json: shard 6/8 verdict PASS
+shard 7/8: 161 mutants tested in 32m: 1 missed, 121 caught, 39 unviable
+  missed.txt (1 lines):
+    crates/secmp-proto/src/wire/inv.rs:327:35: replace && with || in <impl PartialEq for Profile>::eq
+  xtask-shard.json: shard 7/8 verdict FAIL
+
+per package over the 8 shards (outcomes.json):
+  secmp-crypto: total 268, {'CaughtMutant': 168, 'MissedMutant': 1, 'Unviable': 99}, caught 62.7 %, unviable 36.9 %
+  secmp-proto: total 1026, {'CaughtMutant': 727, 'MissedMutant': 5, 'Unviable': 294}, caught 70.9 %, unviable 28.7 %

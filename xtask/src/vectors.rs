@@ -3,7 +3,8 @@
 //!
 //! 1. The Rust generators write `vectors/rust/<suite>.json` (gitignored): the `secmp-crypto` example `gen-vectors`
 //!    (feature `kat`) the M1 suites, the `secmp-proto` example `gen-encodings` the positive rows of `encodings`, the
-//!    `secmp-proto` example `gen-tr` (feature `kat`) the complete `tr` suite (M3).
+//!    `secmp-proto` example `gen-tr` (feature `kat`) the complete `tr` suite (M3), the example `gen-hx` (feature
+//!    `kat`) the complete `hx` suite (M4).
 //! 2. Each file is compared **structurally** with the committed reference file `vectors/ref/<suite>.json`
 //!    (written by the independent `ref/` session): both are parsed, `generator` is removed, the values must be
 //!    equal — no case folding. Every byte-string field must match `^([0-9a-f]{2})*$`. For the suites of
@@ -27,7 +28,7 @@ use crate::expect;
 use crate::util::{Cmd, Error, Result, bail, say};
 
 /// Fields whose JSON strings are not byte strings (SCHEMA §1: labels, digit strings, `mode`, `op`, ids; schema 3:
-/// the `encodings` inputs `structure` and `context`).
+/// the `encodings` inputs `structure` and `context`; schema 5: the `hx` invitation `uri`, an ASCII string).
 const TEXT_FIELDS: &[&str] = &[
     "id",
     "op",
@@ -42,6 +43,7 @@ const TEXT_FIELDS: &[&str] = &[
     "generator",
     "structure",
     "context",
+    "uri",
 ];
 
 fn parse(path: &Path) -> Result<Value> {
@@ -203,6 +205,22 @@ fn generate(rust_dir: &Path) -> Result<()> {
             "kat",
             "--example",
             "gen-tr",
+            "--",
+        ])
+        .arg(rust_dir.to_string_lossy())
+        .run()?;
+    Cmd::cargo()
+        .args([
+            "run",
+            "--release",
+            "--locked",
+            "--quiet",
+            "--package",
+            "secmp-proto",
+            "--features",
+            "kat",
+            "--example",
+            "gen-hx",
             "--",
         ])
         .arg(rust_dir.to_string_lossy())

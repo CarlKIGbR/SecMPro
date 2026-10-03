@@ -18,8 +18,9 @@ use core::fmt;
 pub enum Error {
     /// The input is not exactly one valid encoding (or the value cannot be encoded).
     Rejected,
-    /// The local environment could not provide OS randomness or locked memory; never input-dependent; never
-    /// produced by a wire decoder; the caller must neither send nor acknowledge — retry later.
+    /// The local environment could not provide OS randomness or locked memory, or a store could not make a commit
+    /// durable (`PrekeyStore::commit_accept`, M4 review C-12); never input-dependent; never produced by a wire
+    /// decoder; the caller must neither send nor acknowledge — retry later.
     Unavailable,
 }
 

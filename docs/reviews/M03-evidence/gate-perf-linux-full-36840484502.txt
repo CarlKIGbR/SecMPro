@@ -1,0 +1,16 @@
+Run 36840484502 (pull_request, m03-tr, linux-full job 110298554207), head a47cc21df822c23fcfba0855b37c55bb6ca10c9c.
+Extracted with: gh api --allow-escape-sequences repos/CarlKIGbR/SecMPro/actions/jobs/110298554207/logs ;
+timestamps and ANSI codes removed; step `perf` of `cargo xtask ci-full` only.
+
+=== [5] perf ===
+$ /home/runner/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/cargo run --release --locked -p secmp-proto --example tr-perf -- target/tr-perf.txt
+    Finished `release` profile [optimized] target(s) in 25.63s
+     Running `target/release/examples/tr-perf target/tr-perf.txt`
+  tr-perf host=x86_64-unknown-linux-gnu
+  tr-perf n=200
+  tr-perf warmup=20
+  tr-perf chain_median_us=52.4
+  tr-perf chain_max_us=87.6
+  tr-perf step_median_us=374.7
+  tr-perf step_max_us=440.7
+

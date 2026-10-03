@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Daily fuzz campaign and seeded property run (docs/06 §4 Fuzzing "nightly 4 h", Property; M2 review F2, F10). Not a
-# required check; its job name is not a required-check name (`cargo xtask policy` checks that the four required names
+# required check; its job name is not a required-check name (`cargo xtask policy` checks that the pinned job names
 # exist only in ci.yml).
 # - Property tests: `cargo nextest run -p secmp-proto --features kat` (the TR property and vector tests need `kat`;
 #   M3 review C5) with `SECMP_PROPTEST_SEED` set to the run id (a decimal u64), so
@@ -11,8 +11,8 @@
 #   vectors plus the tracked corpus, which the campaign only reads (as the per-PR smoke of ci-full step 6). The scratch
 #   corpus (with the inputs libFuzzer added) and any crash inputs are uploaded as artefacts; taking inputs into
 #   `fuzz/corpus/` (after `cargo fuzz cmin`) is a manual, reviewed commit.
-# Checked by `cargo xtask policy` as every workflow (see the header of ci.yml). By convention, not checked: the
-# schedule/workflow_dispatch triggers only and a read-only token.
+# Checked by `cargo xtask policy` as every workflow (see the header of ci.yml), including the read-only token. By
+# convention, not checked: the schedule/workflow_dispatch triggers only.
 name: fuzz-nightly
 
 on:

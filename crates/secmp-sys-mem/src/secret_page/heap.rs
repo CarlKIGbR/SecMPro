@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! Miri backend of `SecretPage`: a heap allocation of one page. Miri cannot execute `mmap`/`mlock`/
-//! `VirtualLock`; this backend lets it check the safe wrapper (the raw-pointer accessors and zeroisation). It is
-//! compiled only under `cfg(miri)` and never in a real build.
+//! Miri and Kani backend of `SecretPage`: a heap allocation of one page. Neither tool executes `mmap`/`mlock`/
+//! `VirtualLock`; this backend lets Miri check the safe wrapper (the raw-pointer accessors and zeroisation) and Kani
+//! run code that holds secrets (the prekey store). It is compiled only under `cfg(miri)` or `cfg(kani)` and never
+//! in a real build.
 
 use core::ptr::{self, NonNull};
 
 use super::{Backend, Error};
 
-/// The page size assumed under Miri.
+/// The page size assumed under Miri and Kani.
 const PAGE: usize = 4096;
 
 pub(super) fn page_size() -> Result<usize, Error> {

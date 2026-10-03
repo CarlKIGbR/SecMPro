@@ -1,0 +1,19 @@
+# WEISUNG M4-FIX-3: tests by exact name at e387c3e (M1 Pro, cargo nextest run --workspace --all-features -E "test(/(^|::)<name>$/) | …")
+
+PASS profile_eq_distinguishes_name_and_avatar — secmp-proto wire::inv::tests::profile_eq_distinguishes_name_and_avatar [dictated, item 2]
+PASS sensitivity_control_passes_when_decide_catches_the_leak_at_a_crop — xtask::bin/xtask ctreport::tests::sensitivity_control_passes_when_decide_catches_the_leak_at_a_crop [dictated, item 1]
+PASS sensitivity_control_fails_when_no_crop_reaches_the_floor — xtask::bin/xtask ctreport::tests::sensitivity_control_fails_when_no_crop_reaches_the_floor [dictated, item 1]
+PASS sensitivity_control_fails_when_class_one_is_slower — xtask::bin/xtask ctreport::tests::sensitivity_control_fails_when_class_one_is_slower [dictated, item 1]
+PASS sensitivity_control_fails_when_the_leak_is_not_reproduced — xtask::bin/xtask ctreport::tests::sensitivity_control_fails_when_the_leak_is_not_reproduced [dictated, item 1]
+PASS ct_check_rederives_the_sensitivity_control_from_both_measurements — xtask::bin/xtask ctreport::tests::ct_check_rederives_the_sensitivity_control_from_both_measurements [dictated, item 1]
+PASS ct_report_carries_host_identity_and_histograms — xtask::bin/xtask ctreport::tests::ct_report_carries_host_identity_and_histograms [dictated, item 1]
+PASS mutants_merge_fails_when_the_caught_share_is_below_half — xtask::bin/xtask gates::tests::mutants_merge_fails_when_the_caught_share_is_below_half [dictated, item 3]
+PASS mutants_merge_passes_the_crypto_tally_of_run_37127247911 — xtask::bin/xtask gates::tests::mutants_merge_passes_the_crypto_tally_of_run_37127247911 [dictated, item 3]
+PASS mutants_merge_reports_every_shard_and_package_before_it_fails — xtask::bin/xtask gates::tests::mutants_merge_reports_every_shard_and_package_before_it_fails [dictated, item 3]
+PASS ct_gate_timeout_is_a_fail_naming_the_target — xtask::bin/xtask gates::tests::ct_gate_timeout_is_a_fail_naming_the_target [item 4 (Unix path here; Windows path only in CI)]
+PASS mutants_floor_fails_a_package_without_a_caught_mutant — xtask::bin/xtask gates::tests::mutants_floor_fails_a_package_without_a_caught_mutant [re-pointed, item 3]
+PASS mutants_merge_needs_every_shard_with_a_pass_verdict — xtask::bin/xtask gates::tests::mutants_merge_needs_every_shard_with_a_pass_verdict [re-pointed, item 3]
+PASS fifty_rejected_groups_reject_the_call_and_forty_nine_do_not — secmp-proto::hx accept_ok::fifty_rejected_groups_reject_the_call_and_forty_nine_do_not [nit VD3-2 (renamed)]
+PASS kani_gate_fails_on_an_unsatisfiable_cover — xtask::bin/xtask gates::tests::kani_gate_fails_on_an_unsatisfiable_cover [nit VD3-9]
+
+Summary [   5.472s] 15 tests run: 15 passed, 559 skipped

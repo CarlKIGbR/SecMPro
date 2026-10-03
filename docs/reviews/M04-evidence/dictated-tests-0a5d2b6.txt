@@ -1,0 +1,39 @@
+# M4-fix: the dictated tests of REMEDIATION-M4, by exact name (cargo nextest run --workspace --all-features)
+# head 0a5d2b6 + the docs commit's comment-only changes, M1 Pro
+
+PASS ct_gate_timeout_is_a_fail_naming_the_target
+PASS the_hx_same_content_control_fails_the_run_as_control_fail
+PASS mutants_shard_option_comes_off_the_command_line
+PASS mutants_command_line_builds_with_features_kat
+PASS mutants_floor_fails_a_package_without_a_caught_mutant
+PASS mutants_skip_list_names_existing_tests
+PASS miri_feature_gated_targets_are_listed
+PASS dispatch_full_runs_the_linux_full_line
+PASS deleting_or_neutering_a_pinned_job_is_a_finding
+PASS flow_style_and_quoted_uses_are_findings
+PASS workflow_permissions_shell_and_prover_override_are_findings
+PASS delegations_map_to_pinned_jobs
+PASS fuzz_corpus_exists_for_every_target
+PASS proverif_table_covers_every_claims_row
+PASS proverif_model_hashes_are_pinned
+PASS proverif_tr_gate_matches_by_query_text
+PASS release_persists_the_state_at_release_time
+PASS first_msg_with_nonzero_n_rejects_before_any_chain_step
+PASS accept_counter_rules_reject_after_a_valid_mac
+PASS rejected_init_id_does_not_re_form_within_one_accept
+PASS add_record_rejects_duplicate_opk_id_alone
+PASS accept_commit_unavailable_is_unavailable_and_changes_nothing
+PASS read_routes_pre_sizes_the_vector
+PASS known_sites_equal_the_product_site_tags
+PASS base64url_decode_rejects_invalid_and_dirty_alike
+PASS zeroize_clears_every_byte_field
+PASS dropped_invitation_is_wiped
+PASS accept_reject_sites_name_the_check_that_rejects
+PASS accept_every_rejecting_row_counts_no_delete_and_no_draw
+PASS kani_gate_fails_on_an_unsatisfiable_cover
+PASS invitee_low_order_x25519_rejects
+PASS invitee_bad_ed25519_identity_rejects
+PASS test crates/secmp-proto/src/wire/cell.rs - wire::cell::wire_bodies_are_not_clone_outside_tests (line 273) - compile fail ... ok
+PASS test crates/secmp-proto/src/wire/cell.rs - wire::cell::wire_bodies_are_not_clone_outside_tests (line 265) - compile fail ... ok
+
+Summary [   9.620s] 32 tests run: 32 passed, 528 skipped

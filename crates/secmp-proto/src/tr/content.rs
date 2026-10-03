@@ -16,8 +16,10 @@
 //! **Reassembly rules** (§7.6 leaves them to reassembly; readings raised as SQ-25): the fragments of one `msg_id`
 //! agree on `total`; an identical duplicate of a stored `idx` is ignored; a conflicting duplicate or a `total`
 //! mismatch discards the partial message; a message is complete when every `idx < total` is present, and is the
-//! concatenation of its chunks in `idx` order, decoded as `FragmentPayload`; chunks of any size are accepted; at
-//! most [`MAX_PARTIALS`] messages are in reassembly, the oldest is evicted first. Every chunk and every reassembled
+//! concatenation of its chunks in `idx` order, decoded as `FragmentPayload`; the chunk shape is canonical
+//! (spec §7.6 rev 2.4, ADR-043 (f); M3 review F16): every chunk but the last is exactly 1669 bytes and the last is
+//! 1…1669 bytes, i.e. `total = ⌈len/1669⌉`, checked when the group completes — any other shape discards the message;
+//! at most [`MAX_PARTIALS`] messages are in reassembly, the oldest is evicted first. Every chunk and every reassembled
 //! buffer is zeroizing. The partial messages are persisted with the ratchet state ([`Inbox::to_bytes`]): a stored
 //! fragment is "processing committed" before its cell is acknowledged (§7.5).
 
@@ -57,6 +59,36 @@ pub fn dummy() -> Content {
         ts: 0,
         body: ContentBody::Dummy,
     }
+}
+
+/// The number of chunks of a Content of `len` bytes: `⌈len/1669⌉`, 1 for `len ≤ 1669` (spec §7.6 rev 2.4). A total
+/// of 1 is the unfragmented Content; a Fragment itself carries `total ≥ 2` (§4.1).
+#[must_use]
+pub fn chunk_total(len: usize) -> usize {
+    len.div_ceil(CHUNK_MAX).max(1)
+}
+
+/// The canonical chunks of `bytes` (spec §7.6 rev 2.4): maximal chunks of 1669 bytes, the remainder last; one empty
+/// chunk for empty `bytes`.
+#[must_use]
+pub fn split_chunks(bytes: &[u8]) -> Vec<&[u8]> {
+    if bytes.is_empty() {
+        return vec![bytes];
+    }
+    bytes.chunks(CHUNK_MAX).collect()
+}
+
+/// Whether the chunks of a complete message have the canonical shape: all but the last exactly 1669 bytes, the last
+/// 1…1669 bytes (spec §7.6 rev 2.4).
+fn canonical_shape(chunks: &[Option<Zeroizing<Vec<u8>>>]) -> bool {
+    let Some((last, init)) = chunks.split_last() else {
+        return false;
+    };
+    init.iter()
+        .all(|c| c.as_ref().is_some_and(|c| c.len() == CHUNK_MAX))
+        && last
+            .as_ref()
+            .is_some_and(|c| (1..=CHUNK_MAX).contains(&c.len()))
 }
 
 /// What the peer's identity allows (spec §6.6, §6.7, §7.7). Kept by the caller with the contact.
@@ -245,6 +277,9 @@ impl Inbox {
         let Some(done) = self.partials.remove(at) else {
             return Delivery::Malformed;
         };
+        if !canonical_shape(&done.chunks) {
+            return Delivery::Malformed;
+        }
         // one allocation of the full length: a growing `Vec` would free its earlier blocks unwiped (`codec` docs)
         let len = done
             .chunks

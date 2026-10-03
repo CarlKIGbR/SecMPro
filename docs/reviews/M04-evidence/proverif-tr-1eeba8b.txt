@@ -1,0 +1,50 @@
+# formal/tr.pv in `cargo xtask step --strict proverif --models all` (4 parallel processes) — models of commit 1eeba8b; ProVerif 2.05, this Mac (M1 Pro)
+# sha256 formal/tr.pv e613eceb4f776aaa73b78f6ae4af63c5cb65b48ae49997b2f02bc48929a2211f
+# gate: finished after 191.4 s · RESULT lines 46 (46 expected, matched by query text against expect::PROVERIF_EXPECTED_TR)
+
+RESULT not attacker_p1(content(sClean,st1,c0)) is true.
+RESULT not attacker_p1(content(sClean,st1,c1)) is true.
+RESULT not attacker_p1(content(sClean,st2,c0)) is true.
+RESULT not attacker_p1(content(sClean,st2,c1)) is true.
+RESULT not attacker_p1(content(sClean,st3,c0)) is true.
+RESULT not attacker_p1(content(sClean,st3,c1)) is true.
+RESULT inj-event(Recv(sClean,pB,i_55,n_55,x)) ==> inj-event(Send(sClean,pA,i_55,n_55,x)) is true.
+RESULT inj-event(Recv(sClean,pA,i_55,n_55,x)) ==> inj-event(Send(sClean,pB,i_55,n_55,x)) is true.
+RESULT not attacker_p1(content(sFS,st1,c0)) is true.
+RESULT not attacker_p1(content(sFS,st1,c1)) is true.
+RESULT not attacker_p1(content(sFS,st2,c0)) is true.
+RESULT not attacker_p1(content(sFS,st2,c1)) is true.
+RESULT not attacker_p1(content(sPCS,st3,c0)) is true.
+RESULT not attacker_p1(content(sPCS,st3,c1)) is true.
+RESULT not attacker_p1(content(sPCSdh,st3,c0)) is true.
+RESULT not attacker_p1(content(sPCSdh,st3,c1)) is true.
+RESULT not attacker_p1(content(sPCSkem,st3,c0)) is true.
+RESULT not attacker_p1(content(sPCSkem,st3,c1)) is true.
+RESULT not attacker_p1(content(sPCSboth,st3,c0)) is false.
+RESULT not attacker_p1(content(sPCSboth,st3,c1)) is false.
+RESULT not attacker_p1(exp(g,dhsk(sClean,kA1))) is true.
+RESULT not attacker_p1(pk(kemsk(sClean,kA1))) is true.
+RESULT not attacker_p1(nmark(sClean,st1,c0)) is true.
+RESULT not attacker_p1(nmark(sClean,st1,c1)) is true.
+RESULT not attacker_p1(exp(g,dhsk(sClean,kB2))) is true.
+RESULT not attacker_p1(pk(kemsk(sClean,kB2))) is true.
+RESULT not attacker_p1(nmark(sClean,st2,c0)) is true.
+RESULT not attacker_p1(nmark(sClean,st2,c1)) is true.
+RESULT not attacker_p1(exp(g,dhsk(sClean,kA3))) is true.
+RESULT not attacker_p1(pk(kemsk(sClean,kA3))) is true.
+RESULT not attacker_p1(nmark(sClean,st3,c0)) is true.
+RESULT not attacker_p1(nmark(sClean,st3,c1)) is true.
+RESULT not attacker_p1(exp(g,dhsk(sHFS,kA1))) is true.
+RESULT not attacker_p1(pk(kemsk(sHFS,kA1))) is true.
+RESULT not attacker_p1(nmark(sHFS,st1,c0)) is true.
+RESULT not attacker_p1(nmark(sHFS,st1,c1)) is true.
+RESULT not attacker_p1(content(sPCS,st1,c1)) is false.
+RESULT event(RecvKem(s_14,p_55,i_55,n_55,x,ct)) ==> event(ChainKem(s_14,p_55,i_55,ct)) is true.
+RESULT event(HdrOpenTwice(k1_1,k2_1,h)) ==> k1_1 = k2_1 is false.
+RESULT not event(Recv(sClean,pB,st3,c1,content(sClean,st3,c1))) is false.
+RESULT not event(Recv(sFS,pA,st2,c1,content(sFS,st2,c1))) is false.
+RESULT not event(Recv(sPCS,pB,st3,c1,content(sPCS,st3,c1))) is false.
+RESULT not event(Recv(sPCSdh,pB,st3,c1,content(sPCSdh,st3,c1))) is false.
+RESULT not event(Recv(sPCSkem,pB,st3,c1,content(sPCSkem,st3,c1))) is false.
+RESULT not event(Recv(sPCSboth,pB,st3,c1,content(sPCSboth,st3,c1))) is false.
+RESULT not event(Recv(sHFS,pB,st3,c1,content(sHFS,st3,c1))) is false.

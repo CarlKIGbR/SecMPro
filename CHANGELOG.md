@@ -150,3 +150,27 @@ All notable changes to this project are documented in this file. The format foll
   F2, F10); `secmp-proto` under Miri (F3); ct-gate hardening (F15–F17); the ct bench moved to `secmp-testkit` with an
   inline A/A′ placement control (ADR-042, F6); PartialEq only in tests on MAC/commitment/token/tag types (F1);
   zeroizing signed messages and plaintext fields (F20, F21); the fine-timer recomputation script (F13).
+- M4 `secmp-proto::inv` (SecMP-INV, spec §5): `InvitationV1` and its `secmp://i/` URI with a constant-time base64url
+  codec, the link-data blob under `K_ld`, `K_inv`, and the invitee checks of §5.5 steps 1, 3, 4 (`invitee_check` →
+  `InviteeAccepted`).
+- M4 `secmp-proto::hx` (SecMP-HX, spec §6.4–§6.6): `Initiator::start` (PQXDH with ML-KEM-1024, the sealed three-cell
+  envelope, the first ratchet message; `EK_I` wiped at the end of the derivation; no signature by the initiator) with
+  persist-before-send through `HandshakeCells::release(state, persist)`, and `Responder::accept` (trial opening and
+  grouping per ADR-044 (c), steps 1–3, one `commit_accept` that deletes the OPK and consumes the record; a uniform
+  `Rejected`, `Unavailable` for a commit that cannot be made durable).
+- M4 `secmp-proto::prekeys`: `IdentityKeys`, the `PrekeyStore` trait and `MemoryPrekeyStore` (signed-prekey
+  generations with retention, one-time prekeys used once, one record per OPK, the ratchet prekey, invitation records).
+- M4 vectors and verification: the `hx` suite frozen as `vectors/hx.json` (30 cases, byte-identical to the reference);
+  115 dictated test rows, property tests P1–P11, fuzz targets F1–F7, Kani harnesses K1–K5 and K4b on the real store,
+  ct targets for the invitee fingerprint check, the X25519 all-zero check and two `accept` rejections, with an HX
+  same-content control.
+- M4 `formal/`: `CLAIMS.md` §HX and the ProVerif model as the library `formal/hx.pvl` with one file per session under
+  `formal/hx/` (ADR-046), 92 `RESULT` lines matched by query text, model hashes pinned; `tr.pv` gains the F5 branch and
+  T13 (46 lines, matched by query text since the M4 review).
+- M4 spec and decisions: `docs/03` rev 2.4 (ADR-043) and rev 2.5 (ADR-044); ADR-045 (gate verdicts in the job
+  summary), ADR-046 (per-session ProVerif files, `proverif-hx` job), ADR-047 (mutation testing as its own job) with
+  the M4 review's amendments (ct progress and step budget, `ct` as its own job, 8 mutation shards with a per-package
+  floor, an HX same-content control, pinned model hashes); docs/01 RR-15, RR-17…RR-19.
+- M4 CI and gates (M4 review C-1…C-7): the workflow policy pins the delegated jobs (`ct`, `mutants-shard`/`mutants`,
+  `proverif-hx`), reads `uses` as YAML, and checks the read-only token, `defaults`/`shell` and the prover override;
+  the Miri gate names the feature-gated suites it cannot run; a tracked seed corpus for every fuzz target.

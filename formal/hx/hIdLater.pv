@@ -1,0 +1,76 @@
+(* SPDX-License-Identifier: AGPL-3.0-or-later *)
+(* formal/hx/hIdLater.pv — session hIdLater of CLAIMS §HX, one file per session (O-18, ADR-046) over the library
+   formal/hx.pvl (model, abstractions, devices: its header). Run: proverif -lib formal/hx.pvl formal/hx/hIdLater.pv
+
+   Row (formal/hx.pvl 3.): I's inv. pinv · PubIKS - · LeakInv ph 1 · RevealLT(R) ph 1 · RevealLT(I) - · RevealSPK ph 1 ·
+   RevealOPK - · DHO ph 1 · KEMO - · layers sealed (O-17).
+   Queries (RESULT lines in this order; expected per the CLAIMS gate rule):
+     no begin event:    H7c (2) true · H11 (4) false
+   — 6 RESULT lines.
+*)
+
+const hIdLater: tagt.
+
+(* DHO, phase 1 only: private, offered by the process DHO1 from phase 1 on (formal/hx.pvl 4.) *)
+reduc forall x: bitstring, y: bitstring;
+        dh_break1(exp(g, dhsk(hIdLater, x)), exp(g, dhsk(hIdLater, y))) = exp(exp(g, dhsk(hIdLater, x)), dhsk(hIdLater, y))
+      [private].
+
+(* Secrecy assumptions (formal/hx.pvl 7.): the keys this session never reveals, and those it reveals only in
+   phase 1 (phase 0) *)
+not x: bitstring; attacker(dhsk(hIdLater, eph(x))).
+not x: bitstring; attacker(kemsk(hIdLater, eph(x))).
+not attacker(iksig(hIdLater, pR)) phase 0.
+not attacker(dhsk(hIdLater, kIKR)) phase 0.
+not attacker(iksig(hIdLater, pI)).
+not attacker(dhsk(hIdLater, kIKI)).
+not attacker(dhsk(hIdLater, kSPK)) phase 0.
+not attacker(kemsk(hIdLater, kSPK)) phase 0.
+not attacker(kemsk(hIdLater, kRPK)) phase 0.
+
+(* Queries (CLAIMS.md §HX), grouped by begin event (O-19); IKSPublic of the honest parties:
+   iks(vk(iksig(s, pR)), exp(g, dhsk(s, kIKR))) and iks(vk(iksig(s, pI)), exp(g, dhsk(s, kIKI))). *)
+
+query iI: bitstring, iR: bitstring, b: bitstring, tr: bitstring, rt: bitstring, sk: key, ld: bitstring,
+      oid: bitstring, s2: tagt;
+      (* H7c: against a later invitation leak — IK_dh_I public key *)
+      attacker(exp(g, dhsk(hIdLater, kIKI)));
+      (* H7c: IK_sig_I public key *)
+      attacker(vk(iksig(hIdLater, pI)));
+      (* H11: reachability sanity: IStart, BundleSigned, the honest pair, IConfirm — IStart *)
+      event(IStart(hIdLater, iks(vk(iksig(hIdLater, pI)), exp(g, dhsk(hIdLater, kIKI))),
+                   iks(vk(iksig(hIdLater, pR)), exp(g, dhsk(hIdLater, kIKR))), b, tr, rt, sk));
+      (* H11: BundleSigned *)
+      event(BundleSigned(hIdLater, iR, b));
+      (* H11: the honest pair *)
+      event(RAccept(hIdLater, iR, iks(vk(iksig(hIdLater, pI)), exp(g, dhsk(hIdLater, kIKI))), ld, oid, tr, rt, sk))
+        && event(IStart(hIdLater, iks(vk(iksig(hIdLater, pI)), exp(g, dhsk(hIdLater, kIKI))), iR, b, tr, rt, sk));
+      (* H11: IConfirm *)
+      event(IConfirm(hIdLater, iks(vk(iksig(hIdLater, pI)), exp(g, dhsk(hIdLater, kIKI))),
+                     iks(vk(iksig(hIdLater, pR)), exp(g, dhsk(hIdLater, kIKR))), tr, sk)).
+
+(* One invitation j issued by R (formal/hx.pvl 1.): OPK_j, bundle, InvitationV1, blob, the one acceptance
+   attempt (O-13), and this session's compromise of the invitation *)
+let Invitation(s: tagt) =
+  new o[]: bitstring;
+  new ld[]: bitstring;
+  new lk[]: key;
+  new opkid[]: bitstring;
+  let b = bundle(s, opkid, o) in
+  event BundleSigned(s, riks(s), b);
+  event InvIssued(s, riks(s), ld, opkid);
+  out(c, ld);
+  out(c, BlobS(s, ld, lk, b));
+  (
+    AcceptS(s, ld, lk, opkid, o)
+  | out(pinv(s), (ld, lk, fp(riks(s))))
+  | (phase 1; Leak(s, ld, lk))
+  ).
+
+process
+    out(c, riks(hIdLater))
+  | ! Invitation(hIdLater)
+  | ! ProcIS(hIdLater, pinv(hIdLater))
+  | (phase 1; RevLT(hIdLater, pR, kIKR))
+  | (phase 1; RevSPK(hIdLater))
+  | (phase 1; ! in(c, (x: G, y: G)); out(c, dh_break1(x, y)))

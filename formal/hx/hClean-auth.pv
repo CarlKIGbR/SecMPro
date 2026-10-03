@@ -1,0 +1,72 @@
+(* SPDX-License-Identifier: AGPL-3.0-or-later *)
+(* formal/hx/hClean-auth.pv — session hClean of CLAIMS §HX, its begin-IStart declaration (O-22) and one H11 line over the
+   library formal/hx.pvl (model, abstractions, devices: its header). Run: proverif -lib formal/hx.pvl formal/hx/hClean-auth.pv
+
+   Row (formal/hx.pvl 3.): as hClean.pv plus the attacker as inviter: I on c with event IStart (ProcIPA, O-20;
+   O-21 withdrawn), only on bundles that verify under IK_sig_R (O-23); search devices (O-24).
+   Queries (RESULT lines in this order; expected per the CLAIMS gate rule):
+     no begin event:    H11 (1) false (the honest pair completes in this file: M4 review C-7, erratum 5)
+     begin IStart:      H5 (1) true
+   — 2 RESULT lines. The other declarations of the session are in hClean.pv.
+*)
+
+const hClean: tagt.
+
+(* O-24 search devices (CLAIMS §HX "Model devices"): resolution hints only; the queries, the oracle and
+   compromise scope and the secrecy assumptions are unchanged *)
+select k: key, l: bitstring, m: bitstring; attacker(caead_seal( *k, nz, (lbl_inner, *l), *m))/5000.
+nounif p: bitstring, r: coins; attacker(encaps_ct1024( *p, *r)) [ignoreAFewTimes].
+nounif x: exponent; attacker(exp(g, x)) [ignoreAFewTimes].
+
+(* Secrecy assumptions (formal/hx.pvl 7.): the keys this session never reveals, and those it reveals only in
+   phase 1 (phase 0) *)
+not x: bitstring; attacker(dhsk(hClean, eph(x))).
+not x: bitstring; attacker(kemsk(hClean, eph(x))).
+not attacker(iksig(hClean, pR)).
+not attacker(dhsk(hClean, kIKR)).
+not attacker(iksig(hClean, pI)).
+not attacker(dhsk(hClean, kIKI)).
+not attacker(dhsk(hClean, kSPK)).
+not attacker(kemsk(hClean, kSPK)).
+not attacker(kemsk(hClean, kRPK)).
+
+(* Queries (CLAIMS.md §HX), ordered by begin event (O-22); IKSPublic of the honest parties:
+   iks(vk(iksig(s, pR)), exp(g, dhsk(s, kIKR))) and iks(vk(iksig(s, pI)), exp(g, dhsk(s, kIKI))). *)
+
+query iI: bitstring, iR: bitstring, b: bitstring, tr: bitstring, rt: bitstring, sk: key, ld: bitstring,
+      oid: bitstring, s2: tagt;
+      (* H11: reachability sanity of this file (CLAIMS H11, erratum 5): the honest pair completes, so the begin-IStart
+         declaration below is not vacuous *)
+      event(RAccept(hClean, iR, iks(vk(iksig(hClean, pI)), exp(g, dhsk(hClean, kIKI))), ld, oid, tr, rt, sk))
+        && event(IStart(hClean, iks(vk(iksig(hClean, pI)), exp(g, dhsk(hClean, kIKI))), iR, b, tr, rt, sk)).
+
+query iI: bitstring, iR: bitstring, b: bitstring, tr: bitstring, rt: bitstring, sk: key, ld: bitstring,
+      oid: bitstring, s2: tagt;
+      (* H5: injective agreement of R with I on transcript, SK and reply route, iks_I honest *)
+      inj-event(RAccept(hClean, iR, iks(vk(iksig(hClean, pI)), exp(g, dhsk(hClean, kIKI))), ld, oid, tr, rt, sk))
+        ==> inj-event(IStart(hClean, iks(vk(iksig(hClean, pI)), exp(g, dhsk(hClean, kIKI))), iR, b, tr, rt, sk)).
+
+(* One invitation j issued by R (formal/hx.pvl 1.): OPK_j, bundle, InvitationV1 (to I on pinv), blob, the one
+   acceptance attempt (O-13), and this session's compromise of the invitation *)
+let Invitation(s: tagt) =
+  new o[]: bitstring;
+  new ld[]: bitstring;
+  new lk[]: key;
+  new opkid[]: bitstring;
+  let b = bundle(s, opkid, o) in
+  event BundleSigned(s, riks(s), b);
+  event InvIssued(s, riks(s), ld, opkid);
+  out(c, ld);
+  out(c, BlobP(s, ld, b));
+  (
+    AcceptP(s, ld, lk, opkid, o)
+  | out(pinv(s), (ld, lk, fp(riks(s))))
+  | Leak(s, ld, lk)
+  ).
+
+process
+    out(c, riks(hClean))
+  | ! Invitation(hClean)
+  | ! ProcIP(hClean, pinv(hClean))
+  | ! ProcIPA(hClean, c)
+  | PubI(hClean)

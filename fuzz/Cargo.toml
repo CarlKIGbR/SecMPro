@@ -119,3 +119,52 @@ path = "fuzz_targets/tr_state.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "inv_uri"
+path = "fuzz_targets/inv_uri.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "inv_linkdata"
+path = "fuzz_targets/inv_linkdata.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "hx_outer"
+path = "fuzz_targets/hx_outer.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "hx_inner"
+path = "fuzz_targets/hx_inner.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "hx_cell_plaintext"
+path = "fuzz_targets/hx_cell_plaintext.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "hx_accept_raw"
+path = "fuzz_targets/hx_accept_raw.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "hx_accept_structured"
+path = "fuzz_targets/hx_accept_structured.rs"
+test = false
+doc = false
+bench = false

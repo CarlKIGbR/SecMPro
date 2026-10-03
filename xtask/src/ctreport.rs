@@ -8,7 +8,10 @@
 //!   clock (M2 review F17, [`q_eff_bound`]);
 //! - the positive control's presence and detection (whatever its label says, M2 review F15), and the inline A/A
 //!   control;
-//! - the sensitivity control, bound to `tag_compare`'s batch size and sample count;
+//! - the sensitivity control, bound to `tag_compare`'s batch size and sample count: in a report that records both of
+//!   its measurements, caught by the target rule with class 0 slower at its deciding crop, with the host identity,
+//!   the bench's SHA-256, the histograms and the same-content variant recorded (ADR-041 Amendment 3); in the reports
+//!   written before, its raw Δ at or above the floor (Amendment 1 (2));
 //! - the target set and the sample counts; a shortened run (`secmp_ct_scale`) is refused;
 //! - the batch sizes (ADR-041 Amendment 2, M3 review R-57): every measurement taken with the target's recorded `k`,
 //!   the `requantised` flag consistent with `k_initial` and `k`, and each judged measurement realising at least
@@ -171,14 +174,178 @@ fn floor_ticks(q: f64, tick: f64) -> f64 {
     (expect::CT_EFFECT_FLOOR_QUANTA * q).max(expect::CT_EFFECT_FLOOR_NS / tick)
 }
 
-/// The sensitivity control `min_leak_control` (ADR-041 Amendment 1 (2)): its line and whether it reached the
-/// effect floor. The gate does not take the bench's word for it: the report's `reached` must be true **and** the
-/// raw Δ must be at least the floor, which must be at least `CT_EFFECT_FLOOR_NS` and one effective quantum (at least
-/// one tick) of the control's measurement. A missing or incomplete control never reaches the floor. The
-/// comparisons are in ticks within the printed rounding: the floor of linux-ct run 36678826377 equals one `q_eff`
-/// (24.4928 ticks printed next to 24.493), which a comparison of the rounded values in ns refused. The ns and
-/// floor counts printed are computed from the ticks (review C3 (h)), not copied from the report.
+/// Whether a report records the sensitivity control as a pair of measurements (`sensitivity_control.second`, ADR-041
+/// Amendment 3), which the gate judges by the verdict rule; the reports written before carry one `measurement` and
+/// are read by the raw rule of Amendment 1 (2).
+fn control_pair(report: &Value) -> Option<&Value> {
+    report
+        .get("sensitivity_control")
+        .filter(|c| c.get("second").is_some())
+}
+
+/// The sensitivity control `min_leak_control`: its line and whether it passed — by the verdict rule for a report
+/// that records both measurements ([`ct_sensitivity_pair`], ADR-041 Amendment 3), else by the raw rule of Amendment
+/// 1 (2) ([`ct_sensitivity_raw`]).
 fn ct_sensitivity(report: &Value) -> (String, bool) {
+    match control_pair(report) {
+        Some(control) => ct_sensitivity_pair(report, control),
+        None => ct_sensitivity_raw(report),
+    }
+}
+
+/// The two measurements of the sensitivity control as the gate reads them (ADR-041 Amendment 3): per measurement its
+/// `q_eff_ticks` and crops (`None` if unreadable), and the clock's tick length.
+struct ControlPair {
+    tick: Option<f64>,
+    first: Option<(f64, Vec<(String, Stat)>)>,
+    second: Option<(f64, Vec<(String, Stat)>)>,
+}
+
+impl ControlPair {
+    fn read(tick: Option<f64>, first: Option<&Value>, second: Option<&Value>) -> Self {
+        let read = |m: Option<&Value>| Some((q_eff(m?)?, crops(m?)?));
+        Self {
+            tick,
+            first: read(first),
+            second: read(second),
+        }
+    }
+
+    /// t, Δ (ticks) and `q_eff` of measurement `m` at `crop`.
+    fn stat(m: Option<&(f64, Vec<(String, Stat)>)>, crop: &str) -> Option<(f64, f64, f64)> {
+        let (q, crops) = m?;
+        let (_, s) = crops.iter().find(|(n, _)| n == crop)?;
+        Some((s.t, s.delta, *q))
+    }
+
+    fn first_delta(&self, crop: &str) -> Option<f64> {
+        Self::stat(self.first.as_ref(), crop).map(|(_, d, _)| d)
+    }
+
+    /// The crop names of the first measurement.
+    fn crop_names(&self) -> Vec<String> {
+        self.first
+            .as_ref()
+            .map(|(_, c)| c.iter().map(|(n, _)| n.clone()).collect())
+            .unwrap_or_default()
+    }
+
+    /// The target rule at `crop` within the printed rounding (the tests of [`possible_verdicts`]): whether a FAIL with
+    /// class 0 slower (Δ > 0 in both) is possible, whether a FAIL with class 1 slower is sure, and the strength
+    /// min(|t1|, |t2|) by which `decide` picks its crop. `None` if a measurement or the tick length is unreadable.
+    fn judge(&self, crop: &str) -> Option<(bool, bool, f64)> {
+        let tick = self.tick?;
+        let (t1, d1, q1) = Self::stat(self.first.as_ref(), crop)?;
+        let (t2, d2, q2) = Self::stat(self.second.as_ref(), crop)?;
+        let pass = expect::CT_THRESHOLDS;
+        let same_sign = (t1 < 0.0) == (t2 < 0.0);
+        let shift_maybe = same_sign && t1.abs() + HALF_T > pass && t2.abs() + HALF_T > pass;
+        let shift_surely = same_sign && t1.abs() - HALF_T > pass && t2.abs() - HALF_T > pass;
+        let floor_maybe = d1.abs() + HALF_4 >= floor_ticks(q1 - HALF_Q, tick)
+            && d2.abs() + HALF_4 >= floor_ticks(q2 - HALF_Q, tick);
+        let floor_surely = d1.abs() - HALF_4 >= floor_ticks(q1 + HALF_Q, tick)
+            && d2.abs() - HALF_4 >= floor_ticks(q2 + HALF_Q, tick);
+        let slower0 = d1 > 0.0 && d2 > 0.0 && t1 > 0.0;
+        Some((
+            shift_maybe && floor_maybe && slower0,
+            shift_surely && floor_surely && t1 < 0.0,
+            t1.abs().min(t2.abs()),
+        ))
+    }
+
+    /// Δ in ns, Δ in effect floors and t of both measurements at `crop`, as printed.
+    fn describe(&self, crop: &str) -> (String, String, String) {
+        let two = |v: Option<f64>| v.map_or_else(|| "?".to_owned(), |v| format!("{v:.2}"));
+        let both = [
+            Self::stat(self.first.as_ref(), crop),
+            Self::stat(self.second.as_ref(), crop),
+        ];
+        let [d1, d2] = both.map(|s| s.zip(self.tick).map(|((_, d, _), tick)| d * tick));
+        let [f1, f2] = both.map(|s| {
+            s.zip(self.tick)
+                .map(|((_, d, q), tick)| d / floor_ticks(q, tick))
+        });
+        let [t1, t2] = both.map(|s| s.map(|(t, _, _)| t));
+        (
+            format!("{} / {} ns", two(d1), two(d2)),
+            format!("{} / {} floors", two(f1), two(f2)),
+            format!("t {} / {}", two(t1), two(t2)),
+        )
+    }
+}
+
+/// ADR-041 Amendment 3 (1), (3): the sensitivity control of a report with both measurements, re-derived by the target
+/// rule (`decide` of the bench, [`possible_verdicts`]'s tests): at the recorded `deciding_crop`, within the printed
+/// rounding, |t| above `CT_THRESHOLDS` in both measurements with the same sign, |Δ| at or above each measurement's
+/// floor `max(q_eff, CT_EFFECT_FLOOR_NS)`, and class 0 the slower (Δ > 0 in both); and no crop where a FAIL with class
+/// 1 slower is sure and surely stronger (`decide` takes the strongest relevant crop, by min(|t1|, |t2|)). The report's
+/// `reached` must be true as well; a control recorded as caught whose crops do not give it is refused. The line names
+/// the deciding crop with Δ (ns, floors) and t of both measurements, and both raw Δ as information.
+fn ct_sensitivity_pair(report: &Value, control: &Value) -> (String, bool) {
+    let measured = |key: &str| control.get(key).filter(|m| !m.is_null());
+    let pair = ControlPair::read(tick_ns(report), measured("first"), measured("second"));
+    let crop = control.get("deciding_crop").and_then(Value::as_str);
+    let decision = control
+        .get("decision")
+        .and_then(Value::as_str)
+        .unwrap_or("none");
+    let caught_at = crop.and_then(|c| pair.judge(c));
+    let overtaken = caught_at.is_some_and(|(_, _, strength)| {
+        pair.crop_names()
+            .iter()
+            .filter_map(|n| pair.judge(n))
+            .any(|(_, wrong_sure, other)| wrong_sure && other - HALF_T > strength + HALF_T)
+    });
+    let reached = control.get("reached").and_then(Value::as_bool) == Some(true)
+        && caught_at.is_some_and(|(caught, _, _)| caught)
+        && !overtaken;
+    let (raw_ns, _, _) = pair.describe("raw");
+    let reading = match (crop, caught_at) {
+        (Some(c), Some((true, _, _))) => {
+            let (d, f, t) = pair.describe(c);
+            format!("decide {decision} at {c}, class 0 slower: Δ {d} ({f}), {t}")
+        }
+        (Some(c), Some(_)) if pair.first_delta(c).is_some_and(|d| d < 0.0) => {
+            let (d, f, t) = pair.describe(c);
+            format!("decide {decision} at {c}, class 1 slower: Δ {d} ({f}), {t}")
+        }
+        _ => format!(
+            "decide {decision}{}: no crop reproduces the injected leak at ≥ 1 floor with |t| > {} in both \
+             measurements",
+            crop.map(|c| format!(" at {c}")).unwrap_or_default(),
+            expect::CT_THRESHOLDS
+        ),
+    };
+    let batch = control
+        .get("k")
+        .and_then(Value::as_u64)
+        .map_or_else(|| "-".to_owned(), |k| k.to_string());
+    let samples = control.get("samples").and_then(Value::as_u64).unwrap_or(0);
+    let measurements: String = [("first", "first"), ("second", "second")]
+        .iter()
+        .filter_map(|(key, label)| {
+            measured(key).map(|m| format!("; {label} {}", ct_measurement(m)))
+        })
+        .collect();
+    let state = if reached { "CAUGHT" } else { "NOT CAUGHT" };
+    (
+        format!(
+            "min_leak_control: {state} — {reading}; raw Δ {raw_ns} (information); k={batch}, {samples} samples\
+             {measurements} (sensitivity control: the verdict rule must catch the injected leak with class 0 slower, \
+             ADR-041 Amendment 3)"
+        ),
+        reached,
+    )
+}
+
+/// ADR-041 Amendment 1 (2), for the reports written before Amendment 3 (one `measurement`): the control's line and
+/// whether it reached the effect floor. The gate does not take the bench's word for it: the report's `reached` must
+/// be true **and** the raw Δ must be at least the floor, which must be at least `CT_EFFECT_FLOOR_NS` and one effective
+/// quantum (at least one tick) of the control's measurement. A missing or incomplete control never reaches the floor.
+/// The comparisons are in ticks within the printed rounding: the floor of linux-ct run 36678826377 equals one `q_eff`
+/// (24.4928 ticks printed next to 24.493), which a comparison of the rounded values in ns refused. The ns and floor
+/// counts printed are computed from the ticks (review C3 (h)), not copied from the report.
+fn ct_sensitivity_raw(report: &Value) -> (String, bool) {
     let Some(control) = report.get("sensitivity_control").filter(|c| c.is_object()) else {
         return (
             "min_leak_control: missing from the report (sensitivity control, must reach the floor)"
@@ -230,6 +397,143 @@ fn ct_sensitivity(report: &Value) -> (String, bool) {
     )
 }
 
+/// ADR-041 Amendment 3 (2): the bins per class of the histograms of the sensitivity control and its same-content
+/// variant (the bench's `HISTOGRAM_BINS`).
+const CONTROL_HISTOGRAM_BINS: usize = 21;
+
+/// ADR-041 Amendment 3 (2): the line of the informative same-content variant `min_leak_same_content` (no verdict,
+/// never a failure): its p50 Δ (ns, floors) and t, and the interquartile range of each class with their ratio
+/// (class 1 / class 0); `None` for a report without it.
+fn ct_same_content_line(report: &Value) -> Option<String> {
+    let variant = report
+        .get("min_leak_same_content")
+        .filter(|v| v.is_object())?;
+    let Some(m) = variant.get("measurement").filter(|m| !m.is_null()) else {
+        return Some("min_leak_same_content: informative (no verdict) — not measured".to_owned());
+    };
+    let tick = tick_ns(report);
+    let p50 = |key: &str| {
+        m.get("crops")
+            .and_then(|c| c.get("p50"))
+            .and_then(|c| c.get(key))
+            .and_then(Value::as_f64)
+    };
+    let (delta, t) = (p50("delta"), p50("t"));
+    let floor = q_eff(m).zip(tick).map(|(q, tick)| floor_ticks(q, tick));
+    let iqr = |class: &str| {
+        let s = m.get("shape")?.get(class)?;
+        Some(s.get("p75")?.as_f64()? - s.get("p25")?.as_f64()?)
+    };
+    let (i0, i1) = (iqr("class0"), iqr("class1"));
+    let ratio = i0.zip(i1).and_then(|(a, b)| (a > 0.0).then(|| b / a));
+    let two = |v: Option<f64>| v.map_or_else(|| "?".to_owned(), |v| format!("{v:.2}"));
+    Some(format!(
+        "min_leak_same_content: informative (no verdict) — p50 Δ {} ns ({} floors), t {}; IQR class 0 {} / class 1 {} \
+         ticks (ratio {}); {} (same content through the per-class preparation, ADR-041 Amendment 3)",
+        two(delta.zip(tick).map(|(d, tick)| d * tick)),
+        two(delta.zip(floor).map(|(d, f)| d / f)),
+        two(t),
+        two(i0),
+        two(i1),
+        two(ratio),
+        ct_measurement(m)
+    ))
+}
+
+/// ADR-041 Amendment 3 (2): a report with both control measurements carries the evidence that separates a layout
+/// effect from a host effect — `host.cpu_model` and `host.microcode` (text; the bench writes `unknown` where the host
+/// does not say), `bench_sha256` (64 lowercase hex digits) and, where the control was measured, both measurements
+/// taken with the control's `k`, a histogram of [`CONTROL_HISTOGRAM_BINS`] bins per class whose counts sum to the
+/// class counts of the first measurement (`sensitivity_control.histogram`), and the same-content variant with its
+/// measurement and histogram (`min_leak_same_content`). Each gap is a refusal.
+fn pair_record_findings(report: &Value, control: &Value) -> Vec<String> {
+    let mut out = Vec::new();
+    for key in ["cpu_model", "microcode"] {
+        let value = report
+            .get("host")
+            .and_then(|h| h.get(key))
+            .and_then(Value::as_str);
+        if value.is_none_or(|s| s.trim().is_empty()) {
+            out.push(format!(
+                "ct report: no host.{key} (ADR-041 Amendment 3 (2))"
+            ));
+        }
+    }
+    let sha = report.get("bench_sha256").and_then(Value::as_str);
+    if !sha.is_some_and(|s| {
+        s.len() == 64
+            && s.bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    }) {
+        out.push(format!(
+            "ct report: bench_sha256 {sha:?} is not a SHA-256 in hex (ADR-041 Amendment 3 (2))"
+        ));
+    }
+    let Some(first) = control.get("first").filter(|m| !m.is_null()) else {
+        return out;
+    };
+    let k = control.get("k").and_then(Value::as_u64);
+    for key in ["first", "second"] {
+        let taken = control
+            .get(key)
+            .and_then(|m| m.get("k"))
+            .and_then(Value::as_u64);
+        if taken.is_none() || taken != k {
+            out.push(format!(
+                "ct report: min_leak_control {key} taken with k {taken:?}, not the control's k {k:?}"
+            ));
+        }
+    }
+    out.extend(histogram_findings(
+        "sensitivity_control",
+        control.get("histogram"),
+        first,
+    ));
+    let same = report.get("min_leak_same_content");
+    match same
+        .and_then(|v| v.get("measurement"))
+        .filter(|m| !m.is_null())
+    {
+        Some(m) => out.extend(histogram_findings(
+            "min_leak_same_content",
+            same.and_then(|v| v.get("histogram")),
+            m,
+        )),
+        None => out.push(
+            "ct report: no min_leak_same_content measurement next to a measured sensitivity control (ADR-041 \
+             Amendment 3 (2))"
+                .to_owned(),
+        ),
+    }
+    out
+}
+
+/// The histogram `h` of `name`: per class [`CONTROL_HISTOGRAM_BINS`] counts that sum to the class count of `m`'s raw
+/// crop (`n0`, `n1`).
+fn histogram_findings(name: &str, h: Option<&Value>, m: &Value) -> Vec<String> {
+    let raw = m.get("crops").and_then(|c| c.get("raw"));
+    let count = |key: &str| raw.and_then(|r| r.get(key)).and_then(Value::as_u64);
+    [("class0", count("n0")), ("class1", count("n1"))]
+        .into_iter()
+        .filter_map(|(class, n)| {
+            let bins: Option<Vec<u64>> = h
+                .and_then(|h| h.get(class))
+                .and_then(Value::as_array)
+                .and_then(|a| a.iter().map(Value::as_u64).collect());
+            let sum = bins
+                .as_ref()
+                .map(|b| b.iter().fold(0_u64, |s, x| s.saturating_add(*x)));
+            let len = bins.as_ref().map(Vec::len);
+            (len != Some(CONTROL_HISTOGRAM_BINS) || n.is_none() || sum != n).then(|| {
+                format!(
+                    "ct report: {name} histogram {class}: {len:?} bins summing to {sum:?}, expected \
+                     {CONTROL_HISTOGRAM_BINS} bins summing to the class count {n:?} (ADR-041 Amendment 3 (2))"
+                )
+            })
+        })
+        .collect()
+}
+
 /// One target's line: verdict (with the deciding crop), `k`, calibration, both measurements and the A/A control.
 fn ct_line(r: &Value) -> (String, String, bool) {
     let name = text(r, "name");
@@ -272,6 +576,8 @@ fn ct_line(r: &Value) -> (String, String, bool) {
             " (A/A′ placement control: a FAIL makes the run CONTROL_FAIL)"
         } else if name == expect::CT_SAME_CONTENT_CONTROL {
             " (same-content control: a FAIL makes the run CONTROL_FAIL)"
+        } else if name == expect::CT_HX_SAME_CONTENT_CONTROL {
+            " (HX same-content control: a FAIL makes the run CONTROL_FAIL)"
         } else {
             ""
         }
@@ -601,6 +907,13 @@ fn target_findings(
                  which makes the run CONTROL_FAIL (ADR-042 Amendment 2)"
             ));
         }
+        // ADR-042 Amendment 3 (M4 review C-2): so does the HX same-content control
+        if name == expect::CT_HX_SAME_CONTENT_CONTROL && verdict == "FAIL" {
+            out.push(format!(
+                "ct report: {name} FAIL in a {run_verdict} run: the HX same-content control reached the effect floor, \
+                 which makes the run CONTROL_FAIL (ADR-042 Amendment 3)"
+            ));
+        }
     }
     out
 }
@@ -639,7 +952,12 @@ fn batch_findings(r: &Value) -> Vec<String> {
         if key == "aa_control" {
             continue;
         }
+        // M3 review F-ctreport: a measurement without a readable median cannot be shown to realise the minimum, so
+        // it is refused (this function runs only for the target sets of the ADR-041 Amendment 2 record format)
         let median = m.get("class_median_ticks").and_then(Value::as_f64);
+        if median.is_none() {
+            out.push(format!("ct report: {name} {key} has no class_median_ticks"));
+        }
         if let (Some(median), Some(q)) = (median, q_eff(m))
             && median < min * (q - HALF_Q)
         {
@@ -663,6 +981,9 @@ fn rederive(
     let mut out = set_findings(report, results, targets);
     out.extend(control_findings(results, run_verdict));
     out.extend(binding_findings(report, results));
+    if let Some(control) = control_pair(report) {
+        out.extend(pair_record_findings(report, control));
+    }
     if run_verdict == "CONTROL_FAIL" {
         out.extend(
             results
@@ -739,15 +1060,23 @@ pub(crate) fn ct_table_for(json: &str, targets: TargetSet) -> Result<CtTable> {
             .failed
             .push("ct report: run verdict FAIL without a failing target".to_owned());
     }
-    // ADR-041 Amendment 1 (2): a control below the floor must have made the run CONTROL_FAIL
+    // ADR-041 Amendment 1 (2), Amendment 3: a control below the floor, or one the verdict rule did not catch, must have
+    // made the run CONTROL_FAIL
     let (sensitivity, reached) = ct_sensitivity(&v);
     if !reached && run_verdict != "CONTROL_FAIL" {
+        let missed = if control_pair(&v).is_some() {
+            "the verdict rule did not catch the sensitivity control"
+        } else {
+            "the sensitivity control did not reach the floor"
+        };
         table.failed.push(format!(
-            "ct report: run verdict {run_verdict} although the sensitivity control did not reach the floor — \
-             {sensitivity}"
+            "ct report: run verdict {run_verdict} although {missed} — {sensitivity}"
         ));
     }
     table.lines.push(sensitivity);
+    if let Some(line) = ct_same_content_line(&v) {
+        table.lines.push(line);
+    }
     table
         .failed
         .extend(rederive(&v, run_verdict, results, targets));
@@ -1850,6 +2179,102 @@ mod tests {
         Ok(())
     }
 
+    /// ADR-042 Amendment 3 (M4 review C-2): the HX same-content control is judged like `same_content_control` — PASS
+    /// and a sub-floor shift pass; a FAIL inside a FAIL run is refused (the bench must have made the run
+    /// `CONTROL_FAIL`), and so is a label its crops do not give; a `CONTROL_FAIL` run naming it fails with its reason
+    /// alone; it is not the positive control.
+    #[test]
+    fn the_hx_same_content_control_fails_the_run_as_control_fail() -> Result<()> {
+        let hx = expect::CT_HX_SAME_CONTENT_CONTROL;
+        assert!(expect::CT_TARGETS.contains(&hx));
+        assert_ne!(hx, expect::CT_SAME_CONTENT_CONTROL);
+        assert_ne!(hx, expect::CT_POSITIVE_CONTROL);
+        let all = |t: f64, delta: f64| {
+            let crops: Vec<(&str, f64, f64)> = CROPS.iter().map(|c| (*c, t, delta)).collect();
+            measurement_with(&crops, 1.0)
+        };
+        let with = |first: Value, second: Value, verdict: &str, run: &str| {
+            let mut v = report();
+            set(&mut v, &["run_verdict"], Value::from(run));
+            let target = at(&mut v, hx);
+            set(target, &["first"], first);
+            set(target, &["second"], second);
+            set(target, &["verdict"], Value::from(verdict));
+            set(
+                target,
+                &["decisive_crop"],
+                if verdict == "PASS" {
+                    Value::Null
+                } else {
+                    Value::from("p90")
+                },
+            );
+            v
+        };
+        let t = table(&report())?;
+        assert!(t.failed.is_empty(), "{t:?}");
+        assert!(
+            t.lines
+                .iter()
+                .any(|l| l.starts_with("hx_same_content_control: PASS")
+                    && l.ends_with("(HX same-content control: a FAIL makes the run CONTROL_FAIL)"))
+        );
+        // a reproduced shift below the floor (Δ 5 ticks < floor 20) passes as SUB_FLOOR_SHIFT
+        let sub = with(all(30.0, 5.0), all(25.0, 5.0), "SUB_FLOOR_SHIFT", "PASS");
+        assert!(refusals(&sub)?.is_empty());
+        assert!(table(&sub)?.failed.is_empty());
+        // a reproduced shift at the floor, labelled FAIL in a FAIL run: refused (only CONTROL_FAIL is consistent)
+        let fail = with(all(30.0, 30.0), all(25.0, 30.0), "FAIL", "FAIL");
+        let found = refusals(&fail)?;
+        assert_eq!(found.len(), 2, "{found:?}");
+        assert!(
+            found
+                .iter()
+                .any(|f| f.starts_with("hx_same_content_control: FAIL at p90"))
+        );
+        assert!(found.contains(
+            &"ct report: hx_same_content_control FAIL in a FAIL run: the HX same-content control reached the effect floor, which makes the run CONTROL_FAIL (ADR-042 Amendment 3)"
+                .to_owned()
+        ));
+        assert!(
+            found
+                .iter()
+                .any(|f| f.contains("which makes the run CONTROL_FAIL"))
+        );
+        // the same crops labelled as a sub-floor shift: refused by the re-derivation
+        let hidden = with(all(30.0, 30.0), all(25.0, 30.0), "SUB_FLOOR_SHIFT", "PASS");
+        assert_eq!(
+            refusals(&hidden)?,
+            vec!["ct report: hx_same_content_control SUB_FLOOR_SHIFT, but its recorded crops give {\"FAIL\"}".to_owned()]
+        );
+        // the CONTROL_FAIL run the bench writes for it: its reason is the one finding
+        let mut control_fail = with(
+            all(30.0, 30.0),
+            all(25.0, 30.0),
+            "CONTROL_FAIL",
+            "CONTROL_FAIL",
+        );
+        let reason = "same-content control hx_same_content_control FAIL at p90: identical contents through the \
+                      per-class preparation path shift the class means by 1.50 / 1.50 effect floors";
+        set(&mut control_fail, &["run_reason"], Value::from(reason));
+        for name in expect::CT_TARGETS {
+            set(
+                at(&mut control_fail, name),
+                &["verdict"],
+                Value::from("CONTROL_FAIL"),
+            );
+        }
+        assert_eq!(
+            table(&control_fail)?.failed,
+            vec![format!("CONTROL_FAIL — {reason}")]
+        );
+        // it is not the positive control
+        let mut two = report();
+        set(at(&mut two, hx), &["control"], Value::from(true));
+        assert!(refused(&two, "2 positive controls")?);
+        Ok(())
+    }
+
     /// ADR-041 Amendment 2 (M3 review R-57): a requantised record — `k_initial` 1, `k` 3, every measurement taken
     /// with k 3 — passes and its line names the re-batch; the gate reads `k` per measurement and the flag: a
     /// measurement taken with another `k`, a flag that does not fit the two batch sizes, a missing record, and a
@@ -1955,6 +2380,34 @@ mod tests {
         Ok(())
     }
 
+    /// M3 review (ct report hardening): a judged measurement without a `class_median_ticks` is refused for a report of
+    /// the Amendment 2 record format, not skipped; the M2 set, whose reports predate the record, is not asked for it.
+    #[test]
+    fn a_missing_class_median_is_refused() -> Result<()> {
+        let mut v = report();
+        assert!(table(&v)?.failed.is_empty());
+        let t = at(&mut v, "caead_derive");
+        if let Some(m) = t.get_mut("second").and_then(Value::as_object_mut) {
+            m.remove("class_median_ticks");
+        }
+        assert!(refused(
+            &v,
+            "ct report: caead_derive second has no class_median_ticks"
+        )?);
+        let t = at(&mut v, "caead_derive");
+        if let Some(t) = t.as_object_mut() {
+            t.remove("k_initial");
+            t.remove("requantised");
+        }
+        assert!(
+            !ct_table_for(&v.to_string(), M2_TARGETS)?
+                .failed
+                .iter()
+                .any(|f| f.contains("has no class_median_ticks"))
+        );
+        Ok(())
+    }
+
     /// `ct-check --targets m2|current`: the target set is chosen explicitly; the M2 set is the nine targets of M2, all
     /// still in `expect::CT_TARGETS`, without `aa_prime_control`; a report of the current set is refused against it.
     #[test]
@@ -1984,6 +2437,371 @@ mod tests {
                 .failed
                 .iter()
                 .any(|f| f.contains("differ from the M2 target set"))
+        );
+        Ok(())
+    }
+
+    /// The sensitivity control's crops (crop, t, Δ ticks) of PR run 37127247911 (cac6eff, `ct` job): raw Δ −11.70 at
+    /// t −4.79, the injected leak at p50/p75/p90 (Δ 6.2/6.3/3.1 floors of 26 ticks, t 203.7/259.6/139.8).
+    const RUN_37127247911_CONTROL: [(&str, f64, f64); 6] = [
+        ("raw", -4.794, -11.6982),
+        ("p50", 203.655, 161.8166),
+        ("p75", 259.563, 162.9221),
+        ("p90", 139.784, 80.0337),
+        ("p95", 44.108, 25.5119),
+        ("p99", -14.608, -9.93),
+    ];
+
+    /// The tick length of that runner (2.600 GHz TSC): 10 ns = 26 ticks, the floor at `q_eff` 2 ticks.
+    const TICK_2600_MHZ: f64 = 0.384_616_118_196_471;
+
+    /// A histogram of 21 bins with all `n` samples of a class in the first bin.
+    fn bins(n: u64) -> Value {
+        Value::from(
+            std::iter::once(n)
+                .chain(std::iter::repeat_n(0, 20))
+                .collect::<Vec<u64>>(),
+        )
+    }
+
+    /// `report()` on the 2.600 GHz clock (`q_eff` 2 ticks, floor 26 ticks) with a sensitivity control of two
+    /// measurements (ADR-041 Amendment 3) with the given crops and `q_eff` 2, the bench's `decision`, `deciding_crop`
+    /// and `reached`, and the evidence of Amendment 3 (2): host, bench SHA-256, histograms (the fixture measurements
+    /// have 5 samples per class), the same-content variant. Not caught: the run is `CONTROL_FAIL` with `reason`.
+    fn pair_report(
+        first: &[(&str, f64, f64)],
+        second: &[(&str, f64, f64)],
+        bench: (&str, Option<&str>, bool),
+        reason: &str,
+    ) -> Value {
+        let (decision, crop, reached) = bench;
+        let mut v = report();
+        set(&mut v, &["clock", "tick_ns"], Value::from(TICK_2600_MHZ));
+        set(&mut v, &["clock", "q_eff_ticks"], Value::from(2.0));
+        let histogram = serde_json::json!({"bins": 21, "lo_ticks": 15000, "hi_ticks": 15700,
+            "bin_ticks": 33.333, "class0": bins(5), "class1": bins(5)});
+        set(
+            &mut v,
+            &["sensitivity_control"],
+            serde_json::json!({"name": "min_leak_control", "k": 1, "samples": expect::CT_SAMPLES,
+                "decision": decision, "deciding_crop": crop, "reached": reached, "histogram": histogram.clone(),
+                "first": measurement_with(first, 2.0), "second": measurement_with(second, 2.0)}),
+        );
+        if let Some(o) = v.as_object_mut() {
+            o.insert(
+                "host".to_owned(),
+                serde_json::json!({"cpu_model": "AMD EPYC 7763 64-Core Processor", "microcode": "0xffffffff"}),
+            );
+            o.insert("bench_sha256".to_owned(), Value::from("ab".repeat(32)));
+            o.insert(
+                "min_leak_same_content".to_owned(),
+                serde_json::json!({"name": "min_leak_same_content", "k": 1, "samples": expect::CT_SAMPLES,
+                    "verdict": null, "informative": true, "histogram": histogram,
+                    "measurement": measurement_with(&[("p50", 1.5, 2.0)], 2.0)}),
+            );
+        }
+        if !reached {
+            set(&mut v, &["run_verdict"], Value::from("CONTROL_FAIL"));
+            set(&mut v, &["run_reason"], Value::from(reason));
+            for name in expect::CT_TARGETS {
+                set(at(&mut v, name), &["verdict"], Value::from("CONTROL_FAIL"));
+            }
+        }
+        v
+    }
+
+    /// The `min_leak_control` line of a report.
+    fn control_line(v: &Value) -> Result<String> {
+        table(v)?
+            .lines
+            .into_iter()
+            .find(|l| l.starts_with("min_leak_control: "))
+            .ok_or_else(|| Error("no min_leak_control line".to_owned()))
+    }
+
+    /// ADR-041 Amendment 3 (1): the control of run 37127247911 — raw Δ −11.70 ticks, which the raw rule of Amendment 1
+    /// (2) failed — in both measurements is caught by the target rule at p75 (and p50 would do as well), class 0 slower;
+    /// the line names the deciding crop, Δ and t of both measurements and both raw Δ as information.
+    #[test]
+    fn sensitivity_control_passes_when_decide_catches_the_leak_at_a_crop() -> Result<()> {
+        let run = RUN_37127247911_CONTROL;
+        let v = pair_report(&run, &run, ("FAIL", Some("p75"), true), "");
+        let t = table(&v)?;
+        assert!(t.failed.is_empty(), "{t:?}");
+        let line = control_line(&v)?;
+        assert!(
+            line.starts_with(
+                "min_leak_control: CAUGHT — decide FAIL at p75, class 0 slower: Δ 62.66 / 62.66 ns (6.27 / 6.27 \
+                 floors), t 259.56 / 259.56; raw Δ -4.50 / -4.50 ns (information); k=1, 1000000 samples"
+            ),
+            "{line}"
+        );
+        assert!(line.ends_with(
+            "(sensitivity control: the verdict rule must catch the injected leak with class 0 slower, ADR-041 \
+             Amendment 3)"
+        ));
+        let p50 = pair_report(&run, &run, ("FAIL", Some("p50"), true), "");
+        assert!(table(&p50)?.failed.is_empty());
+        // the same crops as one measurement under the raw rule: below the floor
+        let mut raw = report();
+        set(&mut raw, &["clock", "tick_ns"], Value::from(TICK_2600_MHZ));
+        set(
+            &mut raw,
+            &["sensitivity_control", "raw_delta_ticks"],
+            Value::from(-11.6982),
+        );
+        set(
+            &mut raw,
+            &["sensitivity_control", "floor_ticks"],
+            Value::from(26.0),
+        );
+        assert!(refused(
+            &raw,
+            "the sensitivity control did not reach the floor"
+        )?);
+        Ok(())
+    }
+
+    /// ADR-041 Amendment 3 (1): every |Δ| below the 26-tick floor (a sub-floor shift at most) is not caught: a run
+    /// recorded as caught is refused, the `CONTROL_FAIL` run the bench writes fails with its reason alone.
+    #[test]
+    fn sensitivity_control_fails_when_no_crop_reaches_the_floor() -> Result<()> {
+        let small = [
+            ("raw", -4.794, -11.6982),
+            ("p50", 203.655, 20.0),
+            ("p75", 259.563, 25.99),
+            ("p90", 139.784, 15.0),
+            ("p95", 44.108, 10.0),
+            ("p99", -14.608, -9.93),
+        ];
+        let claimed = pair_report(&small, &small, ("FAIL", Some("p75"), true), "");
+        assert_eq!(refusals(&claimed)?.len(), 1, "{:?}", refusals(&claimed)?);
+        assert!(refused(
+            &claimed,
+            "run verdict PASS although the verdict rule did not catch the sensitivity control"
+        )?);
+        let reason = "sensitivity control min_leak_control not caught by the verdict rule (decide: SUB_FLOOR_SHIFT \
+                      at p75): no crop reproduces the injected leak at ≥ 1 floor with |t| > 4.5 in both measurements \
+                      (ADR-041 Amendment 3)";
+        let v = pair_report(
+            &small,
+            &small,
+            ("SUB_FLOOR_SHIFT", Some("p75"), false),
+            reason,
+        );
+        assert_eq!(table(&v)?.failed, vec![format!("CONTROL_FAIL — {reason}")]);
+        assert!(control_line(&v)?.starts_with(
+            "min_leak_control: NOT CAUGHT — decide SUB_FLOOR_SHIFT at p75: no crop reproduces the injected leak"
+        ));
+        Ok(())
+    }
+
+    /// ADR-041 Amendment 3 (1): the sign rule is kept — a FAIL with class 1 slower at the deciding crop (Δ −162 ticks at
+    /// p50/p75, |t| 204/260) is not caught; the line and the bench's reason name the sign.
+    #[test]
+    fn sensitivity_control_fails_when_class_one_is_slower() -> Result<()> {
+        let swapped = [
+            ("raw", 4.794, 11.6982),
+            ("p50", -203.655, -161.8166),
+            ("p75", -259.563, -162.9221),
+            ("p90", 1.0, 0.1),
+            ("p95", 1.0, 0.1),
+            ("p99", 1.0, 0.1),
+        ];
+        let claimed = pair_report(&swapped, &swapped, ("FAIL", Some("p75"), true), "");
+        assert!(refused(
+            &claimed,
+            "although the verdict rule did not catch the sensitivity control"
+        )?);
+        let reason = "sensitivity control min_leak_control caught with the wrong sign: class 1 slower at the deciding \
+                      crop p75 (Δ -162.92 / -162.92 ticks, t -259.56 / -259.56), where the injected leak makes class \
+                      0 slower (ADR-041 Amendment 3)";
+        let v = pair_report(&swapped, &swapped, ("FAIL", Some("p75"), false), reason);
+        assert_eq!(table(&v)?.failed, vec![format!("CONTROL_FAIL — {reason}")]);
+        let line = control_line(&v)?;
+        assert!(
+            line.starts_with(
+                "min_leak_control: NOT CAUGHT — decide FAIL at p75, class 1 slower: Δ -62.66 / -62.66 ns"
+            ),
+            "{line}"
+        );
+        Ok(())
+    }
+
+    /// ADR-041 Amendment 3 (1): the leak must be reproduced — the first measurement shows it (run 37127247911), the
+    /// second does not (raw and p50 ≈ 0): not caught.
+    #[test]
+    fn sensitivity_control_fails_when_the_leak_is_not_reproduced() -> Result<()> {
+        let run = RUN_37127247911_CONTROL;
+        let flat = [
+            ("raw", 0.3, 0.1),
+            ("p50", 0.4, 0.2),
+            ("p75", 1.0, 0.5),
+            ("p90", -0.6, -0.3),
+            ("p95", 0.2, 0.1),
+            ("p99", 0.1, 0.0),
+        ];
+        let claimed = pair_report(&run, &flat, ("FAIL", Some("p75"), true), "");
+        assert!(refused(
+            &claimed,
+            "although the verdict rule did not catch the sensitivity control"
+        )?);
+        let reason = "sensitivity control min_leak_control not caught by the verdict rule (decide: PASS): no crop \
+                      reproduces the injected leak at ≥ 1 floor with |t| > 4.5 in both measurements (ADR-041 \
+                      Amendment 3)";
+        let v = pair_report(&run, &flat, ("PASS", None, false), reason);
+        assert_eq!(table(&v)?.failed, vec![format!("CONTROL_FAIL — {reason}")]);
+        assert!(
+            control_line(&v)?
+                .starts_with("min_leak_control: NOT CAUGHT — decide PASS: no crop reproduces")
+        );
+        Ok(())
+    }
+
+    /// ADR-041 Amendment 3 (3): the gate re-derives a control of two measurements from its crops and refuses one recorded
+    /// as caught whose crops do not give it (not reproduced; caught at a crop where `decide` would have taken a
+    /// stronger one with class 1 slower); a report of the earlier format — the committed one of run 37127247911 — keeps
+    /// the raw rule and re-derives as the `CONTROL_FAIL` it records.
+    #[test]
+    fn ct_check_rederives_the_sensitivity_control_from_both_measurements() -> Result<()> {
+        let run = RUN_37127247911_CONTROL;
+        let flat: Vec<(&str, f64, f64)> = CROPS.iter().map(|c| (*c, 1.0, 0.1)).collect();
+        // recorded as caught, the second measurement shows nothing
+        let v = pair_report(&run, &flat, ("FAIL", Some("p75"), true), "");
+        assert_eq!(
+            refusals(&v)?
+                .iter()
+                .filter(|f| f.contains("the verdict rule did not catch"))
+                .count(),
+            1
+        );
+        // recorded as caught at p50, while p99 reproduces a stronger shift with class 1 slower
+        let stronger = [
+            ("raw", 1.0, 0.1),
+            ("p50", 203.655, 161.8166),
+            ("p75", 1.0, 0.1),
+            ("p90", 1.0, 0.1),
+            ("p95", 1.0, 0.1),
+            ("p99", -400.0, -100.0),
+        ];
+        let v = pair_report(&stronger, &stronger, ("FAIL", Some("p50"), true), "");
+        assert!(refused(
+            &v,
+            "although the verdict rule did not catch the sensitivity control"
+        )?);
+        // as caught at p50 without the stronger p99: accepted
+        let mut weaker = stronger;
+        if let Some(p99) = weaker.last_mut() {
+            *p99 = ("p99", -4.0, -100.0);
+        }
+        assert!(
+            table(&pair_report(
+                &weaker,
+                &weaker,
+                ("FAIL", Some("p50"), true),
+                ""
+            ))?
+            .failed
+            .is_empty()
+        );
+        // the committed report of run 37127247911 (one measurement): the raw rule, its recorded CONTROL_FAIL
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../docs/reviews/M04-evidence/ct-report-linux-37127247911-cac6eff.json");
+        let json = std::fs::read_to_string(path)?;
+        let committed: Value =
+            serde_json::from_str(&json).map_err(|e| Error(format!("committed report: {e}")))?;
+        assert!(control_pair(&committed).is_none());
+        let t = ct_table(&json)?;
+        assert_eq!(
+            t.failed,
+            vec![
+                "CONTROL_FAIL — sensitivity control min_leak_control below the effect floor: raw Δ -11.70 ticks < \
+                 floor 26.00 ticks (1 q_eff, 10 ns)"
+                    .to_owned()
+            ]
+        );
+        assert!(t.lines.iter().any(|l| l.starts_with(
+            "min_leak_control: BELOW THE FLOOR — raw Δ -4.50 ns, floor 10.00 ns (-0.45 floors), k=1, 1000000 samples"
+        )));
+        Ok(())
+    }
+
+    /// ADR-041 Amendment 3 (2): a report with both control measurements carries the host (CPU model, microcode), the
+    /// bench's SHA-256, a 21-bin histogram per class summing to the class counts, and the same-content variant with
+    /// its histogram; each gap is refused, `unknown` (macOS microcode) is accepted, and the same-content variant gets
+    /// a line of its own (no verdict).
+    #[test]
+    fn ct_report_carries_host_identity_and_histograms() -> Result<()> {
+        let run = RUN_37127247911_CONTROL;
+        let good = || pair_report(&run, &run, ("FAIL", Some("p75"), true), "");
+        let t = table(&good())?;
+        assert!(t.failed.is_empty(), "{t:?}");
+        assert!(t.lines.iter().any(|l| l.starts_with(
+            "min_leak_same_content: informative (no verdict) — p50 Δ 0.77 ns (0.08 floors), t 1.50; IQR class 0 ? / \
+             class 1 ? ticks (ratio ?)"
+        )));
+        let mut unknown = good();
+        set(&mut unknown, &["host", "microcode"], Value::from("unknown"));
+        assert!(table(&unknown)?.failed.is_empty());
+        let edit = |path: &[&str], value: Value| -> Result<Vec<String>> {
+            let mut v = good();
+            set(&mut v, path, value);
+            refusals(&v)
+        };
+        let one = |found: Vec<String>, needle: &str| {
+            assert!(
+                found.len() == 1 && found.iter().all(|f| f.contains(needle)),
+                "{needle}: {found:?}"
+            );
+        };
+        one(
+            edit(&["host", "cpu_model"], Value::Null)?,
+            "no host.cpu_model",
+        );
+        one(
+            edit(&["host", "microcode"], Value::from(""))?,
+            "no host.microcode",
+        );
+        assert_eq!(edit(&["host"], Value::Null)?.len(), 2);
+        one(edit(&["bench_sha256"], Value::Null)?, "bench_sha256 None");
+        one(
+            edit(&["bench_sha256"], Value::from("AB".repeat(32)))?,
+            "is not a SHA-256 in hex",
+        );
+        one(
+            edit(&["bench_sha256"], Value::from("ab".repeat(31)))?,
+            "is not a SHA-256 in hex",
+        );
+        let twenty: Vec<u64> = std::iter::once(5)
+            .chain(std::iter::repeat_n(0, 19))
+            .collect();
+        one(
+            edit(
+                &["sensitivity_control", "histogram", "class0"],
+                Value::from(twenty),
+            )?,
+            "sensitivity_control histogram class0: Some(20) bins summing to Some(5)",
+        );
+        one(
+            edit(&["sensitivity_control", "histogram", "class1"], bins(4))?,
+            "sensitivity_control histogram class1: Some(21) bins summing to Some(4), expected 21 bins summing to the \
+             class count Some(5)",
+        );
+        assert_eq!(
+            edit(&["sensitivity_control", "histogram"], Value::Null)?.len(),
+            2
+        );
+        one(
+            edit(&["min_leak_same_content", "histogram", "class0"], bins(6))?,
+            "min_leak_same_content histogram class0",
+        );
+        one(
+            edit(&["min_leak_same_content"], Value::Null)?,
+            "no min_leak_same_content measurement",
+        );
+        one(
+            edit(&["sensitivity_control", "second", "k"], Value::from(2))?,
+            "min_leak_control second taken with k Some(2), not the control's k Some(1)",
         );
         Ok(())
     }

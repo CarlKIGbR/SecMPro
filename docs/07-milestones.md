@@ -83,9 +83,11 @@ v1.1: M16 → M17 → M18 → M19 → M20 (release)
 
 ### M4 — SecMP-HX handshake + SecMP-INV (sans-IO) + ProVerif model (M/L)
 
+**Status (2026-10-01).** Started 2026-10-01 on branch `m04-hx` from `main` at `836a94e4f8abec27d877740291ecbe9957c10177`; plan, `formal/CLAIMS.md` §HX, ADR-044 (proposed), ADR-045 and the reference HX/INV files were committed first. Report: `docs/reviews/M04-report.md`.
+
 **Deliverables.**
 - `secmp-proto::inv`: invitation create/parse, `LinkDataV1` sealing/opening, `K_ld`/`K_inv` derivation, QR/URI text.
-- `secmp-proto::hx`: `Initiator::start(bundle, own_iks, reply_routes, profile) -> (three HandshakeCells, RatchetState)` and `Responder::accept(cells, own_keys) -> (RatchetState, peer_iks, routes, profile)` per §6.4–6.6 (outer/inner layers, `K_id`, OPK bookkeeping).
+- `secmp-proto::hx`: `Initiator::start(accepted: &InviteeAccepted /* the §5.5 result of `inv::invitee_check` */, own_keys: &InitiatorKeys /* iks + ik_dh, no signing key */, reply_routes, profile, now, entropy) -> Result<(HandshakeCells, RatchetState)>` (EK_I wiped at the end of `agree`, before the ratchet is initialised — stricter than `docs/03:325`, ADR-044 (b); `release(state, persist)` (`HandshakeCells::release`) hands the cells and the caller's state at release time to one persist call, M4 review C-8; the sketch of TEST-SPEC-M4:27 (O-12) is superseded) and `Responder::accept(cells, record, store, own_keys, entropy) -> Accepted { state, peer, routes, profile }` per §6.4–6.6 (outer/inner layers, `K_id`; the OPK is deleted and the record consumed in one `commit_accept`; uniform `Error::Rejected`, state and store unchanged on rejection). The API follows §6.4–§6.6, not the earlier sketch (reviewer decision O-12, 2026-10-01).
 - Prekey store trait with in-memory implementation (SPK weekly, retention rule, OPK single use, RPK).
 - `ref/` HX; frozen vectors for a full run with fixed randomness (identical `SK`, `transcript`, `K_id`, cells); negative tests: wrong fingerprint, expired bundle, bad signature, missing/used OPK, zero DH, tampered chunk, garbage cells interleaved, replayed envelope.
 - `formal/hx.pv`: SK secrecy (classical and with the DH oracle broken), injective agreement on the transcript, identity confidentiality of I under `K_id`, plus the reviewer's expected-false queries (PQ authentication, KCI).
@@ -107,6 +109,8 @@ v1.1: M16 → M17 → M18 → M19 → M20 (release)
 **Acceptance.** Harness: two clients create queues (pool), exchange 1 000 cells each way, relay evicts at capacity and reports ids, sweeper expires by bucket, memory budget refuses new queues at the limit; **relay restart → `ERR_NOQUEUE` → identical queues re-created → conversation continues without a new invitation**; all responses `FRAME_SIZE`; byte-level test proves error and success frames are indistinguishable; fuzz target for the executor; relay unit tests for every command; `FETCH` idempotence and cumulative ack verified.
 
 **Review focus.** Strict counters; `sess_id` in command signatures; one-time consumption atomic; owner-status non-consuming; eviction reporting; zeroize on delete; hour buckets only; `RelayInfo` never cached by the client.
+
+**Follow-ups from the M4 review (F-M5).** Branch-free trial opens of the TR header keys (R-59, docs/01 RR-17) with the counting accessor that would detect a reintroduced secret-indexed `mk` load (campaign R-58, R-42); fuzz target `hx_accept_structured` mode 3 (R-44: fuzzer bytes as padded Content, encrypted from the fixture's state); the formal batch (F6's second receive attempt after a skipped-path acceptance, R-41; the O-15 composition sentence, R-70); the rev-2.5 reference cases and the `hx.json`/`ref/hx.json` re-freeze with ADR-048 and a derived `inv_sid` (R-66, R-90).
 
 ---
 
@@ -137,6 +141,8 @@ v1.1: M16 → M17 → M18 → M19 → M20 (release)
 **Acceptance.** E2E green locally and in CI (loopback), nightly ⚙ over Tor; forensic test: `strings`/hexdump of the profile directory shows no plaintext message, key, contact name or fingerprint; wrong passphrase takes constant time; the crash-between-persist-and-send test shows no key reuse on restart.
 
 **Review focus.** Persist-before-send/ack enforced by construction; OPK deletion; unverified contacts cannot receive view-once messages; no identifiers reach `secmp-transport`; backup contains no ratchet material.
+
+**Obligation from the M4 review (F-M7, C-12).** The transactional store: `PrekeyStore::commit_accept` of the encrypted store stages the OPK deletion and the record's consumption in one store transaction, which the client commits together with the whole `hx::Accepted` (`state`, `peer`, `routes`, `profile`) before it acknowledges any cell of the invitation queue and before it retires that queue; a commit that cannot be made durable is `Error::Unavailable` and changes nothing (R-26). The client retains at most the newest 24 unclassified cells of an invitation queue between `accept` calls, and a complete group is spent after one `accept` (RT-1).
 
 ---
 

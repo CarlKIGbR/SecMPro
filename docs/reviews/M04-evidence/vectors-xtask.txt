@@ -1,0 +1,45 @@
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.09s
+     Running `target/debug/xtask vectors`
+$ /Users/c.carl/.rustup/toolchains/1.98.1-aarch64-apple-darwin/bin/cargo run --release --locked --quiet --package secmp-crypto --features kat --example gen-vectors -- /Users/c.carl/coding/claude_code/SecMPro/vectors/rust
+$ /Users/c.carl/.rustup/toolchains/1.98.1-aarch64-apple-darwin/bin/cargo run --release --locked --quiet --package secmp-proto --example gen-encodings -- /Users/c.carl/coding/claude_code/SecMPro/vectors/rust
+warning: unused import: `sha256`
+  --> crates/secmp-proto/src/prekeys.rs:21:82
+   |
+21 |     HybridSigningKey, Label, MlKem768Dk, MlKem1024Dk, SecretBytes, X25519Secret, sha256,
+   |                                                                                  ^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+$ /Users/c.carl/.rustup/toolchains/1.98.1-aarch64-apple-darwin/bin/cargo run --release --locked --quiet --package secmp-proto --features kat --example gen-tr -- /Users/c.carl/coding/claude_code/SecMPro/vectors/rust
+$ /Users/c.carl/.rustup/toolchains/1.98.1-aarch64-apple-darwin/bin/cargo run --release --locked --quiet --package secmp-proto --features kat --example gen-hx -- /Users/c.carl/coding/claude_code/SecMPro/vectors/rust
+$ /Users/c.carl/.rustup/toolchains/1.98.1-aarch64-apple-darwin/bin/cargo nextest run --locked --package secmp-proto --test encodings_ref
+warning: unused import: `sha256`
+  --> crates/secmp-proto/src/prekeys.rs:21:82
+   |
+21 |     HybridSigningKey, Label, MlKem768Dk, MlKem1024Dk, SecretBytes, X25519Secret, sha256,
+   |                                                                                  ^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `secmp-proto` (lib) generated 1 warning (run `cargo fix --lib -p secmp-proto` to apply 1 suggestion)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+────────────
+ Nextest run ID 3e6b499f-19e7-41b0-ad88-104ec334abd9 with nextest profile: default
+    Starting 3 tests across 1 binary
+        PASS [   0.208s] (1/3) secmp-proto::encodings_ref every_row_of_the_encodings_file
+        PASS [   0.318s] (2/3) secmp-proto::encodings_ref the_rust_generator_reproduces_every_positive_row
+        PASS [   0.348s] (3/3) secmp-proto::encodings_ref canonical_writer_is_stable
+────────────
+     Summary [   0.350s] 3 tests run: 3 passed, 0 skipped
+  caead: agrees with ref; frozen file unchanged
+  encodings: agrees with ref; frozen file unchanged
+  fingerprint: agrees with ref; frozen file unchanged
+  hkdf-labels: agrees with ref; frozen file unchanged
+  hx: agrees with ref; frozen file unchanged
+  hybridkem-1024: agrees with ref; frozen file unchanged
+  hybridkem-768: agrees with ref; frozen file unchanged
+  hybridsign: agrees with ref; frozen file unchanged
+  msgencrypt: agrees with ref; frozen file unchanged
+  sas: agrees with ref; frozen file unchanged
+  tr: agrees with ref; frozen file unchanged
+vectors: 11 suites identical to vectors/ref (structural, SCHEMA §1; positive rows of encodings)

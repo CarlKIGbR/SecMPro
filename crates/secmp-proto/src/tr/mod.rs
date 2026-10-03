@@ -24,6 +24,8 @@ mod tests;
 #[cfg(feature = "kat")]
 pub use entropy::FixedEntropy;
 pub use entropy::{Entropy, OsEntropy};
+#[cfg(feature = "kat")]
+pub use ratchet::{DECRYPT_SITE_KAT, SKIP_STEPS_KAT, TRIAL_COUNTS_KAT};
 pub use ratchet::{Opened, Plaintext, Refused, Sealed};
 pub use select::{MAX_FF, MAX_SKIPPED, SKIP_WINDOW};
 pub use state::RatchetState;

@@ -11,9 +11,11 @@
 
 use core::num::NonZeroU16;
 
-use secmp_crypto::SecretBytes;
+use secmp_crypto::{SecretBytes, Zeroize};
 
-use crate::codec::{Decode, Encode, Reader, Writer, boxed, decode_padded, encode_padded};
+use crate::codec::{
+    Decode, Encode, Reader, Writer, Zeroizing, boxed, decode_padded, encode_padded,
+};
 use crate::error::{Error, Result};
 use crate::keys::{Ed25519Pk, HybridSig, MlKem768Ek, MlKem1024Ek, X25519Pk};
 use crate::sizes::{
@@ -28,7 +30,7 @@ const ONION_CHECKSUM_PREFIX: &[u8] = b".onion checksum";
 const ONION_VERSION: u8 = 0x03;
 
 /// A v3 onion service identity (the decoded 56-character address, spec §5.3).
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 #[cfg_attr(test, derive(Debug))]
 pub struct Onion([u8; ONION_LEN]);
 
@@ -78,7 +80,7 @@ impl Onion {
 /// `RelayRef.direct.host`: 1..=253 bytes, each in 0x21..=0x7E (a DNS name or an IP literal; rev 2.3).
 #[derive(Clone, PartialEq, Eq)]
 #[cfg_attr(test, derive(Debug))]
-pub struct Host(Vec<u8>);
+pub struct Host(crate::codec::Zeroizing<Vec<u8>>);
 
 impl Host {
     /// The host with these bytes.
@@ -88,7 +90,7 @@ impl Host {
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
         if (1..=HOST_MAX).contains(&bytes.len()) && bytes.iter().all(|b| (0x21..=0x7e).contains(b))
         {
-            Ok(Self(bytes.to_vec()))
+            Ok(Self(crate::codec::Zeroizing::new(bytes.to_vec())))
         } else {
             Err(Error::Rejected)
         }
@@ -98,6 +100,12 @@ impl Host {
     #[must_use]
     pub fn as_bytes(&self) -> &[u8] {
         &self.0
+    }
+}
+
+impl Zeroize for Host {
+    fn zeroize(&mut self) {
+        self.0.zeroize();
     }
 }
 
@@ -125,6 +133,35 @@ pub struct RelayRef {
     pub akc: [u8; HASH_LEN],
     /// Direct TLS endpoint, if offered.
     pub direct: Option<Direct>,
+}
+
+impl Zeroize for RelayRef {
+    fn zeroize(&mut self) {
+        self.relay_fp.zeroize();
+        self.onion.0.zeroize();
+        self.akc.zeroize();
+        if let Some(d) = &mut self.direct {
+            d.host.zeroize();
+            d.spki_sha256.zeroize();
+        }
+    }
+}
+
+/// A decoded or rejected `RelayRef` is wiped when it goes out of scope (M4 review R-61).
+impl Drop for RelayRef {
+    fn drop(&mut self) {
+        self.zeroize();
+        #[cfg(test)]
+        crate::wire::wipe_log::note("RelayRef");
+    }
+}
+
+/// `SecretBytes` has no in-place wipe: a zero value replaces the seed, and the old allocation is wiped by its own
+/// `Drop`. (`from_slice` fails only on a wrong length, which `HASH_LEN` is not.)
+pub(crate) fn wipe_seed(seed: &mut SecretBytes<HASH_LEN>) {
+    if let Ok(zero) = SecretBytes::from_slice(&[0; HASH_LEN]) {
+        *seed = zero;
+    }
 }
 
 impl Encode for RelayRef {
@@ -192,6 +229,28 @@ pub struct InvitationV1 {
     pub expires: u64,
 }
 
+/// Wiped explicitly, by `Zeroizing<InvitationV1>` (held so by [`crate::inv::InviteeAccepted`]) and, since R-61, by its
+/// own `Drop` (so a rejected invitation is wiped too): the relay reference, the ids and both seeds.
+impl Zeroize for InvitationV1 {
+    fn zeroize(&mut self) {
+        self.relay.zeroize();
+        self.ld_id.zeroize();
+        wipe_seed(&mut self.link_key);
+        self.inviter_fp.zeroize();
+        self.inv_sid.zeroize();
+        wipe_seed(&mut self.inv_send_seed);
+        self.expires = 0;
+    }
+}
+
+impl Drop for InvitationV1 {
+    fn drop(&mut self) {
+        self.zeroize();
+        #[cfg(test)]
+        crate::wire::wipe_log::note("InvitationV1");
+    }
+}
+
 impl Encode for InvitationV1 {
     fn encode_to(&self, w: &mut Writer) -> Result<()> {
         write_ver(w);
@@ -210,6 +269,9 @@ impl Encode for InvitationV1 {
 
 impl Decode for InvitationV1 {
     fn decode_from(r: &mut Reader<'_>) -> Result<Self> {
+        // feature `kat`: the invitee's reject-site tag (`inv::INVITEE_SITE_KAT`)
+        #[cfg(feature = "kat")]
+        crate::inv::INVITEE_SITE_KAT.set(Some("invitation decode"));
         read_ver(r)?;
         // one-time only; 0x02 (multi-use) is reserved and v1 clients MUST reject it (spec §5.2)
         r.expect(INVITATION_ONE_TIME)?;
@@ -227,10 +289,12 @@ impl Decode for InvitationV1 {
 }
 
 /// `Profile = name_len u8 ‖ name (UTF-8, ≤ 64) ‖ avatar_present u8 ‖ [avatar_sha256[32]]` (D.3).
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone)]
 #[cfg_attr(test, derive(Debug))]
 pub struct Profile {
-    name: String,
+    /// Held wiped-on-drop: it comes out of a decrypted Handshake (M3 review F10). Not a secret in the comparison
+    /// sense (display name), so `PartialEq` below compares the strings.
+    name: Zeroizing<String>,
     /// SHA-256 of the avatar, if any.
     pub avatar_sha256: Option<[u8; HASH_LEN]>,
 }
@@ -245,7 +309,7 @@ impl Profile {
             return Err(Error::Rejected);
         }
         Ok(Self {
-            name: name.to_owned(),
+            name: Zeroizing::new(name.to_owned()),
             avatar_sha256,
         })
     }
@@ -253,9 +317,18 @@ impl Profile {
     /// The display name.
     #[must_use]
     pub fn name(&self) -> &str {
-        &self.name
+        self.name.as_str()
     }
 }
+
+// display data; variable-time comparison is acceptable (reviewer 2026-10-01)
+impl PartialEq for Profile {
+    fn eq(&self, other: &Self) -> bool {
+        *self.name == *other.name && self.avatar_sha256 == other.avatar_sha256
+    }
+}
+
+impl Eq for Profile {}
 
 impl Encode for Profile {
     fn encode_to(&self, w: &mut Writer) -> Result<()> {
@@ -281,7 +354,7 @@ impl Decode for Profile {
         let name = core::str::from_utf8(name).map_err(|_| Error::Rejected)?;
         let avatar_sha256 = if r.flag()? { Some(r.array()?) } else { None };
         Ok(Self {
-            name: name.to_owned(),
+            name: Zeroizing::new(name.to_owned()),
             avatar_sha256,
         })
     }
@@ -370,7 +443,11 @@ impl Decode for PrekeyBundle {
         let rpk_kem = MlKem768Ek::decode_from(r)?;
         let spk_expiry = r.u64()?;
         // `opk_present` MUST be 0x01 in v1 (spec §6.3)
+        #[cfg(feature = "kat")]
+        crate::inv::INVITEE_SITE_KAT.set(Some("opk_present"));
         r.expect(1)?;
+        #[cfg(feature = "kat")]
+        crate::inv::INVITEE_SITE_KAT.set(Some("linkdata decode"));
         Ok(Self {
             spk_id,
             spk_dh,
@@ -651,6 +728,19 @@ pub(crate) mod tests {
             w.u8(0);
             assert!(Profile::decode(&w.into_bytes()).is_err());
         }
+        Ok(())
+    }
+
+    /// M4 PR run 37127247911 (R-96): `Profile::eq` compares the name and the avatar hash, both — a one-byte change of
+    /// either, and a missing avatar, make two profiles differ (kills `eq -> true` and `&& -> ||`).
+    #[test]
+    fn profile_eq_distinguishes_name_and_avatar() -> Result<()> {
+        let alice = Profile::new("alice", Some([1; 32]))?;
+        assert_eq!(alice, Profile::new("alice", Some([1; 32]))?);
+        assert_ne!(alice, Profile::new("alicf", Some([1; 32]))?);
+        assert_ne!(alice, Profile::new("alice", Some([2; 32]))?);
+        assert_ne!(alice, Profile::new("alice", None)?);
+        assert_eq!(Profile::new("", None)?, Profile::new("", None)?);
         Ok(())
     }
 

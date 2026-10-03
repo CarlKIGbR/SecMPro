@@ -91,13 +91,24 @@ pub(crate) const CT_MIN_REALISED_QUANTA: u64 = 80;
 /// carries `secmp_ct_scale`, which the gate refuses, and the gate unsets the variable for its own run.
 pub(crate) const CT_SAMPLES: usize = 1_000_000;
 
+/// ADR-045 Amendment 1 (M4 review C-1): the wall-clock budget of the bench run of the `ct` step, in seconds. At
+/// expiry the gate kills the bench and fails naming the target and phase of the last line of
+/// `target/ct-progress.jsonl`. 290 min: 40 min below the 330 min of the `ct` job of `ci.yml` and of `ci-dispatch.yml`
+/// `dispatch-ct` (build and setup fit in the rest; delta review VD1-2).
+pub(crate) const CT_STEP_TIMEOUT_SECONDS: u64 = 17_400;
+
 /// Samples per measurement of `sas` (`SafetyNumber::new`, Argon2id: about a millisecond per call).
 pub(crate) const CT_SAS_SAMPLES: usize = 20_000;
 
 /// The ct targets (M2 review C3 (a)): the gate refuses a report whose target set differs. Exactly one of them, the
 /// positive control, is measured once and must be detected. M3: the three SecMP-TR rejection targets
 /// `tr_decrypt_reject_*` (plan D9: `RatchetState::decrypt_with` on one fixed receiver state), the A/A′ placement
-/// control (ADR-042) and the same-content control (ADR-042 Amendment 2).
+/// control (ADR-042) and the same-content control (ADR-042 Amendment 2). M4: `tr_decrypt_reject_skipped` (M3 review
+/// R-04, F2; WEISUNG M4-4: the skipped path, entry 0 vs entry 4 of nine under the first of three distinct skipped
+/// header keys — the opening trial is the same, R-59) and the INV/HX targets of
+/// TEST-SPEC-M4 (f): `inv_fingerprint_compare` (`inv::invitee_check`, §5.5 step 3), `x25519_zero_check`
+/// (`X25519Secret::diffie_hellman`, §3, §6.4), `hx_accept_reject_inner` and `hx_accept_reject_first_msg`
+/// (`Responder::accept`, §6.6 steps 2 and 3); M4 review C-2: the HX same-content control (ADR-042 Amendment 3).
 pub(crate) const CT_TARGETS: &[&str] = &[
     "control_variable_time_compare",
     "tag_compare",
@@ -112,7 +123,13 @@ pub(crate) const CT_TARGETS: &[&str] = &[
     "tr_decrypt_reject_hdr_key",
     "tr_decrypt_reject_body_tag",
     "tr_decrypt_reject_ct_pq",
+    "tr_decrypt_reject_skipped",
     "same_content_control",
+    "inv_fingerprint_compare",
+    "x25519_zero_check",
+    "hx_accept_reject_inner",
+    "hx_accept_reject_first_msg",
+    "hx_same_content_control",
 ];
 
 /// The positive control among [`CT_TARGETS`].
@@ -126,6 +143,11 @@ pub(crate) const CT_AA_PRIME_CONTROL: &str = "aa_prime_control";
 /// the per-class preparation path, judged like a target; a FAIL makes the run `CONTROL_FAIL`, PASS and
 /// `SUB_FLOOR_SHIFT` pass. Not the positive control.
 pub(crate) const CT_SAME_CONTENT_CONTROL: &str = "same_content_control";
+
+/// The HX same-content control among [`CT_TARGETS`] (ADR-042 Amendment 3, M4 review C-2): the class-1 cells of
+/// `hx_accept_reject_inner` in both classes through the HX preparation path, judged like [`CT_SAME_CONTENT_CONTROL`]: a
+/// FAIL makes the run `CONTROL_FAIL`, PASS and `SUB_FLOOR_SHIFT` pass. Not the positive control.
+pub(crate) const CT_HX_SAME_CONTENT_CONTROL: &str = "hx_same_content_control";
 
 /// docs/07 M3 acceptance "encrypt+decrypt of a message < 3 ms" (M3 plan D11): the `perf` step fails if the maximum of
 /// a kind of `crates/secmp-proto/examples/tr-perf.rs` (release profile; encrypt, persist, decrypt and commit of one
@@ -142,11 +164,20 @@ pub(crate) const TR_PERF_KINDS: &[&str] = &["chain", "step"];
 /// cargo-fuzz targets under `fuzz/fuzz_targets/` (docs/06 §5 step 6): M1 key, ciphertext and signature parsers
 /// and the two openers of `secmp-crypto`; M2 every `secmp-proto` decoder, one target per Appendix D section
 /// (`proto_*`, a selector byte picks the decoder); M3 SecMP-TR `Decrypt` on a fixed receiver state (`tr_decrypt`)
-/// and the TR persistence decoders (`tr_state`).
+/// and the TR persistence decoders (`tr_state`); M4 the invitation URI (`inv_uri`), the link data (`inv_linkdata`),
+/// the three handshake structures (`hx_outer`, `hx_inner`, `hx_cell_plaintext`) and `Responder::accept` on raw and
+/// on structurally mutated envelopes (`hx_accept_raw`, `hx_accept_structured`).
 pub(crate) const FUZZ_TARGETS: &[&str] = &[
     "caead_open",
     "ed25519_verify",
+    "hx_accept_raw",
+    "hx_accept_structured",
+    "hx_cell_plaintext",
+    "hx_inner",
+    "hx_outer",
     "hybrid_sign_verify",
+    "inv_linkdata",
+    "inv_uri",
     "mldsa65_verify",
     "mlkem_parse",
     "msg_open",
@@ -199,10 +230,24 @@ pub(crate) const FUZZ_NIGHTLY_SECONDS: u64 = 14_400;
 /// - `tr_decrypt`: mode 1 + the larger of a cell (4096) and a header plaintext (2314; mode ≠ 0) = 4097.
 /// - `tr_state`: selector 1 + the larger of `RatchetStateV1` at its maximum (38 585, `skipped` full) and `InboxV1`
 ///   with one message of one maximal chunk (1694) = 38586.
+/// - `inv_uri`: the URI of the largest `InvitationV1` (a 253-byte `direct` host: 530 B → 707 characters, 10 for the
+///   prefix) = 717.
+/// - `inv_linkdata`: mode 1 + the larger of an opened `LinkDataV1` (12288) and a `LinkBlob` (12360) = 12361.
+/// - `hx_outer`: the padded `Outer` = 12018. `hx_inner`: `Inner` = 6113. `hx_cell_plaintext`: 4024.
+/// - `hx_accept_raw`: count 1 + 12 cells of (selector 1 + 4096 raw bytes) = 49165.
+/// - `hx_accept_structured`: selector 1 + the larger of `Padded` (12018), `Inner` (6113) and the `Outer` head (3177)
+///   = 12019.
 pub(crate) const FUZZ_MAX_LEN: &[(&str, usize)] = &[
     ("caead_open", 12_618),
     ("ed25519_verify", 4_243),
+    ("hx_accept_raw", 49_166),
+    ("hx_accept_structured", 12_020),
+    ("hx_cell_plaintext", 4_025),
+    ("hx_inner", 6_114),
+    ("hx_outer", 12_019),
     ("hybrid_sign_verify", 7_810),
+    ("inv_linkdata", 12_362),
+    ("inv_uri", 718),
     ("mldsa65_verify", 3_567),
     ("mlkem_parse", 1_570),
     ("msg_open", 2_000),
@@ -219,23 +264,105 @@ pub(crate) const FUZZ_MAX_LEN: &[(&str, usize)] = &[
 /// Packages under the mutation gate (docs/06 §4, §5 step 8).
 pub(crate) const MUTANT_PACKAGES: &[&str] = &["secmp-crypto", "secmp-proto"];
 
+/// ADR-047 Amendment 1 (2): the shards of the mutation gate in CI — the matrix job `mutants-shard` of `ci.yml` runs
+/// `cargo xtask step --strict mutants --shard K/8` for K = 0…7, and the job `mutants` (`step mutants-merge`) merges
+/// their results and gives the verdict.
+pub(crate) const MUTANT_SHARDS: usize = 8;
+
+/// ADR-047 Amendment 2 (1) (replacing the unviable cap of Amendment 1 (4), M4 review R-06): the floor per package of
+/// [`MUTANT_PACKAGES`] — at least one caught mutant, and caught at least this percentage of all the package's generated
+/// mutants (caught + missed + unviable + timeout); otherwise the merge fails naming the package.
+pub(crate) const MUTANT_MIN_CAUGHT_PERCENT: usize = 50;
+
+/// ADR-047 Amendment 2 (2): an unviable share above this percentage of a package's mutants is printed as a WARNING in
+/// the verdict text and the job summary, never a failure (PR run 37127247911: `secmp-crypto` 99 of 268 = 36.9 %, all
+/// `FnValue` replacements needing `Default` on types that have none by design).
+pub(crate) const MUTANT_UNVIABLE_WARN_PERCENT: usize = 35;
+
+/// ADR-047 Amendment 1 (5), M4 review R-05: tests left out of the test run of every mutant (libtest `--skip` filters
+/// after `cargo mutants … -- --`, each matching only its test), as (name, reason). The `kat` and `nextest` steps still
+/// run them; the same bound is checked quickly by `select::tests::skip_plan_bounds`, the Kani harness `tr_skip_plan`,
+/// vector N10 and the property tests.
+pub(crate) const MUTANT_SKIP_TESTS: &[(&str, &str)] = &[
+    (
+        "ratchet_fast_forward_bound_on_the_chain",
+        "secmp-proto tr::tests (feature kat): 2 × 2^20 KDF_CK, 49–110 s per run on CI",
+    ),
+    (
+        "ratchet_fast_forward_bound_on_a_step",
+        "secmp-proto tr::tests (feature kat): 3 × 2^20 KDF_CK, 37–73 s per run on CI",
+    ),
+];
+
+/// ADR-047 Amendment 1, with the budget rule of ADR-045 Amendment 1: the wall-clock budget of one run of the `mutants`
+/// step (one shard in CI), in seconds; at expiry the gate stops cargo-mutants and fails naming the last line of its
+/// output. 280 min: 20 min below the `mutants-shard` job of `ci.yml` (300 min), whose setup fits in the rest.
+pub(crate) const MUTANTS_STEP_TIMEOUT_SECONDS: u64 = 16_800;
+
 /// Code compiled only under Kani (`#[cfg(kani)]`: `secmp-proto`'s harnesses and the `kani_stubs` modules), kept out
 /// of the mutation gate by file and by mutant name: no test build contains it, so every mutant of it would survive
 /// (M2: 52 such survivors in the CI run on `774e04a`); Kani runs it (ci-full step 9).
 pub(crate) const MUTANT_EXCLUDE_FILES: &[&str] = &["crates/secmp-proto/src/kani_proofs.rs"];
 /// Mutant names (regex, `cargo mutants --exclude-re`) excluded: `kani_stubs::` for the reason above; and (M3) the
 /// `secmp-proto` code compiled only with `secmp-proto`'s own feature `kat` — the vector, test and bench tooling of
-/// SecMP-TR (`tr::FixedEntropy`, the message-key digests, the header-key and `sb` accessors), never in a shipped
-/// build. The gate builds `secmp-proto` without that feature (its `kat` tests — the `tr` vectors, generator and
-/// property tests — take minutes, per mutant), so every mutant of that code would survive unbuilt (M3 local run: 27
-/// such survivors). The `kat` step runs it: `tests/tr_vectors.rs` and `tests/tr_generator.rs` reproduce every byte
-/// `FixedEntropy` supplies, the property tests check the digests.
+/// SecMP-TR (`tr::FixedEntropy`, the message-key digests, the header-key and `sb` accessors, and (M4)
+/// `encrypt_padded_kat`), never in a shipped build. Since R-60 the gate builds with feature `kat` (`--features kat` for
+/// both packages since ADR-047 Amendment 1; the HX integration suite is `required-features`); the exclusion stays, as
+/// these functions are tooling, not product code. Formerly
+/// the gate built without it, so every mutant of that code would survive unbuilt (M3 local run: 27 such survivors; M4 local run on `tr/ratchet.rs` 2026-10-02: 1,
+/// `encrypt_padded_kat`). The `kat` step runs it: `tests/tr_vectors.rs` and `tests/tr_generator.rs` reproduce every
+/// byte `FixedEntropy` supplies, the `hx` suite's generator (`tests/common/hx_gen.rs`) seals its padded first
+/// messages with `encrypt_padded_kat`, the property tests check the digests.
 pub(crate) const MUTANT_EXCLUDE_RE: &[&str] = &[
     "kani_stubs::",
     "FixedEntropy",
     "message_key_digest_kat",
     "replace mk_digest ",
-    "RatchetState::(hk_s_kat|receiving_header_keys_kat|sb_kat)",
+    "RatchetState::(hk_s_kat|receiving_header_keys_kat|sb_kat|encrypt_padded_kat)",
+    // cfg(kani)-only helpers (M4-12): not compiled in the mutants build
+    "Groups<.*>::(get|remove_completed) ",
+    // error text, no logic (M4-12)
+    "impl (core::fmt::)?Display for \\w+Error>::fmt",
+];
+
+/// The reject sites a `ct` target may claim (M4 review R-63): every site name in use, in one place (M4 review C-14:
+/// `gates::tests::known_sites_equal_the_product_site_tags` checks the set against the product's tags). The product tags
+/// them under feature `kat` (`tr::DECRYPT_SITE_KAT`, `inv::INVITEE_SITE_KAT`, `hx::ACCEPT_SITE_KAT`); the bench's
+/// claims (`crates/secmp-testkit/benches/ct.rs`) name one of them (the `x25519_zero_check` claim names the all-zero
+/// check, which passes: it is no reject target). A new site is added here with the code that sets it, so a claim with
+/// a misspelt or retired site fails the gate instead of being reported as it stands.
+pub(crate) const KNOWN_SITES: &[&str] = &[
+    // SecMP-TR (`tr::ratchet`, §7.4)
+    "cell length",
+    "header: no key opened",
+    "skipped: (hk, n) not stored",
+    "header decode",
+    "body MAC",
+    "kem constancy",
+    "counter rule",
+    "dh_pk",
+    "body decode",
+    // SecMP-INV (`inv`, `wire::inv`, §5.5)
+    "uri",
+    "invitation decode",
+    "blob open",
+    "linkdata decode",
+    "opk_present",
+    "expired",
+    "fingerprint",
+    "bundle signature",
+    "bundle expired",
+    // SecMP-HX (`hx`, §6.5, §6.6)
+    "no complete group",
+    "outer",
+    "x25519",
+    "inner open",
+    "inner checks",
+    "first_msg decrypt",
+    "first_msg checks",
+    "opk delete",
+    // the Output claim of `x25519_zero_check`
+    "§3/§6.4 all-zero check of the output (passes: not a reject target)",
 ];
 
 /// Packages run under Miri (docs/06 §4); M3: `secmp-proto` (M2 review F3).
@@ -267,6 +394,9 @@ pub(crate) const MIRI_TARGET: &str = "aarch64-unknown-linux-gnu";
 /// `docs/reviews/M03-evidence/miri-secmp-proto-aarch64-apple-darwin.txt`): every test of 60 s or more is skipped
 /// here — `secmp-proto` has no `unsafe` (`forbid(unsafe_code)`), so under Miri its tests re-check the dependencies'
 /// `unsafe` code, which the kept tests reach on shorter inputs; the kept lib tests take about 5.4 min together.
+/// Measured M4 (`x86_64` GitHub runner, `linux-full` run 37127247911;
+/// `docs/reviews/M04-evidence/linux-full-37127247911-miri-excerpt.txt`): the 67 kept `secmp-proto` lib tests took
+/// 7232 s, six of them 60 s or more, which the same 60-s rule skips.
 pub(crate) const MIRI_SKIP: &[(&str, &str, &str)] = &[
     (
         "secmp-crypto",
@@ -345,6 +475,89 @@ pub(crate) const MIRI_SKIP: &[(&str, &str, &str)] = &[
         "canonical_writer_is_stable",
         "4082 s under Miri (M3): generates the 78 positive rows of the encodings suite",
     ),
+    (
+        "secmp-proto",
+        "test-target:hx_persist",
+        "731 s, 573 s and 699 s per test under Miri (M4-fix, measured on 7a38edd, 2003 s in all; \
+         docs/reviews/M04-evidence/miri-hx-persist-7a38edd.txt): each test generates two identities (ML-DSA-65 key \
+         generation) and runs a full handshake; the fourth test (release_persists_the_state_at_release_time, M4 \
+         review C-8) is of the same kind",
+    ),
+    (
+        "secmp-proto",
+        "tr::ratchet::trial_work::trial_opens_every_candidate_every_call",
+        "5392 s under Miri (M4, linux-full run 37127247911, x86_64 GitHub runner; \
+         docs/reviews/M04-evidence/linux-full-37127247911-miri-excerpt.txt): 3 fixtures x 7 cells, each decrypt \
+         trial-opens every skipped header key; the kept `tests/tr_smoke.rs` runs a session through the same \
+         AEAD, X25519 and ML-KEM code",
+    ),
+    (
+        "secmp-proto",
+        "wire::cell::tests::read_routes_pre_sizes_the_vector",
+        "553 s under Miri (M4, linux-full run 37127247911, x86_64 GitHub runner; \
+         docs/reviews/M04-evidence/linux-full-37127247911-miri-excerpt.txt): encodes and decodes 1, 10 and 255 \
+         relay-queue routes; `wire::cell::tests::handshake_body_caps_and_routes` decodes one route \
+         through the same `RouteDescriptor` and `Zeroizing` code",
+    ),
+    (
+        "secmp-proto",
+        "tr::ratchet::single_conversion::any_skipped_single_conversion",
+        "520 s under Miri (M4, linux-full run 37127247911, x86_64 GitHub runner; \
+         docs/reviews/M04-evidence/linux-full-37127247911-miri-excerpt.txt): a session with six cells through \
+         skipped-key, chain, step and rejection paths; the kept `tests/tr_smoke.rs` reaches the same \
+         `RatchetState::open` code and dependency `unsafe` code",
+    ),
+    (
+        "secmp-proto",
+        "wire::cell::tests::routes",
+        "90 s under Miri (M4, linux-full run 37127247911, x86_64 GitHub runner; \
+         docs/reviews/M04-evidence/linux-full-37127247911-miri-excerpt.txt): route descriptors up to a 65535-byte \
+         unknown blob and a route update; `wire::cell::tests::handshake_body_caps_and_routes` reaches the same \
+         route codec on shorter inputs",
+    ),
+    (
+        "secmp-proto",
+        "wire::cell::tests::app_message_and_batch",
+        "85 s under Miri (M4, linux-full run 37127247911, x86_64 GitHub runner; \
+         docs/reviews/M04-evidence/linux-full-37127247911-miri-excerpt.txt): every app kind, a 65535-byte message \
+         and batches; `wire::cell::tests::content_types_padding_and_limits` (26 s) and \
+         `wire::cell::tests::header` (22 s) reach the same codec code on shorter inputs",
+    ),
+    (
+        "secmp-proto",
+        "tr::entropy::tests::os_entropy_draws_fresh_values",
+        "66 s under Miri (M4, linux-full run 37127247911, x86_64 GitHub runner; \
+         docs/reviews/M04-evidence/linux-full-37127247911-miri-excerpt.txt): draws X25519, ML-KEM-768 and nonce \
+         values from the OS and runs one encapsulation; `test_entropy_fails_after_its_budget` (46 s) and \
+         `keys::tests::mlkem_fields` (40 s) reach the same ML-KEM code",
+    ),
+];
+
+/// Integration-test targets with `required-features` that no Miri run builds (`miri` and `miri-full` run without
+/// features; naming such a target would make cargo refuse the run), as (package, test target, reason). M4 review C-4
+/// (R-12): the Miri gate fails unless this list equals the package's test targets with `required-features`, in both
+/// directions; every one of them runs natively in the `kat` step (and `nextest`).
+pub(crate) const MIRI_FEATURE_GATED: &[(&str, &str, &str)] = &[
+    (
+        "secmp-proto",
+        "hx",
+        "required-features = [\"kat\"]: the SecMP-HX integration suite (M4), natively in the kat step",
+    ),
+    (
+        "secmp-proto",
+        "tr_generator",
+        "required-features = [\"kat\"]: the SecMP-TR vector generator test (M3), natively in the kat step",
+    ),
+    (
+        "secmp-proto",
+        "tr_properties",
+        "required-features = [\"kat\"]: the SecMP-TR property tests (M3), natively in the kat step",
+    ),
+    (
+        "secmp-proto",
+        "tr_vectors",
+        "required-features = [\"kat\"]: the frozen SecMP-TR vectors (M3), natively in the kat step",
+    ),
 ];
 
 /// Tests Miri cannot run at all, left out of `miri` and `miri-full` alike, as (package, filter, reason); same filter
@@ -370,11 +583,18 @@ pub(crate) const KANI_PACKAGES: &[&str] = &["secmp-proto"];
 /// The Kani harnesses (M2 review C5): the gate refuses a run unless Kani reports exactly these as successfully
 /// verified ("Complete - N successfully verified harnesses, 0 failures, N total." with N = this count), so a
 /// deleted or renamed harness fails the gate instead of passing silently. M3 (plan step 9): the three `tr_*`
-/// harnesses of the SecMP-TR decisions (`tr::select`).
+/// harnesses of the SecMP-TR decisions (`tr::select`). M4: the five `kani_*` harnesses of SecMP-HX, and (WEISUNG M4-8)
+/// K4b `kani_commit_accept_atomic` on the real prekey store.
 pub(crate) const KANI_HARNESSES: &[&str] = &[
     "kani_proofs::cell",
     "kani_proofs::header_v1",
     "kani_proofs::header_v1_reencodes",
+    "kani_proofs::kani_accept_opk_delete_only_on_success",
+    "kani_proofs::kani_cell_plaintext_decode_total",
+    "kani_proofs::kani_commit_accept_atomic",
+    "kani_proofs::kani_hx_chunk_bounds",
+    "kani_proofs::kani_hx_grouping",
+    "kani_proofs::kani_outer_unpad_total",
     "kani_proofs::padding",
     "kani_proofs::request_cont",
     "kani_proofs::request_fetch",
@@ -393,6 +613,14 @@ pub(crate) const KANI_HARNESSES: &[&str] = &[
     "kani_proofs::tr_skip_plan",
 ];
 
+/// M4 delta review VD1-5: the `kani::cover!` properties per harness. The gate requires exactly these cover summaries
+/// ("N of N cover properties satisfied" for each, no other harness with one), so a deleted or an added cover fails it
+/// instead of changing the count silently.
+pub(crate) const KANI_COVERS: &[(&str, usize)] = &[
+    ("kani_proofs::kani_accept_opk_delete_only_on_success", 1),
+    ("kani_proofs::kani_commit_accept_atomic", 1),
+];
+
 /// The SecMP vector suites (`vectors/SCHEMA.md` §3): frozen as `vectors/<suite>.json`, reference files
 /// `vectors/ref/<suite>.json`, Rust files `vectors/rust/<suite>.json` (docs/06 §5 step 12a). M2–M5 add suites.
 pub(crate) const VECTOR_SUITES: &[&str] = &[
@@ -400,6 +628,7 @@ pub(crate) const VECTOR_SUITES: &[&str] = &[
     "encodings",
     "fingerprint",
     "hkdf-labels",
+    "hx",
     "hybridkem-1024",
     "hybridkem-768",
     "hybridsign",
@@ -412,7 +641,8 @@ pub(crate) const VECTOR_SUITES: &[&str] = &[
 /// `vectors/ref/<suite>.json`, absent from `vectors/`. The `ref-vectors` step requires each to be present and
 /// well-formed (JSON, `suite` = its name, a non-empty `cases` array) and compares nothing yet. Moving a suite from
 /// here to `VECTOR_SUITES` is its freeze step (M2: `encodings`, frozen in `docs/reviews/M02-report.md` plan step 10;
-/// M3: `tr`, committed with the M3 brief and frozen in `docs/reviews/M03-report.md` plan step 6). None pending.
+/// M3: `tr`, committed with the M3 brief and frozen in `docs/reviews/M03-report.md` plan step 6; M4: `hx`, committed
+/// with the M4 plan commit and frozen in `docs/reviews/M04-report.md` plan step 5). None pending.
 pub(crate) const VECTOR_REF_PENDING: &[&str] = &[];
 
 /// Suites whose Rust generator writes the positive rows only (M2 cross-generates the `encodings` positives, docs/07
@@ -420,8 +650,26 @@ pub(crate) const VECTOR_REF_PENDING: &[&str] = &[];
 /// reject every other row of the reference file (`secmp-proto` test `encodings_ref`) before the freeze.
 pub(crate) const VECTOR_POSITIVE_ONLY: &[&str] = &["encodings"];
 
-/// ProVerif models under `formal/` (docs/06 §5 step 10). M3 adds `tr.pv`, M4 `hx.pv`, M5 `link.pv`.
+/// The single-file ProVerif models `formal/<name>.pv` (docs/06 §5 step 10): M3 `tr.pv`; M5 adds `link.pv`. The `proverif`
+/// step refuses any other `formal/*.pv`. M4 (WEISUNG M4-5 §4, gate F7, M3 review R-14): the SecMP-HX model is not one of
+/// them — it is the library [`PROVERIF_HX_LIB`] and one model per session under [`PROVERIF_HX_DIR`] (the files of
+/// [`PROVERIF_EXPECTED_HX`]), each run as `proverif -lib formal/hx.pvl formal/hx/<session>.pv`; the old joint model
+/// `formal/hx.pv` must not exist.
 pub(crate) const PROVERIF_MODELS: &[&str] = &["tr"];
+
+/// The SecMP-HX ProVerif library (M4, WEISUNG M4-5): required whenever the `hx` models run.
+pub(crate) const PROVERIF_HX_LIB: &str = "formal/hx.pvl";
+
+/// The directory of the SecMP-HX session models `<session>.pv` (M4, WEISUNG M4-5): its set of `.pv` stems must equal
+/// the set of files of [`PROVERIF_EXPECTED_HX`].
+pub(crate) const PROVERIF_HX_DIR: &str = "formal/hx";
+
+/// Seconds one ProVerif process may run (WEISUNG M4-5 §4, gate F7): a run still going after this is killed, and the
+/// gate fails naming the file and its last progress line (`… rules inserted. …`). Applies to every model file.
+pub(crate) const PROVERIF_TIMEOUT_SECONDS: u64 = 1800;
+
+/// The largest number of parallel ProVerif processes (`--jobs N`), and the cap of the default (the available cores).
+pub(crate) const PROVERIF_MAX_JOBS: usize = 4;
 
 /// What one ProVerif `RESULT` line must say (`formal/CLAIMS.md`, gate rule).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -434,36 +682,279 @@ pub(crate) enum Proved {
     Informative,
 }
 
-/// The expected `RESULT` lines of one model: runs of (CLAIMS ID, number of lines, expected verdict), in order.
-pub(crate) type ProverifRuns = &'static [(&'static str, usize, Proved)];
+/// The expected `RESULT` lines of each model of [`PROVERIF_MODELS`]: one row per line, (file stem, `formal/CLAIMS.md`
+/// ID, query text, expected verdict) in the order ProVerif prints them, matched by query text like the HX files
+/// (`gates::proverif_check_hx_in`, M4 review C-7, ADR-046 Amendment 1 (3); M3 plan D10 compared only count and
+/// verdict per position): a missing, an extra or a re-ordered line fails, as does a `True` line that is not "is true."
+/// and a `False` line that is not "is false."; an `Informative` line may say anything. A test checks the IDs and
+/// verdicts against the "Expected" column of `formal/CLAIMS.md`.
+pub(crate) const PROVERIF_EXPECTED: &[(&str, &[HxExpected])] = &[("tr", PROVERIF_EXPECTED_TR)];
 
-/// The expected `RESULT` lines of each model of [`PROVERIF_MODELS`], in the order ProVerif prints them, as runs of
-/// (`formal/CLAIMS.md` ID, number of lines, expected verdict). The `proverif` step expands the runs and compares line
-/// by line (`gates::proverif_check`, M3 plan D10): the number of lines must match, a `True` line must be proved, a
-/// `False` line must be an attack, an `Informative` line may say anything; a test checks the verdicts against the
-/// "Expected" column of `formal/CLAIMS.md`.
-///
 /// `tr` (M3, 39 lines; CLAIMS §TR gate rule: T1–T6, T8, T9, T11 true, T7 and T10 false, T12 informative): T1 the six
 /// contents of steps 1–3 (n = 0, 1); T2 both directions; T3 the four contents of steps 1–2; T4, T5, T6 and T7 the two
 /// contents of step 3 each; T8 per step `dh_pk` and `ek_pq` of its header and `n` of both messages (twelve); T9 the
-/// same four fields of step 1; T10 one content; T11 and T12 one query each (T12: the model gives false).
-pub(crate) const PROVERIF_EXPECTED: &[(&str, ProverifRuns)] = &[(
-    "tr",
-    &[
-        ("T1", 6, Proved::True),
-        ("T2", 2, Proved::True),
-        ("T3", 4, Proved::True),
-        ("T4", 2, Proved::True),
-        ("T5", 2, Proved::True),
-        ("T6", 2, Proved::True),
-        ("T7", 2, Proved::False),
-        ("T8", 12, Proved::True),
-        ("T9", 4, Proved::True),
-        ("T10", 1, Proved::False),
-        ("T11", 1, Proved::True),
-        ("T12", 1, Proved::Informative),
-    ],
-)];
+/// same four fields of step 1; T10 one content; T11 and T12 one query each (T12: the model gives false). M4 (WEISUNG
+/// M4-5, M3 review R-52, EXT-1): T13, reachability sanity, one query per honest session of the model (sClean, sFS,
+/// sPCS, sPCSdh, sPCSkem, sPCSboth, sHFS), each false (the honest run completes) — 46 lines. The query texts are the
+/// `RESULT` lines of the gate run on `569c2e2` (`docs/reviews/M04-evidence/proverif-tr-569c2e2.txt`). One entry per line;
+/// `rustfmt` leaves the table alone.
+#[rustfmt::skip]
+pub(crate) const PROVERIF_EXPECTED_TR: &[HxExpected] = &[
+    ("tr", "T1", "not attacker_p1(content(sClean,st1,c0))", Proved::True),
+    ("tr", "T1", "not attacker_p1(content(sClean,st1,c1))", Proved::True),
+    ("tr", "T1", "not attacker_p1(content(sClean,st2,c0))", Proved::True),
+    ("tr", "T1", "not attacker_p1(content(sClean,st2,c1))", Proved::True),
+    ("tr", "T1", "not attacker_p1(content(sClean,st3,c0))", Proved::True),
+    ("tr", "T1", "not attacker_p1(content(sClean,st3,c1))", Proved::True),
+    ("tr", "T2", "inj-event(Recv(sClean,pB,i_55,n_55,x)) ==> inj-event(Send(sClean,pA,i_55,n_55,x))", Proved::True),
+    ("tr", "T2", "inj-event(Recv(sClean,pA,i_55,n_55,x)) ==> inj-event(Send(sClean,pB,i_55,n_55,x))", Proved::True),
+    ("tr", "T3", "not attacker_p1(content(sFS,st1,c0))", Proved::True),
+    ("tr", "T3", "not attacker_p1(content(sFS,st1,c1))", Proved::True),
+    ("tr", "T3", "not attacker_p1(content(sFS,st2,c0))", Proved::True),
+    ("tr", "T3", "not attacker_p1(content(sFS,st2,c1))", Proved::True),
+    ("tr", "T4", "not attacker_p1(content(sPCS,st3,c0))", Proved::True),
+    ("tr", "T4", "not attacker_p1(content(sPCS,st3,c1))", Proved::True),
+    ("tr", "T5", "not attacker_p1(content(sPCSdh,st3,c0))", Proved::True),
+    ("tr", "T5", "not attacker_p1(content(sPCSdh,st3,c1))", Proved::True),
+    ("tr", "T6", "not attacker_p1(content(sPCSkem,st3,c0))", Proved::True),
+    ("tr", "T6", "not attacker_p1(content(sPCSkem,st3,c1))", Proved::True),
+    ("tr", "T7", "not attacker_p1(content(sPCSboth,st3,c0))", Proved::False),
+    ("tr", "T7", "not attacker_p1(content(sPCSboth,st3,c1))", Proved::False),
+    ("tr", "T8", "not attacker_p1(exp(g,dhsk(sClean,kA1)))", Proved::True),
+    ("tr", "T8", "not attacker_p1(pk(kemsk(sClean,kA1)))", Proved::True),
+    ("tr", "T8", "not attacker_p1(nmark(sClean,st1,c0))", Proved::True),
+    ("tr", "T8", "not attacker_p1(nmark(sClean,st1,c1))", Proved::True),
+    ("tr", "T8", "not attacker_p1(exp(g,dhsk(sClean,kB2)))", Proved::True),
+    ("tr", "T8", "not attacker_p1(pk(kemsk(sClean,kB2)))", Proved::True),
+    ("tr", "T8", "not attacker_p1(nmark(sClean,st2,c0))", Proved::True),
+    ("tr", "T8", "not attacker_p1(nmark(sClean,st2,c1))", Proved::True),
+    ("tr", "T8", "not attacker_p1(exp(g,dhsk(sClean,kA3)))", Proved::True),
+    ("tr", "T8", "not attacker_p1(pk(kemsk(sClean,kA3)))", Proved::True),
+    ("tr", "T8", "not attacker_p1(nmark(sClean,st3,c0))", Proved::True),
+    ("tr", "T8", "not attacker_p1(nmark(sClean,st3,c1))", Proved::True),
+    ("tr", "T9", "not attacker_p1(exp(g,dhsk(sHFS,kA1)))", Proved::True),
+    ("tr", "T9", "not attacker_p1(pk(kemsk(sHFS,kA1)))", Proved::True),
+    ("tr", "T9", "not attacker_p1(nmark(sHFS,st1,c0))", Proved::True),
+    ("tr", "T9", "not attacker_p1(nmark(sHFS,st1,c1))", Proved::True),
+    ("tr", "T10", "not attacker_p1(content(sPCS,st1,c1))", Proved::False),
+    ("tr", "T11", "event(RecvKem(s_14,p_55,i_55,n_55,x,ct)) ==> event(ChainKem(s_14,p_55,i_55,ct))", Proved::True),
+    ("tr", "T12", "event(HdrOpenTwice(k1_1,k2_1,h)) ==> k1_1 = k2_1", Proved::Informative),
+    ("tr", "T13", "not event(Recv(sClean,pB,st3,c1,content(sClean,st3,c1)))", Proved::False),
+    ("tr", "T13", "not event(Recv(sFS,pA,st2,c1,content(sFS,st2,c1)))", Proved::False),
+    ("tr", "T13", "not event(Recv(sPCS,pB,st3,c1,content(sPCS,st3,c1)))", Proved::False),
+    ("tr", "T13", "not event(Recv(sPCSdh,pB,st3,c1,content(sPCSdh,st3,c1)))", Proved::False),
+    ("tr", "T13", "not event(Recv(sPCSkem,pB,st3,c1,content(sPCSkem,st3,c1)))", Proved::False),
+    ("tr", "T13", "not event(Recv(sPCSboth,pB,st3,c1,content(sPCSboth,st3,c1)))", Proved::False),
+    ("tr", "T13", "not event(Recv(sHFS,pB,st3,c1,content(sHFS,st3,c1)))", Proved::False),
+];
+
+/// The SHA-256 of every ProVerif model file — `formal/tr.pv`, the library `formal/hx.pvl` and every `formal/hx/*.pv`
+/// (M4 review C-7, ADR-046 Amendment 1 (1)): the `proverif` step refuses to run on other content, and a test in
+/// `linux-fast` (`gates::tests::proverif_model_hashes_are_pinned`) fails on any byte changed, so a model change touches
+/// this table in the same reviewed commit. The digest is taken over the committed text (CRLF read as LF).
+pub(crate) const PROVERIF_MODEL_SHA256: &[(&str, &str)] = &[
+    (
+        "formal/tr.pv",
+        "e613eceb4f776aaa73b78f6ae4af63c5cb65b48ae49997b2f02bc48929a2211f",
+    ),
+    (
+        "formal/hx.pvl",
+        "a24b1a50637c7b13d22c8e23568d1d402d18b8e7650d4bd65b85261505f3d20b",
+    ),
+    (
+        "formal/hx/hBoth.pv",
+        "6a606316c7401a7924b8894bb7893b9551a477a2cfb25051edca7cea67cf4ef8",
+    ),
+    (
+        "formal/hx/hClean-auth.pv",
+        "d7e0a63c0f5efa2c75ae63049ffe39b3b8aa81db62db2b6a1e36812609201d6e",
+    ),
+    (
+        "formal/hx/hClean.pv",
+        "c18c398e3d46b96e79ad45d8750d15aec50758cf6e18b976baedc842d7690fbd",
+    ),
+    (
+        "formal/hx/hDH-auth.pv",
+        "1beed1798581053ce0f200da6f7bcba2296604334aff0485cdc906ac07babe59",
+    ),
+    (
+        "formal/hx/hDH.pv",
+        "28ed0e6819a164cd0829f0b0705e061643ec910209c31872bae12fe5e5a1f018",
+    ),
+    (
+        "formal/hx/hFS.pv",
+        "f21c9d1f5a4e9190ffbe539ff3fe44bebe87cfbc08e6b5e0c704af10993fb15f",
+    ),
+    (
+        "formal/hx/hFSDH.pv",
+        "dc87046c29964180e4ceae349b9fef6fc12dcbb4c279a22312aa3e72bbc3a0ec",
+    ),
+    (
+        "formal/hx/hFSOPK.pv",
+        "ac8df3c07a2cb1212e99d60e4e9434ce0565bd7c580f33822a41acb6857e8e75",
+    ),
+    (
+        "formal/hx/hId.pv",
+        "4ed5e5205221c86e6466f090eb6f633341ddc6958b967ead56406d996fda3c52",
+    ),
+    (
+        "formal/hx/hIdLater.pv",
+        "2c6b2265c7b7af98682cd63aac9daf20918cadeab2377c814d88c954d98d53fa",
+    ),
+    (
+        "formal/hx/hIdLaterOPK.pv",
+        "43b483e056a221ca357ade4989739caeaaaffad0a2e9eb7b61b3a217b956b85e",
+    ),
+    (
+        "formal/hx/hIdThief.pv",
+        "a2c855940c688a0481ea7267e45f3314c898c68c749de8111975984c4f48abe5",
+    ),
+    (
+        "formal/hx/hKCI-auth.pv",
+        "d6c5870001a50f9f639a5571821ea96d1c1e1fd844ffd6a973a5437870b686d3",
+    ),
+    (
+        "formal/hx/hKCI.pv",
+        "eaf38619a061040a35770e3a486d5f85e2055d4a6c8c792fe5c867d941188113",
+    ),
+    (
+        "formal/hx/hKCIi.pv",
+        "df6fe825f759a5c43d481e0bc6c5a595195864fa1acccb81c5bdea744dce84e9",
+    ),
+    (
+        "formal/hx/hKCIlt-auth.pv",
+        "3ddae9f7502f3b90851ac2e4ff574ccd0312928234d01e0ce3631d414021f812",
+    ),
+    (
+        "formal/hx/hKCIlt.pv",
+        "7157b89d3d9cab0cf5d673f2476b506fd32a3b4aeada6373ab1e174b1a6bab4c",
+    ),
+    (
+        "formal/hx/hKEM-auth.pv",
+        "307f29dd51c29771404d930e44d640291263b2b133be711f39fcc75f724ccc76",
+    ),
+    (
+        "formal/hx/hKEM.pv",
+        "016d5c86fb75efaf6706034fb4d6e0d7f3a7316c45667fedb6e6c227e8c3a967",
+    ),
+];
+
+/// One expected `RESULT` line of a SecMP-HX session model: (file stem under [`PROVERIF_HX_DIR`], `formal/CLAIMS.md` ID,
+/// query text, expected verdict). The query text is what ProVerif prints between `RESULT ` and the final ` is true.`,
+/// ` is false.` or ` cannot be proved.`; the `RESULT (but …)` remark ProVerif adds under an injective query is not a
+/// `RESULT` line of its own.
+pub(crate) type HxExpected = (&'static str, &'static str, &'static str, Proved);
+
+/// The expected `RESULT` lines of every SecMP-HX session model (WEISUNG M4-5 §4, gate F7), in the order ProVerif prints
+/// them within each file. The `proverif` step (`gates::proverif_check_hx`) matches the lines by query text, not by
+/// position: a missing, an extra or a re-ordered `RESULT` line fails, as does a verdict other than the expected one (a
+/// `True` line must say "is true.", a `False` line "is false.") and an `hx/*.pv` file without entries here.
+///
+/// Derived from the session files' queries in ProVerif 2.05's display form (spaces removed; `b_2`, `tr_2`, `rt_2`,
+/// `sk_2`, `ld_N` with N = 4 + the `Leak`/`RevOPK` calls of the file's `Invitation`; `attacker_p1` in files with a
+/// phase 1; `not (…)` for reachability queries). WEISUNG M4-7 (O-20…O-22): 19 files — the 14 session files and the
+/// auth files `hClean-auth`, `hKEM-auth`, `hDH-auth`, `hKCI-auth`, `hKCIlt-auth`, each with the begin-`IStart`
+/// declaration (H5/H8/H9/H9b; `ld_6`, `b_3`, `tr_3`, `rt_3`, `sk_3`: the attacker-as-inviter process adds bindings)
+/// and, since the M4 review (C-7, erratum 5), one H11 line before it (the honest pair, same bindings); declarations
+/// ordered no-begin, H6b, H10, H6a. The 82 rows of the session files equal the printed `RESULT` lines of the M4-7 runs;
+/// the 10 auth rows equal the `RESULT` lines of the M4-fix run (`docs/reviews/M04-evidence/proverif-hx-<head>.txt`) —
+/// 92 in total. Expected verdict: the `formal/CLAIMS.md` gate rule. One entry per line; `rustfmt` leaves the table
+/// alone.
+#[rustfmt::skip]
+pub(crate) const PROVERIF_EXPECTED_HX: &[HxExpected] = &[
+    ("hClean", "H1 (i)", "not (event(IStart(hClean,iI,iks(vk(iksig(hClean,pR)),exp(g,dhsk(hClean,kIKR))),b_2,tr_2,rt_2,sk_2)) && attacker(sk_2))", Proved::True),
+    ("hClean", "H1 (ii)", "not (event(RAccept(hClean,iR,iks(vk(iksig(hClean,pI)),exp(g,dhsk(hClean,kIKI))),ld_5,oid,tr_2,rt_2,sk_2)) && attacker(sk_2))", Proved::True),
+    ("hClean", "H11", "not event(IStart(hClean,iks(vk(iksig(hClean,pI)),exp(g,dhsk(hClean,kIKI))),iks(vk(iksig(hClean,pR)),exp(g,dhsk(hClean,kIKR))),b_2,tr_2,rt_2,sk_2))", Proved::False),
+    ("hClean", "H11", "not event(BundleSigned(hClean,iR,b_2))", Proved::False),
+    ("hClean", "H11", "not (event(RAccept(hClean,iR,iks(vk(iksig(hClean,pI)),exp(g,dhsk(hClean,kIKI))),ld_5,oid,tr_2,rt_2,sk_2)) && event(IStart(hClean,iks(vk(iksig(hClean,pI)),exp(g,dhsk(hClean,kIKI))),iR,b_2,tr_2,rt_2,sk_2)))", Proved::False),
+    ("hClean", "H11", "not event(IConfirm(hClean,iks(vk(iksig(hClean,pI)),exp(g,dhsk(hClean,kIKI))),iks(vk(iksig(hClean,pR)),exp(g,dhsk(hClean,kIKR))),tr_2,sk_2))", Proved::False),
+    ("hClean", "H6b", "inj-event(IConfirm(hClean,iI,iks(vk(iksig(hClean,pR)),exp(g,dhsk(hClean,kIKR))),tr_2,sk_2)) ==> inj-event(RAccept(hClean,iks(vk(iksig(hClean,pR)),exp(g,dhsk(hClean,kIKR))),iI,ld_5,oid,tr_2,rt_2,sk_2))", Proved::True),
+    ("hClean", "H10", "inj-event(RAccept(hClean,iR,iI,ld_5,oid,tr_2,rt_2,sk_2)) ==> inj-event(InvIssued(hClean,iR,ld_5,oid))", Proved::True),
+    ("hClean", "H6a", "event(IStart(hClean,iI,iks(vk(iksig(hClean,pR)),exp(g,dhsk(hClean,kIKR))),b_2,tr_2,rt_2,sk_2)) ==> event(BundleSigned(s2,iks(vk(iksig(hClean,pR)),exp(g,dhsk(hClean,kIKR))),b_2))", Proved::True),
+    ("hClean-auth", "H11", "not (event(RAccept(hClean,iR,iks(vk(iksig(hClean,pI)),exp(g,dhsk(hClean,kIKI))),ld_6,oid,tr_3,rt_3,sk_3)) && event(IStart(hClean,iks(vk(iksig(hClean,pI)),exp(g,dhsk(hClean,kIKI))),iR,b_3,tr_3,rt_3,sk_3)))", Proved::False),
+    ("hClean-auth", "H5", "inj-event(RAccept(hClean,iR,iks(vk(iksig(hClean,pI)),exp(g,dhsk(hClean,kIKI))),ld_6,oid,tr_3,rt_3,sk_3)) ==> inj-event(IStart(hClean,iks(vk(iksig(hClean,pI)),exp(g,dhsk(hClean,kIKI))),iR,b_3,tr_3,rt_3,sk_3))", Proved::True),
+    ("hDH", "H2 (i)", "not (event(IStart(hDH,iI,iks(vk(iksig(hDH,pR)),exp(g,dhsk(hDH,kIKR))),b_2,tr_2,rt_2,sk_2)) && attacker(sk_2))", Proved::True),
+    ("hDH", "H2 (ii)", "not (event(RAccept(hDH,iR,iks(vk(iksig(hDH,pI)),exp(g,dhsk(hDH,kIKI))),ld_5,oid,tr_2,rt_2,sk_2)) && event(IStart(hDH,iks(vk(iksig(hDH,pI)),exp(g,dhsk(hDH,kIKI))),iR,b_2,tr_2,rt_2,sk_2)) && attacker(sk_2))", Proved::True),
+    ("hDH", "H11", "not event(IStart(hDH,iks(vk(iksig(hDH,pI)),exp(g,dhsk(hDH,kIKI))),iks(vk(iksig(hDH,pR)),exp(g,dhsk(hDH,kIKR))),b_2,tr_2,rt_2,sk_2))", Proved::False),
+    ("hDH", "H11", "not event(BundleSigned(hDH,iR,b_2))", Proved::False),
+    ("hDH", "H11", "not (event(RAccept(hDH,iR,iks(vk(iksig(hDH,pI)),exp(g,dhsk(hDH,kIKI))),ld_5,oid,tr_2,rt_2,sk_2)) && event(IStart(hDH,iks(vk(iksig(hDH,pI)),exp(g,dhsk(hDH,kIKI))),iR,b_2,tr_2,rt_2,sk_2)))", Proved::False),
+    ("hDH", "H11", "not event(IConfirm(hDH,iks(vk(iksig(hDH,pI)),exp(g,dhsk(hDH,kIKI))),iks(vk(iksig(hDH,pR)),exp(g,dhsk(hDH,kIKR))),tr_2,sk_2))", Proved::False),
+    ("hDH-auth", "H11", "not (event(RAccept(hDH,iR,iks(vk(iksig(hDH,pI)),exp(g,dhsk(hDH,kIKI))),ld_6,oid,tr_3,rt_3,sk_3)) && event(IStart(hDH,iks(vk(iksig(hDH,pI)),exp(g,dhsk(hDH,kIKI))),iR,b_3,tr_3,rt_3,sk_3)))", Proved::False),
+    ("hDH-auth", "H8", "inj-event(RAccept(hDH,iR,iks(vk(iksig(hDH,pI)),exp(g,dhsk(hDH,kIKI))),ld_6,oid,tr_3,rt_3,sk_3)) ==> inj-event(IStart(hDH,iks(vk(iksig(hDH,pI)),exp(g,dhsk(hDH,kIKI))),iR,b_3,tr_3,rt_3,sk_3))", Proved::False),
+    ("hKEM", "H3 (i)", "not (event(IStart(hKEM,iI,iks(vk(iksig(hKEM,pR)),exp(g,dhsk(hKEM,kIKR))),b_2,tr_2,rt_2,sk_2)) && attacker(sk_2))", Proved::True),
+    ("hKEM", "H3 (ii)", "not (event(RAccept(hKEM,iR,iks(vk(iksig(hKEM,pI)),exp(g,dhsk(hKEM,kIKI))),ld_5,oid,tr_2,rt_2,sk_2)) && attacker(sk_2))", Proved::True),
+    ("hKEM", "H11", "not event(IStart(hKEM,iks(vk(iksig(hKEM,pI)),exp(g,dhsk(hKEM,kIKI))),iks(vk(iksig(hKEM,pR)),exp(g,dhsk(hKEM,kIKR))),b_2,tr_2,rt_2,sk_2))", Proved::False),
+    ("hKEM", "H11", "not event(BundleSigned(hKEM,iR,b_2))", Proved::False),
+    ("hKEM", "H11", "not (event(RAccept(hKEM,iR,iks(vk(iksig(hKEM,pI)),exp(g,dhsk(hKEM,kIKI))),ld_5,oid,tr_2,rt_2,sk_2)) && event(IStart(hKEM,iks(vk(iksig(hKEM,pI)),exp(g,dhsk(hKEM,kIKI))),iR,b_2,tr_2,rt_2,sk_2)))", Proved::False),
+    ("hKEM", "H11", "not event(IConfirm(hKEM,iks(vk(iksig(hKEM,pI)),exp(g,dhsk(hKEM,kIKI))),iks(vk(iksig(hKEM,pR)),exp(g,dhsk(hKEM,kIKR))),tr_2,sk_2))", Proved::False),
+    ("hKEM-auth", "H11", "not (event(RAccept(hKEM,iR,iks(vk(iksig(hKEM,pI)),exp(g,dhsk(hKEM,kIKI))),ld_6,oid,tr_3,rt_3,sk_3)) && event(IStart(hKEM,iks(vk(iksig(hKEM,pI)),exp(g,dhsk(hKEM,kIKI))),iR,b_3,tr_3,rt_3,sk_3)))", Proved::False),
+    ("hKEM-auth", "H5", "inj-event(RAccept(hKEM,iR,iks(vk(iksig(hKEM,pI)),exp(g,dhsk(hKEM,kIKI))),ld_6,oid,tr_3,rt_3,sk_3)) ==> inj-event(IStart(hKEM,iks(vk(iksig(hKEM,pI)),exp(g,dhsk(hKEM,kIKI))),iR,b_3,tr_3,rt_3,sk_3))", Proved::True),
+    ("hBoth", "H4", "not (event(IStart(hBoth,iI,iks(vk(iksig(hBoth,pR)),exp(g,dhsk(hBoth,kIKR))),b_2,tr_2,rt_2,sk_2)) && attacker(sk_2))", Proved::False),
+    ("hBoth", "H11", "not event(IStart(hBoth,iks(vk(iksig(hBoth,pI)),exp(g,dhsk(hBoth,kIKI))),iks(vk(iksig(hBoth,pR)),exp(g,dhsk(hBoth,kIKR))),b_2,tr_2,rt_2,sk_2))", Proved::False),
+    ("hBoth", "H11", "not event(BundleSigned(hBoth,iR,b_2))", Proved::False),
+    ("hBoth", "H11", "not (event(RAccept(hBoth,iR,iks(vk(iksig(hBoth,pI)),exp(g,dhsk(hBoth,kIKI))),ld_5,oid,tr_2,rt_2,sk_2)) && event(IStart(hBoth,iks(vk(iksig(hBoth,pI)),exp(g,dhsk(hBoth,kIKI))),iR,b_2,tr_2,rt_2,sk_2)))", Proved::False),
+    ("hBoth", "H11", "not event(IConfirm(hBoth,iks(vk(iksig(hBoth,pI)),exp(g,dhsk(hBoth,kIKI))),iks(vk(iksig(hBoth,pR)),exp(g,dhsk(hBoth,kIKR))),tr_2,sk_2))", Proved::False),
+    ("hId", "H7a", "not attacker(exp(g,dhsk(hId,kIKI)))", Proved::True),
+    ("hId", "H7a", "not attacker(vk(iksig(hId,pI)))", Proved::True),
+    ("hId", "H11", "not event(IStart(hId,iks(vk(iksig(hId,pI)),exp(g,dhsk(hId,kIKI))),iks(vk(iksig(hId,pR)),exp(g,dhsk(hId,kIKR))),b_2,tr_2,rt_2,sk_2))", Proved::False),
+    ("hId", "H11", "not event(BundleSigned(hId,iR,b_2))", Proved::False),
+    ("hId", "H11", "not (event(RAccept(hId,iR,iks(vk(iksig(hId,pI)),exp(g,dhsk(hId,kIKI))),ld_4,oid,tr_2,rt_2,sk_2)) && event(IStart(hId,iks(vk(iksig(hId,pI)),exp(g,dhsk(hId,kIKI))),iR,b_2,tr_2,rt_2,sk_2)))", Proved::False),
+    ("hId", "H11", "not event(IConfirm(hId,iks(vk(iksig(hId,pI)),exp(g,dhsk(hId,kIKI))),iks(vk(iksig(hId,pR)),exp(g,dhsk(hId,kIKR))),tr_2,sk_2))", Proved::False),
+    ("hId", "H6a", "event(IStart(hId,iI,iks(vk(iksig(hId,pR)),exp(g,dhsk(hId,kIKR))),b_2,tr_2,rt_2,sk_2)) ==> event(BundleSigned(s2,iks(vk(iksig(hId,pR)),exp(g,dhsk(hId,kIKR))),b_2))", Proved::True),
+    ("hIdThief", "H7b", "not attacker(exp(g,dhsk(hIdThief,kIKI)))", Proved::True),
+    ("hIdThief", "H7b", "not attacker(vk(iksig(hIdThief,pI)))", Proved::True),
+    ("hIdThief", "H11", "not event(IStart(hIdThief,iks(vk(iksig(hIdThief,pI)),exp(g,dhsk(hIdThief,kIKI))),iks(vk(iksig(hIdThief,pR)),exp(g,dhsk(hIdThief,kIKR))),b_2,tr_2,rt_2,sk_2))", Proved::False),
+    ("hIdThief", "H11", "not event(BundleSigned(hIdThief,iR,b_2))", Proved::False),
+    ("hIdThief", "H11", "not (event(RAccept(hIdThief,iR,iks(vk(iksig(hIdThief,pI)),exp(g,dhsk(hIdThief,kIKI))),ld_5,oid,tr_2,rt_2,sk_2)) && event(IStart(hIdThief,iks(vk(iksig(hIdThief,pI)),exp(g,dhsk(hIdThief,kIKI))),iR,b_2,tr_2,rt_2,sk_2)))", Proved::False),
+    ("hIdThief", "H11", "not event(IConfirm(hIdThief,iks(vk(iksig(hIdThief,pI)),exp(g,dhsk(hIdThief,kIKI))),iks(vk(iksig(hIdThief,pR)),exp(g,dhsk(hIdThief,kIKR))),tr_2,sk_2))", Proved::False),
+    ("hIdLater", "H7c", "not attacker_p1(exp(g,dhsk(hIdLater,kIKI)))", Proved::True),
+    ("hIdLater", "H7c", "not attacker_p1(vk(iksig(hIdLater,pI)))", Proved::True),
+    ("hIdLater", "H11", "not event(IStart(hIdLater,iks(vk(iksig(hIdLater,pI)),exp(g,dhsk(hIdLater,kIKI))),iks(vk(iksig(hIdLater,pR)),exp(g,dhsk(hIdLater,kIKR))),b_2,tr_2,rt_2,sk_2))", Proved::False),
+    ("hIdLater", "H11", "not event(BundleSigned(hIdLater,iR,b_2))", Proved::False),
+    ("hIdLater", "H11", "not (event(RAccept(hIdLater,iR,iks(vk(iksig(hIdLater,pI)),exp(g,dhsk(hIdLater,kIKI))),ld_5,oid,tr_2,rt_2,sk_2)) && event(IStart(hIdLater,iks(vk(iksig(hIdLater,pI)),exp(g,dhsk(hIdLater,kIKI))),iR,b_2,tr_2,rt_2,sk_2)))", Proved::False),
+    ("hIdLater", "H11", "not event(IConfirm(hIdLater,iks(vk(iksig(hIdLater,pI)),exp(g,dhsk(hIdLater,kIKI))),iks(vk(iksig(hIdLater,pR)),exp(g,dhsk(hIdLater,kIKR))),tr_2,sk_2))", Proved::False),
+    ("hIdLaterOPK", "H7d", "not attacker_p1(exp(g,dhsk(hIdLaterOPK,kIKI)))", Proved::False),
+    ("hIdLaterOPK", "H7d", "not attacker_p1(vk(iksig(hIdLaterOPK,pI)))", Proved::False),
+    ("hIdLaterOPK", "H11", "not event(IStart(hIdLaterOPK,iks(vk(iksig(hIdLaterOPK,pI)),exp(g,dhsk(hIdLaterOPK,kIKI))),iks(vk(iksig(hIdLaterOPK,pR)),exp(g,dhsk(hIdLaterOPK,kIKR))),b_2,tr_2,rt_2,sk_2))", Proved::False),
+    ("hIdLaterOPK", "H11", "not event(BundleSigned(hIdLaterOPK,iR,b_2))", Proved::False),
+    ("hIdLaterOPK", "H11", "not (event(RAccept(hIdLaterOPK,iR,iks(vk(iksig(hIdLaterOPK,pI)),exp(g,dhsk(hIdLaterOPK,kIKI))),ld_6,oid,tr_2,rt_2,sk_2)) && event(IStart(hIdLaterOPK,iks(vk(iksig(hIdLaterOPK,pI)),exp(g,dhsk(hIdLaterOPK,kIKI))),iR,b_2,tr_2,rt_2,sk_2)))", Proved::False),
+    ("hIdLaterOPK", "H11", "not event(IConfirm(hIdLaterOPK,iks(vk(iksig(hIdLaterOPK,pI)),exp(g,dhsk(hIdLaterOPK,kIKI))),iks(vk(iksig(hIdLaterOPK,pR)),exp(g,dhsk(hIdLaterOPK,kIKR))),tr_2,sk_2))", Proved::False),
+    ("hKCI", "H11", "not event(IStart(hKCI,iks(vk(iksig(hKCI,pI)),exp(g,dhsk(hKCI,kIKI))),iks(vk(iksig(hKCI,pR)),exp(g,dhsk(hKCI,kIKR))),b_2,tr_2,rt_2,sk_2))", Proved::False),
+    ("hKCI", "H11", "not event(BundleSigned(hKCI,iR,b_2))", Proved::False),
+    ("hKCI", "H11", "not (event(RAccept(hKCI,iR,iks(vk(iksig(hKCI,pI)),exp(g,dhsk(hKCI,kIKI))),ld_5,oid,tr_2,rt_2,sk_2)) && event(IStart(hKCI,iks(vk(iksig(hKCI,pI)),exp(g,dhsk(hKCI,kIKI))),iR,b_2,tr_2,rt_2,sk_2)))", Proved::False),
+    ("hKCI", "H11", "not event(IConfirm(hKCI,iks(vk(iksig(hKCI,pI)),exp(g,dhsk(hKCI,kIKI))),iks(vk(iksig(hKCI,pR)),exp(g,dhsk(hKCI,kIKR))),tr_2,sk_2))", Proved::False),
+    ("hKCI-auth", "H11", "not (event(RAccept(hKCI,iR,iks(vk(iksig(hKCI,pI)),exp(g,dhsk(hKCI,kIKI))),ld_6,oid,tr_3,rt_3,sk_3)) && event(IStart(hKCI,iks(vk(iksig(hKCI,pI)),exp(g,dhsk(hKCI,kIKI))),iR,b_3,tr_3,rt_3,sk_3)))", Proved::False),
+    ("hKCI-auth", "H9", "inj-event(RAccept(hKCI,iR,iks(vk(iksig(hKCI,pI)),exp(g,dhsk(hKCI,kIKI))),ld_6,oid,tr_3,rt_3,sk_3)) ==> inj-event(IStart(hKCI,iks(vk(iksig(hKCI,pI)),exp(g,dhsk(hKCI,kIKI))),iR,b_3,tr_3,rt_3,sk_3))", Proved::False),
+    ("hKCIlt", "H11", "not event(IStart(hKCIlt,iks(vk(iksig(hKCIlt,pI)),exp(g,dhsk(hKCIlt,kIKI))),iks(vk(iksig(hKCIlt,pR)),exp(g,dhsk(hKCIlt,kIKR))),b_2,tr_2,rt_2,sk_2))", Proved::False),
+    ("hKCIlt", "H11", "not event(BundleSigned(hKCIlt,iR,b_2))", Proved::False),
+    ("hKCIlt", "H11", "not (event(RAccept(hKCIlt,iR,iks(vk(iksig(hKCIlt,pI)),exp(g,dhsk(hKCIlt,kIKI))),ld_5,oid,tr_2,rt_2,sk_2)) && event(IStart(hKCIlt,iks(vk(iksig(hKCIlt,pI)),exp(g,dhsk(hKCIlt,kIKI))),iR,b_2,tr_2,rt_2,sk_2)))", Proved::False),
+    ("hKCIlt", "H11", "not event(IConfirm(hKCIlt,iks(vk(iksig(hKCIlt,pI)),exp(g,dhsk(hKCIlt,kIKI))),iks(vk(iksig(hKCIlt,pR)),exp(g,dhsk(hKCIlt,kIKR))),tr_2,sk_2))", Proved::False),
+    ("hKCIlt-auth", "H11", "not (event(RAccept(hKCIlt,iR,iks(vk(iksig(hKCIlt,pI)),exp(g,dhsk(hKCIlt,kIKI))),ld_6,oid,tr_3,rt_3,sk_3)) && event(IStart(hKCIlt,iks(vk(iksig(hKCIlt,pI)),exp(g,dhsk(hKCIlt,kIKI))),iR,b_3,tr_3,rt_3,sk_3)))", Proved::False),
+    ("hKCIlt-auth", "H9b", "inj-event(RAccept(hKCIlt,iR,iks(vk(iksig(hKCIlt,pI)),exp(g,dhsk(hKCIlt,kIKI))),ld_6,oid,tr_3,rt_3,sk_3)) ==> inj-event(IStart(hKCIlt,iks(vk(iksig(hKCIlt,pI)),exp(g,dhsk(hKCIlt,kIKI))),iR,b_3,tr_3,rt_3,sk_3))", Proved::True),
+    ("hKCIi", "H9c", "not (event(IStart(hKCIi,iI,iks(vk(iksig(hKCIi,pR)),exp(g,dhsk(hKCIi,kIKR))),b_2,tr_2,rt_2,sk_2)) && attacker(sk_2))", Proved::True),
+    ("hKCIi", "H11", "not event(IStart(hKCIi,iks(vk(iksig(hKCIi,pI)),exp(g,dhsk(hKCIi,kIKI))),iks(vk(iksig(hKCIi,pR)),exp(g,dhsk(hKCIi,kIKR))),b_2,tr_2,rt_2,sk_2))", Proved::False),
+    ("hKCIi", "H11", "not event(BundleSigned(hKCIi,iR,b_2))", Proved::False),
+    ("hKCIi", "H11", "not (event(RAccept(hKCIi,iR,iks(vk(iksig(hKCIi,pI)),exp(g,dhsk(hKCIi,kIKI))),ld_5,oid,tr_2,rt_2,sk_2)) && event(IStart(hKCIi,iks(vk(iksig(hKCIi,pI)),exp(g,dhsk(hKCIi,kIKI))),iR,b_2,tr_2,rt_2,sk_2)))", Proved::False),
+    ("hKCIi", "H11", "not event(IConfirm(hKCIi,iks(vk(iksig(hKCIi,pI)),exp(g,dhsk(hKCIi,kIKI))),iks(vk(iksig(hKCIi,pR)),exp(g,dhsk(hKCIi,kIKR))),tr_2,sk_2))", Proved::False),
+    ("hFS", "H11", "not event(IStart(hFS,iks(vk(iksig(hFS,pI)),exp(g,dhsk(hFS,kIKI))),iks(vk(iksig(hFS,pR)),exp(g,dhsk(hFS,kIKR))),b_2,tr_2,rt_2,sk_2))", Proved::False),
+    ("hFS", "H11", "not event(BundleSigned(hFS,iR,b_2))", Proved::False),
+    ("hFS", "H11", "not (event(RAccept(hFS,iR,iks(vk(iksig(hFS,pI)),exp(g,dhsk(hFS,kIKI))),ld_5,oid,tr_2,rt_2,sk_2)) && event(IStart(hFS,iks(vk(iksig(hFS,pI)),exp(g,dhsk(hFS,kIKI))),iR,b_2,tr_2,rt_2,sk_2)))", Proved::False),
+    ("hFS", "H11", "not event(IConfirm(hFS,iks(vk(iksig(hFS,pI)),exp(g,dhsk(hFS,kIKI))),iks(vk(iksig(hFS,pR)),exp(g,dhsk(hFS,kIKR))),tr_2,sk_2))", Proved::False),
+    ("hFS", "H12 (i)", "not (event(IStart(hFS,iI,iks(vk(iksig(hFS,pR)),exp(g,dhsk(hFS,kIKR))),b_2,tr_2,rt_2,sk_2)) && attacker_p1(sk_2))", Proved::True),
+    ("hFS", "H12 (ii)", "not (event(RAccept(hFS,iR,iks(vk(iksig(hFS,pI)),exp(g,dhsk(hFS,kIKI))),ld_5,oid,tr_2,rt_2,sk_2)) && attacker_p1(sk_2))", Proved::True),
+    ("hFSOPK", "H11", "not event(IStart(hFSOPK,iks(vk(iksig(hFSOPK,pI)),exp(g,dhsk(hFSOPK,kIKI))),iks(vk(iksig(hFSOPK,pR)),exp(g,dhsk(hFSOPK,kIKR))),b_2,tr_2,rt_2,sk_2))", Proved::False),
+    ("hFSOPK", "H11", "not event(BundleSigned(hFSOPK,iR,b_2))", Proved::False),
+    ("hFSOPK", "H11", "not (event(RAccept(hFSOPK,iR,iks(vk(iksig(hFSOPK,pI)),exp(g,dhsk(hFSOPK,kIKI))),ld_6,oid,tr_2,rt_2,sk_2)) && event(IStart(hFSOPK,iks(vk(iksig(hFSOPK,pI)),exp(g,dhsk(hFSOPK,kIKI))),iR,b_2,tr_2,rt_2,sk_2)))", Proved::False),
+    ("hFSOPK", "H11", "not event(IConfirm(hFSOPK,iks(vk(iksig(hFSOPK,pI)),exp(g,dhsk(hFSOPK,kIKI))),iks(vk(iksig(hFSOPK,pR)),exp(g,dhsk(hFSOPK,kIKR))),tr_2,sk_2))", Proved::False),
+    ("hFSOPK", "H12b (i)", "not (event(IStart(hFSOPK,iI,iks(vk(iksig(hFSOPK,pR)),exp(g,dhsk(hFSOPK,kIKR))),b_2,tr_2,rt_2,sk_2)) && attacker_p1(sk_2))", Proved::False),
+    ("hFSOPK", "H12b (ii)", "not (event(RAccept(hFSOPK,iR,iks(vk(iksig(hFSOPK,pI)),exp(g,dhsk(hFSOPK,kIKI))),ld_6,oid,tr_2,rt_2,sk_2)) && attacker_p1(sk_2))", Proved::False),
+    ("hFSDH", "H11", "not event(IStart(hFSDH,iks(vk(iksig(hFSDH,pI)),exp(g,dhsk(hFSDH,kIKI))),iks(vk(iksig(hFSDH,pR)),exp(g,dhsk(hFSDH,kIKR))),b_2,tr_2,rt_2,sk_2))", Proved::False),
+    ("hFSDH", "H11", "not event(BundleSigned(hFSDH,iR,b_2))", Proved::False),
+    ("hFSDH", "H11", "not (event(RAccept(hFSDH,iR,iks(vk(iksig(hFSDH,pI)),exp(g,dhsk(hFSDH,kIKI))),ld_5,oid,tr_2,rt_2,sk_2)) && event(IStart(hFSDH,iks(vk(iksig(hFSDH,pI)),exp(g,dhsk(hFSDH,kIKI))),iR,b_2,tr_2,rt_2,sk_2)))", Proved::False),
+    ("hFSDH", "H11", "not event(IConfirm(hFSDH,iks(vk(iksig(hFSDH,pI)),exp(g,dhsk(hFSDH,kIKI))),iks(vk(iksig(hFSDH,pR)),exp(g,dhsk(hFSDH,kIKR))),tr_2,sk_2))", Proved::False),
+    ("hFSDH", "H12c (i)", "not (event(IStart(hFSDH,iI,iks(vk(iksig(hFSDH,pR)),exp(g,dhsk(hFSDH,kIKR))),b_2,tr_2,rt_2,sk_2)) && attacker_p1(sk_2))", Proved::True),
+    ("hFSDH", "H12c (ii)", "not (event(RAccept(hFSDH,iR,iks(vk(iksig(hFSDH,pI)),exp(g,dhsk(hFSDH,kIKI))),ld_5,oid,tr_2,rt_2,sk_2)) && attacker_p1(sk_2))", Proved::True),
+];
 
 /// systemd units under `deploy/` checked with `systemd-analyze security --offline` (docs/06 §5 step 14,
 /// exposure ≤ 2.0). M10 adds `secmp-relay.service`.
@@ -500,21 +991,111 @@ pub(crate) const CONTINUE_ON_ERROR_JOBS: &[&str] = &[];
 /// The workflow that holds the required checks of the `main-protection` ruleset (docs/06 §4).
 pub(crate) const REQUIRED_WORKFLOW: &str = ".github/workflows/ci.yml";
 
-/// The job names of the required checks (M2 review C2): they exist only in [`REQUIRED_WORKFLOW`], which has no
-/// `workflow_dispatch` trigger, so no dispatch can add a `skipped` (= passing) check run under a required name.
+/// The job names of the required checks of the `main-protection` ruleset (M2 review C2): they exist only in
+/// [`REQUIRED_WORKFLOW`], which has no `workflow_dispatch` trigger, so no dispatch can add a `skipped` (= passing) check
+/// run under a required name. The policy step pins [`PINNED_JOBS`], a superset.
 pub(crate) const REQUIRED_JOBS: &[&str] =
     &["linux-fast", "windows-native", "xwin-cross", "linux-full"];
 
-/// The job-level `if:` of every required job, `None` for none (external review EXT-1, M3 follow-up F19): the policy
-/// step refuses any other condition — a condition that evaluates to false on `pull_request` would leave a `skipped`
-/// check run under a required name, which GitHub counts as passing. `linux-full` excludes only `push` (on `main`),
-/// by design since the M2 workflow change; the other three run on every event.
+/// The jobs whose gate lines ([`REQUIRED_GATE_RUNS`]), conditions ([`REQUIRED_JOB_CONDITIONS`]) and structure the
+/// policy step pins (M4 review C-5, R-01): the required checks of [`REQUIRED_JOBS`] and the jobs `linux-full`
+/// delegates to — the ct gate `ct`, the mutation shards `mutants-shard` with their verdict job `mutants`, and the
+/// SecMP-HX models `proverif-hx`. Like the required names they exist only in [`REQUIRED_WORKFLOW`]. (A skipped job
+/// counts as passing on GitHub, so the in-repo pin is needed whether or not the ruleset requires them.)
+pub(crate) const PINNED_JOBS: &[&str] = &[
+    "linux-fast",
+    "windows-native",
+    "xwin-cross",
+    "linux-full",
+    "ct",
+    "mutants-shard",
+    "mutants",
+    "proverif-hx",
+];
+
+/// The `needs:` of a pinned job, as (job, the one job it needs) — M4 review C-5: the verdict job `mutants` needs
+/// exactly `mutants-shard` (ADR-047 Amendment 1 (2)), written as that plain scalar; any other `needs:` on a pinned job
+/// is a finding (a skipped or failing dependency would skip the job).
+pub(crate) const PINNED_JOB_NEEDS: &[(&str, &str)] = &[("mutants", "mutants-shard")];
+
+/// Where each `--delegated <step>` of a pinned gate line runs, as (step, pinned job) — M4 review C-5: the policy step
+/// refuses a delegation without an entry here, and an entry whose job has no pinned gate line of its own; a pinned
+/// `--models tr` needs a pinned `proverif --models hx` line.
+pub(crate) const DELEGATED_TO: &[(&str, &str)] = &[
+    ("windows-native", "windows-native"),
+    ("windows-cross", "xwin-cross"),
+    ("mutants", "mutants"),
+    ("ct", "ct"),
+];
+
+/// The `cargo xtask` gate `run:` lines of each pinned job of [`PINNED_JOBS`], in order (M3 review F3, R-09;
+/// `install-tools` aside; M4 review C-5 adds the delegated jobs). The policy step refuses any other gate line, a
+/// missing one and an appended `|| true`. An accident guard (the real control is review of the workflow and of this
+/// file), not a tamper-proof one.
+pub(crate) const REQUIRED_GATE_RUNS: &[(&str, &[&str])] = &[
+    (
+        "linux-fast",
+        &[
+            "cargo xtask ci-fast --strict",
+            "cargo xtask step --strict sbom systemd",
+        ],
+    ),
+    (
+        "windows-native",
+        &["cargo xtask step --strict clippy nextest doctest kat hello"],
+    ),
+    ("xwin-cross", &["cargo xtask step --strict windows-cross"]),
+    (
+        "linux-full",
+        // the SecMP-HX models run in their own job `proverif-hx` (WEISUNG M4-5 §5), mutation testing in `mutants` (ADR-047),
+        // the ct gate in `ct` (ADR-047 Amendment 1, M4 review C-2)
+        &[
+            "cargo xtask ci-full --strict --delegated windows-native --delegated windows-cross --delegated mutants --delegated ct --models tr",
+        ],
+    ),
+    // M4 review C-5 (R-01): the delegated jobs
+    ("ct", &["cargo xtask step --strict ct"]),
+    (
+        "mutants-shard",
+        &["cargo xtask step --strict mutants --shard ${{ matrix.shard }}/8"],
+    ),
+    ("mutants", &["cargo xtask step --strict mutants-merge"]),
+    (
+        "proverif-hx",
+        &["cargo xtask step --strict proverif --models hx --jobs 4"],
+    ),
+];
+
+/// The job-level `if:` of every pinned job of [`PINNED_JOBS`], `None` for none (external review EXT-1, M3 follow-up
+/// F19; M4 review C-5): the policy step (an accident guard, not a tamper-proof control; the real control is review, M3
+/// review F23) refuses any other condition — a condition that evaluates to false on `pull_request` would leave a
+/// `skipped` check run under a pinned name, which GitHub counts as passing. `linux-full` and its delegated jobs exclude
+/// only `push` (on `main`), by design since the M2 workflow change; the verdict job `mutants` runs after its shards
+/// whatever their outcome (`always()`); the other three required jobs run on every event.
 pub(crate) const REQUIRED_JOB_CONDITIONS: &[(&str, Option<&str>)] = &[
     ("linux-fast", None),
     ("windows-native", None),
     ("xwin-cross", None),
     (
         "linux-full",
+        Some("github.event_name == 'schedule' || github.event_name == 'pull_request'"),
+    ),
+    (
+        "ct",
+        Some("github.event_name == 'schedule' || github.event_name == 'pull_request'"),
+    ),
+    (
+        "mutants-shard",
+        Some("github.event_name == 'schedule' || github.event_name == 'pull_request'"),
+    ),
+    (
+        "mutants",
+        Some(
+            "always() && (github.event_name == 'schedule' || github.event_name == 'pull_request')",
+        ),
+    ),
+    (
+        "proverif-hx",
         Some("github.event_name == 'schedule' || github.event_name == 'pull_request'"),
     ),
 ];

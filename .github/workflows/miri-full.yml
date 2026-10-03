@@ -1,10 +1,15 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Weekly Miri run over the complete test set (docs/06 §4 Miri row, M1 review F3). `ci-full` runs Miri in a
-# bounded scope that skips the test modules of `expect::MIRI_SKIP` (runtime); this job runs every test, those
-# modules included, with a 6-hour timeout. Not a required check; its job name is not a required-check name.
+# bounded scope that skips the test modules of `expect::MIRI_SKIP` (runtime); these jobs run every test that a build
+# without features contains, those modules included, with a 6-hour timeout each. Not run under Miri at all: the test
+# targets with `required-features = ["kat"]` (`hx`, `tr_vectors`, `tr_properties`, `tr_generator` of secmp-proto,
+# listed in `expect::MIRI_FEATURE_GATED` and checked by the gate; they run natively in the `kat` step) and the tests
+# of `expect::MIRI_UNSUPPORTED`. One job per package of `expect::MIRI_PACKAGES` (M3 review F22, Q-4),
+# so that a package's run time does not share the limit of the others (a test in `cargo xtask policy` pins the
+# set). Not required checks; the job names are not required-check names.
 # Checked by `cargo xtask policy` as every workflow (see the header of ci.yml): no `pull_request_target`/
-# `workflow_run` trigger, actions pinned by commit SHA, no `continue-on-error`. By convention, not checked: the
-# schedule/workflow_dispatch triggers only and a read-only token.
+# `workflow_run` trigger, actions pinned by commit SHA, no `continue-on-error`, the read-only token. By convention, not
+# checked: the schedule/workflow_dispatch triggers only.
 name: miri-full
 
 on:
@@ -23,7 +28,7 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  miri-full:
+  miri-full-secmp-sys-mem:
     runs-on: ubuntu-latest
     timeout-minutes: 360
     steps:
@@ -34,5 +39,47 @@ jobs:
         run: rustup toolchain install && rustc -vV
       - name: Pinned nightly with Miri
         run: cargo xtask install-tools --set miri --nightly
-      - name: Miri, complete set (no skip list)
-        run: cargo xtask step --strict miri-full
+      - name: Miri, complete set of secmp-sys-mem (no skip list)
+        run: cargo xtask step --strict miri-full-secmp-sys-mem
+
+  miri-full-secmp-sys-desktop:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Pinned toolchain (rust-toolchain.toml)
+        run: rustup toolchain install && rustc -vV
+      - name: Pinned nightly with Miri
+        run: cargo xtask install-tools --set miri --nightly
+      - name: Miri, complete set of secmp-sys-desktop (no skip list)
+        run: cargo xtask step --strict miri-full-secmp-sys-desktop
+
+  miri-full-secmp-crypto:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Pinned toolchain (rust-toolchain.toml)
+        run: rustup toolchain install && rustc -vV
+      - name: Pinned nightly with Miri
+        run: cargo xtask install-tools --set miri --nightly
+      - name: Miri, complete set of secmp-crypto (no skip list)
+        run: cargo xtask step --strict miri-full-secmp-crypto
+
+  miri-full-secmp-proto:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Pinned toolchain (rust-toolchain.toml)
+        run: rustup toolchain install && rustc -vV
+      - name: Pinned nightly with Miri
+        run: cargo xtask install-tools --set miri --nightly
+      - name: Miri, secmp-proto without the runtime skip list (the feature-gated suites of MIRI_FEATURE_GATED aside)
+        run: cargo xtask step --strict miri-full-secmp-proto

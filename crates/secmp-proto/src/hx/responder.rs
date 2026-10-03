@@ -359,8 +359,9 @@ fn process(
         &transcript,
     )?;
     let state = RatchetState::init_responder(&sk, &transcript, spk.dh_copy()?, spk.rpk_copy()?)?;
+    // §7.4 Decrypt with no fast-forward: `n ≠ 0` is rejected before any chain step (ADR-044 (e), M4 review C-9)
     let opened = state
-        .decrypt_with(inner.first_msg.as_bytes(), entropy)
+        .decrypt_first_with(inner.first_msg.as_bytes(), entropy)
         .map_err(|refused| refused.error())?;
     #[cfg(feature = "kat")]
     ACCEPT_SITE_KAT.set(Some("first_msg checks"));

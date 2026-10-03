@@ -11,7 +11,7 @@
 //!   decodes headers only after `decide` (`ratchet::select_header`; M3 review C6/F1). So `decide`'s case code is the
 //!   only conversion of a cell-dependent `Choice` to a branch up to and including `decide` (test
 //!   `any_skipped_single_conversion`).
-//! - [`skip_plan`]: the bounds of `skip_message_keys(until)` — which positions are derived and which are stored.
+//! - [`skip_plan_within`]: the bounds of `skip_message_keys(until)` — which positions are derived and which are stored.
 //! - [`evicted`]: how many earliest-inserted entries leave `skipped` after an insertion.
 
 use secmp_crypto::{Choice, ConditionallySelectable};
@@ -181,13 +181,26 @@ pub(crate) struct SkipPlan {
     pub(crate) store_from: u32,
 }
 
-/// See [`SkipPlan`]. The case `ck_r = None` (no receiving chain: nothing to skip) is the caller's.
+/// See [`SkipPlan`]: [`skip_plan_within`] with the bound [`MAX_FF`] of §7.4, as the ratchet calls it (the tests and the
+/// Kani harness `tr_skip_plan` check this instance). The case `ck_r = None` (no receiving chain: nothing to skip) is
+/// the caller's.
 ///
 /// # Errors
 /// [`Error::Rejected`] if `until < n_r` or the gap exceeds [`MAX_FF`].
+#[cfg(any(test, kani))]
 pub(crate) fn skip_plan(n_r: u32, until: u32) -> Result<SkipPlan> {
+    skip_plan_within(n_r, until, MAX_FF)
+}
+
+/// The bounds of `skip_message_keys(until)` on a chain at `n_r` ([`SkipPlan`]) with the fast-forward bound `max_ff`:
+/// [`MAX_FF`] in §7.4 Decrypt, 0 for SecMP-HX's first message (ADR-044 (e), M4 review C-9), so that its `n ≠ 0` is
+/// rejected before any chain step. The case `ck_r = None` (no receiving chain: nothing to skip) is the caller's.
+///
+/// # Errors
+/// [`Error::Rejected`] if `until < n_r` or the gap exceeds `max_ff`.
+pub(crate) fn skip_plan_within(n_r: u32, until: u32, max_ff: u32) -> Result<SkipPlan> {
     let steps = until.checked_sub(n_r).ok_or(Error::Rejected)?;
-    if steps > MAX_FF {
+    if steps > max_ff {
         return Err(Error::Rejected);
     }
     Ok(SkipPlan {
@@ -294,6 +307,22 @@ mod tests {
         );
         assert_eq!(skip_plan(0, MAX_FF + 1), Err(Error::Rejected), "MAX_FF + 1");
         assert_eq!(skip_plan(1, MAX_FF + 2), Err(Error::Rejected), "N10");
+        // the bound of SecMP-HX's first message (M4 review C-9): no fast-forward at all
+        assert_eq!(
+            skip_plan_within(0, 0, 0),
+            Ok(SkipPlan {
+                steps: 0,
+                store_from: 0
+            })
+        );
+        assert_eq!(
+            skip_plan_within(0, 1, 0),
+            Err(Error::Rejected),
+            "n = 1, bound 0"
+        );
+        assert_eq!(skip_plan_within(0, 1 << 20, 0), Err(Error::Rejected));
+        assert_eq!(skip_plan_within(3, 2, 0), Err(Error::Rejected), "replay");
+        assert_eq!(skip_plan_within(0, 7, 7).map(|p| p.steps), Ok(7));
         assert_eq!(
             skip_plan(u32::MAX, u32::MAX),
             Ok(SkipPlan {

@@ -48,7 +48,7 @@ use crate::sizes::{
     BODY_LEN, CELL_LEN, HASH_LEN, HDR_CT_LEN, HEADER_LEN, NONCE_LEN, X25519_PK_LEN, sum,
 };
 use crate::tr::entropy::{Entropy, OsEntropy};
-use crate::tr::select::{self, CellChoice, Path, SkipPlan};
+use crate::tr::select::{self, CellChoice, MAX_FF, Path, SkipPlan};
 use crate::tr::state::{DhPair, KemPair, RatchetState, SkippedKey};
 use crate::wire::cell::{Cell, Content, HeaderV1};
 
@@ -139,6 +139,12 @@ std::thread_local! {
     /// `|skipped|` on every path — an early exit from the trial loop or the lookup changes them. Without `kat` and
     /// outside the tests neither the counters nor any statement updating them exists.
     pub static TRIAL_COUNTS_KAT: core::cell::Cell<(u32, u32)> = const { core::cell::Cell::new((0, 0)) };
+
+    /// The `KDF_CK` steps `skip_message_keys` derived in the last [`RatchetState::decrypt`] on this thread (feature
+    /// `kat` and the unit tests; M4 review C-9): reset with [`TRIAL_COUNTS_KAT`]. The test
+    /// `first_msg_with_nonzero_n_rejects_before_any_chain_step` reads 0 after SecMP-HX rejected a first message with
+    /// `n ≠ 0`. No shipped code path reads it; without `kat` and outside the tests it does not exist.
+    pub static SKIP_STEPS_KAT: core::cell::Cell<u32> = const { core::cell::Cell::new(0) };
 }
 
 /// A refused `encrypt` or `decrypt`: the state, unchanged, and the error — [`Error::Rejected`] for every
@@ -307,6 +313,8 @@ fn derive_skipped(
     let mut stored = Vec::new();
     let mut p = from;
     for _ in 0..plan.steps {
+        #[cfg(any(test, feature = "kat"))]
+        SKIP_STEPS_KAT.set(SKIP_STEPS_KAT.get().saturating_add(1));
         let (next, mk) = kdf_ck(&ck)?;
         if p >= plan.store_from {
             stored.push(SkippedKey {
@@ -719,11 +727,34 @@ impl RatchetState {
     /// # Errors
     /// As [`RatchetState::decrypt`].
     pub fn decrypt_with(
-        mut self,
+        self,
         cell: &[u8],
         entropy: &mut impl Entropy,
     ) -> core::result::Result<Opened, Refused> {
-        let (update, plaintext) = match self.open(cell, entropy) {
+        self.decrypt_within(cell, entropy, MAX_FF)
+    }
+
+    /// [`RatchetState::decrypt_with`] of SecMP-HX's first message (§6.6 step 3, ADR-044 (e); M4 review C-9): the
+    /// fast-forward bound is 0, so a header with `n ≠ 0` is rejected at `skip_message_keys`, before any `KDF_CK` step,
+    /// the body MAC and the sending half's randomness. `pn` costs nothing on a fresh responder (no receiving chain);
+    /// the caller still requires `(n, pn) = (0, 0)` of the opened cell. Crate-private: only `hx::responder` calls it.
+    pub(crate) fn decrypt_first_with(
+        self,
+        cell: &[u8],
+        entropy: &mut impl Entropy,
+    ) -> core::result::Result<Opened, Refused> {
+        self.decrypt_within(cell, entropy, 0)
+    }
+
+    /// [`RatchetState::decrypt_with`] with the fast-forward bound `max_ff` of `skip_message_keys` ([`MAX_FF`], or 0 for
+    /// SecMP-HX's first message).
+    fn decrypt_within(
+        mut self,
+        cell: &[u8],
+        entropy: &mut impl Entropy,
+        max_ff: u32,
+    ) -> core::result::Result<Opened, Refused> {
+        let (update, plaintext) = match self.open(cell, entropy, max_ff) {
             Ok(x) => x,
             Err(error) => return Err(Refused::new(self, error)),
         };
@@ -768,8 +799,14 @@ impl RatchetState {
         keys
     }
 
-    /// Everything of §7.4 that decides acceptance, on the borrowed state (plan D2, D3).
-    fn open(&self, cell: &[u8], entropy: &mut impl Entropy) -> Result<(Update, Plaintext)> {
+    /// Everything of §7.4 that decides acceptance, on the borrowed state (plan D2, D3); `max_ff` bounds
+    /// `skip_message_keys`.
+    fn open(
+        &self,
+        cell: &[u8],
+        entropy: &mut impl Entropy,
+        max_ff: u32,
+    ) -> Result<(Update, Plaintext)> {
         #[cfg(feature = "kat")]
         DECRYPT_SITE_KAT.set(Some("cell length"));
         if cell.len() != CELL_LEN {
@@ -778,7 +815,10 @@ impl RatchetState {
         #[cfg(feature = "kat")]
         DECRYPT_SITE_KAT.set(Some("header: no key opened"));
         #[cfg(any(test, feature = "kat"))]
-        TRIAL_COUNTS_KAT.set((0, 0));
+        {
+            TRIAL_COUNTS_KAT.set((0, 0));
+            SKIP_STEPS_KAT.set(0);
+        }
         let (hdr_nonce, rest) = cell
             .split_first_chunk::<NONCE_LEN>()
             .ok_or(Error::Rejected)?;
@@ -814,17 +854,19 @@ impl RatchetState {
                     plaintext,
                 ))
             }
-            Selected::Chain(header) => self.open_chain(&header, &body_ad, body),
-            Selected::Step(header) => self.open_step(&header, &body_ad, body, entropy),
+            Selected::Chain(header) => self.open_chain(&header, &body_ad, body, max_ff),
+            Selected::Step(header) => self.open_step(&header, &body_ad, body, entropy, max_ff),
         }
     }
 
-    /// §7.4 with `step = false`: KEM constancy, `skip_message_keys(header.n)`, `KDF_CK`, `MsgDecrypt`.
+    /// §7.4 with `step = false`: KEM constancy, `skip_message_keys(header.n)` (at most `max_ff` steps), `KDF_CK`,
+    /// `MsgDecrypt`.
     fn open_chain(
         &self,
         header: &HeaderV1,
         body_ad: &[u8],
         body: &[u8],
+        max_ff: u32,
     ) -> Result<(Update, Plaintext)> {
         #[cfg(feature = "kat")]
         DECRYPT_SITE_KAT.set(Some("kem constancy"));
@@ -841,7 +883,7 @@ impl RatchetState {
         }
         #[cfg(feature = "kat")]
         DECRYPT_SITE_KAT.set(Some("counter rule"));
-        let plan = select::skip_plan(self.n_r, header.n)?;
+        let plan = select::skip_plan_within(self.n_r, header.n, max_ff)?;
         let (ck, added) = derive_skipped(ck_r, hk_r, self.n_r, plan)?;
         // (ck_r, mk) = KDF_CK(ck_r); n_r += 1
         let (ck_next, mk) = kdf_ck(&ck)?;
@@ -862,14 +904,15 @@ impl RatchetState {
     }
 
     /// §7.4 with `step = true`: the new-ratchet-key check, `skip_message_keys(header.pn)` on the old chain,
-    /// `DHRatchet` (receiving half), `skip_message_keys(header.n)`, `KDF_CK`, `MsgDecrypt`, and — only after the
-    /// body MAC verified — `DHRatchet`'s sending half.
+    /// `DHRatchet` (receiving half), `skip_message_keys(header.n)` (each at most `max_ff` steps), `KDF_CK`,
+    /// `MsgDecrypt`, and — only after the body MAC verified — `DHRatchet`'s sending half.
     fn open_step(
         &self,
         header: &HeaderV1,
         body_ad: &[u8],
         body: &[u8],
         entropy: &mut impl Entropy,
+        max_ff: u32,
     ) -> Result<(Update, Plaintext)> {
         #[cfg(feature = "kat")]
         DECRYPT_SITE_KAT.set(Some("dh_pk"));
@@ -887,7 +930,7 @@ impl RatchetState {
         // skip_message_keys(header.pn) on the *old* receiving chain (none yet: nothing to skip)
         let mut added = Vec::new();
         if let (Some(ck_r), Some(hk_r)) = (&self.ck_r, &self.hk_r) {
-            let plan = select::skip_plan(self.n_r, header.pn)?;
+            let plan = select::skip_plan_within(self.n_r, header.pn, max_ff)?;
             added = derive_skipped(ck_r, hk_r, self.n_r, plan)?.1;
         }
         #[cfg(feature = "kat")]
@@ -903,7 +946,7 @@ impl RatchetState {
         #[cfg(feature = "kat")]
         DECRYPT_SITE_KAT.set(Some("counter rule"));
         // skip_message_keys(header.n) on the new chain (n_r = 0, hk_r = the old nhk_r)
-        let plan = select::skip_plan(0, header.n)?;
+        let plan = select::skip_plan_within(0, header.n, max_ff)?;
         let (ck, new_chain) = derive_skipped(&ck_r, nhk_r, 0, plan)?;
         added.extend(new_chain);
         let (ck_next, mk) = kdf_ck(&ck)?;

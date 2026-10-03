@@ -488,14 +488,18 @@ impl MemoryPrekeyStore {
         })
     }
 
-    /// Record an issued invitation (§5.2). Both prekeys it names must be held.
+    /// Record an issued invitation (§5.2). Both prekeys it names must be held, and its OPK must be no other record's:
+    /// one record per OPK (§6.1 "Single use", `docs/03:275`; M4 review C-11), so `retire_expired` and
+    /// `commit_accept` never delete the OPK of a live record.
     ///
     /// # Errors
-    /// [`Error::Rejected`] if a prekey is not held or the `ld_id` is already recorded.
+    /// [`Error::Rejected`] if a prekey is not held or the `ld_id` is already recorded. Rejected also if another record
+    /// already names `record.opk_id`.
     pub fn add_record(&mut self, record: InvitationRecord) -> Result<()> {
         if self.spk(record.spk_id).is_none()
             || self.opk(record.opk_id).is_none()
             || self.records.iter().any(|r| r.ld_id == record.ld_id)
+            || self.records.iter().any(|r| r.opk_id == record.opk_id)
         {
             return Err(Error::Rejected);
         }

@@ -340,6 +340,17 @@ fn add_record_rejects_duplicate_ld_id_alone() {
     store.add_record(record(2, 1, 2)).unwrap();
 }
 
+/// M4 review C-11 (R-25): one record per OPK (§6.1 single use) — a second record naming a recorded OPK is refused
+/// alone (new `ld_id`, held SPK, the OPK held but already recorded), the store unchanged; the same record with another
+/// held OPK is accepted.
+#[test]
+fn add_record_rejects_duplicate_opk_id_alone() {
+    let mut store = plain_store();
+    store.add_record(record(1, 1, 1)).unwrap();
+    assert_add_rejected(&mut store, record(2, 1, 1));
+    store.add_record(record(2, 1, 2)).unwrap();
+}
+
 /// A deterministic entropy stream long enough for one `issue_invitation` after the SPK exists.
 fn stream() -> Vec<u8> {
     (0..16_384_u32)

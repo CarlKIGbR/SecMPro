@@ -13,9 +13,12 @@
 //! each record that [`MemoryPrekeyStore::retire_expired`] returns.
 //!
 //! **Persistence.** The in-memory store is the reference for the trait; the encrypted store of M7 implements the
-//! same trait. `commit_accept` is the commit point of an accepted handshake: an implementation makes the deletion
-//! and the record's consumption durable together with the new session state, and a failed `commit_accept` leaves the OPK in place (the handshake is
-//! then rejected and the invitee's byte-identical retry is processed again, §6.5).
+//! same trait. `commit_accept` is the commit point of an accepted handshake: it deletes the OPK and consumes the record,
+//! both or neither. A persistent store stages these writes in a store transaction that the caller commits together
+//! with the new session state (`Accepted.state`) before it acknowledges any cell (persist-before-ack, CLAUDE.md §1.7;
+//! M4 review C-12, the transactional store is an M7 obligation, F-M7). A `commit_accept` that is refused
+//! ([`Error::Rejected`]) or cannot be made durable ([`Error::Unavailable`]) leaves the OPK in place: the handshake is
+//! then not accepted and the invitee's byte-identical retry is processed again (§6.5).
 
 #[cfg(any(test, feature = "kat"))]
 use secmp_crypto::sha256;
@@ -330,12 +333,13 @@ pub trait PrekeyStore {
     fn delete_opk(&mut self, opk_id: u32) -> Result<()>;
 
     /// The commit point of an accepted handshake (§6.6 step 4, §5.2 "until the invitation is consumed"): delete
-    /// the one-time prekey **and** consume the invitation record of `ld_id`, both or neither (one durable
-    /// transaction in a persistent store).
+    /// the one-time prekey **and** consume the invitation record of `ld_id`, both or neither. A persistent store
+    /// stages both writes in a store transaction that the caller commits together with `Accepted.state` before it
+    /// acknowledges any cell (M4 review C-12; F-M7).
     ///
     /// # Errors
-    /// [`Error::Rejected`] if the OPK or the record is absent, the record does not name exactly `opk_id`, or the
-    /// commit could not be made durable; nothing is changed then.
+    /// [`Error::Rejected`] if the OPK or the record is absent, or the record does not name exactly `opk_id`;
+    /// [`Error::Unavailable`] if the commit could not be made durable. Nothing is changed in either case.
     fn commit_accept(&mut self, opk_id: u32, ld_id: &Id) -> Result<()>;
 }
 

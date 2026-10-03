@@ -5,9 +5,18 @@
 //! step 4 (`commit_accept`: OPK deletion and record consumption), which is the last operation. Every rejection therefore leaves the store, the record and the caller's
 //! state as they were, and "log nothing identifying" (§6.6 step 3) holds because nothing here logs.
 //!
-//! **One uniform error.** Every rejection of untrusted input is [`Error::Rejected`], whichever check failed;
-//! [`Error::Unavailable`] occurs only if the ratchet's sending half could not draw randomness after the
-//! `first_msg` MAC verified (the caller neither acknowledges nor deletes anything and retries).
+//! **One uniform error.** Every rejection of untrusted input is [`Error::Rejected`], whichever check failed.
+//! [`Error::Unavailable`] is the environment's, never the input's: the locked-memory copies of `SPK_dh` and `RPK_kem`
+//! for the ratchet (before `first_msg` is decrypted), the ratchet's sending half that draws randomness after the
+//! `first_msg` MAC verified, and a `commit_accept` that could not be made durable (M4 review C-12). The caller
+//! neither acknowledges nor deletes anything then, and retries.
+//!
+//! **The caller's duties (persist-before-ack, M4 review C-12).** On `Ok`, the caller persists the whole
+//! [`Accepted`] — the session state, the peer, the routes, the profile — in the same store transaction as the
+//! `commit_accept` writes, before it acknowledges any cell and before it retires the invitation queue. Between calls
+//! it retains at most the newest 24 cells of the invitation queue that it could not classify (eight partial groups of
+//! three, [`MAX_PARTIAL_GROUPS`]); a complete group is spent after one `accept` call, accepted or not (review RT-1;
+//! the client's enforcement is F-M7).
 
 use secmp_crypto::{Caead, ConstantTimeEq, Label, MlKem1024Ct, SecretBytes};
 
@@ -61,7 +70,9 @@ std::thread_local! {
     pub static ACCEPT_SITE_KAT: core::cell::Cell<Option<&'static str>> = const { core::cell::Cell::new(None) };
 }
 
-/// What a successful [`Responder::accept`] yields (§6.6 step 4).
+/// What a successful [`Responder::accept`] yields (§6.6 step 4). The caller persists all of it — with the store's
+/// `commit_accept` writes, in one transaction — before it acknowledges any cell and before it retires the invitation
+/// queue (persist-before-ack; M4 review C-12).
 pub struct Accepted {
     /// The ratchet state after decrypting `first_msg` (§7.4): the responder side of the session. It holds none
     /// of the prekey secrets: the DH step replaced `SPK_dh` and `RPK_kem` (CLAUDE.md §1.3).
@@ -220,12 +231,14 @@ impl<K: PartialEq, const R: usize> Processed<K, R> {
 /// The driver of §6.5 and §6.6 step 4 over already opened chunks `(init_id, i, chunk)`, in fetch order: group them
 /// ([`insert`]); for each group that completes, in the order of completion, `process` it (§6.6 steps 1–3, reading
 /// the store); the first group `process` accepts is the session: the OPK is deleted and the record consumed — the only call of
-/// `commit_accept`, after `process` succeeded — and `process`'s value returned. A group `process` rejects is discarded
+/// `commit_accept`, after `process` succeeded — and `process`'s value returned (a `commit_accept` that is refused is
+/// [`Error::Rejected`], one that could not be made durable [`Error::Unavailable`]; the OPK is kept). A group
+/// `process` rejects is discarded
 /// and the OPK kept; its `init_id` is recorded, and every later chunk of that `init_id` in this call is ignored — the
 /// first complete group of an `init_id` is the one that counts (first-seen wins, ADR-044 (c); M4 review C-10; the
 /// record lives for one call). Groups of other `init_id`s are still processed, up to [`MAX_PROCESSED_GROUPS`] rejected
 /// ones (then the call rejects). If none is accepted the result is [`Error::Rejected`]; [`Error::Unavailable`] from
-/// `process` is passed up at once. A failing `commit_accept` rejects, the OPK kept.
+/// `process` is passed up at once.
 pub(crate) fn drive<K: PartialEq, C, T, S: PrekeyStore>(
     items: impl IntoIterator<Item = (K, usize, C)>,
     store: &mut S,
@@ -253,9 +266,7 @@ pub(crate) fn drive<K: PartialEq, C, T, S: PrekeyStore>(
                 // step 4: delete the OPK and consume the record (`commit_accept`) — the last operation; a failure keeps it and rejects
                 #[cfg(feature = "kat")]
                 ACCEPT_SITE_KAT.set(Some("opk delete"));
-                store
-                    .commit_accept(opk_id, ld_id)
-                    .map_err(|_| Error::Rejected)?;
+                store.commit_accept(opk_id, ld_id)?;
                 return Ok(accepted);
             }
             Err(Error::Unavailable) => return Err(Error::Unavailable),
@@ -284,9 +295,14 @@ impl Responder {
     /// no group passes, the result is [`Error::Rejected`], whether `cells` held garbage only, an incomplete group
     /// or a bad envelope.
     ///
+    /// On `Ok` the caller persists the returned [`Accepted`] (state, peer, routes, profile) in the store transaction of
+    /// the `commit_accept` writes before it acknowledges any cell and before it retires the invitation queue; between
+    /// calls it retains at most the newest 24 unclassified cells, and a complete group is spent after one `accept`
+    /// (module documentation; M4 review C-12).
+    ///
     /// # Errors
-    /// The uniform [`Error::Rejected`]; [`Error::Unavailable`] as described in the module documentation. The store
-    /// is unchanged on every error.
+    /// The uniform [`Error::Rejected`]; [`Error::Unavailable`] as described in the module documentation (also when
+    /// `commit_accept` could not be made durable). The store is unchanged on every error.
     pub fn accept(
         cells: &[Cell],
         record: &InvitationRecord,

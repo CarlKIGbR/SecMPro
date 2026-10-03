@@ -534,7 +534,8 @@ fn kani_hx_grouping() {
 }
 
 /// A prekey store without keys that keeps the contract of [`PrekeyStore::commit_accept`]: the OPK and the record are
-/// removed together (`Ok`), or nothing changes (`Err`: either is absent, or the commit could not be made durable).
+/// removed together (`Ok`), or nothing changes (`Err(Rejected)`: either is absent; `Err(Unavailable)`: the commit
+/// could not be made durable, M4 review C-12).
 /// It counts the calls and keeps their arguments. (On the real `MemoryPrekeyStore`, which Kani runs since
 /// `secmp-sys-mem` has a `cfg(kani)` heap backend, this harness gave no verdict in 30 minutes, with or without the
 /// K4b stubs; K4b proves `commit_accept` on the real store. M4 report §11.2.)
@@ -562,12 +563,14 @@ impl PrekeyStore for ContractStore {
     fn commit_accept(&mut self, opk_id: u32, ld_id: &[u8; 16]) -> Result<()> {
         self.commits = self.commits.saturating_add(1);
         self.committed_with = Some((opk_id, *ld_id));
-        if self.opk_present && self.record_present && self.durable {
+        if !(self.opk_present && self.record_present) {
+            Err(Error::Rejected)
+        } else if self.durable {
             self.opk_present = false;
             self.record_present = false;
             Ok(())
         } else {
-            Err(Error::Rejected)
+            Err(Error::Unavailable)
         }
     }
 }
@@ -582,8 +585,8 @@ const DRIVE_CHUNKS: usize = 6;
 /// only if** a processed group passed every step, and no group is processed after that; every processing sees the
 /// store untouched, so a rejected complete group leaves it as it was and a later group can still commit (the cover
 /// property: a first group rejected, a group of another init_id committed); `Ok` ⇔ that commit succeeded, and then
-/// the OPK and the record are gone; every `Err` leaves the store as it was; `Unavailable` comes only from a step and
-/// never commits.
+/// the OPK and the record are gone; every `Err` leaves the store as it was; `Unavailable` comes from a step (then no
+/// commit was attempted) or from the one commit, which could not be made durable (M4 review C-12).
 #[kani::proof]
 #[kani::unwind(10)] // DRIVE_CHUNKS + 1 items; the 8 slots; 4 steps
 fn kani_accept_opk_delete_only_on_success() {
@@ -662,7 +665,14 @@ fn kani_accept_opk_delete_only_on_success() {
         Err(e) => {
             assert!(store.opk_present == opk_present && store.record_present == record_present);
             if e == Error::Unavailable {
-                assert!(unavailable.get() && store.commits == 0);
+                assert!(
+                    (unavailable.get() && store.commits == 0)
+                        || (store.commits == 1
+                            && accepted.get().is_some()
+                            && opk_present
+                            && record_present
+                            && !store.durable)
+                );
             } else {
                 assert!(e == Error::Rejected);
             }

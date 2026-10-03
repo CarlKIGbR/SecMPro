@@ -561,36 +561,94 @@ fn accept_handshake_without_known_route_rejects_and_keeps_opk() {
     check_row("N-70");
 }
 
+/// A store that counts `delete_opk` and `commit_accept` calls (each deletes the OPK) and delegates to the in-memory
+/// store (N-60).
+struct Counting {
+    inner: secmp_proto::prekeys::MemoryPrekeyStore,
+    deletes: usize,
+}
+
+impl secmp_proto::prekeys::PrekeyStore for Counting {
+    fn spk(&self, id: u32) -> Option<&secmp_proto::prekeys::SpkGeneration> {
+        self.inner.spk(id)
+    }
+    fn opk(&self, id: u32) -> Option<&secmp_proto::prekeys::OpkSecrets> {
+        self.inner.opk(id)
+    }
+    fn delete_opk(&mut self, id: u32) -> secmp_proto::Result<()> {
+        self.deletes = self.deletes.saturating_add(1);
+        self.inner.delete_opk(id)
+    }
+    fn commit_accept(&mut self, opk_id: u32, ld_id: &[u8; 16]) -> secmp_proto::Result<()> {
+        self.deletes = self.deletes.saturating_add(1);
+        self.inner.commit_accept(opk_id, ld_id)
+    }
+}
+
+/// A store whose `commit_accept` cannot be made durable (M4 review C-12): it counts the call, returns
+/// `Unavailable` and changes nothing; everything else is the in-memory store's.
+struct Failing {
+    inner: secmp_proto::prekeys::MemoryPrekeyStore,
+    commits: usize,
+}
+
+impl secmp_proto::prekeys::PrekeyStore for Failing {
+    fn spk(&self, id: u32) -> Option<&secmp_proto::prekeys::SpkGeneration> {
+        self.inner.spk(id)
+    }
+    fn opk(&self, id: u32) -> Option<&secmp_proto::prekeys::OpkSecrets> {
+        self.inner.opk(id)
+    }
+    fn delete_opk(&mut self, id: u32) -> secmp_proto::Result<()> {
+        self.inner.delete_opk(id)
+    }
+    fn commit_accept(&mut self, _opk_id: u32, _ld_id: &[u8; 16]) -> secmp_proto::Result<()> {
+        self.commits = self.commits.saturating_add(1);
+        Err(Error::Unavailable)
+    }
+}
+
+/// M4 review C-12 (R-26): a `commit_accept` that cannot be made durable is `Unavailable`, not `Rejected` — honest
+/// cells, the store refuses to make the commit durable: `accept` returns `Unavailable` after exactly one commit call,
+/// the inner store is unchanged and the OPK kept. A refused commit stays `Rejected` (`commit_accept_rejects_*` in
+/// `store.rs`).
+#[test]
+fn accept_commit_unavailable_is_unavailable_and_changes_nothing() {
+    use secmp_proto::hx::Responder;
+    use secmp_proto::wire::cell::Cell;
+    let lib = Lib::new();
+    let mut store = Failing {
+        inner: lib.store(),
+        commits: 0,
+    };
+    let before = store.inner.digest_kat();
+    let cells: Vec<Cell> = lib
+        .honest()
+        .iter()
+        .map(|c| Cell::from_bytes(c).unwrap())
+        .collect();
+    let result = Responder::accept(
+        &cells,
+        &lib.record(),
+        &mut store,
+        &lib.r_id.responder_keys(),
+        &mut FixedEntropy::new(&lib.w.step),
+    );
+    assert_eq!(result.err(), Some(Error::Unavailable));
+    assert_eq!(store.commits, 1, "the one commit, after steps 1-3 passed");
+    assert_eq!(store.inner.digest_kat(), before, "the store is unchanged");
+    assert!(
+        store.inner.opk_ids().contains(&harness::OPK_ID),
+        "the OPK is kept"
+    );
+}
+
 /// N-60: every row above through one function: one error value, the store digest unchanged, the OPK kept, and the
 /// counting store sees no `delete_opk` call.
 #[test]
 fn accept_reject_is_uniform_and_transactional() {
-    use secmp_proto::Error;
     use secmp_proto::hx::Responder;
-    use secmp_proto::prekeys::PrekeyStore;
     use secmp_proto::wire::cell::Cell;
-
-    /// A store that counts `delete_opk` calls and delegates to the in-memory store.
-    struct Counting {
-        inner: secmp_proto::prekeys::MemoryPrekeyStore,
-        deletes: usize,
-    }
-    impl PrekeyStore for Counting {
-        fn spk(&self, id: u32) -> Option<&secmp_proto::prekeys::SpkGeneration> {
-            self.inner.spk(id)
-        }
-        fn opk(&self, id: u32) -> Option<&secmp_proto::prekeys::OpkSecrets> {
-            self.inner.opk(id)
-        }
-        fn delete_opk(&mut self, id: u32) -> secmp_proto::Result<()> {
-            self.deletes += 1;
-            self.inner.delete_opk(id)
-        }
-        fn commit_accept(&mut self, opk_id: u32, ld_id: &[u8; 16]) -> secmp_proto::Result<()> {
-            self.deletes += 1;
-            self.inner.commit_accept(opk_id, ld_id)
-        }
-    }
 
     let lib = Lib::new();
     let entries = table(&lib);

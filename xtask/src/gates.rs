@@ -1761,6 +1761,13 @@ pub(crate) fn kani(ctx: &Ctx) -> Result<Outcome> {
     for c in &covers {
         say(&format!("  cover {c}"));
     }
+    let pin = kani_cover_pin_findings(&covers);
+    if !pin.is_empty() {
+        bail!(
+            "kani: the covers differ from expect::KANI_COVERS: {}",
+            pin.join("; ")
+        );
+    }
     Ok(Outcome::Pass(format!(
         "Kani {}: harness packages {} (expected set matches); {}/{} harnesses verified (expect::KANI_HARNESSES): {}; \
          every cover satisfied: {}",
@@ -1801,17 +1808,22 @@ pub(crate) fn kani_covers(output: &str) -> Result<Vec<String>> {
             && status != "SATISFIED"
         {
             failed.push(format!("{current}: a cover is {status}"));
-        } else if let Some(counts) = t
+        } else if let Some((counts, suffix)) = t
             .strip_prefix("** ")
-            .and_then(|r| r.strip_suffix(" cover properties satisfied"))
+            .and_then(|r| r.split_once(" cover properties satisfied"))
         {
             let numbers: Vec<usize> = counts
                 .split(" of ")
                 .filter_map(|n| n.trim().parse().ok())
                 .collect();
+            // delta review VD1-5: Kani appends " (K unreachable)" when a cover cannot be reached
             match numbers.as_slice() {
-                [n, m] if n == m => lines.push(format!("{current}: {counts} satisfied")),
-                _ => failed.push(format!("{current}: {counts} cover properties satisfied")),
+                [n, m] if n == m && suffix.is_empty() => {
+                    lines.push(format!("{current}: {counts} satisfied"));
+                }
+                _ => failed.push(format!(
+                    "{current}: {counts} cover properties satisfied{suffix}"
+                )),
             }
         }
     }
@@ -1819,6 +1831,25 @@ pub(crate) fn kani_covers(output: &str) -> Result<Vec<String>> {
         bail!("kani: a cover is not satisfied: {}", failed.join("; "));
     }
     Ok(lines)
+}
+
+/// M4 delta review VD1-5: the cover summaries of a Kani run ([`kani_covers`]) differ from `expect::KANI_COVERS` —
+/// a pinned summary missing, one not pinned, or a harness reported twice.
+pub(crate) fn kani_cover_pin_findings(covers: &[String]) -> Vec<String> {
+    let want: BTreeSet<String> = expect::KANI_COVERS
+        .iter()
+        .map(|(h, m)| format!("{h}: {m} of {m} satisfied"))
+        .collect();
+    let got: BTreeSet<String> = covers.iter().cloned().collect();
+    let mut out: Vec<String> = want
+        .difference(&got)
+        .map(|w| format!("missing: {w}"))
+        .collect();
+    out.extend(got.difference(&want).map(|g| format!("not pinned: {g}")));
+    if got.len() != covers.len() {
+        out.push("a cover summary reported twice".to_owned());
+    }
+    out
 }
 
 /// M2 review C5: the harnesses a Kani run verified. Refuses the run unless every "Complete - N successfully verified
@@ -5750,6 +5781,46 @@ mod tests {
         );
         // no cover at all is no failure
         assert!(kani_covers(&kani_log(expect::KANI_HARNESSES, 0))?.is_empty());
+        Ok(())
+    }
+
+    /// M4 delta review VD1-5: the number of covers is pinned (`expect::KANI_COVERS`: as many as `kani_proofs.rs` has,
+    /// each on a known harness); the committed Kani log matches it; a deleted or an added cover is a finding; a
+    /// summary with Kani's `(K unreachable)` suffix fails the cover check.
+    #[test]
+    fn kani_cover_count_is_pinned() -> Result<()> {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let source = std::fs::read_to_string(root.join("crates/secmp-proto/src/kani_proofs.rs"))?;
+        let pinned: usize = expect::KANI_COVERS.iter().map(|(_, m)| m).sum();
+        assert_eq!(source.matches("kani::cover!(").count(), pinned);
+        for (h, _) in expect::KANI_COVERS {
+            assert!(expect::KANI_HARNESSES.contains(h), "{h}");
+        }
+        let log = std::fs::read_to_string(
+            root.join("docs/reviews/M04-evidence/kani-xtask-step-0a5d2b6.txt"),
+        )?;
+        assert_eq!(
+            kani_cover_pin_findings(&kani_covers(&log)?),
+            Vec::<String>::new()
+        );
+        let summary = "** 1 of 1 cover properties satisfied";
+        // a cover deleted: its harness prints no summary
+        let deleted = log.replacen(summary, "", 1);
+        assert_eq!(kani_cover_pin_findings(&kani_covers(&deleted)?).len(), 1);
+        // a cover added: "2 of 2" is not the pinned "1 of 1"
+        let added = log.replacen(summary, "** 2 of 2 cover properties satisfied", 1);
+        assert_eq!(kani_cover_pin_findings(&kani_covers(&added)?).len(), 2);
+        // the unreachable suffix, with and without a short count
+        for line in [
+            "** 1 of 2 cover properties satisfied (1 unreachable)",
+            "** 1 of 1 cover properties satisfied (1 unreachable)",
+        ] {
+            let got = kani_covers(&log.replacen(summary, line, 1));
+            assert!(
+                got.as_ref().is_err_and(|e| e.0.contains("(1 unreachable)")),
+                "{line}: {got:?}"
+            );
+        }
         Ok(())
     }
 

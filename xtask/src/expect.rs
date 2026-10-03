@@ -556,6 +556,14 @@ pub(crate) const KANI_HARNESSES: &[&str] = &[
     "kani_proofs::tr_skip_plan",
 ];
 
+/// M4 delta review VD1-5: the `kani::cover!` properties per harness. The gate requires exactly these cover summaries
+/// ("N of N cover properties satisfied" for each, no other harness with one), so a deleted or an added cover fails it
+/// instead of changing the count silently.
+pub(crate) const KANI_COVERS: &[(&str, usize)] = &[
+    ("kani_proofs::kani_accept_opk_delete_only_on_success", 1),
+    ("kani_proofs::kani_commit_accept_atomic", 1),
+];
+
 /// The SecMP vector suites (`vectors/SCHEMA.md` §3): frozen as `vectors/<suite>.json`, reference files
 /// `vectors/ref/<suite>.json`, Rust files `vectors/rust/<suite>.json` (docs/06 §5 step 12a). M2–M5 add suites.
 pub(crate) const VECTOR_SUITES: &[&str] = &[

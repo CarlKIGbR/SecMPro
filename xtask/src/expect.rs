@@ -753,9 +753,10 @@ pub(crate) const REQUIRED_GATE_RUNS: &[(&str, &[&str])] = &[
     ("xwin-cross", &["cargo xtask step --strict windows-cross"]),
     (
         "linux-full",
-        // the SecMP-HX models run in their own job `proverif-hx` (WEISUNG M4-5 §5), mutation testing in `mutants` (ADR-047)
+        // the SecMP-HX models run in their own job `proverif-hx` (WEISUNG M4-5 §5), mutation testing in `mutants` (ADR-047),
+        // the ct gate in `ct` (ADR-047 Amendment 1, M4 review C-2)
         &[
-            "cargo xtask ci-full --strict --delegated windows-native --delegated windows-cross --delegated mutants --models tr",
+            "cargo xtask ci-full --strict --delegated windows-native --delegated windows-cross --delegated mutants --delegated ct --models tr",
         ],
     ),
 ];

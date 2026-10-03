@@ -190,12 +190,29 @@ jobs:
             ~/.kani
           key: ${{ steps.tools-cache.outputs.cache-primary-key }}
       # step 10 runs `formal/tr.pv` here; the SecMP-HX models run in `proverif-hx` (WEISUNG M4-5, gate F7)
-      # step 8 (mutants) runs in the `mutants` job (ADR-047)
+      # step 8 (mutants) runs in the `mutants` job (ADR-047), step 5 `ct` in the `ct` job (ADR-047 Amendment 1)
       - name: ci-full (steps 1–14)
-        run: cargo xtask ci-full --strict --delegated windows-native --delegated windows-cross --delegated mutants --models tr
-      # The report of the `ct` step (ADR-038 runner metadata and per-target t values), kept with every run so a
-      # verdict can be re-read without the job log (M1 review §E 5.7).
-      - name: Upload the constant-time report
+        run: cargo xtask ci-full --strict --delegated windows-native --delegated windows-cross --delegated mutants --delegated ct --models tr
+
+  # docs/06 §5 step 5 `ct` (ADR-038, ADR-041) as its own job (ADR-047 Amendment 1, M4 review C-2): on PR run
+  # 37041956810 the step ran at least 216.7 min inside `linux-full` without a verdict, and `linux-full` delegates it
+  # here. The bench appends a line per finished phase to `target/ct-progress.jsonl` and the gate fails at its own budget
+  # `expect::CT_STEP_TIMEOUT_SECONDS` (290 min, ADR-045 Amendment 1), within this job's limit; the report (ADR-038
+  # runner metadata and per-target t values, M1 review §E 5.7), the progress file and the bench log are kept as an
+  # artefact in every case. Same events as `linux-full`.
+  ct:
+    if: github.event_name == 'schedule' || github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Pinned toolchain (rust-toolchain.toml)
+        run: rustup toolchain install && rustc -vV
+      - name: Constant-time gate (step 5 ct)
+        run: cargo xtask step --strict ct
+      - name: Upload the constant-time report, progress and bench log
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

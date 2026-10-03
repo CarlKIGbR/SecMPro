@@ -284,10 +284,11 @@ jobs:
             target/mutants-step.log
           if-no-files-found: error
 
-  # The verdict of step 8 (ADR-047 Amendment 1 (2), (4)): runs after the shards whatever their outcome, downloads
-  # their results, and fails unless all 8 passed, every survivor is documented in `docs/mutants-accepted.md` and each
-  # package has at least one caught mutant and at most 35 % unviable ones (`expect::MUTANT_MAX_UNVIABLE_PERCENT`). The
-  # merged outcomes and the per-package counts are kept as an artefact. Same events as `linux-full`.
+  # The verdict of step 8 (ADR-047 Amendment 1 (2), Amendment 2): runs after the shards whatever their outcome,
+  # downloads their results, reports every shard and package, and fails unless all 8 passed, every survivor is
+  # documented in `docs/mutants-accepted.md` and each package has caught at least 50 % of its mutants
+  # (`expect::MUTANT_MIN_CAUGHT_PERCENT`); an unviable share above 35 % is a warning. The merged outcomes and the
+  # per-package counts are kept as an artefact. Same events as `linux-full`.
   mutants:
     needs: mutants-shard
     if: always() && (github.event_name == 'schedule' || github.event_name == 'pull_request')

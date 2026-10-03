@@ -269,9 +269,15 @@ pub(crate) const MUTANT_PACKAGES: &[&str] = &["secmp-crypto", "secmp-proto"];
 /// their results and gives the verdict.
 pub(crate) const MUTANT_SHARDS: usize = 8;
 
-/// ADR-047 Amendment 1 (4), M4 review R-06: the floor per package of [`MUTANT_PACKAGES`] — at least one caught mutant,
-/// and at most this percentage of the package's mutants unviable; otherwise the gate fails naming the package.
-pub(crate) const MUTANT_MAX_UNVIABLE_PERCENT: usize = 35;
+/// ADR-047 Amendment 2 (1) (replacing the unviable cap of Amendment 1 (4), M4 review R-06): the floor per package of
+/// [`MUTANT_PACKAGES`] — at least one caught mutant, and caught at least this percentage of all the package's generated
+/// mutants (caught + missed + unviable + timeout); otherwise the merge fails naming the package.
+pub(crate) const MUTANT_MIN_CAUGHT_PERCENT: usize = 50;
+
+/// ADR-047 Amendment 2 (2): an unviable share above this percentage of a package's mutants is printed as a WARNING in
+/// the verdict text and the job summary, never a failure (PR run 37127247911: `secmp-crypto` 99 of 268 = 36.9 %, all
+/// `FnValue` replacements needing `Default` on types that have none by design).
+pub(crate) const MUTANT_UNVIABLE_WARN_PERCENT: usize = 35;
 
 /// ADR-047 Amendment 1 (5), M4 review R-05: tests left out of the test run of every mutant (libtest `--skip` filters
 /// after `cargo mutants … -- --`, each matching only its test), as (name, reason). The `kat` and `nextest` steps still

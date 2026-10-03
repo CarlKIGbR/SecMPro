@@ -378,9 +378,12 @@ use crate::sizes::{
 };
 use crate::wire::hx::{HandshakeCellPlaintext, Outer};
 
-/// The three chunks of `Padded` (§6.5: 3 × 4006 = 12018): for every chunk index `i` < 3, `i · 4006 + 4006` does not
-/// overflow and does not exceed 12018, the chunks tile `Padded` exactly (`as_chunks` leaves no remainder), and
-/// splitting and joining is the identity at every byte index (the chunk `j / 4006` at offset `j % 4006` is byte `j`).
+/// K1, a check of the chunking constants and their tiling — not a property of the initiator's split or the responder's
+/// join, which it does not call (M4 review C-15, R-32): `HANDSHAKE_CHUNKS × HANDSHAKE_CHUNK_LEN` = 3 × 4006 = 12018
+/// (§6.5); for every chunk index `i` < 3, `i · 4006 + 4006` does not overflow and does not exceed 12018; `as_chunks`
+/// tiles a 12018-byte array exactly (no remainder); and for every byte index `j`, `(j / 4006) · 4006 + j % 4006 = j`
+/// with `j / 4006` < 3 (Euclid's identity on these constants). The split and the join are exercised by the tests and
+/// the vectors.
 #[kani::proof]
 fn kani_hx_chunk_bounds() {
     assert!(usize::from(HANDSHAKE_CHUNKS) * HANDSHAKE_CHUNK_LEN == OUTER_PADDED_LEN);

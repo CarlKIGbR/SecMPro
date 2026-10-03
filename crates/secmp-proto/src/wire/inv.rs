@@ -731,6 +731,19 @@ pub(crate) mod tests {
         Ok(())
     }
 
+    /// M4 PR run 37127247911 (R-96): `Profile::eq` compares the name and the avatar hash, both — a one-byte change of
+    /// either, and a missing avatar, make two profiles differ (kills `eq -> true` and `&& -> ||`).
+    #[test]
+    fn profile_eq_distinguishes_name_and_avatar() -> Result<()> {
+        let alice = Profile::new("alice", Some([1; 32]))?;
+        assert_eq!(alice, Profile::new("alice", Some([1; 32]))?);
+        assert_ne!(alice, Profile::new("alicf", Some([1; 32]))?);
+        assert_ne!(alice, Profile::new("alice", Some([2; 32]))?);
+        assert_ne!(alice, Profile::new("alice", None)?);
+        assert_eq!(Profile::new("", None)?, Profile::new("", None)?);
+        Ok(())
+    }
+
     fn bundle() -> Result<PrekeyBundle> {
         Ok(PrekeyBundle {
             spk_id: 1,

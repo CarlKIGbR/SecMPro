@@ -553,12 +553,13 @@ fn invitee_bad_ed25519_identity_rejects() {
         let mut iks = lib.w.r.iks_bytes.clone();
         put(&mut iks, IKS_ED, &bytes);
         let linkdata = lib.linkdata_of(&iks, &lib.w.bundle);
-        // M4 review C-15 (R-31): the IKS decoder of the link data is what rejects (not a later backstop)
-        let _ = name;
-        rejects_at(
+        // M4 review C-15 (R-31): the IKS decoder of the link data is what rejects (not a later backstop); the case
+        // keeps its own label (delta review VD2-5)
+        rejects_at_as(
             &lib,
             &lib.w.uri,
             &lib.blob_of(&linkdata, 8),
+            name,
             "linkdata decode",
         );
     }
@@ -599,8 +600,17 @@ fn low_order_values() -> Vec<[u8; 32]> {
 
 /// `rejects`, and the `kat` reject-site tag (`inv::INVITEE_SITE_KAT`) names `site`.
 fn rejects_at(lib: &Lib, uri: &str, blob: &[u8], site: &str) {
-    rejects(lib, uri, blob, site);
-    assert_eq!(secmp_proto::inv::INVITEE_SITE_KAT.get(), Some(site));
+    rejects_at_as(lib, uri, blob, site, site);
+}
+
+/// [`rejects_at`] with the case's own label `what` in the messages.
+fn rejects_at_as(lib: &Lib, uri: &str, blob: &[u8], what: &str, site: &str) {
+    rejects(lib, uri, blob, what);
+    assert_eq!(
+        secmp_proto::inv::INVITEE_SITE_KAT.get(),
+        Some(site),
+        "{what}: the reject site"
+    );
 }
 
 /// M3 review R-45, F19 (WEISUNG M4-4 Part E): each reject site of §5.5 sets its tag, on one input each — the names

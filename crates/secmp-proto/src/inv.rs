@@ -452,12 +452,14 @@ mod tests {
         }
     }
 
-    /// M4 review C-14 (R-28): an invalid character and non-zero unused bits are refused alike: `"A*"` (an invalid
-    /// character, whose sextet also leaves unused bits set) and `"AB"` (valid characters, non-zero unused bits) are
-    /// `Rejected`; `"AA"` and an RFC 4648 vector decode.
+    /// M4 review C-14 (R-28): an invalid character and non-zero unused bits are refused alike, each on its own:
+    /// `"*A"` and `"AAA*"` (an invalid character, every unused bit zero — invalid only) and `"AB"` (valid characters,
+    /// non-zero unused bits — dirty only) are `Rejected`, so dropping either condition fails the test (delta review
+    /// VD2-3); `"AA"` and an RFC 4648 vector decode.
     #[test]
     fn base64url_decode_rejects_invalid_and_dirty_alike() {
-        assert_eq!(base64url_decode("A*").err(), Some(Error::Rejected));
+        assert_eq!(base64url_decode("*A").err(), Some(Error::Rejected));
+        assert_eq!(base64url_decode("AAA*").err(), Some(Error::Rejected));
         assert_eq!(base64url_decode("AB").err(), Some(Error::Rejected));
         assert_eq!(
             base64url_decode("AA").ok().as_deref().map(Vec::as_slice),

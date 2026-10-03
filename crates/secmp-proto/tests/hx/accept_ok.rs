@@ -1301,8 +1301,6 @@ fn hx_secrets_are_zeroizing_types() {
     let _routes: &secmp_crypto::Zeroizing<Vec<RouteDescriptor>> = &accepted.routes;
 }
 
-/// V-6: `start`'s cells are released only through `release`; a persist that fails returns its error and hands out
-/// nothing (the cells are dropped), and the closure sees cells and state together.
 /// A caller's persist error (`HandshakeCells::release` also returns the error of serialising the state, as `From`).
 #[derive(Debug, PartialEq, Eq)]
 enum PersistError {
@@ -1316,6 +1314,8 @@ impl From<Error> for PersistError {
     }
 }
 
+/// V-6: `start`'s cells are released only through `release`; a persist that fails returns its error and hands out
+/// nothing (the cells are dropped), and the closure sees cells and state together.
 #[test]
 fn start_persist_error_is_returned_and_nothing_sent() {
     let lib = Lib::new();

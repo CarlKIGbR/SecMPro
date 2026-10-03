@@ -738,8 +738,8 @@ fn accept_reject_is_uniform_and_transactional() {
 }
 
 /// M4 review C-15 (R-33): the N-60 assertions — `Rejected`, no `delete_opk`/`commit_accept` call, the store digest
-/// unchanged, and no draw a rejection could cause (`remaining()` is the whole DH-step stream, or 0 when the first
-/// message decrypted) — over the rejecting rows outside `table()`: N-32, N-33, N-67, N-37 with a live OPK, N-38, N-39,
+/// unchanged, and no draw (`remaining()` is the whole DH-step stream: every row here rejects before the first message
+/// is decrypted) — over the rejecting rows outside `table()`: N-32, N-33, N-67, N-37 with a live OPK, N-38, N-39,
 /// N-71, and N-41 through `Responder::accept` (a low-order input of DH1–DH4: `EK_I` and `IKSPublic_I.ik_dh`; the
 /// decoders refuse it before any DH, the helper's own check is the unit test of the same name).
 #[test]
@@ -764,10 +764,11 @@ fn accept_every_rejecting_row_counts_no_delete_and_no_draw() {
         assert_eq!(result.err(), Some(Error::Rejected), "{what}");
         assert_eq!(store.deletes, 0, "{what}: no delete");
         assert_eq!(store.inner.digest_kat(), before, "{what}: store digest");
-        let left = entropy.remaining();
-        assert!(
-            left == lib.w.step.len() || left == 0,
-            "{what}: a rejection draws nothing, or one whole DH step ({left} left)"
+        // every row here rejects before the first message is decrypted: nothing is drawn (delta review VD2-4)
+        assert_eq!(
+            entropy.remaining(),
+            lib.w.step.len(),
+            "{what}: a rejection draws nothing"
         );
     };
     // N-32: chunk 1 under another invitation's K_inv, or with another ld_id in the AD

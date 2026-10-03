@@ -20,7 +20,9 @@
 //! `commit_accept` writes, before it acknowledges any cell and before it retires the invitation queue. Between calls
 //! it retains at most the newest 24 cells of the invitation queue that it could not classify (eight partial groups of
 //! three, [`MAX_PARTIAL_GROUPS`]); a complete group is spent after one `accept` call, accepted or not (review RT-1;
-//! the client's enforcement is F-M7).
+//! the client's enforcement is F-M7) — except after [`Error::Unavailable`], when nothing was committed and the caller
+//! retries the same cells: a group is spent after `Ok` (or `Rejected`), retried after `Unavailable` (delta review
+//! VD2-7).
 
 use secmp_crypto::{Caead, ConstantTimeEq, Label, MlKem1024Ct, SecretBytes};
 
@@ -310,7 +312,8 @@ impl Responder {
     /// On `Ok` the caller persists the returned [`Accepted`] (state, peer, routes, profile) in the store transaction of
     /// the `commit_accept` writes before it acknowledges any cell and before it retires the invitation queue; between
     /// calls it retains at most the newest 24 unclassified cells, and a complete group is spent after one `accept`
-    /// (module documentation; M4 review C-12).
+    /// (module documentation; M4 review C-12). A group is spent after `Ok`, retried after [`Error::Unavailable`]
+    /// (nothing was committed; delta review VD2-7).
     ///
     /// # Errors
     /// The uniform [`Error::Rejected`]; [`Error::Unavailable`] as described in the module documentation (also when

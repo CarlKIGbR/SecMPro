@@ -415,13 +415,15 @@ impl LineTail {
 }
 
 /// How long a child stopped at its budget may take to end after SIGINT before it is killed (cargo-mutants stops its
-/// own `cargo` children on an interrupt; a kill of the parent alone would leave them running).
+/// own `cargo` children on an interrupt; a kill of the parent alone would leave them running). Unix only: elsewhere
+/// the child is killed at once (`stop_child`).
+#[cfg(unix)]
 const STOP_GRACE: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// Run `cmd` with stdin closed and stdout and stderr in `log` under the wall-clock budget `timeout` (ADR-045
 /// Amendment 1; M4 review C-1, C-3), calling `poll` every `every` and once more after the end. Returns the exit status,
 /// or `None` if the budget ran out: the child was then stopped (on Unix with SIGINT first, then killed after
-/// [`STOP_GRACE`]) and reaped.
+/// `STOP_GRACE`) and reaped.
 fn run_budgeted(
     cmd: &Cmd,
     log: &Path,
@@ -449,7 +451,8 @@ fn run_budgeted(
 }
 
 /// Stop a child at its budget and reap it: SIGINT first on Unix (a tool may end its own children), a kill if it is
-/// still running after [`STOP_GRACE`]. The child may have exited meanwhile: a failed signal or kill is then harmless.
+/// still running after `STOP_GRACE`; elsewhere a kill at once. The child may have exited meanwhile: a failed signal
+/// or kill is then harmless.
 fn stop_child(child: &mut std::process::Child) -> Result<()> {
     #[cfg(unix)]
     {
@@ -4370,17 +4373,26 @@ mod tests {
             "echo bench output".to_owned(),
             "exit 1".to_owned(),
         );
+        // the slow bench as a batch file: a `/C` command line with inner quotes is quoted once more by
+        // `std::process::Command`, and cmd.exe then mis-parses it and exits at once (PR run 37127247911, R-98)
         #[cfg(windows)]
-        let (program, flag, slow, quick, failing) = (
-            "cmd.exe",
-            "/C",
-            format!(
-                "echo {line}>> \"{}\"&& ping -n 30 127.0.0.1",
-                progress.display()
-            ),
-            "echo bench output".to_owned(),
-            "exit 1".to_owned(),
-        );
+        let (program, flag, slow, quick, failing) = {
+            let script = dir.join("slow.cmd");
+            std::fs::write(
+                &script,
+                format!(
+                    "@echo {line}>> \"{}\"\r\n@ping -n 30 127.0.0.1 >nul\r\n",
+                    progress.display()
+                ),
+            )?;
+            (
+                "cmd.exe",
+                "/C",
+                script.display().to_string(),
+                "echo bench output".to_owned(),
+                "exit 1".to_owned(),
+            )
+        };
         let started = std::time::Instant::now();
         let got = run_ct_bench(
             &Cmd::new(program).args([flag, slow.as_str()]),

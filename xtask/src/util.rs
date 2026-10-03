@@ -58,7 +58,6 @@ pub(crate) struct Cmd {
 /// Captured result of a command that is allowed to fail.
 pub(crate) struct Captured {
     pub(crate) success: bool,
-    pub(crate) code: Option<i32>,
     pub(crate) stdout: String,
     pub(crate) stderr: String,
 }
@@ -192,7 +191,6 @@ impl Cmd {
             .map_err(|e| Error(format!("cannot start `{}`: {e}", self.program)))?;
         Ok(Captured {
             success: out.status.success(),
-            code: out.status.code(),
             stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
             stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
         })

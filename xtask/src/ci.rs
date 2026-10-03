@@ -175,7 +175,7 @@ const FULL_EXTRA: &[Step] = &[
 ];
 
 /// Steps outside `ci-full`, run only by `cargo xtask step <id>` (their own workflows: `miri-full.yml`,
-/// `fuzz-nightly.yml`).
+/// `fuzz-nightly.yml`; the `mutants` job of `ci.yml`).
 const ON_DEMAND: &[Step] = &[
     Step {
         num: "9",
@@ -206,6 +206,12 @@ const ON_DEMAND: &[Step] = &[
         num: "6",
         id: "fuzz-nightly",
         run: gates::fuzz_nightly,
+    },
+    // ADR-047 Amendment 1 (2): the verdict over the shards of `step mutants --shard K/N` (the `mutants` job of ci.yml)
+    Step {
+        num: "8",
+        id: "mutants-merge",
+        run: gates::mutants_merge,
     },
 ];
 

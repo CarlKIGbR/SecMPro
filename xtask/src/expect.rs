@@ -264,6 +264,35 @@ pub(crate) const FUZZ_MAX_LEN: &[(&str, usize)] = &[
 /// Packages under the mutation gate (docs/06 §4, §5 step 8).
 pub(crate) const MUTANT_PACKAGES: &[&str] = &["secmp-crypto", "secmp-proto"];
 
+/// ADR-047 Amendment 1 (2): the shards of the mutation gate in CI — the matrix job `mutants-shard` of `ci.yml` runs
+/// `cargo xtask step --strict mutants --shard K/8` for K = 0…7, and the job `mutants` (`step mutants-merge`) merges
+/// their results and gives the verdict.
+pub(crate) const MUTANT_SHARDS: usize = 8;
+
+/// ADR-047 Amendment 1 (4), M4 review R-06: the floor per package of [`MUTANT_PACKAGES`] — at least one caught mutant,
+/// and at most this percentage of the package's mutants unviable; otherwise the gate fails naming the package.
+pub(crate) const MUTANT_MAX_UNVIABLE_PERCENT: usize = 35;
+
+/// ADR-047 Amendment 1 (5), M4 review R-05: tests left out of the test run of every mutant (libtest `--skip` filters
+/// after `cargo mutants … -- --`, each matching only its test), as (name, reason). The `kat` and `nextest` steps still
+/// run them; the same bound is checked quickly by `select::tests::skip_plan_bounds`, the Kani harness `tr_skip_plan`,
+/// vector N10 and the property tests.
+pub(crate) const MUTANT_SKIP_TESTS: &[(&str, &str)] = &[
+    (
+        "ratchet_fast_forward_bound_on_the_chain",
+        "secmp-proto tr::tests (feature kat): 2 × 2^20 KDF_CK, 49–110 s per run on CI",
+    ),
+    (
+        "ratchet_fast_forward_bound_on_a_step",
+        "secmp-proto tr::tests (feature kat): 3 × 2^20 KDF_CK, 37–73 s per run on CI",
+    ),
+];
+
+/// ADR-047 Amendment 1, with the budget rule of ADR-045 Amendment 1: the wall-clock budget of one run of the `mutants`
+/// step (one shard in CI), in seconds; at expiry the gate stops cargo-mutants and fails naming the last line of its
+/// output. 280 min: 20 min below the `mutants-shard` job of `ci.yml` (300 min), whose setup fits in the rest.
+pub(crate) const MUTANTS_STEP_TIMEOUT_SECONDS: u64 = 16_800;
+
 /// Code compiled only under Kani (`#[cfg(kani)]`: `secmp-proto`'s harnesses and the `kani_stubs` modules), kept out
 /// of the mutation gate by file and by mutant name: no test build contains it, so every mutant of it would survive
 /// (M2: 52 such survivors in the CI run on `774e04a`); Kani runs it (ci-full step 9).
@@ -271,8 +300,9 @@ pub(crate) const MUTANT_EXCLUDE_FILES: &[&str] = &["crates/secmp-proto/src/kani_
 /// Mutant names (regex, `cargo mutants --exclude-re`) excluded: `kani_stubs::` for the reason above; and (M3) the
 /// `secmp-proto` code compiled only with `secmp-proto`'s own feature `kat` — the vector, test and bench tooling of
 /// SecMP-TR (`tr::FixedEntropy`, the message-key digests, the header-key and `sb` accessors, and (M4)
-/// `encrypt_padded_kat`), never in a shipped build. Since R-60 the gate builds `secmp-proto` with that feature (the HX
-/// integration suite is `required-features`); the exclusion stays, as these functions are tooling, not product code. Formerly
+/// `encrypt_padded_kat`), never in a shipped build. Since R-60 the gate builds with feature `kat` (`--features kat` for
+/// both packages since ADR-047 Amendment 1; the HX integration suite is `required-features`); the exclusion stays, as
+/// these functions are tooling, not product code. Formerly
 /// the gate built without it, so every mutant of that code would survive unbuilt (M3 local run: 27 such survivors; M4 local run on `tr/ratchet.rs` 2026-10-02: 1,
 /// `encrypt_padded_kat`). The `kat` step runs it: `tests/tr_vectors.rs` and `tests/tr_generator.rs` reproduce every
 /// byte `FixedEntropy` supplies, the `hx` suite's generator (`tests/common/hx_gen.rs`) seals its padded first

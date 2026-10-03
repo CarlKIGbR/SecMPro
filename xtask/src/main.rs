@@ -47,7 +47,8 @@ usage: cargo xtask <command> [options]
   cooldown                                  7-day dependency cooldown only
   sbom                                      CycloneDX SBOMs + cargo-auditable release builds
   win-test --backend github|libvirt         Windows gate (github: windows-latest; libvirt: from M9)
-  install-tools [--set NAME] [--nightly]    install the pinned tools (fast | windows | xwin | miri | fuzz | full | all)
+    step: [--shard K/N]                     the mutants step's shard (CI: K/8, merged by `step mutants-merge`)
+  install-tools [--set NAME] [--nightly]    install the pinned tools (fast | windows | xwin | mutants | miri | fuzz | full | all)
   vectors                                   generate the Rust vectors, compare with vectors/ref, freeze
   ct-check [--targets current|m2] REPORT... the ct gate's reading of saved ct reports
   repro-check | ops-check                   documented stubs until M11 / M10";
@@ -65,6 +66,10 @@ fn run(args: &[String]) -> Result<()> {
     let (rest, proverif) = split_proverif_options(cmd, rest)?;
     if let Some(o) = proverif {
         gates::set_proverif_options(o)?;
+    }
+    let (rest, shard) = split_mutants_options(cmd, &rest)?;
+    if let Some(s) = shard {
+        gates::set_mutants_shard(s)?;
     }
     match cmd.as_str() {
         "ci-fast" => ci::fast(&rest),
@@ -142,6 +147,38 @@ fn split_proverif_options(
     ))
 }
 
+/// The option of the `mutants` step (ADR-047 Amendment 1 (2)): `--shard K/N`, taken out of the arguments of `step`
+/// before `ci.rs` parses the rest, and returned apart (`None`: not given). Other commands keep their arguments unchanged
+/// (their parsers refuse it). The option needs the `mutants` step among the selected ones; a value other than `K/N`
+/// with `K < N`, a missing value and the option given twice are refused.
+fn split_mutants_options(
+    cmd: &str,
+    rest: &[String],
+) -> Result<(Vec<String>, Option<gates::MutantsShard>)> {
+    if cmd != "step" {
+        return Ok((rest.to_vec(), None));
+    }
+    let mut kept = Vec::new();
+    let mut shard = None;
+    let mut it = rest.iter();
+    while let Some(a) = it.next() {
+        if a == "--shard" {
+            let Some(v) = it.next() else {
+                bail!("--shard needs K/N");
+            };
+            if shard.replace(gates::MutantsShard::parse(v)?).is_some() {
+                bail!("--shard given twice");
+            }
+        } else {
+            kept.push(a.clone());
+        }
+    }
+    if shard.is_some() && !kept.iter().any(|a| a == "mutants") {
+        bail!("--shard belongs to the mutants step, which is not selected");
+    }
+    Ok((kept, shard))
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match run(&args) {
@@ -217,6 +254,41 @@ mod tests {
         assert_eq!(
             split_proverif_options("ci-fast", &args("--models hx"))?,
             (args("--models hx"), None)
+        );
+        Ok(())
+    }
+
+    /// ADR-047 Amendment 1 (2), M4 review C-3: `--shard K/N` comes off the `step` arguments wherever it stands; `K/0`,
+    /// `K >= N`, a malformed, repeated or missing value and the option without the `mutants` step are refused; other
+    /// commands keep it (and refuse it in their own parser).
+    #[test]
+    fn mutants_shard_option_comes_off_the_command_line() -> Result<()> {
+        let (rest, shard) = split_mutants_options("step", &args("--strict mutants --shard 3/8"))?;
+        assert_eq!(rest, args("--strict mutants"));
+        assert_eq!(shard, Some(gates::MutantsShard { k: 3, n: 8 }));
+        let (rest, shard) = split_mutants_options("step", &args("--shard 0/8 --strict mutants"))?;
+        assert_eq!(rest, args("--strict mutants"));
+        assert_eq!(shard.map(|s| s.to_string()), Some("0/8".to_owned()));
+        assert_eq!(
+            split_mutants_options("step", &args("--strict mutants"))?,
+            (args("--strict mutants"), None)
+        );
+        for bad in [
+            "mutants --shard 3/0",
+            "mutants --shard 8/8",
+            "mutants --shard 9/8",
+            "mutants --shard 3",
+            "mutants --shard -1/8",
+            "mutants --shard a/8",
+            "mutants --shard 3/8 --shard 4/8",
+            "mutants --shard",
+            "kani --shard 3/8",
+        ] {
+            assert!(split_mutants_options("step", &args(bad)).is_err(), "{bad}");
+        }
+        assert_eq!(
+            split_mutants_options("ci-full", &args("--strict --shard 3/8"))?,
+            (args("--strict --shard 3/8"), None)
         );
         Ok(())
     }

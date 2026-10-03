@@ -223,14 +223,27 @@ jobs:
             target/ct-bench.log
           if-no-files-found: error
 
-  # docs/06 §5 step 8 (mutation testing, secmp-crypto and secmp-proto) as its own job (ADR-047): on PR run
-  # 36930469555 `linux-full` took 3 h 51 min of its 240 min and the mutants step was the largest part; `linux-full`
-  # delegates it here. Same events and pins as `linux-full`; no `needs:`. The `mutants.out` listing and the
-  # job summary (ADR-045) are kept as an artefact.
-  mutants:
+  # docs/06 §5 step 8 (mutation testing, secmp-crypto and secmp-proto) outside `linux-full` (ADR-047), as 8 shards and
+  # a merge (ADR-047 Amendment 1, M4 review C-3): the two-crate run needs an estimated 7–26 h, more than any job. Each
+  # shard runs every eighth mutant (round-robin) with `-j 3` under the step budget `expect::MUTANTS_STEP_TIMEOUT_SECONDS`
+  # (280 min) and records its verdict in `mutants.out`, which with the step log are kept as an artefact in every
+  # case. Same events as `linux-full`.
+  mutants-shard:
     if: github.event_name == 'schedule' || github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 240
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        shard:
+          - 0
+          - 1
+          - 2
+          - 3
+          - 4
+          - 5
+          - 6
+          - 7
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -245,28 +258,56 @@ jobs:
         id: tools-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: |
-            ~/.secmp-tools
-            ~/.kani
-          key: ci-tools-full-${{ runner.os }}-${{ hashFiles('xtask/src/tools.rs', 'rust-toolchain.toml') }}
-      - name: Install pinned tools and nightly (Miri, fuzz)
-        run: cargo xtask install-tools --set full --nightly
+          path: ~/.secmp-tools
+          key: ci-tools-mutants-${{ runner.os }}-${{ hashFiles('xtask/src/tools.rs', 'rust-toolchain.toml') }}
+      - name: Install pinned tools (cargo-mutants)
+        run: cargo xtask install-tools --set mutants
       - name: Save pinned tools (right after installing, so a later failing step cannot lose the cache)
         if: steps.tools-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: |
-            ~/.secmp-tools
-            ~/.kani
+          path: ~/.secmp-tools
           key: ${{ steps.tools-cache.outputs.cache-primary-key }}
-      - name: Mutation testing (step 8, `-j 3`)
-        run: cargo xtask step --strict mutants
-      - name: Upload the mutants evidence
+      - name: Mutation testing, one shard of 8 (step 8, `-j 3`)
+        run: cargo xtask step --strict mutants --shard ${{ matrix.shard }}/8
+      - name: Upload the shard's mutants evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: mutants-${{ github.run_attempt }}
-          path: target/mutants.out/
+          name: mutants-${{ matrix.shard }}-${{ github.run_attempt }}
+          path: |
+            target/mutants.out/
+            target/mutants-step.log
+          if-no-files-found: error
+
+  # The verdict of step 8 (ADR-047 Amendment 1 (2), (4)): runs after the shards whatever their outcome, downloads
+  # their results, and fails unless all 8 passed, every survivor is documented in `docs/mutants-accepted.md` and each
+  # package has at least one caught mutant and at most 35 % unviable ones (`expect::MUTANT_MAX_UNVIABLE_PERCENT`). The
+  # merged outcomes and the per-package counts are kept as an artefact. Same events as `linux-full`.
+  mutants:
+    needs: mutants-shard
+    if: always() && (github.event_name == 'schedule' || github.event_name == 'pull_request')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Pinned toolchain (rust-toolchain.toml)
+        run: rustup toolchain install && rustc -vV
+      - name: Download the shard results
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: mutants-*-${{ github.run_attempt }}
+          path: target/mutants-shards
+      - name: Mutation verdict over the 8 shards (step 8)
+        run: cargo xtask step --strict mutants-merge
+      - name: Upload the merged mutants evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mutation-verdict-${{ github.sha }}-${{ github.run_attempt }}
+          path: target/mutants-merged/
           if-no-files-found: error
 
   # docs/06 §5 step 10 for SecMP-HX (WEISUNG M4-5, gate F7, M3 review R-14): every session model `formal/hx/*.pv` over

@@ -91,6 +91,8 @@ pub(crate) fn set(name: &str) -> Result<Vec<CargoTool>> {
         "fast" => vec![NEXTEST, DENY, VET, AUDIT, AUDITABLE, CYCLONEDX],
         "windows" => vec![NEXTEST],
         "xwin" => vec![XWIN],
+        // the `mutants-shard` jobs of ci.yml (ADR-047 Amendment 1): cargo-mutants alone, under its own cache key
+        "mutants" => vec![MUTANTS],
         // the weekly `miri-full` workflow needs only the pinned nightly (`--nightly`)
         "miri" => vec![],
         // the daily `fuzz-nightly` workflow: the campaign (with `--nightly`) and the seeded property run
@@ -103,7 +105,9 @@ pub(crate) fn set(name: &str) -> Result<Vec<CargoTool>> {
             ZIGBUILD, KANI,
         ],
         other => {
-            bail!("unknown tool set {other:?} (fast | windows | xwin | miri | fuzz | full | all)")
+            bail!(
+                "unknown tool set {other:?} (fast | windows | xwin | mutants | miri | fuzz | full | all)"
+            )
         }
     })
 }

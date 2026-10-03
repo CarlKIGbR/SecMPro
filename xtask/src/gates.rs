@@ -330,7 +330,7 @@ fn ct_bench_executable_in(messages: &str) -> Option<String> {
 const CT_POLL: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// ADR-045 Amendment 1 (M4 review C-1): run the ct bench `bench` with stdout and stderr in `log`, echo each new
-/// complete line of `progress` (the bench appends one JSON object per finished phase), and kill the bench once
+/// complete line of `progress` (the bench appends one JSON object per finished phase), and stop the bench once
 /// `timeout` has passed: the gate then fails naming the target and phase of the last progress line. Returns whether
 /// the bench exited successfully.
 pub(crate) fn run_ct_bench(
@@ -339,65 +339,132 @@ pub(crate) fn run_ct_bench(
     progress: &Path,
     timeout: std::time::Duration,
 ) -> Result<bool> {
-    let deadline = std::time::Instant::now()
-        .checked_add(timeout)
-        .ok_or_else(|| Error("ct: the step budget is out of range".to_owned()))?;
-    let mut child = bench.spawn_logged(log)?;
-    let mut echoed = 0;
+    let mut tail = LineTail::new(progress);
     let mut last = None;
-    loop {
-        let status = child.try_wait()?;
-        echo_ct_progress(progress, &mut echoed, &mut last);
-        if let Some(status) = status {
-            return Ok(status.success());
+    let status = run_budgeted(bench, log, timeout, CT_POLL, || {
+        for line in tail.lines() {
+            say(&format!("  ct progress {line}"));
+            last = Some(ct_progress_label(&line));
         }
-        if std::time::Instant::now() >= deadline {
-            // the bench may have exited since `try_wait`: a failed kill is then harmless, `wait` reaps it either way
-            let _ = child.kill();
-            child.wait()?;
-            echo_ct_progress(progress, &mut echoed, &mut last);
-            bail!(
-                "ct: timeout, killed after {} s; last progress: {}; bench log {}, progress {}",
-                timeout.as_secs(),
-                last.as_deref()
-                    .unwrap_or("none (no line in the progress file)"),
-                log.display(),
-                progress.display()
-            );
-        }
-        std::thread::sleep(CT_POLL);
+    })?;
+    match status {
+        Some(status) => Ok(status.success()),
+        None => bail!(
+            "ct: timeout, killed after {} s; last progress: {}; bench log {}, progress {}",
+            timeout.as_secs(),
+            last.as_deref()
+                .unwrap_or("none (no line in the progress file)"),
+            log.display(),
+            progress.display()
+        ),
     }
 }
 
-/// Echo the complete lines of `progress` after its first `echoed` bytes and advance `echoed`; `last` becomes the
-/// `<target> <phase>` of the newest line (the raw line if it is not such an object). A missing file echoes nothing.
-fn echo_ct_progress(progress: &Path, echoed: &mut usize, last: &mut Option<String>) {
-    let Ok(bytes) = std::fs::read(progress) else {
-        return;
-    };
-    let Some(new) = bytes.get(*echoed..) else {
-        // truncated by a new run of the bench: start over
-        *echoed = 0;
-        return;
-    };
-    let Some(end) = new.iter().rposition(|b| *b == b'\n') else {
-        return;
-    };
-    let complete = new.get(..=end).unwrap_or_default();
-    for line in String::from_utf8_lossy(complete).lines() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        say(&format!("  ct progress {line}"));
-        let v: Option<Value> = serde_json::from_str(line).ok();
-        let field = |k: &str| v.as_ref().and_then(|v| v.get(k)).and_then(Value::as_str);
-        *last = Some(match (field("target"), field("phase")) {
-            (Some(t), Some(p)) => format!("{t} {p}"),
-            _ => line.to_owned(),
-        });
+/// `<target> <phase>` of a progress line of the ct bench, or the raw line if it is not such an object.
+fn ct_progress_label(line: &str) -> String {
+    let v: Option<Value> = serde_json::from_str(line).ok();
+    let field = |k: &str| v.as_ref().and_then(|v| v.get(k)).and_then(Value::as_str);
+    match (field("target"), field("phase")) {
+        (Some(t), Some(p)) => format!("{t} {p}"),
+        _ => line.to_owned(),
     }
-    *echoed = echoed.saturating_add(complete.len());
+}
+
+/// The complete lines a growing file gained since the last read (ADR-045 Amendment 1: the progress of a gate that
+/// runs for hours).
+struct LineTail {
+    path: PathBuf,
+    read: usize,
+}
+
+impl LineTail {
+    fn new(path: &Path) -> Self {
+        Self {
+            path: path.to_path_buf(),
+            read: 0,
+        }
+    }
+
+    /// The complete, non-empty lines appended since the last call; none while the file is missing. A file shorter than
+    /// what was read has been truncated by a new run and is read from its start.
+    fn lines(&mut self) -> Vec<String> {
+        let Ok(bytes) = std::fs::read(&self.path) else {
+            return Vec::new();
+        };
+        if bytes.len() < self.read {
+            self.read = 0;
+        }
+        let new = bytes.get(self.read..).unwrap_or_default();
+        let Some(end) = new.iter().rposition(|b| *b == b'\n') else {
+            return Vec::new();
+        };
+        let complete = new.get(..=end).unwrap_or_default();
+        self.read = self.read.saturating_add(complete.len());
+        String::from_utf8_lossy(complete)
+            .lines()
+            .map(str::trim_end)
+            .filter(|l| !l.trim().is_empty())
+            .map(str::to_owned)
+            .collect()
+    }
+}
+
+/// How long a child stopped at its budget may take to end after SIGINT before it is killed (cargo-mutants stops its
+/// own `cargo` children on an interrupt; a kill of the parent alone would leave them running).
+const STOP_GRACE: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Run `cmd` with stdin closed and stdout and stderr in `log` under the wall-clock budget `timeout` (ADR-045
+/// Amendment 1; M4 review C-1, C-3), calling `poll` every `every` and once more after the end. Returns the exit status,
+/// or `None` if the budget ran out: the child was then stopped (on Unix with SIGINT first, then killed after
+/// [`STOP_GRACE`]) and reaped.
+fn run_budgeted(
+    cmd: &Cmd,
+    log: &Path,
+    timeout: std::time::Duration,
+    every: std::time::Duration,
+    mut poll: impl FnMut(),
+) -> Result<Option<std::process::ExitStatus>> {
+    let deadline = std::time::Instant::now()
+        .checked_add(timeout)
+        .ok_or_else(|| Error("the step budget is out of range".to_owned()))?;
+    let mut child = cmd.spawn_logged(log)?;
+    loop {
+        let status = child.try_wait()?;
+        poll();
+        if let Some(status) = status {
+            return Ok(Some(status));
+        }
+        if std::time::Instant::now() >= deadline {
+            stop_child(&mut child)?;
+            poll();
+            return Ok(None);
+        }
+        std::thread::sleep(every);
+    }
+}
+
+/// Stop a child at its budget and reap it: SIGINT first on Unix (a tool may end its own children), a kill if it is
+/// still running after [`STOP_GRACE`]. The child may have exited meanwhile: a failed signal or kill is then harmless.
+fn stop_child(child: &mut std::process::Child) -> Result<()> {
+    #[cfg(unix)]
+    {
+        let _ = std::process::Command::new("kill")
+            .args(["-INT", &child.id().to_string()])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+        let until = std::time::Instant::now().checked_add(STOP_GRACE);
+        while until.is_some_and(|u| std::time::Instant::now() < u) {
+            if child.try_wait()?.is_some() {
+                return Ok(());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
+    }
+    let _ = child.kill();
+    child.wait()?;
+    Ok(())
 }
 
 /// The `ct` gate's reading of the reject sites (M3 review R-45, F19; the bench's per-class pre-checks). Each target
@@ -916,35 +983,185 @@ pub(crate) fn mutant_survivors(
     ))
 }
 
-pub(crate) fn mutants(ctx: &Ctx) -> Result<Outcome> {
-    tools::require(tools::MUTANTS)?;
-    // With features `kat` (crypto and proto: R-60, the HX integration suite) the external KATs and the frozen-vector tests join the unit tests in killing mutants.
-    let mut c = Cmd::cargo().args([
+/// One shard of the mutation gate (`step mutants --shard K/N`, ADR-047 Amendment 1 (2)): `k` < `n`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct MutantsShard {
+    pub(crate) k: usize,
+    pub(crate) n: usize,
+}
+
+impl MutantsShard {
+    /// `K/N` with `N` ≥ 1 and `K` < `N`.
+    pub(crate) fn parse(v: &str) -> Result<Self> {
+        let parsed = v
+            .split_once('/')
+            .and_then(|(k, n)| Some((k.parse::<usize>().ok()?, n.parse::<usize>().ok()?)));
+        match parsed {
+            Some((k, n)) if k < n => Ok(Self { k, n }),
+            _ => bail!("--shard {v:?}: expected K/N with 0 <= K < N"),
+        }
+    }
+}
+
+impl std::fmt::Display for MutantsShard {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}/{}", self.k, self.n)
+    }
+}
+
+/// The shard of this invocation (set at most once, before any step runs); unset: every mutant.
+static MUTANTS_SHARD: std::sync::OnceLock<MutantsShard> = std::sync::OnceLock::new();
+
+/// Record the shard of this invocation (`main.rs`); a second call is refused.
+pub(crate) fn set_mutants_shard(s: MutantsShard) -> Result<()> {
+    MUTANTS_SHARD
+        .set(s)
+        .map_err(|_| Error("the mutants shard can be set once".to_owned()))
+}
+
+/// The `cargo mutants` arguments of the gate (ADR-047 with Amendment 1): feature `kat` for both packages (R-60: the HX
+/// integration suite; with it the external KATs and the frozen-vector tests join the unit tests in killing mutants),
+/// three mutants in parallel, `--caught --unviable` so the log shows every outcome as it happens, the shard if one is
+/// given (round-robin, so every shard gets a share of both packages), the packages and exclusions of `expect.rs`, and
+/// after `-- --` the libtest `--skip` filters of `expect::MUTANT_SKIP_TESTS`.
+pub(crate) fn mutants_args(shard: Option<MutantsShard>) -> Vec<String> {
+    let mut a: Vec<String> = [
         "mutants",
         "--no-shuffle",
-        // M4-12 (ADR-047): three mutants in parallel on the 4-core runner; serial, the HX part alone took about 3 h
+        // M4-12 (ADR-047): three mutants in parallel on the 4-core runner
         "-j",
         "3",
         "--output",
         "target",
         "--features",
-        "secmp-crypto/kat,secmp-proto/kat",
-    ]);
+        "kat",
+        "--caught",
+        "--unviable",
+    ]
+    .iter()
+    .map(|s| (*s).to_owned())
+    .collect();
+    if let Some(shard) = shard {
+        a.extend([
+            "--shard".to_owned(),
+            shard.to_string(),
+            "--sharding".to_owned(),
+            "round-robin".to_owned(),
+        ]);
+    }
     for p in expect::MUTANT_PACKAGES {
-        c = c.args(["--package", p]);
+        a.extend(["--package".to_owned(), (*p).to_owned()]);
     }
     for f in expect::MUTANT_EXCLUDE_FILES {
-        c = c.args(["--exclude", f]);
+        a.extend(["--exclude".to_owned(), (*f).to_owned()]);
     }
     for re in expect::MUTANT_EXCLUDE_RE {
-        c = c.args(["--exclude-re", re]);
+        a.extend(["--exclude-re".to_owned(), (*re).to_owned()]);
     }
-    let cap = c.dir(&ctx.root).capture()?;
-    say(cap.stdout.trim_end());
-    let out = ctx.root.join("target").join("mutants.out");
+    // the remaining arguments go to `cargo test`, and after its own `--` to every test binary
+    a.extend(["--".to_owned(), "--".to_owned()]);
+    for (test, _) in expect::MUTANT_SKIP_TESTS {
+        a.extend(["--skip".to_owned(), (*test).to_owned()]);
+    }
+    a
+}
+
+/// How often the mutation gate polls cargo-mutants and echoes its new output lines.
+const MUTANTS_POLL: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// The file in which a sharded `mutants` step records its verdict for the merge (`mutants.out` is the shard's
+/// artefact).
+const MUTANTS_SHARD_VERDICT: &str = "xtask-shard.json";
+
+/// docs/06 §5 step 8 (ADR-047 with Amendment 1): `cargo mutants` over `expect::MUTANT_PACKAGES` with output in
+/// `target/mutants-step.log` (echoed as it grows) under the budget `expect::MUTANTS_STEP_TIMEOUT_SECONDS`; every
+/// missed or timed-out mutant must be documented in `docs/mutants-accepted.md`. With `--shard K/N` (one CI shard) the
+/// step records its verdict in `target/mutants.out/xtask-shard.json` for `mutants-merge`, which applies the
+/// per-package floor; without, the step applies the floor itself.
+pub(crate) fn mutants(ctx: &Ctx) -> Result<Outcome> {
+    tools::require(tools::MUTANTS)?;
+    let shard = MUTANTS_SHARD.get().copied();
+    let target = ctx.root.join("target");
+    let out = target.join("mutants.out");
+    let verdict_file = out.join(MUTANTS_SHARD_VERDICT);
+    if verdict_file.exists() {
+        std::fs::remove_file(&verdict_file)?;
+    }
+    let log = target.join("mutants-step.log");
+    let timeout = std::time::Duration::from_secs(expect::MUTANTS_STEP_TIMEOUT_SECONDS);
+    let mut tail = LineTail::new(&log);
+    let mut last = None;
+    let status = run_budgeted(
+        &Cmd::cargo().args(mutants_args(shard)).dir(&ctx.root),
+        &log,
+        timeout,
+        MUTANTS_POLL,
+        || {
+            for line in tail.lines() {
+                say(&format!("  {line}"));
+                last = Some(line);
+            }
+        },
+    )?;
+    let verdict = mutants_shard_verdict(ctx, status, &out, &log, last.as_deref());
+    if let Some(shard) = shard {
+        let (passed, detail) = match &verdict {
+            Ok(d) => ("PASS", d.clone()),
+            Err(e) => ("FAIL", e.0.clone()),
+        };
+        std::fs::create_dir_all(&out)?;
+        std::fs::write(
+            &verdict_file,
+            serde_json::json!({
+                "shard": shard.to_string(),
+                "verdict": passed,
+                "exit_code": status.and_then(|s| s.code()),
+                "detail": detail,
+            })
+            .to_string(),
+        )?;
+        let detail = verdict?;
+        return Ok(Outcome::Pass(format!(
+            "shard {shard}: {detail}; the per-package floor is applied by mutants-merge"
+        )));
+    }
+    let detail = verdict?;
+    let outcomes = read_outcomes(&out.join("outcomes.json"))?;
+    let counts = mutant_counts(&outcomes.outcomes)?;
+    let (lines, failures) = mutants_floor(&counts);
+    for l in &lines {
+        say(&format!("  mutants {l}"));
+    }
+    if !failures.is_empty() {
+        bail!(
+            "mutation floor (ADR-047 Amendment 1): {}",
+            failures.join("; ")
+        );
+    }
+    Ok(Outcome::Pass(format!("{detail}; {}", lines.join("; "))))
+}
+
+/// The verdict of one `cargo mutants` run (one shard or all): Err on a timeout, a baseline or usage failure, and an
+/// undocumented survivor; else the summary line with the count of documented survivors.
+fn mutants_shard_verdict(
+    ctx: &Ctx,
+    status: Option<std::process::ExitStatus>,
+    out: &Path,
+    log: &Path,
+    last: Option<&str>,
+) -> Result<String> {
+    let Some(status) = status else {
+        bail!(
+            "mutants: timeout, killed after {} s; last line: {}; log {}",
+            expect::MUTANTS_STEP_TIMEOUT_SECONDS,
+            last.unwrap_or("none"),
+            log.display()
+        );
+    };
+    let code = status.code();
     let read = |name: &str| std::fs::read_to_string(out.join(name)).ok();
     let accepted = std::fs::read_to_string(ctx.root.join("docs").join("mutants-accepted.md"))?;
-    let survivors = mutant_survivors(cap.code, read("missed.txt"), read("timeout.txt"))?;
+    let survivors = mutant_survivors(code, read("missed.txt"), read("timeout.txt"))?;
     let undocumented = undocumented_survivors(&survivors, &accepted);
     let documented = survivors
         .lines()
@@ -952,34 +1169,314 @@ pub(crate) fn mutants(ctx: &Ctx) -> Result<Outcome> {
         .count()
         .saturating_sub(undocumented.len());
     // cargo-mutants: 0 all caught, 2 missed mutants, 3 timeouts; anything else (baseline failure, usage) fails
-    let only_survivors = matches!(cap.code, Some(0 | 2 | 3));
+    let only_survivors = matches!(code, Some(0 | 2 | 3));
     if !only_survivors || !undocumented.is_empty() {
-        say(cap.stderr.trim_end());
         for u in &undocumented {
             say(&format!("  UNDOCUMENTED SURVIVOR {u}"));
         }
         bail!(
-            "cargo mutants (exit {:?}): {} undocumented survivor(s) (docs/mutants-accepted.md){}",
-            cap.code,
+            "cargo mutants (exit {code:?}): {} undocumented survivor(s) (docs/mutants-accepted.md){}; log {}",
             undocumented.len(),
             if only_survivors {
                 ""
             } else {
                 "; baseline or usage failure"
-            }
+            },
+            log.display()
         );
     }
-    let summary = cap
-        .stdout
+    let text = std::fs::read_to_string(log).unwrap_or_default();
+    let summary = text
         .lines()
         .rev()
         .find(|l| l.contains("mutants tested"))
         .unwrap_or_default()
         .trim()
         .to_owned();
-    Ok(Outcome::Pass(format!(
+    Ok(format!(
         "{}: {summary}; survivors documented in docs/mutants-accepted.md: {documented}",
         expect::MUTANT_PACKAGES.join(", ")
+    ))
+}
+
+/// The outcomes of one cargo-mutants run (`outcomes.json`): every mutant's outcome (the baseline left out) and the
+/// run's own count of mutants, which must equal the number of mutant outcomes.
+struct MutantOutcomes {
+    outcomes: Vec<Value>,
+}
+
+fn read_outcomes(path: &Path) -> Result<MutantOutcomes> {
+    let text =
+        std::fs::read_to_string(path).map_err(|e| Error(format!("{}: {e}", path.display())))?;
+    let v: Value =
+        serde_json::from_str(&text).map_err(|e| Error(format!("{}: {e}", path.display())))?;
+    let all = v
+        .get("outcomes")
+        .and_then(Value::as_array)
+        .ok_or_else(|| Error(format!("{}: no `outcomes` array", path.display())))?;
+    let outcomes: Vec<Value> = all
+        .iter()
+        .filter(|o| o.get("scenario").and_then(|s| s.get("Mutant")).is_some())
+        .cloned()
+        .collect();
+    let total = v.get("total_mutants").and_then(Value::as_u64);
+    if total != u64::try_from(outcomes.len()).ok() {
+        bail!(
+            "{}: {} mutant outcomes, but total_mutants {total:?} (an incomplete run)",
+            path.display(),
+            outcomes.len()
+        );
+    }
+    Ok(MutantOutcomes { outcomes })
+}
+
+/// The outcome counts of one package.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct MutantCounts {
+    total: usize,
+    caught: usize,
+    missed: usize,
+    timeout: usize,
+    unviable: usize,
+}
+
+/// Per package (the `package` field cargo-mutants 27.1.0 writes for every mutant), the outcome counts of `outcomes`
+/// (mutant outcomes of `outcomes.json`, possibly merged from several shards). A mutant without a package, of a
+/// package outside `expect::MUTANT_PACKAGES`, in a file outside `crates/<package>/`, or with an unknown outcome is an
+/// error: it cannot be attributed, so the floor could not be judged.
+fn mutant_counts(outcomes: &[Value]) -> Result<std::collections::BTreeMap<String, MutantCounts>> {
+    let mut counts: std::collections::BTreeMap<String, MutantCounts> = expect::MUTANT_PACKAGES
+        .iter()
+        .map(|p| ((*p).to_owned(), MutantCounts::default()))
+        .collect();
+    for o in outcomes {
+        let mutant = o.get("scenario").and_then(|s| s.get("Mutant"));
+        let name = mutant
+            .and_then(|m| m.get("name"))
+            .and_then(Value::as_str)
+            .unwrap_or("?");
+        let package = mutant
+            .and_then(|m| m.get("package"))
+            .and_then(Value::as_str);
+        let file = mutant.and_then(|m| m.get("file")).and_then(Value::as_str);
+        let Some(package) = package else {
+            bail!("mutants: the mutant {name:?} names no package");
+        };
+        if !file.is_some_and(|f| f.starts_with(&format!("crates/{package}/"))) {
+            bail!(
+                "mutants: the mutant {name:?} of {package} is not in crates/{package}/ ({file:?})"
+            );
+        }
+        let Some(c) = counts.get_mut(package) else {
+            bail!(
+                "mutants: the mutant {name:?} is in the package {package}, which is not one of {:?}",
+                expect::MUTANT_PACKAGES
+            );
+        };
+        let slot = match o.get("summary").and_then(Value::as_str) {
+            Some("CaughtMutant") => &mut c.caught,
+            Some("MissedMutant") => &mut c.missed,
+            Some("Timeout") => &mut c.timeout,
+            Some("Unviable") => &mut c.unviable,
+            other => bail!("mutants: the mutant {name:?} has the unknown outcome {other:?}"),
+        };
+        *slot = slot.saturating_add(1);
+        c.total = c.total.saturating_add(1);
+    }
+    Ok(counts)
+}
+
+/// ADR-047 Amendment 1 (4), M4 review R-06: the floor per package of `expect::MUTANT_PACKAGES` — at least one caught
+/// mutant, and at most `expect::MUTANT_MAX_UNVIABLE_PERCENT` % of its mutants unviable (a build that fails for every
+/// mutant must not pass). Returns one line of counts per package and the failures, each naming its package.
+fn mutants_floor(
+    counts: &std::collections::BTreeMap<String, MutantCounts>,
+) -> (Vec<String>, Vec<String>) {
+    let mut lines = Vec::new();
+    let mut failures = Vec::new();
+    let max = expect::MUTANT_MAX_UNVIABLE_PERCENT;
+    for p in expect::MUTANT_PACKAGES {
+        let c = counts.get(*p).copied().unwrap_or_default();
+        let share = c
+            .unviable
+            .saturating_mul(1000)
+            .checked_div(c.total)
+            .unwrap_or(0);
+        lines.push(format!(
+            "{p}: caught {}, missed {}, timeout {}, unviable {} of {} ({}.{} %, at most {max} %)",
+            c.caught,
+            c.missed,
+            c.timeout,
+            c.unviable,
+            c.total,
+            share / 10,
+            share % 10
+        ));
+        if c.caught == 0 {
+            failures.push(format!("{p}: no caught mutant (of {})", c.total));
+        }
+        if c.unviable.saturating_mul(100) > max.saturating_mul(c.total) {
+            failures.push(format!(
+                "{p}: unviable {} of {} mutants is above {max} %",
+                c.unviable, c.total
+            ));
+        }
+    }
+    (lines, failures)
+}
+
+/// The merged result of the shards of a CI mutation run.
+struct MergedShards {
+    outcomes: Vec<Value>,
+    /// One line per shard (its directory and number of mutants).
+    shards: Vec<String>,
+}
+
+/// Read the `n` shard results under `dir` (the artefacts `mutants-<K>-<attempt>` of the `mutants-shard` jobs, each with
+/// `mutants.out/`): exactly one directory per shard K = 0…n−1 and no other, each with a PASS verdict of shard `K/n`
+/// (written by the shard's `mutants` step) and a complete `outcomes.json`.
+fn merge_mutant_shards(dir: &Path, n: usize) -> Result<MergedShards> {
+    let mut by_shard: std::collections::BTreeMap<usize, Vec<PathBuf>> =
+        std::collections::BTreeMap::new();
+    let entries = std::fs::read_dir(dir).map_err(|e| {
+        Error(format!(
+            "mutants-merge: {}: {e} (no shard results downloaded)",
+            dir.display()
+        ))
+    })?;
+    for entry in entries {
+        let path = entry?.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let k = name
+            .strip_prefix("mutants-")
+            .and_then(|r| r.split_once('-'))
+            .and_then(|(k, _)| k.parse::<usize>().ok());
+        let Some(k) = k else {
+            bail!(
+                "mutants-merge: unexpected directory {name:?} in {}",
+                dir.display()
+            );
+        };
+        by_shard.entry(k).or_default().push(path);
+    }
+    let mut outcomes = Vec::new();
+    let mut shards = Vec::new();
+    for k in 0..n {
+        let dirs = by_shard.remove(&k).unwrap_or_default();
+        let [d] = dirs.as_slice() else {
+            bail!(
+                "mutants-merge: shard {k}/{n}: {} result directories (exactly one expected)",
+                dirs.len()
+            );
+        };
+        let out = d.join("mutants.out");
+        let verdict: Value = std::fs::read_to_string(out.join(MUTANTS_SHARD_VERDICT))
+            .ok()
+            .and_then(|t| serde_json::from_str(&t).ok())
+            .ok_or_else(|| {
+                Error(format!(
+                    "mutants-merge: shard {k}/{n}: no verdict ({}) — the shard did not finish",
+                    out.join(MUTANTS_SHARD_VERDICT).display()
+                ))
+            })?;
+        let field = |f: &str| verdict.get(f).and_then(Value::as_str).unwrap_or_default();
+        if field("shard") != format!("{k}/{n}") || field("verdict") != "PASS" {
+            bail!(
+                "mutants-merge: shard {k}/{n}: verdict {} for shard {}: {}",
+                field("verdict"),
+                field("shard"),
+                field("detail")
+            );
+        }
+        let read = read_outcomes(&out.join("outcomes.json"))?;
+        shards.push(format!(
+            "shard {k}/{n}: {} mutants ({})",
+            read.outcomes.len(),
+            d.file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        ));
+        outcomes.extend(read.outcomes);
+    }
+    if let Some(k) = by_shard.keys().next() {
+        bail!("mutants-merge: a result directory for shard {k}, outside 0..{n}");
+    }
+    Ok(MergedShards { outcomes, shards })
+}
+
+/// The names (`path:line:col: description`, as `missed.txt`/`timeout.txt` list them) of the mutants with `summary`.
+fn mutant_names(outcomes: &[Value], summary: &str) -> String {
+    outcomes
+        .iter()
+        .filter(|o| o.get("summary").and_then(Value::as_str) == Some(summary))
+        .filter_map(|o| {
+            o.get("scenario")
+                .and_then(|s| s.get("Mutant"))
+                .and_then(|m| m.get("name"))
+                .and_then(Value::as_str)
+        })
+        .fold(String::new(), |mut all, n| {
+            all.push_str(n);
+            all.push('\n');
+            all
+        })
+}
+
+/// The verdict of the sharded mutation gate (ADR-047 Amendment 1 (2), (4); the `mutants` job of `ci.yml`): the
+/// `expect::MUTANT_SHARDS` shard results under `target/mutants-shards/` merged into `target/mutants-merged/`
+/// (`outcomes.json`, `missed.txt`, `timeout.txt`, `summary.txt`); fails unless every shard passed, every survivor is
+/// documented in `docs/mutants-accepted.md`, and every package meets the floor.
+pub(crate) fn mutants_merge(ctx: &Ctx) -> Result<Outcome> {
+    let target = ctx.root.join("target");
+    let merged = merge_mutant_shards(&target.join("mutants-shards"), expect::MUTANT_SHARDS)?;
+    for l in &merged.shards {
+        say(&format!("  mutants {l}"));
+    }
+    let missed = mutant_names(&merged.outcomes, "MissedMutant");
+    let timeout = mutant_names(&merged.outcomes, "Timeout");
+    let counts = mutant_counts(&merged.outcomes)?;
+    let (lines, mut failures) = mutants_floor(&counts);
+    for l in &lines {
+        say(&format!("  mutants {l}"));
+    }
+    let out = target.join("mutants-merged");
+    std::fs::create_dir_all(&out)?;
+    std::fs::write(
+        out.join("outcomes.json"),
+        serde_json::json!({ "outcomes": merged.outcomes }).to_string(),
+    )?;
+    std::fs::write(out.join("missed.txt"), &missed)?;
+    std::fs::write(out.join("timeout.txt"), &timeout)?;
+    std::fs::write(
+        out.join("summary.txt"),
+        [merged.shards.clone(), lines.clone()].concat().join("\n"),
+    )?;
+    let accepted = std::fs::read_to_string(ctx.root.join("docs").join("mutants-accepted.md"))?;
+    let survivors = format!("{missed}{timeout}");
+    let undocumented = undocumented_survivors(&survivors, &accepted);
+    for u in &undocumented {
+        say(&format!("  UNDOCUMENTED SURVIVOR {u}"));
+    }
+    if !undocumented.is_empty() {
+        failures.push(format!(
+            "{} undocumented survivor(s) (docs/mutants-accepted.md)",
+            undocumented.len()
+        ));
+    }
+    if !failures.is_empty() {
+        bail!("mutants-merge: {}", failures.join("; "));
+    }
+    let documented = survivors.lines().filter(|l| !l.trim().is_empty()).count();
+    Ok(Outcome::Pass(format!(
+        "{} shards merged; {}; survivors documented in docs/mutants-accepted.md: {documented}",
+        expect::MUTANT_SHARDS,
+        lines.join("; ")
     )))
 }
 
@@ -4099,6 +4596,266 @@ mod tests {
             line
         );
         assert_eq!(mutant_survivors(Some(0), None, None)?.trim(), "");
+        Ok(())
+    }
+
+    /// ADR-047 Amendment 1 (3), M4 review R-06: the gate builds both packages with `--features kat` (a per-package
+    /// `secmp-proto/kat` makes cargo refuse the `secmp-crypto` build), passes the shard through with round-robin
+    /// sharding, and skips the tests of `expect::MUTANT_SKIP_TESTS` after `-- --`.
+    #[test]
+    fn mutants_command_line_builds_with_features_kat() {
+        let args = mutants_args(Some(MutantsShard { k: 3, n: 8 }));
+        let pair = |a: &str, b: &str| {
+            args.windows(2).any(|w| {
+                w.first().map(String::as_str) == Some(a) && w.get(1).map(String::as_str) == Some(b)
+            })
+        };
+        assert!(pair("--features", "kat"), "{args:?}");
+        assert!(pair("--shard", "3/8"), "{args:?}");
+        assert!(pair("--sharding", "round-robin"), "{args:?}");
+        assert!(
+            !args
+                .iter()
+                .any(|a| a.contains("secmp-proto/kat") || a.contains("secmp-crypto/kat"))
+        );
+        assert_eq!(args.iter().filter(|a| *a == "--features").count(), 1);
+        for p in expect::MUTANT_PACKAGES {
+            assert!(pair("--package", p), "{p}");
+        }
+        // the skip filters come after `-- --`: cargo-mutants hands the rest to `cargo test`, which hands it to libtest
+        let at = args.iter().position(|a| a == "--").unwrap_or(usize::MAX);
+        assert_eq!(
+            args.get(at.saturating_add(1)).map(String::as_str),
+            Some("--")
+        );
+        let tail: Vec<&str> = args
+            .iter()
+            .skip(at.saturating_add(2))
+            .map(String::as_str)
+            .collect();
+        let want: Vec<&str> = expect::MUTANT_SKIP_TESTS
+            .iter()
+            .flat_map(|(t, _)| ["--skip", *t])
+            .collect();
+        assert_eq!(tail, want);
+        // without a shard: no shard arguments
+        let all = mutants_args(None);
+        assert!(!all.iter().any(|a| a.starts_with("--shard")), "{all:?}");
+        assert_eq!(
+            MutantsShard::parse("7/8")
+                .map(|s| s.to_string())
+                .ok()
+                .as_deref(),
+            Some("7/8")
+        );
+        assert!(MutantsShard::parse("8/8").is_err() && MutantsShard::parse("3/0").is_err());
+    }
+
+    /// One mutant outcome of cargo-mutants 27.1.0's `outcomes.json`.
+    fn mutant_outcome(package: &str, i: usize, summary: &str) -> Value {
+        let name = format!("crates/{package}/src/lib.rs:{i}:1: replace f{i} with ()");
+        serde_json::json!({"scenario": {"Mutant": {"name": name, "package": package,
+            "file": format!("crates/{package}/src/lib.rs")}}, "summary": summary})
+    }
+
+    /// `caught`, `unviable` and `missed` mutants of `package`.
+    fn mutant_outcomes(package: &str, caught: usize, unviable: usize, missed: usize) -> Vec<Value> {
+        let kinds = [
+            ("CaughtMutant", caught),
+            ("Unviable", unviable),
+            ("MissedMutant", missed),
+        ];
+        let mut out = Vec::new();
+        for (summary, n) in kinds {
+            for _ in 0..n {
+                out.push(mutant_outcome(package, out.len(), summary));
+            }
+        }
+        out
+    }
+
+    /// ADR-047 Amendment 1 (4), M4 review R-06: the floor per package — every `secmp-crypto` mutant unviable fails
+    /// naming `secmp-crypto`, 36 % unviable fails, 35 % and a balanced input pass; a package without mutants fails; a
+    /// mutant of an unknown package, outside its crate or with an unknown outcome cannot be counted.
+    #[test]
+    fn mutants_floor_fails_a_package_without_a_caught_mutant() -> Result<()> {
+        let floor = |outcomes: Vec<Value>| -> Result<(Vec<String>, Vec<String>)> {
+            Ok(mutants_floor(&mutant_counts(&outcomes)?))
+        };
+        // every crypto mutant unviable (the R-06 build failure)
+        let all_unviable = [
+            mutant_outcomes("secmp-crypto", 0, 241, 0),
+            mutant_outcomes("secmp-proto", 60, 30, 1),
+        ]
+        .concat();
+        let (lines, failures) = floor(all_unviable)?;
+        assert!(
+            !failures.is_empty() && failures.iter().all(|f| f.starts_with("secmp-crypto: ")),
+            "{failures:?}"
+        );
+        assert!(
+            failures.iter().any(|f| f.contains("no caught mutant")),
+            "{failures:?}"
+        );
+        assert!(lines.iter().any(|l| {
+            l.starts_with("secmp-crypto: caught 0, missed 0, timeout 0, unviable 241 of 241")
+        }));
+        // 36 % unviable: fails naming the package
+        let (_, failures) = floor(
+            [
+                mutant_outcomes("secmp-crypto", 64, 36, 0),
+                mutant_outcomes("secmp-proto", 70, 30, 0),
+            ]
+            .concat(),
+        )?;
+        assert_eq!(
+            failures,
+            vec!["secmp-crypto: unviable 36 of 100 mutants is above 35 %".to_owned()]
+        );
+        let (_, failures) = floor(
+            [
+                mutant_outcomes("secmp-crypto", 70, 30, 0),
+                mutant_outcomes("secmp-proto", 63, 36, 1),
+            ]
+            .concat(),
+        )?;
+        assert_eq!(
+            failures,
+            vec!["secmp-proto: unviable 36 of 100 mutants is above 35 %".to_owned()]
+        );
+        // exactly 35 % and a balanced input pass
+        let (lines, failures) = floor(
+            [
+                mutant_outcomes("secmp-crypto", 65, 35, 0),
+                mutant_outcomes("secmp-proto", 80, 18, 2),
+            ]
+            .concat(),
+        )?;
+        assert!(failures.is_empty(), "{failures:?}");
+        assert_eq!(
+            lines,
+            vec![
+                "secmp-crypto: caught 65, missed 0, timeout 0, unviable 35 of 100 (35.0 %, at most 35 %)".to_owned(),
+                "secmp-proto: caught 80, missed 2, timeout 0, unviable 18 of 100 (18.0 %, at most 35 %)".to_owned(),
+            ]
+        );
+        // a package without any mutant: no caught mutant
+        let (_, failures) = floor(mutant_outcomes("secmp-proto", 5, 0, 0))?;
+        assert_eq!(
+            failures,
+            vec!["secmp-crypto: no caught mutant (of 0)".to_owned()]
+        );
+        // unattributable outcomes are refused
+        let mut foreign = mutant_outcome("secmp-ui", 1, "CaughtMutant");
+        assert!(mutant_counts(&[foreign.clone()]).is_err());
+        if let Some(m) = foreign.pointer_mut("/scenario/Mutant") {
+            m["package"] = Value::from("secmp-crypto");
+        }
+        assert!(
+            mutant_counts(&[foreign]).is_err(),
+            "file outside crates/secmp-crypto/"
+        );
+        assert!(mutant_counts(&[mutant_outcome("secmp-proto", 1, "Success")]).is_err());
+        let mut nameless = mutant_outcome("secmp-proto", 1, "CaughtMutant");
+        if let Some(m) = nameless
+            .pointer_mut("/scenario/Mutant")
+            .and_then(Value::as_object_mut)
+        {
+            m.remove("package");
+        }
+        assert!(mutant_counts(&[nameless]).is_err());
+        Ok(())
+    }
+
+    /// ADR-047 Amendment 1 (5): every test skipped for each mutant is a `#[cfg(feature = "kat")]` test function of
+    /// `crates/secmp-proto/src/tr/tests.rs` (so it still runs in the `kat` step), and its name matches no other test
+    /// function there (a libtest `--skip` filter is a substring match).
+    #[test]
+    fn mutants_skip_list_names_existing_tests() -> Result<()> {
+        let path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../crates/secmp-proto/src/tr/tests.rs");
+        let text = std::fs::read_to_string(path)?;
+        let lines: Vec<&str> = text.lines().collect();
+        assert!(!expect::MUTANT_SKIP_TESTS.is_empty());
+        for (name, reason) in expect::MUTANT_SKIP_TESTS {
+            assert!(!reason.is_empty(), "{name}");
+            let decl = format!("fn {name}(");
+            let at: Vec<usize> = lines
+                .iter()
+                .enumerate()
+                .filter(|(_, l)| l.trim_start().starts_with(&decl))
+                .map(|(i, _)| i)
+                .collect();
+            let [at] = at.as_slice() else {
+                bail!("{name}: {} declarations in tr/tests.rs", at.len());
+            };
+            // the attributes directly above the function
+            let attrs: Vec<&str> = lines
+                .get(..*at)
+                .unwrap_or_default()
+                .iter()
+                .rev()
+                .take_while(|l| l.trim_start().starts_with("#["))
+                .map(|l| l.trim())
+                .collect();
+            assert!(attrs.contains(&"#[test]"), "{name}: {attrs:?}");
+            assert!(
+                attrs.contains(&"#[cfg(feature = \"kat\")]"),
+                "{name}: {attrs:?}"
+            );
+            let matching = lines
+                .iter()
+                .filter(|l| l.trim_start().starts_with("fn ") && l.contains(*name))
+                .count();
+            assert_eq!(matching, 1, "{name} is a substring of another test name");
+        }
+        Ok(())
+    }
+
+    /// ADR-047 Amendment 1 (2): the merge needs exactly one result per shard, each with a PASS verdict of its own shard
+    /// and a complete `outcomes.json`; it then counts every package over all shards.
+    #[test]
+    fn mutants_merge_needs_every_shard_with_a_pass_verdict() -> Result<()> {
+        let dir =
+            std::env::temp_dir().join(format!("secmp-xtask-mutants-merge-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let write_shard =
+            |k: usize, n: usize, verdict: &str, outcomes: &[Value], total: usize| -> Result<()> {
+                let out = dir.join(format!("mutants-{k}-1")).join("mutants.out");
+                std::fs::create_dir_all(&out)?;
+                std::fs::write(
+                out.join(MUTANTS_SHARD_VERDICT),
+                serde_json::json!({"shard": format!("{k}/{n}"), "verdict": verdict, "detail": "d"})
+                    .to_string(),
+            )?;
+                let mut all =
+                    vec![serde_json::json!({"scenario": "Baseline", "summary": "Success"})];
+                all.extend(outcomes.iter().cloned());
+                std::fs::write(
+                    out.join("outcomes.json"),
+                    serde_json::json!({"outcomes": all, "total_mutants": total}).to_string(),
+                )?;
+                Ok(())
+            };
+        let crypto = mutant_outcomes("secmp-crypto", 3, 1, 0);
+        let proto = mutant_outcomes("secmp-proto", 3, 1, 0);
+        write_shard(0, 2, "PASS", &crypto, 4)?;
+        write_shard(1, 2, "PASS", &proto, 4)?;
+        let merged = merge_mutant_shards(&dir, 2)?;
+        assert_eq!(merged.outcomes.len(), 8);
+        let counts = mutant_counts(&merged.outcomes)?;
+        assert_eq!(counts.get("secmp-crypto").map(|c| c.caught), Some(3));
+        // a missing shard, a failed shard, a shard with an incomplete outcomes.json, a third shard
+        assert!(merge_mutant_shards(&dir, 3).is_err());
+        write_shard(1, 2, "FAIL", &proto, 4)?;
+        assert!(merge_mutant_shards(&dir, 2).is_err());
+        write_shard(1, 2, "PASS", &proto, 5)?;
+        assert!(merge_mutant_shards(&dir, 2).is_err());
+        write_shard(1, 2, "PASS", &proto, 4)?;
+        write_shard(0, 3, "PASS", &crypto, 4)?;
+        assert!(merge_mutant_shards(&dir, 2).is_err(), "shard 0 says 0/3");
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(merge_mutant_shards(&dir, 2).is_err(), "nothing downloaded");
         Ok(())
     }
 

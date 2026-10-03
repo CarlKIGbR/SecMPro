@@ -758,6 +758,14 @@ fn fuzz_with(ctx: &Ctx, seconds: u64) -> Result<(String, String)> {
     tools::require_nightly(&[])?;
     let found = file_stems(&ctx.root.join("fuzz").join("fuzz_targets"), "rs")?;
     same_set("fuzz targets", &found, expect::FUZZ_TARGETS)?;
+    let missing =
+        targets_without_corpus(&ctx.root.join("fuzz").join("corpus"), expect::FUZZ_TARGETS);
+    if !missing.is_empty() {
+        bail!(
+            "fuzz: no tracked seed in fuzz/corpus/<target>/ for {} (libFuzzer refuses the missing second corpus directory)",
+            missing.join(", ")
+        );
+    }
     let mut seeded = Vec::new();
     let mut failed = Vec::new();
     for t in &found {
@@ -784,6 +792,23 @@ fn fuzz_with(ctx: &Ctx, seconds: u64) -> Result<(String, String)> {
         );
     }
     Ok((list(&found), seeded.join(", ")))
+}
+
+/// M4 review C-6 (R-07): the targets of `targets` whose tracked corpus `corpus/<t>/` holds no regular file. The fuzz
+/// gate passes that directory as libFuzzer's second corpus, which must exist; a seed is committed for every target
+/// (no `.gitkeep`: libFuzzer would read it as an empty input).
+pub(crate) fn targets_without_corpus(corpus: &Path, targets: &[&str]) -> Vec<String> {
+    targets
+        .iter()
+        .filter(|t| {
+            std::fs::read_dir(corpus.join(t)).map_or(true, |entries| {
+                !entries
+                    .filter_map(std::result::Result::ok)
+                    .any(|e| e.file_type().is_ok_and(|ft| ft.is_file()))
+            })
+        })
+        .map(|t| (*t).to_owned())
+        .collect()
 }
 
 /// The arguments of `cargo fuzz run` for target `t` (M2 review F7, F18): the scratch corpus first (libFuzzer's
@@ -5341,6 +5366,47 @@ mod tests {
         assert!(kani_verified(&kani_log(&twice, 0)).is_err());
         let no_summary = kani_log(all, 0).replace("Complete - ", "Done - ");
         assert!(kani_verified(&no_summary).is_err());
+        Ok(())
+    }
+
+    /// M4 review C-6 (R-07): every fuzz target has a tracked seed corpus (`fuzz/corpus/<t>/` with at least one file),
+    /// the directory the fuzz gate passes as libFuzzer's second corpus; without the `hx_outer` seeds the check names it.
+    #[test]
+    fn fuzz_corpus_exists_for_every_target() -> Result<()> {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let corpus = root.join("fuzz").join("corpus");
+        assert_eq!(
+            targets_without_corpus(&corpus, expect::FUZZ_TARGETS),
+            Vec::<String>::new()
+        );
+        // every hx_outer seed is a padded `Outer` of exactly 12018 bytes
+        let seeds: Vec<PathBuf> = std::fs::read_dir(corpus.join("hx_outer"))?
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .collect();
+        assert!(!seeds.is_empty());
+        for f in &seeds {
+            assert_eq!(std::fs::metadata(f)?.len(), 12_018, "{}", f.display());
+        }
+        // a copy of the corpus layout without the hx_outer seeds fails naming hx_outer
+        let dir =
+            std::env::temp_dir().join(format!("secmp-xtask-fuzz-corpus-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        for t in expect::FUZZ_TARGETS {
+            std::fs::create_dir_all(dir.join(t))?;
+            if *t != "hx_outer" {
+                std::fs::write(dir.join(t).join("seed"), [0_u8])?;
+            }
+        }
+        assert_eq!(
+            targets_without_corpus(&dir, expect::FUZZ_TARGETS),
+            vec!["hx_outer".to_owned()]
+        );
+        std::fs::remove_dir_all(dir.join("hx_outer"))?;
+        assert_eq!(
+            targets_without_corpus(&dir, expect::FUZZ_TARGETS),
+            vec!["hx_outer".to_owned()]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
         Ok(())
     }
 

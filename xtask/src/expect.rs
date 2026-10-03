@@ -787,14 +787,47 @@ pub(crate) const CONTINUE_ON_ERROR_JOBS: &[&str] = &[];
 /// The workflow that holds the required checks of the `main-protection` ruleset (docs/06 §4).
 pub(crate) const REQUIRED_WORKFLOW: &str = ".github/workflows/ci.yml";
 
-/// The job names of the required checks (M2 review C2): they exist only in [`REQUIRED_WORKFLOW`], which has no
-/// `workflow_dispatch` trigger, so no dispatch can add a `skipped` (= passing) check run under a required name.
+/// The job names of the required checks of the `main-protection` ruleset (M2 review C2): they exist only in
+/// [`REQUIRED_WORKFLOW`], which has no `workflow_dispatch` trigger, so no dispatch can add a `skipped` (= passing) check
+/// run under a required name. The policy step pins [`PINNED_JOBS`], a superset.
 pub(crate) const REQUIRED_JOBS: &[&str] =
     &["linux-fast", "windows-native", "xwin-cross", "linux-full"];
 
-/// The `cargo xtask` gate `run:` lines of each required job, in order (M3 review F3, R-09; `install-tools` aside).
-/// The policy step refuses any other gate line, a missing one and an appended `|| true`. An accident guard (the
-/// real control is review of the workflow and of this file), not a tamper-proof one.
+/// The jobs whose gate lines ([`REQUIRED_GATE_RUNS`]), conditions ([`REQUIRED_JOB_CONDITIONS`]) and structure the
+/// policy step pins (M4 review C-5, R-01): the required checks of [`REQUIRED_JOBS`] and the jobs `linux-full`
+/// delegates to — the ct gate `ct`, the mutation shards `mutants-shard` with their verdict job `mutants`, and the
+/// SecMP-HX models `proverif-hx`. Like the required names they exist only in [`REQUIRED_WORKFLOW`]. (A skipped job
+/// counts as passing on GitHub, so the in-repo pin is needed whether or not the ruleset requires them.)
+pub(crate) const PINNED_JOBS: &[&str] = &[
+    "linux-fast",
+    "windows-native",
+    "xwin-cross",
+    "linux-full",
+    "ct",
+    "mutants-shard",
+    "mutants",
+    "proverif-hx",
+];
+
+/// The `needs:` of a pinned job, as (job, the one job it needs) — M4 review C-5: the verdict job `mutants` needs
+/// exactly `mutants-shard` (ADR-047 Amendment 1 (2)), written as that plain scalar; any other `needs:` on a pinned job
+/// is a finding (a skipped or failing dependency would skip the job).
+pub(crate) const PINNED_JOB_NEEDS: &[(&str, &str)] = &[("mutants", "mutants-shard")];
+
+/// Where each `--delegated <step>` of a pinned gate line runs, as (step, pinned job) — M4 review C-5: the policy step
+/// refuses a delegation without an entry here, and an entry whose job has no pinned gate line of its own; a pinned
+/// `--models tr` needs a pinned `proverif --models hx` line.
+pub(crate) const DELEGATED_TO: &[(&str, &str)] = &[
+    ("windows-native", "windows-native"),
+    ("windows-cross", "xwin-cross"),
+    ("mutants", "mutants"),
+    ("ct", "ct"),
+];
+
+/// The `cargo xtask` gate `run:` lines of each pinned job of [`PINNED_JOBS`], in order (M3 review F3, R-09;
+/// `install-tools` aside; M4 review C-5 adds the delegated jobs). The policy step refuses any other gate line, a
+/// missing one and an appended `|| true`. An accident guard (the real control is review of the workflow and of this
+/// file), not a tamper-proof one.
 pub(crate) const REQUIRED_GATE_RUNS: &[(&str, &[&str])] = &[
     (
         "linux-fast",
@@ -816,18 +849,49 @@ pub(crate) const REQUIRED_GATE_RUNS: &[(&str, &[&str])] = &[
             "cargo xtask ci-full --strict --delegated windows-native --delegated windows-cross --delegated mutants --delegated ct --models tr",
         ],
     ),
+    // M4 review C-5 (R-01): the delegated jobs
+    ("ct", &["cargo xtask step --strict ct"]),
+    (
+        "mutants-shard",
+        &["cargo xtask step --strict mutants --shard ${{ matrix.shard }}/8"],
+    ),
+    ("mutants", &["cargo xtask step --strict mutants-merge"]),
+    (
+        "proverif-hx",
+        &["cargo xtask step --strict proverif --models hx --jobs 4"],
+    ),
 ];
 
-/// The job-level `if:` of every required job, `None` for none (external review EXT-1, M3 follow-up F19): the policy
-/// step (an accident guard, not a tamper-proof control; the real control is review, M3 review F23) refuses any other condition — a condition that evaluates to false on `pull_request` would leave a `skipped`
-/// check run under a required name, which GitHub counts as passing. `linux-full` excludes only `push` (on `main`),
-/// by design since the M2 workflow change; the other three run on every event.
+/// The job-level `if:` of every pinned job of [`PINNED_JOBS`], `None` for none (external review EXT-1, M3 follow-up
+/// F19; M4 review C-5): the policy step (an accident guard, not a tamper-proof control; the real control is review, M3
+/// review F23) refuses any other condition — a condition that evaluates to false on `pull_request` would leave a
+/// `skipped` check run under a pinned name, which GitHub counts as passing. `linux-full` and its delegated jobs exclude
+/// only `push` (on `main`), by design since the M2 workflow change; the verdict job `mutants` runs after its shards
+/// whatever their outcome (`always()`); the other three required jobs run on every event.
 pub(crate) const REQUIRED_JOB_CONDITIONS: &[(&str, Option<&str>)] = &[
     ("linux-fast", None),
     ("windows-native", None),
     ("xwin-cross", None),
     (
         "linux-full",
+        Some("github.event_name == 'schedule' || github.event_name == 'pull_request'"),
+    ),
+    (
+        "ct",
+        Some("github.event_name == 'schedule' || github.event_name == 'pull_request'"),
+    ),
+    (
+        "mutants-shard",
+        Some("github.event_name == 'schedule' || github.event_name == 'pull_request'"),
+    ),
+    (
+        "mutants",
+        Some(
+            "always() && (github.event_name == 'schedule' || github.event_name == 'pull_request')",
+        ),
+    ),
+    (
+        "proverif-hx",
         Some("github.event_name == 'schedule' || github.event_name == 'pull_request'"),
     ),
 ];

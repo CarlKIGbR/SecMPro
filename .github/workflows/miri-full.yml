@@ -8,8 +8,8 @@
 # so that a package's run time does not share the limit of the others (a test in `cargo xtask policy` pins the
 # set). Not required checks; the job names are not required-check names.
 # Checked by `cargo xtask policy` as every workflow (see the header of ci.yml): no `pull_request_target`/
-# `workflow_run` trigger, actions pinned by commit SHA, no `continue-on-error`. By convention, not checked: the
-# schedule/workflow_dispatch triggers only and a read-only token.
+# `workflow_run` trigger, actions pinned by commit SHA, no `continue-on-error`, the read-only token. By convention, not
+# checked: the schedule/workflow_dispatch triggers only.
 name: miri-full
 
 on:

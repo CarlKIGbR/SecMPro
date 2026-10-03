@@ -2898,10 +2898,10 @@ pub(crate) fn systemd(ctx: &Ctx) -> Result<Outcome> {
 
 // ---- CI hygiene --------------------------------------------------------------------------------------------
 
-/// Findings for one workflow file: forbidden triggers, actions not pinned to a full commit SHA,
-/// `continue-on-error` outside the jobs allowed by `expect::CONTINUE_ON_ERROR_JOBS`, and artefact names without the
-/// run attempt. An accident guard against careless workflow edits, not a tamper-proof control: the real control is
-/// review (M3 review F23, R-08).
+/// Findings for one workflow file: forbidden triggers, actions not pinned to a full commit SHA, flow-style YAML inside
+/// `jobs:`, `continue-on-error` outside the jobs allowed by `expect::CONTINUE_ON_ERROR_JOBS`, and artefact names
+/// without the run attempt. An accident guard against careless workflow edits, not a tamper-proof control: the real
+/// control is review (M3 review F23, R-08).
 pub(crate) fn workflow_findings(name: &str, text: &str) -> Vec<String> {
     let mut out = Vec::new();
     for line in text.lines() {
@@ -2912,19 +2912,6 @@ pub(crate) fn workflow_findings(name: &str, text: &str) -> Vec<String> {
         for trigger in ["pull_request_target", "workflow_run"] {
             if t.contains(trigger) {
                 out.push(format!("{name}: forbidden trigger `{trigger}`"));
-            }
-        }
-        if let Some(u) = t
-            .strip_prefix("uses:")
-            .or_else(|| t.strip_prefix("- uses:"))
-        {
-            let u = u.trim();
-            let pinned = u.split_once('@').is_some_and(|(_, r)| {
-                let r = r.split_whitespace().next().unwrap_or_default();
-                r.len() == 40 && r.bytes().all(|b| b.is_ascii_hexdigit())
-            });
-            if !u.starts_with("./") && !pinned {
-                out.push(format!("{name}: action not pinned by commit SHA: {u}"));
             }
         }
         if let Some(v) = t.strip_prefix("run:").or_else(|| t.strip_prefix("- run:")) {
@@ -2940,6 +2927,26 @@ pub(crate) fn workflow_findings(name: &str, text: &str) -> Vec<String> {
     // F3 (R-09): the value is read as YAML would (`true # false` is `true`; `"continue-on-error"` and any
     // indentation are the same key)
     let lines = yaml_lines(text);
+    // M4 review C-5 (R-15): `uses` read as YAML would (a quoted key, a space before the colon), and no flow-style
+    // mapping or sequence inside `jobs:`, which this reader does not parse (`- {uses: …}`, `job: {if: false}`)
+    for l in &lines {
+        if l.job.is_some() && (l.key.starts_with(['{', '[']) || l.value.starts_with(['{', '['])) {
+            out.push(format!(
+                "{name}: flow-style YAML inside jobs (job {:?}): {}: {}",
+                l.job, l.key, l.value
+            ));
+        }
+        if l.key == "uses" {
+            let u = l.value.as_str();
+            let pinned = u.split_once('@').is_some_and(|(_, r)| {
+                let r = r.split_whitespace().next().unwrap_or_default();
+                r.len() == 40 && r.bytes().all(|b| b.is_ascii_hexdigit())
+            });
+            if !u.starts_with("./") && !pinned {
+                out.push(format!("{name}: action not pinned by commit SHA: {u}"));
+            }
+        }
+    }
     for l in &lines {
         if l.key == "continue-on-error" && l.value != "false" {
             let ok = l
@@ -2963,6 +2970,53 @@ pub(crate) fn workflow_findings(name: &str, text: &str) -> Vec<String> {
                 "{name}: upload-artifact name {other:?} does not end with `{ARTEFACT_SUFFIX}`"
             )),
         }
+    }
+    out
+}
+
+/// M4 review C-5 (R-16): the workflow-level `permissions` of every workflow is exactly `contents: read`, no job sets
+/// its own `permissions`, and no workflow mentions `SECMP_PROVERIF` (the variable that replaces the ProVerif binary of
+/// the `proverif` step). An accident guard like [`workflow_findings`].
+pub(crate) fn workflow_token_findings(name: &str, text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let lines = yaml_lines(text);
+    let mut top = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| l.col == 0 && l.dash.is_none() && l.key == "permissions");
+    match (top.next(), top.next()) {
+        (Some((i, p)), None) => {
+            let body: Vec<(&str, &str)> = lines
+                .iter()
+                .skip(i.saturating_add(1))
+                .take_while(|l| l.col > 0 || l.dash.is_some())
+                .map(|l| (l.key.as_str(), l.value.as_str()))
+                .collect();
+            if !p.value.is_empty() || body != [("contents", "read")] {
+                out.push(format!(
+                    "{name}: workflow permissions are not exactly `contents: read`: {:?} {body:?}",
+                    p.value
+                ));
+            }
+        }
+        (None, _) => out.push(format!(
+            "{name}: no workflow-level `permissions: contents: read`"
+        )),
+        (Some(_), Some(_)) => out.push(format!("{name}: two workflow-level `permissions`")),
+    }
+    for l in lines
+        .iter()
+        .filter(|l| l.job.is_some() && l.key == "permissions")
+    {
+        out.push(format!(
+            "{name}: job {:?} sets its own `permissions`",
+            l.job
+        ));
+    }
+    if text.contains("SECMP_PROVERIF") {
+        out.push(format!(
+            "{name}: mentions SECMP_PROVERIF, which replaces the prover of the proverif step"
+        ));
     }
     out
 }
@@ -3220,43 +3274,110 @@ fn is_gate_run(run: &str) -> bool {
     run.contains("cargo xtask") && !run.contains("install-tools")
 }
 
-/// F3 (R-09): structural findings for the required jobs of the required workflow — a `needs:` (a skipped or
-/// failing dependency would skip the job), flow-style or renamed or doubly conditioned jobs, and a step-level `if:`
-/// on a gate step. An accident guard (see [`required_job_findings`]).
+/// F3 (R-09), M4 review C-5: structural findings for the pinned jobs (`expect::PINNED_JOBS`) of the required workflow —
+/// a `needs:` other than the one of `expect::PINNED_JOB_NEEDS` (a skipped or failing dependency would skip the job),
+/// flow-style or renamed or doubly conditioned jobs, a step-level `if:` on a gate step, a `defaults:` and a step
+/// `shell:` (either changes the shell a gate line runs in); and a `defaults:` anywhere in the workflow. An accident
+/// guard (see [`required_job_findings`]).
 fn required_job_structure_findings(name: &str, text: &str) -> Vec<String> {
     let mut out = Vec::new();
+    if yaml_lines(text).iter().any(|l| l.key == "defaults") {
+        out.push(format!(
+            "{name}: a `defaults:` changes the shell of the pinned gate lines"
+        ));
+    }
     for j in yaml_jobs(text) {
-        if !expect::REQUIRED_JOBS.contains(&j.id.as_str()) {
+        if !expect::PINNED_JOBS.contains(&j.id.as_str()) {
             continue;
         }
         let id = &j.id;
         if j.inline {
-            out.push(format!("{name}: required job `{id}` is in flow style"));
+            out.push(format!("{name}: pinned job `{id}` is in flow style"));
+        }
+        let pinned_needs = expect::PINNED_JOB_NEEDS
+            .iter()
+            .find(|(job, _)| job == id)
+            .map(|(_, needs)| *needs);
+        let needs: Vec<&str> = j
+            .props
+            .iter()
+            .filter(|(k, _)| k == "needs")
+            .map(|(_, v)| v.as_str())
+            .collect();
+        match (pinned_needs, needs.as_slice()) {
+            (None, []) => {}
+            (Some(p), [n]) if p == *n => {}
+            (pinned, found) => out.push(format!(
+                "{name}: pinned job `{id}`: `needs:` {found:?}, pinned {pinned:?} (a `needs:` can skip the job)"
+            )),
         }
         for (key, why) in [
-            ("needs", "a `needs:` can skip the job"),
             ("name", "a `name:` changes the check-run name"),
+            (
+                "defaults",
+                "a `defaults:` changes the shell of its gate lines",
+            ),
         ] {
             if j.props.iter().any(|(k, _)| k == key) {
-                out.push(format!("{name}: required job `{id}`: {why}"));
+                out.push(format!("{name}: pinned job `{id}`: {why}"));
             }
         }
         if j.props.iter().filter(|(k, _)| k == "if").count() > 1 {
-            out.push(format!("{name}: required job `{id}` has two `if:`"));
+            out.push(format!("{name}: pinned job `{id}` has two `if:`"));
         }
         for step in &j.steps {
             let gate = step.iter().any(|(k, v)| k == "run" && is_gate_run(v));
             if gate && step.iter().any(|(k, _)| k == "if") {
                 out.push(format!(
-                    "{name}: required job `{id}`: a gate step has a step-level `if:`"
+                    "{name}: pinned job `{id}`: a gate step has a step-level `if:`"
                 ));
+            }
+            if step.iter().any(|(k, _)| k == "shell") {
+                out.push(format!("{name}: pinned job `{id}`: a step sets `shell:`"));
             }
         }
     }
     out
 }
 
-/// F3 (R-09): the `cargo xtask` gate `run:` lines of every required job are exactly those pinned in
+/// M4 review C-5 (V5 (d)): every `--delegated <step>` of a pinned gate line (`runs`, as `expect::REQUIRED_GATE_RUNS`)
+/// is listed in `expect::DELEGATED_TO` with a job that has a pinned gate line of its own, and a pinned `--models tr`
+/// comes with a pinned `proverif --models hx` line — so no delegation hands a step to nothing.
+pub(crate) fn delegation_findings(
+    runs: &[(&str, &[&str])],
+    delegated_to: &[(&str, &str)],
+) -> Vec<String> {
+    let mut out = Vec::new();
+    let has_line = |job: &str| runs.iter().any(|(j, lines)| *j == job && !lines.is_empty());
+    let all_lines = || runs.iter().flat_map(|(_, lines)| lines.iter());
+    for (job, lines) in runs {
+        for line in *lines {
+            for d in line.split("--delegated ").skip(1) {
+                let step = d.split_whitespace().next().unwrap_or_default();
+                match delegated_to.iter().find(|(s, _)| *s == step) {
+                    None => out.push(format!(
+                        "`{job}` delegates `{step}`, which expect::DELEGATED_TO does not map to a job"
+                    )),
+                    Some((_, target)) if !has_line(target) => out.push(format!(
+                        "`{job}` delegates `{step}` to `{target}`, which has no pinned gate line"
+                    )),
+                    Some(_) => {}
+                }
+            }
+        }
+    }
+    if all_lines().any(|l| l.contains("--models tr"))
+        && !all_lines().any(|l| l.contains("proverif --models hx"))
+    {
+        out.push(
+            "a pinned line runs `--models tr` but no pinned line runs `proverif --models hx`"
+                .to_owned(),
+        );
+    }
+    out
+}
+
+/// F3 (R-09), M4 review C-5: the `cargo xtask` gate `run:` lines of every pinned job are exactly those pinned in
 /// `expect::REQUIRED_GATE_RUNS` (an appended `|| true`, a changed step list or a missing gate is a finding).
 /// `name`/`text`: the required workflow.
 pub(crate) fn required_gate_findings(name: &str, text: &str) -> Vec<String> {
@@ -3264,7 +3385,7 @@ pub(crate) fn required_gate_findings(name: &str, text: &str) -> Vec<String> {
     let jobs = yaml_jobs(text);
     for (job, pinned) in expect::REQUIRED_GATE_RUNS {
         let Some(j) = jobs.iter().find(|j| j.id.as_str() == *job) else {
-            out.push(format!("{name}: required job `{job}` missing"));
+            out.push(format!("{name}: pinned job `{job}` missing"));
             continue;
         };
         let found: Vec<&str> = j
@@ -3276,7 +3397,7 @@ pub(crate) fn required_gate_findings(name: &str, text: &str) -> Vec<String> {
             .collect();
         if found.as_slice() != *pinned {
             out.push(format!(
-                "{name}: required job `{job}` runs the gates {found:?}, pinned {pinned:?}"
+                "{name}: pinned job `{job}` runs the gates {found:?}, pinned {pinned:?}"
             ));
         }
     }
@@ -3296,6 +3417,14 @@ pub(crate) fn required_gate_findings(name: &str, text: &str) -> Vec<String> {
 /// (M3 review F23, R-08). `files`: (repository-relative path, text).
 pub(crate) fn required_job_findings(files: &[(String, String)]) -> Vec<String> {
     let mut out = Vec::new();
+    // the required checks of the ruleset are a subset of the pinned jobs
+    for r in expect::REQUIRED_JOBS {
+        if !expect::PINNED_JOBS.contains(r) {
+            out.push(format!(
+                "required check `{r}` is not in expect::PINNED_JOBS"
+            ));
+        }
+    }
     let mut seen_required = false;
     for (name, text) in files {
         let jobs = job_names(text);
@@ -3309,15 +3438,15 @@ pub(crate) fn required_job_findings(files: &[(String, String)]) -> Vec<String> {
                     "{name}: a `workflow_dispatch` trigger next to the required checks"
                 ));
             }
-            for required in expect::REQUIRED_JOBS {
-                if !jobs.iter().any(|j| j == required) {
-                    out.push(format!("{name}: required job `{required}` missing"));
+            for pinned in expect::PINNED_JOBS {
+                if !jobs.iter().any(|j| j == pinned) {
+                    out.push(format!("{name}: pinned job `{pinned}` missing"));
                 }
             }
             out.extend(required_job_structure_findings(name, text));
             let conditions = job_conditions(text);
             for (job, found) in &conditions {
-                if !expect::REQUIRED_JOBS.contains(&job.as_str()) {
+                if !expect::PINNED_JOBS.contains(&job.as_str()) {
                     continue;
                 }
                 let pinned = expect::REQUIRED_JOB_CONDITIONS
@@ -3327,20 +3456,20 @@ pub(crate) fn required_job_findings(files: &[(String, String)]) -> Vec<String> {
                 match pinned {
                     Some(pinned) if pinned == found.as_deref() => {}
                     Some(pinned) => out.push(format!(
-                        "{name}: required job `{job}` has the condition {found:?}, pinned {pinned:?}"
+                        "{name}: pinned job `{job}` has the condition {found:?}, pinned {pinned:?}"
                     )),
                     None => out.push(format!(
-                        "{name}: required job `{job}` has no pinned condition in expect::REQUIRED_JOB_CONDITIONS"
+                        "{name}: pinned job `{job}` has no pinned condition in expect::REQUIRED_JOB_CONDITIONS"
                     )),
                 }
             }
         } else {
             for j in jobs
                 .iter()
-                .filter(|j| expect::REQUIRED_JOBS.contains(&j.as_str()))
+                .filter(|j| expect::PINNED_JOBS.contains(&j.as_str()))
             {
                 out.push(format!(
-                    "{name}: job `{j}` uses a required-check name outside {}",
+                    "{name}: job `{j}` uses a pinned job name outside {}",
                     expect::REQUIRED_WORKFLOW
                 ));
             }
@@ -3362,9 +3491,14 @@ fn workflows(root: &Path) -> Result<String> {
     for f in &files {
         let text = std::fs::read_to_string(f)?;
         findings.extend(workflow_findings(&rel(root, f), &text));
+        findings.extend(workflow_token_findings(&rel(root, f), &text));
         texts.push((rel(root, f), text));
     }
     findings.extend(required_job_findings(&texts));
+    findings.extend(delegation_findings(
+        expect::REQUIRED_GATE_RUNS,
+        expect::DELEGATED_TO,
+    ));
     if let Some((_, text)) = texts.iter().find(|(n, _)| n == expect::REQUIRED_WORKFLOW) {
         findings.extend(required_gate_findings(expect::REQUIRED_WORKFLOW, text));
     }
@@ -3375,8 +3509,9 @@ fn workflows(root: &Path) -> Result<String> {
         bail!("{} CI-hygiene finding(s)", findings.len());
     }
     Ok(format!(
-        "workflows: {} files, triggers/SHA pins/continue-on-error ok; required checks only in ci.yml, no dispatch there, job conditions, needs and gate run lines as pinned (accident guard, not tamper-proof)",
-        files.len()
+        "workflows: {} files, triggers/SHA pins/flow style/continue-on-error/permissions ok; pinned jobs ({}) only in ci.yml, no dispatch there, job conditions, needs, defaults/shell and gate run lines as pinned, delegations mapped (accident guard, not tamper-proof)",
+        files.len(),
+        expect::PINNED_JOBS.join(", ")
     ))
 }
 
@@ -4316,10 +4451,18 @@ mod tests {
         assert_eq!(workflow_findings("w", yaml_trap).len(), 1);
     }
 
-    /// M2 review C2: the required job names only in ci.yml, all four there, and no dispatch trigger in ci.yml.
+    /// The pinned jobs `linux-full` delegates to (M4 review C-5), with their pinned conditions, `needs:` and gate lines,
+    /// as they follow the required jobs in a `ci.yml` fixture.
+    const PINNED_EXTRA: &str = "  ct:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict ct\n  mutants-shard:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    strategy:\n      matrix:\n        shard:\n          - 0\n          - 1\n    steps:\n      - run: cargo xtask install-tools --set mutants\n      - run: cargo xtask step --strict mutants --shard ${{ matrix.shard }}/8\n  mutants:\n    needs: mutants-shard\n    if: always() && (github.event_name == 'schedule' || github.event_name == 'pull_request')\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict mutants-merge\n  proverif-hx:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict proverif --models hx --jobs 4\n";
+
+    /// M2 review C2: the required job names only in ci.yml, all four there, and no dispatch trigger in ci.yml; M4
+    /// review C-5: likewise the pinned jobs `linux-full` delegates to.
     #[test]
     fn required_checks_only_in_the_pull_request_workflow() {
-        let ci = "on:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  linux-fast:\n    runs-on: x\n  windows-native:\n    runs-on: x\n  xwin-cross:\n    runs-on: x\n  linux-full:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n";
+        let ci = format!(
+            "on:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  linux-fast:\n    runs-on: x\n  windows-native:\n    runs-on: x\n  xwin-cross:\n    runs-on: x\n  linux-full:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n{PINNED_EXTRA}"
+        );
+        let ci = ci.as_str();
         let dispatch = "on:\n  workflow_dispatch:\njobs:\n  dispatch-ct:\n    runs-on: x\n  dispatch-full:\n    runs-on: x\n";
         let files = |ci: &str, other: &str| {
             vec![
@@ -4348,6 +4491,9 @@ mod tests {
         // a required job missing from ci.yml, or ci.yml missing
         let missing = ci.replace("  xwin-cross:\n    runs-on: x\n", "");
         assert_eq!(required_job_findings(&files(&missing, dispatch)).len(), 1);
+        // a delegated pinned job's name in another workflow
+        let reuse_ct = dispatch.replace("dispatch-ct:", "ct:");
+        assert_eq!(required_job_findings(&files(ci, &reuse_ct)).len(), 1);
         assert_eq!(
             required_job_findings(&[("other.yml".to_owned(), dispatch.to_owned())]).len(),
             1
@@ -4358,7 +4504,10 @@ mod tests {
     /// new condition, a changed one, a removed pinned one; step-level conditions and other jobs are not affected.
     #[test]
     fn required_jobs_keep_their_pinned_conditions() {
-        let ci = "on:\n  pull_request:\njobs:\n  linux-fast:\n    runs-on: x\n    steps:\n      - if: always()\n        run: x\n  windows-native:\n    runs-on: x\n  xwin-cross:\n    runs-on: x\n  linux-full:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n  extra:\n    if: false\n    runs-on: x\n";
+        let ci = format!(
+            "on:\n  pull_request:\njobs:\n  linux-fast:\n    runs-on: x\n    steps:\n      - if: always()\n        run: x\n  windows-native:\n    runs-on: x\n  xwin-cross:\n    runs-on: x\n  linux-full:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n  extra:\n    if: false\n    runs-on: x\n{PINNED_EXTRA}"
+        );
+        let ci = ci.as_str();
         let dispatch = "on:\n  workflow_dispatch:\njobs:\n  dispatch-ct:\n    runs-on: x\n";
         let files = |ci: &str| {
             vec![
@@ -4379,16 +4528,25 @@ mod tests {
         assert_eq!(found.len(), 1, "{found:?}");
         assert!(found.iter().any(|f| f.contains("`linux-fast`")));
         // the pinned condition changed, or removed
-        let changed = ci.replace("|| github.event_name == 'pull_request'", "");
+        let changed = ci.replacen("|| github.event_name == 'pull_request'", "", 1);
         assert_eq!(required_job_findings(&files(&changed)).len(), 1);
-        let removed = ci.replace(
+        let removed = ci.replacen(
             "    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n",
             "",
+            1,
         );
         assert_eq!(required_job_findings(&files(&removed)).len(), 1);
+        // likewise on every pinned job (M4 review C-5): each condition changed alone is one finding
+        assert_eq!(
+            required_job_findings(&files(
+                &ci.replace("|| github.event_name == 'pull_request'", "")
+            ))
+            .len(),
+            5
+        );
         // the conditions as parsed
         let parsed = job_conditions(ci);
-        assert_eq!(parsed.len(), 5);
+        assert_eq!(parsed.len(), 9);
         assert_eq!(parsed.first(), Some(&("linux-fast".to_owned(), None)));
         assert_eq!(
             parsed.get(4),
@@ -4444,11 +4602,11 @@ mod tests {
         assert_eq!(workflow_findings("w", nameless).len(), 1);
     }
 
-    /// The four required jobs with their gate steps; `fast` is spliced into `linux-fast` after its `runs-on`,
-    /// `fast_step` replaces its first gate step line.
+    /// The pinned jobs with their gate steps (the four required ones, then [`PINNED_EXTRA`]); `fast` is spliced into
+    /// `linux-fast` after its `runs-on`, `fast_step` replaces its first gate step line.
     fn gate_ci(fast: &str, fast_step: &str) -> String {
         format!(
-            "on:\n  pull_request:\njobs:\n  linux-fast:\n    runs-on: x\n{fast}    steps:\n      - uses: actions/cache/save@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6\n        if: steps.c.outputs.hit != 'true'\n{fast_step}      - run: cargo xtask step --strict sbom systemd\n  windows-native:\n    runs-on: x\n    steps:\n      - run: cargo xtask install-tools --set windows\n      - run: cargo xtask step --strict clippy nextest doctest kat hello\n  xwin-cross:\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict windows-cross\n  linux-full:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask ci-full --strict --delegated windows-native --delegated windows-cross --delegated mutants --delegated ct --models tr\n"
+            "on:\n  pull_request:\npermissions:\n  contents: read\njobs:\n  linux-fast:\n    runs-on: x\n{fast}    steps:\n      - uses: actions/cache/save@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6\n        if: steps.c.outputs.hit != 'true'\n{fast_step}      - run: cargo xtask step --strict sbom systemd\n  windows-native:\n    runs-on: x\n    steps:\n      - run: cargo xtask install-tools --set windows\n      - run: cargo xtask step --strict clippy nextest doctest kat hello\n  xwin-cross:\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict windows-cross\n  linux-full:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask ci-full --strict --delegated windows-native --delegated windows-cross --delegated mutants --delegated ct --models tr\n{PINNED_EXTRA}"
         )
     }
 
@@ -4456,6 +4614,7 @@ mod tests {
     fn all_ci_findings(ci: &str) -> Vec<String> {
         let dispatch = "on:\n  workflow_dispatch:\njobs:\n  dispatch-ct:\n    runs-on: x\n";
         let mut out = workflow_findings(expect::REQUIRED_WORKFLOW, ci);
+        out.extend(workflow_token_findings(expect::REQUIRED_WORKFLOW, ci));
         out.extend(required_job_findings(&[
             (expect::REQUIRED_WORKFLOW.to_owned(), ci.to_owned()),
             (
@@ -4555,6 +4714,256 @@ mod tests {
         // the real ci.yml passes every check
         let real = include_str!("../../.github/workflows/ci.yml");
         assert_eq!(all_ci_findings(real), Vec::<String>::new());
+    }
+
+    /// `text` without the job `id` (its header line and every deeper line up to the next job or the end).
+    fn without_job(text: &str, id: &str) -> String {
+        let header = format!("  {id}:");
+        let mut out = String::new();
+        let mut skipping = false;
+        for line in text.lines() {
+            let is_job_header = line.starts_with("  ")
+                && !line.starts_with("   ")
+                && line.trim_end().ends_with(':');
+            if is_job_header {
+                skipping = line.trim_end() == header;
+            }
+            if !skipping {
+                out.push_str(line);
+                out.push('\n');
+            }
+        }
+        out
+    }
+
+    /// M4 review C-5 (R-01; V5 variants v01, v02, v03, v05, v14): deleting the job `mutants` or `proverif-hx`, an
+    /// `if: false` on a pinned job, `--models tr` instead of `--models hx` and an appended `|| true` are each a finding,
+    /// on the fixture and on the real `ci.yml`; the pristine texts give none.
+    #[test]
+    fn deleting_or_neutering_a_pinned_job_is_a_finding() {
+        let real = include_str!("../../.github/workflows/ci.yml");
+        let fixture = gate_ci("", "      - run: cargo xtask ci-fast --strict\n");
+        for (what, ci) in [("fixture", fixture.as_str()), ("ci.yml", real)] {
+            assert_eq!(all_ci_findings(ci), Vec::<String>::new(), "{what}");
+            let variants = [
+                ("v01 delete mutants", without_job(ci, "mutants")),
+                ("v02 delete proverif-hx", without_job(ci, "proverif-hx")),
+                ("delete ct", without_job(ci, "ct")),
+                ("delete mutants-shard", without_job(ci, "mutants-shard")),
+                (
+                    "v03 if: false",
+                    ci.replacen(
+                        "    if: always() && (github.event_name == 'schedule' || github.event_name == 'pull_request')\n",
+                        "    if: false\n",
+                        1,
+                    ),
+                ),
+                (
+                    "v05 --models tr",
+                    ci.replacen("proverif --models hx --jobs 4", "proverif --models tr --jobs 4", 1),
+                ),
+                (
+                    "v14 || true",
+                    ci.replacen("cargo xtask step --strict ct\n", "cargo xtask step --strict ct || true\n", 1),
+                ),
+                (
+                    "a second needs",
+                    ci.replacen("    needs: mutants-shard\n", "    needs: proverif-hx\n", 1),
+                ),
+                (
+                    "needs on ct",
+                    ci.replacen(
+                        "  ct:\n",
+                        "  ct:\n    needs: linux-fast\n",
+                        1,
+                    ),
+                ),
+            ];
+            for (name, text) in &variants {
+                assert_ne!(text.as_str(), ci, "{what} {name}: the edit did not apply");
+                let found = all_ci_findings(text);
+                assert!(!found.is_empty(), "{what} {name}: no finding");
+            }
+        }
+    }
+
+    /// M4 review C-5 (R-15): `uses` is read as YAML would — a flow-style step, a quoted key and a space before the
+    /// colon each give one finding; an action pinned by SHA (in any of those spellings but flow style) none.
+    #[test]
+    fn flow_style_and_quoted_uses_are_findings() {
+        let step = |line: &str| format!("jobs:\n  a:\n    runs-on: x\n    steps:\n{line}\n");
+        for line in [
+            "      - {uses: evil/action@main}",
+            "      - \"uses\": evil/action@main",
+            "      - uses : evil/action@main",
+            "      - 'uses': evil/action@main",
+        ] {
+            let found = workflow_findings("w", &step(line));
+            assert_eq!(found.len(), 1, "{line}: {found:?}");
+        }
+        let sha = "3d3c42e5aac5ba805825da76410c181273ba90b1";
+        for line in [
+            format!("      - uses: actions/checkout@{sha} # v7.0.1"),
+            format!("      - \"uses\": actions/checkout@{sha}"),
+            format!("      - uses : actions/checkout@{sha}"),
+        ] {
+            assert_eq!(
+                workflow_findings("w", &step(&line)),
+                Vec::<String>::new(),
+                "{line}"
+            );
+        }
+        // a flow-style pinned step is still refused: the reader does not parse flow style
+        assert_eq!(
+            workflow_findings(
+                "w",
+                &step(&format!("      - {{uses: actions/checkout@{sha}}}"))
+            )
+            .len(),
+            1
+        );
+        // flow style outside `jobs:` (the `on:` lists) is not inside a job
+        assert_eq!(
+            workflow_findings(
+                "w",
+                "on:\n  push:\n    branches: [main]\njobs:\n  a:\n    runs-on: x\n"
+            ),
+            Vec::<String>::new()
+        );
+    }
+
+    /// M4 review C-5 (R-16): workflow permissions other than exactly `contents: read`, job-level permissions, a
+    /// `defaults.run.shell`, a step `shell:` in a pinned job and `SECMP_PROVERIF` in the environment are each a
+    /// finding; every real workflow passes.
+    #[test]
+    fn workflow_permissions_shell_and_prover_override_are_findings() {
+        let good = gate_ci("", "      - run: cargo xtask ci-fast --strict\n");
+        assert_eq!(all_ci_findings(&good), Vec::<String>::new());
+        let block = "permissions:\n  contents: read\n";
+        let variants = [
+            ("write-all", good.replacen(block, "permissions: write-all\n", 1)),
+            ("no permissions", good.replacen(block, "", 1)),
+            ("contents: write", good.replacen(block, "permissions:\n  contents: write\n", 1)),
+            (
+                "an extra scope",
+                good.replacen(block, "permissions:\n  contents: read\n  id-token: write\n", 1),
+            ),
+            (
+                "job-level permissions",
+                gate_ci("    permissions:\n      contents: write\n      id-token: write\n", "      - run: cargo xtask ci-fast --strict\n"),
+            ),
+            (
+                "defaults.run.shell",
+                good.replacen(block, "permissions:\n  contents: read\ndefaults:\n  run:\n    shell: bash -c 'exit 0'\n", 1),
+            ),
+            (
+                "job defaults",
+                gate_ci("    defaults:\n      run:\n        shell: 'bash -c \"exit 0\"'\n", "      - run: cargo xtask ci-fast --strict\n"),
+            ),
+            (
+                "step shell",
+                gate_ci("", "      - run: cargo xtask ci-fast --strict\n        shell: 'bash -c \"exit 0\"'\n"),
+            ),
+            (
+                "env SECMP_PROVERIF",
+                good.replacen(block, "permissions:\n  contents: read\nenv:\n  SECMP_PROVERIF: /bin/true\n", 1),
+            ),
+        ];
+        for (name, text) in &variants {
+            assert_ne!(text, &good, "{name}: the edit did not apply");
+            assert!(!all_ci_findings(text).is_empty(), "{name}: no finding");
+        }
+        for (file, text) in [
+            ("ci.yml", include_str!("../../.github/workflows/ci.yml")),
+            (
+                "ci-dispatch.yml",
+                include_str!("../../.github/workflows/ci-dispatch.yml"),
+            ),
+            (
+                "fuzz-nightly.yml",
+                include_str!("../../.github/workflows/fuzz-nightly.yml"),
+            ),
+            (
+                "miri-full.yml",
+                include_str!("../../.github/workflows/miri-full.yml"),
+            ),
+        ] {
+            assert_eq!(
+                workflow_token_findings(file, text),
+                Vec::<String>::new(),
+                "{file}"
+            );
+            assert_eq!(
+                workflow_findings(file, text),
+                Vec::<String>::new(),
+                "{file}"
+            );
+        }
+    }
+
+    /// M4 review C-5 (V5 (d)): every delegation of a pinned line maps to a pinned job with its own gate line, and the
+    /// pinned `--models tr` comes with a pinned `proverif --models hx`; the constants are consistent with each other.
+    #[test]
+    fn delegations_map_to_pinned_jobs() {
+        assert_eq!(
+            delegation_findings(expect::REQUIRED_GATE_RUNS, expect::DELEGATED_TO),
+            Vec::<String>::new()
+        );
+        // a delegation without a mapping, or mapped to a job without a pinned line
+        let unmapped: Vec<(&str, &str)> = expect::DELEGATED_TO
+            .iter()
+            .copied()
+            .filter(|(step, _)| *step != "ct")
+            .collect();
+        let found = delegation_findings(expect::REQUIRED_GATE_RUNS, &unmapped);
+        assert!(found.iter().any(|f| f.contains("`ct`")), "{found:?}");
+        let without = |job: &str| -> Vec<(&'static str, &'static [&'static str])> {
+            expect::REQUIRED_GATE_RUNS
+                .iter()
+                .copied()
+                .filter(|(j, _)| *j != job)
+                .collect()
+        };
+        for job in ["ct", "mutants", "xwin-cross", "windows-native"] {
+            assert!(
+                !delegation_findings(&without(job), expect::DELEGATED_TO).is_empty(),
+                "{job}"
+            );
+        }
+        // `--models tr` without the HX line
+        assert!(!delegation_findings(&without("proverif-hx"), expect::DELEGATED_TO).is_empty());
+        // an unknown delegation
+        let extra: &[(&str, &[&str])] = &[(
+            "linux-full",
+            &["cargo xtask ci-full --strict --delegated fuzz"],
+        )];
+        assert!(!delegation_findings(extra, expect::DELEGATED_TO).is_empty());
+        // the constants: the gate lines and conditions cover exactly the pinned jobs, the required checks are pinned, the
+        // pinned needs name pinned jobs
+        let pinned: BTreeSet<String> = expect::PINNED_JOBS
+            .iter()
+            .map(|j| (*j).to_owned())
+            .collect();
+        let runs: BTreeSet<String> = expect::REQUIRED_GATE_RUNS
+            .iter()
+            .map(|(j, _)| (*j).to_owned())
+            .collect();
+        let conditions: BTreeSet<String> = expect::REQUIRED_JOB_CONDITIONS
+            .iter()
+            .map(|(j, _)| (*j).to_owned())
+            .collect();
+        assert_eq!(runs, pinned);
+        assert_eq!(conditions, pinned);
+        assert!(expect::REQUIRED_JOBS.iter().all(|j| pinned.contains(*j)));
+        for (job, needs) in expect::PINNED_JOB_NEEDS {
+            assert!(
+                pinned.contains(*job) && pinned.contains(*needs),
+                "{job} {needs}"
+            );
+        }
+        for (_, job) in expect::DELEGATED_TO {
+            assert!(pinned.contains(*job), "{job}");
+        }
     }
 
     /// F22 (Q-4): `miri-full.yml` has one job per package of `MIRI_PACKAGES`, each running its own `miri-full-<p>`

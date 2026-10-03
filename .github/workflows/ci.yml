@@ -1,16 +1,20 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # SecMPro CI (docs/06 §5, ADR-029). Every job runs `cargo xtask`, so local and CI gates are the same code.
-# The first four jobs below are the required checks of the `main-protection` ruleset (`proverif-hx`, added in M4, is
-# not one unless the owner adds it to the ruleset and `expect::REQUIRED_JOBS`). Their names exist only in this
-# workflow, and it has no manual-dispatch trigger (M2 review C2): a dispatch would add `skipped` check runs
-# under the required names, which count as passing. On-demand runs use `ci-dispatch.yml`.
-# Checked by `cargo xtask policy` (`workflow_findings`, `workflows`) as an accident guard against careless edits, not
-# a tamper-proof control (the check runs inside the jobs it guards; the real control is review of this file and of
-# `xtask/src/{expect,gates,ci}.rs`): no `pull_request_target`/`workflow_run` trigger; every action pinned by full
-# commit SHA; no `continue-on-error`; no plain-scalar `run:` that YAML would misparse; no manual-dispatch trigger
-# here and the required job names in no other workflow; job conditions pinned, no `needs:` on a required job, the
-# `cargo xtask` gate lines pinned; every artefact name ends with the run attempt. By convention, not
-# checked: a read-only token and checkout without persisted credentials. `--strict` turns every skipped step into a
+# The first four jobs below are the required checks of the `main-protection` ruleset (`expect::REQUIRED_JOBS`); the
+# jobs `linux-full` delegates to — `ct`, `mutants-shard` with its verdict job `mutants`, and `proverif-hx` (M4) — are
+# pinned like them (`expect::PINNED_JOBS`, M4 review C-5) and are required checks once the owner adds `ct`, `mutants`
+# and `proverif-hx` to the ruleset. The pinned names exist only in this workflow, and it has no manual-dispatch trigger
+# (M2 review C2): a dispatch would add `skipped` check runs under them, which count as passing. On-demand runs use
+# `ci-dispatch.yml`.
+# Checked by `cargo xtask policy` (`workflow_findings`, `workflow_token_findings`, `workflows`) as an accident guard
+# against careless edits, not a tamper-proof control (the check runs inside the jobs it guards; the real control is
+# review of this file and of `xtask/src/{expect,gates,ci}.rs`): no `pull_request_target`/`workflow_run` trigger; every
+# action pinned by full commit SHA; no flow-style YAML inside `jobs:`; no `continue-on-error`; no plain-scalar `run:`
+# that YAML would misparse; workflow permissions exactly `contents: read` and none per job; no override of the prover; no
+# manual-dispatch trigger here and the pinned job names in no other workflow; job conditions pinned, no `needs:` on a
+# pinned job but the pinned one of `mutants`, no `defaults:` and no step `shell:`, the `cargo xtask` gate lines pinned
+# and every `--delegated` step mapped to a pinned job; every artefact name ends with the run attempt. By convention, not
+# checked: checkout without persisted credentials. `--strict` turns every skipped step into a
 # failure. Caches hold only the pinned tools and are keyed by this workflow; release workflows (M11) must not
 # restore them.
 name: ci

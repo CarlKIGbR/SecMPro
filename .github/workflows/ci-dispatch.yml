@@ -8,8 +8,8 @@
 # `dispatch-mutants-shard`/`dispatch-mutants` = `mutants-shard`/`mutants`, `dispatch-proverif-hx` = `proverif-hx`; the
 # suites `full` and `all` run all of the delegated jobs. `cargo xtask win-test --backend github --dispatch` starts
 # `suite: windows`.
-# Checked by `cargo xtask policy` as every workflow (see the header of ci.yml). By convention, not checked: a
-# read-only token and checkout without persisted credentials.
+# Checked by `cargo xtask policy` as every workflow (see the header of ci.yml), including the read-only token. By
+# convention, not checked: checkout without persisted credentials.
 name: ci-dispatch
 
 on:

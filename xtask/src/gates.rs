@@ -149,6 +149,12 @@ pub(crate) fn hello(_: &Ctx) -> Result<Outcome> {
     Ok(Outcome::Pass(banners.join(" | ")))
 }
 
+/// The test targets `kat` runs a second time with libcrux's portable backend, per package.
+pub(crate) const KAT_PORTABLE_RERUN: &[(&str, &[&str])] = &[
+    ("secmp-crypto", &["kat_mlkem", "vectors"]),
+    ("secmp-proto", &["tr_vectors", "hx"]),
+];
+
 pub(crate) fn kat(ctx: &Ctx) -> Result<Outcome> {
     let found: BTreeSet<String> = ctx
         .ws
@@ -175,12 +181,11 @@ pub(crate) fn kat(ctx: &Ctx) -> Result<Outcome> {
     // so the run above tests the backend this host uses. A CPU without AVX2 runs the portable backend: the ML-KEM
     // KATs and the frozen vectors run again with the SIMD backends compiled out (own target directory, because
     // the build scripts do not declare the variables and Cargo would reuse a stale build) — `secmp-crypto`'s M1
-    // suites and, from M3, the `tr` suite of `secmp-proto` (ML-KEM-768 at every ratchet step; docs/06 §5).
+    // suites, from M3 the `tr` suite of `secmp-proto` (ML-KEM-768 at every ratchet step) and, from M4, its `hx`
+    // suite (the handshake's ML-KEM-768 encapsulations, the frozen HX vectors and the generator; docs/06 §5, M4
+    // review R-94).
     let portable_dir = ctx.root.join("target").join("kat-portable");
-    for (package, tests) in [
-        ("secmp-crypto", &["kat_mlkem", "vectors"][..]),
-        ("secmp-proto", &["tr_vectors"][..]),
-    ] {
+    for &(package, tests) in KAT_PORTABLE_RERUN {
         let mut args = vec![
             "nextest",
             "run",
@@ -202,7 +207,7 @@ pub(crate) fn kat(ctx: &Ctx) -> Result<Outcome> {
             .run()?;
     }
     Ok(Outcome::Pass(format!(
-        "KAT/differential packages: {} (expected set matches); ML-KEM KATs and frozen vectors (M1 suites, tr) also with libcrux's portable backend",
+        "KAT/differential packages: {} (expected set matches); ML-KEM KATs and frozen vectors (M1 suites, tr, hx) also with libcrux's portable backend",
         list(&found)
     )))
 }
@@ -5252,6 +5257,27 @@ mod tests {
             ["nextest", "run", "--locked", "--package", "secmp-proto"]
         );
         assert!(!nonkat.contains(&"--workspace") && !nonkat.iter().any(|a| a.contains("kat")));
+    }
+
+    /// M4 review R-94 (Codex EXT-6): the portable-backend rerun of `kat` covers the HX suite of `secmp-proto`.
+    #[test]
+    fn kat_portable_rerun_includes_the_hx_suite() -> Result<()> {
+        let proto: Vec<&str> = KAT_PORTABLE_RERUN
+            .iter()
+            .filter(|(package, _)| *package == "secmp-proto")
+            .flat_map(|(_, tests)| tests.iter().copied())
+            .collect();
+        assert!(proto.contains(&"hx"), "{proto:?}");
+        assert!(proto.contains(&"tr_vectors"), "{proto:?}");
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let manifest = std::fs::read_to_string(root.join("crates/secmp-proto/Cargo.toml"))?;
+        for t in &proto {
+            assert!(
+                manifest.contains(&format!("name = \"{t}\"")),
+                "{t} is not a test target of secmp-proto"
+            );
+        }
+        Ok(())
     }
 
     /// The string literals of `text` (between unescaped double quotes; escapes are kept as written).

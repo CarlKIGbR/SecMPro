@@ -1363,16 +1363,25 @@ expectations unchanged. Cannot be run on the Mac; the PR run's `windows-native` 
 8. Not in the Weisung: `linux-full` of run 37127247911 was cancelled at its 240-min limit inside ci-full step 9 (Miri),
    see "Open" below.
 
-### Open — `linux-full` of run 37127247911 (not covered by the Weisung)
+### Miri — `linux-full` of run 37127247911 cancelled at 240 min; six tests to `MIRI_SKIP` (FIX-4, R-99)
 
 `linux-full` (job 111214947831) ran 13:45:16–17:45:32 UTC and was cancelled at `timeout-minutes: 240` inside ci-full
 step [9] `miri` (started 15:12:48, 152.7 min until the cancel; `M04-evidence/linux-full-37127247911-miri-excerpt.txt`).
-The `secmp-proto` lib tests under Miri took 120.5 min (67 run, 67 filtered): `tr::ratchet::trial_work::
-trial_opens_every_candidate_every_call` ≈ 5 392 s, `wire::cell::tests::read_routes_pre_sizes_the_vector` ≈ 553 s,
-`tr::ratchet::single_conversion::any_skipped_single_conversion` ≈ 520 s, `wire::cell::tests::routes` ≈ 90 s,
-`app_message_and_batch` ≈ 85 s, `tr::entropy::tests::os_entropy_draws_fresh_values` ≈ 66 s (time between consecutive
-results); the cancel hit `tests/tr_smoke.rs`. `expect.rs:394` skips every `secmp-proto` test of 60 s or more under
-Miri after a local measurement; these M4 tests are not in `MIRI_SKIP`. Not changed here (outside the Weisung, a gate
-scope change): the next PR run's `linux-full` will most likely be cancelled the same way. Question to the reviewer:
-measure them locally and add `MIRI_SKIP` rows under the existing 60-s rule (the weekly `miri-full` keeps them), or
-another remedy.
+The 67 kept `secmp-proto` lib tests took 7232 s between first and last result. Six of them are 60 s or more
+(x86_64 GitHub runner, time between consecutive results):
+
+| Test | Seconds under Miri |
+|---|---|
+| `tr::ratchet::trial_work::trial_opens_every_candidate_every_call` | 5392 |
+| `wire::cell::tests::read_routes_pre_sizes_the_vector` | 553 |
+| `tr::ratchet::single_conversion::any_skipped_single_conversion` | 520 |
+| `wire::cell::tests::routes` | 90 |
+| `wire::cell::tests::app_message_and_batch` | 85 |
+| `tr::entropy::tests::os_entropy_draws_fresh_values` | 66 |
+
+Disposition (WEISUNG M4-FIX-4, commit `ddda4f5`): the existing M3 rule of `expect.rs` ("every test of 60 s or more is
+skipped here; the weekly `miri-full` runs them") applied to these six, one `MIRI_SKIP` row each with the measured time
+and its source; the doc comment above the list names the M4 measurement. No change to the rule, `MIRI_UNSUPPORTED`,
+budgets or thresholds. The next three tests (49/46/46 s) stay. The weekly `miri-full` keeps the six; they run natively
+on every target. The Miri gate was not run locally. PR run 37145562404 (a6157e8) superseded by the push of FIX-4
+(reviewer-accepted cancellation, one-time release).

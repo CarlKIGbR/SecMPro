@@ -336,6 +336,22 @@ fn group_duplicate_chunk_differing_first_seen_wins() {
     lib.assert_rejected(&[vec![bogus], h].concat(), "bogus before the honest chunk");
 }
 
+/// M4 review C-10 (R-24; ADR-044 (c), first-seen wins): a bogus chunk 1 of the honest `init_id` X comes first, so
+/// X's first complete group (bogus₁, h₀, h₂) is rejected; the byte-identical honest group that follows in the same call
+/// does not form again — `Rejected`, the OPK kept, the store unchanged. Controls: the honest group alone accepts, and
+/// a rejected group of another `init_id` does not stop the honest one (`group_rejected_then_other_init_id_accepts`).
+#[test]
+fn rejected_init_id_does_not_re_form_within_one_accept() {
+    let lib = Lib::new();
+    let h = lib.honest();
+    let bogus = bogus_chunk(&lib, 1, 55);
+    lib.assert_rejected(
+        &[vec![bogus], h.clone(), h.clone()].concat(),
+        "[bogus₁(X), h₀, h₁, h₂, h₀, h₁, h₂]",
+    );
+    accepted_ok(&lib, &h, "control: [h₀, h₁, h₂]");
+}
+
 #[test]
 fn group_duplicate_chunk_identical_ignored() {
     let lib = Lib::new();

@@ -27,6 +27,12 @@ use crate::wire::inv::{IksPublic, Profile};
 /// At most this many partially received envelopes are held while grouping; the oldest is evicted (ADR-044 (c)).
 pub const MAX_PARTIAL_GROUPS: usize = 8;
 
+/// At most this many complete groups are recorded as processed in one [`Responder::accept`] call (ADR-044 (c), M4
+/// review C-10): ⌊`QUEUE_CAPACITY` / 3⌋ = ⌊128 / 3⌋ (`docs/03:168`), the most complete groups one full invitation queue
+/// holds. A call that completes more stops there and rejects (fail-closed).
+pub const MAX_PROCESSED_GROUPS: usize = 42;
+const _: () = assert!(MAX_PROCESSED_GROUPS >= 128 / 3);
+
 #[cfg(feature = "kat")]
 std::thread_local! {
     /// The reject-site tag of the last [`Responder::accept`] on this thread (feature `kat`; M3 review R-45, F19), read
@@ -147,7 +153,9 @@ impl<K: PartialEq, C, const N: usize> Groups<K, C, N> {
 
 /// Add chunk `i` (< 3) of `init_id` (§6.5, ADR-044 (c)): a duplicate `(init_id, i)` is ignored whatever its bytes
 /// (identical: nothing to do; differing: first-seen wins); a new `init_id` evicts the oldest partial group once the
-/// `N` slots ([`MAX_PARTIAL_GROUPS`]) are full. Returns the index of the group if it is now complete.
+/// `N` slots ([`MAX_PARTIAL_GROUPS`]) are full. Returns the index of the group if it is now complete. A chunk of an
+/// `init_id` whose group was already processed in the same call never reaches `insert` ([`drive`] drops it, M4
+/// review C-10), so a rejected group does not form again.
 pub(crate) fn insert<K: PartialEq, C, const N: usize>(
     groups: &mut Groups<K, C, N>,
     init_id: K,
@@ -176,12 +184,48 @@ pub(crate) fn insert<K: PartialEq, C, const N: usize>(
     group.complete().then_some(at)
 }
 
+/// The `init_id`s of the complete groups [`drive`] processed and rejected in one call (ADR-044 (c), M4 review C-10): a
+/// fixed array of `R` slots, no `Vec` (the Kani harness of `drive` runs it as in production).
+pub(crate) struct Processed<K, const R: usize> {
+    ids: [Option<K>; R],
+    len: usize,
+}
+
+impl<K: PartialEq, const R: usize> Processed<K, R> {
+    pub(crate) const fn new() -> Self {
+        Self {
+            ids: [const { None }; R],
+            len: 0,
+        }
+    }
+
+    fn contains(&self, init_id: &K) -> bool {
+        self.ids
+            .iter()
+            .take(self.len)
+            .any(|x| x.as_ref() == Some(init_id))
+    }
+
+    /// Record `init_id`; `false` if all `R` slots are taken.
+    fn push(&mut self, init_id: K) -> bool {
+        let Some(slot) = self.ids.get_mut(self.len) else {
+            return false;
+        };
+        *slot = Some(init_id);
+        self.len = self.len.saturating_add(1);
+        true
+    }
+}
+
 /// The driver of §6.5 and §6.6 step 4 over already opened chunks `(init_id, i, chunk)`, in fetch order: group them
 /// ([`insert`]); for each group that completes, in the order of completion, `process` it (§6.6 steps 1–3, reading
 /// the store); the first group `process` accepts is the session: the OPK is deleted and the record consumed — the only call of
 /// `commit_accept`, after `process` succeeded — and `process`'s value returned. A group `process` rejects is discarded
-/// and the OPK kept; later groups are still processed. If none is accepted the result is [`Error::Rejected`];
-/// [`Error::Unavailable`] from `process` is passed up at once. A failing `commit_accept` rejects, the OPK kept.
+/// and the OPK kept; its `init_id` is recorded, and every later chunk of that `init_id` in this call is ignored — the
+/// first complete group of an `init_id` is the one that counts (first-seen wins, ADR-044 (c); M4 review C-10; the
+/// record lives for one call). Groups of other `init_id`s are still processed, up to [`MAX_PROCESSED_GROUPS`] rejected
+/// ones (then the call rejects). If none is accepted the result is [`Error::Rejected`]; [`Error::Unavailable`] from
+/// `process` is passed up at once. A failing `commit_accept` rejects, the OPK kept.
 pub(crate) fn drive<K: PartialEq, C, T, S: PrekeyStore>(
     items: impl IntoIterator<Item = (K, usize, C)>,
     store: &mut S,
@@ -190,7 +234,12 @@ pub(crate) fn drive<K: PartialEq, C, T, S: PrekeyStore>(
     mut process: impl FnMut(&Group<K, C>, &S) -> Result<T>,
 ) -> Result<T> {
     let mut groups: Groups<K, C, MAX_PARTIAL_GROUPS> = Groups::new();
+    let mut processed: Processed<K, MAX_PROCESSED_GROUPS> = Processed::new();
     for (init_id, i, chunk) in items {
+        // a group of this init_id was processed and rejected in this call: it does not form again (ADR-044 (c))
+        if processed.contains(&init_id) {
+            continue;
+        }
         let Some(done) = insert(&mut groups, init_id, i, chunk) else {
             continue;
         };
@@ -210,8 +259,13 @@ pub(crate) fn drive<K: PartialEq, C, T, S: PrekeyStore>(
                 return Ok(accepted);
             }
             Err(Error::Unavailable) => return Err(Error::Unavailable),
-            // a rejected complete group is discarded; the OPK is kept (§6.6 step 3)
-            Err(_) => {}
+            // a rejected complete group is discarded and its init_id recorded; the OPK is kept (§6.6 step 3). More
+            // rejected groups than a full queue holds: stop (fail-closed)
+            Err(_) => {
+                if !processed.push(group.init_id) {
+                    return Err(Error::Rejected);
+                }
+            }
         }
     }
     Err(Error::Rejected)
@@ -394,7 +448,125 @@ fn process(
 
 #[cfg(test)]
 mod tests {
-    use super::{Groups, MAX_PARTIAL_GROUPS, insert};
+    use super::{Groups, MAX_PARTIAL_GROUPS, MAX_PROCESSED_GROUPS, drive, insert};
+    use crate::error::{Error, Result};
+    use crate::prekeys::{OpkSecrets, PrekeyStore, SpkGeneration};
+
+    /// A store without keys for `drive`: it counts `commit_accept` calls and always commits.
+    #[derive(Default)]
+    struct Commits(u32);
+
+    impl PrekeyStore for Commits {
+        fn spk(&self, _spk_id: u32) -> Option<&SpkGeneration> {
+            None
+        }
+
+        fn opk(&self, _opk_id: u32) -> Option<&OpkSecrets> {
+            None
+        }
+
+        fn delete_opk(&mut self, _opk_id: u32) -> Result<()> {
+            Err(Error::Rejected)
+        }
+
+        fn commit_accept(&mut self, _opk_id: u32, _ld_id: &[u8; 16]) -> Result<()> {
+            self.0 = self.0.saturating_add(1);
+            Ok(())
+        }
+    }
+
+    /// `drive` over `items` with a `process` stub that rejects the groups whose first chunk is in `bad` and accepts
+    /// the others: the result, the `init_id`s `process` saw (in order), and the commits.
+    fn run(items: &[(u8, usize, u8)], bad: &[u8]) -> (Result<u8>, Vec<u8>, u32) {
+        let mut store = Commits::default();
+        let mut seen = Vec::new();
+        let result = drive(
+            items.iter().copied(),
+            &mut store,
+            1,
+            &[0; 16],
+            |group, _| {
+                seen.push(group.init_id);
+                match group.chunks.first().and_then(Option::as_ref) {
+                    Some(tag) if bad.contains(tag) => Err(Error::Rejected),
+                    _ => Ok(group.init_id),
+                }
+            },
+        );
+        (result, seen, store.0)
+    }
+
+    /// M4 review C-10 (R-24): the same input as `rejected_init_id_does_not_re_form_within_one_accept` through `drive`
+    /// with a counting `process`: `[bogus₁(X), h₀, h₁, h₂, h₀, h₁, h₂]` (the bogus chunk 1 first) completes X once,
+    /// rejected — `process` runs exactly once and nothing is committed; another `init_id` after it is still processed;
+    /// more rejected groups than [`MAX_PROCESSED_GROUPS`] stop the call.
+    #[test]
+    fn drive_does_not_re_form_a_rejected_init_id() {
+        let x = 7;
+        // chunk tags: 0 = honest, 9 = the bogus chunk 1; the stub rejects a group whose chunk 1 is the bogus one
+        let items = [
+            (x, 1, 9),
+            (x, 0, 0),
+            (x, 1, 0),
+            (x, 2, 0),
+            (x, 0, 0),
+            (x, 1, 0),
+            (x, 2, 0),
+        ];
+        let mut store = Commits::default();
+        let mut calls = 0_u32;
+        let result = drive(
+            items.iter().copied(),
+            &mut store,
+            1,
+            &[0; 16],
+            |group, _| {
+                calls = calls.saturating_add(1);
+                match group.chunks.get(1).and_then(Option::as_ref) {
+                    Some(9) => Err(Error::Rejected),
+                    _ => Ok(group.init_id),
+                }
+            },
+        );
+        assert_eq!(result.err(), Some(Error::Rejected));
+        assert_eq!(calls, 1, "the group of X is processed once");
+        assert_eq!(store.0, 0, "nothing committed");
+        // the honest group alone, and after a rejected group of another init_id: accepted
+        let honest = [(x, 0, 0), (x, 1, 0), (x, 2, 0)];
+        assert_eq!(run(&honest, &[]), (Ok(x), vec![x], 1));
+        let other: Vec<(u8, usize, u8)> = [(3, 0, 5), (3, 1, 5), (3, 2, 5)]
+            .into_iter()
+            .chain(honest)
+            .collect();
+        assert_eq!(run(&other, &[5]), (Ok(x), vec![3, x], 1));
+        // the chunks of a rejected init_id that come later start no group, whatever their bytes
+        let again: Vec<(u8, usize, u8)> = [
+            (3, 0, 5),
+            (3, 1, 5),
+            (3, 2, 5),
+            (3, 0, 0),
+            (3, 1, 0),
+            (3, 2, 0),
+        ]
+        .to_vec();
+        assert_eq!(run(&again, &[5]), (Err(Error::Rejected), vec![3], 0));
+        // MAX_PROCESSED_GROUPS rejected groups are recorded; one more stops the call before a later good group
+        let limit = u8::try_from(MAX_PROCESSED_GROUPS).unwrap_or(u8::MAX);
+        let many: Vec<(u8, usize, u8)> = (0..=limit)
+            .flat_map(|id| (0..3).map(move |i| (id, i, 5)))
+            .chain([(200, 0, 0), (200, 1, 0), (200, 2, 0)])
+            .collect();
+        let (result, seen, commits) = run(&many, &[5]);
+        assert_eq!(result.err(), Some(Error::Rejected));
+        assert_eq!(seen.len(), MAX_PROCESSED_GROUPS.saturating_add(1));
+        assert_eq!(commits, 0);
+        // one rejected group fewer: the good group after them is processed and committed
+        let fewer: Vec<(u8, usize, u8)> = (0..limit)
+            .flat_map(|id| (0..3).map(move |i| (id, i, 5)))
+            .chain([(200, 0, 0), (200, 1, 0), (200, 2, 0)])
+            .collect();
+        assert_eq!(run(&fewer, &[5]).0, Ok(200));
+    }
 
     type G = Groups<u8, u8, MAX_PARTIAL_GROUPS>;
 

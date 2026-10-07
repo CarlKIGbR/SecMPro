@@ -3,7 +3,6 @@
 //! handshake (cases 3 and 4), an independent composition of the handshake of spec §8.3 (written from the spec and
 //! `vectors/SCHEMA-4.11-link.md` with `secmp-crypto` primitives, not with `secmp_proto::link`), and the byte layouts
 //! of the records of D.1.
-#![allow(dead_code)]
 
 use std::collections::BTreeMap;
 use std::sync::OnceLock;

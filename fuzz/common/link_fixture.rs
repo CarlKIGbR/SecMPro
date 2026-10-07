@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-#![allow(clippy::unwrap_used, clippy::expect_used, dead_code)]
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! The fixed SecMP-LINK handshake of the `link_*` fuzz targets (M5): a relay whose every secret comes from
 //! `FixedEntropy`-style constant bytes (SHA-256 of a label and a counter), so its identity, `RELAYINFO`, the honest
 //! `HS1` and `HS2` and the honest link are the same in every run and on every machine.

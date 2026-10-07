@@ -1157,6 +1157,81 @@ fn clone_prekeys(k: &harness::Prekeys) -> harness::Prekeys {
     }
 }
 
+/// The inputs of one §6.4 key agreement of P-12, with the pieces the property varies.
+struct KidCase {
+    initiator: harness::Identity,
+    responder: harness::Identity,
+    keys: harness::Prekeys,
+    ld_id: [u8; 16],
+    link_key: [u8; 32],
+    ek_sk: Vec<u8>,
+    m_spk: [u8; 32],
+    m_opk: [u8; 32],
+}
+
+impl KidCase {
+    fn random(rng: &mut StdRng) -> Self {
+        Self {
+            initiator: random_identity(rng),
+            responder: random_identity(rng),
+            keys: random_prekeys(rng),
+            ld_id: rng.random(),
+            link_key: rng.random(),
+            ek_sk: random_bytes(rng, 32),
+            m_spk: rng.random(),
+            m_opk: rng.random(),
+        }
+    }
+
+    fn agree(&self) -> harness::Agreement {
+        self.agree_with(None, None, None)
+    }
+
+    /// The agreement with the initiator, the responder or the prekeys replaced.
+    fn agree_with(
+        &self,
+        initiator: Option<&harness::Identity>,
+        responder: Option<&harness::Identity>,
+        keys: Option<&harness::Prekeys>,
+    ) -> harness::Agreement {
+        harness::agree(&harness::AgreeIn {
+            i: initiator.unwrap_or(&self.initiator),
+            r: responder.unwrap_or(&self.responder),
+            keys: keys.unwrap_or(&self.keys),
+            ld_id: &self.ld_id,
+            link_key: &self.link_key,
+            ek_sk: &self.ek_sk,
+            m_spk: &self.m_spk,
+            m_opk: &self.m_opk,
+        })
+    }
+
+    /// The agreement with one of the six `K_id` inputs replaced by fresh randomness.
+    fn agree_varying(&self, rng: &mut StdRng, input: &str) -> harness::Agreement {
+        let mut keys = clone_prekeys(&self.keys);
+        let (mut ld_id, mut link_key, mut first_m, mut second_m) =
+            (self.ld_id, self.link_key, self.m_spk, self.m_opk);
+        match input {
+            "ld_id" => ld_id = rng.random(),
+            "link_key" => link_key = rng.random(),
+            "DH3" => keys.spk_dh = X25519Secret::from_bytes(&random_bytes(rng, 32)).unwrap(),
+            "ss_spk" => first_m = rng.random(),
+            "DH4" => keys.opk_dh = X25519Secret::from_bytes(&random_bytes(rng, 32)).unwrap(),
+            _ => second_m = rng.random(),
+        }
+        harness::agree(&harness::AgreeIn {
+            i: &self.initiator,
+            r: &self.responder,
+            keys: &keys,
+            ld_id: &ld_id,
+            link_key: &link_key,
+            ek_sk: &self.ek_sk,
+            m_spk: &first_m,
+            m_opk: &second_m,
+        })
+    }
+}
+
 /// P-12 `prop_k_id_independent_of_iks_i_dh1_dh2` (R-56): `K_id` is recomputed from the independent key agreement of
 /// §6.4 with `IKSPublic_I` (and so `DH1` and the transcript) varied, and with `DH2` varied (another responder
 /// identity): it is unchanged, while `SK` changes; with each of its six inputs (`ld_id`, `link_key`, `DH3`,
@@ -1164,114 +1239,59 @@ fn clone_prekeys(k: &harness::Prekeys) -> harness::Prekeys {
 /// secrets.
 #[test]
 fn prop_k_id_independent_of_iks_i_dh1_dh2() {
-    use harness::{AgreeIn, agree};
     let mut rng = rng_for(12);
     for case in 0..CASES * 2 {
         let ctx = format!("SECMP_PROPTEST_SEED={} case {case}", master_seed());
-        let (i, i2) = (random_identity(&mut rng), random_identity(&mut rng));
-        let (r, r2) = (random_identity(&mut rng), random_identity(&mut rng));
-        let keys = random_prekeys(&mut rng);
-        let ld_id: [u8; 16] = rng.random();
-        let link_key: [u8; 32] = rng.random();
-        let ek_sk = random_bytes(&mut rng, 32);
-        let (m_spk, m_opk): ([u8; 32], [u8; 32]) = (rng.random(), rng.random());
-        let run = |i: &harness::Identity,
-                   r: &harness::Identity,
-                   keys: &harness::Prekeys,
-                   ld: &[u8; 16],
-                   lk: &[u8; 32],
-                   m1: &[u8; 32],
-                   m2: &[u8; 32]| {
-            agree(&AgreeIn {
-                i,
-                r,
-                keys,
-                ld_id: ld,
-                link_key: lk,
-                ek_sk: &ek_sk,
-                m_spk: m1,
-                m_opk: m2,
-            })
-        };
-        let base = run(&i, &r, &keys, &ld_id, &link_key, &m_spk, &m_opk);
+        let c = KidCase::random(&mut rng);
+        let base = c.agree();
         // the library's K_id on the agreed secrets equals the harness's
         let secret = |b: &[u8]| SecretBytes::<32>::from_slice(b).unwrap();
         let lib = hx::k_id(
-            &ld_id,
-            &secret(&link_key),
+            &c.ld_id,
+            &secret(&c.link_key),
             &secret(base.dh.get(2).unwrap()),
             &secret(&base.ss_spk),
             &secret(base.dh.get(3).unwrap()),
             &secret(&base.ss_opk),
         )
         .unwrap();
-        assert_eq!(
-            lib.expose_secret(),
-            base.k_id.expose_secret(),
-            "{ctx}: library = harness"
-        );
+        assert_eq!(lib.expose_secret(), base.k_id.expose_secret(), "{ctx}: lib");
         // IKSPublic_I (DH1, transcript) varied: K_id unchanged, SK and DH1 changed
-        let other_i = run(&i2, &r, &keys, &ld_id, &link_key, &m_spk, &m_opk);
-        assert_ne!(other_i.dh.first(), base.dh.first(), "{ctx}: DH1 differs");
-        assert_ne!(other_i.transcript, base.transcript, "{ctx}: transcript");
+        let another_initiator = random_identity(&mut rng);
+        let by_i = c.agree_with(Some(&another_initiator), None, None);
+        assert_ne!(by_i.dh.first(), base.dh.first(), "{ctx}: DH1 differs");
+        assert_ne!(by_i.transcript, base.transcript, "{ctx}: transcript");
         assert_ne!(
-            other_i.sk.expose_secret(),
+            by_i.sk.expose_secret(),
             base.sk.expose_secret(),
             "{ctx}: SK"
         );
         assert_eq!(
-            other_i.k_id.expose_secret(),
+            by_i.k_id.expose_secret(),
             base.k_id.expose_secret(),
             "{ctx}: K_id independent of IKSPublic_I and DH1"
         );
         // DH2 varied (another responder identity IK_dh_R): K_id unchanged, SK changed
-        let other_r = run(&i, &r2, &keys, &ld_id, &link_key, &m_spk, &m_opk);
-        assert_ne!(other_r.dh.get(1), base.dh.get(1), "{ctx}: DH2 differs");
+        let another_responder = random_identity(&mut rng);
+        let by_r = c.agree_with(None, Some(&another_responder), None);
+        assert_ne!(by_r.dh.get(1), base.dh.get(1), "{ctx}: DH2 differs");
         assert_ne!(
-            other_r.sk.expose_secret(),
+            by_r.sk.expose_secret(),
             base.sk.expose_secret(),
             "{ctx}: SK (DH2)"
         );
         assert_eq!(
-            other_r.k_id.expose_secret(),
+            by_r.k_id.expose_secret(),
             base.k_id.expose_secret(),
             "{ctx}: K_id independent of DH2"
         );
         // each of the six inputs varied: K_id changes
-        let (ld2, lk2): ([u8; 16], [u8; 32]) = (rng.random(), rng.random());
-        let (m_spk2, m_opk2): ([u8; 32], [u8; 32]) = (rng.random(), rng.random());
-        let keys_spk = harness::Prekeys {
-            spk_dh: X25519Secret::from_bytes(&random_bytes(&mut rng, 32)).unwrap(),
-            ..clone_prekeys(&keys)
-        };
-        let keys_opk = harness::Prekeys {
-            opk_dh: X25519Secret::from_bytes(&random_bytes(&mut rng, 32)).unwrap(),
-            ..clone_prekeys(&keys)
-        };
-        for (name, other) in [
-            ("ld_id", run(&i, &r, &keys, &ld2, &link_key, &m_spk, &m_opk)),
-            ("link_key", run(&i, &r, &keys, &ld_id, &lk2, &m_spk, &m_opk)),
-            (
-                "DH3",
-                run(&i, &r, &keys_spk, &ld_id, &link_key, &m_spk, &m_opk),
-            ),
-            (
-                "ss_spk",
-                run(&i, &r, &keys, &ld_id, &link_key, &m_spk2, &m_opk),
-            ),
-            (
-                "DH4",
-                run(&i, &r, &keys_opk, &ld_id, &link_key, &m_spk, &m_opk),
-            ),
-            (
-                "ss_opk",
-                run(&i, &r, &keys, &ld_id, &link_key, &m_spk, &m_opk2),
-            ),
-        ] {
+        for input in ["ld_id", "link_key", "DH3", "ss_spk", "DH4", "ss_opk"] {
+            let other = c.agree_varying(&mut rng, input);
             assert_ne!(
                 other.k_id.expose_secret(),
                 base.k_id.expose_secret(),
-                "{ctx}: K_id changes with {name}"
+                "{ctx}: K_id changes with {input}"
             );
         }
     }

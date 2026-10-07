@@ -582,21 +582,6 @@ pub(crate) const MIRI_FEATURE_GATED: &[(&str, &str, &str)] = &[
     ),
     (
         "secmp-proto",
-        "link_client",
-        "required-features = [\"kat\"]: the SecMP-LINK client handshake tests (M5), natively in the kat step",
-    ),
-    (
-        "secmp-proto",
-        "link_frames",
-        "required-features = [\"kat\"]: the SecMP-LINK frame tests and properties (M5), natively in the kat step",
-    ),
-    (
-        "secmp-proto",
-        "link_relay",
-        "required-features = [\"kat\"]: the SecMP-LINK relay handshake tests (M5), natively in the kat step",
-    ),
-    (
-        "secmp-proto",
         "hx",
         "required-features = [\"kat\"]: the SecMP-HX integration suite (M4), natively in the kat step",
     ),

@@ -64,17 +64,8 @@ name = "link"
 path = "tests/link/main.rs"
 required-features = ["kat"]
 
-[[test]]
-name = "link_client"
-required-features = ["kat"]
 
-[[test]]
-name = "link_relay"
-required-features = ["kat"]
 
-[[test]]
-name = "link_frames"
-required-features = ["kat"]
 
 # The performance measurement of M3 (plan D11: encrypt + decrypt < 3 ms), OS randomness, feature `kat` off; run in
 # the release profile by `cargo xtask step perf`.

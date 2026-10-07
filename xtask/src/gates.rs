@@ -165,17 +165,7 @@ pub(crate) fn hello(_: &Ctx) -> Result<Outcome> {
 /// The test targets `kat` runs a second time with libcrux's portable backend, per package.
 pub(crate) const KAT_PORTABLE_RERUN: &[(&str, &[&str])] = &[
     ("secmp-crypto", &["kat_mlkem", "vectors"]),
-    (
-        "secmp-proto",
-        &[
-            "tr_vectors",
-            "hx",
-            "link",
-            "link_client",
-            "link_frames",
-            "link_relay",
-        ],
-    ),
+    ("secmp-proto", &["tr_vectors", "hx", "link"]),
 ];
 
 pub(crate) fn kat(ctx: &Ctx) -> Result<Outcome> {
@@ -5536,10 +5526,8 @@ mod tests {
             .collect();
         assert!(proto.contains(&"hx"), "{proto:?}");
         assert!(proto.contains(&"tr_vectors"), "{proto:?}");
-        // M5: the handshakes of the SecMP-LINK suites encapsulate with ML-KEM-768 and -1024
-        for t in ["link", "link_client", "link_frames", "link_relay"] {
-            assert!(proto.contains(&t), "{t}: {proto:?}");
-        }
+        // M5: the handshakes of the SecMP-LINK tests encapsulate with ML-KEM-768 and -1024
+        assert!(proto.contains(&"link"), "{proto:?}");
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
         let manifest = std::fs::read_to_string(root.join("crates/secmp-proto/Cargo.toml"))?;
         for t in &proto {

@@ -262,9 +262,18 @@ fn read_count(r: &mut Reader<'_>) -> Result<usize> {
 /// this crate's own tests (`cfg_attr(test, derive(Clone))`), and `wire::inv::Onion` is not `Copy`. Outside the tests a
 /// body has no `clone()`:
 ///
-/// ```compile_fail,E0599
-/// fn copy(body: &secmp_proto::wire::cell::BatchBody) -> secmp_proto::wire::cell::BatchBody {
-///     body.clone()
+/// ```compile_fail,E0277
+/// fn needs_clone<T: Clone>(_: &T) {}
+/// fn check(
+///     a: &secmp_proto::wire::cell::AppMessage,
+///     b: &secmp_proto::wire::cell::BatchBody,
+///     f: &secmp_proto::wire::cell::Fragment,
+///     c: &secmp_proto::wire::cell::ControlBody,
+/// ) {
+///     needs_clone(a);
+///     needs_clone(b);
+///     needs_clone(f);
+///     needs_clone(c);
 /// }
 /// ```
 ///

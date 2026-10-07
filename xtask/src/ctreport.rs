@@ -2805,4 +2805,17 @@ mod tests {
         );
         Ok(())
     }
+
+    /// M4 review VD4-3: the bench (`crates/secmp-testkit/benches/ct.rs`, which cannot depend on xtask) and the report
+    /// reader each hold the histogram bin count; both are 21 (ADR-041 Amendment 3 (2)).
+    #[test]
+    fn histogram_bin_count_is_pinned_in_both_places() {
+        let bench = include_str!("../../crates/secmp-testkit/benches/ct.rs");
+        let declared = bench
+            .lines()
+            .find_map(|l| l.strip_prefix("const HISTOGRAM_BINS: usize = "))
+            .and_then(|v| v.trim_end_matches(';').trim().parse::<usize>().ok());
+        assert_eq!(declared, Some(21), "bench HISTOGRAM_BINS");
+        assert_eq!(CONTROL_HISTOGRAM_BINS, 21);
+    }
 }

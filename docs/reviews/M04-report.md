@@ -1257,7 +1257,7 @@ n0/n1; `histogram`, `ct.rs:3503`), `host.cpu_model`/`host.microcode` (`/proc/cpu
 machdep.cpu.brand_string`, microcode `unknown`; `ct.rs:3585`), `bench_sha256` (`ct.rs:3622`) and
 `min_leak_same_content` (both classes 32 steps through `blend` with two delta buffers, one measurement, no verdict;
 `ct.rs:1509`). The gate (`ctreport.rs`): a report whose `sensitivity_control` carries `second` is re-derived by the
-target rule at the recorded `deciding_crop` within the printed rounding (`ControlPair::judge`, `ctreport.rs:198`;
+target rule at the recorded `deciding_crop` within the printed rounding (`ControlPair::judge`, `ctreport.rs:236`;
 `ct_sensitivity_pair`, `:284`) and must carry the Amendment 3 (2) evidence (`pair_record_findings`, `:449`); reports
 without `second` keep the raw rule (the committed report of run 37127247911 re-derives as its `CONTROL_FAIL`); the
 control's line in the job summary names the deciding crop, Δ (ns, floors) and t of both measurements; the
@@ -1385,3 +1385,54 @@ and its source; the doc comment above the list names the M4 measurement. No chan
 budgets or thresholds. The next three tests (49/46/46 s) stay. The weekly `miri-full` keeps the six; they run natively
 on every target. The Miri gate was not run locally. PR run 37145562404 (a6157e8) superseded by the push of FIX-4
 (reviewer-accepted cancellation, one-time release).
+
+## M4-FIX-5 — the two red jobs of PR run 37146709153 (WEISUNG M4-FIX-5, 2026-10-07)
+
+Head before `126d910` (= `origin/m04-hx`, PR #5). PR run 37146709153 on `126d910` is complete: green `linux-fast`,
+`xwin-cross`, `proverif-hx`, 8 mutants shards + merge, `ct`; red `linux-full` (step [9] miri only) and
+`windows-native` (nextest, 1 test).
+
+| Job | Id | Result | Evidence |
+|---|---|---|---|
+| linux-fast | 111272199041 | success | |
+| xwin-cross | 111272199219 | success | |
+| proverif-hx | 111272199273 | success (21 model hashes, per-file RESULT lines) | `M04-evidence/proverif-hx-37146709153.txt` |
+| mutants-shard 0…7 | 111272199173 … 111272199250 | success (163/163/162 ×6 mutants) | |
+| mutants (merge) | 111277273043 | success: crypto caught 168, missed 1, unviable 99 of 268 (62.7 %, WARNING unviable 36.9 % > 35 %, ADR-047 Am. 2); proto caught 733, missed 3, unviable 294 of 1030 (71.2 %); 4 documented survivors, 0 undocumented | `M04-evidence/mutants-merge-37146709153.txt` |
+| ct | 111272199216 | success, `run_verdict` PASS | `M04-evidence/ct-report-linux-37146709153-126d910.json` (+ progress, bench log) |
+| linux-full | 111272199191 | **failure**: step [9] miri (2708 s after R-99), doctest; Kani 25/25 on cap 50 (2851 s); fuzz, coverage, kat (incl. hx portable), proverif tr PASS; total 168.8 min | `linux-full-37146709153-steps.txt`, `linux-full-37146709153-miri-doctest-excerpt.txt` |
+| windows-native | 111272199240 | **failure**: nextest, 1 test (R-100) | `windows-native-37146709153-excerpt.txt` |
+
+**ct (C-2 (c)).** AMD EPYC 7763, TSC clock source, `q_eff` 1 tick. The sensitivity control `min_leak_control` decides FAIL
+(the injected one-byte early exit is caught) at the crop `p50` in both measurements: Δ 324.3 / 322.0 ticks = 13.24 /
+13.14 floors, |t| 4478 / 4303, class 0 slower. Three targets are SUB_FLOOR_SHIFT, none FAIL: `same_content_control`,
+`inv_fingerprint_compare`, `hx_accept_reject_inner`. `min_leak_same_content` (informative): max |t| 1.78 at p75,
+|Δ| ≤ 0.16 ticks at every crop.
+
+**R-100 (windows-native).** The Windows checkout has CRLF; `gates::tests::deleting_or_neutering_a_pinned_job_is_a_finding`
+edits `ci.yml` line-anchored (`include_str!`), variant v03 did not apply. Fix: one helper `gates::lf` normalises
+`\r\n` to `\n`, used by the policy reader (`workflows`) right after reading each workflow file and by the test; no
+`.gitattributes`, no `cfg(windows)`. Dictated test `policy_reads_crlf_workflows_like_lf` (the committed `ci.yml` as CRLF
+gives no finding; each pin-edit variant gives the same finding on CRLF and LF); the variants moved into
+`pin_edit_variants`, shared by both tests. Not run on Windows (owner-operated VM, no run before the push).
+
+**R-101 (linux-full, Miri).** `cargo miri test --doc` with `nightly-2026-09-21`: the `compile_fail,E0599` doctest of
+`wire::cell::wire_bodies_are_not_clone_outside_tests` reports E0308 there (method resolution clones the reference),
+E0599 on stable 1.98.1. Fix: the first doctest asserts the missing `Clone` through a trait bound (`needs_clone<T: Clone>`),
+`compile_fail,E0277`, for all four bodies `AppMessage`, `BatchBody`, `Fragment`, `ControlBody` (all in
+`secmp_proto::wire::cell`). Both toolchains: 3 doctests ok — stable `cargo test --doc -p secmp-proto`; nightly
+`cargo miri test --doc -p secmp-proto` with `LIBCRUX_DISABLE_SIMD128/256=1` (`cargo miri` ran on the Mac).
+
+**LEAK.** `ct_gate_timeout_is_a_fail_naming_the_target` passes on Windows but nextest marks it LEAK (the `ping` child
+outlives the killed `cmd.exe`). A tree kill (`taskkill /F /T`) needs 9 lines and cannot be run here; not fixed, noted as
+F-M5 in the review §F (decision 3: more than 5 lines).
+
+**VD4 nits.** VD4-4: ADR-041 Am. 3 `<sha>` → `e387c3e`. VD4-5: `ControlPair::judge` is at `ctreport.rs:236`.
+VD4-3: the bench cannot depend on xtask; the two constants stay and the test
+`histogram_bin_count_is_pinned_in_both_places` (`ctreport.rs`) reads the bench source and asserts both are 21.
+VD3-1/VD4-1 (Kani cost under the 50 cap) closed: 25/25 in 2851 s on run 37146709153.
+
+Evidence files (`docs/reviews/M04-evidence/`): `ct-report-linux-37146709153-126d910.json`,
+`ct-progress-linux-37146709153.jsonl`, `ct-bench-linux-37146709153.log`, `mutants-merge-37146709153.txt`,
+`linux-full-37146709153-steps.txt`, `linux-full-37146709153-miri-doctest-excerpt.txt`,
+`windows-native-37146709153-excerpt.txt`, `proverif-hx-37146709153.txt`, `fix5-tests-458bfaf.txt`.

@@ -39,8 +39,8 @@ Facts (SPEC-QUESTIONS.md state "Weisung REF-M4-1"): `"schema": 5`; **30 cases = 
 `first-msg-not-handshake`. The positive run is "restructured" (reading confirmation) and the responder cases run
 "R after cases 1–4" with "case 6's cells"; **Fill-in from SCHEMA-4.10:** the exact list of the 8 positives (not provided).
 
-Vectors are unchanged by the reviewer's decisions of 2026-10-01. The retained-SPK positive has no vector; SQ-28 (for the
-ref): add a retained-SPK positive case at the next vector freeze.
+Vectors are unchanged by the reviewer's decisions of 2026-10-01. The retained-SPK positive has no vector; WEISUNG_REF item RF-1
+(retained-SPK positive), delivered with the R-66/R-90 re-freeze: add a retained-SPK positive case at the next vector freeze.
 
 Test `hx_vectors` (one assertion message per case id) compares, byte for byte, every output the ref emits:
 

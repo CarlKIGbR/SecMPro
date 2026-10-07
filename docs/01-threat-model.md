@@ -45,7 +45,7 @@ Method: assets → adversaries → per-adversary "can / cannot learn or do" tabl
 |---|---|
 | Message content, message length, message type, whether a cell is real or cover traffic | Cells are E2E encrypted with encrypted headers and fixed size; dummies are ratchet messages (spec §7, §10) |
 | Sender identity, recipient identity, any long-term key of any user | No identifiers exist; queue keys are per-queue pseudonyms; identity keys only appear inside E2E/invitation-encrypted blobs, with an inner layer keyed by ephemeral material so that even a later invitation leak does not expose the invitee's identity to a recording relay (spec §6.4–6.5) |
-| Which two queues form a conversation — **cryptographically** | `rid` and `sid` are independent derived ids; in Strict mode every queue is reached over its own Tor circuit; identical `HandshakeInit` cells are indistinguishable from other cells |
+| Which two queues form a conversation — **cryptographically** | `rid` and `sid` are independent derived ids; in Strict mode every queue is reached over its own Tor circuit; identical handshake cells (App. D `HandshakeCell`) are indistinguishable from other cells |
 | Client IP addresses (Tor mode) | Onion service; the relay sees only the rendezvous circuit |
 | Content of invitations / prekeys | Link data is encrypted with a key the relay never sees |
 | Partition users by handing out per-user relay keys or access keys undetected | `RelayInfo` is fetched per link and never cached; the access-key commitment `akc` is pinned in every `RelayRef` (spec §5.3, §8.2, §9.6) |
@@ -158,7 +158,7 @@ Therefore the product wording MUST be: *"On Windows, SecMPro removes its windows
 | Client ↔ relay link | Relay pinned by fingerprint; client anonymous by design | AEAD frames, counters | n/a (anonymous) | PQ hybrid link inside Tor; fixed frames | Per-link rate limits; Tor PoW; queue capacity | Relay process sandboxed |
 | Relay ↔ queue store | Capability signatures | Relay is the store (trusted for availability only) | n/a | Cells opaque | Memory budget; eviction | n/a |
 | Contact ↔ contact (E2E) | HX authentication + SAS | Ratchet MAC + session binding + key commitment | Deniable by design (no signatures on messages) | Encrypted headers; padding | Per-queue capacity | n/a |
-| Invitation channel | Fingerprint commitment; SAS | Link data AEAD + COM | n/a | Invitation-key encryption of HandshakeInit | One-time consumption; expiry | n/a |
+| Invitation channel | Fingerprint commitment; SAS | Link data AEAD + COM | n/a | Invitation-key encryption of handshake cells (App. D `HandshakeCell`) | One-time consumption; expiry | n/a |
 | UI ↔ core | n/a (in-process) | n/a | n/a | UI holds no keys; screen security | n/a | v1.x process split |
 | Store ↔ disk | n/a | SQLCipher HMAC | n/a | Encrypted, wrapped keys, no temp files | n/a | n/a |
 
@@ -177,7 +177,7 @@ Linkability: queues unlinkable in Strict mode; identity keys never on the relay.
 | RR-5 | RAM-only relay: every restart loses undelivered cells (re-sent from outboxes) and briefly exposes a burst of re-creation commands | Low | Deterministic queue ids (spec §9.1); random re-creation delays |
 | RR-11 | Statistical correlation of a client's queues and of conversation pairs through lifecycle timing (start/stop/rotation) | Medium (grows in importance with the user base) | §10.6 mitigations; re-assess at 100+ users; mixnet transport option |
 | RR-12 | Linux capture exclusions are user-space settings; same-user malware can clear them | Medium | Poll-and-lock heuristic; Flatpak sandboxing (v1.x); honest wording |
-| RR-13 | Handshake envelope exposure if an invitation leaks *and* the relay recorded the cells: only the outer layer is affected; identity stays protected by `K_id` once the OPK is deleted | Low | Spec §6.4–6.5 |
+| RR-13 | Handshake envelope exposure if an invitation leaks *and* the relay recorded the cells: only the outer layer is affected; identity stays protected by `K_id` once the OPK is deleted and EK_I discarded | Low | Spec §6.4–6.5 |
 | RR-14 | Eviction notices tell a contact that the recipient was offline for longer than `QUEUE_CAPACITY × P_q` | Low | Documented; receipts reveal the same |
 | RR-6 | Constant-rate traffic cost may push users to Low-bandwidth mode (weaker) | Medium | Measure in M6; tune `T`/`F` |
 | RR-7 | Arti (client) is pre-1.0 with breaking API changes | Medium | Pinned version + CI upgrade job |

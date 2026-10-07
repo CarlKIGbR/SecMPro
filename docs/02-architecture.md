@@ -108,7 +108,7 @@ Concurrency: a session is owned by one `SessionActor` task; the send-link and re
 ```
 [Invitation created] ──LINK_PUT──► relay      (inviter, responder)
 [Invitation scanned] ──LINK_GET──► relay      (invitee, initiator)
-  initiator: create own recv-queue → HandshakeInit (3 cells over invitation queue)
+  initiator: create own recv-queue → handshake cells (App. D `HandshakeCell`) (3 cells over invitation queue)
   responder: process → take a pooled recv-queue → first reply (RouteUpdate) over initiator's queue; invitation queue retired with overlap
   both: show safety number; contact = unverified until confirmed
 [Steady state] each contact = 2 queues; constant-rate SEND/FETCH per §10 of the spec

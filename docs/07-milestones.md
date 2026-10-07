@@ -90,7 +90,7 @@ v1.1: M16 → M17 → M18 → M19 → M20 (release)
 - `secmp-proto::hx`: `Initiator::start(accepted: &InviteeAccepted /* the §5.5 result of `inv::invitee_check` */, own_keys: &InitiatorKeys /* iks + ik_dh, no signing key */, reply_routes, profile, now, entropy) -> Result<(HandshakeCells, RatchetState)>` (EK_I wiped at the end of `agree`, before the ratchet is initialised — stricter than `docs/03:325`, ADR-044 (b); `release(state, persist)` (`HandshakeCells::release`) hands the cells and the caller's state at release time to one persist call, M4 review C-8; the sketch of TEST-SPEC-M4:27 (O-12) is superseded) and `Responder::accept(cells, record, store, own_keys, entropy) -> Accepted { state, peer, routes, profile }` per §6.4–6.6 (outer/inner layers, `K_id`; the OPK is deleted and the record consumed in one `commit_accept`; uniform `Error::Rejected`, state and store unchanged on rejection). The API follows §6.4–§6.6, not the earlier sketch (reviewer decision O-12, 2026-10-01).
 - Prekey store trait with in-memory implementation (SPK weekly, retention rule, OPK single use, RPK).
 - `ref/` HX; frozen vectors for a full run with fixed randomness (identical `SK`, `transcript`, `K_id`, cells); negative tests: wrong fingerprint, expired bundle, bad signature, missing/used OPK, zero DH, tampered chunk, garbage cells interleaved, replayed envelope.
-- `formal/hx.pv`: SK secrecy (classical and with the DH oracle broken), injective agreement on the transcript, identity confidentiality of I under `K_id`, plus the reviewer's expected-false queries (PQ authentication, KCI).
+- `formal/hx.pvl` + `formal/hx/*.pv`: SK secrecy (classical and with the DH oracle broken), injective agreement on the transcript, identity confidentiality of I under `K_id`, plus the reviewer's expected-false queries (PQ authentication, KCI).
 
 **Acceptance.** Vectors pass; negative tests rejected with uniform errors; ProVerif matches `CLAIMS.md`.
 
@@ -104,7 +104,7 @@ v1.1: M16 → M17 → M18 → M19 → M20 (release)
 - `secmp-proto::link`: sans-IO handshake state machines (client/relay) and frame codec (§8), multi-frame continuation.
 - `secmp-relay` (library + binary): connection task, executor for the eight commands, `QueueStore` with derived ids and idempotent creation, `LinkDataStore` with owner-status mode, `MemoryBudget`, sweeper, `RelayInfo` per HELLO, tokens/`akc`, rate limits, graceful drain, `keygen`/`rotate-static`, config; a `tracing` test that fails on any per-request field.
 - `secmp-transport::RelayQueueTransport` over an abstract byte stream; `secmp-testkit::Harness` (relay + N clients, virtual clock, scenario DSL).
-- `ref/` LINK; frozen vectors (HS1/HS2, first three frames each way, every command/response layout); `formal/link.pv`.
+- `ref/` LINK; frozen vectors (HS1/HS2, first three frames each way, every command/response layout); `formal/link.pvl` + `formal/link/*.pv`.
 
 **Acceptance.** Harness: two clients create queues (pool), exchange 1 000 cells each way, relay evicts at capacity and reports ids, sweeper expires by bucket, memory budget refuses new queues at the limit; **relay restart → `ERR_NOQUEUE` → identical queues re-created → conversation continues without a new invitation**; all responses `FRAME_SIZE`; byte-level test proves error and success frames are indistinguishable; fuzz target for the executor; relay unit tests for every command; `FETCH` idempotence and cumulative ack verified.
 

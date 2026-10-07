@@ -325,17 +325,17 @@ Note: the SQ-25 follow-up (§5.5 clarification) is carried by ADR-043 (h); nothi
 
 **Decision.**
 
-(a) §11.1 wording errata (`docs/03:699`): "mutual classical authentication" means: I→R injective agreement on the transcript (H5); R→I implicit (DH2/DH3 + bundle signature) plus key confirmation on the first decrypted reply (H6b).
+(a) §11.1 wording errata (`docs/03:707`): "mutual classical authentication" means: I→R injective agreement on the transcript (H5); R→I implicit (DH2/DH3 + bundle signature) plus key confirmation on the first decrypted reply (H6b).
 
-(b) Initiator EK_I discard (§6.4, `docs/03:323`): the initiator MUST zeroize EK_I's secret immediately after the three cells are sealed and the initiator RatchetState is initialised; `Initiator::start` returns no EK secret; the persisted initiator state after `start` contains no EK_I secret.
+(b) Initiator EK_I discard (§6.4, `docs/03:325`): the initiator MUST zeroize EK_I's secret immediately after the three cells are sealed and the initiator RatchetState is initialised; `Initiator::start` returns no EK secret; the persisted initiator state after `start` contains no EK_I secret.
 
-(c) Grouping (§6.5, `docs/03:340`): a duplicate (init_id, i) with identical bytes is ignored; with differing bytes the later one is discarded (first-seen wins); after a rejected complete group that group is discarded, the OPK is kept and later groups with other init_ids are processed; at most 8 partial groups are stored, oldest evicted.
+(c) Grouping (§6.5, `docs/03:342`): a duplicate (init_id, i) with identical bytes is ignored; with differing bytes the later one is discarded (first-seen wins); after a rejected complete group that group is discarded, the OPK is kept and later groups with other init_ids are processed; at most 8 partial groups are stored, oldest evicted.
 
-(d) Expiry at the responder (§6.6, `docs/03:346-349`, and §5.2, `docs/03:211`): §6.6 takes no time; expiry is enforced by the invitation-record lifecycle (§5.2): the client MUST NOT call `accept` for an expired record and retires its queue; `accept` has no clock parameter.
+(d) Expiry at the responder (§6.6, `docs/03:348-351`, and §5.2, `docs/03:211`): §6.6 takes no time; expiry is enforced by the invitation-record lifecycle (§5.2): the client MUST NOT call `accept` for an expired record and retires its queue; `accept` has no clock parameter.
 
-(e) first_msg constraints (§6.5, `docs/03:330`, and §9.8, `docs/03:640`): the first_msg header MUST carry n = 0 and pn = 0; R rejects otherwise (uniform error, OPK kept); seq/ts follow §7.6 without further constraint; the Handshake content MUST contain at least one route of a known kind, else R rejects (uniform error, OPK kept).
+(e) first_msg constraints (§6.5, `docs/03:332`, and §9.8, `docs/03:648`): the first_msg header MUST carry n = 0 and pn = 0; R rejects otherwise (uniform error, OPK kept); seq/ts follow §7.6 without further constraint; the Handshake content MUST contain at least one route of a known kind, else R rejects (uniform error, OPK kept).
 
-(f) Reflection (§6.6 step 2, `docs/03:347`): R MUST reject an envelope whose IKSPublic_I equals IKSPublic_R (reflection), uniform error, OPK kept; an IKS equal to an existing contact's is client-core policy (M7), not a handshake rejection.
+(f) Reflection (§6.6 step 2, `docs/03:349`): R MUST reject an envelope whose IKSPublic_I equals IKSPublic_R (reflection), uniform error, OPK kept; an IKS equal to an existing contact's is client-core policy (M7), not a handshake rejection.
 
 **Alternatives.** None recorded.
 
@@ -374,7 +374,7 @@ Amended 2026-10-03 — Accepted (Reviewer, Owner-Delegation 30.09.2026).
 
 ### ADR-048 — Spec clarifications rev 2.6: SecMP-LINK/Q readings, editorial errata, `inv_sid` derivation, RT-3
 
-**Status:** Proposed (reviewer) — owner default +24 h after delivery. **Date:** 2026-10-03. **Deciders:** reviewer
+**Status:** Proposed (reviewer) — owner default +24 h after delivery; ratified by default 2026-10-04 20:45 UTC (owner memo of 2026-10-03; BRIEF_M5 §11 (1)); the docs/03 rev 2.6 text and the Part 5 errata land in the docs commit after the ratification. **Date:** 2026-10-03. **Deciders:** reviewer
 (Fable) proposes; owner (Christopher) ratifies — changes to `docs/03` are owner-reserved (`docs/03:3`). Items (o), (p)
 and the optional (q) are the owner-class OPEN-M5 defaults (OPEN-M5-06, -02, -01); they go into the owner memo with the
 same +24 h default.

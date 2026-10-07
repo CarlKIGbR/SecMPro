@@ -1,0 +1,123 @@
+Disassembly check (WEISUNG M4-FIX-7 step 4, ADR-042 Amendment 4, R-103): `blend` with one delta under an opaque
+per-call mask, aarch64-apple-darwin.
+
+Source: crates/secmp-testkit/benches/ct.rs of b138a2b. The binary was built from the working tree on 1834d54 with
+that change uncommitted; the file's blob there, 045523998ac46f8cb9c83ae9edf01947af239f68 (`git hash-object`), is
+the blob of `git rev-parse b138a2b:crates/secmp-testkit/benches/ct.rs`. Binary: `env PATH=…
+CARGO_PROFILE_RELEASE_STRIP=none CARGO_PROFILE_BENCH_STRIP=none cargo bench --locked -p secmp-testkit --features kat
+--bench ct --no-run --target-dir target/disasm` (the release profile strips the symbols; everything else is the
+gate's profile: opt-level 3, fat LTO, codegen-units 1, panic abort) → target/disasm/release/deps/ct-46c3d08297ea7114
+(sha256 d348c1e769665e01cb46219365f7d7b6b1f7bcf76ae80ec8761d8f7893ce4069); `llvm-objdump -d -C --no-show-raw-insn`
+(LLVM 22.1.8-rust-1.98.1-stable, rustup llvm-tools of 1.98.1). The two earlier forms:
+docs/reviews/M03-evidence/ct-blend-disasm-aarch64-bc5088b.txt (mask without `black_box`: unswitched into `memcpy`
+and an XOR loop) and docs/reviews/M03-evidence/ct-blend-disasm-aarch64-fix-ec618c8.txt (two delta buffers selected by
+index, ADR-042 Amendment 2).
+
+Source (b138a2b):
+
+    fn blend(base: &[u8], deltas: &Deltas, class: usize, out: &mut [u8]) {
+        let m: u8 = black_box(u8::from((class & 1) == 0).wrapping_neg());
+        let delta = black_box(deltas.0.as_slice());
+        for ((o, b), d) in out.iter_mut().zip(base).zip(delta) {
+            *o = b ^ (d & m);
+        }
+    }
+
+`ct::blend`, the whole symbol, verbatim (the only symbol whose name contains `blend`; 44 `bl 0x100030600 <ct::blend>`
+call sites in the binary; no clone):
+
+0000000100030600 <ct::blend>:
+100030600:     	sub	sp, sp, #0x20
+100030604:     	orr	w8, w4, #0xfe
+100030608:     	add	w8, w8, #0x1
+10003060c:     	strb	w8, [sp, #0xf]
+100030610:     	add	x8, sp, #0xf
+100030614:     	stp	x2, x3, [sp, #0x10]
+100030618:     	add	x8, sp, #0x10
+10003061c:     	cmp	x1, x6
+100030620:     	csel	x8, x1, x6, lo
+100030624:     	ldr	x9, [sp, #0x18]
+100030628:     	cmp	x9, x8
+10003062c:     	csel	x9, x9, x8, lo
+100030630:     	cbz	x9, 0x100030730 <ct::blend+0x130>
+100030634:     	ldr	x10, [sp, #0x10]
+100030638:     	ldrb	w8, [sp, #0xf]
+10003063c:     	cmp	x9, #0x8
+100030640:     	b.hs	0x10003064c <ct::blend+0x4c>
+100030644:     	mov	x11, #0x0               ; =0
+100030648:     	b	0x100030704 <ct::blend+0x104>
+10003064c:     	cmp	x9, #0x40
+100030650:     	b.hs	0x10003065c <ct::blend+0x5c>
+100030654:     	mov	x11, #0x0               ; =0
+100030658:     	b	0x1000306c4 <ct::blend+0xc4>
+10003065c:     	and	x12, x9, #0x38
+100030660:     	and	x11, x9, #0x7fffffffffffffc0
+100030664:     	dup.16b	v0, w8
+100030668:     	add	x13, x5, #0x20
+10003066c:     	add	x14, x0, #0x20
+100030670:     	add	x15, x10, #0x20
+100030674:     	and	x16, x9, #0x7fffffffffffffc0
+100030678:     	ldp	q1, q2, [x15, #-0x20]
+10003067c:     	ldp	q3, q4, [x15], #0x40
+100030680:     	and.16b	v1, v0, v1
+100030684:     	and.16b	v2, v0, v2
+100030688:     	and.16b	v3, v0, v3
+10003068c:     	and.16b	v4, v0, v4
+100030690:     	ldp	q5, q6, [x14, #-0x20]
+100030694:     	ldp	q7, q16, [x14], #0x40
+100030698:     	eor.16b	v1, v5, v1
+10003069c:     	eor.16b	v2, v6, v2
+1000306a0:     	eor.16b	v3, v7, v3
+1000306a4:     	eor.16b	v4, v16, v4
+1000306a8:     	stp	q1, q2, [x13, #-0x20]
+1000306ac:     	stp	q3, q4, [x13], #0x40
+1000306b0:     	subs	x16, x16, #0x40
+1000306b4:     	b.ne	0x100030678 <ct::blend+0x78>
+1000306b8:     	cmp	x9, x11
+1000306bc:     	b.eq	0x100030730 <ct::blend+0x130>
+1000306c0:     	cbz	x12, 0x100030704 <ct::blend+0x104>
+1000306c4:     	mov	x15, x11
+1000306c8:     	and	x11, x9, #0x7ffffffffffffff8
+1000306cc:     	dup.8b	v0, w8
+1000306d0:     	sub	x12, x15, x11
+1000306d4:     	add	x13, x10, x15
+1000306d8:     	add	x14, x0, x15
+1000306dc:     	add	x15, x5, x15
+1000306e0:     	ldr	d1, [x13], #0x8
+1000306e4:     	and.8b	v1, v0, v1
+1000306e8:     	ldr	d2, [x14], #0x8
+1000306ec:     	eor.8b	v1, v2, v1
+1000306f0:     	str	d1, [x15], #0x8
+1000306f4:     	adds	x12, x12, #0x8
+1000306f8:     	b.ne	0x1000306e0 <ct::blend+0xe0>
+1000306fc:     	cmp	x9, x11
+100030700:     	b.eq	0x100030730 <ct::blend+0x130>
+100030704:     	sub	x9, x9, x11
+100030708:     	add	x10, x10, x11
+10003070c:     	add	x12, x0, x11
+100030710:     	add	x11, x5, x11
+100030714:     	ldrb	w13, [x10], #0x1
+100030718:     	and	w13, w8, w13
+10003071c:     	ldrb	w14, [x12], #0x1
+100030720:     	eor	w13, w14, w13
+100030724:     	strb	w13, [x11], #0x1
+100030728:     	subs	x9, x9, #0x1
+10003072c:     	b.ne	0x100030714 <ct::blend+0x114>
+100030730:     	add	sp, sp, #0x20
+100030734:     	ret
+
+Registers (LTO passes the arguments split): x0/x1 = base pointer/length, x2/x3 = the delta slice's pointer/length,
+w4 = class, x5/x6 = out pointer/length.
+
+Finding: one loop, not versioned on the mask or the class. The mask is computed without a branch
+(`orr w8, w4, #0xfe; add w8, w8, #0x1`: low byte 0xFF for an even class, 0x00 for an odd one), stored to the stack
+and reloaded (`strb w8, [sp, #0xf]` … `ldrb w8, [sp, #0xf]`: `black_box(m)`); the delta slice goes through memory
+the same way (`stp x2, x3, [sp, #0x10]` … `ldr x9, [sp, #0x18]`, `ldr x10, [sp, #0x10]`). The mask is broadcast into a
+vector register (`dup.16b v0, w8` at 0x100030664; `dup.8b v0, w8` at 0x1000306cc for the 8-byte tail) and enters the
+XOR only through `and` (main loop 0x100030678–0x1000306b4, 64 B per iteration: `ldp` delta, `and.16b` with v0, `ldp`
+base, `eor.16b`, `stp` out; then an 8-byte and a 1-byte tail, `and w13, w8, w13` in the latter). Every conditional
+branch tests a length or a loop counter (`cbz x9`, `cmp x9, #0x8`/`#0x40` + `b.hs`, `subs`/`adds` + `b.ne`,
+`cmp x9, x11` + `b.eq`, `cbz x12`); w8 is never compared and no branch depends on it or on w4. The loop length is
+the minimum of the three slice lengths, the same for both classes. No `bl` in the symbol, so no `memcpy`. Both
+classes therefore execute the same instructions on the same addresses (`base`, the one delta, `out`) and differ only
+in the value of w8. The fallback of the Weisung (`black_box(m)` inside the loop body) was not needed.

@@ -1440,3 +1440,76 @@ Evidence files (`docs/reviews/M04-evidence/`): `ct-report-linux-37146709153-126d
 **Run 4 (37593310636, `86c481e`).** `windows-native`: 1 failure (`proverif_model_hashes_are_pinned`, CRLF double conversion in the test, R-102); `ct`, mutants, `proverif-hx` PASS; `linux-full` pending at the time of writing.
 
 **FIX-6.** R-102: the test builds its CRLF variant from LF and checks a second conversion; xtask `nextest` runs `--no-fail-fast`; CRLF audit of the xtask tests (`lf()` on 14 repository-text reads). `cargo nextest run -p xtask`: 146/146; workspace `--all-features`: 576/576; `step --strict clippy policy`: PASS; no change to `vectors/`, `docs/03`, `docs/01`, `formal/`, `crates/`.
+
+## M4-FIX-7 — ct CONTROL_FAIL of PR run 37614599312 (WEISUNG M4-FIX-7, 2026-10-07)
+
+**Run 5 (37614599312, `1834d54`).** Every job but `ct` green; `ct` `CONTROL_FAIL`.
+
+| Job | Id | Conclusion | Minutes |
+|---|---|---|---|
+| linux-fast | 112769779662 | success | 14.2 |
+| windows-native | 112769780145 | success (0 failed) | 32.5 |
+| xwin-cross | 112769780154 | success | 2.9 |
+| linux-full | 112769780012 | success (`ci-full: PASS`) | 147.4 |
+| proverif-hx | 112769780103 | success | 10.5 |
+| mutants-shard 0…7 | 112769780374, 112769780446, 112769780524, 112769781268, 112769780117, 112769780391, 112769780532, 112769780366 | success | 20.4, 24.6, 21.8, 29.1, 14.6, 26.2, 18.4, 22.1 |
+| mutants (merge) | 112780651194 | success | 0.5 |
+| ct | 112769780046 | **failure**: `run_verdict CONTROL_FAIL` | 90.0 |
+
+**Finding (R-103).** `ct`: AMD EPYC 7763, `rdtscp`, tick 0.409 ns, `q_eff` 1 tick, floor 10 ns = 24.45 ticks, bench sha256
+`93d23cca5916…` (the executable of run 37146709153, where `ct` passed). `run_reason`: "same-content control
+hx_same_content_control FAIL at p50: identical contents through the per-class preparation path shift the class means by
+2.01 / 1.95 effect floors — the preparation path differs by class (ADR-042 Amendment 3)".
+
+| Target | Crop | Δ ticks first / second | Floors | t first / second |
+|---|---|---|---|---|
+| `hx_same_content_control` | p50 | +49.16 / +47.72 | 2.01 / 1.95 | +18.46 / +18.42 |
+| `same_content_control` | p50 | −2.75 / −4.84 | 0.11 / 0.20 | −8.57 / −13.60 |
+| `hx_accept_reject_inner` | p50 | −63.38 / −49.61 | 2.59 / 2.03 | −23.31 / −17.95 |
+| `hx_accept_reject_first_msg` | raw (max \|t\|) | +99.12 / −8.93 | not reproduced | +1.02 / −0.09 |
+| `min_leak_control` | p75 | reached | 15.2 | |
+
+The cause (reviewer, from the source): `blend` selected the delta buffer by the class index — class 0 the XOR delta,
+class 1 a separate all-zero allocation of the same length (12 288 bytes for the HX targets) — and read it right before
+the timed window; which of the two buffers was just read set the cache state the timed call started with. A harness
+finding (ADR-042 Amendment 3 (2)), not a product finding.
+
+**Fix (`b138a2b`, ADR-042 Amendment 4).** `crates/secmp-testkit/benches/ct.rs` only: `Deltas` holds one delta
+(`class0 ^ class1`); `blend` reads it in both classes under `m = black_box(u8::from((class & 1) == 0).wrapping_neg())`,
+the delta slice through `black_box`, one `#[inline(never)]` loop `*o = b ^ (d & m)`. `blended_vec`, `blended_key` and the
+callers are unchanged (they pass `&Deltas`); the history comment of the targets section, the module doc (`:86-90`) and
+the doc of `min_leak_same_content` now describe the one-delta form. `cargo xtask step --strict fmt clippy policy`: PASS.
+
+**Disassembly** (`ct-blend-disasm-aarch64-fix7-b138a2b.txt`; gate profile with symbols, LLVM 22.1.8): `ct::blend` is one
+symbol with 44 call sites; the mask is computed without a branch (`orr w8, w4, #0xfe; add w8, w8, #0x1`), passes through
+the stack (`strb`/`ldrb [sp, #0xf]`), is broadcast (`dup.16b v0, w8`) and enters the 64-byte NEON loop only through
+`and.16b` (then 8-byte and 1-byte tails); every conditional branch tests a length or a loop counter; no `bl`, so no
+`memcpy`. The fallback (`black_box(m)` in the loop body) was not needed.
+
+**Scaled local run** (`SECMP_CT_SCALE=10`, Apple M1 Pro, `cntvct_el0`, floor 1 tick = 41.667 ns, 100 000 samples per
+target, 351 s; evidence only, the gate refuses a scaled report):
+
+```
+run_verdict PASS | run_reason None | secmp_ct_scale 10
+min_leak_control: reached True | decision FAIL | deciding_crop p99 (Δ 2.95 / 2.86 floors, t 215.4 / 212.8)
+min_leak_same_content: max|t| 0.75 (p50)
+control_variable_time_compare  PASS  k=26 (the variable-time comparison is seen: p50 t −10359.36)
+aa_prime_control               PASS  p90: Δ +0.03 / +0.00 ticks, t +1.95 / +0.43
+same_content_control           PASS  p99: Δ −0.08 / +0.05 ticks, t −1.92 / +0.76
+hx_same_content_control        PASS  p90: Δ −0.68 / −0.30 ticks (0.68 / 0.30 floors), t −1.17 / −0.53
+hx_accept_reject_inner         PASS  p95: Δ −0.73 / +0.49 ticks (0.73 / 0.49 floors), t −1.06 / +0.68
+hx_accept_reject_first_msg     PASS  raw: Δ −101.20 / +6.92 ticks, t −1.94 / +0.38 (max |t| 1.94 / 1.87)
+```
+
+All 20 targets PASS (none NOT MEASURABLE); the crop shown for a PASS is the first measurement's max-|t| crop.
+
+Evidence files (`docs/reviews/M04-evidence/`): `ct-blend-disasm-aarch64-fix7-b138a2b.txt`,
+`ct-report-local-b138a2b-scale10.json`, `ct-progress-local-b138a2b-scale10.jsonl`, `ct-local-b138a2b-scale10.txt`,
+`ct-report-linux-37614599312-1834d54.json`, `ct-progress-linux-37614599312.jsonl`. Pending: the Linux `ct` report of the
+next PR run.
+
+**Deviations.** (1) `git rev-parse --short HEAD origin/m04-hx` refused two revisions ("Needed a single revision"); run
+as two commands, both `1834d54`. (2) `| tee` was refused by the headless shell; the bench output went to
+`target/fable/ct-local-fix7-scale10.txt` by redirection (2 cargo lines; the bench writes only report and progress
+files). (3) Besides `Deltas`, `blend` and the targets-section comment, two doc comments in `ct.rs` that described the
+two-buffer form were updated (module doc `:89-90`, `min_leak_same_content`).

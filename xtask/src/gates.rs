@@ -106,13 +106,26 @@ pub(crate) fn cooldown(ctx: &Ctx) -> Result<Outcome> {
 
 /// The workspace `cargo nextest` arguments (feature unification enables `kat` of `secmp-proto` through `secmp-testkit`).
 pub(crate) fn nextest_args() -> Vec<&'static str> {
-    vec!["nextest", "run", "--workspace", "--locked"]
+    vec![
+        "nextest",
+        "run",
+        "--workspace",
+        "--locked",
+        "--no-fail-fast",
+    ]
 }
 
 /// M3 review F20 (R-48): the non-kat run of the shipped configuration of `secmp-proto`. `--workspace` unifies the
 /// `kat` feature, so the package is selected alone, without `--features kat`.
 pub(crate) fn nextest_nonkat_args() -> Vec<&'static str> {
-    vec!["nextest", "run", "--locked", "--package", "secmp-proto"]
+    vec![
+        "nextest",
+        "run",
+        "--locked",
+        "--no-fail-fast",
+        "--package",
+        "secmp-proto",
+    ]
 }
 
 pub(crate) fn nextest(_: &Ctx) -> Result<Outcome> {
@@ -4008,9 +4021,9 @@ mod tests {
     #[test]
     fn proverif_tr_gate_matches_by_query_text() -> Result<()> {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
-        let committed = std::fs::read_to_string(
+        let committed = lf(&std::fs::read_to_string(
             root.join("docs/reviews/M04-evidence/proverif-tr-569c2e2.txt"),
-        )?;
+        )?);
         let summary = proverif_check("tr", &committed)?;
         assert!(
             summary.starts_with("formal/tr.pv: 46 RESULT lines as expected"),
@@ -4569,7 +4582,7 @@ mod tests {
             .collect();
         same_set("PROVERIF_EXPECTED", &tables, expect::PROVERIF_MODELS)?;
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
-        let claims = std::fs::read_to_string(root.join("formal/CLAIMS.md"))?;
+        let claims = lf(&std::fs::read_to_string(root.join("formal/CLAIMS.md"))?);
         assert_eq!(claim_rows(&claims, "| T").len(), 13);
         hx_set_check(
             &dir_stems(&root.join(expect::PROVERIF_HX_DIR), "pv")?,
@@ -4598,7 +4611,7 @@ mod tests {
     #[test]
     fn proverif_table_covers_every_claims_row() -> Result<()> {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
-        let claims = std::fs::read_to_string(root.join("formal/CLAIMS.md"))?;
+        let claims = lf(&std::fs::read_to_string(root.join("formal/CLAIMS.md"))?);
         let tr = expect::PROVERIF_EXPECTED_TR;
         let hx = expect::PROVERIF_EXPECTED_HX;
         assert_eq!(claims_table_findings(&claims, tr, hx), Vec::<String>::new());
@@ -4709,9 +4722,20 @@ mod tests {
             );
             std::fs::write(dir.join(file), &original)?;
         }
-        // CRLF line ends (a Windows checkout) hash like the committed text
-        let crlf = std::fs::read_to_string(dir.join("formal/tr.pv"))?.replace('\n', "\r\n");
-        std::fs::write(dir.join("formal/tr.pv"), crlf)?;
+        // CRLF line ends (a Windows checkout) hash like the committed text; the variant is built from the LF form, so
+        // a checkout that already has CRLF does not get `\r\r\n` (R-102), and converting the CRLF file once more
+        // through the same path (what a Windows host does) stays clean
+        let to_crlf = |s: &str| s.replace("\r\n", "\n").replace('\n', "\r\n");
+        let crlf = to_crlf(&std::fs::read_to_string(dir.join("formal/tr.pv"))?);
+        assert!(crlf.contains("\r\n") && !crlf.contains("\r\r"));
+        std::fs::write(dir.join("formal/tr.pv"), &crlf)?;
+        assert_eq!(
+            proverif_model_hash_findings(&dir, pins),
+            Vec::<String>::new()
+        );
+        let again = to_crlf(&std::fs::read_to_string(dir.join("formal/tr.pv"))?);
+        assert_eq!(again, crlf);
+        std::fs::write(dir.join("formal/tr.pv"), again)?;
         assert_eq!(
             proverif_model_hash_findings(&dir, pins),
             Vec::<String>::new()
@@ -4952,9 +4976,9 @@ mod tests {
             Some(&("extra".to_owned(), Some("false".to_owned())))
         );
         // the real ci.yml keeps its pinned conditions
-        let real = include_str!("../../.github/workflows/ci.yml");
+        let real = lf(include_str!("../../.github/workflows/ci.yml"));
         for (job, cond) in expect::REQUIRED_JOB_CONDITIONS {
-            let found = job_conditions(real)
+            let found = job_conditions(&real)
                 .into_iter()
                 .find(|(j, _)| j == job)
                 .map(|(_, c)| c);
@@ -4978,7 +5002,8 @@ mod tests {
                 include_str!("../../.github/workflows/fuzz-nightly.yml"),
             ),
         ] {
-            let names = upload_artifact_names(&yaml_lines(text));
+            let text = lf(text);
+            let names = upload_artifact_names(&yaml_lines(&text));
             assert!(!names.is_empty(), "{file}");
             for n in &names {
                 assert!(
@@ -4987,7 +5012,7 @@ mod tests {
                     "{file}: {n:?}"
                 );
             }
-            assert!(workflow_findings(file, text).is_empty(), "{file}");
+            assert!(workflow_findings(file, &text).is_empty(), "{file}");
             // the same file with one name lacking the suffix, or without a name, is a finding
             let first = names.first().cloned().flatten().unwrap_or_default();
             let stripped = text.replacen(
@@ -5111,8 +5136,8 @@ mod tests {
         );
         assert_eq!(all_ci_findings(&block), Vec::<String>::new());
         // the real ci.yml passes every check
-        let real = include_str!("../../.github/workflows/ci.yml");
-        assert_eq!(all_ci_findings(real), Vec::<String>::new());
+        let real = lf(include_str!("../../.github/workflows/ci.yml"));
+        assert_eq!(all_ci_findings(&real), Vec::<String>::new());
     }
 
     /// `text` without the job `id` (its header line and every deeper line up to the next job or the end).
@@ -5341,6 +5366,8 @@ mod tests {
                 include_str!("../../.github/workflows/miri-full.yml"),
             ),
         ] {
+            let text = lf(text);
+            let text = text.as_str();
             assert_eq!(
                 workflow_token_findings(file, text),
                 Vec::<String>::new(),
@@ -5423,8 +5450,8 @@ mod tests {
     /// step, and is no required check.
     #[test]
     fn miri_full_workflow_has_one_job_per_package() {
-        let text = include_str!("../../.github/workflows/miri-full.yml");
-        let jobs = yaml_jobs(text);
+        let text = lf(include_str!("../../.github/workflows/miri-full.yml"));
+        let jobs = yaml_jobs(&text);
         assert_eq!(jobs.len(), expect::MIRI_PACKAGES.len());
         for p in expect::MIRI_PACKAGES {
             let id = format!("miri-full-{p}");
@@ -5439,7 +5466,7 @@ mod tests {
                 "{id}"
             );
         }
-        assert!(workflow_findings("miri-full.yml", text).is_empty());
+        assert!(workflow_findings("miri-full.yml", &text).is_empty());
     }
 
     /// F18 (R-42): the coverage run leaves test-only files out of the denominator.
@@ -5466,12 +5493,25 @@ mod tests {
     fn nextest_has_a_non_kat_run() {
         assert_eq!(
             nextest_args(),
-            ["nextest", "run", "--workspace", "--locked"]
+            [
+                "nextest",
+                "run",
+                "--workspace",
+                "--locked",
+                "--no-fail-fast"
+            ]
         );
         let nonkat = nextest_nonkat_args();
         assert_eq!(
             nonkat,
-            ["nextest", "run", "--locked", "--package", "secmp-proto"]
+            [
+                "nextest",
+                "run",
+                "--locked",
+                "--no-fail-fast",
+                "--package",
+                "secmp-proto"
+            ]
         );
         assert!(!nonkat.contains(&"--workspace") && !nonkat.iter().any(|a| a.contains("kat")));
     }
@@ -5568,7 +5608,7 @@ mod tests {
         for f in walk_files(&src, &|p: &Path| {
             p.extension().is_some_and(|e| e == "rs") && !p.ends_with("tests.rs")
         })? {
-            let full = std::fs::read_to_string(&f)?;
+            let full = lf(&std::fs::read_to_string(&f)?);
             let text = full.split("#[cfg(test)]\nmod ").next().unwrap_or_default();
             for (at, _) in text.match_indices("_SITE_KAT.set(") {
                 let call = balanced_call(text, at);
@@ -5805,7 +5845,7 @@ mod tests {
     fn mutants_skip_list_names_existing_tests() -> Result<()> {
         let path =
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../crates/secmp-proto/src/tr/tests.rs");
-        let text = std::fs::read_to_string(path)?;
+        let text = lf(&std::fs::read_to_string(path)?);
         let lines: Vec<&str> = text.lines().collect();
         assert!(!expect::MUTANT_SKIP_TESTS.is_empty());
         for (name, reason) in expect::MUTANT_SKIP_TESTS {
@@ -5892,9 +5932,9 @@ mod tests {
 
     /// `docs/mutants-accepted.md` as committed.
     fn accepted_survivors() -> Result<String> {
-        Ok(std::fs::read_to_string(
+        Ok(lf(&std::fs::read_to_string(
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../docs/mutants-accepted.md"),
-        )?)
+        )?))
     }
 
     /// ADR-047 Amendment 1 (2), with Amendment 2 (3): the merge needs exactly one result per shard, each with a PASS
@@ -6168,15 +6208,17 @@ mod tests {
     #[test]
     fn kani_cover_count_is_pinned() -> Result<()> {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
-        let source = std::fs::read_to_string(root.join("crates/secmp-proto/src/kani_proofs.rs"))?;
+        let source = lf(&std::fs::read_to_string(
+            root.join("crates/secmp-proto/src/kani_proofs.rs"),
+        )?);
         let pinned: usize = expect::KANI_COVERS.iter().map(|(_, m)| m).sum();
         assert_eq!(source.matches("kani::cover!(").count(), pinned);
         for (h, _) in expect::KANI_COVERS {
             assert!(expect::KANI_HARNESSES.contains(h), "{h}");
         }
-        let log = std::fs::read_to_string(
+        let log = lf(&std::fs::read_to_string(
             root.join("docs/reviews/M04-evidence/kani-xtask-step-0a5d2b6.txt"),
-        )?;
+        )?);
         assert_eq!(
             kani_cover_pin_findings(&kani_covers(&log)?),
             Vec::<String>::new()
@@ -6340,7 +6382,7 @@ mod tests {
         let files = vec![
             (
                 expect::REQUIRED_WORKFLOW.to_owned(),
-                include_str!("../../.github/workflows/ci.yml").to_owned(),
+                lf(include_str!("../../.github/workflows/ci.yml")),
             ),
             (
                 ".github/workflows/fuzz-nightly.yml".to_owned(),
@@ -6392,8 +6434,12 @@ mod tests {
     #[test]
     fn dispatch_full_runs_the_linux_full_line() -> Result<()> {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
-        let ci = std::fs::read_to_string(root.join(".github/workflows/ci.yml"))?;
-        let dispatch = std::fs::read_to_string(root.join(".github/workflows/ci-dispatch.yml"))?;
+        let ci = lf(&std::fs::read_to_string(
+            root.join(".github/workflows/ci.yml"),
+        )?);
+        let dispatch = lf(&std::fs::read_to_string(
+            root.join(".github/workflows/ci-dispatch.yml"),
+        )?);
         let gate_lines = |text: &str, job: &str| -> Vec<String> {
             yaml_jobs(text)
                 .into_iter()

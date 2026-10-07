@@ -613,3 +613,15 @@ fn relay_handshake_rejection_keeps_no_state() {
     fresh("after RH-14");
     assert_eq!(client_entropy().remaining(), 160);
 }
+
+/// Extra (not a dictated row): the key generation a relay announces is the one it was built with.
+#[test]
+fn relay_keys_report_their_kid() {
+    let fx = RelayFx::case1();
+    assert_eq!(fx.keys().kid(), 1);
+    assert_eq!(fx.keys_with_kid(2).kid(), 2);
+    assert_eq!(
+        fx.keys().sig_pk().as_bytes().to_vec(),
+        reference().case(1).output("relay_sig_pk")
+    );
+}

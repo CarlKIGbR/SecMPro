@@ -402,3 +402,260 @@ pub fn split_blob(blob: &[u8]) -> Result<(Box<[u8; BLOB_PART_LEN]>, Cont, Cont)>
         },
     ))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::wire::testutil::{ed25519, sig};
+
+    fn put(cmd_seq: u32, fill: u8) -> Result<Request> {
+        Ok(Request {
+            cmd_seq,
+            cmd: RequestCmd::LinkPut {
+                ld_id: [7; 16],
+                one_time: true,
+                expires_bucket: 99,
+                owner_pk: ed25519(3)?,
+                token: [4; 32],
+                sig: sig(5)?,
+                blob_part: Box::new([fill; BLOB_PART_LEN]),
+            },
+        })
+    }
+
+    fn cont(cmd_seq: u32, idx: ContIdx, fill: u8) -> Request {
+        Request {
+            cmd_seq,
+            cmd: RequestCmd::Cont(Cont {
+                idx,
+                data: Box::new([fill; CONT_DATA_LEN]),
+            }),
+        }
+    }
+
+    fn ping(cmd_seq: u32) -> Request {
+        Request {
+            cmd_seq,
+            cmd: RequestCmd::Ping,
+        }
+    }
+
+    fn linkr(cmd_seq: u32, fill: u8) -> Response {
+        Response {
+            cmd_seq,
+            cmd: ResponseCmd::LinkR {
+                present: true,
+                consumed: false,
+                blob_part: Box::new([fill; BLOB_PART_LEN]),
+            },
+        }
+    }
+
+    fn rcont(cmd_seq: u32, idx: ContIdx, fill: u8) -> Response {
+        Response {
+            cmd_seq,
+            cmd: ResponseCmd::Cont(Cont {
+                idx,
+                data: Box::new([fill; CONT_DATA_LEN]),
+            }),
+        }
+    }
+
+    /// The transition table of ADR-048 (f), written out: only the next `CONT` continues, anything else while a
+    /// message is pending rejects, and so does a `CONT` with nothing pending.
+    #[test]
+    fn step_follows_the_table() {
+        let states = [
+            State::Idle,
+            State::AwaitOne { cmd_seq: 1 },
+            State::AwaitTwo { cmd_seq: 1 },
+        ];
+        let mut inputs = vec![
+            Input::Other,
+            Input::Start { cmd_seq: 1 },
+            Input::Start { cmd_seq: 2 },
+        ];
+        for cmd_seq in [1, 2] {
+            for idx in 0..=3 {
+                inputs.push(Input::Cont { cmd_seq, idx });
+            }
+        }
+        for state in states {
+            for input in &inputs {
+                let want = match (state, *input) {
+                    (State::Idle, Input::Other) => Some((State::Idle, Step::Single)),
+                    (State::Idle, Input::Start { cmd_seq }) => {
+                        Some((State::AwaitOne { cmd_seq }, Step::Began))
+                    }
+                    (State::AwaitOne { cmd_seq: 1 }, Input::Cont { cmd_seq: 1, idx: 1 }) => {
+                        Some((State::AwaitTwo { cmd_seq: 1 }, Step::Continued))
+                    }
+                    (State::AwaitTwo { cmd_seq: 1 }, Input::Cont { cmd_seq: 1, idx: 2 }) => {
+                        Some((State::Idle, Step::Complete))
+                    }
+                    _ => None,
+                };
+                assert_eq!(step(state, *input), want, "{state:?} {input:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn blob_offsets_and_cont_indices() {
+        assert_eq!(BLOB_OFFSETS, [0, 4160, 8260]);
+        assert_eq!(
+            BLOB_PART_LEN.saturating_add(CONT_DATA_LEN.saturating_mul(2)),
+            LINK_BLOB_LEN,
+            "three frames carry the whole blob"
+        );
+        assert_eq!(cont_idx(ContIdx::One), 1);
+        assert_eq!(cont_idx(ContIdx::Two), 2);
+    }
+
+    #[test]
+    fn link_put_assembles_in_order() -> Result<()> {
+        let mut a = LinkPutAssembler::new();
+        assert!(!a.is_pending());
+        assert!(matches!(a.push(put(5, 0xa1)?)?, Assembled::Pending));
+        assert!(a.is_pending());
+        assert!(matches!(
+            a.push(cont(5, ContIdx::One, 0xb2))?,
+            Assembled::Pending
+        ));
+        assert!(a.is_pending());
+        let Assembled::Put(p) = a.push(cont(5, ContIdx::Two, 0xc3))? else {
+            return Err(Error::Rejected);
+        };
+        assert!(!a.is_pending());
+        assert_eq!(
+            (p.cmd_seq, p.ld_id, p.one_time, p.expires_bucket, p.token),
+            (5, [7; 16], true, 99, [4; 32])
+        );
+        assert_eq!(p.blob.len(), LINK_BLOB_LEN);
+        let at = |i: usize| p.blob.get(i).copied();
+        let [o0, o1, o2] = BLOB_OFFSETS;
+        assert_eq!(at(o0), Some(0xa1));
+        assert_eq!(at(o1.saturating_sub(1)), Some(0xa1));
+        assert_eq!(at(o1), Some(0xb2));
+        assert_eq!(at(o2.saturating_sub(1)), Some(0xb2));
+        assert_eq!(at(o2), Some(0xc3));
+        assert_eq!(at(LINK_BLOB_LEN.saturating_sub(1)), Some(0xc3));
+        // the assembler is reusable, and a single-frame command passes through unchanged
+        let Assembled::Single(r) = a.push(ping(9))? else {
+            return Err(Error::Rejected);
+        };
+        assert_eq!((r.cmd_seq, r.cmd), (9, RequestCmd::Ping));
+        Ok(())
+    }
+
+    #[test]
+    fn link_put_rejects_every_other_order() -> Result<()> {
+        type Frames = fn() -> Result<Vec<Request>>;
+        let cases: [(&str, Frames); 7] = [
+            ("orphan CONT 1", || Ok(vec![cont(5, ContIdx::One, 0)])),
+            ("orphan CONT 2", || Ok(vec![cont(5, ContIdx::Two, 0)])),
+            ("CONT 2 first", || {
+                Ok(vec![put(5, 0)?, cont(5, ContIdx::Two, 0)])
+            }),
+            ("CONT 1 twice", || {
+                Ok(vec![
+                    put(5, 0)?,
+                    cont(5, ContIdx::One, 0),
+                    cont(5, ContIdx::One, 0),
+                ])
+            }),
+            ("another cmd_seq", || {
+                Ok(vec![put(5, 0)?, cont(6, ContIdx::One, 0)])
+            }),
+            ("PING between", || Ok(vec![put(5, 0)?, ping(6)])),
+            ("LINK_PUT inside a LINK_PUT", || {
+                Ok(vec![put(5, 0)?, put(5, 0)?])
+            }),
+        ];
+        for (what, frames) in cases {
+            let mut a = LinkPutAssembler::new();
+            let mut verdict = Ok(());
+            for f in frames()? {
+                if let Err(e) = a.push(f) {
+                    verdict = Err(e);
+                    break;
+                }
+            }
+            assert_eq!(verdict, Err(Error::Rejected), "{what}");
+            // a rejection resets the assembler
+            assert!(!a.is_pending(), "{what}: reset");
+            assert!(matches!(a.push(ping(1))?, Assembled::Single(_)), "{what}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn linkr_assembles_in_order_and_rejects_the_rest() -> Result<()> {
+        let mut a = LinkrAssembler::new();
+        assert!(matches!(
+            a.push(linkr(3, 1)),
+            Ok(AssembledResponse::Pending)
+        ));
+        assert!(matches!(
+            a.push(rcont(3, ContIdx::One, 2)),
+            Ok(AssembledResponse::Pending)
+        ));
+        let Ok(AssembledResponse::Linkr(l)) = a.push(rcont(3, ContIdx::Two, 3)) else {
+            return Err(Error::Rejected);
+        };
+        assert_eq!((l.cmd_seq, l.present, l.consumed), (3, true, false));
+        assert_eq!(l.blob.len(), LINK_BLOB_LEN);
+        let at = |i: usize| l.blob.get(i).copied();
+        let [o0, o1, o2] = BLOB_OFFSETS;
+        assert_eq!((at(o0), at(o1), at(o2)), (Some(1), Some(2), Some(3)));
+        let ok = Response {
+            cmd_seq: 4,
+            cmd: ResponseCmd::Ok,
+        };
+        assert!(matches!(a.push(ok), Ok(AssembledResponse::Single(_))));
+        // orphan CONT, wrong order, wrong cmd_seq, a single frame inside a LINKR
+        for frames in [
+            vec![rcont(3, ContIdx::One, 0)],
+            vec![linkr(3, 0), rcont(3, ContIdx::Two, 0)],
+            vec![linkr(3, 0), rcont(4, ContIdx::One, 0)],
+            vec![linkr(3, 0), rcont(3, ContIdx::One, 0), linkr(3, 0)],
+            vec![
+                linkr(3, 0),
+                Response {
+                    cmd_seq: 3,
+                    cmd: ResponseCmd::Ok,
+                },
+            ],
+        ] {
+            let mut a = LinkrAssembler::new();
+            let verdict = frames.into_iter().try_for_each(|f| a.push(f).map(|_| ()));
+            assert_eq!(verdict, Err(Error::Rejected));
+            let ok = Response {
+                cmd_seq: 1,
+                cmd: ResponseCmd::Ok,
+            };
+            assert!(matches!(a.push(ok), Ok(AssembledResponse::Single(_))));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn split_blob_cuts_at_the_offsets() -> Result<()> {
+        let blob: Vec<u8> = (0..LINK_BLOB_LEN)
+            .map(|i| u8::try_from(i.rem_euclid(251)).unwrap_or(0))
+            .collect();
+        let (first, one, two) = split_blob(&blob)?;
+        let [_, o1, o2] = BLOB_OFFSETS;
+        assert_eq!(first.as_slice(), blob.get(..o1).unwrap_or_default());
+        assert_eq!(one.data.as_slice(), blob.get(o1..o2).unwrap_or_default());
+        assert_eq!(two.data.as_slice(), blob.get(o2..).unwrap_or_default());
+        assert_eq!((one.idx, two.idx), (ContIdx::One, ContIdx::Two));
+        let shorter = blob
+            .get(..LINK_BLOB_LEN.saturating_sub(1))
+            .unwrap_or_default();
+        assert_eq!(split_blob(shorter).err(), Some(Error::Rejected));
+        let longer = [blob.as_slice(), &[0]].concat();
+        assert_eq!(split_blob(&longer).err(), Some(Error::Rejected));
+        Ok(())
+    }
+}

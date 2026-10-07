@@ -114,3 +114,34 @@ pub struct HandshakeTrace {
     /// `sess_id`.
     pub sess_id: [u8; 16],
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn display_names_each_condition_without_detail() {
+        assert_eq!(Error::Rejected.to_string(), "rejected");
+        assert_eq!(Error::CounterOverflow.to_string(), "counter overflow");
+        assert_eq!(Error::PayloadTooLong.to_string(), "payload too long");
+        assert_eq!(Error::NewLinkRequired.to_string(), "new link required");
+        assert_eq!(Error::Unavailable.to_string(), "unavailable");
+    }
+
+    #[test]
+    fn errors_convert_keeping_their_kind() {
+        assert_eq!(Error::from(crate::Error::Rejected), Error::Rejected);
+        assert_eq!(Error::from(crate::Error::Unavailable), Error::Unavailable);
+        assert_eq!(Error::from(secmp_crypto::Error::Rejected), Error::Rejected);
+        assert_eq!(
+            Error::from(secmp_crypto::Error::Unavailable),
+            Error::Unavailable
+        );
+    }
+
+    #[test]
+    fn limits_are_the_spec_values() {
+        assert_eq!(MAX_VALIDITY_SECS, 5_184_000);
+        assert_eq!(LINK_MAX_FRAMES, 1_048_576);
+    }
+}

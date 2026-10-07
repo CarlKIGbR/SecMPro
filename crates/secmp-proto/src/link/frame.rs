@@ -23,7 +23,7 @@ use secmp_crypto::{Label, SecretBytes};
 use crate::codec::{Decode, Zeroizing, pad, unpad};
 use crate::link::handshake::LinkKeys;
 use crate::link::{Error, LINK_MAX_FRAMES, Result};
-use crate::sizes::{AEAD_TAG_LEN, FRAME_LEN, FRAME_PLAINTEXT_LEN};
+use crate::sizes::{FRAME_LEN, FRAME_PLAINTEXT_LEN};
 use crate::wire::Id;
 use crate::wire::frame::{CellrContext, Request, Response};
 #[cfg(kani)]
@@ -242,12 +242,6 @@ impl Link {
     #[must_use]
     pub const fn recv_counter(&self) -> Option<u64> {
         self.recv.0
-    }
-
-    /// The length of a sealed frame (`payload` padded to 4336 B plus the tag).
-    #[must_use]
-    pub const fn frame_len() -> usize {
-        FRAME_PLAINTEXT_LEN + AEAD_TAG_LEN
     }
 }
 

@@ -228,6 +228,11 @@ fn link_vectors_hs2_accept() {
             "{id} {name} = link-0004"
         );
     }
+    assert_eq!(
+        t.mac2.to_vec(),
+        reference().case(4).output("mac2"),
+        "{id} mac2 = link-0004"
+    );
     assert_eq!(client.sess_id(), relay.sess_id(), "{id} sess_id both sides");
     let (ks, kr) = client.keys_kat();
     let (rs, rr) = relay.keys_kat();
@@ -400,4 +405,49 @@ fn link_vectors_file_shape() {
     assert_eq!(n("frame-reject"), 12, "frame-reject");
     assert_eq!(n("relay-keys"), 1);
     assert_eq!(add(add(n("hs1"), n("hs2")), n("hs2-accept")), 3);
+}
+
+/// Extra (not a dictated row): the derived `rid`, `sid` and the access `token` of `link-0006` (`QUEUE_NEW`) from its
+/// seeds, the relay's access key and the `sess_id` of `link-0004`.
+#[test]
+fn link_vectors_derived_ids_and_token_of_case_6() {
+    use secmp_crypto::Ed25519SigningKey;
+    use secmp_proto::keys::Ed25519Pk;
+    use secmp_proto::link::ids;
+    let c = reference().case(6);
+    let public = |seed: &[u8]| {
+        let key = Ed25519SigningKey::from_seed(seed).unwrap();
+        Ed25519Pk::from_bytes(key.verifying_key().as_bytes()).unwrap()
+    };
+    let (recv_pk, send_pk) = (public(&c.input("recv_seed")), public(&c.input("send_seed")));
+    assert_eq!(
+        ids::rid(&recv_pk).unwrap().to_vec(),
+        c.output("rid"),
+        "link-0006 rid"
+    );
+    assert_eq!(
+        ids::sid(&recv_pk, &send_pk).unwrap().to_vec(),
+        c.output("sid"),
+        "link-0006 sid"
+    );
+    let fx = RelayFx::case1();
+    let sess_id: [u8; 16] = reference().case(4).output("sess_id").try_into().unwrap();
+    let token = ids::token(&fx.access(), &sess_id, 1).unwrap();
+    assert_eq!(token.to_vec(), c.output("token"), "link-0006 token");
+    assert!(bool::from(
+        ids::token_verify(&fx.access(), &sess_id, 1, &token).unwrap()
+    ));
+    // bound to the link and to the command's own cmd_seq
+    assert!(!bool::from(
+        ids::token_verify(&fx.access(), &sess_id, 2, &token).unwrap()
+    ));
+    let other_link = [sess_id.first().copied().unwrap_or(0) ^ 1; 16];
+    assert!(!bool::from(
+        ids::token_verify(&fx.access(), &other_link, 1, &token).unwrap()
+    ));
+    assert_eq!(
+        ids::relay_fp(&public(&fx.sig_seed)).to_vec(),
+        fx.relay_fp.to_vec()
+    );
+    assert_eq!(ids::akc(&fx.access()), fx.akc);
 }

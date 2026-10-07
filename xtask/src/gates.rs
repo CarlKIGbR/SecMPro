@@ -165,7 +165,17 @@ pub(crate) fn hello(_: &Ctx) -> Result<Outcome> {
 /// The test targets `kat` runs a second time with libcrux's portable backend, per package.
 pub(crate) const KAT_PORTABLE_RERUN: &[(&str, &[&str])] = &[
     ("secmp-crypto", &["kat_mlkem", "vectors"]),
-    ("secmp-proto", &["tr_vectors", "hx"]),
+    (
+        "secmp-proto",
+        &[
+            "tr_vectors",
+            "hx",
+            "link",
+            "link_client",
+            "link_frames",
+            "link_relay",
+        ],
+    ),
 ];
 
 pub(crate) fn kat(ctx: &Ctx) -> Result<Outcome> {
@@ -220,7 +230,7 @@ pub(crate) fn kat(ctx: &Ctx) -> Result<Outcome> {
             .run()?;
     }
     Ok(Outcome::Pass(format!(
-        "KAT/differential packages: {} (expected set matches); ML-KEM KATs and frozen vectors (M1 suites, tr, hx) also with libcrux's portable backend",
+        "KAT/differential packages: {} (expected set matches); ML-KEM KATs and frozen vectors (M1 suites, tr, hx, link) also with libcrux's portable backend",
         list(&found)
     )))
 }
@@ -5526,6 +5536,10 @@ mod tests {
             .collect();
         assert!(proto.contains(&"hx"), "{proto:?}");
         assert!(proto.contains(&"tr_vectors"), "{proto:?}");
+        // M5: the handshakes of the SecMP-LINK suites encapsulate with ML-KEM-768 and -1024
+        for t in ["link", "link_client", "link_frames", "link_relay"] {
+            assert!(proto.contains(&t), "{t}: {proto:?}");
+        }
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
         let manifest = std::fs::read_to_string(root.join("crates/secmp-proto/Cargo.toml"))?;
         for t in &proto {
@@ -6217,7 +6231,7 @@ mod tests {
             assert!(expect::KANI_HARNESSES.contains(h), "{h}");
         }
         let log = lf(&std::fs::read_to_string(
-            root.join("docs/reviews/M04-evidence/kani-xtask-step-0a5d2b6.txt"),
+            root.join("docs/reviews/M05-evidence/kani-xtask-step-ae10972.txt"),
         )?);
         assert_eq!(
             kani_cover_pin_findings(&kani_covers(&log)?),

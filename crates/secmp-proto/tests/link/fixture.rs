@@ -44,16 +44,34 @@ pub fn hex(b: &[u8]) -> String {
     })
 }
 
+/// `a + b` (the lints deny unchecked arithmetic, also in tests).
+pub fn add(a: usize, b: usize) -> usize {
+    a.checked_add(b).unwrap()
+}
+
+/// `len` bytes of `bytes` from `off`.
+pub fn at(bytes: &[u8], off: usize, len: usize) -> &[u8] {
+    bytes.get(off..add(off, len)).unwrap()
+}
+
+/// Everything of `bytes` from `off`.
+pub fn from(bytes: &[u8], off: usize) -> &[u8] {
+    bytes.get(off..).unwrap()
+}
+
+/// `bytes` with bit 0 of the byte at `at` flipped.
 pub fn flip(bytes: &[u8], at: usize) -> Vec<u8> {
     let mut v = bytes.to_vec();
-    v[at] ^= 1;
+    *v.get_mut(at).unwrap() ^= 1;
     v
 }
 
 /// `bytes` with `new` written at `at`.
 pub fn patch(bytes: &[u8], at: usize, new: &[u8]) -> Vec<u8> {
     let mut v = bytes.to_vec();
-    v[at..at + new.len()].copy_from_slice(new);
+    v.get_mut(at..add(at, new.len()))
+        .unwrap()
+        .copy_from_slice(new);
     v
 }
 
@@ -87,8 +105,8 @@ impl Case {
                 .unwrap_or_default()
         };
         Self {
-            id: v["id"].as_str().unwrap().to_owned(),
-            op: v["op"].as_str().unwrap().to_owned(),
+            id: v.get("id").unwrap().as_str().unwrap().to_owned(),
+            op: v.get("op").unwrap().as_str().unwrap().to_owned(),
             inputs: map("inputs"),
             outputs: map("outputs"),
             raw: v.clone(),
@@ -96,27 +114,42 @@ impl Case {
     }
 
     pub fn input(&self, name: &str) -> Vec<u8> {
-        unhex(
-            self.inputs
-                .get(name)
-                .unwrap_or_else(|| panic!("{}: no input {name}", self.id))
-                .as_str()
-                .unwrap(),
-        )
+        let v = self.inputs.get(name);
+        assert!(v.is_some(), "{}: no input {name}", self.id);
+        unhex(v.unwrap().as_str().unwrap())
     }
 
     pub fn output(&self, name: &str) -> Vec<u8> {
-        unhex(
-            self.outputs
-                .get(name)
-                .unwrap_or_else(|| panic!("{}: no output {name}", self.id))
-                .as_str()
-                .unwrap(),
-        )
+        let v = self.outputs.get(name);
+        assert!(v.is_some(), "{}: no output {name}", self.id);
+        unhex(v.unwrap().as_str().unwrap())
     }
 
     pub fn manipulation(&self) -> &str {
-        self.raw["manipulation"].as_str().unwrap_or("")
+        self.raw
+            .get("manipulation")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+    }
+
+    /// The JSON value at `pointer` (RFC 6901, e.g. `/outputs/accept`) of the raw case.
+    pub fn at_pointer(&self, pointer: &str) -> Option<&Value> {
+        self.raw.pointer(pointer)
+    }
+
+    /// Whether the case carries `"expect": "reject"`.
+    pub fn expects_reject(&self) -> bool {
+        self.at_pointer("/expect") == Some(&Value::String("reject".into()))
+    }
+
+    /// `outputs.accept`, if present.
+    pub fn accept(&self) -> Option<bool> {
+        self.at_pointer("/outputs/accept").and_then(Value::as_bool)
+    }
+
+    /// The case's `party`.
+    pub fn party(&self) -> &str {
+        self.at_pointer("/party").and_then(Value::as_str).unwrap()
     }
 }
 
@@ -129,7 +162,7 @@ pub struct Ref {
 impl Ref {
     /// The case `link-00nn`.
     pub fn case(&self, n: usize) -> &Case {
-        let c = &self.cases[n - 1];
+        let c = self.cases.get(n.checked_sub(1).unwrap()).unwrap();
         assert_eq!(c.id, format!("link-{n:04}"));
         c
     }
@@ -139,7 +172,9 @@ pub fn reference() -> &'static Ref {
     static REF: OnceLock<Ref> = OnceLock::new();
     REF.get_or_init(|| {
         let v = link_file();
-        let cases = v["cases"]
+        let cases = v
+            .get("cases")
+            .unwrap()
             .as_array()
             .unwrap()
             .iter()
@@ -218,11 +253,11 @@ impl RelayFx {
     pub fn resigned(&self, f: impl FnOnce(&mut Vec<u8>)) -> Vec<u8> {
         let mut rec = self.rec_relayinfo.clone();
         f(&mut rec);
-        let signed = [Label::LinkRelayinfo.as_bytes(), &rec[3..3 + 1677]].concat();
+        let signed = [Label::LinkRelayinfo.as_bytes(), at(&rec, 3, 1677)].concat();
         let sig = Ed25519SigningKey::from_seed(&self.sig_seed)
             .unwrap()
             .sign(&signed);
-        rec[3 + 1677..].copy_from_slice(&sig);
+        rec.get_mut(1680..).unwrap().copy_from_slice(&sig);
         rec
     }
 }
@@ -349,7 +384,7 @@ pub fn h0_of(p: &Hs1Parts) -> [u8; 32] {
         sha256(&[&p.ct_kem]).to_vec(),
     ]
     .concat();
-    assert_eq!(pre.len(), 15 + 1 + 4 + 32 + 32 + 32 + 32 + 32);
+    assert_eq!(pre.len(), 180);
     sha256(&[&pre])
 }
 
@@ -429,5 +464,9 @@ pub fn compose_hs1(
 pub fn expand_keys(ck2: &SecretBytes<32>) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
     let okm = hkdf_expand::<80>(ck2.expose_secret(), Label::LinkKeys, &[]).unwrap();
     let b = okm.expose_secret();
-    (b[..32].to_vec(), b[32..64].to_vec(), b[64..].to_vec())
+    (
+        at(b, 0, 32).to_vec(),
+        at(b, 32, 32).to_vec(),
+        from(b, 64).to_vec(),
+    )
 }

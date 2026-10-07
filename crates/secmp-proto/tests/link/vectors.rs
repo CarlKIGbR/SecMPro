@@ -3,12 +3,13 @@
 //! `secmp_proto::link` (TEST-SPEC-M5 (a): V-01…V-05, V-17…V-19, V-21). Every assertion message names its case id.
 //! The command groups (V-06…V-16, V-20, V-22) are Phase B.
 
+use secmp_proto::Encode;
 use secmp_proto::link::{self, Error};
 use secmp_proto::tr::FixedEntropy;
 
 use crate::fixture::{
-    NOW, RelayFx, VALID_UNTIL, client_draws, client_entropy, hex, honest_links, reference,
-    relay_draws, unhex,
+    NOW, RelayFx, VALID_UNTIL, add, at, client_draws, client_entropy, flip, from, h1, hex,
+    honest_links, patch, reference, relay_draws, ri, unhex,
 };
 
 const HELLO: &str = "0007015345434d5001";
@@ -32,7 +33,6 @@ fn link_vectors_relay_keys() {
     assert_eq!(keys.fp().to_vec(), c.output("relay_fp"), "{id} relay_fp");
     assert_eq!(keys.akc().to_vec(), c.output("akc"), "{id} akc");
     let info = keys.relay_info(VALID_UNTIL).unwrap();
-    use secmp_proto::Encode;
     let info_bytes = info.encode().unwrap();
     assert_eq!(info_bytes.len(), 1741, "{id} relayinfo length");
     assert_eq!(info_bytes.to_vec(), c.output("relayinfo"), "{id} relayinfo");
@@ -70,10 +70,7 @@ fn link_vectors_relayinfo_accept() {
         "link-0002 rec_hello"
     );
     assert_eq!(hex(&hello), HELLO, "link-0002 rec_hello literal");
-    assert_eq!(
-        c2.raw["outputs"]["accept"], true,
-        "link-0002 accept in the file"
-    );
+    assert_eq!(c2.accept(), Some(true), "link-0002 accept in the file");
     assert!(
         st.on_relayinfo(&fx.rec_relayinfo, &mut client_entropy())
             .is_ok(),
@@ -87,18 +84,14 @@ fn link_vectors_relayinfo_accept() {
         "relayinfo-valid-60d",
         "link-0059 manipulation"
     );
-    assert_eq!(
-        c59.raw["outputs"]["accept"], true,
-        "link-0059 accept in the file"
-    );
+    assert_eq!(c59.accept(), Some(true), "link-0059 accept in the file");
     let (_h, st) = link::client::start(fx.relay_fp, Some(&access), NOW).unwrap();
     assert!(
         st.on_relayinfo(&rec, &mut client_entropy()).is_ok(),
         "link-0059 accept"
     );
     let boundary = fx.resigned(|r| {
-        r[crate::fixture::ri::VALID_UNTIL..crate::fixture::ri::VALID_UNTIL + 8]
-            .copy_from_slice(&(NOW + 5_184_000).to_be_bytes());
+        *r = patch(r, ri::VALID_UNTIL, &(NOW + 5_184_000).to_be_bytes());
     });
     assert_eq!(boundary, rec, "link-0059 re-signed bytes");
 }
@@ -128,25 +121,13 @@ fn link_vectors_hs1() {
     assert_eq!(entropy.remaining(), 0, "{id} draws consumed exactly");
     assert_eq!(rec.len(), 2856, "{id} rec_hs1 length");
     assert_eq!(rec, c.output("rec_hs1"), "{id} rec_hs1");
-    assert_eq!(rec[3..], c.output("hs1")[..], "{id} hs1");
+    assert_eq!(from(&rec, 3), c.output("hs1"), "{id} hs1");
+    assert_eq!(at(&rec, h1::E_C, 32), c.output("e_c"), "{id} e_c");
+    assert_eq!(at(&rec, h1::EK_C, 1184), c.output("ek_c"), "{id} ek_c");
+    assert_eq!(at(&rec, h1::PK_E1, 32), c.output("pk_e1"), "{id} pk_e1");
     assert_eq!(
-        &rec[crate::fixture::h1::E_C..crate::fixture::h1::E_C + 32],
-        &c.output("e_c")[..],
-        "{id} e_c"
-    );
-    assert_eq!(
-        &rec[crate::fixture::h1::EK_C..crate::fixture::h1::EK_C + 1184],
-        &c.output("ek_c")[..],
-        "{id} ek_c"
-    );
-    assert_eq!(
-        &rec[crate::fixture::h1::PK_E1..crate::fixture::h1::PK_E1 + 32],
-        &c.output("pk_e1")[..],
-        "{id} pk_e1"
-    );
-    assert_eq!(
-        &rec[crate::fixture::h1::CT_KEM..crate::fixture::h1::CT_KEM + 1568],
-        &c.output("ct_kem")[..],
+        at(&rec, h1::CT_KEM, 1568),
+        c.output("ct_kem"),
         "{id} ct_kem"
     );
     let t = wait.trace_kat();
@@ -155,8 +136,8 @@ fn link_vectors_hs1() {
     assert_eq!(t.ck1.to_vec(), c.output("ck1"), "{id} ck1");
     assert_eq!(t.mac1.to_vec(), c.output("mac1"), "{id} mac1");
     assert_eq!(
-        &rec[crate::fixture::h1::MAC1..],
-        &c.output("mac1")[..],
+        from(&rec, h1::MAC1),
+        c.output("mac1"),
         "{id} mac1 in the record"
     );
 }
@@ -180,7 +161,7 @@ fn link_vectors_hs2() {
     assert_eq!(entropy.remaining(), 0, "{id} sk_er, m2 consumed");
     assert_eq!(rec_hs2.len(), 1156, "{id} rec_hs2 length");
     assert_eq!(rec_hs2, c.output("rec_hs2"), "{id} rec_hs2");
-    assert_eq!(rec_hs2[3..], c.output("hs2")[..], "{id} hs2");
+    assert_eq!(from(&rec_hs2, 3), c.output("hs2"), "{id} hs2");
     let t = relay_link.trace_kat();
     for (name, got) in [
         ("ss1", t.ss1.to_vec()),
@@ -213,8 +194,7 @@ fn link_vectors_hs2() {
     let (_i, st) = link::relay::accept(&keys)
         .on_hello(&unhex(HELLO), VALID_UNTIL)
         .unwrap();
-    let mut bad = rec_hs1.clone();
-    bad[crate::fixture::h1::MAC1] ^= 1;
+    let bad = flip(&rec_hs1, h1::MAC1);
     assert!(
         matches!(st.on_hs1(&bad, &mut untouched), Err(Error::Rejected)),
         "{id} mac1 flip"
@@ -256,7 +236,9 @@ fn link_vectors_hs2_accept() {
     assert_eq!(client.send_counter(), Some(0), "{id} c2r");
     assert_eq!(client.recv_counter(), Some(0), "{id} r2c");
     assert_eq!(
-        c.raw["outputs"]["link_post"]["cmd_seq"], 0,
+        c.at_pointer("/outputs/link_post/cmd_seq")
+            .and_then(serde_json::Value::as_u64),
+        Some(0),
         "{id} link_post cmd_seq"
     );
 }
@@ -274,7 +256,7 @@ fn link_vectors_relayinfo_reject() {
         let c = reference().case(n);
         let who = reject_label(c);
         assert_eq!(c.op, "relayinfo-reject", "{who} op");
-        assert_eq!(c.raw["expect"], "reject", "{who} expect");
+        assert!(c.expects_reject(), "{who} expect");
         let rec = c.input("rec_relayinfo");
         let pinned: [u8; 32] = if c.inputs.contains_key("relay_fp") {
             c.input("relay_fp").try_into().unwrap()
@@ -371,17 +353,25 @@ fn link_vectors_hs2_reject() {
 fn link_vectors_file_shape() {
     use std::collections::BTreeMap;
     let r = reference();
-    assert_eq!(r.header["suite"], "link");
-    assert_eq!(r.header["schema"], 6);
+    assert_eq!(
+        r.header
+            .pointer("/suite")
+            .and_then(serde_json::Value::as_str),
+        Some("link")
+    );
+    assert_eq!(
+        r.header
+            .pointer("/schema")
+            .and_then(serde_json::Value::as_u64),
+        Some(6)
+    );
     assert_eq!(r.cases.len(), 86);
     for (i, c) in r.cases.iter().enumerate() {
-        assert_eq!(c.id, format!("link-{:04}", i + 1), "contiguous ids");
+        assert_eq!(c.id, format!("link-{:04}", add(i, 1)), "contiguous ids");
     }
     let mut parties: BTreeMap<String, usize> = BTreeMap::new();
     for c in &r.cases {
-        *parties
-            .entry(c.raw["party"].as_str().unwrap().to_owned())
-            .or_default() += 1;
+        *parties.entry(c.party().to_owned()).or_default() += 1;
     }
     assert_eq!(parties.get("R"), Some(&23), "party R");
     assert_eq!(parties.get("C"), Some(&17), "party C");
@@ -401,13 +391,13 @@ fn link_vectors_file_shape() {
     // op counts of `ref-link-cases-index.txt`, grouped as the file groups them
     let n = |op: &str| *ops.get(op).unwrap_or(&0);
     assert_eq!(
-        n("relayinfo-reject") + n("relayinfo-accept"),
-        1 + 7 + 1,
+        add(n("relayinfo-reject"), n("relayinfo-accept")),
+        9,
         "RelayInfo cases (0002, I1–I7, I8)"
     );
     assert_eq!(n("hs1-reject"), 11, "hs1-reject");
     assert_eq!(n("hs2-reject"), 4, "hs2-reject");
     assert_eq!(n("frame-reject"), 12, "frame-reject");
     assert_eq!(n("relay-keys"), 1);
-    assert_eq!(n("hs1") + n("hs2") + n("hs2-accept"), 3);
+    assert_eq!(add(add(n("hs1"), n("hs2")), n("hs2-accept")), 3);
 }

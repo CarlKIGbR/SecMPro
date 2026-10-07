@@ -7,10 +7,11 @@
 
 use secmp_crypto::{MLDSA65_PK_LEN, MLDSA65_SIG_LEN, MSG_SEALED_LEN, Zeroizing};
 use secmp_proto::sizes::{
-    CELL_LEN, CONTENT_BODY_MAX, ED25519_PK_LEN, ED25519_SIG_LEN, FRAGMENT_HEADER_LEN,
+    CELL_LEN, CONTENT_BODY_MAX, ED25519_PK_LEN, ED25519_SIG_LEN, FRAGMENT_HEADER_LEN, FRAME_LEN,
     FRAME_PLAINTEXT_LEN, HANDSHAKE_CELL_PT_LEN, HEADER_LEN, HOST_MAX, HS1_LEN, HYBRID_SIG_LEN,
     ID_LEN, INNER_LEN, LINK_BLOB_LEN, LINKDATA_PADDED_LEN, MAX_MSG_BYTES, MLKEM1024_CT_LEN,
-    MLKEM1024_EK_LEN, NAME_MAX, NONCE_LEN, OUTER_PADDED_LEN, PREKEY_BUNDLE_LEN, X25519_PK_LEN,
+    MLKEM1024_EK_LEN, NAME_MAX, NONCE_LEN, OUTER_PADDED_LEN, PREKEY_BUNDLE_LEN, RELAYINFO_LEN,
+    X25519_PK_LEN,
 };
 use secmp_proto::tr::RatchetState;
 use secmp_proto::tr::content::Inbox;
@@ -69,6 +70,22 @@ fn largest_invitation_uri_len() -> Result<usize, Error> {
     Ok(secmp_proto::inv::invitation_uri(&invitation)?.len())
 }
 
+/// The SecMP-LINK/Q targets (M5, Phase A).
+fn link_entries() -> [(&'static str, usize); 6] {
+    [
+        // selector, record `len` u16, type byte, then the HS1 fields (the largest record)
+        ("link_records", sum(&[1, 2, 1, HS1_LEN])),
+        // selector, flag byte, then the RELAYINFO record (`len`, type, `RelayInfoV1`) of the raw mode
+        ("link_client_handshake", sum(&[1, 1, 2, 1, RELAYINFO_LEN])),
+        ("link_relay_handshake", sum(&[1, 2, 1, HS1_LEN])),
+        // selector, then a unit (the raw mode; the others take at most 4339)
+        ("link_frame_open", sum(&[1, FRAME_LEN])),
+        // selector / mode byte, then a frame plaintext
+        ("q_request_decode", sum(&[1, FRAME_PLAINTEXT_LEN])),
+        ("q_response_decode", sum(&[1, FRAME_PLAINTEXT_LEN])),
+    ]
+}
+
 #[test]
 fn fuzz_max_len_is_the_largest_valid_input_plus_one() -> Result<(), Error> {
     // the largest `HandshakeBody`: a 64-byte name with an avatar, one route of an unknown kind with a full blob
@@ -101,7 +118,7 @@ fn fuzz_max_len_is_the_largest_valid_input_plus_one() -> Result<(), Error> {
     .concat();
     let inbox = Inbox::from_bytes(&inbox_bytes)?.to_bytes()?.len();
     let uri = largest_invitation_uri_len()?;
-    let expected: [(&str, usize); 21] = [
+    let expected: Vec<(&str, usize)> = [
         // mode, nonce, ad_len, AD, `COM ‖ C` of a LinkBlob
         (
             "caead_open",
@@ -167,7 +184,10 @@ fn fuzz_max_len_is_the_largest_valid_input_plus_one() -> Result<(), Error> {
             "tr_state",
             sum(&[1, RatchetState::MAX_ENCODED_LEN.max(inbox)]),
         ),
-    ];
+    ]
+    .into_iter()
+    .chain(link_entries())
+    .collect();
     assert_eq!(handshake, 65_642);
     assert_eq!(send, 4_146);
     assert_eq!(inbox, 1_694);

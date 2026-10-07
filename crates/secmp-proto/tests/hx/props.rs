@@ -1124,3 +1124,155 @@ fn prop_outer_unpad_total_12018() {
     // the valid placement with the version byte 1 is accepted (about half of the 64 buffers)
     assert!(accepted >= UNPAD_CASES / 8, "accepted {accepted}");
 }
+
+// ---- P-12 (M5, R-56) -------------------------------------------------------------------------------------------
+
+/// A responder's prekeys from random seeds (spec §6.1).
+fn random_prekeys(rng: &mut StdRng) -> harness::Prekeys {
+    harness::Prekeys {
+        spk_dh: X25519Secret::from_bytes(&random_bytes(rng, 32)).unwrap(),
+        spk_kem: secmp_crypto::MlKem1024Dk::from_seed(&random_bytes(rng, 64)).unwrap(),
+        rpk_kem: secmp_crypto::MlKem768Dk::from_seed(&random_bytes(rng, 64)).unwrap(),
+        opk_dh: X25519Secret::from_bytes(&random_bytes(rng, 32)).unwrap(),
+        opk_kem: secmp_crypto::MlKem1024Dk::from_seed(&random_bytes(rng, 64)).unwrap(),
+    }
+}
+
+fn random_identity(rng: &mut StdRng) -> harness::Identity {
+    let (xi, ed, dh) = (
+        random_bytes(rng, 32),
+        random_bytes(rng, 32),
+        random_bytes(rng, 32),
+    );
+    harness::identity(&xi, &ed, &dh)
+}
+
+fn clone_prekeys(k: &harness::Prekeys) -> harness::Prekeys {
+    harness::Prekeys {
+        spk_dh: X25519Secret::from_bytes(k.spk_dh.expose_secret()).unwrap(),
+        spk_kem: secmp_crypto::MlKem1024Dk::from_seed(k.spk_kem.expose_seed()).unwrap(),
+        rpk_kem: secmp_crypto::MlKem768Dk::from_seed(k.rpk_kem.expose_seed()).unwrap(),
+        opk_dh: X25519Secret::from_bytes(k.opk_dh.expose_secret()).unwrap(),
+        opk_kem: secmp_crypto::MlKem1024Dk::from_seed(k.opk_kem.expose_seed()).unwrap(),
+    }
+}
+
+/// P-12 `prop_k_id_independent_of_iks_i_dh1_dh2` (R-56): `K_id` is recomputed from the independent key agreement of
+/// §6.4 with `IKSPublic_I` (and so `DH1` and the transcript) varied, and with `DH2` varied (another responder
+/// identity): it is unchanged, while `SK` changes; with each of its six inputs (`ld_id`, `link_key`, `DH3`,
+/// `ss_spk`, `DH4`, `ss_opk`) varied it changes. The library's `hx::k_id` agrees with the harness on the agreed
+/// secrets.
+#[test]
+fn prop_k_id_independent_of_iks_i_dh1_dh2() {
+    use harness::{AgreeIn, agree};
+    let mut rng = rng_for(12);
+    for case in 0..CASES * 2 {
+        let ctx = format!("SECMP_PROPTEST_SEED={} case {case}", master_seed());
+        let (i, i2) = (random_identity(&mut rng), random_identity(&mut rng));
+        let (r, r2) = (random_identity(&mut rng), random_identity(&mut rng));
+        let keys = random_prekeys(&mut rng);
+        let ld_id: [u8; 16] = rng.random();
+        let link_key: [u8; 32] = rng.random();
+        let ek_sk = random_bytes(&mut rng, 32);
+        let (m_spk, m_opk): ([u8; 32], [u8; 32]) = (rng.random(), rng.random());
+        let run = |i: &harness::Identity,
+                   r: &harness::Identity,
+                   keys: &harness::Prekeys,
+                   ld: &[u8; 16],
+                   lk: &[u8; 32],
+                   m1: &[u8; 32],
+                   m2: &[u8; 32]| {
+            agree(&AgreeIn {
+                i,
+                r,
+                keys,
+                ld_id: ld,
+                link_key: lk,
+                ek_sk: &ek_sk,
+                m_spk: m1,
+                m_opk: m2,
+            })
+        };
+        let base = run(&i, &r, &keys, &ld_id, &link_key, &m_spk, &m_opk);
+        // the library's K_id on the agreed secrets equals the harness's
+        let secret = |b: &[u8]| SecretBytes::<32>::from_slice(b).unwrap();
+        let lib = hx::k_id(
+            &ld_id,
+            &secret(&link_key),
+            &secret(base.dh.get(2).unwrap()),
+            &secret(&base.ss_spk),
+            &secret(base.dh.get(3).unwrap()),
+            &secret(&base.ss_opk),
+        )
+        .unwrap();
+        assert_eq!(
+            lib.expose_secret(),
+            base.k_id.expose_secret(),
+            "{ctx}: library = harness"
+        );
+        // IKSPublic_I (DH1, transcript) varied: K_id unchanged, SK and DH1 changed
+        let other_i = run(&i2, &r, &keys, &ld_id, &link_key, &m_spk, &m_opk);
+        assert_ne!(other_i.dh.first(), base.dh.first(), "{ctx}: DH1 differs");
+        assert_ne!(other_i.transcript, base.transcript, "{ctx}: transcript");
+        assert_ne!(
+            other_i.sk.expose_secret(),
+            base.sk.expose_secret(),
+            "{ctx}: SK"
+        );
+        assert_eq!(
+            other_i.k_id.expose_secret(),
+            base.k_id.expose_secret(),
+            "{ctx}: K_id independent of IKSPublic_I and DH1"
+        );
+        // DH2 varied (another responder identity IK_dh_R): K_id unchanged, SK changed
+        let other_r = run(&i, &r2, &keys, &ld_id, &link_key, &m_spk, &m_opk);
+        assert_ne!(other_r.dh.get(1), base.dh.get(1), "{ctx}: DH2 differs");
+        assert_ne!(
+            other_r.sk.expose_secret(),
+            base.sk.expose_secret(),
+            "{ctx}: SK (DH2)"
+        );
+        assert_eq!(
+            other_r.k_id.expose_secret(),
+            base.k_id.expose_secret(),
+            "{ctx}: K_id independent of DH2"
+        );
+        // each of the six inputs varied: K_id changes
+        let (ld2, lk2): ([u8; 16], [u8; 32]) = (rng.random(), rng.random());
+        let (m_spk2, m_opk2): ([u8; 32], [u8; 32]) = (rng.random(), rng.random());
+        let keys_spk = harness::Prekeys {
+            spk_dh: X25519Secret::from_bytes(&random_bytes(&mut rng, 32)).unwrap(),
+            ..clone_prekeys(&keys)
+        };
+        let keys_opk = harness::Prekeys {
+            opk_dh: X25519Secret::from_bytes(&random_bytes(&mut rng, 32)).unwrap(),
+            ..clone_prekeys(&keys)
+        };
+        for (name, other) in [
+            ("ld_id", run(&i, &r, &keys, &ld2, &link_key, &m_spk, &m_opk)),
+            ("link_key", run(&i, &r, &keys, &ld_id, &lk2, &m_spk, &m_opk)),
+            (
+                "DH3",
+                run(&i, &r, &keys_spk, &ld_id, &link_key, &m_spk, &m_opk),
+            ),
+            (
+                "ss_spk",
+                run(&i, &r, &keys, &ld_id, &link_key, &m_spk2, &m_opk),
+            ),
+            (
+                "DH4",
+                run(&i, &r, &keys_opk, &ld_id, &link_key, &m_spk, &m_opk),
+            ),
+            (
+                "ss_opk",
+                run(&i, &r, &keys, &ld_id, &link_key, &m_spk, &m_opk2),
+            ),
+        ] {
+            assert_ne!(
+                other.k_id.expose_secret(),
+                base.k_id.expose_secret(),
+                "{ctx}: K_id changes with {name}"
+            );
+        }
+    }
+}

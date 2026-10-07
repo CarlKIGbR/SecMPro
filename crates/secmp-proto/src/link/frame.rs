@@ -16,14 +16,18 @@
 //! decode, a `CONT` with nothing pending) leaves the counters unchanged (spec §8.5): [`Link::open_unit`] does not
 //! mutate, [`Link::commit`] advances. [`Link::open_request`] and [`Link::open_response`] do open, decode and commit.
 
-use secmp_crypto::{Aead, Label, SecretBytes, Zeroizing};
+#[cfg(not(kani))]
+use secmp_crypto::Aead;
+use secmp_crypto::{Label, SecretBytes};
 
-use crate::codec::{Decode, pad, unpad};
+use crate::codec::{Decode, Zeroizing, pad, unpad};
 use crate::link::handshake::LinkKeys;
 use crate::link::{Error, LINK_MAX_FRAMES, Result};
 use crate::sizes::{AEAD_TAG_LEN, FRAME_LEN, FRAME_PLAINTEXT_LEN};
 use crate::wire::Id;
 use crate::wire::frame::{CellrContext, Request, Response};
+#[cfg(kani)]
+use kani_stubs::Aead;
 
 /// The largest payload a frame carries (the padding needs one marker byte).
 pub const MAX_PAYLOAD_LEN: usize = FRAME_PLAINTEXT_LEN - 1;
@@ -280,5 +284,87 @@ impl Link {
     #[must_use]
     pub fn keys_kat(&self) -> (&[u8; 32], &[u8; 32]) {
         (self.k_send.expose_secret(), self.k_recv.expose_secret())
+    }
+}
+
+/// Kani only (`crate::kani_proofs`, `kani_link_counter_*`): a stand-in for `secmp_crypto::Aead` whose seal records the
+/// nonce's counter in the first 8 tag bytes and whose open succeeds iff the nonce's counter equals that record, and
+/// a constructor of a [`Link`] with chosen counters. `Zeroizing` is `codec::Zeroizing` (the Kani stand-in; the same
+/// type as `secmp_crypto::Zeroizing` outside Kani), because `zeroize` contains inline assembly Kani cannot execute.
+#[cfg(kani)]
+pub(crate) mod kani_stubs {
+    use secmp_crypto::{Nonce24, SecretBytes};
+
+    use super::{AEAD_TAG_LEN, Counter, Id, Link, Zeroizing};
+
+    pub(crate) struct Aead;
+
+    /// The 8-byte frame counter of a link nonce `0^16 || u64be(counter)`.
+    fn nonce_counter(nonce: &[u8; 24]) -> Option<u64> {
+        nonce.last_chunk::<8>().copied().map(u64::from_be_bytes)
+    }
+
+    impl Aead {
+        pub(crate) fn seal(
+            _k: &SecretBytes<32>,
+            nonce: Nonce24,
+            _ad: &[u8],
+            p: &[u8],
+        ) -> Result<Vec<u8>, secmp_crypto::Error> {
+            let mut out = p.to_vec();
+            let mut tag = [0_u8; AEAD_TAG_LEN];
+            if let (Some(c), Some(t)) =
+                (nonce_counter(nonce.as_bytes()), tag.first_chunk_mut::<8>())
+            {
+                *t = c.to_be_bytes();
+            }
+            out.extend_from_slice(&tag);
+            Ok(out)
+        }
+
+        pub(crate) fn open(
+            _k: &SecretBytes<32>,
+            nonce: &[u8; 24],
+            _ad: &[u8],
+            c: &[u8],
+        ) -> Result<Zeroizing<Vec<u8>>, secmp_crypto::Error> {
+            let tag_at = c
+                .len()
+                .checked_sub(AEAD_TAG_LEN)
+                .ok_or(secmp_crypto::Error::Rejected)?;
+            let (ct, tag) = c
+                .split_at_checked(tag_at)
+                .ok_or(secmp_crypto::Error::Rejected)?;
+            let recorded = tag.first_chunk::<8>().copied().map(u64::from_be_bytes);
+            if recorded.is_some() && recorded == nonce_counter(nonce) {
+                Ok(Zeroizing::new(ct.to_vec()))
+            } else {
+                Err(secmp_crypto::Error::Rejected)
+            }
+        }
+    }
+
+    /// The counter a sealed frame was sealed under (the stand-in's record in the tag).
+    pub(crate) fn sealed_counter(frame: &[u8]) -> Option<u64> {
+        let tag_at = frame.len().checked_sub(AEAD_TAG_LEN)?;
+        let tag = frame.get(tag_at..)?;
+        Some(u64::from_be_bytes(*tag.first_chunk::<8>()?))
+    }
+
+    impl Link {
+        /// A link with all-zero keys, the given counters and `max_frames`.
+        pub(crate) fn kani_new(
+            send: Option<u64>,
+            recv: Option<u64>,
+            max_frames: Option<u64>,
+        ) -> Option<Self> {
+            let key = SecretBytes::<32>::from_slice(&[0; 32]).ok()?;
+            let key2 = SecretBytes::<32>::from_slice(&[0; 32]).ok()?;
+            let sess_id: Id = [0; 16];
+            let mut link = Self::new(key, key2, sess_id, max_frames);
+            link.send = Counter(send);
+            link.recv = Counter(recv);
+            Some(link)
+        }
     }
 }

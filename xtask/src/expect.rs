@@ -166,7 +166,10 @@ pub(crate) const TR_PERF_KINDS: &[&str] = &["chain", "step"];
 /// (`proto_*`, a selector byte picks the decoder); M3 SecMP-TR `Decrypt` on a fixed receiver state (`tr_decrypt`)
 /// and the TR persistence decoders (`tr_state`); M4 the invitation URI (`inv_uri`), the link data (`inv_linkdata`),
 /// the three handshake structures (`hx_outer`, `hx_inner`, `hx_cell_plaintext`) and `Responder::accept` on raw and
-/// on structurally mutated envelopes (`hx_accept_raw`, `hx_accept_structured`).
+/// on structurally mutated envelopes (`hx_accept_raw`, `hx_accept_structured`); M5 (Phase A) the SecMP-LINK record
+/// decoders (`link_records`), the client and the relay side of the handshake (`link_client_handshake`,
+/// `link_relay_handshake`), `Link::open` (`link_frame_open`) and the D.2 frame-plaintext decoders (`q_request_decode`,
+/// `q_response_decode`); `hx_accept_structured` gains its mode 3 (M4 review R-44).
 pub(crate) const FUZZ_TARGETS: &[&str] = &[
     "caead_open",
     "ed25519_verify",
@@ -178,6 +181,10 @@ pub(crate) const FUZZ_TARGETS: &[&str] = &[
     "hybrid_sign_verify",
     "inv_linkdata",
     "inv_uri",
+    "link_client_handshake",
+    "link_frame_open",
+    "link_records",
+    "link_relay_handshake",
     "mldsa65_verify",
     "mlkem_parse",
     "msg_open",
@@ -186,9 +193,26 @@ pub(crate) const FUZZ_TARGETS: &[&str] = &[
     "proto_handshake",
     "proto_invitation",
     "proto_records",
+    "q_request_decode",
+    "q_response_decode",
     "tr_decrypt",
     "tr_state",
     "x25519_dh",
+];
+
+/// Fuzz targets that rely on their tracked corpus (`fuzz/corpus/<target>/`) alone, because the frozen suite their
+/// seeding rule would read is not frozen yet (`xtask::fuzzseed`: a rule names a suite of [`VECTOR_SUITES`]).
+/// M5 Phase A: the six SecMP-LINK/Q targets read the `link` suite, which is frozen in Phase B (TEST-SPEC-M5 X-01,
+/// V-22); Phase B moves them out of this list by adding their seeding rules (the unit test
+/// `the_rules_name_listed_targets_and_frozen_suites` fails if a listed target has both).
+#[cfg(test)]
+pub(crate) const FUZZ_TRACKED_ONLY: &[&str] = &[
+    "link_client_handshake",
+    "link_frame_open",
+    "link_records",
+    "link_relay_handshake",
+    "q_request_decode",
+    "q_response_decode",
 ];
 
 /// Seconds per fuzz target of the `fuzz` gate (ci-full step 6, docs/06 §4: "≈2 min per target on every PR").
@@ -236,7 +260,14 @@ pub(crate) const FUZZ_NIGHTLY_SECONDS: u64 = 14_400;
 /// - `hx_outer`: the padded `Outer` = 12018. `hx_inner`: `Inner` = 6113. `hx_cell_plaintext`: 4024.
 /// - `hx_accept_raw`: count 1 + 12 cells of (selector 1 + 4096 raw bytes) = 49165.
 /// - `hx_accept_structured`: selector 1 + the larger of `Padded` (12018), `Inner` (6113) and the `Outer` head (3177)
-///   = 12019.
+///   = 12019. M5 mode 3 (a padded `Content`, 1710) is shorter.
+/// - `link_records`: selector 1 + the HS1 record (`len` 2 + type 1 + 2853, the largest of the four) = 2857.
+/// - `link_client_handshake`: selector 1 + flag byte 1 + the `RELAYINFO` record (`len` 2 + type 1 + 1741; mode 0, the
+///   structured modes take at most 112) = 1746.
+/// - `link_relay_handshake`: selector 1 + the HS1 record (2856) = 2857.
+/// - `link_frame_open`: selector 1 + a unit of 4352 B (the other modes take at most 4339) = 4353.
+/// - `q_request_decode`: selector 1 + a frame plaintext 4336 = 4337.
+/// - `q_response_decode`: mode 1 + a frame plaintext 4336 = 4337.
 pub(crate) const FUZZ_MAX_LEN: &[(&str, usize)] = &[
     ("caead_open", 12_618),
     ("ed25519_verify", 4_243),
@@ -248,6 +279,10 @@ pub(crate) const FUZZ_MAX_LEN: &[(&str, usize)] = &[
     ("hybrid_sign_verify", 7_810),
     ("inv_linkdata", 12_362),
     ("inv_uri", 718),
+    ("link_client_handshake", 1_747),
+    ("link_frame_open", 4_354),
+    ("link_records", 2_858),
+    ("link_relay_handshake", 2_858),
     ("mldsa65_verify", 3_567),
     ("mlkem_parse", 1_570),
     ("msg_open", 2_000),
@@ -256,6 +291,8 @@ pub(crate) const FUZZ_MAX_LEN: &[(&str, usize)] = &[
     ("proto_handshake", 12_020),
     ("proto_invitation", 12_362),
     ("proto_records", 2_858),
+    ("q_request_decode", 4_338),
+    ("q_response_decode", 4_338),
     ("tr_decrypt", 4_098),
     ("tr_state", 38_587),
     ("x25519_dh", 97),
@@ -540,6 +577,26 @@ pub(crate) const MIRI_SKIP: &[(&str, &str, &str)] = &[
 pub(crate) const MIRI_FEATURE_GATED: &[(&str, &str, &str)] = &[
     (
         "secmp-proto",
+        "link",
+        "required-features = [\"kat\"]: the replay of the SecMP-LINK vector groups (M5), natively in the kat step",
+    ),
+    (
+        "secmp-proto",
+        "link_client",
+        "required-features = [\"kat\"]: the SecMP-LINK client handshake tests (M5), natively in the kat step",
+    ),
+    (
+        "secmp-proto",
+        "link_frames",
+        "required-features = [\"kat\"]: the SecMP-LINK frame tests and properties (M5), natively in the kat step",
+    ),
+    (
+        "secmp-proto",
+        "link_relay",
+        "required-features = [\"kat\"]: the SecMP-LINK relay handshake tests (M5), natively in the kat step",
+    ),
+    (
+        "secmp-proto",
         "hx",
         "required-features = [\"kat\"]: the SecMP-HX integration suite (M4), natively in the kat step",
     ),
@@ -592,9 +649,14 @@ pub(crate) const KANI_HARNESSES: &[&str] = &[
     "kani_proofs::kani_accept_opk_delete_only_on_success",
     "kani_proofs::kani_cell_plaintext_decode_total",
     "kani_proofs::kani_commit_accept_atomic",
+    "kani_proofs::kani_cont_assembly",
+    "kani_proofs::kani_frame_pad_total",
     "kani_proofs::kani_hx_chunk_bounds",
     "kani_proofs::kani_hx_grouping",
+    "kani_proofs::kani_link_counter_checked_add",
+    "kani_proofs::kani_link_counter_strict_plus_one",
     "kani_proofs::kani_outer_unpad_total",
+    "kani_proofs::kani_q_frame_plaintext_exact_fit",
     "kani_proofs::padding",
     "kani_proofs::request_cont",
     "kani_proofs::request_fetch",
@@ -619,6 +681,8 @@ pub(crate) const KANI_HARNESSES: &[&str] = &[
 pub(crate) const KANI_COVERS: &[(&str, usize)] = &[
     ("kani_proofs::kani_accept_opk_delete_only_on_success", 1),
     ("kani_proofs::kani_commit_accept_atomic", 1),
+    ("kani_proofs::kani_cont_assembly", 1),
+    ("kani_proofs::kani_link_counter_strict_plus_one", 2),
 ];
 
 /// The SecMP vector suites (`vectors/SCHEMA.md` §3): frozen as `vectors/<suite>.json`, reference files
@@ -642,8 +706,9 @@ pub(crate) const VECTOR_SUITES: &[&str] = &[
 /// well-formed (JSON, `suite` = its name, a non-empty `cases` array) and compares nothing yet. Moving a suite from
 /// here to `VECTOR_SUITES` is its freeze step (M2: `encodings`, frozen in `docs/reviews/M02-report.md` plan step 10;
 /// M3: `tr`, committed with the M3 brief and frozen in `docs/reviews/M03-report.md` plan step 6; M4: `hx`, committed
-/// with the M4 plan commit and frozen in `docs/reviews/M04-report.md` plan step 5). None pending.
-pub(crate) const VECTOR_REF_PENDING: &[&str] = &[];
+/// with the M4 plan commit and frozen in `docs/reviews/M04-report.md` plan step 5; M5: `link`, committed with the
+/// M5 plan commit, frozen by Phase B, TEST-SPEC-M5 V-22 and X-01). Pending: `link`.
+pub(crate) const VECTOR_REF_PENDING: &[&str] = &["link"];
 
 /// Suites whose Rust generator writes the positive rows only (M2 cross-generates the `encodings` positives, docs/07
 /// M2 deliverables): `cargo xtask vectors` compares the header and the positive rows, and requires the decoders to

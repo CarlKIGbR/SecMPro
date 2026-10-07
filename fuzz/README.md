@@ -9,7 +9,7 @@ CI, with the pinned nightly (`xtask/src/tools.rs`) and a per-target `-max_len` (
   (`FUZZ_SMOKE_SECONDS`).
 - **Nightly campaign** (`.github/workflows/fuzz-nightly.yml`, daily at 00:23 UTC and on dispatch; not a
   required check; `cargo xtask step fuzz-nightly`): 4 h (`FUZZ_NIGHTLY_SECONDS` = 14 400 s) shared equally by
-  the targets (1 200 s each with the 12 targets of M2, 1 028 s with the 14 of M3, 685 s with the 21 of M4). The workflow uploads the scratch corpus and any crash
+  the targets (1 200 s each with the 12 targets of M2, 1 028 s with the 14 of M3, 685 s with the 21 of M4, 533 s with the 27 of M5). The workflow uploads the scratch corpus and any crash
   inputs as artefacts; taking inputs into `fuzz/corpus/` (after `cargo fuzz cmin`) is a manual, reviewed commit.
   The same workflow runs the `secmp-proto` tests with feature `kat` (`cargo nextest run -p secmp-proto --features
   kat`, which builds the `kat`-only TR property test `tr_properties` and the `canonical` property tests) with

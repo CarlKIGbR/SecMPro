@@ -730,10 +730,16 @@ mod tests {
             assert!(expect::VECTOR_SUITES.contains(&r.suite), "{}", r.suite);
         }
         for t in expect::FUZZ_TARGETS {
+            let has_rule = SEED_RULES.iter().any(|r| r.target == *t);
+            let tracked_only = expect::FUZZ_TRACKED_ONLY.contains(t);
+            assert!(has_rule || tracked_only, "{t} has no seeding rule");
             assert!(
-                SEED_RULES.iter().any(|r| r.target == *t),
-                "{t} has no seeding rule"
+                !(has_rule && tracked_only),
+                "{t} has a seeding rule and is listed as tracked-corpus only"
             );
+        }
+        for t in expect::FUZZ_TRACKED_ONLY {
+            assert!(expect::FUZZ_TARGETS.contains(t), "{t} is not a fuzz target");
         }
     }
 
@@ -791,7 +797,12 @@ mod tests {
                 total_proto = total_proto.saturating_add(seeds.len());
             }
         }
-        assert_eq!(expected.len(), expect::FUZZ_TARGETS.len());
+        assert_eq!(
+            expected.len(),
+            expect::FUZZ_TARGETS
+                .len()
+                .saturating_sub(expect::FUZZ_TRACKED_ONLY.len())
+        );
         // every decodable `encodings` row, once: 78 positives and 547 negatives
         assert_eq!(total_proto, 625);
         Ok(())

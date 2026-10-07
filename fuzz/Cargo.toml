@@ -168,3 +168,45 @@ path = "fuzz_targets/hx_accept_structured.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "link_records"
+path = "fuzz_targets/link_records.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "link_client_handshake"
+path = "fuzz_targets/link_client_handshake.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "link_relay_handshake"
+path = "fuzz_targets/link_relay_handshake.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "link_frame_open"
+path = "fuzz_targets/link_frame_open.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "q_request_decode"
+path = "fuzz_targets/q_request_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "q_response_decode"
+path = "fuzz_targets/q_response_decode.rs"
+test = false
+doc = false
+bench = false

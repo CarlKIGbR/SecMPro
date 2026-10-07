@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The vector-file format of SCHEMA.md rev 5 (rev 2 for the M1 files) and the per-case input randomness.
+"""The vector-file format of SCHEMA.md rev 6 (rev 2 for the M1 files) and the per-case input randomness.
 
 SCHEMA §1: file shape, value encodings, canonical writer, structural comparison.
 SCHEMA §2: seed_i and stream_i (SQ-01, Reading A). SCHEMA §3: suite tags (SQ-02, Reading A).
@@ -17,10 +17,12 @@ SCHEMA = 2
 # SCHEMA §1 (REF-M2-1 correction 2): encodings.json is "schema": 3, for its nested `value` objects and
 # arrays and the ASCII fields `structure`/`context`; the M1 files keep 2. Brief REF-M3: tr.json is
 # "schema": 4, for its case-level fields (SCHEMA §4.9). Brief REF-M4: hx.json is "schema": 5 (SCHEMA §4.10).
-SUITE_SCHEMA = {"encodings": 3, "tr": 4, "hx": 5}
+# Brief REF-M5: link.json is "schema": 6 (SCHEMA §4.11).
+SUITE_SCHEMA = {"encodings": 3, "tr": 4, "hx": 5, "link": 6}
 SPEC = "SecMP/1 rev 2.2"
 # Weisung REF-M2-3: encodings.json names spec rev 2.3 (ADR-039); the M1 files keep rev 2.2.
-SUITE_SPEC = {"encodings": "SecMP/1 rev 2.3", "tr": "SecMP/1 rev 2.3", "hx": "SecMP/1 rev 2.3"}
+SUITE_SPEC = {"encodings": "SecMP/1 rev 2.3", "tr": "SecMP/1 rev 2.3", "hx": "SecMP/1 rev 2.6",
+              "link": "SecMP/1 rev 2.3"}
 GENERATOR = "ref-python"
 
 
@@ -44,6 +46,7 @@ SUITE_TAGS = {
     "encodings": "enc",                      # brief REF-M2 / proposal SCHEMA-4.8-encodings.md
     "tr": "tr",                              # brief REF-M3 / proposal SCHEMA-4.9-tr.md
     "hx": "hx",                              # brief REF-M4 / proposal SCHEMA-4.10-hx.md
+    "link": "link",                          # brief REF-M5 / SCHEMA-4.11-link.md
 }
 
 # SCHEMA §1 / SQ-04: the operation names (encode/decode: proposal SCHEMA-4.8).
@@ -246,7 +249,7 @@ _HX_RESPOND_OUT = {"transcript", "sk", "k_id", "peer_iks", "content", "profile",
 HX_CASE_KEYS = {
     "keys-R": ("R", {"iks", "fp", "bundle", "opks_post"}),
     "keys-I": ("I", {"iks", "fp"}),
-    "invite": ("R", {"invitation", "uri"}),
+    "invite": ("R", {"invitation", "uri", "inv_sid", "invq_recv_pk", "owner_pk"}),
     "linkdata": ("R", {"k_ld", "linkdata", "blob"}),
     "invitee-accept": ("I", {"k_ld", "k_inv", "accept"}),
     "initiate": ("I", {"ek_pk", "dh1", "dh2", "dh3", "dh4", "ct_spk", "ss_spk", "ct_opk", "ss_opk", "transcript",
@@ -254,6 +257,8 @@ HX_CASE_KEYS = {
                        "cell_2", "state_post_I"}),
     "respond": ("R", _HX_RESPOND_OUT),
     "respond-garbage": ("R", _HX_RESPOND_OUT),
+    "respond-later-group": ("R", _HX_RESPOND_OUT),
+    "respond-retained-spk": ("R", _HX_RESPOND_OUT),
     "invitee-reject": ("I", None),
     "respond-reject": ("R", {"opks_post"}),
 }
@@ -305,21 +310,117 @@ def _validate_hx_case(case: dict) -> None:
         _check_hx_field(case["id"], name, value)
 
 
+# SCHEMA §4.11 (link, "schema": 6): per op the parties; the case-level fields; the value shapes.
+LINK_CR_OPS = {"queue-new", "send", "ping", "fetch", "fetch-multi", "send-fill", "queue-del", "link-put", "link-get",
+               "skey"}
+LINK_OPS = {"relay-keys": {"R"}, "relayinfo-accept": {"C"}, "hs1": {"C"}, "hs2": {"R"}, "hs2-accept": {"C"},
+            **{op: {"CR"} for op in LINK_CR_OPS}, "indist": {"CR"},
+            "relayinfo-reject": {"C"}, "hs1-reject": {"R"}, "hs2-reject": {"C"}, "frame-reject": {"R", "C"}}
+LINK_REJECT_OPS = {"relayinfo-reject", "hs1-reject", "hs2-reject", "frame-reject"}
+LINK_BYTES_LISTS = {"req", "resp", "req_frames", "resp_frames"}     # arrays of byte strings, in frame order
+LINK_POST = {"c2r", "r2c", "cmd_seq"}
+LINK_QUEUE = {"rid", "sid", "cell_ids", "next_cell_id"}
+LINK_LINKDATA = {"ld_id", "one_time", "expires_bucket", "present", "consumed"}
+
+
+def _uint(x) -> bool:
+    return isinstance(x, int) and not isinstance(x, bool) and x >= 0
+
+
+def _hex(x) -> bool:
+    return isinstance(x, str) and HEX_RE.match(x) is not None
+
+
+def _store_post_ok(v) -> bool:
+    if not (isinstance(v, dict) and set(v) == {"queues", "linkdata"}
+            and isinstance(v["queues"], list) and isinstance(v["linkdata"], list)):
+        return False
+    for q in v["queues"]:
+        if not (isinstance(q, dict) and set(q) == LINK_QUEUE and _hex(q["rid"]) and _hex(q["sid"])
+                and _uint(q["next_cell_id"]) and isinstance(q["cell_ids"], list) and all(map(_uint, q["cell_ids"]))):
+            return False
+    for e in v["linkdata"]:
+        if not (isinstance(e, dict) and set(e) == LINK_LINKDATA and _hex(e["ld_id"])
+                and all(_uint(e[k]) for k in LINK_LINKDATA - {"ld_id"})):
+            return False
+    rids, ld_ids = [q["rid"] for q in v["queues"]], [e["ld_id"] for e in v["linkdata"]]
+    return rids == sorted(set(rids)) and ld_ids == sorted(set(ld_ids))     # ascending (lowercase hex sorts as bytes)
+
+
+def _check_link_field(case_id_, name, value):
+    if name == "accept":
+        ok = isinstance(value, bool)
+    elif name == "frame_len":
+        ok = _uint(value)
+    elif name in LINK_BYTES_LISTS:
+        ok = isinstance(value, list) and len(value) > 0 and all(map(_hex, value))
+    elif name == "link_post":
+        ok = isinstance(value, dict) and set(value) == LINK_POST and all(map(_uint, value.values()))
+    elif name == "store_post":
+        ok = _store_post_ok(value)
+    elif name == "resp_counts":
+        ok = isinstance(value, list) and all(isinstance(g, list) and g and all(map(_uint, g)) for g in value)
+    else:
+        ok = _hex(value)
+    if not ok:
+        raise ValueError(f"{case_id_}: field {name!r}: bad value {value!r}")
+
+
+def _validate_link_case(case: dict, earlier_ids: set) -> None:
+    op, cid = case.get("op"), case["id"]
+    if op not in LINK_OPS:
+        raise ValueError(f"{cid}: op {op!r}")
+    allowed = {"id", "op", "party", "inputs", "from", "cmd_seq", "count", "cases", "manipulation", "expect", "outputs"}
+    if not {"id", "op", "party", "inputs"} <= set(case) <= allowed:
+        raise ValueError(f"{cid}: keys {sorted(case)}")
+    if case["party"] not in LINK_OPS[op]:
+        raise ValueError(f"{cid}: party {case['party']!r}")
+    if (op in ("relay-keys", "indist")) == ("from" in case):
+        raise ValueError(f"{cid}: `from` on op {op}")
+    if "from" in case and case["from"] not in earlier_ids:
+        raise ValueError(f"{cid}: from {case['from']!r} is not an earlier case")
+    if (op in LINK_CR_OPS) != ("cmd_seq" in case) or ("cmd_seq" in case and not (_uint(case["cmd_seq"])
+                                                                                  and case["cmd_seq"] >= 1)):
+        raise ValueError(f"{cid}: cmd_seq")
+    if (op == "send-fill") != ("count" in case) or ("count" in case and not (_uint(case["count"]) and case["count"])):
+        raise ValueError(f"{cid}: count")
+    if (op == "indist") != ("cases" in case) or ("cases" in case and not (
+            isinstance(case["cases"], list) and all(isinstance(g, list) and g and all(x in earlier_ids for x in g)
+                                                    for g in case["cases"]))):
+        raise ValueError(f"{cid}: cases")
+    if "manipulation" in case and not (isinstance(case["manipulation"], str) and case["manipulation"].isascii()
+                                       and case["manipulation"]):
+        raise ValueError(f"{cid}: manipulation {case['manipulation']!r}")
+    if op in LINK_REJECT_OPS:
+        if case.get("expect") != "reject" or "manipulation" not in case:
+            raise ValueError(f"{cid}: a rejection carries `manipulation` and \"expect\": \"reject\"")
+    elif "expect" in case:
+        raise ValueError(f"{cid}: expect on op {op}")
+    has_outputs = "outputs" in case
+    if op in ("relayinfo-reject", "hs2-reject") and has_outputs or op not in LINK_REJECT_OPS | {"hs1-reject"} \
+            and not has_outputs or op == "frame-reject" and set(case.get("outputs", {})) != {"link_post"}:
+        raise ValueError(f"{cid}: outputs")
+    for name, value in [*case["inputs"].items(), *case.get("outputs", {}).items()]:
+        _check_link_field(cid, name, value)
+
+
 def validate_document(doc: dict) -> None:
     """Raises ValueError unless doc has the SCHEMA §1 shape."""
     if set(doc) != {"schema", "suite", "spec", "generator", "cases"}:
         raise ValueError(f"top-level keys {sorted(doc)}")
     if doc["suite"] not in SUITE_TAGS or doc["schema"] != schema_of(doc["suite"]):
         raise ValueError("schema or suite")
-    if doc["suite"] in ("tr", "hx"):
+    if doc["suite"] in ("tr", "hx", "link"):
         seen = set()
         for n, case in enumerate(doc["cases"], start=1):
             if case.get("id") != case_id(doc["suite"], n):
                 raise ValueError(f"case {n}: id {case.get('id')!r} (ids start at 0001, no gaps, in order)")
             if doc["suite"] == "tr":
                 _validate_tr_case(case, seen)
-            else:
+            elif doc["suite"] == "hx":
                 _validate_hx_case(case)
+            else:
+                _validate_link_case(case, seen)
             seen.add(case["id"])
         return
     for n, case in enumerate(doc["cases"], start=1):

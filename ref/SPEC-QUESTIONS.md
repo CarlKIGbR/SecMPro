@@ -32,6 +32,10 @@ and why, and the suites it blocks. A blocked suite is not written until the answ
 | SQ-23 | N9 "sealed under the sender's `nhk_s`" | `tr`: 1 case (written under the m16 key) | answered 2026-09-30 |
 | SQ-24 | The state-digest label is not in App. A | — (confirmation) | answered 2026-09-30 |
 | SQ-25 | Does the invitee check the inviter's expiry bounds (`expires` ≤ creation + 30 d, `spk_expiry` ≥ `expires`)? | — (no `hx` case depends on it) | answered 2026-09-30 |
+| SQ-26 | A request with `cmd_seq` ≤ `last`: frame count and timing for FETCH, FETCH_MULTI, LINK_GET, LINK_PUT | — (no `link` case depends on it) | answered 2026-10-07 |
+| SQ-27 | Frames that arrive while a LINK_PUT waits for its CONT frames | — (no `link` case depends on it) | answered 2026-10-07 |
+| SQ-28 | FETCH_MULTI with more entries in error than `F_M`, and a repeated `rid` | — (no `link` case depends on it) | answered 2026-10-07 |
+| SQ-29 | What "a route of a known kind" means for a Handshake content (§6.5 rev 2.5, §9.8) | — (R18 uses kind 0x7F) | open (2026-10-07) |
 
 **State 2026-09-28 (brief REF-M1):** all answers applied; `BLOCKED_BY` is empty; the eight M1 files are written to `vectors/`. No new question was raised by the rev 2.2 spec or SCHEMA rev 2. The readings applied to the new SCHEMA §4 tables are listed at the end ("Readings adopted without a question — SCHEMA rev 2 §4") for the reviewer to veto.
 
@@ -44,6 +48,8 @@ and why, and the suites it blocks. A blocked suite is not written until the answ
 **State 2026-09-30 (brief REF-M4):** spec rev 2.3, unchanged; SCHEMA is rev 5, with the §4.10 proposal `SCHEMA-4.10-hx.md`. `vectors/hx.json` is written: 28 cases (8 positive, 8 `invitee-reject`, 12 `respond-reject`), `"schema": 5`. There is one new question, SQ-25, and it blocks nothing: no case depends on it, so `BLOCKED_BY` stays empty. The readings adopted without a question are listed at the end ("Readings adopted without a question — REF-M4"). The ten earlier files are unchanged.
 
 **State 2026-09-30 (Weisung REF-M4-1):** readings 1–15 are confirmed and SQ-25 is answered (reading A). V9 (`hx-0029`, `ld-bad-sig-ed`) and R13 (`hx-0030`, `first-msg-not-handshake`) are appended after R12, so no earlier index or seed moves: 30 cases (8 positive, 9 `invitee-reject`, 13 `respond-reject`). Cases `hx-0001` … `hx-0028` are byte-identical to the REF-M4 file. No open questions.
+
+**State 2026-10-02 (brief REF-M5):** spec rev 2.3, unchanged here; SCHEMA is rev 6, with §4.11 `SCHEMA-4.11-link.md` (the reviewer's table, regenerated from `ref/secmp_ref/link_cases.py`). `vectors/link.json` is written: 86 cases (27 positive, 23 command-error, X1, 8 RelayInfo, 11 `hs1-reject`, 4 `hs2-reject`, 12 `frame-reject`), `"schema": 6`. The reviewer's readings OPEN-1 … OPEN-13 and (a)–(g) are implemented as given; they answer the ref-log notes L-3 (OPEN-7) and L-5 (OPEN-11). There are three new questions, SQ-26 … SQ-28. None blocks a case: each concerns a relay behaviour that no case exercises, so `BLOCKED_BY` stays empty. The readings adopted without a question are listed at the end ("Readings adopted without a question — REF-M5"). The eleven earlier files are unchanged.
 
 ---
 
@@ -305,6 +311,33 @@ These are the §3.5 byte rules, which need no message. Any key that fails them i
 **Blocks:** nothing. Under B or C, two `invitee-reject` cases could be added (`expires` one second over the bound; `spk_expiry` = `expires` − 1 with `spk_expiry` > `now`).
 **Answer** (reviewer, 2026-09-30, Weisung REF-M4-1): reading A is correct. §5.2 and §6.3 bind the inviter; the invitee checks exactly §5.5 steps 1, 3 and 4 as listed in the brief. No case is added. A spec clarification will say so; nothing changes for `ref/`.
 
+## SQ-26 — A request with `cmd_seq` ≤ `last`: frame count and timing for FETCH, FETCH_MULTI, LINK_GET and LINK_PUT (§9.2, §9.3, D.2; reading OPEN-5)
+
+**Quote:** reading OPEN-5: "`cmd_seq ≤ last` is answered with one ERR 6 (MALFORMED), and nothing is executed. CONT stays exempt." §9.3: FETCH "exactly `F` `CELLR` frames; errors are signalled in `CELLR.present` (… 4 = MALFORMED)", FETCH_MULTI "exactly `F_M` `CELLR` frames", LINK_GET "3 `LINKR` frames"; D.2: "LINK_PUT receives ONE response frame after its third frame", "A relay MUST answer every request with the exact number of frames the table specifies, in request order"; §9.3: "success and error frames are indistinguishable on the wire".
+**Problem.** For PING, SKEY, SEND, QUEUE_NEW and QUEUE_DEL one ERR frame is the D.2 count anyway. For FETCH (`F`), FETCH_MULTI (`F_M`) and LINK_GET (3), "one ERR 6" differs from the D.2 count, and FETCH and FETCH_MULTI have their own MALFORMED channel (`present` 4, reading OPEN-7). For LINK_PUT, the stale `cmd_seq` is in frame 1: if the relay answers at once, the two CONT frames that follow are orphans and tear the link down (reading OPEN-6); if it waits, the answer comes after the third frame like every LINK_PUT answer (reading R-e).
+**Readings:** (A) one ERR 6 frame for every command, sent after the command's last request frame (for LINK_PUT, after the third); (B) the command's own D.2 shape: FETCH `F` CELLR with frame 1 `present` 4, FETCH_MULTI `F_M` CELLR with one `present` 4 frame per entry, LINK_GET LINKR {0, 0, dummy} and two CONT (it has no MALFORMED signal), LINK_PUT one ERR 6 after the third frame; (C) as A, but LINK_PUT answered at its first frame, so its CONTs tear the link down.
+**Reading used: A** (reading OPEN-5 as written, with the LINK_PUT timing of D.2). A stale `cmd_seq` comes only from a faulty client (frames are authenticated and counted), so A's frame count reveals nothing about the store. B keeps the D.2 counts exact.
+**Answer** (reviewer, ADR-048 (f), ratified by default 2026-10-04 20:45 UTC; Weisung REF-M5-2): reading A. Nothing changes for `ref/`.
+**Blocks:** nothing. The only case with a stale `cmd_seq`, E23 (`link-0050`), is a PING, for which A, B and C give the same single ERR 6. `ref/tests/test_link.py` pins A for LINK_PUT and FETCH.
+
+## SQ-27 — Frames that arrive while a LINK_PUT waits for its CONT frames (§9.2, D.2; reading OPEN-6)
+
+**Quote:** D.2: "`0x7F CONT idx u8 ‖ data` ; continuation of the previous multi-frame command with the same cmd_seq (LINK_PUT: idx 1,2 carry 4100 B each …); LINK_PUT receives ONE response frame after its third frame"; §9.2: "`CONT` frames repeat the continued command's `cmd_seq` and are exempt from the increase check"; reading OPEN-6: a CONT "with no multi-frame command pending" is a LINK-level rejection.
+**Problem.** OPEN-6 covers a CONT with nothing pending. After a LINK_PUT's first frame, the spec does not say what the relay does with (a) a CONT with another `cmd_seq`, (b) a CONT with `idx` 2 first or `idx` 1 twice, or (c) any other request, SKEY included, before both CONTs have arrived.
+**Readings:** (A) a LINK-level rejection, as for the orphan CONT: teardown, nothing emitted, state unchanged; (B) the pending LINK_PUT is dropped silently and the new frame is processed; (C) the LINK_PUT is answered with ERR 6 and the new frame is processed.
+**Reading used: A** (reference check `cont-expected`). B and C break "one response after the third frame" (B answers nothing, C answers before the third frame), and a client that interleaves is faulty.
+**Answer** (reviewer, ADR-048 (j), ratified by default 2026-10-04 20:45 UTC; Weisung REF-M5-2): reading A. Nothing changes for `ref/`.
+**Blocks:** nothing; no case sends such a frame. `ref/tests/test_link.py` pins A.
+
+## SQ-28 — FETCH_MULTI with more entries in error than `F_M`, and a repeated `rid` (§9.3, §4.2, D.2)
+
+**Quote:** D.2: "`0x05 FETCH_MULTI count u8 (1..=32)`"; §9.3: "exactly `F_M` `CELLR` frames: first one `CELLR` with `present ∈ {2,3,4}` for each listed queue in error, then cells from the remaining queues oldest-first by `arrival`, then dummies"; §4.2: `F_M` = 8.
+**Problem.** `count` may exceed `F_M`. With more than `F_M` entries in error, "one CELLR for each listed queue in error" and "exactly `F_M` frames" cannot both hold. A `rid` listed twice (possibly with two `ack`s) is not addressed either: one error frame per entry or per queue, and can a cell come back twice?
+**Readings, over-full:** (A) the first `F_M` error frames, in request order, and no others; (B) one frame per error, more than `F_M` frames; (C) `count` ≤ `F_M` is a decoder rule. **Repeated `rid`:** (A) each entry is checked and its `ack` applied in request order, an error frame per erroneous entry, and the queue's cells are selected once; (B) a repeated `rid` makes the request MALFORMED.
+**Reading used: A and A.** B breaks D.2's exact count; C would change the decoder (the `encodings` suite accepts `count` up to 32).
+**Answer** (reviewer, ADR-048 (j), ratified by default 2026-10-04 20:45 UTC; Weisung REF-M5-2): A and A. Nothing changes for `ref/`.
+**Blocks:** nothing. P18 and E15 list two distinct queues with at most one in error. `ref/tests/test_link.py` pins the over-full reading.
+
 ---
 
 ## Readings adopted without a question (for the reviewer to veto)
@@ -347,9 +380,11 @@ None of these blocks a suite. Item 1 is the one where a different reading change
 - **L-2 — fixed in rev 2.2:** Appendix A lists the nine `SecMP-STORE/1 <table>` labels explicitly.
 - *(original note)* **L-2 (Appendix A, `SecMP-STORE/1 <table>`):** the table names are defined outside this document (`02-architecture.md` §4.2). No STORE label can be written from this spec alone.
 - **Arithmetic check:** every size in Appendix B, and the frame, cell and handshake layouts they come from, were added up again from their field lists. All of them agree (`ref/tests/test_labels_sizes.py::test_composite_sizes_add_up`), as do the §10.2 bandwidth figures and the §7.4 "≈ 121 days" figure.
-- **L-3 (§9.1 vs §9.3 / D.2, for M5):** §9.1 says "The relay MUST answer a `FETCH` whose `ack ≥ next_cell_id` with `ERR_MALFORMED`". But §9.3 answers a FETCH with "exactly `F` `CELLR` frames; errors are signalled in `CELLR.present` (… 4 = MALFORMED)", and D.2 says "A relay MUST answer every request with the exact number of frames the table specifies". Is a stale ack answered with one ERR frame or with F CELLR frames with `present` = 4? This does not affect `encodings`.
+- **L-3 — answered by reading OPEN-7 (brief REF-M5):** a stale ack is answered with `F` CELLR frames, frame 1 with `present` 4.
+- *(original note)* **L-3 (§9.1 vs §9.3 / D.2, for M5):** §9.1 says "The relay MUST answer a `FETCH` whose `ack ≥ next_cell_id` with `ERR_MALFORMED`". But §9.3 answers a FETCH with "exactly `F` `CELLR` frames; errors are signalled in `CELLR.present` (… 4 = MALFORMED)", and D.2 says "A relay MUST answer every request with the exact number of frames the table specifies". Is a stale ack answered with one ERR frame or with F CELLR frames with `present` = 4? This does not affect `encodings`.
 - **L-4 (§4.2 "PERIODS … tunable … finalised in M6", ADR-018):** the `encodings` rows that use period values (`inv_period_s` := 30, the positives with 10/20/40/80, …) are frozen with PERIODS = {10, 20, 40, 80}. If M6 changes PERIODS, these rows change with it.
-- **L-5 (D.2):** a LINKR with `present` = 1 and `consumed` = 1 has no stated meaning (a consumed one-time blob is deleted), and a CELLR with `present` = 1 and `cell_id` = 0 contradicts "cell_id … monotonically increasing from 1" (§9.1). Decoders accept both, since D-5 and D-7 check each field on its own. No vector uses either.
+- **L-5 — answered by reading OPEN-11 (brief REF-M5):** the consuming LINK_GET answers `present` 1, `consumed` 0; the dummy blob is 12360 random bytes. The CELLR half (`present` 1 with `cell_id` 0) does not occur, since `cell_id` counts from 1.
+- *(original note)* **L-5 (D.2):** a LINKR with `present` = 1 and `consumed` = 1 has no stated meaning (a consumed one-time blob is deleted), and a CELLR with `present` = 1 and `cell_id` = 0 contradicts "cell_id … monotonically increasing from 1" (§9.1). Decoders accept both, since D-5 and D-7 check each field on its own. No vector uses either.
 
 ## Readings adopted without a question — REF-M2 (for the reviewer to veto)
 
@@ -450,3 +485,53 @@ These concern `ref/secmp_ref/inv.py` (spec §5), `ref/secmp_ref/hx.py` (spec §6
 - **V9 `ld-bad-sig-ed`** (`hx-0029`, invitee-reject): as V5, but bit 0 of byte 0 of `bundle.sig` is flipped (the Ed25519 R), sealed with `n` 24 from the stream. The flipped R is still a valid curve point, so the LinkDataV1 decoder (§4.1 (b)) accepts it, and HybridVerify rejects: the ML-DSA half verifies and the Ed25519 half fails (tested). Ref check `bundle-sig`.
 - **R13 `first-msg-not-handshake`** (`hx-0030`, respond-reject, R after cases 1–4): a Batch Content (type 0x02, `ver` 1, `seq` 1, `ts` 1 700 000 001, `count` 1 ‖ AppMessage{`msg_id` 16, kind 1, `expire_after` 0, `payload_len` 8, `payload` 8}) encrypted from a fresh copy of I's post-init TR state. Stream order: `msg_id`, `payload`, `hdr_nonce`, `inner_nonce`, `init_id`, `cell_nonce_0..2`, then R's `dh_sk`, `kem_seed`, `m`. Inner and outer are re-sealed. TR decrypt succeeds, and the Handshake type check (reading 8) rejects: ref check `not-handshake`; `opks_post` = [42].
 - Both are appended after R12, so no earlier case index or seed moves. `hx-0001` … `hx-0028` were compared with the REF-M4 file (`e5f82bae…`) case by case and are byte-identical. `vectors/hx.json` is still `"schema": 5`, written twice from fresh processes, byte-identical: SHA-256 `a33cf162e36969dc4bd70114a7c1b0ae3a97e09a187cd210c47dc374f436e7d2`. `SCHEMA-4.10-hx.md` is re-rendered (30 cases: 8 / 9 / 13). `SCHEMA.md` and the ten earlier files are unchanged.
+
+## Readings adopted without a question — REF-M5 (for the reviewer to veto)
+
+**Reviewer (Weisung REF-M5-2, 2026-10-07): readings 1–13 are confirmed** (reading 1 as the relay's check order, OPEN-M5-04). SQ-26 (A), SQ-27 (A) and SQ-28 (A, A) are answered as ADR-048 (f), (j); an owner override would mean one more re-freeze.
+
+These concern `ref/secmp_ref/link.py` (spec §8), `ref/secmp_ref/relay.py` (spec §9) and the `link` suite (`SCHEMA-4.11-link.md`). The reviewer's readings OPEN-1 … OPEN-13 and (a)–(g) are implemented as given and are not repeated here. Items 1–10 are about the protocol, and items 11–13 about the vector file. No byte of `vectors/link.json` depends on items 1–9: every case has one fault, and no case reaches the behaviours they pin.
+
+1. **Order of checks inside a command.** §9 gives none, so each row of the table has exactly one fault. `ref/` checks: QUEUE_NEW token, signature, known `recv_pk` (identical: OK_QUEUE_NEW; other `send_pk`: ERR 4), budget; SEND `sid`, signature; FETCH and each FETCH_MULTI entry `rid`, signature, `ack`; QUEUE_DEL `rid`, signature; LINK_PUT token, signature, `ld_id` known; owner-status LINK_GET entry and signature together (either failing gives {0, 0}, reading OPEN-10). The budget comes after the idempotency check, so an identical QUEUE_NEW at the limit is answered OK_QUEUE_NEW (reading OPEN-12: no case sends one).
+2. **SKEY** (reading OPEN-6). The relay reads `op` and `cmd_seq` and parses nothing else (SKEY has no v1 fields); the padding is verified when the frame opens (item 3). Its `cmd_seq` is recorded under reading OPEN-5 like any request.
+3. **Padding first, then the D.2 decoder.** `Link.open` returns the payload after the ISO/IEC 7816-4 check, and the relay then decodes it with the M2 request decoder (which re-pads and checks the fields, so the two together are the decoder of REF-M2 reading 4). Either failure is the LINK-level rejection of reading OPEN-6 (reference check `pt-decode`). A request that fails the §4.1 decoder obligations (a low-order key, a bad signature encoding) is such a rejection too.
+4. **RelayInfo.** The checks run in the order decode, `sig`, `relay_fp`, `valid_until ≥ now`, `valid_until − now ≤ 60 days`, `akc`. `akc` is compared only when the client holds an access key (§8.2 "if it holds an access key"); in the suite it always does. HS1's `h0` takes `relay_fp` computed from the accepted RelayInfoV1's `relay_sig_pk`, which equals the pinned value.
+5. **Consumed one-time link data.** The blob is dropped and a marker keeps `one_time`, `expires_bucket` and `owner_pk`; owner status reports {0, 1}; a LINK_PUT on the marker's `ld_id` is ERR 5 until the marker expires (the reviewer lists this outside the suite).
+6. **Link data that is not one-time** (`one_time` = 0): a consume-mode LINK_GET returns it ({1, 0}) and keeps it.
+7. **Draws.** An owner-status LINK_GET draws its dummy blob whether or not the entry exists and the signature verifies; a consume-mode LINK_GET draws one only when it returns no blob. FETCH draws its error frame's cell before the dummies; FETCH_MULTI draws one cell per error frame in request order, then the dummies (response-frame order, as the brief says).
+8. **Store internals.** `arrival` starts at 1 and increases by one per stored cell; a FETCH or FETCH_MULTI entry that is not in error sets `last_fetch_bucket`; buckets are hours since epoch; nothing expires within the suite.
+9. **Counters.** `checked_add` is a local abort (`CounterOverflow`, not the uniform Reject) when a counter would pass 2^64 − 1, after the frame with counter 2^64 − 1 has been sealed or opened. A frame that does not open leaves the counter where it was. Not reachable in a vector.
+10. **The client's checks of a response** (generator self-checks, not spec rules): the D.2 frame count, the position after the command's last request frame, and the `cmd_seq` echo.
+11. **`from`.** `link-0001` starts from no state and has no `from`; X1 has `cases` instead.
+12. **Outputs.** A command-error case lists `req`, `req_frames`, `resp`, `resp_frames`, `link_post` and `store_post` (its manipulated token or signature is visible in `req`). The derived outputs of a positive case are `token` and `sig` (QUEUE_NEW, plus `rid` and `sid` on a queue's first QUEUE_NEW), `sig` (SEND, FETCH, QUEUE_DEL, owner-status LINK_GET), `sig_0`/`sig_1` in entry order (FETCH_MULTI) and `token`, `sig` (LINK_PUT); a consume-mode LINK_GET (`sig` = 0^64) and PING have none. Every link-A case, PING included, has `store_post`.
+13. **JSON shapes** (SCHEMA §1 `"schema": 6`): `frame_len` (X1) is a JSON number; everything else is as the brief lists it.
+
+## SQ-29 — What "a route of a known kind" means for a Handshake content (§6.5 rev 2.5, §9.8)
+
+**Quote:** §6.5 (rev 2.5): "the Handshake content MUST contain at least one route of a known kind, else R rejects (uniform error, OPK kept)"; §9.8: "kind 0x01 RelayQueue … ; v1", "kind 0x02 OnionEndpoint … ; v1.1", "kind 0x03 Mailbox … ; v1.1", "v1 clients MUST ignore unknown kinds"; D.5: RouteDescriptor.
+**Problem.** "Known" can mean the kinds listed in §9.8 (0x01, 0x02, 0x03) or the kinds a v1 client implements (0x01 only). A Handshake whose only route is kind 0x02 or 0x03 is rejected under the second reading and accepted under the first, though a v1 client could not use it.
+**Readings:** (A) known = 0x01, the v1 kind; (B) known = 0x01, 0x02 and 0x03.
+**Reading used: A.** R18 (`hx-0036`) uses kind 0x7F, which both readings reject; no case uses 0x02 or 0x03.
+**Blocks:** nothing.
+
+## Applied: Weisung REF-M5-2 (ref/, 2026-10-07)
+
+- **RF-1** is the name of the retained-SPK request ("SQ-28 (ref)" in the earlier announcement; SQ-28 is the FETCH_MULTI question above). Case A2 (`hx-0037`).
+- **`inv_sid` derived** (ADR-048 (m), M4 review R-90), draw-and-discard (OPEN-M5-14 B): `hx-0003` lists `inv_sid_discarded` at the old position, then `invq_recv_seed` and `owner_seed` after the last draw; outputs add `inv_sid`, `invq_recv_pk`, `owner_pk`. The invitation and URI bytes change, so do `hx-0009` … `hx-0011` (their invitation and URI inputs); every other old case is unchanged.
+- **Appended after `hx-0030`:** `hx-0031` A1 `respond-later-group`, `hx-0032` R14 `no-reform`, `hx-0033` R15 `first-msg-n`, `hx-0034` R16 `first-msg-pn`, `hx-0035` R17 `reflection`, `hx-0036` R18 `no-known-route`, `hx-0037` A2 `respond-retained-spk`. `vectors/hx.json` names spec rev 2.6 in its header (all cases: only the header differs for the unchanged ones).
+- **`hx.py`:** groups are processed in completion order and a rejected group is discarded (a closed group cannot re-form), at most 8 partial groups, the first_msg header must have `n` = `pn` = 0, `IKSPublic_I` ≠ `IKSPublic_R`, at least one route of kind 0x01, and the Outer's `spk_id` may name a retained SPK generation (`Prekeys.retained`).
+- **ADR-048 (o)** in `relay.py`: LINK_PUT checks token, signature, `now_bucket ≤ expires_bucket ≤ now_bucket + 720`, then `ld_id`; outside the range: ERR 6 after the third frame, nothing stored. `vectors/link.json` is unchanged (its `expires_bucket` is `now_bucket` + 168).
+- **F15:** in this directory the four renderers (`ref/tools/render_schema_4_{8,9,10,11}.py`) already write `SCHEMA-4.<n>-….md` in the directory root, next to `SCHEMA.md`, not under `vectors/`; the main repository's copy (the one that wrote under `vectors/`) is not visible here. The 4.8, 4.9 and 4.11 tables re-render byte-identically; 4.10 is re-rendered.
+- **`tests/test_tr.py`:** the SQ-24 test asserted that the label `SecMP-TR/1 state-digest` is absent from the spec. Rev 2.4's App. A now names it once, as a test-only label outside the set; the test checks exactly that.
+
+## Readings adopted without a question — REF-M5-2 (for the reviewer to veto)
+
+1. **Grouping (§6.5 rev 2.5).** A group that has completed is closed whether it is accepted or rejected: later chunks of its `init_id` are ignored. A duplicate (`init_id`, `i`) is ignored whatever its bytes (first-seen wins). Eviction: when a ninth `init_id` would be stored, the oldest partial group is dropped first.
+2. **Rejection result with several groups.** If no group is accepted, the reference check is that of the last rejected group; `no-complete-envelope` only if no group completed. A rejected group's DH-step draws are consumed (they are listed, as R8's).
+3. **Order of the new checks.** `reflection` right after the Inner decoder (before any DH1/DH2); `first-msg-header` after Decrypt succeeds and before the Content decoder; `no-known-route` after the Handshake type check. The header is read with the responder's next header key, before the DH step.
+4. **A1's rejected group** is R8's construction (last byte of `first_msg` flipped) under a fresh `init_id`; its cells and the honest cells follow in that order.
+5. **R15** builds `n` = 1 by encrypting one message from I's post-init state and discarding it; **R16** sets `pn` = 1 on that state. Both therefore decrypt, and only the header rule rejects.
+6. **R17** uses case 6's `first_msg` unchanged under `IKSPublic_I` := `IKSPublic_R`.
+7. **A2**: R's current SPK is a new generation `spk_id` 8 (keys from the case's stream, `spk_expiry` unchanged); SPK 7 is retained with its RPK. The outputs equal case 7's `transcript`, `sk`, `k_id`, `peer_iks`, `content`; `state_post_R` differs (other step draws).
+8. **JSON shapes and names (proposal).** New ops `respond-later-group` and `respond-retained-spk` (positive, party R, outputs as `respond`); `invite` outputs add `inv_sid`, `invq_recv_pk`, `owner_pk`. `SCHEMA.md` §1's hx bullet (op list, outputs) was not touched, as instructed, and lists neither new op nor the three outputs.
+9. **ADR-048 (o) boundaries.** Both bounds are inclusive, as quoted; `expires_bucket` is compared as the u32 it is on the wire.

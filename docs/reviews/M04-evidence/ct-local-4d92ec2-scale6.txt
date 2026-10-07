@@ -1,0 +1,53 @@
+# ct local run on 4d92ec2 test(m4): per-class Rejected and reject-site pre-checks (F19, M3 R-45), SECMP_CT_SCALE=6 (local only: the gate refuses a scaled report)
+$ target/release/deps/ct-e6d882ede7799922 --bench
+exit 1 after 537 s
+$ cargo xtask ct-check target/ct-report.json
+exit 1 after 1 s
+ct-check against expect::CT_TARGETS
+FAIL target/ct-report.json: tr_decrypt_reject_skipped: FAIL at p50 — k=1, calibration median 27916.7 ns, 166666 samples; first max |t| = 12.88 (p50), batch median 27916.7 ns, q_eff 1.0 ticks (clock), realised 670.0 quanta; second max |t| = 15.29 (p50), batch median 27875.0 ns, q_eff 1.0 ticks (clock), realised 669.0 quanta; A/A max |t| = 1.06 (p99), batch median 28166.7 ns, q_eff 1.0 ticks (clock), realised 676.0 quanta; ct report: a shortened run (secmp_ct_scale = "6"); the gate runs the full sample counts; ct report: control_variable_time_compare measured Some(166666) samples, expect 1000000; ct report: tag_compare measured Some(166666) samples, expect 1000000; ct report: msg_open_reject measured Some(166666) samples, expect 1000000; ct report: caead_open_reject measured Some(166666) samples, expect 1000000; ct report: sas measured Some(3333) samples, expect 20000; ct report: caead_derive measured Some(166666) samples, expect 1000000; ct report: caead_aead_reject measured Some(166666) samples, expect 1000000; ct report: caead_com_compare measured Some(166666) samples, expect 1000000; ct report: caead_open_reject_samekey measured Some(166666) samples, expect 1000000; ct report: aa_prime_control measured Some(166666) samples, expect 1000000; ct report: tr_decrypt_reject_hdr_key measured Some(166666) samples, expect 1000000; ct report: tr_decrypt_reject_body_tag measured Some(166666) samples, expect 1000000; ct report: tr_decrypt_reject_ct_pq measured Some(166666) samples, expect 1000000; ct report: tr_decrypt_reject_skipped measured Some(166666) samples, expect 1000000; ct report: same_content_control measured Some(166666) samples, expect 1000000; ct report: inv_fingerprint_compare measured Some(166666) samples, expect 1000000; ct report: x25519_zero_check measured Some(166666) samples, expect 1000000; ct report: hx_accept_reject_inner measured Some(166666) samples, expect 1000000; ct report: hx_accept_reject_first_msg measured Some(166666) samples, expect 1000000
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.19s
+     Running `target/debug/xtask ct-check target/ct-report.json`
+xtask: error: 1 of 1 ct reports do not pass
+error: None | run_verdict: FAIL | reason: None
+scale: 6
+min_leak_control: reached True raw_delta_floor 3.0507 raw_delta_ns 127.1112 floor_ns 41.6667
+control_variable_time_compare  PASS            k=26 median=177.9ns floor_ns=41.667/None maxt=15731.228/None
+tag_compare                    PASS            k=1 median=5791.7ns floor_ns=41.667/41.667 maxt=1.262/1.275
+msg_open_reject                PASS            k=2 median=2604.2ns floor_ns=41.667/41.667 maxt=2.444/2.051
+caead_open_reject              PASS            k=1 median=8166.7ns floor_ns=41.667/41.667 maxt=2.452/1.216
+sas                            PASS            k=1 median=808833.3ns floor_ns=41.667/41.667 maxt=1.725/2.065
+caead_derive                   PASS            k=16 median=289.1ns floor_ns=41.667/41.667 maxt=1.389/1.523
+caead_aead_reject              PASS            k=2 median=3729.2ns floor_ns=41.667/41.667 maxt=1.537/1.292
+caead_com_compare              PASS            k=1 median=6041.7ns floor_ns=41.667/41.667 maxt=2.11/2.097
+caead_open_reject_samekey      PASS            k=1 median=8166.7ns floor_ns=41.667/41.667 maxt=0.658/1.065
+aa_prime_control               PASS            k=2 median=2500.0ns floor_ns=41.667/41.667 maxt=0.976/1.478
+tr_decrypt_reject_hdr_key      PASS            k=1 median=9916.7ns floor_ns=41.667/41.667 maxt=1.107/2.856
+    site: §7.4 header trial decryption (no candidate key opens) | observed: ['Err(Rejected)', 'Err(Rejected)'] | twin: None | fixtures: 5
+tr_decrypt_reject_body_tag     PASS            k=1 median=17708.3ns floor_ns=41.667/41.667 maxt=1.474/2.474
+    site: §7.4 chain path: body MAC | observed: ['Err(Rejected)', 'Err(Rejected)'] | twin: None | fixtures: 5
+tr_decrypt_reject_ct_pq        PASS            k=1 median=14833.3ns floor_ns=41.667/41.667 maxt=1.198/1.189
+    site: §7.4 chain path: KEM constancy | observed: ['Err(Rejected)', 'Err(Rejected)'] | twin: None | fixtures: 5
+tr_decrypt_reject_skipped      FAIL            k=1 median=27916.7ns floor_ns=41.667/41.667 maxt=12.875/15.289 decisive=p50 first(dfloor,t)=(-1.41, -12.875) second=(-1.4224, -15.289)
+    site: §7.4 skipped path: body MAC | observed: ['Err(Rejected)', 'Err(Rejected)'] | twin: None | fixtures: 5
+same_content_control           PASS            k=1 median=17750.0ns floor_ns=41.667/41.667 maxt=1.048/1.607
+    site: §7.4 chain path: body MAC | observed: ['Err(Rejected)', 'Err(Rejected)'] | twin: None | fixtures: 5
+inv_fingerprint_compare        PASS            k=1 median=42291.7ns floor_ns=41.667/41.667 maxt=2.83/1.72
+    site: §5.5 step 3: fingerprint comparison | observed: ['Err(Rejected)', 'Err(Rejected)'] | twin: {'expected': 'Ok', 'observed': 'Ok'} | fixtures: 5
+x25519_zero_check              PASS            k=1 median=36291.7ns floor_ns=41.667/41.667 maxt=1.791/0.416
+    site: §3/§6.4 all-zero check of the output (passes: not a reject target) | observed: ["Ok, non-zero output bytes [0], the class's value", "Ok, non-zero output bytes [31], the class's value"] | twin: None | fixtures: 5
+hx_accept_reject_inner         PASS            k=1 median=190750.0ns floor_ns=41.667/41.667 maxt=1.74/2.964
+    site: inner open | observed: ['Err(Rejected), site inner open', 'Err(Rejected), site inner open'] | twin: {'expected': 'Ok', 'observed': 'Ok'} | fixtures: 5
+hx_accept_reject_first_msg     PASS            k=1 median=490250.0ns floor_ns=41.667/41.667 maxt=1.885/1.537
+    site: first_msg decrypt | observed: ['Err(Rejected), site first_msg decrypt', 'Err(Rejected), site first_msg decrypt'] | twin: {'expected': 'Ok', 'observed': 'Ok'} | fixtures: 5
+# the five new targets (target/tmp/new_targets.py)
+clock: cntvct_el0 tick_ns 41.6666667361111 q_eff_ticks 1.0
+tr_decrypt_reject_skipped: FAIL k=1 floor 41.667 ns (1.0 ticks) | max|t| 12.88 (p50) / 15.29 (p50) | A/A max|t| 1.06 | reproduced: p50 t -12.88/-15.29, delta -1.4100/-1.4224 floors (-1.41/-1.42 ticks)
+   site §7.4 skipped path: body MAC | precheck observed ['Err(Rejected)', 'Err(Rejected)'] twin None
+inv_fingerprint_compare: PASS k=1 floor 41.667 ns (1.0 ticks) | max|t| 2.83 (p50) / 1.72 (p95) | A/A max|t| 1.06 | reproduced: none
+   site §5.5 step 3: fingerprint comparison | precheck observed ['Err(Rejected)', 'Err(Rejected)'] twin {'expected': 'Ok', 'observed': 'Ok'}
+x25519_zero_check: PASS k=1 floor 41.667 ns (1.0 ticks) | max|t| 1.79 (p90) / 0.42 (p90) | A/A max|t| 1.86 | reproduced: none
+   site §3/§6.4 all-zero check of the output (passes: not a reject target) | precheck observed ["Ok, non-zero output bytes [0], the class's value", "Ok, non-zero output bytes [31], the class's value"] twin None
+hx_accept_reject_inner: PASS k=1 floor 41.667 ns (1.0 ticks) | max|t| 1.74 (p75) / 2.96 (p75) | A/A max|t| 0.86 | reproduced: none
+   site inner open | precheck observed ['Err(Rejected), site inner open', 'Err(Rejected), site inner open'] twin {'expected': 'Ok', 'observed': 'Ok'}
+hx_accept_reject_first_msg: PASS k=1 floor 41.667 ns (1.0 ticks) | max|t| 1.89 (p50) / 1.54 (p99) | A/A max|t| 2.25 | reproduced: none
+   site first_msg decrypt | precheck observed ['Err(Rejected), site first_msg decrypt', 'Err(Rejected), site first_msg decrypt'] twin {'expected': 'Ok', 'observed': 'Ok'}

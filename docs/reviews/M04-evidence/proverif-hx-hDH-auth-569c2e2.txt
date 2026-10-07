@@ -1,0 +1,38 @@
+# ProVerif 2.05 — formal/hx/hDH-auth.pv over formal/hx.pvl (WEISUNG M4-11), models of commit 569c2e2
+# command: cargo xtask step --strict proverif --models all --jobs 4 (proverif -lib formal/hx.pvl formal/hx/hDH-auth.pv, 1800 s cap; 4 files in parallel on this Mac (M1 Pro), no other ProVerif run alongside)
+# sha256 formal/hx.pvl 885adf37f8e24ea48aba117ef893db8ed2f45af919c4c91c864de78a3aa0c867
+# sha256 formal/hx/hDH-auth.pv 49a3fad652cf4e18f112b6ba862c26e2af42edcb6c506ba0b8aa9fc628eef3e5
+# gate: finished after 10.4 s · RESULT lines 1 of 1 expected · secrecy assumptions verified 13 · O-24: yes
+# finished: yes · last progress line: 3000 rules inserted. Base: 476 rules (459 with conclusion selected). Queue: 151 rules.
+# session tags in the log other than the file's: none (one session per file, O-18)
+
+| # | CLAIMS ID | expected | verdict | trace (false verdicts): found · event tags · events |
+|---|---|---|---|---|
+| 1 | H8 | false | false | yes · hDH · BundleSigned×4 InvIssued×4 LeakInv×4 PubIKS×1 RAccept×1 |
+
+Query texts (as ProVerif prints them, = expect::PROVERIF_EXPECTED_HX):
+1. H8 `inj-event(RAccept(hDH,iR,iks(vk(iksig(hDH,pI)),exp(g,dhsk(hDH,kIKI))),ld_6,oid,tr_3,rt_3,sk_3)) ==> inj-event(IStart(hDH,iks(vk(iksig(hDH,pI)),exp(g,dhsk(hDH,kIKI))),iR,b_3,tr_3,rt_3,sk_3))`
+
+RESULT lines and the last 20 progress lines of the log:
+RESULT inj-event(RAccept(hDH,iR,iks(vk(iksig(hDH,pI)),exp(g,dhsk(hDH,kIKI))),ld_6,oid,tr_3,rt_3,sk_3)) ==> inj-event(IStart(hDH,iks(vk(iksig(hDH,pI)),exp(g,dhsk(hDH,kIKI))),iR,b_3,tr_3,rt_3,sk_3)) is false.
+RESULT (even event(RAccept(hDH,iR,iks(vk(iksig(hDH,pI)),exp(g,dhsk(hDH,kIKI))),ld_6,oid,tr_3,rt_3,sk_3)) ==> event(IStart(hDH,iks(vk(iksig(hDH,pI)),exp(g,dhsk(hDH,kIKI))),iR,b_3,tr_3,rt_3,sk_3)) is false.)
+8600 rules inserted. Base: 1561 rules (276 with conclusion selected). Queue: 165 rules.
+8800 rules inserted. Base: 1628 rules (276 with conclusion selected). Queue: 163 rules.
+9000 rules inserted. Base: 1562 rules (333 with conclusion selected). Queue: 134 rules.
+9200 rules inserted. Base: 1758 rules (436 with conclusion selected). Queue: 83 rules.
+9400 rules inserted. Base: 1843 rules (436 with conclusion selected). Queue: 43 rules.
+200 rules inserted. Base: 36 rules (16 with conclusion selected). Queue: 594 rules.
+400 rules inserted. Base: 232 rules (16 with conclusion selected). Queue: 594 rules.
+600 rules inserted. Base: 432 rules (16 with conclusion selected). Queue: 594 rules.
+800 rules inserted. Base: 625 rules (16 with conclusion selected). Queue: 594 rules.
+1000 rules inserted. Base: 438 rules (16 with conclusion selected). Queue: 594 rules.
+1200 rules inserted. Base: 238 rules (16 with conclusion selected). Queue: 594 rules.
+1400 rules inserted. Base: 38 rules (16 with conclusion selected). Queue: 594 rules.
+1600 rules inserted. Base: 228 rules (16 with conclusion selected). Queue: 594 rules.
+1800 rules inserted. Base: 428 rules (16 with conclusion selected). Queue: 594 rules.
+2000 rules inserted. Base: 626 rules (34 with conclusion selected). Queue: 576 rules.
+2200 rules inserted. Base: 426 rules (34 with conclusion selected). Queue: 576 rules.
+2400 rules inserted. Base: 226 rules (34 with conclusion selected). Queue: 576 rules.
+2600 rules inserted. Base: 76 rules (59 with conclusion selected). Queue: 551 rules.
+2800 rules inserted. Base: 276 rules (259 with conclusion selected). Queue: 351 rules.
+3000 rules inserted. Base: 476 rules (459 with conclusion selected). Queue: 151 rules.

@@ -809,14 +809,14 @@ fn ratchet_cell_content_and_bodies() {
             check_bytes(&mut g, "Content", case, &content);
         }
         let message = g.app_message(2_000);
-        check(&mut g, "AppMessage", case, &message);
+        check_bytes(&mut g, "AppMessage", case, &message);
         let count = g.len(1, 6);
         let batch = BatchBody {
             messages: (0..count).map(|_| g.app_message(400)).collect(),
         };
-        check(&mut g, "BatchBody", case, &batch);
+        check_bytes(&mut g, "BatchBody", case, &batch);
         let fragment = g.fragment(3_000);
-        check(&mut g, "Fragment", case, &fragment);
+        check_bytes(&mut g, "Fragment", case, &fragment);
         let rd = g.route(3_000);
         check_bytes(&mut g, "RouteDescriptor", case, &rd);
         let rq = g.relay_queue();
@@ -838,7 +838,7 @@ fn ratchet_cell_content_and_bodies() {
         let receipt = g.receipt(255);
         check(&mut g, "ReceiptBody", case, &receipt);
         let control = g.control(3_000);
-        check(&mut g, "ControlBody", case, &control);
+        check_bytes(&mut g, "ControlBody", case, &control);
         let payload = match g.rng.random_range(0..5) {
             0 => FragmentPayload::Batch(batch),
             1 => FragmentPayload::RouteUpdate(ru),
@@ -898,8 +898,8 @@ fn edge_lengths() {
         payload: Zeroizing::new(vec![7; 65_535]),
     };
     assert_eq!(max_payload.encode().unwrap().len(), 65_558);
-    check(&mut g, "AppMessage max", 0, &max_payload);
-    check(
+    check_bytes(&mut g, "AppMessage max", 0, &max_payload);
+    check_bytes(
         &mut g,
         "ControlBody max",
         0,
@@ -982,7 +982,7 @@ fn edge_enum_variants() {
         check(&mut g, "Period", 0, &p);
     }
     for kind in AppKind::ALL {
-        check(
+        check_bytes(
             &mut g,
             "AppKind",
             usize::from(kind.byte()),
@@ -1066,5 +1066,10 @@ fn structures_with_macs_commitments_tokens_or_tags_have_no_partial_eq() {
     <Inner as AmbiguousIfPartialEq<_>>::check();
     <HandshakeCell as AmbiguousIfPartialEq<_>>::check();
     <Cell as AmbiguousIfPartialEq<_>>::check();
+    // M3 review F11: the content types that may carry secret bytes (a Fragment's chunk can hold a `send_seed`)
+    <Fragment as AmbiguousIfPartialEq<_>>::check();
+    <AppMessage as AmbiguousIfPartialEq<_>>::check();
+    <BatchBody as AmbiguousIfPartialEq<_>>::check();
+    <ControlBody as AmbiguousIfPartialEq<_>>::check();
     <HeaderV1 as AmbiguousIfPartialEq<HasPartialEq>>::check();
 }

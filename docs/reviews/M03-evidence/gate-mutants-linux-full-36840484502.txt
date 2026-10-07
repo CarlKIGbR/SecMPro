@@ -1,0 +1,12 @@
+Run 36840484502 (pull_request, m03-tr, linux-full job 110298554207), head a47cc21df822c23fcfba0855b37c55bb6ca10c9c.
+Extracted with: gh api --allow-escape-sequences repos/CarlKIGbR/SecMPro/actions/jobs/110298554207/logs ;
+timestamps and ANSI codes removed; step `mutants` of `cargo xtask ci-full` only.
+
+=== [8] mutants ===
+$ /home/runner/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/cargo mutants --no-shuffle --output target --features secmp-crypto/kat --package secmp-crypto --package secmp-proto --exclude crates/secmp-proto/src/kani_proofs.rs --exclude-re kani_stubs:: --exclude-re FixedEntropy --exclude-re message_key_digest_kat --exclude-re 'replace mk_digest ' --exclude-re RatchetState::(hk_s_kat|receiving_header_keys_kat|sb_kat)
+Found 899 mutants to test
+ok       Unmutated baseline in 16s build + 21s test
+MISSED   crates/secmp-crypto/src/secret.rs:59:9: replace <impl Drop for SecretBytes<N>>::drop with () in 1s build + 15s test
+##[warning] replace <impl Drop for SecretBytes<N>>::drop with ()
+899 mutants tested in 38m: 1 missed, 615 caught, 283 unviable
+

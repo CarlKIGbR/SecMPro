@@ -1,0 +1,620 @@
+Run 36840484502 (pull_request, m03-tr, linux-full job 110298554207), head a47cc21df822c23fcfba0855b37c55bb6ca10c9c.
+Extracted with: gh api --allow-escape-sequences repos/CarlKIGbR/SecMPro/actions/jobs/110298554207/logs ;
+timestamps and ANSI codes removed; step `fuzz` of `cargo xtask ci-full` only.
+
+=== [6] fuzz ===
+$ rustup component list --installed --toolchain nightly-2026-09-21
+  caead_open: 25 vector seeds in target/fuzz-corpus/caead_open/
+$ rustup run nightly-2026-09-21 cargo fuzz run --fuzz-dir fuzz caead_open target/fuzz-corpus/caead_open fuzz/corpus/caead_open -- -max_total_time=120 -max_len=12618 -timeout=60
+    Updating crates.io index
+ Downloading crates ...
+    Finished `release` profile [optimized + debuginfo] target(s) in 42.32s
+    Finished `release` profile [optimized + debuginfo] target(s) in 0.04s
+     Running `fuzz/target/x86_64-unknown-linux-gnu/release/caead_open -artifact_prefix=fuzz/artifacts/caead_open/ -max_total_time=120 -max_len=12618 -timeout=60 target/fuzz-corpus/caead_open fuzz/corpus/caead_open`
+INFO: Running with entropic power schedule (0xFF, 100).
+INFO: Seed: 2043696868
+INFO: Loaded 1 modules   (3701 inline 8-bit counters): 3701 [0x5569bb4fad10, 0x5569bb4fbb85), 
+INFO: Loaded 1 PC tables (3701 PCs): 3701 [0x5569bb4fbb88,0x5569bb50a2d8), 
+INFO:       25 files found in target/fuzz-corpus/caead_open
+INFO:       74 files found in fuzz/corpus/caead_open
+INFO: seed corpus: files: 99 min: 25b max: 12617b total: 66773b rss: 42Mb
+###### Recommended dictionary. ######
+"E\000\000\000\000\000\000\000" # Uses: 13930
+"\003\000\000\000\000\000\000\000" # Uses: 13721
+"\001\000\000\000" # Uses: 13589
+"\377\377" # Uses: 13468
+"\377\377\377\377\377\377\377\027" # Uses: 13884
+"\000\000\000\000\000\000\001I" # Uses: 13775
+"\000\000\000\000\000\000\000\207" # Uses: 13509
+"{\000\000\000\000\000\000\000" # Uses: 13288
+"\377\377\377\377\377\377\377\006" # Uses: 12401
+"\000\000\000\000" # Uses: 11840
+"\001\000" # Uses: 11044
+"\001\000\000\000\000\000\000\022" # Uses: 10618
+"\001\000\000\000\000\000\000\002" # Uses: 10208
+"\247\357}\255\302\003\000\000" # Uses: 9789
+"\001\000\000\000\000\000\000 " # Uses: 705
+"\001\000\000\000\000\000\000\000" # Uses: 592
+###### End of recommended dictionary. ######
+Done 1938079 runs in 121 second(s)
+  ed25519_verify: 25 vector seeds in target/fuzz-corpus/ed25519_verify/
+$ rustup run nightly-2026-09-21 cargo fuzz run --fuzz-dir fuzz ed25519_verify target/fuzz-corpus/ed25519_verify fuzz/corpus/ed25519_verify -- -max_total_time=120 -max_len=4243 -timeout=60
+    Finished `release` profile [optimized + debuginfo] target(s) in 0.25s
+    Finished `release` profile [optimized + debuginfo] target(s) in 0.04s
+     Running `fuzz/target/x86_64-unknown-linux-gnu/release/ed25519_verify -artifact_prefix=fuzz/artifacts/ed25519_verify/ -max_total_time=120 -max_len=4243 -timeout=60 target/fuzz-corpus/ed25519_verify fuzz/corpus/ed25519_verify`
+INFO: Running with entropic power schedule (0xFF, 100).
+INFO: Seed: 3259198156
+INFO: Loaded 1 modules   (4123 inline 8-bit counters): 4123 [0x563ef7eccb30, 0x563ef7ecdb4b), 
+INFO: Loaded 1 PC tables (4123 PCs): 4123 [0x563ef7ecdb50,0x563ef7eddd00), 
+INFO:       25 files found in target/fuzz-corpus/ed25519_verify
+INFO:      136 files found in fuzz/corpus/ed25519_verify
+INFO: seed corpus: files: 161 min: 32b max: 4243b total: 32280b rss: 44Mb
+###### Recommended dictionary. ######
+"\014\377\377\377" # Uses: 1113
+"&\350\225\217\302\262'\260E\303\364\211\362\357\230\360\325\337\254\005\323\30639\2618\002\210mS\374\005" # Uses: 1002
+"\377?\000\000\000\000\000\000" # Uses: 979
+"\177\361\203\260I{\000\000" # Uses: 920
+"\001\000\000\000" # Uses: 950
+"\377\377\377\377\377\377?\000" # Uses: 928
+"\000\001\022X>Uv\260" # Uses: 859
+"\001\000\000\000\000\000@\000" # Uses: 857
+"\001\247" # Uses: 834
+"\001@\000\000\000\000\000\000" # Uses: 821
+"\354\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\177" # Uses: 831
+"\000\000\000d" # Uses: 804
+"\263K~\271p\314%(T\3151\227{\245\352\2447\330\365\345\305\214Vc\034\335\027\034\002\204^\005\216$\213m\3463(Q\010\317\024\234*\352\254\335O\310$\210j}5\003\262\236\246;\225/\005\011" # Uses: 745
+"\252\000" # Uses: 799
+"\000\000\000\000" # Uses: 777
+"\001\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000" # Uses: 736
+"\\\377\377\377" # Uses: 606
+"\242[\001\246\254\342B\250\340\345 \010U\015\301\303\261\220Q}\206\321c\267\004^\211:\255\316\351s\200\034\267)\322>\234\273,\215\206\306f\255\236\255\241\201eged\272\217\2345E1\351Q\305\001" # Uses: 480
+"\315<\027&\236\253\027s\357;//\324\201\204\211\326\215\331\263\315%\356\322\315\264l\366s7\224U" # Uses: 513
+"\370\377\377\377" # Uses: 445
+"\377\377\377\251" # Uses: 385
+"\000\000\000\000\000\000@\000" # Uses: 391
+"\000\000\000\324" # Uses: 349
+"\377\377" # Uses: 183
+"l\012A\307\241\273\214\330\240\353\374\330\013?\356R+\252wlzv91\003\223\225\353#x\213\023" # Uses: 136
+"\376\377\377'" # Uses: 81
+"\001\006\033'J\016\240\260" # Uses: 61
+###### End of recommended dictionary. ######
+Done 195793 runs in 121 second(s)
+  hybrid_sign_verify: 42 vector seeds in target/fuzz-corpus/hybrid_sign_verify/
+$ rustup run nightly-2026-09-21 cargo fuzz run --fuzz-dir fuzz hybrid_sign_verify target/fuzz-corpus/hybrid_sign_verify fuzz/corpus/hybrid_sign_verify -- -max_total_time=120 -max_len=7810 -timeout=60
+    Finished `release` profile [optimized + debuginfo] target(s) in 0.28s
+    Finished `release` profile [optimized + debuginfo] target(s) in 0.04s
+     Running `fuzz/target/x86_64-unknown-linux-gnu/release/hybrid_sign_verify -artifact_prefix=fuzz/artifacts/hybrid_sign_verify/ -max_total_time=120 -max_len=7810 -timeout=60 target/fuzz-corpus/hybrid_sign_verify fuzz/corpus/hybrid_sign_verify`
+INFO: Running with entropic power schedule (0xFF, 100).
+INFO: Seed: 160669263
+INFO: Loaded 1 modules   (8598 inline 8-bit counters): 8598 [0x560ea391fcb0, 0x560ea3921e46), 
+INFO: Loaded 1 PC tables (8598 PCs): 8598 [0x560ea3921e48,0x560ea39437a8), 
+INFO:       42 files found in target/fuzz-corpus/hybrid_sign_verify
+INFO:       77 files found in fuzz/corpus/hybrid_sign_verify
+INFO: seed corpus: files: 119 min: 2b max: 7809b total: 112219b rss: 41Mb
+###### Recommended dictionary. ######
+"\377\377\377\004" # Uses: 201
+"\037qN$e\015\332\342\324\250\321\202+\302r\234\334\202\355\373L\032'\261&\347\236\341X\376\256\020" # Uses: 166
+"\004\000\000\000" # Uses: 209
+"X\266\346\356\002j\260cQ\006v\026N\316Y\255\314\216\0068\242\215\244\351Cn\222\016.\303\311\037(q\202\344p\345\360\200\272x\340,y\016Y%" # Uses: 152
+"&\350\225\217\302\262'\260E\303\364\211\362\357\230\360\325\337\254\005\323\30639\2618\002\210mS\374\005" # Uses: 170
+"\000\000\000\000\000\000\000\000" # Uses: 150
+"\001\377\003\000" # Uses: 190
+"\001\000\000\000\000\000\000\026" # Uses: 175
+"\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000" # Uses: 128
+"\001\007\376\000" # Uses: 128
+"\377\377\377\377" # Uses: 113
+"\015\000\000\000\000\000\000\000" # Uses: 96
+"\001\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000" # Uses: 83
+###### End of recommended dictionary. ######
+Done 24309 runs in 121 second(s)
+  mldsa65_verify: 34 vector seeds in target/fuzz-corpus/mldsa65_verify/
+$ rustup run nightly-2026-09-21 cargo fuzz run --fuzz-dir fuzz mldsa65_verify target/fuzz-corpus/mldsa65_verify fuzz/corpus/mldsa65_verify -- -max_total_time=120 -max_len=3567 -timeout=60
+    Finished `release` profile [optimized + debuginfo] target(s) in 0.27s
+    Finished `release` profile [optimized + debuginfo] target(s) in 0.04s
+     Running `fuzz/target/x86_64-unknown-linux-gnu/release/mldsa65_verify -artifact_prefix=fuzz/artifacts/mldsa65_verify/ -max_total_time=120 -max_len=3567 -timeout=60 target/fuzz-corpus/mldsa65_verify fuzz/corpus/mldsa65_verify`
+INFO: Running with entropic power schedule (0xFF, 100).
+INFO: Seed: 1348730526
+INFO: Loaded 1 modules   (3878 inline 8-bit counters): 3878 [0x55f888eff050, 0x55f888efff76), 
+INFO: Loaded 1 PC tables (3878 PCs): 3878 [0x55f888efff78,0x55f888f0f1d8), 
+INFO:       34 files found in target/fuzz-corpus/mldsa65_verify
+INFO:        3 files found in fuzz/corpus/mldsa65_verify
+INFO: seed corpus: files: 37 min: 1b max: 3311b total: 89499b rss: 42Mb
+###### Recommended dictionary. ######
+"\000\000\000\000\000\000\000\005" # Uses: 38920
+"\377\377\377\377\377\377\377\377" # Uses: 38491
+"\005\000\000\000\000\000\000\000" # Uses: 15121
+###### End of recommended dictionary. ######
+Done 1102427 runs in 121 second(s)
+  mlkem_parse: 86 vector seeds in target/fuzz-corpus/mlkem_parse/
+$ rustup run nightly-2026-09-21 cargo fuzz run --fuzz-dir fuzz mlkem_parse target/fuzz-corpus/mlkem_parse fuzz/corpus/mlkem_parse -- -max_total_time=120 -max_len=1570 -timeout=60
+    Finished `release` profile [optimized + debuginfo] target(s) in 0.31s
+    Finished `release` profile [optimized + debuginfo] target(s) in 0.04s
+     Running `fuzz/target/x86_64-unknown-linux-gnu/release/mlkem_parse -artifact_prefix=fuzz/artifacts/mlkem_parse/ -max_total_time=120 -max_len=1570 -timeout=60 target/fuzz-corpus/mlkem_parse fuzz/corpus/mlkem_parse`
+INFO: Running with entropic power schedule (0xFF, 100).
+INFO: Seed: 2589698422
+INFO: Loaded 1 modules   (14596 inline 8-bit counters): 14596 [0x55bc53545790, 0x55bc53549094), 
+INFO: Loaded 1 PC tables (14596 PCs): 14596 [0x55bc53549098,0x55bc535820d8), 
+INFO:       86 files found in target/fuzz-corpus/mlkem_parse
+INFO:      140 files found in fuzz/corpus/mlkem_parse
+INFO: seed corpus: files: 226 min: 1b max: 1569b total: 83557b rss: 43Mb
+###### Recommended dictionary. ######
+"\377\377\377\377\377\377\377 " # Uses: 23782
+"\377\377\377\377\377\377\377\377" # Uses: 24126
+"\377\377\377\377" # Uses: 23769
+"\376\377\377\377\377\377\377\377" # Uses: 23955
+"\376\342/\304\227/\261\274J\354\327@E\223\011%k~;\213\037\203\204V/\325C\252'\271c\374\177\202TF\3769M{d\250\345q\301\212\023Jp2Z\274\364\034\354\241\2307\205c\263\273=M" # Uses: 23100
+"\376\342/c\022&\304\313Q\346e\011P\346\013\371\231\234\320\301\306\276\005\020CT#\3764\266=E\005\\{\255\2643\024\024H\232\264i4\220,\220\266\001{\351A\266\213\3203\306\313\034<5\267\011" # Uses: 21733
+###### End of recommended dictionary. ######
+Done 1832320 runs in 121 second(s)
+  msg_open: 24 vector seeds in target/fuzz-corpus/msg_open/
+$ rustup run nightly-2026-09-21 cargo fuzz run --fuzz-dir fuzz msg_open target/fuzz-corpus/msg_open fuzz/corpus/msg_open -- -max_total_time=120 -max_len=2000 -timeout=60
+    Finished `release` profile [optimized + debuginfo] target(s) in 0.27s
+    Finished `release` profile [optimized + debuginfo] target(s) in 0.04s
+     Running `fuzz/target/x86_64-unknown-linux-gnu/release/msg_open -artifact_prefix=fuzz/artifacts/msg_open/ -max_total_time=120 -max_len=2000 -timeout=60 target/fuzz-corpus/msg_open fuzz/corpus/msg_open`
+INFO: Running with entropic power schedule (0xFF, 100).
+INFO: Seed: 3810837817
+INFO: Loaded 1 modules   (2319 inline 8-bit counters): 2319 [0x56041916aa10, 0x56041916b31f), 
+INFO: Loaded 1 PC tables (2319 PCs): 2319 [0x56041916b320,0x560419174410), 
+INFO:       24 files found in target/fuzz-corpus/msg_open
+INFO:        3 files found in fuzz/corpus/msg_open
+INFO: seed corpus: files: 27 min: 2b max: 1999b total: 42041b rss: 42Mb
+###### Recommended dictionary. ######
+"\377\377" # Uses: 601963
+"\315\006\000\000\000\000\000\000" # Uses: 340461
+###### End of recommended dictionary. ######
+Done 10926439 runs in 121 second(s)
+  proto_cell: 190 vector seeds in target/fuzz-corpus/proto_cell/
+$ rustup run nightly-2026-09-21 cargo fuzz run --fuzz-dir fuzz proto_cell target/fuzz-corpus/proto_cell fuzz/corpus/proto_cell -- -max_total_time=120 -max_len=65644 -timeout=60
+    Finished `release` profile [optimized + debuginfo] target(s) in 0.85s
+    Finished `release` profile [optimized + debuginfo] target(s) in 0.04s
+     Running `fuzz/target/x86_64-unknown-linux-gnu/release/proto_cell -artifact_prefix=fuzz/artifacts/proto_cell/ -max_total_time=120 -max_len=65644 -timeout=60 target/fuzz-corpus/proto_cell fuzz/corpus/proto_cell`
+INFO: Running with entropic power schedule (0xFF, 100).
+INFO: Seed: 1403872036
+INFO: Loaded 1 modules   (7023 inline 8-bit counters): 7023 [0x5578d72195b0, 0x5578d721b11f), 
+INFO: Loaded 1 PC tables (7023 PCs): 7023 [0x5578d721b120,0x5578d7236810), 
+INFO:      190 files found in target/fuzz-corpus/proto_cell
+INFO:      405 files found in fuzz/corpus/proto_cell
+INFO: seed corpus: files: 595 min: 1b max: 65559b total: 686570b rss: 41Mb
+###### Recommended dictionary. ######
+"\243\004\376\231y\205'z\016\372Vr\016\215\255\350\274\205q\301\012\312\221D\231\342\247\312-g-A" # Uses: 6738
+"\356\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\177" # Uses: 6693
+"]\377\377\377" # Uses: 7052
+"\271\000\000\000" # Uses: 7234
+"'\377\377\377" # Uses: 7218
+"\021\000\000\000\000\000\000\000" # Uses: 7005
+"&\350\225\217\302\262'\260E\303\364\211\362\357\230\360\325\337\254\005\323\30639\2618\002\210mS\374\005" # Uses: 6696
+"\031\000\000\000\000\000\000\000" # Uses: 6981
+"\016\000\000\000\000\000\000\000" # Uses: 6959
+"\001\000\000\000\000\000\000\000" # Uses: 6988
+"\210\007\000\000\000\000\000\000" # Uses: 6922
+"\001\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000" # Uses: 6456
+"\225\2775\342X\271\250O\233\002\026\323\315tb\337\272\013\367\331\211a\312\014\264B\000\361\337\007\363\\" # Uses: 6462
+"\355\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\177" # Uses: 6607
+"\226\377\377\377" # Uses: 6965
+"#\000" # Uses: 7072
+"\377\377\377\010" # Uses: 6968
+"\0006" # Uses: 7070
+"\001\000\000\000\000\000@\000" # Uses: 6697
+"\001\020\000\000\000\000\000\000" # Uses: 6726
+"\013t\010\337/\035\352\367\202\273\213\243\240\230\242\326\242\343\033\252H#a\032`\273q\033\371\233\320!" # Uses: 6293
+"\001\000\000\000" # Uses: 6802
+"\257\006\000\000\000\000\000\000" # Uses: 6767
+"\377\377\377\377" # Uses: 6705
+"\000\000\000{" # Uses: 6924
+"\377\377\377\377\377\377\377\003" # Uses: 6705
+"\376\377\3775" # Uses: 6824
+"c\000\000\000\000\000\000\000" # Uses: 6641
+"\377\377\377\377\377\377\377|" # Uses: 6606
+"\000\000\000\020" # Uses: 6700
+"\350\000\000\000" # Uses: 6840
+"1\223V\310q\310\227\035P\272X\232u\032\301f/\354b\275\202Y\021t\263kv\222W\272\310\002" # Uses: 6288
+"\375\377\377\377" # Uses: 6583
+"o\372\231\345o)\272\256\347\311\225\225\311\330^\014\333\326\207\340\271\365\251\311L\320\002\350\216`/\016" # Uses: 6189
+"\000\000\000\000" # Uses: 6721
+"\030\000\000\000\000\000\000\000" # Uses: 6709
+"\001\000\000\000\000\000\000N" # Uses: 6675
+"\006\000\000\000" # Uses: 6595
+",\000\000\000\000\000\000\000" # Uses: 6505
+"\354\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\177" # Uses: 6245
+"\376\377\377=" # Uses: 6621
+"\355\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377,\377\377\377\377\377\377\377\377\377\177" # Uses: 6128
+"\377\001I\336Q\307\015\034" # Uses: 6416
+"\233\032U\244\335z\021Z\017\262\276\217\017\220\226\317\272\022M#[\270\304S\352~ V\360\377\377\177" # Uses: 5995
+" b.V\360\002;i\001\370t\027\007\351D\227\324\256n\203\277\336\266\233\327\351\210\037\254\235\021\011\"\241\201\025 1\205jL~\037\202\317\256\203\300_@A\2133\000\336\333\035q;&\333P\220N" # Uses: 5595
+"\003\000\000\000" # Uses: 6521
+"\000\000\000\000\000\000\000\006" # Uses: 6432
+"G\000" # Uses: 6491
+"\365XB\002=\303\371\344I\227\036\365H\231\177\023\304\326\355\362*-iz\321\326\370\3718It;" # Uses: 6044
+"\266\002\001z\002\004]\377\377\377}|\007\271<{\256S\215\021\010\232\262\273\2015\377\377\377\377\377\177" # Uses: 6076
+"\000\000\000\000\000\000\000\017" # Uses: 6208
+"\314\377\377\377" # Uses: 6306
+"\000\000" # Uses: 6294
+"\011\000\000\000\000\000\000\000" # Uses: 6316
+"\000\000\000\000\000\000\000\000" # Uses: 6280
+"\207\364\0118\325/\376\342/\376\362\021\000\000\000\000\000\001\271\000\000\000\000\000\000u\017\037`ml`ml`ml`ml`ml`ml`ml`ml`ml`ml`ml`ml" # Uses: 5525
+"58\365\273b\222D3:\361\231\356\261X(\343r\337\327k^\000\000\000\000\000\000\000\000\000\000\000" # Uses: 6120
+"\374\006\000\000\000\000\000\000" # Uses: 6312
+"\377\377\377\377\377\377\000\027" # Uses: 6347
+"\307\027jp=M\330O\272<\013v\015\020g\017* S\372,9\314\306N\307\375w\222\254\003z" # Uses: 5979
+"d\000" # Uses: 6599
+"\000\000\000\360" # Uses: 6328
+"Z\342/\376\342/\376\342/\376\342/\376\342/\376\342/\376\342/\376\342/\376\342/\376\342/\376\342/\376\342/\376\342/\376\342/\376\342/\376\342/\376\342/\376\342/\376R/\376\342/\376\342/\376" # Uses: 5497
+"\347\000" # Uses: 6237
+"\001\000" # Uses: 6124
+"\003\000" # Uses: 6277
+"\001\000\000\000\000\000\000Q" # Uses: 6112
+"\376\377\377\275" # Uses: 6165
+"\3775" # Uses: 6128
+"\000\000\000\000\000\000\001\032" # Uses: 6125
+"q\377\377\377" # Uses: 6228
+"]\000\000\000" # Uses: 6317
+"\376\377\377\377\377\377\377\377" # Uses: 6045
+"\377\377\377\377\377\377\3779" # Uses: 6067
+"\016g\273\030\2247u+\304\003\364\315\365Z\\\323\325G\232C\251\026\021\301n\311hcY\312\377U" # Uses: 5630
+"\002\000\000\000" # Uses: 6083
+"v\001\000\000\000\000\000\000" # Uses: 5909
+"\001\000\000\000\000\000\000-" # Uses: 5817
+"\347\377\377\377" # Uses: 5928
+"\001\000\000\340\000'\377G" # Uses: 5688
+"\345\377\377\377" # Uses: 5527
+"(\343r\337\327k^\214\242\300\340i\324\322\034-\331\032\0163\304l\312s\031\220r+\364\0342\024\207\004\3328\345\377\377\377\377\377\377\021\000\000\000[\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377" # Uses: 4796
+"S\015\000\000\000\000\000\000" # Uses: 5514
+"\001&" # Uses: 5686
+"\354\000" # Uses: 5677
+"\011\012\000\000\000\000\000\000" # Uses: 5349
+"\377\377\377\377\377\377\377\032" # Uses: 5293
+"`\364Utpu\336\006\037\035*\017\232 \250\276\270>`z\306j\021m\200V\377\002i+\"\177" # Uses: 4948
+"\000\000\000\000\000\000@\000" # Uses: 5150
+"\0012" # Uses: 5202
+"\001\001\000\000\000\000\000\000" # Uses: 5105
+"\001\200" # Uses: 5213
+"\001F" # Uses: 5172
+"\377\377\377\346" # Uses: 4902
+"\254\000\000\000" # Uses: 4915
+"\000\000\000\000\000\000\006\366" # Uses: 4761
+"I\000\000\000" # Uses: 4832
+"\3771" # Uses: 4730
+"\001\000\000\004" # Uses: 4319
+".\000\000\000" # Uses: 3996
+"\377\377\377\267" # Uses: 4022
+"\001\004\330\006\327Y\243\335" # Uses: 3742
+"\001\000\000\226" # Uses: 3706
+"\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000" # Uses: 3381
+"\377\377\377>" # Uses: 3294
+"\377\377\377\377\377\377\377\000" # Uses: 3290
+"\377\377\377\017\000\013-X" # Uses: 3067
+"VUUUUUU\005" # Uses: 3183
+"\000\000\000\000\000\000\007\010" # Uses: 3124
+"5\351\017u\243b\005\000" # Uses: 3001
+"\001k" # Uses: 2965
+"\000\000\000\000\000\000\000\010" # Uses: 2728
+"\270\000\000\000" # Uses: 2610
+"\243\377\377\377" # Uses: 2610
+"\362\000\000\000\000\000\000\000" # Uses: 2365
+"\230\006\000\000\000\000\000\000" # Uses: 1904
+"\003\000\000\000\000\000\000\000" # Uses: 1799
+"\356\001\013\001Y\377\377\377\377\377\377\377\321\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\177" # Uses: 1689
+"\377\377\377\377\377\377\377\377" # Uses: 1790
+"\001\000\000\000\000\000\000\021" # Uses: 1715
+"\001G\256\024z\341G\256" # Uses: 1607
+"\362\377\377\377" # Uses: 1629
+"\000\001&\000\000\020\313\356\254\000\000\000\000\000\000\000\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\177" # Uses: 1428
+"B\317" # Uses: 1489
+"\376\377\377\314" # Uses: 1408
+"[\377\377\377" # Uses: 1334
+"5\377\377\377" # Uses: 1315
+"\377\000" # Uses: 976
+"<S" # Uses: 941
+"\036\000" # Uses: 976
+"\001\000\000\000\000\000\000\005" # Uses: 561
+"\024\000\000\000\000\000\000\000" # Uses: 321
+"\000\000\000\000\000\000\001\277" # Uses: 224
+"\000\000\000\000\000\000\005\352" # Uses: 144
+"VE" # Uses: 95
+"\002\000\000\000\000\000\000\000" # Uses: 77
+###### End of recommended dictionary. ######
+Done 8024415 runs in 121 second(s)
+  proto_frames: 182 vector seeds in target/fuzz-corpus/proto_frames/
+$ rustup run nightly-2026-09-21 cargo fuzz run --fuzz-dir fuzz proto_frames target/fuzz-corpus/proto_frames fuzz/corpus/proto_frames -- -max_total_time=120 -max_len=4338 -timeout=60
+    Finished `release` profile [optimized + debuginfo] target(s) in 0.31s
+    Finished `release` profile [optimized + debuginfo] target(s) in 0.04s
+     Running `fuzz/target/x86_64-unknown-linux-gnu/release/proto_frames -artifact_prefix=fuzz/artifacts/proto_frames/ -max_total_time=120 -max_len=4338 -timeout=60 target/fuzz-corpus/proto_frames fuzz/corpus/proto_frames`
+INFO: Running with entropic power schedule (0xFF, 100).
+INFO: Seed: 2800983967
+INFO: Loaded 1 modules   (2941 inline 8-bit counters): 2941 [0x5652f4f4eeb0, 0x5652f4f4fa2d), 
+INFO: Loaded 1 PC tables (2941 PCs): 2941 [0x5652f4f4fa30,0x5652f4f5b200), 
+INFO:      182 files found in target/fuzz-corpus/proto_frames
+INFO:      157 files found in fuzz/corpus/proto_frames
+INFO: seed corpus: files: 339 min: 1b max: 4338b total: 1448601b rss: 40Mb
+###### Recommended dictionary. ######
+"V\020\000\000\000\000\000\000" # Uses: 29583
+"[\256\352\035\212%\335_\347S\031\316%\366!'a\234\372.\304\271iW\011\272\024\255\035jLl" # Uses: 29388
+"\251\377\377\377" # Uses: 29715
+"\377\377\377\377\377\377\377\377" # Uses: 22374
+"\354\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\177" # Uses: 10757
+"\000\000{T\223*\325\200" # Uses: 10827
+"N\\\354\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\177" # Uses: 10638
+"\0124-D\244\361\015C\013\177\313\246\231\3342\202\330\371\011\2749\037\027\213\352\243\206\3411\017+w" # Uses: 10589
+"\376\377\377\330" # Uses: 10463
+"\377\377\377\377" # Uses: 10486
+"\376\377\377\343" # Uses: 9951
+"E\012\000\000\000\000\000\000" # Uses: 9983
+"\307\377\377\377" # Uses: 2101
+###### End of recommended dictionary. ######
+Done 3073956 runs in 121 second(s)
+  proto_handshake: 40 vector seeds in target/fuzz-corpus/proto_handshake/
+$ rustup run nightly-2026-09-21 cargo fuzz run --fuzz-dir fuzz proto_handshake target/fuzz-corpus/proto_handshake fuzz/corpus/proto_handshake -- -max_total_time=120 -max_len=12020 -timeout=60
+    Finished `release` profile [optimized + debuginfo] target(s) in 0.38s
+    Finished `release` profile [optimized + debuginfo] target(s) in 0.04s
+     Running `fuzz/target/x86_64-unknown-linux-gnu/release/proto_handshake -artifact_prefix=fuzz/artifacts/proto_handshake/ -max_total_time=120 -max_len=12020 -timeout=60 target/fuzz-corpus/proto_handshake fuzz/corpus/proto_handshake`
+INFO: Running with entropic power schedule (0xFF, 100).
+INFO: Seed: 4176405660
+INFO: Loaded 1 modules   (2463 inline 8-bit counters): 2463 [0x56336838fdf0, 0x56336839078f), 
+INFO: Loaded 1 PC tables (2463 PCs): 2463 [0x563368390790,0x56336839a180), 
+INFO:       40 files found in target/fuzz-corpus/proto_handshake
+INFO:       86 files found in fuzz/corpus/proto_handshake
+INFO: seed corpus: files: 126 min: 1b max: 12020b total: 562211b rss: 42Mb
+###### Recommended dictionary. ######
+"&\350\225\217\302\262'\260E\303\364\211\362\357\230\360\325\337\254\005\323\30639\2618\002\210mS\374\005" # Uses: 127802
+"\016\000" # Uses: 133750
+"\354\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\177" # Uses: 126596
+"_\234\225\274\243P\214$\261\320\261U\234\203\357[\004D\\\304X\034\216\206\330\"N\335\320\237\021W" # Uses: 120062
+"\377\377\377\000" # Uses: 71481
+###### End of recommended dictionary. ######
+Done 7299106 runs in 121 second(s)
+  proto_invitation: 132 vector seeds in target/fuzz-corpus/proto_invitation/
+$ rustup run nightly-2026-09-21 cargo fuzz run --fuzz-dir fuzz proto_invitation target/fuzz-corpus/proto_invitation fuzz/corpus/proto_invitation -- -max_total_time=120 -max_len=12362 -timeout=60
+    Finished `release` profile [optimized + debuginfo] target(s) in 0.45s
+    Finished `release` profile [optimized + debuginfo] target(s) in 0.04s
+     Running `fuzz/target/x86_64-unknown-linux-gnu/release/proto_invitation -artifact_prefix=fuzz/artifacts/proto_invitation/ -max_total_time=120 -max_len=12362 -timeout=60 target/fuzz-corpus/proto_invitation fuzz/corpus/proto_invitation`
+INFO: Running with entropic power schedule (0xFF, 100).
+INFO: Seed: 1348204835
+INFO: Loaded 1 modules   (4057 inline 8-bit counters): 4057 [0x564ce68363b0, 0x564ce6837389), 
+INFO: Loaded 1 PC tables (4057 PCs): 4057 [0x564ce6837390,0x564ce6847120), 
+INFO:      132 files found in target/fuzz-corpus/proto_invitation
+INFO:      263 files found in fuzz/corpus/proto_invitation
+INFO: seed corpus: files: 395 min: 1b max: 12362b total: 963113b rss: 41Mb
+###### Recommended dictionary. ######
+"\350\377\377\377" # Uses: 41423
+"\000\000\000\000\000\000@\000" # Uses: 40692
+"\024\000\000\000" # Uses: 40772
+"/\000\000\000" # Uses: 40315
+"\377\352" # Uses: 41083
+"\001\000\000d" # Uses: 39072
+"\355\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\177" # Uses: 37090
+"\020\000" # Uses: 33983
+"\227\000" # Uses: 33171
+"\207\223\250|\003\375\360\346v\355\336\342\366\312.L\030\230\3472\001\304H\365\003\033\357O\305J3l" # Uses: 26447
+"\354\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\177" # Uses: 20614
+"\030\000\000\000\000\000\000\000" # Uses: 19360
+"\000\000\000\000\000\000\000\000" # Uses: 3840
+"\031\000\000\000\000\000\000\000" # Uses: 770
+###### End of recommended dictionary. ######
+Done 4893310 runs in 121 second(s)
+  proto_records: 81 vector seeds in target/fuzz-corpus/proto_records/
+$ rustup run nightly-2026-09-21 cargo fuzz run --fuzz-dir fuzz proto_records target/fuzz-corpus/proto_records fuzz/corpus/proto_records -- -max_total_time=120 -max_len=2858 -timeout=60
+    Finished `release` profile [optimized + debuginfo] target(s) in 0.37s
+    Finished `release` profile [optimized + debuginfo] target(s) in 0.04s
+     Running `fuzz/target/x86_64-unknown-linux-gnu/release/proto_records -artifact_prefix=fuzz/artifacts/proto_records/ -max_total_time=120 -max_len=2858 -timeout=60 target/fuzz-corpus/proto_records fuzz/corpus/proto_records`
+INFO: Running with entropic power schedule (0xFF, 100).
+INFO: Seed: 2696716487
+INFO: Loaded 1 modules   (3021 inline 8-bit counters): 3021 [0x56514e9b0d50, 0x56514e9b191d), 
+INFO: Loaded 1 PC tables (3021 PCs): 3021 [0x56514e9b1920,0x56514e9bd5f0), 
+INFO:       81 files found in target/fuzz-corpus/proto_records
+INFO:      199 files found in fuzz/corpus/proto_records
+INFO: seed corpus: files: 280 min: 1b max: 2864b total: 417319b rss: 42Mb
+###### Recommended dictionary. ######
+"\355\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\177" # Uses: 48992
+"\307\027jp=M\330O\272<\013v\015\020g\017* S\372,9\314\306N\307\375w\222\254\003z" # Uses: 47983
+"\377\377" # Uses: 48693
+"\354\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\177" # Uses: 45574
+"\000\000\000\000\000\000@\000" # Uses: 40686
+"\353[\003Vk\006\004\000" # Uses: 28757
+"\376\377\377\272" # Uses: 22539
+"\027\013\000\000\000\000\000\000" # Uses: 21580
+"\327\270\332f3K\365\000" # Uses: 21216
+"\377\377\377\377\377\377\377\027" # Uses: 19008
+"\036\000\000\000" # Uses: 15317
+"\377\377\377\377" # Uses: 1387
+###### End of recommended dictionary. ######
+Done 4828150 runs in 121 second(s)
+  tr_decrypt: 53 vector seeds in target/fuzz-corpus/tr_decrypt/
+$ rustup run nightly-2026-09-21 cargo fuzz run --fuzz-dir fuzz tr_decrypt target/fuzz-corpus/tr_decrypt fuzz/corpus/tr_decrypt -- -max_total_time=120 -max_len=4098 -timeout=60
+    Finished `release` profile [optimized + debuginfo] target(s) in 1.45s
+    Finished `release` profile [optimized + debuginfo] target(s) in 0.04s
+     Running `fuzz/target/x86_64-unknown-linux-gnu/release/tr_decrypt -artifact_prefix=fuzz/artifacts/tr_decrypt/ -max_total_time=120 -max_len=4098 -timeout=60 target/fuzz-corpus/tr_decrypt fuzz/corpus/tr_decrypt`
+INFO: Running with entropic power schedule (0xFF, 100).
+INFO: Seed: 848561563
+INFO: Loaded 1 modules   (20434 inline 8-bit counters): 20434 [0x55c4d7c01e10, 0x55c4d7c06de2), 
+INFO: Loaded 1 PC tables (20434 PCs): 20434 [0x55c4d7c06de8,0x55c4d7c56b08), 
+INFO:       53 files found in target/fuzz-corpus/tr_decrypt
+INFO:        9 files found in fuzz/corpus/tr_decrypt
+INFO: seed corpus: files: 62 min: 2315b max: 4098b total: 246886b rss: 41Mb
+	NEW_FUNC[1/1]: 0x55c4d7a60cf0  (/home/runner/work/SecMPro/SecMPro/fuzz/target/x86_64-unknown-linux-gnu/release/tr_decrypt+0x1f8cf0) (BuildId: 41e073db49d70c4801fc0fa58b5eba37f5dfe56b)
+###### Recommended dictionary. ######
+"\377\377\377\377" # Uses: 149
+"\376\377\377\377\377\377\377\377" # Uses: 141
+"\360\377\377\377" # Uses: 139
+"\017\000" # Uses: 135
+"\356L\355\244\376\3450\265@u\305\307\237J\251\256\356\205$U\017\3569\215\020\221\243\37153\202\024" # Uses: 131
+"\355\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\177" # Uses: 119
+"\001\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000" # Uses: 123
+"3\000" # Uses: 115
+"\356\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\177" # Uses: 100
+"\007\016\000\000\000\000\000\000" # Uses: 118
+"\000\000" # Uses: 113
+"\000\000\000\353" # Uses: 96
+"\000\000\000\000\000\000\226\271" # Uses: 104
+"\000\000\002\240\007e\024\355" # Uses: 105
+"\307\225<\301\306\366\351\242{ \217MfmPd\235\300\304D\365R\015\323\2310\275=\256\"\277'" # Uses: 101
+"\017\000\000\000" # Uses: 98
+"\340\353z|;A\270\256\026V\343\372\361\237\304j\332\011\215\353\2342\261\375\206b\005\026_I\270\000" # Uses: 80
+"x\025\2546\023*.\340w\006\026+(n\357\014\027\206q5i:\360\366\251\005\235YI\371\242>" # Uses: 100
+"\001\000\000\000" # Uses: 94
+"\000\000\000\356" # Uses: 99
+"\014\000\000\000" # Uses: 94
+"\000\000\000\000\000\000\000\000" # Uses: 79
+"\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000" # Uses: 75
+"\357\000" # Uses: 72
+"\377\377\377\377\377\377\377\377" # Uses: 59
+"\377\377\377\377\377\377\016a" # Uses: 80
+"\000\000\000\000\000\000\000\004" # Uses: 59
+"\005\000\000\000\000\000\000\000" # Uses: 68
+"\373\322\355\037\220\353,\345\372J\203\340h\005\254AUt\302\2309?5\263q\372\010b\234\352\0164" # Uses: 32
+"\0012" # Uses: 55
+"\210\000\000\000" # Uses: 47
+"\006UUUUUUU" # Uses: 48
+"\004\000" # Uses: 35
+"_\234\225\274\243P\214$\261\320\261U\234\203\357[\004D\\\304X\034\216\206\330\"N\335\320\237\021W" # Uses: 52
+"\270\016\000\000\000\000\000\000" # Uses: 42
+"\373\322\000\000\000\356\001\361!\255\250\342C*******************" # Uses: 40
+"\000\352\240\032@{\000\000" # Uses: 27
+"\000\000\000\000" # Uses: 33
+"\001\000\000\000\000\000\016\257" # Uses: 33
+"\001\000\000\000\000\000\000\000" # Uses: 21
+"\001\000\000\000\000\000\207T" # Uses: 26
+"\307\225<\301\306\366\351\242{ \217MfmPd\235\004\000\000\000\004\000\000\000&Gu\021\\\245q" # Uses: 16
+"\001\000\002\320\001\177\336s" # Uses: 8
+"\217MfmPd\235\300\304D\365R\015\323\2310\275=\256\"\277'\225\223\374\2634\373\235\330\202\010\202\225 \0055{}\212\026\201\357cr\025\334,\345\372J\203\340h\005\254AUt\302\230\263q\372" # Uses: 7
+";\377\377\377" # Uses: 7
+"\373\0055\037\220\353\001\361!\255\250\342C\215M\000\000\367\373\0055\037\220\353\001\361!\255\250\342C\015" # Uses: 5
+###### End of recommended dictionary. ######
+Done 40603 runs in 122 second(s)
+  tr_state: 1 vector seeds in target/fuzz-corpus/tr_state/
+$ rustup run nightly-2026-09-21 cargo fuzz run --fuzz-dir fuzz tr_state target/fuzz-corpus/tr_state fuzz/corpus/tr_state -- -max_total_time=120 -max_len=38587 -timeout=60
+    Finished `release` profile [optimized + debuginfo] target(s) in 0.35s
+    Finished `release` profile [optimized + debuginfo] target(s) in 0.04s
+     Running `fuzz/target/x86_64-unknown-linux-gnu/release/tr_state -artifact_prefix=fuzz/artifacts/tr_state/ -max_total_time=120 -max_len=38587 -timeout=60 target/fuzz-corpus/tr_state fuzz/corpus/tr_state`
+INFO: Running with entropic power schedule (0xFF, 100).
+INFO: Seed: 3570440306
+INFO: Loaded 1 modules   (6963 inline 8-bit counters): 6963 [0x55ec8c407130, 0x55ec8c408c63), 
+INFO: Loaded 1 PC tables (6963 PCs): 6963 [0x55ec8c408c68,0x55ec8c423f98), 
+INFO:        1 files found in target/fuzz-corpus/tr_state
+INFO:        5 files found in fuzz/corpus/tr_state
+INFO: seed corpus: files: 6 min: 3b max: 3974b total: 7133b rss: 40Mb
+	NEW_FUNC[1/1]: 0x55ec8c30c9a0  (/home/runner/work/SecMPro/SecMPro/fuzz/target/x86_64-unknown-linux-gnu/release/tr_state+0x1679a0) (BuildId: 59e533d5ef71a74dabf79aa691216adc1014b9a6)
+	NEW_FUNC[1/2]: 0x55ec8c30d760  (/home/runner/work/SecMPro/SecMPro/fuzz/target/x86_64-unknown-linux-gnu/release/tr_state+0x168760) (BuildId: 59e533d5ef71a74dabf79aa691216adc1014b9a6)
+	NEW_FUNC[2/2]: 0x55ec8c30e810  (/home/runner/work/SecMPro/SecMPro/fuzz/target/x86_64-unknown-linux-gnu/release/tr_state+0x169810) (BuildId: 59e533d5ef71a74dabf79aa691216adc1014b9a6)
+	NEW_FUNC[1/1]: 0x55ec8c30e2b0  (/home/runner/work/SecMPro/SecMPro/fuzz/target/x86_64-unknown-linux-gnu/release/tr_state+0x1692b0) (BuildId: 59e533d5ef71a74dabf79aa691216adc1014b9a6)
+###### Recommended dictionary. ######
+"R\000\000\000\000\000\000\000" # Uses: 5431
+"\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000" # Uses: 5363
+"\377\377\377\377\377\377\377\021" # Uses: 5421
+"\000\000\000\000" # Uses: 5468
+"\001\000\000\000\000\000\000\000" # Uses: 5425
+"\030\000" # Uses: 5638
+"\000\000\000\236" # Uses: 5679
+"\240\004\000\000\000\000\000\000" # Uses: 5478
+"\000\000\000\017" # Uses: 5473
+"\001\253" # Uses: 5476
+"D\000\000\000\000\000\000\000" # Uses: 5469
+"'\000\000\000" # Uses: 5427
+"\001\000\000\000\000\000\000\005" # Uses: 5471
+"\000\000\000\000\000\000\000\000\000'\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000" # Uses: 5462
+"\356\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\177" # Uses: 5301
+"\000\000\000\000\000\000\0008" # Uses: 5534
+"\356\377\377\377\377\377\377\377\37726\364r\366\237U\365\2217a@\037\034\300\344\000\222\261:\361\223`" # Uses: 5329
+"\001\000\001\240\000\010\347\262" # Uses: 5415
+"\000\315" # Uses: 5542
+"\307\225<\301\306\366\351\242{ \217MfmPd\235\300\304D\365R\015\323\2310\275=\256\",d" # Uses: 5387
+"G\011\000\000\000\000\000\000" # Uses: 5545
+"x\025\2546\023*.\340w\006\026+(n\357\014\027\206q5i:\360\366\251\005\235YI\371\242>" # Uses: 5334
+"\346\000\000\000" # Uses: 5555
+"\015\200\351M6G\326\223\377\230\006\344\000\000\000\000\000\000\000\000\000\315\000\000\000\000\000\000\000\000\000\000" # Uses: 5378
+"\352\000" # Uses: 5525
+"\354\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\177" # Uses: 5268
+"\340\353z|;A\270\256\026V\343\372\361\237\304j\332\011\215\353\2342\261\375\206b\005\026_I\270\000" # Uses: 5434
+"\001\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000" # Uses: 5299
+"\001\000\000\000\000\000\000\004" # Uses: 5513
+"\000\000\000\000\000\000\000\324" # Uses: 5451
+"\273y\222\354\352A`\233X;\2444\031\025\222\016\343\201\273F\272\026v\234\030\032\272\240\010\011|{;_8C_\205\267y\024\226b\002%\027{!\005\306\027\012\"K'G\253\255\032\210\261\000g\024" # Uses: 4868
+"_\234\225\274\243P\214$\261\320\261U\234\203\357[\004D\\\304X\034\216\206\330\"N\335\320\237\021W" # Uses: 5251
+"\024\377\377\377" # Uses: 5480
+"\377\377\377\242" # Uses: 5531
+"\001\000\000\000\000\000\011\011" # Uses: 5463
+"\353\000\000\000\000\000\000\000" # Uses: 5378
+"\000\000\000\000\000\000\000\022" # Uses: 5383
+"u\000\000\000" # Uses: 5490
+"\001\000\000\000\000\000\000\010" # Uses: 5519
+"\266\000\000\000" # Uses: 5399
+"\001\000\001\200\000E\035\022" # Uses: 5325
+"'\000" # Uses: 5396
+"9\005\000\000\000\000\000\000" # Uses: 5388
+"\015\000\000\000" # Uses: 5461
+"v\000\000\000" # Uses: 5476
+"\203\000\000\000" # Uses: 5458
+"\000^" # Uses: 5322
+"\001\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\021\021" # Uses: 5155
+":\377\377\377" # Uses: 5485
+"\355\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\177" # Uses: 5096
+"^\233\026\267\000\347\031\351w,\007\000\013\033\327xn\220|e= I] !\"#$%&'" # Uses: 5153
+"\377\377\377\377\377\377\377\377" # Uses: 5293
+"\001\332\240\263<{\000\000" # Uses: 5278
+"'\377\377\377" # Uses: 5215
+"c5\254\000p\001\000\000" # Uses: 5156
+"\302\000\000\000" # Uses: 5199
+"_\234\225\274\243P\214$\261\320\261U\234\203\357[\004D\\\304X\034\001\332\240\263<{\000\000\021W" # Uses: 4802
+"\013\000\000\000\000\000\000\000" # Uses: 4964
+"\376\377\377\230" # Uses: 4879
+"\377\377\377\377\377\377\004u" # Uses: 4866
+"\000\000\000\231" # Uses: 4854
+"&\000\000\000" # Uses: 4941
+"\001\000\000\000\000\000\0008" # Uses: 4903
+"\273y\222\354\352A`\233X;\2444\031\025\222\016\343\201\273F\272\026v\234\030\032\272\240\010\011|{;_8C_\267y\024\226b\022\365\027{!\005\306\027\012\"K'G\253\255\032\210\262\014@ML" # Uses: 4142
+"\336\207\017\"L\037`&Gu%D\336\220|\012p\230\246\012\017\330U$uf\216\247i\221\306\367\266\3271\007Wb4:\023l\327\031\004\303\321V+<\021\\\245q;t\215C\030\243\374\360\202\215" # Uses: 4245
+"\377\377\377\377\377\377\377\037" # Uses: 4834
+"\210\377\377\377" # Uses: 4859
+"\017\000" # Uses: 4927
+"\377\377\377\377\377\377\024B" # Uses: 4791
+"\377\377\377\377\377\377\377 " # Uses: 4600
+"\000\000\000v" # Uses: 4730
+"\221\000\000\000" # Uses: 4675
+"\273y\222\354\352A`\213\000\320\300\000\320\300\000\320\300\000\320\300\000\320\300\000\320\300\000\320\300\000\320\300/\376\342/\376\342/\376\342/\376\342/\376\342/\376\342/\376\342/\376\342/\376\342/\376\342/\376" # Uses: 4052
+"\000\354" # Uses: 4735
+"\001\000\000\000" # Uses: 4575
+"\377\377\377\377\377\377\003A" # Uses: 4679
+"\377\377\377\377" # Uses: 4633
+"\233\000\000\000" # Uses: 4586
+"9\003\000\000\000\000\000\000" # Uses: 4645
+"\376\377\377\377" # Uses: 4743
+"\236\000" # Uses: 4683
+"\377u" # Uses: 4788
+"\013\000\000\000" # Uses: 4576
+"\377^" # Uses: 4667
+"P\246\024\011\261\335\3202^\233\026\267\000\347\031\351w,\007\000\013\033\327xn\220|e=o\007\000" # Uses: 4589
+"\234\000\000\000" # Uses: 4635
+"\000\000\000\000\000\000\000 " # Uses: 4782
+"\006\000\000\000\000\000\000\000" # Uses: 4550
+"\307\225<\301\306\366\351\242{ \217MfmPd\235\300\304D\365R\015\323\231\021'\000\021\021\021\004" # Uses: 4675
+"\304\000" # Uses: 4496
+"\353\000" # Uses: 4420
+"P\246\024\011\230\335\3202^\233\026\267\000\347\031\351w,\007\000\013\033\327xn\220|e= I]" # Uses: 4349
+"\235\000\000\000" # Uses: 4477
+"\030\000\000\000\000\000\000\000" # Uses: 4364
+"\004\000\000\000\000\000\000\000" # Uses: 4385
+"\377\235" # Uses: 4063
+"b\017\000\000\000\000\000\000" # Uses: 3890
+"\001\000\000\000\000\000\017\206" # Uses: 3750
+"\377\030" # Uses: 3802
+"\273y\222\354\352A`\233X;\2444\031\025\222\016\343\201\273F\272\026v\234\030\032\272\240\010\011|{;_8C_\267y\024\226b\022\365\027{!\005\306\027\012\"K'G\253\255\032\210\262\015g\025=" # Uses: 2646
+";\027;\027\364\245\206\336\377\377\377\377\237\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\177" # Uses: 2720
+".\000\000\000\000\000\000\000" # Uses: 2582
+"\000d" # Uses: 2548
+"\001\000\000\000\000\000\000\377" # Uses: 2473
+"\307\225<\301\306\366\351\242{ \217MfmPd\235\300\304\011\011\001\001\001\021\021\021\021\021\021\021\021" # Uses: 904
+###### End of recommended dictionary. ######
+Done 5786148 runs in 121 second(s)
+  x25519_dh: 54 vector seeds in target/fuzz-corpus/x25519_dh/
+$ rustup run nightly-2026-09-21 cargo fuzz run --fuzz-dir fuzz x25519_dh target/fuzz-corpus/x25519_dh fuzz/corpus/x25519_dh -- -max_total_time=120 -max_len=97 -timeout=60
+    Finished `release` profile [optimized + debuginfo] target(s) in 0.27s
+    Finished `release` profile [optimized + debuginfo] target(s) in 0.04s
+     Running `fuzz/target/x86_64-unknown-linux-gnu/release/x25519_dh -artifact_prefix=fuzz/artifacts/x25519_dh/ -max_total_time=120 -max_len=97 -timeout=60 target/fuzz-corpus/x25519_dh fuzz/corpus/x25519_dh`
+INFO: Running with entropic power schedule (0xFF, 100).
+INFO: Seed: 572561377
+INFO: Loaded 1 modules   (1960 inline 8-bit counters): 1960 [0x558f37116cb0, 0x558f37117458), 
+INFO: Loaded 1 PC tables (1960 PCs): 1960 [0x558f37117458,0x558f3711eed8), 
+INFO:       54 files found in target/fuzz-corpus/x25519_dh
+INFO:        3 files found in fuzz/corpus/x25519_dh
+INFO: seed corpus: files: 57 min: 32b max: 96b total: 5376b rss: 44Mb
+Done 156307 runs in 121 second(s)
+

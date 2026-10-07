@@ -1,0 +1,82 @@
+WEISUNG M4-8 — Kani K4b (commit_accept atomic) and K4a on the real MemoryPrekeyStore: every attempt
+Date 2026-10-02, this Mac (aarch64-apple-darwin, 16 GiB), Kani 0.68.0 / CBMC 6.11.0. Head 8434372 + working tree
+until the commits 13640ac (sys-mem backend), 15b7b3b (harnesses), 80f1f5b (proptest).
+Every run: `cargo kani --package secmp-proto -Z stubbing [-Z unstable-options --harness-timeout C] --exact
+--harness kani_proofs::<h>` (own --target-dir when several ran at once), wrapped in target/tmp/peakrss.py
+(exit code, wall time, peak RSS of the largest child). "Shared CPU" = other CBMC runs at the same time.
+
+0. Backend. `secmp-sys-mem` selects `secret_page/heap.rs` under cfg(any(miri, kani)) (one file for both, no new
+   unsafe). A MemoryPrekeyStore with SPK, OPKs and records can now be built under Kani (M4-3 probe: mmap
+   unsupported). Two more obstacles, both stubbed in kani_proofs.rs (only for K4b):
+   - OS randomness: `secmp_crypto::rng::fill` (getrandom/getentropy are foreign) -> `kani_fill`;
+   - zeroize's inline-asm barrier: `zeroize::optimization_barrier` -> no-op (as in the M4-3 probe).
+
+1. Symbolic store, unwind 65 (a dropped ML-KEM seed is wiped by a 64-step loop; #[kani::unwind] bounds every loop):
+   store = starting_at(any, any), SPK optional, <= 2 OPKs, <= 2 records (any ld_id/spk_id/opk_id/expires, kept by
+   add_record), optional delete_opk(any); checks incl. opk_ids().len() (sort) and per-candidate views.
+   Stopped after ~11 min in symex: CBMC unrolled the sort (insertion_sort/insert_tail) and every loop over the
+   (symbolic-length) vectors 64 times (log: insert_tail iteration 36, memcmp 2080 iterations).
+2. Stub of zeroize's byte loop `<core::slice::IterMut<'_, u8> as zeroize::Zeroize>::zeroize`: Kani 0.68
+   "unable to find implementation of associated function `secmp_crypto::Zeroize::zeroize` for
+   std::slice::IterMut<'a, T>" (compile error, 1 s).
+3. As 1 without the sort and with one symbolic probe id per kind (OPK, record, SPK) instead of per-candidate views:
+   VERIFICATION FAILED "CBMC timed out", 1805 s (cap 30 min), peak 1.60 GiB, shared CPU after minute 17.
+4. Concrete store shapes (28: <= 2 OPKs, <= 2 records each naming either OPK, with or without one OPK deleted;
+   symbolic (opk_id, ld_id)), unwind 65: stopped after ~11 min, still in the third shape (after the commit the
+   vector lengths are symbolic again: every lookup unrolled 64 times with the 16-step memcmp inside).
+K4a-1. K4a (`drive`, 6 chunks, 8 slots) on the real store, unwind 65 (no zeroize stub possible yet):
+   "CBMC timed out", 1811 s, peak 2.60 GiB, shared CPU.
+5. Stub paths (compile-only probes): `<[u8; 64] as zeroize::Zeroize>::zeroize` resolves to the generic
+   `impl<Z, const N: usize> Zeroize for [Z; N]` (stub must take <Z, const N>; `fn<Z: Default + Copy, const N>` with
+   `*a = [Z::default(); N]` accepted); `<[Z; N] as ...>` -> "unable to find `Z`"; `<secmp_sys_mem::SecretPage<64>
+   as core::ops::Drop>::drop` -> internal compiler error "cannot find `N/#0` in param-env".
+6. As 3 with the zeroize stub, unwind 17 (the 16-byte ld_id `==` is Kani's memcmp model, a 16-step loop):
+   symex 792 s, 1 405 705 steps, 42 335 VCCs; "CBMC timed out", 1805 s, peak 2.76 GiB.
+   Shapes (as 4) and K4a with the zeroize stub, unwind 17: both stopped after ~27 min, still in symex.
+7. Stub of `[u8; 16] ==`: `<[u8; 16] as core::cmp::PartialEq>::eq` -> "expected module, found derive macro";
+   `<[u8; 16] as PartialEq>::eq` -> "unable to find `PartialEq`" (prelude); with `use core::cmp::PartialEq;` ->
+   "unable to find implementation ... for [u8; 16]"; `<[u8; 16] as PartialEq<[u8; 16]>>::eq` resolves (stub
+   takes <T, U, const N>).
+8. As 3 with both stubs, unwind 3: symex 47 s (337 518 steps, 8 794 VCCs), then "CBMC appears to have run out of
+   memory" during propositional reduction, 1194 s, peak 3.06 GiB (three other jobs at the time).
+   K4a with both stubs, unwind 10 (its M4-3 bound): "CBMC timed out", 1803 s, peak 2.42 GiB, still in symex.
+9. As 8 with concrete, distinct secret bytes (draw d = byte d repeated), alone: symex 60 s, the same
+   "run out of memory" after 800 s, peak 3.00 GiB. (RLIMIT_STACK cannot be raised on this host: setrlimit refused.)
+10. As 9 with 64-byte heap pages under Kani (trial only, reverted): SSA conversion 46 s -> 2.8 s; still "run out
+   of memory" after 765 s, peak 4.51 GiB.
+11. One concrete shape (2 OPKs, 2 records, symbolic query, full checks), unwind 4: symex 114 s (495 382 steps,
+   13 588 VCCs); "CBMC timed out" at the 20-min cap, 1206 s, peak 5.30 GiB.
+12. Smallest store (1 SPK, 1 OPK, 1 record, concrete), symbolic (opk_id, ld_id), only `Ok <=> both held`:
+   VERIFIED, 13.1 s (86 373 steps, 1 063 VCCs).
+13. Bisection, concrete stores, symbolic query, presence checks only, 9-min caps, 2-3 jobs at once:
+   2 OPKs + 2 records: timeout; 2 OPKs + 1 record: VERIFIED 46.4 s (39.4 s with a u128 compare for [u8; 16]);
+   1 OPK + 2 records: timeout (with either `==` stub). A second record (consume_record = Vec::remove of an
+   InvitationRecord at a symbolic index) is what does not finish; a second OPK does.
+   Also timeouts: symbolic store with <= 2 OPKs and <= 1 record (with and without probes), and the 14 concrete
+   shapes with <= 1 record and full checks.
+14. Final K4b (committed): two concrete stores (2 OPKs + 1 record naming OPK 1; naming OPK 2, then OPK 2
+   deleted), symbolic (opk_id, ld_id), one symbolic probe id per kind, key identity by the first secret byte,
+   unwind 3: VERIFIED 312.2 s (with probes) / 224.8 s (without) with 2 jobs at once, peak 5.60 GiB;
+   with the 4096-byte page (as committed) alone: VERIFIED 320.2 s, peak 6.35 GiB, "1 of 1 cover properties
+   satisfied".
+
+Conclusion: the K4b bound of WEISUNG M4-3 (any store of <= 2 OPKs and <= 2 records, symbolic) is not provable by
+Kani 0.68 here (timeouts at 30 min or CBMC's "out of memory" at 3-4.5 GiB); with 1 record and a concrete store it
+is (K4b as committed). K4a on the real store: no verdict in 30 minutes in any form (K4a-1, 6, 8): K4a keeps its
+store model.
+
+Backend absent from non-Kani builds (head 80f1f5b, target/tmp/m48_backend_absent.py): the --cfg flags of every
+secmp_sys_mem rustc invocation of a release build and a test build, the unix-backend imports of the native test
+binary (exactly one `mod os` compiles; the heap backend imports none of them), and the cfg unit test:
+
+    release build: exit 0; secmp_sys_mem rustc invocations: 1
+      lib: --cfg []
+      cfg kani/miri set: no
+    test build: exit 0; secmp_sys_mem rustc invocations: 2
+      test: --cfg []
+      lib: --cfg []
+      cfg kani/miri set: no
+    test binary secmp_sys_mem-28a7529940a4149a: undefined OS symbols of the unix backend: ['_mlock', '_mmap', '_mprotect', '_munlock', '_munmap']
+      test secret_page::tests::heap_backend_only_under_miri_or_kani ... ok
+      test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.00s
+      test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

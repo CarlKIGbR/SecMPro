@@ -1,0 +1,68 @@
+# WEISUNG M4-7 — ProVerif diagnostics (models of commit 7c235d2 unless a scratch file is named; ProVerif 2.05, this Mac, M1 Pro; several runs in parallel)
+
+## A. Auth files with O-20–O-22 only (final library before O-23; runq.py, 3 in parallel, cap 1800 s)
+- hClean-auth.pv: rc=TIMEOUT wall=1800.7 s · RESULT: none · last: 40400 rules inserted. Base: 22722 rules (714 with conclusion selected). Queue: 58657 rules.
+- hKEM-auth.pv: rc=TIMEOUT wall=1801.3 s · RESULT: none · last: 40400 rules inserted. Base: 22680 rules (724 with conclusion selected). Queue: 58686 rules.
+- hDH-auth.pv: rc=TIMEOUT wall=1801.7 s · RESULT: none · last: 41400 rules inserted. Base: 22001 rules (749 with conclusion selected). Queue: 57368 rules.
+- hKCI-auth.pv: rc=TIMEOUT wall=1800.6 s · RESULT: none · last: 40800 rules inserted. Base: 22675 rules (709 with conclusion selected). Queue: 59169 rules.
+- hKCIlt-auth.pv: rc=TIMEOUT wall=1801.2 s · RESULT: none · last: 58800 rules inserted. Base: 43452 rules (150 with conclusion selected). Queue: 16407 rules.
+=> every auth file exceeded 30 min: O-23 applies to all five (committed in ProcIPA).
+
+## B. Auth files with O-23 before the gate run (scratch library = committed formal/hx.pvl but one comment line; 2 in parallel, cap 1800 s; runs stopped when the gate run started are marked 'stopped')
+- hClean-auth.pv: rc=TIMEOUT wall=1800.8 s · RESULT: none · last: 22800 rules inserted. Base: 16338 rules (144 with conclusion selected). Queue: 56146 rules.
+- hKCIlt-auth.pv: rc=TIMEOUT wall=1801.3 s · RESULT: none · last: 46800 rules inserted. Base: 30935 rules (164 with conclusion selected). Queue: 27823 rules.
+- hKEM-auth.pv: rc=stopped wall=- s · RESULT: none · last: 25000 rules inserted. Base: 18510 rules (158 with conclusion selected). Queue: 65777 rules.
+- hDH-auth.pv: rc=stopped wall=- s · RESULT: none · last: 25200 rules inserted. Base: 18422 rules (189 with conclusion selected). Queue: 65701 rules.
+- hKCI-auth.pv: rc=stopped wall=- s · RESULT: none · last: 16200 rules inserted. Base: 9680 rules (142 with conclusion selected). Queue: 31681 rules.
+
+## C. The begin-IStart declaration without any attacker-as-inviter process (scratch; cap 590/400 s)
+- hClean-auth.pv without '! ProcIPA(hClean, c)' (I only on pinv), H5 injective: rc=TIMEOUT wall=590.5 s · RESULT: none · last: 17200 rules inserted. Base: 11003 rules (141 with conclusion selected). Queue: 37156 rules.
+- same, H5 non-injective (inj-event -> event): rc=TIMEOUT wall=590.4 s · RESULT: none · last: 18800 rules inserted. Base: 12575 rules (142 with conclusion selected). Queue: 44403 rules.
+- hClean-auth.pv with ProcIPA fed only R's own invitations (private channel), H5: rc=TIMEOUT wall=590.5 s · RESULT: none · last: 20200 rules inserted. Base: 12207 rules (160 with conclusion selected). Queue: 40526 rules.
+- same as the first, plus 'nounif sk: sigsk, m: bitstring; attacker(hsign(sk, lbl_bundle, m))': rc=TIMEOUT wall=400.7 s · RESULT: none · last: 18600 rules inserted. Base: 12375 rules (142 with conclusion selected). Queue: 41737 rules.
+- same as the first, plus the lemma 'event(IStart(hClean, iI, iR, b, tr, rt, sk)) ==> iR = IKSPublic_R && event(BundleSigned(hClean, iR, b))' (the lemma is proved; H5 not reached): rc=TIMEOUT wall=580.5 s · RESULT: true · last: 32600 rules inserted. Base: 29891 rules (155 with conclusion selected). Queue: 41828 rules.
+- profile (first variant with 'set verboseRules = true', 240 s, 14541 rules; selected facts of the last 3000 rules, shapes to depth 3):
+    rules: 3000, with begin-event hypotheses: 2564
+      806 mess(pinv(hClean),(_,_,h()))
+      272 attacker(exp(g,_))
+      180 attacker(hsign(iksig(hClean,pI),lbl_bundle,(,_),exp(g,dhsk))))
+      180 attacker(hsign(iksig(hClean,pR),lbl_bundle,(,_),exp(g,dhsk))))
+      180 attacker(hsign(_,lbl_bundle,(,_),exp(g,dhsk))))
+      120 attacker(lk)
+      120 attacker(encaps_ct1024(pk1024(kemsk),r))
+       92 attacker(hx_kid(ld,lk,exp(exp,dhsk),encaps_ss1024(pk1024,r),exp(exp,dhsk),encaps_ss1024(pk1024,_)))
+       75 attacker(exp(g,dhsk(hClean,eph)))
+       65 <conclusion>
+       64 attacker(pk1024(kemsk(hClean,eph)))
+       64 attacker(ld)
+       48 attacker(exp(exp(g,dhsk),dhsk(hClean,kSPK)))
+       45 attacker(hsign(iksig(hClean,pI),lbl_bundle,(,_),exp(g,_))))
+       45 attacker(hsign(iksig(hClean,pR),lbl_bundle,(,_),exp(g,_))))
+  the rules carry b-inj-event(IStart(hClean, I, iks(vk(sk_2), exp(g,x_2)), b, ...)) with the bundle's DH
+  fields and signer still variables (I's pinv input not yet resolved) and I's own EK names nested through
+  the bundle index (e[b = (..., exp(g,dhsk(hClean,eph(e[b = ...]))), ...)]).
+=> the stall is in the begin-IStart declaration itself: it occurs with no attacker-as-inviter process, so no
+   restriction of that process (O-20, O-21, O-23) can remove it.
+
+## D. O-21 and R's own leaked invitation (scratch hClean-fwdreach.pv: the attacker-as-inviter process takes R's
+   own invitations from a private channel; no ProcIP; one reachability query)
+- event(RAccept(hClean, iR, iks_I honest, ld, oid, tr, rt, sk)) && event(IStartA(hClean, iks_I honest, iR, b, tr, rt, sk)): rc=0 wall=12.7 s · RESULT: false · last: 19400 rules inserted. Base: 9610 rules (198 with conclusion selected). Queue: 5 rules.
+  trace (abridged):
+    event LeakInv(hClean,ld_9) at {46} in copy a
+    event IStartA(hClean,iks(vk(iksig(hClean,pI)),exp(g,dhsk(hClean,kIKI))),iks(vk(iksig(hClean,pR)),exp(g,dhsk(hClean,kIKR))),(spkid0,exp(g,dhsk(hClean,kSPK)),pk1024(kemsk(hClean,kSPK)),pk768(kemsk(hClea
+    out(c, (~M_80,(~M_81,~M_82,~M_83,~M_84,~M_85,~M_86))) with ~M_80 = ld_9, ~M_81 = exp(g,dhsk(hClean,eph(e_2))), ~M_82 = spkid0, ~M_83 = opkid_8, ~M_84 = encaps_ct1024(pk1024(kemsk(hClean,kSPK)),kemr(hC
+    in(c, (~M_2,(~M_81,spkid0,~M_12,~M_84,~M_85,~M_86))) with ~M_2 = ld_9, ~M_81 = exp(g,dhsk(hClean,eph(e_2))), ~M_12 = opkid_8, ~M_84 = encaps_ct1024(pk1024(kemsk(hClean,kSPK)),kemr(hClean,r1_2)), ~M_85
+    event RAccept(hClean,iks(vk(iksig(hClean,pR)),exp(g,dhsk(hClean,kIKR))),iks(vk(iksig(hClean,pI)),exp(g,dhsk(hClean,kIKI))),ld_9,opkid_8,th(iks(vk(iksig(hClean,pR)),exp(g,dhsk(hClean,kIKR))),spkid0,exp
+=> in the auth files the leak puts R's invitation on c, ProcIPA takes it, and R accepts the honest I on a run
+   whose only begin event is IStartA: H5 (hClean, hKEM) and H9b (hKCIlt) have this counterexample, and H8/H9
+   are false for this reason as well — once a run saturates (none did).
+
+## E. The bundle index of I's names (new e[ld, lk, b]; library header 7.)
+- hKCIlt.pv, names [ld, lk] (M4-5 device): rc=0 wall=16.1 s · RESULT: false, false, false, cbp · last: 200 rules inserted. Base: 139 rules (138 with conclusion selected). Queue: 36 rules.
+- hKCIlt.pv, names [ld, lk, opkid] (scratch): rc=0 wall=25.6 s · RESULT: false, false, false, cbp · last: 200 rules inserted. Base: 139 rules (138 with conclusion selected). Queue: 36 rules.
+- hKCIlt.pv, names [ld, lk, b] (scratch = committed): rc=0 wall=31.6 s · RESULT: false, false, false, false · last: 200 rules inserted. Base: 139 rules (138 with conclusion selected). Queue: 36 rules.
+- hBoth.pv, names [ld, lk]: rc=0 wall=471.0 s · RESULT: false, false, false, false, cbp · last: 600 rules inserted. Base: 272 rules (16 with conclusion selected). Queue: 89 rules.
+- hBoth.pv, names [ld, lk, b] (committed): rc=0 wall=1072.5 s · RESULT: false, false, false, false, false · last: 600 rules inserted. Base: 272 rules (16 with conclusion selected). Queue: 89 rules.
+  [ld, lk]: the IConfirm derivations take I runs of one invitation with different bundles as one run (hKCIlt:
+  bundles the attacker signs with R's revealed IK_sig; hBoth: R's bundle of another invitation under this
+  invitation's plaintext ld_id) and have no trace ('Could not find a trace corresponding to this derivation').

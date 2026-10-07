@@ -10,8 +10,9 @@
 //! under both labels: it must stay quiet, otherwise the harness or the runner is unsound. The **sensitivity
 //! control** `min_leak_control` (ADR-041 Amendment 1 (2)) measures the smallest leak the gate must see — the work
 //! of a 32-byte comparison that exits one byte early for class 1, in one out-of-line function whose instruction
-//! stream is the same for both classes (ADR-042 Amendment 1) — and must reach the effect floor with class 0 the
-//! slower, otherwise the run is `CONTROL_FAIL`; it records the gate's sensitivity per run.
+//! stream is the same for both classes (ADR-042 Amendment 1) — and must be caught by the verdict rule it validates
+//! (`decide` on two measurements gives FAIL) with class 0 the slower at the deciding crop (ADR-041 Amendment 3),
+//! otherwise the run is `CONTROL_FAIL`; it records the gate's sensitivity per run.
 //!
 //! Targets:
 //! - `tag_compare`: the tag comparison used by `MsgEncrypt` (`subtle::ConstantTimeEq` on 32 bytes), tags that
@@ -42,6 +43,31 @@
 //!   MAC rejects);
 //! - `tr_decrypt_reject_ct_pq`: a header under `hk_r` whose `ct_pq` differs from `last_ct_r` in byte 0 vs byte 1087,
 //!   the body unchanged (the KEM-constancy check rejects).
+//! - `tr_decrypt_reject_skipped` (M4, M3 review R-04, F2, respecified by WEISUNG M4-4 after R-58/R-59): on its own
+//!   receiver state, which holds nine skipped message keys of three earlier chains of A (chain 1: n = 0 … 4;
+//!   chains 2 and 3: n = 0 and 1; so 3 distinct header keys, 5 candidates) and whose current receiving chain is a
+//!   fourth one: A's undelivered cell `(hk_1, n = 0)` (entry 0) vs `(hk_1, n = 4)` (entry 4), each with its body
+//!   tag wrong in byte 0 — both headers open at trial 0, `(hk, n)` is in `skipped`, and the skipped path's body MAC
+//!   rejects. The classes differ in the entry index alone: the lookup visits every entry and selects the message key
+//!   with masks (M4 review R-58). The position of the opening trial is not a class difference (R-59); the
+//!   early-exit regression is caught by the unit test `trial_opens_every_candidate_every_call`.
+//!
+//! SecMP-INV/HX targets (M4, TEST-SPEC-M4 (f)), measured after the TR targets on the product path:
+//! - `inv_fingerprint_compare`: `inv::invitee_check` with an issued blob, the invitation's `inviter_fp` changed in
+//!   byte 0 vs byte 31 (spec §5.5 step 3; the blob opens and decodes in both classes);
+//! - `x25519_zero_check`: `X25519Secret::diffie_hellman` (the helper of DH1–DH4) on two fixed pairs whose output is
+//!   non-zero in byte 0 only vs in byte 31 only (spec §3, §6.4; the all-zero test passes in both classes);
+//! - `hx_accept_reject_inner`: `Responder::accept`, `inner_ct` under a wrong key vs under `K_id` with its tag flipped
+//!   (spec §6.6 step 2, after the real DH/KEM work);
+//! - `hx_accept_reject_first_msg`: `Responder::accept`, `first_msg`'s body tag wrong in byte 0 vs byte 31 (spec §6.6
+//!   step 3: §7.4 Decrypt on R's fresh state, the step path).
+//!
+//! Per-class pre-check (M4; M3 review R-45, F19): before every measurement of a TR, INV or HX target (and of the
+//! same-content control), on the very fixture that is measured, each class's input passes once through the measured
+//! call and must give what the target claims — `Err(Rejected)` and the product's `kat` reject-site tag at the claimed
+//! site (`tr::DECRYPT_SITE_KAT`, `inv::INVITEE_SITE_KAT`, `hx::ACCEPT_SITE_KAT`); `Ok` with the class's output for
+//! `x25519_zero_check`; the unmodified input passes (INV, HX). A mismatch aborts the run with target, class, expected
+//! and observed outcome in the report's `error`. The report carries `site` and `precheck` per target.
 //!
 //! The same-content control `same_content_control` (ADR-042 Amendment 2) is measured and judged like a target, after
 //! the TR targets: `tr_decrypt_reject` on the `tr_decrypt_reject_body_tag` fixture (the largest cell) with identical
@@ -60,8 +86,8 @@
 //! The classes may differ only in their contents, never in where the inputs live: every measured input is a
 //! fresh copy made by `prepare` (by value or in a new allocation, identical sequence for both classes), so buffer
 //! placement cannot correlate with the class (M1 review F7); the fresh copies are made from one common source
-//! per target (F9, `f7b3066`; the targets section below); and the preparation runs the same code for both classes
-//! (`blend`, ADR-042 Amendment 2).
+//! per target (F9, `f7b3066`; the targets section below); and the preparation runs the same code on the same
+//! addresses for both classes (`blend`, ADR-042 Amendments 2 and 4).
 //!
 //! ADR-038 (the instrument):
 //! - **Timer (1).** Each call is timed with the CPU counter — `rdtscp` on `x86_64`, `cntvct_el0` on `aarch64`,
@@ -108,12 +134,15 @@
 //!   reproduced but no reproduced crop is relevant; PASS otherwise. The positive control is measured once and must
 //!   exceed `CT_THRESHOLDS` (FAIL otherwise). The inline A/A control measures every target once more with class-0
 //!   inputs under both labels; if any of its crops exceeds `CT_AA_MAX_T`, the run is `CONTROL_FAIL`. The
-//!   sensitivity control (Amendment 1 (2)) is measured once after the A/A control with `tag_compare`'s batch size
-//!   and sample count; if its raw Δ (class 0 slower) is below its effect floor, or it cannot be measured, the run is
-//!   `CONTROL_FAIL`; so it is if the A/A′ placement control FAILs (ADR-042). A `CONTROL_FAIL` run fails the gate and
-//!   gives no target verdict (every target shows
+//!   sensitivity control (Amendment 1 (2), judged since Amendment 3 by the verdict rule it validates) is measured
+//!   twice after the A/A control with `tag_compare`'s batch size and sample count, like a target; unless `decide` on
+//!   the two measurements gives FAIL with class 0 the slower at the deciding crop, or if it cannot be measured, the
+//!   run is `CONTROL_FAIL`; so it is if the A/A′ placement control FAILs (ADR-042). A `CONTROL_FAIL` run fails the
+//!   gate and gives no target verdict (every target shows
 //!   `CONTROL_FAIL`). `NOT_MEASURABLE` fails the gate as before. A clock without a positive, finite tick length
-//!   makes every target NOT MEASURABLE (the floor in ticks needs it).
+//!   makes every target NOT MEASURABLE (the floor in ticks needs it). After it, the informative same-content variant
+//!   `min_leak_same_content` (Amendment 3 (2): both classes 32 byte steps through the same per-class preparation) is
+//!   measured once; it has no verdict and never fails the run.
 //! - The parameters are read from `xtask/src/expect.rs` (`CT_THRESHOLDS`, `CT_RESOLUTION_MAX_FRACTION`,
 //!   `CT_MAX_BATCH`, `CT_BATCH_MARGIN`, `CT_MIN_REALISED_QUANTA`, `CT_EFFECT_FLOOR_QUANTA`, `CT_EFFECT_FLOOR_NS`,
 //!   `CT_AA_MAX_T`, `CT_SAMPLES`, `CT_SAS_SAMPLES`) — this file contains no copy of them — and echoed in the report,
@@ -123,12 +152,19 @@
 //! lattice and quantum), the run verdict and, per target, `k`, the calibration, both measurements (per crop: n,
 //! class means, Δ in ticks, in `q_eff` and in effect floors, pooled sd, t; the class medians, the realised quanta,
 //! `q_eff` and where it came from, the effect floor, per-class percentiles), `t1`/`t2` at the first measurement's
-//! maximum, the deciding crop and the A/A measurement; and the sensitivity control (`k`, sample count, floor, raw
-//! Δ, whether it reached the floor, its measurement).
+//! maximum, the deciding crop and the A/A measurement; the sensitivity control (`k`, sample count, `decide`'s verdict
+//! and deciding crop, Δ in ticks and floors and t of both measurements there, both raw Δ as information, whether it
+//! was caught, both measurements and a 21-bin histogram per class of the first one's samples) and its same-content
+//! variant (one measurement and its histogram); and the host (CPU model and microcode) and the SHA-256 of the bench
+//! executable (Amendment 3 (2)), so that a layout or host effect can be told apart later.
 //!
 //! Run by `cargo xtask step ct` (ci-full) as `cargo bench -p secmp-testkit --features kat --bench ct` (ADR-042 moved
 //! the bench here from `secmp-crypto`, so that it can measure `secmp-proto` too); the results are written to
-//! `target/ct-report.json` and the exit status is the verdict. `SECMP_CT_SCALE`, a divisor of every sample count
+//! `target/ct-report.json` and the exit status is the verdict. While it runs, the bench appends one JSON line per
+//! finished phase of a target (calibration, first, second, requantised, aa; `first` and `second` of
+//! `min_leak_control`, `first` of `min_leak_same_content`: target, phase, elapsed seconds, `k`, median ticks) to
+//! `target/ct-progress.jsonl`, which the gate echoes and names when it kills a run at
+//! its step budget (ADR-045 Amendment 1). `SECMP_CT_SCALE`, a divisor of every sample count
 //! (default 1), shortens quick local runs; the report then carries `secmp_ct_scale`, which the gate refuses (M2
 //! review C3 (c)), and the gate unsets the variable for its own run.
 
@@ -137,8 +173,11 @@
 #![allow(unsafe_code)]
 
 use std::cell::RefCell;
+use std::fmt::Write as _;
 use std::hint::black_box;
+use std::io::Write as _;
 use std::process::ExitCode;
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
@@ -146,13 +185,20 @@ use chacha20poly1305::aead::AeadInOut;
 use chacha20poly1305::{KeyInit, Tag, XChaCha20Poly1305, XNonce};
 use secmp_crypto::{
     AEAD_TAG_LEN, Aead, BODY_LEN, COM_LEN, Caead, Fingerprint, Label, MSG_TAG_LEN, MlKem768Dk,
-    MsgEncrypt, Nonce24, SafetyNumber, SecretBytes, X25519Secret, Zeroizing, hkdf_expand,
+    MsgEncrypt, Nonce24, SafetyNumber, SecretBytes, X25519Public, X25519Secret, Zeroizing,
+    hkdf_expand,
 };
+use secmp_proto::hx::{Initiator, Responder};
+use secmp_proto::inv::{derive_k_inv, invitee_check};
 use secmp_proto::keys::{MlKem768Ek, X25519Pk};
-use secmp_proto::sizes::{HDR_CT_LEN, NONCE_LEN};
+use secmp_proto::prekeys::{IdentityKeys, InvitationRecord, IssueParams, MemoryPrekeyStore};
+use secmp_proto::sizes::{CELL_LEN, HANDSHAKE_CHUNK_LEN, HDR_CT_LEN, NONCE_LEN};
 use secmp_proto::tr::content::dummy;
 use secmp_proto::tr::{FixedEntropy, RatchetState};
-use secmp_proto::wire::cell::HeaderV1;
+use secmp_proto::wire::cell::{Cell, HeaderV1, RelayQueue, RouteDescriptor};
+use secmp_proto::wire::hx::{HandshakeCellPlaintext, Outer};
+use secmp_proto::wire::inv::{InvitationV1, Onion, Profile, RelayRef};
+use secmp_proto::wire::{Id, Period};
 use secmp_proto::{Decode, Encode};
 use sha3::Shake256;
 use sha3::digest::{ExtendableOutput, Update, XofReader};
@@ -846,11 +892,6 @@ impl Measurement {
         f64_of(self.class_median_ticks) / self.q_eff
     }
 
-    /// The raw (uncropped) class statistics.
-    fn raw(&self) -> Option<&Stats> {
-        self.crops.iter().find(|(k, _)| k == "raw").map(|(_, s)| s)
-    }
-
     fn json(&self, clock: &Clock, rules: Rules) -> String {
         let ts: Vec<String> = self
             .crops
@@ -979,6 +1020,16 @@ struct Requantised {
 }
 
 impl Calibration {
+    /// The progress line of the finished calibration (ADR-045 Amendment 1): its batch size and the median of its last
+    /// round (of the single calls if there was none).
+    fn progress(&self, target: &str) {
+        let median = self
+            .rounds
+            .last()
+            .map_or(self.single_median_ticks, |(_, median)| *median);
+        progress(target, "calibration", self.k, Some(median));
+    }
+
     /// The median duration of one call, in ticks, by the last round (the single calls if there was none).
     fn per_call_ticks(&self) -> f64 {
         self.rounds.last().map_or_else(
@@ -1155,6 +1206,7 @@ fn evaluate(
     rules: Rules,
 ) -> Result<Outcome, secmp_crypto::Error> {
     let calibration = calibrate(&target, stream, clock, rules)?;
+    calibration.progress(target.name);
     let mut outcome = Outcome {
         target,
         calibration,
@@ -1184,10 +1236,13 @@ fn evaluate(
                         k: u32|
      -> Result<(Measurement, Option<Measurement>), secmp_crypto::Error> {
         let first = measure_once(stream, t, k)?;
+        progress(t.name, "first", Some(k), Some(first.median_ticks));
         let second = if t.control {
             None
         } else {
-            Some(measure_once(stream, t, k)?)
+            let second = measure_once(stream, t, k)?;
+            progress(t.name, "second", Some(k), Some(second.median_ticks));
+            Some(second)
         };
         Ok((first, second))
     };
@@ -1217,6 +1272,8 @@ fn evaluate(
             k_initial: k,
             q_eff,
         });
+        // the new batch size (none: NOT MEASURABLE); the pair measured with it logs `first` and `second` again
+        progress(outcome.target.name, "requantised", next, None);
         let Some(k2) = next else {
             // no batch size up to `max_batch` reaches the minimum: NOT MEASURABLE
             outcome.calibration.k = None;
@@ -1274,8 +1331,10 @@ impl Outcome {
             || "null".to_owned(),
             |m| (m.max().0 <= rules.aa_max_t).to_string(),
         );
+        // M3 review R-45 (F19): the claimed reject site and the per-class pre-check, `null` for a target without one
+        let (site, precheck) = claim_json(self.target.name);
         format!(
-            "{{\"name\":\"{}\",\"class0\":\"{class0}\",\"class1\":\"{class1}\",\"samples\":{},\"control\":{},\"k\":{},\"requantised\":{},\"k_initial\":{},\"calibration_median_ticks\":{per_call_ticks:.2},\"calibration_median_ns\":{:.1},\"calibration\":{},\"verdict\":\"{}\",\"passed\":{},\"decisive_crop\":{},\"t1_t2\":{t1_t2},\"aa_passed\":{aa_passed},\"aa_control\":{},\"first\":{},\"second\":{}}}",
+            "{{\"name\":\"{}\",\"class0\":\"{class0}\",\"class1\":\"{class1}\",\"samples\":{},\"control\":{},\"site\":{site},\"precheck\":{precheck},\"k\":{},\"requantised\":{},\"k_initial\":{},\"calibration_median_ticks\":{per_call_ticks:.2},\"calibration_median_ns\":{:.1},\"calibration\":{},\"verdict\":\"{}\",\"passed\":{},\"decisive_crop\":{},\"t1_t2\":{t1_t2},\"aa_passed\":{aa_passed},\"aa_control\":{},\"first\":{},\"second\":{}}}",
             self.target.name,
             self.target.samples,
             self.target.control,
@@ -1305,48 +1364,53 @@ impl Outcome {
 // ---- targets --------------------------------------------------------------------------------------------------
 //
 // Input preparation (M2 finding, WEISUNG M2-2 C; ADR-042 Amendment 2): every measured input is built from **one
-// common source per target**, `base` (the class-1 input), as `base ^ deltas[class]` — `Deltas` holds class 0's
-// delta (class 0 XOR class 1) and class 1's all-zero delta of the same length, in two buffers selected by index —
-// by one out-of-line XOR loop (`blend`) that runs the same instructions for both classes; the classes differ in the
-// contents of the fresh copy and in which of the two delta buffers the loop reads (the one class-dependent address
-// left in the preparation). History: before M2, `prepare` copied each input from a per-class source buffer
-// (`inputs[c]`, `&sealed` vs `&tampered`, `&at_100` vs `&at_300`, `&other` vs `&k`) right before the timed window,
-// and the class-dependent source address left a class-dependent cache footprint at the start of every timed call:
-// an A/A′ control (identical contents, the class-1 source only moved to its own allocation) failed with it on
-// GitHub-hosted Linux (`msg_open_reject` 13.0, `caead_open_reject` 50.1, run 36569831144), while the A/A control
-// (one source for both labels) passed in every run — the M1 review F7 rule ("the classes may differ only in their
-// contents, never in where the inputs live") applied one step earlier. The M2 form `base ^ (delta & mask)` was
-// then split by the compiler into a `memcpy` for class 1 and an XOR loop for class 0 (ADR-042 Amendment 2). The
-// same-content control `same_content_control` measures this whole preparation path with identical contents in
-// both classes.
+// common source per target**, `base` (the class-1 input), as `base ^ (delta & mask)` — `Deltas` holds the one
+// delta (class 0 XOR class 1), the mask is 0xFF for class 0 and 0x00 for class 1 and passes through `black_box` —
+// by one out-of-line XOR loop (`blend`) that runs the same instructions on the same addresses for both classes; the
+// classes differ only in the mask value and so in the contents of the fresh copy. History: before M2, `prepare`
+// copied each input from a per-class source buffer (`inputs[c]`, `&sealed` vs `&tampered`, `&at_100` vs `&at_300`,
+// `&other` vs `&k`) right before the timed window, and the class-dependent source address left a class-dependent
+// cache footprint at the start of every timed call: an A/A′ control (identical contents, the class-1 source only
+// moved to its own allocation) failed with it on GitHub-hosted Linux (`msg_open_reject` 13.0, `caead_open_reject`
+// 50.1, run 36569831144), while the A/A control (one source for both labels) passed in every run — the M1 review F7
+// rule ("the classes may differ only in their contents, never in where the inputs live") applied one step earlier.
+// The M2 form `base ^ (delta & mask)` without `black_box` was then split by the compiler into a `memcpy` for class 1
+// and an XOR loop for class 0 (ADR-042 Amendment 2). Amendment 2 replaced it by a per-class delta selected by index
+// (class 0's XOR delta, class 1 a separate all-zero buffer of the same length), which left one class-dependent
+// address in the preparation: which of the two delta buffers the loop read right before the timed window. With the
+// 12 288-byte HX blend that decided the cache state the timed call started with, and `hx_same_content_control`
+// failed with it on GitHub-hosted Linux (2.01 / 1.95 effect floors, run 37614599312; ADR-042 Amendment 4, R-103).
+// The same-content controls measure this preparation path with identical contents in both classes:
+// `same_content_control` on the 4096-byte TR cell, `hx_same_content_control` on the 12 288-byte HX blend and its
+// three boxed cells (ADR-042 Amendment 3).
 
-/// The per-class deltas of `blend` (ADR-042 Amendment 2), indexed by the class: class 0's `class0 ^ class1` and
-/// class 1's all-zero delta of the same length.
-struct Deltas([Vec<u8>; 2]);
+/// The delta of `blend` (ADR-042 Amendment 4): `class0 ^ class1`, read by both classes.
+struct Deltas(Vec<u8>);
 
 impl Deltas {
-    /// The deltas that turn the base (`class1`) into `class0` for class 0 and leave it unchanged for class 1.
+    /// The delta that turns the base (`class1`) into `class0` under class 0's mask.
     fn new(class0: &[u8], class1: &[u8]) -> Self {
-        let delta = xor(class0, class1);
-        let zero = vec![0_u8; delta.len()];
-        Self([delta, zero])
+        Self(xor(class0, class1))
     }
 }
 
-/// `out = base ^ deltas[class]`: `base ^ (class0 ^ class1)` for class 0, `base` for class 1 (ADR-042 Amendment 2).
-/// One out-of-line XOR loop for both classes: the class only selects the delta buffer by index, and the selected
-/// buffer passes through `black_box`, so the compiler can neither branch on the class nor split the loop by it. The
-/// mask form `base ^ (delta & mask)` it replaces was split into a `memcpy` for class 1 and an XOR loop for class 0,
-/// both before the timed window (`docs/reviews/M03-evidence/ct-blend-disasm-aarch64-bc5088b.txt`).
+/// `out = base ^ (delta & mask)`: `base ^ (class0 ^ class1)` for class 0 (mask 0xFF), `base` for class 1 (mask
+/// 0x00) (ADR-042 Amendment 4). One out-of-line XOR loop for both classes over the same `base` and the same delta:
+/// the class enters only as the mask value, which passes through `black_box` as the delta slice does, so the
+/// compiler can neither branch on the class nor split the loop by it, and no class-selected address remains. The
+/// mask form without `black_box` was split into a `memcpy` for class 1 and an XOR loop for class 0
+/// (`docs/reviews/M03-evidence/ct-blend-disasm-aarch64-bc5088b.txt`); the per-class delta buffers that replaced it
+/// left the buffer read before the timed window class-dependent (R-103).
 #[inline(never)]
 fn blend(base: &[u8], deltas: &Deltas, class: usize, out: &mut [u8]) {
-    let delta = black_box(deltas.0.get(class & 1).map_or(&[][..], Vec::as_slice));
+    let m: u8 = black_box(u8::from((class & 1) == 0).wrapping_neg());
+    let delta = black_box(deltas.0.as_slice());
     for ((o, b), d) in out.iter_mut().zip(base).zip(delta) {
-        *o = b ^ d;
+        *o = b ^ (d & m);
     }
 }
 
-/// `a ^ b`, bytewise (class 0's delta of `Deltas`).
+/// `a ^ b`, bytewise (the delta of `Deltas`).
 fn xor(a: &[u8], b: &[u8]) -> Vec<u8> {
     a.iter().zip(b).map(|(x, y)| x ^ y).collect()
 }
@@ -1439,11 +1503,26 @@ fn min_leak_call(input: &LeakInput) {
 /// byte steps, class 1 with 31 (one byte early); 256 comparisons per call as in `tag_compare`, so class 0 is slower
 /// by 256 byte steps. Both classes' inputs are built from one common source (`blend`, the F9 rule).
 fn min_leak(n: usize, k: usize, stream: &mut Stream) -> Samples {
+    min_leak_steps(n, k, stream, [32, 31])
+}
+
+/// The informative same-content variant `min_leak_same_content` of the sensitivity control (ADR-041 Amendment 3 (2)):
+/// both classes 32 byte steps, through the same per-class preparation as `min_leak` (`blend` with one delta under the
+/// per-class mask, the delta all-zero). A class difference here follows the label or the preparation, not the
+/// step count — the falsifier of the loop-exit reading of run 37127247911 (`DIAG-ct-37127247911.md`).
+fn min_leak_same_content(n: usize, k: usize, stream: &mut Stream) -> Samples {
+    min_leak_steps(n, k, stream, [32, 32])
+}
+
+/// `min_leak_call` measured with `steps[c]` byte steps for class `c`; class 0's input is built from class 1's (the
+/// base) by `blend`.
+fn min_leak_steps(n: usize, k: usize, stream: &mut Stream, steps: [u8; 2]) -> Samples {
     let mut bytes = [0_u8; 32];
     stream.fill(&mut bytes);
-    // source: `steps ‖ bytes`; class 1 (the base) 31 steps, class 0 32 steps
-    let class1: Vec<u8> = [31_u8].iter().chain(bytes.iter()).copied().collect();
-    let class0: Vec<u8> = [32_u8].iter().chain(bytes.iter()).copied().collect();
+    let [steps0, steps1] = steps;
+    // source: `steps ‖ bytes`; class 1 (the base) `steps1` steps, class 0 `steps0` steps
+    let class1: Vec<u8> = [steps1].iter().chain(bytes.iter()).copied().collect();
+    let class0: Vec<u8> = [steps0].iter().chain(bytes.iter()).copied().collect();
     let delta = Deltas::new(&class0, &class1);
     measure(
         n,
@@ -1773,6 +1852,274 @@ fn sas(n: usize, k: usize, stream: &mut Stream) -> Samples {
     )
 }
 
+// ---- reject sites and per-class pre-checks (M4; M3 review R-45, F19) ---------------------------------------------
+//
+// Every SecMP-TR, -INV and -HX target (and the same-content control, which measures the TR body-tag cell) claims where
+// both of its classes end. Before each measurement — on the very fixture that is measured, every time a target is
+// run (calibration, the pair, the A/A control) — each class's input is passed once through the measured call and the
+// outcome is compared with the claim: `Err(Rejected)` and the product's `kat` reject-site tag of the path
+// (`secmp_proto::tr::DECRYPT_SITE_KAT`, `secmp_proto::inv::INVITEE_SITE_KAT`, `secmp_proto::hx::ACCEPT_SITE_KAT`);
+// for `x25519_zero_check`, `Ok` and the output's shape. A mismatch
+// aborts the run, and `main` writes target, class, expected and observed outcome into the report's `error`, which
+// fails the gate. The report carries `site` and `precheck` per target; the gate appends the site to the target's
+// verdict line.
+
+/// How a target's pre-check verifies its claim on each class.
+#[derive(Clone, Copy)]
+enum SiteCheck {
+    /// `Err(Rejected)` and the product's `kat` reject-site tag equal to the claimed site (`RatchetState::decrypt`:
+    /// `tr::DECRYPT_SITE_KAT`; `inv::invitee_check`: `inv::INVITEE_SITE_KAT`; `Responder::accept`:
+    /// `hx::ACCEPT_SITE_KAT`).
+    Tagged,
+    /// `Ok`, with the class's output (not a reject target).
+    Output,
+}
+
+impl SiteCheck {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Tagged => "Err(Rejected) and the kat reject-site tag",
+            Self::Output => "Ok and the class's output",
+        }
+    }
+}
+
+/// What a target claims: its name and classes, the site where both classes end, and how the pre-check verifies it.
+#[derive(Clone, Copy)]
+struct Claim {
+    target: &'static str,
+    classes: [&'static str; 2],
+    site: &'static str,
+    check: SiteCheck,
+}
+
+const CLAIM_TR_HDR_KEY: Claim = Claim {
+    target: "tr_decrypt_reject_hdr_key",
+    classes: [
+        "header sealed under a wrong key",
+        "header sealed under hk_r, its tag's last byte flipped",
+    ],
+    site: "header: no key opened",
+    check: SiteCheck::Tagged,
+};
+const CLAIM_TR_BODY_TAG: Claim = Claim {
+    target: "tr_decrypt_reject_body_tag",
+    classes: ["body tag wrong in byte 0", "body tag wrong in byte 31"],
+    site: "body MAC",
+    check: SiteCheck::Tagged,
+};
+const CLAIM_TR_CT_PQ: Claim = Claim {
+    target: "tr_decrypt_reject_ct_pq",
+    classes: [
+        "ct_pq differs from last_ct_r in byte 0",
+        "ct_pq differs from last_ct_r in byte 1087",
+    ],
+    site: "kem constancy",
+    check: SiteCheck::Tagged,
+};
+const CLAIM_TR_SKIPPED: Claim = Claim {
+    target: "tr_decrypt_reject_skipped",
+    classes: [
+        "header under hk_1, n = 0 (trial 0; entry 0 of 9), body tag wrong in byte 0",
+        "header under hk_1, n = 4 (trial 0; entry 4 of 9), body tag wrong in byte 0",
+    ],
+    site: "body MAC",
+    check: SiteCheck::Tagged,
+};
+const CLAIM_SAME_CONTENT: Claim = Claim {
+    target: SAME_CONTENT,
+    classes: [
+        "the class-1 cell of tr_decrypt_reject_body_tag (body tag wrong in byte 31)",
+        "the same cell",
+    ],
+    site: "body MAC",
+    check: SiteCheck::Tagged,
+};
+const CLAIM_INV_FP: Claim = Claim {
+    target: "inv_fingerprint_compare",
+    classes: [
+        "inviter_fp differs from the IKS fingerprint in byte 0",
+        "inviter_fp differs from the IKS fingerprint in byte 31",
+    ],
+    site: "fingerprint",
+    check: SiteCheck::Tagged,
+};
+const CLAIM_X25519: Claim = Claim {
+    target: "x25519_zero_check",
+    classes: [
+        "X25519 output 9 (non-zero in byte 0 only)",
+        "X25519 output 49·2^248 (non-zero in byte 31 only)",
+    ],
+    site: "§3/§6.4 all-zero check of the output (passes: not a reject target)",
+    check: SiteCheck::Output,
+};
+const CLAIM_HX_INNER: Claim = Claim {
+    target: "hx_accept_reject_inner",
+    classes: [
+        "inner_ct sealed under a wrong key (wrong K_id: COM and tag fail)",
+        "inner_ct under K_id, its tag's last byte flipped (COM ok, tag fails)",
+    ],
+    site: "inner open",
+    check: SiteCheck::Tagged,
+};
+const CLAIM_HX_FIRST_MSG: Claim = Claim {
+    target: "hx_accept_reject_first_msg",
+    classes: [
+        "first_msg body tag wrong in byte 0",
+        "first_msg body tag wrong in byte 31",
+    ],
+    site: "first_msg decrypt",
+    check: SiteCheck::Tagged,
+};
+const CLAIM_HX_SAME_CONTENT: Claim = Claim {
+    target: HX_SAME_CONTENT,
+    classes: [
+        "the class-1 cells of hx_accept_reject_inner (inner_ct under K_id, its tag's last byte flipped)",
+        "the same cells",
+    ],
+    site: "inner open",
+    check: SiteCheck::Tagged,
+};
+
+/// Every claim, for the report (`claim_json`).
+const CLAIMS: [Claim; 10] = [
+    CLAIM_TR_HDR_KEY,
+    CLAIM_TR_BODY_TAG,
+    CLAIM_TR_CT_PQ,
+    CLAIM_TR_SKIPPED,
+    CLAIM_SAME_CONTENT,
+    CLAIM_INV_FP,
+    CLAIM_X25519,
+    CLAIM_HX_INNER,
+    CLAIM_HX_FIRST_MSG,
+    CLAIM_HX_SAME_CONTENT,
+];
+
+/// A target built from its claim (name and classes from the claim).
+fn claimed(
+    claim: Claim,
+    samples: usize,
+    run: fn(usize, usize, &mut Stream) -> Result<Samples, secmp_crypto::Error>,
+) -> Target {
+    Target {
+        name: claim.target,
+        classes: claim.classes,
+        samples,
+        control: false,
+        run,
+    }
+}
+
+/// A target's pre-check as recorded for the report: how many fixtures it ran on, and what the first gave.
+struct PreCheck {
+    target: &'static str,
+    fixtures: u64,
+    expected: [String; 2],
+    observed: [String; 2],
+    /// The positive twin (the unmodified input through the same call), where the target has one: (expected, observed).
+    twin: Option<(String, String)>,
+}
+
+std::thread_local! {
+    /// The pre-checks of the run, one per target (`precheck`).
+    static PRECHECKS: RefCell<Vec<PreCheck>> = const { RefCell::new(Vec::new()) };
+}
+
+/// A call's outcome as the pre-check states it: `Ok` or `Err(<error>)`.
+fn outcome<T>(r: &Result<T, secmp_proto::Error>) -> String {
+    match r {
+        Ok(_) => "Ok".to_owned(),
+        Err(e) => format!("Err({e:?})"),
+    }
+}
+
+/// What a class of a rejecting target must give: `Err(Rejected)`, with the site where the product tags it.
+fn expected_rejection(claim: Claim) -> String {
+    match claim.check {
+        SiteCheck::Tagged => format!("Err(Rejected), site {}", claim.site),
+        SiteCheck::Output => "Err(Rejected)".to_owned(),
+    }
+}
+
+/// The pre-check of `claim` on one fixture: class `c` gave `observed[c]` where the claim says `expected[c]`; `twin`
+/// is (expected, observed) of the unmodified input, where the target has one. A mismatch aborts the run (`abort`)
+/// with target, class, expected and observed; otherwise the check is recorded (the first fixture's outcomes, and the
+/// number of fixtures).
+fn precheck(
+    claim: Claim,
+    expected: [String; 2],
+    observed: [String; 2],
+    twin: Option<(String, String)>,
+) -> Result<(), secmp_crypto::Error> {
+    for (c, ((want, seen), class)) in expected
+        .iter()
+        .zip(&observed)
+        .zip(claim.classes)
+        .enumerate()
+    {
+        if want != seen {
+            return Err(abort(format!(
+                "pre-check failed (M3 review R-45): target {}, class {c} ({class}): expected {want}, observed {seen} \
+                 (claimed site: {})",
+                claim.target, claim.site
+            )));
+        }
+    }
+    if let Some((want, seen)) = &twin
+        && want != seen
+    {
+        return Err(abort(format!(
+            "pre-check failed (M3 review R-45): target {}, positive twin (the unmodified input): expected {want}, \
+             observed {seen}",
+            claim.target
+        )));
+    }
+    PRECHECKS.with(|p| {
+        let Ok(mut p) = p.try_borrow_mut() else {
+            return;
+        };
+        if let Some(known) = p.iter_mut().find(|k| k.target == claim.target) {
+            known.fixtures = known.fixtures.saturating_add(1);
+        } else {
+            p.push(PreCheck {
+                target: claim.target,
+                fixtures: 1,
+                expected,
+                observed,
+                twin,
+            });
+        }
+    });
+    Ok(())
+}
+
+/// The report's `site` and `precheck` of the target `name` (JSON; both `null` for a target without a claim, and
+/// `precheck` `null` if it never ran).
+fn claim_json(name: &str) -> (String, String) {
+    let Some(claim) = CLAIMS.iter().find(|c| c.target == name) else {
+        return ("null".to_owned(), "null".to_owned());
+    };
+    let precheck = PRECHECKS.with(|p| {
+        p.try_borrow().ok().and_then(|p| {
+            p.iter().find(|k| k.target == name).map(|k| {
+                serde_json::json!({
+                    "check": claim.check.as_str(),
+                    "passed": true,
+                    "fixtures": k.fixtures,
+                    "expected": k.expected,
+                    "observed": k.observed,
+                    "twin": k.twin.as_ref().map(|(want, seen)| serde_json::json!({"expected": want, "observed": seen})),
+                })
+                .to_string()
+            })
+        })
+    });
+    (
+        serde_json::Value::from(claim.site).to_string(),
+        precheck.unwrap_or_else(|| "null".to_owned()),
+    )
+}
+
 // ---- SecMP-TR targets (M3 plan D9) -----------------------------------------------------------------------------
 
 /// Randomness of A (`FixedEntropy`, SCHEMA-4.9 order): `init_initiator` (X25519 secret 32, ML-KEM-768 seed 64,
@@ -1971,6 +2318,147 @@ fn tr_ct_pq_classes(s: &TrSession, _: &mut Stream) -> Result<[Vec<u8>; 2], secmp
     ])
 }
 
+/// Randomness of each party of the skipped-keys fixture (`FixedEntropy`, more than either draws): A's
+/// initialisation (128), thirteen header nonces (13 × 24) and three DH steps (3 × 128); B's four DH steps (4 × 128)
+/// and three header nonces (3 × 24).
+const TR_SKIPPED_RANDOMNESS: usize = 2048;
+
+/// The skipped message keys B holds per skipped chain of A (`tr_decrypt_reject_skipped`; M3 review R-04: at least 3
+/// chains; WEISUNG M4-4 Part C: 5 + 2 + 2 = 9 entries, 3 distinct header keys, 5 trial candidates).
+const TR_SKIPPED_PER_CHAIN: [usize; 3] = [5, 2, 2];
+
+/// The entry of chain 1 that class 1 is under (`(hk_1, 4)`, entry 4 of 9; class 0 is `(hk_1, 0)`, entry 0).
+const TR_SKIPPED_CLASS1_N: usize = 4;
+
+/// The fixture of `tr_decrypt_reject_skipped` (M3 review R-04, F2; WEISUNG M4-4 Part C): B's state with skipped
+/// message keys of three of A's chains, and A's undelivered cells of each, in the order the chains were skipped.
+struct TrSkipped {
+    /// B after the four chains (`tr_skipped_session`): `skipped` = `(hk_1, 0)` … `(hk_1, 4)`, `(hk_2, 0)`,
+    /// `(hk_2, 1)`, `(hk_3, 0)`, `(hk_3, 1)` in insertion order; `hk_r` is chain 4's header key.
+    receiver: RatchetState,
+    /// A's honest undelivered cells per skipped chain, n = 0, 1, …: 5, 2 and 2 of them.
+    undelivered: Vec<Vec<Vec<u8>>>,
+}
+
+/// `state` encrypts a Dummy and persists (a no-op); the new state and the cell's bytes.
+fn tr_send(
+    state: RatchetState,
+    entropy: &mut FixedEntropy,
+) -> Result<(RatchetState, Vec<u8>), secmp_proto::Error> {
+    let (next, cell) = state
+        .encrypt_with(&dummy(), entropy)
+        .map_err(|r| r.error())?
+        .persist(|_| Ok::<(), secmp_proto::Error>(()))?;
+    Ok((next, cell.as_bytes().to_vec()))
+}
+
+/// `state` decrypts `cell` and commits (a no-op); the new state.
+fn tr_receive(
+    state: RatchetState,
+    cell: &[u8],
+    entropy: &mut FixedEntropy,
+) -> Result<RatchetState, secmp_proto::Error> {
+    let (next, _) = state
+        .decrypt_with(cell, entropy)
+        .map_err(|r| r.error())?
+        .commit(|_| Ok::<(), secmp_proto::Error>(()))?;
+    Ok(next)
+}
+
+/// A copy of a 32-byte header key.
+fn key_copy(key: Option<&SecretBytes<32>>) -> Result<SecretBytes<32>, secmp_proto::Error> {
+    Ok(SecretBytes::<32>::from_slice(
+        key.ok_or(secmp_proto::Error::Rejected)?.expose_secret(),
+    )?)
+}
+
+/// A → B over four of A's sending chains (keys and randomness from the stream, as `tr_session`). On each of chains
+/// 1–3, A sends n = 0 … `c_i` and B receives only n = `c_i` (c = 5, 2, 2: `TR_SKIPPED_PER_CHAIN`): its DH step stores
+/// the skipped keys `(hk_i, 0)` … `(hk_i, c_i − 1)` (spec §7.4 `skip_message_keys(header.n)` on the new chain); B then
+/// replies and A's DH step on the reply starts the next chain (`pn` = `c_i` + 1 = B's `n_r` of the old chain: nothing
+/// more is skipped). Chain 4's first cell makes it B's current receiving chain. Checks that the four header keys are
+/// pairwise distinct, that B's `hk_r` is chain 4's and that neither `hk_r` nor `nhk_r` is a skipped chain's key — so
+/// a cell under `hk_1` … `hk_3` can open only on the skipped path — and that each of the nine undelivered cells
+/// opens on a copy of B (its `(hk_i, n)` is in `skipped`).
+fn tr_skipped_session(stream: &mut Stream) -> Result<TrSkipped, secmp_proto::Error> {
+    let sk = SecretBytes::<32>::from_slice(&drawn(stream, 32))?;
+    let mut sb = [0_u8; 32];
+    stream.fill(&mut sb);
+    let spk = X25519Secret::from_bytes(&drawn(stream, 32))?;
+    let rpk = MlKem768Dk::from_seed(&drawn(stream, 64))?;
+    let spk_pub = X25519Pk::from_bytes(spk.public_key().as_bytes())?;
+    let rpk_ek = MlKem768Ek::from_bytes(rpk.encapsulation_key().as_bytes())?;
+    let mut a_entropy = FixedEntropy::new(&drawn(stream, TR_SKIPPED_RANDOMNESS));
+    let mut b_entropy = FixedEntropy::new(&drawn(stream, TR_SKIPPED_RANDOMNESS));
+    let mut a = RatchetState::init_initiator_with(&sk, &sb, &spk_pub, &rpk_ek, &mut a_entropy)?;
+    let mut b = RatchetState::init_responder(&sk, &sb, spk, rpk)?;
+    let mut chain_keys = Vec::new();
+    let mut undelivered = Vec::new();
+    for count in TR_SKIPPED_PER_CHAIN {
+        chain_keys.push(key_copy(a.hk_s_kat())?);
+        let mut cells = Vec::new();
+        for _ in 0..count {
+            let (next, cell) = tr_send(a, &mut a_entropy)?;
+            a = next;
+            cells.push(cell);
+        }
+        let (a_last, last) = tr_send(a, &mut a_entropy)?;
+        b = tr_receive(b, &last, &mut b_entropy)?;
+        undelivered.push(cells);
+        let (b_next, reply) = tr_send(b, &mut b_entropy)?;
+        b = b_next;
+        a = tr_receive(a_last, &reply, &mut a_entropy)?;
+    }
+    let current = key_copy(a.hk_s_kat())?;
+    let (_, cell) = tr_send(a, &mut a_entropy)?;
+    b = tr_receive(b, &cell, &mut b_entropy)?;
+    let (Some(hk_r), Some(nhk_r)) = b.receiving_header_keys_kat() else {
+        return Err(secmp_proto::Error::Rejected);
+    };
+    let mut distinct = bool::from(hk_r.ct_eq(&current));
+    for (i, key) in chain_keys.iter().enumerate() {
+        distinct &= !bool::from(key.ct_eq(hk_r) | key.ct_eq(nhk_r) | key.ct_eq(&current));
+        for other in chain_keys.iter().skip(i.saturating_add(1)) {
+            distinct &= !bool::from(key.ct_eq(other));
+        }
+    }
+    if !distinct {
+        return Err(secmp_proto::Error::Rejected);
+    }
+    for cell in undelivered.iter().flatten() {
+        RatchetState::from_bytes(&b.to_bytes()?)?
+            .decrypt_with(cell, &mut FixedEntropy::new(&[]))
+            .map_err(|r| r.error())?;
+    }
+    Ok(TrSkipped {
+        receiver: b,
+        undelivered,
+    })
+}
+
+/// `tr_decrypt_reject_skipped` (WEISUNG M4-4 Part C): A's undelivered cell `(hk_1, n = 0)` (class 0, entry 0) vs
+/// `(hk_1, n = 4)` (class 1, entry 4) of the first skipped chain, each with its body tag (the last `MSG_TAG_LEN`
+/// bytes) wrong in byte 0. Both headers open at trial 0 (`hk_1` is the first distinct skipped key).
+fn tr_skipped_classes(fixture: &TrSkipped) -> Result<[Vec<u8>; 2], secmp_proto::Error> {
+    let chain1 = fixture
+        .undelivered
+        .first()
+        .ok_or(secmp_proto::Error::Rejected)?;
+    let (Some(first), Some(last)) = (chain1.first(), chain1.get(TR_SKIPPED_CLASS1_N)) else {
+        return Err(secmp_proto::Error::Rejected);
+    };
+    let wrong_tag = |cell: &[u8]| {
+        let mut cell = cell.to_vec();
+        let tag_at = cell
+            .len()
+            .checked_sub(MSG_TAG_LEN)
+            .ok_or(secmp_proto::Error::Rejected)?;
+        flip(&mut cell, tag_at)?;
+        Ok::<_, secmp_proto::Error>(cell)
+    };
+    Ok([wrong_tag(first)?, wrong_tag(last)?])
+}
+
 /// One call of a TR target: take the receiver's state out of `slot`, decrypt `cell`, put back the unchanged state
 /// of the refusal. An accepted cell leaves the slot empty (every later call finds no state), which
 /// `tr_decrypt_reject` turns into an abort.
@@ -1992,18 +2480,82 @@ fn tr_decrypt_reject(
     n: usize,
     k: usize,
     stream: &mut Stream,
+    claim: Claim,
     classes: TrClasses,
 ) -> Result<Samples, secmp_crypto::Error> {
     let session = tr_session(stream).map_err(crypto_error)?;
     let [class0, class1] = classes(&session, stream).map_err(crypto_error)?;
-    let delta = Deltas::new(&class0, &class1);
-    let slot = RefCell::new(Some(session.receiver));
+    tr_measure(n, k, stream, claim, session.receiver, &class0, &class1)
+}
+
+/// `tr_decrypt_reject_skipped` (M3 review R-04, F2; respecified by WEISUNG M4-4 Part C): `RatchetState::decrypt_with`
+/// on the receiver of `tr_skipped_session` (9 entries, 3 distinct header keys, 5 candidates), the classes of
+/// `tr_skipped_classes`, measured as every TR target (`tr_measure`). The measured difference is the entry index alone
+/// (M4 review R-58: the lookup selects the message key with masks over every entry).
+///
+/// Classes share the opening trial on purpose: the position of the succeeding trial leaks ≈ 1 floor through the AEAD
+/// library's tag-check branch (R-59, accepted under R-15, hardening F-M5); the early-exit regression F2 was meant for
+/// is caught by `trial_opens_every_candidate_every_call`.
+fn tr_decrypt_reject_skipped(
+    n: usize,
+    k: usize,
+    stream: &mut Stream,
+) -> Result<Samples, secmp_crypto::Error> {
+    let fixture = tr_skipped_session(stream).map_err(crypto_error)?;
+    let [class0, class1] = tr_skipped_classes(&fixture).map_err(crypto_error)?;
+    tr_measure(
+        n,
+        k,
+        stream,
+        CLAIM_TR_SKIPPED,
+        fixture.receiver,
+        &class0,
+        &class1,
+    )
+}
+
+/// The measurement of a TR target on `receiver`: first the pre-check (M3 review R-45, F19) — each class's cell
+/// decrypted once on `receiver` must give `Err(Rejected)` with `tr::DECRYPT_SITE_KAT` at the claimed §7.4 site, the
+/// unchanged state handed back (the honest cell of the fixture opens, `tr_session`, `tr_skipped_session`) — then `n`
+/// samples of `k` calls, every input built from one common source with `blend` (class 1 the base). Aborts
+/// (`TR_ACCEPTED`) if any call accepted its cell.
+fn tr_measure(
+    n: usize,
+    k: usize,
+    stream: &mut Stream,
+    claim: Claim,
+    receiver: RatchetState,
+    class0: &[u8],
+    class1: &[u8],
+) -> Result<Samples, secmp_crypto::Error> {
+    let mut receiver = Some(receiver);
+    let mut observed = [String::new(), String::new()];
+    for (seen, cell) in observed.iter_mut().zip([class0, class1]) {
+        // an accepted cell takes the state with it: the next class finds none, and the pre-check fails
+        let Some(state) = receiver.take() else {
+            break;
+        };
+        *seen = match state.decrypt_with(cell, &mut FixedEntropy::new(&[])) {
+            Ok(_) => "Ok (accepted)".to_owned(),
+            Err(refused) => {
+                let (state, error) = refused.into_parts();
+                receiver = Some(state);
+                let site = secmp_proto::tr::DECRYPT_SITE_KAT.get().unwrap_or("none");
+                format!("{}, site {site}", outcome::<()>(&Err(error)))
+            }
+        };
+    }
+    let expected = expected_rejection(claim);
+    precheck(claim, [expected.clone(), expected], observed, None)?;
+    let receiver = receiver.ok_or(secmp_crypto::Error::Rejected)?;
+    let delta = Deltas::new(class0, class1);
+    let slot = RefCell::new(Some(receiver));
     let mut entropy = FixedEntropy::new(&[]);
     let samples = measure(
         n,
         k,
         stream,
-        |c, _| blended_vec(&class1, &delta, c),
+        |c, _| blended_vec(class1, &delta, c),
         |cell| tr_decrypt(&slot, &mut entropy, cell),
     );
     if slot.into_inner().is_none() {
@@ -2011,6 +2563,638 @@ fn tr_decrypt_reject(
         return Err(secmp_crypto::Error::Rejected);
     }
     Ok(samples)
+}
+
+// ---- SecMP-INV/HX targets (M4, TEST-SPEC-M4 (f)) --------------------------------------------------------------
+
+std::thread_local! {
+    /// Why an INV/HX/X25519 target aborted the run (a call gave the outcome both classes must not give, or the prekey
+    /// store changed); `main` writes it into the report as `error`, which fails the gate.
+    static ABORT: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
+/// Record `reason` as the run's abort reason (the first is kept) and return the bench's error.
+fn abort(reason: String) -> secmp_crypto::Error {
+    ABORT.with(|a| {
+        if let Ok(mut a) = a.try_borrow_mut()
+            && a.is_none()
+        {
+            *a = Some(reason);
+        }
+    });
+    secmp_crypto::Error::Rejected
+}
+
+/// The abort reason of the run, if a target set one.
+fn abort_reason() -> Option<String> {
+    ABORT.with(|a| a.try_borrow().ok().and_then(|a| a.clone()))
+}
+
+/// Creation time of the invitation (Unix seconds; the values of the hx test fixture).
+const HX_CREATED: u64 = 1_700_000_000;
+/// The invitee's `now` (§5.5): before `expires` and `spk_expiry`.
+const HX_NOW: u64 = 1_700_000_100;
+/// `expires` and `spk_expiry`: creation + 30 days (§5.2, §6.3).
+const HX_EXPIRES: u64 = 1_702_592_000;
+/// Randomness per party and step of the INV/HX fixture (`FixedEntropy`, more than any of them draws).
+const HX_RANDOMNESS: usize = 4096;
+/// The last byte of a fingerprint (`inv_fingerprint_compare` class 1).
+const FP_LAST: usize = 31;
+
+/// The inviter of the INV/HX targets: identity, prekey store (one SPK generation, one OPK, the record) and the
+/// issued invitation (§5.2, §5.4, §6.3), built by `MemoryPrekeyStore::issue_invitation` with randomness from the
+/// stream.
+struct HxInviter {
+    store: MemoryPrekeyStore,
+    identity: IdentityKeys,
+    /// The invitation's encoding (a secret).
+    invitation: Zeroizing<Vec<u8>>,
+    /// The sealed link data (what `LINK_GET` returns, §5.5 step 2).
+    blob: Vec<u8>,
+}
+
+/// A relay reference with fixed fields (the hx test fixture's `relay_ref`).
+fn relay_ref(seed: u8) -> RelayRef {
+    RelayRef {
+        relay_fp: [seed; 32],
+        onion: Onion::from_pubkey(&[seed.wrapping_add(1); 32]),
+        akc: [seed.wrapping_add(2); 32],
+        direct: None,
+    }
+}
+
+/// A reply route with fixed fields (the hx test fixture's `route`).
+fn hx_route(seed: u8) -> Result<RouteDescriptor, secmp_proto::Error> {
+    Ok(RouteDescriptor::RelayQueue(RelayQueue {
+        relay: relay_ref(seed),
+        sid: [seed.wrapping_add(3); 16],
+        send_seed: SecretBytes::from_slice(&[seed.wrapping_add(4); 32])?,
+        period_s: Period::S20,
+    }))
+}
+
+/// The inviter: `IdentityKeys::generate`, then `issue_invitation` at `HX_CREATED`, expiring at `HX_EXPIRES`.
+fn hx_inviter(stream: &mut Stream) -> Result<HxInviter, secmp_proto::Error> {
+    let mut entropy = FixedEntropy::new(&drawn(stream, HX_RANDOMNESS));
+    let identity = IdentityKeys::generate(&mut entropy)?;
+    let mut store = MemoryPrekeyStore::default();
+    let issued = store
+        .issue_invitation(
+            &identity,
+            IssueParams {
+                relay: relay_ref(10),
+                inv_period: Period::S20,
+                profile: Profile::new("bob", None)?,
+                now: HX_CREATED,
+                expires: HX_EXPIRES,
+                spk_expiry: HX_EXPIRES,
+            },
+            &mut entropy,
+        )
+        .map_err(|_| secmp_proto::Error::Rejected)?;
+    Ok(HxInviter {
+        store,
+        identity,
+        invitation: issued.invitation.encode()?,
+        blob: issued.blob.encode()?.to_vec(),
+    })
+}
+
+/// `inv_fingerprint_compare`: the invitation with `inviter_fp` changed in byte 0 (class 0) vs byte 31 (class 1);
+/// everything else as issued, so both are refused by the comparison of §5.5 step 3 alone.
+fn inv_fp_classes(invitation: &[u8]) -> Result<[Zeroizing<Vec<u8>>; 2], secmp_proto::Error> {
+    let changed = |at: usize| {
+        let mut changed = InvitationV1::decode(invitation)?;
+        flip(&mut changed.inviter_fp, at)?;
+        changed.encode()
+    };
+    Ok([changed(0)?, changed(FP_LAST)?])
+}
+
+/// `inv_fingerprint_compare` (TEST-SPEC-M4 (f); spec §5.5 step 3): `inv::invitee_check` on the issued blob at
+/// `HX_NOW`, the invitation of class 0 vs class 1 (`inv_fp_classes`), each a fresh decode of a `blend`ed encoding
+/// (class 1 the base), taken by value by the call. The blob opens under `K_ld` and decodes in both classes; the
+/// fingerprint comparison refuses. Pre-check (M3 review R-45, F19): each class gives `Err(Rejected)` with
+/// `inv::INVITEE_SITE_KAT` at "fingerprint", and the unmodified invitation passes the same call. Aborts if any
+/// measured call accepted.
+fn inv_fingerprint_compare(
+    n: usize,
+    k: usize,
+    stream: &mut Stream,
+) -> Result<Samples, secmp_crypto::Error> {
+    let inviter = hx_inviter(stream).map_err(crypto_error)?;
+    let [class0, class1] = inv_fp_classes(&inviter.invitation).map_err(crypto_error)?;
+    let check = |invitation: &[u8]| {
+        outcome(
+            &InvitationV1::decode(invitation)
+                .and_then(|invitation| invitee_check(invitation, &inviter.blob, HX_NOW)),
+        )
+    };
+    let rejected = |invitation: &[u8]| {
+        let seen = check(invitation);
+        let site = secmp_proto::inv::INVITEE_SITE_KAT.get().unwrap_or("none");
+        format!("{seen}, site {site}")
+    };
+    let expected = expected_rejection(CLAIM_INV_FP);
+    precheck(
+        CLAIM_INV_FP,
+        [expected.clone(), expected],
+        [rejected(&class0), rejected(&class1)],
+        Some(("Ok".to_owned(), check(&inviter.invitation))),
+    )?;
+    let delta = Deltas::new(&class0, &class1);
+    let blob = inviter.blob;
+    let mut accepted = false;
+    let samples = measure(
+        n,
+        k,
+        stream,
+        |c, _| {
+            let bytes = Zeroizing::new(blended_vec(&class1, &delta, c));
+            RefCell::new(InvitationV1::decode(&bytes).ok())
+        },
+        |invitation| {
+            if let Some(invitation) = invitation.try_borrow_mut().ok().and_then(|mut i| i.take()) {
+                accepted |= black_box(invitee_check(invitation, black_box(&blob), HX_NOW).is_ok());
+            }
+        },
+    );
+    if accepted {
+        return Err(abort(
+            "bench aborted: inv::invitee_check accepted an invitation of inv_fingerprint_compare, which must be \
+             rejected in both classes"
+                .to_owned(),
+        ));
+    }
+    Ok(samples)
+}
+
+// `x25519_zero_check` (TEST-SPEC-M4 (f); spec §3, §6.4): two fixed (secret, peer) pairs whose X25519 output has the
+// class shape, computed offline (no dependency) with an RFC 7748 X25519 checked against RFC 7748 §5.2 (the first test
+// vector, 1 and 1 000 iterations) and the 487 Wycheproof cases with a non-zero shared secret of
+// `vectors/external/wycheproof/x25519_test.json`: for a u-coordinate `u` of a point of prime order ℓ and an
+// RFC 7748-clamped scalar `c` (clamping is then a no-op; c = clamp(SHA-256("SecMPro ct x25519_zero_check class 0"))
+// resp. "… class 1"), the peer is `P = x((c⁻¹ mod ℓ)·u)` by an x-only Montgomery ladder, so `X25519(c, P) = u`.
+// Class 0: u = 9 (the base point; output `09 00 … 00`, non-zero in byte 0 only). Class 1: u = 49·2^248 (on the
+// curve, order ℓ; output `00 … 00 31`, non-zero in byte 31 only). Both peers are of order ℓ (not low order).
+
+/// `x25519_zero_check` class 0: the secret.
+const X25519_SECRET_0: [u8; 32] = [
+    0x70, 0x90, 0x49, 0xef, 0x8c, 0xcd, 0xaf, 0x82, 0xba, 0xed, 0x44, 0x23, 0x23, 0x97, 0x71, 0x47,
+    0x25, 0xf6, 0x29, 0xe8, 0xc0, 0x7b, 0xfe, 0x46, 0xfd, 0x7b, 0x22, 0xcd, 0x06, 0x8d, 0x8a, 0x5c,
+];
+/// `x25519_zero_check` class 0: the peer (`X25519(X25519_SECRET_0, X25519_PEER_0)` = 9).
+const X25519_PEER_0: [u8; 32] = [
+    0x6f, 0x29, 0x8d, 0x50, 0x90, 0xb5, 0xae, 0xe6, 0x88, 0x87, 0xa6, 0x61, 0xed, 0xa0, 0x07, 0x5d,
+    0x11, 0x5c, 0x5c, 0x65, 0xef, 0xc5, 0xdb, 0xbf, 0xdf, 0x2a, 0xd0, 0x0a, 0x40, 0x2e, 0xd8, 0x00,
+];
+/// `x25519_zero_check` class 1: the secret.
+const X25519_SECRET_1: [u8; 32] = [
+    0x70, 0xa0, 0xd1, 0x3f, 0xd5, 0x93, 0xc2, 0x43, 0x5b, 0xfc, 0x2a, 0x95, 0x37, 0xf2, 0xe7, 0x4b,
+    0x27, 0x85, 0xc3, 0x80, 0x1c, 0x32, 0x07, 0x1b, 0x99, 0xca, 0xb0, 0x96, 0xe9, 0xc7, 0xa5, 0x4d,
+];
+/// `x25519_zero_check` class 1: the peer (`X25519(X25519_SECRET_1, X25519_PEER_1)` = 49·2^248).
+const X25519_PEER_1: [u8; 32] = [
+    0x91, 0x15, 0x7a, 0xb0, 0xb2, 0xb2, 0xbf, 0x4b, 0xdb, 0xe4, 0x05, 0x3a, 0xc4, 0x40, 0x4e, 0x70,
+    0x7a, 0x15, 0x07, 0x9e, 0x8e, 0xf0, 0xc6, 0x39, 0x63, 0x8d, 0xd8, 0xef, 0xc8, 0x4d, 0xde, 0x61,
+];
+/// `x25519_zero_check` class 0: the output, u = 9.
+const X25519_OUT_0: [u8; 32] = [
+    9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+];
+/// `x25519_zero_check` class 1: the output, u = 49·2^248.
+const X25519_OUT_1: [u8; 32] = [
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0x31,
+];
+
+/// The pre-check's statement of an X25519 result: `Ok` with the positions of the output's non-zero bytes, and
+/// whether the output is `want` (compared in constant time), or the error.
+fn x25519_outcome(r: &Result<SecretBytes<32>, secmp_crypto::Error>, want: &[u8; 32]) -> String {
+    match r {
+        Ok(out) => {
+            let nonzero: Vec<usize> = out
+                .expose_secret()
+                .iter()
+                .enumerate()
+                .filter(|(_, b)| **b != 0)
+                .map(|(i, _)| i)
+                .collect();
+            let value = if bool::from(out.expose_secret().ct_eq(want)) {
+                "the class's value"
+            } else {
+                "another value"
+            };
+            format!("Ok, non-zero output bytes {nonzero:?}, {value}")
+        }
+        Err(e) => format!("Err({e:?})"),
+    }
+}
+
+/// `x25519_zero_check`: `X25519Secret::diffie_hellman` (the helper `hx::dh_checked` calls for DH1–DH4 on both sides,
+/// and the ratchet's DH steps) on the class's fixed pair, both from one `blend`ed `secret ‖ peer` (class 1 the
+/// base); the all-zero test of the output passes in both classes. Pre-check (M3 review R-45, F19): each class's pair
+/// gives `Ok` with the class's output — non-zero in byte 0 only (9) vs in byte 31 only (49·2^248), read with
+/// `expose_secret`. Aborts if any measured call refused.
+fn x25519_zero_check(
+    n: usize,
+    k: usize,
+    stream: &mut Stream,
+) -> Result<Samples, secmp_crypto::Error> {
+    let dh = |secret: &[u8; 32], peer: &[u8; 32]| {
+        X25519Secret::from_bytes(secret)?.diffie_hellman(&X25519Public::from_bytes(peer)?)
+    };
+    precheck(
+        CLAIM_X25519,
+        [
+            "Ok, non-zero output bytes [0], the class's value".to_owned(),
+            "Ok, non-zero output bytes [31], the class's value".to_owned(),
+        ],
+        [
+            x25519_outcome(&dh(&X25519_SECRET_0, &X25519_PEER_0), &X25519_OUT_0),
+            x25519_outcome(&dh(&X25519_SECRET_1, &X25519_PEER_1), &X25519_OUT_1),
+        ],
+        None,
+    )?;
+    let class0 = [X25519_SECRET_0, X25519_PEER_0].concat();
+    let class1 = [X25519_SECRET_1, X25519_PEER_1].concat();
+    let delta = Deltas::new(&class0, &class1);
+    let mut refused = false;
+    let samples = measure(
+        n,
+        k,
+        stream,
+        |c, _| {
+            let mut raw = Zeroizing::new([0_u8; 64]);
+            blend(&class1, &delta, c, raw.as_mut_slice());
+            let (secret, peer) = raw.split_at(32);
+            X25519Secret::from_bytes(secret)
+                .ok()
+                .zip(X25519Public::from_bytes(peer).ok())
+        },
+        |pair| {
+            if let Some((secret, peer)) = pair {
+                refused |= black_box(secret.diffie_hellman(black_box(peer)).is_err());
+            }
+        },
+    );
+    if refused {
+        return Err(abort(
+            "bench aborted: X25519Secret::diffie_hellman refused a pair of x25519_zero_check, whose outputs are not \
+             all zero"
+                .to_owned(),
+        ));
+    }
+    Ok(samples)
+}
+
+/// The fixture of the HX targets (§6.4–§6.6): the inviter's identity, store and record, and the honest envelope of
+/// `Initiator::start` taken apart so that the classes are re-sealed with the public constructions — `K_inv`
+/// (`inv::derive_k_inv`), `K_id` (`hx::k_id` of DH3, DH4 and the two encapsulations, recomputed from the initiator's
+/// fixed randomness), the cells' nonces and `init_id`, `Outer` and the `Inner` bytes.
+struct HxSession {
+    responder: IdentityKeys,
+    /// The inviter's store: SPK, OPK and the record; every call of a target must leave it unchanged.
+    store: MemoryPrekeyStore,
+    record: InvitationRecord,
+    ld_id: Id,
+    k_inv: SecretBytes<32>,
+    k_id: SecretBytes<32>,
+    init_id: Id,
+    /// `N_0`, `N_1`, `N_2` of the honest cells.
+    nonces: Vec<[u8; NONCE_LEN]>,
+    outer: Outer,
+    /// The honest `Inner` (`IKSPublic_I ‖ first_msg`).
+    inner: Zeroizing<Vec<u8>>,
+    /// The three honest cells (3 × 4096 bytes).
+    honest: Vec<u8>,
+}
+
+impl HxSession {
+    /// `"SecMP-HX/1 inner" ‖ ld_id` (§6.5).
+    fn inner_ad(&self) -> Vec<u8> {
+        [Label::HxInner.as_bytes(), self.ld_id.as_slice()].concat()
+    }
+
+    /// The honest `Outer` with `inner_ct = N2 ‖ CAEAD.Seal(key, N2, "SecMP-HX/1 inner" ‖ ld_id, inner)` (§6.5; `N2`
+    /// the honest one).
+    fn with_inner(&self, key: &SecretBytes<32>, inner: &[u8]) -> Result<Outer, secmp_proto::Error> {
+        let com_ct = Caead::seal(
+            key,
+            Nonce24::from_bytes_kat(self.outer.inner_ct.n2),
+            &self.inner_ad(),
+            inner,
+        )?;
+        let (com, ct) = com_ct
+            .split_first_chunk::<COM_LEN>()
+            .ok_or(secmp_proto::Error::Rejected)?;
+        let mut outer = self.outer.clone();
+        outer.inner_ct.com = *com;
+        outer.inner_ct.ct = Box::new(ct.try_into().map_err(|_| secmp_proto::Error::Rejected)?);
+        Ok(outer)
+    }
+
+    /// The three cells of `outer` (§6.5): `N_i ‖ CAEAD.Seal(K_inv, N_i, "SecMP-HX/1 initcell" ‖ ld_id, init_id ‖ i ‖ 3
+    /// ‖ Padded[i·4006 .. (i+1)·4006])` with the honest `N_i` and `init_id`.
+    fn cells(&self, outer: &Outer) -> Result<Vec<u8>, secmp_proto::Error> {
+        let padded = outer.encode()?;
+        let ad = [Label::HxInitcell.as_bytes(), self.ld_id.as_slice()].concat();
+        let mut cells = Vec::with_capacity(self.honest.len());
+        for ((i, chunk), n) in (0_u8..)
+            .zip(padded.chunks(HANDSHAKE_CHUNK_LEN))
+            .zip(&self.nonces)
+        {
+            let plaintext = HandshakeCellPlaintext {
+                init_id: self.init_id,
+                i,
+                chunk: Box::new(chunk.try_into().map_err(|_| secmp_proto::Error::Rejected)?),
+            }
+            .encode()?;
+            cells.extend_from_slice(n);
+            cells.extend_from_slice(&Caead::seal(
+                &self.k_inv,
+                Nonce24::from_bytes_kat(*n),
+                &ad,
+                &plaintext,
+            )?);
+        }
+        if cells.len() != self.honest.len() {
+            return Err(secmp_proto::Error::Rejected);
+        }
+        Ok(cells)
+    }
+}
+
+/// The inviter (`hx_inviter`), the invitee's §5.5 checks (`inv::invitee_check`) and `Initiator::start` with fixed
+/// randomness from the stream (its first draws: `EK_I`, then the `Encaps` randomness of `SPK_kem` and of `OPK_kem`),
+/// the cells released; then the envelope taken apart (`K_inv` opens the cells; `Outer` decodes; `K_id` from DH3, DH4
+/// and the recomputed encapsulations — whose ciphertexts must be `Outer`'s — opens `inner_ct`). Checks that the
+/// builders (`HxSession::with_inner`, `HxSession::cells`) reproduce the honest cells byte for byte.
+fn hx_session(stream: &mut Stream) -> Result<HxSession, secmp_proto::Error> {
+    let inviter = hx_inviter(stream)?;
+    let invitation = InvitationV1::decode(&inviter.invitation)?;
+    let ld_id = invitation.ld_id;
+    let link_key = SecretBytes::<32>::from_slice(invitation.link_key.expose_secret())?;
+    let record = inviter
+        .store
+        .record(&ld_id)
+        .ok_or(secmp_proto::Error::Rejected)?
+        .duplicate()?;
+    let accepted = invitee_check(invitation, &inviter.blob, HX_NOW)?;
+    let guest = IdentityKeys::generate(&mut FixedEntropy::new(&drawn(stream, HX_RANDOMNESS)))?;
+    let start = drawn(stream, HX_RANDOMNESS);
+    let (cells, state) = Initiator::start(
+        &accepted,
+        &guest.initiator_keys(),
+        &[hx_route(20)?],
+        &Profile::new("alice", None)?,
+        HX_NOW.saturating_add(1),
+        &mut FixedEntropy::new(&start),
+    )?;
+    let honest: Vec<u8> = cells
+        .release(&state, |_, _| Ok::<(), secmp_proto::Error>(()))?
+        .iter()
+        .flat_map(|c| c.as_bytes().iter().copied())
+        .collect();
+    let k_inv = derive_k_inv(&ld_id, &link_key)?;
+    let ad_cell = [Label::HxInitcell.as_bytes(), ld_id.as_slice()].concat();
+    let mut padded = Zeroizing::new(Vec::new());
+    let mut nonces = Vec::new();
+    let mut init_id = None;
+    for (i, cell) in (0_u8..).zip(honest.chunks(CELL_LEN)) {
+        let (n, com_ct) = cell
+            .split_first_chunk::<NONCE_LEN>()
+            .ok_or(secmp_proto::Error::Rejected)?;
+        let p = HandshakeCellPlaintext::decode(&Caead::open(&k_inv, n, &ad_cell, com_ct)?)?;
+        if p.i != i || init_id.is_some_and(|id| id != p.init_id) {
+            return Err(secmp_proto::Error::Rejected);
+        }
+        init_id = Some(p.init_id);
+        padded.extend_from_slice(p.chunk.as_slice());
+        nonces.push(*n);
+    }
+    let outer = Outer::decode(&padded)?;
+    // spec §6.4: K_id = HKDF(ld_id, link_key ‖ DH3 ‖ ss_spk ‖ DH4 ‖ ss_opk, "SecMP-HX/1 idkey"), from the initiator's
+    // side
+    let (ek, rest) = start
+        .split_first_chunk::<32>()
+        .ok_or(secmp_proto::Error::Rejected)?;
+    let (m_signed, rest) = rest
+        .split_first_chunk::<32>()
+        .ok_or(secmp_proto::Error::Rejected)?;
+    let (m_onetime, _) = rest
+        .split_first_chunk::<32>()
+        .ok_or(secmp_proto::Error::Rejected)?;
+    let bundle = &accepted.link_data().bundle;
+    let ek = X25519Secret::from_bytes(ek)?;
+    let dh3 = ek.diffie_hellman(&X25519Public::from_bytes(bundle.spk_dh.as_bytes())?)?;
+    let dh4 = ek.diffie_hellman(&X25519Public::from_bytes(bundle.opk_dh.as_bytes())?)?;
+    let (ct_signed, ss_signed) =
+        secmp_crypto::MlKem1024Ek::from_bytes(bundle.spk_kem.as_bytes())?.encapsulate_kat(m_signed);
+    let (ct_onetime, ss_onetime) =
+        secmp_crypto::MlKem1024Ek::from_bytes(bundle.opk_kem.as_bytes())?
+            .encapsulate_kat(m_onetime);
+    if ct_signed.as_bytes() != outer.ct_spk.as_ref()
+        || ct_onetime.as_bytes() != outer.ct_opk.as_ref()
+    {
+        return Err(secmp_proto::Error::Rejected);
+    }
+    let k_id = secmp_proto::hx::k_id(&ld_id, &link_key, &dh3, &ss_signed, &dh4, &ss_onetime)?;
+    let inner_ct = [outer.inner_ct.com.as_slice(), outer.inner_ct.ct.as_slice()].concat();
+    let ad_inner = [Label::HxInner.as_bytes(), ld_id.as_slice()].concat();
+    let inner = Caead::open(&k_id, &outer.inner_ct.n2, &ad_inner, &inner_ct)?;
+    let session = HxSession {
+        responder: inviter.identity,
+        store: inviter.store,
+        record,
+        ld_id,
+        k_inv,
+        k_id,
+        init_id: init_id.ok_or(secmp_proto::Error::Rejected)?,
+        nonces,
+        outer,
+        inner,
+        honest,
+    };
+    if session.cells(&session.with_inner(&session.k_id, &session.inner)?)? != session.honest {
+        return Err(secmp_proto::Error::Rejected);
+    }
+    Ok(session)
+}
+
+/// The two classes of an HX target, class 0 first: each the three cells of one envelope (3 × 4096 bytes).
+type HxClasses = fn(&HxSession, &mut Stream) -> Result<[Vec<u8>; 2], secmp_proto::Error>;
+
+/// `hx_accept_reject_inner`: `inner_ct` sealed under a wrong key from the stream (class 0: `COM` and the tag fail)
+/// vs the honest `inner_ct` with its tag's last byte flipped (class 1: `COM` matches, the tag fails); `Outer`
+/// otherwise honest, the cells re-sealed under `K_inv`. Both pass step 1 and the real DH/KEM work of step 2.
+fn hx_inner_classes(
+    s: &HxSession,
+    stream: &mut Stream,
+) -> Result<[Vec<u8>; 2], secmp_proto::Error> {
+    let wrong = SecretBytes::<32>::from_slice(&drawn(stream, 32))?;
+    let class0 = s.cells(&s.with_inner(&wrong, &s.inner)?)?;
+    let mut outer = s.outer.clone();
+    let last = outer
+        .inner_ct
+        .ct
+        .len()
+        .checked_sub(1)
+        .ok_or(secmp_proto::Error::Rejected)?;
+    flip(outer.inner_ct.ct.as_mut_slice(), last)?;
+    Ok([class0, s.cells(&outer)?])
+}
+
+/// `hx_accept_reject_first_msg`: the honest `Inner` with `first_msg`'s body tag (the last `MSG_TAG_LEN` bytes of the
+/// cell, which ends `Inner`) wrong in byte 0 (class 0) vs byte 31 (class 1), sealed under the right `K_id`; the cells
+/// re-sealed. Both pass steps 1 and 2 and reach §7.4 Decrypt of `first_msg` on R's fresh state (empty `skipped`;
+/// the header opens under `nhk_r`: the step path).
+fn hx_first_msg_classes(s: &HxSession, _: &mut Stream) -> Result<[Vec<u8>; 2], secmp_proto::Error> {
+    let wrong_tag = |from_end: usize| {
+        let mut inner = Zeroizing::new(s.inner.to_vec());
+        let at = inner
+            .len()
+            .checked_sub(from_end)
+            .ok_or(secmp_proto::Error::Rejected)?;
+        flip(&mut inner, at)?;
+        s.cells(&s.with_inner(&s.k_id, &inner)?)
+    };
+    Ok([wrong_tag(MSG_TAG_LEN)?, wrong_tag(1)?])
+}
+
+/// `hx_same_content_control` (ADR-042 Amendment 3): the class-1 cells of `hx_inner_classes` (the honest `inner_ct` with
+/// its tag's last byte flipped) for both classes, through the HX preparation path of `hx_accept_reject` (a 12 288-byte
+/// `blended_vec` and three boxed cells per call, as for every HX target).
+fn hx_same_content_classes(
+    s: &HxSession,
+    stream: &mut Stream,
+) -> Result<[Vec<u8>; 2], secmp_proto::Error> {
+    let [_, class1] = hx_inner_classes(s, stream)?;
+    Ok([class1.clone(), class1])
+}
+
+/// Cells from their bytes (3 × 4096).
+fn hx_cells(bytes: &[u8]) -> Vec<Cell> {
+    bytes
+        .chunks(CELL_LEN)
+        .filter_map(|c| Cell::from_bytes(c).ok())
+        .collect()
+}
+
+/// An HX target: `Responder::accept` (the product path, §6.5 grouping and §6.6) with the inviter's record, store
+/// and identity, the three cells of class 0 vs class 1 of `classes`, each a fresh `Vec<Cell>` from a `blend`ed
+/// source (class 1 the base). A rejection keeps the OPK and leaves the store unchanged (§6.6), so the one store
+/// serves every call; no call draws randomness (a rejection before the first message's MAC draws none), so the
+/// entropy is empty. Pre-check (M3 review R-45, F19): each class's cells, passed once through the same call on the
+/// same store, give `Err(Rejected)` with `hx::ACCEPT_SITE_KAT` at the claimed site and the store unchanged; the
+/// honest cells are accepted on a copy of the store (`duplicate_kat`). Aborts if any measured call accepted or the
+/// store's digest changed.
+fn hx_accept_reject(
+    n: usize,
+    k: usize,
+    stream: &mut Stream,
+    claim: Claim,
+    classes: HxClasses,
+) -> Result<Samples, secmp_crypto::Error> {
+    let session = hx_session(stream).map_err(crypto_error)?;
+    let [class0, class1] = classes(&session, stream).map_err(crypto_error)?;
+    let twin_entropy = drawn(stream, HX_RANDOMNESS);
+    let HxSession {
+        responder,
+        mut store,
+        record,
+        honest,
+        ..
+    } = session;
+    let keys = responder.responder_keys();
+    let before = store.digest_kat();
+    // the first-message target also names the TR step that refuses (`tr::DECRYPT_SITE_KAT`, reset before each call;
+    // M4 delta review VD2-2): the body MAC, not the counter rule
+    let tr_site = (claim.target == CLAIM_HX_FIRST_MSG.target).then_some("body MAC");
+    let mut accept_once = |cells: &[u8]| {
+        secmp_proto::tr::DECRYPT_SITE_KAT.set(None);
+        let r = Responder::accept(
+            &hx_cells(cells),
+            &record,
+            &mut store,
+            &keys,
+            &mut FixedEntropy::new(&[]),
+        );
+        let site = secmp_proto::hx::ACCEPT_SITE_KAT.get().unwrap_or("none");
+        let seen = format!("{}, site {site}", outcome(&r));
+        if tr_site.is_some() {
+            let tr = secmp_proto::tr::DECRYPT_SITE_KAT.get().unwrap_or("none");
+            format!("{seen}, tr site {tr}")
+        } else {
+            seen
+        }
+    };
+    let observed = [accept_once(&class0), accept_once(&class1)];
+    let kept = bool::from(store.digest_kat().as_slice().ct_eq(before.as_slice()));
+    let twin = Responder::accept(
+        &hx_cells(&honest),
+        &record,
+        &mut store.duplicate_kat().map_err(crypto_error)?,
+        &keys,
+        &mut FixedEntropy::new(&twin_entropy),
+    );
+    let expected = match tr_site {
+        Some(tr) => format!("{}, tr site {tr}", expected_rejection(claim)),
+        None => expected_rejection(claim),
+    };
+    precheck(
+        claim,
+        [expected.clone(), expected],
+        observed.map(|seen| {
+            if kept {
+                seen
+            } else {
+                format!("{seen}, prekey store changed")
+            }
+        }),
+        Some(("Ok".to_owned(), outcome(&twin))),
+    )?;
+    let delta = Deltas::new(&class0, &class1);
+    let mut entropy = FixedEntropy::new(&[]);
+    let mut accepted = false;
+    let samples = measure(
+        n,
+        k,
+        stream,
+        |c, _| hx_cells(&blended_vec(&class1, &delta, c)),
+        |cells| {
+            accepted |= black_box(
+                Responder::accept(black_box(cells), &record, &mut store, &keys, &mut entropy)
+                    .is_ok(),
+            );
+        },
+    );
+    if accepted || !bool::from(store.digest_kat().as_slice().ct_eq(before.as_slice())) {
+        return Err(abort(
+            "bench aborted: Responder::accept accepted an envelope of an HX target or changed the prekey store; both \
+             classes must be rejected with the store unchanged"
+                .to_owned(),
+        ));
+    }
+    Ok(samples)
+}
+
+/// The SecMP-INV/HX targets (TEST-SPEC-M4 (f)) and the HX same-content control (ADR-042 Amendment 3), measured after
+/// `tr_targets`, `n` samples per measurement.
+fn hx_targets(n: usize) -> [Target; 5] {
+    [
+        claimed(CLAIM_INV_FP, n, inv_fingerprint_compare),
+        claimed(CLAIM_X25519, n, x25519_zero_check),
+        claimed(CLAIM_HX_INNER, n, |n, k, s| {
+            hx_accept_reject(n, k, s, CLAIM_HX_INNER, hx_inner_classes)
+        }),
+        claimed(CLAIM_HX_FIRST_MSG, n, |n, k, s| {
+            hx_accept_reject(n, k, s, CLAIM_HX_FIRST_MSG, hx_first_msg_classes)
+        }),
+        claimed(CLAIM_HX_SAME_CONTENT, n, |n, k, s| {
+            hx_accept_reject(n, k, s, CLAIM_HX_SAME_CONTENT, hx_same_content_classes)
+        }),
+    ]
 }
 
 /// `SECMP_CT_SCALE` if set (local quick runs only; echoed in the report, refused by the gate).
@@ -2106,54 +3290,30 @@ fn targets(n: usize, n_sas: usize) -> [Target; 10] {
     ]
 }
 
-/// The SecMP-TR targets (M3 plan D9) and the same-content control (ADR-042 Amendment 2), measured after `targets`,
-/// `n` samples per measurement.
-fn tr_targets(n: usize) -> [Target; 4] {
+/// The SecMP-TR targets (M3 plan D9; `tr_decrypt_reject_skipped` M4, M3 review R-04) and the same-content control
+/// (ADR-042 Amendment 2), measured after `targets`, `n` samples per measurement.
+fn tr_targets(n: usize) -> [Target; 5] {
     [
-        Target {
-            name: "tr_decrypt_reject_hdr_key",
-            classes: [
-                "header sealed under a wrong key",
-                "header sealed under hk_r, its tag's last byte flipped",
-            ],
-            samples: n,
-            control: false,
-            run: |n, k, s| tr_decrypt_reject(n, k, s, tr_hdr_key_classes),
-        },
-        Target {
-            name: "tr_decrypt_reject_body_tag",
-            classes: ["body tag wrong in byte 0", "body tag wrong in byte 31"],
-            samples: n,
-            control: false,
-            run: |n, k, s| tr_decrypt_reject(n, k, s, tr_body_tag_classes),
-        },
-        Target {
-            name: "tr_decrypt_reject_ct_pq",
-            classes: [
-                "ct_pq differs from last_ct_r in byte 0",
-                "ct_pq differs from last_ct_r in byte 1087",
-            ],
-            samples: n,
-            control: false,
-            run: |n, k, s| tr_decrypt_reject(n, k, s, tr_ct_pq_classes),
-        },
-        Target {
-            name: SAME_CONTENT,
-            classes: [
-                "the class-1 cell of tr_decrypt_reject_body_tag (body tag wrong in byte 31)",
-                "the same cell",
-            ],
-            samples: n,
-            control: false,
-            run: |n, k, s| tr_decrypt_reject(n, k, s, tr_same_content_classes),
-        },
+        claimed(CLAIM_TR_HDR_KEY, n, |n, k, s| {
+            tr_decrypt_reject(n, k, s, CLAIM_TR_HDR_KEY, tr_hdr_key_classes)
+        }),
+        claimed(CLAIM_TR_BODY_TAG, n, |n, k, s| {
+            tr_decrypt_reject(n, k, s, CLAIM_TR_BODY_TAG, tr_body_tag_classes)
+        }),
+        claimed(CLAIM_TR_CT_PQ, n, |n, k, s| {
+            tr_decrypt_reject(n, k, s, CLAIM_TR_CT_PQ, tr_ct_pq_classes)
+        }),
+        claimed(CLAIM_TR_SKIPPED, n, tr_decrypt_reject_skipped),
+        claimed(CLAIM_SAME_CONTENT, n, |n, k, s| {
+            tr_decrypt_reject(n, k, s, CLAIM_SAME_CONTENT, tr_same_content_classes)
+        }),
     ]
 }
 
 /// Every target (`evaluate`), then the inline A/A control over the full target set (ADR-041 (3)) and the
 /// sensitivity control (Amendment 1 (2)); the third value is the reason of a `CONTROL_FAIL` run (either control
-/// failed, or the A/A′ placement control or the same-content control gave FAIL, ADR-042 and its Amendment 2; every
-/// target verdict is then `CONTROL_FAIL`).
+/// failed, or the A/A′ placement control or one of the two same-content controls gave FAIL, ADR-042 and its
+/// Amendments 2 and 3; every target verdict is then `CONTROL_FAIL`).
 fn run(
     rules: Rules,
 ) -> Result<(Clock, Vec<Outcome>, Option<String>, Sensitivity), secmp_crypto::Error> {
@@ -2163,15 +3323,32 @@ fn run(
     let n = rules.samples.checked_div(scale).unwrap_or(1);
     let n_sas = rules.sas_samples.checked_div(scale).unwrap_or(1);
     let mut out = Vec::new();
-    for target in targets(n, n_sas).into_iter().chain(tr_targets(n)) {
+    for target in targets(n, n_sas)
+        .into_iter()
+        .chain(tr_targets(n))
+        .chain(hx_targets(n))
+    {
         out.push(evaluate(target, &mut stream, &clock, rules)?);
     }
     let aa_fail = aa_control(&mut out, &mut stream, &clock, rules)?;
-    let sensitivity = sensitivity_control(&out, &mut stream, &clock, rules);
+    let sensitivity = sensitivity_control(&out, &mut stream, &clock);
     let mut reasons: Vec<String> = aa_fail.into_iter().collect();
     reasons.extend(sensitivity.failure(rules));
     reasons.extend(placement_failure(&out, &clock, rules));
-    reasons.extend(same_content_failure(&out, &clock, rules));
+    reasons.extend(same_content_failure(
+        &out,
+        &clock,
+        rules,
+        SAME_CONTENT,
+        "ADR-042 Amendment 2",
+    ));
+    reasons.extend(same_content_failure(
+        &out,
+        &clock,
+        rules,
+        HX_SAME_CONTENT,
+        "ADR-042 Amendment 3",
+    ));
     let control_fail = (!reasons.is_empty()).then(|| reasons.join("; "));
     if control_fail.is_some() {
         for outcome in &mut out {
@@ -2181,87 +3358,281 @@ fn run(
     Ok((clock, out, control_fail, sensitivity))
 }
 
-/// The sensitivity control of a run (ADR-041 Amendment 1 (2)): `min_leak` with `tag_compare`'s batch size and
-/// sample count, and its effect floor. `measurement` is `None` if it could not be measured (`tag_compare` without
-/// a batch size, or a clock without a quantum or a tick length) — which fails the run like a missed floor.
+/// The sensitivity control of a run (ADR-041 Amendment 1 (2), judged since Amendment 3 by the verdict rule it
+/// validates): `min_leak` measured twice with `tag_compare`'s batch size and sample count, like a target. The
+/// measurements are `None` if they could not be taken (`tag_compare` without a batch size, or a clock without a
+/// quantum or a tick length) — which fails the run like a control that is not caught.
 struct Sensitivity {
     k: Option<u32>,
     samples: usize,
-    measurement: Option<Measurement>,
-    /// The effect floor of the measurement, in ticks.
-    floor_ticks: Option<f64>,
+    first: Option<Measurement>,
+    second: Option<Measurement>,
+    /// The per-class histogram of the first measurement's samples (Amendment 3 (2); `histogram`).
+    histogram: Option<String>,
+    /// The tick length the effect floors are computed with (`Clock::tick`).
+    tick_ns: Option<f64>,
+    /// The informative same-content variant (Amendment 3 (2)): one measurement and its histogram; no verdict.
+    same_content: Option<(Measurement, String)>,
 }
 
 impl Sensitivity {
-    /// The raw Δ (class 0 − class 1, in ticks) if measured.
-    fn raw_delta(&self) -> Option<f64> {
-        self.measurement.as_ref()?.raw().map(Stats::delta)
+    /// `decide` on the two measurements (ADR-041 Amendment 3 (1)): the verdict and the deciding crop; `None` if not
+    /// measured.
+    fn decision(&self, rules: Rules) -> Option<(Verdict, Option<String>)> {
+        let (first, second, tick_ns) = (self.first.as_ref()?, self.second.as_ref()?, self.tick_ns?);
+        Some(decide(first, second, rules, tick_ns))
     }
 
-    /// Whether the raw Δ reaches the floor with the expected sign (class 0, 32 byte steps, is the slower one).
-    fn reached(&self) -> bool {
-        matches!((self.raw_delta(), self.floor_ticks), (Some(d), Some(f)) if d >= f)
+    /// The class statistics of `m` at `crop`.
+    fn at<'a>(m: Option<&'a Measurement>, crop: &str) -> Option<&'a Stats> {
+        m?.crops.iter().find(|(k, _)| k == crop).map(|(_, s)| s)
     }
 
-    /// The `CONTROL_FAIL` reason, if the control did not reach its floor.
+    /// Whether the control is caught (Amendment 3 (1)): `decide` gives FAIL and class 0 (32 byte steps) is the slower
+    /// one at the deciding crop in both measurements (Δ > 0; `decide` already requires the same sign of t in both).
+    fn reached(&self, rules: Rules) -> bool {
+        match self.decision(rules) {
+            Some((Verdict::Fail, Some(crop))) => [self.first.as_ref(), self.second.as_ref()]
+                .into_iter()
+                .all(|m| Self::at(m, &crop).is_some_and(|s| s.delta() > 0.0)),
+            _ => false,
+        }
+    }
+
+    /// The `CONTROL_FAIL` reason, if the verdict rule did not catch the control with class 0 the slower, naming the
+    /// deciding statistic.
     fn failure(&self, rules: Rules) -> Option<String> {
-        if self.reached() {
+        if self.reached(rules) {
             return None;
         }
-        Some(match (self.raw_delta(), self.floor_ticks) {
-            (Some(d), Some(f)) => format!(
-                "sensitivity control min_leak_control below the effect floor: raw Δ {d:.2} ticks < floor {f:.2} ticks ({} q_eff, {} ns)",
-                rules.effect_floor, rules.effect_floor_ns
+        Some(match self.decision(rules) {
+            None => "sensitivity control min_leak_control not measured".to_owned(),
+            Some((Verdict::Fail, Some(crop))) => {
+                let stat = |m: Option<&Measurement>, f: fn(&Stats) -> f64| {
+                    Self::at(m, &crop).map_or_else(|| "?".to_owned(), |s| format!("{:.2}", f(s)))
+                };
+                format!(
+                    "sensitivity control min_leak_control caught with the wrong sign: class 1 slower at the deciding \
+                     crop {crop} (Δ {} / {} ticks, t {} / {}), where the injected leak makes class 0 slower \
+                     (ADR-041 Amendment 3)",
+                    stat(self.first.as_ref(), Stats::delta),
+                    stat(self.second.as_ref(), Stats::delta),
+                    stat(self.first.as_ref(), Stats::t),
+                    stat(self.second.as_ref(), Stats::t)
+                )
+            }
+            Some((verdict, crop)) => format!(
+                "sensitivity control min_leak_control not caught by the verdict rule (decide: {}{}): no crop \
+                 reproduces the injected leak at ≥ 1 floor with |t| > {} in both measurements (ADR-041 Amendment 3)",
+                verdict.as_str(),
+                crop.map(|c| format!(" at {c}")).unwrap_or_default(),
+                rules.pass
             ),
-            _ => "sensitivity control min_leak_control not measured".to_owned(),
         })
     }
 
     fn json(&self, clock: &Clock, rules: Rules) -> String {
         let num = |x: Option<f64>| x.map_or_else(|| "null".to_owned(), |x| format!("{x:.4}"));
-        let ns = |x: Option<f64>| num(x.map(|x| x * clock.tick_ns));
-        let raw = self.raw_delta();
-        let ratio = raw.zip(self.floor_ticks).map(|(d, f)| d / f);
+        let measurement =
+            |m: Option<&Measurement>| m.map_or_else(|| "null".to_owned(), |m| m.json(clock, rules));
+        let floor = |m: Option<&Measurement>| m.map(|m| rules.floor_ticks(m.q_eff, clock.tick_ns));
+        let decision = self.decision(rules);
+        let crop = decision.as_ref().and_then(|(_, c)| c.clone());
+        let (first, second) = (self.first.as_ref(), self.second.as_ref());
+        // at the deciding crop (none: null), and raw (information), per measurement
+        let delta_at = |m: Option<&Measurement>, crop: Option<&str>| {
+            crop.and_then(|c| Self::at(m, c)).map(Stats::delta)
+        };
+        let t_at = |m: Option<&Measurement>| {
+            num(crop.as_deref().and_then(|c| Self::at(m, c)).map(Stats::t))
+        };
+        let floors =
+            |d: Option<f64>, m: Option<&Measurement>| num(d.zip(floor(m)).map(|(d, f)| d / f));
+        let (d1, d2) = (
+            delta_at(first, crop.as_deref()),
+            delta_at(second, crop.as_deref()),
+        );
+        let (r1, r2) = (delta_at(first, Some("raw")), delta_at(second, Some("raw")));
         format!(
-            "{{\"name\":\"min_leak_control\",\"class0\":\"32 byte steps (an early-exit comparison mismatching in byte 31)\",\"class1\":\"31 byte steps (mismatch in byte 30: exits one byte early)\",\"comparisons_per_call\":256,\"k\":{},\"samples\":{},\"floor_ticks\":{},\"floor_ns\":{},\"raw_delta_ticks\":{},\"raw_delta_ns\":{},\"raw_delta_floor\":{},\"reached\":{},\"measurement\":{}}}",
+            "{{\"name\":\"min_leak_control\",\"class0\":\"32 byte steps (an early-exit comparison mismatching in byte 31)\",\"class1\":\"31 byte steps (mismatch in byte 30: exits one byte early)\",\"comparisons_per_call\":256,\"k\":{},\"samples\":{},\"rule\":\"ADR-041 Amendment 3: decide on the two measurements gives FAIL with class 0 slower at the deciding crop\",\"decision\":{},\"deciding_crop\":{},\"first_delta_ticks\":{},\"second_delta_ticks\":{},\"first_delta_floor\":{},\"second_delta_floor\":{},\"first_t\":{},\"second_t\":{},\"first_floor_ticks\":{},\"second_floor_ticks\":{},\"first_raw_delta_ticks\":{},\"second_raw_delta_ticks\":{},\"first_raw_delta_floor\":{},\"second_raw_delta_floor\":{},\"reached\":{},\"histogram\":{},\"first\":{},\"second\":{}}}",
             self.k.map_or_else(|| "null".to_owned(), |k| k.to_string()),
             self.samples,
-            num(self.floor_ticks),
-            ns(self.floor_ticks),
-            num(raw),
-            ns(raw),
-            num(ratio),
-            self.reached(),
-            self.measurement
+            decision
                 .as_ref()
-                .map_or_else(|| "null".to_owned(), |m| m.json(clock, rules))
+                .map_or_else(|| "null".to_owned(), |(v, _)| format!("\"{}\"", v.as_str())),
+            crop.as_ref()
+                .map_or_else(|| "null".to_owned(), |c| format!("\"{c}\"")),
+            num(d1),
+            num(d2),
+            floors(d1, first),
+            floors(d2, second),
+            t_at(first),
+            t_at(second),
+            num(floor(first)),
+            num(floor(second)),
+            num(r1),
+            num(r2),
+            floors(r1, first),
+            floors(r2, second),
+            self.reached(rules),
+            self.histogram.as_deref().unwrap_or("null"),
+            measurement(first),
+            measurement(second)
+        )
+    }
+
+    /// The informative same-content variant `min_leak_same_content` (ADR-041 Amendment 3 (2)): no verdict.
+    fn same_content_json(&self, clock: &Clock, rules: Rules) -> String {
+        format!(
+            "{{\"name\":\"min_leak_same_content\",\"class0\":\"32 byte steps\",\"class1\":\"32 byte steps (the same content through the same per-class preparation)\",\"comparisons_per_call\":256,\"k\":{},\"samples\":{},\"verdict\":null,\"informative\":true,\"histogram\":{},\"measurement\":{}}}",
+            self.k.map_or_else(|| "null".to_owned(), |k| k.to_string()),
+            self.samples,
+            self.same_content
+                .as_ref()
+                .map_or("null", |(_, h)| h.as_str()),
+            self.same_content
+                .as_ref()
+                .map_or_else(|| "null".to_owned(), |(m, _)| m.json(clock, rules))
         )
     }
 }
 
-/// ADR-041 Amendment 1 (2): the sensitivity control, measured once after the A/A control with `tag_compare`'s
-/// batch size (after any re-batching) and sample count.
-fn sensitivity_control(
-    out: &[Outcome],
-    stream: &mut Stream,
-    clock: &Clock,
-    rules: Rules,
-) -> Sensitivity {
+/// Bins of the per-class histograms of the sensitivity control and its same-content variant (ADR-041 Amendment 3
+/// (2)).
+const HISTOGRAM_BINS: usize = 21;
+
+/// ADR-041 Amendment 3 (2): per class, the counts of `samples` in `HISTOGRAM_BINS` equal-width bins over [p1, p99] of
+/// both classes together; a sample below p1 counts in the first bin and one above p99 in the last, so each class's
+/// counts sum to its sample count. `{"bins":21,"lo_ticks":…,"hi_ticks":…,"bin_ticks":…,"class0":[…],"class1":[…]}`.
+fn histogram(samples: &[(usize, u64)]) -> String {
+    let mut sorted: Vec<u64> = samples.iter().map(|(_, x)| *x).collect();
+    sorted.sort_unstable();
+    let at = |permille: usize| {
+        let idx = sorted.len().saturating_mul(permille) / 1000;
+        sorted
+            .get(idx.min(sorted.len().saturating_sub(1)))
+            .copied()
+            .unwrap_or(0)
+    };
+    let (lo, hi) = (at(10), at(990));
+    let span = u128::from(hi.saturating_sub(lo));
+    let bins = u128::try_from(HISTOGRAM_BINS).unwrap_or(1);
+    let last = HISTOGRAM_BINS.saturating_sub(1);
+    let bin = |x: u64| -> usize {
+        if x <= lo {
+            0
+        } else if x >= hi {
+            last
+        } else {
+            u128::from(x.saturating_sub(lo))
+                .saturating_mul(bins)
+                .checked_div(span)
+                .and_then(|b| usize::try_from(b).ok())
+                .map_or(last, |b| b.min(last))
+        }
+    };
+    let mut counts = [[0_u64; HISTOGRAM_BINS]; 2];
+    for (c, x) in samples {
+        if let Some(n) = counts.get_mut(c & 1).and_then(|row| row.get_mut(bin(*x))) {
+            *n = n.saturating_add(1);
+        }
+    }
+    let row =
+        |r: &[u64; HISTOGRAM_BINS]| r.iter().map(u64::to_string).collect::<Vec<_>>().join(",");
+    let [c0, c1] = &counts;
+    format!(
+        "{{\"bins\":{HISTOGRAM_BINS},\"lo_ticks\":{lo},\"hi_ticks\":{hi},\"bin_ticks\":{:.3},\"class0\":[{}],\"class1\":[{}]}}",
+        f64_of(hi.saturating_sub(lo)) / f64_of(u64::try_from(HISTOGRAM_BINS).unwrap_or(1)),
+        row(c0),
+        row(c1)
+    )
+}
+
+/// ADR-041 Amendment 1 (2) and Amendment 3: the sensitivity control, measured twice after the A/A control with
+/// `tag_compare`'s batch size (after any re-batching) and sample count, then its same-content variant once.
+fn sensitivity_control(out: &[Outcome], stream: &mut Stream, clock: &Clock) -> Sensitivity {
     let tag = out.iter().find(|o| o.target.name == "tag_compare");
     let mut sensitivity = Sensitivity {
         k: tag.and_then(|t| t.calibration.k),
         samples: tag.map_or(0, |t| t.target.samples),
-        measurement: None,
-        floor_ticks: None,
+        first: None,
+        second: None,
+        histogram: None,
+        tick_ns: clock.tick(),
+        same_content: None,
     };
-    if let (Some(k), Some(quantum), Some(tick_ns)) = (sensitivity.k, clock.quantum(), clock.tick())
-    {
-        let samples = min_leak(sensitivity.samples, usize::try_from(k).unwrap_or(1), stream);
+    let (Some(k), Some(quantum), Some(_)) = (sensitivity.k, clock.quantum(), clock.tick()) else {
+        return sensitivity;
+    };
+    let batch = usize::try_from(k).unwrap_or(1);
+    let mut measure = |run: fn(usize, usize, &mut Stream) -> Samples, target: &str, phase: &str| {
+        let samples = run(sensitivity.samples, batch, stream);
         let m = Measurement::of(&samples, quantum, clock.resolution_ticks, k);
-        sensitivity.floor_ticks = Some(rules.floor_ticks(m.q_eff, tick_ns));
-        sensitivity.measurement = Some(m);
-    }
+        progress(target, phase, Some(k), Some(m.median_ticks));
+        (m, samples)
+    };
+    let (first, samples) = measure(min_leak, "min_leak_control", "first");
+    let histogram_first = histogram(&samples);
+    let (second, _) = measure(min_leak, "min_leak_control", "second");
+    let (same, samples) = measure(min_leak_same_content, "min_leak_same_content", "first");
+    let histogram_same = histogram(&samples);
+    sensitivity.first = Some(first);
+    sensitivity.second = Some(second);
+    sensitivity.histogram = Some(histogram_first);
+    sensitivity.same_content = Some((same, histogram_same));
     sensitivity
+}
+
+/// ADR-041 Amendment 3 (2): the CPU model and microcode of the host — Linux `/proc/cpuinfo` (`model name`,
+/// `microcode`), macOS `sysctl -n machdep.cpu.brand_string` (microcode unknown); `"unknown"` for anything not
+/// readable, which never fails the run.
+fn host_json() -> String {
+    let unknown = || "unknown".to_owned();
+    let (model, microcode) = match std::fs::read_to_string("/proc/cpuinfo") {
+        Ok(info) => {
+            let field = |key: &str| {
+                info.lines()
+                    .find_map(|l| {
+                        let (k, v) = l.split_once(':')?;
+                        (k.trim() == key).then(|| v.trim().to_owned())
+                    })
+                    .filter(|v| !v.is_empty())
+            };
+            (field("model name"), field("microcode"))
+        }
+        Err(_) => (
+            std::process::Command::new("/usr/sbin/sysctl")
+                .args(["-n", "machdep.cpu.brand_string"])
+                .stdin(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .output()
+                .ok()
+                .filter(|o| o.status.success())
+                .and_then(|o| String::from_utf8(o.stdout).ok())
+                .map(|s| s.trim().to_owned())
+                .filter(|s| !s.is_empty()),
+            None,
+        ),
+    };
+    serde_json::json!({
+        "cpu_model": model.unwrap_or_else(unknown),
+        "microcode": microcode.unwrap_or_else(unknown),
+    })
+    .to_string()
+}
+
+/// ADR-041 Amendment 3 (2): the SHA-256 of the running bench executable (`std::env::current_exe`), lowercase hex;
+/// `None` if it cannot be read.
+fn bench_sha256() -> Option<String> {
+    let bytes = std::fs::read(std::env::current_exe().ok()?).ok()?;
+    Some(
+        secmp_crypto::sha256(&[&bytes])
+            .iter()
+            .fold(String::new(), |mut hex, b| {
+                let _ = write!(hex, "{b:02x}");
+                hex
+            }),
+    )
 }
 
 /// The name of the A/A′ placement control (ADR-042 (2); `expect::CT_TARGETS`).
@@ -2296,12 +3667,22 @@ fn placement_failure(out: &[Outcome], clock: &Clock, rules: Rules) -> Option<Str
 /// The name of the same-content control (ADR-042 Amendment 2; `expect::CT_TARGETS`).
 const SAME_CONTENT: &str = "same_content_control";
 
-/// ADR-042 Amendment 2: the same-content control is judged like a target; if its verdict is FAIL, a preparation path
-/// that differs by class alone reaches the effect floor and the run is `CONTROL_FAIL` with this reason (its Δ at the
-/// deciding crop in effect floors of each measurement). `None` if it passed, showed a sub-floor shift or was not
-/// measured (NOT MEASURABLE fails the run on its own).
-fn same_content_failure(out: &[Outcome], clock: &Clock, rules: Rules) -> Option<String> {
-    let o = out.iter().find(|o| o.target.name == SAME_CONTENT)?;
+/// The name of the HX same-content control (ADR-042 Amendment 3; `expect::CT_TARGETS`).
+const HX_SAME_CONTENT: &str = "hx_same_content_control";
+
+/// ADR-042 Amendment 2 (`same_content_control`, the TR preparation path) and Amendment 3 (`hx_same_content_control`,
+/// the HX one; `adr` names the decision): a same-content control is judged like a target; if its verdict is FAIL, a
+/// preparation path that differs by class alone reaches the effect floor and the run is `CONTROL_FAIL` with this
+/// reason (its Δ at the deciding crop in effect floors of each measurement). `None` if it passed, showed a sub-floor
+/// shift or was not measured (NOT MEASURABLE fails the run on its own).
+fn same_content_failure(
+    out: &[Outcome],
+    clock: &Clock,
+    rules: Rules,
+    name: &str,
+    adr: &str,
+) -> Option<String> {
+    let o = out.iter().find(|o| o.target.name == name)?;
     if o.verdict != Verdict::Fail {
         return None;
     }
@@ -2314,9 +3695,8 @@ fn same_content_failure(out: &[Outcome], clock: &Clock, rules: Rules) -> Option<
         .map_or_else(|| "?".to_owned(), |f| format!("{f:.2}"))
     };
     Some(format!(
-        "same-content control {SAME_CONTENT} FAIL at {crop}: identical contents through the per-class preparation \
-         path shift the class means by {} / {} effect floors — the preparation path differs by class (ADR-042 \
-         Amendment 2)",
+        "same-content control {name} FAIL at {crop}: identical contents through the per-class preparation path \
+         shift the class means by {} / {} effect floors — the preparation path differs by class ({adr})",
         floors(o.first.as_ref()),
         floors(o.second.as_ref())
     ))
@@ -2339,6 +3719,7 @@ fn aa_control(
         let batch = usize::try_from(k).unwrap_or(1);
         let samples = (outcome.target.run)(outcome.target.samples, batch, stream)?;
         let aa = Measurement::of(&samples, quantum, clock.resolution_ticks, k);
+        progress(outcome.target.name, "aa", Some(k), Some(aa.median_ticks));
         let (max, at) = aa.max();
         if max > rules.aa_max_t {
             aa_failures.push(format!("{} |t| = {max:.2} at {at}", outcome.target.name));
@@ -2355,7 +3736,41 @@ fn aa_control(
     }))
 }
 
+/// When the bench started (`main`), for the elapsed seconds of the progress lines.
+static STARTED: OnceLock<Instant> = OnceLock::new();
+
+/// ADR-045 Amendment 1 (M4 review C-1): the progress file, next to the report.
+fn progress_path() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/ct-progress.jsonl")
+}
+
+/// Append the progress line of a finished `phase` of `target`: the seconds since the bench started, the batch size
+/// and the median batch duration in ticks (`null` where the phase has none). A file, never stdout (docs/06 §2); a
+/// failed write is ignored, since the lines are diagnosis only and the report carries the verdict.
+fn progress(target: &str, phase: &str, k: Option<u32>, median_ticks: Option<u64>) {
+    let elapsed = STARTED
+        .get()
+        .map_or(0.0, |t| (t.elapsed().as_secs_f64() * 10.0).round() / 10.0);
+    let line = serde_json::json!({
+        "target": target,
+        "phase": phase,
+        "elapsed_s": elapsed,
+        "k": k,
+        "median_ticks": median_ticks,
+    });
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(progress_path())
+    {
+        let _ = writeln!(f, "{line}");
+    }
+}
+
 fn main() -> ExitCode {
+    let _ = STARTED.set(Instant::now());
+    // a fresh progress file per run (the gate removes it as well)
+    let _ = std::fs::write(progress_path(), "");
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/ct-report.json");
     let Some(rules) = Rules::from_expect() else {
         // written for the gate to print; the bench itself may not print (docs/06 §2)
@@ -2366,11 +3781,13 @@ fn main() -> ExitCode {
     let Ok((clock, outcomes, control_fail, sensitivity)) = run(rules) else {
         // the gate prints the reason of an aborted run (`ctreport::ct_table_for` reads `error`)
         let error = if TR_ACCEPTED.load(Ordering::Relaxed) {
-            "{\"error\":\"bench aborted: RatchetState::decrypt_with accepted a cell of a TR target, which must be rejected in both classes\"}"
+            "bench aborted: RatchetState::decrypt_with accepted a cell of a TR target, which must be rejected in both classes".to_owned()
+        } else if let Some(reason) = abort_reason() {
+            reason
         } else {
-            "{\"error\":\"bench aborted: OS randomness or locked memory unavailable, or an input of the bench itself was refused\"}"
+            "bench aborted: OS randomness or locked memory unavailable, or an input of the bench itself was refused".to_owned()
         };
-        let _ = std::fs::write(path, error);
+        let _ = std::fs::write(path, serde_json::json!({ "error": error }).to_string());
         return ExitCode::FAILURE;
     };
     // the run verdict (ADR-041, Amendment 1): CONTROL_FAIL if the inline A/A control or the sensitivity control
@@ -2383,7 +3800,7 @@ fn main() -> ExitCode {
         "FAIL"
     };
     let json = format!(
-        "{{\"thresholds\":{},{}\"sign\":\"{SIGN}\",\"clock\":{},\"run_verdict\":\"{run_verdict}\",\"run_reason\":{},\"sensitivity_control\":{},\"results\":[{}]}}",
+        "{{\"thresholds\":{},{}\"sign\":\"{SIGN}\",\"clock\":{},\"host\":{},\"bench_sha256\":{},\"run_verdict\":\"{run_verdict}\",\"run_reason\":{},\"sensitivity_control\":{},\"min_leak_same_content\":{},\"results\":[{}]}}",
         rules.json(),
         // M2 review C3 (c): a shortened run says so, and the gate refuses it
         ct_scale().map_or_else(String::new, |s| format!(
@@ -2391,8 +3808,11 @@ fn main() -> ExitCode {
             serde_json::Value::from(s)
         )),
         clock.json(),
+        host_json(),
+        serde_json::Value::from(bench_sha256()),
         serde_json::Value::from(control_fail),
         sensitivity.json(&clock, rules),
+        sensitivity.same_content_json(&clock, rules),
         outcomes
             .iter()
             .map(|o| o.json(&clock, rules))

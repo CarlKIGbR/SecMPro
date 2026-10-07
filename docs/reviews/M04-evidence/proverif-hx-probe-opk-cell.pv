@@ -1,0 +1,39 @@
+(* SPDX-License-Identifier: AGPL-3.0-or-later *)
+(* Probe (evidence, not a gate model): the OPK bookkeeping of formal/hx.pv (6.) in isolation. Per invitation a fresh
+   key kinv and a fresh OPK o, delivered to I on a private channel; a single-use private cell holding o, read by
+   replicated acceptance attempts with the equality pattern (=o), re-output on failure, not re-output on success.
+   The envelope binds (ek, o) under kinv, like the transcript binds EK_I and the OPK. Queries: H5's and H10's
+   injective shapes. *)
+free c: channel.
+type key.
+fun senc(bitstring, key): bitstring.
+reduc forall m: bitstring, k: key; sdec(senc(m, k), k) = m.
+
+event IStart(bitstring, bitstring).
+event RAccept(bitstring, bitstring).
+event InvIssued(bitstring).
+
+query x: bitstring, y: bitstring; inj-event(RAccept(x, y)) ==> inj-event(IStart(x, y)).
+query x: bitstring, y: bitstring; inj-event(RAccept(x, y)) ==> inj-event(InvIssued(y)).
+
+let I(pinv: channel) =
+  in(pinv, (o: bitstring, k: key));
+  new ek[]: bitstring;
+  event IStart(ek, o);
+  out(c, senc((ek, o), k)).
+
+let Attempt(o: bitstring, kinv: key, cell: channel) =
+  in(c, m: bitstring);
+  in(cell, =o);
+  let (ek: bitstring, =o) = sdec(m, kinv) in
+    event RAccept(ek, o)
+  else out(cell, o).
+
+let Invitation(pinv: channel) =
+  new o[]: bitstring;
+  new kinv[]: key;
+  new cell[]: channel;
+  event InvIssued(o);
+  (out(pinv, (o, kinv)) | out(cell, o) | ! Attempt(o, kinv, cell)).
+
+process new pinv: channel; (! I(pinv) | ! Invitation(pinv))

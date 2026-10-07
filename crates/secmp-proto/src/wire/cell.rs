@@ -12,7 +12,7 @@
 //! - `RouteDescriptor`: kind 0x01 is a `RelayQueue`; every other kind is kept as opaque bytes (spec §9.8: v1
 //!   clients ignore unknown kinds; keeping them makes re-encoding canonical).
 
-use secmp_crypto::SecretBytes;
+use secmp_crypto::{SecretBytes, Zeroize};
 
 use crate::codec::{
     Decode, Encode, Reader, Writer, Zeroizing, boxed, decode_padded, encode_padded,
@@ -208,8 +208,8 @@ impl AppKind {
 
 /// `AppMessage = msg_id[16] ‖ kind u8 ‖ expire_after u32 ‖ payload_len u16 ‖ payload` (payload opaque). The
 /// payload is decrypted message content, confidential: it is zeroized on drop (external review EXT-5, F21).
-#[derive(Clone, PartialEq, Eq)]
-#[cfg_attr(test, derive(Debug))]
+#[cfg_attr(test, derive(Clone))]
+#[cfg_attr(test, derive(PartialEq, Eq, Debug))]
 pub struct AppMessage {
     /// Message id (dedup).
     pub msg_id: Id,
@@ -258,9 +258,39 @@ fn read_count(r: &mut Reader<'_>) -> Result<usize> {
     }
 }
 
+/// M4 review C-14 (R-30): the wire bodies `AppMessage`, `BatchBody`, `Fragment` and `ControlBody` are `Clone` only in
+/// this crate's own tests (`cfg_attr(test, derive(Clone))`), and `wire::inv::Onion` is not `Copy`. Outside the tests a
+/// body has no `clone()`:
+///
+/// ```compile_fail,E0277
+/// fn needs_clone<T: Clone>(_: &T) {}
+/// fn check(
+///     a: &secmp_proto::wire::cell::AppMessage,
+///     b: &secmp_proto::wire::cell::BatchBody,
+///     f: &secmp_proto::wire::cell::Fragment,
+///     c: &secmp_proto::wire::cell::ControlBody,
+/// ) {
+///     needs_clone(a);
+///     needs_clone(b);
+///     needs_clone(f);
+///     needs_clone(c);
+/// }
+/// ```
+///
+/// and an `Onion` is moved, not copied:
+///
+/// ```compile_fail,E0382
+/// use secmp_proto::wire::inv::Onion;
+/// fn twice(onion: Onion) -> (Onion, Onion) {
+///     (onion, onion)
+/// }
+/// ```
+#[cfg(doctest)]
+pub mod wire_bodies_are_not_clone_outside_tests {}
+
 /// `Batch body = count u8 (1..=255) ‖ AppMessage[] × count`.
-#[derive(Clone, PartialEq, Eq)]
-#[cfg_attr(test, derive(Debug))]
+#[cfg_attr(test, derive(Clone))]
+#[cfg_attr(test, derive(PartialEq, Eq, Debug))]
 pub struct BatchBody {
     /// 1..=255 messages.
     pub messages: Vec<AppMessage>,
@@ -290,8 +320,8 @@ impl Decode for BatchBody {
 /// (rev 2.3). The chunk runs to the end of the enclosing structure; chunk sizing and consistency across fragments
 /// are reassembly rules. A chunk of a fragmented `RouteUpdate` carries `send_seed` bytes, so it is zeroized on drop
 /// (review C1).
-#[derive(Clone, PartialEq, Eq)]
-#[cfg_attr(test, derive(Debug))]
+#[cfg_attr(test, derive(Clone))]
+#[cfg_attr(test, derive(PartialEq, Eq, Debug))]
 pub struct Fragment {
     /// The fragmented message's id.
     pub msg_id: Id,
@@ -356,6 +386,23 @@ pub struct RelayQueue {
     pub period_s: Period,
 }
 
+impl Zeroize for RelayQueue {
+    fn zeroize(&mut self) {
+        self.relay.zeroize();
+        self.sid.zeroize();
+        crate::wire::inv::wipe_seed(&mut self.send_seed);
+    }
+}
+
+/// A decoded route that a rejected `process` drops is wiped (M4 review R-61).
+impl Drop for RelayQueue {
+    fn drop(&mut self) {
+        self.zeroize();
+        #[cfg(test)]
+        crate::wire::wipe_log::note("RelayQueue");
+    }
+}
+
 impl Encode for RelayQueue {
     fn encode_to(&self, w: &mut Writer) -> Result<()> {
         self.relay.encode_to(w)?;
@@ -391,6 +438,27 @@ pub enum RouteDescriptor {
         /// `RelayQueue` does (review C1).
         blob: Zeroizing<Vec<u8>>,
     },
+}
+
+/// Wiped by `Zeroizing<Vec<RouteDescriptor>>` (held so by [`crate::hx::Accepted`]).
+impl Zeroize for RouteDescriptor {
+    fn zeroize(&mut self) {
+        match self {
+            Self::RelayQueue(q) => q.zeroize(),
+            Self::Unknown { kind, blob } => {
+                *kind = 0;
+                blob.zeroize();
+            }
+        }
+    }
+}
+
+impl Drop for RouteDescriptor {
+    fn drop(&mut self) {
+        self.zeroize();
+        #[cfg(test)]
+        crate::wire::wipe_log::note("RouteDescriptor");
+    }
 }
 
 impl Encode for RouteDescriptor {
@@ -436,11 +504,15 @@ fn write_routes(w: &mut Writer, routes: &[RouteDescriptor]) -> Result<()> {
     Ok(())
 }
 
+/// The routes of a body, in a vector sized exactly once (M4 review C-13: a growing vector would free its earlier
+/// blocks, which hold routing metadata, without wiping them; `codec.rs`'s rule).
 fn read_routes(r: &mut Reader<'_>) -> Result<Vec<RouteDescriptor>> {
     let count = read_count(r)?;
-    (0..count)
-        .map(|_| RouteDescriptor::decode_from(r))
-        .collect()
+    let mut routes = Vec::with_capacity(count);
+    for _ in 0..count {
+        routes.push(RouteDescriptor::decode_from(r)?);
+    }
+    Ok(routes)
 }
 
 /// `RouteUpdate body = count u8 (1..=255) ‖ RouteDescriptor[] × count`.
@@ -578,8 +650,8 @@ pub enum ControlCode {
 
 /// `Control body = code u8 ‖ arg_len u16 ‖ arg` (arg opaque; decrypted content, zeroized on drop — external review
 /// EXT-5, F21).
-#[derive(Clone, PartialEq, Eq)]
-#[cfg_attr(test, derive(Debug))]
+#[cfg_attr(test, derive(Clone))]
+#[cfg_attr(test, derive(PartialEq, Eq, Debug))]
 pub struct ControlBody {
     /// The code.
     pub code: ControlCode,
@@ -863,6 +935,28 @@ mod tests {
         })
     }
 
+    /// M4 review C-13 (R-45): the decoded route vector is sized once — `capacity() == len()` for 1, 10 and 255
+    /// `RelayQueue` routes (no growth, so no unwiped earlier block).
+    #[test]
+    fn read_routes_pre_sizes_the_vector() -> Result<()> {
+        for n in [1_usize, 10, 255] {
+            let body = RouteUpdateBody {
+                routes: (0..n)
+                    .map(|_| {
+                        Ok(RouteDescriptor::RelayQueue(relay_queue(
+                            false,
+                            Period::S20,
+                        )?))
+                    })
+                    .collect::<Result<Vec<_>>>()?,
+            };
+            let decoded = RouteUpdateBody::decode(&body.encode()?)?;
+            assert_eq!(decoded.routes.len(), n);
+            assert_eq!(decoded.routes.capacity(), n, "{n} routes");
+        }
+        Ok(())
+    }
+
     /// Review C1: every structure that carries a `send_seed` encodes into a `Zeroizing<Vec<u8>>` (a change of a
     /// return type fails to compile here) and the seed is in each of these buffers; fragment chunks and unknown
     /// route blobs, which may carry one, are `Zeroizing<Vec<u8>>` fields.
@@ -924,12 +1018,12 @@ mod tests {
         let chunk: Zeroizing<Vec<u8>> = chunk;
         assert_eq!(*chunk, [5]);
         // kind 2 is an unknown route
-        let RouteDescriptor::Unknown { blob, .. } = RouteDescriptor::decode(&[1, 2, 0, 1, 7])?
-        else {
+        let route = RouteDescriptor::decode(&[1, 2, 0, 1, 7])?;
+        let RouteDescriptor::Unknown { blob, .. } = &route else {
             return Err(Error::Rejected);
         };
-        let blob: Zeroizing<Vec<u8>> = blob;
-        assert_eq!(*blob, [7]);
+        let blob: &Zeroizing<Vec<u8>> = blob;
+        assert_eq!(**blob, [7]);
         Ok(())
     }
 
@@ -1214,6 +1308,151 @@ mod tests {
         for t in [0x00_u8, 0x01, 0x03, 0x08] {
             assert!(FragmentPayload::decode(&[t, 1, 1]).is_err(), "{t}");
         }
+        Ok(())
+    }
+}
+
+/// M4-12 (M4 review R-61): the hand-written `Zeroize` of `RelayRef`, `RelayQueue`, `RouteDescriptor` and
+/// `InvitationV1` clears every byte field, and their `Drop` runs it. A heap field (`direct.host`, an unknown route's
+/// `blob`) is wiped and then emptied, so the tests assert that it is empty (an all-zero check over an empty slice
+/// would pass whether or not it was wiped). Not wiped, by design: `direct.port` (a `NonZeroU16`, no zero value) and
+/// the periods (`period_s`, `inv_period_s`: enum values, not secrets) — M4 review C-14.
+#[cfg(test)]
+mod wipe_tests {
+    use super::*;
+    use crate::wire::Period;
+    use crate::wire::inv::InvitationV1;
+    use crate::wire::inv::tests::relay_ref;
+    use crate::wire::wipe_log;
+
+    fn all_zero(b: &[u8]) -> bool {
+        b.iter().all(|x| *x == 0)
+    }
+
+    fn relay_clear(r: &RelayRef) -> bool {
+        all_zero(&r.relay_fp)
+            && all_zero(r.onion.as_bytes())
+            && all_zero(&r.akc)
+            && r.direct
+                .as_ref()
+                .is_none_or(|d| d.host.as_bytes().is_empty() && all_zero(&d.spki_sha256))
+    }
+
+    fn queue() -> Result<RelayQueue> {
+        Ok(RelayQueue {
+            relay: relay_ref(true)?,
+            sid: [0x11; 16],
+            send_seed: SecretBytes::from_slice(&[0x22; 32])?,
+            period_s: Period::S20,
+        })
+    }
+
+    fn invitation() -> Result<InvitationV1> {
+        Ok(InvitationV1 {
+            relay: relay_ref(true)?,
+            ld_id: [5; 16],
+            link_key: SecretBytes::from_slice(&[6; 32])?,
+            inviter_fp: [7; 32],
+            inv_sid: [8; 16],
+            inv_send_seed: SecretBytes::from_slice(&[9; 32])?,
+            inv_period_s: Period::S80,
+            expires: u64::MAX,
+        })
+    }
+
+    #[test]
+    fn zeroize_clears_every_byte_field() -> Result<()> {
+        // RelayRef: relay_fp, onion, akc, direct.host (wiped and emptied), direct.spki_sha256; direct.port stays
+        let mut r = relay_ref(true)?;
+        assert!(!relay_clear(&r) && r.direct.is_some());
+        assert!(
+            r.direct
+                .as_ref()
+                .is_some_and(|d| !d.host.as_bytes().is_empty())
+        );
+        let port = r.direct.as_ref().map(|d| d.port);
+        r.zeroize();
+        assert!(relay_clear(&r));
+        assert!(
+            r.direct
+                .as_ref()
+                .is_some_and(|d| d.host.as_bytes().is_empty())
+        );
+        assert_eq!(
+            r.direct.as_ref().map(|d| d.port),
+            port,
+            "the port is not wiped"
+        );
+
+        // RelayQueue: the relay reference, sid, send_seed; period_s stays
+        let mut q = queue()?;
+        q.zeroize();
+        assert!(relay_clear(&q.relay));
+        assert!(all_zero(&q.sid));
+        assert!(all_zero(q.send_seed.expose_secret()));
+        assert!(q.period_s == Period::S20, "the period is not wiped");
+
+        // RouteDescriptor: both variants
+        let mut route = RouteDescriptor::RelayQueue(queue()?);
+        route.zeroize();
+        let RouteDescriptor::RelayQueue(q) = &route else {
+            return Err(Error::Rejected);
+        };
+        assert!(relay_clear(&q.relay) && all_zero(&q.sid) && all_zero(q.send_seed.expose_secret()));
+        let mut unknown = RouteDescriptor::Unknown {
+            kind: 7,
+            blob: Zeroizing::new(vec![0xaa; 40]),
+        };
+        unknown.zeroize();
+        let RouteDescriptor::Unknown { kind, blob } = &unknown else {
+            return Err(Error::Rejected);
+        };
+        assert_eq!(*kind, 0);
+        assert!(blob.is_empty(), "the blob is wiped and emptied");
+
+        // InvitationV1: relay, ld_id, link_key, inviter_fp, inv_sid, inv_send_seed, expires; inv_period_s stays
+        let mut inv = invitation()?;
+        inv.zeroize();
+        assert!(inv.inv_period_s == Period::S80, "the period is not wiped");
+        assert!(relay_clear(&inv.relay));
+        assert!(all_zero(&inv.ld_id) && all_zero(&inv.inviter_fp) && all_zero(&inv.inv_sid));
+        assert!(all_zero(inv.link_key.expose_secret()));
+        assert!(all_zero(inv.inv_send_seed.expose_secret()));
+        assert_eq!(inv.expires, 0);
+        Ok(())
+    }
+
+    /// The `Drop` of each type runs its wipe (no safe way to read freed memory, so the test observes the call, which
+    /// `zeroize_clears_every_byte_field` shows wipes every byte field): a dropped value, and an invitation that
+    /// `invitee_check` drops on its rejection path (expired). (Route lists dropped by a rejected `process` take the
+    /// same `Drop`; that path is not exercised here.)
+    #[test]
+    fn dropped_invitation_is_wiped() -> Result<()> {
+        wipe_log::take();
+        drop(invitation()?);
+        assert_eq!(wipe_log::take(), ["InvitationV1", "RelayRef"]);
+
+        // the rejection path: expired (step 1), the invitation is dropped inside `invitee_check`
+        let inv = invitation()?;
+        let expires = inv.expires;
+        assert_eq!(
+            crate::inv::invitee_check(inv, &[], expires).err(),
+            Some(Error::Rejected)
+        );
+        assert_eq!(wipe_log::take(), ["InvitationV1", "RelayRef"]);
+
+        drop(RouteDescriptor::RelayQueue(queue()?));
+        assert_eq!(
+            wipe_log::take(),
+            ["RouteDescriptor", "RelayQueue", "RelayRef"]
+        );
+        drop(RouteDescriptor::Unknown {
+            kind: 2,
+            blob: Zeroizing::new(vec![1]),
+        });
+        assert_eq!(wipe_log::take(), ["RouteDescriptor"]);
+        drop(relay_ref(true)?);
+        assert_eq!(wipe_log::take(), ["RelayRef"]);
         Ok(())
     }
 }

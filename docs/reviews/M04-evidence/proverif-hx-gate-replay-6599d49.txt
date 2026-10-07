@@ -1,0 +1,352 @@
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.08s
+     Running `target/debug/xtask step proverif --models hx --jobs 4`
+
+=== [10] proverif ===
+$ /Users/c.carl/coding/claude_code/SecMPro/target/tmp/pvreplay.py -help
+$ /Users/c.carl/coding/claude_code/SecMPro/target/tmp/pvreplay.py /Users/c.carl/coding/claude_code/SecMPro/xtask/fixtures/proverif/selftest.pv
+  ProVerif: 14 files, --models hx, 4 parallel processes, timeout 1800 s per file
+$ /Users/c.carl/coding/claude_code/SecMPro/target/tmp/pvreplay.py -lib /Users/c.carl/coding/claude_code/SecMPro/formal/hx.pvl /Users/c.carl/coding/claude_code/SecMPro/formal/hx/hClean.pv > /Users/c.carl/coding/claude_code/SecMPro/target/proverif/hx-hClean.log
+$ /Users/c.carl/coding/claude_code/SecMPro/target/tmp/pvreplay.py -lib /Users/c.carl/coding/claude_code/SecMPro/formal/hx.pvl /Users/c.carl/coding/claude_code/SecMPro/formal/hx/hDH.pv > /Users/c.carl/coding/claude_code/SecMPro/target/proverif/hx-hDH.log
+$ /Users/c.carl/coding/claude_code/SecMPro/target/tmp/pvreplay.py -lib /Users/c.carl/coding/claude_code/SecMPro/formal/hx.pvl /Users/c.carl/coding/claude_code/SecMPro/formal/hx/hBoth.pv > /Users/c.carl/coding/claude_code/SecMPro/target/proverif/hx-hBoth.log
+$ /Users/c.carl/coding/claude_code/SecMPro/target/tmp/pvreplay.py -lib /Users/c.carl/coding/claude_code/SecMPro/formal/hx.pvl /Users/c.carl/coding/claude_code/SecMPro/formal/hx/hFS.pv > /Users/c.carl/coding/claude_code/SecMPro/target/proverif/hx-hFS.log
+  20000 rules inserted. Base: 9019 rules (1103 with conclusion selected). Queue: 1761 rules.
+  20200 rules inserted. Base: 9063 rules (1104 with conclusion selected). Queue: 1725 rules.
+  20400 rules inserted. Base: 9216 rules (1104 with conclusion selected). Queue: 1623 rules.
+  20600 rules inserted. Base: 9370 rules (1104 with conclusion selected). Queue: 1642 rules.
+  20800 rules inserted. Base: 9396 rules (1108 with conclusion selected). Queue: 1676 rules.
+  21000 rules inserted. Base: 9425 rules (1110 with conclusion selected). Queue: 1697 rules.
+  21200 rules inserted. Base: 9457 rules (1113 with conclusion selected). Queue: 1723 rules.
+  21400 rules inserted. Base: 9513 rules (1119 with conclusion selected). Queue: 1767 rules.
+  21600 rules inserted. Base: 9543 rules (1122 with conclusion selected). Queue: 1794 rules.
+  21800 rules inserted. Base: 9581 rules (1123 with conclusion selected). Queue: 1831 rules.
+  22000 rules inserted. Base: 9670 rules (1123 with conclusion selected). Queue: 1771 rules.
+  22200 rules inserted. Base: 9831 rules (1123 with conclusion selected). Queue: 1763 rules.
+  22400 rules inserted. Base: 9896 rules (1123 with conclusion selected). Queue: 1786 rules.
+  22600 rules inserted. Base: 9945 rules (1131 with conclusion selected). Queue: 1805 rules.
+  22800 rules inserted. Base: 9950 rules (1135 with conclusion selected). Queue: 1845 rules.
+  23000 rules inserted. Base: 9988 rules (1138 with conclusion selected). Queue: 1887 rules.
+  23200 rules inserted. Base: 10024 rules (1143 with conclusion selected). Queue: 1930 rules.
+  23400 rules inserted. Base: 10053 rules (1144 with conclusion selected). Queue: 1949 rules.
+  
+  [replay of run r1: rc=TIMEOUT]
+  formal/hx/hFS.pv: FAILED after 0.1 s
+  315000 rules inserted. Base: 75855 rules (4174 with conclusion selected). Queue: 21454 rules.
+  315200 rules inserted. Base: 75823 rules (4174 with conclusion selected). Queue: 21454 rules.
+  315400 rules inserted. Base: 75925 rules (4174 with conclusion selected). Queue: 21454 rules.
+  315600 rules inserted. Base: 76031 rules (4174 with conclusion selected). Queue: 21454 rules.
+  315800 rules inserted. Base: 76119 rules (4174 with conclusion selected). Queue: 21454 rules.
+  316000 rules inserted. Base: 76221 rules (4174 with conclusion selected). Queue: 21454 rules.
+  316200 rules inserted. Base: 73700 rules (4192 with conclusion selected). Queue: 21436 rules.
+  316400 rules inserted. Base: 73654 rules (4192 with conclusion selected). Queue: 21436 rules.
+  316600 rules inserted. Base: 73596 rules (4192 with conclusion selected). Queue: 21436 rules.
+  316800 rules inserted. Base: 73510 rules (4192 with conclusion selected). Queue: 21436 rules.
+  317000 rules inserted. Base: 73458 rules (4192 with conclusion selected). Queue: 21436 rules.
+  317200 rules inserted. Base: 73364 rules (4192 with conclusion selected). Queue: 21436 rules.
+  317400 rules inserted. Base: 73230 rules (4192 with conclusion selected). Queue: 21436 rules.
+  317600 rules inserted. Base: 73112 rules (4192 with conclusion selected). Queue: 21436 rules.
+  317800 rules inserted. Base: 73060 rules (4192 with conclusion selected). Queue: 21436 rules.
+  318000 rules inserted. Base: 72974 rules (4192 with conclusion selected). Queue: 21436 rules.
+  318200 rules inserted. Base: 72886 rules (4192 with conclusion selected). Queue: 21436 rules.
+  318400 rules inserted. Base: 72756 rules (4192 with conclusion selected). Queue: 21436 rules.
+  
+  [replay of run r1: rc=TIMEOUT]
+$ /Users/c.carl/coding/claude_code/SecMPro/target/tmp/pvreplay.py -lib /Users/c.carl/coding/claude_code/SecMPro/formal/hx.pvl /Users/c.carl/coding/claude_code/SecMPro/formal/hx/hFSDH.pv > /Users/c.carl/coding/claude_code/SecMPro/target/proverif/hx-hFSDH.log
+  formal/hx/hBoth.pv: FAILED after 0.1 s
+  8400 rules inserted. Base: 6444 rules (78 with conclusion selected). Queue: 3600 rules.
+  8600 rules inserted. Base: 6408 rules (78 with conclusion selected). Queue: 3625 rules.
+  8800 rules inserted. Base: 6392 rules (78 with conclusion selected). Queue: 3646 rules.
+  9000 rules inserted. Base: 6271 rules (83 with conclusion selected). Queue: 10123 rules.
+  9200 rules inserted. Base: 6152 rules (92 with conclusion selected). Queue: 21877 rules.
+  9400 rules inserted. Base: 6284 rules (107 with conclusion selected). Queue: 41529 rules.
+  9600 rules inserted. Base: 6484 rules (107 with conclusion selected). Queue: 41379 rules.
+  9800 rules inserted. Base: 6684 rules (107 with conclusion selected). Queue: 41287 rules.
+  10000 rules inserted. Base: 6884 rules (107 with conclusion selected). Queue: 42714 rules.
+  10200 rules inserted. Base: 7084 rules (107 with conclusion selected). Queue: 42612 rules.
+  10400 rules inserted. Base: 7284 rules (107 with conclusion selected). Queue: 46604 rules.
+  10600 rules inserted. Base: 7363 rules (108 with conclusion selected). Queue: 48619 rules.
+  10800 rules inserted. Base: 7365 rules (108 with conclusion selected). Queue: 48619 rules.
+  11000 rules inserted. Base: 7365 rules (108 with conclusion selected). Queue: 48619 rules.
+  11200 rules inserted. Base: 7379 rules (108 with conclusion selected). Queue: 49639 rules.
+  11400 rules inserted. Base: 7333 rules (108 with conclusion selected). Queue: 49639 rules.
+  11600 rules inserted. Base: 7306 rules (108 with conclusion selected). Queue: 50455 rules.
+  11800 rules inserted. Base: 7259 rules (108 with conclusion selected). Queue: 50455 rules.
+  
+  [replay of run r1: rc=TIMEOUT]
+$ /Users/c.carl/coding/claude_code/SecMPro/target/tmp/pvreplay.py -lib /Users/c.carl/coding/claude_code/SecMPro/formal/hx.pvl /Users/c.carl/coding/claude_code/SecMPro/formal/hx/hFSOPK.pv > /Users/c.carl/coding/claude_code/SecMPro/target/proverif/hx-hFSOPK.log
+  formal/hx/hClean.pv: FAILED after 0.1 s
+  8400 rules inserted. Base: 6480 rules (94 with conclusion selected). Queue: 3585 rules.
+  8600 rules inserted. Base: 6433 rules (94 with conclusion selected). Queue: 3630 rules.
+  8800 rules inserted. Base: 6435 rules (94 with conclusion selected). Queue: 3655 rules.
+  9000 rules inserted. Base: 6314 rules (99 with conclusion selected). Queue: 10153 rules.
+  9200 rules inserted. Base: 6197 rules (108 with conclusion selected). Queue: 21952 rules.
+  9400 rules inserted. Base: 6284 rules (127 with conclusion selected). Queue: 41739 rules.
+  9600 rules inserted. Base: 6484 rules (127 with conclusion selected). Queue: 41577 rules.
+  9800 rules inserted. Base: 6684 rules (127 with conclusion selected). Queue: 41474 rules.
+  10000 rules inserted. Base: 6884 rules (127 with conclusion selected). Queue: 42784 rules.
+  10200 rules inserted. Base: 7084 rules (127 with conclusion selected). Queue: 42784 rules.
+  10400 rules inserted. Base: 7284 rules (127 with conclusion selected). Queue: 46601 rules.
+  10600 rules inserted. Base: 7393 rules (128 with conclusion selected). Queue: 48799 rules.
+  10800 rules inserted. Base: 7395 rules (128 with conclusion selected). Queue: 48799 rules.
+  11000 rules inserted. Base: 7395 rules (128 with conclusion selected). Queue: 48799 rules.
+  11200 rules inserted. Base: 7420 rules (128 with conclusion selected). Queue: 49819 rules.
+  11400 rules inserted. Base: 7366 rules (128 with conclusion selected). Queue: 49819 rules.
+  11600 rules inserted. Base: 7346 rules (128 with conclusion selected). Queue: 50635 rules.
+  11800 rules inserted. Base: 7299 rules (128 with conclusion selected). Queue: 50635 rules.
+  
+  [replay of run r1: rc=TIMEOUT]
+$ /Users/c.carl/coding/claude_code/SecMPro/target/tmp/pvreplay.py -lib /Users/c.carl/coding/claude_code/SecMPro/formal/hx.pvl /Users/c.carl/coding/claude_code/SecMPro/formal/hx/hId.pv > /Users/c.carl/coding/claude_code/SecMPro/target/proverif/hx-hId.log
+  formal/hx/hDH.pv: FAILED after 0.1 s
+$ /Users/c.carl/coding/claude_code/SecMPro/target/tmp/pvreplay.py -lib /Users/c.carl/coding/claude_code/SecMPro/formal/hx.pvl /Users/c.carl/coding/claude_code/SecMPro/formal/hx/hIdLater.pv > /Users/c.carl/coding/claude_code/SecMPro/target/proverif/hx-hIdLater.log
+  24600 rules inserted. Base: 9888 rules (1124 with conclusion selected). Queue: 2778 rules.
+  24800 rules inserted. Base: 9939 rules (1124 with conclusion selected). Queue: 2873 rules.
+  25000 rules inserted. Base: 9971 rules (1124 with conclusion selected). Queue: 2844 rules.
+  25200 rules inserted. Base: 9999 rules (1128 with conclusion selected). Queue: 2815 rules.
+  25400 rules inserted. Base: 10027 rules (1129 with conclusion selected). Queue: 2795 rules.
+  25600 rules inserted. Base: 10059 rules (1130 with conclusion selected). Queue: 2779 rules.
+  25800 rules inserted. Base: 10125 rules (1138 with conclusion selected). Queue: 2846 rules.
+  26000 rules inserted. Base: 10262 rules (1138 with conclusion selected). Queue: 2808 rules.
+  26200 rules inserted. Base: 10345 rules (1138 with conclusion selected). Queue: 2933 rules.
+  26400 rules inserted. Base: 10494 rules (1138 with conclusion selected). Queue: 2953 rules.
+  26600 rules inserted. Base: 10524 rules (1139 with conclusion selected). Queue: 2987 rules.
+  26800 rules inserted. Base: 10570 rules (1143 with conclusion selected). Queue: 3037 rules.
+  27000 rules inserted. Base: 10580 rules (1145 with conclusion selected). Queue: 3053 rules.
+  27200 rules inserted. Base: 10617 rules (1148 with conclusion selected). Queue: 3055 rules.
+  27400 rules inserted. Base: 10669 rules (1149 with conclusion selected). Queue: 3071 rules.
+  21200 rules inserted. Base: 9303 rules (1122 with conclusion selected). Queue: 1897 rules.
+  21400 rules inserted. Base: 9436 rules (1122 with conclusion selected). Queue: 1917 rules.
+  21600 rules inserted. Base: 9466 rules (1126 with conclusion selected). Queue: 1952 rules.
+  21800 rules inserted. Base: 9559 rules (1126 with conclusion selected). Queue: 1981 rules.
+  22000 rules inserted. Base: 9563 rules (1130 with conclusion selected). Queue: 1999 rules.
+  22200 rules inserted. Base: 9612 rules (1134 with conclusion selected). Queue: 2041 rules.
+  22400 rules inserted. Base: 9654 rules (1139 with conclusion selected). Queue: 2065 rules.
+  22600 rules inserted. Base: 9686 rules (1140 with conclusion selected). Queue: 2078 rules.
+  22800 rules inserted. Base: 9704 rules (1141 with conclusion selected). Queue: 2117 rules.
+  23000 rules inserted. Base: 9839 rules (1141 with conclusion selected). Queue: 2024 rules.
+  23200 rules inserted. Base: 9975 rules (1141 with conclusion selected). Queue: 2034 rules.
+  23400 rules inserted. Base: 10070 rules (1141 with conclusion selected). Queue: 2045 rules.
+  23600 rules inserted. Base: 10141 rules (1149 with conclusion selected). Queue: 2085 rules.
+  23800 rules inserted. Base: 10211 rules (1151 with conclusion selected). Queue: 2066 rules.
+  24000 rules inserted. Base: 10206 rules (1154 with conclusion selected). Queue: 2105 rules.
+  24200 rules inserted. Base: 10243 rules (1157 with conclusion selected). Queue: 2155 rules.
+  24400 rules inserted. Base: 10272 rules (1161 with conclusion selected). Queue: 2190 rules.
+  24600 rules inserted. Base: 10309 rules (1163 with conclusion selected). Queue: 2201 rules.
+  
+  [replay of run r1: rc=TIMEOUT]
+  27600 rules inserted. Base: 10733 rules (1153 with conclusion selected). Queue: 3085 rules.
+  formal/hx/hFSOPK.pv: FAILED after 0.1 s
+  27800 rules inserted. Base: 10769 rules (1155 with conclusion selected). Queue: 3094 rules.
+  28000 rules inserted. Base: 10784 rules (1160 with conclusion selected). Queue: 3080 rules.
+  
+  [replay of run r1: rc=TIMEOUT]
+  formal/hx/hFSDH.pv: FAILED after 0.1 s
+  formal/hx/hId.pv: finished after 0.1 s
+  formal/hx/hIdLater.pv: finished after 0.1 s
+$ /Users/c.carl/coding/claude_code/SecMPro/target/tmp/pvreplay.py -lib /Users/c.carl/coding/claude_code/SecMPro/formal/hx.pvl /Users/c.carl/coding/claude_code/SecMPro/formal/hx/hIdLaterOPK.pv > /Users/c.carl/coding/claude_code/SecMPro/target/proverif/hx-hIdLaterOPK.log
+$ /Users/c.carl/coding/claude_code/SecMPro/target/tmp/pvreplay.py -lib /Users/c.carl/coding/claude_code/SecMPro/formal/hx.pvl /Users/c.carl/coding/claude_code/SecMPro/formal/hx/hIdThief.pv > /Users/c.carl/coding/claude_code/SecMPro/target/proverif/hx-hIdThief.log
+$ /Users/c.carl/coding/claude_code/SecMPro/target/tmp/pvreplay.py -lib /Users/c.carl/coding/claude_code/SecMPro/formal/hx.pvl /Users/c.carl/coding/claude_code/SecMPro/formal/hx/hKCIi.pv > /Users/c.carl/coding/claude_code/SecMPro/target/proverif/hx-hKCIi.log
+$ /Users/c.carl/coding/claude_code/SecMPro/target/tmp/pvreplay.py -lib /Users/c.carl/coding/claude_code/SecMPro/formal/hx.pvl /Users/c.carl/coding/claude_code/SecMPro/formal/hx/hKCI.pv > /Users/c.carl/coding/claude_code/SecMPro/target/proverif/hx-hKCI.log
+  formal/hx/hIdLaterOPK.pv: finished after 0.1 s
+  formal/hx/hKCIi.pv: finished after 0.1 s
+  formal/hx/hIdThief.pv: finished after 0.1 s
+$ /Users/c.carl/coding/claude_code/SecMPro/target/tmp/pvreplay.py -lib /Users/c.carl/coding/claude_code/SecMPro/formal/hx.pvl /Users/c.carl/coding/claude_code/SecMPro/formal/hx/hKCIlt.pv > /Users/c.carl/coding/claude_code/SecMPro/target/proverif/hx-hKCIlt.log
+$ /Users/c.carl/coding/claude_code/SecMPro/target/tmp/pvreplay.py -lib /Users/c.carl/coding/claude_code/SecMPro/formal/hx.pvl /Users/c.carl/coding/claude_code/SecMPro/formal/hx/hKEM.pv > /Users/c.carl/coding/claude_code/SecMPro/target/proverif/hx-hKEM.log
+  8400 rules inserted. Base: 6449 rules (80 with conclusion selected). Queue: 3600 rules.
+  8600 rules inserted. Base: 6410 rules (80 with conclusion selected). Queue: 3625 rules.
+  8800 rules inserted. Base: 6397 rules (80 with conclusion selected). Queue: 3646 rules.
+  9000 rules inserted. Base: 6276 rules (85 with conclusion selected). Queue: 10123 rules.
+  9200 rules inserted. Base: 6157 rules (94 with conclusion selected). Queue: 21877 rules.
+  9400 rules inserted. Base: 6283 rules (109 with conclusion selected). Queue: 41532 rules.
+  9600 rules inserted. Base: 6483 rules (109 with conclusion selected). Queue: 41382 rules.
+  9800 rules inserted. Base: 6683 rules (109 with conclusion selected). Queue: 41287 rules.
+  10000 rules inserted. Base: 6883 rules (109 with conclusion selected). Queue: 42717 rules.
+  10200 rules inserted. Base: 7083 rules (109 with conclusion selected). Queue: 42579 rules.
+  10400 rules inserted. Base: 7283 rules (109 with conclusion selected). Queue: 46605 rules.
+  10600 rules inserted. Base: 7365 rules (110 with conclusion selected). Queue: 48619 rules.
+  10800 rules inserted. Base: 7367 rules (110 with conclusion selected). Queue: 48619 rules.
+  11000 rules inserted. Base: 7367 rules (110 with conclusion selected). Queue: 48619 rules.
+  11200 rules inserted. Base: 7382 rules (110 with conclusion selected). Queue: 49639 rules.
+  11400 rules inserted. Base: 7335 rules (110 with conclusion selected). Queue: 49639 rules.
+  11600 rules inserted. Base: 7310 rules (110 with conclusion selected). Queue: 50455 rules.
+  11800 rules inserted. Base: 7262 rules (110 with conclusion selected). Queue: 50455 rules.
+  
+  [replay of run r1: rc=TIMEOUT]
+  formal/hx/hKCI.pv: FAILED after 0.1 s
+  8400 rules inserted. Base: 6447 rules (79 with conclusion selected). Queue: 3600 rules.
+  8600 rules inserted. Base: 6409 rules (79 with conclusion selected). Queue: 3625 rules.
+  8800 rules inserted. Base: 6395 rules (79 with conclusion selected). Queue: 3646 rules.
+  9000 rules inserted. Base: 6274 rules (84 with conclusion selected). Queue: 10123 rules.
+  9200 rules inserted. Base: 6155 rules (93 with conclusion selected). Queue: 21877 rules.
+  9400 rules inserted. Base: 6283 rules (108 with conclusion selected). Queue: 41531 rules.
+  9600 rules inserted. Base: 6483 rules (108 with conclusion selected). Queue: 41397 rules.
+  9800 rules inserted. Base: 6683 rules (108 with conclusion selected). Queue: 41291 rules.
+  10000 rules inserted. Base: 6883 rules (108 with conclusion selected). Queue: 42716 rules.
+  10200 rules inserted. Base: 7083 rules (108 with conclusion selected). Queue: 42580 rules.
+  10400 rules inserted. Base: 7283 rules (108 with conclusion selected). Queue: 46605 rules.
+  10600 rules inserted. Base: 7364 rules (109 with conclusion selected). Queue: 48619 rules.
+  10800 rules inserted. Base: 7366 rules (109 with conclusion selected). Queue: 48619 rules.
+  11000 rules inserted. Base: 7366 rules (109 with conclusion selected). Queue: 48619 rules.
+  11200 rules inserted. Base: 7381 rules (109 with conclusion selected). Queue: 49639 rules.
+  11400 rules inserted. Base: 7334 rules (109 with conclusion selected). Queue: 49639 rules.
+  11600 rules inserted. Base: 7308 rules (109 with conclusion selected). Queue: 50455 rules.
+  11800 rules inserted. Base: 7260 rules (109 with conclusion selected). Queue: 50455 rules.
+  
+  [replay of run r1: rc=TIMEOUT]
+  8400 rules inserted. Base: 6452 rules (79 with conclusion selected). Queue: 3600 rules.
+  8600 rules inserted. Base: 6412 rules (79 with conclusion selected). Queue: 3625 rules.
+  8800 rules inserted. Base: 6400 rules (79 with conclusion selected). Queue: 3646 rules.
+  formal/hx/hKCIlt.pv: FAILED after 0.1 s
+  9000 rules inserted. Base: 6279 rules (84 with conclusion selected). Queue: 10123 rules.
+  9200 rules inserted. Base: 6160 rules (93 with conclusion selected). Queue: 21877 rules.
+  9400 rules inserted. Base: 6284 rules (108 with conclusion selected). Queue: 41533 rules.
+  9600 rules inserted. Base: 6484 rules (108 with conclusion selected). Queue: 41383 rules.
+  9800 rules inserted. Base: 6684 rules (108 with conclusion selected). Queue: 41287 rules.
+  10000 rules inserted. Base: 6884 rules (108 with conclusion selected). Queue: 42718 rules.
+  10200 rules inserted. Base: 7084 rules (108 with conclusion selected). Queue: 42580 rules.
+  10400 rules inserted. Base: 7284 rules (108 with conclusion selected). Queue: 46606 rules.
+  10600 rules inserted. Base: 7368 rules (110 with conclusion selected). Queue: 48618 rules.
+  10800 rules inserted. Base: 7371 rules (111 with conclusion selected). Queue: 48617 rules.
+  11000 rules inserted. Base: 7371 rules (111 with conclusion selected). Queue: 48617 rules.
+  11200 rules inserted. Base: 7387 rules (111 with conclusion selected). Queue: 49637 rules.
+  11400 rules inserted. Base: 7339 rules (111 with conclusion selected). Queue: 49637 rules.
+  11600 rules inserted. Base: 7313 rules (111 with conclusion selected). Queue: 50453 rules.
+  11800 rules inserted. Base: 7267 rules (111 with conclusion selected). Queue: 50453 rules.
+  
+  [replay of run r1: rc=TIMEOUT]
+  formal/hx/hKEM.pv: FAILED after 0.1 s
+  formal/hx/hId.pv: 7 RESULT lines as expected — H7a true ×2, H11 false ×4, H6a true ×1 (0.1 s)
+  formal/hx/hIdLater.pv: 6 RESULT lines as expected — H7c true ×2, H11 false ×4 (0.1 s)
+  formal/hx/hIdLaterOPK.pv: 6 RESULT lines as expected — H7d false ×2, H11 false ×4 (0.1 s)
+  formal/hx/hIdThief.pv: 6 RESULT lines as expected — H7b true ×2, H11 false ×4 (0.1 s)
+  formal/hx/hKCIi.pv: 5 RESULT lines as expected — H9c true ×1, H11 false ×4 (0.1 s)
+ProVerif 2.05 gate: --models hx, 4 parallel processes, timeout 1800 s per file
+sha256 of the model files:
+09ba6cbb57f05de142cc18cdae2694c826ea7ecdf03b411c505945492957a1ef  formal/tr.pv
+f358ca8ea48f2e7c45cf0303a436e43f9f2a3ba72b180100805bab4c9ebeceff  formal/hx.pvl
+28a249a02493f52d888864a686948824c0c652789ce1564b0fb99bfd4b156218  formal/hx/hBoth.pv
+0355254e2bcbac09e547061eb7a3317f4b5ced842d7ac9cd68160ee0a5a724b0  formal/hx/hClean.pv
+23b033c066a918a220f3ce4021b1045d7498890bc46edbe31f072fa3c63d3766  formal/hx/hDH.pv
+fb5ff650dd3570a1d1943395259fb9a3cfaf684ea6b43f653b3dff16aaf10855  formal/hx/hFS.pv
+17dd940d5422c0ad6dd7e38d89f4936c07aa55311170764f387b8564a46e3919  formal/hx/hFSDH.pv
+43bb4318fe085741d55ba8c81563d9be96da4845dca660416a9f122e962018f3  formal/hx/hFSOPK.pv
+4ed5e5205221c86e6466f090eb6f633341ddc6958b967ead56406d996fda3c52  formal/hx/hId.pv
+2c6b2265c7b7af98682cd63aac9daf20918cadeab2377c814d88c954d98d53fa  formal/hx/hIdLater.pv
+43b483e056a221ca357ade4989739caeaaaffad0a2e9eb7b61b3a217b956b85e  formal/hx/hIdLaterOPK.pv
+a2c855940c688a0481ea7267e45f3314c898c68c749de8111975984c4f48abe5  formal/hx/hIdThief.pv
+fc70898b313603613118e602311bcb399812689004c19bbbb5a12c5b8ff6fb7e  formal/hx/hKCI.pv
+28dc6ca7f2a026459102789300e3262a2444a930a0159fcf3e83db0d2392d102  formal/hx/hKCIi.pv
+06860df0cbcefbb5c8a8a40c3ac1224d09435c7d22e26cdad6139e592bc766c5  formal/hx/hKCIlt.pv
+6ecd51cc7f546900b7b255dc422e480ebb6ce1f75b99816c87e97bfd72498824  formal/hx/hKEM.pv
+per file: RESULT lines, "secrecy assumption verified" lines, wall time, verdict:
+formal/hx/hBoth.pv: 0 RESULT lines, 0 secrecy assumptions verified, wall 0.1 s, FAIL: formal/hx/hBoth.pv: ProVerif failed (exit status: 1); log /Users/c.carl/coding/claude_code/SecMPro/target/proverif/hx-hBoth.log
+formal/hx/hClean.pv: 0 RESULT lines, 0 secrecy assumptions verified, wall 0.1 s, FAIL: formal/hx/hClean.pv: ProVerif failed (exit status: 1); log /Users/c.carl/coding/claude_code/SecMPro/target/proverif/hx-hClean.log
+formal/hx/hDH.pv: 0 RESULT lines, 0 secrecy assumptions verified, wall 0.1 s, FAIL: formal/hx/hDH.pv: ProVerif failed (exit status: 1); log /Users/c.carl/coding/claude_code/SecMPro/target/proverif/hx-hDH.log
+formal/hx/hFS.pv: 0 RESULT lines, 0 secrecy assumptions verified, wall 0.1 s, FAIL: formal/hx/hFS.pv: ProVerif failed (exit status: 1); log /Users/c.carl/coding/claude_code/SecMPro/target/proverif/hx-hFS.log
+formal/hx/hFSDH.pv: 0 RESULT lines, 0 secrecy assumptions verified, wall 0.1 s, FAIL: formal/hx/hFSDH.pv: ProVerif failed (exit status: 1); log /Users/c.carl/coding/claude_code/SecMPro/target/proverif/hx-hFSDH.log
+formal/hx/hFSOPK.pv: 0 RESULT lines, 0 secrecy assumptions verified, wall 0.1 s, FAIL: formal/hx/hFSOPK.pv: ProVerif failed (exit status: 1); log /Users/c.carl/coding/claude_code/SecMPro/target/proverif/hx-hFSOPK.log
+formal/hx/hId.pv: 7 RESULT lines, 26 secrecy assumptions verified, wall 0.1 s, PASS
+formal/hx/hIdLater.pv: 6 RESULT lines, 19 secrecy assumptions verified, wall 0.1 s, PASS
+formal/hx/hIdLaterOPK.pv: 6 RESULT lines, 15 secrecy assumptions verified, wall 0.1 s, PASS
+formal/hx/hIdThief.pv: 6 RESULT lines, 13 secrecy assumptions verified, wall 0.1 s, PASS
+formal/hx/hKCI.pv: 0 RESULT lines, 0 secrecy assumptions verified, wall 0.1 s, FAIL: formal/hx/hKCI.pv: ProVerif failed (exit status: 1); log /Users/c.carl/coding/claude_code/SecMPro/target/proverif/hx-hKCI.log
+formal/hx/hKCIi.pv: 5 RESULT lines, 11 secrecy assumptions verified, wall 0.1 s, PASS
+formal/hx/hKCIlt.pv: 0 RESULT lines, 0 secrecy assumptions verified, wall 0.1 s, FAIL: formal/hx/hKCIlt.pv: ProVerif failed (exit status: 1); log /Users/c.carl/coding/claude_code/SecMPro/target/proverif/hx-hKCIlt.log
+formal/hx/hKEM.pv: 0 RESULT lines, 0 secrecy assumptions verified, wall 0.1 s, FAIL: formal/hx/hKEM.pv: ProVerif failed (exit status: 1); log /Users/c.carl/coding/claude_code/SecMPro/target/proverif/hx-hKEM.log
+FAIL [10] proverif: 9 of 14 ProVerif files failed: formal/hx/hBoth.pv: ProVerif failed (exit status: 1); log /Users/c.carl/coding/claude_code/SecMPro/target/proverif/hx-hBoth.log; formal/hx/hClean.pv: ProVerif failed (exit status: 1); log /Users/c.carl/coding/claude_code/SecMPro/target/proverif/hx-hClean.log; formal/hx/hDH.pv: ProVerif failed (exit status: 1); log /Users/c.carl/coding/claude_code/SecMPro/target/proverif/hx-hDH.log; formal/hx/hFS.pv: ProVerif failed (exit status: 1); log /Users/c.carl/coding/claude_code/SecMPro/target/proverif/hx-hFS.log; formal/hx/hFSDH.pv: ProVerif failed (exit status: 1); log /Users/c.carl/coding/claude_code/SecMPro/target/proverif/hx-hFSDH.log; formal/hx/hFSOPK.pv: ProVerif failed (exit status: 1); log /Users/c.carl/coding/claude_code/SecMPro/target/proverif/hx-hFSOPK.log; formal/hx/hKCI.pv: ProVerif failed (exit status: 1); log /Users/c.carl/coding/claude_code/SecMPro/target/proverif/hx-hKCI.log; formal/hx/hKCIlt.pv: ProVerif failed (exit status: 1); log /Users/c.carl/coding/claude_code/SecMPro/target/proverif/hx-hKCIlt.log; formal/hx/hKEM.pv: ProVerif failed (exit status: 1); log /Users/c.carl/coding/claude_code/SecMPro/target/proverif/hx-hKEM.log
+### gate `proverif`
+
+| item | verdict |
+|---|---|
+| status | FAIL (1 s) |
+| line 1 | 9 of 14 ProVerif files failed: formal/hx/hBoth.pv: ProVerif failed (exit status: 1) |
+| line 2 | log /Users/c.carl/coding/claude_code/SecMPro/target/proverif/hx-hBoth.log |
+| line 3 | formal/hx/hClean.pv: ProVerif failed (exit status: 1) |
+| line 4 | log /Users/c.carl/coding/claude_code/SecMPro/target/proverif/hx-hClean.log |
+| line 5 | formal/hx/hDH.pv: ProVerif failed (exit status: 1) |
+| line 6 | log /Users/c.carl/coding/claude_code/SecMPro/target/proverif/hx-hDH.log |
+| line 7 | formal/hx/hFS.pv: ProVerif failed (exit status: 1) |
+| line 8 | log /Users/c.carl/coding/claude_code/SecMPro/target/proverif/hx-hFS.log |
+| line 9 | formal/hx/hFSDH.pv: ProVerif failed (exit status: 1) |
+| line 10 | log /Users/c.carl/coding/claude_code/SecMPro/target/proverif/hx-hFSDH.log |
+| line 11 | formal/hx/hFSOPK.pv: ProVerif failed (exit status: 1) |
+| line 12 | log /Users/c.carl/coding/claude_code/SecMPro/target/proverif/hx-hFSOPK.log |
+| line 13 | formal/hx/hKCI.pv: ProVerif failed (exit status: 1) |
+| line 14 | log /Users/c.carl/coding/claude_code/SecMPro/target/proverif/hx-hKCI.log |
+| line 15 | formal/hx/hKCIlt.pv: ProVerif failed (exit status: 1) |
+| line 16 | log /Users/c.carl/coding/claude_code/SecMPro/target/proverif/hx-hKCIlt.log |
+| line 17 | formal/hx/hKEM.pv: ProVerif failed (exit status: 1) |
+| line 18 | log /Users/c.carl/coding/claude_code/SecMPro/target/proverif/hx-hKEM.log |
+
+
+### ProVerif results (per file and CLAIMS ID)
+
+| file | ID | verdict | expected | wall time of the file | sha256 |
+| --- | --- | --- | --- | --- | --- |
+| formal/hx/hBoth.pv | H4 | no result ×1 | false ×1 | 0.1 s | 28a249a02493 |
+| formal/hx/hBoth.pv | H11 | no result ×4 | false ×4 | 0.1 s | 28a249a02493 |
+| formal/hx/hClean.pv | H1 (i) | no result ×1 | true ×1 | 0.1 s | 0355254e2bcb |
+| formal/hx/hClean.pv | H1 (ii) | no result ×1 | true ×1 | 0.1 s | 0355254e2bcb |
+| formal/hx/hClean.pv | H11 | no result ×4 | false ×4 | 0.1 s | 0355254e2bcb |
+| formal/hx/hClean.pv | H6a | no result ×1 | true ×1 | 0.1 s | 0355254e2bcb |
+| formal/hx/hClean.pv | H5 | no result ×1 | true ×1 | 0.1 s | 0355254e2bcb |
+| formal/hx/hClean.pv | H6b | no result ×1 | true ×1 | 0.1 s | 0355254e2bcb |
+| formal/hx/hClean.pv | H10 | no result ×1 | true ×1 | 0.1 s | 0355254e2bcb |
+| formal/hx/hDH.pv | H2 (i) | no result ×1 | true ×1 | 0.1 s | 23b033c066a9 |
+| formal/hx/hDH.pv | H2 (ii) | no result ×1 | true ×1 | 0.1 s | 23b033c066a9 |
+| formal/hx/hDH.pv | H11 | no result ×4 | false ×4 | 0.1 s | 23b033c066a9 |
+| formal/hx/hDH.pv | H8 | no result ×1 | false ×1 | 0.1 s | 23b033c066a9 |
+| formal/hx/hFS.pv | H11 | no result ×4 | false ×4 | 0.1 s | fb5ff650dd35 |
+| formal/hx/hFS.pv | H12 (i) | no result ×1 | true ×1 | 0.1 s | fb5ff650dd35 |
+| formal/hx/hFS.pv | H12 (ii) | no result ×1 | true ×1 | 0.1 s | fb5ff650dd35 |
+| formal/hx/hFSDH.pv | H11 | no result ×4 | false ×4 | 0.1 s | 17dd940d5422 |
+| formal/hx/hFSDH.pv | H12c (i) | no result ×1 | true ×1 | 0.1 s | 17dd940d5422 |
+| formal/hx/hFSDH.pv | H12c (ii) | no result ×1 | true ×1 | 0.1 s | 17dd940d5422 |
+| formal/hx/hFSOPK.pv | H11 | no result ×4 | false ×4 | 0.1 s | 43bb4318fe08 |
+| formal/hx/hFSOPK.pv | H12b (i) | no result ×1 | false ×1 | 0.1 s | 43bb4318fe08 |
+| formal/hx/hFSOPK.pv | H12b (ii) | no result ×1 | false ×1 | 0.1 s | 43bb4318fe08 |
+| formal/hx/hId.pv | H7a | true ×2 | true ×2 | 0.1 s | 4ed5e5205221 |
+| formal/hx/hId.pv | H11 | false ×4 | false ×4 | 0.1 s | 4ed5e5205221 |
+| formal/hx/hId.pv | H6a | true ×1 | true ×1 | 0.1 s | 4ed5e5205221 |
+| formal/hx/hIdLater.pv | H7c | true ×2 | true ×2 | 0.1 s | 2c6b2265c7b7 |
+| formal/hx/hIdLater.pv | H11 | false ×4 | false ×4 | 0.1 s | 2c6b2265c7b7 |
+| formal/hx/hIdLaterOPK.pv | H7d | false ×2 | false ×2 | 0.1 s | 43b483e056a2 |
+| formal/hx/hIdLaterOPK.pv | H11 | false ×4 | false ×4 | 0.1 s | 43b483e056a2 |
+| formal/hx/hIdThief.pv | H7b | true ×2 | true ×2 | 0.1 s | a2c855940c68 |
+| formal/hx/hIdThief.pv | H11 | false ×4 | false ×4 | 0.1 s | a2c855940c68 |
+| formal/hx/hKCI.pv | H11 | no result ×4 | false ×4 | 0.1 s | fc70898b3136 |
+| formal/hx/hKCI.pv | H9 | no result ×1 | false ×1 | 0.1 s | fc70898b3136 |
+| formal/hx/hKCIi.pv | H9c | true ×1 | true ×1 | 0.1 s | 28dc6ca7f2a0 |
+| formal/hx/hKCIi.pv | H11 | false ×4 | false ×4 | 0.1 s | 28dc6ca7f2a0 |
+| formal/hx/hKCIlt.pv | H11 | no result ×4 | false ×4 | 0.1 s | 06860df0cbce |
+| formal/hx/hKCIlt.pv | H9b | no result ×1 | true ×1 | 0.1 s | 06860df0cbce |
+| formal/hx/hKEM.pv | H3 (i) | no result ×1 | true ×1 | 0.1 s | 6ecd51cc7f54 |
+| formal/hx/hKEM.pv | H3 (ii) | no result ×1 | true ×1 | 0.1 s | 6ecd51cc7f54 |
+| formal/hx/hKEM.pv | H11 | no result ×4 | false ×4 | 0.1 s | 6ecd51cc7f54 |
+| formal/hx/hKEM.pv | H5 | no result ×1 | true ×1 | 0.1 s | 6ecd51cc7f54 |
+
+
+### ProVerif models
+
+| item | verdict |
+|---|---|
+| formal/tr.pv | sha256 09ba6cbb57f05de142cc18cdae2694c826ea7ecdf03b411c505945492957a1ef |
+| formal/hx.pvl | sha256 f358ca8ea48f2e7c45cf0303a436e43f9f2a3ba72b180100805bab4c9ebeceff |
+| formal/hx/hBoth.pv | sha256 28a249a02493f52d888864a686948824c0c652789ce1564b0fb99bfd4b156218 |
+| formal/hx/hClean.pv | sha256 0355254e2bcbac09e547061eb7a3317f4b5ced842d7ac9cd68160ee0a5a724b0 |
+| formal/hx/hDH.pv | sha256 23b033c066a918a220f3ce4021b1045d7498890bc46edbe31f072fa3c63d3766 |
+| formal/hx/hFS.pv | sha256 fb5ff650dd3570a1d1943395259fb9a3cfaf684ea6b43f653b3dff16aaf10855 |
+| formal/hx/hFSDH.pv | sha256 17dd940d5422c0ad6dd7e38d89f4936c07aa55311170764f387b8564a46e3919 |
+| formal/hx/hFSOPK.pv | sha256 43bb4318fe085741d55ba8c81563d9be96da4845dca660416a9f122e962018f3 |
+| formal/hx/hId.pv | sha256 4ed5e5205221c86e6466f090eb6f633341ddc6958b967ead56406d996fda3c52 |
+| formal/hx/hIdLater.pv | sha256 2c6b2265c7b7af98682cd63aac9daf20918cadeab2377c814d88c954d98d53fa |
+| formal/hx/hIdLaterOPK.pv | sha256 43b483e056a221ca357ade4989739caeaaaffad0a2e9eb7b61b3a217b956b85e |
+| formal/hx/hIdThief.pv | sha256 a2c855940c688a0481ea7267e45f3314c898c68c749de8111975984c4f48abe5 |
+| formal/hx/hKCI.pv | sha256 fc70898b313603613118e602311bcb399812689004c19bbbb5a12c5b8ff6fb7e |
+| formal/hx/hKCIi.pv | sha256 28dc6ca7f2a026459102789300e3262a2444a930a0159fcf3e83db0d2392d102 |
+| formal/hx/hKCIlt.pv | sha256 06860df0cbcefbb5c8a8a40c3ac1224d09435c7d22e26cdad6139e592bc766c5 |
+| formal/hx/hKEM.pv | sha256 6ecd51cc7f546900b7b255dc422e480ebb6ce1f75b99816c87e97bfd72498824 |
+
+
+
+=== step summary (host aarch64-apple-darwin, strict: false) ===
+  10 proverif        FAIL          1s  9 of 14 ProVerif files failed: formal/hx/hBoth.pv: ProVerif failed (exit status: 1); log /Users/c.carl/coding/claude_code/SecMPro/target/proverif/hx-hBoth.log; formal/hx/hClean.pv: ProVerif failed (exit status: 1); log /Users/c.carl/coding/claude_code/SecMPro/target/proverif/hx-hClean.log; formal/hx/hDH.pv: ProVerif failed (exit status: 1); log /Users/c.carl/coding/claude_code/SecMPro/target/proverif/hx-hDH.log; formal/hx/hFS.pv: ProVerif failed (exit status: 1); log /Users/c.carl/coding/claude_code/SecMPro/target/proverif/hx-hFS.log; formal/hx/hFSDH.pv: ProVerif failed (exit status: 1); log /Users/c.carl/coding/claude_code/SecMPro/target/proverif/hx-hFSDH.log; formal/hx/hFSOPK.pv: ProVerif failed (exit status: 1); log /Users/c.carl/coding/claude_code/SecMPro/target/proverif/hx-hFSOPK.log; formal/hx/hKCI.pv: ProVerif failed (exit status: 1); log /Users/c.carl/coding/claude_code/SecMPro/target/proverif/hx-hKCI.log; formal/hx/hKCIlt.pv: ProVerif failed (exit status: 1); log /Users/c.carl/coding/claude_code/SecMPro/target/proverif/hx-hKCIlt.log; formal/hx/hKEM.pv: ProVerif failed (exit status: 1); log /Users/c.carl/coding/claude_code/SecMPro/target/proverif/hx-hKEM.log
+xtask: error: step: 1 step(s) failed

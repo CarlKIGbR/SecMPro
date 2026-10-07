@@ -1,0 +1,92 @@
+# cargo xtask step proverif --models tr (models as of 6599d49; ProVerif 2.05, this Mac, other ProVerif runs alongside)
+# sha256 formal/tr.pv 09ba6cbb57f05de142cc18cdae2694c826ea7ecdf03b411c505945492957a1ef
+
+   Compiling xtask v0.0.0 (/Users/c.carl/coding/claude_code/SecMPro/xtask)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.64s
+     Running `target/debug/xtask step proverif --models tr`
+
+=== [10] proverif ===
+$ proverif -help
+$ proverif /Users/c.carl/coding/claude_code/SecMPro/xtask/fixtures/proverif/selftest.pv
+  ProVerif: 1 files, --models tr, 4 parallel processes, timeout 1800 s per file
+$ proverif /Users/c.carl/coding/claude_code/SecMPro/formal/tr.pv > /Users/c.carl/coding/claude_code/SecMPro/target/proverif/tr.log
+  formal/tr.pv: finished after 87.4 s
+  formal/tr.pv: 46 RESULT lines as expected — T1 true ×6, T2 true ×2, T3 true ×4, T4 true ×2, T5 true ×2, T6 true ×2, T7 false ×2, an attack as expected, T8 true ×12, T9 true ×4, T10 false ×1, an attack as expected, T11 true ×1, T12 false ×1, informative, T13 false ×7, an attack as expected (87.4 s)
+ProVerif 2.05 gate: --models tr, 4 parallel processes, timeout 1800 s per file
+sha256 of the model files:
+09ba6cbb57f05de142cc18cdae2694c826ea7ecdf03b411c505945492957a1ef  formal/tr.pv
+f358ca8ea48f2e7c45cf0303a436e43f9f2a3ba72b180100805bab4c9ebeceff  formal/hx.pvl
+28a249a02493f52d888864a686948824c0c652789ce1564b0fb99bfd4b156218  formal/hx/hBoth.pv
+0355254e2bcbac09e547061eb7a3317f4b5ced842d7ac9cd68160ee0a5a724b0  formal/hx/hClean.pv
+23b033c066a918a220f3ce4021b1045d7498890bc46edbe31f072fa3c63d3766  formal/hx/hDH.pv
+fb5ff650dd3570a1d1943395259fb9a3cfaf684ea6b43f653b3dff16aaf10855  formal/hx/hFS.pv
+17dd940d5422c0ad6dd7e38d89f4936c07aa55311170764f387b8564a46e3919  formal/hx/hFSDH.pv
+43bb4318fe085741d55ba8c81563d9be96da4845dca660416a9f122e962018f3  formal/hx/hFSOPK.pv
+4ed5e5205221c86e6466f090eb6f633341ddc6958b967ead56406d996fda3c52  formal/hx/hId.pv
+2c6b2265c7b7af98682cd63aac9daf20918cadeab2377c814d88c954d98d53fa  formal/hx/hIdLater.pv
+43b483e056a221ca357ade4989739caeaaaffad0a2e9eb7b61b3a217b956b85e  formal/hx/hIdLaterOPK.pv
+a2c855940c688a0481ea7267e45f3314c898c68c749de8111975984c4f48abe5  formal/hx/hIdThief.pv
+fc70898b313603613118e602311bcb399812689004c19bbbb5a12c5b8ff6fb7e  formal/hx/hKCI.pv
+28dc6ca7f2a026459102789300e3262a2444a930a0159fcf3e83db0d2392d102  formal/hx/hKCIi.pv
+06860df0cbcefbb5c8a8a40c3ac1224d09435c7d22e26cdad6139e592bc766c5  formal/hx/hKCIlt.pv
+6ecd51cc7f546900b7b255dc422e480ebb6ce1f75b99816c87e97bfd72498824  formal/hx/hKEM.pv
+per file: RESULT lines, "secrecy assumption verified" lines, wall time, verdict:
+formal/tr.pv: 46 RESULT lines, 390 secrecy assumptions verified, wall 87.4 s, PASS
+### gate `proverif`
+
+| item | verdict |
+|---|---|
+| status | PASS (87 s) |
+| line 1 | ProVerif 2.05 self-test [true, false] ok |
+| line 2 | --models tr, 4 parallel processes, timeout 1800 s per file |
+| line 3 | single-file models: tr (expected set matches) |
+| line 4 | HX sessions over formal/hx.pvl: none (= the files of expect::PROVERIF_EXPECTED_HX) |
+| line 5 | formal/tr.pv: 46 RESULT lines as expected — T1 true ×6, T2 true ×2, T3 true ×4, T4 true ×2, T5 true ×2, T6 true ×2, T7 false ×2, an attack as expected, T8 true ×12, T9 true ×4, T10 false ×1, an attack as expected, T11 true ×1, T12 false ×1, informative, T13 false ×7, an attack as expected (87.4 s) |
+| line 6 | evidence target/proverif/summary.txt, results.tsv and one log per file |
+
+
+### ProVerif results (per file and CLAIMS ID)
+
+| file | ID | verdict | expected | wall time of the file | sha256 |
+| --- | --- | --- | --- | --- | --- |
+| formal/tr.pv | T1 | true ×6 | true ×6 | 87.4 s | 09ba6cbb57f0 |
+| formal/tr.pv | T2 | true ×2 | true ×2 | 87.4 s | 09ba6cbb57f0 |
+| formal/tr.pv | T3 | true ×4 | true ×4 | 87.4 s | 09ba6cbb57f0 |
+| formal/tr.pv | T4 | true ×2 | true ×2 | 87.4 s | 09ba6cbb57f0 |
+| formal/tr.pv | T5 | true ×2 | true ×2 | 87.4 s | 09ba6cbb57f0 |
+| formal/tr.pv | T6 | true ×2 | true ×2 | 87.4 s | 09ba6cbb57f0 |
+| formal/tr.pv | T7 | false ×2 | false ×2 | 87.4 s | 09ba6cbb57f0 |
+| formal/tr.pv | T8 | true ×12 | true ×12 | 87.4 s | 09ba6cbb57f0 |
+| formal/tr.pv | T9 | true ×4 | true ×4 | 87.4 s | 09ba6cbb57f0 |
+| formal/tr.pv | T10 | false ×1 | false ×1 | 87.4 s | 09ba6cbb57f0 |
+| formal/tr.pv | T11 | true ×1 | true ×1 | 87.4 s | 09ba6cbb57f0 |
+| formal/tr.pv | T12 | false ×1 | any (informative) ×1 | 87.4 s | 09ba6cbb57f0 |
+| formal/tr.pv | T13 | false ×7 | false ×7 | 87.4 s | 09ba6cbb57f0 |
+
+
+### ProVerif models
+
+| item | verdict |
+|---|---|
+| formal/tr.pv | sha256 09ba6cbb57f05de142cc18cdae2694c826ea7ecdf03b411c505945492957a1ef |
+| formal/hx.pvl | sha256 f358ca8ea48f2e7c45cf0303a436e43f9f2a3ba72b180100805bab4c9ebeceff |
+| formal/hx/hBoth.pv | sha256 28a249a02493f52d888864a686948824c0c652789ce1564b0fb99bfd4b156218 |
+| formal/hx/hClean.pv | sha256 0355254e2bcbac09e547061eb7a3317f4b5ced842d7ac9cd68160ee0a5a724b0 |
+| formal/hx/hDH.pv | sha256 23b033c066a918a220f3ce4021b1045d7498890bc46edbe31f072fa3c63d3766 |
+| formal/hx/hFS.pv | sha256 fb5ff650dd3570a1d1943395259fb9a3cfaf684ea6b43f653b3dff16aaf10855 |
+| formal/hx/hFSDH.pv | sha256 17dd940d5422c0ad6dd7e38d89f4936c07aa55311170764f387b8564a46e3919 |
+| formal/hx/hFSOPK.pv | sha256 43bb4318fe085741d55ba8c81563d9be96da4845dca660416a9f122e962018f3 |
+| formal/hx/hId.pv | sha256 4ed5e5205221c86e6466f090eb6f633341ddc6958b967ead56406d996fda3c52 |
+| formal/hx/hIdLater.pv | sha256 2c6b2265c7b7af98682cd63aac9daf20918cadeab2377c814d88c954d98d53fa |
+| formal/hx/hIdLaterOPK.pv | sha256 43b483e056a221ca357ade4989739caeaaaffad0a2e9eb7b61b3a217b956b85e |
+| formal/hx/hIdThief.pv | sha256 a2c855940c688a0481ea7267e45f3314c898c68c749de8111975984c4f48abe5 |
+| formal/hx/hKCI.pv | sha256 fc70898b313603613118e602311bcb399812689004c19bbbb5a12c5b8ff6fb7e |
+| formal/hx/hKCIi.pv | sha256 28dc6ca7f2a026459102789300e3262a2444a930a0159fcf3e83db0d2392d102 |
+| formal/hx/hKCIlt.pv | sha256 06860df0cbcefbb5c8a8a40c3ac1224d09435c7d22e26cdad6139e592bc766c5 |
+| formal/hx/hKEM.pv | sha256 6ecd51cc7f546900b7b255dc422e480ebb6ce1f75b99816c87e97bfd72498824 |
+
+
+
+=== step summary (host aarch64-apple-darwin, strict: false) ===
+  10 proverif        PASS         87s  ProVerif 2.05 self-test [true, false] ok; --models tr, 4 parallel processes, timeout 1800 s per file; single-file models: tr (expected set matches); HX sessions over formal/hx.pvl: none (= the files of expect::PROVERIF_EXPECTED_HX); formal/tr.pv: 46 RESULT lines as expected — T1 true ×6, T2 true ×2, T3 true ×4, T4 true ×2, T5 true ×2, T6 true ×2, T7 false ×2, an attack as expected, T8 true ×12, T9 true ×4, T10 false ×1, an attack as expected, T11 true ×1, T12 false ×1, informative, T13 false ×7, an attack as expected (87.4 s); evidence target/proverif/summary.txt, results.tsv and one log per file
+step: PASS

@@ -7,6 +7,8 @@ Build, CI, supply-chain and release automation (docs/06 §5). The alias lives in
 |---|---|
 | `ci-fast [--strict]` | docs/06 §5 steps 1–5: `fmt`, `clippy`, `policy`, `deny`, `vet`, `audit`, `cooldown`, `nextest`, `doctest`, `hello`, `kat` |
 | `ci-full [--strict] [--delegated ID]…` (`ci`) | steps 1–14: the above plus `perf` (M3: TR encrypt+decrypt < 3 ms), `ct`, `fuzz`, `coverage`, `mutants`, `miri`, `kani`, `proverif`, `windows-cross`, `windows-native`, `linux-target`, `ref-vectors`, `repro`, `sbom`, `systemd` |
+| `ci-full`/`step`: `[--models tr\|hx\|all] [--jobs N]` | the `proverif` step's models (default `all`: `formal/tr.pv` and every `formal/hx/*.pv`) and the number of parallel ProVerif processes; refused unless the `proverif` step is selected. CI: `linux-full` runs `--models tr`, the job `proverif-hx` runs `step --strict proverif --models hx --jobs 4` (ADR-046) |
+| `ci-full --delegated mutants` | the `mutants` step runs in its own CI job (`cargo xtask step --strict mutants`, ADR-047); `linux-full` passes `--delegated mutants` next to `--delegated windows-native --delegated windows-cross` |
 | `step [--strict] ID…` | run selected steps, also the on-demand steps outside `ci-full`: `miri-full` (weekly workflow `miri-full.yml`) and `fuzz-nightly` (the 4 h campaign of the daily workflow `fuzz-nightly.yml`) |
 | `policy`, `cooldown`, `sbom` | shortcuts for single steps |
 | `win-test --backend github\|libvirt [--rerun\|--dispatch]` | the Windows gate (below) |

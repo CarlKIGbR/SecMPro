@@ -1,0 +1,72 @@
+# formal/tr.pv in cargo xtask step --strict proverif --models all --jobs 4 — models of commit 569c2e2; ProVerif 2.05, this Mac (M1 Pro), no other ProVerif run alongside
+# sha256 formal/tr.pv 09ba6cbb57f05de142cc18cdae2694c826ea7ecdf03b411c505945492957a1ef
+# gate: finished after 169.6 s · RESULT lines 46
+
+$ proverif /Users/c.carl/coding/claude_code/SecMPro/formal/tr.pv > /Users/c.carl/coding/claude_code/SecMPro/target/proverif/tr.log
+  formal/tr.pv: finished after 169.6 s
+  formal/tr.pv: 46 RESULT lines as expected — T1 true ×6, T2 true ×2, T3 true ×4, T4 true ×2, T5 true ×2, T6 true ×2, T7 false ×2, an attack as expected, T8 true ×12, T9 true ×4, T10 false ×1, an attack as expected, T11 true ×1, T12 false ×1, informative, T13 false ×7, an attack as expected (169.6 s)
+09ba6cbb57f05de142cc18cdae2694c826ea7ecdf03b411c505945492957a1ef  formal/tr.pv
+formal/tr.pv: 46 RESULT lines, 390 secrecy assumptions verified, wall 169.6 s, PASS
+| line 5 | formal/tr.pv: 46 RESULT lines as expected — T1 true ×6, T2 true ×2, T3 true ×4, T4 true ×2, T5 true ×2, T6 true ×2, T7 false ×2, an attack as expected, T8 true ×12, T9 true ×4, T10 false ×1, an attack as expected, T11 true ×1, T12 false ×1, informative, T13 false ×7, an attack as expected (169.6 s) |
+| formal/tr.pv | T1 | true ×6 | true ×6 | 169.6 s | 09ba6cbb57f0 |
+| formal/tr.pv | T2 | true ×2 | true ×2 | 169.6 s | 09ba6cbb57f0 |
+| formal/tr.pv | T3 | true ×4 | true ×4 | 169.6 s | 09ba6cbb57f0 |
+| formal/tr.pv | T4 | true ×2 | true ×2 | 169.6 s | 09ba6cbb57f0 |
+| formal/tr.pv | T5 | true ×2 | true ×2 | 169.6 s | 09ba6cbb57f0 |
+| formal/tr.pv | T6 | true ×2 | true ×2 | 169.6 s | 09ba6cbb57f0 |
+| formal/tr.pv | T7 | false ×2 | false ×2 | 169.6 s | 09ba6cbb57f0 |
+| formal/tr.pv | T8 | true ×12 | true ×12 | 169.6 s | 09ba6cbb57f0 |
+| formal/tr.pv | T9 | true ×4 | true ×4 | 169.6 s | 09ba6cbb57f0 |
+| formal/tr.pv | T10 | false ×1 | false ×1 | 169.6 s | 09ba6cbb57f0 |
+| formal/tr.pv | T11 | true ×1 | true ×1 | 169.6 s | 09ba6cbb57f0 |
+| formal/tr.pv | T12 | false ×1 | any (informative) ×1 | 169.6 s | 09ba6cbb57f0 |
+| formal/tr.pv | T13 | false ×7 | false ×7 | 169.6 s | 09ba6cbb57f0 |
+| formal/tr.pv | sha256 09ba6cbb57f05de142cc18cdae2694c826ea7ecdf03b411c505945492957a1ef |
+  10 proverif        PASS        475s  ProVerif 2.05 self-test [true, false] ok; --models all, 4 parallel processes, timeout 1800 s per file; single-file models: tr (expected set matches); HX sessions over formal/hx.pvl: hBoth, hClean, hClean-auth, hDH, hDH-auth, hFS, hFSDH, hFSOPK, hId, hIdLater, hIdLaterOPK, hIdThief, hKCI, hKCI-auth, hKCIi, hKCIlt, hKCIlt-auth, hKEM, hKEM-auth (= the files of expect::PROVERIF_EXPECTED_HX); formal/tr.pv: 46 RESULT lines as expected — T1 true ×6, T2 true ×2, T3 true ×4, T4 true ×2, T5 true ×2, T6 true ×2, T7 false ×2, an attack as expected, T8 true ×12, T9 true ×4, T10 false ×1, an attack as expected, T11 true ×1, T12 false ×1, informative, T13 false ×7, an attack as expected (169.6 s); formal/hx/hBoth.pv: 5 RESULT lines as expected — H4 false ×1, H11 false ×4 (474.9 s); formal/hx/hClean.pv: 9 RESULT lines as expected — H1 (i) true ×1, H1 (ii) true ×1, H11 false ×4, H6b true ×1, H10 true ×1, H6a true ×1 (37.5 s); formal/hx/hClean-auth.pv: 1 RESULT lines as expected — H5 true ×1 (2.5 s); formal/hx/hDH.pv: 6 RESULT lines as expected — H2 (i) true ×1, H2 (ii) true ×1, H11 false ×4 (33.7 s); formal/hx/hDH-auth.pv: 1 RESULT lines as expected — H8 false ×1 (10.4 s); formal/hx/hFS.pv: 6 RESULT lines as expected — H11 false ×4, H12 (i) true ×1, H12 (ii) true ×1 (1.1 s); formal/hx/hFSDH.pv: 6 RESULT lines as expected — H11 false ×4, H12c (i) true ×1, H12c (ii) true ×1 (1.0 s); formal/hx/hFSOPK.pv: 6 RESULT lines as expected — H11 false ×4, H12b (i) false ×1, H12b (ii) false ×1 (1.9 s); formal/hx/hId.pv: 7 RESULT lines as expected — H7a true ×2, H11 false ×4, H6a true ×1 (0.7 s); formal/hx/hIdLater.pv: 6 RESULT lines as expected — H7c true ×2, H11 false ×4 (0.5 s); formal/hx/hIdLaterOPK.pv: 6 RESULT lines as expected — H7d false ×2, H11 false ×4 (0.8 s); formal/hx/hIdThief.pv: 6 RESULT lines as expected — H7b true ×2, H11 false ×4 (6.5 s); formal/hx/hKCI.pv: 4 RESULT lines as expected — H11 false ×4 (20.3 s); formal/hx/hKCI-auth.pv: 1 RESULT lines as expected — H9 false ×1 (6.5 s); formal/hx/hKCIi.pv: 5 RESULT lines as expected — H9c true ×1, H11 false ×4 (12.7 s); formal/hx/hKCIlt.pv: 4 RESULT lines as expected — H11 false ×4 (44.3 s); formal/hx/hKCIlt-auth.pv: 1 RESULT lines as expected — H9b true ×1 (307.5 s); formal/hx/hKEM.pv: 6 RESULT lines as expected — H3 (i) true ×1, H3 (ii) true ×1, H11 false ×4 (22.7 s); formal/hx/hKEM-auth.pv: 1 RESULT lines as expected — H5 true ×1 (4.8 s); evidence target/proverif/summary.txt, results.tsv and one log per file
+
+RESULT not attacker_p1(content(sClean,st1,c0)) is true.
+RESULT not attacker_p1(content(sClean,st1,c1)) is true.
+RESULT not attacker_p1(content(sClean,st2,c0)) is true.
+RESULT not attacker_p1(content(sClean,st2,c1)) is true.
+RESULT not attacker_p1(content(sClean,st3,c0)) is true.
+RESULT not attacker_p1(content(sClean,st3,c1)) is true.
+RESULT inj-event(Recv(sClean,pB,i_55,n_55,x)) ==> inj-event(Send(sClean,pA,i_55,n_55,x)) is true.
+RESULT inj-event(Recv(sClean,pA,i_55,n_55,x)) ==> inj-event(Send(sClean,pB,i_55,n_55,x)) is true.
+RESULT not attacker_p1(content(sFS,st1,c0)) is true.
+RESULT not attacker_p1(content(sFS,st1,c1)) is true.
+RESULT not attacker_p1(content(sFS,st2,c0)) is true.
+RESULT not attacker_p1(content(sFS,st2,c1)) is true.
+RESULT not attacker_p1(content(sPCS,st3,c0)) is true.
+RESULT not attacker_p1(content(sPCS,st3,c1)) is true.
+RESULT not attacker_p1(content(sPCSdh,st3,c0)) is true.
+RESULT not attacker_p1(content(sPCSdh,st3,c1)) is true.
+RESULT not attacker_p1(content(sPCSkem,st3,c0)) is true.
+RESULT not attacker_p1(content(sPCSkem,st3,c1)) is true.
+RESULT not attacker_p1(content(sPCSboth,st3,c0)) is false.
+RESULT not attacker_p1(content(sPCSboth,st3,c1)) is false.
+RESULT not attacker_p1(exp(g,dhsk(sClean,kA1))) is true.
+RESULT not attacker_p1(pk(kemsk(sClean,kA1))) is true.
+RESULT not attacker_p1(nmark(sClean,st1,c0)) is true.
+RESULT not attacker_p1(nmark(sClean,st1,c1)) is true.
+RESULT not attacker_p1(exp(g,dhsk(sClean,kB2))) is true.
+RESULT not attacker_p1(pk(kemsk(sClean,kB2))) is true.
+RESULT not attacker_p1(nmark(sClean,st2,c0)) is true.
+RESULT not attacker_p1(nmark(sClean,st2,c1)) is true.
+RESULT not attacker_p1(exp(g,dhsk(sClean,kA3))) is true.
+RESULT not attacker_p1(pk(kemsk(sClean,kA3))) is true.
+RESULT not attacker_p1(nmark(sClean,st3,c0)) is true.
+RESULT not attacker_p1(nmark(sClean,st3,c1)) is true.
+RESULT not attacker_p1(exp(g,dhsk(sHFS,kA1))) is true.
+RESULT not attacker_p1(pk(kemsk(sHFS,kA1))) is true.
+RESULT not attacker_p1(nmark(sHFS,st1,c0)) is true.
+RESULT not attacker_p1(nmark(sHFS,st1,c1)) is true.
+RESULT not attacker_p1(content(sPCS,st1,c1)) is false.
+RESULT event(RecvKem(s_14,p_55,i_55,n_55,x,ct)) ==> event(ChainKem(s_14,p_55,i_55,ct)) is true.
+RESULT event(HdrOpenTwice(k1_1,k2_1,h)) ==> k1_1 = k2_1 is false.
+RESULT not event(Recv(sClean,pB,st3,c1,content(sClean,st3,c1))) is false.
+RESULT not event(Recv(sFS,pA,st2,c1,content(sFS,st2,c1))) is false.
+RESULT not event(Recv(sPCS,pB,st3,c1,content(sPCS,st3,c1))) is false.
+RESULT not event(Recv(sPCSdh,pB,st3,c1,content(sPCSdh,st3,c1))) is false.
+RESULT not event(Recv(sPCSkem,pB,st3,c1,content(sPCSkem,st3,c1))) is false.
+RESULT not event(Recv(sPCSboth,pB,st3,c1,content(sPCSboth,st3,c1))) is false.
+RESULT not event(Recv(sHFS,pB,st3,c1,content(sHFS,st3,c1))) is false.

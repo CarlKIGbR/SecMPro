@@ -1,0 +1,335 @@
+Run 36840484502 (pull_request, m03-tr, linux-full job 110298554207), head a47cc21df822c23fcfba0855b37c55bb6ca10c9c.
+Extracted with: gh api --allow-escape-sequences repos/CarlKIGbR/SecMPro/actions/jobs/110298554207/logs ;
+timestamps and ANSI codes removed; step `miri` of `cargo xtask ci-full` only.
+
+=== [9] miri ===
+$ rustup component list --installed --toolchain nightly-2026-09-21
+$ rustup run nightly-2026-09-21 cargo miri setup --target aarch64-unknown-linux-gnu
+Preparing a sysroot for Miri (target: aarch64-unknown-linux-gnu)...
+    Updating crates.io index
+ Downloading crates ...
+warning: unused dependency `sysroot`
+  --> Cargo.toml:18:15
+   |
+18 | [dependencies.sysroot]
+   |               ^^^^^^^^
+   |
+   = note: `cargo::unused_dependencies` is set to `warn` by default
+help: consider removing the dependency on `sysroot`
+warning: `custom-local-sysroot` (manifest) generated 1 warning
+    Finished `custom_sysroot` profile [optimized] target(s) in 18.81s
+A sysroot for Miri is now available in `/home/runner/.cache/miri`.
+$ LIBCRUX_DISABLE_SIMD128=1 LIBCRUX_DISABLE_SIMD256=1 CARGO_TARGET_DIR=/home/runner/work/SecMPro/SecMPro/target/miri-portable rustup run nightly-2026-09-21 cargo miri test --locked --target aarch64-unknown-linux-gnu --package secmp-sys-mem --
+warning: unused dependency `libc`
+  --> crates/secmp-sys-mem/Cargo.toml:16:1
+   |
+16 | libc.workspace = true
+   | ^^^^
+   |
+   = note: `cargo::unused_dependencies` is set to `warn` by default
+help: consider removing the dependency on `libc`
+warning: `secmp-sys-mem` (manifest) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.79s
+     Running unittests src/lib.rs (target/miri-portable/miri/aarch64-unknown-linux-gnu/debug/build/secmp-sys-mem/d223613c06285556/out/secmp_sys_mem-d223613c06285556)
+
+running 7 tests
+test secret_page::tests::backend_is_the_expected_one ... ok
+test secret_page::tests::debug_shows_no_contents ... ok
+test secret_page::tests::drop_zeroises_before_release ... ok
+test secret_page::tests::full_page_fits_and_larger_is_refused ... ok
+test secret_page::tests::is_send_and_sync ... ok
+test secret_page::tests::many_pages_are_independent ... ok
+test secret_page::tests::starts_zeroed_and_round_trips ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.10s
+
+   Doc-tests secmp_sys_mem
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+$ LIBCRUX_DISABLE_SIMD128=1 LIBCRUX_DISABLE_SIMD256=1 CARGO_TARGET_DIR=/home/runner/work/SecMPro/SecMPro/target/miri-portable rustup run nightly-2026-09-21 cargo miri test --locked --target aarch64-unknown-linux-gnu --package secmp-sys-desktop --
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.04s
+     Running unittests src/lib.rs (target/miri-portable/miri/aarch64-unknown-linux-gnu/debug/build/secmp-sys-desktop/49a14598c308e034/out/secmp_sys_desktop-49a14598c308e034)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+   Doc-tests secmp_sys_desktop
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+$ LIBCRUX_DISABLE_SIMD128=1 LIBCRUX_DISABLE_SIMD256=1 CARGO_TARGET_DIR=/home/runner/work/SecMPro/SecMPro/target/miri-portable rustup run nightly-2026-09-21 cargo miri test --locked --target aarch64-unknown-linux-gnu --package secmp-crypto -- --skip mldsa:: --skip hybrid_sign:: --skip sas::
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.36s
+     Running unittests src/lib.rs (target/miri-portable/miri/aarch64-unknown-linux-gnu/debug/build/secmp-crypto/56f0a07acaf758f3/out/secmp_crypto-56f0a07acaf758f3)
+
+running 65 tests
+test aead::tests::draft_xchacha_a31_opens ... ok
+test aead::tests::empty_plaintext ... ok
+test aead::tests::every_failure_is_the_same_rejection ... ok
+test aead::tests::open_ct_needs_the_exact_out_length ... ok
+test aead::tests::seal_is_the_crate_aead_and_round_trips ... ok
+test aead::tests::the_aead_verifies_before_it_decrypts ... ok
+test caead::tests::every_failure_is_the_same_rejection ... ok
+test caead::tests::matches_the_definition ... ok
+test caead::tests::round_trip_and_layout ... ok
+test caead::tests::tag_valid_but_commitment_wrong ... ok
+test ed25519::tests::bad_r_is_rejected ... ok
+test ed25519::tests::canonical_edges ... ok
+test ed25519::tests::rfc8032_vectors ... ok
+test ed25519::tests::s_plus_l_is_rejected ... ok
+test ed25519::tests::signature_byte_rules ... ok
+test ed25519::tests::signature_encoding_check ... ok
+test ed25519::tests::small_order_and_non_canonical_keys_are_refused ... ok
+test ed25519::tests::wrong_message_signature_or_length ... ok
+test error::tests::display_carries_no_detail ... ok
+test error::tests::locked_memory_failure_maps_to_unavailable ... ok
+test fingerprint::tests::definition_and_lengths ... ok
+test hash::tests::sha256_fips180_vectors ... ok
+test hash::tests::sha3_256_fips202_vectors ... ok
+test hybrid_kem::tests::combiner_order_and_label ... ok
+test hybrid_kem::tests::debug_is_redacted ... ok
+test hybrid_kem::tests::low_order_keys_are_rejected_on_both_sides ... ok
+test hybrid_kem::tests::round_trips ... ok
+test hybrid_kem::tests::tampering_changes_the_secret_without_error ... ok
+test kdf::tests::empty_salt_equals_zero_salt ... ok
+test kdf::tests::info_is_label_then_context_unframed ... ok
+test kdf::tests::length_limits ... ok
+test kdf::tests::matches_manual_hmac_composition ... ok
+test label::tests::enum_equals_appendix_a_of_the_spec ... ok
+test label::tests::exactly_two_hybrid_sign_labels ... ok
+test label::tests::label_set_is_prefix_free ... ok
+test label::tests::labels_are_ascii_and_round_trip ... ok
+test mlkem::tests::ciphertext_lengths_and_debug ... ok
+test mlkem::tests::encapsulation_key_import_is_validated ... ok
+test mlkem::tests::expose_seed_round_trips_through_from_seed ... ok
+test mlkem::tests::implicit_rejection_on_a_flipped_ciphertext ... ok
+test mlkem::tests::round_trip_768_and_1024 ... ok
+test mlkem::tests::seed_is_the_key ... ok
+test msg::tests::every_failure_is_the_same_rejection ... ok
+test msg::tests::matches_the_definition ... ok
+test msg::tests::round_trip ... ok
+test nonce::tests::counter_never_wraps ... ok
+test nonce::tests::counter_receives_strictly_plus_one ... ok
+test nonce::tests::counter_sends_in_order ... ok
+test nonce::tests::nonces_are_random ... ok
+test rng::tests::fills_and_differs ... ok
+test secret::tests::locked_secret_basics ... ok
+test secret::tests::secret_bytes_basics ... ok
+test secret::tests::secret_bytes_zeroise_on_drop_step ... ok
+test test_util::hex_round_trip ... ok
+test tr_kdf::tests::kdf_ck_matches_manual_hmac ... ok
+test tr_kdf::tests::kdf_rk_matches_manual_composition ... ok
+test tr_kdf::tests::manual_hmac_matches_rfc4231 ... ok
+test tr_kdf::tests::outputs_are_distinct_and_bound_to_every_input ... ok
+test tr_kdf::tests::tr_init_matches_manual_composition ... ok
+test x25519::tests::decode_refuses_exactly_the_low_order_encodings ... ok
+test x25519::tests::expose_secret_round_trips_through_from_bytes ... ok
+test x25519::tests::lengths_and_debug ... ok
+test x25519::tests::low_order_inputs_are_rejected ... ok
+test x25519::tests::rfc7748_diffie_hellman ... ok
+test x25519::tests::rfc7748_top_bit_masked ... ok
+
+test result: ok. 65 passed; 0 failed; 0 ignored; 0 measured; 11 filtered out; finished in 2625.93s
+
+     Running tests/kat_curve25519.rs (target/miri-portable/miri/aarch64-unknown-linux-gnu/debug/build/secmp-crypto/8bb5170f679c04c1/out/kat_curve25519-8bb5170f679c04c1)
+warning: missing documentation for the crate
+   --> crates/secmp-crypto/tests/kat_curve25519.rs:2:1
+    |
+  2 | / #![cfg(feature = "kat")]
+  3 | | #![allow(clippy::unwrap_used, clippy::expect_used)]
+  4 | | #![forbid(unsafe_code)]
+  5 | | //! Known-answer tests for X25519 and Ed25519 (feature `kat`): Wycheproof `x25519_test.json` and
+...   |
+157 | |     );
+158 | | }
+    | |_^
+    |
+    = note: requested on the command line with `-W missing-docs`
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+warning: 1 warning emitted
+
+     Running tests/kat_mldsa.rs (target/miri-portable/miri/aarch64-unknown-linux-gnu/debug/build/secmp-crypto/1e3a6d3c10672e1e/out/kat_mldsa-1e3a6d3c10672e1e)
+warning: missing documentation for the crate
+   --> crates/secmp-crypto/tests/kat_mldsa.rs:2:1
+    |
+  2 | / #![cfg(feature = "kat")]
+  3 | | #![allow(clippy::unwrap_used, clippy::expect_used)]
+  4 | | #![forbid(unsafe_code)]
+  5 | | //! Known-answer tests for ML-DSA-65 as SecMP uses it — pure ML-DSA (FIPS 204 Alg. 2/3) with a context string,
+...   |
+154 | |     assert_eq!(n, 15);
+155 | | }
+    | |_^
+    |
+    = note: requested on the command line with `-W missing-docs`
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+warning: 1 warning emitted
+
+     Running tests/kat_mlkem.rs (target/miri-portable/miri/aarch64-unknown-linux-gnu/debug/build/secmp-crypto/39c2a9a0e55fb2bf/out/kat_mlkem-39c2a9a0e55fb2bf)
+warning: missing documentation for the crate
+   --> crates/secmp-crypto/tests/kat_mlkem.rs:2:1
+    |
+  2 | / #![cfg(feature = "kat")]
+  3 | | #![allow(clippy::unwrap_used, clippy::expect_used)]
+  4 | | #![forbid(unsafe_code)]
+  5 | | //! Known-answer tests for ML-KEM-768 and ML-KEM-1024 (feature `kat`): Wycheproof and NIST ACVP through the
+...   |
+306 | |     counts = (202, 269, 100, 9, 25, 55)
+307 | | );
+    | |__^
+    |
+    = note: requested on the command line with `-W missing-docs`
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+warning: 1 warning emitted
+
+     Running tests/kat_symmetric.rs (target/miri-portable/miri/aarch64-unknown-linux-gnu/debug/build/secmp-crypto/31a3e683a44dff9e/out/kat_symmetric-31a3e683a44dff9e)
+warning: missing documentation for the crate
+   --> crates/secmp-crypto/tests/kat_symmetric.rs:2:1
+    |
+  2 | / #![cfg(feature = "kat")]
+  3 | | #![allow(clippy::unwrap_used, clippy::expect_used)]
+  4 | | #![forbid(unsafe_code)]
+  5 | | //! Known-answer tests for the symmetric primitives under `MsgEncrypt` and `CAEAD` (feature `kat`): the pinned
+...   |
+303 | | }
+    | |_^
+    |
+    = note: requested on the command line with `-W missing-docs`
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+warning: 1 warning emitted
+
+     Running tests/vectors.rs (target/miri-portable/miri/aarch64-unknown-linux-gnu/debug/build/secmp-crypto/675603169f4e2909/out/vectors-675603169f4e2909)
+warning: missing documentation for the crate
+   --> crates/secmp-crypto/tests/vectors.rs:2:1
+    |
+  2 | / #![cfg(feature = "kat")]
+  3 | | #![allow(clippy::unwrap_used, clippy::expect_used)]
+  4 | | #![forbid(unsafe_code)]
+  5 | | //! The frozen SecMP vectors (`vectors/<suite>.json`, cross-checked against the independent `ref/`
+...   |
+132 | |     assert_eq!(vectors::SUITES.len(), 8);
+133 | | }
+    | |_^
+    |
+    = note: requested on the command line with `-W missing-docs`
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+warning: 1 warning emitted
+
+   Doc-tests secmp_crypto
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+$ LIBCRUX_DISABLE_SIMD128=1 LIBCRUX_DISABLE_SIMD256=1 CARGO_TARGET_DIR=/home/runner/work/SecMPro/SecMPro/target/miri-portable rustup run nightly-2026-09-21 cargo miri test --locked --target aarch64-unknown-linux-gnu --package secmp-proto --lib --bins --test encodings_ref --test fuzz_max_len --test tr_smoke -- --skip wire::inv::tests::iks_bundle_link_data_blob --skip wire::frame::tests::reserved_and_foreign_opcodes_reject --skip wire::cell::tests::fragment_payload_inner_types --skip wire::cell::tests::key_change_receipt_control --skip wire::inv::tests::largest_link_data_fits_its_padding --skip wire::frame::tests::fetch_multi_count_and_link_get_rules --skip wire::frame::tests::every_request_round_trips_at_frame_size --skip wire::frame::tests::every_response_round_trips_at_frame_size --skip tr::tests:: --skip canonical_writer_is_stable --skip every_row_of_the_encodings_file --skip the_rust_generator_reproduces_every_positive_row
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.85s
+     Running unittests src/lib.rs (target/miri-portable/miri/aarch64-unknown-linux-gnu/debug/build/secmp-proto/c88ad4498c74a8b2/out/secmp_proto-c88ad4498c74a8b2)
+
+running 45 tests
+test codec::tests::boxed_arrays_need_the_exact_length ... ok
+test codec::tests::encoding_buffers_are_zeroizing ... ok
+test codec::tests::flags_and_expected_bytes ... ok
+test codec::tests::length_prefixes ... ok
+test codec::tests::padding_round_trip_and_rejections ... ok
+test codec::tests::reader_is_bounded_and_exact ... ok
+test codec::tests::writer_grows_without_losing_bytes ... ok
+test codec::tests::writer_growth_policy ... ok
+test codec::tests::writer_with_capacity_allocates_once ... ok
+test error::tests::crypto_errors_keep_their_kind ... ok
+test error::tests::display_carries_no_detail ... ok
+test keys::tests::ed25519_fields ... ok
+test keys::tests::hybrid_sig_checks_only_the_ed25519_half ... ok
+test keys::tests::mlkem_fields ... ok
+test keys::tests::x25519_field ... ok
+test sizes::tests::sum_saturates_to_max_on_overflow ... ok
+test tr::entropy::tests::os_entropy_draws_fresh_values ... ok
+test tr::entropy::tests::test_entropy_fails_after_its_budget ... ok
+test tr::select::tests::constant_time_selection_equals_the_pseudocode ... ok
+test tr::select::tests::skip_plan_bounds ... ok
+test wire::cell::tests::app_message_and_batch ... ok
+test wire::cell::tests::cell_parts ... ok
+test wire::cell::tests::content_types_padding_and_limits ... ok
+test wire::cell::tests::fragment_rules ... ok
+test wire::cell::tests::handshake_body_caps_and_routes ... ok
+test wire::cell::tests::header ... ok
+test wire::cell::tests::plaintext_fields_are_zeroizing ... ok
+test wire::cell::tests::routes ... ok
+test wire::cell::tests::secret_bearing_encodings_are_zeroizing ... ok
+test wire::frame::tests::cellr_context_and_zero_rules ... ok
+test wire::frame::tests::opcode_table_equals_appendix_d2 ... ok
+test wire::hx::tests::cell_plaintext_index_and_total ... ok
+test wire::hx::tests::opaque_and_inner_structures ... ok
+test wire::hx::tests::outer_is_padded_to_three_chunks ... ok
+test wire::inv::tests::invitation ... ok
+test wire::inv::tests::onion_checksum_and_version ... ok
+test wire::inv::tests::profile_names ... ok
+test wire::inv::tests::relay_ref_with_and_without_direct ... ok
+test wire::record::tests::handshake_records ... ok
+test wire::record::tests::hello ... ok
+test wire::record::tests::relay_info_and_its_record ... ok
+test wire::signed::tests::exact_contents ... ok
+test wire::signed::tests::lengths_and_labels ... ok
+test wire::signed::tests::signed_messages_are_zeroizing ... ok
+test wire::tests::periods ... ok
+
+test result: ok. 45 passed; 0 failed; 0 ignored; 0 measured; 57 filtered out; finished in 1199.89s
+
+     Running tests/encodings_ref.rs (target/miri-portable/miri/aarch64-unknown-linux-gnu/debug/build/secmp-proto/92ce622fd1b790ef/out/encodings_ref-92ce622fd1b790ef)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 0.03s
+
+     Running tests/fuzz_max_len.rs (target/miri-portable/miri/aarch64-unknown-linux-gnu/debug/build/secmp-proto/d27ac4c4cdd5d639/out/fuzz_max_len-d27ac4c4cdd5d639)
+
+running 1 test
+test fuzz_max_len_is_the_largest_valid_input_plus_one ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 73.12s
+
+     Running tests/tr_smoke.rs (target/miri-portable/miri/aarch64-unknown-linux-gnu/debug/build/secmp-proto/3bf1be276b0d1135/out/tr_smoke-3bf1be276b0d1135)
+
+running 1 test
+test both_directions_steps_and_reordering ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1160.07s
+
+$ LIBCRUX_DISABLE_SIMD128=1 LIBCRUX_DISABLE_SIMD256=1 CARGO_TARGET_DIR=/home/runner/work/SecMPro/SecMPro/target/miri-portable rustup run nightly-2026-09-21 cargo miri test --locked --target aarch64-unknown-linux-gnu --package secmp-proto --doc -- --skip wire::inv::tests::iks_bundle_link_data_blob --skip wire::frame::tests::reserved_and_foreign_opcodes_reject --skip wire::cell::tests::fragment_payload_inner_types --skip wire::cell::tests::key_change_receipt_control --skip wire::inv::tests::largest_link_data_fits_its_padding --skip wire::frame::tests::fetch_multi_count_and_link_get_rules --skip wire::frame::tests::every_request_round_trips_at_frame_size --skip wire::frame::tests::every_response_round_trips_at_frame_size --skip tr::tests:: --skip canonical_writer_is_stable --skip every_row_of_the_encodings_file --skip the_rust_generator_reproduces_every_positive_row
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.04s
+   Doc-tests secmp_proto
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+

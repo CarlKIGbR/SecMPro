@@ -1,0 +1,43 @@
+# linux-full job 111214947831, PR run 37127247911 (cac6eff): cancelled at the job limit (timeout-minutes 240; 13:45:16-17:45:32 UTC) inside ci-full step [9] miri. Read-only extract of the job log (gh api .../actions/jobs/111214947831/logs), 2026-10-03.
+
+## step starts (ci-full --strict --delegated windows-native --delegated windows-cross --delegated mutants --delegated ct --models tr)
+2026-10-03T14:01:59.1031586Z === [1] fmt ===
+2026-10-03T14:01:59.6820086Z === [2] clippy ===
+2026-10-03T14:02:27.9608095Z === [2] policy ===
+2026-10-03T14:02:28.4310063Z === [3] deny ===
+2026-10-03T14:02:28.9943091Z === [3] vet ===
+2026-10-03T14:02:29.3125875Z === [3] audit ===
+2026-10-03T14:02:32.7228119Z === [3] cooldown ===
+2026-10-03T14:02:36.8565733Z === [4] nextest ===
+2026-10-03T14:07:34.3602571Z === [4] doctest ===
+2026-10-03T14:07:34.7091233Z === [4] hello ===
+2026-10-03T14:07:34.8160696Z === [5] kat ===
+2026-10-03T14:24:19.2368515Z === [5] perf ===
+2026-10-03T14:24:43.2507921Z === [5] ct ===
+2026-10-03T14:24:43.2508412Z === [6] fuzz ===
+2026-10-03T15:08:03.6631314Z === [7] coverage ===
+2026-10-03T15:12:48.0522514Z === [8] mutants ===
+2026-10-03T15:12:48.0522910Z === [9] miri ===
+2026-10-03T15:13:21.5772928Z running 65 tests
+2026-10-03T15:37:01.8223285Z test result: ok. 65 passed; 0 failed; 0 ignored; 0 measured; 11 filtered out; finished in 2
+2026-10-03T15:37:15.1450383Z running 67 tests
+2026-10-03T17:37:47.6348662Z test result: ok. 67 passed; 0 failed; 0 ignored; 0 measured; 67 filtered out; finished in 1
+2026-10-03T17:45:29.3929467Z ##[error]The operation was canceled.
+
+## secmp-proto lib tests under Miri: time between consecutive results (tests run one after another), top 15
+secmp-proto lib under Miri, linux-full run 37127247911: 67 tests, 7232 s between first and last result
+    5392 s  tr::ratchet::trial_work::trial_opens_every_candidate_every_call
+     553 s  wire::cell::tests::read_routes_pre_sizes_the_vector
+     520 s  tr::ratchet::single_conversion::any_skipped_single_conversion
+      90 s  wire::cell::tests::routes
+      85 s  wire::cell::tests::app_message_and_batch
+      66 s  tr::entropy::tests::os_entropy_draws_fresh_values
+      49 s  tr::ratchet::selection::undecodable_skipped_header_rejects_on_every_path
+      46 s  tr::entropy::tests::test_entropy_fails_after_its_budget
+      46 s  wire::signed::tests::exact_contents
+      40 s  keys::tests::mlkem_fields
+      38 s  wire::record::tests::relay_info_and_its_record
+      28 s  wire::record::tests::handshake_records
+      26 s  wire::cell::tests::content_types_padding_and_limits
+      24 s  wire::hx::tests::outer_is_padded_to_three_chunks
+      22 s  wire::cell::tests::header

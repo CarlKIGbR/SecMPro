@@ -31,9 +31,12 @@
 
 pub mod codec;
 mod error;
+pub mod hx;
+pub mod inv;
 #[cfg(kani)]
 mod kani_proofs;
 pub mod keys;
+pub mod prekeys;
 pub mod sizes;
 pub mod tr;
 pub mod wire;

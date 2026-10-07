@@ -1,0 +1,10 @@
+FIX-5 dictated tests (aarch64-apple-darwin; code head 458bfaf, VD4-3 test added in the docs commit)
+xtask gates::tests::policy_reads_crlf_workflows_like_lf                      PASS (cargo nextest run -p xtask)
+xtask gates::tests::deleting_or_neutering_a_pinned_job_is_a_finding          PASS (LF-normalised fixture)
+xtask ctreport::tests::histogram_bin_count_is_pinned_in_both_places          PASS
+cargo nextest run -p xtask                                                   145/145 PASS (before the VD4-3 test)
+cargo nextest run --workspace --all-features                                 576/576 PASS
+cargo xtask ci-fast --strict                                                 PASS
+cargo xtask step --strict clippy policy                                      PASS
+doctest, stable 1.98.1: cargo test --doc -p secmp-proto                      3 passed (E0277 block at cell.rs:265, E0382 block at :282, hx::HandshakeCells)
+doctest, nightly-2026-09-21: LIBCRUX_DISABLE_SIMD128=1 LIBCRUX_DISABLE_SIMD256=1 rustup run nightly-2026-09-21 cargo miri test --doc -p secmp-proto   3 passed (cargo miri ran)

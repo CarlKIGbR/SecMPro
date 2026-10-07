@@ -21,6 +21,11 @@
 //! | `mldsa65_verify` | `hybridsign` | mode 0 ‖ `pk_mldsa`; mode 1 ‖ `ctx_len` 0 ‖ the ML-DSA half of `sig` |
 //! | `proto_records`, `proto_frames`, `proto_invitation`, `proto_handshake`, `proto_cell` | `encodings` | every decodable row (positive: `outputs.bytes`, negative: `inputs.bytes`) as selector ‖ bytes in the target of its structure ([`encodings_target`]); the encode-only `Signed/*` rows have no decoder |
 //! | `tr_decrypt` | `tr` | the `cell` of every `send` case (`outputs`) and `recv-reject` case (`inputs`, incl. the 4095- and 4097-byte ones) as mode 0 ‖ cell (they are sealed under the vector session's keys: the fixed receiver of the target rejects them) |
+//! | `inv_uri` | `hx` | the `uri` of every case (the invitation, and the three manipulated ones) |
+//! | `inv_linkdata` | `hx` | mode 0 ‖ the `linkdata` of every case padded to 12288, mode 1 ‖ its `blob` |
+//! | `hx_outer`, `hx_inner`, `hx_cell_plaintext` | `hx` | the `outer` of every case padded to 12018 B; the `inner` of every case that has one; `init_id ‖ i ‖ 3 ‖ chunk` of the three chunks of an `outer` |
+//! | `hx_accept_raw` | `hx` | every `fetched` list as raw cells (selector 3 ‖ 4096 B, at most 12); from `initiate` also the honest group by selector and as raw cells |
+//! | `hx_accept_structured` | `hx` | mode 0 ‖ the padded `outer`, mode 1 ‖ the `inner`, mode 2 ‖ the first 3177 bytes of the `outer` |
 //! | `tr_state` | `tr` | the `init` case: selector 0 ‖ a `RatchetStateV1` of the §7.2 responder's shape filled with the case's bytes ([`tr_state`]) |
 //!
 //! The label byte of `hybrid_sign_verify` is 0 for every seed: the target picks `Label::ALL[byte % len]`, and its
@@ -63,9 +68,44 @@ pub(crate) const SEED_RULES: &[SeedRule] = &[
         seeds: ed25519_verify,
     },
     SeedRule {
+        target: "hx_accept_raw",
+        suite: "hx",
+        seeds: hx_accept_raw,
+    },
+    SeedRule {
+        target: "hx_accept_structured",
+        suite: "hx",
+        seeds: hx_accept_structured,
+    },
+    SeedRule {
+        target: "hx_cell_plaintext",
+        suite: "hx",
+        seeds: hx_cell_plaintext,
+    },
+    SeedRule {
+        target: "hx_inner",
+        suite: "hx",
+        seeds: hx_inner,
+    },
+    SeedRule {
+        target: "hx_outer",
+        suite: "hx",
+        seeds: hx_outer,
+    },
+    SeedRule {
         target: "hybrid_sign_verify",
         suite: "hybridsign",
         seeds: hybrid_sign_verify,
+    },
+    SeedRule {
+        target: "inv_linkdata",
+        suite: "hx",
+        seeds: inv_linkdata,
+    },
+    SeedRule {
+        target: "inv_uri",
+        suite: "hx",
+        seeds: inv_uri,
     },
     SeedRule {
         target: "mldsa65_verify",
@@ -430,6 +470,141 @@ fn proto_cell(case: &Value) -> Result<Vec<(&'static str, Vec<u8>)>> {
     encodings_seed("proto_cell", case)
 }
 
+/// A text (ASCII string) field of a case, from its inputs or else its outputs.
+fn text_field<'a>(case: &'a Value, key: &str) -> Option<&'a str> {
+    ["inputs", "outputs"]
+        .iter()
+        .find_map(|section| case.get(section).and_then(|s| s.get(key)))
+        .and_then(Value::as_str)
+}
+
+/// A list of byte strings (`fetched`) of a case.
+fn list_field(case: &Value, key: &str) -> Result<Vec<Vec<u8>>> {
+    ["inputs", "outputs"]
+        .iter()
+        .find_map(|section| case.get(section).and_then(|s| s.get(key)))
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(unhex)
+                .collect::<Result<Vec<_>>>()
+        })
+        .transpose()
+        .map(Option::unwrap_or_default)
+}
+
+/// ISO/IEC 7816-4 padding (spec §4.1): `bytes ‖ 0x80 ‖ 0…` to `size` (unchanged if it does not fit).
+fn iso_pad(bytes: &[u8], size: usize) -> Vec<u8> {
+    let mut out = bytes.to_vec();
+    if out.len() < size {
+        out.push(0x80);
+        out.resize(size, 0);
+    }
+    out
+}
+
+/// The padded handshake `Outer` length (3 × 4006) and the length of an unpadded `Outer`'s fields before `inner_ct`.
+const HX_PADDED: usize = 12_018;
+const HX_OUTER_HEAD: usize = 3_177;
+
+/// `hx_outer`: the `Outer` of a case (unpadded in the file), padded to 12018 bytes.
+fn hx_outer(case: &Value) -> Result<Vec<(&'static str, Vec<u8>)>> {
+    Ok(field(case, "outer")?
+        .map(|outer| vec![("outer", iso_pad(&outer, HX_PADDED))])
+        .unwrap_or_default())
+}
+
+/// `hx_inner`: the `Inner` (6113 B) of a case that re-seals one.
+fn hx_inner(case: &Value) -> Result<Vec<(&'static str, Vec<u8>)>> {
+    Ok(field(case, "inner")?
+        .map(|inner| vec![("inner", inner)])
+        .unwrap_or_default())
+}
+
+/// `hx_cell_plaintext`: `init_id ‖ i ‖ 3 ‖ chunk` for the three chunks of a case's padded `Outer`.
+fn hx_cell_plaintext(case: &Value) -> Result<Vec<(&'static str, Vec<u8>)>> {
+    let (Some(outer), Some(init_id)) = (field(case, "outer")?, field(case, "init_id")?) else {
+        return Ok(Vec::new());
+    };
+    let padded = iso_pad(&outer, HX_PADDED);
+    Ok(padded
+        .as_chunks::<4006>()
+        .0
+        .iter()
+        .zip([("chunk0", 0_u8), ("chunk1", 1), ("chunk2", 2)])
+        .map(|(chunk, (name, i))| (name, cat(&[&init_id, &[i, 3], chunk])))
+        .collect())
+}
+
+/// `inv_uri`: the case's `uri` as its ASCII bytes.
+fn inv_uri(case: &Value) -> Result<Vec<(&'static str, Vec<u8>)>> {
+    let Some(uri) = text_field(case, "uri") else {
+        return Ok(Vec::new());
+    };
+    if !uri.is_ascii() {
+        bail!("hx: a `uri` that is not ASCII");
+    }
+    Ok(vec![("uri", uri.as_bytes().to_vec())])
+}
+
+/// `inv_linkdata`: mode 0 ‖ the padded `LinkDataV1` of a case, and mode 1 ‖ its blob.
+fn inv_linkdata(case: &Value) -> Result<Vec<(&'static str, Vec<u8>)>> {
+    let mut out = Vec::new();
+    if let Some(linkdata) = field(case, "linkdata")? {
+        out.push(("linkdata", cat(&[&[0], &iso_pad(&linkdata, 12_288)])));
+    }
+    if let Some(blob) = field(case, "blob")? {
+        out.push(("blob", cat(&[&[1], &blob])));
+    }
+    Ok(out)
+}
+
+/// `hx_accept_raw`: count ‖ per cell (selector 3 ‖ 4096 raw bytes). A case's `fetched` list becomes raw cells (at
+/// most 12); the `initiate` case also gives the honest group by selector (`[3, 0, 1, 2]`) and as raw cells.
+fn hx_accept_raw(case: &Value) -> Result<Vec<(&'static str, Vec<u8>)>> {
+    let raw = |cells: &[Vec<u8>]| -> Vec<u8> {
+        let cells: Vec<&Vec<u8>> = cells.iter().filter(|c| c.len() == 4096).take(12).collect();
+        let mut out = vec![u8::try_from(cells.len()).unwrap_or(0)];
+        for c in cells {
+            out.push(3);
+            out.extend_from_slice(c);
+        }
+        out
+    };
+    let mut out = Vec::new();
+    let fetched = list_field(case, "fetched")?;
+    if !fetched.is_empty() {
+        out.push(("fetched", raw(&fetched)));
+    }
+    if op(case) == "initiate" {
+        let cells: Vec<Vec<u8>> = ["cell_0", "cell_1", "cell_2"]
+            .iter()
+            .filter_map(|k| field(case, k).ok().flatten())
+            .collect();
+        out.push(("honest", vec![3, 0, 1, 2]));
+        out.push(("cells", raw(&cells)));
+    }
+    Ok(out)
+}
+
+/// `hx_accept_structured`: mode 0 ‖ `Padded`, mode 1 ‖ `Inner`, mode 2 ‖ the `Outer` head (before `inner_ct`).
+fn hx_accept_structured(case: &Value) -> Result<Vec<(&'static str, Vec<u8>)>> {
+    let mut out = Vec::new();
+    if let Some(outer) = field(case, "outer")? {
+        out.push(("padded", cat(&[&[0], &iso_pad(&outer, HX_PADDED)])));
+        out.push((
+            "head",
+            cat(&[&[2], outer.get(..HX_OUTER_HEAD).unwrap_or(&outer)]),
+        ));
+    }
+    if let Some(inner) = field(case, "inner")? {
+        out.push(("inner", cat(&[&[1], &inner])));
+    }
+    Ok(out)
+}
+
 /// `tr_decrypt`: mode 0 ‖ the case's `cell` (a `send` case's output, a `recv-reject` case's input), any length.
 fn tr_decrypt(case: &Value) -> Result<Vec<(&'static str, Vec<u8>)>> {
     Ok(field(case, "cell")?
@@ -569,7 +744,17 @@ mod tests {
         let expected: &[(&str, usize)] = &[
             ("caead_open", 25),
             ("ed25519_verify", 25),
+            // the `hx` suite (30 cases): `fetched` lists (16 of them) and the honest group (2 seeds of `initiate`);
+            // 10 `outer`s (3 chunks each with an `init_id`: 30 plaintexts; 2 structured seeds each), 4 `inner`s
+            ("hx_accept_raw", 17),
+            ("hx_accept_structured", 24),
+            ("hx_cell_plaintext", 30),
+            ("hx_inner", 4),
+            ("hx_outer", 10),
             ("hybrid_sign_verify", 42),
+            // 6 `linkdata` and 7 `blob`; 4 `uri`
+            ("inv_linkdata", 13),
+            ("inv_uri", 4),
             ("mldsa65_verify", 34),
             ("mlkem_parse", 86),
             ("msg_open", 24),

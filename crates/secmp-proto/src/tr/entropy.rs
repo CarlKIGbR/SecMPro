@@ -8,7 +8,10 @@
 //! 32 raw bytes, an ML-KEM-768 key the 64-byte seed `d ‖ z` (`KeyGen_internal`), `Encaps` randomness `m` 32 bytes
 //! (`Encaps_internal`), a nonce 24 bytes (`vectors/SCHEMA.md` §2).
 
-use secmp_crypto::{MlKem768Ct, MlKem768Dk, MlKem768Ek, Nonce24, SecretBytes, X25519Secret};
+use secmp_crypto::{
+    HybridSignature, HybridSigningKey, Label, MlKem768Ct, MlKem768Dk, MlKem768Ek, MlKem1024Ct,
+    MlKem1024Dk, MlKem1024Ek, Nonce24, SecretBytes, X25519Secret,
+};
 
 use crate::error::Result;
 
@@ -42,6 +45,40 @@ pub trait Entropy: sealed::Sealed {
     /// # Errors
     /// [`crate::Error::Unavailable`] if randomness is unavailable.
     fn nonce(&mut self) -> Result<Nonce24>;
+
+    /// `ML-KEM-1024.keygen()`, held as its seed (§6.1 signed and one-time prekeys; M4).
+    ///
+    /// # Errors
+    /// [`crate::Error::Unavailable`] if randomness or locked memory is unavailable.
+    fn mlkem1024(&mut self) -> Result<MlKem1024Dk>;
+
+    /// `ML-KEM-1024.Encaps(ek)` → `(ct, ss)` (§6.4; M4).
+    ///
+    /// # Errors
+    /// [`crate::Error::Unavailable`] if randomness is unavailable.
+    fn encaps1024(&mut self, ek: &MlKem1024Ek) -> Result<(MlKem1024Ct, SecretBytes<32>)>;
+
+    /// `N` random bytes held as a secret (identifiers, `link_key`, seeds, `init_id`; M4).
+    ///
+    /// # Errors
+    /// [`crate::Error::Unavailable`] if randomness or locked memory is unavailable.
+    fn secret<const N: usize>(&mut self) -> Result<SecretBytes<N>>;
+
+    /// A fresh `IK_sig` (Ed25519 ‖ ML-DSA-65; M4). The derandomised implementation reads the ML-DSA seed `ξ`
+    /// (32 bytes), then the Ed25519 seed (32 bytes) (`vectors/SCHEMA-4.10-hx.md`, `keys-R`).
+    ///
+    /// # Errors
+    /// [`crate::Error::Unavailable`] if randomness or locked memory is unavailable.
+    fn hybrid_signing_key(&mut self) -> Result<HybridSigningKey>;
+
+    /// `HybridSign(key, label, msg)` with the ML-DSA hedge `rnd` from this source (§3.5; M4: the inviter signs
+    /// bundles). The derandomised implementation reads `rnd` (32 bytes).
+    ///
+    /// # Errors
+    /// [`crate::Error::Unavailable`] if randomness is unavailable; [`crate::Error::Rejected`] if the message is
+    /// refused by the signer.
+    fn sign(&mut self, key: &HybridSigningKey, label: Label, msg: &[u8])
+    -> Result<HybridSignature>;
 }
 
 /// The operating system CSPRNG (the only [`Entropy`] of a shipped build).
@@ -64,6 +101,31 @@ impl Entropy for OsEntropy {
 
     fn nonce(&mut self) -> Result<Nonce24> {
         Ok(Nonce24::random()?)
+    }
+
+    fn mlkem1024(&mut self) -> Result<MlKem1024Dk> {
+        Ok(MlKem1024Dk::generate()?)
+    }
+
+    fn encaps1024(&mut self, ek: &MlKem1024Ek) -> Result<(MlKem1024Ct, SecretBytes<32>)> {
+        Ok(ek.encapsulate()?)
+    }
+
+    fn secret<const N: usize>(&mut self) -> Result<SecretBytes<N>> {
+        Ok(SecretBytes::<N>::random()?)
+    }
+
+    fn hybrid_signing_key(&mut self) -> Result<HybridSigningKey> {
+        Ok(HybridSigningKey::generate()?)
+    }
+
+    fn sign(
+        &mut self,
+        key: &HybridSigningKey,
+        label: Label,
+        msg: &[u8],
+    ) -> Result<HybridSignature> {
+        Ok(key.sign(label, msg)?)
     }
 }
 
@@ -129,6 +191,34 @@ impl Entropy for FixedEntropy {
     fn nonce(&mut self) -> Result<Nonce24> {
         Ok(Nonce24::from_bytes_kat(*self.take::<24>()?))
     }
+
+    fn mlkem1024(&mut self) -> Result<MlKem1024Dk> {
+        Ok(MlKem1024Dk::from_seed(self.take::<64>()?.as_slice())?)
+    }
+
+    fn encaps1024(&mut self, ek: &MlKem1024Ek) -> Result<(MlKem1024Ct, SecretBytes<32>)> {
+        Ok(ek.encapsulate_kat(&*self.take::<32>()?))
+    }
+
+    fn secret<const N: usize>(&mut self) -> Result<SecretBytes<N>> {
+        Ok(SecretBytes::<N>::from_slice(self.take::<N>()?.as_slice())?)
+    }
+
+    fn hybrid_signing_key(&mut self) -> Result<HybridSigningKey> {
+        let xi = self.take::<32>()?;
+        let ed = self.take::<32>()?;
+        Ok(HybridSigningKey::from_seeds(ed.as_slice(), xi.as_slice())?)
+    }
+
+    fn sign(
+        &mut self,
+        key: &HybridSigningKey,
+        label: Label,
+        msg: &[u8],
+    ) -> Result<HybridSignature> {
+        let rnd = self.take::<32>()?;
+        Ok(key.sign_kat(label, msg, &rnd)?)
+    }
 }
 
 /// Test randomness (unit tests only, with or without feature `kat`): the OS source for the first `ok` draws, then
@@ -181,6 +271,36 @@ impl Entropy for TestEntropy {
     fn nonce(&mut self) -> Result<Nonce24> {
         self.draw()?;
         OsEntropy.nonce()
+    }
+
+    fn mlkem1024(&mut self) -> Result<MlKem1024Dk> {
+        self.draw()?;
+        OsEntropy.mlkem1024()
+    }
+
+    fn encaps1024(&mut self, ek: &MlKem1024Ek) -> Result<(MlKem1024Ct, SecretBytes<32>)> {
+        self.draw()?;
+        OsEntropy.encaps1024(ek)
+    }
+
+    fn secret<const N: usize>(&mut self) -> Result<SecretBytes<N>> {
+        self.draw()?;
+        OsEntropy.secret::<N>()
+    }
+
+    fn hybrid_signing_key(&mut self) -> Result<HybridSigningKey> {
+        self.draw()?;
+        OsEntropy.hybrid_signing_key()
+    }
+
+    fn sign(
+        &mut self,
+        key: &HybridSigningKey,
+        label: Label,
+        msg: &[u8],
+    ) -> Result<HybridSignature> {
+        self.draw()?;
+        OsEntropy.sign(key, label, msg)
     }
 }
 

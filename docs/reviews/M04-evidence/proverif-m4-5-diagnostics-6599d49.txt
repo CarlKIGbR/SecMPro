@@ -1,0 +1,47 @@
+# WEISUNG M4-5 — ProVerif diagnostics (scratch variants of the committed models; not deliverables)
+# models as of 6599d49; ProVerif 2.05; this Mac (M1 Pro), other ProVerif runs alongside
+
+## A. H11 trace reconstruction with plaintext layers (hClean, first declaration: H1 x2, H11 x4)
+Each row: the hClean first declaration with the library change and settings named; verdicts in order.
+- library without devices (new e[] etc.), defaults: true, true, false, false, cannot be proved, cannot be proved, true
+- set unifyDerivation = false: true, true, false, false, false, cannot be proved
+- unifyDerivation = false, simplifyDerivation = false: true, true, false, false, false, cannot be proved
+- simplifyDerivation = false: true, true, false, false, cannot be proved, cannot be proved
+- unifyDerivation = false, reconstructTrace = 50: true, true, false, false, false, cannot be proved
+- I's names new e[ld] (+ r1, r2, r3, routes), unifyDerivation = false: true, true, false, false, false, cannot be proved
+- I's names new e[ld], defaults: true, true, false, false, cannot be proved, cannot be proved
+- I's names new e[ld, lk], unifyDerivation = false  <- committed devices: true, true, false, false, false, false
+- I's names new e[ld, lk], defaults: true, true, false, false, cannot be proved, cannot be proved
+Failure mode without the devices: 'A trace has been found, assuming the following hypothesis: The attacker
+has ~M_80 = iksig(hClean,pR)' (honest pair, IConfirm) and 'Could not find a trace corresponding to this
+derivation' (IConfirm): ProVerif decomposes the plaintext Outer tuple, and the derivation takes components
+(EK_I, ct_spk, ...) from different runs of one merged I copy (same e[] with other invitations).
+
+## B. tr.pv F5 — settings (46 RESULT lines expected: T1 6 t, T2 2 t, T3 4 t, T4-T6 2 t each, T7 2 f, T8 12 t,
+T9 4 t, T10 f, T11 t, T12 f (informative), T13 7 f)
+- F5 first version (sequential private delivery), defaults — 332 s: true, true, true, true, true, true, cannot be proved, (but) true, true, true, true, true, true, true, true, true, true, true, true, cannot be proved, cannot be proved, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, false, true, false, cannot be proved, false, cannot be proved, cannot be proved, cannot be proved, cannot be proved, false
+- + set unifyDerivation = false: true, true, true, true, true, true, cannot be proved, (but) true, true, true, true, true, true, true, true, true, true, true, true, cannot be proved, cannot be proved, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, false, true, false, cannot be proved, false, cannot be proved, cannot be proved, cannot be proved, cannot be proved, false
+- + set preciseActions = true — 1275 s under load: true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, cannot be proved, cannot be proved, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, false, true, false, false, false, false, false, false, false, false
+- + preciseActions + unifyDerivation = false: true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, cannot be proved, cannot be proved, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, false, true, false, false, false, false, false, false, false, false
+- committed: preciseActions + private delivery offered in parallel — 165 s: true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, false, false, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, true, false, true, false, false, false, false, false, false, false, false
+T2 first line without preciseActions: Recv(B,1,0) at the step {141} and at the skipped key {294} counted as
+two receptions ('We have @occ141_1 <> @occ294_1'; no trace). T7 with sequential private delivery: the
+derivation uses A's other-first branch on (2,1), which the blocking private output of (2,0) never allows.
+
+## C. hClean begin-IStart declaration (H5)
+- profile (H5 only, verboseRules, 720 s): the rules around 11800 carry b-inj-event(IStart(hClean, I, iks(vk(sk_2),
+  ikdhR_1), ...)) — I on an attacker invitation — with selected hypotheses attacker(exp(g,dhsk(hClean,kSPK))),
+  (kIKR), (kIKI), (eph(o)), attacker(exp(g,x_1)), attacker(vk(sk_2)): every DH field of the attacker's bundle
+  resolved against every public key; ~40 rules/s before 11800, then a few per minute.
+- H6b alone (declaration 4 of hClean.pv): true (14.4 s)
+- H10 alone (declaration 5 of hClean.pv): true (22.5 s)
+- H5 with iR bound to IKSPublic_R (semantically equivalent query; NOT applied): no RESULT in 600 s; last 11800 rules inserted. Base: 7259 rules (108 with conclusion selected). Queue: 50455 rules.
+
+## D. Named candidate abstraction (not applied): no attacker-as-inviter (I only on R's invitations)
+- hFS without '! ProcIS(hFS, c)': false, false, false, false, true, true — 0.7 s (the committed hFS: no RESULT in 1800 s)
+- hBoth with I on pinv(hBoth) (plaintext layers kept): false, false, false, false, cannot be proved; last 600 rules inserted. Base: 272 rules (16 with conclusion selected). Queue: 89 rules.
+
+## E. hIdThief, O-17 read literally (I on the public channel instead of pinv)
+- false, false, false, false, false, false (19.4 s): H7b false — the attacker sends I an invitation pinned to its own key a_2 and a bundle
+  signed with it; I accepts and seals IKS_I under a K_id the attacker computes (H7: an inviter learns I's
+  identity by design). Committed hIdThief keeps I on pinv(hIdThief) with plaintext layers: H7b true x2.

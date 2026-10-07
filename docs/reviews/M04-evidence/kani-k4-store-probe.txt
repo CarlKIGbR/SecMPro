@@ -1,0 +1,45 @@
+WEISUNG M4-3 — K4a (real store) / K4b: can Kani build a MemoryPrekeyStore that holds an OPK?
+Date 2026-10-01, this Mac (aarch64-apple-darwin), Kani 0.68.0 / CBMC 6.11.0, head 69d1320 + working tree.
+
+Probe harness (temporary, removed again; never committed as a harness):
+
+    #[kani::proof]
+    fn probe_store() {
+        let mut s = crate::prekeys::MemoryPrekeyStore::starting_at(1, 1);
+        let r = s.issue_opk(&mut crate::tr::OsEntropy);
+        assert!(r.is_ok());
+    }
+
+An OPK (`OpkSecrets`), an SPK generation (`SpkGeneration`) and therefore every invitation record (`add_record`
+requires a held SPK and OPK) can only be created through `Entropy` (sealed; the only implementation without feature
+`kat` is `OsEntropy`). Their secrets are `X25519Secret`/`MlKem*Dk` = `secmp_crypto::LockedSecret` =
+`secmp_sys_mem::SecretPage` (mmap + mprotect + mlock; on Linux first memfd_secret through the variadic
+`libc::syscall`). All of these types have private fields, so no stub written in `secmp-proto` can construct them.
+
+Run 1: `cargo kani --package secmp-proto -Z stubbing --exact --harness kani_proofs::probe_store`
+  exit 1; wall 3 s
+  Check 65: secmp_sys_mem::secret_page::os::Mapping::new.unsupported_construct.1   - Status: FAILURE
+  Check 66: zeroize::barrier::optimization_barrier::<u8>.unsupported_construct.1   - Status: FAILURE
+  Failed Checks: call to foreign "C" function `mmap` is not currently supported by Kani.
+  Failed Checks: assertion failed: r.is_ok()
+  VERIFICATION:- FAILED
+
+Run 2: the same with harness-file stubs `#[kani::stub(libc::sysconf|mmap|mprotect|mlock|munlock|munmap|getentropy,
+  <safe Rust replacements>)]` and `#[kani::stub(zeroize::optimization_barrier, <no-op>)]`
+  exit 1; wall 2 s
+  the zeroize check is gone (that stub applies); the foreign libc stubs do not apply:
+  Check 111: secmp_sys_mem::secret_page::os::Mapping::new.unsupported_construct.1  - Status: FAILURE
+  Failed Checks: call to foreign "C" function `mmap` is not currently supported by Kani.
+  Failed Checks: assertion failed: r.is_ok()
+  VERIFICATION:- FAILED
+
+Run 3: run 2 plus `-Z c-ffi` (CBMC's C library models instead of the unsupported-construct check)
+  exit 1; wall 3 s
+  Check 1: mmap.assertion.1
+  Failed Checks: Function `mmap` with missing definition is unreachable
+  Failed Checks: assertion failed: r.is_ok()
+  VERIFICATION:- FAILED
+
+Conclusion: under Kani 0.68 a MemoryPrekeyStore can hold no OPK, SPK or record without a product-code change
+(e.g. a `cfg(kani)` heap backend in `secmp-sys-mem` beside its `cfg(miri)` one, or `cfg(kani)` constructors in
+`prekeys`). K4b and the real-store part of K4a are therefore STOPPED (M04-report §11).

@@ -1,0 +1,29 @@
+cargo mutants --no-shuffle --output target/mutants-hx --features secmp-crypto/kat,secmp-proto/kat -p secmp-proto -f '**/src/hx/**' -f '**/src/inv.rs' -f '**/src/prekeys.rs' -f '**/src/wire/hx.rs' --exclude-re kani_stubs:: --exclude-re FixedEntropy --exclude-re message_key_digest_kat --exclude-re 'replace mk_digest ' --exclude-re 'RatchetState::(hk_s_kat|receiving_header_keys_kat|sb_kat|encrypt_padded_kat)'
+(run 1 killed by the 30-min background limit after 60 outcomes: 40 caught, 19 unviable, 1 missed; run 2 with --iterate -j3 tested the remaining 276 incl. the 1 re-tested missed: 22 missed, 180 caught, 74 unviable, 67 min)
+Baseline: 127-131 s test per run.
+Head bc17190. Mutation sites without feature enumeration (-f globs need the **/ prefix: 'src/hx/**' matches 0 files).
+TOTAL 335 | caught 220 (40+180) | missed 22 | unviable 93 (19+74) | timeouts 0
+
+MISSED:
+crates/secmp-proto/src/inv.rs:81:9: replace <impl core::fmt::Display for IssueError>::fmt -> core::fmt::Result with Ok(Default::default())
+crates/secmp-proto/src/inv.rs:161:44: replace | with ^ in base64url_encode
+crates/secmp-proto/src/inv.rs:161:32: replace | with ^ in base64url_encode
+crates/secmp-proto/src/inv.rs:198:34: replace | with ^ in base64url_decode
+crates/secmp-proto/src/prekeys.rs:36:45: replace * with +
+crates/secmp-proto/src/prekeys.rs:36:45: replace * with /
+crates/secmp-proto/src/prekeys.rs:36:40: replace * with +
+crates/secmp-proto/src/prekeys.rs:36:40: replace * with /
+crates/secmp-proto/src/prekeys.rs:36:35: replace * with +
+crates/secmp-proto/src/prekeys.rs:184:9: replace SpkGeneration::created -> u64 with 0
+crates/secmp-proto/src/prekeys.rs:184:9: replace SpkGeneration::created -> u64 with 1
+crates/secmp-proto/src/prekeys.rs:498:13: replace || with && in MemoryPrekeyStore::add_record
+crates/secmp-proto/src/prekeys.rs:497:13: replace || with && in MemoryPrekeyStore::add_record
+crates/secmp-proto/src/prekeys.rs:590:39: replace != with == in MemoryPrekeyStore::issue_invitation
+crates/secmp-proto/src/prekeys.rs:717:39: replace || with && in <impl PrekeyStore for MemoryPrekeyStore>::commit_accept
+crates/secmp-proto/src/hx/responder.rs:108:9: replace Groups<K, C, N>::get -> Option<&Group<K, C>> with None
+crates/secmp-proto/src/hx/responder.rs:108:9: replace Groups<K, C, N>::get -> Option<&Group<K, C>> with Some(Box::leak(Box::new(Default::default())))
+crates/secmp-proto/src/hx/responder.rs:114:9: replace Groups<K, C, N>::remove_completed -> Option<Group<K, C>> with None
+crates/secmp-proto/src/hx/responder.rs:114:9: replace Groups<K, C, N>::remove_completed -> Option<Group<K, C>> with Some(Default::default())
+crates/secmp-proto/src/hx/responder.rs:131:33: replace < with == in Groups<K, C, N>::remove
+crates/secmp-proto/src/hx/responder.rs:131:33: replace < with > in Groups<K, C, N>::remove
+crates/secmp-proto/src/hx/responder.rs:290:38: replace || with && in process

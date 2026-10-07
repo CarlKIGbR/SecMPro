@@ -1,0 +1,42 @@
+# ProVerif 2.05 — formal/hx/hKCIi.pv over formal/hx.pvl (WEISUNG M4-5 §2), models as of 6599d49
+# command: timeout 1800 proverif -lib formal/hx.pvl formal/hx/hKCIi.pv  (target/tmp/runq.py, 4 files in parallel on this Mac, M1 Pro 10 cores / 16 GB, other ProVerif runs alongside)
+# sha256 formal/hx.pvl f358ca8ea48f2e7c45cf0303a436e43f9f2a3ba72b180100805bab4c9ebeceff
+# sha256 formal/hx/hKCIi.pv 28dc6ca7f2a026459102789300e3262a2444a930a0159fcf3e83db0d2392d102
+# exit: 0 · wall 26.1 s · RESULT lines 5 of 5 expected · secrecy assumptions verified 11
+# finished: yes · last progress line: 37400 rules inserted. Base: 15072 rules (1980 with conclusion selected). Queue: 7 rules.
+# session tags in the log other than hKCIi: none (one session per file, O-18)
+
+| # | CLAIMS ID | expected | verdict | query (as ProVerif prints it) |
+|---|---|---|---|---|
+| 1 | H9c | true | true | `not (event(IStart(hKCIi,iI,iks(vk(iksig(hKCIi,pR)),exp(g,dhsk(hKCIi,kIKR))),b_2,tr_2,rt_2,sk_2)) && attacker(sk_2))` |
+| 2 | H11 | false | false | `not event(IStart(hKCIi,iks(vk(iksig(hKCIi,pI)),exp(g,dhsk(hKCIi,kIKI))),iks(vk(iksig(hKCIi,pR)),exp(g,dhsk(hKCIi,kIKR))),b_2,tr_2,rt_2,sk_2))` |
+| 3 | H11 | false | false | `not event(BundleSigned(hKCIi,iR,b_2))` |
+| 4 | H11 | false | false | `not (event(RAccept(hKCIi,iR,iks(vk(iksig(hKCIi,pI)),exp(g,dhsk(hKCIi,kIKI))),ld_5,oid,tr_2,rt_2,sk_2)) && event(IStart(hKCIi,iks(vk(iksig(hKCIi,pI)),exp(g,dhsk(hKCIi,kIKI))),iR,b_2,tr_2,rt_2,sk_2)))` |
+| 5 | H11 | false | false | `not event(IConfirm(hKCIi,iks(vk(iksig(hKCIi,pI)),exp(g,dhsk(hKCIi,kIKI))),iks(vk(iksig(hKCIi,pR)),exp(g,dhsk(hKCIi,kIKR))),tr_2,sk_2))` |
+
+RESULT lines and the 20 progress lines before the end of the log:
+RESULT not (event(IStart(hKCIi,iI,iks(vk(iksig(hKCIi,pR)),exp(g,dhsk(hKCIi,kIKR))),b_2,tr_2,rt_2,sk_2)) && attacker(sk_2)) is true.
+RESULT not event(IStart(hKCIi,iks(vk(iksig(hKCIi,pI)),exp(g,dhsk(hKCIi,kIKI))),iks(vk(iksig(hKCIi,pR)),exp(g,dhsk(hKCIi,kIKR))),b_2,tr_2,rt_2,sk_2)) is false.
+RESULT not event(BundleSigned(hKCIi,iR,b_2)) is false.
+RESULT not (event(RAccept(hKCIi,iR,iks(vk(iksig(hKCIi,pI)),exp(g,dhsk(hKCIi,kIKI))),ld_5,oid,tr_2,rt_2,sk_2)) && event(IStart(hKCIi,iks(vk(iksig(hKCIi,pI)),exp(g,dhsk(hKCIi,kIKI))),iR,b_2,tr_2,rt_2,sk_2))) is false.
+RESULT not event(IConfirm(hKCIi,iks(vk(iksig(hKCIi,pI)),exp(g,dhsk(hKCIi,kIKI))),iks(vk(iksig(hKCIi,pR)),exp(g,dhsk(hKCIi,kIKR))),tr_2,sk_2)) is false.
+33600 rules inserted. Base: 15246 rules (1864 with conclusion selected). Queue: 258 rules.
+33800 rules inserted. Base: 15275 rules (1864 with conclusion selected). Queue: 241 rules.
+34000 rules inserted. Base: 15284 rules (1864 with conclusion selected). Queue: 223 rules.
+34200 rules inserted. Base: 15324 rules (1870 with conclusion selected). Queue: 199 rules.
+34400 rules inserted. Base: 15367 rules (1880 with conclusion selected). Queue: 167 rules.
+34600 rules inserted. Base: 15389 rules (1881 with conclusion selected). Queue: 153 rules.
+34800 rules inserted. Base: 15403 rules (1882 with conclusion selected). Queue: 152 rules.
+35000 rules inserted. Base: 15426 rules (1886 with conclusion selected). Queue: 148 rules.
+35200 rules inserted. Base: 15248 rules (1892 with conclusion selected). Queue: 142 rules.
+35400 rules inserted. Base: 15140 rules (1900 with conclusion selected). Queue: 134 rules.
+35600 rules inserted. Base: 15152 rules (1911 with conclusion selected). Queue: 123 rules.
+35800 rules inserted. Base: 15145 rules (1918 with conclusion selected). Queue: 116 rules.
+36000 rules inserted. Base: 15151 rules (1926 with conclusion selected). Queue: 108 rules.
+36200 rules inserted. Base: 15177 rules (1926 with conclusion selected). Queue: 108 rules.
+36400 rules inserted. Base: 15176 rules (1926 with conclusion selected). Queue: 108 rules.
+36600 rules inserted. Base: 15191 rules (1926 with conclusion selected). Queue: 106 rules.
+36800 rules inserted. Base: 15191 rules (1927 with conclusion selected). Queue: 102 rules.
+37000 rules inserted. Base: 15139 rules (1932 with conclusion selected). Queue: 90 rules.
+37200 rules inserted. Base: 15057 rules (1942 with conclusion selected). Queue: 66 rules.
+37400 rules inserted. Base: 15072 rules (1980 with conclusion selected). Queue: 7 rules.

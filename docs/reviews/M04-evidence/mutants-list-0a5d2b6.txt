@@ -1,0 +1,48 @@
+# M4-fix C-3: cargo mutants --list --json with the gate selection (--features kat, MUTANT_EXCLUDE_FILES, MUTANT_EXCLUDE_RE), per package and per file
+# head 0a5d2b6 + the docs commit (comment-only changes), cargo-mutants 27.1.0 — the basis of the per-package floor (caught >= 1, unviable <= 35 %)
+# at the review pin e8359b1: secmp-crypto 268, secmp-proto 1013, both 1281
+
+secmp-crypto mutants: 268
+    16 crates/secmp-crypto/src/aead.rs
+    19 crates/secmp-crypto/src/caead.rs
+    33 crates/secmp-crypto/src/ed25519.rs
+    2 crates/secmp-crypto/src/error.rs
+    8 crates/secmp-crypto/src/fingerprint.rs
+    5 crates/secmp-crypto/src/hash.rs
+    4 crates/secmp-crypto/src/hybrid_kem.rs
+    22 crates/secmp-crypto/src/hybrid_sign.rs
+    13 crates/secmp-crypto/src/kdf.rs
+    10 crates/secmp-crypto/src/label.rs
+    23 crates/secmp-crypto/src/mldsa.rs
+    30 crates/secmp-crypto/src/msg.rs
+    13 crates/secmp-crypto/src/nonce.rs
+    1 crates/secmp-crypto/src/rng.rs
+    23 crates/secmp-crypto/src/sas.rs
+    21 crates/secmp-crypto/src/secret.rs
+    4 crates/secmp-crypto/src/tr_kdf.rs
+    5 crates/secmp-crypto/src/vector_stream.rs
+    16 crates/secmp-crypto/src/x25519.rs
+secmp-proto mutants: 1026
+    92 crates/secmp-proto/src/codec.rs
+    3 crates/secmp-proto/src/error.rs
+    4 crates/secmp-proto/src/hx/derive.rs
+    9 crates/secmp-proto/src/hx/initiator.rs
+    35 crates/secmp-proto/src/hx/mod.rs
+    38 crates/secmp-proto/src/hx/responder.rs
+    142 crates/secmp-proto/src/inv.rs
+    20 crates/secmp-proto/src/keys.rs
+    99 crates/secmp-proto/src/prekeys.rs
+    2 crates/secmp-proto/src/sizes.rs
+    66 crates/secmp-proto/src/tr/content.rs
+    12 crates/secmp-proto/src/tr/entropy.rs
+    73 crates/secmp-proto/src/tr/ratchet.rs
+    36 crates/secmp-proto/src/tr/select.rs
+    67 crates/secmp-proto/src/tr/state.rs
+    95 crates/secmp-proto/src/wire/cell.rs
+    67 crates/secmp-proto/src/wire/frame.rs
+    14 crates/secmp-proto/src/wire/hx.rs
+    50 crates/secmp-proto/src/wire/inv.rs
+    8 crates/secmp-proto/src/wire/mod.rs
+    23 crates/secmp-proto/src/wire/record.rs
+    71 crates/secmp-proto/src/wire/signed.rs
+both packages (the gate's selection): 1294

@@ -11,7 +11,7 @@
 //! | Linux | `memfd_secret(2)` (removed from the kernel direct map, implicitly locked and excluded from core dumps), not inherited across `fork` (`MADV_DONTFORK`); where `memfd_secret` is unavailable, `mlock` + `MADV_DONTDUMP` + `MADV_WIPEONFORK` |
 //! | Windows | `VirtualLock` (the working set is enlarged when the lock quota is exhausted) |
 //! | macOS (development host) | `mlock` |
-//! | Miri | a heap allocation (Miri cannot execute the operating-system calls) |
+//! | Miri, Kani | a heap allocation (verification backends: neither tool executes the operating-system calls) |
 //!
 //! Failure to obtain protected memory is an error, never a silent downgrade (fail closed, CLAUDE.md §1.5).
 
@@ -19,13 +19,13 @@ use core::fmt;
 
 use zeroize::Zeroize;
 
-#[cfg(miri)]
+#[cfg(any(miri, kani))]
 #[path = "secret_page/heap.rs"]
 mod os;
-#[cfg(all(unix, not(miri)))]
+#[cfg(all(unix, not(any(miri, kani))))]
 #[path = "secret_page/unix.rs"]
 mod os;
-#[cfg(all(windows, not(miri)))]
+#[cfg(all(windows, not(any(miri, kani))))]
 #[path = "secret_page/windows.rs"]
 mod os;
 
@@ -39,7 +39,7 @@ pub enum Backend {
     Mlock,
     /// Windows `VirtualAlloc` + `VirtualLock`.
     VirtualLock,
-    /// Heap memory, used only when running under Miri.
+    /// Heap memory, used only when running under Miri or Kani.
     Heap,
 }
 
@@ -180,6 +180,22 @@ mod tests {
         Ok(())
     }
 
+    /// The heap backend is a verification backend: a build without `cfg(miri)` and `cfg(kani)` — every test and
+    /// production build — has the operating-system backend.
+    #[test]
+    fn heap_backend_only_under_miri_or_kani() -> Result<(), Error> {
+        let verification = cfg!(any(miri, kani));
+        assert_eq!(
+            SecretPage::<32>::new()?.backend() == Backend::Heap,
+            verification
+        );
+        assert_eq!(
+            SecretPage::<32>::with_options(false)?.backend() == Backend::Heap,
+            verification
+        );
+        Ok(())
+    }
+
     #[test]
     fn many_pages_are_independent() -> Result<(), Error> {
         let mut pages = Vec::new();
@@ -228,8 +244,8 @@ mod tests {
     }
 
     /// Operating-system view of the pages: the data page is accessible, both guard pages are not, and the data
-    /// page is locked (Linux: `VmFlags` in `/proc/self/smaps`). Not compiled under Miri, which has no OS.
-    #[cfg(not(miri))]
+    /// page is locked (Linux: `VmFlags` in `/proc/self/smaps`). Not compiled under Miri or Kani, which have no OS.
+    #[cfg(not(any(miri, kani)))]
     #[test]
     fn guard_pages_and_locking_as_seen_by_the_os() -> Result<(), Error> {
         let page = os::page_size()?;

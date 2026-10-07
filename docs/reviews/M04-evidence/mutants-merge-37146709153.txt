@@ -1,0 +1,13 @@
+  mutants shard 0/8: PASS — 163 mutants (mutants-0-1)
+  mutants shard 1/8: PASS — 163 mutants (mutants-1-1)
+  mutants shard 2/8: PASS — 162 mutants (mutants-2-1)
+  mutants shard 3/8: PASS — 162 mutants (mutants-3-1)
+  mutants shard 4/8: PASS — 162 mutants (mutants-4-1)
+  mutants shard 5/8: PASS — 162 mutants (mutants-5-1)
+  mutants shard 6/8: PASS — 162 mutants (mutants-6-1)
+  mutants shard 7/8: PASS — 162 mutants (mutants-7-1)
+  mutants secmp-crypto: caught 168, missed 1, timeout 0, unviable 99 of 268 (caught 62.7 %, at least 50 %, unviable 36.9 %)
+  mutants secmp-proto: caught 733, missed 3, timeout 0, unviable 294 of 1030 (caught 71.2 %, at least 50 %, unviable 28.5 %)
+  mutants WARNING secmp-crypto: unviable 36.9 % > 35 % (99 of 268 mutants, informative, ADR-047 Amendment 2)
+  mutants survivors documented in docs/mutants-accepted.md: 4, undocumented: 0
+   8 mutants-merge   PASS          0s  8 shards merged; shard 0/8: PASS — 163 mutants (mutants-0-1); shard 1/8: PASS — 163 mutants (mutants-1-1); shard 2/8: PASS — 162 mutants (mutants-2-1); shard 3/8: PASS — 162 mutants (mutants-3-1); shard 4/8: PASS — 162 mutants (mutants-4-1); shard 5/8: PASS — 162 mutants (mutants-5-1); shard 6/8: PASS — 162 mutants (mutants-6-1); shard 7/8: PASS — 162 mutants (mutants-7-1); secmp-crypto: caught 168, missed 1, timeout 0, unviable 99 of 268 (caught 62.7 %, at least 50 %, unviable 36.9 %); secmp-proto: caught 733, missed 3, timeout 0, unviable 294 of 1030 (caught 71.2 %, at least 50 %, unviable 28.5 %); WARNING secmp-crypto: unviable 36.9 % > 35 % (99 of 268 mutants, informative, ADR-047 Amendment 2); survivors documented in docs/mutants-accepted.md: 4, undocumented: 0

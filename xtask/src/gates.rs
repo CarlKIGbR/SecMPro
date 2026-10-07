@@ -3682,6 +3682,12 @@ pub(crate) fn required_job_findings(files: &[(String, String)]) -> Vec<String> {
     out
 }
 
+/// `s` with every `\r\n` as `\n`: a Windows checkout may convert the workflows, the readers below are line-anchored
+/// (M4 review R-100).
+fn lf(s: &str) -> String {
+    s.replace("\r\n", "\n")
+}
+
 fn workflows(root: &Path) -> Result<String> {
     let dir = root.join(".github").join("workflows");
     let files = walk_files(&dir, &|p: &Path| {
@@ -3690,7 +3696,7 @@ fn workflows(root: &Path) -> Result<String> {
     let mut findings = Vec::new();
     let mut texts = Vec::new();
     for f in &files {
-        let text = std::fs::read_to_string(f)?;
+        let text = lf(&std::fs::read_to_string(f)?);
         findings.extend(workflow_findings(&rel(root, f), &text));
         findings.extend(workflow_token_findings(&rel(root, f), &text));
         texts.push((rel(root, f), text));
@@ -5134,10 +5140,22 @@ mod tests {
     /// on the fixture and on the real `ci.yml`; the pristine texts give none.
     #[test]
     fn deleting_or_neutering_a_pinned_job_is_a_finding() {
-        let real = include_str!("../../.github/workflows/ci.yml");
+        let real = lf(include_str!("../../.github/workflows/ci.yml"));
         let fixture = gate_ci("", "      - run: cargo xtask ci-fast --strict\n");
-        for (what, ci) in [("fixture", fixture.as_str()), ("ci.yml", real)] {
+        for (what, ci) in [("fixture", fixture.as_str()), ("ci.yml", real.as_str())] {
             assert_eq!(all_ci_findings(ci), Vec::<String>::new(), "{what}");
+            let variants = pin_edit_variants(ci);
+            for (name, text) in &variants {
+                assert_ne!(text.as_str(), ci, "{what} {name}: the edit did not apply");
+                let found = all_ci_findings(text);
+                assert!(!found.is_empty(), "{what} {name}: no finding");
+            }
+        }
+    }
+
+    /// The pin-edit variants of `deleting_or_neutering_a_pinned_job_is_a_finding` (LF text).
+    fn pin_edit_variants(ci: &str) -> Vec<(&'static str, String)> {
+        {
             let variants = [
                 ("v01 delete mutants", without_job(ci, "mutants")),
                 ("v02 delete proverif-hx", without_job(ci, "proverif-hx")),
@@ -5172,11 +5190,23 @@ mod tests {
                     ),
                 ),
             ];
-            for (name, text) in &variants {
-                assert_ne!(text.as_str(), ci, "{what} {name}: the edit did not apply");
-                let found = all_ci_findings(text);
-                assert!(!found.is_empty(), "{what} {name}: no finding");
-            }
+            variants.into()
+        }
+    }
+
+    /// M4 review R-100: the policy reads a CRLF checkout like an LF one — the committed `ci.yml` as CRLF gives no
+    /// finding, and each pin-edit variant applied to the CRLF text gives the finding it gives on LF.
+    #[test]
+    fn policy_reads_crlf_workflows_like_lf() {
+        let real = lf(include_str!("../../.github/workflows/ci.yml"));
+        let crlf = real.replace('\n', "\r\n");
+        assert_ne!(crlf, real);
+        assert_eq!(all_ci_findings(&lf(&crlf)), Vec::<String>::new());
+        for (name, edited) in pin_edit_variants(&real) {
+            let on_lf = all_ci_findings(&edited);
+            let on_crlf = all_ci_findings(&lf(&edited.replace('\n', "\r\n")));
+            assert!(!on_lf.is_empty(), "{name}: no finding on LF");
+            assert_eq!(on_lf, on_crlf, "{name}");
         }
     }
 

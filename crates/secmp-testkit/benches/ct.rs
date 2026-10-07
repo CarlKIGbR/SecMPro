@@ -86,8 +86,8 @@
 //! The classes may differ only in their contents, never in where the inputs live: every measured input is a
 //! fresh copy made by `prepare` (by value or in a new allocation, identical sequence for both classes), so buffer
 //! placement cannot correlate with the class (M1 review F7); the fresh copies are made from one common source
-//! per target (F9, `f7b3066`; the targets section below); and the preparation runs the same code for both classes
-//! (`blend`, ADR-042 Amendment 2).
+//! per target (F9, `f7b3066`; the targets section below); and the preparation runs the same code on the same
+//! addresses for both classes (`blend`, ADR-042 Amendments 2 and 4).
 //!
 //! ADR-038 (the instrument):
 //! - **Timer (1).** Each call is timed with the CPU counter — `rdtscp` on `x86_64`, `cntvct_el0` on `aarch64`,
@@ -1364,49 +1364,53 @@ impl Outcome {
 // ---- targets --------------------------------------------------------------------------------------------------
 //
 // Input preparation (M2 finding, WEISUNG M2-2 C; ADR-042 Amendment 2): every measured input is built from **one
-// common source per target**, `base` (the class-1 input), as `base ^ deltas[class]` — `Deltas` holds class 0's
-// delta (class 0 XOR class 1) and class 1's all-zero delta of the same length, in two buffers selected by index —
-// by one out-of-line XOR loop (`blend`) that runs the same instructions for both classes; the classes differ in the
-// contents of the fresh copy and in which of the two delta buffers the loop reads (the one class-dependent address
-// left in the preparation). History: before M2, `prepare` copied each input from a per-class source buffer
-// (`inputs[c]`, `&sealed` vs `&tampered`, `&at_100` vs `&at_300`, `&other` vs `&k`) right before the timed window,
-// and the class-dependent source address left a class-dependent cache footprint at the start of every timed call:
-// an A/A′ control (identical contents, the class-1 source only moved to its own allocation) failed with it on
-// GitHub-hosted Linux (`msg_open_reject` 13.0, `caead_open_reject` 50.1, run 36569831144), while the A/A control
-// (one source for both labels) passed in every run — the M1 review F7 rule ("the classes may differ only in their
-// contents, never in where the inputs live") applied one step earlier. The M2 form `base ^ (delta & mask)` was
-// then split by the compiler into a `memcpy` for class 1 and an XOR loop for class 0 (ADR-042 Amendment 2). The
-// same-content controls measure this preparation path with identical contents in both classes: `same_content_control`
-// on the 4096-byte TR cell, `hx_same_content_control` on the 12 288-byte HX blend and its three boxed cells (ADR-042
-// Amendment 3).
+// common source per target**, `base` (the class-1 input), as `base ^ (delta & mask)` — `Deltas` holds the one
+// delta (class 0 XOR class 1), the mask is 0xFF for class 0 and 0x00 for class 1 and passes through `black_box` —
+// by one out-of-line XOR loop (`blend`) that runs the same instructions on the same addresses for both classes; the
+// classes differ only in the mask value and so in the contents of the fresh copy. History: before M2, `prepare`
+// copied each input from a per-class source buffer (`inputs[c]`, `&sealed` vs `&tampered`, `&at_100` vs `&at_300`,
+// `&other` vs `&k`) right before the timed window, and the class-dependent source address left a class-dependent
+// cache footprint at the start of every timed call: an A/A′ control (identical contents, the class-1 source only
+// moved to its own allocation) failed with it on GitHub-hosted Linux (`msg_open_reject` 13.0, `caead_open_reject`
+// 50.1, run 36569831144), while the A/A control (one source for both labels) passed in every run — the M1 review F7
+// rule ("the classes may differ only in their contents, never in where the inputs live") applied one step earlier.
+// The M2 form `base ^ (delta & mask)` without `black_box` was then split by the compiler into a `memcpy` for class 1
+// and an XOR loop for class 0 (ADR-042 Amendment 2). Amendment 2 replaced it by a per-class delta selected by index
+// (class 0's XOR delta, class 1 a separate all-zero buffer of the same length), which left one class-dependent
+// address in the preparation: which of the two delta buffers the loop read right before the timed window. With the
+// 12 288-byte HX blend that decided the cache state the timed call started with, and `hx_same_content_control`
+// failed with it on GitHub-hosted Linux (2.01 / 1.95 effect floors, run 37614599312; ADR-042 Amendment 4, R-103).
+// The same-content controls measure this preparation path with identical contents in both classes:
+// `same_content_control` on the 4096-byte TR cell, `hx_same_content_control` on the 12 288-byte HX blend and its
+// three boxed cells (ADR-042 Amendment 3).
 
-/// The per-class deltas of `blend` (ADR-042 Amendment 2), indexed by the class: class 0's `class0 ^ class1` and
-/// class 1's all-zero delta of the same length.
-struct Deltas([Vec<u8>; 2]);
+/// The delta of `blend` (ADR-042 Amendment 4): `class0 ^ class1`, read by both classes.
+struct Deltas(Vec<u8>);
 
 impl Deltas {
-    /// The deltas that turn the base (`class1`) into `class0` for class 0 and leave it unchanged for class 1.
+    /// The delta that turns the base (`class1`) into `class0` under class 0's mask.
     fn new(class0: &[u8], class1: &[u8]) -> Self {
-        let delta = xor(class0, class1);
-        let zero = vec![0_u8; delta.len()];
-        Self([delta, zero])
+        Self(xor(class0, class1))
     }
 }
 
-/// `out = base ^ deltas[class]`: `base ^ (class0 ^ class1)` for class 0, `base` for class 1 (ADR-042 Amendment 2).
-/// One out-of-line XOR loop for both classes: the class only selects the delta buffer by index, and the selected
-/// buffer passes through `black_box`, so the compiler can neither branch on the class nor split the loop by it. The
-/// mask form `base ^ (delta & mask)` it replaces was split into a `memcpy` for class 1 and an XOR loop for class 0,
-/// both before the timed window (`docs/reviews/M03-evidence/ct-blend-disasm-aarch64-bc5088b.txt`).
+/// `out = base ^ (delta & mask)`: `base ^ (class0 ^ class1)` for class 0 (mask 0xFF), `base` for class 1 (mask
+/// 0x00) (ADR-042 Amendment 4). One out-of-line XOR loop for both classes over the same `base` and the same delta:
+/// the class enters only as the mask value, which passes through `black_box` as the delta slice does, so the
+/// compiler can neither branch on the class nor split the loop by it, and no class-selected address remains. The
+/// mask form without `black_box` was split into a `memcpy` for class 1 and an XOR loop for class 0
+/// (`docs/reviews/M03-evidence/ct-blend-disasm-aarch64-bc5088b.txt`); the per-class delta buffers that replaced it
+/// left the buffer read before the timed window class-dependent (R-103).
 #[inline(never)]
 fn blend(base: &[u8], deltas: &Deltas, class: usize, out: &mut [u8]) {
-    let delta = black_box(deltas.0.get(class & 1).map_or(&[][..], Vec::as_slice));
+    let m: u8 = black_box(u8::from((class & 1) == 0).wrapping_neg());
+    let delta = black_box(deltas.0.as_slice());
     for ((o, b), d) in out.iter_mut().zip(base).zip(delta) {
-        *o = b ^ d;
+        *o = b ^ (d & m);
     }
 }
 
-/// `a ^ b`, bytewise (class 0's delta of `Deltas`).
+/// `a ^ b`, bytewise (the delta of `Deltas`).
 fn xor(a: &[u8], b: &[u8]) -> Vec<u8> {
     a.iter().zip(b).map(|(x, y)| x ^ y).collect()
 }
@@ -1503,8 +1507,8 @@ fn min_leak(n: usize, k: usize, stream: &mut Stream) -> Samples {
 }
 
 /// The informative same-content variant `min_leak_same_content` of the sensitivity control (ADR-041 Amendment 3 (2)):
-/// both classes 32 byte steps, through the same per-class preparation as `min_leak` (`blend` with two delta buffers,
-/// class 1's all-zero, class 0's all-zero too). A class difference here follows the label or the preparation, not the
+/// both classes 32 byte steps, through the same per-class preparation as `min_leak` (`blend` with one delta under the
+/// per-class mask, the delta all-zero). A class difference here follows the label or the preparation, not the
 /// step count — the falsifier of the loop-exit reading of run 37127247911 (`DIAG-ct-37127247911.md`).
 fn min_leak_same_content(n: usize, k: usize, stream: &mut Stream) -> Samples {
     min_leak_steps(n, k, stream, [32, 32])

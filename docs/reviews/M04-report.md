@@ -1436,3 +1436,7 @@ Evidence files (`docs/reviews/M04-evidence/`): `ct-report-linux-37146709153-126d
 `ct-progress-linux-37146709153.jsonl`, `ct-bench-linux-37146709153.log`, `mutants-merge-37146709153.txt`,
 `linux-full-37146709153-steps.txt`, `linux-full-37146709153-miri-doctest-excerpt.txt`,
 `windows-native-37146709153-excerpt.txt`, `proverif-hx-37146709153.txt`, `fix5-tests-458bfaf.txt`.
+
+**Run 4 (37593310636, `86c481e`).** `windows-native`: 1 failure (`proverif_model_hashes_are_pinned`, CRLF double conversion in the test, R-102); `ct`, mutants, `proverif-hx` PASS; `linux-full` pending at the time of writing.
+
+**FIX-6.** R-102: the test builds its CRLF variant from LF and checks a second conversion; xtask `nextest` runs `--no-fail-fast`; CRLF audit of the xtask tests (`lf()` on 14 repository-text reads). `cargo nextest run -p xtask`: 146/146; workspace `--all-features`: 576/576; `step --strict clippy policy`: PASS; no change to `vectors/`, `docs/03`, `docs/01`, `formal/`, `crates/`.

@@ -1,0 +1,47 @@
+(* SPDX-License-Identifier: AGPL-3.0-or-later *)
+(* formal/link/lSig.pv — session lSig of CLAIMS §LINK, one file per session (OPEN-M5-16 A, LO-1) over the
+   library formal/link.pvl (model, abstractions, devices: its header). Run:
+   proverif -lib formal/link.pvl formal/link/lSig.pv
+
+   Row (formal/link.pvl 3.): RevealSig in phase 0: the attacker signs a RelayInfo with its own static keys.
+   Queries in the order of their RESULT lines (CLAIMS §LINK gate rule):
+     L8 · L8 · L8
+     L2
+   — 4 RESULT lines.
+*)
+
+const lSig: tagt.
+
+(* Secrecy assumptions (formal/link.pvl 7.): the secrets this session never reveals, and those it reveals only
+   in phase 1 ("phase 0") *)
+not x: bitstring; attacker(dhsk(lSig, iC(x))).
+not x: bitstring; attacker(kemsk(lSig, iC(x))).
+not x: bitstring; attacker(dhsk(lSig, iE(x))).
+not x: bitstring; attacker(dhsk(lSig, iR(x))).
+not x: bitstring; attacker(kemr(lSig, x)).
+not x: bitstring; attacker(sigk(lSig, iQ(x))).
+not attacker(dhsk(lSig, kRdh)).
+not attacker(kemsk(lSig, kRkem)).
+
+(* Queries (CLAIMS §LINK), one declaration per begin event (formal/link.pvl 7.); R's pinned fingerprint is
+   h((lbl_relayfp, vk(sigk(s, kRsig)))), an honest queue key vk(sigk(s, iQ(x))). *)
+
+query sid: bitstring, ctr: bitstring, m: bitstring, kid: bitstring, h0: bitstring, h1: bitstring, k1: key,
+      k2: key, fp: bitstring, cs: bitstring, cmd: bitstring, x: bitstring;
+      (* L8: reachability — CStart *)
+      event(CStart(lSig, fp, kid, h0));
+      (* L8: the honest pair completes (RAccept and CAccept with equal arguments) *)
+      event(RAccept(lSig, kid, h0, h1, sid, k1, k2)) && event(CAccept(lSig, fp, kid, h0, h1, sid, k1, k2));
+      (* L8: R executes a command of an honest queue key *)
+      event(RExec(lSig, sid, cs, cmd, vk(sigk(lSig, iQ(x))))).
+
+query sid: bitstring, ctr: bitstring, m: bitstring, kid: bitstring, h0: bitstring, h1: bitstring, k1: key,
+      k2: key, fp: bitstring, cs: bitstring, cmd: bitstring, x: bitstring;
+      (* L2: relay authentication rests on relay_sig; expected false *)
+      inj-event(CAccept(lSig, h((lbl_relayfp, vk(sigk(lSig, kRsig)))), kid, h0, h1, sid, k1, k2))
+        ==> inj-event(RAccept(lSig, kid, h0, h1, sid, k1, k2)).
+
+process
+    Relay(lSig)
+  | ! Client(lSig)
+  | RevSig(lSig)

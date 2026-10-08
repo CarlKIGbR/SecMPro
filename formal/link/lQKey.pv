@@ -1,0 +1,46 @@
+(* SPDX-License-Identifier: AGPL-3.0-or-later *)
+(* formal/link/lQKey.pv — session lQKey of CLAIMS §LINK, one file per session (OPEN-M5-16 A, LO-1) over the
+   library formal/link.pvl (model, abstractions, devices: its header). Run:
+   proverif -lib formal/link.pvl formal/link/lQKey.pv
+
+   Row (formal/link.pvl 3.): RevealQKey in phase 0 (each client's queue signing key).
+   Queries in the order of their RESULT lines (CLAIMS §LINK gate rule):
+     L8 · L8 · L8
+     L6a
+   — 4 RESULT lines.
+*)
+
+const lQKey: tagt.
+
+(* Secrecy assumptions (formal/link.pvl 7.): the secrets this session never reveals, and those it reveals only
+   in phase 1 ("phase 0") *)
+not x: bitstring; attacker(dhsk(lQKey, iC(x))).
+not x: bitstring; attacker(kemsk(lQKey, iC(x))).
+not x: bitstring; attacker(dhsk(lQKey, iE(x))).
+not x: bitstring; attacker(dhsk(lQKey, iR(x))).
+not x: bitstring; attacker(kemr(lQKey, x)).
+not attacker(dhsk(lQKey, kRdh)).
+not attacker(kemsk(lQKey, kRkem)).
+not attacker(sigk(lQKey, kRsig)).
+
+(* Queries (CLAIMS §LINK), one declaration per begin event (formal/link.pvl 7.); R's pinned fingerprint is
+   h((lbl_relayfp, vk(sigk(s, kRsig)))), an honest queue key vk(sigk(s, iQ(x))). *)
+
+query sid: bitstring, ctr: bitstring, m: bitstring, kid: bitstring, h0: bitstring, h1: bitstring, k1: key,
+      k2: key, fp: bitstring, cs: bitstring, cmd: bitstring, x: bitstring;
+      (* L8: reachability — CStart *)
+      event(CStart(lQKey, fp, kid, h0));
+      (* L8: the honest pair completes (RAccept and CAccept with equal arguments) *)
+      event(RAccept(lQKey, kid, h0, h1, sid, k1, k2)) && event(CAccept(lQKey, fp, kid, h0, h1, sid, k1, k2));
+      (* L8: R executes a command of an honest queue key *)
+      event(RExec(lQKey, sid, cs, cmd, vk(sigk(lQKey, iQ(x))))).
+
+query sid: bitstring, ctr: bitstring, m: bitstring, kid: bitstring, h0: bitstring, h1: bitstring, k1: key,
+      k2: key, fp: bitstring, cs: bitstring, cmd: bitstring, x: bitstring;
+      (* L6a: sanity, the queue key is the capability; expected false *)
+      inj-event(RExec(lQKey, sid, cs, cmd, vk(sigk(lQKey, iQ(x)))))
+        ==> inj-event(CSign(lQKey, sid, cs, cmd, vk(sigk(lQKey, iQ(x))))).
+
+process
+    Relay(lQKey)
+  | ! ClientQ(lQKey)

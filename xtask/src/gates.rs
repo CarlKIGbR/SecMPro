@@ -5400,8 +5400,8 @@ mod tests {
     /// PV-01 `proverif_link_matches_claims` [O-16] (TEST-SPEC-M5 (h)): the gate's reading of the SecMP-LINK files —
     /// every file of `expect::PROVERIF_EXPECTED_LINK` passes with the output its entries describe and is refused, naming
     /// the file, the CLAIMS ID and the query, when one of its lines has the opposite or no verdict; the `RESULT` lines of
-    /// the committed local run (`docs/reviews/M05-evidence/proverif-link-local.txt`, one section per file) pass the gate
-    /// for every file, so the table is the measured one. The verdicts against CLAIMS: X-04.
+    /// the committed local run (`docs/reviews/M05-evidence/proverif-link-local-2.txt`, one section per file) pass the
+    /// gate for every file, so the table is the measured one. The verdicts against CLAIMS: X-04.
     #[test]
     fn proverif_link_matches_claims() -> Result<()> {
         let table = expect::PROVERIF_EXPECTED_LINK;
@@ -5446,7 +5446,7 @@ mod tests {
         // the committed local run
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
         let evidence = lf(&std::fs::read_to_string(
-            root.join("docs/reviews/M05-evidence/proverif-link-local.txt"),
+            root.join("docs/reviews/M05-evidence/proverif-link-local-2.txt"),
         )?);
         let sections = link_evidence_sections(&evidence);
         let stems: BTreeSet<String> = sections.iter().map(|(s, _)| s.clone()).collect();

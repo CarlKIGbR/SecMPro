@@ -1137,7 +1137,8 @@ pub(crate) const PROVERIF_EXPECTED_HX: &[HxExpected] = &[
 /// L1b, L3, L3a, L3b, L4, L5, L5a, L6, L7 true; L1c, L2, L3c, L5b, L6a and every L8 line false) and a `link/*.pv` file
 /// without entries. Declarations per file (formal/link.pvl 3., 6.): the payload lines of L3/L5 (`CSend`, `RSend`) and the
 /// three L8 lines, then the L1-type line, L4 (two lines), L6-type, L7 — 55 lines in 9 files. Query texts in ProVerif 2.05's
-/// display form from the local runs (docs/reviews/M05-evidence/proverif-link-local.txt); `rustfmt` leaves the table alone.
+/// display form from the completed local runs (docs/reviews/M05-evidence/proverif-link-local-2.txt, WEISUNG M5-B-2: every
+/// line of lDH and lBoth from their runs with the reveals of LO-5/LO-6); `rustfmt` leaves the table alone.
 #[rustfmt::skip]
 pub(crate) const PROVERIF_EXPECTED_LINK: &[HxExpected] = &[
     ("lClean", "L3", "not (event(CAccept(lClean,h((lbl_relayfp,vk(sigk(lClean,kRsig)))),kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) && event(CSend(lClean,sid_4,ctr,m)) && attacker(m))", Proved::True),

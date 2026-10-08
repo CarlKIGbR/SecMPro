@@ -1,0 +1,753 @@
+Kani Rust Verifier 0.68.0 (cargo plugin)
+CBMC 6.11.0
+warning: use of an unstable feature
+ --> <crate attribute>:1:12
+  |
+1 | #![feature(register_tool)]
+  |            ^^^^^^^^^^^^^
+  |
+  = note: requested on the command line with `--force-warn unstable-features`
+
+warning: trailing semicolon in macro used in expression position
+  --> crates/secmp-crypto/src/hybrid_sign.rs:27:15
+   |
+27 | const _: () = assert!(HYBRID_SIG_LEN == ED25519_SIG_LEN + MLDSA65_SIG_LEN);
+   |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+   = note: for more information, see issue #79813 <https://github.com/rust-lang/rust/issues/79813>
+   = note: `#[warn(semicolon_in_expressions_from_non_local_macros)]` (part of `#[warn(future_incompatible)]`) on by default
+   = note: this warning originates in the macro `assert` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: trailing semicolon in macro used in expression position
+  --> crates/secmp-crypto/src/msg.rs:33:15
+   |
+33 | const _: () = assert!(MSG_SEALED_LEN == BODY_LEN + MSG_TAG_LEN);
+   |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+   = note: for more information, see issue #79813 <https://github.com/rust-lang/rust/issues/79813>
+   = note: this warning originates in the macro `assert` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: use of an unstable feature
+ --> <crate attribute>:1:12
+  |
+1 | #![feature(register_tool)]
+  |            ^^^^^^^^^^^^^
+  |
+  = note: requested on the command line with `--force-warn unstable-features`
+
+   Compiling secmp-proto v0.0.0 (/Users/c.carl/coding/claude_code/SecMPro/crates/secmp-proto)
+warning: trailing semicolon in macro used in expression position
+  --> crates/secmp-proto/src/hx/responder.rs:50:15
+   |
+50 | const _: () = assert!(MAX_PROCESSED_GROUPS >= (128 + 24) / 3);
+   |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+   = note: for more information, see issue #79813 <https://github.com/rust-lang/rust/issues/79813>
+   = note: `#[warn(semicolon_in_expressions_from_non_local_macros)]` (part of `#[warn(future_incompatible)]`) on by default
+   = note: this warning originates in the macro `assert` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: trailing semicolon in macro used in expression position
+   --> crates/secmp-proto/src/inv.rs:428:15
+    |
+428 | const _: () = assert!(LINK_BLOB_LEN == NONCE_LEN + COM_LEN + 12_288 + 16);
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+    = note: for more information, see issue #79813 <https://github.com/rust-lang/rust/issues/79813>
+    = note: this warning originates in the macro `assert` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: trailing semicolon in macro used in expression position
+  --> crates/secmp-proto/src/kani_proofs.rs:79:19
+   |
+79 |         Err(_) => assert!(len != CELL_LEN),
+   |                   ^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+   = note: for more information, see issue #79813 <https://github.com/rust-lang/rust/issues/79813>
+   = note: this warning originates in the macro `assert` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: trailing semicolon in macro used in expression position
+   --> crates/secmp-proto/src/kani_proofs.rs:138:19
+    |
+138 |         Err(_) => assert!(n == size),
+    |                   ^^^^^^^^^^^^^^^^^^
+    |
+    = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+    = note: for more information, see issue #79813 <https://github.com/rust-lang/rust/issues/79813>
+    = note: this warning originates in the macro `assert` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: trailing semicolon in macro used in expression position
+   --> crates/secmp-proto/src/kani_proofs.rs:323:19
+    |
+323 |         Err(_) => assert!(gap.is_none_or(|g| g > MAX_FF)),
+    |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+    = note: for more information, see issue #79813 <https://github.com/rust-lang/rust/issues/79813>
+    = note: this warning originates in the macro `assert` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: trailing semicolon in macro used in expression position
+   --> crates/secmp-proto/src/kani_proofs.rs:427:15
+    |
+427 | const _: () = assert!(GROUPING_SLOTS < MAX_PARTIAL_GROUPS);
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+    = note: for more information, see issue #79813 <https://github.com/rust-lang/rust/issues/79813>
+    = note: this warning originates in the macro `assert` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: trailing semicolon in macro used in expression position
+   --> crates/secmp-proto/src/kani_proofs.rs:932:31
+    |
+932 |                     Err(_) => assert!(false),
+    |                               ^^^^^^^^^^^^^^
+    |
+    = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+    = note: for more information, see issue #79813 <https://github.com/rust-lang/rust/issues/79813>
+    = note: this warning originates in the macro `assert` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: trailing semicolon in macro used in expression position
+   --> crates/secmp-proto/src/kani_proofs.rs:936:19
+    |
+936 |         Err(_) => assert!(n == FRAME_PLAINTEXT_LEN),
+    |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+    = note: for more information, see issue #79813 <https://github.com/rust-lang/rust/issues/79813>
+    = note: this warning originates in the macro `assert` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: trailing semicolon in macro used in expression position
+    --> crates/secmp-proto/src/kani_proofs.rs:1026:19
+     |
+1026 |         Err(_) => assert!(false),
+     |                   ^^^^^^^^^^^^^^
+     |
+     = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+     = note: for more information, see issue #79813 <https://github.com/rust-lang/rust/issues/79813>
+     = note: this warning originates in the macro `assert` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: trailing semicolon in macro used in expression position
+    --> crates/secmp-proto/src/kani_proofs.rs:1160:44
+     |
+1160 |             (State::Idle, Input::Other) => assert!(taken == Step::Single && next == State::Idle),
+     |                                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+     = note: for more information, see issue #79813 <https://github.com/rust-lang/rust/issues/79813>
+     = note: this warning originates in the macro `assert` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: trailing semicolon in macro used in expression position
+    --> crates/secmp-proto/src/kani_proofs.rs:1164:44
+     |
+1164 |             (State::AwaitTwo { .. }, _) => assert!(taken == Step::Complete),
+     |                                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+     = note: for more information, see issue #79813 <https://github.com/rust-lang/rust/issues/79813>
+     = note: this warning originates in the macro `assert` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: trailing semicolon in macro used in expression position
+    --> crates/secmp-proto/src/kani_proofs.rs:1165:50
+     |
+1165 |             (State::Idle, Input::Cont { .. }) => assert!(false),
+     |                                                  ^^^^^^^^^^^^^^
+     |
+     = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+     = note: for more information, see issue #79813 <https://github.com/rust-lang/rust/issues/79813>
+     = note: this warning originates in the macro `assert` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: trailing semicolon in macro used in expression position
+   --> crates/secmp-proto/src/sizes.rs:199:15
+    |
+199 | const _: () = assert!(HYBRID_SIG_LEN == 3373);
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+    = note: for more information, see issue #79813 <https://github.com/rust-lang/rust/issues/79813>
+    = note: this warning originates in the macro `assert` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: trailing semicolon in macro used in expression position
+   --> crates/secmp-proto/src/sizes.rs:200:15
+    |
+200 | const _: () = assert!(IKS_PUBLIC_LEN == 2017);
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+    = note: for more information, see issue #79813 <https://github.com/rust-lang/rust/issues/79813>
+    = note: this warning originates in the macro `assert` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: trailing semicolon in macro used in expression position
+   --> crates/secmp-proto/src/sizes.rs:201:15
+    |
+201 | const _: () = assert!(PREKEY_BUNDLE_LEN == 7775);
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+    = note: for more information, see issue #79813 <https://github.com/rust-lang/rust/issues/79813>
+    = note: this warning originates in the macro `assert` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: trailing semicolon in macro used in expression position
+   --> crates/secmp-proto/src/sizes.rs:202:15
+    |
+202 | const _: () = assert!(LINK_BLOB_LEN == 12_360);
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+    = note: for more information, see issue #79813 <https://github.com/rust-lang/rust/issues/79813>
+    = note: this warning originates in the macro `assert` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: trailing semicolon in macro used in expression position
+   --> crates/secmp-proto/src/sizes.rs:203:15
+    |
+203 | const _: () = assert!(HEADER_LEN == 2314 && HDR_CT_LEN == 2330);
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+    = note: for more information, see issue #79813 <https://github.com/rust-lang/rust/issues/79813>
+    = note: this warning originates in the macro `assert` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: trailing semicolon in macro used in expression position
+   --> crates/secmp-proto/src/sizes.rs:204:15
+    |
+204 | const _: () = assert!(CELL_LEN == 4096);
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+    = note: for more information, see issue #79813 <https://github.com/rust-lang/rust/issues/79813>
+    = note: this warning originates in the macro `assert` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: trailing semicolon in macro used in expression position
+   --> crates/secmp-proto/src/sizes.rs:205:15
+    |
+205 | const _: () = assert!(sum(&[FRAME_PLAINTEXT_LEN, AEAD_TAG_LEN]) == FRAME_LEN);
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+    = note: for more information, see issue #79813 <https://github.com/rust-lang/rust/issues/79813>
+    = note: this warning originates in the macro `assert` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: trailing semicolon in macro used in expression position
+   --> crates/secmp-proto/src/sizes.rs:206:15
+    |
+206 | const _: () = assert!(sum(&[CELL_LEN, 240]) == FRAME_PLAINTEXT_LEN);
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+    = note: for more information, see issue #79813 <https://github.com/rust-lang/rust/issues/79813>
+    = note: this warning originates in the macro `assert` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: trailing semicolon in macro used in expression position
+   --> crates/secmp-proto/src/sizes.rs:208:5
+    |
+208 |     assert!(OUTER_LEN == 9362 && OUTER_PADDED_LEN == 12_018 && OUTER_LEN < OUTER_PADDED_LEN);
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+    = note: for more information, see issue #79813 <https://github.com/rust-lang/rust/issues/79813>
+    = note: this warning originates in the macro `assert` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: trailing semicolon in macro used in expression position
+   --> crates/secmp-proto/src/sizes.rs:209:15
+    |
+209 | const _: () = assert!(INNER_LEN == 6113 && INNER_CT_LEN == 6185);
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+    = note: for more information, see issue #79813 <https://github.com/rust-lang/rust/issues/79813>
+    = note: this warning originates in the macro `assert` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: trailing semicolon in macro used in expression position
+   --> crates/secmp-proto/src/sizes.rs:210:15
+    |
+210 | const _: () = assert!(HANDSHAKE_CELL_PT_LEN == 4024 && HANDSHAKE_CELL_LEN == 4096);
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+    = note: for more information, see issue #79813 <https://github.com/rust-lang/rust/issues/79813>
+    = note: this warning originates in the macro `assert` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: trailing semicolon in macro used in expression position
+   --> crates/secmp-proto/src/sizes.rs:211:15
+    |
+211 | const _: () = assert!(RELAYINFO_LEN == 1741 && HS1_LEN == 2853 && HS2_LEN == 1153);
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+    = note: for more information, see issue #79813 <https://github.com/rust-lang/rust/issues/79813>
+    = note: this warning originates in the macro `assert` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: trailing semicolon in macro used in expression position
+   --> crates/secmp-proto/src/sizes.rs:212:15
+    |
+212 | const _: () = assert!(HELLO_BODY_LEN == 7);
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+    = note: for more information, see issue #79813 <https://github.com/rust-lang/rust/issues/79813>
+    = note: this warning originates in the macro `assert` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: trailing semicolon in macro used in expression position
+   --> crates/secmp-proto/src/sizes.rs:213:15
+    |
+213 | const _: () = assert!(INVITATION_NO_DIRECT_LEN == 241 && RELAYREF_NO_DIRECT_LEN == 101);
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+    = note: for more information, see issue #79813 <https://github.com/rust-lang/rust/issues/79813>
+    = note: this warning originates in the macro `assert` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: trailing semicolon in macro used in expression position
+   --> crates/secmp-proto/src/sizes.rs:215:15
+    |
+215 | const _: () = assert!(sum(&[CONTENT_HEADER_LEN, CONTENT_BODY_MAX, 1]) == BODY_LEN);
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+    = note: for more information, see issue #79813 <https://github.com/rust-lang/rust/issues/79813>
+    = note: this warning originates in the macro `assert` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: trailing semicolon in macro used in expression position
+   --> crates/secmp-proto/src/sizes.rs:216:15
+    |
+216 | const _: () = assert!(KEYCHANGE_BODY_LEN == 5390 && KEYCHANGE_BODY_LEN > CONTENT_BODY_MAX);
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+    = note: for more information, see issue #79813 <https://github.com/rust-lang/rust/issues/79813>
+    = note: this warning originates in the macro `assert` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: trailing semicolon in macro used in expression position
+   --> crates/secmp-proto/src/sizes.rs:219:15
+    |
+219 | const _: () = assert!(PROFILE_MAX_LEN == 98 && LINKDATA_MAX_LEN == 9899);
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+    = note: for more information, see issue #79813 <https://github.com/rust-lang/rust/issues/79813>
+    = note: this warning originates in the macro `assert` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: trailing semicolon in macro used in expression position
+   --> crates/secmp-proto/src/sizes.rs:220:15
+    |
+220 | const _: () = assert!(sum(&[LINKDATA_MAX_LEN, 1]) <= LINKDATA_PADDED_LEN);
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+    = note: for more information, see issue #79813 <https://github.com/rust-lang/rust/issues/79813>
+    = note: this warning originates in the macro `assert` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: trailing semicolon in macro used in expression position
+   --> crates/secmp-proto/src/sizes.rs:222:15
+    |
+222 | const _: () = assert!(sum(&[BLOB_PART_LEN, CONT_DATA_LEN, CONT_DATA_LEN]) == LINK_BLOB_LEN);
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+    = note: for more information, see issue #79813 <https://github.com/rust-lang/rust/issues/79813>
+    = note: this warning originates in the macro `assert` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: trailing semicolon in macro used in expression position
+   --> crates/secmp-proto/src/sizes.rs:223:15
+    |
+223 |   const _: () = assert!(
+    |  _______________^
+224 | |     sum(&[
+225 | |         1,
+226 | |         4,
+...   |
+234 | |     ]) < FRAME_PLAINTEXT_LEN
+235 | | );
+    | |_^
+    |
+    = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+    = note: for more information, see issue #79813 <https://github.com/rust-lang/rust/issues/79813>
+    = note: this warning originates in the macro `assert` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: trailing semicolon in macro used in expression position
+   --> crates/secmp-proto/src/sizes.rs:236:15
+    |
+236 | const _: () = assert!(sum(&[1, 4, ID_LEN, CELL_LEN, ED25519_SIG_LEN]) < FRAME_PLAINTEXT_LEN);
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+    = note: for more information, see issue #79813 <https://github.com/rust-lang/rust/issues/79813>
+    = note: this warning originates in the macro `assert` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: trailing semicolon in macro used in expression position
+   --> crates/secmp-proto/src/sizes.rs:237:15
+    |
+237 | const _: () = assert!(sum(&[1, 4, 1, ID_LEN, 8, CELL_LEN]) < FRAME_PLAINTEXT_LEN);
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+    = note: for more information, see issue #79813 <https://github.com/rust-lang/rust/issues/79813>
+    = note: this warning originates in the macro `assert` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: trailing semicolon in macro used in expression position
+   --> crates/secmp-proto/src/sizes.rs:238:15
+    |
+238 | const _: () = assert!(sum(&[1, 4, 1, CONT_DATA_LEN]) < FRAME_PLAINTEXT_LEN);
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+    = note: for more information, see issue #79813 <https://github.com/rust-lang/rust/issues/79813>
+    = note: this warning originates in the macro `assert` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: trailing semicolon in macro used in expression position
+   --> crates/secmp-proto/src/sizes.rs:240:15
+    |
+240 |   const _: () = assert!(
+    |  _______________^
+241 | |     sum(&[
+242 | |         6, 88, 88, 88, 88, 88, 88, 88, 88, 88, 88, 88, 88, 88, 88, 88, 88, 88, 88, 88, 88, 88, 88,
+243 | |         88, 88, 88, 88, 88, 88, 88, 88, 88, 88
+244 | |     ]) == 2822
+245 | | );
+    | |_^
+    |
+    = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+    = note: for more information, see issue #79813 <https://github.com/rust-lang/rust/issues/79813>
+    = note: this warning originates in the macro `assert` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: trailing semicolon in macro used in expression position
+   --> crates/secmp-proto/src/sizes.rs:246:15
+    |
+246 | const _: () = assert!(sum(&[ID_LEN, 8, ED25519_SIG_LEN]) == 88);
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+    = note: for more information, see issue #79813 <https://github.com/rust-lang/rust/issues/79813>
+    = note: this warning originates in the macro `assert` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: trailing semicolon in macro used in expression position
+   --> crates/secmp-proto/src/sizes.rs:249:15
+    |
+249 | const _: () = assert!(X25519_PK_LEN == secmp_crypto::X25519_LEN);
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+    = note: for more information, see issue #79813 <https://github.com/rust-lang/rust/issues/79813>
+    = note: this warning originates in the macro `assert` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: trailing semicolon in macro used in expression position
+   --> crates/secmp-proto/src/sizes.rs:250:15
+    |
+250 | const _: () = assert!(ED25519_PK_LEN == secmp_crypto::ED25519_PK_LEN);
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+    = note: for more information, see issue #79813 <https://github.com/rust-lang/rust/issues/79813>
+    = note: this warning originates in the macro `assert` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: trailing semicolon in macro used in expression position
+   --> crates/secmp-proto/src/sizes.rs:251:15
+    |
+251 | const _: () = assert!(ED25519_SIG_LEN == secmp_crypto::ED25519_SIG_LEN);
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+    = note: for more information, see issue #79813 <https://github.com/rust-lang/rust/issues/79813>
+    = note: this warning originates in the macro `assert` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: trailing semicolon in macro used in expression position
+   --> crates/secmp-proto/src/sizes.rs:252:15
+    |
+252 | const _: () = assert!(MLKEM768_EK_LEN == secmp_crypto::MLKEM768_EK_LEN);
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+    = note: for more information, see issue #79813 <https://github.com/rust-lang/rust/issues/79813>
+    = note: this warning originates in the macro `assert` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: trailing semicolon in macro used in expression position
+   --> crates/secmp-proto/src/sizes.rs:253:15
+    |
+253 | const _: () = assert!(MLKEM768_CT_LEN == secmp_crypto::MLKEM768_CT_LEN);
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+    = note: for more information, see issue #79813 <https://github.com/rust-lang/rust/issues/79813>
+    = note: this warning originates in the macro `assert` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: trailing semicolon in macro used in expression position
+   --> crates/secmp-proto/src/sizes.rs:254:15
+    |
+254 | const _: () = assert!(MLKEM1024_EK_LEN == secmp_crypto::MLKEM1024_EK_LEN);
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+    = note: for more information, see issue #79813 <https://github.com/rust-lang/rust/issues/79813>
+    = note: this warning originates in the macro `assert` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: trailing semicolon in macro used in expression position
+   --> crates/secmp-proto/src/sizes.rs:255:15
+    |
+255 | const _: () = assert!(MLKEM1024_CT_LEN == secmp_crypto::MLKEM1024_CT_LEN);
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+    = note: for more information, see issue #79813 <https://github.com/rust-lang/rust/issues/79813>
+    = note: this warning originates in the macro `assert` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: trailing semicolon in macro used in expression position
+   --> crates/secmp-proto/src/sizes.rs:256:15
+    |
+256 | const _: () = assert!(MLDSA65_PK_LEN == secmp_crypto::MLDSA65_PK_LEN);
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+    = note: for more information, see issue #79813 <https://github.com/rust-lang/rust/issues/79813>
+    = note: this warning originates in the macro `assert` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: trailing semicolon in macro used in expression position
+   --> crates/secmp-proto/src/sizes.rs:257:15
+    |
+257 | const _: () = assert!(MLDSA65_SIG_LEN == secmp_crypto::MLDSA65_SIG_LEN);
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+    = note: for more information, see issue #79813 <https://github.com/rust-lang/rust/issues/79813>
+    = note: this warning originates in the macro `assert` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: trailing semicolon in macro used in expression position
+   --> crates/secmp-proto/src/sizes.rs:258:15
+    |
+258 | const _: () = assert!(HYBRID_SIG_LEN == secmp_crypto::HYBRID_SIG_LEN);
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+    = note: for more information, see issue #79813 <https://github.com/rust-lang/rust/issues/79813>
+    = note: this warning originates in the macro `assert` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: trailing semicolon in macro used in expression position
+   --> crates/secmp-proto/src/sizes.rs:259:15
+    |
+259 | const _: () = assert!(IKS_PUBLIC_LEN == secmp_crypto::IKS_PUBLIC_LEN);
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+    = note: for more information, see issue #79813 <https://github.com/rust-lang/rust/issues/79813>
+    = note: this warning originates in the macro `assert` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: trailing semicolon in macro used in expression position
+   --> crates/secmp-proto/src/sizes.rs:260:15
+    |
+260 | const _: () = assert!(BODY_LEN == secmp_crypto::BODY_LEN);
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+    = note: for more information, see issue #79813 <https://github.com/rust-lang/rust/issues/79813>
+    = note: this warning originates in the macro `assert` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: trailing semicolon in macro used in expression position
+   --> crates/secmp-proto/src/sizes.rs:261:15
+    |
+261 | const _: () = assert!(NONCE_LEN == secmp_crypto::NONCE_LEN);
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+    = note: for more information, see issue #79813 <https://github.com/rust-lang/rust/issues/79813>
+    = note: this warning originates in the macro `assert` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: trailing semicolon in macro used in expression position
+   --> crates/secmp-proto/src/sizes.rs:262:15
+    |
+262 | const _: () = assert!(COM_LEN == secmp_crypto::COM_LEN);
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+    = note: for more information, see issue #79813 <https://github.com/rust-lang/rust/issues/79813>
+    = note: this warning originates in the macro `assert` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: trailing semicolon in macro used in expression position
+   --> crates/secmp-proto/src/sizes.rs:263:15
+    |
+263 | const _: () = assert!(AEAD_TAG_LEN == secmp_crypto::AEAD_TAG_LEN);
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+    = note: for more information, see issue #79813 <https://github.com/rust-lang/rust/issues/79813>
+    = note: this warning originates in the macro `assert` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: trailing semicolon in macro used in expression position
+   --> crates/secmp-proto/src/sizes.rs:264:15
+    |
+264 | const _: () = assert!(BODY_TAG_LEN == secmp_crypto::MSG_TAG_LEN);
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+    = note: for more information, see issue #79813 <https://github.com/rust-lang/rust/issues/79813>
+    = note: this warning originates in the macro `assert` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: trailing semicolon in macro used in expression position
+   --> crates/secmp-proto/src/sizes.rs:265:15
+    |
+265 | const _: () = assert!(sum(&[BODY_LEN, BODY_TAG_LEN]) == secmp_crypto::MSG_SEALED_LEN);
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+    = note: for more information, see issue #79813 <https://github.com/rust-lang/rust/issues/79813>
+    = note: this warning originates in the macro `assert` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: trailing semicolon in macro used in expression position
+  --> crates/secmp-proto/src/tr/content.rs:49:15
+   |
+49 | const _: () = assert!(CHUNK_MAX == CONTENT_BODY_MAX - FRAGMENT_HEADER_LEN);
+   |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+   = note: for more information, see issue #79813 <https://github.com/rust-lang/rust/issues/79813>
+   = note: this warning originates in the macro `assert` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: trailing semicolon in macro used in expression position
+   --> crates/secmp-proto/src/tr/ratchet.rs:410:15
+    |
+410 | const _: () = assert!(HEADER_N_AT == 38);
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+    = note: for more information, see issue #79813 <https://github.com/rust-lang/rust/issues/79813>
+    = note: this warning originates in the macro `assert` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: trailing semicolon in macro used in expression position
+  --> crates/secmp-proto/src/tr/select.rs:27:15
+   |
+27 | const _: () = assert!(MAX_SKIPPED == 2 * 256 && SKIP_WINDOW == 256 && MAX_FF == 1_048_576);
+   |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+   = note: for more information, see issue #79813 <https://github.com/rust-lang/rust/issues/79813>
+   = note: this warning originates in the macro `assert` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: trailing semicolon in macro used in expression position
+  --> crates/secmp-proto/src/tr/state.rs:55:15
+   |
+55 |   const _: () = assert!(
+   |  _______________^
+56 | |     OPT_KEY_LEN == X25519_PK_LEN + 1
+57 | |         && ENTRY_LEN == 68
+58 | |         && SKIPPED_MAX_BYTES == MAX_SKIPPED * ENTRY_LEN
+59 | |         && RatchetState::MAX_ENCODED_LEN == 38_585
+60 | | );
+   | |_^
+   |
+   = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+   = note: for more information, see issue #79813 <https://github.com/rust-lang/rust/issues/79813>
+   = note: this warning originates in the macro `assert` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: trailing semicolon in macro used in expression position
+   --> crates/secmp-proto/src/wire/inv.rs:581:15
+    |
+581 | const _: () = assert!(LINK_BLOB_CT_LEN == LINKDATA_PADDED_LEN + AEAD_TAG_LEN);
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in a future release!
+    = note: for more information, see issue #79813 <https://github.com/rust-lang/rust/issues/79813>
+    = note: this warning originates in the macro `assert` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: function `unpad` is never used
+   --> crates/secmp-proto/src/codec.rs:309:19
+    |
+309 |     pub(crate) fn unpad(bytes: &[u8], size: usize) -> Result<&[u8]> {
+    |                   ^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: static `KANI_DRAWS` is never used
+   --> crates/secmp-proto/src/kani_proofs.rs:706:8
+    |
+706 | static KANI_DRAWS: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(1);
+    |        ^^^^^^^^^^
+
+warning: function `kani_fill` is never used
+   --> crates/secmp-proto/src/kani_proofs.rs:712:4
+    |
+712 | fn kani_fill(buf: &mut [u8]) -> secmp_crypto::Result<()> {
+    |    ^^^^^^^^^
+
+warning: function `kani_no_barrier` is never used
+   --> crates/secmp-proto/src/kani_proofs.rs:723:4
+    |
+723 | fn kani_no_barrier<T: ?Sized>(_val: &T) {}
+    |    ^^^^^^^^^^^^^^^
+
+warning: function `kani_zeroize_array` is never used
+   --> crates/secmp-proto/src/kani_proofs.rs:727:4
+    |
+727 | fn kani_zeroize_array<Z: Default + Copy, const N: usize>(a: &mut [Z; N]) {
+    |    ^^^^^^^^^^^^^^^^^^
+
+warning: function `kani_eq_at` is never used
+   --> crates/secmp-proto/src/kani_proofs.rs:732:4
+    |
+732 | fn kani_eq_at<T: PartialEq<U>, U>(a: &[T], b: &[U], k: usize) -> bool {
+    |    ^^^^^^^^^^
+
+warning: function `kani_array_eq` is never used
+   --> crates/secmp-proto/src/kani_proofs.rs:741:4
+    |
+741 | fn kani_array_eq<T: PartialEq<U> + 'static, U: 'static, const N: usize>(
+    |    ^^^^^^^^^^^^^
+
+warning: function `checked` is never used
+   --> crates/secmp-proto/src/keys.rs:250:8
+    |
+250 |     fn checked<T>(value: T) -> Result<T> {
+    |        ^^^^^^^
+
+warning: function `ed25519_pk` is never used
+   --> crates/secmp-proto/src/keys.rs:258:19
+    |
+258 |     pub(crate) fn ed25519_pk(bytes: &[u8]) -> Result<Ed25519Pk> {
+    |                   ^^^^^^^^^^
+
+warning: function `ed25519_sig` is never used
+   --> crates/secmp-proto/src/keys.rs:263:19
+    |
+263 |     pub(crate) fn ed25519_sig(bytes: &[u8]) -> Result<Ed25519Sig> {
+    |                   ^^^^^^^^^^^
+
+warning: function `mlkem768_ek` is never used
+   --> crates/secmp-proto/src/keys.rs:268:19
+    |
+268 |     pub(crate) fn mlkem768_ek(bytes: &[u8]) -> Result<MlKem768Ek> {
+    |                   ^^^^^^^^^^^
+
+warning: function `mlkem1024_ek` is never used
+   --> crates/secmp-proto/src/keys.rs:272:19
+    |
+272 |     pub(crate) fn mlkem1024_ek(bytes: &[u8]) -> Result<MlKem1024Ek> {
+    |                   ^^^^^^^^^^^^
+
+warning: function `request_decode_fields` is never used
+   --> crates/secmp-proto/src/wire/frame.rs:398:19
+    |
+398 |     pub(crate) fn request_decode_fields(_op: u8, r: &mut Reader<'_>) -> Result<RequestCmd> {
+    |                   ^^^^^^^^^^^^^^^^^^^^^
+
+warning: use of an unstable feature
+ --> <crate attribute>:1:12
+  |
+1 | #![feature(register_tool)]
+  |            ^^^^^^^^^^^^^
+  |
+  = note: requested on the command line with `--force-warn unstable-features`
+
+warning: Found the following unsupported constructs:
+             - TerminatorKind::InlineAsm (1)
+             - caller_location (1)
+             - foreign function (1)
+         
+         Verification will fail if one or more of these constructs is reachable.
+         See https://model-checking.github.io/kani/rust-feature-support.html for more details.
+
+warning: Kani currently does not support concurrency. The following constructs will be treated as sequential operations:
+             - atomic_xadd (5)
+         
+
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.45s
+warning: the following packages contain code that will be rejected by a future version of Rust: secmp-crypto v0.0.0 (/Users/c.carl/coding/claude_code/SecMPro/crates/secmp-crypto), secmp-proto v0.0.0 (/Users/c.carl/coding/claude_code/SecMPro/crates/secmp-proto)
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 28`

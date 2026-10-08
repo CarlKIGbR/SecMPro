@@ -102,6 +102,9 @@ through the `Initiator` was not built) · R-42/R-59, R-41, R-47, R-66, R-67, R-7
 ## 5. Deviations from spec / plan
 
 - Reference files copied by the reviewer (WEISUNG M5-1), `<SECMPROREF>` = `target/fable/m5/ref/`.
+- R-104: `e243648` left `kani_stubs` importing `AEAD_TAG_LEN` from `super` after the `use crate::sizes` line lost it; the Kani
+  gate evidence (30/30, 3215 s) predates that commit; fixed in `cc6d8c8`, codegen at the fixed head exit 0
+  (`M05-evidence/kani-codegen-m5a-cc6d8c8.txt`), full gate = CI `linux-full` of the run on the pushed head.
 - `docs/01:48` (E-4): the literal substitution of ADR-048 Part 5 breaks the sentence; applied as "identical handshake cells
   (App. D `HandshakeCell`) are indistinguishable from other cells".
 - K-01 `kani_frame_pad_total` is bounded: the symbolic `unpad` scan of a 4336-byte buffer did not finish in about 30 minutes, so

@@ -1,0 +1,45 @@
+# M5 Phase B — freeze of the `link` suite (TEST-SPEC-M5 V-22, X-01; docs/06 §5 step 12a)
+
+branch m05-link, HEAD 6665c78 (the Phase B working tree on top of it, not yet committed when the commands ran)
+
+$ env PATH=... cargo xtask vectors > target/tmp/v22-vectors.log 2>&1   (exit 0)
+
+     Running `target/debug/xtask vectors`
+$ /Users/c.carl/.rustup/toolchains/1.98.1-aarch64-apple-darwin/bin/cargo run --release --locked --quiet --package secmp-crypto --features kat --example gen-vectors -- /Users/c.carl/coding/claude_code/SecMPro/vectors/rust
+$ /Users/c.carl/.rustup/toolchains/1.98.1-aarch64-apple-darwin/bin/cargo run --release --locked --quiet --package secmp-proto --example gen-encodings -- /Users/c.carl/coding/claude_code/SecMPro/vectors/rust
+$ /Users/c.carl/.rustup/toolchains/1.98.1-aarch64-apple-darwin/bin/cargo run --release --locked --quiet --package secmp-proto --features kat --example gen-tr -- /Users/c.carl/coding/claude_code/SecMPro/vectors/rust
+$ /Users/c.carl/.rustup/toolchains/1.98.1-aarch64-apple-darwin/bin/cargo run --release --locked --quiet --package secmp-proto --features kat --example gen-hx -- /Users/c.carl/coding/claude_code/SecMPro/vectors/rust
+$ /Users/c.carl/.rustup/toolchains/1.98.1-aarch64-apple-darwin/bin/cargo run --release --locked --quiet --package secmp-relay --features kat --example gen-link -- /Users/c.carl/coding/claude_code/SecMPro/vectors/rust
+$ /Users/c.carl/.rustup/toolchains/1.98.1-aarch64-apple-darwin/bin/cargo nextest run --locked --package secmp-proto --test encodings_ref
+   Compiling secmp-proto v0.0.0 (/Users/c.carl/coding/claude_code/SecMPro/crates/secmp-proto)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.76s
+────────────
+ Nextest run ID 33149c87-c331-4883-a79f-492d20474f28 with nextest profile: default
+    Starting 3 tests across 1 binary
+        PASS [   0.435s] (1/3) secmp-proto::encodings_ref every_row_of_the_encodings_file
+        PASS [   0.643s] (2/3) secmp-proto::encodings_ref the_rust_generator_reproduces_every_positive_row
+        PASS [   0.682s] (3/3) secmp-proto::encodings_ref canonical_writer_is_stable
+────────────
+     Summary [   0.686s] 3 tests run: 3 passed, 0 skipped
+  caead: agrees with ref; frozen file unchanged
+  encodings: agrees with ref; frozen file unchanged
+  fingerprint: agrees with ref; frozen file unchanged
+  hkdf-labels: agrees with ref; frozen file unchanged
+  hx: agrees with ref; frozen file unchanged
+  hybridkem-1024: agrees with ref; frozen file unchanged
+  hybridkem-768: agrees with ref; frozen file unchanged
+  hybridsign: agrees with ref; frozen file unchanged
+  link: agrees with ref; frozen as vectors/link.json
+  msgencrypt: agrees with ref; frozen file unchanged
+  sas: agrees with ref; frozen file unchanged
+  tr: agrees with ref; frozen file unchanged
+vectors: 12 suites identical to vectors/ref (structural, SCHEMA §1; positive rows of encodings)
+
+sha256 vectors/link.json     = dd77bb7c96d298f9cc188d4eadbd950605ccca2a250169708cdc573a73264c77 (2818910 B)
+sha256 vectors/ref/link.json = dd77bb7c96d298f9cc188d4eadbd950605ccca2a250169708cdc573a73264c77 (2818910 B)
+expected (BRIEF_M5)          = dd77bb7c96d298f9cc188d4eadbd950605ccca2a250169708cdc573a73264c77 (2818910 B)
+vectors/link.json is a verbatim copy of vectors/ref/link.json: True
+
+$ env PATH=... cargo xtask step --strict ref-vectors > target/tmp/v22-12a.log 2>&1   (exit 0)
+ 12a ref-vectors     PASS          0s  12 frozen suites (962 cases) structurally and byte-identical to vectors/ref (ADR-026); pending freeze (shape only): none
+step: PASS

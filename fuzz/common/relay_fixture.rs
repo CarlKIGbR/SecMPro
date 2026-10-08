@@ -12,6 +12,7 @@
 use std::sync::OnceLock;
 
 use secmp_crypto::{Ed25519SigningKey, MlKem1024Dk, SecretBytes, X25519Secret, sha256};
+use secmp_proto::Encode;
 use secmp_proto::codec::unpad;
 use secmp_proto::keys::{Ed25519Pk, Ed25519Sig};
 use secmp_proto::link::cont::split_blob;
@@ -24,7 +25,6 @@ use secmp_proto::wire::Id;
 use secmp_proto::wire::cell::Cell;
 use secmp_proto::wire::frame::{FetchEntry, LinkGetMode, Request, RequestCmd};
 use secmp_proto::wire::signed::{self, LinkPutFields};
-use secmp_proto::Encode;
 use secmp_relay::event::NullSink;
 use secmp_relay::{Executor, KeyRing, Limits, Now, Relay};
 
@@ -159,7 +159,10 @@ impl Fixture {
         let (hs1, wait) = st.on_relayinfo(&info, &mut self.client_entropy()).unwrap();
         let (hs2, relay_link) = st_r.on_hs1(&hs1, &mut self.relay_entropy()).unwrap();
         let client = wait.on_hs2(&hs2).unwrap();
-        (client, Executor::new(relay_link, relay.limits().link_rate, at(0, 0)))
+        (
+            client,
+            Executor::new(relay_link, relay.limits().link_rate, at(0, 0)),
+        )
     }
 }
 
@@ -194,7 +197,14 @@ impl Client<'_> {
         ids::token(self.access, &self.sess, cmd_seq).unwrap()
     }
 
-    pub fn queue_new(&self, s: u32, recv: &Key, send: &Key, token: [u8; 32], signer: &Key) -> Request {
+    pub fn queue_new(
+        &self,
+        s: u32,
+        recv: &Key,
+        send: &Key,
+        token: [u8; 32],
+        signer: &Key,
+    ) -> Request {
         let msg = signed::queue_new(&self.sess, s, &recv.pk, &send.pk, &token);
         Request {
             cmd_seq: s,
@@ -300,7 +310,10 @@ impl Client<'_> {
         };
         Request {
             cmd_seq: s,
-            cmd: RequestCmd::LinkGet { ld_id: *ld_id, mode },
+            cmd: RequestCmd::LinkGet {
+                ld_id: *ld_id,
+                mode,
+            },
         }
     }
 }
@@ -318,7 +331,10 @@ pub struct Put<'a> {
 
 /// `rid` and `sid` of a pair (spec §9.1).
 pub fn ids_of(recv: &Key, send: &Key) -> (Id, Id) {
-    (ids::rid(&recv.pk).unwrap(), ids::sid(&recv.pk, &send.pk).unwrap())
+    (
+        ids::rid(&recv.pk).unwrap(),
+        ids::sid(&recv.pk, &send.pk).unwrap(),
+    )
 }
 
 /// A cursor over the fuzzer's bytes: every read is zero-padded at the end of the input.

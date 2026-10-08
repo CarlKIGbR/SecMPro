@@ -74,7 +74,10 @@ impl Session<'_> {
         let seq = seq_of(b.u8(), self.last);
         let k = b.u8();
         let cl = self.cl();
-        let (recv, send) = (&self.fx.pairs[usize::from(k & 3)].0, &self.fx.pairs[usize::from(k & 3)].1);
+        let (recv, send) = (
+            &self.fx.pairs[usize::from(k & 3)].0,
+            &self.fx.pairs[usize::from(k & 3)].1,
+        );
         match sub {
             0 => payload(&Request {
                 cmd_seq: seq,
@@ -223,7 +226,9 @@ fuzz_target!(|data: &[u8]| {
     let (hello, st) = link::client::start(fx.fp, Some(&access), NOW).unwrap();
     let info = conn.on_bytes(&hello, t, &mut fx.relay_entropy());
     assert!(!info.close, "RELAYINFO");
-    let (hs1, wait) = st.on_relayinfo(&info.bytes, &mut fx.client_entropy()).unwrap();
+    let (hs1, wait) = st
+        .on_relayinfo(&info.bytes, &mut fx.client_entropy())
+        .unwrap();
     let hs2 = conn.on_bytes(&hs1, t, &mut fx.relay_entropy());
     assert!(!hs2.close, "HS2");
     let mut s = Session {
@@ -243,15 +248,29 @@ fuzz_target!(|data: &[u8]| {
         let out = deliver(&mut conn, fx, &unit, split, t);
         if out.close {
             // a teardown (spec §8.5): nothing emitted, the store as before the unit, and nothing after it
-            assert!(out.bytes.is_empty(), "a teardown emitted {} bytes", out.bytes.len());
-            assert_eq!(relay.store_digest_kat(), digest, "a teardown changed the store");
+            assert!(
+                out.bytes.is_empty(),
+                "a teardown emitted {} bytes",
+                out.bytes.len()
+            );
+            assert_eq!(
+                relay.store_digest_kat(),
+                digest,
+                "a teardown changed the store"
+            );
             let more = conn.on_bytes(&[0; FRAME], t, &mut fx.answer_entropy());
-            assert!(more.close && more.bytes.is_empty(), "a closed connection answered");
+            assert!(
+                more.close && more.bytes.is_empty(),
+                "a closed connection answered"
+            );
             return;
         }
         assert_eq!(out.bytes.len() % FRAME, 0, "partial frames emitted");
         for f in out.bytes.chunks(FRAME) {
-            assert!(s.client.open(f).is_ok(), "a relay frame does not open at the next counter");
+            assert!(
+                s.client.open(f).is_ok(),
+                "a relay frame does not open at the next counter"
+            );
         }
         s.last = conn.executor().map_or(s.last, |e| e.last_cmd_seq());
     }

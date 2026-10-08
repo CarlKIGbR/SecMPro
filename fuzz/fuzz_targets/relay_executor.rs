@@ -32,11 +32,15 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use secmp_proto::link::frame::Frame;
 use secmp_proto::link::Link;
-use secmp_proto::wire::frame::{Cellr, CellrContext, FetchEntry, Request, RequestCmd, Response, ResponseCmd, opcode};
+use secmp_proto::link::frame::Frame;
 use secmp_proto::wire::Id;
-use secmp_relay::budget::{BudgetLimits, LINKDATA_OVERHEAD, LINKDATA_RESERVATION, QUEUE_RESERVATION};
+use secmp_proto::wire::frame::{
+    Cellr, CellrContext, FetchEntry, Request, RequestCmd, Response, ResponseCmd, opcode,
+};
+use secmp_relay::budget::{
+    BudgetLimits, LINKDATA_OVERHEAD, LINKDATA_RESERVATION, QUEUE_RESERVATION,
+};
 use secmp_relay::rate::{RateLimit, TokenBucket};
 use secmp_relay::relay::kat::StoreSnapshot;
 use secmp_relay::{Executor, Limits, Outcome, Relay};
@@ -70,7 +74,12 @@ fn d2_count(op: u8) -> usize {
 fn kinds_fit(op: u8, verdict: Verdict, r: &[Response]) -> bool {
     let ops: Vec<u8> = r.iter().map(|x| x.cmd.op()).collect();
     let err = match r {
-        [Response { cmd: ResponseCmd::Err(c), .. }] => Some(c.byte()),
+        [
+            Response {
+                cmd: ResponseCmd::Err(c),
+                ..
+            },
+        ] => Some(c.byte()),
         _ => None,
     };
     match verdict {
@@ -179,7 +188,12 @@ impl Session {
                 over |= !bucket.take(self.mono);
             }
             let unit = self.client.seal(p).unwrap();
-            outcomes.push(self.exec.on_unit(&self.relay, unit.as_slice(), t, &mut fx.answer_entropy()));
+            outcomes.push(self.exec.on_unit(
+                &self.relay,
+                unit.as_slice(),
+                t,
+                &mut fx.answer_entropy(),
+            ));
         }
         let verdict = if seq <= last {
             Verdict::Stale
@@ -197,12 +211,20 @@ impl Session {
     }
 
     /// The D.2 shape of the answer (spec D.2 `:839`, §9.3 `:610`).
-    fn shape(&mut self, op: u8, verdict: Verdict, seq: u32, outcomes: Vec<Outcome>) -> Vec<Response> {
+    fn shape(
+        &mut self,
+        op: u8,
+        verdict: Verdict,
+        seq: u32,
+        outcomes: Vec<Outcome>,
+    ) -> Vec<Response> {
         let n = outcomes.len();
         let mut frames: Vec<Frame> = Vec::new();
         for (i, o) in outcomes.into_iter().enumerate() {
             match o {
-                Outcome::Teardown => panic!("an honest frame was rejected (op {op:#04x}, frame {i})"),
+                Outcome::Teardown => {
+                    panic!("an honest frame was rejected (op {op:#04x}, frame {i})")
+                }
                 Outcome::Pending => assert!(i + 1 < n, "the last frame of op {op:#04x} is pending"),
                 Outcome::Respond(f) => {
                     assert!(i + 1 == n, "op {op:#04x} answered before its last frame");
@@ -210,8 +232,16 @@ impl Session {
                 }
             }
         }
-        let count = if verdict == Verdict::Run { d2_count(op) } else { 1 };
-        assert_eq!(frames.len(), count, "op {op:#04x} {verdict:?}: D.2 frame count");
+        let count = if verdict == Verdict::Run {
+            d2_count(op)
+        } else {
+            1
+        };
+        assert_eq!(
+            frames.len(),
+            count,
+            "op {op:#04x} {verdict:?}: D.2 frame count"
+        );
         let context = if op == opcode::FETCH_MULTI {
             CellrContext::FetchMulti
         } else {
@@ -226,7 +256,10 @@ impl Session {
                 r
             })
             .collect();
-        assert!(kinds_fit(op, verdict, &resps), "op {op:#04x} {verdict:?}: response kinds");
+        assert!(
+            kinds_fit(op, verdict, &resps),
+            "op {op:#04x} {verdict:?}: response kinds"
+        );
         resps
     }
 
@@ -241,7 +274,10 @@ impl Session {
     ) {
         if verdict != Verdict::Run {
             // not executed: nothing changes (spec §9.2, §9.7 item 7)
-            assert_eq!(before, after, "a stale or rate-limited command changed the store");
+            assert_eq!(
+                before, after,
+                "a stale or rate-limited command changed the store"
+            );
         }
         let derived: Vec<(Id, Id)> = fx
             .pairs
@@ -251,24 +287,51 @@ impl Session {
         for q in &after.queues {
             assert!(q.cell_ids.len() <= QUEUE_CAPACITY, "more than 128 cells");
             assert!(q.next_cell_id >= 1);
-            assert!(q.cell_ids.windows(2).all(|w| w[0] < w[1]), "ids not increasing");
+            assert!(
+                q.cell_ids.windows(2).all(|w| w[0] < w[1]),
+                "ids not increasing"
+            );
             assert!(q.cell_ids.iter().all(|i| *i >= 1 && *i < q.next_cell_id));
-            assert!(derived.contains(&(q.rid, q.sid)), "a queue's ids are not derived from its keys");
+            assert!(
+                derived.contains(&(q.rid, q.sid)),
+                "a queue's ids are not derived from its keys"
+            );
             if !self.sweep
                 && let Some(p) = before.queues.iter().find(|p| p.rid == q.rid)
             {
                 assert!(q.next_cell_id >= p.next_cell_id, "next_cell_id decreased");
             }
         }
-        if let (Some(rid), [Response { cmd: ResponseCmd::OkSend { cell_id, evicted }, .. }]) = (check.send_rid, resps)
+        if let (
+            Some(rid),
+            [
+                Response {
+                    cmd: ResponseCmd::OkSend { cell_id, evicted },
+                    ..
+                },
+            ],
+        ) = (check.send_rid, resps)
             && !self.sweep
         {
-            let q = before.queues.iter().find(|q| q.rid == rid).expect("OK_SEND to an existing queue");
+            let q = before
+                .queues
+                .iter()
+                .find(|q| q.rid == rid)
+                .expect("OK_SEND to an existing queue");
             assert_eq!(*cell_id, q.next_cell_id, "OK_SEND cell_id");
             let full = q.cell_ids.len() == QUEUE_CAPACITY;
             assert_eq!(*evicted, full.then(|| q.cell_ids[0]), "OK_SEND eviction");
         }
-        if let (Some(ids), [Response { cmd: ResponseCmd::OkQueueNew { rid, sid }, .. }]) = (check.new_ids, resps) {
+        if let (
+            Some(ids),
+            [
+                Response {
+                    cmd: ResponseCmd::OkQueueNew { rid, sid },
+                    ..
+                },
+            ],
+        ) = (check.new_ids, resps)
+        {
             assert_eq!((*rid, *sid), ids, "OK_QUEUE_NEW ids are derived");
         }
         for r in resps {
@@ -277,11 +340,21 @@ impl Session {
             }
         }
         let (queues, linkdata) = self.relay.budget_used_kat();
-        assert_eq!(queues, QUEUE_RESERVATION * after.queues.len() as u64, "queue pool");
+        assert_eq!(
+            queues,
+            QUEUE_RESERVATION * after.queues.len() as u64,
+            "queue pool"
+        );
         let held: u64 = after
             .linkdata
             .iter()
-            .map(|e| if e.present { LINKDATA_RESERVATION } else { LINKDATA_OVERHEAD })
+            .map(|e| {
+                if e.present {
+                    LINKDATA_RESERVATION
+                } else {
+                    LINKDATA_OVERHEAD
+                }
+            })
             .sum();
         assert_eq!(linkdata, held, "link-data pool");
     }
@@ -298,7 +371,12 @@ fn build(
     hours: u64,
 ) -> (u8, Vec<Vec<u8>>, Check) {
     let mut check = Check::default();
-    let pair = |k: u8| (&fx.pairs[usize::from(k & 3)].0, &fx.pairs[usize::from((k >> 2) & 3)].1);
+    let pair = |k: u8| {
+        (
+            &fx.pairs[usize::from(k & 3)].0,
+            &fx.pairs[usize::from((k >> 2) & 3)].1,
+        )
+    };
     let token = |k: u8| {
         let mut t = cl.token(seq);
         if k & 0x40 != 0 {
@@ -380,7 +458,11 @@ fn build(
         }
         7 => {
             let k = b.u8();
-            let ld = if k & 3 == 3 && k & 0x10 != 0 { [0xee; 16] } else { [k & 3; 16] };
+            let ld = if k & 3 == 3 && k & 0x10 != 0 {
+                [0xee; 16]
+            } else {
+                [k & 3; 16]
+            };
             let owner = &fx.owners[usize::from((k >> 3) & 1)];
             let sig_seq = if k & 0x80 != 0 { seq ^ 1 } else { seq };
             vec![cl.link_get(seq, &ld, (k & 4 != 0).then_some((owner, sig_seq)))]

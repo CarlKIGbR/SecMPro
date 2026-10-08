@@ -1,0 +1,104 @@
+# M5 Phase B, TEST-SPEC-M5 (e) K-06 negative control (M4 C-15): kani_queue_eviction_bounds's checks on a copy of
+# `Cells::push` with the eviction removed — expected VERIFICATION:- FAILED with every cover SATISFIED.
+# tree: HEAD f574a03 plus the uncommitted Phase B working tree; the patch below was appended to
+#   crates/secmp-relay/src/kani_proofs.rs (a `#[cfg(kani)]`-only file) for this run only and removed afterwards; the
+#   product code (crates/secmp-relay/src/cells.rs) was not touched. The checks (`eviction_bounds`, `checked_send`,
+#   `checked_ack`, `Seen`) are the ones of the committed harness, on its fixed pattern (3 SENDs, an ack of any u64,
+#   a SEND, an ack of any u64).
+# command: env PATH=... cargo kani --package secmp-relay --exact \
+#            --harness kani_proofs::kani_queue_eviction_bounds_negative_control
+# Kani 0.68.0, CBMC 6.11.0, M1 Pro, macOS; exit 1; Verification Time 40.2 s (machine shared with ProVerif and a
+#   cargo-mutants run: timings are noisy)
+# result: 1 of 791 checks failed — `assertion failed: after.len <= CAP` in checked_send::<NoEvict> (the SEND at
+#   capacity keeps 4 cells) — and 3 of 3 cover properties SATISFIED (the covers precede the checks, since a failed
+#   check ends the path).
+#
+# the patch (appended to kani_proofs.rs; the removed eviction is the commented line):
+#
+#   // NEGATIVE CONTROL (M4 C-15; applied for one run only, then removed): `Cells::push` with the eviction removed.
+#   struct NoEvict {
+#       slots: std::collections::VecDeque<crate::cells::Slot<u8>>,
+#       next_cell_id: u64,
+#   }
+#
+#   impl Fifo for NoEvict {
+#       fn ids(&self) -> ([u64; SEEN], usize) {
+#           let mut out = [0_u64; SEEN];
+#           let mut n = 0_usize;
+#           for s in &self.slots {
+#               if let Some(slot) = out.get_mut(n) {
+#                   *slot = s.cell_id;
+#               }
+#               n = n.saturating_add(1);
+#           }
+#           (out, n)
+#       }
+#
+#       fn next_id(&self) -> u64 {
+#           self.next_cell_id
+#       }
+#
+#       fn store(&mut self) -> Result<(u64, Option<u64>), IdsExhausted> {
+#           let cell_id = self.next_cell_id;
+#           let next = cell_id.checked_add(1).ok_or(IdsExhausted)?;
+#           // removed: `if self.slots.len() >= CAP { self.slots.pop_front().map(|s| s.cell_id) } else { None }`
+#           let evicted = None;
+#           self.slots.push_back(crate::cells::Slot {
+#               cell_id,
+#               arrival: 0,
+#               bucket: HourBucket(0),
+#               buf: 0,
+#           });
+#           self.next_cell_id = next;
+#           Ok((cell_id, evicted))
+#       }
+#
+#       fn delete_to(&mut self, ack: u64) -> usize {
+#           let mut deleted = 0_usize;
+#           while self.slots.front().is_some_and(|s| s.cell_id <= ack) {
+#               self.slots.pop_front();
+#               deleted = deleted.saturating_add(1);
+#           }
+#           deleted
+#       }
+#   }
+#
+#   #[kani::proof]
+#   #[kani::unwind(5)]
+#   fn kani_queue_eviction_bounds_negative_control() {
+#       let mut c = NoEvict {
+#           slots: std::collections::VecDeque::new(),
+#           next_cell_id: 1,
+#       };
+#       eviction_bounds(&mut c);
+#   }
+#
+# the run (the harness line, every cover check, the failed check, the summary):
+
+Checking harness kani_proofs::kani_queue_eviction_bounds_negative_control...
+Check 18: kani_proofs::checked_ack::<kani_proofs::NoEvict>.cover.1
+	 - Status: SATISFIED
+	 - Description: "an acknowledgement deletes some cells and keeps the newer ones"
+	 - Location: crates/secmp-relay/src/kani_proofs.rs:271:5 in function kani_proofs::checked_ack::<kani_proofs::NoEvict>
+
+Check 19: kani_proofs::checked_ack::<kani_proofs::NoEvict>.cover.2
+	 - Status: SATISFIED
+	 - Description: "an acknowledgement empties a full queue"
+	 - Location: crates/secmp-relay/src/kani_proofs.rs:275:5 in function kani_proofs::checked_ack::<kani_proofs::NoEvict>
+
+Check 119: kani_proofs::checked_send::<kani_proofs::NoEvict>.cover.1
+	 - Status: SATISFIED
+	 - Description: "a SEND at capacity evicts the oldest cell"
+	 - Location: crates/secmp-relay/src/kani_proofs.rs:231:5 in function kani_proofs::checked_send::<kani_proofs::NoEvict>
+
+Check 123: kani_proofs::checked_send::<kani_proofs::NoEvict>.assertion.4
+	 - Status: FAILURE
+	 - Description: "assertion failed: after.len <= CAP"
+	 - Location: crates/secmp-relay/src/kani_proofs.rs:239:5 in function kani_proofs::checked_send::<kani_proofs::NoEvict>
+
+SUMMARY:
+ ** 1 of 791 failed (24 unreachable)
+ ** 3 of 3 cover properties satisfied
+VERIFICATION:- FAILED
+Verification Time: 40.161263s
+Complete - 0 successfully verified harnesses, 1 failures, 1 total.

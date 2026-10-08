@@ -1,0 +1,38 @@
+# M5 Phase B, TEST-SPEC-M5 (e) K-06 kani_queue_eviction_bounds
+# tree: HEAD f574a03 plus the uncommitted Phase B working tree (crates/secmp-relay/src/kani_proofs.rs with exactly
+#   the three harnesses K-05...K-07; crates/secmp-relay/src/executor.rs with the pure `admit`/`answer` of K-05)
+# command (the gate's form): env PATH=... cargo kani --package secmp-relay
+#   one run of the package's three harnesses: Complete - 3 successfully verified harnesses, 0 failures, 3 total;
+#   wall time of the whole run about 160 s
+# Kani 0.68.0, CBMC 6.11.0, M1 Pro, macOS; the machine was shared with ProVerif runs and a cargo-mutants pass on
+#   secmp-relay (-j 3): timings are noisy
+# bound: Cells<u8, 3>, the fixed pattern 3 SENDs, an ack of any u64, a SEND, an ack of any u64 (a free search
+#   over four operations gave no verdict in 25 min); unwind 5
+# result: VERIFICATION:- SUCCESSFUL, 52.2 s, 0 of 798 checks failed, 3 of 3 covers satisfied
+# negative control: docs/reviews/M05-evidence/kani-m5b-k06-negative-control.txt (VERIFICATION:- FAILED, 3 of 3
+#   covers satisfied)
+#
+# the run (the harness line, every cover check, the summary):
+
+Checking harness kani_proofs::kani_queue_eviction_bounds...
+Check 89: kani_proofs::checked_ack::<cells::Cells<u8, 3>>.cover.1
+	 - Status: SATISFIED
+	 - Description: "an acknowledgement deletes some cells and keeps the newer ones"
+	 - Location: crates/secmp-relay/src/kani_proofs.rs:274:5 in function kani_proofs::checked_ack::<cells::Cells<u8, 3>>
+
+Check 90: kani_proofs::checked_ack::<cells::Cells<u8, 3>>.cover.2
+	 - Status: SATISFIED
+	 - Description: "an acknowledgement empties a full queue"
+	 - Location: crates/secmp-relay/src/kani_proofs.rs:278:5 in function kani_proofs::checked_ack::<cells::Cells<u8, 3>>
+
+Check 161: kani_proofs::checked_send::<cells::Cells<u8, 3>>.cover.1
+	 - Status: SATISFIED
+	 - Description: "a SEND at capacity evicts the oldest cell"
+	 - Location: crates/secmp-relay/src/kani_proofs.rs:231:5 in function kani_proofs::checked_send::<cells::Cells<u8, 3>>
+
+SUMMARY:
+ ** 0 of 798 failed (13 unreachable)
+ ** 3 of 3 cover properties satisfied
+VERIFICATION:- SUCCESSFUL
+Verification Time: 52.183273s
+Complete - 3 successfully verified harnesses, 0 failures, 3 total.

@@ -899,6 +899,8 @@ mod tests {
         let joined = [p.hdr_nonce, p.hdr_ct, p.body_ct, p.tag].concat();
         assert_eq!(joined, bytes);
         assert_eq!(cell.as_bytes().as_slice(), bytes.as_slice());
+        // the buffer the relay keeps (spec §9.7 item 5) holds the same 4096 bytes
+        assert_eq!(cell.clone().into_boxed().as_slice(), bytes.as_slice());
         assert_eq!(*round_trip(&cell)?, bytes);
         exact_fit::<Cell>(&bytes);
         Ok(())

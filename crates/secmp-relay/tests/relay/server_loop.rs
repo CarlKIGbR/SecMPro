@@ -8,7 +8,7 @@
 
 use std::collections::VecDeque;
 use std::io::{self, ErrorKind, Read, Write};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -125,28 +125,37 @@ impl Stream for Scripted {
     }
 }
 
-/// A listener that hands out its script, then (once the handed-out connection has closed) starts the relay's drain
-/// and reports `WouldBlock`.
+/// The accept calls a test lets `serve` make: a one-second drain on a clock of ≥ 100 ms per reading ends within ≈ 10
+/// calls; the next call fails like a broken listener, so a drain that never starts or never finishes fails the test
+/// (`serve` returns `Error::Io`) instead of hanging it.
+const ACCEPT_CALLS_MAX: usize = 100;
+
+/// The relay a listener drains, its clock, and the signal of the handed-out connection's close (taken once).
+type Drain = (Arc<Relay>, Virtual, Mutex<Option<Receiver<()>>>);
+
+/// A listener that hands out its script, then (once, after the handed-out connection has closed) starts the relay's
+/// drain and reports `WouldBlock`; after `ACCEPT_CALLS_MAX` calls it fails.
 struct ScriptedListener {
     script: Mutex<VecDeque<io::Result<Scripted>>>,
-    drain: Option<(Arc<Relay>, Virtual, Mutex<Receiver<()>>)>,
+    drain: Option<Drain>,
+    calls: AtomicUsize,
 }
 
 impl Listener for ScriptedListener {
     type Conn = Scripted;
 
     fn accept_next(&self) -> io::Result<Scripted> {
+        if self.calls.fetch_add(1, Ordering::SeqCst) >= ACCEPT_CALLS_MAX {
+            return Err(io::Error::from(ErrorKind::Other));
+        }
         if let Some(next) = self.script.lock().unwrap().pop_front() {
             return next;
         }
         if let Some((relay, clock, closed)) = &self.drain
             && !relay.draining()
+            && let Some(closed) = closed.lock().unwrap().take()
         {
-            closed
-                .lock()
-                .unwrap()
-                .recv_timeout(Duration::from_secs(60))
-                .unwrap();
+            closed.recv_timeout(Duration::from_secs(60)).unwrap();
             relay.start_drain(clock.now());
         }
         Err(io::Error::from(ErrorKind::WouldBlock))
@@ -189,6 +198,7 @@ fn listener(script: Vec<io::Result<Scripted>>) -> ScriptedListener {
     ScriptedListener {
         script: Mutex::new(script.into()),
         drain: None,
+        calls: AtomicUsize::new(0),
     }
 }
 
@@ -247,7 +257,8 @@ fn serve_hands_each_connection_to_its_thread() {
     stream.closed = Some(tx);
     let l = ScriptedListener {
         script: Mutex::new(vec![Ok(stream)].into()),
-        drain: Some((Arc::clone(&relay), clock.clone(), Mutex::new(rx))),
+        drain: Some((Arc::clone(&relay), clock.clone(), Mutex::new(Some(rx)))),
+        calls: AtomicUsize::new(0),
     };
     assert_eq!(server::serve(&relay, &l, &clock), Ok(()));
     let s = seen.lock().unwrap();

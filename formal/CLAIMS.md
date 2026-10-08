@@ -257,7 +257,11 @@ Amendments (WEISUNG M4-5, reviewer termination diagnosis 2026-10-01; O-7 is repl
   committing AEAD; R's one reply (H6b) is `tseal(tkey_r(SK, ss1), ack)`. TR's internals (hkdf_init, kdf_rk, kdf_ck,
   header/body layers, selection) are proven in tr.pv (T1–T13); hx.pv needs only that rt is bound to SK and ss1 and that
   the reply is computable only with SK. KEMO still covers ct1. The line "hkdf_init, kdf_rk, kdf_ck, hseal/hopen,
-  bseal/bopen exactly as §TR (first_msg only)" is replaced by this one.
+  bseal/bopen exactly as §TR (first_msg only)" is replaced by this one. The TR responder's start keys (SPK_dh_R,
+  RPK_kem_R, §7.2) are per-session and never revealed in tr.pv, whereas the code uses the retained store prekeys, so
+  the forward secrecy of TR step-1 content after a later store compromise (RevealSPK(R)) rests on H12/H12c: the
+  step-1 keys derive from RK = hkdf_init(SK), and SK stays secret after that compromise once OPK_j is deleted (H12),
+  also under a later classical break (H12c).
 - **O-16.** All CAEAD nonces are public constants in the model and init_id is not modelled (no security role;
   uniqueness and grouping are tested: N-29, N-30, K3).
 - **O-17.** In a session whose LeakInv is in phase 0, K_ld, K_inv and link_key are attacker knowledge from the start; a

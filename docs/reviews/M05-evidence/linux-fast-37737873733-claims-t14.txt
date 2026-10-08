@@ -1,0 +1,20 @@
+2026-10-08T06:33:45.5129283Z         FAIL [   0.008s] (592/653) xtask::bin/xtask gates::tests::proverif_table_covers_every_claims_row
+2026-10-08T06:33:45.5132222Z     test gates::tests::proverif_table_covers_every_claims_row ... FAILED
+2026-10-08T06:33:45.5134369Z         gates::tests::proverif_table_covers_every_claims_row
+2026-10-08T06:33:45.5136130Z     test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 145 filtered out; finished in 0.00s
+2026-10-08T06:33:45.5139415Z     thread 'gates::tests::proverif_table_covers_every_claims_row' (12330) panicked at xtask/src/gates.rs:4617:9:
+2026-10-08T06:33:45.5142583Z       left: ["tr: the table's IDs [\"T1\", \"T2\", \"T3\", \"T4\", \"T5\", \"T6\", \"T7\", \"T8\", \"T9\", \"T10\", \"T11\", \"T12\", \"T13\"] are not CLAIMS §TR's [\"T1\", \"T2\", \"T3\", \"T4\", \"T5\", \"T6\", \"T7\", \"T8\", \"T9\", \"T10\", \"T11\", \"T12\", \"T13\", \"T14\"]"]
+2026-10-08T06:33:45.5144036Z      right: []
+2026-10-08T06:33:45.5195402Z         FAIL [   0.006s] (593/653) xtask::bin/xtask gates::tests::proverif_table_follows_the_claims
+2026-10-08T06:33:45.5199170Z     test gates::tests::proverif_table_follows_the_claims ... FAILED
+2026-10-08T06:33:45.5201273Z         gates::tests::proverif_table_follows_the_claims
+2026-10-08T06:33:45.5202497Z     test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 145 filtered out; finished in 0.00s
+2026-10-08T06:33:45.5205826Z     thread 'gates::tests::proverif_table_follows_the_claims' (12332) panicked at xtask/src/gates.rs:4586:9:
+2026-10-08T06:33:45.5207681Z       left: 14
+2026-10-08T06:33:45.5208146Z      right: 13
+2026-10-08T06:33:46.1714382Z         PASS [   0.006s] (633/653) xtask::bin/xtask summary::tests::the_proverif_table_comes_from_the_results_file
+2026-10-08T06:35:25.5732744Z      Summary [ 253.703s] 653 tests run: 651 passed (3 slow), 2 failed, 0 skipped
+2026-10-08T06:35:25.5735126Z         FAIL [   0.008s] (592/653) xtask::bin/xtask gates::tests::proverif_table_covers_every_claims_row
+2026-10-08T06:35:25.5737363Z         FAIL [   0.006s] (593/653) xtask::bin/xtask gates::tests::proverif_table_follows_the_claims
+2026-10-08T06:35:25.5748244Z FAIL [4] nextest: `/home/runner/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/cargo nextest run --workspace --locked --no-fail-fast` failed with exit status: 100
+2026-10-08T06:35:25.6574499Z test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

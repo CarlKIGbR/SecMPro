@@ -29,8 +29,8 @@ Phase B: `modell=claude-opus-5-5`, binding inputs additionally `BRIEF_M5-B` (rev
 | B1 | B | Commit 1 (docs): ADR-047 Am. 3 in `docs/08`, CLAIMS §TR row T14 (+ gate rule), this Phase B plan | — | done (`6665c78`, run `37737873733`) |
 | B2 | B | `crates/secmp-relay`: executor, `QueueStore`, `LinkDataStore`, `MemoryBudget`; link-A replay (oracle); Rust generator of `vectors/link.json`, step 12a with 12 suites | Q-01…Q-60, P-06…P-11, K-05…K-07, FZ-07, V-06…V-16, V-20, V-22, X-01 | done (`2d2fa09`, `e6d8f17`, `96a61f0`, `ae0d67e`, `85f4c01`) |
 | B3 | B | Relay connection task, sweeper, rate limits, drain, `keygen`/`rotate-static`, config, tracing test, zeroization | RL-01…RL-23, F-11, FZ-08 | done (`e6d8f17`, `96a61f0`, `d4eef33`) |
-| B4 | B | Gates: ct targets; counting accessors (R-42/R-59) + docs/01 RR-17 line; `formal/link.pvl` + `formal/link/*.pv`, `tr.pv` T14, CLAIMS O-15 sentence, `proverif-link` job; mutants scope (`docs/06` §4); PR-run CI seed for properties | CT-01…CT-06, X-03, G-01, G-02, PV-01…PV-03, X-04, X-05, X-02, X-07 (opt: X-06, X-08) | done except PV-01 (**STOP**: `lDH`, `lBoth` > 30 min, §8B) |
-| B5 | B | Evidence under `M05-evidence/` per push; Phase B report; closing push; row "Phase B closed @ `<sha>`" | — | report written; Phase B **not closed** (STOP on PV-01) |
+| B4 | B | Gates: ct targets; counting accessors (R-42/R-59) + docs/01 RR-17 line; `formal/link.pvl` + `formal/link/*.pv`, `tr.pv` T14, CLAIMS O-15 sentence, `proverif-link` job; mutants scope (`docs/06` §4); PR-run CI seed for properties | CT-01…CT-06, X-03, G-01, G-02, PV-01…PV-03, X-04, X-05, X-02, X-07 (opt: X-06, X-08) | done; PV-01 after WEISUNG M5-B-2 (LO-5, LO-6: the breaks of `lDH`, `lBoth` as reveals; 9/9 files PASS at `5d7d45b`) |
+| B5 | B | Evidence under `M05-evidence/` per push; Phase B report; closing push; row "Phase B closed @ `<sha>`" | — | done — **Phase B closed @ `6483344`** (`64833444249680e340aa5a0de1407c9afcf7b43f`; §4B; one docs/evidence-only commit on top) |
 | C | C | transport, harness, hx re-freeze rows | see brief §5 | not started |
 
 ### M2 coverage of D.1 records and D.2 requests/responses (decides K-08 and P-13)
@@ -138,9 +138,10 @@ None.
 
 None.
 
-## Phase B (BRIEF_M5-B, WEISUNG M5-B-0; `modell=claude-opus-5-5`)
+## Phase B (BRIEF_M5-B, WEISUNG M5-B-0, WEISUNG M5-B-2; `modell=claude-opus-5-5`)
 
-Commits `6665c78`, `b5e156d`…`85f4c01` (+ this report). Phase B **not closed**: STOP on PV-01 (§8B).
+Commits `6665c78`, `b5e156d`…`85f4c01`, `3dfc55d`, `c3a684b` (STOP report), `5d7d45b`, `0ca55bb`, `6483344` (WEISUNG M5-B-2)
+(+ this report). Phase B **closed @ `6483344`**: the PV-01 STOP is resolved by the reviewer decisions LO-5…LO-7 (§5B, §8B).
 
 ### 2B. What was built
 
@@ -155,11 +156,13 @@ Commits `6665c78`, `b5e156d`…`85f4c01` (+ this report). Phase B **not closed**
   TR header trial through the constant-flow open, `SkippedKey::mk()` counting accessor; `tests/common/seed.rs`.
 - `secmp-crypto`: `Aead::open_ct_constant_flow` (R-59; used only by the TR header trial); `ZeroizeOnDrop` re-export and markers.
 - `secmp-testkit`: ct targets CT-01…CT-06. `fuzz`: `relay_executor`, `relay_link_session` (+3 seeds each).
-- `formal`: `link.pvl` + `link/*.pv` (9 sessions), `tr.pv` T14, CLAIMS O-15 sentence. `vectors/link.json` frozen.
+- `formal`: `link.pvl` + `link/*.pv` (9 sessions; in `lDH` and `lBoth` the breaks as phase-0 reveals through the variants
+  `RelayR`/`RConnR`/`ClientR`/`CLinkR`/`CTailR`, LO-5, LO-6), `tr.pv` T14, CLAIMS O-15 sentence, CLAIMS §LINK "Reviewer
+  decisions (2026-10-08)". `vectors/link.json` frozen.
 - `xtask`/CI: gate tables (vectors 12 suites, fuzz seeding, Kani 33, ct 26, mutants +relay, kat +relay, link models), `testscan`
   (CI run seed, compile_fail scan), job `proverif-link`, `linux-full --delegated proverif-link`.
-- Docs: ADR-047 Am. 3, ADR-049 (proposed), CLAIMS T14, `docs/06` §4 Mutation, `docs/01` RR-17 status line,
-  `docs/mutants-accepted.md` (2 rows).
+- Docs: ADR-047 Am. 3, ADR-049 (accepted by the reviewer 2026-10-08), CLAIMS T14, `docs/06` §4 Mutation and §2 logging line
+  (the relay's closed event set meets CLAUDE.md §4), `docs/01` RR-17 status line, `docs/mutants-accepted.md` (2 rows).
 
 ### 3B. Evidence per TEST-SPEC row (Phase B)
 
@@ -175,13 +178,24 @@ Commits `6665c78`, `b5e156d`…`85f4c01` (+ this report). Phase B **not closed**
 | (e) | K-05…K-07 | `kani_proofs::{kani_cmd_seq_monotone, kani_queue_eviction_bounds, kani_executor_response_count}` | VERIFIED 2.9 s / 52.2 s / 113.7 s; K-06 negative control FAILED, 3/3 covers |
 | (f) | FZ-07, FZ-08 | `relay_executor`, `relay_link_session` | 120 s each, no crash; cov 5727 / 5280, ft 20652 / 12238 |
 | (g) | CT-01…CT-06 | `link_hs1_reject_mac1`, `link_hs2_reject_mac2`, `link_frame_open_reject`, `q_queue_new_reject_token`, `tr_decrypt_trial_open_position`, `link_same_content_control` | local `SECMP_CT_SCALE=10`: PASS each, run PASS (evidence only); CI `ct`: run below |
-| (h) | PV-01 | `formal/link/*.pv`, xtask `proverif_link_matches_claims` | **STOP**: 7/9 files PASS, `lDH`, `lBoth` timeout (§8B); test FAILS |
+| (h) | PV-01 | `formal/link/*.pv`, xtask `proverif_link_matches_claims` | PASS: gate 9/9 files, 55 RESULT lines as expected, models `5d7d45b` (`M05-evidence/proverif-link-local-2.txt`); `lDH` L3a true ×2, L8 false ×3, L1a true, L4 true ×2 (59.0 s); `lBoth` L3c false ×2, L8 false ×3, L1c false (655.2 s); test PASS. Traces of the false lines: below |
 | (h) | PV-02 | `tr.pv` T14; xtask `proverif_tr_t14_second_receive` | T14 true; T1–T13 unchanged (46 lines); probe with the entry kept: false |
 | (h) | PV-03 | CLAIMS O-15 sentence | done |
 | (i) | X-01…X-08 | `vectors::tests::vectors_step_12a_covers_twelve_suites`, `gates::tests::mutants_scope_includes_relay`, `ctreport::tests::ct_targets_list_names_m5_targets`, `gates::tests::proverif_link_table_covers_every_claims_row`, `gates::tests::proverif_link_model_hashes_are_pinned`, `…doctest_compile_fail_blocks_name_an_error_code` (opt), `…pr_ci_runs_props_with_ci_run_seed`, `gates::tests::ct_target_sites_bind_each_target_to_its_site` (opt) | 8 PASS (both optional rows done) |
 
 Counts implemented / passing / extra: vectors 13 / 13 / 1 · unit 86 / 86 / 53 · property 6 / 6 / 0 · Kani 3 / 3 / 0 · fuzz 2 / 2 / 0 ·
-ct 6 / 6 local (CI pending) / 0 · formal 3 / 2 (PV-01 STOP) / 0 · xtask 8 / 8 / 6 → 127 rows, 126 evidenced, PV-01 open.
+ct 6 / 6 local (CI pending) / 0 · formal 3 / 3 / 0 · xtask 8 / 8 / 6 → 127 rows, 127 evidenced.
+
+PV-01, the false lines of `lDH` and `lBoth`, one line per trace (`target/proverif/link-<s>.log`, "A trace has been found." each):
+- `lDH` L8 ×3, `lBoth` L8 ×3: honest runs — CStart after R's RELAYINFO; the honest pair (R answers C's HS1, C verifies mac2);
+  R executes C's QUEUE_NEW.
+- `lBoth` L1c: R never receives the HS1; the attacker computes ss1 from the revealed exponents (relay_dh, the HybridKEM-1024
+  ephemeral) and the revealed coins r1 and answers HS2 itself (its own e_r and ML-KEM-768 encapsulation to ek_c, ck2, mac2):
+  CAccept without RAccept (the non-injective companion line too).
+- `lBoth` L3c (c2r): honest handshake; ss1 and ss2 from the reveals (relay_dh, e1, e_r, coins r1, r2) give k_c2r; the attacker
+  opens C's FETCH frame (counter 1).
+- `lBoth` L3c (r2c): honest handshake; under k_c2r from the reveals the attacker sends R its own QUEUE_NEW on the honest link, R
+  executes it and its OK_QUEUE_NEW is opened under k_r2c; C accepts the HS2.
 
 Extra tests (named): `vectors::link_vectors_ok_queue_new_carries_the_derived_ids`; `conn_stream::{connection_answers_each_record_when_complete_at_any_split, connection_takes_coalesced_records_and_frames}`;
 `rate_cont::{a_link_put_with_one_frame_over_the_rate_is_err_7, a_stale_link_put_over_the_rate_is_err_6}`; `server_loop::{serve_retries_and_exits_after_the_drain, serve_fails_on_a_listener_error, serve_closes_connections_while_draining, serve_hands_each_connection_to_its_thread, handle_answers_and_closes_at_eof, handle_ticks_retries_and_stops_on_an_error, handle_stops_on_teardown_write_failure_and_refusal}`;
@@ -203,7 +217,11 @@ F-M5 lines: R-41 → PV-02 T14 true (`33a55ea`) · R-42/R-59 → G-01, G-02 PASS
 | Kani per harness (relay) | `ae0d67e` | K-05 2.9 s, K-06 52.2 s, K-07 113.7 s; negative control 40.2 s FAILED (1 of 791), 3/3 covers; `M05-evidence/kani-m5b-*.txt` |
 | Fuzz 120 s | `6665c78` + tree | `relay_executor` 752 runs cov 5727 ft 20652; `relay_link_session` 7465 runs cov 5280 ft 12238; no crash (`fuzz-m5b-local.log`) |
 | Mutation pre-check `secmp-relay` (`-j 2`) | `ae0d67e` | 438 tested: 296 caught (67.6 %), 121 unviable (27.6 %), 21 missed (`mutants-relay-local-ae0d67e.txt`) → 19 killed by `d4eef33`/`9378b71` (targeted rerun of `server.rs` + `queue.rs`: 66 tested, 38 caught, 25 unviable, 3 missed; then `serve` 6/6 caught), 2 documented (`docs/mutants-accepted.md`, the `TcpStream` shim) |
-| ProVerif `link` gate | `d4eef33` | FAIL: 7/9 PASS (lClean 83 s, lKEM 172 s, lSig 292 s, lFS 39 s, lFSDH 30 s, lFSEph 47 s, lQKey 50 s), lDH and lBoth killed at 1800 s (`proverif-link-local.txt`) |
+| ProVerif `link` gate | `d4eef33` | FAIL: 7/9 PASS (lClean 83 s, lKEM 172 s, lSig 292 s, lFS 39 s, lFSDH 30 s, lFSEph 47 s, lQKey 50 s), lDH and lBoth killed at 1800 s (`proverif-link-local.txt`) — superseded by the next row |
+| ProVerif `link` gate (WEISUNG M5-B-2) | models `5d7d45b` | `step --strict proverif --models link --jobs 1` PASS, 9/9 files, every RESULT line as expected, 1072 s: lBoth 655.2 s, lClean 38.7 s, lDH 59.0 s, lFS 15.7 s, lFSDH 16.3 s, lFSEph 23.5 s, lKEM 95.5 s, lQKey 24.8 s, lSig 138.9 s; one process at a time; load average 41–72 (system processes, §5B); the seven untouched files: expanded processes byte-identical and RESULT `diff` empty against the first run (`proverif-link-local-2.txt`) |
+| `nextest -p xtask` | tree = `6483344` | 162 / 162 PASS (PV-01 `proverif_link_matches_claims`, X-04, X-05 included) |
+| `ci-fast --strict` (WEISUNG M5-B-2) | tree = `6483344` | PASS: fmt, clippy, policy, deny, vet, audit, cooldown, nextest (111 s; workspace 712, xtask 162, relay 155, …), doctest, hello, kat (449 s) (`M05-evidence/ci-fast-local-6483344.txt`) |
+| `step --strict kani` (R-104, before the closing push) | `6483344` | PASS, 33/33 harnesses (secmp-proto, secmp-relay; = `expect::KANI_HARNESSES`), 33 `VERIFICATION:- SUCCESSFUL`, 0 failed, 2370 s, load average 36–75 (`M05-evidence/kani-xtask-step-6483344.txt`) |
 | ProVerif `tr` (T14) | `85f4c01` | `step --strict proverif --models tr` PASS, 47 RESULT lines as expected (T14 true ×1), 129.6 s on the idle machine (1307.7 s under load earlier); `proverif-tr-gate-local-85f4c01.txt` |
 | ct `SECMP_CT_SCALE=10` | `6665c78` + bench | run PASS, six new targets PASS (evidence only) |
 | vectors / step 12a | tree on `6665c78` | 12 suites identical; 12a PASS, 962 cases |
@@ -216,8 +234,9 @@ F-M5 lines: R-41 → PV-02 T14 true (`33a55ea`) · R-42/R-59 → G-01, G-02 PASS
   PASS) on `proverif_table_follows_the_claims` and
   `proverif_table_covers_every_claims_row` (CLAIMS T14 row before its model); closed by `33a55ea`
   (`M05-evidence/linux-fast-37737873733-claims-t14.txt`).
-- No `tokio`/`tracing` (outside the vetted closure): sans-IO relay, `std::net` server, closed event set (ADR-049 proposed); CLAUDE.md §4
-  "tracing with a redaction layer" met by a construction without a logging crate.
+- No `tokio`/`tracing` (outside the vetted closure): sans-IO relay, `std::net` server, closed event set (ADR-049, accepted by the
+  reviewer 2026-10-08); CLAUDE.md §4 "tracing with a redaction layer" met by a construction without a logging crate (`docs/06` §2
+  line).
 - RL-03 runs an H-03-equivalent relay scenario (1000 cells each way) through `Connection` (the Phase C harness does not exist); RL-02
   runs the scenario in a child process of the test binary with cwd/TMPDIR/HOME in an empty directory.
 - The binary has no drain trigger (no signal handling without `unsafe` in `secmp-sys-*`; M10); drain is `Relay::start_drain` + `serve`.
@@ -236,30 +255,53 @@ F-M5 lines: R-41 → PV-02 T14 true (`33a55ea`) · R-42/R-59 → G-01, G-02 PASS
 - PV-01 model readings (CLAIMS §LINK, for confirmation): L4 not split (LO-3), the premise adds `event(RAccept(…))`; L3/L5 "CAccept names
   R's fp" as a premise conjunct; L7 as `CAccept ⇒ RInfo(s, kid, fp, h(akc label, ak))`; L8 RExec with an honest queue key; RevealEph
   on one designated link; bounds two c2r / three r2c frames. Devices: `formal/link.pvl` header 7., 8. (not copied into CLAIMS).
-- `PROVERIF_EXPECTED_LINK` rows of lDH (L1a, L4 ×2) and lBoth (all) come from ProVerif's `-- Query` text or by session-name
-  substitution from lClean, unconfirmed until those files complete.
+- `PROVERIF_EXPECTED_LINK`: every row is now the RESULT text of a completed run (`proverif-link-local-2.txt`); the lDH and lBoth
+  rows, written earlier from the `-- Query` text, matched the completed runs character for character (no table edit).
+- The §5B readings above are confirmed by the reviewer (WEISUNG M5-B-2 item 5).
+- **LO-5** (reviewer, 2026-10-08): in `lDH` and `lBoth` `dh_break` is removed; the session outputs in phase 0 `dhsk(s, kRdh)`
+  (session process) and `dhsk(s, iC(e))`, `dhsk(s, iE(e1))`, `dhsk(s, iR(er))` right after their `new` (macros `CLinkR`,
+  `CTailR`, `RConnR`; `iD(e)` exists only in lFSEph); the `dhsk` assumptions of both files and the lazy-DH `select` line are
+  removed; justification in `formal/link.pvl` 4. and CLAIMS §LINK "Reviewer decisions". Applied as written.
+- **LO-6** (reviewer, 2026-10-08): in `lBoth` `kem_break1024/768` are removed; `kemr(s, r1)` (CTailR) and `kemr(s, r2)` (RConnR)
+  are output in phase 0; `not attacker(kemr(lBoth, x))` dropped in lBoth only; lKEM untouched. Reading: the variants' flag `rk`
+  gates the two `kemr` outputs (`false` in lDH, `true` in lBoth), so each sits in a parallel branch right after its `new`
+  (`new r1[]; ((if rk then out(c, kemr(s, r1))) | …)`) instead of a sequential output; the output is available from the same
+  point and the rest of the process is not duplicated.
+- **LO-7** (reviewer, 2026-10-08): fallback split of `lDH` — not needed (lDH 59.0 s); the CLAIMS file list and
+  `PROVERIF_EXPECTED_LINK` are unchanged (nine files).
+- The other seven session files and their expanded ProVerif processes are byte-identical before/after; the library gained only
+  the reveal variants and comment text (`proverif-link-local-2.txt`).
+- Machine not idle during the WEISUNG M5-B-2 gate (load average 41–72 sampled from 18:21 to 18:37 CEST, from system processes —
+  Spotlight workers — outside this session; no cargo/Kani/mutants/other ProVerif process of the session ran); one ProVerif process
+  at a time as instructed.
 
 ### 6B. Dependencies added or bumped
 
 None (no new crate in `Cargo.lock` or `fuzz/Cargo.lock`; `secmp-relay` gains workspace crates and the dev-dependencies `serde_json`,
-`rand`; ADR-049 proposed).
+`rand`; ADR-049 accepted).
 
 ### 7B. Open risks and known limitations
 
 - Mutation shards now include 446 relay mutants (local per-mutant test run ≈ 40–70 s; Q-42's 1000 iterations dominate); shard times on CI: closing message.
 - `tr.pv` grew to 47 lines (129.6 s idle); `linux-full` runs it.
+- `lBoth` takes 655.2 s of its 1800 s cap here under load ≈ 50 (margin ≈ 2.7×); its log is 1.4 GB (attack traces with large
+  terms); the `proverif-link` job's runner time comes with the CI run.
 - Kani bounds of K-06/K-07 (§5B); `server` is thread-per-connection (M10 load test).
 
 ### 8B. Blocked / questions for the reviewer or owner
 
-- **STOP (BRIEF_M5-B §3, "a ProVerif file over 30 min"): PV-01.** `formal/link/lDH.pv` does not finish its L1a declaration within
+- **STOP closed (WEISUNG M5-B-2, LO-5…LO-7):** with the breaks as reveals `lDH` completes in 59.0 s and `lBoth` in 655.2 s; every
+  RESULT line as expected (L1a true, L3a true ×2, L4 true ×2, L8 false ×3; L1c false, L3c false ×2, L8 false ×3), no "cannot be
+  proved", no split, no RESULT line of an untouched file changed. Open questions: none. The original STOP, for the record:
+- ~~STOP (BRIEF_M5-B §3, "a ProVerif file over 30 min"): PV-01.~~ `formal/link/lDH.pv` does not finish its L1a declaration within
   1800 s (first declaration complete: L3a true ×2, L8 false ×3), `formal/link/lBoth.pv` not its first declaration; tried: a DH `select`
   line (kept), the HX lazy-DH `nounif` (rejected: two L8 lines "cannot be proved"), selecting the DH shared secrets / derived link keys /
   HKDF extract last, the lClean `nounif` set, `redundancyElim = no`, `nounifIgnoreNtimes`, `selFun = Term`, re-indexing R's names
   (`target/tmp/pvlink-status.md`, `M05-evidence/proverif-link-local.txt`). No query gave the opposite verdict; no true query came out
   "cannot be proved" in a completed run. Consequence: `proverif_link_matches_claims` fails (linux-fast, windows-native, linux-full
   nextest) and the `proverif-link` job will fail on the two timeouts. Question: which search devices or file layout for lDH and lBoth.
-- The PV-01 readings and devices of §5B for confirmation; ADR-049 (proposed) for acceptance.
+- ~~The PV-01 readings and devices of §5B for confirmation; ADR-049 (proposed) for acceptance.~~ Confirmed / accepted (WEISUNG
+  M5-B-2 item 5).
 
 ## 9. Checklist before requesting review
 

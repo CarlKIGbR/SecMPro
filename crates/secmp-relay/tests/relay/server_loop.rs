@@ -196,7 +196,8 @@ fn listener(script: Vec<io::Result<Scripted>>) -> ScriptedListener {
 #[test]
 fn serve_retries_and_exits_after_the_drain() {
     let (relay, events) = relay();
-    let clock = Virtual::new(400);
+    // 100 ms per clock reading: the three scripted errors come before the one-second drain has passed
+    let clock = Virtual::new(100);
     relay.start_drain(clock.now());
     let l = listener(vec![
         Err(io::Error::from(ErrorKind::WouldBlock)),
@@ -204,6 +205,7 @@ fn serve_retries_and_exits_after_the_drain() {
         Err(io::Error::from(ErrorKind::WouldBlock)),
     ]);
     assert_eq!(server::serve(&relay, &l, &clock), Ok(()));
+    assert!(l.script.lock().unwrap().is_empty(), "every scripted error was seen");
     assert_eq!(names(&events), vec!["keys_loaded", "drain_started", "exit"]);
 }
 

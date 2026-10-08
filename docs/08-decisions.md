@@ -539,7 +539,8 @@ clarifications rev 2.6, Proposed)" for OPEN-2…OPEN-11; this ADR records all th
   `expires_bucket`; (p) the ERR 7 answer; (n) a client-core MUST.
 
 ### ADR-049 — `secmp-relay` in M5: no third-party runtime crate; test-only workspace crates
-**Status.** Proposed (implementer, M5 Phase B, 2026-10-08) — engineering class (dependencies), for the reviewer.
+**Status.** Accepted (reviewer, 2026-10-08; WEISUNG M5-B-2 item 5) — engineering class (dependencies). (Proposed
+2026-10-08 by the implementer, M5 Phase B.)
 **Context.** `docs/02` §3 lets `secmp-relay` depend on `secmp-crypto`, `secmp-proto` and `secmp-sys-mem`, and on
 third-party runtime crates (async runtime, `tracing`) through an ADR. BRIEF_M5 §11 (3) gives every new direct
 dependency an ADR line and leaves any `cargo vet` audit to the owner as the named reviewer; BRIEF_M5-B §3 makes a new

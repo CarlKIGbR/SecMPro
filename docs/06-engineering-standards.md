@@ -41,6 +41,8 @@ multiple_unsafe_ops_per_block = "deny"   # one unsafe operation per block
 
 Test code (`#[cfg(test)]`, `tests/`, `fuzz/`, `testkit`) may use `unwrap`/`expect` via `#![allow(clippy::unwrap_used, clippy::expect_used)]` at the file top.
 
+Logging: for `secmp-relay`, `CLAUDE.md` §4 "`tracing` with a redaction layer" is met by the closed event set of `secmp_relay::event` instead of `tracing` — no variant can carry per-request data, `expect::RELAY_TRACE_ALLOW` pins the set and test RL-03 captures a full scenario (ADR-049, accepted 2026-10-08).
+
 **Sanctioned `unsafe_code` relaxations (M0 review, 2026-09-28):** (a) `secmp-sys-mem` and `secmp-sys-desktop` carry `#![allow(unsafe_code)]` at the crate root — these two crates exist for platform bindings and every `unsafe` block in them must have a `// SAFETY:` comment (`undocumented_unsafe_blocks`), do one thing (`multiple_unsafe_ops_per_block`), and be covered by a unit test and, where feasible, Miri; (b) `secmp-ui` carries `#![deny(unsafe_code)]` instead of `forbid`, because Slint's `slint!` macro expansion contains `#[allow(unsafe_code)]` (E0453 under `forbid`); the `policy` step verifies that `secmp-ui`'s own source files contain neither the token `unsafe` nor a hand-written `allow(unsafe_code)`/`expect(unsafe_code)` (ADR-033). Every other crate carries `#![forbid(unsafe_code)]`.
 
 The lint allowances listed in this section are the only sanctioned ones; the review checklist treats any other `#[allow]` on a `deny` lint as a finding.

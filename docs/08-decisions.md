@@ -371,6 +371,15 @@ Erratum (M4 review D-31, 2026-10-03): "`linux-full` returns under the budget" an
 Amended 2026-10-03 — Accepted (Reviewer, Owner-Delegation 30.09.2026).
 **Amendment 2 (2026-10-03): the per-package non-vacuity floor is the caught share, the unviable share becomes informative; the merge reports everything before it fails; reason: PR run 37127247911 (cac6eff), the first complete 8-shard run with `--features kat`: `secmp-crypto` 268 mutants = 168 caught, 1 missed (accepted, `secret.rs` Drop), 99 unviable (36.9 % > 35 %), so the Amendment 1 floor would fail a gate that is manifestly not vacuous; all 99 unviable mutants are `FnValue` replacements that need `Default` on types that have none by design (`Result<Self>` of key types 23, `SecretBytes<_>` 20, `Zeroizing<Vec<u8>>` 8, `Choice` 4, …); `secmp-proto` 1026 = 727 caught, 5 missed (3 accepted, 2 killed in FIX-3), 294 unviable (28.7 %). The merge stopped at the first failing shard and reported neither the second one nor the package tallies.** Reviewer decision (engineering delegation 30.09.2026): (1) per package the merge fails iff caught = 0, or a missed mutant is not listed in `docs/mutants-accepted.md`, or caught < 50 % of all generated mutants (caught + missed + unviable + timeout); (2) the unviable share is printed per package and, above 35 %, as a WARNING in the verdict text and the job summary, never as a FAIL; (3) the merge evaluates every shard and every package and prints each verdict before the overall FAIL; (4) the shard gate, the 8 shards, `--features kat`, the accepted-survivor list and everything else of Amendment 1 are unchanged. Evidence: run 37127247911 (caught share 62.7 % / 70.9 %) and the merge of the next PR run.
 Amended 2026-10-03 — Accepted (Reviewer, Owner-Delegation 30.09.2026).
+**ADR-047 Amendment 3 — `secmp-relay` in the mutation gate. Status: Accepted (Reviewer, Owner-Delegation 30.09.2026) —
+2026-10-03. Context: M5 adds the relay security kernel (executor, `QueueStore`, `LinkDataStore`, link server);
+`docs/06` §4 names only `secmp-crypto` and `secmp-proto` for mutation testing. Decision: the mutation gate runs over
+`secmp-crypto`, `secmp-proto` and `secmp-relay` in the 8 shards of Amendment 1 with the per-package rule of Amendment 2
+(caught share ≥ 50 % of all generated mutants per package, unviable > 35 % a WARNING, an unaccepted survivor a failure
+naming its package; every shard and package reported before a FAIL); `docs/mutants-accepted.md` rows carry `:line`.
+Phase B measures the CI time per shard and reports it; the shard count changes only by a further amendment.
+Consequences: `docs/06` §4 "Mutation" reads "`secmp-crypto`, `secmp-proto`, `secmp-relay`"; test
+`mutants_scope_includes_relay`.**
 
 ### ADR-048 — Spec clarifications rev 2.6: SecMP-LINK/Q readings, editorial errata, `inv_sid` derivation, RT-3
 

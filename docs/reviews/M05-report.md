@@ -9,7 +9,9 @@ Binding inputs: `docs/reviews/M05-planning/` (`BRIEF_M5.md`, `TEST-SPEC-M5.md`, 
 `OPEN-M5-decided.md`). ADR-048 and the owner-class items (o), (p) were ratified by default on 2026-10-04 20:45 UTC (brief
 §11 (1)); optional (q) is not adopted (reading A). The [SQ-n], [O-1], [O-2], [O-6] rows are therefore in scope from the start.
 
-Phases and handover: A (Sonnet) → B (Opus) → C (Sonnet). Handover row: "Phase A closed @ `<sha>`" (set when the PR run is green).
+Phases and handover: A (Sonnet) → B (Opus) → C (Sonnet). **Phase A closed @ `8738ae170a083a1323f14eeb21183bb567e693f5`**
+(PR run `37719235451` green on linux-fast, windows-native, xwin-cross, linux-full, ct, mutants, proverif-hx; rows of steps 1–10).
+Phase B: `modell=claude-opus-5-5`, binding inputs additionally `BRIEF_M5-B` (reviewer, 2026-10-08).
 
 | Step | Phase | What | TEST-SPEC rows closed | Status |
 |---|---|---|---|---|
@@ -23,7 +25,11 @@ Phases and handover: A (Sonnet) → B (Opus) → C (Sonnet). Handover row: "Phas
 | 8 | A | Fuzz targets (+ committed seeds) incl. `hx_accept_structured` mode 3 | FZ-01…FZ-06, FZ-09 | done (local 120 s each) |
 | 9 | A | docs/03 rev 2.6 (ADR-048), errata, re-anchoring | — | done (`ca3a304`) |
 | 10 | A | `cargo xtask ci-fast`, push, PR, PR run; handover | — | ci-fast done locally; PR run: see §4 |
-| B | B | relay crate, link-A vector groups (V-06…V-16, V-20, V-22), Q-*, RL-*, G-01, G-02, ct, K-05…K-07, FZ-07, FZ-08, formal, xtask | see brief §5 | not started |
+| B1 | B | Commit 1 (docs): ADR-047 Am. 3 in `docs/08`, CLAIMS §TR row T14 (+ gate rule), this Phase B plan | — | done |
+| B2 | B | `crates/secmp-relay`: executor, `QueueStore`, `LinkDataStore`, `MemoryBudget`; link-A replay (oracle); Rust generator of `vectors/link.json`, step 12a with 12 suites | Q-01…Q-60, P-06…P-11, K-05…K-07, FZ-07, V-06…V-16, V-20, V-22, X-01 | not started |
+| B3 | B | Relay connection task, sweeper, rate limits, drain, `keygen`/`rotate-static`, config, tracing test, zeroization | RL-01…RL-23, F-11, FZ-08 | not started |
+| B4 | B | Gates: ct targets; counting accessors (R-42/R-59) + docs/01 RR-17 line; `formal/link.pvl` + `formal/link/*.pv`, `tr.pv` T14, CLAIMS O-15 sentence, `proverif-link` job; mutants scope (`docs/06` §4); PR-run CI seed for properties | CT-01…CT-06, X-03, G-01, G-02, PV-01…PV-03, X-04, X-05, X-02, X-07 (opt: X-06, X-08) | not started |
+| B5 | B | Evidence under `M05-evidence/` per push; Phase B report; closing push; row "Phase B closed @ `<sha>`" | — | not started |
 | C | C | transport, harness, hx re-freeze rows | see brief §5 | not started |
 
 ### M2 coverage of D.1 records and D.2 requests/responses (decides K-08 and P-13)

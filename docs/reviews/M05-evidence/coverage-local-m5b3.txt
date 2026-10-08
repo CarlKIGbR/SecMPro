@@ -1,0 +1,94 @@
+# secmp-relay line coverage, local `cargo xtask step --strict coverage` (Apple M1 Pro)
+
+## before: head 7742e38 (coverage args without features) — target/tmp/m5b3-cov-before.log
+     Summary [  76.833s] 712 tests run: 712 passed (1 slow), 0 skipped
+  coverage secmp-cli: 5/6 lines = 83.3 % (min 80 %)
+  coverage secmp-client-core: no code
+  coverage secmp-crypto: 2523/2539 lines = 99.4 % (min 90 %)
+  coverage secmp-proto: 6526/6705 lines = 97.3 % (min 90 %)
+  coverage secmp-relay: 1235/2098 lines = 58.9 % (min 80 %)
+  coverage secmp-store: no code
+  coverage secmp-sys-desktop: no code
+  coverage secmp-sys-mem: 183/191 lines = 95.8 % (min 80 %)
+  coverage secmp-testkit: 172/172 lines = 100.0 % (min 80 %)
+  coverage secmp-transport: no code
+  coverage secmp-ui: 5/6 lines = 83.3 % (min 80 %)
+   7 coverage        FAIL         86s  coverage below threshold: secmp-relay
+
+per file (llvm-cov summary, crates/secmp-relay/):
+src/budget.rs                               83 /    83  100.0 %  missed 0
+src/buf.rs                                  34 /    34  100.0 %  missed 0
+src/cells.rs                               102 /   102  100.0 %  missed 0
+src/clock.rs                                46 /    46  100.0 %  missed 0
+src/cmdseq.rs                               25 /    25  100.0 %  missed 0
+src/config.rs                              217 /   218   99.5 %  missed 1
+src/conn.rs                                  0 /   136    0.0 %  missed 136
+src/error.rs                                23 /    23  100.0 %  missed 0
+src/event.rs                                42 /    44   95.5 %  missed 2
+src/exec.rs                                  0 /   261    0.0 %  missed 261
+src/executor.rs                              0 /   173    0.0 %  missed 173
+src/keys.rs                                280 /   296   94.6 %  missed 16
+src/linkdata.rs                              0 /    41    0.0 %  missed 41
+src/main.rs                                 80 /    88   90.9 %  missed 8
+src/plan.rs                                138 /   139   99.3 %  missed 1
+src/queue.rs                                81 /   113   71.7 %  missed 32
+src/rate.rs                                 44 /    44  100.0 %  missed 0
+src/relay.rs                                 0 /   104    0.0 %  missed 104
+src/server.rs                               40 /   128   31.2 %  missed 88
+total 1235 / 2098 = 58.9 %
+
+## after: tree = dc34d93 (`--features secmp-relay/kat`, gates::COVERAGE_FEATURES) — target/tmp/m5b3-cov-after2.log
+     Summary [  81.596s] 828 tests run: 828 passed (1 slow), 0 skipped
+  coverage secmp-cli: 5/6 lines = 83.3 % (min 80 %)
+  coverage secmp-client-core: no code
+  coverage secmp-crypto: 2523/2539 lines = 99.4 % (min 90 %)
+  coverage secmp-proto: 6548/6706 lines = 97.6 % (min 90 %)
+  coverage secmp-relay: 2161/2218 lines = 97.4 % (min 80 %)
+  coverage secmp-store: no code
+  coverage secmp-sys-desktop: no code
+  coverage secmp-sys-mem: 183/191 lines = 95.8 % (min 80 %)
+  coverage secmp-testkit: 172/172 lines = 100.0 % (min 80 %)
+  coverage secmp-transport: no code
+  coverage secmp-ui: 5/6 lines = 83.3 % (min 80 %)
+   7 coverage        PASS         92s  secmp-cli: 5/6 lines = 83.3 % (min 80 %); secmp-client-core: no code; secmp-crypto: 2523/2539 lines = 99.4 % (min 90 %); secmp-proto: 6548/6706 lines = 97.6 % (min 90 %); secmp-relay: 2161/2218 lines = 97.4 % (min 80 %); secmp-store: no code; secmp-sys-desktop: no code; secmp-sys-mem: 183/191 lines = 95.8 % (min 80 %); secmp-testkit: 172/172 lines = 100.0 % (min 80 %); secmp-transport: no code; secmp-ui: 5/6 lines = 83.3 % (min 80 %) (xtask not measured)
+
+per file:
+src/budget.rs                               83 /    83  100.0 %  missed 0
+src/buf.rs                                  57 /    57  100.0 %  missed 0
+src/cells.rs                               102 /   102  100.0 %  missed 0
+src/clock.rs                                46 /    46  100.0 %  missed 0
+src/cmdseq.rs                               25 /    25  100.0 %  missed 0
+src/config.rs                              217 /   218   99.5 %  missed 1
+src/conn.rs                                131 /   136   96.3 %  missed 5
+src/error.rs                                23 /    23  100.0 %  missed 0
+src/event.rs                                52 /    53   98.1 %  missed 1
+src/exec.rs                                257 /   261   98.5 %  missed 4
+src/executor.rs                            173 /   173  100.0 %  missed 0
+src/keys.rs                                289 /   296   97.6 %  missed 7
+src/linkdata.rs                             41 /    44   93.2 %  missed 3
+src/main.rs                                 81 /    88   92.0 %  missed 7
+src/plan.rs                                138 /   139   99.3 %  missed 1
+src/queue.rs                               113 /   116   97.4 %  missed 3
+src/rate.rs                                 44 /    44  100.0 %  missed 0
+src/relay.rs                               181 /   186   97.3 %  missed 5
+src/server.rs                              108 /   128   84.4 %  missed 20
+total 2161 / 2218 = 97.4 %
+
+uncovered lines after (lcov export of the same run; `cargo llvm-cov report --lcov`):
+config.rs          1  375
+conn.rs            3  147,166,169
+exec.rs            4  106,139,315,322
+keys.rs            7  121-123,127,297,304,323
+linkdata.rs        3  52-54
+main.rs            7  33,111-113,115-117
+plan.rs            1  181
+queue.rs           3  57-59
+relay.rs           5  130,245,279,286,310
+server.rs         20  80-83,85-87,104,106-107,151-153,161-167
+missed lines total 54
+
+## rejected variant: features of every expect::KAT_PACKAGES crate (adds secmp-testkit/kat: the three
+## differential suites, 151-289 s each under instrumentation) — target/tmp/m5b3-cov-after1.log
+     Summary [ 323.437s] 832 tests run: 832 passed (4 slow), 0 skipped
+  coverage secmp-relay: 2160/2218 lines = 97.4 % (min 80 %)
+   7 coverage        PASS        334s  secmp-cli: 5/6 lines = 83.3 % (min 80 %); secmp-client-core: no code; secmp-crypto: 2527/2539 lines = 99.5 % (min 90 %); secmp-proto: 6548/6706 lines = 97.6 % (min 90 %); secmp-relay: 2160/2218 lines = 97.4 % (min 80 %); secmp-store: no code; secmp-sys-desktop: no code; secmp-sys-mem: 183/191 lines = 95.8 % (min 80 %); secmp-testkit: 172/172 lines = 100.0 % (min 80 %); secmp-transport: no code; secmp-ui: 5/6 lines = 83.3 % (min 80 %) (xtask not measured)

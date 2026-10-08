@@ -30,7 +30,7 @@ Phase B: `modell=claude-opus-5-5`, binding inputs additionally `BRIEF_M5-B` (rev
 | B2 | B | `crates/secmp-relay`: executor, `QueueStore`, `LinkDataStore`, `MemoryBudget`; link-A replay (oracle); Rust generator of `vectors/link.json`, step 12a with 12 suites | Q-01…Q-60, P-06…P-11, K-05…K-07, FZ-07, V-06…V-16, V-20, V-22, X-01 | done (`2d2fa09`, `e6d8f17`, `96a61f0`, `ae0d67e`, `85f4c01`) |
 | B3 | B | Relay connection task, sweeper, rate limits, drain, `keygen`/`rotate-static`, config, tracing test, zeroization | RL-01…RL-23, F-11, FZ-08 | done (`e6d8f17`, `96a61f0`, `d4eef33`) |
 | B4 | B | Gates: ct targets; counting accessors (R-42/R-59) + docs/01 RR-17 line; `formal/link.pvl` + `formal/link/*.pv`, `tr.pv` T14, CLAIMS O-15 sentence, `proverif-link` job; mutants scope (`docs/06` §4); PR-run CI seed for properties | CT-01…CT-06, X-03, G-01, G-02, PV-01…PV-03, X-04, X-05, X-02, X-07 (opt: X-06, X-08) | done; PV-01 after WEISUNG M5-B-2 (LO-5, LO-6: the breaks of `lDH`, `lBoth` as reveals; 9/9 files PASS at `5d7d45b`) |
-| B5 | B | Evidence under `M05-evidence/` per push; Phase B report; closing push; row "Phase B closed @ `<sha>`" | — | done — **Phase B closed @ `6483344`** (`64833444249680e340aa5a0de1407c9afcf7b43f`; §4B; one docs/evidence-only commit on top) |
+| B5 | B | Evidence under `M05-evidence/` per push; Phase B report; closing push; row "Phase B closed @ `<sha>`" | — | done — **Phase B closed @ `dc34d93`** (`dc34d93d696b4d4699aa3939e9af428de2e7bdd6`; run 37817187858 red: windows-native, coverage, mutants; fixed in M5-B-3; §4B, §5B; one docs/evidence-only commit on top). Earlier close @ `6483344` |
 | C | C | transport, harness, hx re-freeze rows | see brief §5 | not started |
 
 ### M2 coverage of D.1 records and D.2 requests/responses (decides K-08 and P-13)
@@ -138,10 +138,12 @@ None.
 
 None.
 
-## Phase B (BRIEF_M5-B, WEISUNG M5-B-0, WEISUNG M5-B-2; `modell=claude-opus-5-5`)
+## Phase B (BRIEF_M5-B, WEISUNG M5-B-0, WEISUNG M5-B-2, BRIEF M5-B-3; `modell=claude-opus-5-5`)
 
-Commits `6665c78`, `b5e156d`…`85f4c01`, `3dfc55d`, `c3a684b` (STOP report), `5d7d45b`, `0ca55bb`, `6483344` (WEISUNG M5-B-2)
-(+ this report). Phase B **closed @ `6483344`**: the PV-01 STOP is resolved by the reviewer decisions LO-5…LO-7 (§5B, §8B).
+Commits `6665c78`, `b5e156d`…`85f4c01`, `3dfc55d`, `c3a684b` (STOP report), `5d7d45b`, `0ca55bb`, `6483344` (WEISUNG M5-B-2),
+`d349053`, `109b280`, `dc34d93` (BRIEF M5-B-3) (+ this report). Phase B closed @ `6483344` (the PV-01 STOP resolved by the
+reviewer decisions LO-5…LO-7, §5B, §8B); its PR run 37817187858 was red in windows-native, linux-full (coverage) and mutants;
+**closed @ `dc34d93`** after the M5-B-3 fixes.
 
 ### 2B. What was built
 
@@ -204,6 +206,12 @@ relay unit tests (33): `budget::tests::{reservations_are_the_worst_case, a_reser
 `secmp-crypto`: `aead::tests::constant_flow_rejects_like_open_ct`, `kat_symmetric::{wycheproof_xchacha20_poly1305_constant_flow_equals_open_ct, constant_flow_equals_open_ct_randomized}`;
 xtask: `gates::tests::{relay_trace_allow_equals_the_event_names, mutants_floor_refuses_unattributable_outcomes, ci_full_accepts_the_proverif_link_delegation}`, `testscan::scan::tests::{the_seed_scan_flags_each_rule, the_seed_scanner_reads_items_and_calls}`, `fuzzseed::tests::link_seeds_follow_the_target_layouts`.
 
+Tests touched by M5-B-3 (extra tests; no TEST-SPEC row changes, counts unchanged): `cli::cli_config_errors_refuse_the_start` (config
+path with `/`), `cli::cli_rotate_static_adds_the_next_generation` (+ `--valid-days x`), `gates::tests::relay_trace_allow_equals_the_event_names`
+(source through `lf`), `gates::tests::coverage_ignores_test_files` (+ `--features secmp-relay/kat`), `secmp-proto`
+`wire::cell::tests::cell_parts` (+ `into_boxed` content), `server_loop::*` (the scripted listener fails after `ACCEPT_CALLS_MAX` = 100
+accept calls; it waits for the connection's close once). All PASS at `dc34d93` (`M05-evidence/m5b3-checks-local-dc34d93.txt`).
+
 F-M5 lines: R-41 → PV-02 T14 true (`33a55ea`) · R-42/R-59 → G-01, G-02 PASS; constant-flow AEAD open of the TR header trial (`b5e156d`); CT-05 local PASS, CI below; `docs/01:192` status line · R-47 → X-08 done · R-70 → PV-03 done · R-92 → X-06 done (stable rustdoc does not check the code; the test is a source scan) · R-93 → X-07 done (CI seed = `GITHUB_RUN_ID`, pass in the `kat` step for `secmp-proto` and `secmp-relay`).
 
 ### 4B. Gates (local, Apple M1 Pro; heads named)
@@ -225,6 +233,13 @@ F-M5 lines: R-41 → PV-02 T14 true (`33a55ea`) · R-42/R-59 → G-01, G-02 PASS
 | ProVerif `tr` (T14) | `85f4c01` | `step --strict proverif --models tr` PASS, 47 RESULT lines as expected (T14 true ×1), 129.6 s on the idle machine (1307.7 s under load earlier); `proverif-tr-gate-local-85f4c01.txt` |
 | ct `SECMP_CT_SCALE=10` | `6665c78` + bench | run PASS, six new targets PASS (evidence only) |
 | vectors / step 12a | tree on `6665c78` | 12 suites identical; 12a PASS, 962 cases |
+| PR run 37817187858 (BRIEF M5-B-3 findings, checked against the logs) | `7742e38` | windows-native FAIL (nextest 710/712, kat: `cli_config_errors_refuse_the_start`, `relay_trace_allow_equals_the_event_names`); linux-full FAIL only in step 7 (`secmp-relay` 1235/2098 = 58.9 %, min 80 %), 221 of 240 min; mutants FAIL (5 undocumented: 2 missed, 3 timeout); the rest green (`M05-evidence/m5b3-run-37817187858-red.txt`) |
+| `step --strict coverage`, before | `7742e38` | FAIL, `secmp-relay` 1235/2098 = 58.9 % (= CI), 86 s; `conn.rs`, `exec.rs`, `executor.rs`, `linkdata.rs`, `relay.rs` 0 % (`M05-evidence/coverage-local-m5b3.txt`) |
+| `step --strict coverage`, after | `dc34d93` | PASS, `secmp-relay` 2161/2218 = 97.4 % (min 80 %), 92 s, 828 tests (712 before); `secmp-crypto` 2523/2539 and `secmp-testkit` 172/172 unchanged, `secmp-proto` 6548/6706 = 97.6 % (6526/6705 before); 54 uncovered relay lines listed (20 in `server.rs`: the `std::net` shims and `bind`) |
+| Mutants pre-check, the five survivors (gate command line + `--file`/`--re`) | `109b280` code | 9 mutants in 5 min: 8 caught, 1 unviable (`relay.rs:166` `&&`→`\|\|`); `into_boxed` ×2 caught (1–2 s test), `start_drain`→`()`, `draining`→`true`, `drain_finished`→`false` caught in 49–56 s (were TIMEOUT 1733 s); also `draining`→`false`, `drain_finished`→`true`, `>=`→`<` caught (`M05-evidence/mutants-m5b3-local.txt`) |
+| `ci-fast --strict` | `dc34d93` | PASS: fmt, clippy, policy, deny, vet, audit, cooldown, nextest (119 s), doctest, hello, kat (459 s) (`M05-evidence/ci-fast-local-dc34d93.txt`) |
+| `nextest -p secmp-relay -p secmp-proto -p xtask` | `dc34d93` | 570 / 570 PASS; with `--features secmp-relay/kat` 686 / 686 PASS |
+| `step --strict windows-cross` | `dc34d93` | PASS (`cargo xwin build --all-targets`, x86_64-pc-windows-msvc) |
 
 ### 5B. Deviations
 
@@ -274,6 +289,21 @@ F-M5 lines: R-41 → PV-02 T14 true (`33a55ea`) · R-42/R-59 → G-01, G-02 PASS
 - Machine not idle during the WEISUNG M5-B-2 gate (load average 41–72 sampled from 18:21 to 18:37 CEST, from system processes —
   Spotlight workers — outside this session; no cargo/Kani/mutants/other ProVerif process of the session ran); one ProVerif process
   at a time as instructed.
+- **M5-B-3 windows-native** (`d349053`, test-only): `cli_config_errors_refuse_the_start` wrote the Windows temp path (`C:\…`) into
+  `key_file = "…"`, which the configuration's TOML subset refuses (`config.rs:123`, "strings take no quotes or escapes"); the test
+  writes the path with `/`. `relay_trace_allow_equals_the_event_names` applied `\n`-anchored edits to the CRLF checkout of `event.rs`
+  (no edit → 0 findings, expected 1); it reads the file through `lf` (M4 review R-100). No product change.
+- **M5-B-3 coverage** (`dc34d93`, gate scope): the relay's `relay` suite is `required-features = ["kat"]` and no workspace crate turns
+  on `secmp-relay/kat` by unification, so the coverage run built none of it (`conn`, `exec`, `executor`, `linkdata`, `relay` at 0 %);
+  `coverage_args` adds `--features secmp-relay/kat` (`gates::COVERAGE_FEATURES`). Thresholds, ignore regex and the exclusion
+  mechanism unchanged; `main.rs` is covered by the `cli` child processes (80/88 → 81/88 with `rotate-static --valid-days x`), no
+  exclusion used. Recorded as an ADR-042 consequence line, proposed (engineering class), §8B. A variant with `kat` of every
+  `expect::KAT_PACKAGES` crate was measured and dropped: it adds `secmp-testkit`'s differential suites (151–289 s each) and no
+  relay line.
+- **M5-B-3 mutants** (`109b280`, test-only): `cell_parts` checks the content of `Cell::into_boxed`; the `server_loop` listener fails
+  after `ACCEPT_CALLS_MAX` = 100 accept calls (a passing test makes ≈ 10), so a drain that never starts or never finishes ends
+  `serve` with `Error::Io` and fails the `Ok(())` assertion instead of hanging; it waits for the connection's close once (taken
+  `Receiver`). No entry in `docs/mutants-accepted.md`.
 
 ### 6B. Dependencies added or bumped
 
@@ -287,8 +317,16 @@ None (no new crate in `Cargo.lock` or `fuzz/Cargo.lock`; `secmp-relay` gains wor
 - `lBoth` takes 655.2 s of its 1800 s cap here under load ≈ 50 (margin ≈ 2.7×); its log is 1.4 GB (attack traces with large
   terms); the `proverif-link` job's runner time comes with the CI run.
 - Kani bounds of K-06/K-07 (§5B); `server` is thread-per-connection (M10 load test).
+- `linux-full` budget (run 37817187858): 221 of 240 min (`timeout-minutes: 240`, `ci.yml:155`); step times nextest 350 s, kat
+  1580 s, perf 24 s, fuzz 3579 s, coverage 334 s, miri 2898 s, kani 4190 s, proverif 201 s, sbom 30 s. M5-B-3 adds test time in step
+  7 only: the relay suite (116 tests, 150 s of summed test time, longest 38 s) — locally 86 s → 92 s; the CI step time comes with
+  the new run. Pins: fuzz has `expect::FUZZ_SMOKE_SECONDS` = 120 per target (29 targets = 3480 s); Kani has no time pin in
+  `expect.rs` (33 harnesses). No change.
 
 ### 8B. Blocked / questions for the reviewer or owner
+
+- M5-B-3: the coverage gate's feature scope (`--features secmp-relay/kat`) is a measurement-scope change of a gate — ADR-042
+  consequence line in `docs/08` marked proposed (engineering class), for the reviewer's acceptance. Blocked: none.
 
 - **STOP closed (WEISUNG M5-B-2, LO-5…LO-7):** with the breaks as reveals `lDH` completes in 59.0 s and `lBoth` in 655.2 s; every
   RESULT line as expected (L1a true, L3a true ×2, L4 true ×2, L8 false ×3; L1c false, L3c false ×2, L8 false ×3), no "cannot be

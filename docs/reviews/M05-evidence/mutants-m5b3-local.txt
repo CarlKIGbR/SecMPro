@@ -1,0 +1,21 @@
+# M5-B-3 mutants pre-check, local (Apple M1 Pro), working tree with the code of 109b280 except its clippy-only `type Drain` alias (added after this run)
+# cargo mutants --no-shuffle -j 3 --output target/m5b3-mutants --features kat --caught --unviable
+#   --package secmp-crypto --package secmp-proto --package secmp-relay
+#   --exclude crates/secmp-proto/src/kani_proofs.rs --exclude crates/secmp-relay/src/kani_proofs.rs --exclude-re kani_stubs::
+#   --file crates/secmp-proto/src/wire/cell.rs --file crates/secmp-relay/src/relay.rs
+#   --re 'Cell::into_boxed|Relay::(start_drain|draining|drain_finished)'
+#   -- -- --skip ratchet_fast_forward_bound_on_the_chain --skip ratchet_fast_forward_bound_on_a_step
+
+Found 9 mutants to test
+ok       Unmutated baseline in 10s build + 147s test
+ INFO Auto-set test timeout to 740s
+caught   crates/secmp-proto/src/wire/cell.rs:54:9: replace Cell::into_boxed -> Box<[u8; CELL_LEN]> with Box::new([0; CELL_LEN]) in 2s build + 1s test
+caught   crates/secmp-proto/src/wire/cell.rs:54:9: replace Cell::into_boxed -> Box<[u8; CELL_LEN]> with Box::new([1; CELL_LEN]) in 2s build + 2s test
+unviable crates/secmp-relay/src/relay.rs:166:13: replace && with || in Relay::start_drain in 9s build
+caught   crates/secmp-relay/src/relay.rs:176:9: replace Relay::draining -> bool with true in 1s build + 52s test
+caught   crates/secmp-relay/src/relay.rs:176:9: replace Relay::draining -> bool with false in 8s build + 49s test
+caught   crates/secmp-relay/src/relay.rs:165:9: replace Relay::start_drain with () in 18s build + 50s test
+caught   crates/secmp-relay/src/relay.rs:182:9: replace Relay::drain_finished -> bool with true in 1s build + 56s test
+caught   crates/secmp-relay/src/relay.rs:182:9: replace Relay::drain_finished -> bool with false in 2s build + 51s test
+caught   crates/secmp-relay/src/relay.rs:185:64: replace >= with < in Relay::drain_finished in 2s build + 50s test
+9 mutants tested in 5m: 8 caught, 1 unviable

@@ -1,0 +1,31 @@
+# M5-B-3 local checks on head dc34d93 (Apple M1 Pro)
+
+## cargo nextest run -p secmp-relay -p secmp-proto -p xtask
+  Summary [  74.944s] 570 tests run: 570 passed (1 slow), 0 skipped
+
+## cargo nextest run -p secmp-relay -p secmp-proto -p xtask --features secmp-relay/kat
+  PASS [   0.015s] (105/686) secmp-proto wire::cell::tests::cell_parts
+  PASS [   0.339s] (396/686) secmp-relay::cli cli_keygen_writes_a_key_file_and_prints_relay_fp
+  PASS [   0.346s] (397/686) secmp-relay::cli cli_config_errors_refuse_the_start
+  PASS [   0.018s] (398/686) secmp-relay::cli cli_prints_the_banner
+  PASS [   0.026s] (399/686) secmp-relay::cli cli_refuses_incomplete_and_unknown_arguments
+  PASS [   0.395s] (401/686) secmp-relay::cli cli_keygen_takes_the_validity_in_days
+  PASS [   0.055s] (402/686) secmp-relay::cli cli_rotate_static_adds_the_next_generation
+  PASS [   0.045s] (496/686) secmp-relay::relay server_loop::handle_answers_and_closes_at_eof
+  PASS [   0.043s] (498/686) secmp-relay::relay server_loop::handle_stops_on_teardown_write_failure_and_refusal
+  PASS [   0.042s] (499/686) secmp-relay::relay server_loop::handle_ticks_retries_and_stops_on_an_error
+  PASS [   0.043s] (500/686) secmp-relay::relay server_loop::serve_fails_on_a_listener_error
+  PASS [   0.421s] (502/686) secmp-relay::relay server_loop::serve_closes_connections_while_draining
+  PASS [   0.423s] (503/686) secmp-relay::relay server_loop::serve_retries_and_exits_after_the_drain
+  PASS [   0.590s] (504/686) secmp-relay::relay server_loop::serve_hands_each_connection_to_its_thread
+  PASS [   0.015s] (569/686) xtask::bin/xtask gates::tests::coverage_ignores_test_files
+  PASS [   0.014s] (618/686) xtask::bin/xtask gates::tests::relay_trace_allow_equals_the_event_names
+  Summary [  79.749s] 686 tests run: 686 passed (1 slow), 0 skipped
+
+## cargo xtask step --strict windows-cross
+  Running `target/debug/xtask step --strict windows-cross`
+  === [11] windows-cross ===
+  ### gate `windows-cross`
+  11 windows-cross   PASS         13s  cargo xwin build --all-targets for x86_64-pc-windows-msvc
+  step: PASS
+

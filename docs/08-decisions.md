@@ -538,6 +538,28 @@ clarifications rev 2.6, Proposed)" for OPEN-2…OPEN-11; this ADR records all th
   reference does; (a) adds a client reject for `valid_until − now` > 60 days; (o) a relay reject of an out-of-range
   `expires_bucket`; (p) the ERR 7 answer; (n) a client-core MUST.
 
+### ADR-049 — `secmp-relay` in M5: no third-party runtime crate; test-only workspace crates
+**Status.** Proposed (implementer, M5 Phase B, 2026-10-08) — engineering class (dependencies), for the reviewer.
+**Context.** `docs/02` §3 lets `secmp-relay` depend on `secmp-crypto`, `secmp-proto` and `secmp-sys-mem`, and on
+third-party runtime crates (async runtime, `tracing`) through an ADR. BRIEF_M5 §11 (3) gives every new direct
+dependency an ADR line and leaves any `cargo vet` audit to the owner as the named reviewer; BRIEF_M5-B §3 makes a new
+dependency outside the vetted closure a STOP. Neither `tokio` nor `tracing`/`tracing-subscriber` is in `Cargo.lock`.
+**Decision.** (1) `secmp-relay` has the normal dependencies `secmp-crypto` and `secmp-proto` only. Every component is
+sans-IO — time (`clock::Now`) and randomness (`secmp_proto::tr::Entropy`) come from the caller — so the in-process
+harness of Phase C can drive it on any runtime without the relay depending on one; the binary's listener is `std::net`
+with one thread per connection (the 200-client load test is M10). (2) The relay reports through the closed event set of
+`secmp_relay::event` (start-up, key load, its own listener, configuration error, drain start, exit; OPEN-M5-08 A)
+instead of `tracing`: no variant can carry per-request data, so per-request logging is impossible rather than disabled
+(`docs/05` principle 2); `expect::RELAY_TRACE_ALLOW` pins the set and test RL-03 captures a full scenario. (3)
+Dev-dependencies `serde_json` (the vector file; ADR-031, ADR-037) and `rand` (seeded property generators; ADR-040),
+both already in the vetted closure: no new crate in `Cargo.lock`, no new `cargo vet` record. (4) The workspace crate
+`secmp-crypto` re-exports `zeroize::ZeroizeOnDrop` and marks its secret key types with it (their only fields already
+wipe on drop), for the type-level zeroization test RL-09.
+**Alternatives.** `tokio` + `tracing` now: outside the vetted closure (STOP), owner audits needed. A per-request
+`tracing` redaction layer: weaker than a closed set (a field added later would be emitted).
+**Consequences.** `CLAUDE.md` §4 "Logging: `tracing` with a redaction layer" is met for the relay by a stricter
+construction (no logging crate); adopting `tracing`/`tokio` in M6/M10 is a new ADR with the owner's vet records.
+
 ---
 
 *Template for new entries:*

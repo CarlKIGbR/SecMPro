@@ -872,6 +872,12 @@ dependencies = [
 [[package]]
 name = "secmp-relay"
 version = "0.0.0"
+dependencies = [
+ "rand",
+ "secmp-crypto",
+ "secmp-proto",
+ "serde_json",
+]
 
 [[package]]
 name = "secmp-store"

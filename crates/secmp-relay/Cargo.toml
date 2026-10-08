@@ -9,5 +9,36 @@ license.workspace = true
 repository.workspace = true
 publish.workspace = true
 
+# Derandomised entry points and the kat accessors of the stores (store digest, live-buffer counter, the values in
+# effect): the vectors, the tests and the generator of `vectors/link.json`; never enabled in a shipped build.
+[features]
+kat = ["secmp-proto/kat", "secmp-crypto/kat"]
+
+# docs/02 §3: `secmp-crypto`, `secmp-proto` (and later `secmp-sys-mem`) only among workspace crates; no third-party
+# runtime crate (the listener is `std::net`, the event sink is the crate's own closed set, ADR-049).
+[dependencies]
+secmp-crypto.workspace = true
+secmp-proto.workspace = true
+
+# ADR-049: test-only, workspace crates of the vetted closure (the vector file, seeded generators of the properties).
+[dev-dependencies]
+secmp-crypto = { workspace = true, features = ["kat"] }
+secmp-proto = { workspace = true, features = ["kat"] }
+serde_json.workspace = true
+rand.workspace = true
+
+# The relay tests (milestone M5 Phase B): executor, stores, connection, the link-A replay of `vectors/link.json` and
+# the generator; they need feature `kat` (`FixedEntropy`, the store digest and snapshot).
+[[test]]
+name = "relay"
+path = "tests/relay/main.rs"
+required-features = ["kat"]
+
+# The Rust generator of the `link` vectors (`tests/common/link_gen.rs`): writes `vectors/rust/link.json` for
+# `cargo xtask vectors`; it needs feature `kat` (the derandomised entry points, the stores' snapshot).
+[[example]]
+name = "gen-link"
+required-features = ["kat"]
+
 [lints]
 workspace = true

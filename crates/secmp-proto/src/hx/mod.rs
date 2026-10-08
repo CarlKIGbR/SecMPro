@@ -43,7 +43,7 @@ use crate::wire::inv::IksPublic;
 /// one at release time, not a snapshot taken at `start` (M4 review C-8, R-22). The cells are reachable only through
 /// `release`:
 ///
-/// ```compile_fail
+/// ```compile_fail,E0624
 /// fn bypass(cells: secmp_proto::hx::HandshakeCells) {
 ///     let _ = cells.to_bytes();
 /// }

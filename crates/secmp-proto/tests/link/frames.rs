@@ -488,9 +488,14 @@ fn link_client_response_value_rules_reject() {
 }
 
 // ---------------------------------------------------------------------------------------------------------------
-// Properties (rand-based, as tr_properties.rs): SECMP_PROPTEST_SEED / SECMP_PROPTEST_CASES.
+// Properties (rand-based, as tr_properties.rs): SECMP_PROPTEST_SEED (through `common/seed.rs`) / SECMP_PROPTEST_CASES.
 
+/// The master seed when `SECMP_PROPTEST_SEED` is not set.
 const DEFAULT_SEED: u64 = 0x5ec3_2d00_0000_0005;
+
+/// The one reader of `SECMP_PROPTEST_SEED` (M4 review R-93, TEST-SPEC-M5 X-07).
+#[path = "../common/seed.rs"]
+mod seed;
 
 fn env_number<T: core::str::FromStr>(name: &str) -> Option<T> {
     let raw = std::env::var(name).ok()?;
@@ -501,8 +506,9 @@ fn env_number<T: core::str::FromStr>(name: &str) -> Option<T> {
     Some(raw.parse().unwrap_or_else(|_| std::process::abort()))
 }
 
+/// The master seed of this run: `SECMP_PROPTEST_SEED` (decimal `u64`) if set and not empty, else [`DEFAULT_SEED`].
 fn master_seed() -> u64 {
-    env_number("SECMP_PROPTEST_SEED").unwrap_or(DEFAULT_SEED)
+    seed::master_seed(DEFAULT_SEED)
 }
 
 fn cases(default: u32) -> u32 {

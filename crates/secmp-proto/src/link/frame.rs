@@ -289,7 +289,9 @@ impl Link {
 pub(crate) mod kani_stubs {
     use secmp_crypto::{Nonce24, SecretBytes};
 
-    use super::{AEAD_TAG_LEN, Counter, Id, Link, Zeroizing};
+    use crate::sizes::AEAD_TAG_LEN;
+
+    use super::{Counter, Id, Link, Zeroizing};
 
     pub(crate) struct Aead;
 

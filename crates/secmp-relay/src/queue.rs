@@ -184,3 +184,43 @@ impl QueueStore {
         (&self.queues, &self.sids)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn key(b: u8) -> Option<Ed25519Pk> {
+        let sk = secmp_crypto::Ed25519SigningKey::from_seed(&[b; 32]).ok()?;
+        Ed25519Pk::from_bytes(sk.verifying_key().as_bytes()).ok()
+    }
+
+    #[test]
+    fn ids_index_the_queue_until_it_is_removed() -> Result<(), &'static str> {
+        let recv = key(1).ok_or("key")?;
+        let send = key(2).ok_or("key")?;
+        let mut s = QueueStore::new();
+        let (rid, sid) = ([1; 16], [2; 16]);
+        assert!(!s.has_sid(&sid) && s.rid_of_sid(&sid).is_none() && s.get(&rid).is_none());
+        s.insert(rid, sid, recv, send, HourBucket(5));
+        assert!(s.has_sid(&sid));
+        assert_eq!(s.rid_of_sid(&sid), Some(rid));
+        assert_eq!(s.get(&rid).map(|q| q.sid), Some(sid));
+        assert!(!s.has_sid(&rid));
+        assert!(s.remove(&rid));
+        assert!(!s.has_sid(&sid) && s.get(&rid).is_none());
+        assert!(!s.remove(&rid));
+        Ok(())
+    }
+
+    #[test]
+    fn arrivals_count_from_one() {
+        let mut s = QueueStore::new();
+        assert_eq!(s.next_arrival(), 1);
+        assert_eq!(s.take_arrival(), Some(1));
+        assert_eq!(s.take_arrival(), Some(2));
+        assert_eq!(s.next_arrival(), 3);
+        s.next_arrival = u64::MAX;
+        assert_eq!(s.take_arrival(), None);
+        assert_eq!(s.next_arrival(), u64::MAX);
+    }
+}

@@ -6,8 +6,12 @@
 //! and builds the [`Relay`]; only then [`bind`] opens the loopback listener C tor forwards to. Serving writes no
 //! file (spec §9.7 item 1; test RL-02). The listener is `std::net` (no async runtime in M5; the 200-client load test
 //! is M10). The client's address is never read beyond the accept call and never reported.
+//!
+//! The loops ([`serve`], [`handle`]) are generic over the listener, the stream and the clock ([`Listener`],
+//! [`Stream`], [`Time`]): the binary passes `std::net` and the process clock, the tests in-memory streams and a
+//! virtual clock (no network in tests, `docs/06` §4).
 
-use std::io::{ErrorKind, Read as _, Write as _};
+use std::io::{self, ErrorKind};
 use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::path::Path;
 use std::sync::Arc;
@@ -24,9 +28,17 @@ use crate::keys::KeyFile;
 use crate::relay::Relay;
 
 /// How long a connection read blocks before the connection checks its timeout and the drain.
-const READ_POLL: Duration = Duration::from_millis(500);
+pub const READ_POLL: Duration = Duration::from_millis(500);
 /// How long the accept loop sleeps when no connection is waiting.
 const ACCEPT_POLL: Duration = Duration::from_millis(50);
+/// The sweeper's period on the monotonic clock.
+const TICK_MS: u64 = 1000;
+
+/// Where the loops take their time from.
+pub trait Time: Send + Sync {
+    /// The current time.
+    fn now(&self) -> Now;
+}
 
 /// The process clock: the wall clock and a monotonic clock from the process start.
 #[derive(Clone, Copy)]
@@ -42,14 +54,56 @@ impl Clock {
             origin: Instant::now(),
         }
     }
+}
 
-    /// The current time.
-    #[must_use]
-    pub fn now(&self) -> Now {
+impl Time for Clock {
+    fn now(&self) -> Now {
         Now {
             unix_secs: wall_clock_unix_secs(),
             mono_ms: u64::try_from(self.origin.elapsed().as_millis()).unwrap_or(u64::MAX),
         }
+    }
+}
+
+/// One accepted connection.
+pub trait Stream: io::Read + io::Write + Send + 'static {
+    /// Make reads block for at most `poll`, after which they fail with `WouldBlock` or `TimedOut`.
+    ///
+    /// # Errors
+    /// The I/O error of the underlying stream.
+    fn set_poll(&mut self, poll: Duration) -> io::Result<()>;
+    /// Close both directions.
+    fn close(&mut self);
+}
+
+impl Stream for TcpStream {
+    fn set_poll(&mut self, poll: Duration) -> io::Result<()> {
+        self.set_nonblocking(false)?;
+        self.set_read_timeout(Some(poll))
+    }
+
+    fn close(&mut self) {
+        let _ = self.shutdown(Shutdown::Both);
+    }
+}
+
+/// A non-blocking listener: `accept_next` fails with `WouldBlock` when no connection waits.
+pub trait Listener {
+    /// The connections it accepts.
+    type Conn: Stream;
+    /// The next waiting connection; the peer's address is not part of the result (never stored, never reported).
+    ///
+    /// # Errors
+    /// `WouldBlock` when none waits, `Interrupted`, or the listener's failure.
+    fn accept_next(&self) -> io::Result<Self::Conn>;
+}
+
+impl Listener for TcpListener {
+    type Conn = TcpStream;
+
+    fn accept_next(&self) -> io::Result<TcpStream> {
+        // the peer address is dropped here
+        self.accept().map(|(stream, _)| stream)
     }
 }
 
@@ -100,42 +154,51 @@ const fn reason(e: Error) -> &'static str {
     }
 }
 
-/// Bind the relay's listener at `addr` (a loopback address, `Config::parse`).
+/// Bind the relay's listener at `addr` (a loopback address, `Config::parse`), non-blocking.
 ///
 /// # Errors
 /// [`Error::Io`] if the address cannot be bound.
 pub fn bind(relay: &Relay, addr: SocketAddr) -> Result<TcpListener> {
     let listener = TcpListener::bind(addr)?;
+    listener.set_nonblocking(true)?;
     let own = listener.local_addr()?;
     relay.events().emit(&Event::ListenerBound { addr: &own });
     Ok(listener)
+}
+
+/// Whether the sweeper is due: a full period since the last tick (a clock that steps back is not due).
+const fn tick_due(last_ms: u64, now_ms: u64) -> bool {
+    now_ms.saturating_sub(last_ms) >= TICK_MS
 }
 
 /// Serve until the drain has finished: one thread per connection; the sweeper ticks once per second.
 ///
 /// # Errors
 /// [`Error::Io`] if the listener fails.
-pub fn serve(relay: &Arc<Relay>, listener: &TcpListener, clock: Clock) -> Result<()> {
-    listener.set_nonblocking(true)?;
-    let mut last_tick = clock.now();
+pub fn serve<L: Listener, T: Time + Clone + 'static>(
+    relay: &Arc<Relay>,
+    listener: &L,
+    clock: &T,
+) -> Result<()> {
+    let mut last_tick = clock.now().mono_ms;
     loop {
         let now = clock.now();
         if relay.drain_finished(now) {
             relay.events().emit(&Event::Exit);
             return Ok(());
         }
-        if now.mono_ms.saturating_sub(last_tick.mono_ms) >= 1000 {
+        if tick_due(last_tick, now.mono_ms) {
             relay.tick(now);
-            last_tick = now;
+            last_tick = now.mono_ms;
         }
-        match listener.accept() {
-            // the peer address is dropped here: never stored, never reported
-            Ok((stream, _)) => {
+        match listener.accept_next() {
+            Ok(mut stream) => {
                 if relay.accepts_connections() {
                     let relay = Arc::clone(relay);
-                    std::thread::spawn(move || handle(&relay, stream, clock));
+                    let clock = clock.clone();
+                    std::thread::spawn(move || handle(&relay, stream, &clock));
                 } else {
-                    let _ = stream.shutdown(Shutdown::Both);
+                    stream.close();
                 }
             }
             Err(e) if e.kind() == ErrorKind::WouldBlock => std::thread::sleep(ACCEPT_POLL),
@@ -145,13 +208,15 @@ pub fn serve(relay: &Arc<Relay>, listener: &TcpListener, clock: Clock) -> Result
     }
 }
 
-/// Drive one connection until it closes, the peer leaves or the drain has finished.
-fn handle(relay: &Relay, mut stream: TcpStream, clock: Clock) {
-    if stream.set_nonblocking(false).is_err() || stream.set_read_timeout(Some(READ_POLL)).is_err() {
+/// Drive one connection until it closes, the peer leaves, an I/O error occurs or the drain has finished; then
+/// close it.
+pub fn handle<S: Stream, T: Time>(relay: &Relay, mut stream: S, clock: &T) {
+    if stream.set_poll(READ_POLL).is_err() {
+        stream.close();
         return;
     }
     let Some(mut conn) = Connection::accept(relay, clock.now()) else {
-        let _ = stream.shutdown(Shutdown::Both);
+        stream.close();
         return;
     };
     let mut entropy = OsEntropy;
@@ -173,5 +238,18 @@ fn handle(relay: &Relay, mut stream: TcpStream, clock: Clock) {
             break;
         }
     }
-    let _ = stream.shutdown(Shutdown::Both);
+    stream.close();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_sweeper_ticks_once_a_second() {
+        assert!(!tick_due(0, 999));
+        assert!(tick_due(0, 1000));
+        assert!(tick_due(500, 1500));
+        assert!(!tick_due(5000, 4000));
+    }
 }

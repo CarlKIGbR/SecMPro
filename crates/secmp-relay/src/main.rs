@@ -18,7 +18,7 @@ use std::sync::Arc;
 use secmp_relay::clock::wall_clock_unix_secs;
 use secmp_relay::event::{Event, EventSink as _, StderrSink};
 use secmp_relay::keys::{DEFAULT_VALIDITY_SECS, KeyFile};
-use secmp_relay::server::{self, Clock};
+use secmp_relay::server::{self, Clock, Time as _};
 
 const BANNER: &str = concat!(
     env!("CARGO_PKG_NAME"),
@@ -112,7 +112,7 @@ fn run(config: &std::path::Path) -> ExitCode {
     let Ok(listener) = server::bind(&relay, cfg.listen) else {
         return fail("cannot bind the listener");
     };
-    match server::serve(&relay, &listener, clock) {
+    match server::serve(&relay, &listener, &clock) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => fail(&e.to_string()),
     }

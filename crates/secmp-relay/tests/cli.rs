@@ -43,6 +43,11 @@ fn s(p: &Path) -> &str {
     p.to_str().unwrap()
 }
 
+/// `p` as a string of the configuration's TOML subset, which takes no backslash (`config.rs`): Windows accepts `/`.
+fn toml_path(p: &Path) -> String {
+    s(p).replace('\\', "/")
+}
+
 fn hex(b: &[u8]) -> String {
     use std::fmt::Write as _;
     b.iter().fold(String::new(), |mut out, x| {
@@ -210,7 +215,7 @@ fn cli_config_errors_refuse_the_start() {
         &cfg,
         format!(
             "[listen]\ntor_loopback = \"127.0.0.1:7443\"\n[access]\nkey_file = \"{}\"\n",
-            s(&dir.join("no-keys"))
+            toml_path(&dir.join("no-keys"))
         ),
     )
     .unwrap();

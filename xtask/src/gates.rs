@@ -6431,7 +6431,10 @@ mod tests {
     #[test]
     fn relay_trace_allow_equals_the_event_names() -> Result<()> {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
-        let src = std::fs::read_to_string(root.join("crates/secmp-relay/src/event.rs"))?;
+        // a Windows checkout has CRLF: the line-anchored edits below need `\n`
+        let src = lf(&std::fs::read_to_string(
+            root.join("crates/secmp-relay/src/event.rs"),
+        )?);
         assert_eq!(
             crate::policy::relay_event_names(&src),
             expect::RELAY_TRACE_ALLOW

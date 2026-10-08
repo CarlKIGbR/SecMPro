@@ -631,6 +631,40 @@ pub(crate) fn check_vet_closure(ws: &Workspace) -> Result<String> {
     ))
 }
 
+/// The event names of the relay's closed event set (`secmp_relay::event::EVENT_NAMES` in `src`, the text of
+/// `crates/secmp-relay/src/event.rs`), in order.
+pub(crate) fn relay_event_names(src: &str) -> Vec<String> {
+    let Some(start) = src.find("pub const EVENT_NAMES") else {
+        return Vec::new();
+    };
+    let body = src.get(start..).unwrap_or_default();
+    // the list after `=` (the type `[&str; N]` comes first)
+    let list = body
+        .find('=')
+        .and_then(|eq| body.get(eq..))
+        .and_then(|b| b.find("];").and_then(|end| b.get(..end)))
+        .unwrap_or_default();
+    list.split('"')
+        .skip(1)
+        .step_by(2)
+        .map(str::to_owned)
+        .collect()
+}
+
+/// OPEN-M5-08 A: `expect::RELAY_TRACE_ALLOW` is exactly the relay's closed event set, in order — an event added to
+/// the relay without the list (or the reverse) is a finding.
+pub(crate) fn relay_event_findings(src: &str) -> Vec<String> {
+    let names = relay_event_names(src);
+    if names == expect::RELAY_TRACE_ALLOW {
+        Vec::new()
+    } else {
+        vec![format!(
+            "relay-events: secmp_relay::event::EVENT_NAMES {names:?} is not expect::RELAY_TRACE_ALLOW {:?}",
+            expect::RELAY_TRACE_ALLOW
+        )]
+    }
+}
+
 /// Run every policy check; fail with the full list of findings.
 pub(crate) fn run(ws: &Workspace) -> Result<String> {
     let mut findings = Vec::new();
@@ -657,6 +691,9 @@ pub(crate) fn run(ws: &Workspace) -> Result<String> {
     let relaxations = check_lint_allows(&ws.root, &rs_files, &mut findings)?;
     let crates = check_build_scripts(ws, &mut findings);
     let spdx = check_spdx(&ws.root, &mut findings)?;
+    findings.extend(relay_event_findings(&std::fs::read_to_string(
+        ws.root.join("crates/secmp-relay/src/event.rs"),
+    )?));
     let vet = check_vet_closure(ws);
     if let Err(e) = &vet {
         findings.push(format!("vet-closure: {e}"));
@@ -678,8 +715,10 @@ pub(crate) fn run(ws: &Workspace) -> Result<String> {
         "unsafe-attrs: {forbid} target roots forbid, {sys_allow} sys library roots allow, {exempt_allow} ADR-038 \
          bench root allows ({}), {ui_deny} secmp-ui roots deny, {ui_files} secmp-ui files without `unsafe`; \
          lints-table: {manifests} manifests; lint-allows: {relaxations} relaxing attributes (all sanctioned); \
-         build-scripts: {crates} crates, none; spdx: {spdx} files; {}",
+         build-scripts: {crates} crates, none; spdx: {spdx} files; relay-events: {} names as \
+         expect::RELAY_TRACE_ALLOW; {}",
         expect::UNSAFE_EXEMPT_ROOT,
+        expect::RELAY_TRACE_ALLOW.len(),
         vet.unwrap_or_default()
     ))
 }

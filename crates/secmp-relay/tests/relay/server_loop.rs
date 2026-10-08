@@ -205,7 +205,10 @@ fn serve_retries_and_exits_after_the_drain() {
         Err(io::Error::from(ErrorKind::WouldBlock)),
     ]);
     assert_eq!(server::serve(&relay, &l, &clock), Ok(()));
-    assert!(l.script.lock().unwrap().is_empty(), "every scripted error was seen");
+    assert!(
+        l.script.lock().unwrap().is_empty(),
+        "every scripted error was seen"
+    );
     assert_eq!(names(&events), vec!["keys_loaded", "drain_started", "exit"]);
 }
 

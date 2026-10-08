@@ -6,9 +6,7 @@
 use secmp_proto::link::client;
 use secmp_relay::{Connection, Limits};
 
-use crate::fixture::{
-    Client, FRAME, RelayFx, client_entropy, now, relay_hs_entropy,
-};
+use crate::fixture::{Client, FRAME, RelayFx, client_entropy, now, relay_hs_entropy};
 
 /// Feed `bytes` in pieces of `chunk` (0: all at once) and collect what the relay wrote, per piece.
 fn feed(conn: &mut Connection<'_>, bytes: &[u8], chunk: usize) -> Vec<Vec<u8>> {
@@ -58,7 +56,10 @@ fn connection_answers_each_record_when_complete_at_any_split() {
     assert!(on_time);
     for chunk in [1, 2, 7, 1000, 4351] {
         let (bytes, on_time) = run(chunk);
-        assert!(on_time, "chunk {chunk}: an answer before its input was complete");
+        assert!(
+            on_time,
+            "chunk {chunk}: an answer before its input was complete"
+        );
         assert_eq!(bytes, whole, "chunk {chunk}: the same bytes");
     }
 }
@@ -75,9 +76,7 @@ fn connection_takes_coalesced_records_and_frames() {
     let mut conn = Connection::accept(&relay, now()).unwrap();
     let (hello, st) = client::start(fx.relay_fp, Some(&access), now().unix_secs).unwrap();
     let info = conn.on_bytes(&hello, now(), &mut relay_hs_entropy());
-    let (hs1, wait) = st
-        .on_relayinfo(&info.bytes, &mut client_entropy())
-        .unwrap();
+    let (hs1, wait) = st.on_relayinfo(&info.bytes, &mut client_entropy()).unwrap();
     // the client cannot seal its first frame before HS2; replay the reference link's frame 0 instead: the
     // same keys (the same draws), so the same frame
     let mut probe = Connection::accept(&relay, now()).unwrap();
@@ -95,7 +94,11 @@ fn connection_takes_coalesced_records_and_frames() {
     // HELLO with the first byte of HS1 behind it: RELAYINFO only, the byte is kept
     let mut conn = Connection::accept(&relay, now()).unwrap();
     let (hello, _) = client::start(fx.relay_fp, None, now().unix_secs).unwrap();
-    let out = conn.on_bytes(&[&hello[..], &[0x0b]].concat(), now(), &mut relay_hs_entropy());
+    let out = conn.on_bytes(
+        &[&hello[..], &[0x0b]].concat(),
+        now(),
+        &mut relay_hs_entropy(),
+    );
     assert!(!out.close);
     assert_eq!(out.bytes.len(), 1744, "RELAYINFO");
     assert!(!conn.is_closed() && conn.executor().is_none());

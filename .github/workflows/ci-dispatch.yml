@@ -5,7 +5,8 @@
 # counterpart (M4 review C-4, R-14; checked by `gates::tests::dispatch_full_runs_the_linux_full_line`):
 # `dispatch-fast` = `linux-fast`, `dispatch-windows` = `windows-native`, `dispatch-xwin` = `xwin-cross`,
 # `dispatch-full` = `linux-full` (which delegates mutation testing, ct and the SecMP-HX models), `dispatch-ct` = `ct`,
-# `dispatch-mutants-shard`/`dispatch-mutants` = `mutants-shard`/`mutants`, `dispatch-proverif-hx` = `proverif-hx`; the
+# `dispatch-mutants-shard`/`dispatch-mutants` = `mutants-shard`/`mutants`, `dispatch-proverif-hx` = `proverif-hx`,
+# `dispatch-proverif-link` = `proverif-link` (M5, the SecMP-LINK models `linux-full` delegates); the
 # suites `full` and `all` run all of the delegated jobs. `cargo xtask win-test --backend github --dispatch` starts
 # `suite: windows`.
 # Checked by `cargo xtask policy` as every workflow (see the header of ci.yml), including the read-only token. By
@@ -216,7 +217,7 @@ jobs:
             ~/.kani
           key: ${{ steps.tools-cache.outputs.cache-primary-key }}
       - name: ci-full (steps 1–14)
-        run: cargo xtask ci-full --strict --delegated windows-native --delegated windows-cross --delegated mutants --delegated ct --models tr
+        run: cargo xtask ci-full --strict --delegated windows-native --delegated windows-cross --delegated mutants --delegated ct --delegated proverif-link --models tr
 
   # Step 8 as in ci.yml (ADR-047 Amendment 1): 8 shards, then the verdict over them.
   dispatch-mutants-shard:
@@ -344,5 +345,55 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: proverif-hx-${{ github.sha }}-${{ github.run_attempt }}
+          path: target/proverif/
+          if-no-files-found: error
+
+  # Step 10 for the SecMP-LINK session models as in ci.yml (`proverif-link`, M5).
+  dispatch-proverif-link:
+    if: inputs.suite == 'all' || inputs.suite == 'full'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Pinned toolchain (rust-toolchain.toml)
+        run: rustup toolchain install && rustc -vV
+      - name: Tool install root
+        run: |
+          echo "SECMP_TOOLS_ROOT=$HOME/.secmp-tools" >> "$GITHUB_ENV"
+          echo "$HOME/.secmp-tools/bin" >> "$GITHUB_PATH"
+      - name: Restore pinned tools
+        id: tools-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.secmp-tools
+          key: ci-tools-proverif-${{ runner.os }}-${{ hashFiles('xtask/src/tools.rs', 'rust-toolchain.toml') }}
+      - name: ProVerif 2.05 from source (sha256 as recorded by opam)
+        run: |
+          if [ ! -x "$HOME/.secmp-tools/bin/proverif" ]; then
+            sudo apt-get update && sudo apt-get install -y --no-install-recommends ocaml-nox ocaml-findlib ocamlbuild
+            mkdir -p "$HOME/.secmp-tools/bin"
+            cd "$RUNNER_TEMP"
+            curl --fail --silent --show-error --location -o proverif2.05.tar.gz https://proverif.inria.fr/proverif2.05.tar.gz
+            echo "4871f53c32ab4a04669a060c4886ba5d9080496963fb980a9a62d2c429ceabc4  proverif2.05.tar.gz" | sha256sum -c -
+            tar xzf proverif2.05.tar.gz
+            cd proverif2.05 && ./build -nointeract
+            install -m 0755 proverif "$HOME/.secmp-tools/bin/proverif"
+          fi
+          proverif -help | head -1
+      - name: Save pinned tools (right after installing, so a later failing step cannot lose the cache)
+        if: steps.tools-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.secmp-tools
+          key: ${{ steps.tools-cache.outputs.cache-primary-key }}
+      - name: ProVerif, SecMP-LINK session models (step 10, --models link)
+        run: cargo xtask step --strict proverif --models link --jobs 4
+      - name: Upload the ProVerif logs and evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: proverif-link-${{ github.sha }}-${{ github.run_attempt }}
           path: target/proverif/
           if-no-files-found: error

@@ -47,7 +47,11 @@ fn put(b: &mut Bench, cmd_seq: u32, times: [u64; 3], ld: u8) -> ResponseCmd {
     for (i, (req, t)) in frames.iter().zip(times).enumerate() {
         let answer = b.run(req, at(t), &mut lots());
         if i < 2 {
-            assert!(answer.is_pending(), "nothing after frame {}", i.saturating_add(1));
+            assert!(
+                answer.is_pending(),
+                "nothing after frame {}",
+                i.saturating_add(1)
+            );
         } else {
             last = Some(answer);
         }

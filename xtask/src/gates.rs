@@ -128,13 +128,14 @@ pub(crate) fn nextest_nonkat_args() -> Vec<&'static str> {
     ]
 }
 
+/// The workspace run and the non-kat run with `SECMP_PROPTEST_SEED` removed (every property with its `DEFAULT_SEED`;
+/// the CI run seed pass is in `kat`, M4 review R-93, TEST-SPEC-M5 X-07, `testscan.rs`).
 pub(crate) fn nextest(_: &Ctx) -> Result<Outcome> {
     tools::require(tools::NEXTEST)?;
-    Cmd::cargo().args(nextest_args()).run()?;
-    Cmd::cargo().args(nextest_nonkat_args()).run()?;
-    Ok(Outcome::Pass(
-        "cargo nextest run --workspace; cargo nextest run --package secmp-proto (non-kat)".into(),
-    ))
+    for run in crate::testscan::nextest_runs() {
+        run.run()?;
+    }
+    Ok(Outcome::Pass(crate::testscan::nextest_detail()))
 }
 
 pub(crate) fn doctest(_: &Ctx) -> Result<Outcome> {
@@ -177,18 +178,11 @@ pub(crate) fn kat(ctx: &Ctx) -> Result<Outcome> {
         .map(|p| p.name.clone())
         .collect();
     same_set("KAT packages (feature `kat`)", &found, expect::KAT_PACKAGES)?;
-    for p in &found {
-        Cmd::cargo()
-            .args([
-                "nextest",
-                "run",
-                "--locked",
-                "--package",
-                p,
-                "--features",
-                "kat",
-            ])
-            .run()?;
+    // every package with SECMP_PROPTEST_SEED removed, then in a GitHub Actions run the property packages' property
+    // tests with the CI run seed (M4 review R-93, TEST-SPEC-M5 X-07; `testscan.rs`)
+    let ci_seed = crate::testscan::ci_run_seed()?;
+    for run in crate::testscan::kat_runs(&found, ci_seed)? {
+        run.run()?;
     }
     // libcrux's build scripts compile its SIMD backends on aarch64 (NEON) and x86_64 (AVX2, chosen at run time),
     // so the run above tests the backend this host uses. A CPU without AVX2 runs the portable backend: the ML-KEM
@@ -217,11 +211,13 @@ pub(crate) fn kat(ctx: &Ctx) -> Result<Outcome> {
             .env("LIBCRUX_DISABLE_SIMD128", "1")
             .env("LIBCRUX_DISABLE_SIMD256", "1")
             .env("CARGO_TARGET_DIR", portable_dir.to_string_lossy())
+            .env_remove(crate::testscan::SEED_ENV)
             .run()?;
     }
     Ok(Outcome::Pass(format!(
-        "KAT/differential packages: {} (expected set matches); ML-KEM KATs and frozen vectors (M1 suites, tr, hx, link) also with libcrux's portable backend",
-        list(&found)
+        "KAT/differential packages: {} (expected set matches); ML-KEM KATs and frozen vectors (M1 suites, tr, hx, link) also with libcrux's portable backend; {}",
+        list(&found),
+        crate::testscan::kat_seed_detail(ci_seed)
     )))
 }
 
@@ -491,25 +487,12 @@ fn stop_child(child: &mut std::process::Child) -> Result<()> {
 /// The `ct` gate's reading of the reject sites (M3 review R-45, F19; the bench's per-class pre-checks). Each target
 /// line of `lines` (from [`ctreport::ct_table`], which ignores the report's `site` and `precheck`) gets ` — site
 /// <site>` at the end of its first `; `-segment — the segment with the target's name and verdict, which is one row
-/// of the step's summary (ADR-045, `summary::step_rows`). Problems: a target with a site but no passed pre-check, and
-/// a target of the pre-checked set without a site. (A pre-check that fails aborts the bench, whose report then
-/// carries only `error`, which [`ctreport::ct_table`] refuses.)
+/// of the step's summary (ADR-045, `summary::step_rows`). Problems: a target with a site but no passed pre-check; a
+/// site outside `expect::KNOWN_SITES` (M4 review R-63); and, by the binding of `expect::CT_TARGET_SITES` (M4 review
+/// R-47, TEST-SPEC-M5 X-08), a listed target that claims another known site or none, and a target not listed that
+/// claims a site. (A pre-check that fails aborts the bench, whose report then carries only `error`, which
+/// [`ctreport::ct_table`] refuses.)
 fn ct_site_lines(json: &str, lines: &[String]) -> Result<(Vec<String>, Vec<String>)> {
-    /// The targets whose report entry must carry a site and a passed pre-check: the SecMP-TR targets, the
-    /// same-content control (it measures the TR body-tag cell), the SecMP-INV/HX targets of TEST-SPEC-M4 (f) and the
-    /// HX same-content control (the class-1 cells of `hx_accept_reject_inner`, ADR-042 Amendment 3).
-    const PRECHECKED: &[&str] = &[
-        "tr_decrypt_reject_hdr_key",
-        "tr_decrypt_reject_body_tag",
-        "tr_decrypt_reject_ct_pq",
-        "tr_decrypt_reject_skipped",
-        "same_content_control",
-        "inv_fingerprint_compare",
-        "x25519_zero_check",
-        "hx_accept_reject_inner",
-        "hx_accept_reject_first_msg",
-        "hx_same_content_control",
-    ];
     let v: Value = serde_json::from_str(json).map_err(|e| Error(format!("ct report: {e}")))?;
     let results = v
         .get("results")
@@ -525,12 +508,28 @@ fn ct_site_lines(json: &str, lines: &[String]) -> Result<(Vec<String>, Vec<Strin
             .and_then(|p| p.get("passed"))
             .and_then(Value::as_bool)
             == Some(true);
+        // M4 review R-47 (TEST-SPEC-M5 X-08): the site this target is bound to, if it claims one
+        let bound = expect::CT_TARGET_SITES
+            .iter()
+            .find(|(target, _)| *target == name)
+            .map(|(_, site)| *site);
         match r.get("site").and_then(Value::as_str) {
             Some(site) => {
                 if !expect::KNOWN_SITES.contains(&site) {
                     problems.push(format!(
                         "ct: {name} claims the unknown reject site {site:?} (expect::KNOWN_SITES, M4 review R-63)"
                     ));
+                } else if bound != Some(site) {
+                    problems.push(match bound {
+                        Some(b) => format!(
+                            "ct: {name} claims the reject site {site:?}, but expect::CT_TARGET_SITES binds it to \
+                             {b:?} (M4 review R-47)"
+                        ),
+                        None => format!(
+                            "ct: {name} claims the reject site {site:?}, but expect::CT_TARGET_SITES binds no site \
+                             to it (M4 review R-47)"
+                        ),
+                    });
                 }
                 if !passed {
                     problems.push(format!(
@@ -540,7 +539,7 @@ fn ct_site_lines(json: &str, lines: &[String]) -> Result<(Vec<String>, Vec<Strin
                 }
                 sites.push((format!("{name}: "), site));
             }
-            None if PRECHECKED.contains(&name) => problems.push(format!(
+            None if bound.is_some() => problems.push(format!(
                 "ct: {name} has no reject site and per-class pre-check in the report (M3 review R-45)"
             )),
             None => {}
@@ -2049,25 +2048,29 @@ pub(crate) fn proverif_results(output: &str) -> Vec<Option<bool>> {
         .collect()
 }
 
-/// Which ProVerif models the `proverif` step runs (WEISUNG M4-5 §4 (a), gate F7, M3 review R-14): `--models tr|hx|all`.
+/// Which ProVerif models the `proverif` step runs (WEISUNG M4-5 §4 (a), gate F7, M3 review R-14; M5 OPEN-M5-16 A):
+/// `--models tr|hx|link|all`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ProverifModels {
     /// The single-file models of `expect::PROVERIF_MODELS` (M4: `formal/tr.pv`).
     Tr,
     /// Every `formal/hx/*.pv`, each with `-lib formal/hx.pvl`.
     Hx,
-    /// Both (the default).
+    /// Every `formal/link/*.pv`, each with `-lib formal/link.pvl` (M5, CLAIMS §LINK).
+    Link,
+    /// All three (the default).
     All,
 }
 
 impl ProverifModels {
-    /// The value of `--models`; anything but `tr`, `hx` and `all` is refused.
+    /// The value of `--models`; anything but `tr`, `hx`, `link` and `all` is refused.
     pub(crate) fn parse(s: &str) -> Result<Self> {
         match s {
             "tr" => Ok(Self::Tr),
             "hx" => Ok(Self::Hx),
+            "link" => Ok(Self::Link),
             "all" => Ok(Self::All),
-            other => bail!("--models {other:?}: expected tr, hx or all"),
+            other => bail!("--models {other:?}: expected tr, hx, link or all"),
         }
     }
 
@@ -2075,6 +2078,7 @@ impl ProverifModels {
         match self {
             Self::Tr => "tr",
             Self::Hx => "hx",
+            Self::Link => "link",
             Self::All => "all",
         }
     }
@@ -2083,8 +2087,64 @@ impl ProverifModels {
         matches!(self, Self::Tr | Self::All)
     }
 
-    fn hx(self) -> bool {
-        matches!(self, Self::Hx | Self::All)
+    /// Whether the session models of `family` are selected.
+    fn sessions(self, family: SessionFamily) -> bool {
+        match family {
+            SessionFamily::Hx => matches!(self, Self::Hx | Self::All),
+            SessionFamily::Link => matches!(self, Self::Link | Self::All),
+        }
+    }
+}
+
+/// A ProVerif model made of a library and one file per session, each run as `proverif -lib <lib> <dir>/<session>.pv`
+/// and checked against its own expectation table: SecMP-HX (M4, WEISUNG M4-5, ADR-046) and SecMP-LINK (M5,
+/// OPEN-M5-16 A, CLAIMS §LINK LO-1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SessionFamily {
+    /// `formal/hx.pvl` + `formal/hx/<session>.pv`, `expect::PROVERIF_EXPECTED_HX`.
+    Hx,
+    /// `formal/link.pvl` + `formal/link/<session>.pv`, `expect::PROVERIF_EXPECTED_LINK`.
+    Link,
+}
+
+impl SessionFamily {
+    /// Both families, in the order the step runs them.
+    pub(crate) const ALL: [Self; 2] = [Self::Hx, Self::Link];
+
+    pub(crate) fn lib(self) -> &'static str {
+        match self {
+            Self::Hx => expect::PROVERIF_HX_LIB,
+            Self::Link => expect::PROVERIF_LINK_LIB,
+        }
+    }
+
+    pub(crate) fn dir(self) -> &'static str {
+        match self {
+            Self::Hx => expect::PROVERIF_HX_DIR,
+            Self::Link => expect::PROVERIF_LINK_DIR,
+        }
+    }
+
+    pub(crate) fn table(self) -> &'static [expect::HxExpected] {
+        match self {
+            Self::Hx => expect::PROVERIF_EXPECTED_HX,
+            Self::Link => expect::PROVERIF_EXPECTED_LINK,
+        }
+    }
+
+    pub(crate) fn table_name(self) -> &'static str {
+        match self {
+            Self::Hx => "expect::PROVERIF_EXPECTED_HX",
+            Self::Link => "expect::PROVERIF_EXPECTED_LINK",
+        }
+    }
+
+    /// The short name: the prefix of its logs (`target/proverif/<name>-<session>.log`) and its label in the summary.
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::Hx => "hx",
+            Self::Link => "link",
+        }
     }
 }
 
@@ -2157,26 +2217,41 @@ fn hx_table_files(table: &[expect::HxExpected]) -> BTreeSet<String> {
 }
 
 /// WEISUNG M4-5 §4 (a): the discovered `formal/hx/*.pv` stems are exactly the files of the table — an `hx` file without
-/// expected entries fails, and so does a file of the table that does not exist.
+/// expected entries fails, and so does a file of the table that does not exist (the step calls [`session_set_check`]).
+#[cfg(test)]
 pub(crate) fn hx_set_check(found: &BTreeSet<String>, table: &[expect::HxExpected]) -> Result<()> {
+    session_set_check(SessionFamily::Hx, found, table)
+}
+
+/// [`hx_set_check`] for the session models of `family` (`formal/hx/*.pv`, `formal/link/*.pv`) against `table`.
+pub(crate) fn session_set_check(
+    family: SessionFamily,
+    found: &BTreeSet<String>,
+    table: &[expect::HxExpected],
+) -> Result<()> {
     let want = hx_table_files(table);
     let without: Vec<&String> = found.difference(&want).collect();
     let absent: Vec<&String> = want.difference(found).collect();
     if !without.is_empty() || !absent.is_empty() {
         bail!(
-            "{}/*.pv against expect::PROVERIF_EXPECTED_HX: files without expected entries: {without:?}; expected files \
-             that do not exist: {absent:?}",
-            expect::PROVERIF_HX_DIR
+            "{}/*.pv against {}: files without expected entries: {without:?}; expected files that do not exist: \
+             {absent:?}",
+            family.dir(),
+            family.table_name()
         );
     }
     Ok(())
 }
 
+/// The models one run of the `proverif` step checks: the single-file models (`formal/<name>.pv`) and the session files
+/// (family, session).
+type ProverifInputs = (Vec<String>, Vec<(SessionFamily, String)>);
+
 /// The input set of the `proverif` step for `models` (WEISUNG M4-5 §4 (a)): the old joint model `formal/hx.pv` must
-/// not exist; the single-file models `formal/*.pv` are exactly `expect::PROVERIF_MODELS`; for `hx`, `formal/hx.pvl`
-/// exists and `formal/hx/*.pv` matches `expect::PROVERIF_EXPECTED_HX` ([`hx_set_check`]). Returns the single-file
-/// models and the HX sessions to run.
-fn proverif_inputs(root: &Path, models: ProverifModels) -> Result<(Vec<String>, Vec<String>)> {
+/// not exist; the single-file models `formal/*.pv` are exactly `expect::PROVERIF_MODELS` (so a joint `formal/link.pv`
+/// fails too); for each selected session family (`hx`, `link`; `link` not when `skip_link`), its library exists and
+/// `<dir>/*.pv` matches its table ([`session_set_check`]). Returns the single-file models and the sessions to run.
+fn proverif_inputs(root: &Path, models: ProverifModels, skip_link: bool) -> Result<ProverifInputs> {
     if root.join("formal").join("hx.pv").exists() {
         bail!(
             "formal/hx.pv (the old joint SecMP-HX model) must not exist: the model is {} and {}/*.pv",
@@ -2195,20 +2270,23 @@ fn proverif_inputs(root: &Path, models: ProverifModels) -> Result<(Vec<String>, 
     } else {
         Vec::new()
     };
-    let mut hx = Vec::new();
-    if models.hx() {
-        if !root.join(expect::PROVERIF_HX_LIB).is_file() {
+    let mut sessions = Vec::new();
+    for family in SessionFamily::ALL {
+        if !models.sessions(family) || (skip_link && family == SessionFamily::Link) {
+            continue;
+        }
+        if !root.join(family.lib()).is_file() {
             bail!(
                 "{} is missing (the library of every {}/*.pv)",
-                expect::PROVERIF_HX_LIB,
-                expect::PROVERIF_HX_DIR
+                family.lib(),
+                family.dir()
             );
         }
-        let found = dir_stems(&root.join(expect::PROVERIF_HX_DIR), "pv")?;
-        hx_set_check(&found, expect::PROVERIF_EXPECTED_HX)?;
-        hx = found.into_iter().collect();
+        let found = dir_stems(&root.join(family.dir()), "pv")?;
+        session_set_check(family, &found, family.table())?;
+        sessions.extend(found.into_iter().map(|s| (family, s)));
     }
-    Ok((single, hx))
+    Ok((single, sessions))
 }
 
 /// The last progress line ProVerif printed (`… rules inserted. Base: … Queue: … rules.`), if any.
@@ -2287,15 +2365,16 @@ pub(crate) fn run_logged(
     Ok(text)
 }
 
-/// ADR-046 Amendment 1 (1), M4 review C-7: the model files under `root` (`formal/*.pv`, `formal/hx.pvl`,
-/// `formal/hx/*.pv`) are exactly the files of `pins`, each with the pinned SHA-256 of its committed text
-/// ([`crate::sha256::text_file_hex`]); every difference is a finding naming the file.
+/// ADR-046 Amendment 1 (1), M4 review C-7: the model files under `root` (`formal/*.pv`, the libraries `formal/*.pvl`,
+/// `formal/hx/*.pv` and, M5, `formal/link/*.pv`) are exactly the files of `pins`, each with the pinned SHA-256 of its
+/// committed text ([`crate::sha256::text_file_hex`]); every difference is a finding naming the file.
 pub(crate) fn proverif_model_hash_findings(root: &Path, pins: &[(&str, &str)]) -> Vec<String> {
     let mut found: BTreeSet<String> = BTreeSet::new();
     for (dir, ext) in [
         ("formal", "pv"),
         ("formal", "pvl"),
         (expect::PROVERIF_HX_DIR, "pv"),
+        (expect::PROVERIF_LINK_DIR, "pv"),
     ] {
         if let Ok(stems) = dir_stems(&root.join(dir), ext) {
             found.extend(stems.into_iter().map(|s| format!("{dir}/{s}.{ext}")));
@@ -2322,13 +2401,14 @@ pub(crate) fn proverif_model_hash_findings(root: &Path, pins: &[(&str, &str)]) -
 enum ProverifModel {
     /// A single-file model of `expect::PROVERIF_EXPECTED` (`formal/<name>.pv`).
     Single(String),
-    /// An HX session file of `expect::PROVERIF_EXPECTED_HX` (`formal/hx/<session>.pv`).
-    Hx(String),
+    /// A session file of a family (`formal/hx/<session>.pv` of `expect::PROVERIF_EXPECTED_HX`,
+    /// `formal/link/<session>.pv` of `expect::PROVERIF_EXPECTED_LINK`).
+    Session(SessionFamily, String),
 }
 
 /// One ProVerif process of the step.
 struct ProverifTask {
-    /// The model file as shown (`formal/tr.pv`, `formal/hx/<session>.pv`).
+    /// The model file as shown (`formal/tr.pv`, `formal/hx/<session>.pv`, `formal/link/<session>.pv`).
     file: String,
     model: ProverifModel,
     log: PathBuf,
@@ -2452,13 +2532,14 @@ fn proverif_preflight(root: &Path) -> Result<()> {
     Ok(())
 }
 
-/// The processes of the step: each single-file model `formal/<m>.pv` (log `target/proverif/<m>.log`) and each HX
-/// session `formal/hx/<s>.pv` with `-lib formal/hx.pvl` (log `target/proverif/hx-<s>.log`).
+/// The processes of the step: each single-file model `formal/<m>.pv` (log `target/proverif/<m>.log`) and each session
+/// `<dir>/<s>.pv` of a family with `-lib <lib>` (`formal/hx/<s>.pv` with `-lib formal/hx.pvl`, log
+/// `target/proverif/hx-<s>.log`; `formal/link/<s>.pv` with `-lib formal/link.pvl`, log `target/proverif/link-<s>.log`).
 fn proverif_tasks(
     root: &Path,
     out_dir: &Path,
     single: &[String],
-    hx: &[String],
+    sessions: &[(SessionFamily, String)],
 ) -> Vec<ProverifTask> {
     let path_arg = |p: &str| root.join(p).to_string_lossy().into_owned();
     let mut tasks = Vec::new();
@@ -2471,17 +2552,13 @@ fn proverif_tasks(
             log: out_dir.join(format!("{m}.log")),
         });
     }
-    for s in hx {
-        let file = format!("{}/{s}.pv", expect::PROVERIF_HX_DIR);
+    for (family, s) in sessions {
+        let file = format!("{}/{s}.pv", family.dir());
         tasks.push(ProverifTask {
-            args: vec![
-                "-lib".to_owned(),
-                path_arg(expect::PROVERIF_HX_LIB),
-                path_arg(&file),
-            ],
+            args: vec!["-lib".to_owned(), path_arg(family.lib()), path_arg(&file)],
             file,
-            model: ProverifModel::Hx(s.clone()),
-            log: out_dir.join(format!("hx-{s}.log")),
+            model: ProverifModel::Session(*family, s.clone()),
+            log: out_dir.join(format!("{}-{s}.log", family.name())),
         });
     }
     tasks
@@ -2495,7 +2572,7 @@ fn proverif_record(root: &Path, t: &ProverifTask, end: ProverifEnd) -> ProverifR
     let checked = match (&run, &t.model) {
         (Err(e), _) => Err(Error(e.0.clone())),
         (Ok(out), ProverifModel::Single(m)) => proverif_check(m, out),
-        (Ok(out), ProverifModel::Hx(s)) => proverif_check_hx(s, out),
+        (Ok(out), ProverifModel::Session(f, s)) => proverif_check_session(*f, s, out),
     };
     let text = output.unwrap_or_default();
     match &checked {
@@ -2516,7 +2593,7 @@ fn proverif_record(root: &Path, t: &ProverifTask, end: ProverifEnd) -> ProverifR
         .to_owned();
     let rows = match &t.model {
         ProverifModel::Single(m) => single_rows(m, output),
-        ProverifModel::Hx(s) => hx_rows(expect::PROVERIF_EXPECTED_HX, s, output),
+        ProverifModel::Session(f, s) => hx_rows(f.table(), s, output),
     };
     ProverifRecord {
         file: t.file.clone(),
@@ -2550,14 +2627,58 @@ fn proverif_record(root: &Path, t: &ProverifTask, end: ProverifEnd) -> ProverifR
 /// `expect::PROVERIF_MODEL_SHA256`. Writes `target/proverif/summary.txt` (SHA-256 of every model file, per file the
 /// `RESULT` count, the "secrecy assumption verified" count and the wall time) and `target/proverif/results.tsv` (one
 /// row per (file, CLAIMS ID), the ADR-045 summary table), on failure too.
+///
+/// M5 (OPEN-M5-16 A, BRIEF_M5-B §1): `--models link` and `all` add every SecMP-LINK session file
+/// (`formal/link/<session>.pv` with `-lib formal/link.pvl`, checked against `expect::PROVERIF_EXPECTED_LINK`). When the
+/// same invocation also runs the step `proverif-link` (`ci-full`; there it may be delegated to the job `proverif-link`
+/// with `--delegated proverif-link`), this step leaves the SecMP-LINK models to it ([`proverif_link`]).
 pub(crate) fn proverif(ctx: &Ctx) -> Result<Outcome> {
-    let opts = PROVERIF_OPTIONS.get().copied().unwrap_or(ProverifOptions {
+    let opts = proverif_options();
+    let skip_link = ctx.steps.contains(&PROVERIF_LINK_STEP);
+    proverif_run(ctx, opts.models, skip_link, opts, PROVERIF_FILES)
+}
+
+/// The id of the `ci-full` step that runs the SecMP-LINK models on its own (`ci.rs`; M5, BRIEF_M5-B §1).
+pub(crate) const PROVERIF_LINK_STEP: &str = "proverif-link";
+
+/// The evidence files of the `proverif` step under `target/proverif/` (summary, results table).
+pub(crate) const PROVERIF_FILES: (&str, &str) = ("summary.txt", "results.tsv");
+
+/// The evidence files of the `proverif-link` step under `target/proverif/` (its own, so that both steps of one `ci-full`
+/// keep their evidence).
+pub(crate) const PROVERIF_LINK_FILES: (&str, &str) = ("link-summary.txt", "link-results.tsv");
+
+/// The process-wide ProVerif options, or the default (every model, default jobs).
+fn proverif_options() -> ProverifOptions {
+    PROVERIF_OPTIONS.get().copied().unwrap_or(ProverifOptions {
         models: ProverifModels::All,
         jobs: None,
-    });
+    })
+}
+
+/// `ci-full` step `proverif-link` (M5, BRIEF_M5-B §1, OPEN-M5-16 A): the SecMP-LINK session models alone, as the
+/// `proverif` step runs them with `--models link` (same preflight, model hashes, 30-min cap per file, `--jobs`, checks
+/// against `expect::PROVERIF_EXPECTED_LINK`), with the evidence `target/proverif/link-summary.txt` and
+/// `link-results.tsv`. `linux-full` delegates it (`--delegated proverif-link`) to the job `proverif-link`, which runs
+/// `cargo xtask step --strict proverif --models link --jobs 4`.
+pub(crate) fn proverif_link(ctx: &Ctx) -> Result<Outcome> {
+    let opts = proverif_options();
+    proverif_run(ctx, ProverifModels::Link, false, opts, PROVERIF_LINK_FILES)
+}
+
+/// The body of the steps `proverif` and `proverif-link`: the models of `models` (without the SecMP-LINK sessions when
+/// `skip_link`), `opts.jobs` processes, the evidence into `files` under `target/proverif/`.
+fn proverif_run(
+    ctx: &Ctx,
+    models: ProverifModels,
+    skip_link: bool,
+    opts: ProverifOptions,
+    files: (&str, &str),
+) -> Result<Outcome> {
+    let (summary_name, results_name) = files;
     let jobs = proverif_jobs(opts);
     let out_dir = ctx.root.join("target").join("proverif");
-    for stale in ["summary.txt", "results.tsv"] {
+    for stale in [summary_name, results_name] {
         let p = out_dir.join(stale);
         if p.exists() {
             std::fs::remove_file(&p)?;
@@ -2572,13 +2693,27 @@ pub(crate) fn proverif(ctx: &Ctx) -> Result<Outcome> {
             hashes.join("; ")
         );
     }
-    let (single, hx) = proverif_inputs(&ctx.root, opts.models)?;
-    let tasks = proverif_tasks(&ctx.root, &out_dir, &single, &hx);
+    let (single, sessions) = proverif_inputs(&ctx.root, models, skip_link)?;
     let options = format!(
-        "--models {}, {jobs} parallel processes, timeout {} s per file",
-        opts.models.name(),
+        "--models {}{}, {jobs} parallel processes, timeout {} s per file",
+        models.name(),
+        if skip_link && models.sessions(SessionFamily::Link) {
+            format!(" without the SecMP-LINK models (they run in step {PROVERIF_LINK_STEP})")
+        } else {
+            String::new()
+        },
         expect::PROVERIF_TIMEOUT_SECONDS
     );
+    if single.is_empty() && sessions.is_empty() {
+        return Ok(Outcome::Pass(format!(
+            "ProVerif {} self-test [true, false] ok; {options}; model hashes: {} of {} match \
+             expect::PROVERIF_MODEL_SHA256; no model left for this step",
+            tools::PROVERIF_VERSION,
+            expect::PROVERIF_MODEL_SHA256.len(),
+            expect::PROVERIF_MODEL_SHA256.len(),
+        )));
+    }
+    let tasks = proverif_tasks(&ctx.root, &out_dir, &single, &sessions);
     say(&format!("  ProVerif: {} files, {options}", tasks.len()));
     let timeout = std::time::Duration::from_secs(expect::PROVERIF_TIMEOUT_SECONDS);
     let ends = run_pool(&tasks, jobs, timeout);
@@ -2601,9 +2736,9 @@ pub(crate) fn proverif(ctx: &Ctx) -> Result<Outcome> {
         .flat_map(|r| r.rows.iter().cloned())
         .collect();
     std::fs::create_dir_all(&out_dir)?;
-    std::fs::write(out_dir.join("summary.txt"), &evidence)?;
+    std::fs::write(out_dir.join(summary_name), &evidence)?;
     std::fs::write(
-        out_dir.join("results.tsv"),
+        out_dir.join(results_name),
         crate::summary::proverif_tsv(&rows),
     )?;
     say(evidence.trim_end());
@@ -2628,20 +2763,47 @@ pub(crate) fn proverif(ctx: &Ctx) -> Result<Outcome> {
                 .map(|s| format!("{s} ({:.1} s)", r.secs))
         })
         .collect();
+    Ok(Outcome::Pass(proverif_pass_detail(
+        &options,
+        &(single, sessions),
+        &summaries,
+        files,
+    )))
+}
+
+/// The detail line of a passing `proverif`/`proverif-link` step.
+fn proverif_pass_detail(
+    options: &str,
+    inputs: &ProverifInputs,
+    summaries: &[String],
+    (summary_name, results_name): (&str, &str),
+) -> String {
+    let (single, sessions) = inputs;
     let none_or = |v: String| if v.is_empty() { "none".to_owned() } else { v };
-    Ok(Outcome::Pass(format!(
+    let of_family = |family: SessionFamily| -> String {
+        let names: Vec<&str> = sessions
+            .iter()
+            .filter(|(f, _)| *f == family)
+            .map(|(_, s)| s.as_str())
+            .collect();
+        none_or(names.join(", "))
+    };
+    format!(
         "ProVerif {} self-test [true, false] ok; {options}; model hashes: {} of {} match \
          expect::PROVERIF_MODEL_SHA256; single-file models: {} (expected set matches); HX sessions over {}: {} (= the \
-         files of expect::PROVERIF_EXPECTED_HX); {}; evidence target/proverif/summary.txt, results.tsv and one log per \
+         files of expect::PROVERIF_EXPECTED_HX); LINK sessions over {}: {} (= the files of \
+         expect::PROVERIF_EXPECTED_LINK); {}; evidence target/proverif/{summary_name}, {results_name} and one log per \
          file",
         tools::PROVERIF_VERSION,
         expect::PROVERIF_MODEL_SHA256.len(),
         expect::PROVERIF_MODEL_SHA256.len(),
         none_or(single.join(", ")),
         expect::PROVERIF_HX_LIB,
-        none_or(hx.join(", ")),
+        of_family(SessionFamily::Hx),
+        expect::PROVERIF_LINK_LIB,
+        of_family(SessionFamily::Link),
         summaries.join("; ")
-    )))
+    )
 }
 
 /// The `RESULT` lines of a ProVerif output in order, skipping the `RESULT (but …)` / `RESULT (even …)` remark ProVerif
@@ -2740,7 +2902,9 @@ fn hx_match(expected: &[(&str, &str, expect::Proved)], got: &[ResultLine]) -> Ve
 }
 
 /// WEISUNG M4-5 §4 (b): the `RESULT` lines of one SecMP-HX session file (`formal/hx/<file>.pv`) against its entries
-/// in `expect::PROVERIF_EXPECTED_HX`, matched by query text, not by position ([`proverif_check_hx_in`]).
+/// in `expect::PROVERIF_EXPECTED_HX`, matched by query text, not by position ([`proverif_check_hx_in`]; the step calls
+/// [`proverif_check_session`]).
+#[cfg(test)]
 pub(crate) fn proverif_check_hx(file: &str, output: &str) -> Result<String> {
     proverif_check_hx_in(expect::PROVERIF_EXPECTED_HX, file, output)
 }
@@ -2756,7 +2920,6 @@ pub(crate) fn proverif_check_hx_in(
     file: &str,
     output: &str,
 ) -> Result<String> {
-    use expect::Proved;
     // a single-file model (`formal/tr.pv`, rows of `expect::PROVERIF_EXPECTED`) or an HX session file
     let (path, table_name) = if expect::PROVERIF_MODELS.contains(&file) {
         (format!("formal/{file}.pv"), "expect::PROVERIF_EXPECTED")
@@ -2766,6 +2929,35 @@ pub(crate) fn proverif_check_hx_in(
             "expect::PROVERIF_EXPECTED_HX",
         )
     };
+    proverif_check_lines(table, &path, table_name, file, output)
+}
+
+/// M5 (OPEN-M5-16 A): the `RESULT` lines of one session file of `family` (`<dir>/<file>.pv`) against its entries in the
+/// family's table, with the rules of [`proverif_check_hx_in`]; for SecMP-LINK, `formal/link/<file>.pv` against
+/// `expect::PROVERIF_EXPECTED_LINK`.
+pub(crate) fn proverif_check_session(
+    family: SessionFamily,
+    file: &str,
+    output: &str,
+) -> Result<String> {
+    proverif_check_lines(
+        family.table(),
+        &format!("{}/{file}.pv", family.dir()),
+        family.table_name(),
+        file,
+        output,
+    )
+}
+
+/// The check of [`proverif_check_hx_in`] for the model `path` with the entries of `file` in `table` (`table_name`).
+fn proverif_check_lines(
+    table: &[expect::HxExpected],
+    path: &str,
+    table_name: &str,
+    file: &str,
+    output: &str,
+) -> Result<String> {
+    use expect::Proved;
     let expected = hx_expected(table, file);
     if expected.is_empty() {
         bail!("{path}: no expected entries in {table_name}");
@@ -3555,8 +3747,9 @@ fn required_job_structure_findings(name: &str, text: &str) -> Vec<String> {
 }
 
 /// M4 review C-5 (V5 (d)): every `--delegated <step>` of a pinned gate line (`runs`, as `expect::REQUIRED_GATE_RUNS`)
-/// is listed in `expect::DELEGATED_TO` with a job that has a pinned gate line of its own, and a pinned `--models tr`
-/// comes with a pinned `proverif --models hx` line — so no delegation hands a step to nothing.
+/// is listed in `expect::DELEGATED_TO` with a job that has a pinned gate line of its own, a pinned `--models tr` comes
+/// with a pinned `proverif --models hx` line, and (M5) a pinned `--models tr`/`hx` or `--delegated proverif-link` with a
+/// pinned `proverif --models link` line — so no delegation hands a step to nothing.
 pub(crate) fn delegation_findings(
     runs: &[(&str, &[&str])],
     delegated_to: &[(&str, &str)],
@@ -3585,6 +3778,20 @@ pub(crate) fn delegation_findings(
     {
         out.push(
             "a pinned line runs `--models tr` but no pinned line runs `proverif --models hx`"
+                .to_owned(),
+        );
+    }
+    // M5 (BRIEF_M5-B §1): a pinned selection without the SecMP-LINK models, or a delegated `proverif-link`, needs the
+    // pinned `proverif --models link` line
+    if all_lines().any(|l| {
+        l.contains("--models tr")
+            || l.contains("--models hx")
+            || l.contains(&format!("--delegated {PROVERIF_LINK_STEP}"))
+    }) && !all_lines().any(|l| l.contains("proverif --models link"))
+    {
+        out.push(
+            "a pinned line runs `--models tr`/`--models hx` or delegates `proverif-link`, but no pinned line runs \
+             `proverif --models link`"
                 .to_owned(),
         );
     }
@@ -3935,7 +4142,7 @@ mod tests {
         }
     }
 
-    /// M3 plan D10, M4 review C-7 (ADR-046 Amendment 1 (3)): `formal/tr.pv`'s 46 `RESULT` lines are matched by query
+    /// M3 plan D10, M4 review C-7 (ADR-046 Amendment 1 (3)): `formal/tr.pv`'s 47 `RESULT` lines are matched by query
     /// text against `expect::PROVERIF_EXPECTED` — the output the rows describe passes with a summary per ID; a true query
     /// turning false, a false query turning true, a "cannot be proved" line, a missing and an extra line are each refused,
     /// naming the line and the ID; the informative T12 may say anything; a model without rows is refused. WEISUNG M4-5
@@ -3945,15 +4152,15 @@ mod tests {
     #[test]
     fn proverif_verdicts_against_the_claims_table() -> Result<()> {
         let good = hx_lines(expect::PROVERIF_EXPECTED_TR, "tr");
-        assert_eq!(good.len(), 46);
+        assert_eq!(good.len(), 47);
         let summary = proverif_check("tr", &hx_output(&good))?;
         assert!(
             summary.starts_with(
-                "formal/tr.pv: 46 RESULT lines as expected — T1 true ×6, T2 true ×2, T3 true ×4"
+                "formal/tr.pv: 47 RESULT lines as expected — T1 true ×6, T2 true ×2, T3 true ×4"
             ) && summary.contains("T7 false ×2")
                 && summary.contains("T8 true ×12, T9 true ×4, T10 false ×1, T11 true ×1")
                 && summary.contains("T12 cannot be proved ×1")
-                && summary.ends_with("T13 false ×7"),
+                && summary.ends_with("T13 false ×7, T14 true ×1"),
             "{summary}"
         );
         let with = |at: usize, end: &'static str| {
@@ -3989,44 +4196,45 @@ mod tests {
             with(45, "is true."),
             &["RESULT line 46 (T13) is true, expected false"],
         )?;
-        // a missing line (the last one, T13) and an extra line
+        // a missing line (the last one, T14) and an extra line
         let mut v = good.clone();
         v.pop();
         refused_with(
             proverif_check("tr", &hx_output(&v)),
             &[
-                "45 RESULT lines, expected 46",
-                "missing RESULT line for T13",
+                "46 RESULT lines, expected 47",
+                "missing RESULT line for T14",
             ],
         )?;
         let mut v = good.clone();
         v.push(("not attacker_p1(content(sX,st1,c0))", "is true."));
         refused_with(
             proverif_check("tr", &hx_output(&v)),
-            &["47 RESULT lines, expected 46", "extra RESULT line 47"],
+            &["48 RESULT lines, expected 47", "extra RESULT line 48"],
         )?;
         // the informative T12 (line 39) may say anything
         for t12 in ["is true.", "is false.", "cannot be proved."] {
             assert!(with(38, t12)?.contains("T12"));
         }
         // no RESULT line at all, and a model without an expected table
-        refused_with(proverif_check("tr", ""), &["0 RESULT lines, expected 46"])?;
+        refused_with(proverif_check("tr", ""), &["0 RESULT lines, expected 47"])?;
         assert!(proverif_check("hx", &hx_output(&good)).is_err());
         hx_verdicts_against_the_table()
     }
 
     /// M4 review C-7 (ADR-046 Amendment 1 (3), R-19): the `tr` gate matches by query text — the committed output of the
-    /// gate run on `569c2e2` passes; the same output with T4's query text swapped for another true query, with two
-    /// same-verdict lines of different queries reordered, or with a query text changed (same verdict) is refused.
+    /// gate run with T14 (M5 PV-02; before it the M4 run on `569c2e2`) passes; the same output with T4's query text
+    /// swapped for another true query, with two same-verdict lines of different queries reordered, or with a query text
+    /// changed (same verdict) is refused.
     #[test]
     fn proverif_tr_gate_matches_by_query_text() -> Result<()> {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
         let committed = lf(&std::fs::read_to_string(
-            root.join("docs/reviews/M04-evidence/proverif-tr-569c2e2.txt"),
+            root.join("docs/reviews/M05-evidence/proverif-tr-t14-local.txt"),
         )?);
         let summary = proverif_check("tr", &committed)?;
         assert!(
-            summary.starts_with("formal/tr.pv: 46 RESULT lines as expected"),
+            summary.starts_with("formal/tr.pv: 47 RESULT lines as expected"),
             "{summary}"
         );
         let t3 = "RESULT not attacker_p1(content(sFS,st1,c0)) is true.";
@@ -4571,6 +4779,47 @@ mod tests {
         out
     }
 
+    /// TEST-SPEC-M5 PV-02 (R-41, M3 F6; CLAIMS §TR T14): the `tr` gate expects exactly one T14 line — injective
+    /// agreement of `Accepted` with `Sent` in the session of the F5 branch, proved true — and CLAIMS row T14 states
+    /// that query with Expected true; the model file carries the second receive attempt (`Again`) and the query.
+    #[test]
+    fn proverif_tr_t14_second_receive() -> Result<()> {
+        let t14: Vec<&expect::HxExpected> = expect::PROVERIF_EXPECTED_TR
+            .iter()
+            .filter(|(_, id, ..)| *id == "T14")
+            .collect();
+        assert_eq!(t14.len(), 1, "{t14:?}");
+        let Some(&&(file, _, query, proved)) = t14.first() else {
+            return Err(Error("no T14 row".into()));
+        };
+        assert_eq!((file, proved), ("tr", expect::Proved::True));
+        assert!(
+            query.starts_with("inj-event(Accepted(") && query.contains("==> inj-event(Sent("),
+            "{query}"
+        );
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let claims = lf(&std::fs::read_to_string(root.join("formal/CLAIMS.md"))?);
+        let row = claims
+            .lines()
+            .find(|l| l.starts_with("| T14 |"))
+            .unwrap_or_default();
+        assert!(
+            row.contains("inj-event(Accepted(kid, n, m)) ==> inj-event(Sent(kid, n, m))")
+                && row.trim_end().ends_with("| true |"),
+            "{row}"
+        );
+        let model = std::fs::read_to_string(root.join("formal/tr.pv"))?;
+        assert!(
+            model.contains("inj-event(Accepted("),
+            "the T14 query is in tr.pv"
+        );
+        assert!(
+            model.contains("Again"),
+            "the second receive attempt is modelled"
+        );
+        Ok(())
+    }
+
     /// `expect::PROVERIF_EXPECTED` covers exactly `expect::PROVERIF_MODELS`, the files of `expect::PROVERIF_EXPECTED_HX`
     /// are exactly `formal/hx/*.pv`, and both tables follow `formal/CLAIMS.md` in both directions
     /// ([`claims_table_findings`]).
@@ -4583,7 +4832,7 @@ mod tests {
         same_set("PROVERIF_EXPECTED", &tables, expect::PROVERIF_MODELS)?;
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
         let claims = lf(&std::fs::read_to_string(root.join("formal/CLAIMS.md"))?);
-        assert_eq!(claim_rows(&claims, "| T").len(), 13);
+        assert_eq!(claim_rows(&claims, "| T").len(), 14);
         hx_set_check(
             &dir_stems(&root.join(expect::PROVERIF_HX_DIR), "pv")?,
             expect::PROVERIF_EXPECTED_HX,
@@ -4597,9 +4846,17 @@ mod tests {
             ),
             Vec::<String>::new()
         );
+        // M5: the files of `expect::PROVERIF_EXPECTED_LINK` are exactly `formal/link/*.pv` (its CLAIMS check is X-04,
+        // `proverif_link_table_covers_every_claims_row`)
+        session_set_check(
+            SessionFamily::Link,
+            &dir_stems(&root.join(expect::PROVERIF_LINK_DIR), "pv")?,
+            expect::PROVERIF_EXPECTED_LINK,
+        )?;
         for (_, _, query, _) in expect::PROVERIF_EXPECTED_TR
             .iter()
             .chain(expect::PROVERIF_EXPECTED_HX)
+            .chain(expect::PROVERIF_EXPECTED_LINK)
         {
             assert!(!query.is_empty() && !query.contains('\n'), "{query}");
         }
@@ -4688,7 +4945,8 @@ mod tests {
     fn proverif_model_hashes_are_pinned() -> Result<()> {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
         let pins = expect::PROVERIF_MODEL_SHA256;
-        assert_eq!(pins.len(), 21);
+        // tr.pv, hx.pvl and 19 hx/*.pv; M5: link.pvl and the nine link/*.pv
+        assert_eq!(pins.len(), 31);
         assert_eq!(
             proverif_model_hash_findings(&root, pins),
             Vec::<String>::new()
@@ -4698,6 +4956,7 @@ mod tests {
             std::env::temp_dir().join(format!("secmp-xtask-model-hashes-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join(expect::PROVERIF_HX_DIR))?;
+        std::fs::create_dir_all(dir.join(expect::PROVERIF_LINK_DIR))?;
         for (file, _) in pins {
             std::fs::copy(root.join(file), dir.join(file))?;
         }
@@ -4753,6 +5012,452 @@ mod tests {
             proverif_model_hash_findings(&dir, pins).contains(&"formal/hx.pvl: missing".to_owned())
         );
         let _ = std::fs::remove_dir_all(&dir);
+        Ok(())
+    }
+
+    /// The rows of CLAIMS §LINK (the `| L…` lines of the section `## LINK`): (ID, the verdict of the "Expected" column,
+    /// the "M" column without emphasis). `None`: neither true nor false (L9 "by construction").
+    fn link_claim_rows(claims: &str) -> Vec<(String, Option<expect::Proved>, String)> {
+        let section = claims.split("\n## LINK").nth(1).unwrap_or_default();
+        let section = section.split("\n## ").next().unwrap_or_default();
+        section
+            .lines()
+            .filter(|l| l.starts_with("| L"))
+            .map(|l| {
+                // | ID | Property | Query (sketch) | Assumptions | Expected | M |
+                let cells: Vec<&str> = l.split('|').map(str::trim).collect();
+                let cell = |i: usize| cells.get(i).copied().unwrap_or_default();
+                let expected = cell(5);
+                let proved = if expected == "true" || expected.starts_with("true ") {
+                    Some(expect::Proved::True)
+                } else if expected.starts_with("**false**") {
+                    Some(expect::Proved::False)
+                } else {
+                    None
+                };
+                (
+                    cell(1).to_owned(),
+                    proved,
+                    cell(6).trim_matches('*').to_owned(),
+                )
+            })
+            .collect()
+    }
+
+    /// The CLAIMS §LINK gate rule: the IDs that "must be proved true", those that "must be false", and the session
+    /// files it names (`lClean`, …).
+    fn link_gate_rule(claims: &str) -> (Vec<String>, Vec<String>, BTreeSet<String>) {
+        let flat = claims.replace('\n', " ");
+        let rule = flat.split("Gate rule (M5):").nth(1).unwrap_or_default();
+        let rule = rule.split("A model change").next().unwrap_or_default();
+        let (proved, rest) = rule.split_once("must be proved true").unwrap_or_default();
+        let refuted = rest.split_once("must be false").map_or("", |(f, _)| f);
+        let words = |s: &str| -> Vec<String> {
+            s.split(|c: char| !c.is_ascii_alphanumeric())
+                .filter(|w| !w.is_empty())
+                .map(str::to_owned)
+                .collect()
+        };
+        let ids = |s: &str| -> Vec<String> {
+            words(s)
+                .into_iter()
+                .filter(|w| {
+                    w.starts_with('L')
+                        && w.get(1..2)
+                            .is_some_and(|c| c.chars().all(|d| d.is_ascii_digit()))
+                })
+                .collect()
+        };
+        let sessions = words(rule)
+            .into_iter()
+            .filter(|w| {
+                w.starts_with('l')
+                    && w.get(1..2)
+                        .is_some_and(|c| c.chars().all(|d| d.is_ascii_uppercase()))
+            })
+            .collect();
+        (ids(proved), ids(refuted), sessions)
+    }
+
+    /// X-04 (TEST-SPEC-M5 (i), the C-7 pattern of [`claims_table_findings`]): `expect::PROVERIF_EXPECTED_LINK` against
+    /// CLAIMS §LINK in both directions — every entry's ID is an ID of the gate rule with the rule's verdict, and its row
+    /// (the ID's own row, or for L3a/L3b the row L3 that names them as its claim lines) is an M5 row expecting that
+    /// verdict; every ID of the gate rule and every M5 row expected true or false has at least one entry; an M11 row
+    /// (L10–L12) or L9 (structural) has none; the table's files are exactly the sessions the gate rule names, and each
+    /// has three L8 lines (every file is a base file: `CStart`, the honest pair, `RExec`). Returns the findings.
+    fn link_claims_findings(claims: &str, link: &[expect::HxExpected]) -> Vec<String> {
+        use expect::Proved;
+        let mut out = Vec::new();
+        let rows = link_claim_rows(claims);
+        let (true_ids, false_ids, sessions) = link_gate_rule(claims);
+        let rule = |id: &str| -> Option<Proved> {
+            if true_ids.iter().any(|t| t == id) {
+                Some(Proved::True)
+            } else if false_ids.iter().any(|f| f == id) {
+                Some(Proved::False)
+            } else {
+                None
+            }
+        };
+        let row_of = |id: &str| {
+            rows.iter().find(|(r, ..)| r == id).or_else(|| {
+                let base = id.trim_end_matches(|c: char| c.is_ascii_lowercase());
+                rows.iter().find(|(r, ..)| r == base)
+            })
+        };
+        for (file, id, query, proved) in link {
+            if rule(id) != Some(*proved) {
+                out.push(format!(
+                    "{file} {id}: the CLAIMS §LINK gate rule expects {:?}, the table {proved:?}: {query}",
+                    rule(id)
+                ));
+            }
+            match row_of(id) {
+                Some((_, Some(p), m)) if p == proved && m == "M5" => {}
+                other => out.push(format!(
+                    "{file} {id}: CLAIMS §LINK row {other:?}, the table {proved:?}: {query}"
+                )),
+            }
+        }
+        for id in true_ids.iter().chain(&false_ids) {
+            if !link.iter().any(|(_, i, ..)| i == id) {
+                out.push(format!(
+                    "the CLAIMS §LINK gate rule names {id}, which has no entry in expect::PROVERIF_EXPECTED_LINK"
+                ));
+            }
+        }
+        for (row, proved, m) in &rows {
+            if m == "M5"
+                && proved.is_some()
+                && !link
+                    .iter()
+                    .any(|(_, i, ..)| row_of(i).is_some_and(|(r, ..)| r == row))
+            {
+                out.push(format!(
+                    "CLAIMS row {row} has no entry in expect::PROVERIF_EXPECTED_LINK"
+                ));
+            }
+        }
+        let files = hx_table_files(link);
+        if files != sessions {
+            out.push(format!(
+                "the table's files {files:?} are not the sessions of the CLAIMS §LINK gate rule {sessions:?}"
+            ));
+        }
+        for file in &files {
+            let n = link
+                .iter()
+                .filter(|(f, id, ..)| f == file && *id == "L8")
+                .count();
+            if n != 3 {
+                out.push(format!(
+                    "{file}: {n} L8 entries, CLAIMS L8 has three per base file"
+                ));
+            }
+        }
+        out
+    }
+
+    /// X-04 `proverif_link_table_covers_every_claims_row` [O-16] (TEST-SPEC-M5 (i)): CLAIMS §LINK rows ⇔
+    /// `expect::PROVERIF_EXPECTED_LINK` rows, both directions (C-7 pattern) — the real table gives no finding; the L6
+    /// entry deleted, the L6 row deleted, the L3a entries deleted (L3a is a claim line of row L3, named by the gate
+    /// rule), an L8 line dropped in one file, a flipped verdict, an entry for an M11 row (L10) or for L9 and a file the
+    /// gate rule does not name are each a finding naming what is wrong.
+    #[test]
+    fn proverif_link_table_covers_every_claims_row() -> Result<()> {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let claims = lf(&std::fs::read_to_string(root.join("formal/CLAIMS.md"))?);
+        let link = expect::PROVERIF_EXPECTED_LINK;
+        // the CLAIMS text as read: 19 rows L1…L12 (incl. L1a–L1c, L3c, L5a, L5b, L6a), M11 for L10–L12, L9 structural;
+        // the gate rule's 11 true and 6 false IDs and its nine sessions
+        let rows = link_claim_rows(&claims);
+        assert_eq!(rows.len(), 19, "{rows:?}");
+        let m11: Vec<&str> = rows
+            .iter()
+            .filter(|(_, _, m)| m == "M11")
+            .map(|(id, ..)| id.as_str())
+            .collect();
+        assert_eq!(m11, ["L10", "L11", "L12"]);
+        assert!(
+            rows.iter()
+                .any(|(id, p, m)| id == "L9" && p.is_none() && m == "M5")
+        );
+        let (t, f, sessions) = link_gate_rule(&claims);
+        assert_eq!(
+            t,
+            [
+                "L1", "L1a", "L1b", "L3", "L3a", "L3b", "L4", "L5", "L5a", "L6", "L7"
+            ]
+        );
+        assert_eq!(f, ["L1c", "L2", "L3c", "L5b", "L6a", "L8"]);
+        let want: BTreeSet<String> = [
+            "lClean", "lDH", "lKEM", "lBoth", "lSig", "lFS", "lFSDH", "lFSEph", "lQKey",
+        ]
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
+        assert_eq!(sessions, want);
+        // both directions on the real table
+        assert_eq!(link_claims_findings(&claims, link), Vec::<String>::new());
+        link_claims_mutations_are_findings(&claims, link);
+        Ok(())
+    }
+
+    /// The mutations of X-04: each edit of the table or of CLAIMS is a finding naming what is wrong.
+    fn link_claims_mutations_are_findings(claims: &str, link: &[expect::HxExpected]) {
+        let claims = claims.to_owned();
+        let without = |id: &str| -> Vec<expect::HxExpected> {
+            link.iter().copied().filter(|(_, i, ..)| *i != id).collect()
+        };
+        let found = link_claims_findings(&claims, &without("L6"));
+        assert_eq!(
+            found,
+            vec![
+                "the CLAIMS §LINK gate rule names L6, which has no entry in expect::PROVERIF_EXPECTED_LINK"
+                    .to_owned(),
+                "CLAIMS row L6 has no entry in expect::PROVERIF_EXPECTED_LINK".to_owned(),
+            ]
+        );
+        let found = link_claims_findings(&claims, &without("L3a"));
+        assert_eq!(
+            found,
+            vec![
+                "the CLAIMS §LINK gate rule names L3a, which has no entry in expect::PROVERIF_EXPECTED_LINK"
+                    .to_owned()
+            ]
+        );
+        // the row deleted: every L6 entry is a finding, nothing else
+        let no_l6_row = claims
+            .lines()
+            .filter(|l| !l.starts_with("| L6 "))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let found = link_claims_findings(&no_l6_row, link);
+        assert!(
+            found.len() == 1
+                && found
+                    .iter()
+                    .all(|f| f.starts_with("lClean L6: CLAIMS §LINK row None, the table True")),
+            "{found:?}"
+        );
+        // one L8 line dropped in lClean
+        let mut seen = false;
+        let two_l8: Vec<expect::HxExpected> = link
+            .iter()
+            .copied()
+            .filter(|(f, id, ..)| {
+                let drop = !seen && *f == "lClean" && *id == "L8";
+                seen |= drop;
+                !drop
+            })
+            .collect();
+        assert_eq!(
+            link_claims_findings(&claims, &two_l8),
+            vec!["lClean: 2 L8 entries, CLAIMS L8 has three per base file".to_owned()]
+        );
+        // a flipped verdict, an M11 entry, an L9 entry, a file the gate rule does not name
+        let flipped: Vec<expect::HxExpected> = link
+            .iter()
+            .copied()
+            .map(|(f, id, q, p)| {
+                if id == "L1" {
+                    (f, id, q, expect::Proved::False)
+                } else {
+                    (f, id, q, p)
+                }
+            })
+            .collect();
+        let found = link_claims_findings(&claims, &flipped);
+        assert!(
+            found.len() == 2 && found.iter().all(|f| f.starts_with("lClean L1:")),
+            "{found:?}"
+        );
+        for extra in [
+            ("lClean", "L10", "x", expect::Proved::True),
+            ("lClean", "L9", "x", expect::Proved::True),
+        ] {
+            let mut more = link.to_vec();
+            more.push(extra);
+            let found = link_claims_findings(&claims, &more);
+            assert!(
+                found.len() == 2
+                    && found
+                        .iter()
+                        .all(|f| f.starts_with(&format!("lClean {}:", extra.1))),
+                "{found:?}"
+            );
+        }
+        let mut more = link.to_vec();
+        more.push(("lNew", "L1", "x", expect::Proved::True));
+        assert!(
+            link_claims_findings(&claims, &more)
+                .iter()
+                .any(|f| f.contains("are not the sessions of the CLAIMS §LINK gate rule"))
+        );
+    }
+
+    /// X-05 `proverif_link_model_hashes_are_pinned` [O-16] (TEST-SPEC-M5 (i), ADR-046 Amendment 1 (1)):
+    /// `expect::PROVERIF_MODEL_SHA256` pins exactly `formal/link.pvl` and every `formal/link/*.pv` (the files of
+    /// `expect::PROVERIF_EXPECTED_LINK`) with the committed text's SHA-256; in a copy of the models, a changed byte in
+    /// any link file, an unpinned `formal/link/*.pv` and a missing `formal/link.pvl` are each a finding naming the file;
+    /// the ADR-045 summary lists every link file.
+    #[test]
+    fn proverif_link_model_hashes_are_pinned() -> Result<()> {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let pins = expect::PROVERIF_MODEL_SHA256;
+        let is_link = |f: &str| f == expect::PROVERIF_LINK_LIB || f.starts_with("formal/link/");
+        let pinned: BTreeSet<String> = pins
+            .iter()
+            .map(|(f, _)| (*f).to_owned())
+            .filter(|f| is_link(f))
+            .collect();
+        let stems = dir_stems(&root.join(expect::PROVERIF_LINK_DIR), "pv")?;
+        assert_eq!(stems, hx_table_files(expect::PROVERIF_EXPECTED_LINK));
+        assert_eq!(stems.len(), 9);
+        let mut on_disk: BTreeSet<String> = stems
+            .iter()
+            .map(|s| format!("{}/{s}.pv", expect::PROVERIF_LINK_DIR))
+            .collect();
+        on_disk.insert(expect::PROVERIF_LINK_LIB.to_owned());
+        assert_eq!(pinned, on_disk);
+        assert_eq!(
+            proverif_model_hash_findings(&root, pins),
+            Vec::<String>::new()
+        );
+        let listed: BTreeSet<String> = crate::summary::proverif_model_files(&root)
+            .into_iter()
+            .filter(|f| is_link(f))
+            .collect();
+        assert_eq!(listed, on_disk);
+        // a copy of every pinned model, then one changed byte per link file
+        let dir =
+            std::env::temp_dir().join(format!("secmp-xtask-link-hashes-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(expect::PROVERIF_HX_DIR))?;
+        std::fs::create_dir_all(dir.join(expect::PROVERIF_LINK_DIR))?;
+        for (file, _) in pins {
+            std::fs::copy(root.join(file), dir.join(file))?;
+        }
+        assert_eq!(
+            proverif_model_hash_findings(&dir, pins),
+            Vec::<String>::new()
+        );
+        for file in &on_disk {
+            let original = std::fs::read(dir.join(file))?;
+            let mut changed = original.clone();
+            if let Some(b) = changed.iter_mut().rev().find(|b| b.is_ascii_alphabetic()) {
+                *b ^= 0x20;
+            }
+            std::fs::write(dir.join(file), &changed)?;
+            let found = proverif_model_hash_findings(&dir, pins);
+            assert!(
+                found.len() == 1
+                    && found
+                        .iter()
+                        .all(|f| f.starts_with(&format!("{file}: sha256 "))),
+                "{file}: {found:?}"
+            );
+            std::fs::write(dir.join(file), &original)?;
+        }
+        std::fs::write(
+            dir.join(expect::PROVERIF_LINK_DIR).join("lNew.pv"),
+            "process 0\n",
+        )?;
+        assert_eq!(
+            proverif_model_hash_findings(&dir, pins),
+            vec!["formal/link/lNew.pv: a model file without a pinned sha256".to_owned()]
+        );
+        std::fs::remove_file(dir.join(expect::PROVERIF_LINK_DIR).join("lNew.pv"))?;
+        std::fs::remove_file(dir.join(expect::PROVERIF_LINK_LIB))?;
+        assert_eq!(
+            proverif_model_hash_findings(&dir, pins),
+            vec!["formal/link.pvl: missing".to_owned()]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok(())
+    }
+
+    /// The `RESULT` lines of each file in a committed SecMP-LINK evidence file: the lines after each
+    /// `=== formal/link/<stem>.pv` header, up to the next header.
+    fn link_evidence_sections(text: &str) -> Vec<(String, String)> {
+        let mut out: Vec<(String, String)> = Vec::new();
+        for line in text.lines() {
+            if let Some(stem) = line
+                .strip_prefix("=== formal/link/")
+                .and_then(|r| r.strip_suffix(".pv"))
+            {
+                out.push((stem.to_owned(), String::new()));
+            } else if let Some((_, body)) = out.last_mut()
+                && line.trim_start().starts_with("RESULT")
+            {
+                body.push_str(line.trim());
+                body.push('\n');
+            }
+        }
+        out
+    }
+
+    /// PV-01 `proverif_link_matches_claims` [O-16] (TEST-SPEC-M5 (h)): the gate's reading of the SecMP-LINK files —
+    /// every file of `expect::PROVERIF_EXPECTED_LINK` passes with the output its entries describe and is refused, naming
+    /// the file, the CLAIMS ID and the query, when one of its lines has the opposite or no verdict; the `RESULT` lines of
+    /// the committed local run (`docs/reviews/M05-evidence/proverif-link-local.txt`, one section per file) pass the gate
+    /// for every file, so the table is the measured one. The verdicts against CLAIMS: X-04.
+    #[test]
+    fn proverif_link_matches_claims() -> Result<()> {
+        let table = expect::PROVERIF_EXPECTED_LINK;
+        let files = hx_table_files(table);
+        assert_eq!(files.len(), 9);
+        for file in &files {
+            let lines = hx_lines(table, file);
+            let summary = proverif_check_session(SessionFamily::Link, file, &hx_output(&lines))?;
+            assert!(
+                summary.starts_with(&format!(
+                    "formal/link/{file}.pv: {} RESULT lines as expected — ",
+                    lines.len()
+                )),
+                "{summary}"
+            );
+            for (k, (_, id, query, proved)) in table.iter().filter(|(f, ..)| f == file).enumerate()
+            {
+                for wrong in [flipped(*proved), "cannot be proved."] {
+                    let mut bad = lines.clone();
+                    if let Some(l) = bad.get_mut(k) {
+                        l.1 = wrong;
+                    }
+                    refused_with(
+                        proverif_check_session(SessionFamily::Link, file, &hx_output(&bad)),
+                        &[
+                            &format!(
+                                "formal/link/{file}.pv against expect::PROVERIF_EXPECTED_LINK"
+                            ),
+                            &format!("RESULT line {} ({id}) is ", k.saturating_add(1)),
+                            &format!(", expected {}", expected_word(*proved)),
+                            query,
+                        ],
+                    )?;
+                }
+            }
+        }
+        // a link file is not an HX file, and the HX table knows no link file
+        refused_with(
+            proverif_check_hx("lClean", &hx_output(&hx_lines(table, "lClean"))),
+            &["formal/hx/lClean.pv: no expected entries in expect::PROVERIF_EXPECTED_HX"],
+        )?;
+        // the committed local run
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let evidence = lf(&std::fs::read_to_string(
+            root.join("docs/reviews/M05-evidence/proverif-link-local.txt"),
+        )?);
+        let sections = link_evidence_sections(&evidence);
+        let stems: BTreeSet<String> = sections.iter().map(|(s, _)| s.clone()).collect();
+        assert_eq!(stems, files);
+        for (stem, body) in &sections {
+            let summary = proverif_check_session(SessionFamily::Link, stem, body)?;
+            assert!(
+                summary.starts_with(&format!("formal/link/{stem}.pv: ")),
+                "{summary}"
+            );
+        }
         Ok(())
     }
 
@@ -4876,7 +5581,7 @@ mod tests {
 
     /// The pinned jobs `linux-full` delegates to (M4 review C-5), with their pinned conditions, `needs:` and gate lines,
     /// as they follow the required jobs in a `ci.yml` fixture.
-    const PINNED_EXTRA: &str = "  ct:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict ct\n  mutants-shard:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    strategy:\n      matrix:\n        shard:\n          - 0\n          - 1\n    steps:\n      - run: cargo xtask install-tools --set mutants\n      - run: cargo xtask step --strict mutants --shard ${{ matrix.shard }}/8\n  mutants:\n    needs: mutants-shard\n    if: always() && (github.event_name == 'schedule' || github.event_name == 'pull_request')\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict mutants-merge\n  proverif-hx:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict proverif --models hx --jobs 4\n";
+    const PINNED_EXTRA: &str = "  ct:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict ct\n  mutants-shard:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    strategy:\n      matrix:\n        shard:\n          - 0\n          - 1\n    steps:\n      - run: cargo xtask install-tools --set mutants\n      - run: cargo xtask step --strict mutants --shard ${{ matrix.shard }}/8\n  mutants:\n    needs: mutants-shard\n    if: always() && (github.event_name == 'schedule' || github.event_name == 'pull_request')\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict mutants-merge\n  proverif-hx:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict proverif --models hx --jobs 4\n  proverif-link:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict proverif --models link --jobs 4\n";
 
     /// M2 review C2: the required job names only in ci.yml, all four there, and no dispatch trigger in ci.yml; M4
     /// review C-5: likewise the pinned jobs `linux-full` delegates to.
@@ -4959,17 +5664,18 @@ mod tests {
             1,
         );
         assert_eq!(required_job_findings(&files(&removed)).len(), 1);
-        // likewise on every pinned job (M4 review C-5): each condition changed alone is one finding
+        // likewise on every pinned job (M4 review C-5; M5 adds `proverif-link`): each condition changed alone is one
+        // finding
         assert_eq!(
             required_job_findings(&files(
                 &ci.replace("|| github.event_name == 'pull_request'", "")
             ))
             .len(),
-            5
+            6
         );
         // the conditions as parsed
         let parsed = job_conditions(ci);
-        assert_eq!(parsed.len(), 9);
+        assert_eq!(parsed.len(), 10);
         assert_eq!(parsed.first(), Some(&("linux-fast".to_owned(), None)));
         assert_eq!(
             parsed.get(4),
@@ -5030,7 +5736,7 @@ mod tests {
     /// `linux-fast` after its `runs-on`, `fast_step` replaces its first gate step line.
     fn gate_ci(fast: &str, fast_step: &str) -> String {
         format!(
-            "on:\n  pull_request:\npermissions:\n  contents: read\njobs:\n  linux-fast:\n    runs-on: x\n{fast}    steps:\n      - uses: actions/cache/save@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6\n        if: steps.c.outputs.hit != 'true'\n{fast_step}      - run: cargo xtask step --strict sbom systemd\n  windows-native:\n    runs-on: x\n    steps:\n      - run: cargo xtask install-tools --set windows\n      - run: cargo xtask step --strict clippy nextest doctest kat hello\n  xwin-cross:\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict windows-cross\n  linux-full:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask ci-full --strict --delegated windows-native --delegated windows-cross --delegated mutants --delegated ct --models tr\n{PINNED_EXTRA}"
+            "on:\n  pull_request:\npermissions:\n  contents: read\njobs:\n  linux-fast:\n    runs-on: x\n{fast}    steps:\n      - uses: actions/cache/save@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6\n        if: steps.c.outputs.hit != 'true'\n{fast_step}      - run: cargo xtask step --strict sbom systemd\n  windows-native:\n    runs-on: x\n    steps:\n      - run: cargo xtask install-tools --set windows\n      - run: cargo xtask step --strict clippy nextest doctest kat hello\n  xwin-cross:\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict windows-cross\n  linux-full:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask ci-full --strict --delegated windows-native --delegated windows-cross --delegated mutants --delegated ct --delegated proverif-link --models tr\n{PINNED_EXTRA}"
         )
     }
 
@@ -5184,6 +5890,16 @@ mod tests {
             let variants = [
                 ("v01 delete mutants", without_job(ci, "mutants")),
                 ("v02 delete proverif-hx", without_job(ci, "proverif-hx")),
+                // M5 (BRIEF_M5-B §1): the SecMP-LINK job deleted, or running another model set
+                ("delete proverif-link", without_job(ci, "proverif-link")),
+                (
+                    "proverif-link --models hx",
+                    ci.replacen("proverif --models link --jobs 4", "proverif --models hx --jobs 4", 1),
+                ),
+                (
+                    "linux-full without --delegated proverif-link",
+                    ci.replacen(" --delegated proverif-link --models tr", " --models tr", 1),
+                ),
                 ("delete ct", without_job(ci, "ct")),
                 ("delete mutants-shard", without_job(ci, "mutants-shard")),
                 (
@@ -5412,6 +6128,22 @@ mod tests {
         }
         // `--models tr` without the HX line
         assert!(!delegation_findings(&without("proverif-hx"), expect::DELEGATED_TO).is_empty());
+        // M5: `--delegated proverif-link` (and `--models tr`) without the pinned `proverif --models link` line
+        let found = delegation_findings(&without("proverif-link"), expect::DELEGATED_TO);
+        assert!(
+            found.iter().any(|f| f.contains("`proverif-link`"))
+                && found.iter().any(|f| f.contains("proverif --models link")),
+            "{found:?}"
+        );
+        let only_link_delegated: &[(&str, &[&str])] = &[(
+            "linux-full",
+            &["cargo xtask ci-full --strict --delegated proverif-link"],
+        )];
+        assert!(
+            delegation_findings(only_link_delegated, expect::DELEGATED_TO)
+                .iter()
+                .any(|f| f.contains("proverif --models link"))
+        );
         // an unknown delegation
         let extra: &[(&str, &[&str])] = &[(
             "linux-full",
@@ -5657,6 +6389,68 @@ mod tests {
         Ok(())
     }
 
+    /// TEST-SPEC-M5 X-02 (ADR-047 Amendment 3, OPEN-M5-12): `secmp-relay` (executor, stores, link server) is in the
+    /// 8-shard gate with the Amendment 2 floor, every shard's command line names it, and its Kani-only file is kept
+    /// out like `secmp-proto`'s; the package builds with feature `kat` like the other two.
+    #[test]
+    fn mutants_scope_includes_relay() -> Result<()> {
+        assert_eq!(
+            expect::MUTANT_PACKAGES,
+            &["secmp-crypto", "secmp-proto", "secmp-relay"]
+        );
+        assert_eq!(expect::MUTANT_SHARDS, 8);
+        assert_eq!(expect::MUTANT_MIN_CAUGHT_PERCENT, 50);
+        assert_eq!(expect::MUTANT_UNVIABLE_WARN_PERCENT, 35);
+        assert!(expect::MUTANT_EXCLUDE_FILES.contains(&"crates/secmp-relay/src/kani_proofs.rs"));
+        for k in 0..8 {
+            let args = mutants_args(Some(MutantsShard { k, n: 8 }));
+            assert!(
+                args.windows(2)
+                    .any(|w| w.first().map(String::as_str) == Some("--package")
+                        && w.get(1).map(String::as_str) == Some("secmp-relay")),
+                "shard {k}: {args:?}"
+            );
+        }
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let manifest = std::fs::read_to_string(root.join("crates/secmp-relay/Cargo.toml"))?;
+        assert!(
+            manifest.contains("\nkat = ["),
+            "secmp-relay has feature kat"
+        );
+        let standards = std::fs::read_to_string(root.join("docs/06-engineering-standards.md"))?;
+        assert!(
+            standards.contains("`secmp-crypto`, `secmp-proto`, `secmp-relay`"),
+            "docs/06 §4 Mutation names the three packages (ADR-047 Am. 3 consequence)"
+        );
+        Ok(())
+    }
+
+    /// `expect::RELAY_TRACE_ALLOW` equals the relay's closed event set (`secmp_relay::event::EVENT_NAMES`, read from
+    /// the source), in order and in both directions (OPEN-M5-08; the `policy` step runs the same check; test RL-03
+    /// checks the captured events against the list); a missing, an extra and a renamed event are findings.
+    #[test]
+    fn relay_trace_allow_equals_the_event_names() -> Result<()> {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let src = std::fs::read_to_string(root.join("crates/secmp-relay/src/event.rs"))?;
+        assert_eq!(
+            crate::policy::relay_event_names(&src),
+            expect::RELAY_TRACE_ALLOW
+        );
+        assert_eq!(
+            crate::policy::relay_event_findings(&src),
+            Vec::<String>::new()
+        );
+        for bad in [
+            src.replace("    \"exit\",\n", ""),
+            src.replace("    \"exit\",\n", "    \"exit\",\n    \"request\",\n"),
+            src.replace("\"drain_started\"", "\"drain\""),
+            String::new(),
+        ] {
+            assert_eq!(crate::policy::relay_event_findings(&bad).len(), 1);
+        }
+        Ok(())
+    }
+
     /// ADR-047 Amendment 1 (3), M4 review R-06: the gate builds both packages with `--features kat` (a per-package
     /// `secmp-proto/kat` makes cargo refuse the `secmp-crypto` build), passes the shard through with round-robin
     /// sharding, and skips the tests of `expect::MUTANT_SKIP_TESTS` after `-- --`.
@@ -5735,7 +6529,7 @@ mod tests {
     /// ADR-047 Amendment 1 (4), M4 review R-06, with Amendment 2: the floor per package — every `secmp-crypto` mutant
     /// unviable fails naming `secmp-crypto`; 36 % unviable passes with a WARNING line naming the package (re-pointed
     /// from the failure of Amendment 1 (4)); 35 % and a balanced input pass without one; a package without mutants
-    /// fails; a mutant of an unknown package, outside its crate or with an unknown outcome cannot be counted.
+    /// fails (the unattributable outcomes: `mutants_floor_refuses_unattributable_outcomes`).
     #[test]
     fn mutants_floor_fails_a_package_without_a_caught_mutant() -> Result<()> {
         let floor = |outcomes: Vec<Value>| -> Result<MutantsFloor> {
@@ -5745,6 +6539,7 @@ mod tests {
         let all_unviable = [
             mutant_outcomes("secmp-crypto", 0, 241, 0),
             mutant_outcomes("secmp-proto", 60, 30, 1),
+            mutant_outcomes("secmp-relay", 50, 10, 0),
         ]
         .concat();
         let MutantsFloor {
@@ -5766,6 +6561,7 @@ mod tests {
             [
                 mutant_outcomes("secmp-crypto", 64, 36, 0),
                 mutant_outcomes("secmp-proto", 70, 30, 0),
+                mutant_outcomes("secmp-relay", 50, 10, 0),
             ]
             .concat(),
         )?;
@@ -5781,6 +6577,7 @@ mod tests {
             [
                 mutant_outcomes("secmp-crypto", 70, 30, 0),
                 mutant_outcomes("secmp-proto", 63, 36, 1),
+                mutant_outcomes("secmp-relay", 50, 10, 0),
             ]
             .concat(),
         )?;
@@ -5797,6 +6594,7 @@ mod tests {
             [
                 mutant_outcomes("secmp-crypto", 65, 35, 0),
                 mutant_outcomes("secmp-proto", 80, 18, 2),
+                mutant_outcomes("secmp-relay", 50, 10, 0),
             ]
             .concat(),
         )?;
@@ -5810,15 +6608,25 @@ mod tests {
             vec![
                 "secmp-crypto: caught 65, missed 0, timeout 0, unviable 35 of 100 (caught 65.0 %, at least 50 %, unviable 35.0 %)".to_owned(),
                 "secmp-proto: caught 80, missed 2, timeout 0, unviable 18 of 100 (caught 80.0 %, at least 50 %, unviable 18.0 %)".to_owned(),
+                "secmp-relay: caught 50, missed 0, timeout 0, unviable 10 of 60 (caught 83.3 %, at least 50 %, unviable 16.7 %)".to_owned(),
             ]
         );
         // a package without any mutant: no caught mutant
         let MutantsFloor { failures, .. } = floor(mutant_outcomes("secmp-proto", 5, 0, 0))?;
         assert_eq!(
             failures,
-            vec!["secmp-crypto: no caught mutant (of 0)".to_owned()]
+            vec![
+                "secmp-crypto: no caught mutant (of 0)".to_owned(),
+                "secmp-relay: no caught mutant (of 0)".to_owned()
+            ]
         );
-        // unattributable outcomes are refused
+        Ok(())
+    }
+
+    /// ADR-047 Amendment 1 (4): a mutant of an unknown package, outside its crate, without a package or with an
+    /// unknown outcome cannot be counted.
+    #[test]
+    fn mutants_floor_refuses_unattributable_outcomes() {
         let mut foreign = mutant_outcome("secmp-ui", 1, "CaughtMutant");
         assert!(mutant_counts(&[foreign.clone()]).is_err());
         if let Some(m) = foreign.pointer_mut("/scenario/Mutant") {
@@ -5837,7 +6645,6 @@ mod tests {
             m.remove("package");
         }
         assert!(mutant_counts(&[nameless]).is_err());
-        Ok(())
     }
 
     /// ADR-047 Amendment 1 (5): every test skipped for each mutant is a `#[cfg(feature = "kat")]` test function of
@@ -6008,7 +6815,14 @@ mod tests {
             &mutant_outcomes("secmp-proto", 80, 20, 0),
             100,
         )?;
-        for k in 2..8 {
+        write_shard(
+            &dir,
+            (2, 8),
+            "PASS",
+            &mutant_outcomes("secmp-relay", 50, 10, 0),
+            60,
+        )?;
+        for k in 3..8 {
             write_shard(&dir, (k, 8), "PASS", &[], 0)?;
         }
         let v = merge_verdict(&dir, 8, &accepted_survivors()?, &out)?;
@@ -6033,7 +6847,8 @@ mod tests {
 
     /// ADR-047 Amendment 2 (1), (2): the `secmp-crypto` tally of PR run 37127247911 — 168 caught, 1 missed (the
     /// accepted `SecretBytes` drop), 99 unviable — passes with the WARNING "unviable 36.9 % > 35 %"; the `secmp-proto`
-    /// tally (727 caught, its 3 accepted equivalent mutants, 294 unviable: 28.7 %) passes without one.
+    /// tally (727 caught, its 3 accepted equivalent mutants, 294 unviable: 28.7 %) passes without one (with a
+    /// `secmp-relay` tally beside them since ADR-047 Amendment 3).
     #[test]
     fn mutants_merge_passes_the_crypto_tally_of_run_37127247911() -> Result<()> {
         let (dir, out) = merge_dirs("run-37127247911");
@@ -6052,7 +6867,14 @@ mod tests {
         }
         write_shard(&dir, (0, 8), "PASS", &crypto, 268)?;
         write_shard(&dir, (1, 8), "PASS", &proto, 1024)?;
-        for k in 2..8 {
+        write_shard(
+            &dir,
+            (2, 8),
+            "PASS",
+            &mutant_outcomes("secmp-relay", 50, 10, 0),
+            60,
+        )?;
+        for k in 3..8 {
             write_shard(&dir, (k, 8), "PASS", &[], 0)?;
         }
         let v = merge_verdict(&dir, 8, &accepted_survivors()?, &out)?;
@@ -6102,6 +6924,7 @@ mod tests {
             let mut outcomes = [
                 mutant_outcomes("secmp-crypto", 20, 10, 0),
                 mutant_outcomes("secmp-proto", 90, 30, 0),
+                mutant_outcomes("secmp-relay", 10, 2, 0),
             ]
             .concat();
             let failed = survivors.iter().find(|(s, _)| *s == k);
@@ -6210,17 +7033,31 @@ mod tests {
     #[test]
     fn kani_cover_count_is_pinned() -> Result<()> {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
-        let source = lf(&std::fs::read_to_string(
-            root.join("crates/secmp-proto/src/kani_proofs.rs"),
-        )?);
+        let mut source = String::new();
+        for file in [
+            "crates/secmp-proto/src/kani_proofs.rs",
+            "crates/secmp-relay/src/kani_proofs.rs",
+        ] {
+            source.push_str(&lf(&std::fs::read_to_string(root.join(file))?));
+        }
         let pinned: usize = expect::KANI_COVERS.iter().map(|(_, m)| m).sum();
         assert_eq!(source.matches("kani::cover!(").count(), pinned);
         for (h, _) in expect::KANI_COVERS {
             assert!(expect::KANI_HARNESSES.contains(h), "{h}");
         }
-        let log = lf(&std::fs::read_to_string(
+        let mut log = lf(&std::fs::read_to_string(
             root.join("docs/reviews/M05-evidence/kani-xtask-step-ae10972.txt"),
         )?);
+        // M5 Phase B: the committed runs of the relay harnesses (TEST-SPEC-M5 K-05…K-07)
+        for h in [
+            "kani_cmd_seq_monotone",
+            "kani_executor_response_count",
+            "kani_queue_eviction_bounds",
+        ] {
+            log.push_str(&lf(&std::fs::read_to_string(
+                root.join(format!("docs/reviews/M05-evidence/kani-m5b-{h}.txt")),
+            )?));
+        }
         assert_eq!(
             kani_cover_pin_findings(&kani_covers(&log)?),
             Vec::<String>::new()
@@ -6250,8 +7087,9 @@ mod tests {
     #[test]
     fn kani_refuses_fifteen_harnesses() -> Result<()> {
         let all = expect::KANI_HARNESSES;
-        assert_eq!(all.len(), 30);
-        assert_eq!(kani_verified(&kani_log(all, 0))?.len(), 30);
+        // M5 Phase B: 30 + the three relay harnesses (TEST-SPEC-M5 K-05…K-07)
+        assert_eq!(all.len(), 33);
+        assert_eq!(kani_verified(&kani_log(all, 0))?.len(), 33);
         // a deleted harness: 18 verified, and Kani's own summary says 18 of 18
         let fifteen = all.get(1..).unwrap_or_default();
         assert!(kani_verified(&kani_log(fifteen, 0)).is_err());
@@ -6467,6 +7305,7 @@ mod tests {
             ("dispatch-mutants-shard", "mutants-shard"),
             ("dispatch-mutants", "mutants"),
             ("dispatch-proverif-hx", "proverif-hx"),
+            ("dispatch-proverif-link", "proverif-link"),
         ] {
             let lines = gate_lines(&ci, job);
             assert!(!lines.is_empty(), "{job}: no gate line in ci.yml");
@@ -6627,7 +7466,8 @@ mod tests {
         assert_eq!(expect::FUZZ_NIGHTLY_SECONDS, 14_400);
         assert_eq!(
             nightly_seconds_per_target(expect::FUZZ_NIGHTLY_SECONDS, expect::FUZZ_TARGETS.len())?,
-            14_400 / 27
+            // M5 Phase B: 29 targets (the two relay targets FZ-07, FZ-08), 496 s each
+            14_400 / 29
         );
         assert_eq!(nightly_seconds_per_target(14_400, 14)?, 1028);
         assert!(nightly_seconds_per_target(14_400, 0).is_err());
@@ -6747,7 +7587,8 @@ mod tests {
     }
 
     /// M4 review R-63: a target whose claimed site is in no `KNOWN_SITES` entry fails the gate, naming target and
-    /// site; every site the gate's own tests use, and every one in the list, is accepted.
+    /// site; every site in the list is a known site — accepted where `expect::CT_TARGET_SITES` binds it to the target,
+    /// otherwise refused by that binding alone (M4 review R-47), never as unknown.
     #[test]
     fn ct_gate_rejects_unknown_site() -> Result<()> {
         let mut unknown = M3_SITES;
@@ -6765,7 +7606,8 @@ mod tests {
                     && p.contains("unknown reject site")),
             "{problems:?}"
         );
-        // every known site is accepted (the pre-check passed, the site is listed)
+        // every known site is known (the pre-check passed, the site is listed): the bound "body MAC" is accepted, any
+        // other is refused by the binding of `CT_TARGET_SITES` alone
         for site in expect::KNOWN_SITES {
             let mut ok = M3_SITES;
             if let Some(t) = ok.get_mut(1) {
@@ -6773,8 +7615,115 @@ mod tests {
             }
             let (_, json) = ct_report_with_sites(&ok)?;
             let (_, problems) = ct_site_lines(&json, &[])?;
-            assert!(problems.is_empty(), "{site}: {problems:?}");
+            if *site == "body MAC" {
+                assert!(problems.is_empty(), "{site}: {problems:?}");
+            } else {
+                assert!(
+                    problems.len() == 1
+                        && problems.iter().all(|p| p
+                            .contains("tr_decrypt_reject_body_tag claims the reject site")
+                            && p.contains("binds it to \"body MAC\"")),
+                    "{site}: {problems:?}"
+                );
+            }
         }
+        Ok(())
+    }
+
+    /// TEST-SPEC-M5 X-08 (M4 review R-47): `expect::CT_TARGET_SITES` binds each site-claiming ct target to its site —
+    /// every entry is one target of `expect::CT_TARGETS` with a site of `expect::KNOWN_SITES`, and the claims of the
+    /// committed M4 report (`b138a2b`, every TR/INV/HX target with its site) are exactly the bound ones; the gate
+    /// (`ct_site_lines`) refuses a target re-aimed at another known site (naming target, claimed and bound site), a
+    /// bound target without a site, and a site on a target that is bound to none (a LINK target, `msg_open_reject`).
+    #[test]
+    fn ct_target_sites_bind_each_target_to_its_site() -> Result<()> {
+        let mut seen = BTreeSet::new();
+        for (target, site) in expect::CT_TARGET_SITES {
+            assert!(seen.insert(*target), "{target} listed twice");
+            assert!(expect::CT_TARGETS.contains(target), "{target}");
+            assert!(expect::KNOWN_SITES.contains(site), "{target}: {site}");
+        }
+        assert_eq!(expect::CT_TARGET_SITES.len(), 11);
+        assert!(expect::CT_TARGET_SITES.contains(&("tr_decrypt_trial_open_position", "body MAC")));
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../docs/reviews/M04-evidence/ct-report-local-b138a2b-scale10.json");
+        let json = std::fs::read_to_string(&path).map_err(|e| Error(e.to_string()))?;
+        let mut v: Value = serde_json::from_str(&json).map_err(|e| Error(e.to_string()))?;
+        let (lines, problems) = ct_site_lines(&json, &[])?;
+        assert!(problems.is_empty() && lines.is_empty(), "{problems:?}");
+        let claimed: BTreeSet<(String, String)> = v
+            .get("results")
+            .and_then(Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|r| {
+                let name = r.get("name")?.as_str()?;
+                Some((name.to_owned(), r.get("site")?.as_str()?.to_owned()))
+            })
+            .collect();
+        let bound: BTreeSet<(String, String)> = expect::CT_TARGET_SITES
+            .iter()
+            .filter(|(t, _)| *t != "tr_decrypt_trial_open_position")
+            .map(|(t, s)| ((*t).to_owned(), (*s).to_owned()))
+            .collect();
+        assert_eq!(claimed, bound);
+        // edit one result of the committed report and read it again
+        let mut edited = |name: &str, site: Value| -> Result<Vec<String>> {
+            let results = v
+                .get_mut("results")
+                .and_then(Value::as_array_mut)
+                .ok_or_else(|| Error("ct report: no results".to_owned()))?;
+            let r = results
+                .iter_mut()
+                .find(|r| r.get("name").and_then(Value::as_str) == Some(name))
+                .and_then(Value::as_object_mut)
+                .ok_or_else(|| Error(format!("ct report: no {name}")))?;
+            let before = r.insert("site".to_owned(), site);
+            let found = ct_site_lines(&v.to_string(), &[]).map(|(_, p)| p);
+            if let Some(r) = v
+                .get_mut("results")
+                .and_then(Value::as_array_mut)
+                .and_then(|rs| {
+                    rs.iter_mut()
+                        .find(|r| r.get("name").and_then(Value::as_str) == Some(name))
+                })
+                .and_then(Value::as_object_mut)
+            {
+                r.insert("site".to_owned(), before.unwrap_or(Value::Null));
+            }
+            found
+        };
+        // re-aimed at another known site: refused by the binding alone
+        let found = edited("tr_decrypt_reject_hdr_key", Value::from("body MAC"))?;
+        assert_eq!(
+            found,
+            vec![
+                "ct: tr_decrypt_reject_hdr_key claims the reject site \"body MAC\", but expect::CT_TARGET_SITES binds \
+                 it to \"header: no key opened\" (M4 review R-47)"
+                    .to_owned()
+            ]
+        );
+        // a bound target without its site
+        let found = edited("hx_accept_reject_inner", Value::Null)?;
+        assert!(
+            found.len() == 1
+                && found
+                    .iter()
+                    .all(|p| p.contains("hx_accept_reject_inner has no reject site")),
+            "{found:?}"
+        );
+        // a site on a target bound to none (its pre-check is also missing)
+        let found = edited("msg_open_reject", Value::from("body MAC"))?;
+        assert!(
+            found.iter().any(|p| p
+                == "ct: msg_open_reject claims the reject site \"body MAC\", but expect::CT_TARGET_SITES binds no \
+                    site to it (M4 review R-47)"),
+            "{found:?}"
+        );
+        // the restored report reads as committed
+        let (_, problems) = ct_site_lines(&v.to_string(), &[])?;
+        assert!(problems.is_empty(), "{problems:?}");
         Ok(())
     }
 

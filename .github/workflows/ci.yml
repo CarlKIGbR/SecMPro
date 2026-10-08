@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # SecMPro CI (docs/06 §5, ADR-029). Every job runs `cargo xtask`, so local and CI gates are the same code.
 # The first four jobs below are the required checks of the `main-protection` ruleset (`expect::REQUIRED_JOBS`); the
-# jobs `linux-full` delegates to — `ct`, `mutants-shard` with its verdict job `mutants`, and `proverif-hx` (M4) — are
-# pinned like them (`expect::PINNED_JOBS`, M4 review C-5) and are required checks once the owner adds `ct`, `mutants`
-# and `proverif-hx` to the ruleset. The pinned names exist only in this workflow, and it has no manual-dispatch trigger
+# jobs `linux-full` delegates to — `ct`, `mutants-shard` with its verdict job `mutants`, `proverif-hx` (M4) and
+# `proverif-link` (M5) — are pinned like them (`expect::PINNED_JOBS`, M4 review C-5) and are required checks once the
+# owner adds `ct`, `mutants`, `proverif-hx` and `proverif-link` to the ruleset. The pinned names exist only in this workflow, and it has no manual-dispatch trigger
 # (M2 review C2): a dispatch would add `skipped` check runs under them, which count as passing. On-demand runs use
 # `ci-dispatch.yml`.
 # Checked by `cargo xtask policy` (`workflow_findings`, `workflow_token_findings`, `workflows`) as an accident guard
@@ -193,10 +193,11 @@ jobs:
             ~/.secmp-tools
             ~/.kani
           key: ${{ steps.tools-cache.outputs.cache-primary-key }}
-      # step 10 runs `formal/tr.pv` here; the SecMP-HX models run in `proverif-hx` (WEISUNG M4-5, gate F7)
+      # step 10 runs `formal/tr.pv` here; the SecMP-HX models run in `proverif-hx` (WEISUNG M4-5, gate F7), the
+      # SecMP-LINK models (step `proverif-link`) in `proverif-link` (BRIEF_M5-B §1)
       # step 8 (mutants) runs in the `mutants` job (ADR-047), step 5 `ct` in the `ct` job (ADR-047 Amendment 1)
       - name: ci-full (steps 1–14)
-        run: cargo xtask ci-full --strict --delegated windows-native --delegated windows-cross --delegated mutants --delegated ct --models tr
+        run: cargo xtask ci-full --strict --delegated windows-native --delegated windows-cross --delegated mutants --delegated ct --delegated proverif-link --models tr
 
   # docs/06 §5 step 5 `ct` (ADR-038, ADR-041) as its own job (ADR-047 Amendment 1, M4 review C-2): on PR run
   # 37041956810 the step ran at least 216.7 min inside `linux-full` without a verdict, and `linux-full` delegates it
@@ -365,5 +366,59 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: proverif-hx-${{ github.sha }}-${{ github.run_attempt }}
+          path: target/proverif/
+          if-no-files-found: error
+
+  # docs/06 §5 step 10 for SecMP-LINK (M5, BRIEF_M5-B §1, OPEN-M5-16 A, CLAIMS §LINK): every session model
+  # `formal/link/*.pv` over the library `formal/link.pvl`, four ProVerif processes in parallel, each under the 1800 s
+  # timeout of `expect::PROVERIF_TIMEOUT_SECONDS`; `linux-full` delegates its step `proverif-link` here. Job timeout as
+  # `proverif-hx` (5 waves x 30 min + 30 min for 19 files): 9 files are 3 waves x 30 min + 30 min. The logs,
+  # `summary.txt` and `results.tsv` are kept as an artefact. Same events as `linux-full`.
+  proverif-link:
+    if: github.event_name == 'schedule' || github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Pinned toolchain (rust-toolchain.toml)
+        run: rustup toolchain install && rustc -vV
+      - name: Tool install root
+        run: |
+          echo "SECMP_TOOLS_ROOT=$HOME/.secmp-tools" >> "$GITHUB_ENV"
+          echo "$HOME/.secmp-tools/bin" >> "$GITHUB_PATH"
+      - name: Restore pinned tools
+        id: tools-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.secmp-tools
+          key: ci-tools-proverif-${{ runner.os }}-${{ hashFiles('xtask/src/tools.rs', 'rust-toolchain.toml') }}
+      - name: ProVerif 2.05 from source (sha256 as recorded by opam)
+        run: |
+          if [ ! -x "$HOME/.secmp-tools/bin/proverif" ]; then
+            sudo apt-get update && sudo apt-get install -y --no-install-recommends ocaml-nox ocaml-findlib ocamlbuild
+            mkdir -p "$HOME/.secmp-tools/bin"
+            cd "$RUNNER_TEMP"
+            curl --fail --silent --show-error --location -o proverif2.05.tar.gz https://proverif.inria.fr/proverif2.05.tar.gz
+            echo "4871f53c32ab4a04669a060c4886ba5d9080496963fb980a9a62d2c429ceabc4  proverif2.05.tar.gz" | sha256sum -c -
+            tar xzf proverif2.05.tar.gz
+            cd proverif2.05 && ./build -nointeract
+            install -m 0755 proverif "$HOME/.secmp-tools/bin/proverif"
+          fi
+          proverif -help | head -1
+      - name: Save pinned tools (right after installing, so a later failing step cannot lose the cache)
+        if: steps.tools-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.secmp-tools
+          key: ${{ steps.tools-cache.outputs.cache-primary-key }}
+      - name: ProVerif, SecMP-LINK session models (step 10, --models link)
+        run: cargo xtask step --strict proverif --models link --jobs 4
+      - name: Upload the ProVerif logs and evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: proverif-link-${{ github.sha }}-${{ github.run_attempt }}
           path: target/proverif/
           if-no-files-found: error

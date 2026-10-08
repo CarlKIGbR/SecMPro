@@ -171,28 +171,33 @@ pub(crate) fn proverif_markdown(tsv: &str) -> Result<String> {
     ))
 }
 
-/// The ProVerif model files whose SHA-256 the summary and the evidence show: `formal/tr.pv`, `formal/hx.pvl` and
-/// every `formal/hx/*.pv` (sorted), as paths relative to `root`; files that do not exist are left out.
+/// The ProVerif model files whose SHA-256 the summary and the evidence show: `formal/tr.pv`, `formal/hx.pvl`, every
+/// `formal/hx/*.pv` (sorted), and (M5) `formal/link.pvl` and every `formal/link/*.pv` (sorted), as paths relative to
+/// `root`; files that do not exist are left out.
 pub(crate) fn proverif_model_files(root: &Path) -> Vec<String> {
-    let mut files: Vec<String> = ["formal/tr.pv", crate::expect::PROVERIF_HX_LIB]
-        .iter()
-        .map(|f| (*f).to_owned())
-        .collect();
-    let mut hx: Vec<String> = std::fs::read_dir(root.join(crate::expect::PROVERIF_HX_DIR))
-        .map(|rd| {
-            rd.filter_map(std::result::Result::ok)
-                .map(|e| e.path())
-                .filter(|p| p.extension().is_some_and(|x| x == "pv"))
-                .filter_map(|p| {
-                    p.file_name().map(|n| {
-                        format!("{}/{}", crate::expect::PROVERIF_HX_DIR, n.to_string_lossy())
+    let sessions = |dir: &str| -> Vec<String> {
+        let mut v: Vec<String> = std::fs::read_dir(root.join(dir))
+            .map(|rd| {
+                rd.filter_map(std::result::Result::ok)
+                    .map(|e| e.path())
+                    .filter(|p| p.extension().is_some_and(|x| x == "pv"))
+                    .filter_map(|p| {
+                        p.file_name()
+                            .map(|n| format!("{dir}/{}", n.to_string_lossy()))
                     })
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    hx.sort();
-    files.extend(hx);
+                    .collect()
+            })
+            .unwrap_or_default();
+        v.sort();
+        v
+    };
+    let mut files: Vec<String> = vec![
+        "formal/tr.pv".to_owned(),
+        crate::expect::PROVERIF_HX_LIB.to_owned(),
+    ];
+    files.extend(sessions(crate::expect::PROVERIF_HX_DIR));
+    files.push(crate::expect::PROVERIF_LINK_LIB.to_owned());
+    files.extend(sessions(crate::expect::PROVERIF_LINK_DIR));
     files.retain(|f| root.join(f).is_file());
     files
 }
@@ -204,12 +209,18 @@ pub(crate) fn file_sha256(path: &Path) -> Option<String> {
 }
 
 /// Extra rows of particular steps: `proverif` the results table of the run (`target/proverif/results.tsv`, written by
-/// the step) and the SHA-256 of every model file, `ct` the table of the recorded report.
+/// the step) and the SHA-256 of every model file, likewise `proverif-link` (M5; `target/proverif/link-results.tsv`),
+/// `ct` the table of the recorded report.
 fn extras(root: &Path, step: &str) -> Vec<String> {
-    match step {
-        "proverif" => {
+    let results_file = match step {
+        "proverif" => Some(crate::gates::PROVERIF_FILES.1),
+        s if s == crate::gates::PROVERIF_LINK_STEP => Some(crate::gates::PROVERIF_LINK_FILES.1),
+        _ => None,
+    };
+    match (step, results_file) {
+        (_, Some(results_file)) => {
             let mut out = Vec::new();
-            let results = root.join("target").join("proverif").join("results.tsv");
+            let results = root.join("target").join("proverif").join(results_file);
             if let Ok(tsv) = std::fs::read_to_string(&results) {
                 match proverif_markdown(&tsv) {
                     Ok(m) => out.push(m),
@@ -225,7 +236,7 @@ fn extras(root: &Path, step: &str) -> Vec<String> {
             }
             out
         }
-        "ct" => {
+        ("ct", None) => {
             let report = root.join("target").join("ct-report.json");
             match std::fs::read_to_string(&report) {
                 Ok(json) => match ct_markdown(&json) {

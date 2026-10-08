@@ -348,6 +348,31 @@ mod tests {
     }
 
     #[test]
+    fn values_and_comments_follow_the_subset() {
+        assert_eq!(parse_value("\"a b\""), Ok(Value::Str("a b".to_owned())));
+        assert_eq!(parse_value("1_000"), Ok(Value::Int(1000)));
+        assert_eq!(parse_value("0"), Ok(Value::Int(0)));
+        for bad in [
+            "\"a\\b\"", "\"a\"b\"", "\"", "", "abc", "1x", "-1", "_1", "1_", "_",
+        ] {
+            assert!(parse_value(bad).is_err(), "{bad:?}");
+        }
+        assert_eq!(strip_comment("key = \"a#b\" # note"), "key = \"a#b\" ");
+        assert_eq!(strip_comment("# only a comment"), "");
+        assert_eq!(strip_comment("x = 1"), "x = 1");
+        assert_eq!(strip_comment("x = \"#\""), "x = \"#\"");
+    }
+
+    #[test]
+    fn a_hash_inside_a_string_is_not_a_comment() -> Result<()> {
+        let c = Config::parse(
+            "[listen]\ntor_loopback = \"127.0.0.1:1\"\n[access]\nkey_file = \"/k#1\" # the key file\n",
+        )?;
+        assert_eq!(c.key_file, PathBuf::from("/k#1"));
+        Ok(())
+    }
+
+    #[test]
     fn the_vector_limits_are_unlimited_rates() {
         let v = Limits::vectors();
         assert_eq!(v.link_rate, None);

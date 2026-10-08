@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+mod conn_stream;
 mod d2;
 mod fixture;
 mod generator;
@@ -13,6 +14,7 @@ mod q_queue;
 mod q_send_fetch;
 mod q_seq;
 mod q_shape;
+mod rate_cont;
 mod rl_conn;
 mod rl_process;
 mod rl_store;

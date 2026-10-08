@@ -137,6 +137,7 @@ mod tests {
         let mut c: Cells<u8, 3> = Cells::new();
         assert!(c.is_empty());
         assert_eq!(c.push(1, HourBucket(0), 10)?, (1, None));
+        assert!(!c.is_empty());
         assert_eq!(c.push(2, HourBucket(0), 11)?, (2, None));
         assert_eq!(c.push(3, HourBucket(0), 12)?, (3, None));
         assert_eq!(c.push(4, HourBucket(0), 13)?, (4, Some(1)));

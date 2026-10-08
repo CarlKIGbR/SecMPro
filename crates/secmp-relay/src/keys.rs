@@ -406,6 +406,63 @@ mod tests {
         Ok(())
     }
 
+    /// Raw key-file bytes with the given (`kid`, `valid_until`) generations and the announced `count`.
+    fn raw_file(count: u8, generations: &[(u32, u64)]) -> Vec<u8> {
+        let mut out = MAGIC.to_vec();
+        out.push(VERSION);
+        out.extend_from_slice(&[1; 32]);
+        out.extend_from_slice(&[2; 32]);
+        out.push(count);
+        for &(kid, until) in generations {
+            out.extend_from_slice(&kid.to_be_bytes());
+            out.extend_from_slice(&until.to_be_bytes());
+            out.extend_from_slice(&[3; 32]);
+            out.extend_from_slice(&[4; 64]);
+        }
+        out
+    }
+
+    fn generations_of(n: u32) -> Vec<(u32, u64)> {
+        (1..=n).map(|k| (k, NOW + u64::from(k))).collect()
+    }
+
+    #[test]
+    fn the_decoder_bounds_and_orders_the_generations() -> Result<()> {
+        // 1 to MAX_GENERATIONS generations are a file; 0 and 9 are not, whatever follows the count
+        assert_eq!(
+            KeyFile::decode(&raw_file(1, &generations_of(1)))?
+                .generations()
+                .len(),
+            1
+        );
+        assert_eq!(
+            KeyFile::decode(&raw_file(8, &generations_of(8)))?
+                .generations()
+                .len(),
+            8
+        );
+        assert!(KeyFile::decode(&raw_file(0, &[])).is_err());
+        assert!(KeyFile::decode(&raw_file(9, &generations_of(9))).is_err());
+        // ascending kid, non-decreasing valid_until; an equal valid_until is fine
+        let ok = KeyFile::decode(&raw_file(2, &[(1, NOW), (2, NOW)]))?;
+        assert_eq!(
+            ok.generations().iter().map(|g| g.kid).collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+        assert!(KeyFile::decode(&raw_file(2, &[(1, NOW), (3, NOW + 1)])).is_ok());
+        for bad in [
+            [(2, NOW), (2, NOW + 1)],
+            [(3, NOW), (2, NOW + 1)],
+            [(1, NOW + 1), (2, NOW)],
+        ] {
+            assert!(KeyFile::decode(&raw_file(2, &bad)).is_err(), "{bad:?}");
+        }
+        // the announced count must match the records exactly
+        assert!(KeyFile::decode(&raw_file(1, &generations_of(2))).is_err());
+        assert!(KeyFile::decode(&raw_file(2, &generations_of(1))).is_err());
+        Ok(())
+    }
+
     #[test]
     fn rotation_adds_the_next_kid_and_keeps_the_identity() -> Result<()> {
         let mut f = KeyFile::generate(NOW, DEFAULT_VALIDITY_SECS)?;

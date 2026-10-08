@@ -79,18 +79,6 @@ impl QueueStore {
         }
     }
 
-    /// The number of queues.
-    #[must_use]
-    pub fn len(&self) -> usize {
-        self.queues.len()
-    }
-
-    /// Whether there is no queue.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.queues.is_empty()
-    }
-
     /// The queue `rid`.
     #[must_use]
     pub fn get(&self, rid: &Id) -> Option<&Queue> {

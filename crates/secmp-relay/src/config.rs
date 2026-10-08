@@ -353,10 +353,15 @@ mod tests {
         assert_eq!(parse_value("1_000"), Ok(Value::Int(1000)));
         assert_eq!(parse_value("0"), Ok(Value::Int(0)));
         for bad in [
-            "\"a\\b\"", "\"a\"b\"", "\"", "", "abc", "1x", "-1", "_1", "1_", "_",
+            "\"a\\b\"", "\"a\"b\"", "\"", "", "abc", "1x", "-1", "+1", "_1", "1_", "_",
         ] {
             assert!(parse_value(bad).is_err(), "{bad:?}");
         }
+        // u64::from_str would take a leading '+': the digit check refuses it first
+        assert_eq!(
+            parse_value("+1"),
+            Err(Error::Config("a value is neither an integer nor a string"))
+        );
         assert_eq!(strip_comment("key = \"a#b\" # note"), "key = \"a#b\" ");
         assert_eq!(strip_comment("# only a comment"), "");
         assert_eq!(strip_comment("x = 1"), "x = 1");

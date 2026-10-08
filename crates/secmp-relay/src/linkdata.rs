@@ -63,18 +63,6 @@ impl LinkDataStore {
         }
     }
 
-    /// The number of entries and markers.
-    #[must_use]
-    pub fn len(&self) -> usize {
-        self.entries.len()
-    }
-
-    /// Whether there is none.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
-
     /// The entry or marker `ld_id`.
     #[must_use]
     pub fn get(&self, ld_id: &Id) -> Option<&Entry> {

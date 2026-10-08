@@ -915,6 +915,11 @@ fn percent(covered: u64, count: u64) -> f64 {
 /// `src/**/tests.rs` or `kani_proofs.rs`.
 pub(crate) const COVERAGE_IGNORE_RE: &str = r"(/tests\.rs|/kani_proofs\.rs)$";
 
+/// The feature the coverage run turns on: `secmp-relay`'s `relay` suite is `required-features = ["kat"]` and no
+/// workspace crate enables `secmp-relay/kat` by unification (as `secmp-testkit` does for `secmp-proto/kat`, ADR-042),
+/// so without it the run measured none of the relay's integration tests (M5-B-3, run 37817187858: 58.9 %).
+pub(crate) const COVERAGE_FEATURES: &str = "secmp-relay/kat";
+
 /// The `cargo llvm-cov` arguments.
 pub(crate) fn coverage_args(out_path: &str) -> Vec<String> {
     [
@@ -922,6 +927,8 @@ pub(crate) fn coverage_args(out_path: &str) -> Vec<String> {
         "nextest",
         "--workspace",
         "--locked",
+        "--features",
+        COVERAGE_FEATURES,
         "--json",
         "--summary-only",
         "--ignore-filename-regex",
@@ -6201,7 +6208,8 @@ mod tests {
         assert!(workflow_findings("miri-full.yml", &text).is_empty());
     }
 
-    /// F18 (R-42): the coverage run leaves test-only files out of the denominator.
+    /// F18 (R-42): the coverage run leaves test-only files out of the denominator; M5-B-3: it builds with
+    /// `secmp-relay/kat`, so the relay's `relay` suite is measured.
     #[test]
     fn coverage_ignores_test_files() {
         let args = coverage_args("out.json");
@@ -6214,6 +6222,16 @@ mod tests {
             Some(r"(/tests\.rs|/kani_proofs\.rs)$")
         );
         assert_eq!(args.last().map(String::as_str), Some("out.json"));
+        // M5-B-3: the relay's kat-gated `relay` suite is measured
+        let at = args
+            .iter()
+            .position(|a| a == "--features")
+            .unwrap_or(usize::MAX);
+        assert_eq!(
+            args.get(at.saturating_add(1)).map(String::as_str),
+            Some("secmp-relay/kat")
+        );
+        assert_eq!(args.iter().filter(|a| *a == "--features").count(), 1);
         // the regex's two alternatives name the files of the secmp-proto test code
         assert!(
             COVERAGE_IGNORE_RE.contains("/tests") && COVERAGE_IGNORE_RE.contains("/kani_proofs")

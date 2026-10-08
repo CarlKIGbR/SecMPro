@@ -161,6 +161,12 @@ fn cli_rotate_static_adds_the_next_generation() {
     );
     let o = relay(&["rotate-static", "--keys", s(&path), "--valid-days", "61"]);
     assert!(!o.status.success());
+    let o = relay(&["rotate-static", "--keys", s(&path), "--valid-days", "x"]);
+    assert!(!o.status.success());
+    assert_eq!(
+        stderr(&o),
+        "secmp-relay: --valid-days needs a number of days\n"
+    );
     assert_eq!(
         KeyFile::read(&path).unwrap().ring().unwrap().kids(),
         vec![1, 2]

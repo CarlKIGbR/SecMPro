@@ -347,7 +347,8 @@ Abstractions (each a ProVerif constructor with the listed equation; nothing else
                                                                    ; pad is the identity; the 4352-B length is a test
 Oracles (enabled per session): DHO — dh_break(exp(g,a), exp(g,b)) = exp(exp(g,a),b) for every honest X25519 pair of the
 session; KEMO — kem_break(encaps_ct(ek, r)) = encaps_ss(ek, r) for the ML-KEM-1024 (static) and ML-KEM-768
-(ephemeral) encapsulations; SIGO — forge(vk(sk), m) = sign(sk, m) for `relay_sig` (a quantum break of Ed25519).
+(ephemeral) encapsulations; SIGO — forge(vk(sk), m) = sign(sk, m) for `relay_sig` (a quantum break of Ed25519). In lDH
+and lBoth, DHO and KEMO are modelled as reveals of the honest secrets (LO-5, LO-6 under "Reviewer decisions" below).
 Compromise (each emits an event of the same name and outputs the values on c in the phase the query states):
   RevealStatic(s, kid)  relay_dh and relay_kem secrets of kid
   RevealSig(s)          relay_sig secret
@@ -365,9 +366,9 @@ Events:
 | ID | Property | Query (sketch) | Assumptions | Expected | M |
 |---|---|---|---|---|---|
 | L1 | Relay authentication (implicit, with key confirmation at mac2) | inj-event(CAccept(s,fp,kid,h0,h1,sid,k1,k2)) ==> inj-event(RAccept(s,kid,h0,h1,sid,k1,k2)) for fp = R's pinned fp | lClean: no oracle, no compromise; attacker opens its own links | true | M5 |
-| L1a | … with the classical break | as L1 | lDH: DHO (static and ephemeral DH); `relay_kem` keeps ss1 secret | true | M5 |
+| L1a | … with the classical break | as L1 | lDH: DHO (static and ephemeral DH) as the phase-0 reveal of every honest X25519 exponent (LO-5); `relay_kem` keeps ss1 secret | true | M5 |
 | L1b | … with the PQ break | as L1 | lKEM: KEMO; `relay_dh` keeps ss1 secret | true | M5 |
-| L1c | Sanity: both breaks defeat relay authentication | as L1 | lBoth: DHO and KEMO — the attacker computes ss1 from HS1 and answers its own HS2 | **false** | M5 |
+| L1c | Sanity: both breaks defeat relay authentication | as L1 | lBoth: DHO and KEMO as the phase-0 reveals of every honest X25519 exponent and encapsulation randomness (LO-5, LO-6) — the attacker computes ss1 from HS1 and answers its own HS2 | **false** | M5 |
 | L2 | Relay authentication rests on `relay_sig` (no PQ authentication, §1.2 `docs/03:39`) | as L1 | lSig: RevealSig in phase 0 (SIGO gives the same trace): the attacker signs a RelayInfo with its own static keys under the pinned `relay_sig_pk` | **false** | M5 |
 | L3 | Confidentiality of commands and responses (incl. PQ) | event(CSend(s,sid,ctr,m)) && attacker(m) ==> false, and the same for RSend, m a fresh private payload, for links whose CAccept names R's fp | lClean, lDH, lKEM (each is a separate claim line L3, L3a, L3b) | true | M5 |
 | L3c | Sanity: both breaks defeat confidentiality | as L3 | lBoth | **false** | M5 |
@@ -419,3 +420,22 @@ client's check runs.
   CSend by construction. If ProVerif rejects the mixed premise, split L4 into a non-injective premise query plus an
   injective query with h0 in both events.
 - **LO-4** Counters as public constants {0, 1, 2}; strictness beyond the bound is Kani/proptest (K-02, P-04).
+
+### Reviewer decisions (2026-10-08, WEISUNG M5-B-2)
+
+- **LO-5** DHO in lDH and lBoth as a reveal: the oracle `dh_break` is removed; the session outputs on c, in phase 0,
+  every honest X25519 secret exponent — `out(c, dhsk(s, kRdh))` and, in each process that draws one, the ephemeral
+  exponents `dhsk(s, iC(e))`, `dhsk(s, iE(e1))`, `dhsk(s, iR(er))` (and `iD(e)` where it exists; it exists only in lFSEph)
+  right after the `new` that creates them. Justification: `dhsk` occurs only under `exp`, and `exp` is commutative, so
+  every value `dh_break` returns, exp(exp(g, a), b) for honest a, b, is computable from the public exp(g, a) and the
+  revealed b — the two attackers are equally powerful; a reveal is a clause with one hypothesis chain (its process
+  path), where `dh_break` resolved two attacker hypotheses against every pair of honest public keys (the first
+  declarations of lDH and lBoth exceeded 30 min). The `not attacker(dhsk(…))` assumptions of these two files and the
+  weight `select … attacker(exp(g, dhsk(s, *x)))/-3000` are removed; their KEM and signature assumptions stay.
+- **LO-6** KEMO in lBoth as a reveal: `kem_break1024`/`kem_break768` are removed; each process outputs its encapsulation
+  randomness `kemr(s, r)` right after drawing it (phase 0); `not attacker(kemr(lBoth, x))` is dropped in lBoth only.
+  `kemr` occurs only as the coins of `encaps_ct`/`encaps_ss`, so kem_break's value encaps_ss(ek, r) is computable from
+  the public ek and the revealed r. lKEM is unchanged (KEMO as the oracle).
+- **LO-7** Fallback: if a single declaration of lDH still exceeds 30 min, lDH is split as hDH was in M4 — `lDH.pv` keeps
+  L3a/L8/L4, `lDH-auth.pv` holds L1a alone — and this section's file list and `PROVERIF_EXPECTED_LINK` follow. No other
+  split; lBoth is never split (if it does not finish: STOP).

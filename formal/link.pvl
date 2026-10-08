@@ -75,28 +75,44 @@
    ---------------------------------------------------------------------------------------------------------------
      tag     DHO    KEMO   RevealStatic  RevealSig  RevealEph  RevealQKey  queries (RESULT lines)
      lClean  -      -      -             -          -          -           L3 (2), L8 (3), L1, L4 (2), L6, L7
-     lDH     ph 0   -      -             -          -          -           L3a (2), L8 (3), L1a, L4 (2)
+     lDH     rv 0   -      -             -          -          -           L3a (2), L8 (3), L1a, L4 (2)
      lKEM    -      ph 0   -             -          -          -           L3b (2), L8 (3), L1b, L4 (2)
-     lBoth   ph 0   ph 0   -             -          -          -           L3c (2), L8 (3), L1c
+     lBoth   rv 0   rv 0   -             -          -          -           L3c (2), L8 (3), L1c
      lSig    -      -      -             ph 0       -          -           L8 (3), L2
      lFS     -      -      ph 1          ph 1       -          -           L5 (2), L8 (3)
      lFSDH   ph 1   -      ph 1          ph 1       -          -           L5a (2), L8 (3)
      lFSEph  -      -      ph 1          ph 1       ph 1       -           L5b (2), L8 (3)
      lQKey   -      -      -             -          -          ph 0        L8 (3), L6a
-   Each file contains one session; sessions share no private value; events carry the session tag as first argument and
-   every query names its tag. LO-2: one session lSig with RevealSig (SIGO gives the same L2 trace and is not modelled).
+   ("rv 0": the break as a reveal in phase 0, 4. LO-5, LO-6.) Each file contains one session; sessions share no
+   private value; events carry the session tag as first argument and every query names its tag. LO-2: one session lSig
+   with RevealSig (SIGO gives the same L2 trace and is not modelled).
 
    ---------------------------------------------------------------------------------------------------------------
    4. Oracles (declared in the session file, scoped per session as formal/tr.pv §4 and formal/hx.pvl 4.)
    ---------------------------------------------------------------------------------------------------------------
    DHO:  dh_break(exp(g, dhsk(s,x)), exp(g, dhsk(s,y))) = exp(exp(g, dhsk(s,x)), dhsk(s,y)) for every pair of honest
-         X25519 exponents of session s (relay_dh, e_c, the HybridKEM-1024 ephemeral, e_r). Phase 0 (public destructor
-         dh_break): lDH, lBoth. Phase 1 (private destructor dh_break1, offered by a process from phase 1 on): lFSDH.
+         X25519 exponents of session s (relay_dh, e_c, the HybridKEM-1024 ephemeral, e_r). Phase 1 (private destructor
+         dh_break1, offered by a process from phase 1 on): lFSDH. In lDH and lBoth as a reveal (LO-5, below).
    KEMO: kem_break1024(encaps_ct1024(ek, kemr(s,r))) = encaps_ss1024(ek, kemr(s,r)) (the static stage, relay_kem) and
-         kem_break768(encaps_ct768(ek, kemr(s,r))) = encaps_ss768(ek, kemr(s,r)) (the ephemeral stage, ek_c): lKEM,
-         lBoth (phase 0, public).
+         kem_break768(encaps_ct768(ek, kemr(s,r))) = encaps_ss768(ek, kemr(s,r)) (the ephemeral stage, ek_c): lKEM
+         (phase 0, public). In lBoth as a reveal (LO-6, below).
    Soundness of the scoping: every exponent or ciphertext of a session is honest (covered by the rule) or built by the
    attacker from values it knows (its result computable without the oracle).
+   The breaks of lDH and lBoth as reveals (reviewer decisions LO-5, LO-6, 2026-10-08; CLAIMS §LINK "Reviewer
+   decisions"): no destructor; the session outputs on c, in phase 0, every honest secret the break concerns, each right
+   after the `new` that draws it — DHO: relay_dh (out(c, dhsk(s, kRdh)), a process of the session file), e_c
+   (dhsk(s, iC(e)), CLinkR), the HybridKEM-1024 ephemeral (dhsk(s, iE(e1)), CTailR) and R's e_r (dhsk(s, iR(er)),
+   RConnR); KEMO (lBoth): the encapsulation randomness of both stages (kemr(s, r1), CTailR; kemr(s, r2), RConnR). The
+   variants RelayR, RConnR, ClientR, CLinkR, CTailR are Relay, RConn, Client, CLink, CTail with these outputs and
+   nothing else changed; their flag rk (false in lDH, true in lBoth) gates the kemr outputs; the other seven sessions
+   use the macros without reveals, so their ProVerif input is unchanged. Equally powerful attackers: an honest X25519
+   exponent occurs only as the second argument of exp, and exp(exp(g, a), b) = exp(exp(g, b), a), so every value
+   dh_break returns (exp(exp(g, a), b) for honest a, b) the revealing attacker computes from the public exp(g, a) and
+   the revealed b, and the attacker can use a revealed exponent only under exp; likewise kemr occurs only as the coins
+   of encaps_ct/encaps_ss, so kem_break's value encaps_ss(ek, r) is computable from the public ek and the revealed r.
+   A reveal is a clause whose only hypotheses are the inputs of its process path, where dh_break was a clause with two
+   attacker hypotheses, one per honest public key, resolved against every pair (the first declarations of lDH and lBoth
+   did not finish in 30 min, measured; M5 Phase B §8B).
 
    ---------------------------------------------------------------------------------------------------------------
    5. Compromise (each emits its event and outputs the values on c, in the phase of the session's row)
@@ -106,6 +122,7 @@
      RevealEph(s, C)       e_c secret and dk_c of one link (sanity only): the first link of one designated,
                            not replicated client process (ClientE, next to the replicated clients)  macro CLinkE
      RevealQKey(s, q)      the client's queue signing key, per client process          macro ClientQ
+   The reveals of lDH and lBoth (4., LO-5, LO-6) are the breaks, not compromise: they emit no event.
    The macros contain no phase except CLinkE (its reveal branch starts with phase 1); the session file puts `phase 1;` in
    front where its row says ph 1, so phase 1 occurs only in the files of sessions with a phase-1 compromise. Phase 1
    ends every phase-0 process; the queries' attacker facts are evaluated at the end of the last phase. In lFS* the
@@ -158,10 +175,8 @@
      honest-pair and RExec lines "cannot be proved" (hypotheses kept by nounif were not discharged in the trace);
      `set nounifIgnoreNtimes = 4` restored those traces but L1's query phase then exploded. With the weights: L1 37 s,
      every L8 line false.
-   - In lDH and lBoth (DHO in phase 0), in the session file: `select x: bitstring; attacker(exp(g, dhsk(s, *x)))/-3000.`
-     — the lazy DH oracle of formal/hx/hDH-auth.pv (O-24) as a weight: honest X25519 public keys, the hypotheses of
-     dh_break, are resolved last. Without it the first declaration of lDH and lBoth did not finish in 20 min (queue
-     ≈ 67 000 rules); the nounif form lost the L8 honest-pair and RExec traces (measured on lDH).
+   - The weight `select x: bitstring; attacker(exp(g, dhsk(s, *x)))/-3000.` of lDH and lBoth (the lazy DH oracle) is
+     removed with dh_break (LO-5, 4.): no clause has an honest public key as a hypothesis of the break any more.
    - Query declarations one per begin event (no-begin queries first), CLAIMS ID order within a declaration.
 
    ---------------------------------------------------------------------------------------------------------------
@@ -501,3 +516,87 @@ let RevStatic(s: tagt) =
 let RevSig(s: tagt) =
   event RevealSig(s);
   out(c, sigk(s, kRsig)).
+
+(* ---------------------------------------------------------------- the breaks as reveals (4., LO-5, LO-6) ---- *)
+(* lDH (rk = false) and lBoth (rk = true) only: RConn, Relay, CTail, CLink, Client with the phase-0 outputs of every
+   honest X25519 exponent right after its `new` (LO-5) and, when rk, of the encapsulation randomness (LO-6); every
+   other process line verbatim (comments omitted). relay_dh is output by the session file's process. *)
+
+let RConnR(s: tagt, rk: bool) =
+  in(c, (=tHello, =magic, =ver1));
+  out(c, rinfo(s));
+  in(c, (=tHS1, =ver1, =kid0, ec: G, ekc: bitstring, pke1: G, ctkem: bitstring, m1: bitstring));
+  let ss1 = hkem(decaps1024(kemsk(s, kRkem), ctkem), exp(pke1, dhsk(s, kRdh)), ctkem, pk1024(kemsk(s, kRkem)),
+                 exp(g, dhsk(s, kRdh)), pke1, lbl_v1024) in
+  let h0 = h((lbl_h0, ver1, kid0, rfp(s), ec, h(ekc), pke1, h(ctkem))) in
+  let ck1 = hkdf_extract(h0, ss1) in
+  if m1 = mac(ck1, lbl_hs1) then
+  new er[ec, ekc, pke1, ctkem]: bitstring;
+  out(c, dhsk(s, iR(er)));
+  new r2[ec, ekc, pke1, ctkem]: bitstring;
+  ( (if rk then out(c, kemr(s, r2)))
+  | let x = dhsk(s, iR(er)) in
+    let erpub = exp(g, x) in
+    let ctc = encaps_ct768(ekc, kemr(s, r2)) in
+    let ss2 = hkem(encaps_ss768(ekc, kemr(s, r2)), exp(ec, x), ctc, ekc, ec, erpub, lbl_v768) in
+    let h1 = h((h0, m1, erpub, h(ctc))) in
+    let ck2 = hkdf_extract(h1, (ck1, ss2)) in
+    let ks = hkdf_expand(ck2, lbl_keys) in
+    let k1 = p_c2r(ks) in
+    let k2 = p_r2c(ks) in
+    let sid = p_sid(ks) in
+    event RAccept(s, kid0, h0, h1, sid, k1, k2);
+    out(c, (tHS2, ver1, erpub, ctc, mac(ck2, lbl_hs2)));
+    RFrames(s, sid, k1, k2) ).
+
+let RelayR(s: tagt, rk: bool) =
+  event RInfo(s, kid0, rfp(s), h((lbl_akc, ak)));
+  ! RConnR(s, rk).
+
+let CTailR(s: tagt, qsk: sigsk, spk: bitstring, kid: bitstring, rdh: G, rkem: bitstring, ie: bitstring, rk: bool) =
+  new e1[]: bitstring;
+  out(c, dhsk(s, iE(e1)));
+  new r1[]: bitstring;
+  ( (if rk then out(c, kemr(s, r1)))
+  | let ec = dhsk(s, ie) in
+    let ecpub = exp(g, ec) in
+    let dkc = kemsk(s, ie) in
+    let ekc = pk768(dkc) in
+    let x1 = dhsk(s, iE(e1)) in
+    let pke1 = exp(g, x1) in
+    let ctkem = encaps_ct1024(rkem, kemr(s, r1)) in
+    let ss1 = hkem(encaps_ss1024(rkem, kemr(s, r1)), exp(rdh, x1), ctkem, rkem, rdh, pke1, lbl_v1024) in
+    let h0 = h((lbl_h0, ver1, kid, rfp(s), ecpub, h(ekc), pke1, h(ctkem))) in
+    let ck1 = hkdf_extract(h0, ss1) in
+    let m1 = mac(ck1, lbl_hs1) in
+    event CStart(s, rfp(s), kid, h0);
+    out(c, (tHS1, ver1, kid, ecpub, ekc, pke1, ctkem, m1));
+    in(c, (=tHS2, =ver1, erpub: G, ctc: bitstring, m2: bitstring));
+    let ss2 = hkem(decaps768(dkc, ctc), exp(erpub, ec), ctc, ekc, ecpub, erpub, lbl_v768) in
+    let h1 = h((h0, m1, erpub, h(ctc))) in
+    let ck2 = hkdf_extract(h1, (ck1, ss2)) in
+    if m2 = mac(ck2, lbl_hs2) then
+    let ks = hkdf_expand(ck2, lbl_keys) in
+    let k1 = p_c2r(ks) in
+    let k2 = p_r2c(ks) in
+    let sid = p_sid(ks) in
+    event CAccept(s, rfp(s), kid, h0, h1, sid, k1, k2);
+    CFrames(s, sid, k1, k2, qsk, spk) ).
+
+let CLinkR(s: tagt, qsk: sigsk, spk: bitstring, rk: bool) =
+  out(c, (tHello, magic, ver1));
+  in(c, (=tInfo, =ver1, rpk: bitstring, kid: bitstring, rdh: G, rkem: bitstring, akc: bitstring, vu: bitstring,
+         rsg: bitstring));
+  if h((lbl_relayfp, rpk)) = rfp(s) then
+  if verify(rpk, (lbl_relayinfo, ver1, rpk, kid, rdh, rkem, akc, vu), rsg) = true then
+  if akc = h((lbl_akc, ak)) then
+  new e[]: bitstring;
+  out(c, dhsk(s, iC(e)));
+  CTailR(s, qsk, spk, kid, rdh, rkem, iC(e), rk).
+
+let ClientR(s: tagt, rk: bool) =
+  new q[]: bitstring;
+  new spk[]: bitstring;
+  let qsk = sigk(s, iQ(q)) in
+  out(c, vk(qsk));
+  ( CLinkR(s, qsk, spk, rk) | CLinkR(s, qsk, spk, rk) ).

@@ -3,7 +3,7 @@
    library formal/link.pvl (model, abstractions, devices: its header). Run:
    proverif -lib formal/link.pvl formal/link/lDH.pv
 
-   Row (formal/link.pvl 3.): DHO (phase 0) for every honest X25519 pair; relay_kem keeps ss1 secret.
+   Row (formal/link.pvl 3.): DHO as a reveal (LO-5): each honest X25519 exponent in phase 0; relay_kem keeps ss1 secret.
    Queries in the order of their RESULT lines (CLAIMS §LINK gate rule):
      L3a · L3a · L8 · L8 · L8
      L1a
@@ -13,23 +13,11 @@
 
 const lDH: tagt.
 
-(* DHO, phase 0: every pair of honest X25519 exponents of this session (formal/link.pvl 4.) *)
-reduc forall x: bitstring, y: bitstring;
-        dh_break(exp(g, dhsk(lDH, x)), exp(g, dhsk(lDH, y))) = exp(exp(g, dhsk(lDH, x)), dhsk(lDH, y)).
-
-(* Search device (formal/link.pvl 7.): honest X25519 public keys are selected last, so the DH oracle is
-   resolved lazily; search strategy only *)
-select x: bitstring; attacker(exp(g, dhsk(lDH, *x)))/-3000.
-
 (* Secrecy assumptions (formal/link.pvl 7.): the secrets this session never reveals, and those it reveals only
    in phase 1 ("phase 0") *)
-not x: bitstring; attacker(dhsk(lDH, iC(x))).
 not x: bitstring; attacker(kemsk(lDH, iC(x))).
-not x: bitstring; attacker(dhsk(lDH, iE(x))).
-not x: bitstring; attacker(dhsk(lDH, iR(x))).
 not x: bitstring; attacker(kemr(lDH, x)).
 not x: bitstring; attacker(sigk(lDH, iQ(x))).
-not attacker(dhsk(lDH, kRdh)).
 not attacker(kemsk(lDH, kRkem)).
 not attacker(sigk(lDH, kRsig)).
 
@@ -65,6 +53,9 @@ query sid: bitstring, ctr: bitstring, m: bitstring, kid: bitstring, h0: bitstrin
       (* L4 (r2c) *)
       inj-event(CRecv(lDH, sid, ctr, m)) ==> inj-event(RSend(lDH, sid, ctr, m)).
 
+(* The break as a reveal (formal/link.pvl 4., LO-5): RelayR and ClientR output the honest X25519
+   exponents right after drawing them, the last process relay_dh; phase 0 *)
 process
-    Relay(lDH)
-  | ! Client(lDH)
+    RelayR(lDH, false)
+  | ! ClientR(lDH, false)
+  | out(c, dhsk(lDH, kRdh))

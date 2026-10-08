@@ -974,11 +974,11 @@ pub(crate) const PROVERIF_MODEL_SHA256: &[(&str, &str)] = &[
     // M5 (OPEN-M5-16 A): the SecMP-LINK library and its nine session files
     (
         "formal/link.pvl",
-        "3deba154ed01ed93f48099849feee3ec76b0cbc2913914d2085510c4d8ad9c25",
+        "2b4f9531563dd41ae3dcb92279dbacc275cf5aecf4b6779110f7882e8c8fd562",
     ),
     (
         "formal/link/lBoth.pv",
-        "2d7e595ee9de6f2814ba8c79c631894de2eb72169f479f706d3ae97a812fc261",
+        "d673db6b81c6d690b01076980b3d086bd081e1c47579545c1639051ecc26cf61",
     ),
     (
         "formal/link/lClean.pv",
@@ -986,7 +986,7 @@ pub(crate) const PROVERIF_MODEL_SHA256: &[(&str, &str)] = &[
     ),
     (
         "formal/link/lDH.pv",
-        "790619d8996d34fce1b7bca91516aae1e97780d24a4992e65d0d3cf810e6e8a1",
+        "f43257d189694ccd18e204ef8798de6d262001f2e25e32d62e61ed0096b439a7",
     ),
     (
         "formal/link/lFS.pv",

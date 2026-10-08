@@ -62,8 +62,27 @@
 //! - `hx_accept_reject_first_msg`: `Responder::accept`, `first_msg`'s body tag wrong in byte 0 vs byte 31 (spec §6.6
 //!   step 3: §7.4 Decrypt on R's fresh state, the step path).
 //!
-//! Per-class pre-check (M4; M3 review R-45, F19): before every measurement of a TR, INV or HX target (and of the
-//! same-content control), on the very fixture that is measured, each class's input passes once through the measured
+//! SecMP-LINK/Q and TR targets of M5 (TEST-SPEC-M5 (g)), measured after the HX targets; composed, checked against the
+//! floor; the relay keys and the handshake randomness from the stream (`FixedEntropy`, feature `kat`):
+//! - `link_hs1_reject_mac1` (CT-01): `relay::AwaitHs1::on_hs1`, the honest `HS1` with `mac1` changed in byte 0 vs
+//!   byte 31 (spec §8.3: Decaps, `h0`, `ck1`, then the `mac1` compare, before the relay draws);
+//! - `link_hs2_reject_mac2` (CT-02): `client::AwaitHs2::on_hs2`, the honest `HS2` with `mac2` changed in byte 0 vs
+//!   byte 31 (spec §8.3: Decaps, `h1`, `ck2`, then the `mac2` compare);
+//! - `link_frame_open_reject` (CT-03): `Link::open` of a 4352-byte frame on the relay's end, its tag changed in byte 0
+//!   vs byte 15 (spec §8.4);
+//! - `q_queue_new_reject_token` (CT-04): `link::ids::token_verify` of a `QUEUE_NEW` access token changed in byte 0 vs
+//!   byte 31 (spec §9.6: the HMAC recomputed, then `hmac_sha256_verify`'s `ct_eq`, the primitive of `tag_compare`);
+//! - `tr_decrypt_trial_open_position` (CT-05; M4 review R-42, campaign R-59): §7.4 Decrypt on a receiver with 2
+//!   distinct skipped header keys, the header opening under the first (trial 0) vs the last (trial 1) candidate of
+//!   step 1, the body tag wrong in byte 0 (both refused by the body MAC on the skipped path).
+//!
+//! The LINK targets have no product reject-site tag (spec §8.5: one uniform `link::Error::Rejected`); their pre-check
+//! binds each class to its compare by the positive twin instead: each class gives the claimed outcome, and the
+//! unmodified input passes the same call on the same fixture (`SiteCheck::Twin`; `site` `null`, `precheck.compare`
+//! names the compare).
+//!
+//! Per-class pre-check (M4; M3 review R-45, F19): before every measurement of a TR, INV, HX or M5 target (and of the
+//! same-content controls), on the very fixture that is measured, each class's input passes once through the measured
 //! call and must give what the target claims — `Err(Rejected)` and the product's `kat` reject-site tag at the claimed
 //! site (`tr::DECRYPT_SITE_KAT`, `inv::INVITEE_SITE_KAT`, `hx::ACCEPT_SITE_KAT`); `Ok` with the class's output for
 //! `x25519_zero_check`; the unmodified input passes (INV, HX). A mismatch aborts the run with target, class, expected
@@ -73,7 +92,12 @@
 //! the TR targets: `tr_decrypt_reject` on the `tr_decrypt_reject_body_tag` fixture (the largest cell) with identical
 //! contents in both classes — its class-1 cell, the body tag wrong in byte 31 — through the real per-class
 //! preparation path (`blend`). It sees what neither the inline A/A control (one class under both labels) nor the A/A′
-//! control (no `blend`) can: a preparation path that differs by class. If it FAILs, the run is `CONTROL_FAIL`.
+//! control (no `blend`) can: a preparation path that differs by class. If it FAILs, the run is `CONTROL_FAIL`. Its HX
+//! twin `hx_same_content_control` (ADR-042 Amendment 3) does the same for the 12 288-byte HX blend, and
+//! `link_same_content_control` (TEST-SPEC-M5 CT-06, the Amendment 2 rule: a new artefact class gets its control) for
+//! the LINK frame path: `Link::open` of the class-1 frame of `link_frame_open_reject` (4352 B, the largest LINK blend;
+//! the 2856-byte `HS1` and 1156-byte `HS2` records are built by the same `blend`) in both classes, after the M5
+//! targets. Either FAIL makes the run `CONTROL_FAIL`.
 //!
 //! The A/A′ placement control `aa_prime_control` (ADR-042 (2), M2 review F6) is measured and judged like a target:
 //! `MsgEncrypt::open` rejecting a tag wrong in its last byte with identical contents in both classes, class 0 copied
@@ -184,15 +208,21 @@ use std::time::{Duration, Instant};
 use chacha20poly1305::aead::AeadInOut;
 use chacha20poly1305::{KeyInit, Tag, XChaCha20Poly1305, XNonce};
 use secmp_crypto::{
-    AEAD_TAG_LEN, Aead, BODY_LEN, COM_LEN, Caead, Fingerprint, Label, MSG_TAG_LEN, MlKem768Dk,
-    MsgEncrypt, Nonce24, SafetyNumber, SecretBytes, X25519Public, X25519Secret, Zeroizing,
-    hkdf_expand,
+    AEAD_TAG_LEN, Aead, BODY_LEN, COM_LEN, Caead, Ed25519SigningKey, Fingerprint, Label,
+    MSG_TAG_LEN, MlKem768Dk, MlKem1024Dk, MsgEncrypt, Nonce24, SafetyNumber, SecretBytes,
+    X25519Public, X25519Secret, Zeroizing, hkdf_expand,
 };
 use secmp_proto::hx::{Initiator, Responder};
 use secmp_proto::inv::{derive_k_inv, invitee_check};
 use secmp_proto::keys::{MlKem768Ek, X25519Pk};
+use secmp_proto::link::frame::MAX_PAYLOAD_LEN;
+use secmp_proto::link::ids::{AccessKey, token, token_verify};
+use secmp_proto::link::relay::RelayKeys;
+use secmp_proto::link::{self, Link, client, relay};
 use secmp_proto::prekeys::{IdentityKeys, InvitationRecord, IssueParams, MemoryPrekeyStore};
-use secmp_proto::sizes::{CELL_LEN, HANDSHAKE_CHUNK_LEN, HDR_CT_LEN, NONCE_LEN};
+use secmp_proto::sizes::{
+    CELL_LEN, HANDSHAKE_CHUNK_LEN, HASH_LEN, HDR_CT_LEN, HS1_LEN, HS2_LEN, NONCE_LEN,
+};
 use secmp_proto::tr::content::dummy;
 use secmp_proto::tr::{FixedEntropy, RatchetState};
 use secmp_proto::wire::cell::{Cell, HeaderV1, RelayQueue, RouteDescriptor};
@@ -1873,6 +1903,12 @@ enum SiteCheck {
     Tagged,
     /// `Ok`, with the class's output (not a reject target).
     Output,
+    /// The SecMP-LINK/Q targets (M5): the class's stated outcome (`Err(Rejected)`, or `Ok(false)` for the token
+    /// compare) and the positive twin — the unmodified input passes the same call on the same fixture — so that the one
+    /// field the classes change is the check that refuses. The LINK layer sets no reject-site tag (one uniform
+    /// `link::Error::Rejected`, spec §8.5), so such a claim names its compare (`compare` in the report's `precheck`) and
+    /// no `site` (`expect::CT_TARGET_SITES` binds none to it).
+    Twin,
 }
 
 impl SiteCheck {
@@ -1880,6 +1916,9 @@ impl SiteCheck {
         match self {
             Self::Tagged => "Err(Rejected) and the kat reject-site tag",
             Self::Output => "Ok and the class's output",
+            Self::Twin => {
+                "the class's outcome, and the unmodified input passes the same call (no reject-site tag on this path)"
+            }
         }
     }
 }
@@ -1980,9 +2019,53 @@ const CLAIM_HX_SAME_CONTENT: Claim = Claim {
     site: "inner open",
     check: SiteCheck::Tagged,
 };
+const CLAIM_LINK_HS1_MAC1: Claim = Claim {
+    target: "link_hs1_reject_mac1",
+    classes: ["mac1 differs in byte 0", "mac1 differs in byte 31"],
+    site: "mac1 (spec §8.3: compared after Decaps, before the relay draws)",
+    check: SiteCheck::Twin,
+};
+const CLAIM_LINK_HS2_MAC2: Claim = Claim {
+    target: "link_hs2_reject_mac2",
+    classes: ["mac2 differs in byte 0", "mac2 differs in byte 31"],
+    site: "mac2 (spec §8.3: compared after Decaps, before the link keys are derived)",
+    check: SiteCheck::Twin,
+};
+const CLAIM_LINK_FRAME_TAG: Claim = Claim {
+    target: "link_frame_open_reject",
+    classes: ["tag differs in byte 0", "tag differs in byte 15"],
+    site: "frame AEAD tag (spec §8.4: Link::open at the expected counter)",
+    check: SiteCheck::Twin,
+};
+const CLAIM_Q_TOKEN: Claim = Claim {
+    target: "q_queue_new_reject_token",
+    classes: ["token differs in byte 0", "token differs in byte 31"],
+    site: "access token (spec §9.6: HMAC-SHA-256 recomputed, then compared with ct_eq)",
+    check: SiteCheck::Twin,
+};
+const CLAIM_TR_TRIAL_POSITION: Claim = Claim {
+    target: "tr_decrypt_trial_open_position",
+    classes: [
+        "header opens under the first candidate key (hk_1, trial 0 of the 2 distinct skipped header keys of §7.4 step \
+         1; entry 0 of 4), body tag wrong in byte 0",
+        "header opens under the last candidate key (hk_2, trial 1 of the 2 distinct skipped header keys of §7.4 step 1; \
+         entry 2 of 4), body tag wrong in byte 0",
+    ],
+    site: "body MAC",
+    check: SiteCheck::Tagged,
+};
+const CLAIM_LINK_SAME_CONTENT: Claim = Claim {
+    target: LINK_SAME_CONTENT,
+    classes: [
+        "the class-1 frame of link_frame_open_reject (tag differs in byte 15)",
+        "the same frame",
+    ],
+    site: "frame AEAD tag (spec §8.4: Link::open at the expected counter)",
+    check: SiteCheck::Twin,
+};
 
 /// Every claim, for the report (`claim_json`).
-const CLAIMS: [Claim; 10] = [
+const CLAIMS: [Claim; 16] = [
     CLAIM_TR_HDR_KEY,
     CLAIM_TR_BODY_TAG,
     CLAIM_TR_CT_PQ,
@@ -1993,6 +2076,12 @@ const CLAIMS: [Claim; 10] = [
     CLAIM_HX_INNER,
     CLAIM_HX_FIRST_MSG,
     CLAIM_HX_SAME_CONTENT,
+    CLAIM_LINK_HS1_MAC1,
+    CLAIM_LINK_HS2_MAC2,
+    CLAIM_LINK_FRAME_TAG,
+    CLAIM_Q_TOKEN,
+    CLAIM_TR_TRIAL_POSITION,
+    CLAIM_LINK_SAME_CONTENT,
 ];
 
 /// A target built from its claim (name and classes from the claim).
@@ -2037,7 +2126,7 @@ fn outcome<T>(r: &Result<T, secmp_proto::Error>) -> String {
 fn expected_rejection(claim: Claim) -> String {
     match claim.check {
         SiteCheck::Tagged => format!("Err(Rejected), site {}", claim.site),
-        SiteCheck::Output => "Err(Rejected)".to_owned(),
+        SiteCheck::Output | SiteCheck::Twin => "Err(Rejected)".to_owned(),
     }
 }
 
@@ -2094,30 +2183,37 @@ fn precheck(
 }
 
 /// The report's `site` and `precheck` of the target `name` (JSON; both `null` for a target without a claim, and
-/// `precheck` `null` if it never ran).
+/// `precheck` `null` if it never ran). A `Twin` claim (no reject-site tag on its path) has `site` `null` and names its
+/// compare as `precheck.compare`.
 fn claim_json(name: &str) -> (String, String) {
     let Some(claim) = CLAIMS.iter().find(|c| c.target == name) else {
         return ("null".to_owned(), "null".to_owned());
     };
+    let twin_bound = matches!(claim.check, SiteCheck::Twin);
     let precheck = PRECHECKS.with(|p| {
         p.try_borrow().ok().and_then(|p| {
             p.iter().find(|k| k.target == name).map(|k| {
-                serde_json::json!({
+                let mut json = serde_json::json!({
                     "check": claim.check.as_str(),
                     "passed": true,
                     "fixtures": k.fixtures,
                     "expected": k.expected,
                     "observed": k.observed,
                     "twin": k.twin.as_ref().map(|(want, seen)| serde_json::json!({"expected": want, "observed": seen})),
-                })
-                .to_string()
+                });
+                if let (true, Some(object)) = (twin_bound, json.as_object_mut()) {
+                    object.insert("compare".to_owned(), serde_json::Value::from(claim.site));
+                }
+                json.to_string()
             })
         })
     });
-    (
-        serde_json::Value::from(claim.site).to_string(),
-        precheck.unwrap_or_else(|| "null".to_owned()),
-    )
+    let site = if twin_bound {
+        "null".to_owned()
+    } else {
+        serde_json::Value::from(claim.site).to_string()
+    };
+    (site, precheck.unwrap_or_else(|| "null".to_owned()))
 }
 
 // ---- SecMP-TR targets (M3 plan D9) -----------------------------------------------------------------------------
@@ -2381,6 +2477,15 @@ fn key_copy(key: Option<&SecretBytes<32>>) -> Result<SecretBytes<32>, secmp_prot
 /// a cell under `hk_1` … `hk_3` can open only on the skipped path — and that each of the nine undelivered cells
 /// opens on a copy of B (its `(hk_i, n)` is in `skipped`).
 fn tr_skipped_session(stream: &mut Stream) -> Result<TrSkipped, secmp_proto::Error> {
+    tr_skipped_session_with(stream, &TR_SKIPPED_PER_CHAIN)
+}
+
+/// `tr_skipped_session` with `per_chain.len()` skipped chains of `per_chain[i]` skipped keys each (the stream is read
+/// in the same order for every shape; `tr_decrypt_trial_open_position`: 2 + 2), followed by B's current chain.
+fn tr_skipped_session_with(
+    stream: &mut Stream,
+    per_chain: &[usize],
+) -> Result<TrSkipped, secmp_proto::Error> {
     let sk = SecretBytes::<32>::from_slice(&drawn(stream, 32))?;
     let mut sb = [0_u8; 32];
     stream.fill(&mut sb);
@@ -2394,7 +2499,7 @@ fn tr_skipped_session(stream: &mut Stream) -> Result<TrSkipped, secmp_proto::Err
     let mut b = RatchetState::init_responder(&sk, &sb, spk, rpk)?;
     let mut chain_keys = Vec::new();
     let mut undelivered = Vec::new();
-    for count in TR_SKIPPED_PER_CHAIN {
+    for count in per_chain.iter().copied() {
         chain_keys.push(key_copy(a.hk_s_kat())?);
         let mut cells = Vec::new();
         for _ in 0..count {
@@ -2447,16 +2552,63 @@ fn tr_skipped_classes(fixture: &TrSkipped) -> Result<[Vec<u8>; 2], secmp_proto::
     let (Some(first), Some(last)) = (chain1.first(), chain1.get(TR_SKIPPED_CLASS1_N)) else {
         return Err(secmp_proto::Error::Rejected);
     };
-    let wrong_tag = |cell: &[u8]| {
-        let mut cell = cell.to_vec();
-        let tag_at = cell
-            .len()
-            .checked_sub(MSG_TAG_LEN)
-            .ok_or(secmp_proto::Error::Rejected)?;
-        flip(&mut cell, tag_at)?;
-        Ok::<_, secmp_proto::Error>(cell)
+    Ok([body_tag_wrong(first)?, body_tag_wrong(last)?])
+}
+
+/// `cell` with its body tag (the last `MSG_TAG_LEN` bytes) wrong in byte 0.
+fn body_tag_wrong(cell: &[u8]) -> Result<Vec<u8>, secmp_proto::Error> {
+    let mut cell = cell.to_vec();
+    let tag_at = cell
+        .len()
+        .checked_sub(MSG_TAG_LEN)
+        .ok_or(secmp_proto::Error::Rejected)?;
+    flip(&mut cell, tag_at)?;
+    Ok(cell)
+}
+
+/// The skipped chains of `tr_decrypt_trial_open_position` (TEST-SPEC-M5 CT-05): two chains of A with two skipped keys
+/// each, so B's `skipped` holds 4 entries under 2 distinct header keys (`hk_1`: entries 0 and 1, `hk_2`: entries 2 and
+/// 3), and its current receiving chain is a third one.
+const TR_TRIAL_PER_CHAIN: [usize; 2] = [2, 2];
+
+/// `tr_decrypt_trial_open_position` (TEST-SPEC-M5 CT-05; M4 review R-42, campaign R-59, docs/01 RR-17): A's undelivered
+/// cell `(hk_1, n = 0)` (class 0: the header opens under the first candidate of §7.4 step 1, trial 0) vs `(hk_2, n = 0)`
+/// (class 1: under the last one, trial 1), each with its body tag wrong in byte 0. Both continue on the skipped path,
+/// find `(hk, 0)` in `skipped` and are refused by the body MAC, so the classes differ in the position of the opening
+/// trial (and, under the masked lookup of M4 review R-58, in the entry index) alone.
+fn tr_trial_position_classes(fixture: &TrSkipped) -> Result<[Vec<u8>; 2], secmp_proto::Error> {
+    let [chain1, chain2] = fixture.undelivered.as_slice() else {
+        return Err(secmp_proto::Error::Rejected);
     };
-    Ok([wrong_tag(first)?, wrong_tag(last)?])
+    let (Some(first), Some(last)) = (chain1.first(), chain2.first()) else {
+        return Err(secmp_proto::Error::Rejected);
+    };
+    Ok([body_tag_wrong(first)?, body_tag_wrong(last)?])
+}
+
+/// `tr_decrypt_trial_open_position` (TEST-SPEC-M5 CT-05): spec §7.4 Decrypt (`RatchetState::decrypt_with`, the public
+/// decrypt API with the empty entropy of every TR target: a rejection draws nothing) on the receiver of
+/// `tr_skipped_session_with(.., &TR_TRIAL_PER_CHAIN)` (2 distinct skipped header keys, then `hk_r` and `nhk_r`: 4
+/// candidates), the classes of `tr_trial_position_classes`, measured as every TR target (`tr_measure`: the pre-check
+/// claims "body MAC" for both). Composed, checked against the floor: whether the position of the trial that opens the
+/// header shows (R-59: ≈ 1 floor on the M1 Pro through the AEAD library's tag-check branch before the trial opens were
+/// made branch-free, F-M5).
+fn tr_decrypt_trial_open_position(
+    n: usize,
+    k: usize,
+    stream: &mut Stream,
+) -> Result<Samples, secmp_crypto::Error> {
+    let fixture = tr_skipped_session_with(stream, &TR_TRIAL_PER_CHAIN).map_err(crypto_error)?;
+    let [class0, class1] = tr_trial_position_classes(&fixture).map_err(crypto_error)?;
+    tr_measure(
+        n,
+        k,
+        stream,
+        CLAIM_TR_TRIAL_POSITION,
+        fixture.receiver,
+        &class0,
+        &class1,
+    )
 }
 
 /// One call of a TR target: take the receiver's state out of `slot`, decrypt `cell`, put back the unchanged state
@@ -3197,6 +3349,444 @@ fn hx_targets(n: usize) -> [Target; 5] {
     ]
 }
 
+// ---- SecMP-LINK/Q targets (M5, TEST-SPEC-M5 (g)) --------------------------------------------------------------
+//
+// The relay's keys and the client's and the relay's handshake randomness come from the stream (`FixedEntropy`, feature
+// `kat`), so every handshake state the targets need is a deterministic function of the fixture and can be rebuilt
+// fresh for every call (the typestates `relay::AwaitHs1` and `client::AwaitHs2` are consumed by the call they await).
+// Every measured record, frame and token is built from one common source with `blend` (class 1 the base, ADR-042
+// Amendment 4), the state next to it by the same calls for both classes. The LINK layer has one uniform reject
+// (`link::Error::Rejected`, spec §8.5) and no reject-site tag; each target's pre-check therefore passes the unmodified
+// input through the same call (the positive twin) besides each class (`SiteCheck::Twin`).
+
+/// `now` of the LINK fixture (Unix seconds; the value of the link test fixture).
+const LINK_NOW: u64 = 1_700_000_100;
+/// `valid_until` of the fixture's `RELAYINFO`: 30 days after `LINK_NOW` (within the 60 days of spec §8.2).
+const LINK_VALID_UNTIL: u64 = 1_702_592_000;
+/// The relay's key generation.
+const LINK_KID: u32 = 1;
+/// The client's handshake randomness (`FixedEntropy`, reading OPEN-1: `e_c_sk` 32, `ek_c_seed` 64, then `sk_e1` 32 and
+/// `m1` 32 of the HybridKEM-1024 encapsulation), with room to spare.
+const LINK_CLIENT_RANDOMNESS: usize = 256;
+/// The relay's handshake randomness (`sk_er` 32 and `m2` 32 of the HybridKEM-768 encapsulation), with room to spare.
+const LINK_RELAY_RANDOMNESS: usize = 128;
+/// The last byte of a 32-byte MAC or token (class 1 of CT-01, CT-02, CT-04).
+const MAC_LAST: usize = 31;
+/// The last byte of the 16-byte frame tag (class 1 of CT-03).
+const TAG_LAST: usize = 15;
+/// `cmd_seq` of the `QUEUE_NEW` whose access token CT-04 verifies (spec §9.6).
+const Q_CMD_SEQ: u32 = 1;
+
+/// The fixture of the LINK targets (spec §8.2–§8.4): a relay with keys from the stream and the honest handshake of one
+/// client holding the access key, with fixed randomness — the four records and the draws that rebuild each state.
+struct LinkFixture {
+    keys: RelayKeys,
+    /// The client's copy of the access key (`akc` is checked, spec §8.2).
+    access: AccessKey,
+    fp: [u8; HASH_LEN],
+    hello: Vec<u8>,
+    relayinfo: Vec<u8>,
+    client_draws: Zeroizing<Vec<u8>>,
+    relay_draws: Zeroizing<Vec<u8>>,
+    /// The honest `HS1` (2856 B) and `HS2` (1156 B) records (D.1).
+    hs1: Vec<u8>,
+    hs2: Vec<u8>,
+}
+
+impl LinkFixture {
+    /// A fresh relay state after `HELLO` → `RELAYINFO` (spec §8.2), awaiting `HS1`.
+    fn await_hs1(&self) -> link::Result<relay::AwaitHs1<'_>> {
+        relay::accept(&self.keys)
+            .on_hello(&self.hello, LINK_VALID_UNTIL)
+            .map(|(_, state)| state)
+    }
+
+    /// A fresh client state after `RELAYINFO` → `HS1` with the fixture's draws (spec §8.3), awaiting `HS2`: the same
+    /// state as the honest handshake's, so the honest `HS2` completes it.
+    fn await_hs2(&self) -> link::Result<client::AwaitHs2> {
+        let (_, state) = client::start(self.fp, Some(&self.access), LINK_NOW)?;
+        state
+            .on_relayinfo(&self.relayinfo, &mut FixedEntropy::new(&self.client_draws))
+            .map(|(_, state)| state)
+    }
+
+    /// The relay's end of the honest link, fresh (both counters 0).
+    fn relay_link(&self) -> link::Result<Link> {
+        self.await_hs1()?
+            .on_hs1(&self.hs1, &mut FixedEntropy::new(&self.relay_draws))
+            .map(|(_, end)| end)
+    }
+
+    /// The client's end of the honest link, fresh.
+    fn client_link(&self) -> link::Result<Link> {
+        self.await_hs2()?.on_hs2(&self.hs2)
+    }
+}
+
+/// The relay keys (`RelayKeys::new`: `relay_sig` from a seed, `relay_dh`, `relay_kem` from a seed, the access key;
+/// generation `LINK_KID`) and the handshake randomness from the stream, then the honest handshake (spec §8.2–§8.3:
+/// `client::start`, `relay::accept`, `on_hello`, `on_relayinfo`, `on_hs1`, `on_hs2`). Checks the record lengths of D.1,
+/// that both ends agree on `sess_id`, and that the rebuilt relay end is the same link (the draws fix it).
+fn link_fixture(stream: &mut Stream) -> link::Result<LinkFixture> {
+    let access_bytes = drawn(stream, 32);
+    let keys = RelayKeys::new(
+        Ed25519SigningKey::from_seed(&drawn(stream, 32))?,
+        X25519Secret::from_bytes(&drawn(stream, 32))?,
+        MlKem1024Dk::from_seed(&drawn(stream, 64))?,
+        SecretBytes::from_slice(&access_bytes)?,
+        LINK_KID,
+    )?;
+    let access = SecretBytes::<32>::from_slice(&access_bytes)?;
+    let client_draws = drawn(stream, LINK_CLIENT_RANDOMNESS);
+    let relay_draws = drawn(stream, LINK_RELAY_RANDOMNESS);
+    let fp = keys.fp();
+    let (hello, waiting) = client::start(fp, Some(&access), LINK_NOW)?;
+    let (relayinfo, relay_waiting) = relay::accept(&keys).on_hello(&hello, LINK_VALID_UNTIL)?;
+    let (hs1, client_waiting) =
+        waiting.on_relayinfo(&relayinfo, &mut FixedEntropy::new(&client_draws))?;
+    let (hs2, relay_end) = relay_waiting.on_hs1(&hs1, &mut FixedEntropy::new(&relay_draws))?;
+    let client_end = client_waiting.on_hs2(&hs2)?;
+    let fixture = LinkFixture {
+        keys,
+        access,
+        fp,
+        hello,
+        relayinfo,
+        client_draws,
+        relay_draws,
+        hs1,
+        hs2,
+    };
+    let rebuilt = fixture.relay_link()?;
+    let sizes = fixture.hs1.len() == HS1_LEN.saturating_add(3)
+        && fixture.hs2.len() == HS2_LEN.saturating_add(3);
+    let same = client_end
+        .sess_id()
+        .as_slice()
+        .ct_eq(relay_end.sess_id().as_slice())
+        & rebuilt
+            .sess_id()
+            .as_slice()
+            .ct_eq(relay_end.sess_id().as_slice());
+    if !(sizes && bool::from(same)) {
+        return Err(link::Error::Rejected);
+    }
+    Ok(fixture)
+}
+
+/// The bench's error for a LINK fixture that could not be built: the run aborts with the reason.
+fn link_abort(e: link::Error) -> secmp_crypto::Error {
+    abort(format!(
+        "bench aborted: the SecMP-LINK fixture of the ct bench could not be built ({e})"
+    ))
+}
+
+/// A LINK call's outcome as the pre-check states it: `Ok` or `Err(<error>)`.
+fn link_outcome<T>(r: &link::Result<T>) -> String {
+    match r {
+        Ok(_) => "Ok".to_owned(),
+        Err(e) => format!("Err({e:?})"),
+    }
+}
+
+/// `record` with its trailing 32-byte MAC (`mac1` of `HS1`, `mac2` of `HS2`: the last field of D.1) changed in byte
+/// `at` of the MAC.
+fn mac_changed(record: &[u8], at: usize) -> link::Result<Vec<u8>> {
+    let mac_at = record
+        .len()
+        .checked_sub(HASH_LEN)
+        .and_then(|m| m.checked_add(at))
+        .ok_or(link::Error::Rejected)?;
+    let mut changed = record.to_vec();
+    flip(&mut changed, mac_at)?;
+    Ok(changed)
+}
+
+/// `link_hs1_reject_mac1` (TEST-SPEC-M5 CT-01; spec §8.3, the relay's `mac1` compare): `relay::AwaitHs1::on_hs1` on a
+/// fresh relay state (`LinkFixture::await_hs1`, rebuilt for every call next to the record), the honest `HS1` with
+/// `mac1` changed in byte 0 (class 0) vs byte 31 (class 1). Both decode, pass the `kid` lookup and run the real
+/// HybridKEM-1024 Decaps, `h0`, `ck1` and `mac1` (composed, checked against the floor); the constant-time `mac1`
+/// compare refuses before any draw (the entropy is empty: a call past it would fail as `Unavailable`, not
+/// `Rejected`). Pre-check: each class gives `Err(Rejected)`, and the honest `HS1` gives `Ok` with the relay's draws.
+/// Aborts if a measured call gave anything but `Err(Rejected)`.
+fn link_hs1_reject_mac1(
+    n: usize,
+    k: usize,
+    stream: &mut Stream,
+) -> Result<Samples, secmp_crypto::Error> {
+    let fx = link_fixture(stream).map_err(link_abort)?;
+    let class0 = mac_changed(&fx.hs1, 0).map_err(link_abort)?;
+    let class1 = mac_changed(&fx.hs1, MAC_LAST).map_err(link_abort)?;
+    let refused = |record: &[u8]| {
+        link_outcome(
+            &fx.await_hs1()
+                .and_then(|state| state.on_hs1(record, &mut FixedEntropy::new(&[]))),
+        )
+    };
+    let twin = link_outcome(
+        &fx.await_hs1()
+            .and_then(|state| state.on_hs1(&fx.hs1, &mut FixedEntropy::new(&fx.relay_draws))),
+    );
+    let expected = expected_rejection(CLAIM_LINK_HS1_MAC1);
+    precheck(
+        CLAIM_LINK_HS1_MAC1,
+        [expected.clone(), expected],
+        [refused(&class0), refused(&class1)],
+        Some(("Ok".to_owned(), twin)),
+    )?;
+    let delta = Deltas::new(&class0, &class1);
+    let mut entropy = FixedEntropy::new(&[]);
+    let mut unexpected = false;
+    let samples = measure(
+        n,
+        k,
+        stream,
+        |c, _| {
+            (
+                RefCell::new(fx.await_hs1().ok()),
+                blended_vec(&class1, &delta, c),
+            )
+        },
+        |(state, record)| match state.try_borrow_mut().ok().and_then(|mut s| s.take()) {
+            Some(state) => {
+                unexpected |= black_box(!matches!(
+                    state.on_hs1(black_box(record), &mut entropy),
+                    Err(link::Error::Rejected)
+                ));
+            }
+            None => unexpected = true,
+        },
+    );
+    if unexpected {
+        return Err(abort(
+            "bench aborted: relay on_hs1 gave another outcome than Err(Rejected) for an HS1 of link_hs1_reject_mac1, \
+             which must be refused at mac1 in both classes"
+                .to_owned(),
+        ));
+    }
+    Ok(samples)
+}
+
+/// `link_hs2_reject_mac2` (TEST-SPEC-M5 CT-02; spec §8.3, the client's `mac2` compare): `client::AwaitHs2::on_hs2` on
+/// a fresh client state (`LinkFixture::await_hs2`: `RELAYINFO` checked and `HS1` built with the fixture's draws, rebuilt
+/// for every call next to the record), the honest `HS2` with `mac2` changed in byte 0 (class 0) vs byte 31 (class 1).
+/// Both decode and run the real HybridKEM-768 Decaps, `h1`, `ck2` and `mac2` (composed, checked against the floor); the
+/// `mac2` verification (`hmac_sha256_verify`, a constant-time compare) refuses before the link keys are derived.
+/// Pre-check: each class gives `Err(Rejected)`, and the honest `HS2` completes the same state (`Ok`). Aborts if a
+/// measured call gave anything but `Err(Rejected)`.
+fn link_hs2_reject_mac2(
+    n: usize,
+    k: usize,
+    stream: &mut Stream,
+) -> Result<Samples, secmp_crypto::Error> {
+    let fx = link_fixture(stream).map_err(link_abort)?;
+    let class0 = mac_changed(&fx.hs2, 0).map_err(link_abort)?;
+    let class1 = mac_changed(&fx.hs2, MAC_LAST).map_err(link_abort)?;
+    let outcome_of =
+        |record: &[u8]| link_outcome(&fx.await_hs2().and_then(|state| state.on_hs2(record)));
+    let expected = expected_rejection(CLAIM_LINK_HS2_MAC2);
+    precheck(
+        CLAIM_LINK_HS2_MAC2,
+        [expected.clone(), expected],
+        [outcome_of(&class0), outcome_of(&class1)],
+        Some(("Ok".to_owned(), outcome_of(&fx.hs2))),
+    )?;
+    let delta = Deltas::new(&class0, &class1);
+    let mut unexpected = false;
+    let samples = measure(
+        n,
+        k,
+        stream,
+        |c, _| {
+            (
+                RefCell::new(fx.await_hs2().ok()),
+                blended_vec(&class1, &delta, c),
+            )
+        },
+        |(state, record)| match state.try_borrow_mut().ok().and_then(|mut s| s.take()) {
+            Some(state) => {
+                unexpected |= black_box(!matches!(
+                    state.on_hs2(black_box(record)),
+                    Err(link::Error::Rejected)
+                ));
+            }
+            None => unexpected = true,
+        },
+    );
+    if unexpected {
+        return Err(abort(
+            "bench aborted: client on_hs2 gave another outcome than Err(Rejected) for an HS2 of link_hs2_reject_mac2, \
+             which must be refused at mac2 in both classes"
+                .to_owned(),
+        ));
+    }
+    Ok(samples)
+}
+
+/// The two frames of a frame target, made from the honest frame, class 0 first.
+type FrameClasses = fn(&[u8]) -> link::Result<[Vec<u8>; 2]>;
+
+/// `frame` with byte `at` of its 16-byte AEAD tag (the last `AEAD_TAG_LEN` bytes, spec §8.4) changed.
+fn tag_changed(frame: &[u8], at: usize) -> link::Result<Vec<u8>> {
+    let tag_at = frame
+        .len()
+        .checked_sub(AEAD_TAG_LEN)
+        .and_then(|t| t.checked_add(at))
+        .ok_or(link::Error::Rejected)?;
+    let mut changed = frame.to_vec();
+    flip(&mut changed, tag_at)?;
+    Ok(changed)
+}
+
+/// `link_frame_open_reject`: the honest frame with its tag changed in byte 0 (class 0) vs byte 15 (class 1).
+fn frame_tag_classes(frame: &[u8]) -> link::Result<[Vec<u8>; 2]> {
+    Ok([tag_changed(frame, 0)?, tag_changed(frame, TAG_LAST)?])
+}
+
+/// `link_same_content_control` (TEST-SPEC-M5 CT-06): the class-1 frame of `frame_tag_classes` (tag changed in byte 15)
+/// for both classes.
+fn frame_same_content_classes(frame: &[u8]) -> link::Result<[Vec<u8>; 2]> {
+    let class1 = tag_changed(frame, TAG_LAST)?;
+    Ok([class1.clone(), class1])
+}
+
+/// A frame target (TEST-SPEC-M5 CT-03 and its control CT-06; spec §8.4): `Link::open` on the relay's end of the honest
+/// link at receive counter 0, of the client's first frame (a `MAX_PAYLOAD_LEN`-byte payload from the stream, padded to
+/// 4336 B and sealed under `k_c2r`, 4352 B) changed as `classes` says. The AEAD tag check refuses in both classes and
+/// `Link::open` leaves the counter unchanged (spec §8.5), so the one link serves every call; the 4352-byte frame is
+/// built for every call from one common source with `blend` (class 1 the base). Composed, checked against the floor.
+/// Pre-check: each class gives `Err(Rejected)` with the receive counter still 0, and the honest frame opens on a fresh,
+/// identical relay end (`LinkFixture::relay_link`). Aborts if a measured call opened its frame.
+fn link_frame_reject(
+    n: usize,
+    k: usize,
+    stream: &mut Stream,
+    claim: Claim,
+    classes: FrameClasses,
+) -> Result<Samples, secmp_crypto::Error> {
+    let fx = link_fixture(stream).map_err(link_abort)?;
+    let payload = drawn(stream, MAX_PAYLOAD_LEN);
+    let honest = fx
+        .client_link()
+        .and_then(|mut end| end.seal(&payload))
+        .map_err(link_abort)?;
+    let [class0, class1] = classes(honest.as_slice()).map_err(link_abort)?;
+    let mut receiver = fx.relay_link().map_err(link_abort)?;
+    let mut observed = [String::new(), String::new()];
+    for (seen, frame) in observed.iter_mut().zip([&class0, &class1]) {
+        let outcome = link_outcome(&receiver.open(frame));
+        *seen = format!("{outcome}, recv counter {:?}", receiver.recv_counter());
+    }
+    let twin = link_outcome(
+        &fx.relay_link()
+            .and_then(|mut end| end.open(honest.as_slice())),
+    );
+    let expected = format!("{}, recv counter Some(0)", expected_rejection(claim));
+    precheck(
+        claim,
+        [expected.clone(), expected],
+        observed,
+        Some(("Ok".to_owned(), twin)),
+    )?;
+    let delta = Deltas::new(&class0, &class1);
+    let mut opened = false;
+    let samples = measure(
+        n,
+        k,
+        stream,
+        |c, _| blended_vec(&class1, &delta, c),
+        |frame| {
+            opened |= black_box(receiver.open(black_box(frame)).is_ok());
+        },
+    );
+    if opened || receiver.recv_counter() != Some(0) {
+        return Err(abort(format!(
+            "bench aborted: Link::open opened a frame of {}, which must be refused in both classes with the counter \
+             unchanged",
+            claim.target
+        )));
+    }
+    Ok(samples)
+}
+
+/// `q_queue_new_reject_token` (TEST-SPEC-M5 CT-04; spec §9.6, the relay's access-token compare):
+/// `link::ids::token_verify` — `HMAC-SHA-256(relay_access_key, "SecMP-Q/1 token" ‖ sess_id ‖ u32be(cmd_seq))`
+/// recomputed, then compared with `ct_eq` (`secmp_crypto::hmac_sha256_verify`, the primitive of `tag_compare`) — with
+/// the relay's access key, the link's `sess_id` and `cmd_seq` 1 of a `QUEUE_NEW`, on the honest token changed in byte 0
+/// (class 0) vs byte 31 (class 1), each a fresh 32-byte copy from one common source (`blend`). Composed, checked
+/// against the floor. Pre-check: each class gives `Ok(false)`, the honest token `Ok(true)`. Aborts if a measured call
+/// did not give `Ok(false)`.
+fn q_queue_new_reject_token(
+    n: usize,
+    k: usize,
+    stream: &mut Stream,
+) -> Result<Samples, secmp_crypto::Error> {
+    let fx = link_fixture(stream).map_err(link_abort)?;
+    let sess_id = *fx.relay_link().map_err(link_abort)?.sess_id();
+    let access = fx.keys.access_key();
+    let honest = token(access, &sess_id, Q_CMD_SEQ).map_err(crypto_error)?;
+    let changed = |at: usize| {
+        let mut t = honest;
+        flip(&mut t, at)?;
+        Ok::<_, secmp_proto::Error>(t)
+    };
+    let class0 = changed(0).map_err(crypto_error)?;
+    let class1 = changed(MAC_LAST).map_err(crypto_error)?;
+    let verified = |t: &[u8; HASH_LEN]| match token_verify(access, &sess_id, Q_CMD_SEQ, t) {
+        Ok(choice) => format!("Ok({})", bool::from(choice)),
+        Err(e) => format!("Err({e:?})"),
+    };
+    let expected = "Ok(false)".to_owned();
+    precheck(
+        CLAIM_Q_TOKEN,
+        [expected.clone(), expected],
+        [verified(&class0), verified(&class1)],
+        Some(("Ok(true)".to_owned(), verified(&honest))),
+    )?;
+    let delta = Deltas::new(&class0, &class1);
+    let mut unexpected = false;
+    let samples = measure(
+        n,
+        k,
+        stream,
+        |c, _| {
+            let mut t = [0_u8; HASH_LEN];
+            blend(&class1, &delta, c, &mut t);
+            t
+        },
+        |t| {
+            let r = token_verify(access, black_box(&sess_id), Q_CMD_SEQ, black_box(t));
+            unexpected |= black_box(!matches!(r, Ok(choice) if !bool::from(choice)));
+        },
+    );
+    if unexpected {
+        return Err(abort(
+            "bench aborted: token_verify did not give Ok(false) for a token of q_queue_new_reject_token, which must \
+             be refused in both classes"
+                .to_owned(),
+        ));
+    }
+    Ok(samples)
+}
+
+/// The SecMP-LINK/Q targets and the TR trial-position target of TEST-SPEC-M5 (g) (CT-01…CT-05) and the LINK
+/// same-content control (CT-06; ADR-042 Amendment 2: a new artefact class gets its control), measured after
+/// `hx_targets`, `n` samples per measurement.
+fn m5_targets(n: usize) -> [Target; 6] {
+    [
+        claimed(CLAIM_LINK_HS1_MAC1, n, link_hs1_reject_mac1),
+        claimed(CLAIM_LINK_HS2_MAC2, n, link_hs2_reject_mac2),
+        claimed(CLAIM_LINK_FRAME_TAG, n, |n, k, s| {
+            link_frame_reject(n, k, s, CLAIM_LINK_FRAME_TAG, frame_tag_classes)
+        }),
+        claimed(CLAIM_Q_TOKEN, n, q_queue_new_reject_token),
+        claimed(CLAIM_TR_TRIAL_POSITION, n, tr_decrypt_trial_open_position),
+        claimed(CLAIM_LINK_SAME_CONTENT, n, |n, k, s| {
+            link_frame_reject(n, k, s, CLAIM_LINK_SAME_CONTENT, frame_same_content_classes)
+        }),
+    ]
+}
+
 /// `SECMP_CT_SCALE` if set (local quick runs only; echoed in the report, refused by the gate).
 fn ct_scale() -> Option<String> {
     std::env::var("SECMP_CT_SCALE").ok()
@@ -3312,8 +3902,8 @@ fn tr_targets(n: usize) -> [Target; 5] {
 
 /// Every target (`evaluate`), then the inline A/A control over the full target set (ADR-041 (3)) and the
 /// sensitivity control (Amendment 1 (2)); the third value is the reason of a `CONTROL_FAIL` run (either control
-/// failed, or the A/A′ placement control or one of the two same-content controls gave FAIL, ADR-042 and its
-/// Amendments 2 and 3; every target verdict is then `CONTROL_FAIL`).
+/// failed, or the A/A′ placement control or one of the three same-content controls gave FAIL, ADR-042 and its
+/// Amendments 2 and 3, TEST-SPEC-M5 CT-06; every target verdict is then `CONTROL_FAIL`).
 fn run(
     rules: Rules,
 ) -> Result<(Clock, Vec<Outcome>, Option<String>, Sensitivity), secmp_crypto::Error> {
@@ -3327,6 +3917,7 @@ fn run(
         .into_iter()
         .chain(tr_targets(n))
         .chain(hx_targets(n))
+        .chain(m5_targets(n))
     {
         out.push(evaluate(target, &mut stream, &clock, rules)?);
     }
@@ -3348,6 +3939,13 @@ fn run(
         rules,
         HX_SAME_CONTENT,
         "ADR-042 Amendment 3",
+    ));
+    reasons.extend(same_content_failure(
+        &out,
+        &clock,
+        rules,
+        LINK_SAME_CONTENT,
+        "ADR-042 Amendment 2 rule, TEST-SPEC-M5 CT-06",
     ));
     let control_fail = (!reasons.is_empty()).then(|| reasons.join("; "));
     if control_fail.is_some() {
@@ -3670,8 +4268,13 @@ const SAME_CONTENT: &str = "same_content_control";
 /// The name of the HX same-content control (ADR-042 Amendment 3; `expect::CT_TARGETS`).
 const HX_SAME_CONTENT: &str = "hx_same_content_control";
 
-/// ADR-042 Amendment 2 (`same_content_control`, the TR preparation path) and Amendment 3 (`hx_same_content_control`,
-/// the HX one; `adr` names the decision): a same-content control is judged like a target; if its verdict is FAIL, a
+/// The name of the LINK same-content control (TEST-SPEC-M5 CT-06, the ADR-042 Amendment 2 rule for the new
+/// 4352-byte frame preparation path; `expect::CT_LINK_SAME_CONTENT_CONTROL`).
+const LINK_SAME_CONTENT: &str = "link_same_content_control";
+
+/// ADR-042 Amendment 2 (`same_content_control`, the TR preparation path), Amendment 3 (`hx_same_content_control`, the
+/// HX one) and TEST-SPEC-M5 CT-06 (`link_same_content_control`, the LINK frame one; `adr` names the decision): a
+/// same-content control is judged like a target; if its verdict is FAIL, a
 /// preparation path that differs by class alone reaches the effect floor and the run is `CONTROL_FAIL` with this
 /// reason (its Δ at the deciding crop in effect floors of each measurement). `None` if it passed, showed a sub-floor
 /// shift or was not measured (NOT MEASURABLE fails the run on its own).

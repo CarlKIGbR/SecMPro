@@ -1,0 +1,92 @@
+# ct local run, M5 Phase B ct targets (TEST-SPEC-M5 (g) CT-01…CT-06), SECMP_CT_SCALE=10 (local evidence only: the
+# gate refuses a scaled report; CI's `ct` job is the arbiter). Built from the working tree on 6665c78 (m05-link) with
+# the bench change uncommitted: crates/secmp-testkit/benches/ct.rs blob f8af4f00d4b8e251c813173b1c057d955e3bcda4.
+# `blend` and the preparation path are unchanged (ADR-042 Am. 4; no disassembly check needed).
+# Apple M1 Pro (cntvct_el0, tick 41.667 ns, floor 1 tick = 41.667 ns); NOT a quiet host: other agents worked in the
+# same checkout (one ProVerif run in parallel at the start), so the timings are noisy.
+# Bench binary target/release/deps/ct-e6d882ede7799922, sha256
+# 66e1dcbedc9c68db6dc160a4ac017a3134462ee5120d2b8ecfbcb67d815cc7b6 (= the report's bench_sha256).
+# 1048.1 s elapsed at the last progress line (ct-progress-local-scale10.jsonl, 106 lines); the six new targets
+# 664.4 s -> 829.4 s plus their A/A phases (~42 s).
+# Report: ct-report-local-scale10.json (sha256 514aba5c37e5b772e76165da6dae082f4c4d5d8a61b2c8a8816b150d6319b7a6).
+
+$ env PATH=/Users/c.carl/.cargo/bin:... SECMP_CT_SCALE=10 cargo bench --locked -p secmp-testkit --features kat --bench ct > target/tmp/ct-scale10.log 2>&1
+    Finished `bench` profile [optimized] target(s) in 0.19s
+     Running benches/ct.rs (target/release/deps/ct-e6d882ede7799922)
+(exit status 0: run verdict PASS)
+
+# verdict lines of the report (target/tmp/ct_m5_summary.py; Δ = class 0 − class 1 at the crop shown, which is the
+# deciding crop or, for a PASS, the first measurement's max-|t| crop; floors = Δ / the measurement's effect floor)
+run_verdict PASS | run_reason None | secmp_ct_scale 10
+timer cntvct_el0 | tick_ns 41.6666667361111 | clock q_eff_ticks 1.0 | host {"cpu_model": "Apple M1 Pro", "microcode": "unknown"}
+bench_sha256 66e1dcbedc9c68db6dc160a4ac017a3134462ee5120d2b8ecfbcb67d815cc7b6
+min_leak_control: decision FAIL | deciding_crop p95 | caught True
+
+control_variable_time_compare      PASS             k=26
+tag_compare                        PASS             k=1
+msg_open_reject                    PASS             k=2
+caead_open_reject                  PASS             k=1
+sas                                PASS             k=1
+caead_derive                       PASS             k=16
+caead_aead_reject                  PASS             k=2
+caead_com_compare                  PASS             k=1
+caead_open_reject_samekey          PASS             k=1
+aa_prime_control                   SUB_FLOOR_SHIFT  k=2
+tr_decrypt_reject_hdr_key          PASS             k=1
+tr_decrypt_reject_body_tag         PASS             k=1
+tr_decrypt_reject_ct_pq            PASS             k=1
+tr_decrypt_reject_skipped          PASS             k=1
+same_content_control               PASS             k=1
+inv_fingerprint_compare            PASS             k=1
+x25519_zero_check                  PASS             k=1
+hx_accept_reject_inner             PASS             k=1
+hx_accept_reject_first_msg         PASS             k=1
+hx_same_content_control            PASS             k=1
+link_hs1_reject_mac1               PASS             k=1 n=100000 decisive=None
+   classes: 'mac1 differs in byte 0' / 'mac1 differs in byte 31'
+   calibration median 91000.0 ns | floor first 1.0 ticks (41.667 ns) q_eff 1.0 (clock)
+   at p75: first t -2.28, delta -4.99 ticks (-207.85 ns, -4.99 floors) | second t -0.15, delta -0.37 ticks (-15.38 ns, -0.37 floors)
+   max|t| first 2.283 at p75 | second 1.639 at p90 | A/A max|t| 2.387 at p75
+   site None | precheck {"check": "the class's outcome, and the unmodified input passes the same call (no reject-site tag on this path)", "compare": "mac1 (spec \u00a78.3: compared after Decaps, before the relay draws)", "expected": ["Err(Rejected)", "Err(Rejected)"], "fixtures": 5, "observed": ["Err(Rejected)", "Err(Rejected)"], "passed": true, "twin": {"expected": "Ok", "observed": "Ok"}}
+link_hs2_reject_mac2               PASS             k=1 n=100000 decisive=None
+   classes: 'mac2 differs in byte 0' / 'mac2 differs in byte 31'
+   calibration median 119625.0 ns | floor first 1.0 ticks (41.667 ns) q_eff 1.0 (clock)
+   at p75: first t 1.50, delta 6.38 ticks (265.93 ns, 6.38 floors) | second t 0.14, delta 0.16 ticks (6.52 ns, 0.16 floors)
+   max|t| first 1.495 at p75 | second 1.53 at p99 | A/A max|t| 1.139 at p75
+   site None | precheck {"check": "the class's outcome, and the unmodified input passes the same call (no reject-site tag on this path)", "compare": "mac2 (spec \u00a78.3: compared after Decaps, before the link keys are derived)", "expected": ["Err(Rejected)", "Err(Rejected)"], "fixtures": 5, "observed": ["Err(Rejected)", "Err(Rejected)"], "passed": true, "twin": {"expected": "Ok", "observed": "Ok"}}
+link_frame_open_reject             PASS             k=1 n=100000 decisive=None
+   classes: 'tag differs in byte 0' / 'tag differs in byte 15'
+   calibration median 6916.7 ns | floor first 1.0 ticks (41.667 ns) q_eff 1.0 (clock)
+   at p99: first t -0.85, delta -0.57 ticks (-23.74 ns, -0.57 floors) | second t 1.08, delta 0.70 ticks (29.24 ns, 0.70 floors)
+   max|t| first 0.847 at p99 | second 1.121 at p95 | A/A max|t| 0.909 at p95
+   site None | precheck {"check": "the class's outcome, and the unmodified input passes the same call (no reject-site tag on this path)", "compare": "frame AEAD tag (spec \u00a78.4: Link::open at the expected counter)", "expected": ["Err(Rejected), recv counter Some(0)", "Err(Rejected), recv counter Some(0)"], "fixtures": 5, "observed": ["Err(Rejected), recv counter Some(0)", "Err(Rejected), recv counter Some(0)"], "passed": true, "twin": {"expected": "Ok", "observed": "Ok"}}
+q_queue_new_reject_token           PASS             k=31 n=100000 decisive=None
+   classes: 'token differs in byte 0' / 'token differs in byte 31'
+   calibration median 150.5 ns | floor first 1.0 ticks (41.667 ns) q_eff 1.0 (clock)
+   at p90: first t 1.35, delta 0.02 ticks (1.02 ns, 0.02 floors) | second t 0.90, delta 0.01 ticks (0.48 ns, 0.01 floors)
+   max|t| first 1.351 at p90 | second 1.292 at p99 | A/A max|t| 1.365 at p50
+   site None | precheck {"check": "the class's outcome, and the unmodified input passes the same call (no reject-site tag on this path)", "compare": "access token (spec \u00a79.6: HMAC-SHA-256 recomputed, then compared with ct_eq)", "expected": ["Ok(false)", "Ok(false)"], "fixtures": 7, "observed": ["Ok(false)", "Ok(false)"], "passed": true, "twin": {"expected": "Ok(true)", "observed": "Ok(true)"}}
+tr_decrypt_trial_open_position     PASS             k=1 n=100000 decisive=None
+   classes: 'header opens under the first candidate key (hk_1, trial 0 of the 2 distinct skipped header keys of §7.4 step 1; entry 0 of 4), body tag wrong in byte 0' / 'header opens under the last candidate key (hk_2, trial 1 of the 2 distinct skipped header keys of §7.4 step 1; entry 2 of 4), body tag wrong in byte 0'
+   calibration median 26625.0 ns | floor first 1.0 ticks (41.667 ns) q_eff 1.0 (clock)
+   at p99: first t -1.18, delta -1.63 ticks (-68.05 ns, -1.63 floors) | second t -0.85, delta -1.23 ticks (-51.15 ns, -1.23 floors)
+   max|t| first 1.179 at p99 | second 0.942 at p95 | A/A max|t| 1.478 at p75
+   site 'body MAC' | precheck {"check": "Err(Rejected) and the kat reject-site tag", "expected": ["Err(Rejected), site body MAC", "Err(Rejected), site body MAC"], "fixtures": 5, "observed": ["Err(Rejected), site body MAC", "Err(Rejected), site body MAC"], "passed": true, "twin": null}
+link_same_content_control          PASS             k=1 n=100000 decisive=None
+   classes: 'the class-1 frame of link_frame_open_reject (tag differs in byte 15)' / 'the same frame'
+   calibration median 7041.7 ns | floor first 1.0 ticks (41.667 ns) q_eff 1.0 (clock)
+   at raw: first t 1.35, delta 2.24 ticks (93.50 ns, 2.24 floors) | second t -0.97, delta -2.19 ticks (-91.23 ns, -2.19 floors)
+   max|t| first 1.349 at raw | second 1.358 at p75 | A/A max|t| 1.051 at p50
+   site None | precheck {"check": "the class's outcome, and the unmodified input passes the same call (no reject-site tag on this path)", "compare": "frame AEAD tag (spec \u00a78.4: Link::open at the expected counter)", "expected": ["Err(Rejected), recv counter Some(0)", "Err(Rejected), recv counter Some(0)"], "fixtures": 5, "observed": ["Err(Rejected), recv counter Some(0)", "Err(Rejected), recv counter Some(0)"], "passed": true, "twin": {"expected": "Ok", "observed": "Ok"}}
+
+# the gate's reading of the same report (`cargo xtask ct-check target/ct-report.json`, exit 1 as expected for a
+# scaled run); its 28 refusals split by target/tmp/ct_check_filter.py:
+#   1  "a shortened run (secmp_ct_scale = "10"); the gate runs the full sample counts"
+#   26 "<target> measured Some(100000) samples, expect 1000000" (sas: 2000 / 20000), one per target
+#   1  "run verdict PASS with a failing target" (derived from the 27 above)
+# no other refusal: every verdict, control (positive, A/A, A/A′, three same-content controls, min_leak_control) and
+# batch record re-derives.
+# site claims of the report (target/tmp/ct_sites.py): the 11 targets with a site claim exactly the pairs of
+# expect::CT_TARGET_SITES (X-08); link_hs1_reject_mac1, link_hs2_reject_mac2, link_frame_open_reject,
+# q_queue_new_reject_token and link_same_content_control claim no site (SiteCheck::Twin) and carry a passed pre-check
+# with their positive twin.

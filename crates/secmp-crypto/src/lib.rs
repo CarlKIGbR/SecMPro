@@ -85,4 +85,4 @@ pub use tr_kdf::{kdf_ck, kdf_rk, tr_init};
 #[cfg(feature = "kat")]
 pub use vector_stream::VectorStream;
 pub use x25519::{X25519_LEN, X25519Public, X25519Secret};
-pub use zeroize::{Zeroize, Zeroizing};
+pub use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};

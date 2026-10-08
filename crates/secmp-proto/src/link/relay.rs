@@ -135,15 +135,28 @@ impl RelayKeys {
     }
 }
 
-/// A connection that has not sent anything yet: waiting for `HELLO`.
+/// Marker: every secret field (`relay_sig`, the static pair of `kid`, the access key) wipes its memory on drop.
+impl secmp_crypto::ZeroizeOnDrop for RelayKeys {}
+
+/// A connection that has not sent anything yet: waiting for `HELLO`; the relay holds one key generation.
 #[must_use]
 pub const fn accept(keys: &RelayKeys) -> AwaitHello<'_> {
-    AwaitHello { keys }
+    AwaitHello {
+        ring: core::slice::from_ref(keys),
+    }
+}
+
+/// As [`accept`] for a relay that holds several key generations during a rotation (spec §8.2 "overlapping
+/// validity"): `ring` in ascending `kid` order; `RELAYINFO` announces the last (newest) generation, and `HS1` may
+/// name any generation of the ring. An empty ring answers no `HELLO`.
+#[must_use]
+pub const fn accept_ring(ring: &[RelayKeys]) -> AwaitHello<'_> {
+    AwaitHello { ring }
 }
 
 /// The relay before `HELLO`.
 pub struct AwaitHello<'k> {
-    keys: &'k RelayKeys,
+    ring: &'k [RelayKeys],
 }
 
 impl<'k> AwaitHello<'k> {
@@ -151,23 +164,24 @@ impl<'k> AwaitHello<'k> {
     /// matter who sent it.
     ///
     /// # Errors
-    /// [`Error::Rejected`] if `record` is not exactly a `HELLO` record.
+    /// [`Error::Rejected`] if `record` is not exactly a `HELLO` record, or the ring is empty.
     pub fn on_hello(self, record: &[u8], valid_until: u64) -> Result<(Vec<u8>, AwaitHs1<'k>)> {
         Hello::decode(record)?;
-        let info = self.keys.relay_info_record(valid_until)?;
-        Ok((info, AwaitHs1 { keys: self.keys }))
+        let current = self.ring.last().ok_or(Error::Rejected)?;
+        let info = current.relay_info_record(valid_until)?;
+        Ok((info, AwaitHs1 { ring: self.ring }))
     }
 }
 
 /// The relay after `RELAYINFO`: waiting for `HS1`.
 pub struct AwaitHs1<'k> {
-    keys: &'k RelayKeys,
+    ring: &'k [RelayKeys],
 }
 
 impl AwaitHs1<'_> {
     /// Process `HS1` and answer with the `HS2` record and the established [`Link`] (spec §8.3).
     ///
-    /// The decoder carries the §4.1 obligations on `e_c`, `pk_e1` and `ek_c`; `kid` must be the generation held;
+    /// The decoder carries the §4.1 obligations on `e_c`, `pk_e1` and `ek_c`; `kid` must be a generation held;
     /// `Decaps` binds the relay's own static keys into the combiner; `mac1` is compared in constant time **before**
     /// the relay draws anything. Then `sk_er` and `m2` are drawn for `HybridKEM-768.Encaps((e_c, ek_c))`.
     ///
@@ -175,11 +189,13 @@ impl AwaitHs1<'_> {
     /// [`Error::Rejected`] for any failed check (no randomness drawn); [`Error::Unavailable`] if randomness or
     /// locked memory is unavailable.
     pub fn on_hs1(self, record: &[u8], entropy: &mut impl Entropy) -> Result<(Vec<u8>, Link)> {
-        let keys = self.keys;
         let hs1 = Hs1::decode(record)?;
-        if hs1.kid != keys.kid {
-            return Err(Error::Rejected);
-        }
+        // the kid is public (it is in the cleartext record): a plain lookup
+        let keys = self
+            .ring
+            .iter()
+            .find(|k| k.kid == hs1.kid)
+            .ok_or(Error::Rejected)?;
         let ct1 = HybridKem1024Ciphertext::new(
             X25519Public::from_bytes_checked(hs1.pk_e1.as_bytes())?,
             MlKem1024Ct::from_bytes(hs1.ct_kem.as_slice())?,

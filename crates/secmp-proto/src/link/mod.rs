@@ -38,6 +38,25 @@ pub const MAX_VALIDITY_SECS: u64 = 5_184_000;
 /// new link instead (ADR-048 (OPEN-M5-03)).
 pub const LINK_MAX_FRAMES: u64 = 1 << 20;
 
+/// `F` (`FETCH_BATCH`, spec §4.2): the `CELLR` frames of every `FETCH` response.
+pub const FETCH_BATCH: usize = 4;
+
+/// `F_M` (`FETCH_MULTI_BATCH`, spec §4.2): the `CELLR` frames of every `FETCH_MULTI` response.
+pub const FETCH_MULTI_BATCH: usize = 8;
+
+/// `QUEUE_CAPACITY` (spec §4.2): cells per queue; a `SEND` to a full queue evicts the oldest (§9.5).
+pub const QUEUE_CAPACITY: usize = 128;
+
+/// `CELL_TTL` in hours (spec §4.2: 7 days).
+pub const CELL_TTL_HOURS: u32 = 168;
+
+/// `QUEUE_IDLE_TTL` in hours (spec §4.2: 30 days).
+pub const QUEUE_IDLE_TTL_HOURS: u32 = 720;
+
+/// `LINKDATA_TTL` in hours (spec §4.2: 30 days): the latest `expires_bucket` a `LINK_PUT` may name (§9.3,
+/// ADR-048 (o)).
+pub const LINKDATA_TTL_HOURS: u32 = 720;
+
 /// The error of the link layer. [`Error::Rejected`] is the one verdict on received bytes (spec §8.5); the others
 /// are local conditions that never reach the wire.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -143,5 +162,13 @@ mod tests {
     fn limits_are_the_spec_values() {
         assert_eq!(MAX_VALIDITY_SECS, 5_184_000);
         assert_eq!(LINK_MAX_FRAMES, 1_048_576);
+        assert_eq!(
+            (FETCH_BATCH, FETCH_MULTI_BATCH, QUEUE_CAPACITY),
+            (4, 8, 128)
+        );
+        assert_eq!(
+            (CELL_TTL_HOURS, QUEUE_IDLE_TTL_HOURS, LINKDATA_TTL_HOURS),
+            (168, 720, 720)
+        );
     }
 }

@@ -143,6 +143,9 @@ macro_rules! hybrid_kem {
             dk: $dk,
         }
 
+        /// Marker: both fields wipe their locked pages on drop.
+        impl zeroize::ZeroizeOnDrop for $sk {}
+
         impl $sk {
             /// A new random key.
             ///

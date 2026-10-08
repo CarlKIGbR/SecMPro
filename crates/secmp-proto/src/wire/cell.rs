@@ -47,6 +47,13 @@ impl Cell {
         &self.0
     }
 
+    /// The buffer itself, without a copy: the relay keeps a received cell in this allocation and wipes it when the
+    /// cell is deleted (spec §9.7 item 5).
+    #[must_use]
+    pub fn into_boxed(self) -> Box<[u8; CELL_LEN]> {
+        self.0
+    }
+
     /// The four parts.
     ///
     /// # Errors

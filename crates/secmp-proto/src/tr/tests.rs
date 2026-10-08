@@ -404,7 +404,7 @@ fn old_skipped() -> Result<(RatchetState, RatchetState, Vec<u8>)> {
 /// The header key and message key of the first skipped entry.
 fn front_entry(s: &RatchetState) -> Result<(SecretBytes<32>, SecretBytes<32>)> {
     let e = s.skipped.front().ok_or(Error::Rejected)?;
-    Ok((key(Some(&e.hk))?, key(Some(&e.mk))?))
+    Ok((key(Some(&e.hk))?, key(Some(e.mk()))?))
 }
 
 /// 4096 random bytes.
@@ -1080,11 +1080,8 @@ fn encrypt_refused_after_sealing_hands_back_the_old_state() -> Result<()> {
     let (_, mut b, _) = old_skipped()?;
     let (hk, mk) = front_entry(&b)?;
     while b.skipped.len() <= MAX_SKIPPED {
-        b.skipped.push_back(SkippedKey {
-            hk: key(Some(&hk))?,
-            n: 0,
-            mk: key(Some(&mk))?,
-        });
+        b.skipped
+            .push_back(SkippedKey::new(key(Some(&hk))?, 0, key(Some(&mk))?));
     }
     let ck_s = key(b.ck_s.as_ref())?;
     let n_s = b.n_s;
@@ -1369,7 +1366,7 @@ fn ratchet_skip_stores_exactly_the_last_min_gap_256_keys() -> Result<()> {
             .skip(usize::try_from(first).map_err(|_| Error::Rejected)?);
         for (e, (n, mk)) in b.skipped.iter().zip(expected) {
             assert_eq!(e.n, n, "gap {gap}");
-            assert!(bool::from(e.hk.ct_eq(&hk) & e.mk.ct_eq(mk)), "gap {gap}");
+            assert!(bool::from(e.hk.ct_eq(&hk) & e.mk().ct_eq(mk)), "gap {gap}");
         }
         let mut b = b;
         if let Some(older) = first.checked_sub(1) {
@@ -1681,7 +1678,7 @@ impl Raw {
             skipped: s
                 .skipped
                 .iter()
-                .map(|e| (secret_vec(&e.hk), e.n, secret_vec(&e.mk)))
+                .map(|e| (secret_vec(&e.hk), e.n, secret_vec(e.mk())))
                 .collect(),
         }
     }
@@ -1821,11 +1818,8 @@ fn state_skipped_count_bound() -> Result<()> {
     let (hk, mk) = front_entry(&full)?;
     let mut full = full;
     while full.skipped.len() <= MAX_SKIPPED {
-        full.skipped.push_back(SkippedKey {
-            hk: key(Some(&hk))?,
-            n: 0,
-            mk: key(Some(&mk))?,
-        });
+        full.skipped
+            .push_back(SkippedKey::new(key(Some(&hk))?, 0, key(Some(&mk))?));
     }
     assert_eq!(full.to_bytes().err(), Some(Error::Rejected));
     Ok(())

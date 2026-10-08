@@ -64,6 +64,12 @@ name = "link"
 path = "tests/link/main.rs"
 required-features = ["kat"]
 
+# The work counts of the TR header trial and the skipped-key lookup (M5 TEST-SPEC G-01, G-02; M4 review R-42): they
+# read the counting accessor `tr::TRIAL_COUNTS_KAT`, which exists only with feature `kat`.
+[[test]]
+name = "tr_trial_counts"
+required-features = ["kat"]
+
 
 
 

@@ -86,6 +86,25 @@ fn link_entries() -> [(&'static str, usize); 6] {
     ]
 }
 
+/// The structured relay targets (M5 Phase B): the longest input the harness reads.
+fn relay_entries() -> [(&'static str, usize); 2] {
+    // the longest command: opcode, cmd_seq byte, count byte, 12 FETCH_MULTI entries of (key byte, ack byte)
+    let command = sum(&[1, 1, 1, 12 * 2]);
+    // split byte, kind byte, u16 length, then the largest frame payload (4335 B)
+    let unit = sum(&[1, 1, 2, FRAME_PLAINTEXT_LEN.saturating_sub(1)]);
+    [
+        // a configuration byte, then at most 160 commands
+        ("relay_executor", sum(&[1, command.saturating_mul(160)])),
+        // a configuration byte, then at most 16 units
+        ("relay_link_session", sum(&[1, unit.saturating_mul(16)])),
+    ]
+}
+
+/// The M5 targets: the link/Q decoders and the structured relay targets.
+fn m5_entries() -> impl Iterator<Item = (&'static str, usize)> {
+    link_entries().into_iter().chain(relay_entries())
+}
+
 #[test]
 fn fuzz_max_len_is_the_largest_valid_input_plus_one() -> Result<(), Error> {
     // the largest `HandshakeBody`: a 64-byte name with an avatar, one route of an unknown kind with a full blob
@@ -186,7 +205,7 @@ fn fuzz_max_len_is_the_largest_valid_input_plus_one() -> Result<(), Error> {
         ),
     ]
     .into_iter()
-    .chain(link_entries())
+    .chain(m5_entries())
     .collect();
     assert_eq!(handshake, 65_642);
     assert_eq!(send, 4_146);

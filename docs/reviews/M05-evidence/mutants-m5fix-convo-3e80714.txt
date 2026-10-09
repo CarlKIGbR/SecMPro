@@ -1,0 +1,6 @@
+Found 30 mutants to test
+ok       Unmutated baseline in 16s build + 36s test
+ INFO Auto-set test timeout to 181s
+MISSED   crates/secmp-testkit/src/harness/convo.rs:148:9: replace Side::set_send_cap with () in 0s build + 35s test
+MISSED   crates/secmp-testkit/src/harness/convo.rs:153:9: replace Side::set_recv_cap with () in 0s build + 34s test
+30 mutants tested in 11m: 2 missed, 23 caught, 5 unviable

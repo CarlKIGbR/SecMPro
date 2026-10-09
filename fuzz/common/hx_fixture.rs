@@ -97,7 +97,7 @@ impl Fixture {
             .unwrap();
         let uri = invitation_uri(&issued.invitation).unwrap().to_string();
         let blob = issued.blob.encode().unwrap().to_vec();
-        let record = store.record(&issued.invitation.ld_id).unwrap().duplicate().unwrap();
+        let record = store.record(&issued.invitation.ld_id).unwrap().duplicate_kat().unwrap();
         let accepted = invitee_accept(&uri, &blob, NOW).unwrap();
         let route = RouteDescriptor::RelayQueue(RelayQueue {
             relay: relay_ref(20),
@@ -117,10 +117,10 @@ impl Fixture {
             &mut FixedEntropy::new(&draws),
         )
         .unwrap();
-        let cells = hc
-            .release(&state, |_, _| Ok::<(), secmp_proto::Error>(()))
-            .unwrap()
-            .to_vec();
+        let cells = Vec::from(
+            hc.release(&state, |_, _| Ok::<(), secmp_proto::Error>(()))
+                .unwrap(),
+        );
         // K_id from the initiator's values: DH3 = EK × SPK_dh, DH4 = EK × OPK_dh, ss_spk and ss_opk from the
         // encapsulation randomness
         let bundle = &accepted.link_data().bundle;

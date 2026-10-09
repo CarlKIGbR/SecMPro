@@ -4,7 +4,11 @@
 //! opcode of the other direction, the reserved `SKEY` (0x02) and every unknown opcode reject (`SCHEMA-4.8` D-6).
 //! A `CELLR` is decoded in the context of the request it answers (D.2: "For FETCH, rid is zero on present 0/1").
 
-use crate::codec::{Decode, Encode, Reader, Writer, pad, unpad};
+use core::ops::Deref;
+
+use secmp_crypto::ZeroizeOnDrop;
+
+use crate::codec::{Decode, Encode, Reader, Writer, pad, unpad, wipe};
 use crate::error::{Error, Result};
 use crate::keys::{Ed25519Pk, Ed25519Sig};
 use crate::sizes::{
@@ -127,7 +131,8 @@ impl ContIdx {
     }
 }
 
-/// `CONT = idx u8 ‖ data[4100]` (both directions).
+/// `CONT = idx u8 ‖ data[4100]` (both directions). `data` is wiped when the `CONT` drops (spec §9.7 item 5; M5
+/// review C-4, R-111): an inbound part once the assembler has copied it, an outbound one once its frame is sealed.
 #[derive(Clone, PartialEq, Eq)]
 #[cfg_attr(test, derive(Debug))]
 pub struct Cont {
@@ -136,6 +141,46 @@ pub struct Cont {
     /// The next 4100 bytes of the blob.
     pub data: Box<[u8; CONT_DATA_LEN]>,
 }
+
+impl Drop for Cont {
+    fn drop(&mut self) {
+        wipe(self.data.as_mut_slice());
+        #[cfg(test)]
+        crate::wire::wipe_log::note("Cont");
+    }
+}
+
+impl ZeroizeOnDrop for Cont {}
+
+/// `blob_part[4160]` of `LINK_PUT` and `LINKR` (frame 1 of 3, D.2): the first 4160 bytes of a link-data blob on the
+/// heap, wiped when dropped (spec §9.7 item 5; M5 review C-4, R-111) — an inbound part once the assembler has copied
+/// it, an outbound one ([`crate::link::cont::split_blob`]) once its frame is sealed.
+#[cfg_attr(test, derive(PartialEq, Eq, Debug))]
+pub struct BlobPart(Box<[u8; BLOB_PART_LEN]>);
+
+impl From<Box<[u8; BLOB_PART_LEN]>> for BlobPart {
+    fn from(bytes: Box<[u8; BLOB_PART_LEN]>) -> Self {
+        Self(bytes)
+    }
+}
+
+impl Deref for BlobPart {
+    type Target = [u8; BLOB_PART_LEN];
+
+    fn deref(&self) -> &[u8; BLOB_PART_LEN] {
+        &self.0
+    }
+}
+
+impl Drop for BlobPart {
+    fn drop(&mut self) {
+        wipe(self.0.as_mut_slice());
+        #[cfg(test)]
+        crate::wire::wipe_log::note("BlobPart");
+    }
+}
+
+impl ZeroizeOnDrop for BlobPart {}
 
 impl Cont {
     fn encode_to(&self, w: &mut Writer) {
@@ -152,7 +197,6 @@ impl Cont {
 }
 
 /// A request command and its fields (D.2).
-#[derive(Clone)]
 #[cfg_attr(test, derive(PartialEq, Eq, Debug))]
 pub enum RequestCmd {
     /// `0x01 QUEUE_NEW recv_pk[32] ‖ send_pk[32] ‖ token[32] ‖ sig[64]`.
@@ -211,8 +255,8 @@ pub enum RequestCmd {
         token: [u8; HASH_LEN],
         /// By the owner key, over the fields and `SHA-256(blob)`.
         sig: Ed25519Sig,
-        /// The first 4160 bytes of the blob.
-        blob_part: Box<[u8; BLOB_PART_LEN]>,
+        /// The first 4160 bytes of the blob (wiped on drop).
+        blob_part: BlobPart,
     },
     /// `0x08 LINK_GET ld_id[16] ‖ mode u8 ‖ sig[64]` (zeros when mode = 0).
     LinkGet {
@@ -363,7 +407,7 @@ impl RequestCmd {
                 owner_pk: Ed25519Pk::decode_from(r)?,
                 token: r.array()?,
                 sig: Ed25519Sig::decode_from(r)?,
-                blob_part: r.boxed()?,
+                blob_part: BlobPart(r.boxed()?),
             },
             opcode::LINK_GET => {
                 let ld_id = r.array()?;
@@ -407,7 +451,6 @@ pub(crate) mod kani_stubs {
 }
 
 /// A request frame plaintext.
-#[derive(Clone)]
 #[cfg_attr(test, derive(PartialEq, Eq, Debug))]
 pub struct Request {
     /// Per-link command sequence number (spec §9.2).
@@ -505,7 +548,6 @@ pub enum CellrError {
 }
 
 /// A `CELLR` response `present u8 ‖ rid[16] ‖ cell_id u64 ‖ cell[4096]` (D.2).
-#[derive(Clone)]
 #[cfg_attr(test, derive(PartialEq, Eq, Debug))]
 pub enum Cellr {
     /// `present = 0`: a dummy — `rid` and `cell_id` zero, `cell` random.
@@ -568,13 +610,9 @@ impl Cellr {
         let rid: Id = r.array()?;
         let cell_id = r.u64()?;
         let cell = Cell::decode_from(r)?;
-        let error = |e| {
+        let error = |error, cell| {
             if cell_id == 0 {
-                Ok(Self::Error {
-                    error: e,
-                    rid,
-                    cell: cell.clone(),
-                })
+                Ok(Self::Error { error, rid, cell })
             } else {
                 Err(Error::Rejected)
             }
@@ -584,16 +622,15 @@ impl Cellr {
             1 if context == CellrContext::FetchMulti || rid == [0; 16] => {
                 Ok(Self::Cell { rid, cell_id, cell })
             }
-            2 => error(CellrError::NoQueue),
-            3 => error(CellrError::Auth),
-            4 => error(CellrError::Malformed),
+            2 => error(CellrError::NoQueue, cell),
+            3 => error(CellrError::Auth, cell),
+            4 => error(CellrError::Malformed, cell),
             _ => Err(Error::Rejected),
         }
     }
 }
 
 /// A response command and its fields (D.2).
-#[derive(Clone)]
 #[cfg_attr(test, derive(PartialEq, Eq, Debug))]
 pub enum ResponseCmd {
     /// `0x80 OK`.
@@ -620,8 +657,8 @@ pub enum ResponseCmd {
         present: bool,
         /// The link data was consumed.
         consumed: bool,
-        /// The first 4160 bytes of the blob (a dummy blob when absent).
-        blob_part: Box<[u8; BLOB_PART_LEN]>,
+        /// The first 4160 bytes of the blob (a dummy blob when absent; wiped on drop).
+        blob_part: BlobPart,
     },
     /// `0x8F ERR code u8`.
     Err(ErrCode),
@@ -695,7 +732,7 @@ impl ResponseCmd {
             opcode::LINKR => Self::LinkR {
                 present: r.flag()?,
                 consumed: r.flag()?,
-                blob_part: r.boxed()?,
+                blob_part: BlobPart(r.boxed()?),
             },
             opcode::ERR => Self::Err(ErrCode::from_byte(r.u8()?)?),
             opcode::RESPONSE_CONT => Self::Cont(Cont::decode_from(r)?),
@@ -706,7 +743,6 @@ impl ResponseCmd {
 }
 
 /// A response frame plaintext.
-#[derive(Clone)]
 #[cfg_attr(test, derive(PartialEq, Eq, Debug))]
 pub struct Response {
     /// Echoes the request's `cmd_seq`.
@@ -790,7 +826,7 @@ mod tests {
                 owner_pk: ed25519(13)?,
                 token: [14; 32],
                 sig: sig(15)?,
-                blob_part: Box::new([16; BLOB_PART_LEN]),
+                blob_part: Box::new([16; BLOB_PART_LEN]).into(),
             },
             RequestCmd::LinkGet {
                 ld_id: [17; 16],
@@ -884,7 +920,7 @@ mod tests {
                 ResponseCmd::LinkR {
                     present: true,
                     consumed: false,
-                    blob_part: Box::new([9; BLOB_PART_LEN]),
+                    blob_part: Box::new([9; BLOB_PART_LEN]).into(),
                 },
                 fetch,
             ),

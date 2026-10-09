@@ -872,6 +872,12 @@ dependencies = [
 [[package]]
 name = "secmp-relay"
 version = "0.0.0"
+dependencies = [
+ "rand",
+ "secmp-crypto",
+ "secmp-proto",
+ "serde_json",
+]
 
 [[package]]
 name = "secmp-store"
@@ -899,6 +905,8 @@ dependencies = [
  "ml-kem",
  "secmp-crypto",
  "secmp-proto",
+ "secmp-relay",
+ "secmp-transport",
  "serde_json",
  "sha3",
  "subtle",
@@ -907,6 +915,10 @@ dependencies = [
 [[package]]
 name = "secmp-transport"
 version = "0.0.0"
+dependencies = [
+ "secmp-crypto",
+ "secmp-proto",
+]
 
 [[package]]
 name = "secmp-ui"

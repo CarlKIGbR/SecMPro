@@ -1,0 +1,75 @@
+(* SPDX-License-Identifier: AGPL-3.0-or-later *)
+(* formal/link/lClean.pv — session lClean of CLAIMS §LINK, one file per session (OPEN-M5-16 A, LO-1) over the
+   library formal/link.pvl (model, abstractions, devices: its header). Run:
+   proverif -lib formal/link.pvl formal/link/lClean.pv
+
+   Row (formal/link.pvl 3.): no oracle, no compromise; the attacker opens its own links.
+   Queries in the order of their RESULT lines (CLAIMS §LINK gate rule):
+     L3 · L3 · L8 · L8 · L8
+     L1
+     L4 · L4
+     L6
+     L7
+   — 10 RESULT lines.
+*)
+
+const lClean: tagt.
+
+(* Secrecy assumptions (formal/link.pvl 7.): the secrets this session never reveals, and those it reveals only
+   in phase 1 ("phase 0") *)
+not x: bitstring; attacker(dhsk(lClean, iC(x))).
+not x: bitstring; attacker(kemsk(lClean, iC(x))).
+not x: bitstring; attacker(dhsk(lClean, iE(x))).
+not x: bitstring; attacker(dhsk(lClean, iR(x))).
+not x: bitstring; attacker(kemr(lClean, x)).
+not x: bitstring; attacker(sigk(lClean, iQ(x))).
+not attacker(dhsk(lClean, kRdh)).
+not attacker(kemsk(lClean, kRkem)).
+not attacker(sigk(lClean, kRsig)).
+
+(* Queries (CLAIMS §LINK), one declaration per begin event (formal/link.pvl 7.); R's pinned fingerprint is
+   h((lbl_relayfp, vk(sigk(s, kRsig)))), an honest queue key vk(sigk(s, iQ(x))). *)
+
+query sid: bitstring, ctr: bitstring, m: bitstring, kid: bitstring, h0: bitstring, h1: bitstring, k1: key,
+      k2: key, fp: bitstring, cs: bitstring, cmd: bitstring, x: bitstring;
+      (* L3 (c2r): CSend payloads of the links whose CAccept names R's pinned fp *)
+      event(CAccept(lClean, h((lbl_relayfp, vk(sigk(lClean, kRsig)))), kid, h0, h1, sid, k1, k2))
+        && event(CSend(lClean, sid, ctr, m)) && attacker(m);
+      (* L3 (r2c): RSend payloads of the links whose CAccept names R's pinned fp *)
+      event(CAccept(lClean, h((lbl_relayfp, vk(sigk(lClean, kRsig)))), kid, h0, h1, sid, k1, k2))
+        && event(RSend(lClean, sid, ctr, m)) && attacker(m);
+      (* L8: reachability — CStart *)
+      event(CStart(lClean, fp, kid, h0));
+      (* L8: the honest pair completes (RAccept and CAccept with equal arguments) *)
+      event(RAccept(lClean, kid, h0, h1, sid, k1, k2)) && event(CAccept(lClean, fp, kid, h0, h1, sid, k1, k2));
+      (* L8: R executes a command of an honest queue key *)
+      event(RExec(lClean, sid, cs, cmd, vk(sigk(lClean, iQ(x))))).
+
+query sid: bitstring, ctr: bitstring, m: bitstring, kid: bitstring, h0: bitstring, h1: bitstring, k1: key,
+      k2: key, fp: bitstring, cs: bitstring, cmd: bitstring, x: bitstring;
+      (* L1: relay authentication, key confirmation at mac2 *)
+      inj-event(CAccept(lClean, h((lbl_relayfp, vk(sigk(lClean, kRsig)))), kid, h0, h1, sid, k1, k2))
+        ==> inj-event(RAccept(lClean, kid, h0, h1, sid, k1, k2)).
+
+query sid: bitstring, ctr: bitstring, m: bitstring, kid: bitstring, h0: bitstring, h1: bitstring, k1: key,
+      k2: key, fp: bitstring, cs: bitstring, cmd: bitstring, x: bitstring;
+      (* L4 (c2r): R's frames of a link whose HS1 the honest C produced (CStart h0 = RAccept h0) *)
+      event(CStart(lClean, fp, kid, h0)) && event(RAccept(lClean, kid, h0, h1, sid, k1, k2))
+        && inj-event(RRecv(lClean, sid, ctr, m)) ==> inj-event(CSend(lClean, sid, ctr, m));
+      (* L4 (r2c) *)
+      inj-event(CRecv(lClean, sid, ctr, m)) ==> inj-event(RSend(lClean, sid, ctr, m)).
+
+query sid: bitstring, ctr: bitstring, m: bitstring, kid: bitstring, h0: bitstring, h1: bitstring, k1: key,
+      k2: key, fp: bitstring, cs: bitstring, cmd: bitstring, x: bitstring;
+      (* L6: sess_id binding of command signatures; one execution per command *)
+      inj-event(RExec(lClean, sid, cs, cmd, vk(sigk(lClean, iQ(x)))))
+        ==> inj-event(CSign(lClean, sid, cs, cmd, vk(sigk(lClean, iQ(x))))).
+
+query sid: bitstring, ctr: bitstring, m: bitstring, kid: bitstring, h0: bitstring, h1: bitstring, k1: key,
+      k2: key, fp: bitstring, cs: bitstring, cmd: bitstring, x: bitstring;
+      (* L7: akc pinning — the accepted RelayInfo carries h("SecMP-Q/1 akc" ‖ k) for the client's k *)
+      event(CAccept(lClean, fp, kid, h0, h1, sid, k1, k2)) ==> event(RInfo(lClean, kid, fp, h((lbl_akc, ak)))).
+
+process
+    Relay(lClean)
+  | ! Client(lClean)

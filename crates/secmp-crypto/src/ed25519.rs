@@ -114,6 +114,9 @@ mod strict {
 /// An Ed25519 signing key, held as its 32-byte seed in locked memory.
 pub struct Ed25519SigningKey(LockedSecret<ED25519_SEED_LEN>);
 
+/// Marker: the only field is a [`LockedSecret`], which wipes its page on drop.
+impl zeroize::ZeroizeOnDrop for Ed25519SigningKey {}
+
 impl Ed25519SigningKey {
     /// A new random key.
     ///

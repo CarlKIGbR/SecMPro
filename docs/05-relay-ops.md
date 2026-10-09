@@ -41,6 +41,8 @@ HiddenServiceEnableIntroDoSDefense 1
 HiddenServiceEnableIntroDoSRatePerSec 25
 HiddenServiceEnableIntroDoSBurstPerSec 200
 HiddenServiceNumIntroductionPoints 10
+HiddenServiceMaxStreams 64              # recommended: bounds the stream flood per rendezvous circuit (M05 review R-105, R-108); per-circuit HELLO bucket: M10 (F-1)
+HiddenServiceMaxStreamsCloseCircuit 1   # recommended with the line above
 SafeLogging 1
 Log notice stderr
 ```
@@ -110,6 +112,7 @@ LimitCORE=0
 LimitMEMLOCK=infinity
 MemoryMax=8G
 TasksMax=512
+LimitNOFILE=4096
 LogLevelMax=notice
 StandardOutput=null
 StandardError=journal
@@ -119,7 +122,7 @@ LoadCredentialEncrypted=relay-keys:/etc/secmp/relay-keys.cred
 WantedBy=multi-user.target
 ```
 
-Notes: `StandardOutput=null` — the relay never prints per-request data anyway; only start-up/shutdown notices go to stderr. Relay static keys are loaded from a systemd encrypted credential (TPM-bound where available). Target: `systemd-analyze security secmp-relay.service` exposure **≤ 2.0** (CI gate with `--offline`).
+Notes: `StandardOutput=null` — the relay never prints per-request data anyway; only start-up/shutdown notices go to stderr. Relay static keys are loaded from a systemd encrypted credential (TPM-bound where available). Target: `systemd-analyze security secmp-relay.service` exposure **≤ 2.0** (CI gate with `--offline`). `TasksMax=512` and `LimitNOFILE=4096` bound the thread-per-connection listener: the relay's connection cap (`max_connections`, M05 review C-1) stays below both, and a connection over the cap is closed before any read, without a thread.
 
 Inside the process (after binding sockets and loading credentials): `mlockall(MCL_CURRENT|MCL_FUTURE)`, `prctl(PR_SET_DUMPABLE, 0)`, Landlock (deny all filesystem access; UDP rules not needed since TCP only), seccomp filter tightening beyond systemd's (deny `execve`, `socket` creation after start, `ptrace`). These live in `secmp-sys-mem` and are covered by integration tests that assert e.g. `execve` fails inside the sandbox.
 
@@ -131,7 +134,8 @@ tor_loopback = "127.0.0.1:7443"        # C tor forwards the onion port here (no 
 direct_tls   = ""                      # e.g. "0.0.0.0:443"; empty = disabled (default)
 
 [limits]
-memory_budget_bytes = 6_000_000_000    # hard cap for cells + link data
+queue_budget_bytes    = 6_000_000_000  # queue pool: accounting bound for queue reservations, about 1 % under the allocator footprint (`budget.rs`)
+linkdata_budget_bytes = 1_000_000_000  # link-data pool: link-data reservations (`budget.rs`)
 max_links_per_conn  = 1
 handshakes_per_min_per_ip = 30         # direct mode only; onion mode has no IPs
 frames_per_sec_per_link = 20
@@ -173,7 +177,7 @@ Changing `queue_capacity`, `cell_ttl_hours` or frame sizes changes protocol beha
 
 ## 8. Capacity planning (v1)
 
-Per queue: ≤ 128 × 4096 B ≈ 512 KiB. 10 000 queues ≈ 5 GiB worst case; typical occupancy is far lower because online recipients drain continuously. CPU: negligible (AEAD on 4 KiB frames, Ed25519 verify per command). Network: a Strict-mode contact pair at `P = 10 s` costs the relay about 10 frames (≈ 44 KB) per 10 s in each direction summed; a 1 Gbit/s uplink saturates around 25 000–28 000 concurrently active pairs, and C tor's single-threaded onion-service handling (≈ 4 rendezvous circuits per pair) will likely bind earlier — measure in M10. The unit of scale beyond that is another independent relay (architecture §5.2).
+Per queue: ≤ 128 × 4096 B ≈ 512 KiB. 10 000 queues ≈ 5 GiB worst case; typical occupancy is far lower because online recipients drain continuously. CPU: AEAD on 4 KiB frames, and one Ed25519 verification per signed command, up to 32 per FETCH_MULTI, under the relay's single state lock (lock amplification: M05 review R-109, proposed `docs/01` RR row; measured in M10, F-2). Network: a Strict-mode contact pair at `P = 10 s` costs the relay about 10 frames (≈ 44 KB) per 10 s in each direction summed; a 1 Gbit/s uplink saturates around 25 000–28 000 concurrently active pairs, and C tor's single-threaded onion-service handling (≈ 4 rendezvous circuits per pair) will likely bind earlier — measure in M10. The unit of scale beyond that is another independent relay (architecture §5.2).
 
 ## 9. Hardening check script (M10 deliverable)
 

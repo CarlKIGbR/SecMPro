@@ -8,9 +8,13 @@ vectors/hx.json, so that the two cannot drift apart.
 import pathlib
 
 from secmp_ref import hx_cases
-from secmp_ref.hx_cases import INVITEE_NEGATIVES, POSITIVES, RESPONDER_NEGATIVES
+from secmp_ref.hx_cases import EXTRA, INVITEE_NEGATIVES, POSITIVES, RESPONDER_NEGATIVES
 
-OUT = pathlib.Path(__file__).resolve().parent.parent.parent / "vectors" / "SCHEMA-4.10-hx.md"
+EXTRA_POS = [e for e in EXTRA if not isinstance(e, hx_cases.ResponderNeg)]
+EXTRA_NEG = [e for e in EXTRA if isinstance(e, hx_cases.ResponderNeg)]
+ALL_RESPONDER_NEGATIVES = [*RESPONDER_NEGATIVES, *EXTRA_NEG]
+
+OUT = pathlib.Path(__file__).resolve().parent.parent.parent / "SCHEMA-4.10-hx.md"
 
 
 def _fields(layout):
@@ -23,14 +27,17 @@ HEAD = """\
 *SCHEMA §4.10 as proposed by `ref/` for brief REF-M4 (2026-09-30), from spec rev 2.3 §5, §6, §7.2–7.3, §7.6, §3 and
 App. A–D. The reviewer's decisions in the brief are written down as given; what `ref/` adds is marked
 **(proposal)**, and the reading pinned for SQ-25 is marked with the question. Weisung REF-M4-1 (2026-09-30)
-confirmed every reading and proposal, answered SQ-25 (reading A) and appended V9 and R13. The tables are generated
+confirmed every reading and proposal, answered SQ-25 (reading A) and appended V9 and R13. Weisung REF-M5-2 (2026-10-07) re-froze the file for spec rev 2.6: `inv_sid` is derived, and A1, R14 … R18 and A2 are appended. The tables are generated
 by `ref/tools/render_schema_4_10.py` from `ref/secmp_ref/hx_cases.py`, the table that generates `vectors/hx.json`.*
 
-Suite `hx`, tag `hx` (SCHEMA §3), file `vectors/hx.json`, header `"schema": 5` and `"spec": "SecMP/1 rev 2.3"`
+Suite `hx`, tag `hx` (SCHEMA §3), file `vectors/hx.json`, header `"schema": 5` and `"spec": "SecMP/1 rev 2.6"`
 (SCHEMA §1). {total} cases, one per step: {n_pos} positive, {n_inv} `invitee-reject` (V1–V9) and {n_resp}
-`respond-reject` (R1–R13). The order is the positives, V1–V8 (`hx-0009` … `hx-0016`), R1–R12 (`hx-0017` …
-`hx-0028`), then V9 (`hx-0029`) and R13 (`hx-0030`), which Weisung REF-M4-1 appended so that no earlier case index,
-and so no seed, moves (SCHEMA §1: negatives after the positives). Case *i* draws from its own stream (SCHEMA §2,
+`respond-reject` (R1–R18). The order is the positives (`hx-0001` … `hx-0008`), V1–V8 (`hx-0009` … `hx-0016`), R1–R12
+(`hx-0017` … `hx-0028`), then V9 (`hx-0029`) and R13 (`hx-0030`), which Weisung REF-M4-1 appended so that no earlier
+case index, and so no seed, moves (SCHEMA §1: negatives after the positives), and then the cases of Weisung REF-M5-2
+(**proposal**: ids, op names, stream lists): A1 (`hx-0031`), R14 … R18 (`hx-0032` … `hx-0036`) and A2 (`hx-0037`),
+appended in the same way. The file header names spec rev 2.6 (the rev-2.5 rules of §5.2, §6.1, §6.5 and §6.6 and the
+clarifications of ADR-048); a case whose bytes did not change keeps its stream. Case *i* draws from its own stream (SCHEMA §2,
 suite name `hx`, index *i*); every stream-derived value is listed in `inputs` in stream order, and the *derived*
 values follow them.
 
@@ -67,9 +74,15 @@ built exactly as the §4.8 positive row `rd_relayqueue` (`ver` 1, kind 0x01, Rel
 - `keys-I`: I's identity; `iks`, `fp`.
 - `invite`: InvitationV1 {{`ver` 1, `kind` 0x01, RelayRef {{`ver` 1, `relay_fp`, `onion` = `onion_pubkey` ‖
   SHA3-256(".onion checksum" ‖ `onion_pubkey` ‖ 0x03)[0..2] ‖ 0x03, `akc`, `direct_present` 0}}, `ld_id`, `link_key`,
-  `inviter_fp` = case 1 `fp`, `inv_sid`, `inv_send_seed`, `inv_period_s` 20, `expires`}}. `invitation` is its
-  encoding ({inv_len} B), `uri` = `"secmp://i/"` ‖ base64url without padding ({uri_len} characters in all). R
-  records (`ld_id`, `link_key`, `spk_id` 7, `opk_id` 42, `expires`) for this invitation (§5.2).
+  `inviter_fp` = case 1 `fp`, `inv_sid`, `inv_send_seed`, `inv_period_s` 20, `expires`}}. `inv_sid` is **derived**
+  (§9.1, ADR-048 (m)): SHA-256(`"SecMP-Q/1 sid"` ‖ `invq_recv_pk` ‖ Ed25519.pk(`inv_send_seed`))[0..16], where
+  `invq_recv_pk` is the Ed25519 public key of `invq_recv_seed` (the invitation queue's recipient key). The 16 bytes
+  formerly drawn for `inv_sid` are still drawn, at their old position, and discarded (`inv_sid_discarded`, reading
+  OPEN-M5-14 B), so every other draw keeps its bytes; `invq_recv_seed` and `owner_seed` (the link-data owner key,
+  §5.2) follow the last draw. Outputs: `invitation` is its encoding ({inv_len} B), `uri` = `"secmp://i/"` ‖ base64url
+  without padding ({uri_len} characters in all), and **(proposal)** `inv_sid`, `invq_recv_pk` and `owner_pk` (the
+  Ed25519 public key of `owner_seed`). R records (`ld_id`, `link_key`, `spk_id` 7, `opk_id` 42, `expires`) for this
+  invitation (§5.2).
 - `linkdata`: LinkDataV1 {{`ver` 1, case 1 `iks`, case 1 `bundle`, Profile_R, `created`}}. `linkdata` is its encoding
   without padding ({ld_len} B); `k_ld` = HKDF(`ld_id`, `link_key`, `"SecMP-INV/1 linkdata"`, 32); `blob` = `n` ‖
   CAEAD.Seal(`k_ld`, `n`, `"SecMP-INV/1 blob"` ‖ `ld_id`, pad(`linkdata`, 12288)) (12360 B).
@@ -100,6 +113,12 @@ built exactly as the §4.8 positive row `rd_relayqueue` (`ver` 1, kind 0x01, Rel
   Decrypt), `opks_post` = [].
 - `respond-garbage`: as `respond`, again from R's state after cases 1–4 (not after case 7), with `fetched` =
   [`g1`, `cell_0`, `g2`, `cell_1`, `cell_2`]; `g1` and `g2` do not open and are ignored.
+- `respond-later-group` (A1, **proposal**): as `respond`, from R's state after cases 1–4, on a `fetched` that holds a
+  complete group that R rejects, followed by case 6's cells. A complete group that is rejected is discarded, the OPK is
+  kept, and later groups with other `init_id`s are processed (§6.5 rev 2.5). The outputs are those of `respond`.
+- `respond-retained-spk` (A2, RF-1, **proposal**): as `respond`, from a state in which R holds two SPK generations:
+  the current one (`spk_id` 8) and, retained, the SPK 7 that the invitation references (§6.1 rev 2.5). R finds the
+  generation by the `spk_id` of the Outer, which must be the invitation's. The outputs are those of `respond`.
 - `invitee-reject`: I processes (`uri`, `blob`) as in `invitee-accept`, where `uri` is the case's derived `uri` if it
   lists one and else case 3's, and `blob` the case's derived `blob` if it lists one and else case 4's; it must reject
   with its single uniform error.
@@ -108,12 +127,29 @@ built exactly as the §4.8 positive row `rd_relayqueue` (`ver` 1, kind 0x01, Rel
   listed in every responder case, also where it repeats case 6's cells **(proposal)**. R8, R9 and R13 list R's
   DH-step draws after the construction draws: R's Decrypt takes the step on its working copy before the failure, as
   tr's N1 **(proposal)**; no output depends on them.
+- **Rev 2.5 rules of `respond`** (Weisung REF-M5-2; all **proposal** as to their wording in the vector file): groups
+  are processed in the order they complete. A duplicate (`init_id`, `i`) is ignored whether its bytes are identical or
+  differ (first-seen wins); a group that has completed is closed, so later chunks of its `init_id` are ignored and a
+  rejected `init_id` cannot re-form; at most 8 partial groups are stored, the oldest evicted. After a rejected complete
+  group the OPK is kept and the next group is processed; if none is accepted the op rejects, with the reference check
+  of the last rejected group (or `no-complete-envelope` if no group completed). The `first_msg` header must carry
+  `n` = 0 and `pn` = 0 (`first-msg-header`). `IKSPublic_I` must differ from `IKSPublic_R` (`reflection`, §6.6 step 2).
+  The Handshake content must contain at least one route of a known kind (`no-known-route`; SQ-29). The Outer's
+  `spk_id` must be the invitation's, and may name a retained SPK generation.
 
 #### Positive cases
 
 | # | id | op | party | `inputs`: stream order; *derived* | `outputs` (B) | step |
 |---|---|---|---|---|---|---|
 {positives}
+
+#### Rev 2.5 positive cases (A1, A2; appended by Weisung REF-M5-2, **proposal**)
+
+Both are `party` R, with `outputs` as `respond` (case 7), and `fetched` listed in `inputs`.
+
+| A | id | op | `inputs`: stream order; *derived* | `outputs` (B) | construction |
+|---|---|---|---|---|---|
+{extra}
 
 #### `invitee-reject` (base = cases 3 and 4)
 
@@ -132,14 +168,27 @@ Re-sealing draws, in this order: `inner_nonce` 24 only when Inner changes, then 
 24 each when the outer changes (brief). The checks of the reference responder are `no-complete-envelope`,
 `outer-decode` (the Outer decoder), `prekey-ids` (`spk_id`/`opk_id` not this invitation's), `opk-used` (OPK already
 deleted), `inner-open` (CAEAD.Open with `K_id`), `inner-decode` (the Inner decoder), `tr-decrypt` (§7.4),
-`content-decode` (the Content decoder) and `not-handshake` (a valid Content of another type than 0x01) — and, not
-reached by any case, `dh-zero` (the §6.4 non-zero check, defence in depth behind the §4.1(a) decoders).
+`content-decode` (the Content decoder), `not-handshake` (a valid Content of another type than 0x01), and, from
+Weisung REF-M5-2, `first-msg-header` (`n` or `pn` ≠ 0), `reflection` (`IKSPublic_I` = `IKSPublic_R`) and
+`no-known-route` (no route of kind 0x01) — and, not reached by any case, `dh-zero` (the §6.4 non-zero check, defence in depth behind the §4.1(a) decoders).
 
 | R | id | `manipulation` | R's state | `inputs`: stream order; *derived* | construction | ref check | `opks_post` |
 |---|---|---|---|---|---|---|---|
 {responder}
 
 #### Readings and questions
+
+- **SQ-29** (§6.5 rev 2.5, §9.8): "the Handshake content MUST contain at least one route of a known kind". `ref/`
+  reads "known" as the kinds a v1 responder can use, that is 0x01 (`RelayQueue`, §9.8 "v1"); 0x02 and 0x03 are marked
+  v1.1 there. R18 uses kind 0x7F and rejects under either reading. Open; blocks nothing.
+- Readings adopted without a question — REF-M5-2 (`ref/SPEC-QUESTIONS.md`): the §6.5 grouping rules above (an
+  accepted group also closes its `init_id`); the order of the rev 2.5 checks in `respond` (header `n`/`pn` after
+  Decrypt and before the Content decoder; reflection right after the Inner decoder; routes after the Handshake type
+  check); R15's header `n` = 1 is built by encrypting one message first and discarding its cell, so that R's Decrypt
+  succeeds and only the header rule rejects; R16's `pn` = 1 is set on I's TR state before encrypting; A1's rejected
+  group is case 8's R8 construction under a fresh `init_id`; RF-1's current SPK is a new generation `spk_id` 8
+  (`spk_expiry` unchanged) and its keys come from the case's own stream; `inv_sid`'s derivation draws
+  `invq_recv_seed` and `owner_seed` after the last old draw.
 
 - **SQ-25** (§5.2, §6.3, §5.5): §5.2 "`expires` … MUST be ≤ creation + 30 days" and §6.3 "`spk_expiry` MUST be ≥ the
   expiry of every invitation referencing it" bind the inviter; §5.5 does not say whether the invitee checks them
@@ -177,10 +226,20 @@ def _out(k, v):
 
 def _positives(run):
     out = []
-    for p, case, row in zip(POSITIVES, run.cases, run.rows):
+    for p, case, row in zip(POSITIVES, run.cases[:len(POSITIVES)], run.rows[:len(POSITIVES)]):
         outputs = ", ".join(_out(k, v) for k, v in case.outputs.items())
         out.append(f"| {case.i} | {row['id']} | `{p.op}` | {p.party} | {_names(p.stream, row['derived'])} | "
                    f"{outputs} | {p.text} |")
+    return "\n".join(out)
+
+
+def _extra(run):
+    out = []
+    for ex in EXTRA_POS:
+        case, row = next((c, r) for c, r in zip(run.cases, run.rows) if r.get("name") == ex.name)
+        outputs = ", ".join(_out(k, v) for k, v in case.outputs.items())
+        out.append(f"| {ex.name} | {row['id']} | `{ex.op}` | {_names(ex.stream, row['derived'])} | {outputs} | "
+                   f"{ex.text} |")
     return "\n".join(out)
 
 
@@ -203,12 +262,13 @@ def render() -> str:
     run = hx_cases.run()
     outs = {c.op: c.outputs for c in run.cases if c.outputs}
     return HEAD.format(
-        total=len(run.cases), n_pos=len(POSITIVES), n_inv=len(INVITEE_NEGATIVES), n_resp=len(RESPONDER_NEGATIVES),
+        total=len(run.cases), n_pos=len(POSITIVES) + len(EXTRA_POS), n_inv=len(INVITEE_NEGATIVES),
+        n_resp=len(ALL_RESPONDER_NEGATIVES),
         route=_fields(hx_cases.ROUTE_STREAM), content_len=len(run.ctx.content),
         inv_len=len(outs["invite"]["invitation"]), uri_len=len(outs["invite"]["uri"]),
         ld_len=len(outs["linkdata"]["linkdata"]),
         positives=_positives(run), invitee=_negatives(run, INVITEE_NEGATIVES, "invitee-reject"),
-        responder=_negatives(run, RESPONDER_NEGATIVES, "respond-reject"))
+        responder=_negatives(run, ALL_RESPONDER_NEGATIVES, "respond-reject"), extra=_extra(run))
 
 
 def main():

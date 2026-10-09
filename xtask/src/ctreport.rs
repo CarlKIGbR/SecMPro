@@ -578,6 +578,8 @@ fn ct_line(r: &Value) -> (String, String, bool) {
             " (same-content control: a FAIL makes the run CONTROL_FAIL)"
         } else if name == expect::CT_HX_SAME_CONTENT_CONTROL {
             " (HX same-content control: a FAIL makes the run CONTROL_FAIL)"
+        } else if name == expect::CT_LINK_SAME_CONTENT_CONTROL {
+            " (LINK same-content control: a FAIL makes the run CONTROL_FAIL)"
         } else {
             ""
         }
@@ -706,6 +708,36 @@ pub(crate) const M2_TARGETS: TargetSet = TargetSet {
         "caead_open_reject_samekey",
     ],
     batch_record: false,
+};
+
+/// The target set of the reports written in M4 (the committed evidence under `docs/reviews/M04-evidence/`: the
+/// current set without the six targets of TEST-SPEC-M5 (g)), for re-reading them with `cargo xtask ct-check --targets
+/// m4`.
+pub(crate) const M4_TARGETS: TargetSet = TargetSet {
+    label: "the M4 target set",
+    names: &[
+        "control_variable_time_compare",
+        "tag_compare",
+        "msg_open_reject",
+        "caead_open_reject",
+        "sas",
+        "caead_derive",
+        "caead_aead_reject",
+        "caead_com_compare",
+        "caead_open_reject_samekey",
+        "aa_prime_control",
+        "tr_decrypt_reject_hdr_key",
+        "tr_decrypt_reject_body_tag",
+        "tr_decrypt_reject_ct_pq",
+        "tr_decrypt_reject_skipped",
+        "same_content_control",
+        "inv_fingerprint_compare",
+        "x25519_zero_check",
+        "hx_accept_reject_inner",
+        "hx_accept_reject_first_msg",
+        "hx_same_content_control",
+    ],
+    batch_record: true,
 };
 
 /// M2 review C3 (a), (c): the target set is `targets` (the gate: `expect::CT_TARGETS`), each measured with the sample
@@ -914,6 +946,13 @@ fn target_findings(
                  which makes the run CONTROL_FAIL (ADR-042 Amendment 3)"
             ));
         }
+        // TEST-SPEC-M5 CT-06 (the ADR-042 Amendment 2 rule): so does the LINK same-content control
+        if name == expect::CT_LINK_SAME_CONTENT_CONTROL && verdict == "FAIL" {
+            out.push(format!(
+                "ct report: {name} FAIL in a {run_verdict} run: the LINK same-content control reached the effect \
+                 floor, which makes the run CONTROL_FAIL (ADR-042 Amendment 2, TEST-SPEC-M5 CT-06)"
+            ));
+        }
     }
     out
 }
@@ -1089,13 +1128,15 @@ pub(crate) fn ct_table_for(json: &str, targets: TargetSet) -> Result<CtTable> {
 }
 
 /// The arguments of `ct-check`: an optional `--targets m2` (the target set of the committed M2 reports, before
-/// ADR-042) or `--targets current` (the default, `expect::CT_TARGETS`), then the report files.
+/// ADR-042), `--targets m4` (that of the committed M4 reports, before TEST-SPEC-M5 (g)) or `--targets current` (the
+/// default, `expect::CT_TARGETS`), then the report files.
 fn check_args(args: &[String]) -> Result<(TargetSet, &[String])> {
-    let usage = "usage: cargo xtask ct-check [--targets current|m2] <ct-report.json>…";
+    let usage = "usage: cargo xtask ct-check [--targets current|m2|m4] <ct-report.json>…";
     let (targets, files) = match args {
         [flag, set, files @ ..] if flag == "--targets" => match set.as_str() {
             "current" => (CURRENT_TARGETS, files),
             "m2" => (M2_TARGETS, files),
+            "m4" => (M4_TARGETS, files),
             other => bail!("ct-check: unknown target set {other:?}; {usage}"),
         },
         [flag, ..] if flag.starts_with('-') => bail!("ct-check: unknown option {flag:?}; {usage}"),
@@ -1107,9 +1148,9 @@ fn check_args(args: &[String]) -> Result<(TargetSet, &[String])> {
     Ok((targets, files))
 }
 
-/// `cargo xtask ct-check [--targets current|m2] <report>…`: the gate's reading of saved reports (M2 review C3: every
+/// `cargo xtask ct-check [--targets current|m2|m4] <report>…`: the gate's reading of saved reports (M2 review C3: every
 /// committed report of the ADR-041 Amendment 1 format must still pass; the M2 reports are read against the M2 target
-/// set). Fails unless every report passes.
+/// set, the M4 reports against the M4 one). Fails unless every report passes.
 pub(crate) fn check_files(args: &[String]) -> Result<()> {
     let (targets, args) = check_args(args)?;
     say(&format!("ct-check against {}", targets.label));
@@ -2275,6 +2316,173 @@ mod tests {
         Ok(())
     }
 
+    /// TEST-SPEC-M5 X-03: `expect::CT_TARGETS` holds the six rows of TEST-SPEC-M5 (g) — CT-01…CT-05 and the LINK
+    /// same-content control CT-06 — each once, next to the M4 set, and the bench names each. CT-06 is judged as a
+    /// control, like `same_content_control`: PASS and a sub-floor shift pass; a FAIL in a FAIL run is refused (only
+    /// `CONTROL_FAIL` is consistent), and so is a label its crops do not give; a `CONTROL_FAIL` run naming it fails with
+    /// its reason alone; it is not the positive control. CT-01…CT-05 are targets: a reproduced shift at the floor is
+    /// their FAIL, with no control refusal.
+    #[test]
+    fn ct_targets_list_names_m5_targets() -> Result<()> {
+        const M5: [&str; 6] = [
+            "link_hs1_reject_mac1",
+            "link_hs2_reject_mac2",
+            "link_frame_open_reject",
+            "q_queue_new_reject_token",
+            "tr_decrypt_trial_open_position",
+            "link_same_content_control",
+        ];
+        let targets: BTreeSet<&str> = expect::CT_TARGETS.iter().copied().collect();
+        assert_eq!(targets.len(), expect::CT_TARGETS.len(), "a duplicate");
+        assert_eq!(
+            expect::CT_TARGETS.len(),
+            M4_TARGETS.names.len().saturating_add(M5.len())
+        );
+        assert!(M4_TARGETS.names.iter().all(|t| targets.contains(t)));
+        let bench = include_str!("../../crates/secmp-testkit/benches/ct.rs");
+        for name in M5 {
+            assert!(targets.contains(name), "{name}");
+            assert!(!M4_TARGETS.names.contains(&name), "{name}");
+            assert!(bench.contains(&format!("\"{name}\"")), "bench: {name}");
+        }
+        let link = expect::CT_LINK_SAME_CONTENT_CONTROL;
+        assert_eq!(link, "link_same_content_control");
+        for other in [
+            expect::CT_POSITIVE_CONTROL,
+            expect::CT_AA_PRIME_CONTROL,
+            expect::CT_SAME_CONTENT_CONTROL,
+            expect::CT_HX_SAME_CONTENT_CONTROL,
+        ] {
+            assert_ne!(link, other);
+        }
+        link_control_is_judged_as_a_control(link)?;
+        // CT-01…CT-05: a reproduced shift at the floor is the target's own FAIL, nothing else
+        for name in M5.iter().copied().filter(|n| *n != link) {
+            let fail = judged(
+                name,
+                every_crop(30.0, 30.0),
+                every_crop(25.0, 30.0),
+                "FAIL",
+                "FAIL",
+            );
+            let found = refusals(&fail)?;
+            assert!(
+                found.len() == 1
+                    && found
+                        .iter()
+                        .all(|f| f.starts_with(&format!("{name}: FAIL at p90"))),
+                "{name}: {found:?}"
+            );
+        }
+        Ok(())
+    }
+
+    /// A measurement with `t` and Δ `delta` ticks at every crop, `q_eff` 1 tick.
+    fn every_crop(t: f64, delta: f64) -> Value {
+        let crops: Vec<(&str, f64, f64)> = CROPS.iter().map(|c| (*c, t, delta)).collect();
+        measurement_with(&crops, 1.0)
+    }
+
+    /// The passing `report()` with target `name`'s two measurements and verdict as given (deciding crop p90 unless
+    /// PASS), in a run of verdict `run`.
+    fn judged(name: &str, first: Value, second: Value, verdict: &str, run: &str) -> Value {
+        let mut v = report();
+        set(&mut v, &["run_verdict"], Value::from(run));
+        let target = at(&mut v, name);
+        set(target, &["first"], first);
+        set(target, &["second"], second);
+        set(target, &["verdict"], Value::from(verdict));
+        set(
+            target,
+            &["decisive_crop"],
+            if verdict == "PASS" {
+                Value::Null
+            } else {
+                Value::from("p90")
+            },
+        );
+        v
+    }
+
+    /// TEST-SPEC-M5 X-03, CT-06: the LINK same-content control `link` is judged like `same_content_control`.
+    fn link_control_is_judged_as_a_control(link: &str) -> Result<()> {
+        let all = every_crop;
+        let with = judged;
+        // PASS (the fixture) and a sub-floor shift (reproduced, Δ 5 ticks < floor 20) pass the gate
+        let t = table(&report())?;
+        assert!(t.failed.is_empty(), "{t:?}");
+        assert!(
+            t.lines
+                .iter()
+                .any(|l| l.starts_with(&format!("{link}: PASS"))
+                    && l.ends_with(
+                        "(LINK same-content control: a FAIL makes the run CONTROL_FAIL)"
+                    ))
+        );
+        let sub = with(
+            link,
+            all(30.0, 5.0),
+            all(25.0, 5.0),
+            "SUB_FLOOR_SHIFT",
+            "PASS",
+        );
+        assert!(refusals(&sub)?.is_empty());
+        assert!(table(&sub)?.failed.is_empty());
+        // a reproduced shift at the floor, labelled FAIL in a FAIL run: refused (only CONTROL_FAIL is consistent)
+        let fail = with(link, all(30.0, 30.0), all(25.0, 30.0), "FAIL", "FAIL");
+        let found = refusals(&fail)?;
+        assert_eq!(found.len(), 2, "{found:?}");
+        assert!(
+            found
+                .iter()
+                .any(|f| f.starts_with("link_same_content_control: FAIL at p90"))
+        );
+        assert!(found.contains(
+            &"ct report: link_same_content_control FAIL in a FAIL run: the LINK same-content control reached the effect floor, which makes the run CONTROL_FAIL (ADR-042 Amendment 2, TEST-SPEC-M5 CT-06)"
+                .to_owned()
+        ));
+        // the same crops labelled as a sub-floor shift: refused by the re-derivation
+        let hidden = with(
+            link,
+            all(30.0, 30.0),
+            all(25.0, 30.0),
+            "SUB_FLOOR_SHIFT",
+            "PASS",
+        );
+        assert_eq!(
+            refusals(&hidden)?,
+            vec!["ct report: link_same_content_control SUB_FLOOR_SHIFT, but its recorded crops give {\"FAIL\"}".to_owned()]
+        );
+        // the CONTROL_FAIL run the bench writes for it: its reason is the one finding
+        let mut control_fail = with(
+            link,
+            all(30.0, 30.0),
+            all(25.0, 30.0),
+            "CONTROL_FAIL",
+            "CONTROL_FAIL",
+        );
+        let reason = "same-content control link_same_content_control FAIL at p90: identical contents through the \
+                      per-class preparation path shift the class means by 1.50 / 1.50 effect floors — the preparation \
+                      path differs by class (ADR-042 Amendment 2 rule, TEST-SPEC-M5 CT-06)";
+        set(&mut control_fail, &["run_reason"], Value::from(reason));
+        for name in expect::CT_TARGETS {
+            set(
+                at(&mut control_fail, name),
+                &["verdict"],
+                Value::from("CONTROL_FAIL"),
+            );
+        }
+        assert_eq!(
+            table(&control_fail)?.failed,
+            vec![format!("CONTROL_FAIL — {reason}")]
+        );
+        // it is not the positive control
+        let mut two = report();
+        set(at(&mut two, link), &["control"], Value::from(true));
+        assert!(refused(&two, "2 positive controls")?);
+        Ok(())
+    }
+
     /// ADR-041 Amendment 2 (M3 review R-57): a requantised record — `k_initial` 1, `k` 3, every measurement taken
     /// with k 3 — passes and its line names the re-batch; the gate reads `k` per measurement and the flag: a
     /// measurement taken with another `k`, a flag that does not fit the two batch sizes, a missing record, and a
@@ -2420,6 +2628,9 @@ mod tests {
         let (set, files) = check_args(&plain)?;
         assert_eq!((set.label, files.len()), ("expect::CT_TARGETS", 1));
         assert!(check_args(&args(&["--targets", "current", "a.json"])).is_ok());
+        let m4 = args(&["--targets", "m4", "a.json"]);
+        let (set, files) = check_args(&m4)?;
+        assert_eq!((set.label, files.len()), ("the M4 target set", 1));
         assert!(check_args(&args(&["--targets", "m3"])).is_err());
         assert!(check_args(&args(&["--targets", "m2"])).is_err());
         assert!(check_args(&args(&["--target", "m2", "a.json"])).is_err());
@@ -2704,22 +2915,26 @@ mod tests {
             .failed
             .is_empty()
         );
-        // the committed report of run 37127247911 (one measurement): the raw rule, its recorded CONTROL_FAIL
+        // the committed report of run 37127247911 (one measurement): the raw rule, its recorded CONTROL_FAIL — read
+        // against the M4 target set it was written with; against the current set it lacks the M5 targets alone
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../docs/reviews/M04-evidence/ct-report-linux-37127247911-cac6eff.json");
         let json = std::fs::read_to_string(path)?;
         let committed: Value =
             serde_json::from_str(&json).map_err(|e| Error(format!("committed report: {e}")))?;
         assert!(control_pair(&committed).is_none());
-        let t = ct_table(&json)?;
-        assert_eq!(
-            t.failed,
-            vec![
-                "CONTROL_FAIL — sensitivity control min_leak_control below the effect floor: raw Δ -11.70 ticks < \
-                 floor 26.00 ticks (1 q_eff, 10 ns)"
-                    .to_owned()
-            ]
+        let control_fail = "CONTROL_FAIL — sensitivity control min_leak_control below the effect floor: raw Δ -11.70 \
+                            ticks < floor 26.00 ticks (1 q_eff, 10 ns)";
+        let now = ct_table(&json)?;
+        assert_eq!(now.failed.len(), 2, "{:?}", now.failed);
+        assert!(now.failed.iter().any(|f| f == control_fail));
+        assert!(
+            now.failed
+                .iter()
+                .any(|f| f.contains("differ from expect::CT_TARGETS"))
         );
+        let t = ct_table_for(&json, M4_TARGETS)?;
+        assert_eq!(t.failed, vec![control_fail.to_owned()]);
         assert!(t.lines.iter().any(|l| l.starts_with(
             "min_leak_control: BELOW THE FLOOR — raw Δ -4.50 ns, floor 10.00 ns (-0.45 floors), k=1, 1000000 samples"
         )));

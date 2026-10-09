@@ -87,10 +87,35 @@ impl KemPair {
 }
 
 /// One entry of `skipped`: `(hk, n) → mk`.
+///
+/// `mk` is private to this module: outside it the message key is read only through the counting accessor
+/// [`SkippedKey::mk`] (M4 review R-42, campaign R-58), so that a reintroduced load of an entry's `mk` by a
+/// secret-derived index in the §7.4 decision changes the count of message-key reads that test
+/// `tr_skipped_lookup_touches_every_entry` checks to be exactly `|skipped|` per decryption. This module's own reads
+/// (the encoding, which writes every entry in insertion order after the decision) do not count.
 pub(crate) struct SkippedKey {
     pub(crate) hk: SecretBytes<32>,
     pub(crate) n: u32,
-    pub(crate) mk: SecretBytes<32>,
+    mk: SecretBytes<32>,
+}
+
+impl SkippedKey {
+    /// The entry `(hk, n) → mk`.
+    pub(crate) const fn new(hk: SecretBytes<32>, n: u32, mk: SecretBytes<32>) -> Self {
+        Self { hk, n, mk }
+    }
+
+    /// The entry's message key. Feature `kat` and the unit tests: every call counts one message-key read in the
+    /// second component of `tr::TRIAL_COUNTS_KAT` (reset when a 4096-byte cell's processing begins); without `kat`
+    /// and outside the tests the counting statement does not exist.
+    pub(crate) fn mk(&self) -> &SecretBytes<32> {
+        #[cfg(any(test, feature = "kat"))]
+        super::ratchet::TRIAL_COUNTS_KAT.with(|c| {
+            let (opens, mk_reads) = c.get();
+            c.set((opens, mk_reads.saturating_add(1)));
+        });
+        &self.mk
+    }
 }
 
 /// The SecMP-TR state of one session (spec §7.1). No `Clone`, `Debug` or `PartialEq`: it holds secrets. Persist

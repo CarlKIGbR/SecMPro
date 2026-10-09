@@ -34,7 +34,9 @@ fuzz_target!(|data: &[u8]| {
         };
         rest = tail;
         if selector % 4 < 3 {
-            cells.push(f.cells[usize::from(selector % 4)].clone());
+            // a copy of the honest cell (a `Cell` has no `Clone`, M5 review C-4)
+            let honest = f.cells[usize::from(selector % 4)].as_bytes();
+            cells.push(Cell::from_bytes(honest).unwrap());
         } else {
             let raw = Fixture::fit(rest, 4096);
             rest = &rest[rest.len().min(4096)..];

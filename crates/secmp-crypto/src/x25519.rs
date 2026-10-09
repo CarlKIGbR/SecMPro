@@ -18,6 +18,9 @@ pub const X25519_LEN: usize = 32;
 /// An X25519 secret (32 raw bytes, clamped inside X25519) in locked memory.
 pub struct X25519Secret(LockedSecret<X25519_LEN>);
 
+/// Marker: the only field is a [`LockedSecret`], which wipes its page on drop.
+impl zeroize::ZeroizeOnDrop for X25519Secret {}
+
 impl X25519Secret {
     /// A new random secret.
     ///

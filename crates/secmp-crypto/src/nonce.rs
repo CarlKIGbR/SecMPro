@@ -28,6 +28,18 @@ impl Nonce24 {
         Self(bytes)
     }
 
+    /// The link-frame nonce `0^16 ‖ u64be(counter)` (spec §8.4): the strictly increasing frame counter of one
+    /// direction of one link is the nonce, never transmitted. The caller (`secmp-proto::link`) derives `counter`
+    /// from its checked send counter and never uses a value twice under one key.
+    #[must_use]
+    pub fn from_link_counter(counter: u64) -> Self {
+        let mut n = [0; 24];
+        if let Some(tail) = n.last_chunk_mut::<8>() {
+            *tail = counter.to_be_bytes();
+        }
+        Self(n)
+    }
+
     /// The nonce value, e.g. to transmit it next to the ciphertext. The copy cannot be used to seal again: only
     /// a [`Nonce24`] seals.
     #[must_use]
@@ -92,6 +104,15 @@ mod tests {
         let copy = *a.as_bytes();
         assert_eq!(a.into_bytes(), copy);
         Ok(())
+    }
+
+    #[test]
+    fn link_counter_nonce_is_zero_prefix_then_u64_be() {
+        let n = Nonce24::from_link_counter(0x0102_0304_0506_0708);
+        let mut want = [0_u8; 24];
+        want[16..].copy_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
+        assert_eq!(n.as_bytes(), &want);
+        assert_eq!(Nonce24::from_link_counter(0).as_bytes(), &[0_u8; 24]);
     }
 
     #[test]

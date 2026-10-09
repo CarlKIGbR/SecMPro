@@ -1,0 +1,52 @@
+# M5 Phase B, TEST-SPEC-M5 (e) K-07 kani_executor_response_count [SQ-26]
+# tree: HEAD f574a03 plus the uncommitted Phase B working tree (crates/secmp-relay/src/kani_proofs.rs with exactly
+#   the three harnesses K-05...K-07; crates/secmp-relay/src/executor.rs with the pure `admit`/`answer` of K-05)
+# command (the gate's form): env PATH=... cargo kani --package secmp-relay
+#   one run of the package's three harnesses: Complete - 3 successfully verified harnesses, 0 failures, 3 total;
+#   wall time of the whole run about 160 s
+# Kani 0.68.0, CBMC 6.11.0, M1 Pro, macOS; the machine was shared with ProVerif runs and a cargo-mutants pass on
+#   secmp-relay (-j 3): timings are noisy
+# bound: any of the nine request opcodes, any recorded last, any cmd_seq, any rate outcome per frame; FETCH
+#   outcomes an error or 0, 1, 4, 5 cells, FETCH_MULTI outcomes (errors, cells) in (0,0) (0,3) (2,3) (6,3) (7,3)
+#   (8,1) (9,0) (9,3), every field symbolic (symbolic lengths gave no verdict in 25 min); unwind 10
+# result: VERIFICATION:- SUCCESSFUL, 113.7 s, 0 of 1883 checks failed, 6 of 6 covers satisfied
+#
+# the run (the harness line, every cover check, the summary):
+
+Checking harness kani_proofs::kani_executor_response_count...
+Check 142: kani_proofs::fetch_multi_case.cover.1
+	 - Status: SATISFIED
+	 - Description: "FETCH_MULTI with more errors than F_M"
+	 - Location: crates/secmp-relay/src/kani_proofs.rs:419:5 in function kani_proofs::fetch_multi_case
+
+Check 144: kani_proofs::fetch_multi_case.cover.2
+	 - Status: SATISFIED
+	 - Description: "errors and cells compete for F_M"
+	 - Location: crates/secmp-relay/src/kani_proofs.rs:423:5 in function kani_proofs::fetch_multi_case
+
+Check 200: kani_proofs::fetch_case.cover.1
+	 - Status: SATISFIED
+	 - Description: "FETCH with more cells than F"
+	 - Location: crates/secmp-relay/src/kani_proofs.rs:386:5 in function kani_proofs::fetch_case
+
+Check 255: kani_proofs::kani_executor_response_count.cover.1
+	 - Status: SATISFIED
+	 - Description: "a stale FETCH_MULTI is one frame"
+	 - Location: crates/secmp-relay/src/kani_proofs.rs:537:5 in function kani_proofs::kani_executor_response_count
+
+Check 256: kani_proofs::kani_executor_response_count.cover.2
+	 - Status: SATISFIED
+	 - Description: "a LINK_PUT over the rate is one frame"
+	 - Location: crates/secmp-relay/src/kani_proofs.rs:541:5 in function kani_proofs::kani_executor_response_count
+
+Check 257: kani_proofs::kani_executor_response_count.cover.3
+	 - Status: SATISFIED
+	 - Description: "an executed LINK_GET is three frames"
+	 - Location: crates/secmp-relay/src/kani_proofs.rs:545:5 in function kani_proofs::kani_executor_response_count
+
+SUMMARY:
+ ** 0 of 1883 failed (17 unreachable)
+ ** 6 of 6 cover properties satisfied
+VERIFICATION:- SUCCESSFUL
+Verification Time: 113.66859s
+Complete - 3 successfully verified harnesses, 0 failures, 3 total.

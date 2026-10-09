@@ -12,10 +12,13 @@
 //!   (test `the_aead_verifies_before_it_decrypts`), so an opening costs one keystream pass more than a rejection;
 //!   a trial decryption that opens under *every* candidate key (spec §7.4) therefore does the same total work
 //!   whichever key opens.
+//! - [`Aead::open_ct_constant_flow`] is the same opening with the same verdict and output as `open_ct` and no branch
+//!   on the verdict inside the AEAD either: it applies the keystream and recomputes the tag on every call (M4
+//!   campaign R-59, docs/01 RR-17). Only the SecMP-TR header trial (spec §7.4) uses it.
 
 use chacha20poly1305::aead::AeadInOut;
 use chacha20poly1305::{KeyInit, Tag, XChaCha20Poly1305, XNonce};
-use subtle::{Choice, ConditionallySelectable};
+use subtle::{Choice, ConditionallySelectable, ConstantTimeEq};
 use zeroize::Zeroizing;
 
 use crate::caead::{AEAD_TAG_LEN, NONCE_LEN};
@@ -98,6 +101,63 @@ impl Aead {
             .is_ok();
         let ok = Choice::from(u8::from(opened));
         // a rejected tag leaves the ciphertext in `out`: replace it by zeros without branching on the verdict
+        let rejected = !ok;
+        for b in out.iter_mut() {
+            b.conditional_assign(&0, rejected);
+        }
+        ok
+    }
+
+    /// Constant-flow opening for the SecMP-TR header trial — spec §7.4 `Open(hk, hdr_nonce, hdr_ct)` under every
+    /// candidate header key, XChaCha20-Poly1305 of the spec §3 table: the same function as [`Aead::open_ct`] (same
+    /// `Choice`, the plaintext in `out` on acceptance, zeros on rejection, `out` untouched on a wrong length), with
+    /// no branch on the verdict anywhere, also not inside the AEAD.
+    ///
+    /// **Why (M4 campaign R-59, docs/01 RR-17).** The pinned `chacha20poly1305` verifies the tag and applies the
+    /// keystream only if it verified (test `the_aead_verifies_before_it_decrypts`). In a trial decryption under every
+    /// candidate key, the one call that takes the succeeding branch sits at the position of the key that opened; on
+    /// Apple M1 Pro that shifted the decryption by ≈ 59 ns (≈ 1.4 timer floors) between the first and the last
+    /// candidate. Here every call takes one path: an encryption pass turns `out = ct` into `ct ⊕ keystream` (the
+    /// candidate plaintext; encryption and decryption apply the same keystream, RFC 8439 §2.8), a second encryption
+    /// pass over a copy of that candidate reproduces `ct` and yields the tag over `(ad, ct)` — the tag `Open`
+    /// checks —, the tags are compared with `subtle`, and `out` is zeroed with a mask if they differ. No new
+    /// construction: the result is `XChaCha20-Poly1305.Open` exactly (tests `constant_flow_rejects_like_open_ct`,
+    /// `wycheproof_xchacha20_poly1305_constant_flow_equals_open_ct`, `constant_flow_equals_open_ct_randomized`).
+    ///
+    /// **Cost.** Every call: two keystream passes and two Poly1305 passes over the message, one zeroizing heap copy
+    /// of it; `open_ct` costs one Poly1305 pass and, only if the tag verifies, one keystream pass. The TR header
+    /// trial makes `|distinct skipped header keys| + 2` such calls on 2314-byte headers per received cell; link
+    /// frames, bodies and every other opening keep [`Aead::open`] / [`Aead::open_ct`].
+    #[must_use]
+    pub fn open_ct_constant_flow(
+        k: &SecretBytes<32>,
+        nonce: &[u8; NONCE_LEN],
+        ad: &[u8],
+        c: &[u8],
+        out: &mut [u8],
+    ) -> Choice {
+        // the lengths are public (a header has exactly one length, spec §7.5): as `open_ct`, `out` stays untouched
+        let Some((ct, tag)) = c.split_at_checked(out.len()) else {
+            return Choice::from(0);
+        };
+        let Ok(tag) = Tag::try_from(tag) else {
+            return Choice::from(0);
+        };
+        let aead = cipher(k);
+        let n = XNonce::from(*nonce);
+        // out = ct ⊕ keystream, the candidate plaintext; this pass's tag (over the candidate) is discarded
+        out.copy_from_slice(ct);
+        let first = aead.encrypt_inout_detached(&n, ad, (&mut *out).into());
+        // encrypting the candidate again gives back ct and the tag over (ad, ct)
+        let mut again = Zeroizing::new(out.to_vec());
+        let second = aead.encrypt_inout_detached(&n, ad, again.as_mut_slice().into());
+        // the AEAD refuses only messages beyond 2^38 bytes (a public length; `open_ct` rejects them with zeros too)
+        let (Ok(_), Ok(expected)) = (first, second) else {
+            out.fill(0);
+            return Choice::from(0);
+        };
+        let ok = expected.as_slice().ct_eq(tag.as_slice());
+        // a rejected tag leaves the candidate in `out`: replace it by zeros without branching on the verdict
         let rejected = !ok;
         for b in out.iter_mut() {
             b.conditional_assign(&0, rejected);
@@ -342,6 +402,105 @@ f9664c97637da9768812f615c68b13b52e";
         let mut exact = [0xaa_u8; 20];
         assert!(bool::from(Aead::open_ct(&k, &nb, b"", &sealed, &mut exact)));
         assert_eq!(exact, [5; 20]);
+        Ok(())
+    }
+
+    /// `open_ct` and `open_ct_constant_flow` on the same input, each into its own `out` of `out_len` bytes of
+    /// `0xaa`: the same verdict and the same `out` afterwards; returns them.
+    fn both(
+        k: &SecretBytes<32>,
+        nonce: &[u8; NONCE_LEN],
+        ad: &[u8],
+        c: &[u8],
+        out_len: usize,
+        what: &str,
+    ) -> (bool, Vec<u8>) {
+        let mut a = vec![0xaa_u8; out_len];
+        let mut b = vec![0xaa_u8; out_len];
+        let ra = bool::from(Aead::open_ct(k, nonce, ad, c, &mut a));
+        let rb = bool::from(Aead::open_ct_constant_flow(k, nonce, ad, c, &mut b));
+        assert_eq!(
+            (ra, hex(&a)),
+            (rb, hex(&b)),
+            "{what}: open_ct vs constant flow"
+        );
+        (rb, b)
+    }
+
+    /// `open_ct_constant_flow` (M4 campaign R-59) accepts what `open_ct` accepts, with the same plaintext, and
+    /// touches `out` on every rejection exactly as `open_ct` does — all zero for a ciphertext of the right length,
+    /// untouched (still `0xaa`) for any other length: the A.3.1 vector and the empty plaintext; flipped bits in the
+    /// ciphertext and the tag, a wrong key, nonce or AD; truncation, extension, inputs shorter than a tag, an
+    /// authentic ciphertext of another length, an `out` too short, too long or empty.
+    #[test]
+    fn constant_flow_rejects_like_open_ct() -> Result<()> {
+        let v = a31()?;
+        let (ok, out) = both(&v.key, &v.nonce, &v.aad, &v.sealed, 114, "A.3.1");
+        assert!(ok);
+        assert_eq!(out, A31_PLAINTEXT);
+        let n = Nonce24::random()?;
+        let nb = *n.as_bytes();
+        let empty = Aead::seal(&key(1)?, n, b"ad", b"")?;
+        assert_eq!(
+            both(&key(1)?, &nb, b"ad", &empty, 0, "empty"),
+            (true, vec![])
+        );
+
+        let n = Nonce24::random()?;
+        let nb = *n.as_bytes();
+        let k = key(2)?;
+        let sealed = Aead::seal(&k, n, b"ad", &[7; 32])?;
+        assert_eq!(
+            both(&k, &nb, b"ad", &sealed, 32, "authentic"),
+            (true, vec![7; 32])
+        );
+        let zeroed = (false, vec![0_u8; 32]);
+        for (i, what) in [
+            (0, "ciphertext, first byte"),
+            (31, "ciphertext, last byte"),
+            (32, "tag, first byte"),
+            (47, "tag, last byte"),
+        ] {
+            let mut bad = sealed.clone();
+            if let Some(b) = bad.get_mut(i) {
+                *b ^= 1;
+            }
+            assert_eq!(both(&k, &nb, b"ad", &bad, 32, what), zeroed, "{what}");
+        }
+        assert_eq!(both(&k, &nb, b"aD", &sealed, 32, "AD"), zeroed);
+        assert_eq!(both(&k, &nb, b"", &sealed, 32, "empty AD"), zeroed);
+        assert_eq!(both(&key(3)?, &nb, b"ad", &sealed, 32, "key"), zeroed);
+        let mut other = nb;
+        other[23] ^= 0x80;
+        assert_eq!(both(&k, &other, b"ad", &sealed, 32, "nonce"), zeroed);
+
+        let untouched = (false, vec![0xaa_u8; 32]);
+        let short = sealed.split_last().map_or(&[][..], |(_, r)| r);
+        assert_eq!(both(&k, &nb, b"ad", short, 32, "truncated"), untouched);
+        let mut long = sealed.clone();
+        long.push(0);
+        assert_eq!(both(&k, &nb, b"ad", &long, 32, "extended"), untouched);
+        let fifteen = sealed.get(..15).unwrap_or_default();
+        assert_eq!(both(&k, &nb, b"ad", fifteen, 32, "15 bytes"), untouched);
+        assert_eq!(both(&k, &nb, b"ad", &[], 32, "empty input"), untouched);
+        let n = Nonce24::random()?;
+        let nb31 = *n.as_bytes();
+        let sealed31 = Aead::seal(&k, n, b"ad", &[7; 31])?;
+        assert_eq!(
+            both(&k, &nb31, b"ad", &sealed31, 32, "31 bytes into 32"),
+            untouched
+        );
+        for len in [31, 33, 48] {
+            assert_eq!(
+                both(&k, &nb, b"ad", &sealed, len, "out length"),
+                (false, vec![0xaa; len]),
+                "out of {len} bytes"
+            );
+        }
+        assert_eq!(
+            both(&k, &nb, b"ad", &sealed, 0, "empty out"),
+            (false, vec![])
+        );
         Ok(())
     }
 

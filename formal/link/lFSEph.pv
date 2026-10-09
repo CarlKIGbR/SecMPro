@@ -1,0 +1,55 @@
+(* SPDX-License-Identifier: AGPL-3.0-or-later *)
+(* formal/link/lFSEph.pv — session lFSEph of CLAIMS §LINK, one file per session (OPEN-M5-16 A, LO-1) over the
+   library formal/link.pvl (model, abstractions, devices: its header). Run:
+   proverif -lib formal/link.pvl formal/link/lFSEph.pv
+
+   Row (formal/link.pvl 3.): as lFS plus RevealEph in phase 1 (e_c and dk_c of one link).
+   Queries in the order of their RESULT lines (CLAIMS §LINK gate rule):
+     L5b · L5b · L8 · L8 · L8
+   — 5 RESULT lines.
+*)
+
+(* Search device (formal/link.pvl 7.): keep redundant clauses (the redundancy check stalled this file's
+   saturation, measured); resolution strategy only *)
+set redundancyElim = no.
+
+const lFSEph: tagt.
+
+(* Secrecy assumptions (formal/link.pvl 7.): the secrets this session never reveals, and those it reveals only
+   in phase 1 ("phase 0") *)
+not x: bitstring; attacker(dhsk(lFSEph, iC(x))).
+not x: bitstring; attacker(kemsk(lFSEph, iC(x))).
+not x: bitstring; attacker(dhsk(lFSEph, iD(x))) phase 0.
+not x: bitstring; attacker(kemsk(lFSEph, iD(x))) phase 0.
+not x: bitstring; attacker(dhsk(lFSEph, iE(x))).
+not x: bitstring; attacker(dhsk(lFSEph, iR(x))).
+not x: bitstring; attacker(kemr(lFSEph, x)).
+not x: bitstring; attacker(sigk(lFSEph, iQ(x))).
+not attacker(dhsk(lFSEph, kRdh)) phase 0.
+not attacker(kemsk(lFSEph, kRkem)) phase 0.
+not attacker(sigk(lFSEph, kRsig)) phase 0.
+
+(* Queries (CLAIMS §LINK), one declaration per begin event (formal/link.pvl 7.); R's pinned fingerprint is
+   h((lbl_relayfp, vk(sigk(s, kRsig)))), an honest queue key vk(sigk(s, iQ(x))). *)
+
+query sid: bitstring, ctr: bitstring, m: bitstring, kid: bitstring, h0: bitstring, h1: bitstring, k1: key,
+      k2: key, fp: bitstring, cs: bitstring, cmd: bitstring, x: bitstring;
+      (* L5b (c2r): CSend payloads of the links whose CAccept names R's pinned fp *)
+      event(CAccept(lFSEph, h((lbl_relayfp, vk(sigk(lFSEph, kRsig)))), kid, h0, h1, sid, k1, k2))
+        && event(CSend(lFSEph, sid, ctr, m)) && attacker(m);
+      (* L5b (r2c): RSend payloads of the links whose CAccept names R's pinned fp *)
+      event(CAccept(lFSEph, h((lbl_relayfp, vk(sigk(lFSEph, kRsig)))), kid, h0, h1, sid, k1, k2))
+        && event(RSend(lFSEph, sid, ctr, m)) && attacker(m);
+      (* L8: reachability — CStart *)
+      event(CStart(lFSEph, fp, kid, h0));
+      (* L8: the honest pair completes (RAccept and CAccept with equal arguments) *)
+      event(RAccept(lFSEph, kid, h0, h1, sid, k1, k2)) && event(CAccept(lFSEph, fp, kid, h0, h1, sid, k1, k2));
+      (* L8: R executes a command of an honest queue key *)
+      event(RExec(lFSEph, sid, cs, cmd, vk(sigk(lFSEph, iQ(x))))).
+
+process
+    Relay(lFSEph)
+  | ! Client(lFSEph)
+  | ClientE(lFSEph)
+  | (phase 1; RevStatic(lFSEph))
+  | (phase 1; RevSig(lFSEph))

@@ -9,6 +9,7 @@
 //! (`Encaps_internal`), a nonce 24 bytes (`vectors/SCHEMA.md` §2).
 
 use secmp_crypto::{
+    HybridKem768Ciphertext, HybridKem768PublicKey, HybridKem1024Ciphertext, HybridKem1024PublicKey,
     HybridSignature, HybridSigningKey, Label, MlKem768Ct, MlKem768Dk, MlKem768Ek, MlKem1024Ct,
     MlKem1024Dk, MlKem1024Ek, Nonce24, SecretBytes, X25519Secret,
 };
@@ -79,6 +80,28 @@ pub trait Entropy: sealed::Sealed {
     /// refused by the signer.
     fn sign(&mut self, key: &HybridSigningKey, label: Label, msg: &[u8])
     -> Result<HybridSignature>;
+
+    /// `HybridKEM-768.Encaps(pk)` → `(ct, ss)` (§3.2; the relay's HS2, §8.3 step 5). The derandomised
+    /// implementation reads `sk_e` (32 bytes), then the ML-KEM randomness `m` (32 bytes) (`vectors/SCHEMA-4.11-link.md`,
+    /// reading OPEN-1).
+    ///
+    /// # Errors
+    /// [`crate::Error::Rejected`] if the X25519 output is all zero (a low-order `pk_dh`);
+    /// [`crate::Error::Unavailable`] if randomness or locked memory is unavailable.
+    fn hybrid_encaps768(
+        &mut self,
+        pk: &HybridKem768PublicKey,
+    ) -> Result<(HybridKem768Ciphertext, SecretBytes<32>)>;
+
+    /// `HybridKEM-1024.Encaps(pk)` → `(ct, ss)` (§3.2; the client's HS1, §8.3 step 2), drawn as
+    /// [`Entropy::hybrid_encaps768`].
+    ///
+    /// # Errors
+    /// As [`Entropy::hybrid_encaps768`].
+    fn hybrid_encaps1024(
+        &mut self,
+        pk: &HybridKem1024PublicKey,
+    ) -> Result<(HybridKem1024Ciphertext, SecretBytes<32>)>;
 }
 
 /// The operating system CSPRNG (the only [`Entropy`] of a shipped build).
@@ -126,6 +149,20 @@ impl Entropy for OsEntropy {
         msg: &[u8],
     ) -> Result<HybridSignature> {
         Ok(key.sign(label, msg)?)
+    }
+
+    fn hybrid_encaps768(
+        &mut self,
+        pk: &HybridKem768PublicKey,
+    ) -> Result<(HybridKem768Ciphertext, SecretBytes<32>)> {
+        Ok(pk.encapsulate()?)
+    }
+
+    fn hybrid_encaps1024(
+        &mut self,
+        pk: &HybridKem1024PublicKey,
+    ) -> Result<(HybridKem1024Ciphertext, SecretBytes<32>)> {
+        Ok(pk.encapsulate()?)
     }
 }
 
@@ -219,6 +256,24 @@ impl Entropy for FixedEntropy {
         let rnd = self.take::<32>()?;
         Ok(key.sign_kat(label, msg, &rnd)?)
     }
+
+    fn hybrid_encaps768(
+        &mut self,
+        pk: &HybridKem768PublicKey,
+    ) -> Result<(HybridKem768Ciphertext, SecretBytes<32>)> {
+        let sk_e = self.take::<32>()?;
+        let m = self.take::<32>()?;
+        Ok(pk.encapsulate_kat(&sk_e, &m)?)
+    }
+
+    fn hybrid_encaps1024(
+        &mut self,
+        pk: &HybridKem1024PublicKey,
+    ) -> Result<(HybridKem1024Ciphertext, SecretBytes<32>)> {
+        let sk_e = self.take::<32>()?;
+        let m = self.take::<32>()?;
+        Ok(pk.encapsulate_kat(&sk_e, &m)?)
+    }
 }
 
 /// Test randomness (unit tests only, with or without feature `kat`): the OS source for the first `ok` draws, then
@@ -301,6 +356,22 @@ impl Entropy for TestEntropy {
     ) -> Result<HybridSignature> {
         self.draw()?;
         OsEntropy.sign(key, label, msg)
+    }
+
+    fn hybrid_encaps768(
+        &mut self,
+        pk: &HybridKem768PublicKey,
+    ) -> Result<(HybridKem768Ciphertext, SecretBytes<32>)> {
+        self.draw()?;
+        OsEntropy.hybrid_encaps768(pk)
+    }
+
+    fn hybrid_encaps1024(
+        &mut self,
+        pk: &HybridKem1024PublicKey,
+    ) -> Result<(HybridKem1024Ciphertext, SecretBytes<32>)> {
+        self.draw()?;
+        OsEntropy.hybrid_encaps1024(pk)
     }
 }
 

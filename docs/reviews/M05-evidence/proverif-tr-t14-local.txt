@@ -1,0 +1,92 @@
+# formal/tr.pv with T14 (M5 PV-02, CLAIMS §TR T14, M4 review R-41 / M3 F6) — ProVerif 2.05, this Mac (M1 Pro, 10 cores), 2026-10-08
+# sha256 formal/tr.pv f726a1032e5b54a0b0b95039068182f4c5db8270745d9f160607868cf78b483d
+# status: all 47 RESULT lines as CLAIMS expects (T1-T13 texts and verdicts unchanged, T14 true); the strict gate step
+#         has NOT passed yet: in the main checkout it refuses to start (unpinned SecMP-LINK files, another agent's work
+#         in progress), and in an isolated copy it hit the 1800 s wall cap under load (see below)
+
+## 1. Model run (the command the gate runs: proverif formal/tr.pv), main checkout
+$ python3 target/tmp/runpv2.py formal/tr.pv target/tmp/tr-full-direct.log 1800
+  (runpv2.py: proverif formal/tr.pv, stdout+stderr to the log, wall clock; shared machine: 4-5 SecMP-LINK ProVerif
+  processes and Kani/CBMC of other agents ran alongside)
+  runpv2: rc=0 wall=1307.7s
+  47 RESULT lines; secrecy assumptions verified: 585 (195 per declaration, 3 declarations)
+  wall time of T14's declaration alone (target/tmp/tr-t14-only.pv = formal/tr.pv with only the T14 declaration,
+  one other ProVerif alongside): rc=0 wall=177.5s
+    T14-only: inj-event(Accepted(sClean,kid,n_55,m)) ==> inj-event(Sent(sClean,kid,n_55,m)) is true.
+
+## 2. Gate, main checkout (as briefed)
+$ env PATH=/Users/c.carl/.cargo/bin:/Users/c.carl/.local/bin:/opt/homebrew/bin:/usr/bin:/bin cargo xtask step --strict proverif --models tr > target/tmp/pv-tr-gate.log 2>&1
+  === step summary (host aarch64-apple-darwin, strict: true) ===
+    10 proverif        FAIL          0s  ProVerif models differ from expect::PROVERIF_MODEL_SHA256: formal/link.pvl: a model file without a pinned sha256; formal/link/lBoth.pv: a model file without a pinned sha256; formal/link/lClean.pv: a model file without a pinned sha256; formal/link/lDH.pv: a model file without a pinned sha256; formal/link/lFS.pv: a model file without a pinned sha256; formal/link/lFSDH.pv: a model file without a pinned sha256; formal/link/lFSEph.pv: a model file without a pinned sha256; formal/link/lKEM.pv: a model file without a pinned sha256; formal/link/lQKey.pv: a model file without a pinned sha256; formal/link/lSig.pv: a model file without a pinned sha256
+  xtask: error: step: 1 step(s) failed
+  -> refused before any ProVerif run: formal/link.pvl and formal/link/*.pv are not yet pinned in
+     expect::PROVERIF_MODEL_SHA256 (the formal-LINK agent's work in progress); formal/tr.pv's own pin matches.
+
+## 3. Gate, isolated copy of the checkout (same xtask sources, formal/tr.pv, CLAIMS; without the unpinned LINK files)
+$ python3 target/tmp/gatecopy.py   # copy to target/tmp/gatecopy without target/, .git/, formal/link.pvl, formal/link/;
+                                   # sha256 check: every other file of formal/, xtask/ identical
+$ env PATH=... cargo run --manifest-path target/tmp/gatecopy/Cargo.toml --package xtask --locked -- step --strict proverif --models tr
+  === step summary (host aarch64-apple-darwin, strict: true) ===
+    10 proverif        FAIL       1800s  1 of 1 ProVerif files failed: formal/tr.pv: timeout, killed after 1800 s; last progress line: `25800 rules inserted. Base: 24743 rules (705 with conclusion selected). Queue: 5657 rules.`; log /Users/c.carl/coding/claude_code/SecMPro/target/tmp/gatecopy/target/proverif/tr.log
+  xtask: error: step: 1 step(s) failed
+  CPU time of that ProVerif process (ps samples, target/tmp/tr-gate-cpu.log; columns: time pid elapsed cputime %cpu):
+    13:36:17  3893   09:26   2:42.31   5,4
+    13:46:39  3893   19:48   3:52.35   5,1
+    13:56:45  3893   29:54   4:57.75   2,7
+  -> killed by the 1800 s wall cap with 46 of 47 lines printed after < 5 min of CPU; load average about 47 on 10 cores
+     (four SecMP-LINK ProVerif processes, CBMC, test builds). A capacity gap of the shared machine, not a model
+     verdict; an earlier copy run (before the coordinator's reboot notice) ended the same way (1800 s, last progress
+     line `11400 rules inserted. ...`).
+
+## 4. RESULT lines of run 1 (formal/tr.pv, sha256 above), in file order
+RESULT not attacker_p1(content(sClean,st1,c0)) is true.
+RESULT not attacker_p1(content(sClean,st1,c1)) is true.
+RESULT not attacker_p1(content(sClean,st2,c0)) is true.
+RESULT not attacker_p1(content(sClean,st2,c1)) is true.
+RESULT not attacker_p1(content(sClean,st3,c0)) is true.
+RESULT not attacker_p1(content(sClean,st3,c1)) is true.
+RESULT inj-event(Recv(sClean,pB,i_55,n_55,x)) ==> inj-event(Send(sClean,pA,i_55,n_55,x)) is true.
+RESULT inj-event(Recv(sClean,pA,i_55,n_55,x)) ==> inj-event(Send(sClean,pB,i_55,n_55,x)) is true.
+RESULT not attacker_p1(content(sFS,st1,c0)) is true.
+RESULT not attacker_p1(content(sFS,st1,c1)) is true.
+RESULT not attacker_p1(content(sFS,st2,c0)) is true.
+RESULT not attacker_p1(content(sFS,st2,c1)) is true.
+RESULT not attacker_p1(content(sPCS,st3,c0)) is true.
+RESULT not attacker_p1(content(sPCS,st3,c1)) is true.
+RESULT not attacker_p1(content(sPCSdh,st3,c0)) is true.
+RESULT not attacker_p1(content(sPCSdh,st3,c1)) is true.
+RESULT not attacker_p1(content(sPCSkem,st3,c0)) is true.
+RESULT not attacker_p1(content(sPCSkem,st3,c1)) is true.
+RESULT not attacker_p1(content(sPCSboth,st3,c0)) is false.
+RESULT not attacker_p1(content(sPCSboth,st3,c1)) is false.
+RESULT not attacker_p1(exp(g,dhsk(sClean,kA1))) is true.
+RESULT not attacker_p1(pk(kemsk(sClean,kA1))) is true.
+RESULT not attacker_p1(nmark(sClean,st1,c0)) is true.
+RESULT not attacker_p1(nmark(sClean,st1,c1)) is true.
+RESULT not attacker_p1(exp(g,dhsk(sClean,kB2))) is true.
+RESULT not attacker_p1(pk(kemsk(sClean,kB2))) is true.
+RESULT not attacker_p1(nmark(sClean,st2,c0)) is true.
+RESULT not attacker_p1(nmark(sClean,st2,c1)) is true.
+RESULT not attacker_p1(exp(g,dhsk(sClean,kA3))) is true.
+RESULT not attacker_p1(pk(kemsk(sClean,kA3))) is true.
+RESULT not attacker_p1(nmark(sClean,st3,c0)) is true.
+RESULT not attacker_p1(nmark(sClean,st3,c1)) is true.
+RESULT not attacker_p1(exp(g,dhsk(sHFS,kA1))) is true.
+RESULT not attacker_p1(pk(kemsk(sHFS,kA1))) is true.
+RESULT not attacker_p1(nmark(sHFS,st1,c0)) is true.
+RESULT not attacker_p1(nmark(sHFS,st1,c1)) is true.
+RESULT not attacker_p1(content(sPCS,st1,c1)) is false.
+RESULT event(RecvKem(s_14,p_55,i_55,n_55,x,ct)) ==> event(ChainKem(s_14,p_55,i_55,ct)) is true.
+RESULT event(HdrOpenTwice(k1_1,k2_1,h)) ==> k1_1 = k2_1 is false.
+RESULT not event(Recv(sClean,pB,st3,c1,content(sClean,st3,c1))) is false.
+RESULT not event(Recv(sFS,pA,st2,c1,content(sFS,st2,c1))) is false.
+RESULT not event(Recv(sPCS,pB,st3,c1,content(sPCS,st3,c1))) is false.
+RESULT not event(Recv(sPCSdh,pB,st3,c1,content(sPCSdh,st3,c1))) is false.
+RESULT not event(Recv(sPCSkem,pB,st3,c1,content(sPCSkem,st3,c1))) is false.
+RESULT not event(Recv(sPCSboth,pB,st3,c1,content(sPCSboth,st3,c1))) is false.
+RESULT not event(Recv(sHFS,pB,st3,c1,content(sHFS,st3,c1))) is false.
+RESULT inj-event(Accepted(sClean,kid,n_55,m)) ==> inj-event(Sent(sClean,kid,n_55,m)) is true.
+
+## 5. Gate check over these lines
+xtask test gates::tests::proverif_tr_gate_matches_by_query_text reads this file and runs the gate's checker
+(gates::proverif_check, against expect::PROVERIF_EXPECTED_TR, 47 rows): see target/tmp/pv-tr-xtask.log.

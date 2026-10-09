@@ -1,0 +1,16 @@
+REF-M5-3 regeneration transcript, 2026-10-09, workspace /Users/c.carl/coding/claude_code/SecMProRef (not a git repository)
+
+$ .venv/bin/python gen_vectors.py link hx        (from ref/; writes ../vectors/<suite>.json)
+link.json  sha256 dd77bb7c96d298f9cc188d4eadbd950605ccca2a250169708cdc573a73264c77
+hx.json  sha256 2bf05e699a4b980ff84c0d291291705a8bc409de2fcb365a72e95a43057a0e8d
+
+$ shasum -a 256 vectors/link.json vectors/hx.json      (after regeneration)
+dd77bb7c96d298f9cc188d4eadbd950605ccca2a250169708cdc573a73264c77  vectors/link.json   (2 818 910 B)
+2bf05e699a4b980ff84c0d291291705a8bc409de2fcb365a72e95a43057a0e8d  vectors/hx.json     (1 432 784 B)
+
+$ .venv/bin/python -m pytest tests
+938 passed in 21.69s        (passed/failed/errors = 938/0/0)
+
+Generator state: gen_vectors.py:21-22 already contains link_cases.SUITE (mtime 2 Okt 17:45);
+hx_cases.py:180-185 already derives inv_sid via relay_q.sid_of(invq_recv_pk, ed25519_public(inv_send_seed))
+per ADR-048 (m), the 16 old random bytes still drawn and discarded (mtime 7 Okt 10:01). No edit was needed.

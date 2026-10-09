@@ -24,6 +24,7 @@ mod sbom;
 mod sha256;
 mod stubs;
 mod summary;
+mod testscan;
 mod time;
 mod tools;
 mod util;
@@ -42,7 +43,7 @@ usage: cargo xtask <command> [options]
   ci-full [--strict] [--delegated ID]...    steps 1–14 (before a milestone report; nightly in CI)
   ci                                        alias for ci-full
   step [--strict] ID...                     run selected steps (see `cargo xtask step`)
-    ci-full/step: [--models tr|hx|all] [--jobs N]   the proverif step's models (default all) and parallel
+    ci-full/step: [--models tr|hx|link|all] [--jobs N]   the proverif step's models (default all) and parallel
                                             processes (default the available cores, at most 4)
   policy                                    repository policy checks only
   cooldown                                  7-day dependency cooldown only
@@ -51,7 +52,7 @@ usage: cargo xtask <command> [options]
     step: [--shard K/N]                     the mutants step's shard (CI: K/8, merged by `step mutants-merge`)
   install-tools [--set NAME] [--nightly]    install the pinned tools (fast | windows | xwin | mutants | miri | fuzz | full | all)
   vectors                                   generate the Rust vectors, compare with vectors/ref, freeze
-  ct-check [--targets current|m2] REPORT... the ct gate's reading of saved ct reports
+  ct-check [--targets current|m2|m4] REPORT... the ct gate's reading of saved ct reports
   repro-check | ops-check                   documented stubs until M11 / M10";
 
 fn run(args: &[String]) -> Result<()> {
@@ -96,7 +97,7 @@ fn run(args: &[String]) -> Result<()> {
     }
 }
 
-/// The options of the `proverif` step (WEISUNG M4-5 §4 (a), gate F7): `--models tr|hx|all` and `--jobs N`, taken out
+/// The options of the `proverif` step (WEISUNG M4-5 §4 (a), gate F7): `--models tr|hx|link|all` and `--jobs N`, taken out
 /// of the arguments of `ci-full`/`ci`/`step` before `ci.rs` parses the rest, and returned apart (`None`: neither
 /// given). Other commands keep their arguments unchanged (their parsers refuse both options). With `step`, the options
 /// need the `proverif` step among the selected ones; an unknown value, a missing value and an option given twice are
@@ -116,7 +117,7 @@ fn split_proverif_options(
         match a.as_str() {
             "--models" => {
                 let Some(v) = it.next() else {
-                    bail!("--models needs tr, hx or all");
+                    bail!("--models needs tr, hx, link or all");
                 };
                 if models.replace(gates::ProverifModels::parse(v)?).is_some() {
                     bail!("--models given twice");
@@ -136,8 +137,8 @@ fn split_proverif_options(
     if models.is_none() && jobs.is_none() {
         return Ok((kept, None));
     }
-    if cmd == "step" && !kept.iter().any(|a| a == "proverif") {
-        bail!("--models and --jobs belong to the proverif step, which is not selected");
+    if cmd == "step" && !kept.iter().any(|a| a == "proverif" || a == "proverif-link") {
+        bail!("--models and --jobs belong to the proverif steps, none of which is selected");
     }
     Ok((
         kept,

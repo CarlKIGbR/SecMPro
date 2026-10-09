@@ -35,6 +35,9 @@ macro_rules! ml_kem {
         #[doc = concat!("An ", $name, " decapsulation key, held as its 64-byte seed `d ‖ z` in locked memory.")]
         pub struct $dk(LockedSecret<MLKEM_SEED_LEN>);
 
+        /// Marker: the only field is a [`LockedSecret`], which wipes its page on drop.
+        impl zeroize::ZeroizeOnDrop for $dk {}
+
         impl $dk {
             /// A new random key.
             ///

@@ -1,0 +1,94 @@
+# M5 review evidence - red-team (RT, F1) recomputation from vectors/link.json and App. B constants (pin 3b29ca8)
+# Generated 2026-10-09 by the review bookkeeper. Command:
+#   python3 -I /home/claude/m05/calc/RT_vectors.py /home/claude/m05/src/vectors/link.json
+# Interpreter: python 3.13.16 cryptography 50.0.1
+# Input sha256 (vectors/link.json@3b29ca8): dd77bb7c96d298f9cc188d4eadbd950605ccca2a250169708cdc573a73264c77
+# Script sha256 (RT_vectors.py): 9526bbcf9f6ce474b767099532d675abe98e8ba8c663df84b1c109bb1c8a21a3
+# Documented result (findings/RT.md §4): OK 38, MISMATCH 0
+#
+# ---- script header (first 40 lines of RT_vectors.py) ----
+# | #!/usr/bin/env python3
+# | """RT (red team) recomputation of link-0024 (QUEUE_DEL) and link-0019 (FETCH_MULTI), plus budget/record sizes.
+# | 
+# | Written from docs/03 rev 2.6 D.2/D.6/§8.4/§9.1/§9.6 and App. B. XChaCha helpers copied from L1_link.py (self-tested).
+# | Session keys k_c2r/k_r2c/sess_id are taken from link-0004 outputs (recomputed by L1 from the handshake).
+# | Run: python3 -I RT_vectors.py /home/claude/m05/src/vectors/link.json
+# | """
+# | import hashlib, json, struct, sys
+# | from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+# | from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
+# | 
+# | V = json.load(open(sys.argv[1]))
+# | C = {c["id"]: c for c in V["cases"]}
+# | H = bytes.fromhex
+# | sha = lambda *p: hashlib.sha256(b"".join(p)).digest()
+# | u32 = lambda x: struct.pack(">I", x)
+# | u64 = lambda x: struct.pack(">Q", x)
+# | OK, BAD = [], []
+# | 
+# | 
+# | def chk(name, got, want):
+# |     (OK if got == want else BAD).append(name)
+# |     print(("ok      " if got == want else "MISMATCH"), name)
+# | 
+# | 
+# | def _rotl(v, c): return ((v << c) & 0xffffffff) | (v >> (32 - c))
+# | 
+# | 
+# | def _qr(s, a, b, c, d):
+# |     s[a] = (s[a] + s[b]) & 0xffffffff; s[d] = _rotl(s[d] ^ s[a], 16)
+# |     s[c] = (s[c] + s[d]) & 0xffffffff; s[b] = _rotl(s[b] ^ s[c], 12)
+# |     s[a] = (s[a] + s[b]) & 0xffffffff; s[d] = _rotl(s[d] ^ s[a], 8)
+# |     s[c] = (s[c] + s[d]) & 0xffffffff; s[b] = _rotl(s[b] ^ s[c], 7)
+# | 
+# | 
+# | def hchacha20(key, n16):
+# |     s = [0x61707865, 0x3320646e, 0x79622d32, 0x6b206574] + list(struct.unpack("<8I", key)) + list(struct.unpack("<4I", n16))
+# |     for _ in range(10):
+# |         _qr(s, 0, 4, 8, 12); _qr(s, 1, 5, 9, 13); _qr(s, 2, 6, 10, 14); _qr(s, 3, 7, 11, 15)
+# |         _qr(s, 0, 5, 10, 15); _qr(s, 1, 6, 11, 12); _qr(s, 2, 7, 8, 13); _qr(s, 3, 4, 9, 14)
+# ---- end of script header ----
+#
+# ---- output (stdout+stderr, exit 0) ----
+ok       A recv_pk from seed
+ok       B recv_pk from seed
+ok       0024 sig (recv key A over QUEUE_DEL|sess|seq|rid)
+ok       0024 req (85 B)
+ok       0024 req_frame (k_c2r, ctr 144)
+ok       0024 resp OK
+ok       0024 resp_frame (k_r2c, ctr 163)
+ok       0019 sig_0 (B, MFETCH, ack 0)
+ok       0019 sig_1 (A, MFETCH, ack 2)
+ok       0019 req (182 B, count unsigned)
+ok       0019 req_frame (k_c2r, ctr 13)
+ok       0019 resp[0]
+ok       0019 resp_frame[0] (k_r2c, ctr 22)
+ok       0019 resp[1]
+ok       0019 resp_frame[1] (k_r2c, ctr 23)
+ok       0019 resp[2]
+ok       0019 resp_frame[2] (k_r2c, ctr 24)
+ok       0019 resp[3]
+ok       0019 resp_frame[3] (k_r2c, ctr 25)
+ok       0019 resp[4]
+ok       0019 resp_frame[4] (k_r2c, ctr 26)
+ok       0019 resp[5]
+ok       0019 resp_frame[5] (k_r2c, ctr 27)
+ok       0019 resp[6]
+ok       0019 resp_frame[6] (k_r2c, ctr 28)
+ok       0019 resp[7]
+ok       0019 resp_frame[7] (k_r2c, ctr 29)
+ok       0019 store_post rid A/B
+HeaderV1 2314 cell 4096 LinkBlob 12360
+ok       CELL 4096
+ok       LINK_BLOB 12360
+ok       QUEUE_RESERVATION 524800
+ok       LINKDATA_RESERVATION 12488
+pools at defaults: queues 11432 link-data 80076
+ok       HELLO record 9
+ok       RelayInfoV1 1741
+ok       RELAYINFO record 1744
+ok       RelayInfo signed span 1677
+ok       HS1 2853 / record 2856
+ok       HS2 1153 / record 1156
+link-0001 rec_relayinfo 1744
+OK 38  MISMATCH 0

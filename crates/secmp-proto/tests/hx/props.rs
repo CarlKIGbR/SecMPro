@@ -39,20 +39,13 @@ const DEFAULT_SEED: u64 = 0x5ec3_2d00_0000_0004;
 /// Runs per property.
 const CASES: usize = 6;
 
+/// The one reader of `SECMP_PROPTEST_SEED` (M4 review R-93, TEST-SPEC-M5 X-07).
+#[path = "../common/seed.rs"]
+mod seed;
+
+/// The master seed of this run: `SECMP_PROPTEST_SEED` (decimal `u64`) if set and not empty, else [`DEFAULT_SEED`].
 fn master_seed() -> u64 {
-    let raw = match std::env::var("SECMP_PROPTEST_SEED") {
-        Err(std::env::VarError::NotPresent) => return DEFAULT_SEED,
-        other => other
-            .map_err(|e| format!("SECMP_PROPTEST_SEED: {e}"))
-            .unwrap(),
-    };
-    if raw.trim().is_empty() {
-        return DEFAULT_SEED;
-    }
-    raw.trim()
-        .parse()
-        .map_err(|e| format!("SECMP_PROPTEST_SEED={raw:?} is not a decimal u64: {e}"))
-        .unwrap()
+    seed::master_seed(DEFAULT_SEED)
 }
 
 fn rng_for(tag: u64) -> StdRng {
@@ -162,7 +155,7 @@ fn make_run(seed: u64) -> Run {
     let record = store
         .record(&issued.invitation.ld_id)
         .unwrap()
-        .duplicate()
+        .duplicate_kat()
         .unwrap();
     let accepted = invitee_accept(&uri, &blob, NOW).unwrap();
     let profile = random_profile(&mut rng);
@@ -1037,6 +1030,153 @@ fn reference_marker(buf: &[u8]) -> Option<usize> {
     last.filter(|m| buf.get(*m) == Some(&0x80))
 }
 
+/// A random byte other than 0 and 0x80 (the tail of the class "no 0x80 in the tail").
+fn neither_zero_nor_marker(rng: &mut StdRng) -> u8 {
+    loop {
+        let b: u8 = rng.random_range(1..=255);
+        if b != 0x80 {
+            return b;
+        }
+    }
+}
+
+/// A 12018-byte buffer that `Outer::decode` accepts: random fields with the version byte 1 and an `ek_I` that passes
+/// the X25519 key check, the 0x80 marker at 9362 and zeros after it.
+fn valid_outer_buffer(rng: &mut StdRng) -> Vec<u8> {
+    use secmp_proto::sizes::{OUTER_LEN, OUTER_PADDED_LEN};
+    loop {
+        let mut buf = random_bytes(rng, OUTER_PADDED_LEN);
+        *buf.get_mut(0).unwrap() = 1;
+        *buf.get_mut(OUTER_LEN).unwrap() = 0x80;
+        buf.get_mut(OUTER_LEN + 1..).unwrap().fill(0);
+        if X25519Pk::from_bytes(buf.get(1..33).unwrap()).is_ok() {
+            return buf;
+        }
+    }
+}
+
+/// What a buffer's input class guarantees beyond the reference reading (`reference_marker`), checked in addition.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum UnpadClass {
+    /// No extra guarantee (the M4 classes).
+    Any,
+    /// OPEN-M5-17 "no 0x80 in the tail": the bytes from 9362 on hold no 0x80 and the last non-zero byte is not
+    /// 0x80, so `unpad` and `Outer::decode` both reject.
+    NoMarkerInTail,
+    /// OPEN-M5-17 "0x80 as the last byte": `buf[12017]` = 0x80, so `unpad` returns the first 12017 bytes and
+    /// `Outer::decode` rejects (the field string is not 9362 bytes), also when the bytes before it are a valid
+    /// `Outer` encoding.
+    MarkerLastByte,
+}
+
+impl UnpadClass {
+    /// The class's index in the per-class counts.
+    const fn slot(self) -> usize {
+        match self {
+            Self::Any => 0,
+            Self::NoMarkerInTail => 1,
+            Self::MarkerLastByte => 2,
+        }
+    }
+}
+
+/// The buffers of the two OPEN-M5-17 classes for case `k` (doc of `prop_outer_unpad_total_12018`): 4 of "no 0x80 in
+/// the tail", 2 of "0x80 as the last byte".
+fn open_m5_17_buffers(rng: &mut StdRng, k: usize) -> Vec<(Vec<u8>, String, UnpadClass)> {
+    use secmp_proto::sizes::{OUTER_LEN, OUTER_PADDED_LEN};
+    let mut out = Vec::new();
+    // "no 0x80 in the tail": a valid buffer with its marker removed
+    let mut buf = valid_outer_buffer(rng);
+    *buf.get_mut(OUTER_LEN).unwrap() = 0;
+    *buf.get_mut(OUTER_LEN - 1).unwrap() = neither_zero_nor_marker(rng);
+    out.push((
+        buf,
+        format!("case {k}: no 0x80 in the tail, marker removed"),
+        UnpadClass::NoMarkerInTail,
+    ));
+    // "no 0x80 in the tail": a tail free of 0x80 ending in a non-zero byte at `last`
+    for last in [
+        OUTER_LEN,
+        rng.random_range(OUTER_LEN + 1..OUTER_PADDED_LEN - 1),
+        OUTER_PADDED_LEN - 1,
+    ] {
+        let mut buf = random_bytes(rng, OUTER_PADDED_LEN);
+        if rng.random::<bool>() {
+            *buf.get_mut(0).unwrap() = 1;
+        }
+        for b in buf.get_mut(OUTER_LEN..last).unwrap() {
+            if *b == 0x80 {
+                *b = neither_zero_nor_marker(rng);
+            }
+        }
+        *buf.get_mut(last).unwrap() = neither_zero_nor_marker(rng);
+        buf.get_mut(last.checked_add(1).unwrap()..).unwrap().fill(0);
+        out.push((
+            buf,
+            format!("case {k}: no 0x80 in the tail, last non-zero byte at {last}"),
+            UnpadClass::NoMarkerInTail,
+        ));
+    }
+    // "0x80 as the last byte": a valid buffer (its marker kept) with 0x80 in byte 12017
+    let valid = valid_outer_buffer(rng);
+    assert!(
+        Outer::decode(&valid).is_ok(),
+        "SECMP_PROPTEST_SEED={} case {k}: the valid buffer decodes (control)",
+        master_seed()
+    );
+    let mut buf = valid;
+    *buf.get_mut(OUTER_PADDED_LEN - 1).unwrap() = 0x80;
+    out.push((
+        buf,
+        format!("case {k}: 0x80 as the last byte, after a valid encoding"),
+        UnpadClass::MarkerLastByte,
+    ));
+    // "0x80 as the last byte": every tail byte 0x80
+    let mut buf = random_bytes(rng, OUTER_PADDED_LEN);
+    if rng.random::<bool>() {
+        *buf.get_mut(0).unwrap() = 1;
+    }
+    buf.get_mut(OUTER_LEN..).unwrap().fill(0x80);
+    out.push((
+        buf,
+        format!("case {k}: 0x80 as the last byte, tail all 0x80"),
+        UnpadClass::MarkerLastByte,
+    ));
+    out
+}
+
+/// The guarantees of `class` for `buf`, on top of the reference reading `marker`: "no 0x80 in the tail" — no 0x80 from
+/// 9362 on, no marker, `unpad` rejects; "0x80 as the last byte" — the marker is byte 12017 and `unpad` returns the
+/// first 12017 bytes.
+fn check_unpad_class(buf: &[u8], class: UnpadClass, marker: Option<usize>, ctx: &str) {
+    use secmp_proto::codec::unpad;
+    use secmp_proto::sizes::{OUTER_LEN, OUTER_PADDED_LEN};
+    match class {
+        UnpadClass::Any => {}
+        UnpadClass::NoMarkerInTail => {
+            assert!(
+                !buf.get(OUTER_LEN..).unwrap().contains(&0x80),
+                "{ctx}: class"
+            );
+            assert_eq!(marker, None, "{ctx}: class");
+            assert_eq!(
+                unpad(buf, OUTER_PADDED_LEN).err(),
+                Some(Error::Rejected),
+                "{ctx}"
+            );
+        }
+        UnpadClass::MarkerLastByte => {
+            assert_eq!(buf.last(), Some(&0x80), "{ctx}: class");
+            assert_eq!(marker, Some(OUTER_PADDED_LEN - 1), "{ctx}: class");
+            assert_eq!(
+                unpad(buf, OUTER_PADDED_LEN).map(<[u8]>::len),
+                Ok(OUTER_PADDED_LEN - 1),
+                "{ctx}"
+            );
+        }
+    }
+}
+
 /// K2 option (c) (M4 report §11): the full-size scan, which Kani does not finish. `Outer::decode` and `unpad` on
 /// 12018-byte buffers — random bytes with the 0x80 marker at index 9362 (valid), 0, 1, 9361, 9363 or 12017 and zeros
 /// after it (before a marker > 0, half the buffers carry the version byte 1), the all-zero and the all-0x80 buffer,
@@ -1044,6 +1184,14 @@ fn reference_marker(buf: &[u8]) -> Option<usize> {
 /// is 0x80, else `Rejected`; `Outer::decode` accepts exactly when that marker is at 9362, the version byte is 1 and
 /// `ek_I` passes the X25519 key check, and then the field string is 9362 bytes, `buf[9362]` = 0x80, `buf[9363..]`
 /// is all zero and the `Outer` re-encodes to `buf`; every other result is `Err(Rejected)`.
+///
+/// M4 review R-93, OPEN-M5-17 (decided 2026-10-03), TEST-SPEC-M5 X-07: two more input classes, which cover both
+/// outcomes of the unpad decision at its edges. **"no 0x80 in the tail"** ([`UnpadClass::NoMarkerInTail`]): a valid
+/// buffer with its marker removed (the tail all zero, `buf[9361]` neither 0 nor 0x80), and random fields with a
+/// tail `buf[9362..=last]` free of 0x80 that ends in a non-zero byte, zeros after it, for `last` = 9362, a random
+/// index in between and 12017. **"0x80 as the last byte"** ([`UnpadClass::MarkerLastByte`]): a valid buffer with
+/// 0x80 also in byte 12017 (its own marker kept, so a scan for the first 0x80 after the fields would accept), and
+/// random fields with every tail byte 0x80.
 #[test]
 fn prop_outer_unpad_total_12018() {
     use secmp_proto::codec::unpad;
@@ -1051,9 +1199,17 @@ fn prop_outer_unpad_total_12018() {
     assert_eq!((OUTER_LEN, OUTER_PADDED_LEN), (9362, 12_018));
 
     let mut rng = rng_for(1200);
-    let mut buffers: Vec<(Vec<u8>, String)> = vec![
-        (vec![0; OUTER_PADDED_LEN], "all zero".to_owned()),
-        (vec![0x80; OUTER_PADDED_LEN], "all 0x80".to_owned()),
+    let mut buffers: Vec<(Vec<u8>, String, UnpadClass)> = vec![
+        (
+            vec![0; OUTER_PADDED_LEN],
+            "all zero".to_owned(),
+            UnpadClass::Any,
+        ),
+        (
+            vec![0x80; OUTER_PADDED_LEN],
+            "all 0x80".to_owned(),
+            UnpadClass::Any,
+        ),
     ];
     for k in 0..UNPAD_CASES {
         for at in [
@@ -1070,18 +1226,24 @@ fn prop_outer_unpad_total_12018() {
             }
             *buf.get_mut(at).unwrap() = 0x80;
             buf.get_mut(at.checked_add(1).unwrap()..).unwrap().fill(0);
-            buffers.push((buf, format!("case {k}: marker at {at}")));
+            buffers.push((buf, format!("case {k}: marker at {at}"), UnpadClass::Any));
         }
         buffers.push((
             random_bytes(&mut rng, OUTER_PADDED_LEN),
             format!("case {k}: random"),
+            UnpadClass::Any,
         ));
+        buffers.extend(open_m5_17_buffers(&mut rng, k));
     }
 
     let mut accepted = 0_usize;
-    for (buf, what) in &buffers {
+    let mut per_class = [0_usize; 3];
+    for (buf, what, class) in &buffers {
         let ctx = format!("SECMP_PROPTEST_SEED={} {what}", master_seed());
         let marker = reference_marker(buf);
+        check_unpad_class(buf, *class, marker, &ctx);
+        let count = per_class.get_mut(class.slot()).unwrap();
+        *count = count.checked_add(1).unwrap();
         // the scan
         match unpad(buf, OUTER_PADDED_LEN) {
             Ok(fields) => {
@@ -1120,7 +1282,184 @@ fn prop_outer_unpad_total_12018() {
             }
         }
     }
-    assert_eq!(buffers.len(), 2 + UNPAD_CASES * 7);
+    // per case: the 7 M4 buffers, 4 of "no 0x80 in the tail" and 2 of "0x80 as the last byte" (OPEN-M5-17)
+    assert_eq!(
+        per_class,
+        [2 + UNPAD_CASES * 7, UNPAD_CASES * 4, UNPAD_CASES * 2]
+    );
+    assert_eq!(buffers.len(), 2 + UNPAD_CASES * 13);
     // the valid placement with the version byte 1 is accepted (about half of the 64 buffers)
     assert!(accepted >= UNPAD_CASES / 8, "accepted {accepted}");
+}
+
+// ---- P-12 (M5, R-56) -------------------------------------------------------------------------------------------
+
+/// A responder's prekeys from random seeds (spec §6.1).
+fn random_prekeys(rng: &mut StdRng) -> harness::Prekeys {
+    harness::Prekeys {
+        spk_dh: X25519Secret::from_bytes(&random_bytes(rng, 32)).unwrap(),
+        spk_kem: secmp_crypto::MlKem1024Dk::from_seed(&random_bytes(rng, 64)).unwrap(),
+        rpk_kem: secmp_crypto::MlKem768Dk::from_seed(&random_bytes(rng, 64)).unwrap(),
+        opk_dh: X25519Secret::from_bytes(&random_bytes(rng, 32)).unwrap(),
+        opk_kem: secmp_crypto::MlKem1024Dk::from_seed(&random_bytes(rng, 64)).unwrap(),
+    }
+}
+
+fn random_identity(rng: &mut StdRng) -> harness::Identity {
+    let (xi, ed, dh) = (
+        random_bytes(rng, 32),
+        random_bytes(rng, 32),
+        random_bytes(rng, 32),
+    );
+    harness::identity(&xi, &ed, &dh)
+}
+
+fn clone_prekeys(k: &harness::Prekeys) -> harness::Prekeys {
+    harness::Prekeys {
+        spk_dh: X25519Secret::from_bytes(k.spk_dh.expose_secret()).unwrap(),
+        spk_kem: secmp_crypto::MlKem1024Dk::from_seed(k.spk_kem.expose_seed()).unwrap(),
+        rpk_kem: secmp_crypto::MlKem768Dk::from_seed(k.rpk_kem.expose_seed()).unwrap(),
+        opk_dh: X25519Secret::from_bytes(k.opk_dh.expose_secret()).unwrap(),
+        opk_kem: secmp_crypto::MlKem1024Dk::from_seed(k.opk_kem.expose_seed()).unwrap(),
+    }
+}
+
+/// The inputs of one §6.4 key agreement of P-12, with the pieces the property varies.
+struct KidCase {
+    initiator: harness::Identity,
+    responder: harness::Identity,
+    keys: harness::Prekeys,
+    ld_id: [u8; 16],
+    link_key: [u8; 32],
+    ek_sk: Vec<u8>,
+    m_spk: [u8; 32],
+    m_opk: [u8; 32],
+}
+
+impl KidCase {
+    fn random(rng: &mut StdRng) -> Self {
+        Self {
+            initiator: random_identity(rng),
+            responder: random_identity(rng),
+            keys: random_prekeys(rng),
+            ld_id: rng.random(),
+            link_key: rng.random(),
+            ek_sk: random_bytes(rng, 32),
+            m_spk: rng.random(),
+            m_opk: rng.random(),
+        }
+    }
+
+    fn agree(&self) -> harness::Agreement {
+        self.agree_with(None, None, None)
+    }
+
+    /// The agreement with the initiator, the responder or the prekeys replaced.
+    fn agree_with(
+        &self,
+        initiator: Option<&harness::Identity>,
+        responder: Option<&harness::Identity>,
+        keys: Option<&harness::Prekeys>,
+    ) -> harness::Agreement {
+        harness::agree(&harness::AgreeIn {
+            i: initiator.unwrap_or(&self.initiator),
+            r: responder.unwrap_or(&self.responder),
+            keys: keys.unwrap_or(&self.keys),
+            ld_id: &self.ld_id,
+            link_key: &self.link_key,
+            ek_sk: &self.ek_sk,
+            m_spk: &self.m_spk,
+            m_opk: &self.m_opk,
+        })
+    }
+
+    /// The agreement with one of the six `K_id` inputs replaced by fresh randomness.
+    fn agree_varying(&self, rng: &mut StdRng, input: &str) -> harness::Agreement {
+        let mut keys = clone_prekeys(&self.keys);
+        let (mut ld_id, mut link_key, mut first_m, mut second_m) =
+            (self.ld_id, self.link_key, self.m_spk, self.m_opk);
+        match input {
+            "ld_id" => ld_id = rng.random(),
+            "link_key" => link_key = rng.random(),
+            "DH3" => keys.spk_dh = X25519Secret::from_bytes(&random_bytes(rng, 32)).unwrap(),
+            "ss_spk" => first_m = rng.random(),
+            "DH4" => keys.opk_dh = X25519Secret::from_bytes(&random_bytes(rng, 32)).unwrap(),
+            _ => second_m = rng.random(),
+        }
+        harness::agree(&harness::AgreeIn {
+            i: &self.initiator,
+            r: &self.responder,
+            keys: &keys,
+            ld_id: &ld_id,
+            link_key: &link_key,
+            ek_sk: &self.ek_sk,
+            m_spk: &first_m,
+            m_opk: &second_m,
+        })
+    }
+}
+
+/// P-12 `prop_k_id_independent_of_iks_i_dh1_dh2` (R-56): `K_id` is recomputed from the independent key agreement of
+/// §6.4 with `IKSPublic_I` (and so `DH1` and the transcript) varied, and with `DH2` varied (another responder
+/// identity): it is unchanged, while `SK` changes; with each of its six inputs (`ld_id`, `link_key`, `DH3`,
+/// `ss_spk`, `DH4`, `ss_opk`) varied it changes. The library's `hx::k_id` agrees with the harness on the agreed
+/// secrets.
+#[test]
+fn prop_k_id_independent_of_iks_i_dh1_dh2() {
+    let mut rng = rng_for(12);
+    for case in 0..CASES * 2 {
+        let ctx = format!("SECMP_PROPTEST_SEED={} case {case}", master_seed());
+        let c = KidCase::random(&mut rng);
+        let base = c.agree();
+        // the library's K_id on the agreed secrets equals the harness's
+        let secret = |b: &[u8]| SecretBytes::<32>::from_slice(b).unwrap();
+        let lib = hx::k_id(
+            &c.ld_id,
+            &secret(&c.link_key),
+            &secret(base.dh.get(2).unwrap()),
+            &secret(&base.ss_spk),
+            &secret(base.dh.get(3).unwrap()),
+            &secret(&base.ss_opk),
+        )
+        .unwrap();
+        assert_eq!(lib.expose_secret(), base.k_id.expose_secret(), "{ctx}: lib");
+        // IKSPublic_I (DH1, transcript) varied: K_id unchanged, SK and DH1 changed
+        let another_initiator = random_identity(&mut rng);
+        let by_i = c.agree_with(Some(&another_initiator), None, None);
+        assert_ne!(by_i.dh.first(), base.dh.first(), "{ctx}: DH1 differs");
+        assert_ne!(by_i.transcript, base.transcript, "{ctx}: transcript");
+        assert_ne!(
+            by_i.sk.expose_secret(),
+            base.sk.expose_secret(),
+            "{ctx}: SK"
+        );
+        assert_eq!(
+            by_i.k_id.expose_secret(),
+            base.k_id.expose_secret(),
+            "{ctx}: K_id independent of IKSPublic_I and DH1"
+        );
+        // DH2 varied (another responder identity IK_dh_R): K_id unchanged, SK changed
+        let another_responder = random_identity(&mut rng);
+        let by_r = c.agree_with(None, Some(&another_responder), None);
+        assert_ne!(by_r.dh.get(1), base.dh.get(1), "{ctx}: DH2 differs");
+        assert_ne!(
+            by_r.sk.expose_secret(),
+            base.sk.expose_secret(),
+            "{ctx}: SK (DH2)"
+        );
+        assert_eq!(
+            by_r.k_id.expose_secret(),
+            base.k_id.expose_secret(),
+            "{ctx}: K_id independent of DH2"
+        );
+        // each of the six inputs varied: K_id changes
+        for input in ["ld_id", "link_key", "DH3", "ss_spk", "DH4", "ss_opk"] {
+            let other = c.agree_varying(&mut rng, input);
+            assert_ne!(
+                other.k_id.expose_secret(),
+                base.k_id.expose_secret(),
+                "{ctx}: K_id changes with {input}"
+            );
+        }
+    }
 }

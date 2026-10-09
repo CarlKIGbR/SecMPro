@@ -1,0 +1,20 @@
+# M5-C carry-over (run 37851301032): keys.rs:120:51 `replace < with <=` in KeyFile::rotate
+# head: working tree on b370ffc + test keys::tests::rotation_boundary_new_generation_may_expire_with_the_newest
+# cargo mutants --no-shuffle -j 3 --output target/m5c-mutants --features kat --caught --unviable
+#   --package secmp-crypto --package secmp-proto --package secmp-relay
+#   --exclude crates/secmp-proto/src/kani_proofs.rs --exclude crates/secmp-relay/src/kani_proofs.rs
+#   --exclude-re kani_stubs:: --exclude-re FixedEntropy --file crates/secmp-relay/src/keys.rs --re rotate
+#   -- -- --skip ratchet_fast_forward_bound_on_the_chain --skip ratchet_fast_forward_bound_on_a_step
+# (the gate's other --exclude-re entries match nothing in keys.rs and are left out)
+
+Found 7 mutants to test
+ok       Unmutated baseline in 9s build + 35s test
+ INFO Auto-set test timeout to 178s
+caught   crates/secmp-relay/src/keys.rs:113:9: replace KeyFile::rotate -> Result<u32> with Ok(0) in 1s build + 0s test
+caught   crates/secmp-relay/src/keys.rs:113:9: replace KeyFile::rotate -> Result<u32> with Ok(1) in 1s build + 0s test
+caught   crates/secmp-relay/src/keys.rs:120:51: replace < with == in KeyFile::rotate in 4s build + 0s test
+caught   crates/secmp-relay/src/keys.rs:125:51: replace >= with < in KeyFile::rotate in 1s build + 0s test
+caught   crates/secmp-relay/src/keys.rs:126:35: replace >= with < in KeyFile::rotate in 1s build + 0s test
+caught   crates/secmp-relay/src/keys.rs:120:51: replace < with > in KeyFile::rotate in 12s build + 0s test
+caught   crates/secmp-relay/src/keys.rs:120:51: replace < with <= in KeyFile::rotate in 12s build + 0s test
+7 mutants tested in 66s: 7 caught

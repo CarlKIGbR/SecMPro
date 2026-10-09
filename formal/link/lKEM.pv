@@ -1,0 +1,69 @@
+(* SPDX-License-Identifier: AGPL-3.0-or-later *)
+(* formal/link/lKEM.pv — session lKEM of CLAIMS §LINK, one file per session (OPEN-M5-16 A, LO-1) over the
+   library formal/link.pvl (model, abstractions, devices: its header). Run:
+   proverif -lib formal/link.pvl formal/link/lKEM.pv
+
+   Row (formal/link.pvl 3.): KEMO (phase 0) for the ML-KEM-1024 and ML-KEM-768 encapsulations; relay_dh keeps ss1 secret.
+   Queries in the order of their RESULT lines (CLAIMS §LINK gate rule):
+     L3b · L3b · L8 · L8 · L8
+     L1b
+     L4 · L4
+   — 8 RESULT lines.
+*)
+
+const lKEM: tagt.
+
+(* KEMO, phase 0: the honest ML-KEM-1024 (static stage) and ML-KEM-768 (ephemeral stage) encapsulations
+   (formal/link.pvl 4.) *)
+reduc forall ek: bitstring, r: bitstring;
+        kem_break1024(encaps_ct1024(ek, kemr(lKEM, r))) = encaps_ss1024(ek, kemr(lKEM, r)).
+reduc forall ek: bitstring, r: bitstring;
+        kem_break768(encaps_ct768(ek, kemr(lKEM, r))) = encaps_ss768(ek, kemr(lKEM, r)).
+
+(* Secrecy assumptions (formal/link.pvl 7.): the secrets this session never reveals, and those it reveals only
+   in phase 1 ("phase 0") *)
+not x: bitstring; attacker(dhsk(lKEM, iC(x))).
+not x: bitstring; attacker(kemsk(lKEM, iC(x))).
+not x: bitstring; attacker(dhsk(lKEM, iE(x))).
+not x: bitstring; attacker(dhsk(lKEM, iR(x))).
+not x: bitstring; attacker(kemr(lKEM, x)).
+not x: bitstring; attacker(sigk(lKEM, iQ(x))).
+not attacker(dhsk(lKEM, kRdh)).
+not attacker(kemsk(lKEM, kRkem)).
+not attacker(sigk(lKEM, kRsig)).
+
+(* Queries (CLAIMS §LINK), one declaration per begin event (formal/link.pvl 7.); R's pinned fingerprint is
+   h((lbl_relayfp, vk(sigk(s, kRsig)))), an honest queue key vk(sigk(s, iQ(x))). *)
+
+query sid: bitstring, ctr: bitstring, m: bitstring, kid: bitstring, h0: bitstring, h1: bitstring, k1: key,
+      k2: key, fp: bitstring, cs: bitstring, cmd: bitstring, x: bitstring;
+      (* L3b (c2r): CSend payloads of the links whose CAccept names R's pinned fp *)
+      event(CAccept(lKEM, h((lbl_relayfp, vk(sigk(lKEM, kRsig)))), kid, h0, h1, sid, k1, k2))
+        && event(CSend(lKEM, sid, ctr, m)) && attacker(m);
+      (* L3b (r2c): RSend payloads of the links whose CAccept names R's pinned fp *)
+      event(CAccept(lKEM, h((lbl_relayfp, vk(sigk(lKEM, kRsig)))), kid, h0, h1, sid, k1, k2))
+        && event(RSend(lKEM, sid, ctr, m)) && attacker(m);
+      (* L8: reachability — CStart *)
+      event(CStart(lKEM, fp, kid, h0));
+      (* L8: the honest pair completes (RAccept and CAccept with equal arguments) *)
+      event(RAccept(lKEM, kid, h0, h1, sid, k1, k2)) && event(CAccept(lKEM, fp, kid, h0, h1, sid, k1, k2));
+      (* L8: R executes a command of an honest queue key *)
+      event(RExec(lKEM, sid, cs, cmd, vk(sigk(lKEM, iQ(x))))).
+
+query sid: bitstring, ctr: bitstring, m: bitstring, kid: bitstring, h0: bitstring, h1: bitstring, k1: key,
+      k2: key, fp: bitstring, cs: bitstring, cmd: bitstring, x: bitstring;
+      (* L1b: relay authentication with the PQ break *)
+      inj-event(CAccept(lKEM, h((lbl_relayfp, vk(sigk(lKEM, kRsig)))), kid, h0, h1, sid, k1, k2))
+        ==> inj-event(RAccept(lKEM, kid, h0, h1, sid, k1, k2)).
+
+query sid: bitstring, ctr: bitstring, m: bitstring, kid: bitstring, h0: bitstring, h1: bitstring, k1: key,
+      k2: key, fp: bitstring, cs: bitstring, cmd: bitstring, x: bitstring;
+      (* L4 (c2r): R's frames of a link whose HS1 the honest C produced (CStart h0 = RAccept h0) *)
+      event(CStart(lKEM, fp, kid, h0)) && event(RAccept(lKEM, kid, h0, h1, sid, k1, k2))
+        && inj-event(RRecv(lKEM, sid, ctr, m)) ==> inj-event(CSend(lKEM, sid, ctr, m));
+      (* L4 (r2c) *)
+      inj-event(CRecv(lKEM, sid, ctr, m)) ==> inj-event(RSend(lKEM, sid, ctr, m)).
+
+process
+    Relay(lKEM)
+  | ! Client(lKEM)

@@ -10,4 +10,6 @@
 //! added with an ADR (`serde_json`, ADR-037). It must never be a normal (non-dev) dependency of a shipped crate.
 #![forbid(unsafe_code)]
 
+#[cfg(feature = "harness")]
+pub mod harness;
 pub mod kat;

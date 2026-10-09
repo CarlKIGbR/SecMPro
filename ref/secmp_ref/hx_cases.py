@@ -20,7 +20,8 @@ from typing import NamedTuple
 
 from . import encodings as enc
 from . import encodings_cases as ec
-from . import hx, inv, sizes, tr
+from . import hx, inv, primitives, sizes, tr
+from . import relay as relay_q
 from .cases import TableMismatch
 from .errors import Reject
 from .tr_cases import ROUTE_PERIOD, ROUTE_STREAM, STEP_DRAWS, state_digest
@@ -49,8 +50,11 @@ assert LOW_ORDER.hex() == "e0eb7a7c3b41b8ae1656e3faf19fc46ada098deb9c32b1fd86620
 IKS_STREAM = [("ik_mldsa_xi", 32), ("ik_ed_seed", 32), ("ik_dh_sk", 32)]
 KEYS_R_STREAM = IKS_STREAM + [("spk_dh_sk", 32), ("spk_kem_seed", 64), ("rpk_kem_seed", 64), ("opk_dh_sk", 32),
                               ("opk_kem_seed", 64), ("rnd", 32)]
+# `inv_sid` is derived (§9.1, ADR-048 (m)); its 16 bytes are still drawn, at their old position, and discarded
+# (reading OPEN-M5-14 B, Weisung REF-M5-2), so that every other draw of the case keeps its bytes. The queue keys
+# come last.
 INVITE_STREAM = [("relay_fp", 32), ("onion_pubkey", 32), ("akc", 32), ("ld_id", 16), ("link_key", 32),
-                 ("inv_sid", 16), ("inv_send_seed", 32)]
+                 ("inv_sid_discarded", 16), ("inv_send_seed", 32), ("invq_recv_seed", 32), ("owner_seed", 32)]
 N_STREAM = [("n", 24)]
 START_DRAWS = [("ek_sk", 32), ("m_spk", 32), ("m_opk", 32), ("dh_s_sk", 32), ("kem_s_seed", 64), ("m_tr", 32)]
 CELL_NONCES = [("cell_nonce_0", 24), ("cell_nonce_1", 24), ("cell_nonce_2", 24)]
@@ -173,13 +177,19 @@ def _invite(ctx, rng):
     relay.update(akc=rng.take(32), direct_present=0)
     v = {"ver": enc.PROTO_VER, "kind": KIND, "relay": relay, "ld_id": rng.take(16), "link_key": rng.take(32),
          "inviter_fp": ctx.r.fp}
-    v.update(inv_sid=rng.take(16), inv_send_seed=rng.take(32), inv_period_s=INV_PERIOD, expires=EXPIRES)
+    rng.take(16)                                   # inv_sid_discarded
+    inv_send_seed = rng.take(32)
+    invq_recv_pk = primitives.ed25519_public(rng.take(32))     # the invitation queue's recipient key
+    owner_pk = primitives.ed25519_public(rng.take(32))         # the link-data owner key (§5.2)
+    inv_sid = relay_q.sid_of(invq_recv_pk, primitives.ed25519_public(inv_send_seed))        # §9.1
+    v.update(inv_sid=inv_sid, inv_send_seed=inv_send_seed, inv_period_s=INV_PERIOD, expires=EXPIRES)
     ctx.invitation_value, ctx.invitation = v, enc.encode("InvitationV1", v)
     ctx.uri = inv.uri_encode(ctx.invitation)
     ctx.record = hx.InvitationRecord(v["ld_id"], v["link_key"], SPK_ID, OPK_ID, EXPIRES)
     _check(len(ctx.invitation) == sizes.INVITATION_NO_DIRECT and inv.uri_decode(ctx.uri) == ctx.invitation,
            "invite: size or URI round trip")
-    return {}, {"invitation": ctx.invitation, "uri": ctx.uri}
+    return {}, {"invitation": ctx.invitation, "uri": ctx.uri, "inv_sid": inv_sid, "invq_recv_pk": invq_recv_pk,
+                "owner_pk": owner_pk}
 
 
 def _linkdata(ctx, rng):
@@ -265,7 +275,7 @@ POSITIVES = [
         "SPK_kem (ML-KEM-1024), RPK_kem (ML-KEM-768), OPK 42 (X25519, ML-KEM-1024); the bundle signed with `rnd`"),
     Pos("keys-I", "I", IKS_STREAM, _keys_i, "I's identity"),
     Pos("invite", "R", INVITE_STREAM, _invite,
-        "InvitationV1 with `inviter_fp` = case 1 `fp`, `onion` = `onion_pubkey` ‖ CHECKSUM ‖ 0x03, and its URI"),
+        "InvitationV1 with `inviter_fp` = case 1 `fp`, `onion` = `onion_pubkey` ‖ CHECKSUM ‖ 0x03, `inv_sid` derived (§9.1) from `invq_recv_seed` and `inv_send_seed`; its URI; `invq_recv_pk`, `owner_pk`"),
     Pos("linkdata", "R", N_STREAM, _linkdata,
         "LinkDataV1 {case 1 `iks`, case 1 bundle, Profile_R, `created`} sealed under `K_ld` with `n`"),
     Pos("invitee-accept", "I", [], _invitee_accept,
@@ -484,6 +494,115 @@ assert [n.name for n in NEGATIVES] == [f"V{k}" for k in range(1, 9)] + [f"R{k}" 
 
 
 # ---------------------------------------------------------------------------------------------
+# Rev 2.5 cases (Weisung REF-M5-2 §2, M4 review R-66) and RF-1: appended after R13, in the Weisung's order.
+# Everything in this section is a proposal. R's step draws of a rejected group are listed like R8's.
+
+STEP_DRAWS_2 = [("dh_sk_2", 32), ("kem_seed_2", 64), ("m_2", 32)]   # the second attempt's DH step (A1)
+NEW_SPK_ID = SPK_ID + 1
+
+
+def _a1(ctx, rng):
+    """A complete group (a fresh init_id) whose first_msg body tag is flipped, then the honest group of case 6."""
+    derived, rejected = _inner_edit(ctx, rng, ctx.i.iks + flip(ctx.env.first_msg, -1))
+    return derived, rejected + list(ctx.env.cells), ctx.fresh_responder()
+
+
+def _r14(ctx, rng):
+    """[chunk 1 of X with differing bytes, the honest chunks 0, 1, 2 of X, then 0, 1, 2 of X again]."""
+    chunk = flip(hx.chunks(ctx.env.outer)[1], 0)
+    pt = hx.cell_plaintext(ctx.env.init_id, 1, chunk)
+    c0, c1, c2 = ctx.env.cells
+    differing = hx.seal_cell(ctx.start.k_inv, ctx.record.ld_id, pt, rng.take(24))
+    return {}, [differing, c0, c1, c2, c0, c1, c2]
+
+
+def _advanced_first_msg(ctx, rng, *, discard=0, pn=0):
+    """case 6's Content encrypted from a copy of I's post-init TR state: after `discard` earlier messages on the
+    chain (their cells discarded, so the header carries n = discard) or with `pn` set; inner and outer re-sealed."""
+    state = dataclasses.replace(ctx.post_init, skipped=dict(ctx.post_init.skipped), pn=pn)
+    for _ in range(discard):
+        tr.encrypt(state, ctx.content, rng)
+    first_msg = tr.encrypt(state, ctx.content, rng)
+    return _inner_edit(ctx, rng, ctx.i.iks + first_msg, {"content": ctx.content})
+
+
+def _r17(ctx, rng):
+    return _inner_edit(ctx, rng, ctx.r.iks + ctx.env.first_msg)
+
+
+UNKNOWN_KIND = 0x7F
+UNKNOWN_BLOB = 16
+
+
+def _r18(ctx, rng):
+    blob = rng.take(UNKNOWN_BLOB)
+    route = {"ver": enc.PROTO_VER, "kind": UNKNOWN_KIND, "len": UNKNOWN_BLOB, "blob": blob}
+    return _new_first_msg(ctx, rng, enc.payload("Content", handshake_content(ctx.avatar, route)))
+
+
+def _a2(ctx, rng):
+    """R holds two SPK generations; the invitation references the older, retained one."""
+    spk_dh, spk_kem = tr.DhKey.from_secret(rng.take(32)), hx.Kem1024Key.from_seed(rng.take(64))
+    rpk_kem = tr.KemKey.from_seed(rng.take(64))
+    old = ctx.prekeys
+    prekeys = dataclasses.replace(old, spk_id=NEW_SPK_ID, spk_dh=spk_dh, spk_kem=spk_kem, rpk_kem=rpk_kem,
+                                  opks=dict(old.opks),
+                                  retained={SPK_ID: hx.Spk(SPK_ID, old.spk_dh, old.spk_kem, old.rpk_kem,
+                                                           old.spk_expiry)})
+    return {}, list(ctx.env.cells), hx.Responder(ctx.r, prekeys, ctx.record)
+
+
+class ExtraPos(NamedTuple):
+    name: str
+    op: str
+    stream: list
+    build: object                                 # (ctx, rng) → (derived inputs, fetched, R's state)
+    text: str
+
+
+EXTRA = [
+    ExtraPos("A1", "respond-later-group", INNER_RESEAL + STEP_DRAWS + STEP_DRAWS_2, _a1,
+             "R, from its state after cases 1–4, on `fetched` = [the three cells of a complete group with a fresh "
+             "`init_id` whose `first_msg` has bit 0 of its last byte flipped (as R8), then case 6's three cells]. "
+             "The first group completes, is rejected on its working copy (its DH-step draws are the first "
+             "`dh_sk`, `kem_seed`, `m`) and discarded, the OPK is kept; the second group, another `init_id`, is "
+             "accepted (second step draws): outputs as `respond` (§6.5 rev 2.5)"),
+    ResponderNeg("R14", "no-reform", [("cell_nonce_1", 24)], _r14, "inner-open",
+                 "`fetched` = [a cell with `init_id` of case 6, `i` = 1, and chunk 1 with bit 0 of byte 0 flipped "
+                 "(sealed with `cell_nonce_1`), case 6's cells 0, 1, 2, then cells 0, 1, 2 again]. The first-seen "
+                 "chunk 1 wins, so the group completes with the differing chunk and is rejected (its `inner_ct` "
+                 "does not open); the rejected `init_id` is discarded and the honest cells after it do not form it "
+                 "again (§6.5 rev 2.5)"),
+    ResponderNeg("R15", "first-msg-n", [("hdr_nonce_0", 24), ("hdr_nonce", 24)] + INNER_RESEAL + STEP_DRAWS,
+                 lambda c, r: _advanced_first_msg(c, r, discard=1), "first-msg-header",
+                 "case 6's Content encrypted from I's post-init TR state as its second message (one message "
+                 "encrypted first with `hdr_nonce_0` and discarded), so the header carries `n` = 1, with "
+                 "`hdr_nonce`; inner and outer re-sealed. R decrypts it (skipping one key, DH step), then rejects "
+                 "the header (§6.5 rev 2.5)"),
+    ResponderNeg("R16", "first-msg-pn", [("hdr_nonce", 24)] + INNER_RESEAL + STEP_DRAWS,
+                 lambda c, r: _advanced_first_msg(c, r, pn=1), "first-msg-header",
+                 "case 6's Content encrypted from I's post-init TR state with `pn` := 1 (header `n` = 0, `pn` = 1) "
+                 "and `hdr_nonce`; inner and outer re-sealed. R decrypts it, then rejects the header"),
+    ResponderNeg("R17", "reflection", INNER_RESEAL, _r17, "reflection",
+                 "`IKSPublic_I` := `IKSPublic_R` (case 1's `iks`) in Inner, with case 6's `first_msg`; inner and "
+                 "outer re-sealed. Rejected at §6.6 step 2 (rev 2.5), before any TR step"),
+    ResponderNeg("R18", "no-known-route", [("route_blob", UNKNOWN_BLOB), ("hdr_nonce", 24)] + INNER_RESEAL
+                 + STEP_DRAWS, _r18, "no-known-route",
+                 "case 6's Handshake Content with its one route replaced by a RouteDescriptor of kind 0x7F (`ver` 1, "
+                 "`len` 16, `blob` = `route_blob`), encrypted from I's post-init TR state with `hdr_nonce`; inner "
+                 "and outer re-sealed. R decrypts and decodes it (an unknown kind is kept, §9.8), then rejects: no "
+                 "route of a known kind (§6.5 rev 2.5; SQ-29)"),
+    ExtraPos("A2", "respond-retained-spk", [("spk_dh_sk", 32), ("spk_kem_seed", 64), ("rpk_kem_seed", 64)]
+             + STEP_DRAWS, _a2,
+             "**RF-1.** R holds two SPK generations: a new current one, `spk_id` 8 (`spk_dh_sk`, `spk_kem_seed`, "
+             "`rpk_kem_seed`), and SPK 7 of cases 1–4, retained because the invitation of case 3 references it "
+             "(§6.1 rev 2.5). `fetched` = case 6's cells. R finds SPK 7 by `spk_id` and accepts: outputs as `respond`, "
+             "`transcript`, `sk`, `k_id` equal case 7's"),
+]
+assert [e.name for e in EXTRA] == ["A1", "R14", "R15", "R16", "R17", "R18", "A2"]
+
+
+# ---------------------------------------------------------------------------------------------
 # The run
 
 
@@ -513,7 +632,28 @@ def run() -> Run:
             _invitee_reject(ctx, cases, rows, i, rng, neg)
         else:
             _respond_reject(ctx, cases, rows, i, rng, neg)
+
+    for ex in EXTRA:
+        i += 1
+        rng = _Named(CaseStream(SUITE, i), ex.stream)
+        if isinstance(ex, ResponderNeg):
+            _respond_reject(ctx, cases, rows, i, rng, ex)
+        else:
+            _respond_extra(ctx, cases, rows, i, rng, ex)
     return Run(cases, rows, ctx)
+
+
+def _respond_extra(ctx, cases, rows, i, rng, ex):
+    derived, fetched, responder = ex.build(ctx, rng)
+    acc = hx.respond(responder, fetched, rng)
+    _check(_opks(responder) == [], f"{ex.name}: the OPK was not deleted")
+    outputs = _accepted_outputs(ctx, responder, acc)
+    if ex.name == "A2":
+        _check((outputs["transcript"], outputs["sk"], outputs["k_id"]) == (ctx.accepted7.transcript, ctx.accepted7.sk,
+                                                                       ctx.accepted7.k_id), "A2: keys differ from case 7")
+    cases.append(Case(i, ex.op, {**rng.done(), **derived, "fetched": fetched}, outputs, {"party": "R"}))
+    rows.append({"i": i, "id": case_id(SUITE, i), "op": ex.op, "party": "R", "name": ex.name, "stream": ex.stream,
+                 "derived": [*derived, "fetched"], "outputs": list(outputs), "text": ex.text})
 
 
 def _invitee_reject(ctx, cases, rows, i, rng, neg):

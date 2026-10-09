@@ -1168,7 +1168,7 @@ fn link_put_row(i: u32, s: &mut In) -> Value {
         owner_pk,
         token,
         sig,
-        blob_part,
+        blob_part: blob_part.into(),
     };
     req(i, "LINK_PUT", cmd_seq, cmd)
 }
@@ -1241,7 +1241,7 @@ fn responses(i: u32, s: &mut In) -> Value {
             let cmd = ResponseCmd::LinkR {
                 present: true,
                 consumed: false,
-                blob_part: s.boxed::<BLOB_PART_LEN>(),
+                blob_part: s.boxed::<BLOB_PART_LEN>().into(),
             };
             resp(i, "LINKR", None, cmd_seq, cmd)
         }

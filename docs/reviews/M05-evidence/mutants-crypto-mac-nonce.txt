@@ -1,0 +1,26 @@
+Found 22 mutants to test
+ok       Unmutated baseline in 9s build + 0s test
+ INFO Auto-set test timeout to 20s
+unviable crates/secmp-crypto/src/mac.rs:25:5: replace hmac_parts -> Result<Hmac<Sha256>> with Ok(Hmac::new()) in 0s build
+unviable crates/secmp-crypto/src/mac.rs:25:5: replace hmac_parts -> Result<Hmac<Sha256>> with Ok(Hmac::from_iter([Default::default()])) in 0s build
+unviable crates/secmp-crypto/src/mac.rs:25:5: replace hmac_parts -> Result<Hmac<Sha256>> with Ok(Hmac::new(Default::default())) in 0s build
+unviable crates/secmp-crypto/src/mac.rs:25:5: replace hmac_parts -> Result<Hmac<Sha256>> with Ok(Hmac::from(Default::default())) in 0s build
+unviable crates/secmp-crypto/src/mac.rs:39:5: replace hkdf_extract -> Result<SecretBytes<32>> with Ok(Default::default()) in 0s build
+caught   crates/secmp-crypto/src/mac.rs:50:5: replace hmac_sha256 -> Result<[u8; MAC_LEN]> with Ok([0; MAC_LEN]) in 1s build + 0s test
+unviable crates/secmp-crypto/src/nonce.rs:19:9: replace Nonce24::random -> Result<Self> with Ok(Default::default()) in 0s build
+unviable crates/secmp-crypto/src/nonce.rs:28:9: replace Nonce24::from_bytes_kat -> Self with Default::default() in 0s build
+unviable crates/secmp-crypto/src/nonce.rs:36:9: replace Nonce24::from_link_counter -> Self with Default::default() in 0s build
+caught   crates/secmp-crypto/src/nonce.rs:47:9: replace Nonce24::as_bytes -> &[u8; 24] with Box::leak(Box::new([0; 24])) in 4s build + 0s test
+caught   crates/secmp-crypto/src/nonce.rs:47:9: replace Nonce24::as_bytes -> &[u8; 24] with Box::leak(Box::new([1; 24])) in 1s build + 0s test
+unviable crates/secmp-crypto/src/mac.rs:69:5: replace hmac_sha256_verify -> Result<Choice> with Ok(Default::default()) in 10s build
+caught   crates/secmp-crypto/src/nonce.rs:51:9: replace Nonce24::into_bytes -> [u8; 24] with [0; 24] in 1s build + 0s test
+unviable crates/secmp-crypto/src/nonce.rs:64:9: replace Counter64::zero -> Self with Default::default() in 0s build
+caught   crates/secmp-crypto/src/nonce.rs:70:9: replace Counter64::peek -> u64 with 0 in 1s build + 0s test
+caught   crates/secmp-crypto/src/nonce.rs:51:9: replace Nonce24::into_bytes -> [u8; 24] with [1; 24] in 5s build + 0s test
+caught   crates/secmp-crypto/src/nonce.rs:70:9: replace Counter64::peek -> u64 with 1 in 1s build + 0s test
+unviable crates/secmp-crypto/src/nonce.rs:78:9: replace Counter64::next -> Result<(u64, Self)> with Ok((0, Default::default())) in 0s build
+caught   crates/secmp-crypto/src/mac.rs:50:5: replace hmac_sha256 -> Result<[u8; MAC_LEN]> with Ok([1; MAC_LEN]) in 16s build + 0s test
+unviable crates/secmp-crypto/src/nonce.rs:78:9: replace Counter64::next -> Result<(u64, Self)> with Ok((1, Default::default())) in 0s build
+unviable crates/secmp-crypto/src/nonce.rs:88:9: replace Counter64::accept -> Result<Self> with Ok(Default::default()) in 0s build
+caught   crates/secmp-crypto/src/nonce.rs:88:21: replace != with == in Counter64::accept in 1s build + 0s test
+22 mutants tested in 37s: 9 caught, 13 unviable

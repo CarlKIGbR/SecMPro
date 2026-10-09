@@ -47,8 +47,14 @@ pub(crate) const AUDIT_IGNORES: &[(&str, &str)] = &[(
 )];
 
 /// Packages exposing the `kat` feature (docs/06 §5 step 5): external KATs, differential tests, vector checks; M3:
-/// `secmp-proto` (derandomised TR entry points for the vectors and the ct bench, ADR-042).
-pub(crate) const KAT_PACKAGES: &[&str] = &["secmp-crypto", "secmp-proto", "secmp-testkit"];
+/// `secmp-proto` (derandomised TR entry points for the vectors and the ct bench, ADR-042); M5: `secmp-relay` (the
+/// store snapshot and digest, the live-buffer count and the event capture of its test crate `relay`).
+pub(crate) const KAT_PACKAGES: &[&str] = &[
+    "secmp-crypto",
+    "secmp-proto",
+    "secmp-relay",
+    "secmp-testkit",
+];
 
 /// ADR-041 (1), replacing the two tiers of ADR-038 (2): the |t| threshold of the `ct` gate — a target's shift counts
 /// as reproduced if |t| exceeds it in both measurements at the same crop with the same sign; the positive control
@@ -108,7 +114,12 @@ pub(crate) const CT_SAS_SAMPLES: usize = 20_000;
 /// header keys — the opening trial is the same, R-59) and the INV/HX targets of
 /// TEST-SPEC-M4 (f): `inv_fingerprint_compare` (`inv::invitee_check`, §5.5 step 3), `x25519_zero_check`
 /// (`X25519Secret::diffie_hellman`, §3, §6.4), `hx_accept_reject_inner` and `hx_accept_reject_first_msg`
-/// (`Responder::accept`, §6.6 steps 2 and 3); M4 review C-2: the HX same-content control (ADR-042 Amendment 3).
+/// (`Responder::accept`, §6.6 steps 2 and 3); M4 review C-2: the HX same-content control (ADR-042 Amendment 3). M5,
+/// TEST-SPEC-M5 (g): CT-01 `link_hs1_reject_mac1` (the relay's `mac1` compare, §8.3), CT-02 `link_hs2_reject_mac2`
+/// (the client's `mac2` compare, §8.3), CT-03 `link_frame_open_reject` (`Link::open`, §8.4), CT-04
+/// `q_queue_new_reject_token` (`link::ids::token_verify`, §9.6), CT-05 `tr_decrypt_trial_open_position` (§7.4, the
+/// opening trial's position among 2 distinct skipped header keys; M4 review R-42, campaign R-59) and CT-06 the LINK
+/// same-content control [`CT_LINK_SAME_CONTENT_CONTROL`].
 pub(crate) const CT_TARGETS: &[&str] = &[
     "control_variable_time_compare",
     "tag_compare",
@@ -130,6 +141,12 @@ pub(crate) const CT_TARGETS: &[&str] = &[
     "hx_accept_reject_inner",
     "hx_accept_reject_first_msg",
     "hx_same_content_control",
+    "link_hs1_reject_mac1",
+    "link_hs2_reject_mac2",
+    "link_frame_open_reject",
+    "q_queue_new_reject_token",
+    "tr_decrypt_trial_open_position",
+    "link_same_content_control",
 ];
 
 /// The positive control among [`CT_TARGETS`].
@@ -149,6 +166,35 @@ pub(crate) const CT_SAME_CONTENT_CONTROL: &str = "same_content_control";
 /// FAIL makes the run `CONTROL_FAIL`, PASS and `SUB_FLOOR_SHIFT` pass. Not the positive control.
 pub(crate) const CT_HX_SAME_CONTENT_CONTROL: &str = "hx_same_content_control";
 
+/// The LINK same-content control among [`CT_TARGETS`] (TEST-SPEC-M5 CT-06; the ADR-042 Amendment 2 rule: a new
+/// artefact class gets its control): `Link::open` of the class-1 frame of `link_frame_open_reject` (4352 B, the
+/// largest LINK blend) in both classes through the LINK preparation path, judged like [`CT_SAME_CONTENT_CONTROL`]: a
+/// FAIL makes the run `CONTROL_FAIL`, PASS and `SUB_FLOOR_SHIFT` pass. Not the positive control.
+pub(crate) const CT_LINK_SAME_CONTENT_CONTROL: &str = "link_same_content_control";
+
+/// M4 review R-47 (TEST-SPEC-M5 X-08): the reject site each ct target that claims one is bound to — the site of its
+/// claim in `crates/secmp-testkit/benches/ct.rs`, one of [`KNOWN_SITES`]. The gate (`gates::ct_site_lines`) refuses a
+/// report in which a listed target claims another site or none, or a target not listed here claims a site, so a
+/// bench edit that re-aims a target at another (known) site fails unless this table changes in the same reviewed
+/// commit. The SecMP-LINK/Q targets claim no site (the LINK layer tags none, spec §8.5; their pre-check is the
+/// positive twin) and are not listed.
+pub(crate) const CT_TARGET_SITES: &[(&str, &str)] = &[
+    ("tr_decrypt_reject_hdr_key", "header: no key opened"),
+    ("tr_decrypt_reject_body_tag", "body MAC"),
+    ("tr_decrypt_reject_ct_pq", "kem constancy"),
+    ("tr_decrypt_reject_skipped", "body MAC"),
+    ("same_content_control", "body MAC"),
+    ("inv_fingerprint_compare", "fingerprint"),
+    (
+        "x25519_zero_check",
+        "§3/§6.4 all-zero check of the output (passes: not a reject target)",
+    ),
+    ("hx_accept_reject_inner", "inner open"),
+    ("hx_accept_reject_first_msg", "first_msg decrypt"),
+    ("hx_same_content_control", "inner open"),
+    ("tr_decrypt_trial_open_position", "body MAC"),
+];
+
 /// docs/07 M3 acceptance "encrypt+decrypt of a message < 3 ms" (M3 plan D11): the `perf` step fails if the maximum of
 /// a kind of `crates/secmp-proto/examples/tr-perf.rs` (release profile; encrypt, persist, decrypt and commit of one
 /// message) reaches this many milliseconds.
@@ -166,7 +212,12 @@ pub(crate) const TR_PERF_KINDS: &[&str] = &["chain", "step"];
 /// (`proto_*`, a selector byte picks the decoder); M3 SecMP-TR `Decrypt` on a fixed receiver state (`tr_decrypt`)
 /// and the TR persistence decoders (`tr_state`); M4 the invitation URI (`inv_uri`), the link data (`inv_linkdata`),
 /// the three handshake structures (`hx_outer`, `hx_inner`, `hx_cell_plaintext`) and `Responder::accept` on raw and
-/// on structurally mutated envelopes (`hx_accept_raw`, `hx_accept_structured`).
+/// on structurally mutated envelopes (`hx_accept_raw`, `hx_accept_structured`); M5 (Phase A) the SecMP-LINK record
+/// decoders (`link_records`), the client and the relay side of the handshake (`link_client_handshake`,
+/// `link_relay_handshake`), `Link::open` (`link_frame_open`) and the D.2 frame-plaintext decoders (`q_request_decode`,
+/// `q_response_decode`); `hx_accept_structured` gains its mode 3 (M4 review R-44); M5 (Phase B) the relay's executor
+/// on structured, honestly signed command scripts (`relay_executor`, FZ-07) and a relay connection on honestly
+/// sealed arbitrary plaintexts with `LINK_PUT`/`CONT` interleavings (`relay_link_session`, FZ-08).
 pub(crate) const FUZZ_TARGETS: &[&str] = &[
     "caead_open",
     "ed25519_verify",
@@ -178,6 +229,10 @@ pub(crate) const FUZZ_TARGETS: &[&str] = &[
     "hybrid_sign_verify",
     "inv_linkdata",
     "inv_uri",
+    "link_client_handshake",
+    "link_frame_open",
+    "link_records",
+    "link_relay_handshake",
     "mldsa65_verify",
     "mlkem_parse",
     "msg_open",
@@ -186,10 +241,25 @@ pub(crate) const FUZZ_TARGETS: &[&str] = &[
     "proto_handshake",
     "proto_invitation",
     "proto_records",
+    "q_request_decode",
+    "q_response_decode",
+    "relay_executor",
+    "relay_link_session",
     "tr_decrypt",
     "tr_state",
     "x25519_dh",
 ];
+
+/// Fuzz targets that rely on their tracked corpus (`fuzz/corpus/<target>/`) alone, because the frozen suite their
+/// seeding rule would read is not frozen yet (`xtask::fuzzseed`: a rule names a suite of [`VECTOR_SUITES`]).
+/// M5 Phase A: the six SecMP-LINK/Q targets read the `link` suite, which is frozen in Phase B (TEST-SPEC-M5 X-01,
+/// V-22); Phase B moved them out of this list with their seeding rules once `link` was frozen (the unit test
+/// `the_rules_name_listed_targets_and_frozen_suites` fails if a listed target has both). M5 Phase B: the two relay
+/// targets (TEST-SPEC-M5 FZ-07, FZ-08) are structured — their input is a command script that the harness signs,
+/// tokens and seals (`fuzz/fuzz_targets/relay_*.rs` headers), a layout no frozen suite has — so they rely on their
+/// tracked seeds (`fuzz/corpus/relay_executor/`, `fuzz/corpus/relay_link_session/`, M4 C-6).
+#[cfg(test)]
+pub(crate) const FUZZ_TRACKED_ONLY: &[&str] = &["relay_executor", "relay_link_session"];
 
 /// Seconds per fuzz target of the `fuzz` gate (ci-full step 6, docs/06 §4: "≈2 min per target on every PR").
 pub(crate) const FUZZ_SMOKE_SECONDS: u64 = 120;
@@ -236,7 +306,18 @@ pub(crate) const FUZZ_NIGHTLY_SECONDS: u64 = 14_400;
 /// - `hx_outer`: the padded `Outer` = 12018. `hx_inner`: `Inner` = 6113. `hx_cell_plaintext`: 4024.
 /// - `hx_accept_raw`: count 1 + 12 cells of (selector 1 + 4096 raw bytes) = 49165.
 /// - `hx_accept_structured`: selector 1 + the larger of `Padded` (12018), `Inner` (6113) and the `Outer` head (3177)
-///   = 12019.
+///   = 12019. M5 mode 3 (a padded `Content`, 1710) is shorter.
+/// - `link_records`: selector 1 + the HS1 record (`len` 2 + type 1 + 2853, the largest of the four) = 2857.
+/// - `link_client_handshake`: selector 1 + flag byte 1 + the `RELAYINFO` record (`len` 2 + type 1 + 1741; mode 0, the
+///   structured modes take at most 112) = 1746.
+/// - `link_relay_handshake`: selector 1 + the HS1 record (2856) = 2857.
+/// - `link_frame_open`: selector 1 + a unit of 4352 B (the other modes take at most 4339) = 4353.
+/// - `q_request_decode`: selector 1 + a frame plaintext 4336 = 4337.
+/// - `q_response_decode`: mode 1 + a frame plaintext 4336 = 4337.
+/// - `relay_executor`: a script the harness reads at most 160 commands of, after the configuration byte: 1 + 160 ×
+///   27 (the longest command, `FETCH_MULTI` with 12 entries: opcode, `cmd_seq`, count, 12 × (key, ack)) = 4321.
+/// - `relay_link_session`: the configuration byte and at most 16 units of at most 4339 bytes (split, kind, `u16`
+///   length, a 4335-byte plaintext) = 69425.
 pub(crate) const FUZZ_MAX_LEN: &[(&str, usize)] = &[
     ("caead_open", 12_618),
     ("ed25519_verify", 4_243),
@@ -248,6 +329,10 @@ pub(crate) const FUZZ_MAX_LEN: &[(&str, usize)] = &[
     ("hybrid_sign_verify", 7_810),
     ("inv_linkdata", 12_362),
     ("inv_uri", 718),
+    ("link_client_handshake", 1_747),
+    ("link_frame_open", 4_354),
+    ("link_records", 2_858),
+    ("link_relay_handshake", 2_858),
     ("mldsa65_verify", 3_567),
     ("mlkem_parse", 1_570),
     ("msg_open", 2_000),
@@ -256,13 +341,18 @@ pub(crate) const FUZZ_MAX_LEN: &[(&str, usize)] = &[
     ("proto_handshake", 12_020),
     ("proto_invitation", 12_362),
     ("proto_records", 2_858),
+    ("q_request_decode", 4_338),
+    ("q_response_decode", 4_338),
+    ("relay_executor", 4_322),
+    ("relay_link_session", 69_426),
     ("tr_decrypt", 4_098),
     ("tr_state", 38_587),
     ("x25519_dh", 97),
 ];
 
-/// Packages under the mutation gate (docs/06 §4, §5 step 8).
-pub(crate) const MUTANT_PACKAGES: &[&str] = &["secmp-crypto", "secmp-proto"];
+/// Packages under the mutation gate (docs/06 §4, §5 step 8); M5: `secmp-relay`, the relay security kernel (ADR-047
+/// Amendment 3, OPEN-M5-12).
+pub(crate) const MUTANT_PACKAGES: &[&str] = &["secmp-crypto", "secmp-proto", "secmp-relay"];
 
 /// ADR-047 Amendment 1 (2): the shards of the mutation gate in CI — the matrix job `mutants-shard` of `ci.yml` runs
 /// `cargo xtask step --strict mutants --shard K/8` for K = 0…7, and the job `mutants` (`step mutants-merge`) merges
@@ -302,7 +392,10 @@ pub(crate) const MUTANTS_STEP_TIMEOUT_SECONDS: u64 = 16_800;
 /// Code compiled only under Kani (`#[cfg(kani)]`: `secmp-proto`'s harnesses and the `kani_stubs` modules), kept out
 /// of the mutation gate by file and by mutant name: no test build contains it, so every mutant of it would survive
 /// (M2: 52 such survivors in the CI run on `774e04a`); Kani runs it (ci-full step 9).
-pub(crate) const MUTANT_EXCLUDE_FILES: &[&str] = &["crates/secmp-proto/src/kani_proofs.rs"];
+pub(crate) const MUTANT_EXCLUDE_FILES: &[&str] = &[
+    "crates/secmp-proto/src/kani_proofs.rs",
+    "crates/secmp-relay/src/kani_proofs.rs",
+];
 /// Mutant names (regex, `cargo mutants --exclude-re`) excluded: `kani_stubs::` for the reason above; and (M3) the
 /// `secmp-proto` code compiled only with `secmp-proto`'s own feature `kat` — the vector, test and bench tooling of
 /// SecMP-TR (`tr::FixedEntropy`, the message-key digests, the header-key and `sb` accessors, and (M4)
@@ -477,14 +570,6 @@ pub(crate) const MIRI_SKIP: &[(&str, &str, &str)] = &[
     ),
     (
         "secmp-proto",
-        "test-target:hx_persist",
-        "731 s, 573 s and 699 s per test under Miri (M4-fix, measured on 7a38edd, 2003 s in all; \
-         docs/reviews/M04-evidence/miri-hx-persist-7a38edd.txt): each test generates two identities (ML-DSA-65 key \
-         generation) and runs a full handshake; the fourth test (release_persists_the_state_at_release_time, M4 \
-         review C-8) is of the same kind",
-    ),
-    (
-        "secmp-proto",
         "tr::ratchet::trial_work::trial_opens_every_candidate_every_call",
         "5392 s under Miri (M4, linux-full run 37127247911, x86_64 GitHub runner; \
          docs/reviews/M04-evidence/linux-full-37127247911-miri-excerpt.txt): 3 fixtures x 7 cells, each decrypt \
@@ -540,8 +625,20 @@ pub(crate) const MIRI_SKIP: &[(&str, &str, &str)] = &[
 pub(crate) const MIRI_FEATURE_GATED: &[(&str, &str, &str)] = &[
     (
         "secmp-proto",
+        "link",
+        "required-features = [\"kat\"]: the replay of the SecMP-LINK vector groups (M5), natively in the kat step",
+    ),
+    (
+        "secmp-proto",
         "hx",
         "required-features = [\"kat\"]: the SecMP-HX integration suite (M4), natively in the kat step",
+    ),
+    (
+        "secmp-proto",
+        "hx_persist",
+        "required-features = [\"kat\"]: the HX persistence tests, which copy records with \
+         InvitationRecord::duplicate_kat (M5 review C-6), natively in the kat step; before C-6 a MIRI_SKIP \
+         test-target (2003 s under Miri, docs/reviews/M04-evidence/miri-hx-persist-7a38edd.txt)",
     ),
     (
         "secmp-proto",
@@ -557,6 +654,12 @@ pub(crate) const MIRI_FEATURE_GATED: &[(&str, &str, &str)] = &[
         "secmp-proto",
         "tr_vectors",
         "required-features = [\"kat\"]: the frozen SecMP-TR vectors (M3), natively in the kat step",
+    ),
+    (
+        "secmp-proto",
+        "tr_trial_counts",
+        "required-features = [\"kat\"]: the counting accessors of the TR header trial and the skipped lookup \
+         (M5 G-01, G-02), natively in the kat step",
     ),
 ];
 
@@ -577,24 +680,34 @@ pub(crate) const MIRI_UNSUPPORTED: &[(&str, &str, &str)] = &[
     ),
 ];
 
-/// Packages containing Kani harnesses (docs/06 §4). M2: `secmp-proto` (`src/kani_proofs.rs`).
-pub(crate) const KANI_PACKAGES: &[&str] = &["secmp-proto"];
+/// Packages containing Kani harnesses (docs/06 §4). M2: `secmp-proto` (`src/kani_proofs.rs`). M5 (Phase B):
+/// `secmp-relay` (`src/kani_proofs.rs`, TEST-SPEC-M5 K-05…K-07).
+pub(crate) const KANI_PACKAGES: &[&str] = &["secmp-proto", "secmp-relay"];
 
 /// The Kani harnesses (M2 review C5): the gate refuses a run unless Kani reports exactly these as successfully
 /// verified ("Complete - N successfully verified harnesses, 0 failures, N total." with N = this count), so a
 /// deleted or renamed harness fails the gate instead of passing silently. M3 (plan step 9): the three `tr_*`
 /// harnesses of the SecMP-TR decisions (`tr::select`). M4: the five `kani_*` harnesses of SecMP-HX, and (WEISUNG M4-8)
-/// K4b `kani_commit_accept_atomic` on the real prekey store.
+/// K4b `kani_commit_accept_atomic` on the real prekey store. M5 Phase B: the three relay harnesses of `secmp-relay`
+/// (`kani_cmd_seq_monotone`, `kani_queue_eviction_bounds`, `kani_executor_response_count`; TEST-SPEC-M5 K-05…K-07).
 pub(crate) const KANI_HARNESSES: &[&str] = &[
     "kani_proofs::cell",
     "kani_proofs::header_v1",
     "kani_proofs::header_v1_reencodes",
     "kani_proofs::kani_accept_opk_delete_only_on_success",
     "kani_proofs::kani_cell_plaintext_decode_total",
+    "kani_proofs::kani_cmd_seq_monotone",
     "kani_proofs::kani_commit_accept_atomic",
+    "kani_proofs::kani_cont_assembly",
+    "kani_proofs::kani_executor_response_count",
+    "kani_proofs::kani_frame_pad_total",
     "kani_proofs::kani_hx_chunk_bounds",
     "kani_proofs::kani_hx_grouping",
+    "kani_proofs::kani_link_counter_checked_add",
+    "kani_proofs::kani_link_counter_strict_plus_one",
     "kani_proofs::kani_outer_unpad_total",
+    "kani_proofs::kani_q_frame_plaintext_exact_fit",
+    "kani_proofs::kani_queue_eviction_bounds",
     "kani_proofs::padding",
     "kani_proofs::request_cont",
     "kani_proofs::request_fetch",
@@ -618,7 +731,15 @@ pub(crate) const KANI_HARNESSES: &[&str] = &[
 /// instead of changing the count silently.
 pub(crate) const KANI_COVERS: &[(&str, usize)] = &[
     ("kani_proofs::kani_accept_opk_delete_only_on_success", 1),
+    ("kani_proofs::kani_cmd_seq_monotone", 5),
     ("kani_proofs::kani_commit_accept_atomic", 1),
+    ("kani_proofs::kani_cont_assembly", 1),
+    ("kani_proofs::kani_executor_response_count", 6),
+    ("kani_proofs::kani_frame_pad_total", 2),
+    ("kani_proofs::kani_link_counter_checked_add", 3),
+    ("kani_proofs::kani_link_counter_strict_plus_one", 2),
+    ("kani_proofs::kani_q_frame_plaintext_exact_fit", 2),
+    ("kani_proofs::kani_queue_eviction_bounds", 3),
 ];
 
 /// The SecMP vector suites (`vectors/SCHEMA.md` §3): frozen as `vectors/<suite>.json`, reference files
@@ -632,6 +753,7 @@ pub(crate) const VECTOR_SUITES: &[&str] = &[
     "hybridkem-1024",
     "hybridkem-768",
     "hybridsign",
+    "link",
     "msgencrypt",
     "sas",
     "tr",
@@ -642,7 +764,8 @@ pub(crate) const VECTOR_SUITES: &[&str] = &[
 /// well-formed (JSON, `suite` = its name, a non-empty `cases` array) and compares nothing yet. Moving a suite from
 /// here to `VECTOR_SUITES` is its freeze step (M2: `encodings`, frozen in `docs/reviews/M02-report.md` plan step 10;
 /// M3: `tr`, committed with the M3 brief and frozen in `docs/reviews/M03-report.md` plan step 6; M4: `hx`, committed
-/// with the M4 plan commit and frozen in `docs/reviews/M04-report.md` plan step 5). None pending.
+/// with the M4 plan commit and frozen in `docs/reviews/M04-report.md` plan step 5; M5: `link`, committed with the
+/// M5 plan commit, frozen by Phase B, TEST-SPEC-M5 V-22 and X-01). Pending: none.
 pub(crate) const VECTOR_REF_PENDING: &[&str] = &[];
 
 /// Suites whose Rust generator writes the positive rows only (M2 cross-generates the `encodings` positives, docs/07
@@ -650,11 +773,13 @@ pub(crate) const VECTOR_REF_PENDING: &[&str] = &[];
 /// reject every other row of the reference file (`secmp-proto` test `encodings_ref`) before the freeze.
 pub(crate) const VECTOR_POSITIVE_ONLY: &[&str] = &["encodings"];
 
-/// The single-file ProVerif models `formal/<name>.pv` (docs/06 §5 step 10): M3 `tr.pv`; M5 adds `link.pv`. The `proverif`
-/// step refuses any other `formal/*.pv`. M4 (WEISUNG M4-5 §4, gate F7, M3 review R-14): the SecMP-HX model is not one of
-/// them — it is the library [`PROVERIF_HX_LIB`] and one model per session under [`PROVERIF_HX_DIR`] (the files of
+/// The single-file ProVerif models `formal/<name>.pv` (docs/06 §5 step 10): M3 `tr.pv`. The `proverif` step refuses any
+/// other `formal/*.pv`. M4 (WEISUNG M4-5 §4, gate F7, M3 review R-14): the SecMP-HX model is not one of them — it is the
+/// library [`PROVERIF_HX_LIB`] and one model per session under [`PROVERIF_HX_DIR`] (the files of
 /// [`PROVERIF_EXPECTED_HX`]), each run as `proverif -lib formal/hx.pvl formal/hx/<session>.pv`; the old joint model
-/// `formal/hx.pv` must not exist.
+/// `formal/hx.pv` must not exist. M5 (OPEN-M5-16 A, CLAIMS §LINK LO-1): neither is SecMP-LINK — the library
+/// [`PROVERIF_LINK_LIB`] and one model per session under [`PROVERIF_LINK_DIR`] (the files of
+/// [`PROVERIF_EXPECTED_LINK`]); a joint `formal/link.pv` is refused like any other unlisted `formal/*.pv`.
 pub(crate) const PROVERIF_MODELS: &[&str] = &["tr"];
 
 /// The SecMP-HX ProVerif library (M4, WEISUNG M4-5): required whenever the `hx` models run.
@@ -663,6 +788,13 @@ pub(crate) const PROVERIF_HX_LIB: &str = "formal/hx.pvl";
 /// The directory of the SecMP-HX session models `<session>.pv` (M4, WEISUNG M4-5): its set of `.pv` stems must equal
 /// the set of files of [`PROVERIF_EXPECTED_HX`].
 pub(crate) const PROVERIF_HX_DIR: &str = "formal/hx";
+
+/// The SecMP-LINK ProVerif library (M5, OPEN-M5-16 A, CLAIMS §LINK LO-1): required whenever the `link` models run.
+pub(crate) const PROVERIF_LINK_LIB: &str = "formal/link.pvl";
+
+/// The directory of the SecMP-LINK session models `<session>.pv` (M5, OPEN-M5-16 A): its set of `.pv` stems must equal
+/// the set of files of [`PROVERIF_EXPECTED_LINK`] — the nine sessions of the CLAIMS §LINK gate rule.
+pub(crate) const PROVERIF_LINK_DIR: &str = "formal/link";
 
 /// Seconds one ProVerif process may run (WEISUNG M4-5 §4, gate F7): a run still going after this is killed, and the
 /// gate fails naming the file and its last progress line (`… rules inserted. …`). Applies to every model file.
@@ -696,8 +828,10 @@ pub(crate) const PROVERIF_EXPECTED: &[(&str, &[HxExpected])] = &[("tr", PROVERIF
 /// same four fields of step 1; T10 one content; T11 and T12 one query each (T12: the model gives false). M4 (WEISUNG
 /// M4-5, M3 review R-52, EXT-1): T13, reachability sanity, one query per honest session of the model (sClean, sFS,
 /// sPCS, sPCSdh, sPCSkem, sPCSboth, sHFS), each false (the honest run completes) — 46 lines. The query texts are the
-/// `RESULT` lines of the gate run on `569c2e2` (`docs/reviews/M04-evidence/proverif-tr-569c2e2.txt`). One entry per line;
-/// `rustfmt` leaves the table alone.
+/// `RESULT` lines of the gate run on `569c2e2` (`docs/reviews/M04-evidence/proverif-tr-569c2e2.txt`). M5 (PV-02, M4
+/// review R-41): T14, injective agreement after a skipped-path acceptance and a second offer, true — 47 lines; its text
+/// is the `RESULT` line of `docs/reviews/M05-evidence/proverif-tr-t14-local.txt`. One entry per line; `rustfmt` leaves
+/// the table alone.
 #[rustfmt::skip]
 pub(crate) const PROVERIF_EXPECTED_TR: &[HxExpected] = &[
     ("tr", "T1", "not attacker_p1(content(sClean,st1,c0))", Proved::True),
@@ -746,16 +880,18 @@ pub(crate) const PROVERIF_EXPECTED_TR: &[HxExpected] = &[
     ("tr", "T13", "not event(Recv(sPCSkem,pB,st3,c1,content(sPCSkem,st3,c1)))", Proved::False),
     ("tr", "T13", "not event(Recv(sPCSboth,pB,st3,c1,content(sPCSboth,st3,c1)))", Proved::False),
     ("tr", "T13", "not event(Recv(sHFS,pB,st3,c1,content(sHFS,st3,c1)))", Proved::False),
+    ("tr", "T14", "inj-event(Accepted(sClean,kid,n_55,m)) ==> inj-event(Sent(sClean,kid,n_55,m))", Proved::True),
 ];
 
-/// The SHA-256 of every ProVerif model file — `formal/tr.pv`, the library `formal/hx.pvl` and every `formal/hx/*.pv`
+/// The SHA-256 of every ProVerif model file — `formal/tr.pv`, the library `formal/hx.pvl` and every `formal/hx/*.pv`, and
+/// (M5) `formal/link.pvl` and every `formal/link/*.pv` (X-05 `gates::tests::proverif_link_model_hashes_are_pinned`)
 /// (M4 review C-7, ADR-046 Amendment 1 (1)): the `proverif` step refuses to run on other content, and a test in
 /// `linux-fast` (`gates::tests::proverif_model_hashes_are_pinned`) fails on any byte changed, so a model change touches
 /// this table in the same reviewed commit. The digest is taken over the committed text (CRLF read as LF).
 pub(crate) const PROVERIF_MODEL_SHA256: &[(&str, &str)] = &[
     (
         "formal/tr.pv",
-        "e613eceb4f776aaa73b78f6ae4af63c5cb65b48ae49997b2f02bc48929a2211f",
+        "f726a1032e5b54a0b0b95039068182f4c5db8270745d9f160607868cf78b483d",
     ),
     (
         "formal/hx.pvl",
@@ -836,6 +972,47 @@ pub(crate) const PROVERIF_MODEL_SHA256: &[(&str, &str)] = &[
     (
         "formal/hx/hKEM.pv",
         "016d5c86fb75efaf6706034fb4d6e0d7f3a7316c45667fedb6e6c227e8c3a967",
+    ),
+    // M5 (OPEN-M5-16 A): the SecMP-LINK library and its nine session files
+    (
+        "formal/link.pvl",
+        "2b4f9531563dd41ae3dcb92279dbacc275cf5aecf4b6779110f7882e8c8fd562",
+    ),
+    (
+        "formal/link/lBoth.pv",
+        "d673db6b81c6d690b01076980b3d086bd081e1c47579545c1639051ecc26cf61",
+    ),
+    (
+        "formal/link/lClean.pv",
+        "d9a0dcd5e4865ac06743d8868451befad050ae3a09f00c64e86caf0f907f6a27",
+    ),
+    (
+        "formal/link/lDH.pv",
+        "f43257d189694ccd18e204ef8798de6d262001f2e25e32d62e61ed0096b439a7",
+    ),
+    (
+        "formal/link/lFS.pv",
+        "b23e7b75052b2e5d922ae12e00c3ee94f401e100501d720cc7596e61a9f9a04e",
+    ),
+    (
+        "formal/link/lFSDH.pv",
+        "97f48931b341df472e03bd61bc70cb85bd338405828d4973b5be4c55231a6e4c",
+    ),
+    (
+        "formal/link/lFSEph.pv",
+        "adfa9fa88b2dcf1b8bf80f1f06575da0f36821b5ba050ebd4e182ba9a82633f8",
+    ),
+    (
+        "formal/link/lKEM.pv",
+        "3789840b78dbd4d172bd973f814adde2cb43645ee7fe4b7fc9fcdc71598eb4e9",
+    ),
+    (
+        "formal/link/lQKey.pv",
+        "5589100a569fc5bd1b89427ee2b201a6479a5b57ac81134dbcf5b9f70e2dcd83",
+    ),
+    (
+        "formal/link/lSig.pv",
+        "b24c958a0d84d18da80c160a4386e882f401e7c55b6fd4fe2dc1fac3e1560f42",
     ),
 ];
 
@@ -956,6 +1133,73 @@ pub(crate) const PROVERIF_EXPECTED_HX: &[HxExpected] = &[
     ("hFSDH", "H12c (ii)", "not (event(RAccept(hFSDH,iR,iks(vk(iksig(hFSDH,pI)),exp(g,dhsk(hFSDH,kIKI))),ld_5,oid,tr_2,rt_2,sk_2)) && attacker_p1(sk_2))", Proved::True),
 ];
 
+/// The expected `RESULT` lines of every SecMP-LINK session model (M5, OPEN-M5-16 A, CLAIMS §LINK), in the order ProVerif
+/// prints them within each file, matched by query text like [`PROVERIF_EXPECTED_HX`] (`gates::proverif_check_session`):
+/// a missing, an extra or a re-ordered line fails, as does a verdict other than the CLAIMS §LINK gate rule's (L1, L1a,
+/// L1b, L3, L3a, L3b, L4, L5, L5a, L6, L7 true; L1c, L2, L3c, L5b, L6a and every L8 line false) and a `link/*.pv` file
+/// without entries. Declarations per file (formal/link.pvl 3., 6.): the payload lines of L3/L5 (`CSend`, `RSend`) and the
+/// three L8 lines, then the L1-type line, L4 (two lines), L6-type, L7 — 55 lines in 9 files. Query texts in ProVerif 2.05's
+/// display form from the completed local runs (docs/reviews/M05-evidence/proverif-link-local-2.txt, WEISUNG M5-B-2: every
+/// line of lDH and lBoth from their runs with the reveals of LO-5/LO-6); `rustfmt` leaves the table alone.
+#[rustfmt::skip]
+pub(crate) const PROVERIF_EXPECTED_LINK: &[HxExpected] = &[
+    ("lClean", "L3", "not (event(CAccept(lClean,h((lbl_relayfp,vk(sigk(lClean,kRsig)))),kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) && event(CSend(lClean,sid_4,ctr,m)) && attacker(m))", Proved::True),
+    ("lClean", "L3", "not (event(CAccept(lClean,h((lbl_relayfp,vk(sigk(lClean,kRsig)))),kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) && event(RSend(lClean,sid_4,ctr,m)) && attacker(m))", Proved::True),
+    ("lClean", "L8", "not event(CStart(lClean,fp,kid_2,h0_3))", Proved::False),
+    ("lClean", "L8", "not (event(RAccept(lClean,kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) && event(CAccept(lClean,fp,kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)))", Proved::False),
+    ("lClean", "L8", "not event(RExec(lClean,sid_4,cs,cmd,vk(sigk(lClean,iQ(x_1)))))", Proved::False),
+    ("lClean", "L1", "inj-event(CAccept(lClean,h((lbl_relayfp,vk(sigk(lClean,kRsig)))),kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) ==> inj-event(RAccept(lClean,kid_2,h0_3,h1_3,sid_4,k1_3,k2_3))", Proved::True),
+    ("lClean", "L4", "inj-event(RRecv(lClean,sid_4,ctr,m)) && event(CStart(lClean,fp,kid_2,h0_3)) && event(RAccept(lClean,kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) ==> inj-event(CSend(lClean,sid_4,ctr,m))", Proved::True),
+    ("lClean", "L4", "inj-event(CRecv(lClean,sid_4,ctr,m)) ==> inj-event(RSend(lClean,sid_4,ctr,m))", Proved::True),
+    ("lClean", "L6", "inj-event(RExec(lClean,sid_4,cs,cmd,vk(sigk(lClean,iQ(x_1))))) ==> inj-event(CSign(lClean,sid_4,cs,cmd,vk(sigk(lClean,iQ(x_1)))))", Proved::True),
+    ("lClean", "L7", "event(CAccept(lClean,fp,kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) ==> event(RInfo(lClean,kid_2,fp,h((lbl_akc,ak[]))))", Proved::True),
+    ("lDH", "L3a", "not (event(CAccept(lDH,h((lbl_relayfp,vk(sigk(lDH,kRsig)))),kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) && event(CSend(lDH,sid_4,ctr,m)) && attacker(m))", Proved::True),
+    ("lDH", "L3a", "not (event(CAccept(lDH,h((lbl_relayfp,vk(sigk(lDH,kRsig)))),kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) && event(RSend(lDH,sid_4,ctr,m)) && attacker(m))", Proved::True),
+    ("lDH", "L8", "not event(CStart(lDH,fp,kid_2,h0_3))", Proved::False),
+    ("lDH", "L8", "not (event(RAccept(lDH,kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) && event(CAccept(lDH,fp,kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)))", Proved::False),
+    ("lDH", "L8", "not event(RExec(lDH,sid_4,cs,cmd,vk(sigk(lDH,iQ(x_1)))))", Proved::False),
+    ("lDH", "L1a", "inj-event(CAccept(lDH,h((lbl_relayfp,vk(sigk(lDH,kRsig)))),kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) ==> inj-event(RAccept(lDH,kid_2,h0_3,h1_3,sid_4,k1_3,k2_3))", Proved::True),
+    ("lDH", "L4", "inj-event(RRecv(lDH,sid_4,ctr,m)) && event(CStart(lDH,fp,kid_2,h0_3)) && event(RAccept(lDH,kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) ==> inj-event(CSend(lDH,sid_4,ctr,m))", Proved::True),
+    ("lDH", "L4", "inj-event(CRecv(lDH,sid_4,ctr,m)) ==> inj-event(RSend(lDH,sid_4,ctr,m))", Proved::True),
+    ("lKEM", "L3b", "not (event(CAccept(lKEM,h((lbl_relayfp,vk(sigk(lKEM,kRsig)))),kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) && event(CSend(lKEM,sid_4,ctr,m)) && attacker(m))", Proved::True),
+    ("lKEM", "L3b", "not (event(CAccept(lKEM,h((lbl_relayfp,vk(sigk(lKEM,kRsig)))),kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) && event(RSend(lKEM,sid_4,ctr,m)) && attacker(m))", Proved::True),
+    ("lKEM", "L8", "not event(CStart(lKEM,fp,kid_2,h0_3))", Proved::False),
+    ("lKEM", "L8", "not (event(RAccept(lKEM,kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) && event(CAccept(lKEM,fp,kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)))", Proved::False),
+    ("lKEM", "L8", "not event(RExec(lKEM,sid_4,cs,cmd,vk(sigk(lKEM,iQ(x_1)))))", Proved::False),
+    ("lKEM", "L1b", "inj-event(CAccept(lKEM,h((lbl_relayfp,vk(sigk(lKEM,kRsig)))),kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) ==> inj-event(RAccept(lKEM,kid_2,h0_3,h1_3,sid_4,k1_3,k2_3))", Proved::True),
+    ("lKEM", "L4", "inj-event(RRecv(lKEM,sid_4,ctr,m)) && event(CStart(lKEM,fp,kid_2,h0_3)) && event(RAccept(lKEM,kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) ==> inj-event(CSend(lKEM,sid_4,ctr,m))", Proved::True),
+    ("lKEM", "L4", "inj-event(CRecv(lKEM,sid_4,ctr,m)) ==> inj-event(RSend(lKEM,sid_4,ctr,m))", Proved::True),
+    ("lBoth", "L3c", "not (event(CAccept(lBoth,h((lbl_relayfp,vk(sigk(lBoth,kRsig)))),kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) && event(CSend(lBoth,sid_4,ctr,m)) && attacker(m))", Proved::False),
+    ("lBoth", "L3c", "not (event(CAccept(lBoth,h((lbl_relayfp,vk(sigk(lBoth,kRsig)))),kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) && event(RSend(lBoth,sid_4,ctr,m)) && attacker(m))", Proved::False),
+    ("lBoth", "L8", "not event(CStart(lBoth,fp,kid_2,h0_3))", Proved::False),
+    ("lBoth", "L8", "not (event(RAccept(lBoth,kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) && event(CAccept(lBoth,fp,kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)))", Proved::False),
+    ("lBoth", "L8", "not event(RExec(lBoth,sid_4,cs,cmd,vk(sigk(lBoth,iQ(x_1)))))", Proved::False),
+    ("lBoth", "L1c", "inj-event(CAccept(lBoth,h((lbl_relayfp,vk(sigk(lBoth,kRsig)))),kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) ==> inj-event(RAccept(lBoth,kid_2,h0_3,h1_3,sid_4,k1_3,k2_3))", Proved::False),
+    ("lSig", "L8", "not event(CStart(lSig,fp,kid_2,h0_3))", Proved::False),
+    ("lSig", "L8", "not (event(RAccept(lSig,kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) && event(CAccept(lSig,fp,kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)))", Proved::False),
+    ("lSig", "L8", "not event(RExec(lSig,sid_4,cs,cmd,vk(sigk(lSig,iQ(x_1)))))", Proved::False),
+    ("lSig", "L2", "inj-event(CAccept(lSig,h((lbl_relayfp,vk(sigk(lSig,kRsig)))),kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) ==> inj-event(RAccept(lSig,kid_2,h0_3,h1_3,sid_4,k1_3,k2_3))", Proved::False),
+    ("lFS", "L5", "not (event(CAccept(lFS,h((lbl_relayfp,vk(sigk(lFS,kRsig)))),kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) && event(CSend(lFS,sid_4,ctr,m)) && attacker_p1(m))", Proved::True),
+    ("lFS", "L5", "not (event(CAccept(lFS,h((lbl_relayfp,vk(sigk(lFS,kRsig)))),kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) && event(RSend(lFS,sid_4,ctr,m)) && attacker_p1(m))", Proved::True),
+    ("lFS", "L8", "not event(CStart(lFS,fp,kid_2,h0_3))", Proved::False),
+    ("lFS", "L8", "not (event(RAccept(lFS,kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) && event(CAccept(lFS,fp,kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)))", Proved::False),
+    ("lFS", "L8", "not event(RExec(lFS,sid_4,cs,cmd,vk(sigk(lFS,iQ(x_1)))))", Proved::False),
+    ("lFSDH", "L5a", "not (event(CAccept(lFSDH,h((lbl_relayfp,vk(sigk(lFSDH,kRsig)))),kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) && event(CSend(lFSDH,sid_4,ctr,m)) && attacker_p1(m))", Proved::True),
+    ("lFSDH", "L5a", "not (event(CAccept(lFSDH,h((lbl_relayfp,vk(sigk(lFSDH,kRsig)))),kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) && event(RSend(lFSDH,sid_4,ctr,m)) && attacker_p1(m))", Proved::True),
+    ("lFSDH", "L8", "not event(CStart(lFSDH,fp,kid_2,h0_3))", Proved::False),
+    ("lFSDH", "L8", "not (event(RAccept(lFSDH,kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) && event(CAccept(lFSDH,fp,kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)))", Proved::False),
+    ("lFSDH", "L8", "not event(RExec(lFSDH,sid_4,cs,cmd,vk(sigk(lFSDH,iQ(x_2)))))", Proved::False),
+    ("lFSEph", "L5b", "not (event(CAccept(lFSEph,h((lbl_relayfp,vk(sigk(lFSEph,kRsig)))),kid_4,h0_5,h1_5,sid_6,k1_5,k2_5)) && event(CSend(lFSEph,sid_6,ctr,m)) && attacker_p1(m))", Proved::False),
+    ("lFSEph", "L5b", "not (event(CAccept(lFSEph,h((lbl_relayfp,vk(sigk(lFSEph,kRsig)))),kid_4,h0_5,h1_5,sid_6,k1_5,k2_5)) && event(RSend(lFSEph,sid_6,ctr,m)) && attacker_p1(m))", Proved::False),
+    ("lFSEph", "L8", "not event(CStart(lFSEph,fp,kid_4,h0_5))", Proved::False),
+    ("lFSEph", "L8", "not (event(RAccept(lFSEph,kid_4,h0_5,h1_5,sid_6,k1_5,k2_5)) && event(CAccept(lFSEph,fp,kid_4,h0_5,h1_5,sid_6,k1_5,k2_5)))", Proved::False),
+    ("lFSEph", "L8", "not event(RExec(lFSEph,sid_6,cs,cmd,vk(sigk(lFSEph,iQ(x_1)))))", Proved::False),
+    ("lQKey", "L8", "not event(CStart(lQKey,fp,kid_2,h0_3))", Proved::False),
+    ("lQKey", "L8", "not (event(RAccept(lQKey,kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) && event(CAccept(lQKey,fp,kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)))", Proved::False),
+    ("lQKey", "L8", "not event(RExec(lQKey,sid_4,cs,cmd,vk(sigk(lQKey,iQ(x_1)))))", Proved::False),
+    ("lQKey", "L6a", "inj-event(RExec(lQKey,sid_4,cs,cmd,vk(sigk(lQKey,iQ(x_1))))) ==> inj-event(CSign(lQKey,sid_4,cs,cmd,vk(sigk(lQKey,iQ(x_1)))))", Proved::False),
+];
+
 /// systemd units under `deploy/` checked with `systemd-analyze security --offline` (docs/06 §5 step 14,
 /// exposure ≤ 2.0). M10 adds `secmp-relay.service`.
 pub(crate) const SYSTEMD_UNITS: &[&str] = &[];
@@ -976,7 +1220,11 @@ pub(crate) const COVERAGE_MIN: f64 = 80.0;
 /// (`secmp-client-core::clock`, the relay's hour bucket, `secmp-cli` output timestamps); none exist in M0.
 /// The docs/06 §2 test allowance (`#![allow(clippy::unwrap_used, clippy::expect_used)]` at the top of a file
 /// under `tests/`, `fuzz/` or `crates/secmp-testkit/`) is handled by rule and needs no entry.
-pub(crate) const LINT_ALLOWANCES: &[(&str, &str, &str)] = &[];
+pub(crate) const LINT_ALLOWANCES: &[(&str, &str, &str)] = &[(
+    "crates/secmp-relay/src/clock.rs",
+    "clippy::disallowed_methods",
+    "docs/06 §2: the relay's hour-bucket function `wall_clock_unix_secs`, the crate's one `SystemTime::now` site (M5, test RL-11)",
+)];
 
 /// The only lints the docs/06 §2 test-file allowance may relax.
 pub(crate) const TEST_FILE_ALLOWANCE: &[&str] = &["clippy::unwrap_used", "clippy::expect_used"];
@@ -987,6 +1235,20 @@ pub(crate) const TEST_FILE_PREFIXES: &[&str] = &["fuzz/", "crates/secmp-testkit/
 /// CI jobs that may use `continue-on-error: true`. None: Amendment A1 §5 allowed it for the cargo-xwin
 /// cross-build in M0 only, and the M0 review (condition C1) made that job a hard gate from M1 on.
 pub(crate) const CONTINUE_ON_ERROR_JOBS: &[&str] = &[];
+
+/// The events `secmp-relay` may emit (spec §9.7 item 2; OPEN-M5-08 A): start-up, key load, its own listener bound,
+/// a retried accept (M05 review C-2), a configuration error, drain start and exit — nothing per request at any level. Equal to
+/// `secmp_relay::event::EVENT_NAMES` (test `relay_trace_allow_equals_the_event_names`); test RL-03 captures a full
+/// scenario against this list.
+pub(crate) const RELAY_TRACE_ALLOW: &[&str] = &[
+    "startup",
+    "keys_loaded",
+    "listener_bound",
+    "accept_retry",
+    "config_error",
+    "drain_started",
+    "exit",
+];
 
 /// The workflow that holds the required checks of the `main-protection` ruleset (docs/06 §4).
 pub(crate) const REQUIRED_WORKFLOW: &str = ".github/workflows/ci.yml";
@@ -1011,6 +1273,8 @@ pub(crate) const PINNED_JOBS: &[&str] = &[
     "mutants-shard",
     "mutants",
     "proverif-hx",
+    // M5 (BRIEF_M5-B §1): the SecMP-LINK models
+    "proverif-link",
 ];
 
 /// The `needs:` of a pinned job, as (job, the one job it needs) — M4 review C-5: the verdict job `mutants` needs
@@ -1026,6 +1290,8 @@ pub(crate) const DELEGATED_TO: &[(&str, &str)] = &[
     ("windows-cross", "xwin-cross"),
     ("mutants", "mutants"),
     ("ct", "ct"),
+    // M5 (BRIEF_M5-B §1): the `ci-full` step `proverif-link` runs in the job of the same name
+    ("proverif-link", "proverif-link"),
 ];
 
 /// The `cargo xtask` gate `run:` lines of each pinned job of [`PINNED_JOBS`], in order (M3 review F3, R-09;
@@ -1048,9 +1314,9 @@ pub(crate) const REQUIRED_GATE_RUNS: &[(&str, &[&str])] = &[
     (
         "linux-full",
         // the SecMP-HX models run in their own job `proverif-hx` (WEISUNG M4-5 §5), mutation testing in `mutants` (ADR-047),
-        // the ct gate in `ct` (ADR-047 Amendment 1, M4 review C-2)
+        // the ct gate in `ct` (ADR-047 Amendment 1, M4 review C-2), the SecMP-LINK models in `proverif-link` (BRIEF_M5-B §1)
         &[
-            "cargo xtask ci-full --strict --delegated windows-native --delegated windows-cross --delegated mutants --delegated ct --models tr",
+            "cargo xtask ci-full --strict --delegated windows-native --delegated windows-cross --delegated mutants --delegated ct --delegated proverif-link --models tr",
         ],
     ),
     // M4 review C-5 (R-01): the delegated jobs
@@ -1063,6 +1329,10 @@ pub(crate) const REQUIRED_GATE_RUNS: &[(&str, &[&str])] = &[
     (
         "proverif-hx",
         &["cargo xtask step --strict proverif --models hx --jobs 4"],
+    ),
+    (
+        "proverif-link",
+        &["cargo xtask step --strict proverif --models link --jobs 4"],
     ),
 ];
 
@@ -1096,6 +1366,10 @@ pub(crate) const REQUIRED_JOB_CONDITIONS: &[(&str, Option<&str>)] = &[
     ),
     (
         "proverif-hx",
+        Some("github.event_name == 'schedule' || github.event_name == 'pull_request'"),
+    ),
+    (
+        "proverif-link",
         Some("github.event_name == 'schedule' || github.event_name == 'pull_request'"),
     ),
 ];

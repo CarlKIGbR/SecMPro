@@ -10,5 +10,31 @@
 //! (exempt from the "only `secmp-crypto`" rule and never used for SecMP constructions); an async runtime, each
 //! added with an ADR.
 //!
-//! **Status.** M0 skeleton — no code (implementation starts in M5/M6).
+//! **M5.** [`Session`] (the SecMP-LINK handshake and frame I/O over any [`std::io::Read`] + [`std::io::Write`]
+//! stream, spec §8), [`RelayQueueTransport`] (the [`QueueTransport`] of spec §12.1 for a SecMP relay: signing,
+//! tokens, the `cmd_seq` sequence, and the fail-closed check of every response against its request, OPEN-M5-11 A),
+//! and the opaque capabilities [`RecvCap`] / [`SendCap`]. The trait is synchronous: no async runtime is in the
+//! vetted closure yet (ADR-049), and the in-process streams of the test harness need none. The Tor and TLS stream
+//! providers and an asynchronous driver are M6.
 #![forbid(unsafe_code)]
+#![deny(
+    clippy::arithmetic_side_effects,
+    clippy::indexing_slicing,
+    clippy::as_conversions,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic
+)]
+
+pub mod caps;
+pub mod error;
+pub mod relay_queue;
+pub mod session;
+
+pub use caps::{CAP_LEN, QueueRef, RecvCap, SendCap};
+pub use error::{Error, Result};
+pub use relay_queue::{
+    Bucket, CellId, FetchMultiOutcome, LdId, LinkGetMode, LinkGetOutcome, QueueTransport,
+    RelayQueueTransport, SendOutcome, Token,
+};
+pub use session::Session;

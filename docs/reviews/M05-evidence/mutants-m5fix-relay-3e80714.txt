@@ -1,0 +1,84 @@
+# exclude files ['crates/secmp-proto/src/kani_proofs.rs', 'crates/secmp-relay/src/kani_proofs.rs']
+# exclude-re ['kani_stubs::', 'FixedEntropy', 'message_key_digest_kat', 'replace mk_digest ', 'RatchetState::(hk_s_kat|receiving_header_keys_kat|sb_kat|encrypt_padded_kat)', 'Groups<.*>::(get|remove_completed) ', 'impl (core::fmt::)?Display for \\w+Error>::fmt']
+# skip tests ['ratchet_fast_forward_bound_on_the_chain', 'ratchet_fast_forward_bound_on_a_step']
+# command (shard K): cargo mutants --no-shuffle -j 3 --output target/mutants-relay-fix/s0 --features kat --caught --unviable --shard 0/8 --sharding round-robin --iterate --package secmp-relay --exclude crates/secmp-proto/src/kani_proofs.rs --exclude crates/secmp-relay/src/kani_proofs.rs --exclude-re kani_stubs:: --exclude-re FixedEntropy --exclude-re message_key_digest_kat --exclude-re replace mk_digest  --exclude-re RatchetState::(hk_s_kat|receiving_header_keys_kat|sb_kat|encrypt_padded_kat) --exclude-re Groups<.*>::(get|remove_completed)  --exclude-re impl (core::fmt::)?Display for \w+Error>::fmt -- -- --skip ratchet_fast_forward_bound_on_the_chain --skip ratchet_fast_forward_bound_on_a_step
+SHARD 0/8 exit 0 wall 566 s: 60 mutants tested in 9m: 47 caught, 13 unviable
+SHARD 1/8 exit 0 wall 471 s: 60 mutants tested in 8m: 45 caught, 15 unviable
+SHARD 2/8 exit 3 wall 509 s: 59 mutants tested in 8m: 43 caught, 15 unviable, 1 timeouts
+SHARD 3/8 exit 0 wall 671 s: 59 mutants tested in 11m: 46 caught, 13 unviable
+SHARD 4/8 exit 0 wall 812 s: 59 mutants tested in 14m: 46 caught, 13 unviable
+SHARD 5/8 exit 0 wall 391 s: 59 mutants tested in 7m: 38 caught, 21 unviable
+SHARD 6/8 exit 0 wall 364 s: 59 mutants tested in 6m: 40 caught, 19 unviable
+SHARD 7/8 exit 0 wall 440 s: 59 mutants tested in 7m: 44 caught, 15 unviable
+ALL-SHARDS-DONE
+# exclude files ['crates/secmp-proto/src/kani_proofs.rs', 'crates/secmp-relay/src/kani_proofs.rs']
+# exclude-re ['kani_stubs::', 'FixedEntropy', 'message_key_digest_kat', 'replace mk_digest ', 'RatchetState::(hk_s_kat|receiving_header_keys_kat|sb_kat|encrypt_padded_kat)', 'Groups<.*>::(get|remove_completed) ', 'impl (core::fmt::)?Display for \\w+Error>::fmt']
+# skip tests ['ratchet_fast_forward_bound_on_the_chain', 'ratchet_fast_forward_bound_on_a_step']
+# command (shard K): cargo mutants --no-shuffle -j 3 --output target/mutants-relay-fix/s2 --features kat --caught --unviable --shard 2/8 --sharding round-robin --iterate --package secmp-relay --exclude crates/secmp-proto/src/kani_proofs.rs --exclude crates/secmp-relay/src/kani_proofs.rs --exclude-re kani_stubs:: --exclude-re FixedEntropy --exclude-re message_key_digest_kat --exclude-re replace mk_digest  --exclude-re RatchetState::(hk_s_kat|receiving_header_keys_kat|sb_kat|encrypt_padded_kat) --exclude-re Groups<.*>::(get|remove_completed)  --exclude-re impl (core::fmt::)?Display for \w+Error>::fmt -- -- --skip ratchet_fast_forward_bound_on_the_chain --skip ratchet_fast_forward_bound_on_a_step
+SHARD 2/8 exit 0 wall 347 s: 52 mutants tested in 6m: 34 caught, 18 unviable
+ALL-SHARDS-DONE
+ITERATE shard 2 (--iterate on s2, re-sharded remainder): 52 mutants tested in 6m: 34 caught, 18 unviable (log mutants-relay-s2-iterate.txt)
+RETEST keys.rs:127:51 replace >= with < in KeyFile::rotate (-f keys.rs --re, after the C-5 loop bound): 1 mutant tested in 50s: 1 caught
+TOTAL secmp-relay: 474 mutants; 350 caught, 124 unviable, 0 missed, 0 timeout (after the retest); caught 73.8 %, unviable 26.2 %; former survivors server.rs set_poll (now :116) and close (now :122) caught
+ INFO Iteration excludes 58 previously caught or unviable mutants
+Found 52 mutants to test
+ok       Unmutated baseline in 8s build + 35s test
+ INFO Auto-set test timeout to 179s
+caught   crates/secmp-relay/src/main.rs:44:5: replace validity -> Result<u64, &'static str> with Ok(1) in 0s build + 0s test
+caught   crates/secmp-relay/src/main.rs:106:5: replace run -> ExitCode with Default::default() in 0s build + 0s test
+caught   crates/secmp-relay/src/budget.rs:95:9: replace MemoryBudget::slot -> (&mut u64, Option<u64>) with (Box::leak(Box::new(1)), None) in 1s build + 0s test
+caught   crates/secmp-relay/src/buf.rs:25:9: replace live::inc with () in 3s build + 0s test
+caught   crates/secmp-relay/src/cells.rs:77:9: replace Cells<B, CAP>::iter -> impl Iterator<Item =&Slot<B>> with ::std::iter::empty() in 2s build + 0s test
+caught   crates/secmp-relay/src/cells.rs:90:9: replace Cells<B, CAP>::push -> Result<(u64, Option<u64>), IdsExhausted> with Ok((1, Some(1))) in 3s build + 0s test
+caught   crates/secmp-relay/src/buf.rs:64:5: replace cell_copies_wiped_kat -> u64 with 0 in 12s build + 0s test
+caught   crates/secmp-relay/src/buf.rs:148:9: replace BlobBuf::as_bytes -> &[u8] with Vec::leak(vec![0]) in 13s build + 0s test
+caught   crates/secmp-relay/src/clock.rs:28:9: replace HourBucket::plus -> Option<Self> with None in 2s build + 0s test
+unviable crates/secmp-relay/src/config.rs:138:5: replace parse_value -> Result<Value> with Ok(Default::default()) in 0s build
+unviable crates/secmp-relay/src/config.rs:175:5: replace parse_entries -> Result<BTreeMap<(String, String), Value>> with Ok(BTreeMap::from_iter([(("xyzzy".into(), "xyzzy".into()), Default::default())])) in 0s build
+caught   crates/secmp-relay/src/clock.rs:70:5: replace wall_clock_unix_secs -> u64 with 1 in 1s build + 0s test
+unviable crates/secmp-relay/src/conn.rs:32:35: replace + with - in 0s build
+caught   crates/secmp-relay/src/config.rs:166:13: delete match arm '"' in strip_comment in 1s build + 0s test
+caught   crates/secmp-relay/src/config.rs:214:5: replace int -> Result<Option<u64>> with Ok(Some(1)) in 1s build + 0s test
+unviable crates/secmp-relay/src/conn.rs:165:9: replace Connection<'r>::advance -> Progress with Default::default() in 0s build
+caught   crates/secmp-relay/src/conn.rs:86:9: replace Connection<'r>::accept -> Option<Self> with None in 2s build + 53s test
+caught   crates/secmp-relay/src/conn.rs:120:9: replace Connection<'r>::timed_out -> bool with false in 1s build + 53s test
+caught   crates/secmp-relay/src/conn.rs:211:37: replace < with > in Connection<'r>::advance in 1s build + 53s test
+caught   crates/secmp-relay/src/event.rs:58:9: replace Event<'_>::name -> &'static str with "" in 2s build + 0s test
+unviable crates/secmp-relay/src/exec.rs:206:5: replace fetch -> Result<RelayPlan, Abort> with Ok(Default::default()) in 0s build
+caught   crates/secmp-relay/src/exec.rs:124:8: delete ! in queue_new in 1s build + 50s test
+unviable crates/secmp-relay/src/executor.rs:91:5: replace verdict -> Verdict with Default::default() in 0s build
+caught   crates/secmp-relay/src/event.rs:121:9: replace CaptureSink::events -> Vec<(&'static str, String)> with vec![("xyzzy", "xyzzy".into())] in 3s build + 50s test
+unviable crates/secmp-relay/src/executor.rs:205:9: replace Executor::on_unit -> Outcome with Default::default() in 0s build
+unviable crates/secmp-relay/src/executor.rs:315:5: replace cellrs -> Result<Vec<ResponseCmd>, Teardown> with Ok(vec![Default::default()]) in 0s build
+unviable crates/secmp-relay/src/keys.rs:43:42: replace + with - in 0s build
+unviable crates/secmp-relay/src/keys.rs:67:5: replace secret -> Result<SecretBytes<N>> with Ok(SecretBytes::from(Default::default())) in 0s build
+caught   crates/secmp-relay/src/exec.rs:303:16: replace < with == in link_put in 4s build + 47s test
+unviable crates/secmp-relay/src/keys.rs:138:9: replace KeyFile::generations -> &[Generation] with Vec::leak(vec![Default::default()]) in 0s build
+caught   crates/secmp-relay/src/keys.rs:115:9: replace KeyFile::rotate -> Result<u32> with Ok(0) in 4s build + 0s test
+caught   crates/secmp-relay/src/keys.rs:147:9: replace KeyFile::encode -> Result<Zeroizing<Vec<u8>>> with Ok(Zeroizing::new(vec![1])) in 3s build + 0s test
+unviable crates/secmp-relay/src/keys.rs:202:17: replace && with || in KeyFile::decode in 0s build
+caught   crates/secmp-relay/src/keys.rs:240:9: replace KeyFile::replace -> Result<()> with Ok(()) in 3s build + 1s test
+caught   crates/secmp-relay/src/keys.rs:337:9: replace KeyRing::usable -> bool with false in 4s build + 0s test
+caught   crates/secmp-relay/src/executor.rs:119:38: replace == with != in admit in 1s build + 56s test
+unviable crates/secmp-relay/src/linkdata.rs:106:9: replace LinkDataStore::map_kat -> &IdMap<Entry> with Box::leak(Box::new(IdMap::from(Default::default()))) in 0s build
+unviable crates/secmp-relay/src/plan.rs:147:5: replace plan_fetch_multi -> Box<[CellrPlan<C>; FETCH_MULTI_BATCH]> with Box::new([CellrPlan::new(); FETCH_MULTI_BATCH]) in 0s build
+caught   crates/secmp-relay/src/queue.rs:96:9: replace QueueStore::rid_of_sid -> Option<Id> with None in 1s build + 0s test
+caught   crates/secmp-relay/src/queue.rs:147:9: replace QueueStore::take_arrival -> Option<u64> with None in 1s build + 0s test
+unviable crates/secmp-relay/src/queue.rs:184:9: replace QueueStore::maps_kat -> (&IdMap<Queue>, &IdMap<Id>) with (Box::leak(Box::new(IdMap::new())), Box::leak(Box::new(IdMap::new(Default::default())))) in 0s build
+unviable crates/secmp-relay/src/queue.rs:184:9: replace QueueStore::maps_kat -> (&IdMap<Queue>, &IdMap<Id>) with (Box::leak(Box::new(IdMap::from(Default::default()))), Box::leak(Box::new(IdMap::new()))) in 0s build
+unviable crates/secmp-relay/src/relay.rs:106:9: replace Relay::keys -> &KeyRing with Box::leak(Box::new(Default::default())) in 0s build
+unviable crates/secmp-relay/src/relay.rs:142:9: replace Relay::execute -> Result<RelayPlan, Abort> with Ok(Default::default()) in 0s build
+caught   crates/secmp-relay/src/linkdata.rs:42:9: replace Entry::consumed -> bool with true in 3s build + 50s test
+caught   crates/secmp-relay/src/linkdata.rs:85:9: replace LinkDataStore::expire -> Vec<bool> with vec![false] in 4s build + 49s test
+caught   crates/secmp-relay/src/relay.rs:192:9: replace Relay::accepts_connections -> bool with true in 1s build + 56s test
+caught   crates/secmp-relay/src/relay.rs:330:9: replace Relay::budget_used_kat -> (u64, u64) with (1, 1) in 1s build + 55s test
+caught   crates/secmp-relay/src/server.rs:207:36: replace >= with < in tick_due in 1s build + 0s test
+caught   crates/secmp-relay/src/server.rs:122:9: replace <impl Stream for TcpStream>::close with () in 4s build + 53s test
+caught   crates/secmp-relay/src/server.rs:293:23: replace match guard listener_gone(&e) with false in serve in 2s build + 44s test
+caught   crates/secmp-relay/src/server.rs:322:23: replace match guard e.kind() == ErrorKind::Interrupted with true in handle in 1s build + 44s test
+52 mutants tested in 6m: 34 caught, 18 unviable
+Found 1 mutant to test
+ok       Unmutated baseline in 8s build + 35s test
+ INFO Auto-set test timeout to 180s
+caught   crates/secmp-relay/src/keys.rs:127:51: replace >= with < in KeyFile::rotate in 1s build + 0s test
+1 mutant tested in 50s: 1 caught

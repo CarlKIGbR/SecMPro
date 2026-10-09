@@ -57,21 +57,13 @@ const MUTATIONS: usize = 24;
 /// seed).
 const DEFAULT_SEED: u64 = 0x5ec3_2d00_0000_0002;
 
+/// The one reader of `SECMP_PROPTEST_SEED` (M4 review R-93, TEST-SPEC-M5 X-07).
+#[path = "common/seed.rs"]
+mod seed;
+
 /// The master seed of this run: `SECMP_PROPTEST_SEED` (decimal `u64`) if set and not empty, else [`DEFAULT_SEED`].
 fn master_seed() -> u64 {
-    let raw = match std::env::var("SECMP_PROPTEST_SEED") {
-        Err(std::env::VarError::NotPresent) => return DEFAULT_SEED,
-        other => other
-            .map_err(|e| format!("SECMP_PROPTEST_SEED: {e}"))
-            .unwrap(),
-    };
-    if raw.trim().is_empty() {
-        return DEFAULT_SEED;
-    }
-    raw.trim()
-        .parse()
-        .map_err(|e| format!("SECMP_PROPTEST_SEED={raw:?} is not a decimal u64: {e}"))
-        .unwrap()
+    seed::master_seed(DEFAULT_SEED)
 }
 
 /// Keys and signatures drawn once (key generation dominates the run time otherwise).
@@ -461,7 +453,7 @@ impl Gen {
                 owner_pk: self.ed25519(),
                 token: self.arr(),
                 sig: self.sig(),
-                blob_part: self.boxed::<BLOB_PART_LEN>(),
+                blob_part: self.boxed::<BLOB_PART_LEN>().into(),
             },
             6 => RequestCmd::LinkGet {
                 ld_id: self.arr(),
@@ -531,7 +523,7 @@ impl Gen {
             4 => ResponseCmd::LinkR {
                 present: self.rng.random_bool(0.5),
                 consumed: self.rng.random_bool(0.5),
-                blob_part: self.boxed::<BLOB_PART_LEN>(),
+                blob_part: self.boxed::<BLOB_PART_LEN>().into(),
             },
             5 => ResponseCmd::Err(self.one_of(&ErrCode::ALL)),
             _ => ResponseCmd::Cont(self.cont()),

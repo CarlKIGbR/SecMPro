@@ -1,8 +1,8 @@
 # SecMP/1 — Protocol Specification (normative)
 
-Status: **v1 design freeze candidate, revision 2.5** (2026-10-02; rev 2.1 of 2026-09-25 after adversarial review and verification pass, see `docs/reviews/plan-review-2026-09-25.md`; rev 2.2 of 2026-09-28 answers the reference implementation's spec questions, see `docs/reviews/ref-spec-questions-M1.md` and ADR-035; rev 2.3 clarifies Appendix D for the M2 encodings — decoder obligations, the `ver` rule, `RelayRef` validity, Handshake `caps`, list minimums, Fragment rules and the §7.6 body layouts — see `docs/reviews/ref-spec-questions-M2.md` and ADR-039; rev 2.4 applies ADR-043 (a)–(k), the clarifications of the M3 and M4 reviews; rev 2.5 applies ADR-044 (a)–(f), the clarifications of the M4 planning). Changes to this document require an ADR (see `08-decisions.md`) and a reviewer sign-off.
+Status: **v1 design freeze candidate, revision 2.6** (2026-10-07; rev 2.1 of 2026-09-25 after adversarial review and verification pass, see `docs/reviews/plan-review-2026-09-25.md`; rev 2.2 of 2026-09-28 answers the reference implementation's spec questions, see `docs/reviews/ref-spec-questions-M1.md` and ADR-035; rev 2.3 clarifies Appendix D for the M2 encodings — decoder obligations, the `ver` rule, `RelayRef` validity, Handshake `caps`, list minimums, Fragment rules and the §7.6 body layouts — see `docs/reviews/ref-spec-questions-M2.md` and ADR-039; rev 2.4 applies ADR-043 (a)–(k), the clarifications of the M3 and M4 reviews; rev 2.5 applies ADR-044 (a)–(f), the clarifications of the M4 planning; rev 2.6 applies ADR-048 (a)–(d), (f)–(p), E-1 and E-2: SecMP-LINK/Q readings, editorial errata, `inv_sid` derivation, RT-3). Changes to this document require an ADR (see `08-decisions.md`) and a reviewer sign-off.
 
-Changelog: **rev 2.5** (2026-10-02): ADR-044 (a)–(f). **rev 2.4** (2026-10-02): ADR-043 (a)–(k). **rev 2.3** (2026-09-29, ADR-039) — §4.1 `ver` rule reworded and decoder obligations added; §5.3 `onion` validity (rend-spec-v3); §7.6 `caps`, list counts, Fragment rules, KeyChange never unfragmented, `payload`/`arg` opaque at the encoding layer; D.3 `RelayRef.direct` host and port; D.5 `caps (0)`, `count (1..=255)`, Fragment rules and the Batch, RouteUpdate, reassembled-Fragment and Dummy layouts. No byte layout changed. **rev 2.2** (2026-09-28, ADR-035) — label renames, `MFETCH`, answers SQ-01 … SQ-11. **rev 2.1** (2026-09-25) — after the adversarial plan review.
+Changelog: **rev 2.6** (2026-10-07): ADR-048 (a)–(d), (f)–(p), E-1, E-2. **rev 2.5** (2026-10-02): ADR-044 (a)–(f). **rev 2.4** (2026-10-02): ADR-043 (a)–(k). **rev 2.3** (2026-09-29, ADR-039) — §4.1 `ver` rule reworded and decoder obligations added; §5.3 `onion` validity (rend-spec-v3); §7.6 `caps`, list counts, Fragment rules, KeyChange never unfragmented, `payload`/`arg` opaque at the encoding layer; D.3 `RelayRef.direct` host and port; D.5 `caps (0)`, `count (1..=255)`, Fragment rules and the Batch, RouteUpdate, reassembled-Fragment and Dummy layouts. No byte layout changed. **rev 2.2** (2026-09-28, ADR-035) — label renames, `MFETCH`, answers SQ-01 … SQ-11. **rev 2.1** (2026-09-25) — after the adversarial plan review.
 Audience: the implementer (Claude Code / Opus), the reviewer, and future auditors.
 
 The words MUST / MUST NOT / SHOULD / MAY are used as in RFC 2119.
@@ -199,16 +199,16 @@ InvitationV1 {
   ld_id:          [u8; 16]      ; random, relay-visible link-data id
   link_key:       [u8; 32]      ; random, NEVER sent to the relay
   inviter_fp:     [u8; 32]      ; fingerprint of the inviter's IKS (§6.2)
-  inv_sid:        [u8; 16]      ; sender id of the invitation queue
+  inv_sid:        [u8; 16]      ; sender id of the invitation queue, derived as in §9.1: SHA-256(`"SecMP-Q/1 sid"` ‖ `recv_pk` ‖ `send_pk`)[0..16] with `recv_pk` the invitation queue's recipient key and `send_pk` the Ed25519 public key of `inv_send_seed`; derived, not chosen
   inv_send_seed:  [u8; 32]      ; Ed25519 seed of the invitation queue's sender key
   inv_period_s:   u16           ; ∈ PERIODS; the period at which the invitee sends on the invitation queue and the inviter polls it
   expires:        u64           ; Unix seconds; MUST be ≤ creation + 30 days
 }
 ```
 
-URI: `secmp://i/` + base64url (no padding) of the encoding (≈ 322 chars). QR: same string, byte mode.
+URI: `secmp://i/` + base64url (no padding) of the encoding (332 chars: `secmp://i/` + 322 base64url). QR: same string, byte mode.
 
-The inviter persists, per issued invitation: `ld_id`, `link_key`, the link-data owner key, the invitation queue's recipient key, `spk_id`/`opk_id`, and `expires`, until the invitation is consumed or expired.
+The inviter persists, per issued invitation: `ld_id`, `link_key`, the link-data owner key, the invitation queue's recipient key, `spk_id`/`opk_id`, and `expires`, until the invitation is consumed or expired. The invitation queue is one of the inviter's pooled recv-queues (§10.6 rule 3) whose sender seed is `inv_send_seed`.
 
 Invitations are **secrets**: anyone holding an unconsumed one can become the invitee. One-time link data is consumed on first `LINK_GET` (§9.4). Expiry at the responder is enforced by this record lifecycle, not by §6.6 (rev 2.5). The inviter's client polls the invitation queue at the queue's period like any other recv-queue; if the link data is reported consumed (via the owner status query, §9.4) and no valid handshake arrives before `expires`, the UI shows "invitation used by someone else".
 
@@ -353,7 +353,7 @@ Rules: the initiator generates all three cells once, persists them, and re-sends
 
 Expiry (rev 2.5): §6.6 takes no time; expiry is enforced by the invitation-record lifecycle (§5.2): the client MUST NOT call `accept` for an expired record and retires its queue; `accept` has no clock parameter.
 
-Authentication: R is authenticated to I by `DH2`/`DH3` and by the bundle signature under `IK_sig_R`, pinned via `inviter_fp`. I is authenticated to R by `DH1`. PQ confidentiality comes from `ss_spk`/`ss_opk`. PQ authentication is not provided (industry-standard choice; `01-threat-model.md` §3.8). Deniability: no party signs a message; the envelope contains no signature by I.
+Authentication: R is authenticated to I by `DH2`/`DH3` and by the bundle signature under `IK_sig_R`, pinned via `inviter_fp`. I is authenticated to R by `DH1`. The handshake therefore authenticates `IK_dh_I` only: `IK_sig_I` is bound into the transcript as part of `IKSPublic_I` but never exercised (I signs nothing), so a party can present an `IKSPublic` that combines another user's `IK_sig` with its own `IK_dh` and be accepted as an unverified contact. The safety number (§6.7) covers the whole `IKSPublic` and a key change (§7.7) needs the old `IK_sig`, so nothing is gained cryptographically; a client MUST NOT key a contact's identity or display on `IK_sig` alone before the contact is verified (client core, M7). PQ confidentiality comes from `ss_spk`/`ss_opk`. PQ authentication is not provided (industry-standard choice; `01-threat-model.md` §3.8). Deniability: no party signs a message; the envelope contains no signature by I.
 
 Replay: the OPK is single-use and mandatory, so a replayed envelope is rejected at step 1.
 
@@ -536,7 +536,7 @@ RelayInfoV1 { ver, relay_sig_pk [32], kid: u32, relay_dh_pk [32], relay_kem_ek [
               sig: Ed25519(relay_sig, "SecMP-LINK/1 relayinfo" ‖ all preceding fields) }      ; 1741 B
 ```
 
-The relay sends `RelayInfo` in response to every `HELLO`. The client MUST verify `sig`, `relay_fp`, `valid_until ≥ now`, and `akc` (if it holds an access key), and MUST use the info **only for the current link and never cache it** (caching would let a relay partition clients by handing out per-client keys). Static keys SHOULD be rotated monthly with overlapping validity; `valid_until − now ≤ 60 days`.
+The relay sends `RelayInfo` in response to every `HELLO`. The client MUST verify `sig`, `relay_fp`, `valid_until ≥ now`, and `akc` (if it holds an access key), and MUST use the info **only for the current link and never cache it** (caching would let a relay partition clients by handing out per-client keys). The client MUST also reject a RelayInfo with `valid_until − now` > 60 days (5 184 000 s); exactly 60 days is accepted. A client that holds an access key compares `akc` with SHA-256(`"SecMP-Q/1 akc"` ‖ access key). Static keys SHOULD be rotated monthly with overlapping validity.
 
 ### 8.3 Handshake (hybrid NK-style; client anonymous, relay authenticated)
 
@@ -557,7 +557,7 @@ mac2 = HMAC-SHA-256(ck2, "SecMP-LINK/1 hs2")                             ; clien
 (k_c2r ‖ k_r2c ‖ sess_id) = HKDF-Expand(ck2, "SecMP-LINK/1 keys", 32+32+16)
 ```
 
-Properties: relay authentication (only the holder of the `kid` static keys derives `ss1`); forward secrecy both ways (`ss2` is ephemeral–ephemeral); PQ confidentiality in both stages; client anonymity (no client long-term key). `sess_id` binds command signatures to this link (§9.2). DoS protection is provided by Tor intro-DoS defence and per-connection rate limits, not by `mac1`.
+Properties: relay authentication (only the holder of the `kid` static keys derives `ss1`); forward secrecy both ways (`ss2` is ephemeral–ephemeral); PQ confidentiality in both stages; client anonymity (no client long-term key). `sess_id` binds command signatures to this link (§9.2). DoS protection is provided by Tor intro-DoS defence and per-connection rate limits, not by `mac1`. The relay keeps no HS1 replay cache: a replayed HS1 is answered as a new handshake with fresh `e_r` and `ct_c`; frames replayed from the earlier link then fail under the new keys (§8.4).
 
 ### 8.4 Frames
 
@@ -567,7 +567,11 @@ After HS2, every message in either direction is one frame:
 Frame (4352 B) = XChaCha20-Poly1305.Seal(k_dir, nonce = 0^16 ‖ counter_dir (u64 BE), AD = "SecMP-LINK/1 frame" ‖ sess_id, pad(payload, 4336))
 ```
 
-`counter_dir` is per-direction, starts at 0, `checked_add` (abort on overflow), strict `+1` on receive. After `LINK_MAX_FRAMES` or the link's lifetime (§10.6) the client opens a new link. Multi-frame commands/responses use continuation frames (App. D); every frame is exactly 4352 B.
+`counter_dir` is per-direction, starts at 0, `checked_add` (abort on overflow), strict `+1` on receive (the frame counter; `cmd_seq` is only strictly increasing, §9.2). After `LINK_MAX_FRAMES` or the link's lifetime (§10.6) the client opens a new link. Multi-frame commands/responses use continuation frames (App. D); every frame is exactly 4352 B.
+
+### 8.5 Rejection
+
+A failed check of HELLO, RELAYINFO, HS1, HS2 or a frame is one uniform error: a record or unit of the wrong length or type, a decoder failure (§4.1), a failed signature, `relay_fp`, `valid_until` or `akc` check, an unknown `kid`, a wrong `mac1` or `mac2`, a counter other than the expected one, a failed AEAD open, a frame plaintext that opens but does not decode (padding, opcode, fields), and a `CONT` that does not continue the pending multi-frame command. The receiver emits nothing further and closes the connection; its frame counters, its recorded `cmd_seq` and the relay's store are unchanged. The relay draws no HS2 randomness before `mac1` verifies. A unit of any length other than 4352 B is rejected before the AEAD. `SKEY` (0x02) is the one reserved request opcode that is answered (ERR_MALFORMED, D.2).
 
 ---
 
@@ -586,23 +590,23 @@ so that after a relay restart the recipient re-issues the identical `QUEUE_NEW` 
 
 Relay state per queue: `recv_pk`, `send_pk`, `cells: VecDeque<{cell_id: u64, arrival: u64, cell, expiry_bucket}>`, `next_cell_id`, `created_bucket`, `last_fetch_bucket`. `cell_id` is per-queue, monotonically increasing from 1; `arrival` is a relay-global counter used for oldest-first selection in `FETCH_MULTI`. Buckets are hours since epoch (`u32`).
 
-**After a relay restart** (the client observed `ERR_NOQUEUE`/`present = 2` and re-created the queue): the recipient MUST reset `committed_ack` to 0 and clear its `cell_id` dedup set for that queue; a sender that observed `ERR_NOQUEUE` MUST discard its `cell_id → outbox` map for that queue. The relay MUST answer a `FETCH` whose `ack ≥ next_cell_id` with `ERR_MALFORMED` (a stale ack would otherwise delete every new cell).
+**After a relay restart** (the client observed `ERR_NOQUEUE`/`present = 2` and re-created the queue): the recipient MUST reset `committed_ack` to 0 and clear its `cell_id` dedup set for that queue; a sender that observed `ERR_NOQUEUE` MUST discard its `cell_id → outbox` map for that queue. The relay MUST answer a `FETCH` whose `ack ≥ next_cell_id` with `F` `CELLR` frames whose first has `present = 4` (MALFORMED); nothing is deleted (a stale ack would otherwise delete every new cell).
 
 ### 9.2 Command authentication
 
-Every request frame carries `cmd_seq: u32` (per link, strictly increasing; the relay rejects `≤ last`; `CONT` frames repeat the continued command's `cmd_seq` and are exempt from the increase check). Every command except `PING` and `LINK_GET` in consume mode carries `sig = Ed25519.Sign(key, "SecMP-Q/1 " ‖ CMD_NAME ‖ sess_id ‖ cmd_seq ‖ command fields)`. `QUEUE_NEW` and `LINK_PUT` additionally carry a `token` (§9.6). Per-queue keys are pseudonymous capabilities, never linked to the IKS.
+Every request frame carries `cmd_seq: u32` (per link, strictly increasing, not necessarily +1. The relay's `last` starts at 0; every request frame that opens and decodes with `cmd_seq > last` sets `last`, whatever the command's outcome. A request with `cmd_seq ≤ last` is not executed and is answered with exactly one ERR frame, code 6 (MALFORMED), for every command; for `LINK_PUT` the relay first takes its two `CONT` frames and answers after the third. `CONT` frames repeat the continued command's `cmd_seq` and are exempt from the increase check; only the next `CONT` of the pending `LINK_PUT` (same `cmd_seq`, `idx` 1, then `idx` 2) continues it, and any other frame while a `LINK_PUT` is pending is a LINK-level rejection (§8.5)). Every command except `PING` and `LINK_GET` in consume mode carries `sig = Ed25519.Sign(key, "SecMP-Q/1 " ‖ CMD_NAME ‖ sess_id ‖ cmd_seq ‖ command fields)`. `QUEUE_NEW` and `LINK_PUT` additionally carry a `token` (§9.6). Per-queue keys are pseudonymous capabilities, never linked to the IKS.
 
 ### 9.3 Commands (eight in v1; opcode 0x02 `SKEY` is reserved for v1.1 mailboxes)
 
 | Command | Key fields | Response |
 |---|---|---|
-| `QUEUE_NEW` | `recv_pk`, `send_pk`, `token` (signed by recv key) | `OK_QUEUE_NEW { rid, sid }` \| `ERR_TOKEN` \| `ERR_FULL` \| `OK_QUEUE_NEW` also when the identical queue already exists (idempotent) |
+| `QUEUE_NEW` | `recv_pk`, `send_pk`, `token` (signed by recv key) | `OK_QUEUE_NEW { rid, sid }` \| `ERR_TOKEN` \| `ERR_AUTH` (signature does not verify; known `recv_pk` with another `send_pk`) \| `ERR_FULL`; an identical request (same `recv_pk`, `send_pk`) answers `OK_QUEUE_NEW` without side effects although its token and signature differ |
 | `SEND` | `sid`, `cell` (signed by send key) | `OK_SEND { cell_id, evicted: Option<cell_id> }` \| `ERR_NOQUEUE` \| `ERR_AUTH` |
-| `FETCH` | `rid`, `ack: u64` (signed by recv key) | exactly `F` `CELLR` frames; errors are signalled in `CELLR.present` (2 = NOQUEUE, 3 = AUTH, 4 = MALFORMED) |
-| `FETCH_MULTI` | `count ≤ 32`, then per entry `rid`, `ack`, `sig` (signature label `MFETCH`, App. A) | exactly `F_M` `CELLR` frames: first one `CELLR` with `present ∈ {2,3,4}` for each listed queue in error, then cells from the remaining queues oldest-first by `arrival`, then dummies |
-| `QUEUE_DEL` | `rid` (signed by recv key) | `OK` |
-| `LINK_PUT` | `ld_id`, `one_time`, `expires_bucket`, `owner_pk [32]`, `token`, `blob` (3 frames) | `OK` \| `ERR_EXISTS` \| `ERR_FULL` \| `ERR_TOKEN` |
-| `LINK_GET` | `ld_id`, `mode: u8 (0 = consume, 1 = owner status; owner status is signed by `owner_pk`)` | 3 `LINKR` frames `{ present, consumed, blob }` (dummy blob when absent) |
+| `FETCH` | `rid`, `ack: u64` (signed by recv key) | exactly `F` `CELLR` frames: on success the stored cells with `cell_id > ack`, oldest first (ascending `cell_id`), then dummies; on an error frame 1 carries `present ∈ {2, 3, 4}`, the requested `rid`, `cell_id` 0 and a random cell, frames 2…`F` are dummies |
+| `FETCH_MULTI` | `count ≤ 32`, then per entry `rid`, `ack`, `sig` (signature label `MFETCH`, App. A) | exactly `F_M` `CELLR` frames: first one `CELLR` with `present ∈ {2,3,4}` for each listed queue in error, then cells from the remaining queues oldest-first by `arrival`, then dummies. Each entry has the `FETCH` ack semantics (`ack ≥ next_cell_id` ⇒ `present` 4 for that entry). Error frames come first in request order; when more than `F_M` entries fail, the first `F_M` errors in request order are answered and nothing else. A `rid` listed twice is checked and acknowledged per entry, in request order, and its cells are selected once. A `present` 1 `CELLR` carries its queue's `rid`. |
+| `QUEUE_DEL` | `rid` (signed by recv key) | `OK` \| `ERR_NOQUEUE` \| `ERR_AUTH` |
+| `LINK_PUT` | `ld_id`, `one_time`, `expires_bucket`, `owner_pk [32]`, `token`, `blob` (3 frames) | `OK` \| `ERR_EXISTS` \| `ERR_FULL` \| `ERR_TOKEN` \| `ERR_AUTH`, one response frame after the third frame, also on failure. `expires_bucket` must satisfy now_bucket ≤ `expires_bucket` ≤ now_bucket + 720 (`LINKDATA_TTL` in hours); otherwise `ERR_MALFORMED`, answered after the third frame, nothing stored. |
+| `LINK_GET` | `ld_id`, `mode: u8 (0 = consume, 1 = owner status; owner status is signed by `owner_pk`)` | 3 frames: `LINKR { present, consumed, blob part 4160 B }`, then two `CONT` (0xFF) of 4100 B. Consume mode: a stored blob answers {1, 0, blob} (a one-time blob is then deleted, §9.4); an absent or consumed one answers {0, 0} or {0, 1} with a dummy blob. Owner status: {present, consumed} with a dummy blob, and {0, 0} with a dummy blob when the signature does not verify. A dummy blob is 12360 random bytes |
 | `PING` | – | `OK` |
 
 **FETCH semantics.** `ack` is cumulative: the relay deletes all cells with `cell_id ≤ ack` before selecting, then returns the oldest `F` remaining cells (or dummies). A repeated `FETCH` with the same `ack` returns the same cells; clients drop duplicates by `cell_id`. Unacknowledged cells remain in the queue and count toward capacity. The client sets `ack` to the highest `cell_id` whose processing (decrypt, persist, or decision to discard) is committed — **every delivered cell is acknowledged**, whether or not it decrypted, once the decision is durable. The `FETCH`/`FETCH_MULTI` frame for slot k+1 (ack, `cmd_seq`, signature) is built after response k has been committed, or at a fixed δ before tick k+1 with whatever ack is committed by then — never before response k is processed, or every slot would re-fetch the same cells and halve the drain rate.
@@ -611,15 +615,15 @@ All responses are padded to `FRAME_SIZE`; success and error frames are indisting
 
 ### 9.4 Link data
 
-`LINK_GET` in consume mode on a `one_time` blob returns it and deletes it atomically; later consume-mode calls return `present = 0, consumed = 1`. Owner-status mode (signed by `owner_pk`, which the inviter set at `LINK_PUT`) returns `present`/`consumed` and a dummy blob without consuming. Consumption markers expire with the blob's expiry.
+`LINK_GET` in consume mode on a `one_time` blob returns it with `present = 1, consumed = 0` and deletes it atomically (the first consume wins); later consume-mode calls return `present = 0, consumed = 1`. Owner-status mode (signed by `owner_pk`, which the inviter set at `LINK_PUT`) returns `present`/`consumed` and a dummy blob without consuming. Consumption markers expire with the blob's expiry. Owner status never consumes. A `LINK_PUT` whose `ld_id` names a consumption marker is `ERR_EXISTS` until the marker expires; a blob with `one_time = 0` is returned by every consume-mode `LINK_GET` and kept.
 
 ### 9.5 Capacity and eviction
 
-When a `SEND` arrives at a queue holding `QUEUE_CAPACITY` cells, the relay evicts the oldest cell and reports its `cell_id` in `evicted`. The sender maps evicted ids to its outbox; an evicted *real* message is re-encrypted (new message key) and re-sent at the next slot; an evicted dummy is forgotten. Because the recipient's drain rate exceeds the sender's rate whenever the recipient is online (§10.2), eviction happens only while the recipient is offline, and the newest `QUEUE_CAPACITY` cells — which always include recently (re)sent real messages — are what the recipient finds on return. The ratchet's fast-forward (§7.4) absorbs the evicted positions.
+When a `SEND` arrives at a queue holding `QUEUE_CAPACITY` cells, the relay evicts the oldest cell and reports its `cell_id` in `evicted`. The sender maps evicted ids to its outbox; an evicted *real* message is re-encrypted (new message key) and re-sent at the next slot; an evicted dummy is forgotten. Because the recipient's drain rate exceeds the sender's rate whenever the recipient is online (§10.2), eviction happens only while the recipient is offline, and the newest `QUEUE_CAPACITY` cells — which always include recently (re)sent real messages — are what the recipient finds on return. The ratchet's fast-forward (§7.4) absorbs the evicted positions. `OK_SEND` then carries `evicted_present = 1` and the evicted `cell_id`; otherwise `evicted_present = 0` and `evicted_id = 0`; `cell_id`s keep increasing.
 
 ### 9.6 Tokens
 
-v1: `token = HMAC-SHA-256(relay_access_key, "SecMP-Q/1 token" ‖ sess_id ‖ cmd_seq)`. `relay_access_key` is a 32-byte secret the operator distributes out of band; its commitment `akc` is published in `RelayInfo` and pinned in `RelayRef` so that a per-user key is detectable. v1.x replaces this with VOPRF anonymous tokens (M13).
+v1: `token = HMAC-SHA-256(relay_access_key, "SecMP-Q/1 token" ‖ sess_id ‖ cmd_seq)`. `relay_access_key` is a 32-byte secret the operator distributes out of band; its commitment `akc` is published in `RelayInfo` and pinned in `RelayRef` so that a per-user key is detectable. v1.x replaces this with VOPRF anonymous tokens (M13). The token is bound to `sess_id` and to the command's own `cmd_seq`; a token computed for another `cmd_seq` or another link is `ERR_TOKEN`. v1 keeps no double-spend list (M13).
 
 ### 9.7 Relay obligations (normative)
 
@@ -629,7 +633,7 @@ v1: `token = HMAC-SHA-256(relay_access_key, "SecMP-Q/1 token" ‖ sess_id ‖ cm
 4. Global memory budget: when exceeded, `QUEUE_NEW`/`LINK_PUT` return `ERR_FULL`; `SEND` continues to be accepted (eviction bounds memory per queue).
 5. Zeroize cell buffers on delete.
 6. Fixed-size responses, in order, within the link.
-7. Hostile-input handling: strict parsing, consistency rule, per-link frame-rate limit, per-connection handshake-rate limit, at most one link per underlying connection.
+7. Hostile-input handling: strict parsing, consistency rule, per-link frame-rate limit, per-connection handshake-rate limit, at most one link per underlying connection. A request over the relay's per-link frame-rate limit is not executed and is answered with exactly one `ERR` frame, code 7 (RATE) — for `LINK_PUT` after its third frame — and its `cmd_seq` is recorded (§9.2). A `HELLO` over the handshake-rate limit is answered by closing the connection before `RELAYINFO`.
 8. Idempotent `QUEUE_NEW`: an identical request (same keys) returns `OK_QUEUE_NEW` without side effects; a request with a known `recv_pk` but different `send_pk` is `ERR_AUTH`.
 
 ### 9.8 `RouteDescriptor`
@@ -708,7 +712,7 @@ Constant rate hides *what* and *how much*; the following rules blur *when* links
 
 ### 11.2 Formal models (deliverables)
 
-`formal/CLAIMS.md` lists every query; the reviewer fixes the query set before modelling starts (including queries expected to be *false*, e.g., KCI resistance of HX, PQ authentication — so that the models cannot be weakened to go green). Models: `formal/hx.pv`, `formal/tr.pv` (bounded, 3 steps), `formal/link.pv`; ProVerif is mandatory in CI. Tamarin for the TR+HX composition is optional (M11+).
+`formal/CLAIMS.md` lists every query; the reviewer fixes the query set before modelling starts (including queries expected to be *false*, e.g., KCI resistance of HX, PQ authentication — so that the models cannot be weakened to go green). Models: `formal/hx.pvl` + `formal/hx/*.pv` (one file per session, ADR-046), `formal/tr.pv` (bounded, 3 steps), `formal/link.pvl` + `formal/link/*.pv`; ProVerif is mandatory in CI. Tamarin for the TR+HX composition is optional (M11+).
 
 ### 11.3 Accepted leakage (shown on the UI's "what the relay can see" page)
 
@@ -836,7 +840,7 @@ Response opcodes (relay → client); `cmd_seq` echoes the request:
 0xFF CONT         idx u8 ‖ data
 ```
 
-Multi-frame responses (CELLR × F, LINKR + CONT) are emitted back-to-back with the same `cmd_seq`. A relay MUST answer every request with the exact number of frames the table specifies, in request order.
+Multi-frame responses (CELLR × F, LINKR + CONT) are emitted back-to-back with the same `cmd_seq`. A relay MUST answer every request with the exact number of frames the table specifies, in request order. Exceptions: a request with a stale `cmd_seq` (§9.2) is answered with exactly one ERR 6 frame, and a request over the frame-rate limit (§9.7 item 7) with exactly one ERR 7 frame; for `LINK_PUT` either comes after its third frame.
 
 ### D.3 Invitation, relay reference, link data
 

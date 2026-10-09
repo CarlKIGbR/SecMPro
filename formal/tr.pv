@@ -1,6 +1,6 @@
 (* SPDX-License-Identifier: AGPL-3.0-or-later *)
 (* formal/tr.pv — SecMP-TR, the hybrid Double Ratchet with header encryption (docs/03 §7), bounded to three
-   DH-ratchet steps. Query set: formal/CLAIMS.md §TR (T1–T12, fixed by the reviewer; ADR-026, docs/03 §11.2).
+   DH-ratchet steps. Query set: formal/CLAIMS.md §TR (T1–T14, fixed by the reviewer; ADR-026, docs/03 §11.2).
    Properties: docs/03 §11.1 row "TR". Run: proverif formal/tr.pv (ProVerif 2.05).
 
    ---------------------------------------------------------------------------------------------------------------
@@ -44,6 +44,23 @@
      KEM-constancy check (T11 scope: no RecvKem on this path), then removed (the process ends). Rejecting is silent
      and leaves the state unchanged, so a stopped attempt is the trace in which the rejected cell was not delivered;
      MAX_FF, SKIP_WINDOW and eviction are not reached inside the bound (tests).
+   - 1b. T14 (M3 F6, M4 review R-41): after its acceptance a stored key's process Skipped continues with Again, the
+     receiver's next Decrypt (§7.4) offered a cell on c by the attacker — in particular the accepted cell again (its
+     copy is on c). Step 1: the entry (hk, n) was removed by skipped.remove (§7.4, skipped keys are deleted after
+     use), so a cell whose header opens under hk with header.n = n finds no entry ("else break", or hk is no longer
+     one of the distinct header keys); the other stored keys are their own Skipped processes. Step 2: if the entry's
+     chain is still the receiving chain (hk_r = hk; at every Skipped site n_r = 2 there), the header opens, KEM
+     constancy holds and skip_message_keys(n) rejects it as stale (n < n_r); if the receiver has stepped since
+     (hk_r ≠ hk), neither hk_r nor nhk_r opens a header sealed under hk. So Again rejects the cell; any other cell the
+     receiver can accept inside the bound is accepted at its own slot, so Again accepts nothing (no event, no output)
+     and T14 rests on each stored key's process taking one cell (the removal). Events: Sent(s, kid, n, m) at every
+     send and Accepted(s, kid, n, m) at every acceptance (chain, step and skipped paths) of the F5 processes, with
+     kid = the header key the cell is sealed under (the sender's hk_s; at the receiver the key its header opened
+     under: hk_r, nhk_r or the stored key's hk — the skipped map is keyed by (hk, n), §7.1), n = header.n, m = the
+     content. T14 is stated for sClean, as T2 (in the mPCS sessions the attacker holds A's step-1 state and forges
+     chain-1 cells, T10). Checked during modelling: with the entry kept (Again also accepts a cell opening under hk
+     with header.n = n, under the stored mk), T14 is false (docs/reviews/M05-evidence/proverif-tr-t14-probe-kept.pv,
+     .txt).
 
    ---------------------------------------------------------------------------------------------------------------
    2. Abstractions (plus hseal2 (CLAIMS errata 2026-10-01) those of CLAIMS.md; nothing else about a primitive is assumed)
@@ -71,7 +88,7 @@
    3. Sessions (the claims' scenarios run as independent parallel sessions of one process)
    ---------------------------------------------------------------------------------------------------------------
      tag       mode    compromise                                  oracle        queries
-     sClean    mClean  none                                        none          T1, T2, T8, T11, T13   (1a.)
+     sClean    mClean  none                                        none          T1, T2, T8, T11, T13, T14  (1a., 1b.)
      sFS       mFS     phase 1: Compromise(A,2), Compromise(B,2);  none          T3, T11, T13           (in order)
                        the session runs steps 1–2 only (phase 0)
      sPCS      mPCS    Compromise(A,1); honest steps 2 and 3       none          T4, T10, T11, T13      (1a.)
@@ -85,9 +102,10 @@
    other sessions from the process only removes attacker capabilities, so a query proved true here also holds in a
    model that contains its scenario alone; the attacks reported for the false queries were checked to use only
    their own session.
-   Events carry the session tag as first argument (Send(s, P, i, n, c), Recv(s, P, i, n, c)): T2's assumption "no
-   compromise of the sender's state at or before (i,n)" holds in sClean, so T2 is stated for sClean; T11 has no
-   assumption and is stated for every session (s is universally quantified).
+   Events carry the session tag as first argument (Send(s, P, i, n, c), Recv(s, P, i, n, c); T14's Sent(s, kid, n,
+   m), Accepted(s, kid, n, m), 1b.): T2's assumption "no compromise of the sender's state at or before (i,n)" holds
+   in sClean, so T2 and T14 are stated for sClean; T11 has no assumption and is stated for every session (s is
+   universally quantified).
 
    ---------------------------------------------------------------------------------------------------------------
    4. Oracles, "enabled per query" (CLAIMS: DHO, KEMO)
@@ -174,15 +192,15 @@
      the in-order and other-first branches of one slot (exclusive: one header n) are not combined in one derivation;
      a more precise clause translation of the same process (without it, T2's first line "cannot be proved": the
      Recv of (1,0) at the step and at the skipped key counted as two receptions; T7 had no reconstructable trace).
-   - Two query declarations (T1–T2 and T3–T13, in ID order, a "Tk" comment above each query): ProVerif
-     saturates the clause set once per declaration, and T2's injective events are the expensive part.
+   - Three query declarations (T1–T2, T3–T13 and T14, in ID order, a "Tk" comment above each query): ProVerif
+     saturates the clause set once per declaration, and the injective events of T2 and T14 are the expensive part.
 
    ---------------------------------------------------------------------------------------------------------------
    9. Expected verdicts (CLAIMS gate rule), RESULT lines in file order
    ---------------------------------------------------------------------------------------------------------------
    T1 (6 lines) true · T2 (2) true · T3 (4) true · T4 (2) true · T5 (2) true · T6 (2) true · T7 (2) false ·
-   T8 (12) true · T9 (4) true · T10 (1) false · T11 (1) true · T12 (1) false (informative) · T13 (7) false —
-   46 RESULT lines.
+   T8 (12) true · T9 (4) true · T10 (1) false · T11 (1) true · T12 (1) false (informative) · T13 (7) false ·
+   T14 (1) true — 47 RESULT lines.
 *)
 
 set selFun = Term.
@@ -288,6 +306,9 @@ event ChainKem(tagt, bitstring, bitstring, kemct).                   (* receiver
 event RecvKem(tagt, bitstring, bitstring, bitstring, bitstring, kemct).  (* accepted (i, n) had header ct_pq *)
 event Compromise(tagt, bitstring, bitstring).                        (* Compromise(s, P, i) *)
 event HdrOpenTwice(key, key, bitstring).                             (* T12 probe *)
+event Sent(tagt, key, bitstring, bitstring).                         (* T14: Sent(s, kid, n, m), kid = hk_s (1b.) *)
+event Accepted(tagt, key, bitstring, bitstring).                     (* T14: Accepted(s, kid, n, m), kid = the hk
+                                                                        the header opened under (1b.) *)
 
 (* ---------------------------------------------------------------- secrecy assumptions (8.) -------------------- *)
 
@@ -423,8 +444,8 @@ not x: bitstring; attacker(kemsk(sHFS, x)) phase 0.
 
 (* ---------------------------------------------------------------- queries (CLAIMS.md §TR, in ID order) ------- *)
 
-(* Two declarations (8.): T1–T2, then T3–T13. Every query (one RESULT line each) has its "Tk" comment directly
-   above it; the RESULT lines appear in this order. *)
+(* Three declarations (8.): T1–T2, then T3–T13, then T14. Every query (one RESULT line each) has its "Tk" comment
+   directly above it; the RESULT lines appear in this order. *)
 
 query i: bitstring, n: bitstring, x: bitstring;
       (* T1: body secrecy — not attacker(c) for every honest content c; no compromise, no oracle (sClean). *)
@@ -499,6 +520,12 @@ query s: tagt, p: bitstring, i: bitstring, n: bitstring, x: bitstring, ct: kemct
       (* T13 *) event(Recv(sPCSkem, pB, st3, c1, content(sPCSkem, st3, c1)));
       (* T13 *) event(Recv(sPCSboth, pB, st3, c1, content(sPCSboth, st3, c1)));
       (* T13 *) event(Recv(sHFS, pB, st3, c1, content(sHFS, st3, c1))).
+
+query kid: key, n: bitstring, m: bitstring;
+      (* T14: replay after a skipped-path acceptance (M3 F6) — on the F5 branch the receiver accepts cell c through a
+         skipped message key and is then offered c a second time (Again, 1b.); injective agreement: kid = the header
+         key, n = header.n, m = the content; stated for sClean, as T2. *)
+      inj-event(Accepted(sClean, kid, n, m)) ==> inj-event(Sent(sClean, kid, n, m)).
 
 (* ---------------------------------------------------------------- processes --------------------------------- *)
 
@@ -722,18 +749,33 @@ let ProcB(s: tagt, mode: bitstring, dA: channel, dB: channel) =
 
 (* ---------------------------------------------------------------- F5 receive branches (1a.) ------------------- *)
 
+(* T14 (1b.): the receiver's next Decrypt (§7.4) after the stored key (hk, n) accepted a cell, offered a cell on c
+   — in particular that cell again. Step 1: (hk, n) has been removed (§7.4 skipped.remove: skipped keys are deleted
+   after use), so a header that opens under hk with header.n = n finds no entry ("else break"; or hk is no longer one
+   of the distinct header keys). Step 2: hk_r = hk (n_r = 2 at every Skipped site): KEM constancy holds and
+   skip_message_keys(n) rejects n < n_r (stale); hk_r ≠ hk (stepped since): neither hk_r nor nhk_r opens it. Rejected
+   (silent, state unchanged); any other cell the receiver can accept inside the bound has its own slot. *)
+let Again(hk: key, n: bitstring, sb: bitstring) =
+  in(c, (nna: nonce, hca: bitstring, bda: bitstring));
+  let (dha: G, pna: bitstring, =n, eka: kemek, cta: kemct, mka: bitstring) = hopen(hk, nna, (lbl_hdr, sb), hca) in
+  0.
+
 (* §7.4 step 1, one skipped key: (hk, n) -> mk stored by skip_message_keys. The entry accepts one cell whose header
-   opens under hk with header.n = n, under mk (no KEM-constancy check on this path: T11 scope), then is removed. *)
+   opens under hk with header.n = n, under mk (no KEM-constancy check on this path: T11 scope), then is removed; the
+   receiver's next Decrypt is then offered a cell again (Again, T14). *)
 let Skipped(s: tagt, p: bitstring, i: bitstring, n: bitstring, hk: key, mk: key, sb: bitstring, ch: channel) =
   in(ch, (nns: nonce, hcs: bitstring, bds: bitstring));
   let (dhs: G, pns: bitstring, =n, eks: kemek, cts: kemct, mks: bitstring) = hopen(hk, nns, (lbl_hdr, sb), hcs) in
   let xs = bopen(mk, (lbl_body, sb, nns, hcs), bds) in
-  event Recv(s, p, i, n, xs).
+  event Recv(s, p, i, n, xs);
+  event Accepted(s, hk, n, xs);
+  Again(hk, n, sb).
 
 (* §7.3 B's step 2, n = 0 and n = 1 (hk_s = NHK_B, pn = 0) *)
 let SendStep2(s: tagt, sb: bitstring, NHKB: key, cks2: key, b2: exponent, dkb2: kemdk, ct2: kemct, dA: channel) =
   let m20 = content(s, st2, c0) in
   event Send(s, pB, st2, c0, m20);
+  event Sent(s, NHKB, c0, m20);
   let cell20 = mkcell(NHKB, cks2, sb, (exp(g, b2), c0, c0, pk(dkb2), ct2, nmark(s, st2, c0)), m20) in
   out(c, cell20);
   (
@@ -742,6 +784,7 @@ let SendStep2(s: tagt, sb: bitstring, NHKB: key, cks2: key, b2: exponent, dkb2: 
     let cks2b = ck_ck(cks2) in
     let m21 = content(s, st2, c1) in
     event Send(s, pB, st2, c1, m21);
+    event Sent(s, NHKB, c1, m21);
     let cell21 = mkcell(NHKB, cks2b, sb, (exp(g, b2), c0, c1, pk(dkb2), ct2, nmark(s, st2, c1)), m21) in
     out(c, cell21);
     out(dA, cell21)
@@ -751,6 +794,7 @@ let SendStep2(s: tagt, sb: bitstring, NHKB: key, cks2: key, b2: exponent, dkb2: 
 let SendStep3(s: tagt, sb: bitstring, nhks1: key, cks3: key, a3: exponent, dka3: kemdk, ct3: kemct, dB: channel) =
   let m30 = content(s, st3, c0) in
   event Send(s, pA, st3, c0, m30);
+  event Sent(s, nhks1, c0, m30);
   let cell30 = mkcell(nhks1, cks3, sb, (exp(g, a3), c2, c0, pk(dka3), ct3, nmark(s, st3, c0)), m30) in
   out(c, cell30);
   (
@@ -759,6 +803,7 @@ let SendStep3(s: tagt, sb: bitstring, nhks1: key, cks3: key, a3: exponent, dka3:
     let cks3b = ck_ck(cks3) in
     let m31 = content(s, st3, c1) in
     event Send(s, pA, st3, c1, m31);
+    event Sent(s, nhks1, c1, m31);
     let cell31 = mkcell(nhks1, cks3b, sb, (exp(g, a3), c2, c1, pk(dka3), ct3, nmark(s, st3, c1)), m31) in
     out(c, cell31);
     out(dB, cell31)
@@ -786,6 +831,7 @@ let RecvStep3(s: tagt, sb: bitstring, HKA: key, nhkr1: key, dhpk1: G, rk2: key, 
     event ChainKem(s, pB, st3, ct3);
     event RecvKem(s, pB, st3, c0, x30, ct3);
     event Recv(s, pB, st3, c0, x30);
+    event Accepted(s, nhkr1, c0, x30);
     let ckr3b = ck_ck(ckr3) in
     (
       (if skip11 = yes then Skipped(s, pB, st1, c1, HKA, mk11, sb, c))
@@ -799,7 +845,8 @@ let RecvStep3(s: tagt, sb: bitstring, HKA: key, nhkr1: key, dhpk1: G, rk2: key, 
       if n31 = c1 then
       let x31 = bopen(ck_mk(ckr3b), (lbl_body, sb, nn31, hc31), bd31) in
       event RecvKem(s, pB, st3, c1, x31, ct31);
-      event Recv(s, pB, st3, c1, x31)
+      event Recv(s, pB, st3, c1, x31);
+      event Accepted(s, nhkr1, c1, x31)
     )
   ) else if n3f = c1 then (
     (* other first: skip_message_keys(1) stores mk(3,0) *)
@@ -808,6 +855,7 @@ let RecvStep3(s: tagt, sb: bitstring, HKA: key, nhkr1: key, dhpk1: G, rk2: key, 
     event ChainKem(s, pB, st3, ct3);
     event RecvKem(s, pB, st3, c1, x31, ct3);
     event Recv(s, pB, st3, c1, x31);
+    event Accepted(s, nhkr1, c1, x31);
     (
       (if skip11 = yes then Skipped(s, pB, st1, c1, HKA, mk11, sb, c))
     | Skipped(s, pB, st3, c0, nhkr1, ck_mk(ckr3), sb, dB)
@@ -835,6 +883,7 @@ let ProcA5(s: tagt, mode: bitstring, dA: channel, dB: channel) =
   (* §7.3 step 1, n = 0 (hk_s = HK_A, pn = 0) *)
   let m10 = content(s, st1, c0) in
   event Send(s, pA, st1, c0, m10);
+  event Sent(s, HKA, c0, m10);
   let cell10 = mkcell(HKA, cks1, sb, (exp(g, a1), c0, c0, pk(dka1), ct1, nmark(s, st1, c0)), m10) in
   out(c, cell10);
   out(dB, cell10);
@@ -848,6 +897,7 @@ let ProcA5(s: tagt, mode: bitstring, dA: channel, dB: channel) =
     (* §7.3 step 1, n = 1 *)
     let m11 = content(s, st1, c1) in
     event Send(s, pA, st1, c1, m11);
+    event Sent(s, HKA, c1, m11);
     out(c, mkcell(HKA, cks1b, sb, (exp(g, a1), c0, c1, pk(dka1), ct1, nmark(s, st1, c1)), m11));
     (* §7.4 chain 2, first cell: hk_r = None, nhk_r = NHK_B opens => DH step; (2,0) in order or (2,1) first *)
     in(dA, (nn2f: nonce, hc2f: bitstring, bd2f: bitstring));
@@ -870,6 +920,7 @@ let ProcA5(s: tagt, mode: bitstring, dA: channel, dB: channel) =
       event ChainKem(s, pA, st2, ct2);
       event RecvKem(s, pA, st2, c0, x20, ct2);
       event Recv(s, pA, st2, c0, x20);
+      event Accepted(s, NHKB, c0, x20);
       let ckr2b = ck_ck(ckr2) in
       (* §7.4 chain 2, second cell: hk_r = NHK_B opens => same chain; KEM constancy; n = 0 stale *)
       in(dA, (nn21: nonce, hc21: bitstring, bd21: bitstring));
@@ -881,6 +932,7 @@ let ProcA5(s: tagt, mode: bitstring, dA: channel, dB: channel) =
       let x21 = bopen(ck_mk(ckr2b), (lbl_body, sb, nn21, hc21), bd21) in
       event RecvKem(s, pA, st2, c1, x21, ct21);
       event Recv(s, pA, st2, c1, x21);
+      event Accepted(s, NHKB, c1, x21);
       SendStep3(s, sb, nhks1, cks3, a3, dka3, ct3, dB)
     ) else if n2f = c1 then (
       (* other first: skip_message_keys(1) stores mk(2,0) under (NHK_B, 0) *)
@@ -889,6 +941,7 @@ let ProcA5(s: tagt, mode: bitstring, dA: channel, dB: channel) =
       event ChainKem(s, pA, st2, ct2);
       event RecvKem(s, pA, st2, c1, x21, ct2);
       event Recv(s, pA, st2, c1, x21);
+      event Accepted(s, NHKB, c1, x21);
       (
         Skipped(s, pA, st2, c0, NHKB, ck_mk(ckr2), sb, dA)
       | SendStep3(s, sb, nhks1, cks3, a3, dka3, ct3, dB)
@@ -929,6 +982,7 @@ let ProcB5(s: tagt, mode: bitstring, dA: channel, dB: channel) =
     event ChainKem(s, pB, st1, ct1);
     event RecvKem(s, pB, st1, c0, x10, ct1);
     event Recv(s, pB, st1, c0, x10);
+    event Accepted(s, HKA, c0, x10);
     let ckr1b = ck_ck(ckr1) in
     (
       SendStep2(s, sb, NHKB, cks2, b2, dkb2, ct2, dA)
@@ -945,6 +999,7 @@ let ProcB5(s: tagt, mode: bitstring, dA: channel, dB: channel) =
         let x11 = bopen(ck_mk(ckr1b), (lbl_body, sb, nn11, hc11), bd11) in
         event RecvKem(s, pB, st1, c1, x11, ct11);
         event Recv(s, pB, st1, c1, x11);
+        event Accepted(s, HKA, c1, x11);
         RecvStep3(s, sb, HKA, nhkr1, dhpk1, rk2, b2, dkb2, dB, no, ckr1b)
       ) else (
         (* the step-3 cell first: (1,1) is skipped into (HK_A, 1) *)
@@ -958,6 +1013,7 @@ let ProcB5(s: tagt, mode: bitstring, dA: channel, dB: channel) =
     event ChainKem(s, pB, st1, ct1);
     event RecvKem(s, pB, st1, c1, x11, ct1);
     event Recv(s, pB, st1, c1, x11);
+    event Accepted(s, HKA, c1, x11);
     (
       Skipped(s, pB, st1, c0, HKA, ck_mk(ckr1), sb, dB)
     | SendStep2(s, sb, NHKB, cks2, b2, dkb2, ct2, dA)

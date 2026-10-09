@@ -45,6 +45,8 @@ impl Lib {
         InvitationRecord {
             ld_id: self.w.inv.ld_id,
             link_key: SecretBytes::from_slice(&self.w.inv.link_key).unwrap(),
+            owner_seed: SecretBytes::from_slice(&self.w.inv.owner_seed).unwrap(),
+            invq_recv_seed: SecretBytes::from_slice(&self.w.inv.invq_recv_seed).unwrap(),
             spk_id: SPK_ID,
             opk_id: OPK_ID,
             expires: EXPIRES,

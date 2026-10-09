@@ -4,7 +4,8 @@
 //! 1. The Rust generators write `vectors/rust/<suite>.json` (gitignored): the `secmp-crypto` example `gen-vectors`
 //!    (feature `kat`) the M1 suites, the `secmp-proto` example `gen-encodings` the positive rows of `encodings`, the
 //!    `secmp-proto` example `gen-tr` (feature `kat`) the complete `tr` suite (M3), the example `gen-hx` (feature
-//!    `kat`) the complete `hx` suite (M4).
+//!    `kat`) the complete `hx` suite (M4), the `secmp-relay` example `gen-link` (feature `kat`) the complete `link`
+//!    suite (M5).
 //! 2. Each file is compared **structurally** with the committed reference file `vectors/ref/<suite>.json`
 //!    (written by the independent `ref/` session): both are parsed, `generator` is removed, the values must be
 //!    equal — no case folding. Every byte-string field must match `^([0-9a-f]{2})*$`. For the suites of
@@ -221,6 +222,22 @@ fn generate(rust_dir: &Path) -> Result<()> {
             "kat",
             "--example",
             "gen-hx",
+            "--",
+        ])
+        .arg(rust_dir.to_string_lossy())
+        .run()?;
+    Cmd::cargo()
+        .args([
+            "run",
+            "--release",
+            "--locked",
+            "--quiet",
+            "--package",
+            "secmp-relay",
+            "--features",
+            "kat",
+            "--example",
+            "gen-link",
             "--",
         ])
         .arg(rust_dir.to_string_lossy())
@@ -573,6 +590,52 @@ mod tests {
         assert!(
             check_frozen_suite("x", changed, reference)
                 .is_err_and(|e| e.0.contains("[x-0001]/inputs/k") && e.0.contains("at byte 64"))
+        );
+        Ok(())
+    }
+
+    /// X-01 `vectors_step_12a_covers_twelve_suites` (TEST-SPEC-M5): step 12a compares the 12 frozen suites, `link`
+    /// among them, nothing is pending freeze, and `link`'s frozen file is checked against its reference file (86
+    /// cases, structurally and byte for byte) as part of the step's count.
+    #[test]
+    fn vectors_step_12a_covers_twelve_suites() -> Result<()> {
+        assert_eq!(
+            expect::VECTOR_SUITES.len(),
+            12,
+            "{:?}",
+            expect::VECTOR_SUITES
+        );
+        assert!(expect::VECTOR_SUITES.contains(&"link"));
+        assert!(
+            expect::VECTOR_REF_PENDING.is_empty(),
+            "{:?}",
+            expect::VECTOR_REF_PENDING
+        );
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let vectors = root.join("vectors");
+        let (frozen, reference) = (
+            std::fs::read(vectors.join("link.json"))?,
+            std::fs::read(vectors.join("ref").join("link.json"))?,
+        );
+        assert_eq!(check_frozen_suite("link", &frozen, &reference)?, 86);
+        // the step's total is the sum over the 12 suites, `link`'s 86 cases included
+        let mut total = 0_usize;
+        for suite in expect::VECTOR_SUITES {
+            let doc = parse(&vectors.join(format!("{suite}.json")))?;
+            total = total.saturating_add(
+                doc.get("cases")
+                    .and_then(Value::as_array)
+                    .map_or(0, Vec::len),
+            );
+        }
+        let summary = check_frozen_against_ref(&root)?;
+        assert!(
+            summary.starts_with(&format!("12 frozen suites ({total} cases)")),
+            "{summary}"
+        );
+        assert!(
+            summary.ends_with("pending freeze (shape only): none"),
+            "{summary}"
         );
         Ok(())
     }

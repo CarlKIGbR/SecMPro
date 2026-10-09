@@ -146,6 +146,228 @@ fn wycheproof_xchacha20_poly1305_through_aead() {
     );
 }
 
+/// `Aead::open_ct` and `Aead::open_ct_constant_flow` on the same input, each into its own `out` of `out_len` bytes
+/// of `0xaa`: they agree on the verdict and on `out` afterwards; returns them.
+fn open_both(
+    key: &secmp_crypto::SecretBytes<32>,
+    nonce: &[u8; 24],
+    assoc: &[u8],
+    sealed: &[u8],
+    out_len: usize,
+    what: &str,
+) -> (bool, Vec<u8>) {
+    use secmp_crypto::Aead;
+    let mut a = vec![0xaa_u8; out_len];
+    let mut b = vec![0xaa_u8; out_len];
+    let ra = bool::from(Aead::open_ct(key, nonce, assoc, sealed, &mut a));
+    let rb = bool::from(Aead::open_ct_constant_flow(
+        key, nonce, assoc, sealed, &mut b,
+    ));
+    assert_eq!(
+        (ra, to_hex(&a)),
+        (rb, to_hex(&b)),
+        "{what}: open_ct vs open_ct_constant_flow"
+    );
+    (rb, b)
+}
+
+/// The Wycheproof XChaCha20-Poly1305 file through `Aead::open_ct_constant_flow` (the opening of the SecMP-TR header
+/// trial, spec §7.4; M4 campaign R-59) next to `Aead::open_ct`: on every case with a 24-byte nonce both give the
+/// same verdict and the same `out` — valid cases `Choice` 1 and `msg`, invalid ones (modified tags) `Choice` 0 and
+/// all zeros — and into an `out` one byte too long both refuse and leave it untouched. The nine cases with another
+/// nonce size cannot be expressed (the nonce is a `[u8; 24]`).
+#[test]
+fn wycheproof_xchacha20_poly1305_constant_flow_equals_open_ct() {
+    use secmp_crypto::SecretBytes;
+    let doc = load("external/wycheproof/xchacha20_poly1305_test.json");
+    let mut tally = Tally::default();
+    let (mut valid, mut invalid) = (0_usize, 0_usize);
+    for c in wycheproof_cases(&doc) {
+        let (key, iv, assoc) = (
+            hex_field(c.test, "key"),
+            hex_field(c.test, "iv"),
+            hex_field(c.test, "aad"),
+        );
+        let (msg, ct, tag) = (
+            hex_field(c.test, "msg"),
+            hex_field(c.test, "ct"),
+            hex_field(c.test, "tag"),
+        );
+        let Ok(nonce) = <[u8; 24]>::try_from(iv.as_slice()) else {
+            assert_eq!(c.verdict, Verdict::Invalid, "tcId {}", c.tc_id);
+            tally.skip(c.tc_id, "nonce size is not 24 bytes");
+            continue;
+        };
+        let key = SecretBytes::<32>::from_slice(&key).unwrap();
+        let sealed = [ct.as_slice(), tag.as_slice()].concat();
+        let what = format!("tcId {}", c.tc_id);
+        let (ok, out) = open_both(&key, &nonce, &assoc, &sealed, msg.len(), &what);
+        let longer = msg.len().checked_add(1).unwrap();
+        assert_eq!(
+            open_both(&key, &nonce, &assoc, &sealed, longer, &what),
+            (false, vec![0xaa; longer]),
+            "{what}: out one byte too long"
+        );
+        match c.verdict {
+            Verdict::Valid => {
+                assert!(ok, "{what}");
+                assert_eq!(to_hex(&out), to_hex(&msg), "{what}");
+                valid = valid.saturating_add(1);
+            }
+            Verdict::Invalid => {
+                assert!(!ok, "{what}");
+                assert!(out.iter().all(|b| *b == 0), "{what}");
+                invalid = invalid.saturating_add(1);
+            }
+            Verdict::Acceptable => {
+                tally.skip(c.tc_id, "acceptable");
+                continue;
+            }
+        }
+        tally.check();
+    }
+    assert_eq!(
+        (tally.checked, valid, invalid, tally.skipped.len()),
+        (306, 246, 60, 9),
+        "{}",
+        tally.summary("xchacha20-poly1305 constant flow vs open_ct")
+    );
+}
+
+/// A seeded xorshift64* stream: the inputs of `constant_flow_equals_open_ct_randomized` without a dependency.
+struct Stream(u64);
+
+impl Stream {
+    fn next(&mut self) -> u64 {
+        self.0 ^= self.0.wrapping_shr(12);
+        self.0 ^= self.0.wrapping_shl(25);
+        self.0 ^= self.0.wrapping_shr(27);
+        self.0.wrapping_mul(0x2545_f491_4f6c_dd1d)
+    }
+
+    fn bytes(&mut self, n: usize) -> Vec<u8> {
+        (0..n)
+            .map(|_| u8::try_from(self.next().wrapping_shr(56)).unwrap())
+            .collect()
+    }
+
+    /// Uniform enough in `0..n` (`n > 0`).
+    fn below(&mut self, n: usize) -> usize {
+        usize::try_from(self.next().checked_rem(u64::try_from(n).unwrap()).unwrap()).unwrap()
+    }
+
+    /// One random bit of a byte.
+    fn bit(&mut self) -> u8 {
+        1_u8.wrapping_shl(u32::try_from(self.below(8)).unwrap())
+    }
+}
+
+/// An opening that must be rejected: `(key, nonce, AD, ct ‖ tag)`.
+type Rejected = ([u8; 32], [u8; 24], Vec<u8>, Vec<u8>);
+
+/// `x` with one random bit flipped in one random byte (`x` not empty).
+fn flip_one(s: &mut Stream, x: &mut [u8]) {
+    let at = s.below(x.len());
+    let bit = s.bit();
+    *x.get_mut(at).unwrap() ^= bit;
+}
+
+/// `Aead::open_ct_constant_flow` against `Aead::open_ct` on seeded random inputs (an xorshift64* stream, seed
+/// `0x5ec3_2d00_0000_0059`; no dependency): plaintexts of 0, 1, 15, 16, 17, 63, 64, 65, 255, 1000 and 2314 bytes
+/// (the TR header, spec §7.5), six rounds each, under random keys and nonces and an AD of 0, 13 or 26 bytes, sealed by
+/// `Aead::seal`. Both accept with the plaintext; both reject with an all-zero `out` after a flipped bit in each of the
+/// 16 tag bytes, in the first, middle and last ciphertext byte and at 8 random positions of the input, under a key, a
+/// nonce or a (non-empty) AD with one bit flipped and under an AD one byte longer; both reject leaving `out` untouched
+/// for the input truncated or extended by one byte and for an `out` one byte shorter (non-empty plaintexts) or longer.
+#[test]
+fn constant_flow_equals_open_ct_randomized() {
+    use secmp_crypto::{Aead, Nonce24, SecretBytes};
+    const LENS: [usize; 11] = [0, 1, 15, 16, 17, 63, 64, 65, 255, 1000, 2314];
+    const ROUNDS: usize = 6;
+    let mut s = Stream(0x5ec3_2d00_0000_0059);
+    let (mut accepted, mut zeroed, mut untouched) = (0_usize, 0_usize, 0_usize);
+    for len in LENS {
+        for round in 0..ROUNDS {
+            let key_bytes: [u8; 32] = s.bytes(32).try_into().unwrap();
+            let nonce: [u8; 24] = s.bytes(24).try_into().unwrap();
+            let assoc = s.bytes(round.checked_rem(3).unwrap().checked_mul(13).unwrap());
+            let msg = s.bytes(len);
+            let key = SecretBytes::<32>::from_slice(&key_bytes).unwrap();
+            let sealed = Aead::seal(&key, Nonce24::from_bytes_kat(nonce), &assoc, &msg).unwrap();
+            let what = format!("len {len}, round {round}");
+            assert_eq!(
+                open_both(&key, &nonce, &assoc, &sealed, len, &what),
+                (true, msg.clone()),
+                "{what}: authentic"
+            );
+            accepted = accepted.saturating_add(1);
+
+            // rejected, `out` all zero
+            let mut positions: Vec<usize> = (len..sealed.len()).collect();
+            if let Some(last) = len.checked_sub(1) {
+                positions.extend([0, len.checked_div(2).unwrap(), last]);
+            }
+            positions.extend((0..8).map(|_| s.below(sealed.len())));
+            let mut rejected: Vec<Rejected> = positions
+                .into_iter()
+                .map(|at| {
+                    let mut bad = sealed.clone();
+                    *bad.get_mut(at).unwrap() ^= s.bit();
+                    (key_bytes, nonce, assoc.clone(), bad)
+                })
+                .collect();
+            let (mut k2, mut n2) = (key_bytes, nonce);
+            flip_one(&mut s, &mut k2);
+            flip_one(&mut s, &mut n2);
+            rejected.push((k2, nonce, assoc.clone(), sealed.clone()));
+            rejected.push((key_bytes, n2, assoc.clone(), sealed.clone()));
+            if !assoc.is_empty() {
+                let mut a2 = assoc.clone();
+                flip_one(&mut s, &mut a2);
+                rejected.push((key_bytes, nonce, a2, sealed.clone()));
+            }
+            let mut longer_ad = assoc.clone();
+            longer_ad.push(0);
+            rejected.push((key_bytes, nonce, longer_ad, sealed.clone()));
+            for (k, n, a, c) in rejected {
+                let k = SecretBytes::<32>::from_slice(&k).unwrap();
+                assert_eq!(
+                    open_both(&k, &n, &a, &c, len, &what),
+                    (false, vec![0; len]),
+                    "{what}: rejected"
+                );
+                zeroed = zeroed.saturating_add(1);
+            }
+
+            // rejected, `out` untouched (wrong lengths)
+            let truncated = sealed.split_last().unwrap().1;
+            let mut extended = sealed.clone();
+            extended.push(0);
+            let mut wrong = vec![
+                (truncated, len),
+                (extended.as_slice(), len),
+                (sealed.as_slice(), len.checked_add(1).unwrap()),
+            ];
+            if let Some(shorter) = len.checked_sub(1) {
+                wrong.push((sealed.as_slice(), shorter));
+            }
+            for (c, out_len) in wrong {
+                assert_eq!(
+                    open_both(&key, &nonce, &assoc, c, out_len, &what),
+                    (false, vec![0xaa; out_len]),
+                    "{what}: wrong length"
+                );
+                untouched = untouched.saturating_add(1);
+            }
+        }
+    }
+    // 11 lengths × 6 rounds = 66 cases; zeroed per case: 16 tag bytes + 8 random positions + key + nonce + longer AD
+    // = 27, plus 3 ciphertext positions for the 10 non-empty lengths and the AD flip in rounds 1, 2, 4, 5:
+    // 66 × 27 + 60 × 3 + 11 × 4 = 2006; untouched per case: truncated, extended, out + 1 = 3, plus out − 1 for the
+    // non-empty lengths: 66 × 3 + 60 = 258
+    assert_eq!((accepted, zeroed, untouched), (66, 2006, 258));
+}
+
 /// The ChaCha20 stream as `MsgEncrypt` uses it (IETF variant, 96-bit nonce): the RFC 8439 AEAD encrypts with
 /// the keystream from block 1, so for every valid Wycheproof ChaCha20-Poly1305 case with a 12-byte nonce,
 /// `msg ⊕ keystream[64..]` must equal `ct`.

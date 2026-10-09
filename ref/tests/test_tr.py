@@ -176,7 +176,10 @@ def test_state_digest_layout():
 def test_digest_label_is_outside_appendix_a_and_prefix_free():
     """SQ-24: the label is not an App. A label; it neither starts with one nor starts one."""
     assert tr_cases.DIGEST_LABEL not in labels.APPENDIX_A and tr_cases.DIGEST_LABEL.isascii()
-    assert "SecMP-TR/1 state-digest" not in spec_text()
+    # rev 2.4 (App. A, answer to SQ-24): the spec names it only to say it is a test-only label outside the set
+    text = spec_text()
+    assert text.count("SecMP-TR/1 state-digest") == 1
+    assert 'Test-only labels (such as "SecMP-TR/1 state-digest"' in text and "not part of this set" in text
     for label in labels.APPENDIX_A:
         assert not label.startswith(tr_cases.DIGEST_LABEL) and not tr_cases.DIGEST_LABEL.startswith(label)
 

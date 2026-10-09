@@ -102,14 +102,31 @@ pub fn link_put(
     fields: &LinkPutFields<'_>,
     blob: &LinkBlob,
 ) -> Result<Zeroizing<Vec<u8>>> {
+    Ok(link_put_hashed(
+        sess_id,
+        cmd_seq,
+        fields,
+        &secmp_crypto::sha256(&[&blob.encode()?]),
+    ))
+}
+
+/// [`link_put`] with `SHA-256(blob)` already computed: the relay hashes the assembled 12360 bytes in place and
+/// needs no typed copy of the blob (spec §9.7 item 5).
+#[must_use]
+pub fn link_put_hashed(
+    sess_id: &Id,
+    cmd_seq: u32,
+    fields: &LinkPutFields<'_>,
+    blob_sha256: &[u8; HASH_LEN],
+) -> Zeroizing<Vec<u8>> {
     let mut w = message(Label::QLinkPut, sess_id, cmd_seq);
     w.bytes(fields.ld_id);
     w.flag(fields.one_time);
     w.u32(fields.expires_bucket);
     w.bytes(fields.owner_pk.as_bytes());
     w.bytes(fields.token);
-    w.bytes(&secmp_crypto::sha256(&[&blob.encode()?]));
-    Ok(w.into_bytes())
+    w.bytes(blob_sha256);
+    w.into_bytes()
 }
 
 /// `LINK_GET` in owner-status mode (the only signed mode): `… ‖ ld_id ‖ mode (0x01)`, signed by the owner key.

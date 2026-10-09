@@ -52,10 +52,10 @@
 //! [`advancing_the_sending_chain_equals_encrypting_and_dropping`]); encrypting 2^20 cells would not fit the budget.
 //!
 //! **Seeds and budget.** The master seed is [`DEFAULT_SEED`], or the decimal `u64` in `SECMP_PROPTEST_SEED` if set
-//! and not empty (as in `canonical.rs`); `SECMP_PROPTEST_CASES` (decimal) replaces the number of sessions
-//! [`DEFAULT_CASES`]. The default run takes about a minute in the debug profile; each of its two `MAX_FF` gaps
-//! costs 2^20 chain steps at the sender and 2^20 at the receiver (about 10 µs each in debug). The seed and the
-//! counters are in every assertion message; the test reads no clock (docs/06 §4).
+//! and not empty (read by the shared `common/seed.rs`, as in `canonical.rs`); `SECMP_PROPTEST_CASES` (decimal)
+//! replaces the number of sessions [`DEFAULT_CASES`]. The default run takes about a minute in the debug profile;
+//! each of its two `MAX_FF` gaps costs 2^20 chain steps at the sender and 2^20 at the receiver (about 10 µs each in
+//! debug). The seed and the counters are in every assertion message; the test reads no clock (docs/06 §4).
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -124,9 +124,13 @@ where
     )
 }
 
+/// The one reader of `SECMP_PROPTEST_SEED` (M4 review R-93, TEST-SPEC-M5 X-07).
+#[path = "common/seed.rs"]
+mod seed;
+
 /// The master seed of this run: `SECMP_PROPTEST_SEED` (decimal `u64`) if set and not empty, else [`DEFAULT_SEED`].
 fn master_seed() -> u64 {
-    env_number("SECMP_PROPTEST_SEED").unwrap_or(DEFAULT_SEED)
+    seed::master_seed(DEFAULT_SEED)
 }
 
 /// A party.

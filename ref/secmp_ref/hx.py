@@ -102,15 +102,33 @@ class Opk(NamedTuple):
     kem: Kem1024Key
 
 
+class Spk(NamedTuple):
+    """One SPK generation: SPK_dh, SPK_kem and the RPK_kem bundled with it (§6.1)."""
+    spk_id: int
+    dh: tr.DhKey
+    kem: Kem1024Key
+    rpk: tr.KemKey
+    expiry: int
+
+
 @dataclasses.dataclass
 class Prekeys:
-    """The responder's signed prekeys and its unused one-time prekeys (§6.1). `rpk_kem` is ML-KEM-768."""
+    """The responder's current signed prekeys and its unused one-time prekeys (§6.1). `rpk_kem` is
+    ML-KEM-768. `retained` holds the older SPK generations that an unexpired invitation still
+    references (§6.1 rev 2.5: "an SPK referenced by an unexpired invitation is retained until that
+    invitation expires"), by spk_id."""
     spk_id: int
     spk_dh: tr.DhKey
     spk_kem: Kem1024Key
     rpk_kem: tr.KemKey
     spk_expiry: int
     opks: dict                                    # opk_id → Opk, the unused one-time prekeys
+    retained: dict = dataclasses.field(default_factory=dict)    # spk_id → Spk
+
+    def generation(self, spk_id: int) -> Spk | None:
+        if spk_id == self.spk_id:
+            return Spk(self.spk_id, self.spk_dh, self.spk_kem, self.rpk_kem, self.spk_expiry)
+        return self.retained.get(spk_id)
 
     def bundle_value(self, opk_id: int) -> dict:
         """The PrekeyBundle fields before `sig` (§6.3, D.3); `opk_present` is 0x01 (v1)."""
@@ -325,20 +343,30 @@ class Accepted(NamedTuple):
     state: tr.RatchetState                        # the TR responder state after decrypt(first_msg)
 
 
-def _complete_chunks(k_inv: bytes, ld_id: bytes, fetched) -> tuple[bytes, bytes]:
-    """Trial-open every fetched cell; group the chunks by init_id; the first init_id (in fetch order)
-    for which chunks 0, 1 and 2 have all opened wins. A later chunk with an (init_id, i) already seen
-    is ignored."""
-    groups = {}
+MAX_PARTIAL_GROUPS = 8                             # §6.5 rev 2.5: "at most 8 partial groups are stored"
+
+
+def _complete_groups(k_inv: bytes, ld_id: bytes, fetched):
+    """Trial-open every fetched cell and group the chunks by init_id (§6.5). Yields (init_id, padded
+    Outer) for each group as its chunks 0, 1 and 2 have all arrived, in fetch order. A duplicate
+    (init_id, i) is ignored, whether its bytes are identical or differ (first-seen wins); a group that
+    has been yielded is closed: later chunks of its init_id are ignored, so it cannot re-form; at most
+    MAX_PARTIAL_GROUPS partial groups are stored, the oldest evicted."""
+    partial, closed = {}, set()
     for cell in fetched:
         pt = open_cell(k_inv, ld_id, cell)
-        if pt is None:
+        if pt is None or pt["init_id"] in closed:
             continue
-        group = groups.setdefault(pt["init_id"], {})
+        group = partial.get(pt["init_id"])
+        if group is None:
+            if len(partial) >= MAX_PARTIAL_GROUPS:
+                del partial[next(iter(partial))]
+            group = partial[pt["init_id"]] = {}
         group.setdefault(pt["i"], pt["chunk"])
         if len(group) == ENVELOPE_CELLS:
-            return pt["init_id"], b"".join(group[i] for i in range(ENVELOPE_CELLS))
-    _fail("no-complete-envelope")
+            del partial[pt["init_id"]]
+            closed.add(pt["init_id"])
+            yield pt["init_id"], b"".join(group[i] for i in range(ENVELOPE_CELLS))
 
 
 def _x25519(sk, pk):
@@ -349,25 +377,44 @@ def _x25519(sk, pk):
 
 
 def respond(r: Responder, fetched, rng) -> Accepted:
-    """§6.6 steps 1–4 on the cells fetched from the invitation queue. Every failure is the uniform
-    Reject, keeps the OPK and changes nothing; success deletes the OPK."""
-    inv, pk = r.invitation, r.prekeys
+    """§6.6 steps 1–4 on the cells fetched from the invitation queue. Complete groups are processed in
+    the order they complete; after a rejected complete group that group is discarded, the OPK is kept
+    and later groups with other init_ids are processed (§6.5 rev 2.5). If no group is accepted the
+    result is the uniform Reject (the reference check of the last rejected group, or
+    `no-complete-envelope`). Success deletes the OPK; a rejection changes nothing."""
+    inv = r.invitation
     k_inv = derive_k_inv(inv.ld_id, inv.link_key)
-    init_id, padded = _complete_chunks(k_inv, inv.ld_id, fetched)
-    # 1. Outer; spk_id/opk_id must be this invitation's, and the OPK unused.
+    failure = None
+    for init_id, padded in _complete_groups(k_inv, inv.ld_id, fetched):
+        try:
+            return _respond_group(r, init_id, padded, rng)
+        except Reject:
+            failure = last_rule
+    _fail(failure or "no-complete-envelope")
+
+
+def _known_route(route: dict) -> bool:
+    return route["kind"] == enc.ROUTE_RELAYQUEUE      # §9.8: v1 defines kind 0x01 (SQ-29)
+
+
+def _respond_group(r: Responder, init_id: bytes, padded: bytes, rng) -> Accepted:
+    inv, pk = r.invitation, r.prekeys
+    # 1. Outer; spk_id/opk_id must be this invitation's (the SPK may be a retained generation), the
+    #    OPK unused.
     try:
         outer = enc.decode("Outer", padded)
     except Reject:
         _fail("outer-decode")
-    if outer["spk_id"] != inv.spk_id or outer["spk_id"] != pk.spk_id or outer["opk_id"] != inv.opk_id:
+    spk = pk.generation(outer["spk_id"])
+    if outer["spk_id"] != inv.spk_id or spk is None or outer["opk_id"] != inv.opk_id:
         _fail("prekey-ids")
     opk = pk.opks.get(outer["opk_id"])
     if opk is None:
         _fail("opk-used")
-    # 2. K_id; inner_ct → IKSPublic_I (decodable, ik_dh not low-order) and first_msg.
+    # 2. K_id; inner_ct → IKSPublic_I (decodable, ik_dh not low-order, not IKSPublic_R) and first_msg.
     ek_i = outer["ek_I"]
-    dh3, dh4 = _x25519(pk.spk_dh.sk, ek_i), _x25519(opk.dh.sk, ek_i)
-    ss_spk = primitives.ml_kem_decaps(KEM, pk.spk_kem.dk, outer["ct_spk"])    # implicit rejection (§3.2)
+    dh3, dh4 = _x25519(spk.dh.sk, ek_i), _x25519(opk.dh.sk, ek_i)
+    ss_spk = primitives.ml_kem_decaps(KEM, spk.kem.dk, outer["ct_spk"])       # implicit rejection (§3.2)
     ss_opk = primitives.ml_kem_decaps(KEM, opk.kem.dk, outer["ct_opk"])
     k_id = derive_k_id(inv.ld_id, inv.link_key, dh3, ss_spk, dh4, ss_opk)
     try:
@@ -379,23 +426,32 @@ def respond(r: Responder, fetched, rng) -> Accepted:
     except Reject:
         _fail("inner-decode")
     iks_i = inner_bytes[: sizes.IKS_PUBLIC]
+    if iks_i == r.me.iks:
+        _fail("reflection")                       # §6.6 step 2 (rev 2.5)
     # 3. DH1, DH2, transcript, SK; TR as responder (§7.2); decrypt first_msg; a Handshake Content.
-    dh1, dh2 = _x25519(pk.spk_dh.sk, inner["iks"]["ik_dh"]), _x25519(r.me.dh.sk, ek_i)
-    th = transcript(iks_r=r.me.iks, spk_id=pk.spk_id, spk_dh=pk.spk_dh.pk, spk_kem=pk.spk_kem.ek,
-                    rpk_kem=pk.rpk_kem.ek, opk_id=outer["opk_id"], opk_dh=opk.dh.pk, opk_kem=opk.kem.ek,
+    dh1, dh2 = _x25519(spk.dh.sk, inner["iks"]["ik_dh"]), _x25519(r.me.dh.sk, ek_i)
+    th = transcript(iks_r=r.me.iks, spk_id=spk.spk_id, spk_dh=spk.dh.pk, spk_kem=spk.kem.ek,
+                    rpk_kem=spk.rpk.ek, opk_id=outer["opk_id"], opk_dh=opk.dh.pk, opk_kem=opk.kem.ek,
                     iks_i=iks_i, ek_i=ek_i, ct_spk=outer["ct_spk"], ct_opk=outer["ct_opk"], ld_id=inv.ld_id)
     sk = derive_sk(dh1, dh2, dh3, dh4, ss_spk, ss_opk, th)
-    state = tr.init_responder(sk, th, pk.spk_dh, pk.rpk_kem)
+    state = tr.init_responder(sk, th, spk.dh, spk.rpk)
+    nhk = state.nhk_r                             # the header key of the first message (before the step)
     try:
         padded_content = tr.decrypt(state, inner["first_msg"], rng)
     except Reject:
         _fail("tr-decrypt")
+    hdr_nonce, hdr_ct, _ = tr.split(inner["first_msg"])
+    header = tr.open_header(th, nhk, hdr_nonce, hdr_ct)
+    if header["n"] != 0 or header["pn"] != 0:
+        _fail("first-msg-header")                 # §6.5: n = 0 and pn = 0 (rev 2.5)
     try:
         content = enc.decode("Content", padded_content)          # caps = 0 (§7.6, D.5)
     except Reject:
         _fail("content-decode")
     if content["type"] != enc.CT_HANDSHAKE:
         _fail("not-handshake")                    # §6.5: first_msg's Content is a Handshake
+    if not any(_known_route(route) for route in content["body"]["routes"]):
+        _fail("no-known-route")                   # §6.5: at least one route of a known kind (rev 2.5)
     # 4. Success: the OPK is used up.
     del pk.opks[outer["opk_id"]]
     return Accepted(init_id, th, sk, k_id, iks_i, content, state)

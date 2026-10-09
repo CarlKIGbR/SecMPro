@@ -785,11 +785,17 @@ fn kani_commit_on(named: u32, delete: u32) {
     assert!(store.issue_opk(&mut OsEntropy) == Ok(1));
     assert!(store.issue_opk(&mut OsEntropy) == Ok(2));
     let link_key = secmp_crypto::SecretBytes::from_slice(&[0xa5; 32]);
-    assert!(link_key.is_ok());
-    if let Ok(link_key) = link_key {
+    let owner_seed = secmp_crypto::SecretBytes::from_slice(&[0x3c; 32]);
+    let invq_recv_seed = secmp_crypto::SecretBytes::from_slice(&[0x69; 32]);
+    assert!(link_key.is_ok() && owner_seed.is_ok() && invq_recv_seed.is_ok());
+    if let (Ok(link_key), Ok(owner_seed), Ok(invq_recv_seed)) =
+        (link_key, owner_seed, invq_recv_seed)
+    {
         let record = InvitationRecord {
             ld_id: [1; 16],
             link_key,
+            owner_seed,
+            invq_recv_seed,
             spk_id: 1,
             opk_id: named,
             expires: kani::any(),
@@ -884,5 +890,345 @@ fn kani_cell_plaintext_decode_total() {
         assert!(p.i < HANDSHAKE_CHUNKS);
         assert!(input.get(17) == Some(&HANDSHAKE_CHUNKS));
         reencodes_to(p.encode(), input);
+    }
+}
+
+// ---- M5: SecMP-LINK (spec §8.4, §9.2, §9.3; ADR-048) ----------------------------------------------------------------
+
+use crate::link::cont::{BLOB_OFFSETS, Input, State, Step, step};
+use crate::link::frame::{Link, MAX_PAYLOAD_LEN, kani_stubs::sealed_counter};
+use crate::link::{Error as LinkError, LINK_MAX_FRAMES};
+use crate::sizes::{BLOB_PART_LEN, CONT_DATA_LEN, FRAME_LEN, LINK_BLOB_LEN};
+
+/// K-01 reaches the marker scan only within this many trailing bytes (a symbolic 4336-byte scan does not finish, see the
+/// module documentation; `padding` proves the size-generic code for every size up to [`PAD_SIZES`]).
+const SCAN_WINDOW: usize = 32;
+
+/// K-01. The frame padding at the real size 4336 (spec §4.1, §8.4). (a) `pad` of any payload of any length n (symbolic
+/// content): Ok exactly for n <= 4335 (`MAX_PAYLOAD_LEN`), the result is 4336 bytes, the marker is at index n, the
+/// payload precedes it (one symbolic index) and every byte after it is zero (one symbolic index). (b) `unpad` of any
+/// 4336-byte buffer whose last [`SCAN_WINDOW`] bytes are not all zero (the marker is then found within the window) is
+/// total, and what it accepts re-encodes: `pad` of the returned fields is the buffer. (c) `unpad` inverts `pad` for every
+/// payload that ends within the window (n >= 4336 - [`SCAN_WINDOW`]). Bound: the scan over a longer all-zero tail (the
+/// scan loop is the size-generic code of `padding`, proven for every size up to 32; a symbolic 4336-byte scan did not
+/// finish in 30 minutes, measured 2026-10-07, and in the M2 measurement). The payload and tail indices of (a) are
+/// guarded with `if`, not assumed, so no length is pruned: n = 0 (no payload index) and n = 4335 (no tail index)
+/// reach every later check, (c) included; the covers show both (M05 review R-121, C-12).
+#[kani::proof]
+#[kani::unwind(40)] // the marker scan within the window, plus the window test
+fn kani_frame_pad_total() {
+    let bytes: [u8; FRAME_PLAINTEXT_LEN] = kani::any();
+    let n: usize = kani::any();
+    kani::assume(n <= FRAME_PLAINTEXT_LEN);
+    let payload = bytes.get(..n).unwrap_or_default();
+    // (a)
+    match pad(payload, FRAME_PLAINTEXT_LEN) {
+        Ok(p) => {
+            assert!(n <= MAX_PAYLOAD_LEN);
+            assert!(p.len() == FRAME_PLAINTEXT_LEN);
+            assert!(p.get(n) == Some(&0x80));
+            let j: usize = kani::any();
+            if j < n {
+                assert!(p.get(j) == payload.get(j));
+            }
+            let k: usize = kani::any();
+            if k > n && k < FRAME_PLAINTEXT_LEN {
+                assert!(p.get(k) == Some(&0));
+            }
+            kani::cover!(n == 0, "K-01: the empty payload passes (a)");
+            // (c)
+            if n >= FRAME_PLAINTEXT_LEN.saturating_sub(SCAN_WINDOW) {
+                match unpad(&p, FRAME_PLAINTEXT_LEN) {
+                    Ok(fields) => {
+                        same_bytes(fields, payload);
+                        kani::cover!(
+                            n == MAX_PAYLOAD_LEN,
+                            "K-01: the 4335-byte payload round-trips in (c)"
+                        );
+                    }
+                    Err(_) => assert!(false),
+                }
+            }
+        }
+        Err(_) => assert!(n == FRAME_PLAINTEXT_LEN),
+    }
+    // (b)
+    let tail = bytes
+        .get(FRAME_PLAINTEXT_LEN.saturating_sub(SCAN_WINDOW)..)
+        .unwrap_or_default();
+    kani::assume(tail.iter().any(|b| *b != 0));
+    if let Ok(fields) = unpad(&bytes, FRAME_PLAINTEXT_LEN) {
+        assert!(fields.len() < FRAME_PLAINTEXT_LEN);
+        reencodes_to(pad(fields, FRAME_PLAINTEXT_LEN), &bytes);
+    }
+}
+
+/// A 4352-byte unit with a symbolic counter record: the stand-in `Aead` opens it iff its record equals the expected
+/// counter, so a fresh symbolic unit is accepted or rejected at the solver's choice (the covers show both occur).
+fn symbolic_unit() -> Box<[u8; FRAME_LEN]> {
+    Box::new(kani::any())
+}
+
+/// K-02. Strict `+1` on receive (spec §8.4): `Link::open` over three symbolic units (4352 bytes with a symbolic
+/// counter record) from a symbolic receive counter. Stubbed: the AEAD (`link::frame::kani_stubs::Aead`: open succeeds
+/// iff the nonce's counter equals the counter sealed into the unit) and `codec::unpad` (any proper prefix, or a
+/// rejection, so a unit can open and still be rejected by the padding check). Per step: on success the unit's sealed
+/// counter was the expected one and the receive counter is `checked_add(1)` of it (`None` after `u64::MAX`); on any
+/// failure the receive counter is unchanged and the send counter never moves; `open_unit` alone never changes the
+/// link. Bound: three receives from one symbolic counter (each step runs the same code); the wrong-length branch is
+/// in `kani_link_counter_checked_add`.
+#[kani::proof]
+#[kani::stub(crate::codec::unpad, crate::codec::kani_stubs::unpad)]
+#[kani::unwind(4)]
+fn kani_link_counter_strict_plus_one() {
+    let start: u64 = kani::any();
+    let send: u64 = kani::any();
+    let Some(mut link) = Link::kani_new(Some(send), Some(start), None) else {
+        return;
+    };
+    let mut accepted = false;
+    let mut rejected = false;
+    for _ in 0..3 {
+        let unit = symbolic_unit();
+        let before = link.recv_counter();
+        // a read-only open leaves the link as it was
+        let _ = link.open_unit(unit.as_slice());
+        assert!(link.recv_counter() == before);
+        match link.open(unit.as_slice()) {
+            Ok(opened) => {
+                accepted = true;
+                assert!(before == Some(opened.counter()));
+                assert!(sealed_counter(unit.as_slice()) == before);
+                assert!(link.recv_counter() == opened.counter().checked_add(1));
+            }
+            Err(_) => {
+                rejected = true;
+                assert!(link.recv_counter() == before);
+            }
+        }
+        assert!(link.send_counter() == Some(send));
+    }
+    kani::cover!(accepted, "a unit opens and the counter advances");
+    kani::cover!(rejected, "a unit is rejected and the counter stays");
+    core::mem::forget(link);
+}
+
+/// K-03. Checked counters and the `LINK_MAX_FRAMES` check (spec §4.2, §8.4, ADR-048 OPEN-M5-03). Stubbed: as
+/// `kani_link_counter_strict_plus_one` (the AEAD stand-in; `unpad`). (a) The client's `seal` over every pair of
+/// counters (`None` = exhausted included) and the empty payload: `NewLinkRequired` exactly when either counter is at
+/// or beyond [`LINK_MAX_FRAMES`], otherwise `CounterOverflow` for an exhausted send counter and success for the rest;
+/// nothing moves on an error and success moves the send counter by `checked_add(1)`. (b) The relay (no limit) seals
+/// at every send counter including `u64::MAX`, after which the counter is exhausted and the next seal is
+/// `CounterOverflow` with the counter still exhausted (no wrap to 0); the same for opening at `u64::MAX`; a payload of
+/// 4336 bytes is `PayloadTooLong` and moves nothing; a unit of another length is rejected without moving a counter.
+/// The covers show that each outcome of (a) occurs (M05 review C-12).
+#[kani::proof]
+#[kani::stub(crate::codec::unpad, crate::codec::kani_stubs::unpad)]
+fn kani_link_counter_checked_add() {
+    // (a) the client
+    let send: Option<u64> = kani::any();
+    let recv: Option<u64> = kani::any();
+    let Some(mut client) = Link::kani_new(send, recv, Some(LINK_MAX_FRAMES)) else {
+        return;
+    };
+    let reached = |c: Option<u64>| c.is_some_and(|v| v >= LINK_MAX_FRAMES);
+    match client.seal(&[]) {
+        Err(LinkError::NewLinkRequired) => {
+            assert!(reached(send) || reached(recv));
+            assert!(client.send_counter() == send && client.recv_counter() == recv);
+            kani::cover!(true, "K-03: NewLinkRequired");
+        }
+        Err(LinkError::CounterOverflow) => {
+            assert!(send.is_none() && !reached(recv));
+            assert!(client.send_counter() == send && client.recv_counter() == recv);
+            kani::cover!(true, "K-03: CounterOverflow");
+        }
+        Err(_) => assert!(false),
+        Ok(frame) => {
+            assert!(!reached(send) && !reached(recv));
+            assert!(sealed_counter(frame.as_slice()) == send);
+            assert!(client.send_counter() == send.and_then(|v| v.checked_add(1)));
+            assert!(client.recv_counter() == recv);
+            kani::cover!(true, "K-03: a frame is sealed");
+        }
+    }
+    core::mem::forget(client);
+    // (b) the relay at the end of the counter space
+    let Some(mut relay) = Link::kani_new(Some(u64::MAX), Some(u64::MAX), None) else {
+        return;
+    };
+    let too_long = [0_u8; MAX_PAYLOAD_LEN + 1];
+    assert!(matches!(
+        relay.seal(&too_long),
+        Err(LinkError::PayloadTooLong)
+    ));
+    assert!(relay.send_counter() == Some(u64::MAX));
+    assert!(relay.seal(&[]).is_ok());
+    assert!(relay.send_counter().is_none());
+    assert!(matches!(relay.seal(&[]), Err(LinkError::CounterOverflow)));
+    assert!(relay.send_counter().is_none());
+    // a unit sealed under the last counter opens once; afterwards the receive counter is exhausted
+    let unit = symbolic_unit();
+    if relay.open(unit.as_slice()).is_ok() {
+        assert!(sealed_counter(unit.as_slice()) == Some(u64::MAX));
+        assert!(relay.recv_counter().is_none());
+    }
+    if relay.recv_counter().is_none() {
+        assert!(matches!(
+            relay.open(unit.as_slice()),
+            Err(LinkError::CounterOverflow)
+        ));
+        assert!(relay.recv_counter().is_none());
+    }
+    // a unit of another length is rejected without touching the counters
+    let before = relay.recv_counter();
+    if before.is_some() {
+        assert!(matches!(
+            relay.open(unit.get(..FRAME_LEN - 1).unwrap_or_default()),
+            Err(LinkError::Rejected)
+        ));
+        assert!(relay.recv_counter() == before);
+    }
+    core::mem::forget(relay);
+}
+
+/// One frame the continuation harness feeds: `LINK_PUT` (a start), `CONT` with `idx` 0 ..= 3, or any other
+/// request; `cmd_seq` is any `u32` (the dictated set {1, 2} is a subset).
+fn symbolic_input() -> Input {
+    let cmd_seq: u32 = kani::any();
+    let kind: u8 = kani::any();
+    match kind {
+        0 => Input::Start { cmd_seq },
+        1..=4 => Input::Cont {
+            cmd_seq,
+            idx: kind.saturating_sub(1),
+        },
+        _ => Input::Other,
+    }
+}
+
+/// K-04 [SQ-27]. Continuation (spec §9.2, §9.3; ADR-048 (f)): over every sequence of up to 5 frames from the idle
+/// state (each `LINK_PUT`, `CONT` with `idx` 0 ..= 3 or another request, any `cmd_seq`), [`step`] completes exactly on
+/// `LINK_PUT(s)`, `CONT(s, 1)`, `CONT(s, 2)` in three consecutive frames that start in the idle state, and rejects every
+/// other order: a rejection happens iff the state is pending and the frame is not the next `CONT` of the pending
+/// `cmd_seq`, or the state is idle and the frame is a `CONT`. The sequence stops at the first rejection (the
+/// assembler resets and the link closes). And the blob layout: the three parts start at 0, 4160, 8260 and tile 12360
+/// = [`LINK_BLOB_LEN`] without gap or overlap. Bound: 5 frames (a complete message plus a frame before it and one
+/// after); the transition has no history beyond its state.
+#[kani::proof]
+#[kani::unwind(7)]
+fn kani_cont_assembly() {
+    assert!(BLOB_OFFSETS.first() == Some(&0));
+    assert!(BLOB_OFFSETS.get(1) == Some(&4160));
+    assert!(BLOB_OFFSETS.get(2) == Some(&8260));
+    assert!(BLOB_OFFSETS.get(1) == Some(&BLOB_PART_LEN));
+    assert!(BLOB_OFFSETS.get(2) == Some(&(BLOB_PART_LEN + CONT_DATA_LEN)));
+    assert!(BLOB_PART_LEN + 2 * CONT_DATA_LEN == 12_360);
+    assert!(BLOB_PART_LEN + 2 * CONT_DATA_LEN == LINK_BLOB_LEN);
+    let mut state = State::Idle;
+    let mut history = [Input::Other; 5];
+    let mut completed = false;
+    for i in 0..5_usize {
+        let input = symbolic_input();
+        if let Some(slot) = history.get_mut(i) {
+            *slot = input;
+        }
+        let expected_ok = match (state, input) {
+            (State::Idle, Input::Cont { .. }) => false,
+            (State::Idle, _) => true,
+            (State::AwaitOne { cmd_seq }, Input::Cont { cmd_seq: s, idx }) => {
+                s == cmd_seq && idx == 1
+            }
+            (State::AwaitTwo { cmd_seq }, Input::Cont { cmd_seq: s, idx }) => {
+                s == cmd_seq && idx == 2
+            }
+            (_, _) => false,
+        };
+        let Some((next, taken)) = step(state, input) else {
+            assert!(!expected_ok);
+            return;
+        };
+        assert!(expected_ok);
+        if taken == Step::Complete {
+            completed = true;
+            // exactly the three-frame message, started from idle
+            let (a, b, c) = (
+                i.checked_sub(2).and_then(|k| history.get(k)),
+                i.checked_sub(1).and_then(|k| history.get(k)),
+                history.get(i),
+            );
+            let ok = match (a, b, c) {
+                (
+                    Some(Input::Start { cmd_seq: s0 }),
+                    Some(Input::Cont {
+                        cmd_seq: s1,
+                        idx: 1,
+                    }),
+                    Some(Input::Cont {
+                        cmd_seq: s2,
+                        idx: 2,
+                    }),
+                ) => s0 == s1 && s1 == s2,
+                _ => false,
+            };
+            assert!(ok);
+            assert!(next == State::Idle);
+        }
+        match (state, input) {
+            (State::Idle, Input::Start { cmd_seq }) => {
+                assert!(taken == Step::Began && next == State::AwaitOne { cmd_seq });
+            }
+            (State::Idle, Input::Other) => assert!(taken == Step::Single && next == State::Idle),
+            (State::AwaitOne { cmd_seq }, _) => {
+                assert!(taken == Step::Continued && next == State::AwaitTwo { cmd_seq });
+            }
+            (State::AwaitTwo { .. }, _) => assert!(taken == Step::Complete),
+            (State::Idle, Input::Cont { .. }) => assert!(false),
+        }
+        state = next;
+    }
+    kani::cover!(completed, "a three-frame message completes");
+}
+
+/// K-08. Both D.2 frame-plaintext decoders over the same arbitrary plaintext of 4335, 4336 or 4337 bytes (the exact
+/// size and its neighbours; every field string shorter than 4336 bytes through the `unpad` over-approximation of
+/// `request_frame`/`response_frame`, with `RequestCmd::decode_fields` stubbed as in `request_frame`; the per-opcode
+/// request harnesses and `response_frame` prove the field decoders): neither panics; each accepts only at exactly
+/// 4336 bytes; an accepted request or response carries the `cmd_seq` of bytes 1 ..= 4 (the layout `op ‖ cmd_seq ‖
+/// fields`); an accepted response has the opcode of byte 0, which is one of the seven response opcodes of D.2 and
+/// no request opcode (so a request frame is never taken for a response), for both `CELLR` contexts. The covers show
+/// that each decoder accepts some input (M05 review C-12).
+#[kani::proof]
+#[kani::stub(crate::codec::unpad, crate::codec::kani_stubs::unpad)]
+#[kani::stub(
+    crate::wire::frame::RequestCmd::decode_fields,
+    crate::wire::frame::kani_stubs::request_decode_fields
+)]
+fn kani_q_frame_plaintext_exact_fit() {
+    let bytes: [u8; FRAME_PLAINTEXT_LEN + 1] = kani::any();
+    let len = frame_len();
+    let input = bytes.get(..len).unwrap_or_default();
+    let cmd_seq = bytes
+        .get(1..5)
+        .and_then(|b| <[u8; 4]>::try_from(b).ok())
+        .map(u32::from_be_bytes);
+    if let Ok(req) = Request::decode(input) {
+        assert!(len == FRAME_PLAINTEXT_LEN);
+        assert!(Some(req.cmd_seq) == cmd_seq);
+        kani::cover!(true, "K-08: a request is accepted");
+    }
+    let context = if kani::any() {
+        CellrContext::Fetch
+    } else {
+        CellrContext::FetchMulti
+    };
+    if let Ok(resp) = Response::decode(input, context) {
+        let op = resp.cmd.op();
+        assert!(len == FRAME_PLAINTEXT_LEN);
+        assert!(Some(resp.cmd_seq) == cmd_seq);
+        assert!(bytes.first() == Some(&op));
+        assert!(opcode::RESPONSES.iter().any(|(o, _)| *o == op));
+        assert!(!opcode::REQUESTS.iter().any(|(o, _)| *o == op));
+        kani::cover!(true, "K-08: a response is accepted");
     }
 }

@@ -1,0 +1,602 @@
+(* SPDX-License-Identifier: AGPL-3.0-or-later *)
+(* formal/link.pvl — library of the SecMP-LINK models: SecMP-LINK (docs/03 §8.2–§8.4) with the SecMP-Q command
+   binding (§9.2, §9.6, D.2, D.6). Query set: formal/CLAIMS.md §LINK (L1–L9 gated in M5, L10–L12 are M11; fixed by
+   the reviewer before modelling, docs/03 §11.2; layout OPEN-M5-16 A = LO-1). Properties: docs/03 §11.1 row "LINK".
+   One model file per session: formal/link/<session>.pv holds the session's instantiation, oracles, compromise, phases
+   and queries; this library holds types, constructors, equations, events and process macros.
+   Run: proverif -lib formal/link.pvl formal/link/<session>.pv (ProVerif 2.05).
+
+   ---------------------------------------------------------------------------------------------------------------
+   1. What is modelled (CLAIMS §LINK "Model")
+   ---------------------------------------------------------------------------------------------------------------
+   One honest relay R with the long-term key relay_sig (Ed25519) and, for one key generation kid0, the static keys
+   relay_dh (X25519) and relay_kem (ML-KEM-1024); relay_fp = h("SecMP-LINK/1 relay-fp" ‖ relay_sig_pk) (§8.2) is pinned
+   by every honest client (from its RelayRef). R signs one RelayInfoV1 (§8.2, D.1: ver ‖ relay_sig_pk ‖ kid ‖
+   relay_dh_pk ‖ relay_kem_ek ‖ akc ‖ valid_until, signed with the label "SecMP-LINK/1 relayinfo"), event RInfo, and
+   answers every HELLO with it (Relay, RConn). Honest clients C hold no long-term key (§8.3 "client anonymous"); each
+   client process (Client) holds one queue key and opens two links (CLink | CLink). The attacker is Dolev–Yao on c (the
+   Tor path and the relay's network side), opens its own links to R as an anonymous client, replays any record or frame
+   and holds what every user holds: the relay_access_key ak (§9.6, a free public name) and its own queue keys.
+   Per link, exactly §8.3: C → R HELLO (D.1); R → C RELAYINFO; C checks sig, relay_fp and akc (§8.2; valid_until and
+   the 60-day bound are time: not modelled) and draws e_c (X25519), ek_c (ML-KEM-768) and the HybridKEM-1024 ephemeral
+   pk_e1 with fresh encapsulation randomness; ss1 = HybridKEM-1024 (§3.2) to (relay_dh_pk, relay_kem_ek); h0 =
+   h("SecMP-LINK/1 h0" ‖ ver ‖ kid ‖ relay_fp ‖ e_c ‖ h(ek_c) ‖ pk_e1 ‖ h(ct_kem)); ck1 = Extract(h0, ss1); mac1 =
+   mac(ck1, "SecMP-LINK/1 hs1"); event CStart; C → R HS1 (ver, kid, e_c, ek_c, pk_e1, ct_kem, mac1). R (one
+   replicated connection per HS1, no replay cache, OPEN-3) recomputes ss1 with its static keys, verifies mac1, only then
+   draws e_r and the ML-KEM-768 randomness (§8.5 "no HS2 randomness before mac1 verifies"); ss2 = HybridKEM-768 to (e_c,
+   ek_c) with the hybrid ciphertext (e_r, ct_c); h1 = h(h0 ‖ mac1 ‖ e_r ‖ h(ct_c)); ck2 = Extract(h1, ck1 ‖ ss2); mac2
+   = mac(ck2, "SecMP-LINK/1 hs2"); (k_c2r, k_r2c, sess_id) = Expand(ck2, "SecMP-LINK/1 keys"); event RAccept; R → C HS2
+   (ver, e_r, ct_c, mac2). C verifies mac2 — event CAccept.
+   Frames (§8.4): Frame = AEAD(k_dir, nonce = counter_dir, AD = "SecMP-LINK/1 frame" ‖ sess_id, payload); per direction
+   the counters 0, 1, 2 (LO-4), each receiver opens a frame only under its next expected counter (strict +1). Payloads
+   (D.2, op ‖ cmd_seq ‖ fields ‖ sig): C sends two commands (CFrames), R answers them (RFrames):
+     c2r counter 0  QUEUE_NEW  cmd_seq 1, fields recv_pk ‖ send_pk ‖ token, token = mac(ak, "SecMP-Q/1 token" ‖ sess_id ‖
+                               cmd_seq) (§9.6), sig = Sign(recv key, "SecMP-Q/1 QUEUE_NEW" ‖ sess_id ‖ cmd_seq ‖ fields)
+                               (§9.2, D.6)
+     r2c counter 0  OK_QUEUE_NEW cmd_seq 1, rid = h("SecMP-Q/1 rid" ‖ recv_pk), sid = h("SecMP-Q/1 sid" ‖ recv_pk ‖
+                               send_pk) (§9.1)
+     c2r counter 1  FETCH      cmd_seq 2, fields rid ‖ ack, sig by the recv key ("SecMP-Q/1 FETCH" ‖ sess_id ‖ cmd_seq ‖
+                               fields); R verifies it under the recv_pk it holds for rid (table queues, filled by the
+                               executed QUEUE_NEW)
+     r2c counters 1, 2  F = 2 CELLR frames, cmd_seq 2, each with a fresh cell (store semantics excluded)
+   R checks token (QUEUE_NEW) and signature before it executes a command — event RExec — and executes the command of
+   cmd_seq 1 only at its first request and that of cmd_seq 2 only at its second (R executes each cmd_seq at most once
+   per link, by process structure; the full cmd_seq rule is excluded, CLAIMS §LINK "Paths"). C checks the cmd_seq echo
+   and its own rid/sid derivation (OPEN-M5-11) and the response opcode. Every payload holds a fresh private value
+   (send_pk, the derived sid, the signature over sess_id, a fresh cell), so CSend/RSend carry fresh private payloads.
+   Paths covered / excluded: CLAIMS §LINK "Paths the model covers / excludes" (referenced, not repeated here).
+
+   ---------------------------------------------------------------------------------------------------------------
+   2. Abstractions (exactly those of CLAIMS §LINK; nothing else about a primitive is assumed)
+   ---------------------------------------------------------------------------------------------------------------
+     X25519               exp with exp(exp(g,a),b) = exp(exp(g,b),a); low-order points, the all-zero check: tests  §3
+     ML-KEM-1024, -768    pk/encaps_ct/encaps_ss, decaps(dk, encaps_ct(pk(dk), r)) = encaps_ss(pk(dk), r); implicit
+                          rejection not modelled (a wrong ct makes decaps fail: the same reject at mac1/mac2)       §3
+     hkem(ss_kem, ss_dh, ct_kem, ek, pk_dh, pk_e, V)   the §3.2 combiner (SHA3-256 over ss_kem ‖ ss_dh ‖ SHA3(ct_kem) ‖
+                          SHA3(ek) ‖ pk_dh ‖ pk_e ‖ V), a free one-way constructor; V = "SecMP-HybridKEM-1024/1" or
+                          "-768/1"                                                                                 §3.2
+     h(x)                 SHA-256 (h0, h1, relay_fp, akc, rid, sid, the inner hashes), free one-way
+     hkdf_extract(salt, ikm), hkdf_expand(prk, info)   HKDF-SHA-256, free one-way; the three outputs of
+                          hkdf_expand(ck2, "SecMP-LINK/1 keys") are the projections p_c2r, p_r2c, p_sid           §8.3
+     mac(k, m)            HMAC-SHA-256 (mac1, mac2, token), free one-way                                         §8.3, §9.6
+     sign(sk, m), verify(vk(sk), m, sign(sk, m)) = true   Ed25519 (RelayInfo, queue keys); strictness: tests     §8.2, §9.2
+     aead(k, ctr, ad, m), aead_open(k, ctr, ad, aead(k, ctr, ad, m)) = m   XChaCha20-Poly1305 frame, nonce = the
+                          counter; pad is the identity; the 4352-B length is a test                                §8.4
+     Records and frame payloads are tuples (D.1, D.2; fixed-length fields: concatenation is injective); constant
+     fields (ver, magic, record types, opcodes, labels, valid_until, ack) are public constants.
+   Honest secrets are private constructors applied to (session tag, index): dhsk(s, k) X25519 secrets, kemsk(s, k)
+   ML-KEM decapsulation keys, kemr(s, k) encapsulation randomness, sigk(s, k) Ed25519 keys. Constant indices name R's
+   long-term keys (kRsig, kRdh, kRkem); ephemeral indices wrap a fresh name: iC(e) the link's e_c and dk_c (iD(e) for
+   the one link of RevealEph, so that the secrecy assumptions can tell it from the others), iE(e1) the
+   HybridKEM-1024 ephemeral, iR(er) R's e_r, iQ(q) a client's queue key; kemr(s, r) takes the fresh name itself.
+
+   ---------------------------------------------------------------------------------------------------------------
+   3. Sessions (one file each, OPEN-M5-16 A, LO-1)
+   ---------------------------------------------------------------------------------------------------------------
+     tag     DHO    KEMO   RevealStatic  RevealSig  RevealEph  RevealQKey  queries (RESULT lines)
+     lClean  -      -      -             -          -          -           L3 (2), L8 (3), L1, L4 (2), L6, L7
+     lDH     rv 0   -      -             -          -          -           L3a (2), L8 (3), L1a, L4 (2)
+     lKEM    -      ph 0   -             -          -          -           L3b (2), L8 (3), L1b, L4 (2)
+     lBoth   rv 0   rv 0   -             -          -          -           L3c (2), L8 (3), L1c
+     lSig    -      -      -             ph 0       -          -           L8 (3), L2
+     lFS     -      -      ph 1          ph 1       -          -           L5 (2), L8 (3)
+     lFSDH   ph 1   -      ph 1          ph 1       -          -           L5a (2), L8 (3)
+     lFSEph  -      -      ph 1          ph 1       ph 1       -           L5b (2), L8 (3)
+     lQKey   -      -      -             -          -          ph 0        L8 (3), L6a
+   ("rv 0": the break as a reveal in phase 0, 4. LO-5, LO-6.) Each file contains one session; sessions share no
+   private value; events carry the session tag as first argument and every query names its tag. LO-2: one session lSig
+   with RevealSig (SIGO gives the same L2 trace and is not modelled).
+
+   ---------------------------------------------------------------------------------------------------------------
+   4. Oracles (declared in the session file, scoped per session as formal/tr.pv §4 and formal/hx.pvl 4.)
+   ---------------------------------------------------------------------------------------------------------------
+   DHO:  dh_break(exp(g, dhsk(s,x)), exp(g, dhsk(s,y))) = exp(exp(g, dhsk(s,x)), dhsk(s,y)) for every pair of honest
+         X25519 exponents of session s (relay_dh, e_c, the HybridKEM-1024 ephemeral, e_r). Phase 1 (private destructor
+         dh_break1, offered by a process from phase 1 on): lFSDH. In lDH and lBoth as a reveal (LO-5, below).
+   KEMO: kem_break1024(encaps_ct1024(ek, kemr(s,r))) = encaps_ss1024(ek, kemr(s,r)) (the static stage, relay_kem) and
+         kem_break768(encaps_ct768(ek, kemr(s,r))) = encaps_ss768(ek, kemr(s,r)) (the ephemeral stage, ek_c): lKEM
+         (phase 0, public). In lBoth as a reveal (LO-6, below).
+   Soundness of the scoping: every exponent or ciphertext of a session is honest (covered by the rule) or built by the
+   attacker from values it knows (its result computable without the oracle).
+   The breaks of lDH and lBoth as reveals (reviewer decisions LO-5, LO-6, 2026-10-08; CLAIMS §LINK "Reviewer
+   decisions"): no destructor; the session outputs on c, in phase 0, every honest secret the break concerns, each right
+   after the `new` that draws it — DHO: relay_dh (out(c, dhsk(s, kRdh)), a process of the session file), e_c
+   (dhsk(s, iC(e)), CLinkR), the HybridKEM-1024 ephemeral (dhsk(s, iE(e1)), CTailR) and R's e_r (dhsk(s, iR(er)),
+   RConnR); KEMO (lBoth): the encapsulation randomness of both stages (kemr(s, r1), CTailR; kemr(s, r2), RConnR). The
+   variants RelayR, RConnR, ClientR, CLinkR, CTailR are Relay, RConn, Client, CLink, CTail with these outputs and
+   nothing else changed; their flag rk (false in lDH, true in lBoth) gates the kemr outputs; the other seven sessions
+   use the macros without reveals, so their ProVerif input is unchanged. Equally powerful attackers: an honest X25519
+   exponent occurs only as the second argument of exp, and exp(exp(g, a), b) = exp(exp(g, b), a), so every value
+   dh_break returns (exp(exp(g, a), b) for honest a, b) the revealing attacker computes from the public exp(g, a) and
+   the revealed b, and the attacker can use a revealed exponent only under exp; likewise kemr occurs only as the coins
+   of encaps_ct/encaps_ss, so kem_break's value encaps_ss(ek, r) is computable from the public ek and the revealed r.
+   A reveal is a clause whose only hypotheses are the inputs of its process path, where dh_break was a clause with two
+   attacker hypotheses, one per honest public key, resolved against every pair (the first declarations of lDH and lBoth
+   did not finish in 30 min, measured; M5 Phase B §8B).
+
+   ---------------------------------------------------------------------------------------------------------------
+   5. Compromise (each emits its event and outputs the values on c, in the phase of the session's row)
+   ---------------------------------------------------------------------------------------------------------------
+     RevealStatic(s, kid)  relay_dh and relay_kem secrets of kid0                       macro RevStatic
+     RevealSig(s)          relay_sig                                                   macro RevSig
+     RevealEph(s, C)       e_c secret and dk_c of one link (sanity only): the first link of one designated,
+                           not replicated client process (ClientE, next to the replicated clients)  macro CLinkE
+     RevealQKey(s, q)      the client's queue signing key, per client process          macro ClientQ
+   The reveals of lDH and lBoth (4., LO-5, LO-6) are the breaks, not compromise: they emit no event.
+   The macros contain no phase except CLinkE (its reveal branch starts with phase 1); the session file puts `phase 1;` in
+   front where its row says ph 1, so phase 1 occurs only in the files of sessions with a phase-1 compromise. Phase 1
+   ends every phase-0 process; the queries' attacker facts are evaluated at the end of the last phase. In lFS* the
+   phase-0 links complete and their ephemerals (e_c, dk_c, the HybridKEM-1024 ephemeral, R's e_r and the encapsulation
+   randomness) are never output: they are discarded (§8.3 "forward secrecy both ways").
+
+   ---------------------------------------------------------------------------------------------------------------
+   6. Query forms (CLAIMS §LINK sketches written out; the CLAIMS IDs label each query in the session files)
+   ---------------------------------------------------------------------------------------------------------------
+   - L1, L1a, L1b, L1c, L2: inj-event(CAccept(s, fp_R, kid, h0, h1, sid, k1, k2)) ==> inj-event(RAccept(s, kid, h0, h1,
+     sid, k1, k2)), fp_R = h((lbl_relayfp, vk(sigk(s, kRsig)))) the pinned fingerprint.
+   - L3, L3a, L3b, L3c, L5, L5a, L5b ("for links whose CAccept names R's fp"): event(CAccept(s, fp_R, kid, h0, h1, sid,
+     k1, k2)) && event(CSend(s, sid, ctr, m)) && attacker(m), and the same with RSend — two lines per ID.
+   - L4 (LO-3, mixed premise accepted by ProVerif 2.05, not split): "the link whose HS1 the honest C produced" is the
+     relay link whose RAccept carries the h0 of an honest CStart, so the premise reads event(CStart(s, fp, kid, h0)) &&
+     event(RAccept(s, kid, h0, h1, sid, k1, k2)) && inj-event(RRecv(s, sid, ctr, m)) ==> inj-event(CSend(s, sid, ctr, m))
+     (RAccept is the only event that binds h0 to sid on R's side); second line inj-event(CRecv(s, sid, ctr, m)) ==>
+     inj-event(RSend(s, sid, ctr, m)).
+   - L6, L6a: inj-event(RExec(s, sid, cmd_seq, cmd, qpk)) ==> inj-event(CSign(s, sid, cmd_seq, cmd, qpk)), qpk =
+     vk(sigk(s, iQ(x))) an honest queue key.
+   - L7: event(CAccept(s, fp, kid, h0, h1, sid, k1, k2)) ==> event(RInfo(s, kid, fp, h((lbl_akc, ak)))): the accepted
+     RelayInfo (the one R signed for kid and fp, the only event that carries akc) commits to the access key the client
+     holds.
+   - L8, three lines in every file: event(CStart(s, fp, kid, h0)); event(RAccept(s, kid, h0, h1, sid, k1, k2)) &&
+     event(CAccept(s, fp, kid, h0, h1, sid, k1, k2)) (the honest pair, all shared arguments equal); event(RExec(s, sid,
+     cmd_seq, cmd, vk(sigk(s, iQ(x))))) (a command of an honest queue key executed).
+   - L9 is structural: no query (C holds no long-term secret; HS1 carries only fresh values). L10–L12: M11, no query.
+
+   ---------------------------------------------------------------------------------------------------------------
+   7. Devices (none changes the protocol, a query, an oracle or a compromise; measured on this Mac, ProVerif 2.05)
+   ---------------------------------------------------------------------------------------------------------------
+   Precision devices (of the kind of CLAIMS §HX "Model devices", formal/hx.pvl 7.):
+   - Names carry no message arguments (new n[]): each depends only on the replication indices above it (formal/tr.pv
+     §8), except R's e_r and ML-KEM-768 randomness, indexed by the HS1 R answers (new er[ec, ekc, pke1, ctkem]), and
+     R's CELLR cells, indexed by the link (new n1[sid]). With these names merged across R's connections, ProVerif
+     combined an attacker-run link and an honest link of one abstract R session: L3's RSend line came out "cannot be
+     proved" and the L8 honest pair had no trace (measured on lClean). ProVerif's default `new` carries every message
+     received before it; every argument list over-approximates the same process (the default form made one
+     reachability run of lClean not finish in 9 min).
+   - Secrecy assumptions in each session file (not attacker(M); "phase 0" where the session reveals M in phase 1): what
+     the session's row (3.) never reveals. ProVerif proves each one ("ok, secrecy assumption verified") and aborts if
+     one cannot be proved; they only discard clauses whose hypotheses can never hold. Measured on lClean: the no-begin
+     declaration 165 s -> 26 s, L4 (r2c) 827 s -> 36 s.
+   Search devices (of the kind of CLAIMS §HX O-24: a selection weight changes the order of resolution only, never a
+   clause, a query, an oracle or a compromise; ProVerif stays sound and every "false" comes with a trace it executed):
+   - Here, for every file: the four `select …/-3000` lines below — R's mac1 check, C's mac2 check and the two ML-KEM
+     ciphertexts are resolved last. Without them L1 (begin event RAccept inside R's replicated connection) did not
+     converge (> 9 min on lClean, queue growing: R's HS2 outputs instantiated once per attacker-built HS1, each with its
+     own RAccept begin fact). `nounif … [ignoreAFewTimes]` instead of the weights made L1 fast (12–30 s) but the L8
+     honest-pair and RExec lines "cannot be proved" (hypotheses kept by nounif were not discharged in the trace);
+     `set nounifIgnoreNtimes = 4` restored those traces but L1's query phase then exploded. With the weights: L1 37 s,
+     every L8 line false.
+   - The weight `select x: bitstring; attacker(exp(g, dhsk(s, *x)))/-3000.` of lDH and lBoth (the lazy DH oracle) is
+     removed with dh_break (LO-5, 4.): no clause has an honest public key as a hypothesis of the break any more.
+   - Query declarations one per begin event (no-begin queries first), CLAIMS ID order within a declaration.
+
+   ---------------------------------------------------------------------------------------------------------------
+   8. Readings of the CLAIMS §LINK model text (recorded for the reviewer)
+   ---------------------------------------------------------------------------------------------------------------
+   - LO-1 per-session files (decided). LO-2 one session lSig with RevealSig; SIGO is not modelled. LO-3: ProVerif 2.05
+     accepts the mixed premise of L4 (event && event && inj-event ==> inj-event), so L4 is not split (6.). LO-4: the
+     counters are the public constants c0, c1, c2.
+   - Bounds: by D.2 every request frame carries one command (CONT continues the three-frame LINK_PUT only), so "at most
+     two commands per link" gives two c2r frames (counters 0, 1: QUEUE_NEW, FETCH); the r2c direction uses all three
+     counters (OK_QUEUE_NEW, then F = 2 CELLR). Two links per client process share its queue key (L6: the attacker may
+     replay signed frames across them).
+   - R takes the QUEUE_NEW verification key from the command's fields (recv_pk, §9.3) and the FETCH key from its table
+     of executed QUEUE_NEWs; the store semantics and the cmd_seq rule are excluded (CLAIMS §LINK "Paths").
+   - The honest queue key's public half is output on c (it is no secret against a third party); send_pk is a fresh
+     private value (only the queue's sender holds it).
+   - RevealEph "of one link" (CLAIMS §LINK Compromise): one designated client's first link reveals; the other links and
+     clients keep their ephemerals. (A reveal on every replicated link, the broader reading, stalled saturation of
+     lFSEph at a fixed point under every device tried, measured.)
+*)
+
+(* ---------------------------------------------------------------- channels, types, constants ------------------ *)
+
+free c: channel.
+
+type key.        (* 32-byte symmetric keys: ck1, ck2, k_c2r, k_r2c, relay_access_key *)
+type exponent.   (* X25519 secret *)
+type G.          (* X25519 public key / shared secret *)
+type kemdk.      (* ML-KEM decapsulation key (seed) *)
+type coins.      (* ML-KEM encapsulation randomness *)
+type sigsk.      (* Ed25519 secret key *)
+type tagt.       (* session (scenario) tag; each session file declares its own *)
+
+const ver1: bitstring.                                      (* ver = 0x01 *)
+const magic: bitstring.                                     (* "SECMP" (D.1 HELLO) *)
+const tHello, tInfo, tHS1, tHS2: bitstring.                 (* record types 0x01–0x04 (D.1) *)
+const kid0: bitstring.                                      (* the one key generation kid (§8.2) *)
+const vu0: bitstring.                                       (* valid_until (time is not modelled) *)
+const lbl_relayfp, lbl_relayinfo, lbl_h0, lbl_hs1, lbl_hs2, lbl_keys, lbl_frame: bitstring.
+      (* "SecMP-LINK/1 relay-fp", "… relayinfo", "… h0", "… hs1", "… hs2", "… keys", "… frame" (App. A) *)
+const lbl_v768, lbl_v1024: bitstring.                       (* "SecMP-HybridKEM-768/1", "SecMP-HybridKEM-1024/1" *)
+const lbl_akc, lbl_token, lbl_rid, lbl_sid, lbl_qnew, lbl_fetch: bitstring.
+      (* "SecMP-Q/1 akc", "… token", "… rid", "… sid", "… QUEUE_NEW", "… FETCH" (App. A) *)
+const op_qnew, op_fetch, op_okq, op_cellr: bitstring.       (* opcodes 0x01, 0x04, 0x81, 0x83 (D.2) *)
+const cs1, cs2: bitstring.                                  (* cmd_seq 1, 2 *)
+const ack0: bitstring.                                      (* FETCH ack (0: nothing committed yet) *)
+const c0, c1, c2: bitstring.                                (* frame counters 0, 1, 2 (LO-4) *)
+const kRsig, kRdh, kRkem: bitstring.                        (* indices of relay_sig, relay_dh, relay_kem *)
+const pC: bitstring.                                        (* the client role (RevealEph(s, C)) *)
+
+(* ---------------------------------------------------------------- honest secrets (2.) ------------------------ *)
+
+fun dhsk(tagt, bitstring): exponent [private].              (* X25519.keygen() *)
+fun kemsk(tagt, bitstring): kemdk [private].                (* ML-KEM keygen (seed) *)
+fun kemr(tagt, bitstring): coins [private].                 (* ML-KEM encapsulation randomness *)
+fun sigk(tagt, bitstring): sigsk [private].                 (* Ed25519 keygen *)
+fun iC(bitstring): bitstring [data].                        (* index of a link's e_c and dk_c *)
+fun iD(bitstring): bitstring [data].                        (* the same for the link of RevealEph (lFSEph) *)
+fun iE(bitstring): bitstring [data].                        (* index of a link's HybridKEM-1024 ephemeral *)
+fun iR(bitstring): bitstring [data].                        (* index of R's e_r *)
+fun iQ(bitstring): bitstring [data].                        (* index of a client's queue key *)
+
+free ak: key.                                               (* relay_access_key: every user holds it (§9.6) *)
+
+(* ---------------------------------------------------------------- primitives (CLAIMS abstractions) ----------- *)
+
+(* §3 X25519 *)
+const g: G.
+fun exp(G, exponent): G.
+equation forall x: exponent, y: exponent; exp(exp(g, x), y) = exp(exp(g, y), x).
+
+(* §3 ML-KEM-1024 (relay_kem, the static stage) *)
+fun pk1024(kemdk): bitstring.
+fun encaps_ct1024(bitstring, coins): bitstring.
+fun encaps_ss1024(bitstring, coins): bitstring.
+reduc forall dk: kemdk, r: coins; decaps1024(dk, encaps_ct1024(pk1024(dk), r)) = encaps_ss1024(pk1024(dk), r).
+
+(* §3 ML-KEM-768 (ek_c, the ephemeral stage) *)
+fun pk768(kemdk): bitstring.
+fun encaps_ct768(bitstring, coins): bitstring.
+fun encaps_ss768(bitstring, coins): bitstring.
+reduc forall dk: kemdk, r: coins; decaps768(dk, encaps_ct768(pk768(dk), r)) = encaps_ss768(pk768(dk), r).
+
+(* §3.2 HybridKEM combiner: hkem(ss_kem, ss_dh, ct_kem, ek_kem, pk_dh, pk_e, V) *)
+fun hkem(bitstring, G, bitstring, bitstring, G, G, bitstring): bitstring.
+
+(* SHA-256, HKDF-SHA-256 (the three outputs of Expand(ck2, "SecMP-LINK/1 keys") as projections), HMAC-SHA-256 *)
+fun h(bitstring): bitstring.
+fun hkdf_extract(bitstring, bitstring): key.
+fun hkdf_expand(key, bitstring): bitstring.
+fun p_c2r(bitstring): key.
+fun p_r2c(bitstring): key.
+fun p_sid(bitstring): bitstring.
+fun mac(key, bitstring): bitstring.
+
+(* Ed25519 (RelayInfo §8.2, queue keys §9.2) *)
+fun vk(sigsk): bitstring.
+fun sign(sigsk, bitstring): bitstring.
+reduc forall sk: sigsk, m: bitstring; verify(vk(sk), m, sign(sk, m)) = true.
+
+(* §8.4 XChaCha20-Poly1305 frame: nonce = the counter, AD = "SecMP-LINK/1 frame" ‖ sess_id *)
+fun aead(key, bitstring, bitstring, bitstring): bitstring.
+reduc forall k: key, n: bitstring, ad: bitstring, m: bitstring; aead_open(k, n, ad, aead(k, n, ad, m)) = m.
+
+(* R's store of queues (§9.1): (session, rid, recv_pk), filled by an executed QUEUE_NEW *)
+table queues(tagt, bitstring, bitstring).
+
+(* ---------------------------------------------------------------- search devices (7.) ------------------------ *)
+
+select x: bitstring, y: bitstring; attacker(mac(hkdf_extract( *x, *y), lbl_hs1))/-3000.
+select x: bitstring, y: bitstring; attacker(mac(hkdf_extract( *x, *y), lbl_hs2))/-3000.
+select p: bitstring, r: coins; attacker(encaps_ct1024( *p, *r))/-3000.
+select p: bitstring, r: coins; attacker(encaps_ct768( *p, *r))/-3000.
+
+(* ---------------------------------------------------------------- events (CLAIMS §LINK) ---------------------- *)
+
+event RInfo(tagt, bitstring, bitstring, bitstring).                                   (* (s, kid, fp, akc) *)
+event CStart(tagt, bitstring, bitstring, bitstring).                                  (* (s, fp, kid, h0) *)
+event RAccept(tagt, bitstring, bitstring, bitstring, bitstring, key, key).            (* (s, kid, h0, h1, sid, k1, k2) *)
+event CAccept(tagt, bitstring, bitstring, bitstring, bitstring, bitstring, key, key). (* (s, fp, kid, h0, h1, sid, k1, k2) *)
+event CSend(tagt, bitstring, bitstring, bitstring).                                   (* (s, sid, ctr, m): c2r sealed *)
+event RRecv(tagt, bitstring, bitstring, bitstring).                                   (* c2r opened *)
+event RSend(tagt, bitstring, bitstring, bitstring).                                   (* r2c sealed *)
+event CRecv(tagt, bitstring, bitstring, bitstring).                                   (* r2c opened *)
+event CSign(tagt, bitstring, bitstring, bitstring, bitstring).                        (* (s, sid, cmd_seq, cmd, qpk) *)
+event RExec(tagt, bitstring, bitstring, bitstring, bitstring).                        (* (s, sid, cmd_seq, cmd, qpk) *)
+event RevealStatic(tagt, bitstring).                                                  (* (s, kid) *)
+event RevealSig(tagt).                                                                (* (s) *)
+event RevealEph(tagt, bitstring).                                                     (* (s, C) *)
+event RevealQKey(tagt, bitstring).                                                    (* (s, q) *)
+
+(* ---------------------------------------------------------------- R's keys and RelayInfo (§8.2) ------------- *)
+
+(* relay_fp = SHA-256("SecMP-LINK/1 relay-fp" ‖ relay_sig_pk) *)
+letfun rfp(s: tagt) = h((lbl_relayfp, vk(sigk(s, kRsig)))).
+
+(* RELAYINFO record (D.1): 0x02 ‖ RelayInfoV1, sig over "SecMP-LINK/1 relayinfo" ‖ all preceding fields;
+   akc = SHA-256("SecMP-Q/1 akc" ‖ relay_access_key) *)
+letfun rinfo(s: tagt) =
+  (tInfo, ver1, vk(sigk(s, kRsig)), kid0, exp(g, dhsk(s, kRdh)), pk1024(kemsk(s, kRkem)), h((lbl_akc, ak)), vu0,
+   sign(sigk(s, kRsig), (lbl_relayinfo, ver1, vk(sigk(s, kRsig)), kid0, exp(g, dhsk(s, kRdh)),
+                         pk1024(kemsk(s, kRkem)), h((lbl_akc, ak)), vu0))).
+
+(* ---------------------------------------------------------------- R: §8.3, §8.4, §9.2 ------------------------ *)
+
+(* R's frames of one link (1.): the strict +1 counter is the fixed nonce of each receive; a failing check stops the
+   link silently (§8.5: no further output) *)
+let RFrames(s: tagt, sid: bitstring, k1: key, k2: key) =
+  (* c2r counter 0: QUEUE_NEW, cmd_seq 1 — token (§9.6), then the signature by recv_pk (§9.2, D.6) *)
+  in(c, f0: bitstring);
+  let p0 = aead_open(k1, c0, (lbl_frame, sid), f0) in
+  event RRecv(s, sid, c0, p0);
+  let (=op_qnew, =cs1, cmd1: bitstring, sg1: bitstring) = p0 in
+  let (rpk: bitstring, spk: bitstring, tok: bitstring) = cmd1 in
+  if tok = mac(ak, (lbl_token, sid, cs1)) then
+  if verify(rpk, (lbl_qnew, sid, cs1, cmd1), sg1) = true then
+  event RExec(s, sid, cs1, cmd1, rpk);
+  insert queues(s, h((lbl_rid, rpk)), rpk);
+  (* r2c counter 0: OK_QUEUE_NEW { rid, sid } (§9.1 derived identifiers) *)
+  let q0 = (op_okq, cs1, h((lbl_rid, rpk)), h((lbl_sid, rpk, spk))) in
+  event RSend(s, sid, c0, q0);
+  out(c, aead(k2, c0, (lbl_frame, sid), q0));
+  (* c2r counter 1: FETCH, cmd_seq 2 — signed by the recv key R holds for rid *)
+  in(c, f1: bitstring);
+  let p1 = aead_open(k1, c1, (lbl_frame, sid), f1) in
+  event RRecv(s, sid, c1, p1);
+  let (=op_fetch, =cs2, cmd2: bitstring, sg2: bitstring) = p1 in
+  let (rid: bitstring, ack: bitstring) = cmd2 in
+  get queues(=s, =rid, fpk) in
+  if verify(fpk, (lbl_fetch, sid, cs2, cmd2), sg2) = true then
+  event RExec(s, sid, cs2, cmd2, fpk);
+  (* r2c counters 1, 2: F = 2 CELLR frames, each with a fresh cell *)
+  new n1[sid]: bitstring;
+  new n2[sid]: bitstring;
+  let q1 = (op_cellr, cs2, n1) in
+  event RSend(s, sid, c1, q1);
+  out(c, aead(k2, c1, (lbl_frame, sid), q1));
+  let q2 = (op_cellr, cs2, n2) in
+  event RSend(s, sid, c2, q2);
+  out(c, aead(k2, c2, (lbl_frame, sid), q2)).
+
+(* One connection of R (§8.3): HELLO, RELAYINFO, HS1 (kid, mac1 checked before any HS2 randomness), HS2 *)
+let RConn(s: tagt) =
+  in(c, (=tHello, =magic, =ver1));
+  out(c, rinfo(s));
+  in(c, (=tHS1, =ver1, =kid0, ec: G, ekc: bitstring, pke1: G, ctkem: bitstring, m1: bitstring));
+  (* §3.2 HybridKEM-1024.Decaps((relay_dh, relay_kem), (pk_e1, ct_kem)) *)
+  let ss1 = hkem(decaps1024(kemsk(s, kRkem), ctkem), exp(pke1, dhsk(s, kRdh)), ctkem, pk1024(kemsk(s, kRkem)),
+                 exp(g, dhsk(s, kRdh)), pke1, lbl_v1024) in
+  let h0 = h((lbl_h0, ver1, kid0, rfp(s), ec, h(ekc), pke1, h(ctkem))) in
+  let ck1 = hkdf_extract(h0, ss1) in
+  if m1 = mac(ck1, lbl_hs1) then
+  (* §3.2 HybridKEM-768.Encaps((e_c, ek_c)) = ((e_r, ct_c), ss2) *)
+  new er[ec, ekc, pke1, ctkem]: bitstring;
+  new r2[ec, ekc, pke1, ctkem]: bitstring;
+  let x = dhsk(s, iR(er)) in
+  let erpub = exp(g, x) in
+  let ctc = encaps_ct768(ekc, kemr(s, r2)) in
+  let ss2 = hkem(encaps_ss768(ekc, kemr(s, r2)), exp(ec, x), ctc, ekc, ec, erpub, lbl_v768) in
+  let h1 = h((h0, m1, erpub, h(ctc))) in
+  let ck2 = hkdf_extract(h1, (ck1, ss2)) in
+  let ks = hkdf_expand(ck2, lbl_keys) in
+  let k1 = p_c2r(ks) in
+  let k2 = p_r2c(ks) in
+  let sid = p_sid(ks) in
+  event RAccept(s, kid0, h0, h1, sid, k1, k2);
+  out(c, (tHS2, ver1, erpub, ctc, mac(ck2, lbl_hs2)));
+  RFrames(s, sid, k1, k2).
+
+(* R: one RelayInfo for kid0, then every connection *)
+let Relay(s: tagt) =
+  event RInfo(s, kid0, rfp(s), h((lbl_akc, ak)));
+  ! RConn(s).
+
+(* ---------------------------------------------------------------- C: §8.2–§8.4, §9.2 ------------------------- *)
+
+(* C's frames of one link (1.): two commands of the queue key qsk (queue send key spk), their responses *)
+let CFrames(s: tagt, sid: bitstring, k1: key, k2: key, qsk: sigsk, spk: bitstring) =
+  let qpk = vk(qsk) in
+  (* c2r counter 0: QUEUE_NEW recv_pk ‖ send_pk ‖ token, signed by the recv key (§9.2, §9.6, D.2, D.6) *)
+  let cmd1 = (qpk, spk, mac(ak, (lbl_token, sid, cs1))) in
+  event CSign(s, sid, cs1, cmd1, qpk);
+  let p0 = (op_qnew, cs1, cmd1, sign(qsk, (lbl_qnew, sid, cs1, cmd1))) in
+  event CSend(s, sid, c0, p0);
+  out(c, aead(k1, c0, (lbl_frame, sid), p0));
+  (* r2c counter 0: OK_QUEUE_NEW with C's own rid and sid (OPEN-M5-11) *)
+  in(c, f0: bitstring);
+  let q0 = aead_open(k2, c0, (lbl_frame, sid), f0) in
+  event CRecv(s, sid, c0, q0);
+  let (=op_okq, =cs1, =h((lbl_rid, qpk)), =h((lbl_sid, qpk, spk))) = q0 in
+  (* c2r counter 1: FETCH rid ‖ ack, signed by the recv key *)
+  let cmd2 = (h((lbl_rid, qpk)), ack0) in
+  event CSign(s, sid, cs2, cmd2, qpk);
+  let p1 = (op_fetch, cs2, cmd2, sign(qsk, (lbl_fetch, sid, cs2, cmd2))) in
+  event CSend(s, sid, c1, p1);
+  out(c, aead(k1, c1, (lbl_frame, sid), p1));
+  (* r2c counters 1, 2: the two CELLR frames *)
+  in(c, f1: bitstring);
+  let q1 = aead_open(k2, c1, (lbl_frame, sid), f1) in
+  event CRecv(s, sid, c1, q1);
+  let (=op_cellr, =cs2, x1: bitstring) = q1 in
+  in(c, f2: bitstring);
+  let q2 = aead_open(k2, c2, (lbl_frame, sid), f2) in
+  event CRecv(s, sid, c2, q2);
+  let (=op_cellr, =cs2, x2: bitstring) = q2 in
+  0.
+
+(* C's handshake after the RelayInfo checks (§8.3), with the index ie of the link's e_c and dk_c *)
+let CTail(s: tagt, qsk: sigsk, spk: bitstring, kid: bitstring, rdh: G, rkem: bitstring, ie: bitstring) =
+  new e1[]: bitstring;
+  new r1[]: bitstring;
+  let ec = dhsk(s, ie) in
+  let ecpub = exp(g, ec) in
+  let dkc = kemsk(s, ie) in
+  let ekc = pk768(dkc) in
+  (* §3.2 HybridKEM-1024.Encaps((relay_dh_pk, relay_kem_ek)) = ((pk_e1, ct_kem), ss1) *)
+  let x1 = dhsk(s, iE(e1)) in
+  let pke1 = exp(g, x1) in
+  let ctkem = encaps_ct1024(rkem, kemr(s, r1)) in
+  let ss1 = hkem(encaps_ss1024(rkem, kemr(s, r1)), exp(rdh, x1), ctkem, rkem, rdh, pke1, lbl_v1024) in
+  let h0 = h((lbl_h0, ver1, kid, rfp(s), ecpub, h(ekc), pke1, h(ctkem))) in
+  let ck1 = hkdf_extract(h0, ss1) in
+  let m1 = mac(ck1, lbl_hs1) in
+  event CStart(s, rfp(s), kid, h0);
+  out(c, (tHS1, ver1, kid, ecpub, ekc, pke1, ctkem, m1));
+  in(c, (=tHS2, =ver1, erpub: G, ctc: bitstring, m2: bitstring));
+  (* §3.2 HybridKEM-768.Decaps((e_c, dk_c), (e_r, ct_c)) *)
+  let ss2 = hkem(decaps768(dkc, ctc), exp(erpub, ec), ctc, ekc, ecpub, erpub, lbl_v768) in
+  let h1 = h((h0, m1, erpub, h(ctc))) in
+  let ck2 = hkdf_extract(h1, (ck1, ss2)) in
+  if m2 = mac(ck2, lbl_hs2) then
+  let ks = hkdf_expand(ck2, lbl_keys) in
+  let k1 = p_c2r(ks) in
+  let k2 = p_r2c(ks) in
+  let sid = p_sid(ks) in
+  event CAccept(s, rfp(s), kid, h0, h1, sid, k1, k2);
+  CFrames(s, sid, k1, k2, qsk, spk).
+
+(* One link of C: HELLO, RELAYINFO with the §8.2 checks (signature, pinned relay_fp, akc of the access key C holds;
+   valid_until is time and not modelled), a fresh link index e, the handshake *)
+let CLink(s: tagt, qsk: sigsk, spk: bitstring) =
+  out(c, (tHello, magic, ver1));
+  in(c, (=tInfo, =ver1, rpk: bitstring, kid: bitstring, rdh: G, rkem: bitstring, akc: bitstring, vu: bitstring,
+         rsg: bitstring));
+  if h((lbl_relayfp, rpk)) = rfp(s) then
+  if verify(rpk, (lbl_relayinfo, ver1, rpk, kid, rdh, rkem, akc, vu), rsg) = true then
+  if akc = h((lbl_akc, ak)) then
+  new e[]: bitstring;
+  CTail(s, qsk, spk, kid, rdh, rkem, iC(e)).
+
+(* CLink with RevealEph (5., lFSEph): in phase 1 the link's e_c secret and dk_c are output *)
+let CLinkE(s: tagt, qsk: sigsk, spk: bitstring) =
+  out(c, (tHello, magic, ver1));
+  in(c, (=tInfo, =ver1, rpk: bitstring, kid: bitstring, rdh: G, rkem: bitstring, akc: bitstring, vu: bitstring,
+         rsg: bitstring));
+  if h((lbl_relayfp, rpk)) = rfp(s) then
+  if verify(rpk, (lbl_relayinfo, ver1, rpk, kid, rdh, rkem, akc, vu), rsg) = true then
+  if akc = h((lbl_akc, ak)) then
+  new e[]: bitstring;
+  (
+    CTail(s, qsk, spk, kid, rdh, rkem, iD(e))
+  | (phase 1; event RevealEph(s, pC); out(c, (dhsk(s, iD(e)), kemsk(s, iD(e)))))
+  ).
+
+(* A client process: one queue (recv key qsk, published: its public key is no secret against a third party; send key
+   spk, fresh) and two links (CLAIMS §LINK bounds) *)
+let Client(s: tagt) =
+  new q[]: bitstring;
+  new spk[]: bitstring;
+  let qsk = sigk(s, iQ(q)) in
+  out(c, vk(qsk));
+  ( CLink(s, qsk, spk) | CLink(s, qsk, spk) ).
+
+(* The client of RevealEph (lFSEph): one designated client process, not replicated, next to the replicated clients;
+   its first link outputs its e_c secret and dk_c in phase 1 (CLAIMS §LINK RevealEph: "of one link") *)
+let ClientE(s: tagt) =
+  new q[]: bitstring;
+  new spk[]: bitstring;
+  let qsk = sigk(s, iQ(q)) in
+  out(c, vk(qsk));
+  ( CLinkE(s, qsk, spk) | CLink(s, qsk, spk) ).
+
+(* Client with RevealQKey in phase 0 (lQKey): the queue signing key is output *)
+let ClientQ(s: tagt) =
+  new q[]: bitstring;
+  new spk[]: bitstring;
+  let qsk = sigk(s, iQ(q)) in
+  out(c, vk(qsk));
+  ( CLink(s, qsk, spk) | CLink(s, qsk, spk) | (event RevealQKey(s, q); out(c, qsk)) ).
+
+(* ---------------------------------------------------------------- compromise macros (5.) -------------------- *)
+
+let RevStatic(s: tagt) =
+  event RevealStatic(s, kid0);
+  out(c, (dhsk(s, kRdh), kemsk(s, kRkem))).
+
+let RevSig(s: tagt) =
+  event RevealSig(s);
+  out(c, sigk(s, kRsig)).
+
+(* ---------------------------------------------------------------- the breaks as reveals (4., LO-5, LO-6) ---- *)
+(* lDH (rk = false) and lBoth (rk = true) only: RConn, Relay, CTail, CLink, Client with the phase-0 outputs of every
+   honest X25519 exponent right after its `new` (LO-5) and, when rk, of the encapsulation randomness (LO-6); every
+   other process line verbatim (comments omitted). relay_dh is output by the session file's process. *)
+
+let RConnR(s: tagt, rk: bool) =
+  in(c, (=tHello, =magic, =ver1));
+  out(c, rinfo(s));
+  in(c, (=tHS1, =ver1, =kid0, ec: G, ekc: bitstring, pke1: G, ctkem: bitstring, m1: bitstring));
+  let ss1 = hkem(decaps1024(kemsk(s, kRkem), ctkem), exp(pke1, dhsk(s, kRdh)), ctkem, pk1024(kemsk(s, kRkem)),
+                 exp(g, dhsk(s, kRdh)), pke1, lbl_v1024) in
+  let h0 = h((lbl_h0, ver1, kid0, rfp(s), ec, h(ekc), pke1, h(ctkem))) in
+  let ck1 = hkdf_extract(h0, ss1) in
+  if m1 = mac(ck1, lbl_hs1) then
+  new er[ec, ekc, pke1, ctkem]: bitstring;
+  out(c, dhsk(s, iR(er)));
+  new r2[ec, ekc, pke1, ctkem]: bitstring;
+  ( (if rk then out(c, kemr(s, r2)))
+  | let x = dhsk(s, iR(er)) in
+    let erpub = exp(g, x) in
+    let ctc = encaps_ct768(ekc, kemr(s, r2)) in
+    let ss2 = hkem(encaps_ss768(ekc, kemr(s, r2)), exp(ec, x), ctc, ekc, ec, erpub, lbl_v768) in
+    let h1 = h((h0, m1, erpub, h(ctc))) in
+    let ck2 = hkdf_extract(h1, (ck1, ss2)) in
+    let ks = hkdf_expand(ck2, lbl_keys) in
+    let k1 = p_c2r(ks) in
+    let k2 = p_r2c(ks) in
+    let sid = p_sid(ks) in
+    event RAccept(s, kid0, h0, h1, sid, k1, k2);
+    out(c, (tHS2, ver1, erpub, ctc, mac(ck2, lbl_hs2)));
+    RFrames(s, sid, k1, k2) ).
+
+let RelayR(s: tagt, rk: bool) =
+  event RInfo(s, kid0, rfp(s), h((lbl_akc, ak)));
+  ! RConnR(s, rk).
+
+let CTailR(s: tagt, qsk: sigsk, spk: bitstring, kid: bitstring, rdh: G, rkem: bitstring, ie: bitstring, rk: bool) =
+  new e1[]: bitstring;
+  out(c, dhsk(s, iE(e1)));
+  new r1[]: bitstring;
+  ( (if rk then out(c, kemr(s, r1)))
+  | let ec = dhsk(s, ie) in
+    let ecpub = exp(g, ec) in
+    let dkc = kemsk(s, ie) in
+    let ekc = pk768(dkc) in
+    let x1 = dhsk(s, iE(e1)) in
+    let pke1 = exp(g, x1) in
+    let ctkem = encaps_ct1024(rkem, kemr(s, r1)) in
+    let ss1 = hkem(encaps_ss1024(rkem, kemr(s, r1)), exp(rdh, x1), ctkem, rkem, rdh, pke1, lbl_v1024) in
+    let h0 = h((lbl_h0, ver1, kid, rfp(s), ecpub, h(ekc), pke1, h(ctkem))) in
+    let ck1 = hkdf_extract(h0, ss1) in
+    let m1 = mac(ck1, lbl_hs1) in
+    event CStart(s, rfp(s), kid, h0);
+    out(c, (tHS1, ver1, kid, ecpub, ekc, pke1, ctkem, m1));
+    in(c, (=tHS2, =ver1, erpub: G, ctc: bitstring, m2: bitstring));
+    let ss2 = hkem(decaps768(dkc, ctc), exp(erpub, ec), ctc, ekc, ecpub, erpub, lbl_v768) in
+    let h1 = h((h0, m1, erpub, h(ctc))) in
+    let ck2 = hkdf_extract(h1, (ck1, ss2)) in
+    if m2 = mac(ck2, lbl_hs2) then
+    let ks = hkdf_expand(ck2, lbl_keys) in
+    let k1 = p_c2r(ks) in
+    let k2 = p_r2c(ks) in
+    let sid = p_sid(ks) in
+    event CAccept(s, rfp(s), kid, h0, h1, sid, k1, k2);
+    CFrames(s, sid, k1, k2, qsk, spk) ).
+
+let CLinkR(s: tagt, qsk: sigsk, spk: bitstring, rk: bool) =
+  out(c, (tHello, magic, ver1));
+  in(c, (=tInfo, =ver1, rpk: bitstring, kid: bitstring, rdh: G, rkem: bitstring, akc: bitstring, vu: bitstring,
+         rsg: bitstring));
+  if h((lbl_relayfp, rpk)) = rfp(s) then
+  if verify(rpk, (lbl_relayinfo, ver1, rpk, kid, rdh, rkem, akc, vu), rsg) = true then
+  if akc = h((lbl_akc, ak)) then
+  new e[]: bitstring;
+  out(c, dhsk(s, iC(e)));
+  CTailR(s, qsk, spk, kid, rdh, rkem, iC(e), rk).
+
+let ClientR(s: tagt, rk: bool) =
+  new q[]: bitstring;
+  new spk[]: bitstring;
+  let qsk = sigk(s, iQ(q)) in
+  out(c, vk(qsk));
+  ( CLinkR(s, qsk, spk, rk) | CLinkR(s, qsk, spk, rk) ).

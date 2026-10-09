@@ -27,6 +27,12 @@
 //! | `hx_accept_raw` | `hx` | every `fetched` list as raw cells (selector 3 ‖ 4096 B, at most 12); from `initiate` also the honest group by selector and as raw cells |
 //! | `hx_accept_structured` | `hx` | mode 0 ‖ the padded `outer`, mode 1 ‖ the `inner`, mode 2 ‖ the first 3177 bytes of the `outer` |
 //! | `tr_state` | `tr` | the `init` case: selector 0 ‖ a `RatchetStateV1` of the §7.2 responder's shape filled with the case's bytes ([`tr_state`]) |
+//! | `link_records` | `link` | every record of a case as selector ‖ record: `rec_hello` 0, `rec_relayinfo` 1, `rec_hs1` 2, `rec_hs2` 3 |
+//! | `link_client_handshake` | `link` | mode 0 ‖ flag 1 ‖ every `rec_relayinfo` (raw `RELAYINFO`, access key held) |
+//! | `link_relay_handshake` | `link` | mode 0 ‖ every `rec_hello`, mode 1 ‖ every `rec_hs1` (raw records) |
+//! | `link_frame_open` | `link` | mode 0 ‖ the `frame` of a reject case (raw unit); mode 1 ‖ each request payload of `req` (sealed by the target's client) |
+//! | `q_request_decode` | `link` | mode 1 ‖ each request payload of `req` (padded by the harness) |
+//! | `q_response_decode` | `link` | mode 2 (3 after `fetch-multi`: the context bit) ‖ each response payload of `resp`; mode 2 ‖ `resp_last` |
 //!
 //! The label byte of `hybrid_sign_verify` is 0 for every seed: the target picks `Label::ALL[byte % len]`, and its
 //! verification seeds are rejected under its fixed key whatever the label; the fuzzer varies the byte.
@@ -108,6 +114,26 @@ pub(crate) const SEED_RULES: &[SeedRule] = &[
         seeds: inv_uri,
     },
     SeedRule {
+        target: "link_client_handshake",
+        suite: "link",
+        seeds: link_client_handshake,
+    },
+    SeedRule {
+        target: "link_frame_open",
+        suite: "link",
+        seeds: link_frame_open,
+    },
+    SeedRule {
+        target: "link_records",
+        suite: "link",
+        seeds: link_records,
+    },
+    SeedRule {
+        target: "link_relay_handshake",
+        suite: "link",
+        seeds: link_relay_handshake,
+    },
+    SeedRule {
         target: "mldsa65_verify",
         suite: "hybridsign",
         seeds: mldsa65_verify,
@@ -151,6 +177,16 @@ pub(crate) const SEED_RULES: &[SeedRule] = &[
         target: "proto_records",
         suite: "encodings",
         seeds: proto_records,
+    },
+    SeedRule {
+        target: "q_request_decode",
+        suite: "link",
+        seeds: q_request_decode,
+    },
+    SeedRule {
+        target: "q_response_decode",
+        suite: "link",
+        seeds: q_response_decode,
     },
     SeedRule {
         target: "tr_decrypt",
@@ -605,6 +641,100 @@ fn hx_accept_structured(case: &Value) -> Result<Vec<(&'static str, Vec<u8>)>> {
     Ok(out)
 }
 
+/// `link_records`: selector ‖ record for every D.1 record of a case — `rec_hello` 0, `rec_relayinfo` 1, `rec_hs1` 2,
+/// `rec_hs2` 3 (honest outputs and manipulated inputs alike).
+fn link_records(case: &Value) -> Result<Vec<(&'static str, Vec<u8>)>> {
+    let mut out = Vec::new();
+    for (key, selector) in [
+        ("rec_hello", 0_u8),
+        ("rec_relayinfo", 1),
+        ("rec_hs1", 2),
+        ("rec_hs2", 3),
+    ] {
+        if let Some(record) = field(case, key)? {
+            out.push((key, cat(&[&[selector], &record])));
+        }
+    }
+    Ok(out)
+}
+
+/// `link_client_handshake`: mode 0 (raw `RELAYINFO`) ‖ flag 1 (the client holds the access key) ‖ the case's
+/// `rec_relayinfo` (the target's fixed client pins another relay: every one is rejected).
+fn link_client_handshake(case: &Value) -> Result<Vec<(&'static str, Vec<u8>)>> {
+    Ok(field(case, "rec_relayinfo")?
+        .map(|record| vec![("relayinfo", cat(&[&[0, 1], &record]))])
+        .unwrap_or_default())
+}
+
+/// `link_relay_handshake`: mode 0 (raw `HELLO`) ‖ the case's `rec_hello`, mode 1 (raw `HS1`) ‖ its `rec_hs1`.
+fn link_relay_handshake(case: &Value) -> Result<Vec<(&'static str, Vec<u8>)>> {
+    let mut out = Vec::new();
+    for (key, mode) in [("rec_hello", 0_u8), ("rec_hs1", 1)] {
+        if let Some(record) = field(case, key)? {
+            out.push((key, cat(&[&[mode], &record])));
+        }
+    }
+    Ok(out)
+}
+
+/// The names of a case's request payloads (`LINK_PUT`: 3 frames) and response payloads (`FETCH_MULTI`: 8 frames).
+const LINK_REQ: &[&str] = &["req-0", "req-1", "req-2"];
+const LINK_RESP: &[&str] = &[
+    "resp-0", "resp-1", "resp-2", "resp-3", "resp-4", "resp-5", "resp-6", "resp-7",
+];
+
+/// `mode ‖ payload` for each payload of the list `key`, named by `names` (a case with more payloads than names is
+/// refused).
+fn link_payloads(
+    case: &Value,
+    key: &str,
+    names: &'static [&'static str],
+    mode: u8,
+) -> Result<Vec<(&'static str, Vec<u8>)>> {
+    let items = list_field(case, key)?;
+    if items.len() > names.len() {
+        bail!(
+            "link: case {} has {} {key} payloads",
+            case.get("id").and_then(Value::as_str).unwrap_or("?"),
+            items.len()
+        );
+    }
+    Ok(names
+        .iter()
+        .zip(items)
+        .map(|(name, p)| (*name, cat(&[&[mode], &p])))
+        .collect())
+}
+
+/// `link_frame_open`: mode 0 (raw unit) ‖ the `frame` of a reject case (sealed under the vector link's keys: the
+/// target's link rejects it, the wrong lengths before the AEAD); mode 1 (honest) ‖ every request payload of `req`,
+/// which the target's client seals.
+fn link_frame_open(case: &Value) -> Result<Vec<(&'static str, Vec<u8>)>> {
+    let mut out = Vec::new();
+    if let Some(frame) = field(case, "frame")? {
+        out.push(("frame", cat(&[&[0], &frame])));
+    }
+    out.extend(link_payloads(case, "req", LINK_REQ, 1)?);
+    Ok(out)
+}
+
+/// `q_request_decode`: mode 1 (padded by the harness) ‖ every request payload of `req` (`SKEY` included, which the
+/// decoder refuses).
+fn q_request_decode(case: &Value) -> Result<Vec<(&'static str, Vec<u8>)>> {
+    link_payloads(case, "req", LINK_REQ, 1)
+}
+
+/// `q_response_decode`: mode 2 (padded by the harness) | context (1 after `FETCH_MULTI`) ‖ every response payload of
+/// `resp`, and the `send-fill` case's `resp_last`.
+fn q_response_decode(case: &Value) -> Result<Vec<(&'static str, Vec<u8>)>> {
+    let context = u8::from(op(case) == "fetch-multi");
+    let mut out = link_payloads(case, "resp", LINK_RESP, 2 | context)?;
+    if let Some(last) = field(case, "resp_last")? {
+        out.push(("resp-last", cat(&[&[2], &last])));
+    }
+    Ok(out)
+}
+
 /// `tr_decrypt`: mode 0 ‖ the case's `cell` (a `send` case's output, a `recv-reject` case's input), any length.
 fn tr_decrypt(case: &Value) -> Result<Vec<(&'static str, Vec<u8>)>> {
     Ok(field(case, "cell")?
@@ -730,10 +860,16 @@ mod tests {
             assert!(expect::VECTOR_SUITES.contains(&r.suite), "{}", r.suite);
         }
         for t in expect::FUZZ_TARGETS {
+            let has_rule = SEED_RULES.iter().any(|r| r.target == *t);
+            let tracked_only = expect::FUZZ_TRACKED_ONLY.contains(t);
+            assert!(has_rule || tracked_only, "{t} has no seeding rule");
             assert!(
-                SEED_RULES.iter().any(|r| r.target == *t),
-                "{t} has no seeding rule"
+                !(has_rule && tracked_only),
+                "{t} has a seeding rule and is listed as tracked-corpus only"
             );
+        }
+        for t in expect::FUZZ_TRACKED_ONLY {
+            assert!(expect::FUZZ_TARGETS.contains(t), "{t} is not a fuzz target");
         }
     }
 
@@ -744,17 +880,24 @@ mod tests {
         let expected: &[(&str, usize)] = &[
             ("caead_open", 25),
             ("ed25519_verify", 25),
-            // the `hx` suite (30 cases): `fetched` lists (16 of them) and the honest group (2 seeds of `initiate`);
-            // 10 `outer`s (3 chunks each with an `init_id`: 30 plaintexts; 2 structured seeds each), 4 `inner`s
-            ("hx_accept_raw", 17),
-            ("hx_accept_structured", 24),
-            ("hx_cell_plaintext", 30),
-            ("hx_inner", 4),
-            ("hx_outer", 10),
+            // the `hx` suite (37 cases): `fetched` lists (23 of them) and the honest group (2 seeds of `initiate`);
+            // 15 `outer`s (3 chunks each with an `init_id`: 45 plaintexts; 3 structured seeds each), 9 `inner`s
+            ("hx_accept_raw", 24),
+            ("hx_accept_structured", 39),
+            ("hx_cell_plaintext", 45),
+            ("hx_inner", 9),
+            ("hx_outer", 15),
             ("hybrid_sign_verify", 42),
             // 6 `linkdata` and 7 `blob`; 4 `uri`
             ("inv_linkdata", 13),
             ("inv_uri", 4),
+            // the `link` suite (86 cases): 9 `rec_relayinfo` (case 1, I1–I8), 2 `rec_hello`, 11 `rec_hs1` (P3,
+            // S1–S10), 6 `rec_hs2` (P4, S10, T1–T4); 13 `frame`s (S10, F1–F12) and 53 request payloads of 44
+            // link-A cases (three per LINK_PUT, two in E23)
+            ("link_client_handshake", 9),
+            ("link_frame_open", 66),
+            ("link_records", 28),
+            ("link_relay_handshake", 13),
             ("mldsa65_verify", 34),
             ("mlkem_parse", 86),
             ("msg_open", 24),
@@ -763,6 +906,9 @@ mod tests {
             ("proto_handshake", 40),
             ("proto_invitation", 132),
             ("proto_records", 81),
+            // 53 request payloads; 95 response payloads and the `send-fill` case's `resp_last`
+            ("q_request_decode", 53),
+            ("q_response_decode", 96),
             // 40 `send` cells and 13 `recv-reject` cells; one state from the `init` case
             ("tr_decrypt", 53),
             ("tr_state", 1),
@@ -791,7 +937,12 @@ mod tests {
                 total_proto = total_proto.saturating_add(seeds.len());
             }
         }
-        assert_eq!(expected.len(), expect::FUZZ_TARGETS.len());
+        assert_eq!(
+            expected.len(),
+            expect::FUZZ_TARGETS
+                .len()
+                .saturating_sub(expect::FUZZ_TRACKED_ONLY.len())
+        );
         // every decodable `encodings` row, once: 78 positives and 547 negatives
         assert_eq!(total_proto, 625);
         Ok(())
@@ -892,6 +1043,49 @@ mod tests {
         );
         assert_eq!(bytes.len(), 250);
         assert!(tr_state(&send)?.is_empty());
+        Ok(())
+    }
+
+    /// The layouts of the `link` rules (M5 Phase B): records behind their selector, payloads behind their mode, the
+    /// `CELLR` context bit after `FETCH_MULTI`; a case with more payloads than names is refused.
+    #[test]
+    fn link_seeds_follow_the_target_layouts() -> Result<()> {
+        let hs1 = serde_json::json!({"id": "link-0003", "op": "hs1", "inputs": {"e_c_sk": "01"},
+            "outputs": {"rec_hs1": "0a0b", "hs1": "0b"}});
+        assert_eq!(link_records(&hs1)?, vec![("rec_hs1", vec![2, 0x0a, 0x0b])]);
+        assert_eq!(
+            link_relay_handshake(&hs1)?,
+            vec![("rec_hs1", vec![1, 0x0a, 0x0b])]
+        );
+        assert!(link_client_handshake(&hs1)?.is_empty());
+        let info = serde_json::json!({"id": "link-0052", "op": "relayinfo-reject",
+            "inputs": {"rec_relayinfo": "0c"}, "expect": "reject"});
+        assert_eq!(
+            link_client_handshake(&info)?,
+            vec![("relayinfo", vec![0, 1, 0x0c])]
+        );
+        assert_eq!(link_records(&info)?, vec![("rec_relayinfo", vec![1, 0x0c])]);
+        let multi = serde_json::json!({"id": "link-0019", "op": "fetch-multi",
+            "outputs": {"req": ["05aa"], "resp": ["83bb", "83cc"], "req_frames": ["dd"]}});
+        assert_eq!(q_request_decode(&multi)?, vec![("req-0", vec![1, 5, 0xaa])]);
+        assert_eq!(
+            q_response_decode(&multi)?,
+            vec![
+                ("resp-0", vec![3, 0x83, 0xbb]),
+                ("resp-1", vec![3, 0x83, 0xcc])
+            ]
+        );
+        assert_eq!(link_frame_open(&multi)?, vec![("req-0", vec![1, 5, 0xaa])]);
+        let fill = serde_json::json!({"id": "link-0020", "op": "send-fill", "outputs": {"resp_last": "82"}});
+        assert_eq!(
+            q_response_decode(&fill)?,
+            vec![("resp-last", vec![2, 0x82])]
+        );
+        let reject =
+            serde_json::json!({"id": "link-0075", "op": "frame-reject", "inputs": {"frame": "ee"}});
+        assert_eq!(link_frame_open(&reject)?, vec![("frame", vec![0, 0xee])]);
+        let four = serde_json::json!({"id": "x", "op": "link-put", "outputs": {"req": ["01", "02", "03", "04"]}});
+        assert!(q_request_decode(&four).is_err());
         Ok(())
     }
 

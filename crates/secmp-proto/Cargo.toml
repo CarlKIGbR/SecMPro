@@ -57,6 +57,25 @@ required-features = ["kat"]
 name = "gen-hx"
 required-features = ["kat"]
 
+# The SecMP-LINK tests (milestone M5): the replay of the `link` suite's handshake groups, the client and relay
+# handshake, the frames and the properties; they need feature `kat` (`FixedEntropy`, the handshake trace).
+[[test]]
+name = "link"
+path = "tests/link/main.rs"
+required-features = ["kat"]
+
+# The work counts of the TR header trial and the skipped-key lookup (M5 TEST-SPEC G-01, G-02; M4 review R-42): they
+# read the counting accessor `tr::TRIAL_COUNTS_KAT`, which exists only with feature `kat`.
+[[test]]
+name = "tr_trial_counts"
+required-features = ["kat"]
+
+# The persist-before-send bytes of `HandshakeCells::release` (V-6, M3 review F13): it copies the invitation record with
+# `InvitationRecord::duplicate_kat`, which exists only with feature `kat` (M5 review C-6, R-113).
+[[test]]
+name = "hx_persist"
+required-features = ["kat"]
+
 # The performance measurement of M3 (plan D11: encrypt + decrypt < 3 ms), OS randomness, feature `kat` off; run in
 # the release profile by `cargo xtask step perf`.
 [[example]]

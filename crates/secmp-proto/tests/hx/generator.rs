@@ -32,8 +32,16 @@ fn without_generator(doc: &Value) -> Value {
     doc
 }
 
+/// V-25 (TEST-SPEC-M5): the generator reproduces the re-frozen reference file, and the frozen copy is that file
+/// byte for byte (the comparison of `cargo xtask vectors`, step 12a).
 #[test]
-fn the_rust_generator_reproduces_the_hx_file() {
+fn hx_generator_reproduces_ref_file() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../vectors");
+    assert!(
+        std::fs::read(root.join("hx.json")).unwrap()
+            == std::fs::read(root.join("ref/hx.json")).unwrap(),
+        "vectors/hx.json is vectors/ref/hx.json"
+    );
     let (file, text) = vector_file();
     let ours = hx::generate();
     for key in ["schema", "suite", "spec"] {
@@ -44,7 +52,7 @@ fn the_rust_generator_reproduces_the_hx_file() {
         Some("secmp-rust")
     );
     let (generated, listed) = (cases(&ours), cases(&file));
-    assert_eq!(generated.len(), 30, "one case per step");
+    assert_eq!(generated.len(), 37, "one case per step");
     assert_eq!(generated.len(), listed.len(), "cases");
     for (g, l) in generated.iter().zip(listed) {
         assert_eq!(

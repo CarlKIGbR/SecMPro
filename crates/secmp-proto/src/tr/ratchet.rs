@@ -19,8 +19,10 @@
 //! nothing, allocates no locked memory and draws no randomness.
 //!
 //! **Constant work in trial decryption (plan D3).** The header is opened under every candidate key — each distinct
-//! header key of `skipped`, `hk_r`, `nhk_r`, an absent key replaced by a dummy key whose result is masked — and each
-//! result ([`Aead::open_ct`]) is held as a [`select::CellChoice`], which has no conversion to `bool`;
+//! header key of `skipped`, `hk_r`, `nhk_r`, an absent key replaced by a dummy key whose result is masked — with
+//! [`Aead::open_ct_constant_flow`], which applies the keystream and recomputes the tag on every call, so not even the
+//! AEAD branches on which candidate opened (M4 campaign R-59, docs/01 RR-17), and each result is held as a
+//! [`select::CellChoice`], which has no conversion to `bool`;
 //! `select_header` reduces them to the §7.4 case with [`select::first_opened`] and [`select::decide`], whose case
 //! code is the one conversion to a branch up to and including `decide` (docs/06 §9; M3 review C6/F1, test
 //! `any_skipped_single_conversion`). The `n` of the `(hk, n)` lookup is read from the plaintext bytes `[38..42]` of
@@ -31,7 +33,9 @@
 //! `Choice` → `bool` conversion before `decide`, in `distinct_skipped_keys`, compares the state's own header keys
 //! with each other: it does not depend on the cell. Keys, KEM material and ratchet keys are compared with `ct_eq`,
 //! never `==`. The `(hk, n)` lookup visits every entry of `skipped` and selects the entry's message key with masks
-//! (`lookup_skipped`, M4 review R-58): the skipped path loads no entry by its index before the body MAC.
+//! (`lookup_skipped`, M4 review R-58): the skipped path loads no entry by its index before the body MAC. Outside
+//! `tr::state` an entry's message key is read only through the counting accessor `SkippedKey::mk` (M4 review R-42);
+//! feature `kat` counts those reads and the header AEAD opens per decryption (`TRIAL_COUNTS_KAT`).
 
 use std::collections::VecDeque;
 
@@ -134,10 +138,16 @@ std::thread_local! {
 #[cfg(any(test, feature = "kat"))]
 std::thread_local! {
     /// The work of the last [`RatchetState::decrypt`] on this thread (feature `kat` and the unit tests; M3 review
-    /// R-04): `(header trial decryptions, skipped entries visited by the (hk, n) lookup)`. Reset when a 4096-byte
-    /// cell's processing begins; test `trial_opens_every_candidate_every_call` checks `distinct + 2` and
-    /// `|skipped|` on every path — an early exit from the trial loop or the lookup changes them. Without `kat` and
-    /// outside the tests neither the counters nor any statement updating them exists.
+    /// R-04, M4 review R-42): `(header AEAD-open attempts, skipped entries read)`. The first counts the calls of
+    /// [`Aead::open_ct_constant_flow`] in the header trial of spec §7.4 (`open_header`, the trial's only AEAD call;
+    /// an absent key is one dummy open); the second counts the reads of a skipped entry's message key through the
+    /// counting accessor `SkippedKey::mk`, the only read of an entry's `mk` outside `tr::state` — the `(hk, n)` lookup
+    /// reads every entry's once. Reset when a 4096-byte cell's processing begins. Tests
+    /// `trial_opens_every_candidate_every_call`, `tr_header_trial_open_tries_every_key` (G-01) and
+    /// `tr_skipped_lookup_touches_every_entry` (G-02) check `distinct + 2` and `|skipped|` on every path: an early exit
+    /// from the trial loop or the lookup lowers them, and a reintroduced load of an entry's `mk` by a secret-derived
+    /// index (campaign R-58) raises the second. Without `kat` and outside the tests neither the counters nor any
+    /// statement updating them exists.
     pub static TRIAL_COUNTS_KAT: core::cell::Cell<(u32, u32)> = const { core::cell::Cell::new((0, 0)) };
 
     /// The `KDF_CK` steps `skip_message_keys` derived in the last [`RatchetState::decrypt`] on this thread (feature
@@ -317,11 +327,7 @@ fn derive_skipped(
         SKIP_STEPS_KAT.set(SKIP_STEPS_KAT.get().saturating_add(1));
         let (next, mk) = kdf_ck(&ck)?;
         if p >= plan.store_from {
-            stored.push(SkippedKey {
-                hk: copy32(hk)?,
-                n: p,
-                mk,
-            });
+            stored.push(SkippedKey::new(copy32(hk)?, p, mk));
         }
         ck = next;
         p = p.checked_add(1).ok_or(Error::Rejected)?;
@@ -330,7 +336,7 @@ fn derive_skipped(
 }
 
 /// One trial decryption of the header (spec §7.4, plan D3): whether the key opened it, and the plaintext
-/// (`HEADER_LEN` bytes, all zero if the tag did not verify; [`Aead::open_ct`]).
+/// (`HEADER_LEN` bytes, all zero if the tag did not verify; [`Aead::open_ct_constant_flow`]).
 type Trial = (CellChoice, Zeroizing<Vec<u8>>);
 
 /// The trial decryptions of one header under every candidate key — all of them, every time (spec §7.4, plan D3).
@@ -354,7 +360,11 @@ enum Selected {
     Step(HeaderV1),
 }
 
-/// `Open(key, hdr_nonce, hdr_ct)` with constant work: an absent key is replaced by `dummy` and its result masked.
+/// `Open(key, hdr_nonce, hdr_ct)` of spec §7.4 with constant work: an absent key is replaced by `dummy` and its result
+/// masked, and the opening is [`Aead::open_ct_constant_flow`] — the keystream applied and the tag recomputed on every
+/// call, the tags compared with `subtle` — so no branch, also not inside the AEAD, depends on whether this key opened
+/// (M4 campaign R-59, docs/01 RR-17). The header trial's only AEAD call; feature `kat` and the unit tests count each
+/// call in the first component of `TRIAL_COUNTS_KAT` (M4 review R-42).
 fn open_header(
     key: Option<&SecretBytes<32>>,
     dummy: &SecretBytes<32>,
@@ -364,19 +374,20 @@ fn open_header(
 ) -> Trial {
     #[cfg(any(test, feature = "kat"))]
     TRIAL_COUNTS_KAT.with(|c| {
-        let (opens, visited) = c.get();
-        c.set((opens.saturating_add(1), visited));
+        let (opens, mk_reads) = c.get();
+        c.set((opens.saturating_add(1), mk_reads));
     });
     let mut out = Zeroizing::new(vec![0_u8; HEADER_LEN]);
     let present = Choice::from(u8::from(key.is_some()));
-    let opened = Aead::open_ct(key.unwrap_or(dummy), hdr_nonce, ad, hdr_ct, &mut out);
+    let opened = Aead::open_ct_constant_flow(key.unwrap_or(dummy), hdr_nonce, ad, hdr_ct, &mut out);
     (CellChoice::from(opened & present), out)
 }
 
 /// The `(hk, n)` lookup of §7.4 step 1, comparing every entry of `skipped` in constant time: whether `(hk, n)` is
 /// stored, the index of the match (used only after the body MAC verified, `Update::remove`) and the match's message
 /// key, all-zero if none matched. mk selected by masks over every entry (R-58): no secret-indexed load before the
-/// body MAC.
+/// body MAC. Every entry's `mk` is read once, through the counting accessor `SkippedKey::mk` (R-42; feature `kat`:
+/// the second component of `TRIAL_COUNTS_KAT`), whether it matched or not.
 fn lookup_skipped(
     skipped: &VecDeque<SkippedKey>,
     hk: &[u8; 32],
@@ -385,22 +396,14 @@ fn lookup_skipped(
     let mut found = CellChoice::from(Choice::from(0));
     let mut found_at = 0_u32;
     let mut mk = Zeroizing::new([0_u8; 32]);
-    #[cfg(any(test, feature = "kat"))]
-    let mut visited = 0_u32;
     for (j, e) in (0_u32..).zip(skipped) {
         let hit = CellChoice::from(e.hk.expose_secret().ct_eq(hk) & e.n.ct_eq(&n));
         found |= hit;
         hit.assign(&mut found_at, &j);
-        for (dst, src) in mk.iter_mut().zip(e.mk.expose_secret()) {
+        for (dst, src) in mk.iter_mut().zip(e.mk().expose_secret()) {
             hit.assign(dst, src);
         }
-        #[cfg(any(test, feature = "kat"))]
-        {
-            visited = visited.saturating_add(1);
-        }
     }
-    #[cfg(any(test, feature = "kat"))]
-    TRIAL_COUNTS_KAT.with(|c| c.set((c.get().0, visited)));
     (found, found_at, mk)
 }
 
@@ -1069,7 +1072,8 @@ mod zeroizing_field_types {
             let _: &Option<SecretBytes<32>> = key;
         }
         let _: &SecretBytes<32> = &k.hk;
-        let _: &SecretBytes<32> = &k.mk;
+        // `mk` is private to `tr::state`; its accessor returns a reference to the field
+        let _: &SecretBytes<32> = k.mk();
         let _: &SecretBytes<BODY_LEN> = &p.bytes;
         let _: &Zeroizing<Vec<u8>> = &sealed.state_bytes;
         let _: &Zeroizing<Vec<u8>> = &opened.state_bytes;
@@ -1230,7 +1234,9 @@ mod selection {
 
     use secmp_crypto::{Choice, SecretBytes};
 
-    use super::{Selected, Trial, Trials, header_n, lookup_skipped, select_header};
+    use super::{
+        Selected, TRIAL_COUNTS_KAT, Trial, Trials, header_n, lookup_skipped, select_header,
+    };
     use crate::codec::{Decode, Encode, Zeroizing};
     use crate::error::{Error, Result};
     use crate::sizes::{HEADER_LEN, PROTO_VER};
@@ -1277,11 +1283,11 @@ mod selection {
         next: Option<Zeroizing<Vec<u8>>>,
     ) -> Result<Option<(&'static str, u32)>> {
         let k = SecretBytes::<32>::from_slice(&[1; 32])?;
-        let skipped = VecDeque::from([SkippedKey {
-            hk: SecretBytes::from_slice(&[1; 32])?,
-            n: 5,
-            mk: SecretBytes::from_slice(&[3; 32])?,
-        }]);
+        let skipped = VecDeque::from([SkippedKey::new(
+            SecretBytes::from_slice(&[1; 32])?,
+            5,
+            SecretBytes::from_slice(&[3; 32])?,
+        )]);
         let trials = Trials {
             skipped: vec![trial(skipped_key)],
             current: trial(current),
@@ -1378,10 +1384,12 @@ mod selection {
     /// M4 review R-58: `lookup_skipped` selects the matching entry's message key with masks over every entry — at
     /// index 0, in the middle and last — and gives the all-zero key on a miss; the index comes back for
     /// `Update::remove` only, and `RatchetState::open` passes the selected key to the body MAC (`Selected::Skipped`
-    /// carries it), so `skipped` is not indexed before the MAC. A `VecDeque::get` cannot be hooked, and neither this
-    /// test nor the counter of `trial_opens_every_candidate_every_call` would detect a reintroduced secret-indexed `mk`
-    /// load (no M4 mutants run covered `tr/`): that absence is guarded by review only, until the counting accessor of
-    /// F-M5 (M4 review R-42).
+    /// carries it), so `skipped` is not indexed before the MAC. A `VecDeque::get` cannot be hooked; outside
+    /// `tr::state` an entry's `mk` is read only through the counting accessor `SkippedKey::mk` (M4 review R-42), and
+    /// every lookup — hit or miss — reads exactly `|skipped|` message keys (the second component of
+    /// `TRIAL_COUNTS_KAT`; through `decrypt`: `trial_opens_every_candidate_every_call` and, feature `kat`,
+    /// `tr_skipped_lookup_touches_every_entry`), so a reintroduced load of the match's `mk` by its index counts one
+    /// more.
     #[test]
     fn skipped_mk_is_selected_without_indexing() -> Result<()> {
         // seven entries over three header keys, (hk_i, n) → mk = [10·i + n; 32]
@@ -1399,32 +1407,42 @@ mod selection {
                 .checked_mul(10)
                 .and_then(|x| x.checked_add(u8::try_from(n).ok()?))
                 .ok_or(Error::Rejected)?;
-            skipped.push_back(SkippedKey {
-                hk: SecretBytes::from_slice(&[i; 32])?,
+            skipped.push_back(SkippedKey::new(
+                SecretBytes::from_slice(&[i; 32])?,
                 n,
-                mk: SecretBytes::from_slice(&[mk; 32])?,
-            });
+                SecretBytes::from_slice(&[mk; 32])?,
+            ));
         }
         let found = |c: CellChoice| {
             let mut f = 0_u8;
             c.assign(&mut f, &1);
             f
         };
+        // the message keys one lookup reads (the counting accessor), from a non-zero start
+        let lookup = |skipped: &VecDeque<SkippedKey>, hk: u8, n: u32| {
+            TRIAL_COUNTS_KAT.set((5, 100));
+            let result = lookup_skipped(skipped, &[hk; 32], n);
+            let (opens, mk_reads) = TRIAL_COUNTS_KAT.get();
+            assert_eq!(opens, 5, "({hk}, {n}): the lookup opens nothing");
+            (result, mk_reads.checked_sub(100))
+        };
         for (hk, n, at, mk) in [(1, 0, 0, 10), (2, 0, 3, 20), (3, 1, 6, 31), (1, 4, 2, 14)] {
-            let (hit, index, key) = lookup_skipped(&skipped, &[hk; 32], n);
+            let ((hit, index, key), reads) = lookup(&skipped, hk, n);
             assert_eq!(found(hit), 1, "({hk}, {n})");
             assert_eq!(index, at, "({hk}, {n})");
             assert_eq!(*key, [mk; 32], "({hk}, {n})");
+            assert_eq!(reads, Some(7), "({hk}, {n}): message keys read");
         }
         // misses: a stored hk with another n, a stored n under another hk, an unknown key, an empty `skipped`
         for (hk, n) in [(1, 2), (2, 1), (3, 4), (4, 0)] {
-            let (hit, index, key) = lookup_skipped(&skipped, &[hk; 32], n);
+            let ((hit, index, key), reads) = lookup(&skipped, hk, n);
             assert_eq!(found(hit), 0, "({hk}, {n})");
             assert_eq!(index, 0, "({hk}, {n})");
             assert_eq!(*key, [0; 32], "({hk}, {n})");
+            assert_eq!(reads, Some(7), "({hk}, {n}): message keys read");
         }
-        let (hit, _, key) = lookup_skipped(&VecDeque::new(), &[1; 32], 0);
-        assert_eq!((found(hit), *key), (0, [0; 32]));
+        let ((hit, _, key), reads) = lookup(&VecDeque::new(), 1, 0);
+        assert_eq!((found(hit), *key, reads), (0, [0; 32], Some(0)));
         Ok(())
     }
 }
@@ -1492,9 +1510,10 @@ mod trial_work {
     /// For `distinct` = 1, 3 and 6 distinct skipped header keys (2 entries each), cells opening at the first, a
     /// middle and the last skipped candidate (accepted; and the last one with its body tag wrong: rejected at the
     /// MAC), under `hk_r`, under `nhk_r` and under no key: every `decrypt` performs `distinct + 2` header trial
-    /// decryptions and visits every entry of `skipped` (`TRIAL_COUNTS_KAT`). A trial loop or lookup that stops after
-    /// the first key that opened (the regression M3 review R-04 is about) counts fewer for every cell that opens
-    /// before the last candidate.
+    /// decryptions and reads the message key of every entry of `skipped` once (`TRIAL_COUNTS_KAT`). A trial loop or
+    /// lookup that stops after the first key that opened (the regression M3 review R-04 is about) counts fewer for
+    /// every cell that opens before the last candidate; a load of the matching entry's `mk` by its index (campaign
+    /// R-58) counts one more on the skipped path (M4 review R-42).
     #[test]
     fn trial_opens_every_candidate_every_call() -> Result<()> {
         for distinct in [1_usize, 3, 6] {
@@ -1529,7 +1548,7 @@ mod trial_work {
                 assert_eq!(
                     TRIAL_COUNTS_KAT.get(),
                     want,
-                    "{distinct} keys, {what}: (header trials, entries visited)"
+                    "{distinct} keys, {what}: (header trials, message keys read)"
                 );
             }
         }

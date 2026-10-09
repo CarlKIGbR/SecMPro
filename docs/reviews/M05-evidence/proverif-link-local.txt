@@ -1,0 +1,209 @@
+SecMP-LINK ProVerif models — local evidence (M5 Phase B; PV-01, X-04, X-05; OPEN-M5-16 A)
+Gate result: FAIL — 7 of 9 files PASS (every RESULT line with its CLAIMS §LINK verdict); formal/link/lDH.pv (inside its L1a declaration, after the first declaration's 5 expected lines) and formal/link/lBoth.pv (inside its first declaration) exceed the 1800 s cap. STOP condition of the brief ("a file needs > 30 min"); no query gave the opposite verdict and no true query came out "cannot be proved" in any completed run.
+ProVerif 2.05 (~/.local/bin/proverif), macOS arm64 (this Mac), working tree on HEAD d4eef33ccddb7950dd32156caabe05a4abd8449f
+Layout: formal/link.pvl + formal/link/<session>.pv (CLAIMS §LINK LO-1).
+Devices (formal/link.pvl header 7., 8.; session files): names new n[] with R's e_r/coins indexed by the HS1 (er[ec, ekc, pke1, ctkem]) and R's cells by sid; the RevealEph link's ephemerals indexed by iD(e); per-session secrecy assumptions; four `select …/-3000` lines (mac(hkdf_extract(*,*), lbl_hs1 | lbl_hs2), encaps_ct1024(*,*), encaps_ct768(*,*)); lDH and lBoth: `select x: bitstring; attacker(exp(g, dhsk(s, *x)))/-3000.`; lFSEph: `set redundancyElim = no.`. None changes a query, an oracle or a compromise.
+Machine: shared with other agents' Kani (cbmc) and cargo-mutants runs during all measurements (load average 30-100 at times); wall times are under that load.
+
+sha256 of every link model file (text, CRLF read as LF; = expect::PROVERIF_MODEL_SHA256):
+3deba154ed01ed93f48099849feee3ec76b0cbc2913914d2085510c4d8ad9c25  formal/link.pvl
+d9a0dcd5e4865ac06743d8868451befad050ae3a09f00c64e86caf0f907f6a27  formal/link/lClean.pv
+790619d8996d34fce1b7bca91516aae1e97780d24a4992e65d0d3cf810e6e8a1  formal/link/lDH.pv
+3789840b78dbd4d172bd973f814adde2cb43645ee7fe4b7fc9fcdc71598eb4e9  formal/link/lKEM.pv
+2d7e595ee9de6f2814ba8c79c631894de2eb72169f479f706d3ae97a812fc261  formal/link/lBoth.pv
+b24c958a0d84d18da80c160a4386e882f401e7c55b6fd4fe2dc1fac3e1560f42  formal/link/lSig.pv
+b23e7b75052b2e5d922ae12e00c3ee94f401e100501d720cc7596e61a9f9a04e  formal/link/lFS.pv
+97f48931b341df472e03bd61bc70cb85bd338405828d4973b5be4c55231a6e4c  formal/link/lFSDH.pv
+adfa9fa88b2dcf1b8bf80f1f06575da0f36821b5ba050ebd4e182ba9a82633f8  formal/link/lFSEph.pv
+5589100a569fc5bd1b89427ee2b201a6479a5b57ac81134dbcf5b9f70e2dcd83  formal/link/lQKey.pv
+
+Gate: env PATH=… cargo xtask step --strict proverif --models link --jobs 4 > target/tmp/pv-link-gate.log 2>&1
+Per file (each `proverif -lib <root>/formal/link.pvl <root>/formal/link/<s>.pv`, log target/proverif/link-<s>.log, cap 1800 s):
+
+=== formal/link/lClean.pv
+wall 83.3 s; 10 RESULT lines; 45 secrecy assumptions verified; gate: PASS
+RESULT not (event(CAccept(lClean,h((lbl_relayfp,vk(sigk(lClean,kRsig)))),kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) && event(CSend(lClean,sid_4,ctr,m)) && attacker(m)) is true.
+RESULT not (event(CAccept(lClean,h((lbl_relayfp,vk(sigk(lClean,kRsig)))),kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) && event(RSend(lClean,sid_4,ctr,m)) && attacker(m)) is true.
+RESULT not event(CStart(lClean,fp,kid_2,h0_3)) is false.
+RESULT not (event(RAccept(lClean,kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) && event(CAccept(lClean,fp,kid_2,h0_3,h1_3,sid_4,k1_3,k2_3))) is false.
+RESULT not event(RExec(lClean,sid_4,cs,cmd,vk(sigk(lClean,iQ(x_1))))) is false.
+RESULT inj-event(CAccept(lClean,h((lbl_relayfp,vk(sigk(lClean,kRsig)))),kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) ==> inj-event(RAccept(lClean,kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) is true.
+RESULT inj-event(RRecv(lClean,sid_4,ctr,m)) && event(CStart(lClean,fp,kid_2,h0_3)) && event(RAccept(lClean,kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) ==> inj-event(CSend(lClean,sid_4,ctr,m)) is true.
+RESULT inj-event(CRecv(lClean,sid_4,ctr,m)) ==> inj-event(RSend(lClean,sid_4,ctr,m)) is true.
+RESULT inj-event(RExec(lClean,sid_4,cs,cmd,vk(sigk(lClean,iQ(x_1))))) ==> inj-event(CSign(lClean,sid_4,cs,cmd,vk(sigk(lClean,iQ(x_1))))) is true.
+RESULT event(CAccept(lClean,fp,kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) ==> event(RInfo(lClean,kid_2,fp,h((lbl_akc,ak[])))) is true.
+last progress line: 800 rules inserted. Base: 504 rules (8 with conclusion selected). Queue: 16 rules.
+
+=== formal/link/lDH.pv
+wall 1801.3 s; 0 RESULT lines; 0 secrecy assumptions verified; gate: FAIL: formal/link/lDH.pv: timeout, killed after 1800 s; last progress line: `46600 rules inserted. Base: 28552 rules (8 with conclusion selected). Queue: 5814 rules.`; log /Users/c.carl/coding/claude_code/SecMPro/target/proverif/link-lDH.log
+RESULT not (event(CAccept(lDH,h((lbl_relayfp,vk(sigk(lDH,kRsig)))),kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) && event(CSend(lDH,sid_4,ctr,m)) && attacker(m)) is true.
+RESULT not (event(CAccept(lDH,h((lbl_relayfp,vk(sigk(lDH,kRsig)))),kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) && event(RSend(lDH,sid_4,ctr,m)) && attacker(m)) is true.
+RESULT not event(CStart(lDH,fp,kid_2,h0_3)) is false.
+RESULT not (event(RAccept(lDH,kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) && event(CAccept(lDH,fp,kid_2,h0_3,h1_3,sid_4,k1_3,k2_3))) is false.
+RESULT not event(RExec(lDH,sid_4,cs,cmd,vk(sigk(lDH,iQ(x_1))))) is false.
+last progress line: 46600 rules inserted. Base: 28552 rules (8 with conclusion selected). Queue: 5814 rules.
+
+=== formal/link/lKEM.pv
+wall 171.7 s; 8 RESULT lines; 27 secrecy assumptions verified; gate: PASS
+RESULT not (event(CAccept(lKEM,h((lbl_relayfp,vk(sigk(lKEM,kRsig)))),kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) && event(CSend(lKEM,sid_4,ctr,m)) && attacker(m)) is true.
+RESULT not (event(CAccept(lKEM,h((lbl_relayfp,vk(sigk(lKEM,kRsig)))),kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) && event(RSend(lKEM,sid_4,ctr,m)) && attacker(m)) is true.
+RESULT not event(CStart(lKEM,fp,kid_2,h0_3)) is false.
+RESULT not (event(RAccept(lKEM,kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) && event(CAccept(lKEM,fp,kid_2,h0_3,h1_3,sid_4,k1_3,k2_3))) is false.
+RESULT not event(RExec(lKEM,sid_4,cs,cmd,vk(sigk(lKEM,iQ(x_1))))) is false.
+RESULT inj-event(CAccept(lKEM,h((lbl_relayfp,vk(sigk(lKEM,kRsig)))),kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) ==> inj-event(RAccept(lKEM,kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) is true.
+RESULT inj-event(RRecv(lKEM,sid_4,ctr,m)) && event(CStart(lKEM,fp,kid_2,h0_3)) && event(RAccept(lKEM,kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) ==> inj-event(CSend(lKEM,sid_4,ctr,m)) is true.
+RESULT inj-event(CRecv(lKEM,sid_4,ctr,m)) ==> inj-event(RSend(lKEM,sid_4,ctr,m)) is true.
+last progress line: 400 rules inserted. Base: 68 rules (0 with conclusion selected). Queue: 48 rules.
+
+=== formal/link/lBoth.pv
+wall 1801.3 s; 0 RESULT lines; 0 secrecy assumptions verified; gate: FAIL: formal/link/lBoth.pv: timeout, killed after 1800 s; last progress line: `105800 rules inserted. Base: 18317 rules (10561 with conclusion selected). Queue: 68179 rules.`; log /Users/c.carl/coding/claude_code/SecMPro/target/proverif/link-lBoth.log
+last progress line: 105800 rules inserted. Base: 18317 rules (10561 with conclusion selected). Queue: 68179 rules.
+
+=== formal/link/lSig.pv
+wall 292.1 s; 4 RESULT lines; 16 secrecy assumptions verified; gate: PASS
+RESULT not event(CStart(lSig,fp,kid_2,h0_3)) is false.
+RESULT not (event(RAccept(lSig,kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) && event(CAccept(lSig,fp,kid_2,h0_3,h1_3,sid_4,k1_3,k2_3))) is false.
+RESULT not event(RExec(lSig,sid_4,cs,cmd,vk(sigk(lSig,iQ(x_1))))) is false.
+RESULT inj-event(CAccept(lSig,h((lbl_relayfp,vk(sigk(lSig,kRsig)))),kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) ==> inj-event(RAccept(lSig,kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) is false.
+RESULT (even event(CAccept(lSig,h((lbl_relayfp,vk(sigk(lSig,kRsig)))),kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) ==> event(RAccept(lSig,kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) is false.)
+last progress line: 2200 rules inserted. Base: 1194 rules (8 with conclusion selected). Queue: 64 rules.
+
+=== formal/link/lFS.pv
+wall 38.7 s; 5 RESULT lines; 15 secrecy assumptions verified; gate: PASS
+RESULT not (event(CAccept(lFS,h((lbl_relayfp,vk(sigk(lFS,kRsig)))),kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) && event(CSend(lFS,sid_4,ctr,m)) && attacker_p1(m)) is true.
+RESULT not (event(CAccept(lFS,h((lbl_relayfp,vk(sigk(lFS,kRsig)))),kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) && event(RSend(lFS,sid_4,ctr,m)) && attacker_p1(m)) is true.
+RESULT not event(CStart(lFS,fp,kid_2,h0_3)) is false.
+RESULT not (event(RAccept(lFS,kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) && event(CAccept(lFS,fp,kid_2,h0_3,h1_3,sid_4,k1_3,k2_3))) is false.
+RESULT not event(RExec(lFS,sid_4,cs,cmd,vk(sigk(lFS,iQ(x_1))))) is false.
+last progress line: 23200 rules inserted. Base: 7439 rules (467 with conclusion selected). Queue: 249 rules.
+
+=== formal/link/lFSDH.pv
+wall 30.1 s; 5 RESULT lines; 15 secrecy assumptions verified; gate: PASS
+RESULT not (event(CAccept(lFSDH,h((lbl_relayfp,vk(sigk(lFSDH,kRsig)))),kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) && event(CSend(lFSDH,sid_4,ctr,m)) && attacker_p1(m)) is true.
+RESULT not (event(CAccept(lFSDH,h((lbl_relayfp,vk(sigk(lFSDH,kRsig)))),kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) && event(RSend(lFSDH,sid_4,ctr,m)) && attacker_p1(m)) is true.
+RESULT not event(CStart(lFSDH,fp,kid_2,h0_3)) is false.
+RESULT not (event(RAccept(lFSDH,kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) && event(CAccept(lFSDH,fp,kid_2,h0_3,h1_3,sid_4,k1_3,k2_3))) is false.
+RESULT not event(RExec(lFSDH,sid_4,cs,cmd,vk(sigk(lFSDH,iQ(x_2))))) is false.
+last progress line: 24200 rules inserted. Base: 6956 rules (547 with conclusion selected). Queue: 52 rules.
+
+=== formal/link/lFSEph.pv
+wall 47.1 s; 5 RESULT lines; 17 secrecy assumptions verified; gate: PASS
+RESULT not (event(CAccept(lFSEph,h((lbl_relayfp,vk(sigk(lFSEph,kRsig)))),kid_4,h0_5,h1_5,sid_6,k1_5,k2_5)) && event(CSend(lFSEph,sid_6,ctr,m)) && attacker_p1(m)) is false.
+RESULT not (event(CAccept(lFSEph,h((lbl_relayfp,vk(sigk(lFSEph,kRsig)))),kid_4,h0_5,h1_5,sid_6,k1_5,k2_5)) && event(RSend(lFSEph,sid_6,ctr,m)) && attacker_p1(m)) is false.
+RESULT not event(CStart(lFSEph,fp,kid_4,h0_5)) is false.
+RESULT not (event(RAccept(lFSEph,kid_4,h0_5,h1_5,sid_6,k1_5,k2_5)) && event(CAccept(lFSEph,fp,kid_4,h0_5,h1_5,sid_6,k1_5,k2_5))) is false.
+RESULT not event(RExec(lFSEph,sid_6,cs,cmd,vk(sigk(lFSEph,iQ(x_1))))) is false.
+last progress line: 200 rules inserted. Base: 168 rules (0 with conclusion selected). Queue: 78 rules.
+
+=== formal/link/lQKey.pv
+wall 49.5 s; 4 RESULT lines; 16 secrecy assumptions verified; gate: PASS
+RESULT not event(CStart(lQKey,fp,kid_2,h0_3)) is false.
+RESULT not (event(RAccept(lQKey,kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) && event(CAccept(lQKey,fp,kid_2,h0_3,h1_3,sid_4,k1_3,k2_3))) is false.
+RESULT not event(RExec(lQKey,sid_4,cs,cmd,vk(sigk(lQKey,iQ(x_1))))) is false.
+RESULT inj-event(RExec(lQKey,sid_4,cs,cmd,vk(sigk(lQKey,iQ(x_1))))) ==> inj-event(CSign(lQKey,sid_4,cs,cmd,vk(sigk(lQKey,iQ(x_1))))) is false.
+RESULT (even event(RExec(lQKey,sid_4,cs,cmd,vk(sigk(lQKey,iQ(x_1))))) ==> event(CSign(lQKey,sid_4,cs,cmd,vk(sigk(lQKey,iQ(x_1))))) is false.)
+last progress line: 3400 rules inserted. Base: 199 rules (97 with conclusion selected). Queue: 9 rules.
+
+Gate output (verdict and summary lines):
+  === [10] proverif ===
+    ProVerif: 9 files, --models link, 4 parallel processes, timeout 1800 s per file
+  $ proverif -lib /Users/c.carl/coding/claude_code/SecMPro/formal/link.pvl /Users/c.carl/coding/claude_code/SecMPro/formal/link/lBoth.pv > /Users/c.carl/coding/claude_code/SecMPro/target/proverif/link-lBoth.log
+  $ proverif -lib /Users/c.carl/coding/claude_code/SecMPro/formal/link.pvl /Users/c.carl/coding/claude_code/SecMPro/formal/link/lClean.pv > /Users/c.carl/coding/claude_code/SecMPro/target/proverif/link-lClean.log
+  $ proverif -lib /Users/c.carl/coding/claude_code/SecMPro/formal/link.pvl /Users/c.carl/coding/claude_code/SecMPro/formal/link/lDH.pv > /Users/c.carl/coding/claude_code/SecMPro/target/proverif/link-lDH.log
+  $ proverif -lib /Users/c.carl/coding/claude_code/SecMPro/formal/link.pvl /Users/c.carl/coding/claude_code/SecMPro/formal/link/lFS.pv > /Users/c.carl/coding/claude_code/SecMPro/target/proverif/link-lFS.log
+    formal/link/lFS.pv: finished after 38.7 s
+  $ proverif -lib /Users/c.carl/coding/claude_code/SecMPro/formal/link.pvl /Users/c.carl/coding/claude_code/SecMPro/formal/link/lFSDH.pv > /Users/c.carl/coding/claude_code/SecMPro/target/proverif/link-lFSDH.log
+    formal/link/lFSDH.pv: finished after 30.1 s
+  $ proverif -lib /Users/c.carl/coding/claude_code/SecMPro/formal/link.pvl /Users/c.carl/coding/claude_code/SecMPro/formal/link/lFSEph.pv > /Users/c.carl/coding/claude_code/SecMPro/target/proverif/link-lFSEph.log
+    formal/link/lClean.pv: finished after 83.3 s
+  $ proverif -lib /Users/c.carl/coding/claude_code/SecMPro/formal/link.pvl /Users/c.carl/coding/claude_code/SecMPro/formal/link/lKEM.pv > /Users/c.carl/coding/claude_code/SecMPro/target/proverif/link-lKEM.log
+    formal/link/lFSEph.pv: finished after 47.1 s
+  $ proverif -lib /Users/c.carl/coding/claude_code/SecMPro/formal/link.pvl /Users/c.carl/coding/claude_code/SecMPro/formal/link/lQKey.pv > /Users/c.carl/coding/claude_code/SecMPro/target/proverif/link-lQKey.log
+    formal/link/lQKey.pv: finished after 49.5 s
+  $ proverif -lib /Users/c.carl/coding/claude_code/SecMPro/formal/link.pvl /Users/c.carl/coding/claude_code/SecMPro/formal/link/lSig.pv > /Users/c.carl/coding/claude_code/SecMPro/target/proverif/link-lSig.log
+    formal/link/lKEM.pv: finished after 171.7 s
+    formal/link/lSig.pv: finished after 292.1 s
+    formal/link/lDH.pv: FAILED after 1801.3 s
+    formal/link/lBoth.pv: FAILED after 1801.3 s
+    formal/link/lClean.pv: 10 RESULT lines as expected — L3 true ×2, L8 false ×3, L1 true ×1, L4 true ×2, L6 true ×1, L7 true ×1 (83.3 s)
+    formal/link/lFS.pv: 5 RESULT lines as expected — L5 true ×2, L8 false ×3 (38.7 s)
+    formal/link/lFSDH.pv: 5 RESULT lines as expected — L5a true ×2, L8 false ×3 (30.1 s)
+    formal/link/lFSEph.pv: 5 RESULT lines as expected — L5b false ×2, L8 false ×3 (47.1 s)
+    formal/link/lKEM.pv: 8 RESULT lines as expected — L3b true ×2, L8 false ×3, L1b true ×1, L4 true ×2 (171.7 s)
+    formal/link/lQKey.pv: 4 RESULT lines as expected — L8 false ×3, L6a false ×1 (49.5 s)
+    formal/link/lSig.pv: 4 RESULT lines as expected — L8 false ×3, L2 false ×1 (292.1 s)
+  ProVerif 2.05 gate: --models link, 4 parallel processes, timeout 1800 s per file
+  2d7e595ee9de6f2814ba8c79c631894de2eb72169f479f706d3ae97a812fc261  formal/link/lBoth.pv
+  d9a0dcd5e4865ac06743d8868451befad050ae3a09f00c64e86caf0f907f6a27  formal/link/lClean.pv
+  790619d8996d34fce1b7bca91516aae1e97780d24a4992e65d0d3cf810e6e8a1  formal/link/lDH.pv
+  b23e7b75052b2e5d922ae12e00c3ee94f401e100501d720cc7596e61a9f9a04e  formal/link/lFS.pv
+  97f48931b341df472e03bd61bc70cb85bd338405828d4973b5be4c55231a6e4c  formal/link/lFSDH.pv
+  adfa9fa88b2dcf1b8bf80f1f06575da0f36821b5ba050ebd4e182ba9a82633f8  formal/link/lFSEph.pv
+  3789840b78dbd4d172bd973f814adde2cb43645ee7fe4b7fc9fcdc71598eb4e9  formal/link/lKEM.pv
+  5589100a569fc5bd1b89427ee2b201a6479a5b57ac81134dbcf5b9f70e2dcd83  formal/link/lQKey.pv
+  b24c958a0d84d18da80c160a4386e882f401e7c55b6fd4fe2dc1fac3e1560f42  formal/link/lSig.pv
+  formal/link/lBoth.pv: 0 RESULT lines, 0 secrecy assumptions verified, wall 1801.3 s, FAIL: formal/link/lBoth.pv: timeout, killed after 1800 s; last progress line: `105800 rules inserted. Base: 18317 rules (10561 with conclusion selected). Queue: 68179 rules.`; log /Users/c.carl/coding/claude_code/SecMPro/target/proverif/link-lBoth.log
+  formal/link/lClean.pv: 10 RESULT lines, 45 secrecy assumptions verified, wall 83.3 s, PASS
+  formal/link/lDH.pv: 0 RESULT lines, 0 secrecy assumptions verified, wall 1801.3 s, FAIL: formal/link/lDH.pv: timeout, killed after 1800 s; last progress line: `46600 rules inserted. Base: 28552 rules (8 with conclusion selected). Queue: 5814 rules.`; log /Users/c.carl/coding/claude_code/SecMPro/target/proverif/link-lDH.log
+  formal/link/lFS.pv: 5 RESULT lines, 15 secrecy assumptions verified, wall 38.7 s, PASS
+  formal/link/lFSDH.pv: 5 RESULT lines, 15 secrecy assumptions verified, wall 30.1 s, PASS
+  formal/link/lFSEph.pv: 5 RESULT lines, 17 secrecy assumptions verified, wall 47.1 s, PASS
+  formal/link/lKEM.pv: 8 RESULT lines, 27 secrecy assumptions verified, wall 171.7 s, PASS
+  formal/link/lQKey.pv: 4 RESULT lines, 16 secrecy assumptions verified, wall 49.5 s, PASS
+  formal/link/lSig.pv: 4 RESULT lines, 16 secrecy assumptions verified, wall 292.1 s, PASS
+  FAIL [10] proverif: 2 of 9 ProVerif files failed: formal/link/lBoth.pv: timeout, killed after 1800 s; last progress line: `105800 rules inserted. Base: 18317 rules (10561 with conclusion selected). Queue: 68179 rules.`; log /Users/c.carl/coding/claude_code/SecMPro/target/proverif/link-lBoth.log; formal/link/lDH.pv: timeout, killed after 1800 s; last progress line: `46600 rules inserted. Base: 28552 rules (8 with conclusion selected). Queue: 5814 rules.`; log /Users/c.carl/coding/claude_code/SecMPro/target/proverif/link-lDH.log
+  | status | FAIL (1806 s) |
+  | line 1 | 2 of 9 ProVerif files failed: formal/link/lBoth.pv: timeout, killed after 1800 s |
+  | line 4 | formal/link/lDH.pv: timeout, killed after 1800 s |
+  ### ProVerif results (per file and CLAIMS ID)
+  | formal/link/lBoth.pv | L3c | no result ×2 | false ×2 | 1801.3 s | 2d7e595ee9de |
+  | formal/link/lBoth.pv | L8 | no result ×3 | false ×3 | 1801.3 s | 2d7e595ee9de |
+  | formal/link/lBoth.pv | L1c | no result ×1 | false ×1 | 1801.3 s | 2d7e595ee9de |
+  | formal/link/lClean.pv | L3 | true ×2 | true ×2 | 83.3 s | d9a0dcd5e486 |
+  | formal/link/lClean.pv | L8 | false ×3 | false ×3 | 83.3 s | d9a0dcd5e486 |
+  | formal/link/lClean.pv | L1 | true ×1 | true ×1 | 83.3 s | d9a0dcd5e486 |
+  | formal/link/lClean.pv | L4 | true ×2 | true ×2 | 83.3 s | d9a0dcd5e486 |
+  | formal/link/lClean.pv | L6 | true ×1 | true ×1 | 83.3 s | d9a0dcd5e486 |
+  | formal/link/lClean.pv | L7 | true ×1 | true ×1 | 83.3 s | d9a0dcd5e486 |
+  | formal/link/lDH.pv | L3a | no result ×2 | true ×2 | 1801.3 s | 790619d8996d |
+  | formal/link/lDH.pv | L8 | no result ×3 | false ×3 | 1801.3 s | 790619d8996d |
+  | formal/link/lDH.pv | L1a | no result ×1 | true ×1 | 1801.3 s | 790619d8996d |
+  | formal/link/lDH.pv | L4 | no result ×2 | true ×2 | 1801.3 s | 790619d8996d |
+  | formal/link/lFS.pv | L5 | true ×2 | true ×2 | 38.7 s | b23e7b75052b |
+  | formal/link/lFS.pv | L8 | false ×3 | false ×3 | 38.7 s | b23e7b75052b |
+  | formal/link/lFSDH.pv | L5a | true ×2 | true ×2 | 30.1 s | 97f48931b341 |
+  | formal/link/lFSDH.pv | L8 | false ×3 | false ×3 | 30.1 s | 97f48931b341 |
+  | formal/link/lFSEph.pv | L5b | false ×2 | false ×2 | 47.1 s | adfa9fa88b2d |
+  | formal/link/lFSEph.pv | L8 | false ×3 | false ×3 | 47.1 s | adfa9fa88b2d |
+  | formal/link/lKEM.pv | L3b | true ×2 | true ×2 | 171.7 s | 3789840b78db |
+  | formal/link/lKEM.pv | L8 | false ×3 | false ×3 | 171.7 s | 3789840b78db |
+  | formal/link/lKEM.pv | L1b | true ×1 | true ×1 | 171.7 s | 3789840b78db |
+  | formal/link/lKEM.pv | L4 | true ×2 | true ×2 | 171.7 s | 3789840b78db |
+  | formal/link/lQKey.pv | L8 | false ×3 | false ×3 | 49.5 s | 5589100a569f |
+  | formal/link/lQKey.pv | L6a | false ×1 | false ×1 | 49.5 s | 5589100a569f |
+  | formal/link/lSig.pv | L8 | false ×3 | false ×3 | 292.1 s | b24c958a0d84 |
+  | formal/link/lSig.pv | L2 | false ×1 | false ×1 | 292.1 s | b24c958a0d84 |
+  ### ProVerif models
+  | formal/link/lBoth.pv | sha256 2d7e595ee9de6f2814ba8c79c631894de2eb72169f479f706d3ae97a812fc261 |
+  | formal/link/lClean.pv | sha256 d9a0dcd5e4865ac06743d8868451befad050ae3a09f00c64e86caf0f907f6a27 |
+  | formal/link/lDH.pv | sha256 790619d8996d34fce1b7bca91516aae1e97780d24a4992e65d0d3cf810e6e8a1 |
+  | formal/link/lFS.pv | sha256 b23e7b75052b2e5d922ae12e00c3ee94f401e100501d720cc7596e61a9f9a04e |
+  | formal/link/lFSDH.pv | sha256 97f48931b341df472e03bd61bc70cb85bd338405828d4973b5be4c55231a6e4c |
+  | formal/link/lFSEph.pv | sha256 adfa9fa88b2dcf1b8bf80f1f06575da0f36821b5ba050ebd4e182ba9a82633f8 |
+  | formal/link/lKEM.pv | sha256 3789840b78dbd4d172bd973f814adde2cb43645ee7fe4b7fc9fcdc71598eb4e9 |
+  | formal/link/lQKey.pv | sha256 5589100a569fc5bd1b89427ee2b201a6479a5b57ac81134dbcf5b9f70e2dcd83 |
+  | formal/link/lSig.pv | sha256 b24c958a0d84d18da80c160a4386e882f401e7c55b6fd4fe2dc1fac3e1560f42 |
+  === step summary (host aarch64-apple-darwin, strict: true) ===
+    10 proverif        FAIL       1806s  2 of 9 ProVerif files failed: formal/link/lBoth.pv: timeout, killed after 1800 s; last progress line: `105800 rules inserted. Base: 18317 rules (10561 with conclusion selected). Queue: 68179 rules.`; log /Users/c.carl/coding/claude_code/SecMPro/target/proverif/link-lBoth.log; formal/link/lDH.pv: timeout, killed after 1800 s; last progress line: `46600 rules inserted. Base: 28552 rules (8 with conclusion selected). Queue: 5814 rules.`; log /Users/c.carl/coding/claude_code/SecMPro/target/proverif/link-lDH.log
+  xtask: error: step: 1 step(s) failed
+
+Development runs (same queries; earlier library/session texts differ only as recorded in target/tmp/pvlink-status.md):
+  r2: lClean rc=0 wall=62.3s n=10 results=true,true,false,false,false,true,true,true,true,true last=800 rules inserted. Base: 504 rules (8 with conclusion selected). 
+  r2: lKEM rc=0 wall=437.3s n=8 results=true,true,false,false,false,true,true,true last=400 rules inserted. Base: 68 rules (0 with conclusion selected). Queue: 48 rul
+  r2: lFS rc=0 wall=36.2s n=5 results=true,true,false,false,false last=23200 rules inserted. Base: 7436 rules (465 with conclusion selected). Queue: 245 rules.
+  r2: lFSDH rc=0 wall=62.3s n=5 results=true,true,false,false,false last=24200 rules inserted. Base: 6922 rules (545 with conclusion selected). Queue: 24 rules.
+  r2: lSig rc=0 wall=804.4s n=5 results=false,false,false,false,false last=2200 rules inserted. Base: 1194 rules (8 with conclusion selected). Queue: 64 rules.
+  r2: lQKey rc=0 wall=75.4s n=5 results=false,false,false,false,false last=3400 rules inserted. Base: 199 rules (97 with conclusion selected). Queue: 9 rules.
+  r2: lDH rc=-15 wall=1250.0s n=0 results= last=22200 rules inserted. Base: 9420 rules (878 with conclusion selected). Queue: 66964 rules.
+  r2: lBoth rc=-15 wall=1250.3s n=0 results= last=28000 rules inserted. Base: 6835 rules (1071 with conclusion selected). Queue: 69104 rules.
+  r8: lFSEph-S3 rc=0 wall=55.3s n=5 results=false,false,false,false,false last=200 rules inserted. Base: 168 rules (0 with conclusion selected). Queue: 78 rules.

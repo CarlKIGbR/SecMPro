@@ -1,0 +1,30 @@
+# M5 Phase B — local fuzz smoke of the two relay targets (TEST-SPEC-M5 (f) FZ-07, FZ-08)
+# tree: HEAD 6665c78 (`git rev-parse --short HEAD`) plus the uncommitted Phase B working tree (the targets, the
+#       fixture fuzz/common/relay_fixture.rs, secmp-relay with feature kat as a path dependency of fuzz/Cargo.toml)
+# toolchain: cargo +nightly-2026-09-21 fuzz (cargo-fuzz 0.13.2), M1 Pro, macOS arm64; ASan build (cargo-fuzz default)
+# commands (the gate's form: scratch corpus first, so libFuzzer writes new inputs only under target/; the tracked
+# corpus fuzz/corpus/<t>/ read-only; -max_len from expect::FUZZ_MAX_LEN, -timeout 60):
+#   env PATH=... cargo +nightly-2026-09-21 fuzz run --fuzz-dir fuzz relay_executor target/fuzz-corpus/relay_executor \
+#       fuzz/corpus/relay_executor -- -max_total_time=120 -max_len=4322 -timeout=60
+#   env PATH=... cargo +nightly-2026-09-21 fuzz run --fuzz-dir fuzz relay_link_session \
+#       target/fuzz-corpus/relay_link_session fuzz/corpus/relay_link_session -- -max_total_time=120 -max_len=69426 \
+#       -timeout=60
+# tracked seeds (M4 C-6): fuzz/corpus/relay_executor/ 3 files (every command; 131 SENDs past the 128-cell capacity;
+#   the rate limit), fuzz/corpus/relay_link_session/ 3 files (LINK_PUT + two CONTs in two writes, then a teardown;
+#   a PING while a LINK_PUT is pending; raw plaintexts and a mutated one); unchanged by the runs.
+# result: no crash, no artifact (fuzz/artifacts/relay_executor/ and fuzz/artifacts/relay_link_session/ empty)
+
+## relay_executor (FZ-07) — exit 0
+#4	INITED cov: 5493 ft: 8753 corp: 3/637b exec/s: 0 rss: 53Mb
+#128	pulse  cov: 5650 ft: 16518 corp: 83/15288b lim: 532 exec/s: 7 rss: 100Mb
+#256	pulse  cov: 5677 ft: 17801 corp: 164/28Kb lim: 532 exec/s: 7 rss: 121Mb
+#512	pulse  cov: 5706 ft: 19645 corp: 257/48Kb lim: 532 exec/s: 7 rss: 132Mb
+#752	DONE   cov: 5727 ft: 20652 corp: 338/68Kb lim: 532 exec/s: 6 rss: 196Mb
+Done 752 runs in 122 second(s)
+# (each input runs a new relay, a SecMP-LINK handshake and up to 160 honestly signed commands: about 150 ms per
+#  input in the ASan build, so 120 s give some 750 inputs)
+
+## relay_link_session (FZ-08) — exit 0
+#4	INITED cov: 4965 ft: 7386 corp: 3/85b exec/s: 0 rss: 46Mb
+#7465	DONE   cov: 5280 ft: 12238 corp: 221/6417b lim: 44 exec/s: 61 rss: 127Mb
+Done 7465 runs in 121 second(s)

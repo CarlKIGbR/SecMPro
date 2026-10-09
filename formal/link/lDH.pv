@@ -1,0 +1,61 @@
+(* SPDX-License-Identifier: AGPL-3.0-or-later *)
+(* formal/link/lDH.pv — session lDH of CLAIMS §LINK, one file per session (OPEN-M5-16 A, LO-1) over the
+   library formal/link.pvl (model, abstractions, devices: its header). Run:
+   proverif -lib formal/link.pvl formal/link/lDH.pv
+
+   Row (formal/link.pvl 3.): DHO as a reveal (LO-5): each honest X25519 exponent in phase 0; relay_kem keeps ss1 secret.
+   Queries in the order of their RESULT lines (CLAIMS §LINK gate rule):
+     L3a · L3a · L8 · L8 · L8
+     L1a
+     L4 · L4
+   — 8 RESULT lines.
+*)
+
+const lDH: tagt.
+
+(* Secrecy assumptions (formal/link.pvl 7.): the secrets this session never reveals, and those it reveals only
+   in phase 1 ("phase 0") *)
+not x: bitstring; attacker(kemsk(lDH, iC(x))).
+not x: bitstring; attacker(kemr(lDH, x)).
+not x: bitstring; attacker(sigk(lDH, iQ(x))).
+not attacker(kemsk(lDH, kRkem)).
+not attacker(sigk(lDH, kRsig)).
+
+(* Queries (CLAIMS §LINK), one declaration per begin event (formal/link.pvl 7.); R's pinned fingerprint is
+   h((lbl_relayfp, vk(sigk(s, kRsig)))), an honest queue key vk(sigk(s, iQ(x))). *)
+
+query sid: bitstring, ctr: bitstring, m: bitstring, kid: bitstring, h0: bitstring, h1: bitstring, k1: key,
+      k2: key, fp: bitstring, cs: bitstring, cmd: bitstring, x: bitstring;
+      (* L3a (c2r): CSend payloads of the links whose CAccept names R's pinned fp *)
+      event(CAccept(lDH, h((lbl_relayfp, vk(sigk(lDH, kRsig)))), kid, h0, h1, sid, k1, k2))
+        && event(CSend(lDH, sid, ctr, m)) && attacker(m);
+      (* L3a (r2c): RSend payloads of the links whose CAccept names R's pinned fp *)
+      event(CAccept(lDH, h((lbl_relayfp, vk(sigk(lDH, kRsig)))), kid, h0, h1, sid, k1, k2))
+        && event(RSend(lDH, sid, ctr, m)) && attacker(m);
+      (* L8: reachability — CStart *)
+      event(CStart(lDH, fp, kid, h0));
+      (* L8: the honest pair completes (RAccept and CAccept with equal arguments) *)
+      event(RAccept(lDH, kid, h0, h1, sid, k1, k2)) && event(CAccept(lDH, fp, kid, h0, h1, sid, k1, k2));
+      (* L8: R executes a command of an honest queue key *)
+      event(RExec(lDH, sid, cs, cmd, vk(sigk(lDH, iQ(x))))).
+
+query sid: bitstring, ctr: bitstring, m: bitstring, kid: bitstring, h0: bitstring, h1: bitstring, k1: key,
+      k2: key, fp: bitstring, cs: bitstring, cmd: bitstring, x: bitstring;
+      (* L1a: relay authentication with the classical break *)
+      inj-event(CAccept(lDH, h((lbl_relayfp, vk(sigk(lDH, kRsig)))), kid, h0, h1, sid, k1, k2))
+        ==> inj-event(RAccept(lDH, kid, h0, h1, sid, k1, k2)).
+
+query sid: bitstring, ctr: bitstring, m: bitstring, kid: bitstring, h0: bitstring, h1: bitstring, k1: key,
+      k2: key, fp: bitstring, cs: bitstring, cmd: bitstring, x: bitstring;
+      (* L4 (c2r): R's frames of a link whose HS1 the honest C produced (CStart h0 = RAccept h0) *)
+      event(CStart(lDH, fp, kid, h0)) && event(RAccept(lDH, kid, h0, h1, sid, k1, k2))
+        && inj-event(RRecv(lDH, sid, ctr, m)) ==> inj-event(CSend(lDH, sid, ctr, m));
+      (* L4 (r2c) *)
+      inj-event(CRecv(lDH, sid, ctr, m)) ==> inj-event(RSend(lDH, sid, ctr, m)).
+
+(* The break as a reveal (formal/link.pvl 4., LO-5): RelayR and ClientR output the honest X25519
+   exponents right after drawing them, the last process relay_dh; phase 0 *)
+process
+    RelayR(lDH, false)
+  | ! ClientR(lDH, false)
+  | out(c, dhsk(lDH, kRdh))

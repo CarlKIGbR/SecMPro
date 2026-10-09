@@ -25,6 +25,9 @@ pub(crate) struct Ctx {
     pub(crate) root: PathBuf,
     pub(crate) ws: Workspace,
     pub(crate) host: String,
+    /// The ids of every step of this invocation, delegated ones included (M5: the `proverif` step leaves the
+    /// SecMP-LINK models to the step `proverif-link` when the invocation has it).
+    pub(crate) steps: Vec<&'static str>,
 }
 
 type StepFn = fn(&Ctx) -> Result<Outcome>;
@@ -137,6 +140,13 @@ const FULL_EXTRA: &[Step] = &[
         id: "proverif",
         run: gates::proverif,
     },
+    // M5 (BRIEF_M5-B §1, OPEN-M5-16 A): the SecMP-LINK models as a step of their own, so that `linux-full` can delegate
+    // them to the job `proverif-link` (`--delegated proverif-link`); `proverif` leaves them to this step
+    Step {
+        num: "10",
+        id: gates::PROVERIF_LINK_STEP,
+        run: gates::proverif_link,
+    },
     Step {
         num: "11",
         id: "windows-cross",
@@ -246,17 +256,24 @@ fn all_steps() -> impl Iterator<Item = &'static Step> {
     FAST.iter().chain(FULL_EXTRA.iter())
 }
 
-fn execute(steps: &[&Step], opts: &Options, label: &str) -> Result<()> {
-    for d in &opts.delegated {
+/// Every `--delegated` id names one of `steps` (else the invocation is refused).
+fn check_delegated(steps: &[&Step], delegated: &[String], label: &str) -> Result<()> {
+    for d in delegated {
         if !steps.iter().any(|s| s.id == d) {
             bail!("--delegated {d}: no such step in {label}");
         }
     }
+    Ok(())
+}
+
+fn execute(steps: &[&Step], opts: &Options, label: &str) -> Result<()> {
+    check_delegated(steps, &opts.delegated, label)?;
     let ws = Workspace::load()?;
     let ctx = Ctx {
         root: ws.root.clone(),
         ws,
         host: crate::sbom::host_triple()?,
+        steps: steps.iter().map(|s| s.id).collect(),
     };
     let mut rows = Vec::new();
     let mut failed = 0_usize;
@@ -394,6 +411,40 @@ mod tests {
         assert!(parse(&["fmt".into()], false).is_err());
         assert_eq!(parse(&["fmt".into(), "clippy".into()], true)?.ids.len(), 2);
         assert!(parse(&["--delegated".into()], false).is_err());
+        Ok(())
+    }
+
+    /// M5 (BRIEF_M5-B §1): `ci-full` has the step `proverif-link` right after `proverif`, so the pinned `linux-full`
+    /// line's `--delegated proverif-link` is accepted (and every other delegation of that line); `ci-fast` has no such
+    /// step and refuses it, as does any id that is no step.
+    #[test]
+    fn ci_full_accepts_the_proverif_link_delegation() -> Result<()> {
+        let full: Vec<&Step> = all_steps().collect();
+        let ids: Vec<&str> = full.iter().map(|s| s.id).collect();
+        let at = ids.iter().position(|i| *i == "proverif");
+        assert_eq!(
+            at.and_then(|i| ids.get(i.saturating_add(1))).copied(),
+            Some(gates::PROVERIF_LINK_STEP)
+        );
+        let line = crate::expect::REQUIRED_GATE_RUNS
+            .iter()
+            .find(|(j, _)| *j == "linux-full")
+            .and_then(|(_, l)| l.first())
+            .copied()
+            .unwrap_or_default();
+        let args: Vec<String> = line
+            .split_whitespace()
+            .skip(3)
+            .map(str::to_owned)
+            .filter(|a| a != "--models" && a != "tr")
+            .collect();
+        let o = parse(&args, false)?;
+        assert!(o.strict);
+        assert!(o.delegated.iter().any(|d| d == gates::PROVERIF_LINK_STEP));
+        check_delegated(&full, &o.delegated, "ci-full")?;
+        let fast: Vec<&Step> = FAST.iter().collect();
+        assert!(check_delegated(&fast, &["proverif-link".to_owned()], "ci-fast").is_err());
+        assert!(check_delegated(&full, &["proverif-tr".to_owned()], "ci-full").is_err());
         Ok(())
     }
 }

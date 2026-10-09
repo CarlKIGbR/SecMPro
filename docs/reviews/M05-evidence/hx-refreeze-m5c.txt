@@ -1,0 +1,33 @@
+# M5-C hx re-freeze checks (head fb2d651)
+
+$ shasum -a 256 target/fable/m5/ref/vectors/hx.json vectors/ref/hx.json vectors/hx.json
+2bf05e699a4b980ff84c0d291291705a8bc409de2fcb365a72e95a43057a0e8d  target/fable/m5/ref/vectors/hx.json
+2bf05e699a4b980ff84c0d291291705a8bc409de2fcb365a72e95a43057a0e8d  vectors/ref/hx.json
+2bf05e699a4b980ff84c0d291291705a8bc409de2fcb365a72e95a43057a0e8d  vectors/hx.json
+(exit 0)
+
+$ stat -f '%z %N' target/fable/m5/ref/vectors/hx.json vectors/ref/hx.json vectors/hx.json
+1432784 target/fable/m5/ref/vectors/hx.json
+1432784 vectors/ref/hx.json
+1432784 vectors/hx.json
+(exit 0)
+
+$ diff vectors/SCHEMA.md target/fable/m5/ref/SCHEMA.md
+(exit 0)
+
+$ cmp vectors/SCHEMA-4.10-hx.md target/fable/m5/ref/SCHEMA-4.10-hx.md
+(exit 0)
+
+$ shasum -a 256 vectors/link.json vectors/ref/link.json
+dd77bb7c96d298f9cc188d4eadbd950605ccca2a250169708cdc573a73264c77  vectors/link.json
+dd77bb7c96d298f9cc188d4eadbd950605ccca2a250169708cdc573a73264c77  vectors/ref/link.json
+(exit 0)
+
+$ git diff --stat b370ffc HEAD -- vectors
+ vectors/SCHEMA-4.10-hx.md | 75 +++++++++++++++++++++++++++++++++++++++--------
+ vectors/SCHEMA.md         |  6 ++--
+ vectors/hx.json           |  2 +-
+ vectors/ref/hx.json       |  2 +-
+ 4 files changed, 69 insertions(+), 16 deletions(-)
+(exit 0)
+

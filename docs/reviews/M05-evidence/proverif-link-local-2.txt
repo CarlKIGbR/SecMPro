@@ -1,0 +1,167 @@
+SecMP-LINK ProVerif models — local evidence 2 (M5 Phase B, WEISUNG M5-B-2; PV-01, X-04, X-05; OPEN-M5-16 A)
+Gate result: PASS — 9 of 9 files, every RESULT line as expected (expect::PROVERIF_EXPECTED_LINK, CLAIMS §LINK gate rule); no "cannot be proved"; no file over the 1800 s cap; no LO-7 split (lDH 59.0 s).
+ProVerif 2.05 (~/.local/bin/proverif), macOS arm64 (this Mac). Models as committed in 5d7d45b (unchanged at HEAD 0ca55bb17cce6a97533f6b8e5744f64cbf363019).
+Change since evidence 1 (docs/reviews/M05-evidence/proverif-link-local.txt, models at d4eef33): the reviewer decisions LO-5 and LO-6 (CLAIMS §LINK "Reviewer decisions (2026-10-08)", formal/link.pvl 4.) — in lDH and lBoth dh_break is replaced by phase-0 outputs of every honest X25519 exponent (relay_dh from the session process; e_c, the HybridKEM-1024 ephemeral and e_r right after their `new`, macros CLinkR/CTailR/RConnR), in lBoth kem_break1024/768 by outputs of the encapsulation randomness of both stages; the dhsk assumptions of both files, lBoth's kemr assumption and the lazy-DH weight `select x: bitstring; attacker(exp(g, dhsk(s, *x)))/-3000.` are removed. lKEM and the other six sessions use the unchanged macros.
+Devices (formal/link.pvl header 7.; session files): names new n[] with R's e_r/coins indexed by the HS1 (er[ec, ekc, pke1, ctkem]) and R's cells by sid; the RevealEph link's ephemerals indexed by iD(e); per-session secrecy assumptions; four `select …/-3000` lines (mac(hkdf_extract(*,*), lbl_hs1 | lbl_hs2), encaps_ct1024(*,*), encaps_ct768(*,*)); lFSEph: `set redundancyElim = no.`. None changes a query, an oracle or a compromise.
+Machine: one ProVerif process at a time (--jobs 1, lBoth, lClean, lDH each alone); no cargo, Kani, cargo-mutants or other ProVerif process of this session ran during the gate; the Mac was not idle — load average sampled at 54.9 (18:21), 72.2 (18:23), 49.2 (18:31), 49.6 (18:32), 48.2 (18:35), 40.7 (18:37 CEST) from system processes outside the session (Spotlight workers). Wall times are under that load.
+
+sha256 of every link model file (text, CRLF read as LF; = expect::PROVERIF_MODEL_SHA256):
+2b4f9531563dd41ae3dcb92279dbacc275cf5aecf4b6779110f7882e8c8fd562  formal/link.pvl
+d9a0dcd5e4865ac06743d8868451befad050ae3a09f00c64e86caf0f907f6a27  formal/link/lClean.pv
+f43257d189694ccd18e204ef8798de6d262001f2e25e32d62e61ed0096b439a7  formal/link/lDH.pv
+3789840b78dbd4d172bd973f814adde2cb43645ee7fe4b7fc9fcdc71598eb4e9  formal/link/lKEM.pv
+d673db6b81c6d690b01076980b3d086bd081e1c47579545c1639051ecc26cf61  formal/link/lBoth.pv
+b24c958a0d84d18da80c160a4386e882f401e7c55b6fd4fe2dc1fac3e1560f42  formal/link/lSig.pv
+b23e7b75052b2e5d922ae12e00c3ee94f401e100501d720cc7596e61a9f9a04e  formal/link/lFS.pv
+97f48931b341df472e03bd61bc70cb85bd338405828d4973b5be4c55231a6e4c  formal/link/lFSDH.pv
+adfa9fa88b2dcf1b8bf80f1f06575da0f36821b5ba050ebd4e182ba9a82633f8  formal/link/lFSEph.pv
+5589100a569fc5bd1b89427ee2b201a6479a5b57ac81134dbcf5b9f70e2dcd83  formal/link/lQKey.pv
+
+The seven untouched sessions (WEISUNG M5-B-2 "other files byte-identical"):
+  session files: byte-identical (sha256 unchanged, as above and in evidence 1).
+  ProVerif's expanded initial process (stdout from "Process 0" to the first query, target/tmp/pvproc.py) with the library before (git show c3a684b:formal/link.pvl) and after:
+    lClean  8aa353bf79e20797  8aa353bf79e20797  identical (190 lines)
+    lKEM    27ae11ba95726a9e  27ae11ba95726a9e  identical (186 lines)
+    lSig    862c73f86aa60e2b  862c73f86aa60e2b  identical (188 lines)
+    lFS     277928767afd4870  277928767afd4870  identical (192 lines)
+    lFSDH   6ecc113c62f15fd8  6ecc113c62f15fd8  identical (197 lines)
+    lFSEph  dc0c096c9af52318  dc0c096c9af52318  identical (321 lines)
+    lQKey   3321123f52d1c7b9  3321123f52d1c7b9  identical (187 lines)
+  RESULT lines, evidence 1 against this run: `diff -r target/tmp/res_old target/tmp/res_new` (one file per session, its lines starting with RESULT) — exit status 0, output empty:
+    lClean  10 lines starting with RESULT, identical text and verdicts
+    lKEM    8 lines starting with RESULT, identical text and verdicts
+    lSig    5 lines starting with RESULT, identical text and verdicts
+    lFS     5 lines starting with RESULT, identical text and verdicts
+    lFSDH   5 lines starting with RESULT, identical text and verdicts
+    lFSEph  5 lines starting with RESULT, identical text and verdicts
+    lQKey   5 lines starting with RESULT, identical text and verdicts
+
+Trace summaries of the false lines of lDH and lBoth (target/proverif/link-<s>.log, "A trace has been found." for each):
+  lDH L8 CStart: honest run — C reads R's RELAYINFO, draws (and reveals) e_c and the HybridKEM-1024 ephemeral, CStart.
+  lDH L8 RAccept && CAccept: honest handshake — R answers C's HS1 (reveals e_r), C verifies mac2.
+  lDH L8 RExec: honest handshake, C's QUEUE_NEW reaches R, R executes it.
+  lBoth L3c (c2r): honest handshake; the attacker computes ss1 (revealed relay_dh and HybridKEM-1024 ephemeral exponent, revealed coins r1) and ss2 (revealed e_r, revealed coins r2), derives k_c2r and opens C's FETCH frame (counter 1).
+  lBoth L3c (r2c): honest handshake; with the keys computed from the reveals the attacker seals its own QUEUE_NEW (its own queue key) under k_c2r on the honest link, R executes it and its OK_QUEUE_NEW (RSend) is opened under k_r2c; C accepts the HS2.
+  lBoth L8 CStart: honest run up to C's HS1 (as lDH).
+  lBoth L8 RAccept && CAccept: honest handshake (as lDH; R also reveals its coins r2).
+  lBoth L8 RExec: honest handshake, C's QUEUE_NEW executed by R.
+  lBoth L1c: R never receives the HS1; the attacker computes ss1 from the revealed exponents and coins r1, then answers HS2 itself with its own e_r and its own ML-KEM-768 encapsulation to ek_c, computes ck2 and mac2: CAccept without RAccept (also the non-injective line).
+
+Gate: env PATH=… cargo xtask step --strict proverif --models link --jobs 1 > target/tmp/pv-link-gate-2.log 2>&1 — PASS, 1067.6 s of ProVerif wall time over the nine files
+Per file (each `proverif -lib <root>/formal/link.pvl <root>/formal/link/<s>.pv`, log target/proverif/link-<s>.log, cap 1800 s):
+
+=== formal/link/lClean.pv
+wall 38.7 s; 10 RESULT lines; 45 secrecy assumptions verified; gate: PASS
+RESULT not (event(CAccept(lClean,h((lbl_relayfp,vk(sigk(lClean,kRsig)))),kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) && event(CSend(lClean,sid_4,ctr,m)) && attacker(m)) is true.
+RESULT not (event(CAccept(lClean,h((lbl_relayfp,vk(sigk(lClean,kRsig)))),kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) && event(RSend(lClean,sid_4,ctr,m)) && attacker(m)) is true.
+RESULT not event(CStart(lClean,fp,kid_2,h0_3)) is false.
+RESULT not (event(RAccept(lClean,kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) && event(CAccept(lClean,fp,kid_2,h0_3,h1_3,sid_4,k1_3,k2_3))) is false.
+RESULT not event(RExec(lClean,sid_4,cs,cmd,vk(sigk(lClean,iQ(x_1))))) is false.
+RESULT inj-event(CAccept(lClean,h((lbl_relayfp,vk(sigk(lClean,kRsig)))),kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) ==> inj-event(RAccept(lClean,kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) is true.
+RESULT inj-event(RRecv(lClean,sid_4,ctr,m)) && event(CStart(lClean,fp,kid_2,h0_3)) && event(RAccept(lClean,kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) ==> inj-event(CSend(lClean,sid_4,ctr,m)) is true.
+RESULT inj-event(CRecv(lClean,sid_4,ctr,m)) ==> inj-event(RSend(lClean,sid_4,ctr,m)) is true.
+RESULT inj-event(RExec(lClean,sid_4,cs,cmd,vk(sigk(lClean,iQ(x_1))))) ==> inj-event(CSign(lClean,sid_4,cs,cmd,vk(sigk(lClean,iQ(x_1))))) is true.
+RESULT event(CAccept(lClean,fp,kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) ==> event(RInfo(lClean,kid_2,fp,h((lbl_akc,ak[])))) is true.
+
+=== formal/link/lDH.pv
+wall 59.0 s; 8 RESULT lines; 15 secrecy assumptions verified; gate: PASS
+RESULT not (event(CAccept(lDH,h((lbl_relayfp,vk(sigk(lDH,kRsig)))),kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) && event(CSend(lDH,sid_4,ctr,m)) && attacker(m)) is true.
+RESULT not (event(CAccept(lDH,h((lbl_relayfp,vk(sigk(lDH,kRsig)))),kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) && event(RSend(lDH,sid_4,ctr,m)) && attacker(m)) is true.
+RESULT not event(CStart(lDH,fp,kid_2,h0_3)) is false.
+RESULT not (event(RAccept(lDH,kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) && event(CAccept(lDH,fp,kid_2,h0_3,h1_3,sid_4,k1_3,k2_3))) is false.
+RESULT not event(RExec(lDH,sid_4,cs,cmd,vk(sigk(lDH,iQ(x_1))))) is false.
+RESULT inj-event(CAccept(lDH,h((lbl_relayfp,vk(sigk(lDH,kRsig)))),kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) ==> inj-event(RAccept(lDH,kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) is true.
+RESULT inj-event(RRecv(lDH,sid_4,ctr,m)) && event(CStart(lDH,fp,kid_2,h0_3)) && event(RAccept(lDH,kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) ==> inj-event(CSend(lDH,sid_4,ctr,m)) is true.
+RESULT inj-event(CRecv(lDH,sid_4,ctr,m)) ==> inj-event(RSend(lDH,sid_4,ctr,m)) is true.
+
+=== formal/link/lKEM.pv
+wall 95.5 s; 8 RESULT lines; 27 secrecy assumptions verified; gate: PASS
+RESULT not (event(CAccept(lKEM,h((lbl_relayfp,vk(sigk(lKEM,kRsig)))),kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) && event(CSend(lKEM,sid_4,ctr,m)) && attacker(m)) is true.
+RESULT not (event(CAccept(lKEM,h((lbl_relayfp,vk(sigk(lKEM,kRsig)))),kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) && event(RSend(lKEM,sid_4,ctr,m)) && attacker(m)) is true.
+RESULT not event(CStart(lKEM,fp,kid_2,h0_3)) is false.
+RESULT not (event(RAccept(lKEM,kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) && event(CAccept(lKEM,fp,kid_2,h0_3,h1_3,sid_4,k1_3,k2_3))) is false.
+RESULT not event(RExec(lKEM,sid_4,cs,cmd,vk(sigk(lKEM,iQ(x_1))))) is false.
+RESULT inj-event(CAccept(lKEM,h((lbl_relayfp,vk(sigk(lKEM,kRsig)))),kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) ==> inj-event(RAccept(lKEM,kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) is true.
+RESULT inj-event(RRecv(lKEM,sid_4,ctr,m)) && event(CStart(lKEM,fp,kid_2,h0_3)) && event(RAccept(lKEM,kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) ==> inj-event(CSend(lKEM,sid_4,ctr,m)) is true.
+RESULT inj-event(CRecv(lKEM,sid_4,ctr,m)) ==> inj-event(RSend(lKEM,sid_4,ctr,m)) is true.
+
+=== formal/link/lBoth.pv
+wall 655.2 s; 6 RESULT lines; 8 secrecy assumptions verified; gate: PASS
+RESULT not (event(CAccept(lBoth,h((lbl_relayfp,vk(sigk(lBoth,kRsig)))),kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) && event(CSend(lBoth,sid_4,ctr,m)) && attacker(m)) is false.
+RESULT not (event(CAccept(lBoth,h((lbl_relayfp,vk(sigk(lBoth,kRsig)))),kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) && event(RSend(lBoth,sid_4,ctr,m)) && attacker(m)) is false.
+RESULT not event(CStart(lBoth,fp,kid_2,h0_3)) is false.
+RESULT not (event(RAccept(lBoth,kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) && event(CAccept(lBoth,fp,kid_2,h0_3,h1_3,sid_4,k1_3,k2_3))) is false.
+RESULT not event(RExec(lBoth,sid_4,cs,cmd,vk(sigk(lBoth,iQ(x_1))))) is false.
+RESULT inj-event(CAccept(lBoth,h((lbl_relayfp,vk(sigk(lBoth,kRsig)))),kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) ==> inj-event(RAccept(lBoth,kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) is false.
+RESULT (even event(CAccept(lBoth,h((lbl_relayfp,vk(sigk(lBoth,kRsig)))),kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) ==> event(RAccept(lBoth,kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) is false.)
+
+=== formal/link/lSig.pv
+wall 138.9 s; 4 RESULT lines; 16 secrecy assumptions verified; gate: PASS
+RESULT not event(CStart(lSig,fp,kid_2,h0_3)) is false.
+RESULT not (event(RAccept(lSig,kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) && event(CAccept(lSig,fp,kid_2,h0_3,h1_3,sid_4,k1_3,k2_3))) is false.
+RESULT not event(RExec(lSig,sid_4,cs,cmd,vk(sigk(lSig,iQ(x_1))))) is false.
+RESULT inj-event(CAccept(lSig,h((lbl_relayfp,vk(sigk(lSig,kRsig)))),kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) ==> inj-event(RAccept(lSig,kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) is false.
+RESULT (even event(CAccept(lSig,h((lbl_relayfp,vk(sigk(lSig,kRsig)))),kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) ==> event(RAccept(lSig,kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) is false.)
+
+=== formal/link/lFS.pv
+wall 15.7 s; 5 RESULT lines; 15 secrecy assumptions verified; gate: PASS
+RESULT not (event(CAccept(lFS,h((lbl_relayfp,vk(sigk(lFS,kRsig)))),kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) && event(CSend(lFS,sid_4,ctr,m)) && attacker_p1(m)) is true.
+RESULT not (event(CAccept(lFS,h((lbl_relayfp,vk(sigk(lFS,kRsig)))),kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) && event(RSend(lFS,sid_4,ctr,m)) && attacker_p1(m)) is true.
+RESULT not event(CStart(lFS,fp,kid_2,h0_3)) is false.
+RESULT not (event(RAccept(lFS,kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) && event(CAccept(lFS,fp,kid_2,h0_3,h1_3,sid_4,k1_3,k2_3))) is false.
+RESULT not event(RExec(lFS,sid_4,cs,cmd,vk(sigk(lFS,iQ(x_1))))) is false.
+
+=== formal/link/lFSDH.pv
+wall 16.3 s; 5 RESULT lines; 15 secrecy assumptions verified; gate: PASS
+RESULT not (event(CAccept(lFSDH,h((lbl_relayfp,vk(sigk(lFSDH,kRsig)))),kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) && event(CSend(lFSDH,sid_4,ctr,m)) && attacker_p1(m)) is true.
+RESULT not (event(CAccept(lFSDH,h((lbl_relayfp,vk(sigk(lFSDH,kRsig)))),kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) && event(RSend(lFSDH,sid_4,ctr,m)) && attacker_p1(m)) is true.
+RESULT not event(CStart(lFSDH,fp,kid_2,h0_3)) is false.
+RESULT not (event(RAccept(lFSDH,kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) && event(CAccept(lFSDH,fp,kid_2,h0_3,h1_3,sid_4,k1_3,k2_3))) is false.
+RESULT not event(RExec(lFSDH,sid_4,cs,cmd,vk(sigk(lFSDH,iQ(x_2))))) is false.
+
+=== formal/link/lFSEph.pv
+wall 23.5 s; 5 RESULT lines; 17 secrecy assumptions verified; gate: PASS
+RESULT not (event(CAccept(lFSEph,h((lbl_relayfp,vk(sigk(lFSEph,kRsig)))),kid_4,h0_5,h1_5,sid_6,k1_5,k2_5)) && event(CSend(lFSEph,sid_6,ctr,m)) && attacker_p1(m)) is false.
+RESULT not (event(CAccept(lFSEph,h((lbl_relayfp,vk(sigk(lFSEph,kRsig)))),kid_4,h0_5,h1_5,sid_6,k1_5,k2_5)) && event(RSend(lFSEph,sid_6,ctr,m)) && attacker_p1(m)) is false.
+RESULT not event(CStart(lFSEph,fp,kid_4,h0_5)) is false.
+RESULT not (event(RAccept(lFSEph,kid_4,h0_5,h1_5,sid_6,k1_5,k2_5)) && event(CAccept(lFSEph,fp,kid_4,h0_5,h1_5,sid_6,k1_5,k2_5))) is false.
+RESULT not event(RExec(lFSEph,sid_6,cs,cmd,vk(sigk(lFSEph,iQ(x_1))))) is false.
+
+=== formal/link/lQKey.pv
+wall 24.8 s; 4 RESULT lines; 16 secrecy assumptions verified; gate: PASS
+RESULT not event(CStart(lQKey,fp,kid_2,h0_3)) is false.
+RESULT not (event(RAccept(lQKey,kid_2,h0_3,h1_3,sid_4,k1_3,k2_3)) && event(CAccept(lQKey,fp,kid_2,h0_3,h1_3,sid_4,k1_3,k2_3))) is false.
+RESULT not event(RExec(lQKey,sid_4,cs,cmd,vk(sigk(lQKey,iQ(x_1))))) is false.
+RESULT inj-event(RExec(lQKey,sid_4,cs,cmd,vk(sigk(lQKey,iQ(x_1))))) ==> inj-event(CSign(lQKey,sid_4,cs,cmd,vk(sigk(lQKey,iQ(x_1))))) is false.
+RESULT (even event(RExec(lQKey,sid_4,cs,cmd,vk(sigk(lQKey,iQ(x_1))))) ==> event(CSign(lQKey,sid_4,cs,cmd,vk(sigk(lQKey,iQ(x_1))))) is false.)
+
+Gate output (verdict and summary lines):
+  === [10] proverif ===
+    ProVerif: 9 files, --models link, 1 parallel processes, timeout 1800 s per file
+    formal/link/lBoth.pv: finished after 655.2 s
+    formal/link/lClean.pv: finished after 38.7 s
+    formal/link/lDH.pv: finished after 59.0 s
+    formal/link/lFS.pv: finished after 15.7 s
+    formal/link/lFSDH.pv: finished after 16.3 s
+    formal/link/lFSEph.pv: finished after 23.5 s
+    formal/link/lKEM.pv: finished after 95.5 s
+    formal/link/lQKey.pv: finished after 24.8 s
+    formal/link/lSig.pv: finished after 138.9 s
+  === step summary (host aarch64-apple-darwin, strict: true) ===
+    10 proverif        PASS       1072s  ProVerif 2.05 self-test [true, false] ok
+    --models link, 1 parallel processes, timeout 1800 s per file
+    model hashes: 31 of 31 match expect::PROVERIF_MODEL_SHA256
+    single-file models: none (expected set matches)
+    HX sessions over formal/hx.pvl: none (= the files of expect::PROVERIF_EXPECTED_HX)
+    LINK sessions over formal/link.pvl: lBoth, lClean, lDH, lFS, lFSDH, lFSEph, lKEM, lQKey, lSig (= the files of expect::PROVERIF_EXPECTED_LINK)
+    formal/link/lBoth.pv: 6 RESULT lines as expected — L3c false ×2, L8 false ×3, L1c false ×1 (655.2 s)
+    formal/link/lClean.pv: 10 RESULT lines as expected — L3 true ×2, L8 false ×3, L1 true ×1, L4 true ×2, L6 true ×1, L7 true ×1 (38.7 s)
+    formal/link/lDH.pv: 8 RESULT lines as expected — L3a true ×2, L8 false ×3, L1a true ×1, L4 true ×2 (59.0 s)
+    formal/link/lFS.pv: 5 RESULT lines as expected — L5 true ×2, L8 false ×3 (15.7 s)
+    formal/link/lFSDH.pv: 5 RESULT lines as expected — L5a true ×2, L8 false ×3 (16.3 s)
+    formal/link/lFSEph.pv: 5 RESULT lines as expected — L5b false ×2, L8 false ×3 (23.5 s)
+    formal/link/lKEM.pv: 8 RESULT lines as expected — L3b true ×2, L8 false ×3, L1b true ×1, L4 true ×2 (95.5 s)
+    formal/link/lQKey.pv: 4 RESULT lines as expected — L8 false ×3, L6a false ×1 (24.8 s)
+    formal/link/lSig.pv: 4 RESULT lines as expected — L8 false ×3, L2 false ×1 (138.9 s)
+    evidence target/proverif/summary.txt, results.tsv and one log per file
+  step: PASS

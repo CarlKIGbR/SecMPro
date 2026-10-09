@@ -1,0 +1,39 @@
+# M5 review evidence - V1 reproduction of R-105 (L8-01) and R-106 (L8-02), pin 3b29ca8
+# Source: verifier file V1.md (fan-out V1) and its run directory verify/V1/run/ (err01.txt, err02.txt).
+# Copy of the pin built with toolchain 1.98.1: cargo build --offline -p secmp-relay (debug, 27 s);
+# cargo test --offline -p secmp-relay --features kat --test relay server_loop -> 7/7 PASS (incl. serve_fails_on_a_listener_error).
+# Flood script: N idle TCP connects to the relay's loopback port (no byte sent), then check the PID.
+#
+# ---- V1.md, section 'Reproductions' (verbatim) ----
+## Reproductions (`/home/claude/m05/verify/V1/run/`)
+
+- **L8-02**: `prlimit --nofile=32:32 secmp-relay --config relay.toml`; 32 idle connects → relay process dead, `exit=1`, stderr `secmp-relay: i/o error` (`err02.txt`).
+- **L8-01**: `MALLOC_ARENA_MAX=1 prlimit --as=40000000 secmp-relay ...` (address-space limit as stand-in for the cgroup pids limit; no cgroup v2 here, root ignores RLIMIT_NPROC); 17 idle connects → `thread 'main' panicked at library/std/src/thread/functions.rs:131: failed to spawn thread: Os { code: 11, kind: WouldBlock }`, exit 101 (debug = unwind; release would abort) (`err01.txt`). Same errno (EAGAIN) as a `TasksMax` refusal; the literal TasksMax=512 run was not performed.
+- **L8-03**: not reproduced live (needs a full HELLO/HS1 client); deterministic code reading.
+
+# ---- err01.txt (R-105 / L8-01: MALLOC_ARENA_MAX=1 prlimit --as=40000000 secmp-relay ...; 17 idle connects; exit 101, debug = unwind) ----
+secmp-relay: startup secmp-relay 0.0.0
+secmp-relay: keys_loaded generations=1
+secmp-relay: listener_bound 127.0.0.1:17443
+
+thread 'main' (26414) panicked at /rustc/48a229ceaefd4985c50990b14116b6d856af0985/library/std/src/thread/functions.rs:131:29:
+failed to spawn thread: Os { code: 11, kind: WouldBlock, message: "Resource temporarily unavailable" }
+stack backtrace:
+note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.
+
+# ---- err02.txt (R-106 / L8-02: prlimit --nofile=32:32 secmp-relay --config relay.toml; 32 idle connects; exit=1) ----
+secmp-relay: startup secmp-relay 0.0.0
+secmp-relay: keys_loaded generations=1
+secmp-relay: listener_bound 127.0.0.1:17443
+secmp-relay: i/o error
+
+# ---- V1.md, section 'Verdicts' (verbatim) ----
+## Verdicts
+
+| FID | Severity | Status | Reason | Smallest fix |
+|---|---|---|---|---|
+| L8-01 | major | CONFIRMED (reproduction + code reading) | Unbounded thread-per-connection with `std::thread::spawn` on the main thread; spawn refusal panics → process dies; 512 idle unauthenticated connections under TasksMax=512; every crash empties the relay | Atomic connection counter / semaphore checked before spawning (cap well below TasksMax and LimitNOFILE, e.g. 400), over the cap close the stream; `std::thread::Builder::spawn` with `Err` → close the stream; set `LimitNOFILE` explicitly in docs/05 §4 |
+| L8-02 | major | CONFIRMED (reproduction; test pins it) | Any accept error except WouldBlock/Interrupted exits serve → process; EMFILE reachable with idle connections; `serve_fails_on_a_listener_error` pins `ConnectionAborted` as fatal | Retry (sleep `ACCEPT_POLL`) on `EMFILE`/`ENFILE`/`ENOBUFS`/`ENOMEM`/`ConnectionAborted`/`ConnectionReset` and the accept(2) pending-network errors; exit only on `EBADF`/`EINVAL`/`ENOTSOCK`; change the test to assert retry for these kinds |
+| L8-03 | minor | CONFIRMED (code reading) | Linked connections have no inactivity bound and `write_all` has no write timeout, so non-reading/idle links hold threads forever; becomes a lockout of the cap once L8-01 is fixed (cost: 1 HELLO token each, 4/s) | `set_write_timeout` in `set_poll`; relay-side idle bound for `Phase::Linked` (no unit within k × slowest period, or link age > LINK_LIFETIME + margin) |
+
+Note (outside the three FIDs): `docs/01:158` names "Tor PoW" as a DoS mitigation while `docs/05:39` has PoW off (ADR-024); `docs/05` torrc lacks `HiddenServiceMaxStreams` / `HiddenServiceMaxStreamsCloseCircuit 1` (relevant to L8-04 too).

@@ -1,0 +1,48 @@
+# M5 Phase B, TEST-SPEC-M5 (e) K-05 kani_cmd_seq_monotone
+# tree: HEAD f574a03 plus the uncommitted Phase B working tree (crates/secmp-relay/src/kani_proofs.rs with exactly
+#   the three harnesses K-05...K-07; crates/secmp-relay/src/executor.rs with the pure `admit`/`answer` of K-05)
+# command (the gate's form): env PATH=... cargo kani --package secmp-relay
+#   one run of the package's three harnesses: Complete - 3 successfully verified harnesses, 0 failures, 3 total;
+#   wall time of the whole run about 160 s
+# Kani 0.68.0, CBMC 6.11.0, M1 Pro, macOS; the machine was shared with ProVerif runs and a cargo-mutants pass on
+#   secmp-relay (-j 3): timings are noisy
+# bound: five frames, each of any kind (single request or SKEY, LINK_PUT frame 1, CONT 1, CONT 2), any cmd_seq,
+#   any command, any rate outcome; unwind 6
+# result: VERIFICATION:- SUCCESSFUL, 2.9 s, 0 of 276 checks failed, 5 of 5 covers satisfied
+#   (an earlier run on the same harness code, 09:31: 6.2 s, the same verdict)
+#
+# the run (the harness line, every cover check, the summary):
+
+Checking harness kani_proofs::kani_cmd_seq_monotone...
+Check 22: kani_proofs::kani_cmd_seq_monotone.cover.1
+	 - Status: SATISFIED
+	 - Description: "a CONT whose cmd_seq is not above last completes a fresh LINK_PUT"
+	 - Location: crates/secmp-relay/src/kani_proofs.rs:133:25 in function kani_proofs::kani_cmd_seq_monotone
+
+Check 23: kani_proofs::kani_cmd_seq_monotone.cover.2
+	 - Status: SATISFIED
+	 - Description: "a stale LINK_PUT is answered ERR 6 after its third frame"
+	 - Location: crates/secmp-relay/src/kani_proofs.rs:137:25 in function kani_proofs::kani_cmd_seq_monotone
+
+Check 24: kani_proofs::kani_cmd_seq_monotone.cover.3
+	 - Status: SATISFIED
+	 - Description: "a LINK_PUT over the rate is answered ERR 7"
+	 - Location: crates/secmp-relay/src/kani_proofs.rs:141:25 in function kani_proofs::kani_cmd_seq_monotone
+
+Check 37: kani_proofs::kani_cmd_seq_monotone.cover.4
+	 - Status: SATISFIED
+	 - Description: "a stale request is answered ERR 6"
+	 - Location: crates/secmp-relay/src/kani_proofs.rs:95:17 in function kani_proofs::kani_cmd_seq_monotone
+
+Check 38: kani_proofs::kani_cmd_seq_monotone.cover.5
+	 - Status: SATISFIED
+	 - Description: "a fresh request is executed"
+	 - Location: crates/secmp-relay/src/kani_proofs.rs:96:17 in function kani_proofs::kani_cmd_seq_monotone
+
+SUMMARY:
+ ** 0 of 276 failed (1 unreachable)
+ ** 5 of 5 cover properties satisfied
+VERIFICATION:- SUCCESSFUL
+Verification Time: 2.9389575s
+Complete - 3 successfully verified harnesses, 0 failures, 3 total.
+Complete - 3 successfully verified harnesses, 0 failures, 3 total.

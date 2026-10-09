@@ -308,3 +308,70 @@ fn every_event_of_the_tr_file() {
     assert_eq!(rx.inbox.partials(), 0);
     assert!(rx.new_iks.is_some());
 }
+
+/// G-03 `tr_vectors_f14_new_iks_equals_vector_iks` (R-55, M3 review F14): the `new_iks` the receiver delivers from the
+/// four `KeyChange` fragments is byte-equal to the `IKSPublic` that the seeds of tr-0049 define.
+#[test]
+fn tr_vectors_f14_new_iks_equals_vector_iks() {
+    let doc = vector_file();
+    let cases = doc.get("cases").and_then(Value::as_array).unwrap();
+    let mut p = Parties::default();
+    let mut cells = Cells::new();
+    let mut rx = KeyChangeRx {
+        inbox: Inbox::new(),
+        trust: Trust::Verified,
+        old_ik: None,
+        delivered: Vec::new(),
+        new_iks: None,
+    };
+    let mut vector_iks: Option<Vec<u8>> = None;
+    for case in cases {
+        let id = text(case, "id");
+        let op = text(case, "op");
+        let inputs = case.get("inputs").unwrap();
+        let outputs = case.get("outputs").unwrap();
+        if id == "tr-0049" {
+            let sk = HybridSigningKey::from_seeds(
+                &bytes(inputs, "old_ik_ed_seed"),
+                &bytes(inputs, "old_ik_mldsa_xi"),
+            )
+            .unwrap();
+            rx.old_ik = Some(sk.verifying_key());
+            let new = HybridSigningKey::from_seeds(
+                &bytes(inputs, "new_ik_ed_seed"),
+                &bytes(inputs, "new_ik_mldsa_xi"),
+            )
+            .unwrap()
+            .verifying_key();
+            let new_dh = X25519Secret::from_bytes(&bytes(inputs, "new_ik_dh_sk")).unwrap();
+            vector_iks = Some(
+                [
+                    &[1_u8][..],
+                    new.ed25519().as_slice(),
+                    new.mldsa65().as_slice(),
+                    new_dh.public_key().as_bytes().as_slice(),
+                ]
+                .concat(),
+            );
+        }
+        if op == "init" {
+            init(&mut p, id, inputs, outputs);
+            continue;
+        }
+        let party = text(case, "party");
+        let st = p.take(party);
+        let st = match op {
+            "send" => send(st, id, inputs, outputs, &mut cells),
+            "recv" => recv(st, id, case, &cells, &mut rx),
+            "advance" => advance(st, case, inputs),
+            _ => reject(st, id, case),
+        };
+        p.put(party, st);
+    }
+    let delivered = rx.new_iks.expect("the KeyChange was delivered");
+    assert_eq!(
+        delivered.encode().unwrap().to_vec(),
+        vector_iks.expect("tr-0049 carries the new identity seeds"),
+        "new_iks = the vector's IKSPublic"
+    );
+}

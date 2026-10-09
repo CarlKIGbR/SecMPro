@@ -1,0 +1,13 @@
+# Binding-Gate notes (Fable, 2026-10-09 08:35 UTC) — run 37882708499, pin 3b29ca8
+
+- EV-1 (merge-ref SHA 1b4820e4 in artefact names): origin/main = a229dbf = base of the PR branch and ancestor of the pin, so the PR merge commit's tree equals the pin's tree (fast-forward merge). Resolved: artefacts cover the pin's tree.
+- CI missed.txt per shard (from the run's artefacts, copied to target/fable/ci/run-37882708499/artifacts/mutants-<i>-1/mutants.out/missed.txt):
+  - shard 0: crates/secmp-proto/src/inv.rs:163:32 replace | with ^ in base64url_encode
+  - shard 1: crates/secmp-crypto/src/secret.rs:59:9 replace <impl Drop for SecretBytes<N>>::drop with ()
+  - shard 3: crates/secmp-proto/src/inv.rs:202:34 replace | with ^ in base64url_decode
+  - shard 4: crates/secmp-relay/src/server.rs:81:9 replace <impl Stream for TcpStream>::set_poll -> io::Result<()> with Ok(())
+  - shard 5: crates/secmp-relay/src/server.rs:86:9 replace <impl Stream for TcpStream>::close with ()
+  - shard 6: crates/secmp-proto/src/inv.rs:163:44 replace | with ^ in base64url_encode
+  - shards 2, 7: none. Total 6 = crypto 1, proto 3, relay 2 (matches REPORT.txt). EV-7 resolved.
+- linux-full step summary lines of the run (job-linux-full.log): kat PASS 1543 s (packages crypto, proto, relay, testkit; link suite included; proptest seed 37882708499); fuzz PASS 3579 s (29 targets, 120 s each; relay_executor, relay_link_session included); coverage PASS 499 s: cli 83.3, crypto 99.4 (2523/2539), proto 97.7 (6585/6741), relay 97.6 (2175/2229), sys-mem 95.3, testkit 94.3 (607/644), transport 89.7 (546/609), ui 83.3; miri PASS 2954 s (sys-mem, sys-desktop, crypto, proto); kani PASS 3918 s 33/33 (proto + relay). EV-2/EV-3 resolved: CI numbers equal the local fb2d651 numbers.
+- ct-report.json and ct-progress.jsonl of the run: /home/claude/m05/ci/ (staged from the Mac). EV-10 → verifier.

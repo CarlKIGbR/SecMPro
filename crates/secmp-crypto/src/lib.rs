@@ -32,6 +32,7 @@ mod hybrid_kem;
 mod hybrid_sign;
 mod kdf;
 mod label;
+mod mac;
 mod mldsa;
 mod mlkem;
 mod msg;
@@ -64,6 +65,7 @@ pub use hybrid_sign::{HYBRID_SIG_LEN, HybridSignature, HybridSigningKey, HybridV
 pub use kdf::hkdf_kat;
 pub use kdf::{HKDF_MAX_LEN, hkdf, hkdf_expand};
 pub use label::Label;
+pub use mac::{MAC_LEN, hkdf_extract, hmac_sha256, hmac_sha256_verify};
 pub use mldsa::{
     MLDSA_MAX_CTX_LEN, MLDSA_SEED_LEN, MLDSA65_PK_LEN, MLDSA65_SIG_LEN, MlDsa65SigningKey,
     MlDsa65VerifyingKey,
@@ -83,4 +85,4 @@ pub use tr_kdf::{kdf_ck, kdf_rk, tr_init};
 #[cfg(feature = "kat")]
 pub use vector_stream::VectorStream;
 pub use x25519::{X25519_LEN, X25519Public, X25519Secret};
-pub use zeroize::{Zeroize, Zeroizing};
+pub use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};

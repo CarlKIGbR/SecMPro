@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! The server loops (`secmp_relay::server::{serve, handle}`) over in-memory streams, an in-memory listener and a
-//! virtual clock — no socket (`docs/06` §4): the accept loop retries on `WouldBlock`/`Interrupted`, fails on any other
-//! listener error, refuses connections while draining and over the connection cap (closed unread, no thread), hands
-//! each connection to its own job, survives a job that cannot be started, and exits with an `exit` event once the
-//! drain has lasted `drain_secs`; the connection loop ticks on read timeouts, retries interrupted reads, stops on EOF,
-//! an I/O error, a failed write or a teardown, and always closes the stream. Extra tests of M5 Phase B (not TEST-SPEC
-//! rows) and of the M05 review conditions C-1.
+//! virtual clock — no socket (`docs/06` §4): the accept loop retries on `WouldBlock`/`Interrupted`, retries every
+//! other `accept` error after a recorded wait and an `accept_retry` event, ends only when the listener is gone,
+//! refuses connections while draining and over the connection cap (closed unread, no thread), hands each connection
+//! to its own job, survives a job that cannot be started, and exits with an `exit` event once the drain has lasted
+//! `drain_secs`; the connection loop ticks on read timeouts, retries interrupted reads, stops on EOF, an I/O error, a
+//! failed write or a teardown, and always closes the stream. Extra tests of M5 Phase B (not TEST-SPEC rows) and of
+//! the M05 review conditions C-1 and C-2.
 
 use std::collections::VecDeque;
 use std::io::{self, ErrorKind, Read, Write};
@@ -20,22 +21,44 @@ use secmp_relay::{Error, KeyRing, Limits, Now, Relay};
 
 use crate::fixture::{HELLO, NOW, RelayFx, VALID_UNTIL};
 
-/// A virtual clock: every reading advances the monotonic clock by `step` milliseconds.
+/// A virtual clock: every reading advances the monotonic clock by `step` milliseconds; the accept loop's waits are
+/// recorded, not slept. The log holds the readings (`None`) and the waits (`Some`) in order.
 #[derive(Clone)]
-struct Virtual(Arc<(AtomicU64, u64)>);
+struct Virtual(Arc<VirtualState>);
+
+struct VirtualState {
+    mono_ms: AtomicU64,
+    step: u64,
+    log: Mutex<Vec<Option<Duration>>>,
+}
 
 impl Virtual {
     fn new(step: u64) -> Self {
-        Self(Arc::new((AtomicU64::new(0), step)))
+        Self(Arc::new(VirtualState {
+            mono_ms: AtomicU64::new(0),
+            step,
+            log: Mutex::new(Vec::new()),
+        }))
+    }
+
+    /// The readings (`None`) and the waits (`Some`) so far, in order.
+    fn log(&self) -> Vec<Option<Duration>> {
+        self.0.log.lock().unwrap().clone()
     }
 }
 
 impl Time for Virtual {
     fn now(&self) -> Now {
+        let mut log = self.0.log.lock().unwrap();
+        log.push(None);
         Now {
             unix_secs: NOW,
-            mono_ms: self.0.0.fetch_add(self.0.1, Ordering::SeqCst),
+            mono_ms: self.0.mono_ms.fetch_add(self.0.step, Ordering::SeqCst),
         }
+    }
+
+    fn pause(&self, d: Duration) {
+        self.0.log.lock().unwrap().push(Some(d));
     }
 }
 
@@ -138,9 +161,15 @@ impl Stream for Scripted {
 }
 
 /// The accept calls a test lets `serve` make: a one-second drain on a clock of ≥ 100 ms per reading ends within ≈ 10
-/// calls; the next call fails like a broken listener, so a drain that never starts or never finishes fails the test
+/// calls; the next call fails like a dead listener, so a drain that never starts or never finishes fails the test
 /// (`serve` returns `Error::Io`) instead of hanging it.
 const ACCEPT_CALLS_MAX: usize = 100;
+
+/// A dead listener's error (EBADF, the first of `server::LISTENER_GONE`): `serve` ends on it.
+fn dead() -> io::Error {
+    let [ebadf, _, _] = server::LISTENER_GONE;
+    io::Error::from_raw_os_error(ebadf)
+}
 
 /// The relay a listener drains, its clock, and the signal of the handed-out connection's close (taken once).
 type Drain = (Arc<Relay>, Virtual, Mutex<Option<Receiver<()>>>);
@@ -158,7 +187,7 @@ impl Listener for ScriptedListener {
 
     fn accept_next(&self) -> io::Result<Scripted> {
         if self.calls.fetch_add(1, Ordering::SeqCst) >= ACCEPT_CALLS_MAX {
-            return Err(io::Error::from(ErrorKind::Other));
+            return Err(dead());
         }
         if let Some(next) = self.script.lock().unwrap().pop_front() {
             return next;
@@ -243,18 +272,91 @@ fn serve_retries_and_exits_after_the_drain() {
     assert_eq!(names(&events), vec!["keys_loaded", "drain_started", "exit"]);
 }
 
-/// Any other listener error ends the loop with `Error::Io` and no `exit` event.
+/// C-2 (M05 review R-106) `serve_retries_on_a_transient_accept_error`: an `accept` error of one connection
+/// (`ConnectionAborted`, `ConnectionReset`) or of a resource (ENOMEM, EMFILE) does not end the loop: each gets one
+/// `accept_retry` event and a wait of `ACCEPT_RETRY` before the next `accept` (recorded by the virtual clock, not
+/// slept); the next connection is served (`HELLO` answered with `RELAYINFO`), and the drain ends the loop with `exit`.
 #[test]
-fn serve_fails_on_a_listener_error() {
+fn serve_retries_on_a_transient_accept_error() {
     let (relay, events) = relay();
-    let clock = Virtual::new(400);
-    relay.start_drain(clock.now());
-    let l = listener(vec![Err(io::Error::from(ErrorKind::ConnectionAborted))]);
+    let clock = Virtual::new(100);
+    let (tx, rx) = mpsc::channel();
+    let (mut stream, seen) = Scripted::new(vec![In::Data(HELLO.to_vec())]);
+    stream.closed = Some(tx);
+    let transient = [
+        io::Error::from(ErrorKind::ConnectionAborted),
+        io::Error::from(ErrorKind::ConnectionReset),
+        io::Error::from(ErrorKind::OutOfMemory),
+        // EMFILE on Unix; every code outside `LISTENER_GONE` is retried
+        io::Error::from_raw_os_error(24),
+    ];
+    let retries = transient.len();
+    let mut script: Vec<io::Result<Scripted>> = transient.into_iter().map(Err).collect();
+    script.push(Ok(stream));
+    let l = ScriptedListener {
+        script: Mutex::new(script.into()),
+        drain: Some((Arc::clone(&relay), clock.clone(), Mutex::new(Some(rx)))),
+        calls: AtomicUsize::new(0),
+    };
     assert_eq!(
         server::serve(&relay, &l, &clock, server::spawn_thread),
-        Err(Error::Io)
+        Ok(()),
+        "C-2: the loop runs on to the drain"
     );
-    assert_eq!(names(&events), vec!["keys_loaded", "drain_started"]);
+    {
+        let s = seen.lock().unwrap();
+        assert_eq!(
+            (s.written.len(), s.closed),
+            (1744, true),
+            "C-2: the next connection is served"
+        );
+    }
+    let mut want = vec!["keys_loaded"];
+    want.extend(std::iter::repeat_n("accept_retry", retries));
+    want.extend(["drain_started", "exit"]);
+    assert_eq!(names(&events), want, "C-2: one accept_retry per error");
+    // the start-up reading, then per retried error: the loop's reading and the wait; then the reading of the accept
+    // that hands out the connection
+    let mut prefix = vec![None];
+    for _ in 0..retries {
+        prefix.extend([None, Some(server::ACCEPT_RETRY)]);
+    }
+    prefix.push(None);
+    let log = clock.log();
+    assert_eq!(
+        log.get(..prefix.len()),
+        Some(prefix.as_slice()),
+        "C-2: each retried error waits ACCEPT_RETRY before the next accept"
+    );
+    assert_eq!(server::ACCEPT_RETRY, Duration::from_millis(50));
+}
+
+/// C-2 (M05 review R-106) `serve_exits_on_a_dead_listener`: EBADF, EINVAL and ENOTSOCK (`server::LISTENER_GONE`)
+/// mean the listener is gone: the loop ends at the first such error with `Error::Io` — no `accept_retry`, no wait,
+/// no `exit` event. (The drain runs, so a loop that retried the error would end with `exit` instead of hanging.)
+#[test]
+fn serve_exits_on_a_dead_listener() {
+    for code in server::LISTENER_GONE {
+        let (relay, events) = relay();
+        let clock = Virtual::new(400);
+        relay.start_drain(clock.now());
+        let l = listener(vec![Err(io::Error::from_raw_os_error(code))]);
+        assert_eq!(
+            server::serve(&relay, &l, &clock, server::spawn_thread),
+            Err(Error::Io),
+            "C-2: os error {code} ends the loop"
+        );
+        assert_eq!(
+            names(&events),
+            vec!["keys_loaded", "drain_started"],
+            "C-2: os error {code}: nothing retried, no exit"
+        );
+        assert_eq!(l.calls.load(Ordering::SeqCst), 1, "C-2: one accept");
+        assert!(
+            clock.log().iter().all(Option::is_none),
+            "C-2: os error {code}: no wait"
+        );
+    }
 }
 
 /// While draining, an accepted connection is closed unread (OPEN-M5-09).
@@ -382,11 +484,6 @@ fn handle_stops_on_teardown_write_failure_and_refusal() {
 /// The accept calls a [`Fed`] listener answers before it reports a dead listener, so a test whose expectation fails
 /// ends `serve` instead of hanging it.
 const FED_CALLS_MAX: usize = 20_000;
-
-/// A dead listener's error: `serve` ends on it.
-fn dead() -> io::Error {
-    io::Error::from(ErrorKind::Other)
-}
 
 /// A listener the test feeds through a channel: it waits up to 5 ms for a connection, then reports `WouldBlock`;
 /// after `FED_CALLS_MAX` calls, or once the test has dropped its sender (the test ended or failed), it is dead.

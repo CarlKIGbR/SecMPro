@@ -1234,13 +1234,14 @@ pub(crate) const TEST_FILE_PREFIXES: &[&str] = &["fuzz/", "crates/secmp-testkit/
 pub(crate) const CONTINUE_ON_ERROR_JOBS: &[&str] = &[];
 
 /// The events `secmp-relay` may emit (spec §9.7 item 2; OPEN-M5-08 A): start-up, key load, its own listener bound,
-/// a configuration error, drain start and exit — nothing per request at any level. Equal to
+/// a retried accept (M05 review C-2), a configuration error, drain start and exit — nothing per request at any level. Equal to
 /// `secmp_relay::event::EVENT_NAMES` (test `relay_trace_allow_equals_the_event_names`); test RL-03 captures a full
 /// scenario against this list.
 pub(crate) const RELAY_TRACE_ALLOW: &[&str] = &[
     "startup",
     "keys_loaded",
     "listener_bound",
+    "accept_retry",
     "config_error",
     "drain_started",
     "exit",

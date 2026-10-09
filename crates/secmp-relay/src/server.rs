@@ -31,14 +31,41 @@ use crate::relay::Relay;
 /// How long a connection read blocks before the connection checks its timeout and the drain.
 pub const READ_POLL: Duration = Duration::from_millis(500);
 /// How long the accept loop sleeps when no connection is waiting.
-const ACCEPT_POLL: Duration = Duration::from_millis(50);
+pub const ACCEPT_POLL: Duration = Duration::from_millis(50);
+/// How long the accept loop waits after an `accept` error it retries (M05 review C-2).
+pub const ACCEPT_RETRY: Duration = Duration::from_millis(50);
+
+/// The raw OS errors of `accept` that mean the listener itself is gone — EBADF, EINVAL, ENOTSOCK —: [`serve`] ends.
+/// Every other `accept` error belongs to one connection (`ConnectionAborted`, `ConnectionReset`) or to a resource
+/// (EMFILE, ENFILE, ENOBUFS, ENOMEM) and is retried after [`ACCEPT_RETRY`] (M05 review C-2). Raw codes per target
+/// family (no `libc`).
+#[cfg(any(target_os = "linux", target_os = "android"))]
+pub const LISTENER_GONE: [i32; 3] = [9, 22, 88];
+/// The raw OS errors of `accept` that mean the listener itself is gone — EBADF, EINVAL, ENOTSOCK —: [`serve`] ends.
+/// Every other `accept` error belongs to one connection (`ConnectionAborted`, `ConnectionReset`) or to a resource
+/// (EMFILE, ENFILE, ENOBUFS, ENOMEM) and is retried after [`ACCEPT_RETRY`] (M05 review C-2). Raw codes per target
+/// family (no `libc`).
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
+pub const LISTENER_GONE: [i32; 3] = [9, 22, 38];
+/// The raw OS errors of `accept` that mean the listener itself is gone — `WSAEBADF`, `WSAEINVAL`, `WSAENOTSOCK` —:
+/// [`serve`] ends. Every other `accept` error is retried after [`ACCEPT_RETRY`] (M05 review C-2).
+#[cfg(windows)]
+pub const LISTENER_GONE: [i32; 3] = [10_009, 10_022, 10_038];
+
+/// Whether an `accept` error means the listener is gone ([`LISTENER_GONE`]).
+fn listener_gone(e: &io::Error) -> bool {
+    e.raw_os_error()
+        .is_some_and(|code| LISTENER_GONE.contains(&code))
+}
 /// The sweeper's period on the monotonic clock.
 const TICK_MS: u64 = 1000;
 
-/// Where the loops take their time from.
+/// Where the loops take their time from, and how the accept loop waits.
 pub trait Time: Send + Sync {
     /// The current time.
     fn now(&self) -> Now;
+    /// Wait `d` before the next `accept` (the binary sleeps; tests record the wait).
+    fn pause(&self, d: Duration);
 }
 
 /// The process clock: the wall clock and a monotonic clock from the process start.
@@ -63,6 +90,10 @@ impl Time for Clock {
             unix_secs: wall_clock_unix_secs(),
             mono_ms: u64::try_from(self.origin.elapsed().as_millis()).unwrap_or(u64::MAX),
         }
+    }
+
+    fn pause(&self, d: Duration) {
+        std::thread::sleep(d);
     }
 }
 
@@ -212,10 +243,11 @@ impl<S: Stream> Drop for Slot<S> {
 
 /// Serve until the drain has finished: one job per connection, started by `spawn` ([`spawn_thread`] in the binary),
 /// at most `max_connections` at once — a connection over the cap, or one accepted while draining, is closed before
-/// any read and without a job; the sweeper ticks once per second.
+/// any read and without a job; the sweeper ticks once per second. An `accept` error is retried after [`ACCEPT_RETRY`]
+/// with an `accept_retry` event, unless the listener is gone ([`LISTENER_GONE`]).
 ///
 /// # Errors
-/// [`Error::Io`] if the listener fails.
+/// [`Error::Io`] if the listener is gone.
 pub fn serve<L: Listener, T: Time + Clone + 'static>(
     relay: &Arc<Relay>,
     listener: &L,
@@ -252,9 +284,13 @@ pub fn serve<L: Listener, T: Time + Clone + 'static>(
                 // a spawn failure drops the job: the slot closes the stream and counts it out; serving goes on
                 let _ = spawn(Box::new(move || slot.run(&relay, &clock)));
             }
-            Err(e) if e.kind() == ErrorKind::WouldBlock => std::thread::sleep(ACCEPT_POLL),
+            Err(e) if e.kind() == ErrorKind::WouldBlock => clock.pause(ACCEPT_POLL),
             Err(e) if e.kind() == ErrorKind::Interrupted => {}
-            Err(e) => return Err(e.into()),
+            Err(e) if listener_gone(&e) => return Err(e.into()),
+            Err(_) => {
+                relay.events().emit(&Event::AcceptRetry);
+                clock.pause(ACCEPT_RETRY);
+            }
         }
     }
 }
@@ -295,6 +331,16 @@ pub fn handle<S: Stream, T: Time>(relay: &Relay, mut stream: S, clock: &T) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The binary's waits are real sleeps (M05 review C-2): `Clock::pause` blocks for the duration.
+    #[test]
+    fn the_process_clock_sleeps_in_pause() {
+        let clock = Clock::start();
+        let start = Instant::now();
+        clock.pause(Duration::from_millis(20));
+        assert!(start.elapsed() >= Duration::from_millis(20));
+        assert!(clock.now().mono_ms >= 20);
+    }
 
     #[test]
     fn the_sweeper_ticks_once_a_second() {

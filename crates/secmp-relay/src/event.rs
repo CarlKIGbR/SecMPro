@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! What the relay reports about itself (spec §9.7 item 2; OPEN-M5-08 A; `docs/05` principle 2 "can't, not won't").
 //!
-//! The events form a closed set — start-up, key load, the relay's own listener bound, a configuration error, drain
-//! start and exit — and no variant has a field that could carry per-request data: no id, key, token, `sess_id`,
+//! The events form a closed set — start-up, key load, the relay's own listener bound, a retried `accept` (M05 review
+//! C-2), a configuration error, drain start and exit — and no variant has a field that could carry per-request data: no id, key, token, `sess_id`,
 //! `cmd_seq`, `cell_id`, client address or timing. Per-request logging is therefore impossible, not merely off; the
 //! connection, the executor and the stores emit nothing at all. `expect::RELAY_TRACE_ALLOW` (xtask) lists exactly
 //! [`EVENT_NAMES`]; test RL-03 captures every event of a full scenario. Aggregate counters (§9.7 item 2, "only if
@@ -26,6 +26,9 @@ pub enum Event<'a> {
         /// The address the relay listens on.
         addr: &'a SocketAddr,
     },
+    /// An `accept` failed with an error that does not end the listener (a connection's, a resource limit's); the
+    /// loop waits and accepts on (M05 review C-2). No field: neither the error nor a peer.
+    AcceptRetry,
     /// The start was refused: configuration or key file (the rule, never a value).
     ConfigError {
         /// Which rule.
@@ -38,10 +41,11 @@ pub enum Event<'a> {
 }
 
 /// The names of every event, in declaration order (`expect::RELAY_TRACE_ALLOW`).
-pub const EVENT_NAMES: [&str; 6] = [
+pub const EVENT_NAMES: [&str; 7] = [
     "startup",
     "keys_loaded",
     "listener_bound",
+    "accept_retry",
     "config_error",
     "drain_started",
     "exit",
@@ -55,6 +59,7 @@ impl Event<'_> {
             Self::Startup => "startup",
             Self::KeysLoaded { .. } => "keys_loaded",
             Self::ListenerBound { .. } => "listener_bound",
+            Self::AcceptRetry => "accept_retry",
             Self::ConfigError { .. } => "config_error",
             Self::DrainStarted => "drain_started",
             Self::Exit => "exit",
@@ -72,6 +77,7 @@ impl Event<'_> {
             ),
             Self::KeysLoaded { generations } => format!("keys_loaded generations={generations}"),
             Self::ListenerBound { addr } => format!("listener_bound {addr}"),
+            Self::AcceptRetry => "accept_retry".to_owned(),
             Self::ConfigError { reason } => format!("config_error {reason}"),
             Self::DrainStarted => "drain_started".to_owned(),
             Self::Exit => "exit".to_owned(),
@@ -136,6 +142,7 @@ mod tests {
             Event::Startup,
             Event::KeysLoaded { generations: 2 },
             Event::ListenerBound { addr: &addr },
+            Event::AcceptRetry,
             Event::ConfigError {
                 reason: "unknown key",
             },
@@ -152,6 +159,7 @@ mod tests {
             Event::ListenerBound { addr: &addr }.render(),
             "listener_bound 127.0.0.1:7443"
         );
+        assert_eq!(Event::AcceptRetry.render(), "accept_retry");
         assert!(Event::Startup.render().starts_with("startup secmp-relay "));
         NullSink.emit(&Event::Exit);
         StderrSink.emit(&Event::Exit);

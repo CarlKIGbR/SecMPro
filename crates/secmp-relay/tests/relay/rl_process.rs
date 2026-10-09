@@ -498,7 +498,8 @@ fn leaks(line: &str, trail: &Trail) -> Vec<String> {
 /// relay's `EVENT_NAMES`), every line is a rendering fixed by the configuration alone, and none carries a `rid`,
 /// `sid`, `ld_id`, key, seed, token, `sess_id`, `cmd_seq`, `cell_id` or cell bytes of the scenario, raw, in hex,
 /// base64 or decimal; the relay has no `tracing` dependency, no other output path, and no client address to report
-/// (spec §9.7 item 2; `docs/07:105`; OPEN-M5-08 A).
+/// (spec §9.7 item 2; `docs/07:105`; OPEN-M5-08 A). The retried-accept event of the M05 review (C-2) is in the set
+/// and renders as its bare name: no error, no peer.
 #[test]
 fn relay_tracing_emits_no_per_request_field() {
     let allow = trace_allow();
@@ -531,6 +532,12 @@ fn relay_tracing_emits_no_per_request_field() {
             "RL-03: event {name} is not in RELAY_TRACE_ALLOW"
         );
     }
+    assert!(allow.iter().any(|a| a == "accept_retry"));
+    assert_eq!(
+        Event::AcceptRetry.render(),
+        "accept_retry",
+        "RL-03: a retried accept carries no field"
+    );
     let (keys, _) = relay.keys().newest().unwrap();
     trail.bytes.extend([
         keys.fp().to_vec(),

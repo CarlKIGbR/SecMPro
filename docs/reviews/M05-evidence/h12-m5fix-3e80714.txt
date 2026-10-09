@@ -1,0 +1,76 @@
+   Compiling secmp-proto v0.0.0 (/Users/c.carl/coding/claude_code/SecMPro/crates/secmp-proto)
+   Compiling secmp-relay v0.0.0 (/Users/c.carl/coding/claude_code/SecMPro/crates/secmp-relay)
+   Compiling secmp-transport v0.0.0 (/Users/c.carl/coding/claude_code/SecMPro/crates/secmp-transport)
+   Compiling secmp-testkit v0.0.0 (/Users/c.carl/coding/claude_code/SecMPro/crates/secmp-testkit)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.46s
+────────────
+ Nextest run ID 21778e7c-d51b-4e20-97f1-6bb3c8b6f7a9 with nextest profile: default
+    Starting 1 test across 3 binaries (29 tests skipped)
+        PASS [   2.207s] (1/1) secmp-testkit::harness scenarios::harness_relay_restart_queues_recreated_conversation_continues
+────────────
+     Summary [   2.208s] 1 test run: 1 passed, 29 skipped
+    Blocking waiting for file lock on build directory
+   Compiling secmp-relay v0.0.0 (/Users/c.carl/coding/claude_code/SecMPro/crates/secmp-relay)
+   Compiling secmp-testkit v0.0.0 (/Users/c.carl/coding/claude_code/SecMPro/crates/secmp-testkit)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.85s
+────────────
+ Nextest run ID e479427b-0a8c-4e5c-9bcc-11998a640cb0 with nextest profile: default
+    Starting 1 test across 3 binaries (29 tests skipped)
+        PASS [   2.188s] (1/1) secmp-testkit::harness scenarios::harness_relay_restart_queues_recreated_conversation_continues
+────────────
+     Summary [   2.189s] 1 test run: 1 passed, 29 skipped
+diff --git a/crates/secmp-testkit/src/harness/convo.rs b/crates/secmp-testkit/src/harness/convo.rs
+index e2738e5..45ab158 100644
+--- a/crates/secmp-testkit/src/harness/convo.rs
++++ b/crates/secmp-testkit/src/harness/convo.rs
+@@ -168,6 +168,7 @@ impl Side {
+     ) -> Result<SendOutcome, Error> {
+         let content = text_content(self.next_seq, payload);
+         let state = self.state.take().ok_or(Error::Invalid)?;
++        let rollback = state.to_bytes().unwrap(); // C-8 HAND MUTATION
+         let sealed = match state.encrypt_with(&content, entropy) {
+             Ok(sealed) => sealed,
+             Err(refused) => {
+@@ -178,7 +179,11 @@ impl Side {
+         let (state, cell) = sealed.persist(|_| Ok::<(), ()>(())).unwrap();
+         self.state = Some(state);
+         self.next_seq = self.next_seq.checked_add(1).unwrap();
+-        transport.send(&self.send, &cell)
++        let sent = transport.send(&self.send, &cell); // C-8 HAND MUTATION
++        if matches!(sent, Err(Error::NoQueue)) {
++            self.state = Some(RatchetState::from_bytes(&rollback).unwrap()); // C-8 HAND MUTATION: roll back
++        }
++        sent
+     }
+ 
+     /// One `FETCH` with the committed acknowledgement: decrypt every cell not seen before, commit the state, then
+   Compiling secmp-testkit v0.0.0 (/Users/c.carl/coding/claude_code/SecMPro/crates/secmp-testkit)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.69s
+────────────
+ Nextest run ID 940746ee-0f3b-4eb9-998e-f560fab4917a with nextest profile: default
+    Starting 1 test across 3 binaries (29 tests skipped)
+        FAIL [   2.024s] (1/1) secmp-testkit::harness scenarios::harness_relay_restart_queues_recreated_conversation_continues
+  stdout ───
+
+    running 1 test
+    test scenarios::harness_relay_restart_queues_recreated_conversation_continues ... FAILED
+
+    failures:
+
+    failures:
+        scenarios::harness_relay_restart_queues_recreated_conversation_continues
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 23 filtered out; finished in 2.01s
+
+  stderr ───
+
+    thread 'scenarios::harness_relay_restart_queues_recreated_conversation_continues' (2761413) panicked at crates/secmp-testkit/tests/harness/scenarios.rs:586:5:
+    assertion `left == right` failed: pairwise-distinct message keys
+      left: 17
+     right: 19
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+────────────
+     Summary [   2.025s] 1 test run: 0 passed, 1 failed, 29 skipped
+        FAIL [   2.024s] (1/1) secmp-testkit::harness scenarios::harness_relay_restart_queues_recreated_conversation_continues
+error: test run failed

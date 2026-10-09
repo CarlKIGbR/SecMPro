@@ -491,11 +491,41 @@ None. New edges between workspace crates: `secmp-transport` → `secmp-crypto`, 
 - For the reviewer's acceptance: ADR-050 (no async runtime in M5; deviation 1), the ADR-042 consequence line (deviation 5).
 - Blocked: none.
 
+## Fix round M5-FIX (2026-10-09)
+
+Commits `3b29ca8..3e80714` (one per review condition C-n; `git log --oneline 3b29ca8..m05-link`):
+
+- C-5 `4475d15` `KeyFile::encode` allocates its exact size once.
+- C-10 `25ab436` RL-15 identical `QUEUE_NEW` during drain, RL-13 over-rate `SKEY` (tests added in the relay tests).
+- C-9 `d4105ce` ProVerif gate requires the `(even … is false.)` remark for injective expected-false queries.
+- C-6 `26cbc83` `InvitationRecord::duplicate_kat` only under `cfg(test)`/`kat`.
+- C-1 `dfe8d12` connection cap and a spawner that cannot panic the accept loop.
+- C-8 `7dbdf3d` H-12 asserts that no message key is reused across the restart (`harness_relay_restart_queues_recreated_conversation_continues`; two clean runs and a hand-mutation negative control that fails as intended, `h12-m5fix-3e80714.txt`).
+- C-2 `13df2e4` accept errors are retried; only a dead listener ends `serve`.
+- C-4 `461d50b` wiping `Drop` for `Cell`, `Cont.data`, `LinkPut.blob_part`.
+- C-3 `78e7e1e` write timeout, link age bound 24 h, idle bound `link_idle_secs`.
+- C-7 `28b95ad` mutants matcher keys on `path:line`; relay shim rows removed; loopback close test.
+- C-12 `3e151cf` K-01 guards instead of assumes; covers for K-01, K-03, K-08 (Kani: K-01 exit 0 in 293.5 s, K-03 exit 0 in 26.0 s, K-08 exit 0 in 151.5 s).
+- C-13 `3e80714` Q-25 acked-but-unreported entry; report corrections E-1…E-6.
+- C-11 (this commit) `ref/` synced with the reference workspace (REGEN-M5-3: link.json `dd77bb7c…4c77`, hx.json `2bf05e69…8e8d`, pytest 938/0/0); 10 files differed (the 9 named in WEISUNG M5-FIX-2 plus `tools/render_schema_4_9.py`). `cargo xtask step --strict ref-vectors`: PASS, 12 frozen suites (969 cases) byte-identical.
+
+Mutation gates: secmp-relay 474 mutants, 350 caught, 124 unviable, 0 missed, 0 timeout (after the retest of `keys.rs:127:51`); convo.rs 30 mutants, 23 caught, 2 missed, 5 unviable (the two missed are `Side::set_send_cap` and `Side::set_recv_cap` replaced with `()`, convo.rs:148 and :153).
+
+### Deviations (fix round)
+
+- **VD-3:** test H-05 (`crates/secmp-testkit/tests/harness/scenarios.rs`) was rewritten for the C-3 idle/age bounds. Its last two queue-expiry checks read the relay store directly instead of fetching end to end, because the idle bound closes the link before the second expiry window.
+- **VD-7:** the convo.rs mutation run demanded by C-8 is `mutants-m5fix-convo-3e80714.txt`: 30 mutants, 23 caught, 2 missed, 5 unviable. The two missed mutants are not covered by a test.
+
+### Evidence (fix round)
+
+`docs/reviews/M05-evidence/`: `ci-fast-m5fix-3e80714.txt`, `mutants-m5fix-relay-3e80714.txt`, `mutants-m5fix-convo-3e80714.txt`, `kani-m5fix-3e80714.txt`, `h12-m5fix-3e80714.txt`; also `ref-regen-m5-3.txt`.
+Caveats: `ci-fast-m5fix-3e80714.txt` is the raw log and ends at test 33/34 of the last nextest step with no step summary, so it does NOT evidence a green `ci-fast` at `3e80714`; a complete run is still needed. The concatenated files carry no `=== file ===` headers (plain `cat`); source files are named in the lines above. The fix round has not been pushed (`origin/m05-link` is still `3b29ca8`), so no PR run exists on the fix head.
+
 ## 9. Checklist before requesting review
 
 - [x] All acceptance criteria of `docs/07` §M5 evidenced (230 rows + K-08; §3, §3B, §3C, §10.1)
 - [x] `cargo xtask ci` green on a clean checkout — local `ci-fast --strict` PASS at `fb2d651`; PR run `37882708499` green on the
-  closing head `3b29ca8` (M05 review §E); the fix round's PR run on its pushed head: closing message of M5-FIX
+  closing head `3b29ca8` (M05 review §E; run 37882708499); fix run: see closing message (fix round not yet pushed)
 - [x] No `#[ignore]`, no lint allowance for a security lint, no disabled gate (policy step PASS: the only relaxations are the sanctioned `unwrap`/`expect` file allowances of test code under `crates/secmp-testkit/`)
 - [x] Vectors frozen and reviewed: `hx.json` re-frozen as planned (REF-M5-2), nothing else changed (`hx-refreeze-m5c.txt`)
 - [x] Docs updated: `docs/03` rev 2.6 (A), `docs/06`, `docs/08` ADR-047 Am. 3, ADR-049, ADR-050 (proposed), `docs/07` §M5 status

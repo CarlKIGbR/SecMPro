@@ -230,7 +230,7 @@ fn q_link_put_cont_violations_tear_down() {
         let (mut b, digest, reqs) = put_pending(taken);
         let req = Request {
             cmd_seq: 2,
-            ..reqs.get(taken).unwrap().clone()
+            ..reqs.into_iter().nth(taken).unwrap()
         };
         torn(
             &mut b,

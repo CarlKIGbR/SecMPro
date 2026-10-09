@@ -32,8 +32,8 @@ use crate::linkdata::Entry;
 use crate::plan::{FetchMultiOutcome, FetchOutcome, Plan, plan_fetch, plan_fetch_multi};
 use crate::relay::State;
 
-/// A copy of a stored cell in a response (wiped when the response is sealed).
-pub type CellCopy = SecretBytes<CELL_LEN>;
+/// A copy of a stored cell in a response (wiped when the response is sealed; [`crate::buf::CellCopy`]).
+pub use crate::buf::CellCopy;
 /// A copy of a stored blob in a response.
 pub type BlobCopy = SecretBytes<LINK_BLOB_LEN>;
 /// The relay's plans.
@@ -79,7 +79,7 @@ fn token_ok(ctx: &Ctx<'_>, token: &[u8; HASH_LEN]) -> bool {
 }
 
 fn copy_cell(bytes: &[u8]) -> Result<CellCopy, Abort> {
-    SecretBytes::from_slice(bytes).map_err(|_| Abort)
+    CellCopy::new(bytes).map_err(|_| Abort)
 }
 
 /// Run one command on the state.
@@ -165,7 +165,7 @@ fn send(
     let q = st.queues.get_mut(&rid).ok_or(Abort)?;
     let (cell_id, evicted) = q
         .cells
-        .push(arrival, ctx.now, CellBuf::new(cell.into_boxed()))
+        .push(arrival, ctx.now, CellBuf::new(cell))
         .map_err(|_| Abort)?;
     Ok(Plan::OkSend { cell_id, evicted })
 }

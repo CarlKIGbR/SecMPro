@@ -453,7 +453,7 @@ impl Gen {
                 owner_pk: self.ed25519(),
                 token: self.arr(),
                 sig: self.sig(),
-                blob_part: self.boxed::<BLOB_PART_LEN>(),
+                blob_part: self.boxed::<BLOB_PART_LEN>().into(),
             },
             6 => RequestCmd::LinkGet {
                 ld_id: self.arr(),
@@ -523,7 +523,7 @@ impl Gen {
             4 => ResponseCmd::LinkR {
                 present: self.rng.random_bool(0.5),
                 consumed: self.rng.random_bool(0.5),
-                blob_part: self.boxed::<BLOB_PART_LEN>(),
+                blob_part: self.boxed::<BLOB_PART_LEN>().into(),
             },
             5 => ResponseCmd::Err(self.one_of(&ErrCode::ALL)),
             _ => ResponseCmd::Cont(self.cont()),

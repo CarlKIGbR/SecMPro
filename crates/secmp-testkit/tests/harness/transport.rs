@@ -443,7 +443,7 @@ fn transport_rejects_bad_response_shape() {
                 cmd: ResponseCmd::LinkR {
                     present: true,
                     consumed: false,
-                    blob_part: part,
+                    blob_part: part.into(),
                 },
             },
             cont(ContIdx::Two),

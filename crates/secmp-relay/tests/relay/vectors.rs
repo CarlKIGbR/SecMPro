@@ -134,19 +134,16 @@ fn build(n: usize, case: &Case, cl: &Client, k: &Keys) -> Option<Vec<Request>> {
         24 => one(cl.queue_del(seq, &k.a.0)),
         25 => {
             let ld_id: [u8; 16] = case.input("ld_id").try_into().unwrap();
-            Some(
-                cl.link_put(
-                    seq,
-                    &Put {
-                        ld_id: &ld_id,
-                        one_time: true,
-                        expires_bucket: EXPIRES,
-                        owner: &k.owner,
-                        blob: &case.input("blob"),
-                    },
-                )
-                .to_vec(),
-            )
+            Some(Vec::from(cl.link_put(
+                seq,
+                &Put {
+                    ld_id: &ld_id,
+                    one_time: true,
+                    expires_bucket: EXPIRES,
+                    owner: &k.owner,
+                    blob: &case.input("blob"),
+                },
+            )))
         }
         27 | 29 => {
             let ld_id: [u8; 16] = file.case(25).input("ld_id").try_into().unwrap();

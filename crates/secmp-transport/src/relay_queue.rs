@@ -301,7 +301,8 @@ impl<S: Read + Write> QueueTransport for RelayQueueTransport<S> {
             cmd_seq: seq,
             cmd: RequestCmd::Send {
                 sid: *to.sid(),
-                cell: cell.clone(),
+                // the request's own copy, wiped when the request drops (a `Cell` has no `Clone`; M5 review C-4)
+                cell: Cell::from_bytes(cell.as_bytes())?,
                 sig: signature,
             },
         }])?;

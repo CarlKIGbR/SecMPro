@@ -479,7 +479,7 @@ impl<T: QueueTransport> QueueTransport for Tap<'_, T> {
     }
 
     fn send(&mut self, to: &SendCap, cell: &Cell) -> secmp_transport::Result<SendOutcome> {
-        self.sent.push(cell.clone());
+        self.sent.push(Cell::from_bytes(cell.as_bytes()).unwrap());
         self.inner.send(to, cell)
     }
 

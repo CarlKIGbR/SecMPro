@@ -396,7 +396,7 @@ fn link_signatures_verified(bench: &mut Bench, v: &Values, tokens: &[[u8; 32]], 
         "Q-54 LINK_PUT",
         seq.checked_add(1).unwrap(),
         &|q| link_put_msg(&sess, q, &v.ld, owner, &tok(q), &hash),
-        &|q, sig| link_put_req(q, &put, tok(q), sig).to_vec(),
+        &|q, sig| Vec::from(link_put_req(q, &put, tok(q), sig)),
         owner,
         |reply| err4_or(reply, reply.is_ok()),
     );

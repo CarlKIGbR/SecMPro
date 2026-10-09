@@ -14,16 +14,16 @@ use secmp_crypto::{
     Ed25519SigningKey, HybridKem1024SecretKey, MlKem1024Dk, SecretBytes, X25519Secret,
     ZeroizeOnDrop,
 };
-use secmp_proto::link::QUEUE_CAPACITY;
 use secmp_proto::link::ids::AccessKey;
 use secmp_proto::link::relay::RelayKeys;
+use secmp_proto::link::{FETCH_BATCH, FETCH_MULTI_BATCH, QUEUE_CAPACITY};
 use secmp_proto::tr::OsEntropy;
 use secmp_proto::wire::Id;
 use secmp_proto::wire::frame::{Request, RequestCmd};
 use secmp_relay::budget::{
     BudgetLimits, LINKDATA_BLOB_CHARGE, LINKDATA_OVERHEAD, LINKDATA_RESERVATION, QUEUE_RESERVATION,
 };
-use secmp_relay::buf::{BlobBuf, CellBuf, live_buffers_kat};
+use secmp_relay::buf::{BlobBuf, CellBuf, cell_copies_wiped_kat, live_buffers_kat};
 use secmp_relay::cells::{Cells, Slot};
 use secmp_relay::exec::{BlobCopy, CellCopy};
 use secmp_relay::keys::{DEFAULT_VALIDITY_SECS, Generation, KeyFile};
@@ -656,9 +656,29 @@ fn relay_storage_types_zeroize_on_drop() {
     let _: fn(&Slot<CellBuf>) -> &CellBuf = |s| &s.buf;
 }
 
+/// The response copies of one `FETCH` / `FETCH_MULTI` (M5 review C-4, R-111): the request built by `build` is run,
+/// and every copy of a stored cell its answer was built from is dropped — wiped — by the end of the request, one per
+/// cell delivered (`present` 1). Returns the number of cells delivered.
+fn copies_wiped_per_fetch(
+    d: &mut Drive,
+    what: &str,
+    build: impl FnOnce(&Client, u32) -> Request,
+) -> usize {
+    let before = cell_copies_wiped_kat();
+    let frames = d.go(now(), build);
+    let delivered = presents(&frames).iter().filter(|(p, _)| *p == 1).count();
+    assert_eq!(
+        cell_copies_wiped_kat().checked_sub(before).unwrap(),
+        u64::try_from(delivered).unwrap(),
+        "RL-10: {what}: one wiped response copy per cell delivered"
+    );
+    delivered
+}
+
 /// RL-10 `relay_every_delete_path_drops_the_buffer`: ack, eviction, `QUEUE_DEL`, cell TTL, idle TTL, consume and
 /// link-data expiry drop each stored buffer at once (the kat live-buffer counter falls by one per buffer); none is
-/// left after the store drops (spec §9.7 item 5).
+/// left after the store drops (spec §9.7 item 5). The copies a `FETCH` or `FETCH_MULTI` answer is built from are
+/// wiped by the end of the request, one per cell delivered (M5 review C-4, R-111; `copies_wiped_per_fetch`).
 #[test]
 fn relay_every_delete_path_drops_the_buffer() {
     let base = live_buffers_kat();
@@ -672,9 +692,11 @@ fn relay_every_delete_path_drops_the_buffer() {
             d.go(now(), |c, n| c.send(n, &r, &s, &cell));
         }
         assert_eq!(live(), 3, "three stored cells");
-        d.go(now(), |c, n| c.fetch(n, &r, 1));
+        let delivered = copies_wiped_per_fetch(&mut d, "FETCH ack 1", |c, n| c.fetch(n, &r, 1));
+        assert_eq!(delivered, 2, "cells 2 and 3");
         assert_eq!(live(), 2, "RL-10: ack drops one buffer");
-        d.go(now(), |c, n| c.fetch(n, &r, 3));
+        let delivered = copies_wiped_per_fetch(&mut d, "FETCH ack 3", |c, n| c.fetch(n, &r, 3));
+        assert_eq!(delivered, 0, "an empty queue: dummies only");
         assert_eq!(
             live(),
             0,
@@ -687,6 +709,14 @@ fn relay_every_delete_path_drops_the_buffer() {
         let sent = d.go(now(), |c, n| c.send(n, &r, &s, &cell));
         assert_eq!(sent, vec![V::Send(132, Some(4))]);
         assert_eq!(live(), 128, "RL-10: eviction drops the evicted buffer");
+        let delivered =
+            copies_wiped_per_fetch(&mut d, "FETCH of a full queue", |c, n| c.fetch(n, &r, 4));
+        assert_eq!(delivered, FETCH_BATCH);
+        let delivered = copies_wiped_per_fetch(&mut d, "FETCH_MULTI of a full queue", |c, n| {
+            Client::fetch_multi(n, vec![c.fetch_entry(n, &r, 4)])
+        });
+        assert_eq!(delivered, FETCH_MULTI_BATCH);
+        assert_eq!(live(), 128, "an ack of a deleted cell deletes nothing");
         d.go(now(), |c, n| c.queue_del(n, &r));
         assert_eq!(
             live(),

@@ -113,7 +113,6 @@ impl Decode for Outer {
 }
 
 /// `Inner = IKSPublic ‖ first_msg` (6113 B): the initiator's identity and its first TR cell.
-#[derive(Clone)]
 #[cfg_attr(test, derive(PartialEq, Eq, Debug))]
 pub struct Inner {
     /// `IKSPublic_I`.

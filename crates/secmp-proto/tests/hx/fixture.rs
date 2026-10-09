@@ -100,10 +100,7 @@ pub fn invitee_run(inviter: &Inviter, entropy: &mut impl Entropy) -> Invitee {
 }
 
 pub fn release(cells: HandshakeCells, state: &RatchetState) -> Vec<Cell> {
-    cells
-        .release(state, |_, _| Ok::<(), Error>(()))
-        .unwrap()
-        .to_vec()
+    Vec::from(cells.release(state, |_, _| Ok::<(), Error>(())).unwrap())
 }
 
 pub fn blob_bytes(issued: &Issued) -> Vec<u8> {

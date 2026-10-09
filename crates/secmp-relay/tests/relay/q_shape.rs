@@ -362,7 +362,7 @@ impl Scenario {
                 vec![Client::fetch_multi(1, vec![c.fetch_entry(1, &rb, 0)])],
             ),
             ("QUEUE_DEL", vec![c.queue_del(1, &rb)]),
-            ("LINK_PUT", c.link_put(1, &p).to_vec()),
+            ("LINK_PUT", Vec::from(c.link_put(1, &p))),
             ("LINK_GET", vec![Client::link_get_consume(1, &[2; 16])]),
             ("PING", vec![Client::ping(1)]),
         ];

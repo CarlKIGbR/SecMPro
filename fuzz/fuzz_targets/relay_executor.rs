@@ -442,7 +442,7 @@ fn build(
             let bucket = now_bucket() + u32::try_from(hours).unwrap();
             let expires = (bucket - 2) + 3 * u32::from(b.u8());
             let blob = vec![b.u8(); 12_360];
-            cl.link_put(
+            Vec::from(cl.link_put(
                 seq,
                 &Put {
                     ld_id: [k & 3; 16],
@@ -453,8 +453,7 @@ fn build(
                     blob: &blob,
                     signer: if k & 0x80 != 0 { other } else { owner },
                 },
-            )
-            .to_vec()
+            ))
         }
         7 => {
             let k = b.u8();

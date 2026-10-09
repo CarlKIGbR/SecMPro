@@ -9,13 +9,13 @@ use std::io::{self, Read, Write};
 use std::rc::Rc;
 
 use secmp_crypto::{Ed25519SigningKey, MlKem1024Dk, SecretBytes, VectorStream, X25519Secret};
-use secmp_proto::Encode;
 use secmp_proto::codec::unpad;
 use secmp_proto::link::Link;
 use secmp_proto::link::relay::{AwaitHs1, RelayKeys, accept_ring};
 use secmp_proto::sizes::{FRAME_LEN, FRAME_PLAINTEXT_LEN};
 use secmp_proto::wire::cell::Cell;
 use secmp_proto::wire::frame::{Cellr, ErrCode, Request, Response, ResponseCmd};
+use secmp_proto::{Decode, Encode};
 use secmp_testkit::harness::EntropyPool;
 
 /// The unix time the scripted relay and its client agree on.
@@ -25,6 +25,11 @@ const HS1_LEN: usize = 2856;
 
 /// A closure from the n-th request (counting every frame, `CONT` included) to the responses to send back.
 pub type Script = Box<dyn FnMut(&Request, usize) -> Vec<Response>>;
+
+/// A copy of `request` through its encoding (a request has no `Clone`, M5 review C-4).
+fn copy(request: &Request) -> Request {
+    Request::decode(&request.encode().unwrap()).unwrap()
+}
 
 enum Phase {
     Hello,
@@ -97,7 +102,7 @@ impl Scripted {
 
     /// The requests opened so far, in order.
     pub fn seen(&self) -> Vec<Request> {
-        self.0.borrow().seen.clone()
+        self.0.borrow().seen.iter().map(copy).collect()
     }
 
     /// The link's `sess_id`, once the handshake is done.
@@ -141,7 +146,7 @@ impl Inner {
                     let unit: Vec<u8> = self.input.drain(..FRAME_LEN).collect();
                     let request = link.open_request(&unit).unwrap();
                     let n = self.seen.len();
-                    self.seen.push(request.clone());
+                    self.seen.push(copy(&request));
                     for response in (self.script)(&request, n) {
                         let padded = response.encode().unwrap();
                         let payload = unpad(&padded, FRAME_PLAINTEXT_LEN).unwrap();

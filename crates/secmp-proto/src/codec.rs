@@ -24,6 +24,16 @@ pub(crate) use kani_stubs::Zeroizing;
 #[cfg(not(kani))]
 pub(crate) use secmp_crypto::Zeroizing;
 
+/// Wipe `bytes`: the `Drop` of the wire's opaque heap buffers — [`crate::wire::cell::Cell`],
+/// [`crate::wire::frame::Cont`] and [`crate::wire::frame::BlobPart`] (spec §9.7 item 5; M5 review C-4, R-111). Under
+/// Kani a no-op, for the reason of the `Zeroizing` stand-in above.
+pub(crate) fn wipe(bytes: &mut [u8]) {
+    #[cfg(not(kani))]
+    secmp_crypto::Zeroize::zeroize(bytes);
+    #[cfg(kani)]
+    let _ = bytes;
+}
+
 /// The ISO/IEC 7816-4 padding marker (spec §4.1).
 const PAD_MARKER: u8 = 0x80;
 
@@ -354,6 +364,19 @@ mod tests {
     use super::*;
     // the real type, not the crate's alias (which is a stand-in under Kani)
     use secmp_crypto::Zeroizing;
+
+    /// M5 review C-4 (R-111): the wipe behind the `Drop` of `Cell`, `Cont` and `BlobPart` zeroes every byte.
+    #[test]
+    fn wipe_zeroes_every_byte() {
+        for len in [0_usize, 1, 4096, 4100, 4160] {
+            let mut bytes: Vec<u8> = (0..len)
+                .map(|i| u8::try_from(i % 251).unwrap_or(0) | 1)
+                .collect();
+            wipe(&mut bytes);
+            assert_eq!(bytes.len(), len);
+            assert!(bytes.iter().all(|&b| b == 0), "{len} bytes");
+        }
+    }
 
     #[test]
     fn reader_is_bounded_and_exact() {

@@ -17,7 +17,7 @@ use crate::keys::{Ed25519Pk, Ed25519Sig};
 use crate::link::{Error, Result};
 use crate::sizes::{BLOB_PART_LEN, CONT_DATA_LEN, HASH_LEN, LINK_BLOB_LEN};
 use crate::wire::Id;
-use crate::wire::frame::{Cont, ContIdx, Request, RequestCmd, Response, ResponseCmd};
+use crate::wire::frame::{BlobPart, Cont, ContIdx, Request, RequestCmd, Response, ResponseCmd};
 
 /// Where frame 1, `CONT` 1 and `CONT` 2 put their bytes in the blob: 0, 4160, 8260 (total 12360).
 pub const BLOB_OFFSETS: [usize; 3] = [
@@ -373,11 +373,12 @@ impl LinkrAssembler {
     }
 }
 
-/// Split a 12360-byte blob into the parts the three frames carry (frame 1, `CONT` 1, `CONT` 2).
+/// Split a 12360-byte blob into the parts the three frames carry (frame 1, `CONT` 1, `CONT` 2); every part is
+/// wiped when it drops ([`BlobPart`], [`Cont`]; M5 review C-4, R-111).
 ///
 /// # Errors
 /// [`Error::Rejected`] unless `blob` is exactly 12360 bytes.
-pub fn split_blob(blob: &[u8]) -> Result<(Box<[u8; BLOB_PART_LEN]>, Cont, Cont)> {
+pub fn split_blob(blob: &[u8]) -> Result<(BlobPart, Cont, Cont)> {
     let (first, rest) = blob
         .split_first_chunk::<BLOB_PART_LEN>()
         .ok_or(Error::Rejected)?;
@@ -391,7 +392,7 @@ pub fn split_blob(blob: &[u8]) -> Result<(Box<[u8; BLOB_PART_LEN]>, Cont, Cont)>
         return Err(Error::Rejected);
     }
     Ok((
-        Box::new(*first),
+        BlobPart::from(Box::new(*first)),
         Cont {
             idx: ContIdx::One,
             data: Box::new(*one),
@@ -418,7 +419,7 @@ mod tests {
                 owner_pk: ed25519(3)?,
                 token: [4; 32],
                 sig: sig(5)?,
-                blob_part: Box::new([fill; BLOB_PART_LEN]),
+                blob_part: Box::new([fill; BLOB_PART_LEN]).into(),
             },
         })
     }
@@ -446,7 +447,7 @@ mod tests {
             cmd: ResponseCmd::LinkR {
                 present: true,
                 consumed: false,
-                blob_part: Box::new([fill; BLOB_PART_LEN]),
+                blob_part: Box::new([fill; BLOB_PART_LEN]).into(),
             },
         }
     }
@@ -636,6 +637,59 @@ mod tests {
             };
             assert!(matches!(a.push(ok), Ok(AssembledResponse::Single(_))));
         }
+        Ok(())
+    }
+
+    fn needs_zeroize_on_drop<T: secmp_crypto::ZeroizeOnDrop>() {}
+
+    /// M5 review C-4 (R-111): the blob parts a frame carries — a `CONT`'s 4100 data bytes and a `blob_part` — wipe
+    /// when they drop: `Cont` and `BlobPart` are `ZeroizeOnDrop` (type level) and their `Drop`s run the wipe (wipe
+    /// log; `codec::tests::wipe_zeroes_every_byte` shows the wipe zeroes every byte). Inbound, each frame's part is
+    /// wiped as soon as the assembler has copied it into its zeroizing blob, also on a rejection; outbound, the parts
+    /// of `split_blob` are wiped when their frames drop.
+    #[test]
+    fn cont_data_wipes_on_drop() -> Result<()> {
+        use crate::wire::wipe_log;
+        needs_zeroize_on_drop::<Cont>();
+        needs_zeroize_on_drop::<BlobPart>();
+        // inbound LINK_PUT: frame 1, CONT 1, CONT 2
+        let mut a = LinkPutAssembler::new();
+        let frames = [
+            put(5, 0xa1)?,
+            cont(5, ContIdx::One, 0xb2),
+            cont(5, ContIdx::Two, 0xc3),
+        ];
+        wipe_log::take();
+        for (frame, part) in frames.into_iter().zip(["BlobPart", "Cont", "Cont"]) {
+            let _ = a.push(frame)?;
+            assert_eq!(wipe_log::take(), [part], "the frame's part, once copied");
+        }
+        // a rejected frame (an orphan CONT) is wiped as well
+        assert_eq!(
+            a.push(cont(6, ContIdx::One, 0)).err(),
+            Some(Error::Rejected)
+        );
+        assert_eq!(wipe_log::take(), ["Cont"]);
+        // inbound LINKR on the client
+        let mut r = LinkrAssembler::new();
+        for (frame, part) in [
+            linkr(3, 1),
+            rcont(3, ContIdx::One, 2),
+            rcont(3, ContIdx::Two, 3),
+        ]
+        .into_iter()
+        .zip(["BlobPart", "Cont", "Cont"])
+        {
+            let _ = r.push(frame)?;
+            assert_eq!(wipe_log::take(), [part], "the frame's part, once copied");
+        }
+        // outbound: the parts of split_blob
+        let (first, one, two) = split_blob(&[7; LINK_BLOB_LEN])?;
+        assert!(wipe_log::take().is_empty(), "nothing wiped while alive");
+        drop(first);
+        assert_eq!(wipe_log::take(), ["BlobPart"]);
+        drop((one, two));
+        assert_eq!(wipe_log::take(), ["Cont", "Cont"]);
         Ok(())
     }
 

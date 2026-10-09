@@ -12,10 +12,10 @@
 //! - `RouteDescriptor`: kind 0x01 is a `RelayQueue`; every other kind is kept as opaque bytes (spec §9.8: v1
 //!   clients ignore unknown kinds; keeping them makes re-encoding canonical).
 
-use secmp_crypto::{SecretBytes, Zeroize};
+use secmp_crypto::{SecretBytes, Zeroize, ZeroizeOnDrop};
 
 use crate::codec::{
-    Decode, Encode, Reader, Writer, Zeroizing, boxed, decode_padded, encode_padded,
+    Decode, Encode, Reader, Writer, Zeroizing, boxed, decode_padded, encode_padded, wipe,
 };
 use crate::error::{Error, Result};
 use crate::keys::{HybridSig, MlKem768Ek, X25519Pk};
@@ -27,10 +27,28 @@ use crate::wire::inv::{IksPublic, Profile, RelayRef};
 use crate::wire::{Id, Period, read_ver, write_ver};
 
 /// A ratchet cell `hdr_nonce[24] ‖ hdr_ct[2330] ‖ body_ct[1710] ‖ tag[32]` (4096 B). Opaque here: only its length
-/// is checked (`SCHEMA-4.8` D-13); the parts are views.
-#[derive(Clone)]
+/// is checked (`SCHEMA-4.8` D-13); the parts are views. Its bytes are wiped when it drops (spec §9.7 item 5; M5
+/// review C-4, R-111): the relay's request and response copies never survive in freed heap. It has no `Clone` — a
+/// copy is an explicit [`Cell::from_bytes`], wiped on drop as well:
+///
+/// ```compile_fail,E0277
+/// fn needs_clone<T: Clone>(_: &T) {}
+/// fn copy(cell: &secmp_proto::wire::cell::Cell) {
+///     needs_clone(cell);
+/// }
+/// ```
 #[cfg_attr(test, derive(PartialEq, Eq, Debug))]
 pub struct Cell(Box<[u8; CELL_LEN]>);
+
+impl Drop for Cell {
+    fn drop(&mut self) {
+        wipe(self.0.as_mut_slice());
+        #[cfg(test)]
+        crate::wire::wipe_log::note("Cell");
+    }
+}
+
+impl ZeroizeOnDrop for Cell {}
 
 impl Cell {
     /// A cell of exactly 4096 bytes.
@@ -45,13 +63,6 @@ impl Cell {
     #[must_use]
     pub fn as_bytes(&self) -> &[u8; CELL_LEN] {
         &self.0
-    }
-
-    /// The buffer itself, without a copy: the relay keeps a received cell in this allocation and wipes it when the
-    /// cell is deleted (spec §9.7 item 5).
-    #[must_use]
-    pub fn into_boxed(self) -> Box<[u8; CELL_LEN]> {
-        self.0
     }
 
     /// The four parts.
@@ -901,6 +912,7 @@ mod tests {
     use crate::wire::testutil::{
         ek768, exact_fit, hybrid_sig, round_trip, round_trip_bytes, x25519,
     };
+    use crate::wire::wipe_log;
     use secmp_crypto::Zeroizing;
 
     #[test]
@@ -923,10 +935,31 @@ mod tests {
         let joined = [p.hdr_nonce, p.hdr_ct, p.body_ct, p.tag].concat();
         assert_eq!(joined, bytes);
         assert_eq!(cell.as_bytes().as_slice(), bytes.as_slice());
-        // the buffer the relay keeps (spec §9.7 item 5) holds the same 4096 bytes
-        assert_eq!(cell.clone().into_boxed().as_slice(), bytes.as_slice());
         assert_eq!(*round_trip(&cell)?, bytes);
         exact_fit::<Cell>(&bytes);
+        Ok(())
+    }
+
+    fn needs_zeroize_on_drop<T: ZeroizeOnDrop>() {}
+
+    /// M5 review C-4 (R-111): a cell — decoded from a frame or built from bytes — wipes its 4096 bytes when it drops:
+    /// `Cell` is `ZeroizeOnDrop` (type level), and its `Drop` runs the wipe (observed through the wipe log, as in
+    /// `dropped_invitation_is_wiped`; `codec::tests::wipe_zeroes_every_byte` shows the wipe zeroes every byte). The
+    /// relay's request and response copies are `Cell`s.
+    #[test]
+    fn cell_wipes_on_drop() -> Result<()> {
+        needs_zeroize_on_drop::<Cell>();
+        wipe_log::take();
+        let decoded = Cell::decode(&[0xa5; CELL_LEN])?;
+        let built = Cell::from_bytes(&[0x5a; CELL_LEN])?;
+        assert!(wipe_log::take().is_empty(), "nothing wiped while alive");
+        drop(decoded);
+        assert_eq!(wipe_log::take(), ["Cell"]);
+        drop(built);
+        assert_eq!(wipe_log::take(), ["Cell"]);
+        // a rejected decode builds no cell, so nothing is wiped
+        assert!(Cell::decode(&[0; CELL_LEN - 1]).is_err());
+        assert!(wipe_log::take().is_empty());
         Ok(())
     }
 

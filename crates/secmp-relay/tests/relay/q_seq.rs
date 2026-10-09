@@ -166,7 +166,7 @@ fn q_cmd_seq_stale_multi_frame_commands() {
             "LINK_GET owner",
             vec![b.client.link_get_owner(10, &[1; 16], &owner)],
         ),
-        ("LINK_PUT", b.client.link_put(5, &fresh).to_vec()),
+        ("LINK_PUT", Vec::from(b.client.link_put(5, &fresh))),
     ];
     for (name, reqs) in commands {
         let r = cmd(&mut b, &format!("Q-50 stale {name}"), &reqs, STALE);

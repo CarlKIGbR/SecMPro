@@ -323,10 +323,11 @@ fn cellr(
         CellrPlan::Dummy => Cellr::Dummy {
             cell: random_cell(entropy)?,
         },
+        // the response's `Cell` is wiped when its frame is sealed, the copy here (M5 review C-4, R-111)
         CellrPlan::Cell { rid, cell_id, cell } => Cellr::Cell {
             rid,
             cell_id,
-            cell: Cell::from_bytes(cell.expose_secret()).map_err(|_| Teardown)?,
+            cell: Cell::from_bytes(cell.as_bytes()).map_err(|_| Teardown)?,
         },
         CellrPlan::Error { error, rid } => Cellr::Error {
             error,

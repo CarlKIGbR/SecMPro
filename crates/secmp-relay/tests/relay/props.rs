@@ -575,7 +575,7 @@ fn link_put(
         }
         _ => {}
     }
-    frames.to_vec()
+    Vec::from(frames)
 }
 
 /// The monotonic clock of a link's requests (advancing by up to `step_ms` per frame) and a mirror of the executor's
@@ -1333,10 +1333,15 @@ fn assembly_fault(b: &Bench, h: &History, rng: &mut StdRng) -> Vec<u8> {
     match rng.random_range(0..5) {
         0 => payload(&Client::ping(s)),
         1 => skey(s),
-        2 => payload(&Request {
-            cmd_seq: expected.cmd_seq ^ rng.random_range(1..=u32::MAX),
-            cmd: expected.cmd.clone(),
-        }),
+        2 => {
+            // the expected frame under another `cmd_seq` (`op ‖ cmd_seq ‖ fields`, D.2; a request has no `Clone`)
+            let mut p = payload(expected);
+            let other = expected.cmd_seq ^ rng.random_range(1..=u32::MAX);
+            p.get_mut(1..5)
+                .unwrap()
+                .copy_from_slice(&other.to_be_bytes());
+            p
+        }
         3 => payload(frames.get(if *sent == 1 { 2 } else { 1 }).unwrap()),
         _ => payload(frames.first().unwrap()),
     }

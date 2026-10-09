@@ -29,6 +29,7 @@ use crate::scheduler::types::{
     Alert, CellSource, CellToken, ControlKind, IsolationKey, LinkEvent, LinkId, OpId, Output,
     QueueId, Reason, RelayId, SendFailure, Transport,
 };
+pub use crate::scheduler::types::LinkKind;
 use crate::timing::{TimingRng, Unavailable};
 
 use self::backoff::reconnect_delay;
@@ -164,17 +165,8 @@ pub struct LinkInfo {
     pub ticks: u32,
     /// Ticks whose responses are outstanding.
     pub in_flight: u8,
-}
-
-/// What a link is for.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum LinkKind {
-    /// One `SEND` per period (Strict).
-    Send,
-    /// One `FETCH` per period (Strict).
-    Recv,
-    /// One slot per `T` for a whole relay (Balanced, Low-bw).
-    Relay,
+    /// Consecutive closes before `RELAYINFO` (the back-off exponent, LR-03).
+    pub closed_before: u32,
 }
 
 /// One preparation, for the tests (feature `kat`).
@@ -397,11 +389,21 @@ impl World {
         let key = self.new_key();
         link.state = State::Connecting { id };
         let transport = self.transport();
+        let (kind, period_ms) = (
+            match link.spec {
+                Spec::Send(_) => LinkKind::Send,
+                Spec::Recv(_) => LinkKind::Recv,
+                Spec::Relay(_) => LinkKind::Relay,
+            },
+            self.period_of(link.spec).unwrap_or(0),
+        );
         self.out.push(Output::Connect {
             link: id,
             key,
             relay,
             transport,
+            kind,
+            period_ms,
         });
     }
 
@@ -925,16 +927,32 @@ impl Scheduler {
         &self.world.prep.ticks
     }
 
-    /// Set the send counter of a connection's link (the rotation tests; feature `kat`).
+    /// Set the send counter of a connection's link (the rotation tests; feature `kat`): what was prepared under the old
+    /// counter is dropped and prepared again.
+    ///
+    /// # Errors
+    /// [`SchedError::Unavailable`].
     #[cfg(feature = "kat")]
-    pub fn set_send_counter_kat(&mut self, id: LinkId, value: u64) {
+    pub fn set_send_counter_kat<S: CellSource>(
+        &mut self,
+        id: LinkId,
+        value: u64,
+        now: u64,
+        source: &mut S,
+    ) -> Result<Vec<Output>, SchedError> {
         for link in &mut self.links {
             if let State::Up(up) = &mut link.state
                 && up.id == id
             {
                 up.chan.set_send_counter_kat(value);
+                if let Some(Part { kind: ReqKind::Send { queue, token }, .. }) = up.send_part.take() {
+                    source.discard(queue, token);
+                }
+                up.fetch_part = None;
             }
         }
+        self.pass(now, source)?;
+        Ok(core::mem::take(&mut self.world.out))
     }
 
     /// The preparations so far (tests only).
@@ -965,6 +983,7 @@ impl Scheduler {
                     die_at: None,
                     ticks: 0,
                     in_flight: 0,
+                    closed_before: l.closed_before,
                 };
                 match &l.state {
                     State::Down { at } => info.starts_at = Some(*at),

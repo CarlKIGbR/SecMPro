@@ -198,7 +198,7 @@ fn owner_status_reissues_identical_put() {
         .unwrap();
     sim.run_until(t0);
     // the relay restarts: it has forgotten the link data (spec §9.7 (1))
-    sim.harness_mut().restart_relay();
+    sim.restart_relay();
     let t1 = t0 + 10_000;
     sim.run_until(t1);
     sim.client(alice)

@@ -13,6 +13,8 @@ use secmp_testkit::harness::{
 
 pub const FRAME: usize = 4352;
 
+pub type TestConv = Conversation<MemOutbox, MemPersist, EntropyPool>;
+
 /// One contact between client `a` and client `b`: the queues in both directions and the conversations.
 pub struct Contact {
     pub a: usize,

@@ -19,7 +19,8 @@ use secmp_client_core::scheduler::core::{SchedError, Scheduler};
 use secmp_client_core::scheduler::outbox::{MemOutbox, MemPersist};
 use secmp_client_core::scheduler::params::{Mode, Params};
 use secmp_client_core::scheduler::types::{
-    CellSource, CellToken, ControlKind, IsolationKey, LinkEvent, LinkId, OpId, Output, PreparedCell,
+    CellSource, CellToken, ControlKind, IsolationKey, LinkEvent, LinkId, LinkKind, OpId, Output,
+    PreparedCell,
     QueueId, RelayId, SendFailure, SourceError,
 };
 use secmp_client_core::timing::TimingRng;
@@ -176,6 +177,10 @@ pub struct GateState {
     pub delivered: BTreeMap<(u32, u64), u32>,
     /// The order of preparations and writes with the counters at that moment.
     pub audit: Vec<Audit>,
+    /// The highest `cell_id` an `OK_SEND` reported.
+    pub relayed_max: u64,
+    /// How many evicted ids `OK_SEND` reported.
+    pub evicted_count: u64,
 }
 
 /// One audited event (feature `kat`).
@@ -221,10 +226,12 @@ impl CellSource for Gate<'_> {
     }
 
     fn relayed(&mut self, queue: QueueId, token: CellToken, cell_id: u64) {
+        self.state.relayed_max = self.state.relayed_max.max(cell_id);
         self.convs.relayed(queue, token, cell_id);
     }
 
     fn evicted(&mut self, queue: QueueId, cell_id: u64) {
+        self.state.evicted_count = self.state.evicted_count.saturating_add(1);
         self.convs.evicted(queue, cell_id);
     }
 
@@ -290,6 +297,8 @@ pub struct SimClient {
     pub control_keys: Vec<(OpId, IsolationKey)>,
     /// Every `Connect` the scheduler asked for: time, connection, isolation key.
     pub connects: Vec<(u64, LinkId, IsolationKey)>,
+    /// What each connection is for and its tick period.
+    pub link_kinds: BTreeMap<u64, (LinkKind, u64)>,
 }
 
 /// The driver (see the module documentation).
@@ -368,6 +377,7 @@ impl VirtualDriver {
             controls_started: Vec::new(),
             refused: 0,
             connects: Vec::new(),
+            link_kinds: BTreeMap::new(),
             links: BTreeMap::new(),
             link_status: Vec::new(),
             link_consumed: Vec::new(),
@@ -577,8 +587,10 @@ impl VirtualDriver {
         while let Some(out) = queue.pop_front() {
             match out {
                 Output::Event(e) => self.clients.get_mut(i).unwrap().events.push((t, e)),
-                Output::Connect { link, key, .. } => {
-                    self.clients.get_mut(i).unwrap().connects.push((t, link, key));
+                Output::Connect { link, key, kind, period_ms, .. } => {
+                    let c = self.clients.get_mut(i).unwrap();
+                    c.connects.push((t, link, key));
+                    c.link_kinds.insert(link.0, (kind, period_ms));
                     let more = self.connect(i, t, link);
                     queue.extend(more);
                 }
@@ -863,6 +875,31 @@ impl VirtualDriver {
                 Ok(())
             }
         }
+    }
+
+    /// Set the send counter of connection `link` of client `i` (the rotation tests).
+    ///
+    /// # Panics
+    /// On a violated harness invariant: a test failure, never a production path.
+    pub fn set_send_counter(&mut self, i: usize, link: LinkId, value: u64) {
+        let now = self.now;
+        let outs = {
+            let c = self.clients.get_mut(i).unwrap();
+            c.sched
+                .set_send_counter_kat(link, value, now, &mut Gate::new(&mut c.convs, &mut c.gate))
+                .unwrap()
+        };
+        self.apply(i, now, outs);
+    }
+
+    /// Restart the relay (spec §9.7 item 1): same keys, no state, every connection of every client cut.
+    pub fn restart_relay(&mut self) {
+        for c in &mut self.clients {
+            for conn in c.conns.values() {
+                conn.stream.cut();
+            }
+        }
+        self.harness.restart_relay();
     }
 
     // ---- scenario helpers -----------------------------------------------------------------------------------------

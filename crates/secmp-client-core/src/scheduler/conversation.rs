@@ -286,6 +286,12 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
         self.receipts_due.len()
     }
 
+    /// Whether something real waits for a slot: a planned cell, a queued message, a receipt.
+    #[must_use]
+    pub fn has_pending_real(&self) -> bool {
+        !self.plan.is_empty() || self.outbox.waiting() > 0 || (self.send_receipts && !self.receipts_due.is_empty())
+    }
+
     /// How many cell ids are mapped to what they carried (S-32).
     #[must_use]
     pub fn mapped_cells(&self) -> usize {

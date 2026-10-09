@@ -86,6 +86,17 @@ pub enum ControlKind {
     LinkGetConsume(u32),
 }
 
+/// What a link is for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LinkKind {
+    /// One `SEND` per period (Strict).
+    Send,
+    /// One `FETCH` per period (Strict).
+    Recv,
+    /// One slot per `T` for a whole relay (Balanced, Low-bw).
+    Relay,
+}
+
 /// How a connection reaches the relay (CLAUDE.md §1.5: the user's choice, never changed by a failure).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Transport {
@@ -108,6 +119,10 @@ pub enum Output {
         relay: RelayId,
         /// The transport, the same for every attempt.
         transport: Transport,
+        /// What the link is for.
+        kind: LinkKind,
+        /// Its tick period in milliseconds.
+        period_ms: u64,
     },
     /// Write these prepared frames (a multiple of 4352 bytes) to the link, now.
     Write {

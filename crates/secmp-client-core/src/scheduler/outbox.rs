@@ -68,6 +68,9 @@ pub trait Outbox {
 
     /// Fail the messages never relayed within 30 days of being queued.
     fn expire(&mut self, now_ms: u64);
+
+    /// How many messages wait to be sent (queued and not being sent).
+    fn waiting(&self) -> usize;
 }
 
 struct Entry {
@@ -171,6 +174,13 @@ impl Outbox for MemOutbox {
             e.state = MsgState::Delivered;
             e.taken = false;
         }
+    }
+
+    fn waiting(&self) -> usize {
+        self.entries
+            .iter()
+            .filter(|e| e.state == MsgState::Queued && !e.taken)
+            .count()
     }
 
     fn expire(&mut self, now_ms: u64) {

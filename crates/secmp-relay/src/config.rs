@@ -53,6 +53,9 @@ pub struct Limits {
     /// review C-3: default 900 s; M6 adjusts the default to the slowest scheduler period, so that a client's
     /// constant-rate traffic keeps every link it holds).
     pub link_idle_ms: u64,
+    /// A link older than this is closed, in milliseconds: the longest `LINK_LIFETIME` (spec §4.2, OPEN-M5-03). The
+    /// default is [`crate::conn::LINK_AGE_MAX_MS`]; the virtual-clock tests of M6 raise it to hold a link for a day.
+    pub link_age_ms: u64,
 }
 
 /// Default queue pool: 6 GB (`docs/05` §5 `memory_budget_bytes`).
@@ -84,6 +87,7 @@ impl Limits {
             drain_secs: DEFAULT_DRAIN_SECS,
             max_connections: DEFAULT_MAX_CONNECTIONS,
             link_idle_ms: DEFAULT_LINK_IDLE_SECS.saturating_mul(1000),
+            link_age_ms: crate::conn::LINK_AGE_MAX_MS,
         }
     }
 
@@ -98,6 +102,7 @@ impl Limits {
             drain_secs: DEFAULT_DRAIN_SECS,
             max_connections: DEFAULT_MAX_CONNECTIONS,
             link_idle_ms: DEFAULT_LINK_IDLE_SECS.saturating_mul(1000),
+            link_age_ms: crate::conn::LINK_AGE_MAX_MS,
         }
     }
 }
@@ -290,6 +295,7 @@ impl Config {
             link_idle_ms: idle_secs
                 .checked_mul(1000)
                 .ok_or(Error::Config("link_idle_secs is out of range"))?,
+            link_age_ms: crate::conn::LINK_AGE_MAX_MS,
         };
         Ok(Self {
             listen,
@@ -342,6 +348,7 @@ mod tests {
                 drain_secs: 9,
                 max_connections: 8,
                 link_idle_ms: 10_000,
+                link_age_ms: crate::conn::LINK_AGE_MAX_MS,
             }
         );
         Ok(())

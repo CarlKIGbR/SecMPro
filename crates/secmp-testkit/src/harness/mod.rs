@@ -11,12 +11,16 @@
 
 mod clock;
 mod convo;
+mod driver;
 mod entropy;
 mod stream;
 mod verify;
 mod world;
 
 pub use clock::Clock;
+pub use driver::{
+    Audit, CONTROL_SLOT_BASE, Gate, GateState, Conv, Convs, Dir, Inspect, Material, Options, SimClient, Trace, TraceEntry, VirtualDriver,
+};
 pub use convo::{Polled, Side, ratchet_pair, text_content, text_of};
 pub use entropy::EntropyPool;
 pub use stream::{

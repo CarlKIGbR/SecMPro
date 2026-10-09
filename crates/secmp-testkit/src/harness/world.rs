@@ -195,6 +195,17 @@ impl Harness {
         self.clock.clone()
     }
 
+    /// A new connection to the relay (the relay's accept; `None` while it drains). The scheduler driver opens its
+    /// connections here.
+    pub fn open_stream(&mut self) -> Option<HarnessStream> {
+        HarnessStream::open(
+            self.relay,
+            &self.clock,
+            &self.relay_entropy,
+            self.config.split,
+        )
+    }
+
     /// The relay (its stores and limits through the `kat` accessors).
     #[must_use]
     pub const fn relay(&self) -> &'static Relay {

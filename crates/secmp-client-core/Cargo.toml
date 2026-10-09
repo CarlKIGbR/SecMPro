@@ -19,7 +19,7 @@ kat = ["secmp-proto/kat", "secmp-crypto/kat", "secmp-transport/harness"]
 [dependencies]
 secmp-crypto.workspace = true
 secmp-proto.workspace = true
-secmp-transport = { path = "../secmp-transport" }
+secmp-transport.workspace = true
 
 [lints]
 workspace = true

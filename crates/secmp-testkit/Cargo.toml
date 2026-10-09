@@ -15,7 +15,7 @@ publish.workspace = true
 # `harness`: the in-process relay + clients (src/harness, tests/harness); `kat` adds the differential suites and the
 # constant-time bench. The coverage gate turns on `harness` only (the differential suites take minutes under
 # instrumentation and cover no workspace line).
-harness = ["secmp-crypto/kat", "secmp-proto/kat", "secmp-relay/kat", "secmp-transport/harness"]
+harness = ["secmp-crypto/kat", "secmp-proto/kat", "secmp-relay/kat", "secmp-transport/harness", "secmp-client-core/kat"]
 kat = ["harness"]
 
 # The harness (feature `harness`, which `kat` includes): the relay in process, the SecMP-LINK client, derandomised
@@ -25,6 +25,7 @@ kat = ["harness"]
 [dependencies]
 secmp-crypto.workspace = true
 secmp-proto.workspace = true
+secmp-client-core.workspace = true
 secmp-relay.workspace = true
 secmp-transport.workspace = true
 serde_json.workspace = true

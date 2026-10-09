@@ -96,6 +96,18 @@ large_stack_arrays = "warn"
 undocumented_unsafe_blocks = "deny"      # every unsafe block needs a `// SAFETY:` comment (fires only where unsafe exists)
 multiple_unsafe_ops_per_block = "deny"   # one unsafe operation per block
 
+# M6: the scheduler tests run hours of virtual time, i.e. thousands of hybrid-ratchet steps and handshakes; third-party
+# crates and the two crypto crates are optimised in the dev/test profile (no change to the release profile, no change
+# to any lint or gate). Debug assertions stay on.
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.dev.package.secmp-crypto]
+opt-level = 3
+
+[profile.dev.package.secmp-proto]
+opt-level = 3
+
 # docs/06 §6 — release profile for reproducible builds.
 [profile.release]
 opt-level = 3

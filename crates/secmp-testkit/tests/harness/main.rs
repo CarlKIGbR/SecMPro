@@ -8,6 +8,8 @@
 mod fixture;
 mod invitation;
 mod m6_channel;
+mod m6_common;
+mod m6_sched;
 mod scenarios;
 mod scripted;
 mod transport;

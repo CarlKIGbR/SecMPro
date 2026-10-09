@@ -2,10 +2,11 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 #![forbid(unsafe_code)]
 //! The bytes `HandshakeCells::release` hands to `persist` (persist-before-send, V-6, M3 review F13): exactly the
-//! three released cells and the serialised initiator state. OS randomness and no feature `kat`: it also runs in the
-//! non-`kat` `nextest -p secmp-proto` of step 4 (when it was written the mutation gate built `secmp-proto` without
-//! `kat`; it builds with `kat` since R-60): `HandshakeCells::to_bytes` and `join_cells` are otherwise checked only by
-//! the `kat`-gated `hx` suite (M4-6, PR run 36930469555: 9 missed mutants).
+//! three released cells and the serialised initiator state. OS randomness; feature `kat` since M5 review C-6 (R-113):
+//! the record copy `InvitationRecord::duplicate_kat` exists only with it, so the suite runs in the `kat` step (and in
+//! the mutation gate, which builds `secmp-proto` with `kat` since R-60). It was written without `kat` (M4-6, PR run
+//! 36930469555: 9 missed mutants) because `HandshakeCells::to_bytes` and `join_cells` were otherwise checked only by
+//! the `kat`-gated `hx` suite.
 
 use secmp_crypto::SecretBytes;
 use secmp_proto::Encode;
@@ -162,7 +163,7 @@ fn persisted_cells_are_accepted_by_the_responder() {
         .unwrap()
         .into_cells();
     assert_eq!(concat(&restored), concat(&released));
-    let record = r.inviter.record().duplicate().unwrap();
+    let record = r.inviter.record().duplicate_kat().unwrap();
     let accepted = Responder::accept(
         &restored,
         &record,

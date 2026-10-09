@@ -352,7 +352,9 @@ fn responder_store(world: &World, c: &Case) -> MemoryPrekeyStore {
         assert_eq!(e.remaining(), 0, "{}: the generation's draws", c.id);
         assert_eq!(store.spk_ids(), vec![SPK_ID, SPK_ID + 1], "{}", c.id);
     }
-    store.add_record(world.record.duplicate().unwrap()).unwrap();
+    store
+        .add_record(world.record.duplicate_kat().unwrap())
+        .unwrap();
     store
 }
 

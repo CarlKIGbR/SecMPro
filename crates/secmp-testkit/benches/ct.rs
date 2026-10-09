@@ -3091,7 +3091,7 @@ fn hx_session(stream: &mut Stream) -> Result<HxSession, secmp_proto::Error> {
         .store
         .record(&ld_id)
         .ok_or(secmp_proto::Error::Rejected)?
-        .duplicate()?;
+        .duplicate_kat()?;
     let accepted = invitee_check(invitation, &inviter.blob, HX_NOW)?;
     let guest = IdentityKeys::generate(&mut FixedEntropy::new(&drawn(stream, HX_RANDOMNESS)))?;
     let start = drawn(stream, HX_RANDOMNESS);

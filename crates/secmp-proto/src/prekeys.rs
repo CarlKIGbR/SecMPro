@@ -320,13 +320,16 @@ impl InvitationRecord {
         ed25519_pk_of(&self.invq_recv_seed)
     }
 
-    /// A copy (the link key is duplicated into a zeroizing heap `SecretBytes`): the caller that keeps its records in
-    /// the same store it hands to [`crate::hx::Responder::accept`] copies the record first.
+    /// A deep copy, for tests (feature `kat` or this crate's tests only; M5 review C-6, R-113): duplicates all three
+    /// secrets of the record — `link_key`, `owner_seed` and `invq_recv_seed` — into zeroizing heap `SecretBytes`; a
+    /// test that keeps its records in the same store it hands to [`crate::hx::Responder::accept`] copies the record
+    /// first. A shipped build has no way to copy the secrets out of a record.
     ///
     /// # Errors
-    /// None in practice: `SecretBytes::from_slice` refuses only a wrong length, and a link key is always 32 bytes
-    /// (M4 review R-37: no locked memory is involved, so the call cannot be `Unavailable`).
-    pub fn duplicate(&self) -> Result<Self> {
+    /// None in practice: `SecretBytes::from_slice` refuses only a wrong length, and the three secrets are always 32
+    /// bytes (M4 review R-37: no locked memory is involved, so the call cannot be `Unavailable`).
+    #[cfg(any(test, feature = "kat"))]
+    pub fn duplicate_kat(&self) -> Result<Self> {
         Ok(Self {
             ld_id: self.ld_id,
             link_key: SecretBytes::from_slice(self.link_key.expose_secret())?,
@@ -338,6 +341,20 @@ impl InvitationRecord {
         })
     }
 }
+
+/// M5 review C-6 (R-113): `InvitationRecord::duplicate_kat`, the deep copy of a record's three secrets, exists only in
+/// this crate's own tests and with feature `kat`. Without `kat` a record has no such method (`compile_fail`); with
+/// `kat` (e.g. `cargo test --workspace --doc`, where a dev-dependency enables it) the same code compiles, so the block
+/// fails for the missing method and nothing else:
+///
+#[cfg_attr(not(feature = "kat"), doc = "```compile_fail,E0599")]
+#[cfg_attr(feature = "kat", doc = "```")]
+/// fn copy(record: &secmp_proto::prekeys::InvitationRecord) {
+///     let _ = record.duplicate_kat();
+/// }
+/// ```
+#[cfg(doctest)]
+pub mod invitation_record_copies_only_under_kat {}
 
 /// The Ed25519 public key of a 32-byte seed.
 fn ed25519_pk_of(seed: &SecretBytes<HASH_LEN>) -> Result<Ed25519Pk> {
@@ -711,7 +728,7 @@ impl MemoryPrekeyStore {
         }
         let mut records = Vec::new();
         for r in &self.records {
-            records.push(r.duplicate()?);
+            records.push(r.duplicate_kat()?);
         }
         Ok(Self {
             generations,

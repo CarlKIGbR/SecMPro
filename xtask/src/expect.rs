@@ -570,14 +570,6 @@ pub(crate) const MIRI_SKIP: &[(&str, &str, &str)] = &[
     ),
     (
         "secmp-proto",
-        "test-target:hx_persist",
-        "731 s, 573 s and 699 s per test under Miri (M4-fix, measured on 7a38edd, 2003 s in all; \
-         docs/reviews/M04-evidence/miri-hx-persist-7a38edd.txt): each test generates two identities (ML-DSA-65 key \
-         generation) and runs a full handshake; the fourth test (release_persists_the_state_at_release_time, M4 \
-         review C-8) is of the same kind",
-    ),
-    (
-        "secmp-proto",
         "tr::ratchet::trial_work::trial_opens_every_candidate_every_call",
         "5392 s under Miri (M4, linux-full run 37127247911, x86_64 GitHub runner; \
          docs/reviews/M04-evidence/linux-full-37127247911-miri-excerpt.txt): 3 fixtures x 7 cells, each decrypt \
@@ -640,6 +632,13 @@ pub(crate) const MIRI_FEATURE_GATED: &[(&str, &str, &str)] = &[
         "secmp-proto",
         "hx",
         "required-features = [\"kat\"]: the SecMP-HX integration suite (M4), natively in the kat step",
+    ),
+    (
+        "secmp-proto",
+        "hx_persist",
+        "required-features = [\"kat\"]: the HX persistence tests, which copy records with \
+         InvitationRecord::duplicate_kat (M5 review C-6), natively in the kat step; before C-6 a MIRI_SKIP \
+         test-target (2003 s under Miri, docs/reviews/M04-evidence/miri-hx-persist-7a38edd.txt)",
     ),
     (
         "secmp-proto",

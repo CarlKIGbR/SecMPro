@@ -14,7 +14,7 @@ fn hx_roundtrip_os_rng() {
     let guest = invitee_run(&inviter, &mut rng);
     let record_opk = inviter.record().opk_id;
     assert!(inviter.store.opk(record_opk).is_some());
-    let record = inviter.record().duplicate().unwrap();
+    let record = inviter.record().duplicate_kat().unwrap();
     let mut store = std::mem::take(&mut inviter.store);
     let accepted = Responder::accept(
         &guest.cells,

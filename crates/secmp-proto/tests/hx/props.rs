@@ -155,7 +155,7 @@ fn make_run(seed: u64) -> Run {
     let record = store
         .record(&issued.invitation.ld_id)
         .unwrap()
-        .duplicate()
+        .duplicate_kat()
         .unwrap();
     let accepted = invitee_accept(&uri, &blob, NOW).unwrap();
     let profile = random_profile(&mut rng);

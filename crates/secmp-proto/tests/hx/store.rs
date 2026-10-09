@@ -505,7 +505,7 @@ fn invitation_record_holds_owner_and_invq_recv_keys() {
         ed_pk(&[12; 32])
     );
     // the restore stand-in
-    let copy = record.duplicate().unwrap();
+    let copy = record.duplicate_kat().unwrap();
     assert_eq!(copy.owner_seed.expose_secret(), owner.expose_secret());
     assert_eq!(copy.invq_recv_seed.expose_secret(), invq.expose_secret());
     assert_eq!(

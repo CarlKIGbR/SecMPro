@@ -77,7 +77,7 @@ fn issue(harness: &mut Harness, alice: ClientId) -> Inviter {
     let record = store
         .record(&issued.invitation.ld_id)
         .unwrap()
-        .duplicate()
+        .duplicate_kat()
         .unwrap();
     let bucket = HourBucket::from_unix_secs(expires).0;
     let (link, _) = harness.client(alice).link().unwrap();

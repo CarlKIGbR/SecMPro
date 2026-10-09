@@ -70,8 +70,11 @@ required-features = ["kat"]
 name = "tr_trial_counts"
 required-features = ["kat"]
 
-
-
+# The persist-before-send bytes of `HandshakeCells::release` (V-6, M3 review F13): it copies the invitation record with
+# `InvitationRecord::duplicate_kat`, which exists only with feature `kat` (M5 review C-6, R-113).
+[[test]]
+name = "hx_persist"
+required-features = ["kat"]
 
 # The performance measurement of M3 (plan D11: encrypt + decrypt < 3 ms), OS randomness, feature `kat` off; run in
 # the release profile by `cargo xtask step perf`.

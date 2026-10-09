@@ -111,6 +111,7 @@ through the `Initiator` was not built) · R-42/R-59, R-41, R-47, R-66, R-67, R-7
 | Fuzz (local, 120 s per target, scratch corpus) | `link_records` cov 677 ft 1604; `link_client_handshake` 3197/6506; `link_relay_handshake` 2908/5183; `link_frame_open` 3881/4467; `q_request_decode` 559/1485; `q_response_decode` 237/341; `hx_accept_structured` 6111/9468; no crash; `fuzz-phase-a-local-e243648.log` |
 | Mutation pre-check (local, `cargo mutants -f 'link/*.rs'`, link tests only) | first run 160 mutants: 76 caught, 44 unviable, 40 missed → tests added (§2); second run (`e243648`): 156 mutants, 112 caught, 44 unviable, 0 missed (`mutants-link-second-run.txt`); `secmp-crypto` `mac.rs` + `nonce.rs`: 22 mutants, 9 caught, 13 unviable, 0 missed (`mutants-crypto-mac-nonce.txt`) |
 | PR run (`linux-fast`, `windows-native`, `xwin-cross`, `linux-full`, `ct`, `mutants`, `proverif-hx`) | pending — run IDs in the closing message |
+| CI `ct`, PR run `37882708499` (tree of `3b29ca8`; corrected in the M5 fix round, M05 review R-125, C-13) | run PASS (`ct-check` re-derived by the review, V12). Positive control `control_variable_time_compare` PASS = detected, t −21801.2 at p75; CT-01…CT-06 (`link_hs1_reject_mac1`, `link_hs2_reject_mac2`, `link_frame_open_reject`, `q_queue_new_reject_token`, `tr_decrypt_trial_open_position`, `link_same_content_control`) PASS, max\|t\| ≤ 2.79; `caead_derive` SUB_FLOOR_SHIFT at p95 (t 45.45/45.88, Δ 2.425/2.188 ticks = 0.099/0.089 floors; admissible, FAIL not possible). The "FAIL p90 122.6/122.5" of the closing message's Block B is the sensitivity control `min_leak_control` (ADR-041 Am. 3: it must detect the planted leak; Δ 122.64/122.54 floors), not the positive control as Block B said. Evidence: `M05-evidence/ct-report-linux-37882708499.json`, `ct-progress-linux-37882708499.jsonl`, `review-v12-ct-check.txt` |
 
 ## 5. Deviations from spec / plan
 
@@ -123,7 +124,13 @@ through the `Initiator` was not built) · R-42/R-59, R-41, R-47, R-66, R-67, R-7
 - K-01 `kani_frame_pad_total` is bounded: the symbolic `unpad` scan of a 4336-byte buffer did not finish in about 30 minutes, so
   `unpad` is proven total / inverting `pad` for buffers whose last 32 bytes are not all zero (`SCAN_WINDOW`); the longer all-zero tail rests
   on the existing `padding` harness (size-generic code, sizes up to 32). K-08's request side stubs `RequestCmd::decode_fields` (as
-  `request_frame` does); the per-opcode `request_*` harnesses cover the field decoders.
+  `request_frame` does); the per-opcode `request_*` harnesses cover the field decoders. Not disclosed until the review (R-121): K-01's
+  payload and tail indices of (a) were `kani::assume`d (`j < n`, `n < k < 4336`), which pruned every later check — (c) and (b)
+  included — for n = 0 and n = 4335 (the maximal payload). The fix round (C-12) replaced both by `if` guards and added covers
+  (K-01 2, K-03 3, K-08 2; `expect::KANI_COVERS`).
+- `QUEUE_NEW` whose derived `sid` is held by another queue → `ERR_AUTH` (`crates/secmp-relay/src/exec.rs:137-140`; reachable
+  only by a 128-bit collision; fail-closed; not in spec §9.3/§9.7(8); the reference implementation overwrites). Declared in the
+  fix round (M05 review R-138, C-13); ADR-048 erratum (c) proposed by the reviewer (owner default 2026-10-10).
 - Fuzz seeding: `xtask::expect::FUZZ_TRACKED_ONLY` lists the six link/Q targets, which rely on their tracked corpus until Phase B freezes
   the `link` suite (the unit test `the_rules_name_listed_targets_and_frozen_suites` fails if a listed target also has a seeding rule).
 - Test layout: one test crate `link` (the policy gate refuses a `dead_code` allow, so the shared fixture must be used by something
@@ -322,7 +329,11 @@ None (no new crate in `Cargo.lock` or `fuzz/Cargo.lock`; `secmp-relay` gains wor
 - `tr.pv` grew to 47 lines (129.6 s idle); `linux-full` runs it.
 - `lBoth` takes 655.2 s of its 1800 s cap here under load ≈ 50 (margin ≈ 2.7×); its log is 1.4 GB (attack traces with large
   terms); the `proverif-link` job's runner time comes with the CI run.
-- Kani bounds of K-06/K-07 (§5B); `server` is thread-per-connection (M10 load test).
+- Kani bounds of K-06/K-07 (§5B); `server` is thread-per-connection (M10 load test). Corrected in the fix round (M05 review
+  R-105…R-107, C-1…C-3): at most `max_connections` (default 256, below `TasksMax` 512 and `LimitNOFILE`) at once, a connection over
+  the cap closed before any read and without a thread, a thread-spawn failure closes the stream instead of aborting; `accept`
+  errors are retried (`accept_retry`), only a dead listener (EBADF/EINVAL/ENOTSOCK) ends `serve`; a 30-s write timeout; a link
+  is closed after 24 h (`LINK_LIFETIME` bound) or after `link_idle_secs` (900 s) without a complete unit.
 - `linux-full` budget (run 37817187858): 221 of 240 min (`timeout-minutes: 240`, `ci.yml:155`); step times nextest 350 s, kat
   1580 s, perf 24 s, fuzz 3579 s, coverage 334 s, miri 2898 s, kani 4190 s, proverif 201 s, sbom 30 s. M5-B-3 adds test time in step
   7 only: the relay suite (116 tests, 150 s of summed test time, longest 38 s) — locally 86 s → 92 s; the CI step time comes with
@@ -455,7 +466,8 @@ Tests touched: xtask `fuzzseed::tests::the_frozen_vectors_seed_every_target` (hx
    `harness` (not `kat`: the `kat` step discovers packages by that feature name, `expect::KAT_PACKAGES` unchanged).
 6. **Fuzz seed counts** (`fuzzseed::the_frozen_vectors_seed_every_target`) follow the re-frozen hx suite (24 / 39 / 45 / 9 / 15,
    was 17 / 24 / 30 / 4 / 10): derived from the file, not a threshold.
-7. **H-12** has no outbox: "the sender drops its `cell_id` map" is vacuous at M5 (`Side` keeps none; the outbox is M6).
+7. ~~**H-12** has no outbox: "the sender drops its `cell_id` map" is vacuous at M5 (`Side` keeps none; the outbox is M6).~~
+   Struck (M05 review §E, R-115): the clause is struck in TEST-SPEC H-12 as well; the map belongs to M6's outbox.
 8. **Harness relay is leaked** (`Box::leak`, one per `Harness::new` / `restart_relay`): a `Connection` borrows its `Relay` for
    its life; test infrastructure, bounded, no change to Phase B code.
 9. **`cargo xtask step --strict vectors kat`** (brief §2.4): there is no step named `vectors`; the `kat` step ran inside
@@ -482,7 +494,8 @@ None. New edges between workspace crates: `secmp-transport` → `secmp-crypto`, 
 ## 9. Checklist before requesting review
 
 - [x] All acceptance criteria of `docs/07` §M5 evidenced (230 rows + K-08; §3, §3B, §3C, §10.1)
-- [ ] `cargo xtask ci` green on a clean checkout — local `ci-fast --strict` PASS at `fb2d651`; the PR run of the closing push decides (closing message)
+- [x] `cargo xtask ci` green on a clean checkout — local `ci-fast --strict` PASS at `fb2d651`; PR run `37882708499` green on the
+  closing head `3b29ca8` (M05 review §E); the fix round's PR run on its pushed head: closing message of M5-FIX
 - [x] No `#[ignore]`, no lint allowance for a security lint, no disabled gate (policy step PASS: the only relaxations are the sanctioned `unwrap`/`expect` file allowances of test code under `crates/secmp-testkit/`)
 - [x] Vectors frozen and reviewed: `hx.json` re-frozen as planned (REF-M5-2), nothing else changed (`hx-refreeze-m5c.txt`)
 - [x] Docs updated: `docs/03` rev 2.6 (A), `docs/06`, `docs/08` ADR-047 Am. 3, ADR-049, ADR-050 (proposed), `docs/07` §M5 status
@@ -528,7 +541,9 @@ The counts of A and B are those of §3 and §3B; the extra tests of each phase a
 | F15 | — | via the reference session: `SCHEMA-4.10-hx.md` rendered by the fixed tool, copied unchanged (`hx-refreeze-m5c.txt`) |
 | ADR-048 editorial list (R-60…R-65, RT-3) | — | applied in Phase A (`docs/03` rev 2.6, errata) |
 
-No F-M5 line is deferred.
+No F-M5 line is deferred — except, corrected in the fix round (M05 review R-156, R-164 / RT-03): the M04 F-M5 note "nextest LEAK
+of the Windows fake bench" (`xtask/src/gates.rs:4617-4624`: the `ping` child outlives the killed `cmd.exe`, no tree kill) is not
+closed in M5 and is re-targeted to M9 (F-16).
 
 ### 10.3 Deviations index
 
@@ -546,7 +561,7 @@ informational).
 | Fuzz | `fuzz-phase-a-local-e243648.log` | `fuzz-m5b-local.log` | none (no new target; seed counts of the hx suite follow the re-frozen vectors) |
 | Mutants | `mutants-link-second-run.txt`, `mutants-crypto-mac-nonce.txt` | `mutants-relay-local-ae0d67e.txt`, `mutants-m5b3-local.txt` | `mutants-m5c-rotate-local.txt`, `mutants-m5c-proto-local.txt` |
 | ProVerif | — | `proverif-link-local-2.txt`, `proverif-tr-gate-local-85f4c01.txt` | unchanged (no model file touched) |
-| ct | — | `ct-report-local-scale10.json`, `ct-summary-local-scale10.txt` | unchanged (no ct target touched) |
+| ct | — | `ct-report-local-scale10.json`, `ct-summary-local-scale10.txt` | unchanged (no ct target touched); CI record of run `37882708499`: `ct-report-linux-37882708499.json`, `ct-progress-linux-37882708499.jsonl` (fix round) |
 | Coverage | — | `coverage-local-m5b3.txt` | `coverage-local-m5c-fb2d651.txt` |
 | Vectors | `schema-diff.txt` | `vectors-link-freeze.txt` | `vectors-m5c-fb2d651.txt`, `hx-refreeze-m5c.txt` |
 | Tests listing | `kat-listing-phase-a.txt` | `m5b3-checks-local-dc34d93.txt` | `phase-c-tests-fb2d651.txt` |

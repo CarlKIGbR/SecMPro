@@ -612,32 +612,65 @@ fn q_fetch_multi_signature_label_is_mfetch() {
     );
 }
 
-/// Q-25 `q_fetch_multi_more_errors_than_f_m` [SQ-28]: nine entries, all in error (`present` 2, 3 and 4), answer
-/// exactly 8 frames: the first eight errors in request order, and only their eight cells are drawn (ADR-048 (j)).
+/// Q-25's bench, without a budget limit (three queues; the vector budget holds two): A holds cell 1, B is empty, C
+/// holds cells 1 and 2. The next `cmd_seq` is 7.
+fn q25_bench([(ra, sa), (rb, sb), (rc, sc)]: &[(Key, Key); 3]) -> Bench {
+    let mut b = Bench::new(limits(None, None));
+    run_queue_new(&mut b, "Q-25 A", 1, ra, sa);
+    run_send(&mut b, "Q-25 A1", 2, ra, sa, &cell(1));
+    run_queue_new(&mut b, "Q-25 B", 3, rb, sb);
+    run_queue_new(&mut b, "Q-25 C", 4, rc, sc);
+    run_send(&mut b, "Q-25 C1", 5, rc, sc, &cell(0x31));
+    run_send(&mut b, "Q-25 C2", 6, rc, sc, &cell(0x32));
+    b
+}
+
+/// Q-25 `q_fetch_multi_more_errors_than_f_m` [SQ-28]: ten entries — nine in error (`present` 2, 3 and 4), then a
+/// valid one for queue C with `ack` 1 — answer exactly 8 frames: the first eight errors in request order, and only
+/// their eight cells are drawn (ADR-048 (j)). The valid 10th entry is not reported, because the `F_M` cap cuts the
+/// answer before it, but it is still checked and acknowledged: every entry has the `FETCH` ack semantics and the cap
+/// limits only what is answered (spec §9.3 `FETCH_MULTI`; acking a cut entry is spec-conformant, M05 review H-10).
+/// So C's cell 1 is deleted and the store changes by exactly what a lone `FETCH` of C with `ack` 1 changes on a twin
+/// bench; a later `FETCH` of C no longer shows cell 1 (`q25_acked_but_unreported_entry_still_deletes`, M05 review
+/// R-140/C-13).
 #[test]
 fn q_fetch_multi_more_errors_than_f_m() {
-    let (ra, sa, rb, sb) = (Key::of(1), Key::of(2), Key::of(3), Key::of(4));
-    let mut b = with_cells(&ra, &sa, 1);
-    run_queue_new(&mut b, "Q-25 B", 3, &rb, &sb);
+    let keys = [
+        (Key::of(1), Key::of(2)),
+        (Key::of(3), Key::of(4)),
+        (Key::of(5), Key::of(6)),
+    ];
+    let [(ra, sa), (rb, _), (rc, _)] = &keys;
+    let mut b = q25_bench(&keys);
     let sess = b.client.sess_id();
     let (a, bq) = (rid_of(&ra.pk), rid_of(&rb.pk));
     let unknown: Vec<Key> = (50_u8..57).map(Key::of).collect();
     let (first, rest) = unknown.split_first().unwrap();
     let mut entries = vec![
-        b.client.fetch_entry(4, first, 0),
-        entry(a, 0, sa.sign(&msg_fetch("MFETCH", &sess, 4, &a, 0))),
-        b.client.fetch_entry(4, &rb, 1),
+        b.client.fetch_entry(7, first, 0),
+        entry(a, 0, sa.sign(&msg_fetch("MFETCH", &sess, 7, &a, 0))),
+        b.client.fetch_entry(7, rb, 1),
     ];
-    entries.extend(rest.iter().map(|k| b.client.fetch_entry(4, k, 0)));
-    assert_eq!(entries.len(), 9, "Q-25: nine entries");
+    entries.extend(rest.iter().map(|k| b.client.fetch_entry(7, k, 0)));
+    entries.push(b.client.fetch_entry(7, rc, 1));
+    assert_eq!(
+        entries.len(),
+        10,
+        "Q-25: ten entries, nine errors then a valid one"
+    );
     let mut want = vec![(2, rid_of(&first.pk), 0), (3, a, 0), (4, bq, 0)];
     want.extend(rest.iter().take(5).map(|k| (2, rid_of(&k.pk), 0)));
     let mut entropy = FixedEntropy::new(&vec![0x5a; 32_768]);
     let digest = b.digest();
-    let payload = req_payload(&Client::fetch_multi(4, entries));
+    assert_eq!(
+        queue_of(&b, rc),
+        (vec![1, 2], 3),
+        "Q-25: C holds cells 1 and 2"
+    );
+    let payload = req_payload(&Client::fetch_multi(7, entries));
     let r = cmd_with(
         &mut b,
-        "Q-25 nine errors",
+        "Q-25 nine errors and a valid entry",
         &[payload],
         Expect::D2,
         now(),
@@ -646,14 +679,47 @@ fn q_fetch_multi_more_errors_than_f_m() {
     assert_eq!(
         r.heads(),
         want,
-        "Q-25: the first eight errors in request order"
+        "Q-25: the first eight errors in request order (q25_acked_but_unreported_entry_still_deletes: C's entry \
+         is not reported)"
     );
     assert_eq!(
         entropy.remaining(),
         0,
         "Q-25: eight cells drawn, nothing else"
     );
-    assert_eq!(b.digest(), digest, "Q-25: store unchanged");
+    assert_eq!(
+        queue_of(&b, rc),
+        (vec![2], 3),
+        "Q-25 q25_acked_but_unreported_entry_still_deletes: C's cell 1 deleted by the unreported entry's ack, cell 2 \
+         kept"
+    );
+    assert_eq!(
+        (queue_of(&b, ra), queue_of(&b, rb)),
+        ((vec![1], 2), (Vec::new(), 1)),
+        "Q-25: A and B unchanged (their entries are errors)"
+    );
+    let mut twin = q25_bench(&keys);
+    assert_eq!(
+        twin.digest(),
+        digest,
+        "Q-25: the twin bench holds the same store"
+    );
+    // C's cell 2 alone; a FETCH's present-1 frame carries rid 0 (only FETCH_MULTI's carries its rid, OPEN-8)
+    let only_2 = padded(&[(1, [0; 16], 2)], 4);
+    let lone = run_fetch(&mut twin, "Q-25 twin: FETCH C ack 1", 7, rc, 1);
+    assert_eq!(lone.heads(), only_2, "Q-25 twin: C ack 1 served");
+    assert_eq!(
+        b.digest(),
+        twin.digest(),
+        "Q-25 q25_acked_but_unreported_entry_still_deletes: the store changed by exactly C's ack 1 (= a lone FETCH \
+         of C with ack 1 on the twin bench)"
+    );
+    let later = run_fetch(&mut b, "Q-25 FETCH C afterwards", 8, rc, 0);
+    assert_eq!(
+        later.heads(),
+        only_2,
+        "Q-25 q25_acked_but_unreported_entry_still_deletes: a later FETCH of C no longer shows cell 1"
+    );
 }
 
 /// Q-26 `q_fetch_multi_repeated_rid` [SQ-28]: a `rid` listed twice with `ack` 1 then 2: the acks apply in request

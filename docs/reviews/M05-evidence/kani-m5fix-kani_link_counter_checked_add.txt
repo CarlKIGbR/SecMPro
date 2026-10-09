@@ -1,0 +1,29 @@
+# M5 fix round (BRIEF M5-FIX, M05 review R-121, C-12), TEST-SPEC-M5 (e) K-03 kani_link_counter_checked_add
+# tree: the tree of the C-12 commit ("fix(m05): C-12 K-01 guards instead of assumes; covers for K-01, K-03, K-08"),
+#   run before it was committed (C-1…C-10 committed; the harness change committed unchanged with this file)
+# command: env PATH=... cargo kani -p secmp-proto -Z stubbing --harness kani_proofs::kani_link_counter_checked_add --exact
+#   codegen of the package first: cargo kani -p secmp-proto -Z stubbing --only-codegen, exit 0
+# Kani 0.68.0, CBMC 6.11.0, M1 Pro, macOS; one harness at a time, no other build running
+# result: VERIFICATION:- SUCCESSFUL; wall 26.0 s; ** 0 of 1027 failed (8 unreachable); ** 3 of 3 cover properties satisfied; Verification Time: 22.973715s
+#
+# the run (the harness line, every cover check, the summary):
+
+Checking harness kani_proofs::kani_link_counter_checked_add...
+Check 13: kani_proofs::kani_link_counter_checked_add.cover.1
+	 - Status: SATISFIED
+	 - Description: "K-03: NewLinkRequired"
+	 - Location: crates/secmp-proto/src/kani_proofs.rs:1039:13 in function kani_proofs::kani_link_counter_checked_add
+Check 16: kani_proofs::kani_link_counter_checked_add.cover.2
+	 - Status: SATISFIED
+	 - Description: "K-03: CounterOverflow"
+	 - Location: crates/secmp-proto/src/kani_proofs.rs:1044:13 in function kani_proofs::kani_link_counter_checked_add
+Check 24: kani_proofs::kani_link_counter_checked_add.cover.3
+	 - Status: SATISFIED
+	 - Description: "K-03: a frame is sealed"
+	 - Location: crates/secmp-proto/src/kani_proofs.rs:1052:13 in function kani_proofs::kani_link_counter_checked_add
+SUMMARY:
+ ** 0 of 1027 failed (8 unreachable)
+ ** 3 of 3 cover properties satisfied
+VERIFICATION:- SUCCESSFUL
+Verification Time: 22.973715s
+Complete - 1 successfully verified harnesses, 0 failures, 1 total.

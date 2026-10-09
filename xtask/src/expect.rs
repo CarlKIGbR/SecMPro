@@ -735,7 +735,10 @@ pub(crate) const KANI_COVERS: &[(&str, usize)] = &[
     ("kani_proofs::kani_commit_accept_atomic", 1),
     ("kani_proofs::kani_cont_assembly", 1),
     ("kani_proofs::kani_executor_response_count", 6),
+    ("kani_proofs::kani_frame_pad_total", 2),
+    ("kani_proofs::kani_link_counter_checked_add", 3),
     ("kani_proofs::kani_link_counter_strict_plus_one", 2),
+    ("kani_proofs::kani_q_frame_plaintext_exact_fit", 2),
     ("kani_proofs::kani_queue_eviction_bounds", 3),
 ];
 

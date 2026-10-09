@@ -7430,6 +7430,16 @@ mod tests {
                 root.join(format!("docs/reviews/M05-evidence/kani-m5b-{h}.txt")),
             )?));
         }
+        // M5 fix round (M05 review R-121, C-12): the runs of K-01, K-03 and K-08 with their new covers
+        for h in [
+            "kani_frame_pad_total",
+            "kani_link_counter_checked_add",
+            "kani_q_frame_plaintext_exact_fit",
+        ] {
+            log.push_str(&lf(&std::fs::read_to_string(
+                root.join(format!("docs/reviews/M05-evidence/kani-m5fix-{h}.txt")),
+            )?));
+        }
         assert_eq!(
             kani_cover_pin_findings(&kani_covers(&log)?),
             Vec::<String>::new()

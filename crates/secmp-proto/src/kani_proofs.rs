@@ -911,7 +911,9 @@ const SCAN_WINDOW: usize = 32;
 /// total, and what it accepts re-encodes: `pad` of the returned fields is the buffer. (c) `unpad` inverts `pad` for every
 /// payload that ends within the window (n >= 4336 - [`SCAN_WINDOW`]). Bound: the scan over a longer all-zero tail (the
 /// scan loop is the size-generic code of `padding`, proven for every size up to 32; a symbolic 4336-byte scan did not
-/// finish in 30 minutes, measured 2026-10-07, and in the M2 measurement).
+/// finish in 30 minutes, measured 2026-10-07, and in the M2 measurement). The payload and tail indices of (a) are
+/// guarded with `if`, not assumed, so no length is pruned: n = 0 (no payload index) and n = 4335 (no tail index)
+/// reach every later check, (c) included; the covers show both (M05 review R-121, C-12).
 #[kani::proof]
 #[kani::unwind(40)] // the marker scan within the window, plus the window test
 fn kani_frame_pad_total() {
@@ -926,15 +928,24 @@ fn kani_frame_pad_total() {
             assert!(p.len() == FRAME_PLAINTEXT_LEN);
             assert!(p.get(n) == Some(&0x80));
             let j: usize = kani::any();
-            kani::assume(j < n);
-            assert!(p.get(j) == payload.get(j));
+            if j < n {
+                assert!(p.get(j) == payload.get(j));
+            }
             let k: usize = kani::any();
-            kani::assume(k > n && k < FRAME_PLAINTEXT_LEN);
-            assert!(p.get(k) == Some(&0));
+            if k > n && k < FRAME_PLAINTEXT_LEN {
+                assert!(p.get(k) == Some(&0));
+            }
+            kani::cover!(n == 0, "K-01: the empty payload passes (a)");
             // (c)
             if n >= FRAME_PLAINTEXT_LEN.saturating_sub(SCAN_WINDOW) {
                 match unpad(&p, FRAME_PLAINTEXT_LEN) {
-                    Ok(fields) => same_bytes(fields, payload),
+                    Ok(fields) => {
+                        same_bytes(fields, payload);
+                        kani::cover!(
+                            n == MAX_PAYLOAD_LEN,
+                            "K-01: the 4335-byte payload round-trips in (c)"
+                        );
+                    }
                     Err(_) => assert!(false),
                 }
             }
@@ -1010,6 +1021,7 @@ fn kani_link_counter_strict_plus_one() {
 /// at every send counter including `u64::MAX`, after which the counter is exhausted and the next seal is
 /// `CounterOverflow` with the counter still exhausted (no wrap to 0); the same for opening at `u64::MAX`; a payload of
 /// 4336 bytes is `PayloadTooLong` and moves nothing; a unit of another length is rejected without moving a counter.
+/// The covers show that each outcome of (a) occurs (M05 review C-12).
 #[kani::proof]
 #[kani::stub(crate::codec::unpad, crate::codec::kani_stubs::unpad)]
 fn kani_link_counter_checked_add() {
@@ -1024,10 +1036,12 @@ fn kani_link_counter_checked_add() {
         Err(LinkError::NewLinkRequired) => {
             assert!(reached(send) || reached(recv));
             assert!(client.send_counter() == send && client.recv_counter() == recv);
+            kani::cover!(true, "K-03: NewLinkRequired");
         }
         Err(LinkError::CounterOverflow) => {
             assert!(send.is_none() && !reached(recv));
             assert!(client.send_counter() == send && client.recv_counter() == recv);
+            kani::cover!(true, "K-03: CounterOverflow");
         }
         Err(_) => assert!(false),
         Ok(frame) => {
@@ -1035,6 +1049,7 @@ fn kani_link_counter_checked_add() {
             assert!(sealed_counter(frame.as_slice()) == send);
             assert!(client.send_counter() == send.and_then(|v| v.checked_add(1)));
             assert!(client.recv_counter() == recv);
+            kani::cover!(true, "K-03: a frame is sealed");
         }
     }
     core::mem::forget(client);
@@ -1181,7 +1196,8 @@ fn kani_cont_assembly() {
 /// request harnesses and `response_frame` prove the field decoders): neither panics; each accepts only at exactly
 /// 4336 bytes; an accepted request or response carries the `cmd_seq` of bytes 1 ..= 4 (the layout `op ‖ cmd_seq ‖
 /// fields`); an accepted response has the opcode of byte 0, which is one of the seven response opcodes of D.2 and
-/// no request opcode (so a request frame is never taken for a response), for both `CELLR` contexts.
+/// no request opcode (so a request frame is never taken for a response), for both `CELLR` contexts. The covers show
+/// that each decoder accepts some input (M05 review C-12).
 #[kani::proof]
 #[kani::stub(crate::codec::unpad, crate::codec::kani_stubs::unpad)]
 #[kani::stub(
@@ -1199,6 +1215,7 @@ fn kani_q_frame_plaintext_exact_fit() {
     if let Ok(req) = Request::decode(input) {
         assert!(len == FRAME_PLAINTEXT_LEN);
         assert!(Some(req.cmd_seq) == cmd_seq);
+        kani::cover!(true, "K-08: a request is accepted");
     }
     let context = if kani::any() {
         CellrContext::Fetch
@@ -1212,5 +1229,6 @@ fn kani_q_frame_plaintext_exact_fit() {
         assert!(bytes.first() == Some(&op));
         assert!(opcode::RESPONSES.iter().any(|(o, _)| *o == op));
         assert!(!opcode::REQUESTS.iter().any(|(o, _)| *o == op));
+        kani::cover!(true, "K-08: a response is accepted");
     }
 }

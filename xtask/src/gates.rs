@@ -2816,33 +2816,57 @@ fn proverif_pass_detail(
     )
 }
 
-/// The `RESULT` lines of a ProVerif output in order, skipping the `RESULT (but …)` / `RESULT (even …)` remark ProVerif
-/// prints under an injective query that does not hold (it states the non-injective version's verdict, qualifies the
-/// line above and is no result of its own; `(even …)` when that version is false too, first seen with H8/H9, M4-11).
+/// The `RESULT` lines of a ProVerif output in order. The `RESULT (but …)` / `RESULT (even …)` remark ProVerif prints
+/// under an injective query that does not hold states the non-injective version's verdict (`(even … is false.)` when
+/// that version is false too, first seen with H8/H9, M4-11; `(but … is true.)` when it holds): it is no result of its
+/// own and is attached to the line above it (M5 review R-117, C-9: the gate reads it for the injective lines expected
+/// false). A remark without a line above it is an unreadable line of its own (ProVerif never prints one).
 pub(crate) fn proverif_result_lines(output: &str) -> Vec<ResultLine> {
-    output
+    let mut out: Vec<ResultLine> = Vec::new();
+    for r in output
         .lines()
         .filter_map(|l| l.trim().strip_prefix("RESULT "))
-        .filter(|r| !r.starts_with("(but ") && !r.starts_with("(even "))
-        .map(|r| {
-            for (suffix, verdict) in [
-                (" is true.", PvVerdict::True),
-                (" is false.", PvVerdict::False),
-                (" cannot be proved.", PvVerdict::CannotBeProved),
-            ] {
-                if let Some(query) = r.strip_suffix(suffix) {
-                    return ResultLine {
-                        query: query.to_owned(),
-                        verdict,
-                    };
-                }
-            }
-            ResultLine {
-                query: r.to_owned(),
-                verdict: PvVerdict::Unreadable,
-            }
-        })
-        .collect()
+    {
+        let remark = r.starts_with("(but ") || r.starts_with("(even ");
+        match out.last_mut() {
+            Some(above) if remark => above.remarks.push(r.to_owned()),
+            _ => out.push(result_line(r, remark)),
+        }
+    }
+    out
+}
+
+/// One `RESULT` line (the text after `RESULT `) read as query and verdict; `orphan`: a remark without a line above it.
+fn result_line(r: &str, orphan: bool) -> ResultLine {
+    let unreadable = ResultLine {
+        query: r.to_owned(),
+        verdict: PvVerdict::Unreadable,
+        remarks: Vec::new(),
+    };
+    if orphan {
+        return unreadable;
+    }
+    for (suffix, verdict) in [
+        (" is true.", PvVerdict::True),
+        (" is false.", PvVerdict::False),
+        (" cannot be proved.", PvVerdict::CannotBeProved),
+    ] {
+        if let Some(query) = r.strip_suffix(suffix) {
+            return ResultLine {
+                query: query.to_owned(),
+                verdict,
+                remarks: Vec::new(),
+            };
+        }
+    }
+    unreadable
+}
+
+/// M5 review R-117 (C-9): the remarks under an injective `RESULT` line that is false say that the non-injective
+/// version is false as well — exactly one remark, `(even … is false.)`. `(but … is true.)` (only injectivity fails: a
+/// replay) or no remark does not.
+fn even_remark(remarks: &[String]) -> bool {
+    matches!(remarks, [r] if r.starts_with("(even ") && r.ends_with(" is false.)"))
 }
 
 /// What ProVerif says about one query.
@@ -2869,11 +2893,13 @@ impl PvVerdict {
     }
 }
 
-/// One `RESULT` line: the query text (between `RESULT ` and the verdict) and the verdict.
+/// One `RESULT` line: the query text (between `RESULT ` and the verdict), the verdict, and the `RESULT (but …)` /
+/// `RESULT (even …)` remarks printed under it (the text after `RESULT `; none for a query that holds).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ResultLine {
     pub(crate) query: String,
     pub(crate) verdict: PvVerdict,
+    pub(crate) remarks: Vec<String>,
 }
 
 /// The expected entries of one SecMP-HX file: (CLAIMS ID, query text, verdict), in table order.
@@ -2922,9 +2948,10 @@ pub(crate) fn proverif_check_hx(file: &str, output: &str) -> Result<String> {
 /// [`proverif_check_hx`] against `table`: the file must have entries; every `RESULT` line must match an entry by its
 /// query text (else "extra"), every entry a line (else "missing"), the matched entries must come in table order (else
 /// "re-ordered") and their number must be the same; a `True` entry's line must say "is true.", a `False` entry's
-/// line "is false." (an `Informative` entry's line may say anything), anything else fails, naming the file, the CLAIMS
-/// ID and the query text. Returns the summary per ID. Also the check of the single-file models (`file` one of
-/// `expect::PROVERIF_MODELS`, M4 review C-7).
+/// line "is false." (an `Informative` entry's line may say anything), and a `False` entry's line whose query is
+/// injective (its text contains `inj-event`) must carry exactly one remark `RESULT (even … is false.)` (M5 review
+/// R-117, C-9); anything else fails, naming the file, the CLAIMS ID and the query text. Returns the summary per ID.
+/// Also the check of the single-file models (`file` one of `expect::PROVERIF_MODELS`, M4 review C-7).
 pub(crate) fn proverif_check_hx_in(
     table: &[expect::HxExpected],
     file: &str,
@@ -3012,6 +3039,28 @@ fn proverif_check_lines(
             problems.push(format!(
                 "RESULT line {line} ({id}) is {}, expected {wanted}: {}",
                 g.verdict.word(),
+                g.query
+            ));
+        }
+        // M5 review R-117 (C-9): an injective query expected false (the line's own text says `inj-event`) must be false
+        // in its non-injective version too; `(but … is true.)` under it is a replay-only failure, not the expected one
+        if *want == Proved::False
+            && g.verdict == PvVerdict::False
+            && g.query.contains("inj-event")
+            && !even_remark(&g.remarks)
+        {
+            let remarks = if g.remarks.is_empty() {
+                "none".to_owned()
+            } else {
+                g.remarks
+                    .iter()
+                    .map(|r| format!("`RESULT {r}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            problems.push(format!(
+                "RESULT line {line} ({id}) is an injective query expected false, but its remark is {remarks}, \
+                 expected one `RESULT (even … is false.)` (the non-injective version false too): {}",
                 g.query
             ));
         }
@@ -5466,6 +5515,198 @@ mod tests {
             assert!(
                 summary.starts_with(&format!("formal/link/{stem}.pv: ")),
                 "{summary}"
+            );
+        }
+        Ok(())
+    }
+
+    /// The remark of the synthetic outputs ([`hx_output`]) under an injective query that is false.
+    const EVEN_REMARK: &str = "RESULT (even event(RAccept(x,y)) ==> event(IStart(x,y)) is false.)";
+
+    /// M5 review R-117 (C-9): an injective query expected false passes only with exactly one remark `RESULT (even … is
+    /// false.)` under it. A synthetic lQKey output whose L6a line carries `RESULT (but … is true.)` (the non-injective
+    /// version holds: a replay-only failure) is refused naming the file, the line, the ID, the remark and the query; so
+    /// are no remark and two remarks, the committed lQKey run edited that way (the reviewer's V7), and every injective
+    /// expected-false entry of the HX and LINK tables (H8, H9, L1c, L2, L6a) with the `(but …)` remark. A remark
+    /// attaches to the line above it; one without a line above is an unreadable line.
+    #[test]
+    fn proverif_inj_false_requires_even_remark() -> Result<()> {
+        let l6a = "inj-event(RExec(lQKey,sid_4,cs,cmd,vk(sigk(lQKey,iQ(x_1))))) ==> \
+                   inj-event(CSign(lQKey,sid_4,cs,cmd,vk(sigk(lQKey,iQ(x_1)))))";
+        assert!(expect::PROVERIF_EXPECTED_LINK.contains(&(
+            "lQKey",
+            "L6a",
+            l6a,
+            expect::Proved::False
+        )));
+        let but = "RESULT (but event(RExec(lQKey,sid_4,cs,cmd,vk(sigk(lQKey,iQ(x_1))))) ==> \
+                   event(CSign(lQKey,sid_4,cs,cmd,vk(sigk(lQKey,iQ(x_1))))) is true.)";
+        let even = but
+            .replace("RESULT (but ", "RESULT (even ")
+            .replace(" is true.)", " is false.)");
+        let l8: Vec<String> = hx_lines(expect::PROVERIF_EXPECTED_LINK, "lQKey")
+            .iter()
+            .filter(|(q, _)| *q != l6a)
+            .map(|(q, end)| format!("RESULT {q} {end}"))
+            .collect();
+        assert_eq!(l8.len(), 3);
+        let output = |remarks: &[&str]| -> String {
+            let mut v = l8.clone();
+            v.push(format!("RESULT {l6a} is false."));
+            v.extend(remarks.iter().map(|r| (*r).to_owned()));
+            v.join("\n")
+        };
+        assert!(
+            proverif_check_session(SessionFamily::Link, "lQKey", &output(&[&even]))?
+                .ends_with("L8 false ×3, L6a false ×1")
+        );
+        for (remarks, shown) in [
+            (
+                vec![but],
+                format!("but its remark is `{but}`, expected one"),
+            ),
+            (vec![], "but its remark is none, expected one".to_owned()),
+            (
+                vec![even.as_str(), even.as_str()],
+                format!("but its remark is `{even}`, `{even}`, expected one"),
+            ),
+        ] {
+            refused_with(
+                proverif_check_session(SessionFamily::Link, "lQKey", &output(&remarks)),
+                &[
+                    "formal/link/lQKey.pv against expect::PROVERIF_EXPECTED_LINK",
+                    "RESULT line 4 (L6a) is an injective query expected false",
+                    &shown,
+                    "`RESULT (even … is false.)`",
+                    l6a,
+                ],
+            )?;
+        }
+        // the committed lQKey run (docs/reviews/M05-evidence/proverif-link-local-2.txt) with its remark edited
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let evidence = lf(&std::fs::read_to_string(
+            root.join("docs/reviews/M05-evidence/proverif-link-local-2.txt"),
+        )?);
+        let sections = link_evidence_sections(&evidence);
+        let Some((_, lqkey)) = sections.iter().find(|(s, _)| s == "lQKey") else {
+            bail!("no lQKey section in the committed link run");
+        };
+        assert_eq!(lqkey.matches(&even).count(), 1);
+        proverif_check_session(SessionFamily::Link, "lQKey", lqkey)?;
+        refused_with(
+            proverif_check_session(SessionFamily::Link, "lQKey", &lqkey.replace(&even, but)),
+            &["RESULT line 4 (L6a)", but],
+        )?;
+        inj_false_entries_need_even_remark()
+    }
+
+    /// The second half of `proverif_inj_false_requires_even_remark`: every injective expected-false entry of both
+    /// session families is refused with the `(but …)` remark, and a remark attaches to the line above it.
+    fn inj_false_entries_need_even_remark() -> Result<()> {
+        let mut seen = Vec::new();
+        for family in SessionFamily::ALL {
+            for (file, id, query, _) in family
+                .table()
+                .iter()
+                .filter(|(_, _, q, p)| *p == expect::Proved::False && q.contains("inj-event"))
+            {
+                let good = hx_output(&hx_lines(family.table(), file));
+                assert_eq!(good.matches(EVEN_REMARK).count(), 1, "{file}");
+                proverif_check_session(family, file, &good)?;
+                let bad = good.replace(
+                    EVEN_REMARK,
+                    "RESULT (but event(RAccept(x,y)) ==> event(IStart(x,y)) is true.)",
+                );
+                refused_with(
+                    proverif_check_session(family, file, &bad),
+                    &[
+                        &format!("{}/{file}.pv against {}", family.dir(), family.table_name()),
+                        &format!(
+                            "({id}) is an injective query expected false, but its remark is `RESULT (but "
+                        ),
+                        query,
+                    ],
+                )?;
+                seen.push(*id);
+            }
+        }
+        assert_eq!(seen, ["H8", "H9", "L1c", "L2", "L6a"]);
+        // attachment: a remark belongs to the line above it, one without a line above is unreadable
+        let lines = proverif_result_lines(
+            "RESULT (even e is false.)\nRESULT not attacker(s[]) is true.\nRESULT q is false.\n  RESULT (but p is true.)\n",
+        );
+        let got: Vec<(&str, PvVerdict, Vec<String>)> = lines
+            .iter()
+            .map(|l| (l.query.as_str(), l.verdict, l.remarks.clone()))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                ("(even e is false.)", PvVerdict::Unreadable, vec![]),
+                ("not attacker(s[])", PvVerdict::True, vec![]),
+                ("q", PvVerdict::False, vec!["(but p is true.)".to_owned()]),
+            ]
+        );
+        Ok(())
+    }
+
+    /// M5 review R-117 (C-9): the remarks ProVerif 2.05 prints today — lines 96, 104 and 136 of the committed link run
+    /// (`docs/reviews/M05-evidence/proverif-link-local-2.txt`: L1c in lBoth, L2 in lSig, L6a in lQKey) — are
+    /// `RESULT (even … is false.)`, attach to the injective line above them and pass the gate; the nine files of that
+    /// run pass with the summaries the gate printed then (9/9 unchanged).
+    #[test]
+    fn proverif_inj_false_accepts_even_remark() -> Result<()> {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let evidence = lf(&std::fs::read_to_string(
+            root.join("docs/reviews/M05-evidence/proverif-link-local-2.txt"),
+        )?);
+        let text: Vec<&str> = evidence.lines().collect();
+        let sections = link_evidence_sections(&evidence);
+        for (number, stem, id) in [
+            (96_usize, "lBoth", "L1c"),
+            (104, "lSig", "L2"),
+            (136, "lQKey", "L6a"),
+        ] {
+            let Some(line) = number.checked_sub(1).and_then(|i| text.get(i)) else {
+                bail!("the committed link run has no line {number}");
+            };
+            let remark = line.strip_prefix("RESULT ").unwrap_or_default();
+            assert!(
+                remark.starts_with("(even event(") && remark.ends_with(" is false.)"),
+                "line {number}: {line}"
+            );
+            let Some((_, body)) = sections.iter().find(|(s, _)| s == stem) else {
+                bail!("no {stem} section in the committed link run");
+            };
+            let got = proverif_result_lines(body);
+            let Some(last) = got.last() else {
+                bail!("{stem}: no RESULT line");
+            };
+            assert!(
+                last.query.starts_with("inj-event("),
+                "{stem}: {}",
+                last.query
+            );
+            assert_eq!(last.verdict, PvVerdict::False);
+            assert_eq!(last.remarks, vec![remark.to_owned()]);
+            assert!(expect::PROVERIF_EXPECTED_LINK.contains(&(
+                stem,
+                id,
+                last.query.as_str(),
+                expect::Proved::False
+            )));
+            assert_eq!(
+                got.iter().map(|l| l.remarks.len()).sum::<usize>(),
+                1,
+                "{stem}"
+            );
+        }
+        assert_eq!(sections.len(), 9);
+        for (stem, body) in &sections {
+            let summary = proverif_check_session(SessionFamily::Link, stem, body)?;
+            assert!(
+                evidence.contains(&format!("    {summary} (")),
+                "{stem}: {summary}"
             );
         }
         Ok(())

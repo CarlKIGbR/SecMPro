@@ -996,25 +996,40 @@ pub(crate) fn coverage(ctx: &Ctx) -> Result<Outcome> {
 }
 
 /// Missed or timed-out mutants (lines `<path>:<line>:<col>: <description>` of `cargo mutants`' `missed.txt` /
-/// `timeout.txt`) that no line of `docs/mutants-accepted.md` documents with both its path and its description
-/// (line numbers are ignored, so an accepted survivor stays accepted when unrelated code moves).
+/// `timeout.txt`) that no line of `docs/mutants-accepted.md` documents with both its place and its description
+/// ([`survivor_documented`]; M5 review R-114, C-7: keyed on `path:line`, so the same description elsewhere in the file
+/// is not accepted, and a row whose code moves is updated to the new line).
 pub(crate) fn undocumented_survivors(listing: &str, accepted: &str) -> Vec<String> {
     listing
         .lines()
         .map(str::trim)
         .filter(|l| !l.is_empty())
-        .filter(|l| {
-            let mut parts = l.splitn(4, ':');
-            let path = parts.next().unwrap_or_default();
-            let desc = parts.nth(2).map(str::trim).unwrap_or_default();
-            path.is_empty()
-                || desc.is_empty()
-                || !accepted
-                    .lines()
-                    .any(|a| a.contains(&format!("`{path}`")) && a.contains(&format!("`{desc}`")))
-        })
+        .filter(|l| !survivor_documented(l, accepted))
         .map(str::to_owned)
         .collect()
+}
+
+/// Whether one line of `accepted` names the survivor `<path>:<line>:<col>: <description>` by its place —
+/// `` `<path>:<line>` ``, or `` `<path>:<line>:<col>` `` where two survivors share a line — and by
+/// `` `<description>` ``.
+fn survivor_documented(survivor: &str, accepted: &str) -> bool {
+    let mut parts = survivor.splitn(4, ':');
+    let (Some(path), Some(line), Some(col), Some(desc)) = (
+        parts.next(),
+        parts.next(),
+        parts.next(),
+        parts.next().map(str::trim),
+    ) else {
+        return false;
+    };
+    if [path, line, col, desc].iter().any(|p| p.is_empty()) {
+        return false;
+    }
+    let places = [format!("`{path}:{line}`"), format!("`{path}:{line}:{col}`")];
+    let desc = format!("`{desc}`");
+    accepted
+        .lines()
+        .any(|a| a.contains(&desc) && places.iter().any(|p| a.contains(p.as_str())))
 }
 
 /// The survivors of a cargo-mutants run (`missed.txt` and `timeout.txt` of `mutants.out`), refusing a listing that
@@ -4048,7 +4063,7 @@ mod tests {
     #[test]
     fn mutation_survivors_must_be_documented() {
         let accepted =
-            "| `crates/a/src/x.rs`: `replace <impl Drop for S>::drop with ()` | reason |\n";
+            "| `crates/a/src/x.rs:59`: `replace <impl Drop for S>::drop with ()` | reason |\n";
         let listing = "crates/a/src/x.rs:59:9: replace <impl Drop for S>::drop with ()\n\
                        crates/a/src/x.rs:12:5: replace f -> bool with true\n\n";
         let u = undocumented_survivors(listing, accepted);
@@ -4056,14 +4071,7 @@ mod tests {
             u,
             vec!["crates/a/src/x.rs:12:5: replace f -> bool with true".to_owned()]
         );
-        // the line number does not matter, the file does
-        assert!(
-            undocumented_survivors(
-                "crates/a/src/x.rs:99:1: replace <impl Drop for S>::drop with ()",
-                accepted
-            )
-            .is_empty()
-        );
+        // the file matters (the line: `accepted_mutant_requires_matching_line`)
         assert_eq!(
             undocumented_survivors(
                 "crates/b/src/x.rs:59:9: replace <impl Drop for S>::drop with ()",
@@ -4074,6 +4082,104 @@ mod tests {
         );
         assert_eq!(undocumented_survivors("garbage", accepted).len(), 1);
         assert!(undocumented_survivors("", accepted).is_empty());
+    }
+
+    /// Rows of an accepted-survivors file: one keyed on `path:line`, two on `path:line:col` sharing a line.
+    const ACCEPTED_ROWS: &str = "\
+        | `crates/a/src/x.rs:59`: `replace <impl Drop for S>::drop with ()` | reason | control | M1 |\n\
+        | `crates/a/src/y.rs:163:32`: `replace | with ^ in enc` | reason | control | M4 |\n\
+        | `crates/a/src/y.rs:163:44`: `replace | with ^ in enc` | reason | control | M4 |\n";
+
+    /// M5 review R-114 (C-7): a survivor is accepted only at the line its row names — the same description on another
+    /// line (also one whose number has the row's as prefix or suffix), at another column of a `path:line:col` row, or
+    /// without a parseable place is undocumented; so are a survivor of the committed `docs/mutants-accepted.md` moved by
+    /// one line and the two relay shim survivors whose rows C-7 removed.
+    #[test]
+    fn accepted_mutant_requires_matching_line() -> Result<()> {
+        for survivor in [
+            "crates/a/src/x.rs:60:9: replace <impl Drop for S>::drop with ()",
+            "crates/a/src/x.rs:5:9: replace <impl Drop for S>::drop with ()",
+            "crates/a/src/x.rs:159:9: replace <impl Drop for S>::drop with ()",
+            "crates/a/src/x.rs:590:9: replace <impl Drop for S>::drop with ()",
+            "crates/a/src/y.rs:163:33: replace | with ^ in enc",
+            "crates/a/src/y.rs:164:32: replace | with ^ in enc",
+            "crates/a/src/x.rs:59: replace <impl Drop for S>::drop with ()",
+            "crates/a/src/x.rs::9: replace <impl Drop for S>::drop with ()",
+        ] {
+            assert_eq!(
+                undocumented_survivors(survivor, ACCEPTED_ROWS),
+                vec![survivor.to_owned()],
+                "{survivor}"
+            );
+        }
+        let committed = accepted_survivors()?;
+        for survivor in [
+            "crates/secmp-crypto/src/secret.rs:60:9: replace <impl Drop for SecretBytes<N>>::drop with ()",
+            "crates/secmp-proto/src/inv.rs:164:32: replace | with ^ in base64url_encode",
+            "crates/secmp-proto/src/inv.rs:163:36: replace | with ^ in base64url_encode",
+            "crates/secmp-proto/src/inv.rs:203:34: replace | with ^ in base64url_decode",
+            "crates/secmp-relay/src/server.rs:81:9: replace <impl Stream for TcpStream>::set_poll -> io::Result<()> \
+             with Ok(())",
+            "crates/secmp-relay/src/server.rs:86:9: replace <impl Stream for TcpStream>::close with ()",
+        ] {
+            assert_eq!(
+                undocumented_survivors(survivor, &committed),
+                vec![survivor.to_owned()],
+                "{survivor}"
+            );
+        }
+        Ok(())
+    }
+
+    /// M5 review R-114 (C-7): a survivor whose place (`path:line`, or `path:line:col`) and description one row names
+    /// is accepted; the same place with another description is not. The survivors of CI run 37882708499 (pin 3b29ca8,
+    /// `missed.txt` of its eight shards, `docs/reviews/M05-evidence/review-binding.txt`) against the committed
+    /// `docs/mutants-accepted.md`: the four accepted rows document four of them, the two relay shim survivors are
+    /// undocumented (their rows removed; the loopback test kills them).
+    #[test]
+    fn accepted_mutant_matches_line_and_description() -> Result<()> {
+        for survivor in [
+            "crates/a/src/x.rs:59:9: replace <impl Drop for S>::drop with ()",
+            "crates/a/src/x.rs:59:1: replace <impl Drop for S>::drop with ()",
+            "crates/a/src/y.rs:163:32: replace | with ^ in enc",
+            "crates/a/src/y.rs:163:44: replace | with ^ in enc",
+        ] {
+            assert!(
+                undocumented_survivors(survivor, ACCEPTED_ROWS).is_empty(),
+                "{survivor}"
+            );
+        }
+        for survivor in [
+            "crates/a/src/x.rs:59:9: replace <impl Drop for T>::drop with ()",
+            "crates/a/src/x.rs:59:9: replace f -> bool with true",
+            "crates/a/src/y.rs:163:32: replace | with & in enc",
+            "crates/a/src/y.rs:163:44: replace | with ^ in dec",
+        ] {
+            assert_eq!(
+                undocumented_survivors(survivor, ACCEPTED_ROWS),
+                vec![survivor.to_owned()],
+                "{survivor}"
+            );
+        }
+        let ci_37882708499 = "\
+            crates/secmp-proto/src/inv.rs:163:32: replace | with ^ in base64url_encode\n\
+            crates/secmp-crypto/src/secret.rs:59:9: replace <impl Drop for SecretBytes<N>>::drop with ()\n\
+            crates/secmp-proto/src/inv.rs:202:34: replace | with ^ in base64url_decode\n\
+            crates/secmp-relay/src/server.rs:81:9: replace <impl Stream for TcpStream>::set_poll -> io::Result<()> \
+            with Ok(())\n\
+            crates/secmp-relay/src/server.rs:86:9: replace <impl Stream for TcpStream>::close with ()\n\
+            crates/secmp-proto/src/inv.rs:163:44: replace | with ^ in base64url_encode\n";
+        assert_eq!(
+            undocumented_survivors(ci_37882708499, &accepted_survivors()?),
+            vec![
+                "crates/secmp-relay/src/server.rs:81:9: replace <impl Stream for TcpStream>::set_poll -> \
+                 io::Result<()> with Ok(())"
+                    .to_owned(),
+                "crates/secmp-relay/src/server.rs:86:9: replace <impl Stream for TcpStream>::close with ()"
+                    .to_owned(),
+            ]
+        );
+        Ok(())
     }
 
     #[test]

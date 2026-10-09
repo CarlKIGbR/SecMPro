@@ -767,3 +767,21 @@ fn set_poll_sets_read_and_write_timeouts_on_a_real_socket() {
         "C-3: the read blocked for the poll, not at once"
     );
 }
+
+/// C-7 (M05 review R-114, R-163) `close_closes_the_socket`: `Stream::close` on an accepted `TcpStream` shuts both
+/// directions down while the relay's side is still alive (not by its drop): the peer reads EOF, and a write on the
+/// relay's side fails.
+#[test]
+fn close_closes_the_socket() {
+    let (mut relay_side, mut peer) = loopback();
+    peer.set_read_timeout(Some(Duration::from_secs(10)))
+        .unwrap();
+    Stream::close(&mut relay_side);
+    let mut buf = [0_u8; 8];
+    assert_eq!(peer.read(&mut buf).unwrap(), 0, "C-7: the peer reads EOF");
+    assert!(
+        relay_side.write_all(b"x").is_err(),
+        "C-7: the relay's side is shut for writing"
+    );
+    drop(relay_side);
+}

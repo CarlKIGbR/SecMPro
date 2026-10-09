@@ -410,6 +410,30 @@ impl Drop for RelayQueue {
     }
 }
 
+impl RelayQueue {
+    /// The route of a pooled queue (spec §9.1, §9.8, ADR-048 (m)): `sid` is derived, not chosen —
+    /// SHA-256("SecMP-Q/1 sid" ‖ `recv_pk` ‖ `send_pk`)[0..16] with `send_pk` the Ed25519 public key of `send_seed` —
+    /// so that a `SEND` with this route reaches the queue a §9.1 relay derived from the same keys.
+    ///
+    /// # Errors
+    /// [`Error::Rejected`] if `send_seed` is not a seed of 32 bytes the signer accepts (not for a generated one).
+    pub fn derived(
+        relay: RelayRef,
+        recv_pk: &crate::keys::Ed25519Pk,
+        send_seed: SecretBytes<HASH_LEN>,
+        period_s: Period,
+    ) -> Result<Self> {
+        let key = secmp_crypto::Ed25519SigningKey::from_seed(send_seed.expose_secret())?;
+        let send_pk = crate::keys::Ed25519Pk::from_bytes(key.verifying_key().as_bytes())?;
+        Ok(Self {
+            relay,
+            sid: crate::link::ids::sid(recv_pk, &send_pk)?,
+            send_seed,
+            period_s,
+        })
+    }
+}
+
 impl Encode for RelayQueue {
     fn encode_to(&self, w: &mut Writer) -> Result<()> {
         self.relay.encode_to(w)?;

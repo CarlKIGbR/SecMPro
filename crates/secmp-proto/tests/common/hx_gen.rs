@@ -4,9 +4,9 @@
 //! from the SCHEMA text and the spec; it reads no vector file and uses no `hx`/`inv`/`prekeys` code of the
 //! library (the independent construction of `hx_harness.rs`).
 //!
-//! [`generate`] builds the 30 cases: 8 positive (keys-R, keys-I, invite, linkdata, invitee-accept, initiate,
-//! respond, respond-garbage), 9 `invitee-reject` (V1–V9) and 13 `respond-reject` (R1–R13), in the SCHEMA order
-//! (positives, V1–V8, R1–R12, then V9 and R13). Case *i* draws from its own SCHEMA §2 stream (suite `hx`,
+//! [`generate`] builds the 37 cases: 10 positive (keys-R, keys-I, invite, linkdata, invitee-accept, initiate,
+//! respond, respond-garbage, and A1, A2), 9 `invitee-reject` (V1–V9) and 18 `respond-reject` (R1–R18), in the
+//! SCHEMA order (positives, V1–V8, R1–R12, V9, R13, then A1, R14–R18, A2). Case *i* draws from its own SCHEMA §2 stream (suite `hx`,
 //! index *i*): the stream-derived values in the order the SCHEMA lists them, then the derived ones.
 //!
 //! Shared by the `gen-hx` example (which writes `vectors/rust/hx.json` for `cargo xtask vectors`) and the
@@ -18,7 +18,7 @@ use serde_json::{Map, Value, json};
 
 use secmp_crypto::{
     Caead, Ed25519SigningKey, Label, MlKem768Dk, MlKem1024Ct, MlKem1024Dk, SecretBytes,
-    VectorStream, X25519Public, X25519Secret, sha3_256,
+    VectorStream, X25519Public, X25519Secret, sha3_256, sha256,
 };
 use secmp_proto::Encode;
 use secmp_proto::codec::{pad, unpad};
@@ -98,10 +98,15 @@ impl Stream {
     }
 
     fn dh_step(&mut self) -> Vec<u8> {
+        self.dh_step_named("dh_sk", "kem_seed", "m")
+    }
+
+    /// A DH-step draw (`dh_sk` ‖ `kem_seed` ‖ `m`) under the given input names (A1's second step: `_2`).
+    fn dh_step_named(&mut self, dh_sk: &str, kem_seed: &str, m: &str) -> Vec<u8> {
         [
-            self.draw("dh_sk", 32),
-            self.draw("kem_seed", 64),
-            self.draw("m", 32),
+            self.draw(dh_sk, 32),
+            self.draw(kem_seed, 64),
+            self.draw(m, 32),
         ]
         .concat()
     }
@@ -137,8 +142,20 @@ pub struct Invitation {
     pub ld_id: [u8; 16],
     pub link_key: [u8; 32],
     pub inviter_fp: [u8; 32],
+    /// Derived (§9.1, ADR-048 (m)): SHA-256("SecMP-Q/1 sid" ‖ `invq_recv_pk` ‖ `inv_send_pk`)[0..16].
     pub inv_sid: [u8; 16],
     pub inv_send_seed: [u8; 32],
+    /// The Ed25519 seed of the invitation queue's recipient key (§5.2) and of the link-data owner key.
+    pub invq_recv_seed: [u8; 32],
+    pub owner_seed: [u8; 32],
+}
+
+/// The Ed25519 public key of `seed`.
+fn ed25519_pk(seed: &[u8; 32]) -> [u8; 32] {
+    *Ed25519SigningKey::from_seed(seed)
+        .unwrap()
+        .verifying_key()
+        .as_bytes()
 }
 
 impl Invitation {
@@ -262,20 +279,46 @@ fn case2() -> (Identity, Vec<u8>, Value) {
 
 fn case3(r: &Identity) -> (Invitation, Vec<u8>, String, Value) {
     let mut s = Stream::new(3);
+    let relay_fp = s.arr("relay_fp");
+    let onion_pubkey = s.arr("onion_pubkey");
+    let akc = s.arr("akc");
+    let ld_id = s.arr("ld_id");
+    let link_key = s.arr("link_key");
+    // OPEN-M5-14 B: the 16 bytes formerly drawn for `inv_sid` are drawn at their old place and discarded
+    let _discarded: [u8; 16] = s.arr("inv_sid_discarded");
+    let inv_send_seed = s.arr("inv_send_seed");
+    let invq_recv_seed = s.arr("invq_recv_seed");
+    let owner_seed = s.arr("owner_seed");
+    let invq_recv_pk = ed25519_pk(&invq_recv_seed);
+    let inv_sid: [u8; 16] = sha256(&[
+        Label::QSid.as_bytes(),
+        &invq_recv_pk,
+        &ed25519_pk(&inv_send_seed),
+    ])[..16]
+        .try_into()
+        .unwrap();
     let inv = Invitation {
-        relay_fp: s.arr("relay_fp"),
-        onion_pubkey: s.arr("onion_pubkey"),
-        akc: s.arr("akc"),
-        ld_id: s.arr("ld_id"),
-        link_key: s.arr("link_key"),
-        inv_sid: s.arr("inv_sid"),
-        inv_send_seed: s.arr("inv_send_seed"),
+        relay_fp,
+        onion_pubkey,
+        akc,
+        ld_id,
+        link_key,
+        inv_sid,
+        inv_send_seed,
+        invq_recv_seed,
+        owner_seed,
         inviter_fp: r.fp,
     };
     let encoded = inv.encode(1, 1, EXPIRES);
     let text = uri(&encoded);
     assert_eq!(text.len(), 332);
-    let outputs = json!({"invitation": hex(&encoded), "uri": text});
+    let outputs = json!({
+        "invitation": hex(&encoded),
+        "uri": text,
+        "inv_sid": hex(&inv_sid),
+        "invq_recv_pk": hex(&ed25519_pk(&inv.invq_recv_seed)),
+        "owner_pk": hex(&ed25519_pk(&inv.owner_seed)),
+    });
     let case = s.finish(3, "invite", "R", vec![("outputs", outputs)]);
     (inv, encoded, text, case)
 }
@@ -901,6 +944,79 @@ fn first_msg_case(
     reject_r(s, i, manipulation, &fetched, &[OPK_ID])
 }
 
+/// R15 / R16 / R18: the first message is a cell built by `build` (which draws its own `hdr_nonce`s, and returns
+/// the cell and the unpadded Content); stream = `build`'s draws, `inner_nonce`, the re-seal draws, the DH step.
+fn first_msg_cell_case(
+    re: &Re<'_>,
+    i: u32,
+    manipulation: &str,
+    build: impl FnOnce(&mut Stream) -> (Vec<u8>, Vec<u8>),
+) -> Value {
+    let mut s = Stream::new(i);
+    let (cell, content) = build(&mut s);
+    let inner_nonce = s.draw("inner_nonce", 24);
+    let inner = [re.base.i.iks_bytes.as_slice(), &cell].concat();
+    let a = &re.b6.a;
+    let ict = inner_ct(&a.k_id, &re.base.inv.ld_id, &inner_nonce, &inner);
+    let outer_bytes = outer(&a.ek_pk, SPK_ID, OPK_ID, &a.ct_spk, &a.ct_opk, &ict);
+    let fetched = reseal(re, &mut s, &outer_bytes);
+    let _ = s.dh_step();
+    s.list("content", &content);
+    s.list("inner", &inner);
+    s.list("outer", &outer_bytes);
+    reject_r(s, i, manipulation, &fetched, &[OPK_ID])
+}
+
+/// Encrypts the padded `body` from `state` with `hdr_nonce`; returns the new state and the cell.
+fn encrypt_padded(state: RatchetState, body: &[u8], hdr_nonce: &[u8]) -> (RatchetState, Vec<u8>) {
+    let (state, cell) = state
+        .encrypt_padded_kat(body, &mut fixed(&[hdr_nonce]))
+        .map_err(|r| r.error())
+        .unwrap()
+        .persist(|_| Ok::<(), ()>(()))
+        .unwrap();
+    (state, cell.as_bytes().to_vec())
+}
+
+/// `RatchetStateV1` from its fields (the inverse of `tr_digest::fields`).
+fn encode_state(f: &tr_digest::StateFields) -> Vec<u8> {
+    fn put_opt(out: &mut Vec<u8>, x: Option<&Vec<u8>>) {
+        match x {
+            None => out.push(0),
+            Some(x) => {
+                out.push(1);
+                out.extend_from_slice(x);
+            }
+        }
+    }
+    let mut out = vec![1];
+    out.extend_from_slice(&f.sb_rk_dh_s);
+    put_opt(&mut out, f.dh_r.as_ref());
+    out.extend_from_slice(&f.kem_s_seed);
+    for x in f.kem.iter().chain(&f.keys) {
+        put_opt(&mut out, x.as_ref());
+    }
+    for n in [f.n_s, f.n_r, f.pn] {
+        out.extend_from_slice(&n.to_be_bytes());
+    }
+    out.extend_from_slice(&u16::try_from(f.skipped.len()).unwrap().to_be_bytes());
+    for e in &f.skipped {
+        out.extend_from_slice(e);
+    }
+    out
+}
+
+/// `state` with `pn` := 1. A state with `pn` ≠ 0 is only reachable after receiving a DH step, so the serialisation
+/// is rebuilt with a receiving chain; the sending half, which seals the cell, is the honest one (SCHEMA-4.10 R16).
+fn with_pn_one(state: &RatchetState) -> RatchetState {
+    let mut f = tr_digest::fields(state);
+    f.pn = 1;
+    f.keys[1] = Some(vec![1; 32]);
+    f.keys[3] = Some(vec![2; 32]);
+    f.kem[1] = Some(vec![3; 1088]);
+    RatchetState::from_bytes(&encode_state(&f)).unwrap()
+}
+
 fn r_cases(re: &Re<'_>) -> Vec<(u32, Value)> {
     let b6 = re.b6;
     let mut out = Vec::new();
@@ -1006,6 +1122,123 @@ fn r_cases(re: &Re<'_>) -> Vec<(u32, Value)> {
         }),
     ));
     out
+}
+
+/// R14 … R18 (`hx-0032` … `hx-0036`, Weisung REF-M5-2).
+fn r_cases_rev25(re: &Re<'_>) -> Vec<(u32, Value)> {
+    let b6 = re.b6;
+    let k = k_inv(&re.base.inv.ld_id, &re.base.inv.link_key);
+    let mut out = Vec::new();
+    // R14 no-reform (rev 2.5): a differing chunk 1 first, then the honest cells twice
+    let mut s = Stream::new(32);
+    let n1 = s.draw("cell_nonce_1", 24);
+    let mut chunk = chunk_of(&b6.outer, 1);
+    *byte_mut(&mut chunk, 0) ^= 1;
+    let differing = cell_raw(
+        &k,
+        &re.base.inv.ld_id,
+        &n1,
+        &cell_plaintext(&b6.init_id, 1, 3, &chunk),
+    );
+    let mut fetched = vec![differing];
+    fetched.extend(b6.cells.clone());
+    fetched.extend(b6.cells.clone());
+    out.push((32, reject_r(s, 32, "no-reform", &fetched, &[OPK_ID])));
+    // R15 first-msg-n: case 6's Content as I's second message (one message encrypted first and discarded)
+    out.push((
+        33,
+        first_msg_cell_case(re, 33, "first-msg-n", |s| {
+            let hdr_nonce_0 = s.draw("hdr_nonce_0", 24);
+            let hdr_nonce = s.draw("hdr_nonce", 24);
+            let body = pad(&b6.content, BODY_LEN).unwrap().to_vec();
+            let (state, _discarded) =
+                encrypt_padded(snapshot(&b6.i_after_init), &body, &hdr_nonce_0);
+            let (_, cell) = encrypt_padded(state, &body, &hdr_nonce);
+            (cell, b6.content.clone())
+        }),
+    ));
+    // R16 first-msg-pn: case 6's Content with pn := 1 in the header
+    out.push((
+        34,
+        first_msg_cell_case(re, 34, "first-msg-pn", |s| {
+            let hdr_nonce = s.draw("hdr_nonce", 24);
+            let body = pad(&b6.content, BODY_LEN).unwrap().to_vec();
+            let (_, cell) = encrypt_padded(with_pn_one(&b6.i_after_init), &body, &hdr_nonce);
+            (cell, b6.content.clone())
+        }),
+    ));
+    // R17 reflection: IKSPublic_I := IKSPublic_R in Inner, case 6's first_msg
+    let inner = [re.base.r.iks_bytes.as_slice(), &b6.first_msg].concat();
+    out.push((35, inner_case(re, 35, "reflection", false, &inner)));
+    // R18 no-known-route: the route replaced by a RouteDescriptor of kind 0x7F
+    out.push((
+        36,
+        first_msg_cell_case(re, 36, "no-known-route", |s| {
+            let blob = s.draw("route_blob", 16);
+            let hdr_nonce = s.draw("hdr_nonce", 24);
+            let content = handshake_content(
+                Profile::new("alice", Some(b6.avatar)).unwrap(),
+                vec![RouteDescriptor::Unknown {
+                    kind: 0x7F,
+                    blob: secmp_crypto::Zeroizing::new(blob),
+                }],
+                1,
+                1_700_000_001,
+            );
+            let (_, cell) = encrypt_padded(
+                snapshot(&b6.i_after_init),
+                &content.encode().unwrap(),
+                &hdr_nonce,
+            );
+            (cell, unpadded_content(&content))
+        }),
+    ));
+    out
+}
+
+/// A1 (`hx-0031`, `respond-later-group`): a complete group that R rejects (case 8's R8 construction under a fresh
+/// `init_id`), then case 6's cells, accepted with the second step's draws.
+fn case31(base: &Base0, b6: &Base6) -> Value {
+    let mut s = Stream::new(31);
+    let inner_nonce = s.draw("inner_nonce", 24);
+    let inner = flip_last_bit(b6.inner.clone(), INNER_LEN - 1);
+    let ict = inner_ct(&b6.a.k_id, &base.inv.ld_id, &inner_nonce, &inner);
+    let outer_bytes = outer(
+        &b6.a.ek_pk,
+        SPK_ID,
+        OPK_ID,
+        &b6.a.ct_spk,
+        &b6.a.ct_opk,
+        &ict,
+    );
+    let init_id: [u8; 16] = s.arr("init_id");
+    let n0 = s.draw("cell_nonce_0", 24);
+    let n1 = s.draw("cell_nonce_1", 24);
+    let n2 = s.draw("cell_nonce_2", 24);
+    let k = k_inv(&base.inv.ld_id, &base.inv.link_key);
+    let rejected = cells(&k, &base.inv.ld_id, &init_id, [&n0, &n1, &n2], &outer_bytes);
+    let _first_step = s.dh_step();
+    let step = s.dh_step_named("dh_sk_2", "kem_seed_2", "m_2");
+    s.list("inner", &inner);
+    s.list("outer", &outer_bytes);
+    let fetched: Vec<Vec<u8>> = rejected.into_iter().chain(b6.cells.clone()).collect();
+    s.list_value("fetched", hex_array(&fetched));
+    let outputs = responded_outputs(&respond(base, &b6.cells, &step));
+    s.finish(31, "respond-later-group", "R", vec![("outputs", outputs)])
+}
+
+/// A2 (`hx-0037`, `respond-retained-spk`): R holds SPK generation 8 (from the case's own stream) next to SPK 7
+/// of cases 1–4; case 6's cells name SPK 7 and are accepted.
+fn case37(base: &Base0, b6: &Base6) -> Value {
+    let mut s = Stream::new(37);
+    let _spk_dh_sk = s.draw("spk_dh_sk", 32);
+    let _spk_kem_seed = s.draw("spk_kem_seed", 64);
+    let _rpk_kem_seed = s.draw("rpk_kem_seed", 64);
+    let step = s.dh_step();
+    let fetched: Vec<Vec<u8>> = b6.cells.to_vec();
+    s.list_value("fetched", hex_array(&fetched));
+    let outputs = responded_outputs(&respond(base, &fetched, &step));
+    s.finish(37, "respond-retained-spk", "R", vec![("outputs", outputs)])
 }
 
 /// The values through case 6 and case 7's randomness: the scenario the negative tests build on.
@@ -1121,14 +1354,20 @@ pub fn generate() -> Value {
         base: &base0,
         b6: &w.b6,
     }));
-    // SCHEMA order: positives, V1–V8 (9–16), R1–R12 (17–28), V9 (29), R13 (30)
+    numbered.extend(r_cases_rev25(&Re {
+        base: &base0,
+        b6: &w.b6,
+    }));
+    numbered.push((31, case31(&base0, &w.b6)));
+    numbered.push((37, case37(&base0, &w.b6)));
+    // SCHEMA order: positives, V1–V8 (9–16), R1–R12 (17–28), V9 (29), R13 (30), A1 (31), R14–R18 (32–36), A2 (37)
     numbered.sort_by_key(|(i, _)| *i);
     let cases: Vec<Value> = numbered.into_iter().map(|(_, c)| c).collect();
-    assert_eq!(cases.len(), 30);
+    assert_eq!(cases.len(), 37);
     json!({
         "schema": 5,
         "suite": SUITE,
-        "spec": "SecMP/1 rev 2.3",
+        "spec": "SecMP/1 rev 2.6",
         "generator": "secmp-rust",
         "cases": cases,
     })

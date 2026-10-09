@@ -282,14 +282,19 @@ impl OpkSecrets {
     }
 }
 
-/// What the inviter persists per issued invitation until it is consumed or expired (§5.2): `ld_id`, `link_key`,
-/// `spk_id`, `opk_id`, `expires`. (The link-data owner key and the invitation queue's recipient key are the
-/// session layer's, M5–M7.)
+/// What the inviter persists per issued invitation until it is consumed or expired (§5.2): `ld_id`, `link_key`, the
+/// link-data owner key, the invitation queue's recipient key, `spk_id`, `opk_id`, `expires` (M4 review R-67, M5).
 pub struct InvitationRecord {
     /// Link-data id.
     pub ld_id: Id,
     /// The link key; never sent to the relay.
     pub link_key: SecretBytes<HASH_LEN>,
+    /// The Ed25519 seed of the link-data owner key: its public key is the `owner_pk` of the `LINK_PUT` and signs the
+    /// owner-status `LINK_GET` (§9.3, §9.4).
+    pub owner_seed: SecretBytes<HASH_LEN>,
+    /// The Ed25519 seed of the invitation queue's recipient key (§5.2, §9.1): with `inv_send_seed` it fixes the
+    /// queue's `rid` and `inv_sid`.
+    pub invq_recv_seed: SecretBytes<HASH_LEN>,
     /// The signed prekey the bundle names.
     pub spk_id: u32,
     /// The one-time prekey the bundle names.
@@ -299,6 +304,22 @@ pub struct InvitationRecord {
 }
 
 impl InvitationRecord {
+    /// The public key of the link-data owner key (the `owner_pk` of §9.3 `LINK_PUT`).
+    ///
+    /// # Errors
+    /// None in practice (a seed of 32 bytes always yields a key).
+    pub fn owner_pk(&self) -> Result<Ed25519Pk> {
+        ed25519_pk_of(&self.owner_seed)
+    }
+
+    /// The public key of the invitation queue's recipient key (`recv_pk` of its `QUEUE_NEW`, §9.1).
+    ///
+    /// # Errors
+    /// None in practice.
+    pub fn invq_recv_pk(&self) -> Result<Ed25519Pk> {
+        ed25519_pk_of(&self.invq_recv_seed)
+    }
+
     /// A copy (the link key is duplicated into a zeroizing heap `SecretBytes`): the caller that keeps its records in
     /// the same store it hands to [`crate::hx::Responder::accept`] copies the record first.
     ///
@@ -309,11 +330,19 @@ impl InvitationRecord {
         Ok(Self {
             ld_id: self.ld_id,
             link_key: SecretBytes::from_slice(self.link_key.expose_secret())?,
+            owner_seed: SecretBytes::from_slice(self.owner_seed.expose_secret())?,
+            invq_recv_seed: SecretBytes::from_slice(self.invq_recv_seed.expose_secret())?,
             spk_id: self.spk_id,
             opk_id: self.opk_id,
             expires: self.expires,
         })
     }
+}
+
+/// The Ed25519 public key of a 32-byte seed.
+fn ed25519_pk_of(seed: &SecretBytes<HASH_LEN>) -> Result<Ed25519Pk> {
+    let key = secmp_crypto::Ed25519SigningKey::from_seed(seed.expose_secret())?;
+    Ed25519Pk::from_bytes(key.verifying_key().as_bytes())
 }
 
 /// What the responder reads from, and deletes from, the prekey store (§6.6). Retention, rotation and expiry are
@@ -579,8 +608,8 @@ impl MemoryPrekeyStore {
     }
 
     /// Issue an invitation (§5.2, §5.4, §6.3): rotate the SPK if due, take a fresh OPK, sign the bundle, draw
-    /// `ld_id`, `link_key`, `inv_sid`, `inv_send_seed` and the blob nonce, seal the link data, and record the
-    /// invitation. The inviter-side bounds are enforced here ([`inv::check_issue_bounds`]).
+    /// `ld_id`, `link_key`, a discarded 16 bytes, `inv_send_seed`, the blob nonce, `invq_recv_seed` and `owner_seed`,
+    /// derive `inv_sid` (§9.1), seal the link data, and record the invitation. The inviter-side bounds are enforced here ([`inv::check_issue_bounds`]).
     ///
     /// # Errors
     /// [`IssueError`]: the bounds, or a cryptographic or environment error. Nothing is recorded on error.
@@ -612,9 +641,18 @@ impl MemoryPrekeyStore {
         let bundle = self.bundle(identity, spk_id, opk_id, params.spk_expiry, entropy)?;
         let ld_id: Id = *entropy.secret::<16>()?.expose_secret();
         let link_key = entropy.secret::<HASH_LEN>()?;
-        let inv_sid: Id = *entropy.secret::<16>()?.expose_secret();
+        // ADR-048 (m), OPEN-M5-14 B: the 16 bytes formerly drawn for `inv_sid` are still drawn, at their old place, and
+        // discarded (zeroized on drop), so that no other draw changes its bytes; `inv_sid` is derived below (§9.1)
+        let _discarded = entropy.secret::<16>()?;
         let inv_send_seed = entropy.secret::<HASH_LEN>()?;
         let nonce = entropy.nonce()?;
+        // the new draws follow the last old one: the invitation queue's recipient key and the link-data owner key
+        let invq_recv_seed = entropy.secret::<HASH_LEN>()?;
+        let owner_seed = entropy.secret::<HASH_LEN>()?;
+        let inv_sid = crate::link::ids::sid(
+            &ed25519_pk_of(&invq_recv_seed)?,
+            &ed25519_pk_of(&inv_send_seed)?,
+        )?;
         let link_data = LinkDataV1 {
             inviter_iks: identity.public().clone(),
             bundle,
@@ -636,6 +674,8 @@ impl MemoryPrekeyStore {
         self.add_record(InvitationRecord {
             ld_id,
             link_key: record_key,
+            owner_seed,
+            invq_recv_seed,
             spk_id,
             opk_id,
             expires: params.expires,
@@ -705,6 +745,8 @@ impl MemoryPrekeyStore {
         for r in &self.records {
             m.extend_from_slice(&r.ld_id);
             m.extend_from_slice(r.link_key.expose_secret());
+            m.extend_from_slice(r.owner_seed.expose_secret());
+            m.extend_from_slice(r.invq_recv_seed.expose_secret());
             m.extend_from_slice(&r.spk_id.to_be_bytes());
             m.extend_from_slice(&r.opk_id.to_be_bytes());
             m.extend_from_slice(&r.expires.to_be_bytes());

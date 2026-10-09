@@ -31,7 +31,11 @@ Phase B: `modell=claude-opus-5-5`, binding inputs additionally `BRIEF_M5-B` (rev
 | B3 | B | Relay connection task, sweeper, rate limits, drain, `keygen`/`rotate-static`, config, tracing test, zeroization | RL-01…RL-23, F-11, FZ-08 | done (`e6d8f17`, `96a61f0`, `d4eef33`) |
 | B4 | B | Gates: ct targets; counting accessors (R-42/R-59) + docs/01 RR-17 line; `formal/link.pvl` + `formal/link/*.pv`, `tr.pv` T14, CLAIMS O-15 sentence, `proverif-link` job; mutants scope (`docs/06` §4); PR-run CI seed for properties | CT-01…CT-06, X-03, G-01, G-02, PV-01…PV-03, X-04, X-05, X-02, X-07 (opt: X-06, X-08) | done; PV-01 after WEISUNG M5-B-2 (LO-5, LO-6: the breaks of `lDH`, `lBoth` as reveals; 9/9 files PASS at `5d7d45b`) |
 | B5 | B | Evidence under `M05-evidence/` per push; Phase B report; closing push; row "Phase B closed @ `<sha>`" | — | done — **Phase B closed @ `dc34d93`** (`dc34d93d696b4d4699aa3939e9af428de2e7bdd6`; run 37817187858 red: windows-native, coverage, mutants; fixed in M5-B-3; §4B, §5B; one docs/evidence-only commit on top). Earlier close @ `6483344` |
-| C | C | transport, harness, hx re-freeze rows | see brief §5 | not started |
+| C1 | C | Commit 1: carry-over test `keys::tests::rotation_boundary_new_generation_may_expire_with_the_newest` (+ the gate's mutants command restricted to `keys.rs` `rotate`: 7 caught); ADR-042 consequence line accepted; hx re-freeze: `vectors/ref/hx.json` (sha256 `2bf05e69…a0e8d`, 1 432 784 B, checked), `vectors/SCHEMA.md` rev 7, `vectors/SCHEMA-4.10-hx.md`; `InvitationRecord` (owner and invitation-queue recipient seeds), `issue_invitation` (derived `inv_sid`), `RelayQueue::derived`; generator cases hx-0003, hx-0031…0037; `vectors/hx.json` re-frozen by `cargo xtask vectors` | V-23, V-24, V-25, G-04, G-05 | done |
+| C2 | C | `secmp-transport`: `Session` (SecMP-LINK client over `std::io` streams), `RelayQueueTransport`, `RecvCap`/`SendCap` | T-01…T-09, T-11 | in progress |
+| C3 | C | `secmp-testkit::harness` (feature `kat`): `Harness`, virtual `Clock`, `EntropyPool`, `HarnessStream`/`Capture`/`Split`, `Side`; scenarios | H-01…H-06, H-08…H-13, G-06 | in progress |
+| C4 | C | Local gates (`ci-fast --strict`, `step --strict vectors kat`, Kani, nextest per touched crate), evidence under `M05-evidence/` | — | open |
+| C5 | C | Closing push = this report complete; PR run green on all jobs | — | open |
 
 ### M2 coverage of D.1 records and D.2 requests/responses (decides K-08 and P-13)
 

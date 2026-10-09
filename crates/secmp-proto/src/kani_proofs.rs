@@ -785,11 +785,17 @@ fn kani_commit_on(named: u32, delete: u32) {
     assert!(store.issue_opk(&mut OsEntropy) == Ok(1));
     assert!(store.issue_opk(&mut OsEntropy) == Ok(2));
     let link_key = secmp_crypto::SecretBytes::from_slice(&[0xa5; 32]);
-    assert!(link_key.is_ok());
-    if let Ok(link_key) = link_key {
+    let owner_seed = secmp_crypto::SecretBytes::from_slice(&[0x3c; 32]);
+    let invq_recv_seed = secmp_crypto::SecretBytes::from_slice(&[0x69; 32]);
+    assert!(link_key.is_ok() && owner_seed.is_ok() && invq_recv_seed.is_ok());
+    if let (Ok(link_key), Ok(owner_seed), Ok(invq_recv_seed)) =
+        (link_key, owner_seed, invq_recv_seed)
+    {
         let record = InvitationRecord {
             ld_id: [1; 16],
             link_key,
+            owner_seed,
+            invq_recv_seed,
             spk_id: 1,
             opk_id: named,
             expires: kani::any(),

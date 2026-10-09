@@ -488,4 +488,19 @@ mod tests {
         assert!(f.rotate(NOW, 0).is_err());
         Ok(())
     }
+
+    /// M5-C carry-over (run 37851301032, `keys.rs:120:51`): a new generation that expires exactly when the newest one
+    /// does is accepted; one second earlier is the `Config` error, and a refused rotation changes nothing.
+    #[test]
+    fn rotation_boundary_new_generation_may_expire_with_the_newest() -> Result<()> {
+        let mut f = KeyFile::generate(NOW, DEFAULT_VALIDITY_SECS)?;
+        let newest_until = NOW + DEFAULT_VALIDITY_SECS;
+        let now = NOW + 100;
+        let early = f.rotate(now, newest_until - now - 1);
+        assert!(matches!(early, Err(Error::Config(_))), "one second short");
+        assert_eq!(f.generations().len(), 1, "nothing added");
+        assert_eq!(f.rotate(now, newest_until - now)?, 2, "exactly equal");
+        assert_eq!(f.ring()?.newest()?.1, newest_until);
+        Ok(())
+    }
 }

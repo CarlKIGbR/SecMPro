@@ -1,4 +1,6 @@
-# Test-vector schema — revision 6 (normative for `ref/` and for `secmp-crypto`/`secmp-proto`)
+# Test-vector schema — revision 7 (normative for `ref/` and for `secmp-crypto`/`secmp-proto`)
+
+Revision 7 (2026-10-07, Weisung REF-M5-2) adds the R-66 cases, RF-1 and the derived `inv_sid` to §4.10 (`hx.json` is re-frozen for spec rev 2.6; its `"schema"` stays 5).
 
 Revision 6 (2026-10-02, brief REF-M5) adds §4.11 `link` (its case table is `SCHEMA-4.11-link.md`), the suite tag `link` (§3) and the JSON shapes that suite needs (§1). The M1–M4 files are unchanged and keep `"schema": 2`, `"schema": 3`, `"schema": 4` and `"schema": 5`.
 
@@ -217,7 +219,7 @@ The case shape, the obligations per op, the state digest `StateDigestV1`, the Co
 
 ### 4.10 `hx` — SecMP-INV/HX full run (spec §5, §6)
 
-The case shape, the constants, the obligations per op, the positive run, the invitee rejections V1–V9 and the responder rejections R1–R13 are in `SCHEMA-4.10-hx.md` (proposal of brief REF-M4; generated from `ref/secmp_ref/hx_cases.py`).
+The case shape, the constants, the obligations per op, the positive run, the invitee rejections V1–V9, the responder rejections R1–R18 and the rev-2.5 positive cases A1 (`respond-later-group`) and A2 (`respond-retained-spk`, RF-1) are in `SCHEMA-4.10-hx.md` (proposal of brief REF-M4, extended by Weisung REF-M5-2; generated from `ref/secmp_ref/hx_cases.py`). `inv_sid` of the `invite` case is derived as in §9.1 (ADR-048 (m)).
 
 ### 4.11 `link` — SecMP-LINK/SecMP-Q full run (spec §8, §9)
 

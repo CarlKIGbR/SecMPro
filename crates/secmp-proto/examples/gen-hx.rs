@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Writes the Rust side of the `hx` vectors (`vectors/SCHEMA.md` §4.10, `vectors/SCHEMA-4.10-hx.md`: the SecMP-INV/HX
-//! full run, 30 cases) as `<dir>/hx.json` in the canonical form of SCHEMA §1. Run by `cargo xtask vectors` with
+//! full run, 37 cases) as `<dir>/hx.json` in the canonical form of SCHEMA §1. Run by `cargo xtask vectors` with
 //! `<dir> = vectors/rust` (gitignored). Needs feature `kat` (the derandomised ratchet entry points and the SCHEMA §2
 //! streams). The generator reads no vector file; a failed check aborts the example. Exit status: failure if the
 //! file cannot be written.

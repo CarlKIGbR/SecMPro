@@ -45,8 +45,20 @@ fn vector_file() -> Value {
     serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
 }
 
+/// All cases of the vector file.
+pub(crate) fn load_cases() -> Vec<Case> {
+    vector_file()
+        .get("cases")
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(Case::new)
+        .collect()
+}
+
 /// A case of the file: its named byte strings.
-struct Case {
+pub(crate) struct Case {
     id: String,
     op: String,
     inputs: BTreeMap<String, Value>,
@@ -69,7 +81,7 @@ impl Case {
         }
     }
 
-    fn input(&self, name: &str) -> Vec<u8> {
+    pub(crate) fn input(&self, name: &str) -> Vec<u8> {
         unhex(self.inputs.get(name).unwrap().as_str().unwrap())
     }
 
@@ -77,7 +89,7 @@ impl Case {
         self.inputs.contains_key(name)
     }
 
-    fn output(&self, name: &str) -> Vec<u8> {
+    pub(crate) fn output(&self, name: &str) -> Vec<u8> {
         unhex(self.outputs.get(name).unwrap().as_str().unwrap())
     }
 
@@ -148,7 +160,7 @@ fn route(c: &Case) -> RouteDescriptor {
     })
 }
 
-fn by_id<'a>(cases: &'a [Case], id: &str) -> &'a Case {
+pub(crate) fn by_id<'a>(cases: &'a [Case], id: &str) -> &'a Case {
     cases.iter().find(|c| c.id == id).unwrap()
 }
 
@@ -223,7 +235,7 @@ fn case_invitation(c3: &Case, r_identity: &IdentityKeys) -> (InvitationV1, Vec<u
         ld_id: c3.input("ld_id").try_into().unwrap(),
         link_key: SecretBytes::from_slice(&c3.input("link_key")).unwrap(),
         inviter_fp: r_identity.fingerprint().unwrap(),
-        inv_sid: c3.input("inv_sid").try_into().unwrap(),
+        inv_sid: c3.output("inv_sid").try_into().unwrap(),
         inv_send_seed: SecretBytes::from_slice(&c3.input("inv_send_seed")).unwrap(),
         inv_period_s: Period::S20,
         expires: EXPIRES,
@@ -320,55 +332,100 @@ fn case_initiator(
     derive_checks(c6, &ids.r_identity, &ids.i_identity, link_data, invitation);
 }
 
-/// Cases 7 and 8: the responder, from the state after cases 1–4; returns the store after case 7.
+/// R's store for case `c`: the state after cases 1–4 (the SPK 7 and the OPK 42 of case 1, the record of case 3);
+/// for A2 (`respond-retained-spk`) with a second, current SPK generation 8 from the case's own stream.
+fn responder_store(world: &World, c: &Case) -> MemoryPrekeyStore {
+    let mut store = store_from(&world.store_seed);
+    if c.op == "respond-retained-spk" {
+        assert_eq!(store.spk_ids(), vec![SPK_ID], "{} before", c.id);
+        let mut e = fixed(&[
+            &c.input("spk_dh_sk"),
+            &c.input("spk_kem_seed"),
+            &c.input("rpk_kem_seed"),
+        ]);
+        assert_eq!(
+            store.create_spk(CREATED, &mut e).unwrap(),
+            SPK_ID + 1,
+            "{} new generation",
+            c.id
+        );
+        assert_eq!(e.remaining(), 0, "{}: the generation's draws", c.id);
+        assert_eq!(store.spk_ids(), vec![SPK_ID, SPK_ID + 1], "{}", c.id);
+    }
+    store.add_record(world.record.duplicate().unwrap()).unwrap();
+    store
+}
+
+/// The DH-step randomness `Responder::accept` consumes for case `c`: `dh_sk ‖ kem_seed ‖ m` of the one step it
+/// takes. The reference's Decrypt takes the DH step on its working copy before the body MAC of a rejected group
+/// fails (A1: the first draws), the product's Decrypt is transactional and draws nothing for a rejected cell, so
+/// for A1 only the second step's draws (`dh_sk_2 ‖ kem_seed_2 ‖ m_2`, the accepted group's) reach the product.
+fn responder_entropy(c: &Case) -> FixedEntropy {
+    if c.has_input("dh_sk_2") {
+        return FixedEntropy::new(
+            &[c.input("dh_sk_2"), c.input("kem_seed_2"), c.input("m_2")].concat(),
+        );
+    }
+    if !c.has_input("dh_sk") {
+        return FixedEntropy::new(&[]);
+    }
+    FixedEntropy::new(&[c.input("dh_sk"), c.input("kem_seed"), c.input("m")].concat())
+}
+
+/// A positive responder case (7, 8, A1, A2): `Responder::accept` on `fetched` reproduces every output; returns the
+/// store afterwards.
+fn replay_positive(c: &Case, world: &World) -> MemoryPrekeyStore {
+    let mut store = responder_store(world, c);
+    let fetched = cells_of(&c.list("fetched"));
+    let mut e = responder_entropy(c);
+    let accepted = Responder::accept(
+        &fetched,
+        &world.record,
+        &mut store,
+        &world.r_identity.responder_keys(),
+        &mut e,
+    );
+    assert!(accepted.is_ok(), "{} accept", c.id);
+    let accepted = accepted.unwrap();
+    assert_eq!(e.remaining(), 0, "{}: DH-step draws consumed", c.id);
+    c.expect("peer_iks", &accepted.peer.encode().unwrap());
+    c.expect("profile", &accepted.profile.encode().unwrap());
+    let routes: Vec<String> = accepted
+        .routes
+        .iter()
+        .map(|r| hex(&r.encode().unwrap()))
+        .collect();
+    let listed: Vec<String> = c
+        .outputs
+        .get("routes")
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|x| x.as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(routes, listed, "{} routes", c.id);
+    assert_eq!(
+        digest(&accepted.state),
+        hex(&c.output("state_post_R")),
+        "{} state_post_R",
+        c.id
+    );
+    assert_eq!(
+        hex(accepted.state.sb_kat()),
+        hex(&c.output("transcript")),
+        "{} transcript (sb)",
+        c.id
+    );
+    assert_eq!(store.opk_ids(), Vec::<u32>::new(), "{} opks_post", c.id);
+    store
+}
+
+/// Cases 7, 8, A1 and A2: the responder, from the state after cases 1–4; returns the store after case 7.
 fn case_responder(cases: &[Case], world: &World) -> MemoryPrekeyStore {
     let mut after_7 = None;
-    for id in ["hx-0007", "hx-0008"] {
-        let c = by_id(cases, id);
-        let mut store = store_from(&world.store_seed);
-        store.add_record(world.record.duplicate().unwrap()).unwrap();
-        let fetched = cells_of(&c.list("fetched"));
-        let mut e = fixed(&[&c.input("dh_sk"), &c.input("kem_seed"), &c.input("m")]);
-        let accepted = Responder::accept(
-            &fetched,
-            &world.record,
-            &mut store,
-            &world.r_identity.responder_keys(),
-            &mut e,
-        );
-        assert!(accepted.is_ok(), "{} accept", c.id);
-        let accepted = accepted.unwrap();
-        assert_eq!(e.remaining(), 0, "{}: DH-step draws consumed", c.id);
-        c.expect("peer_iks", &accepted.peer.encode().unwrap());
-        c.expect("profile", &accepted.profile.encode().unwrap());
-        let routes: Vec<String> = accepted
-            .routes
-            .iter()
-            .map(|r| hex(&r.encode().unwrap()))
-            .collect();
-        let listed: Vec<String> = c
-            .outputs
-            .get("routes")
-            .unwrap()
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|x| x.as_str().unwrap().to_owned())
-            .collect();
-        assert_eq!(routes, listed, "{} routes", c.id);
-        assert_eq!(
-            digest(&accepted.state),
-            hex(&c.output("state_post_R")),
-            "{} state_post_R",
-            c.id
-        );
-        assert_eq!(
-            hex(accepted.state.sb_kat()),
-            hex(&c.output("transcript")),
-            "{} transcript (sb)",
-            c.id
-        );
-        assert_eq!(store.opk_ids(), Vec::<u32>::new(), "{} opks_post", c.id);
+    for id in ["hx-0007", "hx-0008", "hx-0031", "hx-0037"] {
+        let store = replay_positive(by_id(cases, id), world);
         if id == "hx-0007" {
             after_7 = Some(store);
         }
@@ -376,7 +433,68 @@ fn case_responder(cases: &[Case], world: &World) -> MemoryPrekeyStore {
     after_7.unwrap()
 }
 
-/// The invitee-reject (V1–V9) and respond-reject (R1–R13) cases.
+/// A respond-reject case: `Responder::accept` rejects with the uniform error; `store` is unchanged and holds the
+/// OPKs `opks_post` lists.
+fn replay_reject(c: &Case, world: &World, store: &mut MemoryPrekeyStore) {
+    let before = store.digest_kat();
+    let fetched = cells_of(&c.list("fetched"));
+    let mut e = responder_entropy(c);
+    assert_eq!(
+        Responder::accept(
+            &fetched,
+            &world.record,
+            store,
+            &world.r_identity.responder_keys(),
+            &mut e,
+        )
+        .err(),
+        Some(Error::Rejected),
+        "{} respond-reject",
+        c.id
+    );
+    assert_eq!(store.digest_kat(), before, "{}: store unchanged", c.id);
+    let expected: Vec<u32> = c
+        .outputs
+        .get("opks_post")
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|n| u32::try_from(n.as_u64().unwrap()).unwrap())
+        .collect();
+    assert_eq!(store.opk_ids(), expected, "{} opks_post", c.id);
+}
+
+/// R's world after cases 1–4: the identity, the store seed and the invitation record of case 3.
+fn make_world(
+    cases: &[Case],
+    r_identity: IdentityKeys,
+    store_seed: Vec<u8>,
+    invitation: &InvitationV1,
+    invitation_bytes: Vec<u8>,
+    uri: String,
+    blob: Vec<u8>,
+) -> World {
+    let c3 = by_id(cases, "hx-0003");
+    World {
+        r_identity,
+        store_seed,
+        record: InvitationRecord {
+            ld_id: invitation.ld_id,
+            link_key: SecretBytes::from_slice(invitation.link_key.expose_secret()).unwrap(),
+            owner_seed: SecretBytes::from_slice(&c3.input("owner_seed")).unwrap(),
+            invq_recv_seed: SecretBytes::from_slice(&c3.input("invq_recv_seed")).unwrap(),
+            spk_id: SPK_ID,
+            opk_id: OPK_ID,
+            expires: EXPIRES,
+        },
+        invitation: invitation_bytes,
+        uri,
+        blob,
+    }
+}
+
+/// The invitee-reject (V1–V9) and respond-reject (R1–R18) cases.
 fn case_rejects(cases: &[Case], world: &World, mut after_7: MemoryPrekeyStore) {
     for c in cases {
         match c.op.as_str() {
@@ -400,44 +518,11 @@ fn case_rejects(cases: &[Case], world: &World, mut after_7: MemoryPrekeyStore) {
                 );
             }
             "respond-reject" => {
-                let mut fresh = store_from(&world.store_seed);
-                fresh.add_record(world.record.duplicate().unwrap()).unwrap();
-                let store = if c.id == "hx-0019" {
-                    &mut after_7
+                if c.id == "hx-0019" {
+                    replay_reject(c, world, &mut after_7);
                 } else {
-                    &mut fresh
-                };
-                let before = store.digest_kat();
-                let fetched = cells_of(&c.list("fetched"));
-                let mut e = if c.has_input("dh_sk") {
-                    fixed(&[&c.input("dh_sk"), &c.input("kem_seed"), &c.input("m")])
-                } else {
-                    FixedEntropy::new(&[])
-                };
-                assert_eq!(
-                    Responder::accept(
-                        &fetched,
-                        &world.record,
-                        store,
-                        &world.r_identity.responder_keys(),
-                        &mut e,
-                    )
-                    .err(),
-                    Some(Error::Rejected),
-                    "{} respond-reject",
-                    c.id
-                );
-                assert_eq!(store.digest_kat(), before, "{}: store unchanged", c.id);
-                let expected: Vec<u32> = c
-                    .outputs
-                    .get("opks_post")
-                    .unwrap()
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .map(|n| u32::try_from(n.as_u64().unwrap()).unwrap())
-                    .collect();
-                assert_eq!(store.opk_ids(), expected, "{} opks_post", c.id);
+                    replay_reject(c, world, &mut responder_store(world, c));
+                }
             }
             _ => {}
         }
@@ -457,7 +542,7 @@ fn hx_vectors() {
         .iter()
         .map(Case::new)
         .collect();
-    assert_eq!(cases.len(), 30);
+    assert_eq!(cases.len(), 37);
 
     let ids = case_identities(&cases);
     let (invitation, invitation_bytes, uri) =
@@ -482,20 +567,15 @@ fn hx_vectors() {
         &accepted,
     );
 
-    let world = World {
-        r_identity: ids.r_identity,
-        store_seed: ids.store_seed,
-        record: InvitationRecord {
-            ld_id: invitation.ld_id,
-            link_key: SecretBytes::from_slice(invitation.link_key.expose_secret()).unwrap(),
-            spk_id: SPK_ID,
-            opk_id: OPK_ID,
-            expires: EXPIRES,
-        },
-        invitation: invitation_bytes,
+    let world = make_world(
+        &cases,
+        ids.r_identity,
+        ids.store_seed,
+        &invitation,
+        invitation_bytes,
         uri,
-        blob: blob_bytes,
-    };
+        blob_bytes,
+    );
     let after_7 = case_responder(&cases, &world);
     case_rejects(&cases, &world, after_7);
 }
@@ -568,5 +648,130 @@ fn derive_checks(
         hex(&c6.output("k_id")),
         "{} k_id",
         c6.id
+    );
+}
+
+/// V-24: the cases of Weisung REF-M5-2 (A1, R14 … R18, A2; the rev 2.5 rules of §6.5, §6.6) through the product.
+#[test]
+fn hx_vectors_rev25_cases() {
+    let cases = load_cases();
+    assert_eq!(cases.len(), 37);
+    let ids = case_identities(&cases);
+    let (invitation, invitation_bytes, uri) =
+        case_invitation(by_id(&cases, "hx-0003"), &ids.r_identity);
+    let (_, blob_bytes, _) = case_blob(by_id(&cases, "hx-0004"), &ids, &invitation);
+    let world = make_world(
+        &cases,
+        ids.r_identity,
+        ids.store_seed,
+        &invitation,
+        invitation_bytes,
+        uri,
+        blob_bytes,
+    );
+
+    // A1: a complete group that R rejects is discarded and the OPK is kept; the next group is accepted. The
+    // entropy handed to `accept` is the accepted group's step, `dh_sk_2 ‖ kem_seed_2 ‖ m_2` (see
+    // `responder_entropy`): the reference's rejected group consumed `dh_sk ‖ kem_seed ‖ m` on its working copy, the
+    // product's transactional Decrypt draws nothing for it.
+    let a1 = by_id(&cases, "hx-0031");
+    assert_eq!(a1.op, "respond-later-group");
+    let fetched = a1.list("fetched");
+    assert_eq!(fetched.len(), 6);
+    {
+        // the rejected group alone: rejected, store unchanged, OPK 42 kept
+        let mut store = responder_store(&world, a1);
+        let before = store.digest_kat();
+        let group = cells_of(fetched.get(..3).unwrap());
+        let mut e = fixed(&[&a1.input("dh_sk"), &a1.input("kem_seed"), &a1.input("m")]);
+        assert_eq!(
+            Responder::accept(
+                &group,
+                &world.record,
+                &mut store,
+                &world.r_identity.responder_keys(),
+                &mut e,
+            )
+            .err(),
+            Some(Error::Rejected),
+            "{} the first group alone",
+            a1.id
+        );
+        assert_eq!(
+            e.remaining(),
+            128,
+            "{}: a rejected group draws nothing (transactional Decrypt)",
+            a1.id
+        );
+        assert_eq!(store.digest_kat(), before, "{}: store unchanged", a1.id);
+        assert_eq!(store.opk_ids(), vec![OPK_ID], "{}: OPK kept", a1.id);
+    }
+    replay_positive(a1, &world);
+
+    // R14 … R18: rejected with the uniform error, the store unchanged, OPK 42 kept
+    for id in ["hx-0032", "hx-0033", "hx-0034", "hx-0035", "hx-0036"] {
+        let c = by_id(&cases, id);
+        assert_eq!(c.op, "respond-reject", "{id}");
+        replay_reject(c, &world, &mut responder_store(&world, c));
+        assert_eq!(
+            c.outputs
+                .get("opks_post")
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .len(),
+            1,
+            "{id}"
+        );
+    }
+
+    // A2: SPK 7 is retained next to the current SPK 8 and is found by the Outer's `spk_id`
+    let a2 = by_id(&cases, "hx-0037");
+    assert_eq!(a2.op, "respond-retained-spk");
+    let store = replay_positive(a2, &world);
+    assert_eq!(
+        store.spk_ids(),
+        vec![SPK_ID, SPK_ID + 1],
+        "{} SPKs kept",
+        a2.id
+    );
+    let c7 = by_id(&cases, "hx-0007");
+    for name in ["transcript", "sk", "k_id", "peer_iks", "content", "profile"] {
+        assert_eq!(
+            a2.output(name),
+            c7.output(name),
+            "{} {name} = case 7's",
+            a2.id
+        );
+    }
+}
+
+/// Case 3's `inv_sid` is SHA-256(`"SecMP-Q/1 sid"` ‖ `invq_recv_pk` ‖ Ed25519.pk(`inv_send_seed`))`[0..16]` (§9.1,
+/// ADR-048 (m)); the 16 bytes drawn at its old place are discarded.
+#[test]
+fn hx_vectors_invite_derives_inv_sid() {
+    let cases = load_cases();
+    let c3 = by_id(&cases, "hx-0003");
+    let pk = |seed: &[u8]| -> Vec<u8> {
+        secmp_crypto::Ed25519SigningKey::from_seed(seed)
+            .unwrap()
+            .verifying_key()
+            .as_bytes()
+            .to_vec()
+    };
+    let invq_recv_pk = pk(&c3.input("invq_recv_seed"));
+    c3.expect("invq_recv_pk", &invq_recv_pk);
+    c3.expect("owner_pk", &pk(&c3.input("owner_seed")));
+    let digest = secmp_crypto::sha256(&[
+        secmp_crypto::Label::QSid.as_bytes(),
+        &invq_recv_pk,
+        &pk(&c3.input("inv_send_seed")),
+    ]);
+    c3.expect("inv_sid", digest.get(..16).unwrap());
+    assert_ne!(
+        hex(&c3.input("inv_sid_discarded")),
+        hex(&c3.output("inv_sid")),
+        "{}: inv_sid is derived, not drawn",
+        c3.id
     );
 }

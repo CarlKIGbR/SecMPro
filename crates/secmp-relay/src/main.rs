@@ -112,7 +112,7 @@ fn run(config: &std::path::Path) -> ExitCode {
     let Ok(listener) = server::bind(&relay, cfg.listen) else {
         return fail("cannot bind the listener");
     };
-    match server::serve(&relay, &listener, &clock) {
+    match server::serve(&relay, &listener, &clock, server::spawn_thread) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => fail(&e.to_string()),
     }

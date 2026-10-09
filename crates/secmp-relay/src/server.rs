@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! The process around the sans-IO relay (`docs/02` §5.1, `docs/05` §4–§5): start-up, the listener, one thread per
-//! connection.
+//! connection up to the connection cap (`max_connections`, M05 review C-1).
 //!
 //! Start-up refuses before any listener binds (test RL-23): [`prepare`] reads the configuration and the key file
 //! and builds the [`Relay`]; only then [`bind`] opens the loopback listener C tor forwards to. Serving writes no
@@ -15,6 +15,7 @@ use std::io::{self, ErrorKind};
 use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use secmp_proto::tr::OsEntropy;
@@ -171,7 +172,47 @@ const fn tick_due(last_ms: u64, now_ms: u64) -> bool {
     now_ms.saturating_sub(last_ms) >= TICK_MS
 }
 
-/// Serve until the drain has finished: one thread per connection; the sweeper ticks once per second.
+/// The work of one accepted connection, handed to the spawner of [`serve`].
+pub type Job = Box<dyn FnOnce() + Send + 'static>;
+
+/// The production spawner of [`serve`]: one OS thread per connection through `std::thread::Builder`, whose failure
+/// (the unit's `TasksMax`, memory) is returned instead of raised (M05 review C-1). A job that is not started is
+/// dropped, which closes its connection.
+///
+/// # Errors
+/// The thread could not be created.
+pub fn spawn_thread(job: Job) -> io::Result<()> {
+    std::thread::Builder::new().spawn(job).map(drop)
+}
+
+/// One served connection, counted in the live connections: dropped after its thread's loop or, if no thread could be
+/// started for it, at once — either way the stream is closed and the count goes down.
+struct Slot<S: Stream> {
+    stream: Option<S>,
+    live: Arc<AtomicUsize>,
+}
+
+impl<S: Stream> Slot<S> {
+    /// Drive the connection to its end ([`handle`] closes it).
+    fn run<T: Time>(mut self, relay: &Relay, clock: &T) {
+        if let Some(stream) = self.stream.take() {
+            handle(relay, stream, clock);
+        }
+    }
+}
+
+impl<S: Stream> Drop for Slot<S> {
+    fn drop(&mut self) {
+        if let Some(stream) = self.stream.as_mut() {
+            stream.close();
+        }
+        self.live.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// Serve until the drain has finished: one job per connection, started by `spawn` ([`spawn_thread`] in the binary),
+/// at most `max_connections` at once — a connection over the cap, or one accepted while draining, is closed before
+/// any read and without a job; the sweeper ticks once per second.
 ///
 /// # Errors
 /// [`Error::Io`] if the listener fails.
@@ -179,7 +220,10 @@ pub fn serve<L: Listener, T: Time + Clone + 'static>(
     relay: &Arc<Relay>,
     listener: &L,
     clock: &T,
+    mut spawn: impl FnMut(Job) -> io::Result<()>,
 ) -> Result<()> {
+    let live = Arc::new(AtomicUsize::new(0));
+    let cap = relay.limits().max_connections;
     let mut last_tick = clock.now().mono_ms;
     loop {
         let now = clock.now();
@@ -193,13 +237,20 @@ pub fn serve<L: Listener, T: Time + Clone + 'static>(
         }
         match listener.accept_next() {
             Ok(mut stream) => {
-                if relay.accepts_connections() {
-                    let relay = Arc::clone(relay);
-                    let clock = clock.clone();
-                    std::thread::spawn(move || handle(&relay, stream, &clock));
-                } else {
+                // only this loop adds to `live`, so the count cannot pass the cap between the check and the add
+                if !relay.accepts_connections() || live.load(Ordering::SeqCst) >= cap {
                     stream.close();
+                    continue;
                 }
+                live.fetch_add(1, Ordering::SeqCst);
+                let slot = Slot {
+                    stream: Some(stream),
+                    live: Arc::clone(&live),
+                };
+                let relay = Arc::clone(relay);
+                let clock = clock.clone();
+                // a spawn failure drops the job: the slot closes the stream and counts it out; serving goes on
+                let _ = spawn(Box::new(move || slot.run(&relay, &clock)));
             }
             Err(e) if e.kind() == ErrorKind::WouldBlock => std::thread::sleep(ACCEPT_POLL),
             Err(e) if e.kind() == ErrorKind::Interrupted => {}

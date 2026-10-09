@@ -19,6 +19,7 @@
 //! hello_burst = 16
 //! hello_per_sec = 4
 //! hello_hs1_timeout_secs = 30
+//! max_connections = 256                  # M05 review C-1: below the unit's TasksMax and LimitNOFILE
 //! [shutdown]
 //! drain_secs = 60                        # OPEN-M5-09
 //! ```
@@ -44,6 +45,9 @@ pub struct Limits {
     pub hello_timeout_ms: u64,
     /// Graceful drain before exit, in seconds (OPEN-M5-09: 60).
     pub drain_secs: u64,
+    /// Connections served at once, one thread each; an accepted connection over the cap is closed before any read,
+    /// without a thread (M05 review C-1).
+    pub max_connections: usize,
 }
 
 /// Default queue pool: 6 GB (`docs/05` §5 `memory_budget_bytes`).
@@ -54,6 +58,9 @@ pub const DEFAULT_LINKDATA_BUDGET: u64 = 1_000_000_000;
 pub const DEFAULT_HELLO_TIMEOUT_SECS: u64 = 30;
 /// Default drain (OPEN-M5-09).
 pub const DEFAULT_DRAIN_SECS: u64 = 60;
+/// Default connection cap (M05 review C-1): below the systemd unit's `TasksMax` and `LimitNOFILE` (`docs/05` §4),
+/// so the relay refuses a connection before the system refuses it a thread or a descriptor.
+pub const DEFAULT_MAX_CONNECTIONS: usize = 256;
 
 impl Limits {
     /// The OPEN-M5 defaults.
@@ -68,6 +75,7 @@ impl Limits {
             hello_rate: Some(RateLimit::HELLO_DEFAULT),
             hello_timeout_ms: DEFAULT_HELLO_TIMEOUT_SECS.saturating_mul(1000),
             drain_secs: DEFAULT_DRAIN_SECS,
+            max_connections: DEFAULT_MAX_CONNECTIONS,
         }
     }
 
@@ -80,6 +88,7 @@ impl Limits {
             hello_rate: None,
             hello_timeout_ms: DEFAULT_HELLO_TIMEOUT_SECS.saturating_mul(1000),
             drain_secs: DEFAULT_DRAIN_SECS,
+            max_connections: DEFAULT_MAX_CONNECTIONS,
         }
     }
 }
@@ -111,6 +120,7 @@ const KEYS: &[(&str, &str)] = &[
     ("limits", "hello_burst"),
     ("limits", "hello_per_sec"),
     ("limits", "hello_hs1_timeout_secs"),
+    ("limits", "max_connections"),
     ("shutdown", "drain_secs"),
 ];
 
@@ -240,6 +250,13 @@ impl Config {
         if timeout_secs == 0 {
             return Err(Error::Config("hello_hs1_timeout_secs must be positive"));
         }
+        let max_connections = match int(&e, "limits", "max_connections")? {
+            None => DEFAULT_MAX_CONNECTIONS,
+            Some(0) => return Err(Error::Config("max_connections must be positive")),
+            Some(n) => {
+                usize::try_from(n).map_err(|_| Error::Config("max_connections is out of range"))?
+            }
+        };
         let limits = Limits {
             budget: BudgetLimits {
                 queue_bytes: Some(
@@ -255,6 +272,7 @@ impl Config {
                 .checked_mul(1000)
                 .ok_or(Error::Config("hello_hs1_timeout_secs is out of range"))?,
             drain_secs: int(&e, "shutdown", "drain_secs")?.unwrap_or(DEFAULT_DRAIN_SECS),
+            max_connections,
         };
         Ok(Self {
             listen,
@@ -281,7 +299,7 @@ mod tests {
     const FULL: &str = "# relay\n[listen]\ntor_loopback = \"127.0.0.1:7443\"  # C tor\n[access]\nkey_file = \"/k\"\n\
         [limits]\nqueue_budget_bytes = 1_049_600\nlinkdata_budget_bytes = 24_976\nlink_frames_burst = 3\n\
         link_frames_per_sec = 2\nhello_burst = 5\nhello_per_sec = 6\nhello_hs1_timeout_secs = 7\n\
-        [shutdown]\ndrain_secs = 9\n";
+        max_connections = 8\n[shutdown]\ndrain_secs = 9\n";
 
     #[test]
     fn every_value_is_taken() -> Result<()> {
@@ -305,8 +323,39 @@ mod tests {
                 }),
                 hello_timeout_ms: 7000,
                 drain_secs: 9,
+                max_connections: 8,
             }
         );
+        Ok(())
+    }
+
+    /// `TasksMax` of the relay's systemd unit (`docs/05` §4): each connection is one thread of this budget, next to
+    /// the accept loop's own.
+    const UNIT_TASKS_MAX: usize = 512;
+    /// `LimitNOFILE` of the unit (`docs/05` §4): each connection holds one descriptor.
+    const UNIT_LIMIT_NOFILE: usize = 4096;
+    /// systemd's default soft `LimitNOFILE` (1024), for a unit without that line.
+    const DEFAULT_SOFT_NOFILE: usize = 1024;
+
+    /// M05 review C-1: the default connection cap stays below the unit's `TasksMax` and both descriptor limits —
+    /// pinned against the numbers `docs/05` §4 states.
+    #[test]
+    fn max_connections_default_is_below_tasksmax() -> Result<()> {
+        let unit = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/05-relay-ops.md"),
+        )
+        .map_err(|_| Error::Io)?;
+        assert!(unit.contains(&format!("\nTasksMax={UNIT_TASKS_MAX}")));
+        assert!(unit.contains(&format!("\nLimitNOFILE={UNIT_LIMIT_NOFILE}")));
+        let cap = Config::parse(
+            "[listen]\ntor_loopback = \"127.0.0.1:1\"\n[access]\nkey_file = \"k\"\n",
+        )?
+        .limits
+        .max_connections;
+        assert_eq!(cap, DEFAULT_MAX_CONNECTIONS);
+        assert!(cap < UNIT_TASKS_MAX, "{cap} < TasksMax");
+        // below systemd's default soft limit, and so below the unit's `LimitNOFILE` as well
+        assert!(cap < DEFAULT_SOFT_NOFILE, "{cap} < LimitNOFILE");
         Ok(())
     }
 
@@ -331,6 +380,7 @@ mod tests {
             format!("{base}[limits]\nhello_burst = \"1\"\n"),
             format!("{base}[limits]\nhello_burst = 99999999999\n"),
             format!("{base}[limits]\nhello_hs1_timeout_secs = 0\n"),
+            format!("{base}[limits]\nmax_connections = 0\n"),
             format!("{base}[limits]\nqueue_budget_bytes = 1_\n"),
             format!("{base}[limits]\nqueue_budget_bytes\n"),
             format!("{base}[limits\n"),

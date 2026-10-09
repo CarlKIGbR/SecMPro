@@ -611,13 +611,14 @@ fn config_text(key_file: &Path, extra: &str) -> String {
 
 /// Every limit of the configuration, set away from its default.
 const LIMITS: &str = "[limits]\nqueue_budget_bytes = 524_800\nlinkdata_budget_bytes = 12_488\nlink_frames_burst = 3\n\
-link_frames_per_sec = 2\nhello_burst = 2\nhello_per_sec = 1\nhello_hs1_timeout_secs = 7\n[shutdown]\ndrain_secs = 9\n";
+link_frames_per_sec = 2\nhello_burst = 2\nhello_per_sec = 1\nhello_hs1_timeout_secs = 7\nmax_connections = 5\n\
+[shutdown]\ndrain_secs = 9\n";
 
 /// RL-23 `relay_config_controls_start_and_limits`: a missing or unreadable configuration, a malformed one, a
 /// missing key file and a key file with no generation valid now refuse the start with an error (no panic) and a
 /// `config_error` event, before any listener binds (no `listener_bound`; the binary exits likewise); a valid
-/// configuration with the budget, the rate limits, the `HELLO`→`HS1` timeout and `drain_secs` starts the relay with
-/// exactly those values in effect (`docs/07:105`; `docs/05` §5).
+/// configuration with the budget, the rate limits, the `HELLO`→`HS1` timeout, the connection cap (M05 review C-1)
+/// and `drain_secs` starts the relay with exactly those values in effect (`docs/07:105`; `docs/05` §5).
 #[test]
 fn relay_config_controls_start_and_limits() {
     let dir = fresh_dir("rl23");
@@ -710,6 +711,7 @@ fn relay_config_controls_start_and_limits() {
         }),
         hello_timeout_ms: 7_000,
         drain_secs: 9,
+        max_connections: 5,
     };
     assert_eq!(
         *relay.limits(),

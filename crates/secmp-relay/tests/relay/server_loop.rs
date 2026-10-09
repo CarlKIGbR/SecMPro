@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! The server loops (`secmp_relay::server::{serve, handle}`) over in-memory streams, an in-memory listener and a
 //! virtual clock — no socket (`docs/06` §4): the accept loop retries on `WouldBlock`/`Interrupted`, fails on any other
-//! listener error, refuses connections while draining, hands each connection to its own thread and exits with an
-//! `exit` event once the drain has lasted `drain_secs`; the connection loop ticks on read timeouts, retries
-//! interrupted reads, stops on EOF, an I/O error, a failed write or a teardown, and always closes the stream. Extra
-//! tests of M5 Phase B (not TEST-SPEC rows).
+//! listener error, refuses connections while draining and over the connection cap (closed unread, no thread), hands
+//! each connection to its own job, survives a job that cannot be started, and exits with an `exit` event once the
+//! drain has lasted `drain_secs`; the connection loop ticks on read timeouts, retries interrupted reads, stops on EOF,
+//! an I/O error, a failed write or a teardown, and always closes the stream. Extra tests of M5 Phase B (not TEST-SPEC
+//! rows) and of the M05 review conditions C-1.
 
 use std::collections::VecDeque;
 use std::io::{self, ErrorKind, Read, Write};
@@ -42,6 +43,8 @@ impl Time for Virtual {
 enum In {
     Data(Vec<u8>),
     Fail(ErrorKind),
+    /// An idle peer: the read blocks until the test releases it (or drops the sender), then EOF.
+    Block(Receiver<()>),
 }
 
 /// What a scripted stream saw.
@@ -59,6 +62,7 @@ struct Scripted {
     fail_poll: bool,
     fail_write: bool,
     closed: Option<Sender<()>>,
+    reading: Option<Sender<()>>,
 }
 
 impl Scripted {
@@ -71,6 +75,7 @@ impl Scripted {
                 fail_poll: false,
                 fail_write: false,
                 closed: None,
+                reading: None,
             },
             seen,
         )
@@ -82,12 +87,19 @@ impl Read for Scripted {
         let mut seen = self.seen.lock().unwrap();
         seen.reads = seen.reads.checked_add(1).unwrap();
         drop(seen);
+        if let Some(tx) = &self.reading {
+            let _ = tx.send(());
+        }
         match self.script.pop_front() {
             Some(In::Data(d)) => {
                 buf.get_mut(..d.len()).unwrap().copy_from_slice(&d);
                 Ok(d.len())
             }
             Some(In::Fail(kind)) => Err(io::Error::from(kind)),
+            Some(In::Block(release)) => {
+                let _ = release.recv();
+                Ok(0)
+            }
             None => Ok(0),
         }
     }
@@ -155,7 +167,7 @@ impl Listener for ScriptedListener {
             && !relay.draining()
             && let Some(closed) = closed.lock().unwrap().take()
         {
-            closed.recv_timeout(Duration::from_secs(60)).unwrap();
+            closed.recv_timeout(SIGNAL).unwrap();
             relay.start_drain(clock.now());
         }
         Err(io::Error::from(ErrorKind::WouldBlock))
@@ -173,12 +185,18 @@ impl EventSink for Shared {
 
 /// The relay of case 1 with a one-second drain; its events.
 fn relay() -> (Arc<Relay>, Arc<CaptureSink>) {
+    relay_with(Limits::vectors().max_connections)
+}
+
+/// The relay of case 1 with a one-second drain and a connection cap of `max_connections`; its events.
+fn relay_with(max_connections: usize) -> (Arc<Relay>, Arc<CaptureSink>) {
     let events = Arc::new(CaptureSink::default());
     let fx = RelayFx::case1();
     let relay = Relay::new(
         KeyRing::new(vec![(fx.keys(1), VALID_UNTIL)]).unwrap(),
         Limits {
             drain_secs: 1,
+            max_connections,
             ..Limits::vectors()
         },
         Box::new(Shared(Arc::clone(&events))),
@@ -214,7 +232,10 @@ fn serve_retries_and_exits_after_the_drain() {
         Err(io::Error::from(ErrorKind::Interrupted)),
         Err(io::Error::from(ErrorKind::WouldBlock)),
     ]);
-    assert_eq!(server::serve(&relay, &l, &clock), Ok(()));
+    assert_eq!(
+        server::serve(&relay, &l, &clock, server::spawn_thread),
+        Ok(())
+    );
     assert!(
         l.script.lock().unwrap().is_empty(),
         "every scripted error was seen"
@@ -229,7 +250,10 @@ fn serve_fails_on_a_listener_error() {
     let clock = Virtual::new(400);
     relay.start_drain(clock.now());
     let l = listener(vec![Err(io::Error::from(ErrorKind::ConnectionAborted))]);
-    assert_eq!(server::serve(&relay, &l, &clock), Err(Error::Io));
+    assert_eq!(
+        server::serve(&relay, &l, &clock, server::spawn_thread),
+        Err(Error::Io)
+    );
     assert_eq!(names(&events), vec!["keys_loaded", "drain_started"]);
 }
 
@@ -241,7 +265,10 @@ fn serve_closes_connections_while_draining() {
     relay.start_drain(clock.now());
     let (stream, seen) = Scripted::new(vec![In::Data(HELLO.to_vec())]);
     let l = listener(vec![Ok(stream)]);
-    assert_eq!(server::serve(&relay, &l, &clock), Ok(()));
+    assert_eq!(
+        server::serve(&relay, &l, &clock, server::spawn_thread),
+        Ok(())
+    );
     let s = seen.lock().unwrap();
     assert!(s.closed && s.reads == 0 && s.written.is_empty());
 }
@@ -260,7 +287,10 @@ fn serve_hands_each_connection_to_its_thread() {
         drain: Some((Arc::clone(&relay), clock.clone(), Mutex::new(Some(rx)))),
         calls: AtomicUsize::new(0),
     };
-    assert_eq!(server::serve(&relay, &l, &clock), Ok(()));
+    assert_eq!(
+        server::serve(&relay, &l, &clock, server::spawn_thread),
+        Ok(())
+    );
     let s = seen.lock().unwrap();
     assert_eq!(s.written.len(), 1744, "RELAYINFO");
     assert!(s.closed);
@@ -347,4 +377,242 @@ fn handle_stops_on_teardown_write_failure_and_refusal() {
         (0, true),
         "refused while draining"
     );
+}
+
+/// The accept calls a [`Fed`] listener answers before it reports a dead listener, so a test whose expectation fails
+/// ends `serve` instead of hanging it.
+const FED_CALLS_MAX: usize = 20_000;
+
+/// A dead listener's error: `serve` ends on it.
+fn dead() -> io::Error {
+    io::Error::from(ErrorKind::Other)
+}
+
+/// A listener the test feeds through a channel: it waits up to 5 ms for a connection, then reports `WouldBlock`;
+/// after `FED_CALLS_MAX` calls, or once the test has dropped its sender (the test ended or failed), it is dead.
+struct Fed {
+    rx: Mutex<Receiver<Scripted>>,
+    calls: AtomicUsize,
+}
+
+impl Fed {
+    fn new() -> (Self, Sender<Scripted>) {
+        let (tx, rx) = mpsc::channel();
+        (
+            Self {
+                rx: Mutex::new(rx),
+                calls: AtomicUsize::new(0),
+            },
+            tx,
+        )
+    }
+}
+
+impl Listener for Fed {
+    type Conn = Scripted;
+
+    fn accept_next(&self) -> io::Result<Scripted> {
+        if self.calls.fetch_add(1, Ordering::SeqCst) >= FED_CALLS_MAX {
+            return Err(dead());
+        }
+        match self
+            .rx
+            .lock()
+            .unwrap()
+            .recv_timeout(Duration::from_millis(5))
+        {
+            Ok(stream) => Ok(stream),
+            Err(mpsc::RecvTimeoutError::Timeout) => Err(io::Error::from(ErrorKind::WouldBlock)),
+            Err(mpsc::RecvTimeoutError::Disconnected) => Err(dead()),
+        }
+    }
+}
+
+/// An idle peer: it sends nothing until released.
+struct Idle {
+    stream: Scripted,
+    seen: Arc<Mutex<Seen>>,
+    release: Sender<()>,
+    /// Signalled at each read.
+    reading: Receiver<()>,
+    /// Signalled at the close.
+    closed: Receiver<()>,
+}
+
+fn idle() -> Idle {
+    let (release, wait) = mpsc::channel();
+    let (stream, seen) = Scripted::new(vec![In::Block(wait)]);
+    let (stream, reading, closed) = signalled(stream);
+    Idle {
+        stream,
+        seen,
+        release,
+        reading,
+        closed,
+    }
+}
+
+/// `stream` with the signals of its reads and of its close.
+fn signalled(mut stream: Scripted) -> (Scripted, Receiver<()>, Receiver<()>) {
+    let (read_tx, reading) = mpsc::channel();
+    let (close_tx, closed) = mpsc::channel();
+    stream.reading = Some(read_tx);
+    stream.closed = Some(close_tx);
+    (stream, reading, closed)
+}
+
+/// How long a test waits for a signal of another thread before it fails.
+const SIGNAL: Duration = Duration::from_secs(10);
+
+/// A spawner that starts each job on its own thread and signals `done` after the job has returned (its slot is then
+/// counted out); `started` counts the jobs.
+fn signalling_spawner(
+    done: Sender<()>,
+    started: Arc<AtomicUsize>,
+) -> impl FnMut(server::Job) -> io::Result<()> {
+    move |job: server::Job| {
+        started.fetch_add(1, Ordering::SeqCst);
+        let done = done.clone();
+        std::thread::Builder::new()
+            .spawn(move || {
+                job();
+                let _ = done.send(());
+            })
+            .map(drop)
+    }
+}
+
+/// C-1 (M05 review R-105) `cap_refuses_the_n_plus_first_idle_connection`: with `max_connections` 4, four idle
+/// connections get a job each and stay open; the fifth is closed by the relay before any read and without a job; no
+/// panic; once one of the four has closed, the next connection is served again.
+#[test]
+fn cap_refuses_the_n_plus_first_idle_connection() {
+    let (relay, _) = relay_with(4);
+    let clock = Virtual::new(100);
+    let (listener, feed) = Fed::new();
+    let (done_tx, done) = mpsc::channel();
+    let started = Arc::new(AtomicUsize::new(0));
+    let spawner = signalling_spawner(done_tx, Arc::clone(&started));
+    std::thread::scope(|scope| {
+        // owned by this closure: a failing assertion drops it, the listener is dead and `serve` ends, so the scope
+        // joins at once instead of after `FED_CALLS_MAX` accepts
+        let feed = feed;
+        let serving = scope.spawn(|| server::serve(&relay, &listener, &clock, spawner));
+        let mut held = Vec::new();
+        for i in 0..4 {
+            let peer = idle();
+            feed.send(peer.stream).unwrap();
+            peer.reading.recv_timeout(SIGNAL).unwrap();
+            assert!(
+                !peer.seen.lock().unwrap().closed,
+                "C-1: connection {i} is open"
+            );
+            held.push((peer.seen, peer.release));
+        }
+        let fifth = idle();
+        feed.send(fifth.stream).unwrap();
+        fifth.closed.recv_timeout(SIGNAL).unwrap();
+        {
+            let s = fifth.seen.lock().unwrap();
+            assert!(
+                s.closed && s.reads == 0 && s.written.is_empty(),
+                "C-1: the fifth is closed unread"
+            );
+        }
+        assert_eq!(
+            started.load(Ordering::SeqCst),
+            4,
+            "C-1: no job for the fifth"
+        );
+        for (i, (seen, _)) in held.iter().enumerate() {
+            assert!(
+                !seen.lock().unwrap().closed,
+                "C-1: connection {i} stays open"
+            );
+        }
+        // one of the four ends; its slot is counted out before `done`
+        let (first_seen, first_release) = held.remove(0);
+        first_release.send(()).unwrap();
+        done.recv_timeout(SIGNAL).unwrap();
+        assert!(first_seen.lock().unwrap().closed);
+        let sixth = idle();
+        feed.send(sixth.stream).unwrap();
+        sixth.reading.recv_timeout(SIGNAL).unwrap();
+        assert_eq!(
+            started.load(Ordering::SeqCst),
+            5,
+            "C-1: served again after one closed"
+        );
+        assert!(!sixth.seen.lock().unwrap().closed);
+        sixth.release.send(()).unwrap();
+        for (_, release) in &held {
+            release.send(()).unwrap();
+        }
+        for _ in 0..4 {
+            done.recv_timeout(SIGNAL).unwrap();
+        }
+        relay.start_drain(clock.now());
+        assert_eq!(
+            serving.join().unwrap(),
+            Ok(()),
+            "C-1: the loop ran on to the drain"
+        );
+        assert!(sixth.seen.lock().unwrap().closed);
+        for (seen, _) in &held {
+            assert!(seen.lock().unwrap().closed);
+        }
+    });
+}
+
+/// C-1 (M05 review R-105) `spawn_failure_closes_the_stream_and_keeps_serving`: a job the spawner cannot start is
+/// dropped — its connection is closed unread and counted out (with a cap of 1 the next connection is still served)
+/// — and the loop serves on: the next `HELLO` is answered with `RELAYINFO`; no panic.
+#[test]
+fn spawn_failure_closes_the_stream_and_keeps_serving() {
+    let (relay, _) = relay_with(1);
+    let clock = Virtual::new(100);
+    let (listener, feed) = Fed::new();
+    let (done_tx, done) = mpsc::channel();
+    let started = Arc::new(AtomicUsize::new(0));
+    let mut inner = signalling_spawner(done_tx, Arc::clone(&started));
+    let mut failed = 0_usize;
+    let spawner = move |job: server::Job| {
+        if failed == 0 {
+            failed = 1;
+            drop(job);
+            return Err(io::Error::from(ErrorKind::WouldBlock));
+        }
+        inner(job)
+    };
+    std::thread::scope(|scope| {
+        // owned by this closure: a failing assertion drops it, the listener is dead and `serve` ends, so the scope
+        // joins at once instead of after `FED_CALLS_MAX` accepts
+        let feed = feed;
+        let serving = scope.spawn(|| server::serve(&relay, &listener, &clock, spawner));
+        let (first, first_seen) = Scripted::new(vec![In::Data(HELLO.to_vec())]);
+        let (first, _, first_closed) = signalled(first);
+        feed.send(first).unwrap();
+        first_closed.recv_timeout(SIGNAL).unwrap();
+        {
+            let s = first_seen.lock().unwrap();
+            assert!(
+                s.closed && s.reads == 0 && s.written.is_empty(),
+                "C-1: a job that cannot start closes its stream unread"
+            );
+        }
+        let (second, second_seen) = Scripted::new(vec![In::Data(HELLO.to_vec())]);
+        feed.send(second).unwrap();
+        done.recv_timeout(SIGNAL).unwrap();
+        {
+            let s = second_seen.lock().unwrap();
+            assert_eq!(
+                (s.written.len(), s.closed),
+                (1744, true),
+                "C-1: the next connection is served (RELAYINFO), within the cap of 1"
+            );
+        }
+        assert_eq!(started.load(Ordering::SeqCst), 1);
+        relay.start_drain(clock.now());
+        assert_eq!(serving.join().unwrap(), Ok(()), "C-1: serving went on");
+    });
 }

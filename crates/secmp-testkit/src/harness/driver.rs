@@ -435,12 +435,13 @@ impl VirtualDriver {
     fn next_event(&self) -> Option<u64> {
         let mut best: Option<u64> = None;
         for c in &self.clients {
-            for t in c
-                .sched
-                .next_deadline()
-                .into_iter()
-                .chain(c.conns.values().filter_map(|k| k.rx.front().map(|(t, _)| *t)))
-            {
+            // answers held back are not an event until they are let go
+            let waiting = c
+                .conns
+                .values()
+                .filter(|_| !c.opts.withhold)
+                .filter_map(|k| k.rx.front().map(|(t, _)| *t));
+            for t in c.sched.next_deadline().into_iter().chain(waiting) {
                 best = Some(best.map_or(t, |b| b.min(t)));
             }
         }

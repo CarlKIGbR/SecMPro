@@ -3,6 +3,7 @@
 
 use secmp_client_core::scheduler::conversation::Conversation;
 use secmp_client_core::scheduler::core::LinkInfo;
+use secmp_proto::wire::cell::Cell as WireCell;
 use secmp_client_core::scheduler::outbox::{MemOutbox, MemPersist};
 use secmp_client_core::scheduler::params::{Mode, Params};
 use secmp_client_core::scheduler::types::{LinkEvent, QueueId, RelayId};
@@ -48,15 +49,29 @@ pub fn contact(
     period_ab: u64,
     period_ba: u64,
 ) -> Contact {
+    contact_on(d, a, b, period_ab, period_ba, RelayId(0))
+}
+
+/// As [`contact`], with the queues labelled as being on `relay` (the harness has one physical relay; the label is what
+/// Balanced groups by).
+pub fn contact_on(
+    d: &mut VirtualDriver,
+    a: usize,
+    b: usize,
+    period_ab: u64,
+    period_ba: u64,
+    relay: RelayId,
+) -> Contact {
     let now = d.now();
-    let relay = RelayId(0);
     // the queue b receives on, a sends to
-    let (rc_b, sc_b, _, _) = d.new_queue(b);
-    let (rc_a, sc_a, _, _) = d.new_queue(a);
+    let (rc_b, sc_b, rb, sb) = d.new_queue(b);
+    let (rc_a, sc_a, ra, sa) = d.new_queue(a);
     let b_recv = d.client(b).sched.add_recv_queue(now, relay, rc_b, period_ab).unwrap();
     let a_send = d.client(a).sched.add_send_queue(now, relay, sc_b, period_ab).unwrap();
     let a_recv = d.client(a).sched.add_recv_queue(now, relay, rc_a, period_ba).unwrap();
     let b_send = d.client(b).sched.add_send_queue(now, relay, sc_a, period_ba).unwrap();
+    d.client(b).material.queues.insert(b_recv.0, (rb, sb));
+    d.client(a).material.queues.insert(a_recv.0, (ra, sa));
     let (state_a, state_b) = d.ratchet_states(a, b);
     let peer_a = d.peer_key(a);
     let peer_b = d.peer_key(b);
@@ -136,4 +151,178 @@ pub fn max_dt(a: &[TraceEntry], b: &[TraceEntry]) -> Option<u64> {
         max = max.max(x.t_ms.abs_diff(y.t_ms));
     }
     Some(max)
+}
+
+/// A queue owned by `a` (which receives on it, scheduled) whose other end is driven by hand: `b`'s conversation exists
+/// but `b` has no scheduler queue, so the test decides what is sent and when.
+pub struct Half {
+    pub a_recv: QueueId,
+    pub send_cap: Vec<u8>,
+    pub conv_a: usize,
+    pub conv_b: usize,
+    pub b_queue: QueueId,
+}
+
+pub fn half_contact(d: &mut VirtualDriver, a: usize, b: usize, period: u64) -> Half {
+    let now = d.now();
+    let (rc, sc, recv_seed, send_seed) = d.new_queue(a);
+    let a_recv = d
+        .client(a)
+        .sched
+        .add_recv_queue(now, RelayId(0), rc, period)
+        .unwrap();
+    d.client(a).material.queues.insert(a_recv.0, (recv_seed, send_seed));
+    let (state_b, state_a) = d.ratchet_states(b, a);
+    let peer_a = d.peer_key(a);
+    let peer_b = d.peer_key(b);
+    let b_queue = QueueId(u32::MAX);
+    let mut conv_a: Conversation<MemOutbox, MemPersist, EntropyPool> = Conversation::new(
+        state_a,
+        MemOutbox::new(),
+        MemPersist::new(),
+        EntropyPool::new("m6-half", 1),
+        peer_b,
+        START_UNIX,
+    );
+    let mut conv_b: Conversation<MemOutbox, MemPersist, EntropyPool> = Conversation::new(
+        state_b,
+        MemOutbox::new(),
+        MemPersist::new(),
+        EntropyPool::new("m6-half", 2),
+        peer_a,
+        START_UNIX,
+    );
+    conv_a.bind(QueueId(u32::MAX - 1), a_recv);
+    conv_b.bind(b_queue, QueueId(u32::MAX - 2));
+    let idx_a = d.client(a).convs.add(conv_a);
+    let idx_b = d.client(b).convs.add(conv_b);
+    Half {
+        a_recv,
+        send_cap: sc.to_bytes().to_vec(),
+        conv_a: idx_a,
+        conv_b: idx_b,
+        b_queue,
+    }
+}
+
+/// `SEND` a cell to the queue of `half` over a fresh connection (not traced, not scheduled).
+pub fn inject(d: &mut VirtualDriver, client: usize, half: &Half, cell: &secmp_proto::wire::cell::Cell) -> u64 {
+    let access = d.harness().access_key();
+    let fp = d.harness().relay_fp();
+    let unix = d.harness().clock().unix();
+    let stream = d.harness_mut().open_stream().unwrap();
+    let mut t = secmp_transport::RelayQueueTransport::connect(
+        stream,
+        fp,
+        Some(&access),
+        unix,
+        d.client(client).entropy.get(),
+    )
+    .unwrap();
+    let cap = secmp_transport::SendCap::from_bytes(&half.send_cap).unwrap();
+    secmp_transport::QueueTransport::send(&mut t, &cap, cell).unwrap().cell_id
+}
+
+/// The one-sample Kolmogorov–Smirnov test of `samples` against the uniform distribution on `[lo, hi]`: `(D, p)` with
+/// the asymptotic p-value.
+pub fn ks_uniform(samples: &[u64], lo: u64, hi: u64) -> (f64, f64) {
+    let n = samples.len();
+    let nf = f64::from(u32::try_from(n).unwrap());
+    let span = f64::from(u32::try_from(hi - lo).unwrap());
+    let mut sorted = samples.to_vec();
+    sorted.sort_unstable();
+    let mut d = 0.0_f64;
+    for (i, x) in sorted.iter().enumerate() {
+        let f = f64::from(u32::try_from(*x - lo).unwrap()) / span;
+        let above = f64::from(u32::try_from(i + 1).unwrap()) / nf - f;
+        let below = f - f64::from(u32::try_from(i).unwrap()) / nf;
+        d = d.max(above).max(below);
+    }
+    let root = nf.sqrt();
+    let lambda = (root + 0.12 + 0.11 / root) * d;
+    let mut p = 0.0_f64;
+    for k in 1..=100_u32 {
+        let kf = f64::from(k);
+        let term = (-2.0 * kf * kf * lambda * lambda).exp();
+        if k % 2 == 1 {
+            p += 2.0 * term;
+        } else {
+            p -= 2.0 * term;
+        }
+    }
+    (d, p.clamp(0.0, 1.0))
+}
+
+/// Two-sample KS (D, p) for the inter-departure analysis.
+pub fn ks_two_sample(a: &[u64], b: &[u64]) -> (f64, f64) {
+    let (mut x, mut y) = (a.to_vec(), b.to_vec());
+    x.sort_unstable();
+    y.sort_unstable();
+    let (n, m) = (x.len(), y.len());
+    let (mut i, mut j) = (0_usize, 0_usize);
+    let mut d = 0.0_f64;
+    let (nf, mf) = (f64::from(u32::try_from(n).unwrap()), f64::from(u32::try_from(m).unwrap()));
+    while i < n && j < m {
+        let (xv, yv) = (x[i], y[j]);
+        let v = xv.min(yv);
+        while i < n && x[i] <= v {
+            i += 1;
+        }
+        while j < m && y[j] <= v {
+            j += 1;
+        }
+        let fx = f64::from(u32::try_from(i).unwrap()) / nf;
+        let fy = f64::from(u32::try_from(j).unwrap()) / mf;
+        d = d.max((fx - fy).abs());
+    }
+    let en = (nf * mf / (nf + mf)).sqrt();
+    let lambda = (en + 0.12 + 0.11 / en) * d;
+    let mut p = 0.0_f64;
+    for k in 1..=100_u32 {
+        let kf = f64::from(k);
+        let term = (-2.0 * kf * kf * lambda * lambda).exp();
+        if k % 2 == 1 {
+            p += 2.0 * term;
+        } else {
+            p -= 2.0 * term;
+        }
+    }
+    (d, p.clamp(0.0, 1.0))
+}
+
+/// Run until a link of `kind` is up; returns `(its slot, t_up)`. The first tick of the link is a whole period away.
+pub fn run_until_link_up(
+    d: &mut VirtualDriver,
+    client: usize,
+    kind: secmp_client_core::scheduler::core::LinkKind,
+) -> (u64, u64) {
+    loop {
+        let infos = d.client_ref(client).sched.links();
+        if let Some(i) = infos.iter().find(|l| l.kind == kind && l.t_up.is_some()) {
+            return (i.id.unwrap().0, i.t_up.unwrap());
+        }
+        let next = d.now().saturating_add(500);
+        d.run_until(next);
+    }
+}
+
+/// Client `a` sends to a queue that `b` owns (nobody receives): one send link, one conversation. Returns the
+/// conversation's index. `b` has no scheduler queue, so the only traffic and the only counted work is `a`'s.
+pub fn send_only(d: &mut VirtualDriver, a: usize, b: usize, period: u64) -> usize {
+    let now = d.now();
+    let (_rc, sc, _, _) = d.new_queue(b);
+    let a_send = d.client(a).sched.add_send_queue(now, RelayId(0), sc, period).unwrap();
+    let (state_a, _state_b) = d.ratchet_states(a, b);
+    let peer = d.peer_key(b);
+    let idx = u32::try_from(a).unwrap();
+    let mut conv: Conversation<MemOutbox, MemPersist, EntropyPool> = Conversation::new(
+        state_a,
+        MemOutbox::new(),
+        MemPersist::new(),
+        EntropyPool::new("m6-sendonly", idx),
+        peer,
+        START_UNIX,
+    );
+    conv.bind(a_send, QueueId(u32::MAX));
+    d.client(a).convs.add(conv)
 }

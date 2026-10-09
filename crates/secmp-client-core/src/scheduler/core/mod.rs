@@ -221,11 +221,38 @@ struct World {
     prep: PrepLog,
 }
 
+/// What one tick cost in the counted work (feature `kat`): `[seal_calls, sign_calls, tr_encrypt_calls,
+/// persist_calls]` between the start and the end of the tick, and the bytes it wrote (S-19).
+#[cfg(feature = "kat")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TickAudit {
+    /// The connection.
+    pub link: LinkId,
+    /// The tick's time.
+    pub at: u64,
+    /// The change of each counter during the tick.
+    pub delta: [u64; 4],
+    /// The bytes written.
+    pub bytes: usize,
+}
+
+#[cfg(feature = "kat")]
+fn counters_now() -> [u64; 4] {
+    [
+        secmp_transport::channel::counters::seal_calls(),
+        secmp_transport::channel::counters::sign_calls(),
+        crate::scheduler::conversation::counters::tr_encrypt_calls(),
+        crate::scheduler::conversation::counters::persist_calls(),
+    ]
+}
+
 /// The preparation log (feature `kat`; empty and free otherwise).
 #[derive(Default)]
 struct PrepLog {
     #[cfg(feature = "kat")]
     records: Vec<PrepRecord>,
+    #[cfg(feature = "kat")]
+    ticks: Vec<TickAudit>,
 }
 
 impl PrepLog {
@@ -610,10 +637,37 @@ impl World {
         match todo {
             Todo::Connect => self.start_connect(link),
             Todo::Lifetime => self.tear(link, now, Reason::Lifetime, source)?,
-            Todo::Run => match self.tick(link, now) {
-                TickResult::Tear(reason) => self.tear(link, now, reason, source)?,
-                TickResult::Idle | TickResult::Wrote => self.prepare_link(link, now, source)?,
-            },
+            Todo::Run => {
+                #[cfg(feature = "kat")]
+                let (before, out_before) = (counters_now(), self.out.len());
+                let result = self.tick(link, now);
+                #[cfg(feature = "kat")]
+                if matches!(result, TickResult::Wrote)
+                    && let State::Up(up) = &link.state
+                {
+                    let after = counters_now();
+                    let mut delta = [0_u64; 4];
+                    for ((d, a), b) in delta.iter_mut().zip(after).zip(before) {
+                        *d = a.saturating_sub(b);
+                    }
+                    let bytes = self
+                        .out
+                        .iter()
+                        .skip(out_before)
+                        .map(|o| if let Output::Write { bytes, .. } = o { bytes.len() } else { 0 })
+                        .sum();
+                    self.prep.ticks.push(TickAudit {
+                        link: up.id,
+                        at: now,
+                        delta,
+                        bytes,
+                    });
+                }
+                match result {
+                    TickResult::Tear(reason) => self.tear(link, now, reason, source)?,
+                    TickResult::Idle | TickResult::Wrote => self.prepare_link(link, now, source)?,
+                }
+            }
             Todo::Nothing => {}
         }
         Ok(())
@@ -847,6 +901,13 @@ impl Scheduler {
     #[must_use]
     pub fn acked(&self, queue: QueueId) -> Option<u64> {
         self.world.recvs.iter().find(|r| r.id == queue).map(|r| r.acked)
+    }
+
+    /// What each tick cost in counted work (tests only).
+    #[cfg(feature = "kat")]
+    #[must_use]
+    pub fn tick_audit(&self) -> &[TickAudit] {
+        &self.world.prep.ticks
     }
 
     /// The preparations so far (tests only).

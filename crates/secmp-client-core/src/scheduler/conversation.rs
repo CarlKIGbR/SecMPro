@@ -286,6 +286,12 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
         self.receipts_due.len()
     }
 
+    /// How many cell ids are mapped to what they carried (S-32).
+    #[must_use]
+    pub fn mapped_cells(&self) -> usize {
+        self.by_cell.len()
+    }
+
     /// The last durable ratchet state.
     #[must_use]
     pub fn durable(&self) -> &[u8] {
@@ -428,6 +434,15 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
 }
 
 impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
+    /// Build the next cell of this conversation (what the scheduler's cell source does for the send queue), for
+    /// callers that drive a conversation by hand.
+    ///
+    /// # Errors
+    /// [`SourceError`] if the new state could not be persisted: no cell leaves.
+    pub fn prepare_direct(&mut self, now_ms: u64) -> Result<PreparedCell, SourceError> {
+        self.prepare(now_ms)
+    }
+
     fn prepare(&mut self, now_ms: u64) -> Result<PreparedCell, SourceError> {
         self.outbox.expire(now_ms);
         if self.plan.is_empty() {

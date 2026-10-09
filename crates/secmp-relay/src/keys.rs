@@ -37,7 +37,9 @@ const VERSION: u8 = 0x01;
 pub const MAX_GENERATIONS: usize = 8;
 /// The default validity of a new generation: 45 days (`docs/05` §5 `relayinfo_valid_days`).
 pub const DEFAULT_VALIDITY_SECS: u64 = 3_888_000;
-/// Bytes of one generation record.
+/// Bytes of the file header: `"SMPRKEYS" ‖ ver ‖ relay_sig seed[32] ‖ relay_access_key[32] ‖ count`.
+const HEADER_LEN: usize = MAGIC.len() + 1 + 32 + 32 + 1;
+/// Bytes of one generation record: `kid ‖ valid_until ‖ relay_dh secret[32] ‖ relay_kem seed[64]`.
 const GENERATION_LEN: usize = 4 + 8 + 32 + 64;
 
 /// One key generation as stored.
@@ -136,13 +138,18 @@ impl KeyFile {
         &self.generations
     }
 
-    /// The file bytes.
+    /// The file bytes, written into one allocation of the exact file size: a growing buffer would free unwiped
+    /// copies of the secrets on every move (R-112).
     ///
     /// # Errors
     /// [`Error::KeyFile`] if the contents break the file rules (not reachable for a generated file).
     pub fn encode(&self) -> Result<Zeroizing<Vec<u8>>> {
         let count = u8::try_from(self.generations.len()).map_err(|_| Error::KeyFile)?;
-        let mut out = Zeroizing::new(Vec::new());
+        let len = GENERATION_LEN
+            .checked_mul(self.generations.len())
+            .and_then(|records| records.checked_add(HEADER_LEN))
+            .ok_or(Error::KeyFile)?;
+        let mut out = Zeroizing::new(Vec::with_capacity(len));
         out.extend_from_slice(MAGIC);
         out.push(VERSION);
         out.extend_from_slice(self.sig.expose_secret());
@@ -368,6 +375,32 @@ mod tests {
         let gen1 = g.generations().first().ok_or(Error::KeyFile)?;
         assert_eq!(gen1.kid, 1);
         assert_eq!(gen1.valid_until, NOW + DEFAULT_VALIDITY_SECS);
+        Ok(())
+    }
+
+    /// C-5 (R-112): `encode` writes into one allocation of the exact file size — `capacity() == len()` after the
+    /// last byte, so no growth step moved (and freed unwiped) a block holding the secrets. The loop is bounded: a
+    /// `rotate` that stopped adding generations fails the test instead of hanging it.
+    #[test]
+    fn encode_never_reallocates() -> Result<()> {
+        let mut f = KeyFile::generate(NOW, DEFAULT_VALIDITY_SECS)?;
+        let mut now = NOW;
+        let mut checked = Vec::new();
+        for _ in 0..MAX_GENERATIONS {
+            let n = f.generations().len();
+            if [1, 3, MAX_GENERATIONS].contains(&n) {
+                let bytes = f.encode()?;
+                assert_eq!(bytes.len(), HEADER_LEN + GENERATION_LEN * n);
+                assert_eq!(bytes.capacity(), bytes.len(), "{n} generations");
+                checked.push(n);
+            }
+            if n == MAX_GENERATIONS {
+                break;
+            }
+            now += 1;
+            f.rotate(now, DEFAULT_VALIDITY_SECS)?;
+        }
+        assert_eq!(checked, vec![1, 3, MAX_GENERATIONS]);
         Ok(())
     }
 

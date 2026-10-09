@@ -20,13 +20,14 @@ use secmp_relay::keys::{DEFAULT_VALIDITY_SECS, KeyFile};
 use secmp_relay::rate::RateLimit;
 use secmp_relay::{Connection, Limits, Now, Outcome, Output, Relay};
 
+use crate::d2::{OP_SKEY, msg_queue_new, queue_new_req};
 use crate::fixture::{
-    Bench, Client, EXPIRES, FRAME, HELLO, Key, NOW, RelayFx, VALID_UNTIL, at, client_entropy, hex,
-    lots, now, reference, relay_hs_entropy, rid_of,
+    Bench, Client, EXPIRES, FRAME, HELLO, Key, NOW, RelayFx, VALID_UNTIL, at, client_entropy, flip,
+    hex, lots, now, reference, relay_hs_entropy, rid_of, sid_of,
 };
 use crate::rl_util::{
     BLOB, CELL, Drive, RELAYINFO_RECORD, V, Wire, add, cells, copy_key, distinct_bytes, flags,
-    fresh_dir, hello, identity, key_file, linkr, load, one_time, pair, presents, view,
+    fresh_dir, hello, identity, key_file, linkr, load, one_time, pair, presents, strip, view,
 };
 
 /// What a teardown writes: nothing, and the connection closes (spec §8.5).
@@ -117,9 +118,13 @@ fn relay_one_link_per_connection() {
 }
 
 /// RL-13 `relay_frame_rate_limit`: with the per-link limit of OPEN-M5-02 (burst 8 request frames, refill 1 per
-/// second), a PING, a FETCH and a `LINK_PUT` over the rate are each answered with exactly one ERR 7 frame — the
-/// `LINK_PUT`'s after its third frame, also when only that frame is over —, are not executed (store unchanged), and
-/// their `cmd_seq` is recorded: a later request with it is stale (ERR 6) (spec §9.7 item 7, D.2; ADR-048 (p)).
+/// second), a PING, a FETCH, a `LINK_PUT` and an `SKEY` over the rate are each answered with exactly one ERR 7 frame
+/// — the `LINK_PUT`'s after its third frame, also when only that frame is over —, are not executed (store
+/// unchanged), and their `cmd_seq` is recorded: a later request with it is stale (ERR 6) (spec §9.7 item 7, D.2;
+/// ADR-048 (p)). The over-rate `SKEY` (`rl13_over_rate_skey_is_err_7_and_records_cmd_seq`, M05 review R-139/C-10,
+/// H-4): rate (ERR 7), not the `SKEY` row's ERR 6, for a fresh `cmd_seq` over the rate — the D.2 exceptions override
+/// the `SKEY` table row; a stale `cmd_seq` is ERR 6 before the rate, also for `SKEY` (owner erratum (d), §8.5/D.2
+/// precedence; OPEN-M5-decided clarification 2026-10-09).
 #[test]
 fn relay_frame_rate_limit() {
     let mut d = Drive::new(Limits::defaults());
@@ -167,22 +172,34 @@ fn relay_frame_rate_limit() {
         "RL-13: LINK_PUT over the rate: one ERR 7 after frame 3"
     );
     let put_seq = d.b.exec.last_cmd_seq();
+    let over = skey(&mut d, t0);
     assert_eq!(
-        (ping_seq, fetch_seq, put_seq),
-        (9, 10, 11),
-        "RL-13: the cmd_seqs are recorded"
+        over,
+        vec![V::Err(7)],
+        "RL-13 (C-10) rl13_over_rate_skey_is_err_7_and_records_cmd_seq: SKEY over the rate: one ERR 7"
+    );
+    let skey_seq = d.b.exec.last_cmd_seq();
+    assert_eq!(
+        (ping_seq, fetch_seq, put_seq, skey_seq),
+        (9, 10, 11, 12),
+        "RL-13: the cmd_seqs are recorded (C-10: the SKEY's too)"
     );
     assert_eq!(
         d.b.digest(),
         before,
-        "RL-13: not executed (cell 1 kept, no link data)"
+        "RL-13: not executed (cell 1 kept, no link data; C-10: the SKEY changed nothing)"
     );
-    for (i, seq) in [ping_seq, fetch_seq, put_seq].into_iter().enumerate() {
+    for (i, seq) in [ping_seq, fetch_seq, put_seq, skey_seq]
+        .into_iter()
+        .enumerate()
+    {
         let t = mono(times_ms(add(1, u64::try_from(i).unwrap())));
         let stale = d.b.run(&Client::ping(seq), t, &mut lots());
         assert_eq!(
             stale.frames().iter().map(view).collect::<Vec<_>>(),
-            vec![(seq, V::Err(6))]
+            vec![(seq, V::Err(6))],
+            "RL-13: a later request with a recorded cmd_seq is stale (C-10 \
+             rl13_over_rate_skey_is_err_7_and_records_cmd_seq: also the SKEY's)"
         );
     }
     // only the third frame over the rate: two tokens left when the LINK_PUT starts
@@ -211,6 +228,25 @@ fn relay_frame_rate_limit() {
         vec![(1, 2), (0, 0), (0, 0), (0, 0)],
         "RL-13: the FETCH is executed"
     );
+}
+
+/// An `SKEY` (`0x02 ‖ cmd_seq`; no request type, reading OPEN-6, D.2) for the next `cmd_seq` at `t`: the views of
+/// its answer (each frame echoes the `cmd_seq`).
+fn skey(d: &mut Drive, t: Now) -> Vec<V> {
+    let s = d.seq.bump();
+    let frame =
+        d.b.client
+            .seal_payload(&[&[OP_SKEY][..], &s.to_be_bytes()].concat());
+    let frames = match d.b.unit(&frame, t, &mut lots()) {
+        Outcome::Respond(frames) => Some(frames),
+        Outcome::Pending | Outcome::Teardown => None,
+    }
+    .expect("the SKEY is answered");
+    let views = frames
+        .iter()
+        .map(|f| view(&d.b.client.open(f.as_slice(), CellrContext::Fetch)))
+        .collect();
+    strip(s, views)
 }
 
 /// `secs` seconds in milliseconds.
@@ -283,9 +319,13 @@ fn relay_handshake_rate_limit() {
     assert_eq!(e.remaining(), left, "RL-14: HELLO draws nothing");
 }
 
-/// RL-15 `relay_graceful_drain`: once the drain has started, `QUEUE_NEW` and `LINK_PUT` (after its third frame)
-/// answer ERR 2 with the store unchanged, SEND and FETCH on the open link are served, a new connection is refused,
-/// and the drain is finished `drain_secs` (60) after its start (`docs/02` §5.1; OPEN-M5-09 A).
+/// RL-15 `relay_graceful_drain`: once the drain has started, a `QUEUE_NEW` that would create state and `LINK_PUT`
+/// (after its third frame) answer ERR 2 with the store unchanged, SEND and FETCH on the open link are served, a new
+/// connection is refused, and the drain is finished `drain_secs` (60) after its start (`docs/02` §5.1; OPEN-M5-09
+/// A). An identical `QUEUE_NEW` (same keys, existing queue: no new state) answers `OK_QUEUE_NEW` with the store
+/// unchanged also during the drain, as at the budget limit (Q-07), and its token is checked first: with a bad token
+/// it is ERR 1 (`rl15_drain_identical_queue_new_answers_ok`; OPEN-M5-09 clarification 2026-10-09, M05 review
+/// R-119/C-10).
 #[test]
 fn relay_graceful_drain() {
     let mut d = Drive::new(Limits::vectors());
@@ -311,6 +351,32 @@ fn relay_graceful_drain() {
         "RL-15: LINK_PUT ERR 2 after its third frame"
     );
     assert_eq!(d.b.digest(), before, "RL-15: no new state");
+    let same = d.go(start, |c, n| c.queue_new(n, &r, &s));
+    assert_eq!(
+        same,
+        vec![V::QueueNew(rid_of(&r.pk), sid_of(&r.pk, &s.pk))],
+        "RL-15 (C-10) rl15_drain_identical_queue_new_answers_ok: an identical QUEUE_NEW answers OK_QUEUE_NEW"
+    );
+    assert_eq!(
+        d.b.digest(),
+        before,
+        "RL-15 (C-10) rl15_drain_identical_queue_new_answers_ok: store unchanged"
+    );
+    let bad_token = d.go(start, |c, n| {
+        let token: [u8; 32] = flip(&c.token(n), 0).try_into().unwrap();
+        let sig = r.sign(&msg_queue_new(&c.sess_id(), n, &r, &s, &token));
+        queue_new_req(n, &r, &s, token, sig)
+    });
+    assert_eq!(
+        bad_token,
+        vec![V::Err(1)],
+        "RL-15 (C-10) rl15_drain_identical_queue_new_answers_ok: the identical QUEUE_NEW with a bad token is ERR 1"
+    );
+    assert_eq!(
+        d.b.digest(),
+        before,
+        "RL-15 (C-10) rl15_drain_identical_queue_new_answers_ok: bad token, store unchanged"
+    );
     let sent = d.go(start, |c, n| c.send(n, &r, &s, &[2; CELL]));
     assert_eq!(sent, vec![V::Send(2, None)], "RL-15: SEND served");
     let fetched = d.go(start, |c, n| c.fetch(n, &r, 0));

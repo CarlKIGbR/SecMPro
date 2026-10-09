@@ -2,7 +2,7 @@
 //! Client transport `secmp-transport::RelayQueueTransport` (TEST-SPEC-M5 (b6), T-01…T-09, T-11; spec §12.1) against
 //! the Phase B relay in process, and against a scripted relay where the relay must misbehave.
 
-use secmp_crypto::{Label, SecretBytes, hmac_sha256};
+use secmp_crypto::{ConstantTimeEq, Label, SecretBytes, hmac_sha256};
 use secmp_proto::Encode;
 use secmp_proto::wire::frame::{
     Cellr, CellrError, Cont, ContIdx, ErrCode, LinkGetMode as WireMode, RequestCmd, Response,
@@ -23,12 +23,15 @@ fn transport_create_queue_idempotent() {
     let (t, _) = r.link(a);
     let (r1, s1) = t.create_queue(&recv, &send, &token).unwrap();
     let (r2, s2) = t.create_queue(&recv, &send, &token).unwrap();
-    assert!(r1 == r2 && s1 == s2, "same (RecvCap, SendCap)");
+    assert!(
+        bool::from(r1.ct_eq(&r2) & s1.ct_eq(&s2)),
+        "same (RecvCap, SendCap)"
+    );
     // another queue gives other capabilities
     let (recv_b, send_b) = r.seeds(a);
     let (t, _) = r.link(a);
     let (r3, s3) = t.create_queue(&recv_b, &send_b, &token).unwrap();
-    assert!(r3 != r1 && s3 != s1);
+    assert!(bool::from(!r3.ct_eq(&r1) & !s3.ct_eq(&s1)));
     // a known recv key with another send key is ERR_AUTH (spec §9.7 item 8)
     let other_send = SecretBytes::from_slice(&[0x77; 32]).unwrap();
     assert_eq!(
@@ -485,7 +488,7 @@ fn transport_caps_are_opaque_and_roundtrip() {
     let recv_back = RecvCap::from_bytes(&recv_bytes).unwrap();
     let send_back = SendCap::from_bytes(&send_bytes).unwrap();
     assert!(
-        recv_back == recv_cap && send_back == send_cap,
+        bool::from(recv_back.ct_eq(&recv_cap) & send_back.ct_eq(&send_cap)),
         "equal after restore"
     );
     // usable after restore

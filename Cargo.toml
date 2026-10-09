@@ -64,6 +64,9 @@ rand = { version = "=0.10.3", default-features = false, features = ["std_rng"] }
 # Workspace crates (path dependencies; docs/02 §3 fixes who may depend on whom).
 secmp-crypto = { path = "crates/secmp-crypto" }
 secmp-proto = { path = "crates/secmp-proto" }
+secmp-relay = { path = "crates/secmp-relay" }
+secmp-transport = { path = "crates/secmp-transport" }
+secmp-client-core = { path = "crates/secmp-client-core" }
 secmp-sys-mem = { path = "crates/secmp-sys-mem" }
 secmp-testkit = { path = "crates/secmp-testkit" }
 

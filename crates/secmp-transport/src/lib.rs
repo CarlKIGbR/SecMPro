@@ -27,7 +27,9 @@
 )]
 
 pub mod caps;
+pub mod channel;
 pub mod error;
+pub mod evicted;
 pub mod relay_queue;
 pub mod session;
 
@@ -37,4 +39,5 @@ pub use relay_queue::{
     Bucket, CellId, FetchMultiOutcome, LdId, LinkGetMode, LinkGetOutcome, QueueTransport,
     RelayQueueTransport, SendOutcome, Token,
 };
-pub use session::Session;
+pub use channel::{Channel, Command, Completed, Outcome, Prepared};
+pub use session::{ConnectOutcome, Session};

@@ -4,7 +4,7 @@
 
 use std::collections::BTreeSet;
 
-use secmp_crypto::{SecretBytes, VectorStream, sha256};
+use secmp_crypto::{ConstantTimeEq, SecretBytes, VectorStream, sha256};
 use secmp_proto::keys::Ed25519Pk;
 use secmp_proto::tr::RatchetState;
 use secmp_proto::wire::Period;
@@ -686,9 +686,12 @@ fn harness_relay_restart_queues_recreated_conversation_continues() {
     let (re_recv, re_send) = t
         .create_queue(&p.seeds_b.recv, &p.seeds_b.send, &token)
         .unwrap();
-    assert!(&re_recv == p.side_b.recv_cap(), "the identical queue");
     assert!(
-        &re_send == p.side_a.send_cap(),
+        bool::from(re_recv.ct_eq(p.side_b.recv_cap())),
+        "the identical queue"
+    );
+    assert!(
+        bool::from(re_send.ct_eq(p.side_a.send_cap())),
         "the sender's capability stays valid"
     );
     p.side_b.reset_receiving();
@@ -699,7 +702,7 @@ fn harness_relay_restart_queues_recreated_conversation_continues() {
     let (re_recv_a, _) = t
         .create_queue(&p.seeds_a.recv, &p.seeds_a.send, &token)
         .unwrap();
-    assert_eq!(&re_recv_a, p.side_a.recv_cap());
+    assert!(bool::from(re_recv_a.ct_eq(p.side_a.recv_cap())));
     p.side_a.reset_receiving();
 
     // A sends again; the cells after the re-creation decrypt, the lost ones are not re-sent

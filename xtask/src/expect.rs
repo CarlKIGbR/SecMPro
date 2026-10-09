@@ -26,6 +26,31 @@ pub(crate) const UNSAFE_DENY_ONLY: &[&str] = &["secmp-ui"];
 /// Crates whose normal (shipped) dependency closure must have zero cargo-vet exemptions (docs/06 §3, ADR-036).
 pub(crate) const ZERO_EXEMPTION_ROOTS: &[&str] = &["secmp-crypto", "secmp-proto"];
 
+/// The normal (shipped) direct dependencies each of these crates may have, by package name (M5 review F-7, R-126,
+/// TEST-SPEC-M6 G-04): a direct dependency enters only with its ADR line and an entry here. Phase A (M6, before the
+/// tokio/Tor ADR-051): workspace crates only, plus the testkit's existing normal `serde_json` (ADR-037); the
+/// relay and the transport stay `std`-only (ADR-049, ADR-050). `secmp-client-core` gains exactly the workspace crates
+/// `secmp-proto`, `secmp-crypto` and `secmp-transport`. Phase B widens a row exactly to ADR-051.
+pub(crate) const NORMAL_DEPENDENCY_ALLOW: &[(&str, &[&str])] = &[
+    ("secmp-relay", &["secmp-crypto", "secmp-proto"]),
+    ("secmp-transport", &["secmp-crypto", "secmp-proto"]),
+    (
+        "secmp-client-core",
+        &["secmp-crypto", "secmp-proto", "secmp-transport"],
+    ),
+    (
+        "secmp-testkit",
+        &[
+            "secmp-client-core",
+            "secmp-crypto",
+            "secmp-proto",
+            "secmp-relay",
+            "secmp-transport",
+            "serde_json",
+        ],
+    ),
+];
+
 /// The targets over which that closure is taken and united: the `[graph] targets` of `deny.toml` (the two
 /// shipped targets and the development host, ADR-029).
 pub(crate) const VET_CLOSURE_TARGETS: &[&str] = &[
@@ -272,9 +297,27 @@ pub(crate) const FUZZ_SMOKE_SECONDS: u64 = 120;
 pub(crate) const FUZZ_INPUT_TIMEOUT_SECONDS: u64 = 60;
 
 /// Seconds of the scheduled campaign (`.github/workflows/fuzz-nightly.yml`, docs/06 §4 "nightly 4 h"; M2 review F2),
-/// shared equally by the fuzz targets: each gets `FUZZ_NIGHTLY_SECONDS / FUZZ_TARGETS.len()` seconds (M2: 12
-/// targets, 1200 s each; M3: 14 targets, 1028 s each).
+/// shared by the fuzz targets: each of [`FUZZ_DEEP_TARGETS`] gets [`FUZZ_DEEP_NIGHTLY_SECONDS`], each of the others
+/// `(FUZZ_NIGHTLY_SECONDS - deep total) / (FUZZ_TARGETS.len() - deep count)` seconds (M2: 12 targets, 1200 s each;
+/// M3: 14 targets, 1028 s each; M5: 29 targets, 496 s each; M6: 27 targets 266 s, 2 targets 3 600 s).
 pub(crate) const FUZZ_NIGHTLY_SECONDS: u64 = 14_400;
+
+/// Files (workspace-relative) that may contain an `#[ignore]` attribute because an ADR allows it (CLAUDE.md §6: "never
+/// mark a test `#[ignore]` without an ADR"; M5 review R-155, TEST-SPEC-M6 G-10). Empty; checked by the test
+/// `no_ignore_without_adr`.
+#[cfg(test)]
+pub(crate) const IGNORE_ADR: &[&str] = &[];
+
+/// The executor fuzzers of M5 (TEST-SPEC-M5 FZ-07 `relay_executor`, FZ-08 `relay_link_session`; M5 review F-8, R-127,
+/// TEST-SPEC-M6 G-05): each input runs a relay and a handshake, so a run is slow and libFuzzer's default length control
+/// kept `lim` pinned at the seed length (532 B and 44 B of 4 321 B and 69 425 B). These targets run with
+/// `-len_control=0` (`lim` = `-max_len` from the first run on) and get [`FUZZ_DEEP_NIGHTLY_SECONDS`] each of the
+/// nightly campaign; the other targets share the rest equally. The step's evidence lists the runs and `lim` per target.
+pub(crate) const FUZZ_DEEP_TARGETS: &[&str] = &["relay_executor", "relay_link_session"];
+
+/// Seconds of the nightly campaign that each of [`FUZZ_DEEP_TARGETS`] gets (the rest of [`FUZZ_NIGHTLY_SECONDS`] is
+/// shared equally by the other targets).
+pub(crate) const FUZZ_DEEP_NIGHTLY_SECONDS: u64 = 3_600;
 
 /// libFuzzer `-max_len` per fuzz target (M2 review C4: without it libFuzzer caps inputs at the largest corpus file,
 /// 5 397 B for `proto_cell` after `cargo fuzz cmin`). Each value is the target's largest valid input plus one byte
@@ -1220,11 +1263,18 @@ pub(crate) const COVERAGE_MIN: f64 = 80.0;
 /// (`secmp-client-core::clock`, the relay's hour bucket, `secmp-cli` output timestamps); none exist in M0.
 /// The docs/06 §2 test allowance (`#![allow(clippy::unwrap_used, clippy::expect_used)]` at the top of a file
 /// under `tests/`, `fuzz/` or `crates/secmp-testkit/`) is handled by rule and needs no entry.
-pub(crate) const LINT_ALLOWANCES: &[(&str, &str, &str)] = &[(
-    "crates/secmp-relay/src/clock.rs",
-    "clippy::disallowed_methods",
-    "docs/06 §2: the relay's hour-bucket function `wall_clock_unix_secs`, the crate's one `SystemTime::now` site (M5, test RL-11)",
-)];
+pub(crate) const LINT_ALLOWANCES: &[(&str, &str, &str)] = &[
+    (
+        "crates/secmp-relay/src/clock.rs",
+        "clippy::disallowed_methods",
+        "docs/06 §2: the relay's hour-bucket function `wall_clock_unix_secs`, the crate's one `SystemTime::now` site (M5, test RL-11)",
+    ),
+    (
+        "crates/secmp-client-core/src/clock.rs",
+        "clippy::disallowed_methods",
+        "docs/06 §2: `SystemClock::unix_secs`, the client's one `SystemTime::now` site (M6, test AD-11)",
+    ),
+];
 
 /// The only lints the docs/06 §2 test-file allowance may relax.
 pub(crate) const TEST_FILE_ALLOWANCE: &[&str] = &["clippy::unwrap_used", "clippy::expect_used"];

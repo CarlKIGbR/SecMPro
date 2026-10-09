@@ -29,6 +29,7 @@ use secmp_proto::wire::signed::{self, LinkPutFields};
 
 use crate::caps::{QueueRef, RecvCap, SendCap, pk_of};
 use crate::error::{Error, Result};
+use crate::evicted::evicted_is_plausible;
 use crate::session::Session;
 
 /// A per-queue cell id (spec §9.1).
@@ -307,7 +308,9 @@ impl<S: Read + Write> QueueTransport for RelayQueueTransport<S> {
             },
         }])?;
         match self.single(seq, &[ErrCode::NoQueue, ErrCode::Auth])? {
-            ResponseCmd::OkSend { cell_id, evicted } if cell_id != 0 => {
+            ResponseCmd::OkSend { cell_id, evicted }
+                if cell_id != 0 && evicted_is_plausible(cell_id, evicted) =>
+            {
                 Ok(SendOutcome { cell_id, evicted })
             }
             _ => Err(self.session.reject()),

@@ -6,8 +6,11 @@
 #   M3 review C5) with `SECMP_PROPTEST_SEED` set to the run id (a decimal u64), so
 #   the seeded property tests explore a new seed every night; the seed is printed first, and a failure is reproduced
 #   by running the tests locally with the same value.
-# - Fuzz campaign: `cargo xtask step --strict fuzz-nightly` gives every fuzz target `expect::FUZZ_NIGHTLY_SECONDS /
-#   number of targets` seconds (14 400 s / 14 targets = 1 028 s in M3), on a scratch corpus seeded from the frozen
+# - Fuzz campaign: `cargo xtask step --strict fuzz-nightly` splits `expect::FUZZ_NIGHTLY_SECONDS` (14 400 s) over the
+#   fuzz targets: each of `expect::FUZZ_DEEP_TARGETS` (the executor fuzzers FZ-07, FZ-08, run with -len_control=0)
+#   gets `expect::FUZZ_DEEP_NIGHTLY_SECONDS`, the others share the rest equally:
+#   27 targets x 266 s + 2 targets x 3600 s
+#   (checked by `gates::tests::fuzz_executor_depth`), on a scratch corpus seeded from the frozen
 #   vectors plus the tracked corpus, which the campaign only reads (as the per-PR smoke of ci-full step 6). The scratch
 #   corpus (with the inputs libFuzzer added) and any crash inputs are uploaded as artefacts; taking inputs into
 #   `fuzz/corpus/` (after `cargo fuzz cmin`) is a manual, reviewed commit.

@@ -837,6 +837,11 @@ version = "0.0.0"
 [[package]]
 name = "secmp-client-core"
 version = "0.0.0"
+dependencies = [
+ "secmp-crypto",
+ "secmp-proto",
+ "secmp-transport",
+]
 
 [[package]]
 name = "secmp-crypto"

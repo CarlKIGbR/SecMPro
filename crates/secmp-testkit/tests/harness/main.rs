@@ -7,6 +7,7 @@
 
 mod fixture;
 mod invitation;
+mod m6_channel;
 mod scenarios;
 mod scripted;
 mod transport;

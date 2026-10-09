@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # On-demand runs of single SecMPro gates (`workflow_dispatch` only; M2 review C2). The job names differ from the
-# required checks and the other gate jobs of `ci.yml` (`ct`, `mutants-shard`, `mutants`, `proverif-hx`), so a dispatch
+# required checks and the other gate jobs of `ci.yml` (`ct`, `mutants-shard`, `mutants`, `proverif-hx`, `proverif-link`), so a dispatch
 # on a pull-request head never adds a check run under such a name. Each job runs the same `cargo xtask` gate lines as its `ci.yml`
 # counterpart (M4 review C-4, R-14; checked by `gates::tests::dispatch_full_runs_the_linux_full_line`):
 # `dispatch-fast` = `linux-fast`, `dispatch-windows` = `windows-native`, `dispatch-xwin` = `xwin-cross`,
@@ -17,7 +17,7 @@ on:
   workflow_dispatch:
     inputs:
       suite:
-        description: "Jobs to run (fast = steps 1–5, 13, 14; full = ci-full, the xwin cross-build and the jobs ci-full delegates (ct, mutants, proverif-hx); windows = the Windows gate; ct = the constant-time gate alone; all = every job)"
+        description: "Jobs to run (fast = steps 1–5, 13, 14; full = ci-full, the xwin cross-build and the jobs ci-full delegates (ct, mutants, proverif-hx, proverif-link); windows = the Windows gate; ct = the constant-time gate alone; all = every job)"
         type: choice
         options: [all, fast, full, windows, ct]
         default: ct

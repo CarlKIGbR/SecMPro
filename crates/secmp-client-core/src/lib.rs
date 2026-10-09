@@ -8,5 +8,9 @@
 //! **Allowed dependencies** (docs/02 §3): `secmp-proto`, `secmp-crypto`, `secmp-transport`, `secmp-store`,
 //! `secmp-sys-desktop`, `secmp-sys-mem`; an async runtime, added with an ADR.
 //!
-//! **Status.** M0 skeleton — no code (implementation starts in M6/M7).
+//! **Status.** M6 Phase A: [`clock`], [`timing`] and the sans-IO constant-rate [`scheduler`] with its `ControlOps`,
+//! `QueuePool` and `outbox` (in-memory behind traits). Contacts, sessions, invitations and the `Api` are M7.
 #![forbid(unsafe_code)]
+
+pub mod clock;
+pub mod timing;

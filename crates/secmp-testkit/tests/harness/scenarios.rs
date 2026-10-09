@@ -2,17 +2,23 @@
 //! The harness scenarios of TEST-SPEC-M5 (c): H-01, H-03…H-06, H-08, H-10…H-13 and G-06, written against the public
 //! surface of `secmp_testkit::harness` only (H-09).
 
+use std::collections::BTreeSet;
+
 use secmp_crypto::{SecretBytes, VectorStream, sha256};
 use secmp_proto::keys::Ed25519Pk;
+use secmp_proto::tr::RatchetState;
 use secmp_proto::wire::Period;
 use secmp_proto::wire::cell::{Cell, RelayQueue};
-use secmp_proto::wire::inv::{Onion, RelayRef};
+use secmp_proto::wire::inv::{LinkBlob, Onion, RelayRef};
 use secmp_relay::budget::QUEUE_RESERVATION;
 use secmp_testkit::harness::{
     Capture, ClientId, EntropyPool, FrameCheck, Harness, HarnessConfig, Side, Split, ratchet_pair,
-    verify_frames,
+    text_of, verify_frames,
 };
-use secmp_transport::{Error, QueueTransport, RecvCap, SendCap};
+use secmp_transport::{
+    Bucket, CellId, Error, FetchMultiOutcome, LdId, LinkGetMode, LinkGetOutcome, QueueTransport,
+    RecvCap, SendCap, SendOutcome, Token,
+};
 
 use crate::scripted::cell;
 
@@ -57,6 +63,16 @@ fn two_queues(h: &mut Harness, c: ClientId) -> (Vec<(RecvCap, SendCap)>, Seeds) 
     (caps, first.unwrap())
 }
 
+/// The ratchet session of [`pair`]: the initiator (`A`) and the responder (`B`), from one shared `SK` and fixed
+/// entropy (the same states on every call).
+fn sessions() -> (RatchetState, RatchetState) {
+    let sk = SecretBytes::from_slice(&VectorStream::new("harness-sk", 0).take(32)).unwrap();
+    let transcript = [0x7e_u8; 32];
+    let mut ea = EntropyPool::new("harness-sk-a", 0);
+    let mut eb = EntropyPool::new("harness-sk-b", 0);
+    ratchet_pair(&sk, &transcript, ea.get(), eb.get())
+}
+
 pub fn pair(config: HarnessConfig) -> Pair {
     let mut h = Harness::new(config);
     let (ca, cb) = (h.add_client(), h.add_client());
@@ -68,13 +84,7 @@ pub fn pair(config: HarnessConfig) -> Pair {
     queues_b.pop().unwrap();
     let (recv_a, send_to_a) = queues_a.pop().unwrap();
     let (recv_b, send_to_b) = queues_b.pop().unwrap();
-    let sk = SecretBytes::from_slice(&VectorStream::new("harness-sk", 0).take(32)).unwrap();
-    let transcript = [0x7e_u8; 32];
-    let (ia, rb) = {
-        let mut ea = EntropyPool::new("harness-sk-a", 0);
-        let mut eb = EntropyPool::new("harness-sk-b", 0);
-        ratchet_pair(&sk, &transcript, ea.get(), eb.get())
-    };
+    let (ia, rb) = sessions();
     Pair {
         side_a: Side::new(ia, recv_a, send_to_b),
         side_b: Side::new(rb, recv_b, send_to_a),
@@ -451,18 +461,177 @@ fn harness_transport_runs_over_in_process_streams() {
     }
 }
 
+/// A transport that records every cell handed to `SEND` before the relay answers — also the cells the relay refuses
+/// with `ERR_NOQUEUE` — and passes every operation on unchanged (H-12).
+struct Tap<'a, T> {
+    inner: &'a mut T,
+    sent: &'a mut Vec<Cell>,
+}
+
+impl<T: QueueTransport> QueueTransport for Tap<'_, T> {
+    fn create_queue(
+        &mut self,
+        recv: &SecretBytes<32>,
+        send: &SecretBytes<32>,
+        token: &Token,
+    ) -> secmp_transport::Result<(RecvCap, SendCap)> {
+        self.inner.create_queue(recv, send, token)
+    }
+
+    fn send(&mut self, to: &SendCap, cell: &Cell) -> secmp_transport::Result<SendOutcome> {
+        self.sent.push(cell.clone());
+        self.inner.send(to, cell)
+    }
+
+    fn fetch(
+        &mut self,
+        from: &RecvCap,
+        ack: CellId,
+    ) -> secmp_transport::Result<Vec<(CellId, Cell)>> {
+        self.inner.fetch(from, ack)
+    }
+
+    fn fetch_multi(
+        &mut self,
+        from: &[(&RecvCap, CellId)],
+    ) -> secmp_transport::Result<FetchMultiOutcome> {
+        self.inner.fetch_multi(from)
+    }
+
+    fn delete_queue(&mut self, q: &RecvCap) -> secmp_transport::Result<()> {
+        self.inner.delete_queue(q)
+    }
+
+    fn put_link_data(
+        &mut self,
+        id: LdId,
+        owner: &SecretBytes<32>,
+        blob: &LinkBlob,
+        one_time: bool,
+        expires: Bucket,
+        token: &Token,
+    ) -> secmp_transport::Result<()> {
+        self.inner
+            .put_link_data(id, owner, blob, one_time, expires, token)
+    }
+
+    fn get_link_data(
+        &mut self,
+        id: LdId,
+        mode: LinkGetMode<'_>,
+    ) -> secmp_transport::Result<LinkGetOutcome> {
+        self.inner.get_link_data(id, mode)
+    }
+}
+
+/// `side` seals `payload` as its next cell and `SEND`s it over client `c`'s link; the cell is recorded in `sent`
+/// whatever the relay answers.
+fn send_tapped(
+    h: &mut Harness,
+    c: ClientId,
+    side: &mut Side,
+    sent: &mut Vec<Cell>,
+    payload: &[u8],
+) -> Result<SendOutcome, Error> {
+    let (t, e) = h.client(c).link().unwrap();
+    side.send_text(&mut Tap { inner: t, sent }, e, payload)
+}
+
+/// One cell `A` sealed, as `B` opens it: the text, `(n, pn)` of its header (spec §7.3), and SHA-256 of the message key
+/// that opened it (feature `kat`; the key that sealed it, spec §7.4).
+struct SealedCell {
+    text: String,
+    position: (u32, u32),
+    mk_digest: [u8; 32],
+}
+
+/// Every cell of `cells` opened by its own fresh copy of `B`'s initial ratchet state (the responder of [`sessions`]),
+/// so that the position and the message key of a cell do not depend on which cells were opened before it — two cells
+/// sealed under one key both open, at the same position, with the same digest.
+fn open_each(cells: &[Cell]) -> Vec<SealedCell> {
+    let initial = sessions().1.to_bytes().unwrap();
+    let mut entropy = EntropyPool::new("harness-h12-shadow", 0);
+    cells
+        .iter()
+        .map(|cell| {
+            let shadow = RatchetState::from_bytes(&initial).unwrap();
+            let opened = shadow
+                .decrypt_with(cell.as_bytes(), entropy.get())
+                .ok()
+                .expect("every cell A sealed opens");
+            let content = opened.plaintext().content().unwrap();
+            SealedCell {
+                text: String::from_utf8(text_of(&content).unwrap()).unwrap(),
+                position: opened.header_counters(),
+                mk_digest: opened.plaintext().message_key_digest_kat(),
+            }
+        })
+        .collect()
+}
+
+/// H-12, no message key reused across the restart (R-115): the cells `A` sealed — `a0`…`a9`, the refused `lost-1` and
+/// `lost-2`, `a10`…`a16` — lie in `A`'s one sending chain (`B` sent nothing in between: `pn` = 0), the k-th at `n` = k
+/// (pairwise-distinct positions), each under its own message key; `pos(a10) = pos(lost-2) + 1 = pos(a9) + 3`.
+fn assert_no_mk_reuse(sent_a: &[Cell]) {
+    let opened = open_each(sent_a);
+    let mut sealed: Vec<String> = (0..10).map(|i| format!("a{i}")).collect();
+    sealed.extend(["lost-1".to_owned(), "lost-2".to_owned()]);
+    sealed.extend((10..17).map(|i| format!("a{i}")));
+    assert_eq!(
+        opened.iter().map(|o| o.text.clone()).collect::<Vec<_>>(),
+        sealed,
+        "every cell A sealed, the refused ones included"
+    );
+    let digests: BTreeSet<[u8; 32]> = opened.iter().map(|o| o.mk_digest).collect();
+    assert_eq!(
+        digests.len(),
+        opened.len(),
+        "pairwise-distinct message keys"
+    );
+    let positions: Vec<(u32, u32)> = opened.iter().map(|o| o.position).collect();
+    let consecutive: Vec<(u32, u32)> = (0..19).map(|n| (n, 0)).collect();
+    assert_eq!(positions, consecutive, "one position per sealed cell");
+    let n_of = |text: &str| {
+        opened
+            .iter()
+            .find(|o| o.text == text)
+            .map(|o| o.position.0)
+            .unwrap()
+    };
+    assert_eq!(
+        Some(n_of("a10")),
+        n_of("lost-2").checked_add(1),
+        "pos(a10) = pos(lost-2) + 1"
+    );
+    assert_eq!(
+        Some(n_of("a10")),
+        n_of("a9").checked_add(3),
+        "a10 = the last cell before the restart + 3"
+    );
+}
+
 /// H-12: the relay restarts mid-conversation → `ERR_NOQUEUE` → the identical queues are re-created → the conversation
-/// continues without a new invitation (spec §9.1).
+/// continues without a new invitation, and no message key is reused across the restart (spec §9.1; the M5 review's
+/// `h12_restart_recreate_without_mk_reuse`, R-115 / C-8): every cell `A` sealed — before the restart, the two the
+/// relay refused (`lost-1`, `lost-2`) and after the re-creation — sits at its own position under its own message key,
+/// and `a10` follows `lost-2` directly. A sender that rolled its ratchet back on `ERR_NOQUEUE` and re-sealed under a
+/// refused cell's key fails here. The sender keeps no `cell_id` map in M5 (the outbox is M6, review §E).
 #[test]
 fn harness_relay_restart_queues_recreated_conversation_continues() {
     let mut p = pair(HarnessConfig::default());
     let (ca, cb) = (p.a, p.b);
+    // every cell A seals, in sealing order, whatever the relay answers
+    let mut sent_a: Vec<Cell> = Vec::new();
     // A sends 10 cells; B has fetched 5 when the relay restarts
     for i in 0..10 {
-        let (t, e) = p.h.client(ca).link().unwrap();
-        p.side_a
-            .send_text(t, e, format!("a{i}").as_bytes())
-            .unwrap();
+        send_tapped(
+            &mut p.h,
+            ca,
+            &mut p.side_a,
+            &mut sent_a,
+            format!("a{i}").as_bytes(),
+        )
+        .unwrap();
     }
     let (t, e) = p.h.client(cb).link().unwrap();
     p.side_b.poll(t, e).unwrap();
@@ -477,15 +646,13 @@ fn harness_relay_restart_queues_recreated_conversation_continues() {
     // the links are cut: both clients reconnect (a new link, a new RELAYINFO) and meet ERR_NOQUEUE
     p.h.connect(ca).unwrap();
     p.h.connect(cb).unwrap();
-    let (t, e) = p.h.client(ca).link().unwrap();
     assert_eq!(
-        p.side_a.send_text(t, e, b"lost-1").err(),
+        send_tapped(&mut p.h, ca, &mut p.side_a, &mut sent_a, b"lost-1").err(),
         Some(Error::NoQueue),
         "sender: ERR 3"
     );
-    let (t, e) = p.h.client(ca).link().unwrap();
     assert_eq!(
-        p.side_a.send_text(t, e, b"lost-2").err(),
+        send_tapped(&mut p.h, ca, &mut p.side_a, &mut sent_a, b"lost-2").err(),
         Some(Error::NoQueue),
         "it keeps sending"
     );
@@ -496,7 +663,8 @@ fn harness_relay_restart_queues_recreated_conversation_continues() {
         "recipient: present 2"
     );
 
-    // the recipient waits U[10 s, 5 min] on the virtual clock, then re-creates the identical queue
+    // pacing of this test, not a measured client behaviour: the test itself draws a delay from U[10 s, 5 min] (the
+    // re-creation delay of §9.1) and advances the virtual clock by it; then the recipient re-creates the identical queue
     let draw = u64::from_be_bytes(p.h.client(cb).bytes(8).try_into().unwrap());
     let delay = 10 + draw % 291;
     p.h.advance_secs(delay);
@@ -511,7 +679,7 @@ fn harness_relay_restart_queues_recreated_conversation_continues() {
         "the sender's capability stays valid"
     );
     p.side_b.reset_receiving();
-    // A meets present 2 on its own queue too and re-creates it (its seeds, after its own delay)
+    // A meets present 2 on its own queue too and re-creates it with its seeds (the test adds no second delay)
     let (t, e) = p.h.client(ca).link().unwrap();
     assert_eq!(p.side_a.poll(t, e).err(), Some(Error::NoQueue));
     let (t, _) = p.h.client(ca).link().unwrap();
@@ -523,10 +691,14 @@ fn harness_relay_restart_queues_recreated_conversation_continues() {
 
     // A sends again; the cells after the re-creation decrypt, the lost ones are not re-sent
     for i in 10..17 {
-        let (t, e) = p.h.client(ca).link().unwrap();
-        p.side_a
-            .send_text(t, e, format!("a{i}").as_bytes())
-            .unwrap();
+        send_tapped(
+            &mut p.h,
+            ca,
+            &mut p.side_a,
+            &mut sent_a,
+            format!("a{i}").as_bytes(),
+        )
+        .unwrap();
     }
     let (t, e) = p.h.client(cb).link().unwrap();
     assert_eq!(p.side_b.drain(t, e).unwrap(), 7);
@@ -534,6 +706,7 @@ fn harness_relay_restart_queues_recreated_conversation_continues() {
     let mut want: Vec<String> = (0..before).map(|i| format!("a{i}")).collect();
     want.extend((10..17).map(|i| format!("a{i}")));
     assert_eq!(got, want, "no new invitation, the lost cells stay lost");
+    assert_no_mk_reuse(&sent_a);
     // B can still answer: its first send after the restart uses the same ratchet
     let (t, e) = p.h.client(cb).link().unwrap();
     p.side_b.send_text(t, e, b"b-after").unwrap();

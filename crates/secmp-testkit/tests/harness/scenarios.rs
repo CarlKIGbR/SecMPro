@@ -134,9 +134,25 @@ impl Pair {
 
     /// The frame check of the current connection of client `c`.
     pub fn check(&mut self, c: ClientId) -> FrameCheck {
-        let client = self.h.client(c);
-        let capture = client.streams().last().unwrap().capture();
-        verify_frames(client.transport().unwrap(), &capture)
+        frame_check(&mut self.h, c)
+    }
+}
+
+/// The frame check of the current connection of client `c` (H-08).
+pub fn frame_check(h: &mut Harness, c: ClientId) -> FrameCheck {
+    let client = h.client(c);
+    let capture = client.streams().last().unwrap().capture();
+    verify_frames(client.transport().unwrap(), &capture)
+}
+
+/// H-08 for every current connection of the scenario: whole frames only, and every one opens.
+fn assert_frames(h: &mut Harness, clients: &[ClientId], scenario: &str) {
+    for c in clients {
+        let check = frame_check(h, *c);
+        assert!(
+            check.aligned && check.all_open && check.to_relay > 0 && check.to_client > 0,
+            "{scenario}: {check:?}"
+        );
     }
 }
 
@@ -170,7 +186,7 @@ fn harness_clients_create_pool_queues() {
             assert_eq!(send_cap.sid().as_slice(), sid.get(..16).unwrap());
         }
     }
-    // the relay holds the four queues: each answers a FETCH (an unknown one would be NOQUEUE)
+    assert_frames(&mut h, &[ca, cb], "H-01");
 }
 
 /// H-03: 1000 cells each way over the relay, cumulative acknowledgement, dedup by `cell_id`.
@@ -206,6 +222,7 @@ fn harness_exchange_1000_cells_each_way() {
     );
     assert_eq!(p.side_a.committed_ack(), u64::try_from(EXCHANGE).unwrap());
     assert_eq!(p.side_b.committed_ack(), u64::try_from(EXCHANGE).unwrap());
+    assert_frames(&mut p.h, &[ca, cb], "H-03");
 }
 
 /// H-04: the recipient is offline, the sender sends 200 cells; the relay evicts ids 1…72 in order and reports them;
@@ -237,6 +254,7 @@ fn harness_eviction_reports_ids_newest_128_decrypt() {
         (72..200).map(|i| format!("a{i}")).collect::<Vec<_>>(),
         "the newest 128"
     );
+    assert_frames(&mut p.h, &[ca, cb], "H-04");
 }
 
 /// H-05: the sweeper expires by hour bucket — cells after `CELL_TTL`, an idle queue after `QUEUE_IDLE_TTL`, link data
@@ -320,6 +338,7 @@ fn harness_sweeper_expires_by_bucket() {
         )
         .unwrap();
     assert!(!status.present && !status.consumed, "gone after it");
+    assert_frames(&mut p.h, &[ca, cb], "H-05");
 }
 
 /// H-06: the memory budget refuses a new queue at the limit and still accepts every `SEND`.
@@ -351,6 +370,7 @@ fn harness_memory_budget_refuses_new_queue_at_limit() {
     // deleting a queue frees its reservation
     t.delete_queue(&queues.first().unwrap().0).unwrap();
     assert!(t.create_queue(&recv, &send, &token).is_ok());
+    assert_frames(&mut h, &[ca], "H-06");
 }
 
 /// H-08: after `HS2` every stream is a whole number of 4352-byte units, and every unit opens.
@@ -553,6 +573,7 @@ fn harness_undecryptable_cell_is_acknowledged() {
             .unwrap()
             .is_empty()
     );
+    assert_frames(&mut p.h, &[ca, cb], "H-13");
 }
 
 /// G-06: a `RelayQueue` route built by the derived constructor names the queue the relay derived; a `SEND` with the

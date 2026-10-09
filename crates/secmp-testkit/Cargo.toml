@@ -12,7 +12,11 @@ publish.workspace = true
 [features]
 # The differential tests (tests/differential.rs): secmp-crypto against ml-kem and aws-lc-rs (docs/06 §4); the
 # constant-time bench (benches/ct.rs).
-kat = ["secmp-crypto/kat", "secmp-proto/kat", "secmp-relay/kat", "secmp-transport/kat"]
+# `harness`: the in-process relay + clients (src/harness, tests/harness); `kat` adds the differential suites and the
+# constant-time bench. The coverage gate turns on `harness` only (the differential suites take minutes under
+# instrumentation and cover no workspace line).
+harness = ["secmp-crypto/kat", "secmp-proto/kat", "secmp-relay/kat", "secmp-transport/kat"]
+kat = ["harness"]
 
 # The harness (feature `kat`): the relay in process, the SecMP-LINK client, derandomised entropy. Workspace crates
 # only (docs/02 §3: testkit may use any workspace crate except secmp-ui); no third-party runtime crate (ADR-049).
@@ -39,7 +43,7 @@ subtle.workspace = true
 [[test]]
 name = "harness"
 path = "tests/harness/main.rs"
-required-features = ["kat"]
+required-features = ["harness"]
 
 # dudect-style constant-time tests (release profile), run by `cargo xtask step ct` (ADR-038, ADR-041); moved here from
 # secmp-crypto by ADR-042.

@@ -915,10 +915,13 @@ fn percent(covered: u64, count: u64) -> f64 {
 /// `src/**/tests.rs` or `kani_proofs.rs`.
 pub(crate) const COVERAGE_IGNORE_RE: &str = r"(/tests\.rs|/kani_proofs\.rs)$";
 
-/// The feature the coverage run turns on: `secmp-relay`'s `relay` suite is `required-features = ["kat"]` and no
+/// The features the coverage run turns on: `secmp-relay`'s `relay` suite is `required-features = ["kat"]` and no
 /// workspace crate enables `secmp-relay/kat` by unification (as `secmp-testkit` does for `secmp-proto/kat`, ADR-042),
 /// so without it the run measured none of the relay's integration tests (M5-B-3, run 37817187858: 58.9 %).
-pub(crate) const COVERAGE_FEATURES: &str = "secmp-relay/kat";
+/// M5-C: `secmp-testkit/harness` adds the in-process harness and its tests (`tests/harness`), which are the tests of
+/// `secmp-transport` (the transport has no relay of its own to talk to) — without it the transport would be measured
+/// at its one unit test. The testkit's differential suites (`kat`, 151–289 s each under instrumentation) stay out.
+pub(crate) const COVERAGE_FEATURES: &str = "secmp-relay/kat,secmp-testkit/harness";
 
 /// The `cargo llvm-cov` arguments.
 pub(crate) fn coverage_args(out_path: &str) -> Vec<String> {
@@ -6209,7 +6212,8 @@ mod tests {
     }
 
     /// F18 (R-42): the coverage run leaves test-only files out of the denominator; M5-B-3: it builds with
-    /// `secmp-relay/kat`, so the relay's `relay` suite is measured.
+    /// `secmp-relay/kat`, so the relay's `relay` suite is measured; M5-C: and `secmp-testkit/harness`, so the harness and
+    /// the transport tests are.
     #[test]
     fn coverage_ignores_test_files() {
         let args = coverage_args("out.json");
@@ -6229,7 +6233,7 @@ mod tests {
             .unwrap_or(usize::MAX);
         assert_eq!(
             args.get(at.saturating_add(1)).map(String::as_str),
-            Some("secmp-relay/kat")
+            Some("secmp-relay/kat,secmp-testkit/harness")
         );
         assert_eq!(args.iter().filter(|a| *a == "--features").count(), 1);
         // the regex's two alternatives name the files of the secmp-proto test code

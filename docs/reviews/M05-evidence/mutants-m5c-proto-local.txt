@@ -1,0 +1,23 @@
+# M5-C mutation pre-check, local: the new product code of the hx re-freeze (prekeys.rs, wire/cell.rs)
+# head: fce3ac7 + working tree (testkit `harness` feature, coverage scope)
+# cargo mutants --no-shuffle -j 3 --output target/m5c-mutants2 --features kat --caught --unviable
+#   --package secmp-crypto --package secmp-proto --package secmp-relay
+#   --exclude crates/secmp-proto/src/kani_proofs.rs --exclude crates/secmp-relay/src/kani_proofs.rs
+#   --exclude-re kani_stubs:: --exclude-re FixedEntropy
+#   --file crates/secmp-proto/src/prekeys.rs --file crates/secmp-proto/src/wire/cell.rs
+#   --re 'owner_pk|invq_recv_pk|ed25519_pk_of|issue_with|RelayQueue::derived|InvitationRecord::duplicate|digest_kat'
+#   -- -- --skip ratchet_fast_forward_bound_on_the_chain --skip ratchet_fast_forward_bound_on_a_step
+
+Found 9 mutants to test
+ok       Unmutated baseline in 8s build + 112s test
+ INFO Auto-set test timeout to 562s
+unviable crates/secmp-proto/src/prekeys.rs:312:9: replace InvitationRecord::owner_pk -> Result<Ed25519Pk> with Ok(Default::default()) in 0s build
+unviable crates/secmp-proto/src/prekeys.rs:320:9: replace InvitationRecord::invq_recv_pk -> Result<Ed25519Pk> with Ok(Default::default()) in 0s build
+unviable crates/secmp-proto/src/prekeys.rs:330:9: replace InvitationRecord::duplicate -> Result<Self> with Ok(Default::default()) in 0s build
+unviable crates/secmp-proto/src/prekeys.rs:344:5: replace ed25519_pk_of -> Result<Ed25519Pk> with Ok(Default::default()) in 0s build
+unviable crates/secmp-proto/src/prekeys.rs:641:9: replace MemoryPrekeyStore::issue_with -> core::result::Result<Issued, IssueError> with Ok(Default::default()) in 12s build
+caught   crates/secmp-proto/src/prekeys.rs:520:13: delete field sig from struct PrekeyBundle expression in MemoryPrekeyStore::bundle in 2s build + 37s test
+unviable crates/secmp-proto/src/wire/cell.rs:426:9: replace RelayQueue::derived -> Result<Self> with Ok(Default::default()) in 1s build
+caught   crates/secmp-proto/src/prekeys.rs:730:9: replace MemoryPrekeyStore::digest_kat -> [u8; 32] with [0; 32] in 20s build + 26s test
+caught   crates/secmp-proto/src/prekeys.rs:730:9: replace MemoryPrekeyStore::digest_kat -> [u8; 32] with [1; 32] in 8s build + 26s test
+9 mutants tested in 3m: 3 caught, 6 unviable

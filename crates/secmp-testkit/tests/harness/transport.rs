@@ -94,6 +94,7 @@ fn transport_fetch_returns_real_cells_only() {
     let a = r.a;
     let (recv, send) = r.seeds(a);
     let token = r.h.access_key();
+    let extra: Vec<_> = (0..4).map(|_| r.seeds(a)).collect();
     let (t, _) = r.link(a);
     let (recv_cap, send_cap) = t.create_queue(&recv, &send, &token).unwrap();
     assert!(
@@ -114,6 +115,14 @@ fn transport_fetch_returns_real_cells_only() {
         t.fetch(&recv_cap, 6).unwrap().is_empty(),
         "all acknowledged"
     );
+    // 1 to 4 stored cells on fresh queues: exactly those, then dummies
+    for (count, (recv, send)) in (1..=4_u8).zip(&extra) {
+        let (recv_cap, send_cap) = t.create_queue(recv, send, &token).unwrap();
+        for i in 0..count {
+            t.send(&send_cap, &cell(0xc0_u8.saturating_add(i))).unwrap();
+        }
+        assert_eq!(t.fetch(&recv_cap, 0).unwrap().len(), usize::from(count));
+    }
     // present 4 (MALFORMED): an acknowledgement beyond the queue's last id
     assert_eq!(t.fetch(&recv_cap, 7).err(), Some(Error::Malformed));
     // present 2 (NOQUEUE)

@@ -10,10 +10,11 @@
 
 use std::collections::VecDeque;
 use std::io::{self, ErrorKind, Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use secmp_relay::event::{CaptureSink, EventSink};
 use secmp_relay::server::{self, Listener, Stream, Time};
@@ -76,6 +77,8 @@ struct Seen {
     written: Vec<u8>,
     reads: usize,
     closed: bool,
+    /// The read poll and the write timeout `set_poll` was given.
+    timeouts: Option<(Duration, Duration)>,
 }
 
 /// A stream that reads its script (then EOF) and records writes, reads and the close.
@@ -143,8 +146,8 @@ impl Write for Scripted {
 }
 
 impl Stream for Scripted {
-    fn set_poll(&mut self, poll: Duration) -> io::Result<()> {
-        assert_eq!(poll, server::READ_POLL);
+    fn set_poll(&mut self, poll: Duration, write: Duration) -> io::Result<()> {
+        self.seen.lock().unwrap().timeouts = Some((poll, write));
         if self.fail_poll {
             Err(io::Error::from(ErrorKind::Other))
         } else {
@@ -712,4 +715,55 @@ fn spawn_failure_closes_the_stream_and_keeps_serving() {
         relay.start_drain(clock.now());
         assert_eq!(serving.join().unwrap(), Ok(()), "C-1: serving went on");
     });
+}
+
+/// C-3 (M05 review R-107) `write_timeout_is_set`: before its first read the connection loop gives the stream the read
+/// poll and the 30-s write timeout, so a peer that stops reading loses its connection at a blocked write.
+#[test]
+fn write_timeout_is_set() {
+    let (relay, _) = relay();
+    let (stream, seen) = Scripted::new(vec![In::Data(HELLO.to_vec())]);
+    server::handle(&relay, stream, &Virtual::new(10));
+    let s = seen.lock().unwrap();
+    assert_eq!(
+        s.timeouts,
+        Some((server::READ_POLL, server::WRITE_TIMEOUT)),
+        "C-3: both timeouts are set"
+    );
+    assert_eq!(server::WRITE_TIMEOUT, Duration::from_secs(30));
+    assert_eq!((s.written.len(), s.closed), (1744, true));
+}
+
+/// A connected loopback pair (`127.0.0.1:0`; network outside unit tests, `docs/06` §4): the relay's side, non-blocking
+/// as if accepted from `server::bind`'s non-blocking listener (inherited on macOS and the BSDs), and the peer.
+fn loopback() -> (TcpStream, TcpStream) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let peer = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let accepted = listener.accept_next().unwrap();
+    accepted.set_nonblocking(true).unwrap();
+    (accepted, peer)
+}
+
+/// C-3 (M05 review R-107, R-163) `set_poll_sets_read_and_write_timeouts_on_a_real_socket`: `set_poll` on an accepted
+/// `TcpStream` sets the read timeout (the 30-s `HELLO` bound and the drain rely on it) and the write timeout, and makes
+/// the socket blocking: a read with no data waits for the poll, then fails with `WouldBlock`/`TimedOut`.
+#[test]
+fn set_poll_sets_read_and_write_timeouts_on_a_real_socket() {
+    let (mut relay_side, _peer) = loopback();
+    Stream::set_poll(&mut relay_side, server::READ_POLL, server::WRITE_TIMEOUT).unwrap();
+    assert_eq!(relay_side.read_timeout().unwrap(), Some(server::READ_POLL));
+    assert_eq!(
+        relay_side.write_timeout().unwrap(),
+        Some(server::WRITE_TIMEOUT)
+    );
+    let start = Instant::now();
+    let err = relay_side.read(&mut [0_u8; 16]).unwrap_err();
+    assert!(
+        matches!(err.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut),
+        "{err}"
+    );
+    assert!(
+        start.elapsed() >= server::READ_POLL.checked_div(2).unwrap(),
+        "C-3: the read blocked for the poll, not at once"
+    );
 }

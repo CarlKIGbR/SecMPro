@@ -20,6 +20,7 @@
 //! hello_per_sec = 4
 //! hello_hs1_timeout_secs = 30
 //! max_connections = 256                  # M05 review C-1: below the unit's TasksMax and LimitNOFILE
+//! link_idle_secs = 900                   # M05 review C-3; M6 adjusts it to the slowest scheduler period
 //! [shutdown]
 //! drain_secs = 60                        # OPEN-M5-09
 //! ```
@@ -48,6 +49,10 @@ pub struct Limits {
     /// Connections served at once, one thread each; an accepted connection over the cap is closed before any read,
     /// without a thread (M05 review C-1).
     pub max_connections: usize,
+    /// A link that has received no complete unit for this long is closed, nothing emitted, in milliseconds (M05
+    /// review C-3: default 900 s; M6 adjusts the default to the slowest scheduler period, so that a client's
+    /// constant-rate traffic keeps every link it holds).
+    pub link_idle_ms: u64,
 }
 
 /// Default queue pool: 6 GB (`docs/05` §5 `memory_budget_bytes`).
@@ -61,6 +66,8 @@ pub const DEFAULT_DRAIN_SECS: u64 = 60;
 /// Default connection cap (M05 review C-1): below the systemd unit's `TasksMax` and `LimitNOFILE` (`docs/05` §4),
 /// so the relay refuses a connection before the system refuses it a thread or a descriptor.
 pub const DEFAULT_MAX_CONNECTIONS: usize = 256;
+/// Default idle bound of a link, in seconds (M05 review C-3; M6 adjusts it to the slowest scheduler period).
+pub const DEFAULT_LINK_IDLE_SECS: u64 = 900;
 
 impl Limits {
     /// The OPEN-M5 defaults.
@@ -76,6 +83,7 @@ impl Limits {
             hello_timeout_ms: DEFAULT_HELLO_TIMEOUT_SECS.saturating_mul(1000),
             drain_secs: DEFAULT_DRAIN_SECS,
             max_connections: DEFAULT_MAX_CONNECTIONS,
+            link_idle_ms: DEFAULT_LINK_IDLE_SECS.saturating_mul(1000),
         }
     }
 
@@ -89,6 +97,7 @@ impl Limits {
             hello_timeout_ms: DEFAULT_HELLO_TIMEOUT_SECS.saturating_mul(1000),
             drain_secs: DEFAULT_DRAIN_SECS,
             max_connections: DEFAULT_MAX_CONNECTIONS,
+            link_idle_ms: DEFAULT_LINK_IDLE_SECS.saturating_mul(1000),
         }
     }
 }
@@ -121,6 +130,7 @@ const KEYS: &[(&str, &str)] = &[
     ("limits", "hello_per_sec"),
     ("limits", "hello_hs1_timeout_secs"),
     ("limits", "max_connections"),
+    ("limits", "link_idle_secs"),
     ("shutdown", "drain_secs"),
 ];
 
@@ -257,6 +267,10 @@ impl Config {
                 usize::try_from(n).map_err(|_| Error::Config("max_connections is out of range"))?
             }
         };
+        let idle_secs = int(&e, "limits", "link_idle_secs")?.unwrap_or(DEFAULT_LINK_IDLE_SECS);
+        if idle_secs == 0 {
+            return Err(Error::Config("link_idle_secs must be positive"));
+        }
         let limits = Limits {
             budget: BudgetLimits {
                 queue_bytes: Some(
@@ -273,6 +287,9 @@ impl Config {
                 .ok_or(Error::Config("hello_hs1_timeout_secs is out of range"))?,
             drain_secs: int(&e, "shutdown", "drain_secs")?.unwrap_or(DEFAULT_DRAIN_SECS),
             max_connections,
+            link_idle_ms: idle_secs
+                .checked_mul(1000)
+                .ok_or(Error::Config("link_idle_secs is out of range"))?,
         };
         Ok(Self {
             listen,
@@ -299,7 +316,7 @@ mod tests {
     const FULL: &str = "# relay\n[listen]\ntor_loopback = \"127.0.0.1:7443\"  # C tor\n[access]\nkey_file = \"/k\"\n\
         [limits]\nqueue_budget_bytes = 1_049_600\nlinkdata_budget_bytes = 24_976\nlink_frames_burst = 3\n\
         link_frames_per_sec = 2\nhello_burst = 5\nhello_per_sec = 6\nhello_hs1_timeout_secs = 7\n\
-        max_connections = 8\n[shutdown]\ndrain_secs = 9\n";
+        max_connections = 8\nlink_idle_secs = 10\n[shutdown]\ndrain_secs = 9\n";
 
     #[test]
     fn every_value_is_taken() -> Result<()> {
@@ -324,6 +341,7 @@ mod tests {
                 hello_timeout_ms: 7000,
                 drain_secs: 9,
                 max_connections: 8,
+                link_idle_ms: 10_000,
             }
         );
         Ok(())
@@ -381,6 +399,8 @@ mod tests {
             format!("{base}[limits]\nhello_burst = 99999999999\n"),
             format!("{base}[limits]\nhello_hs1_timeout_secs = 0\n"),
             format!("{base}[limits]\nmax_connections = 0\n"),
+            format!("{base}[limits]\nlink_idle_secs = 0\n"),
+            format!("{base}[limits]\nlink_idle_secs = 18_446_744_073_709_552\n"),
             format!("{base}[limits]\nqueue_budget_bytes = 1_\n"),
             format!("{base}[limits]\nqueue_budget_bytes\n"),
             format!("{base}[limits\n"),

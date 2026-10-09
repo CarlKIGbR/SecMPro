@@ -14,8 +14,9 @@
 //! Limits (§9.7 item 7, ADR-048 (p), OPEN-M5-02): a `HELLO` over the listener's handshake rate closes the
 //! connection before `RELAYINFO`; a connection without a complete `HS1` within the `HELLO`→`HS1` timeout of its
 //! `HELLO` is closed, nothing emitted (the same bound applies from accept to `HELLO`, an engineering choice); `HS1`
-//! is accepted only for a key generation that is still valid (OPEN-M5-10). The connection buffers at most one
-//! record or unit.
+//! is accepted only for a key generation that is still valid (OPEN-M5-10). A link is closed, nothing emitted, once it
+//! is [`LINK_AGE_MAX_MS`] old (the longest `LINK_LIFETIME`, spec §2, OPEN-M5-03) or has received no complete unit for
+//! the configured idle bound (`link_idle_secs`, M05 review C-3). The connection buffers at most one record or unit.
 
 use secmp_proto::Decode;
 use secmp_proto::link::relay::{AwaitHs1, accept_ring};
@@ -33,6 +34,9 @@ const HELLO_RECORD_LEN: usize = 2 + HELLO_BODY_LEN;
 const HS1_BODY_LEN: usize = 1 + HS1_LEN;
 /// Bytes of an `HS1` record.
 const HS1_RECORD_LEN: usize = 2 + HS1_BODY_LEN;
+/// The age at which the relay closes a link: 24 h, the upper end of `LINK_LIFETIME` ~ U[6 h, 24 h] (spec §2, §10.1
+/// item 1; OPEN-M5-03), after which a compliant client has re-handshaken on a fresh circuit (M05 review C-3).
+pub const LINK_AGE_MAX_MS: u64 = 86_400_000;
 
 /// What to write and whether to close.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -44,9 +48,19 @@ pub struct Output {
 }
 
 enum Phase<'r> {
-    AwaitHello { since_ms: u64 },
-    AwaitHs1 { st: AwaitHs1<'r>, since_ms: u64 },
-    Linked(Box<Executor>),
+    AwaitHello {
+        since_ms: u64,
+    },
+    AwaitHs1 {
+        st: AwaitHs1<'r>,
+        since_ms: u64,
+    },
+    /// The link, established at `since_ms`; its last complete unit arrived at `last_ms`.
+    Linked {
+        ex: Box<Executor>,
+        since_ms: u64,
+        last_ms: u64,
+    },
     Closed,
 }
 
@@ -88,7 +102,7 @@ impl<'r> Connection<'r> {
     #[must_use]
     pub fn executor(&self) -> Option<&Executor> {
         match &self.phase {
-            Phase::Linked(e) => Some(e),
+            Phase::Linked { ex, .. } => Some(ex),
             _ => None,
         }
     }
@@ -103,16 +117,22 @@ impl<'r> Connection<'r> {
     }
 
     fn timed_out(&self, now: Now) -> bool {
-        let limit = self.relay.limits().hello_timeout_ms;
+        let limits = self.relay.limits();
         match &self.phase {
             Phase::AwaitHello { since_ms } | Phase::AwaitHs1 { since_ms, .. } => {
-                now.mono_ms.saturating_sub(*since_ms) >= limit
+                now.mono_ms.saturating_sub(*since_ms) >= limits.hello_timeout_ms
             }
-            Phase::Linked(_) | Phase::Closed => false,
+            Phase::Linked {
+                since_ms, last_ms, ..
+            } => {
+                now.mono_ms.saturating_sub(*since_ms) >= LINK_AGE_MAX_MS
+                    || now.mono_ms.saturating_sub(*last_ms) >= limits.link_idle_ms
+            }
+            Phase::Closed => false,
         }
     }
 
-    /// The clock moved without input: close a connection whose handshake timed out.
+    /// The clock moved without input: close a connection whose handshake timed out, or whose link is too old or idle.
     pub fn on_tick(&mut self, now: Now) -> Output {
         if self.is_closed() || self.timed_out(now) {
             return self.close(Vec::new());
@@ -202,37 +222,62 @@ impl<'r> Connection<'r> {
                 match st.on_hs1(&record, entropy) {
                     Ok((hs2, link)) => {
                         out.extend_from_slice(&hs2);
-                        self.phase = Phase::Linked(Box::new(Executor::new(
-                            link,
-                            relay.limits().link_rate,
-                            now,
-                        )));
+                        self.phase = Phase::Linked {
+                            ex: Box::new(Executor::new(link, relay.limits().link_rate, now)),
+                            since_ms: now.mono_ms,
+                            last_ms: now.mono_ms,
+                        };
                         Progress::More
                     }
                     Err(_) => Progress::Close,
                 }
             }
-            Phase::Linked(mut ex) => {
-                if self.input.len() < FRAME_LEN {
-                    self.phase = Phase::Linked(ex);
-                    return Progress::Wait;
+            Phase::Linked {
+                ex,
+                since_ms,
+                last_ms,
+            } => self.advance_linked(ex, since_ms, last_ms, now, entropy, out),
+        }
+    }
+
+    /// One unit of an established link (the link was established at `since_ms`, its last unit arrived at `last_ms`).
+    fn advance_linked(
+        &mut self,
+        mut ex: Box<Executor>,
+        since_ms: u64,
+        last_ms: u64,
+        now: Now,
+        entropy: &mut impl Entropy,
+        out: &mut Vec<u8>,
+    ) -> Progress {
+        if self.input.len() < FRAME_LEN {
+            self.phase = Phase::Linked {
+                ex,
+                since_ms,
+                last_ms,
+            };
+            return Progress::Wait;
+        }
+        let unit: Vec<u8> = self.input.drain(..FRAME_LEN).collect();
+        // a complete unit restarts the idle bound
+        let linked = |ex| Phase::Linked {
+            ex,
+            since_ms,
+            last_ms: now.mono_ms,
+        };
+        match ex.on_unit(self.relay, &unit, now, entropy) {
+            Outcome::Respond(frames) => {
+                for f in &frames {
+                    out.extend_from_slice(f.as_slice());
                 }
-                let unit: Vec<u8> = self.input.drain(..FRAME_LEN).collect();
-                match ex.on_unit(relay, &unit, now, entropy) {
-                    Outcome::Respond(frames) => {
-                        for f in &frames {
-                            out.extend_from_slice(f.as_slice());
-                        }
-                        self.phase = Phase::Linked(ex);
-                        Progress::More
-                    }
-                    Outcome::Pending => {
-                        self.phase = Phase::Linked(ex);
-                        Progress::More
-                    }
-                    Outcome::Teardown => Progress::Close,
-                }
+                self.phase = linked(ex);
+                Progress::More
             }
+            Outcome::Pending => {
+                self.phase = linked(ex);
+                Progress::More
+            }
+            Outcome::Teardown => Progress::Close,
         }
     }
 }

@@ -267,8 +267,12 @@ fn harness_eviction_reports_ids_newest_128_decrypt() {
     assert_frames(&mut p.h, &[ca, cb], "H-04");
 }
 
-/// H-05: the sweeper expires by hour bucket — cells after `CELL_TTL`, an idle queue after `QUEUE_IDLE_TTL`, link data
-/// after its `expires_bucket` — end to end through the harness clock.
+/// H-05: the sweeper expires by hour bucket — cells after `CELL_TTL`, link data after its `expires_bucket`, an idle
+/// queue after `QUEUE_IDLE_TTL` — end to end through the harness clock. After each jump of the clock the client
+/// connects again: the relay closes a link that has been idle for `link_idle_secs` or is 24 h old (M05 review C-3),
+/// which the M6 scheduler's constant-rate traffic and link lifetime never let happen. A running relay cannot take a
+/// new key generation, so no link opens after its key's 60 days (`KEY_VALIDITY_SECS`): the two observations of (3)
+/// after day 60 read the relay's store (`snapshot_kat`) instead of a `FETCH`, which would also refresh the queue.
 #[test]
 fn harness_sweeper_expires_by_bucket() {
     let mut p = pair(HarnessConfig::default());
@@ -278,48 +282,21 @@ fn harness_sweeper_expires_by_bucket() {
     let (t, e) = p.h.client(ca).link().unwrap();
     p.side_a.send_text(t, e, b"old").unwrap();
     p.h.advance_hours(168);
+    p.h.connect(cb).unwrap();
     let (t, _) = p.h.client(cb).link().unwrap();
     let held = t.fetch(p.side_b.recv_cap(), 0).unwrap();
     assert_eq!(held.len(), 1, "retained at bucket + 168");
     p.h.advance_hours(1);
+    p.h.connect(cb).unwrap();
     let (t, _) = p.h.client(cb).link().unwrap();
     assert!(
         t.fetch(p.side_b.recv_cap(), 0).unwrap().is_empty(),
         "expired at bucket + 169"
     );
-    // (2) a queue goes after QUEUE_IDLE_TTL = 720 h without a non-error FETCH (from its creation if there was none):
-    // retained at +720, expired at +721; a FETCH refreshes the clock
-    let seed = |b: u8| SecretBytes::<32>::from_slice(&[b; 32]).unwrap();
-    let (t, _) = p.h.client(cb).link().unwrap();
-    let (keep, _) = t.create_queue(&seed(0x61), &seed(0x62), &token).unwrap();
-    let (lost, _) = t.create_queue(&seed(0x63), &seed(0x64), &token).unwrap();
-    p.h.advance_hours(720);
-    let (t, _) = p.h.client(cb).link().unwrap();
-    assert!(
-        t.fetch(&keep, 0).is_ok(),
-        "retained at bucket + 720 (this FETCH refreshes it)"
-    );
-    p.h.advance_hours(1);
-    let (t, _) = p.h.client(cb).link().unwrap();
-    assert_eq!(
-        t.fetch(&lost, 0).err(),
-        Some(Error::NoQueue),
-        "expired at bucket + 721"
-    );
-    assert!(t.fetch(&keep, 0).is_ok(), "refreshed one hour ago");
-    p.h.advance_hours(720);
-    let (t, _) = p.h.client(cb).link().unwrap();
-    assert!(t.fetch(&keep, 0).is_ok(), "720 h after the last FETCH");
-    p.h.advance_hours(721);
-    let (t, _) = p.h.client(cb).link().unwrap();
-    assert_eq!(
-        t.fetch(&keep, 0).err(),
-        Some(Error::NoQueue),
-        "721 h after the last FETCH"
-    );
-    // (3) link data is valid through its expires_bucket and gone after it
+    // (2) link data is valid through its expires_bucket and gone after it
     let owner = SecretBytes::from_slice(&[0x71; 32]).unwrap();
     let bucket = secmp_relay::HourBucket::from_unix_secs(p.h.clock().unix()).0 + 10;
+    p.h.connect(ca).unwrap();
     let (t, _) = p.h.client(ca).link().unwrap();
     t.put_link_data(
         [0x81; 16],
@@ -331,6 +308,7 @@ fn harness_sweeper_expires_by_bucket() {
     )
     .unwrap();
     p.h.advance_hours(10);
+    p.h.connect(ca).unwrap();
     let (t, _) = p.h.client(ca).link().unwrap();
     let status = t
         .get_link_data(
@@ -340,6 +318,7 @@ fn harness_sweeper_expires_by_bucket() {
         .unwrap();
     assert!(status.present, "valid through expires_bucket");
     p.h.advance_hours(1);
+    p.h.connect(ca).unwrap();
     let (t, _) = p.h.client(ca).link().unwrap();
     let status = t
         .get_link_data(
@@ -348,6 +327,40 @@ fn harness_sweeper_expires_by_bucket() {
         )
         .unwrap();
     assert!(!status.present && !status.consumed, "gone after it");
+    // (3) a queue goes after QUEUE_IDLE_TTL = 720 h without a non-error FETCH (from its creation if there was none):
+    // retained at +720, expired at +721; a FETCH refreshes the clock
+    let seed = |b: u8| SecretBytes::<32>::from_slice(&[b; 32]).unwrap();
+    p.h.connect(cb).unwrap();
+    let (t, _) = p.h.client(cb).link().unwrap();
+    let (keep, _) = t.create_queue(&seed(0x61), &seed(0x62), &token).unwrap();
+    let (lost, _) = t.create_queue(&seed(0x63), &seed(0x64), &token).unwrap();
+    p.h.advance_hours(720);
+    p.h.connect(cb).unwrap();
+    let (t, _) = p.h.client(cb).link().unwrap();
+    assert!(
+        t.fetch(&keep, 0).is_ok(),
+        "retained at bucket + 720 (this FETCH refreshes it)"
+    );
+    p.h.advance_hours(1);
+    p.h.connect(cb).unwrap();
+    let (t, _) = p.h.client(cb).link().unwrap();
+    assert_eq!(
+        t.fetch(&lost, 0).err(),
+        Some(Error::NoQueue),
+        "expired at bucket + 721"
+    );
+    let held = |h: &Harness, q: &RecvCap| {
+        h.relay()
+            .snapshot_kat()
+            .queues
+            .iter()
+            .any(|s| s.rid == *q.queue().rid())
+    };
+    assert!(held(&p.h, &keep), "refreshed one hour ago");
+    p.h.advance_hours(719);
+    assert!(held(&p.h, &keep), "720 h after the last FETCH");
+    p.h.advance_hours(1);
+    assert!(!held(&p.h, &keep), "721 h after the last FETCH");
     assert_frames(&mut p.h, &[ca, cb], "H-05");
 }
 

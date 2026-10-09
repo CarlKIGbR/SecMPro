@@ -30,6 +30,8 @@ use crate::relay::Relay;
 
 /// How long a connection read blocks before the connection checks its timeout and the drain.
 pub const READ_POLL: Duration = Duration::from_millis(500);
+/// How long a connection write may block: a peer that does not read loses its connection (M05 review C-3).
+pub const WRITE_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long the accept loop sleeps when no connection is waiting.
 pub const ACCEPT_POLL: Duration = Duration::from_millis(50);
 /// How long the accept loop waits after an `accept` error it retries (M05 review C-2).
@@ -99,19 +101,21 @@ impl Time for Clock {
 
 /// One accepted connection.
 pub trait Stream: io::Read + io::Write + Send + 'static {
-    /// Make reads block for at most `poll`, after which they fail with `WouldBlock` or `TimedOut`.
+    /// Make reads block for at most `poll` and writes for at most `write`, after which they fail with `WouldBlock`
+    /// or `TimedOut`.
     ///
     /// # Errors
     /// The I/O error of the underlying stream.
-    fn set_poll(&mut self, poll: Duration) -> io::Result<()>;
+    fn set_poll(&mut self, poll: Duration, write: Duration) -> io::Result<()>;
     /// Close both directions.
     fn close(&mut self);
 }
 
 impl Stream for TcpStream {
-    fn set_poll(&mut self, poll: Duration) -> io::Result<()> {
+    fn set_poll(&mut self, poll: Duration, write: Duration) -> io::Result<()> {
         self.set_nonblocking(false)?;
-        self.set_read_timeout(Some(poll))
+        self.set_read_timeout(Some(poll))?;
+        self.set_write_timeout(Some(write))
     }
 
     fn close(&mut self) {
@@ -295,10 +299,10 @@ pub fn serve<L: Listener, T: Time + Clone + 'static>(
     }
 }
 
-/// Drive one connection until it closes, the peer leaves, an I/O error occurs or the drain has finished; then
-/// close it.
+/// Drive one connection until it closes, the peer leaves, an I/O error occurs (a write blocked for
+/// [`WRITE_TIMEOUT`] included) or the drain has finished; then close it.
 pub fn handle<S: Stream, T: Time>(relay: &Relay, mut stream: S, clock: &T) {
-    if stream.set_poll(READ_POLL).is_err() {
+    if stream.set_poll(READ_POLL, WRITE_TIMEOUT).is_err() {
         stream.close();
         return;
     }

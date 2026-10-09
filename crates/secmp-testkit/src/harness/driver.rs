@@ -26,11 +26,12 @@ use secmp_client_core::timing::TimingRng;
 use secmp_crypto::{Aead, HybridSigningKey, Label, Nonce24, SecretBytes};
 use secmp_proto::Decode;
 use secmp_proto::wire::cell::Cell;
+use secmp_proto::wire::inv::LinkBlob;
 use secmp_proto::wire::frame::Request;
 use secmp_proto::tr::{Entropy, FixedEntropy, RatchetState};
 use secmp_transport::{
-    ConnectOutcome, Error as TransportError, QueueTransport, RecvCap, RelayQueueTransport, SendCap,
-    Session,
+    ConnectOutcome, Error as TransportError, LinkGetMode, QueueTransport, RecvCap,
+    RelayQueueTransport, SendCap, Session,
 };
 
 use super::convo::ratchet_pair;
@@ -127,6 +128,20 @@ struct Conn {
 pub struct Material {
     /// `(recv seed, send seed)` by queue.
     pub queues: BTreeMap<u32, ([u8; 32], [u8; 32])>,
+}
+
+/// The link data the host holds for a `LinkPut` / `LinkGet` control operation.
+pub struct LinkMaterial {
+    /// `ld_id`.
+    pub ld_id: [u8; 16],
+    /// The seed of the owner key.
+    pub owner_seed: [u8; 32],
+    /// The 12 360-byte blob.
+    pub blob: Vec<u8>,
+    /// One-time entry.
+    pub one_time: bool,
+    /// `expires_bucket`.
+    pub expires_bucket: u32,
 }
 
 /// What the driver does with a client's connections.
@@ -263,6 +278,16 @@ pub struct SimClient {
     pub refused: u64,
     /// The requests written: time, slot, request.
     pub requests: Vec<(u64, u64, Request)>,
+    /// Link data by number, for the link-data control operations.
+    pub links: BTreeMap<u32, LinkMaterial>,
+    /// Owner-status answers: time, link data, present, consumed.
+    pub link_status: Vec<(u64, u32, bool, bool)>,
+    /// Consume answers: time, link data, present, consumed, blob returned.
+    pub link_consumed: Vec<(u64, u32, bool, bool, bool)>,
+    /// The requests of every control connection: time, operation, requests in order.
+    pub control_requests: Vec<(u64, OpId, Vec<Request>)>,
+    /// The isolation key of every control operation.
+    pub control_keys: Vec<(OpId, IsolationKey)>,
     /// Every `Connect` the scheduler asked for: time, connection, isolation key.
     pub connects: Vec<(u64, LinkId, IsolationKey)>,
 }
@@ -343,6 +368,11 @@ impl VirtualDriver {
             controls_started: Vec::new(),
             refused: 0,
             connects: Vec::new(),
+            links: BTreeMap::new(),
+            link_status: Vec::new(),
+            link_consumed: Vec::new(),
+            control_requests: Vec::new(),
+            control_keys: Vec::new(),
             requests: Vec::new(),
         });
         to_usize(u64::from(index))
@@ -561,7 +591,8 @@ impl VirtualDriver {
                         conn.stream.cut();
                     }
                 }
-                Output::Control { op, kind, .. } => {
+                Output::Control { op, kind, key, .. } => {
+                    self.clients.get_mut(i).unwrap().control_keys.push((op, key));
                     let more = self.control(i, t, op, kind);
                     queue.extend(more);
                 }
@@ -725,6 +756,19 @@ impl VirtualDriver {
         let result = self.run_control(i, &mut transport, kind, &access, t);
         let capture = keep.capture();
         keep.cut();
+        {
+            let (k_send, _) = transport.session().link_kat().keys_kat();
+            let sess = *transport.session().link_kat().sess_id();
+            let key = SecretBytes::<32>::from_slice(k_send).unwrap();
+            let ad = [Label::LinkFrame.as_bytes(), sess.as_slice()].concat();
+            let mut requests = Vec::new();
+            for (n, unit) in capture.frames_to_relay().as_chunks::<FRAME>().0.iter().enumerate() {
+                let nonce = *Nonce24::from_link_counter(u64::try_from(n).unwrap()).as_bytes();
+                let plain = Aead::open(&key, &nonce, &ad, unit).unwrap();
+                requests.push(Request::decode(&plain).unwrap());
+            }
+            self.clients.get_mut(i).unwrap().control_requests.push((t, op, requests));
+        }
         for _ in 0..capture.frames_to_relay().len() / FRAME {
             self.trace(i, t, FRAME, Dir::C2R, slot);
         }
@@ -783,8 +827,39 @@ impl VirtualDriver {
                 let cap = RecvCap::from_seed(&SecretBytes::from_slice(&recv).unwrap())?;
                 transport.delete_queue(&cap)
             }
-            ControlKind::LinkPut(_) | ControlKind::LinkGetOwner(_) | ControlKind::LinkGetConsume(_) => {
-                // link data is driven by the tests through `RelayQueueTransport` directly (CO-05)
+            ControlKind::LinkPut(n) => {
+                let client = self.clients.get_mut(idx).unwrap();
+                let m = client.links.get(&n).ok_or(TransportError::Invalid)?;
+                let blob = LinkBlob::decode(&m.blob).map_err(|_| TransportError::Invalid)?;
+                transport.put_link_data(
+                    m.ld_id,
+                    &SecretBytes::from_slice(&m.owner_seed).unwrap(),
+                    &blob,
+                    m.one_time,
+                    m.expires_bucket,
+                    access,
+                )
+            }
+            ControlKind::LinkGetOwner(n) => {
+                let client = self.clients.get_mut(idx).unwrap();
+                let m = client.links.get(&n).ok_or(TransportError::Invalid)?;
+                let owner = SecretBytes::from_slice(&m.owner_seed).unwrap();
+                let ld = m.ld_id;
+                let got = transport.get_link_data(ld, LinkGetMode::OwnerStatus(&owner))?;
+                client.link_status.push((now, n, got.present, got.consumed));
+                let relay = client.relay;
+                let expired = false;
+                let _ = client.sched.owner_status(now, relay, n, got.present, got.consumed, expired);
+                Ok(())
+            }
+            ControlKind::LinkGetConsume(n) => {
+                let client = self.clients.get_mut(idx).unwrap();
+                let m = client.links.get(&n).ok_or(TransportError::Invalid)?;
+                let ld = m.ld_id;
+                let got = transport.get_link_data(ld, LinkGetMode::Consume)?;
+                client
+                    .link_consumed
+                    .push((now, n, got.present, got.consumed, got.blob.is_some()));
                 Ok(())
             }
         }

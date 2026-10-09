@@ -65,6 +65,21 @@ impl TimingRng {
         }
     }
 
+    /// A second generator for a separate purpose (the control operations): seeded from this one's next 64 bits, so the two
+    /// streams do not move each other. The fork is not a uniform draw and is not counted.
+    ///
+    /// # Errors
+    /// [`Unavailable`] if the operating system has no randomness.
+    pub fn fork(&mut self) -> Result<Self, Unavailable> {
+        #[cfg_attr(not(any(test, feature = "kat")), allow(unused_variables))]
+        let seed = self.next_u64()?;
+        Ok(match self.source {
+            Source::Os => Self::os(),
+            #[cfg(any(test, feature = "kat"))]
+            Source::Seeded(_) => Self::seeded(seed ^ 0xa5a5_a5a5_5a5a_5a5a),
+        })
+    }
+
     /// How many uniform draws were made ([`TimingRng::uniform`] calls that returned).
     #[must_use]
     pub const fn draws(&self) -> u64 {

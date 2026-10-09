@@ -225,6 +225,13 @@ impl Channel {
         &mut self.link
     }
 
+    /// Set the send counter (tests only, feature `harness`): the write position follows.
+    #[cfg(feature = "harness")]
+    pub fn set_send_counter_kat(&mut self, value: u64) {
+        self.link.set_send_counter_kat(value);
+        self.next_write = value;
+    }
+
     /// The next counter this side seals under; `None` once exhausted.
     #[must_use]
     pub const fn send_counter(&self) -> Option<u64> {

@@ -86,6 +86,15 @@ pub enum ControlKind {
     LinkGetConsume(u32),
 }
 
+/// How a connection reaches the relay (CLAUDE.md §1.5: the user's choice, never changed by a failure).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Transport {
+    /// Through Tor (the default).
+    Tor,
+    /// Direct TLS (the user chose it; implies Balanced).
+    Direct,
+}
+
 /// What the scheduler asks of its driver.
 pub enum Output {
     /// Open a connection (isolated by `key`) to `relay`, run the SecMP-LINK handshake, then report
@@ -97,6 +106,8 @@ pub enum Output {
         key: IsolationKey,
         /// The relay.
         relay: RelayId,
+        /// The transport, the same for every attempt.
+        transport: Transport,
     },
     /// Write these prepared frames (a multiple of 4352 bytes) to the link, now.
     Write {
@@ -120,6 +131,8 @@ pub enum Output {
         relay: RelayId,
         /// What to run.
         kind: ControlKind,
+        /// The transport.
+        transport: Transport,
     },
     /// A local event.
     Event(LinkEvent),

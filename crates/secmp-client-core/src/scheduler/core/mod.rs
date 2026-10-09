@@ -27,7 +27,7 @@ use crate::scheduler::params::{FETCH_MULTI_LIMIT, Mode, Params};
 use crate::scheduler::pool::QueuePool;
 use crate::scheduler::types::{
     Alert, CellSource, CellToken, ControlKind, IsolationKey, LinkEvent, LinkId, OpId, Output,
-    QueueId, Reason, RelayId, SendFailure,
+    QueueId, Reason, RelayId, SendFailure, Transport,
 };
 use crate::timing::{TimingRng, Unavailable};
 
@@ -207,6 +207,8 @@ struct World {
     mode: Mode,
     direct: bool,
     rng: TimingRng,
+    /// The randomness of the control operations and the pool (apart from the links', CO-07).
+    ctl: TimingRng,
     sends: Vec<SendQ>,
     recvs: Vec<RecvQ>,
     control: ControlOps,
@@ -284,6 +286,14 @@ impl World {
             Mode::Balanced
         } else {
             self.mode
+        }
+    }
+
+    const fn transport(&self) -> Transport {
+        if self.direct {
+            Transport::Direct
+        } else {
+            Transport::Tor
         }
     }
 
@@ -386,10 +396,12 @@ impl World {
         let id = self.new_link_id();
         let key = self.new_key();
         link.state = State::Connecting { id };
+        let transport = self.transport();
         self.out.push(Output::Connect {
             link: id,
             key,
             relay,
+            transport,
         });
     }
 
@@ -684,11 +696,11 @@ impl World {
         rq.recreating = true;
         rq.acked = 0;
         let relay = rq.relay;
-        let at = now.saturating_add(self.rng.uniform(lo, hi)?);
+        let at = now.saturating_add(self.ctl.uniform(lo, hi)?);
         let op = self.new_op_id();
         self.control.schedule(
             &self.params,
-            &mut self.rng,
+            &mut self.ctl,
             op,
             now,
             OpSpec {
@@ -820,7 +832,7 @@ impl World {
                 let op = self.new_op_id();
                 self.control.schedule(
                     &self.params,
-                    &mut self.rng,
+                    &mut self.ctl,
                     op,
                     now,
                     OpSpec {
@@ -848,7 +860,9 @@ const fn reason_of(e: TransportError) -> Reason {
 impl Scheduler {
     /// A scheduler with no queues.
     #[must_use]
-    pub fn new(params: Params, mode: Mode, rng: TimingRng) -> Self {
+    pub fn new(params: Params, mode: Mode, mut rng: TimingRng) -> Self {
+        // forking cannot fail for a seeded generator; the operating system's has been used before
+        let ctl = rng.fork().unwrap_or_else(|_| TimingRng::os());
         let pool = QueuePool::new(params.pool_target);
         Self {
             world: World {
@@ -856,6 +870,7 @@ impl Scheduler {
                 mode,
                 direct: false,
                 rng,
+                ctl,
                 sends: Vec::new(),
                 recvs: Vec::new(),
                 control: ControlOps::new(),
@@ -888,7 +903,7 @@ impl Scheduler {
     /// Uniform timing draws so far (the activity-independence tests compare them).
     #[must_use]
     pub const fn timing_draws(&self) -> u64 {
-        self.world.rng.draws()
+        self.world.rng.draws().saturating_add(self.world.ctl.draws())
     }
 
     /// Ticks lost to a frame that was not ready (OPEN-M6-13).
@@ -908,6 +923,18 @@ impl Scheduler {
     #[must_use]
     pub fn tick_audit(&self) -> &[TickAudit] {
         &self.world.prep.ticks
+    }
+
+    /// Set the send counter of a connection's link (the rotation tests; feature `kat`).
+    #[cfg(feature = "kat")]
+    pub fn set_send_counter_kat(&mut self, id: LinkId, value: u64) {
+        for link in &mut self.links {
+            if let State::Up(up) = &mut link.state
+                && up.id == id
+            {
+                up.chan.set_send_counter_kat(value);
+            }
+        }
     }
 
     /// The preparations so far (tests only).
@@ -1317,7 +1344,7 @@ impl Scheduler {
         let op = self.world.new_op_id();
         self.world.control.schedule(
             &self.world.params,
-            &mut self.world.rng,
+            &mut self.world.ctl,
             op,
             now,
             OpSpec {
@@ -1358,7 +1385,7 @@ impl Scheduler {
     ) -> Result<(), SchedError> {
         self.world
             .control
-            .failed(&self.world.params, &mut self.world.rng, op, now, closed_before_relayinfo)?;
+            .failed(&self.world.params, &mut self.world.ctl, op, now, closed_before_relayinfo)?;
         Ok(())
     }
 
@@ -1419,11 +1446,13 @@ impl Scheduler {
         }
         for due in world.control.take_due(now) {
             let key = world.new_key();
+            let transport = world.transport();
             world.out.push(Output::Control {
                 op: due.id,
                 key,
                 relay: due.relay,
                 kind: due.kind,
+                transport,
             });
         }
         self.links.retain(|l| !matches!(l.state, State::Gone));

@@ -19,7 +19,7 @@ mod world;
 
 pub use clock::Clock;
 pub use driver::{
-    Audit, CONTROL_SLOT_BASE, Gate, GateState, Conv, Convs, Dir, Inspect, Material, Options, SimClient, Trace, TraceEntry, VirtualDriver,
+    Audit, CONTROL_SLOT_BASE, Gate, GateState, Conv, Convs, Dir, Inspect, LinkMaterial, Material, Options, SimClient, Trace, TraceEntry, VirtualDriver,
 };
 pub use convo::{Polled, Side, ratchet_pair, text_content, text_of};
 pub use entropy::EntropyPool;

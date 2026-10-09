@@ -71,10 +71,12 @@ impl TimingRng {
     /// # Errors
     /// [`Unavailable`] if the operating system has no randomness.
     pub fn fork(&mut self) -> Result<Self, Unavailable> {
-        #[cfg_attr(not(any(test, feature = "kat")), allow(unused_variables))]
         let seed = self.next_u64()?;
         Ok(match self.source {
-            Source::Os => Self::os(),
+            Source::Os => {
+                let _ = seed;
+                Self::os()
+            }
             #[cfg(any(test, feature = "kat"))]
             Source::Seeded(_) => Self::seeded(seed ^ 0xa5a5_a5a5_5a5a_5a5a),
         })

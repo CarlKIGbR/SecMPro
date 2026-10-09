@@ -75,6 +75,7 @@ pub(crate) const AUDIT_IGNORES: &[(&str, &str)] = &[(
 /// `secmp-proto` (derandomised TR entry points for the vectors and the ct bench, ADR-042); M5: `secmp-relay` (the
 /// store snapshot and digest, the live-buffer count and the event capture of its test crate `relay`).
 pub(crate) const KAT_PACKAGES: &[&str] = &[
+    "secmp-client-core",
     "secmp-crypto",
     "secmp-proto",
     "secmp-relay",

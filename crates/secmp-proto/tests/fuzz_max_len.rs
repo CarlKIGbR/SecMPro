@@ -102,7 +102,28 @@ fn relay_entries() -> [(&'static str, usize); 2] {
 
 /// The M5 targets: the link/Q decoders and the structured relay targets.
 fn m5_entries() -> impl Iterator<Item = (&'static str, usize)> {
-    link_entries().into_iter().chain(relay_entries())
+    link_entries()
+        .into_iter()
+        .chain(relay_entries())
+        .chain(m6_entries())
+}
+
+/// The M6 targets (Phase A): the longest input the harnesses read.
+fn m6_entries() -> [(&'static str, usize); 2] {
+    // a count byte, four kind bytes, then at most 8 units of a `u16` length and the largest frame payload (4335 B)
+    let unit = sum(&[2, FRAME_PLAINTEXT_LEN.saturating_sub(1)]);
+    // a mode byte, 8 seed bytes, then at most 192 events of a tag byte and at most a `u32`
+    let event = sum(&[1, 4]);
+    [
+        (
+            "client_pipeline_responses",
+            sum(&[5, unit.saturating_mul(8)]),
+        ),
+        (
+            "scheduler_event_sequence",
+            sum(&[1, 8, event.saturating_mul(192)]),
+        ),
+    ]
 }
 
 #[test]

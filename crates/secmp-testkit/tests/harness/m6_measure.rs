@@ -265,6 +265,45 @@ fn add_sender(
     }
 }
 
+/// The recipient returns; run until every queue is acknowledged. Returns the ticks of its busiest link.
+fn return_and_drain(
+    sim: &mut VirtualDriver,
+    bob: usize,
+    all: &[Sender],
+    mode: Mode,
+    period_ms: u64,
+) -> u64 {
+    sim.client(bob).opts.refuse_connections = false;
+    let kind = if mode == Mode::Strict {
+        LinkKind::Recv
+    } else {
+        LinkKind::Relay
+    };
+    run_until_link_up(sim, bob, kind);
+    let mut guard = 0_u32;
+    while !all.iter().all(|s| {
+        let newest = sim.client_ref(s.client).gate.relayed_max;
+        sim.client_ref(bob)
+            .sched
+            .acked(s.bob_queue)
+            .unwrap()
+            .saturating_add(1)
+            >= newest
+    }) {
+        let next = sim.now().saturating_add(period_ms.min(10_000));
+        sim.run_until(next);
+        guard = guard.saturating_add(1);
+        assert!(guard < 100_000, "the queues do not drain");
+    }
+    sim.client_ref(bob)
+        .sched
+        .links()
+        .iter()
+        .map(|l| u64::from(l.ticks))
+        .max()
+        .unwrap()
+}
+
 /// What one drain case found.
 struct Drain {
     evicted: u64,
@@ -332,36 +371,7 @@ fn drain_case(mode: Mode, senders: usize, period_ms: u64, hours: u64, seed: u64)
         sent_each.iter().map(|s| s.saturating_sub(128)).sum::<u64>(),
         "the relay evicts exactly the cells beyond the 128 it holds"
     );
-    sim.client(bob).opts.refuse_connections = false;
-    let kind = if mode == Mode::Strict {
-        LinkKind::Recv
-    } else {
-        LinkKind::Relay
-    };
-    run_until_link_up(&mut sim, bob, kind);
-    let mut guard = 0_u32;
-    while !all.iter().all(|s| {
-        let newest = sim.client_ref(s.client).gate.relayed_max;
-        sim.client_ref(bob)
-            .sched
-            .acked(s.bob_queue)
-            .unwrap()
-            .saturating_add(1)
-            >= newest
-    }) {
-        let next = sim.now().saturating_add(period_ms.min(10_000));
-        sim.run_until(next);
-        guard = guard.saturating_add(1);
-        assert!(guard < 100_000, "the queues do not drain");
-    }
-    let took = sim
-        .client_ref(bob)
-        .sched
-        .links()
-        .iter()
-        .map(|l| u64::from(l.ticks))
-        .max()
-        .unwrap();
+    let took = return_and_drain(&mut sim, bob, &all, mode, period_ms);
     for s in &all {
         let got = sim
             .client_ref(bob)

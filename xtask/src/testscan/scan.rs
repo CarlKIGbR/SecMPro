@@ -1212,6 +1212,7 @@ mod tests {
             "b::bin::prop_via_main: its package is not in PROPERTY_PACKAGES (no CI-seed pass)",
             "PROPERTY_PACKAGES: secmp-proto holds no property test (stale entry)",
             "PROPERTY_PACKAGES: secmp-relay holds no property test (stale entry)",
+            "PROPERTY_PACKAGES: secmp-testkit holds no property test (stale entry)",
             "crates/a/tests/own.rs: names \"SECMP_PROPTEST_SEED\" itself; read it through crates/secmp-proto/tests/common/seed.rs",
             "crates/a/tests/own.rs: seeded properties without the helper (`#[path = \"…/common/seed.rs\"] mod seed;` and `seed::master_seed(DEFAULT_SEED)`)",
             "crates/a/tests/own.rs: prop_own does not take its seed from seed::master_seed",

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! M6 (d2) ControlOps and (d3) QueuePool (CO-01…CO-08, QP-01…QP-05; spec §10.6 (2), (3)).
+//! M6 (d2) `ControlOps` and (d3) `QueuePool` (CO-01…CO-08, QP-01…QP-05; spec §10.6 (2), (3)).
 
 use secmp_client_core::scheduler::control::When;
 use secmp_client_core::scheduler::core::{LinkKind, Scheduler};
@@ -9,7 +9,9 @@ use secmp_client_core::timing::TimingRng;
 use secmp_proto::wire::frame::RequestCmd;
 use secmp_testkit::harness::{CONTROL_SLOT_BASE, Dir, Inspect, LinkMaterial, VirtualDriver};
 
-use crate::m6_common::{FRAME, client, client_with, contact, driver, frames_of, ks_uniform, run_until_link_up};
+use crate::m6_common::{
+    FRAME, client, client_with, contact, driver, frames_of, ks_uniform, run_until_link_up,
+};
 
 fn material(n: u8) -> LinkMaterial {
     LinkMaterial {
@@ -71,7 +73,10 @@ fn control_ops_run_on_one_shot_links() {
     for (_, _, r) in &c.requests {
         assert!(matches!(
             r.cmd,
-            RequestCmd::Send { .. } | RequestCmd::Fetch { .. } | RequestCmd::Ping | RequestCmd::FetchMulti { .. }
+            RequestCmd::Send { .. }
+                | RequestCmd::Fetch { .. }
+                | RequestCmd::Ping
+                | RequestCmd::FetchMulti { .. }
         ));
     }
     // each operation's trace slot is its own and above the scheduled ones
@@ -92,7 +97,13 @@ fn control_op_delay_uniform_1_to_60_min() {
     let mut delays = Vec::new();
     for n in 0..1000_u32 {
         let op = sched
-            .schedule_control(t, ControlKind::QueueNew(QueueId(n)), RelayId(0), u64::from(n), When::Delayed)
+            .schedule_control(
+                t,
+                ControlKind::QueueNew(QueueId(n)),
+                RelayId(0),
+                u64::from(n),
+                When::Delayed,
+            )
             .unwrap();
         delays.push(sched.control_due(op).unwrap() - t);
     }
@@ -108,21 +119,45 @@ fn control_op_delay_from_related_op() {
     let t1 = 5_000_000;
     // a LINK_PUT due at t1, a related QUEUE_DEL enqueued 10 s before it
     let put = sched
-        .schedule_control(t1 - 20_000, ControlKind::LinkPut(1), RelayId(0), 77, When::At(t1))
+        .schedule_control(
+            t1 - 20_000,
+            ControlKind::LinkPut(1),
+            RelayId(0),
+            77,
+            When::At(t1),
+        )
         .unwrap();
     assert_eq!(sched.control_due(put), Some(t1));
     let del = sched
-        .schedule_control(t1 - 10_000, ControlKind::QueueDel(QueueId(1)), RelayId(0), 77, When::Delayed)
+        .schedule_control(
+            t1 - 10_000,
+            ControlKind::QueueDel(QueueId(1)),
+            RelayId(0),
+            77,
+            When::Delayed,
+        )
         .unwrap();
     assert!(sched.control_due(del).unwrap() >= t1 + 60_000);
     // and one enqueued after the PUT started
     let after = sched
-        .schedule_control(t1 + 5_000, ControlKind::LinkGetOwner(1), RelayId(0), 77, When::Delayed)
+        .schedule_control(
+            t1 + 5_000,
+            ControlKind::LinkGetOwner(1),
+            RelayId(0),
+            77,
+            When::Delayed,
+        )
         .unwrap();
     assert!(sched.control_due(after).unwrap() >= t1 + 60_000);
     // an unrelated operation is not held back by it
     let other = sched
-        .schedule_control(t1 - 10_000, ControlKind::QueueDel(QueueId(2)), RelayId(0), 99, When::Delayed)
+        .schedule_control(
+            t1 - 10_000,
+            ControlKind::QueueDel(QueueId(2)),
+            RelayId(0),
+            99,
+            When::Delayed,
+        )
         .unwrap();
     assert!(sched.control_due(other).unwrap() <= t1 - 10_000 + 3_600_000);
 }
@@ -139,7 +174,13 @@ fn prompt_ops_are_not_delayed() {
     let consume = sim
         .client(alice)
         .sched
-        .schedule_control(t, ControlKind::LinkGetConsume(3), RelayId(0), 3, When::Prompt)
+        .schedule_control(
+            t,
+            ControlKind::LinkGetConsume(3),
+            RelayId(0),
+            3,
+            When::Prompt,
+        )
         .unwrap();
     let put = sim
         .client(alice)
@@ -152,18 +193,40 @@ fn prompt_ops_are_not_delayed() {
         let (at, _, _) = started.iter().find(|(_, o, _)| *o == op).unwrap();
         assert_eq!(*at, t, "delay 0");
     }
-    assert!(sim.client_ref(alice).control_requests.iter().all(|(_, _, r)| !r.is_empty()));
+    assert!(
+        sim.client_ref(alice)
+            .control_requests
+            .iter()
+            .all(|(_, _, r)| !r.is_empty())
+    );
 }
 
-fn put_fields(sim: &VirtualDriver, client: usize, nth: usize) -> (Vec<u8>, Vec<u8>, Vec<u8>, ([u8; 16], bool, u32), Vec<u8>) {
+/// The fields of a `LINK_PUT` that a re-issue must repeat, and its token.
+type PutFields = (Vec<u8>, Vec<u8>, Vec<u8>, ([u8; 16], bool, u32), Vec<u8>);
+
+fn put_fields(sim: &VirtualDriver, client: usize, nth: usize) -> PutFields {
     let puts: Vec<_> = sim
         .client_ref(client)
         .control_requests
         .iter()
-        .filter(|(_, _, reqs)| matches!(reqs.first().map(|r| &r.cmd), Some(RequestCmd::LinkPut { .. })))
+        .filter(|(_, _, reqs)| {
+            matches!(
+                reqs.first().map(|r| &r.cmd),
+                Some(RequestCmd::LinkPut { .. })
+            )
+        })
         .collect();
     let (_, _, reqs) = puts.get(nth).unwrap();
-    let Some(RequestCmd::LinkPut { ld_id, one_time, expires_bucket, owner_pk, token, blob_part, .. }) = reqs.first().map(|r| &r.cmd) else {
+    let Some(RequestCmd::LinkPut {
+        ld_id,
+        one_time,
+        expires_bucket,
+        owner_pk,
+        token,
+        blob_part,
+        ..
+    }) = reqs.first().map(|r| &r.cmd)
+    else {
         unreachable!()
     };
     let conts: Vec<u8> = reqs
@@ -203,10 +266,19 @@ fn owner_status_reissues_identical_put() {
     sim.run_until(t1);
     sim.client(alice)
         .sched
-        .schedule_control(t1, ControlKind::LinkGetOwner(1), RelayId(0), 1, When::Prompt)
+        .schedule_control(
+            t1,
+            ControlKind::LinkGetOwner(1),
+            RelayId(0),
+            1,
+            When::Prompt,
+        )
         .unwrap();
     sim.run_until(t1);
-    assert_eq!(sim.client_ref(alice).link_status.last().map(|s| (s.2, s.3)), Some((false, false)));
+    assert_eq!(
+        sim.client_ref(alice).link_status.last().map(|s| (s.2, s.3)),
+        Some((false, false))
+    );
     sim.run_until(t1 + 3_700_000);
     let puts: Vec<u64> = sim
         .client_ref(alice)
@@ -217,10 +289,17 @@ fn owner_status_reissues_identical_put() {
         .collect();
     assert_eq!(puts.len(), 2, "the PUT was issued once more");
     let again = *puts.get(1).unwrap();
-    assert!((t1 + 60_000..=t1 + 3_600_000).contains(&again), "after U[1 min, 60 min]: {again}");
+    assert!(
+        (t1 + 60_000..=t1 + 3_600_000).contains(&again),
+        "after U[1 min, 60 min]: {again}"
+    );
     let (b1, c1, pk1, meta1, token1) = put_fields(&sim, alice, 0);
     let (b2, c2, pk2, meta2, token2) = put_fields(&sim, alice, 1);
-    assert_eq!((b1, c1, pk1, meta1), (b2, c2, pk2, meta2), "identical LINK_PUT");
+    assert_eq!(
+        (b1, c1, pk1, meta1),
+        (b2, c2, pk2, meta2),
+        "identical LINK_PUT"
+    );
     assert_ne!(token1, token2, "a new token for the new link");
 }
 
@@ -235,7 +314,13 @@ fn control_op_retried_after_link_failure() {
     let t = sim.now();
     sim.client(alice)
         .sched
-        .schedule_control(t, ControlKind::QueueNew(QueueId(700)), RelayId(0), 1, When::Prompt)
+        .schedule_control(
+            t,
+            ControlKind::QueueNew(QueueId(700)),
+            RelayId(0),
+            1,
+            When::Prompt,
+        )
         .unwrap();
     while sim.client_ref(alice).controls_started.len() < 2 {
         let next = sim.now() + 30_000;
@@ -247,8 +332,9 @@ fn control_op_retried_after_link_failure() {
     assert_eq!(c.controls_done.len(), 1, "executed exactly once");
     let starts: Vec<u64> = c.controls_started.iter().map(|(t, _, _)| *t).collect();
     assert_eq!(starts.len(), 3);
-    assert!(starts[1] - starts[0] <= 180_000, "first retry within U[0, 180 s]");
-    assert!(starts[2] - starts[1] <= 360_000, "second within U[0, 360 s]");
+    let gap = |i: usize| starts.get(i + 1).unwrap() - starts.get(i).unwrap();
+    assert!(gap(0) <= 180_000, "first retry within U[0, 180 s]");
+    assert!(gap(1) <= 360_000, "second within U[0, 360 s]");
 }
 
 /// CO-07: control operations leave the scheduled traces unchanged; the only extra units are the one-shot links'.
@@ -265,7 +351,13 @@ fn control_ops_leave_scheduled_traces_unchanged() {
             for n in 0..5_u32 {
                 sim.client(alice)
                     .sched
-                    .schedule_control(now, ControlKind::QueueNew(QueueId(800 + n)), RelayId(0), u64::from(n), When::Prompt)
+                    .schedule_control(
+                        now,
+                        ControlKind::QueueNew(QueueId(800 + n)),
+                        RelayId(0),
+                        u64::from(n),
+                        When::Prompt,
+                    )
                     .unwrap();
             }
         }
@@ -299,7 +391,13 @@ fn control_op_draws_from_timing_rng() {
         let before = sim.client_ref(alice).sched.timing_draws();
         sim.client(alice)
             .sched
-            .schedule_control(0, ControlKind::QueueNew(QueueId(n)), RelayId(0), u64::from(n), When::Delayed)
+            .schedule_control(
+                0,
+                ControlKind::QueueNew(QueueId(n)),
+                RelayId(0),
+                u64::from(n),
+                When::Delayed,
+            )
             .unwrap();
         assert_eq!(sim.client_ref(alice).sched.timing_draws() - before, 1);
     }
@@ -326,19 +424,36 @@ fn pool_keeps_two_spares_per_relay() {
     let mut sim = driver();
     let alice = client(&mut sim, Mode::Strict, 91);
     let now = sim.now();
-    sim.client(alice).sched.manage_pool(now, RelayId(0)).unwrap();
-    assert_eq!(sim.client_ref(alice).sched.pool_spares(RelayId(0)), 0, "not refilled synchronously");
+    sim.client(alice)
+        .sched
+        .manage_pool(now, RelayId(0))
+        .unwrap();
+    assert_eq!(
+        sim.client_ref(alice).sched.pool_spares(RelayId(0)),
+        0,
+        "not refilled synchronously"
+    );
     sim.run_until(3_600_000 + 10);
     assert_eq!(sim.client_ref(alice).sched.pool_spares(RelayId(0)), 2);
     let t = sim.now();
     let (taken, _) = {
         let c = sim.client(alice);
-        c.sched.take_pool_queue(t, RelayId(0), 80_000, &mut NoCells).unwrap()
+        c.sched
+            .take_pool_queue(t, RelayId(0), 80_000, &mut NoCells)
+            .unwrap()
     };
     assert!(taken.is_some());
-    assert_eq!(sim.client_ref(alice).sched.pool_spares(RelayId(0)), 1, "one left right after the hand-out");
+    assert_eq!(
+        sim.client_ref(alice).sched.pool_spares(RelayId(0)),
+        1,
+        "one left right after the hand-out"
+    );
     sim.run_until(t + 3_600_010);
-    assert_eq!(sim.client_ref(alice).sched.pool_spares(RelayId(0)), 2, "replaced");
+    assert_eq!(
+        sim.client_ref(alice).sched.pool_spares(RelayId(0)),
+        2,
+        "replaced"
+    );
 }
 
 use crate::m6_sched_bal::NoCells;
@@ -349,16 +464,26 @@ fn pool_queue_fetched_at_pool_period() {
     let mut sim = driver();
     let alice = client_with(&mut sim, Mode::Strict, pool_params(1), 101);
     let now = sim.now();
-    sim.client(alice).sched.manage_pool(now, RelayId(0)).unwrap();
+    sim.client(alice)
+        .sched
+        .manage_pool(now, RelayId(0))
+        .unwrap();
     sim.run_until(3_600_000 + 190_000);
     let (slot, _) = run_until_link_up(&mut sim, alice, LinkKind::Recv);
     sim.run_until(sim.now() + 900_000);
-    let fetches: Vec<u64> = frames_of(&sim, alice, Dir::C2R, slot).iter().map(|e| e.t_ms).collect();
+    let fetches: Vec<u64> = frames_of(&sim, alice, Dir::C2R, slot)
+        .iter()
+        .map(|e| e.t_ms)
+        .collect();
     assert!(fetches.len() >= 10);
     for pair in fetches.windows(2) {
-        assert_eq!(pair[1] - pair[0], 80_000);
+        assert_eq!(pair.get(1).unwrap() - pair.first().unwrap(), 80_000);
     }
-    assert!(frames_of(&sim, alice, Dir::C2R, slot).iter().all(|e| e.len == FRAME));
+    assert!(
+        frames_of(&sim, alice, Dir::C2R, slot)
+            .iter()
+            .all(|e| e.len == FRAME)
+    );
 }
 
 /// QP-03: accepting an invitation takes a spare without a `QUEUE_NEW` at that moment; the replacement comes later.
@@ -367,7 +492,10 @@ fn pool_handout_needs_no_queue_new() {
     let mut sim = driver();
     let alice = client(&mut sim, Mode::Strict, 111);
     let now = sim.now();
-    sim.client(alice).sched.manage_pool(now, RelayId(0)).unwrap();
+    sim.client(alice)
+        .sched
+        .manage_pool(now, RelayId(0))
+        .unwrap();
     sim.run_until(3_600_000 + 10);
     let t = sim.now();
     let started_before = sim.client_ref(alice).controls_started.len();
@@ -378,7 +506,11 @@ fn pool_handout_needs_no_queue_new() {
         .unwrap();
     assert!(taken.is_some());
     sim.run_until(t);
-    assert_eq!(sim.client_ref(alice).controls_started.len(), started_before, "no QUEUE_NEW at the hand-out");
+    assert_eq!(
+        sim.client_ref(alice).controls_started.len(),
+        started_before,
+        "no QUEUE_NEW at the hand-out"
+    );
     sim.run_until(t + 3_700_000);
     let replacement = sim
         .client_ref(alice)
@@ -388,7 +520,10 @@ fn pool_handout_needs_no_queue_new() {
         .map(|(at, _, _)| *at)
         .next()
         .unwrap();
-    assert!(replacement >= t + 60_000, "the replacement starts ≥ 1 min later: {replacement} vs {t}");
+    assert!(
+        replacement >= t + 60_000,
+        "the replacement starts ≥ 1 min later: {replacement} vs {t}"
+    );
 }
 
 /// QP-04: a spare is fetched like any queue, so it never reaches `QUEUE_IDLE_TTL` (31 days with the relay's sweeper).
@@ -397,7 +532,10 @@ fn pool_queue_never_idles_out() {
     let mut sim = driver();
     let alice = client_with(&mut sim, Mode::Strict, pool_params(1), 121);
     let now = sim.now();
-    sim.client(alice).sched.manage_pool(now, RelayId(0)).unwrap();
+    sim.client(alice)
+        .sched
+        .manage_pool(now, RelayId(0))
+        .unwrap();
     sim.run_until(31 * 86_400_000);
     let c = sim.client_ref(alice);
     let creations = c
@@ -405,14 +543,22 @@ fn pool_queue_never_idles_out() {
         .iter()
         .filter(|(_, _, k)| matches!(k, ControlKind::QueueNew(_)))
         .count();
-    assert_eq!(creations, 1, "never re-created: it never answered present 2");
+    assert_eq!(
+        creations, 1,
+        "never re-created: it never answered present 2"
+    );
     assert_eq!(c.sched.pool_spares(RelayId(0)), 1);
     // and it is still being fetched at the end: the last hour has its 45 `FETCH`es
     let end = 31 * 86_400_000_u64;
     let last_hour = c
         .trace
         .iter()
-        .filter(|e| e.dir == Dir::C2R && e.len == FRAME && e.t_ms > end - 3_600_000 && e.slot < CONTROL_SLOT_BASE)
+        .filter(|e| {
+            e.dir == Dir::C2R
+                && e.len == FRAME
+                && e.t_ms > end - 3_600_000
+                && e.slot < CONTROL_SLOT_BASE
+        })
         .count();
     assert!(last_hour >= 44, "{last_hour} FETCHes in the last hour");
 }
@@ -423,7 +569,10 @@ fn pool_handout_recreates_link_with_announced_period() {
     let mut sim = driver();
     let alice = client_with(&mut sim, Mode::Strict, pool_params(1), 131);
     let now = sim.now();
-    sim.client(alice).sched.manage_pool(now, RelayId(0)).unwrap();
+    sim.client(alice)
+        .sched
+        .manage_pool(now, RelayId(0))
+        .unwrap();
     sim.run_until(3_600_000 + 190_000);
     let (old_slot, _) = run_until_link_up(&mut sim, alice, LinkKind::Recv);
     let t = sim.now();
@@ -439,13 +588,22 @@ fn pool_handout_recreates_link_with_announced_period() {
     )), "the 80 s link closes");
     let keys_before = sim.client_ref(alice).connects.len();
     sim.run_until(t + 190_000);
-    let new = sim.client_ref(alice).connects.iter().skip(keys_before).find(|(_, id, _)| id.0 != old_slot).unwrap();
+    let new = sim
+        .client_ref(alice)
+        .connects
+        .iter()
+        .skip(keys_before)
+        .find(|(_, id, _)| id.0 != old_slot)
+        .unwrap();
     assert!(new.0 >= t && new.0 <= t + 180_000, "new phase");
     let new_slot = new.1.0;
     sim.run_until(new.0 + 120_000);
-    let fetches: Vec<u64> = frames_of(&sim, alice, Dir::C2R, new_slot).iter().map(|e| e.t_ms).collect();
+    let fetches: Vec<u64> = frames_of(&sim, alice, Dir::C2R, new_slot)
+        .iter()
+        .map(|e| e.t_ms)
+        .collect();
     assert!(fetches.len() >= 5);
     for pair in fetches.windows(2) {
-        assert_eq!(pair[1] - pair[0], 10_000);
+        assert_eq!(pair.get(1).unwrap() - pair.first().unwrap(), 10_000);
     }
 }

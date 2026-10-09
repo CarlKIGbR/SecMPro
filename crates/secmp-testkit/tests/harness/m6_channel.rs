@@ -10,9 +10,7 @@ use secmp_crypto::SecretBytes;
 use secmp_proto::wire::frame::{Cellr, ErrCode, Request, RequestCmd, Response, ResponseCmd};
 use secmp_testkit::harness::EntropyPool;
 use secmp_transport::channel::counters;
-use secmp_transport::{
-    Command, ConnectOutcome, Error, Outcome, RecvCap, SendCap, Session,
-};
+use secmp_transport::{Command, ConnectOutcome, Error, Outcome, RecvCap, SendCap, Session};
 
 use crate::scripted::{self, Script, Scripted, cell, dummy, err};
 
@@ -85,8 +83,8 @@ struct Peer {
 fn caps() -> (SendCap, RecvCap) {
     let recv_seed = SecretBytes::from_slice(&[0x41; 32]).unwrap();
     let recv = RecvCap::from_seed(&recv_seed).unwrap();
-    let send = SendCap::from_route([0x42; 16], &SecretBytes::from_slice(&[0x43; 32]).unwrap())
-        .unwrap();
+    let send =
+        SendCap::from_route([0x42; 16], &SecretBytes::from_slice(&[0x43; 32]).unwrap()).unwrap();
     (send, recv)
 }
 
@@ -167,7 +165,10 @@ fn prepare_seals_before_write() {
     let before = p.tap.written();
     p.session.write_prepared(&prepared).unwrap();
     assert_eq!(
-        (counters::seal_calls() - seal1, counters::sign_calls() - sign1),
+        (
+            counters::seal_calls() - seal1,
+            counters::sign_calls() - sign1
+        ),
         (0, 0),
         "no crypto on the write path"
     );
@@ -238,7 +239,8 @@ fn pipelined_responses_matched_in_order() {
 #[test]
 fn pipelined_mismatch_closes_link() {
     // request 1 answered with request 2's cmd_seq
-    let wrong_seq: Script = Box::new(|request: &Request, _| vec![scripted::ok(request.cmd_seq + 1)]);
+    let wrong_seq: Script =
+        Box::new(|request: &Request, _| vec![scripted::ok(request.cmd_seq + 1)]);
     let mut p = peer(wrong_seq, None);
     let a = p.session.prepare(&Command::Ping).unwrap();
     p.session.write_prepared(&a).unwrap();
@@ -332,7 +334,8 @@ impl Write for Dead {
 fn closed_before_relayinfo_is_its_own_outcome() {
     let id = scripted::identity();
     let mut entropy = EntropyPool::new("m6-channel-client", 1);
-    let outcome = Session::connect_outcome(Dead, id.fp, Some(&id.access), scripted::T0, entropy.get());
+    let outcome =
+        Session::connect_outcome(Dead, id.fp, Some(&id.access), scripted::T0, entropy.get());
     assert!(matches!(outcome, ConnectOutcome::ClosedBeforeRelayInfo));
 
     let mut wrong = id.fp;

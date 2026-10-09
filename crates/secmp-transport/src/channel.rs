@@ -200,6 +200,13 @@ impl Channel {
         }
     }
 
+    /// A channel over an established client link (tests and fuzz targets only, feature `harness`).
+    #[cfg(feature = "harness")]
+    #[must_use]
+    pub fn from_link_kat(link: Link) -> Self {
+        Self::new(link)
+    }
+
     /// The link's `sess_id`.
     #[must_use]
     pub const fn sess_id(&self) -> &Id {
@@ -440,9 +447,9 @@ impl Channel {
             frames,
         } = done;
         let outcome = match expect {
-            Expect::Ping => Outcome::Ping(
-                single(frames, &[], |c| matches!(c, ResponseCmd::Ok))?.map(|_| ()),
-            ),
+            Expect::Ping => {
+                Outcome::Ping(single(frames, &[], |c| matches!(c, ResponseCmd::Ok))?.map(|_| ()))
+            }
             Expect::Send => Outcome::Send(
                 match single(frames, &[ErrCode::NoQueue, ErrCode::Auth], |c| {
                     matches!(c, ResponseCmd::OkSend { .. })
@@ -508,7 +515,9 @@ fn check_fetch(
             return Err(Error::Rejected);
         };
         match c {
-            Cellr::Error { error: e, rid: r, .. } if at == 0 => {
+            Cellr::Error {
+                error: e, rid: r, ..
+            } if at == 0 => {
                 if r != *rid {
                     return Err(Error::Rejected);
                 }

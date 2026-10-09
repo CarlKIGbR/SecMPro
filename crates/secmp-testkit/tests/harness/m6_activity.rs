@@ -6,17 +6,20 @@
 //! trace — the user's messages, the peers' messages, receipts, focus changes — is applied around the scheduler, never to
 //! it; the idle run is the same scenario with the same timing seed and no activity.
 
+use secmp_client_core::scheduler::control::When;
 use secmp_client_core::scheduler::conversation::{Conversation, Conversations};
 use secmp_client_core::scheduler::outbox::{MemOutbox, MemPersist, OutMessage, Outbox};
 use secmp_client_core::scheduler::params::{Mode, Params};
 use secmp_client_core::scheduler::types::{CellSource, ControlKind, QueueId, RelayId};
-use secmp_client_core::scheduler::control::When;
 use secmp_crypto::Zeroizing;
 use secmp_proto::wire::cell::AppKind;
-use secmp_testkit::harness::{CONTROL_SLOT_BASE, Dir, EntropyPool, START_UNIX, Trace, VirtualDriver};
+use secmp_testkit::harness::{
+    CONTROL_SLOT_BASE, Dir, EntropyPool, START_UNIX, Trace, VirtualDriver,
+};
 use secmp_transport::{QueueTransport, RecvCap, RelayQueueTransport, SendCap};
 
-use crate::m6_common::{client_with, driver, max_dt};
+use crate::m6_common::{client_with, driver, evidence, max_dt};
+use crate::m6_rand::Mix;
 
 type PeerConvs = Conversations<MemOutbox, MemPersist, EntropyPool>;
 
@@ -58,50 +61,38 @@ pub struct Activity {
     pub events: Vec<(u64, Event)>,
 }
 
-/// A small deterministic generator for the activity (not the timing randomness, not cryptographic).
-struct Mix(u64);
-
-impl Mix {
-    fn next(&mut self) -> u64 {
-        self.0 = self.0.wrapping_add(0x9e37_79b9_7f4a_7c15);
-        let mut z = self.0;
-        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-        z ^ (z >> 31)
-    }
-
-    fn below(&mut self, n: u64) -> u64 {
-        self.next() % n
-    }
-
-    /// A length 1…65535, log-uniform in the bit length.
-    fn len(&mut self) -> usize {
-        let bits = self.below(17);
-        let top = (1_u64 << bits) - 1;
-        usize::try_from(1 + self.below(top.max(1)).min(65_534)).unwrap()
-    }
-}
-
 /// A trace of `hours` of user activity: per second the user sends with probability `rate`/1000 (bursts of 100 now and
 /// then), the peers send at a fifth of that, focus toggles at random.
 pub fn activity(trace: u64, hours: u64, contacts: usize) -> Activity {
-    let mut mix = Mix(0xac71_0000 ^ trace.wrapping_mul(0x9e37_79b9));
+    let mut mix = Mix::new(0xac71_0000 ^ trace.wrapping_mul(0x9e37_79b9));
     let user_milli = mix.below(1001);
-    let peer_milli = user_milli / 5;
+    let peer_milli = user_milli.checked_div(5).unwrap();
     let mut events = Vec::new();
     let contacts_u64 = u64::try_from(contacts).unwrap();
-    for sec in 1..hours * 3600 {
-        let t = sec * 1000 + mix.below(1000);
+    for sec in 1..hours.saturating_mul(3600) {
+        let t = sec.saturating_mul(1000).saturating_add(mix.below(1000));
         if mix.below(1000) < user_milli {
             let contact = usize::try_from(mix.below(contacts_u64)).unwrap();
             let burst = if mix.below(500) == 0 { 100 } else { 1 };
             for _ in 0..burst {
-                events.push((t, Event::UserSend { contact, len: mix.len() }));
+                events.push((
+                    t,
+                    Event::UserSend {
+                        contact,
+                        len: mix.len(),
+                    },
+                ));
             }
         }
         if mix.below(1000) < peer_milli {
             let contact = usize::try_from(mix.below(contacts_u64)).unwrap();
-            events.push((t, Event::PeerSend { contact, len: mix.len() }));
+            events.push((
+                t,
+                Event::PeerSend {
+                    contact,
+                    len: mix.len(),
+                },
+            ));
         }
         if mix.below(900) == 0 {
             events.push((t, Event::Focus));
@@ -129,11 +120,26 @@ impl Rig {
         let now = sim.now();
         let mut peers = Vec::new();
         for (n, (ab, ba)) in sc.contacts.iter().enumerate() {
-            let y = client_with(&mut sim, Mode::Strict, Params::default(), sc.seed.wrapping_add(1000 + u64::try_from(n).unwrap()));
+            let y = client_with(
+                &mut sim,
+                Mode::Strict,
+                Params::default(),
+                sc.seed
+                    .wrapping_add(1000)
+                    .wrapping_add(u64::try_from(n).unwrap()),
+            );
             let (rc_p, sc_p, _, _) = sim.new_queue(y);
             let (rc_x, sc_x, _, _) = sim.new_queue(x);
-            let x_send = sim.client(x).sched.add_send_queue(now, RelayId(0), sc_p, *ab).unwrap();
-            let x_recv = sim.client(x).sched.add_recv_queue(now, RelayId(0), rc_x, *ba).unwrap();
+            let x_send = sim
+                .client(x)
+                .sched
+                .add_send_queue(now, RelayId(0), sc_p, *ab)
+                .unwrap();
+            let x_recv = sim
+                .client(x)
+                .sched
+                .add_recv_queue(now, RelayId(0), rc_x, *ba)
+                .unwrap();
             let (state_x, state_p) = sim.ratchet_states(x, y);
             let key_x = sim.peer_key(x);
             let key_p = sim.peer_key(y);
@@ -182,7 +188,14 @@ impl Rig {
         let unix = self.sim.harness().clock().unix();
         let stream = self.sim.harness_mut().open_stream().unwrap();
         let x = self.x;
-        RelayQueueTransport::connect(stream, fp, Some(&access), unix, self.sim.client(x).entropy.get()).unwrap()
+        RelayQueueTransport::connect(
+            stream,
+            fp,
+            Some(&access),
+            unix,
+            self.sim.client(x).entropy.get(),
+        )
+        .unwrap()
     }
 
     /// The peers read what `x` sent and answer with what they have (receipts, their messages), at most 20 cells each.
@@ -200,7 +213,7 @@ impl Rig {
                     peer.drained_to = peer.drained_to.max(id);
                 }
             }
-            let mut sent = 0;
+            let mut sent = 0_usize;
             while sent < 20
                 && peer
                     .convs
@@ -209,7 +222,7 @@ impl Rig {
             {
                 let cell = peer.convs.prepare_cell(QueueId(0), now).unwrap().unwrap();
                 t.send(&peer.into_x, &cell.cell).unwrap();
-                sent += 1;
+                sent = sent.saturating_add(1);
             }
         }
     }
@@ -219,7 +232,13 @@ impl Rig {
             Event::UserSend { contact, len } => {
                 let idx = self.peers.get(contact).unwrap().x_conv;
                 let x = self.x;
-                self.sim.client(x).convs.get_mut(idx).unwrap().outbox_mut().enqueue(text(n, len), now);
+                self.sim
+                    .client(x)
+                    .convs
+                    .get_mut(idx)
+                    .unwrap()
+                    .outbox_mut()
+                    .enqueue(text(n, len), now);
             }
             Event::PeerSend { contact, len } => {
                 self.peers
@@ -229,7 +248,7 @@ impl Rig {
                     .get_mut(0)
                     .unwrap()
                     .outbox_mut()
-                    .enqueue(text(1_000_000 + n, len), now);
+                    .enqueue(text(n.saturating_add(1_000_000), len), now);
             }
             // fed to the application layer, never to the scheduler: there is nothing to feed in M6
             Event::Focus => {}
@@ -239,12 +258,12 @@ impl Rig {
     /// Run `hours` of virtual time; `act` is applied around the scheduler. Returns the traces and the timing draws at the
     /// end of every hour.
     pub fn run(&mut self, hours: u64, act: Option<&Activity>) -> Run {
-        let end = hours * 3_600_000;
+        let end = hours.saturating_mul(3_600_000);
         let mut events = act.map(|a| a.events.iter().copied().peekable());
         let mut next_pump = 600_000;
         let mut next_hour = 3_600_000;
         let mut draws = Vec::new();
-        let mut n = 0;
+        let mut n = 0_u64;
         let x = self.x;
         loop {
             let next_event = events.as_mut().and_then(|it| it.peek().map(|(t, _)| *t));
@@ -254,17 +273,20 @@ impl Rig {
                 .min()
                 .unwrap();
             self.sim.run_until(t);
-            while let Some((_, e)) = events.as_mut().and_then(|it| it.next_if(|(et, _)| *et <= t)) {
-                n += 1;
+            while let Some((_, e)) = events
+                .as_mut()
+                .and_then(|it| it.next_if(|(et, _)| *et <= t))
+            {
+                n = n.saturating_add(1);
                 self.apply(e, t, n);
             }
             if t == next_pump {
                 self.pump(t);
-                next_pump += 600_000;
+                next_pump = next_pump.saturating_add(600_000);
             }
             if t == next_hour {
                 draws.push(self.sim.client_ref(x).sched.timing_draws());
-                next_hour += 3_600_000;
+                next_hour = next_hour.saturating_add(3_600_000);
             }
             if t == end {
                 break;
@@ -278,7 +300,15 @@ impl Rig {
         let to_x = self
             .peers
             .iter()
-            .map(|p| self.sim.client_ref(x).convs.get(p.x_conv).unwrap().received().len())
+            .map(|p| {
+                self.sim
+                    .client_ref(x)
+                    .convs
+                    .get(p.x_conv)
+                    .unwrap()
+                    .received()
+                    .len()
+            })
             .sum();
         Run {
             to_peers,
@@ -318,7 +348,9 @@ pub struct Run {
 
 /// Map `f` over `items` on as many threads as the machine offers.
 pub fn par_map<T: Send, R: Send>(items: Vec<T>, f: impl Fn(T) -> R + Sync) -> Vec<R> {
-    let workers = std::thread::available_parallelism().map_or(2, usize::from).min(items.len().max(1));
+    let workers = std::thread::available_parallelism()
+        .map_or(2, usize::from)
+        .min(items.len().max(1));
     let queue = std::sync::Mutex::new(items.into_iter().enumerate().collect::<Vec<_>>());
     let out = std::sync::Mutex::new(Vec::new());
     std::thread::scope(|s| {
@@ -340,13 +372,16 @@ pub fn par_map<T: Send, R: Send>(items: Vec<T>, f: impl Fn(T) -> R + Sync) -> Ve
 
 /// Compare an active run with the idle one: same length, sizes, directions, slots; the largest |Δt|.
 pub fn compare(idle: &Run, active: &Run) -> (Option<u64>, Option<u64>) {
-    (max_dt(&idle.c2r, &active.c2r), max_dt(&idle.r2c, &active.r2c))
+    (
+        max_dt(&idle.c2r, &active.c2r),
+        max_dt(&idle.r2c, &active.r2c),
+    )
 }
 
-fn independence(mode: Mode, contacts: Vec<(u64, u64)>, traces: u64, hours: u64) -> (u64, u64) {
+fn independence(mode: Mode, contacts: &[(u64, u64)], traces: u64, hours: u64) -> (u64, u64) {
     let sc = |seed: u64| Scenario {
         mode,
-        contacts: contacts.clone(),
+        contacts: contacts.to_vec(),
         pool: true,
         seed,
     };
@@ -360,14 +395,20 @@ fn independence(mode: Mode, contacts: Vec<(u64, u64)>, traces: u64, hours: u64) 
         let mut rig = Rig::new(&sc(77), Params::default());
         let run = rig.run(hours, Some(&act));
         let (c, r) = compare(&idle, &run);
-        (trace, c, r, run.draws == idle.draws, run.to_peers + run.to_x)
+        (
+            trace,
+            c,
+            r,
+            run.draws == idle.draws,
+            run.to_peers.saturating_add(run.to_x),
+        )
     });
     let (mut max_c2r, mut max_r2c) = (0, 0);
     let real: usize = results.iter().map(|r| r.4).sum();
     assert!(real > 50, "the traces carried real messages: {real}");
     for (trace, c, r, same_draws, _) in results {
-        let c = c.unwrap_or_else(|| panic!("trace {trace}: the C2R trace differs in length, size, direction or slot"));
-        let r = r.unwrap_or_else(|| panic!("trace {trace}: the R2C trace differs in length, size, direction or slot"));
+        let c = c.expect("the C2R trace differs in length, size, direction or slot");
+        let r = r.expect("the R2C trace differs in length, size, direction or slot");
         assert!(c <= 5, "trace {trace}: C2R max |Δt| = {c}");
         assert!(r <= 5, "trace {trace}: R2C max |Δt| = {r}");
         assert!(same_draws, "trace {trace}: timing draws differ");
@@ -378,27 +419,30 @@ fn independence(mode: Mode, contacts: Vec<(u64, u64)>, traces: u64, hours: u64) 
 }
 
 fn report(name: &str, c2r: u64, r2c: u64) {
-    std::eprintln!("{name}: max |Δt| C2R = {c2r} ms, R2C = {r2c} ms");
+    evidence(
+        name,
+        &format!("{name}: max |Δt| C2R = {c2r} ms, R2C = {r2c} ms"),
+    );
 }
 
 /// AI-01: Strict, two contacts and the pool, 64 activity traces of 6 h each: the emitted frames equal the idle run's.
 #[test]
 fn activity_independence_strict_virtual() {
-    let (c, r) = independence(Mode::Strict, vec![(10_000, 10_000), (20_000, 40_000)], 64, 6);
+    let (c, r) = independence(Mode::Strict, &[(10_000, 10_000), (20_000, 40_000)], 64, 6);
     report("AI-01", c, r);
 }
 
 /// AI-02: as AI-01, Balanced with four contacts.
 #[test]
 fn activity_independence_balanced_virtual() {
-    let (c, r) = independence(Mode::Balanced, vec![(10_000, 10_000); 4], 64, 6);
+    let (c, r) = independence(Mode::Balanced, &[(10_000, 10_000); 4], 64, 6);
     report("AI-02", c, r);
 }
 
 /// AI-03: as AI-01, Low-bw with five contacts at 40 s.
 #[test]
 fn activity_independence_lowbw_virtual() {
-    let (c, r) = independence(Mode::LowBw, vec![(40_000, 40_000); 5], 64, 6);
+    let (c, r) = independence(Mode::LowBw, &[(40_000, 40_000); 5], 64, 6);
     report("AI-03", c, r);
 }
 
@@ -415,7 +459,8 @@ fn activity_independence_when_receiving() {
     let idle = Rig::new(&sc(78), Params::default()).run(hours, None);
     let results = par_map((0..8_u64).collect(), |trace| {
         let mut act = activity(trace + 500, hours, 2);
-        act.events.retain(|(_, e)| !matches!(e, Event::UserSend { .. }));
+        act.events
+            .retain(|(_, e)| !matches!(e, Event::UserSend { .. }));
         let mut rig = Rig::new(&sc(78), Params::default());
         let run = rig.run(hours, Some(&act));
         compare(&idle, &run)
@@ -508,16 +553,30 @@ fn control_ops_are_the_only_extra_units() {
             .unwrap();
     }
     let active = rig.run(hours, None);
-    assert_eq!(compare(&idle, &active), (Some(0), Some(0)), "the scheduled links are unchanged");
-    assert!(active.extra_units > 0 && idle.extra_units == 0, "extra units: {}", active.extra_units);
-    assert!(active.control_c2r.iter().all(|e| e.slot >= CONTROL_SLOT_BASE));
+    assert_eq!(
+        compare(&idle, &active),
+        (Some(0), Some(0)),
+        "the scheduled links are unchanged"
+    );
+    assert!(
+        active.extra_units > 0 && idle.extra_units == 0,
+        "extra units: {}",
+        active.extra_units
+    );
+    assert!(
+        active
+            .control_c2r
+            .iter()
+            .all(|e| e.slot >= CONTROL_SLOT_BASE)
+    );
 }
 
 /// AI-09: nothing on the tick path reads the outbox — `tick` names neither the outbox nor the cell source, and the core
 /// knows no outbox at all.
 #[test]
 fn tick_path_reads_no_outbox() {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../secmp-client-core/src/scheduler");
+    let root =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../secmp-client-core/src/scheduler");
     let core = std::fs::read_to_string(root.join("core/mod.rs")).unwrap();
     let start = core.find("fn tick(").expect("the tick function");
     let rest = core.get(start..).unwrap();
@@ -541,8 +600,16 @@ fn tick_path_reads_no_outbox() {
     for word in ["outbox", "cellsource", "source."] {
         assert!(!body.contains(word), "`tick` mentions `{word}`");
     }
-    for f in ["core/mod.rs", "core/pure.rs", "core/backoff.rs", "control.rs", "pool.rs"] {
-        let text = std::fs::read_to_string(root.join(f)).unwrap().to_lowercase();
+    for f in [
+        "core/mod.rs",
+        "core/pure.rs",
+        "core/backoff.rs",
+        "control.rs",
+        "pool.rs",
+    ] {
+        let text = std::fs::read_to_string(root.join(f))
+            .unwrap()
+            .to_lowercase();
         assert!(!text.contains("outbox"), "{f} mentions the outbox");
     }
 }

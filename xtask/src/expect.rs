@@ -245,6 +245,7 @@ pub(crate) const TR_PERF_KINDS: &[&str] = &["chain", "step"];
 /// sealed arbitrary plaintexts with `LINK_PUT`/`CONT` interleavings (`relay_link_session`, FZ-08).
 pub(crate) const FUZZ_TARGETS: &[&str] = &[
     "caead_open",
+    "client_pipeline_responses",
     "ed25519_verify",
     "hx_accept_raw",
     "hx_accept_structured",
@@ -270,6 +271,7 @@ pub(crate) const FUZZ_TARGETS: &[&str] = &[
     "q_response_decode",
     "relay_executor",
     "relay_link_session",
+    "scheduler_event_sequence",
     "tr_decrypt",
     "tr_state",
     "x25519_dh",
@@ -284,7 +286,12 @@ pub(crate) const FUZZ_TARGETS: &[&str] = &[
 /// tokens and seals (`fuzz/fuzz_targets/relay_*.rs` headers), a layout no frozen suite has — so they rely on their
 /// tracked seeds (`fuzz/corpus/relay_executor/`, `fuzz/corpus/relay_link_session/`, M4 C-6).
 #[cfg(test)]
-pub(crate) const FUZZ_TRACKED_ONLY: &[&str] = &["relay_executor", "relay_link_session"];
+pub(crate) const FUZZ_TRACKED_ONLY: &[&str] = &[
+    "client_pipeline_responses",
+    "relay_executor",
+    "relay_link_session",
+    "scheduler_event_sequence",
+];
 
 /// Seconds per fuzz target of the `fuzz` gate (ci-full step 6, docs/06 §4: "≈2 min per target on every PR").
 pub(crate) const FUZZ_SMOKE_SECONDS: u64 = 120;
@@ -363,6 +370,7 @@ pub(crate) const FUZZ_DEEP_NIGHTLY_SECONDS: u64 = 3_600;
 ///   length, a 4335-byte plaintext) = 69425.
 pub(crate) const FUZZ_MAX_LEN: &[(&str, usize)] = &[
     ("caead_open", 12_618),
+    ("client_pipeline_responses", 34_702),
     ("ed25519_verify", 4_243),
     ("hx_accept_raw", 49_166),
     ("hx_accept_structured", 12_020),
@@ -388,6 +396,7 @@ pub(crate) const FUZZ_MAX_LEN: &[(&str, usize)] = &[
     ("q_response_decode", 4_338),
     ("relay_executor", 4_322),
     ("relay_link_session", 69_426),
+    ("scheduler_event_sequence", 970),
     ("tr_decrypt", 4_098),
     ("tr_state", 38_587),
     ("x25519_dh", 97),
@@ -725,7 +734,7 @@ pub(crate) const MIRI_UNSUPPORTED: &[(&str, &str, &str)] = &[
 
 /// Packages containing Kani harnesses (docs/06 §4). M2: `secmp-proto` (`src/kani_proofs.rs`). M5 (Phase B):
 /// `secmp-relay` (`src/kani_proofs.rs`, TEST-SPEC-M5 K-05…K-07).
-pub(crate) const KANI_PACKAGES: &[&str] = &["secmp-proto", "secmp-relay"];
+pub(crate) const KANI_PACKAGES: &[&str] = &["secmp-client-core", "secmp-proto", "secmp-relay"];
 
 /// The Kani harnesses (M2 review C5): the gate refuses a run unless Kani reports exactly these as successfully
 /// verified ("Complete - N successfully verified harnesses, 0 failures, N total." with N = this count), so a
@@ -738,12 +747,16 @@ pub(crate) const KANI_HARNESSES: &[&str] = &[
     "kani_proofs::header_v1",
     "kani_proofs::header_v1_reencodes",
     "kani_proofs::kani_accept_opk_delete_only_on_success",
+    "kani_proofs::kani_backoff_cap",
+    "kani_proofs::kani_balanced_rr_selects_due_or_ping",
     "kani_proofs::kani_cell_plaintext_decode_total",
     "kani_proofs::kani_cmd_seq_monotone",
     "kani_proofs::kani_commit_accept_atomic",
     "kani_proofs::kani_cont_assembly",
+    "kani_proofs::kani_evicted_range",
     "kani_proofs::kani_executor_response_count",
     "kani_proofs::kani_frame_pad_total",
+    "kani_proofs::kani_in_flight_bound",
     "kani_proofs::kani_hx_chunk_bounds",
     "kani_proofs::kani_hx_grouping",
     "kani_proofs::kani_link_counter_checked_add",
@@ -751,6 +764,9 @@ pub(crate) const KANI_HARNESSES: &[&str] = &[
     "kani_proofs::kani_outer_unpad_total",
     "kani_proofs::kani_q_frame_plaintext_exact_fit",
     "kani_proofs::kani_queue_eviction_bounds",
+    "kani_proofs::kani_rate_bound_integer_form",
+    "kani_proofs::kani_tick_time_checked",
+    "kani_proofs::kani_uniform_draw_in_range",
     "kani_proofs::padding",
     "kani_proofs::request_cont",
     "kani_proofs::request_fetch",

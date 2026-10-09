@@ -4,18 +4,15 @@
 use secmp_client_core::scheduler::core::LinkKind;
 use secmp_client_core::scheduler::params::{Mode, Params};
 use secmp_client_core::scheduler::types::{LinkEvent, Reason, RelayId};
+use secmp_proto::wire::frame::RequestCmd;
 use secmp_testkit::harness::{Dir, Inspect, VirtualDriver};
 
 use crate::m6_common::{
-    FRAME, client, client_with, contact, driver, frames_of, ks_uniform, run_until_link_up,
+    FRAME, at, client, client_with, contact, driver, frames_of, ks_uniform, run_until_link_up,
 };
 
-fn at(t_up: u64, k: u64, period: u64) -> u64 {
-    t_up.checked_add(k.checked_mul(period).unwrap()).unwrap()
-}
-
-fn the_link(d: &VirtualDriver, c: usize, kind: LinkKind) -> (u64, u64) {
-    let infos = d.client_ref(c).sched.links();
+fn the_link(sim: &VirtualDriver, c: usize, kind: LinkKind) -> (u64, u64) {
+    let infos = sim.client_ref(c).sched.links();
     let info = infos.iter().find(|l| l.kind == kind).unwrap();
     (info.id.unwrap().0, info.t_up.unwrap())
 }
@@ -23,18 +20,18 @@ fn the_link(d: &VirtualDriver, c: usize, kind: LinkKind) -> (u64, u64) {
 /// S-16: link lifetimes are uniform on [6 h, 24 h].
 #[test]
 fn link_lifetime_uniform_6h_24h() {
-    let mut d = driver();
-    let a = client(&mut d, Mode::Strict, 161);
-    let now = d.now();
+    let mut sim = driver();
+    let a = client(&mut sim, Mode::Strict, 161);
+    let now = sim.now();
     for _ in 0..1000 {
-        let (rc, _, _, _) = d.new_queue(a);
-        d.client(a)
+        let (rc, _, _, _) = sim.new_queue(a);
+        sim.client(a)
             .sched
             .add_recv_queue(now, RelayId(0), rc, 80_000)
             .unwrap();
     }
-    d.run_until(190_000);
-    let lives: Vec<u64> = d
+    sim.run_until(190_000);
+    let lives: Vec<u64> = sim
         .client_ref(a)
         .sched
         .links()
@@ -51,50 +48,70 @@ fn link_lifetime_uniform_6h_24h() {
 /// within `P_q`.
 #[test]
 fn lifetime_end_reconnects_fresh() {
-    let mut d = driver();
+    let mut sim = driver();
     let params = Params {
         lifetime_ms: (21_600_000, 21_600_000),
         ..Params::default()
     };
-    let a = client_with(&mut d, Mode::Strict, params.clone(), 171);
-    let b = client_with(&mut d, Mode::Strict, params, 172);
-    contact(&mut d, a, b, 10_000, 80_000);
-    d.run_until(200_000);
-    let (slot, t_up) = the_link(&d, a, LinkKind::Send);
+    let a = client_with(&mut sim, Mode::Strict, params.clone(), 171);
+    let b = client_with(&mut sim, Mode::Strict, params, 172);
+    contact(&mut sim, a, b, 10_000, 80_000);
+    sim.run_until(200_000);
+    let (slot, t_up) = the_link(&sim, a, LinkKind::Send);
     let end = t_up + 21_600_000;
-    d.run_until(end + 200_000);
-    let events = &d.client_ref(a).events;
+    sim.run_until(end + 200_000);
+    let events = &sim.client_ref(a).events;
     let torn = events
         .iter()
         .find(|(_, e)| matches!(e, LinkEvent::TornDown(id, Reason::Lifetime) if id.0 == slot))
         .expect("lifetime teardown");
     assert_eq!(torn.0, end, "close at t_up + L");
-    let old = frames_of(&d, a, Dir::C2R, slot);
-    assert!(old.iter().all(|e| e.t_ms < end), "no unit at or after the lifetime");
-    let connects = &d.client_ref(a).connects;
+    let old = frames_of(&sim, a, Dir::C2R, slot);
+    assert!(
+        old.iter().all(|e| e.t_ms < end),
+        "no unit at or after the lifetime"
+    );
+    let connects = &sim.client_ref(a).connects;
     let first_key = connects.iter().find(|(_, id, _)| id.0 == slot).unwrap().2;
     let again = connects
         .iter()
-        .find(|(t, id, k)| *t >= end && id.0 != slot && *k != first_key && d.client_ref(a).sched.links().iter().any(|l| l.id == Some(*id) && l.kind == LinkKind::Send))
+        .find(|(t, id, k)| {
+            *t >= end
+                && id.0 != slot
+                && *k != first_key
+                && sim
+                    .client_ref(a)
+                    .sched
+                    .links()
+                    .iter()
+                    .any(|l| l.id == Some(*id) && l.kind == LinkKind::Send)
+        })
         .expect("a new send link with a new key");
-    assert!((end..=end + 180_000).contains(&again.0), "new phase within 3 min");
+    assert!(
+        (end..=end + 180_000).contains(&again.0),
+        "new phase within 3 min"
+    );
     let new_slot = again.1.0;
-    let new_sends = frames_of(&d, a, Dir::C2R, new_slot);
+    let new_sends = frames_of(&sim, a, Dir::C2R, new_slot);
     let last_old = old.last().unwrap().t_ms;
     let first_new = new_sends.first().unwrap().t_ms;
-    assert!(first_new - last_old >= 10_000, "gap {}", first_new - last_old);
+    assert!(
+        first_new - last_old >= 10_000,
+        "gap {}",
+        first_new - last_old
+    );
 }
 
 /// S-19: during a tick nothing is sealed, signed, encrypted or persisted — the tick writes the prepared 4 352 bytes.
 #[test]
 fn tick_writes_prebuilt_bytes_only() {
-    let mut d = driver();
-    let a = client(&mut d, Mode::Strict, 191);
-    let b = client(&mut d, Mode::Strict, 192);
-    let c = contact(&mut d, a, b, 10_000, 10_000);
+    let mut sim = driver();
+    let a = client(&mut sim, Mode::Strict, 191);
+    let b = client(&mut sim, Mode::Strict, 192);
+    let c = contact(&mut sim, a, b, 10_000, 10_000);
     {
         use secmp_client_core::scheduler::outbox::{OutMessage, Outbox};
-        let conv = d.client(a).convs.get_mut(c.conv_a).unwrap();
+        let conv = sim.client(a).convs.get_mut(c.conv_a).unwrap();
         for n in 0..30_u8 {
             conv.outbox_mut().enqueue(
                 OutMessage {
@@ -107,8 +124,8 @@ fn tick_writes_prebuilt_bytes_only() {
             );
         }
     }
-    d.run_until(1_300_000);
-    let audit = d.client_ref(a).sched.tick_audit();
+    sim.run_until(1_300_000);
+    let audit = sim.client_ref(a).sched.tick_audit();
     assert!(audit.len() >= 100, "{} ticks audited", audit.len());
     for t in audit {
         assert_eq!(t.delta, [0, 0, 0, 0], "tick at {} did work", t.at);
@@ -120,12 +137,12 @@ fn tick_writes_prebuilt_bytes_only() {
 /// committed (or one `FETCH_LEAD` before the tick).
 #[test]
 fn next_frame_prepared_before_tick() {
-    let mut d = driver();
-    let a = client(&mut d, Mode::Strict, 201);
-    let b = client(&mut d, Mode::Strict, 202);
-    contact(&mut d, a, b, 10_000, 10_000);
-    d.run_until(1_300_000);
-    let log = d.client_ref(a).sched.prep_log();
+    let mut sim = driver();
+    let a = client(&mut sim, Mode::Strict, 201);
+    let b = client(&mut sim, Mode::Strict, 202);
+    contact(&mut sim, a, b, 10_000, 10_000);
+    sim.run_until(1_300_000);
+    let log = sim.client_ref(a).sched.prep_log();
     assert!(log.len() > 200);
     for r in log {
         assert!(r.at < r.tick_at, "{r:?} prepared at or after its tick");
@@ -144,38 +161,48 @@ fn next_frame_prepared_before_tick() {
 #[test]
 fn fetch_ack_uses_committed_state() {
     for (latency, lagging) in [(300_u64, false), (9_500, true)] {
-        let mut d = driver();
-        let a = client(&mut d, Mode::Strict, 211);
-        let b = client(&mut d, Mode::Strict, 212);
-        let c = contact(&mut d, a, b, 10_000, 10_000);
-        d.client(a).latency_ms = latency;
-        d.client(a).opts.inspect = Inspect::Requests;
-        let (slot, t_up) = run_until_link_up(&mut d, a, LinkKind::Recv);
+        let mut sim = driver();
+        let a = client(&mut sim, Mode::Strict, 211);
+        let b = client(&mut sim, Mode::Strict, 212);
+        let c = contact(&mut sim, a, b, 10_000, 10_000);
+        sim.client(a).latency_ms = latency;
+        sim.client(a).opts.inspect = Inspect::Requests;
+        let (slot, t_up) = run_until_link_up(&mut sim, a, LinkKind::Recv);
         let mut acks_after_response: Vec<u64> = Vec::new();
         for k in 1..=14_u64 {
-            d.run_until(at(t_up, k, 10_000) + latency);
-            acks_after_response.push(d.client_ref(a).sched.acked(c.a_recv).unwrap());
+            sim.run_until(at(t_up, k, 10_000) + latency);
+            acks_after_response.push(sim.client_ref(a).sched.acked(c.a_recv).unwrap());
         }
-        d.run_until(at(t_up, 15, 10_000));
-        use secmp_proto::wire::frame::RequestCmd;
-        let fetch_acks: Vec<u64> = d
+        sim.run_until(at(t_up, 15, 10_000));
+        let fetch_acks: Vec<u64> = sim
             .client_ref(a)
             .requests
             .iter()
             .filter(|(_, s, r)| *s == slot && matches!(r.cmd, RequestCmd::Fetch { .. }))
-            .map(|(_, _, r)| if let RequestCmd::Fetch { ack, .. } = &r.cmd { *ack } else { 0 })
+            .map(|(_, _, r)| {
+                if let RequestCmd::Fetch { ack, .. } = &r.cmd {
+                    *ack
+                } else {
+                    0
+                }
+            })
             .collect();
         // fetch_acks[k] is the FETCH of tick k + 1; acks_after_response[k - 1] the state after response k
         for k in 3..14_usize {
-            let want = if lagging {
-                acks_after_response[k - 2]
-            } else {
-                acks_after_response[k - 1]
-            };
-            assert_eq!(fetch_acks[k], want, "latency {latency}, FETCH of tick {}", k + 1);
+            let behind = if lagging { 2 } else { 1 };
+            let want = *acks_after_response.get(k - behind).unwrap();
+            assert_eq!(
+                *fetch_acks.get(k).unwrap(),
+                want,
+                "latency {latency}, FETCH of tick {}",
+                k + 1
+            );
         }
-        let delivered = &d.client_ref(a).gate.delivered;
-        assert!(delivered.values().all(|n| *n == 1), "every cell delivered once");
+        let delivered = &sim.client_ref(a).gate.delivered;
+        assert!(
+            delivered.values().all(|n| *n == 1),
+            "every cell delivered once"
+        );
     }
 }
 
@@ -183,30 +210,37 @@ fn fetch_ack_uses_committed_state() {
 /// (`Overrun`) and comes back at a random offset.
 #[test]
 fn prepare_overrun_tears_down() {
-    let mut d = driver();
-    let a = client(&mut d, Mode::Strict, 221);
-    let b = client(&mut d, Mode::Strict, 222);
-    contact(&mut d, a, b, 10_000, 80_000);
-    let (slot, t_up) = run_until_link_up(&mut d, a, LinkKind::Send);
+    let mut sim = driver();
+    let a = client(&mut sim, Mode::Strict, 221);
+    let b = client(&mut sim, Mode::Strict, 222);
+    contact(&mut sim, a, b, 10_000, 80_000);
+    let (slot, t_up) = run_until_link_up(&mut sim, a, LinkKind::Send);
     let t5 = at(t_up, 5, 10_000);
-    d.run_until(t5 - 1);
-    d.client(a).gate.block_prepare = true;
-    d.run_until(at(t_up, 7, 10_000));
-    let sent: Vec<u64> = frames_of(&d, a, Dir::C2R, slot).iter().map(|e| e.t_ms).collect();
-    assert_eq!(sent.last().copied(), Some(t5), "tick 5 was prepared, tick 6 was not");
+    sim.run_until(t5 - 1);
+    sim.client(a).gate.block_prepare = true;
+    sim.run_until(at(t_up, 7, 10_000));
+    let sent: Vec<u64> = frames_of(&sim, a, Dir::C2R, slot)
+        .iter()
+        .map(|e| e.t_ms)
+        .collect();
+    assert_eq!(
+        sent.last().copied(),
+        Some(t5),
+        "tick 5 was prepared, tick 6 was not"
+    );
     let t6 = at(t_up, 6, 10_000);
     assert!(!sent.contains(&t6), "no unit at tick 6");
-    let torn = d
+    let torn = sim
         .client_ref(a)
         .events
         .iter()
         .find(|(_, e)| matches!(e, LinkEvent::TornDown(id, Reason::Overrun) if id.0 == slot))
         .expect("overrun");
     assert_eq!(torn.0, t6);
-    assert_eq!(d.client_ref(a).sched.overruns(), 1);
-    d.client(a).gate.block_prepare = false;
-    d.run_until(t6 + 200_000);
-    let next = d
+    assert_eq!(sim.client_ref(a).sched.overruns(), 1);
+    sim.client(a).gate.block_prepare = false;
+    sim.run_until(t6 + 200_000);
+    let next = sim
         .client_ref(a)
         .connects
         .iter()
@@ -218,29 +252,54 @@ fn prepare_overrun_tears_down() {
 /// S-23: the in-flight bound — with the relay withholding answers, tick 3 tears the link down before it writes.
 #[test]
 fn in_flight_bound_two() {
-    let mut d = driver();
-    let a = client(&mut d, Mode::Strict, 231);
-    let b = client(&mut d, Mode::Strict, 232);
-    contact(&mut d, a, b, 10_000, 80_000);
-    d.client(a).opts.withhold = true;
-    let (slot, t_up) = run_until_link_up(&mut d, a, LinkKind::Send);
-    let (t1, t2, t3) = (at(t_up, 1, 10_000), at(t_up, 2, 10_000), at(t_up, 3, 10_000));
-    d.run_until(t1);
-    assert_eq!(d.client_ref(a).sched.links().iter().find(|l| l.id.map(|i| i.0) == Some(slot)).unwrap().in_flight, 1);
-    d.run_until(t2);
-    assert_eq!(d.client_ref(a).sched.links().iter().find(|l| l.id.map(|i| i.0) == Some(slot)).unwrap().in_flight, 2);
-    d.run_until(t3);
-    let sent: Vec<u64> = frames_of(&d, a, Dir::C2R, slot).iter().map(|e| e.t_ms).collect();
+    let mut sim = driver();
+    let a = client(&mut sim, Mode::Strict, 231);
+    let b = client(&mut sim, Mode::Strict, 232);
+    contact(&mut sim, a, b, 10_000, 80_000);
+    sim.client(a).opts.withhold = true;
+    let (slot, t_up) = run_until_link_up(&mut sim, a, LinkKind::Send);
+    let (t1, t2, t3) = (
+        at(t_up, 1, 10_000),
+        at(t_up, 2, 10_000),
+        at(t_up, 3, 10_000),
+    );
+    sim.run_until(t1);
+    assert_eq!(
+        sim.client_ref(a)
+            .sched
+            .links()
+            .iter()
+            .find(|l| l.id.map(|i| i.0) == Some(slot))
+            .unwrap()
+            .in_flight,
+        1
+    );
+    sim.run_until(t2);
+    assert_eq!(
+        sim.client_ref(a)
+            .sched
+            .links()
+            .iter()
+            .find(|l| l.id.map(|i| i.0) == Some(slot))
+            .unwrap()
+            .in_flight,
+        2
+    );
+    sim.run_until(t3);
+    let sent: Vec<u64> = frames_of(&sim, a, Dir::C2R, slot)
+        .iter()
+        .map(|e| e.t_ms)
+        .collect();
     assert_eq!(sent, vec![t1, t2], "0 bytes at tick 3");
-    let torn = d
+    let torn = sim
         .client_ref(a)
         .events
         .iter()
         .find(|(_, e)| matches!(e, LinkEvent::TornDown(id, Reason::InFlight) if id.0 == slot))
         .expect("in-flight teardown");
     assert_eq!(torn.0, t3);
-    d.run_until(t3 + 200_000);
-    let next = d
+    sim.run_until(t3 + 200_000);
+    let next = sim
         .client_ref(a)
         .connects
         .iter()
@@ -261,7 +320,8 @@ fn scheduler_reads_no_ui_state() {
             }
         }
     }
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../secmp-client-core/src/scheduler");
+    let root =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../secmp-client-core/src/scheduler");
     let mut files = Vec::new();
     walk(&root, &mut files);
     assert!(files.len() >= 8);

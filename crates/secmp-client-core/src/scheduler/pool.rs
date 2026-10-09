@@ -64,7 +64,10 @@ impl QueuePool {
 
     /// The creation of `queue` succeeded: it is a spare. Returns its relay.
     pub fn created(&mut self, queue: QueueId) -> Option<RelayId> {
-        let r = self.relays.iter_mut().find(|r| r.pending.contains(&queue))?;
+        let r = self
+            .relays
+            .iter_mut()
+            .find(|r| r.pending.contains(&queue))?;
         r.pending.retain(|q| *q != queue);
         r.spares.push(queue);
         Some(r.relay)

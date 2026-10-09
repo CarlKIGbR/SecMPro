@@ -31,7 +31,9 @@ fn new_link_required_rotates() {
     let torn = c
         .events
         .iter()
-        .find(|(_, e)| matches!(e, LinkEvent::TornDown(id, Reason::NewLinkRequired) if id.0 == slot))
+        .find(
+            |(_, e)| matches!(e, LinkEvent::TornDown(id, Reason::NewLinkRequired) if id.0 == slot),
+        )
         .expect("TornDown(NewLinkRequired)");
     let next = c
         .connects
@@ -46,7 +48,11 @@ fn new_link_required_rotates() {
         .into_iter()
         .filter(|e| e.slot == slot && e.t_ms > t)
         .collect();
-    assert!(old.len() <= 1, "{} frames after the counter was set", old.len());
+    assert!(
+        old.len() <= 1,
+        "{} frames after the counter was set",
+        old.len()
+    );
 }
 
 /// LR-02: after a failure the next attempt follows at `U[0, 180 s]`.
@@ -62,7 +68,13 @@ fn reconnect_jitter_after_failure() {
     let outs = sched.poll(t, &mut NoCells).unwrap();
     let links: Vec<LinkId> = outs
         .iter()
-        .filter_map(|o| if let Output::Connect { link, .. } = o { Some(*link) } else { None })
+        .filter_map(|o| {
+            if let Output::Connect { link, .. } = o {
+                Some(*link)
+            } else {
+                None
+            }
+        })
         .collect();
     assert_eq!(links.len(), 1000);
     for link in links {
@@ -94,17 +106,25 @@ fn reconnect_jitter_after_failure() {
         .map(|(at, _)| *at)
         .collect();
     assert!(!torn.is_empty());
-    let back = c.connects.iter().filter(|(at, _, _)| *at > torn[0]).count();
+    let back = c
+        .connects
+        .iter()
+        .filter(|(at, _, _)| *at > *torn.first().unwrap())
+        .count();
     assert!(back >= 1);
 }
 
 /// LR-03: consecutive closes before `RELAYINFO` back off exponentially up to the cap, and the count resets after an `HS2`.
 #[test]
 fn backoff_closed_before_relayinfo() {
-    let caps: Vec<u64> = (1..=8).map(|n| backoff_cap(n, 180_000, 3_600_000)).collect();
+    let caps: Vec<u64> = (1..=8)
+        .map(|n| backoff_cap(n, 180_000, 3_600_000))
+        .collect();
     assert_eq!(
         caps,
-        [180_000, 360_000, 720_000, 1_440_000, 2_880_000, 3_600_000, 3_600_000, 3_600_000]
+        [
+            180_000, 360_000, 720_000, 1_440_000, 2_880_000, 3_600_000, 3_600_000, 3_600_000
+        ]
     );
     let mut maxima = [0_u64; 8];
     for seed in 0..300_u64 {
@@ -117,7 +137,13 @@ fn backoff_closed_before_relayinfo() {
             let outs = sched.poll(now, &mut NoCells).unwrap();
             let link = outs
                 .iter()
-                .find_map(|o| if let Output::Connect { link, .. } = o { Some(*link) } else { None })
+                .find_map(|o| {
+                    if let Output::Connect { link, .. } = o {
+                        Some(*link)
+                    } else {
+                        None
+                    }
+                })
                 .unwrap();
             sched.connect_failed(link, now, true).unwrap();
             let info = *sched.links().first().unwrap();
@@ -130,7 +156,10 @@ fn backoff_closed_before_relayinfo() {
         }
     }
     for (m, cap) in maxima.iter().zip(&caps) {
-        assert!(*m * 10 > *cap * 9, "the delay reaches its cap: {m} of {cap}");
+        assert!(
+            *m * 10 > *cap * 9,
+            "the delay reaches its cap: {m} of {cap}"
+        );
     }
 
     // the exponent resets after an HS2
@@ -143,10 +172,27 @@ fn backoff_closed_before_relayinfo() {
         let next = sim.now() + 10_000;
         sim.run_until(next);
     }
-    assert_eq!(sim.client_ref(alice).sched.links().first().unwrap().closed_before, 3);
+    assert_eq!(
+        sim.client_ref(alice)
+            .sched
+            .links()
+            .first()
+            .unwrap()
+            .closed_before,
+        3
+    );
     sim.client(alice).opts.refuse_connections = false;
     let (_, _) = run_until_link_up(&mut sim, alice, LinkKind::Send);
-    assert_eq!(sim.client_ref(alice).sched.links().first().unwrap().closed_before, 0, "reset after HS2");
+    assert_eq!(
+        sim.client_ref(alice)
+            .sched
+            .links()
+            .first()
+            .unwrap()
+            .closed_before,
+        0,
+        "reset after HS2"
+    );
 }
 
 /// LR-04: the back-off draws from the timing randomness only — an outbox full of messages changes no reconnect time.
@@ -199,7 +245,10 @@ fn reconnect_never_changes_transport() {
         for _ in 0..8 {
             let outs = sched.poll(now, &mut NoCells).unwrap();
             for o in outs {
-                if let Output::Connect { link, transport, .. } = o {
+                if let Output::Connect {
+                    link, transport, ..
+                } = o
+                {
                     seen.push(transport);
                     sched.connect_failed(link, now, true).unwrap();
                 }
@@ -238,11 +287,15 @@ fn rotation_and_reconnect_keep_send_spacing() {
         .filter(|(_, e)| matches!(e, LinkEvent::TornDown(_, Reason::Lifetime | Reason::Closed)))
         .count();
     assert!(rotations >= 100, "{rotations} rotations and reconnects");
-    let mut sends: Vec<u64> = frames(&sim, alice, Dir::C2R).iter().map(|e| e.t_ms).collect();
+    let mut sends: Vec<u64> = frames(&sim, alice, Dir::C2R)
+        .iter()
+        .map(|e| e.t_ms)
+        .collect();
     sends.sort_unstable();
     assert!(sends.len() > 300);
     for pair in sends.windows(2) {
-        assert!(pair[1] - pair[0] >= 10_000, "{} then {}", pair[0], pair[1]);
+        let (first, second) = (*pair.first().unwrap(), *pair.get(1).unwrap());
+        assert!(second - first >= 10_000, "{first} then {second}");
     }
     assert!(frames(&sim, alice, Dir::C2R).iter().all(|e| e.len == FRAME));
 }

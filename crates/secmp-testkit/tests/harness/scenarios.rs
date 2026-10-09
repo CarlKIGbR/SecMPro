@@ -389,7 +389,7 @@ fn harness_memory_budget_refuses_new_queue_at_limit() {
             "a SEND is never refused for memory"
         );
     }
-    // an identical QUEUE_NEW of an existing queue is still answered (spec §9.7 item 8)
+    // (an identical QUEUE_NEW at the limit is `h01_identical_queue_new_answers_ok`, M6 G-07)
     // deleting a queue frees its reservation
     t.delete_queue(&queues.first().unwrap().0).unwrap();
     assert!(t.create_queue(&recv, &send, &token).is_ok());

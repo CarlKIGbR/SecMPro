@@ -9,8 +9,8 @@
 //! back to *queued*: it is re-encrypted under a new key and sent again, the receiver deduplicates by `msg_id`.
 
 use secmp_crypto::Zeroizing;
-use secmp_proto::wire::cell::AppKind;
 use secmp_proto::wire::Id;
+use secmp_proto::wire::cell::AppKind;
 
 /// A message id (spec §7.6): the receiver's dedup key.
 pub type MsgId = Id;

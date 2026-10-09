@@ -30,7 +30,13 @@ fn text(n: u8, len: usize) -> OutMessage {
 
 /// Two conversations of one ratchet pair in one cell source: `a` (initiator) sends on queue 0 and receives on 1, `b`
 /// sends on 2 and receives on 3.
-fn pair(tag: u32) -> (Conversations<MemOutbox, MemPersist, EntropyPool>, usize, usize) {
+fn pair(
+    tag: u32,
+) -> (
+    Conversations<MemOutbox, MemPersist, EntropyPool>,
+    usize,
+    usize,
+) {
     let sk = SecretBytes::from_slice(&[7_u8; 32]).unwrap();
     let mut pool = EntropyPool::new("m6-ob-pair", tag);
     let transcript: [u8; 32] = pool.bytes(32).try_into().unwrap();
@@ -63,22 +69,39 @@ fn pair(tag: u32) -> (Conversations<MemOutbox, MemPersist, EntropyPool>, usize, 
     (convs, a, b)
 }
 
-/// OB-01: queued → relayed(cell_id) → delivered (a receipt from the peer).
+/// OB-01: queued → `relayed(cell_id)` → delivered (a receipt from the peer).
 #[test]
 fn outbox_states() {
     let (mut convs, a, b) = pair(1);
     let id = [1_u8; 16];
-    convs.get_mut(a).unwrap().outbox_mut().enqueue(text(1, 50), 0);
-    assert_eq!(convs.get(a).unwrap().outbox().state(&id), Some(MsgState::Queued));
+    convs
+        .get_mut(a)
+        .unwrap()
+        .outbox_mut()
+        .enqueue(text(1, 50), 0);
+    assert_eq!(
+        convs.get(a).unwrap().outbox().state(&id),
+        Some(MsgState::Queued)
+    );
     let cell = convs.prepare_cell(A_SEND, 10_000).unwrap().unwrap();
-    assert_eq!(convs.get(a).unwrap().outbox().state(&id), Some(MsgState::Queued), "not relayed yet");
+    assert_eq!(
+        convs.get(a).unwrap().outbox().state(&id),
+        Some(MsgState::Queued),
+        "not relayed yet"
+    );
     convs.relayed(A_SEND, cell.token, 9);
-    assert_eq!(convs.get(a).unwrap().outbox().state(&id), Some(MsgState::Relayed(9)));
+    assert_eq!(
+        convs.get(a).unwrap().outbox().state(&id),
+        Some(MsgState::Relayed(9))
+    );
     convs.deliver(B_RECV, 9, &cell.cell).unwrap();
     assert_eq!(convs.get(b).unwrap().received().len(), 1);
     let receipt = convs.prepare_cell(B_SEND, 20_000).unwrap().unwrap();
     convs.deliver(A_RECV, 1, &receipt.cell).unwrap();
-    assert_eq!(convs.get(a).unwrap().outbox().state(&id), Some(MsgState::Delivered));
+    assert_eq!(
+        convs.get(a).unwrap().outbox().state(&id),
+        Some(MsgState::Delivered)
+    );
 }
 
 /// OB-02: an evicted real cell is re-sent under a new key (new cell, new ratchet position, same `msg_id`); an evicted
@@ -90,19 +113,36 @@ fn outbox_requeues_evicted_real_with_new_key() {
     // a dummy first, then the real message
     let dummy = convs.prepare_cell(A_SEND, 0).unwrap().unwrap();
     convs.relayed(A_SEND, dummy.token, 8);
-    convs.get_mut(a).unwrap().outbox_mut().enqueue(text(2, 50), 0);
+    convs
+        .get_mut(a)
+        .unwrap()
+        .outbox_mut()
+        .enqueue(text(2, 50), 0);
     let first = convs.prepare_cell(A_SEND, 10_000).unwrap().unwrap();
     convs.relayed(A_SEND, first.token, 9);
     // the dummy is evicted: forgotten, the real message stays relayed
     convs.evicted(A_SEND, 8);
-    assert_eq!(convs.get(a).unwrap().outbox().state(&id), Some(MsgState::Relayed(9)));
+    assert_eq!(
+        convs.get(a).unwrap().outbox().state(&id),
+        Some(MsgState::Relayed(9))
+    );
     // the real cell is evicted: queued again, sent at the next slot as a new cell
     convs.evicted(A_SEND, 9);
-    assert_eq!(convs.get(a).unwrap().outbox().state(&id), Some(MsgState::Queued));
+    assert_eq!(
+        convs.get(a).unwrap().outbox().state(&id),
+        Some(MsgState::Queued)
+    );
     let again = convs.prepare_cell(A_SEND, 20_000).unwrap().unwrap();
-    assert_ne!(first.cell.as_bytes(), again.cell.as_bytes(), "new key, new bytes");
+    assert_ne!(
+        first.cell.as_bytes(),
+        again.cell.as_bytes(),
+        "new key, new bytes"
+    );
     convs.relayed(A_SEND, again.token, 10);
-    assert_eq!(convs.get(a).unwrap().outbox().state(&id), Some(MsgState::Relayed(10)));
+    assert_eq!(
+        convs.get(a).unwrap().outbox().state(&id),
+        Some(MsgState::Relayed(10))
+    );
     // the receiver sees the same msg_id (the first copy was lost, the second delivers)
     convs.deliver(B_RECV, 10, &again.cell).unwrap();
     assert_eq!(convs.get(b).unwrap().received().first().unwrap().msg_id, id);
@@ -131,8 +171,15 @@ fn outbox_failed_after_30_days() {
 fn outbox_resends_unreceipted_after_restart() {
     let (mut convs, a, b) = pair(4);
     for n in 1..=3_u8 {
-        convs.get_mut(a).unwrap().outbox_mut().enqueue(text(n, 40), 0);
-        let cell = convs.prepare_cell(A_SEND, u64::from(n) * 10_000).unwrap().unwrap();
+        convs
+            .get_mut(a)
+            .unwrap()
+            .outbox_mut()
+            .enqueue(text(n, 40), 0);
+        let cell = convs
+            .prepare_cell(A_SEND, u64::from(n) * 10_000)
+            .unwrap()
+            .unwrap();
         convs.relayed(A_SEND, cell.token, u64::from(n));
     }
     convs.get_mut(a).unwrap().outbox_mut().delivered(&[1; 16]);
@@ -147,7 +194,10 @@ fn outbox_resends_unreceipted_after_restart() {
         vec![MsgState::Delivered, MsgState::Queued, MsgState::Queued]
     );
     for slot in 0..2_u64 {
-        let cell = convs.prepare_cell(A_SEND, 100_000 + slot * 10_000).unwrap().unwrap();
+        let cell = convs
+            .prepare_cell(A_SEND, 100_000 + slot * 10_000)
+            .unwrap()
+            .unwrap();
         convs.relayed(A_SEND, cell.token, 20 + slot);
         convs.deliver(B_RECV, 20 + slot, &cell.cell).unwrap();
     }
@@ -168,7 +218,11 @@ fn outbox_fragments_large_message() {
     assert_eq!(1 + 23 + 65_535, 65_559);
     assert_eq!((1 + 65_559_usize).div_ceil(1669), 40);
     let (mut convs, a, b) = pair(5);
-    convs.get_mut(a).unwrap().outbox_mut().enqueue(text(5, 65_535), 0);
+    convs
+        .get_mut(a)
+        .unwrap()
+        .outbox_mut()
+        .enqueue(text(5, 65_535), 0);
     let mut types = Vec::new();
     for slot in 0..41_u64 {
         let cell = convs.prepare_cell(A_SEND, slot * 10_000).unwrap().unwrap();
@@ -176,9 +230,26 @@ fn outbox_fragments_large_message() {
         convs.deliver(B_RECV, slot + 1, &cell.cell).unwrap();
         types.push(convs.get(b).unwrap().received().len());
     }
-    assert_eq!(types.iter().position(|n| *n == 1), Some(39), "complete with the 40th cell");
-    assert_eq!(convs.get(b).unwrap().received().first().unwrap().payload.len(), 65_535);
-    assert_eq!(convs.get(a).unwrap().outbox().state(&[5; 16]), Some(MsgState::Relayed(40)));
+    assert_eq!(
+        types.iter().position(|n| *n == 1),
+        Some(39),
+        "complete with the 40th cell"
+    );
+    assert_eq!(
+        convs
+            .get(b)
+            .unwrap()
+            .received()
+            .first()
+            .unwrap()
+            .payload
+            .len(),
+        65_535
+    );
+    assert_eq!(
+        convs.get(a).unwrap().outbox().state(&[5; 16]),
+        Some(MsgState::Relayed(40))
+    );
 
     // on the clock: the fragments take the slots a dummy would have taken
     let run = |big: bool| {
@@ -187,16 +258,31 @@ fn outbox_fragments_large_message() {
         let bob = client(&mut sim, Mode::Strict, 52);
         let c = contact(&mut sim, alice, bob, 10_000, 80_000);
         if big {
-            sim.client(alice).convs.get_mut(c.conv_a).unwrap().outbox_mut().enqueue(text(6, 65_535), 0);
+            sim.client(alice)
+                .convs
+                .get_mut(c.conv_a)
+                .unwrap()
+                .outbox_mut()
+                .enqueue(text(6, 65_535), 0);
         }
         sim.run_until(900_000);
-        let got = sim.client_ref(bob).convs.get(c.conv_b).unwrap().received().len();
+        let got = sim
+            .client_ref(bob)
+            .convs
+            .get(c.conv_b)
+            .unwrap()
+            .received()
+            .len();
         (sim.scheduled(alice, Dir::C2R), got)
     };
     let (idle, none) = run(false);
     let (busy, one) = run(true);
     assert_eq!((none, one), (0, 1));
-    assert_eq!(max_dt(&idle, &busy), Some(0), "fragmentation adds no frame and shifts no tick");
+    assert_eq!(
+        max_dt(&idle, &busy),
+        Some(0),
+        "fragmentation adds no frame and shifts no tick"
+    );
 }
 
 /// OB-06: three delivered messages are receipted by one `Receipt{delivered}` cell in a normal slot — no extra unit.
@@ -204,17 +290,31 @@ fn outbox_fragments_large_message() {
 fn receipts_ride_normal_slots() {
     let (mut convs, a, b) = pair(6);
     for n in 1..=3_u8 {
-        convs.get_mut(a).unwrap().outbox_mut().enqueue(text(n, 40), 0);
-        let cell = convs.prepare_cell(A_SEND, u64::from(n) * 10_000).unwrap().unwrap();
+        convs
+            .get_mut(a)
+            .unwrap()
+            .outbox_mut()
+            .enqueue(text(n, 40), 0);
+        let cell = convs
+            .prepare_cell(A_SEND, u64::from(n) * 10_000)
+            .unwrap()
+            .unwrap();
         convs.relayed(A_SEND, cell.token, u64::from(n));
         convs.deliver(B_RECV, u64::from(n), &cell.cell).unwrap();
     }
     assert_eq!(convs.get(b).unwrap().receipts_due(), 3);
     let receipt = convs.prepare_cell(B_SEND, 40_000).unwrap().unwrap();
-    assert_eq!(convs.get(b).unwrap().receipts_due(), 0, "one cell takes all three");
+    assert_eq!(
+        convs.get(b).unwrap().receipts_due(),
+        0,
+        "one cell takes all three"
+    );
     convs.deliver(A_RECV, 1, &receipt.cell).unwrap();
     for n in 1..=3_u8 {
-        assert_eq!(convs.get(a).unwrap().outbox().state(&[n; 16]), Some(MsgState::Delivered));
+        assert_eq!(
+            convs.get(a).unwrap().outbox().state(&[n; 16]),
+            Some(MsgState::Delivered)
+        );
     }
 
     // on the clock: the receiver's emissions are those of an idle receiver
@@ -225,28 +325,39 @@ fn receipts_ride_normal_slots() {
         let c = contact(&mut sim, alice, bob, 40_000, 40_000);
         if busy {
             for n in 1..=3_u8 {
-                sim.client(alice).convs.get_mut(c.conv_a).unwrap().outbox_mut().enqueue(text(n, 40), 0);
+                sim.client(alice)
+                    .convs
+                    .get_mut(c.conv_a)
+                    .unwrap()
+                    .outbox_mut()
+                    .enqueue(text(n, 40), 0);
             }
         }
         sim.run_until(1_500_000);
         let states: Vec<_> = (1..=3_u8)
-            .filter_map(|n| sim.client_ref(alice).convs.get(c.conv_a).unwrap().outbox().state(&[n; 16]))
+            .filter_map(|n| {
+                sim.client_ref(alice)
+                    .convs
+                    .get(c.conv_a)
+                    .unwrap()
+                    .outbox()
+                    .state(&[n; 16])
+            })
             .collect();
         (sim.scheduled(bob, Dir::C2R), states)
     };
     let (idle, _) = run(false);
     let (busy, states) = run(true);
-    assert!(states.iter().all(|s| *s == MsgState::Delivered), "{states:?}");
+    assert!(
+        states.iter().all(|s| *s == MsgState::Delivered),
+        "{states:?}"
+    );
     assert_eq!(max_dt(&idle, &busy), Some(0));
 }
 
 /// OB-07: the scheduler sees the outbox only through its two traits — `secmp-client-core` has no store dependency.
 #[test]
 fn outbox_is_the_store_boundary() {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../secmp-client-core");
-    let manifest = std::fs::read_to_string(root.join("Cargo.toml")).unwrap();
-    let deps = manifest.split("[dependencies]").nth(1).unwrap();
-    assert!(!deps.contains("secmp-store"), "no store dependency in M6");
     fn walk(dir: &std::path::Path, hits: &mut Vec<String>) {
         for e in std::fs::read_dir(dir).unwrap() {
             let p = e.unwrap().path();
@@ -259,6 +370,10 @@ fn outbox_is_the_store_boundary() {
             }
         }
     }
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../secmp-client-core");
+    let manifest = std::fs::read_to_string(root.join("Cargo.toml")).unwrap();
+    let deps = manifest.split("[dependencies]").nth(1).unwrap();
+    assert!(!deps.contains("secmp-store"), "no store dependency in M6");
     let mut hits = Vec::new();
     walk(&root.join("src"), &mut hits);
     assert!(hits.is_empty(), "{hits:?}");
@@ -268,7 +383,11 @@ fn outbox_is_the_store_boundary() {
 #[test]
 fn receiver_dedups_by_msg_id() {
     let (mut convs, a, b) = pair(8);
-    convs.get_mut(a).unwrap().outbox_mut().enqueue(text(8, 40), 0);
+    convs
+        .get_mut(a)
+        .unwrap()
+        .outbox_mut()
+        .enqueue(text(8, 40), 0);
     let first = convs.prepare_cell(A_SEND, 10_000).unwrap().unwrap();
     convs.relayed(A_SEND, first.token, 1);
     convs.evicted(A_SEND, 1);

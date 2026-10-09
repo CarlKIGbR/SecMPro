@@ -14,14 +14,10 @@ use secmp_proto::wire::frame::RequestCmd;
 use secmp_testkit::harness::{Dir, Inspect, VirtualDriver};
 use secmp_transport::RecvCap;
 
-use crate::m6_common::{client, contact, contact_on, driver, frames, frames_of, ks_uniform};
+use crate::m6_common::{at, client, contact, contact_on, driver, frames, frames_of, ks_uniform};
 
-fn at(t_up: u64, k: u64, period: u64) -> u64 {
-    t_up.checked_add(k.checked_mul(period).unwrap()).unwrap()
-}
-
-fn the_link(d: &VirtualDriver, c: usize, kind: LinkKind) -> (u64, u64) {
-    let infos = d.client_ref(c).sched.links();
+fn the_link(sim: &VirtualDriver, c: usize, kind: LinkKind) -> (u64, u64) {
+    let infos = sim.client_ref(c).sched.links();
     let info = infos.iter().find(|l| l.kind == kind).unwrap();
     (info.id.unwrap().0, info.t_up.unwrap())
 }
@@ -52,46 +48,46 @@ impl CellSource for NoCells {
 /// S-06: Balanced opens one link per relay — three contacts on relay X, one on relay Y, two pool queues each: 2 links.
 #[test]
 fn balanced_one_link_per_relay() {
-    let mut d = driver();
-    let a = client(&mut d, Mode::Balanced, 61);
-    let b = client(&mut d, Mode::Strict, 62);
+    let mut sim = driver();
+    let a = client(&mut sim, Mode::Balanced, 61);
+    let b = client(&mut sim, Mode::Strict, 62);
     for _ in 0..3 {
-        contact_on(&mut d, a, b, 80_000, 80_000, RelayId(0));
+        contact_on(&mut sim, a, b, 80_000, 80_000, RelayId(0));
     }
-    contact_on(&mut d, a, b, 80_000, 80_000, RelayId(1));
-    let now = d.now();
-    d.client(a).sched.manage_pool(now, RelayId(0)).unwrap();
-    d.client(a).sched.manage_pool(now, RelayId(1)).unwrap();
-    d.run_until(3_600_000 + 200_000);
-    let links = d.client_ref(a).sched.links();
+    contact_on(&mut sim, a, b, 80_000, 80_000, RelayId(1));
+    let now = sim.now();
+    sim.client(a).sched.manage_pool(now, RelayId(0)).unwrap();
+    sim.client(a).sched.manage_pool(now, RelayId(1)).unwrap();
+    sim.run_until(3_600_000 + 200_000);
+    let links = sim.client_ref(a).sched.links();
     assert_eq!(links.len(), 2, "one link per relay");
     assert!(links.iter().all(|l| l.kind == LinkKind::Relay));
-    assert_eq!(d.client_ref(a).sched.pool_spares(RelayId(0)), 2);
-    assert_eq!(d.client_ref(a).sched.pool_spares(RelayId(1)), 2);
+    assert_eq!(sim.client_ref(a).sched.pool_spares(RelayId(0)), 2);
+    assert_eq!(sim.client_ref(a).sched.pool_spares(RelayId(1)), 2);
 }
 
 /// S-07: a Balanced slot is `SEND`|`PING` then `FETCH_MULTI` (2 frames out), 1 then 8 frames back — 11 per slot.
 #[test]
 fn balanced_slot_frames() {
-    let mut d = driver();
-    let a = client(&mut d, Mode::Balanced, 71);
-    let b = client(&mut d, Mode::Strict, 72);
-    contact(&mut d, a, b, 10_000, 80_000);
-    d.client(a).opts.inspect = Inspect::Requests;
-    d.run_until(200_000);
-    let (slot, t_up) = the_link(&d, a, LinkKind::Relay);
+    let mut sim = driver();
+    let a = client(&mut sim, Mode::Balanced, 71);
+    let b = client(&mut sim, Mode::Strict, 72);
+    contact(&mut sim, a, b, 10_000, 80_000);
+    sim.client(a).opts.inspect = Inspect::Requests;
+    sim.run_until(200_000);
+    let (slot, t_up) = the_link(&sim, a, LinkKind::Relay);
     let t3 = at(t_up, 3, 10_000);
-    d.run_until(t3);
-    let out: Vec<_> = frames_of(&d, a, Dir::C2R, slot)
+    sim.run_until(t3);
+    let out: Vec<_> = frames_of(&sim, a, Dir::C2R, slot)
         .into_iter()
         .filter(|e| e.t_ms == t3)
         .collect();
-    let back: Vec<_> = frames_of(&d, a, Dir::R2C, slot)
+    let back: Vec<_> = frames_of(&sim, a, Dir::R2C, slot)
         .into_iter()
         .filter(|e| e.t_ms == t3)
         .collect();
     assert_eq!((out.len(), back.len()), (2, 9), "11 frames per slot");
-    let reqs: Vec<_> = d
+    let reqs: Vec<_> = sim
         .client_ref(a)
         .requests
         .iter()
@@ -109,8 +105,8 @@ fn balanced_slot_frames() {
 }
 
 /// The queue each Balanced `SEND`/`PING` of ticks 1…n was prepared for (`-` for a ping).
-fn send_sequence(d: &VirtualDriver, a: usize, names: &[(QueueId, char)], n: u32) -> String {
-    let mut records: Vec<_> = d
+fn send_sequence(sim: &VirtualDriver, a: usize, names: &[(QueueId, char)], n: u32) -> String {
+    let mut records: Vec<_> = sim
         .client_ref(a)
         .sched
         .prep_log()
@@ -133,53 +129,53 @@ fn send_sequence(d: &VirtualDriver, a: usize, names: &[(QueueId, char)], n: u32)
 /// S-08: the round-robin pointer and the "at least `P_q` ago" rule.
 #[test]
 fn balanced_round_robin_due_rule() {
-    let mut d = driver();
-    let a = client(&mut d, Mode::Balanced, 81);
-    let b = client(&mut d, Mode::Strict, 82);
-    let ca = contact(&mut d, a, b, 10_000, 80_000);
-    let cb = contact(&mut d, a, b, 40_000, 80_000);
-    let cc = contact(&mut d, a, b, 40_000, 80_000);
-    d.run_until(200_000);
-    let (_, t_up) = the_link(&d, a, LinkKind::Relay);
-    d.run_until(at(t_up, 10, 10_000));
+    let mut sim = driver();
+    let a = client(&mut sim, Mode::Balanced, 81);
+    let b = client(&mut sim, Mode::Strict, 82);
+    let ca = contact(&mut sim, a, b, 10_000, 80_000);
+    let cb = contact(&mut sim, a, b, 40_000, 80_000);
+    let cc = contact(&mut sim, a, b, 40_000, 80_000);
+    sim.run_until(200_000);
+    let (_, t_up) = the_link(&sim, a, LinkKind::Relay);
+    sim.run_until(at(t_up, 10, 10_000));
     let names = [(ca.a_send, 'A'), (cb.a_send, 'B'), (cc.a_send, 'C')];
-    assert_eq!(send_sequence(&d, a, &names, 10), "ABCAABCAAB");
+    assert_eq!(send_sequence(&sim, a, &names, 10), "ABCAABCAAB");
 }
 
 /// S-09: a single send queue at 20 s: `SEND`, `PING`, `SEND`, `PING`, `SEND`.
 #[test]
 fn balanced_ping_when_none_due() {
-    let mut d = driver();
-    let a = client(&mut d, Mode::Balanced, 91);
-    let b = client(&mut d, Mode::Strict, 92);
-    let ca = contact(&mut d, a, b, 20_000, 80_000);
-    d.run_until(200_000);
-    let (_, t_up) = the_link(&d, a, LinkKind::Relay);
-    d.run_until(at(t_up, 5, 10_000));
-    assert_eq!(send_sequence(&d, a, &[(ca.a_send, 'A')], 5), "A-A-A");
+    let mut sim = driver();
+    let a = client(&mut sim, Mode::Balanced, 91);
+    let b = client(&mut sim, Mode::Strict, 92);
+    let ca = contact(&mut sim, a, b, 20_000, 80_000);
+    sim.run_until(200_000);
+    let (_, t_up) = the_link(&sim, a, LinkKind::Relay);
+    sim.run_until(at(t_up, 5, 10_000));
+    assert_eq!(send_sequence(&sim, a, &[(ca.a_send, 'A')], 5), "A-A-A");
 }
 
 /// S-10: `FETCH_MULTI` lists every recv queue in creation order (3 contacts + 2 pool queues = 5), and a 33rd queue is
 /// refused when it is added.
 #[test]
 fn balanced_fetch_multi_lists_all_recv_queues() {
-    let mut d = driver();
-    let a = client(&mut d, Mode::Balanced, 101);
-    let b = client(&mut d, Mode::Strict, 102);
+    let mut sim = driver();
+    let a = client(&mut sim, Mode::Balanced, 101);
+    let b = client(&mut sim, Mode::Strict, 102);
     let cs: Vec<_> = (0..3)
-        .map(|_| contact(&mut d, a, b, 80_000, 80_000))
+        .map(|_| contact(&mut sim, a, b, 80_000, 80_000))
         .collect();
-    let now = d.now();
-    d.client(a).sched.manage_pool(now, RelayId(0)).unwrap();
-    d.client(a).opts.inspect = Inspect::Requests;
-    d.run_until(3_600_000 + 400_000);
-    let sched = &d.client_ref(a).sched;
+    let now = sim.now();
+    sim.client(a).sched.manage_pool(now, RelayId(0)).unwrap();
+    sim.client(a).opts.inspect = Inspect::Requests;
+    sim.run_until(3_600_000 + 400_000);
+    let sched = &sim.client_ref(a).sched;
     let mut expected: Vec<_> = cs
         .iter()
         .map(|c| *sched.queue_ref(c.a_recv).unwrap().rid())
         .collect();
     // the pool queues join in the order their creation succeeded
-    let pool_ids: Vec<u32> = d
+    let pool_ids: Vec<u32> = sim
         .client_ref(a)
         .controls_done
         .iter()
@@ -194,7 +190,7 @@ fn balanced_fetch_multi_lists_all_recv_queues() {
             .into_iter()
             .map(|n| *sched.queue_ref(QueueId(n)).unwrap().rid()),
     );
-    let last = d
+    let last = sim
         .client_ref(a)
         .requests
         .iter()
@@ -244,7 +240,10 @@ fn balanced_rate_bound_integer_form() {
     assert!(bound_result(Mode::Balanced, &[80_000; 32]).is_ok());
     let mut mixed = vec![10_000_u64; 4];
     mixed.push(80_000);
-    assert_eq!(bound_result(Mode::Balanced, &mixed), Err(SchedError::RateBound));
+    assert_eq!(
+        bound_result(Mode::Balanced, &mixed),
+        Err(SchedError::RateBound)
+    );
 }
 
 /// S-12: Low-bw — the bound `Σ 240 000/P ≤ 32`, and 120 slots, 1 320 frames in an hour.
@@ -261,52 +260,67 @@ fn lowbw_rate_bound_and_slot() {
         Err(SchedError::RateBound)
     );
     // 1 h at 30 s slots with five recv-queues at 40 s
-    let mut d = driver();
-    let a = client(&mut d, Mode::LowBw, 121);
-    let now = d.now();
+    let mut sim = driver();
+    let a = client(&mut sim, Mode::LowBw, 121);
+    let now = sim.now();
     for _ in 0..5 {
-        let (rc, _, _, _) = d.new_queue(a);
-        d.client(a)
+        let (rc, _, _, _) = sim.new_queue(a);
+        sim.client(a)
             .sched
             .add_recv_queue(now, RelayId(0), rc, 40_000)
             .unwrap();
     }
-    d.run_until(200_000);
-    let (slot, t_up) = the_link(&d, a, LinkKind::Relay);
-    d.run_until(at(t_up, 120, 30_000));
-    let out = frames_of(&d, a, Dir::C2R, slot).len();
-    let back = frames_of(&d, a, Dir::R2C, slot).len();
-    assert_eq!((out, back, out + back), (240, 1080, 1320), "120 slots, 11 frames each");
+    sim.run_until(200_000);
+    let (slot, t_up) = the_link(&sim, a, LinkKind::Relay);
+    sim.run_until(at(t_up, 120, 30_000));
+    let out = frames_of(&sim, a, Dir::C2R, slot).len();
+    let back = frames_of(&sim, a, Dir::R2C, slot).len();
+    assert_eq!(
+        (out, back, out + back),
+        (240, 1080, 1320),
+        "120 slots, 11 frames each"
+    );
 }
 
 /// S-13: direct mode implies Balanced.
 #[test]
 fn direct_mode_implies_balanced() {
-    let mut d = driver();
-    let a = client(&mut d, Mode::Strict, 131);
-    let b = client(&mut d, Mode::Strict, 132);
-    contact(&mut d, a, b, 10_000, 80_000);
-    contact(&mut d, a, b, 10_000, 80_000);
-    assert_eq!(d.client_ref(a).sched.links().len(), 4, "Strict: a link per queue");
-    let now = d.now();
-    d.client(a).sched.set_direct(now, true, &mut NoCells).unwrap();
-    assert_eq!(d.client_ref(a).sched.effective_mode(), Mode::Balanced);
-    assert_eq!(d.client_ref(a).sched.links().len(), 1, "one link per relay");
+    let mut sim = driver();
+    let a = client(&mut sim, Mode::Strict, 131);
+    let b = client(&mut sim, Mode::Strict, 132);
+    contact(&mut sim, a, b, 10_000, 80_000);
+    contact(&mut sim, a, b, 10_000, 80_000);
+    assert_eq!(
+        sim.client_ref(a).sched.links().len(),
+        4,
+        "Strict: a link per queue"
+    );
+    let now = sim.now();
+    sim.client(a)
+        .sched
+        .set_direct(now, true, &mut NoCells)
+        .unwrap();
+    assert_eq!(sim.client_ref(a).sched.effective_mode(), Mode::Balanced);
+    assert_eq!(
+        sim.client_ref(a).sched.links().len(),
+        1,
+        "one link per relay"
+    );
 }
 
 /// S-14: a mode change tears down every old link at once and starts the new ones at independent random offsets.
 #[test]
 fn mode_change_tears_down_all_links() {
-    let mut d = driver();
-    let a = client(&mut d, Mode::Strict, 141);
-    let b = client(&mut d, Mode::Strict, 142);
-    contact(&mut d, a, b, 10_000, 80_000);
-    contact(&mut d, a, b, 10_000, 80_000);
+    let mut sim = driver();
+    let a = client(&mut sim, Mode::Strict, 141);
+    let b = client(&mut sim, Mode::Strict, 142);
+    contact(&mut sim, a, b, 10_000, 80_000);
+    contact(&mut sim, a, b, 10_000, 80_000);
     let t = 300_000;
-    d.run_until(t);
-    assert_eq!(d.client_ref(a).sched.links().len(), 4);
-    let sent = frames(&d, a, Dir::C2R).len();
-    let outs = d
+    sim.run_until(t);
+    assert_eq!(sim.client_ref(a).sched.links().len(), 4);
+    let sent = frames(&sim, a, Dir::C2R).len();
+    let outs = sim
         .client(a)
         .sched
         .set_mode(t, Mode::Balanced, &mut NoCells)
@@ -316,13 +330,19 @@ fn mode_change_tears_down_all_links() {
         .filter(|o| matches!(o, Output::Event(LinkEvent::TornDown(_, Reason::ModeChange))))
         .count();
     assert_eq!(torn, 4, "every old link: TornDown(ModeChange) at t");
-    let closes = outs.iter().filter(|o| matches!(o, Output::Close { .. })).count();
+    let closes = outs
+        .iter()
+        .filter(|o| matches!(o, Output::Close { .. }))
+        .count();
     assert_eq!(closes, 4, "and closed");
-    assert_eq!(frames(&d, a, Dir::C2R).len(), sent, "no unit after t");
-    let after = d.client_ref(a).sched.links();
+    assert_eq!(frames(&sim, a, Dir::C2R).len(), sent, "no unit after t");
+    let after = sim.client_ref(a).sched.links();
     assert_eq!(after.len(), 1);
     let start = after.first().unwrap().starts_at.unwrap();
-    assert!((t..=t + 180_000).contains(&start), "new link starts within 3 min of t");
+    assert!(
+        (t..=t + 180_000).contains(&start),
+        "new link starts within 3 min of t"
+    );
 }
 
 /// S-15: link phases are uniform on [0, 180 s] and drawn independently — one draw per link.

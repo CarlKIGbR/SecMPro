@@ -20,16 +20,15 @@ use secmp_client_core::scheduler::outbox::{MemOutbox, MemPersist};
 use secmp_client_core::scheduler::params::{Mode, Params};
 use secmp_client_core::scheduler::types::{
     CellSource, CellToken, ControlKind, IsolationKey, LinkEvent, LinkId, LinkKind, OpId, Output,
-    PreparedCell,
-    QueueId, RelayId, SendFailure, SourceError,
+    PreparedCell, QueueId, RelayId, SendFailure, SourceError,
 };
 use secmp_client_core::timing::TimingRng;
 use secmp_crypto::{Aead, HybridSigningKey, Label, Nonce24, SecretBytes};
 use secmp_proto::Decode;
-use secmp_proto::wire::cell::Cell;
-use secmp_proto::wire::inv::LinkBlob;
-use secmp_proto::wire::frame::Request;
 use secmp_proto::tr::{Entropy, FixedEntropy, RatchetState};
+use secmp_proto::wire::cell::Cell;
+use secmp_proto::wire::frame::Request;
+use secmp_proto::wire::inv::LinkBlob;
 use secmp_transport::{
     ConnectOutcome, Error as TransportError, LinkGetMode, QueueTransport, RecvCap,
     RelayQueueTransport, SendCap, Session,
@@ -417,8 +416,8 @@ impl VirtualDriver {
         let unix = self.harness.clock().unix();
         let c = self.clients.get_mut(i).unwrap();
         let (recv, send) = (c.entropy.bytes(32), c.entropy.bytes(32));
-        let mut t = RelayQueueTransport::connect(stream, fp, Some(&access), unix, c.entropy.get())
-            .unwrap();
+        let mut t =
+            RelayQueueTransport::connect(stream, fp, Some(&access), unix, c.entropy.get()).unwrap();
         let (rc, sc) = t
             .create_queue(
                 &SecretBytes::from_slice(&recv).unwrap(),
@@ -434,7 +433,8 @@ impl VirtualDriver {
     /// # Panics
     /// On a violated harness invariant: a test failure, never a production path.
     pub fn ratchet_states(&mut self, a: usize, b: usize) -> (RatchetState, RatchetState) {
-        let sk = SecretBytes::from_slice(&self.clients.get_mut(a).unwrap().entropy.bytes(32)).unwrap();
+        let sk =
+            SecretBytes::from_slice(&self.clients.get_mut(a).unwrap().entropy.bytes(32)).unwrap();
         let transcript: [u8; 32] = self
             .clients
             .get_mut(a)
@@ -453,7 +453,14 @@ impl VirtualDriver {
     /// # Panics
     /// On a violated harness invariant: a test failure, never a production path.
     pub fn peer_key(&mut self, i: usize) -> secmp_crypto::HybridVerifyingKey {
-        let key: HybridSigningKey = self.clients.get_mut(i).unwrap().entropy.get().hybrid_signing_key().unwrap();
+        let key: HybridSigningKey = self
+            .clients
+            .get_mut(i)
+            .unwrap()
+            .entropy
+            .get()
+            .hybrid_signing_key()
+            .unwrap();
         key.verifying_key()
     }
 
@@ -517,7 +524,9 @@ impl VirtualDriver {
             self.deliver_due(i, t);
             let outs = {
                 let c = self.clients.get_mut(i).unwrap();
-                c.sched.poll(t, &mut Gate::new(&mut c.convs, &mut c.gate)).unwrap()
+                c.sched
+                    .poll(t, &mut Gate::new(&mut c.convs, &mut c.gate))
+                    .unwrap()
             };
             self.apply(i, t, outs);
             self.deliver_due(i, t);
@@ -554,7 +563,9 @@ impl VirtualDriver {
                     dir: Dir::R2C,
                     slot: id.0,
                 });
-                c.sched.on_frame(id, t, &frame, &mut Gate::new(&mut c.convs, &mut c.gate)).unwrap()
+                c.sched
+                    .on_frame(id, t, &frame, &mut Gate::new(&mut c.convs, &mut c.gate))
+                    .unwrap()
             };
             self.apply(i, t, outs);
         }
@@ -564,7 +575,9 @@ impl VirtualDriver {
     fn collect(&mut self, i: usize, id: LinkId, t: u64) {
         let c = self.clients.get_mut(i).unwrap();
         let latency = c.latency_ms;
-        let Some(conn) = c.conns.get_mut(&id) else { return };
+        let Some(conn) = c.conns.get_mut(&id) else {
+            return;
+        };
         let mut chunk = [0_u8; FRAME];
         loop {
             let n = std::io::Read::read(&mut conn.stream, &mut chunk).unwrap();
@@ -587,7 +600,13 @@ impl VirtualDriver {
         while let Some(out) = queue.pop_front() {
             match out {
                 Output::Event(e) => self.clients.get_mut(i).unwrap().events.push((t, e)),
-                Output::Connect { link, key, kind, period_ms, .. } => {
+                Output::Connect {
+                    link,
+                    key,
+                    kind,
+                    period_ms,
+                    ..
+                } => {
                     let c = self.clients.get_mut(i).unwrap();
                     c.connects.push((t, link, key));
                     c.link_kinds.insert(link.0, (kind, period_ms));
@@ -604,7 +623,11 @@ impl VirtualDriver {
                     }
                 }
                 Output::Control { op, kind, key, .. } => {
-                    self.clients.get_mut(i).unwrap().control_keys.push((op, key));
+                    self.clients
+                        .get_mut(i)
+                        .unwrap()
+                        .control_keys
+                        .push((op, key));
                     let more = self.control(i, t, op, kind);
                     queue.extend(more);
                 }
@@ -676,7 +699,9 @@ impl VirtualDriver {
                         ended: false,
                     },
                 );
-                c.sched.link_up(link, t, chan, &mut Gate::new(&mut c.convs, &mut c.gate)).unwrap()
+                c.sched
+                    .link_up(link, t, chan, &mut Gate::new(&mut c.convs, &mut c.gate))
+                    .unwrap()
             }
             Hs::ClosedBefore => {
                 self.trace(i, t, HELLO, Dir::C2R, link.0);
@@ -700,7 +725,9 @@ impl VirtualDriver {
             .unwrap()
             .gate
             .audit
-            .push(Audit::Wrote(secmp_transport::channel::counters::seal_calls()));
+            .push(Audit::Wrote(
+                secmp_transport::channel::counters::seal_calls(),
+            ));
         let ok = {
             let c = self.clients.get_mut(i).unwrap();
             c.conns.get_mut(&link).is_some_and(|conn| {
@@ -725,7 +752,10 @@ impl VirtualDriver {
             }
             if c.conns.get(&link).is_some_and(|k| k.rx.is_empty()) {
                 c.conns.remove(&link);
-                return c.sched.on_closed(link, t, &mut Gate::new(&mut c.convs, &mut c.gate)).unwrap();
+                return c
+                    .sched
+                    .on_closed(link, t, &mut Gate::new(&mut c.convs, &mut c.gate))
+                    .unwrap();
             }
         }
         Vec::new()
@@ -737,7 +767,9 @@ impl VirtualDriver {
         if c.opts.inspect == Inspect::Off {
             return;
         }
-        let Some(conn) = c.conns.get_mut(&link) else { return };
+        let Some(conn) = c.conns.get_mut(&link) else {
+            return;
+        };
         let (key, sess) = conn.keys;
         let key = SecretBytes::<32>::from_slice(&key).unwrap();
         let ad = [Label::LinkFrame.as_bytes(), sess.as_slice()].concat();
@@ -753,7 +785,11 @@ impl VirtualDriver {
     // ---- control operations ---------------------------------------------------------------------------------------
 
     fn control(&mut self, i: usize, t: u64, op: OpId, kind: ControlKind) -> Vec<Output> {
-        self.clients.get_mut(i).unwrap().controls_started.push((t, op, kind));
+        self.clients
+            .get_mut(i)
+            .unwrap()
+            .controls_started
+            .push((t, op, kind));
         let slot = CONTROL_SLOT_BASE.saturating_add(op.0);
         let (keep, outcome) = self.handshake(i);
         let Hs::Up(session) = outcome else {
@@ -774,12 +810,22 @@ impl VirtualDriver {
             let key = SecretBytes::<32>::from_slice(k_send).unwrap();
             let ad = [Label::LinkFrame.as_bytes(), sess.as_slice()].concat();
             let mut requests = Vec::new();
-            for (n, unit) in capture.frames_to_relay().as_chunks::<FRAME>().0.iter().enumerate() {
+            for (n, unit) in capture
+                .frames_to_relay()
+                .as_chunks::<FRAME>()
+                .0
+                .iter()
+                .enumerate()
+            {
                 let nonce = *Nonce24::from_link_counter(u64::try_from(n).unwrap()).as_bytes();
                 let plain = Aead::open(&key, &nonce, &ad, unit).unwrap();
                 requests.push(Request::decode(&plain).unwrap());
             }
-            self.clients.get_mut(i).unwrap().control_requests.push((t, op, requests));
+            self.clients
+                .get_mut(i)
+                .unwrap()
+                .control_requests
+                .push((t, op, requests));
         }
         for _ in 0..capture.frames_to_relay().len() / FRAME {
             self.trace(i, t, FRAME, Dir::C2R, slot);
@@ -861,7 +907,10 @@ impl VirtualDriver {
                 client.link_status.push((now, n, got.present, got.consumed));
                 let relay = client.relay;
                 let expired = false;
-                let _ = client.sched.owner_status(now, relay, n, got.present, got.consumed, expired);
+                let _ =
+                    client
+                        .sched
+                        .owner_status(now, relay, n, got.present, got.consumed, expired);
                 Ok(())
             }
             ControlKind::LinkGetConsume(n) => {

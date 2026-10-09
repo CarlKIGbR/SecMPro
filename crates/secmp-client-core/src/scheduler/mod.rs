@@ -4,8 +4,10 @@
 
 pub mod control;
 pub mod core;
+// compiled out under Kani: `secmp-proto`'s codec types are stand-ins there, and the harnesses need only the pure core
+#[cfg(not(kani))]
+pub mod conversation;
+pub mod outbox;
 pub mod params;
 pub mod pool;
 pub mod types;
-pub mod conversation;
-pub mod outbox;

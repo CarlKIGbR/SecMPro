@@ -7675,13 +7675,41 @@ mod tests {
         Ok(())
     }
 
+    /// M6 X-05: the Kani and fuzz lists carry the Phase A additions (TEST-SPEC-M6 K-01…K-07, FZ-01, FZ-04).
+    #[test]
+    fn kani_and_fuzz_lists_m6() {
+        assert!(expect::KANI_PACKAGES.contains(&"secmp-client-core"));
+        for h in [
+            "kani_balanced_rr_selects_due_or_ping",
+            "kani_in_flight_bound",
+            "kani_tick_time_checked",
+            "kani_uniform_draw_in_range",
+            "kani_backoff_cap",
+            "kani_rate_bound_integer_form",
+            "kani_evicted_range",
+        ] {
+            assert!(
+                expect::KANI_HARNESSES.contains(&format!("kani_proofs::{h}").as_str()),
+                "{h}"
+            );
+        }
+        for t in ["client_pipeline_responses", "scheduler_event_sequence"] {
+            assert!(expect::FUZZ_TARGETS.contains(&t), "{t}");
+            assert!(
+                expect::FUZZ_MAX_LEN.iter().any(|(n, _)| *n == t),
+                "{t} max_len"
+            );
+        }
+    }
+
     /// M2 review C5: Kani must verify exactly the harnesses of `expect::KANI_HARNESSES`.
     #[test]
     fn kani_refuses_fifteen_harnesses() -> Result<()> {
         let all = expect::KANI_HARNESSES;
-        // M5 Phase B: 30 + the three relay harnesses (TEST-SPEC-M5 K-05…K-07)
-        assert_eq!(all.len(), 33);
-        assert_eq!(kani_verified(&kani_log(all, 0))?.len(), 33);
+        // M5 Phase B: 30 + the three relay harnesses (TEST-SPEC-M5 K-05…K-07); M6 Phase A: + the seven of
+        // `secmp-client-core` (TEST-SPEC-M6 K-01…K-07)
+        assert_eq!(all.len(), 40);
+        assert_eq!(kani_verified(&kani_log(all, 0))?.len(), 40);
         // a deleted harness: 18 verified, and Kani's own summary says 18 of 18
         let fifteen = all.get(1..).unwrap_or_default();
         assert!(kani_verified(&kani_log(fifteen, 0)).is_err());
@@ -7828,16 +7856,16 @@ mod tests {
             let want = if expect::FUZZ_DEEP_TARGETS.contains(t) {
                 3_600
             } else {
-                266
+                248
             };
             assert_eq!(nightly_seconds_for(t)?, want, "{t}");
         }
-        // 27 x 266 + 2 x 3600 = 14 382 <= 14 400
+        // 29 x 248 + 2 x 3600 = 14 392 <= 14 400
         let total: u64 = expect::FUZZ_TARGETS
             .iter()
             .map(|t| nightly_seconds_for(t))
             .sum::<Result<u64>>()?;
-        assert_eq!(total, 14_382);
+        assert_eq!(total, 14_392);
         assert!(total <= expect::FUZZ_NIGHTLY_SECONDS);
         // the evidence: runs and lim per target, lim = max_len
         let log = "#4\tINITED cov: 5493 ft: 8753 corp: 3/637b exec/s: 0 rss: 53Mb\n\
@@ -8196,8 +8224,8 @@ mod tests {
         assert_eq!(expect::FUZZ_NIGHTLY_SECONDS, 14_400);
         assert_eq!(
             nightly_seconds_per_target(expect::FUZZ_NIGHTLY_SECONDS, expect::FUZZ_TARGETS.len())?,
-            // M5 Phase B: 29 targets (the two relay targets FZ-07, FZ-08), 496 s each
-            14_400 / 29
+            // M6 Phase A: 31 targets (+ FZ-01, FZ-04 of M6), 464 s each
+            14_400 / 31
         );
         assert_eq!(nightly_seconds_per_target(14_400, 14)?, 1028);
         assert!(nightly_seconds_per_target(14_400, 0).is_err());

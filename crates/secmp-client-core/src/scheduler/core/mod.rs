@@ -2,7 +2,7 @@
 //! The sans-IO core of the constant-rate scheduler (spec §10, `docs/02` §4.4).
 //!
 //! **Shape.** The core owns the queues, one task per link, the control operations and the pool; it owns no stream and
-//! reads no clock. A driver (the virtual one of the testkit, the tokio one of M6 Phase B) opens connections when
+//! reads no clock. A driver (the virtual one of the testkit, the asynchronous one of M6 Phase B) opens connections when
 //! [`Output::Connect`] says so, runs the SecMP-LINK handshake, hands the resulting [`Channel`] to
 //! [`Scheduler::link_up`], delivers received frames with [`Scheduler::on_frame`], and calls [`Scheduler::poll`] at
 //! [`Scheduler::next_deadline`]. Every unit the client emits is an [`Output::Write`] of a **prepared** frame.
@@ -25,11 +25,11 @@ use secmp_transport::{
 use crate::scheduler::control::{ControlOps, OpSpec, When};
 use crate::scheduler::params::{FETCH_MULTI_LIMIT, Mode, Params};
 use crate::scheduler::pool::QueuePool;
+pub use crate::scheduler::types::LinkKind;
 use crate::scheduler::types::{
     Alert, CellSource, CellToken, ControlKind, IsolationKey, LinkEvent, LinkId, OpId, Output,
     QueueId, Reason, RelayId, SendFailure, Transport,
 };
-pub use crate::scheduler::types::LinkKind;
 use crate::timing::{TimingRng, Unavailable};
 
 use self::backoff::reconnect_delay;
@@ -333,7 +333,10 @@ impl World {
 
     /// Release what a link held: prepared cells go back, written `SEND`s whose answer never came are re-queued.
     fn release<S: CellSource>(up: &mut Up, source: &mut S) {
-        for part in [up.send_part.take(), up.fetch_part.take()].into_iter().flatten() {
+        for part in [up.send_part.take(), up.fetch_part.take()]
+            .into_iter()
+            .flatten()
+        {
             if let ReqKind::Send { queue, token } = part.kind {
                 source.discard(queue, token);
             }
@@ -362,7 +365,8 @@ impl World {
             }
             State::Connecting { id } => {
                 self.out.push(Output::Close { link: id });
-                self.out.push(Output::Event(LinkEvent::TornDown(id, reason)));
+                self.out
+                    .push(Output::Event(LinkEvent::TornDown(id, reason)));
             }
             State::Down { .. } | State::Gone => {}
         }
@@ -438,13 +442,17 @@ impl World {
             return TickResult::Tear(Reason::InFlight);
         }
         let needs_send = matches!(spec, Spec::Send(_) | Spec::Relay(_));
-        let needs_fetch = matches!(spec, Spec::Recv(_)) || (matches!(spec, Spec::Relay(_)) && has_fetch);
+        let needs_fetch =
+            matches!(spec, Spec::Recv(_)) || (matches!(spec, Spec::Relay(_)) && has_fetch);
         if (needs_send && up.send_part.is_none()) || (needs_fetch && up.fetch_part.is_none()) {
             self.overruns = self.overruns.saturating_add(1);
             return TickResult::Tear(Reason::Overrun);
         }
         let mut sent_to = None;
-        for part in [up.send_part.take(), up.fetch_part.take()].into_iter().flatten() {
+        for part in [up.send_part.take(), up.fetch_part.take()]
+            .into_iter()
+            .flatten()
+        {
             if up.chan.begin_write(&part.prepared).is_err() {
                 return TickResult::Tear(Reason::Rejected);
             }
@@ -537,7 +545,10 @@ impl World {
                     members.iter().map(|(_, l, p)| (*l, *p)).collect();
                 match rr_select(*rr, &table, slot) {
                     Some(at) => {
-                        *rr = at.checked_add(1).and_then(|n| n.checked_rem(members.len())).unwrap_or(0);
+                        *rr = at
+                            .checked_add(1)
+                            .and_then(|n| n.checked_rem(members.len()))
+                            .unwrap_or(0);
                         members.get(at).map(|(q, _, _)| *q)
                     }
                     None => None,
@@ -668,7 +679,13 @@ impl World {
                         .out
                         .iter()
                         .skip(out_before)
-                        .map(|o| if let Output::Write { bytes, .. } = o { bytes.len() } else { 0 })
+                        .map(|o| {
+                            if let Output::Write { bytes, .. } = o {
+                                bytes.len()
+                            } else {
+                                0
+                            }
+                        })
                         .sum();
                     self.prep.ticks.push(TickAudit {
                         link: up.id,
@@ -737,11 +754,20 @@ impl World {
         }
     }
 
-    fn queue_error(&mut self, queue: QueueId, error: TransportError, now: u64) -> Result<(), SchedError> {
+    fn queue_error(
+        &mut self,
+        queue: QueueId,
+        error: TransportError,
+        now: u64,
+    ) -> Result<(), SchedError> {
         match error {
             TransportError::NoQueue => self.recreate(queue, now)?,
-            TransportError::Auth => self.out.push(Output::Event(LinkEvent::Alert(queue, Alert::QueueAuth))),
-            TransportError::Rate => self.out.push(Output::Event(LinkEvent::Alert(queue, Alert::QueueRate))),
+            TransportError::Auth => self
+                .out
+                .push(Output::Event(LinkEvent::Alert(queue, Alert::QueueAuth))),
+            TransportError::Rate => self
+                .out
+                .push(Output::Event(LinkEvent::Alert(queue, Alert::QueueRate))),
             _ => {}
         }
         Ok(())
@@ -793,7 +819,11 @@ impl World {
             (ReqKind::FetchMulti(queues), Outcome::FetchMulti(result)) => match result {
                 Ok(done) => {
                     for q in &queues {
-                        let Some(rid) = self.recvs.iter().find(|r| r.id == *q).map(|r| r.cap.queue())
+                        let Some(rid) = self
+                            .recvs
+                            .iter()
+                            .find(|r| r.id == *q)
+                            .map(|r| r.cap.queue())
                         else {
                             continue;
                         };
@@ -802,7 +832,10 @@ impl World {
                             .iter()
                             .filter(|(r, _, _)| *r == rid)
                             .map(|(_, id, cell)| {
-                                (*id, secmp_proto::wire::cell::Cell::from_bytes(cell.as_bytes()))
+                                (
+                                    *id,
+                                    secmp_proto::wire::cell::Cell::from_bytes(cell.as_bytes()),
+                                )
                             })
                             .filter_map(|(id, c)| c.ok().map(|c| (id, c)))
                             .collect();
@@ -905,7 +938,10 @@ impl Scheduler {
     /// Uniform timing draws so far (the activity-independence tests compare them).
     #[must_use]
     pub const fn timing_draws(&self) -> u64 {
-        self.world.rng.draws().saturating_add(self.world.ctl.draws())
+        self.world
+            .rng
+            .draws()
+            .saturating_add(self.world.ctl.draws())
     }
 
     /// Ticks lost to a frame that was not ready (OPEN-M6-13).
@@ -917,7 +953,11 @@ impl Scheduler {
     /// The cumulative acknowledgement of a recv-queue.
     #[must_use]
     pub fn acked(&self, queue: QueueId) -> Option<u64> {
-        self.world.recvs.iter().find(|r| r.id == queue).map(|r| r.acked)
+        self.world
+            .recvs
+            .iter()
+            .find(|r| r.id == queue)
+            .map(|r| r.acked)
     }
 
     /// What each tick cost in counted work (tests only).
@@ -945,7 +985,11 @@ impl Scheduler {
                 && up.id == id
             {
                 up.chan.set_send_counter_kat(value);
-                if let Some(Part { kind: ReqKind::Send { queue, token }, .. }) = up.send_part.take() {
+                if let Some(Part {
+                    kind: ReqKind::Send { queue, token },
+                    ..
+                }) = up.send_part.take()
+                {
                     source.discard(queue, token);
                 }
                 up.fetch_part = None;
@@ -1016,12 +1060,20 @@ impl Scheduler {
         q
     }
 
-    fn check_balanced(&self, relay: RelayId, extra: Option<u64>, mode: Mode) -> Result<(), SchedError> {
+    fn check_balanced(
+        &self,
+        relay: RelayId,
+        extra: Option<u64>,
+        mode: Mode,
+    ) -> Result<(), SchedError> {
         if self.world.params.slot_ms(mode).is_none() {
             return Ok(());
         }
         let on_relay = self.world.recvs.iter().filter(|r| r.relay == relay);
-        let entries = on_relay.clone().count().saturating_add(usize::from(extra.is_some()));
+        let entries = on_relay
+            .clone()
+            .count()
+            .saturating_add(usize::from(extra.is_some()));
         if entries > FETCH_MULTI_LIMIT {
             return Err(SchedError::TooManyQueues);
         }
@@ -1128,7 +1180,8 @@ impl Scheduler {
             let gone = match link.spec {
                 Spec::Send(q) | Spec::Recv(q) => q == queue,
                 Spec::Relay(r) => {
-                    !world.sends.iter().any(|s| s.relay == r) && !world.recvs.iter().any(|q| q.relay == r)
+                    !world.sends.iter().any(|s| s.relay == r)
+                        && !world.recvs.iter().any(|q| q.relay == r)
                 }
             };
             if gone {
@@ -1218,7 +1271,11 @@ impl Scheduler {
             }
         }
         for spec in wanted {
-            if self.links.iter().any(|l| l.spec == spec && !matches!(l.state, State::Gone)) {
+            if self
+                .links
+                .iter()
+                .any(|l| l.spec == spec && !matches!(l.state, State::Gone))
+            {
                 continue;
             }
             let at = now.saturating_add(self.world.phase()?);
@@ -1267,7 +1324,11 @@ impl Scheduler {
         direct: bool,
         source: &mut S,
     ) -> Result<Vec<Output>, SchedError> {
-        let effective = if direct && mode == Mode::Strict { Mode::Balanced } else { mode };
+        let effective = if direct && mode == Mode::Strict {
+            Mode::Balanced
+        } else {
+            mode
+        };
         let relays: Vec<RelayId> = self.world.recvs.iter().map(|r| r.relay).collect();
         for relay in relays {
             self.check_balanced(relay, None, effective)?;
@@ -1308,8 +1369,17 @@ impl Scheduler {
     ///
     /// # Errors
     /// [`SchedError::UnknownQueue`] if `queue` was not a pool creation; the add errors.
-    pub fn pool_queue_ready(&mut self, now: u64, queue: QueueId, cap: RecvCap) -> Result<(), SchedError> {
-        let relay = self.world.pool.created(queue).ok_or(SchedError::UnknownQueue)?;
+    pub fn pool_queue_ready(
+        &mut self,
+        now: u64,
+        queue: QueueId,
+        cap: RecvCap,
+    ) -> Result<(), SchedError> {
+        let relay = self
+            .world
+            .pool
+            .created(queue)
+            .ok_or(SchedError::UnknownQueue)?;
         let period = self.world.params.p_pool_ms;
         self.add_recv_with_id(now, queue, relay, cap, period, true)
     }
@@ -1402,9 +1472,13 @@ impl Scheduler {
         op: OpId,
         closed_before_relayinfo: bool,
     ) -> Result<(), SchedError> {
-        self.world
-            .control
-            .failed(&self.world.params, &mut self.world.ctl, op, now, closed_before_relayinfo)?;
+        self.world.control.failed(
+            &self.world.params,
+            &mut self.world.ctl,
+            op,
+            now,
+            closed_before_relayinfo,
+        )?;
         Ok(())
     }
 
@@ -1425,8 +1499,14 @@ impl Scheduler {
         if present || consumed || expired {
             return Ok(None);
         }
-        self.schedule_control(now, ControlKind::LinkPut(ld), relay, u64::from(ld), When::Delayed)
-            .map(Some)
+        self.schedule_control(
+            now,
+            ControlKind::LinkPut(ld),
+            relay,
+            u64::from(ld),
+            When::Delayed,
+        )
+        .map(Some)
     }
 
     // ---- the driver's calls ---------------------------------------------------------------------------------------
@@ -1567,7 +1647,9 @@ impl Scheduler {
                 Reason::Closed
             };
             // the driver already dropped the connection: no `Close` for it
-            world.out.push(Output::Event(LinkEvent::TornDown(id, reason)));
+            world
+                .out
+                .push(Output::Event(LinkEvent::TornDown(id, reason)));
             let delay = reconnect_delay(&world.params, &mut world.rng, link.closed_before)?;
             link.state = State::Down {
                 at: now.saturating_add(delay),
@@ -1657,6 +1739,10 @@ impl Scheduler {
     /// The `QueueRef` of a recv-queue (what `FETCH_MULTI` names).
     #[must_use]
     pub fn queue_ref(&self, queue: QueueId) -> Option<QueueRef> {
-        self.world.recvs.iter().find(|r| r.id == queue).map(|r| r.cap.queue())
+        self.world
+            .recvs
+            .iter()
+            .find(|r| r.id == queue)
+            .map(|r| r.cap.queue())
     }
 }

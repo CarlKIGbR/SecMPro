@@ -20,7 +20,7 @@ use secmp_proto::wire::cell::{
     ReceiptBody, ReceiptKind,
 };
 
-use crate::scheduler::outbox::{MsgId, Outbox, OutMessage, Persist, PersistKind};
+use crate::scheduler::outbox::{MsgId, OutMessage, Outbox, Persist, PersistKind};
 use crate::scheduler::types::{
     CellSource, CellToken, PreparedCell, QueueId, SendFailure, SourceError,
 };
@@ -289,7 +289,9 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
     /// Whether something real waits for a slot: a planned cell, a queued message, a receipt.
     #[must_use]
     pub fn has_pending_real(&self) -> bool {
-        !self.plan.is_empty() || self.outbox.waiting() > 0 || (self.send_receipts && !self.receipts_due.is_empty())
+        !self.plan.is_empty()
+            || self.outbox.waiting() > 0
+            || (self.send_receipts && !self.receipts_due.is_empty())
     }
 
     /// How many cell ids are mapped to what they carried (S-32).
@@ -305,7 +307,8 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
     }
 
     fn ts(&self, now_ms: u64) -> u64 {
-        self.unix_base.saturating_add(now_ms.checked_div(1000).unwrap_or(0))
+        self.unix_base
+            .saturating_add(now_ms.checked_div(1000).unwrap_or(0))
     }
 
     fn take_seq(&mut self) -> u64 {

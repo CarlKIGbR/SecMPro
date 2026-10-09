@@ -187,7 +187,11 @@ pub trait CellSource {
     ///
     /// # Errors
     /// [`SourceError`] if the new state could not be persisted: no cell leaves.
-    fn prepare_cell(&mut self, queue: QueueId, now: u64) -> Result<Option<PreparedCell>, SourceError>;
+    fn prepare_cell(
+        &mut self,
+        queue: QueueId,
+        now: u64,
+    ) -> Result<Option<PreparedCell>, SourceError>;
 
     /// `OK_SEND`: the cell of `token` is stored under `cell_id`.
     fn relayed(&mut self, queue: QueueId, token: CellToken, cell_id: u64);

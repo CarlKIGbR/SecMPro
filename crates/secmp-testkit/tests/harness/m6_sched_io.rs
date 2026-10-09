@@ -15,11 +15,13 @@ use secmp_crypto::{SecretBytes, Zeroizing};
 use secmp_proto::tr::{Entropy, FixedEntropy};
 use secmp_proto::wire::cell::{AppKind, Cell};
 use secmp_proto::wire::frame::{ErrCode, Request, RequestCmd, Response, ResponseCmd};
-use secmp_testkit::harness::{Audit, Dir, EntropyPool, Inspect, START_UNIX, VirtualDriver, ratchet_pair};
+use secmp_testkit::harness::{
+    Audit, Dir, EntropyPool, Inspect, START_UNIX, VirtualDriver, ratchet_pair,
+};
 use secmp_transport::{QueueTransport, RecvCap, RelayQueueTransport, SendCap, Session};
 
 use crate::m6_common::{
-    FRAME, client, contact, driver, frames, frames_of, half_contact, inject, run_until_link_up,
+    FRAME, at, client, contact, driver, frames, frames_of, half_contact, inject, run_until_link_up,
     send_only,
 };
 use crate::scripted::{self, Script, Scripted};
@@ -31,10 +33,6 @@ fn text(n: u8, len: usize) -> OutMessage {
         expire_after: 0,
         payload: Zeroizing::new(vec![n; len]),
     }
-}
-
-fn at(t_up: u64, k: u64, period: u64) -> u64 {
-    t_up.checked_add(k.checked_mul(period).unwrap()).unwrap()
 }
 
 type TestConv = Conversation<MemOutbox, MemPersist, EntropyPool>;
@@ -60,7 +58,11 @@ fn conv_with_peer(tag: u32) -> (TestConv, secmp_proto::tr::RatchetState, Entropy
     (conv, receiver, EntropyPool::new("m6-io-peer", tag))
 }
 
-fn content_type_of(cell: &Cell, peer: secmp_proto::tr::RatchetState, pool: &mut EntropyPool) -> (u8, secmp_proto::tr::RatchetState) {
+fn content_type_of(
+    cell: &Cell,
+    peer: secmp_proto::tr::RatchetState,
+    pool: &mut EntropyPool,
+) -> (u8, secmp_proto::tr::RatchetState) {
     let opened = peer.decrypt_with(cell.as_bytes(), pool.get()).ok().unwrap();
     let ty = opened.plaintext().content().unwrap().body.content_type();
     let (state, _) = opened.commit(|_| Ok::<(), ()>(())).unwrap();
@@ -76,27 +78,43 @@ fn real_and_dummy_share_one_path() {
     let i = convs.add(conv);
     let before = counters::tr_encrypt_calls();
     let dummy = convs.prepare_cell(QueueId(0), 0).unwrap().unwrap();
-    convs.get_mut(i).unwrap().outbox_mut().enqueue(text(1, 100), 0);
+    convs
+        .get_mut(i)
+        .unwrap()
+        .outbox_mut()
+        .enqueue(text(1, 100), 0);
     let real = convs.prepare_cell(QueueId(0), 10_000).unwrap().unwrap();
     assert_eq!(counters::tr_encrypt_calls() - before, 2);
-    assert_eq!(counters::encrypt_sites(), vec!["Conversation::seal"], "one call site");
-    assert_eq!((dummy.cell.as_bytes().len(), real.cell.as_bytes().len()), (4096, 4096));
+    assert_eq!(
+        counters::encrypt_sites(),
+        vec!["Conversation::seal"],
+        "one call site"
+    );
+    assert_eq!(
+        (dummy.cell.as_bytes().len(), real.cell.as_bytes().len()),
+        (4096, 4096)
+    );
     let (t1, peer) = content_type_of(&dummy.cell, peer, &mut pool);
     let (t2, _) = content_type_of(&real.cell, peer, &mut pool);
     assert_eq!((t1, t2), (0x00, 0x02));
 
     // on the wire: the same request, the same size
-    let mut d = driver();
-    let a = client(&mut d, Mode::Strict, 251);
-    let b = client(&mut d, Mode::Strict, 252);
-    let c = contact(&mut d, a, b, 10_000, 80_000);
-    d.client(a).opts.inspect = Inspect::Requests;
-    d.run_until(300_000);
-    d.client(a).convs.get_mut(c.conv_a).unwrap().outbox_mut().enqueue(text(2, 500), 300_000);
-    d.run_until(600_000);
-    let c2r = frames(&d, a, Dir::C2R);
+    let mut sim = driver();
+    let a = client(&mut sim, Mode::Strict, 251);
+    let b = client(&mut sim, Mode::Strict, 252);
+    let c = contact(&mut sim, a, b, 10_000, 80_000);
+    sim.client(a).opts.inspect = Inspect::Requests;
+    sim.run_until(300_000);
+    sim.client(a)
+        .convs
+        .get_mut(c.conv_a)
+        .unwrap()
+        .outbox_mut()
+        .enqueue(text(2, 500), 300_000);
+    sim.run_until(600_000);
+    let c2r = frames(&sim, a, Dir::C2R);
     assert!(c2r.iter().all(|e| e.len == FRAME));
-    let sends = d
+    let sends = sim
         .client_ref(a)
         .requests
         .iter()
@@ -104,7 +122,12 @@ fn real_and_dummy_share_one_path() {
         .count();
     assert!(sends > 20);
     assert_eq!(
-        d.client_ref(b).convs.get(c.conv_b).unwrap().received().len(),
+        sim.client_ref(b)
+            .convs
+            .get(c.conv_b)
+            .unwrap()
+            .received()
+            .len(),
         1,
         "the real message arrived among the dummies"
     );
@@ -114,19 +137,27 @@ fn real_and_dummy_share_one_path() {
 /// and the message stays queued.
 #[test]
 fn persist_before_send_order() {
-    let mut d = driver();
-    let a = client(&mut d, Mode::Strict, 261);
-    let b = client(&mut d, Mode::Strict, 262);
-    let c = send_only(&mut d, a, b, 10_000);
-    d.client(a).convs.get_mut(c).unwrap().outbox_mut().enqueue(text(1, 60), 0);
-    d.run_until(400_000);
-    let audit = d.client_ref(a).gate.audit.clone();
+    let mut sim = driver();
+    let a = client(&mut sim, Mode::Strict, 261);
+    let b = client(&mut sim, Mode::Strict, 262);
+    let c = send_only(&mut sim, a, b, 10_000);
+    sim.client(a)
+        .convs
+        .get_mut(c)
+        .unwrap()
+        .outbox_mut()
+        .enqueue(text(1, 60), 0);
+    sim.run_until(400_000);
+    let audit = sim.client_ref(a).gate.audit.clone();
     let mut last_prepared: Option<[u64; 3]> = None;
     let mut checked = 0;
     for e in &audit {
         match *e {
             Audit::Prepared(p) => {
-                assert_eq!(p[0], p[1], "every encrypt was persisted before the cell was released");
+                assert_eq!(
+                    p[0], p[1],
+                    "every encrypt was persisted before the cell was released"
+                );
                 if let Some(q) = last_prepared {
                     assert_eq!(p[0] - q[0], 1);
                 }
@@ -142,25 +173,31 @@ fn persist_before_send_order() {
     assert!(checked > 10);
 
     // run 2: persist fails — no frame is prepared, the link goes down at the tick, the message stays queued
-    let mut d = driver();
-    let a = client(&mut d, Mode::Strict, 263);
-    let b = client(&mut d, Mode::Strict, 264);
-    let c = send_only(&mut d, a, b, 10_000);
-    let (slot, t_up) = run_until_link_up(&mut d, a, LinkKind::Send);
+    let mut sim = driver();
+    let a = client(&mut sim, Mode::Strict, 263);
+    let b = client(&mut sim, Mode::Strict, 264);
+    let c = send_only(&mut sim, a, b, 10_000);
+    let (slot, t_up) = run_until_link_up(&mut sim, a, LinkKind::Send);
     {
-        let conv = d.client(a).convs.get_mut(c).unwrap();
+        let conv = sim.client(a).convs.get_mut(c).unwrap();
         conv.persist_mut().set_failing(true);
         conv.outbox_mut().enqueue(text(9, 60), 0);
     }
     let _ = (slot, t_up);
-    d.run_until(at(t_up, 3, 10_000));
-    let torn = d
+    sim.run_until(at(t_up, 3, 10_000));
+    let torn = sim
         .client_ref(a)
         .events
         .iter()
         .any(|(_, e)| matches!(e, LinkEvent::TornDown(_, Reason::Overrun)));
     assert!(torn, "no frame was prepared: overrun");
-    let state = d.client_ref(a).convs.get(c).unwrap().outbox().state(&[9; 16]);
+    let state = sim
+        .client_ref(a)
+        .convs
+        .get(c)
+        .unwrap()
+        .outbox()
+        .state(&[9; 16]);
     assert_eq!(state, Some(MsgState::Queued));
 }
 
@@ -168,32 +205,66 @@ fn persist_before_send_order() {
 /// succeeds the acknowledgement moves.
 #[test]
 fn persist_before_ack_order() {
-    let mut d = driver();
-    let a = client(&mut d, Mode::Strict, 271);
-    let b = client(&mut d, Mode::Strict, 272);
-    let h = half_contact(&mut d, a, b, 10_000);
+    let mut sim = driver();
+    let a = client(&mut sim, Mode::Strict, 271);
+    let b = client(&mut sim, Mode::Strict, 272);
+    let h = half_contact(&mut sim, a, b, 10_000);
     let real = {
-        let conv = d.client(b).convs.get_mut(h.conv_b).unwrap();
+        let conv = sim.client(b).convs.get_mut(h.conv_b).unwrap();
         conv.outbox_mut().enqueue(text(5, 80), 0);
         conv.prepare_direct(0).unwrap().cell
     };
-    d.client(a).convs.get_mut(h.conv_a).unwrap().persist_mut().set_failing(true);
-    d.client(a).opts.inspect = Inspect::Requests;
-    let id = inject(&mut d, b, &h, &real);
-    let (slot, t_up) = run_until_link_up(&mut d, a, LinkKind::Recv);
-    d.run_until(at(t_up, 4, 10_000));
-    assert_eq!(d.client_ref(a).sched.acked(h.a_recv), Some(0), "no acknowledgement without a commit");
-    let acks: Vec<u64> = fetch_acks(&d, a, slot);
-    assert!(acks.iter().all(|a| *a == 0), "the next FETCHes carry the old ack: {acks:?}");
-    assert!(d.client_ref(a).gate.delivered.get(&(h.a_recv.0, id)).copied().unwrap_or(0) >= 2, "fetched again");
-    d.client(a).convs.get_mut(h.conv_a).unwrap().persist_mut().set_failing(false);
-    d.run_until(at(t_up, 7, 10_000));
-    assert_eq!(d.client_ref(a).sched.acked(h.a_recv), Some(id));
-    assert_eq!(d.client_ref(a).convs.get(h.conv_a).unwrap().received().len(), 1);
+    sim.client(a)
+        .convs
+        .get_mut(h.conv_a)
+        .unwrap()
+        .persist_mut()
+        .set_failing(true);
+    sim.client(a).opts.inspect = Inspect::Requests;
+    let id = inject(&mut sim, b, &h, &real);
+    let (slot, t_up) = run_until_link_up(&mut sim, a, LinkKind::Recv);
+    sim.run_until(at(t_up, 4, 10_000));
+    assert_eq!(
+        sim.client_ref(a).sched.acked(h.a_recv),
+        Some(0),
+        "no acknowledgement without a commit"
+    );
+    let acks: Vec<u64> = fetch_acks(&sim, a, slot);
+    assert!(
+        acks.iter().all(|a| *a == 0),
+        "the next FETCHes carry the old ack: {acks:?}"
+    );
+    assert!(
+        sim.client_ref(a)
+            .gate
+            .delivered
+            .get(&(h.a_recv.0, id))
+            .copied()
+            .unwrap_or(0)
+            >= 2,
+        "fetched again"
+    );
+    sim.client(a)
+        .convs
+        .get_mut(h.conv_a)
+        .unwrap()
+        .persist_mut()
+        .set_failing(false);
+    sim.run_until(at(t_up, 7, 10_000));
+    assert_eq!(sim.client_ref(a).sched.acked(h.a_recv), Some(id));
+    assert_eq!(
+        sim.client_ref(a)
+            .convs
+            .get(h.conv_a)
+            .unwrap()
+            .received()
+            .len(),
+        1
+    );
 }
 
-fn fetch_acks(d: &VirtualDriver, c: usize, slot: u64) -> Vec<u64> {
-    d.client_ref(c)
+fn fetch_acks(sim: &VirtualDriver, c: usize, slot: u64) -> Vec<u64> {
+    sim.client_ref(c)
         .requests
         .iter()
         .filter(|(_, s, _)| *s == slot)
@@ -208,52 +279,71 @@ fn fetch_acks(d: &VirtualDriver, c: usize, slot: u64) -> Vec<u64> {
 /// real cells around it are delivered.
 #[test]
 fn every_delivered_cell_is_acknowledged() {
-    let mut d = driver();
-    let a = client(&mut d, Mode::Strict, 281);
-    let b = client(&mut d, Mode::Strict, 282);
-    let h = half_contact(&mut d, a, b, 10_000);
+    let mut sim = driver();
+    let a = client(&mut sim, Mode::Strict, 281);
+    let b = client(&mut sim, Mode::Strict, 282);
+    let h = half_contact(&mut sim, a, b, 10_000);
     let (r1, r2) = {
-        let conv = d.client(b).convs.get_mut(h.conv_b).unwrap();
+        let conv = sim.client(b).convs.get_mut(h.conv_b).unwrap();
         conv.outbox_mut().enqueue(text(1, 80), 0);
         let r1 = conv.prepare_direct(0).unwrap().cell;
         conv.outbox_mut().enqueue(text(2, 80), 0);
         let r2 = conv.prepare_direct(0).unwrap().cell;
         (r1, r2)
     };
-    let id1 = inject(&mut d, b, &h, &r1);
+    let id1 = inject(&mut sim, b, &h, &r1);
     let garbage = Cell::from_bytes(&[0x33; 4096]).unwrap();
-    let id2 = inject(&mut d, b, &h, &garbage);
-    let id3 = inject(&mut d, b, &h, &r2);
+    let id2 = inject(&mut sim, b, &h, &garbage);
+    let id3 = inject(&mut sim, b, &h, &r2);
     assert_eq!((id1, id2, id3), (1, 2, 3));
-    let (_, t_up) = run_until_link_up(&mut d, a, LinkKind::Recv);
-    d.run_until(at(t_up, 3, 10_000));
-    let conv = d.client_ref(a).convs.get(h.conv_a).unwrap();
+    let (_, t_up) = run_until_link_up(&mut sim, a, LinkKind::Recv);
+    sim.run_until(at(t_up, 3, 10_000));
+    let conv = sim.client_ref(a).convs.get(h.conv_a).unwrap();
     assert_eq!(conv.received().len(), 2, "both real cells delivered");
     assert_eq!(conv.discarded(), 1);
-    assert_eq!(d.client_ref(a).sched.acked(h.a_recv), Some(3), "the ack covers the discarded cell");
+    assert_eq!(
+        sim.client_ref(a).sched.acked(h.a_recv),
+        Some(3),
+        "the ack covers the discarded cell"
+    );
 }
 
 /// S-29: a cell delivered twice by the relay (a re-fetch with an older acknowledgement) is processed once.
 #[test]
 fn refetch_dedup_by_cell_id() {
-    let mut d = driver();
-    let a = client(&mut d, Mode::Strict, 291);
-    let b = client(&mut d, Mode::Strict, 292);
-    let h = half_contact(&mut d, a, b, 10_000);
+    let mut sim = driver();
+    let a = client(&mut sim, Mode::Strict, 291);
+    let b = client(&mut sim, Mode::Strict, 292);
+    let h = half_contact(&mut sim, a, b, 10_000);
     let real = {
-        let conv = d.client(b).convs.get_mut(h.conv_b).unwrap();
+        let conv = sim.client(b).convs.get_mut(h.conv_b).unwrap();
         conv.outbox_mut().enqueue(text(3, 80), 0);
         conv.prepare_direct(0).unwrap().cell
     };
-    let id = inject(&mut d, b, &h, &real);
-    d.client(a).latency_ms = 9_500;
-    d.client(a).opts.inspect = Inspect::Requests;
-    let (slot, t_up) = run_until_link_up(&mut d, a, LinkKind::Recv);
-    d.run_until(at(t_up, 5, 10_000));
-    let acks = fetch_acks(&d, a, slot);
-    assert!(acks.iter().filter(|a| **a == 0).count() >= 2, "the cell was asked for twice: {acks:?}");
-    assert_eq!(d.client_ref(a).gate.delivered.get(&(h.a_recv.0, id)), Some(&1), "processed once");
-    assert_eq!(d.client_ref(a).convs.get(h.conv_a).unwrap().received().len(), 1);
+    let id = inject(&mut sim, b, &h, &real);
+    sim.client(a).latency_ms = 9_500;
+    sim.client(a).opts.inspect = Inspect::Requests;
+    let (slot, t_up) = run_until_link_up(&mut sim, a, LinkKind::Recv);
+    sim.run_until(at(t_up, 5, 10_000));
+    let acks = fetch_acks(&sim, a, slot);
+    assert!(
+        acks.iter().filter(|a| **a == 0).count() >= 2,
+        "the cell was asked for twice: {acks:?}"
+    );
+    assert_eq!(
+        sim.client_ref(a).gate.delivered.get(&(h.a_recv.0, id)),
+        Some(&1),
+        "processed once"
+    );
+    assert_eq!(
+        sim.client_ref(a)
+            .convs
+            .get(h.conv_a)
+            .unwrap()
+            .received()
+            .len(),
+        1
+    );
 }
 
 // ---- S-30: response handling against a scripted relay ---------------------------------------------------------------
@@ -275,7 +365,7 @@ struct Fake {
 
 impl CellSource for Fake {
     fn prepare_cell(&mut self, _: QueueId, _: u64) -> Result<Option<PreparedCell>, SourceError> {
-        self.next += 1;
+        self.next = self.next.saturating_add(1);
         Ok(Some(PreparedCell {
             cell: Cell::from_bytes(&[u8::try_from(self.next).unwrap(); 4096]).unwrap(),
             token: CellToken(self.next),
@@ -319,7 +409,8 @@ impl Rig {
             ..Params::default()
         };
         let mut sched = Scheduler::new(params, mode, TimingRng::seeded(3));
-        let cap = SendCap::from_route([1; 16], &SecretBytes::from_slice(&[9; 32]).unwrap()).unwrap();
+        let cap =
+            SendCap::from_route([1; 16], &SecretBytes::from_slice(&[9; 32]).unwrap()).unwrap();
         sched.add_send_queue(0, RelayId(0), cap, 10_000).unwrap();
         Self {
             sched,
@@ -349,7 +440,10 @@ impl Rig {
                     .unwrap();
                     let (_s, chan) = session.into_parts();
                     self.link = Some(link);
-                    let more = self.sched.link_up(link, self.now, chan, &mut self.src).unwrap();
+                    let more = self
+                        .sched
+                        .link_up(link, self.now, chan, &mut self.src)
+                        .unwrap();
                     queue.extend(more);
                 }
                 Output::Write { link, bytes } => {
@@ -357,18 +451,25 @@ impl Rig {
                     std::io::Write::write_all(&mut self.stream, &bytes).unwrap();
                     loop {
                         let mut frame = vec![0_u8; FRAME];
-                        let mut got = 0;
+                        let mut got = 0_usize;
                         while got < FRAME {
-                            let n = std::io::Read::read(&mut self.stream, &mut frame[got..]).unwrap();
+                            let n = std::io::Read::read(
+                                &mut self.stream,
+                                frame.get_mut(got..).unwrap(),
+                            )
+                            .unwrap();
                             if n == 0 {
                                 break;
                             }
-                            got += n;
+                            got = got.saturating_add(n);
                         }
                         if got < FRAME {
                             break;
                         }
-                        let more = self.sched.on_frame(link, self.now, &frame, &mut self.src).unwrap();
+                        let more = self
+                            .sched
+                            .on_frame(link, self.now, &frame, &mut self.src)
+                            .unwrap();
                         queue.extend(more);
                     }
                 }
@@ -397,13 +498,22 @@ fn send_script() -> Script {
     Box::new(|request: &Request, n| {
         let seq = request.cmd_seq;
         let resp = match n {
-            0 => ResponseCmd::OkSend { cell_id: 10, evicted: Some(5) },
-            1 => ResponseCmd::OkSend { cell_id: 11, evicted: Some(6) },
+            0 => ResponseCmd::OkSend {
+                cell_id: 10,
+                evicted: Some(5),
+            },
+            1 => ResponseCmd::OkSend {
+                cell_id: 11,
+                evicted: Some(6),
+            },
             2 => ResponseCmd::Err(ErrCode::NoQueue),
             3 => ResponseCmd::Err(ErrCode::Auth),
             _ => ResponseCmd::Err(ErrCode::Rate),
         };
-        vec![Response { cmd_seq: seq, cmd: resp }]
+        vec![Response {
+            cmd_seq: seq,
+            cmd: resp,
+        }]
     })
 }
 
@@ -415,7 +525,11 @@ fn send_response_handling() {
     rig.run_to(0);
     let t_up = 0;
     rig.run_to(at(t_up, 5, 10_000));
-    assert_eq!(rig.writes, (1..=5).map(|k| k * 10_000).collect::<Vec<u64>>(), "schedule unchanged");
+    assert_eq!(
+        rig.writes,
+        (1..=5).map(|k| k * 10_000).collect::<Vec<u64>>(),
+        "schedule unchanged"
+    );
     assert_eq!(
         rig.src.calls,
         vec![
@@ -434,36 +548,53 @@ fn send_response_handling() {
     assert!(rig.events.contains(&LinkEvent::RouteDead(q)));
     assert!(rig.events.contains(&LinkEvent::Alert(q, Alert::QueueAuth)));
     assert!(rig.events.contains(&LinkEvent::Alert(q, Alert::QueueRate)));
-    assert!(!rig.events.iter().any(|e| matches!(e, LinkEvent::TornDown(..))), "no teardown");
+    assert!(
+        !rig.events
+            .iter()
+            .any(|e| matches!(e, LinkEvent::TornDown(..))),
+        "no teardown"
+    );
 }
 
 /// S-31: a `FETCH` answered `present` 2 makes the recipient re-create the identical queue on a one-shot link after
 /// `U[10 s, 5 min]`, with its acknowledgement reset; the recv link keeps its ticks.
 #[test]
 fn recv_noqueue_recreates_after_delay() {
-    let mut d = driver();
-    let a = client(&mut d, Mode::Strict, 311);
-    let b = client(&mut d, Mode::Strict, 312);
-    let c = contact(&mut d, a, b, 10_000, 10_000);
-    let (slot, t_up) = run_until_link_up(&mut d, a, LinkKind::Recv);
-    d.run_until(at(t_up, 40, 10_000));
-    assert!(d.client_ref(a).sched.acked(c.a_recv).unwrap() > 0);
+    let mut sim = driver();
+    let a = client(&mut sim, Mode::Strict, 311);
+    let b = client(&mut sim, Mode::Strict, 312);
+    let c = contact(&mut sim, a, b, 10_000, 10_000);
+    let (slot, t_up) = run_until_link_up(&mut sim, a, LinkKind::Recv);
+    sim.run_until(at(t_up, 40, 10_000));
+    assert!(sim.client_ref(a).sched.acked(c.a_recv).unwrap() > 0);
     // the relay loses the queue (QUEUE_DEL by its owner's key stands in for a restart that keeps the connections)
-    let (recv_seed, send_seed) = *d.client_ref(a).material.queues.get(&c.a_recv.0).unwrap();
+    let (recv_seed, send_seed) = *sim.client_ref(a).material.queues.get(&c.a_recv.0).unwrap();
     {
-        let access = d.harness().access_key();
-        let fp = d.harness().relay_fp();
-        let unix = d.harness().clock().unix();
-        let stream = d.harness_mut().open_stream().unwrap();
-        let mut t = RelayQueueTransport::connect(stream, fp, Some(&access), unix, d.client(a).entropy.get()).unwrap();
-        t.delete_queue(&RecvCap::from_seed(&SecretBytes::from_slice(&recv_seed).unwrap()).unwrap()).unwrap();
+        let access = sim.harness().access_key();
+        let fp = sim.harness().relay_fp();
+        let unix = sim.harness().clock().unix();
+        let stream = sim.harness_mut().open_stream().unwrap();
+        let mut t = RelayQueueTransport::connect(
+            stream,
+            fp,
+            Some(&access),
+            unix,
+            sim.client(a).entropy.get(),
+        )
+        .unwrap();
+        t.delete_queue(&RecvCap::from_seed(&SecretBytes::from_slice(&recv_seed).unwrap()).unwrap())
+            .unwrap();
     }
-    let t_gone = d.now();
-    d.run_until(at(t_up, 41, 10_000));
+    let t_gone = sim.now();
+    sim.run_until(at(t_up, 41, 10_000));
     let t_seen = at(t_up, 41, 10_000);
-    assert_eq!(d.client_ref(a).sched.acked(c.a_recv), Some(0), "acknowledgement reset");
-    d.run_until(t_seen + 320_000);
-    let started: Vec<_> = d
+    assert_eq!(
+        sim.client_ref(a).sched.acked(c.a_recv),
+        Some(0),
+        "acknowledgement reset"
+    );
+    sim.run_until(t_seen + 320_000);
+    let started: Vec<_> = sim
         .client_ref(a)
         .controls_started
         .iter()
@@ -471,16 +602,30 @@ fn recv_noqueue_recreates_after_delay() {
         .collect();
     assert_eq!(started.len(), 1, "one re-creation");
     let when = started.first().unwrap().0;
-    assert!((t_seen + 10_000..=t_seen + 300_000).contains(&when), "t + U[10 s, 5 min]: {t_gone} {t_seen} {when}");
+    assert!(
+        (t_seen + 10_000..=t_seen + 300_000).contains(&when),
+        "t + U[10 s, 5 min]: {t_gone} {t_seen} {when}"
+    );
     // identical keys: the original sender capability works again, and the recv link has kept its ticks
-    let sends = d.client_ref(a).material.queues.get(&c.a_recv.0).copied();
+    let sends = sim.client_ref(a).material.queues.get(&c.a_recv.0).copied();
     assert_eq!(sends, Some((recv_seed, send_seed)));
-    let ticks: Vec<u64> = frames_of(&d, a, Dir::C2R, slot).iter().map(|e| e.t_ms).collect();
+    let ticks: Vec<u64> = frames_of(&sim, a, Dir::C2R, slot)
+        .iter()
+        .map(|e| e.t_ms)
+        .collect();
     for (k, t) in ticks.iter().enumerate() {
         assert_eq!(*t, at(t_up, u64::try_from(k).unwrap() + 1, 10_000));
     }
-    assert!(!d.client_ref(a).events.iter().any(|(_, e)| matches!(e, LinkEvent::TornDown(id, _) if id.0 == slot)));
-    assert!(d.client_ref(a).sched.acked(c.a_recv).unwrap() > 0, "fetching again after the re-creation");
+    assert!(
+        !sim.client_ref(a)
+            .events
+            .iter()
+            .any(|(_, e)| matches!(e, LinkEvent::TornDown(id, _) if id.0 == slot))
+    );
+    assert!(
+        sim.client_ref(a).sched.acked(c.a_recv).unwrap() > 0,
+        "fetching again after the re-creation"
+    );
 }
 
 /// S-32: after `ERR_NOQUEUE` on a send queue the sender forgets its `cell_id → message` map; a later `evicted` id of the
@@ -491,8 +636,15 @@ fn sender_noqueue_discards_cell_id_map() {
     let mut convs = Conversations::new();
     let i = convs.add(conv);
     for n in 0..7_u8 {
-        convs.get_mut(i).unwrap().outbox_mut().enqueue(text(n, 30), 0);
-        let p = convs.prepare_cell(QueueId(0), u64::from(n) * 10_000).unwrap().unwrap();
+        convs
+            .get_mut(i)
+            .unwrap()
+            .outbox_mut()
+            .enqueue(text(n, 30), 0);
+        let p = convs
+            .prepare_cell(QueueId(0), u64::from(n) * 10_000)
+            .unwrap()
+            .unwrap();
         convs.relayed(QueueId(0), p.token, u64::from(n) + 1);
     }
     assert_eq!(convs.get(i).unwrap().mapped_cells(), 7);
@@ -500,12 +652,22 @@ fn sender_noqueue_discards_cell_id_map() {
     assert_eq!(convs.get(i).unwrap().mapped_cells(), 0, "map empty");
     // the messages were relayed into a queue that is gone: queued again
     for n in 0..7_u8 {
-        assert_eq!(convs.get(i).unwrap().outbox().state(&[n; 16]), Some(MsgState::Queued));
+        assert_eq!(
+            convs.get(i).unwrap().outbox().state(&[n; 16]),
+            Some(MsgState::Queued)
+        );
     }
     // take one message out again (relayed in the new queue), then a stale evicted id arrives: ignored
     let p = convs.prepare_cell(QueueId(0), 100_000).unwrap().unwrap();
     convs.relayed(QueueId(0), p.token, 20);
-    assert_eq!(convs.get(i).unwrap().outbox().state(&[0; 16]), Some(MsgState::Relayed(20)));
+    assert_eq!(
+        convs.get(i).unwrap().outbox().state(&[0; 16]),
+        Some(MsgState::Relayed(20))
+    );
     convs.evicted(QueueId(0), 3);
-    assert_eq!(convs.get(i).unwrap().outbox().state(&[0; 16]), Some(MsgState::Relayed(20)), "stale id ignored");
+    assert_eq!(
+        convs.get(i).unwrap().outbox().state(&[0; 16]),
+        Some(MsgState::Relayed(20)),
+        "stale id ignored"
+    );
 }

@@ -9,7 +9,7 @@
 # - Fuzz campaign: `cargo xtask step --strict fuzz-nightly` splits `expect::FUZZ_NIGHTLY_SECONDS` (14 400 s) over the
 #   fuzz targets: each of `expect::FUZZ_DEEP_TARGETS` (the executor fuzzers FZ-07, FZ-08, run with -len_control=0)
 #   gets `expect::FUZZ_DEEP_NIGHTLY_SECONDS`, the others share the rest equally:
-#   27 targets x 266 s + 2 targets x 3600 s
+#   29 targets x 248 s + 2 targets x 3600 s
 #   (checked by `gates::tests::fuzz_executor_depth`), on a scratch corpus seeded from the frozen
 #   vectors plus the tracked corpus, which the campaign only reads (as the per-PR smoke of ci-full step 6). The scratch
 #   corpus (with the inputs libFuzzer added) and any crash inputs are uploaded as artefacts; taking inputs into

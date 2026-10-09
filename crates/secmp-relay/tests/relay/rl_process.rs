@@ -721,7 +721,7 @@ fn relay_config_controls_start_and_limits() {
         drain_secs: 9,
         max_connections: 5,
         link_idle_ms: 11_000,
-        link_age_ms: secmp_relay::conn::LINK_AGE_MAX_MS,
+        ..Limits::defaults()
     };
     assert_eq!(
         *relay.limits(),

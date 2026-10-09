@@ -142,10 +142,14 @@ mod tests {
 
     #[test]
     fn backoff_caps_follow_the_table() {
-        let caps: Vec<u64> = (1..=8).map(|n| backoff_cap(n, 180_000, 3_600_000)).collect();
+        let caps: Vec<u64> = (1..=8)
+            .map(|n| backoff_cap(n, 180_000, 3_600_000))
+            .collect();
         assert_eq!(
             caps,
-            [180_000, 360_000, 720_000, 1_440_000, 2_880_000, 3_600_000, 3_600_000, 3_600_000]
+            [
+                180_000, 360_000, 720_000, 1_440_000, 2_880_000, 3_600_000, 3_600_000, 3_600_000
+            ]
         );
         assert_eq!(backoff_cap(u32::MAX, 180_000, 3_600_000), 3_600_000);
     }

@@ -13,5 +13,7 @@
 #![forbid(unsafe_code)]
 
 pub mod clock;
+#[cfg(kani)]
+mod kani_proofs;
 pub mod scheduler;
 pub mod timing;

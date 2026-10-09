@@ -56,6 +56,33 @@ fn link_vectors_relay_keys() {
     assert_eq!(rec, c.output("rec_relayinfo"), "{id} rec_relayinfo");
 }
 
+/// G-09 (M05 review R-144) `relay_info_without_placeholder_signature`: one signing operation per `RELAYINFO` (none for a
+/// placeholder), and the bytes are V-01's.
+#[test]
+fn relay_info_without_placeholder_signature() {
+    let fx = RelayFx::case1();
+    let keys = fx.keys();
+    let before = link::relay::SIGN_CALLS_KAT.get();
+    let info = keys.relay_info(VALID_UNTIL).unwrap();
+    assert_eq!(
+        link::relay::SIGN_CALLS_KAT.get() - before,
+        1,
+        "sign_calls = 1 per RELAYINFO"
+    );
+    assert_eq!(
+        info.encode().unwrap().to_vec(),
+        reference().case(1).output("relayinfo"),
+        "the bytes of V-01"
+    );
+    let before = link::relay::SIGN_CALLS_KAT.get();
+    let _ = keys.relay_info_record(VALID_UNTIL).unwrap();
+    assert_eq!(
+        link::relay::SIGN_CALLS_KAT.get() - before,
+        1,
+        "and for the record"
+    );
+}
+
 /// V-02 `link_vectors_relayinfo_accept`: cases 0002 and 0059.
 #[test]
 fn link_vectors_relayinfo_accept() {

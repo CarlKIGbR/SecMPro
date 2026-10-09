@@ -298,7 +298,7 @@ Amended 2026-10-03 — Accepted (Reviewer, Owner-Delegation 30.09.2026).
 **Consequences.** `secmp-crypto`'s manifest loses its `[[bench]]`; the policy tests name the new path and check that the old one is refused; `secmp-testkit`'s dev build compiles `secmp-proto` (the normal, shipped closure of every crate is unchanged; `cargo vet` and `cargo deny` pass without changes). The ct targets at the M3 pin are the 9 of M2, `aa_prime_control` and the 3 TR targets. A run whose A/A′ control reaches the floor fails as `CONTROL_FAIL`, like a failing A/A control: the runner or the harness, not the code, is blamed, and the report shows by how much. Consequence: workspace test builds compile secmp-proto with `kat` by feature unification; the shipped non-kat configuration is exercised per package (Miri, mutants, nightly); M4 adds a non-kat `nextest -p secmp-proto` to CI step 4 (F).
 Consequence added at M4 (M3 review F20): workspace test builds and the coverage run compile `secmp-proto` with `kat` by feature unification; the shipped (non-`kat`) configuration is exercised per package — Miri, mutants, the nightly campaign, and, from M4, a non-`kat` `cargo nextest run --package secmp-proto` in CI step 4.
 Consequence added at M5 (M5-B-3; proposed by the implementer, engineering class (gates); accepted by the reviewer, 2026-10-08): no workspace crate turns on `secmp-relay/kat` by unification, so the coverage run names it (`--features secmp-relay/kat`, `gates::COVERAGE_FEATURES`) and measures the relay's `required-features` suite `relay`, which the `kat` step runs; PR run 37817187858 measured only the relay's unit, `cli` and `hello` tests (58.9 %). The thresholds and the ignore regex are unchanged.
-Consequence added at M5 (M5-C; proposed by the implementer, engineering class (gates), for the reviewer's acceptance): the harness and the tests of `secmp-transport` (`crates/secmp-testkit/tests/harness`) need `secmp-testkit`'s feature `harness` (a subset of `kat`: the in-process relay and clients), which nothing turns on by unification; the coverage run names it next to `secmp-relay/kat` (`gates::COVERAGE_FEATURES` = `secmp-relay/kat,secmp-testkit/harness`), without the testkit's differential suites (`kat`, 151–289 s each under instrumentation, no workspace line). Without it `secmp-transport` is measured at its one unit test. Thresholds, ignore regex and exclusions unchanged.
+Consequence added at M5 (M5-C; proposed by the implementer, engineering class (gates), accepted by the reviewer, 2026-10-09): the harness and the tests of `secmp-transport` (`crates/secmp-testkit/tests/harness`) need `secmp-testkit`'s feature `harness` (a subset of `kat`: the in-process relay and clients), which nothing turns on by unification; the coverage run names it next to `secmp-relay/kat` (`gates::COVERAGE_FEATURES` = `secmp-relay/kat,secmp-testkit/harness`), without the testkit's differential suites (`kat`, 151–289 s each under instrumentation, no workspace line). Without it `secmp-transport` is measured at its one unit test. Thresholds, ignore regex and exclusions unchanged.
 **Status.** Accepted (Reviewer, Owner-Delegation 30.09.2026) — 2026-10-01, M3 review. (Proposed 2026-09-30 by the implementer, M3, as an engineering ADR: gates/tooling.)
 **Amendment 1 (2026-10-01): layout-independent sensitivity control; reason: CONTROL_FAIL on run 36800231503, 2.600 GHz TSC runner, raw Δ −589.64 ticks.** On that runner the sensitivity control `min_leak_control` (ADR-041 Amendment 1 (2)) measured class 0 faster at every crop (raw Δ −589.64 ticks = −22.7 floors, |t| 162–470), while the same runner type reached the floor with the expected sign in every M2 run (raw Δ +566.7 … +727.7 ticks, bench in `secmp-crypto`): the early-exit `break` at byte 30 vs byte 31 of the inlined comparison loop left a class-dependent branch/code-layout artefact larger than the injected leak, and the move of the bench changed the layout (`docs/reviews/M03-evidence/ct-linux-36800231503.txt`). Reviewer decision (WEISUNG M3-3, option (b)): fix the control, not the rule — ADR-041's criterion, including its sign (class 0 slower), stays. The control's work is now one `#[inline(never)]` function, `min_leak_call`, whose instruction stream is identical for both classes: 256 times a loop of byte steps (a `black_box` load and an xor each) whose count is read from the class input — 32 for class 0, 31 for class 1, the work of a 32-byte comparison that exits one byte early — with the loop counter passed through `black_box`, so the compiler can neither unroll the loop nor split off a count-dependent remainder; the input (`steps ‖ bytes`) lives in one 64-byte-aligned block (`#[repr(C, align(64))]`) and both classes are built from one common source (`blend`, the F9 rule). The injected leak is unchanged (256 byte steps per call; same `k` and sample count as `tag_compare`), as are the A/A′ control, every threshold, the sample counts and the gate's re-derivation. Evidence: two local runs, PASS, control +2.86 floors each (`docs/reviews/M03-evidence/ct-gate-aarch64-apple-darwin-minleak-run{1,2}.txt`), and the dispatch ct run after the push.
 **Amendment 2 (2026-10-01): class-independent input preparation and a same-content control; reason: `tr_decrypt_reject_body_tag` FAIL at p95 on runs 36819503957 and 36819507083 (q_eff 26 ticks) and SUB_FLOOR_SHIFT on run 36831445639 (q_eff 2 ticks), product code unchanged since 665e84e.** Diagnostics on 65c3c5f (run 36831445639, `diagnostics` array): a target whose two classes carried identical content through the real per-class preparation path (`diag_tr_body_tag_same`) reproduced a class-0-slower shift (p50/p75/p90, |t| 20–51), and swapping the class labels (`diag_tr_body_tag_swapped`) kept class 0 slower — the shift follows the label, not the content. Disassembly (aarch64, `docs/reviews/M03-evidence/ct-blend-disasm-aarch64-bc5088b.txt`) shows the compiler splitting `blend` by class into a `memcpy` (class 1) and an XOR loop (class 0), both before the timer; the differing micro-architectural state entering the timed region is the artefact, amplified above the 10 ns floor on the 26-tick-lattice runner type. Neither the inline A/A (one class under both labels) nor the A/A′ control (separate allocations, no blend) can see a class-dependent preparation path. Reviewer decision (WEISUNG M3-8): (1) the preparation path is identical for both classes — one `#[inline(never)]` XOR loop over `base` and a per-class delta buffer selected by index (class 1: all-zero delta), the selected pointer passed through `black_box`; (2) a third control, `same_content_control`, runs the largest TR cell (the `tr_decrypt_reject_body_tag` fixture) with identical content in both classes through the real preparation path and must PASS under the target criterion (no reproduced shift ≥ 1 floor), otherwise the run is `CONTROL_FAIL` like a failed sensitivity control; (3) ADR-041's criterion, its sign rule, the thresholds and the sample counts are unchanged; the `diagnostics` array is removed. Evidence: `ct-report-linux-dispatch-36819503957.json`, `ct-report-linux-dispatch-36831445639.json`, `ct-linux-dispatch-36831445639.txt`, and the first green dispatch on the fixed head.
@@ -540,6 +540,62 @@ clarifications rev 2.6, Proposed)" for OPEN-2…OPEN-11; this ADR records all th
   reference does; (a) adds a client reject for `valid_until − now` > 60 days; (o) a relay reject of an out-of-range
   `expires_bucket`; (p) the ERR 7 answer; (n) a client-core MUST.
 
+### Errata (proposed 2026-10-09, M05 review §D; owner default 2026-10-10 10:00 UTC)
+
+Proposed by the reviewer (M05 review §D 1, §D 2); `docs/03` and `docs/01` text is owner class, so these items carry the
+owner's +24 h default like (o)/(p) and land in `docs/03`/`docs/01` only after ratification. Line numbers are those of
+`docs/03` rev 2.6 and `docs/01` at `3b29ca8`.
+
+- **(a) HELLO limit scope** (M05 review R-108; to (p) and §9.7 item 7). The HELLO handshake-rate limit of (p) and §9.7
+  item 7 is per listener, not per connection: `docs/03` §9.7 item 7 (`:636`) reads "a handshake-rate limit per listener
+  (v1; per rendezvous circuit from M10)", and §8.3 `:560` reads "DoS protection is provided by Tor intro-DoS defence and
+  a per-listener handshake-rate limit, not by `mac1`"; `docs/05:25` and `:50` read "handshake rate limit per listener
+  (per rendezvous circuit from M10)". Reason: over Tor every connection arrives from 127.0.0.1, so a per-source scope is
+  not implementable before `HiddenServiceExportCircuitID` (M10, F-1); the residual (any onion-address holder can hold
+  the shared bucket at about 4 HELLO/s and block new links, and observe aggregate link-open timing) is recorded as the
+  new `docs/01` RR row (i) below. TEST-SPEC RL-14 adds "per listener (17 distinct connections share one bucket)".
+- **(b) Expiry boundary** (M05 review R-128; to (j) and §9.7 item 3). `docs/03` §9.7 item 3 reads "expired iff
+  `now_bucket` > anchor + T, with T = `CELL_TTL` (168 h) from the cell's arrival bucket, `QUEUE_IDLE_TTL` (720 h) from
+  `last_fetch_bucket` (else `created_bucket`); link data is valid through its `expires_bucket`" (OPEN-M5-05 B). A cell
+  therefore lives up to just under 169 h, an idle queue and link data up to about 721 h; the TTL is a lower bound on
+  delivery.
+- **(c) `sid` held by another queue** (M05 review R-138; to (h)). §9.3 `QUEUE_NEW` and §9.7 item 8 gain: "a request
+  whose derived `sid` names another queue is `ERR_AUTH`; checked after the identical-request rule and before the budget
+  (OPEN-M5-04 order)". Reachable only by a 128-bit truncated-hash collision; the reference has no such check and would
+  overwrite `by_sid`; the Rust rule (`exec.rs:137-140`) is the fail-closed one.
+- **(d) Stale before rate, also for `SKEY`** (M05 review H-4, R-139; to (f)/(p)). A request with a stale `cmd_seq` is
+  answered ERR 6 before the frame-rate check (stale before rate); the exceptions of D.2 apply to every request opcode
+  including `SKEY` (0x02): a fresh `SKEY` over the frame-rate limit is answered `ERR 7`, a stale one `ERR 6`, otherwise
+  `ERR_MALFORMED`. Optional rev 2.7 wording at §8.5: "(ERR_MALFORMED, D.2; subject to the D.2 exceptions)".
+- **(e) E-9** (M05 review R-130; Part 5). A row is added to the Part 5 table:
+
+| # | File:line (at the M5 pin) | Replace → with | RID |
+|---|---|---|---|
+| E-9 | `docs/01:192` | the status paragraph "Opening-trial position (R-59, M4)", dictated by BRIEF_M5 and not listed in Part 5, is covered by this ADR; content unchanged (checked in the M05 review) | R-130 |
+
+Proposed `docs/01` text (owner class, M05 review §D 2; recommendation: accept):
+
+- **STRIDE, row "Client ↔ relay link", column D** (`docs/01:158`): "Per-link rate limits; Tor PoW; queue capacity" →
+  "Per-link rate limits; Tor intro-DoS; listener HELLO limit; queue capacity" (PoW is off, ADR-024, `docs/05:39`;
+  M05 review R-108).
+- **New RR row (i), HELLO lockout** (M05 review R-108): "Any holder of the relay's onion address can keep the
+  per-listener HELLO bucket empty (about 4 stream opens/s, about 36 B/s) and so block new links and one-shot control
+  links, and can observe in aggregate when other clients open links. Accepted for v1 (user set of two, availability
+  only; established links survive until rotation). Mitigation: per-circuit bucket with `HiddenServiceExportCircuitID`
+  in M10."
+- **New RR row (ii), lock amplification** (M05 review R-109): "Ed25519 verification runs under the relay's single state
+  lock; one FETCH_MULTI costs up to 32 verifications (about 1.6-3.8 ms of lock hold), so aggregate lock saturation is
+  bounded only by HELLO rate x per-link frame rate (about 260-630 attacker links). Availability only; precondition: one
+  queue (access key) or a known `sid`/`ld_id`. Accepted for v1; measured and, if needed, verified outside the lock in
+  M10."
+- **New RR row (iii), pool exhaustion** (M05 review R-110): "Any holder of the relay access key can reserve both pools:
+  11 432 `QUEUE_NEW` (queue pool, 524 800 B each) in about 68 s and 80 076 `LINK_PUT` (link-data pool) in about 340 s
+  at the HELLO rate, after which honest `QUEUE_NEW`/`LINK_PUT` get `ERR_FULL` (existing queues keep working; SEND is
+  never refused). Reservations free only by expiry (up to 721 h) or restart. Accepted for v1 (key holders are the
+  operator's users); recovery = restart plus access-key rotation to honest users only (runbook, M10); per-token quotas
+  with VOPRF tokens in M13."
+- RR numbers and severity (reviewer proposal): (i) RR-20 — Medium (availability, unauthenticated); (ii) RR-21 — Low (availability, authenticated); (iii) RR-22 — Low (availability, key holders only). The register jumps RR-15 → RR-17; the RR-16 gap is noted editorially, no renumbering (M05 review R-137).
+
 ### ADR-049 — `secmp-relay` in M5: no third-party runtime crate; test-only workspace crates
 **Status.** Accepted (reviewer, 2026-10-08; WEISUNG M5-B-2 item 5) — engineering class (dependencies). (Proposed
 2026-10-08 by the implementer, M5 Phase B.)
@@ -564,8 +620,8 @@ wipe on drop), for the type-level zeroization test RL-09.
 construction (no logging crate); adopting `tracing`/`tokio` in M6/M10 is a new ADR with the owner's vet records.
 
 ### ADR-050 — `secmp-transport` and `secmp-testkit` in M5: a synchronous transport over `std::io`, no async runtime
-**Status.** Proposed (2026-10-09, implementer, M5 Phase C) — engineering class (dependencies, API shape), for the
-reviewer's acceptance.
+**Status.** Accepted (Reviewer, Owner-Delegation 30.09.2026) — 2026-10-09 (M05 review §E). (Proposed 2026-10-09,
+implementer, M5 Phase C — engineering class (dependencies, API shape).)
 **Context.** BRIEF_M5-C §1 (2) names `tokio::io::duplex` and "`tokio` with the features Phase B already enabled" for the
 in-process streams of H-11; `docs/03` §12.1 sketches `QueueTransport` with `#[async_trait]`. Phase B enabled no tokio
 (ADR-049): neither `tokio` nor `async-trait` is in `Cargo.lock`, and a new dependency outside the vetted closure is a STOP

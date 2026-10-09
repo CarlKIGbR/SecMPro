@@ -317,7 +317,7 @@ HX/INV-related entry answered — SQ-10 (fingerprint input), SQ-12 (decoder chec
 
 ## LINK — SecMP-LINK + SecMP-Q command binding, sessions (`formal/link.pvl` + `formal/link/<session>.pv`, M5)
 
-*Planner draft v2 for the reviewer, 2026-10-03 (PRUEF-M5 PR-15 applied; layout per OPEN-M5-16 A, decided). §11.2 (`docs/03:715`): the reviewer fixes this query set, including the
+*Frozen 2026-10-07; reviewer errata 2026-10-09 (M05 review R-116, R-118). (PRUEF-M5 PR-15 applied; layout per OPEN-M5-16 A, decided). §11.2 (`docs/03:715`): the reviewer fixes this query set, including the
 queries expected to be false, before modelling starts. Layout per OPEN-M5-16 (A), as ADR-046/O-18 for HX. Rows marked
 **M11** are equivalence properties and are not gated in M5 (as H7 → F-M11, O-8).*
 
@@ -332,7 +332,7 @@ third parties; what R itself learns is §11.3 accepted leakage. Flow exactly §8
 by `relay_sig`; HS1 = (kid, e_c, ek_c, pk_e1, ct_kem, mac1); HS2 = (e_r, ct_c, mac2); keys `(k_c2r, k_r2c, sess_id)`;
 then frames per §8.4 carrying Q commands per §9.2/D.6 (signature over label ‖ sess_id ‖ cmd_seq ‖ fields; token
 HMAC(access_key, label ‖ sess_id ‖ cmd_seq)). Bounds: two links per client process, counters ∈ {0, 1, 2} per direction,
-at most two commands per link.
+at most two commands per link, F = 2 `CELLR` frames per FETCH response (`FETCH_BATCH` is 4 in §4.2; M05 review H-15).
 Abstractions (each a ProVerif constructor with the listed equation; nothing else is assumed):
   X25519: exp(exp(g,a),b) = exp(exp(g,b),a)                       ; low-order points, the all-zero check: tests
   ML-KEM-1024, ML-KEM-768: decaps(dk, encaps_ct(pk(dk), r)) = encaps_ss(pk(dk), r) ; implicit rejection not modelled
@@ -378,7 +378,7 @@ Events:
 | L5b | Sanity: FS rests on discarding the client ephemerals | as L5 | lFSEph: as lFS plus RevealEph in phase 1 | **false** | M5 |
 | L6 | `sess_id` binding of command signatures; one execution per command | inj-event(RExec(s,sid,cmd_seq,cmd,qpk)) ==> inj-event(CSign(s,sid,cmd_seq,cmd,qpk)) for an honest qpk (§8.3 `docs/03:560`, §9.2 `:597`) | lClean; two links of the same client; the attacker replays signed frames across links; R executes each cmd_seq at most once per link (process structure) | true | M5 |
 | L6a | Sanity: the queue key is the capability | as L6 | lQKey: RevealQKey in phase 0 | **false** | M5 |
-| L7 | `akc` pinning (§8.2 `:539`, §5.3 `:229`; consistency) | event(CAccept(s,fp,kid,…)) ==> akc of the accepted RelayInfo = h("SecMP-Q/1 akc", k) for the access key k the client holds | lClean, clients holding k | true | M5 |
+| L7 | `akc` pinning (§8.2 `:539`, §5.3 `:229`; consistency) (consequence of `relay_sig` authentication; not a check-runs claim — the client's `akc` comparison is evidenced only by C-11, RL-19; M05 review R-116) | event(CAccept(s,fp,kid,…)) ==> akc of the accepted RelayInfo = h("SecMP-Q/1 akc", k) for the access key k the client holds | lClean, clients holding k | true | M5 |
 | L8 | Reachability, one line per accept event and session | in every base file: event(CStart(s,…)); event(RAccept(s,…)) && event(CAccept(s,…)) with equal sid (the honest pair completes); event(RExec(s,…)) | — | **false** per line | M5 |
 | L9 | Client anonymity (structural) | no query: C holds no long-term secret; HS1 carries only fresh values (`docs/03:560`); test C-15 | — | by construction | M5 |
 | L10 | Indistinguishability of success and error responses (§9.3 `:614`) | diff-equivalence: choice[success, error] of the same command on an honest link, response frames observed by the network attacker | lClean | true (lengths are a test: V-16, Q-57) | **M11** |
@@ -397,7 +397,7 @@ table is per (file, ID, query text); model sha256 pinned (ADR-046 Am. 1). A mode
 Covered: HELLO/RELAYINFO with signature, `relay_fp` pin and `akc`; HS1 with `h0` over (ver, kid, relay_fp, e_c,
 h(ek_c), pk_e1, h(ct_kem)), `ck1`, `mac1` checked by R before it answers; HS2 with `h1`, `ck2`, `mac2`; key split
 `(k_c2r, k_r2c, sess_id)`; frames with per-direction keys, counter nonces and AD `sess_id`; HS1 replay as a new
-handshake (OPEN-3); attacker-initiated links; signed commands with `sess_id ‖ cmd_seq`; tokens.
+handshake (OPEN-3); attacker-initiated links; signed `QUEUE_NEW` and `FETCH` with `sess_id ‖ cmd_seq`; tokens.
 Excluded (each with where it is tested): decoders, low-order points, the ML-KEM modulus check, strict Ed25519 byte
 rules (§4.1, §3.5) — C-02…C-08, RH-05…RH-07, Q-56, FZ-01, FZ-05; record and frame lengths, padding (4352/4336, ISO) —
 F-02, F-07, K-01, V-16; `valid_until` and the 60-day bound (time) — C-10; RelayInfo not cached — C-13; counter
@@ -408,8 +408,17 @@ idempotence, eviction, one-time consumption, owner status, budget, expiry, zeroi
 P-07, P-10; token double-spend (none in v1, M13); timing and rate limits — CT-, RL-13/14; Tor and TLS (§8.1, M6); the
 relay as attacker against the client's queues — §11.3 accepted leakage, HX/TR models; the §11.1 Q properties against the
 operator — unlinkability of `rid`/`sid` (derived from fresh per-queue keys, §9.1) and detectability of per-user access
-keys (`akc`) — R is honest in this model: tests Q-01, P-05 (derivation), C-11, RL-19 (`akc`); L7 proves only that the
-client's check runs.
+keys (`akc`) — R is honest in this model: tests Q-01, P-05 (derivation), C-11, RL-19 (`akc`); the relay key ring (one
+generation `kid` in the model; an HS1 naming an older held `kid`, `link/relay.rs:149-155` `accept_ring`) — RL-17
+`relay_rotate_static_overlap`, `keys.rs` tests `the_decoder_bounds_and_orders_the_generations`,
+`rotation_adds_the_next_kid_and_keeps_the_identity`, `rotation_boundary_new_generation_may_expire_with_the_newest`,
+`cli_rotate_static_adds_the_next_generation`; the signed commands `SEND`, `FETCH_MULTI`, `QUEUE_DEL`, `LINK_PUT` and
+`LINK_GET` owner status (the model has only `lbl_qnew`/`lbl_fetch`) — their `sess_id` binding: Q-55, Q-54, the
+`wire/signed.rs` tests `exact_contents`, `lengths_and_labels`, Q-41; a client without an access key skips the `akc`
+check (OPEN-M5-01 A) — C-12; the 16-byte truncation of `rid`/`sid` — Q-01, P-05; `FETCH_BATCH` F = 4 against the
+model's F = 2 (bounds above) — Q-13, Q-57, V-09 (M05 review R-118). L7 follows from `relay_sig` authentication of
+RelayInfo (R signs exactly one `akc`); the client's `akc` comparison (`link/client.rs:98-101`) is not exercised by the
+model — tests C-11, RL-19 (M05 review R-116).
 
 ### Open modelling decisions for the reviewer (LO-n)
 

@@ -1,0 +1,119 @@
+# M5 review evidence - V12 re-derivation of the CI ct report of run 37882708499 (pin 3b29ca8)
+# Source: verifier file V12.md, verify/V12/build.log, verify/V12/ct-check.out.
+# Input: ct-report.json of run 37882708499 (144 141 B; artefact ct-report-Linux-X64-1b4820e4...), rustc 1.98.1.
+#
+# ---- build.log ----
+   Compiling serde_core v1.0.229
+   Compiling zmij v1.0.23
+   Compiling serde_json v1.0.151
+   Compiling memchr v2.8.3
+   Compiling itoa v1.0.18
+   Compiling xtask v0.0.0 (/home/claude/m05/verify/V12/tree/xtask)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 15.25s
+EXIT 0
+# ---- ct-check.out: cargo xtask ct-check /home/claude/m05/verify/V12/in/ct-report.json ----
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.03s
+     Running `target/debug/xtask ct-check /home/claude/m05/verify/V12/in/ct-report.json`
+ct-check against expect::CT_TARGETS
+PASS /home/claude/m05/verify/V12/in/ct-report.json
+ct-check: 1 reports pass
+#
+# ---- V12.md sections 2-5 (run header, per-target table incl. caead_derive, controls, SUB_FLOOR_SHIFT) (verbatim) ----
+## 2. Run header
+
+| field | value |
+|---|---|
+| run_verdict / run_reason | PASS / null |
+| host | AMD EPYC 7763 64-Core, microcode `0xffffffff` (hypervisor-masked; clocksources list hyperv_* → Azure VM) |
+| timer | rdtscp, clocksource tsc, tick_ns 0.408928 (≈ 2.445 GHz), clock q_eff 1.0 tick, lattice median gap 25 ticks, overhead 49 ticks |
+| floor | max(q_eff, 10 ns) = 24.454 ticks (q_eff 1) … 24.6 (q_eff 24.6); F17 bound for q_eff = 25.454 ticks (all targets ≤ 24.6) |
+| bench_sha256 | `e2d3d7aa0dc4e06e5e02cc06330413ee11435d7b65444446458452a297f6a312`. This is the SHA-256 of the **bench executable** (ct.rs:4222-4233), not of a source file, so it cannot be checked against the tree without a reproducible bench build. Note: ct.rs source sha256 is `bfa02520…2a86`, a different object. |
+| head / merge sha | **Not recorded in the JSON** (top-level keys: thresholds, sign, clock, host, bench_sha256, run_verdict, run_reason, sensitivity_control, min_leak_same_content, results). The binding to the pin is only through the artefact name `ct-report-Linux-X64-1b4820e4…` (REPORT.txt:37) plus the binding-gate argument that merge-tree = pin-tree (binding-notes.md, EV-1). |
+| thresholds | pass 4.5, aa_max_t 4.5, floor 1 quantum / 10 ns, samples 1 000 000 (sas 20 000), max_batch 64 |
+| progress | 28 targets/controls, 106 phase lines, last at 8212.5 s (≈ 137 min; the job took 138 min) |
+
+## 3. Per-target table
+
+Columns:
+- t1/t2 and Δ are taken at the decisive crop, or for PASS at the crop with the largest max|t|.
+- Δ in ticks is per batch of k calls; floors = Δ / max(q_eff, 10 ns).
+- "closest to FAIL" = the strongest crop where either condition holds.
+
+| target | verdict | k | q_eff (src) | A/A max\|t\| | max\|t\| first / second | Δ ticks (floors) at that crop | closest to FAIL |
+|---|---|---|---|---|---|---|---|
+| control_variable_time_compare (pos. control) | PASS = detected | 5 | 1.0 (clock) | 1.551 | −21801.2 @p75 (first only; second null) | −20853 (−852.8 fl); class 0 (byte 0) faster, as designed | — |
+| tag_compare | PASS | 1 | 24.333 | 1.505 | 1.42 / 0.43 @p50 | 0.04 (0.002) | none |
+| msg_open_reject | PASS | 1 | 24.43/24.5 | 0.755 | 0.83 @raw / 0.90 @p99 | ≤ 2.2 (0.09) | none |
+| caead_open_reject | PASS | 1 | 24.47/24.5 | 1.511 | 2.48 / 2.88 @p50 | 0.15/0.17 (0.007) | none |
+| sas | PASS | 1 | 24.50 | 2.102 | 1.18 @raw / 2.23 @p50 | raw −1010.6/−499.7 (−41.2/−20.4) | Δ ≥ floor at all crops, but min\|t\| ≤ 1.18 (high-variance 3.27 M-tick target, n = 20 000) |
+| **caead_derive** | **SUB_FLOOR_SHIFT @p95** | 3 | 24.5/24.5 | 2.062 | 55.28 @p75 / 46.28 @p90 | **@p95: t 45.45/45.88, Δ 2.425/2.188 ticks = 0.99/0.89 ns = 0.099/0.089 floors** | reproduced at all 5 percentile crops; largest Δ 0.104 floors @p99 |
+| caead_aead_reject | PASS | 1 | 24.25 | 1.692 | −14.84 @p95 / 4.37 @p50 | p95: −0.68/−0.05 (−0.028) | single-measurement excursion, not reproduced (second −1.19) |
+| caead_com_compare | PASS | 1 | 24.375 | 2.074 | 1.61 / 4.35 @p75 | 0.06/0.18 (0.007) | t 4.35 < 4.5 in second only |
+| caead_open_reject_samekey | PASS | 1 | 24.48 | 1.751 | 2.01 / 1.67 | ≤ 8.2 (0.34) | none |
+| aa_prime_control | PASS | 1 | 24.43/24.5 | 1.19 | 12.83 @p95 / 3.78 @p75 | p95: 0.72/0.07 (0.029) | first-only excursion, not reproduced |
+| tr_decrypt_reject_hdr_key | PASS | 1 | 24.5 | 1.385 | 1.19 / 2.55 | raw 6.2/19.4 (0.25/0.79) | none |
+| tr_decrypt_reject_body_tag | PASS | 1 | 24.5 | 2.092 | 1.35 / 0.98 | ≤ 5.1 (0.21) | none |
+| tr_decrypt_reject_ct_pq | PASS | 1 | 24.5 | 2.672 | 1.22 / 2.06 | ≤ 11.9 (0.49) | none |
+| tr_decrypt_reject_skipped | PASS | 1 | 24.505 | 2.32 | 1.99 / 1.47 | raw 7.9/21.3 (0.32/0.87) | none |
+| same_content_control | PASS | 1 | 24.5 | 1.178 | 3.91 @raw / 0.63 | raw 36.27/−2.16 (1.48/−0.09) | signs differ, so not reproduced |
+| inv_fingerprint_compare | PASS | 1 | 24.49 | 1.075 | 1.99 / 1.29 | raw 25.5/−13.5 (1.04/−0.55) | signs differ |
+| x25519_zero_check | PASS | 1 | 24.498 | 2.538 | 1.26 / 1.31 | raw −46.7/18.1 (−1.9/0.74) | signs differ |
+| hx_accept_reject_inner | PASS | 1 | 24.5 | 1.404 | 1.80 / 1.95 | raw 79.5/101.3 (3.2/4.1) | Δ ≥ floor at raw, min\|t\| 1.25 |
+| hx_accept_reject_first_msg | PASS | 1 | 24.498 | 0.974 | 1.25 / 1.86 | raw 430/457 (17.6/18.6) | Δ ≥ floor at raw, min\|t\| 1.14 |
+| hx_same_content_control | PASS | 1 | 24.5 | 1.254 | 1.43 / 1.16 | raw −80.2/−27.4 (−3.3/−1.1) | Δ ≥ floor at raw, min\|t\| 0.40 |
+| **link_hs1_reject_mac1** (CT-01) | PASS | 1 | 24.5 | 2.66 | 1.31 @raw / 0.74 @p50 | raw −48.8/−14.2 (−1.99/−0.58) | none (Δ < floor in second) |
+| link_hs2_reject_mac2 (CT-02) | PASS | 1 | 24.49/24.5 | 1.19 | 0.74 / 0.86 | p99 29.9/30.4 (1.22/1.24) | Δ ≥ floor at p99, min\|t\| 0.58 |
+| **link_frame_open_reject** (CT-03) | PASS | 1 | 24.5 | 1.296 | 0.82 / 1.46 @p99 | ≤ 2.6 (0.11) | none |
+| q_queue_new_reject_token (CT-04) | PASS | 5 | 1.0 (clock) | 1.161 | 2.79 / 0.57 | ≤ 0.9 (0.04) | none |
+| tr_decrypt_trial_open_position (CT-05, R-59) | PASS | 1 | 24.5/24.51 | 1.503 | 1.26 / 1.11 | ≤ 2.5 (0.10) | none |
+| link_same_content_control (CT-06) | PASS | 1 | 24.6/24.5 | 1.958 | 0.97 / 1.40 | raw −0.28/9.5 (0.39) | none |
+
+Batch records: every target has k_initial = k and requantised = false (no re-batch). All A/A max|t| are ≤ 2.672.
+
+## 4. Controls
+
+**Positive control `control_variable_time_compare`.**
+- Recorded verdict "PASS"; for the positive control this means detected (allowed set PASS/FAIL/NOT_MEASURABLE, ctreport.rs:805). The gate checks only first-measurement max|t| > 4.5.
+- Measured: t = −21801.2 at p75, Δ −852.8 floors. Class 0 (mismatch in byte 0) is faster, which is the expected direction.
+- The p50 crop shows n1 = 0 (the pooled p50 threshold excludes all of class 1); its t = 0 is an artefact of the crop and harmless.
+
+**Sensitivity control `min_leak_control`.** This is the ADR-041 Am. 3 rule. The brief cited "ADR-042 Am. 3" and attributed it to control_variable_time_compare, and so did REPORT.txt Block B. Both are wrong: the "FAIL p90 122.6/122.5" belongs to this control.
+- decision FAIL, deciding_crop p90, reached = true.
+- t 5986.87 / 5806.94.
+- Δ 3004.58 / 3002.18 ticks = 1228.6 / 1227.7 ns = 122.64 / 122.54 floors (floor 24.5 ticks = 10.02 ns, q_eff 24.5 from samples).
+- Class 0 (32 byte steps) is slower, as required.
+- raw Δ 3242.66 / 3250.23 ticks (132.35 / 132.66 floors).
+- k = 1, 1 000 000 samples, equal to tag_compare.
+- Other crops: p50 118.0, p75 121.5, p95 124.9, p99 131.4 floors. All have the same sign and all are far above the floor, so no crop overtakes.
+
+**Same-content variants.** The Haiku "(null)" fields do not exist under those names. The values sit at `min_leak_same_content.measurement.*` and, for the targets, at `results[i].first/second.{crops.raw.delta, median_ticks, class_median_ticks}`.
+
+| control | verdict | where the "raw delta / median" live | values |
+|---|---|---|---|
+| min_leak_same_content | informative (verdict null) | `.measurement` | max\|t\| 1.479 @p50; raw Δ −3.96 ticks (−0.16 fl), t −0.556; median 19306 ticks (7894.8 ns) |
+| same_content_control | PASS | `.first/.second` | raw Δ 36.27 / −2.16 ticks; median 78988 |
+| hx_same_content_control | PASS | `.first/.second` | raw Δ −80.21 / −27.38; median ≈ 695 726 |
+| link_same_content_control | PASS | `.first/.second` | raw Δ −0.28 / 9.51; median 13230 |
+
+**Histograms (21 bins).** Only the sensitivity control and its same-content variant carry histograms, as ADR-041 Am. 3 (2) requires (ctreport.rs:400, 446). Per-target histograms are not part of the format.
+- min_leak_control, lo 16023, hi 21658, bin 268.33 ticks:
+  - c0 `[0,0,0,0,0,0,0,0,0,0,6,46941,389394,82,116,80,93,124,19942,37429,6052]`
+  - c1 `[401287,35858,28,6509,44747,4550,37,125,53,70,87,74,76,561,172,123,159,447,201,164,4413]`
+  - The class modes are separated by about 11 bins ≈ 2950 ticks, consistent with Δ.
+- min_leak_same_content, lo 19208, hi 23177, bin 189:
+  - c0 `[433356,8146,70,65,80,72,56,69,75,967,46752,3886,127,84,85,103,77,93,129,111,5112]`
+  - c1 `[434047,8010,55,71,71,75,70,87,88,992,46899,4007,151,72,78,83,70,68,119,115,5257]`
+  - The two classes are bin-for-bin alike, as a null control should be.
+
+## 5. caead_derive SUB_FLOOR_SHIFT
+
+These are hand checks of the F16 rule (`possible_verdicts`, ctreport.rs:633-676).
+- **Shift reproduced.** |t| > 4.5 in both measurements with the same sign at p50, p75, p90, p95 and p99.
+- **Deciding crop.** It is the strongest min(|t1|, |t2|): p95 = 45.45, against p90 39.24, p75 39.98, p99 20.46 and p50 19.19. The recorded crop p95 matches.
+- **Floor.** Floor = max(24.5 ± 0.0005, 24.454) = 24.5 ticks. Largest |Δ| over all crops: 2.553 / 2.550 ticks at p99 = 0.104 floors.
+  - floor_surely (|Δ| − 5e-5 ≥ 24.5005) is false everywhere, so fail_sure = false.
+  - floor_maybe is false everywhere too, so FAIL is not even possible.
+  - sub_floor_possible = true. The set of possible verdicts is {SUB_FLOOR_SHIFT}, and the recorded verdict is admissible.
+- **Size.** Per call (k = 3) Δ ≈ 0.81 ticks ≈ 0.33 ns on a median of 3454 ticks (≈ 1.41 µs per batch), a relative shift of about 7·10⁻⁴.
+- **Distance to FAIL.** Δ would have to grow by a factor of about 9.6, roughly +22 ticks ≈ 9 ns per batch.
+

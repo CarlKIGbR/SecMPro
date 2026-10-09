@@ -24,6 +24,8 @@ memo with a **+24 h default**; they are docs/03 text in ADR-048 (o), (p), (q) an
 | OPEN-M5-16 | **A** — `formal/link.pvl` + `formal/link/<session>.pv`, ≤ 30 min per file, gate per (file, ID, query text) | O-18: joint files grow superlinearly | engineering | PV-01, X-04, X-05 |
 | OPEN-M5-17 | **Decided** — X-07 classes "no 0x80 in the tail" and "0x80 as the last byte" (planner default, confirmed 2026-10-03) | R-93 names no classes; the two classes cover the unpad decision's branch | engineering | X-07 |
 
+**Clarification 2026-10-09 (M05 review R-119), OPEN-M5-09:** OPEN-M5-09 A, clarified: drain answers `ERR 2` to a `QUEUE_NEW`/`LINK_PUT` that would create state; an identical `QUEUE_NEW` (same keys, existing queue) answers `OK_QUEUE_NEW` without side effects, also during drain, as at the budget limit (Q-07, OPEN-M5-04 order); the token is checked first. `LINK_PUT` ⇒ `ERR 2` is unchanged. Test: RL-15 assertion (M05 review C-10).
+
 ## ADR-047 Amendment 3 (OPEN-M5-12) — text to append after ADR-047 Amendment 2 in `docs/08-decisions.md`
 
 **ADR-047 Amendment 3 — `secmp-relay` in the mutation gate. Status: Accepted (Reviewer, Owner-Delegation 30.09.2026) —

@@ -880,13 +880,13 @@ mod tests {
         let expected: &[(&str, usize)] = &[
             ("caead_open", 25),
             ("ed25519_verify", 25),
-            // the `hx` suite (30 cases): `fetched` lists (16 of them) and the honest group (2 seeds of `initiate`);
-            // 10 `outer`s (3 chunks each with an `init_id`: 30 plaintexts; 2 structured seeds each), 4 `inner`s
-            ("hx_accept_raw", 17),
-            ("hx_accept_structured", 24),
-            ("hx_cell_plaintext", 30),
-            ("hx_inner", 4),
-            ("hx_outer", 10),
+            // the `hx` suite (37 cases): `fetched` lists (23 of them) and the honest group (2 seeds of `initiate`);
+            // 15 `outer`s (3 chunks each with an `init_id`: 45 plaintexts; 3 structured seeds each), 9 `inner`s
+            ("hx_accept_raw", 24),
+            ("hx_accept_structured", 39),
+            ("hx_cell_plaintext", 45),
+            ("hx_inner", 9),
+            ("hx_outer", 15),
             ("hybrid_sign_verify", 42),
             // 6 `linkdata` and 7 `blob`; 4 `uri`
             ("inv_linkdata", 13),

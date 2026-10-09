@@ -9,9 +9,10 @@ license.workspace = true
 repository.workspace = true
 publish.workspace = true
 
-# The link's keys for the byte-level tests of the harness (`Session::link_kat`); never enabled in a shipped build.
+# The link's keys for the byte-level tests of the harness (`Session::link_kat`); never enabled in a shipped build. (Not
+# named `kat`: the `kat` step discovers the packages with that feature, `expect::KAT_PACKAGES`.)
 [features]
-kat = ["secmp-proto/kat", "secmp-crypto/kat"]
+harness = ["secmp-proto/kat", "secmp-crypto/kat"]
 
 # docs/02 §3: `secmp-proto`, `secmp-crypto` only among workspace crates; no third-party runtime crate in M5 (the
 # stream is `std::io`, ADR-049).

@@ -107,8 +107,8 @@ impl<S: Read + Write> Session<S> {
         self.link.sess_id()
     }
 
-    /// The link state: its keys, counters and handshake trace (tests only, feature `kat`).
-    #[cfg(feature = "kat")]
+    /// The link state: its keys, counters and handshake trace (tests only, feature `harness`).
+    #[cfg(feature = "harness")]
     #[must_use]
     pub const fn link_kat(&self) -> &Link {
         &self.link

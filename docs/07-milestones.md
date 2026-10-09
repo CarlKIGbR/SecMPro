@@ -112,7 +112,7 @@ v1.1: M16 → M17 → M18 → M19 → M20 (release)
 
 **Follow-ups from the M4 review (F-M5).** Branch-free trial opens of the TR header keys (R-59, docs/01 RR-17) with the counting accessor that would detect a reintroduced secret-indexed `mk` load (campaign R-58, R-42); fuzz target `hx_accept_structured` mode 3 (R-44: fuzzer bytes as padded Content, encrypted from the fixture's state); the formal batch (F6's second receive attempt after a skipped-path acceptance, R-41; the O-15 composition sentence, R-70); the rev-2.5 reference cases and the `hx.json`/`ref/hx.json` re-freeze with ADR-048 and a derived `inv_sid` (R-66, R-90).
 
-**Status (2026-10-07).** Started 2026-10-07 on branch `m05-link` from `main` at `a229dbfc9dfe57dd0957359044389eb3b6654b32`; plan, test specification (`docs/reviews/M05-planning/TEST-SPEC-M5.md`), ADR-048 (proposed), `formal/CLAIMS.md` §LINK and the reference LINK files were committed first. Report: `docs/reviews/M05-report.md`.
+**Status (2026-10-07).** Started 2026-10-07 on branch `m05-link` from `main` at `a229dbfc9dfe57dd0957359044389eb3b6654b32`; plan, test specification (`docs/reviews/M05-planning/TEST-SPEC-M5.md`), ADR-048 (proposed), `formal/CLAIMS.md` §LINK and the reference LINK files were committed first. Report: `docs/reviews/M05-report.md`. Phases A (Sonnet), B (Opus) and C (Sonnet) are closed (2026-10-09): `secmp-proto::link`, `secmp-relay`, `secmp-transport::RelayQueueTransport` and `secmp-testkit::Harness` are implemented, `hx.json` is re-frozen (rev 2.6, ADR-048 (m)); the report is complete and the M5 review follows.
 
 ---
 

@@ -1,8 +1,9 @@
 # Milestone report — M5 SecMP-LINK + SecMP-Q + relay core + in-process harness
 
-Branch: `m05-link` · Base: `a229dbfc9dfe57dd0957359044389eb3b6654b32` · Author: Claude Code · Date: 2026-10-07
+Branch: `m05-link` · Base: `a229dbfc9dfe57dd0957359044389eb3b6654b32` · Author: Claude Code · Date: 2026-10-07 … 2026-10-09
 Phase A: `modell=claude-sonnet-5-5` (sub-agents for test code: `claude-sonnet-5-5` ×5, `claude-opus-5-5` ×1 for the spec-text application)
 Phase B: `modell=claude-opus-5-5` (sub-agents: `claude-opus-5-5` ×9)
+Phase C: `modell=claude-sonnet-5-5` (sub-agent: `claude-sonnet-5-5` ×1)
 
 ## 1. Plan (written before implementation, updated during)
 
@@ -10,7 +11,8 @@ Binding inputs: `docs/reviews/M05-planning/` (`BRIEF_M5.md`, `TEST-SPEC-M5.md`, 
 `OPEN-M5-decided.md`). ADR-048 and the owner-class items (o), (p) were ratified by default on 2026-10-04 20:45 UTC (brief
 §11 (1)); optional (q) is not adopted (reading A). The [SQ-n], [O-1], [O-2], [O-6] rows are therefore in scope from the start.
 
-Phases and handover: A (Sonnet) → B (Opus) → C (Sonnet). **Phase A closed @ `8738ae170a083a1323f14eeb21183bb567e693f5`**
+Phases and handover: A (Sonnet) → B (Opus) → C (Sonnet). **Phase C closed @ `fb2d651`** (code head; the closing commit adds this report and
+evidence only) — **M5 report complete**. **Phase A closed @ `8738ae170a083a1323f14eeb21183bb567e693f5`**
 (PR run `37719235451` green on linux-fast, windows-native, xwin-cross, linux-full, ct, mutants, proverif-hx; rows of steps 1–10).
 Phase B: `modell=claude-opus-5-5`, binding inputs additionally `BRIEF_M5-B` (reviewer, 2026-10-08).
 
@@ -31,11 +33,11 @@ Phase B: `modell=claude-opus-5-5`, binding inputs additionally `BRIEF_M5-B` (rev
 | B3 | B | Relay connection task, sweeper, rate limits, drain, `keygen`/`rotate-static`, config, tracing test, zeroization | RL-01…RL-23, F-11, FZ-08 | done (`e6d8f17`, `96a61f0`, `d4eef33`) |
 | B4 | B | Gates: ct targets; counting accessors (R-42/R-59) + docs/01 RR-17 line; `formal/link.pvl` + `formal/link/*.pv`, `tr.pv` T14, CLAIMS O-15 sentence, `proverif-link` job; mutants scope (`docs/06` §4); PR-run CI seed for properties | CT-01…CT-06, X-03, G-01, G-02, PV-01…PV-03, X-04, X-05, X-02, X-07 (opt: X-06, X-08) | done; PV-01 after WEISUNG M5-B-2 (LO-5, LO-6: the breaks of `lDH`, `lBoth` as reveals; 9/9 files PASS at `5d7d45b`) |
 | B5 | B | Evidence under `M05-evidence/` per push; Phase B report; closing push; row "Phase B closed @ `<sha>`" | — | done — **Phase B closed @ `dc34d93`** (`dc34d93d696b4d4699aa3939e9af428de2e7bdd6`; run 37817187858 red: windows-native, coverage, mutants; fixed in M5-B-3; §4B, §5B; one docs/evidence-only commit on top). Earlier close @ `6483344` |
-| C1 | C | Commit 1: carry-over test `keys::tests::rotation_boundary_new_generation_may_expire_with_the_newest` (+ the gate's mutants command restricted to `keys.rs` `rotate`: 7 caught); ADR-042 consequence line accepted; hx re-freeze: `vectors/ref/hx.json` (sha256 `2bf05e69…a0e8d`, 1 432 784 B, checked), `vectors/SCHEMA.md` rev 7, `vectors/SCHEMA-4.10-hx.md`; `InvitationRecord` (owner and invitation-queue recipient seeds), `issue_invitation` (derived `inv_sid`), `RelayQueue::derived`; generator cases hx-0003, hx-0031…0037; `vectors/hx.json` re-frozen by `cargo xtask vectors` | V-23, V-24, V-25, G-04, G-05 | done |
-| C2 | C | `secmp-transport`: `Session` (SecMP-LINK client over `std::io` streams), `RelayQueueTransport`, `RecvCap`/`SendCap` | T-01…T-09, T-11 | in progress |
-| C3 | C | `secmp-testkit::harness` (feature `kat`): `Harness`, virtual `Clock`, `EntropyPool`, `HarnessStream`/`Capture`/`Split`, `Side`; scenarios | H-01…H-06, H-08…H-13, G-06 | in progress |
-| C4 | C | Local gates (`ci-fast --strict`, `step --strict vectors kat`, Kani, nextest per touched crate), evidence under `M05-evidence/` | — | open |
-| C5 | C | Closing push = this report complete; PR run green on all jobs | — | open |
+| C1 | C | Commit 1: carry-over test `keys::tests::rotation_boundary_new_generation_may_expire_with_the_newest` (+ the gate's mutants command restricted to `keys.rs` `rotate`: 7 caught); ADR-042 consequence line accepted; hx re-freeze: `vectors/ref/hx.json` (sha256 `2bf05e69…a0e8d`, 1 432 784 B, checked), `vectors/SCHEMA.md` rev 7, `vectors/SCHEMA-4.10-hx.md`; `InvitationRecord` (owner and invitation-queue recipient seeds), `issue_invitation` (derived `inv_sid`), `RelayQueue::derived`; generator cases hx-0003, hx-0031…0037; `vectors/hx.json` re-frozen by `cargo xtask vectors` | V-23, V-24, V-25, G-04, G-05 | done (`010ab8c`) |
+| C2 | C | `secmp-transport`: `Session` (SecMP-LINK client over `std::io` streams), `RelayQueueTransport`, `RecvCap`/`SendCap` | T-01…T-09, T-11 | done (`fce3ac7`) |
+| C3 | C | `secmp-testkit::harness` (feature `harness`): `Harness`, virtual `Clock`, `EntropyPool`, `HarnessStream`/`Capture`/`Split`, `Side`; scenarios | H-01…H-06, H-08…H-13, G-06 | done (`fce3ac7`, `ea4aa64`) |
+| C4 | C | Local gates (`ci-fast --strict`, `vectors`, coverage, windows-cross, Kani, mutants pre-checks), fixes of the first `ci-fast` run (policy header, kat package set, fuzz seed counts), ADR-050, evidence under `M05-evidence/` | — | done (`fb2d651`) |
+| C5 | C | Closing push = this report complete; PR run on all jobs | — | done — **Phase C closed @ `fb2d651`**; PR run: closing message |
 
 ### M2 coverage of D.1 records and D.2 requests/responses (decides K-08 and P-13)
 
@@ -345,6 +347,212 @@ None (no new crate in `Cargo.lock` or `fuzz/Cargo.lock`; `secmp-relay` gains wor
 - ~~The PV-01 readings and devices of §5B for confirmation; ADR-049 (proposed) for acceptance.~~ Confirmed / accepted (WEISUNG
   M5-B-2 item 5).
 
+## Phase C (BRIEF M5-C; `modell=claude-sonnet-5-5`)
+
+Commits `010ab8c`, `fce3ac7`, `ea4aa64`, `fb2d651` (code head; the closing commit adds this report and evidence only).
+Sub-agent: `claude-sonnet-5-5` ×1 (the generator cases hx-0031…0037 and the `hx` tests V-23/V-24/G-04/G-05).
+
+### 2C. What was built
+
+- **Carry-over (brief §1 (0)):** `keys::tests::rotation_boundary_new_generation_may_expire_with_the_newest` (`now_unix +
+  validity_secs == newest_until` is accepted, one second less is the `Config` error and adds nothing); the gate's
+  `cargo mutants` command restricted to `keys.rs` / `rotate`: 7 mutants, 7 caught, among them `120:51` `<` → `<=`
+  (`M05-evidence/mutants-m5c-rotate-local.txt`). Not in `docs/mutants-accepted.md`. ADR-042's M5-B-3 consequence line reads
+  "accepted by the reviewer, 2026-10-08".
+- **hx re-freeze** (WEISUNG REF-M5-2, R-66/R-90, ADR-048 (m), OPEN-M5-14 B, OPEN-M5-15 A): `vectors/ref/hx.json` copied
+  (sha256 `2bf05e69…a0e8d`, 1 432 784 B, both checked), `vectors/SCHEMA.md` equal to the ref's revision 7,
+  `vectors/SCHEMA-4.10-hx.md` copied; `vectors/hx.json` written by `cargo xtask vectors` (12 suites identical, `link` and the
+  ten earlier files unchanged; `M05-evidence/hx-refreeze-m5c.txt`). `secmp-proto`: `InvitationRecord` gains `owner_seed`
+  and `invq_recv_seed` (`SecretBytes<32>`, accessors `owner_pk`, `invq_recv_pk`; `duplicate`, `digest_kat`);
+  `MemoryPrekeyStore::issue_invitation` draws ld_id, link_key, the 16 bytes formerly drawn for `inv_sid` (discarded),
+  inv_send_seed, the blob nonce, then `invq_recv_seed` and `owner_seed`, and derives `inv_sid` (§9.1);
+  `RelayQueue::derived` (the route of a pool queue, `sid` derived). Generator (`tests/common/hx_gen.rs`): case 3 (new
+  draws and outputs) and hx-0031…0037 (A1, R14…R18, A2).
+- **`secmp-transport`** (depends on `secmp-crypto`, `secmp-proto` only): `Session` (SecMP-LINK client over any
+  `std::io::Read + Write`: handshake, frame I/O, `cmd_seq` from 1), `RelayQueueTransport` and the trait `QueueTransport`
+  (§12.1; synchronous, ADR-050), `RecvCap` / `SendCap` (opaque, serialisable, constant-time `PartialEq`, redacted
+  `Debug`), `Error` (the `ERR` codes as outcomes; `Rejected` = LINK-level, link closed). Every response is checked against
+  its request (op, frame count and order, `cmd_seq` echo, derived ids of `OK_QUEUE_NEW`, `CELLR`/`LINKR` layout, the
+  `ERR` codes a command may carry; a single `ERR` 6 / 7 may answer any command).
+- **`secmp-testkit::harness`** (feature `harness`, a subset of `kat`): `Harness` (relay + N clients, `connect`,
+  `create_queues`, `advance_*`, `restart_relay`, `start_drain`), `Clock` (virtual), `EntropyPool` (per actor, SCHEMA §2
+  stream), `HarnessStream` (in-process `std::io` stream over the relay's `Connection`; byte capture; `Split::Chunked`
+  cuts both directions into pieces of 1…4352 B), `Side` (a ratchet session over relay queues: send, poll with cumulative
+  acknowledgement and dedup, `reset_receiving`), `ratchet_pair`, `verify_frames` (opens every captured frame under the
+  link's keys).
+- **Tests:** `crates/secmp-testkit/tests/harness/` (one crate, `required-features = ["harness"]`: `transport`,
+  `scenarios`, `invitation`, `scripted`, `fixture`); `crates/secmp-proto/tests/hx/{vectors,store,generator}.rs`.
+- **Gates (tables):** `gates::COVERAGE_FEATURES` = `secmp-relay/kat,secmp-testkit/harness`; `xtask/src/fuzzseed.rs` pins
+  the seed counts of the re-frozen hx suite. **Docs:** ADR-050 (proposed), ADR-042 consequence line.
+
+### 3C. Evidence per TEST-SPEC row (Phase C)
+
+| Section | Rows | Tests | Result |
+|---|---|---|---|
+| (a) vectors | V-23 | `secmp-proto` test `hx`: `vectors::hx_vectors` (37 cases) | PASS |
+| (a) vectors | V-24 | `vectors::hx_vectors_rev25_cases` (A1, R14…R18, A2) | PASS |
+| (a) vectors | V-25 | `generator::hx_generator_reproduces_ref_file` (also: `vectors/hx.json` = `vectors/ref/hx.json` byte for byte); `cargo xtask vectors` step 12a: 12 suites identical | PASS |
+| (b6) | T-01…T-09, T-11 | `secmp-testkit` test `harness`: `transport::transport_create_queue_idempotent`, `…_send_outcome_mapping`, `…_fetch_returns_real_cells_only`, `…_fetch_multi_maps_queue_refs`, `…_delete_queue`, `…_put_and_get_link_data`, `…_cmd_seq_starts_at_1_strictly_increasing`, `…_token_per_command`, `…_rejects_bad_response_shape`, `…_caps_are_opaque_and_roundtrip` | 10 PASS |
+| (b7) | G-04 | `hx` test: `store::invitation_record_holds_owner_and_invq_recv_keys` | PASS |
+| (b7) | G-05 | `store::issue_invitation_derives_inv_sid` (the draws of cases 1, 3, 4 reproduce case 3's invitation, `inv_sid`, `invq_recv_pk`, `owner_pk` and case 4's blob; every draw consumed) | PASS |
+| (b7) | G-06 | `harness`: `scenarios::route_relay_queue_sid_is_derived` | PASS |
+| (c) | H-01 | `scenarios::harness_clients_create_pool_queues` | PASS |
+| (c) | H-02 | `invitation::harness_invitation_and_handshake_over_relay` | PASS |
+| (c) | H-03 | `scenarios::harness_exchange_1000_cells_each_way` (37 s) | PASS |
+| (c) | H-04 | `scenarios::harness_eviction_reports_ids_newest_128_decrypt` | PASS |
+| (c) | H-05 | `scenarios::harness_sweeper_expires_by_bucket` | PASS |
+| (c) | H-06 | `scenarios::harness_memory_budget_refuses_new_queue_at_limit` | PASS |
+| (c) | H-08 | `scenarios::harness_all_bytes_after_hs2_are_4352_byte_frames`; the same audit (`assert_frames`) closes H-01, H-03, H-04, H-05, H-06, H-13, and H-12 audits before and after the restart | PASS |
+| (c) | H-09 | `invitation::harness_scenario_api_is_public_for_two_clients` (H-02 + H-03 in `tests/`, `pub` items only) | PASS |
+| (c) | H-10 | `scenarios::harness_replay_is_deterministic` | PASS |
+| (c) | H-11 | `scenarios::harness_transport_runs_over_in_process_streams` (whole and chunked streams; deviation §5C 1) | PASS |
+| (c) | H-12 | `scenarios::harness_relay_restart_queues_recreated_conversation_continues` | PASS |
+| (c) | H-13 | `scenarios::harness_undecryptable_cell_is_acknowledged` | PASS |
+
+Counts (implemented / passing / extra): vectors 3 / 3 / 1 · unit 13 / 13 / 3 · integration 12 / 12 / 0 → 28 rows, 28 evidenced.
+Test run at `fb2d651`: 31 PASS (24 `harness`, 1 transport unit test, 6 `hx`) — `M05-evidence/phase-c-tests-fb2d651.txt`.
+
+Extra tests (named): `hx::vectors::hx_vectors_invite_derives_inv_sid`; `harness`: `transport::transport_fetch_maps_auth_and_single_error_frames`
+(present 3 and single ERR 6 / 7 frames of a FETCH from a scripted relay); `secmp-transport` unit `error::tests::every_relay_code_has_its_outcome`;
+`secmp-relay` unit `keys::tests::rotation_boundary_new_generation_may_expire_with_the_newest` (carry-over).
+Tests touched: xtask `fuzzseed::tests::the_frozen_vectors_seed_every_target` (hx counts), `gates::tests::coverage_ignores_test_files`
+(feature string); `hx` tests `tests/hx/{scenario,store}.rs` (record fields).
+
+### 4C. Gates (local, Apple M1 Pro; heads named)
+
+| Gate | Head | Result |
+|---|---|---|
+| `cargo xtask ci-fast --strict` | tree = `fb2d651` | PASS: fmt, clippy, policy, deny, vet, audit, cooldown, nextest (workspace), doctest, hello, kat (476 s; packages crypto, proto, relay, testkit) (`M05-evidence/ci-fast-local-fb2d651.txt`). First run on the tree before the fixes of `fb2d651` failed policy (`tests/harness/main.rs` forbid header), nextest (`fuzzseed` counts) and kat (package set) — fixed in `fb2d651` |
+| `cargo xtask vectors` | `fb2d651` | 12 suites identical to `vectors/ref`; `hx` agrees with ref and the frozen copy is the ref (`M05-evidence/vectors-m5c-fb2d651.txt`, `hx-refreeze-m5c.txt`) |
+| `step --strict coverage` | `fb2d651` | PASS, 114 s: `secmp-transport` 546/609 = 89.7 % (min 80), `secmp-testkit` 607/644 = 94.3 %, `secmp-relay` 2175/2229 = 97.6 %, `secmp-proto` 6585/6741 = 97.7 %, `secmp-crypto` 2523/2539 = 99.4 % (`M05-evidence/coverage-local-m5c-fb2d651.txt`) |
+| `step --strict windows-cross` | `fb2d651` | PASS (`cargo xwin build --all-targets`, x86_64-pc-windows-msvc), 13 s |
+| Mutation pre-check, new `secmp-proto` code (`prekeys.rs`, `wire/cell.rs`) | `fce3ac7` + tree | 9 mutants: 3 caught, 6 unviable, 0 missed (`M05-evidence/mutants-m5c-proto-local.txt`) |
+| Mutation pre-check, carry-over | `010ab8c` | 7 mutants in `keys.rs` / `rotate`: 7 caught |
+| Kani codegen (`cargo kani -p secmp-proto -Z stubbing --only-codegen`) | `010ab8c` | exit 0 (`M05-evidence/kani-codegen-m5c-010ab8c.txt`); the only `#[cfg(kani)]` change is the two record fields in `kani_commit_on`; no new harness |
+| `step --strict kani` | `fb2d651` | PASS, 33/33 harnesses (secmp-proto, secmp-relay; = `expect::KANI_HARNESSES`), 33 `VERIFICATION:- SUCCESSFUL`, 0 failed, 2153 s; no new harness (`M05-evidence/kani-xtask-step-fb2d651.txt`) |
+| PR run | `010ab8c` | run `37874272181` (pending at the time of writing) |
+
+### 5C. Deviations from spec / plan
+
+1. **No `tokio` (ADR-050, proposed).** BRIEF M5-C §1 (2) names `tokio::io::duplex` and "`tokio` with the features Phase B
+   already enabled"; Phase B enabled none (ADR-049), and neither `tokio` nor `async-trait` is in `Cargo.lock`. H-11 runs over
+   two in-process `std::io` streams (whole writes; pieces of 1…4352 B), not `tokio::io::duplex`. `QueueTransport` (§12.1
+   `#[async_trait]`) is synchronous with `&mut self`; its key parameters are the keys' 32-byte seeds (a signing key exposes
+   no seed and a capability must serialise) and `Token` is the relay access key from which each command's token is derived.
+   The asynchronous driver is M6 with its own ADR. No new dependency.
+2. **A1 draw accounting.** In `hx-0031` the file lists the DH-step draws of the rejected first group (`dh_sk`, `kem_seed`,
+   `m`) before those of the accepted one; the product's Decrypt draws nothing for a group that fails the body MAC, so V-24
+   hands `Responder::accept` only the second step (`dh_sk_2‖kem_seed_2‖m_2`) and every byte is consumed; all outputs are
+   byte-identical to the file. The reference's reading ("takes the step on its working copy before the failure") and the
+   product's differ only in the unconsumed 128 bytes.
+3. **G-04 "serialise, restore".** The product has no record serialiser (the store is M7); `InvitationRecord::duplicate` stands
+   in for the restore, the capability serialisation is exercised by T-11.
+4. **`issue_invitation` draw order** (reading of OPEN-M5-14 B "after the case's last draw"): the two new draws follow the
+   blob nonce, the last draw of `issue_invitation`; G-05 pins the order by reproducing cases 3 and 4 from one draw string.
+5. **Coverage scope** (gate table, like M5-B-3, ADR-042 consequence line proposed): `COVERAGE_FEATURES` adds
+   `secmp-testkit/harness`, because the transport's tests are the harness tests; without it `secmp-transport` is measured at
+   its one unit test. Thresholds, ignore regex, exclusions unchanged. `secmp-transport`'s feature for the link keys is
+   `harness` (not `kat`: the `kat` step discovers packages by that feature name, `expect::KAT_PACKAGES` unchanged).
+6. **Fuzz seed counts** (`fuzzseed::the_frozen_vectors_seed_every_target`) follow the re-frozen hx suite (24 / 39 / 45 / 9 / 15,
+   was 17 / 24 / 30 / 4 / 10): derived from the file, not a threshold.
+7. **H-12** has no outbox: "the sender drops its `cell_id` map" is vacuous at M5 (`Side` keeps none; the outbox is M6).
+8. **Harness relay is leaked** (`Box::leak`, one per `Harness::new` / `restart_relay`): a `Connection` borrows its `Relay` for
+   its life; test infrastructure, bounded, no change to Phase B code.
+9. **`cargo xtask step --strict vectors kat`** (brief §2.4): there is no step named `vectors`; the `kat` step ran inside
+   `ci-fast --strict`, `cargo xtask vectors` separately.
+10. The carry-over mutation run omits the gate's `--exclude-re` entries that match nothing in `keys.rs`.
+
+### 6C. Dependencies added or bumped
+
+None. New edges between workspace crates: `secmp-transport` → `secmp-crypto`, `secmp-proto`; `secmp-testkit` → `secmp-crypto`,
+`secmp-proto`, `secmp-relay`, `secmp-transport` (`Cargo.lock` lists them; no third-party crate, no `cargo vet` record).
+
+### 7C. Open risks and known limitations
+
+- `linux-full` budget (221 of 240 min in run 37817187858): the `kat` step runs the 24 harness tests (≈ 60 s locally; H-03 37 s),
+  the coverage step builds the harness (114 s locally against 92 s before); the CI times come with the PR run.
+- `RelayQueueTransport` blocks on a stream: a stalled relay stalls the call (the scheduler of M6 owns timeouts).
+- A response with surplus frames is detected at the next call (the generic stream cannot be peeked).
+
+### 8C. Blocked / questions for the reviewer or owner
+
+- For the reviewer's acceptance: ADR-050 (no async runtime in M5; deviation 1), the ADR-042 consequence line (deviation 5).
+- Blocked: none.
+
 ## 9. Checklist before requesting review
 
-Not yet applicable (Phase A of three).
+- [x] All acceptance criteria of `docs/07` §M5 evidenced (230 rows + K-08; §3, §3B, §3C, §10.1)
+- [ ] `cargo xtask ci` green on a clean checkout — local `ci-fast --strict` PASS at `fb2d651`; the PR run of the closing push decides (closing message)
+- [x] No `#[ignore]`, no lint allowance for a security lint, no disabled gate (policy step PASS: the only relaxations are the sanctioned `unwrap`/`expect` file allowances of test code under `crates/secmp-testkit/`)
+- [x] Vectors frozen and reviewed: `hx.json` re-frozen as planned (REF-M5-2), nothing else changed (`hx-refreeze-m5c.txt`)
+- [x] Docs updated: `docs/03` rev 2.6 (A), `docs/06`, `docs/08` ADR-047 Am. 3, ADR-049, ADR-050 (proposed), `docs/07` §M5 status
+- [x] Threat model and spec untouched except ADR-048 (ratified 2026-10-04)
+
+## 10. Milestone summary (Phases A + B + C)
+
+### 10.1 Rows per TEST-SPEC section (implemented / passing / extra)
+
+| Section | Rows | Ph A | Ph B | Ph C | Implemented | Passing | Extra tests (A / B / C) |
+|---|---|---|---|---|---|---|---|
+| (a) vector | 25 | 9 | 13 | 3 | 25 | 25 | 1 / 1 / 1 |
+| (b) unit (client, relay handshake, frames, executor, relay obligations, transport, F-M5) | 148 | 49 | 86 | 13 | 148 | 148 | 16 / 53 / 3 |
+| (c) integration (harness) | 12 | 0 | 0 | 12 | 12 | 12 | 0 / 0 / 0 |
+| (d) property | 12 | 6 | 6 | 0 | 12 | 12 | 0 / 0 / 0 |
+| (e) Kani | 7 | 4 | 3 | 0 | 7 | 7 | 0 / 0 / 0 |
+| (f) fuzz | 9 | 7 | 2 | 0 | 9 | 9 | 0 / 0 / 0 |
+| (g) ct (5 targets + 1 control) | 6 | 0 | 6 | 0 | 6 | 6 (CI job `ct` green in run 37851301032) | 0 / 0 / 0 |
+| (h) ProVerif obligation | 3 | 0 | 3 | 0 | 3 | 3 | 0 / 0 / 0 |
+| (i) xtask / gate | 8 | 0 | 8 | 0 | 8 | 8 | 0 / 6 / 0 |
+| **total** | **230** | **75** | **127** | **28** | **230** | **230** | A 17 · B 60 · C 4 |
+
+Conditional rows: **K-08** dictated (Phase A, §1 table) and implemented (`kani_q_frame_plaintext_exact_fit`) → 231 rows evidenced;
+**P-13** not dictated (Phase A, M2 coverage table). Withdrawn, numbers not reused: T-10 (→ H-11), H-07 (→ H-12).
+The counts of A and B are those of §3 and §3B; the extra tests of each phase are named there and in §3C.
+
+### 10.2 F-M5 lines (M04 review §C follow-up index)
+
+| Item | Row(s) | Status |
+|---|---|---|
+| R-41 (F6 model branch) | PV-02 | closed (B): `tr.pv` T14 true |
+| R-42, campaign R-59, `docs/07:113`, docs/01 RR-17 | G-01, G-02, CT-05 | closed (B): constant-flow header trial, counting accessor, status line in `docs/01` |
+| R-44 | FZ-09 | closed (A): `hx_accept_structured` mode 3 |
+| R-47 (opt) | X-08 | closed (B) |
+| R-55 | G-03 | closed (A) |
+| R-56 (opt) | P-12 | closed (A), function level; the end-to-end variant through `Initiator` is not built (named in §7) |
+| R-66 | V-23, V-24 | closed (C): rev-2.5 reference cases in the re-frozen `hx.json` |
+| R-67 | G-04 | closed (C): record fields; the persisted form of the record is the encrypted store's (M7), `duplicate` stands in (§5C 3) |
+| R-70 | PV-03 | closed (B) |
+| R-90 | G-05, V-23…V-25 | closed (C): ADR-048 (m), derived `inv_sid`, `hx.json` re-frozen |
+| R-92 (opt) | X-06 | closed (B) |
+| R-93 | X-07 | closed (B) |
+| F15 | — | via the reference session: `SCHEMA-4.10-hx.md` rendered by the fixed tool, copied unchanged (`hx-refreeze-m5c.txt`) |
+| ADR-048 editorial list (R-60…R-65, RT-3) | — | applied in Phase A (`docs/03` rev 2.6, errata) |
+
+No F-M5 line is deferred.
+
+### 10.3 Deviations index
+
+A: §5 (incl. **R-104**: Kani gate evidence `3215 s` predates `cc6d8c8`; the full gate ran on the later head) · B: §5B (reviewer-accepted:
+ADR-049, ADR-047 Amendment 3, LO-5…LO-7 and the PV-01 readings by WEISUNG M5-B-2 item 5, the M5-B-3 coverage scope — ADR-042 line
+"accepted by the reviewer, 2026-10-08") · C: §5C (open for acceptance: ADR-050, ADR-042 coverage-scope line; deviations 2–4, 6–10
+informational).
+
+### 10.4 Gate evidence index (files under `docs/reviews/M05-evidence/`)
+
+| Gate | Phase A | Phase B | Phase C |
+|---|---|---|---|
+| `ci-fast --strict` | `ci-fast-local-fd86ca2.txt` | `ci-fast-local-6483344.txt`, `…-dc34d93.txt` | `ci-fast-local-fb2d651.txt` |
+| Kani | `kani-xtask-step-ae10972.txt`, `kani-codegen-m5a-cc6d8c8.txt` | `kani-xtask-step-6483344.txt`, `kani-m5b-*.txt` | `kani-codegen-m5c-010ab8c.txt`, `kani-xtask-step-fb2d651.txt` |
+| Fuzz | `fuzz-phase-a-local-e243648.log` | `fuzz-m5b-local.log` | none (no new target; seed counts of the hx suite follow the re-frozen vectors) |
+| Mutants | `mutants-link-second-run.txt`, `mutants-crypto-mac-nonce.txt` | `mutants-relay-local-ae0d67e.txt`, `mutants-m5b3-local.txt` | `mutants-m5c-rotate-local.txt`, `mutants-m5c-proto-local.txt` |
+| ProVerif | — | `proverif-link-local-2.txt`, `proverif-tr-gate-local-85f4c01.txt` | unchanged (no model file touched) |
+| ct | — | `ct-report-local-scale10.json`, `ct-summary-local-scale10.txt` | unchanged (no ct target touched) |
+| Coverage | — | `coverage-local-m5b3.txt` | `coverage-local-m5c-fb2d651.txt` |
+| Vectors | `schema-diff.txt` | `vectors-link-freeze.txt` | `vectors-m5c-fb2d651.txt`, `hx-refreeze-m5c.txt` |
+| Tests listing | `kat-listing-phase-a.txt` | `m5b3-checks-local-dc34d93.txt` | `phase-c-tests-fb2d651.txt` |
+| PR runs | `37719235451` (green) | `37737873733`, `37817187858` (red, fixed), `37851301032` (red: `mutants` shard 5, one survivor — carry-over) | `37874272181` (head `010ab8c`) and the closing push's run: see the closing message |
+
+### 10.5 Modellmix
+
+Agents over A + B + C: **Opus 11** (Phase B: the session and 9 sub-agents; Phase A: 1 sub-agent for the spec-text application) ·
+**Sonnet 8** (Phase A: the session and 5 sub-agents; Phase C: the session and 1 sub-agent) · **Haiku 0**.

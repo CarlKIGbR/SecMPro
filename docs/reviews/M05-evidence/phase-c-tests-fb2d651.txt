@@ -1,0 +1,40 @@
+   Compiling secmp-transport v0.0.0 (/Users/c.carl/coding/claude_code/SecMPro/crates/secmp-transport)
+   Compiling secmp-relay v0.0.0 (/Users/c.carl/coding/claude_code/SecMPro/crates/secmp-relay)
+   Compiling secmp-testkit v0.0.0 (/Users/c.carl/coding/claude_code/SecMPro/crates/secmp-testkit)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 4.70s
+────────────
+ Nextest run ID d6441016-9ded-4313-b220-409f6e1cd883 with nextest profile: default
+    Starting 31 tests across 3 binaries (129 tests and 13 binaries skipped)
+        PASS [   0.024s] ( 1/31) secmp-proto::hx vectors::hx_vectors_invite_derives_inv_sid
+        PASS [   0.053s] ( 2/31) secmp-proto::hx store::invitation_record_holds_owner_and_invq_recv_keys
+        PASS [   0.075s] ( 3/31) secmp-proto::hx store::issue_invitation_derives_inv_sid
+        PASS [   0.447s] ( 4/31) secmp-proto::hx vectors::hx_vectors_rev25_cases
+        PASS [   0.544s] ( 5/31) secmp-proto::hx generator::hx_generator_reproduces_ref_file
+        PASS [   0.765s] ( 6/31) secmp-proto::hx vectors::hx_vectors
+        PASS [   0.778s] ( 7/31) secmp-testkit::harness scenarios::harness_clients_create_pool_queues
+        PASS [   1.082s] ( 8/31) secmp-testkit::harness invitation::harness_invitation_and_handshake_over_relay
+        PASS [   1.806s] ( 9/31) secmp-testkit::harness scenarios::harness_memory_budget_refuses_new_queue_at_limit
+        PASS [   1.514s] (10/31) secmp-testkit::harness scenarios::harness_sweeper_expires_by_bucket
+        PASS [   1.890s] (11/31) secmp-testkit::harness scenarios::harness_relay_restart_queues_recreated_conversation_continues
+        PASS [   1.393s] (12/31) secmp-testkit::harness scenarios::harness_undecryptable_cell_is_acknowledged
+        PASS [   0.476s] (13/31) secmp-testkit::harness transport::transport_caps_are_opaque_and_roundtrip
+        PASS [   0.479s] (14/31) secmp-testkit::harness transport::transport_cmd_seq_starts_at_1_strictly_increasing
+        PASS [   0.478s] (15/31) secmp-testkit::harness transport::transport_create_queue_idempotent
+        PASS [   1.383s] (16/31) secmp-testkit::harness scenarios::route_relay_queue_sid_is_derived
+        PASS [   0.526s] (17/31) secmp-testkit::harness transport::transport_delete_queue
+        PASS [   0.507s] (18/31) secmp-testkit::harness transport::transport_fetch_maps_auth_and_single_error_frames
+        PASS [   0.558s] (19/31) secmp-testkit::harness transport::transport_fetch_multi_maps_queue_refs
+        PASS [   3.524s] (20/31) secmp-testkit::harness invitation::harness_scenario_api_is_public_for_two_clients
+        PASS [   3.854s] (21/31) secmp-testkit::harness scenarios::harness_all_bytes_after_hs2_are_4352_byte_frames
+        PASS [   0.014s] (22/31) secmp-transport error::tests::every_relay_code_has_its_outcome
+        PASS [   0.693s] (23/31) secmp-testkit::harness transport::transport_put_and_get_link_data
+        PASS [   0.560s] (24/31) secmp-testkit::harness transport::transport_token_per_command
+        PASS [   0.856s] (25/31) secmp-testkit::harness transport::transport_fetch_returns_real_cells_only
+        PASS [   1.536s] (26/31) secmp-testkit::harness transport::transport_send_outcome_mapping
+        PASS [   6.195s] (27/31) secmp-testkit::harness scenarios::harness_eviction_reports_ids_newest_128_decrypt
+        PASS [   4.758s] (28/31) secmp-testkit::harness transport::transport_rejects_bad_response_shape
+        PASS [   8.174s] (29/31) secmp-testkit::harness scenarios::harness_replay_is_deterministic
+        PASS [   8.173s] (30/31) secmp-testkit::harness scenarios::harness_transport_runs_over_in_process_streams
+        PASS [  37.484s] (31/31) secmp-testkit::harness scenarios::harness_exchange_1000_cells_each_way
+────────────
+     Summary [  37.537s] 31 tests run: 31 passed, 129 skipped

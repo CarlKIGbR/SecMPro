@@ -361,10 +361,15 @@ enum Call {
 struct Fake {
     next: u64,
     calls: Vec<Call>,
+    /// `prepare_cell` is "not ready" before this time (a preparation that finishes late).
+    ready_at: u64,
 }
 
 impl CellSource for Fake {
-    fn prepare_cell(&mut self, _: QueueId, _: u64) -> Result<Option<PreparedCell>, SourceError> {
+    fn prepare_cell(&mut self, _: QueueId, now: u64) -> Result<Option<PreparedCell>, SourceError> {
+        if now < self.ready_at {
+            return Ok(None);
+        }
         self.next = self.next.saturating_add(1);
         Ok(Some(PreparedCell {
             cell: Cell::from_bytes(&[u8::try_from(self.next).unwrap(); 4096]).unwrap(),
@@ -404,10 +409,17 @@ struct Rig {
 
 impl Rig {
     fn new(script: Script, mode: Mode) -> Self {
-        let params = Params {
-            phase_max_ms: 0,
-            ..Params::default()
-        };
+        Self::with(
+            script,
+            mode,
+            Params {
+                phase_max_ms: 0,
+                ..Params::default()
+            },
+        )
+    }
+
+    fn with(script: Script, mode: Mode, params: Params) -> Self {
         let mut sched = Scheduler::new(params, mode, TimingRng::seeded(3));
         let cap =
             SendCap::from_route([1; 16], &SecretBytes::from_slice(&[9; 32]).unwrap()).unwrap();
@@ -446,8 +458,8 @@ impl Rig {
                         .unwrap();
                     queue.extend(more);
                 }
-                Output::Write { link, bytes } => {
-                    self.writes.push(self.now);
+                Output::Write { link, bytes, at } => {
+                    self.writes.push(at);
                     std::io::Write::write_all(&mut self.stream, &bytes).unwrap();
                     loop {
                         let mut frame = vec![0_u8; FRAME];
@@ -477,6 +489,13 @@ impl Rig {
                 Output::Close { .. } | Output::Control { .. } => {}
             }
         }
+    }
+
+    /// The driver wakes at `t` (not at a deadline) and polls.
+    fn poll_at(&mut self, t: u64) {
+        self.now = t;
+        let outs = self.sched.poll(t, &mut self.src).unwrap();
+        self.apply(outs);
     }
 
     fn run_to(&mut self, t_end: u64) {
@@ -670,4 +689,93 @@ fn sender_noqueue_discards_cell_id_map() {
         Some(MsgState::Relayed(20)),
         "stale id ignored"
     );
+}
+
+fn ok_script() -> Script {
+    Box::new(|request: &Request, n| {
+        vec![Response {
+            cmd_seq: request.cmd_seq,
+            cmd: ResponseCmd::OkSend {
+                cell_id: u64::try_from(n).unwrap().saturating_add(1),
+                evicted: None,
+            },
+        }]
+    })
+}
+
+/// VD-1: a frame whose preparation finishes one millisecond after its tick is not written at that tick: the tick is an
+/// overrun, the link goes down and comes back at a fresh random phase.
+#[test]
+fn s_overrun_prepare_late_by_one_ms_writes_nothing() {
+    let params = Params {
+        phase_max_ms: 180_000,
+        ..Params::default()
+    };
+    let mut rig = Rig::with(ok_script(), Mode::Strict, params);
+    // the link comes up at its phase; ticks are 10 s later
+    while rig.sched.links().first().unwrap().t_up.is_none() {
+        rig.run_to(rig.now.saturating_add(500));
+    }
+    let t_up = rig.sched.links().first().unwrap().t_up.unwrap();
+    let tick2 = at(t_up, 2, 10_000);
+    // the cell for tick 2 is prepared after tick 1; it finishes one millisecond after tick 2
+    rig.src.ready_at = tick2 + 1;
+    rig.run_to(at(t_up, 1, 10_000));
+    let draws = rig.sched.timing_draws();
+    rig.run_to(tick2);
+    assert!(!rig.writes.contains(&tick2), "nothing is written at tick 2");
+    assert!(
+        rig.events
+            .iter()
+            .any(|e| matches!(e, LinkEvent::TornDown(_, Reason::Overrun)))
+    );
+    assert_eq!(rig.sched.overruns(), 1);
+    rig.poll_at(tick2 + 1);
+    assert!(
+        !rig.writes.contains(&tick2),
+        "and not a millisecond later either"
+    );
+    let info = *rig.sched.links().first().unwrap();
+    assert!(
+        info.id.is_none() && info.starts_at.is_some(),
+        "a reconnect is scheduled"
+    );
+    assert!((tick2..=tick2 + 180_000).contains(&info.starts_at.unwrap()));
+    assert!(rig.sched.timing_draws() > draws, "with a fresh phase");
+}
+
+/// VD-1: a driver that wakes within the jitter of a tick whose frame is ready writes it once, stamped as the tick.
+#[test]
+fn s_late_driver_wake_within_jitter_writes_once() {
+    let mut rig = Rig::new(ok_script(), Mode::Strict);
+    rig.run_to(10_000);
+    assert_eq!(rig.writes, vec![10_000]);
+    rig.run_to(19_999);
+    rig.poll_at(20_049);
+    assert_eq!(
+        rig.writes,
+        vec![10_000, 20_000],
+        "one write at tick 2, stamped 20 000"
+    );
+    assert!(
+        !rig.events
+            .iter()
+            .any(|e| matches!(e, LinkEvent::TornDown(..)))
+    );
+}
+
+/// VD-1: beyond the jitter the late wake is an overrun, not a late write.
+#[test]
+fn s_late_driver_wake_beyond_jitter_is_overrun() {
+    let mut rig = Rig::new(ok_script(), Mode::Strict);
+    rig.run_to(10_000);
+    rig.run_to(19_999);
+    rig.poll_at(20_051);
+    assert_eq!(rig.writes, vec![10_000], "nothing is written for tick 2");
+    assert!(
+        rig.events
+            .iter()
+            .any(|e| matches!(e, LinkEvent::TornDown(_, Reason::Overrun)))
+    );
+    assert_eq!(rig.sched.overruns(), 1);
 }

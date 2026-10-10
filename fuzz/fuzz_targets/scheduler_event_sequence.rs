@@ -101,7 +101,7 @@ impl World {
                         .unwrap();
                     work.extend(more);
                 }
-                Output::Write { link, bytes } => {
+                Output::Write { link, bytes, .. } => {
                     assert!(!bytes.is_empty() && bytes.len() % FRAME_LEN == 0, "a write of {} bytes", bytes.len());
                     let peer = self.peers.get_mut(&link).expect("a write on a link that is not up");
                     for unit in bytes.chunks(FRAME_LEN) {

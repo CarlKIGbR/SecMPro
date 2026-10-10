@@ -613,8 +613,8 @@ impl VirtualDriver {
                     let more = self.connect(i, t, link);
                     queue.extend(more);
                 }
-                Output::Write { link, bytes } => {
-                    let more = self.write(i, t, link, &bytes);
+                Output::Write { link, bytes, at } => {
+                    let more = self.write(i, t, at, link, &bytes);
                     queue.extend(more);
                 }
                 Output::Close { link } => {
@@ -715,9 +715,9 @@ impl VirtualDriver {
         }
     }
 
-    fn write(&mut self, i: usize, t: u64, link: LinkId, bytes: &[u8]) -> Vec<Output> {
+    fn write(&mut self, i: usize, t: u64, at: u64, link: LinkId, bytes: &[u8]) -> Vec<Output> {
         for _ in 0..bytes.len() / FRAME {
-            self.trace(i, t, FRAME, Dir::C2R, link.0);
+            self.trace(i, at, FRAME, Dir::C2R, link.0);
         }
         self.record(i, t, link, bytes);
         self.clients

@@ -42,9 +42,10 @@ pub struct Params {
     pub backoff_cap_ms: u64,
     /// The period of a pool queue (OPEN-M6-17).
     pub p_pool_ms: u64,
-    /// How late a tick may be written before the link is torn down instead (a late frame would be an activity-correlated
-    /// signal, OPEN-M6-13).
-    pub late_tolerance_ms: u64,
+    /// How late the driver may wake for a tick whose frame is ready (reviewer VD-1, OPEN-M6-13): a frame is written at its
+    /// tick only if its preparation finished before the tick; a driver that wakes more than this after the tick finds
+    /// an overrun, not a late write. Bounded by the driver, independent of preparation and activity.
+    pub driver_jitter_ms: u64,
     /// Spare queues per relay in the pool (spec §10.6 (3)).
     pub pool_target: usize,
 }
@@ -65,7 +66,7 @@ impl Default for Params {
             fetch_lead_ms: 1_000,
             backoff_cap_ms: 3_600_000,
             p_pool_ms: 80_000,
-            late_tolerance_ms: 1_000,
+            driver_jitter_ms: 50,
             pool_target: 2,
         }
     }

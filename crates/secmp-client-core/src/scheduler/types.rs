@@ -128,6 +128,8 @@ pub enum Output {
     Write {
         /// The connection.
         link: LinkId,
+        /// The time of the tick the frames belong to (the driver stamps them with it, not with its wake-up time).
+        at: u64,
         /// The sealed frames.
         bytes: Vec<u8>,
     },

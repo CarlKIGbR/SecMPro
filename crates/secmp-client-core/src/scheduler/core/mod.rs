@@ -434,7 +434,7 @@ impl World {
         if now < at {
             return TickResult::Idle;
         }
-        if now.saturating_sub(at) > self.params.late_tolerance_ms {
+        if now.saturating_sub(at) > self.params.driver_jitter_ms {
             self.overruns = self.overruns.saturating_add(1);
             return TickResult::Tear(Reason::Overrun);
         }
@@ -461,6 +461,7 @@ impl World {
             }
             self.out.push(Output::Write {
                 link: up.id,
+                at,
                 bytes: part.prepared.bytes().to_vec(),
             });
             up.reqs.push_back(Req {

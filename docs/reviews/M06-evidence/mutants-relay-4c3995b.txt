@@ -1,0 +1,18 @@
+code head 4c3995b (WEISUNG M6-6)
+command: cargo mutants -p secmp-relay --features kat -f crates/secmp-relay/src/relay.rs --timeout 240
+Found 32 mutants to test
+ok       Unmutated baseline in 15s build + 11s test
+32 mutants tested in 5m: 22 caught, 10 unviable
+timeout.txt: empty · missed.txt: empty
+
+command: cargo mutants -p secmp-relay --features kat -f crates/secmp-relay/src/server.rs --re 'drain|shutdown|accept' --timeout 240
+Found 1 mutant to test
+1 mutant tested in 27s: 1 unviable
+timeout.txt: empty · missed.txt: empty
+
+extra (whole file): cargo mutants -p secmp-relay --features kat -f crates/secmp-relay/src/server.rs --timeout 240
+Found 40 mutants to test
+40 mutants tested in 7m: 35 caught, 5 unviable
+timeout.txt: empty · missed.txt: empty
+
+relay tests: cargo nextest run -p secmp-relay --features kat --test-threads=1: 168 passed, 35.8 s (M6-5: 36.0 s)

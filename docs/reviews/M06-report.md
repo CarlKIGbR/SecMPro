@@ -136,7 +136,7 @@ None from `docs/03`/`docs/01`. Implementation choices the review should know (no
     thread-local, `crates/secmp-transport/src/channel.rs`); `tr_encrypt_calls`, `persist_calls`, `encrypt_sites`:
     `secmp_client_core::scheduler::conversation::counters` (feature `kat`); `timing_draws`: `Scheduler::timing_draws()` (no
     feature); the relay-info signature counter: `secmp_crypto::SIGN_CALLS_KAT` (feature `kat`, VD-2).
-11. **mutants: `drain_finished` timeout → caught durch `Fed`-Listener (`FED_DRAIN_CALLS_MAX`), Schranke 100 Accepts (≤ 0,5 s) aus `drain_secs` = 1 bei 100 ms je Uhrablesung (≈ 10 Accepts, Faktor 10)** (WEISUNG M6-5, `M06-evidence/mutants-drain-71f0d93.txt`): Phase A hat `drain_finished` und seine Aufrufer nicht geändert; der Produktcode ist beschränkt (`serve` endet nach `drain_secs`).
+11. **Test-Listener mit Shutdown-/Drain-Schranke, K = 10 (Shutdown → Drain), 100 (Drain → Ende), `FED_CALLS_MAX` = 1 500; `relay.rs` vollständig mutiert: 22 caught / 0 missed / 0 timeout (10 unviable)** (WEISUNG M6-5/M6-6, `M06-evidence/mutants-relay-4c3995b.txt`): Klasse „`serve` endet unter dem Mutanten nicht“ (`drain_finished -> false`, `start_drain -> ()`). `Fed` bricht jede der drei Phasen mit Phase, Accept-Zahl und virtueller Zeit ab. Phase A hat `drain_finished`/`start_drain` und ihre Aufrufer nicht geändert; der Produktcode ist beschränkt (`serve` endet nach `drain_secs`).
 
 ## 6. Dependencies added or bumped
 

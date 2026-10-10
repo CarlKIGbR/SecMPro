@@ -57,15 +57,15 @@ fn link_vectors_relay_keys() {
 }
 
 /// G-09 (M05 review R-144) `relay_info_without_placeholder_signature`: one signing operation per `RELAYINFO` (none for a
-/// placeholder), and the bytes are V-01's.
+/// placeholder), counted inside `Ed25519SigningKey::sign` (VD-2), and the bytes are V-01's.
 #[test]
 fn relay_info_without_placeholder_signature() {
     let fx = RelayFx::case1();
     let keys = fx.keys();
-    let before = link::relay::SIGN_CALLS_KAT.get();
+    let before = secmp_crypto::SIGN_CALLS_KAT.get();
     let info = keys.relay_info(VALID_UNTIL).unwrap();
     assert_eq!(
-        link::relay::SIGN_CALLS_KAT.get() - before,
+        secmp_crypto::SIGN_CALLS_KAT.get() - before,
         1,
         "sign_calls = 1 per RELAYINFO"
     );
@@ -74,13 +74,19 @@ fn relay_info_without_placeholder_signature() {
         reference().case(1).output("relayinfo"),
         "the bytes of V-01"
     );
-    let before = link::relay::SIGN_CALLS_KAT.get();
+    let before = secmp_crypto::SIGN_CALLS_KAT.get();
     let _ = keys.relay_info_record(VALID_UNTIL).unwrap();
     assert_eq!(
-        link::relay::SIGN_CALLS_KAT.get() - before,
+        secmp_crypto::SIGN_CALLS_KAT.get() - before,
         1,
         "and for the record"
     );
+    // the counter sits in `Ed25519SigningKey::sign`: three more builds are exactly three more signatures
+    let before = secmp_crypto::SIGN_CALLS_KAT.get();
+    for _ in 0..3 {
+        keys.relay_info(VALID_UNTIL).unwrap();
+    }
+    assert_eq!(secmp_crypto::SIGN_CALLS_KAT.get() - before, 3);
 }
 
 /// V-02 `link_vectors_relayinfo_accept`: cases 0002 and 0059.

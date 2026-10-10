@@ -27,13 +27,6 @@ use crate::sizes::HASH_LEN;
 use crate::tr::Entropy;
 use crate::wire::record::{Hello, Hs1, Hs2, RelayInfoRecord, RelayInfoV1};
 
-#[cfg(feature = "kat")]
-std::thread_local! {
-    /// Signing operations of [`RelayKeys::relay_info`] on this thread (feature `kat`; M05 review R-144): one per
-    /// `RELAYINFO`, none for a placeholder.
-    pub static SIGN_CALLS_KAT: core::cell::Cell<u64> = const { core::cell::Cell::new(0) };
-}
-
 /// The relay's long-term signing identity, the static key pair of one key generation `kid` and the access key
 /// (spec §8.2, §9.6).
 pub struct RelayKeys {
@@ -125,8 +118,6 @@ impl RelayKeys {
             unsigned.signed_fields()?.as_slice(),
         ]
         .concat();
-        #[cfg(feature = "kat")]
-        SIGN_CALLS_KAT.with(|c| c.set(c.get().saturating_add(1)));
         Ok(RelayInfoV1 {
             sig: Ed25519Sig::from_bytes(&self.sig.sign(&message))?,
             ..unsigned

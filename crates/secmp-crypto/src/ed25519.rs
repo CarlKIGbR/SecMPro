@@ -152,8 +152,17 @@ impl Ed25519SigningKey {
     /// Pure Ed25519 signature of `msg` (RFC 8032; deterministic).
     #[must_use]
     pub fn sign(&self, msg: &[u8]) -> [u8; ED25519_SIG_LEN] {
+        #[cfg(feature = "kat")]
+        SIGN_CALLS_KAT.with(|c| c.set(c.get().saturating_add(1)));
         self.dalek().sign(msg).to_bytes()
     }
+}
+
+#[cfg(feature = "kat")]
+std::thread_local! {
+    /// Calls of [`Ed25519SigningKey::sign`] on this thread (feature `kat`; M6 VD-2): counted inside the signing primitive, so
+    /// every signature of every caller changes it — a re-added placeholder signature included.
+    pub static SIGN_CALLS_KAT: core::cell::Cell<u64> = const { core::cell::Cell::new(0) };
 }
 
 /// An Ed25519 verifying key that passed the import rules of spec §3.5 (canonical, not of small order).

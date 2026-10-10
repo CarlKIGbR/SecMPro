@@ -331,6 +331,19 @@ impl Rig {
                 .filter(|e| e.slot >= CONTROL_SLOT_BASE && e.dir == Dir::C2R)
                 .copied()
                 .collect(),
+            control: {
+                // the units of the one-shot links as (time, size, direction); the link kind is "one-shot" for all of them
+                let mut units: Vec<(u64, usize, Dir)> = self
+                    .sim
+                    .client_ref(x)
+                    .trace
+                    .iter()
+                    .filter(|e| e.slot >= CONTROL_SLOT_BASE)
+                    .map(|e| (e.t_ms, e.len, e.dir))
+                    .collect();
+                units.sort();
+                units
+            },
         }
     }
 }
@@ -344,6 +357,8 @@ pub struct Run {
     pub draws: Vec<u64>,
     pub extra_units: usize,
     pub control_c2r: Trace,
+    /// Every unit of the one-shot (control) links, sorted: `(time, size, direction)`.
+    pub control: Vec<(u64, usize, Dir)>,
 }
 
 /// Map `f` over `items` on as many threads as the machine offers.
@@ -368,6 +383,11 @@ pub fn par_map<T: Send, R: Send>(items: Vec<T>, f: impl Fn(T) -> R + Sync) -> Ve
     let mut v = out.into_inner().unwrap();
     v.sort_by_key(|(i, _)| *i);
     v.into_iter().map(|(_, r)| r).collect()
+}
+
+/// The units of the one-shot links of two runs are the same set (VD-5): an extra control link caused by activity differs.
+pub fn control_equal(idle: &Run, active: &Run) -> bool {
+    idle.control == active.control
 }
 
 /// Compare an active run with the idle one: same length, sizes, directions, slots; the largest |Δt|.
@@ -399,7 +419,7 @@ fn independence(mode: Mode, contacts: &[(u64, u64)], traces: u64, hours: u64) ->
             trace,
             c,
             r,
-            run.draws == idle.draws,
+            run.draws == idle.draws && control_equal(&idle, &run),
             run.to_peers.saturating_add(run.to_x),
         )
     });
@@ -411,7 +431,10 @@ fn independence(mode: Mode, contacts: &[(u64, u64)], traces: u64, hours: u64) ->
         let r = r.expect("the R2C trace differs in length, size, direction or slot");
         assert!(c <= 5, "trace {trace}: C2R max |Δt| = {c}");
         assert!(r <= 5, "trace {trace}: R2C max |Δt| = {r}");
-        assert!(same_draws, "trace {trace}: timing draws differ");
+        assert!(
+            same_draws,
+            "trace {trace}: timing draws or the one-shot links differ"
+        );
         max_c2r = max_c2r.max(c);
         max_r2c = max_r2c.max(r);
     }
@@ -463,11 +486,12 @@ fn activity_independence_when_receiving() {
             .retain(|(_, e)| !matches!(e, Event::UserSend { .. }));
         let mut rig = Rig::new(&sc(78), Params::default());
         let run = rig.run(hours, Some(&act));
-        compare(&idle, &run)
+        (compare(&idle, &run), control_equal(&idle, &run))
     });
-    for (n, (c, r)) in results.into_iter().enumerate() {
+    for (n, ((c, r), same_control)) in results.into_iter().enumerate() {
         assert_eq!(c, Some(0), "trace {n}");
         assert_eq!(r, Some(0), "trace {n}");
+        assert!(same_control, "trace {n}: the one-shot links differ");
     }
 }
 
@@ -504,10 +528,15 @@ fn activity_independence_both_directions() {
     let results = par_map((0..8_u64).collect(), |trace| {
         let act = activity(trace + 700, hours, 2);
         let run = Rig::new(&sc(80), Params::default()).run(hours, Some(&act));
-        (idle.r2c.len() == run.r2c.len(), compare(&idle, &run).1)
+        (
+            idle.r2c.len() == run.r2c.len(),
+            compare(&idle, &run).1,
+            control_equal(&idle, &run),
+        )
     });
-    for (n, (same_len, dt)) in results.into_iter().enumerate() {
+    for (n, (same_len, dt, same_control)) in results.into_iter().enumerate() {
         assert!(same_len, "trace {n}");
+        assert!(same_control, "trace {n}: the one-shot links differ");
         assert!(dt.is_some_and(|d| d <= 5), "trace {n}: {dt:?}");
     }
 }
@@ -627,4 +656,43 @@ fn activity_comparator_detects_a_different_schedule() {
     let two = Rig::new(&sc(2), Params::default()).run(1, None);
     let (c, _) = compare(&one, &two);
     assert!(c.is_none_or(|d| d > 5), "different phases must show: {c:?}");
+}
+
+/// VD-5 (extra): the comparator tells a run with one extra one-shot link from the idle run, although the scheduled links
+/// are identical.
+#[test]
+fn activity_comparator_detects_an_extra_control_link() {
+    let sc = Scenario {
+        mode: Mode::Strict,
+        contacts: vec![(10_000, 10_000)],
+        pool: false,
+        seed: 3,
+    };
+    let idle = Rig::new(&sc, Params::default()).run(1, None);
+    let mut rig = Rig::new(&sc, Params::default());
+    rig.sim.run_until(100_000);
+    let now = rig.sim.now();
+    let x = rig.x;
+    rig.sim
+        .client(x)
+        .sched
+        .schedule_control(
+            now,
+            ControlKind::QueueNew(QueueId(901)),
+            RelayId(0),
+            1,
+            When::Prompt,
+        )
+        .unwrap();
+    let busy = rig.run(1, None);
+    assert_eq!(
+        compare(&idle, &busy),
+        (Some(0), Some(0)),
+        "the scheduled links are identical"
+    );
+    assert!(
+        !control_equal(&idle, &busy),
+        "but the extra one-shot link is seen"
+    );
+    assert!(control_equal(&idle, &idle));
 }

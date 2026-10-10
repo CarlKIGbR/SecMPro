@@ -19,7 +19,7 @@ use secmp_proto::wire::cell::AppKind;
 use secmp_proto::wire::frame::RequestCmd;
 use secmp_testkit::harness::{EntropyPool, Inspect, START_UNIX, ratchet_pair};
 
-use crate::m6_activity::{Rig, Scenario, activity, compare};
+use crate::m6_activity::{Rig, Scenario, activity, compare, control_equal};
 use crate::m6_common::{client_with, driver, run_until_link_up, send_only};
 use crate::m6_rand::Mix;
 use crate::m6_sched_bal::{NoCells, fresh_recv_cap};
@@ -79,6 +79,10 @@ fn prop_schedule_independent_of_activity() {
             "case {case} (seed {master}): R2C {r:?}"
         );
         assert_eq!(idle.draws, run.draws, "case {case}: timing draws");
+        assert!(
+            control_equal(&idle, &run),
+            "case {case}: the one-shot links differ"
+        );
     }
 }
 

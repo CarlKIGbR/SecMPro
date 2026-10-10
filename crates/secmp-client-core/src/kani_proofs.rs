@@ -13,7 +13,7 @@ use secmp_transport::evicted::evicted_is_plausible;
 
 use crate::scheduler::core::pure::{Flight, rr_select, tick_time};
 use crate::scheduler::params::{backoff_cap, rate_sum_ok};
-use crate::timing::sample_round;
+use crate::timing::{accept_ceiling, sample_with};
 
 /// `PERIODS` in milliseconds.
 const PERIODS: [u64; 4] = [10_000, 20_000, 40_000, 80_000];
@@ -128,24 +128,20 @@ fn kani_tick_time_checked() {
     }
 }
 
-/// K-04: one round of the rejection sampling accepts a value inside `[a, b]` for every `a ≤ b < 2^32`, and rejects with
-/// probability below one half (the accepted range of 64-bit draws is more than half of them).
 #[kani::proof]
 fn kani_uniform_draw_in_range() {
-    let a: u64 = kani::any();
-    let b: u64 = kani::any();
-    kani::assume(a <= b && b < (1_u64 << 32));
-    let span = b - a + 1;
+    let a: u32 = kani::any();
+    let b: u32 = kani::any();
+    kani::assume(a <= b);
+    let span = u64::from(b) - u64::from(a) + 1;
     let x: u64 = kani::any();
-    if let Some(v) = sample_round(x, a, span) {
-        assert!(a <= v && v <= b);
-        kani::cover!(v == b, "the top of the interval is reachable");
+    let ceiling = accept_ceiling(span).unwrap();
+    if let Some(v) = sample_with(x, u64::from(a), span, ceiling) {
+        assert!(u64::from(a) <= v && v <= u64::from(b));
+        kani::cover!(v == u64::from(b), "the top of the interval is reachable");
     }
-    let ceiling = (u64::MAX / span) * span;
-    assert!(
-        ceiling > u64::MAX / 2,
-        "fewer than half of the draws are rejected"
-    );
+    // the accepted draws are those below `ceiling`: more than half of them
+    assert!(ceiling > u64::MAX / 2, "fewer than half of the draws are rejected");
 }
 
 /// K-05: the cap of the n-th back-off, `min(180 000 · 2^(n−1), 3 600 000)`, never overflows for any n ≥ 1, lies between

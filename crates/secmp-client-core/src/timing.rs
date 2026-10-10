@@ -33,16 +33,27 @@ pub struct TimingRng {
     draws: u64,
 }
 
-/// One round of rejection sampling over a 64-bit draw `x` for the interval `[lo, lo + span - 1]` (`span ≥ 1`):
-/// `Some(value)` if `x` is accepted, `None` if the round is rejected. Accepted values are uniform: `x` is accepted
-/// only below the largest multiple of `span` that fits in 64 bits (no modulo bias).
+/// The largest multiple of `span` that fits 64 bits (`span ≥ 1`): draws below it are accepted, so no value of
+/// `[lo, lo + span − 1]` is likelier than another (no modulo bias).
 #[must_use]
-pub fn sample_round(x: u64, lo: u64, span: u64) -> Option<u64> {
-    let ceiling = u64::MAX.checked_div(span)?.checked_mul(span)?;
+pub fn accept_ceiling(span: u64) -> Option<u64> {
+    u64::MAX.checked_div(span)?.checked_mul(span)
+}
+
+/// One round of rejection sampling over a 64-bit draw `x` for the interval `[lo, lo + span - 1]` with the ceiling of
+/// [`accept_ceiling`]: `Some(value)` if `x` is accepted, `None` if the round is rejected.
+#[must_use]
+pub fn sample_with(x: u64, lo: u64, span: u64, ceiling: u64) -> Option<u64> {
     if x >= ceiling {
         return None;
     }
     x.checked_rem(span)?.checked_add(lo)
+}
+
+/// One round of rejection sampling for `[lo, lo + span - 1]` (`span ≥ 1`).
+#[must_use]
+pub fn sample_round(x: u64, lo: u64, span: u64) -> Option<u64> {
+    sample_with(x, lo, span, accept_ceiling(span)?)
 }
 
 impl TimingRng {

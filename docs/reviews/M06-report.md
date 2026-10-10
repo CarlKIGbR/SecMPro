@@ -49,10 +49,10 @@ AI-09, MR-01, MR-02, G-01…G-11, K-01…K-07, P-01…P-04, P-06, P-07, FZ-01, F
 
 ## 3. Evidence per acceptance criterion (Phase A rows)
 
-Commands, all at code head `SHA7` (WEISUNG M6-1): `cargo xtask ci-fast --strict` (`M06-evidence/ci-fast-m6a-SHA7.txt`),
-`cargo xtask step kani` (`M06-evidence/kani-m6a-SHA7.txt`, with the K-02 negative control), `cargo xtask ci-full --delegated
+Commands, all at code head `03cc660` (WEISUNG M6-1): `cargo xtask ci-fast --strict` (`M06-evidence/ci-fast-m6a-03cc660.txt`),
+`cargo xtask step kani` (`M06-evidence/kani-m6a-03cc660.txt`, with the K-02 negative control), `cargo xtask ci-full --delegated
 windows-native --delegated windows-cross --delegated mutants --delegated ct --delegated proverif-link --models tr` as the
-`linux-full` job (`M06-evidence/ci-full-m6a-SHA7.txt`). The M6 rows are in the `nextest`/`kat` steps of those runs.
+`linux-full` job (`M06-evidence/ci-full-m6a-03cc660.txt`). The M6 rows are in the `nextest`/`kat` steps of those runs.
 
 | Rows | Test (file `crates/secmp-testkit/tests/harness/` unless noted) | Result |
 |---|---|---|
@@ -73,7 +73,7 @@ windows-native --delegated windows-cross --delegated mutants --delegated ct --de
 | G-07 | `secmp-relay` `vectors::v16_checks_unpad`; `m6_followups.rs::h01_identical_queue_new_answers_ok` | pass |
 | G-09 | `secmp-proto` `tests/link/vectors.rs::relay_info_without_placeholder_signature` | pass; V-01 bytes unchanged; the counter is `secmp_crypto::SIGN_CALLS_KAT`, incremented inside `Ed25519SigningKey::sign` (VD-2); hand mutation (a placeholder `sign` call re-added): FAIL `sign_calls = 1 per RELAYINFO`, left 2 right 1 (`vd2-g09-hand-mutation.txt`), removed again |
 | G-11 | `m6_followups.rs::harness_cap_setters_take_effect`; `cargo mutants --test-tool nextest -p secmp-testkit --features harness -f '**/convo.rs'` | pass; 30 mutants: 25 caught, 0 missed, 5 unviable (`G-11-convo-mutants.txt`) |
-| K-01…K-07 | `crates/secmp-client-core/src/kani_proofs.rs` | 7/7 verified (`kani-m6a-SHA7.txt`); negative control K-02 without the in-flight check: `VERIFICATION:- FAILED` (`kani-k02-negative-control.log`) |
+| K-01…K-07 | `crates/secmp-client-core/src/kani_proofs.rs` | 7/7 verified (`kani-m6a-03cc660.txt`); negative control K-02 without the in-flight check: `VERIFICATION:- FAILED` (`kani-k02-negative-control.log`) |
 | P-01…P-04, P-06, P-07 | `m6_props.rs` (`prop_*`, seed through `seed::master_seed`) | pass |
 | FZ-01, FZ-04 | `fuzz/fuzz_targets/client_pipeline_responses.rs`, `scheduler_event_sequence.rs`; 120 s each in the `fuzz` step | pass, no finding |
 | X-05 | xtask `gates::tests::kani_and_fuzz_lists_m6` | pass |
@@ -154,7 +154,7 @@ None for Phase A. Phase B waits for the owner's ADR-051 Part 2 approval and `car
 ## 9. Checklist before requesting review
 
 - [x] All Phase A rows evidenced above
-- [x] `cargo xtask ci-fast --strict` green; `ci-full` green (§4), at `SHA7`
+- [x] `cargo xtask ci-fast --strict` green; `ci-full` green (§4), at `03cc660`
 - [x] No `#[ignore]`, no lint allowances added for security lints, no disabled gates
 - [x] Vectors untouched
 - [ ] PR run on `linux-fast`, `windows-native`, `xwin-cross`, `linux-full` (after the push by the reviewer)

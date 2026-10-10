@@ -1,0 +1,37 @@
+code head 03cc660 (WEISUNG M6-1 VD-3)
+command: cargo kani -p secmp-client-core
+Checking harness kani_proofs::kani_evicted_range...
+ ** 2 of 2 cover properties satisfied
+VERIFICATION:- SUCCESSFUL
+Verification Time: 0.0689599s
+Checking harness kani_proofs::kani_rate_bound_integer_form...
+ ** 2 of 2 cover properties satisfied
+VERIFICATION:- SUCCESSFUL
+Verification Time: 353.5427s
+Checking harness kani_proofs::kani_backoff_cap...
+ ** 2 of 2 cover properties satisfied
+VERIFICATION:- SUCCESSFUL
+Verification Time: 0.13093103s
+Checking harness kani_proofs::kani_uniform_draw_in_range...
+ ** 1 of 1 cover properties satisfied
+VERIFICATION:- SUCCESSFUL
+Verification Time: 13.1616745s
+Checking harness kani_proofs::kani_tick_time_checked...
+ ** 2 of 2 cover properties satisfied
+VERIFICATION:- SUCCESSFUL
+Verification Time: 4.271382s
+Checking harness kani_proofs::kani_in_flight_bound...
+ ** 1 of 1 cover properties satisfied
+VERIFICATION:- SUCCESSFUL
+Verification Time: 0.14964607s
+Checking harness kani_proofs::kani_balanced_rr_selects_due_or_ping...
+ ** 2 of 2 cover properties satisfied
+VERIFICATION:- SUCCESSFUL
+Verification Time: 12.597919s
+Complete - 7 successfully verified harnesses, 0 failures, 7 total.
+=== K-02 negative control: the in-flight check removed from Flight::on_tick (hand mutation, reverted)
+command: cargo kani -p secmp-client-core --harness kani_in_flight_bound
+Checking harness kani_proofs::kani_in_flight_bound...
+ ** 0 of 1 cover properties satisfied (1 unreachable)
+VERIFICATION:- FAILED
+Verification Time: 0.12314755s

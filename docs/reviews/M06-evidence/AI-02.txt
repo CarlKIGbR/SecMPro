@@ -1,0 +1,1 @@
+AI-02: max |Δt| C2R = 0 ms, R2C = 0 ms

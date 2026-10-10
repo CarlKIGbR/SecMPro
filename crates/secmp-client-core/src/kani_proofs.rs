@@ -141,7 +141,10 @@ fn kani_uniform_draw_in_range() {
         kani::cover!(v == u64::from(b), "the top of the interval is reachable");
     }
     // the accepted draws are those below `ceiling`: more than half of them
-    assert!(ceiling > u64::MAX / 2, "fewer than half of the draws are rejected");
+    assert!(
+        ceiling > u64::MAX / 2,
+        "fewer than half of the draws are rejected"
+    );
 }
 
 /// K-05: the cap of the n-th back-off, `min(180 000 · 2^(n−1), 3 600 000)`, never overflows for any n ≥ 1, lies between

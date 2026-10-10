@@ -791,15 +791,22 @@ pub(crate) const KANI_HARNESSES: &[&str] = &[
 /// instead of changing the count silently.
 pub(crate) const KANI_COVERS: &[(&str, usize)] = &[
     ("kani_proofs::kani_accept_opk_delete_only_on_success", 1),
+    ("kani_proofs::kani_backoff_cap", 2),
+    ("kani_proofs::kani_balanced_rr_selects_due_or_ping", 2),
     ("kani_proofs::kani_cmd_seq_monotone", 5),
     ("kani_proofs::kani_commit_accept_atomic", 1),
     ("kani_proofs::kani_cont_assembly", 1),
+    ("kani_proofs::kani_evicted_range", 2),
     ("kani_proofs::kani_executor_response_count", 6),
     ("kani_proofs::kani_frame_pad_total", 2),
+    ("kani_proofs::kani_in_flight_bound", 1),
     ("kani_proofs::kani_link_counter_checked_add", 3),
     ("kani_proofs::kani_link_counter_strict_plus_one", 2),
     ("kani_proofs::kani_q_frame_plaintext_exact_fit", 2),
     ("kani_proofs::kani_queue_eviction_bounds", 3),
+    ("kani_proofs::kani_rate_bound_integer_form", 2),
+    ("kani_proofs::kani_tick_time_checked", 2),
+    ("kani_proofs::kani_uniform_draw_in_range", 1),
 ];
 
 /// The SecMP vector suites (`vectors/SCHEMA.md` §3): frozen as `vectors/<suite>.json`, reference files

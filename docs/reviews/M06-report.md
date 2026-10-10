@@ -49,10 +49,10 @@ AI-09, MR-01, MR-02, G-01…G-11, K-01…K-07, P-01…P-04, P-06, P-07, FZ-01, F
 
 ## 3. Evidence per acceptance criterion (Phase A rows)
 
-Commands: `cargo nextest run -p secmp-testkit -p secmp-client-core -p secmp-transport --features secmp-testkit/harness`
-(127 tests, 127 passed on the head before the last two commits; all M6 rows below are in it), `cargo xtask ci-fast` (PASS,
-`M06-evidence/ci-fast-summary.txt`), `cargo xtask ci-full --delegated windows-native --delegated windows-cross --delegated
-mutants --delegated ct --delegated proverif-link --models tr` (as the `linux-full` job; `M06-evidence/ci-full-summary.txt`).
+Commands, all at code head `SHA7` (WEISUNG M6-1): `cargo xtask ci-fast --strict` (`M06-evidence/ci-fast-m6a-SHA7.txt`),
+`cargo xtask step kani` (`M06-evidence/kani-m6a-SHA7.txt`, with the K-02 negative control), `cargo xtask ci-full --delegated
+windows-native --delegated windows-cross --delegated mutants --delegated ct --delegated proverif-link --models tr` as the
+`linux-full` job (`M06-evidence/ci-full-m6a-SHA7.txt`). The M6 rows are in the `nextest`/`kat` steps of those runs.
 
 | Rows | Test (file `crates/secmp-testkit/tests/harness/` unless noted) | Result |
 |---|---|---|
@@ -71,16 +71,20 @@ mutants --delegated ct --delegated proverif-link --models tr` (as the `linux-ful
 | G-02 | `secmp-transport` `caps::tests::caps_have_no_partial_eq` + two `compile_fail,E0369` doctests | pass |
 | G-03, G-04, G-05, G-06, G-08, G-10 | xtask tests `ct_guard_sites_use_ct_eq`, `normal_dependencies_match_adr_allowlist`, `fuzz_executor_depth`, `testkit_manifest_and_workflow_texts`, `mutants_report_has_unviable_breakdown`, `no_ignore_without_adr` | pass (`cargo test -p xtask`: 173 passed) |
 | G-07 | `secmp-relay` `vectors::v16_checks_unpad`; `m6_followups.rs::h01_identical_queue_new_answers_ok` | pass |
-| G-09 | `secmp-proto` `tests/link/vectors.rs::relay_info_without_placeholder_signature` | pass; V-01 bytes unchanged |
+| G-09 | `secmp-proto` `tests/link/vectors.rs::relay_info_without_placeholder_signature` | pass; V-01 bytes unchanged; the counter is `secmp_crypto::SIGN_CALLS_KAT`, incremented inside `Ed25519SigningKey::sign` (VD-2); hand mutation (a placeholder `sign` call re-added): FAIL `sign_calls = 1 per RELAYINFO`, left 2 right 1 (`vd2-g09-hand-mutation.txt`), removed again |
 | G-11 | `m6_followups.rs::harness_cap_setters_take_effect`; `cargo mutants --test-tool nextest -p secmp-testkit --features harness -f '**/convo.rs'` | pass; 30 mutants: 25 caught, 0 missed, 5 unviable (`G-11-convo-mutants.txt`) |
-| K-01…K-07 | `crates/secmp-client-core/src/kani_proofs.rs` | 7/7 verified (`kani-client-core.log`, `kani-step.log`); negative control K-02 without the in-flight check: `VERIFICATION:- FAILED` (`kani-k02-negative-control.log`) |
+| K-01…K-07 | `crates/secmp-client-core/src/kani_proofs.rs` | 7/7 verified (`kani-m6a-SHA7.txt`); negative control K-02 without the in-flight check: `VERIFICATION:- FAILED` (`kani-k02-negative-control.log`) |
 | P-01…P-04, P-06, P-07 | `m6_props.rs` (`prop_*`, seed through `seed::master_seed`) | pass |
 | FZ-01, FZ-04 | `fuzz/fuzz_targets/client_pipeline_responses.rs`, `scheduler_event_sequence.rs`; 120 s each in the `fuzz` step | pass, no finding |
 | X-05 | xtask `gates::tests::kani_and_fuzz_lists_m6` | pass |
 | X-09 | `m6_followups.rs::scheduler_core_has_no_tokio` | pass |
 
-Row counts of this phase: implemented 103 / 103 · passing 103 · extra: `activity_comparator_detects_a_different_schedule`
-(negative control of the AI comparator), the unit tests of `clock`, `timing`, `params`, `pure` in `secmp-client-core`.
+Row counts of this phase: implemented 103 / 103 · passing 103 · extra tests (named): `activity_comparator_detects_a_different_schedule`,
+`activity_comparator_detects_an_extra_control_link` (VD-5) — negative controls of the AI comparator —, the three
+reviewer-dictated `s_overrun_prepare_late_by_one_ms_writes_nothing`, `s_late_driver_wake_within_jitter_writes_once`,
+`s_late_driver_wake_beyond_jitter_is_overrun` (VD-1, `m6_sched_io.rs`), and the unit tests of `clock`, `timing`, `params`,
+`pure` in `secmp-client-core`. S-01 (VD-6) asserts six pairwise-distinct isolation keys for the six links; AI-01…AI-06,
+P-01 compare the units of the one-shot links as well (VD-5).
 
 ## 4. Gates
 
@@ -90,7 +94,7 @@ Row counts of this phase: implemented 103 / 103 · passing 103 · extra: `activi
 | `cargo xtask ci-full` (as `linux-full`, with the CI delegations) | all steps PASS; the first run failed `fmt` (an unformatted file) and `kani` (the seven new harnesses' `cover!` counts were not pinned in `expect::KANI_COVERS`); both fixed, `cargo xtask step kani` re-run: PASS (`M06-evidence/kani-step.log`) |
 | Windows VM tests | not applicable in Phase A (no Windows-specific code); `windows-native`/`xwin-cross` run in the PR |
 | KATs / differential | PASS (`kat` step, 5 packages incl. `secmp-client-core`) |
-| Fuzz smoke | 31 targets × 120 s, PASS; the two new targets: seeds 3 (FZ-04) and 6 (FZ-01) committed |
+| Fuzz smoke | 31 targets × 120 s, PASS; committed seeds of the two new targets: `client_pipeline_responses` 6, `scheduler_event_sequence` 3 (counted by `git diff --name-status 6300b65..HEAD -- fuzz/corpus`). An earlier commit had carried 94 and 620 files: my manual fuzz runs had written libFuzzer's new inputs into the tracked corpus directory; they were removed again and the nine hand-made seeds restored |
 | Mutation (`cargo mutants`) | delegated to the `mutants` CI job on the existing scope (crypto, proto, relay); `secmp-client-core`/`secmp-transport` enter the scope in Phase B (ADR-047 Am. 4); the one-off G-11 run above |
 | Coverage | secmp-client-core 89.7 %, secmp-transport 87.3 %, secmp-testkit 97.7 %, secmp-crypto 99.4 %, secmp-proto 97.7 %, secmp-relay 98.2 % |
 | ProVerif / Kani / Miri | ProVerif PASS (`--models tr`; `proverif-link` delegated); Kani: 40/40 harnesses (client-core 7/7, 0 failures); Miri PASS |
@@ -117,6 +121,21 @@ None from `docs/03`/`docs/01`. Implementation choices the review should know (no
 5. **Profile**: `[profile.dev.package."*"] opt-level = 3` for the test builds (see §2).
 6. **Test harness**: `cargo test` (threads in one process) exhausts locked memory for the hours-long scenarios; they are run with
    nextest (one process per test), as the gates do.
+7. **Late tolerance withdrawn (reviewer VD-1); driver jitter 50 ms.** `Params::driver_jitter_ms` (default 50) replaces
+   `late_tolerance_ms` (was 1 000): a frame is written at its tick only if it was ready; a tick without its frame is an
+   overrun; a driver that wakes more than 50 ms after the tick finds an overrun. `Output::Write` carries the tick time `at`,
+   the driver stamps traces with it.
+8. **`LinkEvent::RouteDead(queue)`**: emitted by `World::outcome` in `scheduler/core/mod.rs` when a `SEND` is answered
+   `ERR_NOQUEUE` (the route is marked dead, `Scheduler::route_dead(queue)`; spec §10.3 "route.mark_dead"); covered by S-30
+   `send_response_handling` (asserts the event and `route_dead`).
+9. **Sub-agent, denied shell command.** The sub-agent that began G-01/G-02/G-07/G-09/G-11 was refused its Bash call that
+   appended the G-01 test code to `crates/secmp-testkit/tests/harness/transport.rs` (a shell append); it stopped and reported
+   (from its report). I did not ask it to retry or to find another way; I wrote G-01, G-07, G-09, G-11 myself with the
+   file tools (`m6_followups.rs`, `vectors.rs` edits). The earlier xtask sub-agent was not refused anything.
+10. **Counters, where they live.** `seal_calls`, `sign_calls`: `secmp_transport::channel::counters` (feature `harness`,
+    thread-local, `crates/secmp-transport/src/channel.rs`); `tr_encrypt_calls`, `persist_calls`, `encrypt_sites`:
+    `secmp_client_core::scheduler::conversation::counters` (feature `kat`); `timing_draws`: `Scheduler::timing_draws()` (no
+    feature); the relay-info signature counter: `secmp_crypto::SIGN_CALLS_KAT` (feature `kat`, VD-2).
 
 ## 6. Dependencies added or bumped
 
@@ -135,7 +154,7 @@ None for Phase A. Phase B waits for the owner's ADR-051 Part 2 approval and `car
 ## 9. Checklist before requesting review
 
 - [x] All Phase A rows evidenced above
-- [x] `cargo xtask ci-fast` green; `ci-full` green (§4)
+- [x] `cargo xtask ci-fast --strict` green; `ci-full` green (§4), at `SHA7`
 - [x] No `#[ignore]`, no lint allowances added for security lints, no disabled gates
 - [x] Vectors untouched
 - [ ] PR run on `linux-fast`, `windows-native`, `xwin-cross`, `linux-full` (after the push by the reviewer)

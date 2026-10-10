@@ -488,20 +488,31 @@ fn handle_stops_on_teardown_write_failure_and_refusal() {
 /// ends `serve` instead of hanging it.
 const FED_CALLS_MAX: usize = 20_000;
 
+/// The accept calls a [`Fed`] listener answers once the relay is draining (WEISUNG M6-5): `relay_with` sets
+/// `drain_secs` 1 and the clock `Virtual::new(100)` advances 100 ms per reading, so `serve` sees the drain finished
+/// within ≈ 10 calls; 100 is ten times that, ≤ 0.5 s at 5 ms per call. A drain that never finishes (a
+/// `drain_finished` that is always `false`) makes the next call fail like a dead listener: `serve` returns `Error::Io`
+/// and the test fails at once, instead of after `FED_CALLS_MAX` calls (≈ 100 s).
+const FED_DRAIN_CALLS_MAX: usize = 100;
+
 /// A listener the test feeds through a channel: it waits up to 5 ms for a connection, then reports `WouldBlock`;
 /// after `FED_CALLS_MAX` calls, or once the test has dropped its sender (the test ended or failed), it is dead.
 struct Fed {
     rx: Mutex<Receiver<Scripted>>,
     calls: AtomicUsize,
+    relay: Arc<Relay>,
+    drain_calls: AtomicUsize,
 }
 
 impl Fed {
-    fn new() -> (Self, Sender<Scripted>) {
+    fn new(relay: &Arc<Relay>) -> (Self, Sender<Scripted>) {
         let (tx, rx) = mpsc::channel();
         (
             Self {
                 rx: Mutex::new(rx),
                 calls: AtomicUsize::new(0),
+                relay: Arc::clone(relay),
+                drain_calls: AtomicUsize::new(0),
             },
             tx,
         )
@@ -513,6 +524,11 @@ impl Listener for Fed {
 
     fn accept_next(&self) -> io::Result<Scripted> {
         if self.calls.fetch_add(1, Ordering::SeqCst) >= FED_CALLS_MAX {
+            return Err(dead());
+        }
+        if self.relay.draining()
+            && self.drain_calls.fetch_add(1, Ordering::SeqCst) >= FED_DRAIN_CALLS_MAX
+        {
             return Err(dead());
         }
         match self
@@ -589,7 +605,7 @@ fn signalling_spawner(
 fn cap_refuses_the_n_plus_first_idle_connection() {
     let (relay, _) = relay_with(4);
     let clock = Virtual::new(100);
-    let (listener, feed) = Fed::new();
+    let (listener, feed) = Fed::new(&relay);
     let (done_tx, done) = mpsc::channel();
     let started = Arc::new(AtomicUsize::new(0));
     let spawner = signalling_spawner(done_tx, Arc::clone(&started));
@@ -671,7 +687,7 @@ fn cap_refuses_the_n_plus_first_idle_connection() {
 fn spawn_failure_closes_the_stream_and_keeps_serving() {
     let (relay, _) = relay_with(1);
     let clock = Virtual::new(100);
-    let (listener, feed) = Fed::new();
+    let (listener, feed) = Fed::new(&relay);
     let (done_tx, done) = mpsc::channel();
     let started = Arc::new(AtomicUsize::new(0));
     let mut inner = signalling_spawner(done_tx, Arc::clone(&started));

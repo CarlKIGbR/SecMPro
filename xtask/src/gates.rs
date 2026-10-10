@@ -7617,6 +7617,7 @@ mod tests {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
         let mut source = String::new();
         for file in [
+            "crates/secmp-client-core/src/kani_proofs.rs",
             "crates/secmp-proto/src/kani_proofs.rs",
             "crates/secmp-relay/src/kani_proofs.rs",
         ] {
@@ -7650,6 +7651,28 @@ mod tests {
                 root.join(format!("docs/reviews/M05-evidence/kani-m5fix-{h}.txt")),
             )?));
         }
+        // M6 Phase A: the run of the seven `secmp-client-core` harnesses (everything before the negative-control marker of
+        // the committed file `kani-m6a-<sha7>.txt`; the negative control prints `0 of 1` for K-02 on purpose)
+        let evidence = root.join("docs/reviews/M06-evidence");
+        let mut m6: Vec<_> = std::fs::read_dir(&evidence)?
+            .filter_map(std::result::Result::ok)
+            .map(|e| e.path())
+            .filter(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with("kani-m6a-"))
+            })
+            .collect();
+        m6.sort();
+        assert_eq!(m6.len(), 1, "one committed M6 Phase A Kani run: {m6:?}");
+        let whole = lf(&std::fs::read_to_string(
+            m6.first().ok_or_else(|| Error("no run".into()))?,
+        )?);
+        let (positive, negative) = whole
+            .split_once("=== K-02 negative control")
+            .ok_or_else(|| Error("no negative-control marker".into()))?;
+        assert!(negative.contains("VERIFICATION:- FAILED"));
+        log.push_str(positive);
         assert_eq!(
             kani_cover_pin_findings(&kani_covers(&log)?),
             Vec::<String>::new()

@@ -33,15 +33,20 @@ fn strict_one_link_per_queue() {
     let send = links.iter().filter(|l| l.kind == LinkKind::Send).count();
     let recv = links.iter().filter(|l| l.kind == LinkKind::Recv).count();
     assert_eq!((links.len(), send, recv), (6, 2, 4));
-    let mut keys: Vec<u64> = sim
-        .client_ref(a)
-        .connects
+    // VD-6: the isolation keys of exactly these six links, pairwise distinct
+    let current: std::collections::HashSet<u64> = links
         .iter()
-        .map(|(_, _, k)| k.0)
+        .map(|l| {
+            let id = l.id.expect("connected");
+            sim.client_ref(a)
+                .connects
+                .iter()
+                .find(|(_, c, _)| *c == id)
+                .map(|(_, _, k)| k.0)
+                .expect("the connection's key")
+        })
         .collect();
-    keys.sort_unstable();
-    keys.dedup();
-    assert!(keys.len() >= 6, "{} distinct isolation keys", keys.len());
+    assert_eq!(current.len(), 6, "six pairwise-distinct link keys");
     let ids: Vec<u64> = links.iter().filter_map(|l| l.id.map(|i| i.0)).collect();
     assert_eq!(ids.len(), 6, "all six are connected");
 }

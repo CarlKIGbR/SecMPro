@@ -73,7 +73,7 @@ windows-native --delegated windows-cross --delegated mutants --delegated ct --de
 | G-07 | `secmp-relay` `vectors::v16_checks_unpad`; `m6_followups.rs::h01_identical_queue_new_answers_ok` | pass |
 | G-09 | `secmp-proto` `tests/link/vectors.rs::relay_info_without_placeholder_signature` | pass; V-01 bytes unchanged; the counter is `secmp_crypto::SIGN_CALLS_KAT`, incremented inside `Ed25519SigningKey::sign` (VD-2); hand mutation (a placeholder `sign` call re-added): FAIL `sign_calls = 1 per RELAYINFO`, left 2 right 1 (`vd2-g09-hand-mutation.txt`), removed again |
 | G-11 | `m6_followups.rs::harness_cap_setters_take_effect`; `cargo mutants --test-tool nextest -p secmp-testkit --features harness -f '**/convo.rs'` | pass; 30 mutants: 25 caught, 0 missed, 5 unviable (`G-11-convo-mutants.txt`) |
-| K-01…K-07 | `crates/secmp-client-core/src/kani_proofs.rs` | 7/7 verified (`kani-m6a-03cc660.txt`); negative control K-02 without the in-flight check: `VERIFICATION:- FAILED` (`kani-k02-negative-control.log`) |
+| K-01…K-07 | `crates/secmp-client-core/src/kani_proofs.rs` | 7/7 verified (`kani-m6a-03cc660.txt`); negative control K-02 without the in-flight check: `VERIFICATION:- FAILED` (same file, after the marker line) |
 | P-01…P-04, P-06, P-07 | `m6_props.rs` (`prop_*`, seed through `seed::master_seed`) | pass |
 | FZ-01, FZ-04 | `fuzz/fuzz_targets/client_pipeline_responses.rs`, `scheduler_event_sequence.rs`; 120 s each in the `fuzz` step | pass, no finding |
 | X-05 | xtask `gates::tests::kani_and_fuzz_lists_m6` | pass |
@@ -90,13 +90,13 @@ P-01 compare the units of the one-shot links as well (VD-5).
 
 | Gate | Result |
 |---|---|
-| `cargo xtask ci-fast` (Linux) | PASS |
-| `cargo xtask ci-full` (as `linux-full`, with the CI delegations) | all steps PASS; the first run failed `fmt` (an unformatted file) and `kani` (the seven new harnesses' `cover!` counts were not pinned in `expect::KANI_COVERS`); both fixed, `cargo xtask step kani` re-run: PASS (`M06-evidence/kani-step.log`) |
+| `cargo xtask ci-fast --strict` (Linux) | PASS at 03cc660 (`ci-fast-m6a-03cc660.txt`) |
+| `cargo xtask ci-full` (as `linux-full`, with the CI delegations) | `ci-full: PASS` at 03cc660 (`ci-full-m6a-03cc660.txt`): fmt, clippy, policy, deny, vet, audit, cooldown, nextest, doctest, kat (239 s), perf, fuzz (3 785 s, 31 targets), coverage, miri, kani (3 071 s, 40/40), proverif, sbom, systemd PASS; ct, mutants, proverif-link, windows-native, windows-cross delegated to the PR run. (An earlier run at `bb9e45d` had failed `fmt` and the Kani cover pins; both were fixed before this one.) |
 | Windows VM tests | not applicable in Phase A (no Windows-specific code); `windows-native`/`xwin-cross` run in the PR |
 | KATs / differential | PASS (`kat` step, 5 packages incl. `secmp-client-core`) |
 | Fuzz smoke | 31 targets × 120 s, PASS; committed seeds of the two new targets: `client_pipeline_responses` 6, `scheduler_event_sequence` 3 (counted by `git diff --name-status 6300b65..HEAD -- fuzz/corpus`). An earlier commit had carried 94 and 620 files: my manual fuzz runs had written libFuzzer's new inputs into the tracked corpus directory; they were removed again and the nine hand-made seeds restored |
 | Mutation (`cargo mutants`) | delegated to the `mutants` CI job on the existing scope (crypto, proto, relay); `secmp-client-core`/`secmp-transport` enter the scope in Phase B (ADR-047 Am. 4); the one-off G-11 run above |
-| Coverage | secmp-client-core 89.7 %, secmp-transport 87.3 %, secmp-testkit 97.7 %, secmp-crypto 99.4 %, secmp-proto 97.7 %, secmp-relay 98.2 % |
+| Coverage | secmp-client-core 89.8 %, secmp-transport 87.3 %, secmp-testkit 97.7 %, secmp-crypto 99.4 %, secmp-proto 97.7 %, secmp-relay 98.2 % |
 | ProVerif / Kani / Miri | ProVerif PASS (`--models tr`; `proverif-link` delegated); Kani: 40/40 harnesses (client-core 7/7, 0 failures); Miri PASS |
 | `cargo deny` / `vet` / `audit` / cooldown | PASS (no new third-party crate) |
 | Reproducible build | not run (no release-profile change) |

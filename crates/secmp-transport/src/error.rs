@@ -37,6 +37,8 @@ pub enum Error {
     NewLinkRequired,
     /// Randomness or locked memory is unavailable.
     Unavailable,
+    /// A prepared frame was written out of counter order (local; nothing was written).
+    OutOfOrder,
     /// An argument is outside what a request can carry (a `FETCH_MULTI` of 0 or more than 32 queues, a capability
     /// that does not parse).
     Invalid,
@@ -56,6 +58,7 @@ impl fmt::Display for Error {
             Self::Closed => "link closed",
             Self::NewLinkRequired => "new link required",
             Self::Unavailable => "unavailable",
+            Self::OutOfOrder => "frame out of order",
             Self::Invalid => "invalid argument",
         })
     }

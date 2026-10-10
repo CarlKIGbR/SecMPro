@@ -7,6 +7,22 @@
 
 mod fixture;
 mod invitation;
+mod m6_activity;
+mod m6_channel;
+mod m6_common;
+mod m6_control;
+mod m6_followups;
+mod m6_measure;
+mod m6_outbox;
+mod m6_props;
+mod m6_rand;
+mod m6_reconnect;
+mod m6_sched;
+mod m6_sched_bal;
+mod m6_sched_io;
+mod m6_sched_life;
 mod scenarios;
 mod scripted;
+#[path = "../../../secmp-proto/tests/common/seed.rs"]
+mod seed;
 mod transport;

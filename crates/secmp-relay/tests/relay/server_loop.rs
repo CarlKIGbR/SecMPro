@@ -11,7 +11,7 @@
 use std::collections::VecDeque;
 use std::io::{self, ErrorKind, Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -60,6 +60,13 @@ impl Time for Virtual {
 
     fn pause(&self, d: Duration) {
         self.0.log.lock().unwrap().push(Some(d));
+    }
+}
+
+impl Virtual {
+    /// The virtual monotonic time so far (a peek: it neither advances the clock nor logs a reading).
+    fn elapsed_ms(&self) -> u64 {
+        self.0.mono_ms.load(Ordering::SeqCst)
     }
 }
 
@@ -484,27 +491,65 @@ fn handle_stops_on_teardown_write_failure_and_refusal() {
     );
 }
 
-/// The accept calls a [`Fed`] listener answers before it reports a dead listener, so a test whose expectation fails
-/// ends `serve` instead of hanging it.
-const FED_CALLS_MAX: usize = 20_000;
+/// The accept calls a [`Fed`] listener answers before the test has asked for the shutdown (WEISUNG M6-6): the
+/// scenarios of the tests take well under 100 calls of ≤ 5 ms; 1 500 calls are ≤ 7.5 s, so a `serve` that hangs
+/// before the shutdown ends the test within 10 s with a message instead of running into a mutation timeout.
+const FED_CALLS_MAX: usize = 1_500;
 
-/// A listener the test feeds through a channel: it waits up to 5 ms for a connection, then reports `WouldBlock`;
-/// after `FED_CALLS_MAX` calls, or once the test has dropped its sender (the test ended or failed), it is dead.
+/// The accept calls between [`Fed::shut_down`] and the beginning of the drain: `shut_down` starts the drain on the
+/// test's own thread before it sets the flag, so the next call already sees `draining()`; 10 allows for the call
+/// in flight and then some. A `start_drain` that does nothing fails the 11th call (≤ 55 ms).
+const FED_SHUTDOWN_CALLS_MAX: usize = 10;
+
+/// The accept calls a [`Fed`] listener answers once the relay is draining (WEISUNG M6-5): `relay_with` sets
+/// `drain_secs` 1 and the clock `Virtual::new(100)` advances 100 ms per reading, so `serve` sees the drain finished
+/// within ≈ 10 calls; 100 is ten times that, ≤ 0.5 s at 5 ms per call. A drain that never finishes (a
+/// `drain_finished` that is always `false`) fails the 101st call.
+const FED_DRAIN_CALLS_MAX: usize = 100;
+
+/// A listener the test feeds through a channel: it waits up to 5 ms for a connection, then reports `WouldBlock`.
+/// Each of the three phases (before the shutdown, shutdown until the drain begins, drain until `serve` ends) is
+/// bounded: a call beyond the bound fails the test with the phase, the number of calls and the virtual time. It is
+/// dead once the test has dropped its sender (the test ended or failed).
 struct Fed {
     rx: Mutex<Receiver<Scripted>>,
     calls: AtomicUsize,
+    relay: Arc<Relay>,
+    clock: Virtual,
+    shutdown: AtomicBool,
+    shutdown_calls: AtomicUsize,
+    drain_calls: AtomicUsize,
 }
 
 impl Fed {
-    fn new() -> (Self, Sender<Scripted>) {
+    fn new(relay: &Arc<Relay>, clock: &Virtual) -> (Self, Sender<Scripted>) {
         let (tx, rx) = mpsc::channel();
         (
             Self {
                 rx: Mutex::new(rx),
                 calls: AtomicUsize::new(0),
+                relay: Arc::clone(relay),
+                clock: clock.clone(),
+                shutdown: AtomicBool::new(false),
+                shutdown_calls: AtomicUsize::new(0),
+                drain_calls: AtomicUsize::new(0),
             },
             tx,
         )
+    }
+
+    /// The test's shutdown: starts the drain, then tells the listener that it must now begin.
+    fn shut_down(&self) {
+        self.relay.start_drain(self.clock.now());
+        self.shutdown.store(true, Ordering::SeqCst);
+    }
+
+    fn bounded(&self, ok: bool, phase: &str, used: usize) {
+        assert!(
+            ok,
+            "serve did not end: phase `{phase}`, {used} accepts, {} ms virtual time",
+            self.clock.elapsed_ms()
+        );
     }
 }
 
@@ -512,8 +557,15 @@ impl Listener for Fed {
     type Conn = Scripted;
 
     fn accept_next(&self) -> io::Result<Scripted> {
-        if self.calls.fetch_add(1, Ordering::SeqCst) >= FED_CALLS_MAX {
-            return Err(dead());
+        let all = self.calls.fetch_add(1, Ordering::SeqCst);
+        if self.relay.draining() {
+            let n = self.drain_calls.fetch_add(1, Ordering::SeqCst);
+            self.bounded(n < FED_DRAIN_CALLS_MAX, "drain", n);
+        } else if self.shutdown.load(Ordering::SeqCst) {
+            let n = self.shutdown_calls.fetch_add(1, Ordering::SeqCst);
+            self.bounded(n < FED_SHUTDOWN_CALLS_MAX, "shutdown", n);
+        } else {
+            self.bounded(all < FED_CALLS_MAX, "before the shutdown", all);
         }
         match self
             .rx
@@ -589,7 +641,7 @@ fn signalling_spawner(
 fn cap_refuses_the_n_plus_first_idle_connection() {
     let (relay, _) = relay_with(4);
     let clock = Virtual::new(100);
-    let (listener, feed) = Fed::new();
+    let (listener, feed) = Fed::new(&relay, &clock);
     let (done_tx, done) = mpsc::channel();
     let started = Arc::new(AtomicUsize::new(0));
     let spawner = signalling_spawner(done_tx, Arc::clone(&started));
@@ -651,7 +703,7 @@ fn cap_refuses_the_n_plus_first_idle_connection() {
         for _ in 0..4 {
             done.recv_timeout(SIGNAL).unwrap();
         }
-        relay.start_drain(clock.now());
+        listener.shut_down();
         assert_eq!(
             serving.join().unwrap(),
             Ok(()),
@@ -671,7 +723,7 @@ fn cap_refuses_the_n_plus_first_idle_connection() {
 fn spawn_failure_closes_the_stream_and_keeps_serving() {
     let (relay, _) = relay_with(1);
     let clock = Virtual::new(100);
-    let (listener, feed) = Fed::new();
+    let (listener, feed) = Fed::new(&relay, &clock);
     let (done_tx, done) = mpsc::channel();
     let started = Arc::new(AtomicUsize::new(0));
     let mut inner = signalling_spawner(done_tx, Arc::clone(&started));
@@ -712,7 +764,7 @@ fn spawn_failure_closes_the_stream_and_keeps_serving() {
             );
         }
         assert_eq!(started.load(Ordering::SeqCst), 1);
-        relay.start_drain(clock.now());
+        listener.shut_down();
         assert_eq!(serving.join().unwrap(), Ok(()), "C-1: serving went on");
     });
 }

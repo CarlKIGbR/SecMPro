@@ -125,7 +125,7 @@ impl<'r> Connection<'r> {
             Phase::Linked {
                 since_ms, last_ms, ..
             } => {
-                now.mono_ms.saturating_sub(*since_ms) >= LINK_AGE_MAX_MS
+                now.mono_ms.saturating_sub(*since_ms) >= limits.link_age_ms
                     || now.mono_ms.saturating_sub(*last_ms) >= limits.link_idle_ms
             }
             Phase::Closed => false,

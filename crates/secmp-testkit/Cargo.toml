@@ -15,16 +15,19 @@ publish.workspace = true
 # `harness`: the in-process relay + clients (src/harness, tests/harness); `kat` adds the differential suites and the
 # constant-time bench. The coverage gate turns on `harness` only (the differential suites take minutes under
 # instrumentation and cover no workspace line).
-harness = ["secmp-crypto/kat", "secmp-proto/kat", "secmp-relay/kat", "secmp-transport/harness"]
+harness = ["secmp-crypto/kat", "secmp-proto/kat", "secmp-relay/kat", "secmp-transport/harness", "secmp-client-core/kat"]
 kat = ["harness"]
 
-# The harness (feature `kat`): the relay in process, the SecMP-LINK client, derandomised entropy. Workspace crates
-# only (docs/02 §3: testkit may use any workspace crate except secmp-ui); no third-party runtime crate (ADR-049).
+# The harness (feature `harness`, which `kat` includes): the relay in process, the SecMP-LINK client, derandomised
+# entropy. Workspace crates (docs/02 §3: testkit may use any workspace crate except secmp-ui) plus the normal
+# dependency `serde_json` (the KAT loaders, ADR-037); no other third-party runtime crate (ADR-049; pinned by
+# `expect::NORMAL_DEPENDENCY_ALLOW`).
 [dependencies]
 secmp-crypto.workspace = true
 secmp-proto.workspace = true
-secmp-relay = { path = "../secmp-relay" }
-secmp-transport = { path = "../secmp-transport" }
+secmp-client-core.workspace = true
+secmp-relay.workspace = true
+secmp-transport.workspace = true
 serde_json.workspace = true
 
 # Test-only. `chacha20poly1305`, `subtle` and `sha3` serve the constant-time bench (its isolating CAEAD targets and

@@ -1,0 +1,3 @@
+Strict: 3045.9 B/s while up, spec 3046.4 B/s (3046 B/s whole), error 0.00017
+Balanced: 4786.3 B/s while up, spec 4787.2 B/s (4787 B/s whole), error 0.00019
+Low-bw: 1594.7 B/s while up, spec 1595.7 B/s (1595 B/s whole), error 0.00065

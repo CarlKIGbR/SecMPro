@@ -8,6 +8,7 @@ use std::collections::BTreeSet;
 use std::path::{Component, Path, PathBuf};
 
 use super::{DEFAULT_SEED_RANGE, PROPERTY_BINARIES, PROPERTY_PACKAGES, SEED_ENV};
+use crate::expect;
 use crate::util::{Error, Result, rel, walk_files};
 
 /// The one helper that reads [`SEED_ENV`], relative to the workspace root.
@@ -574,9 +575,239 @@ pub(crate) fn compile_fail_fences_without_code(root: &Path) -> Result<Vec<String
     Ok(out)
 }
 
+/// A comparison site of a secret MAC, tag or token that must use a constant-time primitive (M5 review F-6, R-124,
+/// TEST-SPEC-M6 G-03): the file (relative to the workspace root), the primitive the file must call, and the names of
+/// the compared values.
+pub(crate) struct CtSite {
+    pub(crate) file: &'static str,
+    pub(crate) primitive: &'static str,
+    pub(crate) values: &'static [&'static str],
+}
+
+/// The four sites: `mac1` in the relay's handshake (`ct_eq`), `mac2` in the client's (`hmac_sha256_verify`), the
+/// Q-command token in `ids.rs` (`hmac_sha256_verify`) and the tag of `hmac_sha256_verify` itself (`ct_eq`).
+/// TEST-SPEC-M5 CT-01…04 are floor-only (the composed calls dwarf a `==`); this rule pins the comparison primitive.
+pub(crate) const CT_SITES: &[CtSite] = &[
+    CtSite {
+        file: "crates/secmp-proto/src/link/relay.rs",
+        primitive: "ct_eq",
+        values: &["mac1"],
+    },
+    CtSite {
+        file: "crates/secmp-proto/src/link/client.rs",
+        primitive: "hmac_sha256_verify",
+        values: &["mac2"],
+    },
+    CtSite {
+        file: "crates/secmp-proto/src/link/ids.rs",
+        primitive: "hmac_sha256_verify",
+        values: &["received", "token"],
+    },
+    CtSite {
+        file: "crates/secmp-crypto/src/mac.rs",
+        primitive: "ct_eq",
+        values: &["tag", "expected"],
+    },
+];
+
+/// Whether `word` occurs in `text` bounded by non-identifier characters.
+fn has_word(text: &str, word: &str) -> bool {
+    text.match_indices(word).any(|(i, _)| {
+        let before = text.get(..i).and_then(|s| s.bytes().next_back());
+        let after = text
+            .get(i.saturating_add(word.len())..)
+            .and_then(|s| s.bytes().next());
+        !before.is_some_and(is_ident) && !after.is_some_and(is_ident)
+    })
+}
+
+/// Whether a line of stripped code has a `==` or `!=` operator (not `<=`, `>=`, `=>`, `===`).
+fn has_equality_operator(line: &str) -> bool {
+    let padded = format!(" {line} ");
+    padded.as_bytes().windows(4).any(|w| match w {
+        [p, b'=', b'=', n] => !matches!(p, b'=' | b'!' | b'<' | b'>') && *n != b'=',
+        [_, b'!', b'=', n] => *n != b'=',
+        _ => false,
+    })
+}
+
+/// The findings for one site given the text of its file: the non-test part (up to the first `#[cfg(test)]`, with
+/// comments and literals blanked) must call the site's primitive and compare none of its values with `==` or `!=`.
+/// Each finding names the file (and the line for a comparison).
+fn ct_site_findings(site: &CtSite, text: &str) -> Vec<String> {
+    let code = strip(text);
+    let code = code.split("#[cfg(test)]").next().unwrap_or_default();
+    let mut out = Vec::new();
+    let calls = code.match_indices(site.primitive).any(|(i, _)| {
+        let before = code.get(..i).and_then(|s| s.bytes().next_back());
+        let after = code
+            .get(i.saturating_add(site.primitive.len())..)
+            .and_then(|s| s.bytes().next());
+        !before.is_some_and(is_ident) && after == Some(b'(')
+    });
+    if !calls {
+        out.push(format!("{}: no call of {}", site.file, site.primitive));
+    }
+    for (n, line) in code.lines().enumerate() {
+        if has_equality_operator(line) && site.values.iter().any(|v| has_word(line, v)) {
+            out.push(format!(
+                "{}:{}: `==`/`!=` on a secret value ({}); use {}",
+                site.file,
+                n.saturating_add(1),
+                site.values.join("/"),
+                site.primitive
+            ));
+        }
+    }
+    out
+}
+
+/// The findings of every site of [`CT_SITES`] under `root`.
+pub(crate) fn ct_guard_findings(root: &Path) -> Result<Vec<String>> {
+    let mut out = Vec::new();
+    for site in CT_SITES {
+        let text = std::fs::read_to_string(root.join(site.file))
+            .map_err(|e| Error(format!("{}: {e}", site.file)))?;
+        out.extend(ct_site_findings(site, &text));
+    }
+    Ok(out)
+}
+
+/// Whether the code (comments and literals blanked) has an attribute naming `ignore` (`#[ignore]`,
+/// `#[ignore = "…"]`, `#[cfg_attr(…, ignore)]`).
+fn has_ignore_attribute(text: &str) -> bool {
+    let code = strip(text);
+    code.match_indices("#[").any(|(i, _)| {
+        let body = code.get(i.saturating_add(2)..).unwrap_or_default();
+        let mut depth = 1_usize;
+        let mut end = body.len();
+        for (j, c) in body.char_indices() {
+            match c {
+                '[' => depth = depth.saturating_add(1),
+                ']' => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        end = j;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        has_word(body.get(..end).unwrap_or_default(), "ignore")
+    })
+}
+
+/// The files of `files` (workspace-relative path, text) with an `ignore` attribute that `expect::IGNORE_ADR` does
+/// not list (CLAUDE.md §6: no `#[ignore]` without an ADR; M5 review R-155).
+fn ignore_findings(files: &[(String, String)], listed: &[&str]) -> Vec<String> {
+    files
+        .iter()
+        .filter(|(path, text)| !listed.contains(&path.as_str()) && has_ignore_attribute(text))
+        .map(|(path, _)| format!("{path}: #[ignore] without an ADR (expect::IGNORE_ADR)"))
+        .collect()
+}
+
+/// [`ignore_findings`] over every first-party Rust file under `root`.
+pub(crate) fn ignore_findings_in_tree(root: &Path) -> Result<Vec<String>> {
+    let mut files = Vec::new();
+    for dir in RUST_SOURCE_DIRS {
+        for file in walk_files(&root.join(dir), &|p| {
+            p.extension().is_some_and(|x| x == "rs")
+        })? {
+            files.push((rel(root, &file), std::fs::read_to_string(&file)?));
+        }
+    }
+    Ok(ignore_findings(&files, expect::IGNORE_ADR))
+}
+
 mod tests {
     use super::*;
     use crate::gates;
+
+    /// TEST-SPEC-M6 G-03 (M5 review F-6, R-124): the four MAC/tag/token sites compare through `ct_eq` /
+    /// `hmac_sha256_verify`, with no `==`/`!=` on the compared values; a fixture with `==` at one site is refused
+    /// naming it, a fixture without the primitive too.
+    #[test]
+    fn ct_guard_sites_use_ct_eq() -> Result<()> {
+        assert_eq!(CT_SITES.len(), 4);
+        assert_eq!(ct_guard_findings(&root())?, Vec::<String>::new());
+        // the shape of each real site passes; the same text with `==` is refused naming the site and line
+        let good = "fn open() {\n    if !bool::from(mac1.ct_eq(&hs1.mac1)) { return; }\n    k.kid == hs1.kid;\n}\n\
+                    #[cfg(test)]\nmod tests { fn t() { assert!(mac1 == other); } }\n";
+        let relay = CT_SITES
+            .first()
+            .ok_or_else(|| Error("no site".to_owned()))?;
+        assert_eq!(ct_site_findings(relay, good), Vec::<String>::new());
+        let bad = good.replace("!bool::from(mac1.ct_eq(&hs1.mac1))", "mac1 != hs1.mac1");
+        let found = ct_site_findings(relay, &bad);
+        assert_eq!(found.len(), 2, "{found:?}");
+        assert!(
+            found
+                .iter()
+                .any(|f| f.starts_with("crates/secmp-proto/src/link/relay.rs:2: ")),
+            "{found:?}"
+        );
+        assert!(
+            found.iter().any(|f| f.contains("no call of ct_eq")),
+            "{found:?}"
+        );
+        // `==` in a comment or a string, on another value, or an operator like `<=`/`=>` is no finding
+        let quiet = "fn f() {\n    // mac1 == x\n    let s = \"mac1 == x\";\n    let ok = ct_eq(a); if n <= mac1len { } match mac1 { _ => 1 };\n}\n";
+        assert_eq!(ct_site_findings(relay, quiet), Vec::<String>::new());
+        // the other three sites name their own file
+        for site in CT_SITES.iter().skip(1) {
+            let value = site.values.first().copied().unwrap_or("x");
+            let text = format!(
+                "fn f() {{ let _ = {}(a); if {value} == b {{ }} }}\n",
+                site.primitive
+            );
+            let found = ct_site_findings(site, &text);
+            assert_eq!(found.len(), 1, "{found:?}");
+            assert!(found.iter().all(|f| f.starts_with(site.file)), "{found:?}");
+        }
+        Ok(())
+    }
+
+    /// TEST-SPEC-M6 G-10 (M5 review R-155, CLAUDE.md §6): no `#[ignore]` in a first-party Rust file unless
+    /// `expect::IGNORE_ADR` lists the file (empty); the fixtures prove the detection and the listing.
+    #[test]
+    fn no_ignore_without_adr() -> Result<()> {
+        assert!(expect::IGNORE_ADR.is_empty());
+        assert_eq!(ignore_findings_in_tree(&root())?, Vec::<String>::new());
+        let file = |path: &str, text: &str| vec![(path.to_owned(), text.to_owned())];
+        for text in [
+            "#[test]\n#[ignore]\nfn slow() {}\n",
+            "#[test]\n#[ignore = \"slow\"]\nfn slow() {}\n",
+            "#[cfg_attr(miri, ignore)]\nfn slow() {}\n",
+        ] {
+            let found = ignore_findings(&file("crates/x/tests/a.rs", text), &[]);
+            assert_eq!(found.len(), 1, "{text}");
+            assert!(
+                found.iter().all(|f| f.starts_with("crates/x/tests/a.rs: ")),
+                "{found:?}"
+            );
+            // listed with an ADR: accepted
+            assert!(
+                ignore_findings(&file("crates/x/tests/a.rs", text), &["crates/x/tests/a.rs"])
+                    .is_empty()
+            );
+        }
+        // mentions in comments, strings and unrelated attributes are no finding
+        for text in [
+            "// #[ignore]\nfn f() {}\n",
+            "const S: &str = \"#[ignore]\";\n",
+            "#[derive(Debug)]\n#[must_use]\nstruct Ignored;\n",
+            "#[doc = \"ignore\"]\nfn f() {}\n",
+            "#[test]\nfn ignore() {}\n",
+        ] {
+            assert!(
+                ignore_findings(&file("crates/x/src/a.rs", text), &[]).is_empty(),
+                "{text}"
+            );
+        }
+        Ok(())
+    }
     use crate::testscan::{
         NextestRun, ci_run_seed_from, kat_args, kat_runs, kat_seed_detail, nextest_detail,
         nextest_runs, property_filter,
@@ -981,6 +1212,7 @@ mod tests {
             "b::bin::prop_via_main: its package is not in PROPERTY_PACKAGES (no CI-seed pass)",
             "PROPERTY_PACKAGES: secmp-proto holds no property test (stale entry)",
             "PROPERTY_PACKAGES: secmp-relay holds no property test (stale entry)",
+            "PROPERTY_PACKAGES: secmp-testkit holds no property test (stale entry)",
             "crates/a/tests/own.rs: names \"SECMP_PROPTEST_SEED\" itself; read it through crates/secmp-proto/tests/common/seed.rs",
             "crates/a/tests/own.rs: seeded properties without the helper (`#[path = \"…/common/seed.rs\"] mod seed;` and `seed::master_seed(DEFAULT_SEED)`)",
             "crates/a/tests/own.rs: prop_own does not take its seed from seed::master_seed",

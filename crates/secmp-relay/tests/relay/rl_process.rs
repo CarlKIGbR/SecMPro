@@ -721,12 +721,9 @@ fn relay_config_controls_start_and_limits() {
         drain_secs: 9,
         max_connections: 5,
         link_idle_ms: 11_000,
+        ..Limits::defaults()
     };
-    assert_eq!(
-        *relay.limits(),
-        want,
-        "RL-23: the configured values are in effect"
-    );
+    assert_eq!(*relay.limits(), want, "RL-23: configured values in effect");
     in_effect(&relay);
     std::fs::remove_dir_all(&dir).unwrap();
 }

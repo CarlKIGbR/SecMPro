@@ -1,0 +1,4 @@
+Strict 1 h: 360 sent, 232 evicted, drained in 42 recv ticks
+Strict 24 h: 8640 sent, 8512 evicted, drained in 42 recv ticks
+Balanced 4 x 10 s: 1470 sent, 958 evicted, drained in 126 slots
+Low-bw 5 x 40 s: 10802 sent, 10162 evicted, drained in 149 slots

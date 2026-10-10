@@ -736,10 +736,11 @@ fn file_stems(dir: &Path, ext: &str) -> Result<BTreeSet<String>> {
 /// `-max_len` comes from `expect::FUZZ_MAX_LEN` (M2 review C4, F18). Every target runs even after a failure, so the
 /// log shows all of them.
 pub(crate) fn fuzz(ctx: &Ctx) -> Result<Outcome> {
-    let (targets, seeds) = fuzz_with(ctx, expect::FUZZ_SMOKE_SECONDS)?;
+    let (targets, seeds, depth) = fuzz_with(ctx, |_| Ok(expect::FUZZ_SMOKE_SECONDS))?;
     Ok(Outcome::Pass(format!(
         "fuzz smoke, {} s per target on the vector-seeded scratch corpus plus the tracked corpus (read-only), \
-         -max_len from expect::FUZZ_MAX_LEN: {targets} (expected set matches); vector seeds: {seeds}",
+         -max_len from expect::FUZZ_MAX_LEN: {targets} (expected set matches); vector seeds: {seeds}; \
+         executor fuzzers with -len_control=0: {depth}",
         expect::FUZZ_SMOKE_SECONDS
     )))
 }
@@ -748,15 +749,74 @@ pub(crate) fn fuzz(ctx: &Ctx) -> Result<Outcome> {
 /// of [`fuzz`] with `expect::FUZZ_NIGHTLY_SECONDS` shared equally by the targets (`nightly_seconds_per_target`).
 /// Not part of `ci-full`; the workflow uploads the scratch corpus and any crash artefacts.
 pub(crate) fn fuzz_nightly(ctx: &Ctx) -> Result<Outcome> {
-    let seconds =
-        nightly_seconds_per_target(expect::FUZZ_NIGHTLY_SECONDS, expect::FUZZ_TARGETS.len())?;
-    let (targets, seeds) = fuzz_with(ctx, seconds)?;
+    let share = nightly_share_seconds()?;
+    let (targets, seeds, depth) = fuzz_with(ctx, nightly_seconds_for)?;
     Ok(Outcome::Pass(format!(
-        "fuzz campaign, {} s in total, {seconds} s per target on the vector-seeded scratch corpus plus the tracked \
-         corpus (read-only), -max_len from expect::FUZZ_MAX_LEN: {targets}; vector seeds: {seeds}; new inputs in \
-         target/fuzz-corpus/",
-        expect::FUZZ_NIGHTLY_SECONDS
+        "fuzz campaign, {} s in total, {share} s per target ({} s for each of {}) on the vector-seeded scratch corpus \
+         plus the tracked corpus (read-only), -max_len from expect::FUZZ_MAX_LEN: {targets}; vector seeds: {seeds}; \
+         executor fuzzers with -len_control=0: {depth}; new inputs in target/fuzz-corpus/",
+        expect::FUZZ_NIGHTLY_SECONDS,
+        expect::FUZZ_DEEP_NIGHTLY_SECONDS,
+        expect::FUZZ_DEEP_TARGETS.join(", ")
     )))
+}
+
+/// The nightly seconds of every target that is not one of `expect::FUZZ_DEEP_TARGETS`: the campaign minus the deep
+/// targets' time, shared equally (`nightly_seconds_per_target`).
+pub(crate) fn nightly_share_seconds() -> Result<u64> {
+    let deep = expect::FUZZ_DEEP_TARGETS.len();
+    let deep_total = u64::try_from(deep)
+        .ok()
+        .and_then(|n| n.checked_mul(expect::FUZZ_DEEP_NIGHTLY_SECONDS))
+        .ok_or_else(|| Error("fuzz campaign: deep budget overflows".to_owned()))?;
+    let rest = expect::FUZZ_NIGHTLY_SECONDS
+        .checked_sub(deep_total)
+        .ok_or_else(|| Error("fuzz campaign: the deep targets exceed the campaign".to_owned()))?;
+    nightly_seconds_per_target(rest, expect::FUZZ_TARGETS.len().saturating_sub(deep))
+}
+
+/// The nightly seconds of target `t` (M5 review F-8, R-127; TEST-SPEC-M6 G-05).
+pub(crate) fn nightly_seconds_for(t: &str) -> Result<u64> {
+    if expect::FUZZ_DEEP_TARGETS.contains(&t) {
+        Ok(expect::FUZZ_DEEP_NIGHTLY_SECONDS)
+    } else {
+        nightly_share_seconds()
+    }
+}
+
+/// The `Done N runs` count of a libFuzzer log and the last `lim: N` of its status lines (the length cap the mutator
+/// works with); `None` for either if the log has none.
+pub(crate) fn fuzz_log_depth(log: &str) -> (Option<u64>, Option<u64>) {
+    let runs = log.lines().find_map(|l| {
+        l.trim()
+            .strip_prefix("Done ")?
+            .split_whitespace()
+            .next()?
+            .parse()
+            .ok()
+    });
+    let lim = log.lines().rev().find_map(|l| {
+        let (_, rest) = l.split_once(" lim: ")?;
+        rest.split_whitespace().next()?.parse().ok()
+    });
+    (runs, lim)
+}
+
+/// The evidence of a `-len_control=0` run of `t` from its libFuzzer log: `t: <runs> runs, lim <max_len> (= max_len)`;
+/// an error if the log has no run count or no `lim`, or if `lim` is not the target's `-max_len` (the length control
+/// would be back).
+pub(crate) fn fuzz_depth_evidence(t: &str, log: &str) -> Result<String> {
+    let max_len = fuzz_max_len(t)?;
+    let (runs, lim) = fuzz_log_depth(log);
+    let (Some(runs), Some(lim)) = (runs, lim) else {
+        bail!(
+            "fuzz {t}: no `Done N runs` / `lim:` in the libFuzzer output (runs {runs:?}, lim {lim:?})"
+        );
+    };
+    if u64::try_from(max_len).ok() != Some(lim) {
+        bail!("fuzz {t}: lim {lim} is not -max_len {max_len} (-len_control=0 not in effect)");
+    }
+    Ok(format!("{t}: {runs} runs, lim {lim} (= max_len)"))
 }
 
 /// Each target's share of a campaign of `total` seconds; never below the per-PR smoke.
@@ -772,8 +832,12 @@ pub(crate) fn nightly_seconds_per_target(total: u64, targets: usize) -> Result<u
     }
 }
 
-/// Seed and fuzz every target for `seconds`; returns the target list and the seed counts for the summary.
-fn fuzz_with(ctx: &Ctx, seconds: u64) -> Result<(String, String)> {
+/// Seed and fuzz every target for `seconds_for(target)`; returns the target list, the seed counts and the depth
+/// evidence of the `expect::FUZZ_DEEP_TARGETS` (runs and `lim`, from their captured libFuzzer output) for the summary.
+fn fuzz_with(
+    ctx: &Ctx,
+    seconds_for: impl Fn(&str) -> Result<u64>,
+) -> Result<(String, String, String)> {
     tools::require(tools::FUZZ)?;
     tools::require_nightly(&[])?;
     let found = file_stems(&ctx.root.join("fuzz").join("fuzz_targets"), "rs")?;
@@ -788,17 +852,36 @@ fn fuzz_with(ctx: &Ctx, seconds: u64) -> Result<(String, String)> {
     }
     let mut seeded = Vec::new();
     let mut failed = Vec::new();
+    let mut depth = Vec::new();
     for t in &found {
         let n = crate::fuzzseed::seed_scratch_corpus(&ctx.root, t)?;
         say(&format!(
             "  {t}: {n} vector seeds in target/fuzz-corpus/{t}/"
         ));
         seeded.push(format!("{t} {n}"));
-        let run = Cmd::cargo_on(tools::NIGHTLY)
-            .args(fuzz_args(t, seconds)?)
-            .dir(&ctx.root)
-            .run();
-        if let Err(e) = run {
+        let cmd = Cmd::cargo_on(tools::NIGHTLY)
+            .args(fuzz_args(t, seconds_for(t)?)?)
+            .dir(&ctx.root);
+        if expect::FUZZ_DEEP_TARGETS.contains(&t.as_str()) {
+            // the output is captured (libFuzzer writes it to stderr) to read the runs and `lim`, then echoed
+            let out = cmd.capture()?;
+            let log = format!("{}\n{}", out.stdout, out.stderr);
+            for l in log.lines() {
+                say(&format!("  {l}"));
+            }
+            let evidence = if out.success {
+                fuzz_depth_evidence(t, &log)
+            } else {
+                Err(Error(format!("`cargo fuzz run {t}` failed")))
+            };
+            match evidence {
+                Ok(e) => depth.push(e),
+                Err(e) => {
+                    say(&format!("  FAIL {t}: {e}"));
+                    failed.push(t.clone());
+                }
+            }
+        } else if let Err(e) = cmd.run() {
             say(&format!("  FAIL {t}: {e}"));
             failed.push(t.clone());
         }
@@ -811,7 +894,7 @@ fn fuzz_with(ctx: &Ctx, seconds: u64) -> Result<(String, String)> {
             failed.join(", ")
         );
     }
-    Ok((list(&found), seeded.join(", ")))
+    Ok((list(&found), seeded.join(", "), depth.join("; ")))
 }
 
 /// M4 review C-6 (R-07): the targets of `targets` whose tracked corpus `corpus/<t>/` holds no regular file. The fuzz
@@ -836,7 +919,7 @@ pub(crate) fn targets_without_corpus(corpus: &Path, targets: &[&str]) -> Vec<Str
 /// target's `-max_len` and the per-input `-timeout` (`expect::FUZZ_INPUT_TIMEOUT_SECONDS`, M3). Paths are relative
 /// to the workspace root, where the command runs.
 pub(crate) fn fuzz_args(t: &str, seconds: u64) -> Result<Vec<String>> {
-    Ok(vec![
+    let mut args = vec![
         "fuzz".to_owned(),
         "run".to_owned(),
         "--fuzz-dir".to_owned(),
@@ -848,7 +931,12 @@ pub(crate) fn fuzz_args(t: &str, seconds: u64) -> Result<Vec<String>> {
         format!("-max_total_time={seconds}"),
         format!("-max_len={}", fuzz_max_len(t)?),
         format!("-timeout={}", expect::FUZZ_INPUT_TIMEOUT_SECONDS),
-    ])
+    ];
+    if expect::FUZZ_DEEP_TARGETS.contains(&t) {
+        // M5 review F-8, R-127: `lim` starts at `-max_len` instead of the seed length
+        args.push("-len_control=0".to_owned());
+    }
+    Ok(args)
 }
 
 /// The libFuzzer `-max_len` of target `t` (`expect::FUZZ_MAX_LEN`, M2 review C4); a target without one is refused.
@@ -1199,20 +1287,21 @@ pub(crate) fn mutants(ctx: &Ctx) -> Result<Outcome> {
     let outcomes = read_outcomes(&out.join("outcomes.json"))?;
     let counts = mutant_counts(&outcomes.outcomes)?;
     let floor = mutants_floor(&counts);
-    for l in floor.lines.iter().chain(&floor.warnings) {
+    let breakdown = unviable_breakdown(&outcomes.outcomes);
+    for l in floor.lines.iter().chain(&breakdown).chain(&floor.warnings) {
         say(&format!("  mutants {l}"));
     }
     if !floor.failures.is_empty() {
         bail!(
             "mutation floor (ADR-047 Amendment 2): {}",
-            [floor.lines, floor.warnings, floor.failures]
+            [floor.lines, breakdown, floor.warnings, floor.failures]
                 .concat()
                 .join("; ")
         );
     }
     Ok(Outcome::Pass(format!(
         "{detail}; {}",
-        [floor.lines, floor.warnings].concat().join("; ")
+        [floor.lines, breakdown, floor.warnings].concat().join("; ")
     )))
 }
 
@@ -1359,6 +1448,57 @@ fn mutant_counts(outcomes: &[Value]) -> Result<std::collections::BTreeMap<String
         c.total = c.total.saturating_add(1);
     }
     Ok(counts)
+}
+
+/// The unviable mutants of `outcomes` per package of `expect::MUTANT_PACKAGES` (M5 review F-15, R-148, TEST-SPEC-M6
+/// G-08): one line per package with the count of unviable mutants, their five most frequent files and their counts
+/// per mutation operator (cargo-mutants' `genre`, e.g. `FnValue`). Informative: no threshold, it never fails.
+fn unviable_breakdown(outcomes: &[Value]) -> Vec<String> {
+    use std::collections::BTreeMap;
+    fn top(map: &BTreeMap<String, usize>, limit: usize) -> String {
+        let mut rows: Vec<(&String, &usize)> = map.iter().collect();
+        rows.sort_by(|a, b| b.1.cmp(a.1).then_with(|| a.0.cmp(b.0)));
+        let shown: Vec<String> = rows
+            .into_iter()
+            .take(limit)
+            .map(|(k, n)| format!("{k} {n}"))
+            .collect();
+        if shown.is_empty() {
+            "none".to_owned()
+        } else {
+            shown.join(", ")
+        }
+    }
+    let mut lines = Vec::new();
+    for p in expect::MUTANT_PACKAGES {
+        let mut by_file: BTreeMap<String, usize> = BTreeMap::new();
+        let mut by_operator: BTreeMap<String, usize> = BTreeMap::new();
+        let mut total = 0_usize;
+        for o in outcomes {
+            if o.get("summary").and_then(Value::as_str) != Some("Unviable") {
+                continue;
+            }
+            let Some(m) = o.get("scenario").and_then(|s| s.get("Mutant")) else {
+                continue;
+            };
+            if m.get("package").and_then(Value::as_str) != Some(*p) {
+                continue;
+            }
+            let file = m.get("file").and_then(Value::as_str).unwrap_or("?");
+            let genre = m.get("genre").and_then(Value::as_str).unwrap_or("?");
+            for (map, key) in [(&mut by_file, file), (&mut by_operator, genre)] {
+                let n = map.entry(key.to_owned()).or_insert(0);
+                *n = n.saturating_add(1);
+            }
+            total = total.saturating_add(1);
+        }
+        lines.push(format!(
+            "{p}: unviable {total} (informative); by file (top 5): {}; by mutation operator: {}",
+            top(&by_file, 5),
+            top(&by_operator, usize::MAX)
+        ));
+    }
+    lines
 }
 
 /// The per-package verdict of the mutation gate (`mutants_floor`): one line of counts per package, the warnings and
@@ -1619,6 +1759,7 @@ fn merge_verdict(dir: &Path, n: usize, accepted: &str, out: &Path) -> Result<Mer
     let lines = [
         merged.shards,
         floor.lines,
+        unviable_breakdown(&merged.outcomes),
         floor.warnings,
         vec![format!(
             "survivors documented in docs/mutants-accepted.md: {documented}, undocumented: {}",
@@ -6898,6 +7039,75 @@ mod tests {
         out
     }
 
+    /// TEST-SPEC-M6 G-08 (M5 review F-15, R-148): the mutants gate prints, per package, the unviable count by file
+    /// (top 5) and by mutation operator; informative (the lines are no failures).
+    #[test]
+    fn mutants_report_has_unviable_breakdown() {
+        let unviable = |package: &str, file: &str, genre: &str| {
+            serde_json::json!({"scenario": {"Mutant": {"name": format!("crates/{package}/{file}:1:1: x"),
+                "package": package, "file": format!("crates/{package}/{file}"), "genre": genre}},
+                "summary": "Unviable"})
+        };
+        let mut outcomes = Vec::new();
+        // secmp-crypto: 6 files, a.rs 3, b.rs 2, the others 1 each; 5 BinaryOperator and 4 FnValue
+        for (file, n) in [
+            ("a.rs", 3),
+            ("b.rs", 2),
+            ("c.rs", 1),
+            ("d.rs", 1),
+            ("e.rs", 1),
+            ("f.rs", 1),
+        ] {
+            for i in 0..n {
+                let genre = if i == 0 && file != "f.rs" {
+                    "BinaryOperator"
+                } else {
+                    "FnValue"
+                };
+                outcomes.push(unviable("secmp-crypto", file, genre));
+            }
+        }
+        // a caught mutant and another package's unviable mutant do not count for secmp-crypto
+        outcomes.push(mutant_outcome("secmp-crypto", 99, "CaughtMutant"));
+        outcomes.push(unviable("secmp-proto", "z.rs", "FnValue"));
+        let lines = unviable_breakdown(&outcomes);
+        assert_eq!(lines.len(), expect::MUTANT_PACKAGES.len());
+        let crypto = lines
+            .iter()
+            .find(|l| l.starts_with("secmp-crypto: "))
+            .map_or("", String::as_str);
+        assert!(
+            crypto.starts_with("secmp-crypto: unviable 9 (informative); "),
+            "{crypto}"
+        );
+        assert!(
+            crypto.contains(
+                "by file (top 5): crates/secmp-crypto/a.rs 3, crates/secmp-crypto/b.rs 2, \
+                 crates/secmp-crypto/c.rs 1, crates/secmp-crypto/d.rs 1, crates/secmp-crypto/e.rs 1;"
+            ),
+            "{crypto}"
+        );
+        assert!(!crypto.contains("f.rs"), "{crypto}");
+        assert!(
+            crypto.contains("by mutation operator: BinaryOperator 5, FnValue 4"),
+            "{crypto}"
+        );
+        let proto = lines
+            .iter()
+            .find(|l| l.starts_with("secmp-proto: "))
+            .map_or("", String::as_str);
+        assert!(
+            proto.contains("unviable 1 ") && proto.contains("crates/secmp-proto/z.rs 1"),
+            "{proto}"
+        );
+        // a package without unviable mutants says so
+        assert!(
+            unviable_breakdown(&[])
+                .iter()
+                .all(|l| l.contains("unviable 0 ") && l.contains("by mutation operator: none"))
+        );
+    }
+
     /// ADR-047 Amendment 1 (4), M4 review R-06, with Amendment 2: the floor per package — every `secmp-crypto` mutant
     /// unviable fails naming `secmp-crypto`; 36 % unviable passes with a WARNING line naming the package (re-pointed
     /// from the failure of Amendment 1 (4)); 35 % and a balanced input pass without one; a package without mutants
@@ -7407,6 +7617,7 @@ mod tests {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
         let mut source = String::new();
         for file in [
+            "crates/secmp-client-core/src/kani_proofs.rs",
             "crates/secmp-proto/src/kani_proofs.rs",
             "crates/secmp-relay/src/kani_proofs.rs",
         ] {
@@ -7440,6 +7651,28 @@ mod tests {
                 root.join(format!("docs/reviews/M05-evidence/kani-m5fix-{h}.txt")),
             )?));
         }
+        // M6 Phase A: the run of the seven `secmp-client-core` harnesses (everything before the negative-control marker of
+        // the committed file `kani-m6a-<sha7>.txt`; the negative control prints `0 of 1` for K-02 on purpose)
+        let evidence = root.join("docs/reviews/M06-evidence");
+        let mut m6: Vec<_> = std::fs::read_dir(&evidence)?
+            .filter_map(std::result::Result::ok)
+            .map(|e| e.path())
+            .filter(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with("kani-m6a-"))
+            })
+            .collect();
+        m6.sort();
+        assert_eq!(m6.len(), 1, "one committed M6 Phase A Kani run: {m6:?}");
+        let whole = lf(&std::fs::read_to_string(
+            m6.first().ok_or_else(|| Error("no run".into()))?,
+        )?);
+        let (positive, negative) = whole
+            .split_once("=== K-02 negative control")
+            .ok_or_else(|| Error("no negative-control marker".into()))?;
+        assert!(negative.contains("VERIFICATION:- FAILED"));
+        log.push_str(positive);
         assert_eq!(
             kani_cover_pin_findings(&kani_covers(&log)?),
             Vec::<String>::new()
@@ -7465,13 +7698,41 @@ mod tests {
         Ok(())
     }
 
+    /// M6 X-05: the Kani and fuzz lists carry the Phase A additions (TEST-SPEC-M6 K-01…K-07, FZ-01, FZ-04).
+    #[test]
+    fn kani_and_fuzz_lists_m6() {
+        assert!(expect::KANI_PACKAGES.contains(&"secmp-client-core"));
+        for h in [
+            "kani_balanced_rr_selects_due_or_ping",
+            "kani_in_flight_bound",
+            "kani_tick_time_checked",
+            "kani_uniform_draw_in_range",
+            "kani_backoff_cap",
+            "kani_rate_bound_integer_form",
+            "kani_evicted_range",
+        ] {
+            assert!(
+                expect::KANI_HARNESSES.contains(&format!("kani_proofs::{h}").as_str()),
+                "{h}"
+            );
+        }
+        for t in ["client_pipeline_responses", "scheduler_event_sequence"] {
+            assert!(expect::FUZZ_TARGETS.contains(&t), "{t}");
+            assert!(
+                expect::FUZZ_MAX_LEN.iter().any(|(n, _)| *n == t),
+                "{t} max_len"
+            );
+        }
+    }
+
     /// M2 review C5: Kani must verify exactly the harnesses of `expect::KANI_HARNESSES`.
     #[test]
     fn kani_refuses_fifteen_harnesses() -> Result<()> {
         let all = expect::KANI_HARNESSES;
-        // M5 Phase B: 30 + the three relay harnesses (TEST-SPEC-M5 K-05…K-07)
-        assert_eq!(all.len(), 33);
-        assert_eq!(kani_verified(&kani_log(all, 0))?.len(), 33);
+        // M5 Phase B: 30 + the three relay harnesses (TEST-SPEC-M5 K-05…K-07); M6 Phase A: + the seven of
+        // `secmp-client-core` (TEST-SPEC-M6 K-01…K-07)
+        assert_eq!(all.len(), 40);
+        assert_eq!(kani_verified(&kani_log(all, 0))?.len(), 40);
         // a deleted harness: 18 verified, and Kani's own summary says 18 of 18
         let fifteen = all.get(1..).unwrap_or_default();
         assert!(kani_verified(&kani_log(fifteen, 0)).is_err());
@@ -7579,19 +7840,157 @@ mod tests {
                     .as_slice()
                 )
             );
-            assert_eq!(
-                args.get(8..),
-                Some(
-                    [
-                        "-max_total_time=1200".to_owned(),
-                        format!("-max_len={max_len}"),
-                        "-timeout=60".to_owned()
-                    ]
-                    .as_slice()
-                )
-            );
+            let mut tail = vec![
+                "-max_total_time=1200".to_owned(),
+                format!("-max_len={max_len}"),
+                "-timeout=60".to_owned(),
+            ];
+            if expect::FUZZ_DEEP_TARGETS.contains(t) {
+                tail.push("-len_control=0".to_owned());
+            }
+            assert_eq!(args.get(8..), Some(tail.as_slice()));
         }
         assert!(fuzz_args("unknown", 120).is_err());
+        Ok(())
+    }
+
+    /// TEST-SPEC-M6 G-05 (M5 review F-8, R-127): the executor fuzzers FZ-07/FZ-08 run with `-len_control=0` and their
+    /// `FUZZ_MAX_LEN` in the smoke and the nightly command, get 3 600 s each of the nightly campaign (the other
+    /// targets share the rest, never below the smoke), no other target has `-len_control`, and the evidence lists the
+    /// runs and `lim` per target with `lim` = `max_len` (an old-style log with `lim: 532` is refused).
+    #[test]
+    fn fuzz_executor_depth() -> Result<()> {
+        assert_eq!(
+            expect::FUZZ_DEEP_TARGETS,
+            ["relay_executor", "relay_link_session"]
+        );
+        assert_eq!(expect::FUZZ_DEEP_NIGHTLY_SECONDS, 3_600);
+        for t in expect::FUZZ_TARGETS {
+            for seconds in [expect::FUZZ_SMOKE_SECONDS, nightly_seconds_for(t)?] {
+                let args = fuzz_args(t, seconds)?;
+                let deep = expect::FUZZ_DEEP_TARGETS.contains(t);
+                assert_eq!(args.iter().any(|a| a == "-len_control=0"), deep, "{t}");
+                assert!(
+                    args.contains(&format!("-max_len={}", fuzz_max_len(t)?)),
+                    "{t}"
+                );
+                assert!(args.contains(&format!("-max_total_time={seconds}")), "{t}");
+            }
+            let want = if expect::FUZZ_DEEP_TARGETS.contains(t) {
+                3_600
+            } else {
+                248
+            };
+            assert_eq!(nightly_seconds_for(t)?, want, "{t}");
+        }
+        // 29 x 248 + 2 x 3600 = 14 392 <= 14 400
+        let total: u64 = expect::FUZZ_TARGETS
+            .iter()
+            .map(|t| nightly_seconds_for(t))
+            .sum::<Result<u64>>()?;
+        assert_eq!(total, 14_392);
+        assert!(total <= expect::FUZZ_NIGHTLY_SECONDS);
+        // the evidence: runs and lim per target, lim = max_len
+        let log = "#4\tINITED cov: 5493 ft: 8753 corp: 3/637b exec/s: 0 rss: 53Mb\n\
+                   #900\tpulse  cov: 5650 ft: 16518 corp: 83/15288b lim: 4322 exec/s: 7 rss: 100Mb\n\
+                   #1200\tDONE   cov: 5727 ft: 20652 corp: 338/68Kb lim: 4322 exec/s: 6 rss: 196Mb\n\
+                   Done 1200 runs in 122 second(s)\n";
+        assert_eq!(
+            fuzz_depth_evidence("relay_executor", log)?,
+            "relay_executor: 1200 runs, lim 4322 (= max_len)"
+        );
+        // the shallow log of M5 (lim pinned at the seed length), a log without lim and one without runs
+        assert!(fuzz_depth_evidence("relay_executor", &log.replace("4322", "532")).is_err());
+        assert!(fuzz_depth_evidence("relay_executor", "Done 3 runs in 1 second(s)\n").is_err());
+        assert!(
+            fuzz_depth_evidence("relay_executor", "#4\tINITED cov: 1 lim: 4322 exec/s: 0\n")
+                .is_err()
+        );
+        assert!(fuzz_depth_evidence("proto_cell_unknown", log).is_err());
+        Ok(())
+    }
+
+    /// The comment block directly above the `[section]` header line of a TOML text, as one string.
+    fn comment_above(toml: &str, header: &str) -> String {
+        let lines: Vec<&str> = toml.lines().collect();
+        let Some(at) = lines.iter().position(|l| l.trim() == header) else {
+            return String::new();
+        };
+        let mut block: Vec<&str> = lines
+            .iter()
+            .take(at)
+            .rev()
+            .take_while(|l| l.trim_start().starts_with('#'))
+            .copied()
+            .collect();
+        block.reverse();
+        block.join("\n")
+    }
+
+    /// TEST-SPEC-M6 G-06 (M5 review F-10, R-131, R-132, R-133): the comment above the testkit's `[dependencies]` names
+    /// the feature `harness` and the normal `serde_json` (not `kat`); `secmp-relay`, `secmp-transport` (and
+    /// `secmp-client-core`) are `[workspace.dependencies]` of the root manifest and `workspace = true` in the testkit;
+    /// the `ci-dispatch.yml` suite input lists `proverif-link`; and the target count times the seconds in the comment
+    /// of `fuzz-nightly.yml` is the campaign of `expect` (a stale comment is refused).
+    #[test]
+    fn testkit_manifest_and_workflow_texts() -> Result<()> {
+        let testkit = lf(include_str!("../../crates/secmp-testkit/Cargo.toml"));
+        let comment = comment_above(&testkit, "[dependencies]");
+        assert!(comment.contains("feature `harness`"), "{comment}");
+        assert!(!comment.contains("feature `kat`"), "{comment}");
+        assert!(
+            comment.contains("`serde_json`") && comment.contains("normal"),
+            "{comment}"
+        );
+        let root = lf(include_str!("../../Cargo.toml"));
+        let ws_deps = root
+            .split_once("[workspace.dependencies]")
+            .and_then(|(_, rest)| rest.split("\n[").next())
+            .unwrap_or_default();
+        for krate in ["secmp-relay", "secmp-transport", "secmp-client-core"] {
+            assert!(
+                ws_deps
+                    .lines()
+                    .any(|l| l.starts_with(&format!("{krate} = {{ path = "))),
+                "{krate} is not in [workspace.dependencies]"
+            );
+        }
+        for krate in ["secmp-relay", "secmp-transport"] {
+            assert!(
+                testkit
+                    .lines()
+                    .any(|l| l.trim() == format!("{krate}.workspace = true")),
+                "{krate} is not `workspace = true` in secmp-testkit"
+            );
+        }
+        assert!(
+            !testkit
+                .lines()
+                .any(|l| l.starts_with("secmp-") && l.contains("path =")),
+            "secmp-testkit declares a path dependency"
+        );
+        let dispatch = lf(include_str!("../../.github/workflows/ci-dispatch.yml"));
+        assert!(
+            dispatch
+                .lines()
+                .any(|l| l.trim_start().starts_with("description:") && l.contains("proverif-link")),
+            "ci-dispatch.yml: the suite input does not list proverif-link"
+        );
+        let deep = expect::FUZZ_DEEP_TARGETS.len();
+        let phrase = format!(
+            "{} targets x {} s + {deep} targets x {} s",
+            expect::FUZZ_TARGETS.len().saturating_sub(deep),
+            nightly_share_seconds()?,
+            expect::FUZZ_DEEP_NIGHTLY_SECONDS
+        );
+        let nightly = lf(include_str!("../../.github/workflows/fuzz-nightly.yml"));
+        assert!(
+            nightly
+                .lines()
+                .any(|l| l.trim_start_matches('#').trim() == phrase),
+            "fuzz-nightly.yml: no comment line {phrase:?}"
+        );
+        assert!(!nightly.contains("14 targets") && !nightly.contains("1 028 s"));
         Ok(())
     }
 
@@ -7848,8 +8247,8 @@ mod tests {
         assert_eq!(expect::FUZZ_NIGHTLY_SECONDS, 14_400);
         assert_eq!(
             nightly_seconds_per_target(expect::FUZZ_NIGHTLY_SECONDS, expect::FUZZ_TARGETS.len())?,
-            // M5 Phase B: 29 targets (the two relay targets FZ-07, FZ-08), 496 s each
-            14_400 / 29
+            // M6 Phase A: 31 targets (+ FZ-01, FZ-04 of M6), 464 s each
+            14_400 / 31
         );
         assert_eq!(nightly_seconds_per_target(14_400, 14)?, 1028);
         assert!(nightly_seconds_per_target(14_400, 0).is_err());

@@ -21,6 +21,10 @@ secmp-proto = { path = "../crates/secmp-proto", features = ["kat"] }
 # `kat` (M5 Phase B): the `relay_*` targets check the relay's stores through `snapshot_kat`, `store_digest_kat` and
 # `budget_used_kat`.
 secmp-relay = { path = "../crates/secmp-relay", features = ["kat"] }
+# `kat` / `harness` (M6 Phase A): the `client_pipeline_responses` and `scheduler_event_sequence` targets build a client
+# `Channel` over the fixed honest link (`Channel::from_link_kat`) and a seeded `TimingRng`.
+secmp-transport = { path = "../crates/secmp-transport", features = ["harness"] }
+secmp-client-core = { path = "../crates/secmp-client-core", features = ["kat"] }
 
 [workspace]
 members = ["."]
@@ -224,6 +228,20 @@ bench = false
 [[bin]]
 name = "relay_link_session"
 path = "fuzz_targets/relay_link_session.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "client_pipeline_responses"
+path = "fuzz_targets/client_pipeline_responses.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "scheduler_event_sequence"
+path = "fuzz_targets/scheduler_event_sequence.rs"
 test = false
 doc = false
 bench = false

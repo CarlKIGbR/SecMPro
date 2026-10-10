@@ -779,6 +779,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 
 [[package]]
+name = "secmp-client-core"
+version = "0.0.0"
+dependencies = [
+ "secmp-crypto",
+ "secmp-proto",
+ "secmp-transport",
+]
+
+[[package]]
 name = "secmp-crypto"
 version = "0.0.0"
 dependencies = [
@@ -803,9 +812,11 @@ name = "secmp-fuzz"
 version = "0.0.0"
 dependencies = [
  "libfuzzer-sys",
+ "secmp-client-core",
  "secmp-crypto",
  "secmp-proto",
  "secmp-relay",
+ "secmp-transport",
 ]
 
 [[package]]
@@ -830,6 +841,14 @@ dependencies = [
  "libc",
  "windows-sys",
  "zeroize",
+]
+
+[[package]]
+name = "secmp-transport"
+version = "0.0.0"
+dependencies = [
+ "secmp-crypto",
+ "secmp-proto",
 ]
 
 [[package]]

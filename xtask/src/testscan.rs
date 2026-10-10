@@ -42,7 +42,7 @@ pub(crate) const DEFAULT_SEED_RANGE: RangeInclusive<u64> =
 /// The packages with property tests (each a KAT package, `expect::KAT_PACKAGES`): the kat step runs each once more
 /// with the CI run seed. The scan checks that every property test is in one of them and that each holds one (a
 /// property package without the feature `kat` would need a pass of its own; the scan fails until it has one).
-pub(crate) const PROPERTY_PACKAGES: &[&str] = &["secmp-proto", "secmp-relay"];
+pub(crate) const PROPERTY_PACKAGES: &[&str] = &["secmp-proto", "secmp-relay", "secmp-testkit"];
 
 /// Test binaries (nextest `binary_id`) whose seeded property tests predate the `prop_` names (M2 `canonical`, M3
 /// `tr_properties`): the CI-seed pass runs them whole. Every other property test is named `prop_*`.

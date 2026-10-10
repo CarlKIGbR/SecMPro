@@ -1,0 +1,7 @@
+        FAIL [   0.023s] (1/1) secmp-proto::link vectors::relay_info_without_placeholder_signature
+    test vectors::relay_info_without_placeholder_signature ... FAILED
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 64 filtered out; finished in 0.02s
+    assertion `left == right` failed: sign_calls = 1 per RELAYINFO
+      left: 2
+     right: 1
+        FAIL [   0.023s] (1/1) secmp-proto::link vectors::relay_info_without_placeholder_signature

@@ -631,6 +631,41 @@ pub(crate) fn check_vet_closure(ws: &Workspace) -> Result<String> {
     ))
 }
 
+/// The normal direct dependencies of the crates of `expect::NORMAL_DEPENDENCY_ALLOW` that their row does not list
+/// (M5 review F-7, R-126, TEST-SPEC-M6 G-04), each as a finding naming the crate (package) and the dependency; a
+/// listed crate that is not a workspace member is a finding too. Only normal edges count (`dev`- and
+/// `build`-dependencies are not shipped); the edges are those of the workspace graph (`cargo metadata`).
+pub(crate) fn normal_dependency_findings(ws: &Workspace) -> Vec<String> {
+    let mut out = Vec::new();
+    for (krate, allowed) in expect::NORMAL_DEPENDENCY_ALLOW {
+        let Some(pkg) = ws.member(krate) else {
+            out.push(format!(
+                "normal-deps: {krate} is in expect::NORMAL_DEPENDENCY_ALLOW but not a workspace member"
+            ));
+            continue;
+        };
+        let mut deps: Vec<&str> = ws
+            .edges
+            .get(&pkg.id)
+            .into_iter()
+            .flatten()
+            .filter(|(_, normal)| *normal)
+            .filter_map(|(id, _)| ws.all.get(id))
+            .map(|(name, _, _)| name.as_str())
+            .collect();
+        deps.sort_unstable();
+        deps.dedup();
+        for d in deps {
+            if !allowed.contains(&d) {
+                out.push(format!(
+                    "normal-deps: package {krate} has the normal dependency {d}, which expect::NORMAL_DEPENDENCY_ALLOW does not list (a direct dependency needs its ADR line first, CLAUDE.md §1.9)"
+                ));
+            }
+        }
+    }
+    out
+}
+
 /// The event names of the relay's closed event set (`secmp_relay::event::EVENT_NAMES` in `src`, the text of
 /// `crates/secmp-relay/src/event.rs`), in order.
 pub(crate) fn relay_event_names(src: &str) -> Vec<String> {
@@ -694,6 +729,7 @@ pub(crate) fn run(ws: &Workspace) -> Result<String> {
     findings.extend(relay_event_findings(&std::fs::read_to_string(
         ws.root.join("crates/secmp-relay/src/event.rs"),
     )?));
+    findings.extend(normal_dependency_findings(ws));
     let vet = check_vet_closure(ws);
     if let Err(e) = &vet {
         findings.push(format!("vet-closure: {e}"));
@@ -716,9 +752,10 @@ pub(crate) fn run(ws: &Workspace) -> Result<String> {
          bench root allows ({}), {ui_deny} secmp-ui roots deny, {ui_files} secmp-ui files without `unsafe`; \
          lints-table: {manifests} manifests; lint-allows: {relaxations} relaxing attributes (all sanctioned); \
          build-scripts: {crates} crates, none; spdx: {spdx} files; relay-events: {} names as \
-         expect::RELAY_TRACE_ALLOW; {}",
+         expect::RELAY_TRACE_ALLOW; normal-deps: {} crates within expect::NORMAL_DEPENDENCY_ALLOW; {}",
         expect::UNSAFE_EXEMPT_ROOT,
         expect::RELAY_TRACE_ALLOW.len(),
+        expect::NORMAL_DEPENDENCY_ALLOW.len(),
         vet.unwrap_or_default()
     ))
 }
@@ -1325,6 +1362,133 @@ mod tests {
                 .iter()
                 .any(|f| f.contains("must name exactly one target root")),
             "{findings:?}"
+        );
+        Ok(())
+    }
+
+    /// A `cargo metadata` text of the workspace crates of `expect::NORMAL_DEPENDENCY_ALLOW` plus `secmp-crypto`,
+    /// `secmp-proto`, `serde_json` and `tokio`, with the given `(from, to, kind)` edges (`kind` null = normal).
+    fn metadata_fixture(edges: &[(&str, &str, &str)]) -> String {
+        let names = [
+            "secmp-relay",
+            "secmp-transport",
+            "secmp-client-core",
+            "secmp-testkit",
+            "secmp-crypto",
+            "secmp-proto",
+        ];
+        let external = ["serde_json", "tokio"];
+        let id = |n: &str| {
+            if external.contains(&n) {
+                format!("registry+x#{n}@1.0.0")
+            } else {
+                format!("path+file:///w/{n}#0.0.0")
+            }
+        };
+        let package = |n: &&str| {
+            format!(
+                r#"{{"id": "{}", "name": "{n}", "version": "1.0.0", "manifest_path": "/w/{n}/Cargo.toml", "features": {{}}, "targets": []}}"#,
+                id(n)
+            )
+        };
+        let packages: Vec<String> = names
+            .iter()
+            .map(package)
+            .chain(external.iter().map(package))
+            .collect();
+        let members: Vec<String> = names.iter().map(|n| format!("\"{}\"", id(n))).collect();
+        let nodes: Vec<String> = names
+            .iter()
+            .chain(external.iter())
+            .map(|n| {
+                let deps: Vec<String> = edges
+                    .iter()
+                    .filter(|(from, _, _)| from == n)
+                    .map(|(_, to, kind)| {
+                        let kind = if *kind == "null" {
+                            "null".to_owned()
+                        } else {
+                            format!("\"{kind}\"")
+                        };
+                        format!(
+                            r#"{{"pkg": "{}", "dep_kinds": [{{"kind": {kind}, "target": null}}]}}"#,
+                            id(to)
+                        )
+                    })
+                    .collect();
+                format!(r#"{{"id": "{}", "deps": [{}]}}"#, id(n), deps.join(","))
+            })
+            .collect();
+        format!(
+            r#"{{"workspace_root": "/w", "workspace_members": [{}], "packages": [{}], "resolve": {{"nodes": [{}]}}}}"#,
+            members.join(","),
+            packages.join(","),
+            nodes.join(",")
+        )
+    }
+
+    /// TEST-SPEC-M6 G-04 (M5 review F-7, R-126): the normal direct dependencies of `secmp-relay`, `secmp-transport`,
+    /// `secmp-client-core` and `secmp-testkit` are within `expect::NORMAL_DEPENDENCY_ALLOW` (Phase A: workspace
+    /// crates, plus the testkit's `serde_json`); a fixture with an unlisted crate is refused naming crate and package;
+    /// dev- and build-dependencies are not shipped and do not count.
+    #[test]
+    fn normal_dependencies_match_adr_allowlist() -> Result<()> {
+        // the tree itself
+        let findings = normal_dependency_findings(&Workspace::load()?);
+        assert!(findings.is_empty(), "{findings:?}");
+        // the allowlist's shape: workspace crates only, except the testkit's serde_json
+        for (krate, allowed) in expect::NORMAL_DEPENDENCY_ALLOW {
+            for dep in *allowed {
+                assert!(
+                    dep.starts_with("secmp-")
+                        || (*krate == "secmp-testkit" && *dep == "serde_json"),
+                    "{krate}: {dep}"
+                );
+            }
+        }
+        // a fixture within the lists, with dev/build edges to tokio, passes
+        let ok = metadata_fixture(&[
+            ("secmp-relay", "secmp-crypto", "null"),
+            ("secmp-relay", "secmp-proto", "null"),
+            ("secmp-relay", "tokio", "dev"),
+            ("secmp-transport", "secmp-proto", "null"),
+            ("secmp-transport", "tokio", "build"),
+            ("secmp-client-core", "secmp-transport", "null"),
+            ("secmp-testkit", "serde_json", "null"),
+            ("secmp-testkit", "tokio", "dev"),
+        ]);
+        assert_eq!(
+            normal_dependency_findings(&Workspace::parse(&ok)?),
+            Vec::<String>::new()
+        );
+        // an unlisted normal dependency is refused, naming package and crate
+        let bad = metadata_fixture(&[
+            ("secmp-relay", "secmp-crypto", "null"),
+            ("secmp-relay", "tokio", "null"),
+            ("secmp-transport", "serde_json", "null"),
+            ("secmp-client-core", "secmp-relay", "null"),
+        ]);
+        let found = normal_dependency_findings(&Workspace::parse(&bad)?);
+        assert_eq!(found.len(), 3, "{found:?}");
+        for (package, dep) in [
+            ("secmp-relay", "tokio"),
+            ("secmp-transport", "serde_json"),
+            ("secmp-client-core", "secmp-relay"),
+        ] {
+            assert!(
+                found.iter().any(|f| f.contains(&format!(
+                    "package {package} has the normal dependency {dep},"
+                ))),
+                "{package} {dep}: {found:?}"
+            );
+        }
+        // a listed crate that is no workspace member is a finding
+        let none = Workspace::parse(
+            r#"{"workspace_root": "/w", "workspace_members": [], "packages": [], "resolve": {"nodes": []}}"#,
+        )?;
+        assert_eq!(
+            normal_dependency_findings(&none).len(),
+            expect::NORMAL_DEPENDENCY_ALLOW.len()
         );
         Ok(())
     }

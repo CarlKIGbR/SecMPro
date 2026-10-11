@@ -193,6 +193,13 @@ None (workspace path crates only: `secmp-client-core` → `secmp-transport`; `se
   resolve every `Output::Connect` with `link_up` or `connect_failed` — a link in `Connecting` has no deadline in
   `next_deadline`; wake at every `next_deadline`, including the FETCH-lead deadline (`tick − fetch_lead_ms`), which is
   load-bearing; run the preparation off the I/O loop, so that its cost decides only when a frame is ready.
+- **CI budget (WEISUNG M6-11, VD-M6-A-23).** `linux-full` exceeded its 240 min since Phase A (PR runs 38064677208 and 38132969656:
+  exit 143 inside `[9] kani`). Measured (`M06-evidence/ci-jobs-m6a-4e426c3.txt`): the three biggest steps are fuzz 63.8, miri
+  49.3 and kat 41.4 min (coverage 39.7); against the last green main run kat grew by 15.7 and coverage by 31.3 min; kani on
+  the runner is client-core 9.8 + proto ~63 + relay ~4 = ~77 min. Kani is now the required job `kani` (150 min; `linux-full`
+  delegates it with `--delegated kani`; same caches and runner image; the job runs `cargo xtask step --strict kani`). Expected
+  `linux-full` after the split: ~204 min, margin ~36 min to 240 (the faster run: ~182 min). No threshold, harness list or
+  other timeout changed. If the margin falls below 30 min the next candidates are fuzz, miri, kat and coverage.
 - The virtual worker is serial and non-blocking; a single-threaded real driver whose preparation blocked its loop would
   delay *other* links' due writes by the preparation of an active link — the cost model cannot show that, the Phase B
   driver must not do it.

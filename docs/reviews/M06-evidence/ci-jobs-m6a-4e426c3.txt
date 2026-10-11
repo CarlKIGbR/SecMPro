@@ -1,0 +1,100 @@
+WEISUNG M6-11 (VD-M6-A-23): step tables of `linux-full`, code head 4e426c3
+Source: the job logs (`=== [n] step ===` timestamps; the duration of a step is the time to the next header, the last step to the
+end of the log). Runs: 38064677208 and 38132969656 (PR head 4e426c3, linux-full, both ended with exit 143 / SIGTERM inside
+`[9] kani`), 38126629937 (main, schedule, linux-full green, 220.5 min, before M6).
+
+== run 38064677208 (PR, linux-full, SIGTERM): job log 15:42:32 .. 18:57:57 (195.4 min)
+[1] fmt                0.0 min
+[2] clippy             1.1 min
+[2] policy             0.0 min
+[3] deny               0.0 min
+[3] vet                0.0 min
+[3] audit              0.1 min
+[3] cooldown           0.1 min
+[4] nextest            2.8 min
+[4] doctest            0.0 min
+[4] hello              0.4 min
+[5] kat               34.3 min
+[5] perf               0.4 min
+[5] ct                 0.0 min
+[6] fuzz              63.7 min
+[7] coverage          34.2 min
+[8] mutants            0.0 min
+[9] miri              40.3 min
+[9] kani              17.2 min
+   kani: 18:40:43 $ /home/runner/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/cargo kani --package secmp-client-core
+   kani: 18:50:35   Complete - 7 successfully verified harnesses, 0 failures, 7 total.
+   kani: 18:50:35 $ /home/runner/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/cargo kani --package secmp-proto -Z stubbing
+
+== run 38132969656 (PR, linux-full, SIGTERM): job log 10:43:48 .. 14:35:18 (231.5 min)
+[1] fmt                0.0 min
+[2] clippy             1.0 min
+[2] policy             0.0 min
+[3] deny               0.0 min
+[3] vet                0.0 min
+[3] audit              0.1 min
+[3] cooldown           0.1 min
+[4] nextest            2.9 min
+[4] doctest            0.0 min
+[4] hello              0.4 min
+[5] kat               41.4 min
+[5] perf               0.4 min
+[5] ct                 0.0 min
+[6] fuzz              63.8 min
+[7] coverage          39.7 min
+[8] mutants            0.0 min
+[9] miri              49.3 min
+[9] kani              31.7 min
+   kani: 14:03:37 $ /home/runner/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/cargo kani --package secmp-client-core
+   kani: 14:13:28   Complete - 7 successfully verified harnesses, 0 failures, 7 total.
+   kani: 14:13:28 $ /home/runner/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/cargo kani --package secmp-proto -Z stubbing
+
+== run 38126629937 (main, schedule, linux-full green): job log 08:57:21 .. 12:37:53 (220.5 min)
+[1] fmt                0.0 min
+[2] clippy             0.5 min
+[2] policy             0.0 min
+[3] deny               0.0 min
+[3] vet                0.0 min
+[3] audit              0.1 min
+[3] cooldown           0.1 min
+[4] nextest            5.5 min
+[4] doctest            0.0 min
+[4] hello              0.1 min
+[5] kat               25.7 min
+[5] perf               0.4 min
+[5] ct                 0.0 min
+[6] fuzz              59.7 min
+[7] coverage           8.4 min
+[8] mutants            0.0 min
+[9] miri              49.1 min
+[9] kani              66.8 min
+[10] proverif          3.1 min
+[10] proverif-link     0.0 min
+[11] windows-cross     0.0 min
+[11] windows-native     0.0 min
+[11] linux-target      0.0 min
+[12] repro             0.0 min
+[13] sbom              0.5 min
+[14] systemd           0.0 min
+   kani: 11:27:30 $ /home/runner/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/cargo kani --package secmp-proto -Z stubbing
+   kani: 12:30:17   Complete - 30 successfully verified harnesses, 0 failures, 30 total.
+   kani: 12:30:17 $ /home/runner/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/cargo kani --package secmp-relay
+   kani: 12:34:16   Complete - 3 successfully verified harnesses, 0 failures, 3 total.
+
+
+Reading
+- Three biggest steps in run 38132969656: fuzz 63.8 min, miri 49.3 min, kat 41.4 min (coverage 39.7 min is the fourth).
+- Against the last green linux-full on main (38126629937): kat +15.7 min (25.7 -> 41.4), coverage +31.3 min (8.4 -> 39.7), nextest
+  -2.6 min, fuzz +4.1 min, miri +0.2 min; kani: main 66.8 min (secmp-proto 62.8 min + secmp-relay 4.0 min) against, in the PR runs,
+  secmp-client-core 9.8 min (14:03:37 -> 14:13:28, 9.9 min in run 38064677208) plus the same secmp-proto run, which the
+  240-min limit cut off after 31.7 min of the [9] kani step in run 38132969656.
+- Kani split in minutes, as the step runs it: client-core ~9.8, proto ~63, relay ~4 -> ~77 min (+ install/cache restore).
+
+Estimate after the split (linux-full with --delegated kani)
+- run 38132969656: 10:43:48 -> 14:03:37 before the kani step = 199.8 min; the steps after it (proverif 3.1, sbom 0.5, the rest
+  ~0) ~3.7 min (main run) -> ~203.5 min. Limit 240 min -> margin ~36.5 min (>= 30 min).
+- run 38064677208 (faster runner): 15:42:32 -> 18:40:43 = 178.2 min before kani -> ~182 min.
+- Job `kani`: ~77 min + setup against its 150 min budget: margin ~70 min.
+- Next-largest steps if the margin shrinks: fuzz (63.8 min), miri (49.3 min), kat (41.4 min), coverage (39.7 min).
+
+Local (secmp-main, 32 cores): cargo xtask step kani at 4e426c3 + the CI change: PASS, 3065 s, 40/40 harnesses verified.

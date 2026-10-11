@@ -92,6 +92,19 @@ Crypto-specific rules (enforced by review checklist and, where possible, by type
 
 CI triggers (M2, 2026-09-29): `push` runs only for `main`; every PR head is covered by its `pull_request` run, whose jobs are the `main-protection` required checks (a cancelled push run on `7d4e4f0` had left `cancelled` check runs under the required names and blocked the merge). Required job names exist only in the pull_request/push workflow; dispatch workflows use distinct job names (M2 review C2: `ci.yml` holds the required checks and has no `workflow_dispatch`; on-demand runs use `ci-dispatch.yml`, checked by `cargo xtask policy`).
 
+Jobs of `ci.yml` (pinned by `expect::PINNED_JOBS`; the first four are the required checks of the `main-protection` ruleset, the others are the jobs `linux-full` delegates to and become required checks once the owner adds them to the ruleset):
+
+| Job | What | Budget (`timeout-minutes`) |
+|---|---|---|
+| `linux-fast` | `ci-fast` (steps 1–5), SBOM, systemd exposure | 90 |
+| `windows-native` | native MSVC build, clippy, tests, KATs, hello | 90 |
+| `xwin-cross` | `cargo-xwin` cross-build | 60 |
+| `linux-full` | `ci-full` steps 1–14 less the delegated ones | 240 |
+| `ct` | constant-time gate (step 5), `--delegated ct` | 330 |
+| `mutants-shard` ×8, `mutants` | mutation testing (step 8) and its verdict, `--delegated mutants` | 300, 30 |
+| `proverif-hx`, `proverif-link` | ProVerif SecMP-HX and SecMP-LINK models (step 10), `--delegated proverif-link` | 180, 120 |
+| `kani` | Kani harnesses (step 9: every `KANI_PACKAGES`, `-Z stubbing` where used, the verified-harness and cover pins), `--delegated kani` (M6, WEISUNG M6-11, VD-M6-A-23: `linux-full` had passed 240 min) | 150 |
+
 Nothing that touches the network or wall clock in unit tests; `secmp-client-core::clock` is injectable.
 
 ## 5. CI pipeline (`cargo xtask ci-fast` / `cargo xtask ci-full` mirror it locally)

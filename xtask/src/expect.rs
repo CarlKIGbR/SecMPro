@@ -1349,6 +1349,8 @@ pub(crate) const PINNED_JOBS: &[&str] = &[
     "proverif-hx",
     // M5 (BRIEF_M5-B §1): the SecMP-LINK models
     "proverif-link",
+    // M6 (WEISUNG M6-11, VD-M6-A-23): the Kani step, which pushed `linux-full` past its 240 min
+    "kani",
 ];
 
 /// The `needs:` of a pinned job, as (job, the one job it needs) — M4 review C-5: the verdict job `mutants` needs
@@ -1366,6 +1368,8 @@ pub(crate) const DELEGATED_TO: &[(&str, &str)] = &[
     ("ct", "ct"),
     // M5 (BRIEF_M5-B §1): the `ci-full` step `proverif-link` runs in the job of the same name
     ("proverif-link", "proverif-link"),
+    // M6 (WEISUNG M6-11): the `ci-full` step `kani` runs in the job of the same name
+    ("kani", "kani"),
 ];
 
 /// The `cargo xtask` gate `run:` lines of each pinned job of [`PINNED_JOBS`], in order (M3 review F3, R-09;
@@ -1390,7 +1394,7 @@ pub(crate) const REQUIRED_GATE_RUNS: &[(&str, &[&str])] = &[
         // the SecMP-HX models run in their own job `proverif-hx` (WEISUNG M4-5 §5), mutation testing in `mutants` (ADR-047),
         // the ct gate in `ct` (ADR-047 Amendment 1, M4 review C-2), the SecMP-LINK models in `proverif-link` (BRIEF_M5-B §1)
         &[
-            "cargo xtask ci-full --strict --delegated windows-native --delegated windows-cross --delegated mutants --delegated ct --delegated proverif-link --models tr",
+            "cargo xtask ci-full --strict --delegated windows-native --delegated windows-cross --delegated mutants --delegated ct --delegated kani --delegated proverif-link --models tr",
         ],
     ),
     // M4 review C-5 (R-01): the delegated jobs
@@ -1408,6 +1412,8 @@ pub(crate) const REQUIRED_GATE_RUNS: &[(&str, &[&str])] = &[
         "proverif-link",
         &["cargo xtask step --strict proverif --models link --jobs 4"],
     ),
+    // M6 (WEISUNG M6-11): the Kani step in its own job
+    ("kani", &["cargo xtask step --strict kani"]),
 ];
 
 /// The job-level `if:` of every pinned job of [`PINNED_JOBS`], `None` for none (external review EXT-1, M3 follow-up
@@ -1444,6 +1450,10 @@ pub(crate) const REQUIRED_JOB_CONDITIONS: &[(&str, Option<&str>)] = &[
     ),
     (
         "proverif-link",
+        Some("github.event_name == 'schedule' || github.event_name == 'pull_request'"),
+    ),
+    (
+        "kani",
         Some("github.event_name == 'schedule' || github.event_name == 'pull_request'"),
     ),
 ];

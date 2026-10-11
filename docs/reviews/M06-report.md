@@ -37,7 +37,8 @@ AI-09, MR-01, MR-02, G-01…G-11, K-01…K-07, P-01…P-04, P-06, P-07, FZ-01, F
 - `crates/secmp-client-core`: `clock` (`Clock`, `SystemClock` — the one `SystemTime::now`/`Instant::now` site —, `ManualClock`),
   `timing` (`TimingRng`, rejection sampling, `fork`), `scheduler::{params, types, core (Scheduler, pure, backoff), control,
   pool, outbox, conversation}`, `kani_proofs`. The core is sans-IO: no stream, no clock, no runtime, `Output`s for a driver.
-- `crates/secmp-testkit`: `harness::driver` (`VirtualDriver`, `SimClient`, `Gate`, traces), tests `m6_*` under `tests/harness/`.
+- `crates/secmp-testkit`: `harness::driver` (`VirtualDriver`, `SimClient`, `Gate`, traces with emission time and tick stamp,
+  the cost model `prepare_cost`/`receive_cost`, the `after_write` hook), tests `m6_*` under `tests/harness/`.
 - `crates/secmp-relay`: `Limits::link_age_ms` (default `LINK_AGE_MAX_MS`, behaviour unchanged) — see §5.
 - `crates/secmp-proto`: `RelayKeys::relay_info` signs once, without a placeholder signature (G-09, R-144), counting accessor
   `SIGN_CALLS_KAT`.
@@ -49,10 +50,11 @@ AI-09, MR-01, MR-02, G-01…G-11, K-01…K-07, P-01…P-04, P-06, P-07, FZ-01, F
 
 ## 3. Evidence per acceptance criterion (Phase A rows)
 
-Commands, all at code head `03cc660` (WEISUNG M6-1): `cargo xtask ci-fast --strict` (`M06-evidence/ci-fast-m6a-03cc660.txt`),
-`cargo xtask step kani` (`M06-evidence/kani-m6a-03cc660.txt`, with the K-02 negative control), `cargo xtask ci-full --delegated
-windows-native --delegated windows-cross --delegated mutants --delegated ct --delegated proverif-link --models tr` as the
-`linux-full` job (`M06-evidence/ci-full-m6a-03cc660.txt`). The M6 rows are in the `nextest`/`kat` steps of those runs.
+Commands, all at code head `7a67339` (WEISUNG M6-10, fix round 2): `cargo xtask ci-fast --strict`
+(`M06-evidence/ci-fast-m6a-7a67339.txt`), `cargo xtask step kani` (`kani-step-7a67339.txt`; the seven client-core harnesses and
+the K-02 negative control: `kani-m6a-7a67339.txt`), `cargo xtask step coverage`, and the AI rows (`AI-nextest-7a67339.txt`,
+`AI-0x-7a67339.txt`, `MR-0x-7a67339.txt`). `ci-full` last ran at `03cc660` (`ci-full-m6a-03cc660.txt`) and is left to the PR
+run for this round. The M6 rows are in the `nextest`/`kat` steps of those runs.
 
 | Rows | Test (file `crates/secmp-testkit/tests/harness/` unless noted) | Result |
 |---|---|---|
@@ -64,7 +66,8 @@ windows-native --delegated windows-cross --delegated mutants --delegated ct --de
 | CO-01…CO-08, QP-01…QP-05 | `m6_control.rs` | pass |
 | OB-01…OB-08 | `m6_outbox.rs` | pass |
 | LR-01…LR-06 | `m6_reconnect.rs` | pass |
-| AI-01…AI-06, AI-08, AI-09 | `m6_activity.rs` | pass; max \|Δt\| C2R = R2C = **0 ms** in AI-01/02/03 (`AI-0x.txt`) over 64 traces × 6 h each |
+| AI-01…AI-06, AI-08, AI-09 | `m6_activity.rs` | pass; with real 20 ms / dummy 1 ms / receive 5 ms and the **actual emission time** compared: max \|Δt\| C2R = R2C = **0 ms** in AI-01/02/03 (`AI-0x-7a67339.txt`) over 64 traces × 6 h each; AI-04, AI-06 assert `Some(0)`; AI-05 compares both generators (VD-M6-A-12/13) |
+| VD-M6-A-12…22 (fix round 2) | `m6_sched_io.rs`: `s_due_writes_handed_off_before_any_prepare`, `s_prepare_completing_after_tick_is_overrun_even_within_jitter`, `s_poll_due_performs_no_crypto_and_no_persist`, `receive_commit_failure_does_not_advance_ack`; `m6_activity.rs`: `ai_asymmetric_prepare_cost_does_not_move_emission`, `activity_comparator_detects_a_dropped_dummy`/`_a_resized_frame`/`_a_late_emission`; `m6_outbox.rs`: `receive_commit_failure_keeps_partial_and_trust`, `requeued_relayed_message_is_not_failed_after_30d`; `m6_control.rs`: `control_op_delay_from_related_op` (CO-03, executes), `related_control_ops_never_start_within_a_minute`, `pool_admission_respects_fetch_multi_limit`, `rejected_pool_handout_keeps_spare`; `m6_props.rs`: `prop_at_most_once_per_period` (P-02), `prop_no_message_key_reuse_across_crashes`, `prop_no_message_key_reuse_across_crashes_at_the_write`; `m6_channel.rs`: `pipelined_mismatch_closes_link` (AD-04), `fetch_multi_error_and_cells_same_queue_rejected`; `transport.rs`: `fetch_multi_error_and_cells_same_queue_rejected` | pass; see §5 items 13–24 |
 | MR-01 | `m6_measure.rs::bandwidth_model_matches_capture` | pass; model = capture exactly per connection; Strict 3 045.9 B/s while up (spec 3 046.4), Balanced 4 786.3 (4 787.2), Low-bw 1 594.7 (1 595.7) (`MR-01.txt`) |
 | MR-02 | `m6_measure.rs::drain_after_offline_virtual` | pass; Strict 232 / 8 512 evicted, drained in 42 recv ticks (≤ 45); Balanced 4×10 s 126 slots (≤ 130); Low-bw 5×40 s 149 slots (≤ 153) (`MR-02.txt`) |
 | G-01 | `m6_followups.rs::ok_send_with_implausible_evicted_id_is_rejected` | pass |
@@ -73,7 +76,7 @@ windows-native --delegated windows-cross --delegated mutants --delegated ct --de
 | G-07 | `secmp-relay` `vectors::v16_checks_unpad`; `m6_followups.rs::h01_identical_queue_new_answers_ok` | pass |
 | G-09 | `secmp-proto` `tests/link/vectors.rs::relay_info_without_placeholder_signature` | pass; V-01 bytes unchanged; the counter is `secmp_crypto::SIGN_CALLS_KAT`, incremented inside `Ed25519SigningKey::sign` (VD-2); hand mutation (a placeholder `sign` call re-added): FAIL `sign_calls = 1 per RELAYINFO`, left 2 right 1 (`vd2-g09-hand-mutation.txt`), removed again |
 | G-11 | `m6_followups.rs::harness_cap_setters_take_effect`; `cargo mutants --test-tool nextest -p secmp-testkit --features harness -f '**/convo.rs'` | pass; 30 mutants: 25 caught, 0 missed, 5 unviable (`G-11-convo-mutants.txt`) |
-| K-01…K-07 | `crates/secmp-client-core/src/kani_proofs.rs` | 7/7 verified (`kani-m6a-03cc660.txt`); negative control K-02 without the in-flight check: `VERIFICATION:- FAILED` (same file, after the marker line) |
+| K-01…K-07 | `crates/secmp-client-core/src/kani_proofs.rs` | 7/7 verified (`kani-m6a-7a67339.txt`); negative control K-02 without the in-flight check: `VERIFICATION:- FAILED` (same file, after the marker line) |
 | P-01…P-04, P-06, P-07 | `m6_props.rs` (`prop_*`, seed through `seed::master_seed`) | pass |
 | FZ-01, FZ-04 | `fuzz/fuzz_targets/client_pipeline_responses.rs`, `scheduler_event_sequence.rs`; 120 s each in the `fuzz` step | pass, no finding |
 | X-05 | xtask `gates::tests::kani_and_fuzz_lists_m6` | pass |
@@ -90,14 +93,14 @@ P-01 compare the units of the one-shot links as well (VD-5).
 
 | Gate | Result |
 |---|---|
-| `cargo xtask ci-fast --strict` (Linux) | PASS at 03cc660 (`ci-fast-m6a-03cc660.txt`) |
+| `cargo xtask ci-fast --strict` (Linux) | PASS at 7a67339 (`ci-fast-m6a-7a67339.txt`) |
 | `cargo xtask ci-full` (as `linux-full`, with the CI delegations) | `ci-full: PASS` at 03cc660 (`ci-full-m6a-03cc660.txt`): fmt, clippy, policy, deny, vet, audit, cooldown, nextest, doctest, kat (239 s), perf, fuzz (3 785 s, 31 targets), coverage, miri, kani (3 071 s, 40/40), proverif, sbom, systemd PASS; ct, mutants, proverif-link, windows-native, windows-cross delegated to the PR run. (An earlier run at `bb9e45d` had failed `fmt` and the Kani cover pins; both were fixed before this one.) |
 | Windows VM tests | not applicable in Phase A (no Windows-specific code); `windows-native`/`xwin-cross` run in the PR |
 | KATs / differential | PASS (`kat` step, 5 packages incl. `secmp-client-core`) |
 | Fuzz smoke | 31 targets × 120 s, PASS; committed seeds of the two new targets: `client_pipeline_responses` 6, `scheduler_event_sequence` 3 (counted by `git diff --name-status 6300b65..HEAD -- fuzz/corpus`). An earlier commit had carried 94 and 620 files: my manual fuzz runs had written libFuzzer's new inputs into the tracked corpus directory; they were removed again and the nine hand-made seeds restored |
 | Mutation (`cargo mutants`) | delegated to the `mutants` CI job on the existing scope (crypto, proto, relay); `secmp-client-core`/`secmp-transport` enter the scope in Phase B (ADR-047 Am. 4); the one-off G-11 run above |
-| Coverage | secmp-client-core 89.8 %, secmp-transport 87.3 %, secmp-testkit 97.7 %, secmp-crypto 99.4 %, secmp-proto 97.7 %, secmp-relay 98.2 % |
-| ProVerif / Kani / Miri | ProVerif PASS (`--models tr`; `proverif-link` delegated); Kani: 40/40 harnesses (client-core 7/7, 0 failures); Miri PASS |
+| Coverage (`cargo xtask step coverage` at 7a67339) | secmp-client-core 92.3 % (2239/2427), secmp-transport 88.8 % (926/1043), secmp-testkit 97.3 %, secmp-crypto 99.4 %, secmp-proto 97.7 %, secmp-relay 98.2 %, secmp-sys-mem 95.3 % |
+| ProVerif / Kani / Miri | ProVerif PASS (`--models tr`; `proverif-link` delegated; at 03cc660); Kani at 7a67339: 40/40 harnesses (client-core 7/7, 0 failures, 3 068 s; `kani-step-7a67339.txt`); Miri PASS (at 03cc660) |
 | `cargo deny` / `vet` / `audit` / cooldown | PASS (no new third-party crate) |
 | Reproducible build | not run (no release-profile change) |
 
@@ -138,6 +141,42 @@ None from `docs/03`/`docs/01`. Implementation choices the review should know (no
     feature); the relay-info signature counter: `secmp_crypto::SIGN_CALLS_KAT` (feature `kat`, VD-2).
 11. **Test-Listener mit Shutdown-/Drain-Schranke, K = 10 (Shutdown → Drain), 100 (Drain → Ende), `FED_CALLS_MAX` = 1 500; `relay.rs` vollständig mutiert: 22 caught / 0 missed / 0 timeout (10 unviable)** (WEISUNG M6-5/M6-6, `M06-evidence/mutants-relay-4c3995b.txt`): Klasse „`serve` endet unter dem Mutanten nicht“ (`drain_finished -> false`, `start_drain -> ()`). `Fed` bricht jede der drei Phasen mit Phase, Accept-Zahl und virtueller Zeit ab. Phase A hat `drain_finished`/`start_drain` und ihre Aufrufer nicht geändert; der Produktcode ist beschränkt (`serve` endet nach `drain_secs`).
 12. **`relay_executor` Fuzz-Crash `next_cell_id decreased` (CI-Lauf 38085054146), Ursache im Harness** (WEISUNG M6-7, `M06-evidence/fuzz-relay-executor-913248d.txt`): das Harness setzte sein `sweep`-Flag nach jedem Befehl mit Verdikt Run zurück, auch nach `SKEY` (ERR 6, erreicht `Relay::execute` nicht, `relay.rs:144`); der Sweep lief erst im folgenden `QUEUE_NEW` und legte die abgelaufene Queue mit denselben Schlüsseln neu an (`next_cell_id` 4 → 1). Zell-IDs gehören zur Queue-Instanz (spec §9.1 `:591`, `:593`); Produktcode unverändert. Fix: nur ein ausgeführter Befehl löscht das Flag, `SKEY` ändert den Store nicht, eine neue Queue beginnt bei 1 ohne Zellen; Test `rl_store::cell_ids_restart_on_queue_recreation`, Seed `fuzz/corpus/relay_executor/335f88e8…`.
+13. **VD-M6-A-12 (a6a3b6b) — due writes before any preparation or receive work.** `Scheduler::poll` is now `poll_due(now)` (connect,
+    lifetime, the writes of due ticks, teardown/overrun; no cell source, no seal, no persist; teardown releases are noted and
+    handed over later) + `work(now, source)` (releases, the cells of completed responses, preparation, control operations) +
+    `prepared_until(end)` (a frame whose preparation ended after its tick is an overrun even inside the jitter, OPEN-M6-13);
+    `poll` remains as the three in one. `on_frame` no longer touches the cell source: it matches, moves the in-flight count and
+    queues the outcome for `work`; `link_up` and `on_closed` take no source. `new_link_required_rotates` now exhausts the link
+    (counter 2^20) because the relay's counter cannot be moved, so the last frame itself would be refused as out of step.
+14. **VD-M6-A-13 (9e5b811) — the VirtualDriver records actual emission and models cost.** `TraceEntry.t_ms` is the driver's own
+    time at the write, the core's stamp is `at_ms`; `prepare_cost(real, dummy)`/`receive_cost(per_cell)` accrue per cell prepared
+    or decided and run on a serial worker that does not block the loop (its end is reported with `prepared_until`). AI-01…AI-06
+    run with 20/1/5 ms and assert 0 ms. **Proof of the new row:** with the old ordering (the writes handed out after the
+    preparation) `ai_asymmetric_prepare_cost_does_not_move_emission` fails: `left: (Some(19), Some(19)) right: (Some(0),
+    Some(0))` (`AI-asym-old-ordering-proof-7a67339.txt`); that driver mode is removed.
+15. **VD-M6-A-14 (b944a68) — receive commit failure.** `Conversation::on_deliver` stages the reassembly and trust on copies
+    (`Inbox` is `Clone`) and keeps them only after `commit`; tests `receive_commit_failure_keeps_partial_and_trust` and
+    `receive_commit_failure_does_not_advance_ack` fail with the old order. (The trust half is asserted unchanged; no
+    key-change cell is constructed.)
+16. **VD-M6-A-15 (6081367) — control operations rebase on the actual related start.** Each delayed op keeps its drawn delay;
+    it may start only at `max(due, latest related start + delay)`; one op per correlation per `take_due`; `next_due` and
+    `control_due` report the rebased time; a retry after a failure follows the back-off.
+17. **VD-M6-A-16 (e112af0) — pool admission.** `check_balanced(relay, added: Option<(period, counts_in_rate)>, mode)`: the added
+    queue is an entry in every case; `pool_queue_ready` admits before it registers the spare.
+18. **VD-M6-A-17 (2783fc4) — rejected pool handout.** The spare is put back as the oldest one (`QueuePool::untake`).
+19. **VD-M6-A-18 (d20031a) — 30-day failure.** `first_relayed_at` is recorded on `relayed` (the outbox has no clock of its own:
+    its latest known time), kept by both requeues; only never-relayed messages fail (spec §10.4, `docs/03` line 682).
+20. **VD-M6-A-19 (94e35db) — P-02 per queue.** sid → (period, times); case 0 is {10 s, 80 s}; a hand mutation of `rr_select`
+    (`>= 10_000`) fails it and passed the old assertion.
+21. **VD-M6-A-20 (889e331) — AD-04.** Two outstanding requests, request 1 answered with request 2's `cmd_seq`; the unknown
+    sequence is its own part.
+22. **VD-M6-A-21 (1d88bf4) — P-07 boundaries.** (i) after `commit` before release (`MemPersist::crash_after_next_commit`),
+    (ii) after release before write, (iii) after write at the driver's `after_write` hook; restart from the durable state
+    (`Conversation::restart_from`, `Outbox::restart`); no key twice, every message delivered after a drain; a stale durable
+    state at the restart fails the row.
+23. **VD-M6-A-22 (26bf2bb) — FETCH_MULTI.** A rid in both `errors` and `cells` is `Rejected` in `Channel` and in the M5 twin.
+24. **Small items (7a67339).** `timing_draws()` returns `(links, control)`; planted `activity_comparator_detects_a_dropped_dummy`,
+    `…_a_resized_frame`, `…_a_late_emission`; the driver obligations are documented in `scheduler/mod.rs`.
 
 ## 6. Dependencies added or bumped
 
@@ -148,6 +187,15 @@ None (workspace path crates only: `secmp-client-core` → `secmp-transport`; `se
 - AI-01…AI-03 take ≈ 1–1.5 min each on a 32-core host (64 traces × 6 h on threads); on a 4-core runner expect several minutes.
 - The tick path is "equal" in the virtual driver; the real-time path (tokio driver, Tor) is Phase B/C (AI-07).
 - `link_age_ms`/`link_idle` defaults are still the M5 placeholders until G-12.
+- **API change of fix round 2 (VD-M6-A-12):** the driver calls `poll_due(now)` and flushes its writes, then `work(now, source)`,
+  then `prepared_until(end)`; `on_frame`, `link_up`, `on_closed` take no cell source. **What a Phase B driver must do**
+  (also in the module documentation of `scheduler/mod.rs`; this text belongs in the Phase B brief): flush `poll_due` first;
+  resolve every `Output::Connect` with `link_up` or `connect_failed` — a link in `Connecting` has no deadline in
+  `next_deadline`; wake at every `next_deadline`, including the FETCH-lead deadline (`tick − fetch_lead_ms`), which is
+  load-bearing; run the preparation off the I/O loop, so that its cost decides only when a frame is ready.
+- The virtual worker is serial and non-blocking; a single-threaded real driver whose preparation blocked its loop would
+  delay *other* links' due writes by the preparation of an active link — the cost model cannot show that, the Phase B
+  driver must not do it.
 
 ## 8. Blocked / questions for the reviewer or owner
 
@@ -156,7 +204,7 @@ None for Phase A. Phase B waits for the owner's ADR-051 Part 2 approval and `car
 ## 9. Checklist before requesting review
 
 - [x] All Phase A rows evidenced above
-- [x] `cargo xtask ci-fast --strict` green; `ci-full` green (§4), at `03cc660`
+- [x] `cargo xtask ci-fast --strict` green at `7a67339`; Kani 40/40 at `7a67339`; `ci-full` green (§4) at `03cc660`, not rerun
 - [x] No `#[ignore]`, no lint allowances added for security lints, no disabled gates
 - [x] Vectors untouched
 - [ ] PR run on `linux-fast`, `windows-native`, `xwin-cross`, `linux-full` (after the push by the reviewer)

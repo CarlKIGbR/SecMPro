@@ -1044,13 +1044,12 @@ impl Scheduler {
         &self.world.params
     }
 
-    /// Uniform timing draws so far (the activity-independence tests compare them).
+    /// Uniform timing draws so far, `(links, control)`: the generator of the links' phases, lifetimes and back-off, and the
+    /// separate one of the control operations and the pool (CO-07). The activity-independence tests compare both: a sum
+    /// could hide one stream drawing more and the other less.
     #[must_use]
-    pub const fn timing_draws(&self) -> u64 {
-        self.world
-            .rng
-            .draws()
-            .saturating_add(self.world.ctl.draws())
+    pub const fn timing_draws(&self) -> (u64, u64) {
+        (self.world.rng.draws(), self.world.ctl.draws())
     }
 
     /// Ticks lost to a frame that was not ready (OPEN-M6-13).

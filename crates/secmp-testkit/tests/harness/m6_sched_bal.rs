@@ -356,7 +356,11 @@ fn link_phase_uniform_and_independent() {
     let starts: Vec<u64> = s.links().iter().map(|l| l.starts_at.unwrap()).collect();
     assert_eq!(starts.len(), 1000);
     assert!(starts.iter().all(|t| *t <= 180_000));
-    assert_eq!(s.timing_draws(), 1000, "1 000 distinct draw indices");
+    assert_eq!(
+        s.timing_draws(),
+        (1000, 0),
+        "1 000 distinct draw indices of the links' generator, none of the control one"
+    );
     let (dstat, p) = ks_uniform(&starts, 0, 180_000);
     assert!(p >= 0.01, "KS D = {dstat}, p = {p}");
 }

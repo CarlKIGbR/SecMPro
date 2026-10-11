@@ -467,7 +467,9 @@ fn control_op_draws_from_timing_rng() {
                 When::Delayed,
             )
             .unwrap();
-        assert_eq!(sim.client_ref(alice).sched.timing_draws() - before, 1);
+        let after = sim.client_ref(alice).sched.timing_draws();
+        // one draw, from the control generator; the links' generator is untouched (CO-07)
+        assert_eq!((after.0 - before.0, after.1 - before.1), (0, 1));
     }
     assert_eq!(
         sim.client(alice).entropy.bytes(32),

@@ -803,7 +803,10 @@ fn s_overrun_prepare_late_by_one_ms_writes_nothing() {
         "a reconnect is scheduled"
     );
     assert!((tick2..=tick2 + 180_000).contains(&info.starts_at.unwrap()));
-    assert!(rig.sched.timing_draws() > draws, "with a fresh phase");
+    assert!(
+        rig.sched.timing_draws().0 > draws.0,
+        "with a fresh phase from the links' generator"
+    );
 }
 
 /// VD-1: a driver that wakes within the jitter of a tick whose frame is ready writes it once, stamped as the tick.

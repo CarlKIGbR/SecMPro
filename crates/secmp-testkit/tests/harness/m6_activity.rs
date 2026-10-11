@@ -365,7 +365,8 @@ pub struct Run {
     pub work_ms: u64,
     pub c2r: Trace,
     pub r2c: Trace,
-    pub draws: Vec<u64>,
+    /// `(links, control)` timing draws at the end of every hour.
+    pub draws: Vec<(u64, u64)>,
     pub extra_units: usize,
     pub control_c2r: Trace,
     /// Every unit of the one-shot (control) links, sorted: `(time, size, direction)`.
@@ -517,7 +518,7 @@ fn timing_draws_independent_of_activity() {
         seed: 79,
     };
     let idle = Rig::new(&sc, Params::default()).run(hours, None);
-    assert!(idle.draws.len() == 6 && idle.draws.iter().all(|d| *d > 0));
+    assert!(idle.draws.len() == 6 && idle.draws.iter().all(|d| d.0 > 0 && d.1 > 0));
     for trace in 0..4_u64 {
         let act = activity(trace + 900, hours, 2);
         let run = Rig::new(&sc, Params::default()).run(hours, Some(&act));
@@ -743,4 +744,57 @@ fn ai_asymmetric_prepare_cost_does_not_move_emission() {
         );
     }
     assert!(idle.c2r.iter().all(|e| e.t_ms == e.at_ms));
+}
+
+/// A short idle run to plant a defect in.
+fn planted_base() -> (Run, Run) {
+    let sc = Scenario {
+        mode: Mode::Strict,
+        contacts: vec![(10_000, 10_000)],
+        pool: false,
+        seed: 5,
+    };
+    let one = Rig::new(&sc, Params::default()).run(1, None);
+    let two = Rig::new(&sc, Params::default()).run(1, None);
+    assert_eq!(
+        compare(&one, &two),
+        (Some(0), Some(0)),
+        "the same scenario is the same trace"
+    );
+    (one, two)
+}
+
+/// VD-M6-A-12 (extra, planted): a run with one frame missing — a dummy that was not sent — is told apart.
+#[test]
+fn activity_comparator_detects_a_dropped_dummy() {
+    let (idle, mut active) = planted_base();
+    let at = active.c2r.len() / 2;
+    active.c2r.remove(at);
+    assert_eq!(
+        compare(&idle, &active).0,
+        None,
+        "a dropped frame is not 0 ms"
+    );
+}
+
+/// VD-M6-A-12 (extra, planted): a run with one frame of another size is told apart.
+#[test]
+fn activity_comparator_detects_a_resized_frame() {
+    let (idle, mut active) = planted_base();
+    let at = active.c2r.len() / 2;
+    active.c2r.get_mut(at).unwrap().len += 64;
+    assert_eq!(
+        compare(&idle, &active).0,
+        None,
+        "a resized frame is not 0 ms"
+    );
+}
+
+/// VD-M6-A-13 (extra, planted): a frame that left 19 ms late — what the old `poll` ordering produced — is seen as 19 ms.
+#[test]
+fn activity_comparator_detects_a_late_emission() {
+    let (idle, mut active) = planted_base();
+    let at = active.c2r.len() / 2;
+    active.c2r.get_mut(at).unwrap().t_ms += 19;
+    assert_eq!(compare(&idle, &active).0, Some(19));
 }

@@ -29,6 +29,10 @@ struct Op {
     /// The correlation this operation belongs to (a queue, an invitation, a contact), chosen by the host.
     related: u64,
     due: u64,
+    /// The delay drawn for a [`When::Delayed`] operation, until it first starts: it never starts before the latest
+    /// related start plus this delay (spec §10.6 (2): `U[1 min, 60 min]` from any related operation, whenever that one
+    /// actually ran). `None` for an operation a user waits for or that has its own time, and once it has started.
+    delay: Option<u64>,
     running: bool,
     failures: u32,
     closed_before: u32,
@@ -94,10 +98,14 @@ impl ControlOps {
         self.ops.iter().find(|o| o.id == id).map(|o| o.kind)
     }
 
-    /// The monotonic time at which `id` is due, while it waits.
+    /// The monotonic time at which `id` may start, while it waits (a related start that came later has pushed a
+    /// delayed operation back).
     #[must_use]
     pub fn due_of(&self, id: OpId) -> Option<u64> {
-        self.ops.iter().find(|o| o.id == id).map(|o| o.due)
+        self.ops
+            .iter()
+            .find(|o| o.id == id)
+            .map(|o| self.start_not_before(o))
     }
 
     /// Queue an operation. A delayed one starts `U[1 min, 60 min]` after `max(now, the latest start or due time of an
@@ -119,6 +127,7 @@ impl ControlOps {
             related,
             when,
         } = spec;
+        let mut delay = None;
         let due = match when {
             When::Prompt => now,
             When::At(t) => t,
@@ -135,7 +144,9 @@ impl ControlOps {
                     .map(|o| o.due);
                 let base = started.chain(waiting).fold(now, u64::max);
                 let (lo, hi) = params.control_delay_ms;
-                base.saturating_add(rng.uniform(lo, hi)?)
+                let drawn = rng.uniform(lo, hi)?;
+                delay = Some(drawn);
+                base.saturating_add(drawn)
             }
         };
         self.ops.push(Op {
@@ -144,6 +155,7 @@ impl ControlOps {
             relay,
             related,
             due,
+            delay,
             running: false,
             failures: 0,
             closed_before: 0,
@@ -151,28 +163,52 @@ impl ControlOps {
         Ok(())
     }
 
-    /// The earliest due time of a waiting operation.
-    #[must_use]
-    pub fn next_due(&self) -> Option<u64> {
-        self.ops.iter().filter(|o| !o.running).map(|o| o.due).min()
+    /// When `op` may start: its due time, and for a delayed operation not before the latest related start plus its drawn
+    /// delay (a related operation that started later than planned pushes it back).
+    fn start_not_before(&self, op: &Op) -> u64 {
+        let rebased = op.delay.and_then(|d| {
+            self.last_start
+                .iter()
+                .filter(|(r, _)| *r == op.related)
+                .map(|(_, t)| t.saturating_add(d))
+                .max()
+        });
+        rebased.map_or(op.due, |t| t.max(op.due))
     }
 
-    /// The operations due at `now`, in queue order; they are marked running.
+    /// The earliest time a waiting operation may start.
+    #[must_use]
+    pub fn next_due(&self) -> Option<u64> {
+        self.ops
+            .iter()
+            .filter(|o| !o.running)
+            .map(|o| self.start_not_before(o))
+            .min()
+    }
+
+    /// The operations that may start at `now`, in queue order; they are marked running. Of several delayed operations
+    /// of one correlation that are overdue together, one starts per call: the others are rebased on its start.
     pub fn take_due(&mut self, now: u64) -> Vec<DueOp> {
         let mut out = Vec::new();
-        for op in &mut self.ops {
-            if !op.running && op.due <= now {
+        for i in 0..self.ops.len() {
+            let Some(op) = self.ops.get(i) else { break };
+            if op.running || self.start_not_before(op) > now {
+                continue;
+            }
+            let related = op.related;
+            out.push(DueOp {
+                id: op.id,
+                kind: op.kind,
+                relay: op.relay,
+            });
+            if let Some(op) = self.ops.get_mut(i) {
                 op.running = true;
-                out.push(DueOp {
-                    id: op.id,
-                    kind: op.kind,
-                    relay: op.relay,
-                });
-                let related = op.related;
-                match self.last_start.iter_mut().find(|(r, _)| *r == related) {
-                    Some((_, t)) => *t = (*t).max(now),
-                    None => self.last_start.push((related, now)),
-                }
+                // a retry after a failure follows the back-off, not the correlation delay
+                op.delay = None;
+            }
+            match self.last_start.iter_mut().find(|(r, _)| *r == related) {
+                Some((_, t)) => *t = (*t).max(now),
+                None => self.last_start.push((related, now)),
             }
         }
         out

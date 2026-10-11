@@ -4,7 +4,9 @@
 use secmp_client_core::scheduler::control::When;
 use secmp_client_core::scheduler::core::{LinkKind, Scheduler};
 use secmp_client_core::scheduler::params::{Mode, Params};
-use secmp_client_core::scheduler::types::{ControlKind, LinkEvent, QueueId, Reason, RelayId};
+use secmp_client_core::scheduler::types::{
+    ControlKind, LinkEvent, OpId, Output, QueueId, Reason, RelayId,
+};
 use secmp_client_core::timing::TimingRng;
 use secmp_proto::wire::frame::RequestCmd;
 use secmp_testkit::harness::{CONTROL_SLOT_BASE, Dir, Inspect, LinkMaterial, VirtualDriver};
@@ -25,6 +27,19 @@ fn material(n: u8) -> LinkMaterial {
 
 fn plain_scheduler(seed: u64) -> Scheduler {
     Scheduler::new(Params::default(), Mode::Strict, TimingRng::seeded(seed))
+}
+
+/// The control operations the scheduler starts at `now`.
+fn started(sched: &mut Scheduler, now: u64) -> Vec<OpId> {
+    sched
+        .poll(now, &mut NoCells)
+        .unwrap()
+        .into_iter()
+        .filter_map(|o| match o {
+            Output::Control { op, .. } => Some(op),
+            _ => None,
+        })
+        .collect()
 }
 
 /// CO-01: each control operation runs on its own one-shot link with its own isolation key: handshake, the command
@@ -160,6 +175,59 @@ fn control_op_delay_from_related_op() {
         )
         .unwrap();
     assert!(sched.control_due(other).unwrap() <= t1 - 10_000 + 3_600_000);
+
+    // VD-M6-A-15: executed — the delay counts from the related operation's actual start. The PUT starts at t1; a
+    // related prompt PUT then runs shortly before the delayed QUEUE_DEL is due: the delayed one is pushed back to at
+    // least a minute after that start, and the start times the scheduler hands out are at least 60 000 ms apart.
+    assert_eq!(started(&mut sched, t1), vec![put]);
+    let planned = sched.control_due(del).unwrap();
+    let t_put = planned - 10_000;
+    let prompt = sched
+        .schedule_control(t_put, ControlKind::LinkPut(2), RelayId(0), 77, When::Prompt)
+        .unwrap();
+    assert_eq!(started(&mut sched, t_put), vec![prompt]);
+    let pushed = sched.control_due(del).unwrap();
+    assert!(pushed >= t_put + 60_000, "pushed back: {pushed} vs {t_put}");
+    assert!(
+        started(&mut sched, pushed - 1).is_empty(),
+        "not within a minute of the prompt PUT"
+    );
+    assert_eq!(started(&mut sched, pushed), vec![del]);
+    assert!(pushed - t_put >= 60_000);
+}
+
+/// VD-M6-A-15 `related_control_ops_never_start_within_a_minute`: two related delayed operations that are both overdue
+/// at one poll — one starts per call, the other is rebased on that start.
+#[test]
+fn related_control_ops_never_start_within_a_minute() {
+    let mut sched = plain_scheduler(0xc5);
+    let first = sched
+        .schedule_control(
+            0,
+            ControlKind::QueueDel(QueueId(1)),
+            RelayId(0),
+            5,
+            When::Delayed,
+        )
+        .unwrap();
+    let second = sched
+        .schedule_control(
+            0,
+            ControlKind::LinkGetOwner(1),
+            RelayId(0),
+            5,
+            When::Delayed,
+        )
+        .unwrap();
+    // far past both due times
+    let late = 100_000_000;
+    let a = started(&mut sched, late);
+    assert_eq!(a, vec![first], "one operation per call");
+    assert!(started(&mut sched, late).is_empty());
+    let due = sched.control_due(second).unwrap();
+    assert!(due >= late + 60_000, "rebased on the start: {due}");
+    assert!(started(&mut sched, due - 1).is_empty());
+    assert_eq!(started(&mut sched, due), vec![second]);
 }
 
 /// CO-04: where a user is waiting the operation starts at once, on a one-shot link.

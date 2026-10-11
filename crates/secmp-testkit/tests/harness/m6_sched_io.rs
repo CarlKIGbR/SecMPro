@@ -21,8 +21,8 @@ use secmp_testkit::harness::{
 use secmp_transport::{QueueTransport, RecvCap, RelayQueueTransport, SendCap, Session};
 
 use crate::m6_common::{
-    FRAME, at, client, contact, driver, frames, frames_of, half_contact, inject, run_until_link_up,
-    send_only,
+    FRAME, at, client, client_with, contact, driver, frames, frames_of, half_contact, inject,
+    run_until_link_up, send_only,
 };
 use crate::scripted::{self, Script, Scripted};
 
@@ -931,5 +931,60 @@ fn s_poll_due_performs_no_crypto_and_no_persist() {
         counted()[0] - before[0],
         1,
         "and seals its frame (one seal)"
+    );
+}
+
+/// VD-M6-A-12 `s_due_writes_handed_off_before_any_prepare`: two links tick together every 10 s. Preparing a real cell
+/// costs 20 ms (modelled), a dummy 1 ms; link B's message is queued so that its real cell is prepared at the very
+/// instant of a tick. The due writes of both links are in the `poll_due` output of that tick and the driver emits them
+/// at the tick — not after B's 20 ms of preparation — which the trace (emission time, kept apart from the tick the
+/// core stamped) shows: every frame leaves at its tick.
+#[test]
+fn s_due_writes_handed_off_before_any_prepare() {
+    let mut sim = driver();
+    sim.prepare_cost(20, 1);
+    let a = client_with(
+        &mut sim,
+        Mode::Strict,
+        Params {
+            phase_max_ms: 0,
+            ..Params::default()
+        },
+        301,
+    );
+    let b = client(&mut sim, Mode::Strict, 302);
+    let _link_a = send_only(&mut sim, a, b, 10_000);
+    let link_b = send_only(&mut sim, a, b, 10_000);
+    sim.run_until(15_000);
+    // queued between tick 1 and tick 2: its cell is prepared right after tick 2 (at 20 000), 20 ms of work
+    sim.client(a)
+        .convs
+        .get_mut(link_b)
+        .unwrap()
+        .outbox_mut()
+        .enqueue(text(30, 80), 15_000);
+    let work_before = sim.client_ref(a).work_total_ms;
+    sim.run_until(60_000);
+    assert!(
+        sim.client_ref(a).work_total_ms - work_before >= 20,
+        "the real cell was prepared (20 ms of work)"
+    );
+    // the handshake records at the start are not frames
+    let sent: Vec<_> = sim
+        .scheduled(a, Dir::C2R)
+        .into_iter()
+        .filter(|e| e.len == FRAME)
+        .collect();
+    let ticks: Vec<u64> = sent.iter().map(|e| e.t_ms).collect();
+    assert_eq!(
+        ticks,
+        (1..=6_u64)
+            .flat_map(|k| [k * 10_000, k * 10_000])
+            .collect::<Vec<_>>(),
+        "two frames at each tick"
+    );
+    assert!(
+        sent.iter().all(|e| e.t_ms == e.at_ms),
+        "every frame left at the tick the core stamped on it"
     );
 }

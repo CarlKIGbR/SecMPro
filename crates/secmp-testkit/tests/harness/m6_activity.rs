@@ -113,9 +113,17 @@ fn text(n: u64, len: usize) -> OutMessage {
     }
 }
 
+/// The modelled work of the cell source (VD-M6-A-13): preparing a real cell costs 20 ms, a dummy 1 ms, deciding a
+/// received cell 5 ms — an asymmetry the user's activity would show in the emission if the writes waited for it.
+pub const COST_REAL_MS: u64 = 20;
+pub const COST_DUMMY_MS: u64 = 1;
+pub const COST_RECEIVE_MS: u64 = 5;
+
 impl Rig {
     pub fn new(sc: &Scenario, params: Params) -> Self {
         let mut sim = driver();
+        sim.prepare_cost(COST_REAL_MS, COST_DUMMY_MS);
+        sim.receive_cost(COST_RECEIVE_MS);
         let x = client_with(&mut sim, sc.mode, params, sc.seed);
         let now = sim.now();
         let mut peers = Vec::new();
@@ -313,6 +321,7 @@ impl Rig {
         Run {
             to_peers,
             to_x,
+            work_ms: self.sim.client_ref(x).work_total_ms,
             c2r: self.sim.scheduled(x, Dir::C2R),
             r2c: self.sim.scheduled(x, Dir::R2C),
             draws,
@@ -352,6 +361,8 @@ pub struct Run {
     /// Messages that reached the peers / the client under test (the activity really happened).
     pub to_peers: usize,
     pub to_x: usize,
+    /// The modelled work of the cell source the client under test did, in virtual milliseconds.
+    pub work_ms: u64,
     pub c2r: Trace,
     pub r2c: Trace,
     pub draws: Vec<u64>,
@@ -429,8 +440,8 @@ fn independence(mode: Mode, contacts: &[(u64, u64)], traces: u64, hours: u64) ->
     for (trace, c, r, same_draws, _) in results {
         let c = c.expect("the C2R trace differs in length, size, direction or slot");
         let r = r.expect("the R2C trace differs in length, size, direction or slot");
-        assert!(c <= 5, "trace {trace}: C2R max |Δt| = {c}");
-        assert!(r <= 5, "trace {trace}: R2C max |Δt| = {r}");
+        assert!(c == 0, "trace {trace}: C2R max |Δt| = {c}");
+        assert!(r == 0, "trace {trace}: R2C max |Δt| = {r}");
         assert!(
             same_draws,
             "trace {trace}: timing draws or the one-shot links differ"
@@ -537,7 +548,7 @@ fn activity_independence_both_directions() {
     for (n, (same_len, dt, same_control)) in results.into_iter().enumerate() {
         assert!(same_len, "trace {n}");
         assert!(same_control, "trace {n}: the one-shot links differ");
-        assert!(dt.is_some_and(|d| d <= 5), "trace {n}: {dt:?}");
+        assert_eq!(dt, Some(0), "trace {n}");
     }
 }
 
@@ -695,4 +706,41 @@ fn activity_comparator_detects_an_extra_control_link() {
         "but the extra one-shot link is seen"
     );
     assert!(control_equal(&idle, &idle));
+}
+
+/// VD-M6-A-13 `ai_asymmetric_prepare_cost_does_not_move_emission`: preparing a real cell costs 20 ms, a dummy 1 ms,
+/// deciding a received cell 5 ms. The frames still leave exactly at their ticks: the emission time the driver records
+/// (when it wrote to the stream) equals the tick the core stamped, and equals the idle run's, in both directions — the
+/// work only decides when a frame is *ready*, not when a due frame leaves. With the writes handed out only after the
+/// work (the old `poll` ordering) this fails; the proof run is in the report.
+#[test]
+fn ai_asymmetric_prepare_cost_does_not_move_emission() {
+    let hours = 3;
+    let sc = Scenario {
+        mode: Mode::Strict,
+        contacts: vec![(10_000, 10_000), (20_000, 40_000)],
+        pool: true,
+        seed: 91,
+    };
+    let idle = Rig::new(&sc, Params::default()).run(hours, None);
+    assert!(idle.work_ms > 0, "the cost model is engaged");
+    let results = par_map((0..4_u64).collect(), |trace| {
+        let act = activity(trace + 1300, hours, 2);
+        let run = Rig::new(&sc, Params::default()).run(hours, Some(&act));
+        (compare(&idle, &run), run)
+    });
+    for (n, ((c, r), run)) in results.into_iter().enumerate() {
+        assert_eq!((c, r), (Some(0), Some(0)), "trace {n}");
+        assert!(
+            run.work_ms > idle.work_ms,
+            "trace {n}: real cells cost more than dummies ({} vs {})",
+            run.work_ms,
+            idle.work_ms
+        );
+        assert!(
+            run.c2r.iter().all(|e| e.t_ms == e.at_ms),
+            "trace {n}: every frame left at its tick"
+        );
+    }
+    assert!(idle.c2r.iter().all(|e| e.t_ms == e.at_ms));
 }

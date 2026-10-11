@@ -642,6 +642,13 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversations<O, P, S> {
         self.items.get_mut(index)
     }
 
+    /// Whether the conversation that sends on `queue` has something real waiting for a slot (a planned cell, a queued
+    /// message, a receipt): the next cell it prepares for `queue` is then a real one, not a dummy. For the cost models
+    /// of the test drivers; the scheduler never asks.
+    pub fn pending_real(&mut self, queue: QueueId) -> bool {
+        self.by_send(queue).is_some_and(|c| c.has_pending_real())
+    }
+
     fn by_send(&mut self, q: QueueId) -> Option<&mut Conversation<O, P, S>> {
         self.items.iter_mut().find(|c| c.send_queue == Some(q))
     }

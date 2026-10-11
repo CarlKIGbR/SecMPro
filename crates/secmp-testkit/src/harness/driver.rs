@@ -60,7 +60,8 @@ pub enum Dir {
 /// One record or frame (TEST-SPEC-M6 "Trace").
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct TraceEntry {
-    /// Virtual milliseconds.
+    /// Virtual milliseconds: when the driver wrote the frame to the stream (client to relay), or read it (relay to
+    /// client) — the driver's own time at that moment, not the time the core stamped on the frame (VD-M6-A-13).
     pub t_ms: u64,
     /// Bytes.
     pub len: usize,
@@ -68,6 +69,8 @@ pub struct TraceEntry {
     pub dir: Dir,
     /// The connection's slot (creation order, not an id).
     pub slot: u64,
+    /// The time the core stamped on the frame (`Output::Write::at`, the tick); `t_ms` for everything else.
+    pub at_ms: u64,
 }
 
 /// The trace of one client.
@@ -167,9 +170,26 @@ pub enum Inspect {
     Capture,
 }
 
+/// The modelled cost of the work the core asks of the cell source, in virtual milliseconds (VD-M6-A-13): preparing a
+/// real cell, preparing a dummy, deciding one received cell. The work runs on a worker that is serial but does not
+/// block the driver's loop: its end is reported with `prepared_until`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Costs {
+    /// One real cell prepared.
+    pub prepare_real: u64,
+    /// One dummy prepared.
+    pub prepare_dummy: u64,
+    /// One received cell decided and committed.
+    pub receive: u64,
+}
+
 /// What the gate in front of the conversations records or does (S-22, S-26, S-29).
 #[derive(Default)]
 pub struct GateState {
+    /// The modelled cost of each kind of work.
+    pub costs: Costs,
+    /// The modelled work since the last reset (the driver resets it before each `work`).
+    pub work_ms: u64,
     /// Hold the preparation of cells back: `prepare_cell` is "not ready".
     pub block_prepare: bool,
     /// Deliveries per `(queue, cell_id)`.
@@ -213,8 +233,15 @@ impl CellSource for Gate<'_> {
         if self.state.block_prepare {
             return Ok(None);
         }
+        let real = self.convs.pending_real(queue);
         let out = self.convs.prepare_cell(queue, now);
         if matches!(out, Ok(Some(_))) {
+            let cost = if real {
+                self.state.costs.prepare_real
+            } else {
+                self.state.costs.prepare_dummy
+            };
+            self.state.work_ms = self.state.work_ms.saturating_add(cost);
             self.state.audit.push(Audit::Prepared([
                 counters::tr_encrypt_calls(),
                 counters::persist_calls(),
@@ -247,6 +274,7 @@ impl CellSource for Gate<'_> {
     }
 
     fn deliver(&mut self, queue: QueueId, cell_id: u64, cell: &Cell) -> Result<(), SourceError> {
+        self.state.work_ms = self.state.work_ms.saturating_add(self.state.costs.receive);
         let n = self.state.delivered.entry((queue.0, cell_id)).or_insert(0);
         *n = n.saturating_add(1);
         self.convs.deliver(queue, cell_id, cell)
@@ -275,6 +303,10 @@ pub struct SimClient {
     pub opts: Options,
     /// The gate in front of the conversations.
     pub gate: GateState,
+    /// The modelled work done in all (virtual milliseconds).
+    pub work_total_ms: u64,
+    /// When the serial worker is free again.
+    worker_free: u64,
     conns: BTreeMap<LinkId, Conn>,
     /// Control operations completed, with their kind.
     pub controls_done: Vec<(u64, ControlKind)>,
@@ -306,6 +338,7 @@ pub struct VirtualDriver {
     clients: Vec<SimClient>,
     now: u64,
     swept_minute: u64,
+    costs: Costs,
 }
 
 fn to_usize(n: u64) -> usize {
@@ -324,6 +357,27 @@ impl VirtualDriver {
             clients: Vec::new(),
             now: 0,
             swept_minute: 0,
+            costs: Costs::default(),
+        }
+    }
+
+    /// Model the cost of preparing a cell: `real` virtual milliseconds for a real one, `dummy` for a dummy (every
+    /// client, present and future).
+    pub fn prepare_cost(&mut self, real: u64, dummy: u64) {
+        self.costs.prepare_real = real;
+        self.costs.prepare_dummy = dummy;
+        let costs = self.costs;
+        for c in &mut self.clients {
+            c.gate.costs = costs;
+        }
+    }
+
+    /// Model the cost of deciding (decrypting and committing) one received cell: `per_cell` virtual milliseconds.
+    pub fn receive_cost(&mut self, per_cell: u64) {
+        self.costs.receive = per_cell;
+        let costs = self.costs;
+        for c in &mut self.clients {
+            c.gate.costs = costs;
         }
     }
 
@@ -370,7 +424,12 @@ impl VirtualDriver {
             latency_ms: 0,
             relay: RelayId(0),
             opts: Options::default(),
-            gate: GateState::default(),
+            gate: GateState {
+                costs: self.costs,
+                ..GateState::default()
+            },
+            work_total_ms: 0,
+            worker_free: 0,
             conns: BTreeMap::new(),
             controls_done: Vec::new(),
             controls_started: Vec::new(),
@@ -526,13 +585,23 @@ impl VirtualDriver {
         for i in 0..self.clients.len() {
             self.deliver_due(i, t);
             let outs = self.clients.get_mut(i).unwrap().sched.poll_due(t).unwrap();
+            // the frames due now leave at `t`: nothing the work costs comes before them
             self.apply(i, t, outs);
             self.deliver_due(i, t);
             let outs = {
                 let c = self.clients.get_mut(i).unwrap();
-                c.sched
-                    .work(t, &mut Gate::new(&mut c.convs, &mut c.gate))
-                    .unwrap()
+                // the work starts when the worker is free and ends after its modelled cost; the core is told
+                let start = t.max(c.worker_free);
+                c.gate.work_ms = 0;
+                let outs = c
+                    .sched
+                    .work(start, &mut Gate::new(&mut c.convs, &mut c.gate))
+                    .unwrap();
+                let end = start.saturating_add(c.gate.work_ms);
+                c.sched.prepared_until(end);
+                c.work_total_ms = c.work_total_ms.saturating_add(c.gate.work_ms);
+                c.worker_free = end;
+                outs
             };
             self.apply(i, t, outs);
         }
@@ -567,6 +636,7 @@ impl VirtualDriver {
                     len: frame.len(),
                     dir: Dir::R2C,
                     slot: id.0,
+                    at_ms: t,
                 });
                 c.sched.on_frame(id, t, &frame).unwrap()
             };
@@ -639,11 +709,17 @@ impl VirtualDriver {
     }
 
     fn trace(&mut self, i: usize, t: u64, len: usize, dir: Dir, slot: u64) {
+        self.trace_at(i, t, t, len, dir, slot);
+    }
+
+    /// A trace entry written at `t` for a frame the core stamped `at`.
+    fn trace_at(&mut self, i: usize, t: u64, at: u64, len: usize, dir: Dir, slot: u64) {
         self.clients.get_mut(i).unwrap().trace.push(TraceEntry {
             t_ms: t,
             len,
             dir,
             slot,
+            at_ms: at,
         });
     }
 
@@ -717,8 +793,9 @@ impl VirtualDriver {
     }
 
     fn write(&mut self, i: usize, t: u64, at: u64, link: LinkId, bytes: &[u8]) -> Vec<Output> {
+        // the entry carries the driver's own time of the write; the tick the core stamped is kept apart
         for _ in 0..bytes.len() / FRAME {
-            self.trace(i, at, FRAME, Dir::C2R, link.0);
+            self.trace_at(i, t, at, FRAME, Dir::C2R, link.0);
         }
         self.record(i, t, link, bytes);
         self.clients

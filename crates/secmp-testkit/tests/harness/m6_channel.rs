@@ -238,10 +238,35 @@ fn pipelined_responses_matched_in_order() {
 /// `Rejected`; the link is closed and nothing is written after.
 #[test]
 fn pipelined_mismatch_closes_link() {
-    // request 1 answered with request 2's cmd_seq
-    let wrong_seq: Script =
-        Box::new(|request: &Request, _| vec![scripted::ok(request.cmd_seq + 1)]);
-    let mut p = peer(wrong_seq, None);
+    // two requests outstanding; request 1 is answered with request 2's cmd_seq (VD-M6-A-20)
+    let swapped: Script = Box::new(|request: &Request, n| {
+        if n == 0 {
+            vec![scripted::ok(request.cmd_seq + 1)]
+        } else {
+            vec![scripted::ok(request.cmd_seq)]
+        }
+    });
+    let mut p = peer(swapped, None);
+    let a = p.session.prepare(&Command::Ping).unwrap();
+    let b = p.session.prepare(&Command::Ping).unwrap();
+    assert_eq!(b.seq(), a.seq() + 1, "request 2 follows request 1");
+    p.session.write_prepared(&a).unwrap();
+    p.session.write_prepared(&b).unwrap();
+    assert_eq!(p.session.channel().outstanding(), 2);
+    assert_eq!(p.session.read_response().err(), Some(Error::Rejected));
+    assert!(p.session.is_closed());
+    let written = p.tap.written();
+    assert_eq!(
+        p.session.prepare(&Command::Ping).err(),
+        Some(Error::Closed),
+        "nothing more is prepared"
+    );
+    assert_eq!(p.tap.written(), written, "nothing is written after");
+
+    // a cmd_seq that belongs to no outstanding request is refused as well
+    let unknown: Script =
+        Box::new(|request: &Request, _| vec![scripted::ok(request.cmd_seq + 100)]);
+    let mut p = peer(unknown, None);
     let a = p.session.prepare(&Command::Ping).unwrap();
     p.session.write_prepared(&a).unwrap();
     assert_eq!(p.session.read_response().err(), Some(Error::Rejected));

@@ -579,6 +579,10 @@ fn check_fetch_multi(
             }
             Cellr::Cell { rid, cell_id, cell } if stage <= 1 => {
                 stage = 1;
+                // the cells come from the queues that are not in error (D.2): one queue is never both
+                if outcome.errors.iter().any(|(q, _)| *q.rid() == rid) {
+                    return Err(Error::Rejected);
+                }
                 let floor = entries
                     .iter()
                     .filter(|(r, _)| *r == rid)

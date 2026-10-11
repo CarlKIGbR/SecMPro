@@ -345,3 +345,51 @@ fn closed_before_relayinfo_is_its_own_outcome() {
         Session::connect_outcome(relay, wrong, Some(&id.access), scripted::T0, entropy.get());
     assert!(matches!(outcome, ConnectOutcome::Failed(Error::Rejected)));
 }
+
+/// VD-M6-A-22 `fetch_multi_error_and_cells_same_queue_rejected` (the `Channel` side): a `FETCH_MULTI` answer that
+/// reports queue Q in error and also carries a cell of Q is `Rejected`, the link is closed and nothing is written after.
+#[test]
+fn fetch_multi_error_and_cells_same_queue_rejected() {
+    let script: Script = Box::new(|request: &Request, _| {
+        let seq = request.cmd_seq;
+        let RequestCmd::FetchMulti { entries } = &request.cmd else {
+            return vec![err(seq, ErrCode::Malformed)];
+        };
+        let rid = entries.first().unwrap().rid;
+        let mut frames = vec![
+            Response {
+                cmd_seq: seq,
+                cmd: ResponseCmd::Cellr(Cellr::Error {
+                    error: secmp_proto::wire::frame::CellrError::NoQueue,
+                    rid,
+                    cell: cell(0x44),
+                }),
+            },
+            Response {
+                cmd_seq: seq,
+                cmd: ResponseCmd::Cellr(Cellr::Cell {
+                    rid,
+                    cell_id: 1,
+                    cell: cell(0x45),
+                }),
+            },
+        ];
+        frames.extend((0..6).map(|_| dummy(seq)));
+        frames
+    });
+    let mut p = peer(script, None);
+    let entries = [(&p.recv, 0_u64)];
+    let prepared = p
+        .session
+        .prepare(&Command::FetchMulti { from: &entries })
+        .unwrap();
+    p.session.write_prepared(&prepared).unwrap();
+    assert_eq!(p.session.read_response().err(), Some(Error::Rejected));
+    assert!(p.session.is_closed());
+    let written = p.tap.written();
+    assert_eq!(
+        p.session.write_prepared(&prepared).err(),
+        Some(Error::Closed)
+    );
+    assert_eq!(p.tap.written(), written, "nothing written after");
+}

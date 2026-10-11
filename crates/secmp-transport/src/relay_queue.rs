@@ -406,6 +406,10 @@ impl<S: Read + Write> QueueTransport for RelayQueueTransport<S> {
                 }
                 Cellr::Cell { rid, cell_id, cell } if stage <= 1 => {
                     stage = 1;
+                    // the cells come from the queues that are not in error (D.2): one queue is never both
+                    if outcome.errors.iter().any(|(q, _)| *q.rid() == rid) {
+                        return Err(self.session.reject());
+                    }
                     // above the highest ack requested for this queue and above its previous cell
                     let floor = from
                         .iter()

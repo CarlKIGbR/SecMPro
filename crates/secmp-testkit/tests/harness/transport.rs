@@ -519,3 +519,40 @@ fn transport_caps_are_opaque_and_roundtrip() {
         "rid is derived"
     );
 }
+
+/// VD-M6-A-22 `fetch_multi_error_and_cells_same_queue_rejected` (the `RelayQueueTransport` side): a `FETCH_MULTI`
+/// answer that reports queue Q in error and also carries a cell of Q is `Rejected` and closes the link (D.2: the cells
+/// are those of the queues not in error).
+#[test]
+fn fetch_multi_error_and_cells_same_queue_rejected() {
+    let (mut t, _relay, _id) = scripted_transport(Box::new(move |req, _| {
+        let seq = req.cmd_seq;
+        let RequestCmd::FetchMulti { entries } = &req.cmd else {
+            return vec![err(seq, ErrCode::Malformed)];
+        };
+        let rid = entries.first().unwrap().rid;
+        let mut frames = vec![
+            Response {
+                cmd_seq: seq,
+                cmd: ResponseCmd::Cellr(Cellr::Error {
+                    error: CellrError::NoQueue,
+                    rid,
+                    cell: cell(0x44),
+                }),
+            },
+            Response {
+                cmd_seq: seq,
+                cmd: ResponseCmd::Cellr(Cellr::Cell {
+                    rid,
+                    cell_id: 1,
+                    cell: cell(0x45),
+                }),
+            },
+        ];
+        frames.extend((0..6).map(|_| dummy(seq)));
+        frames
+    }));
+    let recv = RecvCap::from_seed(&SecretBytes::from_slice(&[9; 32]).unwrap()).unwrap();
+    assert_eq!(t.fetch_multi(&[(&recv, 0)]).err(), Some(Error::Rejected));
+    assert!(t.is_closed());
+}

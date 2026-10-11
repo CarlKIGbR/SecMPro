@@ -2,7 +2,7 @@
 //! M6 (d2) `ControlOps` and (d3) `QueuePool` (CO-01…CO-08, QP-01…QP-05; spec §10.6 (2), (3)).
 
 use secmp_client_core::scheduler::control::When;
-use secmp_client_core::scheduler::core::{LinkKind, Scheduler};
+use secmp_client_core::scheduler::core::{LinkKind, SchedError, Scheduler};
 use secmp_client_core::scheduler::params::{Mode, Params};
 use secmp_client_core::scheduler::types::{
     ControlKind, LinkEvent, OpId, Output, QueueId, Reason, RelayId,
@@ -524,7 +524,7 @@ fn pool_keeps_two_spares_per_relay() {
     );
 }
 
-use crate::m6_sched_bal::NoCells;
+use crate::m6_sched_bal::{NoCells, fresh_recv_cap};
 
 /// QP-02: a spare is fetched on its own recv link at the pool period (80 s).
 #[test]
@@ -674,4 +674,56 @@ fn pool_handout_recreates_link_with_announced_period() {
     for pair in fetches.windows(2) {
         assert_eq!(pair.get(1).unwrap() - pair.first().unwrap(), 10_000);
     }
+}
+
+/// The `QueueNew` creations the scheduler hands out at `now`: `(operation, queue)`.
+fn creations(sched: &mut Scheduler, now: u64) -> Vec<(OpId, QueueId)> {
+    sched
+        .poll(now, &mut NoCells)
+        .unwrap()
+        .into_iter()
+        .filter_map(|o| match o {
+            Output::Control {
+                op,
+                kind: ControlKind::QueueNew(q),
+                ..
+            } => Some((op, q)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// VD-M6-A-16 `pool_admission_respects_fetch_multi_limit`: a pool spare is an entry of the `FETCH_MULTI` like any queue
+/// (spec D.2: at most 32); only the rate sum leaves it out. With 32 ordinary queues the 33rd entry — a spare whose
+/// creation completes — is refused, and the pool and the queues are as they were.
+#[test]
+fn pool_admission_respects_fetch_multi_limit() {
+    let mut sched = Scheduler::new(Params::default(), Mode::Balanced, TimingRng::seeded(0x516));
+    for n in 0..32 {
+        sched
+            .add_recv_queue(0, RelayId(0), fresh_recv_cap(n), 80_000)
+            .unwrap();
+    }
+    sched.manage_pool(0, RelayId(0)).unwrap();
+    let made = creations(&mut sched, 10_000_000);
+    assert_eq!(made.len(), 2);
+    let links = sched.links().len();
+    for (op, queue) in made {
+        let refused = sched.pool_queue_ready(10_000_000, queue, fresh_recv_cap(1000 + queue.0));
+        assert_eq!(refused, Err(SchedError::TooManyQueues));
+        assert_eq!(
+            sched.pool_spares(RelayId(0)),
+            0,
+            "not registered as a spare"
+        );
+        assert!(sched.queue_ref(queue).is_none(), "not a recv-queue");
+        sched.control_done(op);
+    }
+    assert_eq!(sched.links().len(), links);
+    assert_eq!(sched.overruns(), 0);
+    assert_eq!(
+        sched.add_recv_queue(10_000_000, RelayId(0), fresh_recv_cap(2000), 80_000),
+        Err(SchedError::TooManyQueues),
+        "the 33rd ordinary queue is refused too"
+    );
 }

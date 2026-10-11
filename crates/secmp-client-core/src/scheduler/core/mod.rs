@@ -1061,10 +1061,13 @@ impl Scheduler {
         q
     }
 
+    /// Whether the recv-queues of `relay` fit a mode with one `FETCH_MULTI` link. `added` is a queue about to join:
+    /// `(its period, whether it counts in Σ 1/P)`. Every queue is an entry of the `FETCH_MULTI` (a pool spare too, spec
+    /// D.2: at most 32); only the queues outside the pool enter the rate sum.
     fn check_balanced(
         &self,
         relay: RelayId,
-        extra: Option<u64>,
+        added: Option<(u64, bool)>,
         mode: Mode,
     ) -> Result<(), SchedError> {
         if self.world.params.slot_ms(mode).is_none() {
@@ -1074,14 +1077,14 @@ impl Scheduler {
         let entries = on_relay
             .clone()
             .count()
-            .saturating_add(usize::from(extra.is_some()));
+            .saturating_add(usize::from(added.is_some()));
         if entries > FETCH_MULTI_LIMIT {
             return Err(SchedError::TooManyQueues);
         }
         let periods = on_relay
             .filter(|r| !r.pool)
             .map(|r| r.period_ms)
-            .chain(extra);
+            .chain(added.and_then(|(period, counts)| counts.then_some(period)));
         if self.world.params.rate_bound_ok(mode, periods) {
             Ok(())
         } else {
@@ -1146,7 +1149,7 @@ impl Scheduler {
             return Err(SchedError::BadPeriod);
         }
         let mode = self.world.effective_mode();
-        self.check_balanced(relay, (!pool).then_some(period_ms), mode)?;
+        self.check_balanced(relay, Some((period_ms, !pool)), mode)?;
         self.world.recvs.push(RecvQ {
             id,
             relay,
@@ -1379,10 +1382,13 @@ impl Scheduler {
         let relay = self
             .world
             .pool
-            .created(queue)
+            .pending_relay(queue)
             .ok_or(SchedError::UnknownQueue)?;
         let period = self.world.params.p_pool_ms;
-        self.add_recv_with_id(now, queue, relay, cap, period, true)
+        // admitted first: a refused queue (more than 32 entries) leaves the pool as it was
+        self.add_recv_with_id(now, queue, relay, cap, period, true)?;
+        self.world.pool.created(queue);
+        Ok(())
     }
 
     /// Hand out a spare of `relay` for an invitation announced with `announced_ms`: its link is replaced by one at the
@@ -1409,6 +1415,7 @@ impl Scheduler {
         let out = match self.set_queue_period(now, queue, announced_ms, source) {
             Ok(out) => out,
             Err(e) => {
+                // refused (e.g. the rate bound at the announced period): the spare stays the oldest one, unchanged
                 if let Some(rq) = self.world.recv_mut(queue) {
                     rq.pool = true;
                 }

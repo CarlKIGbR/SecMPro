@@ -20,7 +20,7 @@ use secmp_proto::wire::frame::RequestCmd;
 use secmp_testkit::harness::{EntropyPool, Inspect, START_UNIX, ratchet_pair};
 
 use crate::m6_activity::{Rig, Scenario, activity, compare, control_equal};
-use crate::m6_common::{client_with, driver, run_until_link_up, send_only};
+use crate::m6_common::{client_with, driver, run_until_link_up, send_only, send_only_sid};
 use crate::m6_rand::Mix;
 use crate::m6_sched_bal::{NoCells, fresh_recv_cap};
 use crate::seed;
@@ -86,13 +86,16 @@ fn prop_schedule_independent_of_activity() {
     }
 }
 
-/// P-02: whatever the rotations and reconnects, two `SEND`s to a queue are never less than `P_q` apart.
+/// P-02: whatever the rotations and reconnects, two `SEND`s to a queue are never less than *that queue's own* `P_q`
+/// apart (VD-M6-A-19: not the smallest period of the set); the first case has the mixed periods {10 s, 80 s}.
 #[test]
 fn prop_at_most_once_per_period() {
     let master = seed::master_seed(DEFAULT_SEED.wrapping_add(1));
     for case in 0..cases() {
         let mut mix = Mix::new(master ^ case.wrapping_mul(0x9e37_79b9_7f4a_7c13));
-        let mode = mix.pick(&[Mode::Strict, Mode::Balanced]);
+        let picked = mix.pick(&[Mode::Strict, Mode::Balanced]);
+        // the mixed periods {10 s, 80 s} of case 0 share one Balanced link
+        let mode = if case == 0 { Mode::Balanced } else { picked };
         let params = Params {
             lifetime_ms: {
                 let lo = 100_000 + mix.below(50_000);
@@ -104,12 +107,24 @@ fn prop_at_most_once_per_period() {
         let mut sim = driver();
         let alice = client_with(&mut sim, mode, params, mix.next());
         let bob = client_with(&mut sim, Mode::Strict, Params::default(), 1);
-        let queues = usize::try_from(mix.below(3)).unwrap().saturating_add(1);
+        let queues = if case == 0 {
+            2
+        } else {
+            usize::try_from(mix.below(3)).unwrap().saturating_add(1)
+        };
+        // sid -> (period, SEND times)
+        let mut own: std::collections::BTreeMap<[u8; 16], (u64, Vec<u64>)> =
+            std::collections::BTreeMap::new();
         let mut periods = Vec::new();
-        for _ in 0..queues {
-            let p = mix.pick(&PERIODS);
+        for n in 0..queues {
+            let p = if case == 0 {
+                *[10_000, 80_000].get(n).unwrap()
+            } else {
+                mix.pick(&PERIODS)
+            };
             periods.push(p);
-            send_only(&mut sim, alice, bob, p);
+            let (_, sid) = send_only_sid(&mut sim, alice, bob, p);
+            own.insert(sid, (p, Vec::new()));
         }
         sim.client(alice).opts.inspect = Inspect::Requests;
         let mut t = 0;
@@ -120,39 +135,30 @@ fn prop_at_most_once_per_period() {
                 sim.restart_relay();
             }
         }
-        let mut per_queue: std::collections::BTreeMap<[u8; 16], Vec<u64>> =
-            std::collections::BTreeMap::new();
         for (at, _, r) in &sim.client_ref(alice).requests {
             if let RequestCmd::Send { sid, .. } = &r.cmd {
-                per_queue.entry(*sid).or_default().push(*at);
+                own.get_mut(sid)
+                    .expect("a SEND to a queue of the scenario")
+                    .1
+                    .push(*at);
             }
         }
-        assert_eq!(
-            per_queue.len(),
-            queues,
-            "case {case}: every queue was sent to ({mode:?}, {periods:?}, {} requests)",
-            sim.client_ref(alice).requests.len()
-        );
-        let mut spacing: Vec<u64> = periods.clone();
-        spacing.sort_unstable();
-        for times in per_queue.values() {
+        for (sid, (period, times)) in &own {
             let mut times = times.clone();
             times.sort_unstable();
-            assert!(times.len() > 10);
-            let least = times
-                .windows(2)
-                .map(|w| w.get(1).unwrap().saturating_sub(*w.first().unwrap()))
-                .min()
-                .unwrap();
             assert!(
-                spacing.contains(&least) || least >= 10_000,
-                "case {case}: spacing {least}"
+                times.len() > 2,
+                "case {case}: the queue of period {period} was sent to ({mode:?}, {periods:?}, {} requests)",
+                sim.client_ref(alice).requests.len()
             );
-            // against the queue's own period: the smallest period of the set is the lower bound for all
-            assert!(
-                least >= *spacing.first().unwrap(),
-                "case {case} (seed {master}): {least} < {spacing:?}"
-            );
+            // every consecutive gap, across connections, against the queue's own period
+            for w in times.windows(2) {
+                let gap = w.get(1).unwrap().saturating_sub(*w.first().unwrap());
+                assert!(
+                    gap >= *period,
+                    "case {case} (seed {master}): queue {sid:?} of period {period}: two SENDs {gap} ms apart ({mode:?}, {periods:?})"
+                );
+            }
         }
     }
 }

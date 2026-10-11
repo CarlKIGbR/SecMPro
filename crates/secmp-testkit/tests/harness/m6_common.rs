@@ -236,8 +236,19 @@ pub fn inject(sim: &mut VirtualDriver, client: usize, half: &Half, cell: &Cell) 
 /// Client `alice` sends to a queue that `bob` owns (nobody receives): one send link, one conversation. Returns the
 /// conversation's index. `bob` has no scheduler queue, so the only traffic and the only counted work is `alice`'s.
 pub fn send_only(sim: &mut VirtualDriver, alice: usize, bob: usize, period: u64) -> usize {
+    send_only_sid(sim, alice, bob, period).0
+}
+
+/// As [`send_only`], also returning the `sid` the `SEND`s to the queue carry.
+pub fn send_only_sid(
+    sim: &mut VirtualDriver,
+    alice: usize,
+    bob: usize,
+    period: u64,
+) -> (usize, [u8; 16]) {
     let now = sim.now();
     let (_rc, sc, _, _) = sim.new_queue(bob);
+    let sid = *sc.sid();
     let a_send = sim
         .client(alice)
         .sched
@@ -255,7 +266,7 @@ pub fn send_only(sim: &mut VirtualDriver, alice: usize, bob: usize, period: u64)
         START_UNIX,
     );
     conv.bind(a_send, QueueId(u32::MAX));
-    sim.client(alice).convs.add(conv)
+    (sim.client(alice).convs.add(conv), sid)
 }
 
 /// Run until a link of `kind` is up; returns `(its slot, t_up)`. The first tick of the link is a whole period away.

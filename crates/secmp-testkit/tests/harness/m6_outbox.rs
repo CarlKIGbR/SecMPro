@@ -443,3 +443,51 @@ fn receive_commit_failure_keeps_partial_and_trust() {
     );
     assert_eq!(convs.get(b).unwrap().received().len(), 1);
 }
+
+/// VD-M6-A-18 `requeued_relayed_message_is_not_failed_after_30d`: spec §10.4 "Messages never relayed within 30 days are
+/// surfaced as failed". A message relayed (`OK_SEND`) on day 20 and put back to queued by a lost queue on day 31 was
+/// relayed once: it stays queued and is sent again, it is not failed because 30 days have passed since it was queued.
+#[test]
+fn requeued_relayed_message_is_not_failed_after_30d() {
+    const DAY: u64 = 86_400_000;
+    let (mut convs, a, b) = pair(18);
+    let id = [18_u8; 16];
+    convs
+        .get_mut(a)
+        .unwrap()
+        .outbox_mut()
+        .enqueue(text(18, 60), 0);
+    // OK_SEND before day 30
+    let first = convs.prepare_cell(A_SEND, 20 * DAY).unwrap().unwrap();
+    convs.relayed(A_SEND, first.token, 7);
+    assert_eq!(
+        convs.get(a).unwrap().outbox().state(&id),
+        Some(MsgState::Relayed(7))
+    );
+    // day 31: the queue is lost (ERR_NOQUEUE) — back to queued, and the next slot resends it
+    convs.queue_lost(A_SEND);
+    assert_eq!(
+        convs.get(a).unwrap().outbox().state(&id),
+        Some(MsgState::Queued)
+    );
+    let again = convs.prepare_cell(A_SEND, 31 * DAY).unwrap().unwrap();
+    assert_eq!(
+        convs.get(a).unwrap().outbox().state(&id),
+        Some(MsgState::Queued),
+        "not failed"
+    );
+    convs.relayed(A_SEND, again.token, 8);
+    convs.deliver(B_RECV, 8, &again.cell).unwrap();
+    assert_eq!(convs.get(b).unwrap().received().len(), 1, "sent again");
+    // a message never relayed is failed at day 30 (OB-03)
+    convs
+        .get_mut(a)
+        .unwrap()
+        .outbox_mut()
+        .enqueue(text(19, 60), 31 * DAY);
+    let _ = convs.prepare_cell(A_SEND, 62 * DAY).unwrap().unwrap();
+    assert_eq!(
+        convs.get(a).unwrap().outbox().state(&[19; 16]),
+        Some(MsgState::Failed)
+    );
+}

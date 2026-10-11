@@ -162,6 +162,7 @@ fn prop_at_most_once_per_period() {
 struct ModelEntry {
     id: MsgId,
     queued_at: u64,
+    ever_relayed: bool,
     state: MsgState,
     taken: bool,
 }
@@ -171,6 +172,7 @@ fn model_apply(model: &mut Vec<ModelEntry>, op: &Op) {
         Op::Enqueue(id, at) => model.push(ModelEntry {
             id: *id,
             queued_at: *at,
+            ever_relayed: false,
             state: MsgState::Queued,
             taken: false,
         }),
@@ -187,6 +189,7 @@ fn model_apply(model: &mut Vec<ModelEntry>, op: &Op) {
                 && e.state == MsgState::Queued
             {
                 e.state = MsgState::Relayed(*cell);
+                e.ever_relayed = true;
                 e.taken = false;
             }
         }
@@ -216,7 +219,11 @@ fn model_apply(model: &mut Vec<ModelEntry>, op: &Op) {
         }
         Op::Expire(now) => {
             for e in model.iter_mut() {
-                if e.state == MsgState::Queued && now.saturating_sub(e.queued_at) >= 2_592_000_000 {
+                // spec §10.4: only a message never relayed fails
+                if e.state == MsgState::Queued
+                    && !e.ever_relayed
+                    && now.saturating_sub(e.queued_at) >= 2_592_000_000
+                {
                     e.state = MsgState::Failed;
                     e.taken = false;
                 }

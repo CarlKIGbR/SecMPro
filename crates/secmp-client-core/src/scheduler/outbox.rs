@@ -4,8 +4,9 @@
 //! (OB-07: the scheduler sees nothing else).
 //!
 //! **States (§10.4).** A message is *queued* locally, *relayed* when `OK_SEND` arrived and the cell was not later
-//! reported evicted, and *delivered* when an E2E `Receipt{delivered}` arrives. A message never relayed within 30 days
-//! is *failed*. An evicted real cell, a lost queue (`ERR_NOQUEUE`) or a link that died before the answer put the message
+//! reported evicted, and *delivered* when an E2E `Receipt{delivered}` arrives. A message **never relayed** within 30
+//! days is *failed* (spec §10.4: "Messages never relayed within 30 days are surfaced as failed"); one that was relayed
+//! once and went back to queued (eviction, lost queue) is not, however long it waits to be sent again. An evicted real cell, a lost queue (`ERR_NOQUEUE`) or a link that died before the answer put the message
 //! back to *queued*: it is re-encrypted under a new key and sent again, the receiver deduplicates by `msg_id`.
 
 use secmp_crypto::Zeroizing;
@@ -66,7 +67,8 @@ pub trait Outbox {
     /// A `Receipt{delivered}` for the message.
     fn delivered(&mut self, id: &MsgId);
 
-    /// Fail the messages never relayed within 30 days of being queued.
+    /// Fail the messages never relayed within 30 days of being queued (a message that was relayed once and requeued
+    /// is not failed).
     fn expire(&mut self, now_ms: u64);
 
     /// How many messages wait to be sent (queued and not being sent).
@@ -76,6 +78,9 @@ pub trait Outbox {
 struct Entry {
     message: OutMessage,
     queued_at: u64,
+    /// When `OK_SEND` first reported the message relayed (the outbox's last known time then); `requeue` and
+    /// `requeue_unreceipted` keep it. A message with `None` has never been relayed.
+    first_relayed_at: Option<u64>,
     state: MsgState,
     taken: bool,
 }
@@ -84,6 +89,8 @@ struct Entry {
 #[derive(Default)]
 pub struct MemOutbox {
     entries: Vec<Entry>,
+    /// The latest time the outbox was told (`enqueue`, `expire`): `relayed` carries no clock of its own.
+    clock: u64,
 }
 
 impl MemOutbox {
@@ -92,6 +99,7 @@ impl MemOutbox {
     pub const fn new() -> Self {
         Self {
             entries: Vec::new(),
+            clock: 0,
         }
     }
 
@@ -111,9 +119,11 @@ impl MemOutbox {
 
 impl Outbox for MemOutbox {
     fn enqueue(&mut self, message: OutMessage, now_ms: u64) {
+        self.clock = self.clock.max(now_ms);
         self.entries.push(Entry {
             message,
             queued_at: now_ms,
+            first_relayed_at: None,
             state: MsgState::Queued,
             taken: false,
         });
@@ -141,10 +151,12 @@ impl Outbox for MemOutbox {
     }
 
     fn relayed(&mut self, id: &MsgId, cell_id: u64) {
+        let now = self.clock;
         if let Some(e) = self.entry(id)
             && e.state == MsgState::Queued
         {
             e.state = MsgState::Relayed(cell_id);
+            e.first_relayed_at.get_or_insert(now);
             e.taken = false;
         }
     }
@@ -184,8 +196,12 @@ impl Outbox for MemOutbox {
     }
 
     fn expire(&mut self, now_ms: u64) {
+        self.clock = self.clock.max(now_ms);
         for e in &mut self.entries {
-            if e.state == MsgState::Queued && now_ms.saturating_sub(e.queued_at) >= FAIL_AFTER_MS {
+            if e.state == MsgState::Queued
+                && e.first_relayed_at.is_none()
+                && now_ms.saturating_sub(e.queued_at) >= FAIL_AFTER_MS
+            {
                 e.state = MsgState::Failed;
                 e.taken = false;
             }

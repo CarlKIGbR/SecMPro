@@ -83,6 +83,13 @@ impl QueuePool {
         }
     }
 
+    /// Put `queue` back as the oldest spare of `relay` (a hand-out that was refused).
+    pub fn untake(&mut self, relay: RelayId, queue: QueueId) {
+        if let Some(r) = self.relays.iter_mut().find(|r| r.relay == relay) {
+            r.spares.insert(0, queue);
+        }
+    }
+
     /// Spares on `relay`.
     #[must_use]
     pub fn spares(&self, relay: RelayId) -> usize {

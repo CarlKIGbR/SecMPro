@@ -1419,6 +1419,7 @@ impl Scheduler {
                 if let Some(rq) = self.world.recv_mut(queue) {
                     rq.pool = true;
                 }
+                self.world.pool.untake(relay, queue);
                 return Err(e);
             }
         };

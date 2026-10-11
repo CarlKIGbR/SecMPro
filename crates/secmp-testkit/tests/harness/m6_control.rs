@@ -727,3 +727,56 @@ fn pool_admission_respects_fetch_multi_limit() {
         "the 33rd ordinary queue is refused too"
     );
 }
+
+/// VD-M6-A-17 `rejected_pool_handout_keeps_spare`: a hand-out whose announced period breaks the rate bound is refused
+/// and the spare stays — the oldest one, still outside the rate sum, nothing queued to replace it.
+#[test]
+fn rejected_pool_handout_keeps_spare() {
+    let mut sched = Scheduler::new(Params::default(), Mode::Balanced, TimingRng::seeded(0x517));
+    let mut ordinary = Vec::new();
+    for n in 0..4 {
+        ordinary.push(
+            sched
+                .add_recv_queue(0, RelayId(0), fresh_recv_cap(n), 10_000)
+                .unwrap(),
+        );
+    }
+    sched.manage_pool(0, RelayId(0)).unwrap();
+    let late = 10_000_000;
+    let made = creations(&mut sched, late);
+    let mut spares = Vec::new();
+    for (op, queue) in made {
+        sched
+            .pool_queue_ready(late, queue, fresh_recv_cap(100 + queue.0))
+            .unwrap();
+        sched.control_done(op);
+        spares.push(queue);
+    }
+    assert_eq!(sched.pool_spares(RelayId(0)), 2);
+    // Σ 80 000/P = 32: any hand-out is over the bound
+    for _ in 0..2 {
+        let refused = sched.take_pool_queue(late, RelayId(0), 10_000, &mut NoCells);
+        assert!(matches!(refused, Err(SchedError::RateBound)));
+        assert_eq!(sched.pool_spares(RelayId(0)), 2, "both spares are kept");
+    }
+    assert!(
+        creations(&mut sched, late * 2).is_empty(),
+        "no replacement was queued"
+    );
+    // the spare is still outside the rate sum: one ordinary queue out, one in, is exactly the bound again
+    sched
+        .remove_queue(late, ordinary.first().copied().unwrap(), &mut NoCells)
+        .unwrap();
+    sched
+        .add_recv_queue(late, RelayId(0), fresh_recv_cap(300), 10_000)
+        .unwrap();
+    // and the oldest spare is the one handed out once there is room
+    sched
+        .remove_queue(late, ordinary.get(1).copied().unwrap(), &mut NoCells)
+        .unwrap();
+    let (taken, _) = sched
+        .take_pool_queue(late, RelayId(0), 10_000, &mut NoCells)
+        .unwrap();
+    assert_eq!(taken, spares.first().copied());
+    assert_eq!(sched.pool_spares(RelayId(0)), 1);
+}

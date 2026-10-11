@@ -246,6 +246,17 @@ pub fn send_only_sid(
     bob: usize,
     period: u64,
 ) -> (usize, [u8; 16]) {
+    let (conv, sid, _peer) = send_only_full(sim, alice, bob, period);
+    (conv, sid)
+}
+
+/// As [`send_only_sid`], also returning the ratchet state of the queue's owner, to open the cells that arrive.
+pub fn send_only_full(
+    sim: &mut VirtualDriver,
+    alice: usize,
+    bob: usize,
+    period: u64,
+) -> (usize, [u8; 16], secmp_proto::tr::RatchetState) {
     let now = sim.now();
     let (_rc, sc, _, _) = sim.new_queue(bob);
     let sid = *sc.sid();
@@ -254,7 +265,7 @@ pub fn send_only_sid(
         .sched
         .add_send_queue(now, RelayId(0), sc, period)
         .unwrap();
-    let (state_alice, _state_bob) = sim.ratchet_states(alice, bob);
+    let (state_alice, state_bob) = sim.ratchet_states(alice, bob);
     let peer = sim.peer_key(bob);
     let tag = u32::try_from(alice).unwrap();
     let mut conv: TestConv = Conversation::new(
@@ -266,7 +277,7 @@ pub fn send_only_sid(
         START_UNIX,
     );
     conv.bind(a_send, QueueId(u32::MAX));
-    (sim.client(alice).convs.add(conv), sid)
+    (sim.client(alice).convs.add(conv), sid, state_bob)
 }
 
 /// Run until a link of `kind` is up; returns `(its slot, t_up)`. The first tick of the link is a whole period away.

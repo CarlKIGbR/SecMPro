@@ -281,6 +281,10 @@ impl CellSource for Gate<'_> {
     }
 }
 
+/// Called right after the driver wrote `bytes` to the stream of a client, with the client's conversations: the place
+/// to kill and restart the process at the boundary "after the write" (VD-M6-A-21).
+pub type AfterWrite = Box<dyn FnMut(&mut Convs, &[u8])>;
+
 /// One simulated client.
 pub struct SimClient {
     /// The scheduler core.
@@ -303,6 +307,8 @@ pub struct SimClient {
     pub opts: Options,
     /// The gate in front of the conversations.
     pub gate: GateState,
+    /// The hook called after each write to the stream (none by default).
+    pub after_write: Option<AfterWrite>,
     /// The modelled work done in all (virtual milliseconds).
     pub work_total_ms: u64,
     /// When the serial worker is free again.
@@ -428,6 +434,7 @@ impl VirtualDriver {
                 costs: self.costs,
                 ..GateState::default()
             },
+            after_write: None,
             work_total_ms: 0,
             worker_free: 0,
             conns: BTreeMap::new(),
@@ -813,6 +820,12 @@ impl VirtualDriver {
             })
         };
         if ok {
+            // the write is on the wire: the hook may kill the process here
+            let c = self.clients.get_mut(i).unwrap();
+            if let Some(mut hook) = c.after_write.take() {
+                hook(&mut c.convs, bytes);
+                c.after_write = Some(hook);
+            }
             self.collect(i, link, t);
         }
         let ended = self

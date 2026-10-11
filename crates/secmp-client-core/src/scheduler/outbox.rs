@@ -67,6 +67,10 @@ pub trait Outbox {
     /// A `Receipt{delivered}` for the message.
     fn delivered(&mut self, id: &MsgId);
 
+    /// The process restarted: a message that was being sent (taken, no `OK_SEND` yet) is waiting again — the outbox
+    /// survives restarts, what was in flight does not (spec §10.4).
+    fn restart(&mut self);
+
     /// Fail the messages never relayed within 30 days of being queued (a message that was relayed once and requeued
     /// is not failed).
     fn expire(&mut self, now_ms: u64);
@@ -188,6 +192,12 @@ impl Outbox for MemOutbox {
         }
     }
 
+    fn restart(&mut self) {
+        for e in &mut self.entries {
+            e.taken = false;
+        }
+    }
+
     fn waiting(&self) -> usize {
         self.entries
             .iter()
@@ -239,6 +249,8 @@ pub struct MemPersist {
     fail: bool,
     /// Fail every commit once this many have succeeded (failure injection at the n-th commit).
     fail_from: Option<u64>,
+    /// The next commit is made durable and then the "process dies": it reports an error to the caller.
+    crash_after: bool,
 }
 
 impl MemPersist {
@@ -250,6 +262,7 @@ impl MemPersist {
             commits: 0,
             fail: false,
             fail_from: None,
+            crash_after: false,
         }
     }
 
@@ -268,6 +281,12 @@ impl MemPersist {
     /// Make every later commit fail (or succeed again).
     pub const fn set_failing(&mut self, failing: bool) {
         self.fail = failing;
+    }
+
+    /// The next commit is made durable and then fails towards its caller, as if the process died right after the write
+    /// (crash injection after `Persist::commit(Send)` returned from the store, before the cell is released).
+    pub const fn crash_after_next_commit(&mut self) {
+        self.crash_after = true;
     }
 
     /// Let `n` more commits succeed, then fail every later one (`None`: no such rule).
@@ -291,6 +310,10 @@ impl Persist for MemPersist {
         }
         self.durable = Some(Zeroizing::new(state.to_vec()));
         self.commits = self.commits.saturating_add(1);
+        if self.crash_after {
+            self.crash_after = false;
+            return Err(PersistError);
+        }
         Ok(())
     }
 }

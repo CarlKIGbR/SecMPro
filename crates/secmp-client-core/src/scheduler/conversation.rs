@@ -220,6 +220,24 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
         }
     }
 
+    /// The process died and restarted from `durable` (a serialised ratchet state, e.g. `MemPersist::durable`): what was in
+    /// flight — planned cells, tokens, the cell-id map — is gone, a message that was being sent is waiting again
+    /// ([`Outbox::restart`]); the outbox, the delivered messages, the queues and the trust survive.
+    ///
+    /// # Errors
+    /// [`SourceError`] if `durable` is not a ratchet state.
+    pub fn restart_from(mut self, durable: &[u8]) -> Result<Self, SourceError> {
+        let state = RatchetState::from_bytes(durable).map_err(|_| SourceError)?;
+        self.outbox.restart();
+        self.state = Some(state);
+        self.durable = Zeroizing::new(durable.to_vec());
+        self.plan.clear();
+        self.inflight.clear();
+        self.by_cell.clear();
+        self.relayed_cells.clear();
+        Ok(self)
+    }
+
     /// The scheduler queues of this conversation.
     pub const fn bind(&mut self, send: QueueId, recv: QueueId) {
         self.send_queue = Some(send);
@@ -623,6 +641,21 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversations<O, P, S> {
     #[must_use]
     pub const fn new() -> Self {
         Self { items: Vec::new() }
+    }
+
+    /// The process holding conversation `index` died and restarted from `durable`
+    /// ([`Conversation::restart_from`]).
+    ///
+    /// # Errors
+    /// [`SourceError`] if `durable` is not a ratchet state or there is no such conversation.
+    pub fn restart(&mut self, index: usize, durable: &[u8]) -> Result<(), SourceError> {
+        if index >= self.items.len() {
+            return Err(SourceError);
+        }
+        let old = self.items.remove(index);
+        let restarted = old.restart_from(durable)?;
+        self.items.insert(index, restarted);
+        Ok(())
     }
 
     /// Add a conversation (bound to its queues); returns its index.

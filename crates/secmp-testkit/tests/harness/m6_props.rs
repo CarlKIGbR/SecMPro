@@ -20,7 +20,9 @@ use secmp_proto::wire::frame::RequestCmd;
 use secmp_testkit::harness::{EntropyPool, Inspect, START_UNIX, ratchet_pair};
 
 use crate::m6_activity::{Rig, Scenario, activity, compare, control_equal};
-use crate::m6_common::{client_with, driver, run_until_link_up, send_only, send_only_sid};
+use crate::m6_common::{
+    client_with, driver, run_until_link_up, send_only, send_only_full, send_only_sid,
+};
 use crate::m6_rand::Mix;
 use crate::m6_sched_bal::{NoCells, fresh_recv_cap};
 use crate::seed;
@@ -480,48 +482,96 @@ fn prop_control_ops_isolated_and_delayed() {
     }
 }
 
-/// P-07: a crash anywhere around persist, seal and write never makes a message key reappear.
+/// Where the process dies in one preparation (VD-M6-A-21).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Crash {
+    /// After `Persist::commit(Send)` made the new state durable, before the cell is released to the scheduler.
+    CommittedNotReleased,
+    /// After the cell was released to the scheduler, before the driver wrote it.
+    ReleasedNotWritten,
+    /// After the cell was written (the peer has it).
+    Written,
+}
+
+/// The peer opens one written cell: its message-key digest and the messages it carries.
+fn peer_opens(
+    peer: RatchetState,
+    cell: &secmp_proto::wire::cell::Cell,
+    pool: &mut EntropyPool,
+    digests: &mut Vec<[u8; 32]>,
+    delivered: &mut BTreeSet<MsgId>,
+) -> RatchetState {
+    let opened = peer
+        .decrypt_with(cell.as_bytes(), pool.get())
+        .ok()
+        .expect("the peer opens every written cell");
+    digests.push(opened.plaintext().message_key_digest_kat());
+    if let Ok(content) = opened.plaintext().content()
+        && let secmp_proto::wire::cell::ContentBody::Batch(b) = content.body
+    {
+        delivered.extend(b.messages.iter().map(|m| m.msg_id));
+    }
+    let (state, _) = opened.commit(|_| Ok::<(), ()>(())).unwrap();
+    state
+}
+
+/// A sender conversation (queue 0) in a one-conversation cell source, and the peer's ratchet state.
+fn p7_sender(
+    pool: &mut EntropyPool,
+) -> (
+    Conversations<MemOutbox, MemPersist, EntropyPool>,
+    usize,
+    RatchetState,
+) {
+    let sk = SecretBytes::from_slice(&[9_u8; 32]).unwrap();
+    let transcript: [u8; 32] = pool.bytes(32).try_into().unwrap();
+    let mut ea = FixedEntropy::new(&pool.bytes(1 << 16));
+    let mut eb = FixedEntropy::new(&pool.bytes(1 << 16));
+    let (sender, peer) = ratchet_pair(&sk, &transcript, &mut ea, &mut eb);
+    let mut conv: Conversation<MemOutbox, MemPersist, EntropyPool> = Conversation::new(
+        sender,
+        MemOutbox::new(),
+        MemPersist::new(),
+        EntropyPool::new("m6-p7-conv", 0),
+        secmp_crypto::HybridSigningKey::from_seeds(&[1; 32], &[2; 32])
+            .unwrap()
+            .verifying_key(),
+        START_UNIX,
+    );
+    conv.bind(QueueId(0), QueueId(1));
+    let mut convs = Conversations::new();
+    let idx = convs.add(conv);
+    (convs, idx, peer)
+}
+
+/// P-07 (VD-M6-A-21): a crash at each of the boundaries around persist, release and write — (i) the new state durable
+/// but the cell not released, (ii) the cell released but not written, (iii) the cell written — never makes a message key
+/// reappear, and after the restart from the durable state of the store every message is delivered, none lost. The
+/// process restarts with the outbox and the queues (`Conversation::restart_from`); what was in flight is gone and the
+/// message that was being sent is sent again under a new key. (iii) at the driver's write hook is
+/// `prop_no_message_key_reuse_across_crashes_at_the_write`.
 #[test]
 fn prop_no_message_key_reuse_across_crashes() {
     let master = seed::master_seed(DEFAULT_SEED.wrapping_add(5));
+    let mut seen = (false, false, false);
     for case in 0..cases() * 3 {
         let mut mix = Mix::new(master ^ case.wrapping_mul(0xd6e8_feb8_6659_fd93));
-        let sk = SecretBytes::from_slice(&[9_u8; 32]).unwrap();
         let mut pool = EntropyPool::new("m6-p7", u32::try_from(case).unwrap());
-        let transcript: [u8; 32] = pool.bytes(32).try_into().unwrap();
-        let mut ea = FixedEntropy::new(&pool.bytes(1 << 16));
-        let mut eb = FixedEntropy::new(&pool.bytes(1 << 16));
-        let (sender, mut peer) = ratchet_pair(&sk, &transcript, &mut ea, &mut eb);
-        let key = secmp_proto::tr::Entropy::hybrid_signing_key(pool.get())
-            .unwrap()
-            .verifying_key();
-        let build = |state: RatchetState, tag: u32| {
-            let mut c: Conversation<MemOutbox, MemPersist, EntropyPool> = Conversation::new(
-                state,
-                MemOutbox::new(),
-                MemPersist::new(),
-                EntropyPool::new("m6-p7-conv", tag),
-                secmp_crypto::HybridSigningKey::from_seeds(&[1; 32], &[2; 32])
-                    .unwrap()
-                    .verifying_key(),
-                START_UNIX,
-            );
-            c.bind(QueueId(0), QueueId(1));
-            c
-        };
-        let _ = key;
-        let mut convs = Conversations::new();
-        let mut idx = convs.add(build(sender, 0));
-        let mut incarnation = 1;
+        let (mut convs, idx, mut peer) = p7_sender(&mut pool);
         let mut digests: Vec<[u8; 32]> = Vec::new();
-        for step in 0..60_u64 {
+        let mut enqueued: BTreeSet<MsgId> = BTreeSet::new();
+        let mut delivered: BTreeSet<MsgId> = BTreeSet::new();
+        let (mut after_commit, mut after_release, mut after_write) = (0_u32, 0_u32, 0_u32);
+        for step in 0..90_u64 {
             let conv = convs.get_mut(idx).unwrap();
             let fail = mix.below(5) == 0;
             conv.persist_mut().set_failing(fail);
             if mix.below(3) == 0 {
+                let id = [u8::try_from(step).unwrap(); 16];
+                enqueued.insert(id);
                 conv.outbox_mut().enqueue(
                     OutMessage {
-                        msg_id: [u8::try_from(step).unwrap(); 16],
+                        msg_id: id,
                         kind: AppKind::Text,
                         expire_after: 0,
                         payload: Zeroizing::new(vec![3; 30]),
@@ -529,37 +579,186 @@ fn prop_no_message_key_reuse_across_crashes() {
                     step,
                 );
             }
+            // the crash point of this preparation, if any
+            let crash = (mix.below(4) == 0).then(|| {
+                mix.pick(&[
+                    Crash::CommittedNotReleased,
+                    Crash::ReleasedNotWritten,
+                    Crash::Written,
+                ])
+            });
+            if crash == Some(Crash::CommittedNotReleased) && !fail {
+                conv.persist_mut().crash_after_next_commit();
+            }
             let made = convs.prepare_cell(QueueId(0), step * 10_000);
-            match made {
-                Ok(Some(cell)) => {
+            let mut restart = false;
+            match (made, crash) {
+                (Err(_), Some(Crash::CommittedNotReleased)) if !fail => {
+                    // (i) durable, never released: the peer never sees the cell
+                    after_commit = after_commit.saturating_add(1);
+                    restart = true;
+                }
+                (Ok(Some(_released)), Some(Crash::ReleasedNotWritten)) => {
+                    // (ii) released to the scheduler, never written
+                    after_release = after_release.saturating_add(1);
+                    restart = true;
+                }
+                (Ok(Some(cell)), crash) => {
                     assert!(!fail, "a failing persist released a cell");
-                    // the peer opens every released cell: its message key digest
-                    let opened = peer
-                        .decrypt_with(cell.cell.as_bytes(), pool.get())
-                        .ok()
-                        .unwrap();
-                    digests.push(opened.plaintext().message_key_digest_kat());
-                    let (state, _) = opened.commit(|_| Ok::<(), ()>(())).unwrap();
-                    peer = state;
-                    // a crash after persist: the process restarts from the durable state (the cell may never be written)
-                    if mix.below(4) == 0 {
-                        let durable = convs.get(idx).unwrap().durable().to_vec();
-                        let state = RatchetState::from_bytes(&durable).unwrap();
-                        convs = Conversations::new();
-                        idx = convs.add(build(state, incarnation));
-                        incarnation += 1;
+                    peer = peer_opens(peer, &cell.cell, &mut pool, &mut digests, &mut delivered);
+                    // the relay answered: the conversation learns it, so that a restart finds the message relayed
+                    convs.relayed(QueueId(0), cell.token, step + 1);
+                    if crash == Some(Crash::Written) {
+                        // (iii) written
+                        after_write = after_write.saturating_add(1);
+                        restart = true;
                     }
                 }
-                Ok(None) => unreachable!(),
-                Err(_) => assert!(fail, "an unexpected preparation failure"),
+                (Ok(None), _) => unreachable!(),
+                (Err(_), _) => assert!(fail, "an unexpected preparation failure"),
+            }
+            if restart {
+                // the durable state of the store, not the process's memory
+                let durable = convs
+                    .get(idx)
+                    .unwrap()
+                    .persist()
+                    .durable()
+                    .unwrap()
+                    .to_vec();
+                convs.restart(idx, &durable).unwrap();
+                convs.get_mut(idx).unwrap().persist_mut().set_failing(false);
             }
         }
-        let distinct: BTreeSet<[u8; 32]> = digests.iter().copied().collect();
-        assert_eq!(
-            distinct.len(),
-            digests.len(),
-            "case {case} (seed {master}): a message key was used twice"
-        );
         assert!(digests.len() > 20);
+        // quiet drain: whatever was in flight is sent again, nothing is lost
+        convs.get_mut(idx).unwrap().persist_mut().set_failing(false);
+        for extra in 0..(u64::try_from(enqueued.len()).unwrap() * 2 + 4) {
+            let cell = convs
+                .prepare_cell(QueueId(0), (100 + extra) * 10_000)
+                .unwrap()
+                .unwrap();
+            peer = peer_opens(peer, &cell.cell, &mut pool, &mut digests, &mut delivered);
+            convs.relayed(QueueId(0), cell.token, 1_000 + extra);
+        }
+        let label = format!(
+            "case {case} (seed {master}), crashes {after_commit}/{after_release}/{after_write}"
+        );
+        assert_all_keys_distinct(&digests, &label);
+        assert_eq!(
+            delivered, enqueued,
+            "{label}: a message was lost or invented"
+        );
+        seen.0 |= after_commit > 0;
+        seen.1 |= after_release > 0;
+        seen.2 |= after_write > 0;
+    }
+    assert!(
+        seen.0 && seen.1 && seen.2,
+        "every boundary was crashed at: {seen:?}"
+    );
+}
+
+/// No message key was used twice.
+fn assert_all_keys_distinct(digests: &[[u8; 32]], label: &str) {
+    let distinct: BTreeSet<[u8; 32]> = digests.iter().copied().collect();
+    assert_eq!(
+        distinct.len(),
+        digests.len(),
+        "{label}: a message key was used twice"
+    );
+}
+
+/// P-07 (iii) (VD-M6-A-21): the crash at the driver's write hook, after a frame is on the wire. A sender client runs on
+/// the virtual driver; after a write the hook kills and restarts its process (the conversation from the durable state of
+/// the store, the outbox surviving). The peer opens every cell that was written, in order: no message key appears
+/// twice, and once the sender has run on undisturbed every message arrived.
+#[test]
+fn prop_no_message_key_reuse_across_crashes_at_the_write() {
+    let master = seed::master_seed(DEFAULT_SEED.wrapping_add(6));
+    for case in 0..cases() {
+        let mut mix = Mix::new(master ^ case.wrapping_mul(0x2545_f491_4f6c_dd1d));
+        let mut sim = driver();
+        let alice = client_with(
+            &mut sim,
+            Mode::Strict,
+            Params {
+                phase_max_ms: 1_000,
+                ..Params::default()
+            },
+            mix.next(),
+        );
+        let bob = client_with(&mut sim, Mode::Strict, Params::default(), 1);
+        let (conv, _sid, mut peer) = send_only_full(&mut sim, alice, bob, 10_000);
+        sim.client(alice).opts.inspect = Inspect::Requests;
+        // the hook: after a write the process dies with probability 1/3 and restarts from the durable state
+        let crashes = std::rc::Rc::new(std::cell::Cell::new(0_u32));
+        let mut hook_mix = Mix::new(mix.next());
+        let counter = std::rc::Rc::clone(&crashes);
+        sim.client(alice).after_write = Some(Box::new(move |convs, _bytes| {
+            if hook_mix.below(3) == 0 {
+                let durable = convs
+                    .get(conv)
+                    .unwrap()
+                    .persist()
+                    .durable()
+                    .unwrap()
+                    .to_vec();
+                convs.restart(conv, &durable).unwrap();
+                counter.set(counter.get().saturating_add(1));
+            }
+        }));
+        let mut enqueued: BTreeSet<MsgId> = BTreeSet::new();
+        let mut t = 0_u64;
+        for round in 0..24_u64 {
+            if mix.below(2) == 0 {
+                let id = [u8::try_from(round).unwrap().saturating_add(1); 16];
+                enqueued.insert(id);
+                sim.client(alice)
+                    .convs
+                    .get_mut(conv)
+                    .unwrap()
+                    .outbox_mut()
+                    .enqueue(
+                        OutMessage {
+                            msg_id: id,
+                            kind: AppKind::Text,
+                            expire_after: 0,
+                            payload: Zeroizing::new(vec![5; 40]),
+                        },
+                        t,
+                    );
+            }
+            t += 25_000;
+            sim.run_until(t);
+        }
+        // undisturbed: no more crashes, the rest of the outbox is sent
+        sim.client(alice).after_write = None;
+        for _ in 0..(enqueued.len() + 4) {
+            t += 25_000;
+            sim.run_until(t);
+        }
+        let mut pool = EntropyPool::new("m6-p7-driver", u32::try_from(case).unwrap());
+        let mut digests: Vec<[u8; 32]> = Vec::new();
+        let mut delivered: BTreeSet<MsgId> = BTreeSet::new();
+        for (_, _, r) in &sim.client_ref(alice).requests {
+            if let RequestCmd::Send { cell, .. } = &r.cmd {
+                peer = peer_opens(peer, cell, &mut pool, &mut digests, &mut delivered);
+            }
+        }
+        assert_all_keys_distinct(
+            &digests,
+            &format!("case {case} (seed {master}), {} crashes", crashes.get()),
+        );
+        assert_eq!(
+            delivered,
+            enqueued,
+            "case {case} (seed {master}): a message was lost ({} crashes)",
+            crashes.get()
+        );
+        assert!(
+            crashes.get() > 0,
+            "case {case}: the hook crashed the process"
+        );
     }
 }

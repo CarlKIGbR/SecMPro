@@ -516,10 +516,9 @@ impl Rig {
                     .unwrap();
                     let (_s, chan) = session.into_parts();
                     self.link = Some(link);
-                    let more = self
-                        .sched
-                        .link_up(link, self.now, chan, &mut self.src)
-                        .unwrap();
+                    let more = self.sched.link_up(link, self.now, chan).unwrap();
+                    queue.extend(more);
+                    let more = self.sched.work(self.now, &mut self.src).unwrap();
                     queue.extend(more);
                 }
                 Output::Write { link, bytes, at } => {
@@ -542,12 +541,11 @@ impl Rig {
                         if got < FRAME {
                             break;
                         }
-                        let more = self
-                            .sched
-                            .on_frame(link, self.now, &frame, &mut self.src)
-                            .unwrap();
+                        let more = self.sched.on_frame(link, self.now, &frame).unwrap();
                         queue.extend(more);
                     }
+                    let more = self.sched.work(self.now, &mut self.src).unwrap();
+                    queue.extend(more);
                 }
                 Output::Event(e) => self.events.push(e),
                 Output::Close { .. } | Output::Control { .. } => {}
@@ -555,21 +553,21 @@ impl Rig {
         }
     }
 
-    /// The driver wakes at `t` (not at a deadline) and polls.
+    /// The driver wakes at `t` (not at a deadline): what is due is flushed first, then the work runs (the split API of
+    /// reviewer VD-M6-A-12; the work is modelled as instantaneous).
     fn poll_at(&mut self, t: u64) {
         self.now = t;
-        let outs = self.sched.poll(t, &mut self.src).unwrap();
+        let outs = self.sched.poll_due(t).unwrap();
         self.apply(outs);
+        let outs = self.sched.work(t, &mut self.src).unwrap();
+        self.apply(outs);
+        self.sched.prepared_until(t);
     }
 
     fn run_to(&mut self, t_end: u64) {
         loop {
             match self.sched.next_deadline() {
-                Some(t) if t <= t_end => {
-                    self.now = t.max(self.now);
-                    let outs = self.sched.poll(self.now, &mut self.src).unwrap();
-                    self.apply(outs);
-                }
+                Some(t) if t <= t_end => self.poll_at(t.max(self.now)),
                 _ => break,
             }
         }
@@ -842,4 +840,96 @@ fn s_late_driver_wake_beyond_jitter_is_overrun() {
             .any(|e| matches!(e, LinkEvent::TornDown(_, Reason::Overrun)))
     );
     assert_eq!(rig.sched.overruns(), 1);
+}
+
+/// VD-M6-A-12 `s_prepare_completing_after_tick_is_overrun_even_within_jitter`: a frame whose preparation starts at
+/// 19 999 and, as the driver reports with `prepared_until`, ends at 20 001 is not ready at its tick 20 000. The driver
+/// polls at 20 030 — inside the 50 ms jitter — and finds an overrun: nothing is written.
+#[test]
+fn s_prepare_completing_after_tick_is_overrun_even_within_jitter() {
+    let mut rig = Rig::new(ok_script(), Mode::Strict);
+    rig.run_to(9_999);
+    // the cell source is not ready before 19 999: the frame of tick 2 is not built right after tick 1
+    rig.src.ready_at = 19_999;
+    rig.run_to(10_000);
+    assert_eq!(rig.writes, vec![10_000]);
+    rig.now = 19_999;
+    let outs = rig.sched.work(19_999, &mut rig.src).unwrap();
+    rig.apply(outs);
+    // the preparation took until 20 001
+    rig.sched.prepared_until(20_001);
+    rig.now = 20_030;
+    let outs = rig.sched.poll_due(20_030).unwrap();
+    assert!(
+        !outs.iter().any(|o| matches!(o, Output::Write { .. })),
+        "no write for tick 2"
+    );
+    rig.apply(outs);
+    assert_eq!(rig.writes, vec![10_000], "nothing is written for tick 2");
+    assert!(
+        rig.events
+            .iter()
+            .any(|e| matches!(e, LinkEvent::TornDown(_, Reason::Overrun)))
+    );
+    assert_eq!(rig.sched.overruns(), 1);
+
+    // the same preparation, reported finished at 20 000 (not after the tick): the tick is kept
+    let mut rig = Rig::new(ok_script(), Mode::Strict);
+    rig.run_to(9_999);
+    rig.src.ready_at = 19_999;
+    rig.run_to(10_000);
+    rig.now = 19_999;
+    let outs = rig.sched.work(19_999, &mut rig.src).unwrap();
+    rig.apply(outs);
+    rig.sched.prepared_until(20_000);
+    rig.now = 20_030;
+    let outs = rig.sched.poll_due(20_030).unwrap();
+    rig.apply(outs);
+    assert_eq!(rig.writes, vec![10_000, 20_000]);
+    assert_eq!(rig.sched.overruns(), 0);
+}
+
+/// VD-M6-A-12 `s_poll_due_performs_no_crypto_and_no_persist`: what is due is decided and its frame handed out without a
+/// seal, a signature, a ratchet encryption or a persist, and without a call to the cell source; the next preparation
+/// (`work`) does those.
+#[test]
+fn s_poll_due_performs_no_crypto_and_no_persist() {
+    let mut rig = Rig::new(ok_script(), Mode::Strict);
+    rig.run_to(9_999);
+    let counted = || {
+        [
+            secmp_transport::channel::counters::seal_calls(),
+            secmp_transport::channel::counters::sign_calls(),
+            counters::tr_encrypt_calls(),
+            counters::persist_calls(),
+        ]
+    };
+    let (before, prepared_before) = (counted(), rig.src.next);
+    let outs = rig.sched.poll_due(10_000).unwrap();
+    assert_eq!(
+        outs.iter()
+            .filter(|o| matches!(o, Output::Write { at: 10_000, .. }))
+            .count(),
+        1,
+        "the due write is handed out"
+    );
+    assert_eq!(counted(), before, "no crypto, no persist across poll_due");
+    assert_eq!(
+        rig.src.next, prepared_before,
+        "the cell source is not called"
+    );
+    rig.apply(outs);
+    rig.now = 10_000;
+    let outs = rig.sched.work(10_000, &mut rig.src).unwrap();
+    rig.apply(outs);
+    assert_eq!(
+        rig.src.next,
+        prepared_before + 1,
+        "work prepares the next cell"
+    );
+    assert_eq!(
+        counted()[0] - before[0],
+        1,
+        "and seals its frame (one seal)"
+    );
 }

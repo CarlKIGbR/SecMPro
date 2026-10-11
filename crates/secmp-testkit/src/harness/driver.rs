@@ -519,17 +519,22 @@ impl VirtualDriver {
         }
     }
 
+    /// One client at virtual time `t`, in the order of a real driver (reviewer VD-M6-A-12): the frames that arrived are
+    /// taken in (cheap), what is due is decided and its writes are flushed *first*, then the activity-dependent work
+    /// runs (cells decided, next frames prepared, control operations started).
     fn process(&mut self, t: u64) {
         for i in 0..self.clients.len() {
+            self.deliver_due(i, t);
+            let outs = self.clients.get_mut(i).unwrap().sched.poll_due(t).unwrap();
+            self.apply(i, t, outs);
             self.deliver_due(i, t);
             let outs = {
                 let c = self.clients.get_mut(i).unwrap();
                 c.sched
-                    .poll(t, &mut Gate::new(&mut c.convs, &mut c.gate))
+                    .work(t, &mut Gate::new(&mut c.convs, &mut c.gate))
                     .unwrap()
             };
             self.apply(i, t, outs);
-            self.deliver_due(i, t);
         }
     }
 
@@ -563,9 +568,7 @@ impl VirtualDriver {
                     dir: Dir::R2C,
                     slot: id.0,
                 });
-                c.sched
-                    .on_frame(id, t, &frame, &mut Gate::new(&mut c.convs, &mut c.gate))
-                    .unwrap()
+                c.sched.on_frame(id, t, &frame).unwrap()
             };
             self.apply(i, t, outs);
         }
@@ -699,9 +702,7 @@ impl VirtualDriver {
                         ended: false,
                     },
                 );
-                c.sched
-                    .link_up(link, t, chan, &mut Gate::new(&mut c.convs, &mut c.gate))
-                    .unwrap()
+                c.sched.link_up(link, t, chan).unwrap()
             }
             Hs::ClosedBefore => {
                 self.trace(i, t, HELLO, Dir::C2R, link.0);
@@ -752,10 +753,7 @@ impl VirtualDriver {
             }
             if c.conns.get(&link).is_some_and(|k| k.rx.is_empty()) {
                 c.conns.remove(&link);
-                return c
-                    .sched
-                    .on_closed(link, t, &mut Gate::new(&mut c.convs, &mut c.gate))
-                    .unwrap();
+                return c.sched.on_closed(link, t).unwrap();
             }
         }
         Vec::new()

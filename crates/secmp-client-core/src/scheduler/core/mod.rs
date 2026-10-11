@@ -4,8 +4,18 @@
 //! **Shape.** The core owns the queues, one task per link, the control operations and the pool; it owns no stream and
 //! reads no clock. A driver (the virtual one of the testkit, the asynchronous one of M6 Phase B) opens connections when
 //! [`Output::Connect`] says so, runs the SecMP-LINK handshake, hands the resulting [`Channel`] to
-//! [`Scheduler::link_up`], delivers received frames with [`Scheduler::on_frame`], and calls [`Scheduler::poll`] at
-//! [`Scheduler::next_deadline`]. Every unit the client emits is an [`Output::Write`] of a **prepared** frame.
+//! [`Scheduler::link_up`], delivers received frames with [`Scheduler::on_frame`], and calls [`Scheduler::poll_due`] and
+//! [`Scheduler::work`] at [`Scheduler::next_deadline`]. Every unit the client emits is an [`Output::Write`] of a
+//! **prepared** frame.
+//!
+//! **The driver's calls (reviewer VD-M6-A-12).** [`Scheduler::poll_due`] decides what is due *now* — connections whose
+//! time has come, lifetimes, the writes of due ticks, teardown and overrun decisions — and touches no cell source,
+//! seals nothing and persists nothing; the driver writes its [`Output::Write`]s to the sockets *before* it calls
+//! anything else. [`Scheduler::work`] then does everything that depends on activity: it releases what a teardown held,
+//! decides the cells that responses delivered, prepares the frames of the next ticks and starts control operations.
+//! The driver reports the instant the preparation finished with [`Scheduler::prepared_until`]; a frame whose
+//! preparation ended after its tick is an overrun even if the driver wakes inside the jitter. `poll` is `poll_due` +
+//! `work` + `prepared_until(now)` for callers that do not model the cost of the work.
 //!
 //! **Invariant (spec §10.1, CLAUDE.md §1.4).** The times, sizes and counts of the frames depend only on the mode, the
 //! periods, the set of links and the random phases and lifetimes drawn when a link is created or comes up — never on
@@ -114,6 +124,11 @@ struct Req {
 struct Part {
     prepared: Prepared,
     kind: ReqKind,
+    /// When the preparation of this frame was finished (reviewer VD-M6-A-12): the start of the `work` call that built it,
+    /// raised by [`Scheduler::prepared_until`]. A frame is written at its tick only if this is not after the tick.
+    ready: u64,
+    /// Built by the latest `work` call, whose end the driver has not reported yet.
+    open: bool,
 }
 
 struct Up {
@@ -187,6 +202,40 @@ pub struct PrepRecord {
     pub queue: Option<QueueId>,
 }
 
+/// What a teardown hands back to the cell source (`release`): done at once by the work-phase calls, and noted by
+/// `poll_due`, which touches no cell source, to be handed over by the next `work` ([`Deferred`]).
+trait Release {
+    fn release_discard(&mut self, queue: QueueId, token: CellToken);
+    fn release_failed(&mut self, queue: QueueId, token: CellToken);
+}
+
+impl<S: CellSource> Release for S {
+    fn release_discard(&mut self, queue: QueueId, token: CellToken) {
+        self.discard(queue, token);
+    }
+
+    fn release_failed(&mut self, queue: QueueId, token: CellToken) {
+        self.send_failed(queue, token, SendFailure::Unknown);
+    }
+}
+
+/// The releases noted by `poll_due`.
+#[derive(Default)]
+struct Deferred {
+    discards: Vec<(QueueId, CellToken)>,
+    failures: Vec<(QueueId, CellToken)>,
+}
+
+impl Release for Deferred {
+    fn release_discard(&mut self, queue: QueueId, token: CellToken) {
+        self.discards.push((queue, token));
+    }
+
+    fn release_failed(&mut self, queue: QueueId, token: CellToken) {
+        self.failures.push((queue, token));
+    }
+}
+
 /// The reason a tick did not happen.
 enum TickResult {
     Idle,
@@ -213,6 +262,19 @@ struct World {
     last_now: u64,
     out: Vec<Output>,
     prep: PrepLog,
+    /// Releases of teardowns decided by `poll_due`, for the next `work`.
+    deferred: Deferred,
+    /// Responses that arrived complete (`on_frame`) and whose cells are decided by the next `work`.
+    pending: VecDeque<PendingOutcome>,
+}
+
+/// A completed response waiting for `work`: the cells it carries are decided (and committed) there, never between
+/// `poll_due` and the driver's flush (reviewer VD-M6-A-12).
+struct PendingOutcome {
+    link: LinkId,
+    req: Req,
+    outcome: Outcome,
+    at: u64,
 }
 
 /// What one tick cost in the counted work (feature `kat`): `[seal_calls, sign_calls, tr_encrypt_calls,
@@ -332,29 +394,29 @@ impl World {
     }
 
     /// Release what a link held: prepared cells go back, written `SEND`s whose answer never came are re-queued.
-    fn release<S: CellSource>(up: &mut Up, source: &mut S) {
+    fn release<R: Release>(up: &mut Up, source: &mut R) {
         for part in [up.send_part.take(), up.fetch_part.take()]
             .into_iter()
             .flatten()
         {
             if let ReqKind::Send { queue, token } = part.kind {
-                source.discard(queue, token);
+                source.release_discard(queue, token);
             }
         }
         for req in up.reqs.drain(..) {
             if let ReqKind::Send { queue, token } = req.kind {
-                source.send_failed(queue, token, SendFailure::Unknown);
+                source.release_failed(queue, token);
             }
         }
     }
 
     /// Take the connection down. `ModeChange` removes the link; any other reason schedules the next attempt.
-    fn tear<S: CellSource>(
+    fn tear<R: Release>(
         &mut self,
         link: &mut Link,
         now: u64,
         reason: Reason,
-        source: &mut S,
+        source: &mut R,
     ) -> Result<(), SchedError> {
         match core::mem::replace(&mut link.state, State::Gone) {
             State::Up(mut up) => {
@@ -377,6 +439,19 @@ impl World {
             };
         }
         Ok(())
+    }
+
+    /// `tear` for the calls that touch no cell source: what the link held is handed over by the next `work`.
+    fn tear_deferred(
+        &mut self,
+        link: &mut Link,
+        now: u64,
+        reason: Reason,
+    ) -> Result<(), SchedError> {
+        let mut held = core::mem::take(&mut self.deferred);
+        let result = self.tear(link, now, reason, &mut held);
+        self.deferred = held;
+        result
     }
 
     fn start_connect(&mut self, link: &mut Link) {
@@ -444,7 +519,16 @@ impl World {
         let needs_send = matches!(spec, Spec::Send(_) | Spec::Relay(_));
         let needs_fetch =
             matches!(spec, Spec::Recv(_)) || (matches!(spec, Spec::Relay(_)) && has_fetch);
-        if (needs_send && up.send_part.is_none()) || (needs_fetch && up.fetch_part.is_none()) {
+        // a frame that is missing, or whose preparation ended after the tick (the driver reported it with
+        // `prepared_until`): the tick is lost even if the driver woke inside the jitter (OPEN-M6-13, VD-M6-A-12)
+        let unfinished = [&up.send_part, &up.fetch_part]
+            .into_iter()
+            .flatten()
+            .any(|part| part.ready > at);
+        if (needs_send && up.send_part.is_none())
+            || (needs_fetch && up.fetch_part.is_none())
+            || unfinished
+        {
             self.overruns = self.overruns.saturating_add(1);
             return TickResult::Tear(Reason::Overrun);
         }
@@ -564,6 +648,8 @@ impl World {
                     up.send_part = Some(Part {
                         prepared,
                         kind: ReqKind::Ping,
+                        ready: now,
+                        open: true,
                     });
                     self.prep.record(up, slot, now, (b'P', None));
                     None
@@ -587,6 +673,8 @@ impl World {
                         queue,
                         token: cell.token,
                     },
+                    ready: now,
+                    open: true,
                 });
                 self.prep.record(up, slot, now, (b'S', Some(queue)));
                 None
@@ -610,6 +698,8 @@ impl World {
                         up.fetch_part = Some(Part {
                             prepared,
                             kind: ReqKind::Fetch(q),
+                            ready: now,
+                            open: true,
                         });
                         self.prep.record(up, slot, now, (b'F', Some(q)));
                         None
@@ -630,6 +720,8 @@ impl World {
                         up.fetch_part = Some(Part {
                             prepared,
                             kind: ReqKind::FetchMulti(ids),
+                            ready: now,
+                            open: true,
                         });
                         self.prep.record(up, slot, now, (b'M', None));
                         None
@@ -641,12 +733,13 @@ impl World {
         }
     }
 
-    /// One link at `now`: connect when its time has come, end it at its lifetime, tick, then prepare.
-    fn step<S: CellSource>(
+    /// One link at `now`, the part that is due and needs no cell source: connect when its time has come, end it at its
+    /// lifetime, tick. Preparation is `prepare_link`, in `work`.
+    fn step_due<R: Release>(
         &mut self,
         link: &mut Link,
         now: u64,
-        source: &mut S,
+        source: &mut R,
     ) -> Result<(), SchedError> {
         enum Todo {
             Connect,
@@ -695,14 +788,27 @@ impl World {
                         bytes,
                     });
                 }
-                match result {
-                    TickResult::Tear(reason) => self.tear(link, now, reason, source)?,
-                    TickResult::Idle | TickResult::Wrote => self.prepare_link(link, now, source)?,
+                if let TickResult::Tear(reason) = result {
+                    self.tear(link, now, reason, source)?;
                 }
             }
             Todo::Nothing => {}
         }
         Ok(())
+    }
+
+    /// A `work` call begins: what the previous one built is closed (its end was reported, or it ended at its start).
+    fn begin_work(links: &mut [Link]) {
+        for link in links {
+            if let State::Up(up) = &mut link.state {
+                for part in [up.send_part.as_mut(), up.fetch_part.as_mut()]
+                    .into_iter()
+                    .flatten()
+                {
+                    part.open = false;
+                }
+            }
+        }
     }
 
     fn recreate(&mut self, queue: QueueId, now: u64) -> Result<(), SchedError> {
@@ -919,6 +1025,8 @@ impl Scheduler {
                 last_now: 0,
                 out: Vec::new(),
                 prep: PrepLog::default(),
+                deferred: Deferred::default(),
+                pending: VecDeque::new(),
             },
             links: Vec::new(),
         }
@@ -996,7 +1104,7 @@ impl Scheduler {
                 up.fetch_part = None;
             }
         }
-        self.pass(now, source)?;
+        self.work_pass(now, source)?;
         Ok(core::mem::take(&mut self.world.out))
     }
 
@@ -1546,11 +1654,34 @@ impl Scheduler {
         best
     }
 
-    fn pass<S: CellSource>(&mut self, now: u64, source: &mut S) -> Result<(), SchedError> {
+    /// The activity-dependent part of a pass at `now`: what teardowns held goes back to the cell source, the next
+    /// ticks' frames are prepared (the cell source is called, cells are sealed and persisted), due control operations
+    /// start. Nothing here writes a frame.
+    fn work_pass<S: CellSource>(&mut self, now: u64, source: &mut S) -> Result<(), SchedError> {
         self.world.last_now = self.world.last_now.max(now);
         let (world, links) = (&mut self.world, &mut self.links);
+        World::begin_work(links);
+        let held = core::mem::take(&mut world.deferred);
+        for (queue, token) in held.discards {
+            source.discard(queue, token);
+        }
+        for (queue, token) in held.failures {
+            source.send_failed(queue, token, SendFailure::Unknown);
+        }
+        // the responses that arrived: their cells are decided, committed and acknowledged here
+        for p in core::mem::take(&mut world.pending) {
+            let fit = world.outcome(p.req, p.outcome, p.at, source)?;
+            if !fit
+                && let Some(link) = links.iter_mut().find(|l| match &l.state {
+                    State::Up(up) => up.id == p.link,
+                    _ => false,
+                })
+            {
+                world.tear(link, now, Reason::Rejected, source)?;
+            }
+        }
         for link in links.iter_mut() {
-            world.step(link, now, source)?;
+            world.prepare_link(link, now, source)?;
         }
         for due in world.control.take_due(now) {
             let key = world.new_key();
@@ -1567,8 +1698,67 @@ impl Scheduler {
         Ok(())
     }
 
-    /// Advance to `now`: connect links whose time has come, end links at their lifetime, write the frames of due
-    /// ticks, prepare the next ones, start due control operations.
+    /// What is due at `now`, and nothing that depends on activity (reviewer VD-M6-A-12): connections whose time has
+    /// come ([`Output::Connect`]), links at their lifetime, the writes of due ticks ([`Output::Write`]), teardown and
+    /// overrun decisions. It calls no cell source, seals nothing and persists nothing. The driver writes the returned
+    /// frames to its sockets before it calls [`Scheduler::work`] or anything else.
+    ///
+    /// # Errors
+    /// [`SchedError::Unavailable`] without randomness (fail closed).
+    pub fn poll_due(&mut self, now: u64) -> Result<Vec<Output>, SchedError> {
+        self.world.last_now = self.world.last_now.max(now);
+        let (world, links) = (&mut self.world, &mut self.links);
+        let mut held = core::mem::take(&mut world.deferred);
+        let mut result = Ok(());
+        for link in links.iter_mut() {
+            result = world.step_due(link, now, &mut held);
+            if result.is_err() {
+                break;
+            }
+        }
+        world.deferred = held;
+        self.links.retain(|l| !matches!(l.state, State::Gone));
+        result?;
+        Ok(core::mem::take(&mut self.world.out))
+    }
+
+    /// The activity-dependent work at `now` (the start of the work): what teardowns held goes back to the cell source,
+    /// the frames of the next ticks are prepared, due control operations start. Received cells are decided by the
+    /// calls that carry the responses ([`Scheduler::on_frame`]), which run the same pass. The driver reports when this
+    /// work finished with [`Scheduler::prepared_until`].
+    ///
+    /// # Errors
+    /// [`SchedError::Unavailable`] without randomness (fail closed).
+    pub fn work<S: CellSource>(
+        &mut self,
+        now: u64,
+        source: &mut S,
+    ) -> Result<Vec<Output>, SchedError> {
+        self.work_pass(now, source)?;
+        Ok(core::mem::take(&mut self.world.out))
+    }
+
+    /// The driver reports that the work that began with the latest [`Scheduler::work`] (or response call) finished at
+    /// `end`: the frames it prepared are ready at `end`. A frame whose tick is before `end` is an overrun at its tick.
+    pub fn prepared_until(&mut self, end: u64) {
+        for link in &mut self.links {
+            if let State::Up(up) = &mut link.state {
+                for part in [up.send_part.as_mut(), up.fetch_part.as_mut()]
+                    .into_iter()
+                    .flatten()
+                {
+                    if part.open {
+                        part.ready = part.ready.max(end);
+                        part.open = false;
+                    }
+                }
+            }
+        }
+    }
+
+    /// `poll_due`, `work` and `prepared_until(now)` in one call, for callers that do not model the cost of the work
+    /// (the unit tests of the core). The writes come first in the returned list. A driver that models costs or has real
+    /// sockets uses the three calls.
     ///
     /// # Errors
     /// [`SchedError::Unavailable`] without randomness (fail closed).
@@ -1577,8 +1767,10 @@ impl Scheduler {
         now: u64,
         source: &mut S,
     ) -> Result<Vec<Output>, SchedError> {
-        self.pass(now, source)?;
-        Ok(core::mem::take(&mut self.world.out))
+        let mut outs = self.poll_due(now)?;
+        outs.extend(self.work(now, source)?);
+        self.prepared_until(now);
+        Ok(outs)
     }
 
     fn find(&mut self, id: LinkId) -> Option<usize> {
@@ -1593,12 +1785,11 @@ impl Scheduler {
     ///
     /// # Errors
     /// [`SchedError::Unavailable`].
-    pub fn link_up<S: CellSource>(
+    pub fn link_up(
         &mut self,
         id: LinkId,
         now: u64,
         chan: Channel,
-        source: &mut S,
     ) -> Result<Vec<Output>, SchedError> {
         let Some(at) = self.find(id) else {
             return Ok(Vec::new());
@@ -1628,7 +1819,6 @@ impl Scheduler {
             }));
             world.out.push(Output::Event(LinkEvent::Up(id)));
         }
-        self.pass(now, source)?;
         Ok(core::mem::take(&mut self.world.out))
     }
 
@@ -1671,34 +1861,29 @@ impl Scheduler {
     ///
     /// # Errors
     /// [`SchedError::Unavailable`].
-    pub fn on_closed<S: CellSource>(
-        &mut self,
-        id: LinkId,
-        now: u64,
-        source: &mut S,
-    ) -> Result<Vec<Output>, SchedError> {
+    pub fn on_closed(&mut self, id: LinkId, now: u64) -> Result<Vec<Output>, SchedError> {
         let Some(at) = self.find(id) else {
             return Ok(Vec::new());
         };
         let (world, links) = (&mut self.world, &mut self.links);
         if let Some(link) = links.get_mut(at) {
-            world.tear(link, now, Reason::Closed, source)?;
+            world.tear_deferred(link, now, Reason::Closed)?;
         }
-        self.pass(now, source)?;
         Ok(core::mem::take(&mut self.world.out))
     }
 
-    /// A frame arrived on connection `id` (exactly 4352 bytes): it is matched to the oldest outstanding request; when
-    /// that request's response is complete the cells are decided and committed, then the next frames are prepared.
+    /// A frame arrived on connection `id` (exactly 4352 bytes): it is matched to the oldest outstanding request, and the
+    /// in-flight count moves when that request's response is complete. This is cheap and touches no cell source: the
+    /// cells of a completed response are decided, committed and acknowledged by the next [`Scheduler::work`], never
+    /// between `poll_due` and the driver's flush (reviewer VD-M6-A-12).
     ///
     /// # Errors
     /// [`SchedError::Unavailable`].
-    pub fn on_frame<S: CellSource>(
+    pub fn on_frame(
         &mut self,
         id: LinkId,
         now: u64,
         unit: &[u8],
-        source: &mut S,
     ) -> Result<Vec<Output>, SchedError> {
         let Some(at) = self.find(id) else {
             return Ok(Vec::new());
@@ -1721,9 +1906,8 @@ impl Scheduler {
                 }
             }
             if bad {
-                world.tear(link, now, Reason::Rejected, source)?;
+                world.tear_deferred(link, now, Reason::Rejected)?;
             } else if let Some(completed) = done {
-                let mut fit = true;
                 let mut req = None;
                 if let State::Up(up) = &mut link.state {
                     req = up.reqs.pop_front();
@@ -1734,14 +1918,15 @@ impl Scheduler {
                     }
                 }
                 if let Some(req) = req {
-                    fit = world.outcome(req, completed.outcome, now, source)?;
-                }
-                if !fit {
-                    world.tear(link, now, Reason::Rejected, source)?;
+                    world.pending.push_back(PendingOutcome {
+                        link: id,
+                        req,
+                        outcome: completed.outcome,
+                        at: now,
+                    });
                 }
             }
         }
-        self.pass(now, source)?;
         Ok(core::mem::take(&mut self.world.out))
     }
 

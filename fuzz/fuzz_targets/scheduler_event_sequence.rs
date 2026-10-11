@@ -95,10 +95,9 @@ impl World {
                 Output::Connect { link, .. } => {
                     let (client, relay) = Fixture::get().honest_links();
                     self.peers.insert(link, Peer { relay, pending: Vec::new() });
-                    let more = self
-                        .sched
-                        .link_up(link, self.now, Channel::from_link_kat(client), &mut self.src)
-                        .unwrap();
+                    let more = self.sched.link_up(link, self.now, Channel::from_link_kat(client)).unwrap();
+                    work.extend(more);
+                    let more = self.sched.work(self.now, &mut self.src).unwrap();
                     work.extend(more);
                 }
                 Output::Write { link, bytes, .. } => {
@@ -161,7 +160,7 @@ impl World {
             units.push(peer.relay.seal(payload).unwrap());
         }
         for unit in units {
-            let outs = self.sched.on_frame(link, self.now, &unit[..], &mut self.src).unwrap();
+            let outs = self.sched.on_frame(link, self.now, &unit[..]).unwrap();
             self.apply(outs);
         }
     }
@@ -220,7 +219,7 @@ fuzz_target!(|data: &[u8]| {
             3 => {
                 if let Some(link) = w.link_at(b.u8()) {
                     w.peers.remove(&link);
-                    let outs = w.sched.on_closed(link, w.now, &mut w.src).unwrap();
+                    let outs = w.sched.on_closed(link, w.now).unwrap();
                     w.apply(outs);
                 }
             }

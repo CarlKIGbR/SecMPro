@@ -24,7 +24,10 @@ fn new_link_required_rotates() {
     send_only(&mut sim, alice, bob, 10_000);
     let (slot, t_up) = run_until_link_up(&mut sim, alice, LinkKind::Send);
     sim.run_until(t_up + 25_000);
-    sim.set_send_counter(alice, LinkId(slot), (1 << 20) - 1);
+    // the link has used its 2^20 frames: the next preparation ends it. (The relay's own counter cannot be moved, so
+    // the last frame itself — counter 2^20 - 1 — would be refused by it as out of step, and the link would end as
+    // `Closed` at that tick instead; this row is about the rotation, not about that frame.)
+    sim.set_send_counter(alice, LinkId(slot), 1 << 20);
     let t = sim.now();
     sim.run_until(t + 400_000);
     let c = sim.client_ref(alice);

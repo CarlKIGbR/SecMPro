@@ -398,3 +398,48 @@ fn receiver_dedups_by_msg_id() {
     convs.deliver(B_RECV, 2, &second.cell).unwrap();
     assert_eq!(convs.get(b).unwrap().received().len(), 1, "delivered once");
 }
+
+/// VD-M6-A-14 `receive_commit_failure_keeps_partial_and_trust`: a two-fragment message; fragment 0 is committed,
+/// the commit of fragment 1 fails — the cell is not decided, the reassembly and the trust are as before the cell —
+/// and fragment 1 delivered again once persistence works completes the message exactly once.
+#[test]
+fn receive_commit_failure_keeps_partial_and_trust() {
+    let (mut convs, a, b) = pair(14);
+    convs
+        .get_mut(a)
+        .unwrap()
+        .outbox_mut()
+        .enqueue(text(14, 2500), 0);
+    let f0 = convs.prepare_cell(A_SEND, 10_000).unwrap().unwrap();
+    let f1 = convs.prepare_cell(A_SEND, 20_000).unwrap().unwrap();
+    convs.deliver(B_RECV, 1, &f0.cell).unwrap();
+    {
+        let conv = convs.get(b).unwrap();
+        assert_eq!((conv.partials(), conv.received().len()), (1, 0));
+    }
+    let trust = convs.get(b).unwrap().trust();
+    convs.get_mut(b).unwrap().persist_mut().set_failing(true);
+    assert!(convs.deliver(B_RECV, 2, &f1.cell).is_err());
+    {
+        let conv = convs.get(b).unwrap();
+        assert_eq!(
+            (conv.partials(), conv.received().len(), conv.trust()),
+            (1, 0, trust),
+            "a failed commit leaves the reassembly and the trust as they were"
+        );
+    }
+    convs.get_mut(b).unwrap().persist_mut().set_failing(false);
+    convs.deliver(B_RECV, 2, &f1.cell).unwrap();
+    let conv = convs.get(b).unwrap();
+    assert_eq!(
+        (conv.partials(), conv.received().len()),
+        (0, 1),
+        "delivered once"
+    );
+    // the same cell again is not delivered a second time
+    assert!(
+        convs.deliver(B_RECV, 2, &f1.cell).is_ok(),
+        "a replayed cell is decided (discarded)"
+    );
+    assert_eq!(convs.get(b).unwrap().received().len(), 1);
+}

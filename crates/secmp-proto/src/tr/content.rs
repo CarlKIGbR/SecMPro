@@ -146,14 +146,16 @@ pub enum Delivery {
 }
 
 /// A message in reassembly.
+#[derive(Clone)]
 struct Partial {
     msg_id: Id,
     total: u16,
     chunks: Vec<Option<Zeroizing<Vec<u8>>>>,
 }
 
-/// The receive-side content state of one session: the messages in reassembly.
-#[derive(Default)]
+/// The receive-side content state of one session: the messages in reassembly. `Clone` so that a receiver can stage a
+/// cell's effect on a copy and keep it only once the cell's commit succeeded.
+#[derive(Clone, Default)]
 pub struct Inbox {
     partials: VecDeque<Partial>,
 }

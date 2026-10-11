@@ -263,6 +263,70 @@ fn persist_before_ack_order() {
     );
 }
 
+/// VD-M6-A-14 `receive_commit_failure_does_not_advance_ack`: a message of two fragments is fetched in one response;
+/// the commit of fragment 1 fails — the acknowledgement stops at fragment 0, the next `FETCH`es carry it and fragment 1
+/// comes again; once persistence works the message is delivered once and the acknowledgement moves past fragment 1.
+#[test]
+fn receive_commit_failure_does_not_advance_ack() {
+    let mut sim = driver();
+    let a = client(&mut sim, Mode::Strict, 291);
+    let b = client(&mut sim, Mode::Strict, 292);
+    let h = half_contact(&mut sim, a, b, 10_000);
+    let (f0, f1) = {
+        let conv = sim.client(b).convs.get_mut(h.conv_b).unwrap();
+        conv.outbox_mut().enqueue(text(5, 2500), 0);
+        let f0 = conv.prepare_direct(0).unwrap().cell;
+        let f1 = conv.prepare_direct(0).unwrap().cell;
+        (f0, f1)
+    };
+    // fragment 0 commits, every later commit of a fails
+    sim.client(a)
+        .convs
+        .get_mut(h.conv_a)
+        .unwrap()
+        .persist_mut()
+        .fail_after_commits(Some(1));
+    sim.client(a).opts.inspect = Inspect::Requests;
+    let id0 = inject(&mut sim, b, &h, &f0);
+    let id1 = inject(&mut sim, b, &h, &f1);
+    let (slot, t_up) = run_until_link_up(&mut sim, a, LinkKind::Recv);
+    sim.run_until(at(t_up, 5, 10_000));
+    assert_eq!(
+        sim.client_ref(a).sched.acked(h.a_recv),
+        Some(id0),
+        "the acknowledgement stops at the committed fragment"
+    );
+    let acks = fetch_acks(&sim, a, slot);
+    assert!(
+        acks.iter().all(|a| *a <= id0),
+        "no FETCH acknowledges fragment 1: {acks:?}"
+    );
+    {
+        let conv = sim.client_ref(a).convs.get(h.conv_a).unwrap();
+        assert_eq!((conv.partials(), conv.received().len()), (1, 0));
+    }
+    assert!(
+        sim.client_ref(a)
+            .gate
+            .delivered
+            .get(&(h.a_recv.0, id1))
+            .copied()
+            .unwrap_or(0)
+            >= 2,
+        "fragment 1 comes again"
+    );
+    sim.client(a)
+        .convs
+        .get_mut(h.conv_a)
+        .unwrap()
+        .persist_mut()
+        .fail_after_commits(None);
+    sim.run_until(at(t_up, 9, 10_000));
+    assert_eq!(sim.client_ref(a).sched.acked(h.a_recv), Some(id1));
+    let conv = sim.client_ref(a).convs.get(h.conv_a).unwrap();
+    assert_eq!((conv.partials(), conv.received().len()), (0, 1));
+}
+
 fn fetch_acks(sim: &VirtualDriver, c: usize, slot: u64) -> Vec<u64> {
     sim.client_ref(c)
         .requests

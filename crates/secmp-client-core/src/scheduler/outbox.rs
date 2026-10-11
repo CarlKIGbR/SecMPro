@@ -221,6 +221,8 @@ pub struct MemPersist {
     durable: Option<Zeroizing<Vec<u8>>>,
     commits: u64,
     fail: bool,
+    /// Fail every commit once this many have succeeded (failure injection at the n-th commit).
+    fail_from: Option<u64>,
 }
 
 impl MemPersist {
@@ -231,6 +233,7 @@ impl MemPersist {
             durable: None,
             commits: 0,
             fail: false,
+            fail_from: None,
         }
     }
 
@@ -251,6 +254,14 @@ impl MemPersist {
         self.fail = failing;
     }
 
+    /// Let `n` more commits succeed, then fail every later one (`None`: no such rule).
+    pub const fn fail_after_commits(&mut self, n: Option<u64>) {
+        self.fail_from = match n {
+            Some(n) => Some(self.commits.saturating_add(n)),
+            None => None,
+        };
+    }
+
     /// Seed the durable state (a restart from a snapshot).
     pub fn set_durable(&mut self, state: &[u8]) {
         self.durable = Some(Zeroizing::new(state.to_vec()));
@@ -259,7 +270,7 @@ impl MemPersist {
 
 impl Persist for MemPersist {
     fn commit(&mut self, _kind: PersistKind, state: &[u8]) -> Result<(), PersistError> {
-        if self.fail {
+        if self.fail || self.fail_from.is_some_and(|n| self.commits >= n) {
             return Err(PersistError);
         }
         self.durable = Some(Zeroizing::new(state.to_vec()));

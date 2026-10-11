@@ -274,6 +274,18 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
         &self.received
     }
 
+    /// The trust in the contact's identity (a key change moves it).
+    #[must_use]
+    pub const fn trust(&self) -> Trust {
+        self.trust
+    }
+
+    /// Messages in reassembly (fragments received, message not complete).
+    #[must_use]
+    pub fn partials(&self) -> usize {
+        self.inbox.partials()
+    }
+
     /// Cells discarded because they did not decrypt.
     #[must_use]
     pub const fn discarded(&self) -> u64 {
@@ -549,9 +561,12 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
                 return Ok(());
             }
         };
-        let delivery = self
-            .inbox
-            .receive(opened.plaintext(), &self.peer, &mut self.trust);
+        // the cell's effect on the reassembly and on the trust is staged on copies: it is kept only once the commit of
+        // the new ratchet state succeeded (persist-before-ack: a failed commit leaves everything as it was and the cell
+        // comes again)
+        let mut inbox = self.inbox.clone();
+        let mut trust = self.trust;
+        let delivery = inbox.receive(opened.plaintext(), &self.peer, &mut trust);
         let durable = &mut self.durable;
         let persist = &mut self.persist;
         let committed = opened.commit(|bytes| {
@@ -562,6 +577,8 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
         });
         if let Ok((state, _plaintext)) = committed {
             self.state = Some(state);
+            self.inbox = inbox;
+            self.trust = trust;
         } else {
             self.state = RatchetState::from_bytes(&self.durable).ok();
             return Err(SourceError);

@@ -202,6 +202,8 @@ None (workspace path crates only: `secmp-client-core` → `secmp-transport`; `se
   other timeout changed. If the margin falls below 30 min the next candidates are fuzz, miri, kat and coverage.
 - M6-12: `ci.yml:240` / `ci-dispatch.yml:384` carried an invalid YAML plain scalar as step name (`: ` inside); push run 38538150090 failed with ‚Invalid workflow file‘, no PR run existed for `b83ed0b`; names quoted, policy lint for unquoted step names added (2 tests).
 - M6-15: job `kani` was killed by a runner shutdown (exit 143) four times on this branch, 6–22 min into `cargo kani --package secmp-proto -Z stubbing` (runs 38064677208, 38132969656, 38549219665 attempts 1–2), never on main; container run M6-13b verifies 7/7 + 30/30 without error; xtask now logs a runner resource trace every 20 s when `SECMP_RUNNER_TRACE` is set, enabled on the `kani` job.
+- M6-16: root cause of the four `kani` runner shutdowns — the Phase-A `[profile.dev.package.*] opt-level = 3` overrides (added for the scheduler tests) also applied to the Kani build; `secmp-proto` at opt-level 3 drove CBMC to 15.5 GB RSS on the 16 GB runner (run 38606378025, runner-trace 17:43:22–17:44:02Z, swap full, exit 143). Overrides moved to `[profile.test.package.*]`; the Kani build is back to opt-level 0 as on main.
+- Reviewer question (M6-16): `cargo miri` builds with the `test` profile; whether the opt-level 3 override lowers Miri's MIR-level UB detection is to be verified before the Phase A report is final.
 - The virtual worker is serial and non-blocking; a single-threaded real driver whose preparation blocked its loop would
   delay *other* links' due writes by the preparation of an active link — the cost model cannot show that, the Phase B
   driver must not do it.

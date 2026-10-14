@@ -98,14 +98,16 @@ multiple_unsafe_ops_per_block = "deny"   # one unsafe operation per block
 
 # M6: the scheduler tests run hours of virtual time, i.e. thousands of hybrid-ratchet steps and handshakes; third-party
 # crates and the two crypto crates are optimised in the dev/test profile (no change to the release profile, no change
-# to any lint or gate). Debug assertions stay on.
-[profile.dev.package."*"]
+# to any lint or gate). Debug assertions stay on. Scoped to the `test` profile (M6-16): the `dev` profile also builds the
+# Kani harnesses, and `secmp-proto` at opt-level 3 made CBMC exceed the 16 GB of the CI runner (run 38606378025, job
+# `kani`, 15.5 GB RSS, OOM -> runner shutdown); on main (opt-level 0) the same harness set verifies within budget.
+[profile.test.package."*"]
 opt-level = 3
 
-[profile.dev.package.secmp-crypto]
+[profile.test.package.secmp-crypto]
 opt-level = 3
 
-[profile.dev.package.secmp-proto]
+[profile.test.package.secmp-proto]
 opt-level = 3
 
 # docs/06 §6 — release profile for reproducible builds.

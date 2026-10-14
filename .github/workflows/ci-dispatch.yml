@@ -382,6 +382,8 @@ jobs:
             ~/.kani
           key: ${{ steps.tools-cache.outputs.cache-primary-key }}
       - name: "Kani (step 9 kani: every harness package, `-Z stubbing` where used, the verified-harness and cover pins)"
+        env:
+          SECMP_RUNNER_TRACE: "1"
         run: cargo xtask step --strict kani
 
   # Step 10 for the SecMP-LINK session models as in ci.yml (`proverif-link`, M5).

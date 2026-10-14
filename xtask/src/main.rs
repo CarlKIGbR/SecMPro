@@ -27,6 +27,7 @@ mod summary;
 mod testscan;
 mod time;
 mod tools;
+mod trace;
 mod util;
 mod vectors;
 mod wintest;
@@ -72,6 +73,9 @@ fn run(args: &[String]) -> Result<()> {
     let (rest, shard) = split_mutants_options(cmd, &rest)?;
     if let Some(s) = shard {
         gates::set_mutants_shard(s)?;
+    }
+    if matches!(cmd.as_str(), "step" | "ci-full" | "ci" | "ci-fast") {
+        trace::start_if_enabled();
     }
     match cmd.as_str() {
         "ci-fast" => ci::fast(&rest),

@@ -182,6 +182,27 @@ impl Cmd {
             .map_err(|_| Error(format!("`{}` printed non-UTF-8 output", self.display())))
     }
 
+    /// As [`Cmd::read`], but a failure carries the exit code (`None`: no code, or the program did not start).
+    pub(crate) fn read_with_code(&self) -> std::result::Result<String, (Option<i32>, String)> {
+        let out = self
+            .command()
+            .stderr(Stdio::inherit())
+            .output()
+            .map_err(|e| (None, format!("cannot start `{}`: {e}", self.program)))?;
+        if !out.status.success() {
+            return Err((
+                out.status.code(),
+                format!("`{}` failed with {}", self.display(), out.status),
+            ));
+        }
+        String::from_utf8(out.stdout).map_err(|_| {
+            (
+                None,
+                format!("`{}` printed non-UTF-8 output", self.display()),
+            )
+        })
+    }
+
     /// Run, echo, and capture stdout and stderr without treating failure as an error.
     pub(crate) fn capture(&self) -> Result<Captured> {
         say(&format!("$ {}", self.display()));

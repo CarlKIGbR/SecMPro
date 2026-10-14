@@ -14,7 +14,7 @@ use std::path::Path;
 use serde_json::Value;
 
 use crate::time::{parse_http_date, parse_rfc3339_utc};
-use crate::util::{Cmd, Error, Result, bail};
+use crate::util::{Cmd, Error, Result, bail, say};
 
 /// Minimum age of every dependency version, in seconds (7 days).
 pub(crate) const MIN_AGE_SECS: i64 = 7 * 86_400;
@@ -159,9 +159,64 @@ pub(crate) fn evaluate(now: i64, published: &[(String, String, i64)]) -> Result<
     Ok(out)
 }
 
+/// curl exit codes of a transient transport failure (ADR-015 Amendment 1): DNS (6), connect (7), timeout (28), TLS
+/// handshake (35), empty reply (52), receive (56). `--fail` reports every HTTP error as 22, so HTTP 5xx is not told apart
+/// and 22 is not transient.
+pub(crate) fn is_transient_curl_status(code: Option<i32>) -> bool {
+    matches!(code, Some(6 | 7 | 28 | 35 | 52 | 56))
+}
+
+/// Attempts per package and the pauses between them, in seconds.
+const ATTEMPTS: usize = 3;
+const PAUSES_SECS: [u64; 2] = [5, 15];
+
+type Attempt<'a> = &'a mut dyn FnMut(&str) -> std::result::Result<String, (Option<i32>, String)>;
+
+/// The index entry of `name`, fetching with `attempt_fetch` and retrying a transient failure after 5 s and 15 s (at most
+/// three attempts); any other failure, and an exhausted retry, is an error. Nothing is ever skipped.
+fn fetch_with(
+    name: &str,
+    attempt_fetch: Attempt<'_>,
+    sleep: &mut dyn FnMut(u64),
+) -> Result<(i64, String)> {
+    let mut attempt = 1_usize;
+    loop {
+        match attempt_fetch(name) {
+            Ok(raw) => {
+                let (date, body) = split_response(&raw)?;
+                return Ok((parse_http_date(&date)?, body));
+            }
+            Err((code, msg)) if is_transient_curl_status(code) => {
+                if attempt >= ATTEMPTS {
+                    bail!("{msg} (after {ATTEMPTS} attempts)");
+                }
+                say(&format!(
+                    "cooldown: retry {}/{ATTEMPTS} for {name} after transient curl exit {}",
+                    attempt.saturating_add(1),
+                    code.unwrap_or_default()
+                ));
+                sleep(
+                    PAUSES_SECS
+                        .get(attempt.saturating_sub(1))
+                        .copied()
+                        .unwrap_or(15),
+                );
+                attempt = attempt.saturating_add(1);
+            }
+            Err((_, msg)) => bail!("{msg}"),
+        }
+    }
+}
+
 fn fetch(name: &str) -> Result<(i64, String)> {
+    fetch_with(name, &mut curl_index, &mut |s| {
+        std::thread::sleep(std::time::Duration::from_secs(s));
+    })
+}
+
+fn curl_index(name: &str) -> std::result::Result<String, (Option<i32>, String)> {
     let url = format!("{INDEX}/{}", index_path(name));
-    let raw = Cmd::new("curl")
+    Cmd::new("curl")
         .args([
             "--silent",
             "--show-error",
@@ -176,9 +231,7 @@ fn fetch(name: &str) -> Result<(i64, String)> {
             "secmpro-xtask-cooldown (https://github.com/CarlKIGbR/SecMPro)",
         ])
         .arg(url)
-        .read()?;
-    let (date, body) = split_response(&raw)?;
-    Ok((parse_http_date(&date)?, body))
+        .read_with_code()
 }
 
 /// The lockfiles checked: the workspace and, when present, the separate cargo-fuzz package.
@@ -286,6 +339,69 @@ mod tests {
         assert_eq!(index_path("ab"), "2/ab");
         assert_eq!(index_path("abc"), "3/a/abc");
         assert_eq!(index_path("Serde_JSON"), "se/rd/serde_json");
+    }
+
+    #[test]
+    fn transient_curl_statuses() {
+        for c in [6, 7, 28, 35, 52, 56] {
+            assert!(is_transient_curl_status(Some(c)), "{c}");
+        }
+        for c in [0, 1, 3, 22, 23, 60] {
+            assert!(!is_transient_curl_status(Some(c)), "{c}");
+        }
+        assert!(!is_transient_curl_status(None));
+    }
+
+    const GOOD: &str = "HTTP/2 200 \r\ncontent-type: text/plain\r\ndate: Mon, 28 Sep 2026 16:10:53 GMT\r\n\r\n{\"name\":\"x\",\"vers\":\"1.0.0\",\"pubtime\":\"2026-09-01T00:00:00Z\"}\n";
+
+    /// Run `fetch_with` over scripted results; returns (result, fetch calls, sleeps).
+    fn scripted(
+        results: Vec<std::result::Result<String, (Option<i32>, String)>>,
+    ) -> (Result<(i64, String)>, usize, Vec<u64>) {
+        let mut queue = results.into_iter();
+        let mut calls = 0_usize;
+        let mut sleeps = Vec::new();
+        let out = fetch_with(
+            "x",
+            &mut |_| {
+                calls = calls.saturating_add(1);
+                queue
+                    .next()
+                    .unwrap_or_else(|| Err((None, "exhausted".to_owned())))
+            },
+            &mut |s| sleeps.push(s),
+        );
+        (out, calls, sleeps)
+    }
+
+    #[test]
+    fn transient_failure_is_retried_then_succeeds() {
+        let (out, calls, sleeps) = scripted(vec![
+            Err((Some(7), "connect".to_owned())),
+            Err((Some(7), "connect".to_owned())),
+            Ok(GOOD.to_owned()),
+        ]);
+        assert!(out.is_ok());
+        assert_eq!((calls, sleeps), (3, vec![5, 15]));
+    }
+
+    #[test]
+    fn retry_stops_after_three_transient_failures() {
+        let (out, calls, sleeps) = scripted(vec![
+            Err((Some(28), "timeout".to_owned())),
+            Err((Some(28), "timeout".to_owned())),
+            Err((Some(28), "timeout".to_owned())),
+        ]);
+        let err = out.err().map(|e| e.to_string()).unwrap_or_default();
+        assert!(err.contains("after 3 attempts"), "{err}");
+        assert_eq!((calls, sleeps), (3, vec![5, 15]));
+    }
+
+    #[test]
+    fn non_transient_failure_is_not_retried() {
+        let (out, calls, sleeps) = scripted(vec![Err((Some(22), "http".to_owned()))]);
+        assert!(out.is_err());
+        assert_eq!((calls, sleeps), (1, Vec::new()));
     }
 
     #[test]

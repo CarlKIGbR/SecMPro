@@ -200,6 +200,7 @@ None (workspace path crates only: `secmp-client-core` → `secmp-transport`; `se
   delegates it with `--delegated kani`; same caches and runner image; the job runs `cargo xtask step --strict kani`). Expected
   `linux-full` after the split: ~204 min, margin ~36 min to 240 (the faster run: ~182 min). No threshold, harness list or
   other timeout changed. If the margin falls below 30 min the next candidates are fuzz, miri, kat and coverage.
+- M6-12: `ci.yml:240` / `ci-dispatch.yml:384` carried an invalid YAML plain scalar as step name (`: ` inside); push run 38538150090 failed with ‚Invalid workflow file‘, no PR run existed for `b83ed0b`; names quoted, policy lint for unquoted step names added (2 tests).
 - The virtual worker is serial and non-blocking; a single-threaded real driver whose preparation blocked its loop would
   delay *other* links' due writes by the preparation of an active link — the cost model cannot show that, the Phase B
   driver must not do it.

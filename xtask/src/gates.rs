@@ -3516,6 +3516,37 @@ pub(crate) fn systemd(ctx: &Ctx) -> Result<Outcome> {
 /// `jobs:`, `continue-on-error` outside the jobs allowed by `expect::CONTINUE_ON_ERROR_JOBS`, and artefact names
 /// without the run attempt. An accident guard against careless workflow edits, not a tamper-proof control: the real
 /// control is review (M3 review F23, R-08).
+/// M6-12: a `- name:` step whose plain-scalar value contains `: ` or ` #` is not valid YAML (GitHub refuses the whole
+/// workflow file); such names must be quoted. Lines inside block scalars are not looked at.
+pub(crate) fn step_name_findings(file: &str, text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut block: Option<usize> = None;
+    for (n, raw) in text.lines().enumerate() {
+        let body = raw.trim_start_matches(' ');
+        let lead = raw.len().saturating_sub(body.len());
+        if let Some(c) = block {
+            if body.trim().is_empty() || lead > c {
+                continue;
+            }
+            block = None;
+        }
+        let tail = body.trim_end();
+        if tail.ends_with(['|', '>']) || tail.ends_with("|-") || tail.ends_with(">-") {
+            block = Some(lead);
+        }
+        if let Some(v) = body.strip_prefix("- name:") {
+            let v = v.trim();
+            if !v.starts_with(['"', '\'']) && (v.contains(": ") || v.contains(" #")) {
+                out.push(format!(
+                    "step name is not a valid YAML plain scalar (contains ': ' or ' #'): {file}:{}",
+                    n.saturating_add(1)
+                ));
+            }
+        }
+    }
+    out
+}
+
 pub(crate) fn workflow_findings(name: &str, text: &str) -> Vec<String> {
     let mut out = Vec::new();
     for line in text.lines() {
@@ -4134,6 +4165,7 @@ fn workflows(root: &Path) -> Result<String> {
         let text = lf(&std::fs::read_to_string(f)?);
         findings.extend(workflow_findings(&rel(root, f), &text));
         findings.extend(workflow_token_findings(&rel(root, f), &text));
+        findings.extend(step_name_findings(&rel(root, f), &text));
         texts.push((rel(root, f), text));
     }
     findings.extend(required_job_findings(&texts));
@@ -6080,6 +6112,38 @@ mod tests {
     /// The pinned jobs `linux-full` delegates to (M4 review C-5), with their pinned conditions, `needs:` and gate lines,
     /// as they follow the required jobs in a `ci.yml` fixture.
     const PINNED_EXTRA: &str = "  ct:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict ct\n  mutants-shard:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    strategy:\n      matrix:\n        shard:\n          - 0\n          - 1\n    steps:\n      - run: cargo xtask install-tools --set mutants\n      - run: cargo xtask step --strict mutants --shard ${{ matrix.shard }}/8\n  mutants:\n    needs: mutants-shard\n    if: always() && (github.event_name == 'schedule' || github.event_name == 'pull_request')\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict mutants-merge\n  proverif-hx:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict proverif --models hx --jobs 4\n  proverif-link:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict proverif --models link --jobs 4\n  kani:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict kani\n";
+
+    /// M6-12: the `ci.yml` of `b83ed0b` (an unquoted `: ` in the Kani step name) gives exactly one finding, at line 240.
+    #[test]
+    fn unquoted_step_name_with_colon_space_is_a_finding() {
+        let old = lf(include_str!("../tests/fixtures/ci-b83ed0b.yml"));
+        let found = step_name_findings("ci.yml", &old);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found.iter().all(|f| f.ends_with("ci.yml:240")), "{found:?}");
+        assert!(
+            found
+                .iter()
+                .all(|f| f.starts_with("step name is not a valid YAML plain scalar"))
+        );
+    }
+
+    /// M6-12: the real workflows have no such step name.
+    #[test]
+    fn quoted_step_names_pass() {
+        for (file, text) in [
+            ("ci.yml", include_str!("../../.github/workflows/ci.yml")),
+            (
+                "ci-dispatch.yml",
+                include_str!("../../.github/workflows/ci-dispatch.yml"),
+            ),
+        ] {
+            assert_eq!(
+                step_name_findings(file, &lf(text)),
+                Vec::<String>::new(),
+                "{file}"
+            );
+        }
+    }
 
     /// M2 review C2: the required job names only in ci.yml, all four there, and no dispatch trigger in ci.yml; M4
     /// review C-5: likewise the pinned jobs `linux-full` delegates to.

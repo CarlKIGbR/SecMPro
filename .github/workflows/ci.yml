@@ -237,7 +237,7 @@ jobs:
             ~/.secmp-tools
             ~/.kani
           key: ${{ steps.tools-cache.outputs.cache-primary-key }}
-      - name: Kani (step 9 kani: every harness package, `-Z stubbing` where used, the verified-harness and cover pins)
+      - name: "Kani (step 9 kani: every harness package, `-Z stubbing` where used, the verified-harness and cover pins)"
         run: cargo xtask step --strict kani
 
   # docs/06 §5 step 5 `ct` (ADR-038, ADR-041) as its own job (ADR-047 Amendment 1, M4 review C-2): on PR run

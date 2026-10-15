@@ -13,6 +13,12 @@ criteria = "safe-to-deploy"
 delta = "0.10.0 -> 0.10.1"
 notes = "delta audit by implementer; reviewer read; owner approved. ADR-036 (3). Diff: docs/reviews/M01-evidence/vet-deltas/rand_core-0.10.0-0.10.1.diff (CHANGELOG, version bump, two doc-comment links; no code change). Owner approval: Christopher Carl, 2026-09-29 (M1 review §D)."
 
+[[audits.rustls]]
+who = "Christopher Carl (owner), delta audit by reviewer Fable"
+criteria = "safe-to-deploy"
+delta = "0.23.45 -> 0.23.46"
+notes = "ADR-015 Am. 2; diff in docs/reviews/M06-evidence/vet-deltas/rustls-0.23.45-0.23.46.diff"
+
 [[trusted.aead]]
 criteria = "safe-to-deploy"
 user-id = 267 # Tony Arcieri (tarcieri)
@@ -27,12 +33,36 @@ start = "2026-06-08"
 end = "2027-09-28"
 notes = "Publisher trust (ADR-036 (2), docs/06 §3): RustCrypto trusted-publishing identity (GitHub Actions of the RustCrypto/traits repository) for the RustCrypto trait crates used by the primitive crates chosen by ADR-023/docs/06 §3. Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
 
+[[trusted.aes]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2020-06-05"
+end = "2027-10-01"
+
 [[trusted.aho-corasick]]
 criteria = "safe-to-deploy"
 user-id = 189 # Andrew Gallant (BurntSushi)
 start = "2019-03-28"
 end = "2027-09-28"
 notes = "Publisher trust (docs/06 §3, ADR-015 update of the M0 review): publisher trusted by >= 2 imported audit sets (Mozilla, ISRG, Bytecode Alliance); reviewed at every release."
+
+[[trusted.arti-client]]
+criteria = "safe-to-deploy"
+user-id = 31201 # Gabi Moldovan (gabi-250)
+start = "2024-03-04"
+end = "2027-10-01"
+
+[[trusted.arti-client]]
+criteria = "safe-to-deploy"
+user-id = 43093 # Ian Jackson (ijackson)
+start = "2024-02-05"
+end = "2027-10-01"
+
+[[trusted.arti-client]]
+criteria = "safe-to-deploy"
+user-id = 122288 # Nick Mathewson (nmathewson)
+start = "2021-10-29"
+end = "2027-10-01"
 
 [[trusted.autocfg]]
 criteria = "safe-to-deploy"
@@ -55,6 +85,18 @@ start = "2022-11-09"
 end = "2027-09-28"
 notes = "Publisher trust (ADR-036 (2), docs/06 §3): AWS account publishing aws-lc-rs and aws-lc-sys (differential-test partner in M1, dev-dependency only; TLS in secmp-transport from M6). Reviewed at every release."
 
+[[trusted.base16ct]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2022-01-13"
+end = "2027-10-01"
+
+[[trusted.base64ct]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2021-01-21"
+end = "2027-10-01"
+
 [[trusted.block-buffer]]
 criteria = "safe-to-deploy"
 user-id = 267 # Tony Arcieri (tarcieri)
@@ -68,6 +110,12 @@ trusted-publisher = "github:RustCrypto/utils"
 start = "2026-02-24"
 end = "2027-09-28"
 notes = "Publisher trust (ADR-036 (2), docs/06 §3): RustCrypto trusted-publishing identity (GitHub Actions of the RustCrypto/utils repository) for the RustCrypto utility crates (zeroize, block-buffer, cmov, ctutils, sponge-cursor, ...) used by the primitive crates chosen by ADR-023/docs/06 §3. Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
+
+[[trusted.caret]]
+criteria = "safe-to-deploy"
+user-id = 122288 # Nick Mathewson (nmathewson)
+start = "2021-06-24"
+end = "2027-10-01"
 
 [[trusted.cc]]
 criteria = "safe-to-deploy"
@@ -139,12 +187,24 @@ start = "2026-04-02"
 end = "2027-09-28"
 notes = "Publisher trust (ADR-036 (2), docs/06 §3): RustCrypto trusted-publishing identity (GitHub Actions of the RustCrypto/utils repository) for the RustCrypto utility crates (zeroize, block-buffer, cmov, ctutils, sponge-cursor, ...) used by the primitive crates chosen by ADR-023/docs/06 §3. Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
 
+[[trusted.const-oid]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2020-08-04"
+end = "2027-10-01"
+
 [[trusted.core-models]]
 criteria = "safe-to-deploy"
 user-id = 281161 # Jonas Schneider-Bensch (jschneider-bensch)
 start = "2025-11-05"
 end = "2027-09-28"
 notes = "Publisher trust (ADR-036 (2), docs/06 §3): Cryspen account publishing the libcrux crate family (libcrux-ml-kem, chosen by ADR-023, and its libcrux-* support crates). Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
+
+[[trusted.cpubits]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2026-01-18"
+end = "2027-10-01"
 
 [[trusted.cpufeatures]]
 criteria = "safe-to-deploy"
@@ -153,11 +213,17 @@ start = "2021-04-26"
 end = "2027-09-28"
 notes = "Publisher trust (ADR-036 (2), docs/06 §3): RustCrypto maintainer account publishing the RustCrypto primitive crates chosen by ADR-023/docs/06 §3 (hashes, MACs, KDFs, ciphers, AEADs, signatures, KEMs and their trait/utility crates). Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
 
+[[trusted.crypto-bigint]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2021-04-30"
+end = "2027-10-01"
+
 [[trusted.crypto-common]]
 criteria = "safe-to-deploy"
 user-id = 267 # Tony Arcieri (tarcieri)
 start = "2021-04-28"
-end = "2027-09-28"
+end = "2027-10-01"
 notes = "Publisher trust (ADR-036 (2), docs/06 §3): RustCrypto maintainer account publishing the RustCrypto primitive crates chosen by ADR-023/docs/06 §3 (hashes, MACs, KDFs, ciphers, AEADs, signatures, KEMs and their trait/utility crates). Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
 
 [[trusted.crypto-common]]
@@ -166,6 +232,12 @@ trusted-publisher = "github:RustCrypto/traits"
 start = "2026-02-04"
 end = "2027-09-28"
 notes = "Publisher trust (ADR-036 (2), docs/06 §3): RustCrypto trusted-publishing identity (GitHub Actions of the RustCrypto/traits repository) for the RustCrypto trait crates used by the primitive crates chosen by ADR-023/docs/06 §3. Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
+
+[[trusted.ctr]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2020-06-06"
+end = "2027-10-01"
 
 [[trusted.ctutils]]
 criteria = "safe-to-deploy"
@@ -195,6 +267,36 @@ start = "2023-06-24"
 end = "2027-09-28"
 notes = "Publisher trust (ADR-036 (2), docs/06 §3): dalek-cryptography maintainer account publishing x25519-dalek, ed25519-dalek and curve25519-dalek(-derive), chosen by docs/06 §3. Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
 
+[[trusted.derive-deftly]]
+criteria = "safe-to-deploy"
+user-id = 43093 # Ian Jackson (ijackson)
+start = "2024-03-02"
+end = "2027-10-01"
+
+[[trusted.derive-deftly-macros]]
+criteria = "safe-to-deploy"
+user-id = 43093 # Ian Jackson (ijackson)
+start = "2024-03-02"
+end = "2027-10-01"
+
+[[trusted.derive_builder_core_fork_arti]]
+criteria = "safe-to-deploy"
+user-id = 43093 # Ian Jackson (ijackson)
+start = "2022-05-06"
+end = "2027-10-01"
+
+[[trusted.derive_builder_fork_arti]]
+criteria = "safe-to-deploy"
+user-id = 43093 # Ian Jackson (ijackson)
+start = "2022-05-06"
+end = "2027-10-01"
+
+[[trusted.derive_builder_macro_fork_arti]]
+criteria = "safe-to-deploy"
+user-id = 43093 # Ian Jackson (ijackson)
+start = "2022-05-06"
+end = "2027-10-01"
+
 [[trusted.digest]]
 criteria = "safe-to-deploy"
 user-id = 267 # Tony Arcieri (tarcieri)
@@ -208,6 +310,12 @@ trusted-publisher = "github:RustCrypto/traits"
 start = "2026-02-12"
 end = "2027-09-28"
 notes = "Publisher trust (ADR-036 (2), docs/06 §3): RustCrypto trusted-publishing identity (GitHub Actions of the RustCrypto/traits repository) for the RustCrypto trait crates used by the primitive crates chosen by ADR-023/docs/06 §3. Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
+
+[[trusted.ecdsa]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2019-10-29"
+end = "2027-10-01"
 
 [[trusted.ed25519]]
 criteria = "safe-to-deploy"
@@ -237,12 +345,42 @@ start = "2019-04-02"
 end = "2027-09-28"
 notes = "Publisher trust (docs/06 §3, ADR-015 update of the M0 review): publisher trusted by >= 2 imported audit sets (Mozilla, ISRG, Bytecode Alliance); reviewed at every release."
 
+[[trusted.elliptic-curve]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2019-12-05"
+end = "2027-10-01"
+
 [[trusted.find-msvc-tools]]
 criteria = "safe-to-deploy"
 user-id = 539 # Josh Stone (cuviper)
 start = "2025-08-29"
 end = "2027-09-28"
 notes = "Publisher trust (docs/06 §3, ADR-015 update of the M0 review): publisher trusted by >= 2 imported audit sets (Mozilla, ISRG, Bytecode Alliance); reviewed at every release."
+
+[[trusted.fs-mistrust]]
+criteria = "safe-to-deploy"
+user-id = 122288 # Nick Mathewson (nmathewson)
+start = "2022-05-06"
+end = "2027-10-01"
+
+[[trusted.fslock-guard]]
+criteria = "safe-to-deploy"
+user-id = 31201 # Gabi Moldovan (gabi-250)
+start = "2024-03-04"
+end = "2027-10-01"
+
+[[trusted.fslock-guard]]
+criteria = "safe-to-deploy"
+user-id = 43093 # Ian Jackson (ijackson)
+start = "2024-02-05"
+end = "2027-10-01"
+
+[[trusted.fslock-guard]]
+criteria = "safe-to-deploy"
+user-id = 122288 # Nick Mathewson (nmathewson)
+start = "2024-04-02"
+end = "2027-10-01"
 
 [[trusted.getrandom]]
 criteria = "safe-to-deploy"
@@ -283,7 +421,7 @@ notes = "Publisher trust (ADR-036 (2)), crate-scoped: Cryspen hax team account (
 criteria = "safe-to-deploy"
 user-id = 267 # Tony Arcieri (tarcieri)
 start = "2020-10-19"
-end = "2027-09-28"
+end = "2027-10-01"
 notes = "Publisher trust (ADR-036 (2), docs/06 §3): RustCrypto maintainer account publishing the RustCrypto primitive crates chosen by ADR-023/docs/06 §3 (hashes, MACs, KDFs, ciphers, AEADs, signatures, KEMs and their trait/utility crates). Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
 
 [[trusted.hkdf]]
@@ -412,6 +550,12 @@ start = "2025-11-05"
 end = "2027-09-28"
 notes = "Publisher trust (ADR-036 (2), docs/06 §3): Cryspen account publishing the libcrux crate family (libcrux-ml-kem, chosen by ADR-023, and its libcrux-* support crates). Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
 
+[[trusted.libm]]
+criteria = "safe-to-deploy"
+user-id = 55123 # rust-lang-owner
+start = "2024-10-26"
+end = "2027-10-01"
+
 [[trusted.memchr]]
 criteria = "safe-to-deploy"
 user-id = 189 # Andrew Gallant (BurntSushi)
@@ -475,6 +619,42 @@ start = "2019-05-20"
 end = "2027-09-28"
 notes = "Publisher trust (docs/06 §3, ADR-015 update of the M0 review): publisher trusted by >= 2 imported audit sets (Mozilla, ISRG, Bytecode Alliance); reviewed at every release."
 
+[[trusted.oneshot-fused-workaround]]
+criteria = "safe-to-deploy"
+user-id = 122288 # Nick Mathewson (nmathewson)
+start = "2024-09-30"
+end = "2027-10-01"
+
+[[trusted.p256]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2020-01-06"
+end = "2027-10-01"
+
+[[trusted.p384]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2020-01-06"
+end = "2027-10-01"
+
+[[trusted.p521]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2023-03-04"
+end = "2027-10-01"
+
+[[trusted.pkcs1]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2020-06-12"
+end = "2027-10-01"
+
+[[trusted.pkcs8]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2020-06-12"
+end = "2027-10-01"
+
 [[trusted.poly1305]]
 criteria = "safe-to-deploy"
 user-id = 267 # Tony Arcieri (tarcieri)
@@ -489,6 +669,12 @@ start = "2026-05-10"
 end = "2027-09-28"
 notes = "Publisher trust (ADR-036 (2), docs/06 §3): RustCrypto trusted-publishing identity (GitHub Actions of the RustCrypto/universal-hashes repository) for poly1305, used by chacha20poly1305 (docs/06 §3). Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
 
+[[trusted.polyval]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2019-08-13"
+end = "2027-10-01"
+
 [[trusted.prettyplease]]
 criteria = "safe-to-deploy"
 user-id = 3618 # David Tolnay (dtolnay)
@@ -496,12 +682,24 @@ start = "2022-01-04"
 end = "2027-09-28"
 notes = "Publisher trust (docs/06 §3, ADR-015 update of the M0 review): publisher trusted by >= 2 imported audit sets (Mozilla, ISRG, Bytecode Alliance); reviewed at every release."
 
+[[trusted.primeorder]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2022-06-30"
+end = "2027-10-01"
+
 [[trusted.proc-macro2]]
 criteria = "safe-to-deploy"
 user-id = 3618 # David Tolnay (dtolnay)
 start = "2019-04-23"
 end = "2027-09-28"
 notes = "Publisher trust (docs/06 §3, ADR-015 update of the M0 review): publisher trusted by >= 2 imported audit sets (Mozilla, ISRG, Bytecode Alliance); reviewed at every release."
+
+[[trusted.pwd-grp]]
+criteria = "safe-to-deploy"
+user-id = 43093 # Ian Jackson (ijackson)
+start = "2023-07-14"
+end = "2027-10-01"
 
 [[trusted.regex]]
 criteria = "safe-to-deploy"
@@ -524,12 +722,60 @@ start = "2019-03-30"
 end = "2027-09-28"
 notes = "Publisher trust (docs/06 §3, ADR-015 update of the M0 review): publisher trusted by >= 2 imported audit sets (Mozilla, ISRG, Bytecode Alliance); reviewed at every release."
 
+[[trusted.retry-error]]
+criteria = "safe-to-deploy"
+user-id = 122288 # Nick Mathewson (nmathewson)
+start = "2021-06-24"
+end = "2027-10-01"
+
+[[trusted.rfc6979]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2021-02-09"
+end = "2027-10-01"
+
+[[trusted.rsa]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2022-03-10"
+end = "2027-10-01"
+
+[[trusted.rustls]]
+criteria = "safe-to-deploy"
+user-id = 2751 # Joe Birr-Pixton (ctz)
+start = "2019-04-02"
+end = "2027-10-01"
+
+[[trusted.rustls]]
+criteria = "safe-to-deploy"
+user-id = 4556 # Dirkjan Ochtman (djc)
+start = "2022-05-18"
+end = "2027-10-01"
+
 [[trusted.rustversion]]
 criteria = "safe-to-deploy"
 user-id = 3618 # David Tolnay (dtolnay)
 start = "2019-07-08"
 end = "2027-09-28"
 notes = "Publisher trust (docs/06 §3, ADR-015 update of the M0 review): publisher trusted by >= 2 imported audit sets (Mozilla, ISRG, Bytecode Alliance); reviewed at every release."
+
+[[trusted.safelog]]
+criteria = "safe-to-deploy"
+user-id = 122288 # Nick Mathewson (nmathewson)
+start = "2022-05-06"
+end = "2027-10-01"
+
+[[trusted.saturating-time]]
+criteria = "safe-to-deploy"
+user-id = 122288 # Nick Mathewson (nmathewson)
+start = "2026-10-01"
+end = "2027-10-01"
+
+[[trusted.sec1]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2020-08-26"
+end = "2027-10-01"
 
 [[trusted.serde]]
 criteria = "safe-to-deploy"
@@ -559,6 +805,12 @@ start = "2019-02-28"
 end = "2027-09-28"
 notes = "Publisher trust (docs/06 §3, ADR-015 update of the M0 review): publisher trusted by >= 2 imported audit sets (Mozilla, ISRG, Bytecode Alliance); reviewed at every release."
 
+[[trusted.sha1]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2024-01-08"
+end = "2027-10-01"
+
 [[trusted.sha2]]
 criteria = "safe-to-deploy"
 user-id = 267 # Tony Arcieri (tarcieri)
@@ -577,7 +829,7 @@ notes = "Publisher trust (ADR-036 (2), docs/06 §3): RustCrypto trusted-publishi
 criteria = "safe-to-deploy"
 user-id = 267 # Tony Arcieri (tarcieri)
 start = "2020-06-10"
-end = "2027-09-28"
+end = "2027-10-01"
 notes = "Publisher trust (ADR-036 (2), docs/06 §3): RustCrypto maintainer account publishing the RustCrypto primitive crates chosen by ADR-023/docs/06 §3 (hashes, MACs, KDFs, ciphers, AEADs, signatures, KEMs and their trait/utility crates). Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
 
 [[trusted.sha3]]
@@ -593,6 +845,12 @@ trusted-publisher = "github:RustCrypto/XOFs"
 start = "2026-05-15"
 end = "2027-09-28"
 notes = "Publisher trust (ADR-036 (2), docs/06 §3): RustCrypto trusted-publishing identity (GitHub Actions of the RustCrypto/XOFs repository) for shake, a normal dependency of ml-dsa (ADR-023); not a direct dependency (the vector seed streams use sha3::Shake256, M1 review note). Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
+
+[[trusted.shellexpand]]
+criteria = "safe-to-deploy"
+user-id = 43093 # Ian Jackson (ijackson)
+start = "2022-08-05"
+end = "2027-10-01"
 
 [[trusted.signature]]
 criteria = "safe-to-deploy"
@@ -615,6 +873,18 @@ start = "2021-10-13"
 end = "2027-09-28"
 notes = "Publisher trust (docs/06 §3, ADR-015 update of the M0 review): publisher trusted by >= 2 imported audit sets (Mozilla, Bytecode Alliance); reviewed at every release."
 
+[[trusted.slotmap-careful]]
+criteria = "safe-to-deploy"
+user-id = 122288 # Nick Mathewson (nmathewson)
+start = "2024-09-30"
+end = "2027-10-01"
+
+[[trusted.spki]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2020-12-03"
+end = "2027-10-01"
+
 [[trusted.sponge-cursor]]
 criteria = "safe-to-deploy"
 trusted-publisher = "github:RustCrypto/utils"
@@ -622,12 +892,702 @@ start = "2026-05-08"
 end = "2027-09-28"
 notes = "Publisher trust (ADR-036 (2), docs/06 §3): RustCrypto trusted-publishing identity (GitHub Actions of the RustCrypto/utils repository) for the RustCrypto utility crates (zeroize, block-buffer, cmov, ctutils, sponge-cursor, ...) used by the primitive crates chosen by ADR-023/docs/06 §3. Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
 
+[[trusted.ssh-cipher-fork-arti]]
+criteria = "safe-to-deploy"
+user-id = 31201 # Gabi Moldovan (gabi-250)
+start = "2026-03-16"
+end = "2027-10-01"
+
+[[trusted.ssh-encoding-fork-arti]]
+criteria = "safe-to-deploy"
+user-id = 31201 # Gabi Moldovan (gabi-250)
+start = "2026-03-16"
+end = "2027-10-01"
+
+[[trusted.ssh-key-fork-arti]]
+criteria = "safe-to-deploy"
+user-id = 31201 # Gabi Moldovan (gabi-250)
+start = "2026-03-16"
+end = "2027-10-01"
+
 [[trusted.syn]]
 criteria = "safe-to-deploy"
 user-id = 3618 # David Tolnay (dtolnay)
 start = "2019-03-01"
 end = "2027-09-28"
 notes = "Publisher trust (docs/06 §3, ADR-015 update of the M0 review): publisher trusted by >= 2 imported audit sets (Mozilla, ISRG, Bytecode Alliance); reviewed at every release."
+
+[[trusted.tokio]]
+criteria = "safe-to-deploy"
+user-id = 10
+start = "2019-03-02"
+end = "2027-10-01"
+
+[[trusted.tokio]]
+criteria = "safe-to-deploy"
+user-id = 6741 # Alice Ryhl (Darksonn)
+start = "2020-12-25"
+end = "2027-10-01"
+
+[[trusted.tokio-rustls]]
+criteria = "safe-to-deploy"
+user-id = 4286
+start = "2019-03-13"
+end = "2027-10-01"
+
+[[trusted.tokio-rustls]]
+criteria = "safe-to-deploy"
+user-id = 4556 # Dirkjan Ochtman (djc)
+start = "2023-06-09"
+end = "2027-10-01"
+
+[[trusted.tor-async-utils]]
+criteria = "safe-to-deploy"
+user-id = 31201 # Gabi Moldovan (gabi-250)
+start = "2024-06-05"
+end = "2027-10-01"
+
+[[trusted.tor-async-utils]]
+criteria = "safe-to-deploy"
+user-id = 43093 # Ian Jackson (ijackson)
+start = "2024-04-30"
+end = "2027-10-01"
+
+[[trusted.tor-async-utils]]
+criteria = "safe-to-deploy"
+user-id = 122288 # Nick Mathewson (nmathewson)
+start = "2023-03-31"
+end = "2027-10-01"
+
+[[trusted.tor-basic-utils]]
+criteria = "safe-to-deploy"
+user-id = 31201 # Gabi Moldovan (gabi-250)
+start = "2024-06-05"
+end = "2027-10-01"
+
+[[trusted.tor-basic-utils]]
+criteria = "safe-to-deploy"
+user-id = 43093 # Ian Jackson (ijackson)
+start = "2024-04-30"
+end = "2027-10-01"
+
+[[trusted.tor-basic-utils]]
+criteria = "safe-to-deploy"
+user-id = 122288 # Nick Mathewson (nmathewson)
+start = "2022-04-01"
+end = "2027-10-01"
+
+[[trusted.tor-bytes]]
+criteria = "safe-to-deploy"
+user-id = 31201 # Gabi Moldovan (gabi-250)
+start = "2024-06-05"
+end = "2027-10-01"
+
+[[trusted.tor-bytes]]
+criteria = "safe-to-deploy"
+user-id = 43093 # Ian Jackson (ijackson)
+start = "2024-02-05"
+end = "2027-10-01"
+
+[[trusted.tor-bytes]]
+criteria = "safe-to-deploy"
+user-id = 122288 # Nick Mathewson (nmathewson)
+start = "2021-06-24"
+end = "2027-10-01"
+
+[[trusted.tor-cell]]
+criteria = "safe-to-deploy"
+user-id = 31201 # Gabi Moldovan (gabi-250)
+start = "2024-03-04"
+end = "2027-10-01"
+
+[[trusted.tor-cell]]
+criteria = "safe-to-deploy"
+user-id = 43093 # Ian Jackson (ijackson)
+start = "2024-02-05"
+end = "2027-10-01"
+
+[[trusted.tor-cell]]
+criteria = "safe-to-deploy"
+user-id = 122288 # Nick Mathewson (nmathewson)
+start = "2021-06-24"
+end = "2027-10-01"
+
+[[trusted.tor-cert]]
+criteria = "safe-to-deploy"
+user-id = 31201 # Gabi Moldovan (gabi-250)
+start = "2024-03-04"
+end = "2027-10-01"
+
+[[trusted.tor-cert]]
+criteria = "safe-to-deploy"
+user-id = 43093 # Ian Jackson (ijackson)
+start = "2024-02-05"
+end = "2027-10-01"
+
+[[trusted.tor-cert]]
+criteria = "safe-to-deploy"
+user-id = 122288 # Nick Mathewson (nmathewson)
+start = "2021-06-24"
+end = "2027-10-01"
+
+[[trusted.tor-chanmgr]]
+criteria = "safe-to-deploy"
+user-id = 31201 # Gabi Moldovan (gabi-250)
+start = "2024-03-04"
+end = "2027-10-01"
+
+[[trusted.tor-chanmgr]]
+criteria = "safe-to-deploy"
+user-id = 43093 # Ian Jackson (ijackson)
+start = "2024-02-05"
+end = "2027-10-01"
+
+[[trusted.tor-chanmgr]]
+criteria = "safe-to-deploy"
+user-id = 122288 # Nick Mathewson (nmathewson)
+start = "2021-06-24"
+end = "2027-10-01"
+
+[[trusted.tor-checkable]]
+criteria = "safe-to-deploy"
+user-id = 31201 # Gabi Moldovan (gabi-250)
+start = "2024-03-04"
+end = "2027-10-01"
+
+[[trusted.tor-checkable]]
+criteria = "safe-to-deploy"
+user-id = 43093 # Ian Jackson (ijackson)
+start = "2024-02-05"
+end = "2027-10-01"
+
+[[trusted.tor-checkable]]
+criteria = "safe-to-deploy"
+user-id = 122288 # Nick Mathewson (nmathewson)
+start = "2021-06-24"
+end = "2027-10-01"
+
+[[trusted.tor-circmgr]]
+criteria = "safe-to-deploy"
+user-id = 31201 # Gabi Moldovan (gabi-250)
+start = "2024-03-04"
+end = "2027-10-01"
+
+[[trusted.tor-circmgr]]
+criteria = "safe-to-deploy"
+user-id = 43093 # Ian Jackson (ijackson)
+start = "2024-02-05"
+end = "2027-10-01"
+
+[[trusted.tor-circmgr]]
+criteria = "safe-to-deploy"
+user-id = 122288 # Nick Mathewson (nmathewson)
+start = "2021-06-24"
+end = "2027-10-01"
+
+[[trusted.tor-config]]
+criteria = "safe-to-deploy"
+user-id = 31201 # Gabi Moldovan (gabi-250)
+start = "2024-03-04"
+end = "2027-10-01"
+
+[[trusted.tor-config]]
+criteria = "safe-to-deploy"
+user-id = 43093 # Ian Jackson (ijackson)
+start = "2024-02-05"
+end = "2027-10-01"
+
+[[trusted.tor-config]]
+criteria = "safe-to-deploy"
+user-id = 122288 # Nick Mathewson (nmathewson)
+start = "2021-06-24"
+end = "2027-10-01"
+
+[[trusted.tor-config-path]]
+criteria = "safe-to-deploy"
+user-id = 31201 # Gabi Moldovan (gabi-250)
+start = "2024-12-02"
+end = "2027-10-01"
+
+[[trusted.tor-config-path]]
+criteria = "safe-to-deploy"
+user-id = 43093 # Ian Jackson (ijackson)
+start = "2024-10-31"
+end = "2027-10-01"
+
+[[trusted.tor-config-path]]
+criteria = "safe-to-deploy"
+user-id = 122288 # Nick Mathewson (nmathewson)
+start = "2025-01-07"
+end = "2027-10-01"
+
+[[trusted.tor-consdiff]]
+criteria = "safe-to-deploy"
+user-id = 31201 # Gabi Moldovan (gabi-250)
+start = "2024-06-05"
+end = "2027-10-01"
+
+[[trusted.tor-consdiff]]
+criteria = "safe-to-deploy"
+user-id = 43093 # Ian Jackson (ijackson)
+start = "2024-02-05"
+end = "2027-10-01"
+
+[[trusted.tor-consdiff]]
+criteria = "safe-to-deploy"
+user-id = 122288 # Nick Mathewson (nmathewson)
+start = "2021-06-24"
+end = "2027-10-01"
+
+[[trusted.tor-dirclient]]
+criteria = "safe-to-deploy"
+user-id = 31201 # Gabi Moldovan (gabi-250)
+start = "2024-03-04"
+end = "2027-10-01"
+
+[[trusted.tor-dirclient]]
+criteria = "safe-to-deploy"
+user-id = 43093 # Ian Jackson (ijackson)
+start = "2024-02-05"
+end = "2027-10-01"
+
+[[trusted.tor-dirclient]]
+criteria = "safe-to-deploy"
+user-id = 122288 # Nick Mathewson (nmathewson)
+start = "2021-06-24"
+end = "2027-10-01"
+
+[[trusted.tor-dircommon]]
+criteria = "safe-to-deploy"
+user-id = 31201 # Gabi Moldovan (gabi-250)
+start = "2025-10-06"
+end = "2027-10-01"
+
+[[trusted.tor-dircommon]]
+criteria = "safe-to-deploy"
+user-id = 43093 # Ian Jackson (ijackson)
+start = "2026-03-30"
+end = "2027-10-01"
+
+[[trusted.tor-dircommon]]
+criteria = "safe-to-deploy"
+user-id = 122288 # Nick Mathewson (nmathewson)
+start = "2025-10-30"
+end = "2027-10-01"
+
+[[trusted.tor-dirmgr]]
+criteria = "safe-to-deploy"
+user-id = 31201 # Gabi Moldovan (gabi-250)
+start = "2024-03-04"
+end = "2027-10-01"
+
+[[trusted.tor-dirmgr]]
+criteria = "safe-to-deploy"
+user-id = 43093 # Ian Jackson (ijackson)
+start = "2024-02-05"
+end = "2027-10-01"
+
+[[trusted.tor-dirmgr]]
+criteria = "safe-to-deploy"
+user-id = 122288 # Nick Mathewson (nmathewson)
+start = "2021-06-24"
+end = "2027-10-01"
+
+[[trusted.tor-error]]
+criteria = "safe-to-deploy"
+user-id = 31201 # Gabi Moldovan (gabi-250)
+start = "2024-06-05"
+end = "2027-10-01"
+
+[[trusted.tor-error]]
+criteria = "safe-to-deploy"
+user-id = 43093 # Ian Jackson (ijackson)
+start = "2024-02-05"
+end = "2027-10-01"
+
+[[trusted.tor-error]]
+criteria = "safe-to-deploy"
+user-id = 122288 # Nick Mathewson (nmathewson)
+start = "2022-03-01"
+end = "2027-10-01"
+
+[[trusted.tor-general-addr]]
+criteria = "safe-to-deploy"
+user-id = 31201 # Gabi Moldovan (gabi-250)
+start = "2024-12-02"
+end = "2027-10-01"
+
+[[trusted.tor-general-addr]]
+criteria = "safe-to-deploy"
+user-id = 43093 # Ian Jackson (ijackson)
+start = "2024-10-31"
+end = "2027-10-01"
+
+[[trusted.tor-general-addr]]
+criteria = "safe-to-deploy"
+user-id = 122288 # Nick Mathewson (nmathewson)
+start = "2025-01-07"
+end = "2027-10-01"
+
+[[trusted.tor-guardmgr]]
+criteria = "safe-to-deploy"
+user-id = 31201 # Gabi Moldovan (gabi-250)
+start = "2024-03-04"
+end = "2027-10-01"
+
+[[trusted.tor-guardmgr]]
+criteria = "safe-to-deploy"
+user-id = 43093 # Ian Jackson (ijackson)
+start = "2024-02-05"
+end = "2027-10-01"
+
+[[trusted.tor-guardmgr]]
+criteria = "safe-to-deploy"
+user-id = 122288 # Nick Mathewson (nmathewson)
+start = "2021-10-29"
+end = "2027-10-01"
+
+[[trusted.tor-hsclient]]
+criteria = "safe-to-deploy"
+user-id = 31201 # Gabi Moldovan (gabi-250)
+start = "2024-03-04"
+end = "2027-10-01"
+
+[[trusted.tor-hsclient]]
+criteria = "safe-to-deploy"
+user-id = 43093 # Ian Jackson (ijackson)
+start = "2024-02-05"
+end = "2027-10-01"
+
+[[trusted.tor-hsclient]]
+criteria = "safe-to-deploy"
+user-id = 122288 # Nick Mathewson (nmathewson)
+start = "2023-03-31"
+end = "2027-10-01"
+
+[[trusted.tor-hscrypto]]
+criteria = "safe-to-deploy"
+user-id = 31201 # Gabi Moldovan (gabi-250)
+start = "2024-03-04"
+end = "2027-10-01"
+
+[[trusted.tor-hscrypto]]
+criteria = "safe-to-deploy"
+user-id = 43093 # Ian Jackson (ijackson)
+start = "2024-02-05"
+end = "2027-10-01"
+
+[[trusted.tor-hscrypto]]
+criteria = "safe-to-deploy"
+user-id = 122288 # Nick Mathewson (nmathewson)
+start = "2023-02-01"
+end = "2027-10-01"
+
+[[trusted.tor-key-forge]]
+criteria = "safe-to-deploy"
+user-id = 31201 # Gabi Moldovan (gabi-250)
+start = "2024-12-02"
+end = "2027-10-01"
+
+[[trusted.tor-key-forge]]
+criteria = "safe-to-deploy"
+user-id = 43093 # Ian Jackson (ijackson)
+start = "2024-10-31"
+end = "2027-10-01"
+
+[[trusted.tor-key-forge]]
+criteria = "safe-to-deploy"
+user-id = 122288 # Nick Mathewson (nmathewson)
+start = "2024-09-30"
+end = "2027-10-01"
+
+[[trusted.tor-keymgr]]
+criteria = "safe-to-deploy"
+user-id = 31201 # Gabi Moldovan (gabi-250)
+start = "2024-03-04"
+end = "2027-10-01"
+
+[[trusted.tor-keymgr]]
+criteria = "safe-to-deploy"
+user-id = 43093 # Ian Jackson (ijackson)
+start = "2024-02-05"
+end = "2027-10-01"
+
+[[trusted.tor-keymgr]]
+criteria = "safe-to-deploy"
+user-id = 122288 # Nick Mathewson (nmathewson)
+start = "2023-06-30"
+end = "2027-10-01"
+
+[[trusted.tor-linkspec]]
+criteria = "safe-to-deploy"
+user-id = 31201 # Gabi Moldovan (gabi-250)
+start = "2024-03-04"
+end = "2027-10-01"
+
+[[trusted.tor-linkspec]]
+criteria = "safe-to-deploy"
+user-id = 43093 # Ian Jackson (ijackson)
+start = "2024-02-05"
+end = "2027-10-01"
+
+[[trusted.tor-linkspec]]
+criteria = "safe-to-deploy"
+user-id = 122288 # Nick Mathewson (nmathewson)
+start = "2021-06-24"
+end = "2027-10-01"
+
+[[trusted.tor-llcrypto]]
+criteria = "safe-to-deploy"
+user-id = 31201 # Gabi Moldovan (gabi-250)
+start = "2024-06-05"
+end = "2027-10-01"
+
+[[trusted.tor-llcrypto]]
+criteria = "safe-to-deploy"
+user-id = 43093 # Ian Jackson (ijackson)
+start = "2024-02-05"
+end = "2027-10-01"
+
+[[trusted.tor-llcrypto]]
+criteria = "safe-to-deploy"
+user-id = 122288 # Nick Mathewson (nmathewson)
+start = "2021-06-24"
+end = "2027-10-01"
+
+[[trusted.tor-log-ratelim]]
+criteria = "safe-to-deploy"
+user-id = 31201 # Gabi Moldovan (gabi-250)
+start = "2024-06-05"
+end = "2027-10-01"
+
+[[trusted.tor-log-ratelim]]
+criteria = "safe-to-deploy"
+user-id = 43093 # Ian Jackson (ijackson)
+start = "2024-02-05"
+end = "2027-10-01"
+
+[[trusted.tor-log-ratelim]]
+criteria = "safe-to-deploy"
+user-id = 122288 # Nick Mathewson (nmathewson)
+start = "2023-12-04"
+end = "2027-10-01"
+
+[[trusted.tor-memquota]]
+criteria = "safe-to-deploy"
+user-id = 31201 # Gabi Moldovan (gabi-250)
+start = "2024-09-03"
+end = "2027-10-01"
+
+[[trusted.tor-memquota]]
+criteria = "safe-to-deploy"
+user-id = 43093 # Ian Jackson (ijackson)
+start = "2024-04-30"
+end = "2027-10-01"
+
+[[trusted.tor-memquota]]
+criteria = "safe-to-deploy"
+user-id = 122288 # Nick Mathewson (nmathewson)
+start = "2024-08-01"
+end = "2027-10-01"
+
+[[trusted.tor-memquota-cost]]
+criteria = "safe-to-deploy"
+user-id = 31201 # Gabi Moldovan (gabi-250)
+start = "2026-03-03"
+end = "2027-10-01"
+
+[[trusted.tor-memquota-cost]]
+criteria = "safe-to-deploy"
+user-id = 43093 # Ian Jackson (ijackson)
+start = "2026-03-30"
+end = "2027-10-01"
+
+[[trusted.tor-memquota-cost]]
+criteria = "safe-to-deploy"
+user-id = 122288 # Nick Mathewson (nmathewson)
+start = "2026-02-02"
+end = "2027-10-01"
+
+[[trusted.tor-netdir]]
+criteria = "safe-to-deploy"
+user-id = 31201 # Gabi Moldovan (gabi-250)
+start = "2024-03-04"
+end = "2027-10-01"
+
+[[trusted.tor-netdir]]
+criteria = "safe-to-deploy"
+user-id = 43093 # Ian Jackson (ijackson)
+start = "2024-02-05"
+end = "2027-10-01"
+
+[[trusted.tor-netdir]]
+criteria = "safe-to-deploy"
+user-id = 122288 # Nick Mathewson (nmathewson)
+start = "2021-06-24"
+end = "2027-10-01"
+
+[[trusted.tor-netdoc]]
+criteria = "safe-to-deploy"
+user-id = 31201 # Gabi Moldovan (gabi-250)
+start = "2024-03-04"
+end = "2027-10-01"
+
+[[trusted.tor-netdoc]]
+criteria = "safe-to-deploy"
+user-id = 43093 # Ian Jackson (ijackson)
+start = "2024-02-05"
+end = "2027-10-01"
+
+[[trusted.tor-netdoc]]
+criteria = "safe-to-deploy"
+user-id = 122288 # Nick Mathewson (nmathewson)
+start = "2021-06-24"
+end = "2027-10-01"
+
+[[trusted.tor-persist]]
+criteria = "safe-to-deploy"
+user-id = 31201 # Gabi Moldovan (gabi-250)
+start = "2024-03-04"
+end = "2027-10-01"
+
+[[trusted.tor-persist]]
+criteria = "safe-to-deploy"
+user-id = 43093 # Ian Jackson (ijackson)
+start = "2024-02-05"
+end = "2027-10-01"
+
+[[trusted.tor-persist]]
+criteria = "safe-to-deploy"
+user-id = 122288 # Nick Mathewson (nmathewson)
+start = "2021-10-29"
+end = "2027-10-01"
+
+[[trusted.tor-proto]]
+criteria = "safe-to-deploy"
+user-id = 31201 # Gabi Moldovan (gabi-250)
+start = "2024-03-04"
+end = "2027-10-01"
+
+[[trusted.tor-proto]]
+criteria = "safe-to-deploy"
+user-id = 43093 # Ian Jackson (ijackson)
+start = "2024-02-05"
+end = "2027-10-01"
+
+[[trusted.tor-proto]]
+criteria = "safe-to-deploy"
+user-id = 122288 # Nick Mathewson (nmathewson)
+start = "2021-06-24"
+end = "2027-10-01"
+
+[[trusted.tor-protover]]
+criteria = "safe-to-deploy"
+user-id = 31201 # Gabi Moldovan (gabi-250)
+start = "2024-06-05"
+end = "2027-10-01"
+
+[[trusted.tor-protover]]
+criteria = "safe-to-deploy"
+user-id = 43093 # Ian Jackson (ijackson)
+start = "2024-02-05"
+end = "2027-10-01"
+
+[[trusted.tor-protover]]
+criteria = "safe-to-deploy"
+user-id = 122288 # Nick Mathewson (nmathewson)
+start = "2021-06-24"
+end = "2027-10-01"
+
+[[trusted.tor-relay-selection]]
+criteria = "safe-to-deploy"
+user-id = 31201 # Gabi Moldovan (gabi-250)
+start = "2024-06-05"
+end = "2027-10-01"
+
+[[trusted.tor-relay-selection]]
+criteria = "safe-to-deploy"
+user-id = 43093 # Ian Jackson (ijackson)
+start = "2024-04-30"
+end = "2027-10-01"
+
+[[trusted.tor-relay-selection]]
+criteria = "safe-to-deploy"
+user-id = 122288 # Nick Mathewson (nmathewson)
+start = "2024-04-02"
+end = "2027-10-01"
+
+[[trusted.tor-rtcompat]]
+criteria = "safe-to-deploy"
+user-id = 31201 # Gabi Moldovan (gabi-250)
+start = "2024-06-05"
+end = "2027-10-01"
+
+[[trusted.tor-rtcompat]]
+criteria = "safe-to-deploy"
+user-id = 43093 # Ian Jackson (ijackson)
+start = "2024-02-05"
+end = "2027-10-01"
+
+[[trusted.tor-rtcompat]]
+criteria = "safe-to-deploy"
+user-id = 122288 # Nick Mathewson (nmathewson)
+start = "2021-06-24"
+end = "2027-10-01"
+
+[[trusted.tor-rtmock]]
+criteria = "safe-to-deploy"
+user-id = 31201 # Gabi Moldovan (gabi-250)
+start = "2024-06-05"
+end = "2027-10-01"
+
+[[trusted.tor-rtmock]]
+criteria = "safe-to-deploy"
+user-id = 43093 # Ian Jackson (ijackson)
+start = "2024-02-05"
+end = "2027-10-01"
+
+[[trusted.tor-rtmock]]
+criteria = "safe-to-deploy"
+user-id = 122288 # Nick Mathewson (nmathewson)
+start = "2021-06-24"
+end = "2027-10-01"
+
+[[trusted.tor-socksproto]]
+criteria = "safe-to-deploy"
+user-id = 31201 # Gabi Moldovan (gabi-250)
+start = "2024-06-05"
+end = "2027-10-01"
+
+[[trusted.tor-socksproto]]
+criteria = "safe-to-deploy"
+user-id = 43093 # Ian Jackson (ijackson)
+start = "2024-02-05"
+end = "2027-10-01"
+
+[[trusted.tor-socksproto]]
+criteria = "safe-to-deploy"
+user-id = 122288 # Nick Mathewson (nmathewson)
+start = "2021-06-24"
+end = "2027-10-01"
+
+[[trusted.tor-units]]
+criteria = "safe-to-deploy"
+user-id = 31201 # Gabi Moldovan (gabi-250)
+start = "2024-03-04"
+end = "2027-10-01"
+
+[[trusted.tor-units]]
+criteria = "safe-to-deploy"
+user-id = 43093 # Ian Jackson (ijackson)
+start = "2024-04-30"
+end = "2027-10-01"
+
+[[trusted.tor-units]]
+criteria = "safe-to-deploy"
+user-id = 122288 # Nick Mathewson (nmathewson)
+start = "2021-06-24"
+end = "2027-10-01"
 
 [[trusted.typenum]]
 criteria = "safe-to-deploy"
@@ -657,6 +1617,18 @@ start = "2026-02-27"
 end = "2027-09-28"
 notes = "Publisher trust (ADR-036 (2), docs/06 §3): RustCrypto trusted-publishing identity (GitHub Actions of the RustCrypto/traits repository) for the RustCrypto trait crates used by the primitive crates chosen by ADR-023/docs/06 §3. Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
 
+[[trusted.weak-table]]
+criteria = "safe-to-deploy"
+user-id = 122288 # Nick Mathewson (nmathewson)
+start = "2026-07-16"
+end = "2027-10-01"
+
+[[trusted.web-time-compat]]
+criteria = "safe-to-deploy"
+user-id = 122288 # Nick Mathewson (nmathewson)
+start = "2026-06-30"
+end = "2027-10-01"
+
 [[trusted.windows-sys]]
 criteria = "safe-to-deploy"
 user-id = 64539 # Kenny Kerr (kennykerr)
@@ -684,6 +1656,18 @@ trusted-publisher = "github:RustCrypto/utils"
 start = "2026-06-12"
 end = "2027-09-28"
 notes = "Publisher trust (ADR-036 (2), docs/06 §3): RustCrypto trusted-publishing identity (GitHub Actions of the RustCrypto/utils repository) for the RustCrypto utility crates (zeroize, block-buffer, cmov, ctutils, sponge-cursor, ...) used by the primitive crates chosen by ADR-023/docs/06 §3. Compensating controls: KATs on every target, differential tests, fuzzing, mutation gate. Reviewed at every release."
+
+[[trusted.zeroize_derive]]
+criteria = "safe-to-deploy"
+user-id = 267 # Tony Arcieri (tarcieri)
+start = "2019-03-23"
+end = "2027-10-01"
+
+[[trusted.zeroize_derive]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:RustCrypto/utils"
+start = "2026-06-12"
+end = "2027-10-01"
 
 [[trusted.zmij]]
 criteria = "safe-to-deploy"

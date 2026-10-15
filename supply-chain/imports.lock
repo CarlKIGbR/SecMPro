@@ -13,6 +13,13 @@ user-id = 189
 user-login = "BurntSushi"
 user-name = "Andrew Gallant"
 
+[[publisher.arti-client]]
+version = "0.46.0"
+when = "2026-09-02"
+user-id = 31201
+user-login = "gabi-250"
+user-name = "Gabi Moldovan"
+
 [[publisher.autocfg]]
 version = "1.5.1"
 when = "2026-05-22"
@@ -34,6 +41,20 @@ user-id = 156764
 user-login = "justsmth"
 user-name = "Justin W Smith"
 
+[[publisher.base16ct]]
+version = "0.2.0"
+when = "2023-02-26"
+user-id = 267
+user-login = "tarcieri"
+user-name = "Tony Arcieri"
+
+[[publisher.base64ct]]
+version = "1.8.3"
+when = "2026-01-12"
+user-id = 267
+user-login = "tarcieri"
+user-name = "Tony Arcieri"
+
 [[publisher.block-buffer]]
 version = "0.12.1"
 when = "2026-06-11"
@@ -45,6 +66,13 @@ when = "2026-05-22"
 user-id = 696
 user-login = "fitzgen"
 user-name = "Nick Fitzgerald"
+
+[[publisher.caret]]
+version = "0.10.1"
+when = "2026-08-03"
+user-id = 122288
+user-login = "nmathewson"
+user-name = "Nick Mathewson"
 
 [[publisher.cexpr]]
 version = "0.6.0"
@@ -87,6 +115,13 @@ version = "0.5.4"
 when = "2026-05-28"
 trusted-publisher = "github:RustCrypto/utils"
 
+[[publisher.const-oid]]
+version = "0.10.2"
+when = "2026-01-07"
+user-id = 267
+user-login = "tarcieri"
+user-name = "Tony Arcieri"
+
 [[publisher.core-models]]
 version = "0.0.7"
 when = "2026-07-15"
@@ -104,6 +139,13 @@ user-name = "Tony Arcieri"
 [[publisher.cpufeatures]]
 version = "0.3.1"
 when = "2026-08-26"
+user-id = 267
+user-login = "tarcieri"
+user-name = "Tony Arcieri"
+
+[[publisher.crypto-bigint]]
+version = "0.5.5"
+when = "2023-11-18"
 user-id = 267
 user-login = "tarcieri"
 user-name = "Tony Arcieri"
@@ -139,6 +181,41 @@ user-id = 6979
 user-login = "rozbb"
 user-name = "Michael Rosenberg"
 
+[[publisher.derive-deftly]]
+version = "1.11.5"
+when = "2026-07-27"
+user-id = 43093
+user-login = "ijackson"
+user-name = "Ian Jackson"
+
+[[publisher.derive-deftly-macros]]
+version = "1.11.5"
+when = "2026-07-27"
+user-id = 43093
+user-login = "ijackson"
+user-name = "Ian Jackson"
+
+[[publisher.derive_builder_core_fork_arti]]
+version = "0.11.2"
+when = "2022-05-06"
+user-id = 43093
+user-login = "ijackson"
+user-name = "Ian Jackson"
+
+[[publisher.derive_builder_fork_arti]]
+version = "0.11.2"
+when = "2022-05-06"
+user-id = 43093
+user-login = "ijackson"
+user-name = "Ian Jackson"
+
+[[publisher.derive_builder_macro_fork_arti]]
+version = "0.11.2"
+when = "2022-05-06"
+user-id = 43093
+user-login = "ijackson"
+user-name = "Ian Jackson"
+
 [[publisher.digest]]
 version = "0.10.7"
 when = "2023-05-19"
@@ -150,6 +227,13 @@ user-name = "Tony Arcieri"
 version = "0.11.3"
 when = "2026-05-03"
 trusted-publisher = "github:RustCrypto/traits"
+
+[[publisher.ecdsa]]
+version = "0.16.9"
+when = "2023-11-16"
+user-id = 267
+user-login = "tarcieri"
+user-name = "Tony Arcieri"
 
 [[publisher.ed25519]]
 version = "2.2.3"
@@ -183,6 +267,27 @@ when = "2026-08-20"
 user-id = 539
 user-login = "cuviper"
 user-name = "Josh Stone"
+
+[[publisher.elliptic-curve]]
+version = "0.13.8"
+when = "2023-11-19"
+user-id = 267
+user-login = "tarcieri"
+user-name = "Tony Arcieri"
+
+[[publisher.fs-mistrust]]
+version = "0.15.1"
+when = "2026-08-03"
+user-id = 122288
+user-login = "nmathewson"
+user-name = "Nick Mathewson"
+
+[[publisher.fslock-guard]]
+version = "0.8.2"
+when = "2026-09-02"
+user-id = 31201
+user-login = "gabi-250"
+user-name = "Gabi Moldovan"
 
 [[publisher.getrandom]]
 version = "0.4.3"
@@ -306,6 +411,12 @@ user-id = 281161
 user-login = "jschneider-bensch"
 user-name = "Jonas Schneider-Bensch"
 
+[[publisher.libm]]
+version = "0.2.16"
+when = "2026-01-24"
+user-id = 55123
+user-login = "rust-lang-owner"
+
 [[publisher.memchr]]
 version = "2.8.3"
 when = "2026-07-08"
@@ -342,6 +453,48 @@ user-id = 539
 user-login = "cuviper"
 user-name = "Josh Stone"
 
+[[publisher.oneshot-fused-workaround]]
+version = "0.7.1"
+when = "2026-08-03"
+user-id = 122288
+user-login = "nmathewson"
+user-name = "Nick Mathewson"
+
+[[publisher.p256]]
+version = "0.13.2"
+when = "2023-04-15"
+user-id = 267
+user-login = "tarcieri"
+user-name = "Tony Arcieri"
+
+[[publisher.p384]]
+version = "0.13.1"
+when = "2025-02-07"
+user-id = 267
+user-login = "tarcieri"
+user-name = "Tony Arcieri"
+
+[[publisher.p521]]
+version = "0.13.3"
+when = "2023-11-11"
+user-id = 267
+user-login = "tarcieri"
+user-name = "Tony Arcieri"
+
+[[publisher.pkcs1]]
+version = "0.7.5"
+when = "2023-04-24"
+user-id = 267
+user-login = "tarcieri"
+user-name = "Tony Arcieri"
+
+[[publisher.pkcs8]]
+version = "0.10.2"
+when = "2023-04-05"
+user-id = 267
+user-login = "tarcieri"
+user-name = "Tony Arcieri"
+
 [[publisher.poly1305]]
 version = "0.9.1"
 when = "2026-07-08"
@@ -354,12 +507,26 @@ user-id = 3618
 user-login = "dtolnay"
 user-name = "David Tolnay"
 
+[[publisher.primeorder]]
+version = "0.13.6"
+when = "2023-11-16"
+user-id = 267
+user-login = "tarcieri"
+user-name = "Tony Arcieri"
+
 [[publisher.proc-macro2]]
 version = "1.0.107"
 when = "2026-07-19"
 user-id = 3618
 user-login = "dtolnay"
 user-name = "David Tolnay"
+
+[[publisher.pwd-grp]]
+version = "1.0.2"
+when = "2025-11-05"
+user-id = 43093
+user-login = "ijackson"
+user-name = "Ian Jackson"
 
 [[publisher.regex]]
 version = "1.13.1"
@@ -382,12 +549,47 @@ user-id = 189
 user-login = "BurntSushi"
 user-name = "Andrew Gallant"
 
+[[publisher.retry-error]]
+version = "0.13.1"
+when = "2026-08-03"
+user-id = 122288
+user-login = "nmathewson"
+user-name = "Nick Mathewson"
+
+[[publisher.rfc6979]]
+version = "0.4.0"
+when = "2023-02-28"
+user-id = 267
+user-login = "tarcieri"
+user-name = "Tony Arcieri"
+
+[[publisher.rustls]]
+version = "0.23.46"
+when = "2026-10-14"
+user-id = 2751
+user-login = "ctz"
+user-name = "Joe Birr-Pixton"
+
 [[publisher.rustversion]]
 version = "1.0.23"
 when = "2026-07-07"
 user-id = 3618
 user-login = "dtolnay"
 user-name = "David Tolnay"
+
+[[publisher.safelog]]
+version = "0.9.1"
+when = "2026-08-03"
+user-id = 122288
+user-login = "nmathewson"
+user-name = "Nick Mathewson"
+
+[[publisher.sec1]]
+version = "0.7.3"
+when = "2023-07-16"
+user-id = 267
+user-login = "tarcieri"
+user-name = "Tony Arcieri"
 
 [[publisher.serde]]
 version = "1.0.229"
@@ -432,6 +634,13 @@ version = "0.1.0"
 when = "2026-05-15"
 trusted-publisher = "github:RustCrypto/XOFs"
 
+[[publisher.shellexpand]]
+version = "3.1.2"
+when = "2026-02-23"
+user-id = 43093
+user-login = "ijackson"
+user-name = "Ian Jackson"
+
 [[publisher.signature]]
 version = "2.2.0"
 when = "2023-11-12"
@@ -451,10 +660,38 @@ user-id = 6741
 user-login = "Darksonn"
 user-name = "Alice Ryhl"
 
+[[publisher.slotmap-careful]]
+version = "0.8.1"
+when = "2026-08-03"
+user-id = 122288
+user-login = "nmathewson"
+user-name = "Nick Mathewson"
+
 [[publisher.sponge-cursor]]
 version = "0.1.0"
 when = "2026-05-08"
 trusted-publisher = "github:RustCrypto/utils"
+
+[[publisher.ssh-cipher-fork-arti]]
+version = "0.2.0"
+when = "2026-03-16"
+user-id = 31201
+user-login = "gabi-250"
+user-name = "Gabi Moldovan"
+
+[[publisher.ssh-encoding-fork-arti]]
+version = "0.2.0"
+when = "2026-03-16"
+user-id = 31201
+user-login = "gabi-250"
+user-name = "Gabi Moldovan"
+
+[[publisher.ssh-key-fork-arti]]
+version = "0.6.7"
+when = "2026-03-16"
+user-id = 31201
+user-login = "gabi-250"
+user-name = "Gabi Moldovan"
 
 [[publisher.syn]]
 version = "1.0.109"
@@ -476,6 +713,272 @@ when = "2026-09-16"
 user-id = 3618
 user-login = "dtolnay"
 user-name = "David Tolnay"
+
+[[publisher.tokio]]
+version = "1.53.1"
+when = "2026-07-20"
+user-id = 6741
+user-login = "Darksonn"
+user-name = "Alice Ryhl"
+
+[[publisher.tokio-rustls]]
+version = "0.26.5"
+when = "2026-09-04"
+user-id = 4556
+user-login = "djc"
+user-name = "Dirkjan Ochtman"
+
+[[publisher.tor-async-utils]]
+version = "0.46.0"
+when = "2026-09-02"
+user-id = 31201
+user-login = "gabi-250"
+user-name = "Gabi Moldovan"
+
+[[publisher.tor-basic-utils]]
+version = "0.46.0"
+when = "2026-09-02"
+user-id = 31201
+user-login = "gabi-250"
+user-name = "Gabi Moldovan"
+
+[[publisher.tor-bytes]]
+version = "0.46.0"
+when = "2026-09-02"
+user-id = 31201
+user-login = "gabi-250"
+user-name = "Gabi Moldovan"
+
+[[publisher.tor-cell]]
+version = "0.46.0"
+when = "2026-09-02"
+user-id = 31201
+user-login = "gabi-250"
+user-name = "Gabi Moldovan"
+
+[[publisher.tor-cert]]
+version = "0.46.0"
+when = "2026-09-02"
+user-id = 31201
+user-login = "gabi-250"
+user-name = "Gabi Moldovan"
+
+[[publisher.tor-chanmgr]]
+version = "0.46.0"
+when = "2026-09-02"
+user-id = 31201
+user-login = "gabi-250"
+user-name = "Gabi Moldovan"
+
+[[publisher.tor-checkable]]
+version = "0.46.0"
+when = "2026-09-02"
+user-id = 31201
+user-login = "gabi-250"
+user-name = "Gabi Moldovan"
+
+[[publisher.tor-circmgr]]
+version = "0.46.0"
+when = "2026-09-02"
+user-id = 31201
+user-login = "gabi-250"
+user-name = "Gabi Moldovan"
+
+[[publisher.tor-config]]
+version = "0.46.0"
+when = "2026-09-02"
+user-id = 31201
+user-login = "gabi-250"
+user-name = "Gabi Moldovan"
+
+[[publisher.tor-config-path]]
+version = "0.46.0"
+when = "2026-09-02"
+user-id = 31201
+user-login = "gabi-250"
+user-name = "Gabi Moldovan"
+
+[[publisher.tor-consdiff]]
+version = "0.46.0"
+when = "2026-09-02"
+user-id = 31201
+user-login = "gabi-250"
+user-name = "Gabi Moldovan"
+
+[[publisher.tor-dirclient]]
+version = "0.46.0"
+when = "2026-09-02"
+user-id = 31201
+user-login = "gabi-250"
+user-name = "Gabi Moldovan"
+
+[[publisher.tor-dircommon]]
+version = "0.46.0"
+when = "2026-09-02"
+user-id = 31201
+user-login = "gabi-250"
+user-name = "Gabi Moldovan"
+
+[[publisher.tor-dirmgr]]
+version = "0.46.0"
+when = "2026-09-02"
+user-id = 31201
+user-login = "gabi-250"
+user-name = "Gabi Moldovan"
+
+[[publisher.tor-error]]
+version = "0.46.0"
+when = "2026-09-02"
+user-id = 31201
+user-login = "gabi-250"
+user-name = "Gabi Moldovan"
+
+[[publisher.tor-general-addr]]
+version = "0.46.0"
+when = "2026-09-02"
+user-id = 31201
+user-login = "gabi-250"
+user-name = "Gabi Moldovan"
+
+[[publisher.tor-guardmgr]]
+version = "0.46.0"
+when = "2026-09-02"
+user-id = 31201
+user-login = "gabi-250"
+user-name = "Gabi Moldovan"
+
+[[publisher.tor-hsclient]]
+version = "0.46.0"
+when = "2026-09-02"
+user-id = 31201
+user-login = "gabi-250"
+user-name = "Gabi Moldovan"
+
+[[publisher.tor-hscrypto]]
+version = "0.46.0"
+when = "2026-09-02"
+user-id = 31201
+user-login = "gabi-250"
+user-name = "Gabi Moldovan"
+
+[[publisher.tor-key-forge]]
+version = "0.46.0"
+when = "2026-09-02"
+user-id = 31201
+user-login = "gabi-250"
+user-name = "Gabi Moldovan"
+
+[[publisher.tor-keymgr]]
+version = "0.46.0"
+when = "2026-09-02"
+user-id = 31201
+user-login = "gabi-250"
+user-name = "Gabi Moldovan"
+
+[[publisher.tor-linkspec]]
+version = "0.46.0"
+when = "2026-09-02"
+user-id = 31201
+user-login = "gabi-250"
+user-name = "Gabi Moldovan"
+
+[[publisher.tor-llcrypto]]
+version = "0.46.0"
+when = "2026-09-02"
+user-id = 31201
+user-login = "gabi-250"
+user-name = "Gabi Moldovan"
+
+[[publisher.tor-log-ratelim]]
+version = "0.46.0"
+when = "2026-09-02"
+user-id = 31201
+user-login = "gabi-250"
+user-name = "Gabi Moldovan"
+
+[[publisher.tor-memquota]]
+version = "0.46.0"
+when = "2026-09-02"
+user-id = 31201
+user-login = "gabi-250"
+user-name = "Gabi Moldovan"
+
+[[publisher.tor-memquota-cost]]
+version = "0.46.0"
+when = "2026-09-02"
+user-id = 31201
+user-login = "gabi-250"
+user-name = "Gabi Moldovan"
+
+[[publisher.tor-netdir]]
+version = "0.46.0"
+when = "2026-09-02"
+user-id = 31201
+user-login = "gabi-250"
+user-name = "Gabi Moldovan"
+
+[[publisher.tor-netdoc]]
+version = "0.46.0"
+when = "2026-09-02"
+user-id = 31201
+user-login = "gabi-250"
+user-name = "Gabi Moldovan"
+
+[[publisher.tor-persist]]
+version = "0.46.0"
+when = "2026-09-02"
+user-id = 31201
+user-login = "gabi-250"
+user-name = "Gabi Moldovan"
+
+[[publisher.tor-proto]]
+version = "0.46.0"
+when = "2026-09-02"
+user-id = 31201
+user-login = "gabi-250"
+user-name = "Gabi Moldovan"
+
+[[publisher.tor-protover]]
+version = "0.46.0"
+when = "2026-09-02"
+user-id = 31201
+user-login = "gabi-250"
+user-name = "Gabi Moldovan"
+
+[[publisher.tor-relay-selection]]
+version = "0.46.0"
+when = "2026-09-02"
+user-id = 31201
+user-login = "gabi-250"
+user-name = "Gabi Moldovan"
+
+[[publisher.tor-rtcompat]]
+version = "0.46.0"
+when = "2026-09-02"
+user-id = 31201
+user-login = "gabi-250"
+user-name = "Gabi Moldovan"
+
+[[publisher.tor-rtmock]]
+version = "0.46.0"
+when = "2026-09-02"
+user-id = 31201
+user-login = "gabi-250"
+user-name = "Gabi Moldovan"
+
+[[publisher.tor-socksproto]]
+version = "0.46.0"
+when = "2026-09-02"
+user-id = 31201
+user-login = "gabi-250"
+user-name = "Gabi Moldovan"
+
+[[publisher.tor-units]]
+version = "0.46.0"
+when = "2026-09-02"
+user-id = 31201
+user-login = "gabi-250"
+user-name = "Gabi Moldovan"
 
 [[publisher.typenum]]
 version = "1.20.1"
@@ -523,6 +1026,20 @@ when = "2026-06-12"
 user-id = 1
 user-login = "alexcrichton"
 user-name = "Alex Crichton"
+
+[[publisher.weak-table]]
+version = "0.4.0"
+when = "2026-08-04"
+user-id = 122288
+user-login = "nmathewson"
+user-name = "Nick Mathewson"
+
+[[publisher.web-time-compat]]
+version = "0.2.1"
+when = "2026-08-03"
+user-id = 122288
+user-login = "nmathewson"
+user-name = "Nick Mathewson"
 
 [[publisher.windows-sys]]
 version = "0.52.0"
@@ -573,6 +1090,11 @@ user-name = "Michael Rosenberg"
 
 [[publisher.zeroize]]
 version = "1.9.0"
+when = "2026-06-12"
+trusted-publisher = "github:RustCrypto/utils"
+
+[[publisher.zeroize_derive]]
+version = "1.5.0"
 when = "2026-06-12"
 trusted-publisher = "github:RustCrypto/utils"
 

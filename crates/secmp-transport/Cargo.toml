@@ -20,11 +20,16 @@ harness = ["secmp-proto/kat", "secmp-crypto/kat"]
 [dependencies]
 secmp-crypto.workspace = true
 secmp-proto.workspace = true
-arti-client.workspace = true
 rustls.workspace = true
 tokio-rustls.workspace = true
 tokio.workspace = true
 aws-lc-rs.workspace = true
+
+# Not under Kani (`cargo kani` sets `--cfg=kani` in the rustflags, which Cargo's target cfg sees): the Kani harnesses of
+# `secmp-client-core` verify the sans-IO core only, and the Arti closure does not compile under `cfg(kani)` (`zerocopy`
+# 0.8.60's own `cfg(kani)` code needs its `derive` feature; kani job of PR runs 38691107733, 38724110285).
+[target.'cfg(not(kani))'.dependencies]
+arti-client.workspace = true
 
 [lints]
 workspace = true

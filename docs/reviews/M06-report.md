@@ -380,6 +380,24 @@ required job (`ct`, `mutants`, `proverif-hx`) is not green.
   implementation (`secmp-transport/src/ops.rs`); the M5 harness suite ran 138/138 unchanged after the refactor.
   `Session::link_kat` and `AsyncSession::link_kat` name `link::Link` fully qualified. The old import was unused without
   feature `harness`.
+- **PR run 38724110285 (head `1517781`, P1), read 2026-10-15.**
+  - **`kani` failed at compile time** (also on the commit-1 run 38691107733). Under `cfg(kani)`, `zerocopy` 0.8.60
+    (`secmp-transport` → `arti-client` → … → `rsa` → `rand` 0.8 → `ppv-lite86` → `zerocopy`) does not build: its own
+    `cfg(kani)` code needs the `derive` feature.
+    - **Fix (`fix(m6)` commit after P2):** `arti-client` is a `[target.'cfg(not(kani))'.dependencies]` entry of
+      `secmp-transport`. `cargo kani` sets `--cfg=kani` in `CARGO_ENCODED_RUSTFLAGS`, so Cargo leaves it out of the Kani
+      build only.
+    - The dependency set, features, versions and `Cargo.lock` are unchanged; G-04, AD-12, X-03 and `cargo deny` stay
+      green.
+    - Local `cargo xtask step kani` with the fix: PASS, 40/40 harnesses verified (`secmp-client-core` 7, `secmp-proto` 30,
+      `secmp-relay` 3; 3087 s).
+  - **`windows-native` was cancelled at its 90-min timeout.** Build and nextest took about 18 min with the Arti closure.
+    The `kat` harness suite took 2361 s, almost all of it the Phase A virtual AI tests on the Windows runner (1900–2220 s
+    each). I did not change the job's timeout; it is a CI budget decision for you. P2 adds the tokio AI repeats.
+  - **NASM:** `windows-latest` ships no NASM. Chocolatey installed `nasm` 3.2.0 ("NASM version 3.02"). The probe step now
+    pins `$pin = "3.2.0"` for the fallback install (`ci.yml`, `ci-dispatch.yml`).
+  - `linux-fast` passed in 74 min. The mutants shards were still running when I looked (12:35 UTC); their times go here
+    when the run ends.
 - **MIRI-01 (Phase B, report only).** Command: `cargo +nightly-2026-09-21 miri test -p secmp-proto -v 2>&1 | grep -oE
   "(-C opt-level=[0-9]|-Zmir-opt-level=[0-9]|-Zmiri[a-z-]*)" | sort -u`. The pinned nightly is needed because Miri is not
   on the stable toolchain. Output:

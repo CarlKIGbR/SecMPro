@@ -96,8 +96,9 @@ jobs:
       - name: NASM probe (aws-lc-sys from source with AWS_LC_SYS_PREBUILT_NASM=0; OPEN-M6-06)
         run: |
           # the image's NASM if present (its version goes into the log); else the pinned Chocolatey package
-          # the pin is the version the first probe printed (WEISUNG M6-B-2); empty until then: absent NASM fails
-          $pin = ""
+          # pinned to the package the first run installed (PR run 38724110285: windows-latest ships no NASM; Chocolatey
+          # nasm 3.2.0 = "NASM version 3.02"; WEISUNG M6-B-2)
+          $pin = "3.2.0"
           $nasm = Get-Command nasm -ErrorAction SilentlyContinue
           if ($nasm) { nasm -v } else {
             if (-not $pin) { throw "NASM is not on the runner image and no pinned version is set" }

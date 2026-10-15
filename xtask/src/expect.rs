@@ -27,16 +27,31 @@ pub(crate) const UNSAFE_DENY_ONLY: &[&str] = &["secmp-ui"];
 pub(crate) const ZERO_EXEMPTION_ROOTS: &[&str] = &["secmp-crypto", "secmp-proto"];
 
 /// The normal (shipped) direct dependencies each of these crates may have, by package name (M5 review F-7, R-126,
-/// TEST-SPEC-M6 G-04): a direct dependency enters only with its ADR line and an entry here. Phase A (M6, before the
-/// tokio/Tor ADR-051): workspace crates only, plus the testkit's existing normal `serde_json` (ADR-037); the
-/// relay and the transport stay `std`-only (ADR-049, ADR-050). `secmp-client-core` gains exactly the workspace crates
-/// `secmp-proto`, `secmp-crypto` and `secmp-transport`. Phase B widens a row exactly to ADR-051.
+/// TEST-SPEC-M6 G-04): a direct dependency enters only with its ADR line and an entry here. Phase A (M6): workspace
+/// crates only, plus the testkit's existing normal `serde_json` (ADR-037). Phase B widens the rows exactly to the
+/// ADR-051 Part 2 table (as amended by ADR-051 Amendment 1): `secmp-transport` gains `arti-client`, `rustls`,
+/// `tokio-rustls`, `tokio`, `aws-lc-rs`; `secmp-relay` gains `rustls`, `aws-lc-rs` (optional, feature `direct-tls`,
+/// off by default — the default build stays std-only, ADR-049); `secmp-client-core` and `secmp-testkit` gain `tokio`.
 pub(crate) const NORMAL_DEPENDENCY_ALLOW: &[(&str, &[&str])] = &[
-    ("secmp-relay", &["secmp-crypto", "secmp-proto"]),
-    ("secmp-transport", &["secmp-crypto", "secmp-proto"]),
+    (
+        "secmp-relay",
+        &["aws-lc-rs", "rustls", "secmp-crypto", "secmp-proto"],
+    ),
+    (
+        "secmp-transport",
+        &[
+            "arti-client",
+            "aws-lc-rs",
+            "rustls",
+            "secmp-crypto",
+            "secmp-proto",
+            "tokio",
+            "tokio-rustls",
+        ],
+    ),
     (
         "secmp-client-core",
-        &["secmp-crypto", "secmp-proto", "secmp-transport"],
+        &["secmp-crypto", "secmp-proto", "secmp-transport", "tokio"],
     ),
     (
         "secmp-testkit",
@@ -47,6 +62,7 @@ pub(crate) const NORMAL_DEPENDENCY_ALLOW: &[(&str, &[&str])] = &[
             "secmp-relay",
             "secmp-transport",
             "serde_json",
+            "tokio",
         ],
     ),
 ];
@@ -65,10 +81,35 @@ pub(crate) const BINARIES: &[&str] = &["secmp-relay", "secmp-cli", "secmp-ui"];
 /// `RustSec` advisories that `cargo audit` (docs/06 §5 step 3) ignores, as (id, reason). An entry needs an ADR
 /// (`deny.toml`: "An advisory may only be ignored with an ADR and a reason") and is re-triaged at every release.
 /// The gate prints every ignored id in its result line.
-pub(crate) const AUDIT_IGNORES: &[(&str, &str)] = &[(
-    "RUSTSEC-2026-0173",
-    "ADR-037: proc-macro-error2 (unmaintained) is in Cargo.lock only as a cfg(hax) dependency of hax-lib-macros \
-     and is never compiled for any target; cargo deny, which evaluates the per-target graph, does not report it",
+pub(crate) const AUDIT_IGNORES: &[(&str, &str)] = &[
+    (
+        "RUSTSEC-2026-0173",
+        "ADR-037: proc-macro-error2 (unmaintained) is in Cargo.lock only as a cfg(hax) dependency of hax-lib-macros \
+         and is never compiled for any target; cargo deny, which evaluates the per-target graph, does not report it",
+    ),
+    (
+        "RUSTSEC-2023-0071",
+        "ADR-051 Am. 1: rsa 0.9.10 Marvin — Arti client only verifies RSA signatures, no private key in SecMPro",
+    ),
+    (
+        "RUSTSEC-2024-0436",
+        "ADR-051 Am. 1: paste (unmaintained proc-macro) is compile-time only",
+    ),
+    (
+        "RUSTSEC-2025-0141",
+        "ADR-051 Am. 1: bincode 2.0.1 (unmaintained) is an optional dependency of typed-index-collections; \
+         lock-only, never compiled (cargo tree -i prints nothing); cargo deny does not report it",
+    ),
+];
+
+/// Cooldown exceptions (ADR-015 Amendment 2) as (crate, version, until = publish date + 7 days, advisory): a version
+/// younger than 7 days that closes a RUSTSEC advisory on a pinned crate, kept until the cooldown it bridges is over; an
+/// entry past its `until` date is itself a cooldown finding. The delta diff is in `docs/reviews/MNN-evidence/vet-deltas/`.
+pub(crate) const COOLDOWN_EXCEPTIONS: &[(&str, &str, &str, &str)] = &[(
+    "rustls",
+    "0.23.46",
+    "2026-10-21",
+    "RUSTSEC-2026-0349 (ADR-015 Am. 2)",
 )];
 
 /// Packages exposing the `kat` feature (docs/06 §5 step 5): external KATs, differential tests, vector checks; M3:

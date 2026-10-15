@@ -14,11 +14,17 @@ publish.workspace = true
 [features]
 harness = ["secmp-proto/kat", "secmp-crypto/kat"]
 
-# docs/02 §3: `secmp-proto`, `secmp-crypto` only among workspace crates; no third-party runtime crate in M5 (the
-# stream is `std::io`, ADR-049).
+# docs/02 §3: `secmp-proto`, `secmp-crypto` only among workspace crates. ADR-051 Part 2: the async driver (`tokio`),
+# the Tor provider (`arti-client`) and the TLS provider (`rustls`, `tokio-rustls`, `aws-lc-rs` as the explicit
+# `CryptoProvider` source).
 [dependencies]
 secmp-crypto.workspace = true
 secmp-proto.workspace = true
+arti-client.workspace = true
+rustls.workspace = true
+tokio-rustls.workspace = true
+tokio.workspace = true
+aws-lc-rs.workspace = true
 
 [lints]
 workspace = true

@@ -48,6 +48,49 @@ AI-09, MR-01, MR-02, G-01…G-11, K-01…K-07, P-01…P-04, P-06, P-07, FZ-01, F
 - Root `Cargo.toml`: `[workspace.dependencies]` += `secmp-relay`, `secmp-transport`, `secmp-client-core` (F-10);
   `[profile.dev.package."*"]`/`secmp-crypto`/`secmp-proto` `opt-level = 3` (dev/test only; one virtual hour fell from 21 s to 1.3 s).
 
+### Phase B commit 1 — dependencies as landed (ADR-051 Part 2, Amendment 1)
+
+The closure count is the number of packages in `cargo tree -p <crate> -e normal --target x86_64-unknown-linux-gnu`.
+
+| Crate | Pin | Published | Used by | Closure (normal, Linux) |
+|---|---|---|---|---|
+| `arti-client` | `=0.46.0` (`tokio`, `rustls`, `onion-service-client`, `static-sqlite`) | 2026-09-02 | `secmp-transport` | 390 |
+| `rustls` | `=0.23.46` (`aws_lc_rs`, `std`) | 2026-10-14 09:54 UTC (ADR-015 Am. 2 exception until 2026-10-21) | `secmp-transport`; `secmp-relay` (optional, `direct-tls`) | 15 |
+| `tokio-rustls` | `=0.26.5` | 2026-09-04 | `secmp-transport` | 24 |
+| `tokio` | `=1.53.1` (`rt`, `rt-multi-thread`, `net`, `time`, `sync`, `io-util`) | 2026-07-20 | `secmp-transport`, `secmp-client-core`, `secmp-testkit` | 9 |
+| `aws-lc-rs` | `=1.18.1` (existing entry) | 2026-09-01 | `secmp-transport`; `secmp-relay` (optional, `direct-tls`) | 8 |
+| `turmoil` | `=0.7.2` | 2026-04-24 | `secmp-testkit` (dev) | dev only |
+
+Lock and supply-chain changes:
+- `Cargo.lock`: +442 packages, no existing entry changed.
+- X-01: ten packages younger than 7 days were pinned back: deranged 0.5.8, equivalent 1.0.2, schemars 1.2.2, smallvec 1.16.2,
+  tokio-util 0.7.19, toml 1.1.6, toml_edit 0.25.15, toml_parser 1.1.3, zerocopy/zerocopy-derive 0.8.60. Youngest outside
+  the exception: `toml_writer` 1.1.3+spec-1.1.0, 7 days.
+- X-02: `deny.toml` has 46 `skip` entries; each names the direct dependency that pulls the version. No `skip-tree`.
+- X-04: two license exceptions, `async_executors` (Unlicense) and `notify` (CC0-1.0). `priority-queue` is taken under MPL-2.0.
+- X-03: 334 tracked vet exemptions are new; each names its direct dependency. Imports were refreshed (`cargo vet regenerate
+  imports`; the 4 exemptions it pruned are kept). The closure check now works by (name, version) (ADR-036 Am. 1).
+  `check_vet_closure`: 55 external crates, 0 exempted.
+
+Evidence files:
+- `M06-evidence/ci-fast-m6b-deps-8a31d4f.txt`
+- `M06-evidence/vet-m6b-deps.txt`
+- `M06-evidence/vet-suggest-m6b-deps.txt`. `cargo vet suggest --locked` panics in cargo-vet 0.10.2 (`storage.rs:837`); the
+  file is the output of `cargo vet suggest`, which left the store unchanged: 359 exemptions, 43 unvetted.
+- `M06-evidence/vet-deltas/rustls-0.23.45-0.23.46.diff`, from `cargo vet diff --mode local rustls 0.23.45 0.23.46` with the
+  interactive header stripped: 23 files, +1160/−167.
+- `M06-evidence/advisory-rsa-reachability.txt`
+
+Tests: `cooldown::tests::{exception_allows_young_pinned_version_until_date, expired_exception_is_a_finding,
+exception_does_not_cover_other_versions}`; `policy::tests::{audit_ignores_match_deny_toml,
+vet_closure_exemption_for_closure_version_is_a_finding, vet_closure_other_version_of_closure_name_is_allowed,
+vet_closure_of_this_workspace_has_no_exemptions, crypto_and_proto_stay_sans_io (AD-12),
+normal_dependencies_match_adr_allowlist (G-04, table = ADR-051)}`.
+
+`secmp-testkit` `m6_followups::scheduler_core_has_no_tokio` (X-09) still asserts that `scheduler/core/backoff.rs`, `core/mod.rs`
+and `core/pure.rs` contain no `tokio` token. It also asserts that `tokio.workspace = true` is the only tokio line of the
+`secmp-client-core` manifest.
+
 ## 3. Evidence per acceptance criterion (Phase A rows)
 
 Commands, all at code head `7a67339` (WEISUNG M6-10, fix round 2): `cargo xtask ci-fast --strict`
@@ -180,7 +223,8 @@ None from `docs/03`/`docs/01`. Implementation choices the review should know (no
 
 ## 6. Dependencies added or bumped
 
-None (workspace path crates only: `secmp-client-core` → `secmp-transport`; `secmp-testkit` → `secmp-client-core`).
+Phase A: none (workspace path crates only: `secmp-client-core` → `secmp-transport`; `secmp-testkit` → `secmp-client-core`).
+Phase B commit 1: see §2, "Phase B commit 1 — dependencies as landed".
 
 ## 7. Open risks and known limitations
 
@@ -212,6 +256,135 @@ None (workspace path crates only: `secmp-client-core` → `secmp-transport`; `se
 ## 8. Blocked / questions for the reviewer or owner
 
 None for Phase A. Phase B waits for the owner's ADR-051 Part 2 approval and `cargo vet` records.
+
+### Phase B commit 1 (BRIEF M6-B §1) — BLOCKED, 2026-10-15, base `8a31d4f`
+
+Nothing committed. The ADR-051 Part 2 set, resolved exactly as the table pins it, fails `cargo deny check advisories`. This
+matches the §1 STOP "an advisory". Evidence: `M06-evidence/deny-m6b-deps-8a31d4f.txt`. The uncommitted manifests and lock are
+in `target/fable/M6-B/deps-wip-8a31d4f.patch` (not tracked).
+
+What was done before the stop: the six pins in `[workspace.dependencies]` and the crate edges as in the ADR table. The relay
+got `rustls` and `aws-lc-rs` as optional deps behind `direct-tls`, off by default. Resolving added 442 new crates to
+`Cargo.lock`; no existing entry changed. Ten crates were younger than 7 days and were pinned back with `cargo update --precise`:
+deranged 0.5.8, equivalent 1.0.2, schemars 1.2.2, smallvec 1.16.2, tokio-util 0.7.19, toml 1.1.6, toml_edit 0.25.15,
+toml_parser 1.1.3, zerocopy/zerocopy-derive 0.8.60. After that `cargo xtask cooldown` passed: 561 packages, youngest
+toml_writer 1.1.3, 7 days.
+
+Advisories against the pinned set (`cargo deny --locked check advisories`):
+
+| ID | Crate | Pulled by | Fix |
+|---|---|---|---|
+| RUSTSEC-2026-0349 "Unauthenticated ServerHello can downgrade later connections to classical key exchange" | `rustls` 0.23.45 | direct (`secmp-transport`, `secmp-relay`), `tokio-rustls`, `futures-rustls`, `tor-rtcompat` | ≥ 0.23.46 |
+| RUSTSEC-2026-0346 "`Debug` impls for client session values expose TLS secrets" | `rustls` 0.23.45 | as above | ≥ 0.23.46 |
+| RUSTSEC-2026-0347 "Buffered application data sent to outer server after ECH rejection" | `rustls` 0.23.45 | as above | ≥ 0.23.46 |
+| RUSTSEC-2026-0348 "Brotli certificate decompression can allocate up to 1 GiB before authentication" | `rustls` 0.23.45 | as above | ≥ 0.23.46 |
+| RUSTSEC-2023-0071 "Marvin Attack" (vulnerability) | `rsa` 0.9.10 | `tor-llcrypto`, `tor-key-forge`, `ssh-key-fork-arti` (normal edges, Arti 0.46.0) | none (only `0.10.0-rc.*` exists) |
+| RUSTSEC-2024-0436 `paste` unmaintained | `paste` 1.0.15 | 15 `tor-*` crates, `pwd-grp`, `slotmap-careful` | none |
+
+Why there is no fix inside the brief:
+- `rustls` 0.23.46 is the first fixed version. It was published 2026-10-14 09:54 UTC, so it is inside the 7-day cooldown
+  until 2026-10-21 09:54 UTC (CLAUDE.md §1.9). It is also not the version the ADR-051 table pins.
+- The `rsa` and `paste` findings come from Arti 0.46.0 itself and have no upgrade path. The ADR-051 Context does not
+  mention them. An ignore needs an ADR and a reason (`deny.toml`, `expect::AUDIT_IGNORES`).
+
+The other `cargo deny` findings were as the ADR expected:
+- licenses: `async_executors` (Unlicense) and `notify` (CC0-1.0) are rejected; `priority-queue` passes under the existing
+  MPL-2.0 allowance.
+- bans: 42 duplicated crate names, which become the `skip` list.
+- `cargo vet --locked`: red for the whole new closure, since no exemptions had been written yet.
+
+Questions for the reviewer/owner:
+1. **rustls.** Should the ADR-051 pin move to `rustls =0.23.46`, with commit 1 waiting until 2026-10-21 09:54 UTC? Or is
+   there a cooldown exception (ADR)? `futures-rustls` and `tor-rtcompat` also resolve to the single `rustls` in the graph,
+   so the bump fixes Arti's TLS too.
+2. **rsa / paste in the Arti closure.** Should these become ADR'd advisory ignores with reasons? For `rsa`, Arti uses RSA
+   for Tor relay identity keys; whether only public-key verification is reachable is a question for the reviewer, not
+   established here. The alternative is a different `arti-client` version, which means re-checking the ADR-051 table.
+
+**Resolved by WEISUNG M6-B-0 (2026-10-15):**
+- D1: `rustls =0.23.46`, using the cooldown exception of ADR-015 Am. 2.
+- D2: RUSTSEC-2023-0071 ignored. Evidence: `M06-evidence/advisory-rsa-reachability.txt`, ending `reachable_private_key_ops=none`.
+- D3: RUSTSEC-2024-0436 ignored.
+
+### Phase B commit 1, second attempt (WEISUNG M6-B-0) — BLOCKED, 2026-10-15, base `8a31d4f`
+
+Nothing committed. Everything WEISUNG M6-B-0 §Tun 1–4 asks for is in the working tree:
+- the ADR texts;
+- `COOLDOWN_EXCEPTIONS` and the cooldown code with the three named tests;
+- `AUDIT_IGNORES` and `deny.toml` ignore, with test `audit_ignores_match_deny_toml`;
+- 46 `skip` entries and 2 license exceptions;
+- 337 tracked vet exemptions and the import refresh;
+- the G-04 table widened to ADR-051;
+- AD-12 `crypto_and_proto_stay_sans_io`;
+- X-09 `scheduler_core_has_no_tokio` adapted to Phase B (`tokio.workspace = true` is the only tokio line).
+
+The tracked changes are saved as `target/fable/M6-B/deps-wip-2-8a31d4f.patch`. Two of the weisung's STOP conditions hold.
+
+Gate state at the second stop:
+- passing: `cargo deny check` (all four sections), `cargo xtask cooldown` (prints
+  `cooldown: exception rustls@0.23.46 until 2026-10-21 (RUSTSEC-2026-0349 (ADR-015 Am. 2))`), xtask 187/187 tests, clippy,
+  fmt, nextest, kat (all suites);
+- failing: `policy` (vet-closure, 1 finding), `audit` (1 warning), `vet` (40 owner crates).
+
+**STOP 1 — a further advisory.** `cargo audit --deny warnings` reports **RUSTSEC-2025-0141**, `bincode` 2.0.1 "unmaintained".
+- `bincode` is in `Cargo.lock` only as an optional dependency of `typed-index-collections` 3.5.0, which is in the Arti closure.
+- `cargo tree -i bincode --target all -e normal,build,dev` prints nothing: it is never compiled.
+- `cargo deny` (per-target graph) does not report it.
+- This is the same pattern as RUSTSEC-2026-0173 (`proc-macro-error2`), which is ignored in `AUDIT_IGNORES` only.
+
+**STOP 2 — `cargo vet` red outside the named groups.** `check_vet_closure` refuses an exemption whose crate *name* is in the
+normal closure of `secmp-crypto`/`secmp-proto`, because an exemption can serve as the base of an imported delta.
+1. Feature unification with Arti brings three new crates into that closure:
+   - `zeroize_derive` 1.5.0: `zeroize` default-features, via `aes` ← `tor-llcrypto`;
+   - `libm` 0.2.16: via `num-bigint-dig` ← `ssh-key-fork-arti` (`rsa` feature) ← `tor-key-forge`;
+   - `const-oid` 0.10.2: `digest` 0.11 default, via `sha3` default ← `derive-deftly-macros` ← `arti-client`.
+
+   None of the five import sets covers these versions. The traces come from `cargo tree --workspace -e normal,features -i <crate>`.
+2. Eight Arti-closure versions share a name with a crate already in the closure:
+   - `const-oid` 0.9.6
+   - `crypto-common` 0.1.7
+   - `getrandom` 0.2.17 and 0.3.4
+   - `hkdf` 0.12.4
+   - `rand` 0.8.8 and 0.9.5
+   - `sha3` 0.10.9
+
+   They are not covered by imports either. Policy finding:
+   `vet-closure: cargo-vet exemptions inside the secmp-crypto/secmp-proto closure: const-oid 0.10.2, crypto-common 0.2.2,
+   getrandom 0.4.3, hkdf 0.13.0, libm 0.2.16, rand 0.10.3, sha3 0.11.0, zeroize_derive 1.5.0`.
+
+Without exemptions for these 11 versions, `cargo vet --locked` is red for them in addition to the 40 owner crates:
+arti-client, rustls 0.23.46, tokio, tokio-rustls and 36 `tor-*`. With the exemptions, `policy` is red.
+
+`cargo vet --locked` with the 337 exemptions: "Vetting Failed! 40 unvetted dependencies", exactly the owner groups.
+
+Questions:
+1. **RUSTSEC-2025-0141.** Should it be an `AUDIT_IGNORES` entry (lock-only, never compiled; no `deny.toml` entry because
+   `cargo deny` does not report it), like RUSTSEC-2026-0173?
+2. **The 11 versions.** How should they be vetted? One route is owner audits/trust records; three of them
+   (`zeroize_derive` 1.5.0, `libm` 0.2.16, `const-oid` 0.10.2) are now inside the zero-exemption closure. The other route
+   is a reviewer decision on how `check_vet_closure` treats other versions of a closure crate's name.
+
+**Resolved by WEISUNG M6-B-0b (2026-10-15):**
+- D4: RUSTSEC-2025-0141 is in `AUDIT_IGNORES` only, carved out of `audit_ignores_match_deny_toml` like RUSTSEC-2026-0173,
+  and is listed in the ADR-051 Am. 1 triage.
+- D5: the closure is (name, version) (ADR-036 Am. 1). `zeroize_derive` 1.5.0, `libm` 0.2.16 and `const-oid` 0.10.2 have no
+  exemption; the eight other versions carry X-03 exemptions.
+- D6: the source assertion of `scheduler_core_has_no_tokio` is kept (files in §2).
+
+Gates at commit 1: `cargo xtask ci-fast --strict` green except `vet`. `cargo vet --locked` reports "Vetting Failed! 43
+unvetted dependencies": arti-client 0.46.0, tokio 1.53.1, tokio-rustls 0.26.5, the 36 `tor-*` 0.46.0, rustls 0.23.46,
+zeroize_derive 1.5.0, libm 0.2.16 and const-oid 0.10.2.
+
+**Owner requests (vet records).** These come from `cargo vet suggest`:
+- `rustls` 0.23.46: suggest offers `cargo vet diff rustls 0.21.6 0.23.46` (publisher `ctz`; 180 files, +36233/−21084). Our
+  delta file is 0.23.45 → 0.23.46.
+- `zeroize_derive` 1.5.0: `cargo vet diff zeroize_derive 1.4.2 1.5.0` (6 files, +132/−70). The note reads "this project
+  trusts github:RustCrypto/utils — consider cargo vet trust zeroize_derive github:RustCrypto/utils".
+- `libm` 0.2.16: `cargo vet diff libm 0.2.6 0.2.16` (191 files, +10152/−3644). Note: "consider cargo vet trust libm
+  rust-lang-owner".
+- `const-oid` 0.10.2: `cargo vet inspect const-oid 0.10.2` (7987 lines, publisher `tarcieri`). Note: "consider cargo vet
+  trust const-oid tarcieri".
+- `arti-client`, `tor-*`, `tokio`, `tokio-rustls`: the routes in the ADR-051 table.
 
 ## 9. Checklist before requesting review
 

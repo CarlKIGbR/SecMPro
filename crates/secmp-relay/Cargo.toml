@@ -13,12 +13,18 @@ publish.workspace = true
 # effect): the vectors, the tests and the generator of `vectors/link.json`; never enabled in a shipped build.
 [features]
 kat = ["secmp-proto/kat", "secmp-crypto/kat"]
+# ADR-051 Part 2, OPEN-M6-08 A: the optional direct listener (synchronous rustls `ServerConnection`/`StreamOwned` in the
+# std::net thread model); off by default — the default build stays std-only (ADR-049).
+direct-tls = ["dep:rustls", "dep:aws-lc-rs"]
 
 # docs/02 §3: `secmp-crypto`, `secmp-proto` (and later `secmp-sys-mem`) only among workspace crates; no third-party
-# runtime crate (the listener is `std::net`, the event sink is the crate's own closed set, ADR-049).
+# runtime crate (the listener is `std::net`, the event sink is the crate's own closed set, ADR-049); `rustls` and
+# `aws-lc-rs` only with feature `direct-tls` (ADR-051 Part 2).
 [dependencies]
 secmp-crypto.workspace = true
 secmp-proto.workspace = true
+rustls = { workspace = true, optional = true }
+aws-lc-rs = { workspace = true, optional = true }
 
 # ADR-049: test-only, workspace crates of the vetted closure (the vector file, seeded generators of the properties).
 [dev-dependencies]

@@ -177,6 +177,11 @@ fn scheduler_core_has_no_tokio() {
         seen += 1;
     }
     assert!(seen >= 3);
+    // Phase B (ADR-051 Part 2): the crate has `tokio` for the driver only, as the one workspace dependency line
     let manifest = std::fs::read_to_string(core.join("../../../Cargo.toml")).unwrap();
-    assert!(!manifest.contains("tokio"), "no runtime crate in Phase A");
+    let tokio_lines: Vec<&str> = manifest
+        .lines()
+        .filter(|l| !l.trim_start().starts_with('#') && l.contains("tokio"))
+        .collect();
+    assert_eq!(tokio_lines, vec!["tokio.workspace = true"]);
 }

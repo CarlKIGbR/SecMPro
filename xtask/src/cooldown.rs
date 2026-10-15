@@ -141,19 +141,63 @@ pub(crate) struct Violation {
     pub(crate) age_secs: i64,
 }
 
-/// Evaluate ages against the reference time.
-pub(crate) fn evaluate(now: i64, published: &[(String, String, i64)]) -> Result<Vec<Violation>> {
-    let mut out = Vec::new();
+/// A cooldown exception (ADR-015 Amendment 2): (crate, version, until `YYYY-MM-DD`, advisory).
+pub(crate) type Exception = (&'static str, &'static str, &'static str, &'static str);
+
+/// The result of [`evaluate`]: young packages without a valid exception, the exceptions used (one line each) and the
+/// expired exceptions (findings whether or not their package is still young).
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct Evaluation {
+    pub(crate) violations: Vec<Violation>,
+    pub(crate) used: Vec<String>,
+    pub(crate) expired: Vec<String>,
+}
+
+/// UTC day number (days since 1970-01-01) of a `YYYY-MM-DD` date.
+fn day_of(date: &str) -> Result<i64> {
+    let t = parse_rfc3339_utc(&format!("{date}T00:00:00Z"))?;
+    Ok(t.div_euclid(86_400))
+}
+
+/// Evaluate ages against the reference time. A package younger than 7 days passes iff an exception names its exact
+/// (name, version) and the exception's `until` date is not before the UTC date of `now` (ADR-015 Amendment 2); an
+/// exception whose `until` date is before that date is itself a finding.
+pub(crate) fn evaluate(
+    now: i64,
+    published: &[(String, String, i64)],
+    exceptions: &[Exception],
+) -> Result<Evaluation> {
+    let today = now.div_euclid(86_400);
+    let mut out = Evaluation::default();
+    let mut valid = Vec::new();
+    for &(name, version, until, advisory) in exceptions {
+        if day_of(until)? < today {
+            out.expired.push(format!(
+                "expired cooldown exception {name}@{version} (until {until})"
+            ));
+        } else {
+            valid.push((name, version, until, advisory));
+        }
+    }
     for (name, version, t) in published {
         let age = now
             .checked_sub(*t)
             .ok_or_else(|| Error("time arithmetic overflow".to_owned()))?;
         if age < MIN_AGE_SECS {
-            out.push(Violation {
-                name: name.clone(),
-                version: version.clone(),
-                age_secs: age,
-            });
+            if let Some((n, v, until, advisory)) = valid
+                .iter()
+                .find(|(n, v, _, _)| *n == name.as_str() && *v == version.as_str())
+            {
+                out.used.push(format!(
+                    "cooldown: exception {n}@{v} until {until} ({advisory})"
+                ));
+            } else {
+                out.violations.push(Violation {
+                    name: name.clone(),
+                    version: version.clone(),
+                    age_secs: age,
+                });
+            }
         }
     }
     Ok(out)
@@ -278,12 +322,17 @@ pub(crate) fn run(root: &Path) -> Result<String> {
             .map_err(|e| Error(format!("{} {}: {e}", p.name, p.version)))?;
         published.push((p.name.clone(), p.version.clone(), t));
     }
-    let violations = match now {
-        Some(n) => evaluate(n, &published)?,
-        None => Vec::new(),
+    let eval = match now {
+        Some(n) => evaluate(n, &published, crate::expect::COOLDOWN_EXCEPTIONS)?,
+        None => Evaluation::default(),
     };
-    if !violations.is_empty() {
-        let list: Vec<String> = violations
+    for line in &eval.used {
+        say(line);
+    }
+    let mut findings = eval.expired.clone();
+    if !eval.violations.is_empty() {
+        let list: Vec<String> = eval
+            .violations
             .iter()
             .map(|v| {
                 format!(
@@ -294,11 +343,24 @@ pub(crate) fn run(root: &Path) -> Result<String> {
                 )
             })
             .collect();
-        bail!("dependencies younger than 7 days: {}", list.join(", "));
+        findings.push(format!(
+            "dependencies younger than 7 days: {}",
+            list.join(", ")
+        ));
     }
+    if !findings.is_empty() {
+        bail!("{}", findings.join("; "));
+    }
+    // the youngest package outside the exceptions used (those are listed by name)
+    let excepted = |name: &str, v: &str| {
+        crate::expect::COOLDOWN_EXCEPTIONS
+            .iter()
+            .any(|(n, ev, _, _)| *n == name && *ev == v)
+    };
     let youngest = match now {
         Some(n) => published
             .iter()
+            .filter(|(name, v, _)| !excepted(name, v))
             .filter_map(|(name, v, t)| n.checked_sub(*t).map(|age| (age, name, v)))
             .min()
             .map(|(age, name, v)| {
@@ -310,8 +372,13 @@ pub(crate) fn run(root: &Path) -> Result<String> {
             .unwrap_or_default(),
         None => String::new(),
     };
+    let used = if eval.used.is_empty() {
+        String::new()
+    } else {
+        format!("; {}", eval.used.join("; "))
+    };
     Ok(format!(
-        "{} registry packages ({}), all ≥ 7 days old{youngest}",
+        "{} registry packages ({}), all ≥ 7 days old or excepted (ADR-015 Am. 2){youngest}{used}",
         registry.len(),
         files.join(", ")
     ))
@@ -439,15 +506,99 @@ mod tests {
                 ("ok".into(), "1".into(), ok),
                 ("young".into(), "2".into(), young),
             ],
+            &[],
         )?;
         assert_eq!(
-            v,
+            v.violations,
             vec![Violation {
                 name: "young".into(),
                 version: "2".into(),
                 age_secs: MIN_AGE_SECS - 1
             }]
         );
+        assert!(v.used.is_empty() && v.expired.is_empty());
+        Ok(())
+    }
+
+    const EXC: Exception = (
+        "rustls",
+        "0.23.46",
+        "2026-10-21",
+        "RUSTSEC-2026-0349 (ADR-015 Am. 2)",
+    );
+
+    /// ADR-015 Amendment 2: a young pinned version passes while the exception's `until` date has not passed, also on the
+    /// `until` date itself; the gate line names the exception.
+    #[test]
+    fn exception_allows_young_pinned_version_until_date() -> Result<()> {
+        let published = parse_rfc3339_utc("2026-10-14T09:54:00Z")?;
+        let pkgs = [("rustls".to_owned(), "0.23.46".to_owned(), published)];
+        for now in [
+            "2026-10-15T05:00:00Z",
+            "2026-10-21T00:00:00Z",
+            "2026-10-21T09:53:59Z",
+        ] {
+            let e = evaluate(parse_rfc3339_utc(now)?, &pkgs, &[EXC])?;
+            assert!(e.violations.is_empty(), "{now}: {e:?}");
+            assert!(e.expired.is_empty(), "{now}: {e:?}");
+            assert_eq!(
+                e.used,
+                vec!["cooldown: exception rustls@0.23.46 until 2026-10-21 (RUSTSEC-2026-0349 (ADR-015 Am. 2))".to_owned()],
+                "{now}"
+            );
+        }
+        // without the exception the same package is a violation
+        let e = evaluate(parse_rfc3339_utc("2026-10-15T05:00:00Z")?, &pkgs, &[])?;
+        assert_eq!(e.violations.len(), 1);
+        Ok(())
+    }
+
+    /// An exception past its `until` date is a finding, whether or not its package is still young or still locked.
+    #[test]
+    fn expired_exception_is_a_finding() -> Result<()> {
+        let now = parse_rfc3339_utc("2026-10-22T00:00:00Z")?;
+        let old = parse_rfc3339_utc("2026-10-14T09:54:00Z")?; // > 7 days at `now`
+        let young = parse_rfc3339_utc("2026-10-20T00:00:00Z")?;
+        let expired = "expired cooldown exception rustls@0.23.46 (until 2026-10-21)".to_owned();
+        // package no longer young
+        let e = evaluate(now, &[("rustls".into(), "0.23.46".into(), old)], &[EXC])?;
+        assert_eq!(e.expired, vec![expired.clone()]);
+        assert!(e.violations.is_empty() && e.used.is_empty());
+        // package not in the lock at all
+        let e = evaluate(now, &[], &[EXC])?;
+        assert_eq!(e.expired, vec![expired.clone()]);
+        // package (hypothetically) still young: expired and not excepted
+        let e = evaluate(now, &[("rustls".into(), "0.23.46".into(), young)], &[EXC])?;
+        assert_eq!(e.expired, vec![expired]);
+        assert_eq!(e.violations.len(), 1);
+        assert!(e.used.is_empty());
+        Ok(())
+    }
+
+    /// The exception covers exactly (name, version): another version of the crate, or another crate, stays a violation.
+    #[test]
+    fn exception_does_not_cover_other_versions() -> Result<()> {
+        let now = parse_rfc3339_utc("2026-10-15T05:00:00Z")?;
+        let young = parse_rfc3339_utc("2026-10-14T09:54:00Z")?;
+        let e = evaluate(
+            now,
+            &[
+                ("rustls".into(), "0.23.47".into(), young),
+                ("rustls-webpki".into(), "0.23.46".into(), young),
+                ("rustls".into(), "0.23.46".into(), young),
+            ],
+            &[EXC],
+        )?;
+        let names: Vec<(&str, &str)> = e
+            .violations
+            .iter()
+            .map(|v| (v.name.as_str(), v.version.as_str()))
+            .collect();
+        assert_eq!(
+            names,
+            vec![("rustls", "0.23.47"), ("rustls-webpki", "0.23.46")]
+        );
+        assert_eq!(e.used.len(), 1);
         Ok(())
     }
 }

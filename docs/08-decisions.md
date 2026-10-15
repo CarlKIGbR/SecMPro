@@ -88,6 +88,7 @@ Format: MADR-style, one entry per decision, numbered, never deleted (superseded 
 **Update 2026-09-28 (owner decision OQ-1).** The project license is **AGPL-3.0-or-later** for all crates (`LICENSE` holds the AGPL-3.0 text; `license = "AGPL-3.0-or-later"` in `[workspace.package]`). SPDX policy: every first-party source file starts with `SPDX-License-Identifier: AGPL-3.0-or-later` in the file type's comment syntax, enforced by `cargo xtask policy`. `deny.toml` applies the dependency allowlist of `06` §3 (our own unpublished crates are exempt from it via `[licenses.private] ignore = true`); Slint's GPL-3.0-only branch is the single copyleft exception (compatible with AGPL-3.0, section 13).
 **Update 2026-09-28 (M0 review).** Publisher trust: `cargo vet trust` for dtolnay and BurntSushi (`safe-to-deploy`, end 2027-09-28), justified by their trust in ≥ 2 imported audit sets; rule in `06` §3.
 **Amendment 1 (2026-10-15, Reviewer, Engineering-Delegation 30.09.; M6-17).** The cooldown check retries an index fetch that fails with a transient transport error (curl exit 6, 7, 28, 35, 52, 56) after 5 s and 15 s, at most three attempts per package, each retry logged; every other failure and an exhausted retry fail the gate as before. No package is ever skipped. Occasion: run 38616364662, job `linux-fast`, `curl … index.crates.io/li/bl/libloading` exit 7 (connect) on an otherwise green 17-job run.
+**Amendment 2 (2026-10-15, Reviewer, Engineering-Delegation 30.09.; M6-B-0).** A point release that closes a RUSTSEC advisory on a pinned crate may be adopted inside the 7-day cooldown when all of: (a) the advisory id is named; (b) the exact diff between the two versions is kept as evidence (`docs/reviews/MNN-evidence/vet-deltas/<crate>-<old>-<new>.diff`) and reviewed by the reviewer before the owner records the delta audit; (c) `xtask/src/expect.rs` `COOLDOWN_EXCEPTIONS` carries the tuple (crate, version, until = publish date + 7 days, advisory); an exception past its `until` date is itself a cooldown finding, so the entry cannot outlive the cooldown it bridges. First use: `rustls` 0.23.46 (published 2026-10-14 09:54 UTC) for RUSTSEC-2026-0346…0349, until 2026-10-21 09:54 UTC.
 **Status.** Accepted; license decided 2026-09-28.
 
 ### ADR-016 — Update security: signed manifests now, TUF later
@@ -214,6 +215,7 @@ Amended 2026-09-29 (reviewer, external review EXT-2): Rust and `ref/` agree *str
 **Alternatives.** Named human audits of ≈ 0.69 M lines (not credible); dropping vet for crypto crates (loses the change-tracking benefit); trusting whole organisations by name (over-broad — accounts, not organisations, are trusted).
 **Consequences.** `06` §3 amended; `supply-chain/audits.toml` gains trust entries and delta audits; the residual crates named in the probe (`rand_core`, `keccak`, `hax-lib`, `hax-lib-macros`, `typenum`) are covered by trust or delta audits in M1.
 **Status.** Accepted (reviewer, 2026-09-28).
+**Amendment 1 (2026-10-15, Reviewer; M6-B-0b).** The closure is a set of (name, version) packages as resolved by `cargo metadata`; another version of a closure crate's name that is reachable only outside the closure is not a closure member and may carry a tracked exemption naming its direct dependency.
 
 ### ADR-037 — M1 dependency set: primitive crates, OS bindings, test-only crates
 **Context.** M1 brings the first third-party code into the shipped graph (`secmp-crypto`, `secmp-sys-mem`) and the test-only crates for KATs, differential tests and vector generation. `docs/06` §3 requires an ADR line per direct dependency (why, alternatives, maintenance, audit status); ADR-036 defines the vetting; ADR-023 records the primitive versions.
@@ -645,7 +647,7 @@ trait of §12.1 is not `async` until M6.
 
 ### ADR-051 — Async driver and transport providers in M6: tokio runtime scope, Arti/rustls dependency set, sans-IO boundary
 
-**Status.** Proposed (planner, 2026-10-09; M6 planning). Two classes in one record: **Part 1 (runtime scope, sans-IO
+**Status.** Accepted (Part 1 reviewer 2026-10-09; Part 2 owner default 2026-10-10 19:45 UTC). Two classes in one record: **Part 1 (runtime scope, sans-IO
 boundary, API shape) — engineering**, accepted by the reviewer under the owner delegation of 2026-09-30; **Part 2
 (shipped dependency set, `cargo vet` trust/audits, license and build-input decisions) — OWNER class**: it takes effect
 only with the owner's written approval and the owner's own `cargo vet` records (an agent never records itself,
@@ -723,6 +725,8 @@ gains the `skip` list and two license exceptions; CI installs NASM on Windows an
 shard; the shard count changes only by a further amendment; test `mutants_scope_includes_client_core_and_transport`."
 The §12.1 sketch (`#[async_trait]`, `&self`) is implemented as Part 1.3; an owner who reads that block as protocol text
 records the reservation here.
+
+**Amendment 1 (2026-10-15, Reviewer; M6-B-0).** `rustls` pinned `=0.23.46` instead of `=0.23.45` (RUSTSEC-2026-0346, -0347, -0348, -0349; -0349 is a downgrade of later connections to classical key exchange and would break invariant 3). Advisory triage of the Arti 0.46.0 closure: RUSTSEC-2023-0071 (`rsa` 0.9.10, Marvin timing side channel on RSA private-key operations) ignored — an Arti client performs RSA public-key verification only, no RSA private key exists in SecMPro (evidence: `docs/reviews/M06-evidence/advisory-rsa-reachability.txt`); RUSTSEC-2024-0436 (`paste`, unmaintained proc-macro, compile-time only) ignored. RUSTSEC-2025-0141 (`bincode` 2.0.1, unmaintained) ignored for `cargo audit` only — optional dependency of `typed-index-collections`, present in the lock, compiled for no target (`cargo tree -i bincode --target all -e normal,build,dev` empty). All three are re-triaged at every release and at every `arti-client` bump.
 
 ---
 

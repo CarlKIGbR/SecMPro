@@ -537,9 +537,19 @@ fn check_spdx(root: &Path, findings: &mut Vec<String>) -> Result<usize> {
     Ok(files.len())
 }
 
-/// `[[exemptions.<name>]]` entries of `supply-chain/config.toml`: (crate name, has a tracked-exemption note).
-pub(crate) fn vet_exemptions(config: &str) -> Vec<(String, bool)> {
-    let mut out: Vec<(String, bool)> = Vec::new();
+/// One `[[exemptions.<name>]]` entry of `supply-chain/config.toml`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct VetExemption {
+    pub(crate) name: String,
+    /// The `version` key (empty if the entry has none).
+    pub(crate) version: String,
+    /// The entry carries a tracked-exemption note.
+    pub(crate) noted: bool,
+}
+
+/// The `[[exemptions.<name>]]` entries of `supply-chain/config.toml`, in file order.
+pub(crate) fn vet_exemptions(config: &str) -> Vec<VetExemption> {
+    let mut out: Vec<VetExemption> = Vec::new();
     let mut in_exemption = false;
     for line in config.lines() {
         let t = line.trim();
@@ -549,18 +559,32 @@ pub(crate) fn vet_exemptions(config: &str) -> Vec<(String, bool)> {
                 .strip_prefix("[[exemptions.")
                 .and_then(|r| r.strip_suffix("]]"))
             {
-                out.push((name.trim_matches('"').to_owned(), false));
+                out.push(VetExemption {
+                    name: name.trim_matches('"').to_owned(),
+                    version: String::new(),
+                    noted: false,
+                });
                 in_exemption = true;
             }
-        } else if in_exemption
-            && t.starts_with("notes")
-            && t.contains("Tracked exemption")
-            && let Some(last) = out.last_mut()
-        {
-            last.1 = true;
+        } else if in_exemption && let Some(last) = out.last_mut() {
+            if t.starts_with("notes") && t.contains("Tracked exemption") {
+                last.noted = true;
+            } else if let Some(v) = quoted_value(t, "version") {
+                last.version = v;
+            }
         }
     }
     out
+}
+
+/// The string value of `key = "value"` on a TOML line.
+fn quoted_value(line: &str, key: &str) -> Option<String> {
+    let rest = line
+        .strip_prefix(key)?
+        .trim_start()
+        .strip_prefix('=')?
+        .trim();
+    Some(rest.strip_prefix('"')?.strip_suffix('"')?.to_owned())
 }
 
 /// The normal (shipped) dependency closure of `secmp-crypto`/`secmp-proto` (ADR-036, docs/06 §3): normal edges
@@ -582,8 +606,9 @@ pub(crate) fn zero_exemption_closure(ws: &Workspace) -> Result<BTreeSet<(String,
 }
 
 /// The `vet-closure` findings for a `supply-chain/config.toml` text and a closure: exemptions without a
-/// tracked-exemption note, and exemptions of crates inside the closure. Returns the findings and the number of
-/// exempted crates.
+/// tracked-exemption note, and exemptions of a package inside the closure. The closure is a set of (name, version)
+/// packages (ADR-036 Amendment 1): another version of a closure crate's name, reachable only outside the closure, is
+/// not a member and may carry a tracked exemption. Returns the findings and the number of exemption entries.
 pub(crate) fn vet_closure_findings(
     config: &str,
     closure: &BTreeSet<(String, String)>,
@@ -592,8 +617,8 @@ pub(crate) fn vet_closure_findings(
     let mut findings = Vec::new();
     let untracked: Vec<&str> = entries
         .iter()
-        .filter(|(_, noted)| !noted)
-        .map(|(n, _)| n.as_str())
+        .filter(|e| !e.noted)
+        .map(|e| e.name.as_str())
         .collect();
     if !untracked.is_empty() {
         findings.push(format!(
@@ -601,19 +626,15 @@ pub(crate) fn vet_closure_findings(
             untracked.join(", ")
         ));
     }
-    let exempt: BTreeSet<String> = entries.into_iter().map(|(n, _)| n).collect();
-    let bad: Vec<String> = closure
-        .iter()
-        .filter(|(n, _)| exempt.contains(n))
-        .map(|(n, v)| format!("{n} {v}"))
-        .collect();
-    if !bad.is_empty() {
-        findings.push(format!(
-            "cargo-vet exemptions inside the secmp-crypto/secmp-proto closure: {}",
-            bad.join(", ")
-        ));
+    for e in &entries {
+        if closure.contains(&(e.name.clone(), e.version.clone())) {
+            findings.push(format!(
+                "vet exemption inside the crypto/proto closure: {}@{}",
+                e.name, e.version
+            ));
+        }
     }
-    (findings, exempt.len())
+    (findings, entries.len())
 }
 
 /// `vet-closure`: zero exemptions in the normal `secmp-crypto`/`secmp-proto` closure (docs/06 §3, ADR-036).
@@ -1077,17 +1098,26 @@ mod tests {
     #[test]
     fn exemption_names() {
         let cfg = "[policy.x]\n\n[[exemptions.serde]]\nversion = \"1\"\n\n[[exemptions.\"weird-name\"]]\n";
+        let short = |c: &str| -> Vec<(String, String, bool)> {
+            vet_exemptions(c)
+                .into_iter()
+                .map(|e| (e.name, e.version, e.noted))
+                .collect()
+        };
         assert_eq!(
-            vet_exemptions(cfg),
+            short(cfg),
             vec![
-                ("serde".to_owned(), false),
-                ("weird-name".to_owned(), false)
+                ("serde".to_owned(), "1".to_owned(), false),
+                ("weird-name".to_owned(), String::new(), false)
             ]
         );
         let noted = "[[exemptions.a]]\nversion = \"1\"\nnotes = \"Tracked exemption: pulled by x\"\n\n[[exemptions.b]]\n";
         assert_eq!(
-            vet_exemptions(noted),
-            vec![("a".to_owned(), true), ("b".to_owned(), false)]
+            short(noted),
+            vec![
+                ("a".to_owned(), "1".to_owned(), true),
+                ("b".to_owned(), String::new(), false)
+            ]
         );
     }
 
@@ -1431,20 +1461,195 @@ mod tests {
     /// `secmp-client-core` and `secmp-testkit` are within `expect::NORMAL_DEPENDENCY_ALLOW` (Phase A: workspace
     /// crates, plus the testkit's `serde_json`); a fixture with an unlisted crate is refused naming crate and package;
     /// dev- and build-dependencies are not shipped and do not count.
+    /// Crate-name prefixes of the runtime and I/O crates that the sans-IO crates must not reach (ADR-051 Part 1.2,
+    /// TEST-SPEC-M6 AD-12); an entry ending in `*` is a prefix, any other entry an exact name.
+    pub(crate) const SANS_IO_FORBIDDEN: &[&str] = &[
+        "tokio*",
+        "mio",
+        "socket2",
+        "futures-*",
+        "rustls*",
+        "arti-client",
+        "tor-*",
+    ];
+
+    /// AD-12 findings: crates of `closure` (the normal closure of `secmp-crypto`/`secmp-proto`) matching
+    /// `SANS_IO_FORBIDDEN`, and `async fn` in the given (path, text) sources of those two crates.
+    pub(crate) fn sans_io_findings(
+        closure: &BTreeSet<(String, String)>,
+        sources: &[(String, String)],
+    ) -> Vec<String> {
+        let forbidden = |n: &str| {
+            SANS_IO_FORBIDDEN.iter().any(|f| match f.strip_suffix('*') {
+                Some(prefix) => n.starts_with(prefix),
+                None => n == *f,
+            })
+        };
+        let mut out: Vec<String> = closure
+            .iter()
+            .filter(|(n, _)| forbidden(n))
+            .map(|(n, v)| {
+                format!("sans-io: {n} {v} is in the normal closure of secmp-crypto/secmp-proto")
+            })
+            .collect();
+        for (path, text) in sources {
+            for (i, line) in text.lines().enumerate() {
+                let code = line.split("//").next().unwrap_or_default();
+                if code.contains("async fn")
+                    || code.contains("async move")
+                    || code.contains("async {")
+                {
+                    out.push(format!(
+                        "sans-io: {path}:{} has async code",
+                        i.saturating_add(1)
+                    ));
+                }
+            }
+        }
+        out
+    }
+
+    /// TEST-SPEC-M6 AD-12 (ADR-051 Part 1.2, docs/02 §3): the normal closure of `secmp-crypto` and `secmp-proto` on
+    /// every target of `expect::VET_CLOSURE_TARGETS` contains none of `tokio`, `mio`, `socket2`, `futures-*`,
+    /// `rustls*`, `arti-client`, `tor-*`, and their `src` has no `async` code; planted closures and sources are refused.
+    #[test]
+    fn crypto_and_proto_stay_sans_io() -> Result<()> {
+        let ws = Workspace::load()?;
+        let closure = zero_exemption_closure(&ws)?;
+        assert!(!closure.is_empty());
+        let mut sources = Vec::new();
+        for krate in ["secmp-crypto", "secmp-proto"] {
+            let src = ws.root.join("crates").join(krate).join("src");
+            for f in walk_files(&src, &|p: &Path| p.extension().is_some_and(|e| e == "rs"))? {
+                sources.push((rel(&ws.root, &f), std::fs::read_to_string(&f)?));
+            }
+        }
+        assert!(sources.len() > 2, "{}", sources.len());
+        let findings = sans_io_findings(&closure, &sources);
+        assert!(findings.is_empty(), "{findings:?}");
+        // the gate is not vacuous: planted crates and async code are refused, unrelated names pass
+        let planted: BTreeSet<(String, String)> = [
+            "tokio",
+            "mio",
+            "socket2",
+            "futures-util",
+            "rustls-webpki",
+            "arti-client",
+            "tor-proto",
+            "tokio-rustls",
+            "zeroize",
+            "subtle",
+        ]
+        .iter()
+        .map(|n| ((*n).to_owned(), "1.0.0".to_owned()))
+        .collect();
+        let src = vec![(
+            "x.rs".to_owned(),
+            "fn a() {}\n// async fn in a comment\npub async fn b() {}\nlet f = async move { 1 };\n"
+                .to_owned(),
+        )];
+        let found = sans_io_findings(&planted, &src);
+        assert_eq!(found.len(), 10, "{found:?}");
+        for bad in [
+            "tokio 1",
+            "mio",
+            "socket2",
+            "futures-util",
+            "rustls-webpki",
+            "arti-client",
+            "tor-proto",
+            "tokio-rustls",
+            "x.rs:3",
+            "x.rs:4",
+        ] {
+            assert!(found.iter().any(|f| f.contains(bad)), "{bad}: {found:?}");
+        }
+        Ok(())
+    }
+
+    /// ADR-051 Amendment 1, WEISUNG M6-B-0: every `expect::AUDIT_IGNORES` id is in `deny.toml` `[advisories] ignore`
+    /// with its reason as a comment, except the ids `cargo deny` never reports (`AUDIT_IGNORES_NOT_IN_DENY`), and
+    /// `deny.toml` ignores nothing that `cargo audit` does not.
+    /// `AUDIT_IGNORES` ids that `cargo deny` does not report (its per-target graph never compiles the crate), so they
+    /// have no `deny.toml` `[advisories] ignore` entry.
+    /// RUSTSEC-2025-0141 (ADR-051 Am. 1): lock-only, never compiled (cargo tree -i prints nothing).
+    const AUDIT_IGNORES_NOT_IN_DENY: &[&str] = &["RUSTSEC-2026-0173", "RUSTSEC-2025-0141"];
+
+    #[test]
+    fn audit_ignores_match_deny_toml() -> Result<()> {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let deny = std::fs::read_to_string(root.join("deny.toml"))?;
+        let section = deny
+            .split_once("[advisories]")
+            .and_then(|(_, rest)| rest.split_once("\nignore = ["))
+            .and_then(|(_, rest)| rest.split_once("\n]"))
+            .map(|(body, _)| body)
+            .ok_or_else(|| {
+                crate::util::Error("deny.toml: no multi-line [advisories] ignore list".to_owned())
+            })?;
+        let mut in_deny = Vec::new();
+        for line in section.lines() {
+            let t = line.trim();
+            if let Some(id) = t
+                .strip_prefix('"')
+                .and_then(|r| r.split_once('"'))
+                .map(|(id, _)| id)
+            {
+                let (_, reason) = t.split_once('#').unwrap_or_default();
+                in_deny.push((id, reason.trim()));
+            }
+        }
+        let mut want: Vec<(&str, &str)> = expect::AUDIT_IGNORES
+            .iter()
+            .filter(|(id, _)| !AUDIT_IGNORES_NOT_IN_DENY.contains(id))
+            .copied()
+            .collect();
+        want.sort_unstable();
+        in_deny.sort_unstable();
+        assert_eq!(in_deny, want);
+        for id in ["RUSTSEC-2023-0071", "RUSTSEC-2024-0436"] {
+            assert!(in_deny.iter().any(|(d, _)| *d == id), "{id}");
+        }
+        for id in AUDIT_IGNORES_NOT_IN_DENY {
+            assert!(expect::AUDIT_IGNORES.iter().any(|(a, _)| a == id), "{id}");
+        }
+        Ok(())
+    }
+
     #[test]
     fn normal_dependencies_match_adr_allowlist() -> Result<()> {
         // the tree itself
         let findings = normal_dependency_findings(&Workspace::load()?);
         assert!(findings.is_empty(), "{findings:?}");
-        // the allowlist's shape: workspace crates only, except the testkit's serde_json
+        // the allowlist's shape: workspace crates, plus exactly the third-party crates of the ADR-051 Part 2 table
+        // (Amendment 1) and the testkit's serde_json (ADR-037)
+        let adr051: &[(&str, &[&str])] = &[
+            ("secmp-relay", &["aws-lc-rs", "rustls"]),
+            (
+                "secmp-transport",
+                &[
+                    "arti-client",
+                    "aws-lc-rs",
+                    "rustls",
+                    "tokio",
+                    "tokio-rustls",
+                ],
+            ),
+            ("secmp-client-core", &["tokio"]),
+            ("secmp-testkit", &["serde_json", "tokio"]),
+        ];
         for (krate, allowed) in expect::NORMAL_DEPENDENCY_ALLOW {
-            for dep in *allowed {
-                assert!(
-                    dep.starts_with("secmp-")
-                        || (*krate == "secmp-testkit" && *dep == "serde_json"),
-                    "{krate}: {dep}"
-                );
-            }
+            let third: Vec<&str> = allowed
+                .iter()
+                .copied()
+                .filter(|d| !d.starts_with("secmp-"))
+                .collect();
+            let want = adr051
+                .iter()
+                .find(|(k, _)| k == krate)
+                .map(|(_, d)| d.to_vec())
+                .unwrap_or_default();
+            assert_eq!(third, want, "{krate}");
         }
         // a fixture within the lists, with dev/build edges to tokio, passes
         let ok = metadata_fixture(&[
@@ -1511,7 +1716,7 @@ mod tests {
         assert!(
             findings
                 .iter()
-                .any(|f| f.contains("inside the secmp-crypto/secmp-proto closure: typenum 1.20.1"))
+                .any(|f| f == "vet exemption inside the crypto/proto closure: typenum@1.20.1")
         );
         // outside the closure, correctly noted exemptions are fine
         let clean = config.replace(
@@ -1520,5 +1725,49 @@ mod tests {
         );
         let empty = BTreeSet::new();
         assert!(vet_closure_findings(&clean, &empty).0.is_empty());
+    }
+
+    const TRACKED: &str =
+        "notes = \"Tracked exemption (supply-chain/README.md): pulled by arti-client.\"";
+
+    /// ADR-036 Amendment 1: an exemption for a (name, version) that is in the closure is a finding.
+    #[test]
+    fn vet_closure_exemption_for_closure_version_is_a_finding() {
+        let closure: BTreeSet<(String, String)> = [("const-oid".to_owned(), "0.10.2".to_owned())]
+            .into_iter()
+            .collect();
+        let config = format!(
+            "[[exemptions.const-oid]]\nversion = \"0.10.2\"\ncriteria = \"safe-to-deploy\"\n{TRACKED}\n"
+        );
+        let (findings, n) = vet_closure_findings(&config, &closure);
+        assert_eq!(n, 1);
+        assert_eq!(
+            findings,
+            vec!["vet exemption inside the crypto/proto closure: const-oid@0.10.2".to_owned()]
+        );
+    }
+
+    /// ADR-036 Amendment 1: another version of a closure crate's name, outside the closure, may be exempted.
+    #[test]
+    fn vet_closure_other_version_of_closure_name_is_allowed() {
+        let closure: BTreeSet<(String, String)> = [("const-oid".to_owned(), "0.10.2".to_owned())]
+            .into_iter()
+            .collect();
+        let config = format!(
+            "[[exemptions.const-oid]]\nversion = \"0.9.6\"\ncriteria = \"safe-to-deploy\"\n{TRACKED}\n"
+        );
+        let (findings, n) = vet_closure_findings(&config, &closure);
+        assert_eq!(n, 1);
+        assert!(findings.is_empty(), "{findings:?}");
+    }
+
+    /// The real tree: no exemption of `supply-chain/config.toml` names a (name, version) of the normal closure of
+    /// `secmp-crypto`/`secmp-proto` on the three targets, and every exemption carries its tracked note.
+    #[test]
+    fn vet_closure_of_this_workspace_has_no_exemptions() -> Result<()> {
+        let ws = Workspace::load()?;
+        let summary = check_vet_closure(&ws)?;
+        assert!(summary.contains(", 0 exempted;"), "{summary}");
+        Ok(())
     }
 }

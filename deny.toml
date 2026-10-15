@@ -13,7 +13,12 @@ all-features = true
 unmaintained = "all"
 unsound = "all"
 yanked = "deny"
-ignore = []
+# Each entry's comment is its reason, identical to `xtask/src/expect.rs` AUDIT_IGNORES (test
+# `audit_ignores_match_deny_toml`); both re-triaged at every release and at every `arti-client` bump.
+ignore = [
+    "RUSTSEC-2023-0071", # ADR-051 Am. 1: rsa 0.9.10 Marvin — Arti client only verifies RSA signatures, no private key in SecMPro
+    "RUSTSEC-2024-0436", # ADR-051 Am. 1: paste (unmaintained proc-macro) is compile-time only
+]
 
 [licenses]
 # Allowlist for dependencies (docs/06 §3). SQLCipher is covered by BSD-3-Clause. No LGPL anywhere (ADR-024).
@@ -33,7 +38,13 @@ confidence-threshold = 0.93
 # The single copyleft exception: Slint (GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR
 # LicenseRef-Slint-Software-3.0; GPLv3 is compatible with this project's AGPL-3.0-or-later). Its `i-slint-*`
 # component crates are added here, by name, when Slint enters the graph in M8 (ADR-013).
-exceptions = [{ allow = ["GPL-3.0-only"], crate = "slint" }]
+# ADR-051 Part 2 (owner, OPEN-M6-05 B): two per-crate exceptions in the Arti 0.46.0 closure. `priority-queue`
+# ("LGPL-3.0-or-later OR MPL-2.0") is taken under MPL-2.0 (allowed above); its LGPL alternative is not used.
+exceptions = [
+    { allow = ["GPL-3.0-only"], crate = "slint" },
+    { allow = ["Unlicense"], crate = "async_executors" },
+    { allow = ["CC0-1.0"], crate = "notify" },
+]
 
 [licenses.private]
 # Our own crates are unpublished (`publish = false`) and AGPL-3.0-or-later; the allowlist governs dependencies.
@@ -48,8 +59,57 @@ highlight = "all"
 workspace-default-features = "allow"
 external-default-features = "allow"
 allow = []
-# Wildcard exceptions to `multiple-versions` are listed here, each with a justification.
-skip = []
+# Exceptions to `multiple-versions`, one entry per duplicated version with the direct dependency that pulls it
+# (ADR-051 Part 2, OPEN-M6-04 A, TEST-SPEC-M6 X-02); no `skip-tree`. Arti 0.46.0 brings older majors of the RustCrypto,
+# dalek and rand crates beside the workspace pins; they are never used for SecMP constructions (CLAUDE.md §1.6).
+skip = [
+    { crate = "block-buffer@0.10.4", reason = "pulled by arti-client (ADR-051 Part 2); the pre-M6 graph uses 0.12.1" },
+    { crate = "cipher@0.4.4", reason = "pulled by arti-client (ADR-051 Part 2); the pre-M6 graph uses 0.5.2" },
+    { crate = "const-oid@0.9.6", reason = "pulled by arti-client (ADR-051 Part 2); the pre-M6 graph uses 0.10.2" },
+    { crate = "cpufeatures@0.2.17", reason = "pulled by arti-client (ADR-051 Part 2); the pre-M6 graph uses 0.3.1" },
+    { crate = "crypto-common@0.1.7", reason = "pulled by arti-client (ADR-051 Part 2); the pre-M6 graph uses 0.2.2" },
+    { crate = "curve25519-dalek@4.1.3", reason = "pulled by arti-client (ADR-051 Part 2); the pre-M6 graph uses 5.0.0" },
+    { crate = "darling@0.14.4", reason = "pulled by arti-client (ADR-051 Part 2); the Arti closure also has 0.24.1" },
+    { crate = "darling@0.21.3", reason = "pulled by arti-client (ADR-051 Part 2); the Arti closure also has 0.24.1" },
+    { crate = "darling_core@0.14.4", reason = "pulled by arti-client (ADR-051 Part 2); the Arti closure also has 0.24.1" },
+    { crate = "darling_core@0.21.3", reason = "pulled by arti-client (ADR-051 Part 2); the Arti closure also has 0.24.1" },
+    { crate = "darling_macro@0.14.4", reason = "pulled by arti-client (ADR-051 Part 2); the Arti closure also has 0.24.1" },
+    { crate = "darling_macro@0.21.3", reason = "pulled by arti-client (ADR-051 Part 2); the Arti closure also has 0.24.1" },
+    { crate = "digest@0.10.7", reason = "pulled by arti-client (ADR-051 Part 2); the pre-M6 graph uses 0.11.3" },
+    { crate = "ed25519@2.2.3", reason = "pulled by arti-client (ADR-051 Part 2); the pre-M6 graph uses 3.0.0" },
+    { crate = "ed25519-dalek@2.2.0", reason = "pulled by arti-client (ADR-051 Part 2); the pre-M6 graph uses 3.0.0" },
+    { crate = "foldhash@0.1.5", reason = "pulled by arti-client (ADR-051 Part 2); the Arti closure also has 0.2.0" },
+    { crate = "getrandom@0.2.17", reason = "pulled by arti-client (ADR-051 Part 2); the pre-M6 graph uses 0.4.3" },
+    { crate = "hashbrown@0.15.5", reason = "pulled by arti-client (ADR-051 Part 2); the Arti closure also has 0.17.1" },
+    { crate = "hashbrown@0.16.1", reason = "pulled by arti-client (ADR-051 Part 2); the Arti closure also has 0.17.1" },
+    { crate = "hkdf@0.12.4", reason = "pulled by arti-client (ADR-051 Part 2); the pre-M6 graph uses 0.13.0" },
+    { crate = "hmac@0.12.1", reason = "pulled by arti-client (ADR-051 Part 2); the pre-M6 graph uses 0.13.0" },
+    { crate = "inout@0.1.4", reason = "pulled by arti-client (ADR-051 Part 2); the pre-M6 graph uses 0.2.2" },
+    { crate = "keccak@0.1.6", reason = "pulled by arti-client (ADR-051 Part 2); the pre-M6 graph uses 0.2.2" },
+    { crate = "rand@0.8.8", reason = "pulled by arti-client (ADR-051 Part 2); the pre-M6 graph uses 0.10.3" },
+    { crate = "rand_chacha@0.3.1", reason = "pulled by arti-client (ADR-051 Part 2); the Arti closure also has 0.10.0" },
+    { crate = "rand_core@0.6.4", reason = "pulled by arti-client (ADR-051 Part 2); the pre-M6 graph uses 0.10.1" },
+    { crate = "serde_spanned@0.6.9", reason = "pulled by arti-client (ADR-051 Part 2); the Arti closure also has 1.1.2" },
+    { crate = "sha2@0.10.9", reason = "pulled by arti-client (ADR-051 Part 2); the pre-M6 graph uses 0.11.0" },
+    { crate = "sha3@0.10.9", reason = "pulled by arti-client (ADR-051 Part 2); the pre-M6 graph uses 0.11.0" },
+    { crate = "signature@2.2.0", reason = "pulled by arti-client (ADR-051 Part 2); the pre-M6 graph uses 3.0.0" },
+    { crate = "strsim@0.10.0", reason = "pulled by arti-client (ADR-051 Part 2); the Arti closure also has 0.11.1" },
+    { crate = "syn@1.0.109", reason = "pulled by arti-client (ADR-051 Part 2); the pre-M6 graph uses 2.0.119" },
+    { crate = "syn@3.0.6", reason = "pulled by arti-client, tokio, tokio-rustls (ADR-051 Part 2); the pre-M6 graph uses 2.0.119" },
+    { crate = "synstructure@0.13.2", reason = "pulled by arti-client (ADR-051 Part 2); the Arti closure also has 0.14.0" },
+    { crate = "thiserror@1.0.69", reason = "pulled by arti-client (ADR-051 Part 2); the Arti closure also has 2.0.21" },
+    { crate = "thiserror-impl@1.0.69", reason = "pulled by arti-client (ADR-051 Part 2); the Arti closure also has 2.0.21" },
+    { crate = "toml@0.8.23", reason = "pulled by arti-client (ADR-051 Part 2); the Arti closure also has 1.1.6+spec-1.1.0" },
+    { crate = "toml_datetime@0.6.11", reason = "pulled by arti-client (ADR-051 Part 2); the Arti closure also has 1.1.2+spec-1.1.0" },
+    { crate = "toml_edit@0.22.27", reason = "pulled by arti-client (ADR-051 Part 2); the Arti closure also has 0.25.15+spec-1.1.0" },
+    { crate = "windows-sys@0.59.0", reason = "pulled by arti-client (ADR-051 Part 2); the pre-M6 graph uses 0.61.2" },
+    { crate = "windows-sys@0.60.2", reason = "pulled by arti-client (ADR-051 Part 2); the pre-M6 graph uses 0.61.2" },
+    { crate = "windows-targets@0.52.6", reason = "pulled by arti-client (ADR-051 Part 2); the Arti closure also has 0.53.5" },
+    { crate = "windows_x86_64_gnu@0.52.6", reason = "pulled by arti-client (ADR-051 Part 2); the Arti closure also has 0.53.1" },
+    { crate = "windows_x86_64_msvc@0.52.6", reason = "pulled by arti-client (ADR-051 Part 2); the Arti closure also has 0.53.1" },
+    { crate = "winnow@0.7.15", reason = "pulled by arti-client (ADR-051 Part 2); the Arti closure also has 1.0.4" },
+    { crate = "x25519-dalek@2.0.1", reason = "pulled by arti-client (ADR-051 Part 2); the pre-M6 graph uses 3.0.0" },
+]
 skip-tree = []
 deny = []
 

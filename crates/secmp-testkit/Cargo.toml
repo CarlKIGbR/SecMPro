@@ -20,8 +20,8 @@ kat = ["harness"]
 
 # The harness (feature `harness`, which `kat` includes): the relay in process, the SecMP-LINK client, derandomised
 # entropy. Workspace crates (docs/02 §3: testkit may use any workspace crate except secmp-ui) plus the normal
-# dependency `serde_json` (the KAT loaders, ADR-037); no other third-party runtime crate (ADR-049; pinned by
-# `expect::NORMAL_DEPENDENCY_ALLOW`).
+# dependencies `serde_json` (the KAT loaders, ADR-037) and `tokio` (`MemProvider`, ADR-051 Part 1.1); no other
+# third-party runtime crate (pinned by `expect::NORMAL_DEPENDENCY_ALLOW`).
 [dependencies]
 secmp-crypto.workspace = true
 secmp-proto.workspace = true
@@ -29,6 +29,7 @@ secmp-client-core.workspace = true
 secmp-relay.workspace = true
 secmp-transport.workspace = true
 serde_json.workspace = true
+tokio.workspace = true
 
 # Test-only. `chacha20poly1305`, `subtle` and `sha3` serve the constant-time bench (its isolating CAEAD targets and
 # its input stream), `secmp-proto` its TR targets (ADR-042); all are workspace crates of the vetted closure.
@@ -40,6 +41,8 @@ aws-lc-rs.workspace = true
 sha3.workspace = true
 chacha20poly1305.workspace = true
 subtle.workspace = true
+# ADR-051 Part 2: network simulations (docs/06 §4), dev only.
+turmoil.workspace = true
 
 # The M5 harness tests (T-01…T-09, T-11, H-01…H-13, G-06): they need feature `kat` (the in-process relay, derandomised
 # entropy).

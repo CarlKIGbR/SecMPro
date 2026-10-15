@@ -1,0 +1,1657 @@
+error[rejected]: failed to satisfy license requirements
+   ┌─ /work/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/async_executors-0.7.0/Cargo.toml:37:12
+37 │ license = "Unlicense"
+   ├ Unlicense - The Unlicense:
+   ├   - OSI approved
+   ├   - FSF Free/Libre
+   ├ async_executors v0.7.0
+     └── tor-rtcompat v0.46.0
+         ├── arti-client v0.46.0
+         ├── tor-async-utils v0.46.0
+         ├── tor-chanmgr v0.46.0 (*)
+         ├── tor-circmgr v0.46.0 (*)
+         ├── tor-config v0.46.0
+         ├── tor-dirclient v0.46.0 (*)
+         ├── tor-dirmgr v0.46.0 (*)
+         ├── tor-guardmgr v0.46.0 (*)
+         ├── tor-hsclient v0.46.0 (*)
+         ├── tor-log-ratelim v0.46.0
+         ├── tor-memquota v0.46.0 (*)
+         ├── tor-proto v0.46.0 (*)
+         └── tor-rtmock v0.46.0
+             └── tor-proto v0.46.0 (*)
+
+error[duplicate]: found 2 duplicate entries for crate 'block-buffer'
+   ┌─ /work/SecMPro/Cargo.lock:28:1
+28 │ ╭ block-buffer 0.10.4 registry+https://github.com/rust-lang/crates.io-index
+29 │ │ block-buffer 0.12.1 registry+https://github.com/rust-lang/crates.io-index
+   ├ block-buffer v0.10.4
+     └── digest v0.10.7
+         ├── curve25519-dalek v4.1.3
+         ├── hmac v0.12.1
+         ├── rsa v0.9.10
+         ├── sha1 v0.10.7
+         ├── sha2 v0.10.9
+         ├── sha3 v0.10.9
+         ├── signature v2.2.0
+         ├── tor-bytes v0.46.0 (*)
+         ├── tor-cert v0.46.0 (*)
+         ├── tor-consdiff v0.46.0 (*)
+         ├── tor-dirmgr v0.46.0 (*)
+         ├── tor-hscrypto v0.46.0 (*)
+         ├── tor-llcrypto v0.46.0 (*)
+         ├── tor-netdir v0.46.0 (*)
+         ├── tor-netdoc v0.46.0 (*)
+         └── tor-proto v0.46.0 (*)
+   ├ block-buffer v0.12.1
+     ├── cipher v0.5.2
+     └── digest v0.11.3
+         ├── curve25519-dalek v5.0.0
+         ├── hmac v0.13.0
+         ├── sha2 v0.11.0
+         ├── sha3 v0.11.0
+         ├── shake v0.1.0
+         └── signature v3.0.0
+             ├── ed25519 v3.0.0
+             └── ml-dsa v0.1.1 (*)
+
+error[duplicate]: found 2 duplicate entries for crate 'cipher'
+   ┌─ /work/SecMPro/Cargo.lock:39:1
+39 │ ╭ cipher 0.4.4 registry+https://github.com/rust-lang/crates.io-index
+40 │ │ cipher 0.5.2 registry+https://github.com/rust-lang/crates.io-index
+   ├ cipher v0.4.4
+     └── ssh-cipher-fork-arti v0.2.0
+         └── ssh-key-fork-arti v0.6.7
+             ├── tor-key-forge v0.46.0
+             └── tor-keymgr v0.46.0 (*)
+   ├ cipher v0.5.2
+     ├── aes v0.9.3
+     ├── chacha20 v0.10.2
+     ├── chacha20poly1305 v0.11.0 (*)
+     ├── ctr v0.10.1
+     ├── tor-netdoc v0.46.0 (*)
+     └── tor-proto v0.46.0 (*)
+
+error[duplicate]: found 2 duplicate entries for crate 'const-oid'
+   ┌─ /work/SecMPro/Cargo.lock:46:1
+46 │ ╭ const-oid 0.9.6 registry+https://github.com/rust-lang/crates.io-index
+47 │ │ const-oid 0.10.2 registry+https://github.com/rust-lang/crates.io-index
+   ├ const-oid v0.9.6
+     ├── der v0.7.10
+     ├── digest v0.10.7
+     └── rsa v0.9.10 (*)
+   ├ const-oid v0.10.2
+     └── digest v0.11.3
+         ├── curve25519-dalek v5.0.0
+         ├── hmac v0.13.0
+         ├── sha2 v0.11.0
+         ├── sha3 v0.11.0
+         ├── shake v0.1.0
+         └── signature v3.0.0
+             ├── ed25519 v3.0.0
+             └── ml-dsa v0.1.1 (*)
+
+error[duplicate]: found 2 duplicate entries for crate 'cpufeatures'
+   ┌─ /work/SecMPro/Cargo.lock:51:1
+51 │ ╭ cpufeatures 0.2.17 registry+https://github.com/rust-lang/crates.io-index
+52 │ │ cpufeatures 0.3.1 registry+https://github.com/rust-lang/crates.io-index
+   ├ cpufeatures v0.2.17
+     ├── curve25519-dalek v4.1.3
+     ├── keccak v0.1.6
+     ├── sha1 v0.10.7
+     └── sha2 v0.10.9
+         ├── ed25519-dalek v2.2.0 (*)
+         ├── rsa v0.9.10
+         ├── ssh-encoding-fork-arti v0.2.0
+         ├── ssh-key-fork-arti v0.6.7 (*)
+         └── tor-llcrypto v0.46.0 (*)
+   ├ cpufeatures v0.3.1
+     ├── aes v0.9.3
+     ├── chacha20 v0.10.2
+     ├── curve25519-dalek v5.0.0
+     ├── keccak v0.2.2
+     ├── poly1305 v0.9.1
+     ├── polyval v0.7.3
+     └── sha2 v0.11.0
+         ├── ed25519-dalek v3.0.0 (*)
+         └── secmp-crypto v0.0.0 (*)
+
+error[duplicate]: found 2 duplicate entries for crate 'crypto-common'
+   ┌─ /work/SecMPro/Cargo.lock:56:1
+56 │ ╭ crypto-common 0.1.7 registry+https://github.com/rust-lang/crates.io-index
+57 │ │ crypto-common 0.2.2 registry+https://github.com/rust-lang/crates.io-index
+   ├ crypto-common v0.1.7
+     ├── cipher v0.4.4
+     └── digest v0.10.7
+         ├── curve25519-dalek v4.1.3
+         ├── hmac v0.12.1
+         ├── rsa v0.9.10
+         ├── sha1 v0.10.7
+         ├── sha2 v0.10.9
+         ├── sha3 v0.10.9
+         ├── signature v2.2.0
+         ├── tor-bytes v0.46.0 (*)
+         ├── tor-cert v0.46.0 (*)
+         ├── tor-consdiff v0.46.0 (*)
+         ├── tor-dirmgr v0.46.0 (*)
+         ├── tor-hscrypto v0.46.0 (*)
+         ├── tor-llcrypto v0.46.0 (*)
+         ├── tor-netdir v0.46.0 (*)
+         ├── tor-netdoc v0.46.0 (*)
+         └── tor-proto v0.46.0 (*)
+   ├ crypto-common v0.2.2
+     ├── aead v0.6.1
+     ├── cipher v0.5.2
+     ├── digest v0.11.3
+     ├── kem v0.3.0
+     ├── ml-dsa v0.1.1 (*)
+     └── universal-hash v0.6.1
+         ├── poly1305 v0.9.1
+         └── polyval v0.7.3
+             └── tor-proto v0.46.0 (*)
+
+error[duplicate]: found 2 duplicate entries for crate 'curve25519-dalek'
+   ┌─ /work/SecMPro/Cargo.lock:60:1
+60 │ ╭ curve25519-dalek 4.1.3 registry+https://github.com/rust-lang/crates.io-index
+61 │ │ curve25519-dalek 5.0.0 registry+https://github.com/rust-lang/crates.io-index
+   ├ curve25519-dalek v4.1.3
+     ├── ed25519-dalek v2.2.0
+     ├── tor-llcrypto v0.46.0 (*)
+     └── x25519-dalek v2.0.1
+         └── tor-llcrypto v0.46.0 (*)
+   ├ curve25519-dalek v5.0.0
+     ├── ed25519-dalek v3.0.0
+     └── x25519-dalek v3.0.0
+         └── secmp-crypto v0.0.0 (*)
+
+error[duplicate]: found 3 duplicate entries for crate 'darling'
+   ┌─ /work/SecMPro/Cargo.lock:63:1
+63 │ ╭ darling 0.14.4 registry+https://github.com/rust-lang/crates.io-index
+64 │ │ darling 0.21.3 registry+https://github.com/rust-lang/crates.io-index
+65 │ │ darling 0.24.1 registry+https://github.com/rust-lang/crates.io-index
+   ├ darling v0.14.4
+     └── derive_builder_core_fork_arti v0.11.2
+         └── derive_builder_macro_fork_arti v0.11.2
+             └── derive_builder_fork_arti v0.11.2
+                 ├── arti-client v0.46.0
+                 ├── fs-mistrust v0.15.1
+                 ├── tor-cert v0.46.0
+                 ├── tor-circmgr v0.46.0 (*)
+                 ├── tor-config v0.46.0 (*)
+                 ├── tor-dirmgr v0.46.0 (*)
+                 ├── tor-guardmgr v0.46.0 (*)
+                 ├── tor-keymgr v0.46.0 (*)
+                 ├── tor-linkspec v0.46.0 (*)
+                 ├── tor-netdoc v0.46.0 (*)
+                 ├── tor-proto v0.46.0 (*)
+                 └── tor-rtcompat v0.46.0
+                     ├── arti-client v0.46.0 (*)
+                     ├── tor-async-utils v0.46.0
+                     ├── tor-chanmgr v0.46.0 (*)
+                     ├── tor-circmgr v0.46.0 (*)
+                     ├── tor-config v0.46.0 (*)
+                     ├── tor-dirclient v0.46.0 (*)
+                     ├── tor-dirmgr v0.46.0 (*)
+                     ├── tor-guardmgr v0.46.0 (*)
+                     ├── tor-hsclient v0.46.0 (*)
+                     ├── tor-log-ratelim v0.46.0
+                     ├── tor-memquota v0.46.0 (*)
+                     ├── tor-proto v0.46.0 (*)
+                     └── tor-rtmock v0.46.0
+                         └── tor-proto v0.46.0 (*)
+   ├ darling v0.21.3
+     └── enumset_derive v0.15.0
+         └── enumset v1.1.14
+             └── tor-netdoc v0.46.0
+                 ├── arti-client v0.46.0
+                 ├── tor-circmgr v0.46.0
+                 ├── tor-consdiff v0.46.0
+                 ├── tor-dirclient v0.46.0 (*)
+                 ├── tor-dircommon v0.46.0
+                 ├── tor-dirmgr v0.46.0 (*)
+                 ├── tor-guardmgr v0.46.0 (*)
+                 ├── tor-hsclient v0.46.0 (*)
+                 ├── tor-netdir v0.46.0
+                 └── tor-relay-selection v0.46.0 (*)
+   ├ darling v0.24.1
+     └── serde_with_macros v3.24.0
+         └── serde_with v3.24.0
+             ├── tor-chanmgr v0.46.0
+             ├── tor-linkspec v0.46.0
+             ├── tor-netdoc v0.46.0 (*)
+             └── tor-protover v0.46.0
+                 ├── arti-client v0.46.0 (*)
+                 ├── tor-cell v0.46.0 (*)
+                 ├── tor-circmgr v0.46.0 (*)
+                 ├── tor-dirmgr v0.46.0 (*)
+                 ├── tor-hsclient v0.46.0 (*)
+                 ├── tor-linkspec v0.46.0 (*)
+                 ├── tor-netdir v0.46.0 (*)
+                 ├── tor-netdoc v0.46.0 (*)
+                 └── tor-proto v0.46.0 (*)
+
+error[duplicate]: found 3 duplicate entries for crate 'darling_core'
+   ┌─ /work/SecMPro/Cargo.lock:66:1
+66 │ ╭ darling_core 0.14.4 registry+https://github.com/rust-lang/crates.io-index
+67 │ │ darling_core 0.21.3 registry+https://github.com/rust-lang/crates.io-index
+68 │ │ darling_core 0.24.1 registry+https://github.com/rust-lang/crates.io-index
+   ├ darling_core v0.14.4
+     ├── darling v0.14.4
+     └── darling_macro v0.14.4
+         └── darling v0.14.4 (*)
+   ├ darling_core v0.21.3
+     ├── darling v0.21.3
+     └── darling_macro v0.21.3
+         └── darling v0.21.3 (*)
+   ├ darling_core v0.24.1
+     ├── darling v0.24.1
+     └── darling_macro v0.24.1
+         └── darling v0.24.1 (*)
+
+error[duplicate]: found 3 duplicate entries for crate 'darling_macro'
+   ┌─ /work/SecMPro/Cargo.lock:69:1
+69 │ ╭ darling_macro 0.14.4 registry+https://github.com/rust-lang/crates.io-index
+70 │ │ darling_macro 0.21.3 registry+https://github.com/rust-lang/crates.io-index
+71 │ │ darling_macro 0.24.1 registry+https://github.com/rust-lang/crates.io-index
+   ├ darling_macro v0.14.4
+     └── darling v0.14.4
+         └── derive_builder_core_fork_arti v0.11.2
+             └── derive_builder_macro_fork_arti v0.11.2
+                 └── derive_builder_fork_arti v0.11.2
+                     ├── arti-client v0.46.0
+                     ├── fs-mistrust v0.15.1
+                     ├── tor-cert v0.46.0
+                     ├── tor-circmgr v0.46.0 (*)
+                     ├── tor-config v0.46.0 (*)
+                     ├── tor-dirmgr v0.46.0 (*)
+                     ├── tor-guardmgr v0.46.0 (*)
+                     ├── tor-keymgr v0.46.0 (*)
+                     ├── tor-linkspec v0.46.0 (*)
+                     ├── tor-netdoc v0.46.0 (*)
+                     ├── tor-proto v0.46.0 (*)
+                     └── tor-rtcompat v0.46.0
+                         ├── arti-client v0.46.0 (*)
+                         ├── tor-async-utils v0.46.0
+                         ├── tor-chanmgr v0.46.0 (*)
+                         ├── tor-circmgr v0.46.0 (*)
+                         ├── tor-config v0.46.0 (*)
+                         ├── tor-dirclient v0.46.0 (*)
+                         ├── tor-dirmgr v0.46.0 (*)
+                         ├── tor-guardmgr v0.46.0 (*)
+                         ├── tor-hsclient v0.46.0 (*)
+                         ├── tor-log-ratelim v0.46.0
+                         ├── tor-memquota v0.46.0 (*)
+                         ├── tor-proto v0.46.0 (*)
+                         └── tor-rtmock v0.46.0
+                             └── tor-proto v0.46.0 (*)
+   ├ darling_macro v0.21.3
+     └── darling v0.21.3
+         └── enumset_derive v0.15.0
+             └── enumset v1.1.14
+                 └── tor-netdoc v0.46.0
+                     ├── arti-client v0.46.0
+                     ├── tor-circmgr v0.46.0
+                     ├── tor-consdiff v0.46.0
+                     ├── tor-dirclient v0.46.0 (*)
+                     ├── tor-dircommon v0.46.0
+                     ├── tor-dirmgr v0.46.0 (*)
+                     ├── tor-guardmgr v0.46.0 (*)
+                     ├── tor-hsclient v0.46.0 (*)
+                     ├── tor-netdir v0.46.0
+                     └── tor-relay-selection v0.46.0 (*)
+   ├ darling_macro v0.24.1
+     └── darling v0.24.1
+         └── serde_with_macros v3.24.0
+             └── serde_with v3.24.0
+                 ├── tor-chanmgr v0.46.0
+                 ├── tor-linkspec v0.46.0
+                 ├── tor-netdoc v0.46.0 (*)
+                 └── tor-protover v0.46.0
+                     ├── arti-client v0.46.0 (*)
+                     ├── tor-cell v0.46.0 (*)
+                     ├── tor-circmgr v0.46.0 (*)
+                     ├── tor-dirmgr v0.46.0 (*)
+                     ├── tor-hsclient v0.46.0 (*)
+                     ├── tor-linkspec v0.46.0 (*)
+                     ├── tor-netdir v0.46.0 (*)
+                     ├── tor-netdoc v0.46.0 (*)
+                     └── tor-proto v0.46.0 (*)
+
+error[rejected]: failed to satisfy license requirements
+   ┌─ /work/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/notify-8.2.0/Cargo.toml:33:12
+33 │ license = "CC0-1.0"
+   ├ CC0-1.0 - Creative Commons Zero v1.0 Universal:
+   ├   - FSF Free/Libre
+   ├ notify v8.2.0
+     └── tor-config v0.46.0
+         ├── arti-client v0.46.0
+         ├── tor-chanmgr v0.46.0
+         ├── tor-circmgr v0.46.0 (*)
+         ├── tor-dircommon v0.46.0
+         ├── tor-dirmgr v0.46.0 (*)
+         ├── tor-guardmgr v0.46.0 (*)
+         ├── tor-hsclient v0.46.0 (*)
+         ├── tor-keymgr v0.46.0
+         ├── tor-linkspec v0.46.0
+         ├── tor-memquota v0.46.0
+         └── tor-proto v0.46.0 (*)
+
+error[duplicate]: found 2 duplicate entries for crate 'digest'
+   ┌─ /work/SecMPro/Cargo.lock:83:1
+83 │ ╭ digest 0.10.7 registry+https://github.com/rust-lang/crates.io-index
+84 │ │ digest 0.11.3 registry+https://github.com/rust-lang/crates.io-index
+   ├ digest v0.10.7
+     ├── curve25519-dalek v4.1.3
+     ├── hmac v0.12.1
+     ├── rsa v0.9.10
+     ├── sha1 v0.10.7
+     ├── sha2 v0.10.9
+     ├── sha3 v0.10.9
+     ├── signature v2.2.0
+     ├── tor-bytes v0.46.0 (*)
+     ├── tor-cert v0.46.0 (*)
+     ├── tor-consdiff v0.46.0 (*)
+     ├── tor-dirmgr v0.46.0 (*)
+     ├── tor-hscrypto v0.46.0 (*)
+     ├── tor-llcrypto v0.46.0 (*)
+     ├── tor-netdir v0.46.0 (*)
+     ├── tor-netdoc v0.46.0 (*)
+     └── tor-proto v0.46.0 (*)
+   ├ digest v0.11.3
+     ├── curve25519-dalek v5.0.0
+     ├── hmac v0.13.0
+     ├── sha2 v0.11.0
+     ├── sha3 v0.11.0
+     ├── shake v0.1.0
+     └── signature v3.0.0
+         ├── ed25519 v3.0.0
+         └── ml-dsa v0.1.1 (*)
+
+error[duplicate]: found 2 duplicate entries for crate 'ed25519'
+   ┌─ /work/SecMPro/Cargo.lock:92:1
+92 │ ╭ ed25519 2.2.3 registry+https://github.com/rust-lang/crates.io-index
+93 │ │ ed25519 3.0.0 registry+https://github.com/rust-lang/crates.io-index
+   ├ ed25519 v2.2.3
+     └── ed25519-dalek v2.2.0
+         └── tor-llcrypto v0.46.0
+             ├── arti-client v0.46.0
+             ├── tor-bytes v0.46.0
+             ├── tor-cell v0.46.0 (*)
+             ├── tor-cert v0.46.0 (*)
+             ├── tor-chanmgr v0.46.0 (*)
+             ├── tor-checkable v0.46.0
+             ├── tor-consdiff v0.46.0 (*)
+             ├── tor-dirclient v0.46.0 (*)
+             ├── tor-dircommon v0.46.0 (*)
+             ├── tor-dirmgr v0.46.0 (*)
+             ├── tor-guardmgr v0.46.0 (*)
+             ├── tor-hsclient v0.46.0 (*)
+             ├── tor-hscrypto v0.46.0 (*)
+             ├── tor-key-forge v0.46.0 (*)
+             ├── tor-keymgr v0.46.0 (*)
+             ├── tor-linkspec v0.46.0 (*)
+             ├── tor-netdir v0.46.0 (*)
+             ├── tor-netdoc v0.46.0 (*)
+             └── tor-proto v0.46.0 (*)
+   ├ ed25519 v3.0.0
+     └── ed25519-dalek v3.0.0
+         └── secmp-crypto v0.0.0
+             ├── secmp-client-core v0.0.0
+             ├── secmp-proto v0.0.0
+             ├── secmp-relay v0.0.0 (*)
+             ├── secmp-testkit v0.0.0 (*)
+             └── secmp-transport v0.0.0 (*)
+
+error[duplicate]: found 2 duplicate entries for crate 'ed25519-dalek'
+   ┌─ /work/SecMPro/Cargo.lock:94:1
+94 │ ╭ ed25519-dalek 2.2.0 registry+https://github.com/rust-lang/crates.io-index
+95 │ │ ed25519-dalek 3.0.0 registry+https://github.com/rust-lang/crates.io-index
+   ├ ed25519-dalek v2.2.0
+     └── tor-llcrypto v0.46.0
+         ├── arti-client v0.46.0
+         ├── tor-bytes v0.46.0
+         ├── tor-cell v0.46.0 (*)
+         ├── tor-cert v0.46.0 (*)
+         ├── tor-chanmgr v0.46.0 (*)
+         ├── tor-checkable v0.46.0
+         ├── tor-consdiff v0.46.0 (*)
+         ├── tor-dirclient v0.46.0 (*)
+         ├── tor-dircommon v0.46.0 (*)
+         ├── tor-dirmgr v0.46.0 (*)
+         ├── tor-guardmgr v0.46.0 (*)
+         ├── tor-hsclient v0.46.0 (*)
+         ├── tor-hscrypto v0.46.0 (*)
+         ├── tor-key-forge v0.46.0 (*)
+         ├── tor-keymgr v0.46.0 (*)
+         ├── tor-linkspec v0.46.0 (*)
+         ├── tor-netdir v0.46.0 (*)
+         ├── tor-netdoc v0.46.0 (*)
+         └── tor-proto v0.46.0 (*)
+   ├ ed25519-dalek v3.0.0
+     └── secmp-crypto v0.0.0
+         ├── secmp-client-core v0.0.0
+         ├── secmp-proto v0.0.0
+         ├── secmp-relay v0.0.0 (*)
+         ├── secmp-testkit v0.0.0 (*)
+         └── secmp-transport v0.0.0 (*)
+
+error[duplicate]: found 2 duplicate entries for crate 'foldhash'
+    ┌─ /work/SecMPro/Cargo.lock:115:1
+115 │ ╭ foldhash 0.1.5 registry+https://github.com/rust-lang/crates.io-index
+116 │ │ foldhash 0.2.0 registry+https://github.com/rust-lang/crates.io-index
+    ├ foldhash v0.1.5
+      └── hashbrown v0.15.5
+          └── imara-diff v0.2.0
+              └── tor-consdiff v0.46.0
+                  └── tor-dirmgr v0.46.0
+                      └── arti-client v0.46.0
+                          └── secmp-transport v0.0.0
+                              ├── secmp-client-core v0.0.0
+                              └── secmp-testkit v0.0.0 (*)
+    ├ foldhash v0.2.0
+      └── hashbrown v0.16.1
+          ├── hashlink v0.11.1
+          └── weak-table v0.4.0
+              ├── tor-basic-utils v0.46.0
+              ├── tor-circmgr v0.46.0 (*)
+              └── tor-log-ratelim v0.46.0
+                  ├── tor-memquota v0.46.0 (*)
+                  └── tor-proto v0.46.0 (*)
+
+error[duplicate]: found 2 duplicate entries for crate 'getrandom'
+    ┌─ /work/SecMPro/Cargo.lock:133:1
+133 │ ╭ getrandom 0.2.17 registry+https://github.com/rust-lang/crates.io-index
+134 │ │ getrandom 0.3.4 registry+https://github.com/rust-lang/crates.io-index
+135 │ │ getrandom 0.4.3 registry+https://github.com/rust-lang/crates.io-index
+    ├ getrandom v0.2.17
+      └── rand_core v0.6.4
+          ├── ed25519-dalek v2.2.0
+          ├── merlin v3.0.0
+          ├── rand v0.8.8
+          ├── rand_chacha v0.3.1
+          ├── rsa v0.9.10 (*)
+          ├── signature v2.2.0
+          ├── ssh-key-fork-arti v0.6.7 (*)
+          ├── tor-llcrypto v0.46.0 (*)
+          └── x25519-dalek v2.0.1
+              └── tor-llcrypto v0.46.0 (*)
+    ├ getrandom v0.4.3
+      ├── jobserver v0.1.35
+      ├── rand v0.10.3
+      ├── secmp-crypto v0.0.0 (*)
+      └── tempfile v3.27.0
+          └── arti-client v0.46.0 (*)
+
+error[duplicate]: found 4 duplicate entries for crate 'hashbrown'
+    ┌─ /work/SecMPro/Cargo.lock:138:1
+138 │ ╭ hashbrown 0.12.3 registry+https://github.com/rust-lang/crates.io-index
+139 │ │ hashbrown 0.15.5 registry+https://github.com/rust-lang/crates.io-index
+140 │ │ hashbrown 0.16.1 registry+https://github.com/rust-lang/crates.io-index
+141 │ │ hashbrown 0.17.1 registry+https://github.com/rust-lang/crates.io-index
+    ├ hashbrown v0.12.3
+      └── indexmap v1.9.3
+          └── derive-deftly-macros v1.11.5
+              └── derive-deftly v1.11.5
+                  ├── arti-client v0.46.0
+                  ├── pwd-grp v1.0.2
+                  ├── tor-async-utils v0.46.0
+                  ├── tor-basic-utils v0.46.0
+                  ├── tor-bytes v0.46.0
+                  ├── tor-cell v0.46.0 (*)
+                  ├── tor-chanmgr v0.46.0 (*)
+                  ├── tor-circmgr v0.46.0 (*)
+                  ├── tor-config v0.46.0 (*)
+                  ├── tor-dircommon v0.46.0 (*)
+                  ├── tor-guardmgr v0.46.0 (*)
+                  ├── tor-hsclient v0.46.0 (*)
+                  ├── tor-hscrypto v0.46.0 (*)
+                  ├── tor-key-forge v0.46.0 (*)
+                  ├── tor-keymgr v0.46.0 (*)
+                  ├── tor-linkspec v0.46.0 (*)
+                  ├── tor-llcrypto v0.46.0
+                  ├── tor-memquota v0.46.0 (*)
+                  ├── tor-memquota-cost v0.46.0
+                  ├── tor-netdoc v0.46.0 (*)
+                  ├── tor-persist v0.46.0 (*)
+                  ├── tor-proto v0.46.0 (*)
+                  ├── tor-protover v0.46.0 (*)
+                  ├── tor-rtmock v0.46.0
+                  ├── tor-socksproto v0.46.0 (*)
+                  └── tor-units v0.46.0 (*)
+    ├ hashbrown v0.15.5
+      └── imara-diff v0.2.0
+          └── tor-consdiff v0.46.0
+              └── tor-dirmgr v0.46.0
+                  └── arti-client v0.46.0
+                      └── secmp-transport v0.0.0
+                          ├── secmp-client-core v0.0.0
+                          └── secmp-testkit v0.0.0 (*)
+    ├ hashbrown v0.16.1
+      ├── hashlink v0.11.1
+      └── weak-table v0.4.0
+          ├── tor-basic-utils v0.46.0
+          ├── tor-circmgr v0.46.0 (*)
+          └── tor-log-ratelim v0.46.0
+              ├── tor-memquota v0.46.0 (*)
+              └── tor-proto v0.46.0 (*)
+    ├ hashbrown v0.17.1
+      └── indexmap v2.14.2
+          ├── priority-queue v2.7.0
+          ├── toml_edit v0.22.27
+          ├── toml_edit v0.25.15+spec-1.1.0
+          └── turmoil v0.7.2
+              └── (dev) secmp-testkit v0.0.0 (*)
+
+error[duplicate]: found 2 duplicate entries for crate 'hkdf'
+    ┌─ /work/SecMPro/Cargo.lock:147:1
+147 │ ╭ hkdf 0.12.4 registry+https://github.com/rust-lang/crates.io-index
+148 │ │ hkdf 0.13.0 registry+https://github.com/rust-lang/crates.io-index
+    ├ hkdf v0.12.4
+      └── tor-proto v0.46.0
+          ├── arti-client v0.46.0
+          ├── tor-chanmgr v0.46.0
+          ├── tor-circmgr v0.46.0 (*)
+          ├── tor-dirclient v0.46.0 (*)
+          ├── tor-dirmgr v0.46.0 (*)
+          ├── tor-guardmgr v0.46.0
+          └── tor-hsclient v0.46.0 (*)
+    ├ hkdf v0.13.0
+      └── secmp-crypto v0.0.0
+          ├── secmp-client-core v0.0.0
+          ├── secmp-proto v0.0.0
+          ├── secmp-relay v0.0.0 (*)
+          ├── secmp-testkit v0.0.0 (*)
+          └── secmp-transport v0.0.0 (*)
+
+error[duplicate]: found 2 duplicate entries for crate 'hmac'
+    ┌─ /work/SecMPro/Cargo.lock:149:1
+149 │ ╭ hmac 0.12.1 registry+https://github.com/rust-lang/crates.io-index
+150 │ │ hmac 0.13.0 registry+https://github.com/rust-lang/crates.io-index
+    ├ hmac v0.12.1
+      ├── hkdf v0.12.4
+      └── tor-proto v0.46.0 (*)
+    ├ hmac v0.13.0
+      ├── hkdf v0.13.0
+      └── secmp-crypto v0.0.0 (*)
+
+error[duplicate]: found 2 duplicate entries for crate 'indexmap'
+    ┌─ /work/SecMPro/Cargo.lock:169:1
+169 │ ╭ indexmap 1.9.3 registry+https://github.com/rust-lang/crates.io-index
+170 │ │ indexmap 2.14.2 registry+https://github.com/rust-lang/crates.io-index
+    ├ indexmap v1.9.3
+      └── derive-deftly-macros v1.11.5
+          └── derive-deftly v1.11.5
+              ├── arti-client v0.46.0
+              ├── pwd-grp v1.0.2
+              ├── tor-async-utils v0.46.0
+              ├── tor-basic-utils v0.46.0
+              ├── tor-bytes v0.46.0
+              ├── tor-cell v0.46.0 (*)
+              ├── tor-chanmgr v0.46.0 (*)
+              ├── tor-circmgr v0.46.0 (*)
+              ├── tor-config v0.46.0 (*)
+              ├── tor-dircommon v0.46.0 (*)
+              ├── tor-guardmgr v0.46.0 (*)
+              ├── tor-hsclient v0.46.0 (*)
+              ├── tor-hscrypto v0.46.0 (*)
+              ├── tor-key-forge v0.46.0 (*)
+              ├── tor-keymgr v0.46.0 (*)
+              ├── tor-linkspec v0.46.0 (*)
+              ├── tor-llcrypto v0.46.0
+              ├── tor-memquota v0.46.0 (*)
+              ├── tor-memquota-cost v0.46.0
+              ├── tor-netdoc v0.46.0 (*)
+              ├── tor-persist v0.46.0 (*)
+              ├── tor-proto v0.46.0 (*)
+              ├── tor-protover v0.46.0 (*)
+              ├── tor-rtmock v0.46.0
+              ├── tor-socksproto v0.46.0 (*)
+              └── tor-units v0.46.0 (*)
+    ├ indexmap v2.14.2
+      ├── priority-queue v2.7.0
+      ├── toml_edit v0.22.27
+      ├── toml_edit v0.25.15+spec-1.1.0
+      └── turmoil v0.7.2
+          └── (dev) secmp-testkit v0.0.0 (*)
+
+error[duplicate]: found 2 duplicate entries for crate 'inout'
+    ┌─ /work/SecMPro/Cargo.lock:173:1
+173 │ ╭ inout 0.1.4 registry+https://github.com/rust-lang/crates.io-index
+174 │ │ inout 0.2.2 registry+https://github.com/rust-lang/crates.io-index
+    ├ inout v0.1.4
+      └── cipher v0.4.4
+          └── ssh-cipher-fork-arti v0.2.0
+              └── ssh-key-fork-arti v0.6.7
+                  ├── tor-key-forge v0.46.0
+                  └── tor-keymgr v0.46.0 (*)
+    ├ inout v0.2.2
+      ├── aead v0.6.1
+      └── cipher v0.5.2
+          ├── aes v0.9.3
+          ├── chacha20 v0.10.2
+          ├── chacha20poly1305 v0.11.0 (*)
+          ├── ctr v0.10.1
+          ├── tor-netdoc v0.46.0 (*)
+          └── tor-proto v0.46.0 (*)
+
+error[duplicate]: found 2 duplicate entries for crate 'itertools'
+    ┌─ /work/SecMPro/Cargo.lock:178:1
+178 │ ╭ itertools 0.13.0 registry+https://github.com/rust-lang/crates.io-index
+179 │ │ itertools 0.15.0 registry+https://github.com/rust-lang/crates.io-index
+    ├ itertools v0.13.0
+      └── derive-deftly-macros v1.11.5
+          └── derive-deftly v1.11.5
+              ├── arti-client v0.46.0
+              ├── pwd-grp v1.0.2
+              ├── tor-async-utils v0.46.0
+              ├── tor-basic-utils v0.46.0
+              ├── tor-bytes v0.46.0
+              ├── tor-cell v0.46.0 (*)
+              ├── tor-chanmgr v0.46.0 (*)
+              ├── tor-circmgr v0.46.0 (*)
+              ├── tor-config v0.46.0 (*)
+              ├── tor-dircommon v0.46.0 (*)
+              ├── tor-guardmgr v0.46.0 (*)
+              ├── tor-hsclient v0.46.0 (*)
+              ├── tor-hscrypto v0.46.0 (*)
+              ├── tor-key-forge v0.46.0 (*)
+              ├── tor-keymgr v0.46.0 (*)
+              ├── tor-linkspec v0.46.0 (*)
+              ├── tor-llcrypto v0.46.0
+              ├── tor-memquota v0.46.0 (*)
+              ├── tor-memquota-cost v0.46.0
+              ├── tor-netdoc v0.46.0 (*)
+              ├── tor-persist v0.46.0 (*)
+              ├── tor-proto v0.46.0 (*)
+              ├── tor-protover v0.46.0 (*)
+              ├── tor-rtmock v0.46.0
+              ├── tor-socksproto v0.46.0 (*)
+              └── tor-units v0.46.0 (*)
+    ├ itertools v0.15.0
+      ├── tor-basic-utils v0.46.0
+      ├── tor-cell v0.46.0 (*)
+      ├── tor-checkable v0.46.0
+      ├── tor-circmgr v0.46.0 (*)
+      ├── tor-config v0.46.0 (*)
+      ├── tor-dirclient v0.46.0 (*)
+      ├── tor-dirmgr v0.46.0 (*)
+      ├── tor-guardmgr v0.46.0 (*)
+      ├── tor-hsclient v0.46.0 (*)
+      ├── tor-hscrypto v0.46.0 (*)
+      ├── tor-keymgr v0.46.0 (*)
+      ├── tor-linkspec v0.46.0 (*)
+      ├── tor-memquota v0.46.0 (*)
+      ├── tor-memquota-cost v0.46.0
+      ├── tor-netdir v0.46.0 (*)
+      ├── tor-netdoc v0.46.0 (*)
+      ├── tor-persist v0.46.0 (*)
+      ├── tor-proto v0.46.0 (*)
+      └── tor-rtmock v0.46.0
+          └── tor-proto v0.46.0 (*)
+
+error[duplicate]: found 2 duplicate entries for crate 'keccak'
+    ┌─ /work/SecMPro/Cargo.lock:182:1
+182 │ ╭ keccak 0.1.6 registry+https://github.com/rust-lang/crates.io-index
+183 │ │ keccak 0.2.2 registry+https://github.com/rust-lang/crates.io-index
+    ├ keccak v0.1.6
+      ├── merlin v3.0.0
+      └── sha3 v0.10.9
+          └── tor-llcrypto v0.46.0 (*)
+    ├ keccak v0.2.2
+      ├── sha3 v0.11.0
+      └── shake v0.1.0
+          └── ml-dsa v0.1.1
+              └── secmp-crypto v0.0.0 (*)
+
+error[duplicate]: found 2 duplicate entries for crate 'rand'
+    ┌─ /work/SecMPro/Cargo.lock:260:1
+260 │ ╭ rand 0.8.8 registry+https://github.com/rust-lang/crates.io-index
+261 │ │ rand 0.9.5 registry+https://github.com/rust-lang/crates.io-index
+262 │ │ rand 0.10.3 registry+https://github.com/rust-lang/crates.io-index
+    ├ rand v0.8.8
+      └── num-bigint-dig v0.8.6
+          ├── rsa v0.9.10
+          └── ssh-key-fork-arti v0.6.7 (*)
+    ├ rand v0.10.3
+      ├── arti-client v0.46.0
+      ├── libcrux-traits v0.0.8
+      ├── (dev) secmp-proto v0.0.0 (*)
+      ├── (dev) secmp-relay v0.0.0 (*)
+      ├── tor-basic-utils v0.46.0
+      ├── tor-cell v0.46.0 (*)
+      ├── tor-chanmgr v0.46.0 (*)
+      ├── tor-circmgr v0.46.0 (*)
+      ├── tor-dirmgr v0.46.0 (*)
+      ├── tor-guardmgr v0.46.0 (*)
+      ├── tor-hsclient v0.46.0 (*)
+      ├── tor-hscrypto v0.46.0 (*)
+      ├── tor-key-forge v0.46.0
+      ├── tor-keymgr v0.46.0 (*)
+      ├── tor-llcrypto v0.46.0
+      ├── tor-netdir v0.46.0 (*)
+      ├── tor-netdoc v0.46.0 (*)
+      ├── tor-proto v0.46.0 (*)
+      └── tor-relay-selection v0.46.0 (*)
+
+error[duplicate]: found 2 duplicate entries for crate 'rand_chacha'
+    ┌─ /work/SecMPro/Cargo.lock:263:1
+263 │ ╭ rand_chacha 0.3.1 registry+https://github.com/rust-lang/crates.io-index
+264 │ │ rand_chacha 0.9.0 registry+https://github.com/rust-lang/crates.io-index
+265 │ │ rand_chacha 0.10.0 registry+https://github.com/rust-lang/crates.io-index
+    ├ rand_chacha v0.3.1
+      └── rand v0.8.8
+          └── num-bigint-dig v0.8.6
+              ├── rsa v0.9.10
+              └── ssh-key-fork-arti v0.6.7 (*)
+    ├ rand_chacha v0.10.0
+      ├── tor-basic-utils v0.46.0
+      └── tor-llcrypto v0.46.0
+          ├── arti-client v0.46.0 (*)
+          ├── tor-bytes v0.46.0
+          ├── tor-cell v0.46.0 (*)
+          ├── tor-cert v0.46.0 (*)
+          ├── tor-chanmgr v0.46.0 (*)
+          ├── tor-checkable v0.46.0
+          ├── tor-consdiff v0.46.0 (*)
+          ├── tor-dirclient v0.46.0 (*)
+          ├── tor-dircommon v0.46.0 (*)
+          ├── tor-dirmgr v0.46.0 (*)
+          ├── tor-guardmgr v0.46.0 (*)
+          ├── tor-hsclient v0.46.0 (*)
+          ├── tor-hscrypto v0.46.0 (*)
+          ├── tor-key-forge v0.46.0 (*)
+          ├── tor-keymgr v0.46.0 (*)
+          ├── tor-linkspec v0.46.0 (*)
+          ├── tor-netdir v0.46.0 (*)
+          ├── tor-netdoc v0.46.0 (*)
+          └── tor-proto v0.46.0 (*)
+
+error[duplicate]: found 2 duplicate entries for crate 'rand_core'
+    ┌─ /work/SecMPro/Cargo.lock:266:1
+266 │ ╭ rand_core 0.6.4 registry+https://github.com/rust-lang/crates.io-index
+267 │ │ rand_core 0.9.5 registry+https://github.com/rust-lang/crates.io-index
+268 │ │ rand_core 0.10.1 registry+https://github.com/rust-lang/crates.io-index
+    ├ rand_core v0.6.4
+      ├── ed25519-dalek v2.2.0
+      ├── merlin v3.0.0
+      ├── rand v0.8.8
+      ├── rand_chacha v0.3.1
+      ├── rsa v0.9.10 (*)
+      ├── signature v2.2.0
+      ├── ssh-key-fork-arti v0.6.7 (*)
+      ├── tor-llcrypto v0.46.0 (*)
+      └── x25519-dalek v2.0.1
+          └── tor-llcrypto v0.46.0 (*)
+    ├ rand_core v0.10.1
+      ├── chacha20 v0.10.2
+      ├── crypto-common v0.2.2
+      ├── getrandom v0.4.3
+      ├── kem v0.3.0 (*)
+      ├── ml-kem v0.3.2 (*)
+      ├── rand v0.10.3 (*)
+      ├── rand_chacha v0.10.0
+      ├── rand_jitter v0.6.1
+      ├── rdrand v0.9.0
+      ├── reseeding_rng v0.10.7
+      ├── tor-llcrypto v0.46.0 (*)
+      ├── tor-proto v0.46.0 (*)
+      └── x25519-dalek v3.0.0 (*)
+
+error[duplicate]: found 2 duplicate entries for crate 'serde_spanned'
+    ┌─ /work/SecMPro/Cargo.lock:312:1
+312 │ ╭ serde_spanned 0.6.9 registry+https://github.com/rust-lang/crates.io-index
+313 │ │ serde_spanned 1.1.2 registry+https://github.com/rust-lang/crates.io-index
+    ├ serde_spanned v0.6.9
+      ├── toml v0.8.23
+      └── toml_edit v0.22.27
+          └── toml v0.8.23 (*)
+    ├ serde_spanned v1.1.2
+      └── toml v1.1.6+spec-1.1.0
+          └── tor-config v0.46.0
+              ├── arti-client v0.46.0
+              ├── tor-chanmgr v0.46.0
+              ├── tor-circmgr v0.46.0 (*)
+              ├── tor-dircommon v0.46.0
+              ├── tor-dirmgr v0.46.0 (*)
+              ├── tor-guardmgr v0.46.0 (*)
+              ├── tor-hsclient v0.46.0 (*)
+              ├── tor-keymgr v0.46.0
+              ├── tor-linkspec v0.46.0
+              ├── tor-memquota v0.46.0
+              └── tor-proto v0.46.0 (*)
+
+error[duplicate]: found 2 duplicate entries for crate 'sha2'
+    ┌─ /work/SecMPro/Cargo.lock:317:1
+317 │ ╭ sha2 0.10.9 registry+https://github.com/rust-lang/crates.io-index
+318 │ │ sha2 0.11.0 registry+https://github.com/rust-lang/crates.io-index
+    ├ sha2 v0.10.9
+      ├── ed25519-dalek v2.2.0
+      ├── rsa v0.9.10
+      ├── ssh-encoding-fork-arti v0.2.0
+      ├── ssh-key-fork-arti v0.6.7 (*)
+      └── tor-llcrypto v0.46.0 (*)
+    ├ sha2 v0.11.0
+      ├── ed25519-dalek v3.0.0
+      └── secmp-crypto v0.0.0 (*)
+
+error[duplicate]: found 2 duplicate entries for crate 'sha3'
+    ┌─ /work/SecMPro/Cargo.lock:319:1
+319 │ ╭ sha3 0.10.9 registry+https://github.com/rust-lang/crates.io-index
+320 │ │ sha3 0.11.0 registry+https://github.com/rust-lang/crates.io-index
+    ├ sha3 v0.10.9
+      └── tor-llcrypto v0.46.0
+          ├── arti-client v0.46.0
+          ├── tor-bytes v0.46.0
+          ├── tor-cell v0.46.0 (*)
+          ├── tor-cert v0.46.0 (*)
+          ├── tor-chanmgr v0.46.0 (*)
+          ├── tor-checkable v0.46.0
+          ├── tor-consdiff v0.46.0 (*)
+          ├── tor-dirclient v0.46.0 (*)
+          ├── tor-dircommon v0.46.0 (*)
+          ├── tor-dirmgr v0.46.0 (*)
+          ├── tor-guardmgr v0.46.0 (*)
+          ├── tor-hsclient v0.46.0 (*)
+          ├── tor-hscrypto v0.46.0 (*)
+          ├── tor-key-forge v0.46.0 (*)
+          ├── tor-keymgr v0.46.0 (*)
+          ├── tor-linkspec v0.46.0 (*)
+          ├── tor-netdir v0.46.0 (*)
+          ├── tor-netdoc v0.46.0 (*)
+          └── tor-proto v0.46.0 (*)
+    ├ sha3 v0.11.0
+      ├── derive-deftly-macros v1.11.5
+      ├── ml-kem v0.3.2
+      ├── secmp-crypto v0.0.0 (*)
+      └── (dev) secmp-testkit v0.0.0 (*)
+
+error[duplicate]: found 2 duplicate entries for crate 'signature'
+    ┌─ /work/SecMPro/Cargo.lock:326:1
+326 │ ╭ signature 2.2.0 registry+https://github.com/rust-lang/crates.io-index
+327 │ │ signature 3.0.0 registry+https://github.com/rust-lang/crates.io-index
+    ├ signature v2.2.0
+      ├── ed25519 v2.2.3
+      ├── rsa v0.9.10
+      ├── ssh-key-fork-arti v0.6.7 (*)
+      ├── tor-checkable v0.46.0 (*)
+      ├── tor-dirmgr v0.46.0 (*)
+      ├── tor-hscrypto v0.46.0 (*)
+      ├── tor-key-forge v0.46.0 (*)
+      ├── tor-keymgr v0.46.0 (*)
+      ├── tor-llcrypto v0.46.0 (*)
+      └── tor-netdoc v0.46.0 (*)
+    ├ signature v3.0.0
+      ├── ed25519 v3.0.0
+      └── ml-dsa v0.1.1
+          └── secmp-crypto v0.0.0 (*)
+
+error[duplicate]: found 2 duplicate entries for crate 'strsim'
+    ┌─ /work/SecMPro/Cargo.lock:343:1
+343 │ ╭ strsim 0.10.0 registry+https://github.com/rust-lang/crates.io-index
+344 │ │ strsim 0.11.1 registry+https://github.com/rust-lang/crates.io-index
+    ├ strsim v0.10.0
+      └── darling_core v0.14.4
+          ├── darling v0.14.4
+          └── darling_macro v0.14.4
+              └── darling v0.14.4 (*)
+    ├ strsim v0.11.1
+      └── darling_core v0.24.1
+          ├── darling v0.24.1
+          └── darling_macro v0.24.1
+              └── darling v0.24.1 (*)
+
+error[duplicate]: found 3 duplicate entries for crate 'syn'
+    ┌─ /work/SecMPro/Cargo.lock:348:1
+348 │ ╭ syn 1.0.109 registry+https://github.com/rust-lang/crates.io-index
+349 │ │ syn 2.0.119 registry+https://github.com/rust-lang/crates.io-index
+350 │ │ syn 3.0.6 registry+https://github.com/rust-lang/crates.io-index
+    ├ syn v1.0.109
+      ├── amplify_derive v4.0.1
+      ├── amplify_syn v2.0.1
+      ├── darling_core v0.14.4
+      ├── darling_macro v0.14.4 (*)
+      ├── derive_builder_core_fork_arti v0.11.2 (*)
+      ├── derive_builder_macro_fork_arti v0.11.2 (*)
+      └── educe v0.4.23
+          ├── arti-client v0.46.0 (*)
+          ├── safelog v0.9.1
+          ├── tor-async-utils v0.46.0 (*)
+          ├── tor-basic-utils v0.46.0
+          ├── tor-bytes v0.46.0 (*)
+          ├── tor-cell v0.46.0 (*)
+          ├── tor-chanmgr v0.46.0 (*)
+          ├── tor-circmgr v0.46.0 (*)
+          ├── tor-config v0.46.0 (*)
+          ├── tor-dirmgr v0.46.0 (*)
+          ├── tor-guardmgr v0.46.0 (*)
+          ├── tor-hsclient v0.46.0 (*)
+          ├── tor-llcrypto v0.46.0 (*)
+          ├── tor-memquota v0.46.0 (*)
+          ├── tor-netdoc v0.46.0 (*)
+          ├── tor-proto v0.46.0 (*)
+          ├── tor-rtcompat v0.46.0 (*)
+          ├── tor-rtmock v0.46.0 (*)
+          └── tor-socksproto v0.46.0 (*)
+    ├ syn v2.0.119
+      ├── asn1-rs-derive v0.6.0
+      ├── asn1-rs-impl v0.2.0
+      ├── blanket v0.3.0
+      ├── curve25519-dalek-derive v0.1.1
+      ├── darling_core v0.21.3
+      ├── darling_macro v0.21.3 (*)
+      ├── derive_more-impl v2.1.1
+      ├── enum-ordinalize v3.1.15
+      ├── enum_dispatch v0.3.13
+      ├── enumset_derive v0.15.0 (*)
+      ├── extend v1.2.0
+      ├── getset v0.1.7
+      ├── hax-lib-macros v0.3.7
+      ├── num_enum_derive v0.7.6
+      ├── phf_macros v0.14.0
+      ├── pin-project-internal v1.1.13
+      ├── strum_macros v0.28.0
+      ├── synstructure v0.13.2
+      ├── thiserror-impl v1.0.69
+      ├── tracing-attributes v0.1.31
+      ├── tracing-test-macro v0.2.6
+      ├── visibility v0.1.1
+      ├── windows-implement v0.60.2
+      ├── windows-interface v0.59.3
+      └── zeroize_derive v1.5.0
+          └── zeroize v1.9.0
+              ├── aes v0.9.3
+              ├── aws-lc-rs v1.18.1
+              ├── block-buffer v0.12.1
+              ├── chacha20 v0.10.2 (*)
+              ├── chacha20poly1305 v0.11.0 (*)
+              ├── cipher v0.5.2 (*)
+              ├── curve25519-dalek v4.1.3 (*)
+              ├── curve25519-dalek v5.0.0 (*)
+              ├── der v0.7.10
+              ├── digest v0.11.3 (*)
+              ├── ed25519-dalek v2.2.0 (*)
+              ├── ed25519-dalek v3.0.0 (*)
+              ├── hybrid-array v0.4.15
+              ├── merlin v3.0.0
+              ├── ml-dsa v0.1.1 (*)
+              ├── module-lattice v0.2.3 (*)
+              ├── num-bigint-dig v0.8.6
+              ├── rsa v0.9.10 (*)
+              ├── rustls v0.23.45 (*)
+              ├── rustls-pki-types v1.15.1
+              ├── secmp-crypto v0.0.0 (*)
+              ├── secmp-sys-mem v0.0.0
+              ├── ssh-key-fork-arti v0.6.7 (*)
+              ├── tor-bytes v0.46.0 (*)
+              ├── tor-keymgr v0.46.0 (*)
+              ├── tor-llcrypto v0.46.0 (*)
+              ├── tor-netdoc v0.46.0 (*)
+              ├── tor-proto v0.46.0 (*)
+              ├── tor-rtcompat v0.46.0 (*)
+              ├── x25519-dalek v2.0.1 (*)
+              └── x25519-dalek v3.0.0 (*)
+    ├ syn v3.0.6
+      ├── async-trait v0.1.92
+      ├── darling_core v0.24.1
+      ├── darling_macro v0.24.1 (*)
+      ├── derive-deftly-macros v1.11.5
+      ├── displaydoc v0.2.7
+      ├── futures-macro v0.3.34
+      ├── serde_derive v1.0.229
+      ├── serde_with_macros v3.24.0 (*)
+      ├── synstructure v0.14.0
+      ├── thiserror-impl v2.0.21
+      ├── tokio-macros v2.7.2
+      ├── yoke-derive v0.8.4 (*)
+      ├── zerofrom-derive v0.1.8 (*)
+      └── zerovec-derive v0.11.6
+          └── zerovec v0.11.8 (*)
+
+error[duplicate]: found 2 duplicate entries for crate 'synstructure'
+    ┌─ /work/SecMPro/Cargo.lock:352:1
+352 │ ╭ synstructure 0.13.2 registry+https://github.com/rust-lang/crates.io-index
+353 │ │ synstructure 0.14.0 registry+https://github.com/rust-lang/crates.io-index
+    ├ synstructure v0.13.2
+      └── asn1-rs-derive v0.6.0
+          └── asn1-rs v0.7.2
+              └── der-parser v10.0.0
+                  └── tor-llcrypto v0.46.0
+                      ├── arti-client v0.46.0
+                      ├── tor-bytes v0.46.0
+                      ├── tor-cell v0.46.0 (*)
+                      ├── tor-cert v0.46.0 (*)
+                      ├── tor-chanmgr v0.46.0 (*)
+                      ├── tor-checkable v0.46.0
+                      ├── tor-consdiff v0.46.0 (*)
+                      ├── tor-dirclient v0.46.0 (*)
+                      ├── tor-dircommon v0.46.0 (*)
+                      ├── tor-dirmgr v0.46.0 (*)
+                      ├── tor-guardmgr v0.46.0 (*)
+                      ├── tor-hsclient v0.46.0 (*)
+                      ├── tor-hscrypto v0.46.0 (*)
+                      ├── tor-key-forge v0.46.0 (*)
+                      ├── tor-keymgr v0.46.0 (*)
+                      ├── tor-linkspec v0.46.0 (*)
+                      ├── tor-netdir v0.46.0 (*)
+                      ├── tor-netdoc v0.46.0 (*)
+                      └── tor-proto v0.46.0 (*)
+    ├ synstructure v0.14.0
+      ├── yoke-derive v0.8.4
+      └── zerofrom-derive v0.1.8
+          └── zerofrom v0.1.8
+              ├── icu_collections v2.3.0 (*)
+              ├── icu_provider v2.3.1 (*)
+              ├── yoke v0.8.3 (*)
+              ├── zerotrie v0.2.5 (*)
+              └── zerovec v0.11.8 (*)
+
+error[duplicate]: found 2 duplicate entries for crate 'thiserror'
+    ┌─ /work/SecMPro/Cargo.lock:357:1
+357 │ ╭ thiserror 1.0.69 registry+https://github.com/rust-lang/crates.io-index
+358 │ │ thiserror 2.0.21 registry+https://github.com/rust-lang/crates.io-index
+    ├ thiserror v1.0.69
+      └── postage v0.5.0
+          ├── arti-client v0.46.0
+          ├── tor-async-utils v0.46.0
+          ├── tor-chanmgr v0.46.0 (*)
+          ├── tor-config v0.46.0
+          ├── tor-dirmgr v0.46.0 (*)
+          ├── tor-guardmgr v0.46.0 (*)
+          ├── tor-hsclient v0.46.0 (*)
+          └── tor-proto v0.46.0 (*)
+    ├ thiserror v2.0.21
+      ├── arti-client v0.46.0
+      ├── asn1-rs v0.7.2
+      ├── fs-mistrust v0.15.1
+      ├── fslock-guard v0.8.2
+      ├── pwd-grp v1.0.2
+      ├── safelog v0.9.1
+      ├── slotmap-careful v0.8.1
+      ├── tor-async-utils v0.46.0 (*)
+      ├── tor-basic-utils v0.46.0
+      ├── tor-bytes v0.46.0 (*)
+      ├── tor-cell v0.46.0 (*)
+      ├── tor-cert v0.46.0 (*)
+      ├── tor-chanmgr v0.46.0 (*)
+      ├── tor-checkable v0.46.0 (*)
+      ├── tor-circmgr v0.46.0 (*)
+      ├── tor-config v0.46.0 (*)
+      ├── tor-config-path v0.46.0
+      ├── tor-consdiff v0.46.0 (*)
+      ├── tor-dirclient v0.46.0 (*)
+      ├── tor-dirmgr v0.46.0 (*)
+      ├── tor-error v0.46.0
+      ├── tor-general-addr v0.46.0
+      ├── tor-guardmgr v0.46.0 (*)
+      ├── tor-hsclient v0.46.0 (*)
+      ├── tor-hscrypto v0.46.0 (*)
+      ├── tor-key-forge v0.46.0 (*)
+      ├── tor-keymgr v0.46.0 (*)
+      ├── tor-linkspec v0.46.0 (*)
+      ├── tor-llcrypto v0.46.0 (*)
+      ├── tor-log-ratelim v0.46.0 (*)
+      ├── tor-memquota v0.46.0 (*)
+      ├── tor-netdir v0.46.0 (*)
+      ├── tor-netdoc v0.46.0 (*)
+      ├── tor-persist v0.46.0 (*)
+      ├── tor-proto v0.46.0 (*)
+      ├── tor-protover v0.46.0 (*)
+      ├── tor-rtcompat v0.46.0 (*)
+      ├── tor-rtmock v0.46.0 (*)
+      ├── tor-socksproto v0.46.0 (*)
+      └── tor-units v0.46.0 (*)
+
+error[duplicate]: found 2 duplicate entries for crate 'thiserror-impl'
+    ┌─ /work/SecMPro/Cargo.lock:359:1
+359 │ ╭ thiserror-impl 1.0.69 registry+https://github.com/rust-lang/crates.io-index
+360 │ │ thiserror-impl 2.0.21 registry+https://github.com/rust-lang/crates.io-index
+    ├ thiserror-impl v1.0.69
+      └── thiserror v1.0.69
+          └── postage v0.5.0
+              ├── arti-client v0.46.0
+              ├── tor-async-utils v0.46.0
+              ├── tor-chanmgr v0.46.0 (*)
+              ├── tor-config v0.46.0
+              ├── tor-dirmgr v0.46.0 (*)
+              ├── tor-guardmgr v0.46.0 (*)
+              ├── tor-hsclient v0.46.0 (*)
+              └── tor-proto v0.46.0 (*)
+    ├ thiserror-impl v2.0.21
+      └── thiserror v2.0.21
+          ├── arti-client v0.46.0
+          ├── asn1-rs v0.7.2
+          ├── fs-mistrust v0.15.1
+          ├── fslock-guard v0.8.2
+          ├── pwd-grp v1.0.2
+          ├── safelog v0.9.1
+          ├── slotmap-careful v0.8.1
+          ├── tor-async-utils v0.46.0 (*)
+          ├── tor-basic-utils v0.46.0
+          ├── tor-bytes v0.46.0 (*)
+          ├── tor-cell v0.46.0 (*)
+          ├── tor-cert v0.46.0 (*)
+          ├── tor-chanmgr v0.46.0 (*)
+          ├── tor-checkable v0.46.0 (*)
+          ├── tor-circmgr v0.46.0 (*)
+          ├── tor-config v0.46.0 (*)
+          ├── tor-config-path v0.46.0
+          ├── tor-consdiff v0.46.0 (*)
+          ├── tor-dirclient v0.46.0 (*)
+          ├── tor-dirmgr v0.46.0 (*)
+          ├── tor-error v0.46.0
+          ├── tor-general-addr v0.46.0
+          ├── tor-guardmgr v0.46.0 (*)
+          ├── tor-hsclient v0.46.0 (*)
+          ├── tor-hscrypto v0.46.0 (*)
+          ├── tor-key-forge v0.46.0 (*)
+          ├── tor-keymgr v0.46.0 (*)
+          ├── tor-linkspec v0.46.0 (*)
+          ├── tor-llcrypto v0.46.0 (*)
+          ├── tor-log-ratelim v0.46.0 (*)
+          ├── tor-memquota v0.46.0 (*)
+          ├── tor-netdir v0.46.0 (*)
+          ├── tor-netdoc v0.46.0 (*)
+          ├── tor-persist v0.46.0 (*)
+          ├── tor-proto v0.46.0 (*)
+          ├── tor-protover v0.46.0 (*)
+          ├── tor-rtcompat v0.46.0 (*)
+          ├── tor-rtmock v0.46.0 (*)
+          ├── tor-socksproto v0.46.0 (*)
+          └── tor-units v0.46.0 (*)
+
+error[duplicate]: found 2 duplicate entries for crate 'toml'
+    ┌─ /work/SecMPro/Cargo.lock:370:1
+370 │ ╭ toml 0.8.23 registry+https://github.com/rust-lang/crates.io-index
+371 │ │ toml 1.1.6+spec-1.1.0 registry+https://github.com/rust-lang/crates.io-index
+    ├ toml v0.8.23
+      └── figment v0.10.19
+          └── tor-config v0.46.0
+              ├── arti-client v0.46.0
+              ├── tor-chanmgr v0.46.0
+              ├── tor-circmgr v0.46.0 (*)
+              ├── tor-dircommon v0.46.0
+              ├── tor-dirmgr v0.46.0 (*)
+              ├── tor-guardmgr v0.46.0 (*)
+              ├── tor-hsclient v0.46.0 (*)
+              ├── tor-keymgr v0.46.0
+              ├── tor-linkspec v0.46.0
+              ├── tor-memquota v0.46.0
+              └── tor-proto v0.46.0 (*)
+    ├ toml v1.1.6+spec-1.1.0
+      └── tor-config v0.46.0
+          ├── arti-client v0.46.0
+          ├── tor-chanmgr v0.46.0
+          ├── tor-circmgr v0.46.0 (*)
+          ├── tor-dircommon v0.46.0
+          ├── tor-dirmgr v0.46.0 (*)
+          ├── tor-guardmgr v0.46.0 (*)
+          ├── tor-hsclient v0.46.0 (*)
+          ├── tor-keymgr v0.46.0
+          ├── tor-linkspec v0.46.0
+          ├── tor-memquota v0.46.0
+          └── tor-proto v0.46.0 (*)
+
+error[duplicate]: found 2 duplicate entries for crate 'toml_datetime'
+    ┌─ /work/SecMPro/Cargo.lock:372:1
+372 │ ╭ toml_datetime 0.6.11 registry+https://github.com/rust-lang/crates.io-index
+373 │ │ toml_datetime 1.1.2+spec-1.1.0 registry+https://github.com/rust-lang/crates.io-index
+    ├ toml_datetime v0.6.11
+      ├── toml v0.8.23
+      └── toml_edit v0.22.27
+          └── toml v0.8.23 (*)
+    ├ toml_datetime v1.1.2+spec-1.1.0
+      ├── toml v1.1.6+spec-1.1.0
+      └── toml_edit v0.25.15+spec-1.1.0
+          └── proc-macro-crate v3.5.0
+              ├── derive-deftly-macros v1.11.5
+              └── num_enum_derive v0.7.6
+                  └── num_enum v0.7.6
+                      ├── tor-guardmgr v0.46.0 (*)
+                      └── tor-netdir v0.46.0 (*)
+
+error[duplicate]: found 2 duplicate entries for crate 'toml_edit'
+    ┌─ /work/SecMPro/Cargo.lock:374:1
+374 │ ╭ toml_edit 0.22.27 registry+https://github.com/rust-lang/crates.io-index
+375 │ │ toml_edit 0.25.15+spec-1.1.0 registry+https://github.com/rust-lang/crates.io-index
+    ├ toml_edit v0.22.27
+      └── toml v0.8.23
+          └── figment v0.10.19
+              └── tor-config v0.46.0
+                  ├── arti-client v0.46.0
+                  ├── tor-chanmgr v0.46.0
+                  ├── tor-circmgr v0.46.0 (*)
+                  ├── tor-dircommon v0.46.0
+                  ├── tor-dirmgr v0.46.0 (*)
+                  ├── tor-guardmgr v0.46.0 (*)
+                  ├── tor-hsclient v0.46.0 (*)
+                  ├── tor-keymgr v0.46.0
+                  ├── tor-linkspec v0.46.0
+                  ├── tor-memquota v0.46.0
+                  └── tor-proto v0.46.0 (*)
+    ├ toml_edit v0.25.15+spec-1.1.0
+      └── proc-macro-crate v3.5.0
+          ├── derive-deftly-macros v1.11.5
+          └── num_enum_derive v0.7.6
+              └── num_enum v0.7.6
+                  ├── tor-guardmgr v0.46.0 (*)
+                  └── tor-netdir v0.46.0 (*)
+
+error[duplicate]: found 4 duplicate entries for crate 'windows-sys'
+    ┌─ /work/SecMPro/Cargo.lock:452:1
+452 │ ╭ windows-sys 0.52.0 registry+https://github.com/rust-lang/crates.io-index
+453 │ │ windows-sys 0.59.0 registry+https://github.com/rust-lang/crates.io-index
+454 │ │ windows-sys 0.60.2 registry+https://github.com/rust-lang/crates.io-index
+455 │ │ windows-sys 0.61.2 registry+https://github.com/rust-lang/crates.io-index
+    ├ windows-sys v0.52.0
+      ├── errno v0.3.14
+      ├── rustix v1.1.5 (*)
+      ├── tempfile v3.27.0 (*)
+      └── winapi-util v0.1.11
+          ├── same-file v1.0.6
+          └── walkdir v2.5.0 (*)
+    ├ windows-sys v0.59.0
+      ├── dirs-sys v0.5.0
+      ├── nu-ansi-term v0.50.3
+      └── rand_jitter v0.6.1
+          └── tor-llcrypto v0.46.0
+              ├── arti-client v0.46.0 (*)
+              ├── tor-bytes v0.46.0
+              ├── tor-cell v0.46.0 (*)
+              ├── tor-cert v0.46.0 (*)
+              ├── tor-chanmgr v0.46.0 (*)
+              ├── tor-checkable v0.46.0
+              ├── tor-consdiff v0.46.0 (*)
+              ├── tor-dirclient v0.46.0 (*)
+              ├── tor-dircommon v0.46.0 (*)
+              ├── tor-dirmgr v0.46.0 (*)
+              ├── tor-guardmgr v0.46.0 (*)
+              ├── tor-hsclient v0.46.0 (*)
+              ├── tor-hscrypto v0.46.0 (*)
+              ├── tor-key-forge v0.46.0 (*)
+              ├── tor-keymgr v0.46.0 (*)
+              ├── tor-linkspec v0.46.0 (*)
+              ├── tor-netdir v0.46.0 (*)
+              ├── tor-netdoc v0.46.0 (*)
+              └── tor-proto v0.46.0 (*)
+    ├ windows-sys v0.60.2
+      ├── notify v8.2.0
+      └── socket2 v0.6.5
+          ├── tokio v1.53.1
+          └── tor-rtcompat v0.46.0 (*)
+    ├ windows-sys v0.61.2
+      ├── fslock-guard v0.8.2
+      ├── mio v1.2.4
+      ├── secmp-sys-mem v0.0.0
+      └── tokio v1.53.1 (*)
+
+error[duplicate]: found 2 duplicate entries for crate 'windows-targets'
+    ┌─ /work/SecMPro/Cargo.lock:456:1
+456 │ ╭ windows-targets 0.52.6 registry+https://github.com/rust-lang/crates.io-index
+457 │ │ windows-targets 0.53.5 registry+https://github.com/rust-lang/crates.io-index
+    ├ windows-targets v0.52.6
+      ├── windows-sys v0.52.0
+      └── windows-sys v0.59.0
+          ├── dirs-sys v0.5.0
+          ├── nu-ansi-term v0.50.3
+          └── rand_jitter v0.6.1
+              └── tor-llcrypto v0.46.0
+                  ├── arti-client v0.46.0 (*)
+                  ├── tor-bytes v0.46.0
+                  ├── tor-cell v0.46.0 (*)
+                  ├── tor-cert v0.46.0 (*)
+                  ├── tor-chanmgr v0.46.0 (*)
+                  ├── tor-checkable v0.46.0
+                  ├── tor-consdiff v0.46.0 (*)
+                  ├── tor-dirclient v0.46.0 (*)
+                  ├── tor-dircommon v0.46.0 (*)
+                  ├── tor-dirmgr v0.46.0 (*)
+                  ├── tor-guardmgr v0.46.0 (*)
+                  ├── tor-hsclient v0.46.0 (*)
+                  ├── tor-hscrypto v0.46.0 (*)
+                  ├── tor-key-forge v0.46.0 (*)
+                  ├── tor-keymgr v0.46.0 (*)
+                  ├── tor-linkspec v0.46.0 (*)
+                  ├── tor-netdir v0.46.0 (*)
+                  ├── tor-netdoc v0.46.0 (*)
+                  └── tor-proto v0.46.0 (*)
+    ├ windows-targets v0.53.5
+      └── windows-sys v0.60.2
+          ├── notify v8.2.0
+          └── socket2 v0.6.5
+              ├── tokio v1.53.1
+              └── tor-rtcompat v0.46.0 (*)
+
+error[duplicate]: found 2 duplicate entries for crate 'windows_x86_64_gnu'
+    ┌─ /work/SecMPro/Cargo.lock:459:1
+459 │ ╭ windows_x86_64_gnu 0.52.6 registry+https://github.com/rust-lang/crates.io-index
+460 │ │ windows_x86_64_gnu 0.53.1 registry+https://github.com/rust-lang/crates.io-index
+    ├ windows_x86_64_gnu v0.52.6
+      └── windows-targets v0.52.6
+          ├── windows-sys v0.52.0
+          └── windows-sys v0.59.0
+              ├── dirs-sys v0.5.0
+              ├── nu-ansi-term v0.50.3
+              └── rand_jitter v0.6.1
+                  └── tor-llcrypto v0.46.0
+                      ├── arti-client v0.46.0 (*)
+                      ├── tor-bytes v0.46.0
+                      ├── tor-cell v0.46.0 (*)
+                      ├── tor-cert v0.46.0 (*)
+                      ├── tor-chanmgr v0.46.0 (*)
+                      ├── tor-checkable v0.46.0
+                      ├── tor-consdiff v0.46.0 (*)
+                      ├── tor-dirclient v0.46.0 (*)
+                      ├── tor-dircommon v0.46.0 (*)
+                      ├── tor-dirmgr v0.46.0 (*)
+                      ├── tor-guardmgr v0.46.0 (*)
+                      ├── tor-hsclient v0.46.0 (*)
+                      ├── tor-hscrypto v0.46.0 (*)
+                      ├── tor-key-forge v0.46.0 (*)
+                      ├── tor-keymgr v0.46.0 (*)
+                      ├── tor-linkspec v0.46.0 (*)
+                      ├── tor-netdir v0.46.0 (*)
+                      ├── tor-netdoc v0.46.0 (*)
+                      └── tor-proto v0.46.0 (*)
+    ├ windows_x86_64_gnu v0.53.1
+      └── windows-targets v0.53.5
+          └── windows-sys v0.60.2
+              ├── notify v8.2.0
+              └── socket2 v0.6.5
+                  ├── tokio v1.53.1
+                  └── tor-rtcompat v0.46.0 (*)
+
+error[duplicate]: found 2 duplicate entries for crate 'windows_x86_64_msvc'
+    ┌─ /work/SecMPro/Cargo.lock:461:1
+461 │ ╭ windows_x86_64_msvc 0.52.6 registry+https://github.com/rust-lang/crates.io-index
+462 │ │ windows_x86_64_msvc 0.53.1 registry+https://github.com/rust-lang/crates.io-index
+    ├ windows_x86_64_msvc v0.52.6
+      └── windows-targets v0.52.6
+          ├── windows-sys v0.52.0
+          └── windows-sys v0.59.0
+              ├── dirs-sys v0.5.0
+              ├── nu-ansi-term v0.50.3
+              └── rand_jitter v0.6.1
+                  └── tor-llcrypto v0.46.0
+                      ├── arti-client v0.46.0 (*)
+                      ├── tor-bytes v0.46.0
+                      ├── tor-cell v0.46.0 (*)
+                      ├── tor-cert v0.46.0 (*)
+                      ├── tor-chanmgr v0.46.0 (*)
+                      ├── tor-checkable v0.46.0
+                      ├── tor-consdiff v0.46.0 (*)
+                      ├── tor-dirclient v0.46.0 (*)
+                      ├── tor-dircommon v0.46.0 (*)
+                      ├── tor-dirmgr v0.46.0 (*)
+                      ├── tor-guardmgr v0.46.0 (*)
+                      ├── tor-hsclient v0.46.0 (*)
+                      ├── tor-hscrypto v0.46.0 (*)
+                      ├── tor-key-forge v0.46.0 (*)
+                      ├── tor-keymgr v0.46.0 (*)
+                      ├── tor-linkspec v0.46.0 (*)
+                      ├── tor-netdir v0.46.0 (*)
+                      ├── tor-netdoc v0.46.0 (*)
+                      └── tor-proto v0.46.0 (*)
+    ├ windows_x86_64_msvc v0.53.1
+      └── windows-targets v0.53.5
+          └── windows-sys v0.60.2
+              ├── notify v8.2.0
+              └── socket2 v0.6.5
+                  ├── tokio v1.53.1
+                  └── tor-rtcompat v0.46.0 (*)
+
+error[duplicate]: found 2 duplicate entries for crate 'winnow'
+    ┌─ /work/SecMPro/Cargo.lock:463:1
+463 │ ╭ winnow 0.7.15 registry+https://github.com/rust-lang/crates.io-index
+464 │ │ winnow 1.0.4 registry+https://github.com/rust-lang/crates.io-index
+    ├ winnow v0.7.15
+      └── toml_edit v0.22.27
+          └── toml v0.8.23
+              └── figment v0.10.19
+                  └── tor-config v0.46.0
+                      ├── arti-client v0.46.0
+                      ├── tor-chanmgr v0.46.0
+                      ├── tor-circmgr v0.46.0 (*)
+                      ├── tor-dircommon v0.46.0
+                      ├── tor-dirmgr v0.46.0 (*)
+                      ├── tor-guardmgr v0.46.0 (*)
+                      ├── tor-hsclient v0.46.0 (*)
+                      ├── tor-keymgr v0.46.0
+                      ├── tor-linkspec v0.46.0
+                      ├── tor-memquota v0.46.0
+                      └── tor-proto v0.46.0 (*)
+    ├ winnow v1.0.4
+      ├── toml v1.1.6+spec-1.1.0
+      ├── toml_edit v0.25.15+spec-1.1.0
+      └── toml_parser v1.1.3+spec-1.1.0
+          ├── toml v1.1.6+spec-1.1.0 (*)
+          └── toml_edit v0.25.15+spec-1.1.0 (*)
+
+error[duplicate]: found 2 duplicate entries for crate 'x25519-dalek'
+    ┌─ /work/SecMPro/Cargo.lock:467:1
+467 │ ╭ x25519-dalek 2.0.1 registry+https://github.com/rust-lang/crates.io-index
+468 │ │ x25519-dalek 3.0.0 registry+https://github.com/rust-lang/crates.io-index
+    ├ x25519-dalek v2.0.1
+      └── tor-llcrypto v0.46.0
+          ├── arti-client v0.46.0
+          ├── tor-bytes v0.46.0
+          ├── tor-cell v0.46.0 (*)
+          ├── tor-cert v0.46.0 (*)
+          ├── tor-chanmgr v0.46.0 (*)
+          ├── tor-checkable v0.46.0
+          ├── tor-consdiff v0.46.0 (*)
+          ├── tor-dirclient v0.46.0 (*)
+          ├── tor-dircommon v0.46.0 (*)
+          ├── tor-dirmgr v0.46.0 (*)
+          ├── tor-guardmgr v0.46.0 (*)
+          ├── tor-hsclient v0.46.0 (*)
+          ├── tor-hscrypto v0.46.0 (*)
+          ├── tor-key-forge v0.46.0 (*)
+          ├── tor-keymgr v0.46.0 (*)
+          ├── tor-linkspec v0.46.0 (*)
+          ├── tor-netdir v0.46.0 (*)
+          ├── tor-netdoc v0.46.0 (*)
+          └── tor-proto v0.46.0 (*)
+    ├ x25519-dalek v3.0.0
+      └── secmp-crypto v0.0.0
+          ├── secmp-client-core v0.0.0
+          ├── secmp-proto v0.0.0
+          ├── secmp-relay v0.0.0 (*)
+          ├── secmp-testkit v0.0.0 (*)
+          └── secmp-transport v0.0.0 (*)
+
+warning[license-exception-not-encountered]: license exception was not encountered
+   ┌─ /work/SecMPro/deny.toml:36:52
+36 │ exceptions = [{ allow = ["GPL-3.0-only"], crate = "slint" }]
+
+warning[license-not-encountered]: license was not encountered
+   ┌─ /work/SecMPro/deny.toml:29:6
+29 │     "Unicode-DFS-2016",
+
+error[unmaintained]: paste - no longer maintained
+    ┌─ /work/SecMPro/Cargo.lock:235:1
+235 │ paste 1.0.15 registry+https://github.com/rust-lang/crates.io-index
+    ├ ID: RUSTSEC-2024-0436
+    ├ Advisory: https://rustsec.org/advisories/RUSTSEC-2024-0436
+    ├ The creator of the crate `paste` has stated in the [`README.md`](https://github.com/dtolnay/paste/blob/master/README.md) 
+      that this project is not longer maintained as well as archived the repository
+      ## Possible Alternative(s)
+      - [`pastey`]: a fork of paste and is aimed to be a drop-in replacement with additional features for paste crate
+      - [`with_builtin_macros`]: crate providing a [superset of `paste`'s functionality including general `macro_rules!` eager expansions](https://docs.rs/with_builtin_macros/0.1.0/with_builtin_macros/macro.with_eager_expansions.html)  and `concat!`/`concat_idents!` macros
+      [`pastey`]: https://crates.io/crates/pastey
+      [`with_builtin_macros`]: https://crates.io/crates/with_builtin_macros
+    ├ Announcement: https://github.com/dtolnay/paste
+    ├ Solution: No safe upgrade is available!
+    ├ paste v1.0.15
+      ├── pwd-grp v1.0.2
+      ├── slotmap-careful v0.8.1
+      ├── tor-basic-utils v0.46.0
+      ├── tor-cell v0.46.0 (*)
+      ├── tor-config v0.46.0 (*)
+      ├── tor-dirmgr v0.46.0 (*)
+      ├── tor-error v0.46.0
+      ├── tor-hscrypto v0.46.0 (*)
+      ├── tor-key-forge v0.46.0 (*)
+      ├── tor-memquota v0.46.0 (*)
+      ├── tor-memquota-cost v0.46.0
+      ├── tor-netdoc v0.46.0 (*)
+      ├── tor-persist v0.46.0 (*)
+      ├── tor-protover v0.46.0 (*)
+      └── tor-rtcompat v0.46.0 (*)
+
+error[vulnerability]: Marvin Attack: potential key recovery through timing sidechannels
+    ┌─ /work/SecMPro/Cargo.lock:278:1
+278 │ rsa 0.9.10 registry+https://github.com/rust-lang/crates.io-index
+    ├ ID: RUSTSEC-2023-0071
+    ├ Advisory: https://rustsec.org/advisories/RUSTSEC-2023-0071
+    ├ ### Impact
+      Due to a non-constant-time implementation, information about the private key is leaked through timing information which is observable over the network. An attacker may be able to use that information to recover the key.
+      ### Patches
+      No patch is yet available. The crypto-bigint migration ([RustCrypto/RSA#394](https://github.com/RustCrypto/RSA/pull/394)) did not close this. Tracking is [RustCrypto/RSA#626](https://github.com/RustCrypto/RSA/issues/626) (padding still not constant-time). Implicit rejection work is in [RustCrypto/RSA#680](https://github.com/RustCrypto/RSA/pull/680); default-path blinding is in [RustCrypto/RSA#702](https://github.com/RustCrypto/RSA/pull/702).
+      Still affected as of 2026-09-12: rsa 0.9.10 (latest stable) and rsa 0.10.0-rc.18 (latest). `patched = []` is intentional.
+      ### Workarounds
+      Avoid using the `rsa` crate in settings where attackers can observe timing, for example over the network. Local use on a non-compromised computer is fine.
+      ### References
+      This vulnerability was discovered as part of the "[Marvin Attack]", which revealed several implementations of RSA including OpenSSL had not properly mitigated timing sidechannel attacks.
+      [Marvin Attack]: https://people.redhat.com/~hkario/marvin/
+    ├ Announcement: https://github.com/RustCrypto/RSA/issues/626
+    ├ Solution: No safe upgrade is available!
+    ├ rsa v0.9.10
+      ├── ssh-key-fork-arti v0.6.7
+      ├── tor-key-forge v0.46.0 (*)
+      └── tor-llcrypto v0.46.0
+          ├── arti-client v0.46.0 (*)
+          ├── tor-bytes v0.46.0
+          ├── tor-cell v0.46.0 (*)
+          ├── tor-cert v0.46.0 (*)
+          ├── tor-chanmgr v0.46.0 (*)
+          ├── tor-checkable v0.46.0
+          ├── tor-consdiff v0.46.0 (*)
+          ├── tor-dirclient v0.46.0 (*)
+          ├── tor-dircommon v0.46.0 (*)
+          ├── tor-dirmgr v0.46.0 (*)
+          ├── tor-guardmgr v0.46.0 (*)
+          ├── tor-hsclient v0.46.0 (*)
+          ├── tor-hscrypto v0.46.0 (*)
+          ├── tor-key-forge v0.46.0 (*)
+          ├── tor-keymgr v0.46.0 (*)
+          ├── tor-linkspec v0.46.0 (*)
+          ├── tor-netdir v0.46.0 (*)
+          ├── tor-netdoc v0.46.0 (*)
+          └── tor-proto v0.46.0 (*)
+
+error[vulnerability]: `Debug` impls for client session values expose TLS secrets
+    ┌─ /work/SecMPro/Cargo.lock:283:1
+283 │ rustls 0.23.45 registry+https://github.com/rust-lang/crates.io-index
+    ├ ID: RUSTSEC-2026-0346
+    ├ Advisory: https://rustsec.org/advisories/RUSTSEC-2026-0346
+    ├ The `Debug` implementations of `Tls12ClientSessionValue` and
+      `Tls13ClientSessionValue` were derived, and so included the TLS 1.2 master
+      secret or TLS 1.3 resumption PSK in their output.
+      Custom `ClientSessionStore` implementations that format these values with
+      `Debug` (for example, when logging) could disclose these secrets to readers of
+      the logs. This conflicts with rustls's
+      [key-material redaction policy](https://github.com/rustls/rustls/blob/99f2358cae2954837dbb866faf6727de75489ab9/SECURITY.md#boundary-public-api).
+      Ordinary connection and built-in session cache `Debug` output is redacted and
+      is not affected.
+    ├ Announcement: https://github.com/rustls/rustls/pull/3299
+    ├ Solution: Upgrade to >=0.23.46 (try `cargo update -p rustls`)
+    ├ rustls v0.23.45
+      ├── futures-rustls v0.26.0
+      ├── secmp-relay v0.0.0 (*)
+      ├── secmp-transport v0.0.0 (*)
+      ├── tokio-rustls v0.26.5
+      └── tor-rtcompat v0.46.0 (*)
+
+error[vulnerability]: Buffered application data sent to outer server after ECH rejection
+    ┌─ /work/SecMPro/Cargo.lock:283:1
+283 │ rustls 0.23.45 registry+https://github.com/rust-lang/crates.io-index
+    ├ ID: RUSTSEC-2026-0347
+    ├ Advisory: https://rustsec.org/advisories/RUSTSEC-2026-0347
+    ├ When a server rejects Encrypted Client Hello (ECH), the client completes the
+      handshake using the outer ClientHello and authenticates the server against the
+      ECH config's `public_name`. At the end of that handshake, rustls encrypted and
+      queued any application data buffered via `ClientConnection::writer()` *before*
+      queueing the `ech_required` alert.
+      The application correctly receives
+      `Error::PeerIncompatible(ServerRejectedEncryptedClientHello)`, but the next
+      `write_tls()` call (needed to send the alert) also sends the buffered
+      application data. Plaintext meant for the inner server therefore goes to the
+      client-facing server named by `public_name`.
+      That server is authenticated, so this is not exploitable by an unauthenticated
+      party, but it violates RFC 9849 section 6.1.6, which requires the client to
+      abort with `ech_required` "before sending any application data to the server".
+      This affects only clients that:
+      - use `EchMode::Enable` (GREASE ECH is not affected),
+      - write application data before the handshake completes, and
+      - connect to a server that rejects their ECH config (for example, because it is stale).
+      The underlying ordering bug is older, but before 0.23.44 the client checked
+      the server certificate against the inner server name rather than `public_name`,
+      so certificate verification failed first and no data was sent.
+    ├ Announcement: https://github.com/rustls/rustls/pull/3300
+    ├ Solution: Upgrade to >=0.23.46 (try `cargo update -p rustls`)
+    ├ rustls v0.23.45
+      ├── futures-rustls v0.26.0
+      ├── secmp-relay v0.0.0 (*)
+      ├── secmp-transport v0.0.0 (*)
+      ├── tokio-rustls v0.26.5
+      └── tor-rtcompat v0.46.0 (*)
+
+error[vulnerability]: Brotli certificate decompression can allocate up to 1 GiB before authentication
+    ┌─ /work/SecMPro/Cargo.lock:283:1
+283 │ rustls 0.23.45 registry+https://github.com/rust-lang/crates.io-index
+    ├ ID: RUSTSEC-2026-0348
+    ├ Advisory: https://rustsec.org/advisories/RUSTSEC-2026-0348
+    ├ The built-in Brotli certificate decompressor (enabled by the non-default
+      `brotli` crate feature) bounded the size of the decompressed output, but
+      accepted a peer-selected history window. Brotli's large-window extension was
+      enabled, so a five-byte header could cause an allocation of 1 GiB. A peer can
+      abort a process whose allocator cannot satisfy that request.
+      No trusted certificate is required by the attacker. Affected configurations are:
+      - clients that enable the `brotli` feature and connect to a malicious server, and
+      - servers that enable the `brotli` feature and request client certificates.
+      Applications that do not enable the `brotli` feature are not affected.
+    ├ Announcement: https://github.com/rustls/rustls/pull/3297
+    ├ Solution: Upgrade to >=0.23.46 (try `cargo update -p rustls`)
+    ├ rustls v0.23.45
+      ├── futures-rustls v0.26.0
+      ├── secmp-relay v0.0.0 (*)
+      ├── secmp-transport v0.0.0 (*)
+      ├── tokio-rustls v0.26.5
+      └── tor-rtcompat v0.46.0 (*)
+
+error[vulnerability]: Unauthenticated ServerHello can downgrade later connections to classical key exchange
+    ┌─ /work/SecMPro/Cargo.lock:283:1
+283 │ rustls 0.23.45 registry+https://github.com/rust-lang/crates.io-index
+    ├ ID: RUSTSEC-2026-0349
+    ├ Advisory: https://rustsec.org/advisories/RUSTSEC-2026-0349
+    ├ The client recorded the server-selected key exchange group for each server
+      name when processing the ServerHello, before the server was authenticated.
+      This record is used to predict which key share to send in future ClientHellos
+      to that server name.
+      A network attacker can answer one connection attempt with a ServerHello
+      selecting X25519, and then close the connection. Later ClientHellos for that
+      name carry only an X25519 key share, while `supported_groups` still lists
+      X25519MLKEM768 first. If the genuine server accepts that share rather than
+      sending a HelloRetryRequest for its preferred hybrid group, the handshake
+      completes with classical-only key exchange and no error. This persists for as
+      long as the entry stays in the client's session store.
+      The impact is loss of post-quantum confidentiality for affected connections
+      ("harvest now, decrypt later"). There is no key compromise and no
+      authentication bypass.
+      The following are not affected:
+      - connections to servers which send a HelloRetryRequest for their preferred group,
+      - clients with resumption disabled (as nothing is stored), and
+      - other server names.
+      This behaviour is discussed in
+      [draft-ietf-tls-key-share-prediction](https://www.ietf.org/archive/id/draft-ietf-tls-key-share-prediction-01.html#name-security-considerations),
+      so the practical impact depends largely on server policy.
+    ├ Announcement: https://github.com/rustls/rustls/pull/3355
+    ├ Solution: Upgrade to >=0.23.46 (try `cargo update -p rustls`)
+    ├ rustls v0.23.45
+      ├── futures-rustls v0.26.0
+      ├── secmp-relay v0.0.0 (*)
+      ├── secmp-transport v0.0.0 (*)
+      ├── tokio-rustls v0.26.5
+      └── tor-rtcompat v0.46.0 (*)
+
+advisories FAILED, bans FAILED, licenses FAILED, sources ok

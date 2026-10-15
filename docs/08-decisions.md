@@ -728,7 +728,28 @@ shard; the shard count changes only by a further amendment; test `mutants_scope_
 The §12.1 sketch (`#[async_trait]`, `&self`) is implemented as Part 1.3; an owner who reads that block as protocol text
 records the reservation here.
 
-**Amendment 1 (2026-10-15, Reviewer; M6-B-0).** `rustls` pinned `=0.23.46` instead of `=0.23.45` (RUSTSEC-2026-0346, -0347, -0348, -0349; -0349 is a downgrade of later connections to classical key exchange and would break invariant 3). Advisory triage of the Arti 0.46.0 closure: RUSTSEC-2023-0071 (`rsa` 0.9.10, Marvin timing side channel on RSA private-key operations) ignored — an Arti client performs RSA public-key verification only, no RSA private key exists in SecMPro (evidence: `docs/reviews/M06-evidence/advisory-rsa-reachability.txt`); RUSTSEC-2024-0436 (`paste`, unmaintained proc-macro, compile-time only) ignored. RUSTSEC-2025-0141 (`bincode` 2.0.1, unmaintained) ignored for `cargo audit` only — optional dependency of `typed-index-collections`, present in the lock, compiled for no target (`cargo tree -i bincode --target all -e normal,build,dev` empty). All three are re-triaged at every release and at every `arti-client` bump.
+**Amendment 1 (2026-10-15, Reviewer; M6-B-0).** `rustls` pinned `=0.23.46` instead of `=0.23.45` (RUSTSEC-2026-0346, -0347, -0348, -0349; -0349 is a downgrade of later connections to classical key exchange and would break invariant 3). Advisory triage of the Arti 0.46.0 closure: RUSTSEC-2023-0071 (`rsa` 0.9.10, Marvin timing side channel on RSA private-key operations) ignored — no RSA private-key operation reachable from the selected client paths (call-site check, tor-llcrypto src/pk/rsa.rs; evidence: `docs/reviews/M06-evidence/advisory-rsa-reachability.txt`); RUSTSEC-2024-0436 (`paste`, unmaintained proc-macro, compile-time only) ignored. RUSTSEC-2025-0141 (`bincode` 2.0.1, unmaintained) ignored for `cargo audit` only — optional dependency of `typed-index-collections`, present in the lock, compiled for no target (`cargo tree -i bincode --target all -e normal,build,dev` empty). All three are re-triaged at every release and at every `arti-client` bump.
+
+**Amendment 2 (2026-10-15, Reviewer; M6-B-2, EXT2-4).** The owner's `cargo vet` records for M6 as landed in `b5aa27b`
+(`chore(vet): owner trust records for M6`), read from `supply-chain/audits.toml` `[[trusted.*]]` (166 records added;
+criteria `safe-to-deploy`; the file is the owner's and is not edited here, CLAUDE.md §1.9). Besides the trust records,
+`b5aa27b` adds one audit, `[[audits.rustls]]` (delta 0.23.45 → 0.23.46, ADR-015 Am. 2,
+`docs/reviews/M06-evidence/vet-deltas/rustls-0.23.45-0.23.46.diff`).
+
+| Publisher | Crates | Until |
+|---|---|---|
+| crates.io user-id 10 (no name comment in the record) | `tokio` | 2027-10-01 |
+| crates.io user-id 4286 (no name comment in the record) | `tokio-rustls` | 2027-10-01 |
+| Alice Ryhl (Darksonn) | `tokio` | 2027-10-01 |
+| Dirkjan Ochtman (djc) | `rustls`, `tokio-rustls` | 2027-10-01 |
+| Gabi Moldovan (gabi-250) | `arti-client`, `fslock-guard`, `ssh-cipher-fork-arti`, `ssh-encoding-fork-arti`, `ssh-key-fork-arti`, 36 `tor-*` crates | 2027-10-01 |
+| Ian Jackson (ijackson) | `arti-client`, `derive-deftly`, `derive-deftly-macros`, `derive_builder_core_fork_arti`, `derive_builder_fork_arti`, `derive_builder_macro_fork_arti`, `fslock-guard`, `pwd-grp`, `shellexpand`, 36 `tor-*` crates | 2027-10-01 |
+| Joe Birr-Pixton (ctz) | `rustls` | 2027-10-01 |
+| Nick Mathewson (nmathewson) | `arti-client`, `caret`, `fs-mistrust`, `fslock-guard`, `oneshot-fused-workaround`, `retry-error`, `safelog`, `saturating-time`, `slotmap-careful`, `weak-table`, `web-time-compat`, 36 `tor-*` crates | 2027-10-01 |
+| Tony Arcieri (tarcieri) | `aes`, `base16ct`, `base64ct`, `const-oid`, `cpubits`, `crypto-bigint`, `crypto-common`, `ctr`, `ecdsa`, `elliptic-curve`, `hkdf`, `p256`, `p384`, `p521`, `pkcs1`, `pkcs8`, `polyval`, `primeorder`, `rfc6979`, `rsa`, `sec1`, `sha1`, `sha3`, `spki`, `zeroize_derive` | 2027-10-01 |
+| github:RustCrypto/utils | `zeroize_derive` | 2027-10-01 |
+| rust-lang-owner | `libm` | 2027-10-01 |
+
 
 ---
 

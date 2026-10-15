@@ -3781,10 +3781,26 @@ pub(crate) fn nasm_findings(name: &str, text: &str) -> Vec<String> {
         let installs = code
             .iter()
             .any(|l| l.contains("install") && l.contains("nasm"));
-        let version = code.iter().any(|l| l.contains("nasm") && l.contains(" -v"));
-        if !(installs && version) {
+        let probe = code
+            .iter()
+            .position(|l| l.contains("nasm") && l.contains(" -v"));
+        if !(installs && probe.is_some()) {
             out.push(format!(
                 "{name}: job {job} does not install NASM and print its version (OPEN-M6-06)"
+            ));
+        }
+        // WEISUNG M6-B-2: the probe (`nasm -v`) runs before the build step of the job
+        let build = code.iter().position(|l| l.contains("cargo xtask step"));
+        if let (Some(p), Some(b)) = (probe, build)
+            && p > b
+        {
+            out.push(format!(
+                "{name}: job {job} prints the NASM version only after its build step (OPEN-M6-06)"
+            ));
+        }
+        if build.is_none() {
+            out.push(format!(
+                "{name}: job {job} has no `cargo xtask step` build line"
             ));
         }
     }
@@ -6444,12 +6460,41 @@ mod tests {
         );
         assert_eq!(nasm_findings(".github/workflows/ci.yml", &one).len(), 1);
         // the Windows NASM step removed
-        let no_step = ci.replace("          choco install nasm -y --no-progress\n", "");
+        let no_step = ci.replace(
+            "            choco install nasm --version=$pin -y --no-progress\n",
+            "",
+        );
         let found = nasm_findings(".github/workflows/ci.yml", &no_step);
         assert_eq!(
             found,
             vec![
                 ".github/workflows/ci.yml: job windows-native does not install NASM and print its version (OPEN-M6-06)"
+                    .to_owned()
+            ]
+        );
+        // WEISUNG M6-B-2: the probe moved after the Windows build step is a finding
+        let start = ci.find("      - name: NASM probe").unwrap_or_default();
+        let end = start
+            .saturating_add(
+                ci.get(start..)
+                    .unwrap_or_default()
+                    .find("          }\n")
+                    .unwrap_or_default(),
+            )
+            .saturating_add("          }\n".len());
+        let step = ci.get(start..end).unwrap_or_default().to_owned();
+        assert!(
+            step.contains("nasm -v") && step.contains("choco install nasm --version=$pin"),
+            "{step}"
+        );
+        let gate = "        run: cargo xtask step --strict clippy nextest doctest kat hello\n";
+        let late = ci
+            .replacen(&step, "", 1)
+            .replacen(gate, &format!("{gate}{step}"), 1);
+        assert_eq!(
+            nasm_findings(".github/workflows/ci.yml", &late),
+            vec![
+                ".github/workflows/ci.yml: job windows-native prints the NASM version only after its build step (OPEN-M6-06)"
                     .to_owned()
             ]
         );

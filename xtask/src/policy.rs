@@ -545,6 +545,8 @@ pub(crate) struct VetExemption {
     pub(crate) version: String,
     /// The entry carries a tracked-exemption note.
     pub(crate) noted: bool,
+    /// A `version` line whose value is neither a `"…"` nor a `'…'` string (after a trailing `#` comment is removed).
+    pub(crate) bad_version_line: bool,
 }
 
 /// The `[[exemptions.<name>]]` entries of `supply-chain/config.toml`, in file order.
@@ -563,14 +565,19 @@ pub(crate) fn vet_exemptions(config: &str) -> Vec<VetExemption> {
                     name: name.trim_matches('"').to_owned(),
                     version: String::new(),
                     noted: false,
+                    bad_version_line: false,
                 });
                 in_exemption = true;
             }
         } else if in_exemption && let Some(last) = out.last_mut() {
             if t.starts_with("notes") && t.contains("Tracked exemption") {
                 last.noted = true;
-            } else if let Some(v) = quoted_value(t, "version") {
-                last.version = v;
+            } else if is_key_line(t, "version") {
+                // EXT2-2: fail closed — a version line that does not parse is a finding, never skipped
+                match quoted_value(t, "version") {
+                    Some(v) => last.version = v,
+                    None => last.bad_version_line = true,
+                }
             }
         }
     }
@@ -587,14 +594,29 @@ fn version_parses(v: &str) -> bool {
             .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
 }
 
-/// The string value of `key = "value"` on a TOML line.
+/// The line assigns `key` (`key = …`, any spacing).
+fn is_key_line(line: &str, key: &str) -> bool {
+    line.strip_prefix(key)
+        .is_some_and(|r| r.trim_start().starts_with('='))
+}
+
+/// The string value of `key = "value"` or `key = 'value'` on a TOML line, with a trailing `# comment` after the
+/// closing quote removed (EXT2-2); anything else (no quotes, unterminated, text after the value) is `None`.
 fn quoted_value(line: &str, key: &str) -> Option<String> {
     let rest = line
         .strip_prefix(key)?
         .trim_start()
         .strip_prefix('=')?
         .trim();
-    Some(rest.strip_prefix('"')?.strip_suffix('"')?.to_owned())
+    let quote = rest.chars().next().filter(|c| *c == '"' || *c == '\'')?;
+    let body = rest.get(1..)?;
+    let (value, after) = body.split_once(quote)?;
+    let after = after.trim();
+    if after.is_empty() || after.starts_with('#') {
+        Some(value.to_owned())
+    } else {
+        None
+    }
 }
 
 /// The normal (shipped) dependency closure of `secmp-crypto`/`secmp-proto` (ADR-036, docs/06 §3): normal edges
@@ -637,7 +659,12 @@ pub(crate) fn vet_closure_findings(
         ));
     }
     for e in &entries {
-        if !version_parses(&e.version) {
+        if e.bad_version_line {
+            findings.push(format!(
+                "vet exemption with an unparsable version line: {}",
+                e.name
+            ));
+        } else if !version_parses(&e.version) {
             findings.push(format!("vet exemption without version: {}", e.name));
         } else if closure.contains(&(e.name.clone(), e.version.clone())) {
             findings.push(format!(
@@ -1995,6 +2022,84 @@ mod tests {
         for bad in ["", "1", "1.2", "1.2.x", "v1.2.3", "1..3"] {
             assert!(!version_parses(bad), "{bad}");
         }
+    }
+
+    /// EXT2-2 (Codex re-review): `version = "0.10.2" # owner note` is read as 0.10.2, so an exemption of a closure
+    /// version with a trailing comment is still a finding.
+    #[test]
+    fn vet_closure_exemption_with_trailing_comment_is_parsed() {
+        let closure: BTreeSet<(String, String)> = [("const-oid".to_owned(), "0.10.2".to_owned())]
+            .into_iter()
+            .collect();
+        for line in [
+            r#"version = "0.10.2""#,
+            r#"version = "0.10.2" # owner note"#,
+        ] {
+            let config = format!(
+                "[[exemptions.const-oid]]\n{line}\ncriteria = \"safe-to-deploy\"\n{TRACKED}\n"
+            );
+            let e = vet_exemptions(&config);
+            assert_eq!(
+                e.first().map(|x| x.version.as_str()),
+                Some("0.10.2"),
+                "{line}"
+            );
+            assert_eq!(
+                vet_closure_findings(&config, &closure).0,
+                vec!["vet exemption inside the crypto/proto closure: const-oid@0.10.2".to_owned()],
+                "{line}"
+            );
+        }
+    }
+
+    /// EXT2-2: a TOML literal string `version = '0.10.2'` is read like `"0.10.2"`.
+    #[test]
+    fn vet_closure_exemption_literal_string_version_is_parsed() {
+        let closure: BTreeSet<(String, String)> = [("const-oid".to_owned(), "0.10.2".to_owned())]
+            .into_iter()
+            .collect();
+        for line in [
+            "version = '0.10.2'",
+            "version = '0.10.2'   # note",
+            "version='0.10.2'",
+        ] {
+            let config = format!(
+                "[[exemptions.const-oid]]\n{line}\ncriteria = \"safe-to-deploy\"\n{TRACKED}\n"
+            );
+            assert_eq!(
+                vet_closure_findings(&config, &closure).0,
+                vec!["vet exemption inside the crypto/proto closure: const-oid@0.10.2".to_owned()],
+                "{line}"
+            );
+        }
+    }
+
+    /// EXT2-2: a `version` line that still does not parse is a finding naming the crate, never skipped.
+    #[test]
+    fn vet_closure_unparsable_version_line_is_a_finding() {
+        let empty = BTreeSet::new();
+        for line in [
+            "version = 0.10.2",
+            "version = \"0.10.2",
+            "version = \"0.10.2\" trailing",
+            "version = '0.10.2\"",
+            "version =",
+        ] {
+            let config = format!(
+                "[[exemptions.const-oid]]\n{line}\ncriteria = \"safe-to-deploy\"\n{TRACKED}\n"
+            );
+            assert_eq!(
+                vet_closure_findings(&config, &empty).0,
+                vec!["vet exemption with an unparsable version line: const-oid".to_owned()],
+                "{line}"
+            );
+        }
+        // `versions = …` is another key, not a version line; the entry then has no version
+        let other = format!("[[exemptions.x]]\nversions = \"1\"\n{TRACKED}\n");
+        assert_eq!(
+            vet_closure_findings(&other, &empty).0,
+            vec!["vet exemption without version: x".to_owned()]
+        );
     }
 
     /// ADR-036 Amendment 1: another version of a closure crate's name, outside the closure, may be exempted.

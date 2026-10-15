@@ -36,3 +36,24 @@ backticks with the reason before it enters the list.
 |---|---|
 | `crates/secmp-proto/src/kani_proofs.rs` | Compiled only under `cfg(kani)`; no test build contains it; Kani runs it. |
 | `crates/secmp-relay/src/kani_proofs.rs` | As above. |
+
+## Skipped
+
+Tests left out of the test run of every mutant (`expect::MUTANT_SKIP_TESTS`, ADR-047 Amendment 1 (5);
+`expect::MUTANT_HARNESS_SKIP_TESTS`, ADR-047 Amendment 4, second run). They run in the `kat` and `nextest` steps on every
+PR. Runtimes: nextest on the 32-core container, 2026-10-15 (harness) and the CI figures of Amendment 1 (proto).
+
+| Test | Package / suite | Measured runtime | List |
+|---|---|---|---|
+| `ratchet_fast_forward_bound_on_the_chain` | `secmp-proto` `tr::tests` (kat) | 49–110 s on CI | `MUTANT_SKIP_TESTS` |
+| `ratchet_fast_forward_bound_on_a_step` | `secmp-proto` `tr::tests` (kat) | 37–73 s on CI | `MUTANT_SKIP_TESTS` |
+| `activity_independence_balanced_virtual` (AI-02) | `secmp-testkit` harness | 226 s | `MUTANT_HARNESS_SKIP_TESTS` |
+| `activity_independence_strict_virtual` (AI-01) | `secmp-testkit` harness | 203 s | `MUTANT_HARNESS_SKIP_TESTS` |
+| `activity_independence_lowbw_virtual` (AI-03) | `secmp-testkit` harness | 184 s | `MUTANT_HARNESS_SKIP_TESTS` |
+| `bandwidth_model_matches_capture` (MR-01) | `secmp-testkit` harness | 159 s | `MUTANT_HARNESS_SKIP_TESTS` |
+| `pool_queue_never_idles_out` (QP) | `secmp-testkit` harness | 88 s | `MUTANT_HARNESS_SKIP_TESTS` |
+| `activity_independence_both_directions` (AI-05) | `secmp-testkit` harness | 62 s | `MUTANT_HARNESS_SKIP_TESTS` |
+| `activity_independence_when_receiving` (AI-04) | `secmp-testkit` harness | 60 s | `MUTANT_HARNESS_SKIP_TESTS` |
+| `drain_after_offline_virtual` (MR-02) | `secmp-testkit` harness | 52 s | `MUTANT_HARNESS_SKIP_TESTS` |
+| `ai_asymmetric_prepare_cost_does_not_move_emission` (AI) | `secmp-testkit` harness | 24 s | `MUTANT_HARNESS_SKIP_TESTS` |
+| `prop_schedule_independent_of_activity` (property) | `secmp-testkit` harness | 21 s | `MUTANT_HARNESS_SKIP_TESTS` |

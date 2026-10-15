@@ -437,7 +437,7 @@ notes = "Tracked exemption (supply-chain/README.md): transitive dependency in th
 [[exemptions.futures-core]]
 version = "0.3.34"
 criteria = "safe-to-deploy"
-notes = "Tracked exemption (supply-chain/README.md): dependency of js-sys, compiled only for wasm32 targets (getrandom/uuid); outside the normal closure (ADR-036). Review at every release."
+notes = "Tracked exemption (supply-chain/README.md): transitive via arti-client / tokio (ADR-051 Part 2), outside the crypto/proto closure (ADR-036). Review at every release."
 
 [[exemptions.futures-executor]]
 version = "0.3.34"
@@ -467,12 +467,12 @@ notes = "Tracked exemption (supply-chain/README.md): transitive dependency in th
 [[exemptions.futures-task]]
 version = "0.3.34"
 criteria = "safe-to-deploy"
-notes = "Tracked exemption (supply-chain/README.md): dependency of futures-util <- js-sys, compiled only for wasm32 targets (getrandom/uuid); outside the normal closure (ADR-036). Review at every release."
+notes = "Tracked exemption (supply-chain/README.md): transitive via arti-client / tokio (ADR-051 Part 2), outside the crypto/proto closure (ADR-036). Review at every release."
 
 [[exemptions.futures-util]]
 version = "0.3.34"
 criteria = "safe-to-deploy"
-notes = "Tracked exemption (supply-chain/README.md): dependency of js-sys, compiled only for wasm32 targets (getrandom/uuid); outside the normal closure (ADR-036). Review at every release."
+notes = "Tracked exemption (supply-chain/README.md): transitive via arti-client / tokio (ADR-051 Part 2), outside the crypto/proto closure (ADR-036). Review at every release."
 
 [[exemptions.generic-array]]
 version = "0.14.7"
@@ -882,7 +882,7 @@ notes = "Tracked exemption (supply-chain/README.md): transitive dependency in th
 [[exemptions.pin-project-lite]]
 version = "0.2.17"
 criteria = "safe-to-deploy"
-notes = "Tracked exemption (supply-chain/README.md): dependency of futures-util <- js-sys, compiled only for wasm32 targets; outside the normal closure (ADR-036). Review at every release."
+notes = "Tracked exemption (supply-chain/README.md): transitive via arti-client / tokio (ADR-051 Part 2), outside the crypto/proto closure (ADR-036). Review at every release."
 
 [[exemptions.pkg-config]]
 version = "0.3.34"

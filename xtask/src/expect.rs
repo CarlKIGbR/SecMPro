@@ -89,7 +89,7 @@ pub(crate) const AUDIT_IGNORES: &[(&str, &str)] = &[
     ),
     (
         "RUSTSEC-2023-0071",
-        "ADR-051 Am. 1: rsa 0.9.10 Marvin — Arti client only verifies RSA signatures, no private key in SecMPro",
+        "ADR-051 Am. 1: rsa 0.9.10 Marvin — no RSA private-key operation reachable from the selected client paths (call-site check, tor-llcrypto src/pk/rsa.rs)",
     ),
     (
         "RUSTSEC-2024-0436",

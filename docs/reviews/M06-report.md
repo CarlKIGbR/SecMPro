@@ -261,6 +261,21 @@ None from `docs/03`/`docs/01`. Implementation choices the review should know (no
 Phase A: none (workspace path crates only: `secmp-client-core` → `secmp-transport`; `secmp-testkit` → `secmp-client-core`).
 Phase B commit 1: see §2, "Phase B commit 1 — dependencies as landed".
 
+**EXT2-1: design proposal, not implemented (WEISUNG M6-B-2 §1.5).** The goal is for `linux-full` to fail when a delegated
+required job (`ct`, `mutants`, `proverif-hx`) is not green.
+- **(A) gh-API poll in the delegation step.** `cargo xtask ci-full --delegated X` would poll `gh api
+  repos/…/commits/$GITHUB_SHA/check-runs` for job X until it completes, with a timeout, and fail unless it ends in
+  `success`.
+  - Cons: `linux-full` needs `checks: read` (today the workflow has `contents: read` only); it blocks a runner while it
+    waits; the wait is coupled to the other jobs' timing; a re-run of one job does not update an already finished
+    verdict.
+- **(B) an aggregate verdict job.** A pinned job `ci-verdict` with `needs: [linux-full, ct, mutants, proverif-hx]` and
+  `if: always()`. Its single step, `cargo xtask step ci-verdict`, would read `toJSON(needs)` from the environment and fail
+  unless every result is `success`. "Skipped" counts as a failure on `pull_request`/`schedule`.
+  - Pros: no token scope, no polling, re-runs take effect through GitHub's own `needs` semantics, and the owner makes one
+    required check instead of three.
+- **Recommendation: (B)**, with a policy test pinning its `needs` list to `expect::DELEGATED_TO`.
+
 ## 7. Open risks and known limitations
 
 - AI-01…AI-03 take ≈ 1–1.5 min each on a 32-core host (64 traces × 6 h on threads); on a 4-core runner expect several minutes.

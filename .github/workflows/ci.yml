@@ -96,11 +96,18 @@ jobs:
         run: |
           "SECMP_TOOLS_ROOT=$env:USERPROFILE\.secmp-tools" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "$env:USERPROFILE\.secmp-tools\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
-      - name: NASM (aws-lc-sys from source with AWS_LC_SYS_PREBUILT_NASM=0; OPEN-M6-06)
+      - name: NASM probe (aws-lc-sys from source with AWS_LC_SYS_PREBUILT_NASM=0; OPEN-M6-06)
         run: |
-          choco install nasm -y --no-progress
-          "C:\Program Files\NASM" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
-          & "C:\Program Files\NASM\nasm.exe" -v
+          # the image's NASM if present (its version goes into the log); else the pinned Chocolatey package
+          # the pin is the version the first probe printed (WEISUNG M6-B-2); empty until then: absent NASM fails
+          $pin = ""
+          $nasm = Get-Command nasm -ErrorAction SilentlyContinue
+          if ($nasm) { nasm -v } else {
+            if (-not $pin) { throw "NASM is not on the runner image and no pinned version is set" }
+            choco install nasm --version=$pin -y --no-progress
+            "C:\Program Files\NASM" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+            & "C:\Program Files\NASM\nasm.exe" -v
+          }
       - name: Restore pinned tools
         id: tools-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

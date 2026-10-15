@@ -50,6 +50,12 @@ pub const ALPN: &[u8] = b"secmp/1";
 /// The one key-exchange group (IANA 0x11EC).
 pub const GROUP: NamedGroup = NamedGroup::X25519MLKEM768;
 
+/// The largest end-entity certificate the pin check reads, in bytes (EXTB-7): an ML-DSA-65 certificate, which
+/// `docs/05` §7 names for later, is about 5.5 KB (public key 1952 B, signature 3309 B), an Ed25519 one about 330 B. A
+/// larger certificate is refused before its SPKI is looked at. FZ-02's `-max_len` is derived from this constant
+/// (`crates/secmp-proto/tests/fuzz_max_len.rs`).
+pub const CERT_MAX: usize = 8_192;
+
 /// The crypto provider of every SecMPro TLS configuration: aws-lc-rs with the key exchange restricted to
 /// `X25519MLKEM768` (spec §8.1, `docs/05` §7). Shared by the client provider and the relay's direct listener.
 #[must_use]
@@ -150,13 +156,13 @@ pub fn spki_of(cert: &[u8]) -> Option<&[u8]> {
     Some(spki)
 }
 
-/// The pin check of a presented chain (OPEN-M6-09 A): exactly one certificate, whose SPKI hashes to `pin`; compared in
-/// constant time.
+/// The pin check of a presented chain (OPEN-M6-09 A): exactly one certificate of at most [`CERT_MAX`] bytes, whose SPKI
+/// hashes to `pin`; compared in constant time.
 ///
 /// # Errors
 /// [`Error::Rejected`] otherwise (no detail).
 pub fn check_pin(end_entity: &[u8], intermediates: usize, pin: &[u8; HASH_LEN]) -> Result<()> {
-    if intermediates != 0 {
+    if intermediates != 0 || end_entity.len() > CERT_MAX {
         return Err(Error::Rejected);
     }
     let spki = spki_of(end_entity).ok_or(Error::Rejected)?;

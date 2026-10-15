@@ -856,6 +856,17 @@ fn fuzz_with(
             missing.join(", ")
         );
     }
+    // EXTB-6: the fuzz build uses fuzz/Cargo.lock as it is. cargo-fuzz (0.13) has no `--locked`; cargo resolving the
+    // fuzz package with `--locked` fails if the lock would change, before anything is built
+    Cmd::cargo_on(tools::NIGHTLY)
+        .args(fuzz_lock_check_args())
+        .dir(&ctx.root)
+        .read()
+        .map_err(|e| {
+            Error(format!(
+                "fuzz: fuzz/Cargo.lock is not up to date (cargo --locked): {e}"
+            ))
+        })?;
     let mut seeded = Vec::new();
     let mut failed = Vec::new();
     let mut depth = Vec::new();
@@ -943,6 +954,21 @@ pub(crate) fn fuzz_args(t: &str, seconds: u64) -> Result<Vec<String>> {
         args.push("-len_control=0".to_owned());
     }
     Ok(args)
+}
+
+/// The command that checks, before the fuzz build, that `fuzz/Cargo.lock` needs no change (EXTB-6).
+pub(crate) fn fuzz_lock_check_args() -> Vec<String> {
+    [
+        "metadata",
+        "--format-version",
+        "1",
+        "--locked",
+        "--manifest-path",
+        "fuzz/Cargo.toml",
+    ]
+    .iter()
+    .map(|s| (*s).to_owned())
+    .collect()
 }
 
 /// The libFuzzer `-max_len` of target `t` (`expect::FUZZ_MAX_LEN`, M2 review C4); a target without one is refused.

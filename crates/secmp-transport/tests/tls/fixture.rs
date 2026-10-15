@@ -21,7 +21,7 @@ use secmp_testkit::harness::MemRelay;
 // ---- certificates ------------------------------------------------------------------------------------------------
 
 pub use secmp_testkit::harness::cert::{
-    EXPIRED, FixtureKey, NOT_YET, VALID, certificate, self_signed,
+    EXPIRED, FixtureKey, NOT_YET, VALID, certificate, self_signed, self_signed_of_len,
 };
 
 /// `key` as rustls takes it.

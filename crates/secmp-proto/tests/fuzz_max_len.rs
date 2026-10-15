@@ -108,9 +108,19 @@ fn m5_entries() -> impl Iterator<Item = (&'static str, usize)> {
         .chain(m6_entries())
 }
 
-/// The longest end-entity certificate the TLS pin target reads (M6 Phase B, FZ-02): an ML-DSA-65 certificate, which
-/// `docs/05` §7 names for later, is about 5.5 KB (pk 1952 B, signature 3309 B); an Ed25519 one about 330 B.
-const CERT_MAX: usize = 8_192;
+const TLS_RS: &str = include_str!("../../secmp-transport/src/tls.rs");
+
+/// The longest end-entity certificate the TLS pin check reads (M6 Phase B, FZ-02; EXTB-7): `secmp_transport::tls::
+/// CERT_MAX`, read from its source (this crate does not depend on the transport crate), so the fuzz bound follows the
+/// enforced one.
+fn cert_max() -> usize {
+    TLS_RS
+        .lines()
+        .find_map(|l| l.strip_prefix("pub const CERT_MAX: usize = "))
+        .and_then(|v| v.strip_suffix(';'))
+        .and_then(|v| v.replace('_', "").parse().ok())
+        .unwrap_or(0)
+}
 
 /// The M6 targets (Phase A, and FZ-02, FZ-03 of Phase B): the longest input the harnesses read.
 fn m6_entries() -> [(&'static str, usize); 4] {
@@ -128,7 +138,7 @@ fn m6_entries() -> [(&'static str, usize); 4] {
             sum(&[1, 8, event.saturating_mul(192)]),
         ),
         // the intermediates count byte, then the end-entity DER
-        ("tls_pin_verifier", sum(&[1, CERT_MAX])),
+        ("tls_pin_verifier", sum(&[1, cert_max()])),
         // FZ-03: `RelayRef.onion`, PUBKEY 32 ‖ CHECKSUM 2 ‖ VERSION 1 (spec §5.3)
         ("relayref_onion_to_hsid", sum(&[32, 2, 1])),
     ]
@@ -248,4 +258,10 @@ fn fuzz_max_len_is_the_largest_valid_input_plus_one() -> Result<(), Error> {
         assert_eq!(entry, Some(sum(&[largest, 1])), "{name}");
     }
     Ok(())
+}
+
+/// EXTB-7: FZ-02's bound is `secmp_transport::tls::CERT_MAX`, read from the transport's source (not a copy).
+#[test]
+fn tls_pin_bound_is_the_enforced_cert_max() {
+    assert_eq!(cert_max(), 8_192);
 }

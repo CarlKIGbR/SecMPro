@@ -547,9 +547,37 @@ pub(crate) struct VetExemption {
     pub(crate) noted: bool,
     /// A `version` line whose value is neither a `"…"` nor a `'…'` string (after a trailing `#` comment is removed).
     pub(crate) bad_version_line: bool,
+    /// The header is not the strict form `[[exemptions.<name>]]` at column 0 (EXTB-5): a comment after it, a quoted
+    /// key, spaces inside the brackets, indentation — valid TOML that a line parser must not skip. The entry is still
+    /// read (its name as well as it can be told, its keys), and the header itself is a finding.
+    pub(crate) bad_header: Option<String>,
 }
 
-/// The `[[exemptions.<name>]]` entries of `supply-chain/config.toml`, in file order.
+/// A bare TOML key as cargo-vet writes crate names: ASCII letters, digits, `-`, `_`.
+fn bare_key(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
+/// The crate name of an exemption header in any spelling (for the finding and the closure check of a malformed one).
+fn loose_exemption_name(header: &str) -> String {
+    let inner = header
+        .split('#')
+        .next()
+        .unwrap_or_default()
+        .replace(['[', ']', ' ', '\t'], "");
+    inner
+        .strip_prefix("exemptions.")
+        .unwrap_or(&inner)
+        .trim_matches(['"', '\''])
+        .to_owned()
+}
+
+/// The `[[exemptions.<name>]]` entries of `supply-chain/config.toml`, in file order. Fail closed (EXTB-5): only the
+/// exact form `[[exemptions.<bare-name>]]` at column 0 is an ordinary header; any other line starting with `[` that
+/// mentions `exemptions` is an entry with a header finding, never skipped.
 pub(crate) fn vet_exemptions(config: &str) -> Vec<VetExemption> {
     let mut out: Vec<VetExemption> = Vec::new();
     let mut in_exemption = false;
@@ -557,15 +585,26 @@ pub(crate) fn vet_exemptions(config: &str) -> Vec<VetExemption> {
         let t = line.trim();
         if t.starts_with('[') {
             in_exemption = false;
-            if let Some(name) = t
+            let strict = line
                 .strip_prefix("[[exemptions.")
                 .and_then(|r| r.strip_suffix("]]"))
-            {
+                .filter(|name| bare_key(name));
+            if let Some(name) = strict {
                 out.push(VetExemption {
-                    name: name.trim_matches('"').to_owned(),
+                    name: name.to_owned(),
                     version: String::new(),
                     noted: false,
                     bad_version_line: false,
+                    bad_header: None,
+                });
+                in_exemption = true;
+            } else if t.contains("exemptions") {
+                out.push(VetExemption {
+                    name: loose_exemption_name(t),
+                    version: String::new(),
+                    noted: false,
+                    bad_version_line: false,
+                    bad_header: Some(line.to_owned()),
                 });
                 in_exemption = true;
             }
@@ -659,6 +698,11 @@ pub(crate) fn vet_closure_findings(
         ));
     }
     for e in &entries {
+        if let Some(header) = &e.bad_header {
+            findings.push(format!(
+                "vet exemption header not in the strict form `[[exemptions.<name>]]` at column 0: `{header}`"
+            ));
+        }
         if e.bad_version_line {
             findings.push(format!(
                 "vet exemption with an unparsable version line: {}",
@@ -1912,8 +1956,43 @@ mod tests {
             .collect()
     }
 
-    /// WEISUNG M6-B-4 §0.4: `fuzz/Cargo.lock` resolves every package it shares with the workspace lock to a version (and
-    /// source) of the workspace lock — the vetted, cooldown-checked one; only `libfuzzer-sys` and `arbitrary` may be
+    /// EXTB-6: the fuzz lock's packages are compared with name, version, source and checksum; a missing fuzz lock is a
+    /// cooldown finding; the fuzz gate checks the lock with `cargo --locked` before it builds.
+    #[test]
+    fn fuzz_lock_checksums_and_presence_are_enforced() -> Result<()> {
+        let src = "source = \"registry+https://github.com/rust-lang/crates.io-index\"";
+        let pkg = |v: &str, sum: &str| {
+            format!(
+                "[[package]]\nname = \"serde\"\nversion = \"{v}\"\n{src}\nchecksum = \"{sum}\"\n"
+            )
+        };
+        assert!(fuzz_lock_findings(&pkg("1.0.0", "aa"), &pkg("1.0.0", "aa")).is_empty());
+        assert_eq!(
+            fuzz_lock_findings(&pkg("1.0.0", "aa"), &pkg("1.0.0", "bb")).len(),
+            1,
+            "another checksum for the same version"
+        );
+        let dir = std::env::temp_dir().join(format!("secmp-extb6-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir)?;
+        std::fs::write(dir.join("Cargo.lock"), "version = 4\n")?;
+        let err = crate::cooldown::run(&dir)
+            .err()
+            .map(|e| e.to_string())
+            .unwrap_or_default();
+        assert!(err.contains("fuzz/Cargo.lock is missing"), "{err}");
+        let _ = std::fs::remove_dir_all(&dir);
+        let args = crate::gates::fuzz_lock_check_args();
+        assert!(args.contains(&"--locked".to_owned()));
+        assert!(
+            args.windows(2)
+                .any(|w| w == ["--manifest-path", "fuzz/Cargo.toml"])
+        );
+        Ok(())
+    }
+
+    /// WEISUNG M6-B-4 §0.4, M6-B-5 EXTB-6: `fuzz/Cargo.lock` resolves every package it shares with the workspace lock to
+    /// a version (with the same source and checksum) of the workspace lock — the vetted, cooldown-checked one; only `libfuzzer-sys` and `arbitrary` may be
     /// fuzz-only — and the cooldown gate reads it. A planted divergent version and a planted fuzz-only crate are refused.
     #[test]
     fn fuzz_lock_matches_workspace_lock() -> Result<()> {
@@ -2287,6 +2366,61 @@ mod tests {
             vet_closure_findings(&other, &empty).0,
             vec!["vet exemption without version: x".to_owned()]
         );
+    }
+
+    /// The findings of one exemption of closure package const-oid 0.10.2 under `header`.
+    fn findings_under(header: &str) -> Vec<String> {
+        let closure: BTreeSet<(String, String)> = [("const-oid".to_owned(), "0.10.2".to_owned())]
+            .into_iter()
+            .collect();
+        let config = format!(
+            "[policy.x]\naudit-as-crates-io = false\n\n{header}\nversion = \"0.10.2\"\ncriteria = \"safe-to-deploy\"\n{TRACKED}\n"
+        );
+        vet_closure_findings(&config, &closure).0
+    }
+
+    fn assert_found(header: &str) {
+        let findings = findings_under(header);
+        assert!(
+            findings.contains(&format!(
+                "vet exemption header not in the strict form `[[exemptions.<name>]]` at column 0: `{header}`"
+            )),
+            "{header}: {findings:?}"
+        );
+        assert!(
+            findings.contains(
+                &"vet exemption inside the crypto/proto closure: const-oid@0.10.2".to_owned()
+            ),
+            "{header}: {findings:?}"
+        );
+    }
+
+    /// EXTB-5: `[[exemptions.const-oid]] # owner note` (valid TOML) is found, not skipped.
+    #[test]
+    fn vet_closure_header_with_comment_is_found() {
+        assert_found("[[exemptions.const-oid]] # owner note");
+        assert_found("[[exemptions.const-oid]]#note");
+        // the strict form itself is an ordinary entry
+        assert_eq!(
+            findings_under("[[exemptions.const-oid]]"),
+            vec!["vet exemption inside the crypto/proto closure: const-oid@0.10.2".to_owned()]
+        );
+    }
+
+    /// EXTB-5: a quoted key, `[[exemptions.'const-oid']]` or `[[exemptions."const-oid"]]`, is found.
+    #[test]
+    fn vet_closure_header_quoted_key_is_found() {
+        assert_found("[[exemptions.'const-oid']]");
+        assert_found("[[exemptions.\"const-oid\"]]");
+    }
+
+    /// EXTB-5: spaces inside the brackets, or an indented header, are found.
+    #[test]
+    fn vet_closure_header_with_spaces_is_found() {
+        assert_found("[[ exemptions.const-oid ]]");
+        assert_found("[[exemptions . const-oid]]");
+        assert_found("  [[exemptions.const-oid]]");
+        assert_found("[ [exemptions.const-oid] ]");
     }
 
     /// ADR-036 Amendment 1: another version of a closure crate's name, outside the closure, may be exempted.

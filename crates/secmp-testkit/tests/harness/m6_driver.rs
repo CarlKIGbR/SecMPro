@@ -378,8 +378,8 @@ fn trait_shape<T: AsyncQueueTransport>(
 /// AD-09 (§12.1, ADR-051 Part 1.3): `AsyncQueueTransport` has the seven §12.1 operations with `&mut self` and returns
 /// `impl Future + Send`; no workspace crate depends on `async-trait`. Reading of the row's "no `async-trait` crate in
 /// `Cargo.lock`" (reviewer, WEISUNG M6-B-3 §0.3): no *workspace* crate depends on it — `async-trait` 0.1.92 is in the lock
-/// only through `arti-client` 0.46.0 and its `tor-*` crates, which is unavoidable; the test checks that every dependent in
-/// the lock is a non-`secmp-*` crate.
+/// only through `arti-client` 0.46.0 and its `tor-*` crates, which is unavoidable; the test checks that no workspace member
+/// (as `cargo metadata` lists them, `xtask` included; EXTB-8) declares it and that no dependent in the lock is a member.
 #[test]
 fn queue_transport_async_signature() {
     runtime().block_on(async {
@@ -402,12 +402,44 @@ fn queue_transport_async_signature() {
             .unwrap();
         trait_shape(&mut t, &rc, &sc, &access);
     });
+    // the workspace members as cargo sees them (xtask and fuzz-free members included; EXTB-8), with their declared
+    // dependencies of every kind
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    for krate in std::fs::read_dir(root.join("crates")).unwrap() {
-        let manifest = krate.unwrap().path().join("Cargo.toml");
-        if let Ok(text) = std::fs::read_to_string(&manifest) {
-            assert!(!text.contains("async-trait"), "{}", manifest.display());
-        }
+    let out = std::process::Command::new(env!("CARGO"))
+        .args(["metadata", "--format-version", "1", "--no-deps", "--locked"])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let meta: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let members: Vec<(String, Vec<String>)> = meta
+        .get("packages")
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| {
+            let deps = p
+                .get("dependencies")
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|d| d.get("name").unwrap().as_str().unwrap().to_owned())
+                .collect();
+            (p.get("name").unwrap().as_str().unwrap().to_owned(), deps)
+        })
+        .collect();
+    assert!(
+        members.iter().any(|(n, _)| n == "xtask"),
+        "xtask is a member"
+    );
+    assert!(members.iter().any(|(n, _)| n == "secmp-transport"));
+    for (name, deps) in &members {
+        assert!(
+            !deps.iter().any(|d| d == "async-trait"),
+            "{name} depends on async-trait"
+        );
     }
     let lock = std::fs::read_to_string(root.join("Cargo.lock")).unwrap();
     let mut dependents = Vec::new();
@@ -422,7 +454,9 @@ fn queue_transport_async_signature() {
     }
     assert!(!dependents.is_empty());
     assert!(
-        dependents.iter().all(|d| !d.starts_with("secmp-")),
+        dependents
+            .iter()
+            .all(|d| !members.iter().any(|(n, _)| n == d)),
         "{dependents:?}"
     );
 }

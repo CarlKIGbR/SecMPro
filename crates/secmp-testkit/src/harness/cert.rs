@@ -136,6 +136,40 @@ pub fn certificate(
     ca: bool,
     serial: u8,
 ) -> Vec<u8> {
+    certificate_padded(
+        subject,
+        issuer,
+        (cn, issuer_cn),
+        validity,
+        (ca, serial),
+        None,
+    )
+}
+
+/// A self-signed certificate of `key` of exactly `len` bytes (EXTB-7), padded with a non-critical private extension
+/// (OID 1.3.6.1.4.1.55555.1, an OCTET STRING of zeros); `None` if no padding reaches `len` exactly.
+///
+/// # Panics
+/// On a violated harness invariant: a test failure, never a production path.
+#[must_use]
+pub fn self_signed_of_len(key: &FixtureKey, cn: &str, len: usize) -> Option<Vec<u8>> {
+    (0..len).find_map(|extra| {
+        let c = certificate_padded(key, key, (cn, cn), VALID, (false, 1), Some(extra));
+        (c.len() == len).then_some(c)
+    })
+}
+
+/// [`certificate`] with an optional padding extension of `padding` bytes; `names` = (subject, issuer) common names,
+/// `kind` = (`ca`, serial).
+fn certificate_padded(
+    subject: &FixtureKey,
+    issuer: &FixtureKey,
+    names: (&str, &str),
+    validity: Validity,
+    kind: (bool, u8),
+    padding: Option<usize>,
+) -> Vec<u8> {
+    let ((cn, issuer_cn), (ca, serial)) = (names, kind);
     let version = der(0xa0, &[0x02, 0x01, 0x02]);
     let validity = seq(&[
         &der(0x17, validity.not_before.as_bytes()),
@@ -152,6 +186,14 @@ pub fn certificate(
             &[0x06, 0x03, 0x55, 0x1d, 0x13],
             &[0x01, 0x01, 0xff],
             &der(0x04, &seq(&[&[0x01, 0x01, 0xff]])),
+        ]));
+    }
+    if let Some(extra) = padding {
+        exts.push(seq(&[
+            &[
+                0x06, 0x09, 0x2b, 0x06, 0x01, 0x04, 0x01, 0x83, 0xb2, 0x03, 0x01,
+            ],
+            &der(0x04, &vec![0_u8; extra]),
         ]));
     }
     let exts: Vec<&[u8]> = exts.iter().map(Vec::as_slice).collect();

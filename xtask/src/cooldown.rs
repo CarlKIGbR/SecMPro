@@ -31,6 +31,8 @@ pub(crate) struct Locked {
     pub(crate) name: String,
     pub(crate) version: String,
     pub(crate) source: Option<String>,
+    /// The registry checksum (absent for workspace members and git sources).
+    pub(crate) checksum: Option<String>,
 }
 
 fn quoted(line: &str, key: &str) -> Option<String> {
@@ -57,6 +59,7 @@ pub(crate) fn parse_lock(lock: &str) -> Vec<Locked> {
                     name: String::new(),
                     version: String::new(),
                     source: None,
+                    checksum: None,
                 });
             }
             continue;
@@ -68,6 +71,8 @@ pub(crate) fn parse_lock(lock: &str) -> Vec<Locked> {
                 p.version = v;
             } else if let Some(v) = quoted(t, "source") {
                 p.source = Some(v);
+            } else if let Some(v) = quoted(t, "checksum") {
+                p.checksum = Some(v);
             }
         }
     }
@@ -278,7 +283,8 @@ fn curl_index(name: &str) -> std::result::Result<String, (Option<i32>, String)> 
         .read_with_code()
 }
 
-/// The lockfiles checked: the workspace and, when present, the separate cargo-fuzz package.
+/// The lockfiles checked: the workspace and the separate cargo-fuzz package (both must exist: a missing fuzz lock would
+/// let the fuzz build resolve outside the vetted, cooldown-checked versions, EXTB-6).
 pub(crate) const LOCKFILES: &[&str] = &["Cargo.lock", "fuzz/Cargo.lock"];
 
 /// `cargo xtask cooldown`: check every registry package in the lockfiles.
@@ -288,8 +294,8 @@ pub(crate) fn run(root: &Path) -> Result<String> {
     let mut files = Vec::new();
     for rel in LOCKFILES {
         let path = root.join(rel);
-        if *rel != "Cargo.lock" && !path.exists() {
-            continue;
+        if !path.exists() {
+            bail!("cooldown: {rel} is missing (every lockfile of expect is checked; EXTB-6)");
         }
         files.push(*rel);
         for p in parse_lock(&std::fs::read_to_string(path)?) {

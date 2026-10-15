@@ -23,7 +23,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream};
 use fixture::{
     ClientHelloInfo, EXPIRED, FixtureKey, MemTlsDialer, NOT_YET, ServerLog, ServerSpec, VALID,
     certificate, client_hellos, client_session_id, hello_retry_request, record_types, self_signed,
-    server_config,
+    self_signed_of_len, server_config,
 };
 
 const X25519MLKEM768: u16 = 0x11ec;
@@ -267,6 +267,33 @@ fn tls_handshake_with_pinned_relay_succeeds() {
     });
 }
 
+/// EXTB-7: the end-entity certificate is bounded by `tls::CERT_MAX` (8192 B) before its SPKI is read — a correctly
+/// pinned certificate of 8193 bytes is refused in the handshake (`Error::Rejected`, no SecMP byte), one of exactly
+/// 8192 bytes is accepted; `check_pin` draws the same line.
+#[test]
+fn tls_certificate_over_size_bound_rejects() {
+    assert_eq!(tls::CERT_MAX, 8_192);
+    let k = key(17);
+    let at_bound = self_signed_of_len(&k, "relay.test", tls::CERT_MAX).unwrap();
+    let over = self_signed_of_len(&k, "relay.test", tls::CERT_MAX + 1).unwrap();
+    assert_eq!((at_bound.len(), over.len()), (8_192, 8_193));
+    assert!(tls::check_pin(&at_bound, 0, &k.pin()).is_ok());
+    assert_eq!(tls::check_pin(&over, 0, &k.pin()), Err(Error::Rejected));
+    runtime().block_on(async {
+        for (cert, ok) in [(at_bound, true), (over, false)] {
+            let mut spec = ServerSpec::compliant(Arc::clone(&k));
+            spec.chain = vec![cert];
+            let (result, log) = connect(&spec, k.pin(), None).await;
+            if ok {
+                assert!(result.is_ok(), "8192 B accepted: {:?}", result.err());
+            } else {
+                assert_eq!(result.err(), Some(Error::Rejected), "8193 B refused");
+                assert!(log.plaintext.lock().unwrap().is_empty());
+            }
+        }
+    });
+}
+
 /// TLS-05 (§8.1, D.3): a pin with byte 0 or byte 31 flipped, and a second valid certificate under the right pin, fail
 /// with `Error::Rejected` before any SecMP byte.
 #[test]
@@ -339,32 +366,114 @@ fn tls_certificate_verify_still_checked() {
     });
 }
 
-/// TLS-08 (§8.1 "no tickets/resumption/0-RTT"): the server issues two tickets; the client keeps none and its second
-/// `ClientHello` carries no `pre_shared_key` and no `early_data`; early data is off.
+/// A session store that counts the TLS 1.3 tickets the client hands it (the control of TLS-08).
+#[derive(Debug)]
+struct Counting {
+    inner: rustls::client::ClientSessionMemoryCache,
+    tickets: std::sync::atomic::AtomicUsize,
+}
+
+impl rustls::client::ClientSessionStore for Counting {
+    fn set_kx_hint(&self, name: rustls::pki_types::ServerName<'static>, group: rustls::NamedGroup) {
+        self.inner.set_kx_hint(name, group);
+    }
+
+    fn kx_hint(&self, name: &rustls::pki_types::ServerName<'_>) -> Option<rustls::NamedGroup> {
+        self.inner.kx_hint(name)
+    }
+
+    fn set_tls12_session(
+        &self,
+        name: rustls::pki_types::ServerName<'static>,
+        value: rustls::client::Tls12ClientSessionValue,
+    ) {
+        self.inner.set_tls12_session(name, value);
+    }
+
+    fn tls12_session(
+        &self,
+        name: &rustls::pki_types::ServerName<'_>,
+    ) -> Option<rustls::client::Tls12ClientSessionValue> {
+        self.inner.tls12_session(name)
+    }
+
+    fn remove_tls12_session(&self, name: &rustls::pki_types::ServerName<'static>) {
+        self.inner.remove_tls12_session(name);
+    }
+
+    fn insert_tls13_ticket(
+        &self,
+        name: rustls::pki_types::ServerName<'static>,
+        value: rustls::client::Tls13ClientSessionValue,
+    ) {
+        self.tickets
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.inner.insert_tls13_ticket(name, value);
+    }
+
+    fn take_tls13_ticket(
+        &self,
+        name: &rustls::pki_types::ServerName<'static>,
+    ) -> Option<rustls::client::Tls13ClientSessionValue> {
+        self.inner.take_tls13_ticket(name)
+    }
+}
+
+/// Two handshakes with one shared client configuration against a server that issues two tickets each; the
+/// `ClientHello`s the server saw.
+async fn two_handshakes(
+    config: Arc<rustls::ClientConfig>,
+    spec: &ServerSpec,
+) -> Vec<ClientHelloInfo> {
+    let dialer = MemTlsDialer::new(server_config(spec), None);
+    let connector = tokio_rustls::TlsConnector::from(config);
+    for _ in 0..2 {
+        let stream = dialer.dial("relay.test", 443).await.unwrap();
+        let name = rustls::pki_types::ServerName::try_from("relay.test").unwrap();
+        let mut tls = connector.connect(name, stream).await.unwrap();
+        // write and wait, so the client reads the tickets that follow the handshake
+        tls.write_all(b"x").await.unwrap();
+        tls.flush().await.unwrap();
+        let mut buf = [0_u8; 1];
+        let _ =
+            tokio::time::timeout(std::time::Duration::from_millis(50), tls.read(&mut buf)).await;
+    }
+    (0..2).map(|n| first_hello(&dialer.log(n))).collect()
+}
+
+/// TLS-08 (§8.1 "no tickets/resumption/0-RTT"): one shared client configuration over two connections to a server
+/// that issues two tickets per connection. The configuration's session store is rustls's `NoClientSessionStorage` (it
+/// keeps nothing), the second `ClientHello` offers no `pre_shared_key` and neither offers `early_data`; early data is
+/// off. The control — the same configuration with a counting memory store instead — stores the server's tickets and
+/// offers a PSK in its second `ClientHello`, so the check can see a stored ticket.
 #[test]
 fn tls_no_resumption_no_early_data() {
-    let config = tls::client_config([0; 32]).unwrap();
+    let k = key(8);
+    let config = tls::client_config(k.pin()).unwrap();
     assert!(!config.enable_early_data);
+    let store = format!("{:?}", config.resumption);
+    assert!(store.contains("NoClientSessionStorage"), "{store}");
+    let mut spec = ServerSpec::compliant(Arc::clone(&k));
+    spec.tickets = 2;
     runtime().block_on(async {
-        let k = key(8);
-        let mut spec = ServerSpec::compliant(Arc::clone(&k));
-        spec.tickets = 2;
-        let dialer = MemTlsDialer::new(server_config(&spec), None);
-        let provider = TlsProvider::with_dialer(dialer.clone());
-        let target = MemRelay::new(HarnessConfig::default());
-        let r = relay_ref(&target, "relay.test", 443, k.pin());
-        for _ in 0..2 {
-            let mut stream = provider.connect(&r, Isolation(1)).await.unwrap();
-            // read once so that the tickets are processed by the client
-            stream.write_all(b"x").await.unwrap();
-            stream.flush().await.unwrap();
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        }
-        for n in 0..2 {
-            let hello = first_hello(&dialer.log(n));
+        let hellos = two_handshakes(Arc::clone(&config), &spec).await;
+        for (n, hello) in hellos.iter().enumerate() {
             assert!(!hello.psk, "ClientHello {n} offers a PSK");
             assert!(!hello.early_data, "ClientHello {n} offers early data");
         }
+        // the control: a store that keeps the tickets
+        let counting = Arc::new(Counting {
+            inner: rustls::client::ClientSessionMemoryCache::new(8),
+            tickets: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let mut resuming = (*config).clone();
+        resuming.resumption = rustls::client::Resumption::store(counting.clone());
+        let hellos = two_handshakes(Arc::new(resuming), &spec).await;
+        assert!(
+            counting.tickets.load(std::sync::atomic::Ordering::SeqCst) >= 2,
+            "the server's tickets reach a store that keeps them"
+        );
+        assert!(hellos.get(1).is_some_and(|h| h.psk), "the control resumes");
     });
 }
 

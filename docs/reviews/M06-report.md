@@ -307,6 +307,45 @@ None from `docs/03`/`docs/01`. Implementation choices the review should know (no
 Phase A: none (workspace path crates only: `secmp-client-core` → `secmp-transport`; `secmp-testkit` → `secmp-client-core`).
 Phase B commit 1: see §2, "Phase B commit 1 — dependencies as landed".
 
+**Mutants shards of PR run 38724110285 (head `1517781`) — diagnosis (WEISUNG M6-B-3 §1).**
+- **Shard 1** failed after 156 min (job 116385913865, 11:00 → 13:40). **Shard 5** failed after 192 min (job 116385914084,
+  11:00 → 14:12).
+- **Where the time went.** The first cargo-mutants run took 45 / 50 min (`246 mutants tested in 45m: 2 missed, 185 caught,
+  59 unviable`). The second run took 2 h (`113 mutants tested in 2h: 24 missed, 67 caught, 19 unviable, 3 timeouts` /
+  `31 missed, 63 caught, 17 unviable, 2 timeouts`). A second-run mutant tests for 121–372 s on the runner: the harness
+  suite without the skip list, three mutants in parallel on 4 cores.
+- **Verdict lines:** `FAIL [8] mutants: cargo mutants (exit Some(3)): 27 undocumented survivor(s)` (shard 1) and
+  `… 33 undocumented survivor(s)` (shard 5).
+- **Cause 1, configuration (fixed in `ci(m6): mutants second run — …`).** `crates/secmp-client-core/src/kani_proofs.rs`
+  is compiled only under `cfg(kani)` and was missing from `MUTANT_EXCLUDE_FILES`. 21 of the survivors are there (shard 1:
+  10, e.g. `kani_proofs.rs:55:21: replace < with == in kani_balanced_rr_selects_due_or_ping`; shard 5: 11). It is now
+  excluded like the `secmp-proto` and `secmp-relay` files and listed in `mutants-accepted.md` §Excluded.
+- **Cause 2, real survivors (reported only, no fix without your decision).** These are the misses outside `kani_proofs.rs`
+  plus five timeouts at the 900 s per-mutant timeout. They are the first mutation results for the two new packages.
+  - **Shard 1 misses (14):**
+    - `clock.rs:39 SystemClock::mono_ms -> 1`
+    - `control.rs:86 ControlOps::len -> 0`
+    - `core/mod.rs:951:35`, `:1282:58`, `:1294:57`, `:1675:44` (`== → !=`)
+    - `conversation.rs:345 take_seq -> 1`
+    - `conversation.rs:719 send_failed -> ()`
+    - `caps.rs:20:35 + → *`
+    - `channel.rs:329:20 delete !`
+    - `channel.rs:528:59 > → >=`
+    - `channel.rs:566:54 == → !=`
+    - `relay_queue.rs:363:28 || → &&`
+    - `session.rs:57:23` match guard → `true`
+    - `session.rs:244 close -> ()`
+  - **Shard 1 timeouts:** `timing.rs:40 accept_ceiling -> None`, `core/mod.rs:509:16 < → >` (`World::tick`),
+    `core/mod.rs:1591 control_failed -> Ok(())`.
+  - **Shard 5 misses (20 outside `kani_proofs.rs`)** are in `clock.rs`, `control.rs`, `core/mod.rs`, `conversation.rs`,
+    `pool.rs`, `channel.rs` and `relay_queue.rs`.
+  - **Shard 5 timeouts:** `core/mod.rs:1719:31 delete !` (`poll_due`), `core/mod.rs:1776 find -> Some(1)`.
+  - The `relay_queue.rs` lines refer to `1517781`. The P2 refactor moved that logic into `ops.rs`, so the next run reports
+    it there.
+  - The full lists are in the shard logs (artefacts `mutants-1-1`, `mutants-5-1`).
+  - Each survivor needs either a killing test or an entry in `mutants-accepted.md`, and the timeouts need a decision:
+    accept them as "caught by hang", or bound them in the tests. This is open item **OPEN-M6-B-2** for you.
+
 **EXT2-1: design proposal, not implemented (WEISUNG M6-B-2 §1.5).** The goal is for `linux-full` to fail when a delegated
 required job (`ct`, `mutants`, `proverif-hx`) is not green.
 - **(A) gh-API poll in the delegation step.** `cargo xtask ci-full --delegated X` would poll `gh api

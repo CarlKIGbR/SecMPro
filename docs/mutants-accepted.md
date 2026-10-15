@@ -36,6 +36,7 @@ backticks with the reason before it enters the list.
 |---|---|
 | `crates/secmp-proto/src/kani_proofs.rs` | Compiled only under `cfg(kani)`; no test build contains it; Kani runs it. |
 | `crates/secmp-relay/src/kani_proofs.rs` | As above. |
+| `crates/secmp-client-core/src/kani_proofs.rs` | As above (K-01…K-07, `cfg(kani)`; ADR-047 Am. 4; PR run 38724110285). |
 
 ## Skipped
 

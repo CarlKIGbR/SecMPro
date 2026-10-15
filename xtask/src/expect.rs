@@ -576,6 +576,8 @@ pub(crate) const MUTANTS_STEP_TIMEOUT_SECONDS: u64 = 16_800;
 pub(crate) const MUTANT_EXCLUDE_FILES: &[&str] = &[
     "crates/secmp-proto/src/kani_proofs.rs",
     "crates/secmp-relay/src/kani_proofs.rs",
+    // M6 (ADR-047 Am. 4): client-core's harnesses (K-01…K-07); PR run 38724110285 shards 1 and 5 mutated it (21 survivors)
+    "crates/secmp-client-core/src/kani_proofs.rs",
 ];
 /// Mutant names (regex, `cargo mutants --exclude-re`) excluded: `kani_stubs::` for the reason above; and (M3) the
 /// `secmp-proto` code compiled only with `secmp-proto`'s own feature `kat` — the vector, test and bench tooling of

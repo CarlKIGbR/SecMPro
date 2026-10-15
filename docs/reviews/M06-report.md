@@ -25,6 +25,40 @@ AI-09, MR-01, MR-02, G-01…G-11, K-01…K-07, P-01…P-04, P-06, P-07, FZ-01, F
 | 8 | A | `pool` (`QueuePool`) and `control` (`ControlOps`) | QP-01…QP-05, CO-01…CO-08, P-06 | done |
 | 9 | A | `secmp-testkit::VirtualDriver`; activity independence, measurements | AI-01…AI-06, AI-08, AI-09, P-01, P-02, MR-01, MR-02 | done |
 | 10 | A | Kani, fuzz, xtask lists, `ci-fast`, `ci-full`, evidence under `M06-evidence/` | K-01…K-07, FZ-01, FZ-04, X-05 | done locally; PR run: see §4 |
+| 11 | B | BRIEF M6-B §1 dependencies; §2.1 gates; §2.2 driver; §2.3 TLS; §2.4 relay `direct-tls`; §2.5 Tor; §2.6 owner requests | X-01…X-04, X-06, MU-01, COV-01, COV-02, AD-07…AD-12, P-05, TLS-01…TLS-15, G-12, TOR-01…TOR-09, FZ-02, FZ-03 (TOR-10, X-10: owner, §6) | done; see "Phase B closed" |
+
+**Phase B closed @ `1423029`** (code; the report and evidence commit follows it). Phase B: `modell=claude-opus-5-5`.
+- **Local `ci-full`:** PASS, run with the linux-full delegations (windows-native, windows-cross, mutants, ct,
+  proverif-link; `--models tr`).
+  - Kani was not delegated. It ran locally, 40/40, because `crates/secmp-relay` and `client-core/src/scheduler/run.rs`
+    changed since the last local run.
+  - Times: fuzz 4033 s, miri 2112 s, kani 2908 s, coverage 350 s.
+- **`ci-fast --strict`:** PASS.
+- **Evidence (`docs/reviews/M06-evidence/`):**
+  - `ci-fast-m6b-1423029.txt`
+  - `ci-full-m6b-1423029.txt` (the per-gate tables and the summary)
+  - `kani-m6b-1423029.txt`
+  - `coverage-x01-m6b-1423029.txt` (coverage per crate and the X-01 youngest-crate line)
+  - `vet-m6b-1423029.txt`
+  - `ai-tokio-64-m6b-1423029.txt` (AI-01…AI-06 over the tokio driver, 64 traces, max |Δt| = 0 ms)
+  - The per-shard mutants times are in §7.
+- **Coverage (COV-01/COV-02)** — the thresholds are met; there is no exclusion list:
+
+  | Crate | Lines | Coverage | Phase A |
+  |---|---|---|---|
+  | `secmp-client-core` | 2745/2984 | 92.0 % (min 90) | 92.3 % |
+  | `secmp-transport` | 1746/2037 | 85.7 % (min 80) | 88.8 % |
+  | `secmp-relay` | 2738/2803 | 97.7 % | — |
+  | `secmp-proto` | 6658/6814 | 97.7 % | — |
+  | `secmp-crypto` | 2525/2541 | 99.4 % | — |
+  | `secmp-testkit` | 1695/1814 | 93.4 % | — |
+
+  The transport's drop comes from `tor/arti.rs`, the live-network glue, which no test runs.
+- **X-01:** youngest crate `toml_writer 1.1.3+spec-1.1.0`, 7 days; the only exception is `rustls@0.23.46` until
+  2026-10-21 (ADR-015 Am. 2). 561 registry packages in `Cargo.lock` + `fuzz/Cargo.lock`.
+- **`cargo vet --locked`:** `Vetting Succeeded (236 fully audited, 1 partially audited, 322 exempted)`.
+- **The handover B→C needs a green PR run** (incl. `ct`, `mutants`, `proverif-hx`, `proverif-link`). The `mutants` job
+  will stay red until OPEN-M6-B-2 (§6) is worked in session M6-C.
 
 ## 2. What was built
 

@@ -18,9 +18,9 @@ use secmp_crypto::{SecretBytes, Zeroizing};
 use secmp_proto::tr::{Entropy, FixedEntropy};
 use secmp_proto::wire::cell::AppKind;
 use secmp_testkit::harness::{
-    CONTROL_SLOT_BASE, CostedWorker, Costs, Dir, EntropyPool, HarnessConfig, JobRecord,
-    MemProvider, MemRelay, START_UNIX, TestControl, TestDirectory, TestHandshakes, Trace,
-    TraceEntry, ratchet_pair,
+    CONTROL_SLOT_BASE, ControlMaterial, CostedWorker, Costs, Dir, EntropyPool, HarnessConfig,
+    JobRecord, MemProvider, MemRelay, START_UNIX, TestControl, TestDirectory, TestHandshakes,
+    Trace, TraceEntry, ratchet_pair,
 };
 use secmp_transport::driver::{
     AsyncQueueTransport, AsyncRelayQueueTransport, Isolation, StreamProvider,
@@ -121,6 +121,8 @@ pub struct TClient<P: StreamProvider + 'static = MemProvider> {
     pub pool: EntropyPool,
     pub work_total: Arc<AtomicU64>,
     pub jobs: Arc<Mutex<Vec<JobRecord>>>,
+    /// The control runner's key material and what its operations reported.
+    pub control: Arc<Mutex<ControlMaterial>>,
 }
 
 impl TClient {
@@ -159,6 +161,7 @@ impl<P: StreamProvider + 'static> TClient<P> {
         let worker = CostedWorker::new(Arc::clone(&convs), costs, relay.clock());
         let (work_total, jobs) = (Arc::clone(&worker.work_total), Arc::clone(&worker.log));
         let control = TestControl::new(relay.access_key(), "m6-tokio-ctl", index);
+        let material = Arc::clone(&control.material);
         let driver = Driver::new(
             Arc::new(Only::new(provider, Transport::Tor)),
             Arc::new(TestDirectory::new(relay.relay_ref(), relay.access_key())),
@@ -175,6 +178,7 @@ impl<P: StreamProvider + 'static> TClient<P> {
             pool: EntropyPool::new("m6-client", index),
             work_total,
             jobs,
+            control: material,
         }
     }
 

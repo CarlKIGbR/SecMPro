@@ -7,9 +7,12 @@
 //!
 //! **The driver obligations** (from `scheduler/mod.rs`, BRIEF M6-B §2.2):
 //! - (i) at every wake the driver takes in what arrived (frames: cheap, no cell source), calls
-//!   [`Scheduler::poll_due`] and waits until every [`Output::Write`] it returned has been written and flushed to its
-//!   stream by the link's writer task, and only then calls [`Scheduler::work`]. Writes of different links go out in
-//!   parallel (one writer task per link).
+//!   [`Scheduler::poll_due`], hands every [`Output::Write`] to its link's writer task (one per link, so the writes of
+//!   different links go out in parallel) and waits until they are written and flushed — at most
+//!   [`FLUSH_WAIT_MS`] — before it calls [`Scheduler::work`]. A write is never awaited beyond that: a link whose write
+//!   is still pending when its next tick comes, or after [`WRITE_STALL_MS`], or whose writer reports a failure, is
+//!   closed (`on_closed`), and no link's write ever holds up another link's ticks or `FETCH`-lead wakes (WEISUNG
+//!   M6-B-5 EXTB-3). Events that arrive during the flush wait are kept for the next pass.
 //! - (vi) the work never runs on the I/O path: [`Scheduler::work`] sees a non-blocking cell source (`Deferred`). A cell
 //!   the core asks for is prepared by the serial [`Worker`], off the loop; until it is ready the facade answers "not
 //!   ready" and the core prepares the link again at its next pass (the tick finds no frame only if the worker is later
@@ -44,7 +47,7 @@ use secmp_transport::driver::{
 };
 use secmp_transport::{Channel, Error as TransportError, RecvCap};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 use crate::clock::Clock;
@@ -584,14 +587,17 @@ enum Event<S> {
     Connected(LinkId, Conn<S>),
     Control(OpId, Result<ControlEffect, bool>),
     Job(JobDone),
-    Wrote(LinkId, usize, u64),
+    /// A writer task finished a write: link, length, time, written and flushed.
+    Written(LinkId, usize, u64, bool),
 }
 
-type WriteReq = (Vec<u8>, oneshot::Sender<bool>);
-
 struct LinkIo {
-    writer: mpsc::UnboundedSender<WriteReq>,
+    writer: mpsc::UnboundedSender<Vec<u8>>,
     tasks: [JoinHandle<()>; 2],
+    /// Writes handed to the writer task and not yet reported.
+    pending: u32,
+    /// When the oldest of them was handed out.
+    oldest: Option<u64>,
 }
 
 impl LinkIo {
@@ -636,11 +642,22 @@ pub struct Driver<P: Providers, D, R, H, W, C> {
     jobs: Option<mpsc::UnboundedSender<Job>>,
     events_tx: mpsc::UnboundedSender<Event<P::Stream>>,
     events_rx: mpsc::UnboundedReceiver<Event<P::Stream>>,
+    /// Events that arrived during a flush wait, for the next pass.
+    stash: VecDeque<Event<P::Stream>>,
     links: BTreeMap<LinkId, LinkIo>,
     deferred: Deferred,
     log: Option<RunLog>,
     connect_timeout: Duration,
 }
+
+/// How long a pass waits, after handing out the writes of `poll_due`, for them to be flushed before it goes on to the work
+/// (obligation (i)). Well under the `FETCH` lead (1000 ms), so a slow stream never makes a preparation late; a write of
+/// the pass that is not flushed by then stays pending on its link, and the other links go on.
+pub const FLUSH_WAIT_MS: u64 = 250;
+
+/// A link whose write has been pending this long is closed (as is one whose next tick comes while a write is still
+/// pending): the shortest period of `PERIODS`, so no link ever writes a tick late (EXTB-3).
+pub const WRITE_STALL_MS: u64 = 10_000;
 
 /// How long a connection attempt (stream and SecMP-LINK handshake) may take before it counts as failed: a provider that
 /// never answers must not leave a link in `Connecting`, which has no deadline in the core (obligation (iii)). Two
@@ -676,6 +693,7 @@ where
             jobs: None,
             events_tx,
             events_rx,
+            stash: VecDeque::new(),
             links: BTreeMap::new(),
             deferred: Deferred::default(),
             log: None,
@@ -749,38 +767,135 @@ where
         self.ensure_worker();
         loop {
             let now = self.clock.mono_ms();
-            // what arrived: frames (cheap, no cell source), connect outcomes, finished jobs
-            while let Ok(ev) = self.events_rx.try_recv() {
-                self.on_event(sched, ev, now).await?;
+            // what arrived: frames (cheap, no cell source), connect outcomes, finished jobs, finished writes
+            while let Some(ev) = self.stash.pop_front() {
+                self.on_event(sched, ev, now)?;
             }
-            // (i) what is due now, written and flushed before anything else
+            while let Ok(ev) = self.events_rx.try_recv() {
+                self.on_event(sched, ev, now)?;
+            }
+            self.close_stalled(sched, now)?;
+            // (i) what is due now, handed to the writers and flushed (bounded) before anything else
             self.step(Step::PollDue(now));
             let due = sched.poll_due(now)?;
-            self.apply(sched, due, now).await?;
+            self.apply(sched, due, now)?;
+            self.flush_wait(sched, now).await?;
             self.step(Step::Flushed(now));
             // (vi) the activity-dependent work over the non-blocking facade; (ii) its end from the same clock
             let outs = sched.work(now, &mut self.deferred)?;
             let end = self.clock.mono_ms();
             sched.prepared_until(end);
             self.step(Step::Work(now, end));
-            self.apply(sched, outs, end).await?;
+            self.apply(sched, outs, end)?;
             self.dispatch_jobs(end);
             if now >= until {
                 return Ok(());
             }
-            // (iv) the next deadline (the FETCH lead included) or the next event
-            let next = sched.next_deadline().map_or(until, |d| d.min(until));
+            // (iv) the next deadline (the FETCH lead included), a write's stall bound, or the next event
+            let stall = self
+                .links
+                .values()
+                .filter_map(|io| io.oldest.map(|t| t.saturating_add(WRITE_STALL_MS)))
+                .min();
+            let next = [sched.next_deadline(), stall, Some(until)]
+                .into_iter()
+                .flatten()
+                .min()
+                .unwrap_or(until);
             let wait = next.saturating_sub(self.clock.mono_ms());
             if let Ok(Some(ev)) =
                 tokio::time::timeout(Duration::from_millis(wait), self.events_rx.recv()).await
             {
                 let at = self.clock.mono_ms();
-                self.on_event(sched, ev, at).await?;
+                self.on_event(sched, ev, at)?;
             }
         }
     }
 
-    async fn on_event(
+    /// Wait (at most [`FLUSH_WAIT_MS`]) until every write handed out in the pass at `now` is reported; other events are
+    /// kept for the next pass.
+    async fn flush_wait(&mut self, sched: &mut Scheduler, now: u64) -> Result<(), SchedError> {
+        let until = now.saturating_add(FLUSH_WAIT_MS);
+        while self
+            .links
+            .values()
+            .any(|io| io.pending > 0 && io.oldest == Some(now))
+        {
+            let left = until.saturating_sub(self.clock.mono_ms());
+            if left == 0 {
+                break;
+            }
+            match tokio::time::timeout(Duration::from_millis(left), self.events_rx.recv()).await {
+                Ok(Some(Event::Written(link, len, at, ok))) => {
+                    let t = self.clock.mono_ms();
+                    self.on_written(sched, link, len, at, ok, t)?;
+                }
+                Ok(Some(other)) => self.stash.push_back(other),
+                Ok(None) | Err(_) => break,
+            }
+        }
+        Ok(())
+    }
+
+    /// A writer reported a write: the link's pending count goes down; a failed write closes the link.
+    fn on_written(
+        &mut self,
+        sched: &mut Scheduler,
+        link: LinkId,
+        len: usize,
+        at: u64,
+        ok: bool,
+        now: u64,
+    ) -> Result<(), SchedError> {
+        if ok {
+            self.step(Step::Wrote(at, link, len));
+        }
+        let Some(io) = self.links.get_mut(&link) else {
+            return Ok(());
+        };
+        if ok {
+            io.pending = io.pending.saturating_sub(1);
+            if io.pending == 0 {
+                io.oldest = None;
+            }
+            Ok(())
+        } else {
+            self.close_link(sched, link, now)
+        }
+    }
+
+    /// Close `link` from the driver's side (its stream failed or stalled): its I/O stops, the scheduler tears it down.
+    fn close_link(
+        &mut self,
+        sched: &mut Scheduler,
+        link: LinkId,
+        now: u64,
+    ) -> Result<(), SchedError> {
+        if let Some(io) = self.links.remove(&link) {
+            io.stop();
+        }
+        let outs = sched.on_closed(link, now)?;
+        self.apply(sched, outs, now)
+    }
+
+    /// Close every link whose oldest pending write has waited [`WRITE_STALL_MS`].
+    fn close_stalled(&mut self, sched: &mut Scheduler, now: u64) -> Result<(), SchedError> {
+        let stalled: Vec<LinkId> = self
+            .links
+            .iter()
+            .filter(|(_, io)| {
+                io.oldest
+                    .is_some_and(|t| now.saturating_sub(t) >= WRITE_STALL_MS)
+            })
+            .map(|(l, _)| *l)
+            .collect();
+        for link in stalled {
+            self.close_link(sched, link, now)?;
+        }
+        Ok(())
+    }
+
+    fn on_event(
         &mut self,
         sched: &mut Scheduler,
         ev: Event<P::Stream>,
@@ -838,24 +953,22 @@ where
                 self.deferred.on_done(done);
                 Vec::new()
             }
-            Event::Wrote(link, len, at) => {
-                self.step(Step::Wrote(at, link, len));
-                Vec::new()
+            Event::Written(link, len, at, ok) => {
+                return self.on_written(sched, link, len, at, ok, now);
             }
         };
-        self.apply(sched, outs, now).await
+        self.apply(sched, outs, now)
     }
 
-    /// Carry out the scheduler's outputs; returns once every write among them is flushed to its stream.
-    async fn apply(
+    /// Carry out the scheduler's outputs. Writes are handed to the links' writer tasks and not awaited here (the pass
+    /// waits for them in `flush_wait`); a link whose earlier write is still pending when a new one is due is closed.
+    fn apply(
         &mut self,
         sched: &mut Scheduler,
         outs: Vec<Output>,
         now: u64,
     ) -> Result<(), SchedError> {
-        let _ = &sched;
         let mut queue: VecDeque<Output> = outs.into();
-        let mut acks = Vec::new();
         while let Some(out) = queue.pop_front() {
             match out {
                 Output::Event(e) => {
@@ -871,11 +984,21 @@ where
                     ..
                 } => self.connect(now, link, key, relay, transport),
                 Output::Write { link, bytes, .. } => {
-                    if let Some(io) = self.links.get(&link) {
-                        let (tx, rx) = oneshot::channel();
-                        if io.writer.send((bytes, tx)).is_ok() {
-                            acks.push(rx);
+                    let stalled = self
+                        .links
+                        .get(&link)
+                        .is_some_and(|io| io.pending > 0 && io.oldest.is_some_and(|t| t < now));
+                    if stalled {
+                        // the previous tick's write is still pending: this tick cannot go out on time (EXTB-3)
+                        if let Some(io) = self.links.remove(&link) {
+                            io.stop();
                         }
+                        queue.extend(sched.on_closed(link, now)?);
+                    } else if let Some(io) = self.links.get_mut(&link)
+                        && io.writer.send(bytes).is_ok()
+                    {
+                        io.pending = io.pending.saturating_add(1);
+                        io.oldest.get_or_insert(now);
                     }
                 }
                 Output::Close { link } => {
@@ -898,10 +1021,6 @@ where
                 }
             }
         }
-        // (i) flushed before the caller goes on; the writer tasks of different links write in parallel
-        for ack in acks {
-            let _ = ack.await;
-        }
         Ok(())
     }
 
@@ -920,19 +1039,14 @@ where
                 }
             }
         });
-        let (tx, mut rx) = mpsc::unbounded_channel::<WriteReq>();
+        let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
         let events = self.events_tx.clone();
         let clock = Arc::clone(&self.clock);
-        let log = self.log.is_some();
         let writer = tokio::spawn(async move {
-            while let Some((bytes, ack)) = rx.recv().await {
+            while let Some(bytes) = rx.recv().await {
                 let ok = wr.write_all(&bytes).await.is_ok() && wr.flush().await.is_ok();
-                if ok && log {
-                    let _ = events.send(Event::Wrote(link, bytes.len(), clock.mono_ms()));
-                }
-                let _ = ack.send(ok);
+                let _ = events.send(Event::Written(link, bytes.len(), clock.mono_ms(), ok));
                 if !ok {
-                    let _ = events.send(Event::Closed(link));
                     break;
                 }
             }
@@ -942,6 +1056,8 @@ where
             LinkIo {
                 writer: tx,
                 tasks: [reader, writer],
+                pending: 0,
+                oldest: None,
             },
         ) {
             old.stop();

@@ -13,6 +13,7 @@ mod m6_common;
 mod m6_control;
 mod m6_driver;
 mod m6_driver_fix;
+mod m6_driver_io;
 mod m6_followups;
 mod m6_measure;
 mod m6_outbox;

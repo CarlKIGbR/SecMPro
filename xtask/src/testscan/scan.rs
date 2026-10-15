@@ -1282,4 +1282,63 @@ mod tests {
         );
         Ok(())
     }
+
+    /// WEISUNG M6-B-3 §1: every `expect::WINDOWS_SKIP_TESTS` entry names an existing harness test (defined exactly
+    /// once) and carries a runtime note; the Windows kat run leaves exactly these out, also inside the CI-seed property
+    /// pass (intersection, not union).
+    #[test]
+    fn windows_skip_tests_exist_and_have_runtimes() -> Result<()> {
+        let dir = root().join("crates/secmp-testkit/tests/harness");
+        let mut sources = String::new();
+        for f in walk_files(&dir, &|p: &Path| p.extension().is_some_and(|e| e == "rs"))? {
+            sources.push_str(&std::fs::read_to_string(f)?);
+        }
+        let names: BTreeSet<&str> = crate::expect::WINDOWS_SKIP_TESTS
+            .iter()
+            .map(|(n, _)| *n)
+            .collect();
+        assert_eq!(
+            names.len(),
+            crate::expect::WINDOWS_SKIP_TESTS.len(),
+            "no entry twice"
+        );
+        for (name, note) in crate::expect::WINDOWS_SKIP_TESTS {
+            assert_eq!(
+                sources.matches(&format!("fn {name}()")).count(),
+                1,
+                "{name}"
+            );
+            assert!(
+                note.contains(" s ")
+                    && (note.contains("windows-native") || note.contains("locally")),
+                "{name}: {note}"
+            );
+        }
+        let filter = crate::testscan::windows_skip_filter();
+        assert!(
+            filter.starts_with("not (")
+                && filter.contains("test(/(^|::)activity_independence_strict_virtual$/)")
+        );
+        let plain = crate::testscan::windows_scoped(crate::testscan::NextestRun {
+            args: crate::testscan::kat_args("secmp-testkit"),
+            seed: None,
+        });
+        assert_eq!(plain.args.iter().filter(|a| *a == "-E").count(), 1);
+        assert_eq!(plain.args.last(), Some(&filter));
+        let mut seeded_args = crate::testscan::kat_args("secmp-testkit");
+        seeded_args.extend(["-E".to_owned(), crate::testscan::property_filter()]);
+        let seeded = crate::testscan::windows_scoped(crate::testscan::NextestRun {
+            args: seeded_args,
+            seed: Some(1),
+        });
+        assert_eq!(seeded.args.iter().filter(|a| *a == "-E").count(), 1);
+        assert_eq!(
+            seeded.args.last(),
+            Some(&format!(
+                "({}) and {filter}",
+                crate::testscan::property_filter()
+            ))
+        );
+        Ok(())
+    }
 }

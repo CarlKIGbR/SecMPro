@@ -1755,6 +1755,65 @@ mod tests {
         Ok(())
     }
 
+    /// The `tokio` lines of a `cargo tree -f '{p} {f}' --prefix none` output that carry the feature `test-util`.
+    fn test_util_lines(tree: &str) -> Vec<String> {
+        tree.lines()
+            .filter(|l| l.starts_with("tokio v"))
+            .filter(|l| {
+                l.split_whitespace()
+                    .nth(2)
+                    .is_some_and(|f| f.split(',').any(|x| x == "test-util"))
+            })
+            .map(str::to_owned)
+            .collect()
+    }
+
+    /// WEISUNG M6-B-3 §0.1 (ADR-051 Amendment 3): tokio's `test-util` (`tokio::time::pause`) is a dev-only feature —
+    /// it appears in no normal graph of the workspace (every target of `expect::VET_CLOSURE_TARGETS`), while the dev
+    /// graph has it (the gate is not vacuous); a planted normal line is refused.
+    #[test]
+    fn tokio_test_util_is_dev_only() -> Result<()> {
+        let tree = |edges: &str, target: &str| -> Result<String> {
+            crate::util::Cmd::cargo()
+                .args([
+                    "tree",
+                    "--workspace",
+                    "--locked",
+                    "-e",
+                    edges,
+                    "--target",
+                    target,
+                    "-f",
+                    "{p} {f}",
+                    "--prefix",
+                    "none",
+                ])
+                .read()
+        };
+        for target in expect::VET_CLOSURE_TARGETS {
+            let normal = tree("normal", target)?;
+            assert!(
+                normal.lines().any(|l| l.starts_with("tokio v")),
+                "{target}: tokio missing"
+            );
+            assert_eq!(test_util_lines(&normal), Vec::<String>::new(), "{target}");
+        }
+        let dev = tree("normal,dev", "x86_64-unknown-linux-gnu")?;
+        assert!(
+            !test_util_lines(&dev).is_empty(),
+            "the dev graph carries test-util"
+        );
+        assert_eq!(
+            test_util_lines("tokio v1.53.1 io-util,rt,test-util,time\nserde v1 std\n").len(),
+            1
+        );
+        assert!(
+            test_util_lines("tokio v1.53.1 io-util,rt,time\ntokio-util v0.7.19 test-util\n")
+                .is_empty()
+        );
+        Ok(())
+    }
+
     /// TEST-SPEC-M6 AD-12 (ADR-051 Part 1.2, docs/02 §3): the normal closure of `secmp-crypto` and `secmp-proto` on
     /// every target of `expect::VET_CLOSURE_TARGETS` contains none of `tokio`, `mio`, `socket2`, `futures-*`,
     /// `rustls*`, `arti-client`, `tor-*`, and their `src` has no `async` code; planted closures and sources are refused.

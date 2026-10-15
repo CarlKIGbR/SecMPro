@@ -182,6 +182,12 @@ pub(crate) fn kat(ctx: &Ctx) -> Result<Outcome> {
     // tests with the CI run seed (M4 review R-93, TEST-SPEC-M5 X-07; `testscan.rs`)
     let ci_seed = crate::testscan::ci_run_seed()?;
     for run in crate::testscan::kat_runs(&found, ci_seed)? {
+        // WEISUNG M6-B-3 §1: on Windows without the long host-independent simulations (`expect::WINDOWS_SKIP_TESTS`)
+        let run = if cfg!(windows) {
+            crate::testscan::windows_scoped(run)
+        } else {
+            run
+        };
         run.run()?;
     }
     // libcrux's build scripts compile its SIMD backends on aarch64 (NEON) and x86_64 (AVX2, chosen at run time),

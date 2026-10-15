@@ -278,7 +278,9 @@ None from `docs/03`/`docs/01`. Implementation choices the review should know (no
     the whole capture are equal.
   - AD-08: `m6_driver::async_transport_matches_m5_outcomes`. T-01…T-06 give the same outcome log and the same bytes in both
     directions.
-  - AD-09: `m6_driver::queue_transport_async_signature`.
+  - AD-09: `m6_driver::queue_transport_async_signature`. The reading of the row (reviewer, WEISUNG M6-B-3 §0.3): no
+    *workspace* crate depends on `async-trait`. It is in `Cargo.lock` only through `arti-client` 0.46.0 and its `tor-*`
+    crates.
   - AD-10: `m6_driver::stream_provider_impls`, so far for `MemProvider` and a fault-injecting wrapper. Tor, TLS and Turmoil
     providers join the row in P3/P4 and Phase C.
   - AD-11: `m6_driver::driver_has_no_wall_clock`.
@@ -306,6 +308,20 @@ None from `docs/03`/`docs/01`. Implementation choices the review should know (no
 
 Phase A: none (workspace path crates only: `secmp-client-core` → `secmp-transport`; `secmp-testkit` → `secmp-client-core`).
 Phase B commit 1: see §2, "Phase B commit 1 — dependencies as landed".
+
+**OPEN-M6-B-1 — receive throughput of the driver's facade (accepted for Phase B, WEISUNG M6-B-3 §0.2; decided after the
+Phase-B review).**
+- **What it costs.**
+  - A `FETCH` / `FETCH_MULTI` response commits at most one new cell, instead of up to F = 4. The core stops at the first
+    cell the facade reports "not committed", which is the cell the worker is still deciding.
+  - Every received cell waits one more fetch period before its acknowledgement (persist before ack holds).
+  - The relay hands the uncommitted cells out again. That costs no extra frames: a response is always F frames.
+- **Why it carries no activity information.** It applies to every fetched cell alike, real or dummy. Tests:
+  `m6_tokio_ai::ai04_when_receiving_tokio` (the peers active, the local user idle: emission equal to the idle run) and
+  `ai06_both_directions_tokio` (R2C equal), with the receive cost of 5 ms per cell; and
+  `m6_driver::driver_slow_work_does_not_delay_other_links` (400 ms per received cell, emission unchanged).
+- **The way out** is a core API change, for example a deferred-commit outcome of `deliver`, after the Phase-B review. The
+  core stays untouched in Phase B.
 
 **Mutants shards of PR run 38724110285 (head `1517781`) — diagnosis (WEISUNG M6-B-3 §1).**
 - **Shard 1** failed after 156 min (job 116385913865, 11:00 → 13:40). **Shard 5** failed after 192 min (job 116385914084,
@@ -437,6 +453,35 @@ required job (`ct`, `mutants`, `proverif-hx`) is not green.
     pins `$pin = "3.2.0"` for the fallback install (`ci.yml`, `ci-dispatch.yml`).
   - `linux-fast` passed in 74 min. The mutants shards were still running when I looked (12:35 UTC); their times go here
     when the run ends.
+- **Job times of PR run 38724110285** (head `1517781`; all jobs started 11:00:03 UTC; read 14:30 UTC).
+
+  | Job | Result | Time |
+  |---|---|---|
+  | xwin-cross | success | 6 min |
+  | proverif-hx | success | 11 min |
+  | kani | failure (zerocopy, fixed in `6c657e0`) | 17 min |
+  | proverif-link | success | 19 min |
+  | linux-fast | success | 74 min |
+  | ct | success | 90 min |
+  | windows-native | cancelled at the 90-min timeout | 90 min |
+  | linux-full | failure (miri, see below) | 201 min |
+  | mutants-shard 0…7 (ADR-047 Am. 4) | all failed, undocumented survivors (§6) | see below |
+
+  Mutants shard times: 0: 204 min, 1: 160 min, 2: 200 min, 4: 203 min, 5: 192 min, 6: 196 min, 7: 199 min. Shard 3 was
+  still running at 210 min when I read. Of each shard, the first run took about 45–50 min and the second (harness) run
+  about 2 h 30 min.
+  - **`linux-full` step times:** kat 3032 s, fuzz 4083 s, coverage 2779 s, nextest 598 s.
+  - **The miri failure:** `cargo miri test --target aarch64-unknown-linux-gnu --package secmp-crypto` (portable run)
+    fails with `error occurred in cc-rs: failed to find tool "aarch64-linux-gnu-gcc"`.
+    - The chain is `secmp-crypto` → dev-dependency `secmp-testkit` → `secmp-transport` → `rustls` → `aws-lc-rs` →
+      `aws-lc-sys`, a C build. The testkit's normal dependencies reach it since ADR-051.
+    - It is not fixed here; please decide. The options are an aarch64 cross C compiler in the job, or keeping the TLS crates
+      out of the Miri build like the Kani fix (if `cargo miri` sets `cfg(miri)` for Cargo's target cfg).
+- **`windows-native` with `WINDOWS_SKIP_TESTS` (WEISUNG M6-B-3 §1), expected job time.** In run 38724110285 the steps
+  before the harness binary took about 38 min (setup 9 min, clippy 3 min, nextest build and tests 18 min, the `kat` builds).
+  The harness binary took 2361 s, almost all of it in the skipped simulations; the longest remaining harness tests take
+  about 71 s or less on the runner (`prop_schedule_independent_of_activity`). Expected: about 45–50 min, under the 90-min timeout. The tokio repeats are also
+  skipped there.
 - **MIRI-01 (Phase B, report only).** Command: `cargo +nightly-2026-09-21 miri test -p secmp-proto -v 2>&1 | grep -oE
   "(-C opt-level=[0-9]|-Zmir-opt-level=[0-9]|-Zmiri[a-z-]*)" | sort -u`. The pinned nightly is needed because Miri is not
   on the stable toolchain. Output:

@@ -221,6 +221,30 @@ pub(crate) fn kat_runs(
     Ok(runs)
 }
 
+/// The nextest filterset that leaves out `expect::WINDOWS_SKIP_TESTS` (each matched by its last path segment).
+pub(crate) fn windows_skip_filter() -> String {
+    let parts: Vec<String> = crate::expect::WINDOWS_SKIP_TESTS
+        .iter()
+        .map(|(name, _)| format!("test(/(^|::){name}$/)"))
+        .collect();
+    format!("not ({})", parts.join(" | "))
+}
+
+/// A kat run as it runs on Windows (WEISUNG M6-B-3 §1): without the tests of `expect::WINDOWS_SKIP_TESTS` — a run that
+/// already has a filterset (the CI-seed property pass) gets the intersection, nextest's `-E` options being a union.
+#[must_use]
+pub(crate) fn windows_scoped(mut run: NextestRun) -> NextestRun {
+    let skip = windows_skip_filter();
+    if let Some(at) = run.args.iter().position(|a| a == "-E") {
+        if let Some(filter) = run.args.get_mut(at.saturating_add(1)) {
+            *filter = format!("({filter}) and {skip}");
+        }
+    } else {
+        run.args.extend(["-E".to_owned(), skip]);
+    }
+    run
+}
+
 /// The kat step's verdict part about the seeds.
 pub(crate) fn kat_seed_detail(ci_seed: Option<u64>) -> String {
     match ci_seed {

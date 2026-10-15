@@ -531,6 +531,78 @@ pub(crate) const MUTANT_HARNESS_SKIP_TESTS: &[(&str, &str)] = &[
     ),
 ];
 
+/// WEISUNG M6-B-3 §1: the long, host-independent simulations the `kat` step leaves out when it runs on Windows
+/// (`windows-native`, timeout 90 min): the activity-independence runs AI-01…AI-06 on the virtual and the tokio driver,
+/// the measurement runs MR-01/MR-02 and the pool run — as (test name, runtime note). They run on Linux in `kat` and
+/// `coverage` on every PR; Windows keeps every unit, KAT, vector and harness test besides these. Runtimes on the
+/// `windows-native` runner from PR run 38724110285 (the tokio repeats are measured on the 32-core container).
+pub(crate) const WINDOWS_SKIP_TESTS: &[(&str, &str)] = &[
+    (
+        "activity_independence_strict_virtual",
+        "AI-01: 2034 s on windows-native",
+    ),
+    (
+        "activity_independence_balanced_virtual",
+        "AI-02: 2255 s on windows-native",
+    ),
+    (
+        "activity_independence_lowbw_virtual",
+        "AI-03: 1620 s on windows-native",
+    ),
+    (
+        "activity_independence_when_receiving",
+        "AI-04: 385 s on windows-native",
+    ),
+    (
+        "timing_draws_independent_of_activity",
+        "AI-05: 588 s on windows-native",
+    ),
+    (
+        "activity_independence_both_directions",
+        "AI-06: 247 s on windows-native",
+    ),
+    (
+        "ai_asymmetric_prepare_cost_does_not_move_emission",
+        "AI (asymmetric cost): 155 s on windows-native",
+    ),
+    (
+        "bandwidth_model_matches_capture",
+        "MR-01: 511 s on windows-native",
+    ),
+    (
+        "drain_after_offline_virtual",
+        "MR-02: 172 s on windows-native",
+    ),
+    (
+        "pool_queue_never_idles_out",
+        "pool run: 346 s on windows-native",
+    ),
+    (
+        "ai01_strict_tokio",
+        "AI-01 over tokio: 49 s locally (32 cores), not yet measured on windows-native",
+    ),
+    (
+        "ai02_balanced_tokio",
+        "AI-02 over tokio: 31 s locally, not yet measured on windows-native",
+    ),
+    (
+        "ai03_lowbw_tokio",
+        "AI-03 over tokio: 25 s locally, not yet measured on windows-native",
+    ),
+    (
+        "ai04_when_receiving_tokio",
+        "AI-04 over tokio: 40 s locally, not yet measured on windows-native",
+    ),
+    (
+        "ai05_timing_draws_tokio",
+        "AI-05 over tokio: 39 s locally, not yet measured on windows-native",
+    ),
+    (
+        "ai06_both_directions_tokio",
+        "AI-06 over tokio: 43 s locally, not yet measured on windows-native",
+    ),
+];
+
 /// ADR-047 Amendment 4: the packages whose tests the second run executes for every mutant (`--test-package`).
 pub(crate) const MUTANT_HARNESS_TEST_PACKAGES: &[&str] =
     &["secmp-client-core", "secmp-transport", "secmp-testkit"];

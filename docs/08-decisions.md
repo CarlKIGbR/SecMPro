@@ -751,6 +751,14 @@ criteria `safe-to-deploy`; the file is the owner's and is not edited here, CLAUD
 | rust-lang-owner | `libm` | 2027-10-01 |
 
 
+
+**Amendment 3 (2026-10-15, Reviewer; M6-B-3).** (1) `tokio` feature `test-util` is enabled as a **dev-dependency
+feature of `secmp-testkit` only**, for `tokio::time::pause` (the virtual-time tests of the tokio driver, BRIEF M6-B
+§2.2); no shipped build and no normal graph of any workspace crate carries it (policy test
+`tokio_test_util_is_dev_only`, `cargo tree -e normal` on every vet-closure target). (2) `arti-client` is a
+`[target.'cfg(not(kani))'.dependencies]` entry of `secmp-transport`: under `cfg(kani)` its closure does not compile
+(`zerocopy` 0.8.60's own `cfg(kani)` code needs its `derive` feature), and the Kani harnesses verify only the sans-IO core;
+the dependency set, features, versions and `Cargo.lock` are unchanged.
 ---
 
 *Template for new entries:*

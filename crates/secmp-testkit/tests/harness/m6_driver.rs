@@ -376,7 +376,10 @@ fn trait_shape<T: AsyncQueueTransport>(
 }
 
 /// AD-09 (§12.1, ADR-051 Part 1.3): `AsyncQueueTransport` has the seven §12.1 operations with `&mut self` and returns
-/// `impl Future + Send`; no workspace crate depends on `async-trait` (it is in `Cargo.lock` only through Arti).
+/// `impl Future + Send`; no workspace crate depends on `async-trait`. Reading of the row's "no `async-trait` crate in
+/// `Cargo.lock`" (reviewer, WEISUNG M6-B-3 §0.3): no *workspace* crate depends on it — `async-trait` 0.1.92 is in the lock
+/// only through `arti-client` 0.46.0 and its `tor-*` crates, which is unavoidable; the test checks that every dependent in
+/// the lock is a non-`secmp-*` crate.
 #[test]
 fn queue_transport_async_signature() {
     runtime().block_on(async {

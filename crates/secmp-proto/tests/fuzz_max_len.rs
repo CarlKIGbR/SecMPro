@@ -108,8 +108,12 @@ fn m5_entries() -> impl Iterator<Item = (&'static str, usize)> {
         .chain(m6_entries())
 }
 
-/// The M6 targets (Phase A): the longest input the harnesses read.
-fn m6_entries() -> [(&'static str, usize); 2] {
+/// The longest end-entity certificate the TLS pin target reads (M6 Phase B, FZ-02): an ML-DSA-65 certificate, which
+/// `docs/05` §7 names for later, is about 5.5 KB (pk 1952 B, signature 3309 B); an Ed25519 one about 330 B.
+const CERT_MAX: usize = 8_192;
+
+/// The M6 targets (Phase A, and FZ-02 of Phase B): the longest input the harnesses read.
+fn m6_entries() -> [(&'static str, usize); 3] {
     // a count byte, four kind bytes, then at most 8 units of a `u16` length and the largest frame payload (4335 B)
     let unit = sum(&[2, FRAME_PLAINTEXT_LEN.saturating_sub(1)]);
     // a mode byte, 8 seed bytes, then at most 192 events of a tag byte and at most a `u32`
@@ -123,6 +127,8 @@ fn m6_entries() -> [(&'static str, usize); 2] {
             "scheduler_event_sequence",
             sum(&[1, 8, event.saturating_mul(192)]),
         ),
+        // the intermediates count byte, then the end-entity DER
+        ("tls_pin_verifier", sum(&[1, CERT_MAX])),
     ]
 }
 

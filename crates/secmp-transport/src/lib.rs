@@ -39,6 +39,7 @@ pub mod evicted;
 mod ops;
 pub mod relay_queue;
 pub mod session;
+pub mod tls;
 
 pub use caps::{CAP_LEN, QueueRef, RecvCap, SendCap};
 pub use channel::{Channel, Command, Completed, Outcome, Prepared};

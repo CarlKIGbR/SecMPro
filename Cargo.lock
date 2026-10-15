@@ -3582,6 +3582,7 @@ dependencies = [
  "rustls",
  "secmp-crypto",
  "secmp-proto",
+ "secmp-testkit",
  "tokio",
  "tokio-rustls",
 ]

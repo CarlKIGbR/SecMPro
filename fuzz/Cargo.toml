@@ -245,3 +245,10 @@ path = "fuzz_targets/scheduler_event_sequence.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "tls_pin_verifier"
+path = "fuzz_targets/tls_pin_verifier.rs"
+test = false
+doc = false
+bench = false

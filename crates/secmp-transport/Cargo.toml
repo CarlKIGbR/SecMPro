@@ -31,5 +31,16 @@ aws-lc-rs.workspace = true
 [target.'cfg(not(kani))'.dependencies]
 arti-client.workspace = true
 
+# Test-only: the in-process relay (`MemRelay`) of the testkit for the direct-mode TLS tests (TLS-01…TLS-11); the TLS
+# fixtures use this crate's own `rustls` / `tokio-rustls` (no new crate, no new edge to a third-party crate).
+[dev-dependencies]
+secmp-testkit = { workspace = true, features = ["harness"] }
+
+# The direct-mode tests (TEST-SPEC-M6 TLS-01…TLS-11): an in-process rustls server, loopback TCP for TLS-04/TLS-11.
+[[test]]
+name = "tls"
+path = "tests/tls/main.rs"
+required-features = ["harness"]
+
 [lints]
 workspace = true

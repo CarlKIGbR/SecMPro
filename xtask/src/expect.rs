@@ -314,6 +314,7 @@ pub(crate) const FUZZ_TARGETS: &[&str] = &[
     "relay_executor",
     "relay_link_session",
     "scheduler_event_sequence",
+    "tls_pin_verifier",
     "tr_decrypt",
     "tr_state",
     "x25519_dh",
@@ -333,6 +334,7 @@ pub(crate) const FUZZ_TRACKED_ONLY: &[&str] = &[
     "relay_executor",
     "relay_link_session",
     "scheduler_event_sequence",
+    "tls_pin_verifier",
 ];
 
 /// Seconds per fuzz target of the `fuzz` gate (ci-full step 6, docs/06 §4: "≈2 min per target on every PR").
@@ -439,6 +441,8 @@ pub(crate) const FUZZ_MAX_LEN: &[(&str, usize)] = &[
     ("relay_executor", 4_322),
     ("relay_link_session", 69_426),
     ("scheduler_event_sequence", 970),
+    // FZ-02 (M6 Phase B): the count byte and an end-entity DER of at most 8192 B (an ML-DSA-65 certificate ≈ 5.5 KB)
+    ("tls_pin_verifier", 8_194),
     ("tr_decrypt", 4_098),
     ("tr_state", 38_587),
     ("x25519_dh", 97),

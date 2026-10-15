@@ -42,6 +42,9 @@ pub enum Error {
     /// An argument is outside what a request can carry (a `FETCH_MULTI` of 0 or more than 32 queues, a capability
     /// that does not parse).
     Invalid,
+    /// Direct mode was asked for a relay whose `RelayRef` has no direct endpoint (TEST-SPEC-M6 TOR-06): no connection
+    /// is attempted, over any transport.
+    NoDirectEndpoint,
 }
 
 impl fmt::Display for Error {
@@ -60,6 +63,7 @@ impl fmt::Display for Error {
             Self::Unavailable => "unavailable",
             Self::OutOfOrder => "frame out of order",
             Self::Invalid => "invalid argument",
+            Self::NoDirectEndpoint => "no direct endpoint",
         })
     }
 }

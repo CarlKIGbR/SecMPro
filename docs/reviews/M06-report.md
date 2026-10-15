@@ -304,6 +304,53 @@ None from `docs/03`/`docs/01`. Implementation choices the review should know (no
   - The core is untouched: `git diff b5aa27b -- crates/secmp-client-core/src/scheduler/core` is empty. The virtual-driver
     AI-01…AI-06 run unchanged.
 
+- **P3, §2.3 TLS (`secmp-transport::tls`; tests in `crates/secmp-transport/tests/tls/`, feature `harness`).**
+  - TLS-01 `tls_client_offers_exactly_x25519mlkem768`: the provider has one group, 0x11EC. The `ClientHello` has
+    `supported_groups` = `key_share` = [0x11EC] and no SNI.
+  - TLS-02 `tls_client_is_tls13_only`: a TLS 1.2-only server fails with `Rejected`, 0 SecMP bytes; `supported_versions` =
+    [0x0304].
+  - TLS-03 `tls_no_classical_fallback`: servers with [X25519] and with [secp256r1] fail. A hand-made `HelloRetryRequest`
+    for X25519 fails too, with exactly one `ClientHello` and only an alert record after it.
+  - TLS-04 `tls_handshake_with_pinned_relay_succeeds`: loopback TCP; `X25519MLKEM768` and ALPN `secmp/1`; then
+    HELLO…HS2, `PING`, `QUEUE_NEW` and `FETCH` over it.
+  - TLS-05 `tls_spki_pin_mismatch_rejects`: pin bytes 0 and 31 flipped, and a second valid certificate; all `Rejected`,
+    0 SecMP bytes.
+  - TLS-06 `tls_pin_is_the_only_trust_anchor`: pinned certificates that are expired, not yet valid, wrongly named or
+    self-signed are accepted. A CA-signed certificate without the pin is rejected, and so is a chain of two.
+  - TLS-07 `tls_certificate_verify_still_checked`: the pinned certificate with `CertificateVerify` signed by another key
+    is rejected.
+  - TLS-08 `tls_no_resumption_no_early_data`: the server sends 2 tickets; on the second connection the `ClientHello` has
+    no `pre_shared_key` and no `early_data`; `enable_early_data` is false.
+  - TLS-09 `tls_alpn_secmp1_required`: a server without ALPN, and one with only `h2`, are both `Rejected` before any SecMP
+    byte.
+  - TLS-10 `tls_provider_is_explicit`: with aws-lc-rs's default provider (≥ 3 groups) installed as the process default,
+    our configuration still has 1 group. The source scan finds no `ClientConfig::builder()` / `ServerConfig::builder()`
+    in `crates/` or `xtask/`.
+  - TLS-11 `tls_link_bytes_equal_other_transports`: `HELLO`, `HS1` and the first three C2R frames are byte-identical over
+    TLS on loopback and in memory.
+  - Unit tests in `tls.rs`: `tlv_is_total_on_short_and_odd_input`, `pin_needs_one_certificate_and_a_parseable_spki`,
+    `the_configuration_is_tls13_with_one_hybrid_group`.
+  - FZ-02: fuzz target `tls_pin_verifier` with 5 tracked seeds, `max_len` 8194 (count byte + end-entity DER ≤ 8192 B, room
+    for an ML-DSA-65 certificate, `docs/05` §7; derived in `fuzz_max_len.rs`). Local smoke 120 s: 76 452 773 runs, cov
+    307, ft 583, no failure.
+  - **Implementation choices for you to check:**
+    - **TLS 1.3 only.** `ClientConfig::supports_version` is crate-private in rustls 0.23, so the provider keeps only the
+      TLS 1.3 cipher suites. Every configuration built is asserted with `tls::is_tls13_hybrid_only`: all suites TLS 1.3,
+      one group, `X25519MLKEM768`. TLS-02 checks it on the wire.
+    - **No SNI** (`enable_sni = false`): the relay has one certificate, and the host name would only add metadata. The
+      spec does not say either way.
+    - **`spki_of`** is our own total DER walker: definite lengths, minimal encoding, at most 3 length bytes. Fuzzed by
+      FZ-02.
+    - **Fixtures.** The test certificates are built in code (hand-written Ed25519 X.509 DER) in
+      `crates/secmp-transport/tests/tls/fixture.rs`. There is no `rcgen`, and `openssl` needs approval in the container.
+      The TLS tests are in `secmp-transport`, which has `rustls`/`tokio-rustls` as normal dependencies, plus a
+      dev-dependency on `secmp-testkit`, as `secmp-crypto` already has. No crate gained a new third-party edge.
+  - **Fuzz lock.** Since commit 1, `fuzz/Cargo.lock` had none of the ADR-051 crates, so the CI fuzz build resolved them
+    freshly, outside the vetted, cooldown-checked lock. It is now regenerated from the main `Cargo.lock`: 559 packages,
+    the main lock's versions, plus `libfuzzer-sys` 0.4.13 and `arbitrary` 1.4.2 as before. Cooldown passes.
+  - The nightly fuzz split is now 30 × 240 s + 2 × 3600 s (`fuzz_executor_depth`, `nightly_budget_per_target`,
+    `fuzz-nightly.yml`).
+
 ## 6. Dependencies added or bumped
 
 Phase A: none (workspace path crates only: `secmp-client-core` → `secmp-transport`; `secmp-testkit` → `secmp-client-core`).

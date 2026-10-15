@@ -351,6 +351,74 @@ None from `docs/03`/`docs/01`. Implementation choices the review should know (no
     the main lock's versions, plus `libfuzzer-sys` 0.4.13 and `arbitrary` 1.4.2 as before. Cooldown passes.
   - The nightly fuzz split is now 30 × 240 s + 2 × 3600 s (`fuzz_executor_depth`, `nightly_budget_per_target`,
     `fuzz-nightly.yml`).
+  - Fixture certificates are now built in `secmp_testkit::harness::cert` (moved from the transport fixture, unchanged;
+    no TLS crate needed), so that the relay rows below use them too.
+
+- **P4a, §2.4 relay `direct-tls` (BRIEF M6-B §2.4; WEISUNG M6-B-1 had it in P3, WEISUNG M6-B-3 limited P3 to §2.3, so it
+  lands here, before §2.5).**
+  - **What.** `secmp-relay` feature `direct-tls` (off by default; the default build stays std-only, ADR-049):
+    - `src/tls.rs`: `server_config` (`builder_with_provider`, aws-lc-rs with the TLS 1.3 suites and `X25519MLKEM768` only,
+      asserted at config time; ALPN `secmp/1`; `send_tls13_tickets` 0, `max_early_data_size` 0, `NoServerSessionStorage`,
+      no client authentication; `with_single_cert` refuses a key of another certificate).
+    - `TlsConn<S>` (rustls `StreamOwned<ServerConnection, S>` in the existing thread-per-connection model): the
+      handshake runs inside the first reads, bounded by the `HELLO`→`HS1` timeout like any connection start; the first
+      plaintext is handed on only after TLS 1.3, `X25519MLKEM768` and ALPN `secmp/1` are checked; nothing is written
+      before; the close sends `close_notify`.
+    - `TlsListener<L>` and `Listeners<A, B>`: the onion loopback listener and the direct one behind the one accept loop,
+      asked in turn, sharing `max_connections`.
+    - `src/spki.rs` (default build): `spki_of` / `pin_of`, the same DER walk as the client's, and the `spki <cert.der>`
+      subcommand.
+    - Configuration (`[listen]`): `direct_tls` (empty or absent = off), `direct_tls_cert`, `direct_tls_key` (DER files).
+      The file keys without `direct_tls` are refused. So is `direct_tls` in a build without the feature, and a
+      certificate or key that does not load: the start is refused before any listener binds.
+  - **Feature wiring.** Relay feature `kat` turns on `direct-tls`. The relay's own suite and the mutation gate's first
+    run (which builds the package with `--features kat`) then compile and test the listener. `secmp-testkit/harness`
+    names `secmp-relay/direct-tls` too. No new crate, no new third-party edge: `rustls`/`aws-lc-rs` stay optional
+    dependencies of the relay only.
+  - **G-12 (OPEN-M6-15):** `DEFAULT_LINK_IDLE_SECS` 900 → 240, `LINK_AGE_MAX_MS` 86 400 000 → 87 000 000. The M5 C-3
+    tests `linked_idle_bound_closes_the_connection` and `linked_age_bound_closes_at_link_lifetime` were updated to the new
+    values; the busy link of the age test now sends every 200 s, inside the idle bound.
+  - **Tests:**
+    - TLS-12 `relay_direct_tls_config` (`secmp-transport` `tests/tls/relay.rs`; plus the relay unit test
+      `config::tests::direct_tls_is_off_by_default_and_needs_both_files`).
+    - TLS-13 `relay_direct_tls_serves_link` (loopback TCP; `secmp_testkit::harness::DirectRelay` runs
+      `secmp_relay::server::serve` over `Listeners` with the real clock and one thread per connection, as the binary
+      does).
+    - TLS-14 `relay_tls_refuses_classical_client` (loopback): the relay sends exactly one alert record and no SecMP
+      byte; with `max_connections` = 1 a compliant client is served afterwards.
+    - TLS-15 `relay_spki_command_prints_pin` (`secmp-relay` `tests/cli.rs`, the binary on a fixture file; the pin is
+      recomputed from the SPKI's byte range).
+    - G-12 `relay_idle_and_age_bounds_from_schedule` (`secmp-testkit` harness) and the relay unit test
+      `idle_and_age_defaults_are_the_schedule_bounds`. 25 h in Strict and in Low-bw at P = 80 s with a 24-h lifetime on
+      the default relay limits: no `TornDown(Closed)`, and a link reaches its lifetime. The SIM part of the row is
+      Phase C.
+    - Extra:
+      - `secmp-transport` `relay::relay_tls_refuses_a_client_without_alpn` (loopback);
+      - `secmp-relay` `cli_direct_tls_refuses_the_start_without_a_usable_certificate`;
+      - `secmp-relay` `tests/relay/direct_tls.rs`, over an in-memory socket, no network:
+        - `direct_tls_serves_the_link_handshake`
+        - `direct_tls_close_sends_close_notify`
+        - `direct_tls_refuses_classical_groups`
+        - `direct_tls_hands_nothing_on_without_alpn`
+        - `listeners_alternate_and_fall_through`
+        - `tls_listener_wraps_raw_connections`
+        - `server_config_refuses_a_foreign_or_broken_key`
+        - `provider_check_refuses_other_providers`
+        - `any_conn_delegates_to_its_connection`
+        - `tls_conn_passes_the_poll_timeout_on`
+        - `tls_conn_flush_delivers_buffered_bytes`
+      - `secmp-testkit` `m6_spki::relay_and_client_spki_walks_agree`: the two DER walks agree on 20 000 mutated
+        certificates;
+      - `tlv_length_forms_at_their_bounds` in both walks.
+  - **Mutants.** Local `cargo mutants -p secmp-relay --features kat` over `tls.rs`, `spki.rs`, `config.rs` and `main.rs`.
+    The first pass had 18 misses and 4 timeouts; the tests above were added for them. The final pass over `tls.rs` and
+    `spki.rs`: 0 missed, 0 timeouts. The last survivor, `TlsConn::flush` → `Ok(())`, was confirmed killed by hand.
+  - **For you to check:**
+    - `docs/05` §5 shows `direct_tls` only. The two file keys (DER) are new, and the `openssl` command OPEN-M6-09 names
+      for `docs/05` §7 is not written there yet. I did not edit `docs/05`.
+    - Observation, not caused by this work: in the 25-h Low-bw run of the G-12 test, the second client (seed 1204)
+      tears its links down with `Overrun` every 1–3 min. The same happens with the M5 limits 900 s / 86 400 s, so this is
+      scheduler or virtual-driver behaviour. The core is untouched in Phase B (STOP); I report it and do not change it.
 
 ## 6. Dependencies added or bumped
 

@@ -332,3 +332,54 @@ fn scheduler_reads_no_ui_state() {
         }
     }
 }
+
+/// G-12 `relay_idle_and_age_bounds_from_schedule` (OPEN-M6-15; M05 review C-3 "M6 adjusts"): the relay's default idle
+/// bound is 3 × the slowest scheduler period and its age bound the longest link lifetime plus 10 min; a compliant
+/// client at the slowest period, holding its links for the longest lifetime, is never cut by the relay — in Strict
+/// (P = 80 s) and in Low-bw over 25 h on the default relay limits, no link ends with `Closed` (the relay's close), and
+/// a link is held to the end of its 24-h lifetime. (The SIM-01…SIM-10 part of the row is Phase C.)
+#[test]
+fn relay_idle_and_age_bounds_from_schedule() {
+    let params = Params::default();
+    let defaults = secmp_testkit::harness::RelayLimits::defaults();
+    let slowest = params.periods_ms.iter().copied().max().unwrap();
+    assert_eq!(slowest, 80_000);
+    assert_eq!(defaults.link_idle_ms, 3 * slowest);
+    assert_eq!(defaults.link_idle_ms, 240_000);
+    assert_eq!(defaults.link_age_ms, params.lifetime_ms.1 + 600_000);
+    assert_eq!(defaults.link_age_ms, 87_000_000);
+    assert_eq!(
+        secmp_testkit::harness::HarnessConfig::default()
+            .limits
+            .link_idle_ms,
+        defaults.link_idle_ms
+    );
+    let longest = Params {
+        lifetime_ms: (params.lifetime_ms.1, params.lifetime_ms.1),
+        ..Params::default()
+    };
+    for (mode, seed) in [(Mode::Strict, 1201), (Mode::LowBw, 1203)] {
+        let mut sim = driver();
+        let a = client_with(&mut sim, mode, longest.clone(), seed);
+        let b = client_with(&mut sim, mode, longest.clone(), seed + 1);
+        contact(&mut sim, a, b, slowest, slowest);
+        sim.run_until(90_000_000);
+        for c in [a, b] {
+            let events = &sim.client_ref(c).events;
+            let closed: Vec<_> = events
+                .iter()
+                .filter(|(_, e)| matches!(e, LinkEvent::TornDown(_, Reason::Closed)))
+                .collect();
+            assert!(closed.is_empty(), "{mode:?}: relay closes {closed:?}");
+        }
+        // not vacuous: links were held for the whole 24-h lifetime
+        assert!(
+            [a, b].iter().any(|&c| sim
+                .client_ref(c)
+                .events
+                .iter()
+                .any(|(_, e)| matches!(e, LinkEvent::TornDown(_, Reason::Lifetime)))),
+            "{mode:?}: the 24-h lifetime ended a link"
+        );
+    }
+}

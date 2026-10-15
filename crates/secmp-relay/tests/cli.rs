@@ -235,3 +235,125 @@ fn cli_config_errors_refuse_the_start() {
     assert!(!err.contains("listener_bound"), "{err}");
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+/// `direct_tls` fails closed (OPEN-M6-08 A): with a certificate that cannot be loaded — or in a build without feature
+/// `direct-tls`, at all — the start is refused before any listener binds.
+#[test]
+fn cli_direct_tls_refuses_the_start_without_a_usable_certificate() {
+    let dir = scratch("direct-tls");
+    let keys = dir.join("relay-keys");
+    assert!(relay(&["keygen", "--out", s(&keys)]).status.success());
+    let junk = dir.join("junk.der");
+    std::fs::write(&junk, b"\x30\x03\x02\x01\x01").unwrap();
+    let cfg = dir.join("relay.toml");
+    std::fs::write(
+        &cfg,
+        format!(
+            "[listen]\ntor_loopback = \"127.0.0.1:0\"\ndirect_tls = \"127.0.0.1:0\"\ndirect_tls_cert = \"{0}\"\n\
+             direct_tls_key = \"{0}\"\n[access]\nkey_file = \"{1}\"\n",
+            toml_path(&junk),
+            toml_path(&keys)
+        ),
+    )
+    .unwrap();
+    let o = relay(&["--config", s(&cfg)]);
+    assert!(!o.status.success());
+    let err = stderr(&o);
+    let expected = if cfg!(feature = "direct-tls") {
+        "secmp-relay: config_error direct_tls certificate or key\n"
+    } else {
+        "secmp-relay: config_error direct_tls needs a relay built with feature direct-tls\n"
+    };
+    assert!(err.contains(expected), "{err}");
+    assert!(!err.contains("listener_bound"), "{err}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// One DER element (short or two-byte long form; the fixture below stays under 64 KiB).
+fn der(tag: u8, content: &[u8]) -> Vec<u8> {
+    let n = content.len();
+    let mut out = vec![tag];
+    if n < 0x80 {
+        out.push(u8::try_from(n).unwrap());
+    } else if n < 0x100 {
+        out.extend([0x81, u8::try_from(n).unwrap()]);
+    } else {
+        out.extend([
+            0x82,
+            u8::try_from(n >> 8).unwrap(),
+            u8::try_from(n & 0xff).unwrap(),
+        ]);
+    }
+    out.extend_from_slice(content);
+    out
+}
+
+/// TEST-SPEC-M6 TLS-15 `relay_spki_command_prints_pin` (OPEN-M6-09 A; spec D.3 `spki_sha256`): `secmp-relay spki
+/// <cert.der>` prints the 64-hex SHA-256 of the certificate's `SubjectPublicKeyInfo` DER — computed here from the
+/// SPKI's byte range in the fixture (a self-signed Ed25519 X.509 v3 certificate signed with `secmp-crypto`), with and
+/// without the optional `version` field; a file that is no certificate fails with nothing on stdout.
+#[test]
+fn relay_spki_command_prints_pin() {
+    let dir = scratch("spki");
+    let key = secmp_crypto::Ed25519SigningKey::from_seed(&[0x5a; 32]).unwrap();
+    let alg = [0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70];
+    let cn = [
+        &[0x06, 0x03, 0x55, 0x04, 0x03][..],
+        &der(0x0c, b"relay.test"),
+    ]
+    .concat();
+    let name = der(0x30, &der(0x31, &der(0x30, &cn)));
+    let validity = der(
+        0x30,
+        &[der(0x17, b"200101000000Z"), der(0x17, b"491231235959Z")].concat(),
+    );
+    let bits = [&[0_u8][..], key.verifying_key().as_bytes()].concat();
+    let spki = der(0x30, &[&alg[..], &der(0x03, &bits)].concat());
+    for version in [true, false] {
+        let mut tbs = Vec::new();
+        if version {
+            tbs.extend(der(0xa0, &[0x02, 0x01, 0x02]));
+        }
+        tbs.extend([0x02, 0x01, 0x01]);
+        for part in [&alg[..], &name, &validity, &name, &spki] {
+            tbs.extend_from_slice(part);
+        }
+        let tbs = der(0x30, &tbs);
+        let sig = key.sign(&tbs);
+        let sig_bits = [&[0_u8][..], sig.as_ref()].concat();
+        let cert = der(0x30, &[&tbs[..], &alg, &der(0x03, &sig_bits)].concat());
+        // the SPKI's byte range in the certificate: the 44-byte Ed25519 SPKI occurs exactly once
+        let hits: Vec<usize> = cert
+            .windows(spki.len())
+            .enumerate()
+            .filter(|(_, w)| *w == spki.as_slice())
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(hits.len(), 1);
+        let at = hits.first().copied().unwrap();
+        let range = cert.get(at..at + spki.len()).unwrap();
+        let path = dir.join(format!("fixture-{version}.der"));
+        std::fs::write(&path, &cert).unwrap();
+        let o = relay(&["spki", s(&path)]);
+        assert!(o.status.success(), "{}", stderr(&o));
+        let printed = stdout(&o);
+        assert_eq!(
+            printed,
+            format!("{}\n", hex(&secmp_crypto::sha256(&[range])))
+        );
+        assert_eq!(printed.trim_end().len(), 64);
+    }
+    // not a certificate; no file; no argument
+    let junk = dir.join("junk.der");
+    std::fs::write(&junk, b"\x30\x03\x02\x01\x01").unwrap();
+    for args in [
+        vec!["spki", s(&junk)],
+        vec!["spki", "/nonexistent/cert.der"],
+        vec!["spki"],
+    ] {
+        let o = relay(&args);
+        assert!(!o.status.success(), "{args:?}");
+        assert_eq!(stdout(&o), "", "{args:?}");
+    }
+    std::fs::remove_dir_all(&dir).unwrap();
+}

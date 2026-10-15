@@ -22,6 +22,7 @@ mod m6_sched;
 mod m6_sched_bal;
 mod m6_sched_io;
 mod m6_sched_life;
+mod m6_spki;
 mod m6_tokio;
 mod m6_tokio_ai;
 mod scenarios;

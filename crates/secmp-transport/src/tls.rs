@@ -406,4 +406,25 @@ mod tests {
         assert!(!config.enable_early_data && !config.enable_sni);
         Ok(())
     }
+
+    /// The length forms at their bounds: short form up to 127, long form from 128 on, `0x80` (BER's indefinite form)
+    /// refused even with 128 bytes after it, three length bytes the most (65 536 content bytes pass, a four-byte length
+    /// of 16 MiB does not).
+    #[test]
+    fn tlv_length_forms_at_their_bounds() {
+        let short = [&[0x04, 0x7f][..], &[0; 0x7f]].concat();
+        assert_eq!(tlv(&short).map(|t| t.2.len()), Some(0x7f));
+        let long = [&[0x04, 0x81, 0x80][..], &[0; 0x80]].concat();
+        assert_eq!(tlv(&long).map(|t| t.2.len()), Some(0x80));
+        let indefinite = [&[0x04, 0x80][..], &[0; 0x80]].concat();
+        assert_eq!(tlv(&indefinite), None);
+        let three = [&[0x04, 0x83, 0x01, 0x00, 0x00][..], &vec![0; 0x1_0000]].concat();
+        assert_eq!(tlv(&three).map(|t| t.2.len()), Some(0x1_0000));
+        let four = [
+            &[0x04, 0x84, 0x01, 0x00, 0x00, 0x00][..],
+            &vec![0; 0x100_0000],
+        ]
+        .concat();
+        assert_eq!(tlv(&four), None);
+    }
 }

@@ -134,7 +134,7 @@ impl RelaySeeds {
         SecretBytes::from_slice(&self.access).unwrap()
     }
 
-    fn keys(&self) -> RelayKeys {
+    pub(crate) fn keys(&self) -> RelayKeys {
         RelayKeys::new(
             Ed25519SigningKey::from_seed(&self.sig).unwrap(),
             X25519Secret::from_bytes(&self.dh).unwrap(),
@@ -147,7 +147,7 @@ impl RelaySeeds {
 }
 
 /// The relay's `valid_until` offset from the scenario start: the longest a `RELAYINFO` may announce (60 days).
-const KEY_VALIDITY_SECS: u64 = 5_184_000;
+pub(crate) const KEY_VALIDITY_SECS: u64 = 5_184_000;
 
 /// One relay and N clients (see the module documentation).
 pub struct Harness {

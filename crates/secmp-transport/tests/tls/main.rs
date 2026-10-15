@@ -6,6 +6,7 @@
 //! (`docs/06:95`), fronting the in-process relay.
 
 mod fixture;
+mod relay;
 
 use std::num::NonZeroU16;
 use std::sync::Arc;

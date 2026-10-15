@@ -10,9 +10,11 @@ repository.workspace = true
 publish.workspace = true
 
 # Derandomised entry points and the kat accessors of the stores (store digest, live-buffer counter, the values in
-# effect): the vectors, the tests and the generator of `vectors/link.json`; never enabled in a shipped build.
+# effect): the vectors, the tests and the generator of `vectors/link.json`; never enabled in a shipped build. It turns
+# on `direct-tls` too, so the relay's own test suite (`tests/relay/direct_tls.rs`) and the mutation gate's first run,
+# which builds this package with `--features kat`, cover the direct listener.
 [features]
-kat = ["secmp-proto/kat", "secmp-crypto/kat"]
+kat = ["secmp-proto/kat", "secmp-crypto/kat", "direct-tls"]
 # ADR-051 Part 2, OPEN-M6-08 A: the optional direct listener (synchronous rustls `ServerConnection`/`StreamOwned` in the
 # std::net thread model); off by default — the default build stays std-only (ADR-049).
 direct-tls = ["dep:rustls", "dep:aws-lc-rs"]

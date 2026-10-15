@@ -32,6 +32,9 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # OPEN-M6-06 A, ADR-051: aws-lc-sys assembles from source with an installed NASM, never with its prebuilt
+  # objects (unverifiable binaries in the supply chain, docs/06 §3); checked by `windows_builds_nasm_from_source`.
+  AWS_LC_SYS_PREBUILT_NASM: "0"
 
 jobs:
   fuzz-nightly:

@@ -520,6 +520,53 @@ mod tests {
         Ok(())
     }
 
+    /// TEST-SPEC-M6 X-01: the cooldown gate covers the M6 lock — `Cargo.lock` is one of its inputs, every ADR-051 Part 2
+    /// pin is a crates.io package of it (so the gate fetches its `pubtime`), and the only exception is the rustls entry of
+    /// ADR-015 Amendment 2, naming a package that is in the lock at exactly that version. The ages themselves are the
+    /// gate's output (`cargo xtask cooldown`, network), quoted in the report with the youngest crate.
+    #[test]
+    fn cooldown_covers_m6_lock() -> Result<()> {
+        assert!(LOCKFILES.contains(&"Cargo.lock"));
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let lock = parse_lock(&std::fs::read_to_string(root.join("Cargo.lock"))?);
+        let registry = |n: &str, v: &str| {
+            lock.iter().any(|p| {
+                p.name == n
+                    && p.version == v
+                    && p.source
+                        .as_deref()
+                        .is_some_and(|s| CRATES_IO_SOURCES.contains(&s))
+            })
+        };
+        for (n, v) in [
+            ("arti-client", "0.46.0"),
+            ("rustls", "0.23.46"),
+            ("tokio-rustls", "0.26.5"),
+            ("tokio", "1.53.1"),
+            ("aws-lc-rs", "1.18.1"),
+            ("turmoil", "0.7.2"),
+        ] {
+            assert!(registry(n, v), "{n} {v}");
+        }
+        let tor = lock
+            .iter()
+            .filter(|p| p.name.starts_with("tor-") && p.source.is_some())
+            .count();
+        assert!(tor >= 30, "{tor} tor-* packages");
+        assert_eq!(crate::expect::COOLDOWN_EXCEPTIONS.len(), 1);
+        for (n, v, until, advisory) in crate::expect::COOLDOWN_EXCEPTIONS {
+            assert_eq!((*n, *v, *until), ("rustls", "0.23.46", "2026-10-21"));
+            assert!(
+                advisory.starts_with("RUSTSEC-2026-0346")
+                    && advisory.contains("-0349")
+                    && advisory.contains("ADR-015 Am. 2")
+            );
+            assert!(registry(n, v), "{n} {v}");
+            assert!(day_of(until).is_ok());
+        }
+        Ok(())
+    }
+
     const EXC: Exception = (
         "rustls",
         "0.23.46",

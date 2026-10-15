@@ -221,6 +221,41 @@ None from `docs/03`/`docs/01`. Implementation choices the review should know (no
 24. **Small items (7a67339).** `timing_draws()` returns `(links, control)`; planted `activity_comparator_detects_a_dropped_dummy`,
     `…_a_resized_frame`, `…_a_late_emission`; the driver obligations are documented in `scheduler/mod.rs`.
 
+### Phase B rows
+
+- **§0b (verifier follow-ups, `11b3725`):**
+  - `policy::tests::vet_closure_exemption_without_version_is_a_finding`
+  - `SANS_IO_FORBIDDEN` now also contains `futures`, `async-std` and `smol`
+  - ADR-036 Am. 1 wording
+  - the advisory field of the rustls cooldown exception
+- **X-01…X-04:**
+  - `cooldown::tests::cooldown_covers_m6_lock`
+  - `policy::tests::deny_duplicate_skips_are_justified` (46 entries)
+  - `policy::tests::vet_records_for_m6_closure`
+  - `policy::tests::licenses_cover_m6_closure`
+
+  The gates themselves are `cooldown`, `deny` and `vet`, all green after the owner's records.
+- **X-06:** `gates::tests::windows_builds_nasm_from_source`.
+  - Every workflow sets `AWS_LC_SYS_PREBUILT_NASM: "0"` in its top-level `env:`.
+  - `windows-native` and `dispatch-windows` install NASM (`choco install nasm`, then `nasm -v`); `xwin-cross` and
+    `dispatch-xwin` already had the apt NASM step.
+  - The CI log is the evidence that no prebuilt object is used. The choco package version is not pinned; I could not check
+    it from the container (no network to chocolatey.org).
+- **MU-01:** `gates::tests::mutants_scope_includes_client_core_and_transport` and
+  `gates::tests::merge_mutants_runs_unites_outcomes_and_survivors`. ADR-047 Am. 4 is appended, with an implementation note.
+  - `MUTANT_PACKAGES` now has five entries.
+  - `secmp-client-core` and `secmp-transport` run in a second cargo-mutants run per shard. Their tests live in
+    `secmp-testkit/tests/harness`, and the transport has no `kat` feature.
+  - The second run uses `--test-package` for client-core, transport and testkit, `--features harness` and
+    `--test-tool nextest`.
+  - It sets `--timeout 900` and skips the ten long harness tests listed in `MUTANT_HARNESS_SKIP_TESTS`.
+  - Its outcomes are merged into the shard's `mutants.out`.
+  - The `mutants` tool set gains nextest.
+  - Local smoke run of the exact second-run command line on `crates/secmp-transport/src/evicted.rs`: 7/7 caught.
+  - `docs/mutants-accepted.md` gains §Excluded. No Arti glue file exists yet; the Tor glue file comes in §2.5.
+- **COV-01/COV-02:** `gates::tests::coverage_strict_includes_client_core` and `gates::tests::coverage_transport_80_with_tor_glue`.
+  `COVERAGE_STRICT` now includes `secmp-client-core`. The transport ignore pattern is unchanged, with no exclusion list.
+
 ## 6. Dependencies added or bumped
 
 Phase A: none (workspace path crates only: `secmp-client-core` → `secmp-transport`; `secmp-testkit` → `secmp-client-core`).
@@ -248,6 +283,17 @@ Phase B commit 1: see §2, "Phase B commit 1 — dependencies as landed".
 - M6-15: job `kani` was killed by a runner shutdown (exit 143) four times on this branch, 6–22 min into `cargo kani --package secmp-proto -Z stubbing` (runs 38064677208, 38132969656, 38549219665 attempts 1–2), never on main; container run M6-13b verifies 7/7 + 30/30 without error; xtask now logs a runner resource trace every 20 s when `SECMP_RUNNER_TRACE` is set, enabled on the `kani` job.
 - M6-16: root cause of the four `kani` runner shutdowns — the Phase-A `[profile.dev.package.*] opt-level = 3` overrides (added for the scheduler tests) also applied to the Kani build; `secmp-proto` at opt-level 3 drove CBMC to 15.5 GB RSS on the 16 GB runner (run 38606378025, runner-trace 17:43:22–17:44:02Z, swap full, exit 143). Overrides moved to `[profile.test.package.*]`; the Kani build is back to opt-level 0 as on main.
 - Reviewer question (M6-16): `cargo miri` builds with the `test` profile; whether the opt-level 3 override lowers Miri's MIR-level UB detection is to be verified before the Phase A report is final.
+- **MIRI-01 (Phase B, report only).** Command: `cargo +nightly-2026-09-21 miri test -p secmp-proto -v 2>&1 | grep -oE
+  "(-C opt-level=[0-9]|-Zmir-opt-level=[0-9]|-Zmiri[a-z-]*)" | sort -u`. The pinned nightly is needed because Miri is not
+  on the stable toolchain. Output:
+  ```
+  -C opt-level=3
+  -Zmiri-backtrace
+  ```
+- **Mutants CI time (ADR-047 Am. 4).** The second run adds 903 mutants: client-core 601, transport 302. The first run has
+  2 411. In the local smoke run (32 cores, `-j 3`) each harness mutant took 1–150 s to build and 67–74 s to test. On
+  the 4-core runner the time per shard may come close to the 280-min step budget. The per-shard times of the first PR run
+  go into §7 (BRIEF §2.7).
 - M6-17: cooldown fetch retries transient curl errors (ADR-015 Am. 1) after run 38616364662 `linux-fast` failed on a single connect error.
 - The virtual worker is serial and non-blocking; a single-threaded real driver whose preparation blocked its loop would
   delay *other* links' due writes by the preparation of an active link — the cost model cannot show that, the Phase B

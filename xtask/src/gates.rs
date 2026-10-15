@@ -1177,12 +1177,18 @@ pub(crate) fn set_mutants_shard(s: MutantsShard) -> Result<()> {
         .map_err(|_| Error("the mutants shard can be set once".to_owned()))
 }
 
-/// The `cargo mutants` arguments of the gate (ADR-047 with Amendment 1): feature `kat` for both packages (R-60: the HX
-/// integration suite; with it the external KATs and the frozen-vector tests join the unit tests in killing mutants),
-/// three mutants in parallel, `--caught --unviable` so the log shows every outcome as it happens, the shard if one is
-/// given (round-robin, so every shard gets a share of both packages), the packages and exclusions of `expect.rs`, and
-/// after `-- --` the libtest `--skip` filters of `expect::MUTANT_SKIP_TESTS`.
-pub(crate) fn mutants_args(shard: Option<MutantsShard>) -> Vec<String> {
+/// The arguments every `cargo mutants` run of the gate shares (ADR-047 with Amendment 1): three mutants in parallel,
+/// `--caught --unviable` so the log shows every outcome as it happens, the output root, the features, the shard if one
+/// is given (round-robin, so every shard gets a share of every package), the packages, the exclusions of `expect.rs`,
+/// and after `-- --` the libtest `--skip` filters of `expect::MUTANT_SKIP_TESTS`.
+fn mutants_run_args(
+    shard: Option<MutantsShard>,
+    output: &str,
+    features: &str,
+    packages: &[&str],
+    test_packages: &[&str],
+    skips: &[&[(&str, &str)]],
+) -> Vec<String> {
     let mut a: Vec<String> = [
         "mutants",
         "--no-shuffle",
@@ -1190,9 +1196,9 @@ pub(crate) fn mutants_args(shard: Option<MutantsShard>) -> Vec<String> {
         "-j",
         "3",
         "--output",
-        "target",
+        output,
         "--features",
-        "kat",
+        features,
         "--caught",
         "--unviable",
     ]
@@ -1207,8 +1213,11 @@ pub(crate) fn mutants_args(shard: Option<MutantsShard>) -> Vec<String> {
             "round-robin".to_owned(),
         ]);
     }
-    for p in expect::MUTANT_PACKAGES {
+    for p in packages {
         a.extend(["--package".to_owned(), (*p).to_owned()]);
+    }
+    for p in test_packages {
+        a.extend(["--test-package".to_owned(), (*p).to_owned()]);
     }
     for f in expect::MUTANT_EXCLUDE_FILES {
         a.extend(["--exclude".to_owned(), (*f).to_owned()]);
@@ -1216,11 +1225,67 @@ pub(crate) fn mutants_args(shard: Option<MutantsShard>) -> Vec<String> {
     for re in expect::MUTANT_EXCLUDE_RE {
         a.extend(["--exclude-re".to_owned(), (*re).to_owned()]);
     }
-    // the remaining arguments go to `cargo test`, and after its own `--` to every test binary
+    // the remaining arguments go to `cargo test` (or `cargo nextest run`), and after its own `--` to every test binary
+    // (nextest takes the same libtest-style `--skip` filters)
     a.extend(["--".to_owned(), "--".to_owned()]);
-    for (test, _) in expect::MUTANT_SKIP_TESTS {
+    for (test, _) in skips.iter().flat_map(|s| s.iter()) {
         a.extend(["--skip".to_owned(), (*test).to_owned()]);
     }
+    a
+}
+
+/// The packages of the first run: `expect::MUTANT_PACKAGES` without `expect::MUTANT_HARNESS_PACKAGES`.
+fn mutants_own_test_packages() -> Vec<&'static str> {
+    expect::MUTANT_PACKAGES
+        .iter()
+        .copied()
+        .filter(|p| !expect::MUTANT_HARNESS_PACKAGES.contains(p))
+        .collect()
+}
+
+/// The first `cargo mutants` run of the gate (ADR-047 with Amendment 1): the packages whose tests are their own, each
+/// mutant tested by its package's tests with feature `kat` (R-60: the HX integration suite; with it the external KATs
+/// and the frozen-vector tests join the unit tests in killing mutants); output under `target/mutants.out`.
+pub(crate) fn mutants_args(shard: Option<MutantsShard>) -> Vec<String> {
+    mutants_run_args(
+        shard,
+        "target",
+        "kat",
+        &mutants_own_test_packages(),
+        &[],
+        &[expect::MUTANT_SKIP_TESTS],
+    )
+}
+
+/// The output root of the second run (`<root>/mutants.out`).
+const MUTANTS_HARNESS_OUTPUT: &str = "target/mutants-harness";
+
+/// The second `cargo mutants` run of the gate (ADR-047 Amendment 4): `expect::MUTANT_HARNESS_PACKAGES`, whose tests
+/// live in `secmp-testkit/tests/harness` (the in-process relay they need is the testkit's), every mutant tested by the
+/// tests of `expect::MUTANT_HARNESS_TEST_PACKAGES` with feature `harness` (`secmp-transport` has no feature `kat`, and
+/// the testkit's `kat` adds only the differential suites, which cover no line of these packages). The tests run under
+/// nextest (`--test-tool nextest`): the harness suite needs one process per test (five `m6_activity` tests fail when
+/// they share one, as under `cargo test`). cargo-mutants measures its baseline on the mutated package's own tests
+/// only, so the per-mutant test timeout is explicit (`expect::MUTANTS_HARNESS_TEST_TIMEOUT_SECONDS`); the long harness
+/// tests of `expect::MUTANT_HARNESS_SKIP_TESTS` are left out of the per-mutant run like those of
+/// `expect::MUTANT_SKIP_TESTS`.
+pub(crate) fn mutants_harness_args(shard: Option<MutantsShard>) -> Vec<String> {
+    let mut a = mutants_run_args(
+        shard,
+        MUTANTS_HARNESS_OUTPUT,
+        "harness",
+        expect::MUTANT_HARNESS_PACKAGES,
+        expect::MUTANT_HARNESS_TEST_PACKAGES,
+        &[expect::MUTANT_SKIP_TESTS, expect::MUTANT_HARNESS_SKIP_TESTS],
+    );
+    let at = a.iter().position(|x| x == "--").unwrap_or(a.len());
+    let extra = [
+        "--test-tool".to_owned(),
+        "nextest".to_owned(),
+        "--timeout".to_owned(),
+        expect::MUTANTS_HARNESS_TEST_TIMEOUT_SECONDS.to_string(),
+    ];
+    a.splice(at..at, extra);
     a
 }
 
@@ -1231,28 +1296,23 @@ const MUTANTS_POLL: std::time::Duration = std::time::Duration::from_secs(5);
 /// artefact).
 const MUTANTS_SHARD_VERDICT: &str = "xtask-shard.json";
 
-/// docs/06 §5 step 8 (ADR-047 with Amendment 1): `cargo mutants` over `expect::MUTANT_PACKAGES` with output in
-/// `target/mutants-step.log` (echoed as it grows) under the budget `expect::MUTANTS_STEP_TIMEOUT_SECONDS`; every
-/// missed or timed-out mutant must be documented in `docs/mutants-accepted.md`. With `--shard K/N` (one CI shard) the
-/// step records its verdict in `target/mutants.out/xtask-shard.json` for `mutants-merge`, which applies the
-/// per-package floor; without, the step applies the floor itself.
-pub(crate) fn mutants(ctx: &Ctx) -> Result<Outcome> {
-    tools::require(tools::MUTANTS)?;
-    let shard = MUTANTS_SHARD.get().copied();
-    let target = ctx.root.join("target");
-    let out = target.join("mutants.out");
-    let verdict_file = out.join(MUTANTS_SHARD_VERDICT);
-    if verdict_file.exists() {
-        std::fs::remove_file(&verdict_file)?;
-    }
-    let log = target.join("mutants-step.log");
-    let timeout = std::time::Duration::from_secs(expect::MUTANTS_STEP_TIMEOUT_SECONDS);
-    let mut tail = LineTail::new(&log);
+/// The subdirectory of the first run's `mutants.out` that keeps the second run's own files (outcomes, survivor lists,
+/// log), so the shard artefact carries them.
+const MUTANTS_HARNESS_SUBDIR: &str = "harness";
+
+/// Run one `cargo mutants` invocation under `budget`, echoing its log; (exit status or None on timeout, last line).
+fn run_mutants_once(
+    ctx: &Ctx,
+    args: Vec<String>,
+    log: &Path,
+    budget: std::time::Duration,
+) -> Result<(Option<std::process::ExitStatus>, Option<String>)> {
+    let mut tail = LineTail::new(log);
     let mut last = None;
     let status = run_budgeted(
-        &Cmd::cargo().args(mutants_args(shard)).dir(&ctx.root),
-        &log,
-        timeout,
+        &Cmd::cargo().args(args).dir(&ctx.root),
+        log,
+        budget,
         MUTANTS_POLL,
         || {
             for line in tail.lines() {
@@ -1261,7 +1321,129 @@ pub(crate) fn mutants(ctx: &Ctx) -> Result<Outcome> {
             }
         },
     )?;
-    let verdict = mutants_shard_verdict(ctx, status, &out, &log, last.as_deref());
+    Ok((status, last))
+}
+
+/// Merge the second run's results (`second`, a `mutants.out`) into the first run's (`first`): `outcomes.json` gets the
+/// union of the mutant outcomes and the sum of `total_mutants` (the merge job and the floor read it), the survivor and
+/// outcome lists (`caught.txt`, `missed.txt`, `timeout.txt`, `unviable.txt`) are concatenated, and the second run's
+/// files are copied unchanged into `first/harness/`.
+pub(crate) fn merge_mutants_runs(first: &Path, second: &Path) -> Result<()> {
+    let keep = first.join(MUTANTS_HARNESS_SUBDIR);
+    std::fs::create_dir_all(&keep)?;
+    for name in [
+        "outcomes.json",
+        "caught.txt",
+        "missed.txt",
+        "timeout.txt",
+        "unviable.txt",
+    ] {
+        let from = second.join(name);
+        if from.exists() {
+            std::fs::copy(&from, keep.join(name))?;
+        }
+    }
+    let read_json = |p: &Path| -> Result<Value> {
+        let t = std::fs::read_to_string(p).map_err(|e| Error(format!("{}: {e}", p.display())))?;
+        serde_json::from_str(&t).map_err(|e| Error(format!("{}: {e}", p.display())))
+    };
+    let mut a = read_json(&first.join("outcomes.json"))?;
+    let b = read_json(&second.join("outcomes.json"))?;
+    let b_outcomes: Vec<Value> = b
+        .get("outcomes")
+        .and_then(Value::as_array)
+        .ok_or_else(|| Error(format!("{}: no `outcomes` array", second.display())))?
+        .iter()
+        .filter(|o| o.get("scenario").and_then(|s| s.get("Mutant")).is_some())
+        .cloned()
+        .collect();
+    let total = a
+        .get("total_mutants")
+        .and_then(Value::as_u64)
+        .unwrap_or_default()
+        .checked_add(
+            b.get("total_mutants")
+                .and_then(Value::as_u64)
+                .unwrap_or_default(),
+        )
+        .ok_or_else(|| Error("total_mutants overflow".to_owned()))?;
+    let list = a
+        .get_mut("outcomes")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| Error(format!("{}: no `outcomes` array", first.display())))?;
+    list.extend(b_outcomes);
+    if let Some(obj) = a.as_object_mut() {
+        obj.insert("total_mutants".to_owned(), Value::from(total));
+    }
+    std::fs::write(first.join("outcomes.json"), a.to_string())?;
+    for name in ["caught.txt", "missed.txt", "timeout.txt", "unviable.txt"] {
+        let extra = std::fs::read_to_string(second.join(name)).unwrap_or_default();
+        if extra.is_empty() {
+            continue;
+        }
+        let mut text = std::fs::read_to_string(first.join(name)).unwrap_or_default();
+        if !text.is_empty() && !text.ends_with('\n') {
+            text.push('\n');
+        }
+        text.push_str(&extra);
+        std::fs::write(first.join(name), text)?;
+    }
+    Ok(())
+}
+
+/// docs/06 §5 step 8 (ADR-047 with Amendments 1 and 4): `cargo mutants` over `expect::MUTANT_PACKAGES` in two runs —
+/// the packages with their own tests (`mutants_args`, log `target/mutants-step.log`) and the packages tested through the
+/// testkit harness (`mutants_harness_args`, log `target/mutants-harness-step.log`) — both echoed as they grow, under one
+/// budget `expect::MUTANTS_STEP_TIMEOUT_SECONDS`; every missed or timed-out mutant must be documented in
+/// `docs/mutants-accepted.md`. The second run's outcomes are merged into `target/mutants.out`. With `--shard K/N` (one CI
+/// shard, both runs take the same shard) the step records its verdict in `target/mutants.out/xtask-shard.json` for
+/// `mutants-merge`, which applies the per-package floor; without, the step applies the floor itself.
+pub(crate) fn mutants(ctx: &Ctx) -> Result<Outcome> {
+    tools::require(tools::MUTANTS)?;
+    tools::require(tools::NEXTEST)?;
+    let shard = MUTANTS_SHARD.get().copied();
+    let target = ctx.root.join("target");
+    let out = target.join("mutants.out");
+    let harness_out = ctx.root.join(MUTANTS_HARNESS_OUTPUT).join("mutants.out");
+    let verdict_file = out.join(MUTANTS_SHARD_VERDICT);
+    if verdict_file.exists() {
+        std::fs::remove_file(&verdict_file)?;
+    }
+    let started = std::time::Instant::now();
+    let budget = std::time::Duration::from_secs(expect::MUTANTS_STEP_TIMEOUT_SECONDS);
+    let log = target.join("mutants-step.log");
+    let (status, last) = run_mutants_once(ctx, mutants_args(shard), &log, budget)?;
+    let own = mutants_own_test_packages().join(", ");
+    let first = mutants_shard_verdict(ctx, status, &out, &log, last.as_deref(), &own);
+    let harness_log = target.join("mutants-harness-step.log");
+    let rest = budget.saturating_sub(started.elapsed());
+    let (status_h, last_h) =
+        run_mutants_once(ctx, mutants_harness_args(shard), &harness_log, rest)?;
+    let harness_label = expect::MUTANT_HARNESS_PACKAGES.join(", ");
+    let second = mutants_shard_verdict(
+        ctx,
+        status_h,
+        &harness_out,
+        &harness_log,
+        last_h.as_deref(),
+        &harness_label,
+    );
+    // the merge job reads `target/mutants.out` only: merge whenever both runs left outcomes (also on a failing verdict,
+    // so the merge reports the second run's survivors by name), and keep the second run's log in the artefact
+    if out.join("outcomes.json").exists() && harness_out.join("outcomes.json").exists() {
+        merge_mutants_runs(&out, &harness_out)?;
+    }
+    if harness_log.exists() {
+        let keep = out.join(MUTANTS_HARNESS_SUBDIR);
+        std::fs::create_dir_all(&keep)?;
+        std::fs::copy(&harness_log, keep.join("mutants-harness-step.log"))?;
+    }
+    let verdict = match (first, second) {
+        (Ok(a), Ok(b)) => Ok(format!("{a}; {b}")),
+        (Err(e), Ok(_)) | (Ok(_), Err(e)) => Err(e),
+        (Err(a), Err(b)) => Err(Error(format!("{}; {}", a.0, b.0))),
+    };
+    let exit_codes = [status, status_h].map(|s| s.and_then(|s| s.code()));
     if let Some(shard) = shard {
         let (passed, detail) = match &verdict {
             Ok(d) => ("PASS", d.clone()),
@@ -1273,7 +1455,8 @@ pub(crate) fn mutants(ctx: &Ctx) -> Result<Outcome> {
             serde_json::json!({
                 "shard": shard.to_string(),
                 "verdict": passed,
-                "exit_code": status.and_then(|s| s.code()),
+                "exit_code": exit_codes.iter().flatten().copied().max(),
+                "exit_codes": exit_codes,
                 "detail": detail,
             })
             .to_string(),
@@ -1313,6 +1496,7 @@ fn mutants_shard_verdict(
     out: &Path,
     log: &Path,
     last: Option<&str>,
+    label: &str,
 ) -> Result<String> {
     let Some(status) = status else {
         bail!(
@@ -1358,8 +1542,7 @@ fn mutants_shard_verdict(
         .trim()
         .to_owned();
     Ok(format!(
-        "{}: {summary}; survivors documented in docs/mutants-accepted.md: {documented}",
-        expect::MUTANT_PACKAGES.join(", ")
+        "{label}: {summary}; survivors documented in docs/mutants-accepted.md: {documented}"
     ))
 }
 
@@ -3547,6 +3730,67 @@ pub(crate) fn step_name_findings(file: &str, text: &str) -> Vec<String> {
     out
 }
 
+/// The lines of job `job` in a workflow text (from `  <job>:` up to the next job at the same indent).
+fn job_block<'a>(text: &'a str, job: &str) -> Option<Vec<&'a str>> {
+    let header = format!("  {job}:");
+    let mut lines = text.lines().skip_while(|l| *l != header);
+    lines.next()?;
+    Some(
+        lines
+            .take_while(|l| l.is_empty() || l.starts_with("   ") || l.trim_start().starts_with('#'))
+            .collect(),
+    )
+}
+
+/// X-06 (OPEN-M6-06 A): the workflow sets `AWS_LC_SYS_PREBUILT_NASM: "0"` in its top-level `env:`, and each of its jobs
+/// in `expect::NASM_JOBS` has a step that installs NASM and prints `nasm … -v`.
+pub(crate) fn nasm_findings(name: &str, text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let top_env: Vec<&str> = text
+        .lines()
+        .skip_while(|l| *l != "env:")
+        .skip(1)
+        .take_while(|l| l.is_empty() || l.starts_with("  "))
+        .collect();
+    if !top_env
+        .iter()
+        .any(|l| l.trim() == "AWS_LC_SYS_PREBUILT_NASM: \"0\"")
+    {
+        out.push(format!(
+            "{name}: top-level env lacks AWS_LC_SYS_PREBUILT_NASM: \"0\" (OPEN-M6-06)"
+        ));
+    }
+    for (file, job) in expect::NASM_JOBS {
+        if *file != name {
+            continue;
+        }
+        let Some(block) = job_block(text, job) else {
+            out.push(format!("{name}: job {job} (expect::NASM_JOBS) missing"));
+            continue;
+        };
+        let code: Vec<String> = block
+            .iter()
+            .map(|l| {
+                l.split(" #")
+                    .next()
+                    .unwrap_or_default()
+                    .to_ascii_lowercase()
+            })
+            .filter(|l| !l.trim_start().starts_with('#'))
+            .collect();
+        let installs = code
+            .iter()
+            .any(|l| l.contains("install") && l.contains("nasm"));
+        let version = code.iter().any(|l| l.contains("nasm") && l.contains(" -v"));
+        if !(installs && version) {
+            out.push(format!(
+                "{name}: job {job} does not install NASM and print its version (OPEN-M6-06)"
+            ));
+        }
+    }
+    out
+}
+
 pub(crate) fn workflow_findings(name: &str, text: &str) -> Vec<String> {
     let mut out = Vec::new();
     for line in text.lines() {
@@ -4166,6 +4410,7 @@ fn workflows(root: &Path) -> Result<String> {
         findings.extend(workflow_findings(&rel(root, f), &text));
         findings.extend(workflow_token_findings(&rel(root, f), &text));
         findings.extend(step_name_findings(&rel(root, f), &text));
+        findings.extend(nasm_findings(&rel(root, f), &text));
         texts.push((rel(root, f), text));
     }
     findings.extend(required_job_findings(&texts));
@@ -6145,6 +6390,81 @@ mod tests {
         }
     }
 
+    /// TEST-SPEC-M6 X-06 (OPEN-M6-06 A): every workflow sets `AWS_LC_SYS_PREBUILT_NASM: "0"`, and the four jobs that build
+    /// `aws-lc-sys` for Windows install NASM and print its version; a workflow without the variable, or a Windows job
+    /// without the NASM step, is a finding. (The CI log of those jobs is the evidence that no prebuilt object is used.)
+    #[test]
+    fn windows_builds_nasm_from_source() {
+        let real = [
+            (
+                ".github/workflows/ci.yml",
+                include_str!("../../.github/workflows/ci.yml"),
+            ),
+            (
+                ".github/workflows/ci-dispatch.yml",
+                include_str!("../../.github/workflows/ci-dispatch.yml"),
+            ),
+            (
+                ".github/workflows/fuzz-nightly.yml",
+                include_str!("../../.github/workflows/fuzz-nightly.yml"),
+            ),
+            (
+                ".github/workflows/miri-full.yml",
+                include_str!("../../.github/workflows/miri-full.yml"),
+            ),
+        ];
+        for (file, text) in real {
+            assert_eq!(
+                nasm_findings(file, &lf(text)),
+                Vec::<String>::new(),
+                "{file}"
+            );
+        }
+        for (file, job) in expect::NASM_JOBS {
+            let (_, text) = real
+                .iter()
+                .find(|(f, _)| f == file)
+                .copied()
+                .unwrap_or_default();
+            assert!(job_block(&lf(text), job).is_some(), "{file} {job}");
+        }
+        let ci = lf(include_str!("../../.github/workflows/ci.yml"));
+        // the variable removed
+        let no_env = ci.replace("  AWS_LC_SYS_PREBUILT_NASM: \"0\"\n", "");
+        let found = nasm_findings(".github/workflows/ci.yml", &no_env);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(
+            found.iter().all(|f| f.contains("AWS_LC_SYS_PREBUILT_NASM")),
+            "{found:?}"
+        );
+        // set to 1 (prebuilt objects allowed)
+        let one = ci.replace(
+            "AWS_LC_SYS_PREBUILT_NASM: \"0\"",
+            "AWS_LC_SYS_PREBUILT_NASM: \"1\"",
+        );
+        assert_eq!(nasm_findings(".github/workflows/ci.yml", &one).len(), 1);
+        // the Windows NASM step removed
+        let no_step = ci.replace("          choco install nasm -y --no-progress\n", "");
+        let found = nasm_findings(".github/workflows/ci.yml", &no_step);
+        assert_eq!(
+            found,
+            vec![
+                ".github/workflows/ci.yml: job windows-native does not install NASM and print its version (OPEN-M6-06)"
+                    .to_owned()
+            ]
+        );
+        // the xwin NASM install removed
+        let no_xwin = ci.replace(
+            "sudo apt-get install -y --no-install-recommends nasm && nasm -v",
+            "true",
+        );
+        let found = nasm_findings(".github/workflows/ci.yml", &no_xwin);
+        assert!(
+            found.len() == 1 && found.iter().all(|f| f.contains("xwin-cross")),
+            "{found:?}"
+        );
+    }
+
     /// M2 review C2: the required job names only in ci.yml, all four there, and no dispatch trigger in ci.yml; M4
     /// review C-5: likewise the pinned jobs `linux-full` delegates to.
     #[test]
@@ -6773,6 +7093,43 @@ mod tests {
         assert!(workflow_findings("miri-full.yml", &text).is_empty());
     }
 
+    /// TEST-SPEC-M6 COV-01 (OPEN-M6-23): `secmp-client-core` joins the 90 % crates.
+    #[test]
+    fn coverage_strict_includes_client_core() {
+        assert_eq!(
+            expect::COVERAGE_STRICT,
+            &["secmp-crypto", "secmp-proto", "secmp-client-core"]
+        );
+        assert!((expect::COVERAGE_STRICT_MIN - 90.0).abs() < f64::EPSILON);
+    }
+
+    /// TEST-SPEC-M6 COV-02 (OPEN-M6-23): `secmp-transport` is held to the general 80 % with every file counted — the
+    /// ignore pattern names only test and Kani files, so the Arti glue is in the denominator (an exclusion list would
+    /// need the reviewer's written approval).
+    #[test]
+    fn coverage_transport_80_with_tor_glue() {
+        assert!(!expect::COVERAGE_STRICT.contains(&"secmp-transport"));
+        assert!((expect::COVERAGE_MIN - 80.0).abs() < f64::EPSILON);
+        assert_eq!(COVERAGE_IGNORE_RE, r"(/tests\.rs|/kani_proofs\.rs)$");
+        for glue in [
+            "crates/secmp-transport/src/tor.rs",
+            "crates/secmp-transport/src/tor/arti.rs",
+            "crates/secmp-transport/src/tls.rs",
+        ] {
+            assert!(
+                !glue.ends_with("/tests.rs") && !glue.ends_with("/kani_proofs.rs"),
+                "{glue}"
+            );
+        }
+        let args = coverage_args("out.json");
+        assert_eq!(
+            args.iter()
+                .filter(|a| *a == "--ignore-filename-regex")
+                .count(),
+            1
+        );
+    }
+
     /// F18 (R-42): the coverage run leaves test-only files out of the denominator; M5-B-3: it builds with
     /// `secmp-relay/kat`, so the relay's `relay` suite is measured; M5-C: and `secmp-testkit/harness`, so the harness and
     /// the transport tests are.
@@ -6978,10 +7335,8 @@ mod tests {
     /// out like `secmp-proto`'s; the package builds with feature `kat` like the other two.
     #[test]
     fn mutants_scope_includes_relay() -> Result<()> {
-        assert_eq!(
-            expect::MUTANT_PACKAGES,
-            &["secmp-crypto", "secmp-proto", "secmp-relay"]
-        );
+        assert!(expect::MUTANT_PACKAGES.contains(&"secmp-relay"));
+        assert!(!expect::MUTANT_HARNESS_PACKAGES.contains(&"secmp-relay"));
         assert_eq!(expect::MUTANT_SHARDS, 8);
         assert_eq!(expect::MUTANT_MIN_CAUGHT_PERCENT, 50);
         assert_eq!(expect::MUTANT_UNVIABLE_WARN_PERCENT, 35);
@@ -7006,6 +7361,173 @@ mod tests {
             standards.contains("`secmp-crypto`, `secmp-proto`, `secmp-relay`"),
             "docs/06 §4 Mutation names the three packages (ADR-047 Am. 3 consequence)"
         );
+        Ok(())
+    }
+
+    /// TEST-SPEC-M6 MU-01 (ADR-047 Amendment 4, OPEN-M6-23): the gate covers `secmp-crypto`, `secmp-proto`,
+    /// `secmp-relay`, `secmp-client-core` and `secmp-transport` in the 8 shards with the Amendment 2 floor; the two M6
+    /// packages are mutated in the second run of every shard, tested by their own tests and the testkit harness
+    /// (`--test-package`, feature `harness`), the first run keeps the three others with feature `kat`; `secmp-testkit`
+    /// itself is never mutated (G-11); `MUTANT_EXCLUDE_FILES` holds only Kani-only files and Arti glue named in
+    /// `docs/mutants-accepted.md` §Excluded; docs/06 §4 lists the five packages.
+    #[test]
+    fn mutants_scope_includes_client_core_and_transport() {
+        assert_eq!(
+            expect::MUTANT_PACKAGES,
+            &[
+                "secmp-crypto",
+                "secmp-proto",
+                "secmp-relay",
+                "secmp-client-core",
+                "secmp-transport"
+            ]
+        );
+        assert_eq!(
+            expect::MUTANT_HARNESS_PACKAGES,
+            &["secmp-client-core", "secmp-transport"]
+        );
+        assert_eq!(
+            expect::MUTANT_HARNESS_TEST_PACKAGES,
+            &["secmp-client-core", "secmp-transport", "secmp-testkit"]
+        );
+        assert!(!expect::MUTANT_PACKAGES.contains(&"secmp-testkit"));
+        assert_eq!(expect::MUTANT_SHARDS, 8);
+        let pairs = |args: &[String]| -> Vec<(String, String)> {
+            args.windows(2)
+                .filter_map(|w| Some((w.first()?.clone(), w.get(1)?.clone())))
+                .collect()
+        };
+        for k in 0..8 {
+            let shard = Some(MutantsShard { k, n: 8 });
+            let first = pairs(&mutants_args(shard));
+            let second = pairs(&mutants_harness_args(shard));
+            let has =
+                |p: &[(String, String)], a: &str, b: &str| p.iter().any(|(x, y)| x == a && y == b);
+            for p in ["secmp-crypto", "secmp-proto", "secmp-relay"] {
+                assert!(
+                    has(&first, "--package", p) && !has(&second, "--package", p),
+                    "{k} {p}"
+                );
+            }
+            for p in expect::MUTANT_HARNESS_PACKAGES {
+                assert!(
+                    has(&second, "--package", p) && !has(&first, "--package", p),
+                    "{k} {p}"
+                );
+            }
+            for p in expect::MUTANT_HARNESS_TEST_PACKAGES {
+                assert!(has(&second, "--test-package", p), "{k} {p}");
+            }
+            assert!(!first.iter().any(|(a, _)| a == "--test-package"), "{k}");
+            assert!(has(&first, "--features", "kat") && has(&second, "--features", "harness"));
+            assert!(
+                has(&first, "--shard", &format!("{k}/8"))
+                    && has(&second, "--shard", &format!("{k}/8"))
+            );
+            assert!(has(&first, "--output", "target"));
+            assert!(has(&second, "--output", MUTANTS_HARNESS_OUTPUT));
+            assert!(
+                has(&second, "--test-tool", "nextest")
+                    && !first.iter().any(|(a, _)| a == "--test-tool")
+            );
+            assert!(has(
+                &second,
+                "--timeout",
+                &expect::MUTANTS_HARNESS_TEST_TIMEOUT_SECONDS.to_string()
+            ));
+            for (t, _) in expect::MUTANT_HARNESS_SKIP_TESTS {
+                assert!(
+                    has(&second, "--skip", t) && !has(&first, "--skip", t),
+                    "{t}"
+                );
+            }
+            for f in expect::MUTANT_EXCLUDE_FILES {
+                assert!(
+                    has(&first, "--exclude", f) && has(&second, "--exclude", f),
+                    "{f}"
+                );
+            }
+        }
+    }
+
+    /// MU-01, continued: every excluded file is Kani-only or named in `docs/mutants-accepted.md` §Excluded; the two
+    /// harness-run crates have feature `harness`; docs/06 §4 names the five packages.
+    #[test]
+    fn mutants_scope_files_and_docs_follow_amendment_4() -> Result<()> {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let accepted = std::fs::read_to_string(root.join("docs/mutants-accepted.md"))?;
+        for f in expect::MUTANT_EXCLUDE_FILES {
+            assert!(
+                f.ends_with("/kani_proofs.rs") || accepted.contains(&format!("`{f}`")),
+                "{f}: neither Kani-only nor named in docs/mutants-accepted.md"
+            );
+        }
+        let transport = std::fs::read_to_string(root.join("crates/secmp-transport/Cargo.toml"))?;
+        assert!(
+            transport.contains("\nharness = ["),
+            "secmp-transport has feature harness"
+        );
+        let testkit = std::fs::read_to_string(root.join("crates/secmp-testkit/Cargo.toml"))?;
+        assert!(
+            testkit.contains("\nharness = ["),
+            "secmp-testkit has feature harness"
+        );
+        let standards = std::fs::read_to_string(root.join("docs/06-engineering-standards.md"))?;
+        assert!(
+            standards.contains(
+                "`secmp-crypto`, `secmp-proto`, `secmp-relay`, `secmp-client-core`, `secmp-transport`"
+            ),
+            "docs/06 §4 Mutation names the five packages (ADR-047 Am. 4 consequence)"
+        );
+        Ok(())
+    }
+
+    /// ADR-047 Amendment 4: the second run's outcomes are merged into the first run's `mutants.out` — union of the
+    /// outcomes, summed `total_mutants`, concatenated survivor lists, the second run's files kept under `harness/`.
+    #[test]
+    fn merge_mutants_runs_unites_outcomes_and_survivors() -> Result<()> {
+        let dir =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../target/xtask-test-merge-mutants-runs");
+        let _ = std::fs::remove_dir_all(&dir);
+        let (a, b) = (dir.join("a"), dir.join("b"));
+        std::fs::create_dir_all(&a)?;
+        std::fs::create_dir_all(&b)?;
+        let doc = |o: Vec<Value>| {
+            let n = o.len();
+            serde_json::json!({"outcomes": o, "total_mutants": n}).to_string()
+        };
+        std::fs::write(
+            a.join("outcomes.json"),
+            doc(mutant_outcomes("secmp-relay", 2, 1, 1)),
+        )?;
+        std::fs::write(
+            b.join("outcomes.json"),
+            doc(mutant_outcomes("secmp-transport", 3, 0, 1)),
+        )?;
+        std::fs::write(
+            a.join("missed.txt"),
+            "crates/secmp-relay/src/lib.rs:3:1: replace f3 with ()\n",
+        )?;
+        std::fs::write(
+            b.join("missed.txt"),
+            "crates/secmp-transport/src/lib.rs:3:1: replace f3 with ()\n",
+        )?;
+        merge_mutants_runs(&a, &b)?;
+        let merged = read_outcomes(&a.join("outcomes.json"))?;
+        assert_eq!(merged.outcomes.len(), 8);
+        let counts = mutant_counts(&merged.outcomes)?;
+        assert_eq!(
+            counts.get("secmp-transport").map(|c| (c.caught, c.missed)),
+            Some((3, 1))
+        );
+        assert_eq!(
+            counts.get("secmp-relay").map(|c| (c.caught, c.missed)),
+            Some((2, 1))
+        );
+        let missed = std::fs::read_to_string(a.join("missed.txt"))?;
+        assert_eq!(missed.lines().count(), 2, "{missed}");
+        assert!(a.join("harness/outcomes.json").exists() && a.join("harness/missed.txt").exists());
+        let _ = std::fs::remove_dir_all(&dir);
         Ok(())
     }
 
@@ -7058,7 +7580,7 @@ mod tests {
                 .any(|a| a.contains("secmp-proto/kat") || a.contains("secmp-crypto/kat"))
         );
         assert_eq!(args.iter().filter(|a| *a == "--features").count(), 1);
-        for p in expect::MUTANT_PACKAGES {
+        for p in mutants_own_test_packages() {
             assert!(pair("--package", p), "{p}");
         }
         // the skip filters come after `-- --`: cargo-mutants hands the rest to `cargo test`, which hands it to libtest
@@ -7196,6 +7718,8 @@ mod tests {
             mutant_outcomes("secmp-crypto", 0, 241, 0),
             mutant_outcomes("secmp-proto", 60, 30, 1),
             mutant_outcomes("secmp-relay", 50, 10, 0),
+            mutant_outcomes("secmp-client-core", 40, 5, 0),
+            mutant_outcomes("secmp-transport", 30, 3, 0),
         ]
         .concat();
         let MutantsFloor {
@@ -7218,6 +7742,8 @@ mod tests {
                 mutant_outcomes("secmp-crypto", 64, 36, 0),
                 mutant_outcomes("secmp-proto", 70, 30, 0),
                 mutant_outcomes("secmp-relay", 50, 10, 0),
+                mutant_outcomes("secmp-client-core", 40, 5, 0),
+                mutant_outcomes("secmp-transport", 30, 3, 0),
             ]
             .concat(),
         )?;
@@ -7234,6 +7760,8 @@ mod tests {
                 mutant_outcomes("secmp-crypto", 70, 30, 0),
                 mutant_outcomes("secmp-proto", 63, 36, 1),
                 mutant_outcomes("secmp-relay", 50, 10, 0),
+                mutant_outcomes("secmp-client-core", 40, 5, 0),
+                mutant_outcomes("secmp-transport", 30, 3, 0),
             ]
             .concat(),
         )?;
@@ -7251,6 +7779,8 @@ mod tests {
                 mutant_outcomes("secmp-crypto", 65, 35, 0),
                 mutant_outcomes("secmp-proto", 80, 18, 2),
                 mutant_outcomes("secmp-relay", 50, 10, 0),
+                mutant_outcomes("secmp-client-core", 40, 5, 0),
+                mutant_outcomes("secmp-transport", 30, 3, 0),
             ]
             .concat(),
         )?;
@@ -7265,6 +7795,8 @@ mod tests {
                 "secmp-crypto: caught 65, missed 0, timeout 0, unviable 35 of 100 (caught 65.0 %, at least 50 %, unviable 35.0 %)".to_owned(),
                 "secmp-proto: caught 80, missed 2, timeout 0, unviable 18 of 100 (caught 80.0 %, at least 50 %, unviable 18.0 %)".to_owned(),
                 "secmp-relay: caught 50, missed 0, timeout 0, unviable 10 of 60 (caught 83.3 %, at least 50 %, unviable 16.7 %)".to_owned(),
+                "secmp-client-core: caught 40, missed 0, timeout 0, unviable 5 of 45 (caught 88.9 %, at least 50 %, unviable 11.1 %)".to_owned(),
+                "secmp-transport: caught 30, missed 0, timeout 0, unviable 3 of 33 (caught 90.9 %, at least 50 %, unviable 9.1 %)".to_owned(),
             ]
         );
         // a package without any mutant: no caught mutant
@@ -7273,7 +7805,9 @@ mod tests {
             failures,
             vec![
                 "secmp-crypto: no caught mutant (of 0)".to_owned(),
-                "secmp-relay: no caught mutant (of 0)".to_owned()
+                "secmp-relay: no caught mutant (of 0)".to_owned(),
+                "secmp-client-core: no caught mutant (of 0)".to_owned(),
+                "secmp-transport: no caught mutant (of 0)".to_owned()
             ]
         );
         Ok(())
@@ -7475,8 +8009,13 @@ mod tests {
             &dir,
             (2, 8),
             "PASS",
-            &mutant_outcomes("secmp-relay", 50, 10, 0),
-            60,
+            &[
+                mutant_outcomes("secmp-relay", 50, 10, 0),
+                mutant_outcomes("secmp-client-core", 40, 5, 0),
+                mutant_outcomes("secmp-transport", 30, 3, 0),
+            ]
+            .concat(),
+            138,
         )?;
         for k in 3..8 {
             write_shard(&dir, (k, 8), "PASS", &[], 0)?;
@@ -7527,8 +8066,13 @@ mod tests {
             &dir,
             (2, 8),
             "PASS",
-            &mutant_outcomes("secmp-relay", 50, 10, 0),
-            60,
+            &[
+                mutant_outcomes("secmp-relay", 50, 10, 0),
+                mutant_outcomes("secmp-client-core", 40, 5, 0),
+                mutant_outcomes("secmp-transport", 30, 3, 0),
+            ]
+            .concat(),
+            138,
         )?;
         for k in 3..8 {
             write_shard(&dir, (k, 8), "PASS", &[], 0)?;
@@ -7581,6 +8125,8 @@ mod tests {
                 mutant_outcomes("secmp-crypto", 20, 10, 0),
                 mutant_outcomes("secmp-proto", 90, 30, 0),
                 mutant_outcomes("secmp-relay", 10, 2, 0),
+                mutant_outcomes("secmp-client-core", 8, 1, 0),
+                mutant_outcomes("secmp-transport", 4, 1, 0),
             ]
             .concat();
             let failed = survivors.iter().find(|(s, _)| *s == k);

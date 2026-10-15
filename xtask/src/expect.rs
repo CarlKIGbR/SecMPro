@@ -445,8 +445,70 @@ pub(crate) const FUZZ_MAX_LEN: &[(&str, usize)] = &[
 ];
 
 /// Packages under the mutation gate (docs/06 §4, §5 step 8); M5: `secmp-relay`, the relay security kernel (ADR-047
-/// Amendment 3, OPEN-M5-12).
-pub(crate) const MUTANT_PACKAGES: &[&str] = &["secmp-crypto", "secmp-proto", "secmp-relay"];
+/// Amendment 3, OPEN-M5-12); M6: `secmp-client-core` (the constant-rate scheduler) and `secmp-transport` (ADR-047
+/// Amendment 4, OPEN-M6-23).
+pub(crate) const MUTANT_PACKAGES: &[&str] = &[
+    "secmp-crypto",
+    "secmp-proto",
+    "secmp-relay",
+    "secmp-client-core",
+    "secmp-transport",
+];
+
+/// ADR-047 Amendment 4: the packages of [`MUTANT_PACKAGES`] whose tests live in `secmp-testkit/tests/harness` (they need
+/// the testkit's in-process relay and virtual driver; `secmp-client-core` has 10 unit tests of its own,
+/// `secmp-transport` 2). The gate mutates them in a second cargo-mutants run per shard whose every mutant is tested by
+/// the tests of [`MUTANT_HARNESS_TEST_PACKAGES`] with feature `harness`.
+pub(crate) const MUTANT_HARNESS_PACKAGES: &[&str] = &["secmp-client-core", "secmp-transport"];
+
+/// ADR-047 Amendment 4: the per-mutant test timeout of the second run, in seconds (cargo-mutants derives its automatic
+/// timeout from a baseline that runs only the mutated package's own tests: 2 tests, 0 s, i.e. 20 s, and every mutant
+/// timed out on the harness suite in the local smoke run of 2026-10-15). 15 min: the per-mutant suite (without
+/// `MUTANT_HARNESS_SKIP_TESTS`) took about 10 s on 32 cores; the margin covers the 4-core runner with three mutants in
+/// parallel.
+pub(crate) const MUTANTS_HARNESS_TEST_TIMEOUT_SECONDS: u64 = 900;
+
+/// ADR-047 Amendment 4, with the rule of Amendment 1 (5): the long tests of the testkit harness left out of the
+/// per-mutant run of the second run, as (name, reason with the nextest time on the 32-core container, 2026-10-15). The
+/// `kat` and `nextest` steps run them on every PR; together they take 20–226 s each, and the per-mutant suite without
+/// them about 10 s.
+pub(crate) const MUTANT_HARNESS_SKIP_TESTS: &[(&str, &str)] = &[
+    (
+        "activity_independence_balanced_virtual",
+        "AI-02, 64 traces x 6 h virtual: 226 s",
+    ),
+    (
+        "activity_independence_strict_virtual",
+        "AI-01, 64 traces x 6 h virtual: 203 s",
+    ),
+    (
+        "activity_independence_lowbw_virtual",
+        "AI-03, 64 traces x 6 h virtual: 184 s",
+    ),
+    (
+        "bandwidth_model_matches_capture",
+        "MR-01 bandwidth model over a long capture: 159 s",
+    ),
+    (
+        "pool_queue_never_idles_out",
+        "QP row, long virtual run: 88 s",
+    ),
+    ("activity_independence_both_directions", "AI-05: 62 s"),
+    ("activity_independence_when_receiving", "AI-04: 60 s"),
+    (
+        "drain_after_offline_virtual",
+        "MR-02 drain after offline: 52 s",
+    ),
+    (
+        "ai_asymmetric_prepare_cost_does_not_move_emission",
+        "AI asymmetric cost: 24 s",
+    ),
+    ("prop_schedule_independent_of_activity", "property, 21 s"),
+];
+
+/// ADR-047 Amendment 4: the packages whose tests the second run executes for every mutant (`--test-package`).
+pub(crate) const MUTANT_HARNESS_TEST_PACKAGES: &[&str] =
+    &["secmp-client-core", "secmp-transport", "secmp-testkit"];
 
 /// ADR-047 Amendment 1 (2): the shards of the mutation gate in CI — the matrix job `mutants-shard` of `ci.yml` runs
 /// `cargo xtask step --strict mutants --shard K/8` for K = 0…7, and the job `mutants` (`step mutants-merge`) merges
@@ -1315,9 +1377,11 @@ pub(crate) const SYSTEMD_UNITS: &[&str] = &[];
 /// Maximum systemd exposure level (docs/05 §4, docs/06 §5 step 14).
 pub(crate) const SYSTEMD_MAX_EXPOSURE: f64 = 2.0;
 
-/// Line-coverage thresholds in percent (docs/06 §4): `secmp-crypto` and `secmp-proto` ≥ 90, every other
-/// shipped crate ≥ 80. `xtask` is build tooling and not measured.
-pub(crate) const COVERAGE_STRICT: &[&str] = &["secmp-crypto", "secmp-proto"];
+/// Line-coverage thresholds in percent (docs/06 §4): `secmp-crypto` and `secmp-proto` ≥ 90, since M6 also
+/// `secmp-client-core` (the constant-rate scheduler, OPEN-M6-23, TEST-SPEC-M6 COV-01); every other shipped crate ≥ 80,
+/// `secmp-transport` with its Arti glue counted (COV-02; an exclusion list needs the reviewer's written approval). `xtask`
+/// is build tooling and not measured.
+pub(crate) const COVERAGE_STRICT: &[&str] = &["secmp-crypto", "secmp-proto", "secmp-client-core"];
 pub(crate) const COVERAGE_STRICT_MIN: f64 = 90.0;
 pub(crate) const COVERAGE_MIN: f64 = 80.0;
 
@@ -1367,6 +1431,16 @@ pub(crate) const RELAY_TRACE_ALLOW: &[&str] = &[
 
 /// The workflow that holds the required checks of the `main-protection` ruleset (docs/06 §4).
 pub(crate) const REQUIRED_WORKFLOW: &str = ".github/workflows/ci.yml";
+
+/// OPEN-M6-06 A, ADR-051, TEST-SPEC-M6 X-06: the jobs that build `aws-lc-sys` for `x86_64-pc-windows-msvc` (natively or
+/// with cargo-xwin), as (workflow, job); each installs NASM and prints its version. Every workflow sets
+/// `AWS_LC_SYS_PREBUILT_NASM: "0"` in its top-level `env:` (`windows_builds_nasm_from_source`).
+pub(crate) const NASM_JOBS: &[(&str, &str)] = &[
+    (".github/workflows/ci.yml", "windows-native"),
+    (".github/workflows/ci.yml", "xwin-cross"),
+    (".github/workflows/ci-dispatch.yml", "dispatch-windows"),
+    (".github/workflows/ci-dispatch.yml", "dispatch-xwin"),
+];
 
 /// The job names of the required checks of the `main-protection` ruleset (M2 review C2): they exist only in
 /// [`REQUIRED_WORKFLOW`], which has no `workflow_dispatch` trigger, so no dispatch can add a `skipped` (= passing) check

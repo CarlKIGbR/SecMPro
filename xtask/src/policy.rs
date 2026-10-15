@@ -1524,6 +1524,210 @@ mod tests {
         out
     }
 
+    /// The ADR-051 Part 2 direct dependencies (normal and dev).
+    const ADR051_DIRECT: &[&str] = &[
+        "arti-client",
+        "rustls",
+        "tokio-rustls",
+        "tokio",
+        "aws-lc-rs",
+        "turmoil",
+    ];
+
+    fn repo_file(rel_path: &str) -> Result<String> {
+        Ok(std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("..")
+                .join(rel_path),
+        )?)
+    }
+
+    /// (name, version) of every `[[package]]` of `Cargo.lock`.
+    fn lock_packages() -> Result<BTreeSet<(String, String)>> {
+        Ok(crate::cooldown::parse_lock(&repo_file("Cargo.lock")?)
+            .into_iter()
+            .map(|p| (p.name, p.version))
+            .collect())
+    }
+
+    /// The `"…"` value of `key = "…"` inside an inline table line.
+    fn inline_value<'a>(line: &'a str, key: &str) -> Option<&'a str> {
+        let rest = line.split_once(&format!("{key} = \""))?.1;
+        rest.split_once('"').map(|(v, _)| v)
+    }
+
+    /// TEST-SPEC-M6 X-02 (OPEN-M6-04 A): every `deny.toml` `skip` entry names `crate@version` of a crate that is in
+    /// `Cargo.lock` in at least two versions, and a reason naming the direct dependency that pulls it (one of the
+    /// workspace members' direct dependencies); no `skip-tree`; no entry twice. `cargo deny check bans` is the gate.
+    #[test]
+    fn deny_duplicate_skips_are_justified() -> Result<()> {
+        let deny = repo_file("deny.toml")?;
+        assert!(
+            deny.contains("\nskip-tree = []\n"),
+            "skip-tree must stay empty"
+        );
+        let skip = deny
+            .split_once("\nskip = [\n")
+            .and_then(|(_, r)| r.split_once("\n]\n"))
+            .map(|(b, _)| b)
+            .ok_or_else(|| crate::util::Error("deny.toml: no multi-line skip list".to_owned()))?;
+        let lock = lock_packages()?;
+        let ws = Workspace::load()?;
+        let direct: BTreeSet<&str> = ws
+            .members
+            .iter()
+            .flat_map(|m| ws.edges.get(&m.id).into_iter().flatten())
+            .filter_map(|(id, _)| ws.all.get(id))
+            .map(|(name, _, _)| name.as_str())
+            .filter(|n| !n.starts_with("secmp-"))
+            .collect();
+        let mut seen = BTreeSet::new();
+        let mut n = 0_usize;
+        for line in skip.lines().filter(|l| l.trim_start().starts_with('{')) {
+            n = n.saturating_add(1);
+            let krate = inline_value(line, "crate").unwrap_or_default();
+            let reason = inline_value(line, "reason").unwrap_or_default();
+            let (name, version) = krate.split_once('@').unwrap_or_default();
+            assert!(seen.insert(krate.to_owned()), "twice: {krate}");
+            assert!(
+                lock.contains(&(name.to_owned(), version.to_owned())),
+                "{krate} not in Cargo.lock"
+            );
+            let versions = lock.iter().filter(|(l, _)| l == name).count();
+            assert!(
+                versions >= 2,
+                "{krate}: only {versions} version in Cargo.lock"
+            );
+            let pulled = reason
+                .strip_prefix("pulled by ")
+                .and_then(|r| r.split_once(" ("))
+                .map(|(by, _)| by)
+                .unwrap_or_default();
+            assert!(!pulled.is_empty(), "{krate}: reason {reason:?}");
+            for by in pulled.split(", ") {
+                assert!(
+                    direct.contains(by),
+                    "{krate}: {by} is not a direct dependency"
+                );
+            }
+        }
+        assert_eq!(n, 46);
+        Ok(())
+    }
+
+    /// TEST-SPEC-M6 X-03 (OPEN-M6-02): the ADR-051 direct dependencies and the `tor-*`/`arti-*` crates carry no
+    /// exemption — they are covered by the owner's records in `audits.toml` (trust or audit; read here, never written)
+    /// — except `turmoil` (dev-only, a tracked exemption per the ADR-051 vet route); every exemption that cites ADR-051
+    /// names one of the ADR-051 direct dependencies; `check_vet_closure` is tested by
+    /// `vet_closure_of_this_workspace_has_no_exemptions`.
+    #[test]
+    fn vet_records_for_m6_closure() -> Result<()> {
+        let config = repo_file("supply-chain/config.toml")?;
+        let audits = repo_file("supply-chain/audits.toml")?;
+        let notes: Vec<(String, String)> = {
+            let mut out = Vec::new();
+            let mut cur: Option<String> = None;
+            for line in config.lines() {
+                let t = line.trim();
+                if let Some(n) = t
+                    .strip_prefix("[[exemptions.")
+                    .and_then(|r| r.strip_suffix("]]"))
+                {
+                    cur = Some(n.trim_matches('"').to_owned());
+                } else if t.starts_with('[') {
+                    cur = None;
+                } else if let (Some(n), true) = (cur.as_ref(), t.starts_with("notes")) {
+                    out.push((n.clone(), t.to_owned()));
+                }
+            }
+            out
+        };
+        for e in vet_exemptions(&config) {
+            let n = e.name.as_str();
+            let owner = (ADR051_DIRECT.contains(&n) && n != "turmoil")
+                || n.starts_with("tor-")
+                || n.starts_with("arti-");
+            assert!(!owner, "exemption for {n} {}", e.version);
+        }
+        for krate in [
+            "arti-client",
+            "rustls",
+            "tokio-rustls",
+            "tokio",
+            "aws-lc-rs",
+        ] {
+            assert!(
+                audits.contains(&format!("[[trusted.{krate}]]"))
+                    || audits.contains(&format!("[[audits.{krate}]]")),
+                "{krate}: no owner record"
+            );
+        }
+        let mut cited = 0_usize;
+        for (name, note) in &notes {
+            if note.contains("ADR-051") && !ADR051_DIRECT.contains(&name.as_str()) {
+                cited = cited.saturating_add(1);
+                assert!(
+                    ADR051_DIRECT.iter().any(|d| note.contains(d)),
+                    "{name}: {note}"
+                );
+            }
+        }
+        assert!(cited > 100, "{cited} ADR-051 exemptions");
+        Ok(())
+    }
+
+    /// TEST-SPEC-M6 X-04 (OPEN-M6-05 B): the license allowlist is unchanged and the exceptions are exactly Slint's and
+    /// the two ADR-051 additions; `cargo deny check licenses` is the gate.
+    #[test]
+    fn licenses_cover_m6_closure() -> Result<()> {
+        let deny = repo_file("deny.toml")?;
+        let section = |start: &str| -> String {
+            deny.split_once(start)
+                .and_then(|(_, r)| r.split_once("\n]"))
+                .map(|(b, _)| b.to_owned())
+                .unwrap_or_default()
+        };
+        let allow: Vec<String> = section("\nallow = [\n")
+            .lines()
+            .filter_map(|l| inline_value(&format!("x = {}", l.trim()), "x").map(str::to_owned))
+            .collect();
+        assert_eq!(
+            allow,
+            [
+                "MIT",
+                "Apache-2.0",
+                "BSD-2-Clause",
+                "BSD-3-Clause",
+                "ISC",
+                "Zlib",
+                "Unicode-3.0",
+                "Unicode-DFS-2016",
+                "MPL-2.0"
+            ]
+        );
+        let exceptions: Vec<(String, String)> = section("\nexceptions = [\n")
+            .lines()
+            .filter(|l| l.trim_start().starts_with('{'))
+            .map(|l| {
+                let lic = l
+                    .split_once("allow = [\"")
+                    .and_then(|(_, r)| r.split_once('"'))
+                    .map(|(v, _)| v.to_owned())
+                    .unwrap_or_default();
+                (inline_value(l, "crate").unwrap_or_default().to_owned(), lic)
+            })
+            .collect();
+        assert_eq!(
+            exceptions,
+            [
+                ("slint".to_owned(), "GPL-3.0-only".to_owned()),
+                ("async_executors".to_owned(), "Unlicense".to_owned()),
+                ("notify".to_owned(), "CC0-1.0".to_owned()),
+            ]
+        );
+        Ok(())
+    }
+
     /// TEST-SPEC-M6 AD-12 (ADR-051 Part 1.2, docs/02 §3): the normal closure of `secmp-crypto` and `secmp-proto` on
     /// every target of `expect::VET_CLOSURE_TARGETS` contains none of `tokio`, `mio`, `socket2`, `futures-*`,
     /// `rustls*`, `arti-client`, `tor-*`, and their `src` has no `async` code; planted closures and sources are refused.

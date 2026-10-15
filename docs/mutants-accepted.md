@@ -1,6 +1,6 @@
 # Accepted mutation survivors
 
-`docs/06` §4: `cargo mutants` on `secmp-crypto`, `secmp-proto` and `secmp-relay` (ADR-047 Amendment 3) must leave **zero surviving mutants, or each
+`docs/06` §4: `cargo mutants` on `secmp-crypto`, `secmp-proto`, `secmp-relay`, `secmp-client-core` and `secmp-transport` (ADR-047 Amendments 3 and 4) must leave **zero surviving mutants, or each
 survivor documented here** with the reason it cannot be detected by a test. Every entry names the mutant as
 `cargo mutants` prints it in `missed.txt`/`timeout.txt` (`<path>:<line>:<column>: <description>`): its place as
 `` `<path>:<line>` `` (`` `<path>:<line>:<column>` `` where two survivors share a line) and its description in backticks,
@@ -25,3 +25,14 @@ digit conversion (equivalent to the five-digit extraction that follows) was remo
 M5 (review 2026-10-09, R-114/R-163, C-7): the two `secmp-relay` rows of Phase B (`server.rs:81`
 `<impl Stream for TcpStream>::set_poll` and `server.rs:86` `<impl Stream for TcpStream>::close`) were removed — not
 equivalent (`set_poll`'s read timeout carries the 30-s pre-HELLO bound); a loopback test kills both.
+
+## Excluded
+
+Files kept out of the mutation gate (`expect::MUTANT_EXCLUDE_FILES`), each with its reason. ADR-047 Amendment 4: only
+Kani-only files and files of pure Arti/rustls glue that need a live network may be listed; a glue file is named here in
+backticks with the reason before it enters the list.
+
+| File | Reason |
+|---|---|
+| `crates/secmp-proto/src/kani_proofs.rs` | Compiled only under `cfg(kani)`; no test build contains it; Kani runs it. |
+| `crates/secmp-relay/src/kani_proofs.rs` | As above. |

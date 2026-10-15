@@ -109,7 +109,7 @@ pub(crate) const COOLDOWN_EXCEPTIONS: &[(&str, &str, &str, &str)] = &[(
     "rustls",
     "0.23.46",
     "2026-10-21",
-    "RUSTSEC-2026-0349 (ADR-015 Am. 2)",
+    "RUSTSEC-2026-0346/-0347/-0348/-0349 (ADR-015 Am. 2)",
 )];
 
 /// Packages exposing the `kat` feature (docs/06 §5 step 5): external KATs, differential tests, vector checks; M3:

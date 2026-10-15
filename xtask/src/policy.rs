@@ -577,6 +577,16 @@ pub(crate) fn vet_exemptions(config: &str) -> Vec<VetExemption> {
     out
 }
 
+/// A `MAJOR.MINOR.PATCH` version, optionally followed by `-pre` and/or `+build` (the form of `Cargo.lock` versions).
+fn version_parses(v: &str) -> bool {
+    let core = v.split(['-', '+']).next().unwrap_or_default();
+    let parts: Vec<&str> = core.split('.').collect();
+    parts.len() == 3
+        && parts
+            .iter()
+            .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
+}
+
 /// The string value of `key = "value"` on a TOML line.
 fn quoted_value(line: &str, key: &str) -> Option<String> {
     let rest = line
@@ -627,7 +637,9 @@ pub(crate) fn vet_closure_findings(
         ));
     }
     for e in &entries {
-        if closure.contains(&(e.name.clone(), e.version.clone())) {
+        if !version_parses(&e.version) {
+            findings.push(format!("vet exemption without version: {}", e.name));
+        } else if closure.contains(&(e.name.clone(), e.version.clone())) {
             findings.push(format!(
                 "vet exemption inside the crypto/proto closure: {}@{}",
                 e.name, e.version
@@ -1467,7 +1479,10 @@ mod tests {
         "tokio*",
         "mio",
         "socket2",
+        "futures",
         "futures-*",
+        "async-std",
+        "smol",
         "rustls*",
         "arti-client",
         "tor-*",
@@ -1537,8 +1552,12 @@ mod tests {
             "arti-client",
             "tor-proto",
             "tokio-rustls",
+            "futures",
+            "async-std",
+            "smol",
             "zeroize",
             "subtle",
+            "smolstr",
         ]
         .iter()
         .map(|n| ((*n).to_owned(), "1.0.0".to_owned()))
@@ -1549,7 +1568,7 @@ mod tests {
                 .to_owned(),
         )];
         let found = sans_io_findings(&planted, &src);
-        assert_eq!(found.len(), 10, "{found:?}");
+        assert_eq!(found.len(), 13, "{found:?}");
         for bad in [
             "tokio 1",
             "mio",
@@ -1559,6 +1578,9 @@ mod tests {
             "arti-client",
             "tor-proto",
             "tokio-rustls",
+            "futures 1",
+            "async-std",
+            "smol 1",
             "x.rs:3",
             "x.rs:4",
         ] {
@@ -1745,6 +1767,30 @@ mod tests {
             findings,
             vec!["vet exemption inside the crypto/proto closure: const-oid@0.10.2".to_owned()]
         );
+    }
+
+    /// WEISUNG M6-B-1 §0b (a): an exemption entry without a `version`, or with one that does not parse, is a finding.
+    #[test]
+    fn vet_closure_exemption_without_version_is_a_finding() {
+        let empty = BTreeSet::new();
+        let missing = format!("[[exemptions.libm]]\ncriteria = \"safe-to-deploy\"\n{TRACKED}\n");
+        let bad = format!(
+            "[[exemptions.libm]]\nversion = \"0.2\"\ncriteria = \"safe-to-deploy\"\n{TRACKED}\n"
+        );
+        for config in [missing, bad] {
+            let (findings, n) = vet_closure_findings(&config, &empty);
+            assert_eq!(n, 1);
+            assert_eq!(
+                findings,
+                vec!["vet exemption without version: libm".to_owned()]
+            );
+        }
+        for good in ["1.1.6+spec-1.1.0", "0.10.0-rc.19", "0.2.16"] {
+            assert!(version_parses(good), "{good}");
+        }
+        for bad in ["", "1", "1.2", "1.2.x", "v1.2.3", "1..3"] {
+            assert!(!version_parses(bad), "{bad}");
+        }
     }
 
     /// ADR-036 Amendment 1: another version of a closure crate's name, outside the closure, may be exempted.

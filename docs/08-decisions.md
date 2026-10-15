@@ -215,7 +215,7 @@ Amended 2026-09-29 (reviewer, external review EXT-2): Rust and `ref/` agree *str
 **Alternatives.** Named human audits of ≈ 0.69 M lines (not credible); dropping vet for crypto crates (loses the change-tracking benefit); trusting whole organisations by name (over-broad — accounts, not organisations, are trusted).
 **Consequences.** `06` §3 amended; `supply-chain/audits.toml` gains trust entries and delta audits; the residual crates named in the probe (`rand_core`, `keccak`, `hax-lib`, `hax-lib-macros`, `typenum`) are covered by trust or delta audits in M1.
 **Status.** Accepted (reviewer, 2026-09-28).
-**Amendment 1 (2026-10-15, Reviewer; M6-B-0b).** The closure is a set of (name, version) packages as resolved by `cargo metadata`; another version of a closure crate's name that is reachable only outside the closure is not a closure member and may carry a tracked exemption naming its direct dependency.
+**Amendment 1 (2026-10-15, Reviewer; M6-B-0b).** The closure is a set of (name, version) packages as resolved by cargo (`cargo tree -e normal` on the vet-closure targets, as `zero_exemption_closure` does); another version of a closure crate's name that is reachable only outside the closure is not a closure member and may carry a tracked exemption naming its direct dependency.
 
 ### ADR-037 — M1 dependency set: primitive crates, OS bindings, test-only crates
 **Context.** M1 brings the first third-party code into the shipped graph (`secmp-crypto`, `secmp-sys-mem`) and the test-only crates for KATs, differential tests and vector generation. `docs/06` §3 requires an ADR line per direct dependency (why, alternatives, maintenance, audit status); ADR-036 defines the vetting; ADR-023 records the primitive versions.

@@ -240,8 +240,8 @@ fn driver_hanging_writer_does_not_delay_other_links() {
     );
 }
 
-/// Whether `link`'s first frame was complete before the work of the pass that submitted it: the pass (the last
-/// `poll_due` at or before the write's completion) reports a work end at or after that completion.
+/// Whether `link`'s first frame was complete before the work of the pass that submitted it: a pass that began at or
+/// before the write's completion reports a work end at or after it.
 fn wrote_before_work(steps: &[Step], link: LinkId) -> bool {
     let Some(done) = steps.iter().find_map(|s| match s {
         Step::Wrote(t, l, 4352) if *l == link => Some(*t),
@@ -249,19 +249,6 @@ fn wrote_before_work(steps: &[Step], link: LinkId) -> bool {
     }) else {
         return false;
     };
-    let Some(pass) = steps
-        .iter()
-        .filter_map(|s| match s {
-            Step::PollDue(t) if *t <= done => Some(*t),
-            _ => None,
-        })
-        .filter(|t| steps.contains(&Step::Wrote(*t, link, 4352)) || *t < done)
-        .last()
-    else {
-        return false;
-    };
-    let _ = pass;
-    // the work of the submitting pass: the first Work step whose start is the tick the frame was due at
     steps
         .iter()
         .any(|s| matches!(s, Step::Work(start, end) if *start <= done && *end >= done))
@@ -366,4 +353,177 @@ fn driver_pending_flush_later_tick_other_link() {
         log.events
     );
     assert_eq!(held_run.overruns, 0);
+}
+
+// ---- EXTB-4: connects ------------------------------------------------------------------------------------------------
+
+/// One Strict contact (two links, no phase) through a provider that answers every connect `answer_ms` late.
+async fn late_rig(answer_ms: u64, seed: u64) -> TokioRig<Holding> {
+    let setup = Setup::new();
+    let provider = Holding::new(setup.provider.clone(), usize::MAX, None, answer_ms);
+    let sc = Scenario {
+        mode: Mode::Strict,
+        contacts: vec![(10_000, 10_000)],
+        pool: false,
+        seed,
+    };
+    let x = TClient::with_provider(
+        &setup,
+        provider,
+        sc.mode,
+        no_phase(),
+        sc.seed,
+        Costs::default(),
+        0,
+    );
+    TokioRig::assemble(setup, x, &sc).await
+}
+
+/// The connections the client under test (not the set-up) reached the relay with.
+fn client_connects(rig: &TokioRig<Holding>) -> usize {
+    rig.setup
+        .provider
+        .connects()
+        .iter()
+        .filter(|(_, iso)| iso.0 < crate::m6_tokio::SETUP_ISO)
+        .count()
+}
+
+/// EXTB-4: connects outlive neither the driver's shutdown nor its drop. The provider answers 100 ms late; the driver runs
+/// 5 ms (both links' connects pending) and is shut down — explicitly (`Driver::shutdown`, which reports every pending
+/// connect as failed to the scheduler) or by dropping it. Afterwards no connection reaches the relay and nothing is
+/// written.
+#[test]
+fn driver_shutdown_aborts_pending_connects() {
+    for explicit in [true, false] {
+        runtime().block_on(async {
+            let mut rig = late_rig(100, 51).await;
+            let t0 = rig.setup.now();
+            rig.x.run_until(t0 + 5).await;
+            let pending: Vec<LinkId> = rig
+                .x
+                .driver
+                .log()
+                .unwrap()
+                .connects
+                .iter()
+                .filter_map(|(_, p, _)| match p {
+                    Purpose::Link(l) => Some(*l),
+                    Purpose::Control(_) => None,
+                })
+                .collect();
+            assert_eq!(pending.len(), 2, "both connects pending");
+            if explicit {
+                rig.x.driver.shutdown(&mut rig.x.sched).unwrap();
+                let log = rig.x.driver.log().unwrap();
+                for l in &pending {
+                    assert!(
+                        log.resolved.iter().any(|(_, r, up)| r == l && !up),
+                        "{l:?} resolved as failed"
+                    );
+                }
+                assert!(
+                    rig.x.sched.links().iter().all(|l| l.id.is_none()),
+                    "no link is left connecting"
+                );
+            } else {
+                let fresh = TClient::with_provider(
+                    &rig.setup,
+                    Holding::new(rig.setup.provider.clone(), usize::MAX, None, 0),
+                    Mode::Strict,
+                    no_phase(),
+                    51,
+                    Costs::default(),
+                    1,
+                );
+                drop(core::mem::replace(&mut rig.x.driver, fresh.driver));
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            assert_eq!(
+                client_connects(&rig),
+                0,
+                "explicit {explicit}: a connection after the shutdown"
+            );
+            assert!(
+                rig.setup
+                    .relay
+                    .units()
+                    .iter()
+                    .all(|u| u.isolation.0 >= crate::m6_tokio::SETUP_ISO),
+                "explicit {explicit}: bytes after the shutdown"
+            );
+        });
+    }
+}
+
+/// EXTB-4: a link closed while its connect is pending (a mode change tears it down) never starts I/O — whether its
+/// connect is aborted before the provider answers (at 5 ms), or its completion is already on its way (at 100 ms, the
+/// moment the provider answers): the completion is discarded before any stream task starts, the old link writes no
+/// frame, and the new link of the new mode comes up and writes.
+#[test]
+fn driver_close_reconnect_race_discards_old_completion() {
+    use crate::m6_sched_bal::NoCells;
+    for close_at in [5_u64, 100] {
+        runtime().block_on(async {
+            let mut rig = late_rig(100, 52).await;
+            let t0 = rig.setup.now();
+            rig.x.run_until(t0 + close_at).await;
+            let old: Vec<(LinkId, Isolation)> = rig
+                .x
+                .driver
+                .log()
+                .unwrap()
+                .connects
+                .iter()
+                .filter_map(|(_, p, iso)| match p {
+                    Purpose::Link(l) => Some((*l, *iso)),
+                    Purpose::Control(_) => None,
+                })
+                .collect();
+            let connecting = rig
+                .x
+                .sched
+                .links()
+                .iter()
+                .any(|l| l.id.is_some() && l.t_up.is_none());
+            let outs = rig
+                .x
+                .sched
+                .set_mode(t0 + close_at, Mode::Balanced, &mut NoCells)
+                .unwrap();
+            rig.x.driver.submit(&mut rig.x.sched, outs).unwrap();
+            rig.x.run_until(t0 + 60_000).await;
+            let log = rig.x.driver.log().unwrap();
+            for (l, iso) in &old {
+                let frames = rig
+                    .setup
+                    .relay
+                    .units()
+                    .iter()
+                    .filter(|u| u.isolation == *iso && u.len == 4352)
+                    .count();
+                assert_eq!(
+                    frames, 0,
+                    "close at {close_at}: old link {l:?} wrote frames"
+                );
+                assert!(
+                    !rig.x.driver.has_link_io(*l),
+                    "close at {close_at}: old link {l:?} has stream tasks"
+                );
+            }
+            if connecting {
+                assert!(
+                    old.iter()
+                        .all(|(l, _)| log.discarded.iter().any(|(_, d)| d == l)),
+                    "close at {close_at}: the old completions were discarded: {:?}",
+                    log.discarded
+                );
+            }
+            let new_up = log.events.iter().any(|(_, e)| match e {
+                LinkEvent::Up(l) => !old.iter().any(|(o, _)| o == l),
+                _ => false,
+            });
+            assert!(new_up, "close at {close_at}: the Balanced link came up");
+        });
+    }
 }

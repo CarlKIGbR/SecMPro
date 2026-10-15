@@ -24,7 +24,10 @@
 //! - (ii) after `work` the driver reports [`Scheduler::prepared_until`] with the time it read from the same clock right
 //!   then; a cell the worker delivers after its tick makes the core count an overrun.
 //! - (iii) every [`Output::Connect`] is resolved: the connect task reports its outcome through a guard that reports a
-//!   failure if the task ends any other way, and the driver calls `link_up` or `connect_failed`.
+//!   failure if the task ends any other way, and the driver calls `link_up` or `connect_failed`. The driver holds every
+//!   connect task by its link: an [`Output::Close`] of a connecting link aborts it, a completion for a link that is no
+//!   longer pending is discarded before any stream task starts, and [`Driver::shutdown`] (with `Drop` as the backstop)
+//!   aborts what is pending, so no connection outlives the driver (WEISUNG M6-B-5 EXTB-4).
 //! - (iv) the driver sleeps until [`Scheduler::next_deadline`], which includes the `FETCH`-lead deadline.
 //! - (v) time comes only from the [`Clock`] (`clock.rs` is the only module that reads one; AD-11).
 //!
@@ -571,6 +574,8 @@ pub struct RunLog {
     pub resolved: Vec<(u64, LinkId, bool)>,
     /// The local events of the scheduler.
     pub events: Vec<(u64, LinkEvent)>,
+    /// Connect completions discarded because their link was closed or superseded meanwhile: time, link.
+    pub discarded: Vec<(u64, LinkId)>,
     /// The steps of the loop.
     pub steps: Vec<Step>,
 }
@@ -645,6 +650,12 @@ pub struct Driver<P: Providers, D, R, H, W, C> {
     /// Events that arrived during a flush wait, for the next pass.
     stash: VecDeque<Event<P::Stream>>,
     links: BTreeMap<LinkId, LinkIo>,
+    /// The connect task of every link whose connection is being made.
+    connecting: BTreeMap<LinkId, JoinHandle<()>>,
+    /// The tasks of the control operations in progress.
+    controls: Vec<JoinHandle<()>>,
+    /// The worker task.
+    worker_task: Option<JoinHandle<()>>,
     deferred: Deferred,
     log: Option<RunLog>,
     connect_timeout: Duration,
@@ -695,6 +706,9 @@ where
             events_rx,
             stash: VecDeque::new(),
             links: BTreeMap::new(),
+            connecting: BTreeMap::new(),
+            controls: Vec::new(),
+            worker_task: None,
             deferred: Deferred::default(),
             log: None,
             connect_timeout: Duration::from_millis(CONNECT_TIMEOUT_MS),
@@ -736,14 +750,14 @@ where
         };
         let (tx, mut rx) = mpsc::unbounded_channel::<Job>();
         let events = self.events_tx.clone();
-        tokio::spawn(async move {
+        self.worker_task = Some(tokio::spawn(async move {
             while let Some(job) = rx.recv().await {
                 let done = worker.run(job).await;
                 if events.send(Event::Job(done)).is_err() {
                     break;
                 }
             }
-        });
+        }));
         self.jobs = Some(tx);
     }
 
@@ -910,6 +924,13 @@ where
                 sched.on_closed(link, now)?
             }
             Event::Connected(link, conn) => {
+                // closed (Output::Close), aborted or superseded meanwhile: the connection is dropped unused
+                if self.connecting.remove(&link).is_none() {
+                    if let Some(log) = &mut self.log {
+                        log.discarded.push((now, link));
+                    }
+                    return Ok(());
+                }
                 let up = matches!(conn, Conn::Up(..));
                 if let Some(log) = &mut self.log {
                     log.resolved.push((now, link, up));
@@ -917,8 +938,17 @@ where
                 match conn {
                     Conn::Up(up) => {
                         let (stream, chan) = *up;
-                        self.start_io(link, stream);
-                        sched.link_up(link, now, chan)?
+                        // the scheduler takes the link first; only a link it holds as up gets stream tasks
+                        let outs = sched.link_up(link, now, chan)?;
+                        if outs
+                            .iter()
+                            .any(|o| matches!(o, Output::Event(LinkEvent::Up(l)) if *l == link))
+                        {
+                            self.start_io(link, stream);
+                        } else if let Some(log) = &mut self.log {
+                            log.discarded.push((now, link));
+                        }
+                        outs
                     }
                     Conn::ClosedBefore => sched.connect_failed(link, now, true)?,
                     Conn::Failed => sched.connect_failed(link, now, false)?,
@@ -1005,6 +1035,9 @@ where
                     if let Some(io) = self.links.remove(&link) {
                         io.stop();
                     }
+                    if let Some(task) = self.connecting.remove(&link) {
+                        task.abort();
+                    }
                 }
                 Output::Control {
                     op,
@@ -1086,7 +1119,7 @@ where
         let clock = Arc::clone(&self.clock);
         let mut entropy = self.entropy.next();
         let limit = self.connect_timeout;
-        tokio::spawn(async move {
+        let task = tokio::spawn(async move {
             let attempt = async {
                 let relay_ref = directory.relay(relay)?;
                 let stream = providers
@@ -1119,6 +1152,9 @@ where
             };
             resolve.send(conn);
         });
+        if let Some(old) = self.connecting.insert(link, task) {
+            old.abort();
+        }
     }
 
     fn control(
@@ -1141,7 +1177,8 @@ where
         let clock = Arc::clone(&self.clock);
         let mut entropy = self.entropy.next();
         let limit = self.connect_timeout;
-        tokio::spawn(async move {
+        self.controls.retain(|t| !t.is_finished());
+        self.controls.push(tokio::spawn(async move {
             let attempt = async {
                 let relay_ref = directory.relay(relay).ok_or(false)?;
                 let stream = providers
@@ -1171,7 +1208,60 @@ where
                 .await
                 .unwrap_or(Err(false));
             let _ = events.send(Event::Control(op, result));
-        });
+        }));
+    }
+
+    /// Carry out outputs the host got from a scheduler call of its own (`set_mode`, `set_direct`, `remove_queue`,
+    /// `take_pool_queue`, …): connects, closes, events, control operations — as the loop does with its own.
+    ///
+    /// # Errors
+    /// [`SchedError::Unavailable`] without randomness (fail closed).
+    pub fn submit(&mut self, sched: &mut Scheduler, outs: Vec<Output>) -> Result<(), SchedError> {
+        let now = self.clock.mono_ms();
+        self.apply(sched, outs, now)
+    }
+
+    /// Whether `link` has stream tasks (reader and writer) running.
+    #[must_use]
+    pub fn has_link_io(&self, link: LinkId) -> bool {
+        self.links.contains_key(&link)
+    }
+
+    /// Shut the driver down: every pending connect is aborted and reported to the scheduler as failed, every link's
+    /// stream tasks stop and the scheduler hears the close, control operations and the worker stop; nothing the driver
+    /// started opens a connection or writes a byte afterwards (EXTB-4). The outputs the scheduler answers with are not
+    /// carried out.
+    ///
+    /// # Errors
+    /// [`SchedError::Unavailable`] without randomness (fail closed).
+    pub fn shutdown(&mut self, sched: &mut Scheduler) -> Result<(), SchedError> {
+        let now = self.clock.mono_ms();
+        for (link, task) in core::mem::take(&mut self.connecting) {
+            task.abort();
+            if let Some(log) = &mut self.log {
+                log.resolved.push((now, link, false));
+            }
+            let _ = sched.connect_failed(link, now, false)?;
+        }
+        for (link, io) in core::mem::take(&mut self.links) {
+            io.stop();
+            let _ = sched.on_closed(link, now)?;
+        }
+        self.stop_tasks();
+        Ok(())
+    }
+
+    /// Abort the control and worker tasks and drop what they or the links still sent.
+    fn stop_tasks(&mut self) {
+        for task in core::mem::take(&mut self.controls) {
+            task.abort();
+        }
+        if let Some(task) = self.worker_task.take() {
+            task.abort();
+        }
+        self.jobs = None;
+        self.stash.clear();
+        while self.events_rx.try_recv().is_ok() {}
     }
 
     /// Hand every cell the worker prepared but the core never took back to the source (a real message is re-queued):
@@ -1191,8 +1281,18 @@ where
 
 impl<P: Providers, D, R, H, W, C> Drop for Driver<P, D, R, H, W, C> {
     fn drop(&mut self) {
+        // the backstop of `shutdown`: nothing the driver started outlives it
+        for (_, task) in core::mem::take(&mut self.connecting) {
+            task.abort();
+        }
         for (_, io) in core::mem::take(&mut self.links) {
             io.stop();
+        }
+        for task in core::mem::take(&mut self.controls) {
+            task.abort();
+        }
+        if let Some(task) = self.worker_task.take() {
+            task.abort();
         }
     }
 }

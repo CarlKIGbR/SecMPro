@@ -279,7 +279,7 @@ fn curl_index(name: &str) -> std::result::Result<String, (Option<i32>, String)> 
 }
 
 /// The lockfiles checked: the workspace and, when present, the separate cargo-fuzz package.
-const LOCKFILES: &[&str] = &["Cargo.lock", "fuzz/Cargo.lock"];
+pub(crate) const LOCKFILES: &[&str] = &["Cargo.lock", "fuzz/Cargo.lock"];
 
 /// `cargo xtask cooldown`: check every registry package in the lockfiles.
 pub(crate) fn run(root: &Path) -> Result<String> {

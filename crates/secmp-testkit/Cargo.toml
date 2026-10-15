@@ -25,11 +25,17 @@ kat = ["harness"]
 [dependencies]
 secmp-crypto.workspace = true
 secmp-proto.workspace = true
-secmp-client-core.workspace = true
 secmp-relay.workspace = true
-secmp-transport.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
+
+# Not under Miri (`cargo miri` sets `--cfg=miri`, which Cargo's target cfg sees): `secmp-crypto` and `secmp-proto` reach
+# this crate as a dev-dependency for the KAT loaders only, and the transport closure (rustls → aws-lc-sys, Arti's
+# bundled SQLite) is C code that the portable Miri step cannot cross-build for aarch64 (linux-full of PR run
+# 38724110285). The harness, the only user of these two crates, is compiled out under Miri (`src/lib.rs`).
+[target.'cfg(not(miri))'.dependencies]
+secmp-client-core.workspace = true
+secmp-transport.workspace = true
 
 # Test-only. `chacha20poly1305`, `subtle` and `sha3` serve the constant-time bench (its isolating CAEAD targets and
 # its input stream), `secmp-proto` its TR targets (ADR-042); all are workspace crates of the vetted closure.
@@ -44,7 +50,7 @@ subtle.workspace = true
 # ADR-051 Part 2: network simulations (docs/06 §4), dev only.
 turmoil.workspace = true
 # `tokio::time::pause` for the virtual-time tests of the tokio driver (BRIEF M6-B §2.2): feature `test-util`, test
-# builds only — never in a shipped build (pending reviewer confirmation as an ADR-051 note, WEISUNG M6-B-2 P2).
+# builds only — never in a shipped build (ADR-051 Am. 3; policy test `tokio_test_util_is_dev_only`).
 tokio = { workspace = true, features = ["test-util"] }
 
 # The M5 harness tests (T-01…T-09, T-11, H-01…H-13, G-06): they need feature `kat` (the in-process relay, derandomised

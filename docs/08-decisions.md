@@ -758,7 +758,12 @@ feature of `secmp-testkit` only**, for `tokio::time::pause` (the virtual-time te
 `tokio_test_util_is_dev_only`, `cargo tree -e normal` on every vet-closure target). (2) `arti-client` is a
 `[target.'cfg(not(kani))'.dependencies]` entry of `secmp-transport`: under `cfg(kani)` its closure does not compile
 (`zerocopy` 0.8.60's own `cfg(kani)` code needs its `derive` feature), and the Kani harnesses verify only the sans-IO core;
-the dependency set, features, versions and `Cargo.lock` are unchanged.
+the dependency set, features, versions and `Cargo.lock` are unchanged. (3) Likewise `secmp-client-core` and
+`secmp-transport` are `[target.'cfg(not(miri))'.dependencies]` entries of `secmp-testkit`, and its `harness` module is
+compiled out under `cfg(miri)`: `secmp-crypto` and `secmp-proto` reach the testkit as a dev-dependency for the KAT
+loaders only, and the portable Miri step (aarch64) cannot cross-build the C code of the transport closure (`aws-lc-sys`;
+`linux-full` of PR run 38724110285); verified locally (`cargo +nightly-2026-09-21 miri test --target
+aarch64-unknown-linux-gnu -p secmp-crypto` builds no `aws-lc-sys`, `rustls`, Arti or SQLite crate).
 ---
 
 *Template for new entries:*

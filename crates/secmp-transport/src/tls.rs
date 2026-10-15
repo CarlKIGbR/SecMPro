@@ -14,7 +14,8 @@
 //!   crates (`futures-rustls`), so the version list is asserted, not assumed;
 //! - ALPN `secmp/1`, and a server that does not select it is refused before any SecMP byte;
 //! - no resumption, no session tickets, no 0-RTT;
-//! - no SNI: the relay serves one certificate, and the host name would only add metadata on the wire;
+//! - no SNI (reviewer decision, WEISUNG M6-B-4 §0.3): one certificate per relay, so a host name would only be metadata
+//!   on the wire;
 //! - the server certificate is accepted iff the chain is exactly one certificate whose `SubjectPublicKeyInfo` hashes
 //!   (SHA-256) to `RelayRef.direct.spki_sha256` ([`PinVerifier`], OPEN-M6-09 A). Names and dates are not consulted, and
 //!   no CA store is used (`docs/05` §7: "Web PKI is not used"). The `CertificateVerify` signature is still checked with

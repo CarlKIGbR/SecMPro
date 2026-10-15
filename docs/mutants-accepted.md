@@ -26,6 +26,13 @@ M5 (review 2026-10-09, R-114/R-163, C-7): the two `secmp-relay` rows of Phase B 
 `<impl Stream for TcpStream>::set_poll` and `server.rs:86` `<impl Stream for TcpStream>::close`) were removed — not
 equivalent (`set_poll`'s read timeout carries the 30-s pre-HELLO bound); a loopback test kills both.
 
+## Rules
+
+- **Timeouts (M6, WEISUNG M6-B-4 §0.2).** A mutant that times out at the second run's 900 s inside a loop of the
+  scheduler or the transport — `World::tick`, `poll_due`, `accept_ceiling`, `find` — counts as caught-by-hang: the
+  mutation makes the loop not terminate, which the test run detects. Every other timeout, and every missed mutant,
+  needs a killing test or a row in the table above with its reason.
+
 ## Excluded
 
 Files kept out of the mutation gate (`expect::MUTANT_EXCLUDE_FILES`), each with its reason. ADR-047 Amendment 4: only

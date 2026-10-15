@@ -1814,6 +1814,54 @@ mod tests {
         Ok(())
     }
 
+    /// The registry packages of the fuzz lock that the workspace lock does not carry at that version and source; only
+    /// the fuzz harness crates `libfuzzer-sys` and `arbitrary` may be fuzz-only.
+    fn fuzz_lock_findings(workspace: &str, fuzz: &str) -> Vec<String> {
+        let ws = crate::cooldown::parse_lock(workspace);
+        crate::cooldown::parse_lock(fuzz)
+            .into_iter()
+            .filter(|p| p.source.is_some())
+            .filter(|p| !["libfuzzer-sys", "arbitrary"].contains(&p.name.as_str()))
+            .filter(|p| !ws.contains(p))
+            .map(|p| {
+                format!(
+                    "fuzz/Cargo.lock: {} {} not in Cargo.lock",
+                    p.name, p.version
+                )
+            })
+            .collect()
+    }
+
+    /// WEISUNG M6-B-4 §0.4: `fuzz/Cargo.lock` resolves every package it shares with the workspace lock to a version (and
+    /// source) of the workspace lock — the vetted, cooldown-checked one; only `libfuzzer-sys` and `arbitrary` may be
+    /// fuzz-only — and the cooldown gate reads it. A planted divergent version and a planted fuzz-only crate are refused.
+    #[test]
+    fn fuzz_lock_matches_workspace_lock() -> Result<()> {
+        assert!(crate::cooldown::LOCKFILES.contains(&"fuzz/Cargo.lock"));
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let workspace = std::fs::read_to_string(root.join("Cargo.lock"))?;
+        let fuzz = std::fs::read_to_string(root.join("fuzz/Cargo.lock"))?;
+        assert_eq!(fuzz_lock_findings(&workspace, &fuzz), Vec::<String>::new());
+        // not vacuous: the fuzz lock carries the transport closure
+        let locked = crate::cooldown::parse_lock(&fuzz);
+        for name in ["rustls", "aws-lc-rs", "arti-client", "libfuzzer-sys"] {
+            assert!(locked.iter().any(|p| p.name == name), "{name}");
+        }
+        let src = "source = \"registry+https://github.com/rust-lang/crates.io-index\"";
+        let ws = format!("[[package]]\nname = \"serde\"\nversion = \"1.0.0\"\n{src}\n");
+        let fz = |name: &str, version: &str| {
+            format!("{ws}\n[[package]]\nname = \"{name}\"\nversion = \"{version}\"\n{src}\n")
+        };
+        assert!(fuzz_lock_findings(&ws, &fz("libfuzzer-sys", "0.4.13")).is_empty());
+        assert!(fuzz_lock_findings(&ws, &fz("serde", "1.0.0")).is_empty());
+        assert_eq!(
+            fuzz_lock_findings(&ws, &fz("serde", "1.0.1")),
+            vec!["fuzz/Cargo.lock: serde 1.0.1 not in Cargo.lock".to_owned()]
+        );
+        assert_eq!(fuzz_lock_findings(&ws, &fz("cc", "1.2.0")).len(), 1);
+        Ok(())
+    }
+
     /// TEST-SPEC-M6 AD-12 (ADR-051 Part 1.2, docs/02 §3): the normal closure of `secmp-crypto` and `secmp-proto` on
     /// every target of `expect::VET_CLOSURE_TARGETS` contains none of `tokio`, `mio`, `socket2`, `futures-*`,
     /// `rustls*`, `arti-client`, `tor-*`, and their `src` has no `async` code; planted closures and sources are refused.

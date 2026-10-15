@@ -336,9 +336,10 @@ None from `docs/03`/`docs/01`. Implementation choices the review should know (no
   - **Implementation choices for you to check:**
     - **TLS 1.3 only.** `ClientConfig::supports_version` is crate-private in rustls 0.23, so the provider keeps only the
       TLS 1.3 cipher suites. Every configuration built is asserted with `tls::is_tls13_hybrid_only`: all suites TLS 1.3,
-      one group, `X25519MLKEM768`. TLS-02 checks it on the wire.
-    - **No SNI** (`enable_sni = false`): the relay has one certificate, and the host name would only add metadata. The
-      spec does not say either way.
+      one group, `X25519MLKEM768`. TLS-02 checks it on the wire. Confirmed by the reviewer as the reading of "asserted
+      at config time" (WEISUNG M6-B-4 §0.6).
+    - **No SNI** (`enable_sni = false`; confirmed by the reviewer, WEISUNG M6-B-4 §0.3): one certificate per relay, so a
+      host name would only be metadata on the wire.
     - **`spki_of`** is our own total DER walker: definite lengths, minimal encoding, at most 3 length bytes. Fuzzed by
       FZ-02.
     - **Fixtures.** The test certificates are built in code (hand-written Ed25519 X.509 DER) in
@@ -383,31 +384,193 @@ Phase-B review).**
   is compiled only under `cfg(kani)` and was missing from `MUTANT_EXCLUDE_FILES`. 21 of the survivors are there (shard 1:
   10, e.g. `kani_proofs.rs:55:21: replace < with == in kani_balanced_rr_selects_due_or_ping`; shard 5: 11). It is now
   excluded like the `secmp-proto` and `secmp-relay` files and listed in `mutants-accepted.md` §Excluded.
-- **Cause 2, real survivors (reported only, no fix without your decision).** These are the misses outside `kani_proofs.rs`
-  plus five timeouts at the 900 s per-mutant timeout. They are the first mutation results for the two new packages.
-  - **Shard 1 misses (14):**
-    - `clock.rs:39 SystemClock::mono_ms -> 1`
-    - `control.rs:86 ControlOps::len -> 0`
-    - `core/mod.rs:951:35`, `:1282:58`, `:1294:57`, `:1675:44` (`== → !=`)
-    - `conversation.rs:345 take_seq -> 1`
-    - `conversation.rs:719 send_failed -> ()`
-    - `caps.rs:20:35 + → *`
-    - `channel.rs:329:20 delete !`
-    - `channel.rs:528:59 > → >=`
-    - `channel.rs:566:54 == → !=`
-    - `relay_queue.rs:363:28 || → &&`
-    - `session.rs:57:23` match guard → `true`
-    - `session.rs:244 close -> ()`
-  - **Shard 1 timeouts:** `timing.rs:40 accept_ceiling -> None`, `core/mod.rs:509:16 < → >` (`World::tick`),
-    `core/mod.rs:1591 control_failed -> Ok(())`.
-  - **Shard 5 misses (20 outside `kani_proofs.rs`)** are in `clock.rs`, `control.rs`, `core/mod.rs`, `conversation.rs`,
-    `pool.rs`, `channel.rs` and `relay_queue.rs`.
-  - **Shard 5 timeouts:** `core/mod.rs:1719:31 delete !` (`poll_due`), `core/mod.rs:1776 find -> Some(1)`.
-  - The `relay_queue.rs` lines refer to `1517781`. The P2 refactor moved that logic into `ops.rs`, so the next run reports
-    it there.
-  - The full lists are in the shard logs (artefacts `mutants-1-1`, `mutants-5-1`).
-  - Each survivor needs either a killing test or an entry in `mutants-accepted.md`, and the timeouts need a decision:
-    accept them as "caught by hang", or bound them in the tests. This is open item **OPEN-M6-B-2** for you.
+- **Cause 2, real survivors — OPEN-M6-B-2 (not in Phase B; WEISUNG M6-B-4 §0.2: the first item of session M6-C).** All misses and
+  timeouts outside `kani_proofs.rs`, per shard: 135 misses and 27 timeouts at the 900 s per-mutant timeout, 9 of
+  the timeouts caught-by-hang under `docs/mutants-accepted.md` §Rules (`World::tick`, `poll_due`, `accept_ceiling`,
+  `find`); every other entry needs a killing test or an accepted row. Each is named as cargo-mutants printed it at
+  `1517781` (`<crate> <path>:<line>:<col>`), then its line at `f68d923`: "same line", `:<n>` when it moved within the
+  file, `ops.rs:<n>` for the `relay_queue.rs` logic that the P2 refactor moved into `ops.rs` (mapped by hand where the
+  text changed: `relay_queue.rs` 256, 289, 340, 363, 395, 416). The first run's four misses (`secret.rs:59`,
+  `inv.rs:163:32`, `inv.rs:163:44`, `inv.rs:202`) are accepted rows. Source: the job logs of run 38724110285
+  (`gh run view --log --job <id>`).
+  - **Shard 0, misses (20):**
+    - `client-core clock.rs:39:9` `replace <impl Clock for SystemClock>::mono_ms -> u64 with 0` → @f68d923 same line
+    - `client-core timing.rs:18:9` `replace <impl core::fmt::Display for Unavailable>::fmt -> core::fmt::Result with Ok(Default::default())` → @f68d923 same line
+    - `client-core timing.rs:113:24` `replace ^ with & in TimingRng::next_u64` → @f68d923 same line
+    - `client-core scheduler/core/mod.rs:398:9` `replace World::release with ()` → @f68d923 same line
+    - `client-core scheduler/core/mod.rs:875:13` `delete match arm TransportError::Rate in World::queue_error` → @f68d923 same line
+    - `client-core scheduler/core/mod.rs:940:52` `replace == with != in World::outcome` → @f68d923 same line
+    - `client-core scheduler/core/mod.rs:1294:21` `delete ! in Scheduler::remove_queue` → @f68d923 same line
+    - `client-core scheduler/core/mod.rs:1675:21` `delete match arm State::Up(up) in Scheduler::work_pass` → @f68d923 same line
+    - `client-core scheduler/conversation.rs:259:9` `replace Conversation<O, P, S>::set_send_receipts with ()` → @f68d923 same line
+    - `client-core scheduler/conversation.rs:324:39` `delete ! in Conversation<O, P, S>::has_pending_real` → @f68d923 same line
+    - `client-core scheduler/conversation.rs:345:9` `replace Conversation<O, P, S>::take_seq -> u64 with 0` → @f68d923 same line
+    - `client-core scheduler/outbox.rs:302:9` `replace MemPersist::set_durable with ()` → @f68d923 same line
+    - `transport channel.rs:308:50` `replace > with >= in Channel::prepare` → @f68d923 same line
+    - `transport channel.rs:459:28` `replace match guard cell_id != 0 && evicted_is_plausible(cell_id, evicted) with true in Channel::finish` → @f68d923 same line
+    - `transport channel.rs:528:20` `replace match guard error.is_none() && !dummies && cell_id > previous with true in check_fetch` → @f68d923 same line
+    - `transport channel.rs:487:18` `replace match guard ok(&other) with true in single` → @f68d923 same line
+    - `transport relay_queue.rs:547:33` `replace || with && in <impl QueueTransport for RelayQueueTransport<S>>::get_link_data` → @f68d923 `ops.rs:268`
+    - `transport relay_queue.rs:427:40` `replace match guard cell_id > floor with true in <impl QueueTransport for RelayQueueTransport<S>>::fetch_multi` → @f68d923 `ops.rs:360`
+    - `transport relay_queue.rs:407:55` `replace match guard stage <= 1 with true in <impl QueueTransport for RelayQueueTransport<S>>::fetch_multi` → @f68d923 `ops.rs:340`
+    - `transport session.rs:240:9` `replace Session<S>::ensure_open -> Result<()> with Ok(())` → @f68d923 same line
+  - **Shard 0, timeouts (5):**
+    - `client-core timing.rs:56:5` `replace sample_round -> Option<u64> with None` → @f68d923 same line
+    - `client-core scheduler/control.rs:235:58` `replace == with != in ControlOps::failed` → @f68d923 same line
+    - `client-core scheduler/core/mod.rs:509:16` `replace < with == in World::tick` → @f68d923 same line — caught-by-hang (§Rules)
+    - `client-core scheduler/core/mod.rs:1388:44` `delete ! in Scheduler::sync_links` → @f68d923 same line
+    - `client-core scheduler/core/mod.rs:1793:9` `replace Scheduler::link_up -> Result<Vec<Output>, SchedError> with Ok(vec![])` → @f68d923 same line
+  - **Shard 1, misses (17):**
+    - `transport secret.rs:59:9` `replace <impl Drop for SecretBytes<N>>::drop with ()` → @f68d923 same line
+    - `transport inv.rs:163:32` `replace | with ^ in base64url_encode` → @f68d923 same line
+    - `client-core clock.rs:39:9` `replace <impl Clock for SystemClock>::mono_ms -> u64 with 1` → @f68d923 same line
+    - `client-core scheduler/control.rs:86:9` `replace ControlOps::len -> usize with 0` → @f68d923 same line
+    - `client-core scheduler/core/mod.rs:951:35` `replace == with != in World::outcome` → @f68d923 same line
+    - `client-core scheduler/core/mod.rs:1282:58` `replace == with != in Scheduler::remove_queue` → @f68d923 same line
+    - `client-core scheduler/core/mod.rs:1294:57` `replace == with != in Scheduler::remove_queue` → @f68d923 same line
+    - `client-core scheduler/core/mod.rs:1675:44` `replace == with != in Scheduler::work_pass` → @f68d923 same line
+    - `client-core scheduler/conversation.rs:345:9` `replace Conversation<O, P, S>::take_seq -> u64 with 1` → @f68d923 same line
+    - `client-core scheduler/conversation.rs:719:9` `replace <impl CellSource for Conversations<O, P, S>>::send_failed with ()` → @f68d923 same line
+    - `transport caps.rs:20:35` `replace + with *` → @f68d923 same line
+    - `transport channel.rs:329:20` `delete ! in Channel::prepare` → @f68d923 same line
+    - `transport channel.rs:528:59` `replace > with >= in check_fetch` → @f68d923 same line
+    - `transport channel.rs:566:54` `replace == with != in check_fetch_multi` → @f68d923 same line
+    - `transport relay_queue.rs:363:28` `replace || with && in <impl QueueTransport for RelayQueueTransport<S>>::fetch_multi` → @f68d923 `ops.rs:570`
+    - `transport session.rs:57:23` `replace match guard e.kind() == ErrorKind::Interrupted with true in read_exact` → @f68d923 same line
+    - `transport session.rs:244:9` `replace Session<S>::close with ()` → @f68d923 same line
+  - **Shard 1, timeouts (3):**
+    - `client-core timing.rs:40:5` `replace accept_ceiling -> Option<u64> with None` → @f68d923 same line — caught-by-hang (§Rules)
+    - `client-core scheduler/core/mod.rs:509:16` `replace < with > in World::tick` → @f68d923 same line — caught-by-hang (§Rules)
+    - `client-core scheduler/core/mod.rs:1591:9` `replace Scheduler::control_failed -> Result<(), SchedError> with Ok(())` → @f68d923 same line
+  - **Shard 2, misses (11):**
+    - `client-core scheduler/control.rs:86:9` `replace ControlOps::len -> usize with 1` → @f68d923 same line
+    - `client-core scheduler/core/mod.rs:214:9` `replace <impl Release for S>::release_discard with ()` → @f68d923 same line
+    - `client-core scheduler/core/mod.rs:712:39` `replace || with && in World::prepare_fetch` → @f68d923 same line
+    - `client-core scheduler/core/mod.rs:1283:53` `replace == with != in Scheduler::remove_queue` → @f68d923 same line
+    - `client-core scheduler/core/mod.rs:1295:28` `delete ! in Scheduler::remove_queue` → @f68d923 same line
+    - `client-core scheduler/core/mod.rs:1347:35` `delete ! in Scheduler::set_queue_period` → @f68d923 same line
+    - `client-core scheduler/conversation.rs:725:9` `replace <impl CellSource for Conversations<O, P, S>>::discard with ()` → @f68d923 same line
+    - `transport channel.rs:459:41` `replace && with || in Channel::finish` → @f68d923 same line
+    - `transport channel.rs:570:43` `replace == with != in check_fetch_multi` → @f68d923 same line
+    - `transport relay_queue.rs:363:42` `replace > with == in <impl QueueTransport for RelayQueueTransport<S>>::fetch_multi` → @f68d923 `ops.rs:570`
+    - `transport session.rs:57:23` `replace match guard e.kind() == ErrorKind::Interrupted with false in read_exact` → @f68d923 same line
+  - **Shard 2, timeouts (5):**
+    - `client-core timing.rs:40:5` `replace accept_ceiling -> Option<u64> with Some(0)` → @f68d923 same line — caught-by-hang (§Rules)
+    - `client-core scheduler/core/mod.rs:339:24` `replace && with || in World::effective_mode` → @f68d923 same line
+    - `client-core scheduler/core/mod.rs:377:9` `replace World::period_of -> Option<u64> with None` → @f68d923 same line
+    - `client-core scheduler/core/mod.rs:1120:9` `replace Scheduler::links -> Vec<LinkInfo> with vec![]` → @f68d923 same line
+    - `client-core scheduler/core/mod.rs:1696:31` `delete ! in Scheduler::work_pass` → @f68d923 same line
+  - **Shard 3, misses (13):**
+    - `client-core scheduler/control.rs:92:9` `replace ControlOps::is_empty -> bool with true` → @f68d923 same line
+    - `client-core scheduler/core/mod.rs:218:9` `replace <impl Release for S>::release_failed with ()` → @f68d923 same line
+    - `client-core scheduler/core/mod.rs:712:56` `replace > with == in World::prepare_fetch` → @f68d923 same line
+    - `client-core scheduler/core/mod.rs:1295:64` `replace == with != in Scheduler::remove_queue` → @f68d923 same line
+    - `client-core scheduler/conversation.rs:322:9` `delete ! in Conversation<O, P, S>::has_pending_real` → @f68d923 same line
+    - `client-core scheduler/conversation.rs:336:9` `replace Conversation<O, P, S>::durable -> &[u8] with Vec::leak(Vec::new())` → @f68d923 same line
+    - `client-core scheduler/outbox.rs:278:9` `replace MemPersist::commits -> u64 with 0` → @f68d923 same line
+    - `transport caps.rs:20:30` `replace + with *` → @f68d923 same line
+    - `transport channel.rs:289:9` `replace Channel::synced with ()` → @f68d923 same line
+    - `transport channel.rs:599:44` `replace > with >= in check_fetch_multi` → @f68d923 same line
+    - `transport relay_queue.rs:289:43` `replace && with || in <impl QueueTransport for RelayQueueTransport<S>>::create_queue` → @f68d923 `ops.rs:188`
+    - `transport relay_queue.rs:395:57` `replace == with != in <impl QueueTransport for RelayQueueTransport<S>>::fetch_multi` → @f68d923 `ops.rs:330`
+    - `transport session.rs:57:32` `replace == with != in read_exact` → @f68d923 same line
+  - **Shard 3, timeouts (3):**
+    - `client-core timing.rs:40:5` `replace accept_ceiling -> Option<u64> with Some(1)` → @f68d923 same line — caught-by-hang (§Rules)
+    - `client-core scheduler/core/mod.rs:377:9` `replace World::period_of -> Option<u64> with Some(0)` → @f68d923 same line
+    - `client-core scheduler/core/mod.rs:1776:9` `replace Scheduler::find -> Option<usize> with None` → @f68d923 same line — caught-by-hang (§Rules)
+  - **Shard 4, misses (14):**
+    - `transport inv.rs:202:34` `replace | with ^ in base64url_decode` → @f68d923 same line
+    - `client-core scheduler/control.rs:92:9` `replace ControlOps::is_empty -> bool with false` → @f68d923 same line
+    - `client-core scheduler/control.rs:209:63` `replace == with != in ControlOps::take_due` → @f68d923 same line
+    - `client-core scheduler/core/mod.rs:231:9` `replace <impl Release for Deferred>::release_discard with ()` → @f68d923 same line
+    - `client-core scheduler/core/mod.rs:1287:42` `replace != with == in Scheduler::remove_queue` → @f68d923 same line
+    - `client-core scheduler/core/mod.rs:1303:31` `delete ! in Scheduler::remove_queue` → @f68d923 same line
+    - `client-core scheduler/core/mod.rs:1615:32` `replace || with && in Scheduler::owner_status` → @f68d923 same line
+    - `client-core scheduler/conversation.rs:310:9` `replace Conversation<O, P, S>::discarded -> u64 with 1` → @f68d923 same line
+    - `client-core scheduler/conversation.rs:323:38` `replace > with == in Conversation<O, P, S>::has_pending_real` → @f68d923 same line
+    - `client-core scheduler/conversation.rs:336:9` `replace Conversation<O, P, S>::durable -> &[u8] with Vec::leak(vec![0])` → @f68d923 same line
+    - `client-core scheduler/outbox.rs:278:9` `replace MemPersist::commits -> u64 with 1` → @f68d923 same line
+    - `transport channel.rs:528:48` `replace && with || in check_fetch` → @f68d923 same line
+    - `transport relay_queue.rs:363:42` `replace > with >= in <impl QueueTransport for RelayQueueTransport<S>>::fetch_multi` → @f68d923 `ops.rs:570`
+    - `transport relay_queue.rs:427:48` `replace > with >= in <impl QueueTransport for RelayQueueTransport<S>>::fetch_multi` → @f68d923 `ops.rs:360`
+  - **Shard 4, timeouts (4):**
+    - `client-core timing.rs:47:5` `replace sample_with -> Option<u64> with None` → @f68d923 same line
+    - `client-core scheduler/core/mod.rs:377:9` `replace World::period_of -> Option<u64> with Some(1)` → @f68d923 same line
+    - `client-core scheduler/core/mod.rs:1122:25` `delete ! in Scheduler::links` → @f68d923 same line
+    - `client-core scheduler/core/mod.rs:1357:17` `replace == with != in Scheduler::sync_links` → @f68d923 same line
+  - **Shard 5, misses (21):**
+    - `client-core clock.rs:75:9` `replace ManualClock::set_ms with ()` → @f68d923 :107
+    - `client-core scheduler/control.rs:98:9` `replace ControlOps::kind_of -> Option<ControlKind> with None` → @f68d923 same line
+    - `client-core scheduler/control.rs:138:41` `replace == with != in ControlOps::schedule` → @f68d923 same line
+    - `client-core scheduler/control.rs:219:9` `replace ControlOps::done with ()` → @f68d923 same line
+    - `client-core scheduler/core/mod.rs:235:9` `replace <impl Release for Deferred>::release_failed with ()` → @f68d923 same line
+    - `client-core scheduler/core/mod.rs:512:35` `replace > with >= in World::tick` → @f68d923 same line
+    - `client-core scheduler/core/mod.rs:712:56` `replace > with >= in World::prepare_fetch` → @f68d923 same line
+    - `client-core scheduler/core/mod.rs:1160:9` `replace Scheduler::route_dead -> bool with true` → @f68d923 same line
+    - `client-core scheduler/core/mod.rs:997:9` `delete match arm TransportError::Closed in reason_of` → @f68d923 same line
+    - `client-core scheduler/core/mod.rs:1615:20` `replace || with && in Scheduler::owner_status` → @f68d923 same line
+    - `client-core scheduler/core/mod.rs:1914:59` `replace == with != in Scheduler::on_frame` → @f68d923 same line
+    - `client-core scheduler/conversation.rs:336:9` `replace Conversation<O, P, S>::durable -> &[u8] with Vec::leak(vec![1])` → @f68d923 same line
+    - `client-core scheduler/conversation.rs:682:9` `replace Conversations<O, P, S>::pending_real -> bool with true` → @f68d923 same line
+    - `client-core scheduler/pool.rs:53:23` `replace > with >= in QueuePool::missing` → @f68d923 same line
+    - `client-core scheduler/pool.rs:114:9` `replace QueuePool::is_spare -> bool with true` → @f68d923 same line
+    - `transport channel.rs:308:36` `replace || with && in Channel::prepare` → @f68d923 same line
+    - `transport channel.rs:180:5` `replace fits -> bool with true` → @f68d923 same line
+    - `transport channel.rs:486:9` `delete match arm ResponseCmd::Err(_) in single` → @f68d923 same line
+    - `transport channel.rs:566:48` `replace match guard stage == 0 with true in check_fetch_multi` → @f68d923 same line
+    - `transport channel.rs:528:36` `replace && with || in check_fetch` → @f68d923 same line
+    - `transport relay_queue.rs:340:28` `replace || with && in <impl QueueTransport for RelayQueueTransport<S>>::fetch` → @f68d923 `ops.rs:293`
+  - **Shard 5, timeouts (2):**
+    - `client-core scheduler/core/mod.rs:1719:31` `delete ! in Scheduler::poll_due` → @f68d923 same line — caught-by-hang (§Rules)
+    - `client-core scheduler/core/mod.rs:1776:9` `replace Scheduler::find -> Option<usize> with Some(1)` → @f68d923 same line — caught-by-hang (§Rules)
+  - **Shard 6, misses (16):**
+    - `client-core scheduler/core/mod.rs:297:5` `replace counters_now -> [u64; 4] with [0; 4]` → @f68d923 same line
+    - `client-core scheduler/core/mod.rs:393:9` `replace World::relay_has_recv -> bool with false` → @f68d923 same line
+    - `client-core scheduler/core/mod.rs:1292:52` `replace == with != in Scheduler::remove_queue` → @f68d923 same line
+    - `client-core scheduler/conversation.rs:249:9` `replace Conversation<O, P, S>::set_send_queue with ()` → @f68d923 same line
+    - `client-core scheduler/conversation.rs:323:38` `replace > with >= in Conversation<O, P, S>::has_pending_real` → @f68d923 same line
+    - `client-core scheduler/conversation.rs:340:9` `replace Conversation<O, P, S>::ts -> u64 with 0` → @f68d923 same line
+    - `transport caps.rs:43:9` `replace <impl core::fmt::Debug for QueueRef>::fmt -> core::fmt::Result with Ok(Default::default())` → @f68d923 same line
+    - `client-core scheduler/pool.rs:114:9` `replace QueuePool::is_spare -> bool with false` → @f68d923 same line
+    - `transport channel.rs:308:50` `replace > with == in Channel::prepare` → @f68d923 same line
+    - `transport channel.rs:485:35` `replace match guard fits(code, allowed) with true in single` → @f68d923 same line
+    - `transport channel.rs:520:18` `replace match guard at == 0 with true in check_fetch` → @f68d923 same line
+    - `transport channel.rs:566:48` `replace match guard stage == 0 with false in check_fetch_multi` → @f68d923 same line
+    - `transport channel.rs:594:58` `replace == with != in check_fetch_multi` → @f68d923 same line
+    - `transport relay_queue.rs:256:39` `replace match guard fits(code, &[]) with true in RelayQueueTransport<S>::first_cellr` → @f68d923 `ops.rs:252`
+    - `transport relay_queue.rs:391:52` `replace match guard stage == 0 with true in <impl QueueTransport for RelayQueueTransport<S>>::fetch_multi` → @f68d923 `ops.rs:326`
+    - `transport relay_queue.rs:416:55` `replace == with != in <impl QueueTransport for RelayQueueTransport<S>>::fetch_multi` → @f68d923 `ops.rs:349`
+  - **Shard 6, timeouts (3):**
+    - `client-core scheduler/core/mod.rs:379:62` `replace == with != in World::period_of` → @f68d923 same line
+    - `client-core scheduler/core/mod.rs:460:62` `replace == with != in World::start_connect` → @f68d923 same line
+    - `client-core scheduler/core/mod.rs:1777:47` `replace == with != in Scheduler::find` → @f68d923 same line — caught-by-hang (§Rules)
+  - **Shard 7, misses (23):**
+    - `transport inv.rs:163:44` `replace | with ^ in base64url_encode` → @f68d923 same line
+    - `client-core timing.rs:113:24` `replace ^ with | in TimingRng::next_u64` → @f68d923 same line
+    - `client-core scheduler/control.rs:98:39` `replace == with != in ControlOps::kind_of` → @f68d923 same line
+    - `client-core scheduler/core/mod.rs:297:5` `replace counters_now -> [u64; 4] with [1; 4]` → @f68d923 same line
+    - `client-core scheduler/core/mod.rs:393:43` `replace == with != in World::relay_has_recv` → @f68d923 same line
+    - `client-core scheduler/core/mod.rs:521:43` `replace || with && in World::tick` → @f68d923 same line
+    - `client-core scheduler/core/mod.rs:802:9` `replace World::begin_work with ()` → @f68d923 same line
+    - `client-core scheduler/core/mod.rs:932:44` `replace == with != in World::outcome` → @f68d923 same line
+    - `client-core scheduler/core/mod.rs:872:13` `delete match arm TransportError::Auth in World::queue_error` → @f68d923 same line
+    - `client-core scheduler/core/mod.rs:1160:55` `replace && with || in Scheduler::route_dead` → @f68d923 same line
+    - `client-core scheduler/core/mod.rs:1295:25` `replace && with || in Scheduler::remove_queue` → @f68d923 same line
+    - `client-core scheduler/core/mod.rs:1438:35` `replace && with || in Scheduler::change_mode` → @f68d923 same line
+    - `client-core scheduler/core/mod.rs:1573:9` `replace Scheduler::control_done with ()` → @f68d923 same line
+    - `client-core scheduler/conversation.rs:254:9` `replace Conversation<O, P, S>::set_recv_queue with ()` → @f68d923 same line
+    - `client-core scheduler/conversation.rs:322:9` `replace Conversation<O, P, S>::has_pending_real -> bool with true` → @f68d923 same line
+    - `client-core scheduler/conversation.rs:324:36` `replace && with || in Conversation<O, P, S>::has_pending_real` → @f68d923 same line
+    - `client-core scheduler/conversation.rs:340:9` `replace Conversation<O, P, S>::ts -> u64 with 1` → @f68d923 same line
+    - `client-core scheduler/conversation.rs:462:33` `delete ! in Conversation<O, P, S>::restore` → @f68d923 same line
+    - `client-core scheduler/conversation.rs:549:9` `replace Conversation<O, P, S>::on_failed with ()` → @f68d923 same line
+    - `transport channel.rs:580:51` `replace match guard stage <= 1 with true in check_fetch_multi` → @f68d923 same line
+    - `transport channel.rs:599:36` `replace match guard cell_id > floor with true in check_fetch_multi` → @f68d923 same line
+    - `transport relay_queue.rs:351:74` `replace > with >= in <impl QueueTransport for RelayQueueTransport<S>>::fetch` → @f68d923 `ops.rs:304`
+    - `transport relay_queue.rs:422:62` `replace == with != in <impl QueueTransport for RelayQueueTransport<S>>::fetch_multi` → @f68d923 `ops.rs:355`
+  - **Shard 7, timeouts (2):**
+    - `client-core timing.rs:47:10` `replace >= with < in sample_with` → @f68d923 same line
+    - `client-core scheduler/control.rs:235:9` `replace ControlOps::failed -> Result<(), Unavailable> with Ok(())` → @f68d923 same line
 
 **EXT2-1: design proposal, not implemented (WEISUNG M6-B-2 §1.5).** The goal is for `linux-full` to fail when a delegated
 required job (`ct`, `mutants`, `proverif-hx`) is not green.
@@ -514,16 +677,25 @@ required job (`ct`, `mutants`, `proverif-hx`) is not green.
   | linux-full | failure (miri, see below) | 201 min |
   | mutants-shard 0…7 (ADR-047 Am. 4) | all failed, undocumented survivors (§6) | see below |
 
-  Mutants shard times: 0: 204 min, 1: 160 min, 2: 200 min, 4: 203 min, 5: 192 min, 6: 196 min, 7: 199 min. Shard 3 was
-  still running at 210 min when I read. Of each shard, the first run took about 45–50 min and the second (harness) run
-  about 2 h 30 min.
+  Mutants shard times (ADR-047 Am. 4; final, shard 3 from the reviewer, completed 14:37:55 UTC):
+
+  | Shard | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 |
+  |---|---|---|---|---|---|---|---|---|
+  | min | 204 | 160 | 200 | 218 | 203 | 192 | 196 | 199 |
+
+  Of each shard, the first run took about 45–50 min and the second (harness) run about 2 h 30 min.
+  - **Risk: shard time margin.** Shard 3 left 22 min to the 240-min job budget. Candidates if it shrinks further: fewer
+    harness tests per mutant, or 12 shards. No change now (WEISUNG M6-B-4 §0.5).
   - **`linux-full` step times:** kat 3032 s, fuzz 4083 s, coverage 2779 s, nextest 598 s.
   - **The miri failure:** `cargo miri test --target aarch64-unknown-linux-gnu --package secmp-crypto` (portable run)
     fails with `error occurred in cc-rs: failed to find tool "aarch64-linux-gnu-gcc"`.
     - The chain is `secmp-crypto` → dev-dependency `secmp-testkit` → `secmp-transport` → `rustls` → `aws-lc-rs` →
       `aws-lc-sys`, a C build. The testkit's normal dependencies reach it since ADR-051.
-    - It is not fixed here; please decide. The options are an aarch64 cross C compiler in the job, or keeping the TLS crates
-      out of the Miri build like the Kani fix (if `cargo miri` sets `cfg(miri)` for Cargo's target cfg).
+    - **Fixed (WEISUNG M6-B-4 §0.1):** `secmp-client-core` and `secmp-transport` are `cfg(not(miri))` dependencies of
+      `secmp-testkit`, and its `harness` module is compiled out under Miri (ADR-051 Am. 3 (3)). `cargo miri` honours the
+      cfg in Cargo's target tables: `env CARGO_TARGET_DIR=target/miri-portable cargo +nightly-2026-09-21 miri test
+      --locked --target aarch64-unknown-linux-gnu -p secmp-crypto --no-run` builds, and the Miri target dir has no
+      `aws-lc-sys`, `rustls`, `tor-*`, `arti-*` or `libsqlite3-sys` build. No cross C compiler is installed.
 - **`windows-native` with `WINDOWS_SKIP_TESTS` (WEISUNG M6-B-3 §1), expected job time.** In run 38724110285 the steps
   before the harness binary took about 38 min (setup 9 min, clippy 3 min, nextest build and tests 18 min, the `kat` builds).
   The harness binary took 2361 s, almost all of it in the skipped simulations; the longest remaining harness tests take

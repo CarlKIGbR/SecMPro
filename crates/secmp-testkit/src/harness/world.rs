@@ -111,7 +111,7 @@ impl Client {
 }
 
 /// The relay's key material of a scenario: fixed seeds, so a restarted relay is the same relay (spec §8.2).
-struct RelaySeeds {
+pub(crate) struct RelaySeeds {
     sig: Vec<u8>,
     dh: Vec<u8>,
     kem: Vec<u8>,
@@ -119,7 +119,7 @@ struct RelaySeeds {
 }
 
 impl RelaySeeds {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let mut s = VectorStream::new("harness-relay-keys", 0);
         Self {
             sig: s.take(32),
@@ -127,6 +127,11 @@ impl RelaySeeds {
             kem: s.take(64),
             access: s.take(32),
         }
+    }
+
+    /// The relay's access key (the token credential, spec §9.6).
+    pub(crate) fn access(&self) -> AccessKey {
+        SecretBytes::from_slice(&self.access).unwrap()
     }
 
     fn keys(&self) -> RelayKeys {
@@ -175,7 +180,11 @@ impl Harness {
         }
     }
 
-    fn start_relay(seeds: &RelaySeeds, config: &HarnessConfig, now: Now) -> &'static Relay {
+    pub(crate) fn start_relay(
+        seeds: &RelaySeeds,
+        config: &HarnessConfig,
+        now: Now,
+    ) -> &'static Relay {
         let ring = KeyRing::new(vec![(
             seeds.keys(),
             now.unix_secs.saturating_add(KEY_VALIDITY_SECS),

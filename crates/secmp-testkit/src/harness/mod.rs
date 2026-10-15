@@ -13,19 +13,25 @@ mod clock;
 mod convo;
 mod driver;
 mod entropy;
+mod mem;
 mod stream;
+mod tokio_driver;
 mod verify;
 mod world;
 
 pub use clock::Clock;
 pub use convo::{Polled, Side, ratchet_pair, text_content, text_of};
 pub use driver::{
-    Audit, CONTROL_SLOT_BASE, Conv, Convs, Dir, Gate, GateState, Inspect, LinkMaterial, Material,
-    Options, SimClient, Trace, TraceEntry, VirtualDriver,
+    Audit, CONTROL_SLOT_BASE, Conv, Convs, Costs, Dir, Gate, GateState, Inspect, LinkMaterial,
+    Material, Options, SimClient, Trace, TraceEntry, VirtualDriver,
 };
 pub use entropy::EntropyPool;
+pub use mem::{Chunking, MemProvider, MemRelay, Unit};
 pub use stream::{
     CLIENT_HANDSHAKE_BYTES, Capture, FRAME, HarnessStream, RELAY_HANDSHAKE_BYTES, Split,
+};
+pub use tokio_driver::{
+    ControlMaterial, CostedWorker, JobRecord, TestControl, TestDirectory, TestHandshakes,
 };
 pub use verify::{FrameCheck, verify_frames};
 pub use world::{Client, ClientId, Harness, HarnessConfig, START_UNIX};

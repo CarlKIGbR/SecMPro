@@ -43,6 +43,9 @@ chacha20poly1305.workspace = true
 subtle.workspace = true
 # ADR-051 Part 2: network simulations (docs/06 §4), dev only.
 turmoil.workspace = true
+# `tokio::time::pause` for the virtual-time tests of the tokio driver (BRIEF M6-B §2.2): feature `test-util`, test
+# builds only — never in a shipped build (pending reviewer confirmation as an ADR-051 note, WEISUNG M6-B-2 P2).
+tokio = { workspace = true, features = ["test-util"] }
 
 # The M5 harness tests (T-01…T-09, T-11, H-01…H-13, G-06): they need feature `kat` (the in-process relay, derandomised
 # entropy).

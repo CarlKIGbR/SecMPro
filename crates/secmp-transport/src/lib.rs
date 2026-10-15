@@ -16,6 +16,11 @@
 //! and the opaque capabilities [`RecvCap`] / [`SendCap`]. The trait is synchronous: no async runtime is in the
 //! vetted closure yet (ADR-049), and the in-process streams of the test harness need none. The Tor and TLS stream
 //! providers and an asynchronous driver are M6.
+//!
+//! **M6.** [`driver`]: the asynchronous [`driver::AsyncQueueTransport`] (spec §12.1), [`driver::AsyncSession`] and
+//! [`driver::AsyncRelayQueueTransport`] over `tokio::io` streams, and the [`driver::StreamProvider`] (ADR-051). The
+//! commands of both transports are one sans-IO implementation (`ops`), so the synchronous and asynchronous paths build
+//! the same bytes and judge responses the same way.
 #![forbid(unsafe_code)]
 #![deny(
     clippy::arithmetic_side_effects,
@@ -28,8 +33,10 @@
 
 pub mod caps;
 pub mod channel;
+pub mod driver;
 pub mod error;
 pub mod evicted;
+mod ops;
 pub mod relay_queue;
 pub mod session;
 

@@ -57,3 +57,9 @@ PR. Runtimes: nextest on the 32-core container, 2026-10-15 (harness) and the CI 
 | `drain_after_offline_virtual` (MR-02) | `secmp-testkit` harness | 52 s | `MUTANT_HARNESS_SKIP_TESTS` |
 | `ai_asymmetric_prepare_cost_does_not_move_emission` (AI) | `secmp-testkit` harness | 24 s | `MUTANT_HARNESS_SKIP_TESTS` |
 | `prop_schedule_independent_of_activity` (property) | `secmp-testkit` harness | 21 s | `MUTANT_HARNESS_SKIP_TESTS` |
+| `ai01_strict_tokio` (AI-01, tokio driver) | `secmp-testkit` harness | 49 s | `MUTANT_HARNESS_SKIP_TESTS` |
+| `ai02_balanced_tokio` (AI-02, tokio driver) | `secmp-testkit` harness | 31 s | `MUTANT_HARNESS_SKIP_TESTS` |
+| `ai03_lowbw_tokio` (AI-03, tokio driver) | `secmp-testkit` harness | 25 s | `MUTANT_HARNESS_SKIP_TESTS` |
+| `ai04_when_receiving_tokio` (AI-04, tokio driver) | `secmp-testkit` harness | 40 s | `MUTANT_HARNESS_SKIP_TESTS` |
+| `ai05_timing_draws_tokio` (AI-05, tokio driver) | `secmp-testkit` harness | 39 s | `MUTANT_HARNESS_SKIP_TESTS` |
+| `ai06_both_directions_tokio` (AI-06, tokio driver) | `secmp-testkit` harness | 43 s | `MUTANT_HARNESS_SKIP_TESTS` |

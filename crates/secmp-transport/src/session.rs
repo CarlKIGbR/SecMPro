@@ -15,9 +15,9 @@ use std::io::{ErrorKind, Read, Write};
 
 use secmp_proto::Encode;
 use secmp_proto::codec::unpad;
+use secmp_proto::link;
 use secmp_proto::link::client::{self};
 use secmp_proto::link::ids::AccessKey;
-use secmp_proto::link::{self, Link};
 use secmp_proto::sizes::{FRAME_LEN, FRAME_PLAINTEXT_LEN, HASH_LEN, HS2_LEN, RELAYINFO_LEN};
 use secmp_proto::tr::Entropy;
 use secmp_proto::wire::Id;
@@ -212,7 +212,7 @@ impl<S: Read + Write> Session<S> {
     /// The link state: its keys, counters and handshake trace (tests only, feature `harness`).
     #[cfg(feature = "harness")]
     #[must_use]
-    pub const fn link_kat(&self) -> &Link {
+    pub const fn link_kat(&self) -> &link::Link {
         self.chan.link_kat()
     }
 

@@ -48,6 +48,38 @@ impl Clock for SystemClock {
     }
 }
 
+/// The clock of the tokio runtime (ADR-051 Part 1.1): monotonic milliseconds since the clock was made, read from
+/// `tokio::time::Instant` — which a paused runtime (`tokio::time::pause`) advances virtually, so the driver's timers
+/// and its clock agree in tests and in production alike. The Unix time is `unix_origin` + the elapsed whole seconds.
+/// One of the two clock reads of the client besides [`SystemClock`] (TEST-SPEC-M6 AD-11).
+#[derive(Clone, Copy, Debug)]
+pub struct TokioClock {
+    origin: tokio::time::Instant,
+    unix_origin: u64,
+}
+
+impl TokioClock {
+    /// A clock at monotonic time 0 now, with Unix time `unix_origin`. Must be called inside a tokio runtime.
+    #[must_use]
+    pub fn new(unix_origin: u64) -> Self {
+        Self {
+            origin: tokio::time::Instant::now(),
+            unix_origin,
+        }
+    }
+}
+
+impl Clock for TokioClock {
+    fn mono_ms(&self) -> u64 {
+        u64::try_from(self.origin.elapsed().as_millis()).unwrap_or(u64::MAX)
+    }
+
+    fn unix_secs(&self) -> u64 {
+        self.unix_origin
+            .saturating_add(self.mono_ms().checked_div(1000).unwrap_or(0))
+    }
+}
+
 /// A virtual clock: time moves only when told to. Clones share the time.
 #[derive(Clone)]
 pub struct ManualClock {

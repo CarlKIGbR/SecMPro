@@ -23,4 +23,6 @@ pub mod conversation;
 pub mod outbox;
 pub mod params;
 pub mod pool;
+#[cfg(not(kani))]
+pub mod run;
 pub mod types;

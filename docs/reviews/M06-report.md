@@ -91,6 +91,23 @@ normal_dependencies_match_adr_allowlist (G-04, table = ADR-051)}`.
 and `core/pure.rs` contain no `tokio` token. It also asserts that `tokio.workspace = true` is the only tokio line of the
 `secmp-client-core` manifest.
 
+### Phase B P2 — what was built (§2.2)
+
+- `crates/secmp-transport`:
+  - `ops.rs`: the commands of spec §12.1 as sans-IO exchanges, shared by both transports. `RelayQueueTransport` now runs
+    on it.
+  - `driver/`: `AsyncQueueTransport` (the seven operations, `&mut self`, `impl Future + Send`), `AsyncSession`,
+    `AsyncRelayQueueTransport`, `StreamProvider`, `Isolation`, `ProviderStream`.
+- `crates/secmp-client-core`:
+  - `clock::TokioClock`.
+  - `scheduler/run.rs`: `Driver` (the tokio driver), `Providers`/`Only`, `Directory`, `HandshakeEntropy`/`OsHandshakes`,
+    `ControlRunner`/`ControlEffect`, `Worker`/`BlockingWorker`/`Job`/`JobDone`, `RunLog`/`Step`/`Purpose`,
+    `CONNECT_TIMEOUT_MS`.
+- `crates/secmp-testkit`:
+  - `harness::mem`: `MemRelay` and `MemProvider`, the in-process relay behind `tokio::io::duplex` with unit-level timing.
+  - `harness::tokio_driver`: `TestDirectory`, `TestHandshakes`, `TestControl`, `CostedWorker`.
+  - Tests: `m6_tokio`, `m6_tokio_ai`, `m6_driver`.
+
 ## 3. Evidence per acceptance criterion (Phase A rows)
 
 Commands, all at code head `7a67339` (WEISUNG M6-10, fix round 2): `cargo xtask ci-fast --strict`
@@ -255,6 +272,35 @@ None from `docs/03`/`docs/01`. Implementation choices the review should know (no
   - `docs/mutants-accepted.md` gains §Excluded. No Arti glue file exists yet; the Tor glue file comes in §2.5.
 - **COV-01/COV-02:** `gates::tests::coverage_strict_includes_client_core` and `gates::tests::coverage_transport_80_with_tor_glue`.
   `COVERAGE_STRICT` now includes `secmp-client-core`. The transport ignore pattern is unchanged, with no exclusion list.
+- **P2, §2.2 driver.** All tests are in `crates/secmp-testkit/tests/harness/` and run with feature `harness` on a paused
+  tokio clock.
+  - AD-07: `m6_driver::async_session_equals_sync_session`. `HELLO`, `HS1`, link keys, the first three frames each way and
+    the whole capture are equal.
+  - AD-08: `m6_driver::async_transport_matches_m5_outcomes`. T-01…T-06 give the same outcome log and the same bytes in both
+    directions.
+  - AD-09: `m6_driver::queue_transport_async_signature`.
+  - AD-10: `m6_driver::stream_provider_impls`, so far for `MemProvider` and a fault-injecting wrapper. Tor, TLS and Turmoil
+    providers join the row in P3/P4 and Phase C.
+  - AD-11: `m6_driver::driver_has_no_wall_clock`.
+  - P-05: `m6_driver::prop_pipelined_matching_any_chunking`, 16 cases by default.
+  - **Driver obligations, one test each:**
+    - (i) `m6_driver::driver_flushes_due_writes_before_work`
+    - (ii) `m6_driver::driver_reports_late_preparation_as_overrun`
+    - (iii) `m6_driver::driver_resolves_every_connect`: a failing provider, a provider that never answers (connect timeout,
+      resolved at exactly +30 s), and a relay that closes before `RELAYINFO`.
+    - (iv) `m6_driver::driver_wakes_at_the_fetch_lead`
+    - (v) = AD-11 `driver_has_no_wall_clock`
+    - (vi) `m6_driver::driver_slow_work_does_not_delay_other_links`: a 900 ms / 400 ms worker against a free one gives
+      max |Δt| = 0 C2R and R2C, and more than 10 frames left while the worker was busy.
+  - Further driver tests: `blocking_worker_runs_jobs_on_the_blocking_pool`, `only_refuses_the_other_transport`,
+    `driver_releases_unused_cells`, `m6_tokio::tokio_driver_smoke_strict_one_hour`.
+  - **AI-01…AI-06 over the tokio driver** (`m6_tokio_ai::ai01_strict_tokio` … `ai06_both_directions_tokio`), with costs
+    20/1/5 ms. AI-01…03 ran 16 traces × 6 h each, AI-04/05/06 ran 8/4/8. Max |Δt| = 0 ms C2R and R2C in every trace; the
+    timing draws and the one-shot links are equal.
+  - Coverage at P2 (local `cargo xtask step coverage`, 444 s): `secmp-client-core` 2722/2961 = 91.9 % (floor 90 %),
+    `secmp-transport` 1362/1544 = 88.2 % (floor 80 %), `secmp-testkit` 93.0 %.
+  - The core is untouched: `git diff b5aa27b -- crates/secmp-client-core/src/scheduler/core` is empty. The virtual-driver
+    AI-01…AI-06 run unchanged.
 
 ## 6. Dependencies added or bumped
 
@@ -298,6 +344,42 @@ required job (`ct`, `mutants`, `proverif-hx`) is not green.
 - M6-15: job `kani` was killed by a runner shutdown (exit 143) four times on this branch, 6–22 min into `cargo kani --package secmp-proto -Z stubbing` (runs 38064677208, 38132969656, 38549219665 attempts 1–2), never on main; container run M6-13b verifies 7/7 + 30/30 without error; xtask now logs a runner resource trace every 20 s when `SECMP_RUNNER_TRACE` is set, enabled on the `kani` job.
 - M6-16: root cause of the four `kani` runner shutdowns — the Phase-A `[profile.dev.package.*] opt-level = 3` overrides (added for the scheduler tests) also applied to the Kani build; `secmp-proto` at opt-level 3 drove CBMC to 15.5 GB RSS on the 16 GB runner (run 38606378025, runner-trace 17:43:22–17:44:02Z, swap full, exit 143). Overrides moved to `[profile.test.package.*]`; the Kani build is back to opt-level 0 as on main.
 - Reviewer question (M6-16): `cargo miri` builds with the `test` profile; whether the opt-level 3 override lowers Miri's MIR-level UB detection is to be verified before the Phase A report is final.
+- **P2: how the tokio driver keeps obligations (i)/(vi) with an unchanged core** (`secmp-client-core/src/scheduler/run.rs`,
+  module docs).
+  - **The constraint.** `Scheduler::work` calls the cell source synchronously, and `poll_due` needs the same `&mut
+    Scheduler`. If the expensive cell-source work ran inside `work`, it would block the next due write of every other link.
+  - **The design.** `work` sees a non-blocking facade (`Deferred`), and a serial `Worker` runs the cell-source calls off
+    the loop.
+    - A cell the core asks for comes back as "not ready" until the worker has built it. The core prepares the link again
+      at its next pass; that is existing core behaviour.
+    - A fetched cell is "not committed" until the worker has committed it, so no acknowledgement is sent (persist before
+      ack). The cell is fetched again and found committed then.
+    - The notifications are queued to the worker in order.
+  - **Consequence to judge: receive throughput.** At most one newly committed cell per `FETCH` / `FETCH_MULTI` response,
+    instead of up to F = 4. The core stops at the first uncommitted cell. Each received cell also waits one more fetch
+    period before its ack. This affects every cell alike, real or dummy, so it carries no activity information.
+  - **Fixing the throughput needs a core API change**, for example a deferred-commit outcome of `deliver`. That touches
+    `scheduler/core`, which is a STOP; it is a question in §8.
+  - **What still runs on the loop:** the sealing and signing inside `work` (`Channel::prepare`, one frame per slot). It is
+    sub-millisecond and independent of activity, and costs 0 virtual time in the tests.
+  - **Connect timeout:** `CONNECT_TIMEOUT_MS` = 120 s, for connects and for whole control operations. A provider that
+    never answers fails the attempt instead of leaving the link in `Connecting`.
+- **P2: tokio feature `test-util`, a dev-dependency of `secmp-testkit` only.** `tokio::time::pause`, which the brief asks
+  for, needs it. It is not in the ADR-051 feature table, and no shipped build contains it. Please confirm it or name the
+  alternative (a virtual timer of our own) — see §8.
+- **P2: AD-09 wording vs. the lock.** TEST-SPEC AD-09 says "no `async-trait` crate in `Cargo.lock`". `async-trait` 0.1.92
+  is in the lock through `arti-client` 0.46.0 and its `tor-*` crates. The test asserts instead that no workspace crate
+  depends on it, and that every dependent in the lock is a non-`secmp-*` crate.
+- **P2: test budget.**
+  - The tokio AI repeats run 16 traces for AI-01…03 (the virtual originals run 64). At 64 they would have roughly doubled
+    the AI cost in `kat` and `coverage`, and `linux-full` had about 36 min of margin.
+  - The local `kat` step grew from 252 s to 320 s.
+  - The six repeats are in `MUTANT_HARNESS_SKIP_TESTS` and `docs/mutants-accepted.md` §Skipped with their runtimes
+    (25–49 s).
+- **P2: two shared refactors.** The commands of the synchronous and asynchronous transports are now one sans-IO
+  implementation (`secmp-transport/src/ops.rs`); the M5 harness suite ran 138/138 unchanged after the refactor.
+  `Session::link_kat` and `AsyncSession::link_kat` name `link::Link` fully qualified. The old import was unused without
+  feature `harness`.
 - **MIRI-01 (Phase B, report only).** Command: `cargo +nightly-2026-09-21 miri test -p secmp-proto -v 2>&1 | grep -oE
   "(-C opt-level=[0-9]|-Zmir-opt-level=[0-9]|-Zmiri[a-z-]*)" | sort -u`. The pinned nightly is needed because Miri is not
   on the stable toolchain. Output:
@@ -446,6 +528,18 @@ zeroize_derive 1.5.0, libm 0.2.16 and const-oid 0.10.2.
 - `const-oid` 0.10.2: `cargo vet inspect const-oid 0.10.2` (7987 lines, publisher `tarcieri`). Note: "consider cargo vet
   trust const-oid tarcieri".
 - `arti-client`, `tor-*`, `tokio`, `tokio-rustls`: the routes in the ADR-051 table.
+
+### Phase B P2 — questions for the reviewer (no work blocked)
+
+1. **tokio `test-util`.** The paused-clock tests need this feature, and it is not in the ADR-051 table. It is enabled as a
+   dev-dependency of `secmp-testkit` only. Accept it as an ADR-051 note, or ask for a virtual timer of our own instead?
+2. **Receive throughput of the facade** (§7). Accept at most one newly committed cell per `FETCH`? The alternative is a
+   core API change (a deferred-commit `deliver` outcome) in a later phase. That touches `scheduler/core/**`, which the
+   brief makes a STOP.
+3. **AD-09 wording.** `async-trait` is in `Cargo.lock` through Arti 0.46.0. Is the test as built (no workspace crate
+   depends on it) the intended reading?
+4. **Trace counts of the tokio AI repeats** (16 / 16 / 16 / 8 / 4 / 8) and the six new entries of
+   `MUTANT_HARNESS_SKIP_TESTS`: accept, or raise AI-01…03 to 64?
 
 ## 9. Checklist before requesting review
 

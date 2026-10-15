@@ -504,6 +504,31 @@ pub(crate) const MUTANT_HARNESS_SKIP_TESTS: &[(&str, &str)] = &[
         "AI asymmetric cost: 24 s",
     ),
     ("prop_schedule_independent_of_activity", "property, 21 s"),
+    // the tokio repeats of AI-01…AI-06 (M6 Phase B P2), nextest on the 32-core container, all six in parallel
+    (
+        "ai01_strict_tokio",
+        "AI-01 over the tokio driver, 16 traces x 6 h: 49 s",
+    ),
+    (
+        "ai02_balanced_tokio",
+        "AI-02 over the tokio driver, 16 traces x 6 h: 31 s",
+    ),
+    (
+        "ai03_lowbw_tokio",
+        "AI-03 over the tokio driver, 16 traces x 6 h: 25 s",
+    ),
+    (
+        "ai04_when_receiving_tokio",
+        "AI-04 over the tokio driver, 8 traces x 6 h: 40 s",
+    ),
+    (
+        "ai05_timing_draws_tokio",
+        "AI-05 over the tokio driver, 4 traces x 6 h: 39 s",
+    ),
+    (
+        "ai06_both_directions_tokio",
+        "AI-06 over the tokio driver, 8 traces x 6 h: 43 s",
+    ),
 ];
 
 /// ADR-047 Amendment 4: the packages whose tests the second run executes for every mutant (`--test-package`).

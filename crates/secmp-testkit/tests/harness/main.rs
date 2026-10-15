@@ -11,6 +11,7 @@ mod m6_activity;
 mod m6_channel;
 mod m6_common;
 mod m6_control;
+mod m6_driver;
 mod m6_followups;
 mod m6_measure;
 mod m6_outbox;
@@ -21,6 +22,8 @@ mod m6_sched;
 mod m6_sched_bal;
 mod m6_sched_io;
 mod m6_sched_life;
+mod m6_tokio;
+mod m6_tokio_ai;
 mod scenarios;
 mod scripted;
 #[path = "../../../secmp-proto/tests/common/seed.rs"]

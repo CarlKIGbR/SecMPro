@@ -3480,6 +3480,8 @@ dependencies = [
 name = "secmp-relay"
 version = "0.0.0"
 dependencies = [
+ "aws-lc-rs",
+ "rustls",
  "secmp-crypto",
  "secmp-proto",
 ]

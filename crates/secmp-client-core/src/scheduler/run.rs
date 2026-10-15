@@ -39,8 +39,8 @@ use secmp_proto::tr::{Entropy, OsEntropy};
 use secmp_proto::wire::cell::Cell;
 use secmp_proto::wire::inv::RelayRef;
 use secmp_transport::driver::{
-    AsyncConnectOutcome, AsyncRelayQueueTransport, AsyncSession, Isolation, ProviderStream,
-    StreamProvider,
+    AsyncConnectOutcome, AsyncRelayQueueTransport, AsyncSession, EitherStream, Isolation,
+    ProviderStream, StreamProvider,
 };
 use secmp_transport::{Channel, Error as TransportError, RecvCap};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -108,6 +108,48 @@ impl<P: StreamProvider + 'static> Providers for Only<P> {
             return Err(TransportError::Closed);
         }
         self.provider.connect(relay, isolation).await
+    }
+}
+
+/// The two providers of a client: Tor and direct TLS, selected by the transport the scheduler names — which is the
+/// user's explicit direct-mode setting and nothing else (`Scheduler::set_direct`; spec §5.3, §8.1; TEST-SPEC-M6 TOR-05,
+/// TOR-06). Direct mode for a relay whose `RelayRef` has no direct endpoint is
+/// [`TransportError::NoDirectEndpoint`] with no attempt over any transport; a Tor failure is returned as it is and
+/// never reaches the direct provider (CLAUDE.md §1.5).
+pub struct Selected<T, D> {
+    tor: T,
+    direct: D,
+}
+
+impl<T, D> Selected<T, D> {
+    /// The Tor provider `tor` and the direct provider `direct`.
+    pub const fn new(tor: T, direct: D) -> Self {
+        Self { tor, direct }
+    }
+}
+
+impl<T: StreamProvider + 'static, D: StreamProvider + 'static> Providers for Selected<T, D> {
+    type Stream = EitherStream<T::Stream, D::Stream>;
+
+    async fn connect(
+        &self,
+        transport: Transport,
+        relay: &RelayRef,
+        isolation: Isolation,
+    ) -> Result<Self::Stream, TransportError> {
+        match transport {
+            Transport::Tor => self
+                .tor
+                .connect(relay, isolation)
+                .await
+                .map(EitherStream::Left),
+            Transport::Direct if relay.direct.is_none() => Err(TransportError::NoDirectEndpoint),
+            Transport::Direct => self
+                .direct
+                .connect(relay, isolation)
+                .await
+                .map(EitherStream::Right),
+        }
     }
 }
 

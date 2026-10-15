@@ -252,3 +252,10 @@ path = "fuzz_targets/tls_pin_verifier.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "relayref_onion_to_hsid"
+path = "fuzz_targets/relayref_onion_to_hsid.rs"
+test = false
+doc = false
+bench = false

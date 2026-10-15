@@ -106,3 +106,58 @@ pub trait StreamProvider: Send + Sync {
         isolation: Isolation,
     ) -> impl Future<Output = Result<Self::Stream>> + Send;
 }
+
+/// A stream of one of two providers (the user's explicit choice between Tor and direct mode, TEST-SPEC-M6 TOR-06):
+/// every call goes to the stream it holds.
+pub enum EitherStream<A, B> {
+    /// The first provider's stream.
+    Left(A),
+    /// The second provider's stream.
+    Right(B),
+}
+
+impl<A: AsyncRead + Unpin, B: AsyncRead + Unpin> AsyncRead for EitherStream<A, B> {
+    fn poll_read(
+        self: core::pin::Pin<&mut Self>,
+        cx: &mut core::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> core::task::Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            Self::Left(s) => core::pin::Pin::new(s).poll_read(cx, buf),
+            Self::Right(s) => core::pin::Pin::new(s).poll_read(cx, buf),
+        }
+    }
+}
+
+impl<A: AsyncWrite + Unpin, B: AsyncWrite + Unpin> AsyncWrite for EitherStream<A, B> {
+    fn poll_write(
+        self: core::pin::Pin<&mut Self>,
+        cx: &mut core::task::Context<'_>,
+        buf: &[u8],
+    ) -> core::task::Poll<std::io::Result<usize>> {
+        match self.get_mut() {
+            Self::Left(s) => core::pin::Pin::new(s).poll_write(cx, buf),
+            Self::Right(s) => core::pin::Pin::new(s).poll_write(cx, buf),
+        }
+    }
+
+    fn poll_flush(
+        self: core::pin::Pin<&mut Self>,
+        cx: &mut core::task::Context<'_>,
+    ) -> core::task::Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            Self::Left(s) => core::pin::Pin::new(s).poll_flush(cx),
+            Self::Right(s) => core::pin::Pin::new(s).poll_flush(cx),
+        }
+    }
+
+    fn poll_shutdown(
+        self: core::pin::Pin<&mut Self>,
+        cx: &mut core::task::Context<'_>,
+    ) -> core::task::Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            Self::Left(s) => core::pin::Pin::new(s).poll_shutdown(cx),
+            Self::Right(s) => core::pin::Pin::new(s).poll_shutdown(cx),
+        }
+    }
+}

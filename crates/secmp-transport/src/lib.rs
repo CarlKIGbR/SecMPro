@@ -20,7 +20,8 @@
 //! **M6.** [`driver`]: the asynchronous [`driver::AsyncQueueTransport`] (spec §12.1), [`driver::AsyncSession`] and
 //! [`driver::AsyncRelayQueueTransport`] over `tokio::io` streams, and the [`driver::StreamProvider`] (ADR-051). The
 //! commands of both transports are one sans-IO implementation (`ops`), so the synchronous and asynchronous paths build
-//! the same bytes and judge responses the same way.
+//! the same bytes and judge responses the same way. The stream providers: [`tls`] (direct mode) and `tor` (Arti; not in
+//! the Kani build).
 #![forbid(unsafe_code)]
 #![deny(
     clippy::arithmetic_side_effects,
@@ -40,6 +41,9 @@ mod ops;
 pub mod relay_queue;
 pub mod session;
 pub mod tls;
+// Not under Kani: `arti-client` is not in the Kani build (Cargo.toml).
+#[cfg(not(kani))]
+pub mod tor;
 
 pub use caps::{CAP_LEN, QueueRef, RecvCap, SendCap};
 pub use channel::{Channel, Command, Completed, Outcome, Prepared};

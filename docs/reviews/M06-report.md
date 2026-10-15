@@ -420,10 +420,100 @@ None from `docs/03`/`docs/01`. Implementation choices the review should know (no
       tears its links down with `Overrun` every 1–3 min. The same happens with the M5 limits 900 s / 86 400 s, so this is
       scheduler or virtual-driver behaviour. The core is untouched in Phase B (STOP); I report it and do not change it.
 
+- **P4b, §2.5 Tor (`secmp-transport::tor`, not in the Kani build like `arti-client`).**
+  - **What.**
+    - `tor/mod.rs`, the testable part, generic over `TorBackend`:
+      - `config(profile)`: Arti state in `<profile>/tor/state` and cache in `<profile>/tor/cache` via
+        `TorClientConfigBuilder::from_directories`; `fs-mistrust` on, with `ignore_environment()` so that
+        `ARTI_FS_DISABLE_PERMISSION_CHECKS` cannot switch it off.
+      - `TorProvider<B>`: a fresh `IsolationToken::new()` for every `connect`, so per link and per reconnect; nothing
+        is cached.
+      - `TorState`: the gate. `observe(Status)` maps Arti's status to `TorEvent::{Progress(%), Ready, Blocked}`, each
+        change once. Links are admitted only while ready and not blocked: before that `Error::TorNotReady`, after a
+        bootstrap failure `Error::TorUnavailable`. A backend failure is `TorUnavailable`.
+      - `onion_host`, `target`: own RFC 4648 base32 of the 35 onion bytes + `.onion`, checked with Arti's `TorAddr`
+        parser to be a host and not an IP address; port `ONION_PORT` = 443.
+    - `tor/arti.rs`, the glue: client creation (`BootstrapBehavior::Manual`, `create_unbootstrapped`), the bootstrap
+      task, the status follower (polls `bootstrap_status()` every 250 ms; `futures` is not a dependency, so the event
+      stream is not used), and `connect_with_prefs` with the token. It is in `MUTANT_EXCLUDE_FILES`, with its reason in
+      `docs/mutants-accepted.md` §Excluded.
+    - `driver::EitherStream` and `secmp_client_core::scheduler::run::Selected<T, D>`: the `Providers` implementation
+      that takes the transport the scheduler names, which comes from the user's direct setting alone
+      (`Scheduler::set_direct`). Tor goes to Tor only. Direct without `RelayRef.direct` is `NoDirectEndpoint` with no
+      attempt anywhere. No fallback path exists.
+    - New errors `TorNotReady`, `TorUnavailable`.
+  - **Tests:**
+    - `secmp-transport` `tests/tor/main.rs` (recording backend, no network):
+      - TOR-01 `tor_config_uses_profile_state_dir`: the cache dir from `dir_mgr_config()`, the state dir in the built
+        config, no `${ARTI…}` default; on Unix a 0777 directory fails `fs_mistrust().check_directory`; the source never
+        disables the check.
+      - TOR-02 `tor_isolation_token_per_link`: 5 links plus 1 reconnect give 6 distinct tokens.
+      - TOR-03 `tor_no_link_before_bootstrap`: at 0 / 50 / 99 % `TorNotReady` and 0 backend calls; ready gives 1
+        stream; blocked again gives no new link.
+      - TOR-04 `tor_bootstrap_events_mapped`.
+      - TOR-08 `onion_address_from_relayref`.
+      - TOR-09 `onion_connect_uses_port_443`.
+      - Extra: `tor_connect_failure_is_tor_unavailable`.
+    - `secmp-testkit` harness `m6_tor`:
+      - TOR-05 `tor_never_falls_back_to_direct`: with a direct endpoint present, a failed bootstrap, Tor not ready, and
+        3 failed onion connects; the counting direct provider is called 0 times.
+      - TOR-06 `transport_selection_follows_user_choice_only`: the transport is taken from a real `Scheduler` with
+        `set_direct(false|true)`; (off, present) → Tor; (on, present) → TLS; (on, absent) → `NoDirectEndpoint` with 0
+        calls to either provider.
+    - TOR-07 `xtask` `policy::tests::arti_feature_set_is_pinned`: `cargo metadata` resolved features; `arti-client` ⊇
+      {`onion-service-client`, `rustls`, `tokio`, `static-sqlite`}, none of `hs-pow-full`, `compression`, `native-tls`,
+      `experimental`, `experimental-api`, `__is_experimental`; `tor-hsclient` has no `hs-pow-full`.
+    - FZ-03 `fuzz/fuzz_targets/relayref_onion_to_hsid.rs`:
+      - `Onion::from_bytes` is total and accepts exactly 35 bytes with version 3 and the checksum (checked
+        independently in the harness);
+      - for every accepted address, `tor::target` gives port 443, a 62-character host, and a base32 round trip to the
+        input;
+      - the harness also builds the valid address of the input's first 32 bytes.
+      - 5 tracked seeds, `max_len` 36. Local smoke 120 s: 6 079 855 runs, cov 356, ft 777, no failure.
+  - **Deviation, needs your decision (TOR-08, FZ-03).** Both rows ask that "Arti's `HsId` parse re-encodes to the same
+    35 B".
+    - In `arti-client` 0.46, `HsId` is public only with feature `experimental-api`, which TOR-07 forbids.
+      `tor-hscrypto` is not a dependency of the workspace: adding it, even dev-only, is beyond the ADR-051 table.
+    - **Substitute, implemented:**
+      - TOR-08 runs Arti's own HsId check through `connect`: an unbootstrapped client (`BootstrapBehavior::Manual`; no
+        network, `connect_with_prefs` parses the onion address before it waits for bootstrap) answers
+        `ErrorKind::BootstrapRequired` for our host and `InvalidStreamTarget` for a broken checksum.
+      - FZ-03 checks the independent checksum, the base32 round trip and Arti's `TorAddr` parse.
+    - **Alternatives:** (a) accept the substitute; (b) a dev-only `tor-hscrypto =0.46.0`, which is already in
+      `Cargo.lock` as a transitive crate: an ADR-051 amendment plus vet; (c) wait for a stable `HsId` in Arti.
+  - **⚙ TOR-10 / X-10:** the owner request is below. `secmp-testkit/examples/tor_smoke.rs` is the Tor smoke check: Arti
+    in a fresh profile, `READY`, then HELLO…HS2 and `PING` to a given `RelayRef`. No test runs it.
+
 ## 6. Dependencies added or bumped
 
 Phase A: none (workspace path crates only: `secmp-client-core` → `secmp-transport`; `secmp-testkit` → `secmp-client-core`).
 Phase B commit 1: see §2, "Phase B commit 1 — dependencies as landed".
+
+**Owner requests (BRIEF M6-B §2.6; asked 2026-10-15; not waited for).** Infrastructure that is not available stays
+under "Blocked — owner infrastructure" until it runs (TEST-SPEC conventions, ⚙ non-availability path).
+- **X-10 `win_test_runs_transport_suites`: the Windows transport suites.**
+  - **Run:** `cargo xtask win-test --backend github --ref m06-transport`, on the pushed head of Phase B. It waits for
+    the `windows-native` job of the PR run, or re-runs it with `--rerun`.
+  - **Why the GitHub backend:** the libvirt VM backend is deferred to M9 by owner decision A1, so this is the
+    OPEN-M6-20 substitute — `windows-native`'s non-network tests, which include TLS-01…TLS-15, AD-07 and AD-08 (the
+    TLS loopback rows run on the Windows runner).
+  - **Paste back:** the saved log path `target/win-test/<run>-<job>.log`, plus its lines `win-test: job … concluded
+    Success` and `Summary … tests run: … passed`.
+- **TOR-10 `tor_bootstrap_and_link_windows_vm`: Arti on the Windows 11 VM against the test relay.** On the VM, in a
+  checkout of the pushed head:
+
+  ```text
+  cargo run --locked -p secmp-testkit --features harness --example tor_smoke -- C:\secmp-tor-smoke <relay-ref-hex> [<access-key-hex>]
+  ```
+
+  - `<relay-ref-hex>` is the test relay's `RelayRef` encoding (spec §5.3) in hex. The access key is needed only if the
+    test relay requires one.
+  - **Paste back:** the whole output — `tor-smoke start unix=…`, the `tor-event …` lines, `READY unix=…`, `PING OK
+    unix=…` (or the `FAIL …` line) — plus the date, the Windows build (`winver`) and the commit. It goes to
+    `docs/reviews/M06-evidence/tor-10-windows-<date>.txt`.
+  - The same command on Linux, or on GitHub's `windows-latest` as the optional `tor-smoke` dispatch of OPEN-M6-20, is
+    the substitute only with your written consent.
+- **vet:** no record wanted for Phase B. No new crate since your vet commit; `cargo vet --locked` is green.
 
 **OPEN-M6-B-1 — receive throughput of the driver's facade (accepted for Phase B, WEISUNG M6-B-3 §0.2; decided after the
 Phase-B review).**

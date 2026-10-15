@@ -1814,6 +1814,86 @@ mod tests {
         Ok(())
     }
 
+    /// The resolved features of every node of `cargo metadata` JSON whose package is `name` (one set per version).
+    fn resolved_features(metadata: &serde_json::Value, name: &str) -> Vec<BTreeSet<String>> {
+        let empty = Vec::new();
+        let nodes = metadata
+            .pointer("/resolve/nodes")
+            .and_then(serde_json::Value::as_array)
+            .unwrap_or(&empty);
+        nodes
+            .iter()
+            .filter(|n| {
+                n.get("id")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|id| id.contains(&format!("#{name}@")))
+            })
+            .map(|n| {
+                n.get("features")
+                    .and_then(serde_json::Value::as_array)
+                    .map(|f| {
+                        f.iter()
+                            .filter_map(serde_json::Value::as_str)
+                            .map(str::to_owned)
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            })
+            .collect()
+    }
+
+    /// TEST-SPEC-M6 TOR-07 `arti_feature_set_is_pinned` (ADR-024, ADR-051; OPEN-M6-03): in the graph cargo resolves for
+    /// the workspace, `arti-client` has the features `onion-service-client`, `rustls`, `tokio` and `static-sqlite`,
+    /// and none of `hs-pow-full`, `compression`, `native-tls`, `experimental`, `experimental-api` or any
+    /// `__is_experimental`; `tor-hsclient` has no `hs-pow-full`. A planted forbidden feature is refused.
+    #[test]
+    fn arti_feature_set_is_pinned() -> Result<()> {
+        let forbidden = |features: &BTreeSet<String>| -> Vec<String> {
+            features
+                .iter()
+                .filter(|f| {
+                    [
+                        "hs-pow-full",
+                        "compression",
+                        "native-tls",
+                        "experimental",
+                        "experimental-api",
+                    ]
+                    .contains(&f.as_str())
+                        || f.contains("__is_experimental")
+                })
+                .cloned()
+                .collect()
+        };
+        let json = crate::util::Cmd::cargo()
+            .args(["metadata", "--format-version", "1", "--locked"])
+            .read()?;
+        let metadata: serde_json::Value =
+            serde_json::from_str(&json).map_err(|e| crate::util::Error(e.to_string()))?;
+        let arti = resolved_features(&metadata, "arti-client");
+        assert_eq!(arti.len(), 1, "one arti-client");
+        for features in &arti {
+            for want in ["onion-service-client", "rustls", "tokio", "static-sqlite"] {
+                assert!(
+                    features.contains(want),
+                    "arti-client lacks {want}: {features:?}"
+                );
+            }
+            assert_eq!(forbidden(features), Vec::<String>::new());
+        }
+        let hsclient = resolved_features(&metadata, "tor-hsclient");
+        assert!(!hsclient.is_empty(), "tor-hsclient is in the graph");
+        for features in &hsclient {
+            assert!(!features.contains("hs-pow-full"), "{features:?}");
+        }
+        let planted: BTreeSet<String> = ["tokio", "hs-pow-full", "tor-proto/__is_experimental"]
+            .iter()
+            .map(|s| (*s).to_owned())
+            .collect();
+        assert_eq!(forbidden(&planted).len(), 2);
+        Ok(())
+    }
+
     /// The registry packages of the fuzz lock that the workspace lock does not carry at that version and source; only
     /// the fuzz harness crates `libfuzzer-sys` and `arbitrary` may be fuzz-only.
     fn fuzz_lock_findings(workspace: &str, fuzz: &str) -> Vec<String> {

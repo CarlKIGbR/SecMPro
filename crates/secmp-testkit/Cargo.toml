@@ -68,6 +68,11 @@ name = "harness"
 path = "tests/harness/main.rs"
 required-features = ["harness"]
 
+# The owner-operated Tor smoke check (TEST-SPEC-M6 TOR-10, X-10): needs the Tor network, run by hand.
+[[example]]
+name = "tor_smoke"
+required-features = ["harness"]
+
 # dudect-style constant-time tests (release profile), run by `cargo xtask step ct` (ADR-038, ADR-041); moved here from
 # secmp-crypto by ADR-042.
 [[bench]]

@@ -45,6 +45,12 @@ pub enum Error {
     /// Direct mode was asked for a relay whose `RelayRef` has no direct endpoint (TEST-SPEC-M6 TOR-06): no connection
     /// is attempted, over any transport.
     NoDirectEndpoint,
+    /// Tor has not bootstrapped yet (spec §12.3: no link before Tor is ready for traffic; TEST-SPEC-M6 TOR-03): no
+    /// stream was opened.
+    TorNotReady,
+    /// Tor failed — its bootstrap, or the onion connection (TEST-SPEC-M6 TOR-05). Never answered by another
+    /// transport (CLAUDE.md §1.5).
+    TorUnavailable,
 }
 
 impl fmt::Display for Error {
@@ -64,6 +70,8 @@ impl fmt::Display for Error {
             Self::OutOfOrder => "frame out of order",
             Self::Invalid => "invalid argument",
             Self::NoDirectEndpoint => "no direct endpoint",
+            Self::TorNotReady => "tor not ready",
+            Self::TorUnavailable => "tor unavailable",
         })
     }
 }

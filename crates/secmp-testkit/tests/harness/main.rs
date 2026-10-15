@@ -25,6 +25,7 @@ mod m6_sched_life;
 mod m6_spki;
 mod m6_tokio;
 mod m6_tokio_ai;
+mod m6_tor;
 mod scenarios;
 mod scripted;
 #[path = "../../../secmp-proto/tests/common/seed.rs"]

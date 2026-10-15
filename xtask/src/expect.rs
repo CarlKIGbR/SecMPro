@@ -313,6 +313,7 @@ pub(crate) const FUZZ_TARGETS: &[&str] = &[
     "q_response_decode",
     "relay_executor",
     "relay_link_session",
+    "relayref_onion_to_hsid",
     "scheduler_event_sequence",
     "tls_pin_verifier",
     "tr_decrypt",
@@ -333,6 +334,7 @@ pub(crate) const FUZZ_TRACKED_ONLY: &[&str] = &[
     "client_pipeline_responses",
     "relay_executor",
     "relay_link_session",
+    "relayref_onion_to_hsid",
     "scheduler_event_sequence",
     "tls_pin_verifier",
 ];
@@ -443,6 +445,8 @@ pub(crate) const FUZZ_MAX_LEN: &[(&str, usize)] = &[
     ("scheduler_event_sequence", 970),
     // FZ-02 (M6 Phase B): the count byte and an end-entity DER of at most 8192 B (an ML-DSA-65 certificate ≈ 5.5 KB)
     ("tls_pin_verifier", 8_194),
+    // FZ-03 (M6 Phase B): a decoded onion address is exactly 35 bytes (spec §5.3)
+    ("relayref_onion_to_hsid", 36),
     ("tr_decrypt", 4_098),
     ("tr_state", 38_587),
     ("x25519_dh", 97),
@@ -654,6 +658,9 @@ pub(crate) const MUTANT_EXCLUDE_FILES: &[&str] = &[
     "crates/secmp-relay/src/kani_proofs.rs",
     // M6 (ADR-047 Am. 4): client-core's harnesses (K-01…K-07); PR run 38724110285 shards 1 and 5 mutated it (21 survivors)
     "crates/secmp-client-core/src/kani_proofs.rs",
+    // M6 Phase B (ADR-047 Am. 4, BRIEF M6-B §2.5): the Arti glue of the Tor provider, which only a live Tor network
+    // exercises (client creation, bootstrap, the onion connect; owner-operated TOR-10/X-10)
+    "crates/secmp-transport/src/tor/arti.rs",
 ];
 /// Mutant names (regex, `cargo mutants --exclude-re`) excluded: `kani_stubs::` for the reason above; and (M3) the
 /// `secmp-proto` code compiled only with `secmp-proto`'s own feature `kat` — the vector, test and bench tooling of

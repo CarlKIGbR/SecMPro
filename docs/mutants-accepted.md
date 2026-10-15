@@ -44,6 +44,7 @@ backticks with the reason before it enters the list.
 | `crates/secmp-proto/src/kani_proofs.rs` | Compiled only under `cfg(kani)`; no test build contains it; Kani runs it. |
 | `crates/secmp-relay/src/kani_proofs.rs` | As above. |
 | `crates/secmp-client-core/src/kani_proofs.rs` | As above (K-01…K-07, `cfg(kani)`; ADR-047 Am. 4; PR run 38724110285). |
+| `crates/secmp-transport/src/tor/arti.rs` | Pure Arti glue that needs a live Tor network (BRIEF M6-B §2.5): creating the Arti client, its bootstrap, the follower that reads Arti's bootstrap status, and `connect_with_prefs` to the onion service. No test may reach the network (`docs/06` §4), so every mutant there would survive. It decides nothing; the rules are in `tor/mod.rs` and its tests (TOR-01…TOR-09, FZ-03), which stay in the gate. The owner-operated rows TOR-10 and X-10 run it against Tor. |
 
 ## Skipped
 

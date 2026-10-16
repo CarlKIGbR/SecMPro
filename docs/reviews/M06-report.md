@@ -682,12 +682,11 @@ probe before its fix, except the guard tests noted.
 
 - **EXTB-5** now fixed (EXT2B-2 closes the "partially").
 - **EXT2B-1** fixed: relay TLS read calls carry an absolute deadline (`Deadlined` in `secmp-relay/src/tls.rs`).
-- **EXT2B-2** fixed: quoted or escaped key in a `[[` header is a finding by name.
+- **EXT2B-2** fixed: quoted or escaped key in a `[[` header is a finding by name; **EXT3B-1** fixed (a byte-order mark in the vet config is a finding, `c9795a6`); **EXT3B-2** fixed (`flush_wait` bounded by the next scheduler deadline less the driver jitter).
 - **EXT2B-3** fixed (fixture); **OPEN-M6-B-4** closed (fixture).
 - **KANI-M6-C-1 (open, Phase C):** no Kani harness covers `prepare_link`/`prepare_send`; the SEND-before-FETCH guard and
   advance-only-on-success are test evidence only.
-- **OPEN-M6-C-1 (open, owner, spec question):** eventual-fetch guarantee for a conversation partner that is
-  permanently send-incapable (no sending chain, so its combined link can never seal a FETCH).
+- **OPEN-M6-C-1 closed by spec reading** (Codex M6B-EXT3c): a fresh responder contact already holds a sending chain after `first_msg` (`docs/03` §6.6/§7.2); an empty send set yields PING + FETCH_MULTI on a combined link (probe `recv-only Balanced PING=50, FETCH=50, overruns=0`); the old fixture's state (registered send queue + raw responder) is not reachable by the specified integration.
 - The `tor_smoke` example and the nightly fuzz budget (31 × 232 s + 2 × 3600 s): accepted.
 
 **Owner requests (BRIEF M6-B §2.6; asked 2026-10-15; not waited for).** Infrastructure that is not available stays

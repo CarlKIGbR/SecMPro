@@ -106,6 +106,8 @@ Jobs of `ci.yml` (pinned by `expect::PINNED_JOBS`; the first four are the requir
 | `kani` | Kani harnesses (step 9: every `KANI_PACKAGES`, `-Z stubbing` where used, the verified-harness and cover pins), `--delegated kani` (M6, WEISUNG M6-11, VD-M6-A-23: `linux-full` had passed 240 min); `SECMP_RUNNER_TRACE=1`: xtask writes a `runner-trace` line (memory, swap, disk, largest process) every 20 s to the job log (M6-15) | 150 |
 | `fuzz` | fuzz smoke (step 6, every target, `FUZZ_SMOKE_SECONDS` each), `--delegated fuzz` (M6-CI, WEISUNG M6-CI-1 §4, ADR-047 Amendment 5) | 120 |
 
+Integration precondition (OPEN-M6-C-1, closed by spec reading): a contact enters the scheduler only after its first ratchet step, so both parties hold a sending chain before any combined relay link is built.
+
 Nothing that touches the network or wall clock in unit tests; `secmp-client-core::clock` is injectable.
 
 ## 5. CI pipeline (`cargo xtask ci-fast` / `cargo xtask ci-full` mirror it locally)

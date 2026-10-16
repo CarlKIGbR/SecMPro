@@ -129,6 +129,9 @@ struct Part {
     ready: u64,
     /// Built by the latest `work` call, whose end the driver has not reported yet.
     open: bool,
+    /// The Balanced round-robin position after this `SEND` (GLM2B-1): applied when the part is written, together with
+    /// `last_send`, so a teardown between obtaining the cell and the tick leaves the position where it was.
+    next_rr: Option<usize>,
 }
 
 struct Up {
@@ -533,6 +536,7 @@ impl World {
             return TickResult::Tear(Reason::Overrun);
         }
         let mut sent_to = None;
+        let mut next_rr = None;
         for part in [up.send_part.take(), up.fetch_part.take()]
             .into_iter()
             .flatten()
@@ -542,6 +546,7 @@ impl World {
             }
             if let ReqKind::Send { queue, .. } = part.kind {
                 sent_to = Some(queue);
+                next_rr = part.next_rr;
             }
             self.out.push(Output::Write {
                 link: up.id,
@@ -559,6 +564,10 @@ impl World {
             && let Some(sq) = self.sends.iter_mut().find(|s| s.id == q)
         {
             sq.last_send = Some(at);
+        }
+        // the round-robin position moves with the SEND that was written (GLM2B-1), next to `last_send`
+        if let Some(n) = next_rr {
+            link.rr = n;
         }
         TickResult::Wrote
     }
@@ -589,7 +598,7 @@ impl World {
                 Spec::Send(_) => false,
             };
             if needs_send && up.send_part.is_none() {
-                tear = self.prepare_send(&mut link.rr, up, spec, slot, now, source);
+                tear = self.prepare_send(link.rr, up, spec, slot, now, source);
             }
             // a tick's parts go out SEND first (`tick`): its FETCH is sealed only after its SEND, so the counters are in
             // write order even when the cell source answers "not ready" (EXTB-1)
@@ -613,7 +622,7 @@ impl World {
 
     fn prepare_send<S: CellSource>(
         &mut self,
-        rr: &mut usize,
+        rr: usize,
         up: &mut Up,
         spec: Spec,
         slot: u64,
@@ -632,7 +641,7 @@ impl World {
                     .collect();
                 let table: Vec<(Option<u64>, u64)> =
                     members.iter().map(|(_, l, p)| (*l, *p)).collect();
-                match rr_select(*rr, &table, slot) {
+                match rr_select(rr, &table, slot) {
                     Some(at) => {
                         next_rr = Some(
                             at.checked_add(1)
@@ -655,6 +664,7 @@ impl World {
                         kind: ReqKind::Ping,
                         ready: now,
                         open: true,
+                        next_rr: None,
                     });
                     self.prep.record(up, slot, now, (b'P', None));
                     None
@@ -664,13 +674,11 @@ impl World {
         };
         let cap = self.sends.iter().find(|s| s.id == queue).map(|s| &s.cap)?;
         // not ready, or not persisted: nothing is built, the tick finds no frame — and the same queue is asked again at
-        // the next pass (the round-robin position moves only with a cell, EXTB-1)
+        // the next pass (the round-robin position moves only when a SEND is written, EXTB-1, GLM2B-1)
         let Ok(Some(cell)) = source.prepare_cell(queue, now) else {
             return None;
         };
-        if let Some(n) = next_rr {
-            *rr = n;
-        }
+        // the round-robin position moves in `tick`, when this SEND is written (GLM2B-1)
         match up.chan.prepare(&Command::Send {
             to: cap,
             cell: &cell.cell,
@@ -684,6 +692,7 @@ impl World {
                     },
                     ready: now,
                     open: true,
+                    next_rr,
                 });
                 self.prep.record(up, slot, now, (b'S', Some(queue)));
                 None
@@ -709,6 +718,7 @@ impl World {
                             kind: ReqKind::Fetch(q),
                             ready: now,
                             open: true,
+                            next_rr: None,
                         });
                         self.prep.record(up, slot, now, (b'F', Some(q)));
                         None
@@ -731,6 +741,7 @@ impl World {
                             kind: ReqKind::FetchMulti(ids),
                             ready: now,
                             open: true,
+                            next_rr: None,
                         });
                         self.prep.record(up, slot, now, (b'M', None));
                         None

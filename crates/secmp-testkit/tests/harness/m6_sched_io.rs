@@ -427,13 +427,16 @@ struct Fake {
     calls: Vec<Call>,
     /// `prepare_cell` is "not ready" before this time (a preparation that finishes late).
     ready_at: u64,
+    /// The queues `prepare_cell` was asked for and answered, in order.
+    asked: Vec<QueueId>,
 }
 
 impl CellSource for Fake {
-    fn prepare_cell(&mut self, _: QueueId, now: u64) -> Result<Option<PreparedCell>, SourceError> {
+    fn prepare_cell(&mut self, q: QueueId, now: u64) -> Result<Option<PreparedCell>, SourceError> {
         if now < self.ready_at {
             return Ok(None);
         }
+        self.asked.push(q);
         self.next = self.next.saturating_add(1);
         Ok(Some(PreparedCell {
             cell: Cell::from_bytes(&[u8::try_from(self.next).unwrap(); 4096]).unwrap(),
@@ -469,6 +472,8 @@ struct Rig {
     writes: Vec<u64>,
     events: Vec<LinkEvent>,
     now: u64,
+    /// A script for each further connection (a scripted relay serves one connection).
+    remake: Option<fn() -> Script>,
 }
 
 impl Rig {
@@ -496,6 +501,7 @@ impl Rig {
             writes: Vec::new(),
             events: Vec::new(),
             now: 0,
+            remake: None,
         }
     }
 
@@ -504,6 +510,9 @@ impl Rig {
         while let Some(o) = queue.pop_front() {
             match o {
                 Output::Connect { link, .. } => {
+                    if let (Some(make), Some(_)) = (self.remake, self.link) {
+                        self.stream = Scripted::new(make());
+                    }
                     let id = scripted::identity();
                     let mut entropy = EntropyPool::new("m6-rig-client", 0);
                     let session = Session::connect(
@@ -989,5 +998,58 @@ fn s_due_writes_handed_off_before_any_prepare() {
     assert!(
         sent.iter().all(|e| e.t_ms == e.at_ms),
         "every frame left at the tick the core stamped on it"
+    );
+}
+
+/// GLM2B-1 `balanced_rr_does_not_advance_on_teardown_before_tick`: the round-robin position moves when a SEND is
+/// written, not when its cell is obtained. Balanced, three queues due; the cell of the first tick is obtained from q0,
+/// its preparation ends after the tick (an Overrun, so nothing is written), the link reconnects: the first cell asked
+/// for on the new link is q0's again — the post-reconnect rotation does not depend on whether a teardown came between
+/// obtaining and writing.
+#[test]
+fn balanced_rr_does_not_advance_on_teardown_before_tick() {
+    let params = Params {
+        phase_max_ms: 0,
+        ..Params::default()
+    };
+    let mut rig = Rig::with(ok_script(), Mode::Balanced, params);
+    rig.remake = Some(ok_script);
+    let q0 = QueueId(0);
+    let mut queues = vec![q0];
+    for route in [2_u8, 3] {
+        let cap =
+            SendCap::from_route([route; 16], &SecretBytes::from_slice(&[9; 32]).unwrap()).unwrap();
+        queues.push(
+            rig.sched
+                .add_send_queue(0, RelayId(0), cap, 10_000)
+                .unwrap(),
+        );
+    }
+    // the link comes up at 0 and builds its first frames; the driver reports the preparation as ending at 10 001,
+    // after tick 1 (10 000)
+    let outs = rig.sched.poll_due(0).unwrap();
+    rig.apply(outs);
+    assert_eq!(rig.src.asked, vec![q0], "the cell of tick 1 is q0's");
+    rig.sched.prepared_until(10_001);
+    rig.run_to(10_000);
+    assert!(rig.writes.is_empty(), "nothing is written for tick 1");
+    assert_eq!(rig.sched.overruns(), 1);
+    assert!(
+        rig.events
+            .iter()
+            .any(|e| matches!(e, LinkEvent::TornDown(_, Reason::Overrun)))
+    );
+    // the link reconnects and builds the first frames of the new connection
+    let mut t = 10_000;
+    while rig.src.asked.len() < 2 {
+        t += 500;
+        assert!(t < 400_000, "no reconnect");
+        rig.run_to(t);
+    }
+    assert_eq!(
+        rig.src.asked.get(1),
+        Some(&q0),
+        "asked: {:?}",
+        rig.src.asked
     );
 }

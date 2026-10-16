@@ -284,6 +284,25 @@ pub trait Dialer: Send + Sync + 'static {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct TcpDialer;
 
+/// The TCP socket of a direct link to `addr` (GLMB-1): TCP keepalive on, so the kernel probes a peer that went silent,
+/// and Nagle off (a frame is one whole 4352-byte unit). A black-holed link is closed by the driver within
+/// `link_idle_secs` whatever the kernel does: unanswered requests hit the in-flight bound at the third tick (≤ 3 × the
+/// slowest period = 240 s), a write that does not drain hits the driver's write-stall bound. (Keepalive timings and
+/// `TCP_USER_TIMEOUT` need `setsockopt`, which tokio does not expose and this crate may not call itself.)
+///
+/// # Errors
+/// The socket could not be created or configured.
+pub fn tcp_socket(addr: std::net::SocketAddr) -> std::io::Result<tokio::net::TcpSocket> {
+    let socket = if addr.is_ipv4() {
+        tokio::net::TcpSocket::new_v4()?
+    } else {
+        tokio::net::TcpSocket::new_v6()?
+    };
+    socket.set_keepalive(true)?;
+    socket.set_nodelay(true)?;
+    Ok(socket)
+}
+
 impl Dialer for TcpDialer {
     type Stream = tokio::net::TcpStream;
 
@@ -292,7 +311,10 @@ impl Dialer for TcpDialer {
             .await
             .map_err(|_| Error::Closed)?;
         for addr in addrs {
-            if let Ok(stream) = tokio::net::TcpStream::connect(addr).await {
+            let Ok(socket) = tcp_socket(addr) else {
+                continue;
+            };
+            if let Ok(stream) = socket.connect(addr).await {
                 return Ok(stream);
             }
         }
@@ -432,5 +454,24 @@ mod tests {
         ]
         .concat();
         assert_eq!(tlv(&four), None);
+    }
+
+    /// GLMB-1: the direct link's TCP socket has keepalive on and Nagle off, for IPv4 and IPv6.
+    #[test]
+    fn direct_tcp_socket_has_keepalive_and_no_delay() -> std::io::Result<()> {
+        let v4 = std::net::SocketAddr::from(([127, 0, 0, 1], 443));
+        let v6 = std::net::SocketAddr::from((std::net::Ipv6Addr::LOCALHOST, 443));
+        for addr in [v4, v6] {
+            match tcp_socket(addr) {
+                Ok(socket) => {
+                    assert!(socket.keepalive()?, "{addr}");
+                    assert!(socket.nodelay()?, "{addr}");
+                }
+                // a host without IPv6 cannot make the socket at all
+                Err(_) if addr.is_ipv6() => {}
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(())
     }
 }

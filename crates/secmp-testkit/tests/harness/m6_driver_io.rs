@@ -35,6 +35,9 @@ struct Throttled {
     written: usize,
     hold: Option<Hold>,
     sleep: Option<Pin<Box<tokio::time::Sleep>>>,
+    /// Bytes read so far, and after how many the peer goes silent (a black hole: nothing more is delivered).
+    read: usize,
+    mute_after: Option<usize>,
 }
 
 impl AsyncRead for Throttled {
@@ -43,6 +46,20 @@ impl AsyncRead for Throttled {
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<std::io::Result<()>> {
+        if let Some(after) = self.mute_after {
+            let left = after.saturating_sub(self.read);
+            if left == 0 {
+                // a black hole: nothing more arrives, ever
+                return Poll::Pending;
+            }
+            let mut limited = buf.take(left);
+            let polled = Pin::new(&mut self.inner).poll_read(cx, &mut limited);
+            let n = limited.filled().len();
+            // `take` filled the first `n` bytes of `buf`'s unfilled part
+            buf.advance(n);
+            self.read = self.read.saturating_add(n);
+            return polled;
+        }
         Pin::new(&mut self.inner).poll_read(cx, buf)
     }
 }
@@ -96,6 +113,8 @@ struct Holding {
     hold: Option<Hold>,
     answer_ms: u64,
     count: Arc<AtomicUsize>,
+    /// Connection `which` goes silent after this many bytes from the relay.
+    mute_after: Option<usize>,
 }
 
 impl Holding {
@@ -106,6 +125,7 @@ impl Holding {
             hold,
             answer_ms,
             count: Arc::new(AtomicUsize::new(0)),
+            mute_after: None,
         }
     }
 }
@@ -120,6 +140,7 @@ impl StreamProvider for Holding {
     ) -> impl core::future::Future<Output = Result<Throttled, Error>> + Send {
         let n = self.count.fetch_add(1, Ordering::SeqCst);
         let hold = (n == self.which).then_some(self.hold).flatten();
+        let mute_after = (n == self.which).then_some(self.mute_after).flatten();
         let (inner, relay, answer_ms) = (self.inner.clone(), relay.clone(), self.answer_ms);
         async move {
             if answer_ms > 0 {
@@ -131,6 +152,8 @@ impl StreamProvider for Holding {
                 written: 0,
                 hold,
                 sleep: None,
+                read: 0,
+                mute_after,
             })
         }
     }
@@ -526,4 +549,76 @@ fn driver_close_reconnect_race_discards_old_completion() {
             assert!(new_up, "close at {close_at}: the Balanced link came up");
         });
     }
+}
+
+// ---- GLMB-1: a black-holed link -------------------------------------------------------------------------------------
+
+/// The relay's handshake bytes (`RELAYINFO` 1744 + `HS2` 1156): a black hole after them leaves the link up and silent.
+const RELAY_HANDSHAKE: usize = 1744 + 1156;
+
+/// GLMB-1: a link whose peer goes silent right after the handshake — it takes the client's frames and never answers,
+/// as a black-holed TCP connection does — is closed within the relay's idle bound `link_idle_secs` (240 s = 3 × the
+/// slowest period), even at the slowest period (80 s): the unanswered requests reach the in-flight bound at the third
+/// tick, and the link is torn down and connects again; the other link is untouched. (The direct dialer's own socket
+/// options are `tls::tests::direct_tcp_socket_has_keepalive_and_no_delay`; the kernel's timers cannot be driven by the
+/// paused clock.)
+#[test]
+fn direct_blackhole_link_is_closed_within_idle_bound() {
+    runtime().block_on(async {
+        let setup = Setup::new();
+        let mut provider = Holding::new(setup.provider.clone(), 0, None, 0);
+        provider.mute_after = Some(RELAY_HANDSHAKE);
+        let sc = Scenario {
+            mode: Mode::Strict,
+            contacts: vec![(80_000, 80_000)],
+            pool: false,
+            seed: 61,
+        };
+        let x = TClient::with_provider(
+            &setup,
+            provider,
+            sc.mode,
+            no_phase(),
+            sc.seed,
+            Costs::default(),
+            0,
+        );
+        let mut rig = TokioRig::assemble(setup, x, &sc).await;
+        rig.run_minutes(6, None).await;
+        let silent = link_of(&rig, 0);
+        let other = link_of(&rig, 1);
+        let log = rig.x.driver.log().unwrap();
+        let up = log
+            .events
+            .iter()
+            .find_map(|(t, e)| (*e == LinkEvent::Up(silent)).then_some(*t))
+            .unwrap();
+        let torn = log
+            .events
+            .iter()
+            .find_map(|(t, e)| match e {
+                LinkEvent::TornDown(l, reason) if *l == silent => Some((*t, *reason)),
+                _ => None,
+            })
+            .unwrap();
+        let idle_bound = secmp_testkit::harness::RelayLimits::defaults().link_idle_ms;
+        assert_eq!(idle_bound, 240_000);
+        assert!(
+            torn.0 - up <= idle_bound,
+            "closed after {} ms: {torn:?}",
+            torn.0 - up
+        );
+        assert_eq!(torn.1, Reason::InFlight);
+        assert!(
+            !rig.x.driver.has_link_io(silent),
+            "its stream tasks stopped"
+        );
+        assert!(
+            !log.events
+                .iter()
+                .any(|(_, e)| matches!(e, LinkEvent::TornDown(l, _) if *l == other)),
+            "{:?}",
+            log.events
+        );
+    });
 }

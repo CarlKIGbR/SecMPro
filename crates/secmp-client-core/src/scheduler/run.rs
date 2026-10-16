@@ -555,7 +555,7 @@ pub enum Purpose {
 pub enum Step {
     /// `poll_due` at this time.
     PollDue(u64),
-    /// Every write `poll_due` returned is flushed.
+    /// The writes `poll_due` returned are flushed (or left pending on their links): the time the flush wait ended.
     Flushed(u64),
     /// `work` began at the first time and ended (as reported to `prepared_until`) at the second.
     Work(u64, u64),
@@ -794,7 +794,9 @@ where
             let due = sched.poll_due(now)?;
             self.apply(sched, due, now)?;
             self.flush_wait(sched, now).await?;
-            self.step(Step::Flushed(now));
+            // GLMB-3: when the flush wait ended, from the same clock
+            let flushed = self.clock.mono_ms();
+            self.step(Step::Flushed(flushed));
             // (vi) the activity-dependent work over the non-blocking facade; (ii) its end from the same clock
             let outs = sched.work(now, &mut self.deferred)?;
             let end = self.clock.mono_ms();

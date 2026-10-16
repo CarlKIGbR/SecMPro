@@ -1938,22 +1938,37 @@ mod tests {
         Ok(())
     }
 
+    /// The crates only the fuzz package may add to the workspace graph, with their pinned version (empty: any version;
+    /// GLMB-2): `libfuzzer-sys` exactly as `fuzz/Cargo.toml` pins it, `arbitrary` as libfuzzer-sys pulls it.
+    const FUZZ_ONLY: &[(&str, &str)] = &[("libfuzzer-sys", "0.4.13"), ("arbitrary", "")];
+
     /// The registry packages of the fuzz lock that the workspace lock does not carry at that version and source; only
     /// the fuzz harness crates `libfuzzer-sys` and `arbitrary` may be fuzz-only.
     fn fuzz_lock_findings(workspace: &str, fuzz: &str) -> Vec<String> {
         let ws = crate::cooldown::parse_lock(workspace);
-        crate::cooldown::parse_lock(fuzz)
+        let mut out: Vec<String> = Vec::new();
+        for p in crate::cooldown::parse_lock(fuzz)
             .into_iter()
             .filter(|p| p.source.is_some())
-            .filter(|p| !["libfuzzer-sys", "arbitrary"].contains(&p.name.as_str()))
-            .filter(|p| !ws.contains(p))
-            .map(|p| {
-                format!(
+        {
+            match FUZZ_ONLY.iter().find(|(name, _)| *name == p.name) {
+                // GLMB-2: the fuzz-only crates at their pinned versions only
+                Some((_, pin)) => {
+                    if !pin.is_empty() && p.version != *pin {
+                        out.push(format!(
+                            "fuzz/Cargo.lock: {} {} is not the pinned {pin}",
+                            p.name, p.version
+                        ));
+                    }
+                }
+                None if !ws.contains(&p) => out.push(format!(
                     "fuzz/Cargo.lock: {} {} not in Cargo.lock",
                     p.name, p.version
-                )
-            })
-            .collect()
+                )),
+                None => {}
+            }
+        }
+        out
     }
 
     /// EXTB-6: the fuzz lock's packages are compared with name, version, source and checksum; a missing fuzz lock is a
@@ -1991,9 +2006,36 @@ mod tests {
         Ok(())
     }
 
+    /// GLMB-2: the fuzz package's dependency graph is the workspace graph (whose crates `cargo deny` and `cargo vet`
+    /// check) plus exactly the fuzz-only allowlist — `libfuzzer-sys =0.4.13` and the `arbitrary` it pulls — as a policy
+    /// test instead of a second `cargo deny` run (no CI time). A planted other libfuzzer-sys version, and any other
+    /// fuzz-only crate, are refused.
+    #[test]
+    fn fuzz_graph_is_workspace_graph_plus_allowlist() -> Result<()> {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let workspace = std::fs::read_to_string(root.join("Cargo.lock"))?;
+        let fuzz = std::fs::read_to_string(root.join("fuzz/Cargo.lock"))?;
+        assert_eq!(fuzz_lock_findings(&workspace, &fuzz), Vec::<String>::new());
+        let manifest = std::fs::read_to_string(root.join("fuzz/Cargo.toml"))?;
+        assert!(manifest.contains("libfuzzer-sys = { version = \"=0.4.13\" }"));
+        let src = "source = \"registry+https://github.com/rust-lang/crates.io-index\"";
+        let lock = |name: &str, version: &str| {
+            format!("[[package]]\nname = \"{name}\"\nversion = \"{version}\"\n{src}\n")
+        };
+        assert!(fuzz_lock_findings("", &lock("libfuzzer-sys", "0.4.13")).is_empty());
+        assert!(fuzz_lock_findings("", &lock("arbitrary", "1.4.2")).is_empty());
+        assert_eq!(
+            fuzz_lock_findings("", &lock("libfuzzer-sys", "0.4.12")),
+            vec!["fuzz/Cargo.lock: libfuzzer-sys 0.4.12 is not the pinned 0.4.13".to_owned()]
+        );
+        assert_eq!(fuzz_lock_findings("", &lock("cc", "1.2.0")).len(), 1);
+        Ok(())
+    }
+
     /// WEISUNG M6-B-4 §0.4, M6-B-5 EXTB-6: `fuzz/Cargo.lock` resolves every package it shares with the workspace lock to
-    /// a version (with the same source and checksum) of the workspace lock — the vetted, cooldown-checked one; only `libfuzzer-sys` and `arbitrary` may be
-    /// fuzz-only — and the cooldown gate reads it. A planted divergent version and a planted fuzz-only crate are refused.
+    /// a version (with the same source and checksum) of the workspace lock — the vetted, cooldown-checked one; only
+    /// `libfuzzer-sys` and `arbitrary` may be fuzz-only — and the cooldown gate reads it. A planted divergent version
+    /// and a planted fuzz-only crate are refused.
     #[test]
     fn fuzz_lock_matches_workspace_lock() -> Result<()> {
         assert!(crate::cooldown::LOCKFILES.contains(&"fuzz/Cargo.lock"));

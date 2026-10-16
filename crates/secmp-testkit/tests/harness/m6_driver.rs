@@ -760,7 +760,8 @@ fn driver_flushes_due_writes_before_work() {
                 state = 1;
             }
             Step::Flushed(t) => {
-                assert!(state == 1 && t == at, "flush out of order: {step:?}");
+                // GLMB-3: the flush's own time, never before its poll
+                assert!(state == 1 && t >= at, "flush out of order: {step:?}");
                 state = 2;
             }
             Step::Work(start, end) => {

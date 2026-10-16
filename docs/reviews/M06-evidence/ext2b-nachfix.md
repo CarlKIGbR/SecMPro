@@ -35,7 +35,7 @@ Each finding: the regression test was written first and run red, then the fix.
 
 - Test: `secmp-testkit::harness m6_sched_life::relay_idle_and_age_bounds_from_schedule` (tightened).
 - Red (assertion tightened, fixture unchanged): `Strict: client b: [(237303, TornDown(LinkId(1), Overrun))]`.
-- Fix: `m6_common::seed_conversation` (one cell of a delivered to b before link-up; `Contact` now carries b's queues).
+- Fix: `m6_common::seed_conversation` (one cell of a delivered to b before link-up; `Contact` now carries b's receive queue).
 - Green: 26.1 s, Strict and Low-bw (90 000 000 ms): no teardown other than `Lifetime` for a and b, a `Lifetime`
   teardown each. `core/` untouched; OPEN-M6-B-4 closed as a fixture defect.
 
@@ -52,8 +52,8 @@ Each finding: the regression test was written first and run red, then the fix.
 - Proof repetition at `50aa71e`, `env SECMP_AI_TRACES=64 cargo nextest run -p secmp-testkit --features harness -E 'binary(=harness)'`:
   `Summary [1585.013s] 165 tests run: 165 passed (16 slow), 0 skipped` — includes `driver_balanced_first_tick_sends_and_fetches_in_order`,
   `balanced_round_robin_due_rule`, AI-01…AI-06 on the virtual driver at 64 traces and the six tokio repeats at 64 traces with the
-  extended oracle, the wake-schedule/driver suites. `ci-fast --strict` green. Kani was not re-run (the change is outside the pure
-  `pure.rs` functions the harnesses cover; `cargo xtask step kani` is part of `ci-full`/the `kani` job).
+  extended oracle, the wake-schedule/driver suites. `ci-fast --strict` green. Kani was not re-run in this step (not verified whether any harness reaches the changed code; the
+  `kani` job of the PR run covers it).
 - Mutants (hand-made, in a scratch worktree, tests `driver_balanced|balanced_round_robin|balanced_rr`): 4/4 caught —
   `!send_missing`→`true`: `driver_balanced_first_tick_sends_and_fetches_in_order` FAIL; `checked_add`→`checked_sub`:
   `balanced_round_robin_due_rule` FAIL; `link.rr = n`→`link.rr = 0`: `balanced_round_robin_due_rule` FAIL; the rr update in `tick`

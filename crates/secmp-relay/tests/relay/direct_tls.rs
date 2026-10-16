@@ -708,3 +708,46 @@ fn tls_conn_flush_delivers_buffered_bytes() {
     assert_eq!(answer, b"!");
     drop(server.join().unwrap());
 }
+
+/// EXT2B-1 (Codex probe `review_tls_inner_read_outlives_poll`): a `ClientHello` record trickled one byte per 300 ms —
+/// every raw read returns within `READ_POLL`, so rustls's I/O loop never gives control back — must still end at the
+/// `hello_timeout`: the connection is closed within `hello_timeout + READ_POLL` (plus scheduling slack) and `handle`
+/// returns, so the connection slot (`server::Slot`, counted out when `handle` returns) is free.
+#[test]
+fn a_trickled_client_hello_ends_at_the_hello_timeout() {
+    const HELLO_TIMEOUT_MS: u64 = 1500;
+    const PER_BYTE: Duration = Duration::from_millis(300);
+    let (cert, key) = cert_and_key(21);
+    let config = tls::server_config(cert, key).unwrap();
+    let (server_end, mut client_end) = pair();
+    let server_closed = Arc::clone(&server_end.closed);
+    let conn = TlsConn::new(&config, server_end).unwrap();
+    let started = Instant::now();
+    let server = std::thread::spawn(move || {
+        let relay = RelayFx::case1().relay(Limits {
+            hello_timeout_ms: HELLO_TIMEOUT_MS,
+            ..Limits::defaults()
+        });
+        server::handle(&relay, conn, &FixtureTime(Instant::now()));
+        Instant::now()
+    });
+    // a handshake record header announcing 1400 bytes, then one filler byte per 300 ms; the trickle stops at 40 bytes so
+    // that the unfixed code ends (after ~12 s) instead of after 7 minutes
+    let mut record = vec![0x16, 0x03, 0x01, 0x05, 0x78];
+    record.resize(40, 0x01);
+    for byte in record {
+        if server_closed.load(Ordering::SeqCst) > 0 {
+            break;
+        }
+        client_end.write_all(&[byte]).unwrap();
+        std::thread::sleep(PER_BYTE);
+    }
+    let ended = server.join().unwrap().duration_since(started);
+    let bound =
+        Duration::from_millis(HELLO_TIMEOUT_MS) + server::READ_POLL + Duration::from_millis(300);
+    assert!(
+        ended <= bound,
+        "EXT2B-1: closed after {ended:?}, hello_timeout + READ_POLL is {bound:?}"
+    );
+    assert!(server_closed.load(Ordering::SeqCst) > 0);
+}

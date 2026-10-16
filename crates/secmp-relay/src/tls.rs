@@ -26,7 +26,7 @@ use std::io::{self, ErrorKind, Read, Write};
 use std::net::{SocketAddr, TcpListener};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use rustls::crypto::CryptoProvider;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
@@ -36,7 +36,7 @@ use rustls::{NamedGroup, ProtocolVersion, ServerConfig, ServerConnection, Stream
 use crate::error::{Error, Result};
 use crate::event::Event;
 use crate::relay::Relay;
-use crate::server::{Listener, Stream};
+use crate::server::{Listener, READ_POLL, Stream, WRITE_TIMEOUT};
 
 /// The ALPN protocol of SecMP-LINK over TLS (spec §8.1).
 pub const ALPN: &[u8] = b"secmp/1";
@@ -136,8 +136,67 @@ fn acceptable(conn: &ServerConnection) -> bool {
 /// `HELLO`→`HS1` timeout, [`crate::conn`]); the first plaintext byte is handed on only after the handshake passed
 /// [`acceptable`], and nothing is written before.
 pub struct TlsConn<S: Stream> {
-    inner: StreamOwned<ServerConnection, S>,
+    inner: StreamOwned<ServerConnection, Deadlined<S>>,
     checked: bool,
+}
+
+/// The socket under rustls with an absolute deadline for the current `read` call (EXT2B-1, Codex probe
+/// `review_tls_inner_read_outlives_poll`): `StreamOwned::read` loops over raw reads until a TLS record is complete, and
+/// every raw read has its own timeout, so a peer that trickles one byte per poll period would keep the call — and the
+/// connection slot — for as long as it likes, out of reach of the `hello_timeout` check of the connection loop. With
+/// the deadline every raw read and write is capped by what is left of it and fails with `TimedOut` at zero; rustls
+/// keeps its partial state, the loop of [`crate::server::handle`] ticks and checks its timeouts, and calls again.
+struct Deadlined<S: Stream> {
+    sock: S,
+    /// The read and write timeouts the connection loop asked for through [`Stream::set_poll`].
+    poll: Duration,
+    write: Duration,
+    deadline: Option<Instant>,
+    /// The socket's timeouts are the capped ones of the last call.
+    capped: bool,
+}
+
+impl<S: Stream> Deadlined<S> {
+    /// The time left, or `TimedOut` at zero; sets the socket's timeouts to the lesser of the asked ones and that.
+    fn cap(&mut self) -> io::Result<()> {
+        let Some(deadline) = self.deadline else {
+            return Ok(());
+        };
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(io::Error::from(ErrorKind::TimedOut));
+        }
+        self.capped = true;
+        self.sock
+            .set_poll(self.poll.min(left), self.write.min(left))
+    }
+
+    /// The end of a call: the asked timeouts again.
+    fn disarm(&mut self) {
+        self.deadline = None;
+        if self.capped {
+            self.capped = false;
+            let _ = self.sock.set_poll(self.poll, self.write);
+        }
+    }
+}
+
+impl<S: Stream> Read for Deadlined<S> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.cap()?;
+        self.sock.read(buf)
+    }
+}
+
+impl<S: Stream> Write for Deadlined<S> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.cap()?;
+        self.sock.write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.sock.flush()
+    }
 }
 
 /// The refusal of a connection whose handshake the listener does not allow (no detail; the connection closes).
@@ -153,7 +212,16 @@ impl<S: Stream> TlsConn<S> {
     pub fn new(config: &Arc<ServerConfig>, sock: S) -> io::Result<Self> {
         let conn = ServerConnection::new(Arc::clone(config)).map_err(|_| refused())?;
         Ok(Self {
-            inner: StreamOwned::new(conn, sock),
+            inner: StreamOwned::new(
+                conn,
+                Deadlined {
+                    sock,
+                    poll: READ_POLL,
+                    write: WRITE_TIMEOUT,
+                    deadline: None,
+                    capped: false,
+                },
+            ),
             checked: false,
         })
     }
@@ -161,7 +229,12 @@ impl<S: Stream> TlsConn<S> {
 
 impl<S: Stream> Read for TlsConn<S> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        let n = self.inner.read(buf)?;
+        // one absolute deadline for the whole call, however many raw reads rustls makes in it
+        let sock = &mut self.inner.sock;
+        sock.deadline = Instant::now().checked_add(sock.poll);
+        let n = self.inner.read(buf);
+        self.inner.sock.disarm();
+        let n = n?;
         if !self.checked {
             if n != 0 && !acceptable(&self.inner.conn) {
                 return Err(refused());
@@ -188,7 +261,11 @@ impl<S: Stream> Write for TlsConn<S> {
 
 impl<S: Stream> Stream for TlsConn<S> {
     fn set_poll(&mut self, poll: Duration, write: Duration) -> io::Result<()> {
-        self.inner.sock.set_poll(poll, write)
+        let sock = &mut self.inner.sock;
+        sock.poll = poll;
+        sock.write = write;
+        sock.capped = false;
+        sock.sock.set_poll(poll, write)
     }
 
     fn close(&mut self) {
@@ -196,7 +273,7 @@ impl<S: Stream> Stream for TlsConn<S> {
             self.inner.conn.send_close_notify();
             let _ = self.inner.conn.write_tls(&mut self.inner.sock);
         }
-        self.inner.sock.close();
+        self.inner.sock.sock.close();
     }
 }
 

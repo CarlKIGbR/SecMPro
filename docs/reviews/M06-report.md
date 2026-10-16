@@ -605,7 +605,7 @@ probe before its fix, except the guard tests noted.
     driver.
 
   Tests: `driver_shutdown_aborts_pending_connects`, `driver_close_reconnect_race_discards_old_completion`.
-- **EXTB-5** fixed @ `c971701`. xtask has no TOML crate, so the parser is strict: only `[[exemptions.<bare>]]` at column
+- **EXTB-5** fixed @ `c971701`, closed by EXT2B-2 (quoted/escaped keys). xtask has no TOML crate, so the parser is strict: only `[[exemptions.<bare>]]` at column
   0; any other bracket line mentioning `exemptions` is an entry plus a finding. Tests:
   `vet_closure_header_with_comment_is_found`, `vet_closure_header_quoted_key_is_found`,
   `vet_closure_header_with_spaces_is_found`.
@@ -671,6 +671,23 @@ probe before its fix, except the guard tests noted.
   - **Observation:** client b is torn down `Overrun`; first three at 151 526, 323 361 and 497 015 ms, then every 1–3
     min. Client a and the Strict run have at most one.
   - **Not known:** whether it is the virtual driver's cost model or the core's deadline math; not investigated.
+  - **CLOSED 2026-10-16 (WEISUNG M6-CI-2, EXT2B-3): fixture defect, not a driver or core fix.** Client b is the ratchet
+    responder and had no sending chain (`SourceError` from t = 0); on a combined relay link the FETCH part cannot be
+    sealed without a SEND part (EXTB-1), so b's tick tore down with `Overrun`. `m6_common::seed_conversation` delivers
+    one cell of a to b before link-up; `relay_idle_and_age_bounds_from_schedule` now requires, for both clients and
+    every link, no teardown other than `Lifetime` and one `Lifetime` teardown each. Strict and Low-bw (to 90 000 000
+    ms): 0 overruns, passed in 26 s. `core/` untouched. Evidence: `M06-evidence/ext2b-nachfix.md`.
+
+### Codex M6B-EXT2 (WEISUNG M6-CI-2) — status 2026-10-16
+
+- **EXTB-5** now fixed (EXT2B-2 closes the "partially").
+- **EXT2B-1** fixed: relay TLS read calls carry an absolute deadline (`Deadlined` in `secmp-relay/src/tls.rs`).
+- **EXT2B-2** fixed: quoted or escaped key in a `[[` header is a finding by name.
+- **EXT2B-3** fixed (fixture); **OPEN-M6-B-4** closed (fixture).
+- **KANI-M6-C-1 (open, Phase C):** no Kani harness covers `prepare_link`/`prepare_send`; the SEND-before-FETCH guard and
+  advance-only-on-success are test evidence only.
+- **OPEN-M6-C-1 (open, owner, spec question):** eventual-fetch guarantee for a conversation partner that is
+  permanently send-incapable (no sending chain, so its combined link can never seal a FETCH).
 - The `tor_smoke` example and the nightly fuzz budget (31 × 232 s + 2 × 3600 s): accepted.
 
 **Owner requests (BRIEF M6-B §2.6; asked 2026-10-15; not waited for).** Infrastructure that is not available stays

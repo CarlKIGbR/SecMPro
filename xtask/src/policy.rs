@@ -575,6 +575,12 @@ fn loose_exemption_name(header: &str) -> String {
         .to_owned()
 }
 
+/// An array-of-tables header (`[[…`) with a quoted key in its key path; `supply-chain/config.toml` has no other array
+/// of tables than `exemptions`, so a quoted key there can only be a spelling of it.
+fn is_quoted_array_header(t: &str) -> bool {
+    t.starts_with("[[") && t.contains(['"', '\''])
+}
+
 /// The `[[exemptions.<name>]]` entries of `supply-chain/config.toml`, in file order. Fail closed (EXTB-5): only the
 /// exact form `[[exemptions.<bare-name>]]` at column 0 is an ordinary header; any other line starting with `[` that
 /// mentions `exemptions` is an entry with a header finding, never skipped.
@@ -598,7 +604,9 @@ pub(crate) fn vet_exemptions(config: &str) -> Vec<VetExemption> {
                     bad_header: None,
                 });
                 in_exemption = true;
-            } else if t.contains("exemptions") {
+            } else if t.contains("exemptions") || t.contains('\\') || is_quoted_array_header(t) {
+                // EXT2B-2: also an array-of-tables header with a quoted key or any header with an escape — the key
+                // may spell `exemptions` without containing the word (`"exemptions"`)
                 out.push(VetExemption {
                     name: loose_exemption_name(t),
                     version: String::new(),
@@ -699,6 +707,13 @@ pub(crate) fn vet_closure_findings(
     }
     for e in &entries {
         if let Some(header) = &e.bad_header {
+            // EXT2B-2: a quoted or escaped key anywhere in the key path (the TOML crate decodes
+            // `[["exemptions".const-oid]]` as `exemptions → const-oid`, the literal match does not) is rejected by name
+            if header.contains(['"', '\'', '\\']) {
+                findings.push(format!(
+                    "vet exemption header with a quoted or escaped key in a table header (use the bare form `[[exemptions.<name>]]`): `{header}`"
+                ));
+            }
             findings.push(format!(
                 "vet exemption header not in the strict form `[[exemptions.<name>]]` at column 0: `{header}`"
             ));
@@ -2470,6 +2485,43 @@ mod tests {
     fn vet_closure_header_quoted_key_is_found() {
         assert_found("[[exemptions.'const-oid']]");
         assert_found("[[exemptions.\"const-oid\"]]");
+    }
+
+    /// EXT2B-2 (Codex probe, closes EXTB-5): a header whose key path has a quoted or escaped key — the TOML crate decodes
+    /// `[["exemptions".const-oid]]` as `exemptions → const-oid` — is rejected with a finding naming the line, and its
+    /// entry still counts (never `([], 0)`); the legitimate forms stay ordinary.
+    #[test]
+    fn vet_closure_header_with_quoted_table_key_is_rejected() {
+        let closure: BTreeSet<(String, String)> = [("const-oid".to_owned(), "0.10.2".to_owned())]
+            .into_iter()
+            .collect();
+        for header in [
+            "[[\"exemptions\".const-oid]]",
+            "[['exemptions'.const-oid]]",
+            "[[ \"exemptions\" . \"const-oid\" ]]",
+            "[[\"exempt\\u0069ons\".const-oid]]",
+            "[[\"exemptions\".\"const-oid\"]]",
+        ] {
+            let config = format!(
+                "[[exemptions.other]]\nversion = \"1.0.0\"\n{TRACKED}\n\n{header}\nversion = \"0.10.2\"\ncriteria = \"safe-to-deploy\"\n{TRACKED}\n"
+            );
+            let (findings, n) = vet_closure_findings(&config, &closure);
+            assert_eq!(n, 2, "{header}: an entry is counted");
+            assert!(
+                findings
+                    .iter()
+                    .any(|f| f.contains("quoted or escaped key in a table header")
+                        && f.contains(header)),
+                "{header}: {findings:?}"
+            );
+        }
+        // positive controls: the strict form and a quoted key of another table are not this finding
+        let strict = format!("[[exemptions.const-oid]]\nversion = \"0.9.6\"\n{TRACKED}\n");
+        let (findings, n) = vet_closure_findings(&strict, &closure);
+        assert_eq!((n, findings.len()), (1, 0), "{findings:?}");
+        let (findings, _) =
+            vet_closure_findings("[policy.\"x\"]\naudit-as-crates-io = false\n", &closure);
+        assert!(findings.is_empty(), "{findings:?}");
     }
 
     /// EXTB-5: spaces inside the brackets, or an indented header, are found.

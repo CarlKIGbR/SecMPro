@@ -117,6 +117,8 @@ struct Holding {
     mute_after: Option<usize>,
     /// The connect of connection `which` never completes (a dial that hangs).
     hang: bool,
+    /// `answer_ms` applies to connection `which` only.
+    late_only_which: bool,
 }
 
 impl Holding {
@@ -129,6 +131,7 @@ impl Holding {
             count: Arc::new(AtomicUsize::new(0)),
             mute_after: None,
             hang: false,
+            late_only_which: false,
         }
     }
 }
@@ -144,7 +147,12 @@ impl StreamProvider for Holding {
         let n = self.count.fetch_add(1, Ordering::SeqCst);
         let hold = (n == self.which).then_some(self.hold).flatten();
         let mute_after = (n == self.which).then_some(self.mute_after).flatten();
-        let (inner, relay, answer_ms) = (self.inner.clone(), relay.clone(), self.answer_ms);
+        let answer_ms = if self.late_only_which && n != self.which {
+            0
+        } else {
+            self.answer_ms
+        };
+        let (inner, relay) = (self.inner.clone(), relay.clone());
         let hang = self.hang && n == self.which;
         async move {
             if hang {
@@ -701,4 +709,67 @@ fn driver_never_completing_connect_is_bounded() {
             );
         });
     }
+}
+
+/// EXT3B-2 (Codex M6B-EXT3c): a hanging writer on one link does not shift the tick of another link whose tick is due
+/// inside the flush wait. Strict, one contact (two links, P = 10 s, no phase): link 1 is up at 0 and ticks at 130 000;
+/// link 0 connects late, is up at 119 999, and its first write, due at 129 999, hangs for 20 s. The flush wait of the
+/// pass at 129 999 must end before link 1's tick (it waited 250 ms: `PollDue(130249)`, `TornDown(LinkId(1), Overrun)`).
+/// The equal-due case is `driver_hanging_writer_does_not_delay_other_links`.
+#[test]
+fn driver_hanging_writer_does_not_shift_staggered_tick() {
+    runtime().block_on(async {
+        let setup = Setup::new();
+        let mut provider = Holding::new(
+            setup.provider.clone(),
+            0,
+            Some(Hold {
+                first: 0,
+                delay_ms: 20_000,
+            }),
+            119_999,
+        );
+        provider.late_only_which = true;
+        let sc = Scenario {
+            mode: Mode::Strict,
+            contacts: vec![(10_000, 10_000)],
+            pool: false,
+            seed: 81,
+        };
+        let x = TClient::with_provider(
+            &setup,
+            provider,
+            sc.mode,
+            no_phase(),
+            sc.seed,
+            Costs::default(),
+            0,
+        );
+        let mut rig = TokioRig::assemble(setup, x, &sc).await;
+        let run = rig.run_minutes(3, None).await;
+        let (held, healthy) = (link_of(&rig, 0), link_of(&rig, 1));
+        let log = rig.x.driver.log().unwrap();
+        let up_held = log
+            .events
+            .iter()
+            .find_map(|(t, e)| (*e == LinkEvent::Up(held)).then_some(*t))
+            .unwrap();
+        assert_eq!(up_held, 119_999, "the late link comes up at 119 999");
+        let torn_healthy: Vec<_> = log
+            .events
+            .iter()
+            .filter(|(_, e)| matches!(e, LinkEvent::TornDown(l, _) if *l == healthy))
+            .collect();
+        assert!(
+            torn_healthy.is_empty(),
+            "the healthy link was torn down: {torn_healthy:?}"
+        );
+        assert!(
+            run.c2r
+                .iter()
+                .any(|e| e.slot == healthy.0 && e.len == 4352 && e.t_ms == 130_000),
+            "the healthy link wrote its tick at 130 000"
+        );
+        assert_eq!(run.overruns, 0);
+    });
 }

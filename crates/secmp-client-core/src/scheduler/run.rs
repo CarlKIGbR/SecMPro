@@ -828,10 +828,15 @@ where
         }
     }
 
-    /// Wait (at most [`FLUSH_WAIT_MS`]) until every write handed out in the pass at `now` is reported; other events are
-    /// kept for the next pass.
+    /// Wait (at most [`FLUSH_WAIT_MS`], and never past the scheduler's next deadline less the driver jitter) until every
+    /// write handed out in the pass at `now` is reported; other events are kept for the next pass. The next-deadline
+    /// bound is what keeps a hanging writer of one link from delaying another link's tick that falls inside the wait
+    /// (EXT3B-2): on expiry the pass goes on, the stalled write stays pending under [`WRITE_STALL_MS`].
     async fn flush_wait(&mut self, sched: &mut Scheduler, now: u64) -> Result<(), SchedError> {
-        let until = now.saturating_add(FLUSH_WAIT_MS);
+        let mut until = now.saturating_add(FLUSH_WAIT_MS);
+        if let Some(next) = sched.next_deadline() {
+            until = until.min(next.saturating_sub(sched.params().driver_jitter_ms));
+        }
         while self
             .links
             .values()

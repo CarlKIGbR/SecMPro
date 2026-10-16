@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::{Context, Poll};
 
 use secmp_client_core::scheduler::params::{Mode, Params};
-use secmp_client_core::scheduler::run::{Purpose, Step};
+use secmp_client_core::scheduler::run::{CONNECT_TIMEOUT_MS, Purpose, Step};
 use secmp_client_core::scheduler::types::{LinkEvent, LinkId, Reason};
 use secmp_proto::wire::inv::RelayRef;
 use secmp_testkit::harness::{Costs, Dir, MemProvider};
@@ -115,6 +115,8 @@ struct Holding {
     count: Arc<AtomicUsize>,
     /// Connection `which` goes silent after this many bytes from the relay.
     mute_after: Option<usize>,
+    /// The connect of connection `which` never completes (a dial that hangs).
+    hang: bool,
 }
 
 impl Holding {
@@ -126,6 +128,7 @@ impl Holding {
             answer_ms,
             count: Arc::new(AtomicUsize::new(0)),
             mute_after: None,
+            hang: false,
         }
     }
 }
@@ -142,7 +145,11 @@ impl StreamProvider for Holding {
         let hold = (n == self.which).then_some(self.hold).flatten();
         let mute_after = (n == self.which).then_some(self.mute_after).flatten();
         let (inner, relay, answer_ms) = (self.inner.clone(), relay.clone(), self.answer_ms);
+        let hang = self.hang && n == self.which;
         async move {
+            if hang {
+                core::future::pending::<()>().await;
+            }
             if answer_ms > 0 {
                 tokio::time::sleep(std::time::Duration::from_millis(answer_ms)).await;
             }
@@ -621,4 +628,77 @@ fn direct_blackhole_link_is_closed_within_idle_bound() {
             log.events
         );
     });
+}
+
+/// CLIENT-BOUND (WEISUNG M6-CI-4): a connect that never completes — the dial hangs (`hang`), or the peer accepts and
+/// never writes a byte (`mute_after` 0: the link handshake never gets its `RELAYINFO`) — is bounded: the link is
+/// resolved as failed / torn down and tried again within `link_idle_ms` (240 s), its connect task is gone, and the other
+/// link of the contact is unaffected.
+#[test]
+fn driver_never_completing_connect_is_bounded() {
+    for hang in [true, false] {
+        runtime().block_on(async {
+            let setup = Setup::new();
+            let mut provider = Holding::new(setup.provider.clone(), 0, None, 0);
+            if hang {
+                provider.hang = true;
+            } else {
+                provider.mute_after = Some(0);
+            }
+            let sc = Scenario {
+                mode: Mode::Strict,
+                contacts: vec![(10_000, 10_000)],
+                pool: false,
+                seed: 71,
+            };
+            let x = TClient::with_provider(
+                &setup,
+                provider,
+                sc.mode,
+                no_phase(),
+                sc.seed,
+                Costs::default(),
+                0,
+            );
+            let mut rig = TokioRig::assemble(setup, x, &sc).await;
+            rig.run_minutes(10, None).await;
+            let stuck = link_of(&rig, 0);
+            let other = link_of(&rig, 1);
+            let log = rig.x.driver.log().unwrap();
+            let started = log
+                .connects
+                .iter()
+                .find_map(|(t, p, _)| matches!(p, Purpose::Link(l) if *l == stuck).then_some(*t))
+                .unwrap();
+            let bound = secmp_testkit::harness::RelayLimits::defaults().link_idle_ms;
+            assert_eq!(bound, 240_000);
+            let ended = log
+                .resolved
+                .iter()
+                .find_map(|(t, l, up)| (*l == stuck && !up).then_some(*t))
+                .or_else(|| {
+                    log.events.iter().find_map(|(t, e)| {
+                        matches!(e, LinkEvent::TornDown(l, _) if *l == stuck).then_some(*t)
+                    })
+                });
+            // the mechanism: the driver's own connect timeout over provider connect + link handshake, which is below the
+            // relay's idle bound
+            assert!(CONNECT_TIMEOUT_MS < bound);
+            assert_eq!(
+                ended,
+                Some(started + CONNECT_TIMEOUT_MS),
+                "hang {hang}: connect started at {started}, ended {ended:?} (bound {bound} ms)"
+            );
+            assert!(
+                !rig.x.driver.has_link_io(stuck),
+                "hang {hang}: its tasks are gone"
+            );
+            assert!(
+                !log.events
+                    .iter()
+                    .any(|(_, e)| matches!(e, LinkEvent::TornDown(l, _) if *l == other)),
+                "hang {hang}: the other link was torn down"
+            );
+        });
+    }
 }

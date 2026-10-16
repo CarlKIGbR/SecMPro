@@ -62,3 +62,22 @@ Each finding: the regression test was written first and run red, then the fix.
   per-mutant run of the second `cargo mutants` run (`gates::mutants_harness_args`), so `ai02_balanced_tokio` does not run there.
   The pure (A′) revert — the position advancing when the cell is obtained — is exactly the state the new test was red on, so the
   fast suite, which the mutation run does include (`m6_sched_io` is not skipped), now kills it.
+
+## §client-bound — a connect that never completes (WEISUNG M6-CI-4)
+
+- Correction to the EXT2B-1 adapter check above: `secmp-transport` has no timeout of its own, but the driver has one.
+  `scheduler/run.rs` wraps provider connect (the direct provider's TCP connect and TLS handshake, the Tor provider's
+  `connect_with_prefs`) and the SecMP-LINK handshake of every link in one `tokio::time::timeout(connect_timeout, …)`
+  (`CONNECT_TIMEOUT_MS` = 120 000, `Driver::with_connect_timeout`); on expiry the attempt future is dropped, the connect
+  resolves as failed (`Conn::Failed`) and the scheduler retries through its back-off. The core has no deadline for a
+  `Connecting` link; the driver's timeout is what keeps it from staying there (driver obligation (iii)).
+- Probe: `m6_driver_io::driver_never_completing_connect_is_bounded` (real tokio driver, paused clock, one Strict contact at
+  P = 10 s, link 0 hung): (a) the provider's connect future never resolves; (b) the peer accepts and never writes a byte
+  (`mute_after` 0, the link handshake never gets `RELAYINFO`).
+- Observed, both cases: connect of link 0 at t = 0, resolved as failed at t = 120 000 ms (`TornDown(LinkId(0), Closed)`),
+  a new link (`LinkId(2)`) connects and comes up at 120 000; the other link (`LinkId(1)`) up at 0 and never torn down; no
+  stream task of the hung link remains (`has_link_io` false). 120 000 ms < `link_idle_ms` 240 000 ms; the test pins the
+  exact value and `CONNECT_TIMEOUT_MS < link_idle_ms`.
+- Result: bounded, no transport change; no `docs/06` default changed (no ADR-047 Amendment 6).
+- Not covered by this probe: the real `TlsProvider`/`TcpDialer` over a real socket (the paused-clock harness uses
+  `MemProvider`); the timeout wraps the provider future generically, so the provider type does not matter to the bound.

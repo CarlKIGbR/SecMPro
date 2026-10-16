@@ -1,0 +1,17 @@
+# AI-01…AI-06 on the virtual (sync) driver at 64 traces after the EXTB-1 core change (WEISUNG M6-B-6 §0.1 (ii))
+# command: env SECMP_AI_TRACES=64 cargo nextest run -p secmp-testkit --features harness \
+#   -E 'test(/m6_activity::(activity_independence_|timing_draws_independent_of_activity)/)'
+# head cdf2b31; host: 32-core container; 2026-10-16. AI-01…AI-03 always run 64 traces; AI-04/AI-05/AI-06 ran 64 here
+# (CI: 8/4/8). AI-04…AI-06 write no max-|Δt| line: they assert Δt = 0 per trace (AI-05: draws equal).
+
+        PASS [ 238.132s] (1/6) secmp-testkit::harness m6_activity::activity_independence_lowbw_virtual
+        PASS [ 287.166s] (2/6) secmp-testkit::harness m6_activity::activity_independence_when_receiving
+        PASS [ 291.182s] (3/6) secmp-testkit::harness m6_activity::activity_independence_both_directions
+        PASS [ 293.089s] (4/6) secmp-testkit::harness m6_activity::activity_independence_strict_virtual
+        PASS [ 316.148s] (5/6) secmp-testkit::harness m6_activity::activity_independence_balanced_virtual
+        PASS [1042.514s] (6/6) secmp-testkit::harness m6_activity::timing_draws_independent_of_activity
+     Summary [1042.515s] 6 tests run: 6 passed (6 slow), 164 skipped
+
+AI-01: max |Δt| C2R = 0 ms, R2C = 0 ms
+AI-02: max |Δt| C2R = 0 ms, R2C = 0 ms
+AI-03: max |Δt| C2R = 0 ms, R2C = 0 ms

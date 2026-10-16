@@ -27,12 +27,41 @@ AI-09, MR-01, MR-02, G-01…G-11, K-01…K-07, P-01…P-04, P-06, P-07, FZ-01, F
 | 10 | A | Kani, fuzz, xtask lists, `ci-fast`, `ci-full`, evidence under `M06-evidence/` | K-01…K-07, FZ-01, FZ-04, X-05 | done locally; PR run: see §4 |
 | 11 | B | BRIEF M6-B §1 dependencies; §2.1 gates; §2.2 driver; §2.3 TLS; §2.4 relay `direct-tls`; §2.5 Tor; §2.6 owner requests | X-01…X-04, X-06, MU-01, COV-01, COV-02, AD-07…AD-12, P-05, TLS-01…TLS-15, G-12, TOR-01…TOR-09, FZ-02, FZ-03 (TOR-10, X-10: owner, §6) | done; see "Phase B closed" |
 
-**Phase B — not closed.** The P4 closing below was at `1423029`. Then the external reviews of `f68d923` (WEISUNG
-M6-B-5, Codex; M6-B-5b, GLM) found blockers. They are fixed at `2885694` except EXTB-1, which needs a core change:
-STOP, §8. The `ci-full` below is the P4 one; it runs again after the EXTB-1 decision. Phase B:
-`modell=claude-opus-5-5`.
+**Phase B closed @ `cdf2b31`** (code; the report and evidence commit follows it). Phase B: `modell=claude-opus-5-5`.
+- **How it got here.** After the P4 closing at `1423029`, the external reviews of `f68d923` (WEISUNG M6-B-5, Codex;
+  M6-B-5b, GLM) found blockers. All are fixed (§6). EXTB-1 needed the one core change of Phase B, approved by WEISUNG
+  M6-B-6: (A)/(A′) @ `cdf2b31`, with its proofs re-run (§6, "Decisions of WEISUNG M6-B-6").
+- **Local `ci-full`:** PASS at `cdf2b31`, with the linux-full delegations (windows-native, windows-cross, mutants, ct,
+  proverif-link; `--models tr`).
+  - Kani was not delegated: it ran locally, 40/40, 2920 s.
+  - fuzz 4130 s, miri 2093 s, coverage 363 s.
+- **`ci-fast --strict`:** PASS at `cdf2b31`.
+- **Coverage:**
 
-**P4 state, superseded:** Phase B closed @ `1423029` (code; the report and evidence commit follows it).
+  | Crate | Coverage |
+  |---|---|
+  | `secmp-client-core` | 92.3 % (min 90) |
+  | `secmp-transport` | 85.7 % (min 80) |
+  | `secmp-relay` | 97.7 % |
+  | `secmp-proto` | 97.7 % |
+  | `secmp-crypto` | 99.4 % |
+  | `secmp-testkit` | 93.7 % |
+
+- **X-01:** youngest crate `toml_writer 1.1.3+spec-1.1.0`, 8 days.
+- **`cargo vet --locked`:** `Vetting Succeeded (236 fully audited, 1 partially audited, 322 exempted)`.
+- **Evidence (`docs/reviews/M06-evidence/`):**
+  - `ci-fast-m6b-cdf2b31.txt`
+  - `ci-full-m6b-cdf2b31.txt`
+  - `kani-m6b-cdf2b31.txt`
+  - `coverage-x01-m6b-cdf2b31.txt`
+  - `vet-m6b-cdf2b31.txt`
+  - `ai-tokio-64-m6b-cdf2b31.txt`
+  - `ai-sync-64-m6b-cdf2b31.txt`
+  - `mutants-core-cdf2b31.txt`
+- **Handover B→C:** a green PR run (incl. `ct`, `mutants`, `proverif-hx`, `proverif-link`). `mutants` stays red until
+  OPEN-M6-B-2 (§6) is worked in M6-C.
+
+**P4 state, superseded:** Phase B closed @ `1423029`; the paragraphs below describe that run.
 - **Local `ci-full`:** PASS, run with the linux-full delegations (windows-native, windows-cross, mutants, ct,
   proverif-link; `--models tr`).
   - Kani was not delegated. It ran locally, 40/40, because `crates/secmp-relay` and `client-core/src/scheduler/run.rs`
@@ -340,8 +369,8 @@ None from `docs/03`/`docs/01`. Implementation choices the review should know (no
     timing draws and the one-shot links are equal.
   - Coverage at P2 (local `cargo xtask step coverage`, 444 s): `secmp-client-core` 2722/2961 = 91.9 % (floor 90 %),
     `secmp-transport` 1362/1544 = 88.2 % (floor 80 %), `secmp-testkit` 93.0 %.
-  - The core is untouched: `git diff b5aa27b -- crates/secmp-client-core/src/scheduler/core` is empty. The virtual-driver
-    AI-01…AI-06 run unchanged.
+  - At P2 the core was untouched (`git diff b5aa27b -- crates/secmp-client-core/src/scheduler/core` empty); since then
+    the core changed once in Phase B: EXTB-1 (A)/(A′) @ `cdf2b31`, proofs re-run (client-core Kani 7/7; AI-01…AI-06 sync 64 traces 6/6; AI-01…AI-06 tokio 16 and 64 traces with the extended oracle 6/6; S-* suites 40/40 plus the client-core unit tests 11/11; harness binary 164/164; second mutants run on `core/mod.rs`, see §6).
 
 - **P3, §2.3 TLS (`secmp-transport::tls`; tests in `crates/secmp-transport/tests/tls/`, feature `harness`).**
   - TLS-01 `tls_client_offers_exactly_x25519mlkem768`: the provider has one group, 0x11EC. The `ClientHello` has
@@ -457,7 +486,7 @@ None from `docs/03`/`docs/01`. Implementation choices the review should know (no
       for `docs/05` §7 is not written there yet. I did not edit `docs/05`.
     - Observation, not caused by this work: in the 25-h Low-bw run of the G-12 test, the second client (seed 1204)
       tears its links down with `Overrun` every 1–3 min. The same happens with the M5 limits 900 s / 86 400 s, so this is
-      scheduler or virtual-driver behaviour. The core is untouched in Phase B (STOP); I report it and do not change it.
+      scheduler or virtual-driver behaviour. I report it and do not change it (OPEN-M6-B-4); the core changed once in Phase B: EXTB-1 (A)/(A′) @ `cdf2b31`, proofs re-run (client-core Kani 7/7; AI-01…AI-06 sync 64 traces 6/6; AI-01…AI-06 tokio 16 and 64 traces with the extended oracle 6/6; S-* suites 40/40 plus the client-core unit tests 11/11; harness binary 164/164; second mutants run on `core/mod.rs`, see §6).
 
 - **P4b, §2.5 Tor (`secmp-transport::tor`, not in the Kani build like `arti-client`).**
   - **What.**
@@ -523,6 +552,21 @@ None from `docs/03`/`docs/01`. Implementation choices the review should know (no
   - **⚙ TOR-10 / X-10:** the owner request is below. `secmp-testkit/examples/tor_smoke.rs` is the Tor smoke check: Arti
     in a fresh profile, `READY`, then HELLO…HS2 and `PING` to a given `RelayRef`. No test runs it.
 
+- **Extended AI oracle (WEISUNG M6-B-5 EXTB-1 / M6-B-6 §0.2; `m6_tokio_ai.rs`, `MemRelay::store_changes`).** Besides
+  the emission comparison (max |Δt| = 0 in both directions), every idle and active run of the six tokio repeats asserts:
+  - (a) no teardown other than at a lifetime's end (no `Rejected`, no `Overrun`, …);
+  - (c) frames on every tick of every scheduled link: its frame times are one period apart, the first one period after
+    it came up, and no tick is missing before its end;
+  - (b) the relay-visible SEND sequence — queue `rid` and its `next_cell_id`, in time, as the relay's store changed
+    after each unit of the client's own connections — is the idle run's, in every trace.
+    - The acknowledgement progression (each queue's head) is compared in one extra trace per AI-01…AI-03 whose peers
+      send nothing: no `PeerSend` events and peer delivery receipts switched off.
+    - The receipts are needed beyond the approved "no `PeerSend`" rule. They answer the client's own real messages, so
+      a `PeerSend`-free trace still brings cells that the client acknowledges, at the peers' pump times plus the fetch
+      delay; seen in the first run of the oracle.
+  - On the old core the oracle fails AI-02: 162 `Rejected` teardowns in the idle run alone.
+  - The sync AI-04…AI-06 take `SECMP_AI_TRACES` for the local 64-trace run; their CI defaults (8, 4, 8) are unchanged.
+
 ## 6. Dependencies added or bumped
 
 Phase A: none (workspace path crates only: `secmp-client-core` → `secmp-transport`; `secmp-testkit` → `secmp-client-core`).
@@ -530,7 +574,11 @@ Phase B commit 1: see §2, "Phase B commit 1 — dependencies as landed".
 
 **External review of `f68d923` (WEISUNG M6-B-5, Codex; M6-B-5b, GLM) — status per finding.** Each test was red on the
 probe before its fix, except the guard tests noted.
-- **EXTB-1** (Balanced: FETCH sealed before a deferred SEND) — **BLOCKED, core change needed (§8).** The test
+- **EXTB-1** fixed @ `cdf2b31` (core change approved, WEISUNG M6-B-6). It had been blocked on the core change (§8).
+  Reason for the record: with a deferring facade, (A′) is not only a correctness fix; it closes an activity dependence,
+  since the queue a slot serves would otherwise follow the worker's timing. Test
+  `driver_balanced_first_tick_sends_and_fetches_in_order`: red before, green after. The extended AI oracle is described
+  in §5. Before the decision, the test
   `driver_balanced_first_tick_sends_and_fetches_in_order` reproduces the probe red (`TornDown(LinkId(0), Rejected)` at
   10 000, `TornDown(LinkId(1), Rejected)` at 50 000). It is not committed, since it is red on the branch. The extended
   AI oracle (a)–(c) comes with the fix.
@@ -593,6 +641,23 @@ probe before its fix, except the guard tests noted.
     tests, 162/162.
   - `ci-full` is held until EXTB-1 is decided.
 
+**Decisions of WEISUNG M6-B-6, recorded:**
+- **EXTB-1:** (A)/(A′) approved and applied @ `cdf2b31`; the driver contract in `scheduler/mod.rs` states both.
+- **Reopened proofs, re-run at `cdf2b31`:**
+  - client-core Kani: 7/7 (all harnesses of `kani_proofs.rs`);
+  - AI-01…AI-06 sync at 64 traces: 6/6, max |Δt| = 0 (`M06-evidence/ai-sync-64-m6b-cdf2b31.txt`);
+  - AI-01…AI-06 tokio with the extended oracle: 16 traces 6/6, 64 traces 6/6 (`ai-tokio-64-m6b-cdf2b31.txt`);
+  - S-* suites (`m6_sched*`): 40/40; client-core unit tests 11/11; harness binary 164/164;
+  - second cargo-mutants run on `scheduler/core/mod.rs` (local, `--file`; `M06-evidence/mutants-core-cdf2b31.txt`):
+    251 mutants, 122 caught, 41 missed, 40 timeouts (8 of them caught-by-hang under §Rules), 48 unviable.
+    - The new lines leave no survivor. The only finding near them is the timeout `591:27 && → ||` of the existing
+      `needs_send && up.send_part.is_none()`.
+    - The misses and timeouts join OPEN-M6-B-2 (the first item of Phase C).
+- **OPEN-M6-B-5:** keepalive timings and `TCP_USER_TIMEOUT` need `socket2`. Decide in Phase C, via an ADR-051 amendment,
+  or stay with the 240 s in-flight bound. The GLMB-1 deviation (keepalive + nodelay only) is accepted for Phase B.
+- **EXTB-6 deviation** (`cargo metadata --locked` on `fuzz/` instead of a non-existent `cargo fuzz --locked`): accepted.
+- **Harness count:** 164/164 at `cdf2b31` is the number carried; "138/138" was the whole binary at P2.
+
 **Decisions of WEISUNG M6-B-5c, recorded:**
 - **OPEN-M6-B-3:** re-encode through Arti's `HsId` once arti-client exposes it without `experimental-api`; no
   `tor-hscrypto` edge now. The TOR-08/FZ-03 substitute is accepted.
@@ -646,7 +711,7 @@ Phase-B review).**
   `ai06_both_directions_tokio` (R2C equal), with the receive cost of 5 ms per cell; and
   `m6_driver::driver_slow_work_does_not_delay_other_links` (400 ms per received cell, emission unchanged).
 - **The way out** is a core API change, for example a deferred-commit outcome of `deliver`, after the Phase-B review. The
-  core stays untouched in Phase B.
+  core changed once in Phase B: EXTB-1 (A)/(A′) @ `cdf2b31`, proofs re-run (client-core Kani 7/7; AI-01…AI-06 sync 64 traces 6/6; AI-01…AI-06 tokio 16 and 64 traces with the extended oracle 6/6; S-* suites 40/40 plus the client-core unit tests 11/11; harness binary 164/164; second mutants run on `core/mod.rs`, see §6); OPEN-M6-B-1 is not part of it.
 
 **Mutants shards of PR run 38724110285 (head `1517781`) — diagnosis (WEISUNG M6-B-3 §1).**
 - **Shard 1** failed after 156 min (job 116385913865, 11:00 → 13:40). **Shard 5** failed after 192 min (job 116385914084,
@@ -866,6 +931,8 @@ required job (`ct`, `mutants`, `proverif-hx`) is not green.
 
 ## 7. Open risks and known limitations
 
+- **Scheduler core in Phase B:** core changed once in Phase B: EXTB-1 (A)/(A′) @ `cdf2b31`, proofs re-run (client-core Kani 7/7; AI-01…AI-06 sync 64 traces 6/6; AI-01…AI-06 tokio 16 and 64 traces with the extended oracle 6/6; S-* suites 40/40 plus the client-core unit tests 11/11; harness binary 164/164; second mutants run on `core/mod.rs`, see §6).
+
 - AI-01…AI-03 take ≈ 1–1.5 min each on a 32-core host (64 traces × 6 h on threads); on a 4-core runner expect several minutes.
 - The tick path is "equal" in the virtual driver; the real-time path (tokio driver, Tor) is Phase B/C (AI-07).
 - `link_age_ms`/`link_idle` defaults are still the M5 placeholders until G-12.
@@ -998,7 +1065,10 @@ required job (`ct`, `mutants`, `proverif-hx`) is not green.
 
 ## 8. Blocked / questions for the reviewer or owner
 
-### EXTB-1 (WEISUNG M6-B-5 §1) — BLOCKED, 2026-10-16: the fix needs a core change (STOP as instructed)
+### EXTB-1 (WEISUNG M6-B-5 §1) — BLOCKED 2026-10-16, RESOLVED: core change (A)/(A′) approved (WEISUNG M6-B-6), applied @ `cdf2b31`
+
+The text below is the STOP as it was written. The reopened proofs and their results are in §6, "Decisions of WEISUNG
+M6-B-6".
 
 - **Why the driver cannot fix it.**
   - In `prepare_link` (`scheduler/core/mod.rs:591–602`), the core seals the FETCH part in the same call in which the

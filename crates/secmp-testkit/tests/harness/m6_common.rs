@@ -5,7 +5,7 @@ use secmp_client_core::scheduler::conversation::Conversation;
 use secmp_client_core::scheduler::core::LinkKind;
 use secmp_client_core::scheduler::outbox::{MemOutbox, MemPersist};
 use secmp_client_core::scheduler::params::{Mode, Params};
-use secmp_client_core::scheduler::types::{QueueId, RelayId};
+use secmp_client_core::scheduler::types::{CellSource, QueueId, RelayId};
 use secmp_proto::wire::cell::Cell;
 use secmp_testkit::harness::{
     Dir, EntropyPool, HarnessConfig, START_UNIX, TraceEntry, VirtualDriver,
@@ -25,6 +25,27 @@ pub struct Contact {
     /// The index of the conversation in the first and in the second client's `convs`.
     pub conv_a: usize,
     pub conv_b: usize,
+    /// The second client's scheduler queues (sending to the first / receiving from the first).
+    pub b_send: QueueId,
+    pub b_recv: QueueId,
+}
+
+/// Give the second client of a [`contact`] its sending chain (OPEN-M6-B-4, EXT2B-3): `alice` is the ratchet's
+/// initiator, `bob` the responder, who can seal nothing until the first cell of `alice` has been processed — and a
+/// combined link cannot seal the FETCH part without a SEND part, so `bob`'s tick would tear down with `Overrun`. One
+/// cell of `alice` (the same code path as every cell) is delivered to `bob` before any link is up.
+pub fn seed_conversation(sim: &mut VirtualDriver, alice: usize, bob: usize, c: &Contact) {
+    let now = sim.now();
+    let cell = sim
+        .client(alice)
+        .convs
+        .prepare_cell(c.a_send, now)
+        .unwrap()
+        .unwrap();
+    sim.client(bob)
+        .convs
+        .deliver(c.b_recv, 0, &cell.cell)
+        .unwrap();
 }
 
 pub fn driver() -> VirtualDriver {
@@ -126,6 +147,8 @@ pub fn contact_on(
         a_recv: alice_recv,
         conv_a: index_alice,
         conv_b: index_bob,
+        b_send: bob_send,
+        b_recv: bob_recv,
     }
 }
 

@@ -9,6 +9,7 @@ use secmp_testkit::harness::{Dir, Inspect, VirtualDriver};
 
 use crate::m6_common::{
     FRAME, at, client, client_with, contact, driver, frames_of, ks_uniform, run_until_link_up,
+    seed_conversation,
 };
 
 fn the_link(sim: &VirtualDriver, c: usize, kind: LinkKind) -> (u64, u64) {
@@ -362,24 +363,24 @@ fn relay_idle_and_age_bounds_from_schedule() {
         let mut sim = driver();
         let a = client_with(&mut sim, mode, longest.clone(), seed);
         let b = client_with(&mut sim, mode, longest.clone(), seed + 1);
-        contact(&mut sim, a, b, slowest, slowest);
+        let c = contact(&mut sim, a, b, slowest, slowest);
+        seed_conversation(&mut sim, a, b, &c);
         sim.run_until(90_000_000);
-        for c in [a, b] {
+        // EXT2B-3: for both clients and every link the only teardown is the end of its 24-h lifetime — not the relay's
+        // close, and not an `Overrun` (a tick whose frame was not ready) — and each client held a link that long
+        for (name, c) in [("a", a), ("b", b)] {
             let events = &sim.client_ref(c).events;
-            let closed: Vec<_> = events
+            let other: Vec<_> = events
                 .iter()
-                .filter(|(_, e)| matches!(e, LinkEvent::TornDown(_, Reason::Closed)))
+                .filter(|(_, e)| matches!(e, LinkEvent::TornDown(_, r) if *r != Reason::Lifetime))
                 .collect();
-            assert!(closed.is_empty(), "{mode:?}: relay closes {closed:?}");
+            assert!(other.is_empty(), "{mode:?}: client {name}: {other:?}");
+            assert!(
+                events
+                    .iter()
+                    .any(|(_, e)| matches!(e, LinkEvent::TornDown(_, Reason::Lifetime))),
+                "{mode:?}: client {name}: the 24-h lifetime ended a link"
+            );
         }
-        // not vacuous: links were held for the whole 24-h lifetime
-        assert!(
-            [a, b].iter().any(|&c| sim
-                .client_ref(c)
-                .events
-                .iter()
-                .any(|(_, e)| matches!(e, LinkEvent::TornDown(_, Reason::Lifetime)))),
-            "{mode:?}: the 24-h lifetime ended a link"
-        );
     }
 }

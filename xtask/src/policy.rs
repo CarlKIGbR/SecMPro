@@ -694,6 +694,11 @@ pub(crate) fn vet_closure_findings(
 ) -> (Vec<String>, usize) {
     let entries = vet_exemptions(config);
     let mut findings = Vec::new();
+    // EXT3B-1: a byte-order mark makes the first line start with U+FEFF, which the TOML parser accepts and the line
+    // classifier does not see through; rejected, never stripped
+    if config.contains('\u{feff}') {
+        findings.push("vet config contains a byte-order mark".to_owned());
+    }
     let untracked: Vec<&str> = entries
         .iter()
         .filter(|e| !e.noted)
@@ -1640,6 +1645,14 @@ mod tests {
     fn repo_files_are_read_with_lf_line_endings() -> Result<()> {
         assert_eq!(lf("a = [\r\n  \"x\",\r\n]\r\n"), "a = [\n  \"x\",\n]\n");
         assert!(!repo_file("deny.toml")?.contains('\r'));
+        // EXT3B-1: no byte-order mark in the files the policy tests read by line (fail-closed readers, checked here)
+        for f in [
+            "deny.toml",
+            "supply-chain/config.toml",
+            "supply-chain/audits.toml",
+        ] {
+            assert!(!repo_file(f)?.contains('\u{feff}'), "{f}");
+        }
         assert!(lf("skip-tree = []\r\n").contains("skip-tree = []\n"));
         Ok(())
     }
@@ -2522,6 +2535,47 @@ mod tests {
         let (findings, _) =
             vet_closure_findings("[policy.\"x\"]\naudit-as-crates-io = false\n", &closure);
         assert!(findings.is_empty(), "{findings:?}");
+    }
+
+    /// EXT3B-1 (Codex M6B-EXT3c): a UTF-8 byte-order mark before an exemption header — which the TOML parser accepts and
+    /// the line classifier did not recognise (`([], 0)`) — is rejected by name: bare header, quoted header, and the full
+    /// current `supply-chain/config.toml` behind a BOM with the closure exemption planted; the file without a BOM is
+    /// unchanged.
+    #[test]
+    fn vet_closure_byte_order_mark_is_rejected() -> Result<()> {
+        let closure: BTreeSet<(String, String)> = [("const-oid".to_owned(), "0.10.2".to_owned())]
+            .into_iter()
+            .collect();
+        let entry = format!("\nversion = \"0.10.2\"\ncriteria = \"safe-to-deploy\"\n{TRACKED}\n");
+        let real = repo_file("supply-chain/config.toml")?;
+        let inputs = [
+            ("bare", format!("\u{feff}[[exemptions.const-oid]]{entry}")),
+            (
+                "quoted",
+                format!("\u{feff}[[\"exemptions\".const-oid]]{entry}"),
+            ),
+            (
+                "real config",
+                format!("\u{feff}[[exemptions.const-oid]]{entry}\n{real}"),
+            ),
+            (
+                "inside",
+                format!("{real}\n[[exemptions.x]]\u{feff}\nversion = \"1.0.0\"\n{TRACKED}\n"),
+            ),
+        ];
+        for (name, config) in inputs {
+            let (findings, _) = vet_closure_findings(&config, &closure);
+            assert!(
+                findings
+                    .iter()
+                    .any(|f| f == "vet config contains a byte-order mark"),
+                "{name}: {findings:?}"
+            );
+        }
+        // control: the real config without a BOM has no such finding
+        let (findings, _) = vet_closure_findings(&real, &BTreeSet::new());
+        assert!(!findings.iter().any(|f| f.contains("byte-order mark")));
+        Ok(())
     }
 
     /// EXTB-5: spaces inside the brackets, or an indented header, are found.

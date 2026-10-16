@@ -25,8 +25,7 @@ pub struct Contact {
     /// The index of the conversation in the first and in the second client's `convs`.
     pub conv_a: usize,
     pub conv_b: usize,
-    /// The second client's scheduler queues (sending to the first / receiving from the first).
-    pub b_send: QueueId,
+    /// The second client's scheduler queue receiving from the first.
     pub b_recv: QueueId,
 }
 
@@ -147,7 +146,6 @@ pub fn contact_on(
         a_recv: alice_recv,
         conv_a: index_alice,
         conv_b: index_bob,
-        b_send: bob_send,
         b_recv: bob_recv,
     }
 }

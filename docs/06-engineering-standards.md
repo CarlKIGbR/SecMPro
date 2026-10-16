@@ -99,11 +99,12 @@ Jobs of `ci.yml` (pinned by `expect::PINNED_JOBS`; the first four are the requir
 | `linux-fast` | `ci-fast` (steps 1–5), SBOM, systemd exposure | 90 |
 | `windows-native` | native MSVC build, clippy, tests, KATs, hello | 90 |
 | `xwin-cross` | `cargo-xwin` cross-build | 60 |
-| `linux-full` | `ci-full` steps 1–14 less the delegated ones | 240 |
+| `linux-full` | `ci-full` steps 1–14 less the delegated ones (`windows-*`, `mutants`, `ct`, `fuzz`, `kani`, `proverif-link`) | 240 |
 | `ct` | constant-time gate (step 5), `--delegated ct` | 330 |
 | `mutants-shard` ×8, `mutants` | mutation testing (step 8) and its verdict, `--delegated mutants` | 300, 30 |
 | `proverif-hx`, `proverif-link` | ProVerif SecMP-HX and SecMP-LINK models (step 10), `--delegated proverif-link` | 180, 120 |
 | `kani` | Kani harnesses (step 9: every `KANI_PACKAGES`, `-Z stubbing` where used, the verified-harness and cover pins), `--delegated kani` (M6, WEISUNG M6-11, VD-M6-A-23: `linux-full` had passed 240 min); `SECMP_RUNNER_TRACE=1`: xtask writes a `runner-trace` line (memory, swap, disk, largest process) every 20 s to the job log (M6-15) | 150 |
+| `fuzz` | fuzz smoke (step 6, every target, `FUZZ_SMOKE_SECONDS` each), `--delegated fuzz` (M6-CI, WEISUNG M6-CI-1 §4, ADR-047 Amendment 5) | 120 |
 
 Nothing that touches the network or wall clock in unit tests; `secmp-client-core::clock` is injectable.
 
@@ -114,9 +115,9 @@ Nothing that touches the network or wall clock in unit tests; `secmp-client-core
 1. `cargo fmt --check`
 2. `cargo clippy --workspace --all-targets --locked -- -D warnings`
 3. `cargo deny check` · `cargo vet` · `cargo audit` · cooldown check
-4. `cargo nextest run --workspace --locked` (+ doctests)
+4. `cargo nextest run --workspace --locked` without the `secmp-testkit` `harness` binary (+ doctests); the `kat` step (5) is the one runner of that binary (ADR-047 Amendment 5; on Windows both steps leave out `expect::WINDOWS_SKIP_TESTS`)
 5. KATs + differential tests (feature `kat`)
-6. Fuzz smoke (2 min/target)
+6. Fuzz smoke (2 min/target); own job `fuzz`, `--delegated fuzz` (ADR-047 Amendment 5)
 7. Coverage gate
 8. Mutation gate (nightly, and on PRs touching `secmp-crypto`/`secmp-proto`/`secmp-relay`/`secmp-client-core`/`secmp-transport`)
 9. Miri + Kani (nightly, and on PRs touching `secmp-sys-*`/parsers)

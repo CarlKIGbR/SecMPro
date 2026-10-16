@@ -104,6 +104,12 @@ pub(crate) fn cooldown(ctx: &Ctx) -> Result<Outcome> {
     Ok(Outcome::Pass(crate::cooldown::run(&ctx.root)?))
 }
 
+/// The nextest filterset of the workspace run: not the `secmp-testkit` `harness` binary. Feature unification enables
+/// `secmp-testkit/harness` in a `--workspace` build (dev-dependency of `secmp-transport`, TLS-01…TLS-11), which
+/// would run the long simulations here a second time; the `kat` step is the one runner of that binary (WEISUNG
+/// M6-CI-1, ADR-047 Amendment 5).
+pub(crate) const NEXTEST_WORKSPACE_FILTER: &str = "not binary(=harness)";
+
 /// The workspace `cargo nextest` arguments (feature unification enables `kat` of `secmp-proto` through `secmp-testkit`).
 pub(crate) fn nextest_args() -> Vec<&'static str> {
     vec![
@@ -112,6 +118,8 @@ pub(crate) fn nextest_args() -> Vec<&'static str> {
         "--workspace",
         "--locked",
         "--no-fail-fast",
+        "-E",
+        NEXTEST_WORKSPACE_FILTER,
     ]
 }
 
@@ -7248,7 +7256,9 @@ mod tests {
                 "run",
                 "--workspace",
                 "--locked",
-                "--no-fail-fast"
+                "--no-fail-fast",
+                "-E",
+                "not binary(=harness)"
             ]
         );
         let nonkat = nextest_nonkat_args();

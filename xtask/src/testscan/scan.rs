@@ -1341,4 +1341,39 @@ mod tests {
         );
         Ok(())
     }
+
+    /// WEISUNG M6-CI-1 §1: `--workspace` unifies `secmp-testkit/harness` (dev-dependency of `secmp-transport`), so the
+    /// `nextest` step leaves the `harness` binary out and the `kat` step stays its one runner; the double run of the
+    /// long simulations (linux-fast #152: 45 min) cannot come back silently.
+    #[test]
+    fn nextest_does_not_run_the_harness_binary_twice() -> Result<()> {
+        // the workspace nextest run carries exactly one filterset, the one that leaves the harness binary out
+        let args = crate::gates::nextest_args();
+        let at = args.iter().position(|a| *a == "-E").unwrap_or(usize::MAX);
+        assert_eq!(
+            args.get(at.saturating_add(1)).copied(),
+            Some(crate::gates::NEXTEST_WORKSPACE_FILTER)
+        );
+        assert_eq!(args.iter().filter(|a| **a == "-E").count(), 1);
+        assert_eq!(
+            crate::gates::NEXTEST_WORKSPACE_FILTER,
+            "not binary(=harness)"
+        );
+        // the kat run of the testkit selects the whole package (no filterset), and `kat` implies `harness`
+        assert!(crate::expect::KAT_PACKAGES.contains(&"secmp-testkit"));
+        let kat = kat_args("secmp-testkit");
+        assert!(!kat.iter().any(|a| a == "-E" || a.contains("harness")));
+        let manifest = std::fs::read_to_string(root().join("crates/secmp-testkit/Cargo.toml"))?;
+        assert!(
+            manifest
+                .replace("\r\n", "\n")
+                .contains("\nkat = [\"harness\"]\n")
+        );
+        // the unification that makes the filter necessary is still there, or the filter is dead weight
+        let transport = std::fs::read_to_string(root().join("crates/secmp-transport/Cargo.toml"))?;
+        assert!(
+            transport.contains("secmp-testkit = { workspace = true, features = [\"harness\"] }")
+        );
+        Ok(())
+    }
 }

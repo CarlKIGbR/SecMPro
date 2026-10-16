@@ -1342,6 +1342,43 @@ mod tests {
         Ok(())
     }
 
+    /// WEISUNG M6-CI-1 §2: the Windows scope (`expect::WINDOWS_SKIP_TESTS`) applies to every nextest run of both
+    /// `nextest` and `kat` on Windows — intersected with a filterset the run already has, never added to it.
+    #[test]
+    fn windows_skip_applies_to_nextest_and_kat() -> Result<()> {
+        for step in ["nextest(_: &Ctx)", "kat(ctx: &Ctx)"] {
+            let body = gate_body(step)?;
+            assert!(
+                body.contains("if cfg!(windows)")
+                    && body.contains("crate::testscan::windows_scoped(run)"),
+                "{step}: no Windows scope"
+            );
+        }
+        let skip = crate::testscan::windows_skip_filter();
+        let runs = nextest_runs();
+        assert_eq!(runs.len(), 2);
+        for run in runs {
+            let scoped = crate::testscan::windows_scoped(run.clone());
+            assert_eq!(scoped.args.iter().filter(|a| *a == "-E").count(), 1);
+            assert!(scoped.args.last().is_some_and(|f| f.ends_with(&skip)));
+        }
+        let first = crate::testscan::windows_scoped(NextestRun {
+            args: crate::gates::nextest_args()
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
+            seed: None,
+        });
+        assert_eq!(
+            first.args.last(),
+            Some(&format!(
+                "({}) and {skip}",
+                crate::gates::NEXTEST_WORKSPACE_FILTER
+            ))
+        );
+        Ok(())
+    }
+
     /// WEISUNG M6-CI-1 §1: `--workspace` unifies `secmp-testkit/harness` (dev-dependency of `secmp-transport`), so the
     /// `nextest` step leaves the `harness` binary out and the `kat` step stays its one runner; the double run of the
     /// long simulations (linux-fast #152: 45 min) cannot come back silently.

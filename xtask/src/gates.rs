@@ -141,6 +141,12 @@ pub(crate) fn nextest_nonkat_args() -> Vec<&'static str> {
 pub(crate) fn nextest(_: &Ctx) -> Result<Outcome> {
     tools::require(tools::NEXTEST)?;
     for run in crate::testscan::nextest_runs() {
+        // WEISUNG M6-CI-1 §2: on Windows without `expect::WINDOWS_SKIP_TESTS`, as in `kat`
+        let run = if cfg!(windows) {
+            crate::testscan::windows_scoped(run)
+        } else {
+            run
+        };
         run.run()?;
     }
     Ok(Outcome::Pass(crate::testscan::nextest_detail()))

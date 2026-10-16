@@ -1576,6 +1576,8 @@ pub(crate) const PINNED_JOBS: &[&str] = &[
     "proverif-link",
     // M6 (WEISUNG M6-11, VD-M6-A-23): the Kani step, which pushed `linux-full` past its 240 min
     "kani",
+    // WEISUNG M6-CI-1 §4 (ADR-047 Amendment 5): the fuzz smoke (70 min) out of `linux-full`
+    "fuzz",
 ];
 
 /// The `needs:` of a pinned job, as (job, the one job it needs) — M4 review C-5: the verdict job `mutants` needs
@@ -1595,6 +1597,8 @@ pub(crate) const DELEGATED_TO: &[(&str, &str)] = &[
     ("proverif-link", "proverif-link"),
     // M6 (WEISUNG M6-11): the `ci-full` step `kani` runs in the job of the same name
     ("kani", "kani"),
+    // WEISUNG M6-CI-1 §4: the `ci-full` step `fuzz` runs in the job of the same name
+    ("fuzz", "fuzz"),
 ];
 
 /// The `cargo xtask` gate `run:` lines of each pinned job of [`PINNED_JOBS`], in order (M3 review F3, R-09;
@@ -1619,7 +1623,7 @@ pub(crate) const REQUIRED_GATE_RUNS: &[(&str, &[&str])] = &[
         // the SecMP-HX models run in their own job `proverif-hx` (WEISUNG M4-5 §5), mutation testing in `mutants` (ADR-047),
         // the ct gate in `ct` (ADR-047 Amendment 1, M4 review C-2), the SecMP-LINK models in `proverif-link` (BRIEF_M5-B §1)
         &[
-            "cargo xtask ci-full --strict --delegated windows-native --delegated windows-cross --delegated mutants --delegated ct --delegated kani --delegated proverif-link --models tr",
+            "cargo xtask ci-full --strict --delegated windows-native --delegated windows-cross --delegated mutants --delegated ct --delegated fuzz --delegated kani --delegated proverif-link --models tr",
         ],
     ),
     // M4 review C-5 (R-01): the delegated jobs
@@ -1639,6 +1643,8 @@ pub(crate) const REQUIRED_GATE_RUNS: &[(&str, &[&str])] = &[
     ),
     // M6 (WEISUNG M6-11): the Kani step in its own job
     ("kani", &["cargo xtask step --strict kani"]),
+    // WEISUNG M6-CI-1 §4: the fuzz smoke step in its own job
+    ("fuzz", &["cargo xtask step --strict fuzz"]),
 ];
 
 /// The job-level `if:` of every pinned job of [`PINNED_JOBS`], `None` for none (external review EXT-1, M3 follow-up
@@ -1679,6 +1685,10 @@ pub(crate) const REQUIRED_JOB_CONDITIONS: &[(&str, Option<&str>)] = &[
     ),
     (
         "kani",
+        Some("github.event_name == 'schedule' || github.event_name == 'pull_request'"),
+    ),
+    (
+        "fuzz",
         Some("github.event_name == 'schedule' || github.event_name == 'pull_request'"),
     ),
 ];

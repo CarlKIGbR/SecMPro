@@ -95,3 +95,20 @@ Each finding: the regression test was written first and run red, then the fix.
   The skip list stays unchanged (`ai02_balanced_tokio` remains skipped).
 - Pin: `gates::tests::rr_write_time_guard_is_not_skipped_by_the_mutation_run` (the guard exists once, no skip entry names it,
   the second run tests `secmp-testkit` with feature `harness`).
+
+## §windows — PR run #155, windows-native (WEISUNG M6-CI-6)
+
+- With measures 1–4 `windows-native` completes in about 55 min (clippy 187 s, nextest 1175 s ≈ 19.6 min, kat 1857 s ≈ 31 min,
+  doctest and hello short; #152 was cut at 90 min), instead of 90+.
+- The one Windows-only red test of 970: `secmp-transport::tor tor_config_uses_profile_state_dir`
+  (`crates\secmp-transport\tests\tor\main.rs:124`). The panic message is the `Debug` of the built `TorClientConfig`, which
+  shows `state_dir: CfgPath(Literal(LiteralPath { literal: "D:\\a\\SecMPro\\SecMPro\\target\\tmp\\secmp-tor-tor-01-8700\\tor\\…` —
+  backslashes escaped — while the assertion searched for `state.to_str()` with single backslashes; the typed
+  `cache_dir` comparison on line 122 passed.
+- Fix: the assertion searches for the path's own `Debug` rendering (`format!("{path:?}")` without the quotes), identical on
+  every platform; the test's intent (state under `D/tor/state`, no `${ARTI` default) is unchanged. Linux cannot show it red
+  (no escaping there); the evidence is the Windows run of the next PR head.
+- Sweep (`grep` for `contains(…to_str()/display()/to_string_lossy)` and `format!("{x:?}")` on paths in `crates` and
+  `xtask`): one hit, this one. Not hits: `m6_followups.rs:176`, `m6_sched_life.rs:332` (`contains` on file text, `display()` only in the
+  message), `xtask/src/policy.rs:494` (extension list), `policy.rs:437` (workspace-relative paths, `policy` is not a
+  Windows step); the other `format!("{x:?}")` hits format key types, not paths.

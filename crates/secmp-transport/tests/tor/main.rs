@@ -120,8 +120,9 @@ fn tor_config_uses_profile_state_dir() {
     let dirs = config.dir_mgr_config().unwrap();
     assert_eq!(dirs.cache_dir, profile.join("tor").join("cache"));
     let debug = format!("{config:?}");
-    let state = profile.join("tor").join("state");
-    assert!(debug.contains(state.to_str().unwrap()), "{debug}");
+    // the path as `Debug` renders it (on Windows its backslashes are escaped: `"D:\\a\\…"`), not `to_str()`
+    let state = format!("{:?}", profile.join("tor").join("state"));
+    assert!(debug.contains(state.trim_matches('"')), "{debug}");
     // no storage path is one of Arti's defaults (`${ARTI_LOCAL_DATA}`, `${ARTI_CACHE}`; the resolver's variable table
     // itself is listed without the `${`)
     assert!(!debug.contains("${ARTI"), "{debug}");

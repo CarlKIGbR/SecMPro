@@ -1605,12 +1605,28 @@ mod tests {
         "turmoil",
     ];
 
+    /// A repository file with LF line endings: a Windows checkout (`core.autocrlf`) has CRLF, and the tests match
+    /// multi-line needles (`"\nskip-tree = []\n"`, `"\nallow = [\n"`) — WEISUNG M6-CI-1 §3, windows-native #151/#152.
     fn repo_file(rel_path: &str) -> Result<String> {
-        Ok(std::fs::read_to_string(
+        Ok(lf(&std::fs::read_to_string(
             Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("..")
                 .join(rel_path),
-        )?)
+        )?))
+    }
+
+    fn lf(text: &str) -> String {
+        text.replace("\r\n", "\n")
+    }
+
+    /// The Windows-only failures of `deny_duplicate_skips_are_justified` and `licenses_cover_m6_closure` came from CRLF
+    /// in the checked-out `deny.toml`; the needles of both match on the LF form.
+    #[test]
+    fn repo_files_are_read_with_lf_line_endings() -> Result<()> {
+        assert_eq!(lf("a = [\r\n  \"x\",\r\n]\r\n"), "a = [\n  \"x\",\n]\n");
+        assert!(!repo_file("deny.toml")?.contains('\r'));
+        assert!(lf("skip-tree = []\r\n").contains("skip-tree = []\n"));
+        Ok(())
     }
 
     /// (name, version) of every `[[package]]` of `Cargo.lock`.

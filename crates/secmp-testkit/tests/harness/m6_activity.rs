@@ -453,6 +453,15 @@ fn independence(mode: Mode, contacts: &[(u64, u64)], traces: u64, hours: u64) ->
     (max_c2r, max_r2c)
 }
 
+/// The trace count of a run: `default`, or `SECMP_AI_TRACES` if set (the one-off 64-trace local runs, WEISUNG M6-B-6;
+/// CI never sets it).
+fn traces(default: u64) -> u64 {
+    std::env::var("SECMP_AI_TRACES")
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
+        .unwrap_or(default)
+}
+
 fn report(name: &str, c2r: u64, r2c: u64) {
     evidence(
         name,
@@ -492,7 +501,7 @@ fn activity_independence_when_receiving() {
         seed,
     };
     let idle = Rig::new(&sc(78), Params::default()).run(hours, None);
-    let results = par_map((0..8_u64).collect(), |trace| {
+    let results = par_map((0..traces(8)).collect(), |trace| {
         let mut act = activity(trace + 500, hours, 2);
         act.events
             .retain(|(_, e)| !matches!(e, Event::UserSend { .. }));
@@ -519,7 +528,7 @@ fn timing_draws_independent_of_activity() {
     };
     let idle = Rig::new(&sc, Params::default()).run(hours, None);
     assert!(idle.draws.len() == 6 && idle.draws.iter().all(|d| d.0 > 0 && d.1 > 0));
-    for trace in 0..4_u64 {
+    for trace in 0..traces(4) {
         let act = activity(trace + 900, hours, 2);
         let run = Rig::new(&sc, Params::default()).run(hours, Some(&act));
         assert_eq!(run.draws, idle.draws, "trace {trace}");
@@ -537,7 +546,7 @@ fn activity_independence_both_directions() {
         seed,
     };
     let idle = Rig::new(&sc(80), Params::default()).run(hours, None);
-    let results = par_map((0..8_u64).collect(), |trace| {
+    let results = par_map((0..traces(8)).collect(), |trace| {
         let act = activity(trace + 700, hours, 2);
         let run = Rig::new(&sc(80), Params::default()).run(hours, Some(&act));
         (

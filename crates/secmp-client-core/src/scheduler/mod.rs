@@ -13,7 +13,9 @@
 //!   is load-bearing — a driver that wakes only at the ticks prepares a `FETCH` whose previous response is still
 //!   outstanding too late and loses the tick;
 //! - run preparation off the path of the I/O loop: its cost may decide when a frame is *ready*, never when a due frame
-//!   *leaves*.
+//!   *leaves*. A cell source may answer "not ready"; the core then asks the same queue again at its next pass: a "not
+//!   ready" answer never advances the queue choice (the Balanced round robin) and never lets a tick's `FETCH` part be
+//!   sealed before its `SEND` part (WEISUNG M6-B-6, EXTB-1).
 
 pub mod control;
 pub mod core;

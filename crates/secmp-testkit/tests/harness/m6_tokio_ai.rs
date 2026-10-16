@@ -2,14 +2,86 @@
 //! M6 Phase B (BRIEF M6-B §2.2): AI-01…AI-06 repeated over the tokio driver (`scheduler::run`) on a paused tokio clock,
 //! with the asymmetric-cost worker (a real cell 20 ms, a dummy 1 ms, a received cell 5 ms) — the emission times of the
 //! frames, read where they cross the in-process relay, must equal the idle run's: max |Δt| = 0 ms in both directions.
-//! The scenarios and the activity traces are those of `m6_activity`; AI-01…AI-03 run 16 traces here (the virtual-driver
+//! The extended oracle (WEISUNG M6-B-5/-6, EXTB-1) asserts on every run besides: (a) no teardown but a lifetime's end,
+//! (c) frames on every tick of every scheduled link, and (b) the relay-visible SEND sequence equal to the idle run's
+//! (recorded in the relay's store, `MemRelay::store_changes`), the acknowledgement progression too in a trace whose peers
+//! send nothing (no messages, no receipts) — AI-01…AI-03 run one such trace more. The scenarios and the activity traces are those of `m6_activity`; AI-01…AI-03 run 16 traces here (the virtual-driver
 //! originals run 64), AI-04…AI-06 the originals' 8, 4 and 8 — the CI budget of `kat` and `coverage` (report §7).
 
 use secmp_client_core::scheduler::params::Mode;
 
 use crate::m6_activity::{Event, Scenario, activity, par_map};
 use crate::m6_common::{evidence, max_dt};
-use crate::m6_tokio::{TRun, run_scenario};
+use crate::m6_tokio::{TRun, run_scenario, run_scenario_quiet_peers};
+
+/// The extended oracle of WEISUNG M6-B-5/-6 (EXTB-1), per run: (a) no teardown but at the end of a lifetime (no
+/// `Rejected`, no `Overrun`, …); (c) every scheduled link writes on every tick — its frame times are one period apart,
+/// the first one period after it came up, and no tick is missing up to its end.
+fn assert_clean(run: &TRun, what: &str) {
+    use secmp_client_core::scheduler::types::{LinkEvent, Reason};
+    let bad: Vec<_> = run
+        .torn
+        .iter()
+        .filter(|(_, e)| !matches!(e, LinkEvent::TornDown(_, Reason::Lifetime)))
+        .collect();
+    assert!(bad.is_empty(), "{what}: teardowns {bad:?}");
+    for (slot, up) in &run.ups {
+        let mut times: Vec<u64> = run
+            .c2r
+            .iter()
+            .filter(|e| e.slot == *slot && e.len == 4352)
+            .map(|e| e.t_ms)
+            .collect();
+        times.dedup();
+        if times.len() < 2 {
+            continue;
+        }
+        let period = times
+            .get(1)
+            .unwrap()
+            .saturating_sub(*times.first().unwrap());
+        assert_eq!(
+            times.first().unwrap().saturating_sub(*up),
+            period,
+            "{what}: link {slot}: first tick"
+        );
+        assert!(
+            times
+                .windows(2)
+                .all(|w| w.get(1).unwrap().saturating_sub(*w.first().unwrap()) == period),
+            "{what}: link {slot}: a tick without frames"
+        );
+        let end = run
+            .torn
+            .iter()
+            .find_map(|(t, e)| match e {
+                LinkEvent::TornDown(l, _) if l.0 == *slot => Some(*t),
+                _ => None,
+            })
+            .unwrap_or(run.end_ms);
+        assert!(
+            end.saturating_sub(*times.last().unwrap()) <= period,
+            "{what}: link {slot}: ticks missing before its end"
+        );
+    }
+}
+
+/// (b) of the extended oracle: the relay-visible SEND sequence (queue and cell id, in time) is the idle run's in every
+/// trace; the acknowledgement progression too where the peers send nothing — no `PeerSend` event and no delivery
+/// receipts (receipts answer the client's own real messages, so without them switched off a user-only trace still
+/// brings cells, which the client acknowledges).
+fn assert_relay_view(idle: &TRun, run: &TRun, peers_quiet: bool, what: &str) {
+    assert_eq!(
+        idle.sends, run.sends,
+        "{what}: the relay-visible SEND sequence differs"
+    );
+    if peers_quiet {
+        assert_eq!(
+            idle.acks, run.acks,
+            "{what}: the acknowledgement progression differs"
+        );
+    }
+}
 
 fn compare(idle: &TRun, active: &TRun) -> (Option<u64>, Option<u64>) {
     (
@@ -34,9 +106,23 @@ fn independence(mode: Mode, contacts: &[(u64, u64)], traces: u64, hours: u64) ->
     let idle = run_scenario(&sc, hours, None);
     assert!(idle.c2r.len() > 100, "{}", idle.c2r.len());
     assert_eq!(idle.overruns, 0);
-    let results = par_map((0..traces).collect(), |trace| {
-        let act = activity(trace, hours, contacts.len());
-        let run = run_scenario(&sc, hours, Some(&act));
+    assert_clean(&idle, "idle");
+    assert!(!idle.sends.is_empty(), "the relay saw the client's SENDs");
+    // the traces, and one more without the peers' messages (so the acknowledgement progression is compared too)
+    let results = par_map((0..=traces).collect(), |trace| {
+        let mut act = activity(trace, hours, contacts.len());
+        let quiet = trace == traces;
+        let run = if quiet {
+            // the peers send nothing at all: no messages, no receipts
+            act.events
+                .retain(|(_, e)| !matches!(e, Event::PeerSend { .. }));
+            run_scenario_quiet_peers(&sc, hours, Some(&act))
+        } else {
+            run_scenario(&sc, hours, Some(&act))
+        };
+        let what = format!("trace {trace}");
+        assert_clean(&run, &what);
+        assert_relay_view(&idle, &run, quiet, &what);
         let (c, r) = compare(&idle, &run);
         (
             trace,
@@ -125,11 +211,15 @@ fn ai04_when_receiving_tokio() {
     let hours = 6;
     let sc = scenario(Mode::Strict, &[(10_000, 10_000), (20_000, 40_000)], 78);
     let idle = run_scenario(&sc, hours, None);
+    assert_clean(&idle, "AI-04 idle");
     let results = par_map((0..traces(8)).collect(), |trace| {
         let mut act = activity(trace + 500, hours, 2);
         act.events
             .retain(|(_, e)| !matches!(e, Event::UserSend { .. }));
         let run = run_scenario(&sc, hours, Some(&act));
+        let what = format!("AI-04 trace {trace}");
+        assert_clean(&run, &what);
+        assert_relay_view(&idle, &run, false, &what);
         (compare(&idle, &run), run.control == idle.control, run.to_x)
     });
     assert!(
@@ -150,10 +240,15 @@ fn ai05_timing_draws_tokio() {
     let hours = 6;
     let sc = scenario(Mode::Strict, &[(10_000, 10_000), (20_000, 40_000)], 79);
     let idle = run_scenario(&sc, hours, None);
+    assert_clean(&idle, "AI-05 idle");
     assert!(idle.draws.len() == 6 && idle.draws.iter().all(|d| d.0 > 0 && d.1 > 0));
     let results = par_map((0..traces(4)).collect(), |trace| {
         let act = activity(trace + 900, hours, 2);
-        run_scenario(&sc, hours, Some(&act)).draws
+        let run = run_scenario(&sc, hours, Some(&act));
+        let what = format!("AI-05 trace {trace}");
+        assert_clean(&run, &what);
+        assert_relay_view(&idle, &run, false, &what);
+        run.draws
     });
     for (trace, draws) in results.into_iter().enumerate() {
         assert_eq!(draws, idle.draws, "trace {trace}");
@@ -173,9 +268,13 @@ fn ai06_both_directions_tokio() {
     let hours = 6;
     let sc = scenario(Mode::Strict, &[(10_000, 10_000), (20_000, 40_000)], 80);
     let idle = run_scenario(&sc, hours, None);
+    assert_clean(&idle, "AI-06 idle");
     let results = par_map((0..traces(8)).collect(), |trace| {
         let act = activity(trace + 700, hours, 2);
         let run = run_scenario(&sc, hours, Some(&act));
+        let what = format!("AI-06 trace {trace}");
+        assert_clean(&run, &what);
+        assert_relay_view(&idle, &run, false, &what);
         (
             idle.r2c.len() == run.r2c.len(),
             compare(&idle, &run).1,

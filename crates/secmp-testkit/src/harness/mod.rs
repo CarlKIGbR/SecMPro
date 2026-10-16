@@ -30,7 +30,7 @@ pub use driver::{
     Material, Options, SimClient, Trace, TraceEntry, VirtualDriver,
 };
 pub use entropy::EntropyPool;
-pub use mem::{Chunking, MemProvider, MemRelay, Unit};
+pub use mem::{Chunking, MemProvider, MemRelay, StoreChange, Unit};
 /// The relay's direct listener and configuration, for the TLS rows of `secmp-transport` (TLS-12, TLS-14), which have
 /// no dependency on the relay crate of their own.
 pub use secmp_relay::tls as relay_tls;

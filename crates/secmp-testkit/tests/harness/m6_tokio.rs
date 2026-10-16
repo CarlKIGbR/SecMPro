@@ -335,6 +335,15 @@ impl<P: StreamProvider + 'static> TokioRig<P> {
         Self { setup, x, peers }
     }
 
+    /// The peers send no delivery receipts (with no `PeerSend` events they then send nothing at all).
+    pub fn quiet_peers(&mut self) {
+        for peer in &mut self.peers {
+            if let Some(conv) = peer.convs.get_mut(0) {
+                conv.set_send_receipts(false);
+            }
+        }
+    }
+
     /// The peers read what `x` sent and answer with what they have, at most 20 cells each.
     async fn pump(&mut self, now: u64) {
         let Self { setup, peers, .. } = self;
@@ -403,6 +412,51 @@ impl<P: StreamProvider + 'static> TokioRig<P> {
         self.run_ms(minutes.saturating_mul(60_000), act).await
     }
 
+    /// The extended oracle's view of the run (EXTB-1): the client's relay-visible SENDs and head moves, link ups and
+    /// teardowns.
+    fn oracle_parts(&self) -> OracleParts {
+        let relay = &self.setup.relay;
+        // the store changes of the client's own connections (the extended oracle, EXTB-1): a SEND moves a queue's
+        // `next_cell_id`, an acknowledgement (or eviction) its head
+        let (mut sends, mut acks) = (Vec::new(), Vec::new());
+        let mut last: std::collections::BTreeMap<secmp_proto::wire::Id, (u64, u64)> =
+            std::collections::BTreeMap::new();
+        for c in relay.store_changes() {
+            let before = last.insert(c.rid, (c.next_cell_id, c.head));
+            if c.isolation.0 >= SETUP_ISO {
+                continue;
+            }
+            let (next0, head0) = before.unwrap_or((0, 0));
+            if c.next_cell_id != next0 {
+                sends.push((c.t_ms, c.rid, c.next_cell_id));
+            }
+            if c.head != head0 {
+                acks.push((c.t_ms, c.rid, c.head));
+            }
+        }
+        let log = self.x.driver.log().unwrap();
+        let ups = log
+            .events
+            .iter()
+            .filter_map(|(t, e)| match e {
+                secmp_client_core::scheduler::types::LinkEvent::Up(l) => Some((l.0, *t)),
+                _ => None,
+            })
+            .collect();
+        let torn = log
+            .events
+            .iter()
+            .filter(|(_, e)| {
+                matches!(
+                    e,
+                    secmp_client_core::scheduler::types::LinkEvent::TornDown(..)
+                )
+            })
+            .copied()
+            .collect();
+        (sends, acks, ups, torn)
+    }
+
     async fn run_ms(&mut self, end: u64, act: Option<&Activity>) -> TRun {
         let mut events = act.map(|a| a.events.iter().copied().peekable());
         let mut next_pump = 600_000;
@@ -459,7 +513,13 @@ impl<P: StreamProvider + 'static> TokioRig<P> {
             units.sort();
             units
         };
+        let (sends, acks, ups, torn) = self.oracle_parts();
         TRun {
+            sends,
+            acks,
+            ups,
+            torn,
+            end_ms: end,
             to_peers,
             to_x,
             work_ms: self.x.work_total.load(std::sync::atomic::Ordering::SeqCst),
@@ -480,7 +540,25 @@ impl<P: StreamProvider + 'static> TokioRig<P> {
     }
 }
 
+/// What `oracle_parts` returns: SENDs, head moves, ups, teardowns.
+type OracleParts = (
+    Vec<(u64, secmp_proto::wire::Id, u64)>,
+    Vec<(u64, secmp_proto::wire::Id, u64)>,
+    Vec<(u64, u64)>,
+    Vec<(u64, secmp_client_core::scheduler::types::LinkEvent)>,
+);
+
 pub struct TRun {
+    /// The relay-visible SENDs of the client: time, queue, the queue's `next_cell_id` after it.
+    pub sends: Vec<(u64, secmp_proto::wire::Id, u64)>,
+    /// The relay-visible head moves (acknowledgements, evictions) caused by the client: time, queue, new head.
+    pub acks: Vec<(u64, secmp_proto::wire::Id, u64)>,
+    /// When each link came up: link, time.
+    pub ups: Vec<(u64, u64)>,
+    /// Every teardown, with its time.
+    pub torn: Vec<(u64, secmp_client_core::scheduler::types::LinkEvent)>,
+    /// The run's end (virtual ms).
+    pub end_ms: u64,
     pub to_peers: usize,
     pub to_x: usize,
     pub work_ms: u64,
@@ -495,6 +573,16 @@ pub struct TRun {
 pub fn run_scenario(sc: &Scenario, hours: u64, act: Option<&Activity>) -> TRun {
     runtime().block_on(async {
         let mut rig = TokioRig::new(sc, Params::default()).await;
+        rig.run(hours, act).await
+    })
+}
+
+/// As [`run_scenario`], with peers that send nothing on their own — no delivery receipts either (the extended oracle's
+/// acknowledgement comparison, EXTB-1: then the client's acknowledgements follow nothing but its schedule).
+pub fn run_scenario_quiet_peers(sc: &Scenario, hours: u64, act: Option<&Activity>) -> TRun {
+    runtime().block_on(async {
+        let mut rig = TokioRig::new(sc, Params::default()).await;
+        rig.quiet_peers();
         rig.run(hours, act).await
     })
 }

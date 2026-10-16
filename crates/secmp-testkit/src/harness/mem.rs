@@ -43,6 +43,23 @@ pub struct Unit {
     pub isolation: Isolation,
 }
 
+/// A change of one queue in the relay's store, as the relay saw it after a unit of one connection (the extended AI
+/// oracle, WEISUNG M6-B-5/-6 EXTB-1): the queue's `next_cell_id` (it moves with every stored `SEND`) and its head (the
+/// oldest stored cell id, or `next_cell_id` when empty; it moves with acknowledgements and evictions).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StoreChange {
+    /// Virtual milliseconds of the unit.
+    pub t_ms: u64,
+    /// The isolation of the connection whose unit changed the store.
+    pub isolation: Isolation,
+    /// The queue (`rid`).
+    pub rid: secmp_proto::wire::Id,
+    /// Its `next_cell_id` after the unit.
+    pub next_cell_id: u64,
+    /// Its head after the unit.
+    pub head: u64,
+}
+
 /// How the relay's answers are cut (P-05): pieces of 1…4352 bytes from a seed, with up to `max_gap_ms` between them.
 #[derive(Clone, Copy, Debug)]
 pub struct Chunking {
@@ -51,6 +68,12 @@ pub struct Chunking {
     /// The largest gap between two pieces.
     pub max_gap_ms: u64,
 }
+
+/// The store as of the last unit and the changes so far (see [`MemRelay::store_changes`]).
+type StoreLog = (
+    std::collections::BTreeMap<secmp_proto::wire::Id, (u64, u64)>,
+    Vec<StoreChange>,
+);
 
 struct Inner {
     relay: &'static Relay,
@@ -63,6 +86,8 @@ struct Inner {
     chunking: Mutex<Option<Chunking>>,
     captures: Mutex<Vec<(Vec<u8>, Vec<u8>)>>,
     isolations: Mutex<Vec<(u64, Isolation)>>,
+    /// The store as of the last unit (`rid` → `next_cell_id`, head) and every change since the start.
+    store: Mutex<StoreLog>,
 }
 
 /// The relay host (see the module documentation). Clones share the relay.
@@ -143,6 +168,7 @@ impl MemRelay {
             chunking: Mutex::new(None),
             captures: Mutex::new(Vec::new()),
             isolations: Mutex::new(Vec::new()),
+            store: Mutex::new((std::collections::BTreeMap::new(), Vec::new())),
         }))
     }
 
@@ -298,6 +324,8 @@ impl MemRelay {
                     let mut entropy = inner.entropy.lock().unwrap();
                     conn.on_bytes(data, now_of(&inner.clock), entropy.get())
                 };
+                // what this unit changed in the store (no await since `on_bytes`: nothing else ran in between)
+                Self::record_store(&inner, t, isolation);
                 {
                     let mut caps = inner.captures.lock().unwrap();
                     let cap = caps.get_mut(usize::try_from(n).unwrap()).unwrap();
@@ -338,6 +366,35 @@ impl MemRelay {
             }
         });
         Some(client)
+    }
+
+    fn record_store(inner: &Inner, t: u64, isolation: Isolation) {
+        let snap = inner.relay.snapshot_kat();
+        let mut store = inner.store.lock().unwrap();
+        let (last, changes) = &mut *store;
+        for q in snap.queues {
+            let head = q.cell_ids.first().copied().unwrap_or(q.next_cell_id);
+            let now = (q.next_cell_id, head);
+            if last.get(&q.rid) != Some(&now) {
+                last.insert(q.rid, now);
+                changes.push(StoreChange {
+                    t_ms: t,
+                    isolation,
+                    rid: q.rid,
+                    next_cell_id: q.next_cell_id,
+                    head,
+                });
+            }
+        }
+    }
+
+    /// Every change of the store's queues, unit by unit, since the start (see [`StoreChange`]).
+    ///
+    /// # Panics
+    /// On a violated harness invariant: a test failure, never a production path.
+    #[must_use]
+    pub fn store_changes(&self) -> Vec<StoreChange> {
+        self.0.store.lock().unwrap().1.clone()
     }
 
     fn record_r2c(inner: &Inner, r2c: &mut Units, n_bytes: usize, conn: u64, isolation: Isolation) {

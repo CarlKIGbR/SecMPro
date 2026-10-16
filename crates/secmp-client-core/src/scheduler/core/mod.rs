@@ -591,7 +591,10 @@ impl World {
             if needs_send && up.send_part.is_none() {
                 tear = self.prepare_send(&mut link.rr, up, spec, slot, now, source);
             }
-            if tear.is_none() && needs_fetch && up.fetch_part.is_none() {
+            // a tick's parts go out SEND first (`tick`): its FETCH is sealed only after its SEND, so the counters are in
+            // write order even when the cell source answers "not ready" (EXTB-1)
+            let send_missing = needs_send && up.send_part.is_none();
+            if tear.is_none() && !send_missing && needs_fetch && up.fetch_part.is_none() {
                 let fetch_outstanding = up
                     .reqs
                     .iter()
@@ -617,6 +620,7 @@ impl World {
         now: u64,
         source: &mut S,
     ) -> Option<Reason> {
+        let mut next_rr = None;
         let queue = match spec {
             Spec::Send(q) => Some(q),
             Spec::Relay(r) => {
@@ -630,10 +634,11 @@ impl World {
                     members.iter().map(|(_, l, p)| (*l, *p)).collect();
                 match rr_select(*rr, &table, slot) {
                     Some(at) => {
-                        *rr = at
-                            .checked_add(1)
-                            .and_then(|n| n.checked_rem(members.len()))
-                            .unwrap_or(0);
+                        next_rr = Some(
+                            at.checked_add(1)
+                                .and_then(|n| n.checked_rem(members.len()))
+                                .unwrap_or(0),
+                        );
                         members.get(at).map(|(q, _, _)| *q)
                     }
                     None => None,
@@ -658,10 +663,14 @@ impl World {
             };
         };
         let cap = self.sends.iter().find(|s| s.id == queue).map(|s| &s.cap)?;
-        // not ready, or not persisted: nothing is built, the tick finds no frame
+        // not ready, or not persisted: nothing is built, the tick finds no frame — and the same queue is asked again at
+        // the next pass (the round-robin position moves only with a cell, EXTB-1)
         let Ok(Some(cell)) = source.prepare_cell(queue, now) else {
             return None;
         };
+        if let Some(n) = next_rr {
+            *rr = n;
+        }
         match up.chan.prepare(&Command::Send {
             to: cap,
             cell: &cell.cell,

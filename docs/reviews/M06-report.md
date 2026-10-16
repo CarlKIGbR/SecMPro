@@ -27,7 +27,12 @@ AI-09, MR-01, MR-02, G-01…G-11, K-01…K-07, P-01…P-04, P-06, P-07, FZ-01, F
 | 10 | A | Kani, fuzz, xtask lists, `ci-fast`, `ci-full`, evidence under `M06-evidence/` | K-01…K-07, FZ-01, FZ-04, X-05 | done locally; PR run: see §4 |
 | 11 | B | BRIEF M6-B §1 dependencies; §2.1 gates; §2.2 driver; §2.3 TLS; §2.4 relay `direct-tls`; §2.5 Tor; §2.6 owner requests | X-01…X-04, X-06, MU-01, COV-01, COV-02, AD-07…AD-12, P-05, TLS-01…TLS-15, G-12, TOR-01…TOR-09, FZ-02, FZ-03 (TOR-10, X-10: owner, §6) | done; see "Phase B closed" |
 
-**Phase B closed @ `1423029`** (code; the report and evidence commit follows it). Phase B: `modell=claude-opus-5-5`.
+**Phase B — not closed.** The P4 closing below was at `1423029`. Then the external reviews of `f68d923` (WEISUNG
+M6-B-5, Codex; M6-B-5b, GLM) found blockers. They are fixed at `2885694` except EXTB-1, which needs a core change:
+STOP, §8. The `ci-full` below is the P4 one; it runs again after the EXTB-1 decision. Phase B:
+`modell=claude-opus-5-5`.
+
+**P4 state, superseded:** Phase B closed @ `1423029` (code; the report and evidence commit follows it).
 - **Local `ci-full`:** PASS, run with the linux-full delegations (windows-native, windows-cross, mutants, ct,
   proverif-link; `--models tr`).
   - Kani was not delegated. It ran locally, 40/40, because `crates/secmp-relay` and `client-core/src/scheduler/run.rs`
@@ -523,6 +528,86 @@ None from `docs/03`/`docs/01`. Implementation choices the review should know (no
 Phase A: none (workspace path crates only: `secmp-client-core` → `secmp-transport`; `secmp-testkit` → `secmp-client-core`).
 Phase B commit 1: see §2, "Phase B commit 1 — dependencies as landed".
 
+**External review of `f68d923` (WEISUNG M6-B-5, Codex; M6-B-5b, GLM) — status per finding.** Each test was red on the
+probe before its fix, except the guard tests noted.
+- **EXTB-1** (Balanced: FETCH sealed before a deferred SEND) — **BLOCKED, core change needed (§8).** The test
+  `driver_balanced_first_tick_sends_and_fetches_in_order` reproduces the probe red (`TornDown(LinkId(0), Rejected)` at
+  10 000, `TornDown(LinkId(1), Rejected)` at 50 000). It is not committed, since it is red on the branch. The extended
+  AI oracle (a)–(c) comes with the fix.
+- **EXTB-2** fixed @ `6d81017`: the facade binds deliveries and the committed mark to a queue generation, and the
+  driver starts a new generation at the scheduler's `QUEUE_NEW`. Tests: `driver_queue_recreation_does_not_ack_undelivered_cells`;
+  unit test `scheduler::run::tests::late_delivery_of_an_old_generation_commits_nothing`.
+- **EXTB-3** fixed @ `86257bf`:
+  - writes are handed out and counted per link;
+  - a bounded flush wait, `FLUSH_WAIT_MS` = 250, under the FETCH lead;
+  - a link is closed when its next tick is due with a write still pending, after `WRITE_STALL_MS` = 10 000, or when the
+    writer acks `false`;
+  - events that arrive during the flush wait are stashed for the next pass.
+
+  Tests: `driver_hanging_writer_does_not_delay_other_links` and `driver_pending_flush_later_tick_other_link` (both red
+  before the fix), `driver_partial_write_is_completed_before_work` and `driver_pending_flush_same_tick` (guards; green
+  on the old driver too, which also waited).
+- **EXTB-4** fixed @ `be973a7`:
+  - connect tasks are kept per `LinkId`;
+  - `Output::Close` and `Driver::shutdown` abort them; `shutdown` also reports each pending connect as failed;
+  - a completion for a link that is no longer pending is discarded before any I/O (`RunLog::discarded`);
+  - stream tasks start only for a link the scheduler took as up;
+  - `Drop` is the backstop;
+  - new `Driver::submit` for the outputs of the host's own scheduler calls (`set_mode`, …), which had no way into the
+    driver.
+
+  Tests: `driver_shutdown_aborts_pending_connects`, `driver_close_reconnect_race_discards_old_completion`.
+- **EXTB-5** fixed @ `c971701`. xtask has no TOML crate, so the parser is strict: only `[[exemptions.<bare>]]` at column
+  0; any other bracket line mentioning `exemptions` is an entry plus a finding. Tests:
+  `vet_closure_header_with_comment_is_found`, `vet_closure_header_quoted_key_is_found`,
+  `vet_closure_header_with_spaces_is_found`.
+- **EXTB-6** fixed @ `c971701`. A missing `fuzz/Cargo.lock` is a cooldown finding, and the lock comparison includes the
+  checksum.
+  - **Deviation:** cargo-fuzz 0.13.2 has no `--locked`, so the fuzz gate runs `cargo metadata --locked --manifest-path
+    fuzz/Cargo.toml` before it builds.
+
+  Tests: `fuzz_lock_matches_workspace_lock`, `fuzz_lock_checksums_and_presence_are_enforced`.
+- **EXTB-7** fixed @ `c971701`: `tls::CERT_MAX` = 8192 is enforced in `check_pin`, which is the `PinVerifier`'s path.
+  The FZ-02 oracle and `max_len` follow from the constant, read from its source. Tests:
+  `tls_certificate_over_size_bound_rejects` (8193 B refused, 8192 B accepted), `tls_pin_bound_is_the_enforced_cert_max`.
+- **EXTB-8** fixed @ `c971701`: AD-09 takes the members from `cargo metadata`, `xtask` included
+  (`queue_transport_async_signature`).
+- **TLS-08** fixed @ `c971701`. One shared config; its store is `NoClientSessionStorage`, and the second `ClientHello`
+  has no PSK. A control run with a counting store keeps the tickets and resumes (`tls_no_resumption_no_early_data`).
+- **GLMB-1** @ `2885694`: the direct socket has keepalive on and nodelay (`tls::tcp_socket`).
+  - **Deviation:** keepalive timings and `TCP_USER_TIMEOUT` need `setsockopt`. tokio does not expose them, and calling
+    them needs `socket2` as a direct dependency (outside ADR-051) or `unsafe`.
+  - The bound comes from the driver: a black-holed link is closed within `link_idle_secs` by the in-flight bound, at
+    the third unanswered tick (≤ 240 s at P = 80 s), and a stuck writer by the write-stall bound.
+
+  Tests: `direct_blackhole_link_is_closed_within_idle_bound` (paused clock), `tls::tests::direct_tcp_socket_has_keepalive_and_no_delay`.
+- **GLMB-2** @ `2885694`: a policy test, not a second `cargo deny` run (no CI time). The fuzz graph is the workspace
+  graph plus exactly `libfuzzer-sys =0.4.13` and `arbitrary`. Test: `fuzz_graph_is_workspace_graph_plus_allowlist`.
+- **GLMB-3** @ `2885694`: `Step::Flushed` carries the time the flush wait ended (`driver_flushes_due_writes_before_work`
+  checks `t >= poll`).
+- **After the fixes:**
+  - `ci-fast --strict` PASS at every commit, the last at `2885694`.
+  - The six tokio AI repeats PASS with 16 traces (in `nextest`) and 64 traces
+    (`M06-evidence/ai-tokio-64-m6b-2885694.txt`, max |Δt| = 0).
+  - M5 harness suite: **25** tests (`scenarios` 11, `transport` 12, `invitation` 2), 25/25. The harness binary has 162
+    tests, 162/162.
+  - `ci-full` is held until EXTB-1 is decided.
+
+**Decisions of WEISUNG M6-B-5c, recorded:**
+- **OPEN-M6-B-3:** re-encode through Arti's `HsId` once arti-client exposes it without `experimental-api`; no
+  `tor-hscrypto` edge now. The TOR-08/FZ-03 substitute is accepted.
+- **§2.4 in P4:** confirmed (relay `direct-tls`, TLS-12…TLS-15, G-12, `bab802b`).
+- **DOC-M6-C-1 (Phase C):** `docs/05` §5/§7 get the config keys `direct_tls_cert`/`direct_tls_key` (DER) and the
+  `openssl` command of OPEN-M6-09; `docs/05` is not touched now.
+- **OPEN-M6-B-4 (Phase C, read-only diagnosis first; scheduler/core stays a STOP).**
+  - **Reproduction:** `secmp-testkit` harness `m6_sched_life::relay_idle_and_age_bounds_from_schedule`, the Low-bw
+    run: VirtualDriver, seeds 1203 (client a) and 1204 (client b), one contact at P = 80 s both ways, lifetime fixed
+    at 24 h, `phase_max` default, default relay limits; also with the M5 limits (900 s / 86 400 s).
+  - **Observation:** client b is torn down `Overrun`; first three at 151 526, 323 361 and 497 015 ms, then every 1–3
+    min. Client a and the Strict run have at most one.
+  - **Not known:** whether it is the virtual driver's cost model or the core's deadline math; not investigated.
+- The `tor_smoke` example and the nightly fuzz budget (31 × 232 s + 2 × 3600 s): accepted.
+
 **Owner requests (BRIEF M6-B §2.6; asked 2026-10-15; not waited for).** Infrastructure that is not available stays
 under "Blocked — owner infrastructure" until it runs (TEST-SPEC conventions, ⚙ non-availability path).
 - **X-10 `win_test_runs_transport_suites`: the Windows transport suites.**
@@ -834,7 +919,9 @@ required job (`ct`, `mutants`, `proverif-hx`) is not green.
   - The six repeats are in `MUTANT_HARNESS_SKIP_TESTS` and `docs/mutants-accepted.md` §Skipped with their runtimes
     (25–49 s).
 - **P2: two shared refactors.** The commands of the synchronous and asynchronous transports are now one sans-IO
-  implementation (`secmp-transport/src/ops.rs`); the M5 harness suite ran 138/138 unchanged after the refactor.
+  implementation (`secmp-transport/src/ops.rs`). The harness test binary ran 138/138 unchanged after the refactor.
+  Correction (WEISUNG M6-B-5 §3): that was the whole binary at P2 — the 25 M5 harness tests plus the M6 tests of that
+  time — not "the M5 harness suite", which is 25 tests.
   `Session::link_kat` and `AsyncSession::link_kat` name `link::Link` fully qualified. The old import was unused without
   feature `harness`.
 - **PR run 38724110285 (head `1517781`, P1), read 2026-10-15.**
@@ -910,6 +997,51 @@ required job (`ct`, `mutants`, `proverif-hx`) is not green.
   driver must not do it.
 
 ## 8. Blocked / questions for the reviewer or owner
+
+### EXTB-1 (WEISUNG M6-B-5 §1) — BLOCKED, 2026-10-16: the fix needs a core change (STOP as instructed)
+
+- **Why the driver cannot fix it.**
+  - In `prepare_link` (`scheduler/core/mod.rs:591–602`), the core seals the FETCH part in the same call in which the
+    cell source answered "not ready" for the SEND part. At the tick the SEND part is written first, and `begin_write`
+    refuses the counter order.
+  - The driver cannot know in advance which send queue the core will ask for. A Balanced link picks it by round robin
+    over the relay's send queues; `Scheduler` has no list of them and is not `Clone`. So it cannot have the cell ready,
+    or hold the `work` call, before the first "not ready".
+  - The core also advances the round-robin position when the chosen cell was not ready (`:633`), so the queue a slot
+    serves would depend on the worker's timing — that is, on activity — as soon as the facade defers.
+- **Smallest core proposal (two hunks in `prepare_link`/`prepare_send`, +15/−6):**
+  `docs/reviews/M06-evidence/extb1-core-proposal.diff`.
+  - (A) No FETCH is sealed while the tick's SEND part is still missing: `let send_missing = needs_send &&
+    up.send_part.is_none(); if tear.is_none() && !send_missing && …`.
+  - (A′) The round-robin position moves only when the chosen queue's cell was obtained, so the same queue is asked
+    again at the next pass.
+  - With a synchronous cell source nothing changes: it is never "not ready". With `NoCells` the tick overruns as before;
+    only the useless FETCH seal is gone.
+- **Prototype evidence.** Applied in a throwaway `git worktree` under `target/`, not on the branch, never committed,
+  removed afterwards:
+  - the probe test is green;
+  - `cargo nextest run --workspace` 1125/1125 (AI-01…AI-06 sync and tokio, the S-* / LR-* / prep-log tests, FZ-04
+    replay, P-01/P-02);
+  - `cargo kani -p secmp-client-core` 7/7.
+- **Proofs and evidence it reopens:**
+  - Kani K-01…K-07, especially `kani_balanced_rr_selects_due_or_ping` (`rr_select` is unchanged; its caller changes);
+  - AI-01…AI-06 sync and tokio, and their 64-trace evidence;
+  - S-19…S-25 (prepare/tick split, prep log) and the Balanced S-* rows (round robin);
+  - FZ-04 `scheduler_event_sequence`;
+  - P-01/P-02;
+  - MR-01/MR-02 figures (expected unchanged: sync source);
+  - the mutants of `core/mod.rs` (OPEN-M6-B-2 lines shift).
+- **Then:** the EXTB-1 test is committed with the fix. The six tokio AI repeats get the extended oracle: (a) no
+  `TornDown` other than `Lifetime`, (b) the relay-visible SEND queue sequence identical idle vs active (recorded at the
+  `MemRelay` from the store's per-queue `next_cell_id` after each client unit), and (c) frames on every tick. Then
+  `ci-full`.
+- **On the ack progression of oracle (b):**
+  - The acks the client sends for its receive queues follow the peers' activity (`PeerSend` events), so they cannot be
+    identical between an idle and an active trace.
+  - Proposal: compare the ack progression only in traces without peer activity — AI-01…AI-03 variants with the `PeerSend`
+    events removed, as AI-04 removes the `UserSend` ones — and the SEND sequence in all traces.
+  - Please confirm the reading.
+- **Question:** may I apply (A) and (A′) to `scheduler/core/mod.rs`, with the reopened proofs re-run as listed?
 
 None for Phase A. Phase B waits for the owner's ADR-051 Part 2 approval and `cargo vet` records.
 

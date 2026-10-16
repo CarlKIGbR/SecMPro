@@ -81,3 +81,17 @@ Each finding: the regression test was written first and run red, then the fix.
 - Result: bounded, no transport change; no `docs/06` default changed (no ADR-047 Amendment 6).
 - Not covered by this probe: the real `TlsProvider`/`TcpDialer` over a real socket (the paused-clock harness uses
   `MemProvider`); the timeout wraps the provider future generically, so the provider type does not matter to the bound.
+
+## §GLM2B-1 mutant 5 — the pure (A′) revert under the mutation gate's selection (WEISUNG M6-CI-5)
+
+- Mutant 5 (scratch worktree of `fedf77f`, removed): the position written right after `prepare_cell` succeeds in
+  `prepare_send` (`rr: &mut usize`, `*rr = n`), `Part.next_rr` always `None`, so `tick` applies nothing — the pre-GLM2B-1
+  behaviour.
+- Selection: the harness run of `gates::mutants_harness_args` — packages `secmp-client-core`, `secmp-transport`,
+  `secmp-testkit` (`MUTANT_HARNESS_TEST_PACKAGES`), feature `harness`, nextest, with every name of `MUTANT_HARNESS_SKIP_TESTS`
+  and `MUTANT_SKIP_TESTS` as `--skip` (so `ai01…ai06_*_tokio` and the virtual AI tests do not run).
+- Result: `Summary [67.398s] 200 tests run: 199 passed (1 slow), 1 failed, 16 skipped`; the failure is
+  `secmp-testkit::harness m6_sched_io::balanced_rr_does_not_advance_on_teardown_before_tick` — the only test that kills it.
+  The skip list stays unchanged (`ai02_balanced_tokio` remains skipped).
+- Pin: `gates::tests::rr_write_time_guard_is_not_skipped_by_the_mutation_run` (the guard exists once, no skip entry names it,
+  the second run tests `secmp-testkit` with feature `harness`).

@@ -7467,6 +7467,35 @@ mod tests {
         Ok(())
     }
 
+    /// WEISUNG M6-CI-5 (GLM2B-1): the guard that kills the pure (A′) revert — the Balanced round-robin position moving
+    /// when a cell is obtained instead of when its SEND is written — is a fast test that the per-mutant run of the second
+    /// `cargo mutants` run executes: it exists, and neither skip list names it (the tokio-AI repeats are skipped there).
+    #[test]
+    fn rr_write_time_guard_is_not_skipped_by_the_mutation_run() {
+        const GUARD: &str = "balanced_rr_does_not_advance_on_teardown_before_tick";
+        let source = lf(include_str!(
+            "../../crates/secmp-testkit/tests/harness/m6_sched_io.rs"
+        ));
+        assert_eq!(source.matches(&format!("fn {GUARD}()")).count(), 1);
+        for (name, _) in expect::MUTANT_HARNESS_SKIP_TESTS
+            .iter()
+            .chain(expect::MUTANT_SKIP_TESTS)
+        {
+            assert!(
+                !name.contains(GUARD) && !GUARD.contains(name),
+                "{name} would skip the guard"
+            );
+        }
+        // the run it belongs to tests the harness package with feature `harness`
+        let args = mutants_harness_args(None);
+        assert!(
+            args.windows(2)
+                .any(|w| w == ["--test-package", "secmp-testkit"])
+        );
+        assert!(args.windows(2).any(|w| w == ["--features", "harness"]));
+        assert!(!args.iter().any(|a| a.contains(GUARD)));
+    }
+
     /// TEST-SPEC-M6 MU-01 (ADR-047 Amendment 4, OPEN-M6-23): the gate covers `secmp-crypto`, `secmp-proto`,
     /// `secmp-relay`, `secmp-client-core` and `secmp-transport` in the 8 shards with the Amendment 2 floor; the two M6
     /// packages are mutated in the second run of every shard, tested by their own tests and the testkit harness

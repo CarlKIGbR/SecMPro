@@ -529,6 +529,8 @@ struct Rig {
     now: u64,
     /// A script for each further connection (a scripted relay serves one connection).
     remake: Option<fn() -> Script>,
+    /// Whether `apply` reports a written frame to the scheduler (`frame_written`); a test that holds its writer sets false.
+    report_written: bool,
 }
 
 impl Rig {
@@ -557,6 +559,7 @@ impl Rig {
             events: Vec::new(),
             now: 0,
             remake: None,
+            report_written: true,
         }
     }
 
@@ -588,7 +591,9 @@ impl Rig {
                 Output::Write { link, bytes, at } => {
                     self.writes.push(at);
                     std::io::Write::write_all(&mut self.stream, &bytes).unwrap();
-                    self.sched.frame_written(link);
+                    if self.report_written {
+                        self.sched.frame_written(link);
+                    }
                     loop {
                         let mut frame = vec![0_u8; FRAME];
                         let mut got = 0_usize;
@@ -1219,4 +1224,55 @@ fn link_period_is_the_queues_or_the_modes_slot() {
         let lead = Params::default().fetch_lead_ms;
         assert_eq!(rig.sched.next_deadline(), Some(expect - lead), "{mode:?}");
     }
+}
+
+/// FIN2-1 (Astra FINAL2): while SEND frames are written but not yet reported complete, the next SEND is chosen from the
+/// position the newest pending one will commit — the chain Q0 → Q1 → Q2 over three ticks with no completion reported — and a
+/// teardown before any completion leaves the committed position: the replacement link starts at Q0 again.
+#[test]
+fn balanced_rr_reserves_the_successor_of_an_unwritten_send() {
+    let params = Params {
+        phase_max_ms: 0,
+        ..Params::default()
+    };
+    let mut rig = Rig::with(ok_script(), Mode::Balanced, params);
+    rig.remake = Some(ok_script);
+    rig.report_written = false;
+    let q0 = QueueId(0);
+    let mut queues = vec![q0];
+    for route in [2_u8, 3] {
+        let cap =
+            SendCap::from_route([route; 16], &SecretBytes::from_slice(&[9; 32]).unwrap()).unwrap();
+        queues.push(
+            rig.sched
+                .add_send_queue(0, RelayId(0), cap, 10_000)
+                .unwrap(),
+        );
+    }
+    rig.run_to(30_000);
+    assert_eq!(rig.writes, vec![10_000, 20_000, 30_000]);
+    assert_eq!(
+        rig.src.asked.get(..3),
+        Some(queues.as_slice()),
+        "asked: {:?}",
+        rig.src.asked
+    );
+    // the writer never completed: tear the link down; the replacement starts at the committed position
+    let link = rig.link.unwrap();
+    let before = rig.src.asked.len();
+    let outs = rig.sched.on_closed(link, 30_001).unwrap();
+    rig.apply(outs);
+    rig.report_written = true;
+    let mut t = 30_001;
+    while rig.src.asked.len() == before {
+        t += 500;
+        assert!(t < 400_000, "no reconnect");
+        rig.run_to(t);
+    }
+    assert_eq!(
+        rig.src.asked.get(before),
+        Some(&q0),
+        "asked: {:?}",
+        rig.src.asked
+    );
 }

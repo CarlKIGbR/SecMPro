@@ -18,8 +18,9 @@
 //!   *completely written* — not when its cell is obtained and not when the core hands the frame out at the tick (`last_send`
 //!   stays at the tick): the driver reports every completed frame write, oldest first, with
 //!   [`core::Scheduler::frame_written`]; a link torn down before its frame was written leaves the rotation where it was
-//!   (GLM2B-1, FIN-2) — and a "not ready" answer never lets a tick's `FETCH` part be sealed before its `SEND` part
-//!   (WEISUNG M6-B-6, EXTB-1).
+//!   (GLM2B-1, FIN-2), and the next `SEND` is chosen from the position the newest still-unwritten one will commit, so the
+//!   choice never depends on when a write completes (FIN2-1) — and a "not ready" answer never lets a tick's `FETCH` part
+//!   be sealed before its `SEND` part (WEISUNG M6-B-6, EXTB-1).
 
 pub mod control;
 pub mod core;

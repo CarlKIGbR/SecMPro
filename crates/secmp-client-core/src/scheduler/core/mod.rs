@@ -601,7 +601,15 @@ impl World {
                 Spec::Send(_) => false,
             };
             if needs_send && up.send_part.is_none() {
-                tear = self.prepare_send(link.rr, up, spec, slot, now, source);
+                // the successor the newest unwritten SEND will commit, else the committed position (FIN2-1): the
+                // choice never depends on whether a write completed before or after this preparation
+                let rr = up
+                    .unwritten
+                    .iter()
+                    .rev()
+                    .find_map(|n| *n)
+                    .unwrap_or(link.rr);
+                tear = self.prepare_send(rr, up, spec, slot, now, source);
             }
             // a tick's parts go out SEND first (`tick`): its FETCH is sealed only after its SEND, so the counters are in
             // write order even when the cell source answers "not ready" (EXTB-1)

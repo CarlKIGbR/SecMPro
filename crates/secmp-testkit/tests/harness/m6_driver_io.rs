@@ -1080,3 +1080,56 @@ fn driver_rr_does_not_advance_for_a_send_never_written() {
         "the rotation moved past a SEND that was never written"
     );
 }
+
+/// The relay-visible SENDs `(time, queue, next_cell_id)` of one Balanced run (three send queues at 10 s, no phase, seed 103,
+/// the AI costs: a real cell 20 ms, a dummy 1 ms) whose first frame is held for `delay_ms` after `first` bytes; `active`
+/// adds the activity.
+fn fin21_sends(
+    first: usize,
+    delay_ms: u64,
+    active: bool,
+) -> Vec<(u64, secmp_proto::wire::Id, u64)> {
+    use crate::m6_activity::activity;
+    use crate::m6_tokio::AI_COSTS;
+    runtime().block_on(async {
+        let setup = Setup::new();
+        let provider = Holding::new(setup.provider.clone(), 0, Some(Hold { first, delay_ms }), 0);
+        let sc = Scenario {
+            mode: Mode::Balanced,
+            contacts: vec![(10_000, 10_000); 3],
+            pool: false,
+            seed: 103,
+        };
+        let x = TClient::with_provider(&setup, provider, sc.mode, no_phase(), sc.seed, AI_COSTS, 0);
+        let mut rig = TokioRig::assemble(setup, x, &sc).await;
+        let act = activity(103, 3, sc.contacts.len());
+        let run = rig
+            .run_minutes(1, if active { Some(&act) } else { None })
+            .await;
+        run.sends
+    })
+}
+
+/// FIN2-1 (Astra FINAL2, GLM EXT5): the next SEND is chosen against the position the pending SEND will commit, not the
+/// committed one, so the choice does not depend on whether the worker finishes preparing before or after the write
+/// completes. Balanced, first frame held 260 ms (past the 250-ms flush bound; 0 or 128 bytes written first): idle and
+/// active relay-visible SENDs are equal (the pin: `20000 Q0` idle against `20000 Q1` active); a 200-ms hold, inside the
+/// flush wait, is the control.
+#[test]
+fn driver_rr_reservation_does_not_depend_on_worker_timing() {
+    for (first, delay_ms) in [(0, 260), (128, 260), (0, 200)] {
+        let idle = fin21_sends(first, delay_ms, false);
+        let active = fin21_sends(first, delay_ms, true);
+        assert!(idle.len() >= 4, "{idle:?}");
+        let rids = |v: &[(u64, secmp_proto::wire::Id, u64)]| -> Vec<(u64, u8)> {
+            v.iter()
+                .map(|s| (s.0, s.1.first().copied().unwrap_or(0)))
+                .collect()
+        };
+        assert_eq!(
+            rids(&idle),
+            rids(&active),
+            "held {delay_ms} ms after {first} bytes"
+        );
+    }
+}

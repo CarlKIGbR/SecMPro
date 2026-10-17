@@ -608,3 +608,44 @@ fn check_fetch_multi(
     }
     Ok(Ok(outcome))
 }
+
+#[cfg(test)]
+mod tests {
+    //! `check_fetch` on whole batches (mutants-156, WEISUNG M6-CI-9).
+
+    use secmp_proto::wire::frame::Cellr;
+
+    use super::*;
+
+    fn cell() -> Result<Cell> {
+        Ok(Cell::from_bytes(&[7; 4096])?)
+    }
+
+    fn stored(cell_id: u64) -> Result<ResponseCmd> {
+        Ok(ResponseCmd::Cellr(Cellr::Cell {
+            rid: [0; 16],
+            cell_id,
+            cell: cell()?,
+        }))
+    }
+
+    fn dummy() -> Result<ResponseCmd> {
+        Ok(ResponseCmd::Cellr(Cellr::Dummy { cell: cell()? }))
+    }
+
+    /// `channel.rs:528` (`error.is_none() && !dummies && cell_id > previous`, the second `&&` -> `||`): real cells come before
+    /// the dummies — a stored cell after a dummy is a misfit even when its id is above the acknowledgement — and ascend.
+    #[test]
+    fn fetch_batch_has_cells_before_dummies_in_ascending_order() -> Result<()> {
+        let rid = [0; 16];
+        let ok = check_fetch(vec![stored(1)?, stored(2)?, dummy()?, dummy()?], &rid, 0)?;
+        assert!(matches!(ok, Ok(cells) if cells.len() == 2));
+        let after_dummy = check_fetch(vec![stored(1)?, dummy()?, stored(2)?, dummy()?], &rid, 0);
+        assert!(matches!(after_dummy, Err(Error::Rejected)));
+        let descending = check_fetch(vec![stored(2)?, stored(1)?, dummy()?, dummy()?], &rid, 0);
+        assert!(matches!(descending, Err(Error::Rejected)));
+        let at_ack = check_fetch(vec![stored(1)?, dummy()?, dummy()?, dummy()?], &rid, 1);
+        assert!(matches!(at_ack, Err(Error::Rejected)));
+        Ok(())
+    }
+}

@@ -718,3 +718,66 @@ pub(crate) fn get_link_data(
         },
     ))
 }
+
+#[cfg(test)]
+mod tests {
+    //! The judges of the one-shot exchanges, on single response frames (mutants-156, WEISUNG M6-CI-9).
+
+    use super::*;
+
+    fn seeds() -> Result<(SecretBytes<32>, SecretBytes<32>)> {
+        Ok((
+            SecretBytes::from_slice(&[1; 32])?,
+            SecretBytes::from_slice(&[2; 32])?,
+        ))
+    }
+
+    fn reply(seq: u32, cmd: ResponseCmd) -> Response {
+        Response { cmd_seq: seq, cmd }
+    }
+
+    /// `ops.rs:188` (`r == *rid && s == *sid` -> `||`): an `OK_QUEUE_NEW` that names only one of the two derived ids is a
+    /// misfit (the relay is not ours); one that names both completes the exchange with the derived capabilities.
+    #[test]
+    fn queue_new_needs_both_derived_ids() -> Result<()> {
+        let (recv, send) = seeds()?;
+        let access = SecretBytes::from_slice(&[3; 32])?;
+        let keys = QueueNewKeys::derive(&recv, &send)?;
+        let (rid, sid) = (*keys.recv_cap.rid(), *keys.send_cap.sid());
+        let other = [0xEE; 16];
+        for (r, s) in [(rid, other), (other, sid), (other, other)] {
+            let keys = QueueNewKeys::derive(&recv, &send)?;
+            let mut ex = create_queue(7, &[9; 16], keys, &access)?;
+            let got = ex.push(reply(7, ResponseCmd::OkQueueNew { rid: r, sid: s }));
+            assert!(matches!(got, Err(Error::Rejected)), "{r:?} {s:?}");
+        }
+        let keys = QueueNewKeys::derive(&recv, &send)?;
+        let mut ex = create_queue(7, &[9; 16], keys, &access)?;
+        let got = ex.push(reply(7, ResponseCmd::OkQueueNew { rid, sid }));
+        assert!(matches!(got, Ok(Step::Done(Ok(_)))));
+        Ok(())
+    }
+
+    /// `ops.rs:208` and `222` (the first-frame `ERR` guard of `FETCH` and `FETCH_MULTI`, -> `true` / `false`): a first frame
+    /// `ERR` 6/7 (`Rate`) ends the exchange with that error, any other first-frame `ERR` (`NoQueue`) is a misfit.
+    #[test]
+    fn fetch_judges_a_first_frame_err() -> Result<()> {
+        let (recv, _) = seeds()?;
+        let cap = RecvCap::from_seed(&recv)?;
+        let rate = || reply(5, ResponseCmd::Err(ErrCode::Rate));
+        let no_queue = || reply(5, ResponseCmd::Err(ErrCode::NoQueue));
+        let one = || fetch(5, &[9; 16], &cap, 0);
+        let multi = || fetch_multi(5, &[9; 16], &[(&cap, 0)]);
+        assert!(matches!(
+            one()?.push(rate()),
+            Ok(Step::Done(Err(Error::Rate)))
+        ));
+        assert!(matches!(one()?.push(no_queue()), Err(Error::Rejected)));
+        assert!(matches!(
+            multi()?.push(rate()),
+            Ok(Step::Done(Err(Error::Rate)))
+        ));
+        assert!(matches!(multi()?.push(no_queue()), Err(Error::Rejected)));
+        Ok(())
+    }
+}

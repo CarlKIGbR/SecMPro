@@ -1332,8 +1332,19 @@ pub(crate) fn mutants_harness_args(shard: Option<MutantsShard>) -> Vec<String> {
         expect::MUTANTS_HARNESS_TEST_TIMEOUT_SECONDS.to_string(),
     ];
     a.splice(at..at, extra);
+    // WEISUNG M6-CI-9 (ADR-047 Amendment 6): the first failing test cancels the run at once. nextest's default lets the tests
+    // that are running finish, so a mutant that makes some other test loop forever (a scheduler or driver loop) timed out at
+    // 900 s although a test had already failed; with `immediate` those tests are terminated and the mutant is `caught`.
+    let after = a
+        .iter()
+        .position(|x| x == "--")
+        .map_or(a.len(), |i| i.saturating_add(1));
+    a.splice(after..after, [MUTANTS_HARNESS_MAX_FAIL.to_owned()]);
     a
 }
+
+/// The nextest option that cancels the harness run of a mutant at the first failing test.
+pub(crate) const MUTANTS_HARNESS_MAX_FAIL: &str = "--max-fail=1:immediate";
 
 /// How often the mutation gate polls cargo-mutants and echoes its new output lines.
 const MUTANTS_POLL: std::time::Duration = std::time::Duration::from_secs(5);
@@ -7494,6 +7505,18 @@ mod tests {
         );
         assert!(args.windows(2).any(|w| w == ["--features", "harness"]));
         assert!(!args.iter().any(|a| a.contains(GUARD)));
+        // ADR-047 Amendment 6: nextest cancels the run at the first failure, after the first `--` (nextest's own options)
+        let dashes = args.iter().position(|a| a == "--").unwrap_or(usize::MAX);
+        let max_fail = args
+            .iter()
+            .position(|a| a == MUTANTS_HARNESS_MAX_FAIL)
+            .unwrap_or(0);
+        assert_eq!(max_fail, dashes.saturating_add(1));
+        assert!(
+            !mutants_args(None)
+                .iter()
+                .any(|a| a == MUTANTS_HARNESS_MAX_FAIL)
+        );
     }
 
     /// TEST-SPEC-M6 MU-01 (ADR-047 Amendment 4, OPEN-M6-23): the gate covers `secmp-crypto`, `secmp-proto`,

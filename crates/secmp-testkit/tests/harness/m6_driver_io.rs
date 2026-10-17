@@ -896,12 +896,12 @@ fn flush_wait_ends_at_the_completion_of_the_pass_writes() {
     };
     let (_, rig) = run_holding(no_phase(), 43, 0, Some(hold), 1);
     let log = rig.x.driver.log().unwrap();
-    let held = link_of(&rig, 0);
+    let stuck = link_of(&rig, 0);
     let done = log
         .steps
         .iter()
         .find_map(|s| match s {
-            Step::Wrote(t, l, 4352) if *l == held => Some(*t),
+            Step::Wrote(t, l, 4352) if *l == stuck => Some(*t),
             _ => None,
         })
         .unwrap();
@@ -916,12 +916,12 @@ fn flush_wait_ends_at_the_completion_of_the_pass_writes() {
         !log.steps
             .iter()
             .any(|s| matches!(s, Step::Work(start, _) if *start > t && *start < done)),
-        "no work starts inside the held write"
+        "no work starts inside the stuck write"
     );
 }
 
 /// Mutants-156 (`flush_wait`, `pending > 0 && oldest == Some(now)` → `||`): only the writes handed out in THIS pass are waited
-/// for. One first frame is held 9.5 s (past the 250 ms wait, inside the stall bound); the pass at the FETCH lead of the
+/// for. One first frame is stuck 9.5 s (past the 250 ms wait, inside the stall bound); the pass at the FETCH lead of the
 /// next tick (tick − 1000 ms), which hands out nothing, does not wait for the old write: `Flushed` is its own time.
 #[test]
 fn flush_wait_does_not_wait_for_an_earlier_pass_write() {
@@ -931,12 +931,12 @@ fn flush_wait_does_not_wait_for_an_earlier_pass_write() {
     };
     let (_, rig) = run_holding(no_phase(), 43, 0, Some(hold), 1);
     let log = rig.x.driver.log().unwrap();
-    let held = link_of(&rig, 0);
+    let stuck = link_of(&rig, 0);
     let done = log
         .steps
         .iter()
         .find_map(|s| match s {
-            Step::Wrote(t, l, 4352) if *l == held => Some(*t),
+            Step::Wrote(t, l, 4352) if *l == stuck => Some(*t),
             _ => None,
         })
         .unwrap();

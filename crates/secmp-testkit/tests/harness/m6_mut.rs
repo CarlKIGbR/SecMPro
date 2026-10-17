@@ -178,9 +178,7 @@ fn async_link_reports_closed_when_the_stream_ends() {
     use secmp_client_core::clock::Clock as _;
     use secmp_testkit::harness::EntropyPool;
     use secmp_transport::Error;
-    use secmp_transport::driver::{
-        AsyncQueueTransport as _, AsyncRelayQueueTransport, StreamProvider as _,
-    };
+    use secmp_transport::driver::{AsyncRelayQueueTransport, StreamProvider as _};
 
     use crate::m6_tokio::{Setup, runtime};
     // the relay's handshake bytes: RELAYINFO 1744 + HS2 1156

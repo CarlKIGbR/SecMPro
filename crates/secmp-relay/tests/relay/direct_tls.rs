@@ -45,6 +45,8 @@ struct End {
     flush_fails: bool,
     /// While set, writes fail with `WouldBlock` (a full socket buffer).
     writes_block: Arc<std::sync::atomic::AtomicBool>,
+    /// Every `(poll, write)` pair `set_poll` was given, in order.
+    polls: Arc<Mutex<Vec<(Duration, Duration)>>>,
 }
 
 fn pair() -> (End, End) {
@@ -57,6 +59,7 @@ fn pair() -> (End, End) {
         closed: Arc::new(AtomicUsize::new(0)),
         flush_fails: false,
         writes_block: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        polls: Arc::new(Mutex::new(Vec::new())),
     };
     (end(&a, &b), end(&b, &a))
 }
@@ -113,8 +116,9 @@ impl Write for End {
 }
 
 impl Stream for End {
-    fn set_poll(&mut self, poll: Duration, _write: Duration) -> io::Result<()> {
+    fn set_poll(&mut self, poll: Duration, write: Duration) -> io::Result<()> {
         self.poll = Some(poll);
+        self.polls.lock().unwrap().push((poll, write));
         Ok(())
     }
 
@@ -305,7 +309,21 @@ struct Session {
     end: End,
     server_wrote: Arc<Mutex<Vec<u8>>>,
     server_closed: Arc<AtomicUsize>,
-    done: std::thread::JoinHandle<()>,
+    done: Option<std::thread::JoinHandle<()>>,
+}
+
+/// The server thread of `s` ends within a bound: a `handle` that does not return (a retry loop on an error that must end
+/// the connection) fails the test here after 5 s — not by hanging it, which cargo-mutants would count as a timeout.
+fn ended(s: &mut Session) {
+    let done = s.done.take().unwrap();
+    let limit = Instant::now().checked_add(Duration::from_secs(5)).unwrap();
+    while !done.is_finished() && Instant::now() < limit {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    // not joined when it did not end: a loop that retries a persistent error never returns, EOF or not, and the test
+    // fails here; the thread dies with the test process
+    assert!(done.is_finished(), "the connection did not end within 5 s");
+    done.join().unwrap();
 }
 
 fn session(seed: u8) -> (Session, Vec<u8>) {
@@ -324,7 +342,7 @@ fn session(seed: u8) -> (Session, Vec<u8>) {
             end: client_end,
             server_wrote,
             server_closed,
-            done,
+            done: Some(done),
         },
         cert,
     )
@@ -434,7 +452,7 @@ fn direct_tls_serves_the_link_handshake() {
     let (rest, clean) = plaintext(&mut c, &mut s.end, 1);
     assert!(rest.is_empty());
     assert!(clean, "the relay's close carries close_notify");
-    s.done.join().unwrap();
+    ended(&mut s);
     assert_eq!(s.server_closed.load(Ordering::SeqCst), 1);
     // the relay wrote TLS records only: its handshake flight, the RELAYINFO record and the alert
     let types = record_types(&s.server_wrote.lock().unwrap());
@@ -463,7 +481,7 @@ fn direct_tls_close_sends_close_notify() {
     let (rest, clean) = plaintext(&mut c, &mut s.end, 1);
     assert!(rest.is_empty(), "nothing after a broken HS1");
     assert!(clean, "the relay's close carries close_notify");
-    s.done.join().unwrap();
+    ended(&mut s);
     assert_eq!(s.server_closed.load(Ordering::SeqCst), 1);
 }
 
@@ -477,7 +495,7 @@ fn direct_tls_refuses_classical_groups() {
         let (mut s, cert) = session(seed);
         let mut c = client(&cert, vec![group], true);
         assert!(handshake(&mut c, &mut s.end).is_err());
-        s.done.join().unwrap();
+        ended(&mut s);
         let wrote = s.server_wrote.lock().unwrap().clone();
         assert_eq!(record_types(&wrote), vec![0x15], "{wrote:02x?}");
         assert_eq!(s.server_closed.load(Ordering::SeqCst), 1);
@@ -496,7 +514,7 @@ fn direct_tls_hands_nothing_on_without_alpn() {
     flush(&mut c, &mut s.end);
     let (answer, _) = plaintext(&mut c, &mut s.end, 1);
     assert!(answer.is_empty(), "{} SecMP bytes", answer.len());
-    s.done.join().unwrap();
+    ended(&mut s);
     assert_eq!(s.server_closed.load(Ordering::SeqCst), 1);
 }
 
@@ -750,4 +768,32 @@ fn a_trickled_client_hello_ends_at_the_hello_timeout() {
         "EXT2B-1: closed after {ended:?}, hello_timeout + READ_POLL is {bound:?}"
     );
     assert!(server_closed.load(Ordering::SeqCst) > 0);
+}
+
+/// EXT3B mutants-156 (`tls.rs`, `TlsConn::set_poll` replaced by `Ok(())`): the timeouts the connection loop asks for
+/// reach the socket under the TLS stream — at once, and again after a `read` (which narrows them to its deadline and
+/// restores them) — so that a write to a peer that does not read is bounded by the asked write timeout, and a failure of
+/// the socket's `set_poll` is the caller's. (The read side is bounded by the per-call deadline of `Deadlined` in any
+/// case; this is what the write timeout and the restore depend on.)
+#[test]
+fn tls_conn_set_poll_reaches_the_socket() {
+    let (cert, key) = cert_and_key(22);
+    let config = tls::server_config(cert, key).unwrap();
+    let (server_end, _client_end) = pair();
+    let polls = Arc::clone(&server_end.polls);
+    let mut conn = TlsConn::new(&config, server_end).unwrap();
+    let (poll, write) = (Duration::from_millis(123), Duration::from_secs(45));
+    conn.set_poll(poll, write).unwrap();
+    assert_eq!(polls.lock().unwrap().last(), Some(&(poll, write)));
+    // a read narrows the socket's timeouts to the call's deadline (never above the asked poll) and puts them back
+    let mut buf = [0_u8; 8];
+    let err = conn.read(&mut buf).unwrap_err();
+    assert_eq!(err.kind(), ErrorKind::WouldBlock);
+    let seen = polls.lock().unwrap().clone();
+    assert!(seen.len() >= 3, "{seen:?}");
+    assert!(
+        seen.iter().skip(1).all(|(p, w)| *p <= poll && *w <= write),
+        "{seen:?}"
+    );
+    assert_eq!(seen.last(), Some(&(poll, write)), "restored after the read");
 }

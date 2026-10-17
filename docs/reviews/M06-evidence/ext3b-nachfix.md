@@ -27,3 +27,25 @@
 - Green: the new test and the 20 other `driver_*` / `m6_tokio::` tests (21 passed); whole harness binary at default trace
   counts: `Summary [293.301s] 167 tests run: 167 passed (16 slow), 0 skipped`, including `driver_balanced_first_tick_sends_and_fetches_in_order`
   and the six tokio repeats `ai01…ai06_*_tokio` (106–165 s each).
+
+## §mutants-156 — two survivors of PR run #156, mutants-shard (5), first run (WEISUNG M6-CI-8)
+
+- Job 117246088191, first `cargo mutants` run (`secmp-relay`, 257 mutants in 37 min: 175 caught, 80 unviable, 1 missed, 1 timeout):
+  - `TIMEOUT  crates/secmp-relay/src/server.rs:322:23: replace match guard e.kind() == ErrorKind::Interrupted with true in handle in 3s build + 100s test`
+  - `MISSED   crates/secmp-relay/src/tls.rs:264:9: replace <impl Stream for TlsConn<S>>::set_poll -> io::Result<()> with Ok(()) in 2s build + 27s test`
+  - both then `UNDOCUMENTED SURVIVOR`.
+- The second run (`--features harness --shard 5/8`) built its baseline (314 s) and ended at 00:32:41 with `The runner has received a
+  shutdown signal` (exit 143): an infrastructure event, not a test result.
+- `server.rs:322` (`Interrupted` guard → `true`): the unit test `server_loop::handle_ticks_retries_and_stops_on_an_error` already failed under
+  the mutant; the run timed out because two `direct_tls` tests hung (`direct_tls_refuses_classical_groups`,
+  `direct_tls_hands_nothing_on_without_alpn`: the server thread retried a persistent TLS error forever and the test joined it).
+  Fix: `ended()` in `direct_tls.rs` bounds the join (5 s; fails instead of hanging, does not join a thread that did not end), and a new
+  test `server_loop::handle_retries_one_interrupt_and_ends_at_the_next_error` (one `Interrupted`, then `ConnectionReset` / `Other` five times
+  over: two reads and a close, not seven).
+- `tls.rs:264` (`TlsConn::set_poll` → `Ok(())`): the read side is bounded by `Deadlined`'s per-call deadline whatever `set_poll`
+  does, so a read test cannot tell the mutant (equivalent for reads); what depends on it is the socket's write timeout and the restore after a read.
+  Test `direct_tls::tls_conn_set_poll_reaches_the_socket` records the `(poll, write)` pairs the socket under the TLS stream is given.
+- Result, `cargo mutants --no-shuffle -j 2 --features kat --caught --unviable --package secmp-relay --file crates/secmp-relay/src/tls.rs --file crates/secmp-relay/src/server.rs --re 'TlsConn<S>>::set_poll|e.kind\(\) == ErrorKind::Interrupted'`:
+  `7 mutants tested in 2m: 6 caught, 1 unviable` — `caught.txt`: `tls.rs:264:9 … set_poll … with Ok(())`, `server.rs:322:23 … Interrupted with true in handle`
+  (also `with false in handle`, and both in `serve`, `server.rs:292:23`). Before the `ended()` fix the same run gave `TIMEOUT … 322:23 … with true` (1 timeout).
+  (The last edit after this run was a clippy-only `checked_add`; the test suite passes: 190 tests.)

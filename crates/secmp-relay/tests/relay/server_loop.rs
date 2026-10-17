@@ -436,6 +436,24 @@ fn handle_ticks_retries_and_stops_on_an_error() {
     assert_eq!((s.written.len(), s.reads, s.closed), (1744, 5, true));
 }
 
+/// EXT3B mutants-156 (`server.rs:322`, the `Interrupted` guard replaced by `true`): one `Interrupted` is retried and the
+/// connection survives it; the first error of any other kind ends `handle` with the stream closed — the script holds
+/// five more of them, so a loop that retries every error reads them all (seven reads instead of two) and fails the test
+/// at once instead of spinning.
+#[test]
+fn handle_retries_one_interrupt_and_ends_at_the_next_error() {
+    for kind in [ErrorKind::ConnectionReset, ErrorKind::Other] {
+        let (relay, _) = relay();
+        let mut script = vec![In::Fail(ErrorKind::Interrupted), In::Fail(kind)];
+        script.extend((0..5).map(|_| In::Fail(kind)));
+        let (stream, seen) = Scripted::new(script);
+        server::handle(&relay, stream, &Virtual::new(10));
+        let s = seen.lock().unwrap();
+        assert_eq!((s.reads, s.closed), (2, true), "{kind:?}");
+        assert!(s.written.is_empty());
+    }
+}
+
 /// A teardown (a `HELLO` of the wrong length) closes the connection without reading on; so does a failed write; a
 /// stream whose read timeout cannot be set, or a relay that refuses the connection, is closed unread.
 #[test]

@@ -606,6 +606,33 @@ fn is_exemptions_key_line(line: &str) -> bool {
     after.trim_start().starts_with(['.', '='])
 }
 
+/// An assignment whose first key part is a quoted basic string with an escape (`"exempti\\U0000006Fns".x = …`,
+/// `"exemptions" = { … }` spelled with an escape): the TOML parser decodes it, a literal comparison does not, so it is
+/// rejected without decoding (FIN2-2). A *value* string with an escape is not a key and does not trigger this.
+fn is_escaped_assignment_key(line: &str) -> bool {
+    let t = line.trim_start();
+    let Some(body) = t.strip_prefix('"') else {
+        return false;
+    };
+    let mut escaped = false;
+    let mut has_escape = false;
+    for (i, c) in body.char_indices() {
+        if escaped {
+            escaped = false;
+        } else if c == '\\' {
+            escaped = true;
+            has_escape = true;
+        } else if c == '"' {
+            let after = body
+                .get(i.saturating_add(1)..)
+                .unwrap_or_default()
+                .trim_start();
+            return has_escape && after.starts_with(['=', '.']);
+        }
+    }
+    false
+}
+
 /// The `[[exemptions.<name>]]` entries of `supply-chain/config.toml`, in file order. Fail closed (EXTB-5): only the
 /// exact form `[[exemptions.<bare-name>]]` at column 0 is an ordinary header; any other line starting with `[` that
 /// mentions `exemptions` is an entry with a header finding, never skipped.
@@ -726,6 +753,12 @@ pub(crate) fn vet_closure_findings(
     }
     // FIN-3: valid TOML can carry an exemption without a header (dotted key, inline table); the classifier only sees
     // headers, so such a form is rejected by name, never read
+    if config.lines().any(is_escaped_assignment_key) {
+        findings.push(
+            "vet config uses an escaped key in an assignment; only bare keys are accepted"
+                .to_owned(),
+        );
+    }
     if config.lines().any(is_exemptions_key_line) {
         findings.push(
             "vet config uses a non-canonical exemptions form (dotted or inline); only [[exemptions.<name>]] headers are accepted"
@@ -2628,6 +2661,60 @@ mod tests {
         let commented = format!("# exemptions.subtle = [] is not used\n{real}");
         let (findings, _) = vet_closure_findings(&commented, &BTreeSet::new());
         assert!(!findings.iter().any(|f| f.contains("non-canonical")));
+        Ok(())
+    }
+
+    /// FIN2-2 (Astra FINAL2): a quoted basic-string key with an escape on the left of an assignment —
+    /// `"exempti\U0000006Fns".subtle = …`, `"exemptions".subtle` spelled with `\u`, an escaped inline root table — is decoded
+    /// by the TOML parser and normalised by `cargo vet fmt`, but a literal comparison does not see it: rejected by name,
+    /// without decoding. Controls: the real config, a comment, and a *value* string with an escape.
+    #[test]
+    fn vet_closure_escaped_assignment_keys_are_rejected() -> Result<()> {
+        let closure: BTreeSet<(String, String)> = [("subtle".to_owned(), "2.6.1".to_owned())]
+            .into_iter()
+            .collect();
+        let real = repo_file("supply-chain/config.toml")?;
+        let item = "{ version = \"2.6.1\", criteria = \"safe-to-deploy\", notes = \"Tracked exemption: review probe\" }";
+        let planted = [
+            (
+                "escaped letter",
+                format!("\"exempti\\U0000006Fns\".subtle = [{item}]\n{real}"),
+            ),
+            (
+                "short escape",
+                format!("\"exempti\\u006fns\".subtle = [{item}]\n{real}"),
+            ),
+            (
+                "escaped inline root table",
+                format!("\"exempti\\u006fns\" = {{ subtle = [{item}] }}\n{real}"),
+            ),
+            (
+                "escape in the second key part",
+                format!("{real}\n[policy.probe]\n\"su\\u0062tle\" = 1\n"),
+            ),
+        ];
+        for (name, config) in planted {
+            let (findings, _) = vet_closure_findings(&config, &closure);
+            assert!(
+                findings.iter().any(|f| f
+                    == "vet config uses an escaped key in an assignment; only bare keys are accepted"),
+                "{name}: {findings:?}"
+            );
+        }
+        // controls
+        let value = format!("{real}\n[policy.probe]\nnotes = \"a \\u0041 value\"\n");
+        let commented = format!("# \"exempti\\u006fns\" = 1\n{real}");
+        for (name, config) in [
+            ("real", real.clone()),
+            ("value", value),
+            ("comment", commented),
+        ] {
+            let (findings, _) = vet_closure_findings(&config, &BTreeSet::new());
+            assert!(
+                !findings.iter().any(|f| f.contains("escaped key")),
+                "{name}: {findings:?}"
+            );
+        }
         Ok(())
     }
 

@@ -356,7 +356,18 @@ Reviewer decision (WEISUNG M6-CI-13, engineering delegation 30.09.2026):
 3. **Recorded, not changed.** `Measurement::of` falls back to the clock quantum when a measurement's samples show no lattice, and the clock probe recognises no lattice with fewer than 4 runs, although run #159's probe showed `median_gap` 25 and `regular` 1.0. So `tr_decrypt_trial_open_position` and `tr_decrypt_reject_skipped` were judged with q_eff 1.0 tick (clock) while every other target took ≈ 24.5 ticks from its samples. The effect floor is 10 ns either way: 24.45 vs 24.5 ticks. Re-derived with q_eff 24.5, run #159's verdicts are unchanged (FAIL at p90, 1.74 / 1.73 floors; PASS).
 4. ADR-041's criterion, its sign rule, the floor, the thresholds, the crops, the sample counts and every control are unchanged. No product code changes.
 
-Evidence: `docs/reviews/M06-evidence/ct-nonce-M6-CI-13.md`, which holds the condensed CT-DIAG tables and the local verification of the new fixture under the repeat mode. That verification did not meet the 1-tick criterion of WEISUNG M6-CI-13 in every half; the open point is recorded there and in `M06-report.md` §8.
+5. **Acceptance criterion of the fixture fix** (WEISUNG M6-CI-13b, 2026-10-17): the gate's own rule plus a margin. Every half must have |Δp90| < 0.5 × floor (20 local ticks = 5 ns), and every rep verdict must be PASS.
+   - The 1.0-tick bar of WEISUNG M6-CI-13 §5 was a diagnosis bar and is withdrawn: one local tick is 0.25 ns, far below any resolution the gate claims.
+   - Measured on the Threadripper, under the repeat mode, every half a fresh fixture:
+
+     | Fixture | max \|Δp90\| | Rep verdicts |
+     |---|---|---|
+     | old | 28.36 ticks = 7.1 ns; on the EPYC, 42 ticks = 17 ns (run #159 FAIL) | — |
+     | new | 8.93 ticks = 2.2 ns = 0.22 floor | 6/6 (5a) and 8/8 (5b) PASS |
+
+   - The residual (≤ 2.2 ns, both signs, |t| up to 25 on 1M samples) is a public-content micro-timing of the remaining class differences (`hdr_ct`, key/entry, `mk`). It is below the floor by a factor of at least 4, and `tr_decrypt_nonce_dependence` monitors it.
+
+Evidence: `docs/reviews/M06-evidence/ct-nonce-M6-CI-13.md`, which holds the condensed CT-DIAG tables and the local verification of the new fixture under the repeat mode.
 Amended 2026-10-17 — Accepted (Reviewer, Owner-Delegation 30.09., 2026-10-17).
 
 ---

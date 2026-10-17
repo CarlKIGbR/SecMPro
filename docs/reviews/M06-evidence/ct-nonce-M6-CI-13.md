@@ -51,7 +51,8 @@ The production bench has no per-target filter, and a full production run measure
 used the diag branch's repeat mode, with each half run exactly as in the gate (`evaluate`: production calibration and
 pair, a fresh fixture per half).
 
-- A scratch worktree at `6ac385f` (this branch with both fix commits).
+- A scratch worktree at `6ac385f` (this branch with both fix commits): `target/wt-ct13`, detached and gitignored, left
+  in place. It is the source of §2.2 and §2.3; its reports are under `target/wt-ct13/target/verify_5a/` and `verify_5b/`.
 - The three diag commits were cherry-picked onto it as `bf5106c`, `cf45a0f` and `d889bbe`. The one conflict was the
   report's format string; the other merges were textual.
 - Two scratch modes, never committed: `verify_5a` and `verify_5b`.
@@ -126,8 +127,10 @@ ct diag_repeat: tr_decrypt_reject_skipped rep 3 half 2 Δp50/Δp75/Δp90 +0.38/+
 | 5b | `tr_decrypt_trial_open_position` | 8 | **5** (rep 0 h1 −8.93, rep 1 h2 +3.81, rep 2 h1 −1.27) | 6 (rep 0 h1 −25.22, rep 1 h2 10.93) | PASS ×4 |
 | 5b | `tr_decrypt_reject_skipped` | 8 | **6** (rep 0 h1 −5.20, rep 2 h1 +1.14) | 7 (rep 0 h1 −12.93) | PASS ×4 |
 
-- **Not met.** The criterion fails in 7 of 28 fixed-target halves. All 7 are below the 40-tick local floor (largest
-  8.93 ticks = 2.2 ns = 0.22 floor), and every rep verdict of both fixed targets is PASS.
+- **The 1-tick bar** (withdrawn, see the decision below) fails in 7 of 28 fixed-target halves. All 7 are below the
+  40-tick local floor (largest 8.93 ticks = 2.2 ns = 0.22 floor), and every rep verdict of both fixed targets is PASS.
+- **The accepted criterion** (|Δp90| < 0.5 × floor = 20 local ticks in every half, every rep verdict PASS) is met in
+  28 of 28 halves, 14 of 14 rep verdicts.
 - **Old fixture, for comparison:** max 28.36 / 27.46 ticks, and 25 of 32 halves with |t90| > 4.5.
 - **The new fixture of `tr_decrypt_trial_open_position`** is the construction of `diag_trial_open_position_resealed`.
   That gave ≤ 0.50 ticks in 16/16 halves in §5; here 3 of its 14 halves exceed 1 tick.
@@ -135,7 +138,11 @@ ct diag_repeat: tr_decrypt_reject_skipped rep 3 half 2 Δp50/Δp75/Δp90 +0.38/+
   |t90| 56–208.
 - Input addresses were identical for both classes in all 34 halves.
 
+**Reviewer decision (WEISUNG M6-CI-13b, verbatim):**
+
+> Decision (Fable, 2026-10-17 23:50 UTC): the fix is **accepted**. The 1.0-tick bar in M6-CI-13 §5 was mis-specified by the reviewer: one local tick is 0.25 ns, far below any resolution the gate claims (floor 10 ns, ADR-041 Am. 1). The acceptance criterion for the fixture fix is the gate's own rule plus a margin: every half |Δp90| < 0.5 × floor (= 20 local ticks / 5 ns) and every rep verdict PASS. Measured: max |Δp90| 8.93 ticks = 2.2 ns (0.22 floor), 16/16 and 6/6 rep verdicts PASS, against the old fixture's 28 ticks = 7 ns locally and 42 ticks = 17 ns on the EPYC (FAIL). The residual (≤ 2.2 ns, both signs, |t| up to 25 on 1M samples) is a public-content micro-timing of the remaining class differences (`hdr_ct`, key/entry, `mk`); it is below the floor by a factor ≥ 4 and is monitored by `tr_decrypt_nonce_dependence`. No further diagnosis before the PR run.
+
 ## 3 · Status
 
-The fixture rule and the informative target are implemented. The 1-tick criterion of §5 is not met locally. That is
-recorded as blocked in `M06-report.md` §8 and needs a reviewer decision. No rerun was made to obtain a passing set.
+- The fixture rule and the informative target are implemented, and the fix is accepted (WEISUNG M6-CI-13b).
+- R-CT-1 is closed in `M06-report.md` §7. No rerun was made to obtain a passing set.

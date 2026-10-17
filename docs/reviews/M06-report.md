@@ -1079,42 +1079,36 @@ required job (`ct`, `mutants`, `proverif-hx`) is not green.
 - The virtual worker is serial and non-blocking; a single-threaded real driver whose preparation blocked its loop would
   delay *other* links' due writes by the preparation of an active link — the cost model cannot show that, the Phase B
   driver must not do it.
-- **R-CT-1: ct run #159 FAIL — target design, fixed in M6-CI-13; product path clean** (ADR-042 Amendment 5;
-  `docs/reviews/M06-evidence/ct-nonce-M6-CI-13.md`).
-  - `tr_decrypt_trial_open_position` (and, in one half, `tr_decrypt_reject_skipped`) failed because their classes
-    differed in the public header nonce. CT-DIAG-3 V4 showed the nonce alone shifts §7.4 Decrypt by up to 65 ticks
-    with either sign.
-  - The re-sealed variant, with the same nonce, header plaintext and body and differing only in trial position, entry,
-    `hk` and `mk`, stayed ≤ 0.50 ticks in 16/16 halves.
-  - Fix `0d89bdf`: both targets now hold the nonce, the public header and the body constant.
-  - `6ac385f` adds the informative `tr_decrypt_nonce_dependence`.
-  - Status: the local verification of WEISUNG M6-CI-13 §5 missed its 1-tick criterion in 7 of 28 halves (max 8.93
-    ticks = 0.22 local floor; every rep verdict PASS). Open, §8.
+- **R-CT-1 (closed): ct run #159 FAIL — target design; fixed in M6-CI-13; product trial-position path clean; residual
+  public-content micro-timing ≤ 2.2 ns locally, below the 10 ns floor, monitored by the informative target**
+  (ADR-042 Amendment 5; `docs/reviews/M06-evidence/ct-nonce-M6-CI-13.md`).
+  - **Cause.** `tr_decrypt_trial_open_position` (and, in one half, `tr_decrypt_reject_skipped`) failed because their
+    classes differed in the public header nonce. CT-DIAG-3 V4 showed the nonce alone shifts §7.4 Decrypt by up to 65
+    ticks with either sign.
+  - **Product path.** The re-sealed variant, with the same nonce, header plaintext and body and differing only in trial
+    position, entry, `hk` and `mk`, stayed ≤ 0.50 ticks in 16/16 halves.
+  - **Fix.** `0d89bdf`: both targets hold the nonce, the public header and the body constant. `6ac385f` adds the
+    informative `tr_decrypt_nonce_dependence`.
+  - **Acceptance (WEISUNG M6-CI-13b):** every half |Δp90| < 0.5 × floor (20 local ticks = 5 ns) and every rep verdict
+    PASS. The 1.0-tick bar of M6-CI-13 §5 was a diagnosis bar and is withdrawn.
+  - **Measured** (local repeat mode, Threadripper PRO 5955WX, `q_eff` 40 ticks):
+
+    | Fixture | max \|Δp90\| | Rep verdicts |
+    |---|---|---|
+    | new | 8.93 ticks = 2.2 ns = 0.22 floor | 6/6 (5a) and 8/8 (5b) PASS |
+    | old, local | 28.36 ticks = 7.1 ns | — |
+    | old, EPYC | 42 ticks = 17 ns (run #159 FAIL) | — |
+
+  - **Recorded residual** (formerly the §8 question; no question remains open). With the new fixture, 7 of 28 halves
+    shifted by more than 1 tick: −1.42 and −1.65 (5a, `reject_skipped`); −8.93 (t −25.22), +3.81 (t 10.93) and −1.27
+    (5b, `trial_open_position`); −5.20 (t −12.93) and +1.14 (5b, `reject_skipped`). They come with both signs.
+    - This is a public-content micro-timing of the remaining class differences: `hdr_ct`, key/entry, `mk`.
+    - It is below the floor by a factor of at least 4.
+    - The two-receiver control of CT-DIAG-3 (V6c) shifted by up to 7 ticks with nothing differing.
+- ct on fine-timer hosts (EPYC 7763, q_eff 1 tick) resolves public-input micro-timing of ≈ 10–20 ns; targets must
+  hold public fields constant across classes (ADR-042 Am. 5).
 
 ## 8. Blocked / questions for the reviewer or owner
-
-### M6-CI-13 §5 (verification of the ct fixture fix) — BLOCKED 2026-10-18: 1-tick criterion not met locally
-
-- **Criterion (WEISUNG M6-CI-13 §5 (a), (b)):** |Δp90| ≤ 1.0 tick and |t| < 4.5 in every half of the two fixed targets.
-- **Result.** Local repeat mode on this branch's fixed targets, Threadripper PRO 5955WX, `q_eff` 40 ticks
-  (`ct-nonce-M6-CI-13.md` §2):
-
-  | Run | Target | Halves meeting \|Δp90\| ≤ 1.0 | Halves with \|t90\| < 4.5 |
-  |---|---|---|---|
-  | 5a | `tr_decrypt_trial_open_position` | 6/6 | 6/6 |
-  | 5a | `tr_decrypt_reject_skipped` | 4/6 (−1.42; −1.65 with t −4.18) | 6/6 |
-  | 5b | `tr_decrypt_trial_open_position` | 5/8 (−8.93 with t −25.22; +3.81 with t 10.93; −1.27) | 6/8 |
-  | 5b | `tr_decrypt_reject_skipped` | 6/8 (−5.20 with t −12.93; +1.14) | 7/8 |
-
-  - Every rep verdict is PASS, and the 7 failing halves are all below the floor (≤ 0.22 floor).
-  - Old fixture under the same mode: up to 28 ticks, 25 of 32 halves with |t90| > 4.5.
-  - The same construction as the new `tr_decrypt_trial_open_position` (`diag_trial_open_position_resealed`) gave
-    ≤ 0.50 ticks in 16/16 halves in CT-DIAG-2.
-- **Not done:** no rerun to obtain a passing set, and no threshold, floor, crop or sample change.
-- **Question for the reviewer:** is the fix accepted with these residual sub-floor shifts, the 1-tick criterion being a
-  diagnosis bar and not the gate rule? Or should the residual be diagnosed further first? The remaining class
-  differences are `hdr_ct` and the key, entry and `mk`. CT-DIAG-3 V6c showed that two receiver copies alone shift by up
-  to 7 ticks, so the residual may not come from these differences.
 
 ### EXTB-1 (WEISUNG M6-B-5 §1) — BLOCKED 2026-10-16, RESOLVED: core change (A)/(A′) approved (WEISUNG M6-B-6), applied @ `cdf2b31`
 

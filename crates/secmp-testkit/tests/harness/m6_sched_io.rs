@@ -69,6 +69,61 @@ fn content_type_of(
     (ty, state)
 }
 
+/// The `Content` of a cell opened with the peer's ratchet state (type, seq), and the peer's next state.
+fn content_of(
+    cell: &Cell,
+    peer: secmp_proto::tr::RatchetState,
+    pool: &mut EntropyPool,
+) -> ((u8, u64), secmp_proto::tr::RatchetState) {
+    let opened = peer.decrypt_with(cell.as_bytes(), pool.get()).ok().unwrap();
+    let content = opened.plaintext().content().unwrap();
+    let key = (content.body.content_type(), content.seq);
+    let (state, _) = opened.commit(|_| Ok::<(), ()>(())).unwrap();
+    (key, state)
+}
+
+/// Mutants-156 (`conversation.rs:345`, `take_seq` → `1`): the application sequence of the contents a conversation sends
+/// counts up — two messages carry consecutive numbers.
+#[test]
+fn content_seq_counts_up() {
+    let (conv, peer, mut pool) = conv_with_peer(31);
+    let mut convs = Conversations::new();
+    let i = convs.add(conv);
+    for n in [1, 2] {
+        convs
+            .get_mut(i)
+            .unwrap()
+            .outbox_mut()
+            .enqueue(text(n, 40), 0);
+    }
+    let first = convs.prepare_cell(QueueId(0), 10_000).unwrap().unwrap();
+    let second = convs.prepare_cell(QueueId(0), 20_000).unwrap().unwrap();
+    let ((t1, s1), peer) = content_of(&first.cell, peer, &mut pool);
+    let ((t2, s2), _) = content_of(&second.cell, peer, &mut pool);
+    assert_eq!((t1, t2), (0x02, 0x02));
+    assert_eq!(s2, s1 + 1, "seq {s1} then {s2}");
+}
+
+/// Mutants-156 (`conversation.rs:719`, `Conversations::send_failed` → `()`): a `SEND` the relay refused hands the cell's
+/// message back — the next cell for the queue carries it again (a real content, not a dummy).
+#[test]
+fn send_failed_requeues_the_message() {
+    let (conv, peer, mut pool) = conv_with_peer(32);
+    let mut convs = Conversations::new();
+    let i = convs.add(conv);
+    convs
+        .get_mut(i)
+        .unwrap()
+        .outbox_mut()
+        .enqueue(text(7, 40), 0);
+    let first = convs.prepare_cell(QueueId(0), 10_000).unwrap().unwrap();
+    convs.send_failed(QueueId(0), first.token, SendFailure::Rate);
+    let again = convs.prepare_cell(QueueId(0), 20_000).unwrap().unwrap();
+    let ((t1, _), peer) = content_of(&first.cell, peer, &mut pool);
+    let ((t2, _), _) = content_of(&again.cell, peer, &mut pool);
+    assert_eq!((t1, t2), (0x02, 0x02), "the message is sent again");
+}
+
 /// S-25: a dummy and a real message take the same path — one `encrypt` call site, both 4 096 B; Content types 0x00 and
 /// 0x02; the frames carrying them are the same operation and size.
 #[test]
@@ -1052,4 +1107,103 @@ fn balanced_rr_does_not_advance_on_teardown_before_tick() {
         "asked: {:?}",
         rig.src.asked
     );
+    // mutants-156 (`core/mod.rs:234`, `Deferred::release_discard` → `()`): the cell prepared for the tick that was lost
+    // goes back to the source (`discard`), once, at the next work pass
+    assert_eq!(
+        rig.src
+            .calls
+            .iter()
+            .filter(|c| **c == Call::Discard)
+            .count(),
+        1,
+        "{:?}",
+        rig.src.calls
+    );
+}
+
+/// Mutants-156 (`core/mod.rs:600`, `needs_send && up.send_part.is_none()` → `||`): a work pass that finds the tick's SEND
+/// part already prepared must not prepare it again — a second `prepare_cell` for the same tick would seal another part and
+/// leave a gap in the link's counters (the relay would refuse the frame). Strict, one send queue: the cell of tick 1 is asked
+/// for once when the link comes up, work passes in the middle of the interval ask for nothing, tick 1 is written and accepted.
+#[test]
+fn work_pass_does_not_prepare_a_prepared_send_twice() {
+    let mut rig = Rig::new(ok_script(), Mode::Strict);
+    let outs = rig.sched.poll_due(0).unwrap();
+    rig.apply(outs);
+    assert_eq!(rig.src.asked.len(), 1, "the cell of tick 1");
+    for t in [3_000, 6_000] {
+        rig.now = t;
+        let outs = rig.sched.work(t, &mut rig.src).unwrap();
+        assert!(!outs.iter().any(|o| matches!(o, Output::Write { .. })));
+        rig.apply(outs);
+        assert_eq!(rig.src.asked.len(), 1, "work at {t} asked again");
+    }
+    rig.run_to(10_000);
+    assert_eq!(rig.writes, vec![10_000]);
+    assert!(
+        !rig.events
+            .iter()
+            .any(|e| matches!(e, LinkEvent::TornDown(..))),
+        "{:?}",
+        rig.events
+    );
+}
+
+/// Mutants-156 (`core/mod.rs:1302`, `1314`: `==` → `!=` in `Scheduler::remove_queue`): an unknown queue is refused even
+/// when others exist, and a Balanced relay link is closed only when its last queue is removed — not when one of two send
+/// queues of the relay goes.
+#[test]
+fn remove_queue_refuses_unknown_and_ends_the_relay_link_with_its_last_queue() {
+    let mut rig = Rig::new(ok_script(), Mode::Balanced);
+    let cap = SendCap::from_route([5; 16], &SecretBytes::from_slice(&[9; 32]).unwrap()).unwrap();
+    let q1 = rig
+        .sched
+        .add_send_queue(0, RelayId(0), cap, 10_000)
+        .unwrap();
+    let q0 = QueueId(0);
+    assert!(matches!(
+        rig.sched.remove_queue(0, QueueId(99), &mut rig.src),
+        Err(secmp_client_core::scheduler::core::SchedError::UnknownQueue)
+    ));
+    let outs = rig.sched.poll_due(0).unwrap();
+    rig.apply(outs);
+    assert!(rig.sched.links().iter().any(|l| l.id.is_some()), "link up");
+    let outs = rig.sched.remove_queue(1_000, q0, &mut rig.src).unwrap();
+    rig.apply(outs);
+    assert!(
+        !rig.events
+            .iter()
+            .any(|e| matches!(e, LinkEvent::TornDown(..))),
+        "one queue of the relay is left: {:?}",
+        rig.events
+    );
+    assert!(rig.sched.links().iter().any(|l| l.id.is_some()), "still up");
+    let outs = rig.sched.remove_queue(2_000, q1, &mut rig.src).unwrap();
+    rig.apply(outs);
+    assert!(
+        rig.events
+            .iter()
+            .any(|e| matches!(e, LinkEvent::TornDown(_, Reason::Closed))),
+        "{:?}",
+        rig.events
+    );
+}
+
+/// Mutants-156 (`core/mod.rs:380`, `World::period_of` → `Some(1)`): a link ticks at its queue's period (Strict) or at the
+/// mode's slot (Balanced, Low-bw) — read here as the time of the first deadline after the link is up, so that a period of
+/// 1 ms fails at once instead of looping through a run of ticks.
+#[test]
+fn link_period_is_the_queues_or_the_modes_slot() {
+    for (mode, expect) in [
+        (Mode::Strict, 10_000),
+        (Mode::Balanced, Params::default().t_balanced_ms),
+        (Mode::LowBw, Params::default().t_lowbw_ms),
+    ] {
+        let mut rig = Rig::new(ok_script(), mode);
+        let outs = rig.sched.poll_due(0).unwrap();
+        rig.apply(outs);
+        // the first deadline is the FETCH lead, `fetch_lead_ms` before the first tick
+        let lead = Params::default().fetch_lead_ms;
+        assert_eq!(rig.sched.next_deadline(), Some(expect - lead), "{mode:?}");
+    }
 }

@@ -16,6 +16,7 @@ mod m6_driver_fix;
 mod m6_driver_io;
 mod m6_followups;
 mod m6_measure;
+mod m6_mut;
 mod m6_outbox;
 mod m6_props;
 mod m6_rand;

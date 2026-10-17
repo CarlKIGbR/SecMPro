@@ -288,3 +288,22 @@ fn ai06_both_directions_tokio() {
     }
     report("AI-06-tokio", traces(8), 0, 0);
 }
+
+/// AI-07 over the tokio driver (FIN-1, Astra final pass): the fault-paired scenario. Strict, two contacts, four links, one
+/// writer stalled on its first frame, a connection that completes (or fails) inside the flush wait of the tick, one that is
+/// healthy and one that never completes: the relay-visible frames of every activity trace equal the idle run's, for the
+/// completing and the failing connection alike. (AI-01…AI-06 run healthy providers and `assert_clean` rejects teardowns
+/// but lifetime ends, so they cannot reach the event stash of a pass with a stalled writer.)
+#[test]
+fn ai07_fault_paired_tokio() {
+    use crate::m6_driver_io::fin1_run;
+    for connect_fails in [false, true] {
+        let idle = fin1_run(None, connect_fails);
+        assert!(idle.iter().any(|e| e.2 == 4352), "frames were sent");
+        for trace in 0..traces(4) {
+            let active = fin1_run(Some(trace), connect_fails);
+            assert_eq!(idle, active, "trace {trace}, connect fails {connect_fails}");
+        }
+    }
+    report("AI-07-tokio", traces(4), 0, 0);
+}

@@ -80,3 +80,4 @@ PR. Runtimes: nextest on the 32-core container, 2026-10-15 (harness) and the CI 
 | `ai04_when_receiving_tokio` (AI-04, tokio driver) | `secmp-testkit` harness | 40 s | `MUTANT_HARNESS_SKIP_TESTS` |
 | `ai05_timing_draws_tokio` (AI-05, tokio driver) | `secmp-testkit` harness | 39 s | `MUTANT_HARNESS_SKIP_TESTS` |
 | `ai06_both_directions_tokio` (AI-06, tokio driver) | `secmp-testkit` harness | 43 s | `MUTANT_HARNESS_SKIP_TESTS` |
+| `ai07_fault_paired_tokio` (AI-07, tokio driver, fault-paired) | `secmp-testkit` harness | 5 s | `MUTANT_HARNESS_SKIP_TESTS` |

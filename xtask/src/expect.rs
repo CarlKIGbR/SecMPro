@@ -537,6 +537,10 @@ pub(crate) const MUTANT_HARNESS_SKIP_TESTS: &[(&str, &str)] = &[
         "ai06_both_directions_tokio",
         "AI-06 over the tokio driver, 8 traces x 6 h: 43 s",
     ),
+    (
+        "ai07_fault_paired_tokio",
+        "AI-07 over the tokio driver, fault-paired, 4 traces x 1 min: 5 s",
+    ),
 ];
 
 /// WEISUNG M6-B-3 §1: the long, host-independent simulations the `kat` step leaves out when it runs on Windows

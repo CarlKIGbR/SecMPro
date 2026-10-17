@@ -647,8 +647,9 @@ pub struct Driver<P: Providers, D, R, H, W, C> {
     jobs: Option<mpsc::UnboundedSender<Job>>,
     events_tx: mpsc::UnboundedSender<Event<P::Stream>>,
     events_rx: mpsc::UnboundedReceiver<Event<P::Stream>>,
-    /// Events that arrived during a flush wait, for the next pass.
-    stash: VecDeque<Event<P::Stream>>,
+    /// Events that arrived during a flush wait, each with the time it arrived: they are handled right after the flush
+    /// (FIN-1), at that time, so their anchor never depends on what the loop did next.
+    stash: VecDeque<(u64, Event<P::Stream>)>,
     links: BTreeMap<LinkId, LinkIo>,
     /// The connect task of every link whose connection is being made.
     connecting: BTreeMap<LinkId, JoinHandle<()>>,
@@ -782,9 +783,7 @@ where
         loop {
             let now = self.clock.mono_ms();
             // what arrived: frames (cheap, no cell source), connect outcomes, finished jobs, finished writes
-            while let Some(ev) = self.stash.pop_front() {
-                self.on_event(sched, ev, now)?;
-            }
+            self.drain_stash(sched)?;
             while let Ok(ev) = self.events_rx.try_recv() {
                 self.on_event(sched, ev, now)?;
             }
@@ -797,6 +796,10 @@ where
             // GLMB-3: when the flush wait ended, from the same clock
             let flushed = self.clock.mono_ms();
             self.step(Step::Flushed(flushed));
+            // what arrived during the flush wait is handled before any activity-dependent work is dispatched or awaited,
+            // at the time it arrived (FIN-1: a connection completing in the wait must not be anchored at the time a
+            // worker job of this pass wakes the loop)
+            self.drain_stash(sched)?;
             // (vi) the activity-dependent work over the non-blocking facade; (ii) its end from the same clock
             let outs = sched.work(now, &mut self.deferred)?;
             let end = self.clock.mono_ms();
@@ -828,6 +831,14 @@ where
         }
     }
 
+    /// Handle the events stashed during a flush wait, in arrival order, each at its own arrival time.
+    fn drain_stash(&mut self, sched: &mut Scheduler) -> Result<(), SchedError> {
+        while let Some((at, ev)) = self.stash.pop_front() {
+            self.on_event(sched, ev, at)?;
+        }
+        Ok(())
+    }
+
     /// Wait (at most [`FLUSH_WAIT_MS`], and never past the scheduler's next deadline less the driver jitter) until every
     /// write handed out in the pass at `now` is reported; other events are kept for the next pass. The next-deadline
     /// bound is what keeps a hanging writer of one link from delaying another link's tick that falls inside the wait
@@ -851,7 +862,10 @@ where
                     let t = self.clock.mono_ms();
                     self.on_written(sched, link, len, at, ok, t)?;
                 }
-                Ok(Some(other)) => self.stash.push_back(other),
+                Ok(Some(other)) => {
+                    let t = self.clock.mono_ms();
+                    self.stash.push_back((t, other));
+                }
                 Ok(None) | Err(_) => break,
             }
         }

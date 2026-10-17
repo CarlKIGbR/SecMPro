@@ -119,6 +119,11 @@ struct Holding {
     hang: bool,
     /// `answer_ms` applies to connection `which` only.
     late_only_which: bool,
+    /// Per connection number: its first-frame hold, its connect delay and whether the connect hangs (overrides the
+    /// fields above for the connections it lists; FIN-1).
+    plans: Vec<(Option<Hold>, u64, bool)>,
+    /// Connection numbers whose connect fails (after their delay).
+    fails: Vec<usize>,
 }
 
 impl Holding {
@@ -132,6 +137,8 @@ impl Holding {
             mute_after: None,
             hang: false,
             late_only_which: false,
+            plans: Vec::new(),
+            fails: Vec::new(),
         }
     }
 }
@@ -153,13 +160,21 @@ impl StreamProvider for Holding {
             self.answer_ms
         };
         let (inner, relay) = (self.inner.clone(), relay.clone());
-        let hang = self.hang && n == self.which;
+        let fail = self.fails.contains(&n);
+        let mut hang = self.hang && n == self.which;
+        let (mut hold, mut answer_ms) = (hold, answer_ms);
+        if let Some((h, a, g)) = self.plans.get(n) {
+            (hold, answer_ms, hang) = (*h, *a, *g);
+        }
         async move {
             if hang {
                 core::future::pending::<()>().await;
             }
             if answer_ms > 0 {
                 tokio::time::sleep(std::time::Duration::from_millis(answer_ms)).await;
+            }
+            if fail {
+                return Err(Error::Closed);
             }
             let stream = inner.connect(&relay, isolation).await?;
             Ok(Throttled {
@@ -953,4 +968,62 @@ fn flush_wait_does_not_wait_for_an_earlier_pass_write() {
         flushed_of_pass(&log.steps, submitted),
         Some(submitted + 250)
     );
+}
+
+/// One FIN-1 run (Strict, two contacts, four links, no phase, the AI costs): the connections are planned — connection 0
+/// stalls on its first frame (5 s), connection 1 completes at 10 100 ms (inside the flush wait of the pass at the first
+/// tick, 10 000), connection 2 is healthy, connection 3 never completes. Returns the relay-visible client frames
+/// `(time, slot, size)`; `active` adds the activity (real cells cost 20 ms, dummies 1 ms, in the worker).
+pub(crate) fn fin1_run(trace: Option<u64>, connect_fails: bool) -> Vec<(u64, u64, usize)> {
+    use crate::m6_activity::activity;
+    use crate::m6_tokio::AI_COSTS;
+    runtime().block_on(async {
+        let setup = Setup::new();
+        let mut provider = Holding::new(setup.provider.clone(), usize::MAX, None, 0);
+        provider.plans = vec![
+            (
+                Some(Hold {
+                    first: 0,
+                    delay_ms: 5_000,
+                }),
+                0,
+                false,
+            ),
+            (None, 10_100, false),
+            (None, 0, false),
+            (None, 0, true),
+        ];
+        if connect_fails {
+            provider.fails = vec![1];
+        }
+        let sc = Scenario {
+            mode: Mode::Strict,
+            contacts: vec![(10_000, 10_000), (10_000, 10_000)],
+            pool: false,
+            seed: 95,
+        };
+        let x = TClient::with_provider(&setup, provider, sc.mode, no_phase(), sc.seed, AI_COSTS, 0);
+        let mut rig = TokioRig::assemble(setup, x, &sc).await;
+        let act = trace.map(|t| activity(95_u64.saturating_add(t), 3, sc.contacts.len()));
+        let run = rig.run_minutes(1, act.as_ref()).await;
+        run.c2r
+            .iter()
+            .filter(|e| e.dir == Dir::C2R)
+            .map(|e| (e.t_ms, e.slot, e.len))
+            .collect()
+    })
+}
+
+/// FIN-1 (Astra final pass): an event that arrived during a flush wait is anchored at its occurrence, not at the time a
+/// worker job happened to wake the loop. A connection completing at 10 100 ms while another writer stalls — or failing
+/// at 10 100 ms, and the reconnect after it — gives the same relay-visible frames idle and active (the pin: every frame
+/// of the late link 19 ms later in the active run, 20251 vs 20270).
+#[test]
+fn driver_stashed_connect_is_anchored_at_its_occurrence() {
+    for connect_fails in [false, true] {
+        let idle = fin1_run(None, connect_fails);
+        let active = fin1_run(Some(0), connect_fails);
+        assert!(idle.iter().any(|e| e.2 == 4352), "frames were sent");
+        assert_eq!(idle, active, "connect fails: {connect_fails}");
+    }
 }

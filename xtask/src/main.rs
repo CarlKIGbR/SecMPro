@@ -27,6 +27,7 @@ mod summary;
 mod testscan;
 mod time;
 mod tools;
+mod trace;
 mod util;
 mod vectors;
 mod wintest;
@@ -52,7 +53,7 @@ usage: cargo xtask <command> [options]
     step: [--shard K/N]                     the mutants step's shard (CI: K/8, merged by `step mutants-merge`)
   install-tools [--set NAME] [--nightly]    install the pinned tools (fast | windows | xwin | mutants | miri | fuzz | full | all)
   vectors                                   generate the Rust vectors, compare with vectors/ref, freeze
-  ct-check [--targets current|m2|m4] REPORT... the ct gate's reading of saved ct reports
+  ct-check [--targets current|m2|m4|m5] REPORT... the ct gate's reading of saved ct reports
   repro-check | ops-check                   documented stubs until M11 / M10";
 
 fn run(args: &[String]) -> Result<()> {
@@ -72,6 +73,9 @@ fn run(args: &[String]) -> Result<()> {
     let (rest, shard) = split_mutants_options(cmd, &rest)?;
     if let Some(s) = shard {
         gates::set_mutants_shard(s)?;
+    }
+    if matches!(cmd.as_str(), "step" | "ci-full" | "ci" | "ci-fast") {
+        trace::start_if_enabled();
     }
     match cmd.as_str() {
         "ci-fast" => ci::fast(&rest),

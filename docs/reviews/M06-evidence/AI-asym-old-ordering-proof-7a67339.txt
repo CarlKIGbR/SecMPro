@@ -1,0 +1,12 @@
+VD-M6-A-13 proof that ai_asymmetric_prepare_cost_does_not_move_emission fails for its reason.
+Setup: the driver temporarily handed the writes out only after the work (the old `poll` ordering: ticks, all preparation,
+then the writes), with costs real 20 ms / dummy 1 ms; code head 9e5b811 plus that temporary mode, removed again afterwards.
+command: cargo nextest run -p secmp-testkit --features secmp-testkit/harness ai_asymmetric
+        FAIL [  12.425s] (1/1) secmp-testkit::harness m6_activity::ai_asymmetric_prepare_cost_does_not_move_emission
+    test m6_activity::ai_asymmetric_prepare_cost_does_not_move_emission ... FAILED
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 124 filtered out; finished in 12.40s
+    thread 'm6_activity::ai_asymmetric_prepare_cost_does_not_move_emission' (699275) panicked at crates/secmp-testkit/tests/harness/m6_activity.rs:733:9:
+    assertion `left == right` failed: trace 0
+      left: (Some(19), Some(19))
+     right: (Some(0), Some(0))
+        FAIL [  12.425s] (1/1) secmp-testkit::harness m6_activity::ai_asymmetric_prepare_cost_does_not_move_emission

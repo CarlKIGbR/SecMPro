@@ -1,0 +1,2 @@
+code head 7a67339
+AI-03: max |Δt| C2R = 0 ms, R2C = 0 ms

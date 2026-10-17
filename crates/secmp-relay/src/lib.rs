@@ -19,6 +19,8 @@
 //!   (`LinkDataStore`), [`budget`] (`MemoryBudget`), drain, the sweeper; buffers that wipe on delete ([`buf`]).
 //! - [`keys`] (key file, `keygen`, `rotate-static`, the key ring), [`config`], [`clock`] (hour buckets),
 //!   [`rate`] (token buckets), [`event`] (what the relay may report), [`server`] (`std::net`), [`error`].
+//! - M6: [`spki`] (the pin of the direct listener's certificate) and, with feature `direct-tls`, `tls` (the optional
+//!   direct TLS listener, `docs/05` §7).
 #![forbid(unsafe_code)]
 #![deny(
     clippy::arithmetic_side_effects,
@@ -49,6 +51,9 @@ pub mod queue;
 pub mod rate;
 pub mod relay;
 pub mod server;
+pub mod spki;
+#[cfg(feature = "direct-tls")]
+pub mod tls;
 
 pub use clock::{HourBucket, Now};
 pub use config::{Config, Limits};

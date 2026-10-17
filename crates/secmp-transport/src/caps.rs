@@ -3,11 +3,11 @@
 //!
 //! A [`RecvCap`] lets its holder `FETCH` and delete the queue (it holds the recipient key's seed); a [`SendCap`] lets
 //! its holder `SEND` to it (the sender key's seed). Neither exposes a field: they are created by the transport,
-//! compared in constant time, and persisted through [`RecvCap::to_bytes`] / [`SendCap::to_bytes`]. A capability
+//! compared in constant time (`ct_eq`, no `PartialEq`), and persisted through [`RecvCap::to_bytes`] / [`SendCap::to_bytes`]. A capability
 //! names no relay; the transport it is used with does (spec §9.1: the ids are derived, so the same keys re-create the
 //! same queue after a relay restart).
 
-use secmp_crypto::{ConstantTimeEq, Ed25519SigningKey, SecretBytes, Zeroizing};
+use secmp_crypto::{Choice, ConstantTimeEq, Ed25519SigningKey, SecretBytes, Zeroizing};
 use secmp_proto::keys::Ed25519Pk;
 use secmp_proto::link::ids;
 use secmp_proto::wire::Id;
@@ -67,11 +67,19 @@ fn decode(bytes: &[u8]) -> Result<(Id, SecretBytes<32>)> {
     Ok((*id, SecretBytes::from_slice(seed)?))
 }
 
-fn same(a: (&Id, &SecretBytes<32>), b: (&Id, &SecretBytes<32>)) -> bool {
-    bool::from(a.0.as_slice().ct_eq(b.0.as_slice()) & a.1.ct_eq(b.1))
+fn same(a: (&Id, &SecretBytes<32>), b: (&Id, &SecretBytes<32>)) -> Choice {
+    a.0.as_slice().ct_eq(b.0.as_slice()) & a.1.ct_eq(b.1)
 }
 
 /// The recipient's capability of a queue: `rid` and the recipient key's seed.
+///
+/// It has no `PartialEq` (it holds a seed; M05 review F-5): compare with [`ConstantTimeEq::ct_eq`].
+///
+/// ```compile_fail,E0369
+/// fn same(a: &secmp_transport::RecvCap, b: &secmp_transport::RecvCap) -> bool {
+///     a == b
+/// }
+/// ```
 pub struct RecvCap {
     rid: Id,
     seed: SecretBytes<32>,
@@ -128,13 +136,11 @@ impl RecvCap {
     }
 }
 
-impl PartialEq for RecvCap {
-    fn eq(&self, other: &Self) -> bool {
+impl ConstantTimeEq for RecvCap {
+    fn ct_eq(&self, other: &Self) -> Choice {
         same((&self.rid, &self.seed), (&other.rid, &other.seed))
     }
 }
-
-impl Eq for RecvCap {}
 
 impl core::fmt::Debug for RecvCap {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -143,6 +149,14 @@ impl core::fmt::Debug for RecvCap {
 }
 
 /// The sender's capability of a queue: `sid` and the sender key's seed.
+///
+/// It has no `PartialEq` (it holds a seed; M05 review F-5): compare with [`ConstantTimeEq::ct_eq`].
+///
+/// ```compile_fail,E0369
+/// fn same(a: &secmp_transport::SendCap, b: &secmp_transport::SendCap) -> bool {
+///     a == b
+/// }
+/// ```
 pub struct SendCap {
     sid: Id,
     seed: SecretBytes<32>,
@@ -199,16 +213,54 @@ impl SendCap {
     }
 }
 
-impl PartialEq for SendCap {
-    fn eq(&self, other: &Self) -> bool {
+impl ConstantTimeEq for SendCap {
+    fn ct_eq(&self, other: &Self) -> Choice {
         same((&self.sid, &self.seed), (&other.sid, &other.seed))
     }
 }
 
-impl Eq for SendCap {}
-
 impl core::fmt::Debug for SendCap {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str("SendCap(..)")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn seed(first: u8, last: u8) -> Result<SecretBytes<32>> {
+        let mut bytes = [0x42_u8; 32];
+        if let Some(b) = bytes.first_mut() {
+            *b = first;
+        }
+        if let Some(b) = bytes.last_mut() {
+            *b = last;
+        }
+        Ok(SecretBytes::from_slice(&bytes)?)
+    }
+
+    /// G-02 (F-5, R-123): the capabilities hold seeds and have no `PartialEq` (the `compile_fail,E0369` doctests on
+    /// the types pin that); `ct_eq` is 1 for equal and 0 for seeds that differ in one byte.
+    #[test]
+    fn caps_have_no_partial_eq() -> Result<()> {
+        let a = RecvCap::from_seed(&seed(1, 2)?)?;
+        let same = RecvCap::from_seed(&seed(1, 2)?)?;
+        let other = RecvCap::from_seed(&seed(1, 3)?)?;
+        assert_eq!(a.ct_eq(&same).unwrap_u8(), 1);
+        assert_eq!(a.ct_eq(&other).unwrap_u8(), 0);
+
+        let recv_pk = a.public_key()?;
+        let s = SendCap::from_seed(&recv_pk, &seed(5, 6)?)?;
+        let s_same = SendCap::from_seed(&recv_pk, &seed(5, 6)?)?;
+        let s_other = SendCap::from_seed(&recv_pk, &seed(5, 7)?)?;
+        assert_eq!(s.ct_eq(&s_same).unwrap_u8(), 1);
+        assert_eq!(s.ct_eq(&s_other).unwrap_u8(), 0);
+        // same sid, one differing seed byte: the seed alone decides
+        let sid = *s.sid();
+        let x = SendCap::from_route(sid, &seed(5, 6)?)?;
+        let y = SendCap::from_route(sid, &seed(5, 7)?)?;
+        assert_eq!(x.ct_eq(&y).unwrap_u8(), 0);
+        Ok(())
     }
 }

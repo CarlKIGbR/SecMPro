@@ -9,6 +9,9 @@
 //! ```toml
 //! [listen]
 //! tor_loopback = "127.0.0.1:7443"
+//! direct_tls = ""                        # docs/05 §7, e.g. "0.0.0.0:443"; empty or absent = off (default)
+//! direct_tls_cert = "/etc/secmp/relay-tls.der"   # with direct_tls: the certificate, DER (`secmp-relay spki` pins it)
+//! direct_tls_key = "/etc/secmp/relay-tls.key"    # with direct_tls: its PKCS#8 key, DER
 //! [access]
 //! key_file = "/run/credentials/secmp-relay.service/relay-keys"
 //! [limits]
@@ -20,7 +23,7 @@
 //! hello_per_sec = 4
 //! hello_hs1_timeout_secs = 30
 //! max_connections = 256                  # M05 review C-1: below the unit's TasksMax and LimitNOFILE
-//! link_idle_secs = 900                   # M05 review C-3; M6 adjusts it to the slowest scheduler period
+//! link_idle_secs = 240                   # OPEN-M6-15: 3 × the slowest scheduler period (80 s)
 //! [shutdown]
 //! drain_secs = 60                        # OPEN-M5-09
 //! ```
@@ -50,9 +53,12 @@ pub struct Limits {
     /// without a thread (M05 review C-1).
     pub max_connections: usize,
     /// A link that has received no complete unit for this long is closed, nothing emitted, in milliseconds (M05
-    /// review C-3: default 900 s; M6 adjusts the default to the slowest scheduler period, so that a client's
+    /// review C-3; OPEN-M6-15: default 240 s = 3 × the slowest scheduler period of 80 s, so that a client's
     /// constant-rate traffic keeps every link it holds).
     pub link_idle_ms: u64,
+    /// A link older than this is closed, in milliseconds: the default [`crate::conn::LINK_AGE_MAX_MS`] is the longest
+    /// `LINK_LIFETIME` (spec §4.2, OPEN-M5-03) plus 10 min (OPEN-M6-15).
+    pub link_age_ms: u64,
 }
 
 /// Default queue pool: 6 GB (`docs/05` §5 `memory_budget_bytes`).
@@ -66,8 +72,9 @@ pub const DEFAULT_DRAIN_SECS: u64 = 60;
 /// Default connection cap (M05 review C-1): below the systemd unit's `TasksMax` and `LimitNOFILE` (`docs/05` §4),
 /// so the relay refuses a connection before the system refuses it a thread or a descriptor.
 pub const DEFAULT_MAX_CONNECTIONS: usize = 256;
-/// Default idle bound of a link, in seconds (M05 review C-3; M6 adjusts it to the slowest scheduler period).
-pub const DEFAULT_LINK_IDLE_SECS: u64 = 900;
+/// Default idle bound of a link, in seconds (M05 review C-3; OPEN-M6-15, TEST-SPEC-M6 G-12: 3 × the slowest scheduler
+/// period, `PERIODS` max 80 s — a scheduled link writes at least every 80 s, one-shot links close themselves).
+pub const DEFAULT_LINK_IDLE_SECS: u64 = 240;
 
 impl Limits {
     /// The OPEN-M5 defaults.
@@ -84,6 +91,7 @@ impl Limits {
             drain_secs: DEFAULT_DRAIN_SECS,
             max_connections: DEFAULT_MAX_CONNECTIONS,
             link_idle_ms: DEFAULT_LINK_IDLE_SECS.saturating_mul(1000),
+            link_age_ms: crate::conn::LINK_AGE_MAX_MS,
         }
     }
 
@@ -98,8 +106,20 @@ impl Limits {
             drain_secs: DEFAULT_DRAIN_SECS,
             max_connections: DEFAULT_MAX_CONNECTIONS,
             link_idle_ms: DEFAULT_LINK_IDLE_SECS.saturating_mul(1000),
+            link_age_ms: crate::conn::LINK_AGE_MAX_MS,
         }
     }
+}
+
+/// The optional direct TLS listener (`docs/05` §7; OPEN-M6-08 A).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DirectTls {
+    /// Where it listens (any address: the operator exposes it on purpose).
+    pub addr: SocketAddr,
+    /// The certificate, DER.
+    pub cert: PathBuf,
+    /// The certificate's PKCS#8 key, DER.
+    pub key: PathBuf,
 }
 
 /// A parsed configuration.
@@ -107,6 +127,8 @@ impl Limits {
 pub struct Config {
     /// The loopback address C tor forwards the onion port to.
     pub listen: SocketAddr,
+    /// The direct TLS listener; `None` (the default) when `direct_tls` is empty or absent.
+    pub direct_tls: Option<DirectTls>,
     /// The key file (`keygen`).
     pub key_file: PathBuf,
     /// The limits.
@@ -121,6 +143,9 @@ enum Value {
 
 const KEYS: &[(&str, &str)] = &[
     ("listen", "tor_loopback"),
+    ("listen", "direct_tls"),
+    ("listen", "direct_tls_cert"),
+    ("listen", "direct_tls_key"),
     ("access", "key_file"),
     ("limits", "queue_budget_bytes"),
     ("limits", "linkdata_budget_bytes"),
@@ -226,6 +251,54 @@ fn string(entries: &BTreeMap<(String, String), Value>, sec: &str, key: &str) -> 
     }
 }
 
+/// The optional string key `key` of `sec` (`None` when absent).
+fn opt_string(
+    entries: &BTreeMap<(String, String), Value>,
+    sec: &str,
+    key: &str,
+) -> Result<Option<String>> {
+    match entries.get(&(sec.to_owned(), key.to_owned())) {
+        None => Ok(None),
+        Some(Value::Str(s)) => Ok(Some(s.clone())),
+        Some(Value::Int(_)) => Err(Error::Config("a string key has an integer value")),
+    }
+}
+
+/// `direct_tls` with its certificate and key (`docs/05` §7): off when empty or absent — then neither file key may be
+/// set —, otherwise an address and both files; a build without feature `direct-tls` refuses it (fail closed: the
+/// operator asked for a listener this binary cannot open).
+fn direct_tls(e: &BTreeMap<(String, String), Value>) -> Result<Option<DirectTls>> {
+    let addr = opt_string(e, "listen", "direct_tls")?.unwrap_or_default();
+    let cert = opt_string(e, "listen", "direct_tls_cert")?;
+    let key = opt_string(e, "listen", "direct_tls_key")?;
+    if addr.is_empty() {
+        if cert.is_some() || key.is_some() {
+            return Err(Error::Config(
+                "direct_tls_cert/direct_tls_key without direct_tls",
+            ));
+        }
+        return Ok(None);
+    }
+    if !cfg!(feature = "direct-tls") {
+        return Err(Error::Config(
+            "direct_tls needs a relay built with feature direct-tls",
+        ));
+    }
+    let addr: SocketAddr = addr
+        .parse()
+        .map_err(|_| Error::Config("direct_tls is not an address:port"))?;
+    let (Some(cert), Some(key)) = (cert, key) else {
+        return Err(Error::Config(
+            "direct_tls needs direct_tls_cert and direct_tls_key",
+        ));
+    };
+    Ok(Some(DirectTls {
+        addr,
+        cert: PathBuf::from(cert),
+        key: PathBuf::from(key),
+    }))
+}
+
 fn small(v: u64) -> Result<u32> {
     u32::try_from(v).map_err(|_| Error::Config("a rate value is out of range"))
 }
@@ -243,6 +316,7 @@ impl Config {
         if !listen.ip().is_loopback() {
             return Err(Error::Config("tor_loopback must be a loopback address"));
         }
+        let direct_tls = direct_tls(&e)?;
         let key_file = PathBuf::from(string(&e, "access", "key_file")?);
         let d = Limits::defaults();
         let rate = |burst: &str, per: &str, def: Option<RateLimit>| -> Result<Option<RateLimit>> {
@@ -290,9 +364,11 @@ impl Config {
             link_idle_ms: idle_secs
                 .checked_mul(1000)
                 .ok_or(Error::Config("link_idle_secs is out of range"))?,
+            link_age_ms: crate::conn::LINK_AGE_MAX_MS,
         };
         Ok(Self {
             listen,
+            direct_tls,
             key_file,
             limits,
         })
@@ -342,9 +418,68 @@ mod tests {
                 drain_secs: 9,
                 max_connections: 8,
                 link_idle_ms: 10_000,
+                link_age_ms: crate::conn::LINK_AGE_MAX_MS,
             }
         );
+        assert_eq!(c.direct_tls, None);
         Ok(())
+    }
+
+    /// TEST-SPEC-M6 TLS-12 (configuration part; OPEN-M6-08 A): `direct_tls` is off when absent or empty (the default),
+    /// needs both files when set, refuses file keys without it, and a build without feature `direct-tls` refuses it.
+    #[test]
+    fn direct_tls_is_off_by_default_and_needs_both_files() -> Result<()> {
+        let base = "[listen]\ntor_loopback = \"127.0.0.1:1\"\n";
+        let access = "[access]\nkey_file = \"k\"\n";
+        assert_eq!(Config::parse(&format!("{base}{access}"))?.direct_tls, None);
+        assert_eq!(
+            Config::parse(&format!("{base}direct_tls = \"\"\n{access}"))?.direct_tls,
+            None
+        );
+        let full = format!(
+            "{base}direct_tls = \"0.0.0.0:443\"\ndirect_tls_cert = \"/c.der\"\ndirect_tls_key = \"/k.der\"\n{access}"
+        );
+        if cfg!(feature = "direct-tls") {
+            assert_eq!(
+                Config::parse(&full)?.direct_tls,
+                Some(DirectTls {
+                    addr: "0.0.0.0:443".parse().map_err(|_| Error::Io)?,
+                    cert: PathBuf::from("/c.der"),
+                    key: PathBuf::from("/k.der"),
+                })
+            );
+        } else {
+            assert_eq!(
+                Config::parse(&full),
+                Err(Error::Config(
+                    "direct_tls needs a relay built with feature direct-tls"
+                ))
+            );
+        }
+        for bad in [
+            format!("{base}direct_tls_cert = \"/c.der\"\n{access}"),
+            format!("{base}direct_tls = \"\"\ndirect_tls_key = \"/k.der\"\n{access}"),
+            format!("{base}direct_tls = \"0.0.0.0:443\"\ndirect_tls_cert = \"/c.der\"\n{access}"),
+            format!("{base}direct_tls = \"0.0.0.0:443\"\ndirect_tls_key = \"/k.der\"\n{access}"),
+            format!(
+                "{base}direct_tls = \"nowhere\"\ndirect_tls_cert = \"/c\"\ndirect_tls_key = \"/k\"\n{access}"
+            ),
+            format!("{base}direct_tls = 443\n{access}"),
+        ] {
+            assert!(Config::parse(&bad).is_err(), "accepted: {bad:?}");
+        }
+        Ok(())
+    }
+
+    /// TEST-SPEC-M6 G-12 (OPEN-M6-15): the idle bound is 3 × the slowest scheduler period (80 s) and the age bound the
+    /// longest `LINK_LIFETIME` (24 h) plus 10 min.
+    #[test]
+    fn idle_and_age_defaults_are_the_schedule_bounds() {
+        let d = Limits::defaults();
+        assert_eq!(DEFAULT_LINK_IDLE_SECS, 240);
+        assert_eq!(d.link_idle_ms, 240_000);
+        assert_eq!(d.link_age_ms, 87_000_000);
+        assert_eq!(Limits::vectors().link_idle_ms, 240_000);
     }
 
     /// `TasksMax` of the relay's systemd unit (`docs/05` §4): each connection is one thread of this budget, next to

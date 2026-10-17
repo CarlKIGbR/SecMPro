@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # SecMPro CI (docs/06 §5, ADR-029). Every job runs `cargo xtask`, so local and CI gates are the same code.
 # The first four jobs below are the required checks of the `main-protection` ruleset (`expect::REQUIRED_JOBS`); the
-# jobs `linux-full` delegates to — `ct`, `mutants-shard` with its verdict job `mutants`, `proverif-hx` (M4) and
-# `proverif-link` (M5) — are pinned like them (`expect::PINNED_JOBS`, M4 review C-5) and are required checks once the
-# owner adds `ct`, `mutants`, `proverif-hx` and `proverif-link` to the ruleset. The pinned names exist only in this workflow, and it has no manual-dispatch trigger
+# jobs `linux-full` delegates to — `ct`, `mutants-shard` with its verdict job `mutants`, `proverif-hx` (M4),
+# `proverif-link` (M5), `kani` (M6) and `fuzz` (M6-CI) — are pinned like them (`expect::PINNED_JOBS`, M4 review C-5) and are required
+# checks once the owner adds `ct`, `mutants`, `proverif-hx`, `proverif-link`, `kani` and `fuzz` to the ruleset. The pinned names exist only in this workflow, and it has no manual-dispatch trigger
 # (M2 review C2): a dispatch would add `skipped` check runs under them, which count as passing. On-demand runs use
 # `ci-dispatch.yml`.
 # Checked by `cargo xtask policy` (`workflow_findings`, `workflow_token_findings`, `workflows`) as an accident guard
@@ -38,6 +38,9 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # OPEN-M6-06 A, ADR-051: aws-lc-sys assembles from source with an installed NASM, never with its prebuilt
+  # objects (unverifiable binaries in the supply chain, docs/06 §3); checked by `windows_builds_nasm_from_source`.
+  AWS_LC_SYS_PREBUILT_NASM: "0"
 
 jobs:
   # docs/06 §5 steps 1–5 (ci-fast), 13 (SBOM) and 14 (systemd exposure) on every push and pull request.
@@ -93,6 +96,19 @@ jobs:
         run: |
           "SECMP_TOOLS_ROOT=$env:USERPROFILE\.secmp-tools" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "$env:USERPROFILE\.secmp-tools\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+      - name: NASM probe (aws-lc-sys from source with AWS_LC_SYS_PREBUILT_NASM=0; OPEN-M6-06)
+        run: |
+          # the image's NASM if present (its version goes into the log); else the pinned Chocolatey package
+          # pinned to the package the first run installed (PR run 38724110285: windows-latest ships no NASM; Chocolatey
+          # nasm 3.2.0 = "NASM version 3.02"; WEISUNG M6-B-2)
+          $pin = "3.2.0"
+          $nasm = Get-Command nasm -ErrorAction SilentlyContinue
+          if ($nasm) { nasm -v } else {
+            if (-not $pin) { throw "NASM is not on the runner image and no pinned version is set" }
+            choco install nasm --version=$pin -y --no-progress
+            "C:\Program Files\NASM" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+            & "C:\Program Files\NASM\nasm.exe" -v
+          }
       - name: Restore pinned tools
         id: tools-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -195,9 +211,91 @@ jobs:
           key: ${{ steps.tools-cache.outputs.cache-primary-key }}
       # step 10 runs `formal/tr.pv` here; the SecMP-HX models run in `proverif-hx` (WEISUNG M4-5, gate F7), the
       # SecMP-LINK models (step `proverif-link`) in `proverif-link` (BRIEF_M5-B §1)
-      # step 8 (mutants) runs in the `mutants` job (ADR-047), step 5 `ct` in the `ct` job (ADR-047 Amendment 1)
+      # step 8 (mutants) runs in the `mutants` job (ADR-047), step 5 `ct` in the `ct` job (ADR-047 Amendment 1), step 9
+      # `kani` in the `kani` job (WEISUNG M6-11)
       - name: ci-full (steps 1–14)
-        run: cargo xtask ci-full --strict --delegated windows-native --delegated windows-cross --delegated mutants --delegated ct --delegated proverif-link --models tr
+        run: cargo xtask ci-full --strict --delegated windows-native --delegated windows-cross --delegated mutants --delegated ct --delegated fuzz --delegated kani --delegated proverif-link --models tr
+
+  # docs/06 §5 step 9 `kani` as its own job (WEISUNG M6-11, VD-M6-A-23): on main the step took 66.8 min inside
+  # `linux-full`; with the seven `secmp-client-core` harnesses of M6 (9.8 min on the runner) `linux-full` passed its
+  # 240 min — PR runs 38064677208 and 38132969656 ended with exit 143 inside `[9] kani`. `linux-full` delegates the
+  # step here (`--delegated kani`); the job runs exactly the step (every `KANI_PACKAGES`, `-Z stubbing` where used, the
+  # verified-harness and cover pins). Same events and caches as `linux-full`.
+  kani:
+    if: github.event_name == 'schedule' || github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Pinned toolchain (rust-toolchain.toml)
+        run: rustup toolchain install && rustc -vV
+      - name: Tool install root
+        run: |
+          echo "SECMP_TOOLS_ROOT=$HOME/.secmp-tools" >> "$GITHUB_ENV"
+          echo "$HOME/.secmp-tools/bin" >> "$GITHUB_PATH"
+      - name: Restore pinned tools
+        id: tools-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.secmp-tools
+            ~/.kani
+          key: ci-tools-full-${{ runner.os }}-${{ hashFiles('xtask/src/tools.rs', 'rust-toolchain.toml') }}
+      - name: Install pinned tools (Kani and its toolchain, `cargo kani setup`)
+        run: cargo xtask install-tools --set full
+      - name: Save pinned tools (right after installing, so a later failing step cannot lose the cache)
+        if: steps.tools-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.secmp-tools
+            ~/.kani
+          key: ${{ steps.tools-cache.outputs.cache-primary-key }}
+      - name: "Kani (step 9 kani: every harness package, `-Z stubbing` where used, the verified-harness and cover pins)"
+        env:
+          SECMP_RUNNER_TRACE: "1"
+        run: cargo xtask step --strict kani
+
+  # docs/06 §5 step 6 `fuzz` (the smoke run of every target) as its own job (WEISUNG M6-CI-1 §4, ADR-047 Amendment 5):
+  # about 70 min of the 240 min of `linux-full`, which with the M6 simulations (coverage, kat) no longer fit. `linux-full`
+  # delegates the step here (`--delegated fuzz`); the job runs exactly the step (same targets, seconds, corpora and
+  # pins). Same events and caches as `linux-full`.
+  fuzz:
+    if: github.event_name == 'schedule' || github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Pinned toolchain (rust-toolchain.toml)
+        run: rustup toolchain install && rustc -vV
+      - name: Tool install root
+        run: |
+          echo "SECMP_TOOLS_ROOT=$HOME/.secmp-tools" >> "$GITHUB_ENV"
+          echo "$HOME/.secmp-tools/bin" >> "$GITHUB_PATH"
+      - name: Restore pinned tools
+        id: tools-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.secmp-tools
+            ~/.kani
+          key: ci-tools-full-${{ runner.os }}-${{ hashFiles('xtask/src/tools.rs', 'rust-toolchain.toml') }}
+      - name: Install pinned tools and nightly (cargo-fuzz)
+        run: cargo xtask install-tools --set full --nightly
+      - name: Save pinned tools (right after installing, so a later failing step cannot lose the cache)
+        if: steps.tools-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.secmp-tools
+            ~/.kani
+          key: ${{ steps.tools-cache.outputs.cache-primary-key }}
+      - name: "Fuzz (step 6 fuzz: every target, FUZZ_SMOKE_SECONDS each, scratch corpus first, tracked corpus read-only)"
+        run: cargo xtask step --strict fuzz
 
   # docs/06 §5 step 5 `ct` (ADR-038, ADR-041) as its own job (ADR-047 Amendment 1, M4 review C-2): on PR run
   # 37041956810 the step ran at least 216.7 min inside `linux-full` without a verdict, and `linux-full` delegates it

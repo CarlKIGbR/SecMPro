@@ -1,0 +1,46 @@
+WEISUNG M6-8, code head f2e0b3c, run 2 of 3
+command: cargo xtask step ct   (the bench has no per-target filter; this is the gate's own run, all targets and controls)
+host name secmp-main (not carlgpu4)
+
+run 2: run_verdict=PASS host=AMD Ryzen Threadripper PRO 5955WX 16-Cores q_eff_ticks(clock)=40.0 tick_ns=0.2500 lattice_ticks=None
+bench_sha256=f499717c3b9adfee1fe8d8e610b51872f90a718fa589ed29f5231d7ca144dd14
+tr_decrypt_reject_skipped: verdict=PASS decisive_crop=None k=1 q_eff first/second=40.0/40.0 floor_ticks=40.0 realised first/second=4463.0/4463.0
+  crop | t first | t second | delta first | delta second
+  raw | -0.272 | 2.157 | -5.8621 | 41.6212
+  p50 | -30.135 | 27.584 | -10.7617 | 10.0625
+  p75 | -46.308 | 41.118 | -17.0317 | 15.5348
+  p90 | -60.628 | 55.176 | -25.2808 | 23.554
+  p95 | -27.302 | 22.788 | -28.5868 | 23.832
+  p99 | -6.608 | 5.189 | -39.0622 | 30.2249
+min_leak_control: decision=FAIL deciding_crop=p75 first_t=967.8435 second_t=900.1934 first_delta=1956.6322 second_delta=1775.5696 floor_ticks=40.0/40.0
+aa_prime_control: verdict=PASS decisive_crop=None k=1 q_eff first/second=40.0/40.0 floor_ticks=40.0 realised first/second=256.0/255.0
+same_content_control: verdict=PASS decisive_crop=None k=1 q_eff first/second=40.0/40.0 floor_ticks=40.0 realised first/second=2296.0/2303.0
+hx_same_content_control: verdict=PASS decisive_crop=None k=1 q_eff first/second=40.0/40.0 floor_ticks=40.0 realised first/second=20555.0/20634.0
+link_same_content_control: verdict=PASS decisive_crop=None k=1 q_eff first/second=40.0/40.0 floor_ticks=40.0 realised first/second=385.0/385.0
+tr_decrypt_trial_open_position: verdict=PASS decisive_crop=None k=1 q_eff first/second=40.0/40.0 floor_ticks=40.0 realised first/second=3587.0/3591.0
+
+--- gate lines of the run ---
+ct progress {"elapsed_s":338.7,"k":1,"median_ticks":91800,"phase":"calibration","target":"same_content_control"}
+ct progress {"elapsed_s":362.4,"k":1,"median_ticks":91840,"phase":"first","target":"same_content_control"}
+ct progress {"elapsed_s":386.0,"k":1,"median_ticks":92120,"phase":"second","target":"same_content_control"}
+ct progress {"elapsed_s":2163.4,"k":1,"median_ticks":822640,"phase":"calibration","target":"hx_same_content_control"}
+ct progress {"elapsed_s":2374.3,"k":1,"median_ticks":822200,"phase":"first","target":"hx_same_content_control"}
+ct progress {"elapsed_s":2586.1,"k":1,"median_ticks":825360,"phase":"second","target":"hx_same_content_control"}
+ct progress {"elapsed_s":3693.3,"k":1,"median_ticks":15360,"phase":"calibration","target":"link_same_content_control"}
+ct progress {"elapsed_s":3697.4,"k":1,"median_ticks":15400,"phase":"first","target":"link_same_content_control"}
+ct progress {"elapsed_s":3701.6,"k":1,"median_ticks":15400,"phase":"second","target":"link_same_content_control"}
+ct progress {"elapsed_s":3889.8,"k":1,"median_ticks":92080,"phase":"aa","target":"same_content_control"}
+ct progress {"elapsed_s":4990.5,"k":1,"median_ticks":822640,"phase":"aa","target":"hx_same_content_control"}
+ct progress {"elapsed_s":5546.8,"k":1,"median_ticks":15360,"phase":"aa","target":"link_same_content_control"}
+ct report: {"thresholds":{"pass":4.5,"max_resolution_fraction":0.01,"max_batch":64,"batch_margin":1.1,"min_realised_quanta":80,"effect_floor_quanta":1,"effect_floor_ns":10,"aa_max_t":4.5,"samples":1000000,"sas_samples":20000},"sign":"t = (mean(class 0) - mean(class 1)) / SE (Welch); t < 0 means class 0 is faster","clock":{"arch":"x86_64","available_clocksource":"tsc hpet acpi_pm","calibration_ns":200000045.0,"calibration_ticks":799981560,"current_clocksource":"tsc","lattice_probe":{"median_gap":40,"regular":1.0,"runs":2},"lattice_ticks":null,"median_delta_ns":20.00046551073002,"median_delta_ticks":80,"overhead_ns":10.00023275536501,"overhead_ticks":40,"q_eff_ns":10.00023275536501,"q_eff_tick
+ct aa_prime_control: PASS — k=1, calibration median 2570.1 ns, 1000000 samples; first max |t| = 8.85 (p95), batch median 2560.1 ns, q_eff 40.0 ticks (samples), realised 256.0 quanta; second max |t| = 1.22 (p99), batch median 2550.1 ns, q_eff 40.0 ticks (samples), realised 255.0 quanta; A/A max |t| = 1.88 (p95), batch median 2570.1 ns, q_eff 40.0 ticks (samples), realised 257.0 quanta (A/A′ placement control: a FAIL makes the run CONTROL_FAIL)
+ct tr_decrypt_reject_hdr_key: PASS — k=1, calibration median 15570.4 ns, 1000000 samples — site header: no key opened; first max |t| = 0.77 (p99), batch median 15530.4 ns, q_eff 40.0 ticks (samples), realised 1553.0 quanta; second max |t| = 2.33 (p99), batch median 15590.4 ns, q_eff 40.0 ticks (samples), realised 1559.0 quanta; A/A max |t| = 0.98 (p50), batch median 15550.4 ns, q_eff 40.0 ticks (samples), realised 1555.0 quanta
+ct tr_decrypt_reject_body_tag: PASS — k=1, calibration median 23110.5 ns, 1000000 samples — site body MAC; first max |t| = 0.75 (p95), batch median 23070.5 ns, q_eff 40.0 ticks (samples), realised 2307.0 quanta; second max |t| = 1.23 (p95), batch median 23080.5 ns, q_eff 40.0 ticks (samples), realised 2308.0 quanta; A/A max |t| = 1.40 (p95), batch median 23040.5 ns, q_eff 40.0 ticks (samples), realised 2304.0 quanta
+ct tr_decrypt_reject_ct_pq: PASS — k=1, calibration median 20120.5 ns, 1000000 samples — site kem constancy; first max |t| = 2.01 (p95), batch median 20160.5 ns, q_eff 40.0 ticks (samples), realised 2016.0 quanta; second max |t| = 0.59 (p50), batch median 20140.5 ns, q_eff 40.0 ticks (samples), realised 2014.0 quanta; A/A max |t| = 0.85 (p75), batch median 20100.5 ns, q_eff 40.0 ticks (samples), realised 2010.0 quanta
+ct tr_decrypt_reject_skipped: PASS — k=1, calibration median 44681.0 ns, 1000000 samples — site body MAC; first max |t| = 60.63 (p90), batch median 44641.0 ns, q_eff 40.0 ticks (samples), realised 4463.0 quanta; second max |t| = 55.18 (p90), batch median 44641.0 ns, q_eff 40.0 ticks (samples), realised 4463.0 quanta; A/A max |t| = 1.64 (p75), batch median 44691.0 ns, q_eff 40.0 ticks (samples), realised 4469.0 quanta
+ct same_content_control: PASS — k=1, calibration median 22950.5 ns, 1000000 samples — site body MAC; first max |t| = 0.72 (raw), batch median 22960.5 ns, q_eff 40.0 ticks (samples), realised 2296.0 quanta; second max |t| = 1.63 (p50), batch median 23030.5 ns, q_eff 40.0 ticks (samples), realised 2303.0 quanta; A/A max |t| = 0.60 (p50), batch median 23020.5 ns, q_eff 40.0 ticks (samples), realised 2302.0 quanta (same-content control: a FAIL makes the run CONTROL_FAIL)
+ct hx_same_content_control: PASS — k=1, calibration median 205664.8 ns, 1000000 samples — site inner open; first max |t| = 1.59 (p90), batch median 205554.8 ns, q_eff 40.0 ticks (samples), realised 20555.0 quanta; second max |t| = 1.32 (p50), batch median 206344.8 ns, q_eff 40.0 ticks (samples), realised 20634.0 quanta; A/A max |t| = 1.08 (p50), batch median 205664.8 ns, q_eff 40.0 ticks (samples), realised 20566.0 quanta (HX same-content control: a FAIL makes the run CONTROL_FAIL)
+ct tr_decrypt_trial_open_position: PASS — k=1, calibration median 35980.8 ns, 1000000 samples — site body MAC; first max |t| = 1.20 (raw), batch median 35870.8 ns, q_eff 40.0 ticks (samples), realised 3587.0 quanta; second max |t| = 90.66 (p90), batch median 35910.8 ns, q_eff 40.0 ticks (samples), realised 3591.0 quanta; A/A max |t| = 1.49 (raw), batch median 36080.8 ns, q_eff 40.0 ticks (samples), realised 3608.0 quanta
+ct link_same_content_control: PASS — k=1, calibration median 3840.1 ns, 1000000 samples; first max |t| = 2.01 (p90), batch median 3850.1 ns, q_eff 40.0 ticks (clock), realised 385.0 quanta; second max |t| = 1.86 (p50), batch median 3850.1 ns, q_eff 40.0 ticks (samples), realised 385.0 quanta; A/A max |t| = 1.27 (p50), batch median 3840.1 ns, q_eff 40.0 ticks (samples), realised 384.0 quanta (LINK same-content control: a FAIL makes the run CONTROL_FAIL)
+ct min_leak_control: CAUGHT — decide FAIL at p75, class 0 slower: Δ 489.17 / 443.90 ns (48.92 / 44.39 floors), t 967.84 / 900.19; raw Δ 507.01 / 459.93 ns (information); k=1, 1000000 samples; first max |t| = 967.84 (p75), batch median 5610.1 ns, q_eff 40.0 ticks (samples), realised 540.0 quanta; second max |t| = 914.67 (p90), batch median 5610.1 ns, q_eff 40.0 ticks (samples), realised 542.0 quanta (sensitivity control: the verdict rule must catch the injected leak with class 0 slower, ADR-041 Amendment 3)
+ct min_leak_same_content: informative (no verdict) — p50 Δ 0.02 ns (0.00 floors), t 0.65; IQR class 0 120.00 / class 1 120.00 ticks (ratio 1.00); max |t| = 1.72 (p90), batch median 5650.1 ns, q_eff 40.0 ticks (samples), realised 565.0 quanta (same content through the per-class preparation, ADR-041 Amendment 3)

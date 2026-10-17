@@ -87,6 +87,8 @@ Format: MADR-style, one entry per decision, numbered, never deleted (superseded 
 **Decision.** Allowlisted crates only (cargo-deny), vetted (cargo-vet with imports), 7-day cooldown, exact pins for crypto crates, no git deps, no build scripts in our crates. Licenses: permissive set plus Slint and SQLCipher exceptions. Final project license: OQ-1.
 **Update 2026-09-28 (owner decision OQ-1).** The project license is **AGPL-3.0-or-later** for all crates (`LICENSE` holds the AGPL-3.0 text; `license = "AGPL-3.0-or-later"` in `[workspace.package]`). SPDX policy: every first-party source file starts with `SPDX-License-Identifier: AGPL-3.0-or-later` in the file type's comment syntax, enforced by `cargo xtask policy`. `deny.toml` applies the dependency allowlist of `06` §3 (our own unpublished crates are exempt from it via `[licenses.private] ignore = true`); Slint's GPL-3.0-only branch is the single copyleft exception (compatible with AGPL-3.0, section 13).
 **Update 2026-09-28 (M0 review).** Publisher trust: `cargo vet trust` for dtolnay and BurntSushi (`safe-to-deploy`, end 2027-09-28), justified by their trust in ≥ 2 imported audit sets; rule in `06` §3.
+**Amendment 1 (2026-10-15, Reviewer, Engineering-Delegation 30.09.; M6-17).** The cooldown check retries an index fetch that fails with a transient transport error (curl exit 6, 7, 28, 35, 52, 56) after 5 s and 15 s, at most three attempts per package, each retry logged; every other failure and an exhausted retry fail the gate as before. No package is ever skipped. Occasion: run 38616364662, job `linux-fast`, `curl … index.crates.io/li/bl/libloading` exit 7 (connect) on an otherwise green 17-job run.
+**Amendment 2 (2026-10-15, Reviewer, Engineering-Delegation 30.09.; M6-B-0).** A point release that closes a RUSTSEC advisory on a pinned crate may be adopted inside the 7-day cooldown when all of: (a) the advisory id is named; (b) the exact diff between the two versions is kept as evidence (`docs/reviews/MNN-evidence/vet-deltas/<crate>-<old>-<new>.diff`) and reviewed by the reviewer before the owner records the delta audit; (c) `xtask/src/expect.rs` `COOLDOWN_EXCEPTIONS` carries the tuple (crate, version, until = publish date + 7 days, advisory); an exception past its `until` date is itself a cooldown finding, so the entry cannot outlive the cooldown it bridges. First use: `rustls` 0.23.46 (published 2026-10-14 09:54 UTC) for RUSTSEC-2026-0346…0349, until 2026-10-21 09:54 UTC.
 **Status.** Accepted; license decided 2026-09-28.
 
 ### ADR-016 — Update security: signed manifests now, TUF later
@@ -213,6 +215,7 @@ Amended 2026-09-29 (reviewer, external review EXT-2): Rust and `ref/` agree *str
 **Alternatives.** Named human audits of ≈ 0.69 M lines (not credible); dropping vet for crypto crates (loses the change-tracking benefit); trusting whole organisations by name (over-broad — accounts, not organisations, are trusted).
 **Consequences.** `06` §3 amended; `supply-chain/audits.toml` gains trust entries and delta audits; the residual crates named in the probe (`rand_core`, `keccak`, `hax-lib`, `hax-lib-macros`, `typenum`) are covered by trust or delta audits in M1.
 **Status.** Accepted (reviewer, 2026-09-28).
+**Amendment 1 (2026-10-15, Reviewer; M6-B-0b).** The closure is a set of (name, version) packages as resolved by cargo (`cargo tree -e normal` on the vet-closure targets, as `zero_exemption_closure` does); another version of a closure crate's name that is reachable only outside the closure is not a closure member and may carry a tracked exemption naming its direct dependency.
 
 ### ADR-037 — M1 dependency set: primitive crates, OS bindings, test-only crates
 **Context.** M1 brings the first third-party code into the shipped graph (`secmp-crypto`, `secmp-sys-mem`) and the test-only crates for KATs, differential tests and vector generation. `docs/06` §3 requires an ADR line per direct dependency (why, alternatives, maintenance, audit status); ADR-036 defines the vetting; ADR-023 records the primitive versions.
@@ -305,6 +308,67 @@ Consequence added at M5 (M5-C; proposed by the implementer, engineering class (g
 **Amendment 3 (2026-10-03): an HX same-content control; reason: Amendment 2 asks for one control on the largest TR cell, but the HX targets prepare a 12 288-byte blend and three boxed 4 KB cells (`hx_cells(&blended_vec(..))`) that no control runs, so a harness artefact at HX size would be judged a product FAIL; on the Mac `hx_accept_reject_inner` (+14.8 ns, |t| 44) and `hx_accept_reject_first_msg` (−21 to −25 ns, |t| 6 to 8) pass only because the 41.7 ns floor is above them, and at the 10 ns floor of a Linux runner the same shifts would FAIL.** Reviewer decision (M04 review, engineering delegation 30.09.2026): (1) a control `hx_same_content_control` runs the class-1 cells of `hx_accept_reject_inner` in both classes through the real HX preparation path, with the same claim and pre-check, and is judged like `same_content_control`: a FAIL makes the run `CONTROL_FAIL`, PASS and `SUB_FLOOR_SHIFT` pass; it is listed in `expect::CT_TARGETS` and re-derived by the gate; (2) if an HX target fails while this control passes, the failure is a product finding (STOP, docs/06 §4); if the control fails, the run is `CONTROL_FAIL`; (3) ADR-041's criterion, its sign rule, the floor, the thresholds, the sample counts and the three earlier controls are unchanged. Evidence: the Linux ct report of the fix head (`docs/reviews/M04-evidence/ct-report-linux-<run id>.json`).
 **Amendment 4 (2026-10-07): one delta under an opaque per-call mask, no class-selected address in the preparation path; reason: PR run 37614599312 (1834d54; `ct` job 112769780046, AMD EPYC 7763, tsc, tick 0.409 ns, q_eff 1 tick, floor 10 ns = 24.45 ticks; bench sha256 `93d23cca5916…`, the executable of run 37146709153, where `ct` passed) ended `CONTROL_FAIL`: `hx_same_content_control` FAIL at p50, identical contents in both classes, Δ +49.16 / +47.72 ticks = 2.01 / 1.95 effect floors, t +18.46 / +18.42 (run 37127247911: 0.89 / 0.51 floors; run 37146709153: PASS, t +4.48 / +7.61).** In the same run `same_content_control` (4096-byte TR cell) showed the same kind of residue about ten times smaller (p50 −2.75 / −4.84 ticks = 0.11 / 0.20 floors), `hx_accept_reject_inner` shifted by −63.38 / −49.61 ticks (2.59 / 2.03 floors, class 0 faster; class 0 slower in run 37146709153, SUB_FLOOR_SHIFT +8.25 / +4.63: the sign follows the run, not the content), `hx_accept_reject_first_msg` did not reproduce, and `min_leak_control` was reached (p75, 15.2 floors; `min_leak_same_content` max |t| 0.42), so the instrument's sensitivity was intact. Mechanism (reviewer, from the source): Amendment 2 (1) left exactly one class-dependent address in the preparation path — `blend` selected the delta buffer by the class index (class 0 the XOR delta, class 1 a separate all-zero allocation of the same length) and read it right before the timed window. For the HX targets that is one of two 12 288-byte buffers (192 cache lines) next to `base` and `out`; which of them was just read decides the cache state the timed call starts with. The residue scales with the buffer size (≈ 1–2 ns at 4 KB, ≈ 20 ns at 12 KB) and tips over the 10 ns floor run by run. The control did what Amendment 3 (2) made it for: the run is a harness finding, not a product finding (M04 review R-103). Reviewer decision (WEISUNG M4-FIX-7, engineering delegation 30.09.2026): (1) `blend` reads **one** delta buffer in both classes under an opaque per-call mask — `m = black_box(u8::from((class & 1) == 0).wrapping_neg())` (0xFF for class 0, 0x00 for class 1), then one `#[inline(never)]` loop `*o = b ^ (d & m)` over `base` and the class-0 delta (`class0 ^ class1`), the delta slice also through `black_box`; no class-selected address remains, both classes execute the same instructions on the same addresses and differ only in the mask value; `Deltas` keeps only the delta; (2) a disassembly of the gate-profile build must show that LLVM does not unswitch the loop on the mask (it did in M3 without `black_box`, `docs/reviews/M03-evidence/ct-blend-disasm-aarch64-bc5088b.txt`): one loop, the mask broadcast into a vector register, no branch on the class or on the mask, no `memcpy` — otherwise `black_box` moves into the loop body, and a loop still versioned stops the fix; (3) the same-content controls, `expect.rs`, `ctreport.rs`, the floor, the thresholds, the sample counts and the sign rule are unchanged. Evidence: `docs/reviews/M04-evidence/ct-blend-disasm-aarch64-fix7-b138a2b.txt` (aarch64: one loop, `dup.16b v0, w8`, every branch on a length or loop counter, no `bl`), `ct-report-local-b138a2b-scale10.json` with `ct-progress-local-b138a2b-scale10.jsonl` and `ct-local-b138a2b-scale10.txt` (Mac, `SECMP_CT_SCALE=10`: run verdict PASS, both same-content controls PASS; evidence only, the gate refuses a scaled report), `ct-report-linux-37614599312-1834d54.json` with `ct-progress-linux-37614599312.jsonl` (the failing run), and the Linux `ct` report of the next PR run.
 Amended 2026-10-07 — Accepted (Reviewer, Owner-Delegation 30.09.2026).
+**Amendment 5 (2026-10-17): TR position/reject targets hold the header nonce, the public header and the body constant; an informative nonce target; reason: PR run 39040543318 (62d8e59, `ct`, AMD EPYC 7763, q_eff 1.0 tick (clock), floor 10 ns = 24.45 ticks) FAIL `tr_decrypt_trial_open_position` at p90, Δ +42.74 / +42.37 ticks, t 62.3 / 69.4, class 0 slower, a whole-distribution shift of ≈ 49 ticks; in the same run `tr_decrypt_reject_skipped` shifted by +31…+65 ticks in its second measurement only.**
+
+Record of CT-DIAG-1…3 (WEISUNG M6-CI-12, M6-CT-2…4; diag branch `m06-ct-diag` at `4239879a142795edd5fbdd9af1130bca8d71db6a`, raw data in its `docs/reviews/M06-evidence/ct-159-diag*.{md,json,txt}`):
+
+- **Code reading.** It found no instruction on the §7.4 skipped path whose execution depends on which trial opened.
+- **Dispatch 39063440795.** All four diagnosis targets passed: production Δ ≤ 2.5 ticks; label-swapped, interleaved and same-content ≤ 6 ticks. Together with #156, #157 and #159, the shift is intermittent per measurement half.
+- **Repeat mode, local** (Threadripper PRO 5955WX, q_eff 10 ns, 8 evaluations per target, every half a fresh fixture):
+
+  | Target | Halves with \|t90\| > 4.5 | max \|Δp90\| ticks |
+  |---|---|---|
+  | `tr_decrypt_trial_open_position` (old fixture) | 12/16 | 28.4 |
+  | `tr_decrypt_reject_skipped` (old fixture) | 13/16 | 27.5 |
+  | the re-sealed variant (class 1 = class 0's header re-sealed under `hk_2`; same nonce, header plaintext and body) | 0/16 | 0.50 |
+
+  In all 48 halves the classes' inputs had identical addresses.
+- **Bisection** (4 evaluations, 8 halves per variant; class 1 = class 0 with one component changed):
+
+  | Variant | max \|Δp90\| ticks | Halves with \|t90\| > 4.5 |
+  |---|---|---|
+  | `pn` | 0.45 | 0 |
+  | `dh_pk` | 0.88 | 0 |
+  | `ek_pq` / `ct_pq` | 0.89 | 0 |
+  | header nonce | 65.38 | 5 (both signs) |
+  | body ciphertext | 0.52 | 0 |
+  | `mk`, on two receivers | 10.95 | — |
+  | two receivers, same `mk` | 6.98 | — |
+
+Conclusion (reviewer adjudication, 2026-10-17):
+
+- The production trial-position path shows no dependence on the trial position, nor on the secrets `hk` and `mk`.
+- The shift that failed run #159 follows the **public header nonce**, which enters every header trial's XChaCha20 key setup and the body AD.
+- Placement is excluded.
+- Both targets were therefore design defects: their classes differed in the nonce and in public header content, so they measured a public-input micro-timing, not the property they name. The M6-8 observation (Δ −27 / −32 ticks, sign flipped between halves) was the same phenomenon.
+
+Reviewer decision (WEISUNG M6-CI-13, engineering delegation 30.09.2026):
+
+1. **Fixture rule.** The classes of a TR position or reject target share the header nonce, the public header content and the body bytes, unless the target names that field as its class difference. A class difference in a header key or a header field is produced by re-sealing class 0's header plaintext, changed in that field only, under the class's header key with class 0's nonce, followed by class 0's body.
+   - `tr_decrypt_trial_open_position`: class 1 = class 0's header re-sealed under `hk_2`.
+   - `tr_decrypt_reject_skipped`: class 1 = class 0's header with `n = 4` re-sealed under `hk_1`. `n` is the public field this target names.
+   - Names, sites, pre-checks and `expect::CT_TARGETS` are unchanged.
+2. **Informative target.** `tr_decrypt_nonce_dependence` (class 0 = the class 0 of `tr_decrypt_trial_open_position`; class 1 = the same header plaintext and body re-sealed under `hk_1` with a fresh nonce) is calibrated and measured twice after the targets.
+   - It has no verdict and no A/A pass.
+   - It is reported in `informative` and pinned in `expect::CT_INFORMATIVE_TARGETS`.
+   - The gate requires exactly the pinned entries and prints Δ and t per crop; its measurements never fail the gate.
+   - `ct-check --targets m5` reads the reports written before this amendment.
+3. **Recorded, not changed.** `Measurement::of` falls back to the clock quantum when a measurement's samples show no lattice, and the clock probe recognises no lattice with fewer than 4 runs, although run #159's probe showed `median_gap` 25 and `regular` 1.0. So `tr_decrypt_trial_open_position` and `tr_decrypt_reject_skipped` were judged with q_eff 1.0 tick (clock) while every other target took ≈ 24.5 ticks from its samples. The effect floor is 10 ns either way: 24.45 vs 24.5 ticks. Re-derived with q_eff 24.5, run #159's verdicts are unchanged (FAIL at p90, 1.74 / 1.73 floors; PASS).
+4. ADR-041's criterion, its sign rule, the floor, the thresholds, the crops, the sample counts and every control are unchanged. No product code changes.
+
+5. **Acceptance criterion of the fixture fix** (WEISUNG M6-CI-13b, 2026-10-17): the gate's own rule plus a margin. Every half must have |Δp90| < 0.5 × floor (20 local ticks = 5 ns), and every rep verdict must be PASS.
+   - The 1.0-tick bar of WEISUNG M6-CI-13 §5 was a diagnosis bar and is withdrawn: one local tick is 0.25 ns, far below any resolution the gate claims.
+   - Measured on the Threadripper, under the repeat mode, every half a fresh fixture:
+
+     | Fixture | max \|Δp90\| | Rep verdicts |
+     |---|---|---|
+     | old | 28.36 ticks = 7.1 ns; on the EPYC, 42 ticks = 17 ns (run #159 FAIL) | — |
+     | new | 8.93 ticks = 2.2 ns = 0.22 floor | 6/6 (5a) and 8/8 (5b) PASS |
+
+   - The residual (≤ 2.2 ns, both signs, |t| up to 25 on 1M samples) is a public-content micro-timing of the remaining class differences (`hdr_ct`, key/entry, `mk`). It is below the floor by a factor of at least 4, and `tr_decrypt_nonce_dependence` monitors it.
+
+Evidence: `docs/reviews/M06-evidence/ct-nonce-M6-CI-13.md`, which holds the condensed CT-DIAG tables and the local verification of the new fixture under the repeat mode.
+Amended 2026-10-17 — Accepted (Reviewer, Owner-Delegation 30.09., 2026-10-17).
 
 ---
 
@@ -382,6 +446,12 @@ naming its package; every shard and package reported before a FAIL); `docs/mutan
 Phase B measures the CI time per shard and reports it; the shard count changes only by a further amendment.
 Consequences: `docs/06` §4 "Mutation" reads "`secmp-crypto`, `secmp-proto`, `secmp-relay`"; test
 `mutants_scope_includes_relay`.**
+**ADR-047 Amendment 4 — `secmp-client-core` and `secmp-transport` in the mutation gate. Status: Accepted (Reviewer, Owner-Delegation 30.09.2026) — 2026-10-09. Context: M6 adds the constant-rate scheduler (client security kernel, CLAUDE.md §1.4) and the transport drivers. Decision: the mutation gate runs over `secmp-crypto`, `secmp-proto`, `secmp-relay`, `secmp-client-core` and `secmp-transport` in the 8 shards of Amendment 1 with the per-package rule of Amendment 2; files that are pure Arti/rustls glue are excluded by `--exclude-re` with the file name and reason listed in `docs/mutants-accepted.md` §Excluded; `docs/mutants-accepted.md` rows carry `path:line` (M05 C-7). Consequences: `docs/06` §4 "Mutation" lists the five packages; test `mutants_scope_includes_client_core_and_transport`.**
+Implementation note (M6 Phase B, 2026-10-15): the tests of `secmp-client-core` and `secmp-transport` live in `secmp-testkit/tests/harness` (in-process relay, virtual driver; the two crates have 10 and 2 unit tests of their own), and `secmp-transport` has no feature `kat`. Each shard therefore runs cargo-mutants twice with the same `--shard K/8`: the first run over `secmp-crypto`, `secmp-proto`, `secmp-relay` exactly as before (`--features kat`, each mutant tested by its package), the second over `secmp-client-core` and `secmp-transport` with `--features harness` and `--test-package secmp-client-core --test-package secmp-transport --test-package secmp-testkit` (`expect::MUTANT_HARNESS_*`); the second run uses `--test-tool nextest` (the harness suite needs one process per test: five `m6_activity` tests fail when they share one under `cargo test`), an explicit `--timeout 900` (cargo-mutants measures its baseline on the mutated package's own tests only, 2 tests in 0 s, so its automatic 20-s timeout failed every mutant in the local smoke run) and leaves the long harness tests of `expect::MUTANT_HARNESS_SKIP_TESTS` (ten at P1, 20–226 s each; the six tokio repeats of AI-01…AI-06 at P2, 25–49 s each; they run in `kat` and `nextest`) out of the per-mutant run, the rule of Amendment 1 (5); the second run's outcomes are merged into the shard's `target/mutants.out` (its own files and log kept under `harness/`), so the merge job, the floor and the artefacts are unchanged; one step budget covers both runs; the `mutants` tool set gains cargo-nextest. Local smoke run (2026-10-15, `crates/secmp-transport/src/evicted.rs`, the exact second-run command line): 7 mutants, 7 caught. Tests `mutants_scope_includes_client_core_and_transport`, `merge_mutants_runs_unites_outcomes_and_survivors`.
+
+**ADR-047 Amendment 5 — CI budget after Phase B. Status: Accepted (Reviewer, Owner-Delegation 30.09.2026) — 2026-10-16 (WEISUNG M6-CI-1).** Context: PR run #152 (`f68d923`) hit three job timeouts. `linux-fast` 74.5 min in #151 (`1517781`) → cancelled at 90; `windows-native` cancelled at 90; `linux-full` 201 min → cancelled at 240. The step tables (`gh run view --json jobs`, job logs) show one cause: `f68d923` added `secmp-testkit` with feature `harness` as a dev-dependency of `secmp-transport` (TLS-01…TLS-11), so `cargo nextest run --workspace` unified the feature and ran the testkit `harness` binary — the long simulations `m6_activity`, `m6_measure`, `m6_control` and (since `e0e4530`) `m6_tokio_ai`, 140 → 164 tests, ~2250–2700 s — a second time next to the `kat` step (and, in `linux-full`, a third time in `coverage`). `nextest` grew from 9.6 to 54.5 min in `linux-fast` (775 → 1071 tests) and from 9.9 to 55.6 min in `linux-full`; on Windows the `WINDOWS_SKIP_TESTS` filter applied only to `kat`, so `nextest` ran all 1071 tests (46 min of tests). Two xtask policy tests failed on Windows in #151 and #152 (CRLF in the checked-out `deny.toml` against `\n` needles). Decision, no threshold, harness list, seed or scope changed: (1) the workspace `nextest` run takes the filterset `not binary(=harness)` on every platform; `kat` (feature `kat` ⊃ `harness`) stays the one runner of `secmp-testkit/harness`, and the TLS tests of `secmp-transport` (a different binary) still run in `nextest`; test `nextest_does_not_run_the_harness_binary_twice`. (2) On Windows `windows_scoped` (`expect::WINDOWS_SKIP_TESTS`) applies to every run of `nextest` as well as `kat`; test `windows_skip_applies_to_nextest_and_kat`. (3) The policy tests read repository files with LF endings (`repo_files_are_read_with_lf_line_endings`). (4) The fuzz smoke (step 6, ~70 min) is delegated from `linux-full` to the pinned required job `fuzz` (`--delegated fuzz`, `dispatch-fuzz`, `PINNED_JOBS`, `REQUIRED_GATE_RUNS`, `DELEGATED_TO`, `REQUIRED_JOB_CONDITIONS`, `timeout-minutes: 120`; pin-edit variants in `deleting_or_neutering_a_pinned_job_is_a_finding`); the step runs the same targets, seconds, corpora and pins; `coverage` stays in `linux-full`. Timeouts, runner size and the Windows runner are unchanged. What the gate still covers: every test that ran before runs in at least one pinned required job, with the same seeds (the harness binary in `kat`, as before `f68d923`); fuzz runs as a required check under its own name. Expected effect (from the #151/#152 step tables): `linux-fast` ≈ 70 min, `windows-native` ≈ 45–55 min, `linux-full` ≈ 140–150 min. Owner action: add `fuzz` to the required checks of the `main-protection` ruleset.
+
+**ADR-047 Amendment 6 — the harness mutation run cancels at the first failing test. Status: Proposed (implementer, WEISUNG M6-CI-9) — 2026-10-17; the reviewer accepts or reverts (`gates::MUTANTS_HARNESS_MAX_FAIL`, one constant).** Context: in PR run #156 about 25 mutants per shard of the second `cargo mutants` run ended as `TIMEOUT` (900 s) although a test had failed within seconds: nextest's default fail-fast stops *scheduling* tests but lets the running ones finish, and a mutant of a scheduler or driver loop (`sample_with`, `period_of`, `flush_wait`, …) makes other running tests loop forever. Such a timeout counts as a survivor unless the function is in the §Rules list of `docs/mutants-accepted.md`. Decision: the second run passes `--max-fail=1:immediate` to nextest (after the first `--`), which terminates the running tests at the first failure; the first run (`cargo test`) and every test selection, skip list, timeout and threshold are unchanged. Effect (local, 2026-10-17): the sixteen mutants of the shard-2 set that had timed out at 300 s were `caught` (166 mutants in 15 min instead of 69 min). Consequences: test `rr_write_time_guard_is_not_skipped_by_the_mutation_run` pins the option and its position; nothing is weakened — a mutant counts as caught when a test fails, as before.
 
 ### ADR-048 — Spec clarifications rev 2.6: SecMP-LINK/Q readings, editorial errata, `inv_sid` derivation, RT-3
 
@@ -640,6 +710,127 @@ infrastructure in a security crate.
 **Consequences.** H-11 runs over two in-process `std::io` streams, not `tokio::io::duplex` (reported as a deviation); the
 trait of §12.1 is not `async` until M6.
 
+---
+
+### ADR-051 — Async driver and transport providers in M6: tokio runtime scope, Arti/rustls dependency set, sans-IO boundary
+
+**Status.** Accepted (Part 1 reviewer 2026-10-09; Part 2 owner default 2026-10-10 19:45 UTC). Two classes in one record: **Part 1 (runtime scope, sans-IO
+boundary, API shape) — engineering**, accepted by the reviewer under the owner delegation of 2026-09-30; **Part 2
+(shipped dependency set, `cargo vet` trust/audits, license and build-input decisions) — OWNER class**: it takes effect
+only with the owner's written approval and the owner's own `cargo vet` records (an agent never records itself,
+`docs/06` §3). Phase B of M6 lands no dependency before both. Supersedes nothing; extends ADR-049 and ADR-050 (3).
+
+**Context.** `docs/07` §M6 delivers `secmp-transport::tor` (Arti 2.6.x / `arti-client` 0.46.x, `onion-service-client`,
+`rustls`, per-link isolation, bootstrap events, state dir) and `::tls` (rustls/aws-lc-rs, `X25519MLKEM768` only, SPKI
+pin, no tickets/0-RTT), the constant-rate scheduler, `turmoil` simulations and an acceptance over real Tor and direct
+TLS. M5 kept every shipped crate free of third-party runtime code (ADR-049: relay std-only; ADR-050: synchronous
+`secmp-transport` over `std::io`, "the asynchronous driver … needs its own ADR"). Arti is async-only; turmoil
+simulates tokio's network; the relay's direct listener (`docs/05` §7, `docs/02` §2) needs a TLS server. A probe resolve
+on 2026-10-09 (scratch crate: the pins below plus the workspace crypto pins, crates.io index) gives ≈ 398 normal
+crates for `x86_64-unknown-linux-gnu` and `aarch64-apple-darwin`, 412 for `x86_64-pc-windows-msvc`, ≈ 477 incl. build
+dependencies on all targets, ≈ 360 of them new to `Cargo.lock`; 34 crate names in two or three versions (Arti brings
+`x25519-dalek` 2, `ed25519-dalek` 2, `curve25519-dalek` 4, `sha2` 0.10, `rand` 0.8 beside the workspace's newer
+majors); ≈ 45 build scripts including two C builds (`aws-lc-sys`, `libsqlite3-sys` bundled); licenses outside the
+`deny.toml` allowlist: `Unlicense` (`async_executors`), `CC0-1.0` (`notify`), and `priority-queue` "LGPL-3.0-or-later
+OR MPL-2.0"; by crate name 281 of ≈ 360 new crates have some audit in the five imported sets, 79 none (version coverage
+to be established by `cargo vet suggest`); the imported audits end at `arti-client` 0.35, `tokio` 1.42.1,
+`tokio-rustls` 0.24.0 and cover `rustls` up to 0.23.45. In an unconstrained resolve 23 crates were younger than 7 days
+(youngest: `tokio-util` 0.7.20, published 2026-10-09); the lock must be pinned back (`cargo update --precise`).
+
+**Decision — Part 1 (engineering).**
+1. *Runtime.* `tokio` is the one async runtime (OPEN-M6-01 A). Users: `secmp-transport` (`driver`: `AsyncSession`,
+   `AsyncRelayQueueTransport`, `StreamProvider`; providers `tor`, `tls`), `secmp-client-core::scheduler::run` (the
+   driver of the sans-IO scheduler core), `secmp-testkit` (`MemProvider`, `TurmoilProvider`, the turmoil relay host,
+   `two-clients`). Normal features: `rt`, `rt-multi-thread`, `net`, `time`, `sync`, `io-util`; `macros`, `fs`,
+   `process`, `signal` are not requested by our crates.
+2. *Sans-IO boundary.* `secmp-crypto` and `secmp-proto` keep no runtime and no I/O crate in their normal closure and no
+   `async fn` (test AD-12); `secmp-relay` keeps its std::net thread model (ADR-049) — its optional direct listener uses
+   rustls's synchronous `ServerConnection`/`StreamOwned` (OPEN-M6-08 A); `secmp-client-core::scheduler::core` is sans-IO
+   (time as arguments, randomness from `TimingRng`, no `tokio` path — X-09) and is the object of Kani, proptest and the
+   virtual-clock activity-independence tests (OPEN-M6-11 A). Wall-clock reads stay in `secmp-client-core/src/clock.rs`
+   (AD-11).
+3. *API.* `AsyncQueueTransport` carries the seven §12.1 operations with `&mut self` and returns `impl Future + Send`
+   (native async in traits, no `async-trait` crate); the M5 synchronous trait remains for the harness (OPEN-M6-10 A).
+   Prepared frames: `Session::prepare` seals at prepare time, `write_prepared` writes only (AD-01, S-19).
+4. *Gates.* Policy test `normal_dependencies_match_adr_allowlist` (F-7 of the M5 review, G-04) pins each crate's direct
+   normal dependencies to this ADR's table; ADR-047 Amendment 4 (below) and the coverage/Kani lists follow OPEN-M6-23.
+
+**Decision — Part 2 (OWNER class).** Direct dependencies, exact pins in `[workspace.dependencies]`, default features off:
+
+| Crate | Pin (published) | Where | Why / features | Closure estimate (normal, Linux) | Vet route (proposal for the owner) |
+|---|---|---|---|---|---|
+| `arti-client` | `=0.46.0` (2026-09-02) | `secmp-transport` | Tor client, §12.3, ADR-007. Features `tokio`, `rustls`, `onion-service-client`, `static-sqlite`; not `compression`, `native-tls`, `hs-pow-full`, `experimental` (OPEN-M6-03) | ≈ 330 crates (37 `tor-*`/`arti-*`, `rusqlite` 0.39 + bundled SQLite, `futures-rustls`, `tokio-util`, `notify`, `async_executors`, older dalek/sha2/rand majors) | publisher trust, crate-scoped to `arti-client` and `tor-*`, for `nmathewson`, `ijackson`, `gabi-250`, `dgoulet-tor` (`end` ≤ 12 months); imported audits where they exist; the rest tracked exemptions naming `arti-client` |
+| `rustls` | `=0.23.45` (2026-09-14) | `secmp-transport`, `secmp-relay` | TLS 1.3 client (direct mode) and the relay's direct listener; features `aws_lc_rs`, `std` (no `tls12` in our use; `futures-rustls` re-enables it in the graph, our configs restrict versions to TLS 1.3) | ≈ 10 (`rustls-webpki`, `rustls-pki-types`, `zeroize`, `subtle`, `once_cell`, `log`) | imported audit (0.23.45 is audited in an import set); `rustls-webpki`/`rustls-pki-types`: import or trust `ctz`/`djc` |
+| `tokio-rustls` | `=0.26.5` (2026-09-04) | `secmp-transport` | rustls over tokio streams for the client TLS provider | 1 | trust `djc`, `quininer` (imports end at 0.24.0) — alternative: drive `rustls::ClientConnection` by hand and drop this crate |
+| `tokio` | `=1.53.1` (2026-07-20; 1.53.2 of 2026-10-03 is inside the cooldown) | `secmp-transport`, `secmp-client-core`, `secmp-testkit` | async runtime (Part 1.1) | ≈ 6 (`mio`, `socket2`, `bytes`, `pin-project-lite`, `libc`/`windows-sys` already present) | trust `carllerche`, `Darksonn` (imports end at 1.42.1); `mio`, `socket2`: imports |
+| `aws-lc-rs` | `=1.18.1` (2026-09-01; already in the workspace as a dev-dependency) | `secmp-transport`, `secmp-relay` (via `rustls` and as the explicit `CryptoProvider` source) | TLS crypto provider; X25519MLKEM768; `rustls`'s `aws_lc_rs` feature turns on `prebuilt-nasm` | `aws-lc-sys` 0.45.0 (C, build script) | existing trust `justsmth` (ADR-037; note already says "TLS in secmp-transport from M6"); build with NASM and `AWS_LC_SYS_PREBUILT_NASM=0` (OPEN-M6-06) |
+| `turmoil` | `=0.7.2` (2026-04-24) | dev-dependency of `secmp-testkit` | network simulations (`docs/06` §4) | dev only | tracked exemption (dev, outside the normal closure), or trust `carllerche` |
+| (not added) `async-trait`, `hickory-resolver`, any SOCKS crate, `rcgen`, `tracing-subscriber` | — | — | OPEN-M6-10, -26, -09, -25 | — | — |
+
+Further owner decisions bundled here: license exceptions for `async_executors` (Unlicense) and `notify` (CC0-1.0) as
+per-crate `[licenses] exceptions`, and the MPL-2.0 choice for `priority-queue` (OPEN-M6-05 B); `deny.toml` `skip` entries
+for the duplicated versions, each with the pulling crate (OPEN-M6-04 A, engineering, listed here for completeness);
+`arti-client`'s `static-sqlite` and the M7 consequence that `secmp-store` must share `rusqlite`/`libsqlite3-sys` majors
+with Arti (`links = "sqlite3"`; OPEN-M6-03). CLAUDE.md §1.6 already exempts rustls/aws-lc-rs and Arti from the
+"only `secmp-crypto` uses cryptographic crates" rule; they are never used for SecMP constructions (the SecMP-LINK layer
+inside TLS and Tor is unchanged).
+
+**Alternatives.** (a) C tor as a sidecar on the client instead of Arti: a second process and IPC, against ADR-007.
+(b) `smol`/`async-std` instead of tokio: Arti supports them, turmoil does not, `docs/02` §4.1 names tokio.
+(c) Owner delta audits of the whole Arti closure: ≈ 0.35 → 0.46 across 37 `tor-*` crates — not credible; publisher
+trust plus tracked exemptions is the ADR-036 (2) pattern applied outside the crypto closure. (d) No relay TLS listener
+in M6 (external terminator): the direct-TLS acceptance would rest on an unreviewed OpenSSL configuration.
+
+**Consequences.** `Cargo.toml` `[workspace.dependencies]` gains the six pins (plus `secmp-relay`, `secmp-transport`,
+`secmp-client-core` as workspace path entries, F-10); `supply-chain/` gains the owner's trust records and the tracked
+exemptions of the Arti/tokio/rustls closure (each naming its direct dependency; reviewed at every release); `deny.toml`
+gains the `skip` list and two license exceptions; CI installs NASM on Windows and sets `AWS_LC_SYS_PREBUILT_NASM=0`;
+`cargo xtask cooldown` covers the larger lock; the expect lists change as OPEN-M6-23 says. **ADR-047 Amendment 4
+(engineering, text to append):** "the mutation gate runs over `secmp-crypto`, `secmp-proto`, `secmp-relay`,
+`secmp-client-core` and `secmp-transport` in the 8 shards of Amendment 1 with the per-package rule of Amendment 2;
+`MUTANT_EXCLUDE_FILES` names only the Arti glue file(s) that need a live Tor network; M6 Phase B reports the CI time per
+shard; the shard count changes only by a further amendment; test `mutants_scope_includes_client_core_and_transport`."
+The §12.1 sketch (`#[async_trait]`, `&self`) is implemented as Part 1.3; an owner who reads that block as protocol text
+records the reservation here.
+
+**Amendment 1 (2026-10-15, Reviewer; M6-B-0).** `rustls` pinned `=0.23.46` instead of `=0.23.45` (RUSTSEC-2026-0346, -0347, -0348, -0349; -0349 is a downgrade of later connections to classical key exchange and would break invariant 3). Advisory triage of the Arti 0.46.0 closure: RUSTSEC-2023-0071 (`rsa` 0.9.10, Marvin timing side channel on RSA private-key operations) ignored — no RSA private-key operation reachable from the selected client paths (call-site check, tor-llcrypto src/pk/rsa.rs; evidence: `docs/reviews/M06-evidence/advisory-rsa-reachability.txt`); RUSTSEC-2024-0436 (`paste`, unmaintained proc-macro, compile-time only) ignored. RUSTSEC-2025-0141 (`bincode` 2.0.1, unmaintained) ignored for `cargo audit` only — optional dependency of `typed-index-collections`, present in the lock, compiled for no target (`cargo tree -i bincode --target all -e normal,build,dev` empty). All three are re-triaged at every release and at every `arti-client` bump.
+
+**Amendment 2 (2026-10-15, Reviewer; M6-B-2, EXT2-4).** The owner's `cargo vet` records for M6 as landed in `b5aa27b`
+(`chore(vet): owner trust records for M6`), read from `supply-chain/audits.toml` `[[trusted.*]]` (166 records added;
+criteria `safe-to-deploy`; the file is the owner's and is not edited here, CLAUDE.md §1.9). Besides the trust records,
+`b5aa27b` adds one audit, `[[audits.rustls]]` (delta 0.23.45 → 0.23.46, ADR-015 Am. 2,
+`docs/reviews/M06-evidence/vet-deltas/rustls-0.23.45-0.23.46.diff`).
+
+| Publisher | Crates | Until |
+|---|---|---|
+| crates.io user-id 10 (no name comment in the record) | `tokio` | 2027-10-01 |
+| crates.io user-id 4286 (no name comment in the record) | `tokio-rustls` | 2027-10-01 |
+| Alice Ryhl (Darksonn) | `tokio` | 2027-10-01 |
+| Dirkjan Ochtman (djc) | `rustls`, `tokio-rustls` | 2027-10-01 |
+| Gabi Moldovan (gabi-250) | `arti-client`, `fslock-guard`, `ssh-cipher-fork-arti`, `ssh-encoding-fork-arti`, `ssh-key-fork-arti`, 36 `tor-*` crates | 2027-10-01 |
+| Ian Jackson (ijackson) | `arti-client`, `derive-deftly`, `derive-deftly-macros`, `derive_builder_core_fork_arti`, `derive_builder_fork_arti`, `derive_builder_macro_fork_arti`, `fslock-guard`, `pwd-grp`, `shellexpand`, 36 `tor-*` crates | 2027-10-01 |
+| Joe Birr-Pixton (ctz) | `rustls` | 2027-10-01 |
+| Nick Mathewson (nmathewson) | `arti-client`, `caret`, `fs-mistrust`, `fslock-guard`, `oneshot-fused-workaround`, `retry-error`, `safelog`, `saturating-time`, `slotmap-careful`, `weak-table`, `web-time-compat`, 36 `tor-*` crates | 2027-10-01 |
+| Tony Arcieri (tarcieri) | `aes`, `base16ct`, `base64ct`, `const-oid`, `cpubits`, `crypto-bigint`, `crypto-common`, `ctr`, `ecdsa`, `elliptic-curve`, `hkdf`, `p256`, `p384`, `p521`, `pkcs1`, `pkcs8`, `polyval`, `primeorder`, `rfc6979`, `rsa`, `sec1`, `sha1`, `sha3`, `spki`, `zeroize_derive` | 2027-10-01 |
+| github:RustCrypto/utils | `zeroize_derive` | 2027-10-01 |
+| rust-lang-owner | `libm` | 2027-10-01 |
+
+
+
+**Amendment 3 (2026-10-15, Reviewer; M6-B-3).** (1) `tokio` feature `test-util` is enabled as a **dev-dependency
+feature of `secmp-testkit` only**, for `tokio::time::pause` (the virtual-time tests of the tokio driver, BRIEF M6-B
+§2.2); no shipped build and no normal graph of any workspace crate carries it (policy test
+`tokio_test_util_is_dev_only`, `cargo tree -e normal` on every vet-closure target). (2) `arti-client` is a
+`[target.'cfg(not(kani))'.dependencies]` entry of `secmp-transport`: under `cfg(kani)` its closure does not compile
+(`zerocopy` 0.8.60's own `cfg(kani)` code needs its `derive` feature), and the Kani harnesses verify only the sans-IO core;
+the dependency set, features, versions and `Cargo.lock` are unchanged. (3) Likewise `secmp-client-core` and
+`secmp-transport` are `[target.'cfg(not(miri))'.dependencies]` entries of `secmp-testkit`, and its `harness` module is
+compiled out under `cfg(miri)`: `secmp-crypto` and `secmp-proto` reach the testkit as a dev-dependency for the KAT
+loaders only, and the portable Miri step (aarch64) cannot cross-build the C code of the transport closure (`aws-lc-sys`;
+`linux-full` of PR run 38724110285); verified locally (`cargo +nightly-2026-09-21 miri test --target
+aarch64-unknown-linux-gnu -p secmp-crypto` builds no `aws-lc-sys`, `rustls`, Arti or SQLite crate).
+
+**Amendment 4 (2026-10-17, Proposed; M6-CI-10, FIN-1/FIN-2).** The driver contract of `scheduler/mod.rs` is made exact in two places. (1) **A′ commits at SEND write completion; `last_send` at the tick.** The Balanced round-robin position advances when the `SEND` frame has been written completely by the driver, which reports every completed frame write (oldest first, per link) with `Scheduler::frame_written(link)`; the core hands the frame out at the tick and keeps `last_send` there (tick times stay a pure function of the schedule), but a link torn down before the frame was written leaves the rotation where it was — otherwise the rotation would depend on a network fault. A failed or partial write is not a completion. PING slots never commit. While a `SEND` is written but not yet reported complete, the next `SEND` is chosen from the successor position that pending one will commit (a reservation dropped with the link, FIN2-1), so the queue order is a function of the schedule, not of when a write completes. (2) **Stashed events are handled right after the flush wait, at their arrival time.** An event that arrives during a flush wait (a connection completing or failing, a frame, a close) is anchored where it happened, not at the time an activity-dependent worker job wakes the loop; the stash is drained before work is dispatched. Both are core/driver changes without a dependency or API-shape change beyond one `pub fn`.
 ---
 
 *Template for new entries:*

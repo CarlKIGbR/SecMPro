@@ -1,0 +1,298 @@
+# advisory-rsa-reachability — RUSTSEC-2023-0071 (rsa 0.9.10, Marvin) in the arti-client 0.46.0 closure
+# WEISUNG M6-B-0 D2/step 3; base 8a31d4f + ADR-051 Part 2 lock (rustls 0.23.46); 2026-10-15
+# CARGO_HOME=/work/.cargo, registry dir index.crates.io-1949cf8c6b5b557f. The brief's grep was run as an equivalent
+# python3 -I walk (shell variables are not available in this executor); patterns are identical.
+
+## Resolved features (cargo tree -p secmp-transport -e features,normal --target all)
+arti-client: onion-service-client, rustls, static-sqlite, tokio (+ tor-hsclient, tor-hscrypto, __is_nonadditive)
+tor-proto: default, hs-client, hs-common, send-control-msg, tokio  -- NOT relay
+tor-chanmgr: no relay feature; tor-netdoc: default, encode, hs-client, hs-common, incomplete
+tor-cert: default, experimental-api; tor-keymgr: default, keymgr; tor-key-forge: default
+tor-llcrypto: cvt-x25519, hsv3-client, hsv3-service, keymgr, memquota-memcost  -- NOT relay
+ssh-key-fork-arti: alloc, default, ecdsa, rand_core, rsa, std
+
+## 1. grep -rn 'RsaPrivateKey\|PrivateKey\|rsa::.*sign\|SigningKey' tor-llcrypto-0.46.0/src tor-key-forge-0.46.0/src ssh-key-fork-arti-0.6.7/src
+(260 hits; non-RSA hits are Ed25519/X25519/ECDSA key types)
+tor-llcrypto-0.46.0/src/pk/ed25519.rs:43: /// See [`ed25519_dalek::SigningKey`] for more information.
+tor-llcrypto-0.46.0/src/pk/ed25519.rs:46: pub struct Keypair(pub(crate) ed25519_dalek::SigningKey);
+tor-llcrypto-0.46.0/src/pk/ed25519.rs:91:         Self(ed25519_dalek::SigningKey::generate(&mut RngCompat::new(
+tor-llcrypto-0.46.0/src/pk/ed25519.rs:97:         Self(ed25519_dalek::SigningKey::from_bytes(bytes))
+tor-llcrypto-0.46.0/src/pk/ed25519.rs:139:         Self(ed25519_dalek::SigningKey::from(value))
+tor-llcrypto-0.46.0/src/pk/ed25519.rs:174:     /// NOTE: As with [`ed25519_dalek::SigningKey`], this public key _must_ be
+tor-llcrypto-0.46.0/src/pk/ed25519.rs:553: pub trait Ed25519SigningKey {
+tor-llcrypto-0.46.0/src/pk/ed25519.rs:558: impl Ed25519SigningKey for Keypair {
+tor-llcrypto-0.46.0/src/pk/ed25519.rs:563: impl Ed25519SigningKey for ExpandedKeypair {
+tor-llcrypto-0.46.0/src/pk/keymanip.rs:125: /// expanded version of the original [`Keypair`](ed25519_dalek::SigningKey): the lower halves (the keys) of
+tor-llcrypto-0.46.0/src/pk/rsa.rs:18: use rsa::pkcs1::{DecodeRsaPrivateKey, DecodeRsaPublicKey};
+tor-llcrypto-0.46.0/src/pk/rsa.rs:219: pub struct KeyPair(rsa::RsaPrivateKey);
+tor-llcrypto-0.46.0/src/pk/rsa.rs:239:             rsa::RsaPrivateKey::new(&mut RngCompat::new(csprng), 1024).map_err(|_| {
+tor-llcrypto-0.46.0/src/pk/rsa.rs:248:     /// Construct a PrivateKey from DER pkcs1 encoding.
+tor-llcrypto-0.46.0/src/pk/rsa.rs:250:         Some(KeyPair(rsa::RsaPrivateKey::from_pkcs1_der(der).ok()?))
+tor-llcrypto-0.46.0/src/pk/rsa.rs:253:     pub fn as_key(&self) -> &rsa::RsaPrivateKey {
+tor-llcrypto-0.46.0/src/pk/rsa.rs:342: impl From<rsa::RsaPrivateKey> for KeyPair {
+tor-llcrypto-0.46.0/src/pk/rsa.rs:343:     fn from(value: rsa::RsaPrivateKey) -> Self {
+tor-key-forge-0.46.0/src/macros.rs:28: /// The above results in `NonPublicSigningKeypair` and `NonPublicSigningPublicKey` struct being
+tor-key-forge-0.46.0/src/macros.rs:40: /// use tor_llcrypto::pk::ed25519::Ed25519SigningKey;
+tor-key-forge-0.46.0/src/macros.rs:47: /// let signing_kp = MySigningKeypair::generate(&mut rng).expect("Invalid keygen");
+tor-key-forge-0.46.0/src/macros.rs:137:     impl $crate::macro_deps::ed25519::Ed25519SigningKey for $ttype {
+tor-key-forge-0.46.0/src/macros.rs:382: /// The above results in `NonPublicSigningKeypair` and `NonPublicSigningPublicKey` struct being
+tor-key-forge-0.46.0/src/macros.rs:545:     use tor_llcrypto::{pk::ed25519::Ed25519SigningKey, rng::FakeEntropicRng};
+tor-key-forge-0.46.0/src/ssh.rs:4:     Algorithm, LineEnding, PrivateKey, PublicKey, private::KeypairData, public::KeyData,
+tor-key-forge-0.46.0/src/ssh.rs:175:     Ok(TryInto::<::rsa::RsaPrivateKey>::try_into(key)
+tor-key-forge-0.46.0/src/ssh.rs:284:                 let openssh_key = PrivateKey::new(keypair.clone(), comment)
+tor-key-forge-0.46.0/src/traits.rs:7:     private::{Ed25519Keypair, Ed25519PrivateKey, KeypairData, OpaqueKeypair},
+tor-key-forge-0.46.0/src/traits.rs:128:     type SigningKey: ToEncodableKey;
+tor-key-forge-0.46.0/src/traits.rs:135:     // and ToEncodableCert::SigningKey.
+tor-key-forge-0.46.0/src/traits.rs:146:         signed_with: &Self::SigningKey,
+tor-key-forge-0.46.0/src/traits.rs:257:             private: Ed25519PrivateKey::from_bytes(self.as_bytes()),
+tor-key-forge-0.46.0/src/traits.rs:363:             "Error converting rsa::PrivateKey into ssh_key::private::RsaKeypair."
+ssh-key-fork-arti-0.6.7/src/lib.rs:27: //! - [`PrivateKey`]: SSH private keys (i.e. digital signature keys)
+ssh-key-fork-arti-0.6.7/src/lib.rs:83: //! use ssh_key_fork_arti::PrivateKey;
+ssh-key-fork-arti-0.6.7/src/lib.rs:96: //! let private_key = PrivateKey::from_openssh(encoded_key)?;
+ssh-key-fork-arti-0.6.7/src/lib.rs:133: //! Serializing/deserializing [`PrivateKey`] using `serde` is presently
+ssh-key-fork-arti-0.6.7/src/lib.rs:169:     private::PrivateKey,
+ssh-key-fork-arti-0.6.7/src/lib.rs:182:     signature::{Signature, SigningKey},
+ssh-key-fork-arti-0.6.7/src/private.rs:16: //! use ssh_key_fork_arti::PrivateKey;
+ssh-key-fork-arti-0.6.7/src/private.rs:30: //! let encrypted_key = PrivateKey::from_openssh(encoded_key)?;
+ssh-key-fork-arti-0.6.7/src/private.rs:68: //! use ssh_key_fork_arti::{Algorithm, PrivateKey, rand_core::OsRng};
+ssh-key-fork-arti-0.6.7/src/private.rs:71: //! let unencrypted_key = PrivateKey::random(&mut OsRng, Algorithm::Ed25519)?;
+ssh-key-fork-arti-0.6.7/src/private.rs:100: //! use ssh_key_fork_arti::{Algorithm, PrivateKey, rand_core::OsRng};
+ssh-key-fork-arti-0.6.7/src/private.rs:102: //! let private_key = PrivateKey::random(&mut OsRng, Algorithm::Ed25519)?;
+ssh-key-fork-arti-0.6.7/src/private.rs:121:     ed25519::{Ed25519Keypair, Ed25519PrivateKey},
+ssh-key-fork-arti-0.6.7/src/private.rs:128:         dsa::{DsaKeypair, DsaPrivateKey},
+ssh-key-fork-arti-0.6.7/src/private.rs:129:         opaque::{OpaqueKeypair, OpaqueKeypairBytes, OpaquePrivateKeyBytes},
+ssh-key-fork-arti-0.6.7/src/private.rs:130:         rsa::{RsaKeypair, RsaPrivateKey},
+ssh-key-fork-arti-0.6.7/src/private.rs:137: pub use self::ecdsa::{EcdsaKeypair, EcdsaPrivateKey};
+ssh-key-fork-arti-0.6.7/src/private.rs:187: pub struct PrivateKey {
+ssh-key-fork-arti-0.6.7/src/private.rs:207: impl PrivateKey {
+ssh-key-fork-arti-0.6.7/src/private.rs:213:     /// On `no_std` platforms, use `PrivateKey::from(key_data)` instead.
+ssh-key-fork-arti-0.6.7/src/private.rs:285:     /// use ssh_key_fork_arti::{PrivateKey, HashAlg, SshSig};
+ssh-key-fork-arti-0.6.7/src/private.rs:305:     /// let private_key = encoded_private_key.parse::<PrivateKey>()?;
+ssh-key-fork-arti-0.6.7/src/private.rs:650: impl ConstantTimeEq for PrivateKey {
+ssh-key-fork-arti-0.6.7/src/private.rs:662: impl Eq for PrivateKey {}
+ssh-key-fork-arti-0.6.7/src/private.rs:664: impl PartialEq for PrivateKey {
+ssh-key-fork-arti-0.6.7/src/private.rs:670: impl Decode for PrivateKey {
+ssh-key-fork-arti-0.6.7/src/private.rs:741: impl Encode for PrivateKey {
+ssh-key-fork-arti-0.6.7/src/private.rs:791: impl From<PrivateKey> for PublicKey {
+ssh-key-fork-arti-0.6.7/src/private.rs:792:     fn from(private_key: PrivateKey) -> PublicKey {
+ssh-key-fork-arti-0.6.7/src/private.rs:797: impl From<&PrivateKey> for PublicKey {
+ssh-key-fork-arti-0.6.7/src/private.rs:798:     fn from(private_key: &PrivateKey) -> PublicKey {
+ssh-key-fork-arti-0.6.7/src/private.rs:803: impl From<PrivateKey> for public::KeyData {
+ssh-key-fork-arti-0.6.7/src/private.rs:804:     fn from(private_key: PrivateKey) -> public::KeyData {
+ssh-key-fork-arti-0.6.7/src/private.rs:809: impl From<&PrivateKey> for public::KeyData {
+ssh-key-fork-arti-0.6.7/src/private.rs:810:     fn from(private_key: &PrivateKey) -> public::KeyData {
+ssh-key-fork-arti-0.6.7/src/private.rs:816: impl From<DsaKeypair> for PrivateKey {
+ssh-key-fork-arti-0.6.7/src/private.rs:817:     fn from(keypair: DsaKeypair) -> PrivateKey {
+ssh-key-fork-arti-0.6.7/src/private.rs:825: impl From<EcdsaKeypair> for PrivateKey {
+ssh-key-fork-arti-0.6.7/src/private.rs:826:     fn from(keypair: EcdsaKeypair) -> PrivateKey {
+ssh-key-fork-arti-0.6.7/src/private.rs:833: impl From<Ed25519Keypair> for PrivateKey {
+ssh-key-fork-arti-0.6.7/src/private.rs:834:     fn from(keypair: Ed25519Keypair) -> PrivateKey {
+ssh-key-fork-arti-0.6.7/src/private.rs:842: impl From<RsaKeypair> for PrivateKey {
+ssh-key-fork-arti-0.6.7/src/private.rs:843:     fn from(keypair: RsaKeypair) -> PrivateKey {
+ssh-key-fork-arti-0.6.7/src/private.rs:851: impl From<SkEcdsaSha2NistP256> for PrivateKey {
+ssh-key-fork-arti-0.6.7/src/private.rs:852:     fn from(keypair: SkEcdsaSha2NistP256) -> PrivateKey {
+ssh-key-fork-arti-0.6.7/src/private.rs:860: impl From<SkEd25519> for PrivateKey {
+ssh-key-fork-arti-0.6.7/src/private.rs:861:     fn from(keypair: SkEd25519) -> PrivateKey {
+ssh-key-fork-arti-0.6.7/src/private.rs:868: impl TryFrom<KeypairData> for PrivateKey {
+ssh-key-fork-arti-0.6.7/src/private.rs:871:     fn try_from(key_data: KeypairData) -> Result<PrivateKey> {
+ssh-key-fork-arti-0.6.7/src/private.rs:885: impl PemLabel for PrivateKey {
+ssh-key-fork-arti-0.6.7/src/private.rs:889: impl str::FromStr for PrivateKey {
+ssh-key-fork-arti-0.6.7/src/public.rs:54: use crate::PrivateKey;
+ssh-key-fork-arti-0.6.7/src/public.rs:178:     /// See also: [`PrivateKey::sign`].
+ssh-key-fork-arti-0.6.7/src/signature.rs:3: use crate::{private, public, Algorithm, EcdsaCurve, Error, Mpint, PrivateKey, PublicKey, Result};
+ssh-key-fork-arti-0.6.7/src/signature.rs:22:     private::{EcdsaKeypair, EcdsaPrivateKey},
+ssh-key-fork-arti-0.6.7/src/signature.rs:51: pub trait SigningKey: Signer<Signature> {
+ssh-key-fork-arti-0.6.7/src/signature.rs:56: impl<T> SigningKey for T
+ssh-key-fork-arti-0.6.7/src/signature.rs:275: impl Signer<Signature> for PrivateKey {
+ssh-key-fork-arti-0.6.7/src/signature.rs:329:         let signature = dsa::SigningKey::try_from(self)?
+ssh-key-fork-arti-0.6.7/src/signature.rs:401:         let signature = ed25519_dalek::SigningKey::try_from(self)?.sign(message);
+ssh-key-fork-arti-0.6.7/src/signature.rs:510:         impl Signer<Signature> for EcdsaPrivateKey<$size> {
+ssh-key-fork-arti-0.6.7/src/signature.rs:512:                 let signing_key = $krate::ecdsa::SigningKey::from_slice(self.as_ref())?;
+ssh-key-fork-arti-0.6.7/src/signature.rs:668:         let data = rsa::pkcs1v15::SigningKey::<Sha512>::try_from(self)?
+ssh-key-fork-arti-0.6.7/src/signature.rs:686:                 let signature = rsa::pkcs1v15::Signature::try_from(signature.data.as_ref())?;
+ssh-key-fork-arti-0.6.7/src/signature.rs:857:             let signature = dsa::SigningKey::try_from(keypair)
+ssh-key-fork-arti-0.6.7/src/sshsig.rs:3: use crate::{public, Algorithm, Error, HashAlg, Result, Signature, SigningKey};
+ssh-key-fork-arti-0.6.7/src/sshsig.rs:13: use crate::{PrivateKey, PublicKey};
+ssh-key-fork-arti-0.6.7/src/sshsig.rs:31: /// See [`PrivateKey::sign`] and [`PublicKey::verify`] for usage information.
+ssh-key-fork-arti-0.6.7/src/sshsig.rs:100:     /// See also: [`PrivateKey::sign`].
+ssh-key-fork-arti-0.6.7/src/sshsig.rs:101:     pub fn sign<S: SigningKey>(
+ssh-key-fork-arti-0.6.7/src/sshsig.rs:129:     /// expressed using [`SshSig::sign`], such as if the [`SigningKey`] trait
+ssh-key-fork-arti-0.6.7/src/certificate/builder.rs:4: use crate::{public, Result, Signature, SigningKey};
+ssh-key-fork-arti-0.6.7/src/certificate/builder.rs:14: use crate::PrivateKey;
+ssh-key-fork-arti-0.6.7/src/certificate/builder.rs:46: /// use ssh_key_fork_arti::{Algorithm, PrivateKey, certificate, rand_core::OsRng};
+ssh-key-fork-arti-0.6.7/src/certificate/builder.rs:50: /// let ca_key = PrivateKey::random(&mut OsRng, Algorithm::Ed25519)?;
+ssh-key-fork-arti-0.6.7/src/certificate/builder.rs:55: /// let subject_private_key = PrivateKey::random(&mut OsRng, Algorithm::Ed25519)?;
+ssh-key-fork-arti-0.6.7/src/certificate/builder.rs:275:     /// The [`PrivateKey`] type can be used as a signer.
+ssh-key-fork-arti-0.6.7/src/certificate/builder.rs:276:     pub fn sign<S: SigningKey>(self, signing_key: &S) -> Result<Certificate> {
+ssh-key-fork-arti-0.6.7/src/private/dsa.rs:19: pub struct DsaPrivateKey {
+ssh-key-fork-arti-0.6.7/src/private/dsa.rs:24: impl DsaPrivateKey {
+ssh-key-fork-arti-0.6.7/src/private/dsa.rs:36: impl AsRef<[u8]> for DsaPrivateKey {
+ssh-key-fork-arti-0.6.7/src/private/dsa.rs:42: impl ConstantTimeEq for DsaPrivateKey {
+ssh-key-fork-arti-0.6.7/src/private/dsa.rs:48: impl Eq for DsaPrivateKey {}
+ssh-key-fork-arti-0.6.7/src/private/dsa.rs:50: impl PartialEq for DsaPrivateKey {
+ssh-key-fork-arti-0.6.7/src/private/dsa.rs:56: impl Decode for DsaPrivateKey {
+ssh-key-fork-arti-0.6.7/src/private/dsa.rs:66: impl Encode for DsaPrivateKey {
+ssh-key-fork-arti-0.6.7/src/private/dsa.rs:76: impl fmt::Debug for DsaPrivateKey {
+ssh-key-fork-arti-0.6.7/src/private/dsa.rs:78:         f.debug_struct("DsaPrivateKey").finish_non_exhaustive()
+ssh-key-fork-arti-0.6.7/src/private/dsa.rs:82: impl Drop for DsaPrivateKey {
+ssh-key-fork-arti-0.6.7/src/private/dsa.rs:89: impl TryFrom<DsaPrivateKey> for dsa::BigUint {
+ssh-key-fork-arti-0.6.7/src/private/dsa.rs:92:     fn try_from(key: DsaPrivateKey) -> Result<dsa::BigUint> {
+ssh-key-fork-arti-0.6.7/src/private/dsa.rs:98: impl TryFrom<&DsaPrivateKey> for dsa::BigUint {
+ssh-key-fork-arti-0.6.7/src/private/dsa.rs:101:     fn try_from(key: &DsaPrivateKey) -> Result<dsa::BigUint> {
+ssh-key-fork-arti-0.6.7/src/private/dsa.rs:107: impl TryFrom<dsa::SigningKey> for DsaPrivateKey {
+ssh-key-fork-arti-0.6.7/src/private/dsa.rs:110:     fn try_from(key: dsa::SigningKey) -> Result<DsaPrivateKey> {
+ssh-key-fork-arti-0.6.7/src/private/dsa.rs:111:         DsaPrivateKey::try_from(&key)
+ssh-key-fork-arti-0.6.7/src/private/dsa.rs:116: impl TryFrom<&dsa::SigningKey> for DsaPrivateKey {
+ssh-key-fork-arti-0.6.7/src/private/dsa.rs:119:     fn try_from(key: &dsa::SigningKey) -> Result<DsaPrivateKey> {
+ssh-key-fork-arti-0.6.7/src/private/dsa.rs:120:         Ok(DsaPrivateKey {
+ssh-key-fork-arti-0.6.7/src/private/dsa.rs:133:     pub private: DsaPrivateKey,
+ssh-key-fork-arti-0.6.7/src/private/dsa.rs:146:         dsa::SigningKey::generate(rng, components).try_into()
+ssh-key-fork-arti-0.6.7/src/private/dsa.rs:169:         let private = DsaPrivateKey::decode(reader)?;
+ssh-key-fork-arti-0.6.7/src/private/dsa.rs:206: impl TryFrom<DsaKeypair> for dsa::SigningKey {
+ssh-key-fork-arti-0.6.7/src/private/dsa.rs:209:     fn try_from(key: DsaKeypair) -> Result<dsa::SigningKey> {
+ssh-key-fork-arti-0.6.7/src/private/dsa.rs:210:         dsa::SigningKey::try_from(&key)
+ssh-key-fork-arti-0.6.7/src/private/dsa.rs:215: impl TryFrom<&DsaKeypair> for dsa::SigningKey {
+ssh-key-fork-arti-0.6.7/src/private/dsa.rs:218:     fn try_from(key: &DsaKeypair) -> Result<dsa::SigningKey> {
+ssh-key-fork-arti-0.6.7/src/private/dsa.rs:219:         Ok(dsa::SigningKey::from_components(
+ssh-key-fork-arti-0.6.7/src/private/dsa.rs:227: impl TryFrom<dsa::SigningKey> for DsaKeypair {
+ssh-key-fork-arti-0.6.7/src/private/dsa.rs:230:     fn try_from(key: dsa::SigningKey) -> Result<DsaKeypair> {
+ssh-key-fork-arti-0.6.7/src/private/dsa.rs:236: impl TryFrom<&dsa::SigningKey> for DsaKeypair {
+ssh-key-fork-arti-0.6.7/src/private/dsa.rs:239:     fn try_from(key: &dsa::SigningKey) -> Result<DsaKeypair> {
+ssh-key-fork-arti-0.6.7/src/private/ecdsa.rs:15: pub struct EcdsaPrivateKey<const SIZE: usize> {
+ssh-key-fork-arti-0.6.7/src/private/ecdsa.rs:20: impl<const SIZE: usize> EcdsaPrivateKey<SIZE> {
+ssh-key-fork-arti-0.6.7/src/private/ecdsa.rs:37: impl<const SIZE: usize> Decode for EcdsaPrivateKey<SIZE> {
+ssh-key-fork-arti-0.6.7/src/private/ecdsa.rs:57: impl<const SIZE: usize> Encode for EcdsaPrivateKey<SIZE> {
+ssh-key-fork-arti-0.6.7/src/private/ecdsa.rs:76: impl<const SIZE: usize> AsRef<[u8; SIZE]> for EcdsaPrivateKey<SIZE> {
+ssh-key-fork-arti-0.6.7/src/private/ecdsa.rs:82: impl<const SIZE: usize> ConstantTimeEq for EcdsaPrivateKey<SIZE> {
+ssh-key-fork-arti-0.6.7/src/private/ecdsa.rs:88: impl<const SIZE: usize> PartialEq for EcdsaPrivateKey<SIZE> {
+ssh-key-fork-arti-0.6.7/src/private/ecdsa.rs:94: impl<const SIZE: usize> Eq for EcdsaPrivateKey<SIZE> {}
+ssh-key-fork-arti-0.6.7/src/private/ecdsa.rs:96: impl<const SIZE: usize> fmt::Debug for EcdsaPrivateKey<SIZE> {
+ssh-key-fork-arti-0.6.7/src/private/ecdsa.rs:98:         f.debug_struct("EcdsaPrivateKey").finish_non_exhaustive()
+ssh-key-fork-arti-0.6.7/src/private/ecdsa.rs:102: impl<const SIZE: usize> fmt::LowerHex for EcdsaPrivateKey<SIZE> {
+ssh-key-fork-arti-0.6.7/src/private/ecdsa.rs:111: impl<const SIZE: usize> fmt::UpperHex for EcdsaPrivateKey<SIZE> {
+ssh-key-fork-arti-0.6.7/src/private/ecdsa.rs:120: impl<const SIZE: usize> Drop for EcdsaPrivateKey<SIZE> {
+ssh-key-fork-arti-0.6.7/src/private/ecdsa.rs:127: impl From<p256::SecretKey> for EcdsaPrivateKey<32> {
+ssh-key-fork-arti-0.6.7/src/private/ecdsa.rs:128:     fn from(sk: p256::SecretKey) -> EcdsaPrivateKey<32> {
+ssh-key-fork-arti-0.6.7/src/private/ecdsa.rs:129:         EcdsaPrivateKey {
+ssh-key-fork-arti-0.6.7/src/private/ecdsa.rs:136: impl From<p384::SecretKey> for EcdsaPrivateKey<48> {
+ssh-key-fork-arti-0.6.7/src/private/ecdsa.rs:137:     fn from(sk: p384::SecretKey) -> EcdsaPrivateKey<48> {
+ssh-key-fork-arti-0.6.7/src/private/ecdsa.rs:138:         EcdsaPrivateKey {
+ssh-key-fork-arti-0.6.7/src/private/ecdsa.rs:145: impl From<p521::SecretKey> for EcdsaPrivateKey<66> {
+ssh-key-fork-arti-0.6.7/src/private/ecdsa.rs:146:     fn from(sk: p521::SecretKey) -> EcdsaPrivateKey<66> {
+ssh-key-fork-arti-0.6.7/src/private/ecdsa.rs:150:         EcdsaPrivateKey { bytes }
+ssh-key-fork-arti-0.6.7/src/private/ecdsa.rs:163:         private: EcdsaPrivateKey<32>,
+ssh-key-fork-arti-0.6.7/src/private/ecdsa.rs:172:         private: EcdsaPrivateKey<48>,
+ssh-key-fork-arti-0.6.7/src/private/ecdsa.rs:181:         private: EcdsaPrivateKey<66>,
+ssh-key-fork-arti-0.6.7/src/private/ecdsa.rs:293:                 let private = EcdsaPrivateKey::<32>::decode(reader)?;
+ssh-key-fork-arti-0.6.7/src/private/ecdsa.rs:297:                 let private = EcdsaPrivateKey::<48>::decode(reader)?;
+ssh-key-fork-arti-0.6.7/src/private/ecdsa.rs:301:                 let private = EcdsaPrivateKey::<66>::decode(reader)?;
+ssh-key-fork-arti-0.6.7/src/private/ed25519.rs:15: // TODO(tarcieri): use `ed25519::PrivateKey`? (doesn't exist yet)
+ssh-key-fork-arti-0.6.7/src/private/ed25519.rs:17: pub struct Ed25519PrivateKey([u8; Self::BYTE_SIZE]);
+ssh-key-fork-arti-0.6.7/src/private/ed25519.rs:19: impl Ed25519PrivateKey {
+ssh-key-fork-arti-0.6.7/src/private/ed25519.rs:42: impl AsRef<[u8; Self::BYTE_SIZE]> for Ed25519PrivateKey {
+ssh-key-fork-arti-0.6.7/src/private/ed25519.rs:48: impl ConstantTimeEq for Ed25519PrivateKey {
+ssh-key-fork-arti-0.6.7/src/private/ed25519.rs:54: impl Eq for Ed25519PrivateKey {}
+ssh-key-fork-arti-0.6.7/src/private/ed25519.rs:56: impl PartialEq for Ed25519PrivateKey {
+ssh-key-fork-arti-0.6.7/src/private/ed25519.rs:62: impl TryFrom<&[u8]> for Ed25519PrivateKey {
+ssh-key-fork-arti-0.6.7/src/private/ed25519.rs:66:         Ok(Ed25519PrivateKey::from_bytes(bytes.try_into()?))
+ssh-key-fork-arti-0.6.7/src/private/ed25519.rs:70: impl fmt::Debug for Ed25519PrivateKey {
+ssh-key-fork-arti-0.6.7/src/private/ed25519.rs:72:         f.debug_struct("Ed25519PrivateKey").finish_non_exhaustive()
+ssh-key-fork-arti-0.6.7/src/private/ed25519.rs:76: impl fmt::LowerHex for Ed25519PrivateKey {
+ssh-key-fork-arti-0.6.7/src/private/ed25519.rs:85: impl fmt::UpperHex for Ed25519PrivateKey {
+ssh-key-fork-arti-0.6.7/src/private/ed25519.rs:94: impl Drop for Ed25519PrivateKey {
+ssh-key-fork-arti-0.6.7/src/private/ed25519.rs:101: impl From<Ed25519PrivateKey> for ed25519_dalek::SigningKey {
+ssh-key-fork-arti-0.6.7/src/private/ed25519.rs:102:     fn from(key: Ed25519PrivateKey) -> ed25519_dalek::SigningKey {
+ssh-key-fork-arti-0.6.7/src/private/ed25519.rs:103:         ed25519_dalek::SigningKey::from(&key)
+ssh-key-fork-arti-0.6.7/src/private/ed25519.rs:108: impl From<&Ed25519PrivateKey> for ed25519_dalek::SigningKey {
+ssh-key-fork-arti-0.6.7/src/private/ed25519.rs:109:     fn from(key: &Ed25519PrivateKey) -> ed25519_dalek::SigningKey {
+ssh-key-fork-arti-0.6.7/src/private/ed25519.rs:110:         ed25519_dalek::SigningKey::from_bytes(key.as_ref())
+ssh-key-fork-arti-0.6.7/src/private/ed25519.rs:115: impl From<ed25519_dalek::SigningKey> for Ed25519PrivateKey {
+ssh-key-fork-arti-0.6.7/src/private/ed25519.rs:116:     fn from(key: ed25519_dalek::SigningKey) -> Ed25519PrivateKey {
+ssh-key-fork-arti-0.6.7/src/private/ed25519.rs:117:         Ed25519PrivateKey::from(&key)
+ssh-key-fork-arti-0.6.7/src/private/ed25519.rs:122: impl From<&ed25519_dalek::SigningKey> for Ed25519PrivateKey {
+ssh-key-fork-arti-0.6.7/src/private/ed25519.rs:123:     fn from(key: &ed25519_dalek::SigningKey) -> Ed25519PrivateKey {
+ssh-key-fork-arti-0.6.7/src/private/ed25519.rs:124:         Ed25519PrivateKey(key.to_bytes())
+ssh-key-fork-arti-0.6.7/src/private/ed25519.rs:129: impl From<Ed25519PrivateKey> for Ed25519PublicKey {
+ssh-key-fork-arti-0.6.7/src/private/ed25519.rs:130:     fn from(private: Ed25519PrivateKey) -> Ed25519PublicKey {
+ssh-key-fork-arti-0.6.7/src/private/ed25519.rs:136: impl From<&Ed25519PrivateKey> for Ed25519PublicKey {
+ssh-key-fork-arti-0.6.7/src/private/ed25519.rs:137:     fn from(private: &Ed25519PrivateKey) -> Ed25519PublicKey {
+ssh-key-fork-arti-0.6.7/src/private/ed25519.rs:138:         ed25519_dalek::SigningKey::from(private)
+ssh-key-fork-arti-0.6.7/src/private/ed25519.rs:151:     pub private: Ed25519PrivateKey,
+ssh-key-fork-arti-0.6.7/src/private/ed25519.rs:161:         Ed25519PrivateKey::random(rng).into()
+ssh-key-fork-arti-0.6.7/src/private/ed25519.rs:166:     pub fn from_seed(seed: &[u8; Ed25519PrivateKey::BYTE_SIZE]) -> Self {
+ssh-key-fork-arti-0.6.7/src/private/ed25519.rs:167:         Ed25519PrivateKey::from_bytes(seed).into()
+ssh-key-fork-arti-0.6.7/src/private/ed25519.rs:173:         let (priv_bytes, pub_bytes) = bytes.split_at(Ed25519PrivateKey::BYTE_SIZE);
+ssh-key-fork-arti-0.6.7/src/private/ed25519.rs:174:         let private = Ed25519PrivateKey::try_from(priv_bytes)?;
+ssh-key-fork-arti-0.6.7/src/private/ed25519.rs:274: impl From<Ed25519PrivateKey> for Ed25519Keypair {
+ssh-key-fork-arti-0.6.7/src/private/ed25519.rs:275:     fn from(private: Ed25519PrivateKey) -> Ed25519Keypair {
+ssh-key-fork-arti-0.6.7/src/private/ed25519.rs:276:         let secret = ed25519_dalek::SigningKey::from(&private);
+ssh-key-fork-arti-0.6.7/src/private/ed25519.rs:283: impl TryFrom<Ed25519Keypair> for ed25519_dalek::SigningKey {
+ssh-key-fork-arti-0.6.7/src/private/ed25519.rs:286:     fn try_from(key: Ed25519Keypair) -> Result<ed25519_dalek::SigningKey> {
+ssh-key-fork-arti-0.6.7/src/private/ed25519.rs:287:         ed25519_dalek::SigningKey::try_from(&key)
+ssh-key-fork-arti-0.6.7/src/private/ed25519.rs:292: impl TryFrom<&Ed25519Keypair> for ed25519_dalek::SigningKey {
+ssh-key-fork-arti-0.6.7/src/private/ed25519.rs:295:     fn try_from(key: &Ed25519Keypair) -> Result<ed25519_dalek::SigningKey> {
+ssh-key-fork-arti-0.6.7/src/private/ed25519.rs:296:         let signing_key = ed25519_dalek::SigningKey::from(&key.private);
+ssh-key-fork-arti-0.6.7/src/private/ed25519.rs:308: impl From<ed25519_dalek::SigningKey> for Ed25519Keypair {
+ssh-key-fork-arti-0.6.7/src/private/ed25519.rs:309:     fn from(key: ed25519_dalek::SigningKey) -> Ed25519Keypair {
+ssh-key-fork-arti-0.6.7/src/private/ed25519.rs:315: impl From<&ed25519_dalek::SigningKey> for Ed25519Keypair {
+ssh-key-fork-arti-0.6.7/src/private/ed25519.rs:316:     fn from(key: &ed25519_dalek::SigningKey) -> Ed25519Keypair {
+ssh-key-fork-arti-0.6.7/src/private/opaque.rs:22: /// The encoded representation of an `OpaquePrivateKeyBytes` consists of a 4-byte length prefix,
+ssh-key-fork-arti-0.6.7/src/private/opaque.rs:25: pub struct OpaquePrivateKeyBytes(Vec<u8>);
+ssh-key-fork-arti-0.6.7/src/private/opaque.rs:30: /// [`OpaquePublicKey`] followed by the encoded representation of its [`OpaquePrivateKeyBytes`].
+ssh-key-fork-arti-0.6.7/src/private/opaque.rs:34:     pub private: OpaquePrivateKeyBytes,
+ssh-key-fork-arti-0.6.7/src/private/opaque.rs:43: /// [`OpaquePrivateKeyBytes`].
+ssh-key-fork-arti-0.6.7/src/private/opaque.rs:46:     pub private: OpaquePrivateKeyBytes,
+ssh-key-fork-arti-0.6.7/src/private/opaque.rs:55:             private: OpaquePrivateKeyBytes(private_key),
+ssh-key-fork-arti-0.6.7/src/private/opaque.rs:80: impl Decode for OpaquePrivateKeyBytes {
+ssh-key-fork-arti-0.6.7/src/private/opaque.rs:96:         let private = OpaquePrivateKeyBytes::decode(reader)?;
+ssh-key-fork-arti-0.6.7/src/private/opaque.rs:121: impl Encode for OpaquePrivateKeyBytes {
+ssh-key-fork-arti-0.6.7/src/private/opaque.rs:145: impl ConstantTimeEq for OpaquePrivateKeyBytes {
+ssh-key-fork-arti-0.6.7/src/private/opaque.rs:151: impl AsRef<[u8]> for OpaquePrivateKeyBytes {
+ssh-key-fork-arti-0.6.7/src/private/rsa.rs:12:     rsa::{pkcs1v15, traits::PrivateKeyParts},
+ssh-key-fork-arti-0.6.7/src/private/rsa.rs:18: pub struct RsaPrivateKey {
+ssh-key-fork-arti-0.6.7/src/private/rsa.rs:32: impl ConstantTimeEq for RsaPrivateKey {
+ssh-key-fork-arti-0.6.7/src/private/rsa.rs:41: impl Eq for RsaPrivateKey {}
+ssh-key-fork-arti-0.6.7/src/private/rsa.rs:43: impl PartialEq for RsaPrivateKey {
+ssh-key-fork-arti-0.6.7/src/private/rsa.rs:49: impl Decode for RsaPrivateKey {
+ssh-key-fork-arti-0.6.7/src/private/rsa.rs:61: impl Encode for RsaPrivateKey {
+ssh-key-fork-arti-0.6.7/src/private/rsa.rs:81: impl Drop for RsaPrivateKey {
+ssh-key-fork-arti-0.6.7/src/private/rsa.rs:97:     pub private: RsaPrivateKey,
+ssh-key-fork-arti-0.6.7/src/private/rsa.rs:104:         rsa::RsaPrivateKey::new(rng, bit_size)?.try_into()
+ssh-key-fork-arti-0.6.7/src/private/rsa.rs:129:         let private = RsaPrivateKey::decode(reader)?;
+ssh-key-fork-arti-0.6.7/src/private/rsa.rs:172: impl TryFrom<RsaKeypair> for rsa::RsaPrivateKey {
+ssh-key-fork-arti-0.6.7/src/private/rsa.rs:175:     fn try_from(key: RsaKeypair) -> Result<rsa::RsaPrivateKey> {
+ssh-key-fork-arti-0.6.7/src/private/rsa.rs:176:         rsa::RsaPrivateKey::try_from(&key)
+ssh-key-fork-arti-0.6.7/src/private/rsa.rs:181: impl TryFrom<&RsaKeypair> for rsa::RsaPrivateKey {
+ssh-key-fork-arti-0.6.7/src/private/rsa.rs:184:     fn try_from(key: &RsaKeypair) -> Result<rsa::RsaPrivateKey> {
+ssh-key-fork-arti-0.6.7/src/private/rsa.rs:185:         let ret = rsa::RsaPrivateKey::from_components(
+ssh-key-fork-arti-0.6.7/src/private/rsa.rs:200: impl TryFrom<rsa::RsaPrivateKey> for RsaKeypair {
+ssh-key-fork-arti-0.6.7/src/private/rsa.rs:203:     fn try_from(key: rsa::RsaPrivateKey) -> Result<RsaKeypair> {
+ssh-key-fork-arti-0.6.7/src/private/rsa.rs:209: impl TryFrom<&rsa::RsaPrivateKey> for RsaKeypair {
+ssh-key-fork-arti-0.6.7/src/private/rsa.rs:212:     fn try_from(key: &rsa::RsaPrivateKey) -> Result<RsaKeypair> {
+ssh-key-fork-arti-0.6.7/src/private/rsa.rs:224:         let private = RsaPrivateKey {
+ssh-key-fork-arti-0.6.7/src/private/rsa.rs:236: impl<D> TryFrom<&RsaKeypair> for pkcs1v15::SigningKey<D>
+ssh-key-fork-arti-0.6.7/src/private/rsa.rs:242:     fn try_from(keypair: &RsaKeypair) -> Result<pkcs1v15::SigningKey<D>> {
+ssh-key-fork-arti-0.6.7/src/private/rsa.rs:243:         Ok(pkcs1v15::SigningKey::new(keypair.try_into()?))
+
+## 2. RSA private-key operations (pub fn) and their callers in the Arti closure (arti-client, tor-*, arti-* 0.46.0, src/, cfg(test) modules marked)
+
+op                                                        | defined at                               | non-test callers in the closure                      | compiled with our features?
+----------------------------------------------------------|------------------------------------------|------------------------------------------------------|----------------------------
+tor_llcrypto::pk::rsa::KeyPair::sign (PKCS#1 v1.5 sign)   | tor-llcrypto src/pk/rsa.rs:261           | EncodedRsaCrosscert::encode_and_sign, CrossCert::new  | fn yes; callers below
+tor_llcrypto::pk::rsa::KeyPair::generate                  | tor-llcrypto src/pk/rsa.rs:227           | Keygen for rsa::KeyPair (tor-key-forge traits.rs:347), define_rsa_keypair! (macros.rs:524) | see Keygen
+tor_cert::rsa::EncodedRsaCrosscert::encode_and_sign       | tor-cert src/rsa/encode.rs:33            | tor-proto src/relay/channel.rs (only)                 | NO: tor-proto lib.rs:72 `#[cfg(feature = "relay")] pub mod relay;`
+tor_netdoc::doc::authcert::CrossCert::new                 | tor-netdoc src/doc/authcert.rs:536       | AuthCert::new_base (authcert.rs:702)                  | callers of new_base: authcert.rs:1226 (cfg(test) module from :742) only
+tor_netdoc::doc::authcert::AuthCert::encode_sign          | tor-netdoc src/doc/authcert.rs:721       | none (authcert.rs:1230 is in the cfg(test) module)    | no caller
+Keygen for rsa::KeyPair / define_rsa_keypair!             | tor-key-forge traits.rs:342, macros.rs:412 | KeyMgr::generate/get_or_generate::<K>; the only K in lib code: arti-client client.rs:416, :445 `generate::<HsClientDescEncKeypair>` (X25519); define_rsa_keypair! is used only in tor-key-forge macros.rs:571 (cfg(test)) and tor-proto relay tests | no RSA K instantiated
+tor_key_forge ssh::convert_rsa_kp (key decode, no op)     | tor-key-forge src/ssh.rs:167             | keystore parse of an entry of KeyType::RsaKeypair; no lib code requests an RSA key type (see Keygen row) | decode only, not a private-key operation
+ssh_key RsaKeypair::random / Signer<Signature> for RsaKeypair | ssh-key-fork-arti private.rs:499, signature.rs:666 | none in arti-client/tor-*/arti-* (no PrivateKey::random, no try_sign on ssh keys) | no caller
+RSA decryption (Pkcs1v15Encrypt, Oaep, decrypt*)          | —                                        | no occurrence in any tor-*/arti-* 0.46.0 src           | —
+
+Callers search (python3 -I walk over all tor-*/arti-* 0.46.0 and ssh-key-fork-arti 0.6.7 src; patterns
+encode_and_sign( | CrossCert::new( | new_base( | .encode_sign( | rd_encode_sign( | rsa::KeyPair::generate | RsaKeypair::random |
+define_rsa_keypair | convert_rsa_kp( | get_or_generate | .generate::< | PrivateKey::random | try_sign( ) — every encode_and_sign hit
+outside tor-proto/relay is an Ed25519 cert builder (tor-netdoc hsdesc/build.rs:276, build/inner.rs:207/250, types/misc.rs:1654/1762/1853).
+RSA public-key use in the client: tor_llcrypto::pk::rsa::PublicKey::verify (rsa.rs:282) for directory/authority/relay signatures.
+SecMPro holds no RSA key; secmp-* crates do not depend on tor-llcrypto/rsa directly (G-04 allowlist).
+
+reachable_private_key_ops=none

@@ -26,6 +26,47 @@ pub(crate) const UNSAFE_DENY_ONLY: &[&str] = &["secmp-ui"];
 /// Crates whose normal (shipped) dependency closure must have zero cargo-vet exemptions (docs/06 §3, ADR-036).
 pub(crate) const ZERO_EXEMPTION_ROOTS: &[&str] = &["secmp-crypto", "secmp-proto"];
 
+/// The normal (shipped) direct dependencies each of these crates may have, by package name (M5 review F-7, R-126,
+/// TEST-SPEC-M6 G-04): a direct dependency enters only with its ADR line and an entry here. Phase A (M6): workspace
+/// crates only, plus the testkit's existing normal `serde_json` (ADR-037). Phase B widens the rows exactly to the
+/// ADR-051 Part 2 table (as amended by ADR-051 Amendment 1): `secmp-transport` gains `arti-client`, `rustls`,
+/// `tokio-rustls`, `tokio`, `aws-lc-rs`; `secmp-relay` gains `rustls`, `aws-lc-rs` (optional, feature `direct-tls`,
+/// off by default — the default build stays std-only, ADR-049); `secmp-client-core` and `secmp-testkit` gain `tokio`.
+pub(crate) const NORMAL_DEPENDENCY_ALLOW: &[(&str, &[&str])] = &[
+    (
+        "secmp-relay",
+        &["aws-lc-rs", "rustls", "secmp-crypto", "secmp-proto"],
+    ),
+    (
+        "secmp-transport",
+        &[
+            "arti-client",
+            "aws-lc-rs",
+            "rustls",
+            "secmp-crypto",
+            "secmp-proto",
+            "tokio",
+            "tokio-rustls",
+        ],
+    ),
+    (
+        "secmp-client-core",
+        &["secmp-crypto", "secmp-proto", "secmp-transport", "tokio"],
+    ),
+    (
+        "secmp-testkit",
+        &[
+            "secmp-client-core",
+            "secmp-crypto",
+            "secmp-proto",
+            "secmp-relay",
+            "secmp-transport",
+            "serde_json",
+            "tokio",
+        ],
+    ),
+];
+
 /// The targets over which that closure is taken and united: the `[graph] targets` of `deny.toml` (the two
 /// shipped targets and the development host, ADR-029).
 pub(crate) const VET_CLOSURE_TARGETS: &[&str] = &[
@@ -40,16 +81,42 @@ pub(crate) const BINARIES: &[&str] = &["secmp-relay", "secmp-cli", "secmp-ui"];
 /// `RustSec` advisories that `cargo audit` (docs/06 §5 step 3) ignores, as (id, reason). An entry needs an ADR
 /// (`deny.toml`: "An advisory may only be ignored with an ADR and a reason") and is re-triaged at every release.
 /// The gate prints every ignored id in its result line.
-pub(crate) const AUDIT_IGNORES: &[(&str, &str)] = &[(
-    "RUSTSEC-2026-0173",
-    "ADR-037: proc-macro-error2 (unmaintained) is in Cargo.lock only as a cfg(hax) dependency of hax-lib-macros \
-     and is never compiled for any target; cargo deny, which evaluates the per-target graph, does not report it",
+pub(crate) const AUDIT_IGNORES: &[(&str, &str)] = &[
+    (
+        "RUSTSEC-2026-0173",
+        "ADR-037: proc-macro-error2 (unmaintained) is in Cargo.lock only as a cfg(hax) dependency of hax-lib-macros \
+         and is never compiled for any target; cargo deny, which evaluates the per-target graph, does not report it",
+    ),
+    (
+        "RUSTSEC-2023-0071",
+        "ADR-051 Am. 1: rsa 0.9.10 Marvin — no RSA private-key operation reachable from the selected client paths (call-site check, tor-llcrypto src/pk/rsa.rs)",
+    ),
+    (
+        "RUSTSEC-2024-0436",
+        "ADR-051 Am. 1: paste (unmaintained proc-macro) is compile-time only",
+    ),
+    (
+        "RUSTSEC-2025-0141",
+        "ADR-051 Am. 1: bincode 2.0.1 (unmaintained) is an optional dependency of typed-index-collections; \
+         lock-only, never compiled (cargo tree -i prints nothing); cargo deny does not report it",
+    ),
+];
+
+/// Cooldown exceptions (ADR-015 Amendment 2) as (crate, version, until = publish date + 7 days, advisory): a version
+/// younger than 7 days that closes a RUSTSEC advisory on a pinned crate, kept until the cooldown it bridges is over; an
+/// entry past its `until` date is itself a cooldown finding. The delta diff is in `docs/reviews/MNN-evidence/vet-deltas/`.
+pub(crate) const COOLDOWN_EXCEPTIONS: &[(&str, &str, &str, &str)] = &[(
+    "rustls",
+    "0.23.46",
+    "2026-10-21",
+    "RUSTSEC-2026-0346/-0347/-0348/-0349 (ADR-015 Am. 2)",
 )];
 
 /// Packages exposing the `kat` feature (docs/06 §5 step 5): external KATs, differential tests, vector checks; M3:
 /// `secmp-proto` (derandomised TR entry points for the vectors and the ct bench, ADR-042); M5: `secmp-relay` (the
 /// store snapshot and digest, the live-buffer count and the event capture of its test crate `relay`).
 pub(crate) const KAT_PACKAGES: &[&str] = &[
+    "secmp-client-core",
     "secmp-crypto",
     "secmp-proto",
     "secmp-relay",
@@ -149,6 +216,13 @@ pub(crate) const CT_TARGETS: &[&str] = &[
     "link_same_content_control",
 ];
 
+/// ADR-042 Amendment 5 (WEISUNG M6-CI-13): the informative targets of the ct bench. The report carries them in
+/// `informative` (not in `results`), each measured twice, with no verdict; they never fail the gate. The gate checks
+/// that exactly these names are present and prints Δ and t per crop.
+/// `tr_decrypt_nonce_dependence` keeps the public header-nonce micro-timing of §7.4 Decrypt visible (CT-DIAG-3: up to
+/// 65 ticks, either sign).
+pub(crate) const CT_INFORMATIVE_TARGETS: &[&str] = &["tr_decrypt_nonce_dependence"];
+
 /// The positive control among [`CT_TARGETS`].
 pub(crate) const CT_POSITIVE_CONTROL: &str = "control_variable_time_compare";
 
@@ -220,6 +294,7 @@ pub(crate) const TR_PERF_KINDS: &[&str] = &["chain", "step"];
 /// sealed arbitrary plaintexts with `LINK_PUT`/`CONT` interleavings (`relay_link_session`, FZ-08).
 pub(crate) const FUZZ_TARGETS: &[&str] = &[
     "caead_open",
+    "client_pipeline_responses",
     "ed25519_verify",
     "hx_accept_raw",
     "hx_accept_structured",
@@ -245,6 +320,9 @@ pub(crate) const FUZZ_TARGETS: &[&str] = &[
     "q_response_decode",
     "relay_executor",
     "relay_link_session",
+    "relayref_onion_to_hsid",
+    "scheduler_event_sequence",
+    "tls_pin_verifier",
     "tr_decrypt",
     "tr_state",
     "x25519_dh",
@@ -259,7 +337,14 @@ pub(crate) const FUZZ_TARGETS: &[&str] = &[
 /// tokens and seals (`fuzz/fuzz_targets/relay_*.rs` headers), a layout no frozen suite has — so they rely on their
 /// tracked seeds (`fuzz/corpus/relay_executor/`, `fuzz/corpus/relay_link_session/`, M4 C-6).
 #[cfg(test)]
-pub(crate) const FUZZ_TRACKED_ONLY: &[&str] = &["relay_executor", "relay_link_session"];
+pub(crate) const FUZZ_TRACKED_ONLY: &[&str] = &[
+    "client_pipeline_responses",
+    "relay_executor",
+    "relay_link_session",
+    "relayref_onion_to_hsid",
+    "scheduler_event_sequence",
+    "tls_pin_verifier",
+];
 
 /// Seconds per fuzz target of the `fuzz` gate (ci-full step 6, docs/06 §4: "≈2 min per target on every PR").
 pub(crate) const FUZZ_SMOKE_SECONDS: u64 = 120;
@@ -272,9 +357,27 @@ pub(crate) const FUZZ_SMOKE_SECONDS: u64 = 120;
 pub(crate) const FUZZ_INPUT_TIMEOUT_SECONDS: u64 = 60;
 
 /// Seconds of the scheduled campaign (`.github/workflows/fuzz-nightly.yml`, docs/06 §4 "nightly 4 h"; M2 review F2),
-/// shared equally by the fuzz targets: each gets `FUZZ_NIGHTLY_SECONDS / FUZZ_TARGETS.len()` seconds (M2: 12
-/// targets, 1200 s each; M3: 14 targets, 1028 s each).
+/// shared by the fuzz targets: each of [`FUZZ_DEEP_TARGETS`] gets [`FUZZ_DEEP_NIGHTLY_SECONDS`], each of the others
+/// `(FUZZ_NIGHTLY_SECONDS - deep total) / (FUZZ_TARGETS.len() - deep count)` seconds (M2: 12 targets, 1200 s each;
+/// M3: 14 targets, 1028 s each; M5: 29 targets, 496 s each; M6: 27 targets 266 s, 2 targets 3 600 s).
 pub(crate) const FUZZ_NIGHTLY_SECONDS: u64 = 14_400;
+
+/// Files (workspace-relative) that may contain an `#[ignore]` attribute because an ADR allows it (CLAUDE.md §6: "never
+/// mark a test `#[ignore]` without an ADR"; M5 review R-155, TEST-SPEC-M6 G-10). Empty; checked by the test
+/// `no_ignore_without_adr`.
+#[cfg(test)]
+pub(crate) const IGNORE_ADR: &[&str] = &[];
+
+/// The executor fuzzers of M5 (TEST-SPEC-M5 FZ-07 `relay_executor`, FZ-08 `relay_link_session`; M5 review F-8, R-127,
+/// TEST-SPEC-M6 G-05): each input runs a relay and a handshake, so a run is slow and libFuzzer's default length control
+/// kept `lim` pinned at the seed length (532 B and 44 B of 4 321 B and 69 425 B). These targets run with
+/// `-len_control=0` (`lim` = `-max_len` from the first run on) and get [`FUZZ_DEEP_NIGHTLY_SECONDS`] each of the
+/// nightly campaign; the other targets share the rest equally. The step's evidence lists the runs and `lim` per target.
+pub(crate) const FUZZ_DEEP_TARGETS: &[&str] = &["relay_executor", "relay_link_session"];
+
+/// Seconds of the nightly campaign that each of [`FUZZ_DEEP_TARGETS`] gets (the rest of [`FUZZ_NIGHTLY_SECONDS`] is
+/// shared equally by the other targets).
+pub(crate) const FUZZ_DEEP_NIGHTLY_SECONDS: u64 = 3_600;
 
 /// libFuzzer `-max_len` per fuzz target (M2 review C4: without it libFuzzer caps inputs at the largest corpus file,
 /// 5 397 B for `proto_cell` after `cargo fuzz cmin`). Each value is the target's largest valid input plus one byte
@@ -320,6 +423,7 @@ pub(crate) const FUZZ_NIGHTLY_SECONDS: u64 = 14_400;
 ///   length, a 4335-byte plaintext) = 69425.
 pub(crate) const FUZZ_MAX_LEN: &[(&str, usize)] = &[
     ("caead_open", 12_618),
+    ("client_pipeline_responses", 34_702),
     ("ed25519_verify", 4_243),
     ("hx_accept_raw", 49_166),
     ("hx_accept_structured", 12_020),
@@ -345,14 +449,182 @@ pub(crate) const FUZZ_MAX_LEN: &[(&str, usize)] = &[
     ("q_response_decode", 4_338),
     ("relay_executor", 4_322),
     ("relay_link_session", 69_426),
+    ("scheduler_event_sequence", 970),
+    // FZ-02 (M6 Phase B): the count byte and an end-entity DER of at most 8192 B (an ML-DSA-65 certificate ≈ 5.5 KB)
+    ("tls_pin_verifier", 8_194),
+    // FZ-03 (M6 Phase B): a decoded onion address is exactly 35 bytes (spec §5.3)
+    ("relayref_onion_to_hsid", 36),
     ("tr_decrypt", 4_098),
     ("tr_state", 38_587),
     ("x25519_dh", 97),
 ];
 
 /// Packages under the mutation gate (docs/06 §4, §5 step 8); M5: `secmp-relay`, the relay security kernel (ADR-047
-/// Amendment 3, OPEN-M5-12).
-pub(crate) const MUTANT_PACKAGES: &[&str] = &["secmp-crypto", "secmp-proto", "secmp-relay"];
+/// Amendment 3, OPEN-M5-12); M6: `secmp-client-core` (the constant-rate scheduler) and `secmp-transport` (ADR-047
+/// Amendment 4, OPEN-M6-23).
+pub(crate) const MUTANT_PACKAGES: &[&str] = &[
+    "secmp-crypto",
+    "secmp-proto",
+    "secmp-relay",
+    "secmp-client-core",
+    "secmp-transport",
+];
+
+/// ADR-047 Amendment 4: the packages of [`MUTANT_PACKAGES`] whose tests live in `secmp-testkit/tests/harness` (they need
+/// the testkit's in-process relay and virtual driver; `secmp-client-core` has 10 unit tests of its own,
+/// `secmp-transport` 2). The gate mutates them in a second cargo-mutants run per shard whose every mutant is tested by
+/// the tests of [`MUTANT_HARNESS_TEST_PACKAGES`] with feature `harness`.
+pub(crate) const MUTANT_HARNESS_PACKAGES: &[&str] = &["secmp-client-core", "secmp-transport"];
+
+/// ADR-047 Amendment 4: the per-mutant test timeout of the second run, in seconds (cargo-mutants derives its automatic
+/// timeout from a baseline that runs only the mutated package's own tests: 2 tests, 0 s, i.e. 20 s, and every mutant
+/// timed out on the harness suite in the local smoke run of 2026-10-15). 15 min: the per-mutant suite (without
+/// `MUTANT_HARNESS_SKIP_TESTS`) took about 10 s on 32 cores; the margin covers the 4-core runner with three mutants in
+/// parallel.
+pub(crate) const MUTANTS_HARNESS_TEST_TIMEOUT_SECONDS: u64 = 900;
+
+/// ADR-047 Amendment 4, with the rule of Amendment 1 (5): the long tests of the testkit harness left out of the
+/// per-mutant run of the second run, as (name, reason with the nextest time on the 32-core container, 2026-10-15). The
+/// `kat` and `nextest` steps run them on every PR; together they take 20–226 s each, and the per-mutant suite without
+/// them about 10 s.
+pub(crate) const MUTANT_HARNESS_SKIP_TESTS: &[(&str, &str)] = &[
+    (
+        "activity_independence_balanced_virtual",
+        "AI-02, 64 traces x 6 h virtual: 226 s",
+    ),
+    (
+        "activity_independence_strict_virtual",
+        "AI-01, 64 traces x 6 h virtual: 203 s",
+    ),
+    (
+        "activity_independence_lowbw_virtual",
+        "AI-03, 64 traces x 6 h virtual: 184 s",
+    ),
+    (
+        "bandwidth_model_matches_capture",
+        "MR-01 bandwidth model over a long capture: 159 s",
+    ),
+    (
+        "pool_queue_never_idles_out",
+        "QP row, long virtual run: 88 s",
+    ),
+    ("activity_independence_both_directions", "AI-05: 62 s"),
+    ("activity_independence_when_receiving", "AI-04: 60 s"),
+    (
+        "drain_after_offline_virtual",
+        "MR-02 drain after offline: 52 s",
+    ),
+    (
+        "ai_asymmetric_prepare_cost_does_not_move_emission",
+        "AI asymmetric cost: 24 s",
+    ),
+    ("prop_schedule_independent_of_activity", "property, 21 s"),
+    // the tokio repeats of AI-01…AI-06 (M6 Phase B P2), nextest on the 32-core container, all six in parallel
+    (
+        "ai01_strict_tokio",
+        "AI-01 over the tokio driver, 16 traces x 6 h: 49 s",
+    ),
+    (
+        "ai02_balanced_tokio",
+        "AI-02 over the tokio driver, 16 traces x 6 h: 31 s",
+    ),
+    (
+        "ai03_lowbw_tokio",
+        "AI-03 over the tokio driver, 16 traces x 6 h: 25 s",
+    ),
+    (
+        "ai04_when_receiving_tokio",
+        "AI-04 over the tokio driver, 8 traces x 6 h: 40 s",
+    ),
+    (
+        "ai05_timing_draws_tokio",
+        "AI-05 over the tokio driver, 4 traces x 6 h: 39 s",
+    ),
+    (
+        "ai06_both_directions_tokio",
+        "AI-06 over the tokio driver, 8 traces x 6 h: 43 s",
+    ),
+    (
+        "ai07_fault_paired_tokio",
+        "AI-07 over the tokio driver, fault-paired, 4 traces x 1 min: 5 s",
+    ),
+];
+
+/// WEISUNG M6-B-3 §1: the long, host-independent simulations the `kat` step leaves out when it runs on Windows
+/// (`windows-native`, timeout 90 min): the activity-independence runs AI-01…AI-06 on the virtual and the tokio driver,
+/// the measurement runs MR-01/MR-02 and the pool run — as (test name, runtime note). They run on Linux in `kat` and
+/// `coverage` on every PR; Windows keeps every unit, KAT, vector and harness test besides these. Runtimes on the
+/// `windows-native` runner from PR run 38724110285 (the tokio repeats are measured on the 32-core container).
+pub(crate) const WINDOWS_SKIP_TESTS: &[(&str, &str)] = &[
+    (
+        "activity_independence_strict_virtual",
+        "AI-01: 2034 s on windows-native",
+    ),
+    (
+        "activity_independence_balanced_virtual",
+        "AI-02: 2255 s on windows-native",
+    ),
+    (
+        "activity_independence_lowbw_virtual",
+        "AI-03: 1620 s on windows-native",
+    ),
+    (
+        "activity_independence_when_receiving",
+        "AI-04: 385 s on windows-native",
+    ),
+    (
+        "timing_draws_independent_of_activity",
+        "AI-05: 588 s on windows-native",
+    ),
+    (
+        "activity_independence_both_directions",
+        "AI-06: 247 s on windows-native",
+    ),
+    (
+        "ai_asymmetric_prepare_cost_does_not_move_emission",
+        "AI (asymmetric cost): 155 s on windows-native",
+    ),
+    (
+        "bandwidth_model_matches_capture",
+        "MR-01: 511 s on windows-native",
+    ),
+    (
+        "drain_after_offline_virtual",
+        "MR-02: 172 s on windows-native",
+    ),
+    (
+        "pool_queue_never_idles_out",
+        "pool run: 346 s on windows-native",
+    ),
+    (
+        "ai01_strict_tokio",
+        "AI-01 over tokio: 49 s locally (32 cores), not yet measured on windows-native",
+    ),
+    (
+        "ai02_balanced_tokio",
+        "AI-02 over tokio: 31 s locally, not yet measured on windows-native",
+    ),
+    (
+        "ai03_lowbw_tokio",
+        "AI-03 over tokio: 25 s locally, not yet measured on windows-native",
+    ),
+    (
+        "ai04_when_receiving_tokio",
+        "AI-04 over tokio: 40 s locally, not yet measured on windows-native",
+    ),
+    (
+        "ai05_timing_draws_tokio",
+        "AI-05 over tokio: 39 s locally, not yet measured on windows-native",
+    ),
+    (
+        "ai06_both_directions_tokio",
+        "AI-06 over tokio: 43 s locally, not yet measured on windows-native",
+    ),
+];
+
+/// ADR-047 Amendment 4: the packages whose tests the second run executes for every mutant (`--test-package`).
+pub(crate) const MUTANT_HARNESS_TEST_PACKAGES: &[&str] =
+    &["secmp-client-core", "secmp-transport", "secmp-testkit"];
 
 /// ADR-047 Amendment 1 (2): the shards of the mutation gate in CI — the matrix job `mutants-shard` of `ci.yml` runs
 /// `cargo xtask step --strict mutants --shard K/8` for K = 0…7, and the job `mutants` (`step mutants-merge`) merges
@@ -395,6 +667,11 @@ pub(crate) const MUTANTS_STEP_TIMEOUT_SECONDS: u64 = 16_800;
 pub(crate) const MUTANT_EXCLUDE_FILES: &[&str] = &[
     "crates/secmp-proto/src/kani_proofs.rs",
     "crates/secmp-relay/src/kani_proofs.rs",
+    // M6 (ADR-047 Am. 4): client-core's harnesses (K-01…K-07); PR run 38724110285 shards 1 and 5 mutated it (21 survivors)
+    "crates/secmp-client-core/src/kani_proofs.rs",
+    // M6 Phase B (ADR-047 Am. 4, BRIEF M6-B §2.5): the Arti glue of the Tor provider, which only a live Tor network
+    // exercises (client creation, bootstrap, the onion connect; owner-operated TOR-10/X-10)
+    "crates/secmp-transport/src/tor/arti.rs",
 ];
 /// Mutant names (regex, `cargo mutants --exclude-re`) excluded: `kani_stubs::` for the reason above; and (M3) the
 /// `secmp-proto` code compiled only with `secmp-proto`'s own feature `kat` — the vector, test and bench tooling of
@@ -682,7 +959,7 @@ pub(crate) const MIRI_UNSUPPORTED: &[(&str, &str, &str)] = &[
 
 /// Packages containing Kani harnesses (docs/06 §4). M2: `secmp-proto` (`src/kani_proofs.rs`). M5 (Phase B):
 /// `secmp-relay` (`src/kani_proofs.rs`, TEST-SPEC-M5 K-05…K-07).
-pub(crate) const KANI_PACKAGES: &[&str] = &["secmp-proto", "secmp-relay"];
+pub(crate) const KANI_PACKAGES: &[&str] = &["secmp-client-core", "secmp-proto", "secmp-relay"];
 
 /// The Kani harnesses (M2 review C5): the gate refuses a run unless Kani reports exactly these as successfully
 /// verified ("Complete - N successfully verified harnesses, 0 failures, N total." with N = this count), so a
@@ -695,12 +972,16 @@ pub(crate) const KANI_HARNESSES: &[&str] = &[
     "kani_proofs::header_v1",
     "kani_proofs::header_v1_reencodes",
     "kani_proofs::kani_accept_opk_delete_only_on_success",
+    "kani_proofs::kani_backoff_cap",
+    "kani_proofs::kani_balanced_rr_selects_due_or_ping",
     "kani_proofs::kani_cell_plaintext_decode_total",
     "kani_proofs::kani_cmd_seq_monotone",
     "kani_proofs::kani_commit_accept_atomic",
     "kani_proofs::kani_cont_assembly",
+    "kani_proofs::kani_evicted_range",
     "kani_proofs::kani_executor_response_count",
     "kani_proofs::kani_frame_pad_total",
+    "kani_proofs::kani_in_flight_bound",
     "kani_proofs::kani_hx_chunk_bounds",
     "kani_proofs::kani_hx_grouping",
     "kani_proofs::kani_link_counter_checked_add",
@@ -708,6 +989,9 @@ pub(crate) const KANI_HARNESSES: &[&str] = &[
     "kani_proofs::kani_outer_unpad_total",
     "kani_proofs::kani_q_frame_plaintext_exact_fit",
     "kani_proofs::kani_queue_eviction_bounds",
+    "kani_proofs::kani_rate_bound_integer_form",
+    "kani_proofs::kani_tick_time_checked",
+    "kani_proofs::kani_uniform_draw_in_range",
     "kani_proofs::padding",
     "kani_proofs::request_cont",
     "kani_proofs::request_fetch",
@@ -731,15 +1015,22 @@ pub(crate) const KANI_HARNESSES: &[&str] = &[
 /// instead of changing the count silently.
 pub(crate) const KANI_COVERS: &[(&str, usize)] = &[
     ("kani_proofs::kani_accept_opk_delete_only_on_success", 1),
+    ("kani_proofs::kani_backoff_cap", 2),
+    ("kani_proofs::kani_balanced_rr_selects_due_or_ping", 2),
     ("kani_proofs::kani_cmd_seq_monotone", 5),
     ("kani_proofs::kani_commit_accept_atomic", 1),
     ("kani_proofs::kani_cont_assembly", 1),
+    ("kani_proofs::kani_evicted_range", 2),
     ("kani_proofs::kani_executor_response_count", 6),
     ("kani_proofs::kani_frame_pad_total", 2),
+    ("kani_proofs::kani_in_flight_bound", 1),
     ("kani_proofs::kani_link_counter_checked_add", 3),
     ("kani_proofs::kani_link_counter_strict_plus_one", 2),
     ("kani_proofs::kani_q_frame_plaintext_exact_fit", 2),
     ("kani_proofs::kani_queue_eviction_bounds", 3),
+    ("kani_proofs::kani_rate_bound_integer_form", 2),
+    ("kani_proofs::kani_tick_time_checked", 2),
+    ("kani_proofs::kani_uniform_draw_in_range", 1),
 ];
 
 /// The SecMP vector suites (`vectors/SCHEMA.md` §3): frozen as `vectors/<suite>.json`, reference files
@@ -1207,9 +1498,11 @@ pub(crate) const SYSTEMD_UNITS: &[&str] = &[];
 /// Maximum systemd exposure level (docs/05 §4, docs/06 §5 step 14).
 pub(crate) const SYSTEMD_MAX_EXPOSURE: f64 = 2.0;
 
-/// Line-coverage thresholds in percent (docs/06 §4): `secmp-crypto` and `secmp-proto` ≥ 90, every other
-/// shipped crate ≥ 80. `xtask` is build tooling and not measured.
-pub(crate) const COVERAGE_STRICT: &[&str] = &["secmp-crypto", "secmp-proto"];
+/// Line-coverage thresholds in percent (docs/06 §4): `secmp-crypto` and `secmp-proto` ≥ 90, since M6 also
+/// `secmp-client-core` (the constant-rate scheduler, OPEN-M6-23, TEST-SPEC-M6 COV-01); every other shipped crate ≥ 80,
+/// `secmp-transport` with its Arti glue counted (COV-02; an exclusion list needs the reviewer's written approval). `xtask`
+/// is build tooling and not measured.
+pub(crate) const COVERAGE_STRICT: &[&str] = &["secmp-crypto", "secmp-proto", "secmp-client-core"];
 pub(crate) const COVERAGE_STRICT_MIN: f64 = 90.0;
 pub(crate) const COVERAGE_MIN: f64 = 80.0;
 
@@ -1220,11 +1513,18 @@ pub(crate) const COVERAGE_MIN: f64 = 80.0;
 /// (`secmp-client-core::clock`, the relay's hour bucket, `secmp-cli` output timestamps); none exist in M0.
 /// The docs/06 §2 test allowance (`#![allow(clippy::unwrap_used, clippy::expect_used)]` at the top of a file
 /// under `tests/`, `fuzz/` or `crates/secmp-testkit/`) is handled by rule and needs no entry.
-pub(crate) const LINT_ALLOWANCES: &[(&str, &str, &str)] = &[(
-    "crates/secmp-relay/src/clock.rs",
-    "clippy::disallowed_methods",
-    "docs/06 §2: the relay's hour-bucket function `wall_clock_unix_secs`, the crate's one `SystemTime::now` site (M5, test RL-11)",
-)];
+pub(crate) const LINT_ALLOWANCES: &[(&str, &str, &str)] = &[
+    (
+        "crates/secmp-relay/src/clock.rs",
+        "clippy::disallowed_methods",
+        "docs/06 §2: the relay's hour-bucket function `wall_clock_unix_secs`, the crate's one `SystemTime::now` site (M5, test RL-11)",
+    ),
+    (
+        "crates/secmp-client-core/src/clock.rs",
+        "clippy::disallowed_methods",
+        "docs/06 §2: `SystemClock::unix_secs`, the client's one `SystemTime::now` site (M6, test AD-11)",
+    ),
+];
 
 /// The only lints the docs/06 §2 test-file allowance may relax.
 pub(crate) const TEST_FILE_ALLOWANCE: &[&str] = &["clippy::unwrap_used", "clippy::expect_used"];
@@ -1253,6 +1553,16 @@ pub(crate) const RELAY_TRACE_ALLOW: &[&str] = &[
 /// The workflow that holds the required checks of the `main-protection` ruleset (docs/06 §4).
 pub(crate) const REQUIRED_WORKFLOW: &str = ".github/workflows/ci.yml";
 
+/// OPEN-M6-06 A, ADR-051, TEST-SPEC-M6 X-06: the jobs that build `aws-lc-sys` for `x86_64-pc-windows-msvc` (natively or
+/// with cargo-xwin), as (workflow, job); each installs NASM and prints its version. Every workflow sets
+/// `AWS_LC_SYS_PREBUILT_NASM: "0"` in its top-level `env:` (`windows_builds_nasm_from_source`).
+pub(crate) const NASM_JOBS: &[(&str, &str)] = &[
+    (".github/workflows/ci.yml", "windows-native"),
+    (".github/workflows/ci.yml", "xwin-cross"),
+    (".github/workflows/ci-dispatch.yml", "dispatch-windows"),
+    (".github/workflows/ci-dispatch.yml", "dispatch-xwin"),
+];
+
 /// The job names of the required checks of the `main-protection` ruleset (M2 review C2): they exist only in
 /// [`REQUIRED_WORKFLOW`], which has no `workflow_dispatch` trigger, so no dispatch can add a `skipped` (= passing) check
 /// run under a required name. The policy step pins [`PINNED_JOBS`], a superset.
@@ -1275,6 +1585,10 @@ pub(crate) const PINNED_JOBS: &[&str] = &[
     "proverif-hx",
     // M5 (BRIEF_M5-B §1): the SecMP-LINK models
     "proverif-link",
+    // M6 (WEISUNG M6-11, VD-M6-A-23): the Kani step, which pushed `linux-full` past its 240 min
+    "kani",
+    // WEISUNG M6-CI-1 §4 (ADR-047 Amendment 5): the fuzz smoke (70 min) out of `linux-full`
+    "fuzz",
 ];
 
 /// The `needs:` of a pinned job, as (job, the one job it needs) — M4 review C-5: the verdict job `mutants` needs
@@ -1292,6 +1606,10 @@ pub(crate) const DELEGATED_TO: &[(&str, &str)] = &[
     ("ct", "ct"),
     // M5 (BRIEF_M5-B §1): the `ci-full` step `proverif-link` runs in the job of the same name
     ("proverif-link", "proverif-link"),
+    // M6 (WEISUNG M6-11): the `ci-full` step `kani` runs in the job of the same name
+    ("kani", "kani"),
+    // WEISUNG M6-CI-1 §4: the `ci-full` step `fuzz` runs in the job of the same name
+    ("fuzz", "fuzz"),
 ];
 
 /// The `cargo xtask` gate `run:` lines of each pinned job of [`PINNED_JOBS`], in order (M3 review F3, R-09;
@@ -1316,7 +1634,7 @@ pub(crate) const REQUIRED_GATE_RUNS: &[(&str, &[&str])] = &[
         // the SecMP-HX models run in their own job `proverif-hx` (WEISUNG M4-5 §5), mutation testing in `mutants` (ADR-047),
         // the ct gate in `ct` (ADR-047 Amendment 1, M4 review C-2), the SecMP-LINK models in `proverif-link` (BRIEF_M5-B §1)
         &[
-            "cargo xtask ci-full --strict --delegated windows-native --delegated windows-cross --delegated mutants --delegated ct --delegated proverif-link --models tr",
+            "cargo xtask ci-full --strict --delegated windows-native --delegated windows-cross --delegated mutants --delegated ct --delegated fuzz --delegated kani --delegated proverif-link --models tr",
         ],
     ),
     // M4 review C-5 (R-01): the delegated jobs
@@ -1334,6 +1652,10 @@ pub(crate) const REQUIRED_GATE_RUNS: &[(&str, &[&str])] = &[
         "proverif-link",
         &["cargo xtask step --strict proverif --models link --jobs 4"],
     ),
+    // M6 (WEISUNG M6-11): the Kani step in its own job
+    ("kani", &["cargo xtask step --strict kani"]),
+    // WEISUNG M6-CI-1 §4: the fuzz smoke step in its own job
+    ("fuzz", &["cargo xtask step --strict fuzz"]),
 ];
 
 /// The job-level `if:` of every pinned job of [`PINNED_JOBS`], `None` for none (external review EXT-1, M3 follow-up
@@ -1370,6 +1692,14 @@ pub(crate) const REQUIRED_JOB_CONDITIONS: &[(&str, Option<&str>)] = &[
     ),
     (
         "proverif-link",
+        Some("github.event_name == 'schedule' || github.event_name == 'pull_request'"),
+    ),
+    (
+        "kani",
+        Some("github.event_name == 'schedule' || github.event_name == 'pull_request'"),
+    ),
+    (
+        "fuzz",
         Some("github.event_name == 'schedule' || github.event_name == 'pull_request'"),
     ),
 ];

@@ -104,6 +104,12 @@ pub(crate) fn cooldown(ctx: &Ctx) -> Result<Outcome> {
     Ok(Outcome::Pass(crate::cooldown::run(&ctx.root)?))
 }
 
+/// The nextest filterset of the workspace run: not the `secmp-testkit` `harness` binary. Feature unification enables
+/// `secmp-testkit/harness` in a `--workspace` build (dev-dependency of `secmp-transport`, TLS-01…TLS-11), which
+/// would run the long simulations here a second time; the `kat` step is the one runner of that binary (WEISUNG
+/// M6-CI-1, ADR-047 Amendment 5).
+pub(crate) const NEXTEST_WORKSPACE_FILTER: &str = "not binary(=harness)";
+
 /// The workspace `cargo nextest` arguments (feature unification enables `kat` of `secmp-proto` through `secmp-testkit`).
 pub(crate) fn nextest_args() -> Vec<&'static str> {
     vec![
@@ -112,6 +118,8 @@ pub(crate) fn nextest_args() -> Vec<&'static str> {
         "--workspace",
         "--locked",
         "--no-fail-fast",
+        "-E",
+        NEXTEST_WORKSPACE_FILTER,
     ]
 }
 
@@ -133,6 +141,12 @@ pub(crate) fn nextest_nonkat_args() -> Vec<&'static str> {
 pub(crate) fn nextest(_: &Ctx) -> Result<Outcome> {
     tools::require(tools::NEXTEST)?;
     for run in crate::testscan::nextest_runs() {
+        // WEISUNG M6-CI-1 §2: on Windows without `expect::WINDOWS_SKIP_TESTS`, as in `kat`
+        let run = if cfg!(windows) {
+            crate::testscan::windows_scoped(run)
+        } else {
+            run
+        };
         run.run()?;
     }
     Ok(Outcome::Pass(crate::testscan::nextest_detail()))
@@ -182,6 +196,12 @@ pub(crate) fn kat(ctx: &Ctx) -> Result<Outcome> {
     // tests with the CI run seed (M4 review R-93, TEST-SPEC-M5 X-07; `testscan.rs`)
     let ci_seed = crate::testscan::ci_run_seed()?;
     for run in crate::testscan::kat_runs(&found, ci_seed)? {
+        // WEISUNG M6-B-3 §1: on Windows without the long host-independent simulations (`expect::WINDOWS_SKIP_TESTS`)
+        let run = if cfg!(windows) {
+            crate::testscan::windows_scoped(run)
+        } else {
+            run
+        };
         run.run()?;
     }
     // libcrux's build scripts compile its SIMD backends on aarch64 (NEON) and x86_64 (AVX2, chosen at run time),
@@ -736,10 +756,11 @@ fn file_stems(dir: &Path, ext: &str) -> Result<BTreeSet<String>> {
 /// `-max_len` comes from `expect::FUZZ_MAX_LEN` (M2 review C4, F18). Every target runs even after a failure, so the
 /// log shows all of them.
 pub(crate) fn fuzz(ctx: &Ctx) -> Result<Outcome> {
-    let (targets, seeds) = fuzz_with(ctx, expect::FUZZ_SMOKE_SECONDS)?;
+    let (targets, seeds, depth) = fuzz_with(ctx, |_| Ok(expect::FUZZ_SMOKE_SECONDS))?;
     Ok(Outcome::Pass(format!(
         "fuzz smoke, {} s per target on the vector-seeded scratch corpus plus the tracked corpus (read-only), \
-         -max_len from expect::FUZZ_MAX_LEN: {targets} (expected set matches); vector seeds: {seeds}",
+         -max_len from expect::FUZZ_MAX_LEN: {targets} (expected set matches); vector seeds: {seeds}; \
+         executor fuzzers with -len_control=0: {depth}",
         expect::FUZZ_SMOKE_SECONDS
     )))
 }
@@ -748,15 +769,74 @@ pub(crate) fn fuzz(ctx: &Ctx) -> Result<Outcome> {
 /// of [`fuzz`] with `expect::FUZZ_NIGHTLY_SECONDS` shared equally by the targets (`nightly_seconds_per_target`).
 /// Not part of `ci-full`; the workflow uploads the scratch corpus and any crash artefacts.
 pub(crate) fn fuzz_nightly(ctx: &Ctx) -> Result<Outcome> {
-    let seconds =
-        nightly_seconds_per_target(expect::FUZZ_NIGHTLY_SECONDS, expect::FUZZ_TARGETS.len())?;
-    let (targets, seeds) = fuzz_with(ctx, seconds)?;
+    let share = nightly_share_seconds()?;
+    let (targets, seeds, depth) = fuzz_with(ctx, nightly_seconds_for)?;
     Ok(Outcome::Pass(format!(
-        "fuzz campaign, {} s in total, {seconds} s per target on the vector-seeded scratch corpus plus the tracked \
-         corpus (read-only), -max_len from expect::FUZZ_MAX_LEN: {targets}; vector seeds: {seeds}; new inputs in \
-         target/fuzz-corpus/",
-        expect::FUZZ_NIGHTLY_SECONDS
+        "fuzz campaign, {} s in total, {share} s per target ({} s for each of {}) on the vector-seeded scratch corpus \
+         plus the tracked corpus (read-only), -max_len from expect::FUZZ_MAX_LEN: {targets}; vector seeds: {seeds}; \
+         executor fuzzers with -len_control=0: {depth}; new inputs in target/fuzz-corpus/",
+        expect::FUZZ_NIGHTLY_SECONDS,
+        expect::FUZZ_DEEP_NIGHTLY_SECONDS,
+        expect::FUZZ_DEEP_TARGETS.join(", ")
     )))
+}
+
+/// The nightly seconds of every target that is not one of `expect::FUZZ_DEEP_TARGETS`: the campaign minus the deep
+/// targets' time, shared equally (`nightly_seconds_per_target`).
+pub(crate) fn nightly_share_seconds() -> Result<u64> {
+    let deep = expect::FUZZ_DEEP_TARGETS.len();
+    let deep_total = u64::try_from(deep)
+        .ok()
+        .and_then(|n| n.checked_mul(expect::FUZZ_DEEP_NIGHTLY_SECONDS))
+        .ok_or_else(|| Error("fuzz campaign: deep budget overflows".to_owned()))?;
+    let rest = expect::FUZZ_NIGHTLY_SECONDS
+        .checked_sub(deep_total)
+        .ok_or_else(|| Error("fuzz campaign: the deep targets exceed the campaign".to_owned()))?;
+    nightly_seconds_per_target(rest, expect::FUZZ_TARGETS.len().saturating_sub(deep))
+}
+
+/// The nightly seconds of target `t` (M5 review F-8, R-127; TEST-SPEC-M6 G-05).
+pub(crate) fn nightly_seconds_for(t: &str) -> Result<u64> {
+    if expect::FUZZ_DEEP_TARGETS.contains(&t) {
+        Ok(expect::FUZZ_DEEP_NIGHTLY_SECONDS)
+    } else {
+        nightly_share_seconds()
+    }
+}
+
+/// The `Done N runs` count of a libFuzzer log and the last `lim: N` of its status lines (the length cap the mutator
+/// works with); `None` for either if the log has none.
+pub(crate) fn fuzz_log_depth(log: &str) -> (Option<u64>, Option<u64>) {
+    let runs = log.lines().find_map(|l| {
+        l.trim()
+            .strip_prefix("Done ")?
+            .split_whitespace()
+            .next()?
+            .parse()
+            .ok()
+    });
+    let lim = log.lines().rev().find_map(|l| {
+        let (_, rest) = l.split_once(" lim: ")?;
+        rest.split_whitespace().next()?.parse().ok()
+    });
+    (runs, lim)
+}
+
+/// The evidence of a `-len_control=0` run of `t` from its libFuzzer log: `t: <runs> runs, lim <max_len> (= max_len)`;
+/// an error if the log has no run count or no `lim`, or if `lim` is not the target's `-max_len` (the length control
+/// would be back).
+pub(crate) fn fuzz_depth_evidence(t: &str, log: &str) -> Result<String> {
+    let max_len = fuzz_max_len(t)?;
+    let (runs, lim) = fuzz_log_depth(log);
+    let (Some(runs), Some(lim)) = (runs, lim) else {
+        bail!(
+            "fuzz {t}: no `Done N runs` / `lim:` in the libFuzzer output (runs {runs:?}, lim {lim:?})"
+        );
+    };
+    if u64::try_from(max_len).ok() != Some(lim) {
+        bail!("fuzz {t}: lim {lim} is not -max_len {max_len} (-len_control=0 not in effect)");
+    }
+    Ok(format!("{t}: {runs} runs, lim {lim} (= max_len)"))
 }
 
 /// Each target's share of a campaign of `total` seconds; never below the per-PR smoke.
@@ -772,8 +852,12 @@ pub(crate) fn nightly_seconds_per_target(total: u64, targets: usize) -> Result<u
     }
 }
 
-/// Seed and fuzz every target for `seconds`; returns the target list and the seed counts for the summary.
-fn fuzz_with(ctx: &Ctx, seconds: u64) -> Result<(String, String)> {
+/// Seed and fuzz every target for `seconds_for(target)`; returns the target list, the seed counts and the depth
+/// evidence of the `expect::FUZZ_DEEP_TARGETS` (runs and `lim`, from their captured libFuzzer output) for the summary.
+fn fuzz_with(
+    ctx: &Ctx,
+    seconds_for: impl Fn(&str) -> Result<u64>,
+) -> Result<(String, String, String)> {
     tools::require(tools::FUZZ)?;
     tools::require_nightly(&[])?;
     let found = file_stems(&ctx.root.join("fuzz").join("fuzz_targets"), "rs")?;
@@ -786,19 +870,49 @@ fn fuzz_with(ctx: &Ctx, seconds: u64) -> Result<(String, String)> {
             missing.join(", ")
         );
     }
+    // EXTB-6: the fuzz build uses fuzz/Cargo.lock as it is. cargo-fuzz (0.13) has no `--locked`; cargo resolving the
+    // fuzz package with `--locked` fails if the lock would change, before anything is built
+    Cmd::cargo_on(tools::NIGHTLY)
+        .args(fuzz_lock_check_args())
+        .dir(&ctx.root)
+        .read()
+        .map_err(|e| {
+            Error(format!(
+                "fuzz: fuzz/Cargo.lock is not up to date (cargo --locked): {e}"
+            ))
+        })?;
     let mut seeded = Vec::new();
     let mut failed = Vec::new();
+    let mut depth = Vec::new();
     for t in &found {
         let n = crate::fuzzseed::seed_scratch_corpus(&ctx.root, t)?;
         say(&format!(
             "  {t}: {n} vector seeds in target/fuzz-corpus/{t}/"
         ));
         seeded.push(format!("{t} {n}"));
-        let run = Cmd::cargo_on(tools::NIGHTLY)
-            .args(fuzz_args(t, seconds)?)
-            .dir(&ctx.root)
-            .run();
-        if let Err(e) = run {
+        let cmd = Cmd::cargo_on(tools::NIGHTLY)
+            .args(fuzz_args(t, seconds_for(t)?)?)
+            .dir(&ctx.root);
+        if expect::FUZZ_DEEP_TARGETS.contains(&t.as_str()) {
+            // the output is captured (libFuzzer writes it to stderr) to read the runs and `lim`, then echoed
+            let out = cmd.capture()?;
+            let log = format!("{}\n{}", out.stdout, out.stderr);
+            for l in log.lines() {
+                say(&format!("  {l}"));
+            }
+            let evidence = if out.success {
+                fuzz_depth_evidence(t, &log)
+            } else {
+                Err(Error(format!("`cargo fuzz run {t}` failed")))
+            };
+            match evidence {
+                Ok(e) => depth.push(e),
+                Err(e) => {
+                    say(&format!("  FAIL {t}: {e}"));
+                    failed.push(t.clone());
+                }
+            }
+        } else if let Err(e) = cmd.run() {
             say(&format!("  FAIL {t}: {e}"));
             failed.push(t.clone());
         }
@@ -811,7 +925,7 @@ fn fuzz_with(ctx: &Ctx, seconds: u64) -> Result<(String, String)> {
             failed.join(", ")
         );
     }
-    Ok((list(&found), seeded.join(", ")))
+    Ok((list(&found), seeded.join(", "), depth.join("; ")))
 }
 
 /// M4 review C-6 (R-07): the targets of `targets` whose tracked corpus `corpus/<t>/` holds no regular file. The fuzz
@@ -836,7 +950,7 @@ pub(crate) fn targets_without_corpus(corpus: &Path, targets: &[&str]) -> Vec<Str
 /// target's `-max_len` and the per-input `-timeout` (`expect::FUZZ_INPUT_TIMEOUT_SECONDS`, M3). Paths are relative
 /// to the workspace root, where the command runs.
 pub(crate) fn fuzz_args(t: &str, seconds: u64) -> Result<Vec<String>> {
-    Ok(vec![
+    let mut args = vec![
         "fuzz".to_owned(),
         "run".to_owned(),
         "--fuzz-dir".to_owned(),
@@ -848,7 +962,27 @@ pub(crate) fn fuzz_args(t: &str, seconds: u64) -> Result<Vec<String>> {
         format!("-max_total_time={seconds}"),
         format!("-max_len={}", fuzz_max_len(t)?),
         format!("-timeout={}", expect::FUZZ_INPUT_TIMEOUT_SECONDS),
-    ])
+    ];
+    if expect::FUZZ_DEEP_TARGETS.contains(&t) {
+        // M5 review F-8, R-127: `lim` starts at `-max_len` instead of the seed length
+        args.push("-len_control=0".to_owned());
+    }
+    Ok(args)
+}
+
+/// The command that checks, before the fuzz build, that `fuzz/Cargo.lock` needs no change (EXTB-6).
+pub(crate) fn fuzz_lock_check_args() -> Vec<String> {
+    [
+        "metadata",
+        "--format-version",
+        "1",
+        "--locked",
+        "--manifest-path",
+        "fuzz/Cargo.toml",
+    ]
+    .iter()
+    .map(|s| (*s).to_owned())
+    .collect()
 }
 
 /// The libFuzzer `-max_len` of target `t` (`expect::FUZZ_MAX_LEN`, M2 review C4); a target without one is refused.
@@ -1089,12 +1223,18 @@ pub(crate) fn set_mutants_shard(s: MutantsShard) -> Result<()> {
         .map_err(|_| Error("the mutants shard can be set once".to_owned()))
 }
 
-/// The `cargo mutants` arguments of the gate (ADR-047 with Amendment 1): feature `kat` for both packages (R-60: the HX
-/// integration suite; with it the external KATs and the frozen-vector tests join the unit tests in killing mutants),
-/// three mutants in parallel, `--caught --unviable` so the log shows every outcome as it happens, the shard if one is
-/// given (round-robin, so every shard gets a share of both packages), the packages and exclusions of `expect.rs`, and
-/// after `-- --` the libtest `--skip` filters of `expect::MUTANT_SKIP_TESTS`.
-pub(crate) fn mutants_args(shard: Option<MutantsShard>) -> Vec<String> {
+/// The arguments every `cargo mutants` run of the gate shares (ADR-047 with Amendment 1): three mutants in parallel,
+/// `--caught --unviable` so the log shows every outcome as it happens, the output root, the features, the shard if one
+/// is given (round-robin, so every shard gets a share of every package), the packages, the exclusions of `expect.rs`,
+/// and after `-- --` the libtest `--skip` filters of `expect::MUTANT_SKIP_TESTS`.
+fn mutants_run_args(
+    shard: Option<MutantsShard>,
+    output: &str,
+    features: &str,
+    packages: &[&str],
+    test_packages: &[&str],
+    skips: &[&[(&str, &str)]],
+) -> Vec<String> {
     let mut a: Vec<String> = [
         "mutants",
         "--no-shuffle",
@@ -1102,9 +1242,9 @@ pub(crate) fn mutants_args(shard: Option<MutantsShard>) -> Vec<String> {
         "-j",
         "3",
         "--output",
-        "target",
+        output,
         "--features",
-        "kat",
+        features,
         "--caught",
         "--unviable",
     ]
@@ -1119,8 +1259,11 @@ pub(crate) fn mutants_args(shard: Option<MutantsShard>) -> Vec<String> {
             "round-robin".to_owned(),
         ]);
     }
-    for p in expect::MUTANT_PACKAGES {
+    for p in packages {
         a.extend(["--package".to_owned(), (*p).to_owned()]);
+    }
+    for p in test_packages {
+        a.extend(["--test-package".to_owned(), (*p).to_owned()]);
     }
     for f in expect::MUTANT_EXCLUDE_FILES {
         a.extend(["--exclude".to_owned(), (*f).to_owned()]);
@@ -1128,13 +1271,80 @@ pub(crate) fn mutants_args(shard: Option<MutantsShard>) -> Vec<String> {
     for re in expect::MUTANT_EXCLUDE_RE {
         a.extend(["--exclude-re".to_owned(), (*re).to_owned()]);
     }
-    // the remaining arguments go to `cargo test`, and after its own `--` to every test binary
+    // the remaining arguments go to `cargo test` (or `cargo nextest run`), and after its own `--` to every test binary
+    // (nextest takes the same libtest-style `--skip` filters)
     a.extend(["--".to_owned(), "--".to_owned()]);
-    for (test, _) in expect::MUTANT_SKIP_TESTS {
+    for (test, _) in skips.iter().flat_map(|s| s.iter()) {
         a.extend(["--skip".to_owned(), (*test).to_owned()]);
     }
     a
 }
+
+/// The packages of the first run: `expect::MUTANT_PACKAGES` without `expect::MUTANT_HARNESS_PACKAGES`.
+fn mutants_own_test_packages() -> Vec<&'static str> {
+    expect::MUTANT_PACKAGES
+        .iter()
+        .copied()
+        .filter(|p| !expect::MUTANT_HARNESS_PACKAGES.contains(p))
+        .collect()
+}
+
+/// The first `cargo mutants` run of the gate (ADR-047 with Amendment 1): the packages whose tests are their own, each
+/// mutant tested by its package's tests with feature `kat` (R-60: the HX integration suite; with it the external KATs
+/// and the frozen-vector tests join the unit tests in killing mutants); output under `target/mutants.out`.
+pub(crate) fn mutants_args(shard: Option<MutantsShard>) -> Vec<String> {
+    mutants_run_args(
+        shard,
+        "target",
+        "kat",
+        &mutants_own_test_packages(),
+        &[],
+        &[expect::MUTANT_SKIP_TESTS],
+    )
+}
+
+/// The output root of the second run (`<root>/mutants.out`).
+const MUTANTS_HARNESS_OUTPUT: &str = "target/mutants-harness";
+
+/// The second `cargo mutants` run of the gate (ADR-047 Amendment 4): `expect::MUTANT_HARNESS_PACKAGES`, whose tests
+/// live in `secmp-testkit/tests/harness` (the in-process relay they need is the testkit's), every mutant tested by the
+/// tests of `expect::MUTANT_HARNESS_TEST_PACKAGES` with feature `harness` (`secmp-transport` has no feature `kat`, and
+/// the testkit's `kat` adds only the differential suites, which cover no line of these packages). The tests run under
+/// nextest (`--test-tool nextest`): the harness suite needs one process per test (five `m6_activity` tests fail when
+/// they share one, as under `cargo test`). cargo-mutants measures its baseline on the mutated package's own tests
+/// only, so the per-mutant test timeout is explicit (`expect::MUTANTS_HARNESS_TEST_TIMEOUT_SECONDS`); the long harness
+/// tests of `expect::MUTANT_HARNESS_SKIP_TESTS` are left out of the per-mutant run like those of
+/// `expect::MUTANT_SKIP_TESTS`.
+pub(crate) fn mutants_harness_args(shard: Option<MutantsShard>) -> Vec<String> {
+    let mut a = mutants_run_args(
+        shard,
+        MUTANTS_HARNESS_OUTPUT,
+        "harness",
+        expect::MUTANT_HARNESS_PACKAGES,
+        expect::MUTANT_HARNESS_TEST_PACKAGES,
+        &[expect::MUTANT_SKIP_TESTS, expect::MUTANT_HARNESS_SKIP_TESTS],
+    );
+    let at = a.iter().position(|x| x == "--").unwrap_or(a.len());
+    let extra = [
+        "--test-tool".to_owned(),
+        "nextest".to_owned(),
+        "--timeout".to_owned(),
+        expect::MUTANTS_HARNESS_TEST_TIMEOUT_SECONDS.to_string(),
+    ];
+    a.splice(at..at, extra);
+    // WEISUNG M6-CI-9 (ADR-047 Amendment 6): the first failing test cancels the run at once. nextest's default lets the tests
+    // that are running finish, so a mutant that makes some other test loop forever (a scheduler or driver loop) timed out at
+    // 900 s although a test had already failed; with `immediate` those tests are terminated and the mutant is `caught`.
+    let after = a
+        .iter()
+        .position(|x| x == "--")
+        .map_or(a.len(), |i| i.saturating_add(1));
+    a.splice(after..after, [MUTANTS_HARNESS_MAX_FAIL.to_owned()]);
+    a
+}
+
+/// The nextest option that cancels the harness run of a mutant at the first failing test.
+pub(crate) const MUTANTS_HARNESS_MAX_FAIL: &str = "--max-fail=1:immediate";
 
 /// How often the mutation gate polls cargo-mutants and echoes its new output lines.
 const MUTANTS_POLL: std::time::Duration = std::time::Duration::from_secs(5);
@@ -1143,28 +1353,23 @@ const MUTANTS_POLL: std::time::Duration = std::time::Duration::from_secs(5);
 /// artefact).
 const MUTANTS_SHARD_VERDICT: &str = "xtask-shard.json";
 
-/// docs/06 §5 step 8 (ADR-047 with Amendment 1): `cargo mutants` over `expect::MUTANT_PACKAGES` with output in
-/// `target/mutants-step.log` (echoed as it grows) under the budget `expect::MUTANTS_STEP_TIMEOUT_SECONDS`; every
-/// missed or timed-out mutant must be documented in `docs/mutants-accepted.md`. With `--shard K/N` (one CI shard) the
-/// step records its verdict in `target/mutants.out/xtask-shard.json` for `mutants-merge`, which applies the
-/// per-package floor; without, the step applies the floor itself.
-pub(crate) fn mutants(ctx: &Ctx) -> Result<Outcome> {
-    tools::require(tools::MUTANTS)?;
-    let shard = MUTANTS_SHARD.get().copied();
-    let target = ctx.root.join("target");
-    let out = target.join("mutants.out");
-    let verdict_file = out.join(MUTANTS_SHARD_VERDICT);
-    if verdict_file.exists() {
-        std::fs::remove_file(&verdict_file)?;
-    }
-    let log = target.join("mutants-step.log");
-    let timeout = std::time::Duration::from_secs(expect::MUTANTS_STEP_TIMEOUT_SECONDS);
-    let mut tail = LineTail::new(&log);
+/// The subdirectory of the first run's `mutants.out` that keeps the second run's own files (outcomes, survivor lists,
+/// log), so the shard artefact carries them.
+const MUTANTS_HARNESS_SUBDIR: &str = "harness";
+
+/// Run one `cargo mutants` invocation under `budget`, echoing its log; (exit status or None on timeout, last line).
+fn run_mutants_once(
+    ctx: &Ctx,
+    args: Vec<String>,
+    log: &Path,
+    budget: std::time::Duration,
+) -> Result<(Option<std::process::ExitStatus>, Option<String>)> {
+    let mut tail = LineTail::new(log);
     let mut last = None;
     let status = run_budgeted(
-        &Cmd::cargo().args(mutants_args(shard)).dir(&ctx.root),
-        &log,
-        timeout,
+        &Cmd::cargo().args(args).dir(&ctx.root),
+        log,
+        budget,
         MUTANTS_POLL,
         || {
             for line in tail.lines() {
@@ -1173,7 +1378,129 @@ pub(crate) fn mutants(ctx: &Ctx) -> Result<Outcome> {
             }
         },
     )?;
-    let verdict = mutants_shard_verdict(ctx, status, &out, &log, last.as_deref());
+    Ok((status, last))
+}
+
+/// Merge the second run's results (`second`, a `mutants.out`) into the first run's (`first`): `outcomes.json` gets the
+/// union of the mutant outcomes and the sum of `total_mutants` (the merge job and the floor read it), the survivor and
+/// outcome lists (`caught.txt`, `missed.txt`, `timeout.txt`, `unviable.txt`) are concatenated, and the second run's
+/// files are copied unchanged into `first/harness/`.
+pub(crate) fn merge_mutants_runs(first: &Path, second: &Path) -> Result<()> {
+    let keep = first.join(MUTANTS_HARNESS_SUBDIR);
+    std::fs::create_dir_all(&keep)?;
+    for name in [
+        "outcomes.json",
+        "caught.txt",
+        "missed.txt",
+        "timeout.txt",
+        "unviable.txt",
+    ] {
+        let from = second.join(name);
+        if from.exists() {
+            std::fs::copy(&from, keep.join(name))?;
+        }
+    }
+    let read_json = |p: &Path| -> Result<Value> {
+        let t = std::fs::read_to_string(p).map_err(|e| Error(format!("{}: {e}", p.display())))?;
+        serde_json::from_str(&t).map_err(|e| Error(format!("{}: {e}", p.display())))
+    };
+    let mut a = read_json(&first.join("outcomes.json"))?;
+    let b = read_json(&second.join("outcomes.json"))?;
+    let b_outcomes: Vec<Value> = b
+        .get("outcomes")
+        .and_then(Value::as_array)
+        .ok_or_else(|| Error(format!("{}: no `outcomes` array", second.display())))?
+        .iter()
+        .filter(|o| o.get("scenario").and_then(|s| s.get("Mutant")).is_some())
+        .cloned()
+        .collect();
+    let total = a
+        .get("total_mutants")
+        .and_then(Value::as_u64)
+        .unwrap_or_default()
+        .checked_add(
+            b.get("total_mutants")
+                .and_then(Value::as_u64)
+                .unwrap_or_default(),
+        )
+        .ok_or_else(|| Error("total_mutants overflow".to_owned()))?;
+    let list = a
+        .get_mut("outcomes")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| Error(format!("{}: no `outcomes` array", first.display())))?;
+    list.extend(b_outcomes);
+    if let Some(obj) = a.as_object_mut() {
+        obj.insert("total_mutants".to_owned(), Value::from(total));
+    }
+    std::fs::write(first.join("outcomes.json"), a.to_string())?;
+    for name in ["caught.txt", "missed.txt", "timeout.txt", "unviable.txt"] {
+        let extra = std::fs::read_to_string(second.join(name)).unwrap_or_default();
+        if extra.is_empty() {
+            continue;
+        }
+        let mut text = std::fs::read_to_string(first.join(name)).unwrap_or_default();
+        if !text.is_empty() && !text.ends_with('\n') {
+            text.push('\n');
+        }
+        text.push_str(&extra);
+        std::fs::write(first.join(name), text)?;
+    }
+    Ok(())
+}
+
+/// docs/06 §5 step 8 (ADR-047 with Amendments 1 and 4): `cargo mutants` over `expect::MUTANT_PACKAGES` in two runs —
+/// the packages with their own tests (`mutants_args`, log `target/mutants-step.log`) and the packages tested through the
+/// testkit harness (`mutants_harness_args`, log `target/mutants-harness-step.log`) — both echoed as they grow, under one
+/// budget `expect::MUTANTS_STEP_TIMEOUT_SECONDS`; every missed or timed-out mutant must be documented in
+/// `docs/mutants-accepted.md`. The second run's outcomes are merged into `target/mutants.out`. With `--shard K/N` (one CI
+/// shard, both runs take the same shard) the step records its verdict in `target/mutants.out/xtask-shard.json` for
+/// `mutants-merge`, which applies the per-package floor; without, the step applies the floor itself.
+pub(crate) fn mutants(ctx: &Ctx) -> Result<Outcome> {
+    tools::require(tools::MUTANTS)?;
+    tools::require(tools::NEXTEST)?;
+    let shard = MUTANTS_SHARD.get().copied();
+    let target = ctx.root.join("target");
+    let out = target.join("mutants.out");
+    let harness_out = ctx.root.join(MUTANTS_HARNESS_OUTPUT).join("mutants.out");
+    let verdict_file = out.join(MUTANTS_SHARD_VERDICT);
+    if verdict_file.exists() {
+        std::fs::remove_file(&verdict_file)?;
+    }
+    let started = std::time::Instant::now();
+    let budget = std::time::Duration::from_secs(expect::MUTANTS_STEP_TIMEOUT_SECONDS);
+    let log = target.join("mutants-step.log");
+    let (status, last) = run_mutants_once(ctx, mutants_args(shard), &log, budget)?;
+    let own = mutants_own_test_packages().join(", ");
+    let first = mutants_shard_verdict(ctx, status, &out, &log, last.as_deref(), &own);
+    let harness_log = target.join("mutants-harness-step.log");
+    let rest = budget.saturating_sub(started.elapsed());
+    let (status_h, last_h) =
+        run_mutants_once(ctx, mutants_harness_args(shard), &harness_log, rest)?;
+    let harness_label = expect::MUTANT_HARNESS_PACKAGES.join(", ");
+    let second = mutants_shard_verdict(
+        ctx,
+        status_h,
+        &harness_out,
+        &harness_log,
+        last_h.as_deref(),
+        &harness_label,
+    );
+    // the merge job reads `target/mutants.out` only: merge whenever both runs left outcomes (also on a failing verdict,
+    // so the merge reports the second run's survivors by name), and keep the second run's log in the artefact
+    if out.join("outcomes.json").exists() && harness_out.join("outcomes.json").exists() {
+        merge_mutants_runs(&out, &harness_out)?;
+    }
+    if harness_log.exists() {
+        let keep = out.join(MUTANTS_HARNESS_SUBDIR);
+        std::fs::create_dir_all(&keep)?;
+        std::fs::copy(&harness_log, keep.join("mutants-harness-step.log"))?;
+    }
+    let verdict = match (first, second) {
+        (Ok(a), Ok(b)) => Ok(format!("{a}; {b}")),
+        (Err(e), Ok(_)) | (Ok(_), Err(e)) => Err(e),
+        (Err(a), Err(b)) => Err(Error(format!("{}; {}", a.0, b.0))),
+    };
+    let exit_codes = [status, status_h].map(|s| s.and_then(|s| s.code()));
     if let Some(shard) = shard {
         let (passed, detail) = match &verdict {
             Ok(d) => ("PASS", d.clone()),
@@ -1185,7 +1512,8 @@ pub(crate) fn mutants(ctx: &Ctx) -> Result<Outcome> {
             serde_json::json!({
                 "shard": shard.to_string(),
                 "verdict": passed,
-                "exit_code": status.and_then(|s| s.code()),
+                "exit_code": exit_codes.iter().flatten().copied().max(),
+                "exit_codes": exit_codes,
                 "detail": detail,
             })
             .to_string(),
@@ -1199,20 +1527,21 @@ pub(crate) fn mutants(ctx: &Ctx) -> Result<Outcome> {
     let outcomes = read_outcomes(&out.join("outcomes.json"))?;
     let counts = mutant_counts(&outcomes.outcomes)?;
     let floor = mutants_floor(&counts);
-    for l in floor.lines.iter().chain(&floor.warnings) {
+    let breakdown = unviable_breakdown(&outcomes.outcomes);
+    for l in floor.lines.iter().chain(&breakdown).chain(&floor.warnings) {
         say(&format!("  mutants {l}"));
     }
     if !floor.failures.is_empty() {
         bail!(
             "mutation floor (ADR-047 Amendment 2): {}",
-            [floor.lines, floor.warnings, floor.failures]
+            [floor.lines, breakdown, floor.warnings, floor.failures]
                 .concat()
                 .join("; ")
         );
     }
     Ok(Outcome::Pass(format!(
         "{detail}; {}",
-        [floor.lines, floor.warnings].concat().join("; ")
+        [floor.lines, breakdown, floor.warnings].concat().join("; ")
     )))
 }
 
@@ -1224,6 +1553,7 @@ fn mutants_shard_verdict(
     out: &Path,
     log: &Path,
     last: Option<&str>,
+    label: &str,
 ) -> Result<String> {
     let Some(status) = status else {
         bail!(
@@ -1269,8 +1599,7 @@ fn mutants_shard_verdict(
         .trim()
         .to_owned();
     Ok(format!(
-        "{}: {summary}; survivors documented in docs/mutants-accepted.md: {documented}",
-        expect::MUTANT_PACKAGES.join(", ")
+        "{label}: {summary}; survivors documented in docs/mutants-accepted.md: {documented}"
     ))
 }
 
@@ -1359,6 +1688,57 @@ fn mutant_counts(outcomes: &[Value]) -> Result<std::collections::BTreeMap<String
         c.total = c.total.saturating_add(1);
     }
     Ok(counts)
+}
+
+/// The unviable mutants of `outcomes` per package of `expect::MUTANT_PACKAGES` (M5 review F-15, R-148, TEST-SPEC-M6
+/// G-08): one line per package with the count of unviable mutants, their five most frequent files and their counts
+/// per mutation operator (cargo-mutants' `genre`, e.g. `FnValue`). Informative: no threshold, it never fails.
+fn unviable_breakdown(outcomes: &[Value]) -> Vec<String> {
+    use std::collections::BTreeMap;
+    fn top(map: &BTreeMap<String, usize>, limit: usize) -> String {
+        let mut rows: Vec<(&String, &usize)> = map.iter().collect();
+        rows.sort_by(|a, b| b.1.cmp(a.1).then_with(|| a.0.cmp(b.0)));
+        let shown: Vec<String> = rows
+            .into_iter()
+            .take(limit)
+            .map(|(k, n)| format!("{k} {n}"))
+            .collect();
+        if shown.is_empty() {
+            "none".to_owned()
+        } else {
+            shown.join(", ")
+        }
+    }
+    let mut lines = Vec::new();
+    for p in expect::MUTANT_PACKAGES {
+        let mut by_file: BTreeMap<String, usize> = BTreeMap::new();
+        let mut by_operator: BTreeMap<String, usize> = BTreeMap::new();
+        let mut total = 0_usize;
+        for o in outcomes {
+            if o.get("summary").and_then(Value::as_str) != Some("Unviable") {
+                continue;
+            }
+            let Some(m) = o.get("scenario").and_then(|s| s.get("Mutant")) else {
+                continue;
+            };
+            if m.get("package").and_then(Value::as_str) != Some(*p) {
+                continue;
+            }
+            let file = m.get("file").and_then(Value::as_str).unwrap_or("?");
+            let genre = m.get("genre").and_then(Value::as_str).unwrap_or("?");
+            for (map, key) in [(&mut by_file, file), (&mut by_operator, genre)] {
+                let n = map.entry(key.to_owned()).or_insert(0);
+                *n = n.saturating_add(1);
+            }
+            total = total.saturating_add(1);
+        }
+        lines.push(format!(
+            "{p}: unviable {total} (informative); by file (top 5): {}; by mutation operator: {}",
+            top(&by_file, 5),
+            top(&by_operator, usize::MAX)
+        ));
+    }
+    lines
 }
 
 /// The per-package verdict of the mutation gate (`mutants_floor`): one line of counts per package, the warnings and
@@ -1619,6 +1999,7 @@ fn merge_verdict(dir: &Path, n: usize, accepted: &str, out: &Path) -> Result<Mer
     let lines = [
         merged.shards,
         floor.lines,
+        unviable_breakdown(&merged.outcomes),
         floor.warnings,
         vec![format!(
             "survivors documented in docs/mutants-accepted.md: {documented}, undocumented: {}",
@@ -3375,6 +3756,114 @@ pub(crate) fn systemd(ctx: &Ctx) -> Result<Outcome> {
 /// `jobs:`, `continue-on-error` outside the jobs allowed by `expect::CONTINUE_ON_ERROR_JOBS`, and artefact names
 /// without the run attempt. An accident guard against careless workflow edits, not a tamper-proof control: the real
 /// control is review (M3 review F23, R-08).
+/// M6-12: a `- name:` step whose plain-scalar value contains `: ` or ` #` is not valid YAML (GitHub refuses the whole
+/// workflow file); such names must be quoted. Lines inside block scalars are not looked at.
+pub(crate) fn step_name_findings(file: &str, text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut block: Option<usize> = None;
+    for (n, raw) in text.lines().enumerate() {
+        let body = raw.trim_start_matches(' ');
+        let lead = raw.len().saturating_sub(body.len());
+        if let Some(c) = block {
+            if body.trim().is_empty() || lead > c {
+                continue;
+            }
+            block = None;
+        }
+        let tail = body.trim_end();
+        if tail.ends_with(['|', '>']) || tail.ends_with("|-") || tail.ends_with(">-") {
+            block = Some(lead);
+        }
+        if let Some(v) = body.strip_prefix("- name:") {
+            let v = v.trim();
+            if !v.starts_with(['"', '\'']) && (v.contains(": ") || v.contains(" #")) {
+                out.push(format!(
+                    "step name is not a valid YAML plain scalar (contains ': ' or ' #'): {file}:{}",
+                    n.saturating_add(1)
+                ));
+            }
+        }
+    }
+    out
+}
+
+/// The lines of job `job` in a workflow text (from `  <job>:` up to the next job at the same indent).
+fn job_block<'a>(text: &'a str, job: &str) -> Option<Vec<&'a str>> {
+    let header = format!("  {job}:");
+    let mut lines = text.lines().skip_while(|l| *l != header);
+    lines.next()?;
+    Some(
+        lines
+            .take_while(|l| l.is_empty() || l.starts_with("   ") || l.trim_start().starts_with('#'))
+            .collect(),
+    )
+}
+
+/// X-06 (OPEN-M6-06 A): the workflow sets `AWS_LC_SYS_PREBUILT_NASM: "0"` in its top-level `env:`, and each of its jobs
+/// in `expect::NASM_JOBS` has a step that installs NASM and prints `nasm … -v`.
+pub(crate) fn nasm_findings(name: &str, text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let top_env: Vec<&str> = text
+        .lines()
+        .skip_while(|l| *l != "env:")
+        .skip(1)
+        .take_while(|l| l.is_empty() || l.starts_with("  "))
+        .collect();
+    if !top_env
+        .iter()
+        .any(|l| l.trim() == "AWS_LC_SYS_PREBUILT_NASM: \"0\"")
+    {
+        out.push(format!(
+            "{name}: top-level env lacks AWS_LC_SYS_PREBUILT_NASM: \"0\" (OPEN-M6-06)"
+        ));
+    }
+    for (file, job) in expect::NASM_JOBS {
+        if *file != name {
+            continue;
+        }
+        let Some(block) = job_block(text, job) else {
+            out.push(format!("{name}: job {job} (expect::NASM_JOBS) missing"));
+            continue;
+        };
+        let code: Vec<String> = block
+            .iter()
+            .map(|l| {
+                l.split(" #")
+                    .next()
+                    .unwrap_or_default()
+                    .to_ascii_lowercase()
+            })
+            .filter(|l| !l.trim_start().starts_with('#'))
+            .collect();
+        let installs = code
+            .iter()
+            .any(|l| l.contains("install") && l.contains("nasm"));
+        let probe = code
+            .iter()
+            .position(|l| l.contains("nasm") && l.contains(" -v"));
+        if !(installs && probe.is_some()) {
+            out.push(format!(
+                "{name}: job {job} does not install NASM and print its version (OPEN-M6-06)"
+            ));
+        }
+        // WEISUNG M6-B-2: the probe (`nasm -v`) runs before the build step of the job
+        let build = code.iter().position(|l| l.contains("cargo xtask step"));
+        if let (Some(p), Some(b)) = (probe, build)
+            && p > b
+        {
+            out.push(format!(
+                "{name}: job {job} prints the NASM version only after its build step (OPEN-M6-06)"
+            ));
+        }
+        if build.is_none() {
+            out.push(format!(
+                "{name}: job {job} has no `cargo xtask step` build line"
+            ));
+        }
+    }
+    out
+}
+
 pub(crate) fn workflow_findings(name: &str, text: &str) -> Vec<String> {
     let mut out = Vec::new();
     for line in text.lines() {
@@ -3993,6 +4482,8 @@ fn workflows(root: &Path) -> Result<String> {
         let text = lf(&std::fs::read_to_string(f)?);
         findings.extend(workflow_findings(&rel(root, f), &text));
         findings.extend(workflow_token_findings(&rel(root, f), &text));
+        findings.extend(step_name_findings(&rel(root, f), &text));
+        findings.extend(nasm_findings(&rel(root, f), &text));
         texts.push((rel(root, f), text));
     }
     findings.extend(required_job_findings(&texts));
@@ -5938,7 +6429,143 @@ mod tests {
 
     /// The pinned jobs `linux-full` delegates to (M4 review C-5), with their pinned conditions, `needs:` and gate lines,
     /// as they follow the required jobs in a `ci.yml` fixture.
-    const PINNED_EXTRA: &str = "  ct:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict ct\n  mutants-shard:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    strategy:\n      matrix:\n        shard:\n          - 0\n          - 1\n    steps:\n      - run: cargo xtask install-tools --set mutants\n      - run: cargo xtask step --strict mutants --shard ${{ matrix.shard }}/8\n  mutants:\n    needs: mutants-shard\n    if: always() && (github.event_name == 'schedule' || github.event_name == 'pull_request')\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict mutants-merge\n  proverif-hx:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict proverif --models hx --jobs 4\n  proverif-link:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict proverif --models link --jobs 4\n";
+    const PINNED_EXTRA: &str = "  ct:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict ct\n  mutants-shard:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    strategy:\n      matrix:\n        shard:\n          - 0\n          - 1\n    steps:\n      - run: cargo xtask install-tools --set mutants\n      - run: cargo xtask step --strict mutants --shard ${{ matrix.shard }}/8\n  mutants:\n    needs: mutants-shard\n    if: always() && (github.event_name == 'schedule' || github.event_name == 'pull_request')\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict mutants-merge\n  proverif-hx:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict proverif --models hx --jobs 4\n  proverif-link:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict proverif --models link --jobs 4\n  kani:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict kani\n  fuzz:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict fuzz\n";
+
+    /// M6-12: the `ci.yml` of `b83ed0b` (an unquoted `: ` in the Kani step name) gives exactly one finding, at line 240.
+    #[test]
+    fn unquoted_step_name_with_colon_space_is_a_finding() {
+        let old = lf(include_str!("../tests/fixtures/ci-b83ed0b.yml"));
+        let found = step_name_findings("ci.yml", &old);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found.iter().all(|f| f.ends_with("ci.yml:240")), "{found:?}");
+        assert!(
+            found
+                .iter()
+                .all(|f| f.starts_with("step name is not a valid YAML plain scalar"))
+        );
+    }
+
+    /// M6-12: the real workflows have no such step name.
+    #[test]
+    fn quoted_step_names_pass() {
+        for (file, text) in [
+            ("ci.yml", include_str!("../../.github/workflows/ci.yml")),
+            (
+                "ci-dispatch.yml",
+                include_str!("../../.github/workflows/ci-dispatch.yml"),
+            ),
+        ] {
+            assert_eq!(
+                step_name_findings(file, &lf(text)),
+                Vec::<String>::new(),
+                "{file}"
+            );
+        }
+    }
+
+    /// TEST-SPEC-M6 X-06 (OPEN-M6-06 A): every workflow sets `AWS_LC_SYS_PREBUILT_NASM: "0"`, and the four jobs that build
+    /// `aws-lc-sys` for Windows install NASM and print its version; a workflow without the variable, or a Windows job
+    /// without the NASM step, is a finding. (The CI log of those jobs is the evidence that no prebuilt object is used.)
+    #[test]
+    fn windows_builds_nasm_from_source() {
+        let real = [
+            (
+                ".github/workflows/ci.yml",
+                include_str!("../../.github/workflows/ci.yml"),
+            ),
+            (
+                ".github/workflows/ci-dispatch.yml",
+                include_str!("../../.github/workflows/ci-dispatch.yml"),
+            ),
+            (
+                ".github/workflows/fuzz-nightly.yml",
+                include_str!("../../.github/workflows/fuzz-nightly.yml"),
+            ),
+            (
+                ".github/workflows/miri-full.yml",
+                include_str!("../../.github/workflows/miri-full.yml"),
+            ),
+        ];
+        for (file, text) in real {
+            assert_eq!(
+                nasm_findings(file, &lf(text)),
+                Vec::<String>::new(),
+                "{file}"
+            );
+        }
+        for (file, job) in expect::NASM_JOBS {
+            let (_, text) = real
+                .iter()
+                .find(|(f, _)| f == file)
+                .copied()
+                .unwrap_or_default();
+            assert!(job_block(&lf(text), job).is_some(), "{file} {job}");
+        }
+        let ci = lf(include_str!("../../.github/workflows/ci.yml"));
+        // the variable removed
+        let no_env = ci.replace("  AWS_LC_SYS_PREBUILT_NASM: \"0\"\n", "");
+        let found = nasm_findings(".github/workflows/ci.yml", &no_env);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(
+            found.iter().all(|f| f.contains("AWS_LC_SYS_PREBUILT_NASM")),
+            "{found:?}"
+        );
+        // set to 1 (prebuilt objects allowed)
+        let one = ci.replace(
+            "AWS_LC_SYS_PREBUILT_NASM: \"0\"",
+            "AWS_LC_SYS_PREBUILT_NASM: \"1\"",
+        );
+        assert_eq!(nasm_findings(".github/workflows/ci.yml", &one).len(), 1);
+        // the Windows NASM step removed
+        let no_step = ci.replace(
+            "            choco install nasm --version=$pin -y --no-progress\n",
+            "",
+        );
+        let found = nasm_findings(".github/workflows/ci.yml", &no_step);
+        assert_eq!(
+            found,
+            vec![
+                ".github/workflows/ci.yml: job windows-native does not install NASM and print its version (OPEN-M6-06)"
+                    .to_owned()
+            ]
+        );
+        // WEISUNG M6-B-2: the probe moved after the Windows build step is a finding
+        let start = ci.find("      - name: NASM probe").unwrap_or_default();
+        let end = start
+            .saturating_add(
+                ci.get(start..)
+                    .unwrap_or_default()
+                    .find("          }\n")
+                    .unwrap_or_default(),
+            )
+            .saturating_add("          }\n".len());
+        let step = ci.get(start..end).unwrap_or_default().to_owned();
+        assert!(
+            step.contains("nasm -v") && step.contains("choco install nasm --version=$pin"),
+            "{step}"
+        );
+        let gate = "        run: cargo xtask step --strict clippy nextest doctest kat hello\n";
+        let late = ci
+            .replacen(&step, "", 1)
+            .replacen(gate, &format!("{gate}{step}"), 1);
+        assert_eq!(
+            nasm_findings(".github/workflows/ci.yml", &late),
+            vec![
+                ".github/workflows/ci.yml: job windows-native prints the NASM version only after its build step (OPEN-M6-06)"
+                    .to_owned()
+            ]
+        );
+        // the xwin NASM install removed
+        let no_xwin = ci.replace(
+            "sudo apt-get install -y --no-install-recommends nasm && nasm -v",
+            "true",
+        );
+        let found = nasm_findings(".github/workflows/ci.yml", &no_xwin);
+        assert!(
+            found.len() == 1 && found.iter().all(|f| f.contains("xwin-cross")),
+            "{found:?}"
+        );
+    }
 
     /// M2 review C2: the required job names only in ci.yml, all four there, and no dispatch trigger in ci.yml; M4
     /// review C-5: likewise the pinned jobs `linux-full` delegates to.
@@ -6021,18 +6648,18 @@ mod tests {
             1,
         );
         assert_eq!(required_job_findings(&files(&removed)).len(), 1);
-        // likewise on every pinned job (M4 review C-5; M5 adds `proverif-link`): each condition changed alone is one
+        // likewise on every pinned job (M4 review C-5; M5 adds `proverif-link`, M6 `kani`, M6-CI `fuzz`): each condition changed alone is one
         // finding
         assert_eq!(
             required_job_findings(&files(
                 &ci.replace("|| github.event_name == 'pull_request'", "")
             ))
             .len(),
-            6
+            8
         );
         // the conditions as parsed
         let parsed = job_conditions(ci);
-        assert_eq!(parsed.len(), 10);
+        assert_eq!(parsed.len(), 12);
         assert_eq!(parsed.first(), Some(&("linux-fast".to_owned(), None)));
         assert_eq!(
             parsed.get(4),
@@ -6093,7 +6720,7 @@ mod tests {
     /// `linux-fast` after its `runs-on`, `fast_step` replaces its first gate step line.
     fn gate_ci(fast: &str, fast_step: &str) -> String {
         format!(
-            "on:\n  pull_request:\npermissions:\n  contents: read\njobs:\n  linux-fast:\n    runs-on: x\n{fast}    steps:\n      - uses: actions/cache/save@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6\n        if: steps.c.outputs.hit != 'true'\n{fast_step}      - run: cargo xtask step --strict sbom systemd\n  windows-native:\n    runs-on: x\n    steps:\n      - run: cargo xtask install-tools --set windows\n      - run: cargo xtask step --strict clippy nextest doctest kat hello\n  xwin-cross:\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict windows-cross\n  linux-full:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask ci-full --strict --delegated windows-native --delegated windows-cross --delegated mutants --delegated ct --delegated proverif-link --models tr\n{PINNED_EXTRA}"
+            "on:\n  pull_request:\npermissions:\n  contents: read\njobs:\n  linux-fast:\n    runs-on: x\n{fast}    steps:\n      - uses: actions/cache/save@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6\n        if: steps.c.outputs.hit != 'true'\n{fast_step}      - run: cargo xtask step --strict sbom systemd\n  windows-native:\n    runs-on: x\n    steps:\n      - run: cargo xtask install-tools --set windows\n      - run: cargo xtask step --strict clippy nextest doctest kat hello\n  xwin-cross:\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict windows-cross\n  linux-full:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask ci-full --strict --delegated windows-native --delegated windows-cross --delegated mutants --delegated ct --delegated fuzz --delegated kani --delegated proverif-link --models tr\n{PINNED_EXTRA}"
         )
     }
 
@@ -6256,6 +6883,26 @@ mod tests {
                 (
                     "linux-full without --delegated proverif-link",
                     ci.replacen(" --delegated proverif-link --models tr", " --models tr", 1),
+                ),
+                // M6 (WEISUNG M6-11): the Kani job deleted, its gate line changed, or its delegation dropped
+                ("delete kani", without_job(ci, "kani")),
+                (
+                    "kani without --strict",
+                    ci.replacen("cargo xtask step --strict kani", "cargo xtask step kani", 1),
+                ),
+                (
+                    "linux-full without --delegated kani",
+                    ci.replacen(" --delegated kani --delegated proverif-link", " --delegated proverif-link", 1),
+                ),
+                // M6-CI (WEISUNG M6-CI-1 §4): the fuzz job deleted, its gate line changed, or its delegation dropped
+                ("delete fuzz", without_job(ci, "fuzz")),
+                (
+                    "fuzz without --strict",
+                    ci.replacen("cargo xtask step --strict fuzz", "cargo xtask step fuzz", 1),
+                ),
+                (
+                    "linux-full without --delegated fuzz",
+                    ci.replacen(" --delegated fuzz --delegated kani", " --delegated kani", 1),
                 ),
                 ("delete ct", without_job(ci, "ct")),
                 ("delete mutants-shard", without_job(ci, "mutants-shard")),
@@ -6558,6 +7205,43 @@ mod tests {
         assert!(workflow_findings("miri-full.yml", &text).is_empty());
     }
 
+    /// TEST-SPEC-M6 COV-01 (OPEN-M6-23): `secmp-client-core` joins the 90 % crates.
+    #[test]
+    fn coverage_strict_includes_client_core() {
+        assert_eq!(
+            expect::COVERAGE_STRICT,
+            &["secmp-crypto", "secmp-proto", "secmp-client-core"]
+        );
+        assert!((expect::COVERAGE_STRICT_MIN - 90.0).abs() < f64::EPSILON);
+    }
+
+    /// TEST-SPEC-M6 COV-02 (OPEN-M6-23): `secmp-transport` is held to the general 80 % with every file counted — the
+    /// ignore pattern names only test and Kani files, so the Arti glue is in the denominator (an exclusion list would
+    /// need the reviewer's written approval).
+    #[test]
+    fn coverage_transport_80_with_tor_glue() {
+        assert!(!expect::COVERAGE_STRICT.contains(&"secmp-transport"));
+        assert!((expect::COVERAGE_MIN - 80.0).abs() < f64::EPSILON);
+        assert_eq!(COVERAGE_IGNORE_RE, r"(/tests\.rs|/kani_proofs\.rs)$");
+        for glue in [
+            "crates/secmp-transport/src/tor.rs",
+            "crates/secmp-transport/src/tor/arti.rs",
+            "crates/secmp-transport/src/tls.rs",
+        ] {
+            assert!(
+                !glue.ends_with("/tests.rs") && !glue.ends_with("/kani_proofs.rs"),
+                "{glue}"
+            );
+        }
+        let args = coverage_args("out.json");
+        assert_eq!(
+            args.iter()
+                .filter(|a| *a == "--ignore-filename-regex")
+                .count(),
+            1
+        );
+    }
+
     /// F18 (R-42): the coverage run leaves test-only files out of the denominator; M5-B-3: it builds with
     /// `secmp-relay/kat`, so the relay's `relay` suite is measured; M5-C: and `secmp-testkit/harness`, so the harness and
     /// the transport tests are.
@@ -6599,7 +7283,9 @@ mod tests {
                 "run",
                 "--workspace",
                 "--locked",
-                "--no-fail-fast"
+                "--no-fail-fast",
+                "-E",
+                "not binary(=harness)"
             ]
         );
         let nonkat = nextest_nonkat_args();
@@ -6763,10 +7449,8 @@ mod tests {
     /// out like `secmp-proto`'s; the package builds with feature `kat` like the other two.
     #[test]
     fn mutants_scope_includes_relay() -> Result<()> {
-        assert_eq!(
-            expect::MUTANT_PACKAGES,
-            &["secmp-crypto", "secmp-proto", "secmp-relay"]
-        );
+        assert!(expect::MUTANT_PACKAGES.contains(&"secmp-relay"));
+        assert!(!expect::MUTANT_HARNESS_PACKAGES.contains(&"secmp-relay"));
         assert_eq!(expect::MUTANT_SHARDS, 8);
         assert_eq!(expect::MUTANT_MIN_CAUGHT_PERCENT, 50);
         assert_eq!(expect::MUTANT_UNVIABLE_WARN_PERCENT, 35);
@@ -6791,6 +7475,214 @@ mod tests {
             standards.contains("`secmp-crypto`, `secmp-proto`, `secmp-relay`"),
             "docs/06 §4 Mutation names the three packages (ADR-047 Am. 3 consequence)"
         );
+        Ok(())
+    }
+
+    /// WEISUNG M6-CI-5 (GLM2B-1): the guard that kills the pure (A′) revert — the Balanced round-robin position moving
+    /// when a cell is obtained instead of when its SEND is written — is a fast test that the per-mutant run of the second
+    /// `cargo mutants` run executes: it exists, and neither skip list names it (the tokio-AI repeats are skipped there).
+    #[test]
+    fn rr_write_time_guard_is_not_skipped_by_the_mutation_run() {
+        const GUARD: &str = "balanced_rr_does_not_advance_on_teardown_before_tick";
+        let source = lf(include_str!(
+            "../../crates/secmp-testkit/tests/harness/m6_sched_io.rs"
+        ));
+        assert_eq!(source.matches(&format!("fn {GUARD}()")).count(), 1);
+        for (name, _) in expect::MUTANT_HARNESS_SKIP_TESTS
+            .iter()
+            .chain(expect::MUTANT_SKIP_TESTS)
+        {
+            assert!(
+                !name.contains(GUARD) && !GUARD.contains(name),
+                "{name} would skip the guard"
+            );
+        }
+        // the run it belongs to tests the harness package with feature `harness`
+        let args = mutants_harness_args(None);
+        assert!(
+            args.windows(2)
+                .any(|w| w == ["--test-package", "secmp-testkit"])
+        );
+        assert!(args.windows(2).any(|w| w == ["--features", "harness"]));
+        assert!(!args.iter().any(|a| a.contains(GUARD)));
+        // ADR-047 Amendment 6: nextest cancels the run at the first failure, after the first `--` (nextest's own options)
+        let dashes = args.iter().position(|a| a == "--").unwrap_or(usize::MAX);
+        let max_fail = args
+            .iter()
+            .position(|a| a == MUTANTS_HARNESS_MAX_FAIL)
+            .unwrap_or(0);
+        assert_eq!(max_fail, dashes.saturating_add(1));
+        assert!(
+            !mutants_args(None)
+                .iter()
+                .any(|a| a == MUTANTS_HARNESS_MAX_FAIL)
+        );
+    }
+
+    /// TEST-SPEC-M6 MU-01 (ADR-047 Amendment 4, OPEN-M6-23): the gate covers `secmp-crypto`, `secmp-proto`,
+    /// `secmp-relay`, `secmp-client-core` and `secmp-transport` in the 8 shards with the Amendment 2 floor; the two M6
+    /// packages are mutated in the second run of every shard, tested by their own tests and the testkit harness
+    /// (`--test-package`, feature `harness`), the first run keeps the three others with feature `kat`; `secmp-testkit`
+    /// itself is never mutated (G-11); `MUTANT_EXCLUDE_FILES` holds only Kani-only files and Arti glue named in
+    /// `docs/mutants-accepted.md` §Excluded; docs/06 §4 lists the five packages.
+    #[test]
+    fn mutants_scope_includes_client_core_and_transport() {
+        assert_eq!(
+            expect::MUTANT_PACKAGES,
+            &[
+                "secmp-crypto",
+                "secmp-proto",
+                "secmp-relay",
+                "secmp-client-core",
+                "secmp-transport"
+            ]
+        );
+        assert_eq!(
+            expect::MUTANT_HARNESS_PACKAGES,
+            &["secmp-client-core", "secmp-transport"]
+        );
+        assert_eq!(
+            expect::MUTANT_HARNESS_TEST_PACKAGES,
+            &["secmp-client-core", "secmp-transport", "secmp-testkit"]
+        );
+        assert!(!expect::MUTANT_PACKAGES.contains(&"secmp-testkit"));
+        assert_eq!(expect::MUTANT_SHARDS, 8);
+        let pairs = |args: &[String]| -> Vec<(String, String)> {
+            args.windows(2)
+                .filter_map(|w| Some((w.first()?.clone(), w.get(1)?.clone())))
+                .collect()
+        };
+        for k in 0..8 {
+            let shard = Some(MutantsShard { k, n: 8 });
+            let first = pairs(&mutants_args(shard));
+            let second = pairs(&mutants_harness_args(shard));
+            let has =
+                |p: &[(String, String)], a: &str, b: &str| p.iter().any(|(x, y)| x == a && y == b);
+            for p in ["secmp-crypto", "secmp-proto", "secmp-relay"] {
+                assert!(
+                    has(&first, "--package", p) && !has(&second, "--package", p),
+                    "{k} {p}"
+                );
+            }
+            for p in expect::MUTANT_HARNESS_PACKAGES {
+                assert!(
+                    has(&second, "--package", p) && !has(&first, "--package", p),
+                    "{k} {p}"
+                );
+            }
+            for p in expect::MUTANT_HARNESS_TEST_PACKAGES {
+                assert!(has(&second, "--test-package", p), "{k} {p}");
+            }
+            assert!(!first.iter().any(|(a, _)| a == "--test-package"), "{k}");
+            assert!(has(&first, "--features", "kat") && has(&second, "--features", "harness"));
+            assert!(
+                has(&first, "--shard", &format!("{k}/8"))
+                    && has(&second, "--shard", &format!("{k}/8"))
+            );
+            assert!(has(&first, "--output", "target"));
+            assert!(has(&second, "--output", MUTANTS_HARNESS_OUTPUT));
+            assert!(
+                has(&second, "--test-tool", "nextest")
+                    && !first.iter().any(|(a, _)| a == "--test-tool")
+            );
+            assert!(has(
+                &second,
+                "--timeout",
+                &expect::MUTANTS_HARNESS_TEST_TIMEOUT_SECONDS.to_string()
+            ));
+            for (t, _) in expect::MUTANT_HARNESS_SKIP_TESTS {
+                assert!(
+                    has(&second, "--skip", t) && !has(&first, "--skip", t),
+                    "{t}"
+                );
+            }
+            for f in expect::MUTANT_EXCLUDE_FILES {
+                assert!(
+                    has(&first, "--exclude", f) && has(&second, "--exclude", f),
+                    "{f}"
+                );
+            }
+        }
+    }
+
+    /// MU-01, continued: every excluded file is Kani-only or named in `docs/mutants-accepted.md` §Excluded; the two
+    /// harness-run crates have feature `harness`; docs/06 §4 names the five packages.
+    #[test]
+    fn mutants_scope_files_and_docs_follow_amendment_4() -> Result<()> {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let accepted = std::fs::read_to_string(root.join("docs/mutants-accepted.md"))?;
+        for f in expect::MUTANT_EXCLUDE_FILES {
+            assert!(
+                f.ends_with("/kani_proofs.rs") || accepted.contains(&format!("`{f}`")),
+                "{f}: neither Kani-only nor named in docs/mutants-accepted.md"
+            );
+        }
+        let transport = std::fs::read_to_string(root.join("crates/secmp-transport/Cargo.toml"))?;
+        assert!(
+            transport.contains("\nharness = ["),
+            "secmp-transport has feature harness"
+        );
+        let testkit = std::fs::read_to_string(root.join("crates/secmp-testkit/Cargo.toml"))?;
+        assert!(
+            testkit.contains("\nharness = ["),
+            "secmp-testkit has feature harness"
+        );
+        let standards = std::fs::read_to_string(root.join("docs/06-engineering-standards.md"))?;
+        assert!(
+            standards.contains(
+                "`secmp-crypto`, `secmp-proto`, `secmp-relay`, `secmp-client-core`, `secmp-transport`"
+            ),
+            "docs/06 §4 Mutation names the five packages (ADR-047 Am. 4 consequence)"
+        );
+        Ok(())
+    }
+
+    /// ADR-047 Amendment 4: the second run's outcomes are merged into the first run's `mutants.out` — union of the
+    /// outcomes, summed `total_mutants`, concatenated survivor lists, the second run's files kept under `harness/`.
+    #[test]
+    fn merge_mutants_runs_unites_outcomes_and_survivors() -> Result<()> {
+        let dir =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../target/xtask-test-merge-mutants-runs");
+        let _ = std::fs::remove_dir_all(&dir);
+        let (a, b) = (dir.join("a"), dir.join("b"));
+        std::fs::create_dir_all(&a)?;
+        std::fs::create_dir_all(&b)?;
+        let doc = |o: Vec<Value>| {
+            let n = o.len();
+            serde_json::json!({"outcomes": o, "total_mutants": n}).to_string()
+        };
+        std::fs::write(
+            a.join("outcomes.json"),
+            doc(mutant_outcomes("secmp-relay", 2, 1, 1)),
+        )?;
+        std::fs::write(
+            b.join("outcomes.json"),
+            doc(mutant_outcomes("secmp-transport", 3, 0, 1)),
+        )?;
+        std::fs::write(
+            a.join("missed.txt"),
+            "crates/secmp-relay/src/lib.rs:3:1: replace f3 with ()\n",
+        )?;
+        std::fs::write(
+            b.join("missed.txt"),
+            "crates/secmp-transport/src/lib.rs:3:1: replace f3 with ()\n",
+        )?;
+        merge_mutants_runs(&a, &b)?;
+        let merged = read_outcomes(&a.join("outcomes.json"))?;
+        assert_eq!(merged.outcomes.len(), 8);
+        let counts = mutant_counts(&merged.outcomes)?;
+        assert_eq!(
+            counts.get("secmp-transport").map(|c| (c.caught, c.missed)),
+            Some((3, 1))
+        );
+        assert_eq!(
+            counts.get("secmp-relay").map(|c| (c.caught, c.missed)),
+            Some((2, 1))
+        );
+        let missed = std::fs::read_to_string(a.join("missed.txt"))?;
+        assert_eq!(missed.lines().count(), 2, "{missed}");
+        assert!(a.join("harness/outcomes.json").exists() && a.join("harness/missed.txt").exists());
+        let _ = std::fs::remove_dir_all(&dir);
         Ok(())
     }
 
@@ -6843,7 +7735,7 @@ mod tests {
                 .any(|a| a.contains("secmp-proto/kat") || a.contains("secmp-crypto/kat"))
         );
         assert_eq!(args.iter().filter(|a| *a == "--features").count(), 1);
-        for p in expect::MUTANT_PACKAGES {
+        for p in mutants_own_test_packages() {
             assert!(pair("--package", p), "{p}");
         }
         // the skip filters come after `-- --`: cargo-mutants hands the rest to `cargo test`, which hands it to libtest
@@ -6898,6 +7790,75 @@ mod tests {
         out
     }
 
+    /// TEST-SPEC-M6 G-08 (M5 review F-15, R-148): the mutants gate prints, per package, the unviable count by file
+    /// (top 5) and by mutation operator; informative (the lines are no failures).
+    #[test]
+    fn mutants_report_has_unviable_breakdown() {
+        let unviable = |package: &str, file: &str, genre: &str| {
+            serde_json::json!({"scenario": {"Mutant": {"name": format!("crates/{package}/{file}:1:1: x"),
+                "package": package, "file": format!("crates/{package}/{file}"), "genre": genre}},
+                "summary": "Unviable"})
+        };
+        let mut outcomes = Vec::new();
+        // secmp-crypto: 6 files, a.rs 3, b.rs 2, the others 1 each; 5 BinaryOperator and 4 FnValue
+        for (file, n) in [
+            ("a.rs", 3),
+            ("b.rs", 2),
+            ("c.rs", 1),
+            ("d.rs", 1),
+            ("e.rs", 1),
+            ("f.rs", 1),
+        ] {
+            for i in 0..n {
+                let genre = if i == 0 && file != "f.rs" {
+                    "BinaryOperator"
+                } else {
+                    "FnValue"
+                };
+                outcomes.push(unviable("secmp-crypto", file, genre));
+            }
+        }
+        // a caught mutant and another package's unviable mutant do not count for secmp-crypto
+        outcomes.push(mutant_outcome("secmp-crypto", 99, "CaughtMutant"));
+        outcomes.push(unviable("secmp-proto", "z.rs", "FnValue"));
+        let lines = unviable_breakdown(&outcomes);
+        assert_eq!(lines.len(), expect::MUTANT_PACKAGES.len());
+        let crypto = lines
+            .iter()
+            .find(|l| l.starts_with("secmp-crypto: "))
+            .map_or("", String::as_str);
+        assert!(
+            crypto.starts_with("secmp-crypto: unviable 9 (informative); "),
+            "{crypto}"
+        );
+        assert!(
+            crypto.contains(
+                "by file (top 5): crates/secmp-crypto/a.rs 3, crates/secmp-crypto/b.rs 2, \
+                 crates/secmp-crypto/c.rs 1, crates/secmp-crypto/d.rs 1, crates/secmp-crypto/e.rs 1;"
+            ),
+            "{crypto}"
+        );
+        assert!(!crypto.contains("f.rs"), "{crypto}");
+        assert!(
+            crypto.contains("by mutation operator: BinaryOperator 5, FnValue 4"),
+            "{crypto}"
+        );
+        let proto = lines
+            .iter()
+            .find(|l| l.starts_with("secmp-proto: "))
+            .map_or("", String::as_str);
+        assert!(
+            proto.contains("unviable 1 ") && proto.contains("crates/secmp-proto/z.rs 1"),
+            "{proto}"
+        );
+        // a package without unviable mutants says so
+        assert!(
+            unviable_breakdown(&[])
+                .iter()
+                .all(|l| l.contains("unviable 0 ") && l.contains("by mutation operator: none"))
+        );
+    }
+
     /// ADR-047 Amendment 1 (4), M4 review R-06, with Amendment 2: the floor per package — every `secmp-crypto` mutant
     /// unviable fails naming `secmp-crypto`; 36 % unviable passes with a WARNING line naming the package (re-pointed
     /// from the failure of Amendment 1 (4)); 35 % and a balanced input pass without one; a package without mutants
@@ -6912,6 +7873,8 @@ mod tests {
             mutant_outcomes("secmp-crypto", 0, 241, 0),
             mutant_outcomes("secmp-proto", 60, 30, 1),
             mutant_outcomes("secmp-relay", 50, 10, 0),
+            mutant_outcomes("secmp-client-core", 40, 5, 0),
+            mutant_outcomes("secmp-transport", 30, 3, 0),
         ]
         .concat();
         let MutantsFloor {
@@ -6934,6 +7897,8 @@ mod tests {
                 mutant_outcomes("secmp-crypto", 64, 36, 0),
                 mutant_outcomes("secmp-proto", 70, 30, 0),
                 mutant_outcomes("secmp-relay", 50, 10, 0),
+                mutant_outcomes("secmp-client-core", 40, 5, 0),
+                mutant_outcomes("secmp-transport", 30, 3, 0),
             ]
             .concat(),
         )?;
@@ -6950,6 +7915,8 @@ mod tests {
                 mutant_outcomes("secmp-crypto", 70, 30, 0),
                 mutant_outcomes("secmp-proto", 63, 36, 1),
                 mutant_outcomes("secmp-relay", 50, 10, 0),
+                mutant_outcomes("secmp-client-core", 40, 5, 0),
+                mutant_outcomes("secmp-transport", 30, 3, 0),
             ]
             .concat(),
         )?;
@@ -6967,6 +7934,8 @@ mod tests {
                 mutant_outcomes("secmp-crypto", 65, 35, 0),
                 mutant_outcomes("secmp-proto", 80, 18, 2),
                 mutant_outcomes("secmp-relay", 50, 10, 0),
+                mutant_outcomes("secmp-client-core", 40, 5, 0),
+                mutant_outcomes("secmp-transport", 30, 3, 0),
             ]
             .concat(),
         )?;
@@ -6981,6 +7950,8 @@ mod tests {
                 "secmp-crypto: caught 65, missed 0, timeout 0, unviable 35 of 100 (caught 65.0 %, at least 50 %, unviable 35.0 %)".to_owned(),
                 "secmp-proto: caught 80, missed 2, timeout 0, unviable 18 of 100 (caught 80.0 %, at least 50 %, unviable 18.0 %)".to_owned(),
                 "secmp-relay: caught 50, missed 0, timeout 0, unviable 10 of 60 (caught 83.3 %, at least 50 %, unviable 16.7 %)".to_owned(),
+                "secmp-client-core: caught 40, missed 0, timeout 0, unviable 5 of 45 (caught 88.9 %, at least 50 %, unviable 11.1 %)".to_owned(),
+                "secmp-transport: caught 30, missed 0, timeout 0, unviable 3 of 33 (caught 90.9 %, at least 50 %, unviable 9.1 %)".to_owned(),
             ]
         );
         // a package without any mutant: no caught mutant
@@ -6989,7 +7960,9 @@ mod tests {
             failures,
             vec![
                 "secmp-crypto: no caught mutant (of 0)".to_owned(),
-                "secmp-relay: no caught mutant (of 0)".to_owned()
+                "secmp-relay: no caught mutant (of 0)".to_owned(),
+                "secmp-client-core: no caught mutant (of 0)".to_owned(),
+                "secmp-transport: no caught mutant (of 0)".to_owned()
             ]
         );
         Ok(())
@@ -7191,8 +8164,13 @@ mod tests {
             &dir,
             (2, 8),
             "PASS",
-            &mutant_outcomes("secmp-relay", 50, 10, 0),
-            60,
+            &[
+                mutant_outcomes("secmp-relay", 50, 10, 0),
+                mutant_outcomes("secmp-client-core", 40, 5, 0),
+                mutant_outcomes("secmp-transport", 30, 3, 0),
+            ]
+            .concat(),
+            138,
         )?;
         for k in 3..8 {
             write_shard(&dir, (k, 8), "PASS", &[], 0)?;
@@ -7243,8 +8221,13 @@ mod tests {
             &dir,
             (2, 8),
             "PASS",
-            &mutant_outcomes("secmp-relay", 50, 10, 0),
-            60,
+            &[
+                mutant_outcomes("secmp-relay", 50, 10, 0),
+                mutant_outcomes("secmp-client-core", 40, 5, 0),
+                mutant_outcomes("secmp-transport", 30, 3, 0),
+            ]
+            .concat(),
+            138,
         )?;
         for k in 3..8 {
             write_shard(&dir, (k, 8), "PASS", &[], 0)?;
@@ -7297,6 +8280,8 @@ mod tests {
                 mutant_outcomes("secmp-crypto", 20, 10, 0),
                 mutant_outcomes("secmp-proto", 90, 30, 0),
                 mutant_outcomes("secmp-relay", 10, 2, 0),
+                mutant_outcomes("secmp-client-core", 8, 1, 0),
+                mutant_outcomes("secmp-transport", 4, 1, 0),
             ]
             .concat();
             let failed = survivors.iter().find(|(s, _)| *s == k);
@@ -7407,6 +8392,7 @@ mod tests {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
         let mut source = String::new();
         for file in [
+            "crates/secmp-client-core/src/kani_proofs.rs",
             "crates/secmp-proto/src/kani_proofs.rs",
             "crates/secmp-relay/src/kani_proofs.rs",
         ] {
@@ -7440,6 +8426,28 @@ mod tests {
                 root.join(format!("docs/reviews/M05-evidence/kani-m5fix-{h}.txt")),
             )?));
         }
+        // M6 Phase A: the run of the seven `secmp-client-core` harnesses (everything before the negative-control marker of
+        // the committed file `kani-m6a-<sha7>.txt`; the negative control prints `0 of 1` for K-02 on purpose)
+        let evidence = root.join("docs/reviews/M06-evidence");
+        let mut m6: Vec<_> = std::fs::read_dir(&evidence)?
+            .filter_map(std::result::Result::ok)
+            .map(|e| e.path())
+            .filter(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with("kani-m6a-"))
+            })
+            .collect();
+        m6.sort();
+        assert_eq!(m6.len(), 1, "one committed M6 Phase A Kani run: {m6:?}");
+        let whole = lf(&std::fs::read_to_string(
+            m6.first().ok_or_else(|| Error("no run".into()))?,
+        )?);
+        let (positive, negative) = whole
+            .split_once("=== K-02 negative control")
+            .ok_or_else(|| Error("no negative-control marker".into()))?;
+        assert!(negative.contains("VERIFICATION:- FAILED"));
+        log.push_str(positive);
         assert_eq!(
             kani_cover_pin_findings(&kani_covers(&log)?),
             Vec::<String>::new()
@@ -7465,13 +8473,41 @@ mod tests {
         Ok(())
     }
 
+    /// M6 X-05: the Kani and fuzz lists carry the Phase A additions (TEST-SPEC-M6 K-01…K-07, FZ-01, FZ-04).
+    #[test]
+    fn kani_and_fuzz_lists_m6() {
+        assert!(expect::KANI_PACKAGES.contains(&"secmp-client-core"));
+        for h in [
+            "kani_balanced_rr_selects_due_or_ping",
+            "kani_in_flight_bound",
+            "kani_tick_time_checked",
+            "kani_uniform_draw_in_range",
+            "kani_backoff_cap",
+            "kani_rate_bound_integer_form",
+            "kani_evicted_range",
+        ] {
+            assert!(
+                expect::KANI_HARNESSES.contains(&format!("kani_proofs::{h}").as_str()),
+                "{h}"
+            );
+        }
+        for t in ["client_pipeline_responses", "scheduler_event_sequence"] {
+            assert!(expect::FUZZ_TARGETS.contains(&t), "{t}");
+            assert!(
+                expect::FUZZ_MAX_LEN.iter().any(|(n, _)| *n == t),
+                "{t} max_len"
+            );
+        }
+    }
+
     /// M2 review C5: Kani must verify exactly the harnesses of `expect::KANI_HARNESSES`.
     #[test]
     fn kani_refuses_fifteen_harnesses() -> Result<()> {
         let all = expect::KANI_HARNESSES;
-        // M5 Phase B: 30 + the three relay harnesses (TEST-SPEC-M5 K-05…K-07)
-        assert_eq!(all.len(), 33);
-        assert_eq!(kani_verified(&kani_log(all, 0))?.len(), 33);
+        // M5 Phase B: 30 + the three relay harnesses (TEST-SPEC-M5 K-05…K-07); M6 Phase A: + the seven of
+        // `secmp-client-core` (TEST-SPEC-M6 K-01…K-07)
+        assert_eq!(all.len(), 40);
+        assert_eq!(kani_verified(&kani_log(all, 0))?.len(), 40);
         // a deleted harness: 18 verified, and Kani's own summary says 18 of 18
         let fifteen = all.get(1..).unwrap_or_default();
         assert!(kani_verified(&kani_log(fifteen, 0)).is_err());
@@ -7579,19 +8615,157 @@ mod tests {
                     .as_slice()
                 )
             );
-            assert_eq!(
-                args.get(8..),
-                Some(
-                    [
-                        "-max_total_time=1200".to_owned(),
-                        format!("-max_len={max_len}"),
-                        "-timeout=60".to_owned()
-                    ]
-                    .as_slice()
-                )
-            );
+            let mut tail = vec![
+                "-max_total_time=1200".to_owned(),
+                format!("-max_len={max_len}"),
+                "-timeout=60".to_owned(),
+            ];
+            if expect::FUZZ_DEEP_TARGETS.contains(t) {
+                tail.push("-len_control=0".to_owned());
+            }
+            assert_eq!(args.get(8..), Some(tail.as_slice()));
         }
         assert!(fuzz_args("unknown", 120).is_err());
+        Ok(())
+    }
+
+    /// TEST-SPEC-M6 G-05 (M5 review F-8, R-127): the executor fuzzers FZ-07/FZ-08 run with `-len_control=0` and their
+    /// `FUZZ_MAX_LEN` in the smoke and the nightly command, get 3 600 s each of the nightly campaign (the other
+    /// targets share the rest, never below the smoke), no other target has `-len_control`, and the evidence lists the
+    /// runs and `lim` per target with `lim` = `max_len` (an old-style log with `lim: 532` is refused).
+    #[test]
+    fn fuzz_executor_depth() -> Result<()> {
+        assert_eq!(
+            expect::FUZZ_DEEP_TARGETS,
+            ["relay_executor", "relay_link_session"]
+        );
+        assert_eq!(expect::FUZZ_DEEP_NIGHTLY_SECONDS, 3_600);
+        for t in expect::FUZZ_TARGETS {
+            for seconds in [expect::FUZZ_SMOKE_SECONDS, nightly_seconds_for(t)?] {
+                let args = fuzz_args(t, seconds)?;
+                let deep = expect::FUZZ_DEEP_TARGETS.contains(t);
+                assert_eq!(args.iter().any(|a| a == "-len_control=0"), deep, "{t}");
+                assert!(
+                    args.contains(&format!("-max_len={}", fuzz_max_len(t)?)),
+                    "{t}"
+                );
+                assert!(args.contains(&format!("-max_total_time={seconds}")), "{t}");
+            }
+            let want = if expect::FUZZ_DEEP_TARGETS.contains(t) {
+                3_600
+            } else {
+                232
+            };
+            assert_eq!(nightly_seconds_for(t)?, want, "{t}");
+        }
+        // M6 Phase B (FZ-02, FZ-03): 31 x 232 + 2 x 3600 = 14 392 <= 14 400
+        let total: u64 = expect::FUZZ_TARGETS
+            .iter()
+            .map(|t| nightly_seconds_for(t))
+            .sum::<Result<u64>>()?;
+        assert_eq!(total, 14_392);
+        assert!(total <= expect::FUZZ_NIGHTLY_SECONDS);
+        // the evidence: runs and lim per target, lim = max_len
+        let log = "#4\tINITED cov: 5493 ft: 8753 corp: 3/637b exec/s: 0 rss: 53Mb\n\
+                   #900\tpulse  cov: 5650 ft: 16518 corp: 83/15288b lim: 4322 exec/s: 7 rss: 100Mb\n\
+                   #1200\tDONE   cov: 5727 ft: 20652 corp: 338/68Kb lim: 4322 exec/s: 6 rss: 196Mb\n\
+                   Done 1200 runs in 122 second(s)\n";
+        assert_eq!(
+            fuzz_depth_evidence("relay_executor", log)?,
+            "relay_executor: 1200 runs, lim 4322 (= max_len)"
+        );
+        // the shallow log of M5 (lim pinned at the seed length), a log without lim and one without runs
+        assert!(fuzz_depth_evidence("relay_executor", &log.replace("4322", "532")).is_err());
+        assert!(fuzz_depth_evidence("relay_executor", "Done 3 runs in 1 second(s)\n").is_err());
+        assert!(
+            fuzz_depth_evidence("relay_executor", "#4\tINITED cov: 1 lim: 4322 exec/s: 0\n")
+                .is_err()
+        );
+        assert!(fuzz_depth_evidence("proto_cell_unknown", log).is_err());
+        Ok(())
+    }
+
+    /// The comment block directly above the `[section]` header line of a TOML text, as one string.
+    fn comment_above(toml: &str, header: &str) -> String {
+        let lines: Vec<&str> = toml.lines().collect();
+        let Some(at) = lines.iter().position(|l| l.trim() == header) else {
+            return String::new();
+        };
+        let mut block: Vec<&str> = lines
+            .iter()
+            .take(at)
+            .rev()
+            .take_while(|l| l.trim_start().starts_with('#'))
+            .copied()
+            .collect();
+        block.reverse();
+        block.join("\n")
+    }
+
+    /// TEST-SPEC-M6 G-06 (M5 review F-10, R-131, R-132, R-133): the comment above the testkit's `[dependencies]` names
+    /// the feature `harness` and the normal `serde_json` (not `kat`); `secmp-relay`, `secmp-transport` (and
+    /// `secmp-client-core`) are `[workspace.dependencies]` of the root manifest and `workspace = true` in the testkit;
+    /// the `ci-dispatch.yml` suite input lists `proverif-link`; and the target count times the seconds in the comment
+    /// of `fuzz-nightly.yml` is the campaign of `expect` (a stale comment is refused).
+    #[test]
+    fn testkit_manifest_and_workflow_texts() -> Result<()> {
+        let testkit = lf(include_str!("../../crates/secmp-testkit/Cargo.toml"));
+        let comment = comment_above(&testkit, "[dependencies]");
+        assert!(comment.contains("feature `harness`"), "{comment}");
+        assert!(!comment.contains("feature `kat`"), "{comment}");
+        assert!(
+            comment.contains("`serde_json`") && comment.contains("normal"),
+            "{comment}"
+        );
+        let root = lf(include_str!("../../Cargo.toml"));
+        let ws_deps = root
+            .split_once("[workspace.dependencies]")
+            .and_then(|(_, rest)| rest.split("\n[").next())
+            .unwrap_or_default();
+        for krate in ["secmp-relay", "secmp-transport", "secmp-client-core"] {
+            assert!(
+                ws_deps
+                    .lines()
+                    .any(|l| l.starts_with(&format!("{krate} = {{ path = "))),
+                "{krate} is not in [workspace.dependencies]"
+            );
+        }
+        for krate in ["secmp-relay", "secmp-transport"] {
+            assert!(
+                testkit
+                    .lines()
+                    .any(|l| l.trim() == format!("{krate}.workspace = true")),
+                "{krate} is not `workspace = true` in secmp-testkit"
+            );
+        }
+        assert!(
+            !testkit
+                .lines()
+                .any(|l| l.starts_with("secmp-") && l.contains("path =")),
+            "secmp-testkit declares a path dependency"
+        );
+        let dispatch = lf(include_str!("../../.github/workflows/ci-dispatch.yml"));
+        assert!(
+            dispatch
+                .lines()
+                .any(|l| l.trim_start().starts_with("description:") && l.contains("proverif-link")),
+            "ci-dispatch.yml: the suite input does not list proverif-link"
+        );
+        let deep = expect::FUZZ_DEEP_TARGETS.len();
+        let phrase = format!(
+            "{} targets x {} s + {deep} targets x {} s",
+            expect::FUZZ_TARGETS.len().saturating_sub(deep),
+            nightly_share_seconds()?,
+            expect::FUZZ_DEEP_NIGHTLY_SECONDS
+        );
+        let nightly = lf(include_str!("../../.github/workflows/fuzz-nightly.yml"));
+        assert!(
+            nightly
+                .lines()
+                .any(|l| l.trim_start_matches('#').trim() == phrase),
+            "fuzz-nightly.yml: no comment line {phrase:?}"
+        );
+        assert!(!nightly.contains("14 targets") && !nightly.contains("1 028 s"));
         Ok(())
     }
 
@@ -7688,6 +8862,10 @@ mod tests {
             ("dispatch-mutants", "mutants"),
             ("dispatch-proverif-hx", "proverif-hx"),
             ("dispatch-proverif-link", "proverif-link"),
+            // M6 (WEISUNG M6-11)
+            ("dispatch-kani", "kani"),
+            // M6-CI (WEISUNG M6-CI-1 §4)
+            ("dispatch-fuzz", "fuzz"),
         ] {
             let lines = gate_lines(&ci, job);
             assert!(!lines.is_empty(), "{job}: no gate line in ci.yml");
@@ -7848,8 +9026,8 @@ mod tests {
         assert_eq!(expect::FUZZ_NIGHTLY_SECONDS, 14_400);
         assert_eq!(
             nightly_seconds_per_target(expect::FUZZ_NIGHTLY_SECONDS, expect::FUZZ_TARGETS.len())?,
-            // M5 Phase B: 29 targets (the two relay targets FZ-07, FZ-08), 496 s each
-            14_400 / 29
+            // M6 Phase B: 33 targets (+ FZ-02, FZ-03 of M6), 436 s each
+            14_400 / 33
         );
         assert_eq!(nightly_seconds_per_target(14_400, 14)?, 1028);
         assert!(nightly_seconds_per_target(14_400, 0).is_err());

@@ -46,10 +46,11 @@
 //! - `tr_decrypt_reject_skipped` (M4, M3 review R-04, F2, respecified by WEISUNG M4-4 after R-58/R-59): on its own
 //!   receiver state, which holds nine skipped message keys of three earlier chains of A (chain 1: n = 0 … 4;
 //!   chains 2 and 3: n = 0 and 1; so 3 distinct header keys, 5 candidates) and whose current receiving chain is a
-//!   fourth one: A's undelivered cell `(hk_1, n = 0)` (entry 0) vs `(hk_1, n = 4)` (entry 4), each with its body
-//!   tag wrong in byte 0 — both headers open at trial 0, `(hk, n)` is in `skipped`, and the skipped path's body MAC
-//!   rejects. The classes differ in the entry index alone: the lookup visits every entry and selects the message key
-//!   with masks (M4 review R-58). The position of the opening trial is not a class difference (R-59); the
+//!   fourth one: A's undelivered cell `(hk_1, n = 0)` (entry 0) vs the same header with `n = 4` re-sealed under
+//!   `hk_1` with the same nonce and followed by the same body (entry 4; ADR-042 Amendment 5), each with its body tag
+//!   wrong in byte 0 — both headers open at trial 0, `(hk, n)` is in `skipped`, and the skipped path's body MAC
+//!   rejects. The classes differ in the entry index and the public field `n` that selects it: the lookup visits every
+//!   entry and selects the message key with masks (M4 review R-58). The position of the opening trial is not a class difference (R-59); the
 //!   early-exit regression is caught by the unit test `trial_opens_every_candidate_every_call`.
 //!
 //! SecMP-INV/HX targets (M4, TEST-SPEC-M4 (f)), measured after the TR targets on the product path:
@@ -74,7 +75,15 @@
 //!   byte 31 (spec §9.6: the HMAC recomputed, then `hmac_sha256_verify`'s `ct_eq`, the primitive of `tag_compare`);
 //! - `tr_decrypt_trial_open_position` (CT-05; M4 review R-42, campaign R-59): §7.4 Decrypt on a receiver with 2
 //!   distinct skipped header keys, the header opening under the first (trial 0) vs the last (trial 1) candidate of
-//!   step 1, the body tag wrong in byte 0 (both refused by the body MAC on the skipped path).
+//!   step 1, the body tag wrong in byte 0 (both refused by the body MAC on the skipped path). Class 1 is class 0's
+//!   header re-sealed under `hk_2` with the same nonce and body (ADR-042 Amendment 5).
+//!
+//! ADR-042 Amendment 5 (WEISUNG M6-CI-13): the classes of a TR position or reject target share the header nonce, the
+//! public header content and the body bytes, unless the target names one of them as its class difference. A public
+//! header nonce alone shifts §7.4 Decrypt by up to 65 ticks with either sign (CT-DIAG-3). The informative target
+//! `tr_decrypt_nonce_dependence` (class 1 = class 0 re-sealed with a fresh nonce) keeps that effect visible: it is
+//! measured twice after the targets, with no verdict and no A/A pass, and reported in `informative`
+//! (`expect::CT_INFORMATIVE_TARGETS`).
 //!
 //! The LINK targets have no product reject-site tag (spec §8.5: one uniform `link::Error::Rejected`); their pre-check
 //! binds each class to its compare by the positive twin instead: each class gives the claimed outcome, and the
@@ -1960,7 +1969,8 @@ const CLAIM_TR_SKIPPED: Claim = Claim {
     target: "tr_decrypt_reject_skipped",
     classes: [
         "header under hk_1, n = 0 (trial 0; entry 0 of 9), body tag wrong in byte 0",
-        "header under hk_1, n = 4 (trial 0; entry 4 of 9), body tag wrong in byte 0",
+        "the same header with n = 4, re-sealed under hk_1 with the same nonce, the same body (trial 0; entry 4 of 9), \
+         body tag wrong in byte 0",
     ],
     site: "body MAC",
     check: SiteCheck::Tagged,
@@ -2048,8 +2058,8 @@ const CLAIM_TR_TRIAL_POSITION: Claim = Claim {
     classes: [
         "header opens under the first candidate key (hk_1, trial 0 of the 2 distinct skipped header keys of §7.4 step \
          1; entry 0 of 4), body tag wrong in byte 0",
-        "header opens under the last candidate key (hk_2, trial 1 of the 2 distinct skipped header keys of §7.4 step 1; \
-         entry 2 of 4), body tag wrong in byte 0",
+        "the same header plaintext re-sealed under the last candidate key (hk_2, trial 1 of the 2 distinct skipped \
+         header keys of §7.4 step 1; entry 2 of 4) with the same nonce, the same body, body tag wrong in byte 0",
     ],
     site: "body MAC",
     check: SiteCheck::Tagged,
@@ -2064,8 +2074,20 @@ const CLAIM_LINK_SAME_CONTENT: Claim = Claim {
     check: SiteCheck::Twin,
 };
 
+/// The informative nonce-dependence target (ADR-042 Amendment 5; `expect::CT_INFORMATIVE_TARGETS`).
+const CLAIM_TR_NONCE: Claim = Claim {
+    target: "tr_decrypt_nonce_dependence",
+    classes: [
+        "header opens under hk_1 (trial 0 of 2; entry 0 of 4), body tag wrong in byte 0 (the class 0 of \
+         tr_decrypt_trial_open_position)",
+        "the same header plaintext and body, re-sealed under hk_1 with a fresh header nonce, body tag wrong in byte 0",
+    ],
+    site: "body MAC",
+    check: SiteCheck::Tagged,
+};
+
 /// Every claim, for the report (`claim_json`).
-const CLAIMS: [Claim; 16] = [
+const CLAIMS: [Claim; 17] = [
     CLAIM_TR_HDR_KEY,
     CLAIM_TR_BODY_TAG,
     CLAIM_TR_CT_PQ,
@@ -2082,6 +2104,7 @@ const CLAIMS: [Claim; 16] = [
     CLAIM_Q_TOKEN,
     CLAIM_TR_TRIAL_POSITION,
     CLAIM_LINK_SAME_CONTENT,
+    CLAIM_TR_NONCE,
 ];
 
 /// A target built from its claim (name and classes from the claim).
@@ -2423,7 +2446,8 @@ const TR_SKIPPED_RANDOMNESS: usize = 2048;
 /// chains; WEISUNG M4-4 Part C: 5 + 2 + 2 = 9 entries, 3 distinct header keys, 5 trial candidates).
 const TR_SKIPPED_PER_CHAIN: [usize; 3] = [5, 2, 2];
 
-/// The entry of chain 1 that class 1 is under (`(hk_1, 4)`, entry 4 of 9; class 0 is `(hk_1, 0)`, entry 0).
+/// The `n` of class 1's header (`(hk_1, 4)`, entry 4 of 9; class 0 is `(hk_1, 0)`, entry 0). Class 1 is class 0's
+/// header with this `n`, re-sealed with the same nonce (ADR-042 Amendment 5, `tr_skipped_classes`).
 const TR_SKIPPED_CLASS1_N: usize = 4;
 
 /// The fixture of `tr_decrypt_reject_skipped` (M3 review R-04, F2; WEISUNG M4-4 Part C): B's state with skipped
@@ -2434,6 +2458,9 @@ struct TrSkipped {
     receiver: RatchetState,
     /// A's honest undelivered cells per skipped chain, n = 0, 1, …: 5, 2 and 2 of them.
     undelivered: Vec<Vec<Vec<u8>>>,
+    /// A's header key of each skipped chain, `hk_1`, `hk_2`, … (ADR-042 Amendment 5: a class-1 cell is class 0's
+    /// header re-sealed, `tr_resealed`).
+    chain_keys: Vec<SecretBytes<32>>,
 }
 
 /// `state` encrypts a Dummy and persists (a no-op); the new state and the cell's bytes.
@@ -2538,21 +2565,71 @@ fn tr_skipped_session_with(
     Ok(TrSkipped {
         receiver: b,
         undelivered,
+        chain_keys,
     })
 }
 
-/// `tr_decrypt_reject_skipped` (WEISUNG M4-4 Part C): A's undelivered cell `(hk_1, n = 0)` (class 0, entry 0) vs
-/// `(hk_1, n = 4)` (class 1, entry 4) of the first skipped chain, each with its body tag (the last `MSG_TAG_LEN`
-/// bytes) wrong in byte 0. Both headers open at trial 0 (`hk_1` is the first distinct skipped key).
+/// `tr_decrypt_reject_skipped` (WEISUNG M4-4 Part C; fixture rule of ADR-042 Amendment 5): class 0 is A's undelivered
+/// cell `(hk_1, n = 0)` of the first skipped chain (entry 0); class 1 is the same cell with `n` = 4 in its header
+/// plaintext, re-sealed under `hk_1` with the **same** header nonce and followed by the same body (`(hk_1, 4)` is
+/// entry 4). Each has its body tag (the last `MSG_TAG_LEN` bytes) wrong in byte 0; both headers open at trial 0
+/// (`hk_1` is the first distinct skipped key).
+///
+/// The classes share the header nonce, every other header field (`dh_pk`, `pn`, `ek_pq`, `ct_pq`) and the body bytes.
+/// They differ in `n`, a public header field and the one this target names, and therefore in `hdr_ct` and in the entry
+/// the lookup selects. Before Amendment 5, class 1 was A's own `(hk_1, n = 4)` cell: a different nonce and body. The
+/// header nonce alone shifts the decryption by up to 65 ticks with either sign (CT-DIAG-3, V4), and that made run
+/// #159's second measurement fail.
 fn tr_skipped_classes(fixture: &TrSkipped) -> Result<[Vec<u8>; 2], secmp_proto::Error> {
-    let chain1 = fixture
+    let (first, hk1, _) = tr_class0_source(fixture)?;
+    let n = u32::try_from(TR_SKIPPED_CLASS1_N).map_err(|_| secmp_proto::Error::Rejected)?;
+    let class1 = tr_resealed(fixture, first, hk1, hk1, |header| header.n = n)?;
+    Ok([body_tag_wrong(first)?, body_tag_wrong(&class1)?])
+}
+
+/// The class-0 source of the skipped-path targets: A's honest undelivered cell `(hk_1, n = 0)` of the first skipped
+/// chain, `hk_1` and (if there is a second skipped chain) `hk_2`.
+fn tr_class0_source(
+    fixture: &TrSkipped,
+) -> Result<(&[u8], &SecretBytes<32>, Option<&SecretBytes<32>>), secmp_proto::Error> {
+    let first = fixture
         .undelivered
         .first()
+        .and_then(|chain| chain.first())
         .ok_or(secmp_proto::Error::Rejected)?;
-    let (Some(first), Some(last)) = (chain1.first(), chain1.get(TR_SKIPPED_CLASS1_N)) else {
-        return Err(secmp_proto::Error::Rejected);
-    };
-    Ok([body_tag_wrong(first)?, body_tag_wrong(last)?])
+    let hk1 = fixture
+        .chain_keys
+        .first()
+        .ok_or(secmp_proto::Error::Rejected)?;
+    Ok((first, hk1, fixture.chain_keys.get(1)))
+}
+
+/// ADR-042 Amendment 5: `cell` (a cell of the fixture whose header `from` opens) with its header plaintext changed by
+/// `change`, then re-sealed under `to` with the cell's own header nonce, followed by the cell's body. Only `hdr_ct`
+/// differs from `cell`, plus whatever `change` sets. The header goes through the canonical decoder and encoder, which
+/// give back the same bytes when `change` sets nothing.
+fn tr_resealed(
+    fixture: &TrSkipped,
+    cell: &[u8],
+    from: &SecretBytes<32>,
+    to: &SecretBytes<32>,
+    change: impl FnOnce(&mut HeaderV1),
+) -> Result<Vec<u8>, secmp_proto::Error> {
+    let (nonce, rest) = cell
+        .split_first_chunk::<NONCE_LEN>()
+        .ok_or(secmp_proto::Error::Rejected)?;
+    let (hdr_ct, body) = rest
+        .split_at_checked(HDR_CT_LEN)
+        .ok_or(secmp_proto::Error::Rejected)?;
+    let ad = [
+        Label::TrHdr.as_bytes(),
+        fixture.receiver.sb_kat().as_slice(),
+    ]
+    .concat();
+    let mut header = HeaderV1::decode(&Aead::open(from, nonce, &ad, hdr_ct)?)?;
+    change(&mut header);
+    let sealed = Aead::seal(to, Nonce24::from_bytes_kat(*nonce), &ad, &header.encode()?)?;
+    Ok([nonce.as_slice(), &sealed, body].concat())
 }
 
 /// `cell` with its body tag (the last `MSG_TAG_LEN` bytes) wrong in byte 0.
@@ -2571,19 +2648,27 @@ fn body_tag_wrong(cell: &[u8]) -> Result<Vec<u8>, secmp_proto::Error> {
 /// 3), and its current receiving chain is a third one.
 const TR_TRIAL_PER_CHAIN: [usize; 2] = [2, 2];
 
-/// `tr_decrypt_trial_open_position` (TEST-SPEC-M5 CT-05; M4 review R-42, campaign R-59, docs/01 RR-17): A's undelivered
-/// cell `(hk_1, n = 0)` (class 0: the header opens under the first candidate of §7.4 step 1, trial 0) vs `(hk_2, n = 0)`
-/// (class 1: under the last one, trial 1), each with its body tag wrong in byte 0. Both continue on the skipped path,
-/// find `(hk, 0)` in `skipped` and are refused by the body MAC, so the classes differ in the position of the opening
-/// trial (and, under the masked lookup of M4 review R-58, in the entry index) alone.
+/// `tr_decrypt_trial_open_position` (TEST-SPEC-M5 CT-05; M4 review R-42, campaign R-59, docs/01 RR-17; fixture rule of
+/// ADR-042 Amendment 5).
+///
+/// - Class 0 is A's undelivered cell `(hk_1, n = 0)`: its header opens under the first candidate of §7.4 step 1, trial
+///   0.
+/// - Class 1 is the same header plaintext re-sealed under `hk_2` with the **same** header nonce and followed by the same
+///   body: it opens under the last skipped candidate, trial 1.
+///
+/// Each has its body tag wrong in byte 0. Both continue on the skipped path, find `(hk, 0)` in `skipped` (entry 0 under
+/// `hk_1`, entry 2 under `hk_2`) and are refused by the body MAC.
+///
+/// The classes share the header nonce, the whole header plaintext and the body bytes. They differ in the header key
+/// that opens the header, so in the position of the opening trial and, under the masked lookup of M4 review R-58, in
+/// the entry index and its message key, and in `hdr_ct`. Before Amendment 5, class 1 was A's own `(hk_2, 0)` cell,
+/// with another nonce, another public header (`dh_pk`, `pn`, `ek_pq`, `ct_pq`) and another body. The header nonce alone
+/// shifts the decryption by up to 65 ticks with either sign (CT-DIAG-3, V4), and that made run #159 fail.
 fn tr_trial_position_classes(fixture: &TrSkipped) -> Result<[Vec<u8>; 2], secmp_proto::Error> {
-    let [chain1, chain2] = fixture.undelivered.as_slice() else {
-        return Err(secmp_proto::Error::Rejected);
-    };
-    let (Some(first), Some(last)) = (chain1.first(), chain2.first()) else {
-        return Err(secmp_proto::Error::Rejected);
-    };
-    Ok([body_tag_wrong(first)?, body_tag_wrong(last)?])
+    let (first, hk1, hk2) = tr_class0_source(fixture)?;
+    let hk2 = hk2.ok_or(secmp_proto::Error::Rejected)?;
+    let class1 = tr_resealed(fixture, first, hk1, hk2, |_| {})?;
+    Ok([body_tag_wrong(first)?, body_tag_wrong(&class1)?])
 }
 
 /// `tr_decrypt_trial_open_position` (TEST-SPEC-M5 CT-05): spec §7.4 Decrypt (`RatchetState::decrypt_with`, the public
@@ -2609,6 +2694,64 @@ fn tr_decrypt_trial_open_position(
         &class0,
         &class1,
     )
+}
+
+/// `tr_decrypt_nonce_dependence` (ADR-042 Amendment 5): informative, no verdict. It keeps the public-nonce micro-timing
+/// that failed run #159 visible in every run.
+///
+/// - Class 0 is the class 0 of `tr_decrypt_trial_open_position`: A's undelivered `(hk_1, n = 0)`, trial 0, entry 0.
+/// - Class 1 is the same header plaintext and body, re-sealed under `hk_1` with a fresh header nonce drawn from the
+///   stream.
+///
+/// Each has its body tag wrong in byte 0, and both are refused by the body MAC on the skipped path. The classes share
+/// the header key, the entry, the header plaintext and the body. They differ in the header nonce, and so in `hdr_ct` and
+/// in the body AD (which holds both). Measured on the fixture of `tr_decrypt_trial_open_position` with `tr_measure`, so
+/// the pre-check is the TR one.
+fn tr_decrypt_nonce_dependence(
+    n: usize,
+    k: usize,
+    stream: &mut Stream,
+) -> Result<Samples, secmp_crypto::Error> {
+    let fixture = tr_skipped_session_with(stream, &TR_TRIAL_PER_CHAIN).map_err(crypto_error)?;
+    let (first, hk1, _) = tr_class0_source(&fixture).map_err(crypto_error)?;
+    let mut nonce = [0_u8; NONCE_LEN];
+    stream.fill(&mut nonce);
+    let renonced = tr_renonced(&fixture, first, hk1, &nonce).map_err(crypto_error)?;
+    let class0 = body_tag_wrong(first).map_err(crypto_error)?;
+    let class1 = body_tag_wrong(&renonced).map_err(crypto_error)?;
+    tr_measure(
+        n,
+        k,
+        stream,
+        CLAIM_TR_NONCE,
+        fixture.receiver,
+        &class0,
+        &class1,
+    )
+}
+
+/// `cell` with its header plaintext (opened under `hk`) sealed again under `hk` with `nonce`, followed by `cell`'s
+/// body: `nonce ‖ Seal(hk, nonce, hdr AD, header) ‖ body`.
+fn tr_renonced(
+    fixture: &TrSkipped,
+    cell: &[u8],
+    hk: &SecretBytes<32>,
+    nonce: &[u8; NONCE_LEN],
+) -> Result<Vec<u8>, secmp_proto::Error> {
+    let (old, rest) = cell
+        .split_first_chunk::<NONCE_LEN>()
+        .ok_or(secmp_proto::Error::Rejected)?;
+    let (hdr_ct, body) = rest
+        .split_at_checked(HDR_CT_LEN)
+        .ok_or(secmp_proto::Error::Rejected)?;
+    let ad = [
+        Label::TrHdr.as_bytes(),
+        fixture.receiver.sb_kat().as_slice(),
+    ]
+    .concat();
+    let header = Aead::open(hk, old, &ad, hdr_ct)?;
+    let sealed = Aead::seal(hk, Nonce24::from_bytes_kat(*nonce), &ad, &header)?;
+    Ok([nonce.as_slice(), &sealed, body].concat())
 }
 
 /// One call of a TR target: take the receiver's state out of `slot`, decrypt `cell`, put back the unchanged state
@@ -2642,8 +2785,9 @@ fn tr_decrypt_reject(
 
 /// `tr_decrypt_reject_skipped` (M3 review R-04, F2; respecified by WEISUNG M4-4 Part C): `RatchetState::decrypt_with`
 /// on the receiver of `tr_skipped_session` (9 entries, 3 distinct header keys, 5 candidates), the classes of
-/// `tr_skipped_classes`, measured as every TR target (`tr_measure`). The measured difference is the entry index alone
-/// (M4 review R-58: the lookup selects the message key with masks over every entry).
+/// `tr_skipped_classes`, measured as every TR target (`tr_measure`). The measured difference is the entry index, plus
+/// the public header field `n` that selects it (M4 review R-58: the lookup selects the message key with masks over
+/// every entry). The header nonce, the rest of the header and the body are held constant (ADR-042 Amendment 5).
 ///
 /// Classes share the opening trial on purpose: the position of the succeeding trial leaks ≈ 1 floor through the AEAD
 /// library's tag-check branch (R-59, accepted under R-15, hardening F-M5); the early-exit regression F2 was meant for
@@ -3900,13 +4044,87 @@ fn tr_targets(n: usize) -> [Target; 5] {
     ]
 }
 
-/// Every target (`evaluate`), then the inline A/A control over the full target set (ADR-041 (3)) and the
-/// sensitivity control (Amendment 1 (2)); the third value is the reason of a `CONTROL_FAIL` run (either control
-/// failed, or the A/A′ placement control or one of the three same-content controls gave FAIL, ADR-042 and its
-/// Amendments 2 and 3, TEST-SPEC-M5 CT-06; every target verdict is then `CONTROL_FAIL`).
-fn run(
-    rules: Rules,
-) -> Result<(Clock, Vec<Outcome>, Option<String>, Sensitivity), secmp_crypto::Error> {
+/// The informative targets (ADR-042 Amendment 5; `expect::CT_INFORMATIVE_TARGETS`): measured after the targets, no
+/// verdict.
+fn informative_targets(n: usize) -> [Target; 1] {
+    [claimed(CLAIM_TR_NONCE, n, tr_decrypt_nonce_dependence)]
+}
+
+/// An informative target's record (ADR-042 Amendment 5): its calibration and two measurements, no verdict.
+struct Informative {
+    target: Target,
+    calibration: Calibration,
+    first: Option<Measurement>,
+    second: Option<Measurement>,
+}
+
+impl Informative {
+    /// Calibrate `target` and measure it twice with the calibrated `k`, like a target's pair (no re-batch, no verdict,
+    /// no A/A pass). The measurements are `None` where the calibration found no `k` or the clock has no quantum.
+    fn measure(
+        target: Target,
+        stream: &mut Stream,
+        clock: &Clock,
+        rules: Rules,
+    ) -> Result<Self, secmp_crypto::Error> {
+        let calibration = calibrate(&target, stream, clock, rules)?;
+        calibration.progress(target.name);
+        let mut record = Self {
+            target,
+            calibration,
+            first: None,
+            second: None,
+        };
+        let (Some(k), Some(quantum)) = (record.calibration.k, clock.quantum()) else {
+            return Ok(record);
+        };
+        let batch = usize::try_from(k).unwrap_or(1);
+        for (phase, slot) in [("first", &mut record.first), ("second", &mut record.second)] {
+            let samples = (record.target.run)(record.target.samples, batch, stream)?;
+            let m = Measurement::of(&samples, quantum, clock.resolution_ticks, k);
+            progress(record.target.name, phase, Some(k), Some(m.median_ticks));
+            *slot = Some(m);
+        }
+        Ok(record)
+    }
+
+    fn json(&self, clock: &Clock, rules: Rules) -> String {
+        let measurement =
+            |m: Option<&Measurement>| m.map_or_else(|| "null".to_owned(), |m| m.json(clock, rules));
+        let (site, precheck) = claim_json(self.target.name);
+        let [class0, class1] = self.target.classes;
+        format!(
+            "{{\"name\":{},\"class0\":{},\"class1\":{},\"samples\":{},\"informative\":true,\"verdict\":null,\"site\":{site},\"precheck\":{precheck},\"k\":{},\"calibration\":{},\"first\":{},\"second\":{}}}",
+            serde_json::Value::from(self.target.name),
+            serde_json::Value::from(class0),
+            serde_json::Value::from(class1),
+            self.target.samples,
+            self.calibration
+                .k
+                .map_or_else(|| "null".to_owned(), |k| k.to_string()),
+            self.calibration.json(clock),
+            measurement(self.first.as_ref()),
+            measurement(self.second.as_ref())
+        )
+    }
+}
+
+/// What `run` measured: the clock, the target outcomes, the `CONTROL_FAIL` reason, the sensitivity control and the
+/// informative targets.
+type RunRecord = (
+    Clock,
+    Vec<Outcome>,
+    Option<String>,
+    Sensitivity,
+    Vec<Informative>,
+);
+
+/// Every target (`evaluate`), then the informative targets (ADR-042 Amendment 5), the inline A/A control over the full
+/// target set (ADR-041 (3)) and the sensitivity control (Amendment 1 (2)). The third value is the reason of a
+/// `CONTROL_FAIL` run, which is set if either control failed, or if the A/A′ placement control or one of the three
+/// same-content controls gave FAIL (ADR-042 and its Amendments 2 and 3, TEST-SPEC-M5 CT-06); every target verdict is
+/// then `CONTROL_FAIL`.
+fn run(rules: Rules) -> Result<RunRecord, secmp_crypto::Error> {
     let clock = Clock::probe();
     let scale: usize = ct_scale().and_then(|s| s.parse().ok()).unwrap_or(1).max(1);
     let mut stream = Stream::new()?;
@@ -3920,6 +4138,10 @@ fn run(
         .chain(m5_targets(n))
     {
         out.push(evaluate(target, &mut stream, &clock, rules)?);
+    }
+    let mut informative = Vec::new();
+    for target in informative_targets(n) {
+        informative.push(Informative::measure(target, &mut stream, &clock, rules)?);
     }
     let aa_fail = aa_control(&mut out, &mut stream, &clock, rules)?;
     let sensitivity = sensitivity_control(&out, &mut stream, &clock);
@@ -3953,7 +4175,7 @@ fn run(
             outcome.verdict = Verdict::ControlFail;
         }
     }
-    Ok((clock, out, control_fail, sensitivity))
+    Ok((clock, out, control_fail, sensitivity, informative))
 }
 
 /// The sensitivity control of a run (ADR-041 Amendment 1 (2), judged since Amendment 3 by the verdict rule it
@@ -4381,7 +4603,7 @@ fn main() -> ExitCode {
         let _ = std::fs::write(path, error);
         return ExitCode::FAILURE;
     };
-    let Ok((clock, outcomes, control_fail, sensitivity)) = run(rules) else {
+    let Ok((clock, outcomes, control_fail, sensitivity, informative)) = run(rules) else {
         // the gate prints the reason of an aborted run (`ctreport::ct_table_for` reads `error`)
         let error = if TR_ACCEPTED.load(Ordering::Relaxed) {
             "bench aborted: RatchetState::decrypt_with accepted a cell of a TR target, which must be rejected in both classes".to_owned()
@@ -4403,7 +4625,7 @@ fn main() -> ExitCode {
         "FAIL"
     };
     let json = format!(
-        "{{\"thresholds\":{},{}\"sign\":\"{SIGN}\",\"clock\":{},\"host\":{},\"bench_sha256\":{},\"run_verdict\":\"{run_verdict}\",\"run_reason\":{},\"sensitivity_control\":{},\"min_leak_same_content\":{},\"results\":[{}]}}",
+        "{{\"thresholds\":{},{}\"sign\":\"{SIGN}\",\"clock\":{},\"host\":{},\"bench_sha256\":{},\"run_verdict\":\"{run_verdict}\",\"run_reason\":{},\"sensitivity_control\":{},\"min_leak_same_content\":{},\"informative\":[{}],\"results\":[{}]}}",
         rules.json(),
         // M2 review C3 (c): a shortened run says so, and the gate refuses it
         ct_scale().map_or_else(String::new, |s| format!(
@@ -4416,6 +4638,12 @@ fn main() -> ExitCode {
         serde_json::Value::from(control_fail),
         sensitivity.json(&clock, rules),
         sensitivity.same_content_json(&clock, rules),
+        // ADR-042 Amendment 5: the informative targets, no verdict
+        informative
+            .iter()
+            .map(|i| i.json(&clock, rules))
+            .collect::<Vec<_>>()
+            .join(","),
         outcomes
             .iter()
             .map(|o| o.json(&clock, rules))

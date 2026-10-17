@@ -81,13 +81,16 @@ struct Pipe {
     relay_entropy: Rc<RefCell<EntropyPool>>,
     inbox: VecDeque<u8>,
     capture: Capture,
+    capturing: bool,
     closed: bool,
     sizes: Option<Sizes>,
 }
 
 impl Pipe {
     fn feed(&mut self, data: &[u8]) {
-        self.capture.to_relay.extend_from_slice(data);
+        if self.capturing {
+            self.capture.to_relay.extend_from_slice(data);
+        }
         let mut rest = data;
         while !rest.is_empty() && !self.closed {
             let take = self
@@ -101,7 +104,9 @@ impl Pipe {
                 let mut entropy = self.relay_entropy.borrow_mut();
                 self.conn.on_bytes(piece, now, entropy.get())
             };
-            self.capture.to_client.extend_from_slice(&out.bytes);
+            if self.capturing {
+                self.capture.to_client.extend_from_slice(&out.bytes);
+            }
             self.inbox.extend(out.bytes);
             if out.close {
                 self.closed = true;
@@ -133,6 +138,7 @@ impl HarnessStream {
             relay_entropy: Rc::clone(relay_entropy),
             inbox: VecDeque::new(),
             capture: Capture::default(),
+            capturing: true,
             closed: false,
             sizes,
         }))))
@@ -142,6 +148,11 @@ impl HarnessStream {
     #[must_use]
     pub fn capture(&self) -> Capture {
         self.0.borrow().capture.clone()
+    }
+
+    /// Keep (or stop keeping) the byte capture of this connection; long simulations switch it off.
+    pub fn set_capture(&self, on: bool) {
+        self.0.borrow_mut().capturing = on;
     }
 
     /// Whether the relay closed the connection (or the harness cut it).

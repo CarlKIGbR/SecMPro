@@ -1,0 +1,18 @@
+# The six tokio repeats of AI-01..AI-06, 64 traces each, one local run (WEISUNG M6-B-3 §0.4, M6-B-4 §2)
+# command: env SECMP_AI_TRACES=64 cargo nextest run -p secmp-testkit --features harness m6_tokio_ai --no-capture
+# head 1423029; host: 32-core container; 2026-10-15
+
+        PASS [  67.832s] (1/6) secmp-testkit::harness m6_tokio_ai::ai01_strict_tokio
+        PASS [  37.463s] (2/6) secmp-testkit::harness m6_tokio_ai::ai02_balanced_tokio
+        PASS [  34.512s] (3/6) secmp-testkit::harness m6_tokio_ai::ai03_lowbw_tokio
+        PASS [  62.964s] (4/6) secmp-testkit::harness m6_tokio_ai::ai04_when_receiving_tokio
+        PASS [  68.898s] (5/6) secmp-testkit::harness m6_tokio_ai::ai05_timing_draws_tokio
+        PASS [  72.878s] (6/6) secmp-testkit::harness m6_tokio_ai::ai06_both_directions_tokio
+     Summary [ 344.548s] 6 tests run: 6 passed (4 slow), 155 skipped
+
+AI-01-tokio (tokio driver, paused clock, costs 20/1/5 ms, 64 traces x 6 h): max |Δt| C2R = 0 ms, R2C = 0 ms
+AI-02-tokio (tokio driver, paused clock, costs 20/1/5 ms, 64 traces x 6 h): max |Δt| C2R = 0 ms, R2C = 0 ms
+AI-03-tokio (tokio driver, paused clock, costs 20/1/5 ms, 64 traces x 6 h): max |Δt| C2R = 0 ms, R2C = 0 ms
+AI-04-tokio (tokio driver, paused clock, costs 20/1/5 ms, 64 traces x 6 h): max |Δt| C2R = 0 ms, R2C = 0 ms
+AI-05-tokio (64 traces x 6 h): timing draws equal to the idle run in every trace
+AI-06-tokio (tokio driver, paused clock, costs 20/1/5 ms, 64 traces x 6 h): max |Δt| C2R = 0 ms, R2C = 0 ms

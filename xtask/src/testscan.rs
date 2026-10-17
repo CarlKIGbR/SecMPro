@@ -42,7 +42,7 @@ pub(crate) const DEFAULT_SEED_RANGE: RangeInclusive<u64> =
 /// The packages with property tests (each a KAT package, `expect::KAT_PACKAGES`): the kat step runs each once more
 /// with the CI run seed. The scan checks that every property test is in one of them and that each holds one (a
 /// property package without the feature `kat` would need a pass of its own; the scan fails until it has one).
-pub(crate) const PROPERTY_PACKAGES: &[&str] = &["secmp-proto", "secmp-relay"];
+pub(crate) const PROPERTY_PACKAGES: &[&str] = &["secmp-proto", "secmp-relay", "secmp-testkit"];
 
 /// Test binaries (nextest `binary_id`) whose seeded property tests predate the `prop_` names (M2 `canonical`, M3
 /// `tr_properties`): the CI-seed pass runs them whole. Every other property test is named `prop_*`.
@@ -219,6 +219,30 @@ pub(crate) fn kat_runs(
         }
     }
     Ok(runs)
+}
+
+/// The nextest filterset that leaves out `expect::WINDOWS_SKIP_TESTS` (each matched by its last path segment).
+pub(crate) fn windows_skip_filter() -> String {
+    let parts: Vec<String> = crate::expect::WINDOWS_SKIP_TESTS
+        .iter()
+        .map(|(name, _)| format!("test(/(^|::){name}$/)"))
+        .collect();
+    format!("not ({})", parts.join(" | "))
+}
+
+/// A kat run as it runs on Windows (WEISUNG M6-B-3 §1): without the tests of `expect::WINDOWS_SKIP_TESTS` — a run that
+/// already has a filterset (the CI-seed property pass) gets the intersection, nextest's `-E` options being a union.
+#[must_use]
+pub(crate) fn windows_scoped(mut run: NextestRun) -> NextestRun {
+    let skip = windows_skip_filter();
+    if let Some(at) = run.args.iter().position(|a| a == "-E") {
+        if let Some(filter) = run.args.get_mut(at.saturating_add(1)) {
+            *filter = format!("({filter}) and {skip}");
+        }
+    } else {
+        run.args.extend(["-E".to_owned(), skip]);
+    }
+    run
 }
 
 /// The kat step's verdict part about the seeds.

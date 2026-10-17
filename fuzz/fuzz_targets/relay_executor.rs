@@ -27,7 +27,7 @@
 //! echoing `cmd_seq`, of the response kinds D.2 allows; a stale or rate-limited command changes nothing; after
 //! every command every queue holds at most 128 cells with strictly increasing ids below `next_cell_id`, its
 //! `rid`/`sid` are derived from one of the pairs (spec §9.1), `next_cell_id` never decreases (until the sweeper or
-//! a `QUEUE_DEL` removes the queue), `OK_SEND` reports the next id and evicts exactly at capacity, an
+//! a `QUEUE_DEL` removes the queue; a queue created, or created again, by a command starts at 1 with no cells), `OK_SEND` reports the next id and evicts exactly at capacity, an
 //! `OK_QUEUE_NEW` carries the derived ids, and the budget counters equal the stores' reservations.
 #![no_main]
 
@@ -144,6 +144,9 @@ struct Check {
     send_rid: Option<Id>,
     /// `QUEUE_NEW`: the derived ids of its keys.
     new_ids: Option<(Id, Id)>,
+    /// `SKEY`: answered ERR 6 and never executed, so neither the sweeper (it runs at the start of `Relay::execute`)
+    /// nor anything else changes the store.
+    not_executed: bool,
 }
 
 struct Session {
@@ -205,7 +208,9 @@ impl Session {
         let resps = self.shape(req_op, verdict, seq, outcomes);
         let after = self.relay.snapshot_kat();
         self.invariants(fx, &before, &after, verdict, &resps, &check);
-        if verdict == Verdict::Run {
+        // the sweep of a moved hour belongs to the next command that is executed (`Relay::execute`): not to a stale
+        // or rate-limited one, and not to the `SKEY` (VD-M6-A-10, crash-335f88e8)
+        if verdict == Verdict::Run && !check.not_executed {
             self.sweep = false;
         }
     }
@@ -272,7 +277,7 @@ impl Session {
         resps: &[Response],
         check: &Check,
     ) {
-        if verdict != Verdict::Run {
+        if verdict != Verdict::Run || check.not_executed {
             // not executed: nothing changes (spec §9.2, §9.7 item 7)
             assert_eq!(
                 before, after,
@@ -296,10 +301,17 @@ impl Session {
                 derived.contains(&(q.rid, q.sid)),
                 "a queue's ids are not derived from its keys"
             );
-            if !self.sweep
-                && let Some(p) = before.queues.iter().find(|p| p.rid == q.rid)
-            {
-                assert!(q.next_cell_id >= p.next_cell_id, "next_cell_id decreased");
+            match before.queues.iter().find(|p| p.rid == q.rid) {
+                Some(p) if !self.sweep => {
+                    assert!(q.next_cell_id >= p.next_cell_id, "next_cell_id decreased");
+                }
+                // cell ids belong to the queue instance (spec §9.1 `:591`, `:593`): a queue that was not there
+                // before the command — created, or created again after a `QUEUE_DEL` or an expiry — starts at 1
+                None => assert!(
+                    q.next_cell_id == 1 && q.cell_ids.is_empty(),
+                    "a new queue instance does not start at cell id 1"
+                ),
+                Some(_) => {}
             }
         }
         if let (
@@ -395,6 +407,7 @@ fn build(
         1 => {
             // SKEY: `op ‖ cmd_seq` (reading REF-M5 2), answered ERR 6; D.2 has no request type for it
             let p = [&[opcode::SKEY][..], &seq.to_be_bytes()].concat();
+            check.not_executed = true;
             return (opcode::SKEY, vec![p], check);
         }
         2 => {

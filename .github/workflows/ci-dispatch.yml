@@ -1,12 +1,12 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # On-demand runs of single SecMPro gates (`workflow_dispatch` only; M2 review C2). The job names differ from the
-# required checks and the other gate jobs of `ci.yml` (`ct`, `mutants-shard`, `mutants`, `proverif-hx`), so a dispatch
+# required checks and the other gate jobs of `ci.yml` (`ct`, `mutants-shard`, `mutants`, `proverif-hx`, `proverif-link`, `kani`, `fuzz`), so a dispatch
 # on a pull-request head never adds a check run under such a name. Each job runs the same `cargo xtask` gate lines as its `ci.yml`
 # counterpart (M4 review C-4, R-14; checked by `gates::tests::dispatch_full_runs_the_linux_full_line`):
 # `dispatch-fast` = `linux-fast`, `dispatch-windows` = `windows-native`, `dispatch-xwin` = `xwin-cross`,
-# `dispatch-full` = `linux-full` (which delegates mutation testing, ct and the SecMP-HX models), `dispatch-ct` = `ct`,
+# `dispatch-full` = `linux-full` (which delegates mutation testing, ct, fuzz, Kani and the SecMP-LINK models), `dispatch-ct` = `ct`,
 # `dispatch-mutants-shard`/`dispatch-mutants` = `mutants-shard`/`mutants`, `dispatch-proverif-hx` = `proverif-hx`,
-# `dispatch-proverif-link` = `proverif-link` (M5, the SecMP-LINK models `linux-full` delegates); the
+# `dispatch-proverif-link` = `proverif-link` (M5, the SecMP-LINK models `linux-full` delegates), `dispatch-kani` = `kani` (M6), `dispatch-fuzz` = `fuzz` (M6-CI); the
 # suites `full` and `all` run all of the delegated jobs. `cargo xtask win-test --backend github --dispatch` starts
 # `suite: windows`.
 # Checked by `cargo xtask policy` as every workflow (see the header of ci.yml), including the read-only token. By
@@ -17,7 +17,7 @@ on:
   workflow_dispatch:
     inputs:
       suite:
-        description: "Jobs to run (fast = steps 1–5, 13, 14; full = ci-full, the xwin cross-build and the jobs ci-full delegates (ct, mutants, proverif-hx); windows = the Windows gate; ct = the constant-time gate alone; all = every job)"
+        description: "Jobs to run (fast = steps 1–5, 13, 14; full = ci-full, the xwin cross-build and the jobs ci-full delegates (ct, mutants, proverif-hx, proverif-link, kani, fuzz); windows = the Windows gate; ct = the constant-time gate alone; all = every job)"
         type: choice
         options: [all, fast, full, windows, ct]
         default: ct
@@ -33,6 +33,9 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # OPEN-M6-06 A, ADR-051: aws-lc-sys assembles from source with an installed NASM, never with its prebuilt
+  # objects (unverifiable binaries in the supply chain, docs/06 §3); checked by `windows_builds_nasm_from_source`.
+  AWS_LC_SYS_PREBUILT_NASM: "0"
 
 jobs:
   # docs/06 §5 steps 1–5 (ci-fast), 13 (SBOM) and 14 (systemd exposure).
@@ -90,6 +93,19 @@ jobs:
         run: |
           "SECMP_TOOLS_ROOT=$env:USERPROFILE\.secmp-tools" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "$env:USERPROFILE\.secmp-tools\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+      - name: NASM probe (aws-lc-sys from source with AWS_LC_SYS_PREBUILT_NASM=0; OPEN-M6-06)
+        run: |
+          # the image's NASM if present (its version goes into the log); else the pinned Chocolatey package
+          # pinned to the package the first run installed (PR run 38724110285: windows-latest ships no NASM; Chocolatey
+          # nasm 3.2.0 = "NASM version 3.02"; WEISUNG M6-B-2)
+          $pin = "3.2.0"
+          $nasm = Get-Command nasm -ErrorAction SilentlyContinue
+          if ($nasm) { nasm -v } else {
+            if (-not $pin) { throw "NASM is not on the runner image and no pinned version is set" }
+            choco install nasm --version=$pin -y --no-progress
+            "C:\Program Files\NASM" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+            & "C:\Program Files\NASM\nasm.exe" -v
+          }
       - name: Restore pinned tools
         id: tools-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -217,7 +233,7 @@ jobs:
             ~/.kani
           key: ${{ steps.tools-cache.outputs.cache-primary-key }}
       - name: ci-full (steps 1–14)
-        run: cargo xtask ci-full --strict --delegated windows-native --delegated windows-cross --delegated mutants --delegated ct --delegated proverif-link --models tr
+        run: cargo xtask ci-full --strict --delegated windows-native --delegated windows-cross --delegated mutants --delegated ct --delegated fuzz --delegated kani --delegated proverif-link --models tr
 
   # Step 8 as in ci.yml (ADR-047 Amendment 1): 8 shards, then the verdict over them.
   dispatch-mutants-shard:
@@ -347,6 +363,80 @@ jobs:
           name: proverif-hx-${{ github.sha }}-${{ github.run_attempt }}
           path: target/proverif/
           if-no-files-found: error
+
+  # Step 9 (Kani) as in ci.yml (`kani`, WEISUNG M6-11).
+  dispatch-kani:
+    if: inputs.suite == 'all' || inputs.suite == 'full'
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Pinned toolchain (rust-toolchain.toml)
+        run: rustup toolchain install && rustc -vV
+      - name: Tool install root
+        run: |
+          echo "SECMP_TOOLS_ROOT=$HOME/.secmp-tools" >> "$GITHUB_ENV"
+          echo "$HOME/.secmp-tools/bin" >> "$GITHUB_PATH"
+      - name: Restore pinned tools
+        id: tools-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.secmp-tools
+            ~/.kani
+          key: ci-tools-full-${{ runner.os }}-${{ hashFiles('xtask/src/tools.rs', 'rust-toolchain.toml') }}
+      - name: Install pinned tools (Kani and its toolchain, `cargo kani setup`)
+        run: cargo xtask install-tools --set full
+      - name: Save pinned tools (right after installing, so a later failing step cannot lose the cache)
+        if: steps.tools-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.secmp-tools
+            ~/.kani
+          key: ${{ steps.tools-cache.outputs.cache-primary-key }}
+      - name: "Kani (step 9 kani: every harness package, `-Z stubbing` where used, the verified-harness and cover pins)"
+        env:
+          SECMP_RUNNER_TRACE: "1"
+        run: cargo xtask step --strict kani
+
+  # Step 6 (fuzz smoke) as in ci.yml (`fuzz`, WEISUNG M6-CI-1 §4).
+  dispatch-fuzz:
+    if: inputs.suite == 'all' || inputs.suite == 'full'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Pinned toolchain (rust-toolchain.toml)
+        run: rustup toolchain install && rustc -vV
+      - name: Tool install root
+        run: |
+          echo "SECMP_TOOLS_ROOT=$HOME/.secmp-tools" >> "$GITHUB_ENV"
+          echo "$HOME/.secmp-tools/bin" >> "$GITHUB_PATH"
+      - name: Restore pinned tools
+        id: tools-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.secmp-tools
+            ~/.kani
+          key: ci-tools-full-${{ runner.os }}-${{ hashFiles('xtask/src/tools.rs', 'rust-toolchain.toml') }}
+      - name: Install pinned tools and nightly (cargo-fuzz)
+        run: cargo xtask install-tools --set full --nightly
+      - name: Save pinned tools (right after installing, so a later failing step cannot lose the cache)
+        if: steps.tools-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.secmp-tools
+            ~/.kani
+          key: ${{ steps.tools-cache.outputs.cache-primary-key }}
+      - name: "Fuzz (step 6 fuzz: every target, FUZZ_SMOKE_SECONDS each, scratch corpus first, tracked corpus read-only)"
+        run: cargo xtask step --strict fuzz
 
   # Step 10 for the SecMP-LINK session models as in ci.yml (`proverif-link`, M5).
   dispatch-proverif-link:

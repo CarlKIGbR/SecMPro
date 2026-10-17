@@ -1,0 +1,11 @@
+code head 71f0d93 (WEISUNG M6-5)
+command: cargo mutants -p secmp-relay --features kat -f crates/secmp-relay/src/relay.rs --re 'drain_finished' --timeout 240
+Found 3 mutants to test
+ok       Unmutated baseline in 15s build + 11s test
+3 mutants tested in 64s: 3 caught
+baseline Success 11.3 s
+crates/secmp-relay/src/relay.rs:182:9: replace Relay::drain_finished -> bool with true CaughtMutant 11.1 s
+crates/secmp-relay/src/relay.rs:182:9: replace Relay::drain_finished -> bool with false CaughtMutant 11.3 s
+crates/secmp-relay/src/relay.rs:185:64: replace >= with < in Relay::drain_finished CaughtMutant 11.3 s
+before (CI run 38055014861 shard 5): drain_finished -> false: timeout; local at --timeout 240: caught after 106.5 s
+relay tests: cargo nextest run -p secmp-relay --features kat --test-threads=1: 168 passed, 36.0 s

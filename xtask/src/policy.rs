@@ -537,30 +537,185 @@ fn check_spdx(root: &Path, findings: &mut Vec<String>) -> Result<usize> {
     Ok(files.len())
 }
 
-/// `[[exemptions.<name>]]` entries of `supply-chain/config.toml`: (crate name, has a tracked-exemption note).
-pub(crate) fn vet_exemptions(config: &str) -> Vec<(String, bool)> {
-    let mut out: Vec<(String, bool)> = Vec::new();
+/// One `[[exemptions.<name>]]` entry of `supply-chain/config.toml`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct VetExemption {
+    pub(crate) name: String,
+    /// The `version` key (empty if the entry has none).
+    pub(crate) version: String,
+    /// The entry carries a tracked-exemption note.
+    pub(crate) noted: bool,
+    /// A `version` line whose value is neither a `"…"` nor a `'…'` string (after a trailing `#` comment is removed).
+    pub(crate) bad_version_line: bool,
+    /// The header is not the strict form `[[exemptions.<name>]]` at column 0 (EXTB-5): a comment after it, a quoted
+    /// key, spaces inside the brackets, indentation — valid TOML that a line parser must not skip. The entry is still
+    /// read (its name as well as it can be told, its keys), and the header itself is a finding.
+    pub(crate) bad_header: Option<String>,
+}
+
+/// A bare TOML key as cargo-vet writes crate names: ASCII letters, digits, `-`, `_`.
+fn bare_key(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
+/// The crate name of an exemption header in any spelling (for the finding and the closure check of a malformed one).
+fn loose_exemption_name(header: &str) -> String {
+    let inner = header
+        .split('#')
+        .next()
+        .unwrap_or_default()
+        .replace(['[', ']', ' ', '\t'], "");
+    inner
+        .strip_prefix("exemptions.")
+        .unwrap_or(&inner)
+        .trim_matches(['"', '\''])
+        .to_owned()
+}
+
+/// An array-of-tables header (`[[…`) with a quoted key in its key path; `supply-chain/config.toml` has no other array
+/// of tables than `exemptions`, so a quoted key there can only be a spelling of it.
+fn is_quoted_array_header(t: &str) -> bool {
+    t.starts_with("[[") && t.contains(['"', '\''])
+}
+
+/// A key line that assigns to the `exemptions` array without a `[[exemptions.<name>]]` header: `exemptions.x = …`,
+/// `exemptions = { … }`, with spaces or quoted (`"exemptions"`, `'exemptions'`) key parts (FIN-3). Comments and
+/// headers are not key lines.
+fn is_exemptions_key_line(line: &str) -> bool {
+    let t = line.trim_start();
+    if t.starts_with('#') || t.starts_with('[') {
+        return false;
+    }
+    let (quote, rest) = match t.chars().next() {
+        Some(q @ ('"' | '\'')) => (Some(q), t.get(1..).unwrap_or_default()),
+        _ => (None, t),
+    };
+    let Some(after) = rest.strip_prefix("exemptions") else {
+        return false;
+    };
+    let after = match quote {
+        Some(q) => match after.strip_prefix(q) {
+            Some(a) => a,
+            None => return false,
+        },
+        None => after,
+    };
+    after.trim_start().starts_with(['.', '='])
+}
+
+/// An assignment whose first key part is a quoted basic string with an escape (`"exempti\\U0000006Fns".x = …`,
+/// `"exemptions" = { … }` spelled with an escape): the TOML parser decodes it, a literal comparison does not, so it is
+/// rejected without decoding (FIN2-2). A *value* string with an escape is not a key and does not trigger this.
+fn is_escaped_assignment_key(line: &str) -> bool {
+    let t = line.trim_start();
+    let Some(body) = t.strip_prefix('"') else {
+        return false;
+    };
+    let mut escaped = false;
+    let mut has_escape = false;
+    for (i, c) in body.char_indices() {
+        if escaped {
+            escaped = false;
+        } else if c == '\\' {
+            escaped = true;
+            has_escape = true;
+        } else if c == '"' {
+            let after = body
+                .get(i.saturating_add(1)..)
+                .unwrap_or_default()
+                .trim_start();
+            return has_escape && after.starts_with(['=', '.']);
+        }
+    }
+    false
+}
+
+/// The `[[exemptions.<name>]]` entries of `supply-chain/config.toml`, in file order. Fail closed (EXTB-5): only the
+/// exact form `[[exemptions.<bare-name>]]` at column 0 is an ordinary header; any other line starting with `[` that
+/// mentions `exemptions` is an entry with a header finding, never skipped.
+pub(crate) fn vet_exemptions(config: &str) -> Vec<VetExemption> {
+    let mut out: Vec<VetExemption> = Vec::new();
     let mut in_exemption = false;
     for line in config.lines() {
         let t = line.trim();
         if t.starts_with('[') {
             in_exemption = false;
-            if let Some(name) = t
+            let strict = line
                 .strip_prefix("[[exemptions.")
                 .and_then(|r| r.strip_suffix("]]"))
-            {
-                out.push((name.trim_matches('"').to_owned(), false));
+                .filter(|name| bare_key(name));
+            if let Some(name) = strict {
+                out.push(VetExemption {
+                    name: name.to_owned(),
+                    version: String::new(),
+                    noted: false,
+                    bad_version_line: false,
+                    bad_header: None,
+                });
+                in_exemption = true;
+            } else if t.contains("exemptions") || t.contains('\\') || is_quoted_array_header(t) {
+                // EXT2B-2: also an array-of-tables header with a quoted key or any header with an escape — the key
+                // may spell `exemptions` without containing the word (`"exemptions"`)
+                out.push(VetExemption {
+                    name: loose_exemption_name(t),
+                    version: String::new(),
+                    noted: false,
+                    bad_version_line: false,
+                    bad_header: Some(line.to_owned()),
+                });
                 in_exemption = true;
             }
-        } else if in_exemption
-            && t.starts_with("notes")
-            && t.contains("Tracked exemption")
-            && let Some(last) = out.last_mut()
-        {
-            last.1 = true;
+        } else if in_exemption && let Some(last) = out.last_mut() {
+            if t.starts_with("notes") && t.contains("Tracked exemption") {
+                last.noted = true;
+            } else if is_key_line(t, "version") {
+                // EXT2-2: fail closed — a version line that does not parse is a finding, never skipped
+                match quoted_value(t, "version") {
+                    Some(v) => last.version = v,
+                    None => last.bad_version_line = true,
+                }
+            }
         }
     }
     out
+}
+
+/// A `MAJOR.MINOR.PATCH` version, optionally followed by `-pre` and/or `+build` (the form of `Cargo.lock` versions).
+fn version_parses(v: &str) -> bool {
+    let core = v.split(['-', '+']).next().unwrap_or_default();
+    let parts: Vec<&str> = core.split('.').collect();
+    parts.len() == 3
+        && parts
+            .iter()
+            .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// The line assigns `key` (`key = …`, any spacing).
+fn is_key_line(line: &str, key: &str) -> bool {
+    line.strip_prefix(key)
+        .is_some_and(|r| r.trim_start().starts_with('='))
+}
+
+/// The string value of `key = "value"` or `key = 'value'` on a TOML line, with a trailing `# comment` after the
+/// closing quote removed (EXT2-2); anything else (no quotes, unterminated, text after the value) is `None`.
+fn quoted_value(line: &str, key: &str) -> Option<String> {
+    let rest = line
+        .strip_prefix(key)?
+        .trim_start()
+        .strip_prefix('=')?
+        .trim();
+    let quote = rest.chars().next().filter(|c| *c == '"' || *c == '\'')?;
+    let body = rest.get(1..)?;
+    let (value, after) = body.split_once(quote)?;
+    let after = after.trim();
+    if after.is_empty() || after.starts_with('#') {
+        Some(value.to_owned())
+    } else {
+        None
+    }
 }
 
 /// The normal (shipped) dependency closure of `secmp-crypto`/`secmp-proto` (ADR-036, docs/06 §3): normal edges
@@ -582,18 +737,38 @@ pub(crate) fn zero_exemption_closure(ws: &Workspace) -> Result<BTreeSet<(String,
 }
 
 /// The `vet-closure` findings for a `supply-chain/config.toml` text and a closure: exemptions without a
-/// tracked-exemption note, and exemptions of crates inside the closure. Returns the findings and the number of
-/// exempted crates.
+/// tracked-exemption note, and exemptions of a package inside the closure. The closure is a set of (name, version)
+/// packages (ADR-036 Amendment 1): another version of a closure crate's name, reachable only outside the closure, is
+/// not a member and may carry a tracked exemption. Returns the findings and the number of exemption entries.
 pub(crate) fn vet_closure_findings(
     config: &str,
     closure: &BTreeSet<(String, String)>,
 ) -> (Vec<String>, usize) {
     let entries = vet_exemptions(config);
     let mut findings = Vec::new();
+    // EXT3B-1: a byte-order mark makes the first line start with U+FEFF, which the TOML parser accepts and the line
+    // classifier does not see through; rejected, never stripped
+    if config.contains('\u{feff}') {
+        findings.push("vet config contains a byte-order mark".to_owned());
+    }
+    // FIN-3: valid TOML can carry an exemption without a header (dotted key, inline table); the classifier only sees
+    // headers, so such a form is rejected by name, never read
+    if config.lines().any(is_escaped_assignment_key) {
+        findings.push(
+            "vet config uses an escaped key in an assignment; only bare keys are accepted"
+                .to_owned(),
+        );
+    }
+    if config.lines().any(is_exemptions_key_line) {
+        findings.push(
+            "vet config uses a non-canonical exemptions form (dotted or inline); only [[exemptions.<name>]] headers are accepted"
+                .to_owned(),
+        );
+    }
     let untracked: Vec<&str> = entries
         .iter()
-        .filter(|(_, noted)| !noted)
-        .map(|(n, _)| n.as_str())
+        .filter(|e| !e.noted)
+        .map(|e| e.name.as_str())
         .collect();
     if !untracked.is_empty() {
         findings.push(format!(
@@ -601,19 +776,34 @@ pub(crate) fn vet_closure_findings(
             untracked.join(", ")
         ));
     }
-    let exempt: BTreeSet<String> = entries.into_iter().map(|(n, _)| n).collect();
-    let bad: Vec<String> = closure
-        .iter()
-        .filter(|(n, _)| exempt.contains(n))
-        .map(|(n, v)| format!("{n} {v}"))
-        .collect();
-    if !bad.is_empty() {
-        findings.push(format!(
-            "cargo-vet exemptions inside the secmp-crypto/secmp-proto closure: {}",
-            bad.join(", ")
-        ));
+    for e in &entries {
+        if let Some(header) = &e.bad_header {
+            // EXT2B-2: a quoted or escaped key anywhere in the key path (the TOML crate decodes
+            // `[["exemptions".const-oid]]` as `exemptions → const-oid`, the literal match does not) is rejected by name
+            if header.contains(['"', '\'', '\\']) {
+                findings.push(format!(
+                    "vet exemption header with a quoted or escaped key in a table header (use the bare form `[[exemptions.<name>]]`): `{header}`"
+                ));
+            }
+            findings.push(format!(
+                "vet exemption header not in the strict form `[[exemptions.<name>]]` at column 0: `{header}`"
+            ));
+        }
+        if e.bad_version_line {
+            findings.push(format!(
+                "vet exemption with an unparsable version line: {}",
+                e.name
+            ));
+        } else if !version_parses(&e.version) {
+            findings.push(format!("vet exemption without version: {}", e.name));
+        } else if closure.contains(&(e.name.clone(), e.version.clone())) {
+            findings.push(format!(
+                "vet exemption inside the crypto/proto closure: {}@{}",
+                e.name, e.version
+            ));
+        }
     }
-    (findings, exempt.len())
+    (findings, entries.len())
 }
 
 /// `vet-closure`: zero exemptions in the normal `secmp-crypto`/`secmp-proto` closure (docs/06 §3, ADR-036).
@@ -629,6 +819,41 @@ pub(crate) fn check_vet_closure(ws: &Workspace) -> Result<String> {
         expect::VET_CLOSURE_TARGETS.join(", "),
         closure.len(),
     ))
+}
+
+/// The normal direct dependencies of the crates of `expect::NORMAL_DEPENDENCY_ALLOW` that their row does not list
+/// (M5 review F-7, R-126, TEST-SPEC-M6 G-04), each as a finding naming the crate (package) and the dependency; a
+/// listed crate that is not a workspace member is a finding too. Only normal edges count (`dev`- and
+/// `build`-dependencies are not shipped); the edges are those of the workspace graph (`cargo metadata`).
+pub(crate) fn normal_dependency_findings(ws: &Workspace) -> Vec<String> {
+    let mut out = Vec::new();
+    for (krate, allowed) in expect::NORMAL_DEPENDENCY_ALLOW {
+        let Some(pkg) = ws.member(krate) else {
+            out.push(format!(
+                "normal-deps: {krate} is in expect::NORMAL_DEPENDENCY_ALLOW but not a workspace member"
+            ));
+            continue;
+        };
+        let mut deps: Vec<&str> = ws
+            .edges
+            .get(&pkg.id)
+            .into_iter()
+            .flatten()
+            .filter(|(_, normal)| *normal)
+            .filter_map(|(id, _)| ws.all.get(id))
+            .map(|(name, _, _)| name.as_str())
+            .collect();
+        deps.sort_unstable();
+        deps.dedup();
+        for d in deps {
+            if !allowed.contains(&d) {
+                out.push(format!(
+                    "normal-deps: package {krate} has the normal dependency {d}, which expect::NORMAL_DEPENDENCY_ALLOW does not list (a direct dependency needs its ADR line first, CLAUDE.md §1.9)"
+                ));
+            }
+        }
+    }
+    out
 }
 
 /// The event names of the relay's closed event set (`secmp_relay::event::EVENT_NAMES` in `src`, the text of
@@ -694,6 +919,7 @@ pub(crate) fn run(ws: &Workspace) -> Result<String> {
     findings.extend(relay_event_findings(&std::fs::read_to_string(
         ws.root.join("crates/secmp-relay/src/event.rs"),
     )?));
+    findings.extend(normal_dependency_findings(ws));
     let vet = check_vet_closure(ws);
     if let Err(e) = &vet {
         findings.push(format!("vet-closure: {e}"));
@@ -716,9 +942,10 @@ pub(crate) fn run(ws: &Workspace) -> Result<String> {
          bench root allows ({}), {ui_deny} secmp-ui roots deny, {ui_files} secmp-ui files without `unsafe`; \
          lints-table: {manifests} manifests; lint-allows: {relaxations} relaxing attributes (all sanctioned); \
          build-scripts: {crates} crates, none; spdx: {spdx} files; relay-events: {} names as \
-         expect::RELAY_TRACE_ALLOW; {}",
+         expect::RELAY_TRACE_ALLOW; normal-deps: {} crates within expect::NORMAL_DEPENDENCY_ALLOW; {}",
         expect::UNSAFE_EXEMPT_ROOT,
         expect::RELAY_TRACE_ALLOW.len(),
+        expect::NORMAL_DEPENDENCY_ALLOW.len(),
         vet.unwrap_or_default()
     ))
 }
@@ -1040,17 +1267,26 @@ mod tests {
     #[test]
     fn exemption_names() {
         let cfg = "[policy.x]\n\n[[exemptions.serde]]\nversion = \"1\"\n\n[[exemptions.\"weird-name\"]]\n";
+        let short = |c: &str| -> Vec<(String, String, bool)> {
+            vet_exemptions(c)
+                .into_iter()
+                .map(|e| (e.name, e.version, e.noted))
+                .collect()
+        };
         assert_eq!(
-            vet_exemptions(cfg),
+            short(cfg),
             vec![
-                ("serde".to_owned(), false),
-                ("weird-name".to_owned(), false)
+                ("serde".to_owned(), "1".to_owned(), false),
+                ("weird-name".to_owned(), String::new(), false)
             ]
         );
         let noted = "[[exemptions.a]]\nversion = \"1\"\nnotes = \"Tracked exemption: pulled by x\"\n\n[[exemptions.b]]\n";
         assert_eq!(
-            vet_exemptions(noted),
-            vec![("a".to_owned(), true), ("b".to_owned(), false)]
+            short(noted),
+            vec![
+                ("a".to_owned(), "1".to_owned(), true),
+                ("b".to_owned(), String::new(), false)
+            ]
         );
     }
 
@@ -1329,6 +1565,810 @@ mod tests {
         Ok(())
     }
 
+    /// A `cargo metadata` text of the workspace crates of `expect::NORMAL_DEPENDENCY_ALLOW` plus `secmp-crypto`,
+    /// `secmp-proto`, `serde_json` and `tokio`, with the given `(from, to, kind)` edges (`kind` null = normal).
+    fn metadata_fixture(edges: &[(&str, &str, &str)]) -> String {
+        let names = [
+            "secmp-relay",
+            "secmp-transport",
+            "secmp-client-core",
+            "secmp-testkit",
+            "secmp-crypto",
+            "secmp-proto",
+        ];
+        let external = ["serde_json", "tokio"];
+        let id = |n: &str| {
+            if external.contains(&n) {
+                format!("registry+x#{n}@1.0.0")
+            } else {
+                format!("path+file:///w/{n}#0.0.0")
+            }
+        };
+        let package = |n: &&str| {
+            format!(
+                r#"{{"id": "{}", "name": "{n}", "version": "1.0.0", "manifest_path": "/w/{n}/Cargo.toml", "features": {{}}, "targets": []}}"#,
+                id(n)
+            )
+        };
+        let packages: Vec<String> = names
+            .iter()
+            .map(package)
+            .chain(external.iter().map(package))
+            .collect();
+        let members: Vec<String> = names.iter().map(|n| format!("\"{}\"", id(n))).collect();
+        let nodes: Vec<String> = names
+            .iter()
+            .chain(external.iter())
+            .map(|n| {
+                let deps: Vec<String> = edges
+                    .iter()
+                    .filter(|(from, _, _)| from == n)
+                    .map(|(_, to, kind)| {
+                        let kind = if *kind == "null" {
+                            "null".to_owned()
+                        } else {
+                            format!("\"{kind}\"")
+                        };
+                        format!(
+                            r#"{{"pkg": "{}", "dep_kinds": [{{"kind": {kind}, "target": null}}]}}"#,
+                            id(to)
+                        )
+                    })
+                    .collect();
+                format!(r#"{{"id": "{}", "deps": [{}]}}"#, id(n), deps.join(","))
+            })
+            .collect();
+        format!(
+            r#"{{"workspace_root": "/w", "workspace_members": [{}], "packages": [{}], "resolve": {{"nodes": [{}]}}}}"#,
+            members.join(","),
+            packages.join(","),
+            nodes.join(",")
+        )
+    }
+
+    /// TEST-SPEC-M6 G-04 (M5 review F-7, R-126): the normal direct dependencies of `secmp-relay`, `secmp-transport`,
+    /// `secmp-client-core` and `secmp-testkit` are within `expect::NORMAL_DEPENDENCY_ALLOW` (Phase A: workspace
+    /// crates, plus the testkit's `serde_json`); a fixture with an unlisted crate is refused naming crate and package;
+    /// dev- and build-dependencies are not shipped and do not count.
+    /// Crate-name prefixes of the runtime and I/O crates that the sans-IO crates must not reach (ADR-051 Part 1.2,
+    /// TEST-SPEC-M6 AD-12); an entry ending in `*` is a prefix, any other entry an exact name.
+    pub(crate) const SANS_IO_FORBIDDEN: &[&str] = &[
+        "tokio*",
+        "mio",
+        "socket2",
+        "futures",
+        "futures-*",
+        "async-std",
+        "smol",
+        "rustls*",
+        "arti-client",
+        "tor-*",
+    ];
+
+    /// AD-12 findings: crates of `closure` (the normal closure of `secmp-crypto`/`secmp-proto`) matching
+    /// `SANS_IO_FORBIDDEN`, and `async fn` in the given (path, text) sources of those two crates.
+    pub(crate) fn sans_io_findings(
+        closure: &BTreeSet<(String, String)>,
+        sources: &[(String, String)],
+    ) -> Vec<String> {
+        let forbidden = |n: &str| {
+            SANS_IO_FORBIDDEN.iter().any(|f| match f.strip_suffix('*') {
+                Some(prefix) => n.starts_with(prefix),
+                None => n == *f,
+            })
+        };
+        let mut out: Vec<String> = closure
+            .iter()
+            .filter(|(n, _)| forbidden(n))
+            .map(|(n, v)| {
+                format!("sans-io: {n} {v} is in the normal closure of secmp-crypto/secmp-proto")
+            })
+            .collect();
+        for (path, text) in sources {
+            for (i, line) in text.lines().enumerate() {
+                let code = line.split("//").next().unwrap_or_default();
+                if code.contains("async fn")
+                    || code.contains("async move")
+                    || code.contains("async {")
+                {
+                    out.push(format!(
+                        "sans-io: {path}:{} has async code",
+                        i.saturating_add(1)
+                    ));
+                }
+            }
+        }
+        out
+    }
+
+    /// The ADR-051 Part 2 direct dependencies (normal and dev).
+    const ADR051_DIRECT: &[&str] = &[
+        "arti-client",
+        "rustls",
+        "tokio-rustls",
+        "tokio",
+        "aws-lc-rs",
+        "turmoil",
+    ];
+
+    /// A repository file with LF line endings: a Windows checkout (`core.autocrlf`) has CRLF, and the tests match
+    /// multi-line needles (`"\nskip-tree = []\n"`, `"\nallow = [\n"`) — WEISUNG M6-CI-1 §3, windows-native #151/#152.
+    fn repo_file(rel_path: &str) -> Result<String> {
+        Ok(lf(&std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("..")
+                .join(rel_path),
+        )?))
+    }
+
+    fn lf(text: &str) -> String {
+        text.replace("\r\n", "\n")
+    }
+
+    /// The Windows-only failures of `deny_duplicate_skips_are_justified` and `licenses_cover_m6_closure` came from CRLF
+    /// in the checked-out `deny.toml`; the needles of both match on the LF form.
+    #[test]
+    fn repo_files_are_read_with_lf_line_endings() -> Result<()> {
+        assert_eq!(lf("a = [\r\n  \"x\",\r\n]\r\n"), "a = [\n  \"x\",\n]\n");
+        assert!(!repo_file("deny.toml")?.contains('\r'));
+        // EXT3B-1: no byte-order mark in the files the policy tests read by line (fail-closed readers, checked here)
+        for f in [
+            "deny.toml",
+            "supply-chain/config.toml",
+            "supply-chain/audits.toml",
+        ] {
+            assert!(!repo_file(f)?.contains('\u{feff}'), "{f}");
+        }
+        assert!(lf("skip-tree = []\r\n").contains("skip-tree = []\n"));
+        Ok(())
+    }
+
+    /// (name, version) of every `[[package]]` of `Cargo.lock`.
+    fn lock_packages() -> Result<BTreeSet<(String, String)>> {
+        Ok(crate::cooldown::parse_lock(&repo_file("Cargo.lock")?)
+            .into_iter()
+            .map(|p| (p.name, p.version))
+            .collect())
+    }
+
+    /// The `"…"` value of `key = "…"` inside an inline table line.
+    fn inline_value<'a>(line: &'a str, key: &str) -> Option<&'a str> {
+        let rest = line.split_once(&format!("{key} = \""))?.1;
+        rest.split_once('"').map(|(v, _)| v)
+    }
+
+    /// TEST-SPEC-M6 X-02 (OPEN-M6-04 A): every `deny.toml` `skip` entry names `crate@version` of a crate that is in
+    /// `Cargo.lock` in at least two versions, and a reason naming the direct dependency that pulls it (one of the
+    /// workspace members' direct dependencies); no `skip-tree`; no entry twice. `cargo deny check bans` is the gate.
+    #[test]
+    fn deny_duplicate_skips_are_justified() -> Result<()> {
+        let deny = repo_file("deny.toml")?;
+        assert!(
+            deny.contains("\nskip-tree = []\n"),
+            "skip-tree must stay empty"
+        );
+        let skip = deny
+            .split_once("\nskip = [\n")
+            .and_then(|(_, r)| r.split_once("\n]\n"))
+            .map(|(b, _)| b)
+            .ok_or_else(|| crate::util::Error("deny.toml: no multi-line skip list".to_owned()))?;
+        let lock = lock_packages()?;
+        let ws = Workspace::load()?;
+        let direct: BTreeSet<&str> = ws
+            .members
+            .iter()
+            .flat_map(|m| ws.edges.get(&m.id).into_iter().flatten())
+            .filter_map(|(id, _)| ws.all.get(id))
+            .map(|(name, _, _)| name.as_str())
+            .filter(|n| !n.starts_with("secmp-"))
+            .collect();
+        let mut seen = BTreeSet::new();
+        let mut n = 0_usize;
+        for line in skip.lines().filter(|l| l.trim_start().starts_with('{')) {
+            n = n.saturating_add(1);
+            let krate = inline_value(line, "crate").unwrap_or_default();
+            let reason = inline_value(line, "reason").unwrap_or_default();
+            let (name, version) = krate.split_once('@').unwrap_or_default();
+            assert!(seen.insert(krate.to_owned()), "twice: {krate}");
+            assert!(
+                lock.contains(&(name.to_owned(), version.to_owned())),
+                "{krate} not in Cargo.lock"
+            );
+            let versions = lock.iter().filter(|(l, _)| l == name).count();
+            assert!(
+                versions >= 2,
+                "{krate}: only {versions} version in Cargo.lock"
+            );
+            let pulled = reason
+                .strip_prefix("pulled by ")
+                .and_then(|r| r.split_once(" ("))
+                .map(|(by, _)| by)
+                .unwrap_or_default();
+            assert!(!pulled.is_empty(), "{krate}: reason {reason:?}");
+            for by in pulled.split(", ") {
+                assert!(
+                    direct.contains(by),
+                    "{krate}: {by} is not a direct dependency"
+                );
+            }
+        }
+        assert_eq!(n, 46);
+        Ok(())
+    }
+
+    /// TEST-SPEC-M6 X-03 (OPEN-M6-02): the ADR-051 direct dependencies and the `tor-*`/`arti-*` crates carry no
+    /// exemption — they are covered by the owner's records in `audits.toml` (trust or audit; read here, never written)
+    /// — except `turmoil` (dev-only, a tracked exemption per the ADR-051 vet route); every exemption that cites ADR-051
+    /// names one of the ADR-051 direct dependencies; `check_vet_closure` is tested by
+    /// `vet_closure_of_this_workspace_has_no_exemptions`.
+    #[test]
+    fn vet_records_for_m6_closure() -> Result<()> {
+        let config = repo_file("supply-chain/config.toml")?;
+        let audits = repo_file("supply-chain/audits.toml")?;
+        let notes: Vec<(String, String)> = {
+            let mut out = Vec::new();
+            let mut cur: Option<String> = None;
+            for line in config.lines() {
+                let t = line.trim();
+                if let Some(n) = t
+                    .strip_prefix("[[exemptions.")
+                    .and_then(|r| r.strip_suffix("]]"))
+                {
+                    cur = Some(n.trim_matches('"').to_owned());
+                } else if t.starts_with('[') {
+                    cur = None;
+                } else if let (Some(n), true) = (cur.as_ref(), t.starts_with("notes")) {
+                    out.push((n.clone(), t.to_owned()));
+                }
+            }
+            out
+        };
+        for e in vet_exemptions(&config) {
+            let n = e.name.as_str();
+            let owner = (ADR051_DIRECT.contains(&n) && n != "turmoil")
+                || n.starts_with("tor-")
+                || n.starts_with("arti-");
+            assert!(!owner, "exemption for {n} {}", e.version);
+        }
+        for krate in [
+            "arti-client",
+            "rustls",
+            "tokio-rustls",
+            "tokio",
+            "aws-lc-rs",
+        ] {
+            assert!(
+                audits.contains(&format!("[[trusted.{krate}]]"))
+                    || audits.contains(&format!("[[audits.{krate}]]")),
+                "{krate}: no owner record"
+            );
+        }
+        let mut cited = 0_usize;
+        for (name, note) in &notes {
+            if note.contains("ADR-051") && !ADR051_DIRECT.contains(&name.as_str()) {
+                cited = cited.saturating_add(1);
+                assert!(
+                    ADR051_DIRECT.iter().any(|d| note.contains(d)),
+                    "{name}: {note}"
+                );
+            }
+        }
+        assert!(cited > 100, "{cited} ADR-051 exemptions");
+        Ok(())
+    }
+
+    /// TEST-SPEC-M6 X-04 (OPEN-M6-05 B): the license allowlist is unchanged and the exceptions are exactly Slint's and
+    /// the two ADR-051 additions; `cargo deny check licenses` is the gate.
+    #[test]
+    fn licenses_cover_m6_closure() -> Result<()> {
+        let deny = repo_file("deny.toml")?;
+        let section = |start: &str| -> String {
+            deny.split_once(start)
+                .and_then(|(_, r)| r.split_once("\n]"))
+                .map(|(b, _)| b.to_owned())
+                .unwrap_or_default()
+        };
+        let allow: Vec<String> = section("\nallow = [\n")
+            .lines()
+            .filter_map(|l| inline_value(&format!("x = {}", l.trim()), "x").map(str::to_owned))
+            .collect();
+        assert_eq!(
+            allow,
+            [
+                "MIT",
+                "Apache-2.0",
+                "BSD-2-Clause",
+                "BSD-3-Clause",
+                "ISC",
+                "Zlib",
+                "Unicode-3.0",
+                "Unicode-DFS-2016",
+                "MPL-2.0"
+            ]
+        );
+        let exceptions: Vec<(String, String)> = section("\nexceptions = [\n")
+            .lines()
+            .filter(|l| l.trim_start().starts_with('{'))
+            .map(|l| {
+                let lic = l
+                    .split_once("allow = [\"")
+                    .and_then(|(_, r)| r.split_once('"'))
+                    .map(|(v, _)| v.to_owned())
+                    .unwrap_or_default();
+                (inline_value(l, "crate").unwrap_or_default().to_owned(), lic)
+            })
+            .collect();
+        assert_eq!(
+            exceptions,
+            [
+                ("slint".to_owned(), "GPL-3.0-only".to_owned()),
+                ("async_executors".to_owned(), "Unlicense".to_owned()),
+                ("notify".to_owned(), "CC0-1.0".to_owned()),
+            ]
+        );
+        Ok(())
+    }
+
+    /// The `tokio` lines of a `cargo tree -f '{p} {f}' --prefix none` output that carry the feature `test-util`.
+    fn test_util_lines(tree: &str) -> Vec<String> {
+        tree.lines()
+            .filter(|l| l.starts_with("tokio v"))
+            .filter(|l| {
+                l.split_whitespace()
+                    .nth(2)
+                    .is_some_and(|f| f.split(',').any(|x| x == "test-util"))
+            })
+            .map(str::to_owned)
+            .collect()
+    }
+
+    /// WEISUNG M6-B-3 §0.1 (ADR-051 Amendment 3): tokio's `test-util` (`tokio::time::pause`) is a dev-only feature —
+    /// it appears in no normal graph of the workspace (every target of `expect::VET_CLOSURE_TARGETS`), while the dev
+    /// graph has it (the gate is not vacuous); a planted normal line is refused.
+    #[test]
+    fn tokio_test_util_is_dev_only() -> Result<()> {
+        let tree = |edges: &str, target: &str| -> Result<String> {
+            crate::util::Cmd::cargo()
+                .args([
+                    "tree",
+                    "--workspace",
+                    "--locked",
+                    "-e",
+                    edges,
+                    "--target",
+                    target,
+                    "-f",
+                    "{p} {f}",
+                    "--prefix",
+                    "none",
+                ])
+                .read()
+        };
+        for target in expect::VET_CLOSURE_TARGETS {
+            let normal = tree("normal", target)?;
+            assert!(
+                normal.lines().any(|l| l.starts_with("tokio v")),
+                "{target}: tokio missing"
+            );
+            assert_eq!(test_util_lines(&normal), Vec::<String>::new(), "{target}");
+        }
+        let dev = tree("normal,dev", "x86_64-unknown-linux-gnu")?;
+        assert!(
+            !test_util_lines(&dev).is_empty(),
+            "the dev graph carries test-util"
+        );
+        assert_eq!(
+            test_util_lines("tokio v1.53.1 io-util,rt,test-util,time\nserde v1 std\n").len(),
+            1
+        );
+        assert!(
+            test_util_lines("tokio v1.53.1 io-util,rt,time\ntokio-util v0.7.19 test-util\n")
+                .is_empty()
+        );
+        Ok(())
+    }
+
+    /// The resolved features of every node of `cargo metadata` JSON whose package is `name` (one set per version).
+    fn resolved_features(metadata: &serde_json::Value, name: &str) -> Vec<BTreeSet<String>> {
+        let empty = Vec::new();
+        let nodes = metadata
+            .pointer("/resolve/nodes")
+            .and_then(serde_json::Value::as_array)
+            .unwrap_or(&empty);
+        nodes
+            .iter()
+            .filter(|n| {
+                n.get("id")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|id| id.contains(&format!("#{name}@")))
+            })
+            .map(|n| {
+                n.get("features")
+                    .and_then(serde_json::Value::as_array)
+                    .map(|f| {
+                        f.iter()
+                            .filter_map(serde_json::Value::as_str)
+                            .map(str::to_owned)
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            })
+            .collect()
+    }
+
+    /// TEST-SPEC-M6 TOR-07 `arti_feature_set_is_pinned` (ADR-024, ADR-051; OPEN-M6-03): in the graph cargo resolves for
+    /// the workspace, `arti-client` has the features `onion-service-client`, `rustls`, `tokio` and `static-sqlite`,
+    /// and none of `hs-pow-full`, `compression`, `native-tls`, `experimental`, `experimental-api` or any
+    /// `__is_experimental`; `tor-hsclient` has no `hs-pow-full`. A planted forbidden feature is refused.
+    #[test]
+    fn arti_feature_set_is_pinned() -> Result<()> {
+        let forbidden = |features: &BTreeSet<String>| -> Vec<String> {
+            features
+                .iter()
+                .filter(|f| {
+                    [
+                        "hs-pow-full",
+                        "compression",
+                        "native-tls",
+                        "experimental",
+                        "experimental-api",
+                    ]
+                    .contains(&f.as_str())
+                        || f.contains("__is_experimental")
+                })
+                .cloned()
+                .collect()
+        };
+        let json = crate::util::Cmd::cargo()
+            .args(["metadata", "--format-version", "1", "--locked"])
+            .read()?;
+        let metadata: serde_json::Value =
+            serde_json::from_str(&json).map_err(|e| crate::util::Error(e.to_string()))?;
+        let arti = resolved_features(&metadata, "arti-client");
+        assert_eq!(arti.len(), 1, "one arti-client");
+        for features in &arti {
+            for want in ["onion-service-client", "rustls", "tokio", "static-sqlite"] {
+                assert!(
+                    features.contains(want),
+                    "arti-client lacks {want}: {features:?}"
+                );
+            }
+            assert_eq!(forbidden(features), Vec::<String>::new());
+        }
+        let hsclient = resolved_features(&metadata, "tor-hsclient");
+        assert!(!hsclient.is_empty(), "tor-hsclient is in the graph");
+        for features in &hsclient {
+            assert!(!features.contains("hs-pow-full"), "{features:?}");
+        }
+        let planted: BTreeSet<String> = ["tokio", "hs-pow-full", "tor-proto/__is_experimental"]
+            .iter()
+            .map(|s| (*s).to_owned())
+            .collect();
+        assert_eq!(forbidden(&planted).len(), 2);
+        Ok(())
+    }
+
+    /// The crates only the fuzz package may add to the workspace graph, with their pinned version (empty: any version;
+    /// GLMB-2): `libfuzzer-sys` exactly as `fuzz/Cargo.toml` pins it, `arbitrary` as libfuzzer-sys pulls it.
+    const FUZZ_ONLY: &[(&str, &str)] = &[("libfuzzer-sys", "0.4.13"), ("arbitrary", "")];
+
+    /// The registry packages of the fuzz lock that the workspace lock does not carry at that version and source; only
+    /// the fuzz harness crates `libfuzzer-sys` and `arbitrary` may be fuzz-only.
+    fn fuzz_lock_findings(workspace: &str, fuzz: &str) -> Vec<String> {
+        let ws = crate::cooldown::parse_lock(workspace);
+        let mut out: Vec<String> = Vec::new();
+        for p in crate::cooldown::parse_lock(fuzz)
+            .into_iter()
+            .filter(|p| p.source.is_some())
+        {
+            match FUZZ_ONLY.iter().find(|(name, _)| *name == p.name) {
+                // GLMB-2: the fuzz-only crates at their pinned versions only
+                Some((_, pin)) => {
+                    if !pin.is_empty() && p.version != *pin {
+                        out.push(format!(
+                            "fuzz/Cargo.lock: {} {} is not the pinned {pin}",
+                            p.name, p.version
+                        ));
+                    }
+                }
+                None if !ws.contains(&p) => out.push(format!(
+                    "fuzz/Cargo.lock: {} {} not in Cargo.lock",
+                    p.name, p.version
+                )),
+                None => {}
+            }
+        }
+        out
+    }
+
+    /// EXTB-6: the fuzz lock's packages are compared with name, version, source and checksum; a missing fuzz lock is a
+    /// cooldown finding; the fuzz gate checks the lock with `cargo --locked` before it builds.
+    #[test]
+    fn fuzz_lock_checksums_and_presence_are_enforced() -> Result<()> {
+        let src = "source = \"registry+https://github.com/rust-lang/crates.io-index\"";
+        let pkg = |v: &str, sum: &str| {
+            format!(
+                "[[package]]\nname = \"serde\"\nversion = \"{v}\"\n{src}\nchecksum = \"{sum}\"\n"
+            )
+        };
+        assert!(fuzz_lock_findings(&pkg("1.0.0", "aa"), &pkg("1.0.0", "aa")).is_empty());
+        assert_eq!(
+            fuzz_lock_findings(&pkg("1.0.0", "aa"), &pkg("1.0.0", "bb")).len(),
+            1,
+            "another checksum for the same version"
+        );
+        let dir = std::env::temp_dir().join(format!("secmp-extb6-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir)?;
+        std::fs::write(dir.join("Cargo.lock"), "version = 4\n")?;
+        let err = crate::cooldown::run(&dir)
+            .err()
+            .map(|e| e.to_string())
+            .unwrap_or_default();
+        assert!(err.contains("fuzz/Cargo.lock is missing"), "{err}");
+        let _ = std::fs::remove_dir_all(&dir);
+        let args = crate::gates::fuzz_lock_check_args();
+        assert!(args.contains(&"--locked".to_owned()));
+        assert!(
+            args.windows(2)
+                .any(|w| w == ["--manifest-path", "fuzz/Cargo.toml"])
+        );
+        Ok(())
+    }
+
+    /// GLMB-2: the fuzz package's dependency graph is the workspace graph (whose crates `cargo deny` and `cargo vet`
+    /// check) plus exactly the fuzz-only allowlist — `libfuzzer-sys =0.4.13` and the `arbitrary` it pulls — as a policy
+    /// test instead of a second `cargo deny` run (no CI time). A planted other libfuzzer-sys version, and any other
+    /// fuzz-only crate, are refused.
+    #[test]
+    fn fuzz_graph_is_workspace_graph_plus_allowlist() -> Result<()> {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let workspace = std::fs::read_to_string(root.join("Cargo.lock"))?;
+        let fuzz = std::fs::read_to_string(root.join("fuzz/Cargo.lock"))?;
+        assert_eq!(fuzz_lock_findings(&workspace, &fuzz), Vec::<String>::new());
+        let manifest = std::fs::read_to_string(root.join("fuzz/Cargo.toml"))?;
+        assert!(manifest.contains("libfuzzer-sys = { version = \"=0.4.13\" }"));
+        let src = "source = \"registry+https://github.com/rust-lang/crates.io-index\"";
+        let lock = |name: &str, version: &str| {
+            format!("[[package]]\nname = \"{name}\"\nversion = \"{version}\"\n{src}\n")
+        };
+        assert!(fuzz_lock_findings("", &lock("libfuzzer-sys", "0.4.13")).is_empty());
+        assert!(fuzz_lock_findings("", &lock("arbitrary", "1.4.2")).is_empty());
+        assert_eq!(
+            fuzz_lock_findings("", &lock("libfuzzer-sys", "0.4.12")),
+            vec!["fuzz/Cargo.lock: libfuzzer-sys 0.4.12 is not the pinned 0.4.13".to_owned()]
+        );
+        assert_eq!(fuzz_lock_findings("", &lock("cc", "1.2.0")).len(), 1);
+        Ok(())
+    }
+
+    /// WEISUNG M6-B-4 §0.4, M6-B-5 EXTB-6: `fuzz/Cargo.lock` resolves every package it shares with the workspace lock to
+    /// a version (with the same source and checksum) of the workspace lock — the vetted, cooldown-checked one; only
+    /// `libfuzzer-sys` and `arbitrary` may be fuzz-only — and the cooldown gate reads it. A planted divergent version
+    /// and a planted fuzz-only crate are refused.
+    #[test]
+    fn fuzz_lock_matches_workspace_lock() -> Result<()> {
+        assert!(crate::cooldown::LOCKFILES.contains(&"fuzz/Cargo.lock"));
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let workspace = std::fs::read_to_string(root.join("Cargo.lock"))?;
+        let fuzz = std::fs::read_to_string(root.join("fuzz/Cargo.lock"))?;
+        assert_eq!(fuzz_lock_findings(&workspace, &fuzz), Vec::<String>::new());
+        // not vacuous: the fuzz lock carries the transport closure
+        let locked = crate::cooldown::parse_lock(&fuzz);
+        for name in ["rustls", "aws-lc-rs", "arti-client", "libfuzzer-sys"] {
+            assert!(locked.iter().any(|p| p.name == name), "{name}");
+        }
+        let src = "source = \"registry+https://github.com/rust-lang/crates.io-index\"";
+        let ws = format!("[[package]]\nname = \"serde\"\nversion = \"1.0.0\"\n{src}\n");
+        let fz = |name: &str, version: &str| {
+            format!("{ws}\n[[package]]\nname = \"{name}\"\nversion = \"{version}\"\n{src}\n")
+        };
+        assert!(fuzz_lock_findings(&ws, &fz("libfuzzer-sys", "0.4.13")).is_empty());
+        assert!(fuzz_lock_findings(&ws, &fz("serde", "1.0.0")).is_empty());
+        assert_eq!(
+            fuzz_lock_findings(&ws, &fz("serde", "1.0.1")),
+            vec!["fuzz/Cargo.lock: serde 1.0.1 not in Cargo.lock".to_owned()]
+        );
+        assert_eq!(fuzz_lock_findings(&ws, &fz("cc", "1.2.0")).len(), 1);
+        Ok(())
+    }
+
+    /// TEST-SPEC-M6 AD-12 (ADR-051 Part 1.2, docs/02 §3): the normal closure of `secmp-crypto` and `secmp-proto` on
+    /// every target of `expect::VET_CLOSURE_TARGETS` contains none of `tokio`, `mio`, `socket2`, `futures-*`,
+    /// `rustls*`, `arti-client`, `tor-*`, and their `src` has no `async` code; planted closures and sources are refused.
+    #[test]
+    fn crypto_and_proto_stay_sans_io() -> Result<()> {
+        let ws = Workspace::load()?;
+        let closure = zero_exemption_closure(&ws)?;
+        assert!(!closure.is_empty());
+        let mut sources = Vec::new();
+        for krate in ["secmp-crypto", "secmp-proto"] {
+            let src = ws.root.join("crates").join(krate).join("src");
+            for f in walk_files(&src, &|p: &Path| p.extension().is_some_and(|e| e == "rs"))? {
+                sources.push((rel(&ws.root, &f), std::fs::read_to_string(&f)?));
+            }
+        }
+        assert!(sources.len() > 2, "{}", sources.len());
+        let findings = sans_io_findings(&closure, &sources);
+        assert!(findings.is_empty(), "{findings:?}");
+        // the gate is not vacuous: planted crates and async code are refused, unrelated names pass
+        let planted: BTreeSet<(String, String)> = [
+            "tokio",
+            "mio",
+            "socket2",
+            "futures-util",
+            "rustls-webpki",
+            "arti-client",
+            "tor-proto",
+            "tokio-rustls",
+            "futures",
+            "async-std",
+            "smol",
+            "zeroize",
+            "subtle",
+            "smolstr",
+        ]
+        .iter()
+        .map(|n| ((*n).to_owned(), "1.0.0".to_owned()))
+        .collect();
+        let src = vec![(
+            "x.rs".to_owned(),
+            "fn a() {}\n// async fn in a comment\npub async fn b() {}\nlet f = async move { 1 };\n"
+                .to_owned(),
+        )];
+        let found = sans_io_findings(&planted, &src);
+        assert_eq!(found.len(), 13, "{found:?}");
+        for bad in [
+            "tokio 1",
+            "mio",
+            "socket2",
+            "futures-util",
+            "rustls-webpki",
+            "arti-client",
+            "tor-proto",
+            "tokio-rustls",
+            "futures 1",
+            "async-std",
+            "smol 1",
+            "x.rs:3",
+            "x.rs:4",
+        ] {
+            assert!(found.iter().any(|f| f.contains(bad)), "{bad}: {found:?}");
+        }
+        Ok(())
+    }
+
+    /// ADR-051 Amendment 1, WEISUNG M6-B-0: every `expect::AUDIT_IGNORES` id is in `deny.toml` `[advisories] ignore`
+    /// with its reason as a comment, except the ids `cargo deny` never reports (`AUDIT_IGNORES_NOT_IN_DENY`), and
+    /// `deny.toml` ignores nothing that `cargo audit` does not.
+    /// `AUDIT_IGNORES` ids that `cargo deny` does not report (its per-target graph never compiles the crate), so they
+    /// have no `deny.toml` `[advisories] ignore` entry.
+    /// RUSTSEC-2025-0141 (ADR-051 Am. 1): lock-only, never compiled (cargo tree -i prints nothing).
+    const AUDIT_IGNORES_NOT_IN_DENY: &[&str] = &["RUSTSEC-2026-0173", "RUSTSEC-2025-0141"];
+
+    #[test]
+    fn audit_ignores_match_deny_toml() -> Result<()> {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let deny = std::fs::read_to_string(root.join("deny.toml"))?;
+        let section = deny
+            .split_once("[advisories]")
+            .and_then(|(_, rest)| rest.split_once("\nignore = ["))
+            .and_then(|(_, rest)| rest.split_once("\n]"))
+            .map(|(body, _)| body)
+            .ok_or_else(|| {
+                crate::util::Error("deny.toml: no multi-line [advisories] ignore list".to_owned())
+            })?;
+        let mut in_deny = Vec::new();
+        for line in section.lines() {
+            let t = line.trim();
+            if let Some(id) = t
+                .strip_prefix('"')
+                .and_then(|r| r.split_once('"'))
+                .map(|(id, _)| id)
+            {
+                let (_, reason) = t.split_once('#').unwrap_or_default();
+                in_deny.push((id, reason.trim()));
+            }
+        }
+        let mut want: Vec<(&str, &str)> = expect::AUDIT_IGNORES
+            .iter()
+            .filter(|(id, _)| !AUDIT_IGNORES_NOT_IN_DENY.contains(id))
+            .copied()
+            .collect();
+        want.sort_unstable();
+        in_deny.sort_unstable();
+        assert_eq!(in_deny, want);
+        for id in ["RUSTSEC-2023-0071", "RUSTSEC-2024-0436"] {
+            assert!(in_deny.iter().any(|(d, _)| *d == id), "{id}");
+        }
+        for id in AUDIT_IGNORES_NOT_IN_DENY {
+            assert!(expect::AUDIT_IGNORES.iter().any(|(a, _)| a == id), "{id}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn normal_dependencies_match_adr_allowlist() -> Result<()> {
+        // the tree itself
+        let findings = normal_dependency_findings(&Workspace::load()?);
+        assert!(findings.is_empty(), "{findings:?}");
+        // the allowlist's shape: workspace crates, plus exactly the third-party crates of the ADR-051 Part 2 table
+        // (Amendment 1) and the testkit's serde_json (ADR-037)
+        let adr051: &[(&str, &[&str])] = &[
+            ("secmp-relay", &["aws-lc-rs", "rustls"]),
+            (
+                "secmp-transport",
+                &[
+                    "arti-client",
+                    "aws-lc-rs",
+                    "rustls",
+                    "tokio",
+                    "tokio-rustls",
+                ],
+            ),
+            ("secmp-client-core", &["tokio"]),
+            ("secmp-testkit", &["serde_json", "tokio"]),
+        ];
+        for (krate, allowed) in expect::NORMAL_DEPENDENCY_ALLOW {
+            let third: Vec<&str> = allowed
+                .iter()
+                .copied()
+                .filter(|d| !d.starts_with("secmp-"))
+                .collect();
+            let want = adr051
+                .iter()
+                .find(|(k, _)| k == krate)
+                .map(|(_, d)| d.to_vec())
+                .unwrap_or_default();
+            assert_eq!(third, want, "{krate}");
+        }
+        // a fixture within the lists, with dev/build edges to tokio, passes
+        let ok = metadata_fixture(&[
+            ("secmp-relay", "secmp-crypto", "null"),
+            ("secmp-relay", "secmp-proto", "null"),
+            ("secmp-relay", "tokio", "dev"),
+            ("secmp-transport", "secmp-proto", "null"),
+            ("secmp-transport", "tokio", "build"),
+            ("secmp-client-core", "secmp-transport", "null"),
+            ("secmp-testkit", "serde_json", "null"),
+            ("secmp-testkit", "tokio", "dev"),
+        ]);
+        assert_eq!(
+            normal_dependency_findings(&Workspace::parse(&ok)?),
+            Vec::<String>::new()
+        );
+        // an unlisted normal dependency is refused, naming package and crate
+        let bad = metadata_fixture(&[
+            ("secmp-relay", "secmp-crypto", "null"),
+            ("secmp-relay", "tokio", "null"),
+            ("secmp-transport", "serde_json", "null"),
+            ("secmp-client-core", "secmp-relay", "null"),
+        ]);
+        let found = normal_dependency_findings(&Workspace::parse(&bad)?);
+        assert_eq!(found.len(), 3, "{found:?}");
+        for (package, dep) in [
+            ("secmp-relay", "tokio"),
+            ("secmp-transport", "serde_json"),
+            ("secmp-client-core", "secmp-relay"),
+        ] {
+            assert!(
+                found.iter().any(|f| f.contains(&format!(
+                    "package {package} has the normal dependency {dep},"
+                ))),
+                "{package} {dep}: {found:?}"
+            );
+        }
+        // a listed crate that is no workspace member is a finding
+        let none = Workspace::parse(
+            r#"{"workspace_root": "/w", "workspace_members": [], "packages": [], "resolve": {"nodes": []}}"#,
+        )?;
+        assert_eq!(
+            normal_dependency_findings(&none).len(),
+            expect::NORMAL_DEPENDENCY_ALLOW.len()
+        );
+        Ok(())
+    }
+
     #[test]
     fn fixture_vet_exemptions() {
         let config = include_str!("../fixtures/policy/vet-config.toml");
@@ -1347,7 +2387,7 @@ mod tests {
         assert!(
             findings
                 .iter()
-                .any(|f| f.contains("inside the secmp-crypto/secmp-proto closure: typenum 1.20.1"))
+                .any(|f| f == "vet exemption inside the crypto/proto closure: typenum@1.20.1")
         );
         // outside the closure, correctly noted exemptions are fine
         let clean = config.replace(
@@ -1356,5 +2396,399 @@ mod tests {
         );
         let empty = BTreeSet::new();
         assert!(vet_closure_findings(&clean, &empty).0.is_empty());
+    }
+
+    const TRACKED: &str =
+        "notes = \"Tracked exemption (supply-chain/README.md): pulled by arti-client.\"";
+
+    /// ADR-036 Amendment 1: an exemption for a (name, version) that is in the closure is a finding.
+    #[test]
+    fn vet_closure_exemption_for_closure_version_is_a_finding() {
+        let closure: BTreeSet<(String, String)> = [("const-oid".to_owned(), "0.10.2".to_owned())]
+            .into_iter()
+            .collect();
+        let config = format!(
+            "[[exemptions.const-oid]]\nversion = \"0.10.2\"\ncriteria = \"safe-to-deploy\"\n{TRACKED}\n"
+        );
+        let (findings, n) = vet_closure_findings(&config, &closure);
+        assert_eq!(n, 1);
+        assert_eq!(
+            findings,
+            vec!["vet exemption inside the crypto/proto closure: const-oid@0.10.2".to_owned()]
+        );
+    }
+
+    /// WEISUNG M6-B-1 §0b (a): an exemption entry without a `version`, or with one that does not parse, is a finding.
+    #[test]
+    fn vet_closure_exemption_without_version_is_a_finding() {
+        let empty = BTreeSet::new();
+        let missing = format!("[[exemptions.libm]]\ncriteria = \"safe-to-deploy\"\n{TRACKED}\n");
+        let bad = format!(
+            "[[exemptions.libm]]\nversion = \"0.2\"\ncriteria = \"safe-to-deploy\"\n{TRACKED}\n"
+        );
+        for config in [missing, bad] {
+            let (findings, n) = vet_closure_findings(&config, &empty);
+            assert_eq!(n, 1);
+            assert_eq!(
+                findings,
+                vec!["vet exemption without version: libm".to_owned()]
+            );
+        }
+        for good in ["1.1.6+spec-1.1.0", "0.10.0-rc.19", "0.2.16"] {
+            assert!(version_parses(good), "{good}");
+        }
+        for bad in ["", "1", "1.2", "1.2.x", "v1.2.3", "1..3"] {
+            assert!(!version_parses(bad), "{bad}");
+        }
+    }
+
+    /// EXT2-2 (Codex re-review): `version = "0.10.2" # owner note` is read as 0.10.2, so an exemption of a closure
+    /// version with a trailing comment is still a finding.
+    #[test]
+    fn vet_closure_exemption_with_trailing_comment_is_parsed() {
+        let closure: BTreeSet<(String, String)> = [("const-oid".to_owned(), "0.10.2".to_owned())]
+            .into_iter()
+            .collect();
+        for line in [
+            r#"version = "0.10.2""#,
+            r#"version = "0.10.2" # owner note"#,
+        ] {
+            let config = format!(
+                "[[exemptions.const-oid]]\n{line}\ncriteria = \"safe-to-deploy\"\n{TRACKED}\n"
+            );
+            let e = vet_exemptions(&config);
+            assert_eq!(
+                e.first().map(|x| x.version.as_str()),
+                Some("0.10.2"),
+                "{line}"
+            );
+            assert_eq!(
+                vet_closure_findings(&config, &closure).0,
+                vec!["vet exemption inside the crypto/proto closure: const-oid@0.10.2".to_owned()],
+                "{line}"
+            );
+        }
+    }
+
+    /// EXT2-2: a TOML literal string `version = '0.10.2'` is read like `"0.10.2"`.
+    #[test]
+    fn vet_closure_exemption_literal_string_version_is_parsed() {
+        let closure: BTreeSet<(String, String)> = [("const-oid".to_owned(), "0.10.2".to_owned())]
+            .into_iter()
+            .collect();
+        for line in [
+            "version = '0.10.2'",
+            "version = '0.10.2'   # note",
+            "version='0.10.2'",
+        ] {
+            let config = format!(
+                "[[exemptions.const-oid]]\n{line}\ncriteria = \"safe-to-deploy\"\n{TRACKED}\n"
+            );
+            assert_eq!(
+                vet_closure_findings(&config, &closure).0,
+                vec!["vet exemption inside the crypto/proto closure: const-oid@0.10.2".to_owned()],
+                "{line}"
+            );
+        }
+    }
+
+    /// EXT2-2: a `version` line that still does not parse is a finding naming the crate, never skipped.
+    #[test]
+    fn vet_closure_unparsable_version_line_is_a_finding() {
+        let empty = BTreeSet::new();
+        for line in [
+            "version = 0.10.2",
+            "version = \"0.10.2",
+            "version = \"0.10.2\" trailing",
+            "version = '0.10.2\"",
+            "version =",
+        ] {
+            let config = format!(
+                "[[exemptions.const-oid]]\n{line}\ncriteria = \"safe-to-deploy\"\n{TRACKED}\n"
+            );
+            assert_eq!(
+                vet_closure_findings(&config, &empty).0,
+                vec!["vet exemption with an unparsable version line: const-oid".to_owned()],
+                "{line}"
+            );
+        }
+        // `versions = …` is another key, not a version line; the entry then has no version
+        let other = format!("[[exemptions.x]]\nversions = \"1\"\n{TRACKED}\n");
+        assert_eq!(
+            vet_closure_findings(&other, &empty).0,
+            vec!["vet exemption without version: x".to_owned()]
+        );
+    }
+
+    /// The findings of one exemption of closure package const-oid 0.10.2 under `header`.
+    fn findings_under(header: &str) -> Vec<String> {
+        let closure: BTreeSet<(String, String)> = [("const-oid".to_owned(), "0.10.2".to_owned())]
+            .into_iter()
+            .collect();
+        let config = format!(
+            "[policy.x]\naudit-as-crates-io = false\n\n{header}\nversion = \"0.10.2\"\ncriteria = \"safe-to-deploy\"\n{TRACKED}\n"
+        );
+        vet_closure_findings(&config, &closure).0
+    }
+
+    fn assert_found(header: &str) {
+        let findings = findings_under(header);
+        assert!(
+            findings.contains(&format!(
+                "vet exemption header not in the strict form `[[exemptions.<name>]]` at column 0: `{header}`"
+            )),
+            "{header}: {findings:?}"
+        );
+        assert!(
+            findings.contains(
+                &"vet exemption inside the crypto/proto closure: const-oid@0.10.2".to_owned()
+            ),
+            "{header}: {findings:?}"
+        );
+    }
+
+    /// EXTB-5: `[[exemptions.const-oid]] # owner note` (valid TOML) is found, not skipped.
+    #[test]
+    fn vet_closure_header_with_comment_is_found() {
+        assert_found("[[exemptions.const-oid]] # owner note");
+        assert_found("[[exemptions.const-oid]]#note");
+        // the strict form itself is an ordinary entry
+        assert_eq!(
+            findings_under("[[exemptions.const-oid]]"),
+            vec!["vet exemption inside the crypto/proto closure: const-oid@0.10.2".to_owned()]
+        );
+    }
+
+    /// EXTB-5: a quoted key, `[[exemptions.'const-oid']]` or `[[exemptions."const-oid"]]`, is found.
+    #[test]
+    fn vet_closure_header_quoted_key_is_found() {
+        assert_found("[[exemptions.'const-oid']]");
+        assert_found("[[exemptions.\"const-oid\"]]");
+    }
+
+    /// EXT2B-2 (Codex probe, closes EXTB-5): a header whose key path has a quoted or escaped key — the TOML crate decodes
+    /// `[["exemptions".const-oid]]` as `exemptions → const-oid` — is rejected with a finding naming the line, and its
+    /// entry still counts (never `([], 0)`); the legitimate forms stay ordinary.
+    #[test]
+    fn vet_closure_header_with_quoted_table_key_is_rejected() {
+        let closure: BTreeSet<(String, String)> = [("const-oid".to_owned(), "0.10.2".to_owned())]
+            .into_iter()
+            .collect();
+        for header in [
+            "[[\"exemptions\".const-oid]]",
+            "[['exemptions'.const-oid]]",
+            "[[ \"exemptions\" . \"const-oid\" ]]",
+            "[[\"exempt\\u0069ons\".const-oid]]",
+            "[[\"exemptions\".\"const-oid\"]]",
+        ] {
+            let config = format!(
+                "[[exemptions.other]]\nversion = \"1.0.0\"\n{TRACKED}\n\n{header}\nversion = \"0.10.2\"\ncriteria = \"safe-to-deploy\"\n{TRACKED}\n"
+            );
+            let (findings, n) = vet_closure_findings(&config, &closure);
+            assert_eq!(n, 2, "{header}: an entry is counted");
+            assert!(
+                findings
+                    .iter()
+                    .any(|f| f.contains("quoted or escaped key in a table header")
+                        && f.contains(header)),
+                "{header}: {findings:?}"
+            );
+        }
+        // positive controls: the strict form and a quoted key of another table are not this finding
+        let strict = format!("[[exemptions.const-oid]]\nversion = \"0.9.6\"\n{TRACKED}\n");
+        let (findings, n) = vet_closure_findings(&strict, &closure);
+        assert_eq!((n, findings.len()), (1, 0), "{findings:?}");
+        let (findings, _) =
+            vet_closure_findings("[policy.\"x\"]\naudit-as-crates-io = false\n", &closure);
+        assert!(findings.is_empty(), "{findings:?}");
+    }
+
+    /// FIN-3 (Astra final pass): valid TOML carries an exemption without a `[[exemptions.<name>]]` header — a root dotted
+    /// assignment, an inline root table, a dotted key inside another table — and produced no classifier entry
+    /// (`55 external crates, 0 exempted`). Each is rejected by name; the real config is unchanged.
+    #[test]
+    fn vet_closure_dotted_and_inline_exemptions_are_rejected() -> Result<()> {
+        let closure: BTreeSet<(String, String)> = [("subtle".to_owned(), "2.6.1".to_owned())]
+            .into_iter()
+            .collect();
+        let real = repo_file("supply-chain/config.toml")?;
+        let item = "{ version = \"2.6.1\", criteria = \"safe-to-deploy\", notes = \"Tracked exemption: review probe\" }";
+        let planted = [
+            (
+                "root dotted",
+                format!("exemptions.subtle = [{item}]\n{real}"),
+            ),
+            (
+                "root dotted, spaced",
+                format!("exemptions . subtle = [{item}]\n{real}"),
+            ),
+            (
+                "quoted key",
+                format!("\"exemptions\".subtle = [{item}]\n{real}"),
+            ),
+            (
+                "single-quoted key",
+                format!("'exemptions'.subtle = [{item}]\n{real}"),
+            ),
+            (
+                "inline root table",
+                format!("exemptions = {{ subtle = [{item}] }}\n{real}"),
+            ),
+            (
+                "inside another table",
+                format!("{real}\n[policy.probe]\nexemptions.subtle = [{item}]\n"),
+            ),
+            (
+                "indented",
+                format!("  exemptions.subtle = [{item}]\n{real}"),
+            ),
+        ];
+        for (name, config) in planted {
+            let (findings, _) = vet_closure_findings(&config, &closure);
+            assert!(
+                findings
+                    .iter()
+                    .any(|f| f.starts_with("vet config uses a non-canonical exemptions form")),
+                "{name}: {findings:?}"
+            );
+        }
+        // positive control: the real config, and a comment that mentions the word
+        let (findings, _) = vet_closure_findings(&real, &BTreeSet::new());
+        assert!(
+            !findings.iter().any(|f| f.contains("non-canonical")),
+            "{findings:?}"
+        );
+        let commented = format!("# exemptions.subtle = [] is not used\n{real}");
+        let (findings, _) = vet_closure_findings(&commented, &BTreeSet::new());
+        assert!(!findings.iter().any(|f| f.contains("non-canonical")));
+        Ok(())
+    }
+
+    /// FIN2-2 (Astra FINAL2): a quoted basic-string key with an escape on the left of an assignment —
+    /// `"exempti\U0000006Fns".subtle = …`, `"exemptions".subtle` spelled with `\u`, an escaped inline root table — is decoded
+    /// by the TOML parser and normalised by `cargo vet fmt`, but a literal comparison does not see it: rejected by name,
+    /// without decoding. Controls: the real config, a comment, and a *value* string with an escape.
+    #[test]
+    fn vet_closure_escaped_assignment_keys_are_rejected() -> Result<()> {
+        let closure: BTreeSet<(String, String)> = [("subtle".to_owned(), "2.6.1".to_owned())]
+            .into_iter()
+            .collect();
+        let real = repo_file("supply-chain/config.toml")?;
+        let item = "{ version = \"2.6.1\", criteria = \"safe-to-deploy\", notes = \"Tracked exemption: review probe\" }";
+        let planted = [
+            (
+                "escaped letter",
+                format!("\"exempti\\U0000006Fns\".subtle = [{item}]\n{real}"),
+            ),
+            (
+                "short escape",
+                format!("\"exempti\\u006fns\".subtle = [{item}]\n{real}"),
+            ),
+            (
+                "escaped inline root table",
+                format!("\"exempti\\u006fns\" = {{ subtle = [{item}] }}\n{real}"),
+            ),
+            (
+                "escape in the second key part",
+                format!("{real}\n[policy.probe]\n\"su\\u0062tle\" = 1\n"),
+            ),
+        ];
+        for (name, config) in planted {
+            let (findings, _) = vet_closure_findings(&config, &closure);
+            assert!(
+                findings.iter().any(|f| f
+                    == "vet config uses an escaped key in an assignment; only bare keys are accepted"),
+                "{name}: {findings:?}"
+            );
+        }
+        // controls
+        let value = format!("{real}\n[policy.probe]\nnotes = \"a \\u0041 value\"\n");
+        let commented = format!("# \"exempti\\u006fns\" = 1\n{real}");
+        for (name, config) in [
+            ("real", real.clone()),
+            ("value", value),
+            ("comment", commented),
+        ] {
+            let (findings, _) = vet_closure_findings(&config, &BTreeSet::new());
+            assert!(
+                !findings.iter().any(|f| f.contains("escaped key")),
+                "{name}: {findings:?}"
+            );
+        }
+        Ok(())
+    }
+
+    /// EXT3B-1 (Codex M6B-EXT3c): a UTF-8 byte-order mark before an exemption header — which the TOML parser accepts and
+    /// the line classifier did not recognise (`([], 0)`) — is rejected by name: bare header, quoted header, and the full
+    /// current `supply-chain/config.toml` behind a BOM with the closure exemption planted; the file without a BOM is
+    /// unchanged.
+    #[test]
+    fn vet_closure_byte_order_mark_is_rejected() -> Result<()> {
+        let closure: BTreeSet<(String, String)> = [("const-oid".to_owned(), "0.10.2".to_owned())]
+            .into_iter()
+            .collect();
+        let entry = format!("\nversion = \"0.10.2\"\ncriteria = \"safe-to-deploy\"\n{TRACKED}\n");
+        let real = repo_file("supply-chain/config.toml")?;
+        let inputs = [
+            ("bare", format!("\u{feff}[[exemptions.const-oid]]{entry}")),
+            (
+                "quoted",
+                format!("\u{feff}[[\"exemptions\".const-oid]]{entry}"),
+            ),
+            (
+                "real config",
+                format!("\u{feff}[[exemptions.const-oid]]{entry}\n{real}"),
+            ),
+            (
+                "inside",
+                format!("{real}\n[[exemptions.x]]\u{feff}\nversion = \"1.0.0\"\n{TRACKED}\n"),
+            ),
+        ];
+        for (name, config) in inputs {
+            let (findings, _) = vet_closure_findings(&config, &closure);
+            assert!(
+                findings
+                    .iter()
+                    .any(|f| f == "vet config contains a byte-order mark"),
+                "{name}: {findings:?}"
+            );
+        }
+        // control: the real config without a BOM has no such finding
+        let (findings, _) = vet_closure_findings(&real, &BTreeSet::new());
+        assert!(!findings.iter().any(|f| f.contains("byte-order mark")));
+        Ok(())
+    }
+
+    /// EXTB-5: spaces inside the brackets, or an indented header, are found.
+    #[test]
+    fn vet_closure_header_with_spaces_is_found() {
+        assert_found("[[ exemptions.const-oid ]]");
+        assert_found("[[exemptions . const-oid]]");
+        assert_found("  [[exemptions.const-oid]]");
+        assert_found("[ [exemptions.const-oid] ]");
+    }
+
+    /// ADR-036 Amendment 1: another version of a closure crate's name, outside the closure, may be exempted.
+    #[test]
+    fn vet_closure_other_version_of_closure_name_is_allowed() {
+        let closure: BTreeSet<(String, String)> = [("const-oid".to_owned(), "0.10.2".to_owned())]
+            .into_iter()
+            .collect();
+        let config = format!(
+            "[[exemptions.const-oid]]\nversion = \"0.9.6\"\ncriteria = \"safe-to-deploy\"\n{TRACKED}\n"
+        );
+        let (findings, n) = vet_closure_findings(&config, &closure);
+        assert_eq!(n, 1);
+        assert!(findings.is_empty(), "{findings:?}");
+    }
+
+    /// The real tree: no exemption of `supply-chain/config.toml` names a (name, version) of the normal closure of
+    /// `secmp-crypto`/`secmp-proto` on the three targets, and every exemption carries its tracked note.
+    #[test]
+    fn vet_closure_of_this_workspace_has_no_exemptions() -> Result<()> {
+        let ws = Workspace::load()?;
+        let summary = check_vet_closure(&ws)?;
+        assert!(summary.contains(", 0 exempted;"), "{summary}");
+        Ok(())
     }
 }

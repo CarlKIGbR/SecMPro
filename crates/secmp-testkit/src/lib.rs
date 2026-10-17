@@ -10,6 +10,7 @@
 //! added with an ADR (`serde_json`, ADR-037). It must never be a normal (non-dev) dependency of a shipped crate.
 #![forbid(unsafe_code)]
 
-#[cfg(feature = "harness")]
+// Not under Miri: its workspace crates are not in the Miri build (Cargo.toml, `cfg(not(miri))`).
+#[cfg(all(feature = "harness", not(miri)))]
 pub mod harness;
 pub mod kat;

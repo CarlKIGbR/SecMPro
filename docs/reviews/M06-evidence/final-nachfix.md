@@ -74,3 +74,50 @@
 - `cargo kani -p secmp-client-core` (after FIN-2): `Complete - 7 successfully verified harnesses, 0 failures, 7 total.`
   (among them `kani_uniform_draw_in_range`, `kani_tick_time_checked`, `kani_in_flight_bound`,
   `kani_balanced_rr_selects_due_or_ping`).
+
+# WEISUNG M6-CI-11 — residuals FIN2-1 and FIN2-2 (Astra FINAL2, GLM EXT5), 2026-10-17
+
+## FIN2-2 — escaped basic-string assignment keys
+
+- Test `xtask policy::tests::vet_closure_escaped_assignment_keys_are_rejected`: `"exempti\U0000006Fns".subtle = [...]`, the `o`
+  spelling, an escaped inline root table, an escape in a key inside another table, each with the real `subtle@2.6.1`;
+  controls: the real config, a comment, a *value* string with an escape.
+- Red (finding disabled): `escaped letter: []`.
+- Fix: `is_escaped_assignment_key` — a quoted key with a backslash on the left of an assignment is the finding `vet config uses an
+  escaped key in an assignment; only bare keys are accepted`; nothing is decoded.
+- The real step, not only the function (the store file temporarily replaced, then restored with `git checkout`):
+  `cargo xtask step policy` with `"exempti\U0000006Fns".subtle = [...]` prepended → `FINDING vet-closure: vet config uses an escaped key in
+  an assignment; only bare keys are accepted`, `policy FAIL 1 policy finding(s)`; with `exemptions.subtle = [...]` prepended →
+  `FINDING vet-closure: vet config uses a non-canonical exemptions form …`, `policy FAIL`; the restored store → `policy PASS`.
+
+## FIN2-1 — the next SEND is chosen against a committed position that lags a write
+
+- Tests: `m6_driver_io::driver_rr_reservation_does_not_depend_on_worker_timing` (tokio, paused clock; Balanced, three send
+  queues at 10 s, seed 103, AI costs; first frame held 260 ms after 0 bytes and after 128 bytes, and 200 ms as the control;
+  idle against active relay-visible SENDs) and `m6_sched_io::balanced_rr_reserves_the_successor_of_an_unwritten_send`
+  (scripted relay, no completion reported: three ticks ask Q0, Q1, Q2; a teardown before any completion → the replacement
+  link asks Q0).
+- Red at `b06ed10`: idle `[(10260, 239), (20000, 239), (30000, 163), (40000, 185), …]` against active `[(10260, 239), (20000, 163),
+  (30000, 185), (40000, 239), …]` (the pin of the Astra table: `20000 Q0` idle, `Q1` active) and `asked: [Q0, Q0, Q0, Q0]` in the Rig.
+- Fix: `prepare_link` passes `prepare_send` the successor of the newest unwritten SEND (`Up::unwritten`, newest `Some(n)`), else the
+  committed `link.rr`; `last_send` stays at the tick; the reservations die with the `Up`.
+- Green: both tests, and `balanced_rr_does_not_advance_on_teardown_before_tick`, `balanced_round_robin_due_rule`,
+  `driver_rr_does_not_advance_for_a_send_never_written`, `driver_balanced_first_tick_sends_and_fetches_in_order`.
+- Writes in flight on the tokio driver: a second unwritten SEND cannot exist there (a link whose write is pending at its next
+  tick is closed), so the two-in-flight chain is tested on the sans-IO core (the Rig) and the driver test covers the
+  one-in-flight timing case.
+
+## Proof repetition
+
+- `env SECMP_AI_TRACES=64 cargo nextest run -p secmp-testkit --features harness -E 'binary(=harness)'`:
+  `Summary [1533.686s] 190 tests run: 190 passed (18 slow), 0 skipped` (ai01–ai07 included).
+- Mutants (scratch worktree of the FIN2-1 head; tests `driver_balanced|balanced_round_robin|balanced_rr|driver_rr|driver_stashed|reserv|ai07`),
+  8/8 caught: (d) prepare against `link.rr` while `unwritten` is non-empty — `balanced_rr_reserves_the_successor_of_an_unwritten_send`,
+  `driver_rr_reservation_does_not_depend_on_worker_timing`; `!send_missing` → `true` — `driver_rr_does_not_advance_for_a_send_never_written`,
+  `driver_balanced_first_tick_sends_and_fetches_in_order`, `driver_rr_reservation_…`; `checked_add` → `checked_sub` —
+  `balanced_rr_reserves_…`, `balanced_round_robin_due_rule`, `driver_rr_does_not_advance_…`; committed `n` → `0` —
+  `balanced_round_robin_due_rule`, `driver_rr_does_not_advance_…`; commit in `frame_written` dropped — the same two; commit at the
+  tick again — `driver_rr_does_not_advance_for_a_send_never_written`; stash drained after the wait again —
+  `driver_stashed_connect_is_anchored_at_its_occurrence`, `ai07_fault_paired_tokio`; occurrence timestamp → now —
+  `driver_stashed_connect_is_anchored_at_its_occurrence`.
+- `cargo kani -p secmp-client-core` (after FIN2-1): `Complete - 7 successfully verified harnesses, 0 failures, 7 total.`

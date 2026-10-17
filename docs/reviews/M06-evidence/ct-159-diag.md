@@ -262,3 +262,169 @@ gh workflow run ci-dispatch.yml --ref m06-ct-diag -f suite=ct -f ct_env=trial_op
 The `ct` step is expected to end red: the gate refuses the report because its target set differs from
 `expect::CT_TARGETS`. The data is in the artifact `ct-report-Linux-X64-<sha>-<run_id>-<attempt>` (`ct-report.json`),
 and the log line `ct report: {...}` carries the whole report too.
+
+Result of dispatch 39063440795, as reported by the reviewer: all four targets PASS on EPYC 7763 (q_eff 1.0). The
+production Δ is ≤ 2.5 ticks in both halves; swapped, interleaved and same_content are ≤ 6 ticks.
+
+## 5 · Repeat mode with fixture-address logging (WEISUNG M6-CT-3)
+
+### 5.1 · What the mode does
+
+`SECMP_CT_DIAG=trial_open_repeat` runs `DIAG_REPEATS` = 8 independent `evaluate`s for each of three targets:
+
+1. `tr_decrypt_trial_open_position` (production function);
+2. `tr_decrypt_reject_skipped` (production function);
+3. `diag_trial_open_position_resealed`: the M6-CT-2 Q3 variant. Class 1 is class 0's header plaintext re-sealed under
+   `hk_2` with the same nonce, followed by the same body. The cells differ only in `hdr_ct`, and the public header
+   content is the same.
+
+Each `evaluate` is the production calibration plus the production pair. Each half is a fresh fixture, as in the gate.
+There is no A/A pass and no other target; `run_verdict` is `"DIAG"`. Per half, the mode writes one entry into the
+report array `diag_repeat` and one line into the progress file. The gate echoes these lines as
+`ct progress ct diag_repeat: …`.
+
+### 5.2 · Fields per half (`diag_repeat[]`)
+
+- Identity: `target`, `rep` (0–7), `half` (1, 2).
+- The rep's `verdict` and `decisive_crop` (`decide` on its two halves).
+- `k`, `q_eff_ticks`, `q_eff_source`, `n0`, `n1` (raw crop).
+- `p50` / `p75` / `p90`, each `{delta_ticks (class 0 − class 1), t, n0, n1}`.
+- `shape`: per-class percentiles.
+- `input[c]`: the per-class measured input buffer, as `{ptr, mod4096, mod64, other_addresses}`. `other_addresses` is
+  the number of the class's inputs whose address differed from the first.
+- `input_d4096`, `input_d64`: (addr0 − addr1) mod 4096 and mod 64.
+- The `blend` sources, each as `{ptr, mod4096, mod64}`:
+  - `class0_cell` (not read during the measurement);
+  - `class1_cell_base` (read by both classes);
+  - `delta` (read by both classes).
+- The receiver: `receiver_state` (the state inside the slot), `hk_r`, `nhk_r` (their heap boxes), as above.
+- `headers[c]`: the decoded public header of each class's cell — `chain`, `dh_pk` (hex), `pn`, `n`, and the first 8
+  bytes of SHA-256 of `ek_pq` and of `ct_pq`.
+
+Not logged: the skipped-entry boxes (`SkippedKey.hk` and `.mk`, the table the lookup reads) and the per-call heap
+buffers inside `decrypt_with`. Their addresses have no accessor outside `secmp-proto`, and adding one is a product
+change.
+
+The progress line has this form:
+
+```
+ct diag_repeat: <target> rep <r> half <h> Δp50/Δp75/Δp90 <a>/<b>/<c> t90 <t> addr0 <hex> addr1 <hex> d4096 <n> d64 <n> verdict <v>
+```
+
+`addr0` and `addr1` are the per-class input buffers.
+
+### 5.3 · Harness changes on the diag branch (production paths touched, untimed)
+
+- `TrSkipped` keeps `chain_keys`.
+- `tr_decrypt_trial_open_position` and `tr_decrypt_reject_skipped` call `diag_note_headers`.
+- `tr_measure` calls `diag_note_measure` before `measure`, and wraps `prepare` with `diag_note_input`.
+
+All three are no-ops (one thread-local check) unless the repeat mode records. All of this runs outside the timed
+window; it applies to every TR target on this branch.
+
+### 5.4 · Local run
+
+- Host: Threadripper PRO 5955WX, `q_eff` 40 ticks = 10 ns.
+- Settings: 1M samples, `k` 1; 1963 s in total.
+- Command: `env SECMP_CT_DIAG=trial_open_repeat target/release/deps/ct-faacae40b4f5ca2f --bench`.
+- Report: `ct-159-diag-repeat-local.json` (bench sha256 `e93640c1…`). The 48 progress lines are verbatim in
+  `ct-159-diag-repeat-local.txt`.
+
+Excerpt, per half (Δp90 in ticks, t90, and the address fields mod 4096):
+
+```
+target rep half dp90 t90 | input0%4096 | c0cell%4096 c1base%4096 delta%4096 | state%4096 hk_r%4096 nhk_r%4096 | hdr0 chain/pn hdr1 chain/pn same_dh same_ek
+tr_decrypt_trial_open_position         0 1   -1.03   -2.98 | 3472 | 2064 2832 1136 |  392  976  944 | 1/0 2/3 False False
+tr_decrypt_trial_open_position         0 2  -28.36  -84.76 | 1056 | 3904 1152 1040 |  392  624  112 | 1/0 2/3 False False
+tr_decrypt_trial_open_position         1 1  -25.82  -72.29 | 3616 | 3200 1840 3104 |  392 1328  736 | 1/0 2/3 False False
+tr_decrypt_trial_open_position         1 2  -11.40  -32.22 | 1808 |  976 3216 1840 |  392  896 2896 | 1/0 2/3 False False
+tr_decrypt_trial_open_position         2 1  +24.14   70.47 |  992 | 2592  128 2112 |  392 3904 2480 | 1/0 2/3 False False
+tr_decrypt_trial_open_position         2 2  +19.66   53.77 |  976 |  544 2112 3120 |  392 3904 2560 | 1/0 2/3 False False
+tr_decrypt_trial_open_position         3 1   +8.64   25.83 | 1312 |    0 1440 1296 |  392 2560 1904 | 1/0 2/3 False False
+tr_decrypt_trial_open_position         3 2  +11.95   32.95 |    0 | 1136 1424 1296 |  392 1936 3840 | 1/0 2/3 False False
+tr_decrypt_trial_open_position         4 1  +26.20   70.59 |  352 |  400  416  336 |  392  416  720 | 1/0 2/3 False False
+tr_decrypt_trial_open_position         4 2   -9.56  -26.72 | 1920 |  400 2960 2976 |  392 1664  416 | 1/0 2/3 False False
+tr_decrypt_trial_open_position         5 1  -13.60  -38.63 | 3344 | 2960 1552 2016 |  392 2352  576 | 1/0 2/3 False False
+tr_decrypt_trial_open_position         5 2   +0.11    0.33 | 1296 | 2016 2160 2176 |  392 3792  288 | 1/0 2/3 False False
+tr_decrypt_trial_open_position         6 1  -10.21  -30.09 | 1536 |  736 2928 1520 |  392 2608 3792 | 1/0 2/3 False False
+tr_decrypt_trial_open_position         6 2   +0.16    0.49 | 1168 |  736  752 1152 |  392 3040  656 | 1/0 2/3 False False
+tr_decrypt_trial_open_position         7 1   -0.58   -1.62 | 3952 |  976 2832 3936 |  392 1712 1664 | 1/0 2/3 False False
+tr_decrypt_trial_open_position         7 2   +5.66   14.76 | 3840 | 1632 3936 3824 |  392  144  304 | 1/0 2/3 False False
+tr_decrypt_reject_skipped              0 1  +15.45   41.55 |  592 | 2256 1088 3712 |  392 3280 3328 | 1/0 1/0 True True
+tr_decrypt_reject_skipped              0 2  -26.88  -69.13 | 3424 | 3920 3456 1408 |  392 1136  928 | 1/0 1/0 True True
+tr_decrypt_reject_skipped              1 1  +11.69   30.68 | 3600 | 3968 1088 3584 |  392 2992 3472 | 1/0 1/0 True True
+tr_decrypt_reject_skipped              1 2   +0.09    0.24 | 2320 |  464 1760 1776 |  392  672 1520 | 1/0 1/0 True True
+tr_decrypt_reject_skipped              2 1   -0.67   -1.86 |  944 |  304 1920  928 |  392 3072 2432 | 1/0 1/0 True True
+tr_decrypt_reject_skipped              2 2  +11.88   32.56 | 1552 | 2720 3408 3424 |  392  784 3264 | 1/0 1/0 True True
+tr_decrypt_reject_skipped              3 1   +7.42   18.95 | 1728 | 1152 1568 1712 |  392 1696 1664 | 1/0 1/0 True True
+tr_decrypt_reject_skipped              3 2  +19.96   53.53 | 3440 |  464 2768 2160 |  392  112   64 | 1/0 1/0 True True
+tr_decrypt_reject_skipped              4 1  -15.09  -38.53 | 2800 |  464  416 2784 |  392 2128 1520 | 1/0 1/0 True True
+tr_decrypt_reject_skipped              4 2   +1.85    4.92 | 3872 | 1520 2736 3776 |  392  256 1424 | 1/0 1/0 True True
+tr_decrypt_reject_skipped              5 1  -25.50  -65.43 | 1536 | 3168 2800 2848 |  392 4064 1328 | 1/0 1/0 True True
+tr_decrypt_reject_skipped              5 2   +9.32   23.94 | 2128 | 1776 1456 2736 |  392 1648 3488 | 1/0 1/0 True True
+tr_decrypt_reject_skipped              6 1  +12.09   33.41 | 3520 |  416 2000 3504 |  392 1760 1424 | 1/0 1/0 True True
+tr_decrypt_reject_skipped              6 2  +27.46   77.87 |  512 |    0 2784 2000 |  392 1328 2768 | 1/0 1/0 True True
+tr_decrypt_reject_skipped              7 1   +0.93    2.57 |  304 |  352 1536 2080 |  392   96 4000 | 1/0 1/0 True True
+tr_decrypt_reject_skipped              7 2  +22.73   61.48 |  368 | 2304 2112  352 |  392 1648 3440 | 1/0 1/0 True True
+diag_trial_open_position_resealed      0 1   +0.17    0.53 |  400 | 3856 3872 3840 |  232 1344 3744 | 1/0 2/0 True True
+diag_trial_open_position_resealed      0 2   +0.24    0.71 | 2976 | 3248 3264 2016 |  232 3280 1104 | 1/0 2/0 True True
+diag_trial_open_position_resealed      1 1   +0.01    0.03 | 3456 | 1648 1664  480 |  232 2704  976 | 1/0 2/0 True True
+diag_trial_open_position_resealed      1 2   -0.02   -0.06 | 1664 | 1136 1648 2256 |  232 3376 2208 | 1/0 2/0 True True
+diag_trial_open_position_resealed      2 1   -0.50   -1.53 | 1840 | 1856 1872 3344 |  232 4000 2048 | 1/0 2/0 True True
+diag_trial_open_position_resealed      2 2   -0.47   -1.48 | 1872 | 3056 1856 1840 |  232 1760 3008 | 1/0 2/0 True True
+diag_trial_open_position_resealed      3 1   +0.03    0.08 | 3584 | 1280 3536 2448 |  232  752 1296 | 1/0 2/0 True True
+diag_trial_open_position_resealed      3 2   +0.30    0.87 | 3680 | 2448 3536 1280 |  232 3024 1696 | 1/0 2/0 True True
+diag_trial_open_position_resealed      4 1   -0.06   -0.18 | 2624 | 4080 2208  640 |  232 1328 1520 | 1/0 2/0 True True
+diag_trial_open_position_resealed      4 2   -0.24   -0.74 | 2208 |    0 2624 1120 |  232 2816 2480 | 1/0 2/0 True True
+diag_trial_open_position_resealed      5 1   -0.24   -0.67 | 1408 |   80 3328 2080 |  232 1968 1472 | 1/0 2/0 True True
+diag_trial_open_position_resealed      5 2   +0.11    0.34 | 2976 | 1408  480 2704 |  232   16 1632 | 1/0 2/0 True True
+diag_trial_open_position_resealed      6 1   -0.46   -1.37 | 3440 | 2912 3424  608 |  232 1744 2912 | 1/0 2/0 True True
+diag_trial_open_position_resealed      6 2   -0.30   -0.89 | 3440 | 2816 2608 1808 |  232 1344 1792 | 1/0 2/0 True True
+diag_trial_open_position_resealed      7 1   +0.12    0.33 | 4048 | 2208 4032 2192 |  232  176 2448 | 1/0 2/0 True True
+diag_trial_open_position_resealed      7 2   -0.13   -0.39 | 3536 | 2992 3008 1712 |  232 3376 1680 | 1/0 2/0 True True
+```
+
+The resealed rows show class 1 as `2/0`: its header opens under `hk_2` (chain 2) and carries `pn 0`, because it is
+class 0's header.
+
+### 5.5 · Facts from the local run (no verdict)
+
+- **Input addresses:** in every half of every target, both classes' measured inputs have the same address (`d4096 0`,
+  `d64 0`, `other_addresses 0` in all 48 halves). The per-class input buffer does not differ in placement between the
+  classes.
+- **Receiver state:** the receiver state's offset mod 4096 is constant per target: 392 for the production targets, 232
+  for the resealed one. It sits in the stack frame of `tr_measure`.
+- **Shifts in the production targets** (each half is a fresh fixture):
+
+  | Target | Halves with \|t90\| > 4.5 | \|Δp90\| range | Signs |
+  |---|---|---|---|
+  | `tr_decrypt_trial_open_position` | 12 of 16 | 5.7 … 28.4 ticks (1.4 … 7.1 ns) | both |
+  | `tr_decrypt_reject_skipped` | 13 of 16 | up to 27.5 ticks | both |
+
+  Rep verdicts:
+  - `tr_decrypt_trial_open_position`: SUB_FLOOR_SHIFT in reps 1, 2, 3; PASS otherwise.
+  - `tr_decrypt_reject_skipped`: SUB_FLOOR_SHIFT in reps 3 and 6; PASS otherwise.
+  - No rep reached the 40-tick floor in both halves.
+- **Shifts in `diag_trial_open_position_resealed`:** |Δp90| ≤ 0.50 ticks and |t90| ≤ 1.53 in all 16 halves. Every rep
+  verdict is PASS.
+- **Which inputs differ between the classes:**
+
+  | Target | Differs between classes | Same in both classes |
+  |---|---|---|
+  | `tr_decrypt_trial_open_position` | header nonce; header plaintext (`dh_pk`, `ek_pq`, `ct_pq`, `pn`); `hdr_ct`; body ciphertext; header key and entry (trial 0 / entry 0 vs trial 1 / entry 2) | — |
+  | `tr_decrypt_reject_skipped` | header nonce; `n` (0 vs 4); `hdr_ct`; body ciphertext; entry (0 vs 4) | `dh_pk`, `ek_pq`, `ct_pq`, `pn`; header key `hk_1` (both trial 0) |
+  | `diag_trial_open_position_resealed` | `hdr_ct`; header key and entry (trial 0 / entry 0 vs trial 1 / entry 2) | header nonce, header plaintext, body |
+
+- None of the logged address fields (input, the `blend` sources, `hk_r`, `nhk_r`, all mod 4096) takes the same value in
+  the halves with large |Δ| and differs in the others. The logged offsets vary from half to half in all three targets.
+
+### 5.6 · CI dispatch
+
+```
+gh workflow run ci-dispatch.yml --ref m06-ct-diag -f suite=ct -f ct_env=trial_open_repeat
+```
+
+- Expected duration: ≈ 33 min locally at 37 µs per call. Scaled by the CI per-call durations (`tr_decrypt_*` 53–66 µs
+  on the EPYC 7763), that is ≈ 48 min.
+- The step ends red: the gate refuses the report (its target set). The data is in the `ct-report-…` artifact
+  (`diag_repeat`) and in the `ct progress ct diag_repeat:` log lines.

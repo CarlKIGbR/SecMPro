@@ -192,7 +192,9 @@
 //! (default 1), shortens quick local runs; the report then carries `secmp_ct_scale`, which the gate refuses (M2
 //! review C3 (c)), and the gate unsets the variable for its own run. `SECMP_CT_DIAG=trial_open` (WEISUNG M6-CI-12)
 //! replaces the target set by `tr_decrypt_trial_open_position` and its three diagnosis targets; the report then
-//! carries `secmp_ct_diag` and the gate refuses it (target set). Unset or empty, the run is the production run.
+//! carries `secmp_ct_diag` and the gate refuses it (target set). `SECMP_CT_DIAG=trial_open_repeat` (WEISUNG M6-CT-3)
+//! repeats the evaluation of three TR targets and logs per half the class statistics and the fixture addresses
+//! (`diag_repeat`). Unset or empty, the run is the production run.
 
 // ADR-038 (1): the cycle-counter read in `now_ticks` is the only `unsafe` code in the bench. `xtask policy`
 // sanctions this attribute at exactly this path (`expect::UNSAFE_EXEMPT_ROOT`).
@@ -2440,6 +2442,9 @@ struct TrSkipped {
     receiver: RatchetState,
     /// A's honest undelivered cells per skipped chain, n = 0, 1, …: 5, 2 and 2 of them.
     undelivered: Vec<Vec<Vec<u8>>>,
+    /// A's header key of each skipped chain, `hk_1`, `hk_2`, … (M6-CI-12: the diagnosis reads the public headers and
+    /// re-seals one).
+    chain_keys: Vec<SecretBytes<32>>,
 }
 
 /// `state` encrypts a Dummy and persists (a no-op); the new state and the cell's bytes.
@@ -2544,6 +2549,7 @@ fn tr_skipped_session_with(
     Ok(TrSkipped {
         receiver: b,
         undelivered,
+        chain_keys,
     })
 }
 
@@ -2606,6 +2612,7 @@ fn tr_decrypt_trial_open_position(
 ) -> Result<Samples, secmp_crypto::Error> {
     let fixture = tr_skipped_session_with(stream, &TR_TRIAL_PER_CHAIN).map_err(crypto_error)?;
     let [class0, class1] = tr_trial_position_classes(&fixture).map_err(crypto_error)?;
+    diag_note_headers(&fixture, &class0, &class1);
     tr_measure(
         n,
         k,
@@ -2661,6 +2668,7 @@ fn tr_decrypt_reject_skipped(
 ) -> Result<Samples, secmp_crypto::Error> {
     let fixture = tr_skipped_session(stream).map_err(crypto_error)?;
     let [class0, class1] = tr_skipped_classes(&fixture).map_err(crypto_error)?;
+    diag_note_headers(&fixture, &class0, &class1);
     tr_measure(
         n,
         k,
@@ -2708,12 +2716,19 @@ fn tr_measure(
     let receiver = receiver.ok_or(secmp_crypto::Error::Rejected)?;
     let delta = Deltas::new(class0, class1);
     let slot = RefCell::new(Some(receiver));
+    // M6-CI-12 repeat mode: the fixture addresses (no-op otherwise; before the measurement, outside every window)
+    diag_note_measure(n, class0, class1, &delta, &slot);
     let mut entropy = FixedEntropy::new(&[]);
     let samples = measure(
         n,
         k,
         stream,
-        |c, _| blended_vec(class1, &delta, c),
+        |c, _| {
+            let cell = blended_vec(class1, &delta, c);
+            // M6-CI-12 repeat mode: the address of the input (prepared before the window opens)
+            diag_note_input(c, &cell);
+            cell
+        },
         |cell| tr_decrypt(&slot, &mut entropy, cell),
     );
     if slot.into_inner().is_none() {
@@ -2777,10 +2792,11 @@ const CLAIM_DIAG_SAME_CONTENT: Claim = Claim {
 };
 
 /// The diagnosis claims, for the report (`claim_json`).
-const DIAG_CLAIMS: [Claim; 3] = [
+const DIAG_CLAIMS: [Claim; 4] = [
     CLAIM_DIAG_SWAPPED,
     CLAIM_DIAG_INTERLEAVED,
     CLAIM_DIAG_SAME_CONTENT,
+    CLAIM_DIAG_RESEALED,
 ];
 
 /// M6-CI-12 Q2 (`diag_trial_open_position_swapped`): the production target with class 0 = the `hk_2` cell (trial 1)
@@ -2915,6 +2931,393 @@ fn diag_trial_open_targets(n: usize) -> [Target; 4] {
             diag_trial_open_position_same_content,
         ),
     ]
+}
+
+// ---- repeat mode with fixture-address logging (WEISUNG M6-CT-3) ---------------------------------------------------
+//
+// `SECMP_CT_DIAG=trial_open_repeat`: for each of `diag_repeat_targets`, `DIAG_REPEATS` independent `evaluate`s — the
+// production calibration and pair, each half a fresh fixture, as in the gate run — and per half the class statistics
+// at p50/p75/p90 and the addresses of the fixture memory the half used (`DiagHalf`), as `diag_repeat` in the report
+// and one `ct diag_repeat:` line per half in the progress file, which the gate echoes. No A/A pass, no other target.
+// The addresses are those the bench can see: the skipped entries' boxes (`SkippedKey`) have no accessor outside
+// `secmp-proto`, so they are not logged.
+
+/// The value of `CT_DIAG_ENV` for the repeat mode (M6-CT-3).
+const CT_DIAG_TRIAL_OPEN_REPEAT: &str = "trial_open_repeat";
+
+/// Independent evaluations per target in the repeat mode (M6-CT-3: 8, ≈ 60 min at 1M samples on a CI runner).
+const DIAG_REPEATS: usize = 8;
+
+/// What one half (one `tr_measure` call) of the repeat mode used: its sample count, the public headers of the two
+/// classes' cells, and the addresses of its fixture memory.
+#[derive(Default)]
+struct DiagHalf {
+    samples: usize,
+    /// Per class: the decoded public header of the cell (`diag_header`), JSON.
+    headers: [Option<serde_json::Value>; 2],
+    /// The class-0 cell, the class-1 cell (the `blend` base, read by both classes) and the delta (read by both).
+    sources: [usize; 3],
+    /// The receiver state inside the slot, its `hk_r` and `nhk_r` (the heap boxes of the two current header keys).
+    receiver: [usize; 3],
+    /// Per class: the address of the first measured input, and how many of the class's inputs had another address.
+    input_first: [Option<usize>; 2],
+    input_other: [u64; 2],
+}
+
+std::thread_local! {
+    /// The halves of the evaluation in progress (`Some` only in the repeat mode).
+    static DIAG_HALVES: RefCell<Option<Vec<DiagHalf>>> = const { RefCell::new(None) };
+    /// The public headers of the next half (`diag_note_headers`), taken by `diag_note_measure`.
+    static DIAG_PENDING_HEADERS: RefCell<[Option<serde_json::Value>; 2]> = const { RefCell::new([None, None]) };
+    /// The `diag_repeat` entries of the run.
+    static DIAG_REPEAT: RefCell<Vec<serde_json::Value>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Whether the repeat mode records (`DIAG_HALVES` is `Some`).
+fn diag_recording() -> bool {
+    DIAG_HALVES.with(|h| h.try_borrow().is_ok_and(|h| h.is_some()))
+}
+
+/// Lowercase hex of `bytes`.
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().fold(String::new(), |mut s, b| {
+        let _ = write!(s, "{b:02x}");
+        s
+    })
+}
+
+/// The public header of `cell` (a TR cell of the fixture), opened under the first of A's skipped-chain keys that opens
+/// it: the chain, `dh_pk`, `pn`, `n`, and the first 8 bytes of SHA-256 of `ek_pq` and of `ct_pq`; `null` if none opens.
+fn diag_header(fixture: &TrSkipped, cell: &[u8]) -> serde_json::Value {
+    let Some((nonce, rest)) = cell.split_first_chunk::<NONCE_LEN>() else {
+        return serde_json::Value::Null;
+    };
+    let Some((hdr_ct, _)) = rest.split_at_checked(HDR_CT_LEN) else {
+        return serde_json::Value::Null;
+    };
+    let ad = [
+        Label::TrHdr.as_bytes(),
+        fixture.receiver.sb_kat().as_slice(),
+    ]
+    .concat();
+    let digest8 = |bytes: &[u8]| hex(secmp_crypto::sha256(&[bytes]).get(..8).unwrap_or(&[]));
+    for (i, hk) in fixture.chain_keys.iter().enumerate() {
+        if let Ok(plain) = Aead::open(hk, nonce, &ad, hdr_ct)
+            && let Ok(header) = HeaderV1::decode(&plain)
+        {
+            return serde_json::json!({
+                "chain": i.saturating_add(1),
+                "dh_pk": hex(header.dh_pk.as_bytes()),
+                "pn": header.pn,
+                "n": header.n,
+                "ek_pq_sha256_8": digest8(header.ek_pq.as_bytes()),
+                "ct_pq_sha256_8": digest8(header.ct_pq.as_slice()),
+            });
+        }
+    }
+    serde_json::Value::Null
+}
+
+/// Repeat mode: remember the public headers of the two classes' cells for the next half (no-op otherwise).
+fn diag_note_headers(fixture: &TrSkipped, class0: &[u8], class1: &[u8]) {
+    if !diag_recording() {
+        return;
+    }
+    let headers = [diag_header(fixture, class0), diag_header(fixture, class1)];
+    DIAG_PENDING_HEADERS.with(|p| {
+        if let Ok(mut p) = p.try_borrow_mut() {
+            *p = headers.map(Some);
+        }
+    });
+}
+
+/// Repeat mode: start the record of a half of `n` samples with the addresses of its fixture (no-op otherwise).
+fn diag_note_measure(
+    n: usize,
+    class0: &[u8],
+    class1: &[u8],
+    delta: &Deltas,
+    slot: &RefCell<Option<RatchetState>>,
+) {
+    if !diag_recording() {
+        return;
+    }
+    let headers = DIAG_PENDING_HEADERS.with(|p| {
+        p.try_borrow_mut()
+            .map(|mut p| std::mem::take(&mut *p))
+            .unwrap_or_default()
+    });
+    let mut receiver = [0; 3];
+    if let Ok(state) = slot.try_borrow()
+        && let Some(state) = state.as_ref()
+    {
+        let (hk_r, nhk_r) = state.receiving_header_keys_kat();
+        let key = |k: Option<&SecretBytes<32>>| {
+            k.map_or(0, |k| std::ptr::from_ref(k.expose_secret()).addr())
+        };
+        receiver = [std::ptr::from_ref(state).addr(), key(hk_r), key(nhk_r)];
+    }
+    let half = DiagHalf {
+        samples: n,
+        headers,
+        sources: [
+            class0.as_ptr().addr(),
+            class1.as_ptr().addr(),
+            delta.0.as_ptr().addr(),
+        ],
+        receiver,
+        ..DiagHalf::default()
+    };
+    DIAG_HALVES.with(|h| {
+        if let Ok(mut h) = h.try_borrow_mut()
+            && let Some(h) = h.as_mut()
+        {
+            h.push(half);
+        }
+    });
+}
+
+/// Repeat mode: note the address of a prepared input of class `class` in the current half (no-op otherwise).
+fn diag_note_input(class: usize, input: &[u8]) {
+    let addr = input.as_ptr().addr();
+    DIAG_HALVES.with(|h| {
+        let Ok(mut h) = h.try_borrow_mut() else {
+            return;
+        };
+        let Some(half) = h.as_mut().and_then(|h| h.last_mut()) else {
+            return;
+        };
+        let c = class & 1;
+        if let (Some(first), Some(other)) =
+            (half.input_first.get_mut(c), half.input_other.get_mut(c))
+        {
+            match first {
+                None => *first = Some(addr),
+                Some(a) if *a != addr => *other = other.saturating_add(1),
+                Some(_) => {}
+            }
+        }
+    });
+}
+
+/// M6-CT-3 (iii): the trial-position classes with the same public header — class 0 the production class 0 (`hk_1`,
+/// n = 0, trial 0, entry 0), class 1 its header plaintext re-sealed under `hk_2` with the same nonce, followed by the
+/// same body (trial 1; `(hk_2, 0)` is entry 2) — each with the body tag wrong in byte 0. The cells differ only in
+/// `hdr_ct`.
+fn tr_resealed_classes(fixture: &TrSkipped) -> Result<[Vec<u8>; 2], secmp_proto::Error> {
+    let first = fixture
+        .undelivered
+        .first()
+        .and_then(|chain| chain.first())
+        .ok_or(secmp_proto::Error::Rejected)?;
+    let [hk1, hk2] = fixture.chain_keys.as_slice() else {
+        return Err(secmp_proto::Error::Rejected);
+    };
+    let (nonce, rest) = first
+        .split_first_chunk::<NONCE_LEN>()
+        .ok_or(secmp_proto::Error::Rejected)?;
+    let (hdr_ct, body) = rest
+        .split_at_checked(HDR_CT_LEN)
+        .ok_or(secmp_proto::Error::Rejected)?;
+    let ad = [
+        Label::TrHdr.as_bytes(),
+        fixture.receiver.sb_kat().as_slice(),
+    ]
+    .concat();
+    let header = Aead::open(hk1, nonce, &ad, hdr_ct)?;
+    let resealed = Aead::seal(hk2, Nonce24::from_bytes_kat(*nonce), &ad, &header)?;
+    let class1 = [nonce.as_slice(), &resealed, body].concat();
+    Ok([body_tag_wrong(first)?, body_tag_wrong(&class1)?])
+}
+
+/// M6-CT-3 (iii): the trial-position target with one public header for both classes.
+const CLAIM_DIAG_RESEALED: Claim = Claim {
+    target: "diag_trial_open_position_resealed",
+    classes: [
+        "header opens under hk_1 (trial 0; entry 0 of 4), body tag wrong in byte 0 (the production class 0)",
+        "the same header plaintext and body re-sealed under hk_2 with the same nonce (trial 1; entry 2 of 4), body tag \
+         wrong in byte 0",
+    ],
+    site: "body MAC",
+    check: SiteCheck::Tagged,
+};
+
+/// M6-CT-3 (iii) (`diag_trial_open_position_resealed`): the production target with the classes of
+/// `tr_resealed_classes`, measured by `tr_measure`.
+fn diag_trial_open_position_resealed(
+    n: usize,
+    k: usize,
+    stream: &mut Stream,
+) -> Result<Samples, secmp_crypto::Error> {
+    let fixture = tr_skipped_session_with(stream, &TR_TRIAL_PER_CHAIN).map_err(crypto_error)?;
+    let [class0, class1] = tr_resealed_classes(&fixture).map_err(crypto_error)?;
+    diag_note_headers(&fixture, &class0, &class1);
+    tr_measure(
+        n,
+        k,
+        stream,
+        CLAIM_DIAG_RESEALED,
+        fixture.receiver,
+        &class0,
+        &class1,
+    )
+}
+
+/// The targets of the repeat mode (M6-CT-3): the two production targets and the re-sealed variant.
+fn diag_repeat_targets(n: usize) -> [Target; 3] {
+    [
+        claimed(CLAIM_TR_TRIAL_POSITION, n, tr_decrypt_trial_open_position),
+        claimed(CLAIM_TR_SKIPPED, n, tr_decrypt_reject_skipped),
+        claimed(CLAIM_DIAG_RESEALED, n, diag_trial_open_position_resealed),
+    ]
+}
+
+/// `ptr`, `ptr % 4096` and `ptr % 64` of an address, JSON.
+fn diag_addr(addr: usize) -> serde_json::Value {
+    serde_json::json!({
+        "ptr": format!("{addr:#x}"),
+        "mod4096": addr.checked_rem(4096).unwrap_or(0),
+        "mod64": addr.checked_rem(64).unwrap_or(0),
+    })
+}
+
+/// `(a − b) mod m` (wrapping).
+fn diag_diff_mod(a: usize, b: usize, m: usize) -> usize {
+    a.wrapping_sub(b).checked_rem(m).unwrap_or(0)
+}
+
+/// The repeat mode (M6-CT-3): `DIAG_REPEATS` `evaluate`s of each repeat target; per half one `diag_repeat` entry and
+/// one progress line.
+fn diag_repeat(
+    n: usize,
+    stream: &mut Stream,
+    clock: &Clock,
+    rules: Rules,
+) -> Result<(), secmp_crypto::Error> {
+    for index in 0..diag_repeat_targets(n).len() {
+        for rep in 0..DIAG_REPEATS {
+            let Some(target) = diag_repeat_targets(n).into_iter().nth(index) else {
+                continue;
+            };
+            let (name, samples) = (target.name, target.samples);
+            DIAG_HALVES.with(|h| {
+                if let Ok(mut h) = h.try_borrow_mut() {
+                    *h = Some(Vec::new());
+                }
+            });
+            let outcome = evaluate(target, stream, clock, rules);
+            let halves = DIAG_HALVES
+                .with(|h| h.try_borrow_mut().ok().and_then(|mut h| h.take()))
+                .unwrap_or_default();
+            let outcome = outcome?;
+            // the measured pair: the last two halves with the full sample count (calibration halves are shorter)
+            let mut full: Vec<DiagHalf> = halves
+                .into_iter()
+                .filter(|h| h.samples == samples)
+                .collect();
+            let pair = full.split_off(full.len().saturating_sub(2));
+            let measurements = [outcome.first.as_ref(), outcome.second.as_ref()];
+            for (h, (m, half)) in measurements.into_iter().zip(&pair).enumerate() {
+                diag_repeat_entry(name, rep, h, &outcome, m, half);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// One `diag_repeat` entry and its progress line: half `h` (0 = first) of repetition `rep` of `name`.
+fn diag_repeat_entry(
+    name: &str,
+    rep: usize,
+    h: usize,
+    outcome: &Outcome,
+    m: Option<&Measurement>,
+    half: &DiagHalf,
+) {
+    let at = |crop: &str| m.and_then(|m| m.crops.iter().find(|(k, _)| k == crop).map(|(_, s)| *s));
+    let crop = |c: &str| {
+        at(c).map_or(serde_json::Value::Null, |s| {
+            serde_json::json!({"delta_ticks": s.delta(), "t": s.t(), "n0": s.n[0], "n1": s.n[1]})
+        })
+    };
+    let raw = at("raw");
+    let [a0, a1] = half.input_first.map(|a| a.unwrap_or(0));
+    let input = |c: usize| {
+        let mut v = diag_addr(half.input_first.get(c).copied().flatten().unwrap_or(0));
+        if let Some(o) = v.as_object_mut() {
+            o.insert(
+                "other_addresses".to_owned(),
+                serde_json::Value::from(half.input_other.get(c).copied().unwrap_or(0)),
+            );
+        }
+        v
+    };
+    let [s0, s1, sd] = half.sources;
+    let [state, hk_r, nhk_r] = half.receiver;
+    let entry = serde_json::json!({
+        "target": name,
+        "rep": rep,
+        "half": h.saturating_add(1),
+        "verdict": outcome.verdict.as_str(),
+        "decisive_crop": outcome.decisive_crop,
+        "k": m.map(|m| m.k),
+        "q_eff_ticks": m.map(|m| m.q_eff),
+        "q_eff_source": m.map(|m| m.q_eff_source),
+        "n0": raw.map(|s| s.n[0]),
+        "n1": raw.map(|s| s.n[1]),
+        "p50": crop("p50"),
+        "p75": crop("p75"),
+        "p90": crop("p90"),
+        "shape": m.map(|m| {
+            let parse = |s: &str| serde_json::from_str::<serde_json::Value>(s).unwrap_or(serde_json::Value::Null);
+            serde_json::json!({"class0": parse(&m.shape[0]), "class1": parse(&m.shape[1])})
+        }),
+        "input": [input(0), input(1)],
+        "input_d4096": diag_diff_mod(a0, a1, 4096),
+        "input_d64": diag_diff_mod(a0, a1, 64),
+        "class0_cell": diag_addr(s0),
+        "class1_cell_base": diag_addr(s1),
+        "delta": diag_addr(sd),
+        "receiver_state": diag_addr(state),
+        "hk_r": diag_addr(hk_r),
+        "nhk_r": diag_addr(nhk_r),
+        "headers": half.headers,
+    });
+    let delta = |c: &str| at(c).map_or_else(|| "?".to_owned(), |s| format!("{:+.2}", s.delta()));
+    let line = format!(
+        "ct diag_repeat: {name} rep {rep} half {} Δp50/Δp75/Δp90 {}/{}/{} t90 {} addr0 {a0:#x} addr1 {a1:#x} d4096 {} d64 \
+         {} verdict {}",
+        h.saturating_add(1),
+        delta("p50"),
+        delta("p75"),
+        delta("p90"),
+        at("p90").map_or_else(|| "?".to_owned(), |s| format!("{:.2}", s.t())),
+        diag_diff_mod(a0, a1, 4096),
+        diag_diff_mod(a0, a1, 64),
+        outcome.verdict.as_str()
+    );
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(progress_path())
+    {
+        let _ = writeln!(f, "{line}");
+    }
+    DIAG_REPEAT.with(|d| {
+        if let Ok(mut d) = d.try_borrow_mut() {
+            d.push(entry);
+        }
+    });
+}
+
+/// The `diag_repeat` entries of the run (JSON array; empty outside the repeat mode).
+fn diag_repeat_json() -> String {
+    DIAG_REPEAT.with(|d| {
+        d.try_borrow().map_or_else(
+            |_| "[]".to_owned(),
+            |d| serde_json::Value::from(d.clone()).to_string(),
+        )
+    })
 }
 
 // ---- SecMP-INV/HX targets (M4, TEST-SPEC-M4 (f)) --------------------------------------------------------------
@@ -4122,10 +4525,15 @@ fn run(
             .chain(m5_targets(n))
             .collect(),
         Some(CT_DIAG_TRIAL_OPEN) => diag_trial_open_targets(n).into(),
+        // M6-CT-3: the repeat mode records into `diag_repeat`; no target outcome, no A/A pass
+        Some(CT_DIAG_TRIAL_OPEN_REPEAT) => {
+            diag_repeat(n, &mut stream, &clock, rules)?;
+            Vec::new()
+        }
         Some(other) => {
             return Err(abort(format!(
                 "bench aborted: {CT_DIAG_ENV}={other:?} is not a known diagnosis run (known: \
-                 {CT_DIAG_TRIAL_OPEN:?})"
+                 {CT_DIAG_TRIAL_OPEN:?}, {CT_DIAG_TRIAL_OPEN_REPEAT:?})"
             )));
         }
     };
@@ -4612,6 +5020,9 @@ fn main() -> ExitCode {
     // failed, else PASS iff every target passed
     let run_verdict = if control_fail.is_some() {
         "CONTROL_FAIL"
+    } else if ct_diag().as_deref() == Some(CT_DIAG_TRIAL_OPEN_REPEAT) {
+        // M6-CT-3: the repeat mode has no target outcome; its data is `diag_repeat`
+        "DIAG"
     } else if outcomes.iter().all(|o| o.verdict.passed()) {
         "PASS"
     } else {
@@ -4627,8 +5038,9 @@ fn main() -> ExitCode {
         )),
         // M6-CI-12: a diagnosis run says so (its target set is not the gate's)
         ct_diag().map_or_else(String::new, |s| format!(
-            "\"secmp_ct_diag\":{},",
-            serde_json::Value::from(s)
+            "\"secmp_ct_diag\":{},\"diag_repeat\":{},",
+            serde_json::Value::from(s),
+            diag_repeat_json()
         )),
         clock.json(),
         host_json(),

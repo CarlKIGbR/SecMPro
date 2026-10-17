@@ -773,3 +773,184 @@ fn driver_hanging_writer_does_not_shift_staggered_tick() {
         assert_eq!(run.overruns, 0);
     });
 }
+
+/// Mutants-156 (`run.rs` `stop_tasks` → `()`): `shutdown` aborts the control tasks too. One Strict contact and the pool
+/// through a provider that answers every connect 60 s late; the run goes on until a control operation's one-shot connection
+/// is pending, the driver is shut down, and no connection reaches the relay afterwards (the links' connects are aborted by
+/// `shutdown` itself; the control task is `stop_tasks`'s).
+#[test]
+fn driver_shutdown_aborts_pending_control_operations() {
+    runtime().block_on(async {
+        let setup = Setup::new();
+        let provider = Holding::new(setup.provider.clone(), usize::MAX, None, 60_000);
+        let sc = Scenario {
+            mode: Mode::Strict,
+            contacts: vec![(10_000, 10_000)],
+            pool: true,
+            seed: 54,
+        };
+        let x = TClient::with_provider(
+            &setup,
+            provider,
+            sc.mode,
+            no_phase(),
+            sc.seed,
+            Costs::default(),
+            0,
+        );
+        let mut rig = TokioRig::assemble(setup, x, &sc).await;
+        let t0 = rig.setup.now();
+        let mut t = t0;
+        let control_pending = |rig: &TokioRig<Holding>| {
+            rig.x
+                .driver
+                .log()
+                .unwrap()
+                .connects
+                .iter()
+                .any(|(_, p, _)| matches!(p, Purpose::Control(_)))
+        };
+        while !control_pending(&rig) {
+            t += 1_000;
+            assert!(t < t0 + 4 * 3_600_000, "no control operation started");
+            rig.x.run_until(t).await;
+        }
+        let before = client_connects(&rig);
+        rig.x.driver.shutdown(&mut rig.x.sched).unwrap();
+        tokio::time::sleep(std::time::Duration::from_secs(120)).await;
+        assert_eq!(
+            client_connects(&rig),
+            before,
+            "a control operation connected after the shutdown"
+        );
+    });
+}
+
+/// Mutants-156 (`run.rs` `apply`, `io.pending > 0` → `<` in the stalled-write branch): a link whose write is still pending
+/// when its next tick's write is handed out is closed at that tick. With the shipped periods (≥ 10 s = `WRITE_STALL_MS`)
+/// `close_stalled` always comes first, so the periods are 5 s here (`Params::periods_ms`): the first frame, written at
+/// 5 s, hangs for 20 s; the tick at 10 s closes the link (not the stall bound at 15 s).
+#[test]
+fn driver_closes_a_link_whose_write_is_pending_at_its_next_tick() {
+    runtime().block_on(async {
+        let setup = Setup::new();
+        let provider = Holding::new(
+            setup.provider.clone(),
+            0,
+            Some(Hold {
+                first: 0,
+                delay_ms: 20_000,
+            }),
+            0,
+        );
+        let sc = Scenario {
+            mode: Mode::Strict,
+            contacts: vec![(5_000, 5_000)],
+            pool: false,
+            seed: 91,
+        };
+        let params = Params {
+            phase_max_ms: 0,
+            periods_ms: [5_000, 10_000, 20_000, 40_000],
+            ..Params::default()
+        };
+        let x = TClient::with_provider(
+            &setup,
+            provider,
+            sc.mode,
+            params,
+            sc.seed,
+            Costs::default(),
+            0,
+        );
+        let mut rig = TokioRig::assemble(setup, x, &sc).await;
+        rig.run_minutes(1, None).await;
+        let held = link_of(&rig, 0);
+        let log = rig.x.driver.log().unwrap();
+        let torn = log
+            .events
+            .iter()
+            .find_map(|(t, e)| matches!(e, LinkEvent::TornDown(l, _) if *l == held).then_some(*t));
+        assert_eq!(torn, Some(10_000), "{:?}", log.events);
+    });
+}
+
+/// The `Flushed` time of the pass whose `PollDue` is at `t` (the first one at `t`).
+fn flushed_of_pass(steps: &[Step], t: u64) -> Option<u64> {
+    let at = steps.iter().position(|s| *s == Step::PollDue(t))?;
+    steps.get(at..)?.iter().find_map(|s| match s {
+        Step::Flushed(f) => Some(*f),
+        _ => None,
+    })
+}
+
+/// Mutants-156 (`run.rs` `flush_wait`: replaced by `Ok(())`, `pending > 0` → `==`/`<`, `oldest == Some(now)` → `!=`,
+/// `left == 0` → `!=`): the pass that hands a write out waits for it. Two links' first frames are due together, one is held
+/// 100 ms: the pass's `Flushed` is the held write's completion — not the pass's own time (no wait), not 250 ms — and its
+/// `work` starts after it. (The old `wrote_before_work` checks pass without any wait: the next pass starts at the completion.)
+#[test]
+fn flush_wait_ends_at_the_completion_of_the_pass_writes() {
+    let hold = Hold {
+        first: 0,
+        delay_ms: 100,
+    };
+    let (_, rig) = run_holding(no_phase(), 43, 0, Some(hold), 1);
+    let log = rig.x.driver.log().unwrap();
+    let held = link_of(&rig, 0);
+    let done = log
+        .steps
+        .iter()
+        .find_map(|s| match s {
+            Step::Wrote(t, l, 4352) if *l == held => Some(*t),
+            _ => None,
+        })
+        .unwrap();
+    let t = done - 100;
+    assert_eq!(
+        flushed_of_pass(&log.steps, t),
+        Some(done),
+        "{:?}",
+        log.steps
+    );
+    assert!(
+        !log.steps
+            .iter()
+            .any(|s| matches!(s, Step::Work(start, _) if *start > t && *start < done)),
+        "no work starts inside the held write"
+    );
+}
+
+/// Mutants-156 (`flush_wait`, `pending > 0 && oldest == Some(now)` → `||`): only the writes handed out in THIS pass are waited
+/// for. One first frame is held 9.5 s (past the 250 ms wait, inside the stall bound); the pass at the FETCH lead of the
+/// next tick (tick − 1000 ms), which hands out nothing, does not wait for the old write: `Flushed` is its own time.
+#[test]
+fn flush_wait_does_not_wait_for_an_earlier_pass_write() {
+    let hold = Hold {
+        first: 0,
+        delay_ms: 9_500,
+    };
+    let (_, rig) = run_holding(no_phase(), 43, 0, Some(hold), 1);
+    let log = rig.x.driver.log().unwrap();
+    let held = link_of(&rig, 0);
+    let done = log
+        .steps
+        .iter()
+        .find_map(|s| match s {
+            Step::Wrote(t, l, 4352) if *l == held => Some(*t),
+            _ => None,
+        })
+        .unwrap();
+    let submitted = done - 9_500;
+    let lead = submitted + 9_000;
+    assert!(
+        log.steps.contains(&Step::PollDue(lead)),
+        "a pass at the FETCH lead: {:?}",
+        log.steps
+    );
+    assert_eq!(flushed_of_pass(&log.steps, lead), Some(lead));
+    // the pass that handed the write out waited its 250 ms, no more
+    assert_eq!(
+        flushed_of_pass(&log.steps, submitted),
+        Some(submitted + 250)
+    );
+}

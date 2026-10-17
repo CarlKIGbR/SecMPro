@@ -428,3 +428,92 @@ gh workflow run ci-dispatch.yml --ref m06-ct-diag -f suite=ct -f ct_env=trial_op
   on the EPYC 7763), that is ≈ 48 min.
 - The step ends red: the gate refuses the report (its target set). The data is in the `ct-report-…` artifact
   (`diag_repeat`) and in the `ct progress ct diag_repeat:` log lines.
+
+## 6 · Bisection of the content dependence (WEISUNG M6-CT-4)
+
+### 6.1 · Variants
+
+`SECMP_CT_DIAG=trial_open_bisect` runs the repeat mode of §5 over seven variants, 4 evaluations each (8 halves). There
+are 1M samples per half, and each half is a fresh fixture.
+
+In every variant:
+
+- class 0 is the production class-0 cell: `hk_1`, n = 0, trial 0, entry 0;
+- class 1 is that cell with one component changed;
+- both classes have the body tag wrong in byte 0;
+- the pre-check is the production one: `Err(Rejected), site body MAC` for both classes, in every half.
+
+| Variant | Class 1 differs from class 0 in |
+|---|---|
+| V1 `diag_bisect_v1_pn` | `pn` 0 → 3 in the header plaintext (re-sealed under `hk_1`, same nonce, same body) |
+| V2 `diag_bisect_v2_dh` | `dh_pk` replaced by chain 2's (A's next ratchet key, a valid X25519 public key) |
+| V3 `diag_bisect_v3_pq` | `ek_pq` and `ct_pq` replaced by chain 2's |
+| V4 `diag_bisect_v4_nonce` | the same header plaintext and body, re-sealed under `hk_1` with a fresh nonce drawn from the bench stream |
+| V5 `diag_bisect_v5_body` | the same nonce and `hdr_ct`; the body replaced by chain 2's body |
+| V6 `diag_bisect_v6_mk` | the same cell; class 1 decrypts on a receiver copy whose entry `(hk_1, 0)` holds a fresh random `mk` |
+| V6c `diag_bisect_v6c_two_receivers` | control for V6: the same cell; class 1 decrypts on a second, unmodified receiver copy |
+
+Construction notes:
+
+- V1–V4 re-seal the header, so `hdr_ct` changes as well, and with it the body AD, which contains `hdr_ct`.
+- V6 needed no product accessor. Its edit goes through the public `RatchetState::to_bytes` / `from_bytes`: the
+  `RatchetStateV1` entries are `hk ‖ n u32 ‖ mk`, and the 32 bytes after the first occurrence of `hk_1 ‖ 0u32` are
+  replaced. Before measuring, the bench checks that the honest cell opens on receiver 0 and fails on the edited
+  receiver 1 (for V6c: opens on both).
+- V6 and V6c put each class on its own receiver: a two-element array, both restored with `from_bytes`. So they also
+  differ from V1–V5 in that the receiver state is selected by class.
+
+No variant was skipped.
+
+### 6.2 · Local run
+
+- Host: Threadripper PRO 5955WX, `q_eff` 40 ticks = 10 ns.
+- Duration: 2185 s.
+- Command: `env SECMP_CT_DIAG=trial_open_bisect target/release/deps/ct-faacae40b4f5ca2f --bench`.
+- Report: `ct-159-diag-bisect-local.json` (bench sha256 `14ff2a11…`). The 56 progress lines are verbatim in
+  `ct-159-diag-bisect-local.txt`.
+
+Summary:
+
+| Variant | Halves | max \|Δp90\| ticks | Halves with \|t90\| > 4.5 | Rep verdicts |
+|---|---|---|---|---|
+| V1 pn | 8 | 0.45 | 0 | PASS ×4 |
+| V2 dh_pk | 8 | 0.88 | 0 | PASS ×4 |
+| V3 ek_pq/ct_pq | 8 | 0.89 | 0 | PASS ×4 |
+| V4 header nonce | 8 | 65.38 | 5 | PASS ×4 |
+| V5 body ciphertext | 8 | 0.52 | 0 | PASS ×4 |
+| V6 mk (two receivers) | 8 | 10.95 | 5 | PASS, SUB_FLOOR_SHIFT, PASS, PASS |
+| V6c two receivers, same mk | 8 | 6.98 | 6 | PASS, SUB_FLOOR_SHIFT, PASS, PASS |
+
+V4 per half (Δp90 ticks / t90):
+
+| Rep | Half 1 | Half 2 |
+|---|---|---|
+| 0 | −36.82 / −105.15 | +38.64 / +109.37 |
+| 1 | −30.66 / −87.50 | +1.76 / +5.02 |
+| 2 | −65.38 / −173.71 | +1.14 / +3.11 |
+| 3 | +1.23 / +3.51 | −0.52 / −1.46 |
+
+Every V4 rep verdict is PASS, because each half is a fresh fixture with a fresh nonce pair and no rep reproduced the
+same sign above the floor.
+
+### 6.3 · Facts from the bisection (no verdict)
+
+- Changing `pn`, `dh_pk`, or `ek_pq`/`ct_pq` in the header plaintext (V1–V3) or the body ciphertext (V5) gives |Δp90|
+  ≤ 0.89 ticks and |t90| ≤ 2.52 in all 32 halves. In V1–V3 that includes a changed `hdr_ct` under the same nonce.
+- Changing only the header nonce (V4; `hdr_ct` re-sealed accordingly) gives shifts in 5 of 8 halves, with both signs,
+  up to 65.38 ticks = 16.3 ns. This is larger than the production targets' local maximum (28 ticks, §5). The size
+  varies from fixture to fixture, between ≈ 0 and 65 ticks.
+- V6 (different `mk`, two receivers) and V6c (same `mk`, two receivers) give shifts of similar size: max 10.95 and 6.98
+  ticks, in 5 and 6 of 8 halves. So the two-receiver arrangement alone shifts by up to 7 ticks here; the run does not
+  separate an `mk` effect from it.
+- Input addresses are identical for both classes in 55 of 56 halves. The exception is V2 rep 2 half 2 (`d4096 1200`,
+  `d64 48`; Δp90 +0.47, t90 1.32).
+- Where the nonce enters the measured call, from the code (`ratchet.rs:825–842`, `aead.rs:132–166`):
+  - every header trial: the XChaCha20 key schedule (HChaCha20 over the nonce's first 16 bytes, then ChaCha20 with the
+    last 8), in `open_ct_constant_flow`, 4 trials × 2 encryption passes;
+  - the body AD `"SecMP-TR/1 body" ‖ sb ‖ hdr_nonce ‖ hdr_ct`, built at `ratchet.rs:830` and hashed by HMAC in
+    `MsgEncrypt::open`.
+
+  The nonce is public, and in the production cell it is the first 24 bytes. The nonce values themselves are not in the
+  report: the logged `headers` hold the decoded plaintext only.

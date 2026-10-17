@@ -194,7 +194,8 @@
 //! replaces the target set by `tr_decrypt_trial_open_position` and its three diagnosis targets; the report then
 //! carries `secmp_ct_diag` and the gate refuses it (target set). `SECMP_CT_DIAG=trial_open_repeat` (WEISUNG M6-CT-3)
 //! repeats the evaluation of three TR targets and logs per half the class statistics and the fixture addresses
-//! (`diag_repeat`). Unset or empty, the run is the production run.
+//! (`diag_repeat`); `SECMP_CT_DIAG=trial_open_bisect` (WEISUNG M6-CT-4) runs the same repeat mode over one-component
+//! variants of the trial-position cell. Unset or empty, the run is the production run.
 
 // ADR-038 (1): the cycle-counter read in `now_ticks` is the only `unsafe` code in the bench. `xtask policy`
 // sanctions this attribute at exactly this path (`expect::UNSAFE_EXEMPT_ROOT`).
@@ -3164,11 +3165,341 @@ fn diag_trial_open_position_resealed(
 }
 
 /// The targets of the repeat mode (M6-CT-3): the two production targets and the re-sealed variant.
-fn diag_repeat_targets(n: usize) -> [Target; 3] {
-    [
+fn diag_repeat_targets(n: usize) -> Vec<Target> {
+    vec![
         claimed(CLAIM_TR_TRIAL_POSITION, n, tr_decrypt_trial_open_position),
         claimed(CLAIM_TR_SKIPPED, n, tr_decrypt_reject_skipped),
         claimed(CLAIM_DIAG_RESEALED, n, diag_trial_open_position_resealed),
+    ]
+}
+
+// ---- bisection of the content dependence (WEISUNG M6-CT-4) ------------------------------------------------------
+//
+// `SECMP_CT_DIAG=trial_open_bisect`: the repeat mode over `diag_bisect_targets`, `DIAG_BISECT_REPEATS` evaluations
+// each. In every variant class 0 is the production class-0 cell (`hk_1`, n = 0, chain 1, trial 0, entry 0) and class 1
+// is that cell with one component changed. Both have the body tag wrong in byte 0 and are refused at the body MAC
+// (pre-check as production). A changed header plaintext or nonce is re-sealed under `hk_1`, so `hdr_ct` changes with
+// it in V1–V4 (and the body AD, which contains `hdr_ct`).
+
+/// The value of `CT_DIAG_ENV` for the bisection (M6-CT-4).
+const CT_DIAG_TRIAL_OPEN_BISECT: &str = "trial_open_bisect";
+
+/// Evaluations per bisection variant (M6-CT-4: 4).
+const DIAG_BISECT_REPEATS: usize = 4;
+
+/// `pn` of the V1 class-1 header (chain 2's `pn` in the production fixture).
+const DIAG_BISECT_PN: u32 = 3;
+
+/// A cell's `hdr_nonce`, `hdr_ct` and body.
+fn diag_cell_parts(cell: &[u8]) -> Result<CellParts<'_>, secmp_proto::Error> {
+    let (nonce, rest) = cell
+        .split_first_chunk::<NONCE_LEN>()
+        .ok_or(secmp_proto::Error::Rejected)?;
+    let (hdr_ct, body) = rest
+        .split_at_checked(HDR_CT_LEN)
+        .ok_or(secmp_proto::Error::Rejected)?;
+    Ok((nonce, hdr_ct, body))
+}
+
+/// The header AD of the fixture's receiver (`"SecMP-TR/1 hdr" ‖ sb`, spec §7.3).
+fn diag_hdr_ad(fixture: &TrSkipped) -> Vec<u8> {
+    [
+        Label::TrHdr.as_bytes(),
+        fixture.receiver.sb_kat().as_slice(),
+    ]
+    .concat()
+}
+
+/// The decoded header of `cell`, opened under `hk`.
+fn diag_open_header(
+    fixture: &TrSkipped,
+    hk: &SecretBytes<32>,
+    cell: &[u8],
+) -> Result<HeaderV1, secmp_proto::Error> {
+    let (nonce, hdr_ct, _) = diag_cell_parts(cell)?;
+    let plain = Aead::open(hk, nonce, &diag_hdr_ad(fixture), hdr_ct)?;
+    HeaderV1::decode(&plain)
+}
+
+/// `nonce ‖ Seal(hk, nonce, hdr AD, header) ‖ body`.
+fn diag_seal_cell(
+    fixture: &TrSkipped,
+    hk: &SecretBytes<32>,
+    nonce: &[u8; NONCE_LEN],
+    header: &HeaderV1,
+    body: &[u8],
+) -> Result<Vec<u8>, secmp_proto::Error> {
+    let hdr_ct = Aead::seal(
+        hk,
+        Nonce24::from_bytes_kat(*nonce),
+        &diag_hdr_ad(fixture),
+        &header.encode()?,
+    )?;
+    Ok([nonce.as_slice(), &hdr_ct, body].concat())
+}
+
+/// `hk_1`, `hk_2`, the honest class-0 cell and chain 2's honest cell (`diag_bisect_sources`).
+type DiagBisectSources<'a> = (&'a SecretBytes<32>, &'a SecretBytes<32>, &'a [u8], &'a [u8]);
+
+/// The bisection inputs of a fixture: `hk_1`, `hk_2`, the honest class-0 cell (chain 1, n = 0) and chain 2's honest
+/// cell (n = 0), the source of the class-1 components.
+fn diag_bisect_sources(fixture: &TrSkipped) -> Result<DiagBisectSources<'_>, secmp_proto::Error> {
+    let [hk1, hk2] = fixture.chain_keys.as_slice() else {
+        return Err(secmp_proto::Error::Rejected);
+    };
+    let [chain1, chain2] = fixture.undelivered.as_slice() else {
+        return Err(secmp_proto::Error::Rejected);
+    };
+    let (Some(c0), Some(c1)) = (chain1.first(), chain2.first()) else {
+        return Err(secmp_proto::Error::Rejected);
+    };
+    Ok((hk1, hk2, c0, c1))
+}
+
+/// The class-1 cell of a header variant: class 0's header with `change` applied, re-sealed under `hk_1` with class
+/// 0's nonce, followed by class 0's body; both classes with the body tag wrong in byte 0.
+fn diag_header_variant(
+    fixture: &TrSkipped,
+    change: impl FnOnce(&mut HeaderV1, &HeaderV1),
+) -> Result<[Vec<u8>; 2], secmp_proto::Error> {
+    let (hk1, hk2, c0, c1) = diag_bisect_sources(fixture)?;
+    let mut header = diag_open_header(fixture, hk1, c0)?;
+    let other = diag_open_header(fixture, hk2, c1)?;
+    change(&mut header, &other);
+    let (nonce, _, body) = diag_cell_parts(c0)?;
+    let class1 = diag_seal_cell(fixture, hk1, nonce, &header, body)?;
+    Ok([body_tag_wrong(c0)?, body_tag_wrong(&class1)?])
+}
+
+/// V1: only `pn` 0 → 3 in the header plaintext.
+fn diag_v1_pn(fixture: &TrSkipped, _: &mut Stream) -> Result<[Vec<u8>; 2], secmp_proto::Error> {
+    diag_header_variant(fixture, |h, _| h.pn = DIAG_BISECT_PN)
+}
+
+/// V2: only `dh_pk`, replaced by chain 2's (a valid X25519 public key of A).
+fn diag_v2_dh(fixture: &TrSkipped, _: &mut Stream) -> Result<[Vec<u8>; 2], secmp_proto::Error> {
+    diag_header_variant(fixture, |h, other| h.dh_pk = other.dh_pk)
+}
+
+/// V3: only `ek_pq` and `ct_pq`, replaced by chain 2's.
+fn diag_v3_pq(fixture: &TrSkipped, _: &mut Stream) -> Result<[Vec<u8>; 2], secmp_proto::Error> {
+    diag_header_variant(fixture, |h, other| {
+        h.ek_pq.clone_from(&other.ek_pq);
+        h.ct_pq.clone_from(&other.ct_pq);
+    })
+}
+
+/// V4: the same header plaintext and body, re-sealed under `hk_1` with a fresh nonce from the stream.
+fn diag_v4_nonce(
+    fixture: &TrSkipped,
+    stream: &mut Stream,
+) -> Result<[Vec<u8>; 2], secmp_proto::Error> {
+    let (hk1, _, c0, _) = diag_bisect_sources(fixture)?;
+    let header = diag_open_header(fixture, hk1, c0)?;
+    let (_, _, body) = diag_cell_parts(c0)?;
+    let mut nonce = [0_u8; NONCE_LEN];
+    stream.fill(&mut nonce);
+    let class1 = diag_seal_cell(fixture, hk1, &nonce, &header, body)?;
+    Ok([body_tag_wrong(c0)?, body_tag_wrong(&class1)?])
+}
+
+/// V5: the same nonce and `hdr_ct`; the body replaced by chain 2's body.
+fn diag_v5_body(fixture: &TrSkipped, _: &mut Stream) -> Result<[Vec<u8>; 2], secmp_proto::Error> {
+    let (_, _, c0, c1) = diag_bisect_sources(fixture)?;
+    let (nonce, hdr_ct, _) = diag_cell_parts(c0)?;
+    let (_, _, body1) = diag_cell_parts(c1)?;
+    let class1 = [nonce.as_slice(), hdr_ct, body1].concat();
+    Ok([body_tag_wrong(c0)?, body_tag_wrong(&class1)?])
+}
+
+/// The class builder of a bisection variant.
+type DiagBisectClasses = fn(&TrSkipped, &mut Stream) -> Result<[Vec<u8>; 2], secmp_proto::Error>;
+
+/// A bisection variant V1–V5: the production fixture, `classes`, measured by `tr_measure` (one receiver).
+fn diag_bisect_run(
+    n: usize,
+    k: usize,
+    stream: &mut Stream,
+    claim: Claim,
+    classes: DiagBisectClasses,
+) -> Result<Samples, secmp_crypto::Error> {
+    let fixture = tr_skipped_session_with(stream, &TR_TRIAL_PER_CHAIN).map_err(crypto_error)?;
+    let [class0, class1] = classes(&fixture, stream).map_err(crypto_error)?;
+    diag_note_headers(&fixture, &class0, &class1);
+    tr_measure(n, k, stream, claim, fixture.receiver, &class0, &class1)
+}
+
+/// A bisection claim: class 1 as stated, refused at the body MAC.
+const fn diag_bisect_claim(target: &'static str, class1: &'static str) -> Claim {
+    Claim {
+        target,
+        classes: [
+            "the production class-0 cell (hk_1, n = 0, trial 0, entry 0), body tag wrong in byte 0",
+            class1,
+        ],
+        site: "body MAC",
+        check: SiteCheck::Tagged,
+    }
+}
+
+const CLAIM_BISECT_V1: Claim = diag_bisect_claim(
+    "diag_bisect_v1_pn",
+    "class 0's cell with pn 0 → 3 in the header plaintext (re-sealed under hk_1, same nonce, same body)",
+);
+const CLAIM_BISECT_V2: Claim = diag_bisect_claim(
+    "diag_bisect_v2_dh",
+    "class 0's cell with dh_pk replaced by chain 2's (re-sealed under hk_1, same nonce, same body)",
+);
+const CLAIM_BISECT_V3: Claim = diag_bisect_claim(
+    "diag_bisect_v3_pq",
+    "class 0's cell with ek_pq and ct_pq replaced by chain 2's (re-sealed under hk_1, same nonce, same body)",
+);
+const CLAIM_BISECT_V4: Claim = diag_bisect_claim(
+    "diag_bisect_v4_nonce",
+    "class 0's header plaintext and body, re-sealed under hk_1 with a fresh nonce",
+);
+const CLAIM_BISECT_V5: Claim = diag_bisect_claim(
+    "diag_bisect_v5_body",
+    "class 0's nonce and hdr_ct, followed by chain 2's body",
+);
+const CLAIM_BISECT_V6: Claim = diag_bisect_claim(
+    "diag_bisect_v6_mk",
+    "the same cell, on a receiver copy whose skipped entry (hk_1, 0) holds a fresh random mk",
+);
+const CLAIM_BISECT_V6C: Claim = diag_bisect_claim(
+    "diag_bisect_v6c_two_receivers",
+    "the same cell, on a second, unmodified receiver copy (the V6 arrangement without the mk change)",
+);
+
+fn diag_bisect_v1(n: usize, k: usize, s: &mut Stream) -> Result<Samples, secmp_crypto::Error> {
+    diag_bisect_run(n, k, s, CLAIM_BISECT_V1, diag_v1_pn)
+}
+fn diag_bisect_v2(n: usize, k: usize, s: &mut Stream) -> Result<Samples, secmp_crypto::Error> {
+    diag_bisect_run(n, k, s, CLAIM_BISECT_V2, diag_v2_dh)
+}
+fn diag_bisect_v3(n: usize, k: usize, s: &mut Stream) -> Result<Samples, secmp_crypto::Error> {
+    diag_bisect_run(n, k, s, CLAIM_BISECT_V3, diag_v3_pq)
+}
+fn diag_bisect_v4(n: usize, k: usize, s: &mut Stream) -> Result<Samples, secmp_crypto::Error> {
+    diag_bisect_run(n, k, s, CLAIM_BISECT_V4, diag_v4_nonce)
+}
+fn diag_bisect_v5(n: usize, k: usize, s: &mut Stream) -> Result<Samples, secmp_crypto::Error> {
+    diag_bisect_run(n, k, s, CLAIM_BISECT_V5, diag_v5_body)
+}
+fn diag_bisect_v6(n: usize, k: usize, s: &mut Stream) -> Result<Samples, secmp_crypto::Error> {
+    diag_bisect_receivers(n, k, s, CLAIM_BISECT_V6, true)
+}
+fn diag_bisect_v6c(n: usize, k: usize, s: &mut Stream) -> Result<Samples, secmp_crypto::Error> {
+    diag_bisect_receivers(n, k, s, CLAIM_BISECT_V6C, false)
+}
+
+/// V6 (`fresh_mk`) and its control V6c: both classes decrypt the same cell (the production class-0 cell, body tag
+/// wrong in byte 0; `blend` with an all-zero delta), class `c` on receiver `c` of a two-element array. Both receivers
+/// are restored with `RatchetState::from_bytes` from the production receiver's serialisation (`RatchetStateV1`,
+/// whose skipped entries are `hk ‖ n u32 ‖ mk`). For V6, receiver 1's entry `(hk_1, 0)` — the first occurrence of
+/// `hk_1 ‖ 0u32` in the serialisation — gets a fresh `mk` from the stream before it is restored. Checked before
+/// measuring: the honest cell opens on a copy of receiver 0, and opens on a copy of receiver 1 exactly when its `mk`
+/// is unchanged (V6: it must fail, so the edited bytes are that entry's `mk`). Pre-check as `tr_measure`, each class on
+/// its own receiver.
+fn diag_bisect_receivers(
+    n: usize,
+    k: usize,
+    stream: &mut Stream,
+    claim: Claim,
+    fresh_mk: bool,
+) -> Result<Samples, secmp_crypto::Error> {
+    let fixture = tr_skipped_session_with(stream, &TR_TRIAL_PER_CHAIN).map_err(crypto_error)?;
+    let (hk1, _, honest, _) = diag_bisect_sources(&fixture).map_err(crypto_error)?;
+    let cell = body_tag_wrong(honest).map_err(crypto_error)?;
+    let original = fixture.receiver.to_bytes().map_err(crypto_error)?;
+    let mut edited = Zeroizing::new(original.to_vec());
+    if fresh_mk {
+        let pattern = [hk1.expose_secret().as_slice(), &0_u32.to_be_bytes()].concat();
+        let at = edited
+            .windows(pattern.len())
+            .position(|w| w == pattern.as_slice())
+            .and_then(|p| p.checked_add(pattern.len()))
+            .ok_or(secmp_crypto::Error::Rejected)?;
+        let mk = edited
+            .get_mut(at..at.saturating_add(32))
+            .ok_or(secmp_crypto::Error::Rejected)?;
+        stream.fill(mk);
+    }
+    let restore = |bytes: &[u8]| RatchetState::from_bytes(bytes).map_err(crypto_error);
+    let opens = |bytes: &[u8]| -> Result<bool, secmp_crypto::Error> {
+        Ok(restore(bytes)?
+            .decrypt_with(honest, &mut FixedEntropy::new(&[]))
+            .is_ok())
+    };
+    if !opens(&original)? || opens(&edited)? == fresh_mk {
+        return Err(abort(format!(
+            "bench aborted: {}: the receiver edit did not take effect as intended (fresh mk: {fresh_mk})",
+            claim.target
+        )));
+    }
+    diag_note_headers(&fixture, &cell, &cell);
+    drop(fixture);
+    let slots = [
+        RefCell::new(Some(restore(&original)?)),
+        RefCell::new(Some(restore(&edited)?)),
+    ];
+    let mut observed = [String::new(), String::new()];
+    for (seen, slot) in observed.iter_mut().zip(&slots) {
+        let state = slot
+            .try_borrow_mut()
+            .ok()
+            .and_then(|mut s| s.take())
+            .ok_or(secmp_crypto::Error::Rejected)?;
+        *seen = match state.decrypt_with(&cell, &mut FixedEntropy::new(&[])) {
+            Ok(_) => "Ok (accepted)".to_owned(),
+            Err(refused) => {
+                let (state, error) = refused.into_parts();
+                if let Ok(mut s) = slot.try_borrow_mut() {
+                    *s = Some(state);
+                }
+                let site = secmp_proto::tr::DECRYPT_SITE_KAT.get().unwrap_or("none");
+                format!("{}, site {site}", outcome::<()>(&Err(error)))
+            }
+        };
+    }
+    let expected = expected_rejection(claim);
+    precheck(claim, [expected.clone(), expected], observed, None)?;
+    let delta = Deltas::new(&cell, &cell);
+    let [first_receiver, _] = &slots;
+    diag_note_measure(n, &cell, &cell, &delta, first_receiver);
+    let mut entropy = FixedEntropy::new(&[]);
+    let samples = measure(
+        n,
+        k,
+        stream,
+        |c, _| {
+            let input = blended_vec(&cell, &delta, c);
+            diag_note_input(c, &input);
+            (c & 1, input)
+        },
+        |(c, input)| {
+            if let Some(slot) = slots.get(*c) {
+                tr_decrypt(slot, &mut entropy, input);
+            }
+        },
+    );
+    if slots.into_iter().any(|s| s.into_inner().is_none()) {
+        TR_ACCEPTED.store(true, Ordering::Relaxed);
+        return Err(secmp_crypto::Error::Rejected);
+    }
+    Ok(samples)
+}
+
+/// The bisection variants (M6-CT-4), in measurement order.
+fn diag_bisect_targets(n: usize) -> Vec<Target> {
+    vec![
+        claimed(CLAIM_BISECT_V1, n, diag_bisect_v1),
+        claimed(CLAIM_BISECT_V2, n, diag_bisect_v2),
+        claimed(CLAIM_BISECT_V3, n, diag_bisect_v3),
+        claimed(CLAIM_BISECT_V4, n, diag_bisect_v4),
+        claimed(CLAIM_BISECT_V5, n, diag_bisect_v5),
+        claimed(CLAIM_BISECT_V6, n, diag_bisect_v6),
+        claimed(CLAIM_BISECT_V6C, n, diag_bisect_v6c),
     ]
 }
 
@@ -3186,17 +3517,19 @@ fn diag_diff_mod(a: usize, b: usize, m: usize) -> usize {
     a.wrapping_sub(b).checked_rem(m).unwrap_or(0)
 }
 
-/// The repeat mode (M6-CT-3): `DIAG_REPEATS` `evaluate`s of each repeat target; per half one `diag_repeat` entry and
-/// one progress line.
+/// The repeat mode (M6-CT-3; M6-CT-4 with the bisection targets): `reps` `evaluate`s of each target of `targets`; per
+/// half one `diag_repeat` entry and one progress line.
 fn diag_repeat(
     n: usize,
     stream: &mut Stream,
     clock: &Clock,
     rules: Rules,
+    targets: fn(usize) -> Vec<Target>,
+    reps: usize,
 ) -> Result<(), secmp_crypto::Error> {
-    for index in 0..diag_repeat_targets(n).len() {
-        for rep in 0..DIAG_REPEATS {
-            let Some(target) = diag_repeat_targets(n).into_iter().nth(index) else {
+    for index in 0..targets(n).len() {
+        for rep in 0..reps {
+            let Some(target) = targets(n).into_iter().nth(index) else {
                 continue;
             };
             let (name, samples) = (target.name, target.samples);
@@ -4527,13 +4860,32 @@ fn run(
         Some(CT_DIAG_TRIAL_OPEN) => diag_trial_open_targets(n).into(),
         // M6-CT-3: the repeat mode records into `diag_repeat`; no target outcome, no A/A pass
         Some(CT_DIAG_TRIAL_OPEN_REPEAT) => {
-            diag_repeat(n, &mut stream, &clock, rules)?;
+            diag_repeat(
+                n,
+                &mut stream,
+                &clock,
+                rules,
+                diag_repeat_targets,
+                DIAG_REPEATS,
+            )?;
+            Vec::new()
+        }
+        // M6-CT-4: the bisection of the content dependence, in the repeat mode
+        Some(CT_DIAG_TRIAL_OPEN_BISECT) => {
+            diag_repeat(
+                n,
+                &mut stream,
+                &clock,
+                rules,
+                diag_bisect_targets,
+                DIAG_BISECT_REPEATS,
+            )?;
             Vec::new()
         }
         Some(other) => {
             return Err(abort(format!(
                 "bench aborted: {CT_DIAG_ENV}={other:?} is not a known diagnosis run (known: \
-                 {CT_DIAG_TRIAL_OPEN:?}, {CT_DIAG_TRIAL_OPEN_REPEAT:?})"
+                 {CT_DIAG_TRIAL_OPEN:?}, {CT_DIAG_TRIAL_OPEN_REPEAT:?}, {CT_DIAG_TRIAL_OPEN_BISECT:?})"
             )));
         }
     };
@@ -5020,7 +5372,10 @@ fn main() -> ExitCode {
     // failed, else PASS iff every target passed
     let run_verdict = if control_fail.is_some() {
         "CONTROL_FAIL"
-    } else if ct_diag().as_deref() == Some(CT_DIAG_TRIAL_OPEN_REPEAT) {
+    } else if matches!(
+        ct_diag().as_deref(),
+        Some(CT_DIAG_TRIAL_OPEN_REPEAT | CT_DIAG_TRIAL_OPEN_BISECT)
+    ) {
         // M6-CT-3: the repeat mode has no target outcome; its data is `diag_repeat`
         "DIAG"
     } else if outcomes.iter().all(|o| o.verdict.passed()) {

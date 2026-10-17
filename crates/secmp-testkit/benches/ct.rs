@@ -190,7 +190,9 @@
 //! `target/ct-progress.jsonl`, which the gate echoes and names when it kills a run at
 //! its step budget (ADR-045 Amendment 1). `SECMP_CT_SCALE`, a divisor of every sample count
 //! (default 1), shortens quick local runs; the report then carries `secmp_ct_scale`, which the gate refuses (M2
-//! review C3 (c)), and the gate unsets the variable for its own run.
+//! review C3 (c)), and the gate unsets the variable for its own run. `SECMP_CT_DIAG=trial_open` (WEISUNG M6-CI-12)
+//! replaces the target set by `tr_decrypt_trial_open_position` and its three diagnosis targets; the report then
+//! carries `secmp_ct_diag` and the gate refuses it (target set). Unset or empty, the run is the production run.
 
 // ADR-038 (1): the cycle-counter read in `now_ticks` is the only `unsafe` code in the bench. `xtask policy`
 // sanctions this attribute at exactly this path (`expect::UNSAFE_EXEMPT_ROOT`).
@@ -2186,7 +2188,11 @@ fn precheck(
 /// `precheck` `null` if it never ran). A `Twin` claim (no reject-site tag on its path) has `site` `null` and names its
 /// compare as `precheck.compare`.
 fn claim_json(name: &str) -> (String, String) {
-    let Some(claim) = CLAIMS.iter().find(|c| c.target == name) else {
+    let Some(claim) = CLAIMS
+        .iter()
+        .chain(DIAG_CLAIMS.iter())
+        .find(|c| c.target == name)
+    else {
         return ("null".to_owned(), "null".to_owned());
     };
     let twin_bound = matches!(claim.check, SiteCheck::Twin);
@@ -2715,6 +2721,200 @@ fn tr_measure(
         return Err(secmp_crypto::Error::Rejected);
     }
     Ok(samples)
+}
+
+// ---- diagnosis of `tr_decrypt_trial_open_position` (WEISUNG M6-CI-12) -------------------------------------------
+//
+// Run only with `SECMP_CT_DIAG=trial_open` (`ct_diag`): the bench then measures the production target and the three
+// targets below, nothing else, and the report carries `secmp_ct_diag` (the gate refuses such a report: its target set
+// differs from `expect::CT_TARGETS`). Unset or empty, the production run is unchanged. Evidence for the reviewer, not
+// gate targets.
+
+/// The environment variable that selects a diagnosis run (`ct_diag`).
+const CT_DIAG_ENV: &str = "SECMP_CT_DIAG";
+
+/// The value of `CT_DIAG_ENV` for the trial-position diagnosis (M6-CI-12).
+const CT_DIAG_TRIAL_OPEN: &str = "trial_open";
+
+/// `SECMP_CT_DIAG` if set and non-empty (diagnosis runs only; echoed in the report).
+fn ct_diag() -> Option<String> {
+    std::env::var(CT_DIAG_ENV).ok().filter(|v| !v.is_empty())
+}
+
+/// M6-CI-12 Q2: `tr_decrypt_trial_open_position` with the class labels swapped.
+const CLAIM_DIAG_SWAPPED: Claim = Claim {
+    target: "diag_trial_open_position_swapped",
+    classes: [
+        "header opens under hk_2 (trial 1; entry 2 of 4), body tag wrong in byte 0 (the production class 1)",
+        "header opens under hk_1 (trial 0; entry 0 of 4), body tag wrong in byte 0 (the production class 0)",
+    ],
+    site: "body MAC",
+    check: SiteCheck::Tagged,
+};
+
+/// M6-CI-12 Q3: the production classes on per-class receiver copies in one interleaved arena.
+const CLAIM_DIAG_INTERLEAVED: Claim = Claim {
+    target: "diag_trial_open_position_interleaved",
+    classes: [
+        "header opens under hk_1 (trial 0; entry 0 of 4), body tag wrong in byte 0; receiver: a class-0 slot of the \
+         interleaved arena",
+        "header opens under hk_2 (trial 1; entry 2 of 4), body tag wrong in byte 0; receiver: a class-1 slot of the \
+         interleaved arena",
+    ],
+    site: "body MAC",
+    check: SiteCheck::Tagged,
+};
+
+/// M6-CI-12 Q4: the production class 0 in both classes, through the production per-class preparation.
+const CLAIM_DIAG_SAME_CONTENT: Claim = Claim {
+    target: "diag_trial_open_position_same_content",
+    classes: [
+        "header opens under hk_1 (trial 0; entry 0 of 4), body tag wrong in byte 0 (the production class 0)",
+        "the same cell",
+    ],
+    site: "body MAC",
+    check: SiteCheck::Tagged,
+};
+
+/// The diagnosis claims, for the report (`claim_json`).
+const DIAG_CLAIMS: [Claim; 3] = [
+    CLAIM_DIAG_SWAPPED,
+    CLAIM_DIAG_INTERLEAVED,
+    CLAIM_DIAG_SAME_CONTENT,
+];
+
+/// M6-CI-12 Q2 (`diag_trial_open_position_swapped`): the production target with class 0 = the `hk_2` cell (trial 1)
+/// and class 1 = the `hk_1` cell (trial 0), measured by `tr_measure` (class 1, now the `hk_1` cell, is the `blend`
+/// base). Same fixture construction, same receiver, same preparation path as `tr_decrypt_trial_open_position`.
+fn diag_trial_open_position_swapped(
+    n: usize,
+    k: usize,
+    stream: &mut Stream,
+) -> Result<Samples, secmp_crypto::Error> {
+    let fixture = tr_skipped_session_with(stream, &TR_TRIAL_PER_CHAIN).map_err(crypto_error)?;
+    let [hk1_cell, hk2_cell] = tr_trial_position_classes(&fixture).map_err(crypto_error)?;
+    tr_measure(
+        n,
+        k,
+        stream,
+        CLAIM_DIAG_SWAPPED,
+        fixture.receiver,
+        &hk2_cell,
+        &hk1_cell,
+    )
+}
+
+/// M6-CI-12 Q4 (`diag_trial_open_position_same_content`): the production target with the `hk_1` cell (production
+/// class 0, trial 0) in both classes, measured by `tr_measure` (the `blend` delta all-zero: the per-class mask is
+/// applied, the contents are identical).
+fn diag_trial_open_position_same_content(
+    n: usize,
+    k: usize,
+    stream: &mut Stream,
+) -> Result<Samples, secmp_crypto::Error> {
+    let fixture = tr_skipped_session_with(stream, &TR_TRIAL_PER_CHAIN).map_err(crypto_error)?;
+    let [hk1_cell, _] = tr_trial_position_classes(&fixture).map_err(crypto_error)?;
+    tr_measure(
+        n,
+        k,
+        stream,
+        CLAIM_DIAG_SAME_CONTENT,
+        fixture.receiver,
+        &hk1_cell,
+        &hk1_cell,
+    )
+}
+
+/// Class pairs of the interleaved arena of `diag_trial_open_position_interleaved`.
+const DIAG_ARENA_PAIRS: usize = 8;
+
+/// M6-CI-12 Q3 (`diag_trial_open_position_interleaved`): the production classes and cells (`blend`, class 1 the
+/// base, as `tr_measure`), but each class decrypts on its own receiver copy, taken from one arena of
+/// `2 × DIAG_ARENA_PAIRS` slots laid out class 0, class 1, class 0, class 1, …: every slot is a `RatchetState` of the
+/// same type (same size and alignment, contiguous in one `Vec`), restored with `RatchetState::from_bytes` from the
+/// one serialised receiver in slot order, so the heap parts of the two classes are allocated alternately as well.
+/// Sample `i` of class `c` uses slot `2 · (i mod DIAG_ARENA_PAIRS) + c`, so both classes rotate over the same
+/// interleaved region. Pre-check as `tr_measure`, on the receiver before it is copied; aborts (`TR_ACCEPTED`) if a
+/// call accepted its cell (its slot is then empty).
+fn diag_trial_open_position_interleaved(
+    n: usize,
+    k: usize,
+    stream: &mut Stream,
+) -> Result<Samples, secmp_crypto::Error> {
+    let claim = CLAIM_DIAG_INTERLEAVED;
+    let fixture = tr_skipped_session_with(stream, &TR_TRIAL_PER_CHAIN).map_err(crypto_error)?;
+    let [class0, class1] = tr_trial_position_classes(&fixture).map_err(crypto_error)?;
+    let mut receiver = Some(fixture.receiver);
+    let mut observed = [String::new(), String::new()];
+    for (seen, cell) in observed.iter_mut().zip([&class0, &class1]) {
+        let Some(state) = receiver.take() else {
+            break;
+        };
+        *seen = match state.decrypt_with(cell, &mut FixedEntropy::new(&[])) {
+            Ok(_) => "Ok (accepted)".to_owned(),
+            Err(refused) => {
+                let (state, error) = refused.into_parts();
+                receiver = Some(state);
+                let site = secmp_proto::tr::DECRYPT_SITE_KAT.get().unwrap_or("none");
+                format!("{}, site {site}", outcome::<()>(&Err(error)))
+            }
+        };
+    }
+    let expected = expected_rejection(claim);
+    precheck(claim, [expected.clone(), expected], observed, None)?;
+    let receiver = receiver.ok_or(secmp_crypto::Error::Rejected)?;
+    let bytes = receiver.to_bytes().map_err(crypto_error)?;
+    drop(receiver);
+    let arena: Vec<RefCell<Option<RatchetState>>> = (0..DIAG_ARENA_PAIRS.saturating_mul(2))
+        .map(|_| RatchetState::from_bytes(&bytes).map(|s| RefCell::new(Some(s))))
+        .collect::<Result<_, _>>()
+        .map_err(crypto_error)?;
+    let delta = Deltas::new(&class0, &class1);
+    let mut entropy = FixedEntropy::new(&[]);
+    let batch = k.max(1);
+    let samples = measure(
+        n,
+        k,
+        stream,
+        |c, i| {
+            // input `i` = sample · k + call (`measure`)
+            let pair = i
+                .checked_div(batch)
+                .and_then(|sample| sample.checked_rem(DIAG_ARENA_PAIRS))
+                .unwrap_or(0);
+            let slot = pair.saturating_mul(2).saturating_add(c & 1);
+            (slot, blended_vec(&class1, &delta, c))
+        },
+        |(slot, cell)| {
+            if let Some(slot) = arena.get(*slot) {
+                tr_decrypt(slot, &mut entropy, cell);
+            }
+        },
+    );
+    if arena.into_iter().any(|s| s.into_inner().is_none()) {
+        TR_ACCEPTED.store(true, Ordering::Relaxed);
+        return Err(secmp_crypto::Error::Rejected);
+    }
+    Ok(samples)
+}
+
+/// The targets of a `SECMP_CT_DIAG=trial_open` run (M6-CI-12 §2), in measurement order: the production target, then
+/// Q2, Q3, Q4.
+fn diag_trial_open_targets(n: usize) -> [Target; 4] {
+    [
+        claimed(CLAIM_TR_TRIAL_POSITION, n, tr_decrypt_trial_open_position),
+        claimed(CLAIM_DIAG_SWAPPED, n, diag_trial_open_position_swapped),
+        claimed(
+            CLAIM_DIAG_INTERLEAVED,
+            n,
+            diag_trial_open_position_interleaved,
+        ),
+        claimed(
+            CLAIM_DIAG_SAME_CONTENT,
+            n,
+            diag_trial_open_position_same_content,
+        ),
+    ]
 }
 
 // ---- SecMP-INV/HX targets (M4, TEST-SPEC-M4 (f)) --------------------------------------------------------------
@@ -3913,18 +4113,33 @@ fn run(
     let n = rules.samples.checked_div(scale).unwrap_or(1);
     let n_sas = rules.sas_samples.checked_div(scale).unwrap_or(1);
     let mut out = Vec::new();
-    for target in targets(n, n_sas)
-        .into_iter()
-        .chain(tr_targets(n))
-        .chain(hx_targets(n))
-        .chain(m5_targets(n))
-    {
+    // M6-CI-12: a diagnosis run measures only its own target set (`ct_diag`)
+    let run_targets: Vec<Target> = match ct_diag().as_deref() {
+        None => targets(n, n_sas)
+            .into_iter()
+            .chain(tr_targets(n))
+            .chain(hx_targets(n))
+            .chain(m5_targets(n))
+            .collect(),
+        Some(CT_DIAG_TRIAL_OPEN) => diag_trial_open_targets(n).into(),
+        Some(other) => {
+            return Err(abort(format!(
+                "bench aborted: {CT_DIAG_ENV}={other:?} is not a known diagnosis run (known: \
+                 {CT_DIAG_TRIAL_OPEN:?})"
+            )));
+        }
+    };
+    for target in run_targets {
         out.push(evaluate(target, &mut stream, &clock, rules)?);
     }
     let aa_fail = aa_control(&mut out, &mut stream, &clock, rules)?;
     let sensitivity = sensitivity_control(&out, &mut stream, &clock);
     let mut reasons: Vec<String> = aa_fail.into_iter().collect();
-    reasons.extend(sensitivity.failure(rules));
+    // M6-CI-12: a diagnosis run has no `tag_compare`, so the sensitivity control is never measured there; its
+    // "not measured" would override every diagnosis verdict (the report still carries the control as null)
+    if ct_diag().is_none() {
+        reasons.extend(sensitivity.failure(rules));
+    }
     reasons.extend(placement_failure(&out, &clock, rules));
     reasons.extend(same_content_failure(
         &out,
@@ -4403,11 +4618,16 @@ fn main() -> ExitCode {
         "FAIL"
     };
     let json = format!(
-        "{{\"thresholds\":{},{}\"sign\":\"{SIGN}\",\"clock\":{},\"host\":{},\"bench_sha256\":{},\"run_verdict\":\"{run_verdict}\",\"run_reason\":{},\"sensitivity_control\":{},\"min_leak_same_content\":{},\"results\":[{}]}}",
+        "{{\"thresholds\":{},{}{}\"sign\":\"{SIGN}\",\"clock\":{},\"host\":{},\"bench_sha256\":{},\"run_verdict\":\"{run_verdict}\",\"run_reason\":{},\"sensitivity_control\":{},\"min_leak_same_content\":{},\"results\":[{}]}}",
         rules.json(),
         // M2 review C3 (c): a shortened run says so, and the gate refuses it
         ct_scale().map_or_else(String::new, |s| format!(
             "\"secmp_ct_scale\":{},",
+            serde_json::Value::from(s)
+        )),
+        // M6-CI-12: a diagnosis run says so (its target set is not the gate's)
+        ct_diag().map_or_else(String::new, |s| format!(
+            "\"secmp_ct_diag\":{},",
             serde_json::Value::from(s)
         )),
         clock.json(),

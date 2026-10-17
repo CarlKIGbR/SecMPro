@@ -21,6 +21,10 @@ on:
         type: choice
         options: [all, fast, full, windows, ct]
         default: ct
+      ct_env:
+        description: "Value of SECMP_CT_DIAG for the ct job (WEISUNG M6-CI-12; empty = the production ct run; `trial_open` = the diagnosis target set, whose report the gate refuses)"
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -174,6 +178,9 @@ jobs:
       - name: Pinned toolchain (rust-toolchain.toml)
         run: rustup toolchain install && rustc -vV
       - name: Constant-time gate (step 5 ct)
+        # the input reaches the bench as an environment value, never through the shell line
+        env:
+          SECMP_CT_DIAG: ${{ inputs.ct_env }}
         run: cargo xtask step --strict ct
       - name: Upload the constant-time report
         if: always()

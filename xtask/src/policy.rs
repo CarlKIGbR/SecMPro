@@ -581,6 +581,31 @@ fn is_quoted_array_header(t: &str) -> bool {
     t.starts_with("[[") && t.contains(['"', '\''])
 }
 
+/// A key line that assigns to the `exemptions` array without a `[[exemptions.<name>]]` header: `exemptions.x = …`,
+/// `exemptions = { … }`, with spaces or quoted (`"exemptions"`, `'exemptions'`) key parts (FIN-3). Comments and
+/// headers are not key lines.
+fn is_exemptions_key_line(line: &str) -> bool {
+    let t = line.trim_start();
+    if t.starts_with('#') || t.starts_with('[') {
+        return false;
+    }
+    let (quote, rest) = match t.chars().next() {
+        Some(q @ ('"' | '\'')) => (Some(q), t.get(1..).unwrap_or_default()),
+        _ => (None, t),
+    };
+    let Some(after) = rest.strip_prefix("exemptions") else {
+        return false;
+    };
+    let after = match quote {
+        Some(q) => match after.strip_prefix(q) {
+            Some(a) => a,
+            None => return false,
+        },
+        None => after,
+    };
+    after.trim_start().starts_with(['.', '='])
+}
+
 /// The `[[exemptions.<name>]]` entries of `supply-chain/config.toml`, in file order. Fail closed (EXTB-5): only the
 /// exact form `[[exemptions.<bare-name>]]` at column 0 is an ordinary header; any other line starting with `[` that
 /// mentions `exemptions` is an entry with a header finding, never skipped.
@@ -698,6 +723,14 @@ pub(crate) fn vet_closure_findings(
     // classifier does not see through; rejected, never stripped
     if config.contains('\u{feff}') {
         findings.push("vet config contains a byte-order mark".to_owned());
+    }
+    // FIN-3: valid TOML can carry an exemption without a header (dotted key, inline table); the classifier only sees
+    // headers, so such a form is rejected by name, never read
+    if config.lines().any(is_exemptions_key_line) {
+        findings.push(
+            "vet config uses a non-canonical exemptions form (dotted or inline); only [[exemptions.<name>]] headers are accepted"
+                .to_owned(),
+        );
     }
     let untracked: Vec<&str> = entries
         .iter()
@@ -2535,6 +2568,67 @@ mod tests {
         let (findings, _) =
             vet_closure_findings("[policy.\"x\"]\naudit-as-crates-io = false\n", &closure);
         assert!(findings.is_empty(), "{findings:?}");
+    }
+
+    /// FIN-3 (Astra final pass): valid TOML carries an exemption without a `[[exemptions.<name>]]` header — a root dotted
+    /// assignment, an inline root table, a dotted key inside another table — and produced no classifier entry
+    /// (`55 external crates, 0 exempted`). Each is rejected by name; the real config is unchanged.
+    #[test]
+    fn vet_closure_dotted_and_inline_exemptions_are_rejected() -> Result<()> {
+        let closure: BTreeSet<(String, String)> = [("subtle".to_owned(), "2.6.1".to_owned())]
+            .into_iter()
+            .collect();
+        let real = repo_file("supply-chain/config.toml")?;
+        let item = "{ version = \"2.6.1\", criteria = \"safe-to-deploy\", notes = \"Tracked exemption: review probe\" }";
+        let planted = [
+            (
+                "root dotted",
+                format!("exemptions.subtle = [{item}]\n{real}"),
+            ),
+            (
+                "root dotted, spaced",
+                format!("exemptions . subtle = [{item}]\n{real}"),
+            ),
+            (
+                "quoted key",
+                format!("\"exemptions\".subtle = [{item}]\n{real}"),
+            ),
+            (
+                "single-quoted key",
+                format!("'exemptions'.subtle = [{item}]\n{real}"),
+            ),
+            (
+                "inline root table",
+                format!("exemptions = {{ subtle = [{item}] }}\n{real}"),
+            ),
+            (
+                "inside another table",
+                format!("{real}\n[policy.probe]\nexemptions.subtle = [{item}]\n"),
+            ),
+            (
+                "indented",
+                format!("  exemptions.subtle = [{item}]\n{real}"),
+            ),
+        ];
+        for (name, config) in planted {
+            let (findings, _) = vet_closure_findings(&config, &closure);
+            assert!(
+                findings
+                    .iter()
+                    .any(|f| f.starts_with("vet config uses a non-canonical exemptions form")),
+                "{name}: {findings:?}"
+            );
+        }
+        // positive control: the real config, and a comment that mentions the word
+        let (findings, _) = vet_closure_findings(&real, &BTreeSet::new());
+        assert!(
+            !findings.iter().any(|f| f.contains("non-canonical")),
+            "{findings:?}"
+        );
+        let commented = format!("# exemptions.subtle = [] is not used\n{real}");
+        let (findings, _) = vet_closure_findings(&commented, &BTreeSet::new());
+        assert!(!findings.iter().any(|f| f.contains("non-canonical")));
+        Ok(())
     }
 
     /// EXT3B-1 (Codex M6B-EXT3c): a UTF-8 byte-order mark before an exemption header — which the TOML parser accepts and

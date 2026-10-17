@@ -780,4 +780,152 @@ mod tests {
         assert!(matches!(multi()?.push(no_queue()), Err(Error::Rejected)));
         Ok(())
     }
+
+    fn stored_cell(rid: Id, cell_id: u64) -> Result<Cellr> {
+        Ok(Cellr::Cell {
+            rid,
+            cell_id,
+            cell: Cell::from_bytes(&[7; 4096])?,
+        })
+    }
+
+    fn dummy_cell() -> Result<Cellr> {
+        Ok(Cellr::Dummy {
+            cell: Cell::from_bytes(&[7; 4096])?,
+        })
+    }
+
+    fn error_cell(error: CellrError, rid: Id) -> Result<Cellr> {
+        Ok(Cellr::Error {
+            error,
+            rid,
+            cell: Cell::from_bytes(&[7; 4096])?,
+        })
+    }
+
+    /// `ops.rs:293`, `304` (`check_fetch`: `!rest_dummy || r != rid` -> `&&`, `cell_id > previous` -> `>=`): an error frame
+    /// must name the requested queue and be followed by dummies only; cells ascend strictly above the acknowledgement.
+    #[test]
+    fn check_fetch_judges_errors_and_ascending_cells() -> Result<()> {
+        let rid = [1; 16];
+        let other = [2; 16];
+        let bad = |frames| matches!(check_fetch(frames, &rid, 3), Err(Error::Rejected));
+        // an error naming another queue, or followed by a real cell, is a misfit
+        assert!(bad(vec![
+            error_cell(CellrError::NoQueue, other)?,
+            dummy_cell()?
+        ]));
+        assert!(bad(vec![
+            error_cell(CellrError::NoQueue, rid)?,
+            stored_cell([0; 16], 9)?
+        ]));
+        let ok = check_fetch(
+            vec![error_cell(CellrError::NoQueue, rid)?, dummy_cell()?],
+            &rid,
+            3,
+        )?;
+        assert!(matches!(ok, Err(Error::NoQueue)));
+        // cells: strictly above the acknowledgement and strictly ascending
+        assert!(bad(vec![stored_cell([0; 16], 3)?, dummy_cell()?]));
+        assert!(bad(vec![
+            stored_cell([0; 16], 4)?,
+            stored_cell([0; 16], 4)?
+        ]));
+        assert!(bad(vec![
+            stored_cell([0; 16], 5)?,
+            stored_cell([0; 16], 4)?
+        ]));
+        let cells = check_fetch(
+            vec![
+                stored_cell([0; 16], 4)?,
+                stored_cell([0; 16], 5)?,
+                dummy_cell()?,
+            ],
+            &rid,
+            3,
+        )?;
+        assert!(matches!(cells, Ok(c) if c.len() == 2));
+        Ok(())
+    }
+
+    /// `ops.rs:326`, `330`, `340`, `349`, `355`, `360` (`check_fetch_multi`): errors first and in request order, naming a
+    /// listed queue; then cells of queues that are not in error, strictly above the acknowledgement and ascending per
+    /// queue; then dummies — nothing of an earlier kind after a later one.
+    #[test]
+    fn check_fetch_multi_judges_the_order_and_the_ids() -> Result<()> {
+        let (r1, r2, r3) = ([1; 16], [2; 16], [3; 16]);
+        let entries = [(r1, 0), (r2, 5)];
+        let bad = |frames| matches!(check_fetch_multi(frames, &entries), Err(Error::Rejected));
+        // errors in request order only, naming listed queues
+        assert!(bad(vec![
+            error_cell(CellrError::NoQueue, r2)?,
+            error_cell(CellrError::NoQueue, r1)?
+        ]));
+        assert!(bad(vec![error_cell(CellrError::NoQueue, r3)?]));
+        // an error after a cell, a cell after a dummy
+        assert!(bad(vec![
+            stored_cell(r2, 6)?,
+            error_cell(CellrError::NoQueue, r1)?
+        ]));
+        assert!(bad(vec![dummy_cell()?, stored_cell(r2, 6)?]));
+        // a queue in error sends no cell; a cell of an unlisted queue; ids at or below the acknowledgement or not ascending
+        assert!(bad(vec![
+            error_cell(CellrError::NoQueue, r1)?,
+            stored_cell(r1, 1)?
+        ]));
+        assert!(bad(vec![stored_cell(r3, 1)?]));
+        assert!(bad(vec![stored_cell(r2, 5)?]));
+        assert!(bad(vec![stored_cell(r2, 6)?, stored_cell(r2, 6)?]));
+        assert!(bad(vec![stored_cell(r2, 7)?, stored_cell(r2, 6)?]));
+        // a well-formed answer
+        let out = check_fetch_multi(
+            vec![
+                error_cell(CellrError::NoQueue, r1)?,
+                stored_cell(r2, 6)?,
+                stored_cell(r2, 7)?,
+                dummy_cell()?,
+            ],
+            &entries,
+        )?;
+        assert_eq!((out.errors.len(), out.cells.len()), (1, 2));
+        Ok(())
+    }
+
+    /// `ops.rs:268` (`linkr.cmd_seq != seq || (linkr.present && linkr.consumed)`, `||` -> `&&`): {present 1, consumed 1} is no
+    /// state of §9.4 — the three `LINKR` frames of it are a misfit; the other states complete the exchange.
+    #[test]
+    fn link_get_refuses_the_impossible_present_and_consumed() -> Result<()> {
+        use secmp_proto::link::cont::split_blob;
+        let blob = vec![0_u8; 12_360];
+        let run = |present: bool, consumed: bool| -> Result<Result<bool>> {
+            let (part, one, two) = split_blob(&blob)?;
+            let mut judge = Judge::LinkGet {
+                consume: false,
+                assembler: Some(LinkrAssembler::new()),
+                first: true,
+            };
+            let frames = [
+                ResponseCmd::LinkR {
+                    present,
+                    consumed,
+                    blob_part: part,
+                },
+                ResponseCmd::Cont(one),
+                ResponseCmd::Cont(two),
+            ];
+            let mut last = None;
+            for cmd in frames {
+                match judge.push(reply(4, cmd), 4) {
+                    Ok(Step::More) => {}
+                    Ok(Step::Done(_)) => last = Some(true),
+                    Err(e) => return Ok(Err(e)),
+                }
+            }
+            Ok(Ok(last.is_some()))
+        };
+        assert!(matches!(run(true, true)?, Err(Error::Rejected)));
+        assert!(matches!(run(true, false)?, Ok(true)));
+        assert!(matches!(run(false, true)?, Ok(true)));
+        Ok(())
+    }
 }

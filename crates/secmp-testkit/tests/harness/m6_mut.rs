@@ -123,6 +123,206 @@ fn async_link_is_open_after_connect_and_ping() {
     });
 }
 
+/// A stream whose read side ends (EOF) after `left` bytes; writes pass.
+struct Cut {
+    inner: tokio::io::DuplexStream,
+    left: usize,
+}
+
+impl tokio::io::AsyncRead for Cut {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        if self.left == 0 {
+            return std::task::Poll::Ready(Ok(()));
+        }
+        let mut limited = buf.take(self.left);
+        let polled = std::pin::Pin::new(&mut self.inner).poll_read(cx, &mut limited);
+        let n = limited.filled().len();
+        buf.advance(n);
+        self.left = self.left.saturating_sub(n);
+        polled
+    }
+}
+
+impl tokio::io::AsyncWrite for Cut {
+    fn poll_write(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        std::pin::Pin::new(&mut self.inner).poll_write(cx, buf)
+    }
+
+    fn poll_flush(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.inner).poll_shutdown(cx)
+    }
+}
+
+/// `driver/session.rs:209`, `relay_queue.rs:66` (`is_closed` → `false`): an async link whose stream ends right after the
+/// handshake (no answer to the first command) fails that command with `Closed` and reports closed.
+#[test]
+fn async_link_reports_closed_when_the_stream_ends() {
+    use secmp_client_core::clock::Clock as _;
+    use secmp_testkit::harness::EntropyPool;
+    use secmp_transport::Error;
+    use secmp_transport::driver::{
+        AsyncQueueTransport as _, AsyncRelayQueueTransport, StreamProvider as _,
+    };
+
+    use crate::m6_tokio::{Setup, runtime};
+    // the relay's handshake bytes: RELAYINFO 1744 + HS2 1156
+    const RELAY_HANDSHAKE: usize = 1744 + 1156;
+    runtime().block_on(async {
+        let mut setup = Setup::new();
+        let iso = setup.iso();
+        let stream = setup
+            .provider
+            .connect(&setup.relay.relay_ref(), iso)
+            .await
+            .unwrap();
+        let access = setup.relay.access_key();
+        let unix = setup.relay.clock().unix_secs();
+        let mut pool = EntropyPool::new("m6-mut-closed", 0);
+        let mut t = AsyncRelayQueueTransport::connect(
+            Cut {
+                inner: stream,
+                left: RELAY_HANDSHAKE,
+            },
+            setup.relay.relay_fp(),
+            Some(&access),
+            unix,
+            pool.get(),
+        )
+        .await
+        .unwrap();
+        assert!(!t.is_closed());
+        assert_eq!(t.ping().await.err(), Some(Error::Closed));
+        assert!(t.is_closed());
+    });
+}
+
+/// `core/mod.rs:960`, `952` (`==` → `!=` in `World::outcome`, which queue's entry a `FETCH_MULTI` answer's cells go to): two
+/// contacts of a Balanced client each get one message from the peer, on their own queue; each conversation receives its
+/// own message (cells of another queue do not decrypt, they would be dropped), and both queues are acknowledged.
+#[test]
+fn fetch_multi_cells_go_to_their_own_queue() {
+    use secmp_client_core::scheduler::outbox::{OutMessage, Outbox};
+    use secmp_crypto::Zeroizing;
+    use secmp_proto::wire::cell::AppKind;
+
+    use crate::m6_common::{client, contact, driver};
+    let mut sim = driver();
+    let a = client(&mut sim, Mode::Balanced, 311);
+    let b = client(&mut sim, Mode::Strict, 312);
+    let c1 = contact(&mut sim, a, b, 10_000, 10_000);
+    let c2 = contact(&mut sim, a, b, 10_000, 10_000);
+    for (n, c) in [(1_u8, &c1), (2, &c2)] {
+        sim.client(b)
+            .convs
+            .get_mut(c.conv_b)
+            .unwrap()
+            .outbox_mut()
+            .enqueue(
+                OutMessage {
+                    msg_id: [n; 16],
+                    kind: AppKind::Text,
+                    expire_after: 0,
+                    payload: Zeroizing::new(vec![n; 30]),
+                },
+                0,
+            );
+    }
+    sim.run_until(600_000);
+    for (n, c) in [(1_u8, &c1), (2, &c2)] {
+        let got = sim.client_ref(a).convs.get(c.conv_a).unwrap().received();
+        assert_eq!(got.len(), 1, "contact {n}");
+        assert_eq!(got.first().map(|m| m.msg_id), Some([n; 16]), "contact {n}");
+    }
+    assert!(
+        sim.client_ref(a)
+            .sched
+            .acked(c1.a_recv)
+            .is_some_and(|n| n >= 1)
+    );
+    assert!(
+        sim.client_ref(a)
+            .sched
+            .acked(c2.a_recv)
+            .is_some_and(|n| n >= 1)
+    );
+}
+
+/// `core/mod.rs:1303`, `1312`, `1315` (`==` → `!=` in `Scheduler::remove_queue`): an unknown id is refused when only receive
+/// queues exist; removing a queue ends exactly the links that were for it — in Strict the queue's own link, in Balanced the
+/// relay's link only with its last queue (send or receive).
+#[test]
+fn remove_queue_ends_exactly_the_links_of_the_queue() {
+    use secmp_client_core::scheduler::core::SchedError;
+    use secmp_client_core::scheduler::core::Scheduler;
+
+    use crate::m6_sched_bal::fresh_recv_cap;
+    for (mode, links_before, after_first) in [(Mode::Strict, 2, 1), (Mode::Balanced, 1, 1)] {
+        let mut sched = Scheduler::new(Params::default(), mode, TimingRng::seeded(5));
+        let recv = sched
+            .add_recv_queue(0, RelayId(0), fresh_recv_cap(1), 10_000)
+            .unwrap();
+        let send = sched
+            .add_send_queue(
+                0,
+                RelayId(0),
+                secmp_transport::SendCap::from_route(
+                    [4; 16],
+                    &secmp_crypto::SecretBytes::from_slice(&[9; 32]).unwrap(),
+                )
+                .unwrap(),
+                10_000,
+            )
+            .unwrap();
+        assert_eq!(sched.links().len(), links_before, "{mode:?}");
+        assert!(
+            matches!(
+                sched.remove_queue(0, QueueId(99), &mut NoCells),
+                Err(SchedError::UnknownQueue)
+            ),
+            "{mode:?}"
+        );
+        sched.remove_queue(1, send, &mut NoCells).unwrap();
+        assert_eq!(
+            sched.links().len(),
+            after_first,
+            "{mode:?}: after the first"
+        );
+        if mode == Mode::Strict {
+            // the link that stays is the receive queue's, not the removed send queue's
+            assert_eq!(sched.links().first().and_then(|l| l.queue), Some(recv));
+        }
+        sched.remove_queue(2, recv, &mut NoCells).unwrap();
+        assert_eq!(sched.links().len(), 0, "{mode:?}: after the last");
+    }
+    // only a receive queue: an id that is not it is unknown
+    let mut sched = Scheduler::new(Params::default(), Mode::Strict, TimingRng::seeded(6));
+    sched
+        .add_recv_queue(0, RelayId(0), fresh_recv_cap(2), 10_000)
+        .unwrap();
+    assert!(matches!(
+        sched.remove_queue(0, QueueId(99), &mut NoCells),
+        Err(SchedError::UnknownQueue)
+    ));
+}
+
 /// `core/mod.rs:971` (`==` → `!=` in `World::outcome`, the per-queue errors of a `FETCH_MULTI` answer): one queue of a Balanced
 /// link's `FETCH_MULTI` is deleted on the relay; the relay answers that entry with `ERR_NOQUEUE` and the cells of the other as
 /// usual; exactly the deleted queue is re-created (a `QUEUE_NEW` for it), the intact one is left alone.

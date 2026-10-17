@@ -1187,6 +1187,18 @@ fn remove_queue_refuses_unknown_and_ends_the_relay_link_with_its_last_queue() {
         "{:?}",
         rig.events
     );
+    // mutants-156 (`core/mod.rs:217`, the direct `Release for S::release_discard`): the cell prepared for the closed link's
+    // next tick goes back to the source at once
+    assert_eq!(
+        rig.src
+            .calls
+            .iter()
+            .filter(|c| **c == Call::Discard)
+            .count(),
+        1,
+        "{:?}",
+        rig.src.calls
+    );
 }
 
 /// Mutants-156 (`core/mod.rs:380`, `World::period_of` → `Some(1)`): a link ticks at its queue's period (Strict) or at the

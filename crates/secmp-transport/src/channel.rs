@@ -648,4 +648,70 @@ mod tests {
         assert!(matches!(at_ack, Err(Error::Rejected)));
         Ok(())
     }
+
+    /// `channel.rs:520` (`Cellr::Error { .. } if at == 0` -> `true`): an error frame is only ever the first frame.
+    #[test]
+    fn fetch_error_frame_is_only_the_first() -> Result<()> {
+        let rid = [1; 16];
+        let error = ResponseCmd::Cellr(Cellr::Error {
+            error: secmp_proto::wire::frame::CellrError::NoQueue,
+            rid,
+            cell: cell()?,
+        });
+        let late = check_fetch(vec![stored(1)?, error, dummy()?, dummy()?], &rid, 0);
+        assert!(matches!(late, Err(Error::Rejected)));
+        Ok(())
+    }
+
+    fn multi_batch(mut frames: Vec<Cellr>) -> Result<Vec<ResponseCmd>> {
+        while frames.len() < secmp_proto::link::FETCH_MULTI_BATCH {
+            frames.push(Cellr::Dummy { cell: cell()? });
+        }
+        Ok(frames.into_iter().map(ResponseCmd::Cellr).collect())
+    }
+
+    /// `channel.rs:566`, `570`, `599` (`check_fetch_multi`): errors first and in request order, then cells of queues not in
+    /// error, strictly above the acknowledgement and ascending per queue, then dummies.
+    #[test]
+    fn fetch_multi_judges_the_order_and_the_ids() -> Result<()> {
+        use secmp_proto::wire::frame::CellrError;
+        let (r1, r2, r3) = ([1; 16], [2; 16], [3; 16]);
+        let entries = [(r1, 0), (r2, 5)];
+        let err = |rid| -> Result<Cellr> {
+            Ok(Cellr::Error {
+                error: CellrError::NoQueue,
+                rid,
+                cell: cell()?,
+            })
+        };
+        let item = |rid, id| -> Result<Cellr> {
+            Ok(Cellr::Cell {
+                rid,
+                cell_id: id,
+                cell: cell()?,
+            })
+        };
+        let dum = || -> Result<Cellr> { Ok(Cellr::Dummy { cell: cell()? }) };
+        let bad = |frames: Vec<Cellr>| -> Result<bool> {
+            Ok(matches!(
+                check_fetch_multi(multi_batch(frames)?, &entries),
+                Err(Error::Rejected)
+            ))
+        };
+        assert!(bad(vec![err(r2)?, err(r1)?])?);
+        assert!(bad(vec![err(r3)?])?);
+        assert!(bad(vec![item(r2, 6)?, err(r1)?])?);
+        assert!(bad(vec![dum()?, item(r2, 6)?])?);
+        assert!(bad(vec![err(r1)?, item(r1, 1)?])?);
+        assert!(bad(vec![item(r3, 1)?])?);
+        assert!(bad(vec![item(r2, 5)?])?);
+        assert!(bad(vec![item(r2, 6)?, item(r2, 6)?])?);
+        assert!(bad(vec![item(r2, 7)?, item(r2, 6)?])?);
+        let out = check_fetch_multi(
+            multi_batch(vec![err(r1)?, item(r2, 6)?, item(r2, 7)?])?,
+            &entries,
+        )?;
+        assert!(matches!(out, Ok(o) if o.errors.len() == 1 && o.cells.len() == 2));
+        Ok(())
+    }
 }

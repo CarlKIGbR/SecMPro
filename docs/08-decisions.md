@@ -308,6 +308,56 @@ Consequence added at M5 (M5-C; proposed by the implementer, engineering class (g
 **Amendment 3 (2026-10-03): an HX same-content control; reason: Amendment 2 asks for one control on the largest TR cell, but the HX targets prepare a 12 288-byte blend and three boxed 4 KB cells (`hx_cells(&blended_vec(..))`) that no control runs, so a harness artefact at HX size would be judged a product FAIL; on the Mac `hx_accept_reject_inner` (+14.8 ns, |t| 44) and `hx_accept_reject_first_msg` (−21 to −25 ns, |t| 6 to 8) pass only because the 41.7 ns floor is above them, and at the 10 ns floor of a Linux runner the same shifts would FAIL.** Reviewer decision (M04 review, engineering delegation 30.09.2026): (1) a control `hx_same_content_control` runs the class-1 cells of `hx_accept_reject_inner` in both classes through the real HX preparation path, with the same claim and pre-check, and is judged like `same_content_control`: a FAIL makes the run `CONTROL_FAIL`, PASS and `SUB_FLOOR_SHIFT` pass; it is listed in `expect::CT_TARGETS` and re-derived by the gate; (2) if an HX target fails while this control passes, the failure is a product finding (STOP, docs/06 §4); if the control fails, the run is `CONTROL_FAIL`; (3) ADR-041's criterion, its sign rule, the floor, the thresholds, the sample counts and the three earlier controls are unchanged. Evidence: the Linux ct report of the fix head (`docs/reviews/M04-evidence/ct-report-linux-<run id>.json`).
 **Amendment 4 (2026-10-07): one delta under an opaque per-call mask, no class-selected address in the preparation path; reason: PR run 37614599312 (1834d54; `ct` job 112769780046, AMD EPYC 7763, tsc, tick 0.409 ns, q_eff 1 tick, floor 10 ns = 24.45 ticks; bench sha256 `93d23cca5916…`, the executable of run 37146709153, where `ct` passed) ended `CONTROL_FAIL`: `hx_same_content_control` FAIL at p50, identical contents in both classes, Δ +49.16 / +47.72 ticks = 2.01 / 1.95 effect floors, t +18.46 / +18.42 (run 37127247911: 0.89 / 0.51 floors; run 37146709153: PASS, t +4.48 / +7.61).** In the same run `same_content_control` (4096-byte TR cell) showed the same kind of residue about ten times smaller (p50 −2.75 / −4.84 ticks = 0.11 / 0.20 floors), `hx_accept_reject_inner` shifted by −63.38 / −49.61 ticks (2.59 / 2.03 floors, class 0 faster; class 0 slower in run 37146709153, SUB_FLOOR_SHIFT +8.25 / +4.63: the sign follows the run, not the content), `hx_accept_reject_first_msg` did not reproduce, and `min_leak_control` was reached (p75, 15.2 floors; `min_leak_same_content` max |t| 0.42), so the instrument's sensitivity was intact. Mechanism (reviewer, from the source): Amendment 2 (1) left exactly one class-dependent address in the preparation path — `blend` selected the delta buffer by the class index (class 0 the XOR delta, class 1 a separate all-zero allocation of the same length) and read it right before the timed window. For the HX targets that is one of two 12 288-byte buffers (192 cache lines) next to `base` and `out`; which of them was just read decides the cache state the timed call starts with. The residue scales with the buffer size (≈ 1–2 ns at 4 KB, ≈ 20 ns at 12 KB) and tips over the 10 ns floor run by run. The control did what Amendment 3 (2) made it for: the run is a harness finding, not a product finding (M04 review R-103). Reviewer decision (WEISUNG M4-FIX-7, engineering delegation 30.09.2026): (1) `blend` reads **one** delta buffer in both classes under an opaque per-call mask — `m = black_box(u8::from((class & 1) == 0).wrapping_neg())` (0xFF for class 0, 0x00 for class 1), then one `#[inline(never)]` loop `*o = b ^ (d & m)` over `base` and the class-0 delta (`class0 ^ class1`), the delta slice also through `black_box`; no class-selected address remains, both classes execute the same instructions on the same addresses and differ only in the mask value; `Deltas` keeps only the delta; (2) a disassembly of the gate-profile build must show that LLVM does not unswitch the loop on the mask (it did in M3 without `black_box`, `docs/reviews/M03-evidence/ct-blend-disasm-aarch64-bc5088b.txt`): one loop, the mask broadcast into a vector register, no branch on the class or on the mask, no `memcpy` — otherwise `black_box` moves into the loop body, and a loop still versioned stops the fix; (3) the same-content controls, `expect.rs`, `ctreport.rs`, the floor, the thresholds, the sample counts and the sign rule are unchanged. Evidence: `docs/reviews/M04-evidence/ct-blend-disasm-aarch64-fix7-b138a2b.txt` (aarch64: one loop, `dup.16b v0, w8`, every branch on a length or loop counter, no `bl`), `ct-report-local-b138a2b-scale10.json` with `ct-progress-local-b138a2b-scale10.jsonl` and `ct-local-b138a2b-scale10.txt` (Mac, `SECMP_CT_SCALE=10`: run verdict PASS, both same-content controls PASS; evidence only, the gate refuses a scaled report), `ct-report-linux-37614599312-1834d54.json` with `ct-progress-linux-37614599312.jsonl` (the failing run), and the Linux `ct` report of the next PR run.
 Amended 2026-10-07 — Accepted (Reviewer, Owner-Delegation 30.09.2026).
+**Amendment 5 (2026-10-17): TR position/reject targets hold the header nonce, the public header and the body constant; an informative nonce target; reason: PR run 39040543318 (62d8e59, `ct`, AMD EPYC 7763, q_eff 1.0 tick (clock), floor 10 ns = 24.45 ticks) FAIL `tr_decrypt_trial_open_position` at p90, Δ +42.74 / +42.37 ticks, t 62.3 / 69.4, class 0 slower, a whole-distribution shift of ≈ 49 ticks; in the same run `tr_decrypt_reject_skipped` shifted by +31…+65 ticks in its second measurement only.**
+
+Record of CT-DIAG-1…3 (WEISUNG M6-CI-12, M6-CT-2…4; diag branch `m06-ct-diag` at `4239879a142795edd5fbdd9af1130bca8d71db6a`, raw data in its `docs/reviews/M06-evidence/ct-159-diag*.{md,json,txt}`):
+
+- **Code reading.** It found no instruction on the §7.4 skipped path whose execution depends on which trial opened.
+- **Dispatch 39063440795.** All four diagnosis targets passed: production Δ ≤ 2.5 ticks; label-swapped, interleaved and same-content ≤ 6 ticks. Together with #156, #157 and #159, the shift is intermittent per measurement half.
+- **Repeat mode, local** (Threadripper PRO 5955WX, q_eff 10 ns, 8 evaluations per target, every half a fresh fixture):
+
+  | Target | Halves with \|t90\| > 4.5 | max \|Δp90\| ticks |
+  |---|---|---|
+  | `tr_decrypt_trial_open_position` (old fixture) | 12/16 | 28.4 |
+  | `tr_decrypt_reject_skipped` (old fixture) | 13/16 | 27.5 |
+  | the re-sealed variant (class 1 = class 0's header re-sealed under `hk_2`; same nonce, header plaintext and body) | 0/16 | 0.50 |
+
+  In all 48 halves the classes' inputs had identical addresses.
+- **Bisection** (4 evaluations, 8 halves per variant; class 1 = class 0 with one component changed):
+
+  | Variant | max \|Δp90\| ticks | Halves with \|t90\| > 4.5 |
+  |---|---|---|
+  | `pn` | 0.45 | 0 |
+  | `dh_pk` | 0.88 | 0 |
+  | `ek_pq` / `ct_pq` | 0.89 | 0 |
+  | header nonce | 65.38 | 5 (both signs) |
+  | body ciphertext | 0.52 | 0 |
+  | `mk`, on two receivers | 10.95 | — |
+  | two receivers, same `mk` | 6.98 | — |
+
+Conclusion (reviewer adjudication, 2026-10-17):
+
+- The production trial-position path shows no dependence on the trial position, nor on the secrets `hk` and `mk`.
+- The shift that failed run #159 follows the **public header nonce**, which enters every header trial's XChaCha20 key setup and the body AD.
+- Placement is excluded.
+- Both targets were therefore design defects: their classes differed in the nonce and in public header content, so they measured a public-input micro-timing, not the property they name. The M6-8 observation (Δ −27 / −32 ticks, sign flipped between halves) was the same phenomenon.
+
+Reviewer decision (WEISUNG M6-CI-13, engineering delegation 30.09.2026):
+
+1. **Fixture rule.** The classes of a TR position or reject target share the header nonce, the public header content and the body bytes, unless the target names that field as its class difference. A class difference in a header key or a header field is produced by re-sealing class 0's header plaintext, changed in that field only, under the class's header key with class 0's nonce, followed by class 0's body.
+   - `tr_decrypt_trial_open_position`: class 1 = class 0's header re-sealed under `hk_2`.
+   - `tr_decrypt_reject_skipped`: class 1 = class 0's header with `n = 4` re-sealed under `hk_1`. `n` is the public field this target names.
+   - Names, sites, pre-checks and `expect::CT_TARGETS` are unchanged.
+2. **Informative target.** `tr_decrypt_nonce_dependence` (class 0 = the class 0 of `tr_decrypt_trial_open_position`; class 1 = the same header plaintext and body re-sealed under `hk_1` with a fresh nonce) is calibrated and measured twice after the targets.
+   - It has no verdict and no A/A pass.
+   - It is reported in `informative` and pinned in `expect::CT_INFORMATIVE_TARGETS`.
+   - The gate requires exactly the pinned entries and prints Δ and t per crop; its measurements never fail the gate.
+   - `ct-check --targets m5` reads the reports written before this amendment.
+3. **Recorded, not changed.** `Measurement::of` falls back to the clock quantum when a measurement's samples show no lattice, and the clock probe recognises no lattice with fewer than 4 runs, although run #159's probe showed `median_gap` 25 and `regular` 1.0. So `tr_decrypt_trial_open_position` and `tr_decrypt_reject_skipped` were judged with q_eff 1.0 tick (clock) while every other target took ≈ 24.5 ticks from its samples. The effect floor is 10 ns either way: 24.45 vs 24.5 ticks. Re-derived with q_eff 24.5, run #159's verdicts are unchanged (FAIL at p90, 1.74 / 1.73 floors; PASS).
+4. ADR-041's criterion, its sign rule, the floor, the thresholds, the crops, the sample counts and every control are unchanged. No product code changes.
+
+Evidence: `docs/reviews/M06-evidence/ct-nonce-M6-CI-13.md`, which holds the condensed CT-DIAG tables and the local verification of the new fixture under the repeat mode. That verification did not meet the 1-tick criterion of WEISUNG M6-CI-13 in every half; the open point is recorded there and in `M06-report.md` §8.
+Amended 2026-10-17 — Accepted (Reviewer, Owner-Delegation 30.09., 2026-10-17).
 
 ---
 

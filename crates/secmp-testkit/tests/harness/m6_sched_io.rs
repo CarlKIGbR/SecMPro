@@ -588,6 +588,7 @@ impl Rig {
                 Output::Write { link, bytes, at } => {
                     self.writes.push(at);
                     std::io::Write::write_all(&mut self.stream, &bytes).unwrap();
+                    self.sched.frame_written(link);
                     loop {
                         let mut frame = vec![0_u8; FRAME];
                         let mut got = 0_usize;

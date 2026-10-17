@@ -14,9 +14,12 @@
 //!   outstanding too late and loses the tick;
 //! - run preparation off the path of the I/O loop: its cost may decide when a frame is *ready*, never when a due frame
 //!   *leaves*. A cell source may answer "not ready"; the core then asks the same queue again at its next pass: a "not
-//!   ready" answer never advances the queue choice, and the Balanced round robin advances when the `SEND` is *written*
-//!   (at the tick), not when its cell is obtained — a teardown in between leaves it where it was (GLM2B-1) — and a
-//!   "not ready" answer never lets a tick's `FETCH` part be sealed before its `SEND` part (WEISUNG M6-B-6, EXTB-1).
+//!   ready" answer never advances the queue choice, and the Balanced round robin advances when the `SEND` frame is
+//!   *completely written* — not when its cell is obtained and not when the core hands the frame out at the tick (`last_send`
+//!   stays at the tick): the driver reports every completed frame write, oldest first, with
+//!   [`core::Scheduler::frame_written`]; a link torn down before its frame was written leaves the rotation where it was
+//!   (GLM2B-1, FIN-2) — and a "not ready" answer never lets a tick's `FETCH` part be sealed before its `SEND` part
+//!   (WEISUNG M6-B-6, EXTB-1).
 
 pub mod control;
 pub mod core;

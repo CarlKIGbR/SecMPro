@@ -1027,3 +1027,51 @@ fn driver_stashed_connect_is_anchored_at_its_occurrence() {
         assert_eq!(idle, active, "connect fails: {connect_fails}");
     }
 }
+
+/// FIN-2 (Astra final pass): the Balanced round-robin position advances when a SEND frame was completely written, not when
+/// the core handed it out. Balanced, three send queues at 10 s; the first connection's first frame is held at zero bytes
+/// (a stalled writer) and the driver closes the link at the next tick; the replacement link's first SEND goes to the queue
+/// the abandoned frame was for (the pin: queue 2, the rotation having moved past a SEND that never left the process).
+#[test]
+fn driver_rr_does_not_advance_for_a_send_never_written() {
+    fn send_rids(hold: Option<Hold>) -> Vec<secmp_proto::wire::Id> {
+        runtime().block_on(async {
+            let setup = Setup::new();
+            let provider = Holding::new(setup.provider.clone(), 0, hold, 0);
+            let sc = Scenario {
+                mode: Mode::Balanced,
+                contacts: vec![(10_000, 10_000); 3],
+                pool: false,
+                seed: 97,
+            };
+            let x = TClient::with_provider(
+                &setup,
+                provider,
+                sc.mode,
+                no_phase(),
+                sc.seed,
+                Costs::default(),
+                0,
+            );
+            let mut rig = TokioRig::assemble(setup, x, &sc).await;
+            let run = rig.run_minutes(2, None).await;
+            run.sends.iter().take(6).map(|s| s.1).collect()
+        })
+    }
+    let free = send_rids(None);
+    // the normal path: the rotation advances exactly once per written SEND — three queues, each in turn, then again
+    assert_eq!(free.len(), 6);
+    let (first, second) = (free.get(..3).unwrap(), free.get(3..).unwrap());
+    assert_eq!(first, second);
+    let distinct: std::collections::BTreeSet<_> = first.iter().collect();
+    assert_eq!(distinct.len(), 3);
+    let stalled = send_rids(Some(Hold {
+        first: 0,
+        delay_ms: 600_000,
+    }));
+    assert_eq!(
+        stalled.first(),
+        free.first(),
+        "the rotation moved past a SEND that was never written"
+    );
+}

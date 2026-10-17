@@ -12,7 +12,8 @@
 //!   [`FLUSH_WAIT_MS`] — before it calls [`Scheduler::work`]. A write is never awaited beyond that: a link whose write
 //!   is still pending when its next tick comes, or after [`WRITE_STALL_MS`], or whose writer reports a failure, is
 //!   closed (`on_closed`), and no link's write ever holds up another link's ticks or `FETCH`-lead wakes (WEISUNG
-//!   M6-B-5 EXTB-3). Events that arrive during the flush wait are kept for the next pass.
+//!   M6-B-5 EXTB-3). Events that arrive during the flush wait are handled right after it, each at the time it arrived (FIN-1),
+//!   and every write completed in full is reported with [`Scheduler::frame_written`] (FIN-2).
 //! - (vi) the work never runs on the I/O path: [`Scheduler::work`] sees a non-blocking cell source (`Deferred`). A cell
 //!   the core asks for is prepared by the serial [`Worker`], off the loop; until it is ready the facade answers "not
 //!   ready" and the core prepares the link again at its next pass (the tick finds no frame only if the worker is later
@@ -893,6 +894,8 @@ where
             if io.pending == 0 {
                 io.oldest = None;
             }
+            // the whole frame is on the stream: a `SEND` commits its round-robin position now (FIN-2)
+            sched.frame_written(link);
             Ok(())
         } else {
             self.close_link(sched, link, now)

@@ -820,6 +820,8 @@ impl VirtualDriver {
             })
         };
         if ok {
+            // the whole frame is on the stream: the core commits what the frame stood for (FIN-2)
+            self.clients.get_mut(i).unwrap().sched.frame_written(link);
             // the write is on the wire: the hook may kill the process here
             let c = self.clients.get_mut(i).unwrap();
             if let Some(mut hook) = c.after_write.take() {

@@ -146,6 +146,9 @@ struct Up {
     fetch_part: Option<Part>,
     flight: Flight,
     reqs: VecDeque<Req>,
+    /// One entry per frame handed to the driver and not yet reported as written ([`Scheduler::frame_written`]), oldest
+    /// first: the round-robin position the frame commits when it is completely written (a `SEND`), or `None`.
+    unwritten: VecDeque<Option<usize>>,
 }
 
 enum State {
@@ -536,7 +539,6 @@ impl World {
             return TickResult::Tear(Reason::Overrun);
         }
         let mut sent_to = None;
-        let mut next_rr = None;
         for part in [up.send_part.take(), up.fetch_part.take()]
             .into_iter()
             .flatten()
@@ -544,10 +546,15 @@ impl World {
             if up.chan.begin_write(&part.prepared).is_err() {
                 return TickResult::Tear(Reason::Rejected);
             }
-            if let ReqKind::Send { queue, .. } = part.kind {
+            // the round-robin position of a `SEND` is committed when the driver reports the frame completely written
+            // (`Scheduler::frame_written`, FIN-2), not here; `last_send` stays at the tick
+            let commits = if let ReqKind::Send { queue, .. } = part.kind {
                 sent_to = Some(queue);
-                next_rr = part.next_rr;
-            }
+                part.next_rr
+            } else {
+                None
+            };
+            up.unwritten.push_back(commits);
             self.out.push(Output::Write {
                 link: up.id,
                 at,
@@ -564,10 +571,6 @@ impl World {
             && let Some(sq) = self.sends.iter_mut().find(|s| s.id == q)
         {
             sq.last_send = Some(at);
-        }
-        // the round-robin position moves with the SEND that was written (GLM2B-1), next to `last_send`
-        if let Some(n) = next_rr {
-            link.rr = n;
         }
         TickResult::Wrote
     }
@@ -1800,6 +1803,23 @@ impl Scheduler {
         })
     }
 
+    /// The driver has written the oldest frame it was handed for `link` (an [`Output::Write`]) completely — the stream took
+    /// every byte; a failed or partial write is not a completion. A `SEND` frame commits the Balanced round-robin position
+    /// here (A′, GLM2B-1 / FIN-2): a link torn down before its frame was written leaves the rotation where it was. Frames
+    /// complete in the order they were handed out; an unknown or closed link is ignored.
+    pub fn frame_written(&mut self, link: LinkId) {
+        for l in &mut self.links {
+            if let State::Up(up) = &mut l.state
+                && up.id == link
+            {
+                if let Some(Some(n)) = up.unwritten.pop_front() {
+                    l.rr = n;
+                }
+                return;
+            }
+        }
+    }
+
     /// The handshake of connection `id` succeeded at `now`: the link is up; its lifetime is drawn now.
     ///
     /// # Errors
@@ -1835,6 +1855,7 @@ impl Scheduler {
                 fetch_part: None,
                 flight: Flight::new(world.params.max_in_flight),
                 reqs: VecDeque::new(),
+                unwritten: VecDeque::new(),
             }));
             world.out.push(Output::Event(LinkEvent::Up(id)));
         }

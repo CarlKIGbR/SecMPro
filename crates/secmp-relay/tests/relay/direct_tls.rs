@@ -760,6 +760,15 @@ fn a_trickled_client_hello_ends_at_the_hello_timeout() {
         client_end.write_all(&[byte]).unwrap();
         std::thread::sleep(PER_BYTE);
     }
+    // bounded: a `handle` that does not close on the timeout fails here, it does not hang the test (mutants-156)
+    let limit = Instant::now().checked_add(Duration::from_secs(5)).unwrap();
+    while !server.is_finished() && Instant::now() < limit {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(
+        server.is_finished(),
+        "the connection did not end within 5 s"
+    );
     let ended = server.join().unwrap().duration_since(started);
     let bound =
         Duration::from_millis(HELLO_TIMEOUT_MS) + server::READ_POLL + Duration::from_millis(300);

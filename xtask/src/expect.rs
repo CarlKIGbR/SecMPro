@@ -216,6 +216,13 @@ pub(crate) const CT_TARGETS: &[&str] = &[
     "link_same_content_control",
 ];
 
+/// ADR-042 Amendment 5 (WEISUNG M6-CI-13): the informative targets of the ct bench. The report carries them in
+/// `informative` (not in `results`), each measured twice, with no verdict; they never fail the gate. The gate checks
+/// that exactly these names are present and prints Δ and t per crop.
+/// `tr_decrypt_nonce_dependence` keeps the public header-nonce micro-timing of §7.4 Decrypt visible (CT-DIAG-3: up to
+/// 65 ticks, either sign).
+pub(crate) const CT_INFORMATIVE_TARGETS: &[&str] = &["tr_decrypt_nonce_dependence"];
+
 /// The positive control among [`CT_TARGETS`].
 pub(crate) const CT_POSITIVE_CONTROL: &str = "control_variable_time_compare";
 

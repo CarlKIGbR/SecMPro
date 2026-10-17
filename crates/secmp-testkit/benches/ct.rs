@@ -80,7 +80,10 @@
 //!
 //! ADR-042 Amendment 5 (WEISUNG M6-CI-13): the classes of a TR position or reject target share the header nonce, the
 //! public header content and the body bytes, unless the target names one of them as its class difference. A public
-//! header nonce alone shifts §7.4 Decrypt by up to 65 ticks with either sign (CT-DIAG-3).
+//! header nonce alone shifts §7.4 Decrypt by up to 65 ticks with either sign (CT-DIAG-3). The informative target
+//! `tr_decrypt_nonce_dependence` (class 1 = class 0 re-sealed with a fresh nonce) keeps that effect visible: it is
+//! measured twice after the targets, with no verdict and no A/A pass, and reported in `informative`
+//! (`expect::CT_INFORMATIVE_TARGETS`).
 //!
 //! The LINK targets have no product reject-site tag (spec §8.5: one uniform `link::Error::Rejected`); their pre-check
 //! binds each class to its compare by the positive twin instead: each class gives the claimed outcome, and the
@@ -2071,8 +2074,20 @@ const CLAIM_LINK_SAME_CONTENT: Claim = Claim {
     check: SiteCheck::Twin,
 };
 
+/// The informative nonce-dependence target (ADR-042 Amendment 5; `expect::CT_INFORMATIVE_TARGETS`).
+const CLAIM_TR_NONCE: Claim = Claim {
+    target: "tr_decrypt_nonce_dependence",
+    classes: [
+        "header opens under hk_1 (trial 0 of 2; entry 0 of 4), body tag wrong in byte 0 (the class 0 of \
+         tr_decrypt_trial_open_position)",
+        "the same header plaintext and body, re-sealed under hk_1 with a fresh header nonce, body tag wrong in byte 0",
+    ],
+    site: "body MAC",
+    check: SiteCheck::Tagged,
+};
+
 /// Every claim, for the report (`claim_json`).
-const CLAIMS: [Claim; 16] = [
+const CLAIMS: [Claim; 17] = [
     CLAIM_TR_HDR_KEY,
     CLAIM_TR_BODY_TAG,
     CLAIM_TR_CT_PQ,
@@ -2089,6 +2104,7 @@ const CLAIMS: [Claim; 16] = [
     CLAIM_Q_TOKEN,
     CLAIM_TR_TRIAL_POSITION,
     CLAIM_LINK_SAME_CONTENT,
+    CLAIM_TR_NONCE,
 ];
 
 /// A target built from its claim (name and classes from the claim).
@@ -2678,6 +2694,64 @@ fn tr_decrypt_trial_open_position(
         &class0,
         &class1,
     )
+}
+
+/// `tr_decrypt_nonce_dependence` (ADR-042 Amendment 5): informative, no verdict. It keeps the public-nonce micro-timing
+/// that failed run #159 visible in every run.
+///
+/// - Class 0 is the class 0 of `tr_decrypt_trial_open_position`: A's undelivered `(hk_1, n = 0)`, trial 0, entry 0.
+/// - Class 1 is the same header plaintext and body, re-sealed under `hk_1` with a fresh header nonce drawn from the
+///   stream.
+///
+/// Each has its body tag wrong in byte 0, and both are refused by the body MAC on the skipped path. The classes share
+/// the header key, the entry, the header plaintext and the body. They differ in the header nonce, and so in `hdr_ct` and
+/// in the body AD (which holds both). Measured on the fixture of `tr_decrypt_trial_open_position` with `tr_measure`, so
+/// the pre-check is the TR one.
+fn tr_decrypt_nonce_dependence(
+    n: usize,
+    k: usize,
+    stream: &mut Stream,
+) -> Result<Samples, secmp_crypto::Error> {
+    let fixture = tr_skipped_session_with(stream, &TR_TRIAL_PER_CHAIN).map_err(crypto_error)?;
+    let (first, hk1, _) = tr_class0_source(&fixture).map_err(crypto_error)?;
+    let mut nonce = [0_u8; NONCE_LEN];
+    stream.fill(&mut nonce);
+    let renonced = tr_renonced(&fixture, first, hk1, &nonce).map_err(crypto_error)?;
+    let class0 = body_tag_wrong(first).map_err(crypto_error)?;
+    let class1 = body_tag_wrong(&renonced).map_err(crypto_error)?;
+    tr_measure(
+        n,
+        k,
+        stream,
+        CLAIM_TR_NONCE,
+        fixture.receiver,
+        &class0,
+        &class1,
+    )
+}
+
+/// `cell` with its header plaintext (opened under `hk`) sealed again under `hk` with `nonce`, followed by `cell`'s
+/// body: `nonce ‖ Seal(hk, nonce, hdr AD, header) ‖ body`.
+fn tr_renonced(
+    fixture: &TrSkipped,
+    cell: &[u8],
+    hk: &SecretBytes<32>,
+    nonce: &[u8; NONCE_LEN],
+) -> Result<Vec<u8>, secmp_proto::Error> {
+    let (old, rest) = cell
+        .split_first_chunk::<NONCE_LEN>()
+        .ok_or(secmp_proto::Error::Rejected)?;
+    let (hdr_ct, body) = rest
+        .split_at_checked(HDR_CT_LEN)
+        .ok_or(secmp_proto::Error::Rejected)?;
+    let ad = [
+        Label::TrHdr.as_bytes(),
+        fixture.receiver.sb_kat().as_slice(),
+    ]
+    .concat();
+    let header = Aead::open(hk, old, &ad, hdr_ct)?;
+    let sealed = Aead::seal(hk, Nonce24::from_bytes_kat(*nonce), &ad, &header)?;
+    Ok([nonce.as_slice(), &sealed, body].concat())
 }
 
 /// One call of a TR target: take the receiver's state out of `slot`, decrypt `cell`, put back the unchanged state
@@ -3970,13 +4044,87 @@ fn tr_targets(n: usize) -> [Target; 5] {
     ]
 }
 
-/// Every target (`evaluate`), then the inline A/A control over the full target set (ADR-041 (3)) and the
-/// sensitivity control (Amendment 1 (2)); the third value is the reason of a `CONTROL_FAIL` run (either control
-/// failed, or the A/A′ placement control or one of the three same-content controls gave FAIL, ADR-042 and its
-/// Amendments 2 and 3, TEST-SPEC-M5 CT-06; every target verdict is then `CONTROL_FAIL`).
-fn run(
-    rules: Rules,
-) -> Result<(Clock, Vec<Outcome>, Option<String>, Sensitivity), secmp_crypto::Error> {
+/// The informative targets (ADR-042 Amendment 5; `expect::CT_INFORMATIVE_TARGETS`): measured after the targets, no
+/// verdict.
+fn informative_targets(n: usize) -> [Target; 1] {
+    [claimed(CLAIM_TR_NONCE, n, tr_decrypt_nonce_dependence)]
+}
+
+/// An informative target's record (ADR-042 Amendment 5): its calibration and two measurements, no verdict.
+struct Informative {
+    target: Target,
+    calibration: Calibration,
+    first: Option<Measurement>,
+    second: Option<Measurement>,
+}
+
+impl Informative {
+    /// Calibrate `target` and measure it twice with the calibrated `k`, like a target's pair (no re-batch, no verdict,
+    /// no A/A pass). The measurements are `None` where the calibration found no `k` or the clock has no quantum.
+    fn measure(
+        target: Target,
+        stream: &mut Stream,
+        clock: &Clock,
+        rules: Rules,
+    ) -> Result<Self, secmp_crypto::Error> {
+        let calibration = calibrate(&target, stream, clock, rules)?;
+        calibration.progress(target.name);
+        let mut record = Self {
+            target,
+            calibration,
+            first: None,
+            second: None,
+        };
+        let (Some(k), Some(quantum)) = (record.calibration.k, clock.quantum()) else {
+            return Ok(record);
+        };
+        let batch = usize::try_from(k).unwrap_or(1);
+        for (phase, slot) in [("first", &mut record.first), ("second", &mut record.second)] {
+            let samples = (record.target.run)(record.target.samples, batch, stream)?;
+            let m = Measurement::of(&samples, quantum, clock.resolution_ticks, k);
+            progress(record.target.name, phase, Some(k), Some(m.median_ticks));
+            *slot = Some(m);
+        }
+        Ok(record)
+    }
+
+    fn json(&self, clock: &Clock, rules: Rules) -> String {
+        let measurement =
+            |m: Option<&Measurement>| m.map_or_else(|| "null".to_owned(), |m| m.json(clock, rules));
+        let (site, precheck) = claim_json(self.target.name);
+        let [class0, class1] = self.target.classes;
+        format!(
+            "{{\"name\":{},\"class0\":{},\"class1\":{},\"samples\":{},\"informative\":true,\"verdict\":null,\"site\":{site},\"precheck\":{precheck},\"k\":{},\"calibration\":{},\"first\":{},\"second\":{}}}",
+            serde_json::Value::from(self.target.name),
+            serde_json::Value::from(class0),
+            serde_json::Value::from(class1),
+            self.target.samples,
+            self.calibration
+                .k
+                .map_or_else(|| "null".to_owned(), |k| k.to_string()),
+            self.calibration.json(clock),
+            measurement(self.first.as_ref()),
+            measurement(self.second.as_ref())
+        )
+    }
+}
+
+/// What `run` measured: the clock, the target outcomes, the `CONTROL_FAIL` reason, the sensitivity control and the
+/// informative targets.
+type RunRecord = (
+    Clock,
+    Vec<Outcome>,
+    Option<String>,
+    Sensitivity,
+    Vec<Informative>,
+);
+
+/// Every target (`evaluate`), then the informative targets (ADR-042 Amendment 5), the inline A/A control over the full
+/// target set (ADR-041 (3)) and the sensitivity control (Amendment 1 (2)). The third value is the reason of a
+/// `CONTROL_FAIL` run, which is set if either control failed, or if the A/A′ placement control or one of the three
+/// same-content controls gave FAIL (ADR-042 and its Amendments 2 and 3, TEST-SPEC-M5 CT-06); every target verdict is
+/// then `CONTROL_FAIL`.
+fn run(rules: Rules) -> Result<RunRecord, secmp_crypto::Error> {
     let clock = Clock::probe();
     let scale: usize = ct_scale().and_then(|s| s.parse().ok()).unwrap_or(1).max(1);
     let mut stream = Stream::new()?;
@@ -3990,6 +4138,10 @@ fn run(
         .chain(m5_targets(n))
     {
         out.push(evaluate(target, &mut stream, &clock, rules)?);
+    }
+    let mut informative = Vec::new();
+    for target in informative_targets(n) {
+        informative.push(Informative::measure(target, &mut stream, &clock, rules)?);
     }
     let aa_fail = aa_control(&mut out, &mut stream, &clock, rules)?;
     let sensitivity = sensitivity_control(&out, &mut stream, &clock);
@@ -4023,7 +4175,7 @@ fn run(
             outcome.verdict = Verdict::ControlFail;
         }
     }
-    Ok((clock, out, control_fail, sensitivity))
+    Ok((clock, out, control_fail, sensitivity, informative))
 }
 
 /// The sensitivity control of a run (ADR-041 Amendment 1 (2), judged since Amendment 3 by the verdict rule it
@@ -4451,7 +4603,7 @@ fn main() -> ExitCode {
         let _ = std::fs::write(path, error);
         return ExitCode::FAILURE;
     };
-    let Ok((clock, outcomes, control_fail, sensitivity)) = run(rules) else {
+    let Ok((clock, outcomes, control_fail, sensitivity, informative)) = run(rules) else {
         // the gate prints the reason of an aborted run (`ctreport::ct_table_for` reads `error`)
         let error = if TR_ACCEPTED.load(Ordering::Relaxed) {
             "bench aborted: RatchetState::decrypt_with accepted a cell of a TR target, which must be rejected in both classes".to_owned()
@@ -4473,7 +4625,7 @@ fn main() -> ExitCode {
         "FAIL"
     };
     let json = format!(
-        "{{\"thresholds\":{},{}\"sign\":\"{SIGN}\",\"clock\":{},\"host\":{},\"bench_sha256\":{},\"run_verdict\":\"{run_verdict}\",\"run_reason\":{},\"sensitivity_control\":{},\"min_leak_same_content\":{},\"results\":[{}]}}",
+        "{{\"thresholds\":{},{}\"sign\":\"{SIGN}\",\"clock\":{},\"host\":{},\"bench_sha256\":{},\"run_verdict\":\"{run_verdict}\",\"run_reason\":{},\"sensitivity_control\":{},\"min_leak_same_content\":{},\"informative\":[{}],\"results\":[{}]}}",
         rules.json(),
         // M2 review C3 (c): a shortened run says so, and the gate refuses it
         ct_scale().map_or_else(String::new, |s| format!(
@@ -4486,6 +4638,12 @@ fn main() -> ExitCode {
         serde_json::Value::from(control_fail),
         sensitivity.json(&clock, rules),
         sensitivity.same_content_json(&clock, rules),
+        // ADR-042 Amendment 5: the informative targets, no verdict
+        informative
+            .iter()
+            .map(|i| i.json(&clock, rules))
+            .collect::<Vec<_>>()
+            .join(","),
         outcomes
             .iter()
             .map(|o| o.json(&clock, rules))

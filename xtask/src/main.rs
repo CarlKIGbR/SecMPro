@@ -53,7 +53,7 @@ usage: cargo xtask <command> [options]
     step: [--shard K/N]                     the mutants step's shard (CI: K/8, merged by `step mutants-merge`)
   install-tools [--set NAME] [--nightly]    install the pinned tools (fast | windows | xwin | mutants | miri | fuzz | full | all)
   vectors                                   generate the Rust vectors, compare with vectors/ref, freeze
-  ct-check [--targets current|m2|m4] REPORT... the ct gate's reading of saved ct reports
+  ct-check [--targets current|m2|m4|m5] REPORT... the ct gate's reading of saved ct reports
   repro-check | ops-check                   documented stubs until M11 / M10";
 
 fn run(args: &[String]) -> Result<()> {

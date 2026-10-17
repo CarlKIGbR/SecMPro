@@ -108,6 +108,8 @@ Jobs of `ci.yml` (pinned by `expect::PINNED_JOBS`; the first four are the requir
 
 Integration precondition (OPEN-M6-C-1, closed by spec reading): a contact enters the scheduler only after its first ratchet step, so both parties hold a sending chain before any combined relay link is built.
 
+Driver contract (`scheduler/mod.rs`, ADR-051 Amendment 4): the Balanced round robin advances when a `SEND` frame is completely written (the driver reports every completed frame write with `Scheduler::frame_written`; `last_send` stays at the tick), and an event that arrives during a flush wait is handled right after it, at its arrival time — neither depends on a network fault or on the cost of the cell source.
+
 Nothing that touches the network or wall clock in unit tests; `secmp-client-core::clock` is injectable.
 
 ## 5. CI pipeline (`cargo xtask ci-fast` / `cargo xtask ci-full` mirror it locally)

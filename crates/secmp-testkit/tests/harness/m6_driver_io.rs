@@ -1024,6 +1024,11 @@ fn driver_stashed_connect_is_anchored_at_its_occurrence() {
         let idle = fin1_run(None, connect_fails);
         let active = fin1_run(Some(0), connect_fails);
         assert!(idle.iter().any(|e| e.2 == 4352), "frames were sent");
+        if !connect_fails {
+            // anchored at the occurrence: the connection that completed at 10 100 ticks at 20 100, not at the end of the
+            // flush wait of the pass in which it arrived (20 250 / 20 251)
+            assert!(idle.contains(&(20_100, 1, 4352)), "{idle:?}");
+        }
         assert_eq!(idle, active, "connect fails: {connect_fails}");
     }
 }

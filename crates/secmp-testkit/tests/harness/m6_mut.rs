@@ -1362,7 +1362,7 @@ fn start_io_reports_a_failed_write_and_close_link_closes_the_link() {
     runtime().block_on(async {
         let hold = Hold {
             first: 0,
-            delay_ms: u64::MAX,
+            delay_ms: crate::m6_driver_io::Throttled::FAILING_WRITES,
         };
         let mut rig = hold_rig(hold, vec![(10_000, 10_000)], 65).await;
         rig.run_minutes(2, None).await;

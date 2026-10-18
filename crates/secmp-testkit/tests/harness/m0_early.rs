@@ -4,6 +4,13 @@
 //! (the runner) four of them hold every thread and a failing test behind them never starts, so the mutant times out at 900 s.
 //! The tests here fail within a second and are listed first; none of them loops or waits for a wall clock (the waits are
 //! virtual: the paused tokio clock advances at once when every task is idle).
+//!
+//! **Why the four `m6_activity::activity_comparator_detects_*` tests matter:** they run six-hour simulations; under a mutated
+//! period or clock they never end, hold all four threads of the runner, and a failing test queued behind them is never started.
+//!
+//! **The order is the module name.** nextest lists tests by `binary`, then by the full test path, so `m0_early::…` runs before
+//! `m6_activity::…`. That is a dependency: renaming this file or `m6_activity` (or adding a module that sorts before
+//! `m0_early` with long tests) breaks the guarantee, and `mutants-c1-41ee485.md` ("Timeouts") shows what follows.
 
 use std::time::Duration;
 

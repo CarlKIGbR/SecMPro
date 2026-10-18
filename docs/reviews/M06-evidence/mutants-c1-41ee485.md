@@ -15,10 +15,12 @@ Pin: tests at the commit that follows this file (41ee485 and its documentation c
 
 Run 160 had four TIMEOUT survivors: World::period_of -> Some(0) and Some(1), TokioClock::mono_ms -> 1, write_all (async session) -> Ok(()). On this 32-core machine they were caught; with --test-threads=4 (the runner has 4 cores, run ci4) all four timed out again. Cause: four m6_activity::activity_comparator_detects_* tests run six-hour simulations, which these mutants make endless; they sort first among the harness tests, hold all four threads, and the failing test behind them never starts (the log lists SLOW [>120 s] for exactly those four). Fix: the killers are in module m0_early, which sorts before m6_activity (m0_early::period_of_gives_the_deadline_of_the_first_tick, tokio_clock_follows_the_paused_runtime, async_handshake_writes_its_records, async_session_send_writes_the_request_the_relay_answers) and fail in under a second; the waits in them are bounded by the paused tokio clock (a 60-s virtual timeout), not a wall clock. With 4 test threads (ci4b, ci4c) all four mutants plus AsyncSession::send -> Ok(()) and close_stalled -> Ok(()) are caught. close_stalled -> Ok(()) (a driver that spins at the stall deadline) is killed by a run that stops exactly at the stall bound, so the test cannot spin (m6_mut::close_stalled_closes_a_write_pending_for_the_stall_bound). No timeout is proposed as equivalent.
 
-## Killed: mutant, first failing test, red quote (80)
+## Killed: mutant, first failing test, red quote (81 of the 97, and counters_now -> [0; 4], which was not on the run-160 list: 82 mutants)
 
 | Mutant (as in the re-run) | Test that fails first | Red quote (panic) |
 |---|---|---|
+| secmp-client-core/src/scheduler/core/mod.rs:308:5: replace counters_now -> [u64; 4] with [0; 4] | secmp-client-core scheduler::core::m6_mut::counters_now_moves_when_a_counted_step_runs | crates/secmp-client-core/src/scheduler/core/mod.rs:2039:9: assertion left == right failed, left: [0, 0, 0, 0], right: [0, 0, 1, 2] (WEISUNG M6-C1-4: positive control of the audit; cargo mutants --re counters_now) |
+| secmp-client-core/src/scheduler/core/mod.rs:308:5: replace counters_now -> [u64; 4] with [1; 4] | secmp-client-core scheduler::core::m6_mut::counters_now_moves_when_a_counted_step_runs | crates/secmp-client-core/src/scheduler/core/mod.rs:2039:9: assertion left == right failed, left: [0, 0, 0, 0], right: [0, 0, 1, 2] (WEISUNG M6-C1-4: positive control of the audit; cargo mutants --re counters_now) |
 | secmp-client-core/src/scheduler/core/mod.rs:842:9: replace World::begin_work with () | secmp-testkit::harness m6_mut::begin_work_closes_the_frames_of_the_previous_pass | crates/secmp-testkit/tests/harness/m6_mut.rs:854:5: assertion `left == right` failed: the frame built at the link's start is on time |
 | secmp-client-core/src/scheduler/core/mod.rs:912:13: delete match arm TransportError::Auth in World::queue_error | secmp-testkit::harness m6_mut::queue_error_raises_the_auth_and_rate_alerts_of_a_recv_queue | crates/secmp-testkit/tests/harness/m6_mut.rs:568:5: [QueueRate, QueueRate, QueueRate] |
 | secmp-client-core/src/scheduler/core/mod.rs:1218:55: replace && with \|\| in Scheduler::route_dead | secmp-testkit::harness m6_mut::route_dead_marks_only_the_queue_the_relay_refused | crates/secmp-testkit/tests/harness/m6_mut.rs:503:5: Q1 is live |
@@ -100,7 +102,7 @@ Run 160 had four TIMEOUT survivors: World::period_of -> Some(0) and Some(1), Tok
 | secmp-client-core/src/clock.rs:74:9: replace <impl Clock for TokioClock>::mono_ms -> u64 with 1 | secmp-testkit::harness m0_early::tokio_clock_follows_the_paused_runtime | crates/secmp-testkit/tests/harness/m0_early.rs:39:9: assertion `left == right` failed |
 | secmp-transport/src/driver/session.rs:50:5: replace write_all -> Result<()> with Ok(()) | secmp-testkit::harness m0_early::async_handshake_writes_its_records | crates/secmp-testkit/tests/harness/m0_early.rs:58:9: the handshake completed |
 
-## Not killed: accepted rows in docs/mutants-accepted.md (17)
+## Not killed: accepted rows in docs/mutants-accepted.md (16)
 
 | Mutant | Outcome | Row |
 |---|---|---|
@@ -111,7 +113,6 @@ Run 160 had four TIMEOUT survivors: World::period_of -> Some(0) and Some(1), Tok
 | secmp-client-core/src/scheduler/run.rs:859:34: replace > with >= in Driver<P, D, R, H, W, C>::flush_wait | MissedMutant (final) | equivalent or unreachable: see the row of the same place in docs/mutants-accepted.md |
 | secmp-client-core/src/scheduler/core/mod.rs:751:39: replace \|\| with && in World::prepare_fetch | MissedMutant (final) | equivalent or unreachable: see the row of the same place in docs/mutants-accepted.md |
 | secmp-transport/src/channel.rs:329:20: delete ! in Channel::prepare | MissedMutant (final) | equivalent or unreachable: see the row of the same place in docs/mutants-accepted.md |
-| secmp-client-core/src/scheduler/core/mod.rs:308:5: replace counters_now -> [u64; 4] with [1; 4] | MissedMutant (final) | equivalent or unreachable: see the row of the same place in docs/mutants-accepted.md |
 | secmp-transport/src/channel.rs:289:9: replace Channel::synced with () | MissedMutant (final) | equivalent or unreachable: see the row of the same place in docs/mutants-accepted.md |
 | secmp-transport/src/tor/mod.rs:60:23: replace << with >> in base32 | MissedMutant (final) | equivalent or unreachable: see the row of the same place in docs/mutants-accepted.md |
 | secmp-transport/src/driver/session.rs:241:24: delete ! in AsyncSession<S>::send | MissedMutant (ci4b (4 test threads)) | equivalent or unreachable: see the row of the same place in docs/mutants-accepted.md |
@@ -128,7 +129,7 @@ Computed from the totals of run 160 (7 of 8 shards, CI numbers) plus the survivo
 
 | Package | run 160 caught / mutants | killed here | caught after | floor |
 |---|---|---|---|---|
-| secmp-client-core | 384 / 534 = 71.9 % | 61 | 445 / 534 = 83.3 % | ok |
+| secmp-client-core | 384 / 534 = 71.9 % | 62 | 446 / 534 = 83.5 % | ok |
 | secmp-transport | 277 / 481 = 57.6 % | 19 | 296 / 481 = 61.5 % | ok |
 | secmp-crypto, secmp-proto, secmp-relay | 60.7 %, 71.5 %, 75.2 % | 0 (rows only) | unchanged | ok |
 

@@ -2020,3 +2020,27 @@ impl Scheduler {
             .map(|r| r.cap.queue())
     }
 }
+
+/// Positive control of the tick audit (WEISUNG M6-C1-4, mutants `counters_now -> [0; 4]` / `[1; 4]`): the instrument moves
+/// when counted work happens — a blind audit would pass every tick. The counters are thread-local, so the deltas are exact.
+#[cfg(all(test, feature = "kat"))]
+mod m6_mut {
+    use super::counters_now;
+    use crate::scheduler::conversation::counters;
+
+    #[test]
+    fn counters_now_moves_when_a_counted_step_runs() {
+        let before = counters_now();
+        counters::note_encrypt("m6_mut");
+        counters::note_persist();
+        counters::note_persist();
+        let after = counters_now();
+        let delta: Vec<u64> = after
+            .iter()
+            .zip(before)
+            .map(|(a, b)| a.saturating_sub(b))
+            .collect();
+        // [seal, sign, tr_encrypt, persist]: nothing sealed or signed here, one encryption, two commits
+        assert_eq!(delta, vec![0, 0, 1, 2]);
+    }
+}

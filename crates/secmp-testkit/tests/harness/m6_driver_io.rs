@@ -40,6 +40,11 @@ pub(crate) struct Throttled {
     mute_after: Option<usize>,
 }
 
+impl Throttled {
+    /// The `Hold::delay_ms` that makes the first frame after the handshake fail to write (its flush stays Ok) instead of waiting.
+    pub(crate) const FAILING_WRITES: u64 = u64::MAX;
+}
+
 impl AsyncRead for Throttled {
     fn poll_read(
         mut self: Pin<&mut Self>,
@@ -76,8 +81,8 @@ impl AsyncWrite for Throttled {
             if self.written < gate {
                 limit = limit.min(gate.saturating_sub(self.written));
             } else {
-                if hold.delay_ms == u64::MAX {
-                    // `u64::MAX` marks a failing writer: the first frame after the handshake cannot be written (flush stays Ok)
+                if hold.delay_ms == Throttled::FAILING_WRITES {
+                    // `Throttled::FAILING_WRITES` marks a failing writer: the first frame after the handshake cannot be written (flush stays Ok)
                     return Poll::Ready(Err(std::io::Error::from(std::io::ErrorKind::BrokenPipe)));
                 }
                 let sleep = self.sleep.get_or_insert_with(|| {

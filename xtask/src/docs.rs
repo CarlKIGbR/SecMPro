@@ -42,3 +42,23 @@ fn relay_ops_documents_direct_tls_files() -> Result<()> {
     );
     Ok(())
 }
+
+/// D-02 (DOC-M6-C-2): the scheduler's module doc states the flush bound of obligation (i).
+#[test]
+fn run_module_doc_states_the_flush_bound() -> Result<()> {
+    let run = read("crates/secmp-client-core/src/scheduler/run.rs")?;
+    let doc: String = run
+        .lines()
+        .take_while(|l| l.starts_with("//!") || l.starts_with("// SPDX") || l.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    for needle in [
+        "FLUSH_WAIT_MS",
+        "next_deadline",
+        "driver_jitter_ms",
+        "WRITE_STALL_MS",
+    ] {
+        assert!(doc.contains(needle), "module doc names {needle}");
+    }
+    Ok(())
+}

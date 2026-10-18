@@ -9,7 +9,11 @@
 //! - (i) at every wake the driver takes in what arrived (frames: cheap, no cell source), calls
 //!   [`Scheduler::poll_due`], hands every [`Output::Write`] to its link's writer task (one per link, so the writes of
 //!   different links go out in parallel) and waits until they are written and flushed — at most
-//!   [`FLUSH_WAIT_MS`] — before it calls [`Scheduler::work`]. A write is never awaited beyond that: a link whose write
+//!   [`FLUSH_WAIT_MS`] — before it calls [`Scheduler::work`]. The wait ends at
+//!   `min(now + FLUSH_WAIT_MS, next_deadline − driver_jitter_ms)` ([`Scheduler::next_deadline`], the scheduler's
+//!   `driver_jitter_ms` parameter; `flush_wait`), so a hanging writer of one link cannot delay another link's tick that
+//!   falls inside the wait; on expiry the stalled write stays pending under [`WRITE_STALL_MS`]. A write is never
+//!   awaited beyond that: a link whose write
 //!   is still pending when its next tick comes, or after [`WRITE_STALL_MS`], or whose writer reports a failure, is
 //!   closed (`on_closed`), and no link's write ever holds up another link's ticks or `FETCH`-lead wakes (WEISUNG
 //!   M6-B-5 EXTB-3). Events that arrive during the flush wait are handled right after it, each at the time it arrived (FIN-1),

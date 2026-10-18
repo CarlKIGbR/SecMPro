@@ -151,7 +151,7 @@ struct Up {
     reqs: VecDeque<Req>,
     /// One entry per frame handed to the driver and not yet reported as written ([`Scheduler::frame_written`]), oldest
     /// first: the round-robin position the frame commits when it is completely written (a `SEND`), or `None`.
-    unwritten: VecDeque<Option<usize>>,
+    unwritten: Vec<Option<usize>>,
 }
 
 enum State {
@@ -1895,7 +1895,7 @@ impl Scheduler {
                 fetch_part: None,
                 flight: Flight::new(world.params.max_in_flight),
                 reqs: VecDeque::new(),
-                unwritten: VecDeque::new(),
+                unwritten: Vec::new(),
             }));
             world.out.push(Output::Event(LinkEvent::Up(id)));
         }

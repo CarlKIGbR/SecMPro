@@ -8448,6 +8448,24 @@ mod tests {
             .ok_or_else(|| Error("no negative-control marker".into()))?;
         assert!(negative.contains("VERIFICATION:- FAILED"));
         log.push_str(positive);
+        // M6 Phase C1: the run of the thirteen `secmp-client-core` harnesses incl. K-C1…K-C6 (`kani-m6c1-<sha7>.txt`)
+        let mut c1: Vec<_> = std::fs::read_dir(&evidence)?
+            .filter_map(std::result::Result::ok)
+            .map(|e| e.path())
+            .filter(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with("kani-m6c1-"))
+            })
+            .collect();
+        c1.sort();
+        assert_eq!(c1.len(), 1, "one committed M6 Phase C1 Kani run: {c1:?}");
+        let c1_log = lf(&std::fs::read_to_string(
+            c1.first().ok_or_else(|| Error("no run".into()))?,
+        )?);
+        // the C1 run covers the client-core harnesses again: those of Phase A are replaced by its (newer) summaries
+        log = log.replace(positive, "");
+        log.push_str(&c1_log);
         assert_eq!(
             kani_cover_pin_findings(&kani_covers(&log)?),
             Vec::<String>::new()
@@ -8505,9 +8523,9 @@ mod tests {
     fn kani_refuses_fifteen_harnesses() -> Result<()> {
         let all = expect::KANI_HARNESSES;
         // M5 Phase B: 30 + the three relay harnesses (TEST-SPEC-M5 K-05…K-07); M6 Phase A: + the seven of
-        // `secmp-client-core` (TEST-SPEC-M6 K-01…K-07)
-        assert_eq!(all.len(), 40);
-        assert_eq!(kani_verified(&kani_log(all, 0))?.len(), 40);
+        // `secmp-client-core` (TEST-SPEC-M6 K-01…K-07); M6 Phase C1: + K-C1…K-C6
+        assert_eq!(all.len(), 46);
+        assert_eq!(kani_verified(&kani_log(all, 0))?.len(), 46);
         // a deleted harness: 18 verified, and Kani's own summary says 18 of 18
         let fifteen = all.get(1..).unwrap_or_default();
         assert!(kani_verified(&kani_log(fifteen, 0)).is_err());

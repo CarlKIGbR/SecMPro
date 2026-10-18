@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! The pure decisions of the scheduler core, small enough for Kani (K-01…K-03, K-C1…K-C6) and free of state.
 
-use std::collections::VecDeque;
-
 /// The queue a Balanced slot sends to (spec §10.2): the first queue, from the round-robin pointer `rr`, whose previous
 /// `SEND` is at least `P_q` before the slot `slot_ms` (or that was never sent to). `None`: nothing is due, the slot
 /// carries a `PING`. `queues` is `(last_send_ms, period_ms)` in the fixed round-robin order.
@@ -34,27 +32,27 @@ pub fn tick_time(t_up: u64, k: u32, period_ms: u64) -> Option<u64> {
 /// preparation never changes the answer. `unwritten` holds, oldest first, the position each handed-out frame commits when
 /// it is completely written (a `SEND`), or `None`.
 #[must_use]
-pub fn reserved_rr(unwritten: &VecDeque<Option<usize>>, committed: usize) -> usize {
+pub fn reserved_rr(unwritten: &[Option<usize>], committed: usize) -> usize {
     unwritten.iter().rev().find_map(|n| *n).unwrap_or(committed)
 }
 
 /// A frame is handed to the driver: its commit (the position after a `SEND`, `None` for any other frame) joins the ledger.
 /// Nothing is committed here (A′: the rotation advances only when a write completes).
-pub fn hand_out(unwritten: &mut VecDeque<Option<usize>>, commits: Option<usize>) {
-    unwritten.push_back(commits);
+pub fn hand_out(unwritten: &mut Vec<Option<usize>>, commits: Option<usize>) {
+    unwritten.push(commits);
 }
 
 /// The driver reports the oldest handed-out frame completely written: a `SEND`'s position is committed into `rr`. `false`
 /// on an empty ledger (a report for a frame that was never handed out): nothing changes.
-pub fn complete_oldest(unwritten: &mut VecDeque<Option<usize>>, rr: &mut usize) -> bool {
-    match unwritten.pop_front() {
-        Some(Some(n)) => {
-            *rr = n;
-            true
-        }
-        Some(None) => true,
-        None => false,
+pub fn complete_oldest(unwritten: &mut Vec<Option<usize>>, rr: &mut usize) -> bool {
+    // a `Vec`, not a `VecDeque`: the ledger holds at most `unwritten_max` entries, and the shift is the cost of nothing
+    if unwritten.is_empty() {
+        return false;
     }
+    if let Some(n) = unwritten.remove(0) {
+        *rr = n;
+    }
+    true
 }
 
 /// Whether a tick that hands out `adding` frames keeps a ledger of `len` entries within `max` (`unwritten_max`).

@@ -11,7 +11,10 @@
 
 use secmp_transport::evicted::evicted_is_plausible;
 
-use crate::scheduler::core::pure::{Flight, rr_select, tick_time};
+use crate::scheduler::core::pure::{
+    Flight, complete_oldest, hand_out, ledger_admits, reserved_rr, rr_select, tick_time,
+    unwritten_max,
+};
 use crate::scheduler::params::{backoff_cap, rate_sum_ok};
 use crate::timing::{accept_ceiling, sample_with};
 
@@ -201,4 +204,222 @@ fn kani_evicted_range() {
     assert!(accepted == expected);
     kani::cover!(accepted && present, "an eviction is accepted");
     kani::cover!(!accepted, "an implausible id is refused");
+}
+
+// ---- K-C1…K-C6 (BRIEF M6-C1 item 5, A′ ledger): the unwritten-frame ledger of a link and the round-robin rotation -----
+//
+// Scope (M7 for the rest): the harnesses run the extracted pure functions (`reserved_rr`, `hand_out`, `complete_oldest`,
+// `ledger_admits`, `unwritten_max`; item 10b) on a symbolic ledger. They do not run the in-flight rule over real
+// transitions, queue generations, the abstract persist contract or paired executions. An up link needs a `Channel`, which
+// this crate cannot build under Kani, so `Scheduler` itself is out of reach (item 10b).
+
+/// Symbolic ledger contents: up to four entries (`len`), each `None` (a `FETCH`) or the position a `SEND` commits (`< n`).
+/// The array is the reference the harnesses compare against; no clone of a `Vec` is needed (a clone loop costs Kani tens
+/// of gigabytes).
+fn any_entries(n: usize) -> ([Option<usize>; 4], usize) {
+    let len: usize = kani::any();
+    kani::assume(len <= 4);
+    let entries = [any_entry(n), any_entry(n), any_entry(n), any_entry(n)];
+    (entries, len)
+}
+
+/// The ledger `Vec` holding the first `len` of `entries` (pre-sized: no reallocation under symbolic lengths).
+fn ledger_of(entries: &[Option<usize>; 4], len: usize) -> Vec<Option<usize>> {
+    let mut ledger = Vec::with_capacity(8);
+    for e in entries.iter().take(len) {
+        ledger.push(*e);
+    }
+    ledger
+}
+
+fn any_entry(n: usize) -> Option<usize> {
+    if kani::any() {
+        None
+    } else {
+        let v: usize = kani::any();
+        kani::assume(v < n);
+        Some(v)
+    }
+}
+
+/// The last `Some` of the first `m` entries.
+fn last_some_of_prefix(entries: &[Option<usize>], m: usize) -> Option<usize> {
+    entries.iter().take(m).rev().find_map(|e| *e)
+}
+
+/// K-C1 (FIN2-1): the position handed to the next preparation is a function of the schedule only. With up to four handed-out
+/// frames and any FIFO prefix of them reported written before the preparation, `reserved_rr` equals what it is with no
+/// completion applied (the newest pending successor, else the committed position).
+#[kani::proof]
+#[kani::unwind(7)]
+fn kani_reservation_is_schedule_only() {
+    let n: usize = kani::any();
+    kani::assume(n >= 1 && n <= 3);
+    let committed: usize = kani::any();
+    kani::assume(committed < n);
+    let (entries, len) = any_entries(n);
+    let mut ledger = ledger_of(&entries, len);
+    let none_applied = reserved_rr(&ledger, committed);
+    let mut rr = committed;
+    let m: usize = kani::any();
+    kani::assume(m <= len);
+    for _ in 0..m {
+        assert!(complete_oldest(&mut ledger, &mut rr));
+    }
+    assert!(reserved_rr(&ledger, rr) == none_applied);
+    assert!(none_applied < n);
+    kani::cover!(m > 0 && m < len, "a partial completion prefix");
+}
+
+/// K-C2: reports complete frames in the order they were handed out: after `m` of them `rr` is the last `Some` among the
+/// first `m` entries (unchanged if there is none), the later entries are untouched, and a report on an empty ledger is
+/// refused (`false`) and changes nothing.
+#[kani::proof]
+#[kani::unwind(7)]
+fn kani_frame_written_commits_fifo() {
+    let n: usize = kani::any();
+    kani::assume(n >= 1 && n <= 3);
+    let committed: usize = kani::any();
+    kani::assume(committed < n);
+    let (entries, len) = any_entries(n);
+    let mut live = ledger_of(&entries, len);
+    let m: usize = kani::any();
+    kani::assume(m <= 4);
+    let mut rr = committed;
+    for i in 0..m {
+        let was_empty = live.is_empty();
+        let before = rr;
+        let matched = complete_oldest(&mut live, &mut rr);
+        assert!(matched == !was_empty);
+        if was_empty {
+            assert!(rr == before);
+            assert!(i >= len);
+        }
+    }
+    assert!(rr == last_some_of_prefix(&entries[..len], m).unwrap_or(committed));
+    assert!(live.len() == len.saturating_sub(m));
+    for (a, b) in live.iter().zip(entries.iter().take(len).skip(m)) {
+        assert!(a == b);
+    }
+    kani::cover!(rr != committed, "a commit moves the rotation");
+}
+
+/// K-C3 (A′): a teardown leaves the committed position where the completions put it. The position lives in the link, the
+/// ledger in the up-state that `tear` replaces (`core::mem::replace(&mut link.state, …)`): after any number of completions
+/// and a teardown the ledger is empty and `rr` is the value committed before it — what was handed out and never written
+/// moves nothing.
+#[kani::proof]
+#[kani::unwind(7)]
+fn kani_teardown_keeps_the_committed_rr() {
+    let n: usize = kani::any();
+    kani::assume(n >= 1 && n <= 3);
+    let committed: usize = kani::any();
+    kani::assume(committed < n);
+    let (entries, len) = any_entries(n);
+    let mut ledger = ledger_of(&entries, len);
+    let m: usize = kani::any();
+    kani::assume(m <= len);
+    let mut rr = committed;
+    for _ in 0..m {
+        assert!(complete_oldest(&mut ledger, &mut rr));
+    }
+    let committed_before_teardown = rr;
+    // the teardown: the up-state, with its ledger, is dropped; the link keeps `rr`
+    ledger.clear();
+    assert!(ledger.is_empty());
+    assert!(rr == committed_before_teardown);
+    assert!(rr == last_some_of_prefix(&entries[..len], m).unwrap_or(committed));
+    kani::cover!(m < len, "frames handed out and never written");
+}
+
+/// K-C4: a tick hands a prepared frame out without committing. One frame handed out: the ledger grows by exactly one entry
+/// carrying the position the frame will commit, and `rr` is unchanged (Obtain → Tick → Commit order: the commit is
+/// `complete_oldest`). `last_send` is set inline in `World::tick`, outside the extracted functions, and not covered here.
+#[kani::proof]
+#[kani::unwind(7)]
+fn kani_tick_hands_out_without_commit() {
+    let n: usize = kani::any();
+    kani::assume(n >= 1 && n <= 3);
+    let rr: usize = kani::any();
+    kani::assume(rr < n);
+    let (entries, len) = any_entries(n);
+    kani::assume(len <= 3);
+    let mut ledger = ledger_of(&entries, len);
+    let old_len = ledger.len();
+    let old_reserved = reserved_rr(&ledger, rr);
+    let next_rr = any_entry(n);
+    hand_out(&mut ledger, next_rr);
+    assert!(ledger.len() == old_len + 1);
+    assert!(ledger.last() == Some(&next_rr));
+    // nothing was committed by the hand-out: the next preparation is reserved against the new entry (a SEND), else
+    // against what it was
+    assert!(reserved_rr(&ledger, rr) == next_rr.unwrap_or(old_reserved));
+    kani::cover!(next_rr.is_some(), "a SEND is handed out");
+}
+
+/// K-C5: the deadline arithmetic never wraps. The tick time `t_up + k·P` (`pure::tick_time`) is `Some` for every smaller `k`
+/// whenever it is for `k` and is monotone in `k`; the `FETCH`-lead deadline `slot − lead` and the flush bound
+/// `min(now + FLUSH_WAIT_MS, next_deadline − driver_jitter_ms)` — written inline in `prepare_link` and `Driver::flush_wait`
+/// with saturating operations, here as the same expressions — never exceed the slot, the deadline or `now + 250`.
+#[kani::proof]
+fn kani_deadline_arithmetic_checked() {
+    let t_up: u64 = kani::any();
+    let k: u32 = kani::any();
+    let period = any_period();
+    if let Some(next) = k.checked_add(1)
+        && let Some(later) = tick_time(t_up, next, period)
+    {
+        let now_k = tick_time(t_up, k, period);
+        assert!(now_k.is_some());
+        if let Some(earlier) = now_k {
+            assert!(earlier <= later);
+            assert!(later - earlier == period);
+        }
+        kani::cover!(period > 0, "a later tick exists");
+    }
+    let lead: u64 = kani::any();
+    kani::assume(lead <= 1_000);
+    let slot: u64 = kani::any();
+    assert!(slot.saturating_sub(lead) <= slot);
+    let now: u64 = kani::any();
+    let next_deadline: u64 = kani::any();
+    let jitter: u64 = kani::any();
+    kani::assume(jitter <= 50);
+    let flush = now
+        .saturating_add(250)
+        .min(next_deadline.saturating_sub(jitter));
+    assert!(flush <= now.saturating_add(250));
+    assert!(flush <= next_deadline);
+}
+
+/// K-C6 (item 11): the ledger never exceeds `unwritten_max`. Any sequence of up to `UNWRITTEN_MAX + 2` ticks with no
+/// completion, each handing out one or two frames: a tick that `ledger_admits` refuses tears the link down (`Reason::InFlight`,
+/// modelled as the stop) before it hands anything out, and the ledger length stays within the bound at every step.
+#[kani::proof]
+#[kani::unwind(8)]
+fn kani_unwritten_bound() {
+    // the default `max_in_flight` = 2: `UNWRITTEN_MAX` = 4, six ticks (a symbolic `max_in_flight` cost 14.8 GB)
+    let max = unwritten_max(2);
+    assert!(max == 4);
+    let mut ledger: Vec<Option<usize>> = Vec::with_capacity(8);
+    let mut torn = false;
+    for _ in 0..6 {
+        let adding: usize = kani::any();
+        kani::assume(adding >= 1 && adding <= 2);
+        if ledger_admits(ledger.len(), adding, max) {
+            hand_out(&mut ledger, None);
+            if adding == 2 {
+                hand_out(&mut ledger, None);
+            }
+        } else {
+            assert!(ledger.len() + adding > max);
+            torn = true;
+            break;
+        }
+        assert!(ledger.len() <= max);
+    }
+    assert!(ledger.len() <= max);
+    // max + 2 ticks of at least one frame each cannot all be admitted
+    assert!(torn);
+    kani::cover!(torn && ledger.len() == max, "the bound is reached exactly");
 }

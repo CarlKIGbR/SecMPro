@@ -67,6 +67,12 @@ fn base32(bytes: &[u8]) -> String {
 }
 
 /// The onion host name of `onion`: 56 base32 characters of the 35 bytes, then `.onion` (rend-spec-v3 §6).
+///
+/// This hand-written re-encode stands in for Arti's `HsId`, whose public use needs the `experimental-api` feature of
+/// `arti-client` (OPEN-M6-B-3). Arti then parses the text itself in [`target`]. The checksum and version are checked
+/// when the `Onion` is decoded (`Onion::from_bytes`); there is no Ed25519 point check at this layer (a 32-byte string
+/// that is not a curve point yields a host name that no onion service answers). Fix in M7, once `HsId` is reachable
+/// without the experimental feature.
 #[must_use]
 pub fn onion_host(onion: &Onion) -> String {
     let mut host = base32(onion.as_bytes());
@@ -311,6 +317,104 @@ mod tests {
             assert_eq!(base32(input.as_bytes()), expected, "{input:?}");
         }
         assert_eq!(base32(&[0xff; 35]).len(), 56);
+    }
+
+    /// Strict canonical decoder of an onion address text (rend-spec-v3 §6) into its 35 bytes: exactly 56 lowercase
+    /// base32 characters and one `.onion`, VERSION 3 and a valid checksum (the last two through `Onion::from_bytes`).
+    /// Test-side only: production never parses an onion text (Arti does, from [`onion_host`]).
+    fn decode_onion_text(text: &str) -> Option<Onion> {
+        let label = text.strip_suffix(".onion")?;
+        if label.len() != 56 {
+            return None;
+        }
+        let mut bits = Vec::new();
+        for c in label.bytes() {
+            let v = BASE32.iter().position(|b| *b == c)?;
+            bits.extend((0..5).rev().map(|i| (v >> i) & 1 == 1));
+        }
+        let out: Vec<u8> = bits
+            .as_chunks::<8>()
+            .0
+            .iter()
+            .map(|byte| byte.iter().fold(0_u8, |a, b| (a << 1) | u8::from(*b)))
+            .collect();
+        Onion::from_bytes(&out).ok()
+    }
+
+    /// T-01: the re-encode of `Onion` into the host name is canonical (OPEN-M6-B-3).
+    #[test]
+    fn onion_reencode_canonical_inputs_round_trip() {
+        // (a) the Tor Project's own v3 onion service, as listed at https://support.torproject.org/onionservices/
+        // (the checksum and version it carries are verified by the decoder, so a mistyped address fails here)
+        let known = "2gzyxa5ihm7nsggfxnu52rck2vv4rvmdlkiu3zzui5du4xyclen53wid.onion";
+        let onion = decode_onion_text(known);
+        assert!(onion.is_some(), "the known address decodes");
+        if let Some(onion) = onion {
+            assert_eq!(onion_host(&onion), known);
+            let pubkey = onion.as_bytes().first_chunk::<32>();
+            assert!(pubkey.is_some());
+            if let Some(pubkey) = pubkey {
+                assert!(Onion::from_pubkey(pubkey) == onion);
+            }
+        }
+        // (b) three seeded keys (xorshift64*, fixed seed): encode ∘ decode = identity
+        let mut state = 0x5eed_0005_u64;
+        for _ in 0..3 {
+            let mut key = [0_u8; 32];
+            for chunk in key.chunks_mut(8) {
+                state ^= state >> 12;
+                state ^= state << 25;
+                state ^= state >> 27;
+                let word = state.wrapping_mul(0x2545_f491_4f6c_dd1d).to_be_bytes();
+                chunk.copy_from_slice(word.get(..chunk.len()).unwrap_or(&[]));
+            }
+            let onion = Onion::from_pubkey(&key);
+            let host = onion_host(&onion);
+            assert!(decode_onion_text(&host) == Some(onion), "{host}");
+        }
+    }
+
+    /// T-02: what is not canonical is refused and yields no `Onion`. The refusals are those of `Onion::from_bytes` (length,
+    /// version, checksum) and of the strict text decoder above; there is no Ed25519 point check at this layer (OPEN-M6-B-3,
+    /// M7: Arti's `HsId` needs `experimental-api`).
+    #[test]
+    fn onion_reencode_rejects_noncanonical_text() {
+        let known = "2gzyxa5ihm7nsggfxnu52rck2vv4rvmdlkiu3zzui5du4xyclen53wid.onion";
+        assert!(decode_onion_text(known).is_some());
+        assert!(
+            decode_onion_text(&known.to_uppercase()).is_none(),
+            "upper-case"
+        );
+        let stem = known.trim_end_matches(".onion");
+        assert!(
+            decode_onion_text(&format!("{}.onion", &stem[..55])).is_none(),
+            "55 chars"
+        );
+        assert!(
+            decode_onion_text(&format!("{stem}a.onion")).is_none(),
+            "57 chars"
+        );
+        assert!(
+            decode_onion_text(&format!("{known}.onion")).is_none(),
+            "suffix twice"
+        );
+        assert!(decode_onion_text(stem).is_none(), "no suffix");
+        // wrong checksum: flip a bit of the checksum byte; wrong version: 0x02 and 0x04 (bytes, via from_bytes)
+        let bytes = decode_onion_text(known).map(|o| *o.as_bytes());
+        assert!(bytes.is_some());
+        if let Some(bytes) = bytes {
+            let mut bad = bytes;
+            bad[32] ^= 1;
+            assert!(Onion::from_bytes(&bad).is_err(), "checksum");
+            for v in [0x02, 0x04, 0x00] {
+                let mut bad = bytes;
+                bad[34] = v;
+                assert!(Onion::from_bytes(&bad).is_err(), "version {v}");
+            }
+            assert!(Onion::from_bytes(&bytes[..34]).is_err(), "34 bytes");
+            let long = [bytes.as_slice(), &[0]].concat();
+            assert!(Onion::from_bytes(&long).is_err(), "36 bytes");
+        }
     }
 
     #[test]

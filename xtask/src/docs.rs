@@ -20,9 +20,7 @@ const OPENSSL_PREFIX: &str = "openssl req -x509 -newkey ed25519";
 fn relay_ops_documents_direct_tls_files() -> Result<()> {
     let ops = read("docs/05-relay-ops.md")?;
     let section = |n: &str| -> Result<String> {
-        let start = ops
-            .find(&format!("\n## {n}. "))
-            .ok_or("section missing")?;
+        let start = ops.find(&format!("\n## {n}. ")).ok_or("section missing")?;
         let rest = ops.get(start.saturating_add(1)..).ok_or("section")?;
         let end = rest.find("\n## ").unwrap_or(rest.len());
         Ok(rest.get(..end).ok_or("section")?.to_owned())

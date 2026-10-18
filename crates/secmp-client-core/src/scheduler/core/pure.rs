@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! The pure decisions of the scheduler core, small enough for Kani (K-01…K-03) and free of state.
+//! The pure decisions of the scheduler core, small enough for Kani (K-01…K-03, K-C1…K-C6) and free of state.
+
+use std::collections::VecDeque;
 
 /// The queue a Balanced slot sends to (spec §10.2): the first queue, from the round-robin pointer `rr`, whose previous
 /// `SEND` is at least `P_q` before the slot `slot_ms` (or that was never sent to). `None`: nothing is due, the slot
@@ -25,6 +27,40 @@ pub fn rr_select(rr: usize, queues: &[(Option<u64>, u64)], slot_ms: u64) -> Opti
 #[must_use]
 pub fn tick_time(t_up: u64, k: u32, period_ms: u64) -> Option<u64> {
     u64::from(k).checked_mul(period_ms)?.checked_add(t_up)
+}
+
+/// The round-robin position the next `SEND` preparation starts from (FIN2-1): the successor the newest still-unwritten
+/// `SEND` will commit, else the committed position `committed`. Whether a write completed before or after the
+/// preparation never changes the answer. `unwritten` holds, oldest first, the position each handed-out frame commits when
+/// it is completely written (a `SEND`), or `None`.
+#[must_use]
+pub fn reserved_rr(unwritten: &VecDeque<Option<usize>>, committed: usize) -> usize {
+    unwritten.iter().rev().find_map(|n| *n).unwrap_or(committed)
+}
+
+/// A frame is handed to the driver: its commit (the position after a `SEND`, `None` for any other frame) joins the ledger.
+/// Nothing is committed here (A′: the rotation advances only when a write completes).
+pub fn hand_out(unwritten: &mut VecDeque<Option<usize>>, commits: Option<usize>) {
+    unwritten.push_back(commits);
+}
+
+/// The driver reports the oldest handed-out frame completely written: a `SEND`'s position is committed into `rr`. `false`
+/// on an empty ledger (a report for a frame that was never handed out): nothing changes.
+pub fn complete_oldest(unwritten: &mut VecDeque<Option<usize>>, rr: &mut usize) -> bool {
+    match unwritten.pop_front() {
+        Some(Some(n)) => {
+            *rr = n;
+            true
+        }
+        Some(None) => true,
+        None => false,
+    }
+}
+
+/// Whether a tick that hands out `adding` frames keeps a ledger of `len` entries within `max` (`unwritten_max`).
+#[must_use]
+pub const fn ledger_admits(len: usize, adding: usize, max: usize) -> bool {
+    len.saturating_add(adding) <= max
 }
 
 /// The most frames a link may hold handed out and not yet reported written (`UNWRITTEN_MAX`): a tick carries at most two

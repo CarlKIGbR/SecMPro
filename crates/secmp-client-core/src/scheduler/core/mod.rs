@@ -43,7 +43,10 @@ use crate::scheduler::types::{
 use crate::timing::{TimingRng, Unavailable};
 
 use self::backoff::reconnect_delay;
-use self::pure::{Flight, rr_select, tick_time, unwritten_max};
+use self::pure::{
+    Flight, complete_oldest, hand_out, ledger_admits, reserved_rr, rr_select, tick_time,
+    unwritten_max,
+};
 
 /// Why a scheduler call was refused (nothing changed).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -545,7 +548,7 @@ impl World {
         let adding = usize::from(up.send_part.is_some())
             .saturating_add(usize::from(up.fetch_part.is_some()));
         let unwritten_max = unwritten_max(self.params.max_in_flight);
-        if up.unwritten.len().saturating_add(adding) > unwritten_max {
+        if !ledger_admits(up.unwritten.len(), adding, unwritten_max) {
             return TickResult::Tear(Reason::InFlight);
         }
         let mut sent_to = None;
@@ -564,7 +567,7 @@ impl World {
             } else {
                 None
             };
-            up.unwritten.push_back(commits);
+            hand_out(&mut up.unwritten, commits);
             debug_assert!(up.unwritten.len() <= unwritten_max);
             self.out.push(Output::Write {
                 link: up.id,
@@ -614,12 +617,7 @@ impl World {
             if needs_send && up.send_part.is_none() {
                 // the successor the newest unwritten SEND will commit, else the committed position (FIN2-1): the
                 // choice never depends on whether a write completed before or after this preparation
-                let rr = up
-                    .unwritten
-                    .iter()
-                    .rev()
-                    .find_map(|n| *n)
-                    .unwrap_or(link.rr);
+                let rr = reserved_rr(&up.unwritten, link.rr);
                 tear = self.prepare_send(rr, up, spec, slot, now, source);
             }
             // a tick's parts go out SEND first (`tick`): its FETCH is sealed only after its SEND, so the counters are in
@@ -1854,13 +1852,8 @@ impl Scheduler {
             if let State::Up(up) = &mut l.state
                 && up.id == link
             {
-                match up.unwritten.pop_front() {
-                    Some(Some(n)) => l.rr = n,
-                    Some(None) => {}
-                    None => {
-                        self.world.unmatched_written =
-                            self.world.unmatched_written.saturating_add(1);
-                    }
+                if !complete_oldest(&mut up.unwritten, &mut l.rr) {
+                    self.world.unmatched_written = self.world.unmatched_written.saturating_add(1);
                 }
                 return;
             }

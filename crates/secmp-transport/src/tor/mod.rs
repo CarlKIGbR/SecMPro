@@ -344,7 +344,8 @@ mod tests {
     /// T-01: the re-encode of `Onion` into the host name is canonical (OPEN-M6-B-3).
     #[test]
     fn onion_reencode_canonical_inputs_round_trip() {
-        // (a) the Tor Project's own v3 onion service, as listed at https://support.torproject.org/onionservices/
+        // (a) the Tor Project's own v3 onion service, as listed at https://support.torproject.org/onionservices/ —
+        // cited from memory (no network here), validated by checksum/version in the decoder.
         // (the checksum and version it carries are verified by the decoder, so a mistyped address fails here)
         let known = "2gzyxa5ihm7nsggfxnu52rck2vv4rvmdlkiu3zzui5du4xyclen53wid.onion";
         let onion = decode_onion_text(known);
@@ -399,6 +400,17 @@ mod tests {
             "suffix twice"
         );
         assert!(decode_onion_text(stem).is_none(), "no suffix");
+        // a checksum-corrupted address (character 52 lies wholly in the 2 checksum bytes, bits 256..272)
+        let mut corrupted: Vec<char> = known.chars().collect();
+        if let Some(c) = corrupted.get_mut(52) {
+            *c = if *c == 'a' { 'b' } else { 'a' };
+        }
+        let corrupted: String = corrupted.into_iter().collect();
+        assert!(corrupted != known);
+        assert!(
+            decode_onion_text(&corrupted).is_none(),
+            "checksum-corrupted text"
+        );
         // wrong checksum: flip a bit of the checksum byte; wrong version: 0x02 and 0x04 (bytes, via from_bytes)
         let bytes = decode_onion_text(known).map(|o| *o.as_bytes());
         assert!(bytes.is_some());

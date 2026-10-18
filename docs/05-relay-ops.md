@@ -174,7 +174,7 @@ Changing `queue_capacity`, `cell_ttl_hours` or frame sizes changes protocol beha
 
 - rustls with the `aws-lc-rs` provider, TLS 1.3 only, key exchange groups `[X25519MLKEM768]` only, ALPN `secmp/1`, no session tickets, no 0-RTT, no client certificates.
 - Certificate: self-signed Ed25519 (or ML-DSA-65 once rustls stabilises signing), long-lived, pinned by clients via `RelayRef.direct.spki_sha256`. Web PKI is not used.
-- Certificate and key are files the operator makes and names in `[listen]` as `direct_tls_cert` and `direct_tls_key` (both DER; required when `direct_tls` is not empty, refused otherwise). With `openssl`:
+- Certificate and key are files the operator makes and names in `[listen]` as `direct_tls_cert` and `direct_tls_key` (both DER; required when `direct_tls` is not empty, refused otherwise). With `openssl` (OPEN-M6-09, prefix from docs/reviews/M06-planning/OPEN-M6.md):
   ```
   openssl req -x509 -newkey ed25519 -nodes -days 3650 -subj "/CN=secmp-relay" -keyout relay-tls.pem -outform DER -out relay-tls.der
   openssl pkey -in relay-tls.pem -outform DER -out relay-tls.key

@@ -1132,6 +1132,17 @@ required job (`ct`, `mutants`, `proverif-hx`) is not green.
   into `core/pure.rs` it should call them. K-C6 fixes `max_in_flight` = 2 (a symbolic value cost 14.8 GB under Kani).
 - **Infra note for the owner.** The first attempt at K-C4 (a `VecDeque` ledger) ran one `cbmc` to 97 GB RSS; the container has
   no memory limit, and it could not be killed from the session.
+- **OPEN-M6-B-1 measured (item 6, R-01 `m6_driver_io::receive_throughput_per_fetch_is_measured`).** Balanced, one recv queue, four cells
+  stored before the first `FETCH_MULTI`, 5 ms per received cell: the cells are committed at 11, 21, 31 and 41 s — **one cell per
+  response** (10 s apart) — and acknowledged at 21, 31, 41 and 51 s — **one period after the commit**, per cell
+  (`target/m6-evidence/R-01.txt`). The fix needs a core API (a deferred-commit outcome of `deliver`): M7 entry.
+- **`Scheduler::frame_written` is a trusted-caller contract (item 10, Astra FINAL3 (e)).** A report on an up link with an empty ledger is
+  counted (`unmatched_written`, asserted 0 in debug builds by the tokio driver); a duplicate report while the ledger is not empty cannot
+  be told from a genuine one — a frame carries no id — and pops the oldest entry. Detecting it needs an API change (a frame id): M7.
+- **Kani scope (item 5, M7).** K-C1…K-C6 prove the ledger and reservation functions (`core/pure.rs`) on a symbolic ledger. Not covered, M7:
+  the in-flight rule over real transitions, queue generations, the abstract persist contract and paired executions; `Scheduler`
+  itself is out of Kani's reach from `secmp-client-core` (an up link needs a `Channel`).
+- **OPEN-M6-B-3 (item 7).** The onion host re-encode substitutes for Arti's `HsId`; no Ed25519 point check at this layer; fix in M7.
 
 ## 8. Blocked / questions for the reviewer or owner
 
@@ -1139,6 +1150,39 @@ required job (`ct`, `mutants`, `proverif-hx`) is not green.
 
 The per-shard first-run / second-run / job minutes of runs 156 and 160, the cause and the options are in docs/08 (ADR-047 Amendment 7) and
 `docs/reviews/M06-evidence/shard-times-c1.txt`; `MUTANT_SHARDS` is 12 since `ci(mutants): ADR-047 Amendment 7 — 12 shards`.
+
+### OPEN-M6-B-5 — memo: `socket2` for keepalive timings and `TCP_USER_TIMEOUT` (BRIEF M6-C1 item 18; memo only, no `Cargo.toml` change)
+
+- **Why.** The direct link's socket (`tls::tcp_socket`, GLMB-1) has keepalive on and Nagle off, but no timings: the kernel's
+  defaults (2 h before the first probe) never decide, and a black-holed link is closed only by the driver's own bounds — unanswered
+  requests hit the in-flight bound at the third tick (≤ 3 × the slowest period = 240 s), a write that does not drain hits
+  `WRITE_STALL_MS` (10 s). Keepalive time/interval/retries and `TCP_USER_TIMEOUT` need `setsockopt`, which tokio does not expose.
+  With them a dead direct link would be closed by the kernel after about 60 s (for example `TCP_USER_TIMEOUT` 60 s, keepalive
+  30 s / 10 s / 3) instead of up to 240 s. It matters for the direct mode only (testing / own-VPN use, `docs/05` §7); the onion mode
+  has the Tor circuit's own liveness.
+- **What it would take.** `socket2` 0.6.5 is already in `Cargo.lock` (tokio, tokio-rustls, arti-client and turmoil use it; `cargo tree
+  -i socket2` shows its feature `all` enabled by tokio, which is the feature `TcpKeepalive::with_interval`/`with_retries` and
+  `Socket::set_tcp_user_timeout` need). The change is a **new direct dependency of `secmp-transport`** (`socket2 = { workspace = true,
+  features = ["all"] }`) and nothing new in the lock file: `tokio::net::TcpSocket` → `socket2::SockRef::from(&socket)` → `set_tcp_keepalive`,
+  `set_tcp_user_timeout`. No `unsafe` in our crates (socket2's `unsafe` is inside the crate, behind a safe API).
+- **Alternatives.** (1) Stay with the 240-s in-flight bound (today; costs up to 4 min of a dead direct link, no dependency). (2) `std` or
+  tokio alone: `std::net` and tokio offer keepalive on/off and nodelay only. (3) `libc` in a new `secmp-sys-net` crate with `unsafe`:
+  one more audited crate, more code than the safe API of `socket2`. (4) An application-level ping already exists (the scheduler's
+  own traffic), so a shorter in-flight bound would change the schedule rules (spec §10.3) — not an option.
+- **Maintenance and audit status.** `socket2` lives in the `rust-lang` GitHub organisation, is a dependency of tokio, mio's ecosystem and
+  hyper, and is released often; version 0.6.5 is in the lock file and passed the 7-day cooldown. In `supply-chain/config.toml` it is a
+  *tracked exemption* (`[[exemptions.socket2]]` 0.6.5, `safe-to-deploy`: "transitive dependency … review at every release"), not an
+  audit. As a direct dependency the invariant (CLAUDE.md §1.9) wants an ADR entry and a `cargo vet` record: an `audits` entry for
+  0.6.5 by the reviewer after reading its `sys/unix.rs`/`sys/windows.rs` `unsafe` blocks, replacing the exemption.
+- **ADR-051 amendment it would need** (text for the reviewer, not applied): "Part 2 (dependencies): `secmp-transport` takes `socket2`
+  (feature `all`) as a direct dependency for the direct link's TCP socket: keepalive 30 s / 10 s / 3 probes (all platforms) and
+  `TCP_USER_TIMEOUT` 60 s (Linux; the other platforms rely on the keepalive and the driver's bounds). The kernel's probes are
+  zero-byte ACKs at a fixed cadence on an otherwise idle connection — a function of the schedule, not of activity; in the direct mode the
+  client's IP is exposed to the host anyway (`docs/05` §7)." Work: `cargo vet certify socket2 0.6.5` (or an import), `expect::NORMAL_DEPENDENCY_ALLOW`
+  (policy), the amendment in `docs/08`, `tls::tcp_socket` and its test (`direct_tcp_socket_has_keepalive_and_no_delay` also reads the
+  timings back), and a Windows run (X-10) since `TCP_USER_TIMEOUT` does not exist there.
+- **Recommendation.** Defer to M7 with the other direct-mode work; the status quo (240 s) is within the threat model (a dead direct link
+  costs availability, not secrecy).
 
 ### BRIEF M6-C1 item 12 (K-12) — BLOCKED 2026-10-18, RESOLVED (WEISUNG M6-C1-3: harnesses kept, risk recorded in §7): seven `secmp-proto` harnesses exceed 8 GB, not one
 

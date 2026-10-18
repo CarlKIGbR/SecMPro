@@ -345,6 +345,9 @@ pub struct VirtualDriver {
     now: u64,
     swept_minute: u64,
     costs: Costs,
+    /// Whether a completed write is reported to the scheduler (`frame_written`); `false` models a driver that never
+    /// does (C2-07: the ledger bound of item 11).
+    report_written: bool,
 }
 
 fn to_usize(n: u64) -> usize {
@@ -364,7 +367,13 @@ impl VirtualDriver {
             now: 0,
             swept_minute: 0,
             costs: Costs::default(),
+            report_written: true,
         }
+    }
+
+    /// Whether completed writes are reported to the scheduler (default `true`).
+    pub const fn report_written(&mut self, on: bool) {
+        self.report_written = on;
     }
 
     /// Model the cost of preparing a cell: `real` virtual milliseconds for a real one, `dummy` for a dummy (every
@@ -821,7 +830,9 @@ impl VirtualDriver {
         };
         if ok {
             // the whole frame is on the stream: the core commits what the frame stood for (FIN-2)
-            self.clients.get_mut(i).unwrap().sched.frame_written(link);
+            if self.report_written {
+                self.clients.get_mut(i).unwrap().sched.frame_written(link);
+            }
             // the write is on the wire: the hook may kill the process here
             let c = self.clients.get_mut(i).unwrap();
             if let Some(mut hook) = c.after_write.take() {

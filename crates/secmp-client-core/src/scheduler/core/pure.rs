@@ -27,6 +27,15 @@ pub fn tick_time(t_up: u64, k: u32, period_ms: u64) -> Option<u64> {
     u64::from(k).checked_mul(period_ms)?.checked_add(t_up)
 }
 
+/// The most frames a link may hold handed out and not yet reported written (`UNWRITTEN_MAX`): a tick carries at most two
+/// frames (`SEND` and `FETCH`), and at most `max_in_flight` ticks are outstanding (spec §10.3, `Flight`), so a driver that
+/// reports its writes keeps the ledger within `2 · max_in_flight`. A tick that would pass it tears the link down with
+/// `Reason::InFlight` — the driver rule "a write still pending at the next tick closes the link" in the core's terms.
+#[must_use]
+pub fn unwritten_max(max_in_flight: u8) -> usize {
+    usize::from(max_in_flight).saturating_mul(2)
+}
+
 /// Ticks whose responses are outstanding (spec §10.3): a third tick with two outstanding tears the link down.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Flight {
@@ -84,6 +93,13 @@ mod tests {
         assert_eq!(tick_time(5, 3, 10), Some(35));
         assert_eq!(tick_time(u64::MAX, 1, 10), None);
         assert_eq!(tick_time(0, u32::MAX, u64::MAX), None);
+    }
+
+    #[test]
+    fn unwritten_max_is_twice_the_ticks_in_flight() {
+        assert_eq!(unwritten_max(2), 4);
+        assert_eq!(unwritten_max(0), 0);
+        assert_eq!(unwritten_max(u8::MAX), 510);
     }
 
     #[test]

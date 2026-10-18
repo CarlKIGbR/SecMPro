@@ -1345,3 +1345,115 @@ fn frame_written_for_a_closed_link_is_not_counted() {
     rig.sched.frame_written(LinkId(9_999));
     assert_eq!(rig.sched.unmatched_written(), 0);
 }
+
+/// `UNWRITTEN_MAX` at the default parameters: `2 * max_in_flight` (spec §10.3, `:678`).
+const UNWRITTEN_MAX_DEFAULT: usize = 4;
+
+/// Run `rig` for `periods` send periods (10 s), stepping 500 ms; return the longest ledger seen on an up link and, if a
+/// link was torn down with `Reason::InFlight`, the number of writes made when the first such teardown was seen.
+fn run_ledger_watch(rig: &mut Rig, periods: u64) -> (usize, Option<usize>) {
+    let (mut longest, mut first_teardown) = (0_usize, None);
+    let mut t = 0_u64;
+    while t < periods.saturating_mul(10_000) {
+        t = t.saturating_add(500);
+        rig.run_to(t);
+        if let Some(n) = rig.link.and_then(|l| rig.sched.unwritten_len(l)) {
+            longest = longest.max(n);
+        }
+        if first_teardown.is_none()
+            && rig
+                .events
+                .iter()
+                .any(|e| matches!(e, LinkEvent::TornDown(_, Reason::InFlight)))
+        {
+            first_teardown = Some(rig.writes.len());
+        }
+    }
+    (longest, first_teardown)
+}
+
+/// C2-04 (item 11): responses arrive but no write is ever reported complete: the ledger is bounded by `UNWRITTEN_MAX` and
+/// the tick that would exceed it tears the link down with `Reason::InFlight`, before any frame of that tick is written.
+/// (The pin: the ledger grows with every tick, 120+ entries, and no teardown — Astra FINAL3 (f).)
+#[test]
+fn unwritten_ledger_is_bounded_without_completions() {
+    let params = Params {
+        phase_max_ms: 0,
+        ..Params::default()
+    };
+    let mut rig = Rig::with(ok_script(), Mode::Balanced, params);
+    rig.remake = Some(ok_script);
+    rig.report_written = false;
+    let (longest, first_teardown) = run_ledger_watch(&mut rig, 200);
+    assert_eq!(
+        first_teardown,
+        Some(UNWRITTEN_MAX_DEFAULT),
+        "the fifth tick tears the link down: {longest} entries at most"
+    );
+    assert_eq!(longest, UNWRITTEN_MAX_DEFAULT, "ledger length");
+}
+
+/// C2-05 (item 11): with every completion reported the bound is never reached: no teardown for 200 periods, and the
+/// ledger is empty after each tick (the rig reports at the write).
+#[test]
+fn unwritten_bound_is_not_reached_with_completions() {
+    let params = Params {
+        phase_max_ms: 0,
+        ..Params::default()
+    };
+    let mut rig = Rig::with(ok_script(), Mode::Balanced, params);
+    rig.remake = Some(ok_script);
+    let (longest, first_teardown) = run_ledger_watch(&mut rig, 200);
+    assert_eq!(first_teardown, None, "no InFlight teardown");
+    assert!(longest <= 2, "ledger length {longest}");
+    assert!(rig.writes.len() >= 190, "writes: {}", rig.writes.len());
+}
+
+/// C2-07 (item 11): the `InFlight` teardown of the ledger bound is itself activity-independent. A virtual driver that never
+/// reports `frame_written` (Balanced, three contacts, seed 103; the AI-01 activity trace against the idle run): the
+/// emitted units — time, size, direction, link — are identical, including the time of the teardown and the replacement
+/// link's first frame, over the first teardown and two reconnect cycles. (The pin: no teardown in either run, one link.)
+#[test]
+fn unwritten_bound_teardown_is_activity_independent() {
+    use crate::m6_activity::{Rig as ActRig, Scenario as ActScenario, activity};
+    let hours = 1;
+    let run = |active: bool| {
+        let sc = ActScenario {
+            mode: Mode::Balanced,
+            contacts: vec![(10_000, 10_000); 3],
+            pool: false,
+            seed: 103,
+        };
+        let mut rig = ActRig::new(&sc, Params::default());
+        rig.sim.report_written(false);
+        let act = activity(0, hours, 3);
+        rig.run(hours, if active { Some(&act) } else { None })
+    };
+    let idle = run(false);
+    let active = run(true);
+    let links = |r: &crate::m6_activity::Run| {
+        let mut slots: Vec<u64> = r.c2r.iter().map(|e| e.slot).collect();
+        slots.dedup();
+        slots
+    };
+    assert!(
+        links(&idle).len() >= 3,
+        "the ledger bound tore the link down twice at least: links {:?}",
+        links(&idle)
+    );
+    assert!(
+        active.to_peers.saturating_add(active.to_x) > 0,
+        "the activity really happened"
+    );
+    assert_eq!(links(&idle), links(&active));
+    assert_eq!(
+        crate::m6_common::max_dt(&idle.c2r, &active.c2r),
+        Some(0),
+        "C2R"
+    );
+    assert_eq!(
+        crate::m6_common::max_dt(&idle.r2c, &active.r2c),
+        Some(0),
+        "R2C"
+    );
+}

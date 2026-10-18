@@ -43,7 +43,7 @@ use crate::scheduler::types::{
 use crate::timing::{TimingRng, Unavailable};
 
 use self::backoff::reconnect_delay;
-use self::pure::{Flight, rr_select, tick_time};
+use self::pure::{Flight, rr_select, tick_time, unwritten_max};
 
 /// Why a scheduler call was refused (nothing changed).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -540,6 +540,14 @@ impl World {
             self.overruns = self.overruns.saturating_add(1);
             return TickResult::Tear(Reason::Overrun);
         }
+        // the ledger bound (spec §10.3, `:678`; `pure::unwritten_max`): a tick that would pass it is not written — the driver
+        // is not reporting its writes, and a write pending at the next tick closes the link on its side anyway
+        let adding = usize::from(up.send_part.is_some())
+            .saturating_add(usize::from(up.fetch_part.is_some()));
+        let unwritten_max = unwritten_max(self.params.max_in_flight);
+        if up.unwritten.len().saturating_add(adding) > unwritten_max {
+            return TickResult::Tear(Reason::InFlight);
+        }
         let mut sent_to = None;
         for part in [up.send_part.take(), up.fetch_part.take()]
             .into_iter()
@@ -557,6 +565,7 @@ impl World {
                 None
             };
             up.unwritten.push_back(commits);
+            debug_assert!(up.unwritten.len() <= unwritten_max);
             self.out.push(Output::Write {
                 link: up.id,
                 at,

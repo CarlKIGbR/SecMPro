@@ -394,6 +394,53 @@ mod tests {
         link_frames_per_sec = 2\nhello_burst = 5\nhello_per_sec = 6\nhello_hs1_timeout_secs = 7\n\
         max_connections = 8\nlink_idle_secs = 10\n[shutdown]\ndrain_secs = 9\n";
 
+    /// The TOML blocks of `docs/05` whose first line is `[listen]`, each cut at its first blank line: the stanzas the document
+    /// shows (§5, §7).
+    fn documented_listen_stanzas() -> Vec<String> {
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/05-relay-ops.md");
+        let text = std::fs::read_to_string(path).unwrap_or_default();
+        let mut out = Vec::new();
+        let (mut inside, mut cut) = (false, false);
+        let mut block = String::new();
+        for line in text.lines().map(str::trim_start) {
+            if !inside {
+                if line == "```toml" {
+                    (inside, cut) = (true, false);
+                    block.clear();
+                }
+            } else if line == "```" {
+                inside = false;
+                if block.starts_with("[listen]") {
+                    out.push(block.clone());
+                }
+            } else if line.is_empty() {
+                cut = true;
+            } else if !cut {
+                block.push_str(line);
+                block.push('\n');
+            }
+        }
+        out
+    }
+
+    /// FIN4-7: the `[listen]` stanzas of `docs/05` parse — the default one (TLS off, the two key lines commented out) and the
+    /// enabled one (all three set). The earlier example set `direct_tls = ""` with the key lines, which `Config::parse`
+    /// refuses.
+    #[test]
+    fn documented_listen_stanzas_parse() -> Result<()> {
+        let stanzas = documented_listen_stanzas();
+        assert_eq!(stanzas.len(), 2, "§5 and §7 each show one: {stanzas:?}");
+        let mut enabled = 0;
+        for stanza in &stanzas {
+            let text = format!("{stanza}[access]\nkey_file = \"/k\"\n");
+            let c = Config::parse(&text)?;
+            enabled += usize::from(c.direct_tls.is_some());
+        }
+        assert_eq!(enabled, 1, "one stanza has the direct listener off, one on");
+        Ok(())
+    }
+
     #[test]
     fn every_value_is_taken() -> Result<()> {
         let c = Config::parse(FULL)?;

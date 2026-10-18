@@ -132,8 +132,8 @@ Inside the process (after binding sockets and loading credentials): `mlockall(MC
 [listen]
 tor_loopback = "127.0.0.1:7443"        # C tor forwards the onion port here (no TLS)
 direct_tls   = ""                      # e.g. "0.0.0.0:443"; empty = disabled (default)
-direct_tls_cert = "/etc/secmp/relay-tls.der"  # DER certificate; required when direct_tls is set (§7)
-direct_tls_key  = "/etc/secmp/relay-tls.key"  # its PKCS#8 private key, DER; required when direct_tls is set
+# direct_tls_cert = "/etc/secmp/relay-tls.der"  # DER certificate: required when direct_tls is set, refused otherwise (§7)
+# direct_tls_key  = "/etc/secmp/relay-tls.key"  # its PKCS#8 private key, DER: the same rule (an enabled example is in §7)
 
 [limits]
 queue_budget_bytes    = 6_000_000_000  # queue pool: accounting bound for queue reservations, about 1 % under the allocator footprint (`budget.rs`)
@@ -180,6 +180,14 @@ Changing `queue_capacity`, `cell_ttl_hours` or frame sizes changes protocol beha
   openssl pkey -in relay-tls.pem -outform DER -out relay-tls.key
   ```
   `secmp-relay spki relay-tls.der` prints the pin (SHA-256 of the SubjectPublicKeyInfo) that clients take as `RelayRef.direct.spki_sha256`; delete `relay-tls.pem` after the conversion.
+- The enabled `[listen]` stanza (the two key lines are set exactly when `direct_tls` is not empty):
+  ```toml
+  [listen]
+  tor_loopback    = "127.0.0.1:7443"
+  direct_tls      = "0.0.0.0:443"
+  direct_tls_cert = "/etc/secmp/relay-tls.der"
+  direct_tls_key  = "/etc/secmp/relay-tls.key"
+  ```
 - Behind the TLS stream runs the identical SecMP-LINK handshake and frames.
 - The operator must understand that this listener exposes client IPs to the host and its provider; the docs mark it "testing / own-VPN use".
 

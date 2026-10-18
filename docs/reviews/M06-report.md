@@ -1079,6 +1079,13 @@ required job (`ct`, `mutants`, `proverif-hx`) is not green.
     opt-level is ignored` and `test tests::reads_past_the_end ... error: Undefined Behavior: memory access failed:
     attempting to access 1 byte, but got alloc39564+0x4 which is at or beyond the end of the allocation of size 4 bytes`.
     Detection survives opt-level 3: Miri interprets MIR and ignores the level, so the profile setting does not weaken it.
+- **OPEN-M6-B-3 (HsId re-encode; open → M7).** `tor::onion_host` is a hand-written substitute for Arti's `HsId` (public
+  use needs the `experimental-api` feature of `arti-client`). Checksum and version are checked when the `Onion` is
+  decoded; there is no Ed25519 point check at this layer, so a non-point 32-byte string gives a host name no service
+  answers. Fix in M7. Tests T-01/T-02 (`tor::tests::onion_reencode_*`). Note: production has no onion *text* parser, so
+  T-02's text cases (upper-case, 55/57 characters, `.onion` twice) run against a strict test-side decoder, and the
+  checksum/version/length cases against `Onion::from_bytes`; the brief's "no RelayRef produced" has no production
+  counterpart to assert on.
 - **Mutants CI time (ADR-047 Am. 4).** The second run adds 903 mutants: client-core 601, transport 302. The first run has
   2 411. In the local smoke run (32 cores, `-j 3`) each harness mutant took 1–150 s to build and 67–74 s to test. On
   the 4-core runner the time per shard may come close to the 280-min step budget. The per-shard times of the first PR run

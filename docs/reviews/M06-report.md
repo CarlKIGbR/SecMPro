@@ -1071,6 +1071,14 @@ required job (`ct`, `mutants`, `proverif-hx`) is not green.
   -C opt-level=3
   -Zmiri-backtrace
   ```
+  - **(a)** The `test` profile (the workspace sets `opt-level = 3` for `profile.test.package."*"`, `secmp-crypto` and `secmp-proto`) is what Miri builds: the `-v` lines show
+    `-C opt-level=3 -C debug-assertions=on`.
+  - **(b) Probe M-01 (Phase C1, not committed; `target/fable/ci/miri-probe/`, own `[workspace]`, `[profile.test]
+    opt-level = 3`, one test reading `*p.add(len)` of a 4-byte `Vec`).** `cargo +nightly-2026-09-21 miri test -v` runs
+    with `-C opt-level=3 -C debug-assertions=on` and reports: `warning: Miri does not support optimizations: the
+    opt-level is ignored` and `test tests::reads_past_the_end ... error: Undefined Behavior: memory access failed:
+    attempting to access 1 byte, but got alloc39564+0x4 which is at or beyond the end of the allocation of size 4 bytes`.
+    Detection survives opt-level 3: Miri interprets MIR and ignores the level, so the profile setting does not weaken it.
 - **Mutants CI time (ADR-047 Am. 4).** The second run adds 903 mutants: client-core 601, transport 302. The first run has
   2 411. In the local smoke run (32 cores, `-j 3`) each harness mutant took 1–150 s to build and 67–74 s to test. On
   the 4-core runner the time per shard may come close to the 280-min step budget. The per-shard times of the first PR run

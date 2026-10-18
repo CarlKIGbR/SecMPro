@@ -468,7 +468,7 @@ fn refetch_dedup_by_cell_id() {
 // ---- S-30: response handling against a scripted relay ---------------------------------------------------------------
 
 #[derive(Debug, PartialEq, Eq)]
-enum Call {
+pub(crate) enum Call {
     Relayed(u64, u64),
     Evicted(u64),
     Failed(SendFailure),
@@ -477,13 +477,13 @@ enum Call {
 }
 
 #[derive(Default)]
-struct Fake {
-    next: u64,
-    calls: Vec<Call>,
+pub(crate) struct Fake {
+    pub(crate) next: u64,
+    pub(crate) calls: Vec<Call>,
     /// `prepare_cell` is "not ready" before this time (a preparation that finishes late).
-    ready_at: u64,
+    pub(crate) ready_at: u64,
     /// The queues `prepare_cell` was asked for and answered, in order.
-    asked: Vec<QueueId>,
+    pub(crate) asked: Vec<QueueId>,
 }
 
 impl CellSource for Fake {
@@ -519,22 +519,22 @@ impl CellSource for Fake {
 }
 
 /// The scheduler core driven by hand against a scripted relay.
-struct Rig {
-    sched: Scheduler,
-    src: Fake,
-    stream: Scripted,
-    link: Option<LinkId>,
-    writes: Vec<u64>,
-    events: Vec<LinkEvent>,
-    now: u64,
+pub(crate) struct Rig {
+    pub(crate) sched: Scheduler,
+    pub(crate) src: Fake,
+    pub(crate) stream: Scripted,
+    pub(crate) link: Option<LinkId>,
+    pub(crate) writes: Vec<u64>,
+    pub(crate) events: Vec<LinkEvent>,
+    pub(crate) now: u64,
     /// A script for each further connection (a scripted relay serves one connection).
-    remake: Option<fn() -> Script>,
+    pub(crate) remake: Option<fn() -> Script>,
     /// Whether `apply` reports a written frame to the scheduler (`frame_written`); a test that holds its writer sets false.
-    report_written: bool,
+    pub(crate) report_written: bool,
 }
 
 impl Rig {
-    fn new(script: Script, mode: Mode) -> Self {
+    pub(crate) fn new(script: Script, mode: Mode) -> Self {
         Self::with(
             script,
             mode,
@@ -545,7 +545,7 @@ impl Rig {
         )
     }
 
-    fn with(script: Script, mode: Mode, params: Params) -> Self {
+    pub(crate) fn with(script: Script, mode: Mode, params: Params) -> Self {
         let mut sched = Scheduler::new(params, mode, TimingRng::seeded(3));
         let cap =
             SendCap::from_route([1; 16], &SecretBytes::from_slice(&[9; 32]).unwrap()).unwrap();
@@ -563,7 +563,7 @@ impl Rig {
         }
     }
 
-    fn apply(&mut self, outs: Vec<Output>) {
+    pub(crate) fn apply(&mut self, outs: Vec<Output>) {
         let mut queue: std::collections::VecDeque<Output> = outs.into();
         while let Some(o) = queue.pop_front() {
             match o {
@@ -625,7 +625,7 @@ impl Rig {
 
     /// The driver wakes at `t` (not at a deadline): what is due is flushed first, then the work runs (the split API of
     /// reviewer VD-M6-A-12; the work is modelled as instantaneous).
-    fn poll_at(&mut self, t: u64) {
+    pub(crate) fn poll_at(&mut self, t: u64) {
         self.now = t;
         let outs = self.sched.poll_due(t).unwrap();
         self.apply(outs);
@@ -634,7 +634,7 @@ impl Rig {
         self.sched.prepared_until(t);
     }
 
-    fn run_to(&mut self, t_end: u64) {
+    pub(crate) fn run_to(&mut self, t_end: u64) {
         loop {
             match self.sched.next_deadline() {
                 Some(t) if t <= t_end => self.poll_at(t.max(self.now)),
@@ -645,7 +645,7 @@ impl Rig {
     }
 }
 
-fn send_script() -> Script {
+pub(crate) fn send_script() -> Script {
     Box::new(|request: &Request, n| {
         let seq = request.cmd_seq;
         let resp = match n {
@@ -823,7 +823,7 @@ fn sender_noqueue_discards_cell_id_map() {
     );
 }
 
-fn ok_script() -> Script {
+pub(crate) fn ok_script() -> Script {
     Box::new(|request: &Request, n| {
         vec![Response {
             cmd_seq: request.cmd_seq,
@@ -1278,7 +1278,7 @@ fn balanced_rr_reserves_the_successor_of_an_unwritten_send() {
 }
 
 /// Three send queues on relay 0 (periods 10 s), the first being the rig's own: `[Q0, Q1, Q2]`.
-fn rig_with_three_queues(rig: &mut Rig) -> Vec<QueueId> {
+pub(crate) fn rig_with_three_queues(rig: &mut Rig) -> Vec<QueueId> {
     let mut queues = vec![QueueId(0)];
     for route in [2_u8, 3] {
         let cap =

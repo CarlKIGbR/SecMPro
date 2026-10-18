@@ -306,3 +306,61 @@ impl<S: Read + Write> Session<S> {
         Ok(response)
     }
 }
+
+#[cfg(test)]
+mod m6_mut {
+    //! `read_exact` on streams that stumble (mutants #160, WEISUNG M6-C1-2).
+
+    use std::io::{Error as IoError, ErrorKind, Read};
+
+    use super::*;
+
+    /// Yields the scripted results in order, then the end of the stream.
+    struct Script(Vec<std::io::Result<Vec<u8>>>);
+
+    impl Read for Script {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            if self.0.is_empty() {
+                return Ok(0);
+            }
+            match self.0.remove(0) {
+                Ok(bytes) => {
+                    let n = bytes.len().min(buf.len());
+                    if let (Some(dst), Some(src)) = (buf.get_mut(..n), bytes.get(..n)) {
+                        dst.copy_from_slice(src);
+                    }
+                    Ok(n)
+                }
+                Err(e) => Err(e),
+            }
+        }
+    }
+
+    /// `session.rs:57` (`e.kind() == ErrorKind::Interrupted` → `true` / `false` / `!=`): an interrupted read is retried, any other
+    /// error ends the read as `Closed` — also when more data would follow.
+    #[test]
+    fn m6_mut_read_exact_retries_only_interrupted_reads() {
+        let mut buf = [0_u8; 4];
+        let mut interrupted = Script(vec![
+            Err(IoError::from(ErrorKind::Interrupted)),
+            Ok(vec![1, 2]),
+            Err(IoError::from(ErrorKind::Interrupted)),
+            Ok(vec![3, 4]),
+        ]);
+        assert!(read_exact(&mut interrupted, &mut buf).is_ok());
+        assert_eq!(buf, [1, 2, 3, 4]);
+        let mut broken = Script(vec![
+            Err(IoError::from(ErrorKind::BrokenPipe)),
+            Ok(vec![1, 2, 3, 4]),
+        ]);
+        assert!(matches!(
+            read_exact(&mut broken, &mut [0_u8; 4]),
+            Err(Error::Closed)
+        ));
+        let mut short = Script(vec![Ok(vec![1, 2])]);
+        assert!(matches!(
+            read_exact(&mut short, &mut [0_u8; 4]),
+            Err(Error::Closed)
+        ));
+    }
+}

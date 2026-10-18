@@ -229,6 +229,21 @@ impl core::fmt::Debug for SendCap {
 mod tests {
     use super::*;
 
+    /// Mutants #160 (`caps.rs:20`, `+` → `*` twice in `CAP_LEN`): `ver` 1 ‖ id 16 ‖ seed 32.
+    #[test]
+    fn m6_mut_cap_len_is_version_id_seed() {
+        assert_eq!(CAP_LEN, 49);
+    }
+
+    /// Mutants #160 (`caps.rs:43`, `Debug for QueueRef` → `Ok(Default::default())`): the debug form is fixed and names no id.
+    #[test]
+    fn m6_mut_queue_ref_debug_names_no_id() {
+        assert_eq!(
+            format!("{:?}", QueueRef::from_rid([0x7a; 16])),
+            "QueueRef(..)"
+        );
+    }
+
     fn seed(first: u8, last: u8) -> Result<SecretBytes<32>> {
         let mut bytes = [0x42_u8; 32];
         if let Some(b) = bytes.first_mut() {

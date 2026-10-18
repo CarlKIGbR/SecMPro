@@ -24,13 +24,13 @@ const HANDSHAKE: usize = 9 + 2856;
 
 /// How one connection's first frame is held back: `first` bytes of it go out at once, the rest after `delay_ms`.
 #[derive(Clone, Copy)]
-struct Hold {
-    first: usize,
-    delay_ms: u64,
+pub(crate) struct Hold {
+    pub(crate) first: usize,
+    pub(crate) delay_ms: u64,
 }
 
 /// A stream that holds back its first frame after the handshake (see [`Hold`]).
-struct Throttled {
+pub(crate) struct Throttled {
     inner: DuplexStream,
     written: usize,
     hold: Option<Hold>,
@@ -76,6 +76,10 @@ impl AsyncWrite for Throttled {
             if self.written < gate {
                 limit = limit.min(gate.saturating_sub(self.written));
             } else {
+                if hold.delay_ms == u64::MAX {
+                    // `u64::MAX` marks a failing writer: the first frame after the handshake cannot be written (flush stays Ok)
+                    return Poll::Ready(Err(std::io::Error::from(std::io::ErrorKind::BrokenPipe)));
+                }
                 let sleep = self.sleep.get_or_insert_with(|| {
                     Box::pin(tokio::time::sleep(std::time::Duration::from_millis(
                         hold.delay_ms,
@@ -107,7 +111,7 @@ impl AsyncWrite for Throttled {
 /// The `MemProvider` whose connection number `which` (counted from 0) holds back its first frame; every connect may
 /// answer `answer_ms` late.
 #[derive(Clone)]
-struct Holding {
+pub(crate) struct Holding {
     inner: MemProvider,
     which: usize,
     hold: Option<Hold>,
@@ -127,7 +131,12 @@ struct Holding {
 }
 
 impl Holding {
-    fn new(inner: MemProvider, which: usize, hold: Option<Hold>, answer_ms: u64) -> Self {
+    pub(crate) fn new(
+        inner: MemProvider,
+        which: usize,
+        hold: Option<Hold>,
+        answer_ms: u64,
+    ) -> Self {
         Self {
             inner,
             which,
@@ -189,7 +198,7 @@ impl StreamProvider for Holding {
     }
 }
 
-fn scenario(seed: u64) -> Scenario {
+pub(crate) fn scenario(seed: u64) -> Scenario {
     Scenario {
         mode: Mode::Strict,
         contacts: vec![(10_000, 10_000), (10_000, 10_000)],
@@ -226,7 +235,7 @@ fn run_holding(
 }
 
 /// The link of connection number `n`.
-fn link_of(rig: &TokioRig<Holding>, n: usize) -> LinkId {
+pub(crate) fn link_of(rig: &TokioRig<Holding>, n: usize) -> LinkId {
     let links: Vec<LinkId> = rig
         .x
         .driver
@@ -242,7 +251,7 @@ fn link_of(rig: &TokioRig<Holding>, n: usize) -> LinkId {
     *links.get(n).unwrap()
 }
 
-fn no_phase() -> Params {
+pub(crate) fn no_phase() -> Params {
     Params {
         phase_max_ms: 0,
         ..Params::default()
@@ -411,7 +420,7 @@ fn driver_pending_flush_later_tick_other_link() {
 // ---- EXTB-4: connects ------------------------------------------------------------------------------------------------
 
 /// One Strict contact (two links, no phase) through a provider that answers every connect `answer_ms` late.
-async fn late_rig(answer_ms: u64, seed: u64) -> TokioRig<Holding> {
+pub(crate) async fn late_rig(answer_ms: u64, seed: u64) -> TokioRig<Holding> {
     let setup = Setup::new();
     let provider = Holding::new(setup.provider.clone(), usize::MAX, None, answer_ms);
     let sc = Scenario {
@@ -433,7 +442,7 @@ async fn late_rig(answer_ms: u64, seed: u64) -> TokioRig<Holding> {
 }
 
 /// The connections the client under test (not the set-up) reached the relay with.
-fn client_connects(rig: &TokioRig<Holding>) -> usize {
+pub(crate) fn client_connects(rig: &TokioRig<Holding>) -> usize {
     rig.setup
         .provider
         .connects()

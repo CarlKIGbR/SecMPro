@@ -418,6 +418,53 @@ mod tests {
         );
     }
 
+    /// Mutants #160 (`tls.rs:87`, `&&` → `||` in `is_tls13_hybrid_only`): every condition counts on its own — no cipher suite, a
+    /// TLS 1.2 suite, two groups, or another group each make the provider not hybrid-only.
+    #[test]
+    fn m6_mut_hybrid_only_needs_every_condition() {
+        let base = rustls::crypto::aws_lc_rs::default_provider();
+        let hybrid = || vec![rustls::crypto::aws_lc_rs::kx_group::X25519MLKEM768];
+        let tls13: Vec<_> = base
+            .cipher_suites
+            .iter()
+            .copied()
+            .filter(|s| s.version() == &rustls::version::TLS13)
+            .collect();
+        let make = |cipher_suites, kx_groups| CryptoProvider {
+            cipher_suites,
+            kx_groups,
+            ..rustls::crypto::aws_lc_rs::default_provider()
+        };
+        assert!(is_tls13_hybrid_only(&make(tls13.clone(), hybrid())));
+        assert!(
+            !is_tls13_hybrid_only(&make(Vec::new(), hybrid())),
+            "no suite"
+        );
+        assert!(
+            base.cipher_suites
+                .iter()
+                .any(|s| s.version() != &rustls::version::TLS13),
+            "the default provider has a TLS 1.2 suite"
+        );
+        assert!(
+            !is_tls13_hybrid_only(&make(base.cipher_suites.clone(), hybrid())),
+            "TLS 1.2"
+        );
+        let mut two = hybrid();
+        two.push(rustls::crypto::aws_lc_rs::kx_group::X25519);
+        assert!(
+            !is_tls13_hybrid_only(&make(tls13.clone(), two)),
+            "two groups"
+        );
+        assert!(
+            !is_tls13_hybrid_only(&make(
+                tls13,
+                vec![rustls::crypto::aws_lc_rs::kx_group::X25519]
+            )),
+            "not the hybrid group"
+        );
+    }
+
     #[test]
     fn the_configuration_is_tls13_with_one_hybrid_group() -> Result<()> {
         let config = client_config([7; HASH_LEN])?;

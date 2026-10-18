@@ -7,6 +7,7 @@
 
 mod fixture;
 mod invitation;
+mod m0_early;
 mod m6_activity;
 mod m6_channel;
 mod m6_common;

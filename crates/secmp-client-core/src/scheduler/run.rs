@@ -1335,6 +1335,73 @@ mod tests {
         Cell::from_bytes(&[0x5a; secmp_proto::sizes::CELL_LEN])
     }
 
+    /// Mutants #160 (`Deferred::{relayed, evicted, send_failed, discard, queue_lost}` → `()`): each notification of the core
+    /// is queued to the worker, in order, with what the core said.
+    #[test]
+    fn m6_mut_deferred_queues_every_notification_in_order() {
+        let q = QueueId(4);
+        let mut d = Deferred::default();
+        d.relayed(q, CellToken(7), 11);
+        d.evicted(q, 5);
+        d.send_failed(q, CellToken(8), SendFailure::Auth);
+        d.discard(q, CellToken(9));
+        d.queue_lost(q);
+        assert_eq!(d.jobs.len(), 5);
+        assert!(matches!(
+            d.jobs.first(),
+            Some(Job::Relayed { queue, token, cell_id: 11 }) if *queue == q && *token == CellToken(7)
+        ));
+        assert!(matches!(
+            d.jobs.get(1),
+            Some(Job::Evicted { queue, cell_id: 5 }) if *queue == q
+        ));
+        assert!(matches!(
+            d.jobs.get(2),
+            Some(Job::SendFailed { queue, token, why: SendFailure::Auth })
+                if *queue == q && *token == CellToken(8)
+        ));
+        assert!(matches!(
+            d.jobs.get(3),
+            Some(Job::Discard { queue, token }) if *queue == q && *token == CellToken(9)
+        ));
+        assert!(matches!(d.jobs.get(4), Some(Job::QueueLost { queue }) if *queue == q));
+    }
+
+    /// Mutants #160 (`LinkIo::stop` → `()`): stopping a link's I/O aborts both of its tasks.
+    #[test]
+    fn m6_mut_link_io_stop_aborts_both_tasks() {
+        let Ok(rt) = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+        else {
+            return;
+        };
+        rt.block_on(async {
+            let forever = || {
+                tokio::spawn(async {
+                    loop {
+                        tokio::time::sleep(Duration::from_secs(3_600)).await;
+                    }
+                })
+            };
+            let (tx, _rx) = mpsc::unbounded_channel::<Vec<u8>>();
+            let tasks = [forever(), forever()];
+            let handles = [tasks[0].abort_handle(), tasks[1].abort_handle()];
+            let io = LinkIo {
+                writer: tx,
+                tasks,
+                pending: 0,
+                oldest: None,
+            };
+            tokio::task::yield_now().await;
+            assert!(!handles[0].is_finished() && !handles[1].is_finished());
+            io.stop();
+            tokio::task::yield_now().await;
+            assert!(handles[0].is_finished(), "reader task aborted");
+            assert!(handles[1].is_finished(), "writer task aborted");
+        });
+    }
+
     /// EXTB-2: a delivery asked in an older generation of a queue and finished after its re-creation commits nothing;
     /// the same cell id in the new generation needs its own delivery.
     #[test]

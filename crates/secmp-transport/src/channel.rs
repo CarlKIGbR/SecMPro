@@ -621,6 +621,18 @@ mod tests {
         Ok(Cell::from_bytes(&[7; 4096])?)
     }
 
+    /// Mutants #160 (`channel.rs:180`, `fits` → `true`): `ERR` 7 (rate) and 4 (malformed) fit every command; any other code
+    /// only where the command allows it.
+    #[test]
+    fn m6_mut_fits_allows_only_listed_codes() {
+        for code in [ErrCode::Malformed, ErrCode::Rate] {
+            assert!(fits(code, &[]));
+        }
+        assert!(!fits(ErrCode::Auth, &[]));
+        assert!(!fits(ErrCode::NoQueue, &[ErrCode::Auth]));
+        assert!(fits(ErrCode::Auth, &[ErrCode::NoQueue, ErrCode::Auth]));
+    }
+
     fn stored(cell_id: u64) -> Result<ResponseCmd> {
         Ok(ResponseCmd::Cellr(Cellr::Cell {
             rid: [0; 16],

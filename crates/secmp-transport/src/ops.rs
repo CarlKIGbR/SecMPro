@@ -725,6 +725,31 @@ mod tests {
 
     use super::*;
 
+    /// Mutants #160 (`ops.rs:570`, `fetch_multi_len_ok` → `true` / `&&` → `||`): a `FETCH_MULTI` list has 1 to 32 queues.
+    #[test]
+    fn m6_mut_fetch_multi_len_is_one_to_thirty_two() -> Result<()> {
+        let caps: Vec<RecvCap> = (0..33_u8)
+            .map(|n| RecvCap::from_seed(&SecretBytes::from_slice(&[n.saturating_add(1); 32])?))
+            .collect::<Result<_>>()?;
+        let list =
+            |n: usize| -> Vec<(&RecvCap, CellId)> { caps.iter().take(n).map(|c| (c, 0)).collect() };
+        assert!(!fetch_multi_len_ok(&list(0)));
+        assert!(fetch_multi_len_ok(&list(1)));
+        assert!(fetch_multi_len_ok(&list(32)));
+        assert!(!fetch_multi_len_ok(&list(33)));
+        Ok(())
+    }
+
+    /// Mutants #160 (`ops.rs:378`, `TryFrom<Out> for ()` → `Ok(Default::default())`): only a unit answer is a unit.
+    #[test]
+    fn m6_mut_unit_is_only_the_unit_answer() {
+        assert!(<()>::try_from(Out::Unit).is_ok());
+        assert!(matches!(
+            <()>::try_from(Out::Cells(Vec::new())),
+            Err(Error::Rejected)
+        ));
+    }
+
     fn seeds() -> Result<(SecretBytes<32>, SecretBytes<32>)> {
         Ok((
             SecretBytes::from_slice(&[1; 32])?,

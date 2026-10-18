@@ -12,14 +12,14 @@ use secmp_testkit::harness::{Dir, EntropyPool, START_UNIX, ratchet_pair};
 
 use crate::m6_common::{client, contact, driver, max_dt};
 
-type TestConv = Conversation<MemOutbox, MemPersist, EntropyPool>;
+pub(crate) type TestConv = Conversation<MemOutbox, MemPersist, EntropyPool>;
 
-const A_SEND: QueueId = QueueId(0);
-const A_RECV: QueueId = QueueId(1);
-const B_SEND: QueueId = QueueId(2);
-const B_RECV: QueueId = QueueId(3);
+pub(crate) const A_SEND: QueueId = QueueId(0);
+pub(crate) const A_RECV: QueueId = QueueId(1);
+pub(crate) const B_SEND: QueueId = QueueId(2);
+pub(crate) const B_RECV: QueueId = QueueId(3);
 
-fn text(n: u8, len: usize) -> OutMessage {
+pub(crate) fn text(n: u8, len: usize) -> OutMessage {
     OutMessage {
         msg_id: [n; 16],
         kind: AppKind::Text,
@@ -30,7 +30,7 @@ fn text(n: u8, len: usize) -> OutMessage {
 
 /// Two conversations of one ratchet pair in one cell source: `a` (initiator) sends on queue 0 and receives on 1, `b`
 /// sends on 2 and receives on 3.
-fn pair(
+pub(crate) fn pair(
     tag: u32,
 ) -> (
     Conversations<MemOutbox, MemPersist, EntropyPool>,

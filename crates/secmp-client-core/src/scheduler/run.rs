@@ -900,6 +900,8 @@ where
             }
             // the whole frame is on the stream: a `SEND` commits its round-robin position now (FIN-2)
             sched.frame_written(link);
+            // every write is reported once, in order (the trusted-caller contract of `frame_written`)
+            debug_assert_eq!(sched.unmatched_written(), 0);
             Ok(())
         } else {
             self.close_link(sched, link, now)

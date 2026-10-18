@@ -1133,3 +1133,34 @@ fn driver_rr_reservation_does_not_depend_on_worker_timing() {
         );
     }
 }
+
+/// C2-03 (item 10): the tokio driver reports every write once, in order: after the scenario of
+/// `driver_rr_reservation_does_not_depend_on_worker_timing` (Balanced, seed 103, first frame held 260 ms) the scheduler
+/// counted no unmatched `frame_written`; the driver's `debug_assert_eq!` after each `on_written` did not fire either.
+#[test]
+fn driver_reports_no_unmatched_written() {
+    use crate::m6_tokio::AI_COSTS;
+    runtime().block_on(async {
+        let setup = Setup::new();
+        let provider = Holding::new(
+            setup.provider.clone(),
+            0,
+            Some(Hold {
+                first: 0,
+                delay_ms: 260,
+            }),
+            0,
+        );
+        let sc = Scenario {
+            mode: Mode::Balanced,
+            contacts: vec![(10_000, 10_000); 3],
+            pool: false,
+            seed: 103,
+        };
+        let x = TClient::with_provider(&setup, provider, sc.mode, no_phase(), sc.seed, AI_COSTS, 0);
+        let mut rig = TokioRig::assemble(setup, x, &sc).await;
+        let run = rig.run_minutes(1, None).await;
+        assert!(run.sends.len() >= 4, "{:?}", run.sends);
+        assert_eq!(rig.x.sched.unmatched_written(), 0);
+    });
+}

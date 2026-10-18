@@ -265,6 +265,8 @@ struct World {
     next_key: u64,
     next_op: u64,
     overruns: u64,
+    /// `frame_written` calls on an up link with nothing unwritten ([`Scheduler::unmatched_written`]).
+    unmatched_written: u64,
     last_now: u64,
     out: Vec<Output>,
     prep: PrepLog,
@@ -1053,6 +1055,7 @@ impl Scheduler {
                 next_key: 0,
                 next_op: 0,
                 overruns: 0,
+                unmatched_written: 0,
                 last_now: 0,
                 out: Vec::new(),
                 prep: PrepLog::default(),
@@ -1087,6 +1090,23 @@ impl Scheduler {
     #[must_use]
     pub const fn overruns(&self) -> u64 {
         self.world.overruns
+    }
+
+    /// `frame_written` calls that found an up link with an empty ledger: the caller reported a write it was never handed
+    /// (a trusted-caller contract violation; the call itself changes nothing else).
+    #[must_use]
+    pub const fn unmatched_written(&self) -> u64 {
+        self.world.unmatched_written
+    }
+
+    /// The length of the unwritten ledger of the up link `link` (tests only).
+    #[cfg(any(test, feature = "kat"))]
+    #[must_use]
+    pub fn unwritten_len(&self, link: LinkId) -> Option<usize> {
+        self.links.iter().find_map(|l| match &l.state {
+            State::Up(up) if up.id == link => Some(up.unwritten.len()),
+            _ => None,
+        })
     }
 
     /// The cumulative acknowledgement of a recv-queue.
@@ -1815,13 +1835,23 @@ impl Scheduler {
     /// every byte; a failed or partial write is not a completion. A `SEND` frame commits the Balanced round-robin position
     /// here (A′, GLM2B-1 / FIN-2): a link torn down before its frame was written leaves the rotation where it was. Frames
     /// complete in the order they were handed out; an unknown or closed link is ignored.
+    ///
+    /// A call on an up link whose ledger is empty reports a write that was never handed out: it is counted
+    /// ([`Scheduler::unmatched_written`]) and changes nothing else (no panic, the rotation is untouched). A duplicate
+    /// report while the ledger is not empty cannot be told from a genuine one — a frame carries no id — so it pops the
+    /// oldest entry: the driver is a trusted caller that reports each write once (Astra FINAL3 (e)).
     pub fn frame_written(&mut self, link: LinkId) {
         for l in &mut self.links {
             if let State::Up(up) = &mut l.state
                 && up.id == link
             {
-                if let Some(Some(n)) = up.unwritten.pop_front() {
-                    l.rr = n;
+                match up.unwritten.pop_front() {
+                    Some(Some(n)) => l.rr = n,
+                    Some(None) => {}
+                    None => {
+                        self.world.unmatched_written =
+                            self.world.unmatched_written.saturating_add(1);
+                    }
                 }
                 return;
             }

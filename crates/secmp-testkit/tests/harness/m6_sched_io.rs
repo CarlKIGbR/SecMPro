@@ -1276,3 +1276,72 @@ fn balanced_rr_reserves_the_successor_of_an_unwritten_send() {
         rig.src.asked
     );
 }
+
+/// Three send queues on relay 0 (periods 10 s), the first being the rig's own: `[Q0, Q1, Q2]`.
+fn rig_with_three_queues(rig: &mut Rig) -> Vec<QueueId> {
+    let mut queues = vec![QueueId(0)];
+    for route in [2_u8, 3] {
+        let cap =
+            SendCap::from_route([route; 16], &SecretBytes::from_slice(&[9; 32]).unwrap()).unwrap();
+        queues.push(
+            rig.sched
+                .add_send_queue(0, RelayId(0), cap, 10_000)
+                .unwrap(),
+        );
+    }
+    queues
+}
+
+/// C2-01 (item 10): a `frame_written` on an up link whose ledger is empty is counted and changes nothing else — the
+/// rotation stays where the first completion put it.
+#[test]
+fn frame_written_on_an_empty_ledger_is_counted() {
+    let params = Params {
+        phase_max_ms: 0,
+        ..Params::default()
+    };
+    let mut rig = Rig::with(ok_script(), Mode::Balanced, params);
+    let queues = rig_with_three_queues(&mut rig);
+    rig.run_to(10_000);
+    assert_eq!(rig.writes, vec![10_000], "one SEND tick");
+    assert_eq!(
+        rig.sched.unmatched_written(),
+        0,
+        "the rig's completion matched"
+    );
+    let link = rig.link.unwrap();
+    rig.sched.frame_written(link);
+    assert_eq!(rig.sched.unmatched_written(), 1);
+    // `rr` is where the first completion left it (after Q0): the next SENDs go to Q1 and Q2
+    rig.run_to(30_000);
+    assert_eq!(
+        rig.src.asked.get(..3),
+        Some(queues.as_slice()),
+        "asked: {:?}",
+        rig.src.asked
+    );
+    assert_eq!(
+        rig.sched.unmatched_written(),
+        1,
+        "no other call was unmatched"
+    );
+}
+
+/// C2-02 (item 10): a closed or unknown link stays ignored, as before.
+#[test]
+fn frame_written_for_a_closed_link_is_not_counted() {
+    let params = Params {
+        phase_max_ms: 0,
+        ..Params::default()
+    };
+    let mut rig = Rig::with(ok_script(), Mode::Balanced, params);
+    rig.remake = Some(ok_script);
+    let _ = rig_with_three_queues(&mut rig);
+    rig.run_to(10_000);
+    let link = rig.link.unwrap();
+    let outs = rig.sched.on_closed(link, 10_001).unwrap();
+    rig.apply(outs);
+    rig.sched.frame_written(link);
+    rig.sched.frame_written(LinkId(9_999));
+    assert_eq!(rig.sched.unmatched_written(), 0);
+}

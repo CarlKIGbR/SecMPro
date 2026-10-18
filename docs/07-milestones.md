@@ -130,7 +130,7 @@ v1.1: M16 → M17 → M18 → M19 → M20 (release)
 
 **Review focus.** No code path where activity influences timing (grep `Instant::now`, conditionals on outbox state outside `prepare`); isolation tokens per link; exactly one TLS KX group; Tor never bypassed silently.
 
-**Status (2026-10-09).** Started 2026-10-09 on branch `m06-transport` from `main` at `6300b653d0f1f176b7a31470910d5214fa87b9cc`; plan, test specification (`docs/reviews/M06-planning/TEST-SPEC-M6.md`, 177 rows), OPEN-M6 decisions and ADR-051 (Proposed) were committed first. Report: `docs/reviews/M06-report.md`. Phase A (Sonnet) in progress; Phase B waits for the owner's ADR-051 Part 2 approval.
+**Status (2026-10-09).** Started 2026-10-09 on branch `m06-transport` from `main` at `6300b653d0f1f176b7a31470910d5214fa87b9cc`; plan, test specification (`docs/reviews/M06-planning/TEST-SPEC-M6.md`, 177 rows), OPEN-M6 decisions and ADR-051 (Proposed) were committed first. Report: `docs/reviews/M06-report.md`. Phase A (Sonnet) in progress; Phase B waits for the owner's ADR-051 Part 2 approval. **Phase C1 closed @ `1f4ec7c`, C2 pending** (BRIEF M6-C1: ledger bound and Kani K-C1…K-C6, mutation survivors, ADR-047 Amendments 6/7, `ci-verdict`; BRIEF M6-C2 follows; M6 merges only after C2).
 
 ---
 

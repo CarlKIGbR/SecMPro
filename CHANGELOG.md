@@ -50,6 +50,10 @@ All notable changes to this project are documented in this file. The format foll
 - M1 supply chain (ADR-036, ADR-037): publisher trust for the RustCrypto, dalek, Cryspen and AWS accounts,
   crate-scoped trust for `getrandom`, `hax-lib*` and `typenum`, delta audits for `rand_core` and `rand`, tracked
   exemptions only outside the normal `secmp-crypto`/`secmp-proto` closure (checked per target).
+- M6 Phase C1: the aggregate required check `ci-verdict` (green only if every other gate job succeeded; ADR-045
+  Amendment 2); Kani harnesses K-C1…K-C6 for the unwritten-frame ledger and the round-robin reservation; the
+  `Scheduler::unmatched_written` counter; 82 mutation killers for the survivors of PR run 160 (module `m0_early` first
+  in the test order); the receive-throughput characterisation R-01; `docs/05` keys `direct_tls_cert`/`direct_tls_key`.
 
 ### Changed
 
@@ -174,3 +178,6 @@ All notable changes to this project are documented in this file. The format foll
 - M4 CI and gates (M4 review C-1…C-7): the workflow policy pins the delegated jobs (`ct`, `mutants-shard`/`mutants`,
   `proverif-hx`), reads `uses` as YAML, and checks the read-only token, `defaults`/`shell` and the prover override;
   the Miri gate names the feature-gated suites it cannot run; a tracked seed corpus for every fuzz target.
+- M6 Phase C1: a tick that would leave more than `2 × max_in_flight` frames unreported is not written and the link goes
+  down (`Reason::InFlight`); the mutation gate runs as 12 shards (ADR-047 Amendment 7) with `--max-fail=1:immediate`
+  for the harness run (Amendment 6); the ledger and reservation logic moved into `scheduler/core/pure.rs`.

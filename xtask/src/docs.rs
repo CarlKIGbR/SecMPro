@@ -60,3 +60,104 @@ fn run_module_doc_states_the_flush_bound() -> Result<()> {
     }
     Ok(())
 }
+
+/// The text of every `.rs` file under `crates/` and `xtask/` (no `target/`).
+fn all_rust_sources() -> Result<String> {
+    fn walk(dir: &Path, out: &mut String) -> Result<()> {
+        for entry in std::fs::read_dir(dir)? {
+            let path = entry?.path();
+            if path.is_dir() {
+                if path.file_name().is_some_and(|n| n == "target") {
+                    continue;
+                }
+                walk(&path, out)?;
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                out.push_str(&std::fs::read_to_string(&path).unwrap_or_default());
+            }
+        }
+        Ok(())
+    }
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let mut out = String::new();
+    walk(&root.join("crates"), &mut out)?;
+    walk(&root.join("xtask"), &mut out)?;
+    Ok(out)
+}
+
+/// The part of `text` from the line that starts with `from` up to the line that starts with `to`.
+fn between<'a>(text: &'a str, from: &str, to: &str) -> Result<&'a str> {
+    let start = text.find(from).ok_or("section start missing")?;
+    let rest = text.get(start..).ok_or("section")?;
+    let end = rest.find(to).ok_or("section end missing")?;
+    Ok(rest.get(..end).ok_or("section")?)
+}
+
+/// D-03 (BRIEF M6-C1 item 19): the report's §3 names, for each of the 11 rows of `docs/07` §M6 (six Deliverables, five
+/// Acceptance criteria), the tests that evidence it — every backticked test name exists in the tree — or says `OPEN — C2`;
+/// §6 lists TOR-10 and X-10 as owner-operated and not run; the header says Phase C1; nothing is left to be determined.
+#[test]
+fn m06_report_acceptance_rows_are_named() -> Result<()> {
+    let report = read("docs/reviews/M06-report.md")?;
+    let header: String = report.lines().take(4).collect::<Vec<_>>().join("\n");
+    assert!(header.contains("Phase C1"), "the header names Phase C1");
+    assert!(
+        !report.contains(concat!("<", "TBD")),
+        "nothing left undecided"
+    );
+    let s3 = between(&report, "\n## 3. ", "\n## 4. ")?;
+    let rows: Vec<&str> = s3
+        .lines()
+        .filter(|l| l.starts_with("| M6-D") || l.starts_with("| M6-A"))
+        .collect();
+    let ids: Vec<&str> = rows
+        .iter()
+        .filter_map(|r| r.trim_start_matches("| ").split(' ').next())
+        .collect();
+    assert_eq!(
+        ids,
+        [
+            "M6-D1", "M6-D2", "M6-D3", "M6-D4", "M6-D5", "M6-D6", "M6-A1", "M6-A2", "M6-A3",
+            "M6-A4", "M6-A5"
+        ],
+        "6 deliverables and 5 acceptance criteria of docs/07 §M6"
+    );
+    let sources = all_rust_sources()?;
+    for row in &rows {
+        let names: Vec<&str> = row
+            .split('`')
+            .skip(1)
+            .step_by(2)
+            .filter(|t| {
+                t.contains('_')
+                    && t.chars()
+                        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+            })
+            .collect();
+        for name in &names {
+            let found = sources.contains(&format!("fn {name}("))
+                || sources.contains(&format!("fn {name}<"));
+            assert!(found, "{row}: test `{name}` is not in the tree");
+        }
+        assert!(
+            !names.is_empty() || row.contains("OPEN — C2"),
+            "{row}: neither a test name nor `OPEN — C2`"
+        );
+        if row.contains("OPEN — C2") {
+            assert!(
+                row.split("OPEN — C2")
+                    .nth(1)
+                    .is_some_and(|t| t.contains('(')),
+                "{row}: `OPEN — C2` names its rows"
+            );
+        }
+    }
+    let s6 = between(&report, "\n## 6. ", "\n## 7. ")?;
+    for id in ["TOR-10", "X-10"] {
+        assert!(
+            s6.lines()
+                .any(|l| l.contains(id) && l.contains("owner-operated, not run")),
+            "§6 lists {id} as owner-operated, not run"
+        );
+    }
+    Ok(())
+}

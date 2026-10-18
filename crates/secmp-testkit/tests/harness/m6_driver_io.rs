@@ -1178,3 +1178,84 @@ fn driver_reports_no_unmatched_written() {
         assert_eq!(rig.x.sched.unmatched_written(), 0);
     });
 }
+
+/// R-01 (OPEN-M6-B-1, a characterisation, not a requirement): the receive throughput of the driver's `Deferred` facade. One
+/// Balanced client with one recv queue and the AI costs (a received cell 5 ms); the peer has stored four cells before the first
+/// `FETCH_MULTI`. Per period the test records how many cells were newly committed (decided and persisted by the worker, so
+/// delivered to the conversation) and when each cell was acknowledged. The measured values are the expectation: **one cell
+/// is committed per response, and each is acknowledged one period after it was committed** — the cost the Phase-B report
+/// names (a `FETCH` response commits at most one new cell instead of up to four; the fix needs a core API, M7). The numbers
+/// are printed (`target/m6-evidence/R-01.txt`) and change only with the reviewer.
+#[test]
+fn receive_throughput_per_fetch_is_measured() {
+    use crate::m6_activity::Event;
+    use crate::m6_tokio::AI_COSTS;
+    runtime().block_on(async {
+        let setup = Setup::new();
+        let sc = Scenario {
+            mode: Mode::Balanced,
+            contacts: vec![(10_000, 10_000)],
+            pool: false,
+            seed: 71,
+        };
+        let x = TClient::new(&setup, sc.mode, no_phase(), sc.seed, AI_COSTS, 0);
+        let mut rig = TokioRig::assemble(setup, x, &sc).await;
+        let t0 = rig.setup.now();
+        for n in 0..4_u64 {
+            rig.apply(Event::PeerSend { contact: 0, len: 20 }, t0, n);
+        }
+        rig.pump(t0).await;
+        let recv = secmp_client_core::scheduler::types::QueueId(1);
+        let committed = |rig: &TokioRig| {
+            rig.x
+                .convs
+                .lock()
+                .unwrap()
+                .get(0)
+                .unwrap()
+                .received()
+                .len()
+        };
+        let (mut got_at, mut acked_at) = (Vec::new(), Vec::new());
+        let mut per_second = Vec::new();
+        for s in 1..=90_u64 {
+            rig.x.run_until(t0 + s * 1_000).await;
+            let (c, a) = (
+                committed(&rig),
+                usize::try_from(rig.x.sched.acked(recv).unwrap()).unwrap(),
+            );
+            while got_at.len() < c {
+                got_at.push(s);
+            }
+            while acked_at.len() < a {
+                acked_at.push(s);
+            }
+            per_second.push((s, c, a));
+        }
+        let delays: Vec<u64> = acked_at
+            .iter()
+            .zip(&got_at)
+            .map(|(a, g)| a.saturating_sub(*g))
+            .collect();
+        let steps: Vec<u64> = got_at
+            .windows(2)
+            .map(|w| {
+                w.get(1)
+                    .copied()
+                    .unwrap_or(0)
+                    .saturating_sub(w.first().copied().unwrap_or(0))
+            })
+            .collect();
+        let text = format!(
+            "R-01 receive throughput of the facade (Balanced, 4 cells stored before the first FETCH, costs 5 ms per received cell)\n\
+             committed at (s): {got_at:?}\nacknowledged at (s): {acked_at:?}\n\
+             seconds between commits: {steps:?}\nack delay per cell (s): {delays:?}"
+        );
+        crate::m6_common::evidence("R-01", &text);
+        assert_eq!(got_at.len(), 4, "all four cells are committed: {text}");
+        // one cell per response: the commits are one period apart
+        assert!(steps.iter().all(|d| *d == 10), "{text}");
+        // each acknowledgement comes one period after its commit
+        assert!(delays.iter().all(|d| *d == 10), "{text}");
+    });
+}

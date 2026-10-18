@@ -345,7 +345,7 @@ impl<P: StreamProvider + 'static> TokioRig<P> {
     }
 
     /// The peers read what `x` sent and answer with what they have, at most 20 cells each.
-    async fn pump(&mut self, now: u64) {
+    pub(crate) async fn pump(&mut self, now: u64) {
         let Self { setup, peers, .. } = self;
         for peer in peers.iter_mut() {
             let mut t = setup.transport(&mut peer.pool).await;

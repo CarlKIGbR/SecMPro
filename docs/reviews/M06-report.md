@@ -1125,6 +1125,17 @@ required job (`ct`, `mutants`, `proverif-hx`) is not green.
 
 ## 8. Blocked / questions for the reviewer or owner
 
+### BRIEF M6-C1 item 12 (K-12) — BLOCKED 2026-10-18: seven `secmp-proto` harnesses exceed 8 GB, not one
+
+Measured alone (`docs/reviews/M06-evidence/kani-rss-d1bcfdc.txt`, 30 harnesses, all verified): `kani_commit_accept_atomic` 13 751 MB,
+`tr_header_selection` 13 425, `kani_accept_opk_delete_only_on_success` 12 127, `kani_q_frame_plaintext_exact_fit` 11 662,
+`request_link_get` 9 304, `response_frame` 8 754, `kani_frame_pad_total` 8 541 (the rest ≤ 7 750). The brief assumed one peak (runner
+trace 38616364662: 13.8 GB = `kani_commit_accept_atomic`). A different SAT solver does not change it (`tr_header_selection` with
+`--solver cadical`: 13 421 MB). The peak harness is already at the minimum its comments record (M4 report §11.2: no proof with a second
+record or a symbolic store finished in 9–30 minutes; its two `kani_commit_on` scenarios are the property). A reduction of any of the seven
+by unwind or input size narrows what it proves. Nothing was changed. **Question:** keep the harnesses and the runner's 16 GB (the CI job passes), set
+the bound per harness at the measured value, or name which of the seven may be narrowed and how.
+
 ### EXTB-1 (WEISUNG M6-B-5 §1) — BLOCKED 2026-10-16, RESOLVED: core change (A)/(A′) approved (WEISUNG M6-B-6), applied @ `cdf2b31`
 
 The text below is the STOP as it was written. The reopened proofs and their results are in §6, "Decisions of WEISUNG

@@ -181,3 +181,6 @@ All notable changes to this project are documented in this file. The format foll
 - M6 Phase C1: a tick that would leave more than `2 × max_in_flight` frames unreported is not written and the link goes
   down (`Reason::InFlight`); the mutation gate runs as 12 shards (ADR-047 Amendment 7) with `--max-fail=1:immediate`
   for the harness run (Amendment 6); the ledger and reservation logic moved into `scheduler/core/pure.rs`.
+- M6 Phase C1, external round FINAL4: killers for the frame bound of `Channel::prepare` and `AsyncSession::send`, `SystemClock::mono_ms`,
+  the relay's `Deadlined::flush`, `reason_of`, `Channel::synced` and `Session::ensure_open` (eight accepted rows removed);
+  `docs/05` TLS-off example fixed and tested; ADR-042 Amendment 5 text corrected; R-01 labelled as internal readiness.

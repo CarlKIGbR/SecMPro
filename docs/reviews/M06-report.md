@@ -589,6 +589,17 @@ None from `docs/03`/`docs/01`. Implementation choices the review should know (no
   - On the old core the oracle fails AI-02: 162 `Rejected` teardowns in the idle run alone.
   - The sync AI-04…AI-06 take `SECMP_AI_TRACES` for the local 64-trace run; their CI defaults (8, 4, 8) are unchanged.
 
+### FINAL4 round (external review of `007e5b2`, Astra; WEISUNG M6-C1-5) — findings FIN4-1…7, all fixed, none accepted as is
+
+- **FIN4-1 (blocker)** the rows `channel.rs:329:20` and `driver/session.rs:241:24` claimed `NewLinkRequired` needs the `u64` counter space; `Link::seal` returns it at `LINK_MAX_FRAMES` (2^20). Three tests (`m6_mut::channel_prepare_at_the_frame_limit_needs_a_new_link_and_stays_open`, `async_send_closes_the_session_when_the_bound_falls_inside_a_command`, `async_ping_at_the_frame_limit_fails_locally_and_leaves_the_session_open`; the harness gets `Setup::session`), both rows removed. The polarity in the WEISUNG text ("channel closed" at the bound) is the reverse of the code for the single-frame case — at the bound nothing is sealed and the channel stays open; the multi-frame case closes it; the tests assert what the code does, and are red against the mutant either way.
+- **FIN4-2 (blocker)** `SystemClock::mono_ms` rows: `clock::tests::system_clock_counts_from_its_origin` (origin 60 s back, no wait); rows removed; the ruling of WEISUNG M6-C1-4 §0.2 is withdrawn.
+- **FIN4-3** relay `Deadlined::flush`: `tls::m6_mut::deadlined_flush_reaches_the_socket` (rustls `complete_io` over a socket whose flush fails); row removed.
+- **FIN4-4** `reason_of` `Closed` (`m6_mut::reason_of_a_closed_channel_is_closed`), `Channel::synced` and `Session::ensure_open` (in-crate `session::m6_mut` tests over the testkit relay); three rows removed; `tls.rs:366:13` sharpened (the second `||`; the ALPN disjunct stays intact).
+- **FIN4-5** ADR-042 Amendment 5 text corrected (`hk`/`mk` are secret keys, `pn`, `n`, `dh_pk`, `ek_pq`, `ct_pq` encrypted header contents; what the nonce target monitors); `OPEN-M6-C1-2` (§7).
+- **FIN4-6** R-01 relabelled as internal acknowledgement readiness, relay-observed acks as a second series (30/40/50/60 s), four values asserted before the zip.
+- **FIN4-7** the TLS-off example of `docs/05` §5 parses (key lines commented out, an enabled stanza in §7); `secmp-relay config::tests::documented_listen_stanzas_parse`.
+- Counts reconciled in `mutants-c1-41ee485.md` (17 M6 rows at the pin, 9 now); ADR-047 Amendment 7 says 44 harness tests.
+
 ### Phase C1 deviations (BRIEF M6-C1, WEISUNG M6-C1-3, -4): none from the spec or the plan; implementation choices, each with its reason, none needs an ADR
 
 1. **Killers of private functions are unit tests inside their crate** (`scheduler::run::tests::m6_mut_*`, `scheduler::core::m6_mut::counters_now_moves_when_a_counted_step_runs`, `caps`, `channel`, `ops`, `tls` and `session` `m6_mut_*`), not `m6_mut::<function>_<behaviour>` of the harness: the functions are private and the harness reaches only the public API. The killers the harness can reach are in `m6_mut`.
@@ -1185,6 +1196,7 @@ required job (`ct`, `mutants`, `proverif-hx`) is not green.
 - **Kani scope (item 5, M7).** K-C1…K-C6 prove the ledger and reservation functions (`core/pure.rs`) on a symbolic ledger. Not covered, M7:
   the in-flight rule over real transitions, queue generations, the abstract persist contract and paired executions; `Scheduler`
   itself is out of Kani's reach from `secmp-client-core` (an up link needs a `Channel`).
+- **Kani times (FINAL4).** `kani_deadline_arithmetic_checked` and `kani_rate_bound_integer_form` are slow (64-bit multiplications): they verified in the container in 687 s and 358 s (`kani-m6c1-ee3c66f.txt`, `Verification Time`; client-core 13/13 in 1 173 s), and in CI the `kani` job of PR run 39110123300 (head `bf7ba1c`, all 46 harnesses, K-C1…K-C6 included) succeeded in 100.5 min (08:05:40 → 09:46:10; run 39080358115 before K-C: 77 min). The reviewer's macOS run was interrupted after 20 min, which is inside these times; they need no change.
 - **OPEN-M6-B-3 (item 7).** The onion host re-encode substitutes for Arti's `HsId`; no Ed25519 point check at this layer; fix in M7.
 
 ## 8. Blocked / questions for the reviewer or owner

@@ -15,10 +15,18 @@ Pin: tests at the commit that follows this file (41ee485 and its documentation c
 
 Run 160 had four TIMEOUT survivors: World::period_of -> Some(0) and Some(1), TokioClock::mono_ms -> 1, write_all (async session) -> Ok(()). On this 32-core machine they were caught; with --test-threads=4 (the runner has 4 cores, run ci4) all four timed out again. Cause: four m6_activity::activity_comparator_detects_* tests run six-hour simulations, which these mutants make endless; they sort first among the harness tests, hold all four threads, and the failing test behind them never starts (the log lists SLOW [>120 s] for exactly those four). Fix: the killers are in module m0_early, which sorts before m6_activity (m0_early::period_of_gives_the_deadline_of_the_first_tick, tokio_clock_follows_the_paused_runtime, async_handshake_writes_its_records, async_session_send_writes_the_request_the_relay_answers) and fail in under a second; the waits in them are bounded by the paused tokio clock (a 60-s virtual timeout), not a wall clock. With 4 test threads (ci4b, ci4c) all four mutants plus AsyncSession::send -> Ok(()) and close_stalled -> Ok(()) are caught. close_stalled -> Ok(()) (a driver that spins at the stall deadline) is killed by a run that stops exactly at the stall bound, so the test cannot spin (m6_mut::close_stalled_closes_a_write_pending_for_the_stall_bound). No timeout is proposed as equivalent.
 
-## Killed: mutant, first failing test, red quote (81 of the 97, and counters_now -> [0; 4], which was not on the run-160 list: 82 mutants)
+## Killed: mutant, first failing test, red quote (88 of the 97; counters_now -> [0; 4], which was not on the run-160 list, and the relay mutant Deadlined::flush: 90 mutants)
 
 | Mutant (as in the re-run) | Test that fails first | Red quote (panic) |
 |---|---|---|
+| secmp-client-core/src/clock.rs:39:9: replace <impl Clock for SystemClock>::mono_ms -> u64 with 0 | secmp-client-core clock::tests::system_clock_counts_from_its_origin | crates/secmp-client-core/src/clock.rs:156:13: 0 (FINAL4) |
+| secmp-client-core/src/scheduler/core/mod.rs:1037:9: delete match arm TransportError::Closed in reason_of | secmp-testkit::harness m6_mut::reason_of_a_closed_channel_is_closed | crates/secmp-testkit/tests/harness/m6_mut.rs:1590:5: assertion `left == right` failed (FINAL4) |
+| secmp-transport/src/channel.rs:289:9: replace Channel::synced with () | secmp-transport session::m6_mut::m6_mut_blocking_exchange_then_prepared_exchange_keep_write_order | test returned Err(OutOfOrder) from write_prepared (the stale write position) (FINAL4) |
+| secmp-transport/src/channel.rs:329:20: delete ! in Channel::prepare | secmp-testkit::harness m6_mut::channel_prepare_at_the_frame_limit_needs_a_new_link_and_stays_open | crates/secmp-testkit/tests/harness/m6_mut.rs:1620:5: nothing was sealed: the channel stays open (FINAL4) |
+| secmp-transport/src/session.rs:240:9: replace Session<S>::ensure_open -> Result<()> with Ok(()) | secmp-transport session::m6_mut::m6_mut_send_on_a_closed_session_writes_nothing | crates/secmp-transport/src/session.rs:410:9: assertion failed: matches!(session.send(exchange.requests()), Err(Error::Closed)) (FINAL4) |
+| secmp-client-core/src/clock.rs:39:9: replace <impl Clock for SystemClock>::mono_ms -> u64 with 1 | secmp-client-core clock::tests::system_clock_counts_from_its_origin | crates/secmp-client-core/src/clock.rs:156:13: 1 (FINAL4) |
+| secmp-transport/src/driver/session.rs:241:24: delete ! in AsyncSession<S>::send | secmp-testkit::harness m6_mut::async_ping_at_the_frame_limit_fails_locally_and_leaves_the_session_open | crates/secmp-testkit/tests/harness/m6_mut.rs:1681:9: nothing was sealed: the session is open (FINAL4) |
+| secmp-relay/src/tls.rs:198:9: replace <impl Write for Deadlined<S>>::flush -> io::Result<()> with Ok(()) | secmp-relay tls::m6_mut::deadlined_flush_reaches_the_socket | crates/secmp-relay/src/tls.rs:472:9: assertion left == right failed (BrokenPipe expected, the mutant runs on to UnexpectedEof) (FINAL4) |
 | secmp-client-core/src/scheduler/core/mod.rs:308:5: replace counters_now -> [u64; 4] with [0; 4] | secmp-client-core scheduler::core::m6_mut::counters_now_moves_when_a_counted_step_runs | crates/secmp-client-core/src/scheduler/core/mod.rs:2039:9: assertion left == right failed, left: [0, 0, 0, 0], right: [0, 0, 1, 2] (WEISUNG M6-C1-4: positive control of the audit; cargo mutants --re counters_now) |
 | secmp-client-core/src/scheduler/core/mod.rs:308:5: replace counters_now -> [u64; 4] with [1; 4] | secmp-client-core scheduler::core::m6_mut::counters_now_moves_when_a_counted_step_runs | crates/secmp-client-core/src/scheduler/core/mod.rs:2039:9: assertion left == right failed, left: [0, 0, 0, 0], right: [0, 0, 1, 2] (WEISUNG M6-C1-4: positive control of the audit; cargo mutants --re counters_now) |
 | secmp-client-core/src/scheduler/core/mod.rs:842:9: replace World::begin_work with () | secmp-testkit::harness m6_mut::begin_work_closes_the_frames_of_the_previous_pass | crates/secmp-testkit/tests/harness/m6_mut.rs:854:5: assertion `left == right` failed: the frame built at the link's start is on time |
@@ -102,26 +110,19 @@ Run 160 had four TIMEOUT survivors: World::period_of -> Some(0) and Some(1), Tok
 | secmp-client-core/src/clock.rs:74:9: replace <impl Clock for TokioClock>::mono_ms -> u64 with 1 | secmp-testkit::harness m0_early::tokio_clock_follows_the_paused_runtime | crates/secmp-testkit/tests/harness/m0_early.rs:39:9: assertion `left == right` failed |
 | secmp-transport/src/driver/session.rs:50:5: replace write_all -> Result<()> with Ok(()) | secmp-testkit::harness m0_early::async_handshake_writes_its_records | crates/secmp-testkit/tests/harness/m0_early.rs:58:9: the handshake completed |
 
-## Not killed: accepted rows in docs/mutants-accepted.md (16)
+## Not killed: accepted rows in docs/mutants-accepted.md (9)
 
 | Mutant | Outcome | Row |
 |---|---|---|
-| secmp-client-core/src/clock.rs:39:9: replace <impl Clock for SystemClock>::mono_ms -> u64 with 0 | MissedMutant (final) | equivalent or unreachable: see the row of the same place in docs/mutants-accepted.md |
-| secmp-client-core/src/clock.rs:39:9: replace <impl Clock for SystemClock>::mono_ms -> u64 with 1 | MissedMutant (final) | equivalent or unreachable: see the row of the same place in docs/mutants-accepted.md |
 | secmp-client-core/src/scheduler/core/mod.rs:1733:21: delete match arm State::Up(up) in Scheduler::work_pass | MissedMutant (final) | equivalent or unreachable: see the row of the same place in docs/mutants-accepted.md |
 | secmp-client-core/src/scheduler/core/mod.rs:1733:44: replace == with != in Scheduler::work_pass | MissedMutant (final) | equivalent or unreachable: see the row of the same place in docs/mutants-accepted.md |
 | secmp-client-core/src/scheduler/run.rs:859:34: replace > with >= in Driver<P, D, R, H, W, C>::flush_wait | MissedMutant (final) | equivalent or unreachable: see the row of the same place in docs/mutants-accepted.md |
 | secmp-client-core/src/scheduler/core/mod.rs:751:39: replace \|\| with && in World::prepare_fetch | MissedMutant (final) | equivalent or unreachable: see the row of the same place in docs/mutants-accepted.md |
-| secmp-transport/src/channel.rs:329:20: delete ! in Channel::prepare | MissedMutant (final) | equivalent or unreachable: see the row of the same place in docs/mutants-accepted.md |
-| secmp-transport/src/channel.rs:289:9: replace Channel::synced with () | MissedMutant (final) | equivalent or unreachable: see the row of the same place in docs/mutants-accepted.md |
 | secmp-transport/src/tor/mod.rs:60:23: replace << with >> in base32 | MissedMutant (final) | equivalent or unreachable: see the row of the same place in docs/mutants-accepted.md |
-| secmp-transport/src/driver/session.rs:241:24: delete ! in AsyncSession<S>::send | MissedMutant (ci4b (4 test threads)) | equivalent or unreachable: see the row of the same place in docs/mutants-accepted.md |
-| secmp-client-core/src/scheduler/core/mod.rs:1037:9: delete match arm TransportError::Closed in reason_of | MissedMutant (final) | equivalent or unreachable: see the row of the same place in docs/mutants-accepted.md |
 | secmp-transport/src/tor/mod.rs:53:26: replace \| with ^ in base32 | MissedMutant (final) | equivalent or unreachable: see the row of the same place in docs/mutants-accepted.md |
 | secmp-transport/src/tls.rs:366:13: replace \|\| with && in <impl StreamProvider for TlsProvider<D>>::connect | MissedMutant (final) | equivalent or unreachable: see the row of the same place in docs/mutants-accepted.md |
 | secmp-client-core/src/scheduler/run.rs:1050:54: replace > with >= in Driver<P, D, R, H, W, C>::apply | MissedMutant (final) | equivalent or unreachable: see the row of the same place in docs/mutants-accepted.md |
 | secmp-transport/src/channel.rs:486:9: delete match arm ResponseCmd::Err(_) in single | MissedMutant (final) | equivalent or unreachable: see the row of the same place in docs/mutants-accepted.md |
-| secmp-transport/src/session.rs:240:9: replace Session<S>::ensure_open -> Result<()> with Ok(()) | MissedMutant (final) | equivalent or unreachable: see the row of the same place in docs/mutants-accepted.md |
 
 ## Floor (ADR-047 Amendment 2: caught >= 50 % per package)
 
@@ -129,9 +130,10 @@ Computed from the totals of run 160 (7 of 8 shards, CI numbers) plus the survivo
 
 | Package | run 160 caught / mutants | killed here | caught after | floor |
 |---|---|---|---|---|
-| secmp-client-core | 384 / 534 = 71.9 % | 62 | 446 / 534 = 83.5 % | ok |
-| secmp-transport | 277 / 481 = 57.6 % | 19 | 296 / 481 = 61.5 % | ok |
-| secmp-crypto, secmp-proto, secmp-relay | 60.7 %, 71.5 %, 75.2 % | 0 (rows only) | unchanged | ok |
+| secmp-client-core | 384 / 534 = 71.9 % | 65 | 449 / 534 = 84.1 % | ok |
+| secmp-transport | 277 / 481 = 57.6 % | 23 | 300 / 481 = 62.4 % | ok |
+| secmp-crypto, secmp-proto | 60.7 %, 71.5 % | 0 (rows only) | unchanged | ok |
+| secmp-relay | 376 / 500 = 75.2 % | 1 (Deadlined::flush) | 377 / 500 = 75.4 % | ok |
 
 ## New tests (names)
 
@@ -140,3 +142,10 @@ m0_early: period_of_gives_the_deadline_of_the_first_tick, tokio_clock_follows_th
 m6_mut: manual_clock_set_ms_moves_forward_never_back, control_ops_kind_of_finds_the_operation_by_id, control_ops_schedule_ignores_the_starts_of_other_correlations, owner_status_schedules_only_when_nothing_is_known, control_done_removes_the_operation, route_dead_marks_only_the_queue_the_relay_refused, queue_error_raises_the_auth_and_rate_alerts_of_a_recv_queue, queue_pool_lists_only_relays_that_are_short_and_knows_its_spares, mem_persist_counts_its_commits, timing_rng_seeded_is_splitmix64, unavailable_displays_its_message, conversation_rebinding_the_queues_redirects_the_cell_source, conversation_discarded_counts_cells_that_do_not_decrypt, conversation_has_pending_real_follows_the_queue_and_the_receipts, conversation_durable_follows_each_commit, conversation_cells_carry_the_senders_clock, conversation_restore_drops_the_rest_of_a_failed_message, conversations_discard_puts_the_message_back, driver_submit_carries_out_the_hosts_outputs_at_once, close_stalled_closes_a_write_pending_for_the_stall_bound, start_io_reports_a_failed_write_and_close_link_closes_the_link, driver_shutdown_aborts_every_pending_control_operation, release_failed_by_a_closed_link_reaches_the_cell_source, release_failed_by_a_mode_change_reaches_the_cell_source, set_queue_period_accepts_only_the_periods_of_the_spec, set_queue_period_replaces_only_the_links_of_its_queue, change_mode_to_strict_over_tor_gives_per_queue_links, tick_tolerates_a_wake_exactly_at_the_jitter_bound, tick_without_a_prepared_send_is_an_overrun, relay_with_a_recv_queue_needs_its_fetch_at_every_tick, recv_link_needs_its_fetch_at_every_tick, in_flight_counts_a_tick_until_every_answer_is_in, begin_work_closes_the_frames_of_the_previous_pass, prepare_fetch_takes_exactly_thirty_two_queues, release_unused_hands_the_untaken_cell_back, unwritten_len_is_the_ledger_of_the_named_link, channel_finish_rejects_misfit_send_answers, channel_single_rejects_a_ping_answered_with_the_wrong_type, channel_prepare_bounds_the_fetch_multi_list, blocking_session_closes_on_a_failed_write_and_stays_closed.
 
 In-crate: scheduler::run::tests::m6_mut_deferred_queues_every_notification_in_order, m6_mut_link_io_stop_aborts_both_tasks; transport caps m6_mut_cap_len_is_version_id_seed, m6_mut_queue_ref_debug_names_no_id; channel m6_mut_fits_allows_only_listed_codes; ops m6_mut_fetch_multi_len_is_one_to_thirty_two, m6_mut_unit_is_only_the_unit_answer; tls m6_mut_hybrid_only_needs_every_condition; session m6_mut_read_exact_retries_only_interrupted_reads.
+
+## FINAL4 round (WEISUNG M6-C1-5, Astra): what changed, and the reconciliation of the counts
+
+- The rows named by the external reviewer were killed by real tests, so "no test can detect it" was false for them: FIN4-1 (`Channel::prepare` and `AsyncSession::send` `delete !`: `Link::seal` returns `NewLinkRequired` at `LINK_MAX_FRAMES` = 2^20, long before the `u64` space), FIN4-2 (`SystemClock::mono_ms`, back-dated monotonic origin, no wait), FIN4-3 (`Deadlined::flush`, rustls 0.23.46 calls `flush` in `complete_io`), FIN4-4 (`reason_of` `Closed` through a closed channel handed to `link_up`; `Channel::synced`; `Session::ensure_open`).
+- Polarity of the FIN4-1 tests, read from the code: at the bound `Channel::prepare` returns `NewLinkRequired` and the channel **stays open** (nothing was sealed), and so does `AsyncSession::send` with an empty `wire`; a command whose first frame sealed and whose second crossed the bound **closes** the session. The mutant inverts exactly that, and each of the three tests is red against it (hand-applied `if wire.is_empty()` and cargo-mutants).
+- Counts. `docs/mutants-accepted.md` had 17 M6 survivor rows at `007e5b2` (the 16 client-core/transport survivors of this file's second table plus the relay `Deadlined::flush` row); eight rows are removed now, nine remain: `core/mod.rs:1733:21`, `:1733:44`, `:751:39`, `run.rs:859:34`, `:1050:54`, `channel.rs:486:9`, `tls.rs:366:13` (text sharpened), `tor/mod.rs:53:26`, `:60:23`. The non-M6 rows (`secret.rs:59`, `inv.rs:163:32`, `:163:44`, `:202`) and the four excluded files are unchanged.
+- Red: the 4-thread CI-like run (`--test-threads=4`) of the FINAL4 mutants: 16 caught, 3 unviable (`target/mc1/fin4`); the relay run with the first-run command: `Deadlined::flush` caught.

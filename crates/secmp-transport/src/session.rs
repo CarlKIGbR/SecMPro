@@ -336,6 +336,85 @@ mod m6_mut {
         }
     }
 
+    /// A blocking session to the testkit's in-process relay (the stream is only `Read + Write`, so the testkit's copy of this
+    /// crate does not matter), wrapped in a stream that records what is written after the handshake.
+    struct Recording<S> {
+        inner: S,
+        written: usize,
+    }
+
+    impl<S: Read> Read for Recording<S> {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            self.inner.read(buf)
+        }
+    }
+
+    impl<S: Write> Write for Recording<S> {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.written = self.written.saturating_add(buf.len());
+            self.inner.write(buf)
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            self.inner.flush()
+        }
+    }
+
+    fn live_session() -> Result<Session<Recording<secmp_testkit::harness::HarnessStream>>> {
+        use secmp_testkit::harness::{EntropyPool, Harness, HarnessConfig};
+        let mut harness = Harness::new(HarnessConfig::default());
+        let stream = harness.open_stream().ok_or(Error::Closed)?;
+        let mut entropy = EntropyPool::new("transport-m6-mut", 0);
+        let session = Session::connect(
+            stream,
+            harness.relay_fp(),
+            Some(&harness.access_key()),
+            harness.clock().unix(),
+            entropy.get(),
+        )?;
+        let (stream, chan) = session.into_parts();
+        Ok(Session::from_parts(
+            Recording {
+                inner: stream,
+                written: 0,
+            },
+            chan,
+        ))
+    }
+
+    /// FIN4-4 (b), `channel.rs:289` (`Channel::synced` → `()`): after a blocking exchange the write position follows the
+    /// counter, so a prepared exchange on the same session is in order — with `synced` a no-op `write_prepared` is refused
+    /// as out of order.
+    #[test]
+    fn m6_mut_blocking_exchange_then_prepared_exchange_keep_write_order() -> Result<()> {
+        let mut session = live_session()?;
+        let seq = session.next_cmd_seq()?;
+        let mut exchange = crate::ops::ping(seq);
+        session.send(exchange.requests())?;
+        let response = session.receive(exchange.seq(), exchange.context())?;
+        assert!(exchange.push(response).is_ok());
+        let prepared = session.prepare(&Command::Ping)?;
+        session.write_prepared(&prepared)?;
+        assert!(!session.is_closed());
+        Ok(())
+    }
+
+    /// FIN4-4 (c), `session.rs:240` (`Session::ensure_open` → `Ok(())`): a closed session refuses the crate-private `send`
+    /// before it seals or writes anything.
+    #[test]
+    fn m6_mut_send_on_a_closed_session_writes_nothing() -> Result<()> {
+        let mut session = live_session()?;
+        let seq = session.next_cmd_seq()?;
+        let exchange = crate::ops::ping(seq);
+        session.close();
+        assert!(matches!(
+            session.send(exchange.requests()),
+            Err(Error::Closed)
+        ));
+        assert_eq!(session.stream().written, 0, "nothing was written");
+        Ok(())
+    }
+
     /// `session.rs:57` (`e.kind() == ErrorKind::Interrupted` → `true` / `false` / `!=`): an interrupted read is retried, any other
     /// error ends the read as `Closed` — also when more data would follow.
     #[test]

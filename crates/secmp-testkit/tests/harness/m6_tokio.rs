@@ -75,6 +75,31 @@ impl Setup {
     }
 
     /// A fresh set-up link (not traced as the client under test).
+    /// An async link session to the relay (handshake done) on a set-up connection, for tests that set the link's counters
+    /// before wrapping it in an [`AsyncRelayQueueTransport`].
+    pub async fn session(
+        &mut self,
+        pool: &mut EntropyPool,
+    ) -> secmp_transport::driver::AsyncSession<DuplexStream> {
+        let iso = self.iso();
+        let stream = self
+            .provider
+            .connect(&self.relay.relay_ref(), iso)
+            .await
+            .unwrap();
+        let access = self.relay.access_key();
+        let unix = self.relay.clock().unix_secs();
+        secmp_transport::driver::AsyncSession::connect(
+            stream,
+            self.relay.relay_fp(),
+            Some(&access),
+            unix,
+            pool.get(),
+        )
+        .await
+        .unwrap()
+    }
+
     pub async fn transport(
         &mut self,
         pool: &mut EntropyPool,

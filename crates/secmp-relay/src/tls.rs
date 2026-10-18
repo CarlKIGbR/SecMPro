@@ -412,3 +412,64 @@ impl<A: Listener, B: Listener> Listener for Listeners<A, B> {
         }
     }
 }
+
+#[cfg(all(test, feature = "direct-tls"))]
+mod m6_mut {
+    //! `Deadlined::flush` reaches the socket (FIN4-3; mutant `Deadlined::flush -> Ok(())`).
+
+    use std::io::{self, ErrorKind, Read, Write};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use super::*;
+
+    /// A socket that takes every write and fails every flush; it reads as ended.
+    struct FlushFails;
+
+    impl Read for FlushFails {
+        fn read(&mut self, _buf: &mut [u8]) -> io::Result<usize> {
+            Ok(0)
+        }
+    }
+
+    impl Write for FlushFails {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Err(io::Error::from(ErrorKind::BrokenPipe))
+        }
+    }
+
+    impl Stream for FlushFails {
+        fn set_poll(&mut self, _poll: Duration, _write: Duration) -> io::Result<()> {
+            Ok(())
+        }
+
+        fn close(&mut self) {}
+    }
+
+    /// Pinned rustls (0.23.46) calls `flush` on the socket in `complete_io` after it wrote the `ClientHello`: through
+    /// `Deadlined` the socket's `BrokenPipe` reaches the caller. With `flush -> Ok(())` rustls goes on to read the end of the
+    /// stream and fails with `UnexpectedEof` instead.
+    #[test]
+    fn deadlined_flush_reaches_the_socket() -> std::result::Result<(), Box<dyn std::error::Error>> {
+        let config = rustls::ClientConfig::builder_with_provider(crypto_provider())
+            .with_protocol_versions(&[&rustls::version::TLS13])?
+            .with_root_certificates(rustls::RootCertStore::empty())
+            .with_no_client_auth();
+        let mut client =
+            rustls::ClientConnection::new(Arc::new(config), "relay.example".try_into()?)?;
+        let mut sock = Deadlined {
+            sock: FlushFails,
+            poll: READ_POLL,
+            write: WRITE_TIMEOUT,
+            deadline: None,
+            capped: false,
+        };
+        let err = client.complete_io(&mut sock).err();
+        assert_eq!(err.map(|e| e.kind()), Some(ErrorKind::BrokenPipe));
+        Ok(())
+    }
+}

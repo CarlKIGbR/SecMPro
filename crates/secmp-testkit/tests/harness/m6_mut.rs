@@ -1535,6 +1535,161 @@ fn channel_prepare_bounds_the_fetch_multi_list() {
     assert_eq!(one.seq(), 2);
 }
 
+/// FIN4-4 (a), `core/mod.rs:1037` (`delete match arm TransportError::Closed in reason_of`; the earlier row called it
+/// unreachable): a channel that is closed and then handed to the public `Scheduler::link_up` fails its first preparation with
+/// `Closed`, and the link is torn down with `Reason::Closed` — the mutant says `Rejected`.
+#[test]
+fn reason_of_a_closed_channel_is_closed() {
+    use secmp_client_core::scheduler::types::Output;
+    use secmp_testkit::harness::EntropyPool;
+    use secmp_transport::Session;
+
+    use crate::m6_sched_io::Fake;
+    use crate::scripted::{self, Scripted};
+    let params = Params {
+        phase_max_ms: 0,
+        ..Params::default()
+    };
+    let mut sched = Scheduler::new(params, Mode::Strict, TimingRng::seeded(31));
+    let cap = SendCap::from_route(
+        [3; 16],
+        &secmp_crypto::SecretBytes::from_slice(&[9; 32]).unwrap(),
+    )
+    .unwrap();
+    sched.add_send_queue(0, RelayId(0), cap, 10_000).unwrap();
+    let outs = sched.poll_due(0).unwrap();
+    let link = outs
+        .iter()
+        .find_map(|o| match o {
+            Output::Connect { link, .. } => Some(*link),
+            _ => None,
+        })
+        .unwrap();
+    let id = scripted::identity();
+    let mut entropy = EntropyPool::new("m6-mut-closed-channel", 0);
+    let session = Session::connect(
+        Scripted::new(silent_script()),
+        id.fp,
+        Some(&id.access),
+        scripted::T0,
+        entropy.get(),
+    )
+    .unwrap();
+    let (_stream, mut chan) = session.into_parts();
+    chan.close();
+    let mut src = Fake::default();
+    let mut outs = sched.link_up(link, 0, chan).unwrap();
+    outs.extend(sched.work(0, &mut src).unwrap());
+    let reasons: Vec<Reason> = outs
+        .iter()
+        .filter_map(|o| match o {
+            Output::Event(LinkEvent::TornDown(l, why)) if *l == link => Some(*why),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(reasons, vec![Reason::Closed]);
+}
+
+/// The frame bound of a link (`LINK_MAX_FRAMES`) as a counter value.
+fn frame_limit() -> u64 {
+    secmp_proto::link::LINK_MAX_FRAMES
+}
+
+/// FIN4-1 (a), `channel.rs:329` (`delete !` in `Channel::prepare`; the earlier row claimed the `u64` counter space had to be
+/// used up — `Link::seal` returns `NewLinkRequired` at `LINK_MAX_FRAMES` = 2^20): at the bound `prepare` returns
+/// `NewLinkRequired` and the channel stays open, because nothing was sealed (it is used again once a counter is set back);
+/// the mutant closes it.
+#[test]
+fn channel_prepare_at_the_frame_limit_needs_a_new_link_and_stays_open() {
+    use secmp_testkit::harness::EntropyPool;
+    use secmp_transport::{Command, Error, Session};
+
+    use crate::scripted::{self, Scripted};
+    let id = scripted::identity();
+    let mut entropy = EntropyPool::new("m6-mut-limit", 0);
+    let stream = Scripted::new(silent_script());
+    let session =
+        Session::connect(stream, id.fp, Some(&id.access), scripted::T0, entropy.get()).unwrap();
+    let (_stream, mut chan) = session.into_parts();
+    chan.set_send_counter_kat(frame_limit() - 1);
+    assert!(chan.prepare(&Command::Ping).is_ok(), "the last frame seals");
+    assert!(matches!(
+        chan.prepare(&Command::Ping),
+        Err(Error::NewLinkRequired)
+    ));
+    assert!(
+        !chan.is_closed(),
+        "nothing was sealed: the channel stays open"
+    );
+    chan.set_send_counter_kat(0);
+    assert!(chan.prepare(&Command::Ping).is_ok(), "and is usable");
+}
+
+/// FIN4-1 (b), `driver/session.rs:241` (`delete !` in `AsyncSession::send`): a three-frame request (`LINK_PUT`) whose first
+/// frame seals and whose second crosses the bound closes the session — frames of the command are sealed, the counters moved,
+/// the link is unusable — and nothing is written. (The mutant closes only when nothing was sealed.)
+#[test]
+fn async_send_closes_the_session_when_the_bound_falls_inside_a_command() {
+    use secmp_crypto::SecretBytes;
+    use secmp_testkit::harness::EntropyPool;
+    use secmp_transport::Error;
+    use secmp_transport::driver::{AsyncQueueTransport, AsyncRelayQueueTransport};
+
+    runtime().block_on(async {
+        let mut setup = Setup::new();
+        let mut pool = EntropyPool::new("m6-mut-async-limit-b", 0);
+        let token = setup.relay.access_key();
+        let mut session = setup.session(&mut pool).await;
+        session
+            .channel_mut()
+            .set_send_counter_kat(frame_limit() - 1);
+        let mut t = AsyncRelayQueueTransport::new(session);
+        let owner = SecretBytes::from_slice(&[0x31; 32]).unwrap();
+        let put = tokio::time::timeout(
+            std::time::Duration::from_secs(60),
+            t.put_link_data([7; 16], &owner, &crate::fixture::blob(1), true, 5, &token),
+        )
+        .await;
+        assert!(
+            matches!(put, Ok(Err(Error::NewLinkRequired))),
+            "the second frame crosses the bound"
+        );
+        assert!(t.is_closed(), "frames were sealed: the session is closed");
+    });
+}
+
+/// FIN4-1 (c), `driver/session.rs:241`: through the public async transport a `PING` at the bound fails at once with
+/// `NewLinkRequired`, before anything is written, and the session stays open (the mutant closes it). The wait is bounded by
+/// a 60-s timeout of the paused clock.
+#[test]
+fn async_ping_at_the_frame_limit_fails_locally_and_leaves_the_session_open() {
+    use secmp_testkit::harness::EntropyPool;
+    use secmp_transport::Error;
+    use secmp_transport::driver::AsyncRelayQueueTransport;
+
+    runtime().block_on(async {
+        let mut setup = Setup::new();
+        let mut pool = EntropyPool::new("m6-mut-async-limit-c", 0);
+        let mut session = setup.session(&mut pool).await;
+        session.channel_mut().set_send_counter_kat(frame_limit());
+        let mut t = AsyncRelayQueueTransport::new(session);
+        let ping = tokio::time::timeout(std::time::Duration::from_secs(60), t.ping()).await;
+        assert!(
+            matches!(ping, Ok(Err(Error::NewLinkRequired))),
+            "failed locally"
+        );
+        assert!(!t.is_closed(), "nothing was sealed: the session is open");
+        assert!(
+            setup
+                .relay
+                .units()
+                .iter()
+                .all(|u| u.len != 4352 || u.isolation.0 < crate::m6_tokio::SETUP_ISO),
+            "no frame reached the relay"
+        );
+    });
+}
+
 /// A blocking stream that fails its first `fail` writes and records the bytes of the others; it reads as ended.
 struct Flaky {
     fail: usize,

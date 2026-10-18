@@ -140,4 +140,20 @@ mod tests {
         assert!(c.unix_secs() > 1_700_000_000);
         assert!(c.mono_ms() < 60_000);
     }
+
+    /// FIN4-2 (mutants `SystemClock::mono_ms -> 0` / `1`): the monotonic reading counts from the origin. No waiting: the
+    /// origin is put 60 s back (from the origin of a clock just made), so the reading must be at least 60 000 ms.
+    #[test]
+    fn system_clock_counts_from_its_origin() {
+        let fresh = SystemClock::new();
+        let back = fresh.origin.checked_sub(std::time::Duration::from_secs(60));
+        assert!(
+            back.is_some(),
+            "the monotonic clock can be back-dated by a minute"
+        );
+        if let Some(origin) = back {
+            let ms = SystemClock { origin }.mono_ms();
+            assert!(ms >= 60_000, "{ms}");
+        }
+    }
 }

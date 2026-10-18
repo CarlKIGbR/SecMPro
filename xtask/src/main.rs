@@ -15,6 +15,8 @@
 mod ci;
 mod cooldown;
 mod ctreport;
+#[cfg(test)]
+mod docs;
 mod expect;
 mod fuzzseed;
 mod gates;

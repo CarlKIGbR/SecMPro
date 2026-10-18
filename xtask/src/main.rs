@@ -32,6 +32,7 @@ mod tools;
 mod trace;
 mod util;
 mod vectors;
+mod verdict;
 mod wintest;
 
 use std::path::Path;

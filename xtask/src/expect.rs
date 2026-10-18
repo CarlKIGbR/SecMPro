@@ -1578,8 +1578,14 @@ pub(crate) const NASM_JOBS: &[(&str, &str)] = &[
 /// The job names of the required checks of the `main-protection` ruleset (M2 review C2): they exist only in
 /// [`REQUIRED_WORKFLOW`], which has no `workflow_dispatch` trigger, so no dispatch can add a `skipped` (= passing) check
 /// run under a required name. The policy step pins [`PINNED_JOBS`], a superset.
-pub(crate) const REQUIRED_JOBS: &[&str] =
-    &["linux-fast", "windows-native", "xwin-cross", "linux-full"];
+pub(crate) const REQUIRED_JOBS: &[&str] = &[
+    "linux-fast",
+    "windows-native",
+    "xwin-cross",
+    "linux-full",
+    // ADR-045 Amendment 2 (OWNER-M6-02): the aggregate of every other gate job
+    "ci-verdict",
+];
 
 /// The jobs whose gate lines ([`REQUIRED_GATE_RUNS`]), conditions ([`REQUIRED_JOB_CONDITIONS`]) and structure the
 /// policy step pins (M4 review C-5, R-01): the required checks of [`REQUIRED_JOBS`] and the jobs `linux-full`
@@ -1601,12 +1607,34 @@ pub(crate) const PINNED_JOBS: &[&str] = &[
     "kani",
     // WEISUNG M6-CI-1 §4 (ADR-047 Amendment 5): the fuzz smoke (70 min) out of `linux-full`
     "fuzz",
+    // ADR-045 Amendment 2: the one required check that fails when any other gate job did not succeed
+    "ci-verdict",
 ];
 
-/// The `needs:` of a pinned job, as (job, the one job it needs) — M4 review C-5: the verdict job `mutants` needs
-/// exactly `mutants-shard` (ADR-047 Amendment 1 (2)), written as that plain scalar; any other `needs:` on a pinned job
-/// is a finding (a skipped or failing dependency would skip the job).
-pub(crate) const PINNED_JOB_NEEDS: &[(&str, &str)] = &[("mutants", "mutants-shard")];
+/// The `needs:` of a pinned job, as (job, the jobs it needs) — M4 review C-5: the verdict job `mutants` needs exactly
+/// `mutants-shard` (ADR-047 Amendment 1 (2)), written as that plain scalar; `ci-verdict` needs [`CI_VERDICT_NEEDS`]
+/// (ADR-045 Amendment 2), written as a block list; any other `needs:` on a pinned job is a finding (a skipped or failing
+/// dependency would skip the job).
+pub(crate) const PINNED_JOB_NEEDS: &[(&str, &[&str])] = &[
+    ("mutants", &["mutants-shard"]),
+    ("ci-verdict", CI_VERDICT_NEEDS),
+];
+
+/// The jobs `ci-verdict` needs (ADR-045 Amendment 2): every other pinned job, so that a skipped, cancelled or failed gate —
+/// the `mutants` merge included — is a failure of the one aggregate check (GitHub counts a skipped job as passing).
+pub(crate) const CI_VERDICT_NEEDS: &[&str] = &[
+    "linux-fast",
+    "windows-native",
+    "xwin-cross",
+    "linux-full",
+    "ct",
+    "mutants-shard",
+    "mutants",
+    "proverif-hx",
+    "proverif-link",
+    "kani",
+    "fuzz",
+];
 
 /// Where each `--delegated <step>` of a pinned gate line runs, as (step, pinned job) — M4 review C-5: the policy step
 /// refuses a delegation without an entry here, and an entry whose job has no pinned gate line of its own; a pinned
@@ -1668,6 +1696,8 @@ pub(crate) const REQUIRED_GATE_RUNS: &[(&str, &[&str])] = &[
     ("kani", &["cargo xtask step --strict kani"]),
     // WEISUNG M6-CI-1 §4: the fuzz smoke step in its own job
     ("fuzz", &["cargo xtask step --strict fuzz"]),
+    // ADR-045 Amendment 2: the verdict over the needs of every other gate job
+    ("ci-verdict", &["cargo xtask step --strict ci-verdict"]),
 ];
 
 /// The job-level `if:` of every pinned job of [`PINNED_JOBS`], `None` for none (external review EXT-1, M3 follow-up
@@ -1713,5 +1743,12 @@ pub(crate) const REQUIRED_JOB_CONDITIONS: &[(&str, Option<&str>)] = &[
     (
         "fuzz",
         Some("github.event_name == 'schedule' || github.event_name == 'pull_request'"),
+    ),
+    // ADR-045 Amendment 2: after every gate job whatever its outcome, on the events the gate jobs run on
+    (
+        "ci-verdict",
+        Some(
+            "always() && (github.event_name == 'schedule' || github.event_name == 'pull_request')",
+        ),
     ),
 ];

@@ -4147,6 +4147,8 @@ struct YJob {
     inline: bool,
     props: Vec<(String, String)>,
     steps: Vec<Vec<(String, String)>>,
+    /// The items of a block-list `needs:` (`- job` lines under it).
+    needs_items: Vec<String>,
 }
 
 impl YJob {
@@ -4155,6 +4157,25 @@ impl YJob {
             .iter()
             .find(|(k, _)| k == key)
             .map(|(_, v)| v.as_str())
+    }
+
+    /// The jobs this job needs, however written: a scalar, a block list or a flow list (`[a, b]`), and whether it was a
+    /// flow list. `None` without a `needs:`.
+    fn needs(&self) -> Option<(Vec<String>, bool)> {
+        let value = self.prop("needs")?;
+        if let Some(inner) = value.strip_prefix('[') {
+            let items = inner
+                .trim_end_matches(']')
+                .split(',')
+                .map(|s| s.trim().to_owned())
+                .filter(|s| !s.is_empty())
+                .collect();
+            return Some((items, true));
+        }
+        if value.is_empty() {
+            return Some((self.needs_items.clone(), false));
+        }
+        Some((vec![value.to_owned()], false))
     }
 }
 
@@ -4174,6 +4195,7 @@ fn yaml_jobs(text: &str) -> Vec<YJob> {
                 inline: !l.value.is_empty(),
                 props: Vec::new(),
                 steps: Vec::new(),
+                needs_items: Vec::new(),
             });
             prop_col = None;
             cur_prop.clear();
@@ -4192,6 +4214,16 @@ fn yaml_jobs(text: &str) -> Vec<YJob> {
             j.props.push((l.key, l.value));
             step_dash = None;
             step_col = None;
+            continue;
+        }
+        if cur_prop == "needs" && l.dash.is_some() {
+            j.needs_items.push(if l.key.is_empty() {
+                l.value
+            } else if l.value.is_empty() {
+                l.key
+            } else {
+                format!("{}: {}", l.key, l.value)
+            });
             continue;
         }
         if cur_prop != "steps" {
@@ -4238,6 +4270,16 @@ fn job_conditions(text: &str) -> Vec<(String, Option<String>)> {
         .collect()
 }
 
+fn sorted(items: &[String]) -> Vec<String> {
+    let mut v = items.to_vec();
+    v.sort();
+    v
+}
+
+fn sorted_str(items: &[&str]) -> Vec<String> {
+    sorted(&items.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>())
+}
+
 /// A step that runs a `cargo xtask` gate (not the tool installation).
 fn is_gate_run(run: &str) -> bool {
     run.contains("cargo xtask") && !run.contains("install-tools")
@@ -4267,17 +4309,25 @@ fn required_job_structure_findings(name: &str, text: &str) -> Vec<String> {
             .iter()
             .find(|(job, _)| job == id)
             .map(|(_, needs)| *needs);
-        let needs: Vec<&str> = j
-            .props
-            .iter()
-            .filter(|(k, _)| k == "needs")
-            .map(|(_, v)| v.as_str())
-            .collect();
-        match (pinned_needs, needs.as_slice()) {
-            (None, []) => {}
-            (Some(p), [n]) if p == *n => {}
+        let needs = j.needs();
+        match (pinned_needs, needs) {
+            (None, None) => {}
+            (Some(pinned), Some((found, false))) if sorted(&found) == sorted_str(pinned) => {}
+            (Some(pinned), Some((found, flow))) => {
+                let missing: Vec<&str> = pinned
+                    .iter()
+                    .copied()
+                    .filter(|p| !found.iter().any(|f| f == p))
+                    .collect();
+                let extra: Vec<&String> = found.iter().filter(|f| !pinned.contains(&f.as_str())).collect();
+                out.push(format!(
+                    "{name}: pinned job `{id}`: `needs:` lacks {missing:?}, has the extra {extra:?}{} (the verdict needs exactly {pinned:?})",
+                    if flow { ", in flow style" } else { "" }
+                ));
+            }
             (pinned, found) => out.push(format!(
-                "{name}: pinned job `{id}`: `needs:` {found:?}, pinned {pinned:?} (a `needs:` can skip the job)"
+                "{name}: pinned job `{id}`: `needs:` {:?}, pinned {pinned:?} (a `needs:` can skip the job)",
+                found.map(|(f, _)| f)
             )),
         }
         for (key, why) in [
@@ -6429,7 +6479,7 @@ mod tests {
 
     /// The pinned jobs `linux-full` delegates to (M4 review C-5), with their pinned conditions, `needs:` and gate lines,
     /// as they follow the required jobs in a `ci.yml` fixture.
-    const PINNED_EXTRA: &str = "  ct:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict ct\n  mutants-shard:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    strategy:\n      matrix:\n        shard:\n          - 0\n          - 1\n    steps:\n      - run: cargo xtask install-tools --set mutants\n      - run: cargo xtask step --strict mutants --shard ${{ matrix.shard }}/12\n  mutants:\n    needs: mutants-shard\n    if: always() && (github.event_name == 'schedule' || github.event_name == 'pull_request')\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict mutants-merge\n  proverif-hx:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict proverif --models hx --jobs 4\n  proverif-link:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict proverif --models link --jobs 4\n  kani:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict kani\n  fuzz:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict fuzz\n";
+    const PINNED_EXTRA: &str = "  ct:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict ct\n  mutants-shard:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    strategy:\n      matrix:\n        shard:\n          - 0\n          - 1\n    steps:\n      - run: cargo xtask install-tools --set mutants\n      - run: cargo xtask step --strict mutants --shard ${{ matrix.shard }}/12\n  mutants:\n    needs: mutants-shard\n    if: always() && (github.event_name == 'schedule' || github.event_name == 'pull_request')\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict mutants-merge\n  proverif-hx:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict proverif --models hx --jobs 4\n  proverif-link:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict proverif --models link --jobs 4\n  kani:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict kani\n  fuzz:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict fuzz\n  ci-verdict:\n    needs:\n      - linux-fast\n      - windows-native\n      - xwin-cross\n      - linux-full\n      - ct\n      - mutants-shard\n      - mutants\n      - proverif-hx\n      - proverif-link\n      - kani\n      - fuzz\n    if: always() && (github.event_name == 'schedule' || github.event_name == 'pull_request')\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict ci-verdict\n";
 
     /// M6-12: the `ci.yml` of `b83ed0b` (an unquoted `: ` in the Kani step name) gives exactly one finding, at line 240.
     #[test]
@@ -6648,18 +6698,18 @@ mod tests {
             1,
         );
         assert_eq!(required_job_findings(&files(&removed)).len(), 1);
-        // likewise on every pinned job (M4 review C-5; M5 adds `proverif-link`, M6 `kani`, M6-CI `fuzz`): each condition changed alone is one
+        // likewise on every pinned job (M4 review C-5; M5 adds `proverif-link`, M6 `kani`, M6-CI `fuzz`, C1 `ci-verdict`): each condition changed alone is one
         // finding
         assert_eq!(
             required_job_findings(&files(
                 &ci.replace("|| github.event_name == 'pull_request'", "")
             ))
             .len(),
-            8
+            9
         );
         // the conditions as parsed
         let parsed = job_conditions(ci);
-        assert_eq!(parsed.len(), 12);
+        assert_eq!(parsed.len(), 13);
         assert_eq!(parsed.first(), Some(&("linux-fast".to_owned(), None)));
         assert_eq!(
             parsed.get(4),
@@ -6674,6 +6724,118 @@ mod tests {
                 .map(|(_, c)| c);
             assert_eq!(found, Some(cond.map(str::to_owned)), "{job}");
         }
+    }
+
+    /// The real `ci.yml` as the policy step reads it, with the `ci-verdict` job's text edited by `edit`.
+    fn ci_with_verdict(edit: impl Fn(&str) -> String) -> Vec<(String, String)> {
+        let real = lf(include_str!("../../.github/workflows/ci.yml"));
+        let at = real.find("  ci-verdict:\n").unwrap_or(0);
+        let (head, verdict) = real.split_at(at);
+        vec![(
+            expect::REQUIRED_WORKFLOW.to_owned(),
+            format!("{head}{}", edit(verdict)),
+        )]
+    }
+
+    /// V-04 (ADR-045 Amendment 2): `ci-verdict` needs every other pinned job; a list without `ct` is a finding naming `ct`, an
+    /// extra job and a flow-style list are findings too; the real `ci.yml` has none.
+    #[test]
+    fn ci_verdict_needs_every_pinned_job() {
+        assert!(
+            ci_with_verdict(str::to_owned)
+                .iter()
+                .all(|(n, t)| required_job_findings(&[(n.clone(), t.clone())]).is_empty())
+        );
+        let without_ct = ci_with_verdict(|v| v.replacen("      - ct\n", "", 1));
+        let found = required_job_findings(&without_ct);
+        assert!(
+            found
+                .iter()
+                .any(|f| f.contains("`ci-verdict`") && f.contains("\"ct\"")),
+            "{found:?}"
+        );
+        let extra =
+            ci_with_verdict(|v| v.replacen("      - ct\n", "      - ct\n      - docs\n", 1));
+        assert!(!required_job_findings(&extra).is_empty());
+        let flow = ci_with_verdict(|v| {
+            let start = v.find("    needs:\n").unwrap_or(0);
+            let end = v.find("    if:").unwrap_or(v.len());
+            format!(
+                "{}    needs: [{}]\n{}",
+                &v[..start],
+                expect::CI_VERDICT_NEEDS.join(", "),
+                &v[end..]
+            )
+        });
+        let found = required_job_findings(&flow);
+        assert!(found.iter().any(|f| f.contains("flow style")), "{found:?}");
+    }
+
+    /// V-05: `ci-verdict` runs always: without the condition, with `success()`, and without `always()` in front of the events,
+    /// the policy step has a finding that names the pinned condition; the real `ci.yml` has none.
+    #[test]
+    fn ci_verdict_runs_always() {
+        let cond = "    if: always() && (github.event_name == 'schedule' || github.event_name == 'pull_request')\n";
+        for replacement in [
+            "",
+            "    if: success()\n",
+            "    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n",
+        ] {
+            let files = ci_with_verdict(|v| v.replacen(cond, replacement, 1));
+            let found = required_job_findings(&files);
+            assert!(
+                found
+                    .iter()
+                    .any(|f| f.contains("`ci-verdict`") && f.contains("always()")),
+                "{replacement:?}: {found:?}"
+            );
+        }
+        let real = ci_with_verdict(str::to_owned);
+        assert!(required_job_findings(&real).is_empty());
+    }
+
+    /// V-06 (the M2 review C2 rule): a job `ci-verdict` in `ci-dispatch.yml` would add a `skipped` check under the required
+    /// name; it is a finding.
+    #[test]
+    fn ci_verdict_only_in_the_required_workflow() {
+        let mut files = ci_with_verdict(str::to_owned);
+        files.push((
+            ".github/workflows/ci-dispatch.yml".to_owned(),
+            "jobs:\n  ci-verdict:\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict ci-verdict\n".to_owned(),
+        ));
+        let found = required_job_findings(&files);
+        assert!(
+            found
+                .iter()
+                .any(|f| f.contains("`ci-verdict`") && f.contains("outside")),
+            "{found:?}"
+        );
+    }
+
+    /// V-07: `ci-verdict` is a required and a pinned job, ADR-045 Amendment 2 is Accepted in docs/08 and docs/06 §4 names the job.
+    #[test]
+    fn required_jobs_include_ci_verdict() -> Result<()> {
+        assert!(expect::REQUIRED_JOBS.contains(&"ci-verdict"));
+        assert!(expect::PINNED_JOBS.contains(&"ci-verdict"));
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let adr = std::fs::read_to_string(root.join("docs/08-decisions.md"))?;
+        let at = adr
+            .find("ADR-045 Amendment 2")
+            .ok_or_else(|| Error("no ADR-045 Amendment 2".into()))?;
+        let text = adr.get(at..).unwrap_or_default();
+        let head = text.lines().next().unwrap_or_default();
+        assert!(
+            head.contains("Accepted (Reviewer, Owner-Delegation 30.09., 2026-10-17)"),
+            "{head}"
+        );
+        let standards = std::fs::read_to_string(root.join("docs/06-engineering-standards.md"))?;
+        assert!(
+            standards
+                .lines()
+                .any(|l| l.starts_with('|') && l.contains("`ci-verdict`")),
+            "docs/06 §4 job table"
+        );
+        Ok(())
     }
 
     /// M2 review F5, M3 review F21 (R-49): every uploaded artefact of every workflow (the ct reports, the SBOMs, the
@@ -7172,10 +7334,10 @@ mod tests {
         assert_eq!(conditions, pinned);
         assert!(expect::REQUIRED_JOBS.iter().all(|j| pinned.contains(*j)));
         for (job, needs) in expect::PINNED_JOB_NEEDS {
-            assert!(
-                pinned.contains(*job) && pinned.contains(*needs),
-                "{job} {needs}"
-            );
+            assert!(pinned.contains(*job), "{job}");
+            for need in *needs {
+                assert!(pinned.contains(*need), "{job} {need}");
+            }
         }
         for (_, job) in expect::DELEGATED_TO {
             assert!(pinned.contains(*job), "{job}");

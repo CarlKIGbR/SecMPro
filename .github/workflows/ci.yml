@@ -524,3 +524,34 @@ jobs:
           name: proverif-link-${{ github.sha }}-${{ github.run_attempt }}
           path: target/proverif/
           if-no-files-found: error
+
+  # ADR-045 Amendment 2 (OWNER-M6-02): the one aggregate check. Runs after every other gate job whatever its outcome and
+  # fails unless each of them ended `success` (a `skipped`, `cancelled` or missing job is a failure naming it; GitHub
+  # counts a skipped job as passing). `needs:` is the complete list of the other pinned jobs (`expect::CI_VERDICT_NEEDS`),
+  # `mutants` included, so a failing mutation merge is a failure here. Same events as the gate jobs.
+  ci-verdict:
+    needs:
+      - linux-fast
+      - windows-native
+      - xwin-cross
+      - linux-full
+      - ct
+      - mutants-shard
+      - mutants
+      - proverif-hx
+      - proverif-link
+      - kani
+      - fuzz
+    if: always() && (github.event_name == 'schedule' || github.event_name == 'pull_request')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Pinned toolchain (rust-toolchain.toml)
+        run: rustup toolchain install && rustc -vV
+      - name: Verdict over the gate jobs
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: cargo xtask step --strict ci-verdict

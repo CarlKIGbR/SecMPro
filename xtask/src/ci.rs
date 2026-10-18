@@ -223,6 +223,12 @@ const ON_DEMAND: &[Step] = &[
         id: "mutants-merge",
         run: gates::mutants_merge,
     },
+    // ADR-045 Amendment 2: the verdict over the needs of every other gate job (the `ci-verdict` job of ci.yml)
+    Step {
+        num: "15",
+        id: "ci-verdict",
+        run: crate::verdict::ci_verdict,
+    },
 ];
 
 struct Options {

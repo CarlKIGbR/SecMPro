@@ -627,9 +627,9 @@ pub(crate) const MUTANT_HARNESS_TEST_PACKAGES: &[&str] =
     &["secmp-client-core", "secmp-transport", "secmp-testkit"];
 
 /// ADR-047 Amendment 1 (2): the shards of the mutation gate in CI — the matrix job `mutants-shard` of `ci.yml` runs
-/// `cargo xtask step --strict mutants --shard K/8` for K = 0…7, and the job `mutants` (`step mutants-merge`) merges
+/// `cargo xtask step --strict mutants --shard K/12` for K = 0…11, and the job `mutants` (`step mutants-merge`) merges
 /// their results and gives the verdict.
-pub(crate) const MUTANT_SHARDS: usize = 8;
+pub(crate) const MUTANT_SHARDS: usize = 12;
 
 /// ADR-047 Amendment 2 (1) (replacing the unviable cap of Amendment 1 (4), M4 review R-06): the floor per package of
 /// [`MUTANT_PACKAGES`] — at least one caught mutant, and caught at least this percentage of all the package's generated
@@ -1653,7 +1653,7 @@ pub(crate) const REQUIRED_GATE_RUNS: &[(&str, &[&str])] = &[
     ("ct", &["cargo xtask step --strict ct"]),
     (
         "mutants-shard",
-        &["cargo xtask step --strict mutants --shard ${{ matrix.shard }}/8"],
+        &["cargo xtask step --strict mutants --shard ${{ matrix.shard }}/12"],
     ),
     ("mutants", &["cargo xtask step --strict mutants-merge"]),
     (

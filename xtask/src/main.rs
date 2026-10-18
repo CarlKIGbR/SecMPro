@@ -52,7 +52,7 @@ usage: cargo xtask <command> [options]
   cooldown                                  7-day dependency cooldown only
   sbom                                      CycloneDX SBOMs + cargo-auditable release builds
   win-test --backend github|libvirt         Windows gate (github: windows-latest; libvirt: from M9)
-    step: [--shard K/N]                     the mutants step's shard (CI: K/8, merged by `step mutants-merge`)
+    step: [--shard K/N]                     the mutants step's shard (CI: K/12, merged by `step mutants-merge`)
   install-tools [--set NAME] [--nightly]    install the pinned tools (fast | windows | xwin | mutants | miri | fuzz | full | all)
   vectors                                   generate the Rust vectors, compare with vectors/ref, freeze
   ct-check [--targets current|m2|m4|m5] REPORT... the ct gate's reading of saved ct reports

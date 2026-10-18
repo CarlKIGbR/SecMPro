@@ -6429,7 +6429,7 @@ mod tests {
 
     /// The pinned jobs `linux-full` delegates to (M4 review C-5), with their pinned conditions, `needs:` and gate lines,
     /// as they follow the required jobs in a `ci.yml` fixture.
-    const PINNED_EXTRA: &str = "  ct:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict ct\n  mutants-shard:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    strategy:\n      matrix:\n        shard:\n          - 0\n          - 1\n    steps:\n      - run: cargo xtask install-tools --set mutants\n      - run: cargo xtask step --strict mutants --shard ${{ matrix.shard }}/8\n  mutants:\n    needs: mutants-shard\n    if: always() && (github.event_name == 'schedule' || github.event_name == 'pull_request')\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict mutants-merge\n  proverif-hx:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict proverif --models hx --jobs 4\n  proverif-link:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict proverif --models link --jobs 4\n  kani:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict kani\n  fuzz:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict fuzz\n";
+    const PINNED_EXTRA: &str = "  ct:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict ct\n  mutants-shard:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    strategy:\n      matrix:\n        shard:\n          - 0\n          - 1\n    steps:\n      - run: cargo xtask install-tools --set mutants\n      - run: cargo xtask step --strict mutants --shard ${{ matrix.shard }}/12\n  mutants:\n    needs: mutants-shard\n    if: always() && (github.event_name == 'schedule' || github.event_name == 'pull_request')\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict mutants-merge\n  proverif-hx:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict proverif --models hx --jobs 4\n  proverif-link:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict proverif --models link --jobs 4\n  kani:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict kani\n  fuzz:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict fuzz\n";
 
     /// M6-12: the `ci.yml` of `b83ed0b` (an unquoted `: ` in the Kani step name) gives exactly one finding, at line 240.
     #[test]
@@ -7451,12 +7451,12 @@ mod tests {
     fn mutants_scope_includes_relay() -> Result<()> {
         assert!(expect::MUTANT_PACKAGES.contains(&"secmp-relay"));
         assert!(!expect::MUTANT_HARNESS_PACKAGES.contains(&"secmp-relay"));
-        assert_eq!(expect::MUTANT_SHARDS, 8);
+        assert_eq!(expect::MUTANT_SHARDS, 12);
         assert_eq!(expect::MUTANT_MIN_CAUGHT_PERCENT, 50);
         assert_eq!(expect::MUTANT_UNVIABLE_WARN_PERCENT, 35);
         assert!(expect::MUTANT_EXCLUDE_FILES.contains(&"crates/secmp-relay/src/kani_proofs.rs"));
-        for k in 0..8 {
-            let args = mutants_args(Some(MutantsShard { k, n: 8 }));
+        for k in 0..12 {
+            let args = mutants_args(Some(MutantsShard { k, n: 12 }));
             assert!(
                 args.windows(2)
                     .any(|w| w.first().map(String::as_str) == Some("--package")
@@ -7546,14 +7546,14 @@ mod tests {
             &["secmp-client-core", "secmp-transport", "secmp-testkit"]
         );
         assert!(!expect::MUTANT_PACKAGES.contains(&"secmp-testkit"));
-        assert_eq!(expect::MUTANT_SHARDS, 8);
+        assert_eq!(expect::MUTANT_SHARDS, 12);
         let pairs = |args: &[String]| -> Vec<(String, String)> {
             args.windows(2)
                 .filter_map(|w| Some((w.first()?.clone(), w.get(1)?.clone())))
                 .collect()
         };
-        for k in 0..8 {
-            let shard = Some(MutantsShard { k, n: 8 });
+        for k in 0..12 {
+            let shard = Some(MutantsShard { k, n: 12 });
             let first = pairs(&mutants_args(shard));
             let second = pairs(&mutants_harness_args(shard));
             let has =
@@ -7576,8 +7576,8 @@ mod tests {
             assert!(!first.iter().any(|(a, _)| a == "--test-package"), "{k}");
             assert!(has(&first, "--features", "kat") && has(&second, "--features", "harness"));
             assert!(
-                has(&first, "--shard", &format!("{k}/8"))
-                    && has(&second, "--shard", &format!("{k}/8"))
+                has(&first, "--shard", &format!("{k}/12"))
+                    && has(&second, "--shard", &format!("{k}/12"))
             );
             assert!(has(&first, "--output", "target"));
             assert!(has(&second, "--output", MUTANTS_HARNESS_OUTPUT));

@@ -326,9 +326,9 @@ jobs:
             target/ct-bench.log
           if-no-files-found: error
 
-  # docs/06 §5 step 8 (mutation testing, secmp-crypto and secmp-proto) outside `linux-full` (ADR-047), as 8 shards and
+  # docs/06 §5 step 8 (mutation testing, secmp-crypto and secmp-proto) outside `linux-full` (ADR-047), as 12 shards and
   # a merge (ADR-047 Amendment 1, M4 review C-3): the two-crate run needs an estimated 7–26 h, more than any job. Each
-  # shard runs every eighth mutant (round-robin) with `-j 3` under the step budget `expect::MUTANTS_STEP_TIMEOUT_SECONDS`
+  # shard runs every twelfth mutant (round-robin) with `-j 3` under the step budget `expect::MUTANTS_STEP_TIMEOUT_SECONDS`
   # (280 min) and records its verdict in `mutants.out`, which with the step log are kept as an artefact in every
   # case. Same events as `linux-full`.
   mutants-shard:
@@ -347,6 +347,10 @@ jobs:
           - 5
           - 6
           - 7
+          - 8
+          - 9
+          - 10
+          - 11
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -371,8 +375,8 @@ jobs:
         with:
           path: ~/.secmp-tools
           key: ${{ steps.tools-cache.outputs.cache-primary-key }}
-      - name: Mutation testing, one shard of 8 (step 8, `-j 3`)
-        run: cargo xtask step --strict mutants --shard ${{ matrix.shard }}/8
+      - name: Mutation testing, one shard of 12 (step 8, `-j 3`)
+        run: cargo xtask step --strict mutants --shard ${{ matrix.shard }}/12
       - name: Upload the shard's mutants evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -384,7 +388,7 @@ jobs:
           if-no-files-found: error
 
   # The verdict of step 8 (ADR-047 Amendment 1 (2), Amendment 2): runs after the shards whatever their outcome,
-  # downloads their results, reports every shard and package, and fails unless all 8 passed, every survivor is
+  # downloads their results, reports every shard and package, and fails unless all 12 passed, every survivor is
   # documented in `docs/mutants-accepted.md` and each package has caught at least 50 % of its mutants
   # (`expect::MUTANT_MIN_CAUGHT_PERCENT`); an unviable share above 35 % is a warning. The merged outcomes and the
   # per-package counts are kept as an artefact. Same events as `linux-full`.
@@ -404,7 +408,7 @@ jobs:
         with:
           pattern: mutants-*-${{ github.run_attempt }}
           path: target/mutants-shards
-      - name: Mutation verdict over the 8 shards (step 8)
+      - name: Mutation verdict over the 12 shards (step 8)
         run: cargo xtask step --strict mutants-merge
       - name: Upload the merged mutants evidence
         if: always()

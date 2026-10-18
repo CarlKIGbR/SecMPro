@@ -101,7 +101,7 @@ Jobs of `ci.yml` (pinned by `expect::PINNED_JOBS`; the first four are the requir
 | `xwin-cross` | `cargo-xwin` cross-build | 60 |
 | `linux-full` | `ci-full` steps 1–14 less the delegated ones (`windows-*`, `mutants`, `ct`, `fuzz`, `kani`, `proverif-link`) | 240 |
 | `ct` | constant-time gate (step 5), `--delegated ct` | 330 |
-| `mutants-shard` ×8, `mutants` | mutation testing (step 8) and its verdict, `--delegated mutants` | 300, 30 |
+| `mutants-shard` ×12, `mutants` | mutation testing (step 8) and its verdict, `--delegated mutants` | 300, 30 |
 | `proverif-hx`, `proverif-link` | ProVerif SecMP-HX and SecMP-LINK models (step 10), `--delegated proverif-link` | 180, 120 |
 | `kani` | Kani harnesses (step 9: every `KANI_PACKAGES`, `-Z stubbing` where used, the verified-harness and cover pins), `--delegated kani` (M6, WEISUNG M6-11, VD-M6-A-23: `linux-full` had passed 240 min); `SECMP_RUNNER_TRACE=1`: xtask writes a `runner-trace` line (memory, swap, disk, largest process) every 20 s to the job log (M6-15) | 150 |
 | `fuzz` | fuzz smoke (step 6, every target, `FUZZ_SMOKE_SECONDS` each), `--delegated fuzz` (M6-CI, WEISUNG M6-CI-1 §4, ADR-047 Amendment 5) | 120 |

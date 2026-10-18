@@ -406,7 +406,7 @@ mod tests {
             *c = if *c == 'a' { 'b' } else { 'a' };
         }
         let corrupted: String = corrupted.into_iter().collect();
-        assert!(corrupted != known);
+        assert_ne!(corrupted, known);
         assert!(
             decode_onion_text(&corrupted).is_none(),
             "checksum-corrupted text"

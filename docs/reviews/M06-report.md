@@ -1122,10 +1122,20 @@ required job (`ct`, `mutants`, `proverif-hx`) is not green.
     - The two-receiver control of CT-DIAG-3 (V6c) shifted by up to 7 ticks with nothing differing.
 - ct on fine-timer hosts (EPYC 7763, q_eff 1 tick) resolves public-input micro-timing of ≈ 10–20 ns; targets must
   hold public fields constant across classes (ADR-042 Am. 5).
+- **Kani headroom (item 12, decided WEISUNG M6-C1-3: harnesses unchanged).** Peak `secmp-proto` harness 13.75 GB
+  (`kani_commit_accept_atomic`) on a 16 GB runner; seven harnesses exceed 8 GB. The OOM of 14.10. (15.5 GB) came from profile
+  overrides, fixed in M6-16. No bound could be lowered without weakening a property. Baseline table:
+  `docs/reviews/M06-evidence/kani-rss-d1bcfdc.txt`. No ADR-047 amendment.
+- **OPEN-M6-C1-1 (M7).** Split the seven > 8 GB proto harnesses by sub-property, or add an xtask RSS guard
+  (`SECMP_RUNNER_TRACE`) that fails the kani job when the peak exceeds 14.5 GB.
+- **M7: K-C5 call-through after extraction.** K-C5 mirrors the FETCH-lead and flush-bound expressions; once they are extracted
+  into `core/pure.rs` it should call them. K-C6 fixes `max_in_flight` = 2 (a symbolic value cost 14.8 GB under Kani).
+- **Infra note for the owner.** The first attempt at K-C4 (a `VecDeque` ledger) ran one `cbmc` to 97 GB RSS; the container has
+  no memory limit, and it could not be killed from the session.
 
 ## 8. Blocked / questions for the reviewer or owner
 
-### BRIEF M6-C1 item 12 (K-12) — BLOCKED 2026-10-18: seven `secmp-proto` harnesses exceed 8 GB, not one
+### BRIEF M6-C1 item 12 (K-12) — BLOCKED 2026-10-18, RESOLVED (WEISUNG M6-C1-3: harnesses kept, risk recorded in §7): seven `secmp-proto` harnesses exceed 8 GB, not one
 
 Measured alone (`docs/reviews/M06-evidence/kani-rss-d1bcfdc.txt`, 30 harnesses, all verified): `kani_commit_accept_atomic` 13 751 MB,
 `tr_header_selection` 13 425, `kani_accept_opk_delete_only_on_success` 12 127, `kani_q_frame_plaintext_exact_fit` 11 662,

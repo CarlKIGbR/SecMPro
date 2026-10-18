@@ -1133,14 +1133,14 @@ required job (`ct`, `mutants`, `proverif-hx`) is not green.
   delay *other* links' due writes by the preparation of an active link — the cost model cannot show that, the Phase B
   driver must not do it.
 - **R-CT-1 (closed): ct run #159 FAIL — target design; fixed in M6-CI-13; product trial-position path clean; residual
-  public-content micro-timing ≤ 2.2 ns locally, below the 10 ns floor, monitored by the informative target**
+  timing of the selected key, entry and message key ≤ 2.2 ns locally, below the 10 ns floor (not monitored by the informative nonce target)**
   (ADR-042 Amendment 5; `docs/reviews/M06-evidence/ct-nonce-M6-CI-13.md`).
   - **Cause.** `tr_decrypt_trial_open_position` (and, in one half, `tr_decrypt_reject_skipped`) failed because their
     classes differed in the public header nonce. CT-DIAG-3 V4 showed the nonce alone shifts §7.4 Decrypt by up to 65
     ticks with either sign.
   - **Product path.** The re-sealed variant, with the same nonce, header plaintext and body and differing only in trial
     position, entry, `hk` and `mk`, stayed ≤ 0.50 ticks in 16/16 halves.
-  - **Fix.** `0d89bdf`: both targets hold the nonce, the public header and the body constant. `6ac385f` adds the
+  - **Fix.** `0d89bdf`: both targets hold the nonce, the decoded header contents and the body constant. `6ac385f` adds the
     informative `tr_decrypt_nonce_dependence`.
   - **Acceptance (WEISUNG M6-CI-13b):** every half |Δp90| < 0.5 × floor (20 local ticks = 5 ns) and every rep verdict
     PASS. The 1.0-tick bar of M6-CI-13 §5 was a diagnosis bar and is withdrawn.
@@ -1155,11 +1155,14 @@ required job (`ct`, `mutants`, `proverif-hx`) is not green.
   - **Recorded residual** (formerly the §8 question; no question remains open). With the new fixture, 7 of 28 halves
     shifted by more than 1 tick: −1.42 and −1.65 (5a, `reject_skipped`); −8.93 (t −25.22), +3.81 (t 10.93) and −1.27
     (5b, `trial_open_position`); −5.20 (t −12.93) and +1.14 (5b, `reject_skipped`). They come with both signs.
-    - This is a public-content micro-timing of the remaining class differences: `hdr_ct`, key/entry, `mk`.
+    - This is the timing of the remaining class differences: the selected key/entry/message key (`hk`, `mk` are secret keys) and the header ciphertext that follows; `pn`, `n`, `dh_pk`, `ek_pq`, `ct_pq` are encrypted header contents (spec §7.3), not public fields. `tr_decrypt_nonce_dependence` does not monitor it (key, entry and `mk` fixed): it monitors the nonce / header-ciphertext / body-AD contrast.
     - It is below the floor by a factor of at least 4.
     - The two-receiver control of CT-DIAG-3 (V6c) shifted by up to 7 ticks with nothing differing.
-- ct on fine-timer hosts (EPYC 7763, q_eff 1 tick) resolves public-input micro-timing of ≈ 10–20 ns; targets must
-  hold public fields constant across classes (ADR-042 Am. 5).
+- ct on fine-timer hosts (EPYC 7763, q_eff 1 tick) resolves micro-timing of ≈ 10–20 ns in the nonce and in decoded header contents; targets must
+  hold the nonce and the decoded header contents constant across classes unless they name them (ADR-042 Am. 5).
+- **OPEN-M6-C1-2 (FINAL4, decision in the C2 planning).** The re-sealed position fixture holds the decoded `pn` constant (old classes 0/3,
+  new 0/0), so timing that depends on decoded header contents is no longer in the position contrast. A separate contrast with a
+  constant public nonce (a fixture that varies the decoded header contents under one nonce) is open.
 - **Kani headroom (item 12, decided WEISUNG M6-C1-3: harnesses unchanged).** Peak `secmp-proto` harness 13.75 GB
   (`kani_commit_accept_atomic`) on a 16 GB runner; seven harnesses exceed 8 GB. The OOM of 14.10. (15.5 GB) came from profile
   overrides, fixed in M6-16. No bound could be lowered without weakening a property. Baseline table:

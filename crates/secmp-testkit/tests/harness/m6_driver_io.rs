@@ -1182,8 +1182,10 @@ fn driver_reports_no_unmatched_written() {
 /// R-01 (OPEN-M6-B-1, a characterisation, not a requirement): the receive throughput of the driver's `Deferred` facade. One
 /// Balanced client with one recv queue and the AI costs (a received cell 5 ms); the peer has stored four cells before the first
 /// `FETCH_MULTI`. Per period the test records how many cells were newly committed (decided and persisted by the worker, so
-/// delivered to the conversation) and when each cell was acknowledged. The measured values are the expectation: **one cell
-/// is committed per response, and each is acknowledged one period after it was committed** — the cost the Phase-B report
+/// delivered to the conversation) and when each cell became ready to acknowledge — the scheduler's *internal* acknowledgement
+/// state (`Scheduler::acked`), which the next `FETCH_MULTI` carries — and, as a second series, when the relay saw the
+/// acknowledgement (its head moved). The measured values are the expectation: **one cell is committed per response, each is
+/// ready to be acknowledged one period after its commit, and the relay sees it with the next `FETCH_MULTI`** — the cost the Phase-B report
 /// names (a `FETCH` response commits at most one new cell instead of up to four; the fix needs a core API, M7). The numbers
 /// are printed (`target/m6-evidence/R-01.txt`) and change only with the reviewer.
 #[test]
@@ -1248,14 +1250,33 @@ fn receive_throughput_per_fetch_is_measured() {
             .collect();
         let text = format!(
             "R-01 receive throughput of the facade (Balanced, 4 cells stored before the first FETCH, costs 5 ms per received cell)\n\
-             committed at (s): {got_at:?}\nacknowledged at (s): {acked_at:?}\n\
+             committed at (s): {got_at:?}\nready to acknowledge at (s, internal): {acked_at:?}\n\
              seconds between commits: {steps:?}\nack delay per cell (s): {delays:?}"
         );
+        let relay_acks: Vec<u64> = {
+            let mut last: std::collections::BTreeMap<secmp_proto::wire::Id, u64> =
+                std::collections::BTreeMap::new();
+            let mut seen = Vec::new();
+            for c in rig.setup.relay.store_changes() {
+                let before = last.insert(c.rid, c.head).unwrap_or(0);
+                if c.isolation.0 < crate::m6_tokio::SETUP_ISO && c.head != before {
+                    seen.push(c.t_ms.saturating_sub(t0) / 1_000);
+                }
+            }
+            seen
+        };
+        let text = format!("{text}\nrelay-observed acknowledgement at (s): {relay_acks:?}");
         crate::m6_common::evidence("R-01", &text);
         assert_eq!(got_at.len(), 4, "all four cells are committed: {text}");
+        assert_eq!(acked_at.len(), 4, "all four become ready to acknowledge: {text}");
+        assert_eq!(relay_acks.len(), 4, "the relay saw four acknowledgements: {text}");
+        assert!(
+            relay_acks.iter().zip(&acked_at).all(|(w, a)| w >= a),
+            "the relay sees an acknowledgement no earlier than it is ready: {text}"
+        );
         // one cell per response: the commits are one period apart
         assert!(steps.iter().all(|d| *d == 10), "{text}");
-        // each acknowledgement comes one period after its commit
+        // each acknowledgement is ready one period after its commit
         assert!(delays.iter().all(|d| *d == 10), "{text}");
     });
 }

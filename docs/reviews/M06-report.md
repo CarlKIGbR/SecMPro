@@ -1173,10 +1173,12 @@ required job (`ct`, `mutants`, `proverif-hx`) is not green.
   into `core/pure.rs` it should call them. K-C6 fixes `max_in_flight` = 2 (a symbolic value cost 14.8 GB under Kani).
 - **Infra note for the owner.** The first attempt at K-C4 (a `VecDeque` ledger) ran one `cbmc` to 97 GB RSS; the container has
   no memory limit, and it could not be killed from the session.
-- **OPEN-M6-B-1 measured (item 6, R-01 `m6_driver_io::receive_throughput_per_fetch_is_measured`).** Balanced, one recv queue, four cells
-  stored before the first `FETCH_MULTI`, 5 ms per received cell: the cells are committed at 11, 21, 31 and 41 s — **one cell per
-  response** (10 s apart) — and acknowledged at 21, 31, 41 and 51 s — **one period after the commit**, per cell
-  (`target/m6-evidence/R-01.txt`). The fix needs a core API (a deferred-commit outcome of `deliver`): M7 entry.
+- **OPEN-M6-B-1 measured (item 6, R-01 `m6_driver_io::receive_throughput_per_fetch_is_measured`; relabelled after FINAL4 FIN4-6).** Balanced, one recv
+  queue, four cells stored before the first `FETCH_MULTI`, 5 ms per received cell: the cells are committed at 11, 21, 31 and 41 s —
+  **one cell per response** (10 s apart) — and become ready to be acknowledged at 21, 31, 41 and 51 s — the scheduler's *internal*
+  acknowledgement state (`Scheduler::acked`), one period after the commit. The **relay observes** the acknowledgements at 30, 40, 50
+  and 60 s (its queue head moves), i.e. with the next `FETCH_MULTI` (`target/m6-evidence/R-01.txt`). The test asserts four values in each
+  series before comparing. The fix needs a core API (a deferred-commit outcome of `deliver`): M7 entry.
 - **`Scheduler::frame_written` is a trusted-caller contract (item 10, Astra FINAL3 (e)).** A report on an up link with an empty ledger is
   counted (`unmatched_written`, asserted 0 in debug builds by the tokio driver); a duplicate report while the ledger is not empty cannot
   be told from a genuine one — a frame carries no id — and pops the oldest entry. Detecting it needs an API change (a frame id): M7.

@@ -1135,6 +1135,48 @@ required job (`ct`, `mutants`, `proverif-hx`) is not green.
 
 ## 8. Blocked / questions for the reviewer or owner
 
+### Mutants shard time (BRIEF M6-C1 item 9, MU-C2) — ADR-047 Amendment 7, draft (Proposed)
+
+Data: `docs/reviews/M06-evidence/shard-times-c1.txt` (outcomes.json of the shard artifacts of runs 156 and 160, `gh run view --json
+jobs` for the job minutes). The artifacts of shards 4 and 5 are missing for run 156, of shard 4 for run 160.
+
+| Run | Shard | first run, min | second run, min | whole job, min |
+|---|---|---|---|---|
+| 160 (Am. 6 active) | 0 | 45 | 106 | 152 |
+| | 1 | 46 | 118 | 165 |
+| | 2 | 45 | 110 | 155 |
+| | 3 | 59 | 127 | 187 |
+| | 5 | 57 | 143 | 200 |
+| | 6 | 46 | 89 | 136 |
+| | 7 | 56 | 142 | 199 |
+| 156 (Am. 6 not active) | 0 / 1 / 3 / 6 / 7 | 55–60 | 180–214 | 236–273 |
+
+The job budget is 240 min. Run 156 exceeded it on four shards (up to 273 min); run 160 stayed within it, the slowest shard at 200 min
+(17 % margin).
+
+Cause. In run 160 the mutants that took more than 300 s (18–31 per shard) are 35–67 % of the second run's CPU time
+(`slow(>300 s) cpu-min` against all, per shard: 158/297, 155/337, 150/310, 222/357, 249/398, 86/249, 251/376). The five slowest of
+every shard are the same kind: `timing.rs` (`accept_ceiling`, `sample_with`, `sample_round`, `Display for Unavailable`), `clock.rs`
+(`ManualClock::advance_ms`, `set_ms`, `mono_ms`, `unix_secs`, `TokioClock::mono_ms`), `World::period_of`, with 1 000–1 800 s each.
+They are not slow to *build*: the test that fails first is queued behind tests that a mutated period or clock makes endless (four
+`m6_activity::activity_comparator_detects_*` tests hold all four runner threads; reproduced locally with `--test-threads=4`,
+`mutants-c1-41ee485.md`, "Timeouts"), so the mutant is caught late or at the 900-s timeout. The first run (45–59 min) and the setup are
+constant.
+
+Options.
+1. 12 shards (`MUTANT_SHARDS` 8 → 12, one constant): the job time falls by a third (200 → about 135 min), the cost is 50 % more runner
+   minutes and a 12-way merge; it does not change the cause.
+2. Fewer harness tests per mutant (a longer `MUTANT_HARNESS_SKIP_TESTS`): shortens every mutant, but weakens what kills a mutant (the
+   skipped tests are the ones that catch scheduling mutants) and is a harness-list change.
+3. Amendment 6 alone: enough today (200 min of 240), no margin for the tests added since, and the endless-mutant starvation remains.
+4. Put a fast killer of each long-running mutant at the front of the test order (module `m0_early`, which sorts before `m6_activity`),
+   as done in C-3 for `period_of`, `TokioClock::mono_ms`, the async handshake and `AsyncSession::send`. Expected: the 18–31 slow
+   mutants per shard fall to seconds, about half of the second run's CPU time (60 min of 143 on shard 5) at no extra runner cost.
+
+Proposal (Amendment 7, Proposed): keep 8 shards and `MUTANT_SHARDS` unchanged; adopt option 4 for the clock and timing mutants of the
+top-5 lists (`accept_ceiling`, `sample_with`, `sample_round`, `ManualClock::advance_ms`/`set_ms`/`mono_ms`/`unix_secs`) in the next
+round; and take option 1 if a shard of the first PR run with the C-3 tests exceeds 200 min. No change now.
+
 ### BRIEF M6-C1 item 12 (K-12) — BLOCKED 2026-10-18, RESOLVED (WEISUNG M6-C1-3: harnesses kept, risk recorded in §7): seven `secmp-proto` harnesses exceed 8 GB, not one
 
 Measured alone (`docs/reviews/M06-evidence/kani-rss-d1bcfdc.txt`, 30 harnesses, all verified): `kani_commit_accept_atomic` 13 751 MB,

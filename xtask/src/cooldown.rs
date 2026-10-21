@@ -559,14 +559,21 @@ mod tests {
             .filter(|p| p.name.starts_with("tor-") && p.source.is_some())
             .count();
         assert!(tor >= 30, "{tor} tor-* packages");
-        assert_eq!(crate::expect::COOLDOWN_EXCEPTIONS.len(), 1);
-        for (n, v, until, advisory) in crate::expect::COOLDOWN_EXCEPTIONS {
-            assert_eq!((*n, *v, *until), ("rustls", "0.23.46", "2026-10-21"));
-            assert!(
-                advisory.starts_with("RUSTSEC-2026-0346")
-                    && advisory.contains("-0349")
-                    && advisory.contains("ADR-015 Am. 2")
-            );
+        let expected = [
+            ("rustls", "0.23.46", "2026-10-21", "RUSTSEC-2026-0346"),
+            (
+                "rustls-webpki",
+                "0.103.16",
+                "2026-10-27",
+                "RUSTSEC-2026-0382",
+            ),
+        ];
+        assert_eq!(crate::expect::COOLDOWN_EXCEPTIONS.len(), expected.len());
+        for ((n, v, until, advisory), (en, ev, euntil, eadv)) in
+            crate::expect::COOLDOWN_EXCEPTIONS.iter().zip(expected)
+        {
+            assert_eq!((*n, *v, *until), (en, ev, euntil));
+            assert!(advisory.contains(eadv) && advisory.contains("ADR-015 Am. 2"));
             assert!(registry(n, v), "{n} {v}");
             assert!(day_of(until).is_ok());
         }

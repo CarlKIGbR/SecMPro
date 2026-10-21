@@ -5,7 +5,7 @@ Phase A: `modell=claude-sonnet-5-5` (sub-agents: `claude-sonnet-5-5` ×2 — xta
 
 ## 1. Plan (written before implementation, updated during)
 
-**Phase C1 closed @ `e7420ad`** (BRIEF M6-C1; WEISUNG M6-C1-2, -3, -4; Phase C part 1 of 2, `modell=claude-sonnet-5-5`). What C1 did: C-1 hygiene, documentation and the onion re-encode note (DOC-M6-C-1, DOC-M6-C-2, T-01/T-02, MIRI-01); C-2 the unmatched-`frame_written` counter and the `unwritten` bound (items 10, 11, 10b; C2-01…C2-07), Kani K-C1…K-C6 (13/13 client-core harnesses); C-3 the survivors of PR run 160 (item 1: 82 mutants killed, 16 accepted rows, no timeout accepted), ADR-047 Amendments 6 and 7 (12 shards); C-4 `ci-verdict` (ADR-045 Amendment 2, V-01…V-07); C-5 R-01, the `socket2` memo and this report. **Phase C2** (BRIEF_M6-C2: TC-*, SIM-*, AI-07, AI-10, MR-03…MR-07, CT-00, PV-01, X-07, X-08) follows on this head; **M6 merges only after C2**.
+**Phase C1 closed @ `c570d98`** (BRIEF M6-C1; WEISUNG M6-C1-2, -3, -4; Phase C part 1 of 2, `modell=claude-sonnet-5-5`). What C1 did: C-1 hygiene, documentation and the onion re-encode note (DOC-M6-C-1, DOC-M6-C-2, T-01/T-02, MIRI-01); C-2 the unmatched-`frame_written` counter and the `unwritten` bound (items 10, 11, 10b; C2-01…C2-07), Kani K-C1…K-C6 (13/13 client-core harnesses); C-3 the survivors of PR run 160 (item 1: 82 mutants killed, 16 accepted rows, no timeout accepted), ADR-047 Amendments 6 and 7 (12 shards); C-4 `ci-verdict` (ADR-045 Amendment 2, V-01…V-07); C-5 R-01, the `socket2` memo and this report. **Phase C2** (BRIEF_M6-C2: TC-*, SIM-*, AI-07, AI-10, MR-03…MR-07, CT-00, PV-01, X-07, X-08) follows on this head; **M6 merges only after C2**.
 
 Binding inputs: `docs/reviews/M06-planning/` (`BRIEF_M6.md`, `TEST-SPEC-M6.md` (177 rows: A 103, B 44, C 30), `OPEN-M6.md`,
 `OPEN-M6-decided.md`, `ADR-051-proposed.md`). ADR-051 is appended to `docs/08-decisions.md` as **Proposed**; Part 2 (owner)
@@ -1459,8 +1459,8 @@ zeroize_derive 1.5.0, libm 0.2.16 and const-oid 0.10.2.
 ## 9. Checklist before requesting review
 
 - [x] All Phase A rows evidenced above
-- [x] Phase C1 closed @ `e7420ad`: items 1, 3–11, 13 of BRIEF M6-C1 evidenced (§3 rows, §5, §6, §7, §8); item 12 decided (§7); C2 rows are `OPEN — C2` in §3
-- [x] `cargo xtask ci-fast --strict` green at `cd828ca` (C-4) and at the C1 head; `ci-full` at `e7420ad`: `M06-evidence/ci-full-m6c1-e7420ad.txt`
+- [x] Phase C1 closed @ `c570d98`: items 1, 3–11, 13 of BRIEF M6-C1 evidenced (§3 rows, §5, §6, §7, §8); item 12 decided (§7); C2 rows are `OPEN — C2` in §3
+- [x] `cargo xtask ci-fast --strict` green at `cd828ca` (C-4) and at the C1 head; `ci-full` at `c570d98`: `M06-evidence/ci-full-m6c1-c570d98.txt`
 - [x] `cargo xtask ci-fast --strict` green at `7a67339`; Kani 40/40 at `7a67339`; `ci-full` green (§4) at `03cc660`, not rerun
 - [x] No `#[ignore]`, no lint allowances added for security lints, no disabled gates
 - [x] Vectors untouched

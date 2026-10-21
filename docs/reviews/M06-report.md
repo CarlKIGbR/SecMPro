@@ -613,6 +613,8 @@ fourth survivor, `MemPersist::set_durable`, has a killer. Details and red quotes
 
 - **Two follow-ups of the bump.** (1) `xtask` test `cooldown::tests::cooldown_covers_m6_lock` pinned exactly one cooldown exception and went red (nextest, coverage); it now pins both entries. (2) The `sbom` step stayed red after the bump because `target/release/secmp-relay` (Oct 18) was not rebuilt — its sources had not changed — and its embedded `cargo auditable` data still listed `rustls-webpki` 0.103.15 (the data is the resolve of the whole `--package` set at build time). A touch of `crates/secmp-relay/src/main.rs` forced the rebuild; `sbom` PASS. Finding for the reviewer, not fixed here: on a lock-only change a stale release binary can make `sbom` report a version that is no longer in the lock (a CI runner builds from scratch and is not affected); a `cargo clean --release`-style step or a lock-hash check in the `sbom` gate would close it.
 
+- **Test helpers in the mutation set (run 39563783784, WEISUNG M6-C1-8).** cargo-mutants skips only a plain `#[cfg(test)]`; two modules had `#[cfg(all(test, feature = …))]`, so the relay's `FlushFails` stream (four mutants, two reported as undocumented survivors) was mutated. Attributes fixed (`5e1a136`), `--list` grep for `m6_mut|FlushFails|::tests::` prints 0, relay 696 → 692; details in `mutants-c1-41ee485.md`, "PR run 164".
+
 ### Phase C1 deviations (BRIEF M6-C1, WEISUNG M6-C1-3, -4): none from the spec or the plan; implementation choices, each with its reason, none needs an ADR
 
 1. **Killers of private functions are unit tests inside their crate** (`scheduler::run::tests::m6_mut_*`, `scheduler::core::m6_mut::counters_now_moves_when_a_counted_step_runs`, `caps`, `channel`, `ops`, `tls` and `session` `m6_mut_*`), not `m6_mut::<function>_<behaviour>` of the harness: the functions are private and the harness reaches only the public API. The killers the harness can reach are in `m6_mut`.
@@ -1187,6 +1189,7 @@ required job (`ct`, `mutants`, `proverif-hx`) is not green.
 - ct on fine-timer hosts (EPYC 7763, q_eff 1 tick) resolves micro-timing of ≈ 10–20 ns in the nonce and in decoded header contents; targets must
   hold the nonce and the decoded header contents constant across classes unless they name them (ADR-042 Am. 5).
 - **OPEN-M6-C1-2 (FINAL4, decision in the C2 planning).** The re-sealed position fixture holds the decoded `pn` constant (old classes 0/3,
+- **OPEN-M6-C1-3 (stale auditable binary in `sbom`, decision in the C2 planning).** The `sbom` step must not read back a binary whose embedded dependency list differs from `Cargo.lock` (seen after the `rustls-webpki` bump: `target/release/secmp-relay` was not rebuilt and still listed 0.103.15). Candidate fixes: compare the embedded list with `Cargo.lock` and fail on a mismatch, or build into a target directory owned by the step. No fix now.
   new 0/0), so timing that depends on decoded header contents is no longer in the position contrast. A separate contrast with a
   constant public nonce (a fixture that varies the decoded header contents under one nonce) is open.
 - **Kani headroom (item 12, decided WEISUNG M6-C1-3: harnesses unchanged).** Peak `secmp-proto` harness 13.75 GB

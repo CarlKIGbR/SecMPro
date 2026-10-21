@@ -189,3 +189,4 @@ All notable changes to this project are documented in this file. The format foll
 - M6 Phase C1: `rustls-webpki` 0.103.16 (lockfile only) for RUSTSEC-2026-0382, ADR-015 cooldown exception until 2026-10-27, vet delta
   audit recorded.
 - M6 Phase C1: `xtask` test that a failing step makes `ci-full`/`ci-fast`/`step` fail (`ci::tests::a_failing_step_makes_execute_fail`); no defect found.
+- M6 Phase C1: in-crate test modules carry a plain `#[cfg(test)]` (second attribute for the feature), so cargo-mutants no longer mutates test helpers.

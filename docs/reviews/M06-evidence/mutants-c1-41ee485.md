@@ -168,3 +168,20 @@ In-crate: scheduler::run::tests::m6_mut_deferred_queues_every_notification_in_or
 - **New survivor** `MemPersist::set_durable -> ()`: killer `m6_mut::mem_persist_set_durable_is_read_back`. Red (`cargo mutants --re set_durable`, 4 test threads):
   `crates/secmp-testkit/tests/harness/m6_mut.rs:1044:5` `left: None`, `right: Some([115, 110, 97, 112, 115, 104, 111, 116])`. No row.
 
+
+## PR run 164 (39563783784, head 0c867d4): test helpers in the mutation set
+
+- Shards 9 and 11 reported two undocumented survivors, both in the in-memory stream of the FIN4-3 test: `crates/secmp-relay/src/tls.rs:431:13`
+  (`replace m6_mut::<impl Read for FlushFails>::read -> io::Result<usize> with Ok(1)`) and `tls.rs:437:13` (`… Write for FlushFails>::write … with Ok(1)`).
+  `run.rs:1050:54` in shard 9 was missed and matched its row.
+- **Cause.** cargo-mutants skips an item only under a plain `#[cfg(test)]`. The relay's `tls::m6_mut` was `#[cfg(all(test, feature = "direct-tls"))]`, so
+  `FlushFails` (`read`, `write`, `flush`: four mutants) was part of the mutation set; client-core `scheduler::core::m6_mut` had the same
+  `#[cfg(all(test, feature = "kat"))]` (it holds only `#[test]` functions, so it added no mutants, but is fixed alike). The other in-crate test modules
+  (`tests`, `m6_mut` of client-core `run`/`clock`, transport `caps`/`channel`/`ops`/`session`/`tls`/`tor`, relay `config`) already carry a plain `#[cfg(test)]`.
+- **Fix** (commit `5e1a136`): `#[cfg(test)]` and, as a second attribute, `#[cfg(feature = "…")]`; only attributes moved, no `#[mutants::skip]`.
+- **Proof.** `cargo mutants --list -p secmp-relay -p secmp-transport -p secmp-client-core -p secmp-proto -p secmp-crypto 2>/dev/null | grep -c "m6_mut\|FlushFails\|::tests::"`
+  prints `0` (also with `--all-features`, and with the gate's `--features kat` / `--features harness` per run). Before, the same grep over the first-run packages
+  (`--features kat`) printed `4` (the four `FlushFails` mutants), over the second-run packages `0`.
+  `--list` counts per package (gate features): crypto 279 → 279, proto 1538 → 1538, **relay 696 → 692** (exactly the four helpers), client-core 770 → 770, transport 555 → 555.
+- Shard times: slowest shard 9, batches of 74 and 39 min, job 6776 s (about 113 min of 240).
+- `cargo xtask ci-fast --strict`: PASS after the change (attributes only; `ci-full` of `c570d98` still stands).

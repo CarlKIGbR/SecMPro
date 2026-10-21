@@ -890,6 +890,30 @@ pub(crate) fn relay_event_findings(src: &str) -> Vec<String> {
     }
 }
 
+/// The survivor rows of `docs/mutants-accepted.md` (a line `| \`<path>:<line>…\`: \`<description>\` | why | control | accepted in |`)
+/// have exactly four cells: a pipe inside a cell is written `\|` (GFM), and an unescaped one splits the cell, so the gate
+/// would read a shifted description. A row with another number of unescaped pipes is a finding (FINAL4 run 163: the gate
+/// compared the escaped text; it now unescapes `\|`, and this keeps the rows well-formed).
+pub(crate) fn accepted_row_findings(text: &str) -> Vec<String> {
+    text.lines()
+        .filter(|l| l.starts_with("| `crates/") && l.contains("`: `"))
+        .filter_map(|l| {
+            let mut previous = ' ';
+            let mut pipes = 0_usize;
+            for c in l.chars() {
+                if c == '|' && previous != '\\' {
+                    pipes = pipes.saturating_add(1);
+                }
+                previous = c;
+            }
+            (pipes != 5).then(|| {
+                let place = l.split("`: `").next().unwrap_or(l);
+                format!("mutants-accepted: row {place}` has {pipes} unescaped pipes, a survivor row has 5 (four cells; write `\\|` inside a cell)")
+            })
+        })
+        .collect()
+}
+
 /// Run every policy check; fail with the full list of findings.
 pub(crate) fn run(ws: &Workspace) -> Result<String> {
     let mut findings = Vec::new();
@@ -918,6 +942,9 @@ pub(crate) fn run(ws: &Workspace) -> Result<String> {
     let spdx = check_spdx(&ws.root, &mut findings)?;
     findings.extend(relay_event_findings(&std::fs::read_to_string(
         ws.root.join("crates/secmp-relay/src/event.rs"),
+    )?));
+    findings.extend(accepted_row_findings(&std::fs::read_to_string(
+        ws.root.join("docs/mutants-accepted.md"),
     )?));
     findings.extend(normal_dependency_findings(ws));
     let vet = check_vet_closure(ws);
@@ -953,6 +980,25 @@ pub(crate) fn run(ws: &Workspace) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// FINAL4 run 163: a survivor row has five unescaped pipes (four cells). An unescaped pipe in the description splits
+    /// the cell and is a finding; escaped pipes are not; the committed file has none.
+    #[test]
+    fn survivor_rows_have_four_cells() {
+        let good =
+            "| `crates/a/src/x.rs:10`: `replace \\|\\| with && in f` | why | control | M6 |\n";
+        assert!(accepted_row_findings(good).is_empty());
+        let split = "| `crates/a/src/x.rs:10`: `replace || with && in f` | why | control | M6 |\n";
+        assert_eq!(accepted_row_findings(split).len(), 1);
+        let other_table = "| `crates/a/src/kani_proofs.rs` | Kani only | none | M2 |\n";
+        assert!(accepted_row_findings(other_table).is_empty());
+        let committed = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../docs/mutants-accepted.md"),
+        )
+        .unwrap_or_default();
+        assert!(!committed.is_empty());
+        assert_eq!(accepted_row_findings(&committed), Vec::<String>::new());
+    }
 
     #[test]
     fn forbid_header_detection() {

@@ -1161,9 +1161,16 @@ fn survivor_documented(survivor: &str, accepted: &str) -> bool {
     }
     let places = [format!("`{path}:{line}`"), format!("`{path}:{line}:{col}`")];
     let desc = format!("`{desc}`");
-    accepted
-        .lines()
-        .any(|a| a.contains(&desc) && places.iter().any(|p| a.contains(p.as_str())))
+    // inside a GFM table cell a pipe is written `\|`; cargo-mutants prints `|` (run 163: `||` and `|` rows never matched)
+    accepted.lines().any(|a| {
+        let a = unescape_table_pipes(a);
+        a.contains(&desc) && places.iter().any(|p| a.contains(p.as_str()))
+    })
+}
+
+/// A table row of `docs/mutants-accepted.md` with the GFM escape of a pipe (`\|`) undone, and nothing else.
+pub(crate) fn unescape_table_pipes(row: &str) -> String {
+    row.replace("\\|", "|")
 }
 
 /// The survivors of a cargo-mutants run (`missed.txt` and `timeout.txt` of `mutants.out`), refusing a listing that
@@ -7795,6 +7802,48 @@ mod tests {
                 "`secmp-crypto`, `secmp-proto`, `secmp-relay`, `secmp-client-core`, `secmp-transport`"
             ),
             "docs/06 §4 Mutation names the five packages (ADR-047 Am. 4 consequence)"
+        );
+        Ok(())
+    }
+
+    /// FINAL4, PR run 163 (a): a row written with GFM-escaped pipes (`\|\|`) matches the survivor cargo-mutants prints (`||`);
+    /// (b) the old spelling with a literal pipe still matches; (c) any other difference in the description, and another place,
+    /// does not; and the three survivors of run 163 that have rows are documented by the committed file.
+    #[test]
+    fn accepted_rows_with_escaped_pipes_match_the_survivors() -> Result<()> {
+        let escaped =
+            "| `crates/a/src/x.rs:10`: `replace \\|\\| with && in f` | why | control | M6 |\n";
+        let line = "crates/a/src/x.rs:10:5: replace || with && in f";
+        assert!(undocumented_survivors(line, escaped).is_empty(), "(a)");
+        let literal =
+            "| `crates/a/src/x.rs:10:5`: `replace | with ^ in f` | why | control | M4 |\n";
+        assert!(
+            undocumented_survivors("crates/a/src/x.rs:10:5: replace | with ^ in f", literal)
+                .is_empty(),
+            "(b)"
+        );
+        for other in [
+            "crates/a/src/x.rs:10:5: replace || with &&& in f",
+            "crates/a/src/x.rs:10:5: replace || with && in g",
+            "crates/a/src/x.rs:10:5: replace | with && in f",
+            "crates/a/src/x.rs:11:5: replace || with && in f",
+            "crates/b/src/x.rs:10:5: replace || with && in f",
+        ] {
+            assert_eq!(
+                undocumented_survivors(other, escaped).len(),
+                1,
+                "(c) {other}"
+            );
+        }
+        let accepted = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../docs/mutants-accepted.md"),
+        )?;
+        let run_163 = "crates/secmp-client-core/src/scheduler/core/mod.rs:751:39: replace || with && in World::prepare_fetch\n\
+             crates/secmp-transport/src/tls.rs:366:13: replace || with && in <impl StreamProvider for TlsProvider<D>>::connect\n\
+             crates/secmp-transport/src/tor/mod.rs:53:26: replace | with ^ in base32\n";
+        assert_eq!(
+            undocumented_survivors(run_163, &accepted),
+            Vec::<String>::new()
         );
         Ok(())
     }

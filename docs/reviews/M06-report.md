@@ -600,6 +600,12 @@ None from `docs/03`/`docs/01`. Implementation choices the review should know (no
 - **FIN4-7** the TLS-off example of `docs/05` §5 parses (key lines commented out, an enabled stanza in §7); `secmp-relay config::tests::documented_listen_stanzas_parse`.
 - Counts reconciled in `mutants-c1-41ee485.md` (17 M6 rows at the pin, 9 now); ADR-047 Amendment 7 says 44 harness tests.
 
+### PR run 163 round (WEISUNG M6-C1-6): a gate defect, fixed
+
+The mutants gate (`undocumented_survivors`) compared the raw cell text of `docs/mutants-accepted.md`, where a pipe in a description is written `\|` (GFM), with the `||` / `|` that cargo-mutants prints, so
+three rows (`core/mod.rs:751:39`, `tls.rs:366:13`, `tor/mod.rs:53:26`) never matched. Fixed in the gate (`unescape_table_pipes`), with three tests and a policy check on the row shape; the
+fourth survivor, `MemPersist::set_durable`, has a killer. Details and red quotes: `mutants-c1-41ee485.md`, section "PR run 163".
+
 ### Phase C1 deviations (BRIEF M6-C1, WEISUNG M6-C1-3, -4): none from the spec or the plan; implementation choices, each with its reason, none needs an ADR
 
 1. **Killers of private functions are unit tests inside their crate** (`scheduler::run::tests::m6_mut_*`, `scheduler::core::m6_mut::counters_now_moves_when_a_counted_step_runs`, `caps`, `channel`, `ops`, `tls` and `session` `m6_mut_*`), not `m6_mut::<function>_<behaviour>` of the harness: the functions are private and the harness reaches only the public API. The killers the harness can reach are in `m6_mut`.

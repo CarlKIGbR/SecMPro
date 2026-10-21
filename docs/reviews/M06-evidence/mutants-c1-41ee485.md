@@ -149,3 +149,22 @@ In-crate: scheduler::run::tests::m6_mut_deferred_queues_every_notification_in_or
 - Polarity of the FIN4-1 tests, read from the code: at the bound `Channel::prepare` returns `NewLinkRequired` and the channel **stays open** (nothing was sealed), and so does `AsyncSession::send` with an empty `wire`; a command whose first frame sealed and whose second crossed the bound **closes** the session. The mutant inverts exactly that, and each of the three tests is red against it (hand-applied `if wire.is_empty()` and cargo-mutants).
 - Counts. `docs/mutants-accepted.md` had 17 M6 survivor rows at `007e5b2` (the 16 client-core/transport survivors of this file's second table plus the relay `Deadlined::flush` row); eight rows are removed now, nine remain: `core/mod.rs:1733:21`, `:1733:44`, `:751:39`, `run.rs:859:34`, `:1050:54`, `channel.rs:486:9`, `tls.rs:366:13` (text sharpened), `tor/mod.rs:53:26`, `:60:23`. The non-M6 rows (`secret.rs:59`, `inv.rs:163:32`, `:163:44`, `:202`) and the four excluded files are unchanged.
 - Red: the 4-thread CI-like run (`--test-threads=4`) of the FINAL4 mutants: 16 caught, 3 unviable (`target/mc1/fin4`); the relay run with the first-run command: `Deadlined::flush` caught.
+
+## PR run 163 (39153604148, head 007e5b2): three shards red, one gate defect, one new survivor
+
+- Shards 0, 2, 10 failed (shard 0: 99 mutants in 59 min, 2 missed; shard 2: 99 in 65 min, 1 missed; shard 10: 98 in 49 min, 2 missed); the
+  other nine passed. Slowest shard about 138 min of the 240-min budget, all 12 shards under it (ADR-047 Amendment 7 holds).
+- Four undocumented survivors: `core/mod.rs:751:39` (`replace || with && in World::prepare_fetch`), `tls.rs:366:13` (`replace || with && in …TlsProvider<D>>::connect`),
+  `tor/mod.rs:53:26` (`replace | with ^ in base32`) and `outbox.rs:302:9` (`replace MemPersist::set_durable with ()`).
+- **Gate defect.** The first three have rows in `docs/mutants-accepted.md`, written with GFM-escaped pipes (`replace \|\| with &&`, `replace \| with ^`), which is
+  the correct spelling inside a table cell; `undocumented_survivors` compared the raw cell text with cargo-mutants' `||` / `|` and never matched
+  (this is why they showed as undocumented in run 160 as well). Fix in the gate: `survivor_documented` unescapes `\|` → `|` (only that) in the row before it
+  compares place and description. Tests (`xtask gates::tests::accepted_rows_with_escaped_pipes_match_the_survivors`): (a) an escaped row matches the
+  `||` survivor, (b) the old literal-pipe spelling still matches, (c) every other difference in the description and another line or path does not; and the three
+  survivors above against the committed file: no undocumented one. Red: with the unescape turned into an identity, `gates.rs:7817` `(a)`.
+  Policy (`policy::accepted_row_findings`, test `policy::tests::survivor_rows_have_four_cells`): a survivor row must have exactly five unescaped pipes (four cells); it found
+  three older `inv.rs` rows written with a literal pipe in the description, now written `\|`.
+  The `\|` outside the place and description cells is not checked: that needs a cell parser (more than a dozen lines) and breaks nothing.
+- **New survivor** `MemPersist::set_durable -> ()`: killer `m6_mut::mem_persist_set_durable_is_read_back`. Red (`cargo mutants --re set_durable`, 4 test threads):
+  `crates/secmp-testkit/tests/harness/m6_mut.rs:1044:5` `left: None`, `right: Some([115, 110, 97, 112, 115, 104, 111, 116])`. No row.
+

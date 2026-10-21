@@ -184,3 +184,5 @@ All notable changes to this project are documented in this file. The format foll
 - M6 Phase C1, external round FINAL4: killers for the frame bound of `Channel::prepare` and `AsyncSession::send`, `SystemClock::mono_ms`,
   the relay's `Deadlined::flush`, `reason_of`, `Channel::synced` and `Session::ensure_open` (eight accepted rows removed);
   `docs/05` TLS-off example fixed and tested; ADR-042 Amendment 5 text corrected; R-01 labelled as internal readiness.
+- M6 Phase C1, PR run 163: the mutation gate unescapes the table escape `\|` in `docs/mutants-accepted.md` before it compares a
+  survivor (three rows never matched), a policy check keeps the rows at four cells, and `MemPersist::set_durable` has a killer.

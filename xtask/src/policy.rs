@@ -890,7 +890,7 @@ pub(crate) fn relay_event_findings(src: &str) -> Vec<String> {
     }
 }
 
-/// The survivor rows of `docs/mutants-accepted.md` (a line `| \`<path>:<line>…\`: \`<description>\` | why | control | accepted in |`)
+/// The survivor rows of `docs/mutants-accepted.md` (place, description, why, control, accepted in; the place and description cells in backticks)
 /// have exactly four cells: a pipe inside a cell is written `\|` (GFM), and an unescaped one splits the cell, so the gate
 /// would read a shifted description. A row with another number of unescaped pipes is a finding (FINAL4 run 163: the gate
 /// compared the escaped text; it now unescapes `\|`, and this keeps the rows well-formed).

@@ -1034,6 +1034,22 @@ fn mem_persist_counts_its_commits() {
     assert_eq!(persist.commits(), 3, "a failed commit is not counted");
 }
 
+/// `outbox.rs:302` (`MemPersist::set_durable` → `()`, new in PR run 163): seeding the durable state (a restart from a snapshot)
+/// is read back through `durable()`, is not a commit, and is replaced by the next commit.
+#[test]
+fn mem_persist_set_durable_is_read_back() {
+    let mut persist = MemPersist::new();
+    assert_eq!(persist.durable(), None);
+    persist.set_durable(b"snapshot");
+    assert_eq!(persist.durable(), Some(&b"snapshot"[..]));
+    assert_eq!(persist.commits(), 0, "seeding is not a commit");
+    persist.set_durable(b"newer snapshot");
+    assert_eq!(persist.durable(), Some(&b"newer snapshot"[..]));
+    persist.commit(PersistKind::Send, b"after").unwrap();
+    assert_eq!(persist.durable(), Some(&b"after"[..]));
+    assert_eq!(persist.commits(), 1);
+}
+
 /// `timing.rs:113` (`^` → `|` in `TimingRng::next_u64`): the seeded test generator is `SplitMix64` — the first outputs of
 /// the public-domain reference <https://prng.di.unimi.it/splitmix64.c> for the seeds 0 and 1234567.
 #[test]

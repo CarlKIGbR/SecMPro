@@ -2023,7 +2023,8 @@ impl Scheduler {
 
 /// Positive control of the tick audit (WEISUNG M6-C1-4, mutants `counters_now -> [0; 4]` / `[1; 4]`): the instrument moves
 /// when counted work happens — a blind audit would pass every tick. The counters are thread-local, so the deltas are exact.
-#[cfg(all(test, feature = "kat"))]
+#[cfg(test)]
+#[cfg(feature = "kat")]
 mod m6_mut {
     use super::counters_now;
     use crate::scheduler::conversation::counters;

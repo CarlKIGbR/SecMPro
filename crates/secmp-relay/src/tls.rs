@@ -413,7 +413,8 @@ impl<A: Listener, B: Listener> Listener for Listeners<A, B> {
     }
 }
 
-#[cfg(all(test, feature = "direct-tls"))]
+#[cfg(test)]
+#[cfg(feature = "direct-tls")]
 mod m6_mut {
     //! `Deadlined::flush` reaches the socket (FIN4-3; mutant `Deadlined::flush -> Ok(())`).
 

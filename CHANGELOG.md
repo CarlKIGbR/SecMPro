@@ -186,3 +186,6 @@ All notable changes to this project are documented in this file. The format foll
   `docs/05` TLS-off example fixed and tested; ADR-042 Amendment 5 text corrected; R-01 labelled as internal readiness.
 - M6 Phase C1, PR run 163: the mutation gate unescapes the table escape `\|` in `docs/mutants-accepted.md` before it compares a
   survivor (three rows never matched), a policy check keeps the rows at four cells, and `MemPersist::set_durable` has a killer.
+- M6 Phase C1: `rustls-webpki` 0.103.16 (lockfile only) for RUSTSEC-2026-0382, ADR-015 cooldown exception until 2026-10-27, vet delta
+  audit recorded.
+- M6 Phase C1: `xtask` test that a failing step makes `ci-full`/`ci-fast`/`step` fail (`ci::tests::a_failing_step_makes_execute_fail`); no defect found.

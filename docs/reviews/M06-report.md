@@ -606,6 +606,11 @@ The mutants gate (`undocumented_survivors`) compared the raw cell text of `docs/
 three rows (`core/mod.rs:751:39`, `tls.rs:366:13`, `tor/mod.rs:53:26`) never matched. Fixed in the gate (`unescape_table_pipes`), with three tests and a policy check on the row shape; the
 fourth survivor, `MemPersist::set_durable`, has a killer. Details and red quotes: `mutants-c1-41ee485.md`, section "PR run 163".
 
+### RUSTSEC-2026-0382 and the `ci-full` exit status (WEISUNG M6-C1-7)
+
+- **Advisory.** `rustls-webpki` 0.103.15 ("Certificate verification may accept distrusted intermediates", published 2026-10-20) turned `deny`, `audit` and `sbom` of the last `ci-full` red. Handled by a lockfile-only bump to 0.103.16 (`Cargo.lock`, `fuzz/Cargo.lock`; no `Cargo.toml` change, no other crate moved — `cargo update` also re-pointed `tempfile`'s `getrandom` edge, which was reverted by hand, `cargo metadata --locked` accepts both locks), never an ignore. The 7-day cooldown is waived for this patch release under ADR-015 Am. 2 (exception list in `docs/08`, `expect::COOLDOWN_EXCEPTIONS` until 2026-10-27). The delta was read in full (`vet-deltas/rustls-webpki-0.103.15-0.103.16.diff`, 295 lines): version metadata, `end_entity.rs` (+1), `error.rs` (`CertDistrusted`), `verify_cert.rs` (distrusted-SPKI check on every path node and on the trust anchor, one unit test), eight new `.spki.der` data files; no build script, no dependency, no `unsafe`. `cargo vet certify` recorded; `cargo vet --locked --frozen` and `cargo xtask policy --strict` PASS.
+- **Exit status.** The reported "`ci-full` exits 0 with three failed steps" was a misreading: the exit status 0 came from the python wrapper of the background task, which printed the child's status (1) to its output. `xtask` itself returns non-zero (`execute` bails on a failed step, `main` maps `Err` to `ExitCode::FAILURE`). No xtask defect; `ci::tests::a_failing_step_makes_execute_fail` pins it. Checked: no `ci-full-*.txt` of M6 has a step line with status FAIL (the same grep over all evidence files finds FAIL step lines only in the M02/M03 `ci-full` files and `ci-fast-local-85f4c01.txt` (M5) and `ci-fast-m6b-deps-8a31d4f.txt`, which were recorded as failing runs); nothing recorded as green was affected.
+
 ### Phase C1 deviations (BRIEF M6-C1, WEISUNG M6-C1-3, -4): none from the spec or the plan; implementation choices, each with its reason, none needs an ADR
 
 1. **Killers of private functions are unit tests inside their crate** (`scheduler::run::tests::m6_mut_*`, `scheduler::core::m6_mut::counters_now_moves_when_a_counted_step_runs`, `caps`, `channel`, `ops`, `tls` and `session` `m6_mut_*`), not `m6_mut::<function>_<behaviour>` of the harness: the functions are private and the harness reaches only the public API. The killers the harness can reach are in `m6_mut`.
@@ -617,6 +622,8 @@ fourth survivor, `MemPersist::set_durable`, has a killer. Details and red quotes
 7. **The condition of `ci-verdict`** is `always() && (schedule || pull_request)`, like the `mutants` job: on a push to `main` the gate jobs are skipped by design, and the verdict is skipped with them.
 
 ## 6. Dependencies added or bumped
+
+- **`rustls-webpki` 0.103.15 → 0.103.16** (lockfile only, RUSTSEC-2026-0382, ADR-015 Am. 2 cooldown exception until 2026-10-27; `docs/08` exception list; vet delta audit).
 
 ### Owner requests at Phase C1
 

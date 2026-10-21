@@ -407,14 +407,21 @@ mod tests {
     /// into a failing exit status — iff a step failed; a skip fails only under `--strict`.
     #[test]
     fn a_failing_step_makes_execute_fail() -> Result<()> {
+        // the step signature is fixed; a fallible detail keeps these fakes clear of `unnecessary_wraps`
+        fn detail(s: &str) -> Result<String> {
+            if s.is_empty() {
+                bail!("empty detail")
+            }
+            Ok(s.to_owned())
+        }
         fn passes(_: &Ctx) -> Result<Outcome> {
-            Ok(Outcome::Pass("ok".to_owned()))
+            Ok(Outcome::Pass(detail("ok")?))
         }
         fn fails(_: &Ctx) -> Result<Outcome> {
             bail!("fake failure")
         }
         fn skips(_: &Ctx) -> Result<Outcome> {
-            Ok(Outcome::Skip("host".to_owned()))
+            Ok(Outcome::Skip(detail("host")?))
         }
         let good = Step {
             num: "1",

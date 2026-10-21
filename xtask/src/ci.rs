@@ -231,6 +231,7 @@ const ON_DEMAND: &[Step] = &[
     },
 ];
 
+#[derive(Clone)]
 struct Options {
     strict: bool,
     delegated: Vec<String>,
@@ -400,6 +401,54 @@ mod tests {
                 .count(),
             crate::expect::MIRI_PACKAGES.len()
         );
+    }
+
+    /// WEISUNG M6-C1-7 §2: `execute` (behind `ci-full`, `ci-fast` and `step`) returns `Err` — and `main` turns it
+    /// into a failing exit status — iff a step failed; a skip fails only under `--strict`.
+    #[test]
+    fn a_failing_step_makes_execute_fail() -> Result<()> {
+        fn passes(_: &Ctx) -> Result<Outcome> {
+            Ok(Outcome::Pass("ok".to_owned()))
+        }
+        fn fails(_: &Ctx) -> Result<Outcome> {
+            bail!("fake failure")
+        }
+        fn skips(_: &Ctx) -> Result<Outcome> {
+            Ok(Outcome::Skip("host".to_owned()))
+        }
+        let good = Step {
+            num: "1",
+            id: "fake-pass",
+            run: passes,
+        };
+        let bad = Step {
+            num: "2",
+            id: "fake-fail",
+            run: fails,
+        };
+        let skip = Step {
+            num: "3",
+            id: "fake-skip",
+            run: skips,
+        };
+        let lax = Options {
+            strict: false,
+            delegated: Vec::new(),
+            ids: Vec::new(),
+        };
+        let strict = Options {
+            strict: true,
+            ..lax.clone()
+        };
+        execute(&[&good], &lax, "t")?;
+        assert!(execute(&[&good, &bad], &lax, "t").is_err());
+        assert!(execute(&[&bad, &good], &strict, "t").is_err());
+        execute(&[&good, &skip], &lax, "t")?;
+        assert!(execute(&[&good, &skip], &strict, "t").is_err());
+        let mut delegated = lax;
+        delegated.delegated.push("fake-fail".to_owned());
+        execute(&[&good, &bad], &delegated, "t")?;
+        Ok(())
     }
 
     #[test]

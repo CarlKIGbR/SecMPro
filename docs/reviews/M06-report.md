@@ -1485,3 +1485,81 @@ zeroize_derive 1.5.0, libm 0.2.16 and const-oid 0.10.2.
 - Gate line: `3 cooldown PASS 90s 561 registry packages (Cargo.lock, fuzz/Cargo.lock), all ≥ 7 days old or excepted (ADR-015 Am. 2); youngest: rustls 0.23.46, 7 days; cooldown: exception rustls-webpki@0.103.16 until 2026-10-27`.
 - Commit `56179fb` `deps(cooldown): drop expired ADR-015 Am. 2 exception rustls@0.23.46`; the C2-0 docs commit follows it.
 - `rustls-webpki` exception expires 2026-10-27: STOP at the first red `cooldown` then.
+
+### C2-1 `two-clients` (BRIEF M6-C2 §C2-1; rows TC-01…TC-06, TC-09, X-08)
+
+What was built: `secmp-testkit` `[[bin]] two-clients` (`required-features = ["harness"]`, `src/bin/two-clients.rs`, a 10-line `main`) over
+the library module `secmp_testkit::two_clients` (`cli`, `run`, `trace`, `rand`): hand-written flags (no argument-parser crate), exit codes
+0 ok / 1 run failed / 2 usage / 3 transport unavailable, in-memory profiles (`MemOutbox`, `MemPersist`, ratchet states), the scripted
+invitation and handshake (§5.5, §6.4–6.6) on set-up links, then two clients — each a `Scheduler` on the tokio `Driver` — exchanging the
+script's messages over constant-rate links; `--trace-out` is JSON lines with exactly the TC-09 keys. Transports: `mem` (in-process relay),
+`loopback` (plain TCP to the relay's loopback listener, `TcpProvider`), `tls` (`TlsProvider`, pinned SPKI, scheduler direct mode), `tor`
+(`tor::arti::start`, owner-operated); a transport that cannot be used is exit 3 and no other transport is tried (TC-01 checks a decoy
+listener sees only a TLS record).
+
+| Row | Test | Command |
+|---|---|---|
+| TC-01 | `m6_two_clients::two_clients_cli_contract` | `cargo nextest run -p secmp-testkit --features harness --test harness two_clients_cli_contract` |
+| TC-02 | `m6_two_clients::two_clients_profiles_are_in_memory` | same, `…two_clients_profiles_are_in_memory` (600 s virtual, 0.5 s wall) |
+| TC-03 | `m6_two_clients::two_clients_scripted_invitation_handshake` | same (steps `link_put`, `invitation_queue`, `link_get_consume`, `hx_initiator cells=3`, `hx_responder accepted=true … present=false consumed=true`; two `session=up`; equal 60-digit SAS) |
+| TC-04 | `m6_two_clients::two_clients_exchange_script_mem` | same (100 + 100 messages, 1…65 535 B, seed 11; 10.5 s wall; delivered once, in order, bytes equal) |
+| TC-05 | `m6_two_clients::two_clients_loopback_tcp` | same (relay binary on 127.0.0.1, Strict and Balanced in parallel; 619 s wall) |
+| TC-06 | `m6_two_clients::two_clients_direct_tls_loopback` | same (`DirectRelay`, pinned SPKI; 520 s wall) |
+| TC-09 | `m6_two_clients::two_clients_trace_schema` | same |
+| X-08 | `policy::tests::two_clients_not_shipped` | `cargo nextest run -p xtask two_clients_not_shipped` |
+| TC-07, TC-08 | owner-operated, not run | see §6 (C2-1 owner requests) |
+
+Red before green (each dictated test run first against a stubbed `exec` that exits 0 without doing anything, so the assertion line that
+bites is quoted; X-08 against `required-features = ["kat"]`):
+TC-01 `m6_two_clients.rs:126:9: --help does not list --role {inviter,invitee,both}`; TC-02 `m6_two_clients.rs:239:5` (`session=up side=inviter`
+missing); TC-03 `m6_two_clients.rs:283:5 assertion left == right: left: [] right: ["step=link_put", …]`; TC-04 `m6_two_clients.rs:337:5`
+(`delivered side=inviter 100/100` missing); TC-05/TC-06 `m6_two_clients.rs:577:5` (`delivered side=inviter 20/20` missing); TC-09
+`m6_two_clients.rs:611:48: called Result::unwrap() on an Err value: Os { code: 2, kind: NotFound }` (no trace file);
+X-08 `policy.rs:1040:9 left: ["two-clients has required-features [\"kat\"], not [\"harness\"]"]`.
+A real failure found on the way: TC-05/TC-06 first ran with 20 messages of 1…65 535 B and did not finish in 1 500 s — a 65 535 B message
+is 40 cells, i.e. 400 s at P = 10 s, so 20 of them need ≈ 4 000 s of real time. The rows' scripts use `size_max = 1000` (one cell per
+message; 20 cells = 200 s plus link phases up to 180 s); TC-04 (virtual time) keeps 1…65 535 B.
+
+Findings and decisions for the reviewer (none changes the spec; none is a deviation from a row):
+1. **Virtual time in the binary.** `tokio::time::pause`/`start_paused` need tokio's `test-util`, which ADR-051 Am. 3 keeps out of every
+   build but tests (policy `tokio_test_util_is_dev_only`). The binary's `mem` transport therefore runs in real time (a 600 s run takes
+   600 s); the tests drive the same engine in-process on a paused runtime (`two_clients::main_in`, on a 32 MiB-stack thread: the
+   handshake and ratchet frames overflow a test thread's 2 MiB in an unoptimised build). Question §8: may `harness` enable
+   `tokio/test-util` (a non-default feature of a never-shipped crate) so the binary itself is virtual? Not done — it is outside ADR-051.
+2. **The handshake is scripted outside the scheduler.** The invitation, the three cells and the acceptance use one set-up connection per
+   step; the first reply's `RouteUpdate` has no sender before M7, so the inviter's reply route travels in the invitation file next to the
+   URI (`invitation = …`, `route = …`; testkit-only). Everything after the handshake goes through the scheduler. These set-up links are
+   not part of `--trace-out` (the trace counts the driver's connections only).
+3. **CI time.** TC-05/TC-06 are real-time rows with real sockets, 520–619 s each; the `kat` step went from 336 s to 723 s wall on the
+   container (they run next to the long simulations), `windows-native` runs them too (the relay binary is built with a nested
+   `cargo build --locked --offline -p secmp-relay`). Not changed: no timeout, list or threshold was touched.
+4. `interval_s` (script key, default 0) queues message *i* at `t0 + i × interval_s`: needed by MR-04 (latency of a message sent into an
+   idle link). The run prints `clock unix_origin=<secs>`, which aligns the `t_ms` of two traces.
+5. Groups (b)–(d) of the brief are one commit: they share one test file.
+
+**Owner requests, TC-07 and TC-08 (asked 2026-10-22; not waited for; the rows stay `owner-operated, not run` until the files below exist).**
+On both machines, once: `cargo build --locked --release -p secmp-testkit --features harness --bin two-clients`. The same script file
+`script-tc07.txt` on both (50 messages each way, one cell each, one every 20 s so each finds an idle link):
+
+```
+messages = 50
+size_min = 1
+size_max = 1000
+seed = 7
+interval_s = 20
+```
+
+`relay.ref` is the test relay's reference file: `relay_ref = <hex RelayRef>` (spec §5.3, with its onion; for TC-08 with the direct
+endpoint and the SPKI pin from `secmp-relay spki <cert.der>`) and `access_key = <hex>`; `secmp_testkit::two_clients::run::relay_ref_file`
+writes the text.
+
+- **TC-07 (real Tor).** Machine 1: `target/release/two-clients --role inviter --transport tor --mode strict --tor-dir <fresh profile dir>
+  --relay-ref relay.ref --invite-out invite.txt --script script-tc07.txt --trace-out inviter.trace.jsonl > inviter.out`. Copy `invite.txt` to
+  machine 2 (it is a secret; any private channel). Machine 2: `target/release/two-clients --role invitee --transport tor --tor-dir <fresh
+  profile dir> --relay-ref relay.ref --invite-in invite.txt --script script-tc07.txt --trace-out invitee.trace.jsonl > invitee.out`.
+- **TC-08 (direct TLS).** The same with `--transport tls` and no `--tor-dir`, files `*-tls.*`.
+- **Paste back** into `docs/measurements/M6-evidence/two-clients-<tor|tls>-<date>/`: `inviter.out`, `invitee.out`, both traces, the two
+  machine names, the dates, `git rev-parse HEAD`. Expected: `delivered side=inviter 50/50` and `side=invitee 50/50` and `result exact=true`
+  within 30 min of `session=up`, the `sas side=…` lines equal on the two machines. The latency file is, per message, the `deliver` time at
+  the receiver minus the `enqueue` time at the sender, each plus the `clock unix_origin=` of its own `*.out` (clocks NTP-synchronised);
+  MR-04 reads the same files (C2-4).

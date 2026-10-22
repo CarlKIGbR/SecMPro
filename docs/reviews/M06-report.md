@@ -242,6 +242,11 @@ P-01 compare the units of the one-shot links as well (VD-5).
 - **TC-03 `two_clients_scripted_invitation_handshake`:** passing — handshake scripted outside the scheduler (deviation D-C2-1, M7); the
   invitation queue and the reply queues are spares of the clients' `QueuePool`s (pool 2 → 1, no `QUEUE_NEW` of the script).
 
+- **SIM-01…SIM-10 (Phase C2-2):** tests in §10 ("C2-2 turmoil simulations", "C2-2b"). **SIM-07** is re-dictated by the reviewer (no (E);
+  `responses_read == 0`); it runs with two rig parameters of its own, no default changed: the relay's `HELLO`→`HS1` timeout 300 s
+  (default 30 s) and the drivers' connect timeout 600 s (default 120 s). SIM-10 asserts the downstream witnesses of `present = 2`,
+  not the field itself (§10).
+
 ## 4. Gates
 
 | Gate | Result |

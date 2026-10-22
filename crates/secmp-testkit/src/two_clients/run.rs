@@ -196,7 +196,8 @@ pub(crate) fn msg_id(dir: u64, idx: u64) -> [u8; 16] {
 
 // ---- the worker and the nodes ----------------------------------------------------------------------------------------
 
-type Convs<R> = Conversations<MemOutbox, MemPersist, R>;
+/// The conversations of a client (one: its contact).
+pub type Convs<R> = Conversations<MemOutbox, MemPersist, R>;
 
 /// Runs the cell-source jobs on the driver's task, against the conversations the controller also reads. The shipped
 /// worker runs them on the blocking pool; a paused runtime needs the work to take no real time between two instants.
@@ -245,6 +246,83 @@ struct Node<P: StreamProvider + 'static, R: Rand> {
     convs: Arc<Mutex<Convs<R>>>,
 }
 
+/// What a client that restarts needs besides its conversations (which survive in memory, like a disk): its two queues
+/// as capability bytes, the periods, and its place in the script.
+#[derive(Clone)]
+pub struct Restart {
+    name: &'static str,
+    dir: u64,
+    send: Vec<u8>,
+    send_period_ms: u64,
+    recv: Vec<u8>,
+    recv_period_ms: u64,
+    recv_seeds: Seeds,
+}
+
+impl Restart {
+    /// The recipient id of the queue the client receives on (what a relay that restarted must see re-created).
+    #[must_use]
+    pub fn recv_rid(&self) -> Option<secmp_proto::wire::Id> {
+        RecvCap::from_bytes(&self.recv)
+            .ok()
+            .map(|c| *c.queue().rid())
+    }
+}
+
+/// A client the engine brought up: its conversations and what a restart needs.
+struct Registered {
+    convs: Box<dyn core::any::Any + Send>,
+    restart: Restart,
+}
+
+/// What the host of an engine run (a network simulation) can see of it from outside: the trace recorder of the world
+/// and, per client, its conversations and its [`Restart`] data. Create one per client, outside the host, and pass it to
+/// [`World::new`].
+#[derive(Default)]
+pub struct Observer {
+    rec: Mutex<Option<Arc<Recorder>>>,
+    registered: Mutex<Vec<Registered>>,
+}
+
+impl Observer {
+    /// An empty observer.
+    #[must_use]
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self::default())
+    }
+
+    /// The recorder of the latest world made with this observer.
+    #[must_use]
+    pub fn recorder(&self) -> Option<Arc<Recorder>> {
+        self.rec
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// The conversations and the restart data of the client of the latest start, if it is up.
+    #[must_use]
+    pub fn client<R: Rand>(&self) -> Option<(Arc<Mutex<Convs<R>>>, Restart)> {
+        let g = self
+            .registered
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let r = g.last()?;
+        let convs = r.convs.downcast_ref::<Arc<Mutex<Convs<R>>>>()?;
+        Some((Arc::clone(convs), r.restart.clone()))
+    }
+
+    fn register<R: Rand>(&self, convs: &Arc<Mutex<Convs<R>>>, restart: &Restart) {
+        self.registered
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(Registered {
+                convs: Box::new(Arc::clone(convs)),
+                restart: restart.clone(),
+            });
+    }
+}
+
 /// What a client needs to start: its conversation and its two queues.
 struct Start<R: Rand> {
     state: RatchetState,
@@ -254,6 +332,7 @@ struct Start<R: Rand> {
     send_period_ms: u64,
     recv: RecvCap,
     recv_period_ms: u64,
+    recv_seeds: Seeds,
 }
 
 /// The driver of a pool scheduler: no conversations, so a worker over a source without cells.
@@ -343,7 +422,7 @@ impl<P: StreamProvider + 'static, R: Rand> Pooled<P, R> {
 }
 
 /// Everything the nodes of a process share.
-struct World<P: StreamProvider + 'static> {
+pub struct World<P: StreamProvider + 'static> {
     provider: Arc<P>,
     relay: RelayRef,
     access: AccessKey,
@@ -354,6 +433,8 @@ struct World<P: StreamProvider + 'static> {
     rec: Arc<Recorder>,
     /// `QUEUE_NEW` commands sent over the script's set-up links.
     queue_news: Arc<AtomicU64>,
+    /// What a host outside the engine can see of the run.
+    observer: Option<Arc<Observer>>,
 }
 
 fn copy_key(k: &AccessKey) -> AccessKey {
@@ -367,21 +448,7 @@ impl<P: StreamProvider + 'static> World<P> {
         label: &'static str,
         seed: u64,
     ) -> Result<Node<P, R>, Fail> {
-        let now = self.clock.mono_ms();
-        let mut sched = Scheduler::new(Params::default(), self.mode, R::timing(seed));
-        if self.direct {
-            let _ = sched
-                .set_direct(now, true, &mut NoCells)
-                .map_err(|_| Fail::Run("the scheduler refused direct mode".to_owned()))?;
-        }
-        let refused = |_| Fail::Run("the scheduler refused a queue".to_owned());
-        let sq = sched
-            .add_send_queue(now, RelayId(0), s.send, s.send_period_ms)
-            .map_err(refused)?;
-        let rq = sched
-            .add_recv_queue(now, RelayId(0), s.recv, s.recv_period_ms)
-            .map_err(refused)?;
-        let mut conv = Conversation::new(
+        let conv = Conversation::new(
             s.state,
             MemOutbox::new(),
             MemPersist::new(),
@@ -389,25 +456,75 @@ impl<P: StreamProvider + 'static> World<P> {
             s.peer,
             self.unix_base,
         );
-        conv.bind(sq, rq);
         let mut all = Conversations::new();
         all.add(conv);
         let convs = Arc::new(Mutex::new(all));
+        self.node_over(
+            convs,
+            (s.send, s.send_period_ms),
+            (s.recv, s.recv_period_ms, s.recv_seeds),
+            label,
+            seed,
+        )
+    }
+
+    /// A node over conversations that exist: a scheduler with the two queues, bound to conversation 0, and a driver.
+    fn node_over<R: Rand>(
+        &self,
+        convs: Arc<Mutex<Convs<R>>>,
+        send_to: (SendCap, u64),
+        recv: (RecvCap, u64, Seeds),
+        label: &'static str,
+        seed: u64,
+    ) -> Result<Node<P, R>, Fail> {
+        let now = self.clock.mono_ms();
+        let mut sched = Scheduler::new(Params::default(), self.mode, R::timing(seed));
+        if self.direct {
+            let _ = sched
+                .set_direct(now, true, &mut NoCells)
+                .map_err(|_| Fail::Run("the sched refused direct mode".to_owned()))?;
+        }
+        let refused = |_| Fail::Run("the scheduler refused a queue".to_owned());
+        let sq = sched
+            .add_send_queue(now, RelayId(0), send_to.0, send_to.1)
+            .map_err(refused)?;
+        let rq = sched
+            .add_recv_queue(now, RelayId(0), recv.0, recv.1)
+            .map_err(refused)?;
+        convs
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get_mut(0)
+            .ok_or_else(|| Fail::Run("no conversation".to_owned()))?
+            .bind(sq, rq);
         let transport = if self.direct {
             Transport::Direct
         } else {
             Transport::Tor
         };
+        // the queue this client receives on is re-created from its own seeds when the relay forgets it (spec §9.1)
+        let control = TestControl::new(copy_key(&self.access), label, 0);
+        control
+            .material
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .queues
+            .insert(rq.0, recv.2);
         let driver = Driver::new(
             Arc::new(Only::new(
-                Traced::new(Arc::clone(&self.provider), Arc::clone(&self.rec)),
+                if self.observer.is_some() {
+                    // a simulation breaks connections on purpose: a stream dropped inside a unit is no error
+                    Traced::lenient(Arc::clone(&self.provider), Arc::clone(&self.rec))
+                } else {
+                    Traced::new(Arc::clone(&self.provider), Arc::clone(&self.rec))
+                },
                 transport,
             )),
             Arc::new(TestDirectory::new(
                 self.relay.clone(),
                 copy_key(&self.access),
             )),
-            Arc::new(TestControl::new(copy_key(&self.access), label, 0)),
+            Arc::new(control),
             R::handshakes(label, 0),
             InlineWorker(Arc::clone(&convs)),
             Arc::new(self.clock),
@@ -530,13 +647,23 @@ fn public_key(seed: &SecretBytes<32>) -> Ed25519Pk {
 }
 
 /// The inviter: its identity, prekey store, invitation, and the two queues it made.
+/// A queue of the client's own that the conversation receives on: the capability and the seeds it was made from
+/// (a restart of the relay re-creates the identical queue from them, spec §9.1).
+struct Reply {
+    cap: RecvCap,
+    seeds: Seeds,
+}
+
+/// The recipient and the sender seed of a queue.
+type Seeds = ([u8; 32], [u8; 32]);
+
 struct Inviter {
     identity: IdentityKeys,
     store: MemoryPrekeyStore,
     issued: Issued,
     record: InvitationRecord,
     invitation_queue: RecvCap,
-    reply_recv: RecvCap,
+    reply: Reply,
     /// The hex encoding of the reply route (it travels in the invitation file).
     reply_route: String,
 }
@@ -615,7 +742,13 @@ impl<P: StreamProvider + 'static> World<P> {
         let invitation_queue =
             RecvCap::from_seed(&inv_recv).map_err(run_err("invitation queue"))?;
         let (reply_recv_seed, reply_send_seed, _, _) = pool.take()?;
-        let reply_recv = RecvCap::from_seed(&reply_recv_seed).map_err(run_err("reply queue"))?;
+        let reply = Reply {
+            cap: RecvCap::from_seed(&reply_recv_seed).map_err(run_err("reply queue"))?,
+            seeds: (
+                *reply_recv_seed.expose_secret(),
+                *reply_send_seed.expose_secret(),
+            ),
+        };
         let mut t = self.open(iso, rand).await?;
         t.put_link_data(
             issued.invitation.ld_id,
@@ -649,7 +782,7 @@ impl<P: StreamProvider + 'static> World<P> {
             issued,
             record,
             invitation_queue,
-            reply_recv,
+            reply,
             reply_route: hex(&RouteDescriptor::RelayQueue(route).encode().unwrap()),
         })
     }
@@ -684,7 +817,10 @@ impl<P: StreamProvider + 'static> World<P> {
         let identity = IdentityKeys::generate(rand.entropy()).map_err(run_err("identity"))?;
         // the reply queue is a pooled queue too (spec §5.5 step 5)
         let (recv_seed, send_seed, spares_before, spares_after) = pool.take()?;
-        let reply_recv = RecvCap::from_seed(&recv_seed).map_err(run_err("reply queue"))?;
+        let reply = Reply {
+            cap: RecvCap::from_seed(&recv_seed).map_err(run_err("reply queue"))?,
+            seeds: (*recv_seed.expose_secret(), *send_seed.expose_secret()),
+        };
         say(
             out,
             &format!(
@@ -741,7 +877,7 @@ impl<P: StreamProvider + 'static> World<P> {
         Ok(Invitee {
             state,
             peer,
-            reply_recv,
+            reply,
             to_inviter,
             sas,
         })
@@ -831,7 +967,7 @@ impl<P: StreamProvider + 'static> World<P> {
 struct Invitee {
     state: RatchetState,
     peer: secmp_crypto::HybridVerifyingKey,
-    reply_recv: RecvCap,
+    reply: Reply,
     to_inviter: (SendCap, u64),
     sas: String,
 }
@@ -860,6 +996,10 @@ struct Side<P: StreamProvider + 'static, R: Rand> {
     /// The direction of its own messages (0 inviter, 1 invitee).
     dir: u64,
     seen: usize,
+    /// Messages of the script queued before (a restart goes on where the run was).
+    queued: u64,
+    /// What a restart of this client needs.
+    restart: Restart,
 }
 
 /// What the conversation phase reports.
@@ -963,13 +1103,15 @@ fn spawn_drivers<P: StreamProvider + 'static, R: Rand>(
             node,
             dir,
             seen,
+            queued,
+            restart: _,
         } = side;
         shells.push(Shell {
             name,
             convs: Arc::clone(&node.convs),
             dir,
             seen,
-            queued: 0,
+            queued,
         });
         let stop = Arc::clone(stop);
         handles.push(tokio::spawn(async move {
@@ -1111,12 +1253,16 @@ type Up<P, R> = (Side<P, R>, (&'static str, String));
 const PERIOD_MS: u64 = 10_000;
 
 impl<P: StreamProvider + 'static> World<P> {
-    fn inviter_up<R: Rand>(
-        &self,
-        a: Inviter2,
-        reply_recv: RecvCap,
-        rand: R,
-    ) -> Result<Up<P, R>, Fail> {
+    fn inviter_up<R: Rand>(&self, a: Inviter2, reply: Reply, rand: R) -> Result<Up<P, R>, Fail> {
+        let restart = Restart {
+            name: "inviter",
+            dir: 0,
+            send: a.to_invitee.0.to_bytes().to_vec(),
+            send_period_ms: a.to_invitee.1,
+            recv: reply.cap.to_bytes().to_vec(),
+            recv_period_ms: PERIOD_MS,
+            recv_seeds: reply.seeds,
+        };
         let node = self.node(
             Start {
                 state: a.state,
@@ -1124,8 +1270,9 @@ impl<P: StreamProvider + 'static> World<P> {
                 rand,
                 send: a.to_invitee.0,
                 send_period_ms: a.to_invitee.1,
-                recv: reply_recv,
+                recv: reply.cap,
                 recv_period_ms: PERIOD_MS,
+                recv_seeds: reply.seeds,
             },
             "two-clients-inviter",
             1,
@@ -1135,11 +1282,22 @@ impl<P: StreamProvider + 'static> World<P> {
             node,
             dir: 0,
             seen: 0,
+            queued: 0,
+            restart,
         };
         Ok((side, ("inviter", a.sas)))
     }
 
     fn invitee_up<R: Rand>(&self, g: Invitee, rand: R) -> Result<Up<P, R>, Fail> {
+        let restart = Restart {
+            name: "invitee",
+            dir: 1,
+            send: g.to_inviter.0.to_bytes().to_vec(),
+            send_period_ms: g.to_inviter.1,
+            recv: g.reply.cap.to_bytes().to_vec(),
+            recv_period_ms: PERIOD_MS,
+            recv_seeds: g.reply.seeds,
+        };
         let node = self.node(
             Start {
                 state: g.state,
@@ -1147,8 +1305,9 @@ impl<P: StreamProvider + 'static> World<P> {
                 rand,
                 send: g.to_inviter.0,
                 send_period_ms: g.to_inviter.1,
-                recv: g.reply_recv,
+                recv: g.reply.cap,
                 recv_period_ms: PERIOD_MS,
+                recv_seeds: g.reply.seeds,
             },
             "two-clients-invitee",
             2,
@@ -1158,6 +1317,8 @@ impl<P: StreamProvider + 'static> World<P> {
             node,
             dir: 1,
             seen: 0,
+            queued: 0,
+            restart,
         };
         Ok((side, ("invitee", g.sas)))
     }
@@ -1257,8 +1418,22 @@ impl<P: StreamProvider + 'static> World<P> {
         Ok((host, text))
     }
 
-    /// The clients this process runs, up after the handshake: the role of `cli`.
+    /// The clients this process runs, up after the handshake: the role of `cli`; an observer sees each of them.
     async fn start<R: Rand>(&self, cli: &Cli, out: &mut dyn Write) -> Result<Vec<Up<P, R>>, Fail> {
+        let up = self.start_inner::<R>(cli, out).await?;
+        if let Some(o) = &self.observer {
+            for (side, _) in &up {
+                o.register(&side.node.convs, &side.restart);
+            }
+        }
+        Ok(up)
+    }
+
+    async fn start_inner<R: Rand>(
+        &self,
+        cli: &Cli,
+        out: &mut dyn Write,
+    ) -> Result<Vec<Up<P, R>>, Fail> {
         let mut iso = 0_u64;
         let wait_ms = cli.duration_s.unwrap_or(1_800).saturating_mul(1000);
         let (mut ra, mut rb) = (
@@ -1305,7 +1480,7 @@ impl<P: StreamProvider + 'static> World<P> {
             .await?;
         pool_a.finish()?;
         say(out, "session=up side=inviter");
-        up.push(self.inviter_up(accepted, host.reply_recv, ra)?);
+        up.push(self.inviter_up(accepted, host.reply, ra)?);
         if let Some(guest) = guest {
             say(out, "session=up side=invitee");
             up.push(self.invitee_up(guest, rb)?);
@@ -1315,7 +1490,10 @@ impl<P: StreamProvider + 'static> World<P> {
 }
 
 /// One run over `world` (the transport) for the role in `cli`.
-async fn session<P: StreamProvider + 'static, R: Rand>(
+///
+/// # Errors
+/// [`Fail`], mapped to the exit code by the caller.
+pub async fn session<P: StreamProvider + 'static, R: Rand>(
     cli: &Cli,
     world: World<P>,
     script: &Script,
@@ -1331,11 +1509,78 @@ async fn session<P: StreamProvider + 'static, R: Rand>(
             return Err(Fail::Run("the safety numbers differ".to_owned()));
         }
     }
-    let done = converse(&world, sides, script, cli).await?;
-    world
-        .rec
-        .check()
-        .map_err(|e| Fail::Run(format!("the trace is not sound: {e}")))?;
+    drive(cli, &world, sides, script, out).await
+}
+
+/// A client that restarts (a crash of its process): its conversation restarts from the last durable ratchet state
+/// (`MemPersist`; the outbox and the messages received survive, what was in flight does not), a new scheduler and driver
+/// open fresh links over the same two queues, and the run goes on with the script where it was.
+///
+/// # Errors
+/// [`Fail`], mapped to the exit code by the caller.
+pub async fn resume<P: StreamProvider + 'static, R: Rand>(
+    cli: &Cli,
+    world: World<P>,
+    restart: &Restart,
+    convs: Arc<Mutex<Convs<R>>>,
+    script: &Script,
+    out: &mut dyn Write,
+) -> Result<(), Fail> {
+    let (seen, queued) = {
+        let mut g = convs.lock().unwrap_or_else(PoisonError::into_inner);
+        let conv = g
+            .get(0)
+            .ok_or_else(|| Fail::Run("no conversation".to_owned()))?;
+        let durable = conv
+            .persist()
+            .durable()
+            .map_or_else(|| conv.durable().to_vec(), <[u8]>::to_vec);
+        let seen = conv.received().len();
+        let queued = u64::try_from(conv.outbox().states().len()).unwrap_or(u64::MAX);
+        g.restart(0, &durable)
+            .map_err(|_| Fail::Run("the ratchet state does not restart".to_owned()))?;
+        (seen, queued)
+    };
+    let send = SendCap::from_bytes(&restart.send).map_err(run_err("send queue"))?;
+    let recv = RecvCap::from_bytes(&restart.recv).map_err(run_err("receive queue"))?;
+    let label = if restart.dir == 0 {
+        "two-clients-inviter"
+    } else {
+        "two-clients-invitee"
+    };
+    let node = world.node_over(
+        convs,
+        (send, restart.send_period_ms),
+        (recv, restart.recv_period_ms, restart.recv_seeds),
+        label,
+        restart.dir.saturating_add(11),
+    )?;
+    let side = Side {
+        name: restart.name,
+        node,
+        dir: restart.dir,
+        seen,
+        queued,
+        restart: restart.clone(),
+    };
+    drive(cli, &world, vec![side], script, out).await
+}
+
+/// The conversation phase and what follows it: the messages, the checks, the output and the trace file.
+async fn drive<P: StreamProvider + 'static, R: Rand>(
+    cli: &Cli,
+    world: &World<P>,
+    sides: Vec<Side<P, R>>,
+    script: &Script,
+    out: &mut dyn Write,
+) -> Result<(), Fail> {
+    let done = converse(world, sides, script, cli).await?;
+    if world.observer.is_none() {
+        world
+            .rec
+            .check()
+            .map_err(|e| Fail::Run(format!("the trace is not sound: {e}")))?;
+    }
     for (name, got, want) in &done.delivered {
         say(out, &format!("delivered side={name} {got}/{want}"));
     }
@@ -1367,16 +1612,57 @@ fn world<P: StreamProvider + 'static>(
     clock: TokioClock,
     unix_base: u64,
 ) -> World<P> {
-    World {
-        provider: Arc::new(provider),
-        relay,
-        access,
-        clock,
-        unix_base,
-        mode: cli.mode,
-        direct: cli.transport == TransportArg::Tls,
-        rec: Recorder::new(clock),
-        queue_news: Arc::new(AtomicU64::new(0)),
+    World::new(
+        provider,
+        WorldConfig {
+            relay,
+            access,
+            clock,
+            unix_base,
+            mode: cli.mode,
+            direct: cli.transport == TransportArg::Tls,
+        },
+        None,
+    )
+}
+
+/// What a world is made of.
+pub struct WorldConfig {
+    /// The relay's reference.
+    pub relay: RelayRef,
+    /// The relay's access key.
+    pub access: AccessKey,
+    /// The clock of the run (made inside the runtime the run is on).
+    pub clock: TokioClock,
+    /// The Unix time at the clock's origin.
+    pub unix_base: u64,
+    /// The scheduler mode.
+    pub mode: Mode,
+    /// Direct TLS mode (the scheduler names the direct transport).
+    pub direct: bool,
+}
+
+impl<P: StreamProvider + 'static> World<P> {
+    /// A world over `provider`. With an `observer` the run is a simulation: the observer sees the world's recorder
+    /// and the client's conversations, the streams that break mid-unit (the network is broken on purpose) are not
+    /// errors, and the trace is not checked for them.
+    pub fn new(provider: P, c: WorldConfig, observer: Option<Arc<Observer>>) -> Self {
+        let rec = Recorder::new(c.clock);
+        if let Some(o) = &observer {
+            *o.rec.lock().unwrap_or_else(PoisonError::into_inner) = Some(Arc::clone(&rec));
+        }
+        Self {
+            provider: Arc::new(provider),
+            relay: c.relay,
+            access: c.access,
+            clock: c.clock,
+            unix_base: c.unix_base,
+            mode: c.mode,
+            direct: c.direct,
+            rec,
+            queue_news: Arc::new(AtomicU64::new(0)),
+            observer,
+        }
     }
 }
 

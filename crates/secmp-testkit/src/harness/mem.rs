@@ -154,7 +154,17 @@ impl MemRelay {
     /// On a violated harness invariant: a test failure, never a production path.
     #[must_use]
     pub fn new(config: HarnessConfig) -> Self {
-        let clock = TokioClock::new(START_UNIX);
+        Self::new_at(config, START_UNIX)
+    }
+
+    /// As [`MemRelay::new`], with the Unix time `unix_origin` at the clock's origin: a relay that restarts later in a
+    /// simulation reads the time the clients read (the keys and the access key are the same on every start).
+    ///
+    /// # Panics
+    /// On a violated harness invariant: a test failure, never a production path.
+    #[must_use]
+    pub fn new_at(config: HarnessConfig, unix_origin: u64) -> Self {
+        let clock = TokioClock::new(unix_origin);
         let seeds = RelaySeeds::new();
         let relay = Harness::start_relay(&seeds, &config, now_of(&clock));
         Self(Arc::new(Inner {
@@ -283,8 +293,26 @@ impl MemRelay {
     /// On a violated harness invariant: a test failure, never a production path.
     #[must_use]
     pub fn open(&self, isolation: Isolation) -> Option<DuplexStream> {
+        let (client, server) = tokio::io::duplex(1 << 17);
+        self.serve(isolation, server).then_some(client)
+    }
+
+    /// Serve one connection (the relay's accept) on `server`: the relay's sans-IO `Connection` driven by a task on the
+    /// current runtime, reading `server` and writing the answers back. `false` while the relay drains (nothing is
+    /// served). The in-process streams of [`MemRelay::open`] and the simulated sockets of a network simulation are
+    /// served by this one loop.
+    ///
+    /// # Panics
+    /// On a violated harness invariant: a test failure, never a production path.
+    #[must_use]
+    pub fn serve<S>(&self, isolation: Isolation, mut server: S) -> bool
+    where
+        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+    {
         let inner = Arc::clone(&self.0);
-        let mut conn = Connection::accept(inner.relay, now_of(&inner.clock))?;
+        let Some(mut conn) = Connection::accept(inner.relay, now_of(&inner.clock)) else {
+            return false;
+        };
         let n = inner.next_conn.fetch_add(1, Ordering::SeqCst);
         inner
             .captures
@@ -292,7 +320,6 @@ impl MemRelay {
             .unwrap()
             .push((Vec::new(), Vec::new()));
         inner.isolations.lock().unwrap().push((n, isolation));
-        let (client, mut server) = tokio::io::duplex(1 << 17);
         tokio::spawn(async move {
             let mut c2r = Units::new(9, 2856);
             let mut r2c = Units::new(1744, 1156);
@@ -365,7 +392,7 @@ impl MemRelay {
                 }
             }
         });
-        Some(client)
+        true
     }
 
     fn record_store(inner: &Inner, t: u64, isolation: Isolation) {

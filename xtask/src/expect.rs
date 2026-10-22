@@ -558,6 +558,19 @@ pub(crate) const MUTANT_HARNESS_SKIP_TESTS: &[(&str, &str)] = &[
         "two_clients_direct_tls_loopback",
         "TC-06, real-time loopback row (direct TLS, 20 messages each way at P = 10 s): 520 s",
     ),
+    // the turmoil simulations (M6 Phase C2-2), nextest on the 32-core container
+    (
+        "sim_replay_deterministic",
+        "SIM-08, SIM-03 twice (3 h virtual each): 20 s",
+    ),
+    (
+        "sim_relay_restart_recovery",
+        "SIM-03, 3 h virtual with a relay restart: 10 s",
+    ),
+    (
+        "sim_balanced_relay_restart",
+        "SIM-10, SIM-03 in Balanced: 12 s",
+    ),
     (
         "two_clients_exchange_script_mem",
         "TC-04, 100+100 messages of 1…65 535 B over mem, 10 s per mutant x mutant count: 10.5 s",

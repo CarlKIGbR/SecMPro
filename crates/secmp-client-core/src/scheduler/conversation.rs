@@ -174,6 +174,9 @@ pub struct Conversation<O: Outbox, P: Persist, S: EntropySource> {
     receipts_due: Vec<MsgId>,
     send_receipts: bool,
     discarded: u64,
+    /// SHA-256 of every message key this conversation sealed a cell under, in order (feature `kat`; TEST-SPEC-M6 (K)).
+    #[cfg(feature = "kat")]
+    mk_digests: Vec<[u8; 32]>,
 }
 
 impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
@@ -217,6 +220,8 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
             receipts_due: Vec::new(),
             send_receipts: true,
             discarded: 0,
+            #[cfg(feature = "kat")]
+            mk_digests: Vec::new(),
         }
     }
 
@@ -330,6 +335,14 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
         self.by_cell.len()
     }
 
+    /// SHA-256 of the message key of every cell this conversation sealed — real, dummy, receipt, including cells that
+    /// were never written — in sealing order (feature `kat`): the sender's side of the H-12 method (no key used twice).
+    #[cfg(feature = "kat")]
+    #[must_use]
+    pub fn message_key_digests_kat(&self) -> &[[u8; 32]] {
+        &self.mk_digests
+    }
+
     /// The last durable ratchet state.
     #[must_use]
     pub fn durable(&self) -> &[u8] {
@@ -434,6 +447,8 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
                 return Err(SourceError);
             }
         };
+        #[cfg(feature = "kat")]
+        self.mk_digests.push(sealed.message_key_digest_kat());
         let new_durable = &mut self.durable;
         let persist = &mut self.persist;
         let result = sealed.persist(|bytes| {

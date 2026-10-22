@@ -239,6 +239,9 @@ reviewer-dictated `s_overrun_prepare_late_by_one_ms_writes_nothing`, `s_late_dri
 `pure` in `secmp-client-core`. S-01 (VD-6) asserts six pairwise-distinct isolation keys for the six links; AI-01…AI-06,
 P-01 compare the units of the one-shot links as well (VD-5).
 
+- **TC-03 `two_clients_scripted_invitation_handshake`:** passing — handshake scripted outside the scheduler (deviation D-C2-1, M7); the
+  invitation queue and the reply queues are spares of the clients' `QueuePool`s (pool 2 → 1, no `QUEUE_NEW` of the script).
+
 ## 4. Gates
 
 | Gate | Result |
@@ -624,6 +627,13 @@ fourth survivor, `MemPersist::set_durable`, has a killer. Details and red quotes
 5. **The ledger is a `Vec`** (not a `VecDeque`) and the ledger and reservation logic are in `core/pure.rs` (item 10b): Kani needs them out of `Scheduler`, and a `VecDeque` cost 35 GB at K-C1; behaviour unchanged, regression set and the eight hand mutants green.
 6. **Red evidence of the mutant killers** comes from the mutated runs of cargo-mutants (first failing test and panic line per mutant, `mutants-c1-41ee485.md`), not from mutants applied by hand; `AsyncSession::send` was also applied by hand.
 7. **The condition of `ci-verdict`** is `always() && (schedule || pull_request)`, like the `mutants` job: on a push to `main` the gate jobs are skipped by design, and the verdict is skipped with them.
+
+- **D-C2-1 (Phase C2, `two-clients`): the handshake is scripted outside the scheduler.** TC-03 (§3.2 of the test specification: "the
+  M3–M5 path under the scheduler") is met for the invitation, the pool, the cells and the acceptance, but the handshake's own traffic
+  runs on set-up links, not as scheduled ops: the responder's first reply (`RouteUpdate`, §6.6 step 4) cannot be sent with the public API
+  of `secmp-client-core` (missing: an outbox/plan entry for Content type 0x04), and `issue_invitation` cannot adopt a pooled queue's seeds
+  (missing: an `IssueParams` input). Exact analysis in §8; M7 entry in §7. Awaiting the reviewer's decision (branch (ii) of WEISUNG
+  M6-C2-2 §3(b)).
 
 ## 6. Dependencies added or bumped
 
@@ -1220,6 +1230,14 @@ required job (`ct`, `mutants`, `proverif-hx`) is not green.
 - **Kani times (FINAL4).** `kani_deadline_arithmetic_checked` and `kani_rate_bound_integer_form` are slow (64-bit multiplications): they verified in the container in 687 s and 358 s (`kani-m6c1-ee3c66f.txt`, `Verification Time`; client-core 13/13 in 1 173 s), and in CI the `kani` job of PR run 39110123300 (head `bf7ba1c`, all 46 harnesses, K-C1…K-C6 included) succeeded in 100.5 min (08:05:40 → 09:46:10; run 39080358115 before K-C: 77 min). The reviewer's macOS run was interrupted after 20 min, which is inside these times; they need no change.
 - **OPEN-M6-B-3 (item 7).** The onion host re-encode substitutes for Arti's `HsId`; no Ed25519 point check at this layer; fix in M7.
 
+- **M7 (D-C2-1): the handshake through the scheduler.** (1) A `RouteUpdate` sender in `secmp-client-core` (an outbox/plan entry for
+  `Content::RouteUpdate`, the first reply of the responder, §6.6 step 4); (2) an input to `IssueParams` for the seeds of a pooled invitation
+  queue (§5.2); then the three cells, the responder's accept and `LINK_PUT`/`LINK_GET` run as scheduled ops (the analysis is in §8). Until
+  then `two-clients` scripts the handshake on set-up links and carries the inviter's route in the invitation file.
+- **`relay_bin()` and `sbom` (input for C2-4.3, not fixed here).** `tests/harness/m6_two_clients.rs` (`relay_bin()`) runs a nested
+  `cargo build --locked --offline -p secmp-relay` — in a release test run it rewrites `target/release/secmp-relay`, the very path
+  `cargo xtask sbom` reads back with `cargo audit bin`; a stale or foreign binary there is one candidate mechanism for OPEN-M6-C1-3.
+
 ## 8. Blocked / questions for the reviewer or owner
 
 ### Mutants shard time (BRIEF M6-C1 item 9, MU-C2) — decided: ADR-047 Amendment 7 (Accepted, 12 shards)
@@ -1462,6 +1480,30 @@ zeroize_derive 1.5.0, libm 0.2.16 and const-oid 0.10.2.
 4. **Trace counts of the tokio AI repeats** (16 / 16 / 16 / 8 / 4 / 8) and the six new entries of
    `MUTANT_HARNESS_SKIP_TESTS`: accept, or raise AI-01…03 to 64?
 
+### TC-03 (b): can the handshake run as scheduled work? (WEISUNG M6-C2-2 §3(b), read-only analysis of `9ba54ac`)
+
+Expressible with the existing public API (checked in the code, not built): `LINK_PUT`, the invitee's consuming `LINK_GET` and the
+owner status are `ControlKind::{LinkPut, LinkGetConsume, LinkGetOwner}`, queued with `Scheduler::schedule_control(…, When::Prompt)` and
+run by a testkit `ControlRunner` (`TestControl` discards the consumed blob; a wrapper can keep it); the three handshake cells as a testkit
+`CellSource` on a send queue to the invitation queue (`add_send_queue`, `SendCap::from_route`; cells that fail to open are ignored by the
+responder, §6.5, so random cells are valid dummies); the responder's receive through `CellSource::deliver` and `Responder::accept`; the
+pooled queues through `manage_pool` and `take_pool_queue` (done in C2-2 fix-up, see §10).
+
+**Not expressible, with the missing item named:**
+1. The responder's first reply carries a `RouteUpdate` that replaces the invitation queue by a pooled queue (§6.6 step 4, §10.6 rule 5).
+   `secmp-client-core` has no sender of Content type 0x04: `OutMessage.kind` is an `AppKind` without a route-update kind and
+   `Conversation::plan` produces only messages, receipts and dummies. Missing: an outbox/plan entry for `Content::RouteUpdate` (and the
+   switch of the contact's send queue to the new route, which `Conversation::set_send_queue` already allows). Without it the invitee cannot
+   learn the inviter's queue; the invitation file carries it.
+2. `MemoryPrekeyStore::issue_invitation` draws `inv_send_seed` and `invq_recv_seed` itself and `IssueParams` has no field for the seeds of
+   a pooled queue (§5.2: "the invitation queue is one of the inviter's pooled recv-queues"). Worked around in testkit code by overwriting
+   the public fields `InvitationV1.{inv_sid, inv_send_seed}` and `InvitationRecord.invq_recv_seed` after issuing (the link data does
+   not depend on them); a proto API change (an input to `IssueParams`) is M7.
+
+Decision taken, branch **(ii)** of the weisung (item 1 needs a core API change; no core change): the handshake stays scripted outside
+the scheduler; deviation D-C2-1 in §5, M7 entry in §7, TC-03 in §3 marked accordingly. The reviewer decides on (ii) when reading the
+return block.
+
 ## 9. Checklist before requesting review
 
 - [x] All Phase A rows evidenced above
@@ -1509,13 +1551,6 @@ listener sees only a TLS record).
 | X-08 | `policy::tests::two_clients_not_shipped` | `cargo nextest run -p xtask two_clients_not_shipped` |
 | TC-07, TC-08 | owner-operated, not run | see §6 (C2-1 owner requests) |
 
-Red before green (each dictated test run first against a stubbed `exec` that exits 0 without doing anything, so the assertion line that
-bites is quoted; X-08 against `required-features = ["kat"]`):
-TC-01 `m6_two_clients.rs:126:9: --help does not list --role {inviter,invitee,both}`; TC-02 `m6_two_clients.rs:239:5` (`session=up side=inviter`
-missing); TC-03 `m6_two_clients.rs:283:5 assertion left == right: left: [] right: ["step=link_put", …]`; TC-04 `m6_two_clients.rs:337:5`
-(`delivered side=inviter 100/100` missing); TC-05/TC-06 `m6_two_clients.rs:577:5` (`delivered side=inviter 20/20` missing); TC-09
-`m6_two_clients.rs:611:48: called Result::unwrap() on an Err value: Os { code: 2, kind: NotFound }` (no trace file);
-X-08 `policy.rs:1040:9 left: ["two-clients has required-features [\"kat\"], not [\"harness\"]"]`.
 A real failure found on the way: TC-05/TC-06 first ran with 20 messages of 1…65 535 B and did not finish in 1 500 s — a 65 535 B message
 is 40 cells, i.e. 400 s at P = 10 s, so 20 of them need ≈ 4 000 s of real time. The rows' scripts use `size_max = 1000` (one cell per
 message; 20 cells = 200 s plus link phases up to 180 s); TC-04 (virtual time) keeps 1…65 535 B.
@@ -1530,7 +1565,7 @@ Findings and decisions for the reviewer (none changes the spec; none is a deviat
    step; the first reply's `RouteUpdate` has no sender before M7, so the inviter's reply route travels in the invitation file next to the
    URI (`invitation = …`, `route = …`; testkit-only). Everything after the handshake goes through the scheduler. These set-up links are
    not part of `--trace-out` (the trace counts the driver's connections only).
-3. **CI time.** TC-05/TC-06 are real-time rows with real sockets, 520–619 s each; the `kat` step went from 336 s to 723 s wall on the
+3. **CI time.** TC-05/TC-06 are real-time rows with real sockets, 520–619 s each; the `kat` step went from 336 s to 751 s wall on the
    container (they run next to the long simulations), `windows-native` runs them too (the relay binary is built with a nested
    `cargo build --locked --offline -p secmp-relay`). Not changed: no timeout, list or threshold was touched.
 4. `interval_s` (script key, default 0) queues message *i* at `t0 + i × interval_s`: needed by MR-04 (latency of a message sent into an
@@ -1563,3 +1598,50 @@ writes the text.
   within 30 min of `session=up`, the `sas side=…` lines equal on the two machines. The latency file is, per message, the `deliver` time at
   the receiver minus the `enqueue` time at the sender, each plus the `clock unix_origin=` of its own `*.out` (clocks NTP-synchronised);
   MR-04 reads the same files (C2-4).
+
+### C2-1b fix-ups (WEISUNG M6-C2-2; reviewer's diff verification of `9ba54ac`)
+
+Commits: F-1 `4cb8fce`, F-2 `6bdb26c`, TC-03/TC-02 `be2e21e`, this report. `ci-fast --strict` at `be2e21e` (all steps PASS, `kat` 792 s;
+output `target/tc/cifast-c21b.txt`; the C2-1 head had `kat` 751 s, `target/tc/cifast-c21.txt` — the figure in the C2-1 return block).
+
+- **F-1 (major), `trace.rs`.** A unit is recorded as it crosses, never re-sliced: a write is a unit at its flush (the driver writes one frame,
+  then flushes), a read is the reader's own request (`read_exact` of one frame; a handshake record, read as its two-byte length and its
+  body, is one unit of `2 + n` — decided by the length the stream itself carries, not by a constant); a stream that ends inside a unit is an
+  error entry (`Recorder::check`), which fails the run (`the trace is not sound`). Tests `two_clients_trace_rejects_partial_unit` and
+  `two_clients_trace_unit_lengths_are_observed_not_assumed`; TC-05, TC-06 and TC-09 pass with the real lengths.
+- **F-2 (major), `expect::MUTANT_HARNESS_SKIP_TESTS`.** `two_clients_loopback_tcp` (619 s), `two_clients_direct_tls_loopback` (520 s) and
+  `two_clients_exchange_script_mem` (10.5 s) are skipped per mutant, comments in the format of the existing entries; the pinning tests
+  (`mutants_skip_list_names_existing_tests` and the argument tests) follow the list. Per-mutant harness time after the change, the filter
+  of the gate (every skip of the list) on the 32-core container: `cargo nextest run -p secmp-testkit --features harness --test harness
+  --no-fail-fast -- --skip activity_independence --skip bandwidth_model_matches_capture … --skip two_clients_loopback_tcp --skip
+  two_clients_direct_tls_loopback --skip two_clients_exchange_script_mem` — 235 tests passed, **68.6 s** wall (the slowest, 68.6 s, is the
+  existing `timing_draws_independent_of_activity`, AI-05 on the virtual driver, which is not in the list; the new rows in it take ≤ 0.8 s).
+- **TC-03 (a).** Each client fills its `QueuePool` through the scheduler (`manage_pool`, `QUEUE_NEW` control operations; the test tool
+  shortens the control delay to 2…5 s, nothing else in `Params`); the invitation queue and the inviter's reply queue are two spares
+  (`take_pool_queue`), the invitee's reply queue one of its own: `step=invitation_queue source=pool spares_before=2 spares_after=1
+  queue_new_commands=0`; the test also checks the engine source has no `.create_queue(` (the only creations are the pool's control
+  operations: `queue_new_ops=2` per client). **(b)** analysis in §8, branch (ii), deviation D-C2-1 in §5, M7 in §7, TC-03 marked in §3.
+  A probe connection at the start makes an unreachable relay exit 3 at once (the pool control operations would retry for minutes).
+- **TC-02.** The binary also runs (30 s real) with cwd, `HOME`, `USERPROFILE`, `TMPDIR`/`TEMP`/`TMP`, the XDG and the Windows data
+  directories redirected into one empty sandbox; afterwards the sandbox holds the trace file and nothing else. Redirecting instead of
+  listing the real `$HOME`/`/tmp` (which other processes write during the run) keeps the test deterministic: anything the engine wrote
+  through those places lands in the sandbox. The in-process 600 s run keeps its listing of the test directory.
+- **Red before green, re-quoted from the committed tests** (tests at `be2e21e`; each run against a planted condition of the row's "would
+  fail if", sources restored afterwards; text as `cargo nextest` printed it):
+
+  | Row | Planted condition | `m6_two_clients.rs:line` — assertion |
+  |---|---|---|
+  | TC-01 | `--tor-dir` missing from `--help` | `:135:9` `--help does not list --tor-dir` |
+  | TC-02 | the engine writes `profile.bin` into its working directory | `:312:5` `assertion left == right failed: a file besides --trace-out` (left `[…/cwd/profile.bin, …/cwd/trace.jsonl]`, right `[…/cwd/trace.jsonl]`) |
+  | TC-03 | the responder sends two of the three handshake cells | `:338:5` `assertion left == right failed: two-clients: failed: no handshake arrived` (left 1, right 0) |
+  | TC-04 | the expected payload of message *i* is that of *i + 1* | `:415:5` `assertion left == right failed: two-clients: failed: messages lost, duplicated or altered` (left 1, right 0) |
+  | TC-05, TC-06 | every client-to-relay unit one byte longer | `:639:13` `assertion left == right failed: link 0 c2r` (left `[10, 2857]`, right `[9, 2856]`) |
+  | TC-09 | a key `id` in every unit line | `:719:13` `assertion left == right failed: unknown keys in {"t_ms":81014,"len":9,"dir":"c2r","link_slot":0,"id":1}` (left `["dir","id","len","link_slot","t_ms"]`) |
+  | F-1 partial | the residual error dropped | `:764:31` `called Result::unwrap_err() on an Ok value: ()` |
+  | F-1 observed | a write unit clipped at 4 352 | `:808:9` `assertion left == right failed` (left `[(4352, C2R), (4353, R2C), (7, R2C)]`, right `[(4353, C2R), (4353, R2C), (7, R2C)]`) |
+  | X-08 | `required-features = ["kat"]` | `xtask/src/policy.rs:1044:9` `assertion left == right failed` (left `["two-clients has required-features [\"kat\"], not [\"harness\"]"]`, right `[]`) |
+
+  (The lines quoted in the first version of this section matched no committed assertion; they came from runs against a stubbed `exec`
+  and are withdrawn.)
+- **Hygiene.** One number for the C2-1 `kat` step: 751 s (§10 item 3 now says so); `relay_bin()` note in §7. Groups TC-03 and TC-02 are
+  one commit (`be2e21e`).

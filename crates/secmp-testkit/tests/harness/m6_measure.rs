@@ -480,6 +480,7 @@ fn prepare_round(tag: u32) -> Vec<u64> {
 /// dozens of others, and the wall time of a call on an oversubscribed machine measures the scheduler (`ci-fast`: p99 3.6 and
 /// 3.7 ms with 27 other tests running, 0.33 ms alone). It therefore repeats the round of 10 000 slots, up to 12 times, until
 /// one round is below the bound: a cost above the bound is above it in every round and fails; the evidence lists every round.
+/// `.config/nextest.toml` also makes nextest run the test alone (`threads-required`).
 #[test]
 fn cpu_per_slot_measured() {
     use std::time::Instant;

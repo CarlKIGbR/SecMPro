@@ -493,7 +493,7 @@ jobs:
           if-no-files-found: error
 
   # TEST-SPEC-M6 AI-07, loopback part: 1 h idle and 1 h active against a relay on loopback behind its direct TLS listener
-  # (Strict, P = 10 s, two contacts), real time; the two-sample KS test of the inter-departure times, D/p/n written to
+  # (Balanced, direct mode, spec §10.2, T_BALANCED = 10 s, two contacts), real time; the two-sample KS test of the inter-departure times, D/p/n written to
   # `ks-hour.txt`. Only through its own suite (`ks-hour`), never in `all`: it takes two hours. Not a required check.
   ks-hour:
     if: inputs.suite == 'ks-hour'

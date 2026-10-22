@@ -2,7 +2,7 @@
 //! `ks_hour` — the real-time activity-independence run (TEST-SPEC-M6 AI-07, loopback part; `docs/07:125` "real hardware").
 //!
 //! Two contacts (two pairs of clients) run the engine of `two-clients` in real time against a relay on loopback behind its
-//! direct TLS listener (`DirectRelay`): Strict, `P` = 10 s, the first hour idle, the second hour active (one message every
+//! direct TLS listener (`DirectRelay`): Balanced (direct mode implies Balanced, spec §10.2), `T_BALANCED` = 10 s, the first hour idle, the second hour active (one message every
 //! 30 s per client and 10 bursts of 20). The inter-departure times of the C2R frames of every scheduled link, idle hour
 //! against active hour, go through the two-sample KS test of [`secmp_testkit::ks`]: `p ≥ 0.01` per link and pooled, every
 //! unit of a scheduled link 4 352 B. `D`, `p`, `n` and the SHA-256 of the frames analysed are written to
@@ -63,7 +63,7 @@ async fn run_pair(
             access: relay.access_key(),
             clock,
             unix_base: unix,
-            mode: Mode::Strict,
+            mode: Mode::Balanced,
             direct: true,
             connect_timeout_ms: None,
         },
@@ -83,7 +83,7 @@ async fn run_pair(
     };
     let cli = Cli {
         role: Role::Both,
-        mode: Mode::Strict,
+        mode: Mode::Balanced,
         transport: TransportArg::Tls,
         relay_ref: None,
         invite_out: None,
@@ -169,7 +169,7 @@ async fn run(out_dir: PathBuf, idle_s: u64, active_s: u64) -> Result<bool, Strin
         h
     });
     say(&mut shown, &ks::evidence(&report));
-    for (slot, (idle, active)) in ks::gaps(&frames, SPLIT, 100) {
+    for (slot, samples) in ks::gaps(&frames, SPLIT, 100) {
         let median = |v: &[u64]| {
             let mut v = v.to_vec();
             v.sort_unstable();
@@ -183,8 +183,8 @@ async fn run(out_dir: PathBuf, idle_s: u64, active_s: u64) -> Result<bool, Strin
             &mut shown,
             &format!(
                 "link {slot}: {total} frames, median gap idle {} ms, active {} ms",
-                median(&idle),
-                median(&active)
+                median(&samples.idle),
+                median(&samples.active)
             ),
         );
     }
@@ -193,12 +193,19 @@ async fn run(out_dir: PathBuf, idle_s: u64, active_s: u64) -> Result<bool, Strin
         &format!("frames analysed: {}, sha256 {hex}", frames.len()),
     );
     let links_ok = report.per_link.iter().all(|(_, k)| k.p >= 0.01);
-    let ok =
-        links_ok && report.pooled.p >= 0.01 && report.all_frames_full && report.per_link.len() >= 4;
+    // Balanced: every departure carries one frame per queue of the client, 2 (one conversation: a send and a receive queue),
+    // in both hours; a different or varying number is a finding, not a detail the 100 ms merge may hide
+    let per_departure = report.constant_frames_per_departure() == Some(2);
+    let ok = links_ok
+        && report.pooled.p >= 0.01
+        && report.counts_pooled.p >= 0.01
+        && per_departure
+        && report.all_frames_full
+        && report.per_link.len() >= 4;
     say(
         &mut shown,
         &format!(
-            "criterion (p >= 0.01 per link and pooled, 4 links, 4352 B): {}",
+            "criterion (p >= 0.01 per link and pooled, 4 links, a constant 2 frames per departure, 4352 B): {}",
             if ok { "MET" } else { "NOT MET" }
         ),
     );

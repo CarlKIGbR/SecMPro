@@ -1907,7 +1907,7 @@ frames in the outage, rids identical) — `present` is not observable without a 
 re-creation connect is one `Purpose::Control` after the restart (the purpose carries the op id, not its kind; a node's scheduler has no
 pool and no link-data operation, so the only control operation is the `QueueNew`; the test asserts that there is exactly one).
 **TC-02 subprocess part:** the 30 s real run stays; it shows the engine reached the scheduler by a non-empty trace, 6 `enqueue` events and a
-link that completed its handshake (an `HS1` of 2 856 B written); it asserts no `deliver`, because the first delivery of the deterministic
+link that wrote an `HS1` of 2 856 B (scheduler reached); it asserts no `deliver`, because the first delivery of the deterministic
 `mem` run comes at 145.6 s (pool fill ≈ 15 s, link phase up to 180 s, first tick after `P`), which the in-process 600 s part checks. OPEN-M6-C2-2
 is folded into OPEN-M6-B-1 (§7, re-rated: the drain rate equals the send rate); OQ-20 is the open question of B-1.
 

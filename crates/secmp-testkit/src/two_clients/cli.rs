@@ -257,6 +257,18 @@ impl Default for Script {
 pub const MAX_PAYLOAD: u64 = 65_535;
 
 impl Script {
+    /// The queueing order: `(index, due)` of every message sorted by due time (then index). `enqueue_at_ms` is not monotone
+    /// in the index (the bursts come after the steady messages in index order and between them in time), so a host that
+    /// queues in index order and stops at the first message not yet due would hold the bursts back.
+    #[must_use]
+    pub fn schedule(&self) -> Vec<(u64, u64)> {
+        let mut plan: Vec<(u64, u64)> = (0..self.messages)
+            .map(|i| (i, self.enqueue_at_ms(i)))
+            .collect();
+        plan.sort_by_key(|(i, due)| (*due, *i));
+        plan
+    }
+
     /// When message `i` of a client is queued, in milliseconds after the start of the conversation: the steady messages at
     /// `start_s + i × interval_s`, then the bursts (`burst_size` messages at once), one every 360 s from `start_s + 180 s`.
     #[must_use]

@@ -377,11 +377,11 @@ fn profile_goes_nowhere_on_disk() {
     let text = std::fs::read_to_string(cwd.join("trace.jsonl")).unwrap();
     assert!(text.len() > 1_000, "the trace is empty");
     assert_eq!(event_count(&text, "enqueue"), 6);
-    // the engine reached the scheduler: a link finished its handshake (an `HS1` of 2 856 B was written) — a delivery
+    // the engine reached the scheduler: an `HS1` of 2 856 B was written on a link — a delivery
     // needs the link phases of up to 180 s and is asserted by the in-process 600 s part
     assert!(
         units(&text).iter().any(|u| u.1 == 2_856 && u.2 == "c2r"),
-        "no link completed its handshake in the subprocess run"
+        "no `HS1` was written in the subprocess run (the scheduler was not reached)"
     );
     let _ = std::fs::remove_dir_all(&sandbox);
 }
@@ -950,5 +950,79 @@ fn two_clients_direct_tls_loopback() {
     )
     .unwrap();
     loopback_run("tls-strict", "tls", "strict", &reference);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// M-1 (verifier, C2-3): the active hour of AI-07 queues its bursts. A script with an idle hour, 120 messages 30 s apart and
+/// 10 bursts of 20 — on a paused clock, 2 h of virtual time — shows, per client, the `enqueue` events of the active hour
+/// as the 120 steady messages at their 30 s times and 10 groups of 20 within 1 s each, 360 s apart from 180 s into the hour;
+/// no message is queued in the idle hour.
+#[test]
+fn active_hour_enqueues_ten_bursts_of_twenty() {
+    let dir = tmp("bursts");
+    let script = dir.join("script");
+    std::fs::write(
+        &script,
+        "messages = 320\nsize_min = 1\nsize_max = 200\nseed = 3\ninterval_s = 30\nstart_s = 3600\nbursts = 10\nburst_size = 20\n",
+    )
+    .unwrap();
+    let trace = dir.join("trace.jsonl");
+    let run = mem(&format!(
+        "--role both --transport mem --duration-s 7500 --script {} --trace-out {}",
+        script.display(),
+        trace.display()
+    ));
+    assert_eq!(run.code, 0, "{}", run.err);
+    let text = std::fs::read_to_string(&trace).unwrap();
+    // the inviter's messages: ordinals 0..320
+    let mut times: Vec<u64> = text
+        .lines()
+        .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
+        .filter(|v| word(v, "event") == "enqueue" && num(v, "msg") < 320)
+        .map(|v| num(&v, "t_ms"))
+        .collect();
+    times.sort_unstable();
+    assert_eq!(times.len(), 320);
+    let first = *times.first().unwrap();
+    assert!(
+        times.iter().all(|t| *t < first + 3_600_000),
+        "messages outside the active hour"
+    );
+    // groups: messages within 1 s of the previous one
+    let mut groups: Vec<Vec<u64>> = Vec::new();
+    for t in &times {
+        match groups.last_mut() {
+            Some(g) if t - g.last().unwrap() <= 1_000 => g.push(*t),
+            _ => groups.push(vec![*t]),
+        }
+    }
+    let bursts: Vec<&Vec<u64>> = groups.iter().filter(|g| g.len() >= 20).collect();
+    assert_eq!(
+        bursts.len(),
+        10,
+        "burst groups: {:?}",
+        groups.iter().map(Vec::len).collect::<Vec<_>>()
+    );
+    for (k, g) in bursts.iter().enumerate() {
+        // a burst falls on a steady tick (180 s + 360 s·k are multiples of 30 s): 20 or 21 messages in the group
+        assert!(
+            (20..=21).contains(&g.len()),
+            "burst {k}: {} messages",
+            g.len()
+        );
+        let at = u64::try_from(k).unwrap() * 360_000 + 180_000;
+        assert!(
+            g.first().unwrap().abs_diff(first + at) <= 1_000,
+            "burst {k} at {} ms, expected {}",
+            g.first().unwrap() - first,
+            at
+        );
+    }
+    // 10 bursts of 20, and the 120 steady messages (those on a burst's tick are in its group)
+    assert_eq!(times.len(), 320);
+    assert!(
+        groups.iter().filter(|g| g.len() < 20).all(|g| g.len() == 1),
+        "a group of 2…19 messages"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }

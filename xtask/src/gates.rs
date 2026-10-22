@@ -4278,10 +4278,11 @@ fn job_conditions(text: &str) -> Vec<(String, Option<String>)> {
 }
 
 /// The optional dispatch jobs (TEST-SPEC-M6 X-07, [O-20] [O-21]): `tor-smoke` (real Tor, MR-07, TOR-10) and `ks-hour` (the 2 h
-/// run of AI-07). Findings: one of them is missing from `ci-dispatch.yml` or declared twice, it is run by the dispatch
-/// suite `all`, its name is a required check or a job of `ci.yml`, or `ci.yml` (whose jobs are the required checks and
-/// the jobs they delegate to) names either job or starts one of their programs (`tor_smoke`, `ks_hour`) — the only things
-/// of the repository that open a socket to a host other than the loopback.
+/// loopback run of AI-07). Findings: one of them is missing from `ci-dispatch.yml` or declared twice, it is run by the
+/// dispatch suite `all`, its name is a required check or a job of `ci.yml`, or `ci.yml` (whose jobs are the required checks
+/// and the jobs they delegate to) names either job or starts one of their programs (`tor_smoke`, `ks_hour`). `ks_hour` is
+/// loopback-only; what can reach the Tor network is `tor_smoke` and `two-clients --transport tor`, which
+/// [`tor_invocation_findings`] keeps out of every test and of `ci.yml`.
 pub(crate) fn optional_job_findings(ci: &str, dispatch: &str) -> Vec<String> {
     const OPTIONAL: [&str; 2] = ["tor-smoke", "ks-hour"];
     let mut out = Vec::new();
@@ -4317,6 +4318,42 @@ pub(crate) fn optional_job_findings(ci: &str, dispatch: &str) -> Vec<String> {
     for program in ["tor_smoke", "ks_hour"] {
         if ci.contains(program) {
             out.push(format!("optional-jobs: ci.yml starts `{program}`"));
+        }
+    }
+    out
+}
+
+/// No test under `crates/*/tests/` and no step of `ci.yml` starts a program that can reach the Tor network: `tor_smoke`, or
+/// `two-clients --transport tor` with a `--tor-dir` (`run.rs`: `TransportArg::Tor` starts Arti). `--transport tor` on a line
+/// without `--tor-dir` is the usage-error case of TC-01 (exit 2 before anything starts) and is not a finding in a test;
+/// in `ci.yml` any of it is. `files` are `(path, text)` pairs.
+pub(crate) fn tor_invocation_findings(files: &[(String, String)]) -> Vec<String> {
+    let mut out = Vec::new();
+    for (path, text) in files {
+        let is_ci = path.ends_with(".github/workflows/ci.yml");
+        let is_test = path.contains("/tests/")
+            && std::path::Path::new(path)
+                .extension()
+                .is_some_and(|e| e == "rs");
+        if !is_ci && !is_test {
+            continue;
+        }
+        for (n, line) in text.lines().enumerate() {
+            let transport_tor =
+                line.contains("--transport tor") || line.contains("\"--transport\", \"tor\"");
+            let tor_dir = line.contains("--tor-dir");
+            if (transport_tor && (tor_dir || is_ci)) || (is_ci && tor_dir) {
+                out.push(format!(
+                    "tor-invocation: {path}:{} starts `two-clients --transport tor`",
+                    n.saturating_add(1)
+                ));
+            }
+            if line.contains("tor_smoke") && (is_ci || !line.trim_start().starts_with("//")) {
+                out.push(format!(
+                    "tor-invocation: {path}:{} names `tor_smoke`",
+                    n.saturating_add(1)
+                ));
+            }
         }
     }
     out
@@ -4600,6 +4637,13 @@ fn workflows(root: &Path) -> Result<String> {
         text_of(expect::REQUIRED_WORKFLOW),
         text_of(".github/workflows/ci-dispatch.yml"),
     ));
+    let mut scanned = texts.clone();
+    for f in walk_files(&root.join("crates"), &|p: &Path| {
+        p.extension().is_some_and(|e| e == "rs") && p.components().any(|c| c.as_os_str() == "tests")
+    })? {
+        scanned.push((rel(root, &f), lf(&std::fs::read_to_string(&f)?)));
+    }
+    findings.extend(tor_invocation_findings(&scanned));
     findings.extend(delegation_findings(
         expect::REQUIRED_GATE_RUNS,
         expect::DELEGATED_TO,
@@ -6855,6 +6899,48 @@ mod tests {
                 .iter()
                 .any(|f| f.contains("not only under its own suite"))
         );
+    }
+
+    /// m-2 (verifier, C2-3): nothing a test or `ci.yml` starts can reach the Tor network; TC-01's usage-error case
+    /// (`--transport tor` without `--tor-dir`) is allowed, planted invocations are findings, the repository has none.
+    #[test]
+    fn tests_and_ci_do_not_start_tor() -> Result<()> {
+        let planted =
+            |path: &str, text: &str| tor_invocation_findings(&[(path.to_owned(), text.to_owned())]);
+        let usage = "&[\"--transport\", \"tor\", \"--relay-ref\", \"x\"],";
+        assert!(planted("crates/a/tests/t.rs", usage).is_empty());
+        let real = "args(\"--transport tor --tor-dir d --relay-ref r\")";
+        assert_eq!(planted("crates/a/tests/t.rs", real).len(), 1);
+        let split = "&[\"--transport\", \"tor\", \"--tor-dir\", \"d\"],";
+        assert_eq!(planted("crates/a/tests/t.rs", split).len(), 1);
+        assert_eq!(
+            planted("crates/a/tests/t.rs", "cargo run --example tor_smoke").len(),
+            1
+        );
+        assert_eq!(
+            planted(
+                ".github/workflows/ci.yml",
+                "        run: two-clients --transport tor"
+            )
+            .len(),
+            1
+        );
+        // the tree
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let mut files = vec![(
+            ".github/workflows/ci.yml".to_owned(),
+            lf(&std::fs::read_to_string(
+                root.join(".github/workflows/ci.yml"),
+            )?),
+        )];
+        for f in walk_files(&root.join("crates"), &|p: &Path| {
+            p.extension().is_some_and(|e| e == "rs")
+                && p.components().any(|c| c.as_os_str() == "tests")
+        })? {
+            files.push((rel(&root, &f), lf(&std::fs::read_to_string(&f)?)));
+        }
+        assert_eq!(tor_invocation_findings(&files), Vec::<String>::new());
+        Ok(())
     }
 
     /// V-04 (ADR-045 Amendment 2): `ci-verdict` needs every other pinned job; a list without `ct` is a finding naming `ct`, an

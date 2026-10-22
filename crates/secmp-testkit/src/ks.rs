@@ -91,26 +91,56 @@ pub struct Report {
     pub per_link: Vec<(u64, Ks)>,
     /// All links pooled.
     pub pooled: Ks,
-    /// Every unit of a scheduled link has the length of a frame (4 352 B).
+    /// Per scheduled link: the test of the number of frames per departure, idle against active.
+    pub counts_per_link: Vec<(u64, Ks)>,
+    /// All links pooled, the number of frames per departure.
+    pub counts_pooled: Ks,
+    /// The smallest and the largest number of frames in one departure, over every link and both hours.
+    pub frames_per_departure: (u64, u64),
+    /// Every unit of a scheduled link is a frame of 4 352 B, except the handshake records at the start of a connection (a
+    /// 9 B first unit, a 2 856 B first or second unit).
     pub all_frames_full: bool,
+}
+
+impl Report {
+    /// The number of frames every departure of every link carries in both hours, if it is one number (min == max).
+    #[must_use]
+    pub const fn constant_frames_per_departure(&self) -> Option<u64> {
+        if self.frames_per_departure.0 == self.frames_per_departure.1 {
+            Some(self.frames_per_departure.0)
+        } else {
+            None
+        }
+    }
 }
 
 /// The frame length of the link layer (spec §8.4).
 pub const FRAME: usize = 4_352;
 
 /// Frames closer than this belong to one departure: a combined link (direct mode implies Balanced, spec §10.2) writes the
-/// requests of one slot back to back.
+/// requests of one slot back to back. The merge is not blind: [`Report::frames_per_departure`] counts the frames of every
+/// departure, so an extra frame inside a slot is a finding (min ≠ max), not a hidden detail.
 pub const SAME_SLOT_MS: u64 = 100;
 
-/// The scheduled links' gaps: for each slot with at least `min_frames` frames of [`FRAME`] bytes, the gaps between
+/// The samples of one link.
+#[derive(Clone, Debug, Default)]
+pub struct Samples {
+    /// The gaps between consecutive departures that end at or before the split.
+    pub idle: Vec<u64>,
+    /// The gaps that start at or after the split.
+    pub active: Vec<u64>,
+    /// The number of frames of each departure before the split.
+    pub idle_counts: Vec<u64>,
+    /// The number of frames of each departure from the split on.
+    pub active_counts: Vec<u64>,
+}
+
+/// The scheduled links' samples: for each slot with at least `min_frames` frames of [`FRAME`] bytes, the gaps between
 /// consecutive departures (frames less than [`SAME_SLOT_MS`] apart are one departure) that end at or before `split`
-/// (idle) and the gaps that start at or after it (active). A gap that spans `split` is in neither.
+/// (idle) and the gaps that start at or after it (active) — a gap that spans `split` is in neither — and the number of
+/// frames of every departure.
 #[must_use]
-pub fn gaps(
-    frames: &[Frame],
-    split: u64,
-    min_frames: usize,
-) -> BTreeMap<u64, (Vec<u64>, Vec<u64>)> {
+pub fn gaps(frames: &[Frame], split: u64, min_frames: usize) -> BTreeMap<u64, Samples> {
     let mut by_slot: BTreeMap<u64, Vec<u64>> = BTreeMap::new();
     for (t, slot, len) in frames {
         if *len == FRAME {
@@ -123,28 +153,48 @@ pub fn gaps(
             continue;
         }
         times.sort_unstable();
-        let mut departures: Vec<u64> = Vec::new();
+        // departures: (time of the first frame, frames)
+        let mut departures: Vec<(u64, u64)> = Vec::new();
+        let mut last_frame = 0_u64;
         for t in &times {
-            if departures
-                .last()
-                .is_none_or(|last| t.saturating_sub(*last) >= SAME_SLOT_MS)
-            {
-                departures.push(*t);
+            match departures.last_mut() {
+                Some(d) if t.saturating_sub(last_frame) < SAME_SLOT_MS => {
+                    d.1 = d.1.saturating_add(1);
+                }
+                _ => departures.push((*t, 1)),
+            }
+            last_frame = *t;
+        }
+        let mut samples = Samples::default();
+        for (at, count) in &departures {
+            if *at < split {
+                samples.idle_counts.push(*count);
+            } else {
+                samples.active_counts.push(*count);
             }
         }
-        let times = departures;
-        let (mut idle, mut active) = (Vec::new(), Vec::new());
-        for pair in times.windows(2) {
-            let [from, to] = pair else { continue };
+        for pair in departures.windows(2) {
+            let [(from, _), (to, _)] = pair else { continue };
             if *to <= split {
-                idle.push(to.saturating_sub(*from));
+                samples.idle.push(to.saturating_sub(*from));
             } else if *from >= split {
-                active.push(to.saturating_sub(*from));
+                samples.active.push(to.saturating_sub(*from));
             }
         }
-        out.insert(slot, (idle, active));
+        out.insert(slot, samples);
     }
     out
+}
+
+/// Whether every unit of the scheduled links is a frame, handshake records only where a connection starts.
+fn units_are_frames(frames: &[Frame], scheduled: &[u64]) -> bool {
+    scheduled.iter().all(|slot| {
+        let mut units: Vec<&Frame> = frames.iter().filter(|f| f.1 == *slot).collect();
+        units.sort_by_key(|f| f.0);
+        units.iter().enumerate().all(|(i, (_, _, len))| {
+            *len == FRAME || (*len == 9 && i == 0) || (*len == 2_856 && i <= 1)
+        })
+    })
 }
 
 /// The test of every scheduled link and of all pooled.
@@ -152,28 +202,32 @@ pub fn gaps(
 pub fn analyse(frames: &[Frame], split: u64, min_frames: usize) -> Option<Report> {
     let per = gaps(frames, split, min_frames);
     let (mut all_idle, mut all_active) = (Vec::new(), Vec::new());
-    let mut per_link = Vec::new();
-    for (slot, (idle, active)) in &per {
-        per_link.push((*slot, two_sample(idle, active)?));
-        all_idle.extend_from_slice(idle);
-        all_active.extend_from_slice(active);
+    let (mut all_idle_n, mut all_active_n) = (Vec::new(), Vec::new());
+    let (mut per_link, mut counts_per_link) = (Vec::new(), Vec::new());
+    for (slot, s) in &per {
+        per_link.push((*slot, two_sample(&s.idle, &s.active)?));
+        counts_per_link.push((*slot, two_sample(&s.idle_counts, &s.active_counts)?));
+        all_idle.extend_from_slice(&s.idle);
+        all_active.extend_from_slice(&s.active);
+        all_idle_n.extend_from_slice(&s.idle_counts);
+        all_active_n.extend_from_slice(&s.active_counts);
     }
     let pooled = two_sample(&all_idle, &all_active)?;
-    // a unit of a scheduled link that is not a frame: handshake records are the first two units of each direction and are
-    // not counted here; anything else of another length on a link with frames is a finding
+    let counts_pooled = two_sample(&all_idle_n, &all_active_n)?;
+    let counts = all_idle_n.iter().chain(&all_active_n);
+    let frames_per_departure = (counts.clone().min().copied()?, counts.max().copied()?);
     let scheduled: Vec<u64> = per.keys().copied().collect();
-    let all_frames_full = frames
-        .iter()
-        .filter(|(_, slot, _)| scheduled.contains(slot))
-        .all(|(_, _, len)| *len == FRAME || [9, 2_856].contains(len));
     Some(Report {
         per_link,
         pooled,
-        all_frames_full,
+        counts_per_link,
+        counts_pooled,
+        frames_per_departure,
+        all_frames_full: units_are_frames(frames, &scheduled),
     })
 }
 
-/// The text of the evidence file: one line per link and one pooled, `D`, `p`, `n` of each sample.
+/// The text of the evidence file: one line per link and one pooled, `D`, `p`, `n` of each sample, and the frames per departure.
 #[must_use]
 pub fn evidence(report: &Report) -> String {
     use std::fmt::Write as _;
@@ -190,6 +244,19 @@ pub fn evidence(report: &Report) -> String {
         s,
         "pooled: D = {:.6}, p = {:.6}, n_idle = {}, n_active = {}",
         k.d, k.p, k.n1, k.n2
+    );
+    for (slot, k) in &report.counts_per_link {
+        let _ = writeln!(
+            s,
+            "frames per departure, link {slot}: D = {:.6}, p = {:.6}",
+            k.d, k.p
+        );
+    }
+    let k = report.counts_pooled;
+    let _ = writeln!(
+        s,
+        "frames per departure, pooled: D = {:.6}, p = {:.6}, min = {}, max = {}",
+        k.d, k.p, report.frames_per_departure.0, report.frames_per_departure.1
     );
     let _ = writeln!(s, "all units 4352 B: {}", report.all_frames_full);
     s
@@ -211,35 +278,47 @@ mod tests {
         }
     }
 
-    /// The synthetic trace: `links` links of `n` idle and `n` active gaps (`P` = 10 s plus a jitter of 0…2 ms), the active
-    /// gaps `shift` ms shorter; as frames of one run whose active hour starts at `split`.
-    fn trace(links: u64, n: usize, shift: u64, seed: u64) -> (Vec<Frame>, u64) {
+    /// The common split of the synthetic traces.
+    const SPLIT: u64 = 3_600_000;
+
+    /// The synthetic trace: `links` links of exactly `n` idle gaps (ending at [`SPLIT`]) and `n` active gaps, each `P` = 10 s
+    /// plus a jitter of `0..width` ms, the active gaps `shift` ms shorter; every departure is `per` frames 1 ms apart.
+    fn trace(links: u64, n: usize, shift: u64, width: u64, per: u64, seed: u64) -> Vec<Frame> {
         let mut mix = Mix(seed | 1);
-        let split = 3_600_000_u64;
         let mut frames = Vec::new();
         for slot in 0..links {
-            let mut t = 0_u64;
-            frames.push((t, slot, FRAME));
-            while t < split.saturating_mul(2) {
-                let jitter = mix.next() % 3;
-                let gap = 10_000_u64
-                    .saturating_add(jitter)
-                    .saturating_sub(if t >= split { shift } else { 0 });
-                t = t.saturating_add(gap);
-                frames.push((t, slot, FRAME));
+            let idle: Vec<u64> = (0..n)
+                .map(|_| 10_000_u64.saturating_add(mix.next().checked_rem(width).unwrap_or(0)))
+                .collect();
+            let active: Vec<u64> = (0..n)
+                .map(|_| {
+                    10_000_u64
+                        .saturating_add(mix.next().checked_rem(width).unwrap_or(0))
+                        .saturating_sub(shift)
+                })
+                .collect();
+            let mut t = SPLIT.saturating_sub(idle.iter().sum::<u64>());
+            let departure = |t: u64, frames: &mut Vec<Frame>| {
+                for k in 0..per {
+                    frames.push((t.saturating_add(k), slot, FRAME));
+                }
+            };
+            departure(t, &mut frames);
+            for gap in idle.iter().chain(&active) {
+                t = t.saturating_add(*gap);
+                departure(t, &mut frames);
             }
-            let _ = n;
         }
-        (frames, split)
+        frames
     }
 
     /// AI-10 `ks_tool_detects_planted_dependence` (control): the analyser of AI-07 on a synthetic trace whose gaps shrink
-    /// by 1 ms while "active" finds `p < 0.01` per link and pooled at the n of the real run (≈ 360 gaps per link and
-    /// hour, 4 links pooled), with a timer jitter of 0…2 ms.
+    /// by 1 ms while "active" finds `p < 0.01` per link and pooled at the n of the real run (360 gaps per link and hour,
+    /// 4 links pooled), with a timer jitter of 0…2 ms.
     #[test]
     fn ks_tool_detects_planted_dependence() {
-        let (frames, split) = trace(4, 360, 1, 7);
-        let r = analyse(&frames, split, 100).unwrap();
+        let frames = trace(4, 360, 1, 3, 1, 7);
+        let r = analyse(&frames, SPLIT, 100).unwrap();
         assert_eq!(r.per_link.len(), 4);
         assert!(r.pooled.n1 >= 1_400, "{}", r.pooled.n1);
         for (slot, k) in &r.per_link {
@@ -260,8 +339,8 @@ mod tests {
         let mut flagged = 0_usize;
         let mut tests = 0_usize;
         for seed in 1..=50 {
-            let (frames, split) = trace(4, 360, 0, seed);
-            let r = analyse(&frames, split, 100).unwrap();
+            let frames = trace(4, 360, 0, 3, 1, seed);
+            let r = analyse(&frames, SPLIT, 100).unwrap();
             for (_, k) in &r.per_link {
                 tests += 1;
                 if k.p < 0.01 {
@@ -271,6 +350,52 @@ mod tests {
             assert!(r.pooled.p > 1e-4, "seed {seed}: pooled p = {}", r.pooled.p);
         }
         assert!(flagged * 20 <= tests, "{flagged} of {tests} links flagged");
+    }
+
+    /// m-4 (verifier): the control at a realistic timer jitter, 0…20 ms uniform. The smallest shift of {1, 2, 5, 10, 20} ms
+    /// that is found (`p < 0.01` on each of the 4 links, n = 360 per link and hour) is the minimum detectable shift the
+    /// report states: 5 ms. (A shift of 2 ms over a 21-ms jitter is not found: D ≈ 0.1, p ≈ 0.07.)
+    #[test]
+    fn ks_tool_detects_shift_under_realistic_jitter() {
+        let found = |shift: u64| {
+            let frames = trace(4, 360, shift, 21, 1, 11);
+            let r = analyse(&frames, SPLIT, 100).unwrap();
+            r.per_link.iter().all(|(_, k)| k.p < 0.01)
+        };
+        let smallest = [1_u64, 2, 5, 10, 20].into_iter().find(|s| found(*s));
+        assert_eq!(smallest, Some(5), "the smallest detectable shift");
+        assert!(found(10) && found(20));
+        assert!(!found(1) && !found(2));
+    }
+
+    /// M-2 (verifier): the merge of frames less than 100 ms apart does not hide an extra frame. Every departure carries 2
+    /// frames (a combined link); one extra 4 352 B frame 3 ms after a departure of the active hour only is a finding, the
+    /// number of frames per departure is no longer constant. Without it the number is constant (2) in both hours.
+    #[test]
+    fn ks_tool_flags_an_extra_frame_in_a_slot() {
+        let mut frames = trace(4, 360, 0, 3, 2, 5);
+        let r = analyse(&frames, SPLIT, 100).unwrap();
+        assert_eq!(r.constant_frames_per_departure(), Some(2));
+        assert!(r.counts_pooled.d.abs() < 1e-12);
+        let at = frames.iter().find(|f| f.0 > SPLIT + 100_000).unwrap().0;
+        frames.push((at + 3, 0, FRAME));
+        let r = analyse(&frames, SPLIT, 100).unwrap();
+        assert_eq!(r.frames_per_departure, (2, 3));
+        assert_eq!(r.constant_frames_per_departure(), None);
+    }
+
+    /// m-5 (verifier): the handshake records are allowed only where a connection starts, not anywhere on the link.
+    #[test]
+    fn a_handshake_sized_unit_in_the_middle_is_not_a_frame() {
+        let mut frames = trace(1, 120, 0, 3, 1, 3);
+        assert!(analyse(&frames, SPLIT, 100).unwrap().all_frames_full);
+        // a 9 B first unit and a 2 856 B second unit, as at the start of a connection
+        frames.push((0, 0, 9));
+        frames.push((1, 0, 2_856));
+        assert!(analyse(&frames, SPLIT, 100).unwrap().all_frames_full);
+        // the same lengths in the middle of the link
+        frames.push((SPLIT, 0, 2_856));
+        assert!(!analyse(&frames, SPLIT, 100).unwrap().all_frames_full);
     }
 
     #[test]
@@ -295,9 +420,15 @@ mod tests {
             .flat_map(|k| [(k * 10_000, 0, FRAME), (k * 10_000 + 1, 0, FRAME)])
             .collect();
         let g = gaps(&frames, 1_500_000, 100);
-        let (idle, active) = g.get(&0).unwrap();
-        assert!(idle.iter().chain(active).all(|d| *d == 10_000), "{idle:?}");
-        assert_eq!((idle.len(), active.len()), (150, 149));
+        let s = g.get(&0).unwrap();
+        assert!(s.idle.iter().chain(&s.active).all(|d| *d == 10_000));
+        assert_eq!((s.idle.len(), s.active.len()), (150, 149));
+        assert!(
+            s.idle_counts
+                .iter()
+                .chain(&s.active_counts)
+                .all(|c| *c == 2)
+        );
     }
 
     #[test]
@@ -307,9 +438,9 @@ mod tests {
             .map(|t| (*t * 1_000, 0, FRAME))
             .collect();
         let g = gaps(&frames, 30_000, 1);
-        let (idle, active) = g.get(&0).unwrap();
+        let s = g.get(&0).unwrap();
         assert_eq!(
-            (idle.clone(), active.clone()),
+            (s.idle.clone(), s.active.clone()),
             (vec![10_000, 10_000], vec![10_000, 10_000])
         );
     }

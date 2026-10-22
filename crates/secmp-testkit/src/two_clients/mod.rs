@@ -30,6 +30,20 @@ use run::Fail;
 /// Windows process has 1 MiB (8 MiB on Linux) — the program does not depend on its caller's stack.
 const ENGINE_STACK: usize = 64 << 20;
 
+/// Run `f` on a scoped thread of [`ENGINE_STACK`] bytes. A panic of the engine is exit code 101 (as the standard
+/// runtime reports a panic of `main`), a thread that cannot be spawned is 1.
+fn on_stack(f: impl FnOnce() -> u8 + Send) -> u8 {
+    std::thread::scope(|s| {
+        match std::thread::Builder::new()
+            .stack_size(ENGINE_STACK)
+            .spawn_scoped(s, f)
+        {
+            Ok(handle) => handle.join().unwrap_or(101),
+            Err(_) => 1,
+        }
+    })
+}
+
 /// Run `exec` on a thread of [`ENGINE_STACK`] bytes.
 fn on_big_stack(
     runtime: Option<&tokio::runtime::Runtime>,
@@ -37,14 +51,7 @@ fn on_big_stack(
     out: &mut (dyn Write + Send),
     err: &mut (dyn Write + Send),
 ) -> u8 {
-    std::thread::scope(|s| {
-        std::thread::Builder::new()
-            .stack_size(ENGINE_STACK)
-            .spawn_scoped(s, || exec(runtime, args, out, err))
-            .ok()
-            .and_then(|h| h.join().ok())
-            .unwrap_or(1)
-    })
+    on_stack(|| exec(runtime, args, out, err))
 }
 
 /// Run the program: `args` without the program name, the two output streams; returns the exit code.
@@ -115,5 +122,20 @@ fn exec(
             let _ = writeln!(err, "two-clients: failed: {why}");
             1
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// m-9 (verifier): the engine's thread ends in a panic → exit code 101, not a swallowed `1`; a normal return is its code.
+    #[test]
+    fn two_clients_engine_panic_exits_101() {
+        assert_eq!(on_stack(|| 7), 7);
+        assert_eq!(
+            on_stack(|| std::panic::resume_unwind(Box::new("the engine panicked"))),
+            101
+        );
     }
 }

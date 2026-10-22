@@ -1084,10 +1084,13 @@ impl<R: Rand> Shell<R> {
     /// Queue the messages of the script that are due at `now` (message `i` at `t0 + i × interval_s`; the outbox sends
     /// them one cell per slot, in order).
     fn enqueue_due(&mut self, rec: &Recorder, script: &Script, t0: u64, now: u64) {
-        while self.queued < script.messages
-            && t0.saturating_add(script.enqueue_at_ms(self.queued)) <= now
+        let plan = script.schedule();
+        while let Some((idx, _)) = usize::try_from(self.queued)
+            .ok()
+            .and_then(|k| plan.get(k))
+            .copied()
+            .filter(|(_, due)| t0.saturating_add(*due) <= now)
         {
-            let idx = self.queued;
             let mut convs = self.convs.lock().unwrap_or_else(PoisonError::into_inner);
             convs.get_mut(0).unwrap().outbox_mut().enqueue(
                 OutMessage {

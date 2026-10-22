@@ -139,10 +139,10 @@ fn sim_partition_heals() {
                 && c.next_cell_id == next + 1
                 && c.head > head
             {
-                // anchored in the protocol constant: the store that evicts finds the queue at QUEUE_CAPACITY = 128 cells
+                // anchored in the protocol constant: the store that evicts finds the queue at QUEUE_CAPACITY cells (`secmp_proto::link::QUEUE_CAPACITY`, spec §4.2)
                 assert_eq!(
                     next - head,
-                    128,
+                    u64::try_from(secmp_proto::link::QUEUE_CAPACITY).unwrap(),
                     "an eviction from a queue of {} cells",
                     next - head
                 );

@@ -568,6 +568,26 @@ pub(crate) const MUTANT_HARNESS_SKIP_TESTS: &[(&str, &str)] = &[
         "SIM-06, two runs of 3 h virtual: 19 s",
     ),
     (
+        "sim_loss_breaks_links_eventual_delivery",
+        "SIM-01, 3 h virtual with 1 % loss: 9 s",
+    ),
+    (
+        "sim_partition_heals",
+        "SIM-02, 3 h virtual with a 30 min partition: 60 s",
+    ),
+    (
+        "sim_both_clients_restart",
+        "SIM-04, 3 h virtual, both clients restart: 10 s",
+    ),
+    (
+        "sim_crash_between_persist_and_write",
+        "SIM-05, 3 h virtual, one crash: 10 s",
+    ),
+    (
+        "sim_hello_flood_backoff_recovery",
+        "SIM-09, 4 h virtual with a 600 s HELLO flood: 14 s",
+    ),
+    (
         "sim_relay_restart_recovery",
         "SIM-03, 3 h virtual with a relay restart: 10 s",
     ),

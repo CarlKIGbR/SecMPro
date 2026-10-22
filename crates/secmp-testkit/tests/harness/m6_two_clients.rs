@@ -450,7 +450,8 @@ fn two_clients_exchange_script_mem() {
         run.out
     );
     assert!(
-        run.line("result exact=true complete=true").is_some(),
+        run.line("result exact=true in_order=true complete=true")
+            .is_some(),
         "{}",
         run.out
     );
@@ -706,7 +707,11 @@ fn loopback_run(name: &str, transport: &str, mode: &str, reference: &Path) {
         "{}",
         run.out
     );
-    assert!(run.line("result exact=true").is_some(), "{}", run.out);
+    assert!(
+        run.line("result exact=true in_order=true").is_some(),
+        "{}",
+        run.out
+    );
     assert_frames_after_hs2(&std::fs::read_to_string(&trace).unwrap());
     let _ = std::fs::remove_dir_all(&dir);
 }

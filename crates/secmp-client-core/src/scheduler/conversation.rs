@@ -448,7 +448,7 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
             }
         };
         #[cfg(feature = "kat")]
-        self.mk_digests.push(sealed.message_key_digest_kat());
+        let digest = sealed.message_key_digest_kat();
         let new_durable = &mut self.durable;
         let persist = &mut self.persist;
         let result = sealed.persist(|bytes| {
@@ -458,6 +458,9 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
             Ok::<(), crate::scheduler::outbox::PersistError>(())
         });
         if let Ok((state, cell)) = result {
+            // a key counts as used once its state is durable: a cell that was never persisted was never released
+            #[cfg(feature = "kat")]
+            self.mk_digests.push(digest);
             self.state = Some(state);
             Ok(cell)
         } else {

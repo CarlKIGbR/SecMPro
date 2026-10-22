@@ -201,10 +201,16 @@ pub type Convs<R> = Conversations<MemOutbox, MemPersist, R>;
 
 /// Runs the cell-source jobs on the driver's task, against the conversations the controller also reads. The shipped
 /// worker runs them on the blocking pool; a paused runtime needs the work to take no real time between two instants.
-struct InlineWorker<S>(Arc<Mutex<S>>);
+struct InlineWorker<S>(Arc<Mutex<S>>, Option<Arc<Observer>>);
 
 impl<S: CellSource + Send + 'static> Worker for InlineWorker<S> {
     fn run(&mut self, job: Job) -> impl core::future::Future<Output = JobDone> + Send {
+        if let (Job::Evicted { cell_id, .. }, Some(o)) = (&job, &self.1) {
+            o.evicted
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(*cell_id);
+        }
         let mut g = self.0.lock().unwrap_or_else(PoisonError::into_inner);
         core::future::ready(job.apply(&mut *g))
     }
@@ -280,6 +286,10 @@ struct Registered {
 /// [`World::new`].
 #[derive(Default)]
 pub struct Observer {
+    /// The cell ids the relay reported evicted from the client's send queues.
+    evicted: Mutex<Vec<u64>>,
+    /// Every connection the drivers opened: time (ms), purpose.
+    connects: Mutex<Vec<(u64, secmp_client_core::scheduler::run::Purpose)>>,
     events: Mutex<Vec<(u64, secmp_client_core::scheduler::types::LinkEvent)>>,
     rec: Mutex<Option<Arc<Recorder>>>,
     registered: Mutex<Vec<Registered>>,
@@ -311,6 +321,24 @@ impl Observer {
         let r = g.last()?;
         let convs = r.convs.downcast_ref::<Arc<Mutex<Convs<R>>>>()?;
         Some((Arc::clone(convs), r.restart.clone()))
+    }
+
+    /// The cell ids reported evicted to the client so far.
+    #[must_use]
+    pub fn evicted(&self) -> Vec<u64> {
+        self.evicted
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// The connections the drivers opened, as far as the runs ended and reported.
+    #[must_use]
+    pub fn connects(&self) -> Vec<(u64, secmp_client_core::scheduler::run::Purpose)> {
+        self.connects
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     /// The local events of the scheduler (`Up`, `TornDown`, …) with their times, as far as the runs ended and reported.
@@ -538,7 +566,7 @@ impl<P: StreamProvider + 'static> World<P> {
             )),
             Arc::new(control),
             R::handshakes(label, 0),
-            InlineWorker(Arc::clone(&convs)),
+            InlineWorker(Arc::clone(&convs), self.observer.clone()),
             Arc::new(self.clock),
         );
         let driver = match self.connect_timeout_ms {
@@ -1030,6 +1058,8 @@ struct Done {
     delivered: Vec<(&'static str, usize, usize)>,
     /// Every received message was the expected one, once, in order.
     exact: bool,
+    /// They arrived in the script's order.
+    in_order: bool,
     /// The script was completed (all received, all own messages receipted) before the run ended.
     complete: bool,
     end_ms: u64,
@@ -1166,6 +1196,10 @@ async fn finish<P: StreamProvider + 'static, R: Rand>(
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
                 .extend(log.events.iter().copied());
+            o.connects
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .extend(log.connects.iter().map(|(t, p, _)| (*t, *p)));
         }
         node.driver
             .shutdown(&mut node.sched)
@@ -1177,31 +1211,51 @@ async fn finish<P: StreamProvider + 'static, R: Rand>(
     Ok(())
 }
 
-/// What each local client received, `(name, received, expected)`, and whether every received message was the expected
-/// one: the script's payload and id, once, in order.
-fn verify<R: Rand>(
-    shells: &[Shell<R>],
-    script: &Script,
-) -> (Vec<(&'static str, usize, usize)>, bool) {
+/// What [`verify`] found.
+struct Verified {
+    /// `(name, received, expected)` per local client.
+    delivered: Vec<(&'static str, usize, usize)>,
+    /// Every received message is one of the script's, with its payload, once.
+    exact: bool,
+    /// They arrived in the script's order.
+    in_order: bool,
+}
+
+/// What each local client received, and whether every received message was the expected one: an id of the script, once,
+/// with the script's payload (`exact`; (E) of the simulations) and in the script's order (`in_order`; a message evicted
+/// or lost on the way is re-sent after later ones, so only a run without faults keeps the order).
+fn verify<R: Rand>(shells: &[Shell<R>], script: &Script) -> Verified {
     let want = usize::try_from(script.messages).unwrap_or(0);
-    let (mut delivered, mut exact) = (Vec::new(), true);
+    let mut v = Verified {
+        delivered: Vec::new(),
+        exact: true,
+        in_order: true,
+    };
     for shell in shells {
         let peer_dir = 1_u64.saturating_sub(shell.dir);
-        let got = shell.with(|c| {
+        let (len, exact, in_order) = shell.with(|c| {
             let mut ids = std::collections::BTreeSet::new();
-            let mut ok = true;
-            for (idx, m) in c.received().iter().enumerate() {
-                let idx = u64::try_from(idx).unwrap_or(u64::MAX);
-                ok &= m.payload.as_slice() == payload(script, peer_dir, idx).as_slice()
-                    && m.msg_id == msg_id(peer_dir, idx)
+            let (mut exact, mut in_order) = (true, true);
+            for (arrival, m) in c.received().iter().enumerate() {
+                // the message's own index is in its id (`msg_id`)
+                let idx = m
+                    .msg_id
+                    .get(8..)
+                    .and_then(|b| <[u8; 8]>::try_from(b).ok())
+                    .map_or(u64::MAX, u64::from_be_bytes);
+                exact &= m.msg_id == msg_id(peer_dir, idx)
+                    && idx < script.messages
+                    && m.payload.as_slice() == payload(script, peer_dir, idx).as_slice()
                     && ids.insert(m.msg_id);
+                in_order &= u64::try_from(arrival).ok() == Some(idx);
             }
-            (c.received().len(), ok)
+            (c.received().len(), exact, in_order)
         });
-        exact &= got.1;
-        delivered.push((shell.name, got.0, want));
+        v.exact &= exact;
+        v.in_order &= in_order;
+        v.delivered.push((shell.name, len, want));
     }
-    (delivered, exact)
+    v
 }
 
 async fn converse<P: StreamProvider + 'static, R: Rand>(
@@ -1251,7 +1305,11 @@ async fn converse<P: StreamProvider + 'static, R: Rand>(
     world.rec.seal();
     let end_ms = world.clock.mono_ms();
     finish(handles, world.observer.as_deref()).await?;
-    let (delivered, exact) = verify(&shells, script);
+    let Verified {
+        delivered,
+        exact,
+        in_order,
+    } = verify(&shells, script);
     if timed_out {
         return Err(Fail::Run(format!(
             "timeout after {} s: delivered {delivered:?}",
@@ -1261,6 +1319,7 @@ async fn converse<P: StreamProvider + 'static, R: Rand>(
     Ok(Done {
         delivered,
         exact,
+        in_order,
         complete: complete_at.is_some(),
         end_ms: end_ms.saturating_sub(t0),
     })
@@ -1396,7 +1455,7 @@ impl<P: StreamProvider + 'static> World<P> {
             )),
             Arc::new(control),
             R::handshakes(label, 1),
-            InlineWorker(Arc::new(Mutex::new(NoCells))),
+            InlineWorker(Arc::new(Mutex::new(NoCells)), None),
             Arc::new(self.clock),
         );
         let driver = match self.connect_timeout_ms {
@@ -1621,8 +1680,8 @@ async fn drive<P: StreamProvider + 'static, R: Rand>(
     say(
         out,
         &format!(
-            "result exact={} complete={} end_ms={}",
-            done.exact, done.complete, done.end_ms
+            "result exact={} in_order={} complete={} end_ms={}",
+            done.exact, done.in_order, done.complete, done.end_ms
         ),
     );
     // the Unix time at the clock's origin: aligns the `t_ms` of two traces (the latency of a message between two

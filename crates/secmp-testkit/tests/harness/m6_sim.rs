@@ -62,8 +62,13 @@ pub struct Spec {
     pub interval_s: u64,
     /// The clients run `end_s` seconds, then report.
     pub end_s: u64,
-    /// Per-message failure rate of every link and its repair rate (turmoil breaks the TCP connection on a loss).
+    /// Per-message failure rate of the links between each client and the relay, from `fail_from_s` on (the set-up of
+    /// the clients, which has no retry, is over by then), and the repair rate (turmoil breaks the TCP connection on a loss).
     pub fail_rate: Option<(f64, f64)>,
+    /// When the failure rate starts, in seconds.
+    pub fail_from_s: u64,
+    /// A host that sends `HELLO` to the relay at `rate` per second between `start` and `start + length`.
+    pub flood: Option<Flood>,
     /// Minimum and maximum one-way message latency of every link.
     pub latency: Option<(Duration, Duration)>,
     /// The relay's configuration.
@@ -82,12 +87,25 @@ impl Default for Spec {
             interval_s: 30,
             end_s: 3 * 3600,
             fail_rate: None,
+            fail_from_s: 900,
+            flood: None,
             latency: None,
             relay: HarnessConfig::default(),
             mode: Mode::Strict,
             connect_timeout_ms: None,
         }
     }
+}
+
+/// A `HELLO` flood (SIM-09).
+#[derive(Clone, Copy)]
+pub struct Flood {
+    /// `HELLO`s per second.
+    pub rate: u64,
+    /// Start, seconds.
+    pub start: u64,
+    /// Length, seconds.
+    pub length: u64,
 }
 
 /// What a row can touch while the simulation runs.
@@ -98,6 +116,8 @@ pub struct Rig<'a, 'b> {
     pub now: Duration,
     /// The relay of the current start of the host `relay`.
     pub relay: &'a Arc<Mutex<Option<MemRelay>>>,
+    /// What the engine of each client shows from outside: `a`, `b`.
+    pub observers: &'a [Arc<Observer>; 2],
 }
 
 /// What a row reads after the run.
@@ -262,8 +282,8 @@ fn simulate_here(name: &str, spec: &Spec, mut timeline: impl FnMut(&mut Rig<'_, 
         .simulation_duration(end.saturating_add(Duration::from_secs(60)))
         .tick_duration(Duration::from_millis(10))
         .rng_seed(spec.seed);
-    if let Some((fail, repair)) = spec.fail_rate {
-        builder.fail_rate(fail).repair_rate(repair);
+    if let Some((_, repair)) = spec.fail_rate {
+        builder.repair_rate(repair);
     }
     if let Some((min, max)) = spec.latency {
         builder.min_message_latency(min).max_message_latency(max);
@@ -288,20 +308,33 @@ fn simulate_here(name: &str, spec: &Spec, mut timeline: impl FnMut(&mut Rig<'_, 
     });
     client_host(&mut sim, "a", 0, Role::Inviter, spec, script, &shared);
     client_host(&mut sim, "b", 1, Role::Invitee, spec, script, &shared);
+    if let Some(flood) = spec.flood {
+        add_attacker(&mut sim, flood);
+    }
     // the simulation ends when this client does
     sim.client("clock", async move {
         tokio::time::sleep(end).await;
         Ok(())
     });
+    let mut failing = false;
     loop {
         if sim.step().unwrap() {
             break;
         }
         let now = sim.elapsed();
+        if let (false, Some((fail, _))) = (failing, spec.fail_rate)
+            && now >= Duration::from_secs(spec.fail_from_s)
+        {
+            failing = true;
+            for client in ["a", "b"] {
+                sim.set_link_fail_rate(client, "relay", fail);
+            }
+        }
         timeline(&mut Rig {
             sim: &mut sim,
             now,
             relay: &relay_cell,
+            observers: &shared.observers,
         });
     }
     let elapsed = sim.elapsed();
@@ -371,4 +404,25 @@ impl Outcome {
             );
         }
     }
+}
+
+/// The attacker host of a `HELLO` flood: connect, send a `HELLO`, drop, `rate` times per second, for `length` seconds from
+/// `start`.
+fn add_attacker(sim: &mut turmoil::Sim<'_>, flood: Flood) {
+    let hello = secmp_proto::link::client::start([0; 32], None, 0)
+        .unwrap()
+        .0;
+    sim.client("attacker", async move {
+        use tokio::io::AsyncWriteExt as _;
+        tokio::time::sleep(Duration::from_secs(flood.start)).await;
+        let gap = Duration::from_millis(1_000_u64.checked_div(flood.rate).unwrap_or(1_000));
+        let until = turmoil::elapsed().saturating_add(Duration::from_secs(flood.length));
+        while turmoil::elapsed() < until {
+            if let Ok(mut s) = turmoil::net::TcpStream::connect(("relay", RELAY_PORT)).await {
+                let _ = s.write_all(&hello).await;
+            }
+            tokio::time::sleep(gap).await;
+        }
+        Ok(())
+    });
 }

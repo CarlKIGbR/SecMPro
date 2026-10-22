@@ -559,15 +559,12 @@ mod tests {
             .filter(|p| p.name.starts_with("tor-") && p.source.is_some())
             .count();
         assert!(tor >= 30, "{tor} tor-* packages");
-        let expected = [
-            ("rustls", "0.23.46", "2026-10-21", "RUSTSEC-2026-0346"),
-            (
-                "rustls-webpki",
-                "0.103.16",
-                "2026-10-27",
-                "RUSTSEC-2026-0382",
-            ),
-        ];
+        let expected = [(
+            "rustls-webpki",
+            "0.103.16",
+            "2026-10-27",
+            "RUSTSEC-2026-0382",
+        )];
         assert_eq!(crate::expect::COOLDOWN_EXCEPTIONS.len(), expected.len());
         for ((n, v, until, advisory), (en, ev, euntil, eadv)) in
             crate::expect::COOLDOWN_EXCEPTIONS.iter().zip(expected)

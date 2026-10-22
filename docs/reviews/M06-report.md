@@ -5,7 +5,7 @@ Phase A: `modell=claude-sonnet-5-5` (sub-agents: `claude-sonnet-5-5` ×2 — xta
 
 ## 1. Plan (written before implementation, updated during)
 
-**Phase C1 closed @ `c570d98`** (BRIEF M6-C1; WEISUNG M6-C1-2, -3, -4; Phase C part 1 of 2, `modell=claude-sonnet-5-5`). What C1 did: C-1 hygiene, documentation and the onion re-encode note (DOC-M6-C-1, DOC-M6-C-2, T-01/T-02, MIRI-01); C-2 the unmatched-`frame_written` counter and the `unwritten` bound (items 10, 11, 10b; C2-01…C2-07), Kani K-C1…K-C6 (13/13 client-core harnesses); C-3 the survivors of PR run 160 (item 1: 82 mutants killed, 16 accepted rows, no timeout accepted), ADR-047 Amendments 6 and 7 (12 shards); C-4 `ci-verdict` (ADR-045 Amendment 2, V-01…V-07); C-5 R-01, the `socket2` memo and this report. **Phase C2** (BRIEF_M6-C2: TC-*, SIM-*, AI-07, AI-10, MR-03…MR-07, CT-00, PV-01, X-07, X-08) follows on this head; **M6 merges only after C2**.
+**Phase C1 closed @ `25625bc`** (PR run #165 = 39660191651, all jobs green; local `ci-full` evidence `M06-evidence/ci-full-m6c1-c570d98.txt` at `c570d98`, the later commits `5e1a136`/`25625bc` are covered by run #165) (BRIEF M6-C1; WEISUNG M6-C1-2, -3, -4; Phase C part 1 of 2, `modell=claude-sonnet-5-5`). What C1 did: C-1 hygiene, documentation and the onion re-encode note (DOC-M6-C-1, DOC-M6-C-2, T-01/T-02, MIRI-01); C-2 the unmatched-`frame_written` counter and the `unwritten` bound (items 10, 11, 10b; C2-01…C2-07), Kani K-C1…K-C6 (13/13 client-core harnesses); C-3 the survivors of PR run 160 (item 1: 82 mutants killed, 16 accepted rows, no timeout accepted), ADR-047 Amendments 6 and 7 (12 shards); C-4 `ci-verdict` (ADR-045 Amendment 2, V-01…V-07); C-5 R-01, the `socket2` memo and this report. **Phase C2** (BRIEF_M6-C2: TC-*, SIM-*, AI-07, AI-10, MR-03…MR-07, CT-00, PV-01, X-07, X-08) follows on this head; **M6 merges only after C2**.
 
 Binding inputs: `docs/reviews/M06-planning/` (`BRIEF_M6.md`, `TEST-SPEC-M6.md` (177 rows: A 103, B 44, C 30), `OPEN-M6.md`,
 `OPEN-M6-decided.md`, `ADR-051-proposed.md`). ADR-051 is appended to `docs/08-decisions.md` as **Proposed**; Part 2 (owner)
@@ -1188,10 +1188,13 @@ required job (`ct`, `mutants`, `proverif-hx`) is not green.
     - The two-receiver control of CT-DIAG-3 (V6c) shifted by up to 7 ticks with nothing differing.
 - ct on fine-timer hosts (EPYC 7763, q_eff 1 tick) resolves micro-timing of ≈ 10–20 ns in the nonce and in decoded header contents; targets must
   hold the nonce and the decoded header contents constant across classes unless they name them (ADR-042 Am. 5).
-- **OPEN-M6-C1-2 (FINAL4, decision in the C2 planning).** The re-sealed position fixture holds the decoded `pn` constant (old classes 0/3,
+- **OPEN-M6-C1-2 (FINAL4, decided C2 planning → M7 informative target).** The re-sealed position fixture holds the decoded `pn` constant (old classes 0/3,
+  new 0/0), so timing that depends on decoded header contents is no longer in the position contrast. Decision: no ct code in M6. A timing
+  dependence on decoded encrypted-header contents would be a data dependency on header contents, not a secret-key comparison, and is outside
+  `CT_TARGETS` by ADR-042 Am. 5 (no mechanism is asserted: nothing in the tree measures one). A constant-nonce contrast fixture ("header
+  contents vary under one nonce") is an **informative** target for M7. Whether the receiver-side timing of skipped-key work needs a docs/01
+  entry is the owner's decision (threat model).
 - **OPEN-M6-C1-3 (stale auditable binary in `sbom`, decision in the C2 planning).** The `sbom` step must not read back a binary whose embedded dependency list differs from `Cargo.lock` (seen after the `rustls-webpki` bump: `target/release/secmp-relay` was not rebuilt and still listed 0.103.15). Candidate fixes: compare the embedded list with `Cargo.lock` and fail on a mismatch, or build into a target directory owned by the step. No fix now.
-  new 0/0), so timing that depends on decoded header contents is no longer in the position contrast. A separate contrast with a
-  constant public nonce (a fixture that varies the decoded header contents under one nonce) is open.
 - **Kani headroom (item 12, decided WEISUNG M6-C1-3: harnesses unchanged).** Peak `secmp-proto` harness 13.75 GB
   (`kani_commit_accept_atomic`) on a 16 GB runner; seven harnesses exceed 8 GB. The OOM of 14.10. (15.5 GB) came from profile
   overrides, fixed in M6-16. No bound could be lowered without weakening a property. Baseline table:
@@ -1462,10 +1465,23 @@ zeroize_derive 1.5.0, libm 0.2.16 and const-oid 0.10.2.
 ## 9. Checklist before requesting review
 
 - [x] All Phase A rows evidenced above
-- [x] Phase C1 closed @ `c570d98`: items 1, 3–11, 13 of BRIEF M6-C1 evidenced (§3 rows, §5, §6, §7, §8); item 12 decided (§7); C2 rows are `OPEN — C2` in §3
+- [x] Phase C1 closed @ `25625bc` (PR run #165 = 39660191651, all jobs green; local `ci-full` evidence `M06-evidence/ci-full-m6c1-c570d98.txt` at `c570d98`, the later commits `5e1a136`/`25625bc` are covered by run #165): items 1, 3–11, 13 of BRIEF M6-C1 evidenced (§3 rows, §5, §6, §7, §8); item 12 decided (§7); C2 rows are `OPEN — C2` in §3
 - [x] `cargo xtask ci-fast --strict` green at `cd828ca` (C-4) and at the C1 head; `ci-full` at `c570d98`: `M06-evidence/ci-full-m6c1-c570d98.txt`
 - [x] `cargo xtask ci-fast --strict` green at `7a67339`; Kani 40/40 at `7a67339`; `ci-full` green (§4) at `03cc660`, not rerun
 - [x] No `#[ignore]`, no lint allowances added for security lints, no disabled gates
 - [x] Vectors untouched
 - [ ] PR run on `linux-fast`, `windows-native`, `xwin-cross`, `linux-full` (after the push by the reviewer)
 - [x] Threat model and spec untouched
+
+## 10. Phase C2 log (BRIEF M6-C2; `modell=claude-sonnet-5-5`)
+
+### C2-1 fix (WEISUNG M6-C2-1)
+
+- Git identity, repo-local (`git config --show-origin --get-all user.name|user.email`):
+  `file:.git/config	Claude Code` / `file:.git/config	noreply@anthropic.com`.
+- Expired exception `rustls@0.23.46` (ADR-015 Am. 2): red before green, `cargo nextest run -p xtask cooldown_covers_m6_lock` after the
+  `expect.rs` edit only: `panicked at xtask/src/cooldown.rs:571:9: assertion left == right failed  left: 1` (`assert_eq!(COOLDOWN_EXCEPTIONS.len(), expected.len())`);
+  green after the `expected` list dropped the tuple (12/12 `cooldown` tests).
+- Gate line: `3 cooldown PASS 90s 561 registry packages (Cargo.lock, fuzz/Cargo.lock), all ≥ 7 days old or excepted (ADR-015 Am. 2); youngest: rustls 0.23.46, 7 days; cooldown: exception rustls-webpki@0.103.16 until 2026-10-27`.
+- Commit `56179fb` `deps(cooldown): drop expired ADR-015 Am. 2 exception rustls@0.23.46`; the C2-0 docs commit follows it.
+- `rustls-webpki` exception expires 2026-10-27: STOP at the first red `cooldown` then.

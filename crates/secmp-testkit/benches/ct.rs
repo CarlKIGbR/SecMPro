@@ -79,7 +79,7 @@
 //!   header re-sealed under `hk_2` with the same nonce and body (ADR-042 Amendment 5).
 //!
 //! ADR-042 Amendment 5 (WEISUNG M6-CI-13): the classes of a TR position or reject target share the header nonce, the
-//! public header content and the body bytes, unless the target names one of them as its class difference. A public
+//! encrypted header content and the body bytes, unless the target names one of them as its class difference. A public
 //! header nonce alone shifts §7.4 Decrypt by up to 65 ticks with either sign (CT-DIAG-3). The informative target
 //! `tr_decrypt_nonce_dependence` (class 1 = class 0 re-sealed with a fresh nonce) keeps that effect visible: it is
 //! measured twice after the targets, with no verdict and no A/A pass, and reported in `informative`
@@ -2576,7 +2576,7 @@ fn tr_skipped_session_with(
 /// (`hk_1` is the first distinct skipped key).
 ///
 /// The classes share the header nonce, every other header field (`dh_pk`, `pn`, `ek_pq`, `ct_pq`) and the body bytes.
-/// They differ in `n`, a public header field and the one this target names, and therefore in `hdr_ct` and in the entry
+/// They differ in `n`, an encrypted header field and the one this target names, and therefore in `hdr_ct` and in the entry
 /// the lookup selects. Before Amendment 5, class 1 was A's own `(hk_1, n = 4)` cell: a different nonce and body. The
 /// header nonce alone shifts the decryption by up to 65 ticks with either sign (CT-DIAG-3, V4), and that made run
 /// #159's second measurement fail.
@@ -2662,7 +2662,7 @@ const TR_TRIAL_PER_CHAIN: [usize; 2] = [2, 2];
 /// The classes share the header nonce, the whole header plaintext and the body bytes. They differ in the header key
 /// that opens the header, so in the position of the opening trial and, under the masked lookup of M4 review R-58, in
 /// the entry index and its message key, and in `hdr_ct`. Before Amendment 5, class 1 was A's own `(hk_2, 0)` cell,
-/// with another nonce, another public header (`dh_pk`, `pn`, `ek_pq`, `ct_pq`) and another body. The header nonce alone
+/// with another nonce, another encrypted header (`dh_pk`, `pn`, `ek_pq`, `ct_pq`) and another body. The header nonce alone
 /// shifts the decryption by up to 65 ticks with either sign (CT-DIAG-3, V4), and that made run #159 fail.
 fn tr_trial_position_classes(fixture: &TrSkipped) -> Result<[Vec<u8>; 2], secmp_proto::Error> {
     let (first, hk1, hk2) = tr_class0_source(fixture)?;
@@ -2786,7 +2786,7 @@ fn tr_decrypt_reject(
 /// `tr_decrypt_reject_skipped` (M3 review R-04, F2; respecified by WEISUNG M4-4 Part C): `RatchetState::decrypt_with`
 /// on the receiver of `tr_skipped_session` (9 entries, 3 distinct header keys, 5 candidates), the classes of
 /// `tr_skipped_classes`, measured as every TR target (`tr_measure`). The measured difference is the entry index, plus
-/// the public header field `n` that selects it (M4 review R-58: the lookup selects the message key with masks over
+/// the encrypted header field `n` that selects it (M4 review R-58: the lookup selects the message key with masks over
 /// every entry). The header nonce, the rest of the header and the body are held constant (ADR-042 Amendment 5).
 ///
 /// Classes share the opening trial on purpose: the position of the succeeding trial leaks ≈ 1 floor through the AEAD

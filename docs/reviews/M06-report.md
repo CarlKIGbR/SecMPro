@@ -1225,7 +1225,7 @@ required job (`ct`, `mutants`, `proverif-hx`) is not green.
   **one cell per response** (10 s apart) — and become ready to be acknowledged at 21, 31, 41 and 51 s — the scheduler's *internal*
   acknowledgement state (`Scheduler::acked`), one period after the commit. The **relay observes** the acknowledgements at 30, 40, 50
   and 60 s (its queue head moves), i.e. with the next `FETCH_MULTI` (`target/m6-evidence/R-01.txt`). The test asserts four values in each
-  series before comparing. The fix needs a core API (a deferred-commit outcome of `deliver`): M7 entry. **Re-rated in C2-2b:** the drain rate equals the send rate, a backlog never drains (see OPEN-M6-C2-2 in this section, SIM-02).
+  series before comparing. The fix needs a core API (a deferred-commit outcome of `deliver`): M7 entry. **Re-rated in C2-2b/C2-6 (was OPEN-M6-C2-2, folded in here):** not only a latency of one fetch period per cell — the drain rate equals the send rate, so a backlog never drains (§10.2 assumes a drain rate above the sender's). Mechanism: `Deferred::deliver` (`scheduler/run.rs:521–544`) answers `Err` until the commit, `fetched` (`core/mod.rs:882–902`) stops at the first `Err`. Evidence (SIM-02): after the 30-min partition the queue B → A stays at 128 cells to the end of the 3 h run (`next − head` = 128 in each of the 1 235 store changes after 3.0e6 ms; the baseline without the partition ends with 6 cells), evicting one cell per tick; messages arrive late and out of order, (E) holds. MR-02 (drain) ran on the virtual driver, which delivers synchronously. M7, no code; OQ-20 in `docs/09` is the open question.
 - **`Scheduler::frame_written` is a trusted-caller contract (item 10, Astra FINAL3 (e)).** A report on an up link with an empty ledger is
   counted (`unmatched_written`, asserted 0 in debug builds by the tokio driver); a duplicate report while the ledger is not empty cannot
   be told from a genuine one — a frame carries no id — and pops the oldest entry. Detecting it needs an API change (a frame id): M7.
@@ -1251,13 +1251,6 @@ required job (`ct`, `mutants`, `proverif-hx`) is not green.
   received 99/100, message 29 missing; the invitee's outbox ended with 98 delivered + 2 relayed; the queue was re-created 517 s after
   the restart, the sender's links were up again only after the flood (`RouteDead` events: none). No fix, no test change in M6; entered in
   `docs/09-open-questions.md` as OQ-19 (M7 candidate).
-- **OPEN-M6-C2-2 = OPEN-M6-B-1 (one entry; WEISUNG M6-C2-5).** Same root cause as B-1 (`Deferred::deliver`, `scheduler/run.rs:521–544`,
-  answers `Err` until the commit; `fetched`, `core/mod.rs:882–902`, stops at the first `Err`: one cell per round trip). **B-1 is
-  re-rated:** not only a latency of one fetch period per cell — the drain rate equals the send rate, so a backlog never drains (§10.2
-  assumes a drain rate above the sender's). Evidence of C2-2b (SIM-02): after the 30-min partition the queue B → A stays at 128 cells to the
-  end of the 3 h run (`next − head` = 128 in each of the 1 235 store changes after 3.0e6 ms; the baseline without the partition ends with 6
-  cells), evicting one cell per tick; messages arrive late and out of order, (E) holds. MR-02 (drain) ran on the virtual driver, which
-  delivers synchronously. M7, no code; OQ-20 in `docs/09` is the open question of B-1.
 - **Observation for the owner, not an M6 defect (§10.3 consequence):** Strict `P = 10 s` cannot communicate over a link with RTT >
   20 s (`MAX_IN_FLIGHT · P`): no response is read before `TornDown(InFlight)` (SIM-07).
 - **Pool and simulation streams (WEISUNG M6-C2-4 item 8):** the pool streams are strict like the others (a residual at drop is an
@@ -1950,3 +1943,64 @@ in the test); §7 now says what a lenient stream can hide.
   Linux `/proc/net/dev`, so the job runs on an otherwise idle runner and the number includes the runner's own small background traffic), checked by the job with a
   `grep -E` of the line and uploaded as `tor-smoke-<sha>-<attempt>`. The full TOR-10 form (with a relay reference) is unchanged and owner-operated.
 - The executor does not dispatch (read-only token): the reviewer triggers `ks-hour` and `tor-smoke` after the push; C2-4 reads the results.
+
+
+### C2-6 (WEISUNG M6-C2-6): history rewrite, AI-07 re-dictation, verifier fix-ups
+
+**1 · The core dump (`crates/secmp-testkit/core.91310`, 39 MB, added by `c2e5962` while a test aborted with a stack overflow) is out of history.**
+The file held the process environment of the test run (tokens); the owner rotates the token. Steps and proof (unpushed range `a265384..HEAD`,
+5 commits, `git filter-branch --index-filter 'git rm --cached --ignore-unmatch …'`; safety ref `m06-transport-pre-rewrite` and `refs/original/…` deleted;
+`git reflog expire --expire=now --all && git gc --prune=now`):
+```
+$ git log --oneline a265384..m06-transport          # after the rewrite and `chore: ignore core dumps`
+ab966ce chore: ignore core dumps
+6fbbf44 docs(m6): C2-3 report, Windows diagnosis, decisions of WEISUNG M6-C2-5
+a01c2a9 test(ai07): ks_hour example, dispatch jobs ks-hour and tor-smoke, X-07 gate, MR-07 line in tor_smoke
+7f1816d test(ks): the two-sample KS analyser and its control (AI-10)
+9fdbcd3 test(sim): C2-2b verification nits (cap anchor, skipped position, comments), SIM-10 re-dictation note, TC-02 …
+1769900 fix(testkit): the engine runs on a thread with its own stack (windows-native, run #174)
+$ git log --all --diff-filter=A --oneline -- crates/secmp-testkit/core.91310        # (empty)
+$ git rev-list a265384..m06-transport | xargs -I{} git ls-tree -r --name-only {} | grep -c core.91310
+0
+$ git diff a265384 m06-transport~1 --stat | tail -1     # before the `.gitignore` commit
+ 18 files changed, 1111 insertions(+), 90 deletions(-)
+$ git count-objects -vH    # before / after gc
+size: 41.28 MiB   size-pack: 18.92 MiB   →   size: 0 bytes   size-pack: 17.49 MiB
+```
+(The stat equals the old one minus the one `Bin` line, as dictated.) `.gitignore` has `core` and `core.*`. The two later commits of this
+session (`test(ai07,ks)…`, this report) are on top. No file of the working tree was a dump after the rewrite.
+
+**1.7 · The large-file gate: STOP, not done.** The tree has tracked files over 2 MiB today (not counting the dump): `vectors/encodings.json` (4 746 135 B),
+`vectors/ref/encodings.json` (4 746 135 B), `vectors/link.json` (2 818 910 B), `vectors/ref/link.json` (2 818 910 B) — the frozen vectors and their
+reference copies — and `docs/reviews/M04-evidence/proverif-hx-bounded-e42c854.txt` (2 498 468 B). A gate with an empty allowlist would be red on
+the first run and an allowlist entry needs an ADR line, which the weisung forbids me to write around. Decision for the reviewer: allowlist these five
+(frozen vectors cannot shrink, "frozen vectors change only with a spec revision") with an ADR line, or a higher limit (5 MiB would cover all of them). I wrote
+nothing of the gate; the dump would not have passed any limit above 40 MB.
+
+**2 · AI-07 loopback part is re-dictated Balanced (reviewer).** Direct mode implies Balanced (spec §10.2, `docs/03:664`; `scheduler/core/mod.rs:349–351`); the row text
+"Strict" was a planner error and was raised as a decision at the STOP of C2-3 (the first smoke run showed combined links with two frames per slot). Row as run:
+loopback TLS relay, Balanced, `T_BALANCED` = 10 s, 2 contacts, 1 h idle, 1 h active; `ks_hour.rs` passes `Mode::Balanced` explicitly; the comments in `ks_hour.rs` and
+`ci-dispatch.yml` say so. No spec change, no Strict plain-TCP variant in M6 (the Strict evidence is the Tor part, owner-operated). The expected run time of the job is
+≈ 135 min (2 h + handshake and link phases up to 15 min) plus a cold release build of the example (≈ 1 min here, more on a runner with a cold cache) against
+`timeout-minutes: 170`; the first run decides whether a build-cache step is needed (reviewer).
+
+**3 · Verifier fix-ups** (`4c05c37`):
+- **M-1** the bursts were never queued: `Script::enqueue_at_ms` is not monotone in the index and the host queued in index order, stopping at the first message not yet due, so all
+  200 burst messages came at ≈ +3 570 s. Fix: `Script::schedule()` (index, due) sorted by due time, queued in that order. Test `active_hour_enqueues_ten_bursts_of_twenty`
+  (paused clock, 2 h virtual): 10 groups of 20 within 1 s at 180 + 360·k s, and the 120 steady messages; a burst coincides with a steady tick (180 s is a multiple of 30 s), so a
+  group holds 20 or 21. Red: `m6_two_clients.rs:1000:5` `assertion left == right failed: burst groups: [1, 1, 1, …]` left 1, right 10 (index order).
+- **M-2** the 100 ms merge cannot hide a frame any more: the analyser counts the frames of every departure (`Report::frames_per_departure`, KS on the counts per link and pooled,
+  evidence lines); `ks_hour` requires the constant 2 (Balanced, one frame per queue of the client's conversation) in both hours. Test `ks_tool_flags_an_extra_frame_in_a_slot`. Red:
+  `ks.rs:383:9` `assertion left == right failed` left `(2, 2)`, right `(2, 3)`. Smoke run (700 s + 700 s): `frames per departure, pooled: … min = 2, max = 2`, criterion MET.
+- **m-4** `ks_tool_detects_shift_under_realistic_jitter`: at a timer jitter of 0…20 ms (uniform) and n = 360 per link and hour, the **minimum detectable shift is 5 ms** (2 ms: D ≈ 0.1, not
+  found; 5, 10, 20 ms found on every link); at 0…2 ms jitter 1 ms is found (AI-10). The `n` of the generator is honoured (exactly n idle and n active gaps).
+- **m-5** handshake-sized units are allowed only as the first (9 B) and the first/second (2 856 B) unit of a connection (test `a_handshake_sized_unit_in_the_middle_is_not_a_frame`).
+- **m-2** the doc of `optional_job_findings` is corrected (`ks_hour` is loopback-only; `two-clients --transport tor` and `tor_smoke` can reach Tor) and `tor_invocation_findings`
+  (run by the `workflows` step) keeps both out of `ci.yml` and every test under `crates/*/tests/` (the usage-error case of TC-01 is allowed); test `tests_and_ci_do_not_start_tor`.
+  Red: `gates.rs:6942:9` `tor-invocation: crates/secmp-testkit/tests/harness/zz_plant.rs:1 starts \`two-clients --transport tor\``.
+- **m-7** TC-02 wording "HS1 written (scheduler reached)"; **m-8** SIM-02 uses `secmp_proto::link::QUEUE_CAPACITY` (red with the constant minus 1: `m6_sim_faults.rs:143:17`
+  `an eviction from a queue of 128 cells`); **m-9** an engine panic exits 101 (`two_clients_engine_panic_exits_101`; red with `unwrap_or(1)`: `mod.rs:136:9` left 1, right 101);
+  **m-6** OPEN-M6-C2-2 is part of the OPEN-M6-B-1 entry now (§7, one bullet).
+- **Red quotes re-taken from the committed tree** (`4c05c37`; `file:line:col` of the asserting line as printed): AI-10 without the shift `ks.rs:325:13` (`link 0: D = 0.0463…, p = 0.8263…`),
+  with the p-value stubbed `ks.rs:325:13` (`link 0: D = 0.3305…, p = 1`); X-07 (`ks-hour` also under `all`) `gates.rs:6866:9`; SIM-05 position `m6_sim_faults.rs:308:5`
+  (`B skipped [4], A's persisted-but-unsent position is 4`, with the wrong expectation). The earlier quotes `ks.rs:230:13` and `gates.rs:6811` of C2-5 are withdrawn (non-asserting lines).

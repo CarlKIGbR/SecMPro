@@ -1446,7 +1446,7 @@ impl<P: StreamProvider + 'static> World<P> {
         };
         let driver = Driver::new(
             Arc::new(Only::new(
-                Traced::lenient(Arc::clone(&self.provider), Arc::clone(&self.rec)),
+                Traced::new(Arc::clone(&self.provider), Arc::clone(&self.rec)),
                 transport,
             )),
             Arc::new(TestDirectory::new(
@@ -1668,12 +1668,10 @@ async fn drive<P: StreamProvider + 'static, R: Rand>(
     out: &mut dyn Write,
 ) -> Result<(), Fail> {
     let done = converse(world, sides, script, cli).await?;
-    if world.observer.is_none() {
-        world
-            .rec
-            .check()
-            .map_err(|e| Fail::Run(format!("the trace is not sound: {e}")))?;
-    }
+    world
+        .rec
+        .check()
+        .map_err(|e| Fail::Run(format!("the trace is not sound: {e}")))?;
     for (name, got, want) in &done.delivered {
         say(out, &format!("delivered side={name} {got}/{want}"));
     }

@@ -1872,3 +1872,81 @@ accepted as a protocol gap** (OPEN-M6-C2-1, §7, OQ-19). The `ci-fast --strict` 
 
 `ci-fast --strict` at the C2-2b head: all steps PASS (fmt, clippy, policy, deny, vet, audit, cooldown, nextest, doctest, hello), `kat` 716 s
 (`target/tc/cifast-c22b.txt`).
+
+### C2-3 and the fix-ups of WEISUNG M6-C2-5
+
+Commits: Windows `c2e5962`, fix-ups `d9be789`, AI-10 `…` (`test(ks)`), AI-07/X-07/MR-07 `a8bb5dd`, this report. `ci-fast --strict` at `a8bb5dd`: all
+steps PASS, `kat` 768 s (`target/tc/cifast-c23.txt`).
+
+**1 · Windows red of PR run #174 (job `windows-native` 119662175348, head `ae79352`).** The weisung quotes `error[E0463]: can't find
+crate for secmp_relay`; **that error is not in the log** (`gh run view --job 119662175348 --log | grep -c E0463` = 0; no other job of
+run #174 failed except `ci-verdict`, which follows `windows-native`). The red is another one, in `ci-fast` step 5 `kat` (the command of
+the Windows gate, `cargo nextest run --locked --package secmp-testkit --features kat …`):
+
+```
+FAIL  secmp-testkit::harness m6_two_clients::two_clients_cli_contract
+thread 'm6_two_clients::two_clients_cli_contract' panicked at crates\secmp-testkit\tests\harness\m6_two_clients.rs:163:9:
+assertion `left == right` failed: tls:
+thread 'main' (7264) has overflowed its stack
+  left: Some(-1073741571)      right: Some(3)
+```
+
+Mechanism: `-1073741571` = `0xC00000FD` = `STATUS_STACK_OVERFLOW`. The binary `two-clients` ran the engine (handshake, ratchet and
+frame buffers of an unoptimised debug build) on its **main thread**, which has 1 MiB on Windows and 8 MiB on Linux; the first run that gets as
+far as the TLS provider (`--transport tls` against a reference without direct endpoint, expected exit 3) overflowed it. Linux did not see it
+because of the 8 MiB. The in-process tests were not affected (`mem(…)` runs on a 32 MiB thread, M6-C2-1). The nextest run stopped at
+the first failure (`31/255 tests were not run`), so other Windows-only reds behind it (TC-05/TC-06 start the `secmp-relay` binary through a
+nested `cargo build`) are **not yet known**; that is the next PR run's information. Fix (testkit only): `main_with`/`main_in` run the engine
+on a scoped thread of 64 MiB (`ENGINE_STACK`), so the program no longer depends on its caller's stack; the bin passes `Stdout`/`Stderr`
+(the locks are not `Send`). Test `two_clients_main_fits_a_small_stack` (calls `main_with` from a thread of 1 MiB). Red before green:
+`thread '<unknown>' has overflowed its stack … (test aborted with signal 6: SIGABRT)`; green after. The container cannot set `ulimit -s`, so
+the real 1 MiB main thread of Windows was not reproduced; the test reproduces the same overflow in-process.
+
+**2 · Decisions recorded.** SIM-10 is re-dictated by the reviewer: asserted via consequences (`QUEUE_NEW` after `ERR_NOQUEUE`, queue absent,
+frames in the outage, rids identical) — `present` is not observable without a core hook (doc comment of the test, `m6_sim_restart.rs`); the
+re-creation connect is one `Purpose::Control` after the restart (the purpose carries the op id, not its kind; a node's scheduler has no
+pool and no link-data operation, so the only control operation is the `QueueNew`; the test asserts that there is exactly one).
+**TC-02 subprocess part:** the 30 s real run stays; it shows the engine reached the scheduler by a non-empty trace, 6 `enqueue` events and a
+link that completed its handshake (an `HS1` of 2 856 B written); it asserts no `deliver`, because the first delivery of the deterministic
+`mem` run comes at 145.6 s (pool fill ≈ 15 s, link phase up to 180 s, first tick after `P`), which the in-process 600 s part checks. OPEN-M6-C2-2
+is folded into OPEN-M6-B-1 (§7, re-rated: the drain rate equals the send rate); OQ-20 is the open question of B-1.
+
+**2b · Verification nits** (`d9be789`): SIM-02's prediction is anchored in the protocol constant (each inferred eviction asserts the queue held
+128 cells, red: `an eviction from a queue of 128 cells` with 127 expected); SIM-05 compares the skipped *position* (A's send counter at the
+crash minus one, read from its durable state) with B's skipped list (red: `B skipped [4], A's persisted-but-unsent position is 4` with the
+wrong expectation); the comment of `reconnect_delays` states the max-bound it proves; "ten rows"; SIM-03's outage writes: any C2R frame of a
+scheduled link, because a frame is encrypted and a SEND cannot be told from a FETCH, while every tick of the send link carries a SEND (reason
+in the test); §7 now says what a lenient stream can hide.
+
+**3 · C2-3.**
+- **AI-10** `ks::tests::ks_tool_detects_planted_dependence` (`crates/secmp-testkit/src/ks.rs`): two-sample KS (D, asymptotic p, n) on the
+  inter-departure times of the C2R frames per scheduled link, idle hour against active hour, handshakes excluded; synthetic trace of 4 links with
+  `P` = 10 s plus a timer jitter of 0…2 ms and gaps 1 ms shorter in the active hour: `p < 0.01` per link and pooled at n ≈ 360 per link and hour (pooled
+  1 440). Red first: the same trace without the shift — `ks.rs:230:13` `link 0: D = 0.0463401423707831, p = 0.8263133806497643`; and with the p-value
+  stubbed to 1 — `link 0: D = 0.33055555555555555, p = 1`. The other half, `ks_tool_accepts_equal_distributions` (50 seeds × 4 links: ≤ 5 % flagged),
+  and known values (identical samples p = 1, disjoint D = 1, Q(1.36) ≈ 0.049). **Sensitivity statement:** the tool resolves a 1-ms shift when the
+  timer jitter is at most about 3 ms wide at this n; for wider jitter the smallest detectable shift grows with it (D of a shift δ over a jitter width w is
+  ≈ δ/w). The p-value is the asymptotic one; the samples are whole milliseconds with many ties, for which it is conservative (favours "no dependence").
+- **AI-07 loopback part** — dispatch job `ks-hour` (`ci-dispatch.yml`, suite `ks-hour` only, `timeout-minutes: 170`, `permissions: contents: read`,
+  actions pinned, top-level `AWS_LC_SYS_PREBUILT_NASM: "0"` unchanged) runs `target/release/examples/ks_hour target/ks-hour`: two contacts (two pairs of clients) against
+  a relay on loopback behind its direct TLS listener, real time, the first hour idle, the second active (120 messages 30 s apart and 10 bursts of 20 per
+  client, `Script` keys `start_s`, `bursts`, `burst_size`), then the KS test per link and pooled, `p ≥ 0.01`, every unit 4 352 B, exit 1 otherwise; D, p, n,
+  the median gaps per link and the SHA-256 of the frames analysed are written to `ks-hour.txt` (uploaded as artefact `ks-hour-<sha>-<attempt>`).
+  **Evidence file path after the run (reviewer's step):** `docs/reviews/M06-evidence/ks-hour-<run id>.txt`. A smoke run (700 s + 700 s, release build) in the
+  container: `link 4: D = 0.033035, p = 1.000000, n_idle = 68, n_active = 69` … `pooled: D = 0.043478, p = 0.968465, n_idle = 230, n_active = 276`, all units 4 352 B,
+  criterion MET (n is that of 700 s; the job's n is that of an hour).
+  **Finding on the row's input:** "loopback TLS relay, **Strict**, P = 10 s" cannot be Strict: direct mode implies Balanced (spec §10.2,
+  `Scheduler::effective_mode`); the first smoke run showed it — a combined link writes the two requests of a slot 1 ms apart. The run is Balanced with
+  `T_BALANCED` = 10 s, frames less than 100 ms apart count as one departure (no effect for a Strict link), and the output says so. A Strict run over
+  real sockets would need a plain-TCP loopback listener of the relay (`tor_loopback`) behind `--transport loopback`; the dispatch job does not do that.
+  Reviewer: accept as the loopback part of AI-07, or ask for the Strict plain-TCP variant.
+- **X-07** `gates::tests::optional_jobs_are_not_required` (+ `optional_job_findings`, run by the `workflows` step of `policy`): `REQUIRED_JOBS` is
+  the five names of the C1 head; `tor-smoke` and `ks-hour` are declared once each in `ci-dispatch.yml`, only under `inputs.suite == '<own name>'` (never in
+  `all`), are no job of `ci.yml` and no required check, and `ci.yml` names neither job nor starts `tor_smoke`/`ks_hour` (the only programs that reach a host beyond
+  loopback). Red: the real workflow with `ks-hour` also under `all` — `assertion left == right failed … runs under 'inputs.suite == 'all' || inputs.suite ==
+  'ks-hour'', not only under its own suite` (`gates.rs:6811`).
+- **MR-07 / TOR-10 job `tor-smoke`** (`timeout-minutes: 30`): `tor_smoke <profile>` without a relay is now the cold-bootstrap measurement; it prints one last line
+  `MR07 bootstrap_seconds=<s> bytes_down=<n>` (seconds from the start of Arti to `Ready`; bytes received on all non-loopback interfaces over the same time,
+  Linux `/proc/net/dev`, so the job runs on an otherwise idle runner and the number includes the runner's own small background traffic), checked by the job with a
+  `grep -E` of the line and uploaded as `tor-smoke-<sha>-<attempt>`. The full TOR-10 form (with a relay reference) is unchanged and owner-operated.
+- The executor does not dispatch (read-only token): the reviewer triggers `ks-hour` and `tor-smoke` after the push; C2-4 reads the results.

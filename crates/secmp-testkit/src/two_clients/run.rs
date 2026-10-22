@@ -18,7 +18,7 @@
 
 use std::io::Write;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
@@ -47,7 +47,7 @@ use secmp_proto::wire::inv::{Profile, RelayRef};
 use secmp_proto::{Decode as _, Encode as _};
 use secmp_relay::clock::HourBucket;
 use secmp_transport::driver::{
-    AsyncQueueTransport as _, AsyncRelayQueueTransport, Isolation, StreamProvider,
+    AsyncQueueTransport, AsyncRelayQueueTransport, Isolation, StreamProvider,
 };
 use secmp_transport::{LinkGetMode, RecvCap, SendCap};
 
@@ -279,6 +279,8 @@ struct Pooled<P: StreamProvider + 'static, R: Rand> {
     driver: PoolDriver<P, R>,
     material: Arc<Mutex<crate::harness::ControlMaterial>>,
     clock: TokioClock,
+    /// The `QUEUE_NEW` control operations that had run when the pool was full.
+    filled_ops: usize,
 }
 
 fn copy_seed(s: &SecretBytes<32>) -> SecretBytes<32> {
@@ -286,6 +288,27 @@ fn copy_seed(s: &SecretBytes<32>) -> SecretBytes<32> {
 }
 
 impl<P: StreamProvider + 'static, R: Rand> Pooled<P, R> {
+    /// The `QUEUE_NEW` control operations the pool's runner has carried out.
+    fn queue_new_ops(&self) -> usize {
+        self.material
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .done
+            .iter()
+            .filter(|k| {
+                matches!(
+                    k,
+                    secmp_client_core::scheduler::types::ControlKind::QueueNew(_)
+                )
+            })
+            .count()
+    }
+
+    /// Those carried out since the pool was full: the invitation takes spares and creates nothing.
+    fn queue_new_ops_since_fill(&self) -> usize {
+        self.queue_new_ops().saturating_sub(self.filled_ops)
+    }
+
     /// Take the oldest spare: its two seeds, and the pool's spares before and after.
     fn take(&mut self) -> Result<Taken, Fail> {
         let relay = RelayId(0);
@@ -329,6 +352,8 @@ struct World<P: StreamProvider + 'static> {
     mode: Mode,
     direct: bool,
     rec: Arc<Recorder>,
+    /// `QUEUE_NEW` commands sent over the script's set-up links.
+    queue_news: Arc<AtomicU64>,
 }
 
 fn copy_key(k: &AccessKey) -> AccessKey {
@@ -394,19 +419,24 @@ impl<P: StreamProvider + 'static> World<P> {
         })
     }
 
+    /// The `QUEUE_NEW` commands the script itself has sent so far (the pool's are control operations, not counted).
+    fn queue_new_commands(&self) -> u64 {
+        self.queue_news.load(Ordering::SeqCst)
+    }
+
     /// A set-up connection (one step of the script): a link to the relay, handshake done.
     async fn open<R: Rand>(
         &self,
         iso: &mut u64,
         rand: &mut R,
-    ) -> Result<AsyncRelayQueueTransport<P::Stream>, Fail> {
+    ) -> Result<SetupLink<P::Stream>, Fail> {
         *iso = iso.saturating_add(1);
         let stream = self
             .provider
             .connect(&self.relay, Isolation(SETUP_ISO | *iso))
             .await
             .map_err(|e| Fail::Unavailable(format!("connect: {e}")))?;
-        AsyncRelayQueueTransport::connect(
+        let inner = AsyncRelayQueueTransport::connect(
             stream,
             self.relay.relay_fp,
             Some(&self.access),
@@ -414,7 +444,81 @@ impl<P: StreamProvider + 'static> World<P> {
             rand.entropy(),
         )
         .await
-        .map_err(run_err("link handshake"))
+        .map_err(run_err("link handshake"))?;
+        Ok(SetupLink {
+            inner,
+            queue_news: Arc::clone(&self.queue_news),
+        })
+    }
+}
+
+/// A set-up link of the script. It counts the `QUEUE_NEW` commands sent over it: the script takes its queues from the
+/// pool, so the count stays 0 (TC-03 reads it at run time; the pool's own creations are control operations).
+struct SetupLink<S> {
+    inner: AsyncRelayQueueTransport<S>,
+    queue_news: Arc<AtomicU64>,
+}
+
+impl<S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send> AsyncQueueTransport
+    for SetupLink<S>
+{
+    async fn create_queue(
+        &mut self,
+        recv: &SecretBytes<32>,
+        send: &SecretBytes<32>,
+        token: &secmp_transport::Token,
+    ) -> secmp_transport::Result<(RecvCap, SendCap)> {
+        self.queue_news.fetch_add(1, Ordering::SeqCst);
+        self.inner.create_queue(recv, send, token).await
+    }
+
+    async fn send(
+        &mut self,
+        to: &SendCap,
+        cell: &Cell,
+    ) -> secmp_transport::Result<secmp_transport::SendOutcome> {
+        self.inner.send(to, cell).await
+    }
+
+    async fn fetch(
+        &mut self,
+        from: &RecvCap,
+        ack: secmp_transport::CellId,
+    ) -> secmp_transport::Result<Vec<(secmp_transport::CellId, Cell)>> {
+        self.inner.fetch(from, ack).await
+    }
+
+    async fn fetch_multi(
+        &mut self,
+        from: &[(&RecvCap, secmp_transport::CellId)],
+    ) -> secmp_transport::Result<secmp_transport::FetchMultiOutcome> {
+        self.inner.fetch_multi(from).await
+    }
+
+    async fn delete_queue(&mut self, q: &RecvCap) -> secmp_transport::Result<()> {
+        self.inner.delete_queue(q).await
+    }
+
+    async fn put_link_data(
+        &mut self,
+        id: secmp_transport::LdId,
+        owner: &SecretBytes<32>,
+        blob: &secmp_proto::wire::inv::LinkBlob,
+        one_time: bool,
+        expires: secmp_transport::Bucket,
+        token: &secmp_transport::Token,
+    ) -> secmp_transport::Result<()> {
+        self.inner
+            .put_link_data(id, owner, blob, one_time, expires, token)
+            .await
+    }
+
+    async fn get_link_data(
+        &mut self,
+        id: secmp_transport::LdId,
+        mode: LinkGetMode<'_>,
+    ) -> secmp_transport::Result<secmp_transport::LinkGetOutcome> {
+        self.inner.get_link_data(id, mode).await
     }
 }
 
@@ -527,7 +631,9 @@ impl<P: StreamProvider + 'static> World<P> {
         say(
             out,
             &format!(
-                "step=invitation_queue source=pool spares_before={spares_before} spares_after={spares_after} queue_new_commands=0"
+                "step=invitation_queue source=pool spares_before={spares_before} spares_after={spares_after} queue_new_commands={} queue_new_ops_since_fill={}",
+                self.queue_new_commands(),
+                pool.queue_new_ops_since_fill()
             ),
         );
         let route = RelayQueue::derived(
@@ -582,7 +688,9 @@ impl<P: StreamProvider + 'static> World<P> {
         say(
             out,
             &format!(
-                "step=reply_queue side=invitee source=pool spares_before={spares_before} spares_after={spares_after} queue_new_commands=0"
+                "step=reply_queue side=invitee source=pool spares_before={spares_before} spares_after={spares_after} queue_new_commands={} queue_new_ops_since_fill={}",
+                self.queue_new_commands(),
+                pool.queue_new_ops_since_fill()
             ),
         );
         let route = RelayQueue::derived(
@@ -967,6 +1075,8 @@ async fn converse<P: StreamProvider + 'static, R: Rand>(
         }
     }
     stop.store(true, Ordering::SeqCst);
+    // the run is over: the streams the shutdown drops are dropped on purpose
+    world.rec.seal();
     let end_ms = world.clock.mono_ms();
     finish(handles).await?;
     let (delivered, exact) = verify(&shells, script);
@@ -1086,7 +1196,7 @@ impl<P: StreamProvider + 'static> World<P> {
         };
         let driver = Driver::new(
             Arc::new(Only::new(
-                Traced::new(Arc::clone(&self.provider), Recorder::new(self.clock)),
+                Traced::lenient(Arc::clone(&self.provider), Arc::clone(&self.rec)),
                 transport,
             )),
             Arc::new(TestDirectory::new(
@@ -1103,6 +1213,7 @@ impl<P: StreamProvider + 'static> World<P> {
             driver,
             material,
             clock: self.clock,
+            filled_ops: 0,
         };
         while pool.sched.pool_spares(RelayId(0)) < want {
             if self.clock.mono_ms().saturating_sub(now) > POOL_FILL_LIMIT_MS {
@@ -1114,19 +1225,8 @@ impl<P: StreamProvider + 'static> World<P> {
                 .await
                 .map_err(|_| Fail::Run("the pool driver stopped: no randomness".to_owned()))?;
         }
-        let made = pool
-            .material
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .done
-            .iter()
-            .filter(|k| {
-                matches!(
-                    k,
-                    secmp_client_core::scheduler::types::ControlKind::QueueNew(_)
-                )
-            })
-            .count();
+        let made = pool.queue_new_ops();
+        pool.filled_ops = made;
         say(
             out,
             &format!(
@@ -1276,6 +1376,7 @@ fn world<P: StreamProvider + 'static>(
         mode: cli.mode,
         direct: cli.transport == TransportArg::Tls,
         rec: Recorder::new(clock),
+        queue_news: Arc::new(AtomicU64::new(0)),
     }
 }
 

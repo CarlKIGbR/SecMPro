@@ -243,7 +243,8 @@ fn two_clients_profiles_are_in_memory() {
     assert!(before.is_empty());
     let trace = dir.join("trace.jsonl");
     let run = mem(&format!(
-        "--role both --transport mem --duration-s 600 --trace-out {}",
+        "--role both --transport mem --duration-s 600 --script {} --trace-out {}",
+        three_messages_script().display(),
         trace.display()
     ));
     assert_eq!(run.code, 0, "{}", run.err);
@@ -261,8 +262,33 @@ fn two_clients_profiles_are_in_memory() {
         "a file besides --trace-out"
     );
     assert!(after.first().unwrap().1 > 1_000, "the trace is empty");
+    // the trace holds the script's messages: 3 + 3 enqueued, and all of them delivered within the 600 s
+    let text = std::fs::read_to_string(&trace).unwrap();
+    assert_eq!(event_count(&text, "enqueue"), 6);
+    assert_eq!(event_count(&text, "deliver"), 6, "{}", run.out);
     let _ = std::fs::remove_dir_all(&dir);
     profile_goes_nowhere_on_disk();
+}
+
+/// A script of three one-cell messages each way, in a directory of its own.
+fn three_messages_script() -> PathBuf {
+    let dir = tmp("script3");
+    let path = dir.join("script");
+    std::fs::write(
+        &path,
+        "messages = 3\nsize_min = 1\nsize_max = 1000\nseed = 9\n",
+    )
+    .unwrap();
+    path
+}
+
+/// How many lines of a trace are the message event `name`.
+fn event_count(trace: &str, name: &str) -> usize {
+    trace
+        .lines()
+        .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
+        .filter(|v| word(v, "event") == name)
+        .count()
 }
 
 /// TC-02, the places a profile could go: the binary runs (real time, 30 s) with its working directory, `HOME`,
@@ -287,6 +313,8 @@ fn profile_goes_nowhere_on_disk() {
             "mem",
             "--duration-s",
             "30",
+            "--script",
+            three_messages_script().to_str().unwrap(),
             "--trace-out",
             "trace.jsonl",
         ])
@@ -317,6 +345,11 @@ fn profile_goes_nowhere_on_disk() {
         vec![cwd.join("trace.jsonl")],
         "a file besides --trace-out"
     );
+    // the trace is not empty and holds the script's 3 + 3 messages (enqueued at once; 30 s of real time is too short
+    // for their delivery: the links start up to 180 s after the run begins)
+    let text = std::fs::read_to_string(cwd.join("trace.jsonl")).unwrap();
+    assert!(text.len() > 1_000, "the trace is empty");
+    assert_eq!(event_count(&text, "enqueue"), 6);
     let _ = std::fs::remove_dir_all(&sandbox);
 }
 
@@ -342,10 +375,10 @@ fn two_clients_scripted_invitation_handshake() {
         [
             "step=pool side=inviter spares=2 queue_new_ops=2",
             "step=link_put",
-            "step=invitation_queue source=pool spares_before=2 spares_after=1 queue_new_commands=0",
+            "step=invitation_queue source=pool spares_before=2 spares_after=1 queue_new_commands=0 queue_new_ops_since_fill=0",
             "step=pool side=invitee spares=2 queue_new_ops=2",
             "step=link_get_consume",
-            "step=reply_queue side=invitee source=pool spares_before=2 spares_after=1 queue_new_commands=0",
+            "step=reply_queue side=invitee source=pool spares_before=2 spares_after=1 queue_new_commands=0 queue_new_ops_since_fill=0",
             "step=hx_initiator cells=3",
             "step=hx_responder accepted=true link_data present=false consumed=true",
         ],
@@ -362,13 +395,6 @@ fn two_clients_scripted_invitation_handshake() {
     assert!(a.bytes().all(|c| c.is_ascii_digit()));
     assert_eq!(a, b, "the safety numbers differ");
     assert!(run.line("sas=equal").is_some());
-    // by construction the script sends no QUEUE_NEW of its own: the only place the engine creates a queue is the
-    // scheduler's pool control operation (`TestControl`)
-    let engine = include_str!("../../src/two_clients/run.rs");
-    assert!(
-        !engine.contains(".create_queue("),
-        "a QUEUE_NEW in the script"
-    );
 }
 
 /// The number under `key` of a trace line.
@@ -624,6 +650,7 @@ fn assert_frames_after_hs2(trace: &str) {
     let all = units(trace);
     let slots: std::collections::BTreeSet<u64> = all.iter().map(|u| u.3).collect();
     assert!(!slots.is_empty(), "no unit in the trace");
+    let mut frames = 0_usize;
     for slot in slots {
         for (dir, head) in [("c2r", [9_u64, 2_856]), ("r2c", [1_744, 1_156])] {
             let lens: Vec<u64> = all
@@ -631,18 +658,22 @@ fn assert_frames_after_hs2(trace: &str) {
                 .filter(|u| u.3 == slot && u.2 == dir)
                 .map(|u| u.1)
                 .collect();
-            assert!(
-                lens.len() > 2,
-                "link {slot} {dir}: {} units, no frame after the handshake",
-                lens.len()
+            // a link the run ended during its handshake has only a prefix of the records
+            let n = lens.len().min(2);
+            assert_eq!(
+                lens.get(..n).unwrap(),
+                head.get(..n).unwrap(),
+                "link {slot} {dir}"
             );
-            assert_eq!(lens.get(..2).unwrap(), head, "link {slot} {dir}");
+            let after = lens.get(n..).unwrap();
             assert!(
-                lens.get(2..).unwrap().iter().all(|n| *n == 4_352),
+                after.iter().all(|n| *n == 4_352),
                 "link {slot} {dir}: a unit after HS2 is not 4352 B: {lens:?}"
             );
+            frames = frames.saturating_add(after.len());
         }
     }
+    assert!(frames > 0, "no frame after any handshake");
 }
 
 /// `--role both` over a real transport: 20 messages each way, delivered; every unit after HS2 is 4 352 B.
@@ -708,7 +739,8 @@ fn two_clients_trace_schema() {
         keys.sort_unstable();
         assert!(
             obj.values().all(|x| x.is_u64()
-                || ["c2r", "r2c", "enqueue", "deliver"].contains(&x.as_str().unwrap_or_default())),
+                || ["c2r", "r2c", "enqueue", "deliver", "trace_error"]
+                    .contains(&x.as_str().unwrap_or_default())),
             "a value that is no number and no known word: {line}"
         );
         if keys == ["dir", "len", "link_slot", "t_ms"] {
@@ -781,6 +813,38 @@ fn two_clients_trace_rejects_partial_unit() {
             rec.units().iter().map(|u| u.len).collect::<Vec<_>>(),
             [4352]
         );
+    });
+}
+
+/// F1-a (reviewer): a stream dropped inside a unit — the drivers never shut a stream down — is a residual too: the
+/// recorder fails the run, naming the 100 bytes, and the trace carries a `trace_error` message event (keys `event`,
+/// `msg`, `t_ms`). After `seal` (the run is over) a drop is not an error.
+#[test]
+fn two_clients_trace_residual_on_drop_fails() {
+    use secmp_client_core::clock::TokioClock;
+    use secmp_testkit::two_clients::trace::Recorder;
+    use tokio::io::AsyncWriteExt as _;
+    runtime().block_on(async {
+        let rec = Recorder::new(TokioClock::new(0));
+        let (a, _peer) = tokio::io::duplex(1 << 16);
+        let mut s = rec.wrap(a);
+        s.write_all(&[0; 4352]).await.unwrap();
+        s.flush().await.unwrap();
+        s.write_all(&[0; 100]).await.unwrap();
+        assert_eq!(rec.check(), Ok(()));
+        drop(s);
+        let err = rec.check().unwrap_err();
+        assert!(err.contains("c2r: residual 100 B at drop"), "{err}");
+        let trace = rec.jsonl();
+        assert_eq!(event_count(&trace, "trace_error"), 1, "{trace}");
+        // a stream dropped after the run is sealed is dropped on purpose
+        let rec = Recorder::new(TokioClock::new(0));
+        let (b, _peer) = tokio::io::duplex(1 << 16);
+        let mut s = rec.wrap(b);
+        s.write_all(&[0; 100]).await.unwrap();
+        rec.seal();
+        drop(s);
+        assert_eq!(rec.check(), Ok(()));
     });
 }
 

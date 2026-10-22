@@ -56,7 +56,10 @@ struct Inner {
     slots: u64,
     units: Vec<UnitRec>,
     events: Vec<EventRec>,
-    errors: Vec<String>,
+    /// What went wrong, with the clock's time.
+    errors: Vec<(u64, String)>,
+    /// The run is over: streams dropped from now on are not residuals.
+    sealed: bool,
 }
 
 /// What a run recorded (shared by both clients of a process).
@@ -97,7 +100,17 @@ impl Recorder {
     }
 
     fn error(&self, what: String) {
-        self.lock().errors.push(what);
+        let t_ms = self.clock.mono_ms();
+        self.lock().errors.push((t_ms, what));
+    }
+
+    /// The run is over: its streams are dropped on purpose from now on, wherever they stand.
+    pub fn seal(&self) {
+        self.lock().sealed = true;
+    }
+
+    fn sealed(&self) -> bool {
+        self.lock().sealed
     }
 
     /// A stream of the run under this recorder: its units are recorded as they cross (see [`TracedStream`]); the link
@@ -109,6 +122,7 @@ impl Recorder {
             slot: self.next_slot(),
             pending: 0,
             read: ReadSide::default(),
+            lenient: false,
         }
     }
 
@@ -121,7 +135,8 @@ impl Recorder {
         if g.errors.is_empty() {
             Ok(())
         } else {
-            Err(g.errors.join("; "))
+            let all: Vec<&str> = g.errors.iter().map(|(_, e)| e.as_str()).collect();
+            Err(all.join("; "))
         }
     }
 
@@ -166,6 +181,13 @@ impl Recorder {
                 e.event, e.msg, e.t_ms
             );
         }
+        // a recorder error is a message event too (the keys stay `event`, `msg`, `t_ms`): `msg` is its ordinal
+        for (i, (t_ms, _)) in g.errors.iter().enumerate() {
+            let _ = writeln!(
+                out,
+                "{{\"event\":\"trace_error\",\"msg\":{i},\"t_ms\":{t_ms}}}"
+            );
+        }
         out
     }
 }
@@ -196,6 +218,30 @@ pub struct TracedStream<S> {
     /// Bytes written since the last flush.
     pending: usize,
     read: ReadSide,
+    /// A drop with a unit in progress is not an error (the streams of a pool that is shut down on purpose).
+    lenient: bool,
+}
+
+impl<S> Drop for TracedStream<S> {
+    /// A stream dropped inside a unit — a link torn down while a frame was half written or half read — is a residual
+    /// like one at the close, unless the run is over (`Recorder::seal`) or the stream is lenient.
+    fn drop(&mut self) {
+        if self.lenient || self.rec.sealed() {
+            return;
+        }
+        if self.pending > 0 {
+            self.rec.error(format!(
+                "link {} c2r: residual {} B at drop, no unit",
+                self.slot, self.pending
+            ));
+        }
+        if self.read.got > 0 {
+            self.rec.error(format!(
+                "link {} r2c: residual {} B at drop, no unit",
+                self.slot, self.read.got
+            ));
+        }
+    }
 }
 
 impl<S> TracedStream<S> {
@@ -313,12 +359,26 @@ impl<S: AsyncWrite + Unpin> AsyncWrite for TracedStream<S> {
 pub struct Traced<P> {
     inner: Arc<P>,
     rec: Arc<Recorder>,
+    lenient: bool,
 }
 
 impl<P> Traced<P> {
     /// `inner`, recording into `rec`.
     pub const fn new(inner: Arc<P>, rec: Arc<Recorder>) -> Self {
-        Self { inner, rec }
+        Self {
+            inner,
+            rec,
+            lenient: false,
+        }
+    }
+
+    /// As [`Traced::new`], for streams that may be dropped inside a unit (a pool shut down on purpose).
+    pub const fn lenient(inner: Arc<P>, rec: Arc<Recorder>) -> Self {
+        Self {
+            inner,
+            rec,
+            lenient: true,
+        }
     }
 }
 
@@ -331,7 +391,9 @@ impl<P: StreamProvider> StreamProvider for Traced<P> {
         isolation: Isolation,
     ) -> Result<Self::Stream, TransportError> {
         let inner = self.inner.connect(relay, isolation).await?;
-        Ok(self.rec.wrap(inner))
+        let mut stream = self.rec.wrap(inner);
+        stream.lenient = self.lenient;
+        Ok(stream)
     }
 }
 

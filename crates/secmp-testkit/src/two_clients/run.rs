@@ -3,12 +3,14 @@
 //! The engine of `two-clients`: the scripted invitation and handshake (spec §5.5, §6.4–6.6), then two clients — each a
 //! [`Scheduler`] driven by the tokio [`Driver`] — that exchange the script's messages over constant-rate links.
 //!
-//! **What is scripted.** The invitation (`LINK_PUT`, the invitation queue, `LINK_GET` consume), the three handshake cells
-//! and the responder's acceptance run on set-up links, one connection per step, outside the scheduler: M6 has no
-//! client-core that routes handshake cells through the scheduler (M7). The inviter's reply queue is made before the
-//! invitation and its route travels in the invitation file next to the invitation URI (a `RouteUpdate` sender does not
-//! exist yet): the file is testkit-only. Everything after the handshake — every message, every receipt, every dummy —
-//! goes through the scheduler and its links, as in a shipped client.
+//! **What is scripted** (deviation D-C2-1, report §5). Each client first fills its queue pool through the scheduler
+//! (`manage_pool`, `QUEUE_NEW` control operations) and takes the invitation queue and the reply queues from it. The
+//! invitation (`LINK_PUT`, `LINK_GET` consume), the three handshake cells and the responder's acceptance then run on
+//! set-up links, one connection per step, outside the scheduler: the first reply of the responder carries a
+//! `RouteUpdate` (spec §6.6 step 4) and `secmp-client-core` has no sender of Content type 0x04 (`OutMessage` has no such
+//! kind), so the inviter's reply route travels in the invitation file next to the URI (testkit-only). Everything after the
+//! handshake — every message, every receipt, every dummy — goes through the scheduler and its links, as in a shipped
+//! client.
 //!
 //! **Time.** On `mem` the runtime's clock is paused (virtual): a run of hours takes seconds and is reproducible (all
 //! randomness is the harness's deterministic streams). On every real transport time is the runtime's real clock and all
@@ -79,6 +81,8 @@ const INVITATION_SECS: u64 = 7 * 86_400;
 const PERIOD: Period = Period::S10;
 /// How long Arti may take to become ready before `--transport tor` is unavailable.
 const TOR_READY_LIMIT: Duration = Duration::from_secs(600);
+/// How long the pool of a client may take to fill before the transport counts as unavailable.
+const POOL_FILL_LIMIT_MS: u64 = 300_000;
 
 // ---- the relay's reference file ------------------------------------------------------------------------------------
 
@@ -252,6 +256,69 @@ struct Start<R: Rand> {
     recv_period_ms: u64,
 }
 
+/// The driver of a pool scheduler: no conversations, so a worker over a source without cells.
+type PoolDriver<P, R> = Driver<
+    Only<Traced<P>>,
+    TestDirectory,
+    TestControl,
+    <R as Rand>::Hs,
+    InlineWorker<NoCells>,
+    TokioClock,
+>;
+
+/// A queue taken from the pool: its recipient and sender seeds, and the pool's spares before and after.
+type Taken = (SecretBytes<32>, SecretBytes<32>, usize, usize);
+
+/// A client's queue pool before its conversation exists (spec §10.6 (3)): a scheduler that manages the pool of its relay
+/// — the spares are made by `QUEUE_NEW` control operations on one-shot links, delayed from each other — and the driver
+/// that runs them. The driver runs only while the pool fills; the queues the script takes are taken from the scheduler's
+/// pool (`take_pool_queue`), and the driver never runs again, so nothing fetches (and acknowledges) a taken queue
+/// before the script reads it.
+struct Pooled<P: StreamProvider + 'static, R: Rand> {
+    sched: Scheduler,
+    driver: PoolDriver<P, R>,
+    material: Arc<Mutex<crate::harness::ControlMaterial>>,
+    clock: TokioClock,
+}
+
+fn copy_seed(s: &SecretBytes<32>) -> SecretBytes<32> {
+    SecretBytes::from_slice(s.expose_secret()).unwrap()
+}
+
+impl<P: StreamProvider + 'static, R: Rand> Pooled<P, R> {
+    /// Take the oldest spare: its two seeds, and the pool's spares before and after.
+    fn take(&mut self) -> Result<Taken, Fail> {
+        let relay = RelayId(0);
+        let before = self.sched.pool_spares(relay);
+        let (queue, _outputs) = self
+            .sched
+            .take_pool_queue(self.clock.mono_ms(), relay, PERIOD_MS, &mut NoCells)
+            .map_err(|_| Fail::Run("the pool refused the queue".to_owned()))?;
+        let queue = queue.ok_or_else(|| Fail::Run("the pool has no spare queue".to_owned()))?;
+        let seeds = self
+            .material
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .queues
+            .get(&queue.0)
+            .copied()
+            .ok_or_else(|| Fail::Run("a pool queue without seeds".to_owned()))?;
+        let seed = |b: [u8; 32]| SecretBytes::from_slice(&b).map_err(run_err("seed"));
+        Ok((
+            seed(seeds.0)?,
+            seed(seeds.1)?,
+            before,
+            self.sched.pool_spares(relay),
+        ))
+    }
+
+    fn finish(mut self) -> Result<(), Fail> {
+        self.driver
+            .shutdown(&mut self.sched)
+            .map_err(|_| Fail::Run("the pool driver could not shut down".to_owned()))
+    }
+}
+
 /// Everything the nodes of a process share.
 struct World<P: StreamProvider + 'static> {
     provider: Arc<P>,
@@ -409,6 +476,7 @@ impl<P: StreamProvider + 'static> World<P> {
         &self,
         iso: &mut u64,
         rand: &mut R,
+        pool: &mut Pooled<P, R>,
         out: &mut dyn Write,
     ) -> Result<Inviter, Fail> {
         let now = self.clock.unix_secs();
@@ -423,15 +491,27 @@ impl<P: StreamProvider + 'static> World<P> {
             expires,
             spk_expiry: expires,
         };
-        let issued = store
+        let mut issued = store
             .issue_invitation(&identity, params, rand.entropy())
             .map_err(run_err("invitation"))?;
-        let record = store
+        let mut record = store
             .record(&issued.invitation.ld_id)
             .ok_or_else(|| Fail::Run("no invitation record".to_owned()))?
             .duplicate_kat()
             .map_err(run_err("record"))?;
-        let (reply_recv_seed, reply_send_seed) = (rand.seed(), rand.seed());
+        // the invitation queue is a pooled queue (spec §5.2, §10.6 (3)): `issue_invitation` draws seeds of its own and
+        // has no input for a queue that exists, so the invitation and the record take the pooled queue's seeds (the
+        // link data does not depend on them)
+        let (inv_recv, inv_send, spares_before, spares_after) = pool.take()?;
+        issued.invitation.inv_sid =
+            secmp_proto::link::ids::sid(&public_key(&inv_recv), &public_key(&inv_send))
+                .map_err(run_err("invitation queue"))?;
+        issued.invitation.inv_send_seed = inv_send;
+        record.invq_recv_seed = copy_seed(&inv_recv);
+        let invitation_queue =
+            RecvCap::from_seed(&inv_recv).map_err(run_err("invitation queue"))?;
+        let (reply_recv_seed, reply_send_seed, _, _) = pool.take()?;
+        let reply_recv = RecvCap::from_seed(&reply_recv_seed).map_err(run_err("reply queue"))?;
         let mut t = self.open(iso, rand).await?;
         t.put_link_data(
             issued.invitation.ld_id,
@@ -444,24 +524,12 @@ impl<P: StreamProvider + 'static> World<P> {
         .await
         .map_err(run_err("LINK_PUT"))?;
         say(out, "step=link_put");
-        let (invitation_queue, invitation_send) = t
-            .create_queue(
-                &record.invq_recv_seed,
-                &issued.invitation.inv_send_seed,
-                &self.access,
-            )
-            .await
-            .map_err(run_err("invitation queue"))?;
-        if invitation_send.sid() != &issued.invitation.inv_sid {
-            return Err(Fail::Run(
-                "the relay derived another invitation queue".to_owned(),
-            ));
-        }
-        say(out, "step=invitation_queue");
-        let (reply_recv, _) = t
-            .create_queue(&reply_recv_seed, &reply_send_seed, &self.access)
-            .await
-            .map_err(run_err("reply queue"))?;
+        say(
+            out,
+            &format!(
+                "step=invitation_queue source=pool spares_before={spares_before} spares_after={spares_after} queue_new_commands=0"
+            ),
+        );
         let route = RelayQueue::derived(
             self.relay.clone(),
             &public_key(&reply_recv_seed),
@@ -487,6 +555,7 @@ impl<P: StreamProvider + 'static> World<P> {
         iso: &mut u64,
         rand: &mut R,
         file: &InviteFile,
+        pool: &mut Pooled<P, R>,
         out: &mut dyn Write,
     ) -> Result<Invitee, Fail> {
         let now = self.clock.unix_secs();
@@ -507,11 +576,15 @@ impl<P: StreamProvider + 'static> World<P> {
         let accepted = invitee_check(parsed, &blob, now)
             .map_err(|_| Fail::Run("the invitation is refused (§5.5)".to_owned()))?;
         let identity = IdentityKeys::generate(rand.entropy()).map_err(run_err("identity"))?;
-        let (recv_seed, send_seed) = (rand.seed(), rand.seed());
-        let (reply_recv, _) = t
-            .create_queue(&recv_seed, &send_seed, &self.access)
-            .await
-            .map_err(run_err("reply queue"))?;
+        // the reply queue is a pooled queue too (spec §5.5 step 5)
+        let (recv_seed, send_seed, spares_before, spares_after) = pool.take()?;
+        let reply_recv = RecvCap::from_seed(&recv_seed).map_err(run_err("reply queue"))?;
+        say(
+            out,
+            &format!(
+                "step=reply_queue side=invitee source=pool spares_before={spares_before} spares_after={spares_after} queue_new_commands=0"
+            ),
+        );
         let route = RelayQueue::derived(
             self.relay.clone(),
             &public_key(&recv_seed),
@@ -979,15 +1052,101 @@ impl<P: StreamProvider + 'static> World<P> {
         Ok((side, ("invitee", g.sas)))
     }
 
+    /// Fill the pool of client `label` with `want` spares (spec §10.6 (3)): the scheduler's `QUEUE_NEW` control
+    /// operations, delayed from each other. The test tool shortens that delay (`control_delay_ms` 2…5 s, the spec's
+    /// `U[1 min, 60 min]` hides which queue belongs to which invitation); nothing else in `Params` changes.
+    async fn pool<R: Rand>(
+        &self,
+        label: &'static str,
+        want: usize,
+        out: &mut dyn Write,
+    ) -> Result<Pooled<P, R>, Fail> {
+        let mut named = R::actor(label, 2);
+        let suite = format!(
+            "two-clients-pool-{label}-{}",
+            hex(named.seed().expose_secret())
+        );
+        let params = Params {
+            control_delay_ms: (2_000, 5_000),
+            ..Params::default()
+        };
+        let now = self.clock.mono_ms();
+        let mut sched = Scheduler::new(params, self.mode, R::timing(3));
+        let refused = |_| Fail::Run("the scheduler refused the pool".to_owned());
+        if self.direct {
+            let _ = sched.set_direct(now, true, &mut NoCells).map_err(refused)?;
+        }
+        sched.manage_pool(now, RelayId(0)).map_err(refused)?;
+        let control = TestControl::new(copy_key(&self.access), &suite, 0);
+        let material = Arc::clone(&control.material);
+        let transport = if self.direct {
+            Transport::Direct
+        } else {
+            Transport::Tor
+        };
+        let driver = Driver::new(
+            Arc::new(Only::new(
+                Traced::new(Arc::clone(&self.provider), Recorder::new(self.clock)),
+                transport,
+            )),
+            Arc::new(TestDirectory::new(
+                self.relay.clone(),
+                copy_key(&self.access),
+            )),
+            Arc::new(control),
+            R::handshakes(label, 1),
+            InlineWorker(Arc::new(Mutex::new(NoCells))),
+            Arc::new(self.clock),
+        );
+        let mut pool = Pooled {
+            sched,
+            driver,
+            material,
+            clock: self.clock,
+        };
+        while pool.sched.pool_spares(RelayId(0)) < want {
+            if self.clock.mono_ms().saturating_sub(now) > POOL_FILL_LIMIT_MS {
+                return Err(Fail::Unavailable("the queue pool did not fill".to_owned()));
+            }
+            let until = self.clock.mono_ms().saturating_add(CHUNK_MS);
+            pool.driver
+                .run_until(&mut pool.sched, until)
+                .await
+                .map_err(|_| Fail::Run("the pool driver stopped: no randomness".to_owned()))?;
+        }
+        let made = pool
+            .material
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .done
+            .iter()
+            .filter(|k| {
+                matches!(
+                    k,
+                    secmp_client_core::scheduler::types::ControlKind::QueueNew(_)
+                )
+            })
+            .count();
+        say(
+            out,
+            &format!(
+                "step=pool side={label} spares={} queue_new_ops={made}",
+                pool.sched.pool_spares(RelayId(0))
+            ),
+        );
+        Ok(pool)
+    }
+
     /// The inviter issues its invitation; the invitation file's text (and `--invite-out`) is made.
     async fn publish<R: Rand>(
         &self,
         cli: &Cli,
         iso: &mut u64,
         rand: &mut R,
+        pool: &mut Pooled<P, R>,
         out: &mut dyn Write,
     ) -> Result<(Inviter, String), Fail> {
-        let host = self.issue(iso, rand, out).await?;
+        let host = self.issue(iso, rand, pool, out).await?;
         let text = InviteFile::text(
             &invitation_uri(&host.issued.invitation).map_err(run_err("invitation uri"))?,
             &host.reply_route,
@@ -1007,21 +1166,36 @@ impl<P: StreamProvider + 'static> World<P> {
             R::actor("two-clients-invitee", 0),
         );
         let mut up = Vec::new();
+        // the transport is available or the run ends here (exit 3), before any pool is made
+        drop(self.open(&mut iso, &mut ra).await?);
         if cli.role == Role::Invitee {
             let path = cli
                 .invite_in
                 .as_ref()
                 .ok_or_else(|| Fail::Usage("--invite-in".to_owned()))?;
             let file = InviteFile::parse(&read_text(path, "--invite-in")?).map_err(Fail::Usage)?;
-            let guest = self.respond(&mut iso, &mut rb, &file, out).await?;
+            let mut pool = self.pool::<R>("invitee", 2, out).await?;
+            let guest = self
+                .respond(&mut iso, &mut rb, &file, &mut pool, out)
+                .await?;
+            pool.finish()?;
             say(out, "session=up side=invitee");
             up.push(self.invitee_up(guest, rb)?);
             return Ok(up);
         }
-        let (mut host, text) = self.publish(cli, &mut iso, &mut ra, out).await?;
+        // the inviter's pool holds the invitation queue and its reply queue, the invitee's its reply queue
+        let mut pool_a = self.pool::<R>("inviter", 2, out).await?;
+        let (mut host, text) = self
+            .publish(cli, &mut iso, &mut ra, &mut pool_a, out)
+            .await?;
         let guest = if cli.role == Role::Both {
             let file = InviteFile::parse(&text).map_err(Fail::Usage)?;
-            Some(self.respond(&mut iso, &mut rb, &file, out).await?)
+            let mut pool_b = self.pool::<R>("invitee", 2, out).await?;
+            let guest = self
+                .respond(&mut iso, &mut rb, &file, &mut pool_b, out)
+                .await?;
+            pool_b.finish()?;
+            Some(guest)
         } else {
             say(out, "invitation=written");
             None
@@ -1029,6 +1203,7 @@ impl<P: StreamProvider + 'static> World<P> {
         let accepted = self
             .accept(&mut iso, &mut ra, &mut host, wait_ms, out)
             .await?;
+        pool_a.finish()?;
         say(out, "session=up side=inviter");
         up.push(self.inviter_up(accepted, host.reply_recv, ra)?);
         if let Some(guest) = guest {

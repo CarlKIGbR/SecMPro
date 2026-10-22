@@ -262,6 +262,62 @@ fn two_clients_profiles_are_in_memory() {
     );
     assert!(after.first().unwrap().1 > 1_000, "the trace is empty");
     let _ = std::fs::remove_dir_all(&dir);
+    profile_goes_nowhere_on_disk();
+}
+
+/// TC-02, the places a profile could go: the binary runs (real time, 30 s) with its working directory, `HOME`,
+/// `TMPDIR` and the XDG and Windows data directories all redirected into one empty sandbox; afterwards the sandbox holds
+/// the trace file and nothing else (a listing of the real `$HOME` or `/tmp` would race with every other process).
+fn profile_goes_nowhere_on_disk() {
+    let sandbox = tmp("profiles-process");
+    let (cwd, home, scratch) = (
+        sandbox.join("cwd"),
+        sandbox.join("home"),
+        sandbox.join("tmp"),
+    );
+    for d in [&cwd, &home, &scratch] {
+        std::fs::create_dir_all(d).unwrap();
+    }
+    assert!(listing(&sandbox).is_empty());
+    let out = Command::new(BIN)
+        .args([
+            "--role",
+            "both",
+            "--transport",
+            "mem",
+            "--duration-s",
+            "30",
+            "--trace-out",
+            "trace.jsonl",
+        ])
+        .current_dir(&cwd)
+        .env("HOME", &home)
+        .env("USERPROFILE", &home)
+        .env("TMPDIR", &scratch)
+        .env("TEMP", &scratch)
+        .env("TMP", &scratch)
+        .env("XDG_DATA_HOME", &home)
+        .env("XDG_CONFIG_HOME", &home)
+        .env("XDG_CACHE_HOME", &home)
+        .env("XDG_STATE_HOME", &home)
+        .env("APPDATA", &home)
+        .env("LOCALAPPDATA", &home)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        listing(&sandbox)
+            .into_iter()
+            .map(|(p, _)| p)
+            .collect::<Vec<_>>(),
+        vec![cwd.join("trace.jsonl")],
+        "a file besides --trace-out"
+    );
+    let _ = std::fs::remove_dir_all(&sandbox);
 }
 
 /// The digits of the line that starts with `prefix` (the part after the last space).
@@ -272,9 +328,10 @@ fn last_word<'a>(run: &'a Run, prefix: &str) -> &'a str {
 }
 
 /// TC-03 `two_clients_scripted_invitation_handshake` (§5.5, §6.4–6.6): `--role both --transport mem` — the inviter's
-/// `LINK_PUT` and invitation queue, the invitee's `LINK_GET` consume (the owner status then reads consumed), the
-/// initiator's three cells, the responder's acceptance; both clients report `session=up`; the 60-digit safety numbers
-/// equal.
+/// `LINK_PUT` and invitation queue — a spare of the inviter's `QueuePool`, so no `QUEUE_NEW` for it and the pool's
+/// spares drop by one (2 → 1) —, the invitee's `LINK_GET` consume (the owner status then reads consumed) and its reply
+/// queue from its own pool, the initiator's three cells, the responder's acceptance; both clients report `session=up`;
+/// the 60-digit safety numbers equal.
 #[test]
 fn two_clients_scripted_invitation_handshake() {
     let run = mem("--role both --transport mem");
@@ -283,9 +340,12 @@ fn two_clients_scripted_invitation_handshake() {
     assert_eq!(
         steps,
         [
+            "step=pool side=inviter spares=2 queue_new_ops=2",
             "step=link_put",
-            "step=invitation_queue",
+            "step=invitation_queue source=pool spares_before=2 spares_after=1 queue_new_commands=0",
+            "step=pool side=invitee spares=2 queue_new_ops=2",
             "step=link_get_consume",
+            "step=reply_queue side=invitee source=pool spares_before=2 spares_after=1 queue_new_commands=0",
             "step=hx_initiator cells=3",
             "step=hx_responder accepted=true link_data present=false consumed=true",
         ],
@@ -302,6 +362,13 @@ fn two_clients_scripted_invitation_handshake() {
     assert!(a.bytes().all(|c| c.is_ascii_digit()));
     assert_eq!(a, b, "the safety numbers differ");
     assert!(run.line("sas=equal").is_some());
+    // by construction the script sends no QUEUE_NEW of its own: the only place the engine creates a queue is the
+    // scheduler's pool control operation (`TestControl`)
+    let engine = include_str!("../../src/two_clients/run.rs");
+    assert!(
+        !engine.contains(".create_queue("),
+        "a QUEUE_NEW in the script"
+    );
 }
 
 /// The number under `key` of a trace line.

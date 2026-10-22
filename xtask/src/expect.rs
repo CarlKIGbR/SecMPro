@@ -548,6 +548,20 @@ pub(crate) const MUTANT_HARNESS_SKIP_TESTS: &[(&str, &str)] = &[
         "ai07_fault_paired_tokio",
         "AI-07 over the tokio driver, fault-paired, 4 traces x 1 min: 5 s",
     ),
+    // the `two-clients` rows with a relay on 127.0.0.1 and the long exchange (M6 Phase C2-1), nextest on the 32-core
+    // container, the two real-time rows in parallel (WEISUNG M6-C2-2, ADR-047 Am. 1 (5))
+    (
+        "two_clients_loopback_tcp",
+        "TC-05, real-time loopback row (Strict and Balanced, 20 messages each way at P = 10 s): 619 s",
+    ),
+    (
+        "two_clients_direct_tls_loopback",
+        "TC-06, real-time loopback row (direct TLS, 20 messages each way at P = 10 s): 520 s",
+    ),
+    (
+        "two_clients_exchange_script_mem",
+        "TC-04, 100+100 messages of 1…65 535 B over mem, 10 s per mutant x mutant count: 10.5 s",
+    ),
 ];
 
 /// WEISUNG M6-B-3 §1: the long, host-independent simulations the `kat` step leaves out when it runs on Windows

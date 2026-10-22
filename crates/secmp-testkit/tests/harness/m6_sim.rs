@@ -70,6 +70,8 @@ pub struct Spec {
     pub relay: HarnessConfig,
     /// The scheduler mode of both clients.
     pub mode: Mode,
+    /// The clients' connect timeout in ms (`None`: the driver's 120 s).
+    pub connect_timeout_ms: Option<u64>,
 }
 
 impl Default for Spec {
@@ -83,6 +85,7 @@ impl Default for Spec {
             latency: None,
             relay: HarnessConfig::default(),
             mode: Mode::Strict,
+            connect_timeout_ms: None,
         }
     }
 }
@@ -148,7 +151,7 @@ fn client_host(
         Arc::clone(shared.out.get(idx).unwrap()),
     );
     let invite = shared.invite.clone();
-    let (mode, end_s) = (spec.mode, spec.end_s);
+    let (mode, end_s, connect_timeout_ms) = (spec.mode, spec.end_s, spec.connect_timeout_ms);
     sim.host(name, move || {
         let (relay, observer, out, invite) = (
             relay.clone(),
@@ -169,6 +172,7 @@ fn client_host(
                     unix_base: unix,
                     mode,
                     direct: false,
+                    connect_timeout_ms,
                 },
                 Some(Arc::clone(&observer)),
             );

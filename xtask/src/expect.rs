@@ -564,6 +564,10 @@ pub(crate) const MUTANT_HARNESS_SKIP_TESTS: &[(&str, &str)] = &[
         "SIM-08, SIM-03 twice (3 h virtual each): 20 s",
     ),
     (
+        "sim_latency_does_not_move_emission",
+        "SIM-06, two runs of 3 h virtual: 19 s",
+    ),
+    (
         "sim_relay_restart_recovery",
         "SIM-03, 3 h virtual with a relay restart: 10 s",
     ),

@@ -82,7 +82,7 @@ const PERIOD: Period = Period::S10;
 /// How long Arti may take to become ready before `--transport tor` is unavailable.
 const TOR_READY_LIMIT: Duration = Duration::from_secs(600);
 /// How long the pool of a client may take to fill before the transport counts as unavailable.
-const POOL_FILL_LIMIT_MS: u64 = 300_000;
+const POOL_FILL_LIMIT_MS: u64 = 3_600_000;
 
 // ---- the relay's reference file ------------------------------------------------------------------------------------
 
@@ -280,6 +280,7 @@ struct Registered {
 /// [`World::new`].
 #[derive(Default)]
 pub struct Observer {
+    events: Mutex<Vec<(u64, secmp_client_core::scheduler::types::LinkEvent)>>,
     rec: Mutex<Option<Arc<Recorder>>>,
     registered: Mutex<Vec<Registered>>,
 }
@@ -310,6 +311,15 @@ impl Observer {
         let r = g.last()?;
         let convs = r.convs.downcast_ref::<Arc<Mutex<Convs<R>>>>()?;
         Some((Arc::clone(convs), r.restart.clone()))
+    }
+
+    /// The local events of the scheduler (`Up`, `TornDown`, …) with their times, as far as the runs ended and reported.
+    #[must_use]
+    pub fn events(&self) -> Vec<(u64, secmp_client_core::scheduler::types::LinkEvent)> {
+        self.events
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     fn register<R: Rand>(&self, convs: &Arc<Mutex<Convs<R>>>, restart: &Restart) {
@@ -433,6 +443,8 @@ pub struct World<P: StreamProvider + 'static> {
     rec: Arc<Recorder>,
     /// `QUEUE_NEW` commands sent over the script's set-up links.
     queue_news: Arc<AtomicU64>,
+    /// The drivers' connect timeout.
+    connect_timeout_ms: Option<u64>,
     /// What a host outside the engine can see of the run.
     observer: Option<Arc<Observer>>,
 }
@@ -529,6 +541,16 @@ impl<P: StreamProvider + 'static> World<P> {
             InlineWorker(Arc::clone(&convs)),
             Arc::new(self.clock),
         );
+        let driver = match self.connect_timeout_ms {
+            Some(ms) => driver.with_connect_timeout(ms),
+            None => driver,
+        };
+        // a simulation reads the scheduler's local events
+        let driver = if self.observer.is_some() {
+            driver.with_log()
+        } else {
+            driver
+        };
         Ok(Node {
             sched,
             driver,
@@ -1133,11 +1155,18 @@ fn spawn_drivers<P: StreamProvider + 'static, R: Rand>(
 /// Wait for the driver tasks and shut each driver down (nothing opens a connection or writes a byte afterwards).
 async fn finish<P: StreamProvider + 'static, R: Rand>(
     handles: Vec<tokio::task::JoinHandle<Finished<P, R>>>,
+    observer: Option<&Observer>,
 ) -> Result<(), Fail> {
     for h in handles {
         let (mut node, ok) = h
             .await
             .map_err(|_| Fail::Run("a client task failed".to_owned()))?;
+        if let (Some(o), Some(log)) = (observer, node.driver.log()) {
+            o.events
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .extend(log.events.iter().copied());
+        }
         node.driver
             .shutdown(&mut node.sched)
             .map_err(|_| Fail::Run("the driver could not shut down".to_owned()))?;
@@ -1199,7 +1228,8 @@ async fn converse<P: StreamProvider + 'static, R: Rand>(
     loop {
         tokio::time::sleep(Duration::from_millis(CHUNK_MS)).await;
         let now = world.clock.mono_ms();
-        let elapsed = now.saturating_sub(t0);
+        // a simulation host counts the duration from its start (the clock's origin), a run from the conversation's
+        let elapsed = now.saturating_sub(if world.observer.is_some() { 0 } else { t0 });
         for shell in &mut shells {
             shell.enqueue_due(&world.rec, script, t0, now);
             shell.observe(&world.rec, script, now);
@@ -1220,7 +1250,7 @@ async fn converse<P: StreamProvider + 'static, R: Rand>(
     // the run is over: the streams the shutdown drops are dropped on purpose
     world.rec.seal();
     let end_ms = world.clock.mono_ms();
-    finish(handles).await?;
+    finish(handles, world.observer.as_deref()).await?;
     let (delivered, exact) = verify(&shells, script);
     if timed_out {
         return Err(Fail::Run(format!(
@@ -1369,6 +1399,10 @@ impl<P: StreamProvider + 'static> World<P> {
             InlineWorker(Arc::new(Mutex::new(NoCells))),
             Arc::new(self.clock),
         );
+        let driver = match self.connect_timeout_ms {
+            Some(ms) => driver.with_connect_timeout(ms),
+            None => driver,
+        };
         let mut pool = Pooled {
             sched,
             driver,
@@ -1621,6 +1655,7 @@ fn world<P: StreamProvider + 'static>(
             unix_base,
             mode: cli.mode,
             direct: cli.transport == TransportArg::Tls,
+            connect_timeout_ms: None,
         },
         None,
     )
@@ -1640,6 +1675,8 @@ pub struct WorldConfig {
     pub mode: Mode,
     /// Direct TLS mode (the scheduler names the direct transport).
     pub direct: bool,
+    /// The drivers' connect timeout in ms (`None`: the driver's default, 120 s).
+    pub connect_timeout_ms: Option<u64>,
 }
 
 impl<P: StreamProvider + 'static> World<P> {
@@ -1661,6 +1698,7 @@ impl<P: StreamProvider + 'static> World<P> {
             direct: c.direct,
             rec,
             queue_news: Arc::new(AtomicU64::new(0)),
+            connect_timeout_ms: c.connect_timeout_ms,
             observer,
         }
     }

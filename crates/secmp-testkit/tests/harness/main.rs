@@ -27,6 +27,7 @@ mod m6_sched_bal;
 mod m6_sched_io;
 mod m6_sched_life;
 mod m6_sim;
+mod m6_sim_latency;
 mod m6_sim_restart;
 mod m6_spki;
 mod m6_tokio;

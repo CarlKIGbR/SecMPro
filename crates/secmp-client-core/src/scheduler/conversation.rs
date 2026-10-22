@@ -759,3 +759,158 @@ impl<O: Outbox, P: Persist, S: EntropySource> CellSource for Conversations<O, P,
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    // The module is plain `cfg(test)`; the bodies that need the `kat` accessors are gated inside (a module under
+    // `cfg(all(test, feature))` is compiled out of the mutation gate's first run). The tests return `Result`: an in-crate
+    // test module has no `unwrap` allowance (only whole files under `tests/` do).
+
+    /// The failure of a step of the fixture.
+    #[cfg(feature = "kat")]
+    type Fail = &'static str;
+
+    /// A deterministic byte stream for `FixedEntropy` (a counter pushed through a multiplicative mix; not random, not secret).
+    #[cfg(feature = "kat")]
+    fn stream(seed: u64, len: usize) -> Vec<u8> {
+        let mut x = seed | 1;
+        (0..len)
+            .map(|_| {
+                x = x.wrapping_mul(0x9e37_79b9_7f4a_7c15).rotate_left(23) ^ 0x5851_f42d;
+                x.to_be_bytes().first().copied().unwrap_or(0)
+            })
+            .collect()
+    }
+
+    /// The entropy source of a test conversation: a fixed stream.
+    #[cfg(feature = "kat")]
+    struct Fixed(secmp_proto::tr::FixedEntropy);
+
+    #[cfg(feature = "kat")]
+    impl super::EntropySource for Fixed {
+        type E = secmp_proto::tr::FixedEntropy;
+
+        fn entropy(&mut self) -> &mut Self::E {
+            &mut self.0
+        }
+    }
+
+    /// The initiator's ratchet state of a session from one shared secret.
+    #[cfg(feature = "kat")]
+    fn initiator_state() -> Result<secmp_proto::tr::RatchetState, Fail> {
+        use secmp_crypto::SecretBytes;
+        use secmp_proto::keys::{MlKem768Ek, X25519Pk};
+        use secmp_proto::tr::{Entropy as _, FixedEntropy, RatchetState};
+        let mut responder = FixedEntropy::new(&stream(2, 1 << 16));
+        let mut initiator = FixedEntropy::new(&stream(1, 1 << 16));
+        let spk_dh = responder.x25519().map_err(|_| "x25519")?;
+        let rpk_kem = responder.mlkem768().map_err(|_| "ml-kem")?;
+        let spk = X25519Pk::from_bytes(spk_dh.public_key().as_bytes()).map_err(|_| "spk")?;
+        let ek =
+            MlKem768Ek::from_bytes(rpk_kem.encapsulation_key().as_bytes()).map_err(|_| "ek")?;
+        let sk = SecretBytes::from_slice(&[7_u8; 32]).map_err(|_| "secret")?;
+        RatchetState::init_initiator_with(&sk, &[9_u8; 32], &spk, &ek, &mut initiator)
+            .map_err(|_| "initiator")
+    }
+
+    #[cfg(feature = "kat")]
+    type TestConversation = super::Conversation<
+        crate::scheduler::outbox::MemOutbox,
+        crate::scheduler::outbox::MemPersist,
+        Fixed,
+    >;
+
+    #[cfg(feature = "kat")]
+    fn conversation(
+        state: secmp_proto::tr::RatchetState,
+        persist: crate::scheduler::outbox::MemPersist,
+    ) -> Result<TestConversation, Fail> {
+        use secmp_proto::tr::{Entropy as _, FixedEntropy};
+        let peer = FixedEntropy::new(&stream(3, 1 << 20))
+            .hybrid_signing_key()
+            .map_err(|_| "peer key")?
+            .verifying_key();
+        Ok(super::Conversation::new(
+            state,
+            crate::scheduler::outbox::MemOutbox::new(),
+            persist,
+            Fixed(FixedEntropy::new(&stream(4, 1 << 20))),
+            peer,
+            0,
+        ))
+    }
+
+    /// Run `encrypt_with` of the same dummy content on a twin of the initial state with the same entropy: the digests of
+    /// the message keys the conversation must have recorded, in order.
+    #[cfg(feature = "kat")]
+    fn expected_digests(
+        initial: &secmp_proto::tr::RatchetState,
+        n: usize,
+    ) -> Result<Vec<[u8; 32]>, Fail> {
+        use secmp_proto::tr::{FixedEntropy, RatchetState};
+        let bytes = initial.to_bytes().map_err(|_| "to_bytes")?;
+        let mut state = RatchetState::from_bytes(&bytes).map_err(|_| "from_bytes")?;
+        let mut entropy = FixedEntropy::new(&stream(4, 1 << 20));
+        let mut out = Vec::new();
+        for _ in 0..n {
+            let sealed = state
+                .encrypt_with(&secmp_proto::tr::content::dummy(), &mut entropy)
+                .map_err(|_| "encrypt")?;
+            out.push(sealed.message_key_digest_kat());
+            let (next, _cell) = sealed
+                .persist(|_| Ok::<(), ()>(()))
+                .map_err(|()| "persist")?;
+            state = next;
+        }
+        Ok(out)
+    }
+
+    /// Run #176 of the mutation gate: `message_key_digests_kat` mutated to an empty or a constant slice survived, because
+    /// its only consumers are the simulations (on the skip list of the per-mutant run). It records, in sealing order, the
+    /// digest of the message key of every cell the conversation sealed: three seals give three digests, pairwise distinct,
+    /// neither of the constants the mutants return, and each the digest of the key of the cell sealed at that position
+    /// (`Sealed::message_key_digest_kat` of a twin run of the same seals; dummies, because the content of a dummy is fixed).
+    #[test]
+    #[cfg(feature = "kat")]
+    fn message_key_digests_track_each_seal() -> Result<(), Fail> {
+        let state = initiator_state()?;
+        let want = expected_digests(&state, 3)?;
+        let mut conv = conversation(state, crate::scheduler::outbox::MemPersist::new())?;
+        assert!(conv.message_key_digests_kat().is_empty());
+        for _ in 0..3 {
+            conv.prepare_direct(0).map_err(|_| "seal")?;
+        }
+        let got = conv.message_key_digests_kat();
+        assert_eq!(got.len(), 3);
+        for (i, a) in got.iter().enumerate() {
+            assert_ne!(*a, [0_u8; 32]);
+            assert_ne!(*a, [1_u8; 32]);
+            for b in got.iter().skip(i.saturating_add(1)) {
+                assert_ne!(a, b, "a message key used twice");
+            }
+        }
+        assert_eq!(
+            got,
+            want.as_slice(),
+            "the digests of the keys, in sealing order"
+        );
+        Ok(())
+    }
+
+    /// A digest is recorded only once its state is durable (a cell whose persist failed was never released): a failing
+    /// `Persist` makes the seal an `Err` and the list keeps its length; the next seal after the store recovers records
+    /// one digest.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn message_key_digest_not_recorded_when_persist_fails() -> Result<(), Fail> {
+        let mut persist = crate::scheduler::outbox::MemPersist::new();
+        persist.set_failing(true);
+        let mut conv = conversation(initiator_state()?, persist)?;
+        assert!(conv.prepare_direct(0).is_err());
+        assert!(conv.message_key_digests_kat().is_empty());
+        conv.persist_mut().set_failing(false);
+        conv.prepare_direct(0).map_err(|_| "seal")?;
+        assert_eq!(conv.message_key_digests_kat().len(), 1);
+        Ok(())
+    }
+}

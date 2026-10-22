@@ -445,8 +445,11 @@ fn add_attacker(sim: &mut turmoil::Sim<'_>, flood: Flood) {
 
 /// Each teardown of a client with the delay until the connect that follows it: the teardowns, in time order, are matched
 /// to distinct later connects of scheduled links, each to the earliest one not taken. A `LinkId` names one connection
-/// and the events do not say which link a connect renews, so this is the matching that never charges one connect to two
-/// teardowns; the delay of a teardown is at most the one of its own reconnect.
+/// and the events do not say which link a connect renews, so this matching never charges one connect to two teardowns.
+/// What it proves is a maximum bound: if every reconnect follows its teardown within `b`, then every matched delay is
+/// `<= b`; it does not say which connect belongs to which teardown (the delay it reports can be shorter than the own
+/// reconnect of that link, or longer than that of another), so a bound that holds for it holds for each link at its
+/// maximum, and a violation is a violation for some link.
 pub fn reconnect_delays(
     events: &[(u64, secmp_client_core::scheduler::types::LinkEvent)],
     connects: &[(u64, secmp_client_core::scheduler::run::Purpose)],

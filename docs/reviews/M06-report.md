@@ -1225,7 +1225,7 @@ required job (`ct`, `mutants`, `proverif-hx`) is not green.
   **one cell per response** (10 s apart) — and become ready to be acknowledged at 21, 31, 41 and 51 s — the scheduler's *internal*
   acknowledgement state (`Scheduler::acked`), one period after the commit. The **relay observes** the acknowledgements at 30, 40, 50
   and 60 s (its queue head moves), i.e. with the next `FETCH_MULTI` (`target/m6-evidence/R-01.txt`). The test asserts four values in each
-  series before comparing. The fix needs a core API (a deferred-commit outcome of `deliver`): M7 entry.
+  series before comparing. The fix needs a core API (a deferred-commit outcome of `deliver`): M7 entry. **Re-rated in C2-2b:** the drain rate equals the send rate, a backlog never drains (see OPEN-M6-C2-2 in this section, SIM-02).
 - **`Scheduler::frame_written` is a trusted-caller contract (item 10, Astra FINAL3 (e)).** A report on an up link with an empty ledger is
   counted (`unmatched_written`, asserted 0 in debug builds by the tokio driver); a duplicate report while the ledger is not empty cannot
   be told from a genuine one — a frame carries no id — and pops the oldest entry. Detecting it needs an API change (a frame id): M7.
@@ -1251,21 +1251,18 @@ required job (`ct`, `mutants`, `proverif-hx`) is not green.
   received 99/100, message 29 missing; the invitee's outbox ended with 98 delivered + 2 relayed; the queue was re-created 517 s after
   the restart, the sender's links were up again only after the flood (`RouteDead` events: none). No fix, no test change in M6; entered in
   `docs/09-open-questions.md` as OQ-19 (M7 candidate).
-- **OPEN-M6-C2-2 (found in C2-2b while re-asserting SIM-02): the tokio driver drains one cell per `FETCH` tick.** The facade
-  `Deferred::deliver` (`scheduler/run.rs`) answers "not committed" until the worker finished the job, and the core's `fetched`
-  (`core/mod.rs:882–903`) stops at the first uncommitted cell, so of the `F` = 4 cells a `FETCH` returns one is handed to the worker per
-  round trip. A recipient therefore drains at the sender's rate (1 cell per `P`), not faster (§10.2 assumes a drain rate above the
-  sender's): after the 30-min partition of SIM-02 the queue B → A stays at 128 cells to the end of the 3 h run (`next − head` = 128 in
-  every one of the 1 235 store changes after 3.0e6 ms; the baseline without the partition ends with 6 cells), evicting one cell per tick
-  and delivering each cell only as it passes the head (messages arrive late and out of order, (E) still holds). Phase A's drain
-  measurement MR-02 ran on the virtual driver, which delivers synchronously. Root cause in `scheduler/core` (`fetched`) and the driver
-  facade: **not touched, reviewer's**; OQ-20 in `docs/09-open-questions.md`. SIM-02's prediction is taken from the relay's own record
-  of evictions and does not depend on the drain.
+- **OPEN-M6-C2-2 = OPEN-M6-B-1 (one entry; WEISUNG M6-C2-5).** Same root cause as B-1 (`Deferred::deliver`, `scheduler/run.rs:521–544`,
+  answers `Err` until the commit; `fetched`, `core/mod.rs:882–902`, stops at the first `Err`: one cell per round trip). **B-1 is
+  re-rated:** not only a latency of one fetch period per cell — the drain rate equals the send rate, so a backlog never drains (§10.2
+  assumes a drain rate above the sender's). Evidence of C2-2b (SIM-02): after the 30-min partition the queue B → A stays at 128 cells to the
+  end of the 3 h run (`next − head` = 128 in each of the 1 235 store changes after 3.0e6 ms; the baseline without the partition ends with 6
+  cells), evicting one cell per tick; messages arrive late and out of order, (E) holds. MR-02 (drain) ran on the virtual driver, which
+  delivers synchronously. M7, no code; OQ-20 in `docs/09` is the open question of B-1.
 - **Observation for the owner, not an M6 defect (§10.3 consequence):** Strict `P = 10 s` cannot communicate over a link with RTT >
   20 s (`MAX_IN_FLIGHT · P`): no response is read before `TornDown(InFlight)` (SIM-07).
 - **Pool and simulation streams (WEISUNG M6-C2-4 item 8):** the pool streams are strict like the others (a residual at drop is an
   error entry); the streams of the scheduled links in a simulation are lenient at drop (a broken network ends units mid-way on purpose),
-  but `Recorder::check()` now runs in simulation runs too and all nine rows pass it.
+  but `Recorder::check()` now runs in simulation runs too and all ten rows pass it. A lenient stream can hide a unit cut in two by a *dropped* connection (the client tore the link down mid-frame) — a residual at drop is not reported for the scheduled links of a simulation; one cut by the end of the stream (EOF) or by `poll_shutdown` is still an error entry, and the recorded units themselves are exact.
 
 ## 8. Blocked / questions for the reviewer or owner
 
@@ -1750,7 +1747,7 @@ sealed under, counted once its new state is durable (H-12 method: `Sealed::messa
 | SIM-09 | `m6_sim_faults::sim_hello_flood_backoff_recovery` | 13.7 s | yes (14 s) |
 | SIM-07 | not committed — **blocked**, below | — | — |
 
-Nine rows run in 59.8 s wall as a set (nextest, parallel; the longest is SIM-02 at 59.8 s, far from the 900 s per row / 20 min set limits).
+Ten rows (SIM-01…SIM-10) run in 60 s wall as a set (nextest, parallel; the longest is SIM-02 at 59.8 s, far from the 900 s per row / 20 min set limits).
 Commits: `b827d12` (rig, SIM-08, SIM-03, SIM-10 — one commit: the rig is dead code without them), `b11f2bd` (SIM-06 and engine hooks),
 `43dac59` (SIM-01, 02, 04, 05, 09). `ci-fast --strict` at `43dac59`: all steps PASS, `kat` 796 s (`target/tc/cifast-c22.txt`).
 

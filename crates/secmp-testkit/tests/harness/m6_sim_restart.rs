@@ -194,11 +194,20 @@ fn assert_recreated(run: &Outcome, info: &Restart) {
             .filter(|t| *t > info.at_ms)
             .take(2)
             .collect();
-        let created = o
+        // `Purpose::Control` carries the operation id, not its kind: a node's scheduler runs no pool and no link-data
+        // operation, so its only control operation is the `QueueNew` of the re-creation — exactly one after the restart
+        let controls: Vec<u64> = o
             .connects()
             .iter()
-            .find(|(t, p)| *t > info.at_ms && matches!(p, Purpose::Control(_)))
-            .map(|(t, _)| *t);
+            .filter(|(t, p)| *t > info.at_ms && matches!(p, Purpose::Control(_)))
+            .map(|(t, _)| *t)
+            .collect();
+        assert_eq!(
+            controls.len(),
+            1,
+            "client {idx}: control connects {controls:?}"
+        );
+        let created = controls.first().copied();
         let created = created.expect("a client's queue was never re-created");
         window_end = window_end.max(created);
         let fits = ups.iter().any(|up| {
@@ -216,7 +225,9 @@ fn assert_recreated(run: &Outcome, info: &Restart) {
             run.out.get(idx)
         );
     }
-    // the senders keep sending: frames are written during the outage
+    // the senders keep sending: frames are written during the outage. Any C2R frame of a scheduled link suffices: a frame is
+    // encrypted, so a SEND cannot be told from a FETCH, but every tick of the client's send link carries a SEND (Strict: one
+    // link per queue, Balanced: the combined request) and the ticks do not stop when the queue is gone
     for idx in 0..2 {
         let written = run
             .observers
@@ -243,7 +254,10 @@ fn sim_relay_restart_recovery() {
     run.assert_e_and_k("SIM-03");
 }
 
-/// SIM-10 `sim_balanced_relay_restart` (§10.2): SIM-03 in Balanced — the same recovery. The `FETCH_MULTI` entries of the
+/// SIM-10 `sim_balanced_relay_restart` (§10.2): SIM-03 in Balanced — the same recovery. **Re-dictated by the reviewer
+/// (WEISUNG M6-C2-5): asserted via consequences (`QUEUE_NEW` after `ERR_NOQUEUE`, queue absent, frames in the outage, rids
+/// identical) — `present` is not observable without a core hook** (it is decoded in `frame.rs:609–624` →
+/// `core/mod.rs:989–994` → `queue_error` → `recreate`, with no event and no accessor). The `FETCH_MULTI` entries of the
 /// restarted queues answer `present = 2` until re-creation (spec §9.3): the field is read inside the client's channel and
 /// is not exposed to the driver's host, so the test asserts what only that answer causes and what the spec ties to it —
 /// the queues are absent from the relay two seconds after the restart, each recipient re-created its queue (the only

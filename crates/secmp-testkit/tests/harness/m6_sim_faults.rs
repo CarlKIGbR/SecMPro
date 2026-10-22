@@ -139,6 +139,13 @@ fn sim_partition_heals() {
                 && c.next_cell_id == next + 1
                 && c.head > head
             {
+                // anchored in the protocol constant: the store that evicts finds the queue at QUEUE_CAPACITY = 128 cells
+                assert_eq!(
+                    next - head,
+                    128,
+                    "an eviction from a queue of {} cells",
+                    next - head
+                );
                 out.extend(head..c.head);
             }
             prev = Some((c.next_cell_id, c.head));
@@ -229,7 +236,7 @@ fn sim_crash_between_persist_and_write() {
         end_s: 3 * 3_600,
         ..Spec::default()
     };
-    let lost: Arc<Mutex<Option<u64>>> = Arc::default();
+    let lost: Arc<Mutex<Option<(u64, u32)>>> = Arc::default();
     let at_crash = Arc::clone(&lost);
     let mut done = false;
     let run = simulate("crash-persist-write", &spec, move |rig| {
@@ -255,13 +262,60 @@ fn sim_crash_between_persist_and_write() {
         {
             done = true;
             let (sealed, stored) = sealed_and_stored(rig, 0);
-            *at_crash.lock().unwrap() = Some(sealed - stored);
+            // the send counter of A's durable state (it includes the cell sealed and not sent): the next position is it, the
+            // lost one is the one before
+            let (convs, _) = rig
+                .observers
+                .first()
+                .unwrap()
+                .client::<EntropyPool>()
+                .unwrap();
+            let durable = convs.lock().unwrap().get(0).unwrap().durable().to_vec();
+            let n_s = ratchet_tail(&durable).unwrap().0;
+            *at_crash.lock().unwrap() = Some((sealed - stored, n_s));
             rig.sim.bounce("a");
         }
     });
-    let lost = lost.lock().unwrap().expect("the crash was never injected");
+    let (lost, n_s_at_crash) = lost.lock().unwrap().expect("the crash was never injected");
     assert!(lost >= 1, "no prepared cell was waiting at the crash");
     // the end state: read from the outcome's conversations and the relay
+    let (sealed, next) = sealed_and_next_at_end(&run);
+    let surplus = sealed - (next - 1);
+    assert!(
+        (lost..=lost + 2).contains(&surplus),
+        "sealed {sealed}, stored {}, lost at the crash {lost}: surplus {surplus}",
+        next - 1
+    );
+    // the direct assertion: B's durable ratchet state keeps one skipped message key per position it never received — the
+    // position A persisted and never sent — and no other (the cells after it were opened at their own positions, so the
+    // next cell used position + 1)
+    let b_durable = run
+        .convs(1)
+        .lock()
+        .unwrap()
+        .get(0)
+        .unwrap()
+        .durable()
+        .to_vec();
+    let skipped = ratchet_tail(&b_durable).unwrap().1;
+    assert_eq!(
+        skipped.len(),
+        usize::try_from(lost).unwrap(),
+        "B skipped positions {skipped:?}, A lost {lost} at the crash"
+    );
+    // the position itself: the one before A's send counter at the crash (lost == 1, one link sends)
+    assert_eq!(lost, 1, "more than one prepared cell at the crash");
+    assert_eq!(
+        skipped,
+        vec![n_s_at_crash - 1],
+        "B skipped {skipped:?}, A's persisted-but-unsent position is {}",
+        n_s_at_crash - 1
+    );
+    run.assert_e_and_k("SIM-05");
+}
+
+/// The cells A sealed in all, and the `next_cell_id` of the queue A sends to, at the end of the run.
+fn sealed_and_next_at_end(run: &Outcome) -> (u64, u64) {
     let sealed = u64::try_from(
         run.convs(0)
             .lock()
@@ -281,70 +335,50 @@ fn sim_crash_between_persist_and_write() {
         .1
         .recv_rid()
         .unwrap();
-    let next = {
-        let guard = run.relay.lock().unwrap();
-        let snap = guard.as_ref().unwrap().relay().snapshot_kat();
-        snap.queues
-            .iter()
-            .find(|q| q.rid == peer)
-            .unwrap()
-            .next_cell_id
-    };
-    let surplus = sealed - (next - 1);
-    assert!(
-        (lost..=lost + 2).contains(&surplus),
-        "sealed {sealed}, stored {}, lost at the crash {lost}: surplus {surplus}",
-        next - 1
-    );
-    // the direct assertion: B's durable ratchet state keeps one skipped message key per position it never received — the
-    // position A persisted and never sent — and no other (the cells after it were opened at their own positions, so the
-    // next cell used position + 1)
-    let b_durable = run
-        .convs(1)
-        .lock()
+    let guard = run.relay.lock().unwrap();
+    let snap = guard.as_ref().unwrap().relay().snapshot_kat();
+    let next = snap
+        .queues
+        .iter()
+        .find(|q| q.rid == peer)
         .unwrap()
-        .get(0)
-        .unwrap()
-        .durable()
-        .to_vec();
-    let skipped = skipped_positions(&b_durable);
-    assert_eq!(
-        skipped.len(),
-        usize::try_from(lost).unwrap(),
-        "B skipped positions {skipped:?}, A lost {lost} at the crash"
-    );
-    run.assert_e_and_k("SIM-05");
+        .next_cell_id;
+    (sealed, next)
 }
 
-/// The positions `n` of the skipped message keys in a serialised ratchet state (`RatchetStateV1`, `tr/state.rs`: the
-/// encoding ends with `n_s`, `n_r`, `pn` (4 B each), the count (2 B) and the entries `hk` (32) ‖ `n` (4) ‖ `mk` (32)).
-fn skipped_positions(state: &[u8]) -> Vec<u32> {
+/// The tail of a serialised ratchet state (`RatchetStateV1`, `tr/state.rs`): the encoding ends with `n_s`, `n_r`, `pn`
+/// (4 B each), the count of skipped keys (2 B) and the entries `hk` (32) ‖ `n` (4) ‖ `mk` (32). Returns `(n_s, positions
+/// of the skipped keys)`.
+fn ratchet_tail(state: &[u8]) -> Option<(u32, Vec<u32>)> {
     const ENTRY: usize = 68;
     for count in 0..=512_usize {
-        let Some(at) = state
+        let at = state
             .len()
-            .checked_sub(ENTRY.saturating_mul(count).saturating_add(2))
-        else {
-            break;
-        };
+            .checked_sub(ENTRY.saturating_mul(count).saturating_add(2))?;
         let stored = state
             .get(at..at.saturating_add(2))
             .and_then(|b| <[u8; 2]>::try_from(b).ok())
             .map(u16::from_be_bytes);
-        if stored.map(usize::from) == Some(count) {
-            return (0..count)
-                .map(|i| {
-                    let e = at
-                        .saturating_add(2)
-                        .saturating_add(i.saturating_mul(ENTRY))
-                        .saturating_add(32);
-                    let n = state.get(e..e.saturating_add(4)).unwrap();
-                    u32::from_be_bytes(n.try_into().unwrap())
-                })
-                .collect();
+        if stored.map(usize::from) != Some(count) {
+            continue;
         }
+        let n_s = state
+            .get(at.checked_sub(12)?..at.checked_sub(8)?)
+            .and_then(|b| <[u8; 4]>::try_from(b).ok())
+            .map(u32::from_be_bytes)?;
+        let positions = (0..count)
+            .map(|i| {
+                let e = at
+                    .saturating_add(2)
+                    .saturating_add(i.saturating_mul(ENTRY))
+                    .saturating_add(32);
+                let n = state.get(e..e.saturating_add(4)).unwrap();
+                u32::from_be_bytes(n.try_into().unwrap())
+            })
+            .collect();
+        return Some((n_s, positions));
     }
-    Vec::new()
+    None
 }
 
 /// SIM-09 `sim_hello_flood_backoff_recovery` [O-14] (F-1): an attacker host sends `HELLO` at 8/s for 600 s against the

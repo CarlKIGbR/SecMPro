@@ -377,6 +377,12 @@ fn profile_goes_nowhere_on_disk() {
     let text = std::fs::read_to_string(cwd.join("trace.jsonl")).unwrap();
     assert!(text.len() > 1_000, "the trace is empty");
     assert_eq!(event_count(&text, "enqueue"), 6);
+    // the engine reached the scheduler: a link finished its handshake (an `HS1` of 2 856 B was written) — a delivery
+    // needs the link phases of up to 180 s and is asserted by the in-process 600 s part
+    assert!(
+        units(&text).iter().any(|u| u.1 == 2_856 && u.2 == "c2r"),
+        "no link completed its handshake in the subprocess run"
+    );
     let _ = std::fs::remove_dir_all(&sandbox);
 }
 

@@ -191,7 +191,7 @@ Every named test exists in the tree (the xtask test `docs::m06_report_acceptance
 | M6-D3 | Deliverable: `two-clients` binary | OPEN — C2 (TC-01…TC-09) |
 | M6-D4 | Deliverable: `turmoil` simulations | OPEN — C2 (SIM-01…SIM-*) |
 | M6-D5 | Deliverable: activity-independence test | `activity_independence_strict_virtual`, `ai01_strict_tokio`, `ai06_both_directions_tokio`, `ai07_fault_paired_tokio`; AI-10 `ks_tool_detects_planted_dependence`; AI-07 loopback part Balanced (re-dictated, 5 ms minimum detectable shift, ≈ 135 min job), Tor part ⚙; `SECMP_AI_TRACES=64` harness run 196/196 at `ee3c66f` |
-| M6-D6 | Deliverable: measurement report `docs/measurements/M6-traffic.md` | `bandwidth_model_matches_capture`, `drain_after_offline_virtual`; the report and the other rows: group C2-4 |
+| M6-D6 | Deliverable: measurement report `docs/measurements/M6-traffic.md` | `bandwidth_model_matches_capture`, `drain_after_offline_virtual`; `m6_traffic_report_sections`, `recommendation_names_every_parameter`, `bootstrap_cost_measured`, `cpu_per_slot_measured` (`docs/measurements/M6-traffic.md`); MR-04, MR-05 VM part, MR-07 number: owner-operated, not run |
 | M6-A1 | Acceptance: two machines exchange messages over real Tor ⚙ | OPEN — C2 (TC-*, TOR-10 owner-operated, §6); in the tree: `tor_never_falls_back_to_direct`, `transport_selection_follows_user_choice_only` |
 | M6-A2 | Acceptance: two machines over direct TLS | OPEN — C2 (TC-*); in the tree: `tls_handshake_with_pinned_relay_succeeds`, `tls_spki_pin_mismatch_rejects`, `relay_and_client_spki_walks_agree` |
 | M6-A3 | Acceptance: the activity-independence test passes | `activity_independence_strict_virtual`, `ai01_strict_tokio`, `ai06_both_directions_tokio`; AI max Δt = 0 ms |
@@ -1209,7 +1209,19 @@ required job (`ct`, `mutants`, `proverif-hx`) is not green.
   `CT_TARGETS` by ADR-042 Am. 5 (no mechanism is asserted: nothing in the tree measures one). A constant-nonce contrast fixture ("header
   contents vary under one nonce") is an **informative** target for M7. Whether the receiver-side timing of skipped-key work needs a docs/01
   entry is the owner's decision (threat model).
-- **OPEN-M6-C1-3 (stale auditable binary in `sbom`, decision in the C2 planning).** The `sbom` step must not read back a binary whose embedded dependency list differs from `Cargo.lock` (seen after the `rustls-webpki` bump: `target/release/secmp-relay` was not rebuilt and still listed 0.103.15). Candidate fixes: compare the embedded list with `Cargo.lock` and fail on a mismatch, or build into a target directory owned by the step. No fix now.
+- **OPEN-M6-C1-3 (stale auditable binary in `sbom`) — diagnosed and fixed in C2-7 (`aa3d29e`).** Seen after the `rustls-webpki` bump: `target/release/secmp-relay` was not rebuilt and
+  still listed 0.103.15. **Diagnosis** (container `secmp-main`, 2026-10-22; a private target directory `target/diag-sbom` stood in for `target/`, so the real `target/release` was not touched):
+  `cargo auditable build --release --locked --offline --package secmp-relay --target-dir target/diag-sbom --config 'target.x86_64-unknown-linux-gnu.rustflags=["--remap-path-prefix=/work/SecMPro=/secmpro"]'`
+  (the build `sbom` runs) → `cargo audit --json --no-fetch --stale bin target/diag-sbom/release/secmp-relay` → `"lockfile":{"dependency-count":78}`. Then the build of `relay_bin()`
+  (`m6_two_clients.rs`): `cargo build --release --locked --offline -p secmp-relay --target-dir target/diag-sbom` → recompiles `secmp-relay` (17 s; the rustflags differ, so the uplifted binary at
+  the same path is replaced) → the same `cargo audit … bin` now prints `warning: … was not built with 'cargo auditable', the report will be incomplete (4 dependencies recovered)` with
+  `"dependency-count":4`, and `cargo audit --deny warnings --no-fetch --stale bin …` **exits 0**. **Mechanism:** the plain release build of the harness and the auditable build of `sbom` share the
+  uplifted path `target/release/<bin>`; whichever ran last wins; `sbom` ran `cargo audit bin` on whatever was there and accepted a binary without audit data (the warning does not count as a warning
+  for `--deny warnings`). A stale list proper (0.103.15 after the bump) could not be reproduced separately; it needs a binary that cargo considers fresh but whose audit data predates the lock, which the
+  forced relink below excludes by construction. **Fix:** shape (i) of the brief — `target/sbom-build` as the step's own target directory, `cargo clean --release --package <bin>` before the build (every binary
+  relinked from the current lock; cold build of the three binaries 17 s on 32 cores, `cargo xtask sbom` PASS in 20 s) — plus the fail-closed count check (`sbom.rs`: `embedded_findings`). **The JSON
+  does not expose the package list** (`cargo audit --json bin` → `lockfile.dependency-count` only, verified on both binaries above): the name/version comparison with `Cargo.lock` of the brief is therefore
+  not possible without decoding the zlib-compressed `.dep-v0` section (a new crate or an inflate implementation) → M7 with an ADR; the check compares counts (embedded ≥ closure of `cargo tree`, ≤ lock).
 - **Kani headroom (item 12, decided WEISUNG M6-C1-3: harnesses unchanged).** Peak `secmp-proto` harness 13.75 GB
   (`kani_commit_accept_atomic`) on a 16 GB runner; seven harnesses exceed 8 GB. The OOM of 14.10. (15.5 GB) came from profile
   overrides, fixed in M6-16. No bound could be lowered without weakening a property. Baseline table:
@@ -1239,7 +1251,7 @@ required job (`ct`, `mutants`, `proverif-hx`) is not green.
   `Content::RouteUpdate`, the first reply of the responder, §6.6 step 4); (2) an input to `IssueParams` for the seeds of a pooled invitation
   queue (§5.2); then the three cells, the responder's accept and `LINK_PUT`/`LINK_GET` run as scheduled ops (the analysis is in §8). Until
   then `two-clients` scripts the handshake on set-up links and carries the inviter's route in the invitation file.
-- **`relay_bin()` and `sbom` (input for C2-4.3, not fixed here).** `tests/harness/m6_two_clients.rs` (`relay_bin()`) runs a nested
+- **`relay_bin()` and `sbom` (input for C2-4.3; fixed in C2-7, see the OPEN-M6-C1-3 entry below).** `tests/harness/m6_two_clients.rs` (`relay_bin()`) runs a nested
   `cargo build --locked --offline -p secmp-relay` — in a release test run it rewrites `target/release/secmp-relay`, the very path
   `cargo xtask sbom` reads back with `cargo audit bin`; a stale or foreign binary there is one candidate mechanism for OPEN-M6-C1-3.
 
@@ -2004,3 +2016,62 @@ loopback TLS relay, Balanced, `T_BALANCED` = 10 s, 2 contacts, 1 h idle, 1 h act
 - **Red quotes re-taken from the committed tree** (`4c05c37`; `file:line:col` of the asserting line as printed): AI-10 without the shift `ks.rs:325:13` (`link 0: D = 0.0463…, p = 0.8263…`),
   with the p-value stubbed `ks.rs:325:13` (`link 0: D = 0.3305…, p = 1`); X-07 (`ks-hour` also under `all`) `gates.rs:6866:9`; SIM-05 position `m6_sim_faults.rs:308:5`
   (`B skipped [4], A's persisted-but-unsent position is 4`, with the wrong expectation). The earlier quotes `ks.rs:230:13` and `gates.rs:6811` of C2-5 are withdrawn (non-asserting lines) and replaced in place in §10 C2-3.
+
+### C2-7 (WEISUNG M6-C2-7 and M6-C2-7b)
+
+Commits (`git log --oneline e9eef3a..HEAD` at the time of writing, plus this report): `2f71140` §1 · `20bbcdf` §2 · `93ff7fd` §3 · `aa3d29e` sbom
+(OPEN-M6-C1-3) · `674ab45` group C2-4. §1 existed in `2f71140` when WEISUNG 7b arrived; `git status --short` was clean.
+
+**1 · Run #176 survivors (`conversation.rs:343:9`, three `Vec::leak` replacements of `message_key_digests_kat`).** In-crate tests
+`scheduler::conversation::tests::message_key_digests_track_each_seal` (three real seals: `len() == 3`, pairwise distinct, neither `[0;32]` nor `[1;32]`, each equal to the
+`Sealed::message_key_digest_kat()` of a twin run of the same seals) and `…::message_key_digest_not_recorded_when_persist_fails` (failing `MemPersist`: the seal is an `Err`, the
+list keeps its length; after the store recovers one digest). Plain `#[cfg(test)]` module, bodies under `#[cfg(feature = "kat")]` (Q20); both run in 0.1 s under `--features kat`.
+Red on the committed tree: accessor stubbed to `&[]` — `conversation.rs:884:9` (`assert_eq!(got.len(), 3)`, left 0) and `conversation.rs:913:9` (`len() == 1` after the
+recovery); stubbed to `Vec::leak(vec![[0_u8; 32]])` — `conversation.rs:879:9` and `conversation.rs:910:9`.
+
+**2 · Large-file gate (ADR-052).** `expect::LARGE_FILE_LIMIT` 2 MiB, `LARGE_FILE_HARD_CAP` 8 MiB, `LARGE_FILE_ALLOW` (five frozen files, each with its reason), run by the `policy` step over
+`git ls-files`. Allowlisted sizes at `20bbcdf`: `vectors/encodings.json` 4 746 135 B · `vectors/ref/encodings.json` 4 746 135 B · `vectors/link.json` 2 818 910 B ·
+`vectors/ref/link.json` 2 818 910 B · `docs/reviews/M04-evidence/proverif-hx-bounded-e42c854.txt` 2 498 468 B (the clean-tree test asserts every entry is tracked, over the limit and
+under the cap; it cannot print — `print_stdout` is denied — so the sizes are quoted from the first run of the test). Tests `large_file_gate_flags_a_planted_file`,
+`…_accepts_allowlisted`, `…_rejects_allowlisted_over_hard_cap`, `…_is_clean_on_this_tree`. Red (finder stubbed to return nothing; quotes are lines of `20bbcdf`):
+`gates.rs:6985:9` and `gates.rs:7014:9`, both `assert_eq!(found.len(), 1, …)`. ADR-052 in `docs/08`, status "Accepted (Reviewer, Owner-Delegation 2026-09-30)"; CHANGELOG line.
+
+**3 · C2-3b fix-ups (`93ff7fd`).**
+- **F-1** `observe` and `verify` map the k-th arrival to `script.schedule()[k].0`; `active_hour_enqueues_ten_bursts_of_twenty` now also asserts `result exact=true in_order=true`, that every
+  ordinal of both clients is queued once and delivered at most once and after it was queued, in queueing order (≥ 100 deliveries per client within the 7 500 s of the run — not all 320),
+  the idle hour in absolute time (first message ≥ 3 600 000 ms) and the 120 steady messages 30 s apart. Red with the old `run.rs`: `m6_two_clients.rs:1025:5` (the `result exact=true in_order=true` line is absent: `in_order=false`).
+- **F-2** `Report::frames_per_departure_per_link` and the evidence lines `frames per departure, link <n>: min = …, max = …` (`ks_tool_flags_an_extra_frame_in_a_slot` asserts link 0 `(2, 3)`, link 1 `(2, 2)`); red: the field did not exist (compile error), no runtime red.
+- **F-3** the minimum detectable shift is written to stderr in `ks_tool_detects_shift_under_realistic_jitter` (`writeln!` on `std::io::stderr()`, because `print_stderr` is denied): `minimum detectable shift: Some(5) ms`.
+- **F-4** the handshake allowance is per link slot, and a slot is one connection (`link_slot` = the connection's index): a reconnect is a new slot with its own handshake units. Pinned in
+  `a_handshake_sized_unit_in_the_middle_is_not_a_frame` (a second slot with handshake units at its start is accepted); doc of `units_are_frames` says so. No code change, so no red.
+- **F-5** `tor_invocation_findings` also flags `TransportArg::Tor` (outside `//` comments) and `--transport=tor`; planted fixtures in `tests_and_ci_do_not_start_tor`. Red (both spellings disabled): `gates.rs:7074:9` (at `93ff7fd`).
+- **F-6** exit code 101 in `two_clients/mod.rs` and in the usage text of `cli.rs`. **F-7** the C2-3 quotes `ks.rs:230:13` / `gates.rs:6811` are replaced in place by `ks.rs:325:13` / `gates.rs:6866:9` (at `4c05c37`).
+  **F-9** row M6-D5 and the C2-3 AI-07 entry say Balanced, 5 ms minimum shift, ≈ 135 min.
+- **F-8** measured alone on `secmp-main`: `active_hour_enqueues_ten_bursts_of_twenty` 34.2 s and `two_clients_profiles_are_in_memory` 41.3 s — both were above ≈ 10 s and are on `MUTANT_HARNESS_SKIP_TESTS`
+  now (the second was missing since C2-1); `two_clients_exchange_script_mem` 12.0 s (already listed); `cpu_per_slot_measured` 8.0 s (below the rule). The loopback rows take 520–620 s each, as listed.
+
+**4 · Group C2-4.** Report `docs/measurements/M6-traffic.md`; evidence `docs/measurements/M6-evidence/{MR-01,MR-02,MR-05,ci-run-176}.txt` (machine `secmp-main`, 32 logical CPUs; CI figures of run 39776847202).
+
+| row | test / state | result |
+|---|---|---|
+| MR-03 | `docs::m6_traffic_report_sections` (`xtask/src/docs.rs`) | the eight `##` headings in the row's order; every `not measured` carries `— <reason>, YYYY-MM-DD`; a ⚙ line without it is a finding. Red: heading `CPU` → `Processor`: `docs.rs:220:5` `sections […"Processor"…], expected […"CPU"…]` |
+| MR-05 dev host | `m6_measure::cpu_per_slot_measured` | prepare (TR encrypt + persist + seal), 10 000 slots: median 315.0 µs, p99 441.5 µs, max 816.2 µs (< 3 000 µs); CPU: Strict 0.03 %, Balanced 0.04 %, Low-bw 0.01 % of a core over 1 h virtual (whole rig, upper bound). Red (bound 100 µs): `m6_measure.rs:490:5` `p99 344048 ns`. VM part ⚙: not measured |
+| MR-06 | `docs::recommendation_names_every_parameter` | six rows with value, cost, §10.1 check, recommendation; ADR-018 stays "Proposed (owner decides after M6)". Red (`P_POOL` row renamed): `Err("no row for P_POOL")` |
+| MR-04 | ⚙ | not measured — owner-operated, 2026-10-22 (in the report) |
+| MR-07 | `docs::bootstrap_cost_measured` | the `tor-smoke` dispatch has not run (no run of `ci-dispatch.yml` after `e9eef3a` in `gh run list`): reads `not measured — … pending, 2026-10-22`; the test accepts either both numbers or that form and checks that `tor_smoke` prints the `MR07 bootstrap_seconds=… bytes_down=…` line |
+| CT-00 | `gates::tests::ct_targets_unchanged_in_m6` | `CT_TARGETS` = the 26 names of BASE `6300b65` (compared with `git show 6300b65:xtask/src/expect.rs`, identical); `tr_decrypt_nonce_dependence` is informative only. Red (`"sas2"` added): `gates.rs:9926:9` |
+| PV-01 | `gates::tests::proverif_models_unchanged_in_m6` | digest over the 31 `(path, hash)` pairs `f52a8b74…e209b` equals the one of BASE `6300b65` and of `HEAD`; `formal/` has no diff to BASE. Red (one hash digit changed): `gates.rs:9950:9`. `proverif-hx`/`-link` were green in run #176 |
+| X-07 | `optional_jobs_are_not_required` | re-run green (0.02 s): `REQUIRED_JOBS` is the five names, `tor-smoke` and `ks-hour` only under their own suite in `ci-dispatch.yml` |
+
+STOP checks: `PROVERIF_MODEL_SHA256` and the ct list are unchanged against BASE; no ct threshold constant changed (`git diff 6300b65 HEAD -- xtask/src/expect.rs` touches no `CT_*` threshold);
+`git diff --stat e9eef3a HEAD -- Cargo.lock fuzz/Cargo.lock formal` is empty (no lock movement in C2-7).
+
+**OPEN-M6-C1-3 (`aa3d29e`; diagnosis in §7).** Fail-closed `sbom`: own `--target-dir target/sbom-build` with a `cargo clean --release --package <bin>` before the build (every binary is relinked from
+the current lock), and the embedded package count of `cargo audit --json bin` against the lock. Tests `xtask::sbom::tests::stale_embedded_package_fails` and
+`…::embedded_packages_match_lock_passes`; red (`embedded < closure` disabled): `sbom.rs:206:9`. **Deviation from the dictated shape, for the reviewer:** `cargo audit --json bin` carries
+`lockfile.dependency-count` only, no package names or versions (checked on `target/release/secmp-relay` and on an auditable build), so the check compares counts (embedded ≥ the packages of
+`cargo tree -p <bin> -e normal,build`, ≤ the `[[package]]` entries of `Cargo.lock`) and cannot see a version-only mismatch such as 0.103.15 vs 0.103.16; that case is closed by the forced relink. A
+name-level comparison needs the `.dep-v0` section decoded (zlib) — an inflate implementation or a crate (`auditable-info`/`miniz_oxide`) → a new dependency, so M7 with an ADR (per the brief).
+`cargo xtask sbom` after the change: PASS in 20 s here, three binaries read back from `target/sbom-build/release/`.
+
+**Hygiene.** `target/` holds a few helper files of this session (`target/diag-*`, `*.py`, `*.bak`); none is tracked.

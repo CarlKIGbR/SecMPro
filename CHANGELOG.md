@@ -50,6 +50,7 @@ All notable changes to this project are documented in this file. The format foll
 - M1 supply chain (ADR-036, ADR-037): publisher trust for the RustCrypto, dalek, Cryspen and AWS accounts,
   crate-scoped trust for `getrandom`, `hax-lib*` and `typenum`, delta audits for `rand_core` and `rand`, tracked
   exemptions only outside the normal `secmp-crypto`/`secmp-proto` closure (checked per target).
+- M6 Phase C2: large-file gate in the `policy` step (ADR-052): tracked files over 2 MiB must be in `expect::LARGE_FILE_ALLOW` with a reason, none may exceed 8 MiB; `core`/`core.*` are git-ignored.
 - M6 Phase C2: dropped the expired ADR-015 Am. 2 cooldown exception `rustls@0.23.46` (`expect::COOLDOWN_EXCEPTIONS` keeps `rustls-webpki` 0.103.16 until 2026-10-27).
 - M6 Phase C1: the aggregate required check `ci-verdict` (green only if every other gate job succeeded; ADR-045
   Amendment 2); Kani harnesses K-C1…K-C6 for the unwritten-frame ledger and the round-robin reservation; the

@@ -75,6 +75,38 @@ pub(crate) const VET_CLOSURE_TARGETS: &[&str] = &[
     "aarch64-apple-darwin",
 ];
 
+/// The largest tracked file the `policy` step accepts without an allowlist entry (ADR-052): 2 MiB.
+pub(crate) const LARGE_FILE_LIMIT: u64 = 2 * 1024 * 1024;
+
+/// The size no tracked file may exceed, allowlisted or not (ADR-052): 8 MiB.
+pub(crate) const LARGE_FILE_HARD_CAP: u64 = 8 * 1024 * 1024;
+
+/// Tracked files over [`LARGE_FILE_LIMIT`] that are accepted, as (path from the workspace root, reason). An entry needs
+/// an ADR line (ADR-052) and a reason: what belongs here is a file that cannot be smaller by design — frozen test
+/// vectors, frozen evidence — never a build output, a dump or a download.
+pub(crate) const LARGE_FILE_ALLOW: &[(&str, &str)] = &[
+    (
+        "vectors/encodings.json",
+        "frozen SecMP vectors, spec Appendix D; change only with a spec revision",
+    ),
+    (
+        "vectors/ref/encodings.json",
+        "frozen SecMP vectors (reference copy), spec Appendix D; change only with a spec revision",
+    ),
+    (
+        "vectors/link.json",
+        "frozen SecMP vectors, spec Appendix D; change only with a spec revision",
+    ),
+    (
+        "vectors/ref/link.json",
+        "frozen SecMP vectors (reference copy), spec Appendix D; change only with a spec revision",
+    ),
+    (
+        "docs/reviews/M04-evidence/proverif-hx-bounded-e42c854.txt",
+        "M4 ProVerif evidence, frozen",
+    ),
+];
+
 /// Workspace binaries (hello-world banner in M0; SBOM + `cargo auditable` release builds).
 pub(crate) const BINARIES: &[&str] = &["secmp-relay", "secmp-cli", "secmp-ui"];
 

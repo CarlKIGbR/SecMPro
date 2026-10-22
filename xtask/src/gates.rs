@@ -65,7 +65,72 @@ pub(crate) fn policy(ctx: &Ctx) -> Result<Outcome> {
     let mut detail = crate::policy::run(&ctx.ws)?;
     detail.push_str("; ");
     detail.push_str(&workflows(&ctx.root)?);
+    detail.push_str("; ");
+    detail.push_str(&large_files(&ctx.root)?);
     Ok(Outcome::Pass(detail))
+}
+
+/// The tracked files over `limit` bytes that are not allowlisted, and the allowlisted ones over `cap` (ADR-052): one
+/// finding each. `paths` are relative to `root`; a path that is not a file is skipped (a deleted file still in the index).
+pub(crate) fn large_file_findings(
+    root: &Path,
+    paths: &[String],
+    allow: &[(&str, &str)],
+    limit: u64,
+    cap: u64,
+) -> Vec<String> {
+    let mut out = Vec::new();
+    for path in paths {
+        let Ok(meta) = std::fs::metadata(root.join(path)) else {
+            continue;
+        };
+        if !meta.is_file() {
+            continue;
+        }
+        let size = meta.len();
+        let allowed = allow.iter().any(|(p, _)| p == path);
+        if size > cap {
+            out.push(format!(
+                "large-files: {path} is {size} B, over the hard cap of {cap} B (even an allowlisted file may not exceed it)"
+            ));
+        } else if size > limit && !allowed {
+            out.push(format!(
+                "large-files: {path} is {size} B, over {limit} B and not in expect::LARGE_FILE_ALLOW (ADR-052: a core dump, a build output or a download does not belong in the repository)"
+            ));
+        }
+    }
+    out
+}
+
+/// ADR-052: the large-file gate over `git ls-files`.
+fn large_files(root: &Path) -> Result<String> {
+    let listing = Cmd::new("git").args(["ls-files"]).dir(root).read()?;
+    let paths: Vec<String> = listing.lines().map(str::to_owned).collect();
+    let findings = large_file_findings(
+        root,
+        &paths,
+        expect::LARGE_FILE_ALLOW,
+        expect::LARGE_FILE_LIMIT,
+        expect::LARGE_FILE_HARD_CAP,
+    );
+    for f in &findings {
+        say(&format!("  FINDING {f}"));
+    }
+    if !findings.is_empty() {
+        bail!("large-files: {} finding(s)", findings.len());
+    }
+    let big = paths
+        .iter()
+        .filter(|p| {
+            std::fs::metadata(root.join(p)).is_ok_and(|m| m.len() > expect::LARGE_FILE_LIMIT)
+        })
+        .count();
+    Ok(format!(
+        "large-files: {} tracked files, none over {} MiB except {big} allowlisted (hard cap {} MiB)",
+        paths.len(),
+        expect::LARGE_FILE_LIMIT / (1024 * 1024),
+        expect::LARGE_FILE_HARD_CAP / (1024 * 1024)
+    ))
 }
 
 pub(crate) fn deny(_: &Ctx) -> Result<Outcome> {
@@ -6899,6 +6964,88 @@ mod tests {
                 .iter()
                 .any(|f| f.contains("not only under its own suite"))
         );
+    }
+
+    /// A temporary tree with one file of `size` bytes: its root and the relative path.
+    fn tree_with(name: &str, size: usize) -> Result<(std::path::PathBuf, String)> {
+        let root = std::env::temp_dir().join(format!("secmp-large-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("sub"))?;
+        std::fs::write(root.join("sub/blob.bin"), vec![0_u8; size])?;
+        std::fs::write(root.join("small.txt"), b"x")?;
+        Ok((root, "sub/blob.bin".to_owned()))
+    }
+
+    /// ADR-052: a planted file of 3 MiB is a finding naming the path; a file of 1 MiB is not.
+    #[test]
+    fn large_file_gate_flags_a_planted_file() -> Result<()> {
+        let (root, blob) = tree_with("planted", 3 << 20)?;
+        let paths = vec![blob.clone(), "small.txt".to_owned()];
+        let found = large_file_findings(&root, &paths, &[], 2 << 20, 8 << 20);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(
+            found
+                .iter()
+                .any(|f| f.contains(&blob) && f.contains("LARGE_FILE_ALLOW"))
+        );
+        let (small_root, small) = tree_with("below", 1 << 20)?;
+        assert!(large_file_findings(&small_root, &[small], &[], 2 << 20, 8 << 20).is_empty());
+        std::fs::remove_dir_all(root)?;
+        std::fs::remove_dir_all(small_root)?;
+        Ok(())
+    }
+
+    /// ADR-052: an allowlisted path over the limit is accepted.
+    #[test]
+    fn large_file_gate_accepts_allowlisted() -> Result<()> {
+        let (root, blob) = tree_with("allowed", 3 << 20)?;
+        let allow = [("sub/blob.bin", "frozen")];
+        assert!(large_file_findings(&root, &[blob], &allow, 2 << 20, 8 << 20).is_empty());
+        std::fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    /// ADR-052: the hard cap holds for an allowlisted path too.
+    #[test]
+    fn large_file_gate_rejects_allowlisted_over_hard_cap() -> Result<()> {
+        let (root, blob) = tree_with("cap", 9 << 20)?;
+        let allow = [("sub/blob.bin", "frozen")];
+        let found = large_file_findings(&root, &[blob], &allow, 2 << 20, 8 << 20);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found.iter().any(|f| f.contains("hard cap")));
+        std::fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    /// ADR-052: this tree has no finding; the allowlisted files are listed with their sizes, every entry exists and is over
+    /// the limit (a stale entry is a finding too).
+    #[test]
+    fn large_file_gate_is_clean_on_this_tree() -> Result<()> {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let listing = Cmd::new("git").args(["ls-files"]).dir(&root).read()?;
+        let paths: Vec<String> = listing.lines().map(str::to_owned).collect();
+        let found = large_file_findings(
+            &root,
+            &paths,
+            expect::LARGE_FILE_ALLOW,
+            expect::LARGE_FILE_LIMIT,
+            expect::LARGE_FILE_HARD_CAP,
+        );
+        assert_eq!(found, Vec::<String>::new());
+        for (path, reason) in expect::LARGE_FILE_ALLOW {
+            let size = std::fs::metadata(root.join(path))?.len();
+            assert!(
+                size > expect::LARGE_FILE_LIMIT,
+                "{path}: a stale allowlist entry ({size} B)"
+            );
+            assert!(paths.iter().any(|p| p == path), "{path} is not tracked");
+            assert!(!reason.is_empty());
+            assert!(
+                size <= expect::LARGE_FILE_HARD_CAP,
+                "{path}: {size} B is over the hard cap"
+            );
+        }
+        Ok(())
     }
 
     /// m-2 (verifier, C2-3): nothing a test or `ci.yml` starts can reach the Tor network; TC-01's usage-error case

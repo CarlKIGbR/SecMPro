@@ -6,10 +6,32 @@ use std::path::Path;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
+/// A document of the repository with LF line ends (a Windows checkout with `core.autocrlf` has CRLF; ADR-047 Am. 5 (3)).
 fn read(rel: &str) -> Result<String> {
-    Ok(std::fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join(rel),
-    )?)
+    Ok(
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join(rel))?
+            .replace("\r\n", "\n"),
+    )
+}
+
+/// A CRLF checkout of the measurement report is searched like an LF one: the section searches of MR-03 and MR-06 find their
+/// headings.
+#[test]
+fn docs_read_normalises_crlf() -> Result<()> {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../target");
+    std::fs::create_dir_all(&dir)?;
+    let fixture =
+        "# t\r\n\r\n## CPU\r\n\r\nx\r\n\r\n## Recommendation (ADR-018)\r\n\r\ny\r\n\r\n## Gaps\r\n";
+    std::fs::write(dir.join("crlf-fixture.md"), fixture)?;
+    let text = read("target/crlf-fixture.md")?;
+    assert!(!text.contains('\r'));
+    assert!(text.contains("\n## CPU\n"));
+    assert!(
+        text.split("\n## Recommendation (ADR-018)\n")
+            .nth(1)
+            .is_some()
+    );
+    Ok(())
 }
 
 /// The part of the operator's certificate command the planning documents fix (OPEN-M6-09, `OPEN-M6.md`).

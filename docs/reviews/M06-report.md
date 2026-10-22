@@ -1238,10 +1238,29 @@ required job (`ct`, `mutants`, `proverif-hx`) is not green.
   `cargo build --locked --offline -p secmp-relay` — in a release test run it rewrites `target/release/secmp-relay`, the very path
   `cargo xtask sbom` reads back with `cargo audit bin`; a stale or foreign binary there is one candidate mechanism for OPEN-M6-C1-3.
 
-- **Open risk (found in C2-2, spec §10.4): a `Relayed` message lost at a relay restart is not re-sent if the sender never sees
-  `ERR_NOQUEUE`.** If the sender's links are down until the recipient has re-created the queue, nothing marks the message lost; it stays
-  `Relayed` and unreceipted. Evidence and mechanism in §10 ("Finding (spec §10.4)"). Needs a decision on the scheduler/spec side
-  (re-send after a bound, or a receipt timeout); no change made.
+- **OPEN-M6-C2-1 (found in C2-2, spec §10.4; accepted by the reviewer as a real protocol gap, WEISUNG M6-C2-4): a `Relayed`,
+  unreceipted message is re-sent only on `ERR_NOQUEUE`.** The three code sites: `outbox.rs:177` (`requeue_unreceipted`) ←
+  `conversation.rs:571/:748` (`on_lost`) ← `core/mod.rs:941–947` (`Err(NoQueue)` of a `SEND` → `source.queue_lost`). There is no
+  time-based re-send, so a sender whose links are down across a relay restart and the recipient's re-creation of the queue never sees
+  `ERR_NOQUEUE` and the message stays `Relayed` for ever. Evidence (first SIM-09 draft, relay restart in the flood): the inviter
+  received 99/100, message 29 missing; the invitee's outbox ended with 98 delivered + 2 relayed; the queue was re-created 517 s after
+  the restart, the sender's links were up again only after the flood (`RouteDead` events: none). No fix, no test change in M6; entered in
+  `docs/09-open-questions.md` as OQ-19 (M7 candidate).
+- **OPEN-M6-C2-2 (found in C2-2b while re-asserting SIM-02): the tokio driver drains one cell per `FETCH` tick.** The facade
+  `Deferred::deliver` (`scheduler/run.rs`) answers "not committed" until the worker finished the job, and the core's `fetched`
+  (`core/mod.rs:882–903`) stops at the first uncommitted cell, so of the `F` = 4 cells a `FETCH` returns one is handed to the worker per
+  round trip. A recipient therefore drains at the sender's rate (1 cell per `P`), not faster (§10.2 assumes a drain rate above the
+  sender's): after the 30-min partition of SIM-02 the queue B → A stays at 128 cells to the end of the 3 h run (`next − head` = 128 in
+  every one of the 1 235 store changes after 3.0e6 ms; the baseline without the partition ends with 6 cells), evicting one cell per tick
+  and delivering each cell only as it passes the head (messages arrive late and out of order, (E) still holds). Phase A's drain
+  measurement MR-02 ran on the virtual driver, which delivers synchronously. Root cause in `scheduler/core` (`fetched`) and the driver
+  facade: **not touched, reviewer's**; OQ-20 in `docs/09-open-questions.md`. SIM-02's prediction is taken from the relay's own record
+  of evictions and does not depend on the drain.
+- **Observation for the owner, not an M6 defect (§10.3 consequence):** Strict `P = 10 s` cannot communicate over a link with RTT >
+  20 s (`MAX_IN_FLIGHT · P`): no response is read before `TornDown(InFlight)` (SIM-07).
+- **Pool and simulation streams (WEISUNG M6-C2-4 item 8):** the pool streams are strict like the others (a residual at drop is an
+  error entry); the streams of the scheduled links in a simulation are lenient at drop (a broken network ends units mid-way on purpose),
+  but `Recorder::check()` now runs in simulation runs too and all nine rows pass it.
 
 ## 8. Blocked / questions for the reviewer or owner
 
@@ -1785,3 +1804,66 @@ restart, the sender's links up again only after the flood). §10.4 says such mes
 receipted", but only an `ERR_NOQUEUE` triggers it. Fix would be in the scheduler core/spec (e.g. re-send a relayed message that is not
 receipted after a bound) — **not done, core is the reviewer's**; entered in §7 as an open risk. The committed SIM-09 breaks the links
 with a partition instead of a restart.
+
+### C2-2b (WEISUNG M6-C2-4): decisions and fix-ups of the verifier's findings on `3395334`
+
+Commits: `7e8bc99` (items 6, 8), `5d26266` (items 3, 4: SIM-10, SIM-03), `d66808f` (item 1: SIM-07; item 7: SIM-06), `1290576` (item 7:
+SIM-01, 02, 05, 09), this report. Decisions: **SIM-07 re-dictated** by the reviewer (no (E): RTT 50 s > `MAX_IN_FLIGHT · P` = 20 s, no
+response is read before `TornDown(InFlight)`), the two per-row rig parameters are named in the test's doc comment and here; **§10.4
+accepted as a protocol gap** (OPEN-M6-C2-1, §7, OQ-19). The `ci-fast --strict` output is at the end of this section.
+
+- **SIM-07** (`m6_sim_latency::sim_slow_link_in_flight_teardown`, 11.8 s): every `Up` link is `TornDown(InFlight)` 30.0–30.25 s later and
+  no other teardown; at most two C2R frames per scheduled link; `responses_read == 0` (R2C frames of 4 352 B after the first `Up`:
+  0); reconnect per LR-02 (matched to distinct connects); (K); `exact`. **Rig parameters of this row only** (`Spec`, no default
+  changed): relay `hello_timeout_ms` = 300 000 (default 30 000, OPEN-M5-02: the handshake over 25 s one way takes 75 s) and the drivers'
+  connect timeout 600 000 ms (`CONNECT_TIMEOUT_MS` default 120 000: TCP connect 50 s + handshake 100 s).
+- **SIM-10** (item 3): the field `present == 2` of the `FETCH_MULTI` answers is read inside the client's channel
+  (`FetchMultiOutcome.errors` ← `Cellr.present`, `core/mod.rs:967–992`) and reaches neither the driver's host nor the cell source;
+  exposing it needs a hook in the core or the driver, which is not done (core is the reviewer's). Asserted instead, what only that answer
+  causes and what the spec ties to it: the conversation queues are absent from the relay 2 s after the restart; each recipient's only
+  `QUEUE_NEW` after the restart is the re-creation (`Scheduler::queue_error(NoQueue)` is its only trigger); the client kept writing
+  frames in the outage; after it the relay holds the pre-restart queues. Reviewer: accept this reading or add the hook.
+- **SIM-03** (item 4): the restart waits for the first moment a *real* message sits in the relay's queue (a `Relayed` message whose last
+  cell id is still stored; `real_cells_lost ≥ 1`); the re-creation delay is measured per recipient from the first tick after its links
+  came up (`Up + P`, the `FETCH` that reads `ERR_NOQUEUE`) to the `QUEUE_NEW` control connection, and must fit `U[10 s, 300 s]` (±250 ms
+  driver slack) for one of the client's two links — the events do not say which link fetches the queue; both senders wrote frames in the
+  outage; one handshake per client; (E) including the lost messages.
+- **SIM-06** (item 7): the full emission series are compared (identical offsets over the whole shorter series; the length difference is at
+  most `⌈shift / P⌉` because the run is cut at one absolute time and latency moves the first frame); gaps = `P` in both runs.
+- **SIM-01** (item 7): 2 h as written; the loss starts at 15 min (reason: the clients' set-up, the scripted handshake of D-C2-1, runs on
+  single links without a retry); the reconnect check matches each teardown to a *distinct* later connect (a `LinkId` names one connection
+  and the events do not say which link a connect renews, so a per-link comparison is not possible; the matching never charges one connect
+  to two teardowns).
+- **SIM-02** (item 7): the full reported set equals the full predicted set; the prediction is derived from the relay's own record of the
+  queue B → A (a store raising `next_cell_id` by one and moving the head evicted the cells in between; an acknowledgement moves the head
+  alone), not from B. (The first idea, "up to the first acknowledgement", fails because of OPEN-M6-C2-2: the backlog never drains.)
+- **SIM-05** (item 7): direct assertion — B's durable ratchet state holds exactly one skipped message key (the position A persisted and
+  never sent) and no other; plus the (K) and surplus checks.
+- **SIM-09** (item 7): witness that the relay refused honest `HELLO`s (`TornDown(ClosedBeforeRelayInfo)` ≥ 1 per client in the flood);
+  both scheduled links are up at flood end + 3 660 s (the set of live link ids is 2); `link_rate: None` has its reason in the code (the
+  `HELLO` bucket is what the row tests; the per-link frame rate is off in every simulation of the harness).
+- **Item 6**: `Recorder::check()` runs in simulations; items 8: pool streams are strict; all rows pass (§7).
+- **Item 5 (TC-02 deliver in the subprocess): STOP, not done.** The subprocess run (`--transport mem`, real time) delivers its first
+  message 145.6 s after the start (measured: `enqueue` at 15.4 s, first `deliver` at 145 580 ms; the whole script of 3 + 3 messages by
+  146–195 s): the pool fill (control delays 2…5 s, one-shot links) takes ≈ 15 s, the links start at the phases `U[0, 180 s]` of the
+  scheduler (deterministic with the `mem` randomness) and the first tick is `P` after `Up`. That is longer than the 90 s limit of the
+  weisung, so the test stays as it is (6 `enqueue` events). Option for the reviewer: a subprocess run of 170 s real (≈ 1 test of that
+  length, on the `MUTANT_HARNESS_SKIP_TESTS` list) — not done without your word.
+- **Red before green** (planted conditions; committed tests at `1290576`, text as nextest printed it):
+
+  | Row | Planted condition | `file:line` — assertion |
+  |---|---|---|
+  | SIM-07 | one-way latency 5 s (RTT 10 s < 20 s) | `m6_sim_latency.rs:165:9` `client 0: 0 teardowns in 8 h` |
+  | SIM-06 | latency up to 12 s | `m6_sim_latency.rs:76:9` `assertion left == right failed: client 0: the number of scheduled links` |
+  | SIM-03 | delay window narrowed to 100 s | `m6_sim_restart.rs:208:9` `client 0: re-created at 3947874 ms, links up at [3747980, 3765570] + P: no delay in U[10 s, 300 s]` |
+  | SIM-03 | real cells required ≥ 1000 | `m6_sim_restart.rs:154:5` `no real cell was in the store at the restart` |
+  | SIM-10 | outage writes required > 100 000 | `m6_sim_restart.rs:232:9` `client 0 wrote no frame during the outage` |
+  | SIM-10 | queues required present after the restart | `m6_sim_restart.rs:158:5` `a conversation queue existed 2 s after the restart` |
+  | (K) in SIM-03 | the first digest dropped from the set | `m6_sim.rs:401:13` `assertion left == right failed: SIM-03: (K) inviter: a message key was used twice` |
+  | SIM-01 | bound set to 1 s | `m6_sim_faults.rs:60:17` `client 0: InFlight at 964950: the reconnect 165475 ms later, bound 1000` |
+  | SIM-02 | the first predicted id removed | `m6_sim_faults.rs:162:5` `assertion left == right failed: the evicted ids reported to B are not the ids the queue predicts` |
+  | SIM-05 | one skipped position more expected | `m6_sim_faults.rs:311:5` `assertion left == right failed: B skipped positions [4], A lost 1 at the crash` |
+  | SIM-09 | 1 000 refusals required | `m6_sim_faults.rs:415:9` `client 0: the relay refused none of its HELLOs during the flood` |
+
+  (SIM-08 and SIM-04 are unchanged from the table of C2-2.) The earlier SIM-01 line "bound 180000" was a quote of a plant that did not
+  change the bound; replaced by the row above.

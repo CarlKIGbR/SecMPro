@@ -2084,3 +2084,37 @@ accept it by an ADR line (ADR-047/ADR-052 style) or ask for another form (e.g. a
 **`ci-fast --strict` at HEAD** (`docs/reviews/M06-evidence/ci-fast-m6c27-summary.txt`): fmt, clippy, policy, deny, vet, audit, cooldown, nextest, doctest, hello, kat all PASS (`kat` 1 045 s); `ci-fast: PASS`.
 
 **Hygiene.** `target/` holds a few helper files of this session (`target/diag-*`, `*.py`, `*.bak`); none is tracked.
+
+### C2-8 (WEISUNG M6-C2-8)
+
+Commits: `348e78d` §1 · the CRLF fix §2 · `65fe1eb` §3 · `d2bb952` §4 · this report; `git log --oneline e9eef3a..HEAD` is in the return block. Red quotes are lines of the committed tree.
+
+**1 · `windows-native` #177: `two_clients_loopback_tcp` — "the relay reported no listener: Disconnected" (`348e78d`).** Reviewer's diagnosis, confirmed by reading the code (the #177 log of the
+still running run was not retrievable by `gh run view --log` at the time of writing, so the lines `panicked at …m6_two_clients.rs:607:10` / `the relay reported no listener: Disconnected` are quoted from the
+WEISUNG, not re-read): `start_relay` wrote `key_file = "{}"` from `keys.display()`; on Windows that path has backslashes, the relay's config parser refuses any `\` in a string
+(`secmp-relay/src/config.rs:167–168`, "strings take no quotes or escapes"), `server::prepare` fails, `main` returns before `bind`, no `listener_bound` line is printed, the reader thread's `tx` is dropped and
+`recv_timeout` returns `Disconnected`. `keygen` passed because the path is an argument. Fix, nothing in the relay: `relay_config(KEY_FILE)` writes the relative `key_file = "relay.keys"`, the relay is started with
+`.current_dir(dir)` and `--config relay.toml`; the reader thread keeps every stderr line and a failed start panics (via `assert!`) with the error, the exit status and the lines. The relay writes
+only `listener_bound <addr>` and `secmp-relay: <why>` to stderr (`main.rs:39`); no key material. Test `relay_config_parses_with_a_windows_style_dir`: the absolute form of `Path::new(r"C:\t\x").join("relay.keys")`
+is refused by `Config::parse`, the harness form parses. Red (the harness form replaced by the absolute one): `m6_two_clients.rs:572:5` `assert!(parsed.is_ok(), "{text}")`. **Consequence:** TC-05 and TC-06
+(≈ 10 min each) run on Windows for the first time; the `kat` step of `windows-native` grows accordingly (`timeout-minutes: 90`); a Windows-only failure in them in the next run is a new finding, not this one.
+The two loopback tests passed on Linux in `ci-fast --strict` (`kat` 891 s) with the changed `start_relay`.
+
+**2 · CRLF in `xtask/src/docs.rs`.** `read()` now returns the text with `\r\n` → `\n`; test `docs_read_normalises_crlf` (a CRLF fixture in `target/crlf-fixture.md` read through `read()` has no `\r` and both
+section searches of MR-03 and MR-06 succeed). Red (normalisation removed): `docs.rs:27:5` `assertion failed: !text.contains('\r')`.
+
+**3 · MR-05 re-dictated: no retry-until-pass.** Exactly three rounds of 10 000 slots, the minimum p99 judged against the unchanged 3 000 µs bound; the evidence is written before the assert; the assert message carries
+every round. ADR-047 Amendment 8 (`docs/08`) accepts `.config/nextest.toml` (one override, `threads-required = "num-test-threads"` for `test(cpu_per_slot_measured)`; applies to every nextest run, no `--profile`;
+a further override needs an amendment line). Run alone: median 311.8 µs, p99 341.5 µs (rounds 341.5 / 343.6 / 341.6 µs), max 1 122.7 µs; 1 h virtual: Strict 1 099 ms = 0.03 %, Balanced 1 635 ms = 0.04 %,
+Low-bw 585 ms = 0.01 % of a core (`docs/measurements/M6-evidence/MR-05.txt`, which names the parent commit `ba40754` and the blob hash of `m6_measure.rs`). Red (bound 100 µs): `m6_measure.rs:506:5`
+`p99 341019 ns` plus the three rounds. Skip-list text 14 s (3 rounds + rig). The earlier quote `m6_measure.rs:490:5` of `674ab45` is withdrawn.
+
+**4 · C2-4 verifier minors (`d2bb952`).**
+- F-5 quotes re-taken: `gates.rs:7075:9` and `gates.rs:7080:9` at `93ff7fd`; `7074:9` was the comment line (replaced in place in §10 C2-7).
+- Large-file gate: `git ls-files -z`, `nul_separated`; test `large_file_gate_sees_a_non_ascii_path` (3 MiB `ä.bin` in a throw-away repository). Red with the old listing: `gates.rs:7049:9`, left `["\"\\303\\244.bin\""]`, right `["ä.bin"]`.
+- sbom (`aa3d29e`): accepted in writing; §7 OPEN-M6-C1-3 states that the name/version comparison needs `.dep-v0` (M7, ADR) and that a version-only mismatch is invisible to the count.
+- F-1 nit: `observe` takes the ordinal from the index in the received message's id (`index_of`, shared with `verify`), no schedule involved; `active_hour_enqueues_ten_bursts_of_twenty` (34.4 s) still passes.
+- Heading `Drain 1 h/24 h` as in the row (doc and `M6_TRAFFIC_SECTIONS`). MR-06 red with a location: `P_POOL` row renamed — `docs.rs:275:9` `no row for P_POOL`.
+- `cpu_per_slot_measured` stays on Windows (no `WINDOWS_SKIP_TESTS` entry); §3 row M6-D6 notes that the 3 ms bound has not yet been seen on that runner.
+
+**5 · `ci-fast --strict` at HEAD** (`docs/reviews/M06-evidence/ci-fast-m6c28-summary.txt`): fmt, clippy, policy, deny, vet, audit, cooldown, nextest, doctest, hello PASS; `kat` PASS 891 s; `ci-fast: PASS`.

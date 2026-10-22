@@ -19,7 +19,7 @@ owner-operated measurement carries the reason and the date of its absence. ADR-0
   periods; the relay evicts what the 128-cell queues cannot hold; the recipient returns and the run counts the ticks until every
   queue is acknowledged.
 - **CPU (MR-05, `cpu_per_slot_measured`).** The wall time of `Conversation::prepare_direct` (TR encrypt, persist into the in-memory
-  store, seal) over 10 000 slots (repeated until a round is below the bound: the test runs among many others), one slot in two with a real 200-byte message, the others dummies (the same code path); and the wall
+  store, seal) over 10 000 slots (exactly three rounds, the minimum p99 is judged: shared host), one slot in two with a real 200-byte message, the others dummies (the same code path); and the wall
   time of one virtual hour of the whole rig per mode divided by 3 600 s. The rig is single-threaded and includes the relay and the
   virtual transports, so the percentage is an upper bound of the client's own share of a core; it contains no I/O wait, no crypto of the
   link layer over a real socket and no UI.
@@ -73,7 +73,7 @@ modelled Tor overhead).
 ## CPU
 
 Preparation of one cell (TR encrypt + persist + seal), 10 000 slots, container `secmp-main`
-(`M6-evidence/MR-05.txt`): **median 324.8 µs, p99 357.3 µs, max 549.8 µs** (first round of 10 000 slots, run alone; among the other tests of `ci-fast` the wall time of a call is the scheduler's, p99 3.6–3.7 ms, and the test repeats the round, up to 12 times, until one is below the bound); the M3 bound is 3 000 µs (p99 < 3 000 µs: met).
+(`M6-evidence/MR-05.txt`): **median 311.8 µs, p99 341.5 µs, max 1 122.7 µs** (the quietest of exactly three rounds of 10 000 slots, run alone: p99 341.5 / 343.6 / 341.6 µs); the M3 bound is 3 000 µs (p99 < 3 000 µs: met). The test runs alone under nextest (ADR-047 Am. 8).
 The CI `perf` step of run #176 (`linux-full`, encrypt + persist + decrypt + commit, 200 messages per kind) gives chain
 median 199.9 µs / max 261.0 µs and DH-step median 544.1 µs / max 616.3 µs.
 
@@ -81,9 +81,9 @@ Share of a core over one virtual hour (whole rig, upper bound):
 
 | mode | wall time for 1 h of virtual time | share of a core |
 |---|---|---|
-| Strict, 1 contact | 1 140 ms | 0.03 % |
-| Balanced, 4 contacts | 1 677 ms | 0.04 % |
-| Low-bw, 5 contacts | 605 ms | 0.01 % |
+| Strict, 1 contact | 1 099 ms | 0.03 % |
+| Balanced, 4 contacts | 1 635 ms | 0.04 % |
+| Low-bw, 5 contacts | 585 ms | 0.01 % |
 
 Windows VM (MR-05 VM part): not measured — owner-operated Windows 11 VM, 2026-10-22. GitHub `windows-latest` (`windows-native`,
 run #177): `[#177]`.

@@ -442,3 +442,50 @@ fn add_attacker(sim: &mut turmoil::Sim<'_>, flood: Flood) {
         Ok(())
     });
 }
+
+/// Each teardown of a client with the delay until the connect that follows it: the teardowns, in time order, are matched
+/// to distinct later connects of scheduled links, each to the earliest one not taken. A `LinkId` names one connection
+/// and the events do not say which link a connect renews, so this is the matching that never charges one connect to two
+/// teardowns; the delay of a teardown is at most the one of its own reconnect.
+pub fn reconnect_delays(
+    events: &[(u64, secmp_client_core::scheduler::types::LinkEvent)],
+    connects: &[(u64, secmp_client_core::scheduler::run::Purpose)],
+) -> Vec<(
+    secmp_client_core::scheduler::types::Reason,
+    u64,
+    Option<u64>,
+)> {
+    use secmp_client_core::scheduler::run::Purpose;
+    use secmp_client_core::scheduler::types::LinkEvent;
+    let mut conn: Vec<u64> = connects
+        .iter()
+        .filter(|(_, p)| matches!(p, Purpose::Link(_)))
+        .map(|(t, _)| *t)
+        .collect();
+    conn.sort_unstable();
+    let mut downs: Vec<(u64, secmp_client_core::scheduler::types::Reason)> = events
+        .iter()
+        .filter_map(|(t, e)| match e {
+            LinkEvent::TornDown(_, why) => Some((*t, *why)),
+            _ => None,
+        })
+        .collect();
+    downs.sort_by_key(|d| d.0);
+    let mut taken = vec![false; conn.len()];
+    downs
+        .into_iter()
+        .map(|(t, why)| {
+            let next = conn
+                .iter()
+                .enumerate()
+                .find(|(i, c)| **c >= t && !taken.get(*i).copied().unwrap_or(true));
+            let delay = next.map(|(i, c)| {
+                if let Some(slot) = taken.get_mut(i) {
+                    *slot = true;
+                }
+                c.saturating_sub(t)
+            });
+            (why, t, delay)
+        })
+        .collect()
+}

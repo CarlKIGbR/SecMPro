@@ -569,7 +569,11 @@ pub(crate) const MUTANT_HARNESS_SKIP_TESTS: &[(&str, &str)] = &[
     ),
     (
         "sim_loss_breaks_links_eventual_delivery",
-        "SIM-01, 3 h virtual with 1 % loss: 9 s",
+        "SIM-01, 2 h virtual with 1 % loss: 6 s",
+    ),
+    (
+        "sim_slow_link_in_flight_teardown",
+        "SIM-07, 8 h virtual at 25 s one way: 12 s",
     ),
     (
         "sim_partition_heals",

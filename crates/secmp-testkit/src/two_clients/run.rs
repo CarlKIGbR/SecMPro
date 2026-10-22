@@ -1126,17 +1126,31 @@ impl<R: Rand> Shell<R> {
 
     /// Record a `deliver` event for each message received since the last look.
     fn observe(&mut self, rec: &Recorder, script: &Script, now: u64) {
-        let got = self.with(|c| c.received().len());
+        let seen = self.seen;
+        // the index of each new message is the one in its own id (`msg_id`), not its position of arrival: the peer sends in
+        // due-time order (`Script::schedule`), which is not the index order once there are bursts
+        let new: Vec<u64> = self.with(|c| {
+            c.received()
+                .iter()
+                .skip(seen)
+                .map(|m| index_of(&m.msg_id))
+                .collect()
+        });
         let peer_dir = 1_u64.saturating_sub(self.dir);
-        // the peer sends in due-time order (`Script::schedule`), which is not the index order once there are bursts
-        let plan = script.schedule();
-        while self.seen < got {
-            let idx = plan.get(self.seen).map_or(u64::MAX, |(i, _)| *i);
+        for idx in new {
             let ordinal = peer_dir.saturating_mul(script.messages).saturating_add(idx);
             rec.event("deliver", ordinal, now);
             self.seen = self.seen.saturating_add(1);
         }
     }
+}
+
+/// The script index in a message id (`msg_id`: the direction, then the index, big-endian); `u64::MAX` if the id is too short.
+fn index_of(msg_id: &[u8]) -> u64 {
+    msg_id
+        .get(8..)
+        .and_then(|b| <[u8; 8]>::try_from(b).ok())
+        .map_or(u64::MAX, u64::from_be_bytes)
 }
 
 /// What a client's task returns: the node, and whether its driver ran to the end (no randomness lost).
@@ -1243,11 +1257,7 @@ fn verify<R: Rand>(shells: &[Shell<R>], script: &Script) -> Verified {
             let (mut exact, mut in_order) = (true, true);
             for (arrival, m) in c.received().iter().enumerate() {
                 // the message's own index is in its id (`msg_id`)
-                let idx = m
-                    .msg_id
-                    .get(8..)
-                    .and_then(|b| <[u8; 8]>::try_from(b).ok())
-                    .map_or(u64::MAX, u64::from_be_bytes);
+                let idx = index_of(&m.msg_id);
                 exact &= m.msg_id == msg_id(peer_dir, idx)
                     && idx < script.messages
                     && m.payload.as_slice() == payload(script, peer_dir, idx).as_slice()

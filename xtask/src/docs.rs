@@ -191,7 +191,7 @@ const M6_TRAFFIC_SECTIONS: [&str; 8] = [
     "Tor overhead",
     "Latency over Tor",
     "CPU",
-    "Drain 1 h / 24 h",
+    "Drain 1 h/24 h",
     "Recommendation (ADR-018)",
     "Gaps",
 ];
@@ -271,8 +271,9 @@ fn recommendation_names_every_parameter() -> Result<()> {
     for parameter in ["PERIODS", "T_BALANCED", "T_LOWBW", "F", "F_M", "P_POOL"] {
         let row = section
             .lines()
-            .find(|l| l.starts_with(&format!("| `{parameter}` |")))
-            .ok_or_else(|| format!("no row for {parameter}"))?;
+            .find(|l| l.starts_with(&format!("| `{parameter}` |")));
+        assert!(row.is_some(), "no row for {parameter}");
+        let row = row.unwrap_or_default();
         let plain = row.replace("\\|", "/");
         let cells: Vec<&str> = plain.split('|').map(str::trim).collect();
         // | name | value | cost | check | recommendation |

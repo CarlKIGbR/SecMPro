@@ -88,7 +88,7 @@ Share of a core over one virtual hour (whole rig, upper bound):
 Windows VM (MR-05 VM part): not measured — owner-operated Windows 11 VM, 2026-10-22. GitHub `windows-latest` (`windows-native`,
 run #177): `[#177]`.
 
-## Drain 1 h / 24 h
+## Drain 1 h/24 h
 
 After the recipient was offline (MR-02, `M6-evidence/MR-02.txt`; the relay keeps 128 cells per queue):
 

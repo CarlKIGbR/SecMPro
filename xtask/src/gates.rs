@@ -102,10 +102,19 @@ pub(crate) fn large_file_findings(
     out
 }
 
+/// The paths of `git ls-files -z`: NUL-separated, so that a path with a non-ASCII character is not quoted (and then missed).
+fn nul_separated(listing: &str) -> Vec<String> {
+    listing
+        .split('\0')
+        .filter(|p| !p.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
 /// ADR-052: the large-file gate over `git ls-files`.
 fn large_files(root: &Path) -> Result<String> {
-    let listing = Cmd::new("git").args(["ls-files"]).dir(root).read()?;
-    let paths: Vec<String> = listing.lines().map(str::to_owned).collect();
+    let listing = Cmd::new("git").args(["ls-files", "-z"]).dir(root).read()?;
+    let paths = nul_separated(&listing);
     let findings = large_file_findings(
         root,
         &paths,
@@ -7020,6 +7029,26 @@ mod tests {
         let found = large_file_findings(&root, &[blob], &allow, 2 << 20, 8 << 20);
         assert_eq!(found.len(), 1, "{found:?}");
         assert!(found.iter().any(|f| f.contains("hard cap")));
+        std::fs::remove_dir_all(root)?;
+        Ok(())
+    }
+
+    /// ADR-052 (verifier, C2-4): `git ls-files` quotes a path with a non-ASCII character (`"\303\244.bin"`), which the gate
+    /// then did not find on disk and skipped; `-z` lists it as it is. A 3 MiB file called `ä.bin` in a throw-away repository
+    /// is a finding.
+    #[test]
+    fn large_file_gate_sees_a_non_ascii_path() -> Result<()> {
+        let root = std::env::temp_dir().join(format!("secmp-large-utf8-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root)?;
+        Cmd::new("git").args(["init", "-q"]).dir(&root).run()?;
+        std::fs::write(root.join("ä.bin"), vec![0_u8; 3 << 20])?;
+        Cmd::new("git").args(["add", "."]).dir(&root).run()?;
+        let listing = Cmd::new("git").args(["ls-files", "-z"]).dir(&root).read()?;
+        let paths = nul_separated(&listing);
+        assert_eq!(paths, ["ä.bin"]);
+        let found = large_file_findings(&root, &paths, &[], 2 << 20, 8 << 20);
+        assert_eq!(found.len(), 1, "{found:?}");
         std::fs::remove_dir_all(root)?;
         Ok(())
     }

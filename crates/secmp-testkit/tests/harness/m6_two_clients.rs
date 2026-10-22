@@ -678,6 +678,76 @@ fn two_clients_trace_schema() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// F-1 (reviewer, C2-1 diff): a stream that ends inside a unit is an error entry, not a dropped tail — a frame of
+/// 4 352 B followed by 100 B and a close fails the row, in either direction, naming the residual.
+#[test]
+fn two_clients_trace_rejects_partial_unit() {
+    use secmp_client_core::clock::TokioClock;
+    use secmp_testkit::two_clients::trace::Recorder;
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+    runtime().block_on(async {
+        // the client writes 4352 B, flushes, writes 100 B more and closes
+        let rec = Recorder::new(TokioClock::new(0));
+        let (a, _peer) = tokio::io::duplex(1 << 16);
+        let mut s = rec.wrap(a);
+        s.write_all(&[0; 4352]).await.unwrap();
+        s.flush().await.unwrap();
+        s.write_all(&[0; 100]).await.unwrap();
+        s.shutdown().await.unwrap();
+        let err = rec.check().unwrap_err();
+        assert!(err.contains("c2r: residual 100 B"), "{err}");
+        assert_eq!(
+            rec.units().iter().map(|u| u.len).collect::<Vec<_>>(),
+            [4352]
+        );
+        // the relay sends 4352 B + 100 B and closes; the client reads two frames
+        let rec = Recorder::new(TokioClock::new(0));
+        let (c, mut relay) = tokio::io::duplex(1 << 16);
+        let mut r = rec.wrap(c);
+        relay.write_all(&[7; 4452]).await.unwrap();
+        relay.shutdown().await.unwrap();
+        r.read_exact(&mut [0; 4352]).await.unwrap();
+        assert!(r.read_exact(&mut [0; 4352]).await.is_err());
+        let err = rec.check().unwrap_err();
+        assert!(err.contains("r2c: residual 100 B"), "{err}");
+        assert_eq!(
+            rec.units().iter().map(|u| u.len).collect::<Vec<_>>(),
+            [4352]
+        );
+    });
+}
+
+/// F-1: the length of a unit is what crossed, never an assumed one — a unit of 4 353 B is 4 353 in the trace (both
+/// directions), not 4 352 and a residual; a handshake record (a two-byte length, then its body) is one unit of `2 + n`.
+#[test]
+fn two_clients_trace_unit_lengths_are_observed_not_assumed() {
+    use secmp_client_core::clock::TokioClock;
+    use secmp_testkit::harness::Dir;
+    use secmp_testkit::two_clients::trace::Recorder;
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+    runtime().block_on(async {
+        let rec = Recorder::new(TokioClock::new(0));
+        let (a, mut relay) = tokio::io::duplex(1 << 16);
+        let mut s = rec.wrap(a);
+        s.write_all(&[1; 4353]).await.unwrap();
+        s.flush().await.unwrap();
+        relay.write_all(&[2; 4353]).await.unwrap();
+        s.read_exact(&mut [0; 4353]).await.unwrap();
+        // a record: length 5 (big endian), then 5 bytes of body
+        relay.write_all(&[0, 5, 9, 9, 9, 9, 9]).await.unwrap();
+        s.read_exact(&mut [0; 2]).await.unwrap();
+        s.read_exact(&mut [0; 5]).await.unwrap();
+        let seen: Vec<(usize, Dir)> = rec.units().iter().map(|u| (u.len, u.dir)).collect();
+        assert_eq!(
+            seen,
+            [(4353, Dir::C2R), (4353, Dir::R2C), (7, Dir::R2C)],
+            "{seen:?}"
+        );
+        assert_eq!(rec.check(), Ok(()));
+        assert!(rec.jsonl().contains("\"len\":4353"));
+    });
+}
+
 /// TC-05 `two_clients_loopback_tcp` (`docs/06` §4): the relay binary on 127.0.0.1, plain TCP, Strict and Balanced, 20
 /// messages each way — all delivered; in the trace every unit after HS2 is 4 352 B.
 #[test]

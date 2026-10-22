@@ -1057,6 +1057,10 @@ async fn session<P: StreamProvider + 'static, R: Rand>(
         }
     }
     let done = converse(&world, sides, script, cli).await?;
+    world
+        .rec
+        .check()
+        .map_err(|e| Fail::Run(format!("the trace is not sound: {e}")))?;
     for (name, got, want) in &done.delivered {
         say(out, &format!("delivered side={name} {got}/{want}"));
     }

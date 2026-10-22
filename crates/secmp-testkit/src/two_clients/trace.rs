@@ -56,6 +56,7 @@ struct Inner {
     slots: u64,
     units: Vec<UnitRec>,
     events: Vec<EventRec>,
+    errors: Vec<String>,
 }
 
 /// What a run recorded (shared by both clients of a process).
@@ -93,6 +94,35 @@ impl Recorder {
             dir,
             slot,
         });
+    }
+
+    fn error(&self, what: String) {
+        self.lock().errors.push(what);
+    }
+
+    /// A stream of the run under this recorder: its units are recorded as they cross (see [`TracedStream`]); the link
+    /// slot is the next in creation order.
+    pub fn wrap<S>(self: &Arc<Self>, inner: S) -> TracedStream<S> {
+        TracedStream {
+            inner,
+            rec: Arc::clone(self),
+            slot: self.next_slot(),
+            pending: 0,
+            read: ReadSide::default(),
+        }
+    }
+
+    /// The run's trace is sound: no stream ended inside a unit.
+    ///
+    /// # Errors
+    /// What ended where: the link, the direction and the residual bytes.
+    pub fn check(&self) -> Result<(), String> {
+        let g = self.lock();
+        if g.errors.is_empty() {
+            Ok(())
+        } else {
+            Err(g.errors.join("; "))
+        }
     }
 
     /// A message event at `t_ms`.
@@ -140,46 +170,97 @@ impl Recorder {
     }
 }
 
-/// The length of unit `index` of a direction (spec D.1, §8.4).
-const fn unit_len(dir: Dir, index: usize) -> usize {
-    match (dir, index) {
-        (Dir::C2R, 0) => 9,
-        (Dir::C2R, 1) => 2_856,
-        (Dir::R2C, 0) => 1_744,
-        (Dir::R2C, 1) => 1_156,
-        _ => 4_352,
-    }
-}
-
+/// What the read side of a stream has seen of the unit in progress. The boundary of a unit is the reader's own request
+/// (`read_exact` of one frame): the length is what the client asked for, observed, never a constant of this module.
+/// A handshake record (spec D.1) is read as its two-byte length and then its body: a two-byte read whose big-endian
+/// value is the size of the next request is held and logged as one record of `2 + that` bytes.
 #[derive(Default)]
-struct Counter {
-    index: usize,
+struct ReadSide {
+    /// The size of the request in progress and the bytes it has received.
+    want: usize,
     got: usize,
+    /// A completed two-byte read, held until the next request shows whether it was a record's length prefix: its value.
+    held: Option<usize>,
+    /// The next request completes a record whose prefix was held.
+    merged: bool,
+    /// The first two bytes of the request in progress.
+    head: [u8; 2],
 }
 
-impl Counter {
-    fn add(&mut self, mut n: usize, dir: Dir, slot: u64, rec: &Recorder) {
-        while n > 0 {
-            let need = unit_len(dir, self.index).saturating_sub(self.got);
-            let take = need.min(n);
-            self.got = self.got.saturating_add(take);
-            n = n.saturating_sub(take);
-            if self.got >= unit_len(dir, self.index) {
-                rec.unit(self.got, dir, slot);
-                self.index = self.index.saturating_add(1);
-                self.got = 0;
-            }
-        }
-    }
-}
-
-/// A provider's stream that counts the units crossing it.
+/// A provider's stream that records every unit crossing it as it crosses: a write is delimited by the flush that ends
+/// it (the driver writes one frame, then flushes), a read by the request that receives it.
 pub struct TracedStream<S> {
     inner: S,
     rec: Arc<Recorder>,
     slot: u64,
-    c2r: Counter,
-    r2c: Counter,
+    /// Bytes written since the last flush.
+    pending: usize,
+    read: ReadSide,
+}
+
+impl<S> TracedStream<S> {
+    fn close_write(&mut self) {
+        if self.pending > 0 {
+            self.rec.error(format!(
+                "link {} c2r: residual {} B at close, no unit",
+                self.slot, self.pending
+            ));
+            self.pending = 0;
+        }
+    }
+
+    /// The reader's request of `capacity` bytes received `filled` (no bytes: the end of the stream).
+    fn read_done(&mut self, capacity: usize, filled: &[u8]) {
+        let n = filled.len();
+        if capacity == 0 {
+            return;
+        }
+        if n == 0 {
+            // the end of the stream
+            if self.read.got > 0 {
+                self.rec.error(format!(
+                    "link {} r2c: residual {} B at close, no unit",
+                    self.slot, self.read.got
+                ));
+                self.read.got = 0;
+            }
+            if self.read.held.take().is_some() {
+                self.rec.unit(2, Dir::R2C, self.slot);
+            }
+            return;
+        }
+        if self.read.got == 0 {
+            // a new request: `capacity` is what the reader asked for
+            self.read.want = capacity;
+            self.read.merged = false;
+            if let Some(prefix) = self.read.held {
+                if prefix == capacity {
+                    self.read.merged = true;
+                } else {
+                    self.rec.unit(2, Dir::R2C, self.slot);
+                }
+                self.read.held = None;
+            }
+        }
+        for (i, b) in filled.iter().enumerate() {
+            if let Some(slot) = self.read.head.get_mut(self.read.got.saturating_add(i)) {
+                *slot = *b;
+            }
+        }
+        self.read.got = self.read.got.saturating_add(n);
+        if self.read.got < self.read.want {
+            return;
+        }
+        let len = self.read.got;
+        self.read.got = 0;
+        if self.read.merged {
+            self.rec.unit(len.saturating_add(2), Dir::R2C, self.slot);
+        } else if len == 2 {
+            self.read.held = Some(usize::from(u16::from_be_bytes(self.read.head)));
+        } else {
+            self.rec.unit(len, Dir::R2C, self.slot);
+        }
+    }
 }
 
 impl<S: AsyncRead + Unpin> AsyncRead for TracedStream<S> {
@@ -188,12 +269,12 @@ impl<S: AsyncRead + Unpin> AsyncRead for TracedStream<S> {
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<std::io::Result<()>> {
+        let capacity = buf.remaining();
         let before = buf.filled().len();
         let r = Pin::new(&mut self.inner).poll_read(cx, buf);
         if matches!(r, Poll::Ready(Ok(()))) {
-            let n = buf.filled().len().saturating_sub(before);
-            let (rec, slot) = (Arc::clone(&self.rec), self.slot);
-            self.r2c.add(n, Dir::R2C, slot, &rec);
+            let filled = buf.filled().get(before..).unwrap_or_default().to_vec();
+            self.read_done(capacity, &filled);
         }
         r
     }
@@ -207,17 +288,22 @@ impl<S: AsyncWrite + Unpin> AsyncWrite for TracedStream<S> {
     ) -> Poll<std::io::Result<usize>> {
         let r = Pin::new(&mut self.inner).poll_write(cx, buf);
         if let Poll::Ready(Ok(n)) = r {
-            let (rec, slot) = (Arc::clone(&self.rec), self.slot);
-            self.c2r.add(n, Dir::C2R, slot, &rec);
+            self.pending = self.pending.saturating_add(n);
         }
         r
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
-        Pin::new(&mut self.inner).poll_flush(cx)
+        let r = Pin::new(&mut self.inner).poll_flush(cx);
+        if matches!(r, Poll::Ready(Ok(()))) && self.pending > 0 {
+            self.rec.unit(self.pending, Dir::C2R, self.slot);
+            self.pending = 0;
+        }
+        r
     }
 
     fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        self.close_write();
         Pin::new(&mut self.inner).poll_shutdown(cx)
     }
 }
@@ -245,13 +331,7 @@ impl<P: StreamProvider> StreamProvider for Traced<P> {
         isolation: Isolation,
     ) -> Result<Self::Stream, TransportError> {
         let inner = self.inner.connect(relay, isolation).await?;
-        Ok(TracedStream {
-            inner,
-            rec: Arc::clone(&self.rec),
-            slot: self.rec.next_slot(),
-            c2r: Counter::default(),
-            r2c: Counter::default(),
-        })
+        Ok(self.rec.wrap(inner))
     }
 }
 
@@ -286,21 +366,4 @@ impl StreamProvider for TcpProvider {
 pub fn write_file(path: &std::path::Path, text: &str) -> std::io::Result<()> {
     let mut f = std::fs::File::create(path)?;
     f.write_all(text.as_bytes())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn handshake_lengths_then_frames() {
-        assert_eq!(
-            [0, 1, 2, 3].map(|i| unit_len(Dir::C2R, i)),
-            [9, 2_856, 4_352, 4_352]
-        );
-        assert_eq!(
-            [0, 1, 2, 3].map(|i| unit_len(Dir::R2C, i)),
-            [1_744, 1_156, 4_352, 4_352]
-        );
-    }
 }

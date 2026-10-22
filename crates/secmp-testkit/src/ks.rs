@@ -97,6 +97,8 @@ pub struct Report {
     pub counts_pooled: Ks,
     /// The smallest and the largest number of frames in one departure, over every link and both hours.
     pub frames_per_departure: (u64, u64),
+    /// The same per scheduled link: `(slot, (min, max))`.
+    pub frames_per_departure_per_link: Vec<(u64, (u64, u64))>,
     /// Every unit of a scheduled link is a frame of 4 352 B, except the handshake records at the start of a connection (a
     /// 9 B first unit, a 2 856 B first or second unit).
     pub all_frames_full: bool,
@@ -186,7 +188,8 @@ pub fn gaps(frames: &[Frame], split: u64, min_frames: usize) -> BTreeMap<u64, Sa
     out
 }
 
-/// Whether every unit of the scheduled links is a frame, handshake records only where a connection starts.
+/// Whether every unit of the scheduled links is a frame, handshake records only where a connection starts (a link slot is
+/// one connection, so a reconnect — a new slot — has its own handshake records at its start).
 fn units_are_frames(frames: &[Frame], scheduled: &[u64]) -> bool {
     scheduled.iter().all(|slot| {
         let mut units: Vec<&Frame> = frames.iter().filter(|f| f.1 == *slot).collect();
@@ -204,7 +207,10 @@ pub fn analyse(frames: &[Frame], split: u64, min_frames: usize) -> Option<Report
     let (mut all_idle, mut all_active) = (Vec::new(), Vec::new());
     let (mut all_idle_n, mut all_active_n) = (Vec::new(), Vec::new());
     let (mut per_link, mut counts_per_link) = (Vec::new(), Vec::new());
+    let mut fpd_per_link = Vec::new();
     for (slot, s) in &per {
+        let all = s.idle_counts.iter().chain(&s.active_counts);
+        fpd_per_link.push((*slot, (all.clone().min().copied()?, all.max().copied()?)));
         per_link.push((*slot, two_sample(&s.idle, &s.active)?));
         counts_per_link.push((*slot, two_sample(&s.idle_counts, &s.active_counts)?));
         all_idle.extend_from_slice(&s.idle);
@@ -223,6 +229,7 @@ pub fn analyse(frames: &[Frame], split: u64, min_frames: usize) -> Option<Report
         counts_per_link,
         counts_pooled,
         frames_per_departure,
+        frames_per_departure_per_link: fpd_per_link,
         all_frames_full: units_are_frames(frames, &scheduled),
     })
 }
@@ -258,6 +265,12 @@ pub fn evidence(report: &Report) -> String {
         "frames per departure, pooled: D = {:.6}, p = {:.6}, min = {}, max = {}",
         k.d, k.p, report.frames_per_departure.0, report.frames_per_departure.1
     );
+    for (slot, (lo, hi)) in &report.frames_per_departure_per_link {
+        let _ = writeln!(
+            s,
+            "frames per departure, link {slot}: min = {lo}, max = {hi}"
+        );
+    }
     let _ = writeln!(s, "all units 4352 B: {}", report.all_frames_full);
     s
 }
@@ -363,6 +376,14 @@ mod tests {
             r.per_link.iter().all(|(_, k)| k.p < 0.01)
         };
         let smallest = [1_u64, 2, 5, 10, 20].into_iter().find(|s| found(*s));
+        // F-3 (verifier, C2-3b): the figure the report quotes is in the test output (`--no-capture`)
+        {
+            use std::io::Write as _;
+            let _ = writeln!(
+                std::io::stderr(),
+                "minimum detectable shift: {smallest:?} ms (jitter 0..21 ms, n = 360 per link and hour)"
+            );
+        }
         assert_eq!(smallest, Some(5), "the smallest detectable shift");
         assert!(found(10) && found(20));
         assert!(!found(1) && !found(2));
@@ -381,6 +402,10 @@ mod tests {
         frames.push((at + 3, 0, FRAME));
         let r = analyse(&frames, SPLIT, 100).unwrap();
         assert_eq!(r.frames_per_departure, (2, 3));
+        // F-2: the per-link figures show which link carries the extra frame
+        assert!(r.frames_per_departure_per_link.contains(&(0, (2, 3))));
+        assert!(r.frames_per_departure_per_link.contains(&(1, (2, 2))));
+        assert!(evidence(&r).contains("frames per departure, link 0: min = 2, max = 3"));
         assert_eq!(r.constant_frames_per_departure(), None);
     }
 
@@ -393,6 +418,10 @@ mod tests {
         frames.push((0, 0, 9));
         frames.push((1, 0, 2_856));
         assert!(analyse(&frames, SPLIT, 100).unwrap().all_frames_full);
+        // F-4: a reconnect is a new link slot and has its own handshake records at its start
+        let mut again = trace(1, 120, 0, 3, 1, 3);
+        again.extend(frames.iter().map(|(t, _, l)| (*t, 1, *l)));
+        assert!(analyse(&again, SPLIT, 100).unwrap().all_frames_full);
         // the same lengths in the middle of the link
         frames.push((SPLIT, 0, 2_856));
         assert!(!analyse(&frames, SPLIT, 100).unwrap().all_frames_full);

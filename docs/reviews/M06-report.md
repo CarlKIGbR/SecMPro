@@ -190,8 +190,8 @@ Every named test exists in the tree (the xtask test `docs::m06_report_acceptance
 | M6-D2 | Deliverable: scheduler (`LinkTask`, modes, periods, phases, in-flight bounds, reconnect), `ControlOps`, `QueuePool`, `outbox` | `balanced_round_robin_due_rule`, `driver_rr_reservation_does_not_depend_on_worker_timing`, `unwritten_ledger_is_bounded_without_completions`, `control_ops_is_empty_follows_the_queue`, `queue_pool_lists_only_relays_that_are_short_and_knows_its_spares`, `outbox_states`, Kani `kani_unwritten_bound`; `cargo xtask ci-fast --strict`, `cargo kani -p secmp-client-core` (13/13) |
 | M6-D3 | Deliverable: `two-clients` binary | OPEN — C2 (TC-01…TC-09) |
 | M6-D4 | Deliverable: `turmoil` simulations | OPEN — C2 (SIM-01…SIM-*) |
-| M6-D5 | Deliverable: activity-independence test | `activity_independence_strict_virtual`, `ai01_strict_tokio`, `ai06_both_directions_tokio`, `ai07_fault_paired_tokio`; the remaining rows OPEN — C2 (AI-07, AI-10); `SECMP_AI_TRACES=64` harness run 196/196 at `ee3c66f` |
-| M6-D6 | Deliverable: measurement report `docs/measurements/M6-traffic.md` | `bandwidth_model_matches_capture`, `drain_after_offline_virtual`; the report and the other rows OPEN — C2 (MR-03…MR-07) |
+| M6-D5 | Deliverable: activity-independence test | `activity_independence_strict_virtual`, `ai01_strict_tokio`, `ai06_both_directions_tokio`, `ai07_fault_paired_tokio`; AI-10 `ks_tool_detects_planted_dependence`; AI-07 loopback part Balanced (re-dictated, 5 ms minimum detectable shift, ≈ 135 min job), Tor part ⚙; `SECMP_AI_TRACES=64` harness run 196/196 at `ee3c66f` |
+| M6-D6 | Deliverable: measurement report `docs/measurements/M6-traffic.md` | `bandwidth_model_matches_capture`, `drain_after_offline_virtual`; the report and the other rows: group C2-4 |
 | M6-A1 | Acceptance: two machines exchange messages over real Tor ⚙ | OPEN — C2 (TC-*, TOR-10 owner-operated, §6); in the tree: `tor_never_falls_back_to_direct`, `transport_selection_follows_user_choice_only` |
 | M6-A2 | Acceptance: two machines over direct TLS | OPEN — C2 (TC-*); in the tree: `tls_handshake_with_pinned_relay_succeeds`, `tls_spki_pin_mismatch_rejects`, `relay_and_client_spki_walks_agree` |
 | M6-A3 | Acceptance: the activity-independence test passes | `activity_independence_strict_virtual`, `ai01_strict_tokio`, `ai06_both_directions_tokio`; AI max Δt = 0 ms |
@@ -1915,8 +1915,8 @@ in the test); §7 now says what a lenient stream can hide.
 - **AI-10** `ks::tests::ks_tool_detects_planted_dependence` (`crates/secmp-testkit/src/ks.rs`): two-sample KS (D, asymptotic p, n) on the
   inter-departure times of the C2R frames per scheduled link, idle hour against active hour, handshakes excluded; synthetic trace of 4 links with
   `P` = 10 s plus a timer jitter of 0…2 ms and gaps 1 ms shorter in the active hour: `p < 0.01` per link and pooled at n ≈ 360 per link and hour (pooled
-  1 440). Red first: the same trace without the shift — `ks.rs:230:13` `link 0: D = 0.0463401423707831, p = 0.8263133806497643`; and with the p-value
-  stubbed to 1 — `link 0: D = 0.33055555555555555, p = 1`. The other half, `ks_tool_accepts_equal_distributions` (50 seeds × 4 links: ≤ 5 % flagged),
+  1 440). Red first: the same trace without the shift — `ks.rs:325:13` (at `4c05c37`) `link 0: D = 0.0463401423707831, p = 0.8263133806497643`; and with the p-value
+  stubbed to 1 — `ks.rs:325:13` `link 0: D = 0.33055555555555555, p = 1`. The other half, `ks_tool_accepts_equal_distributions` (50 seeds × 4 links: ≤ 5 % flagged),
   and known values (identical samples p = 1, disjoint D = 1, Q(1.36) ≈ 0.049). **Sensitivity statement:** the tool resolves a 1-ms shift when the
   timer jitter is at most about 3 ms wide at this n; for wider jitter the smallest detectable shift grows with it (D of a shift δ over a jitter width w is
   ≈ δ/w). The p-value is the asymptotic one; the samples are whole milliseconds with many ties, for which it is conservative (favours "no dependence").
@@ -1928,16 +1928,16 @@ in the test); §7 now says what a lenient stream can hide.
   **Evidence file path after the run (reviewer's step):** `docs/reviews/M06-evidence/ks-hour-<run id>.txt`. A smoke run (700 s + 700 s, release build) in the
   container: `link 4: D = 0.033035, p = 1.000000, n_idle = 68, n_active = 69` … `pooled: D = 0.043478, p = 0.968465, n_idle = 230, n_active = 276`, all units 4 352 B,
   criterion MET (n is that of 700 s; the job's n is that of an hour).
-  **Finding on the row's input:** "loopback TLS relay, **Strict**, P = 10 s" cannot be Strict: direct mode implies Balanced (spec §10.2,
-  `Scheduler::effective_mode`); the first smoke run showed it — a combined link writes the two requests of a slot 1 ms apart. The run is Balanced with
-  `T_BALANCED` = 10 s, frames less than 100 ms apart count as one departure (no effect for a Strict link), and the output says so. A Strict run over
-  real sockets would need a plain-TCP loopback listener of the relay (`tor_loopback`) behind `--transport loopback`; the dispatch job does not do that.
-  Reviewer: accept as the loopback part of AI-07, or ask for the Strict plain-TCP variant.
+  **Re-dictated Balanced (reviewer, C2-6):** "loopback TLS relay, **Strict**, P = 10 s" cannot be Strict: direct mode implies Balanced (spec §10.2,
+  `Scheduler::effective_mode`); a combined link writes the two requests of a slot 1 ms apart. The row as run: Balanced, `T_BALANCED` = 10 s, frames less than 100 ms
+  apart count as one departure and their number is checked (constant 2 in both hours). No Strict plain-TCP variant in M6; the Strict evidence is the Tor part
+  (owner-operated). **Minimum detectable shift: 5 ms** at a timer jitter of 0…20 ms and n = 360 per link and hour (`ks_tool_detects_shift_under_realistic_jitter`, C2-3b F-3).
+  **Run time of the job:** ≈ 135 min (2 h + link phases up to 15 min) plus the cold release build, against `timeout-minutes: 170`.
 - **X-07** `gates::tests::optional_jobs_are_not_required` (+ `optional_job_findings`, run by the `workflows` step of `policy`): `REQUIRED_JOBS` is
   the five names of the C1 head; `tor-smoke` and `ks-hour` are declared once each in `ci-dispatch.yml`, only under `inputs.suite == '<own name>'` (never in
   `all`), are no job of `ci.yml` and no required check, and `ci.yml` names neither job nor starts `tor_smoke`/`ks_hour` (the only programs that reach a host beyond
   loopback). Red: the real workflow with `ks-hour` also under `all` — `assertion left == right failed … runs under 'inputs.suite == 'all' || inputs.suite ==
-  'ks-hour'', not only under its own suite` (`gates.rs:6811`).
+  'ks-hour'', not only under its own suite` (`gates.rs:6866:9`, at `4c05c37`).
 - **MR-07 / TOR-10 job `tor-smoke`** (`timeout-minutes: 30`): `tor_smoke <profile>` without a relay is now the cold-bootstrap measurement; it prints one last line
   `MR07 bootstrap_seconds=<s> bytes_down=<n>` (seconds from the start of Arti to `Ready`; bytes received on all non-loopback interfaces over the same time,
   Linux `/proc/net/dev`, so the job runs on an otherwise idle runner and the number includes the runner's own small background traffic), checked by the job with a
@@ -2003,4 +2003,4 @@ loopback TLS relay, Balanced, `T_BALANCED` = 10 s, 2 contacts, 1 h idle, 1 h act
   **m-6** OPEN-M6-C2-2 is part of the OPEN-M6-B-1 entry now (§7, one bullet).
 - **Red quotes re-taken from the committed tree** (`4c05c37`; `file:line:col` of the asserting line as printed): AI-10 without the shift `ks.rs:325:13` (`link 0: D = 0.0463…, p = 0.8263…`),
   with the p-value stubbed `ks.rs:325:13` (`link 0: D = 0.3305…, p = 1`); X-07 (`ks-hour` also under `all`) `gates.rs:6866:9`; SIM-05 position `m6_sim_faults.rs:308:5`
-  (`B skipped [4], A's persisted-but-unsent position is 4`, with the wrong expectation). The earlier quotes `ks.rs:230:13` and `gates.rs:6811` of C2-5 are withdrawn (non-asserting lines).
+  (`B skipped [4], A's persisted-but-unsent position is 4`, with the wrong expectation). The earlier quotes `ks.rs:230:13` and `gates.rs:6811` of C2-5 are withdrawn (non-asserting lines) and replaced in place in §10 C2-3.

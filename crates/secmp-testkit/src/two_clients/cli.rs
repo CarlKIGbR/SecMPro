@@ -29,7 +29,7 @@ usage: two-clients [options]
   --trace-out FILE                       write the trace (JSON lines) here
   --tor-dir DIR                          Arti's profile directory (tor)
   --help                                 print this text
-exit codes: 0 ok, 1 the run failed, 2 usage error, 3 the chosen transport is unavailable
+exit codes: 0 ok, 1 the run failed, 2 usage error, 3 the chosen transport is unavailable, 101 the engine panicked (a bug)
 ";
 
 /// Which clients this process runs.

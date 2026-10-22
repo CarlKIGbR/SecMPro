@@ -1128,10 +1128,11 @@ impl<R: Rand> Shell<R> {
     fn observe(&mut self, rec: &Recorder, script: &Script, now: u64) {
         let got = self.with(|c| c.received().len());
         let peer_dir = 1_u64.saturating_sub(self.dir);
+        // the peer sends in due-time order (`Script::schedule`), which is not the index order once there are bursts
+        let plan = script.schedule();
         while self.seen < got {
-            let ordinal = peer_dir
-                .saturating_mul(script.messages)
-                .saturating_add(u64::try_from(self.seen).unwrap_or(u64::MAX));
+            let idx = plan.get(self.seen).map_or(u64::MAX, |(i, _)| *i);
+            let ordinal = peer_dir.saturating_mul(script.messages).saturating_add(idx);
             rec.event("deliver", ordinal, now);
             self.seen = self.seen.saturating_add(1);
         }
@@ -1225,7 +1226,8 @@ struct Verified {
 
 /// What each local client received, and whether every received message was the expected one: an id of the script, once,
 /// with the script's payload (`exact`; (E) of the simulations) and in the script's order (`in_order`; a message evicted
-/// or lost on the way is re-sent after later ones, so only a run without faults keeps the order).
+/// or lost on the way is re-sent after later ones, so only a run without faults keeps the order; the order is the
+/// script's schedule, by due time).
 fn verify<R: Rand>(shells: &[Shell<R>], script: &Script) -> Verified {
     let want = usize::try_from(script.messages).unwrap_or(0);
     let mut v = Verified {
@@ -1235,6 +1237,7 @@ fn verify<R: Rand>(shells: &[Shell<R>], script: &Script) -> Verified {
     };
     for shell in shells {
         let peer_dir = 1_u64.saturating_sub(shell.dir);
+        let plan = script.schedule();
         let (len, exact, in_order) = shell.with(|c| {
             let mut ids = std::collections::BTreeSet::new();
             let (mut exact, mut in_order) = (true, true);
@@ -1249,7 +1252,7 @@ fn verify<R: Rand>(shells: &[Shell<R>], script: &Script) -> Verified {
                     && idx < script.messages
                     && m.payload.as_slice() == payload(script, peer_dir, idx).as_slice()
                     && ids.insert(m.msg_id);
-                in_order &= u64::try_from(arrival).ok() == Some(idx);
+                in_order &= plan.get(arrival).map(|(i, _)| *i) == Some(idx);
             }
             (c.received().len(), exact, in_order)
         });

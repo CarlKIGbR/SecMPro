@@ -4404,8 +4404,15 @@ pub(crate) fn tor_invocation_findings(files: &[(String, String)]) -> Vec<String>
             continue;
         }
         for (n, line) in text.lines().enumerate() {
-            let transport_tor =
-                line.contains("--transport tor") || line.contains("\"--transport\", \"tor\"");
+            let transport_tor = line.contains("--transport tor")
+                || line.contains("--transport=tor")
+                || line.contains("\"--transport\", \"tor\"");
+            if line.contains("TransportArg::Tor") && !line.trim_start().starts_with("//") {
+                out.push(format!(
+                    "tor-invocation: {path}:{} names `TransportArg::Tor`",
+                    n.saturating_add(1)
+                ));
+            }
             let tor_dir = line.contains("--tor-dir");
             if (transport_tor && (tor_dir || is_ci)) || (is_ci && tor_dir) {
                 out.push(format!(
@@ -7064,6 +7071,13 @@ mod tests {
             planted("crates/a/tests/t.rs", "cargo run --example tor_smoke").len(),
             1
         );
+        // F-5 (verifier, C2-3b): the other spellings
+        assert_eq!(
+            planted("crates/a/tests/t.rs", "let t = TransportArg::Tor;").len(),
+            1
+        );
+        let equals = "args(\"--transport=tor --tor-dir d\")";
+        assert_eq!(planted("crates/a/tests/t.rs", equals).len(), 1);
         assert_eq!(
             planted(
                 ".github/workflows/ci.yml",

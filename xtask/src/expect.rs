@@ -635,6 +635,14 @@ pub(crate) const MUTANT_HARNESS_SKIP_TESTS: &[(&str, &str)] = &[
         "two_clients_exchange_script_mem",
         "TC-04, 100+100 messages of 1…65 535 B over mem, 10 s per mutant x mutant count: 10.5 s",
     ),
+    (
+        "active_hour_enqueues_ten_bursts_of_twenty",
+        "M-1, 2 h virtual with 2 x 320 messages: 34 s",
+    ),
+    (
+        "two_clients_profiles_are_in_memory",
+        "TC-02, two runs of the engine with a filesystem snapshot: 41 s",
+    ),
 ];
 
 /// WEISUNG M6-B-3 §1: the long, host-independent simulations the `kat` step leaves out when it runs on Windows

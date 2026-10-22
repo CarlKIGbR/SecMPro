@@ -953,6 +953,54 @@ fn two_clients_direct_tls_loopback() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// The times (ms) of the trace events `event` of `ordinal`.
+fn times_of(text: &str, event: &str, ordinal: u64) -> Vec<u64> {
+    text.lines()
+        .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
+        .filter(|v| word(v, "event") == event && num(v, "msg") == ordinal)
+        .map(|v| num(&v, "t_ms"))
+        .collect()
+}
+
+/// F-1 (verifier, C2-3b): a delivery pairs its own id — at most once, after the message was queued, and in the order of
+/// the queueing (the schedule by due time; the run's 7 500 s need not deliver all of an hour's 320 messages).
+fn deliveries_pair_their_ids(text: &str) {
+    for dir in 0..2_u64 {
+        let mut got: Vec<(u64, u64)> = Vec::new();
+        for ordinal in dir.saturating_mul(320)..dir.saturating_add(1).saturating_mul(320) {
+            let queued = times_of(text, "enqueue", ordinal);
+            let delivered = times_of(text, "deliver", ordinal);
+            assert_eq!(queued.len(), 1, "ordinal {ordinal}");
+            assert!(delivered.len() <= 1, "ordinal {ordinal} delivered twice");
+            if let (Some(d), Some(q)) = (delivered.first(), queued.first()) {
+                assert!(d >= q, "ordinal {ordinal} delivered before it was queued");
+                got.push((*d, *q));
+            }
+        }
+        assert!(got.len() >= 100, "client {dir}: {} deliveries", got.len());
+        got.sort_unstable();
+        assert!(
+            got.windows(2)
+                .all(|w| w.first().map(|a| a.1) <= w.get(1).map(|b| b.1)),
+            "client {dir}: deliveries out of the queueing order"
+        );
+    }
+}
+
+/// F-1: the steady messages (indices 0..120) are queued 30 s apart from the first.
+fn steady_messages_are_30_s_apart(text: &str, first: u64) {
+    for i in 0..120_u64 {
+        let t = times_of(text, "enqueue", i);
+        assert_eq!(t.len(), 1);
+        let at = t.first().copied().unwrap();
+        assert!(
+            at.abs_diff(first.saturating_add(i.saturating_mul(30_000))) <= 1_000,
+            "steady message {i} at {} ms",
+            at.saturating_sub(first)
+        );
+    }
+}
+
 /// M-1 (verifier, C2-3): the active hour of AI-07 queues its bursts. A script with an idle hour, 120 messages 30 s apart and
 /// 10 bursts of 20 — on a paused clock, 2 h of virtual time — shows, per client, the `enqueue` events of the active hour
 /// as the 120 steady messages at their 30 s times and 10 groups of 20 within 1 s each, 360 s apart from 180 s into the hour;
@@ -973,7 +1021,14 @@ fn active_hour_enqueues_ten_bursts_of_twenty() {
         trace.display()
     ));
     assert_eq!(run.code, 0, "{}", run.err);
+    // F-1 (verifier, C2-3b): the arrivals are matched to the due-time order of the script, not the index order
+    assert!(
+        run.line("result exact=true in_order=true").is_some(),
+        "{}",
+        run.out
+    );
     let text = std::fs::read_to_string(&trace).unwrap();
+    deliveries_pair_their_ids(&text);
     // the inviter's messages: ordinals 0..320
     let mut times: Vec<u64> = text
         .lines()
@@ -988,6 +1043,9 @@ fn active_hour_enqueues_ten_bursts_of_twenty() {
         times.iter().all(|t| *t < first + 3_600_000),
         "messages outside the active hour"
     );
+    // the idle hour: nothing is queued before its end, in absolute time (not only relative to the first message)
+    assert!(first >= 3_600_000, "first message at {first} ms");
+    steady_messages_are_30_s_apart(&text, first);
     // groups: messages within 1 s of the previous one
     let mut groups: Vec<Vec<u64>> = Vec::new();
     for t in &times {

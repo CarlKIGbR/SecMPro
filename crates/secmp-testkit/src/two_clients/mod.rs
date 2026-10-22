@@ -12,7 +12,7 @@
 //! `--relay-ref`, `--script`).
 //!
 //! Exit codes: 0 ok · 1 the run failed · 2 usage error · 3 the chosen transport is unavailable (no other transport is
-//! tried).
+//! tried) · 101 the engine panicked (the standard Rust panic code; a bug, never a result).
 
 pub mod cli;
 pub mod rand;

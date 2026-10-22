@@ -1686,3 +1686,97 @@ all steps PASS, `kat` 650 s (`target/tc/cifast-c21c.txt`).
 
 - **Decisions of the weisung recorded:** D-C2-1 branch (ii) accepted and the `tokio/test-util` question closed (§8); "xtask doc check" in
   the brief reads as `cargo nextest run -p xtask docs::` (to be noted in §9 at C2-5).
+
+### Resume after the credit stop (WEISUNG M6-C2-3b)
+
+Stock at the resume (`git status --short`, `git log --oneline ae79352..HEAD`, `git diff --stat`, `git stash list` empty): committed `3fb19db`
+(C2-1c code) and `d3ef9d4` (C2-1c report); edited and uncommitted: `conversation.rs` (the `kat` accessor `message_key_digests_kat`),
+`harness/mem.rs` (`MemRelay::serve`, `new_at`), `two_clients/run.rs` (World/Observer/`resume` hooks), `tests/harness/main.rs`, and the new
+`m6_sim.rs`, `m6_sim_restart.rs`. Per item of WEISUNG M6-C2-3: four minors, committed (`3fb19db`); C2-1c block, committed (`d3ef9d4`);
+C2-2: edited, not green (SIM-08/03/10 red on my own mistakes: a 10 000-line floor, and a re-creation window of 320 s; no wip commit
+was made; both finished to green below, nothing was reverted). Not amended or rebased.
+
+### C2-2 turmoil simulations (BRIEF M6-C2 §C2-2; WEISUNG M6-C2-3)
+
+**Rig** (`tests/harness/m6_sim.rs`, test code only; turmoil stays a dev-dependency): host `relay` = the M5 relay's sans-IO `Connection`
+driven by `MemRelay::serve` over simulated sockets (a restart of the host is a fresh store with the same keys); `TurmoilProvider` = a
+simulated TCP connect to `relay`; hosts `a` (inviter) and `b` (invitee) run the engine of `two-clients` (pool, scripted handshake, constant-rate
+links on the tokio driver) under turmoil's virtual clock; a `clock` client ends the simulation. **(E)** each client reports
+`delivered N/N` and `exact=true` (the received ids are the script's, once, with the script's payload; order is reported separately as
+`in_order`, because an evicted or lost message is re-sent after later ones). **(K)** SHA-256 of the message key of every cell each sender
+sealed under, counted once its new state is durable (H-12 method: `Sealed::message_key_digest_kat`, collected in
+`Conversation::message_key_digests_kat`, `secmp-client-core` feature `kat`; the accessor is in `scheduler/conversation.rs`, not in
+`scheduler/core`), pairwise distinct, and at least one key per message. `Outcome::assert_e_and_k` asserts both in every row.
+
+| Row | Test (`tests/harness/…`) | Wall | Mutants skip entry |
+|---|---|---|---|
+| SIM-08 | `m6_sim_restart::sim_replay_deterministic` | 20.5 s | yes (20 s) |
+| SIM-03 | `m6_sim_restart::sim_relay_restart_recovery` | 10.4 s | yes (10 s) |
+| SIM-10 | `m6_sim_restart::sim_balanced_relay_restart` | 12.4 s | yes (12 s) |
+| SIM-06 | `m6_sim_latency::sim_latency_does_not_move_emission` | 19.8 s | yes (19 s) |
+| SIM-01 | `m6_sim_faults::sim_loss_breaks_links_eventual_delivery` | 9.3 s | yes (9 s) |
+| SIM-02 | `m6_sim_faults::sim_partition_heals` | 59.8 s | yes (60 s) |
+| SIM-04 | `m6_sim_faults::sim_both_clients_restart` | 10.0 s | yes (10 s) |
+| SIM-05 | `m6_sim_faults::sim_crash_between_persist_and_write` | 10.1 s | yes (10 s) |
+| SIM-09 | `m6_sim_faults::sim_hello_flood_backoff_recovery` | 13.7 s | yes (14 s) |
+| SIM-07 | not committed — **blocked**, below | — | — |
+
+Nine rows run in 59.8 s wall as a set (nextest, parallel; the longest is SIM-02 at 59.8 s, far from the 900 s per row / 20 min set limits).
+Commits: `b827d12` (rig, SIM-08, SIM-03, SIM-10 — one commit: the rig is dead code without them), `b11f2bd` (SIM-06 and engine hooks),
+`43dac59` (SIM-01, 02, 04, 05, 09). `ci-fast --strict` at `43dac59`: all steps PASS, `kat` 796 s (`target/tc/cifast-c22.txt`).
+
+How each row is read: SIM-08 compares the full JSON-lines traces (units and message events, > 1 000 lines per client) and reports of two
+SIM-03 runs. SIM-03/10 assert the relay holds exactly the conversation's two queues with the `rid`s they had, each first re-created within
+the window of the restart (reconnect `U[0,180 s]` + one period ≤ 80 s + `U[10 s, 300 s]` = 560 s; the first version of the window,
+320 s, was my error — measured 348 s), and one handshake per client. SIM-06 compares per scheduled link the C2R frame times relative to
+the link's first frame between latency 10…2 000 ms and 0 (equal over the common prefix of ≥ 100 frames; every gap is exactly 10 s; no
+`InFlight`); the first frame itself moves with the handshake. SIM-01: from 15 min, fail rate 0.01 and repair rate 0.5; ≥ 10 teardowns, and
+the next link connect follows each within 180 s (LR-02) / 3 600 s (LR-03, close before `RELAYINFO`). SIM-02: A ↔ relay partitioned
+1 800…3 600 s; the ids reported evicted to B equal `[head at partition, head at heal)` of the relay's queue (A fetched nothing, so the
+queue's head moved only by eviction; 128 kept). SIM-04: both hosts bounced at 1 h; each client's run resumes (no new invitation).
+SIM-05: A is bounced half a period after its latest frame: at the crash it had sealed ≥ 1 cell the relay never stored (the prepared one);
+at the end the surplus of sealed over stored is that number plus at most 2; no key reused. SIM-09: flood 8/s for 600 s from 30 min, a
+90 s partition of both clients at the flood start forces every honest link to connect again; ≤ 40 attempts per client in the flood and
+both scheduled links up by flood end + 3 660 s.
+
+**Red before green** (planted conditions; committed tests at `43dac59`, text as nextest printed it):
+
+| Row | Planted condition | `file:line` — assertion |
+|---|---|---|
+| SIM-08 | second run with another turmoil seed | `m6_sim_restart.rs:60:9` `assertion left == right failed: client 0: the traces of the two runs differ` |
+| SIM-03, SIM-10 | re-creation window narrowed to 100 s | `m6_sim_restart.rs:98:9` `queue [d7, 94, …] re-created 348010 ms after the restart: outside the window …` (SIM-10: 348970 ms) |
+| (K) in SIM-03 | the first digest dropped from the set | `m6_sim.rs:400:13` `assertion left == right failed: SIM-03: (K) inviter: a message key was used twice` |
+| SIM-06 | latency up to 12 s (round trip above `P`) | `m6_sim_latency.rs:73:9` `assertion left == right failed: client 0: the number of scheduled links` |
+| SIM-01 | bound set to 1 s | `m6_sim_faults.rs:71:17` `client 0: InFlight at 964950: the next connect 165475 ms later, bound 180000` |
+| SIM-02 | predicted range one id too long | `m6_sim_faults.rs:147:5` `assertion left == right failed: the evicted ids reported to B are not the ids the queue predicts` |
+| SIM-04 | client B not restarted | `m6_sim_faults.rs:177:9` `client 1 made a new invitation after the restart` |
+| SIM-05 | accepted surplus moved to lost + 3…9 | `m6_sim_faults.rs:280:5` `sealed 1064, stored 1062, lost at the crash 1: surplus 2` |
+| SIM-09 | attempts must be 0 | `m6_sim_faults.rs:337:9` `client 0: 7 connection attempts during the flood: no back-off` |
+
+(The first lines of the SIM-03/10 and SIM-08 rows in the earlier run of this session came from older file states and are replaced by
+these.) Mutants skip list: each slow test is on `MUTANT_HARNESS_SKIP_TESTS` with its time in the same commit as the test.
+
+**Engine hooks added for the simulations** (testkit only; `two-clients` unchanged on the command line): `MemRelay::serve`/`new_at`;
+`World::new` with an `Observer` (recorder, conversations, restart data, evicted ids, connects, scheduler events); `session`/`resume` public;
+the duration of an observed run counts from the host's start; `Driver::with_connect_timeout` is reachable (`WorldConfig`).
+
+**BLOCKED — SIM-07 `sim_slow_link_in_flight_teardown` (not committed; draft kept in `target/tc/sim_latency.full`).**
+The teardown part works as dictated: with one-way latency 25 s and `P` = 10 s every scheduled link writes exactly its first two ticks
+and is `TornDown(InFlight)` 30.0 s after `Up` (assertions passed), the next link is up within `U[0,180 s]` + the handshake. But **(E) cannot
+hold**: after 7.6 h virtual `delivered side=inviter 0/3`. Mechanism: a response needs one round trip of 50 s, a link lives 30 s, so no
+`FETCH` or `OK_SEND` answer is ever read; the sender never gets `OK_SEND`, the receiver never gets a cell, nothing is acknowledged.
+That is a property of §10.3 (two requests in flight, the third tick tears the link down), not an implementation bug, so (E) as written
+in the annex header contradicts SIM-07's own input. Two prerequisites of the row are also outside the defaults and were set per row:
+the relay's `HELLO`→`HS1` timeout (30 s, OPEN-M5-02) is shorter than a handshake over 25 s one way (75 s), and the driver's connect timeout
+(`CONNECT_TIMEOUT_MS` = 120 s) is shorter than TCP connect + handshake (150 s). **Question for the reviewer:** read (E) for SIM-07 as
+"no message is delivered twice and none is altered; (K) holds" (the row's own expectation), or give the row another latency/period? I did
+not weaken anything and continued with the rows that do not depend on it.
+
+**Finding (spec §10.4, found by a first version of SIM-09 that restarted the relay; not a committed row):** a message that was
+`Relayed` (stored by `OK_SEND`) at the moment the relay restarted is lost silently if the sender's links were down until the recipient had
+re-created the queue: the sender sees no `ERR_NOQUEUE` (no `RouteDead`), its outbox keeps the message `Relayed` and nothing re-sends it
+(invitee outbox after 4 h: 98 delivered, 2 relayed; the inviter received 99/100, message 29 missing; queue re-created 517 s after the
+restart, the sender's links up again only after the flood). §10.4 says such messages "are lost and re-sent from the outbox if not yet
+receipted", but only an `ERR_NOQUEUE` triggers it. Fix would be in the scheduler core/spec (e.g. re-send a relayed message that is not
+receipted after a bound) — **not done, core is the reviewer's**; entered in §7 as an open risk. The committed SIM-09 breaks the links
+with a partition instead of a restart.

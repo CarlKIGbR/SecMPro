@@ -1872,3 +1872,6 @@ accepted as a protocol gap** (OPEN-M6-C2-1, §7, OQ-19). The `ci-fast --strict` 
 
   (SIM-08 and SIM-04 are unchanged from the table of C2-2.) The earlier SIM-01 line "bound 180000" was a quote of a plant that did not
   change the bound; replaced by the row above.
+
+`ci-fast --strict` at the C2-2b head: all steps PASS (fmt, clippy, policy, deny, vet, audit, cooldown, nextest, doctest, hello), `kat` 716 s
+(`target/tc/cifast-c22b.txt`).

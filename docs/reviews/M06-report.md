@@ -1504,6 +1504,11 @@ Decision taken, branch **(ii)** of the weisung (item 1 needs a core API change; 
 the scheduler; deviation D-C2-1 in §5, M7 entry in §7, TC-03 in §3 marked accordingly. The reviewer decides on (ii) when reading the
 return block.
 
+- **CLOSED (WEISUNG M6-C2-3, reviewer 2026-10-22): `tokio/test-util` for the `two-clients` binary — no.** ADR-051 Am. 3 stands: the binary's
+  `mem` transport runs in real time, the tests drive the engine on a paused runtime (`main_in`). (Asked in §10, C2-1 finding 1.)
+- **CLOSED (same weisung): D-C2-1, branch (ii) accepted** — the handshake stays scripted outside the scheduler; the M7 entry in §7 stands.
+  No ADR (a test-row deviation, not a spec deviation).
+
 ## 9. Checklist before requesting review
 
 - [x] All Phase A rows evidenced above
@@ -1563,8 +1568,8 @@ Findings and decisions for the reviewer (none changes the spec; none is a deviat
    `tokio/test-util` (a non-default feature of a never-shipped crate) so the binary itself is virtual? Not done — it is outside ADR-051.
 2. **The handshake is scripted outside the scheduler.** The invitation, the three cells and the acceptance use one set-up connection per
    step; the first reply's `RouteUpdate` has no sender before M7, so the inviter's reply route travels in the invitation file next to the
-   URI (`invitation = …`, `route = …`; testkit-only). Everything after the handshake goes through the scheduler. These set-up links are
-   not part of `--trace-out` (the trace counts the driver's connections only).
+   URI (`invitation = …`, `route = …`; testkit-only). Everything after the handshake goes through the scheduler. The script's set-up links are
+   not part of `--trace-out`; the pool's links (the scheduler's control and fetch links of C2-1c) are.
 3. **CI time.** TC-05/TC-06 are real-time rows with real sockets, 520–619 s each; the `kat` step went from 336 s to 751 s wall on the
    container (they run next to the long simulations), `windows-native` runs them too (the relay binary is built with a nested
    `cargo build --locked --offline -p secmp-relay`). Not changed: no timeout, list or threshold was touched.
@@ -1645,3 +1650,39 @@ output `target/tc/cifast-c21b.txt`; the C2-1 head had `kat` 751 s, `target/tc/ci
   and are withdrawn.)
 - **Hygiene.** One number for the C2-1 `kat` step: 751 s (§10 item 3 now says so); `relay_bin()` note in §7. Groups TC-03 and TC-02 are
   one commit (`be2e21e`).
+
+### C2-1c (WEISUNG M6-C2-3; four minors of the reviewer's verification of `ae79352`)
+
+```
+PHASE: C2-1c  BRANCH: m06-transport  HEAD: 3fb19db  (code; the report commit follows)  BASE: 6300b653d0f1f176b7a31470910d5214fa87b9cc
+ROWS: implemented 8/30 · passing 8 · ⚙ open TC-07,TC-08   CI-LOCAL: ci-fast ok (kat 650 s) · ci-full n/a
+```
+
+Commit `3fb19db` `fix(two-clients): recorder residuals on drop, pool traffic traced, runtime counts (C2-1b minors)`; `ci-fast --strict` at it:
+all steps PASS, `kat` 650 s (`target/tc/cifast-c21c.txt`).
+
+- **F1-a.** `TracedStream` has a `Drop`: a stream dropped with a non-zero residual (c2r bytes written and not flushed, r2c bytes of a
+  request not complete) is an error entry, unless the stream is lenient or the run is sealed (`Recorder::seal`, called when the run's
+  loop ends, because the final shutdown drops streams on purpose). Every recorder error is also a message event
+  `{"event":"trace_error","msg":<ordinal>,"t_ms":…}` in the JSONL (the keys stay `event`, `msg`, `t_ms`; TC-09 allows the word). Test
+  `two_clients_trace_residual_on_drop_fails` (also: after `seal` a drop is not an error).
+- **F1-b — chosen: route the pool through the run's recorder** (pool traffic is in the trace like any other link). The pool's control and
+  fetch links have the same record and frame lengths, so TC-05's "after HS2 every unit is 4 352 B" holds (TC-05, TC-06 passed in
+  `kat`). Two consequences, both in `assert_frames_after_hs2`: a link the run ended during its handshake shows only a prefix of the
+  records (the check is a prefix check, then 4 352 B, and the run must show frames somewhere); the pool's streams are lenient on drop
+  (the pool driver is shut down on purpose, and the abort drops the streams after the call returns).
+- **F3-a.** The script's set-up links are `SetupLink`s that count `QUEUE_NEW` commands (`queue_new_commands`), and the step lines print
+  `queue_new_ops_since_fill` (the pool runner's `QueueNew` operations in `material.done` after the pool was full); the test asserts both
+  are 0 and the `.create_queue(` source grep is gone.
+- **F5-a.** TC-02 now runs both parts with a script of 3 + 3 one-cell messages: in process, 6 `enqueue` and 6 `deliver` events within the 600 s;
+  as a process (30 s real, too short for a delivery: links start up to 180 s in), a non-empty trace with 6 `enqueue` events.
+- **Red before green** (committed tests at `3fb19db`; planted condition, source restored afterwards):
+
+  | Test | Planted condition | `m6_two_clients.rs:line` — assertion as printed |
+  |---|---|---|
+  | `two_clients_trace_residual_on_drop_fails` | `Drop` reports nothing | `:836:31` `called Result::unwrap_err() on an Ok value: ()` |
+  | `two_clients_scripted_invitation_handshake` | the script sends a `QUEUE_NEW` over its set-up link | `:373:5` `assertion left == right failed` — left has `queue_new_commands=1`, right `queue_new_commands=0` |
+  | `two_clients_profiles_are_in_memory` | no `enqueue` events are recorded | `:267:5` `assertion left == right failed` (left 0, right 6) |
+
+- **Decisions of the weisung recorded:** D-C2-1 branch (ii) accepted and the `tokio/test-util` question closed (§8); "xtask doc check" in
+  the brief reads as `cargo nextest run -p xtask docs::` (to be noted in §9 at C2-5).

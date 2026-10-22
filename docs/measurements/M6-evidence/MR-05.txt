@@ -1,0 +1,6 @@
+machine: secmp-main (container on carlgpu4), 32 logical CPUs, Linux 7.0.0-34-generic, 2026-10-22
+code: aa3d29e plus the MR-05 test of the C2-4 commit (cargo nextest run -p secmp-testkit --features kat)
+prepare per slot (TR encrypt + persist + seal), 10 000 slots: median 315.0 µs, p99 441.5 µs, max 816.2 µs
+Strict: 1 h virtual in 1133 ms of wall time = 0.03 % of a core (rig incl. relay)
+Balanced: 1 h virtual in 1635 ms of wall time = 0.04 % of a core (rig incl. relay)
+Low-bw: 1 h virtual in 592 ms of wall time = 0.01 % of a core (rig incl. relay)

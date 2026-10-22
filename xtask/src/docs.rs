@@ -161,3 +161,135 @@ fn m06_report_acceptance_rows_are_named() -> Result<()> {
     }
     Ok(())
 }
+
+/// The `## ` headings the measurement report has, in order (MR-03).
+const M6_TRAFFIC_SECTIONS: [&str; 8] = [
+    "Method",
+    "Bandwidth",
+    "Tor overhead",
+    "Latency over Tor",
+    "CPU",
+    "Drain 1 h / 24 h",
+    "Recommendation (ADR-018)",
+    "Gaps",
+];
+
+/// Whether `s` contains a date `YYYY-MM-DD`.
+fn has_date(s: &str) -> bool {
+    s.as_bytes().windows(10).any(|w| {
+        w.iter().enumerate().all(|(i, b)| match i {
+            4 | 7 => *b == b'-',
+            _ => b.is_ascii_digit(),
+        })
+    })
+}
+
+/// MR-03: the findings of a measurement report — a missing or misplaced section, every line that says `not measured` without
+/// the reason and the date (`not measured — <reason>, YYYY-MM-DD`), and every line that marks an owner-operated number (⚙)
+/// without saying that it is not measured.
+fn traffic_report_findings(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let headings: Vec<&str> = text
+        .lines()
+        .filter_map(|l| l.strip_prefix("## "))
+        .map(str::trim)
+        .collect();
+    if headings != M6_TRAFFIC_SECTIONS {
+        out.push(format!(
+            "sections {headings:?}, expected {M6_TRAFFIC_SECTIONS:?}"
+        ));
+    }
+    for (n, line) in text.lines().enumerate() {
+        let n = n.saturating_add(1);
+        let says = line.contains("not measured");
+        if says && !(line.contains("not measured — ") && has_date(line)) {
+            out.push(format!("line {n}: `not measured` without reason and date"));
+        }
+        if line.contains('⚙') && !says {
+            out.push(format!("line {n}: an owner-operated number is present"));
+        }
+    }
+    out
+}
+
+/// MR-03 (`docs/07:126`): `docs/measurements/M6-traffic.md` has the eight sections in the order of the row, and every owner-operated
+/// number is not measured with a reason and a date. A missing section and a ⚙ value that is not marked are findings.
+#[test]
+fn m6_traffic_report_sections() -> Result<()> {
+    let report = read("docs/measurements/M6-traffic.md")?;
+    assert_eq!(traffic_report_findings(&report), Vec::<String>::new());
+    // planted: a section is missing
+    let no_cpu = report.replace("\n## CPU\n", "\n## Processor\n");
+    assert!(
+        traffic_report_findings(&no_cpu)
+            .iter()
+            .any(|f| f.starts_with("sections"))
+    );
+    // planted: an owner-operated value is invented, or loses its date
+    let invented = format!("{report}\n| MR-04 ⚙ | 6.9 % over Tor |\n");
+    assert_eq!(traffic_report_findings(&invented).len(), 1);
+    let undated = report.replace(
+        "not measured — owner-operated, two machines over real Tor, 2026-10-22",
+        "not measured — owner-operated",
+    );
+    assert!(!traffic_report_findings(&undated).is_empty());
+    Ok(())
+}
+
+/// MR-06 (ADR-018, [O-22]): the Recommendation section has a row for each of `PERIODS`, `T_BALANCED`, `T_LOWBW`, `F`, `F_M`,
+/// `P_POOL` with a measured cost and the §10.1 check, and says that ADR-018 stays proposed; ADR-018 itself is not accepted.
+#[test]
+fn recommendation_names_every_parameter() -> Result<()> {
+    let report = read("docs/measurements/M6-traffic.md")?;
+    let section = report
+        .split("\n## Recommendation (ADR-018)\n")
+        .nth(1)
+        .and_then(|s| s.split("\n## ").next())
+        .ok_or("no Recommendation section")?;
+    for parameter in ["PERIODS", "T_BALANCED", "T_LOWBW", "F", "F_M", "P_POOL"] {
+        let row = section
+            .lines()
+            .find(|l| l.starts_with(&format!("| `{parameter}` |")))
+            .ok_or_else(|| format!("no row for {parameter}"))?;
+        let plain = row.replace("\\|", "/");
+        let cells: Vec<&str> = plain.split('|').map(str::trim).collect();
+        // | name | value | cost | check | recommendation |
+        assert_eq!(cells.len(), 7, "{row}");
+        assert!(
+            cells.iter().skip(2).take(4).all(|c| !c.is_empty()),
+            "{row}: an empty cell"
+        );
+    }
+    assert!(section.contains("Proposed (owner decides after M6)"));
+    let adr = read("docs/08-decisions.md")?;
+    let adr018 = between(&adr, "### ADR-018 ", "### ADR-019 ")?;
+    assert!(adr018.contains("**Status.** Proposed (owner decides after M6)."));
+    assert!(!adr018.contains("Accepted"));
+    Ok(())
+}
+
+/// MR-07 ([O-03], ADR-051): the report gives the cold-bootstrap cost of Arti without `compression` — both numbers
+/// (`bootstrap_seconds=`, `bytes_down=`), or `not measured — <reason, date>` — and `tor_smoke` prints the line the number is read
+/// from.
+#[test]
+fn bootstrap_cost_measured() -> Result<()> {
+    let report = read("docs/measurements/M6-traffic.md")?;
+    let line = report
+        .lines()
+        .find(|l| l.contains("Cold bootstrap of Arti"))
+        .ok_or("no bootstrap line")?;
+    let numbers = |key: &str| {
+        line.split(key)
+            .nth(1)
+            .is_some_and(|t| t.starts_with(|c: char| c.is_ascii_digit()))
+    };
+    assert!(
+        (numbers("bootstrap_seconds=") && numbers("bytes_down="))
+            || (line.contains("not measured — ") && has_date(line)),
+        "{line}"
+    );
+    let example = read("crates/secmp-testkit/examples/tor_smoke.rs")?;
+    assert!(example.contains("MR07 bootstrap_seconds="));
+    assert!(example.contains("bytes_down="));
+    Ok(())
+}

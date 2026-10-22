@@ -9889,4 +9889,67 @@ mod tests {
             "{report}"
         );
     }
+
+    /// CT-00 (TEST-SPEC-M6 (j)): M6 adds no ct target. `expect::CT_TARGETS` is the list of the M5 close (BASE `6300b65`, 26 names,
+    /// compared with `git show 6300b65:xtask/src/expect.rs` on 2026-10-22); the ADR-042 Amendment 5 informative target is
+    /// not in it, and no name occurs twice.
+    #[test]
+    fn ct_targets_unchanged_in_m6() {
+        const M5: [&str; 26] = [
+            "control_variable_time_compare",
+            "tag_compare",
+            "msg_open_reject",
+            "caead_open_reject",
+            "sas",
+            "caead_derive",
+            "caead_aead_reject",
+            "caead_com_compare",
+            "caead_open_reject_samekey",
+            "aa_prime_control",
+            "tr_decrypt_reject_hdr_key",
+            "tr_decrypt_reject_body_tag",
+            "tr_decrypt_reject_ct_pq",
+            "tr_decrypt_reject_skipped",
+            "same_content_control",
+            "inv_fingerprint_compare",
+            "x25519_zero_check",
+            "hx_accept_reject_inner",
+            "hx_accept_reject_first_msg",
+            "hx_same_content_control",
+            "link_hs1_reject_mac1",
+            "link_hs2_reject_mac2",
+            "link_frame_open_reject",
+            "q_queue_new_reject_token",
+            "tr_decrypt_trial_open_position",
+            "link_same_content_control",
+        ];
+        assert_eq!(expect::CT_TARGETS, M5.as_slice());
+        let unique: std::collections::BTreeSet<&&str> = expect::CT_TARGETS.iter().collect();
+        assert_eq!(unique.len(), expect::CT_TARGETS.len());
+        for informative in expect::CT_INFORMATIVE_TARGETS {
+            assert!(
+                !expect::CT_TARGETS.contains(informative),
+                "{informative} is informative"
+            );
+        }
+    }
+
+    /// PV-01 (TEST-SPEC-M6 (j)): M6 changes no ProVerif model. The digest over the `(path, SHA-256)` pairs of
+    /// `expect::PROVERIF_MODEL_SHA256` (`path NUL hash LF` each) is the one of the M5 close (BASE `6300b65`, 31 models); the
+    /// table is checked against the files by `proverif_model_hashes_are_pinned`.
+    #[test]
+    fn proverif_models_unchanged_in_m6() {
+        let mut table = Vec::new();
+        for (path, hash) in expect::PROVERIF_MODEL_SHA256 {
+            table.extend_from_slice(path.as_bytes());
+            table.push(0);
+            table.extend_from_slice(hash.as_bytes());
+            table.push(b'\n');
+        }
+        assert_eq!(expect::PROVERIF_MODEL_SHA256.len(), 31);
+        assert_eq!(
+            crate::sha256::hex(&table),
+            "f52a8b74397b8dced6aca1af3ee7aac003eec08775a17900f3578536331e209b"
+        );
+    }
 }

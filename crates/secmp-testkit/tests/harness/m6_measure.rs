@@ -441,3 +441,78 @@ fn drain_after_offline_virtual() {
     assert!(d.ticks <= 153, "Low-bw: {} slots", d.ticks);
     evidence("MR-02", &lines.join("\n"));
 }
+
+/// The `permille`-quantile of sorted figures.
+fn quantile(sorted: &[u64], permille: usize) -> u64 {
+    let idx = sorted.len().saturating_sub(1).saturating_mul(permille) / 1000;
+    sorted.get(idx).copied().unwrap_or(0)
+}
+
+/// Nanoseconds as microseconds with one decimal.
+fn micros(ns: u64) -> String {
+    format!("{:.1} µs", as_f64(ns) / 1000.0)
+}
+
+/// MR-05 (dev-host part): the cost of preparing one cell — TR encrypt, persist, seal; the real and the dummy cell take the
+/// same path — over 10 000 slots, and the share of a core the scheduler takes per mode over one hour of virtual time (the
+/// wall time of the single-threaded run of the whole rig, relay and transports included, so an upper bound of the client's
+/// own share). The M3 bound is 3 ms per encrypt + decrypt; the prepare must stay below it at p99.
+#[test]
+fn cpu_per_slot_measured() {
+    use std::time::Instant;
+    let (mut convs, a, _b) = crate::m6_outbox::pair(5);
+    let mut ns: Vec<u64> = Vec::with_capacity(10_000);
+    for i in 0..10_000_u32 {
+        let conv = convs.get_mut(a).unwrap();
+        // every second slot carries a real message, the others a dummy
+        if i % 2 == 0 {
+            let tag = u8::try_from(i % 250).unwrap();
+            conv.outbox_mut()
+                .enqueue(crate::m6_outbox::text(tag, 200), 0);
+        }
+        let start = Instant::now();
+        let prepared = conv.prepare_direct(0).unwrap();
+        ns.push(u64::try_from(start.elapsed().as_nanos()).unwrap());
+        std::hint::black_box(&prepared);
+    }
+    ns.sort_unstable();
+    let (median, p99, max) = (
+        quantile(&ns, 500),
+        quantile(&ns, 990),
+        ns.last().copied().unwrap(),
+    );
+    let mut lines = vec![format!(
+        "prepare per slot (TR encrypt + persist + seal), 10 000 slots: median {}, p99 {}, max {}",
+        micros(median),
+        micros(p99),
+        micros(max)
+    )];
+    assert!(p99 < 3_000_000, "p99 {p99} ns");
+    // one virtual hour per mode
+    let cases = [
+        ("Strict", Mode::Strict, vec![(10_000, 10_000)]),
+        ("Balanced", Mode::Balanced, vec![(10_000, 10_000); 4]),
+        ("Low-bw", Mode::LowBw, vec![(40_000, 40_000); 5]),
+    ];
+    for (name, mode, contacts) in cases {
+        let sc = Scenario {
+            mode,
+            contacts,
+            pool: true,
+            seed: 0x5a00,
+        };
+        let mut rig = Rig::new(&sc, Params::default());
+        let start = Instant::now();
+        rig.run(1, None);
+        let wall_ms = u64::try_from(start.elapsed().as_millis()).unwrap();
+        // percent of a core over the 3 600 000 ms of the hour, in hundredths of a percent
+        let centi = wall_ms.saturating_mul(10_000) / 3_600_000;
+        lines.push(format!(
+            "{name}: 1 h virtual in {wall_ms} ms of wall time = {}.{:02} % of a core (rig incl. relay)",
+            centi / 100,
+            centi % 100
+        ));
+        assert!(centi < 10_000, "{name}: {centi} hundredths of a percent");
+    }
+    evidence("MR-05", &lines.join("\n"));
+}

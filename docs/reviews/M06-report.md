@@ -2074,4 +2074,13 @@ the current lock), and the embedded package count of `cargo audit --json bin` ag
 name-level comparison needs the `.dep-v0` section decoded (zlib) — an inflate implementation or a crate (`auditable-info`/`miniz_oxide`) → a new dependency, so M7 with an ADR (per the brief).
 `cargo xtask sbom` after the change: PASS in 20 s here, three binaries read back from `target/sbom-build/release/`.
 
+**MR-05 and the shared machine (found by `ci-fast --strict`, 4 failed runs, then green).** `cpu_per_slot_measured` failed in the `kat` step of `ci-fast --strict` three times with
+p99 3.6 ms, 3.7 ms (best of three rounds) and 12.5 ms (best of twelve) — the wall time of one call on a machine that runs 27 other tests is the scheduler's, not the code's (alone: p99 0.33–0.36 ms).
+A fourth attempt found that the first `.config/nextest.toml` override matched nothing (`test(=name)` is the exact module-qualified name). Final form: the test repeats the round of 10 000 slots, up to 12 times,
+until one is below the bound (a real cost above it fails every round; the evidence lists every round) **and** `.config/nextest.toml` has one override, `threads-required = "num-test-threads"` for
+`test(cpu_per_slot_measured)`, so nextest runs it alone. `ci-fast --strict` then ran green (below). **Decision for the reviewer:** `.config/nextest.toml` is a new tooling file (no lint or gate relaxed);
+accept it by an ADR line (ADR-047/ADR-052 style) or ask for another form (e.g. a dedicated step like `perf`).
+
+**`ci-fast --strict` at HEAD** (`docs/reviews/M06-evidence/ci-fast-m6c27-summary.txt`): fmt, clippy, policy, deny, vet, audit, cooldown, nextest, doctest, hello, kat all PASS (`kat` 1 045 s); `ci-fast: PASS`.
+
 **Hygiene.** `target/` holds a few helper files of this session (`target/diag-*`, `*.py`, `*.bak`); none is tracked.

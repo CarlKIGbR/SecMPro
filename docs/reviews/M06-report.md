@@ -2123,3 +2123,12 @@ Low-bw 585 ms = 0.01 % of a core (`docs/measurements/M6-evidence/MR-05.txt`, whi
 - `cpu_per_slot_measured` stays on Windows (no `WINDOWS_SKIP_TESTS` entry); §3 row M6-D6 notes that the 3 ms bound has not yet been seen on that runner.
 
 **5 · `ci-fast --strict` at HEAD** (`docs/reviews/M06-evidence/ci-fast-m6c28-summary.txt`): fmt, clippy, policy, deny, vet, audit, cooldown, nextest, doctest, hello PASS; `kat` PASS 891 s; `ci-fast: PASS`.
+
+### C2-9 (WEISUNG M6-C2-9)
+
+**1 · `linux-fast` #178 (`0b66dfa`).** `sbom: secmp-relay embeds 78 packages, fewer than the 79 of its closure` — diagnosis, the removed lower bound and what stays are in §7 OPEN-M6-C1-3. Added beyond the WEISUNG: the
+foreign relay of the C2-7 diagnosis reports a count of 4, not 0, so "count > 0" alone would accept it; the step now captures `cargo audit`'s stderr and fails on `not built with 'cargo auditable'` as well. Tests
+`unaudited_binary_fails` (red `sbom.rs:194:9`), `embedded_count_above_lock_fails` (red `sbom.rs:208:9`), `embedded_count_within_lock_passes`. `cargo xtask step --strict sbom`: PASS 13 s.
+**2 · C2-4b nits.** `start_relay` waits up to ~100 ms for the child's exit before reading the status; keygen and config use `KEY_FILE`; `large_file_gate_is_clean_on_this_tree` uses `ls-files -z` + `nul_separated`;
+the #177 quote is re-read from the log (§10 C2-8 item 1, lines 4237–4238) and the CRLF fix is named `ba40754`.
+**3 · `ci-fast --strict`** (`docs/reviews/M06-evidence/ci-fast-m6c29-summary.txt`): all steps PASS, `kat` 1 028 s, `ci-fast: PASS`.

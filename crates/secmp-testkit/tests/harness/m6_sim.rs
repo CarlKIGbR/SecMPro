@@ -372,22 +372,23 @@ impl Outcome {
             .0
     }
 
-    /// (E) every real message enqueued was delivered to the application exactly once (each client received all of the
-    /// script's messages, the received payloads and ids are the script's, in order, once each) and (K) the message keys
-    /// of each sender are pairwise distinct (H-12: SHA-256 of the key of every cell it sealed), with at least one key
-    /// per message — the check is not vacuous.
-    pub fn assert_e_and_k(&self, what: &str) {
-        let n = self.script.messages;
+    /// No message was delivered twice or altered: everything each client received is one of the script's messages, once,
+    /// with the script's payload (the engine's `exact`).
+    pub fn assert_exact(&self, what: &str) {
         for (idx, side) in ["inviter", "invitee"].into_iter().enumerate() {
             let report = self.report(idx);
             assert!(
-                report.contains(&format!("delivered side={side} {n}/{n}")),
-                "{what}: (E) {side}: not every message was delivered:\n{report}"
-            );
-            assert!(
                 report.contains("result exact=true"),
-                "{what}: (E) {side}: a message was lost, duplicated or altered:\n{report}"
+                "{what}: (E) {side}: a message was duplicated or altered:\n{report}"
             );
+        }
+    }
+
+    /// (K) the message keys of each sender are pairwise distinct (H-12: SHA-256 of the key of every cell it sealed), with
+    /// at least one key per message — the check is not vacuous.
+    pub fn assert_k(&self, what: &str) {
+        let n = self.script.messages;
+        for (idx, side) in ["inviter", "invitee"].into_iter().enumerate() {
             let convs = self.convs(idx);
             let guard = convs.lock().unwrap();
             let digests = guard.get(0).unwrap().message_key_digests_kat();
@@ -403,6 +404,21 @@ impl Outcome {
                 "{what}: (K) {side}: a message key was used twice"
             );
         }
+    }
+
+    /// (E) every real message enqueued was delivered to the application exactly once — each client received all of the
+    /// script's messages ([`Outcome::assert_exact`]) — and (K) ([`Outcome::assert_k`]).
+    pub fn assert_e_and_k(&self, what: &str) {
+        let n = self.script.messages;
+        for (idx, side) in ["inviter", "invitee"].into_iter().enumerate() {
+            let report = self.report(idx);
+            assert!(
+                report.contains(&format!("delivered side={side} {n}/{n}")),
+                "{what}: (E) {side}: not every message was delivered:\n{report}"
+            );
+        }
+        self.assert_exact(what);
+        self.assert_k(what);
     }
 }
 

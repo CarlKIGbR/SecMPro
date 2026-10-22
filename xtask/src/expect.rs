@@ -641,7 +641,7 @@ pub(crate) const MUTANT_HARNESS_SKIP_TESTS: &[(&str, &str)] = &[
     ),
     (
         "cpu_per_slot_measured",
-        "MR-05, 3 x 10 000 slots and 1 h virtual per mode: 14 s",
+        "MR-05, 10 000 slots (repeated until quiet) and 1 h virtual per mode: 8 s alone, up to 60 s under load",
     ),
     (
         "two_clients_profiles_are_in_memory",

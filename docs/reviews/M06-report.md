@@ -1238,6 +1238,11 @@ required job (`ct`, `mutants`, `proverif-hx`) is not green.
   `cargo build --locked --offline -p secmp-relay` — in a release test run it rewrites `target/release/secmp-relay`, the very path
   `cargo xtask sbom` reads back with `cargo audit bin`; a stale or foreign binary there is one candidate mechanism for OPEN-M6-C1-3.
 
+- **Open risk (found in C2-2, spec §10.4): a `Relayed` message lost at a relay restart is not re-sent if the sender never sees
+  `ERR_NOQUEUE`.** If the sender's links are down until the recipient has re-created the queue, nothing marks the message lost; it stays
+  `Relayed` and unreceipted. Evidence and mechanism in §10 ("Finding (spec §10.4)"). Needs a decision on the scheduler/spec side
+  (re-send after a bound, or a receipt timeout); no change made.
+
 ## 8. Blocked / questions for the reviewer or owner
 
 ### Mutants shard time (BRIEF M6-C1 item 9, MU-C2) — decided: ADR-047 Amendment 7 (Accepted, 12 shards)

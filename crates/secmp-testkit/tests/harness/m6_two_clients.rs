@@ -551,6 +551,27 @@ impl Drop for RelayProcess {
     }
 }
 
+/// The relay's configuration: `tor_loopback` on an ephemeral port and `key_file` as written (a path relative to the
+/// directory the relay starts in: the parser takes no backslash, `secmp-relay/src/config.rs`).
+fn relay_config(key_file: &str) -> String {
+    format!("[listen]\ntor_loopback = \"127.0.0.1:0\"\n[access]\nkey_file = \"{key_file}\"\n")
+}
+
+/// The key file as the configuration names it: relative to the directory the relay is started in.
+const KEY_FILE: &str = "relay.keys";
+
+/// Windows run #177: `key_file = "C:\\t\\x\\relay.keys"` (from `Path::display`) is refused by the parser and the relay exits before it
+/// binds. The value this harness writes parses; the absolute form of a Windows directory does not.
+#[test]
+fn relay_config_parses_with_a_windows_style_dir() {
+    let absolute = Path::new(r"C:\t\x").join(KEY_FILE);
+    let old = relay_config(&absolute.display().to_string());
+    assert!(secmp_relay::config::Config::parse(&old).is_err(), "{old}");
+    let text = relay_config(KEY_FILE);
+    let parsed = secmp_relay::config::Config::parse(&text);
+    assert!(parsed.is_ok(), "{text}");
+}
+
 /// Start the relay binary in `dir`: `keygen`, a configuration with `tor_loopback = "127.0.0.1:0"`, the port it reports in
 /// its `listener_bound` line; the relay reference file for the clients.
 fn start_relay(dir: &Path) -> (RelayProcess, PathBuf) {
@@ -573,17 +594,12 @@ fn start_relay(dir: &Path) -> (RelayProcess, PathBuf) {
     let file = std::fs::read(&keys).unwrap();
     let access = secmp_crypto::SecretBytes::<32>::from_slice(file.get(41..73).unwrap()).unwrap();
     let config = dir.join("relay.toml");
-    std::fs::write(
-        &config,
-        format!(
-            "[listen]\ntor_loopback = \"127.0.0.1:0\"\n[access]\nkey_file = \"{}\"\n",
-            keys.display()
-        ),
-    )
-    .unwrap();
+    std::fs::write(&config, relay_config(KEY_FILE)).unwrap();
+    // the config parser takes no `\\` in a string (`secmp-relay/src/config.rs`), so every path in it is relative to `dir`
     let mut child = Command::new(&bin)
+        .current_dir(dir)
         .arg("--config")
-        .arg(&config)
+        .arg("relay.toml")
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
@@ -591,6 +607,8 @@ fn start_relay(dir: &Path) -> (RelayProcess, PathBuf) {
     let stderr = child.stderr.take().unwrap();
     let relay = RelayProcess { child };
     let (tx, rx) = std::sync::mpsc::channel();
+    let lines = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let collected = std::sync::Arc::clone(&lines);
     std::thread::spawn(move || {
         // keep draining: a relay whose stderr pipe fills would block
         for line in std::io::BufReader::new(stderr)
@@ -600,11 +618,22 @@ fn start_relay(dir: &Path) -> (RelayProcess, PathBuf) {
             if let Some(addr) = line.split("listener_bound ").nth(1) {
                 let _ = tx.send(addr.trim().to_owned());
             }
+            collected.lock().unwrap().push(line);
         }
     });
-    let addr = rx
-        .recv_timeout(std::time::Duration::from_secs(60))
-        .expect("the relay reported no listener");
+    let heard = rx.recv_timeout(std::time::Duration::from_secs(60));
+    if heard.is_err() {
+        // the relay writes no key material to stderr (`main.rs`: `secmp-relay: <why>`, the `listener_bound` line)
+        let mut relay = relay;
+        let status = relay.child.try_wait();
+        assert!(
+            heard.is_ok(),
+            "the relay reported no listener: {heard:?}; exit status {status:?}; stderr:\n{}",
+            lines.lock().unwrap().join("\n")
+        );
+        return (relay, PathBuf::new());
+    }
+    let addr = heard.unwrap();
     let port: u16 = addr.rsplit(':').next().unwrap().parse().unwrap();
     let relay_fp: [u8; 32] = fp_hex
         .as_bytes()

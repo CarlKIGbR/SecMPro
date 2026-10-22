@@ -64,18 +64,6 @@ fn lock_packages(lock: &str) -> u64 {
         .unwrap_or(u64::MAX)
 }
 
-/// The number of distinct packages of a `cargo tree --prefix none --format "{p}"` listing (the repeat marker and the
-/// proc-macro marker are not part of the package).
-fn closure_count(tree: &str) -> u64 {
-    let mut seen = std::collections::BTreeSet::new();
-    for line in tree.lines() {
-        let l = line.trim_end().trim_end_matches(" (*)");
-        seen.insert(l.replace(" (proc-macro)", ""));
-    }
-    seen.remove("");
-    seen.len().try_into().unwrap_or(u64::MAX)
-}
-
 /// The `dependency-count` of `cargo audit --json bin` (the only per-binary figure that report carries: the package
 /// names are not in it).
 fn embedded_count(report: &str) -> Result<u64> {
@@ -87,19 +75,21 @@ fn embedded_count(report: &str) -> Result<u64> {
         .ok_or_else(|| Error("`cargo audit --json bin`: no lockfile.dependency-count".to_owned()))
 }
 
-/// The embedded dependency list of `bin` against the lock: at least the packages of the lock's closure of the binary
-/// (`embedded < closure`: the binary was not built with `cargo auditable`, `cargo audit` then recovers a handful of
-/// names from panic messages, or it is a stale or foreign binary) and at most the packages of the lock.
+/// The embedded dependency list of `bin`: built with `cargo auditable` (`unaudited`: `cargo audit` said it was not, or the
+/// list is empty — it then recovers a handful of names from panic messages) and no longer than `Cargo.lock`
+/// (`embedded > locked`). A lower bound from a locally computed closure is platform- and resolver-dependent (run #178:
+/// 78 embedded against 79 by `cargo tree` on the runner) and is not checked; names and versions need the `.dep-v0` section
+/// (M7, ADR).
 pub(crate) fn embedded_findings(
     bin: &str,
     embedded: u64,
-    closure: u64,
     locked: u64,
+    unaudited: bool,
 ) -> Vec<String> {
     let mut out = Vec::new();
-    if embedded < closure {
+    if unaudited || embedded == 0 {
         out.push(format!(
-            "sbom: {bin} embeds {embedded} packages, fewer than the {closure} of its closure in Cargo.lock (not built with cargo auditable, stale or foreign binary)"
+            "sbom: {bin} was not built with cargo auditable ({embedded} packages recovered)"
         ));
     }
     if embedded > locked {
@@ -170,17 +160,16 @@ pub(crate) fn run(root: &Path) -> Result<String> {
         let exe = target_dir
             .join("release")
             .join(format!("{bin}{}", std::env::consts::EXE_SUFFIX));
-        let report = Cmd::cargo()
+        let audit = Cmd::cargo()
             .args(["audit", "--deny", "warnings", "--json", "bin"])
             .arg(exe.to_string_lossy())
-            .read()?;
-        let embedded = embedded_count(&report)?;
-        let tree = Cmd::cargo()
-            .args(["tree", "--package", bin, "--edges", "normal,build"])
-            .args(["--prefix", "none", "--locked", "--format", "{p}"])
-            .dir(root)
-            .read()?;
-        let found = embedded_findings(bin, embedded, closure_count(&tree), locked);
+            .capture()?;
+        if !audit.success {
+            bail!("cargo audit bin {bin}: {}", audit.stderr.trim());
+        }
+        let embedded = embedded_count(&audit.stdout)?;
+        let unaudited = audit.stderr.contains("not built with 'cargo auditable'");
+        let found = embedded_findings(bin, embedded, locked, unaudited);
         if !found.is_empty() {
             bail!("{}", found.join("; "));
         }
@@ -198,29 +187,38 @@ mod tests {
     use super::*;
 
     /// OPEN-M6-C1-3: a binary of the nested plain `cargo build --release -p secmp-relay` carries no audit data; `cargo audit
-    /// bin` recovered 4 packages from it (container, 2026-10-22) and exited 0. The embedded list is shorter than the lock's
-    /// closure (57 packages for the relay) and the step fails.
+    /// bin` recovered 4 packages from it (container, 2026-10-22), said so on stderr and exited 0. Both signs are findings.
     #[test]
-    fn stale_embedded_package_fails() {
-        let found = embedded_findings("secmp-relay", 4, 57, 190);
+    fn unaudited_binary_fails() {
+        let found = embedded_findings("secmp-relay", 4, 190, true);
         assert_eq!(found.len(), 1, "{found:?}");
-        assert!(found.iter().all(|f| f.contains("secmp-relay embeds 4")));
-        // more than the lock has is a finding too
-        assert_eq!(embedded_findings("secmp-relay", 191, 57, 190).len(), 1);
+        assert!(
+            found
+                .iter()
+                .all(|f| f.contains("not built with cargo auditable"))
+        );
+        let empty = embedded_findings("secmp-relay", 0, 190, false);
+        assert_eq!(empty.len(), 1, "{empty:?}");
     }
 
-    /// The auditable relay of the same tree embeds 78 packages, between its closure (57) and the lock; the parsers read the
-    /// figures of the real outputs.
+    /// An embedded count above the packages of `Cargo.lock` is a finding (a list that does not belong to this lock).
     #[test]
-    fn embedded_packages_match_lock_passes() {
-        assert!(embedded_findings("secmp-relay", 78, 57, 190).is_empty());
+    fn embedded_count_above_lock_fails() {
+        let found = embedded_findings("secmp-relay", 191, 190, false);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found.iter().all(|f| f.contains("more than the 190")));
+    }
+
+    /// The auditable relay embeds 78 packages, within (0, lock]; the parsers read the figures of the real outputs.
+    #[test]
+    fn embedded_count_within_lock_passes() {
+        assert!(embedded_findings("secmp-relay", 78, 190, false).is_empty());
+        assert!(embedded_findings("secmp-relay", 190, 190, false).is_empty());
         let report = r#"{"lockfile":{"dependency-count":78},"vulnerabilities":{"found":false}}"#;
         assert_eq!(embedded_count(report).ok(), Some(78));
         assert!(embedded_count("not json").is_err());
         let lock = "[[package]]\nname = \"a\"\n\n[[package]]\nname = \"b\"\n";
         assert_eq!(lock_packages(lock), 2);
-        let tree = "secmp-relay v0.0.0 (/x)\nserde v1.0.0\nserde v1.0.0 (*)\nsyn v2.0.0 (proc-macro)\nsyn v2.0.0\n";
-        assert_eq!(closure_count(tree), 3);
     }
 
     #[test]

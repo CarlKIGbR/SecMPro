@@ -213,6 +213,9 @@ fn check(cli: &Cli) -> Result<(), CliError> {
 /// size_max = 65535
 /// seed = 7
 /// interval_s = 60       # one message every 60 s (default 0: all at the start)
+/// start_s = 3600        # nothing is queued before this many seconds (default 0)
+/// bursts = 10           # of `messages`, the last `bursts × burst_size` come in bursts, one every 360 s from start_s + 180 s
+/// burst_size = 20
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Script {
@@ -226,6 +229,12 @@ pub struct Script {
     pub seed: u64,
     /// Seconds between two messages of one client (0: all are queued at the start).
     pub interval_s: u64,
+    /// Seconds of silence before the first message (an idle period).
+    pub start_s: u64,
+    /// Bursts among the `messages` (0: none).
+    pub bursts: u64,
+    /// Messages per burst.
+    pub burst_size: u64,
 }
 
 impl Default for Script {
@@ -237,6 +246,9 @@ impl Default for Script {
             size_max: 65_535,
             seed: 1,
             interval_s: 0,
+            start_s: 0,
+            bursts: 0,
+            burst_size: 20,
         }
     }
 }
@@ -245,6 +257,25 @@ impl Default for Script {
 pub const MAX_PAYLOAD: u64 = 65_535;
 
 impl Script {
+    /// When message `i` of a client is queued, in milliseconds after the start of the conversation: the steady messages at
+    /// `start_s + i × interval_s`, then the bursts (`burst_size` messages at once), one every 360 s from `start_s + 180 s`.
+    #[must_use]
+    pub fn enqueue_at_ms(&self, i: u64) -> u64 {
+        let in_bursts = self.bursts.saturating_mul(self.burst_size);
+        let steady = self.messages.saturating_sub(in_bursts);
+        let start = self.start_s.saturating_mul(1000);
+        if i < steady || self.burst_size == 0 {
+            return start.saturating_add(i.saturating_mul(self.interval_s.saturating_mul(1000)));
+        }
+        let burst = i
+            .saturating_sub(steady)
+            .checked_div(self.burst_size)
+            .unwrap_or(0);
+        start
+            .saturating_add(180_000)
+            .saturating_add(burst.saturating_mul(360_000))
+    }
+
     /// Parse a script file's text.
     ///
     /// # Errors
@@ -274,6 +305,9 @@ impl Script {
                 "size_max" => s.size_max = n,
                 "seed" => s.seed = n,
                 "interval_s" => s.interval_s = n,
+                "start_s" => s.start_s = n,
+                "bursts" => s.bursts = n,
+                "burst_size" => s.burst_size = n,
                 other => return Err(format!("unknown script key {other}")),
             }
             seen.push(key.to_owned());

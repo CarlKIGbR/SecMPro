@@ -4277,6 +4277,51 @@ fn job_conditions(text: &str) -> Vec<(String, Option<String>)> {
         .collect()
 }
 
+/// The optional dispatch jobs (TEST-SPEC-M6 X-07, [O-20] [O-21]): `tor-smoke` (real Tor, MR-07, TOR-10) and `ks-hour` (the 2 h
+/// run of AI-07). Findings: one of them is missing from `ci-dispatch.yml` or declared twice, it is run by the dispatch
+/// suite `all`, its name is a required check or a job of `ci.yml`, or `ci.yml` (whose jobs are the required checks and
+/// the jobs they delegate to) names either job or starts one of their programs (`tor_smoke`, `ks_hour`) — the only things
+/// of the repository that open a socket to a host other than the loopback.
+pub(crate) fn optional_job_findings(ci: &str, dispatch: &str) -> Vec<String> {
+    const OPTIONAL: [&str; 2] = ["tor-smoke", "ks-hour"];
+    let mut out = Vec::new();
+    let in_dispatch = job_names(dispatch);
+    let in_ci = job_names(ci);
+    let conditions = job_conditions(dispatch);
+    for job in OPTIONAL {
+        let n = in_dispatch.iter().filter(|j| *j == job).count();
+        if n != 1 {
+            out.push(format!(
+                "optional-jobs: `{job}` is declared {n} times in ci-dispatch.yml, not once"
+            ));
+        }
+        if expect::REQUIRED_JOBS.contains(&job) || in_ci.iter().any(|j| j == job) {
+            out.push(format!(
+                "optional-jobs: `{job}` is a required check or a job of ci.yml"
+            ));
+        }
+        let cond = conditions
+            .iter()
+            .find(|(id, _)| id == job)
+            .and_then(|(_, c)| c.clone())
+            .unwrap_or_default();
+        if cond.trim() != format!("inputs.suite == '{job}'") {
+            out.push(format!(
+                "optional-jobs: `{job}` runs under `{cond}`, not only under its own suite"
+            ));
+        }
+        if ci.contains(job) {
+            out.push(format!("optional-jobs: ci.yml names `{job}`"));
+        }
+    }
+    for program in ["tor_smoke", "ks_hour"] {
+        if ci.contains(program) {
+            out.push(format!("optional-jobs: ci.yml starts `{program}`"));
+        }
+    }
+    out
+}
+
 fn sorted(items: &[String]) -> Vec<String> {
     let mut v = items.to_vec();
     v.sort();
@@ -4544,6 +4589,17 @@ fn workflows(root: &Path) -> Result<String> {
         texts.push((rel(root, f), text));
     }
     findings.extend(required_job_findings(&texts));
+    let text_of = |name: &str| {
+        texts
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, t)| t.as_str())
+            .unwrap_or_default()
+    };
+    findings.extend(optional_job_findings(
+        text_of(expect::REQUIRED_WORKFLOW),
+        text_of(".github/workflows/ci-dispatch.yml"),
+    ));
     findings.extend(delegation_findings(
         expect::REQUIRED_GATE_RUNS,
         expect::DELEGATED_TO,
@@ -6742,6 +6798,63 @@ mod tests {
             expect::REQUIRED_WORKFLOW.to_owned(),
             format!("{head}{}", edit(verdict)),
         )]
+    }
+
+    /// TEST-SPEC-M6 X-07 `optional_jobs_are_not_required` [O-20][O-21]: `tor-smoke` and `ks-hour` exist only in
+    /// `ci-dispatch.yml`, once each, under their own suite only (never in `all`); `REQUIRED_JOBS` is unchanged against the C1
+    /// head (re-dictated: the five names including `ci-verdict`, ADR-045 Amendment 2); `ci.yml` — the required checks and what
+    /// they delegate to — names neither job and starts neither program, so no required job reaches a host beyond the
+    /// loopback. Planted variants are findings.
+    #[test]
+    fn optional_jobs_are_not_required() {
+        assert_eq!(
+            expect::REQUIRED_JOBS,
+            [
+                "linux-fast",
+                "windows-native",
+                "xwin-cross",
+                "linux-full",
+                "ci-verdict"
+            ]
+        );
+        let ci = lf(include_str!("../../.github/workflows/ci.yml"));
+        let dispatch = lf(include_str!("../../.github/workflows/ci-dispatch.yml"));
+        assert_eq!(optional_job_findings(&ci, &dispatch), Vec::<String>::new());
+        // planted: a job in ci.yml, a run of the program in ci.yml, a second declaration, a missing job, the suite `all`
+        let with_job = format!("{ci}\n  tor-smoke:\n    runs-on: x\n");
+        assert!(
+            optional_job_findings(&with_job, &dispatch)
+                .iter()
+                .any(|f| f.contains("`tor-smoke`") && f.contains("job of ci.yml"))
+        );
+        let runs = ci.replace("cargo xtask", "cargo run --example ks_hour; cargo xtask");
+        assert!(
+            optional_job_findings(&runs, &dispatch)
+                .iter()
+                .any(|f| f.contains("starts `ks_hour`"))
+        );
+        let twice =
+            format!("{dispatch}\n  ks-hour:\n    if: inputs.suite == 'ks-hour'\n    runs-on: x\n");
+        assert!(
+            optional_job_findings(&ci, &twice)
+                .iter()
+                .any(|f| f.contains("declared 2 times"))
+        );
+        let missing = dispatch.replace("  tor-smoke:\n", "  tor-smokes:\n");
+        assert!(
+            optional_job_findings(&ci, &missing)
+                .iter()
+                .any(|f| f.contains("`tor-smoke` is declared 0 times"))
+        );
+        let in_all = dispatch.replace(
+            "if: inputs.suite == 'ks-hour'",
+            "if: inputs.suite == 'all' || inputs.suite == 'ks-hour'",
+        );
+        assert!(
+            optional_job_findings(&ci, &in_all)
+                .iter()
+                .any(|f| f.contains("not only under its own suite"))
+        );
     }
 
     /// V-04 (ADR-045 Amendment 2): `ci-verdict` needs every other pinned job; a list without `ct` is a finding naming `ct`, an

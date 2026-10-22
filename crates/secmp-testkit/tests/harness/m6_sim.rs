@@ -275,6 +275,9 @@ fn simulate_here(name: &str, spec: &Spec, mut timeline: impl FnMut(&mut Rig<'_, 
         size_max: 1_000,
         seed: spec.seed,
         interval_s: spec.interval_s,
+        start_s: 0,
+        bursts: 0,
+        burst_size: 20,
     };
     let end = Duration::from_secs(spec.end_s.saturating_add(120));
     let mut builder = turmoil::Builder::new();

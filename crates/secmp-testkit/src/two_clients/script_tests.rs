@@ -13,6 +13,9 @@ fn payloads_are_seeded_and_cover_the_range() {
         size_max: 65_535,
         seed: 11,
         interval_s: 0,
+        start_s: 0,
+        bursts: 0,
+        burst_size: 20,
     };
     let sizes: Vec<usize> = (0..100).map(|i| payload(&script, 0, i).len()).collect();
     assert!(sizes.iter().all(|n| (1..=65_535).contains(n)));
@@ -50,4 +53,27 @@ fn hex_round_trip_and_refusals() {
     for bad in ["a", "zz", "0g", "abc"] {
         assert!(unhex(bad).is_none(), "{bad}");
     }
+}
+
+#[test]
+fn the_schedule_of_the_active_hour() {
+    // AI-07: an idle hour, then 120 messages 30 s apart and 10 bursts of 20, one every 360 s from 180 s after the start
+    let s = Script {
+        messages: 120 + 200,
+        size_min: 1,
+        size_max: 1_000,
+        seed: 1,
+        interval_s: 30,
+        start_s: 3_600,
+        bursts: 10,
+        burst_size: 20,
+    };
+    assert_eq!(s.enqueue_at_ms(0), 3_600_000);
+    assert_eq!(s.enqueue_at_ms(119), 3_600_000 + 119 * 30_000);
+    assert_eq!(s.enqueue_at_ms(120), 3_600_000 + 180_000);
+    assert_eq!(s.enqueue_at_ms(139), 3_600_000 + 180_000);
+    assert_eq!(s.enqueue_at_ms(140), 3_600_000 + 540_000);
+    assert_eq!(s.enqueue_at_ms(319), 3_600_000 + 180_000 + 9 * 360_000);
+    // every message falls in the active hour
+    assert!((0..320).all(|i| (3_600_000..7_200_000).contains(&s.enqueue_at_ms(i))));
 }

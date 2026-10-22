@@ -89,3 +89,8 @@ required-features = ["kat"]
 
 [lints]
 workspace = true
+
+# The real-time activity-independence run (TEST-SPEC-M6 AI-07, loopback part): started by the dispatch job `ks-hour`, 2 h.
+[[example]]
+name = "ks_hour"
+required-features = ["harness"]

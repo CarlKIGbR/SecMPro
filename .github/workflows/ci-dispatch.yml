@@ -17,9 +17,9 @@ on:
   workflow_dispatch:
     inputs:
       suite:
-        description: "Jobs to run (fast = steps 1–5, 13, 14; full = ci-full, the xwin cross-build and the jobs ci-full delegates (ct, mutants, proverif-hx, proverif-link, kani, fuzz); windows = the Windows gate; ct = the constant-time gate alone; all = every job)"
+        description: "Jobs to run (fast = steps 1–5, 13, 14; full = ci-full, the xwin cross-build and the jobs ci-full delegates (ct, mutants, proverif-hx, proverif-link, kani, fuzz); windows = the Windows gate; ct = the constant-time gate alone; ks-hour = the 2 h real-time KS run (AI-07); tor-smoke = the cold Arti bootstrap over real Tor (MR-07); all = every job except those two)"
         type: choice
-        options: [all, fast, full, windows, ct]
+        options: [all, fast, full, windows, ct, ks-hour, tor-smoke]
         default: ct
 
 permissions:
@@ -490,4 +490,57 @@ jobs:
         with:
           name: proverif-link-${{ github.sha }}-${{ github.run_attempt }}
           path: target/proverif/
+          if-no-files-found: error
+
+  # TEST-SPEC-M6 AI-07, loopback part: 1 h idle and 1 h active against a relay on loopback behind its direct TLS listener
+  # (Strict, P = 10 s, two contacts), real time; the two-sample KS test of the inter-departure times, D/p/n written to
+  # `ks-hour.txt`. Only through its own suite (`ks-hour`), never in `all`: it takes two hours. Not a required check.
+  ks-hour:
+    if: inputs.suite == 'ks-hour'
+    runs-on: ubuntu-latest
+    timeout-minutes: 170
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Pinned toolchain (rust-toolchain.toml)
+        run: rustup toolchain install && rustc -vV
+      - name: Build the run
+        run: cargo build --locked --release -p secmp-testkit --features harness --example ks_hour
+      - name: Idle hour, active hour, KS test (exit 1 if p < 0.01 on a link or pooled)
+        run: target/release/examples/ks_hour target/ks-hour
+      - name: Upload the evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ks-hour-${{ github.sha }}-${{ github.run_attempt }}
+          path: target/ks-hour/
+          if-no-files-found: error
+
+  # TEST-SPEC-M6 MR-07, TOR-10: a cold Arti bootstrap in a fresh profile over the real Tor network (`compression` off,
+  # ADR-051): the seconds to `Ready` and the bytes received, on one machine-readable last line
+  # `MR07 bootstrap_seconds=<s> bytes_down=<n>`. Only through its own suite (`tor-smoke`), never in `all`. Not a required check.
+  tor-smoke:
+    if: inputs.suite == 'tor-smoke'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Pinned toolchain (rust-toolchain.toml)
+        run: rustup toolchain install && rustc -vV
+      - name: Build the smoke check
+        run: cargo build --locked --release -p secmp-testkit --features harness --example tor_smoke
+      - name: Cold bootstrap (MR-07)
+        run: |
+          mkdir -p target/tor-smoke
+          target/release/examples/tor_smoke "$RUNNER_TEMP/arti-profile" | tee target/tor-smoke/tor-smoke.txt
+          tail -n 1 target/tor-smoke/tor-smoke.txt | grep -E '^MR07 bootstrap_seconds=[0-9.]+ bytes_down=[0-9]+$'
+      - name: Upload the evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: tor-smoke-${{ github.sha }}-${{ github.run_attempt }}
+          path: target/tor-smoke/
           if-no-files-found: error

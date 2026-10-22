@@ -14,3 +14,5 @@
 #[cfg(all(feature = "harness", not(miri)))]
 pub mod harness;
 pub mod kat;
+#[cfg(all(feature = "harness", not(miri)))]
+pub mod two_clients;

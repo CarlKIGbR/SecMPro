@@ -68,6 +68,13 @@ name = "harness"
 path = "tests/harness/main.rs"
 required-features = ["harness"]
 
+# The two-client test tool (TEST-SPEC-M6 TC-01…TC-09, X-08): a testkit binary, never shipped — not in `expect::BINARIES`,
+# not in the release SBOM.
+[[bin]]
+name = "two-clients"
+path = "src/bin/two-clients.rs"
+required-features = ["harness"]
+
 # The owner-operated Tor smoke check (TEST-SPEC-M6 TOR-10, X-10): needs the Tor network, run by hand.
 [[example]]
 name = "tor_smoke"

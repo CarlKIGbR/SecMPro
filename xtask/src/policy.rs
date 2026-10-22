@@ -981,6 +981,97 @@ pub(crate) fn run(ws: &Workspace) -> Result<String> {
 mod tests {
     use super::*;
 
+    /// Why the test tool `two-clients` could reach a release (X-08): it is not a `secmp-testkit` bin with
+    /// `required-features = ["harness"]`, a name of `binaries` is `two-clients`, or `secmp-testkit` is in the normal
+    /// closure of a shipped binary (its SBOM and `cargo auditable` build would then list the test tool's crates).
+    fn two_clients_findings(ws: &Workspace, binaries: &[&str]) -> Vec<String> {
+        let mut out = Vec::new();
+        let tool = ws.member("secmp-testkit").and_then(|p| {
+            p.targets
+                .iter()
+                .find(|t| t.name == "two-clients" && t.kinds.iter().any(|k| k == "bin"))
+        });
+        match tool {
+            None => out.push("two-clients is not a secmp-testkit bin".to_owned()),
+            Some(t) if t.required_features != ["harness"] => out.push(format!(
+                "two-clients has required-features {:?}, not [\"harness\"]",
+                t.required_features
+            )),
+            Some(_) => {}
+        }
+        for bin in binaries {
+            if *bin == "two-clients" {
+                out.push("two-clients is in BINARIES".to_owned());
+            }
+            let Some(root) = ws.member(bin) else {
+                out.push(format!("BINARIES names {bin}, which is not a member"));
+                continue;
+            };
+            let mut seen = BTreeSet::new();
+            let mut stack = vec![root.id.clone()];
+            while let Some(id) = stack.pop() {
+                if !seen.insert(id.clone()) {
+                    continue;
+                }
+                if ws
+                    .all
+                    .get(&id)
+                    .is_some_and(|(n, _, _)| n == "secmp-testkit")
+                {
+                    out.push(format!("secmp-testkit is in the normal closure of {bin}"));
+                }
+                stack.extend(
+                    ws.edges
+                        .get(&id)
+                        .into_iter()
+                        .flatten()
+                        .filter(|(_, normal)| *normal)
+                        .map(|(dep, _)| dep.clone()),
+                );
+            }
+        }
+        out
+    }
+
+    /// TEST-SPEC-M6 X-08 `two_clients_not_shipped`: `two-clients` is a `secmp-testkit` bin with `required-features =
+    /// ["harness"]`; `expect::BINARIES` — the three binaries `cargo xtask sbom` builds with `cargo auditable` and reads
+    /// back — is unchanged and does not name it; no shipped binary has `secmp-testkit` in its normal closure, so the
+    /// tool is in no release SBOM. Planted variants are refused.
+    #[test]
+    fn two_clients_not_shipped() -> Result<()> {
+        assert_eq!(expect::BINARIES, ["secmp-relay", "secmp-cli", "secmp-ui"]);
+        let ws = Workspace::load()?;
+        assert_eq!(
+            two_clients_findings(&ws, expect::BINARIES),
+            Vec::<String>::new()
+        );
+        // the planted cases
+        let planted = two_clients_findings(&ws, &["secmp-relay", "two-clients"]);
+        assert!(
+            planted.iter().any(|f| f.contains("in BINARIES")),
+            "{planted:?}"
+        );
+        let planted = two_clients_findings(&ws, &["secmp-testkit"]);
+        assert!(
+            planted.iter().any(|f| f.contains("normal closure")),
+            "{planted:?}"
+        );
+        let mut broken = ws.clone();
+        for p in &mut broken.members {
+            for t in &mut p.targets {
+                if t.name == "two-clients" {
+                    t.required_features.clear();
+                }
+            }
+        }
+        let planted = two_clients_findings(&broken, expect::BINARIES);
+        assert!(
+            planted.iter().any(|f| f.contains("required-features")),
+            "{planted:?}"
+        );
+        Ok(())
+    }
+
     /// FINAL4 run 163: a survivor row has five unescaped pipes (four cells). An unescaped pipe in the description splits
     /// the cell and is a finding; escaped pipes are not; the committed file has none.
     #[test]

@@ -640,6 +640,10 @@ pub(crate) const MUTANT_HARNESS_SKIP_TESTS: &[(&str, &str)] = &[
         "M-1, 2 h virtual with 2 x 320 messages: 34 s",
     ),
     (
+        "cpu_per_slot_measured",
+        "MR-05, 3 x 10 000 slots and 1 h virtual per mode: 14 s",
+    ),
+    (
         "two_clients_profiles_are_in_memory",
         "TC-02, two runs of the engine with a filesystem snapshot: 41 s",
     ),

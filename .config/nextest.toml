@@ -1,5 +1,5 @@
 # MR-05 (M6 C2-4): the wall time of one cell preparation is only meaningful on a machine that is not running other tests, so
 # `cpu_per_slot_measured` runs alone (nextest waits for the running tests and starts no other while it runs).
 [[profile.default.overrides]]
-filter = 'test(=cpu_per_slot_measured)'
+filter = 'test(cpu_per_slot_measured)'
 threads-required = "num-test-threads"

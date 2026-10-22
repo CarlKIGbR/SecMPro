@@ -5,13 +5,12 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use secmp_client_core::scheduler::params::Mode;
 use secmp_client_core::scheduler::run::Purpose;
 use secmp_client_core::scheduler::types::{LinkEvent, Reason};
 use secmp_proto::wire::Id;
 use secmp_testkit::harness::{Dir, EntropyPool, HarnessConfig, MemRelay, RelayLimits};
 
-use crate::m6_sim::{Flood, Outcome, Rig, Spec, simulate};
+use crate::m6_sim::{Flood, Outcome, Rig, Spec, reconnect_delays, simulate};
 
 /// The cell ids in the queue `rid` of the current relay and its `next_cell_id`.
 fn queue_state(relay: &Mutex<Option<MemRelay>>, rid: &Id) -> (Vec<u64>, u64) {
@@ -31,16 +30,17 @@ fn recv_rid(rig: &Rig<'_, '_>, idx: usize) -> Option<Id> {
         .and_then(|(_, r)| r.recv_rid())
 }
 
-/// SIM-01 `sim_loss_breaks_links_eventual_delivery` (`docs/07:124`): `fail_rate(0.01)` on both client links from 15 min on,
+/// SIM-01 `sim_loss_breaks_links_eventual_delivery` (`docs/07:124`): `fail_rate(0.01)` on both client links,
 /// `repair_rate(0.5)` (turmoil breaks the TCP connection on a loss), 200 messages each way over 2 h — (E), (K); every
 /// reconnect follows its teardown within the bound of LR-02 (`U[0, 180 s]` after a failure) or, for a close before
-/// `RELAYINFO`, LR-03 (the cap of 3 600 s).
+/// `RELAYINFO`, LR-03 (the cap of 3 600 s). The loss starts at 15 min, not at 0: the clients' set-up (the scripted
+/// handshake of deviation D-C2-1) runs on single links without a retry and ends within the first minutes.
 #[test]
 fn sim_loss_breaks_links_eventual_delivery() {
     let spec = Spec {
         messages: 200,
         interval_s: 20,
-        end_s: 3 * 3_600,
+        end_s: 2 * 3_600,
         fail_rate: Some((0.01, 0.5)),
         ..Spec::default()
     };
@@ -49,29 +49,17 @@ fn sim_loss_breaks_links_eventual_delivery() {
     let mut teardowns = 0_usize;
     for idx in 0..2 {
         let o = run.observers.get(idx).unwrap();
-        let (events, connects) = (o.events(), o.connects());
-        let mut link_connects: Vec<u64> = connects
-            .iter()
-            .filter(|(_, p)| matches!(p, Purpose::Link(_)))
-            .map(|(t, _)| *t)
-            .collect();
-        link_connects.sort_unstable();
-        for (t, e) in &events {
-            let LinkEvent::TornDown(_, why) = e else {
-                continue;
-            };
+        for (why, t, delay) in reconnect_delays(&o.events(), &o.connects()) {
             let bound = match why {
                 Reason::Closed | Reason::InFlight | Reason::Overrun | Reason::Rejected => 180_000,
                 Reason::ClosedBeforeRelayInfo => 3_600_000,
                 _ => continue,
             };
             teardowns += 1;
-            // the link's own reconnect is at most `bound` after the teardown, so the first connect of any link after it is
-            if let Some(next) = link_connects.iter().find(|c| **c >= *t) {
+            if let Some(delay) = delay {
                 assert!(
-                    next - t <= bound + 1_000,
-                    "client {idx}: {why:?} at {t}: the next connect {} ms later, bound {bound}",
-                    next - t
+                    delay <= bound + 1_000,
+                    "client {idx}: {why:?} at {t}: the reconnect {delay} ms later, bound {bound}"
                 );
             }
         }
@@ -125,27 +113,53 @@ fn sim_partition_heals() {
         "the timeline took {} snapshots",
         snaps.len()
     );
-    let ((head_start, _), (head_heal, next_heal)) = (
+    let ((head_start, _), (_, next_heal)) = (
         snaps.first().copied().unwrap(),
         snaps.get(1).copied().unwrap(),
     );
-    let predicted: Vec<u64> = (head_start..head_heal).collect();
-    assert!(
-        predicted.len() >= 20 && next_heal.saturating_sub(head_heal) == 128,
-        "the partition did not fill the queue: head {head_start} → {head_heal}, next {next_heal}"
-    );
-    let mut reported: Vec<u64> = run
+    // The prediction comes from the relay's own record of the queue B → A, not from B: a store that raises `next_cell_id`
+    // by one and moves the head evicted the cells from the old head to the new one (an acknowledgement moves the head
+    // with `next_cell_id` unchanged). The queue keeps 128 cells, so after the partition it evicts until A has drained it.
+    let rid = run
         .observers
-        .get(1)
+        .first()
         .unwrap()
-        .evicted()
-        .into_iter()
-        .filter(|id| (head_start..head_heal).contains(id))
-        .collect();
+        .client::<EntropyPool>()
+        .unwrap()
+        .1
+        .recv_rid()
+        .unwrap();
+    let predicted: Vec<u64> = {
+        let guard = run.relay.lock().unwrap();
+        let changes = guard.as_ref().unwrap().store_changes();
+        let mut out = Vec::new();
+        let mut prev: Option<(u64, u64)> = None;
+        for c in changes.iter().filter(|c| c.rid == rid) {
+            if let Some((next, head)) = prev
+                && c.next_cell_id == next + 1
+                && c.head > head
+            {
+                out.extend(head..c.head);
+            }
+            prev = Some((c.next_cell_id, c.head));
+        }
+        out
+    };
+    assert!(
+        predicted.len() >= 20 && predicted.first().is_some_and(|f| *f >= head_start),
+        "the partition did not fill the queue: head {head_start}, next {next_heal}, {} predicted evictions",
+        predicted.len()
+    );
+    let mut reported: Vec<u64> = run.observers.get(1).unwrap().evicted();
     reported.sort_unstable();
     reported.dedup();
+    // the eviction of the last store may still be on its way to B when the simulation ends
+    let mut want = predicted.clone();
+    if want.last().is_some_and(|l| !reported.contains(l)) {
+        want.pop();
+    }
     assert_eq!(
-        reported, predicted,
+        reported, want,
         "the evicted ids reported to B are not the ids the queue predicts"
     );
     run.assert_e_and_k("SIM-02");
@@ -282,7 +296,55 @@ fn sim_crash_between_persist_and_write() {
         "sealed {sealed}, stored {}, lost at the crash {lost}: surplus {surplus}",
         next - 1
     );
+    // the direct assertion: B's durable ratchet state keeps one skipped message key per position it never received — the
+    // position A persisted and never sent — and no other (the cells after it were opened at their own positions, so the
+    // next cell used position + 1)
+    let b_durable = run
+        .convs(1)
+        .lock()
+        .unwrap()
+        .get(0)
+        .unwrap()
+        .durable()
+        .to_vec();
+    let skipped = skipped_positions(&b_durable);
+    assert_eq!(
+        skipped.len(),
+        usize::try_from(lost).unwrap(),
+        "B skipped positions {skipped:?}, A lost {lost} at the crash"
+    );
     run.assert_e_and_k("SIM-05");
+}
+
+/// The positions `n` of the skipped message keys in a serialised ratchet state (`RatchetStateV1`, `tr/state.rs`: the
+/// encoding ends with `n_s`, `n_r`, `pn` (4 B each), the count (2 B) and the entries `hk` (32) ‖ `n` (4) ‖ `mk` (32)).
+fn skipped_positions(state: &[u8]) -> Vec<u32> {
+    const ENTRY: usize = 68;
+    for count in 0..=512_usize {
+        let Some(at) = state
+            .len()
+            .checked_sub(ENTRY.saturating_mul(count).saturating_add(2))
+        else {
+            break;
+        };
+        let stored = state
+            .get(at..at.saturating_add(2))
+            .and_then(|b| <[u8; 2]>::try_from(b).ok())
+            .map(u16::from_be_bytes);
+        if stored.map(usize::from) == Some(count) {
+            return (0..count)
+                .map(|i| {
+                    let e = at
+                        .saturating_add(2)
+                        .saturating_add(i.saturating_mul(ENTRY))
+                        .saturating_add(32);
+                    let n = state.get(e..e.saturating_add(4)).unwrap();
+                    u32::from_be_bytes(n.try_into().unwrap())
+                })
+                .collect();
+        }
+    }
+    Vec::new()
 }
 
 /// SIM-09 `sim_hello_flood_backoff_recovery` [O-14] (F-1): an attacker host sends `HELLO` at 8/s for 600 s against the
@@ -301,6 +363,8 @@ fn sim_hello_flood_backoff_recovery() {
         interval_s: 60,
         end_s: 4 * 3_600,
         flood: Some(flood),
+        // the `HELLO` bucket (16, 4/s) of the defaults is what the row tests; the per-link frame rate is off as in every
+        // simulation of the harness (the clients' own rate, one frame per 10 s, is far below it)
         relay: HarnessConfig {
             limits: RelayLimits {
                 link_rate: None,
@@ -338,27 +402,40 @@ fn sim_hello_flood_backoff_recovery() {
             attempts <= 40,
             "client {idx}: {attempts} connection attempts during the flood: no back-off"
         );
-        let ups_after: Vec<u64> = o
+        // the flood reached the honest clients: the relay closed at least one of their links before `RELAYINFO` (the
+        // `HELLO` bucket was empty), so the back-off path of LR-03 was exercised
+        let refused = o
             .events()
             .iter()
-            .filter_map(|(t, e)| match e {
-                LinkEvent::Up(_) if *t >= flood.start * 1000 => Some(*t),
-                _ => None,
+            .filter(|(t, e)| {
+                (flood.start * 1000..flood_end).contains(t)
+                    && matches!(e, LinkEvent::TornDown(_, Reason::ClosedBeforeRelayInfo))
             })
-            .collect();
+            .count();
         assert!(
-            ups_after.len() >= 2,
-            "client {idx}: {} links up again after the flood began",
-            ups_after.len()
+            refused >= 1,
+            "client {idx}: the relay refused none of its HELLOs during the flood"
         );
-        assert!(
-            ups_after
-                .iter()
-                .take(2)
-                .all(|t| *t <= flood_end + 3_660_000),
-            "client {idx}: links up at {ups_after:?}, later than flood end + 3660 s"
+        // every scheduled link (two per client) is up at the flood's end + 3 600 s + 60 s: the links that came up minus
+        // the links that went down by then
+        let deadline = flood_end + 3_660_000;
+        let mut up = std::collections::BTreeSet::new();
+        for (t, e) in o.events() {
+            match e {
+                LinkEvent::Up(l) if t <= deadline => {
+                    up.insert(l.0);
+                }
+                LinkEvent::TornDown(l, _) if t <= deadline => {
+                    up.remove(&l.0);
+                }
+                _ => {}
+            }
+        }
+        let live = up.len();
+        assert_eq!(
+            live, 2,
+            "client {idx}: {live} scheduled links up at the deadline"
         );
     }
     run.assert_e_and_k("SIM-09");
-    let _ = Mode::Strict;
 }

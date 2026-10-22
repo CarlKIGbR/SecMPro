@@ -111,6 +111,33 @@ fn relay_ref_at(port: Option<u16>) -> (RelayRef, secmp_proto::link::ids::AccessK
     })
 }
 
+/// `windows-native`, PR run #174: the binary's main thread has 1 MiB on Windows (8 MiB on Linux) and the engine's
+/// frames (handshake, ratchet) overflowed it on the first `--transport tls` run (exit `STATUS_STACK_OVERFLOW`). The program
+/// must not depend on its caller's stack: `main_with` called from a thread of 1 MiB still ends with exit 3 for a relay
+/// reference without a direct endpoint.
+#[test]
+fn two_clients_main_fits_a_small_stack() {
+    let dir = tmp("small-stack");
+    let (relay, access) = relay_ref_at(None);
+    let reference = dir.join("no-direct.ref");
+    std::fs::write(&reference, relay_ref_file(&relay, &access)).unwrap();
+    let argv = args(&format!(
+        "--role both --transport tls --relay-ref {}",
+        reference.display()
+    ));
+    let code = std::thread::Builder::new()
+        .stack_size(1 << 20)
+        .spawn(move || {
+            let (mut out, mut err) = (Vec::new(), Vec::new());
+            secmp_testkit::two_clients::main_with(&argv, &mut out, &mut err)
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+    assert_eq!(code, 3);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// TC-01 `two_clients_cli_contract` (`docs/07` M6): `--help` lists the flags `--role {inviter,invitee,both}`, `--mode
 /// {strict,balanced,lowbw}`, `--transport {mem,loopback,tls,tor}`, `--relay-ref`, `--invite-out`, `--invite-in`,
 /// `--script`, `--duration-s`, `--trace-out`, `--tor-dir`; a bad flag or value exits 2; a transport that cannot be used

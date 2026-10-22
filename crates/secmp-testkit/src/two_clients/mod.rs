@@ -26,19 +26,44 @@ use std::io::Write;
 use cli::{Cli, CliError, Script, USAGE};
 use run::Fail;
 
+/// The stack of the thread the engine runs on: the handshake and the ratchet keep large frames, and the main thread of a
+/// Windows process has 1 MiB (8 MiB on Linux) — the program does not depend on its caller's stack.
+const ENGINE_STACK: usize = 64 << 20;
+
+/// Run `exec` on a thread of [`ENGINE_STACK`] bytes.
+fn on_big_stack(
+    runtime: Option<&tokio::runtime::Runtime>,
+    args: &[String],
+    out: &mut (dyn Write + Send),
+    err: &mut (dyn Write + Send),
+) -> u8 {
+    std::thread::scope(|s| {
+        std::thread::Builder::new()
+            .stack_size(ENGINE_STACK)
+            .spawn_scoped(s, || exec(runtime, args, out, err))
+            .ok()
+            .and_then(|h| h.join().ok())
+            .unwrap_or(1)
+    })
+}
+
 /// Run the program: `args` without the program name, the two output streams; returns the exit code.
-pub fn main_with(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> u8 {
-    exec(None, args, out, err)
+pub fn main_with(
+    args: &[String],
+    out: &mut (dyn Write + Send),
+    err: &mut (dyn Write + Send),
+) -> u8 {
+    on_big_stack(None, args, out, err)
 }
 
 /// As [`main_with`], on `runtime` — a paused one (`tokio::time::pause`, tests only) makes the `mem` transport virtual.
 pub fn main_in(
     runtime: &tokio::runtime::Runtime,
     args: &[String],
-    out: &mut dyn Write,
-    err: &mut dyn Write,
+    out: &mut (dyn Write + Send),
+    err: &mut (dyn Write + Send),
 ) -> u8 {
-    exec(Some(runtime), args, out, err)
+    on_big_stack(Some(runtime), args, out, err)
 }
 
 fn exec(

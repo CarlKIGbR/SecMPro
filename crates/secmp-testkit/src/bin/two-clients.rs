@@ -7,7 +7,7 @@ use std::process::ExitCode;
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let (mut out, mut err) = (std::io::stdout().lock(), std::io::stderr().lock());
+    let (mut out, mut err) = (std::io::stdout(), std::io::stderr());
     ExitCode::from(secmp_testkit::two_clients::main_with(
         &args, &mut out, &mut err,
     ))

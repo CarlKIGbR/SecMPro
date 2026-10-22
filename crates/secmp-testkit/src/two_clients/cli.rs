@@ -212,6 +212,7 @@ fn check(cli: &Cli) -> Result<(), CliError> {
 /// size_min = 1
 /// size_max = 65535
 /// seed = 7
+/// interval_s = 60       # one message every 60 s (default 0: all at the start)
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Script {
@@ -223,6 +224,8 @@ pub struct Script {
     pub size_max: u64,
     /// The seed of the sizes and the payload bytes.
     pub seed: u64,
+    /// Seconds between two messages of one client (0: all are queued at the start).
+    pub interval_s: u64,
 }
 
 impl Default for Script {
@@ -233,6 +236,7 @@ impl Default for Script {
             size_min: 1,
             size_max: 65_535,
             seed: 1,
+            interval_s: 0,
         }
     }
 }
@@ -269,6 +273,7 @@ impl Script {
                 "size_min" => s.size_min = n,
                 "size_max" => s.size_max = n,
                 "seed" => s.seed = n,
+                "interval_s" => s.interval_s = n,
                 other => return Err(format!("unknown script key {other}")),
             }
             seen.push(key.to_owned());

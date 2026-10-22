@@ -7,7 +7,7 @@
 //! itself against a relay on `127.0.0.1` in real time.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use secmp_proto::wire::inv::{Direct, Host, RelayRef};
 use secmp_testkit::harness::{HarnessConfig, MemRelay};
@@ -261,5 +261,455 @@ fn two_clients_profiles_are_in_memory() {
         "a file besides --trace-out"
     );
     assert!(after.first().unwrap().1 > 1_000, "the trace is empty");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The digits of the line that starts with `prefix` (the part after the last space).
+fn last_word<'a>(run: &'a Run, prefix: &str) -> &'a str {
+    run.line(prefix)
+        .and_then(|l| l.rsplit(' ').next())
+        .unwrap_or_default()
+}
+
+/// TC-03 `two_clients_scripted_invitation_handshake` (§5.5, §6.4–6.6): `--role both --transport mem` — the inviter's
+/// `LINK_PUT` and invitation queue, the invitee's `LINK_GET` consume (the owner status then reads consumed), the
+/// initiator's three cells, the responder's acceptance; both clients report `session=up`; the 60-digit safety numbers
+/// equal.
+#[test]
+fn two_clients_scripted_invitation_handshake() {
+    let run = mem("--role both --transport mem");
+    assert_eq!(run.code, 0, "{}", run.err);
+    let steps: Vec<&str> = run.out.lines().filter(|l| l.starts_with("step=")).collect();
+    assert_eq!(
+        steps,
+        [
+            "step=link_put",
+            "step=invitation_queue",
+            "step=link_get_consume",
+            "step=hx_initiator cells=3",
+            "step=hx_responder accepted=true link_data present=false consumed=true",
+        ],
+        "{}",
+        run.out
+    );
+    assert!(run.line("session=up side=inviter").is_some(), "{}", run.out);
+    assert!(run.line("session=up side=invitee").is_some(), "{}", run.out);
+    let (a, b) = (
+        last_word(&run, "sas side=inviter"),
+        last_word(&run, "sas side=invitee"),
+    );
+    assert_eq!(a.len(), 60, "{}", run.out);
+    assert!(a.bytes().all(|c| c.is_ascii_digit()));
+    assert_eq!(a, b, "the safety numbers differ");
+    assert!(run.line("sas=equal").is_some());
+}
+
+/// The number under `key` of a trace line.
+fn num(v: &serde_json::Value, key: &str) -> u64 {
+    v.get(key).and_then(serde_json::Value::as_u64).unwrap()
+}
+
+/// The string under `key` of a JSON object.
+fn word<'a>(v: &'a serde_json::Value, key: &str) -> &'a str {
+    v.get(key)
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default()
+}
+
+/// The `deliver` events of the message ordinals `lo..hi` in a trace, in file order (time order): `(msg, t_ms)`.
+fn delivers(trace: &str, lo: u64, hi: u64) -> Vec<(u64, u64)> {
+    trace
+        .lines()
+        .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
+        .filter(|v| v.get("event").and_then(serde_json::Value::as_str) == Some("deliver"))
+        .map(|v| (num(&v, "msg"), num(&v, "t_ms")))
+        .filter(|(m, _)| (lo..hi).contains(m))
+        .collect()
+}
+
+/// TC-04 `two_clients_exchange_script_mem` (§7.6): a script of 100 messages each way, sizes seeded in 1…65 535 B —
+/// each is delivered once, in order, with the bytes sent (the engine compares every received payload and id with the
+/// script's; the trace shows each message delivered exactly once, in order, in both directions).
+#[test]
+fn two_clients_exchange_script_mem() {
+    let dir = tmp("exchange");
+    let script = dir.join("exchange.script");
+    std::fs::write(
+        &script,
+        "messages = 100\nsize_min = 1\nsize_max = 65535\nseed = 11\n",
+    )
+    .unwrap();
+    let trace = dir.join("trace.jsonl");
+    let run = mem(&format!(
+        "--role both --transport mem --script {} --trace-out {}",
+        script.display(),
+        trace.display()
+    ));
+    assert_eq!(run.code, 0, "{}", run.err);
+    assert!(
+        run.line("delivered side=inviter 100/100").is_some(),
+        "{}",
+        run.out
+    );
+    assert!(
+        run.line("delivered side=invitee 100/100").is_some(),
+        "{}",
+        run.out
+    );
+    assert!(
+        run.line("result exact=true complete=true").is_some(),
+        "{}",
+        run.out
+    );
+    let text = std::fs::read_to_string(&trace).unwrap();
+    for (lo, hi) in [(0, 100), (100, 200)] {
+        let d = delivers(&text, lo, hi);
+        assert_eq!(
+            d.iter().map(|(m, _)| *m).collect::<Vec<_>>(),
+            (lo..hi).collect::<Vec<_>>(),
+            "delivered once, in order"
+        );
+        assert!(d.is_sorted_by_key(|x| x.1));
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ---- the rows with a relay on 127.0.0.1 (real time) -------------------------------------------------------------------
+
+/// The `secmp-relay` binary of this profile, built if it is not (`cargo build --locked --offline -p secmp-relay`; a test
+/// of another package has no `CARGO_BIN_EXE_` for it): the path cargo reports.
+fn relay_bin() -> PathBuf {
+    let exe = std::env::current_exe().unwrap();
+    let mut cmd = Command::new(env!("CARGO"));
+    cmd.args([
+        "build",
+        "--locked",
+        "--offline",
+        "-p",
+        "secmp-relay",
+        "--message-format",
+        "json",
+    ]);
+    if exe.components().any(|c| c.as_os_str() == "release") {
+        cmd.arg("--release");
+    }
+    let out = cmd.stderr(Stdio::inherit()).output().unwrap();
+    assert!(out.status.success(), "cargo build -p secmp-relay failed");
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .filter(|v| {
+            word(v, "reason") == "compiler-artifact"
+                && v.get("target")
+                    .is_some_and(|t| word(t, "name") == "secmp-relay")
+        })
+        .find_map(|v| {
+            v.get("executable")
+                .and_then(serde_json::Value::as_str)
+                .map(PathBuf::from)
+        })
+        .expect("cargo reported no secmp-relay executable")
+}
+
+/// A running `secmp-relay` process serving plain TCP on loopback (the listener an onion service forwards to); killed
+/// when dropped.
+struct RelayProcess {
+    child: std::process::Child,
+}
+
+impl Drop for RelayProcess {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// Start the relay binary in `dir`: `keygen`, a configuration with `tor_loopback = "127.0.0.1:0"`, the port it reports in
+/// its `listener_bound` line; the relay reference file for the clients.
+fn start_relay(dir: &Path) -> (RelayProcess, PathBuf) {
+    use std::io::BufRead as _;
+    let bin = relay_bin();
+    let keys = dir.join("relay.keys");
+    let keygen = Command::new(&bin)
+        .arg("keygen")
+        .arg("--out")
+        .arg(&keys)
+        .output()
+        .unwrap();
+    assert!(keygen.status.success());
+    let fp_hex = String::from_utf8_lossy(&keygen.stdout)
+        .trim()
+        .strip_prefix("relay_fp ")
+        .unwrap()
+        .to_owned();
+    // the key file: "SMPRKEYS" ‖ ver ‖ relay_sig seed[32] ‖ relay_access_key[32] ‖ …
+    let file = std::fs::read(&keys).unwrap();
+    let access = secmp_crypto::SecretBytes::<32>::from_slice(file.get(41..73).unwrap()).unwrap();
+    let config = dir.join("relay.toml");
+    std::fs::write(
+        &config,
+        format!(
+            "[listen]\ntor_loopback = \"127.0.0.1:0\"\n[access]\nkey_file = \"{}\"\n",
+            keys.display()
+        ),
+    )
+    .unwrap();
+    let mut child = Command::new(&bin)
+        .arg("--config")
+        .arg(&config)
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let stderr = child.stderr.take().unwrap();
+    let relay = RelayProcess { child };
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        // keep draining: a relay whose stderr pipe fills would block
+        for line in std::io::BufReader::new(stderr)
+            .lines()
+            .map_while(Result::ok)
+        {
+            if let Some(addr) = line.split("listener_bound ").nth(1) {
+                let _ = tx.send(addr.trim().to_owned());
+            }
+        }
+    });
+    let addr = rx
+        .recv_timeout(std::time::Duration::from_secs(60))
+        .expect("the relay reported no listener");
+    let port: u16 = addr.rsplit(':').next().unwrap().parse().unwrap();
+    let relay_fp: [u8; 32] = fp_hex
+        .as_bytes()
+        .chunks(2)
+        .map(|p| u8::from_str_radix(core::str::from_utf8(p).unwrap(), 16).unwrap())
+        .collect::<Vec<u8>>()
+        .try_into()
+        .unwrap();
+    let reference = RelayRef {
+        relay_fp,
+        onion: secmp_proto::wire::inv::Onion::from_pubkey(&[0x33; 32]),
+        akc: secmp_proto::link::ids::akc(&access),
+        direct: Some(Direct {
+            host: Host::from_bytes(b"127.0.0.1").unwrap(),
+            port: core::num::NonZeroU16::new(port).unwrap(),
+            spki_sha256: [0; 32],
+        }),
+    };
+    let path = dir.join("relay.ref");
+    std::fs::write(&path, relay_ref_file(&reference, &access)).unwrap();
+    (relay, path)
+}
+
+/// `two-clients <args>` as a process, killed after `secs` of wall time.
+fn process_within(args: &[String], secs: u64) -> Run {
+    use std::time::{Duration, Instant};
+    let mut child = Command::new(BIN)
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now()
+        .checked_add(Duration::from_secs(secs))
+        .unwrap();
+    while child.try_wait().unwrap().is_none() {
+        if Instant::now() > deadline {
+            let _ = child.kill();
+            let out = child.wait_with_output().unwrap();
+            // exit code 124 (as `timeout(1)`): the caller's `assert_eq!(code, 0)` fails with what it printed
+            return Run {
+                code: 124,
+                out: String::from_utf8_lossy(&out.stdout).into_owned(),
+                err: format!("two-clients ran past {secs} s"),
+            };
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    let out = child.wait_with_output().unwrap();
+    Run {
+        code: u8::try_from(out.status.code().unwrap_or(255)).unwrap_or(255),
+        out: String::from_utf8_lossy(&out.stdout).into_owned(),
+        err: String::from_utf8_lossy(&out.stderr).into_owned(),
+    }
+}
+
+/// The units of a trace file as `(t_ms, len, dir, slot)`.
+fn units(trace: &str) -> Vec<(u64, u64, String, u64)> {
+    trace
+        .lines()
+        .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
+        .filter(|v| v.get("len").is_some())
+        .map(|v| {
+            (
+                num(&v, "t_ms"),
+                num(&v, "len"),
+                word(&v, "dir").to_owned(),
+                num(&v, "link_slot"),
+            )
+        })
+        .collect()
+}
+
+/// After the handshake of every link, every unit is a frame of 4 352 B: per link and direction the lengths are the
+/// records of spec D.1 (`HELLO` 9, `HS1` 2 856 to the relay; `RELAYINFO` 1 744, `HS2` 1 156 from it), then frames only.
+fn assert_frames_after_hs2(trace: &str) {
+    let all = units(trace);
+    let slots: std::collections::BTreeSet<u64> = all.iter().map(|u| u.3).collect();
+    assert!(!slots.is_empty(), "no unit in the trace");
+    for slot in slots {
+        for (dir, head) in [("c2r", [9_u64, 2_856]), ("r2c", [1_744, 1_156])] {
+            let lens: Vec<u64> = all
+                .iter()
+                .filter(|u| u.3 == slot && u.2 == dir)
+                .map(|u| u.1)
+                .collect();
+            assert!(
+                lens.len() > 2,
+                "link {slot} {dir}: {} units, no frame after the handshake",
+                lens.len()
+            );
+            assert_eq!(lens.get(..2).unwrap(), head, "link {slot} {dir}");
+            assert!(
+                lens.get(2..).unwrap().iter().all(|n| *n == 4_352),
+                "link {slot} {dir}: a unit after HS2 is not 4352 B: {lens:?}"
+            );
+        }
+    }
+}
+
+/// `--role both` over a real transport: 20 messages each way, delivered; every unit after HS2 is 4 352 B.
+fn loopback_run(name: &str, transport: &str, mode: &str, reference: &Path) {
+    let dir = tmp(name);
+    let script = dir.join("script");
+    std::fs::write(
+        &script,
+        "messages = 20\nsize_min = 1\nsize_max = 1000\nseed = 5\n",
+    )
+    .unwrap();
+    let trace = dir.join("trace.jsonl");
+    let run = process_within(
+        &args(&format!(
+            "--role both --transport {transport} --mode {mode} --relay-ref {} --script {} --trace-out {}",
+            reference.display(),
+            script.display(),
+            trace.display()
+        )),
+        1_500,
+    );
+    assert_eq!(run.code, 0, "{}\n{}", run.out, run.err);
+    assert!(
+        run.line("delivered side=inviter 20/20").is_some(),
+        "{}",
+        run.out
+    );
+    assert!(
+        run.line("delivered side=invitee 20/20").is_some(),
+        "{}",
+        run.out
+    );
+    assert!(run.line("result exact=true").is_some(), "{}", run.out);
+    assert_frames_after_hs2(&std::fs::read_to_string(&trace).unwrap());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// TC-09 `two_clients_trace_schema`: every line of `--trace-out` is a JSON object with exactly the keys `t_ms`, `len`,
+/// `dir`, `link_slot` (a unit) or `event`, `msg`, `t_ms` (a message event) — no identifier, key or address field, and
+/// the only strings are `c2r`, `r2c`, `enqueue` and `deliver`; the units have the lengths of spec D.1.
+#[test]
+fn two_clients_trace_schema() {
+    let dir = tmp("schema");
+    let script = dir.join("script");
+    std::fs::write(
+        &script,
+        "messages = 3\nsize_min = 1\nsize_max = 3000\nseed = 2\ninterval_s = 30\n",
+    )
+    .unwrap();
+    let trace = dir.join("trace.jsonl");
+    let run = mem(&format!(
+        "--role both --transport mem --script {} --trace-out {}",
+        script.display(),
+        trace.display()
+    ));
+    assert_eq!(run.code, 0, "{}", run.err);
+    let text = std::fs::read_to_string(&trace).unwrap();
+    let (mut unit_lines, mut event_lines) = (0_u32, 0_u32);
+    for line in text.lines() {
+        let v: serde_json::Value = serde_json::from_str(line).unwrap();
+        let obj = v.as_object().unwrap();
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert!(
+            obj.values().all(|x| x.is_u64()
+                || ["c2r", "r2c", "enqueue", "deliver"].contains(&x.as_str().unwrap_or_default())),
+            "a value that is no number and no known word: {line}"
+        );
+        if keys == ["dir", "len", "link_slot", "t_ms"] {
+            unit_lines += 1;
+            assert!([9, 1_744, 2_856, 1_156, 4_352].contains(&num(&v, "len")));
+            assert!(["c2r", "r2c"].contains(&word(&v, "dir")));
+        } else {
+            assert_eq!(keys, ["event", "msg", "t_ms"], "unknown keys in {line}");
+            event_lines += 1;
+            assert!(["enqueue", "deliver"].contains(&word(&v, "event")));
+            assert!(num(&v, "msg") < 6);
+        }
+    }
+    assert!(unit_lines > 100, "{unit_lines} units");
+    assert_eq!(
+        event_lines, 12,
+        "3 + 3 messages, each enqueued and delivered"
+    );
+    assert_frames_after_hs2(&text);
+    // `interval_s = 30`: the messages of one client are queued 30 s apart
+    let enqueued: Vec<u64> = text
+        .lines()
+        .map(|l| serde_json::from_str::<serde_json::Value>(l).unwrap())
+        .filter(|v| word(v, "event") == "enqueue" && num(v, "msg") < 3)
+        .map(|v| num(&v, "t_ms"))
+        .collect();
+    assert_eq!(enqueued.len(), 3);
+    assert!(
+        enqueued
+            .windows(2)
+            .all(|w| w.get(1).unwrap() - w.first().unwrap() == 30_000),
+        "{enqueued:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// TC-05 `two_clients_loopback_tcp` (`docs/06` §4): the relay binary on 127.0.0.1, plain TCP, Strict and Balanced, 20
+/// messages each way — all delivered; in the trace every unit after HS2 is 4 352 B.
+#[test]
+fn two_clients_loopback_tcp() {
+    let dir = tmp("loopback");
+    let (_relay, reference) = start_relay(&dir);
+    std::thread::scope(|s| {
+        let strict = s.spawn(|| loopback_run("loopback-strict", "loopback", "strict", &reference));
+        let balanced =
+            s.spawn(|| loopback_run("loopback-balanced", "loopback", "balanced", &reference));
+        strict.join().unwrap();
+        balanced.join().unwrap();
+    });
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// TC-06 `two_clients_direct_tls_loopback` (§8.1): the relay's direct listener (`DirectRelay`: the binary's accept loop
+/// behind TLS 1.3 with the hybrid group), the SPKI pinned from the relay reference, 20 messages each way — all delivered.
+#[test]
+fn two_clients_direct_tls_loopback() {
+    use secmp_testkit::harness::cert::{FixtureKey, VALID, self_signed};
+    use secmp_testkit::harness::{DirectRelay, RelayLimits};
+    let dir = tmp("tls");
+    let key = FixtureKey::new([7; 32]);
+    let cert = self_signed(&key, "relay.test", VALID);
+    let relay = DirectRelay::start(&cert, &key.pkcs8(), RelayLimits::defaults());
+    let reference = dir.join("relay.ref");
+    std::fs::write(
+        &reference,
+        relay_ref_file(&relay.relay_ref(), &relay.access_key()),
+    )
+    .unwrap();
+    loopback_run("tls-strict", "tls", "strict", &reference);
     let _ = std::fs::remove_dir_all(&dir);
 }

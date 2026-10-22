@@ -82,7 +82,7 @@ const TOR_READY_LIMIT: Duration = Duration::from_secs(600);
 
 // ---- the relay's reference file ------------------------------------------------------------------------------------
 
-fn hex(bytes: &[u8]) -> String {
+pub(crate) fn hex(bytes: &[u8]) -> String {
     use std::fmt::Write as _;
     bytes.iter().fold(String::new(), |mut s, b| {
         let _ = write!(s, "{b:02x}");
@@ -90,7 +90,7 @@ fn hex(bytes: &[u8]) -> String {
     })
 }
 
-fn unhex(s: &str) -> Option<Vec<u8>> {
+pub(crate) fn unhex(s: &str) -> Option<Vec<u8>> {
     let digit = |c: u8| {
         char::from(c)
             .to_digit(16)
@@ -159,7 +159,7 @@ fn salt(script: &Script, dir: u64, idx: u64) -> u64 {
 }
 
 /// The payload of message `idx` of direction `dir`: a seeded size in `[size_min, size_max]` and seeded bytes.
-fn payload(script: &Script, dir: u64, idx: u64) -> Vec<u8> {
+pub(crate) fn payload(script: &Script, dir: u64, idx: u64) -> Vec<u8> {
     let span = script
         .size_max
         .saturating_sub(script.size_min)
@@ -179,7 +179,7 @@ fn payload(script: &Script, dir: u64, idx: u64) -> Vec<u8> {
 }
 
 /// `msg_id`: the direction and the ordinal (an id of the test script, not secret).
-fn msg_id(dir: u64, idx: u64) -> [u8; 16] {
+pub(crate) fn msg_id(dir: u64, idx: u64) -> [u8; 16] {
     let mut id = [0_u8; 16];
     if let Some(b) = id.first_mut() {
         *b = u8::try_from(dir).unwrap_or(0);
@@ -698,6 +698,8 @@ struct Shell<R: Rand> {
     convs: Arc<Mutex<Convs<R>>>,
     dir: u64,
     seen: usize,
+    /// Messages of the script queued so far.
+    queued: u64,
 }
 
 impl<R: Rand> Shell<R> {
@@ -706,15 +708,45 @@ impl<R: Rand> Shell<R> {
         f(convs.get(0).unwrap())
     }
 
-    /// The client has received everything the script sends it and every message of its own is receipted.
-    fn complete(&self, want: usize) -> bool {
-        self.with(|c| {
-            c.received().len() >= want
-                && c.outbox()
-                    .states()
-                    .iter()
-                    .all(|(_, s)| *s == MsgState::Delivered)
-        })
+    /// Queue the messages of the script that are due at `now` (message `i` at `t0 + i × interval_s`; the outbox sends
+    /// them one cell per slot, in order).
+    fn enqueue_due(&mut self, rec: &Recorder, script: &Script, t0: u64, now: u64) {
+        let interval = script.interval_s.saturating_mul(1000);
+        while self.queued < script.messages
+            && t0.saturating_add(self.queued.saturating_mul(interval)) <= now
+        {
+            let idx = self.queued;
+            let mut convs = self.convs.lock().unwrap_or_else(PoisonError::into_inner);
+            convs.get_mut(0).unwrap().outbox_mut().enqueue(
+                OutMessage {
+                    msg_id: msg_id(self.dir, idx),
+                    kind: AppKind::Text,
+                    expire_after: 0,
+                    payload: Zeroizing::new(payload(script, self.dir, idx)),
+                },
+                now,
+            );
+            rec.event(
+                "enqueue",
+                self.dir.saturating_mul(script.messages).saturating_add(idx),
+                now,
+            );
+            self.queued = self.queued.saturating_add(1);
+        }
+    }
+
+    /// The client has queued the whole script, received everything the script sends it, and every message of its own
+    /// is receipted.
+    fn complete(&self, script: &Script) -> bool {
+        let want = usize::try_from(script.messages).unwrap_or(usize::MAX);
+        self.queued >= script.messages
+            && self.with(|c| {
+                c.received().len() >= want
+                    && c.outbox()
+                        .states()
+                        .iter()
+                        .all(|(_, s)| *s == MsgState::Delivered)
+            })
     }
 
     /// Record a `deliver` event for each message received since the last look.
@@ -727,35 +759,6 @@ impl<R: Rand> Shell<R> {
                 .saturating_add(u64::try_from(self.seen).unwrap_or(u64::MAX));
             rec.event("deliver", ordinal, now);
             self.seen = self.seen.saturating_add(1);
-        }
-    }
-}
-
-/// Queue every message of the script on the local clients (the outbox sends them one cell per slot, in order).
-fn queue_script<P: StreamProvider + 'static, R: Rand>(
-    world: &World<P>,
-    sides: &[Side<P, R>],
-    script: &Script,
-    t0: u64,
-) {
-    for side in sides {
-        let mut convs = side.node.convs.lock().unwrap();
-        let conv = convs.get_mut(0).unwrap();
-        for idx in 0..script.messages {
-            conv.outbox_mut().enqueue(
-                OutMessage {
-                    msg_id: msg_id(side.dir, idx),
-                    kind: AppKind::Text,
-                    expire_after: 0,
-                    payload: Zeroizing::new(payload(script, side.dir, idx)),
-                },
-                t0,
-            );
-            world.rec.event(
-                "enqueue",
-                side.dir.saturating_mul(script.messages).saturating_add(idx),
-                t0,
-            );
         }
     }
 }
@@ -785,6 +788,7 @@ fn spawn_drivers<P: StreamProvider + 'static, R: Rand>(
             convs: Arc::clone(&node.convs),
             dir,
             seen,
+            queued: 0,
         });
         let stop = Arc::clone(stop);
         handles.push(tokio::spawn(async move {
@@ -862,10 +866,11 @@ async fn converse<P: StreamProvider + 'static, R: Rand>(
     };
     let limit_ms = cli.duration_s.map(|d| d.saturating_mul(1000));
     let grace_ms = u64::from(PERIOD.seconds()).saturating_mul(2000);
-    let want = usize::try_from(script.messages).unwrap_or(usize::MAX);
-    queue_script(world, &sides, script, t0);
     let stop = Arc::new(AtomicBool::new(false));
     let (handles, mut shells) = spawn_drivers(world.clock, sides, &stop);
+    for shell in &mut shells {
+        shell.enqueue_due(&world.rec, script, t0, t0);
+    }
     let mut complete_at = None::<u64>;
     let mut timed_out;
     loop {
@@ -873,9 +878,10 @@ async fn converse<P: StreamProvider + 'static, R: Rand>(
         let now = world.clock.mono_ms();
         let elapsed = now.saturating_sub(t0);
         for shell in &mut shells {
+            shell.enqueue_due(&world.rec, script, t0, now);
             shell.observe(&world.rec, script, now);
         }
-        if complete_at.is_none() && shells.iter().all(|s| s.complete(want)) {
+        if complete_at.is_none() && shells.iter().all(|s| s.complete(script)) {
             complete_at = Some(now);
         }
         let finished = match limit_ms {
@@ -1061,6 +1067,9 @@ async fn session<P: StreamProvider + 'static, R: Rand>(
             done.exact, done.complete, done.end_ms
         ),
     );
+    // the Unix time at the clock's origin: aligns the `t_ms` of two traces (the latency of a message between two
+    // machines is its `deliver` time at one minus its `enqueue` time at the other, both plus their origin)
+    say(out, &format!("clock unix_origin={}", world.unix_base));
     if let Some(p) = &cli.trace_out {
         super::trace::write_file(p, &world.rec.jsonl()).map_err(run_err("--trace-out"))?;
     }

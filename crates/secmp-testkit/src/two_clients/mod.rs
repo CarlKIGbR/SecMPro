@@ -17,6 +17,8 @@
 pub mod cli;
 pub mod rand;
 pub mod run;
+#[cfg(test)]
+mod script_tests;
 pub mod trace;
 
 use std::io::Write;

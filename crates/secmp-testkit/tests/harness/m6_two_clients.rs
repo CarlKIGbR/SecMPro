@@ -577,7 +577,7 @@ fn relay_config_parses_with_a_windows_style_dir() {
 fn start_relay(dir: &Path) -> (RelayProcess, PathBuf) {
     use std::io::BufRead as _;
     let bin = relay_bin();
-    let keys = dir.join("relay.keys");
+    let keys = dir.join(KEY_FILE);
     let keygen = Command::new(&bin)
         .arg("keygen")
         .arg("--out")
@@ -625,7 +625,15 @@ fn start_relay(dir: &Path) -> (RelayProcess, PathBuf) {
     if heard.is_err() {
         // the relay writes no key material to stderr (`main.rs`: `secmp-relay: <why>`, the `listener_bound` line)
         let mut relay = relay;
-        let status = relay.child.try_wait();
+        // give a relay that is exiting up to ~100 ms, so that the status is reported and not `None`
+        let mut status = relay.child.try_wait();
+        for _ in 0..10 {
+            if !matches!(status, Ok(None)) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            status = relay.child.try_wait();
+        }
         assert!(
             heard.is_ok(),
             "the relay reported no listener: {heard:?}; exit status {status:?}; stderr:\n{}",

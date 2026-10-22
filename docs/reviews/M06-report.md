@@ -2096,9 +2096,7 @@ accept it by an ADR line (ADR-047/ADR-052 style) or ask for another form (e.g. a
 
 Commits: `348e78d` §1 · the CRLF fix §2 · `65fe1eb` §3 · `d2bb952` §4 · this report; `git log --oneline e9eef3a..HEAD` is in the return block. Red quotes are lines of the committed tree.
 
-**1 · `windows-native` #177: `two_clients_loopback_tcp` — "the relay reported no listener: Disconnected" (`348e78d`).** Reviewer's diagnosis, confirmed by reading the code (the #177 log of the
-still running run was not retrievable by `gh run view --log` at the time of writing, so the lines `panicked at …m6_two_clients.rs:607:10` / `the relay reported no listener: Disconnected` are quoted from the
-WEISUNG, not re-read): `start_relay` wrote `key_file = "{}"` from `keys.display()`; on Windows that path has backslashes, the relay's config parser refuses any `\` in a string
+**1 · `windows-native` #177: `two_clients_loopback_tcp` — "the relay reported no listener: Disconnected" (`348e78d`).** Reviewer's diagnosis, confirmed by reading the code (job 119956847438, `gh api --allow-escape-sequences repos/CarlKIGbR/SecMPro/actions/jobs/119956847438/logs`, re-read in C2-9: line 4237 `thread 'm6_two_clients::two_clients_loopback_tcp' (7792) panicked at crates\secmp-testkit\tests\harness\m6_two_clients.rs:607:10:`, line 4238 `the relay reported no listener: Disconnected`): `start_relay` wrote `key_file = "{}"` from `keys.display()`; on Windows that path has backslashes, the relay's config parser refuses any `\` in a string
 (`secmp-relay/src/config.rs:167–168`, "strings take no quotes or escapes"), `server::prepare` fails, `main` returns before `bind`, no `listener_bound` line is printed, the reader thread's `tx` is dropped and
 `recv_timeout` returns `Disconnected`. `keygen` passed because the path is an argument. Fix, nothing in the relay: `relay_config(KEY_FILE)` writes the relative `key_file = "relay.keys"`, the relay is started with
 `.current_dir(dir)` and `--config relay.toml`; the reader thread keeps every stderr line and a failed start panics (via `assert!`) with the error, the exit status and the lines. The relay writes
@@ -2107,7 +2105,7 @@ is refused by `Config::parse`, the harness form parses. Red (the harness form re
 (≈ 10 min each) run on Windows for the first time; the `kat` step of `windows-native` grows accordingly (`timeout-minutes: 90`); a Windows-only failure in them in the next run is a new finding, not this one.
 The two loopback tests passed on Linux in `ci-fast --strict` (`kat` 891 s) with the changed `start_relay`.
 
-**2 · CRLF in `xtask/src/docs.rs`.** `read()` now returns the text with `\r\n` → `\n`; test `docs_read_normalises_crlf` (a CRLF fixture in `target/crlf-fixture.md` read through `read()` has no `\r` and both
+**2 · CRLF in `xtask/src/docs.rs` (`ba40754`).** `read()` now returns the text with `\r\n` → `\n`; test `docs_read_normalises_crlf` (a CRLF fixture in `target/crlf-fixture.md` read through `read()` has no `\r` and both
 section searches of MR-03 and MR-06 succeed). Red (normalisation removed): `docs.rs:27:5` `assertion failed: !text.contains('\r')`.
 
 **3 · MR-05 re-dictated: no retry-until-pass.** Exactly three rounds of 10 000 slots, the minimum p99 judged against the unchanged 3 000 µs bound; the evidence is written before the assert; the assert message carries

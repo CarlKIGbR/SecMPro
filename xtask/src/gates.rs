@@ -7058,8 +7058,8 @@ mod tests {
     #[test]
     fn large_file_gate_is_clean_on_this_tree() -> Result<()> {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
-        let listing = Cmd::new("git").args(["ls-files"]).dir(&root).read()?;
-        let paths: Vec<String> = listing.lines().map(str::to_owned).collect();
+        let listing = Cmd::new("git").args(["ls-files", "-z"]).dir(&root).read()?;
+        let paths = nul_separated(&listing);
         let found = large_file_findings(
             &root,
             &paths,

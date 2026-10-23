@@ -11,3 +11,4 @@
    4 hello           PASS          0s  secmp-relay 0.0.0 (M5) | secmp-cli 0.0.0 (M0 skeleton: no functionality) | secmp-ui 0.0.0 (M0 skeleton: no functionality)
    5 kat             PASS       1028s  KAT/differential packages: secmp-client-core, secmp-crypto, secmp-proto, secmp-relay, secmp-testkit (expected set matches); ML-KEM KATs and frozen vectors (M1 su
 ci-fast: PASS
+  13 sbom            PASS         13s  12 CycloneDX SBOMs in target/sbom; auditable release builds (x86_64-unknown-linux-gnu, remapped paths) read back by `cargo audit bin`: target/sbom-build/release/secmp-relay, target/sbom-build/release/secmp-cli, target/sbo

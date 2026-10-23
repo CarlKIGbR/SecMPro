@@ -165,7 +165,14 @@ pub(crate) fn run(root: &Path) -> Result<String> {
             .arg(exe.to_string_lossy())
             .capture()?;
         if !audit.success {
-            bail!("cargo audit bin {bin}: {}", audit.stderr.trim());
+            bail!(
+                "cargo audit bin {bin} failed: stderr: {}; stdout: {}",
+                audit.stderr.trim(),
+                audit.stdout.trim()
+            );
+        }
+        for line in audit.stderr.lines() {
+            say(&format!("  cargo audit bin {bin}: {line}"));
         }
         let embedded = embedded_count(&audit.stdout)?;
         let unaudited = audit.stderr.contains("not built with 'cargo auditable'");

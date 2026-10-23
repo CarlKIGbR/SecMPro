@@ -139,9 +139,9 @@ jobs:
           echo "SECMP_TOOLS_ROOT=$HOME/.secmp-tools" >> "$GITHUB_ENV"
           echo "$HOME/.secmp-tools/bin" >> "$GITHUB_PATH"
       - name: LLVM tools for clang-cl / lld-link / llvm-lib
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends clang lld llvm
+        run: sudo apt-get update && sudo apt-get -o Acquire::http::Timeout=30 -o Acquire::Retries=3 install -y --no-install-recommends clang lld llvm
       - name: NASM (aws-lc-sys assembles its x86_64 Windows objects with it; M0 spike (b))
-        run: sudo apt-get install -y --no-install-recommends nasm && nasm -v
+        run: sudo apt-get -o Acquire::http::Timeout=30 -o Acquire::Retries=3 install -y --no-install-recommends nasm && nasm -v
       - name: Restore pinned tools
         id: tools-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -215,7 +215,7 @@ jobs:
       - name: ProVerif 2.05 from source (sha256 as recorded by opam)
         run: |
           if [ ! -x "$HOME/.secmp-tools/bin/proverif" ]; then
-            sudo apt-get update && sudo apt-get install -y --no-install-recommends ocaml-nox ocaml-findlib ocamlbuild
+            sudo apt-get update && sudo apt-get -o Acquire::http::Timeout=30 -o Acquire::Retries=3 install -y --no-install-recommends ocaml-nox ocaml-findlib ocamlbuild
             cd "$RUNNER_TEMP"
             curl --fail --silent --show-error --location -o proverif2.05.tar.gz https://proverif.inria.fr/proverif2.05.tar.gz
             echo "4871f53c32ab4a04669a060c4886ba5d9080496963fb980a9a62d2c429ceabc4  proverif2.05.tar.gz" | sha256sum -c -
@@ -342,7 +342,7 @@ jobs:
       - name: ProVerif 2.05 from source (sha256 as recorded by opam)
         run: |
           if [ ! -x "$HOME/.secmp-tools/bin/proverif" ]; then
-            sudo apt-get update && sudo apt-get install -y --no-install-recommends ocaml-nox ocaml-findlib ocamlbuild
+            sudo apt-get update && sudo apt-get -o Acquire::http::Timeout=30 -o Acquire::Retries=3 install -y --no-install-recommends ocaml-nox ocaml-findlib ocamlbuild
             mkdir -p "$HOME/.secmp-tools/bin"
             cd "$RUNNER_TEMP"
             curl --fail --silent --show-error --location -o proverif2.05.tar.gz https://proverif.inria.fr/proverif2.05.tar.gz
@@ -466,7 +466,7 @@ jobs:
       - name: ProVerif 2.05 from source (sha256 as recorded by opam)
         run: |
           if [ ! -x "$HOME/.secmp-tools/bin/proverif" ]; then
-            sudo apt-get update && sudo apt-get install -y --no-install-recommends ocaml-nox ocaml-findlib ocamlbuild
+            sudo apt-get update && sudo apt-get -o Acquire::http::Timeout=30 -o Acquire::Retries=3 install -y --no-install-recommends ocaml-nox ocaml-findlib ocamlbuild
             mkdir -p "$HOME/.secmp-tools/bin"
             cd "$RUNNER_TEMP"
             curl --fail --silent --show-error --location -o proverif2.05.tar.gz https://proverif.inria.fr/proverif2.05.tar.gz

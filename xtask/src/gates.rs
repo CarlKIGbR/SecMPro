@@ -4021,6 +4021,35 @@ pub(crate) fn workflow_findings(name: &str, text: &str) -> Vec<String> {
             )),
         }
     }
+    out.extend(apt_findings(name, text));
+    out
+}
+
+/// The two options every `apt-get … install` of a workflow carries (ADR-045 Amendment 9): a transfer timeout and retries.
+const APT_OPTIONS: [&str; 2] = ["-o Acquire::http::Timeout=30", "-o Acquire::Retries=3"];
+
+/// ADR-045 Amendment 9: every `apt-get … install` line of a workflow carries [`APT_OPTIONS`], so a stalled mirror fails fast
+/// (run #178: 139 MB in 46 min 38 s) instead of consuming the job budget.
+fn apt_findings(name: &str, text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for (n, line) in text.lines().enumerate() {
+        let t = line.trim();
+        if t.starts_with('#') {
+            continue;
+        }
+        for part in t.split("&&") {
+            let part = part.trim();
+            let installs =
+                part.contains("apt-get") && part.split_whitespace().any(|w| w == "install");
+            if installs && !APT_OPTIONS.iter().all(|o| part.contains(o)) {
+                out.push(format!(
+                    "{name}:{}: `apt-get install` without {} (ADR-045 Amendment 9)",
+                    n.saturating_add(1),
+                    APT_OPTIONS.join(" and ")
+                ));
+            }
+        }
+    }
     out
 }
 
@@ -6795,7 +6824,7 @@ mod tests {
         );
         // the xwin NASM install removed
         let no_xwin = ci.replace(
-            "sudo apt-get install -y --no-install-recommends nasm && nasm -v",
+            "sudo apt-get -o Acquire::http::Timeout=30 -o Acquire::Retries=3 install -y --no-install-recommends nasm && nasm -v",
             "true",
         );
         let found = nasm_findings(".github/workflows/ci.yml", &no_xwin);
@@ -6803,6 +6832,39 @@ mod tests {
             found.len() == 1 && found.iter().all(|f| f.contains("xwin-cross")),
             "{found:?}"
         );
+    }
+
+    /// ADR-045 Amendment 9: every `apt-get install` of the workflows has the timeout and the retries; a planted line without
+    /// them, or with only one, is a finding; the repository has none.
+    #[test]
+    fn apt_installs_carry_timeout_and_retries() -> Result<()> {
+        let good = "        run: sudo apt-get update && sudo apt-get -o Acquire::http::Timeout=30 -o Acquire::Retries=3 install -y x\n";
+        assert!(apt_findings("w.yml", good).is_empty());
+        let bare = "        run: sudo apt-get install -y x\n";
+        assert_eq!(apt_findings("w.yml", bare).len(), 1);
+        let half = "        run: sudo apt-get -o Acquire::Retries=3 install -y x\n";
+        assert_eq!(apt_findings("w.yml", half).len(), 1);
+        let second = "        run: sudo apt-get update && sudo apt-get install -y x\n";
+        assert_eq!(apt_findings("w.yml", second).len(), 1);
+        assert!(apt_findings("w.yml", "# sudo apt-get install -y x\n").is_empty());
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let mut installs = 0_usize;
+        for f in ["ci.yml", "ci-dispatch.yml"] {
+            let text = lf(&std::fs::read_to_string(
+                root.join(".github/workflows").join(f),
+            )?);
+            assert_eq!(apt_findings(f, &text), Vec::<String>::new());
+            installs += text.matches("apt-get -o Acquire").count();
+            // and the gate that runs on the real files reports it too
+            let bare_all = text.replace(" -o Acquire::http::Timeout=30 -o Acquire::Retries=3", "");
+            assert!(
+                workflow_findings(f, &bare_all)
+                    .iter()
+                    .any(|x| x.contains("Amendment 9"))
+            );
+        }
+        assert_eq!(installs, 10);
+        Ok(())
     }
 
     /// M2 review C2: the required job names only in ci.yml, all four there, and no dispatch trigger in ci.yml; M4

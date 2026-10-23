@@ -11,7 +11,7 @@ Build, CI, supply-chain and release automation (docs/06 §5). The alias lives in
 | `ci-full --delegated mutants` | the `mutants` step runs in its own CI job (`cargo xtask step --strict mutants`, ADR-047); `linux-full` passes `--delegated mutants` next to `--delegated windows-native --delegated windows-cross` |
 | `step [--strict] ID…` | run selected steps, also the on-demand steps outside `ci-full`: `miri-full` (weekly workflow `miri-full.yml`) and `fuzz-nightly` (the 4 h campaign of the daily workflow `fuzz-nightly.yml`) |
 | `policy`, `cooldown`, `sbom` | shortcuts for single steps |
-| `win-test --backend github\|libvirt [--rerun\|--dispatch]` | the Windows gate (below) |
+| `win-test --backend github\|selfhosted\|libvirt [--rerun\|--dispatch] [--suite S]` | the Windows gate (below) |
 | `install-tools [--set fast\|windows\|xwin\|miri\|fuzz\|full\|all] [--nightly]` | install the pinned tools (`src/tools.rs`); `SECMP_TOOLS_ROOT` sets `cargo install --root` |
 | `vectors`, `repro-check`, `ops-check` | documented stubs until M1, M11 and M10; they exit non-zero |
 | `ct-check [--targets current\|m2] REPORT…` | the `ct` gate's reading of saved ct reports (`target/ct-report.json` or committed evidence): re-derives every verdict and control from the recorded statistics (M2 review C3, F15–F17); fails unless every report passes. `--targets m2` reads the committed M2 reports against the target set they were written with (before ADR-042 added `aa_prime_control`) |
@@ -67,6 +67,25 @@ check. Replaced by Cargo's `global-min-publish-age` once it is stable (docs/06 �
 Job `windows-native` runs on GitHub-hosted `windows-latest` with the native MSVC toolchain:
 `cargo xtask step --strict clippy nextest doctest kat hello` (clippy with `-D warnings`, all tests, the KATs,
 and every workspace binary started once).
+
+### `--backend selfhosted` (M6–M8, on demand; ADR-029 Amendment 1)
+
+`cargo xtask win-test --backend selfhosted [--ref BRANCH] [--suite hello|win-test|tor-smoke]` (branch default: the
+current branch; suite default: `win-test`) dispatches `.github/workflows/win-ondemand.yml` and reads its `win-suite`
+job, which runs on the repository runner `secmpro-win11-x64` (the owner's Azure Windows 11 VM, labels
+`self-hosted, windows, win11`). The workflow starts the VM when it is stopped (`vm-up`), runs the suite, and
+deallocates the VM only when it started it (`vm-down`); Azure access is GitHub OIDC on those two jobs only. Not a
+required check; its output is owner evidence (X-10, the bootstrap part of TOR-10, the VM part of MR-05).
+
+- **Dispatchable once on `main`.** GitHub dispatches only workflows that exist on the default branch; before the
+  merge the dispatch fails with HTTP 404, and the command then prints the `gh workflow run win-ondemand.yml …` line
+  with the reason and exits successfully.
+- **Refs.** Only `m06-transport` and `main` have a federated Azure credential; for any other branch the command
+  prints the line and "no federated credential for <branch>", and does not dispatch. Without a `gh` token
+  (`gh auth status` fails) it prints the line and "no gh token". The decision is made before any git or network call.
+- **Otherwise** it requires that `origin/<branch>` equals the local head, dispatches, waits for the new
+  `win-ondemand.yml` run, saves the `win-suite` log to `target/win-test/run-<run>-job-<job>.log`, and fails unless
+  the job concluded `success`. `--rerun` and `--dispatch` are refused.
 
 ### `--backend libvirt` (required from M9; deferred by owner decision A1)
 

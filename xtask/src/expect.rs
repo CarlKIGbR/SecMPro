@@ -1664,6 +1664,14 @@ pub(crate) const RELAY_TRACE_ALLOW: &[&str] = &[
 /// The workflow that holds the required checks of the `main-protection` ruleset (docs/06 §4).
 pub(crate) const REQUIRED_WORKFLOW: &str = ".github/workflows/ci.yml";
 
+/// ADR-029 Amendment 1: the one workflow (full repository-relative path, compared with `==`) whose token jobs
+/// [`OIDC_JOBS`] may set job-level `permissions` of exactly `id-token: write` + `contents: read` (Azure OIDC login that
+/// starts and stops the self-hosted Windows VM). Workflow-level `id-token` stays a finding everywhere.
+pub(crate) const OIDC_WORKFLOWS: &[&str] = &[".github/workflows/win-ondemand.yml"];
+
+/// ADR-029 Amendment 1: the token jobs of [`OIDC_WORKFLOWS`] (both on `ubuntu-latest`); the suite job has no token.
+pub(crate) const OIDC_JOBS: &[&str] = &["vm-up", "vm-down"];
+
 /// OPEN-M6-06 A, ADR-051, TEST-SPEC-M6 X-06: the jobs that build `aws-lc-sys` for `x86_64-pc-windows-msvc` (natively or
 /// with cargo-xwin), as (workflow, job); each installs NASM and prints its version. Every workflow sets
 /// `AWS_LC_SYS_PREBUILT_NASM: "0"` in its top-level `env:` (`windows_builds_nasm_from_source`).

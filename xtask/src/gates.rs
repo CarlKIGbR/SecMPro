@@ -4054,7 +4054,8 @@ fn apt_findings(name: &str, text: &str) -> Vec<String> {
 }
 
 /// M4 review C-5 (R-16): the workflow-level `permissions` of every workflow is exactly `contents: read`, no job sets
-/// its own `permissions`, and no workflow mentions `SECMP_PROVERIF` (the variable that replaces the ProVerif binary of
+/// its own `permissions` (one exception, ADR-029 Am. 1: the token jobs [`expect::OIDC_JOBS`] of
+/// [`expect::OIDC_WORKFLOWS`] hold exactly `id-token: write` + `contents: read`, see [`oidc_token_job`]), and no workflow mentions `SECMP_PROVERIF` (the variable that replaces the ProVerif binary of
 /// the `proverif` step). An accident guard like [`workflow_findings`].
 pub(crate) fn workflow_token_findings(name: &str, text: &str) -> Vec<String> {
     let mut out = Vec::new();
@@ -4083,10 +4084,14 @@ pub(crate) fn workflow_token_findings(name: &str, text: &str) -> Vec<String> {
         )),
         (Some(_), Some(_)) => out.push(format!("{name}: two workflow-level `permissions`")),
     }
-    for l in lines
+    for (i, l) in lines
         .iter()
-        .filter(|l| l.job.is_some() && l.key == "permissions")
+        .enumerate()
+        .filter(|(_, l)| l.job.is_some() && l.key == "permissions")
     {
+        if l.value.is_empty() && oidc_token_job(name, l.job.as_deref(), &lines, i) {
+            continue;
+        }
         out.push(format!(
             "{name}: job {:?} sets its own `permissions`",
             l.job
@@ -4098,6 +4103,27 @@ pub(crate) fn workflow_token_findings(name: &str, text: &str) -> Vec<String> {
         ));
     }
     out
+}
+
+/// ADR-029 Am. 1: whether the job-level `permissions` at `lines[at]` is the one allowed block — the workflow is in
+/// [`expect::OIDC_WORKFLOWS`] (full path, `==`), the job in [`expect::OIDC_JOBS`], and the block body is exactly the
+/// two keys `id-token: write` and `contents: read` (either order, nothing else).
+fn oidc_token_job(name: &str, job: Option<&str>, lines: &[YLine], at: usize) -> bool {
+    let Some(job) = job else { return false };
+    if !expect::OIDC_WORKFLOWS.contains(&name) || !expect::OIDC_JOBS.contains(&job) {
+        return false;
+    }
+    let Some(head) = lines.get(at) else {
+        return false;
+    };
+    let mut body: Vec<(&str, &str, bool)> = lines
+        .iter()
+        .skip(at.saturating_add(1))
+        .take_while(|l| l.col > head.col)
+        .map(|l| (l.key.as_str(), l.value.as_str(), l.dash.is_some()))
+        .collect();
+    body.sort_unstable();
+    body == [("contents", "read", false), ("id-token", "write", false)]
 }
 
 /// The end of every artefact name (M2 review F5, M3 review F21).
@@ -7717,6 +7743,115 @@ mod tests {
                 workflow_findings(file, text),
                 Vec::<String>::new(),
                 "{file}"
+            );
+        }
+    }
+
+    const OIDC_NAME: &str = ".github/workflows/win-ondemand.yml";
+    const OIDC_SET: &str = "    permissions:\n      id-token: write\n      contents: read\n";
+
+    /// A minimal OIDC workflow (ADR-029 Am. 1): the three jobs with the given job-level `permissions` blocks (each
+    /// already indented to four spaces, or empty) and, after them, extra job text.
+    fn oidc_text(vm_up: &str, suite: &str, vm_down: &str, extra: &str) -> String {
+        format!(
+            "on:\n  workflow_dispatch:\npermissions:\n  contents: read\njobs:\n  vm-up:\n    runs-on: ubuntu-latest\n{vm_up}    steps:\n      - run: echo up\n  win-suite:\n    runs-on: x\n{suite}    steps:\n      - run: echo suite\n  vm-down:\n    runs-on: ubuntu-latest\n{vm_down}    steps:\n      - run: echo down\n{extra}"
+        )
+    }
+
+    /// ADR-029 Am. 1 (W-2a): the OIDC constants are exactly one workflow (full path) and the two token jobs.
+    #[test]
+    fn oidc_constants_are_exact() {
+        assert_eq!(
+            expect::OIDC_WORKFLOWS,
+            [".github/workflows/win-ondemand.yml"]
+        );
+        assert_eq!(expect::OIDC_JOBS, ["vm-up", "vm-down"]);
+    }
+
+    /// W-2b: the two token jobs may hold exactly `id-token: write` and `contents: read`, in either order.
+    #[test]
+    fn oidc_jobs_may_hold_the_exact_set() {
+        let swapped = "    permissions:\n      contents: read\n      id-token: write\n";
+        for (up, down) in [
+            (OIDC_SET, OIDC_SET),
+            (swapped, OIDC_SET),
+            (OIDC_SET, swapped),
+        ] {
+            assert_eq!(
+                workflow_token_findings(OIDC_NAME, &oidc_text(up, "", down, "")),
+                Vec::<String>::new()
+            );
+        }
+    }
+
+    /// W-2c: the suite job (branch code as SYSTEM) must not hold the token.
+    #[test]
+    fn id_token_on_win_suite_is_a_finding() {
+        let f = workflow_token_findings(OIDC_NAME, &oidc_text(OIDC_SET, OIDC_SET, OIDC_SET, ""));
+        assert_eq!(f.len(), 1, "{f:?}");
+        assert!(f.iter().all(|m| m.contains("win-suite")), "{f:?}");
+    }
+
+    /// W-2d: any other job of the OIDC workflow with `permissions` is a finding.
+    #[test]
+    fn third_job_with_permissions_is_a_finding() {
+        for block in [OIDC_SET, "    permissions:\n      contents: read\n"] {
+            let extra = format!("  extra:\n    runs-on: x\n{block}    steps:\n      - run: echo\n");
+            let f = workflow_token_findings(OIDC_NAME, &oidc_text(OIDC_SET, "", OIDC_SET, &extra));
+            assert_eq!(f.len(), 1, "{f:?}");
+            assert!(f.iter().all(|m| m.contains("extra")), "{f:?}");
+        }
+    }
+
+    /// W-2e: workflow-level `id-token` is a finding in every workflow, the OIDC one included.
+    #[test]
+    fn workflow_level_id_token_is_a_finding_everywhere() {
+        let block = "\npermissions:\n  contents: read\n";
+        let wide = "\npermissions:\n  contents: read\n  id-token: write\n";
+        let ci = lf(include_str!("../../.github/workflows/ci.yml"));
+        for (name, text) in [
+            (
+                OIDC_NAME,
+                oidc_text("", "", "", "").replacen(block, wide, 1),
+            ),
+            (".github/workflows/ci.yml", ci.replacen(block, wide, 1)),
+            (
+                ".github/workflows/other.yml",
+                oidc_text("", "", "", "").replacen(block, wide, 1),
+            ),
+        ] {
+            let f = workflow_token_findings(name, &text);
+            assert_eq!(f.len(), 1, "{name}: {f:?}");
+            assert!(
+                f.iter().all(|m| m.contains("not exactly `contents: read`")),
+                "{name}: {f:?}"
+            );
+        }
+    }
+
+    /// W-2f: the job-level exception is exactly the two-line set, on the two jobs, in the one workflow (full path).
+    #[test]
+    fn job_permissions_exception_is_exact() {
+        let bad = [
+            "    permissions:\n      id-token: write\n      contents: read\n      actions: write\n",
+            "    permissions:\n      contents: write\n      id-token: write\n",
+            "    permissions:\n      id-token: write\n",
+            "    permissions: write-all\n",
+        ];
+        for b in bad {
+            let f = workflow_token_findings(OIDC_NAME, &oidc_text(b, "", OIDC_SET, ""));
+            assert!(!f.is_empty(), "{b:?}: no finding");
+        }
+        let text = oidc_text(OIDC_SET, "", OIDC_SET, "");
+        for name in [
+            ".github/workflows/x-win-ondemand.yml",
+            ".github/workflows/ci-dispatch.yml",
+        ] {
+            let f = workflow_token_findings(name, &text);
+            assert!(!f.is_empty(), "{name}: no finding");
+            assert!(
+                f.iter().all(|m| m.contains("sets its own `permissions`")),
+                "{name}: {f:?}"
             );
         }
     }

@@ -8632,27 +8632,52 @@ mod tests {
         }
     }
 
-    /// W-3i
-    #[test]
-    fn win_ondemand_concurrency_and_budgets() {
-        let real = win_text();
+    /// W-3i: the one concurrency group, no cancel, and the timeouts of the three jobs.
+    fn win_budget_findings(text: &str) -> Vec<String> {
+        let mut out = Vec::new();
         let want = "concurrency:\n  group: win-ondemand-vm\n  cancel-in-progress: false\n";
-        assert!(real.contains(want));
-        assert!(
-            !plant(
-                &real,
-                want,
-                "concurrency:\n  group: win-ondemand-vm\n  cancel-in-progress: true\n"
-            )
-            .contains(want)
-        );
-        let budgets: Vec<(String, Option<String>)> = yaml_jobs(&real)
+        if !text.contains(want) {
+            out.push(format!("concurrency block is not {want:?}"));
+        }
+        let budgets: Vec<(String, Option<String>)> = yaml_jobs(text)
             .into_iter()
             .map(|j| (j.id.clone(), j.prop("timeout-minutes").map(str::to_owned)))
             .collect();
         let expected = [("vm-up", "15"), ("win-suite", "60"), ("vm-down", "15")]
             .map(|(j, t)| (j.to_owned(), Some(t.to_owned())));
-        assert_eq!(budgets, expected);
+        if budgets != expected {
+            out.push(format!("timeout-minutes {budgets:?}, not {expected:?}"));
+        }
+        out
+    }
+
+    /// W-3i
+    #[test]
+    fn win_ondemand_concurrency_and_budgets() {
+        let real = win_text();
+        assert_eq!(win_budget_findings(&real), Vec::<String>::new());
+        for (from, to) in [
+            ("cancel-in-progress: false", "cancel-in-progress: true"),
+            (
+                "group: win-ondemand-vm",
+                "group: win-ondemand-${{ github.ref }}",
+            ),
+            ("    timeout-minutes: 60\n", "    timeout-minutes: 600\n"),
+        ] {
+            let found = win_budget_findings(&plant(&real, from, to));
+            assert!(!found.is_empty(), "{to}: no finding");
+        }
+        let found = win_budget_findings(&plant(
+            &real,
+            "cancel-in-progress: false",
+            "cancel-in-progress: true",
+        ));
+        assert!(
+            found
+                .iter()
+                .any(|f| f.contains("  cancel-in-progress: false\\n")),
+            "{found:?}"
+        );
     }
 
     /// W-3j: the five real workflows, each under its full path, pass every workflow gate.

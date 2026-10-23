@@ -2275,3 +2275,9 @@ Preconditions: `git status --short` empty, `git rev-parse --short HEAD` = `fda49
 miri 2 102 s, kani 3 725 s, proverif 142 s, sbom 14 s); evidence commit **`cbf0284`** (`M06-evidence/ci-full-m6c2-fda4992.txt`). The `windows-native` cells come from PR run 39939400878 (job 120366845842 success,
 47 min 37 s; `M6-evidence/ci-run-182-windows.txt`; the run as a whole was cancelled, the job succeeded). Report changes of this commit: `M6-traffic.md` (no `[#177]` left), §3 rows M6-D3, D4, A1, A2, A4, A5 (and the M6-D6 note on Windows), §5 (D-C2-1 accepted,
 Phase C2 paragraph), §6 (ci-verdict done, owner requests at Phase C), §7 (OPEN-M6-C1-3 status), §8, §9, header, `docs/07` status line, CHANGELOG. Checks after the commit are quoted in the return block of the session.
+
+### C2-14 (WEISUNG M6-C2-14)
+
+ADR-045 Amendment 11 (`docs/08`). Facts: PR run #183 (39970611819, `fda4992`), `linux-full` job 120471975302 cancelled at 240 min — ProVerif step 14:33:59–15:18:26 (44 min 27 s, apt fetch 68.9 MB at 26.0 kB/s) leaving `ci-full` 3 h 15 min; #178 the same (46 min 38 s); #182 the same step 22 s. Cause: `linux-full`, `kani` and `fuzz` shared the key `ci-tools-full-…`; its entry (`refs/pull/9/merge`, 2026-10-15, 168 354 970 B) lacks `proverif`, `linux-full` hits it, rebuilds ProVerif every run and never saves (save only on miss).
+- **Changes:** `.github/workflows/ci.yml:189` (`linux-full`) and `.github/workflows/ci-dispatch.yml:212` (`dispatch-full`): key prefix `ci-tools-full-` → `ci-tools-full-pv-`; `kani`/`fuzz` and twins unchanged. No `xtask` pin of cache keys (`grep -rn ci-tools xtask/src` empty), so no test change. `cargo nextest run -p xtask gates::` 115/115, `policy` PASS.
+- **CI history #183:** every job green except `linux-full` (cancelled at 240 min after the 44-min ProVerif/apt step); `ci-verdict` red accordingly. The first run after this change misses the new key and builds ProVerif once.

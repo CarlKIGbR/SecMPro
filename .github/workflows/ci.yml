@@ -186,7 +186,7 @@ jobs:
           path: |
             ~/.secmp-tools
             ~/.kani
-          key: ci-tools-full-${{ runner.os }}-${{ hashFiles('xtask/src/tools.rs', 'rust-toolchain.toml') }}
+          key: ci-tools-full-pv-${{ runner.os }}-${{ hashFiles('xtask/src/tools.rs', 'rust-toolchain.toml') }}
       - name: Install pinned tools and nightly (Miri, fuzz)
         run: cargo xtask install-tools --set full --nightly
       - name: ProVerif 2.05 from source (sha256 as recorded by opam)

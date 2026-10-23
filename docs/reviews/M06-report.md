@@ -2172,3 +2172,9 @@ workflows changed. Policy test `gates::tests::apt_installs_carry_timeout_and_ret
 one of them, and a second `apt-get install` after `&&` are findings; a comment is not; both real workflows have none and exactly ten installs carry the options; the same texts with the options stripped are reported by
 `workflow_findings` as "Amendment 9". Red (workflows as in `11f5f30`): `gates.rs:6856:13` `assertion left == right failed`, left = the five `ci.yml` lines 145, 147, 195, 448, 502. The expectation of the xwin NASM test
 (`nasm_findings`) follows the new text. `ci-fast --strict` (`docs/reviews/M06-evidence/ci-fast-m6c211-summary.txt`): all steps PASS, `kat` 980 s, `ci-fast: PASS`.
+
+### C2-W (BRIEF M6-C2-W)
+
+Pin `b95c1be12a4c63ca8ede13b7ba3df00068185e6f`. Preconditions §0.1–§0.3 checked at the pin: tree clean, `git pull --ff-only` up to date, `ci-fast --strict` PASS; `ls .github/workflows` = `ci-dispatch.yml ci.yml fuzz-nightly.yml miri-full.yml`; `grep -rn id-token .github/` and `grep -rn azure/login .` empty; `REQUIRED_JOBS` = `linux-fast, windows-native, xwin-cross, linux-full, ci-verdict`. §0.4: dispatchable only after the M6 merge (GitHub dispatches only workflows on the default branch, `M02-report.md:245-246`).
+
+**C2-W1 (docs only).** ADR-029 Amendment 1 (`docs/08`), the Platform sentence in `docs/06` §4, the OQ-3 note under the table of `docs/09`. `ci-fast --strict` PASS (`kat` 966 s, `ci-fast: PASS`).

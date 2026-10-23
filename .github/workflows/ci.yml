@@ -46,7 +46,7 @@ jobs:
   # docs/06 §5 steps 1–5 (ci-fast), 13 (SBOM) and 14 (systemd exposure) on every push and pull request.
   linux-fast:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

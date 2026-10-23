@@ -2223,3 +2223,16 @@ Red first: before the constants `gates.rs:7738:28 error[E0425]: cannot find valu
 - **V3** `27954b4`: the concurrency/budget check is `win_budget_findings`; the old in-body `!plant(..).contains(want)` was vacuous. Red (real file with `cancel-in-progress: true`): `gates.rs:8658:9` `assertion left == right failed`, left = `["concurrency block is not \"concurrency:\\n  group: win-ondemand-vm\\n  cancel-in-progress: false\\n\""]`; plants of the group and of `timeout-minutes: 600` also give findings.
 - **V2** `acadc50`: `FEDERATED_REFS = ["main"]`; `selfhosted_decision` red at `wintest.rs:678:13` (`m06-transport` with a token was still `Dispatch`/"no gh token"), green after; README/module doc say `main`-only. **V1/V2 docs** `b284b0e`: ADR-029 Am. 1 residual-risk sentence (`.credentials*` of the pe_packer runner, `C:\Rust`) and the owner line on the federated subject `refs/heads/m06-transport` (removed at the merge of PR #9; reason: a branch push could grant `id-token` to `win-suite` and dispatch with `--ref`, the gate does not run before a dispatch).
 - **V4–V6:** the NASM red quote is now `gates.rs:6796:13`; W-3 red lines re-quoted from the final tree (W-3j `:8706:13`, W-3k `:8755:13`, W-3i `:8658:9`; the others sit before the V3 edit and are unchanged); the "11 of 13" wording and the README "before any dispatch" wording corrected.
+
+### C2-13 (WEISUNG M6-C2-13)
+
+`ci.yml` `linux-fast` `timeout-minutes: 90` → `120` (ADR-045 Amendment 10, `docs/08`); nothing else changed (`windows-native` 90, `linux-full` 240, no test/threshold/seed/filterset change, `REQUIRED_JOBS`/`PINNED_JOBS` unchanged).
+
+| run | job id | ci-fast step | nextest s | kat s | harness s | slowest test |
+|---|---|---|---|---|---|---|
+| #180 `b95c1be` (39895742759) | 120225672538 | 53 min | 403 | 2670 | 2171 | `activity_independence_balanced_virtual` 1036 s |
+| #179 `11f5f30` (39881739288) | 120180434756 | 88 min 24 s | 659 | 4504 | 3698 | `activity_independence_balanced_virtual` 2154 s |
+| #182 `60083af` (39939400878) | 120366846204 | cancelled at 90:11 | 640 | 4605 | 3791 | `two_clients_loopback_tcp` 726 s |
+
+CI history #182: `linux-fast` cancelled at 90:11 with `ci-fast: PASS` 22 ms earlier (11:59:07.413 vs .435 UTC); `windows-native`, `ct`, `kani`, `fuzz`, `proverif-*`, `xwin-cross` and all 12 mutation shards green; `linux-full`/`mutants` still running at 13:10 UTC (reviewer's reading).
+- **Plan discrepancy (no red line):** the brief points at the check around `gates.rs:8644–8649` (`timeout-minutes {budgets:?}`) as the pinned `linux-fast` budget. That check is `win_budget_findings` of `win-ondemand.yml` (V3); no test or constant in `xtask/` pins `linux-fast`'s `timeout-minutes` (`grep timeout-minutes xtask/src` finds only the win-ondemand check and the fuzz-nightly floor). After changing `ci.yml`: `cargo nextest run -p xtask gates::` 115/115 passed, `policy` PASS — nothing was red, so there is no red line to quote. I did not add a new pin (not in the brief); reviewer to decide whether the budget should be pinned in `expect.rs`.

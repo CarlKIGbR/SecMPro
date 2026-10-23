@@ -2163,3 +2163,12 @@ that mattered and is not introduced), and the budget is not touched. The cause i
 `ci-fast-m6c29-summary.txt`; §7 OPEN-M6-C1-3 now says "> 0 and not unaudited, ≤ lock".
 
 **4 · `ci-fast --strict`** (`docs/reviews/M06-evidence/ci-fast-m6c210-summary.txt`): all steps PASS, `kat` 1 060 s, `ci-fast: PASS`.
+
+### C2-11 (WEISUNG M6-C2-11)
+
+Decision on C2-10 §2 (reviewer): the STOP was right; no `FULL_SKIP_TESTS`, the 240-min budget stays. **ADR-045 Amendment 9** (`docs/08`): all ten `apt-get … install` lines of `ci.yml` (`:145`, `:147`, `:195`, `:448`, `:502`)
+and `ci-dispatch.yml` (`:142`, `:144`, `:218`, `:345`, `:469`) now read `apt-get -o Acquire::http::Timeout=30 -o Acquire::Retries=3 install …`, each still a single-line `run:`; no step `timeout-minutes`; nothing else in the
+workflows changed. Policy test `gates::tests::apt_installs_carry_timeout_and_retries` (`apt_findings`, called from `workflow_findings`, so the `policy` step runs it on the real files): planted lines without the options, with
+one of them, and a second `apt-get install` after `&&` are findings; a comment is not; both real workflows have none and exactly ten installs carry the options; the same texts with the options stripped are reported by
+`workflow_findings` as "Amendment 9". Red (workflows as in `11f5f30`): `gates.rs:6856:13` `assertion left == right failed`, left = the five `ci.yml` lines 145, 147, 195, 448, 502. The expectation of the xwin NASM test
+(`nasm_findings`) follows the new text. `ci-fast --strict` (`docs/reviews/M06-evidence/ci-fast-m6c211-summary.txt`): all steps PASS, `kat` 980 s, `ci-fast: PASS`.

@@ -2132,3 +2132,34 @@ foreign relay of the C2-7 diagnosis reports a count of 4, not 0, so "count > 0" 
 **2 · C2-4b nits.** `start_relay` waits up to ~100 ms for the child's exit before reading the status; keygen and config use `KEY_FILE`; `large_file_gate_is_clean_on_this_tree` uses `ls-files -z` + `nul_separated`;
 the #177 quote is re-read from the log (§10 C2-8 item 1, lines 4237–4238) and the CRLF fix is named `ba40754`.
 **3 · `ci-fast --strict`** (`docs/reviews/M06-evidence/ci-fast-m6c29-summary.txt`): all steps PASS, `kat` 1 028 s, `ci-fast: PASS`.
+
+### C2-10 (WEISUNG M6-C2-10)
+
+**1 · `linux-full` of run #178 (job 120084189452, cancelled at the 240-min budget): not a test that grew — the runner spent 47 min installing OCaml.** Logs read with
+`gh api --allow-escape-sequences …/jobs/<id>/logs | sed 's/\x1b\[[0-9;]*m//g'` (`target/fable-lf178full.lf`, `target/fable-lf176full.lf`; run #176 job 119817852433), step durations from the `=== [n] <step> ===` lines
+(`target/steps.py`):
+
+| step | #176 min | #178 min | Δ |
+|---|---|---|---|
+| (runner start → first step: checkout, toolchain, `apt-get install ocaml-nox ocaml-findlib ocamlbuild`) | 1.1 | **47.8** | **+46.7** |
+| clippy | 1.5 | 1.6 | +0.2 |
+| nextest | 10.4 | 10.7 | +0.3 |
+| kat | 74.2 | 75.7 | +1.4 |
+| perf | 0.4 | 0.4 | 0.0 |
+| coverage | 69.5 | 70.6 | +1.1 |
+| miri | 49.3 | **cancelled after 33.2** (running when the 240 min ended, 00:56:59 UTC) | — |
+| kani, proverif, sbom, … | 3.3 + 0.5 + … | not reached | — |
+
+The 47.8 min are one `apt-get` call (`ci.yml:195`): `Fetched 139 MB in 46min 38s (49.5 kB/s)` from `azure.archive.ubuntu.com` (the packages `libcompiler-libs-ocaml-dev` 38.4 MB took from 21:00:29 to 21:12:56, `ocaml` 81.4 MB
+from 21:15:25 to 21:43:15); in #176 the same download ran at the normal speed (first step at +1.1 min). No step grew by more than 1.4 min; the real-time rows, the SIM rows and `cpu_per_slot_measured` are not the cause,
+and the 3 h 31 min of #176 plus the unchanged steps give ≈ 3 h 34 min for #178 without the stall, 26 min under the budget.
+
+**2 · Fix: none made — STOP on this step, as the WEISUNG says for a single step that grew by itself.** Neither branch of §2 applies (no growth in `coverage`/`kat`/`nextest`, so `FULL_SKIP_TESTS` would save nothing
+that mattered and is not introduced), and the budget is not touched. The cause is a mirror stall on the runner. Options for the reviewer (workflow changes, not made here): a `timeout-minutes` on the install step with one retry
+(`ci.yml:195`, `:448`, `:502` have the same command), `apt-get -o Acquire::http::Timeout=30 -o Acquire::Retries=3` plus a mirror that is not `azure.archive.ubuntu.com`, or the OCaml packages from the runner's cache; a re-run of
+#178's `linux-full` is the other option (PR run #179 is already measuring).
+
+**3 · C2-4c nits (`test(xtask): C2-4c nits`).** `sbom` says `cargo audit`'s stderr lines on success (none were printed on this tree) and bails with stderr and stdout on failure; the sbom summary line is in
+`ci-fast-m6c29-summary.txt`; §7 OPEN-M6-C1-3 now says "> 0 and not unaudited, ≤ lock".
+
+**4 · `ci-fast --strict`** (`docs/reviews/M06-evidence/ci-fast-m6c210-summary.txt`): all steps PASS, `kat` 1 060 s, `ci-fast: PASS`.

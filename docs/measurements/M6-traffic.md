@@ -1,6 +1,6 @@
 # M6 traffic measurements (BRIEF M6-C2 §C2-4, `docs/07` §M6, ADR-018)
 
-Status: **Phase C2-4 draft for the review of M6.** Every number below is quoted from a file under
+Status: **Phase C final for the review of M6.** Every number below is quoted from a file under
 `docs/measurements/M6-evidence/` or labelled as a model value derived from the spec. A number that needs an
 owner-operated measurement carries the reason and the date of its absence. ADR-018 stays "Proposed (owner decides after M6)".
 
@@ -10,7 +10,7 @@ owner-operated measurement carries the reason and the date of its absence. ADR-0
   `kat` harness binary of `secmp-testkit` (`cargo nextest run -p secmp-testkit --features kat`, test profile with `opt-level = 3`
   for dependencies and the two crypto crates), on 2026-10-22. The CI figures come from PR run #176 (`a265384`, run id
   39776847202; `docs/measurements/M6-evidence/ci-run-176.txt`); the `windows-native` figures of that run are void (stack overflow,
-  fixed in `1769900`) and are the cell `[#177]`.
+  fixed in `1769900`); the `windows-native` figures come from PR run 39939400878 (`60083af`; `M6-evidence/ci-run-182-windows.txt`).
 - **Bandwidth (MR-01, `bandwidth_model_matches_capture`).** The whole client side runs on the virtual clock against the relay
   (`Rig`): 24 virtual hours per mode, every frame is captured; the model — units × 4 352 B + 5 765 B per handshake — is checked
   against the capture connection by connection, the steady-state rate is the capture's bytes per second while the links are up.
@@ -35,7 +35,7 @@ owner-operated measurement carries the reason and the date of its absence. ADR-0
 | `proverif-hx` / `proverif-link` | PASS, 31 of 31 model hashes match `PROVERIF_MODEL_SHA256` | 493 s / 1 177 s |
 | `linux-full` (119817852433) | success | job 3 h 31 m (`kat` 4 453 s, `coverage` 4 171 s, `miri` 2 956 s, `nextest` 622 s) |
 | `mutants` secmp-crypto / proto / relay / client-core / transport | caught 171 / 857 / 438 / 530 / 341; missed 1 / 3 / 0 / 8 / 4 (three undocumented, killed in `2f71140`) | shards 1 h 29 m – 2 h 31 m |
-| `windows-native` | `[#177]` | `[#177]` |
+| `windows-native` | success (run 39939400878, job 120366845842): clippy, nextest, doctest, kat, hello PASS; nextest 1074 + 162 passed, kat harness 280 passed (16 skipped) | job 47 min 37 s (`kat` 1 866 s, `nextest` 799 s) |
 
 ## Bandwidth
 
@@ -83,7 +83,7 @@ Share of a core over one virtual hour (whole rig, upper bound):
 | Low-bw, 5 contacts | 585 ms | 0.01 % |
 
 Windows VM (MR-05 VM part): not measured — owner-operated Windows 11 VM, 2026-10-22. GitHub `windows-latest` (`windows-native`,
-run #177): `[#177]`.
+run 39939400878): `cpu_per_slot_measured` PASS (p99 < 3 000 µs, best of three rounds) in 11.2 s; the runner's figures are not in the log and no artefact is uploaded, so no µs value is quoted.
 
 ## Drain 1 h/24 h
 
@@ -123,6 +123,6 @@ with the modelled Tor overhead). Two inputs of the decision are still open: the 
 | MR-04 Tor overhead and latency over real Tor ⚙ | not measured — owner-operated, two machines over real Tor, 2026-10-22 |
 | MR-05 VM part, process CPU % on the Windows 11 VM ⚙ | not measured — owner-operated Windows 11 VM, 2026-10-22 |
 | AI-07 Tor part, TC-07, TC-08, TOR-10 ⚙ | not measured — owner-operated, 2026-10-22 |
-| `windows-native` numbers of run #176 | void (stack overflow, fixed in `1769900`); `[#177]` |
+| `windows-native` numbers of run #176 | void (stack overflow, fixed in `1769900`); replaced by run 39939400878 (`M6-evidence/ci-run-182-windows.txt`); Windows µs figures not quoted — not in the log, 2026-10-23 |
 | ct figures of run #176 | the job passed, its step summary is not in the log; no figure quoted |
 | per-spare cost of the pool queue (`P_POOL`) | model value only; no separate capture |

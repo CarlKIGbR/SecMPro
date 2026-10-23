@@ -8,6 +8,7 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Added
 
+- M6 Phase C2: `two-clients` (TC-*), turmoil simulations SIM-01…SIM-10, the KS analyser and the dispatch jobs `ks-hour`/`tor-smoke` (AI-07 loopback MET, run 39942819176; AI-10), `docs/measurements/M6-traffic.md` (MR-03…MR-07), gates CT-00, PV-01, X-07, X-08.
 - M0 repository bootstrap: Cargo workspace with the eleven `secmp-*` crates as documented skeletons (responsibility
   and allowed dependencies per `docs/02` §3; `#![forbid(unsafe_code)]` everywhere except `secmp-sys-mem` and
   `secmp-sys-desktop`), pinned toolchain (Rust 1.98.1), workspace lint set of `docs/06` §2, release profile and

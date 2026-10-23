@@ -1,9 +1,11 @@
 # Milestone report — M6 Transport providers, constant-rate scheduler, measurements
 
-Branch: `m06-transport` · Base: `6300b653d0f1f176b7a31470910d5214fa87b9cc` · Author: Claude Code · Date: 2026-10-09 … 2026-10-10 · Phase C1: `modell=claude-sonnet-5-5`, 2026-10-18
+Branch: `m06-transport` · Base: `6300b653d0f1f176b7a31470910d5214fa87b9cc` · Author: Claude Code · Date: 2026-10-09 … 2026-10-10 · Phase C1: `modell=claude-sonnet-5-5`, 2026-10-18 · Phase C2: `modell=claude-sonnet-5-5`, 2026-10-22 … 2026-10-23
 Phase A: `modell=claude-sonnet-5-5` (sub-agents: `claude-sonnet-5-5` ×2 — xtask gates G-03/G-04/G-05/G-06/G-08/G-10, and a first part of G-01/G-02; the remainder of that agent's rows was written by the main session)
 
 ## 1. Plan (written before implementation, updated during)
+
+**Phase C closed @ `cbf0284`** (ci-full evidence `M06-evidence/ci-full-m6c2-fda4992.txt` at `fda4992`, the evidence commit `cbf0284` adds only that file; PR run #183 = 39970611819 on `fda4992`; the reviewer corrects this sha if later commits land, precedent Q31). ⚙ open: TC-07, TC-08, AI-07 Tor part, MR-04, MR-05 VM part, TOR-10, X-10 (owner-operated after merge).
 
 **Phase C1 closed @ `25625bc`** (PR run #165 = 39660191651, all jobs green; local `ci-full` evidence `M06-evidence/ci-full-m6c1-c570d98.txt` at `c570d98`, the later commits `5e1a136`/`25625bc` are covered by run #165) (BRIEF M6-C1; WEISUNG M6-C1-2, -3, -4; Phase C part 1 of 2, `modell=claude-sonnet-5-5`). What C1 did: C-1 hygiene, documentation and the onion re-encode note (DOC-M6-C-1, DOC-M6-C-2, T-01/T-02, MIRI-01); C-2 the unmatched-`frame_written` counter and the `unwritten` bound (items 10, 11, 10b; C2-01…C2-07), Kani K-C1…K-C6 (13/13 client-core harnesses); C-3 the survivors of PR run 160 (item 1: 82 mutants killed, 16 accepted rows, no timeout accepted), ADR-047 Amendments 6 and 7 (12 shards); C-4 `ci-verdict` (ADR-045 Amendment 2, V-01…V-07); C-5 R-01, the `socket2` memo and this report. **Phase C2** (BRIEF_M6-C2: TC-*, SIM-*, AI-07, AI-10, MR-03…MR-07, CT-00, PV-01, X-07, X-08) follows on this head; **M6 merges only after C2**.
 
@@ -182,21 +184,21 @@ and `core/pure.rs` contain no `tokio` token. It also asserts that `tokio.workspa
 
 ### Phase C1: the rows of `docs/07` §M6 (6 Deliverables, 5 Acceptance criteria)
 
-Every named test exists in the tree (the xtask test `docs::m06_report_acceptance_rows_are_named` checks it); `OPEN — C2` rows are those of BRIEF_M6-C2. The seven older rows of `docs/mutants-accepted.md` (`core/mod.rs:1733:21`, `:1733:44`, `run.rs:859:34`, `run.rs:1050:54`, `tls.rs:366:13`, `tor/mod.rs:53:26`, `:60:23`) name the places at the C1 head; the gate of the next PR run measures it.
+Every named test exists in the tree (the xtask test `docs::m06_report_acceptance_rows_are_named` checks it); the rows of BRIEF_M6-C2 name their tests or say owner-operated, not run (Phase C). The seven older rows of `docs/mutants-accepted.md` (`core/mod.rs:1733:21`, `:1733:44`, `run.rs:859:34`, `run.rs:1050:54`, `tls.rs:366:13`, `tor/mod.rs:53:26`, `:60:23`) name the places at the C1 head; the gate of the next PR run measures it.
 
 | Row | docs/07 §M6 | Evidence (tests; commands) |
 |---|---|---|
 | M6-D1 | Deliverable: `secmp-transport::tor` and `::tls` | `the_configuration_is_tls13_with_one_hybrid_group`, `pin_needs_one_certificate_and_a_parseable_spki`, `tls_client_offers_exactly_x25519mlkem768`, `tls_handshake_with_pinned_relay_succeeds`, `tls_no_resumption_no_early_data`, `tor_never_falls_back_to_direct`, `onion_reencode_canonical_inputs_round_trip`; `cargo xtask ci-fast --strict` |
 | M6-D2 | Deliverable: scheduler (`LinkTask`, modes, periods, phases, in-flight bounds, reconnect), `ControlOps`, `QueuePool`, `outbox` | `balanced_round_robin_due_rule`, `driver_rr_reservation_does_not_depend_on_worker_timing`, `unwritten_ledger_is_bounded_without_completions`, `control_ops_is_empty_follows_the_queue`, `queue_pool_lists_only_relays_that_are_short_and_knows_its_spares`, `outbox_states`, Kani `kani_unwritten_bound`; `cargo xtask ci-fast --strict`, `cargo kani -p secmp-client-core` (13/13) |
-| M6-D3 | Deliverable: `two-clients` binary | OPEN — C2 (TC-01…TC-09) |
-| M6-D4 | Deliverable: `turmoil` simulations | OPEN — C2 (SIM-01…SIM-*) |
+| M6-D3 | Deliverable: `two-clients` binary | `two_clients_cli_contract`, `two_clients_profiles_are_in_memory`, `two_clients_scripted_invitation_handshake`, `two_clients_exchange_script_mem`, `two_clients_loopback_tcp`, `two_clients_direct_tls_loopback`, `two_clients_trace_schema`, `two_clients_not_shipped` (TC-01…TC-06, TC-09, X-08); `cargo nextest run -p secmp-testkit --features harness --test harness two_clients_`; TC-07, TC-08 owner-operated, not run (§6) |
+| M6-D4 | Deliverable: `turmoil` simulations | `sim_loss_breaks_links_eventual_delivery`, `sim_partition_heals`, `sim_relay_restart_recovery`, `sim_both_clients_restart`, `sim_crash_between_persist_and_write`, `sim_latency_does_not_move_emission`, `sim_slow_link_in_flight_teardown`, `sim_replay_deterministic`, `sim_hello_flood_backoff_recovery`, `sim_balanced_relay_restart` (SIM-01…SIM-10; SIM-07 and SIM-10 re-dictated); `cargo nextest run -p secmp-testkit --features harness --test harness m6_sim` |
 | M6-D5 | Deliverable: activity-independence test | `activity_independence_strict_virtual`, `ai01_strict_tokio`, `ai06_both_directions_tokio`, `ai07_fault_paired_tokio`; AI-10 `ks_tool_detects_planted_dependence`; AI-07 loopback part Balanced: run 39942819176, criterion MET (`M06-evidence/ks-hour-39942819176.txt`), Tor part ⚙; `SECMP_AI_TRACES=64` harness run 196/196 at `ee3c66f` |
-| M6-D6 | Deliverable: measurement report `docs/measurements/M6-traffic.md` | `bandwidth_model_matches_capture`, `drain_after_offline_virtual`; `m6_traffic_report_sections`, `recommendation_names_every_parameter`, `bootstrap_cost_measured`, `cpu_per_slot_measured` (`docs/measurements/M6-traffic.md`; the 3 ms bound has not yet been seen on the `windows-native` runner, the test is not on `WINDOWS_SKIP_TESTS`); MR-04, MR-05 VM part: owner-operated, not run; MR-07 `bootstrap_seconds=9.2 bytes_down=41751578` (run 39942840603) |
-| M6-A1 | Acceptance: two machines exchange messages over real Tor ⚙ | OPEN — C2 (TC-*, TOR-10 owner-operated, §6); in the tree: `tor_never_falls_back_to_direct`, `transport_selection_follows_user_choice_only` |
-| M6-A2 | Acceptance: two machines over direct TLS | OPEN — C2 (TC-*); in the tree: `tls_handshake_with_pinned_relay_succeeds`, `tls_spki_pin_mismatch_rejects`, `relay_and_client_spki_walks_agree` |
+| M6-D6 | Deliverable: measurement report `docs/measurements/M6-traffic.md` | `bandwidth_model_matches_capture`, `drain_after_offline_virtual`; `m6_traffic_report_sections`, `recommendation_names_every_parameter`, `bootstrap_cost_measured`, `cpu_per_slot_measured` (`docs/measurements/M6-traffic.md`; the test is not on `WINDOWS_SKIP_TESTS`: on the `windows-native` runner (run 39939400878) it passed in 11.2 s, so the 3 ms bound held there; no µs figure is in the log); MR-04, MR-05 VM part: owner-operated, not run; MR-07 `bootstrap_seconds=9.2 bytes_down=41751578` (run 39942840603) |
+| M6-A1 | Acceptance: two machines exchange messages over real Tor ⚙ | owner-operated, not run (TC-07, TOR-10, AI-07 Tor part; §6); in the tree: `tor_never_falls_back_to_direct`, `transport_selection_follows_user_choice_only` |
+| M6-A2 | Acceptance: two machines over direct TLS | `two_clients_direct_tls_loopback` (TC-06, loopback); TC-08 owner-operated, not run (§6); in the tree: `tls_handshake_with_pinned_relay_succeeds`, `tls_spki_pin_mismatch_rejects`, `relay_and_client_spki_walks_agree` |
 | M6-A3 | Acceptance: the activity-independence test passes | `activity_independence_strict_virtual`, `ai01_strict_tokio`, `ai06_both_directions_tokio`; AI max Δt = 0 ms |
-| M6-A4 | Acceptance: simulations pass | OPEN — C2 (SIM-*, TC-*) |
-| M6-A5 | Acceptance: ⚙ Arti bootstraps and the transport KATs pass in the Windows VM | OPEN — C2 (X-07, X-08; TOR-10 and X-10 owner-operated, §6); the `windows-native` job runs `tls_client_is_tls13_only` |
+| M6-A4 | Acceptance: simulations pass | `sim_loss_breaks_links_eventual_delivery`, `sim_partition_heals`, `sim_relay_restart_recovery`, `sim_both_clients_restart`, `sim_crash_between_persist_and_write`, `sim_latency_does_not_move_emission`, `sim_slow_link_in_flight_teardown`, `sim_replay_deterministic`, `sim_hello_flood_backoff_recovery`, `sim_balanced_relay_restart`, `two_clients_loopback_tcp`, `two_clients_direct_tls_loopback` |
+| M6-A5 | Acceptance: ⚙ Arti bootstraps and the transport KATs pass in the Windows VM | `optional_jobs_are_not_required` (X-07, run-side: dispatch runs 39942840603/39942819176), `two_clients_not_shipped` (X-08); TOR-10, X-10 owner-operated, not run (§6); the `windows-native` job runs `tls_client_is_tls13_only` |
 
 ### Phase A rows
 
@@ -637,17 +639,22 @@ fourth survivor, `MemPersist::set_durable`, has a killer. Details and red quotes
   M3–M5 path under the scheduler") is met for the invitation, the pool, the cells and the acceptance, but the handshake's own traffic
   runs on set-up links, not as scheduled ops: the responder's first reply (`RouteUpdate`, §6.6 step 4) cannot be sent with the public API
   of `secmp-client-core` (missing: an outbox/plan entry for Content type 0x04), and `issue_invitation` cannot adopt a pooled queue's seeds
-  (missing: an `IssueParams` input). Exact analysis in §8; M7 entry in §7. Awaiting the reviewer's decision (branch (ii) of WEISUNG
-  M6-C2-2 §3(b)).
+  (missing: an `IssueParams` input). Exact analysis in §8; M7 entry in §7. Accepted by the reviewer (WEISUNG M6-C2-3, branch (ii)): a test-row deviation, not a spec deviation, no ADR; M7 entry in §7.
+
+- **Phase C2 — nothing else deviates from the spec.** The reviewer's re-dictations are not deviations (SIM-07, SIM-10, AI-07 Balanced, X-07, MR-05, TC-02). The engineering ADRs of C2 are ADR-052 (large-file gate), ADR-047 Am. 8 (`.config/nextest.toml`), ADR-045 Am. 9 and Am. 10 (apt options, `linux-fast` budget), ADR-029 Am. 1 (selfhosted Windows backend), and the ADR-015 exception for `ctutils` 0.4.2 → 0.4.4 (`60083af`, until 2026-10-30).
 
 ## 6. Dependencies added or bumped
 
 - **`ctutils` 0.4.2 → 0.4.4** (lockfile only, `Cargo.lock` and `fuzz/Cargo.lock`, RUSTSEC-2026-0385, ADR-015 cooldown exception until 2026-10-30; vet delta certified; see §10 C2-W2).
 - **`rustls-webpki` 0.103.15 → 0.103.16** (lockfile only, RUSTSEC-2026-0382, ADR-015 Am. 2 cooldown exception until 2026-10-27; `docs/08` exception list; vet delta audit).
 
+### Owner requests at Phase C (after merge)
+
+Owner-operated, not run; every item has its invocation in the entries below. 1. **TC-07** (two machines, real Tor) and 2. **TC-08** (two machines, direct TLS): the `two-clients` invocations of §10 C2-1/C2-3. 3. **AI-07 Tor part**: the Strict run over real Tor (§10 C2-3). 4. **MR-04**: Tor overhead and latency, `M6-traffic.md` §Tor overhead. 5. **MR-05 VM part**: process CPU % on the Windows 11 VM. 6. **TOR-10** and 7. **X-10**: see the C1 and C2-W requests below. 8. **Smoke `hello`** (`win-ondemand.yml`, `suite=hello`, after merge) and 9. **removal of the federated subject at merge** (C2-W). MR-07 is closed (run 39942840603); OPEN-M6-20 consent is not granted: the `tor-smoke` run closes MR-07 only, not TC-07, TC-08 or TOR-10.
+
 ### Owner requests at Phase C1
 
-- **ci-verdict → `main-protection` ruleset (OWNER-M6-02).** Add the one name `ci-verdict` to the required checks of the `main-protection` ruleset (ADR-045 Amendment 2). It aggregates every other gate job; the four existing names stay until you remove them.
+- **ci-verdict → `main-protection` ruleset (OWNER-M6-02): done** (owner, 2026-10-22); the four older required names (`linux-fast`, `windows-native`, `xwin-cross`, `linux-full`): not confirmed.
 - **TOR-10 (`tor_smoke`): owner-operated, not run.** On the Windows 11 VM, in a checkout of the pushed head: `cargo run --locked -p secmp-testkit --features harness --example tor_smoke -- C:\secmp-tor-smoke <relay-ref-hex> [<access-key-hex>]`; paste the whole output with the date, `winver` and the commit (details below).
 - **X-10 (`win-test`): owner-operated, not run.** `cargo xtask win-test --backend github --ref m06-transport` on the pushed head (details below).
 
@@ -1218,7 +1225,7 @@ required job (`ct`, `mutants`, `proverif-hx`) is not green.
   `CT_TARGETS` by ADR-042 Am. 5 (no mechanism is asserted: nothing in the tree measures one). A constant-nonce contrast fixture ("header
   contents vary under one nonce") is an **informative** target for M7. Whether the receiver-side timing of skipped-key work needs a docs/01
   entry is the owner's decision (threat model).
-- **OPEN-M6-C1-3 (stale auditable binary in `sbom`) — diagnosed and fixed in C2-7 (`aa3d29e`).** Seen after the `rustls-webpki` bump: `target/release/secmp-relay` was not rebuilt and
+- **OPEN-M6-C1-3 (stale auditable binary in `sbom`) — implemented (C2-7/C2-9), count-only, `.dep-v0` name check → M7 ADR (diagnosed and fixed in C2-7, `aa3d29e`).** Seen after the `rustls-webpki` bump: `target/release/secmp-relay` was not rebuilt and
   still listed 0.103.15. **Diagnosis** (container `secmp-main`, 2026-10-22; a private target directory `target/diag-sbom` stood in for `target/`, so the real `target/release` was not touched):
   `cargo auditable build --release --locked --offline --package secmp-relay --target-dir target/diag-sbom --config 'target.x86_64-unknown-linux-gnu.rustflags=["--remap-path-prefix=/work/SecMPro=/secmpro"]'`
   (the build `sbom` runs) → `cargo audit --json --no-fetch --stale bin target/diag-sbom/release/secmp-relay` → `"lockfile":{"dependency-count":78}`. Then the build of `relay_bin()`
@@ -1555,17 +1562,22 @@ return block.
   `mem` transport runs in real time, the tests drive the engine on a paused runtime (`main_in`). (Asked in §10, C2-1 finding 1.)
 - **CLOSED (same weisung): D-C2-1, branch (ii) accepted** — the handshake stays scripted outside the scheduler; the M7 entry in §7 stands.
   No ADR (a test-row deviation, not a spec deviation).
+- **OPEN (C2-13, §10): `linux-fast` `timeout-minutes: 120`** — whether the budget gets a pin in `expect.rs` (today it is text in `ci.yml` and ADR-045 Am. 10 only). For the reviewer.
 
 ## 9. Checklist before requesting review
 
 - [x] All Phase A rows evidenced above
-- [x] Phase C1 closed @ `25625bc` (PR run #165 = 39660191651, all jobs green; local `ci-full` evidence `M06-evidence/ci-full-m6c1-c570d98.txt` at `c570d98`, the later commits `5e1a136`/`25625bc` are covered by run #165): items 1, 3–11, 13 of BRIEF M6-C1 evidenced (§3 rows, §5, §6, §7, §8); item 12 decided (§7); C2 rows are `OPEN — C2` in §3
+- [x] Phase C1 closed @ `25625bc` (PR run #165 = 39660191651, all jobs green; local `ci-full` evidence `M06-evidence/ci-full-m6c1-c570d98.txt` at `c570d98`, the later commits `5e1a136`/`25625bc` are covered by run #165): items 1, 3–11, 13 of BRIEF M6-C1 evidenced (§3 rows, §5, §6, §7, §8); item 12 decided (§7); C2 rows were open in §3 until Phase C
 - [x] `cargo xtask ci-fast --strict` green at `cd828ca` (C-4) and at the C1 head; `ci-full` at `c570d98`: `M06-evidence/ci-full-m6c1-c570d98.txt`
 - [x] `cargo xtask ci-fast --strict` green at `7a67339`; Kani 40/40 at `7a67339`; `ci-full` green (§4) at `03cc660`, not rerun
 - [x] No `#[ignore]`, no lint allowances added for security lints, no disabled gates
 - [x] Vectors untouched
-- [ ] PR run on `linux-fast`, `windows-native`, `xwin-cross`, `linux-full` (after the push by the reviewer)
+- [ ] PR run #183 = 39970611819 on fda4992 (reviewer reads it)
 - [x] Threat model and spec untouched
+- [x] Phase C closed @ `cbf0284`
+- [x] `cargo xtask ci-full --strict …` on `fda4992`: `ci-full: PASS` (`M06-evidence/ci-full-m6c2-fda4992.txt`)
+- [x] `grep -c "OPEN — C[2]" docs/reviews/M06-report.md` → `0` (bracketed so that this line itself does not match the plain pattern; the plain pattern gives 0 as well)
+- [x] `cargo nextest run -p xtask docs::` 7/7
 
 ## 10. Phase C2 log (BRIEF M6-C2; `modell=claude-sonnet-5-5`)
 
@@ -2252,4 +2264,14 @@ Cross-check: the job logs carry the same lines (`MR07 bootstrap_seconds=9.2 byte
 | X-07 | `optional_jobs_are_not_required`, `tests_and_ci_do_not_start_tor` (2/2 PASS) + run side | each run executed its own job only | green |
 
 The Q67 rule (n ≥ 300 per link and hour, from the AI-10 power claim at n = 360) is applied; the AI-07 Tor part stays ⚙. Report edits: §3 rows M6-D5 and M6-D6, `M6-traffic.md` (MR-07 line, Gaps row removed, `PERIODS` check cell);
-the `OPEN — C2` cells are untouched (C2-5).
+the C2-open cells of §3 were left for C2-5.
+Commits: `e9528a7` evidence · `bbeeb80` C2-W3 nits · `fda4992` ci-fast summary
+
+### C2-5 (WEISUNG M6-C2-5): Phase C closed
+
+Preconditions: `git status --short` empty, `git rev-parse --short HEAD` = `fda4992`; `git log --format='%h %s' 25625bc..HEAD -- Cargo.lock fuzz/Cargo.lock` = `60083af fix(deps): ctutils 0.4.2 → 0.4.4 (RUSTSEC-2026-0385, lockfile only)`;
+`git diff 25625bc HEAD -- Cargo.lock fuzz/Cargo.lock | grep '^[-+]name\|^[-+]version'` = `-version = "0.4.2"` / `+version = "0.4.4"` twice (the two lockfiles, `ctutils` only).
+`cargo xtask ci-full --strict --delegated windows-native --delegated windows-cross --delegated mutants --delegated ct --delegated proverif-link --models tr` on `fda4992`: exit 0, `ci-full: PASS` (kat 1 013 s, fuzz 4 088 s, coverage 1 103 s,
+miri 2 102 s, kani 3 725 s, proverif 142 s, sbom 14 s); evidence commit **`cbf0284`** (`M06-evidence/ci-full-m6c2-fda4992.txt`). The `windows-native` cells come from PR run 39939400878 (job 120366845842 success,
+47 min 37 s; `M6-evidence/ci-run-182-windows.txt`; the run as a whole was cancelled, the job succeeded). Report changes of this commit: `M6-traffic.md` (no `[#177]` left), §3 rows M6-D3, D4, A1, A2, A4, A5 (and the M6-D6 note on Windows), §5 (D-C2-1 accepted,
+Phase C2 paragraph), §6 (ci-verdict done, owner requests at Phase C), §7 (OPEN-M6-C1-3 status), §8, §9, header, `docs/07` status line, CHANGELOG. Checks after the commit are quoted in the return block of the session.

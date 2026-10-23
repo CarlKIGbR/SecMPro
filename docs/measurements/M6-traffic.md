@@ -59,10 +59,7 @@ modelled Tor overhead).
 - Model (spec §10.2, 9 cells × 514 B = 4 626 B per frame): +6.3 %.
 - Measured bytes on the wire per 4 352-B frame over real Tor (MR-04, Strict P = 10 s and Balanced 4 contacts, ≥ 100 messages each way):
   not measured — owner-operated, two machines over real Tor, 2026-10-22.
-- Cold bootstrap of Arti without `compression` (MR-07, ADR-051): not measured — `tor-smoke` dispatch run pending, 2026-10-22.
-  The job (`ci-dispatch.yml`, suite `tor-smoke`) prints the last line `MR07 bootstrap_seconds=<s> bytes_down=<n>`; the reviewer
-  triggers it after the push of the branch. The owner invocation is the same program on a host with Tor access:
-  `cargo run --release -p secmp-testkit --example tor_smoke -- <profile-dir>`.
+- Cold bootstrap of Arti without `compression` (MR-07, ADR-051): bootstrap_seconds=9.2 bytes_down=41751578 (≈ 41.8 MB; `tor-smoke` run 39942840603, head `60083af`, ubuntu-latest, 2026-10-23; `M6-evidence/tor-smoke-39942840603.txt`; includes the runner's background traffic).
 
 ## Latency over Tor
 
@@ -108,7 +105,7 @@ ADR-018 stays **"Proposed (owner decides after M6)"**; the table is the executor
 
 | parameter | provisional value (spec §4.2) | measured cost | §10.1 check | recommendation |
 |---|---|---|---|---|
-| `PERIODS` | {10, 20, 40, 80} s | Strict 3 045.9 B/s = 263.2 MB/day per contact at P = 10 s (measured); at 20 / 40 / 80 s ½ / ¼ / ⅛ of it (model, the rate is ∝ 1/P) | AI-01…AI-06: max \|Δt\| = 0 ms on both directions, 64 traces × 6 h; AI-10 / AI-07 loopback part: KS test of the departure gaps (`ks-hour`, dispatch) | keep |
+| `PERIODS` | {10, 20, 40, 80} s | Strict 3 045.9 B/s = 263.2 MB/day per contact at P = 10 s (measured); at 20 / 40 / 80 s ½ / ¼ / ⅛ of it (model, the rate is ∝ 1/P) | AI-01…AI-06: max \|Δt\| = 0 ms on both directions, 64 traces × 6 h; AI-10 / AI-07 loopback part: KS test of the departure gaps (`ks-hour`, dispatch); AI-07 loopback: MET, run 39942819176 | keep |
 | `T_BALANCED` | 10 s | 4 786.3 B/s = 413.5 MB/day for 4 contacts (measured) | AI-02; Balanced KS in `ks-hour`: frames per departure constant 2 | keep |
 | `T_LOWBW` | 30 s | 1 594.7 B/s = 137.8 MB/day for 5 contacts (measured) | AI-03 | keep |
 | `F` | 4 cells per `FETCH` | Strict: queue drained in 42 receive ticks after 24 h offline (bound 45) | drain is part of the fixed slot, no extra operation | keep |
@@ -125,7 +122,6 @@ with the modelled Tor overhead). Two inputs of the decision are still open: the 
 |---|---|
 | MR-04 Tor overhead and latency over real Tor ⚙ | not measured — owner-operated, two machines over real Tor, 2026-10-22 |
 | MR-05 VM part, process CPU % on the Windows 11 VM ⚙ | not measured — owner-operated Windows 11 VM, 2026-10-22 |
-| MR-07 cold bootstrap bytes and seconds | not measured — `tor-smoke` dispatch run pending (reviewer triggers it after the push), 2026-10-22 |
 | AI-07 Tor part, TC-07, TC-08, TOR-10 ⚙ | not measured — owner-operated, 2026-10-22 |
 | `windows-native` numbers of run #176 | void (stack overflow, fixed in `1769900`); `[#177]` |
 | ct figures of run #176 | the job passed, its step summary is not in the log; no figure quoted |

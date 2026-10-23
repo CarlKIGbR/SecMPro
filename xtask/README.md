@@ -80,9 +80,9 @@ required check; its output is owner evidence (X-10, the bootstrap part of TOR-10
 - **Dispatchable once on `main`.** GitHub dispatches only workflows that exist on the default branch; before the
   merge the dispatch fails with HTTP 404, and the command then prints the `gh workflow run win-ondemand.yml …` line
   with the reason and exits successfully.
-- **Refs.** Only `m06-transport` and `main` have a federated Azure credential; for any other branch the command
+- **Refs.** Dispatch is `main`-only: only `refs/heads/main` has a federated Azure credential (the `m06-transport` subject is removed at the merge of PR #9); for any other branch the command
   prints the line and "no federated credential for <branch>", and does not dispatch. Without a `gh` token
-  (`gh auth status` fails) it prints the line and "no gh token". The decision is made before any git or network call.
+  (`gh auth status` fails) it prints the line and "no gh token". The decision is made before any dispatch (`gh auth status` and, without `--ref`, `git rev-parse` run before it).
 - **Otherwise** it requires that `origin/<branch>` equals the local head, dispatches, waits for the new
   `win-ondemand.yml` run, saves the `win-suite` log to `target/win-test/run-<run>-job-<job>.log`, and fails unless
   the job concluded `success`. `--rerun` and `--dispatch` are refused.

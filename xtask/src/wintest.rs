@@ -14,7 +14,7 @@
 //!   Windows 11 VM as a self-hosted runner) with `--suite hello|win-test|tor-smoke` (default `win-test`) and read its
 //!   `win-suite` job. Dispatchable only once the workflow is on the default branch (HTTP 404 before that: the command
 //!   prints the `gh workflow run` line and succeeds), and only for the refs with a federated Azure credential
-//!   (`m06-transport`, `main`); without a `gh` token it prints the line instead of dispatching. Not a required check.
+//!   (`main` only); without a `gh` token it prints the line instead of dispatching. Not a required check.
 //! * `libvirt` (required from M9, deferred by owner decision A1): documented in `xtask/README.md`, not active.
 
 use serde_json::Value;
@@ -44,7 +44,7 @@ const SELFHOSTED: Source = Source {
 const SUITES: [&str; 3] = ["hello", "win-test", "tor-smoke"];
 
 /// The refs with a federated Azure credential (ADR-029 Am. 1): an OIDC login from any other ref fails.
-const FEDERATED_REFS: [&str; 2] = ["m06-transport", "main"];
+const FEDERATED_REFS: [&str; 1] = ["main"];
 
 /// A dispatched run (`--dispatch`): `ci-dispatch.yml`, whose job names are not required-check names (review C2).
 const DISPATCH: Source = Source {
@@ -674,16 +674,26 @@ mod tests {
                 "no federated credential for m06-ct-diag (ADR-029 Am. 1)".to_owned()
             )
         );
+        for authed in [false, true] {
+            assert_eq!(
+                decide("m06-transport", authed, "win-test"),
+                Decision::Print(
+                    "gh workflow run win-ondemand.yml --ref m06-transport -f suite=win-test"
+                        .to_owned(),
+                    "no federated credential for m06-transport (ADR-029 Am. 1)".to_owned()
+                )
+            );
+        }
         assert_eq!(
-            decide("m06-transport", false, "win-test"),
+            decide("main", false, "win-test"),
             Decision::Print(
-                "gh workflow run win-ondemand.yml --ref m06-transport -f suite=win-test".to_owned(),
+                "gh workflow run win-ondemand.yml --ref main -f suite=win-test".to_owned(),
                 "no gh token".to_owned()
             )
         );
         assert_eq!(
-            decide("m06-transport", true, "win-test"),
-            Decision::Dispatch(dispatch_argv(SELFHOSTED, "m06-transport", "win-test"))
+            decide("main", true, "win-test"),
+            Decision::Dispatch(dispatch_argv(SELFHOSTED, "main", "win-test"))
         );
         assert_eq!(
             decide("main", true, "hello"),

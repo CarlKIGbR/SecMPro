@@ -353,7 +353,7 @@ fn libvirt() -> Result<()> {
     )
 }
 
-/// What `--backend selfhosted` does (ADR-029 Am. 1), decided before any git or network call.
+/// What `--backend selfhosted` does (ADR-029 Am. 1), decided before any dispatch.
 #[derive(Debug, PartialEq, Eq)]
 enum Decision {
     /// Run `gh` with these arguments.
@@ -664,7 +664,7 @@ mod tests {
         assert_eq!(ok.and_then(|a| a.branch), Some("main".to_owned()));
     }
 
-    /// W-4d: the decision is made before any git or network call.
+    /// W-4d: the decision is made before any dispatch.
     #[test]
     fn selfhosted_decision() {
         assert_eq!(

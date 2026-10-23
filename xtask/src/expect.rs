@@ -1680,6 +1680,8 @@ pub(crate) const NASM_JOBS: &[(&str, &str)] = &[
     (".github/workflows/ci.yml", "xwin-cross"),
     (".github/workflows/ci-dispatch.yml", "dispatch-windows"),
     (".github/workflows/ci-dispatch.yml", "dispatch-xwin"),
+    // ADR-029 Am. 1: the self-hosted runner has NASM on its PATH; the job proves it by the probe (`nasm -v`)
+    (".github/workflows/win-ondemand.yml", "win-suite"),
 ];
 
 /// The job names of the required checks of the `main-protection` ruleset (M2 review C2): they exist only in

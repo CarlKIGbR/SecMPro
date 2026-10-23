@@ -3881,7 +3881,9 @@ fn job_block<'a>(text: &'a str, job: &str) -> Option<Vec<&'a str>> {
 }
 
 /// X-06 (OPEN-M6-06 A): the workflow sets `AWS_LC_SYS_PREBUILT_NASM: "0"` in its top-level `env:`, and each of its jobs
-/// in `expect::NASM_JOBS` has a step that installs NASM and prints `nasm … -v`.
+/// in `expect::NASM_JOBS` has a step that installs NASM and prints `nasm … -v` — except the jobs of
+/// `expect::OIDC_WORKFLOWS` (ADR-029 Am. 1), whose self-hosted runner has NASM on its PATH: for them the probe
+/// (`nasm -v` before the first `cargo xtask step`) is enough.
 pub(crate) fn nasm_findings(name: &str, text: &str) -> Vec<String> {
     let mut out = Vec::new();
     let top_env: Vec<&str> = text
@@ -3922,7 +3924,9 @@ pub(crate) fn nasm_findings(name: &str, text: &str) -> Vec<String> {
         let probe = code
             .iter()
             .position(|l| l.contains("nasm") && l.contains(" -v"));
-        if !(installs && probe.is_some()) {
+        // ADR-029 Am. 1: the self-hosted runner of an OIDC workflow has NASM on its PATH, so the probe replaces the install
+        let on_path = expect::OIDC_WORKFLOWS.contains(&name);
+        if !((installs || on_path) && probe.is_some()) {
             out.push(format!(
                 "{name}: job {job} does not install NASM and print its version (OPEN-M6-06)"
             ));
@@ -4055,8 +4059,9 @@ fn apt_findings(name: &str, text: &str) -> Vec<String> {
 
 /// M4 review C-5 (R-16): the workflow-level `permissions` of every workflow is exactly `contents: read`, no job sets
 /// its own `permissions` (one exception, ADR-029 Am. 1: the token jobs [`expect::OIDC_JOBS`] of
-/// [`expect::OIDC_WORKFLOWS`] hold exactly `id-token: write` + `contents: read`, see [`oidc_token_job`]), and no workflow mentions `SECMP_PROVERIF` (the variable that replaces the ProVerif binary of
-/// the `proverif` step). An accident guard like [`workflow_findings`].
+/// [`expect::OIDC_WORKFLOWS`] hold exactly `id-token: write` + `contents: read`, see [`oidc_token_job`]), and no
+/// workflow mentions `SECMP_PROVERIF` (the variable that replaces the ProVerif binary of the `proverif` step). An
+/// accident guard like [`workflow_findings`].
 pub(crate) fn workflow_token_findings(name: &str, text: &str) -> Vec<String> {
     let mut out = Vec::new();
     let lines = yaml_lines(text);
@@ -6747,6 +6752,10 @@ mod tests {
                 "ci-dispatch.yml",
                 include_str!("../../.github/workflows/ci-dispatch.yml"),
             ),
+            (
+                ".github/workflows/win-ondemand.yml",
+                include_str!("../../.github/workflows/win-ondemand.yml"),
+            ),
         ] {
             assert_eq!(
                 step_name_findings(file, &lf(text)),
@@ -6777,6 +6786,10 @@ mod tests {
             (
                 ".github/workflows/miri-full.yml",
                 include_str!("../../.github/workflows/miri-full.yml"),
+            ),
+            (
+                ".github/workflows/win-ondemand.yml",
+                include_str!("../../.github/workflows/win-ondemand.yml"),
             ),
         ];
         for (file, text) in real {
@@ -7337,6 +7350,10 @@ mod tests {
                 "fuzz-nightly.yml",
                 include_str!("../../.github/workflows/fuzz-nightly.yml"),
             ),
+            (
+                ".github/workflows/win-ondemand.yml",
+                include_str!("../../.github/workflows/win-ondemand.yml"),
+            ),
         ] {
             let text = lf(text);
             let names = upload_artifact_names(&yaml_lines(&text));
@@ -7731,6 +7748,10 @@ mod tests {
                 "miri-full.yml",
                 include_str!("../../.github/workflows/miri-full.yml"),
             ),
+            (
+                ".github/workflows/win-ondemand.yml",
+                include_str!("../../.github/workflows/win-ondemand.yml"),
+            ),
         ] {
             let text = lf(text);
             let text = text.as_str();
@@ -7854,6 +7875,909 @@ mod tests {
                 "{name}: {f:?}"
             );
         }
+    }
+
+    const WIN_NAME: &str = ".github/workflows/win-ondemand.yml";
+
+    fn win_text() -> String {
+        lf(include_str!("../../.github/workflows/win-ondemand.yml"))
+    }
+
+    /// `text` with the first `from` replaced by `to`; the edit must apply.
+    fn plant(text: &str, from: &str, to: &str) -> String {
+        assert!(text.contains(from), "plant: {from:?} not found");
+        text.replacen(from, to, 1)
+    }
+
+    /// The steps of job `job`: the lines of each step (comments and blank lines dropped).
+    fn win_steps(text: &str, job: &str) -> Vec<Vec<String>> {
+        let mut steps: Vec<Vec<String>> = Vec::new();
+        let mut in_steps = false;
+        for l in job_block(text, job).unwrap_or_default() {
+            if l.trim().is_empty() || l.trim_start().starts_with('#') {
+                continue;
+            }
+            if l == "    steps:" {
+                in_steps = true;
+            } else if !in_steps {
+            } else if l.starts_with("      - ") {
+                steps.push(vec![l.to_owned()]);
+            } else if let Some(s) = steps.last_mut() {
+                s.push(l.to_owned());
+            }
+        }
+        steps
+    }
+
+    /// A direct key of a step (`key: value`, also on the dash line).
+    fn step_field(step: &[String], key: &str) -> Option<String> {
+        let prefix = format!("{key}: ");
+        step.iter().find_map(|l| {
+            let body = l.trim_start();
+            let indent = l.len().saturating_sub(body.len());
+            let body = body.strip_prefix("- ").unwrap_or(body);
+            if indent > 8 {
+                return None;
+            }
+            body.strip_prefix(&prefix).map(|v| v.trim().to_owned())
+        })
+    }
+
+    /// The command lines of a step's `run:` (a block or a single line), trimmed.
+    fn step_run(step: &[String]) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut block = false;
+        for l in step {
+            let body = l.trim_start();
+            let indent = l.len().saturating_sub(body.len());
+            let body = body.strip_prefix("- ").unwrap_or(body);
+            if block && indent >= 10 {
+                out.push(body.trim().to_owned());
+            } else if indent <= 8 && body.starts_with("run:") {
+                match body.strip_prefix("run:").map(str::trim) {
+                    Some("|") => block = true,
+                    Some(v) => out.push(v.to_owned()),
+                    None => {}
+                }
+            } else if indent <= 8 {
+                block = false;
+            }
+        }
+        out
+    }
+
+    fn is_sha40(r: &str) -> bool {
+        r.len() == 40 && r.bytes().all(|b| b.is_ascii_hexdigit())
+    }
+
+    /// W-3a: the triggers of `win-ondemand.yml`.
+    fn win_trigger_findings(text: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        let code: Vec<&str> = text
+            .lines()
+            .filter(|l| !l.trim_start().starts_with('#'))
+            .collect();
+        let on: Vec<&str> = code
+            .iter()
+            .copied()
+            .skip_while(|l| *l != "on:")
+            .skip(1)
+            .take_while(|l| l.is_empty() || l.starts_with(' '))
+            .filter(|l| l.starts_with("  ") && !l.starts_with("   "))
+            .collect();
+        if on != ["  workflow_dispatch:"] {
+            out.push(format!("on: children {on:?}"));
+        }
+        for l in &code {
+            let t = l.trim();
+            for k in [
+                "pull_request",
+                "push",
+                "schedule",
+                "workflow_call",
+                "workflow_run",
+            ] {
+                if t.starts_with(&format!("{k}:")) || t.starts_with(&format!("{k}_target:")) {
+                    out.push(format!("trigger {k}"));
+                }
+            }
+        }
+        out
+    }
+
+    /// W-3a
+    #[test]
+    fn win_ondemand_is_dispatch_only() {
+        let real = win_text();
+        assert_eq!(win_trigger_findings(&real), Vec::<String>::new());
+        let pushed = plant(
+            &real,
+            "on:\n  workflow_dispatch:\n",
+            "on:\n  push:\n    branches: [main]\n  workflow_dispatch:\n",
+        );
+        assert!(!win_trigger_findings(&pushed).is_empty());
+        let pr = plant(
+            &real,
+            "on:\n  workflow_dispatch:\n",
+            "on:\n  workflow_dispatch:\n  pull_request:\n",
+        );
+        assert!(!win_trigger_findings(&pr).is_empty());
+    }
+
+    /// W-3b: the `suite` input is the enum and the only input.
+    fn win_input_findings(text: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        let inputs: Vec<&str> = text
+            .lines()
+            .skip_while(|l| *l != "    inputs:")
+            .skip(1)
+            .take_while(|l| l.starts_with("      "))
+            .collect();
+        let children: Vec<&str> = inputs
+            .iter()
+            .copied()
+            .filter(|l| !l.starts_with("       "))
+            .collect();
+        if children != ["      suite:"] {
+            out.push(format!("inputs {children:?}"));
+        }
+        for want in [
+            "        type: choice",
+            "        options: [hello, win-test, tor-smoke]",
+            "        default: hello",
+        ] {
+            if !inputs.contains(&want) {
+                out.push(format!("missing {want:?}"));
+            }
+        }
+        let keys = inputs
+            .iter()
+            .filter(|l| l.starts_with("        ") && !l.starts_with("         "))
+            .count();
+        if keys != 4 {
+            out.push(format!("{keys} keys under suite, not 4"));
+        }
+        out
+    }
+
+    /// W-3b
+    #[test]
+    fn win_ondemand_suite_input_is_the_enum() {
+        let real = win_text();
+        assert_eq!(win_input_findings(&real), Vec::<String>::new());
+        let more = plant(
+            &real,
+            "options: [hello, win-test, tor-smoke]",
+            "options: [hello, win-test, tor-smoke, all]",
+        );
+        assert!(!win_input_findings(&more).is_empty());
+        let other = plant(
+            &real,
+            "        default: hello\n",
+            "        default: hello\n      extra:\n        type: string\n",
+        );
+        assert!(!win_input_findings(&other).is_empty());
+    }
+
+    /// W-3c: jobs, names, permissions and runners.
+    fn win_job_findings(text: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        let jobs = yaml_jobs(text);
+        let ids: Vec<&str> = jobs.iter().map(|j| j.id.as_str()).collect();
+        if ids != ["vm-up", "win-suite", "vm-down"] {
+            out.push(format!("jobs {ids:?}"));
+        }
+        for id in &ids {
+            if expect::PINNED_JOBS.contains(id)
+                || ["tor-smoke", "ks-hour"].contains(id)
+                || id.starts_with("dispatch-")
+            {
+                out.push(format!("job {id} reuses a reserved name"));
+            }
+        }
+        out.extend(workflow_token_findings(WIN_NAME, text));
+        for j in &jobs {
+            let has = j.prop("permissions").is_some();
+            let token = expect::OIDC_JOBS.contains(&j.id.as_str());
+            if has != token {
+                out.push(format!("job {}: permissions present = {has}", j.id));
+            }
+            if token {
+                if j.prop("runs-on") != Some("ubuntu-latest") {
+                    out.push(format!("token job {} not on ubuntu-latest", j.id));
+                }
+                let block = job_block(text, &j.id).unwrap_or_default().join("\n");
+                if !block.contains(OIDC_SET.trim_end()) {
+                    out.push(format!(
+                        "token job {} lacks the exact permissions block",
+                        j.id
+                    ));
+                }
+            }
+        }
+        out
+    }
+
+    /// W-3c
+    #[test]
+    fn win_ondemand_jobs_and_permissions() {
+        let real = win_text();
+        assert_eq!(win_job_findings(&real), Vec::<String>::new());
+        let ci = lf(include_str!("../../.github/workflows/ci.yml"));
+        let files = |t: &str| {
+            vec![
+                (expect::REQUIRED_WORKFLOW.to_owned(), ci.clone()),
+                (WIN_NAME.to_owned(), t.to_owned()),
+            ]
+        };
+        assert_eq!(required_job_findings(&files(&real)), Vec::<String>::new());
+        let renamed = real
+            .replace("  win-suite:\n", "  windows-native:\n")
+            .replace("vm-up\n      - win-suite", "vm-up\n      - windows-native");
+        assert!(!win_job_findings(&renamed).is_empty());
+        assert!(!required_job_findings(&files(&renamed)).is_empty());
+        let suite_perm = plant(
+            &real,
+            "    timeout-minutes: 60\n",
+            "    timeout-minutes: 60\n    permissions:\n      id-token: write\n      contents: read\n",
+        );
+        assert!(!win_job_findings(&suite_perm).is_empty());
+        let hosted = plant(
+            &real,
+            "  vm-up:\n    runs-on: ubuntu-latest\n",
+            "  vm-up:\n    runs-on: windows-latest\n",
+        );
+        assert!(!win_job_findings(&hosted).is_empty());
+    }
+
+    /// The step texts of a token job must have no repository code and nothing but the dictated `uses:`.
+    fn token_job_common_findings(text: &str, job: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        let block = job_block(text, job).unwrap_or_default();
+        let code: Vec<&str> = block
+            .iter()
+            .copied()
+            .filter(|l| !l.trim_start().starts_with('#'))
+            .collect();
+        let joined = code.join("\n");
+        for bad in [
+            "actions/checkout",
+            "./",
+            "cargo",
+            "xtask",
+            "az vm stop",
+            "az vm restart",
+            "az vm delete",
+            "az vm redeploy",
+            "secrets.",
+        ] {
+            if joined.contains(bad) {
+                out.push(format!("{job}: contains {bad:?}"));
+            }
+        }
+        let uses = code
+            .iter()
+            .filter(|l| l.trim_start().trim_start_matches("- ").starts_with("uses:"))
+            .count();
+        if uses != 1 {
+            out.push(format!("{job}: {uses} `uses:` lines, not 1"));
+        }
+        let steps = win_steps(text, job);
+        let login = steps
+            .first()
+            .and_then(|s| step_field(s, "uses"))
+            .unwrap_or_default();
+        if !login.split_once('@').is_some_and(|(a, r)| {
+            a == "azure/login" && is_sha40(r.split_whitespace().next().unwrap_or_default())
+        }) {
+            out.push(format!(
+                "{job}: first step is not azure/login@<sha40>: {login}"
+            ));
+        }
+        for (want, line) in [
+            (
+                "client-id",
+                "          client-id: ${{ vars.AZURE_CLIENT_ID }}",
+            ),
+            (
+                "tenant-id",
+                "          tenant-id: ${{ vars.AZURE_TENANT_ID }}",
+            ),
+            (
+                "subscription-id",
+                "          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}",
+            ),
+            ("RG", "          RG: ${{ vars.AZURE_VM_RG }}"),
+            ("VM", "          VM: ${{ vars.AZURE_VM_NAME }}"),
+        ] {
+            if !code.contains(&line) {
+                out.push(format!("{job}: missing {want} line {line:?}"));
+            }
+        }
+        let last = steps.last();
+        let logout = last.is_some_and(|s| {
+            step_field(s, "if").as_deref() == Some("always()") && step_run(s) == ["az logout"]
+        });
+        if !logout {
+            out.push(format!(
+                "{job}: the last step is not `if: always()` + `az logout`"
+            ));
+        }
+        out
+    }
+
+    fn vm_up_findings(text: &str) -> Vec<String> {
+        let mut out = token_job_common_findings(text, "vm-up");
+        let steps = win_steps(text, "vm-up");
+        if steps.len() != 3 {
+            out.push(format!("vm-up: {} steps, not 3", steps.len()));
+        }
+        let state = steps.get(1).cloned().unwrap_or_default();
+        let id = step_field(&state, "id").unwrap_or_default();
+        let want = format!("      was_running: ${{{{ steps.{id}.outputs.was_running }}}}");
+        if id.is_empty()
+            || !job_block(text, "vm-up")
+                .unwrap_or_default()
+                .contains(&want.as_str())
+        {
+            out.push(format!("vm-up: no output {want:?}"));
+        }
+        let run = step_run(&state);
+        if !run
+            .iter()
+            .any(|l| l.starts_with("echo \"was_running=") && l.ends_with(">> \"$GITHUB_OUTPUT\""))
+        {
+            out.push("vm-up: does not write was_running to GITHUB_OUTPUT".to_owned());
+        }
+        let starts: Vec<usize> = run
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| l.starts_with("az vm start"))
+            .map(|(i, _)| i)
+            .collect();
+        match starts.as_slice() {
+            [i] => {
+                let before = |k: usize| run.get(i.checked_sub(k)?).map(String::as_str);
+                if before(1) != Some("echo \"was_running=false\" >> \"$GITHUB_OUTPUT\"")
+                    || before(2) != Some("else")
+                {
+                    out.push(
+                        "vm-up: `az vm start` is not in the was_running=false branch".to_owned(),
+                    );
+                }
+            }
+            other => out.push(format!("vm-up: {} `az vm start` lines, not 1", other.len())),
+        }
+        if !run
+            .iter()
+            .any(|l| l.starts_with("power=$(az vm get-instance-view -g \"$RG\" -n \"$VM\""))
+        {
+            out.push("vm-up: does not read the power state".to_owned());
+        }
+        if run.iter().any(|l| l.contains("deallocate")) {
+            out.push("vm-up: deallocates".to_owned());
+        }
+        out
+    }
+
+    /// W-3d
+    #[test]
+    fn vm_up_reports_was_running_and_starts_only_when_stopped() {
+        let real = win_text();
+        assert_eq!(vm_up_findings(&real), Vec::<String>::new());
+        let unguarded = plant(
+            &real,
+            "          else\n            echo \"was_running=false\" >> \"$GITHUB_OUTPUT\"\n            az vm start -g \"$RG\" -n \"$VM\"\n          fi\n",
+            "          else\n            echo \"was_running=false\" >> \"$GITHUB_OUTPUT\"\n          fi\n          az vm start -g \"$RG\" -n \"$VM\"\n",
+        );
+        assert!(!vm_up_findings(&unguarded).is_empty());
+        let checkout = plant(
+            &real,
+            "    steps:\n      - name: Azure login (OIDC)\n",
+            "    steps:\n      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n      - name: Azure login (OIDC)\n",
+        );
+        assert!(!vm_up_findings(&checkout).is_empty());
+        let no_logout = plant(
+            &real,
+            "      - name: Azure logout\n        if: always()\n        run: az logout\n",
+            "",
+        );
+        assert!(!vm_up_findings(&no_logout).is_empty());
+        let stop = plant(
+            &real,
+            "            az vm start -g \"$RG\" -n \"$VM\"\n",
+            "            az vm start -g \"$RG\" -n \"$VM\"\n            az vm stop -g \"$RG\" -n \"$VM\"\n",
+        );
+        assert!(!vm_up_findings(&stop).is_empty());
+    }
+
+    fn vm_down_findings(text: &str) -> Vec<String> {
+        let mut out = token_job_common_findings(text, "vm-down");
+        let jobs = yaml_jobs(text);
+        let Some(j) = jobs.iter().find(|j| j.id == "vm-down") else {
+            return vec!["no vm-down".to_owned()];
+        };
+        if j.needs() != Some((vec!["vm-up".to_owned(), "win-suite".to_owned()], false)) {
+            out.push(format!("vm-down: needs {:?}", j.needs()));
+        }
+        if j.prop("if") != Some("always() && needs.vm-up.outputs.was_running == 'false'") {
+            out.push(format!("vm-down: if {:?}", j.prop("if")));
+        }
+        let steps = win_steps(text, "vm-down");
+        if steps.len() != 3 {
+            out.push(format!("vm-down: {} steps, not 3", steps.len()));
+        }
+        if steps.get(1).map(|s| step_run(s))
+            != Some(vec!["az vm deallocate -g \"$RG\" -n \"$VM\"".to_owned()])
+        {
+            out.push("vm-down: the second step is not exactly `az vm deallocate`".to_owned());
+        }
+        let block = job_block(text, "vm-down").unwrap_or_default().join("\n");
+        if block.matches("az vm ").count() != 1 || block.contains("az vm start") {
+            out.push("vm-down: the only `az vm` verb must be deallocate".to_owned());
+        }
+        out
+    }
+
+    /// W-3e
+    #[test]
+    fn vm_down_deallocates_only_what_vm_up_started() {
+        let real = win_text();
+        assert_eq!(vm_down_findings(&real), Vec::<String>::new());
+        let cond = "    if: always() && needs.vm-up.outputs.was_running == 'false'\n";
+        for planted in [
+            "    if: always()\n",
+            "    if: always() && needs.vm-up.outputs.was_running == 'true'\n",
+            "    if: always() && needs.vm-up.outputs.was_running == 'false' && needs.win-suite.outputs.x\n",
+        ] {
+            assert!(
+                !vm_down_findings(&plant(&real, cond, planted)).is_empty(),
+                "{planted}"
+            );
+        }
+        let flow = plant(
+            &real,
+            "    needs:\n      - vm-up\n      - win-suite\n",
+            "    needs: [vm-up, win-suite]\n",
+        );
+        assert!(!vm_down_findings(&flow).is_empty());
+        assert!(!workflow_findings(WIN_NAME, &flow).is_empty());
+        let start = plant(
+            &real,
+            "        run: az vm deallocate -g \"$RG\" -n \"$VM\"\n",
+            "        run: az vm start -g \"$RG\" -n \"$VM\"\n",
+        );
+        assert!(!vm_down_findings(&start).is_empty());
+    }
+
+    fn win_suite_runner_findings(text: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        let block = job_block(text, "win-suite").unwrap_or_default();
+        let at = block.iter().position(|l| *l == "    runs-on:");
+        let list: Vec<&str> = at
+            .map(|i| {
+                block
+                    .iter()
+                    .copied()
+                    .skip(i.saturating_add(1))
+                    .take(4)
+                    .collect()
+            })
+            .unwrap_or_default();
+        if list.get(..3) != Some(&["      - self-hosted", "      - windows", "      - win11"][..])
+            || list.get(3).is_some_and(|l| l.starts_with("      - "))
+        {
+            out.push(format!("runs-on {list:?}"));
+        }
+        let jobs = yaml_jobs(text);
+        if jobs
+            .iter()
+            .find(|j| j.id == "win-suite")
+            .and_then(|j| j.prop("needs"))
+            != Some("vm-up")
+        {
+            out.push("win-suite: needs is not the scalar vm-up".to_owned());
+        }
+        for step in win_steps(text, "win-suite") {
+            if step_run(&step).is_empty() {
+                continue;
+            }
+            let tor_run = step.iter().any(|l| l.contains("tor_smoke.exe"));
+            let want = if tor_run { "powershell" } else { "cmd" };
+            if step_field(&step, "shell").as_deref() != Some(want) {
+                out.push(format!("step {:?}: shell is not {want}", step.first()));
+            }
+        }
+        out
+    }
+
+    /// W-3f
+    #[test]
+    fn win_suite_runs_on_the_secmpro_runner() {
+        let real = win_text();
+        assert_eq!(win_suite_runner_findings(&real), Vec::<String>::new());
+        let hosted = plant(
+            &real,
+            "    runs-on:\n      - self-hosted\n      - windows\n      - win11\n",
+            "    runs-on: windows-latest\n",
+        );
+        assert!(!win_suite_runner_findings(&hosted).is_empty());
+        let flow = plant(
+            &real,
+            "    runs-on:\n      - self-hosted\n      - windows\n      - win11\n",
+            "    runs-on: [self-hosted, windows, win11]\n",
+        );
+        assert!(!win_suite_runner_findings(&flow).is_empty());
+        assert!(!workflow_findings(WIN_NAME, &flow).is_empty());
+        let pepacker = plant(
+            &real,
+            "      - win11\n",
+            "      - win11\n      - pepacker\n",
+        );
+        assert!(!win_suite_runner_findings(&pepacker).is_empty());
+        let pwsh = plant(&real, "shell: powershell", "shell: pwsh");
+        assert!(!win_suite_runner_findings(&pwsh).is_empty());
+    }
+
+    fn win_suite_line_findings(text: &str, dispatch: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        let steps = win_steps(text, "win-suite");
+        let probe = steps.iter().map(|s| step_run(s)).find(|r| !r.is_empty());
+        let want_probe: Vec<String> = [
+            "rustc -Vv || exit /b 1",
+            "cargo -V || exit /b 1",
+            "nasm -v || exit /b 1",
+            "git --version || exit /b 1",
+            "rustup component list --installed || exit /b 1",
+            "pwsh -v || echo no-pwsh",
+        ]
+        .map(str::to_owned)
+        .to_vec();
+        if probe.as_ref() != Some(&want_probe) {
+            out.push(format!("probe {probe:?}"));
+        }
+        for s in &steps {
+            if step_field(s, "shell").as_deref() == Some("cmd") {
+                for l in step_run(s) {
+                    if !l.ends_with(" || exit /b 1") && l != "pwsh -v || echo no-pwsh" {
+                        out.push(format!("cmd line without `|| exit /b 1`: {l}"));
+                    }
+                }
+            }
+        }
+        let with_if = |suite: &str| -> Vec<&Vec<String>> {
+            let cond = format!("inputs.suite == '{suite}'");
+            steps
+                .iter()
+                .filter(|s| step_field(s, "if").as_deref() == Some(cond.as_str()))
+                .collect()
+        };
+        let gate = "cargo xtask step --strict clippy nextest doctest kat hello";
+        let build = "cargo build --locked --release -p secmp-testkit --features harness --example tor_smoke";
+        for (line, what) in [
+            (gate, "ci-dispatch win-test gate line"),
+            (build, "ci-dispatch tor_smoke build line"),
+        ] {
+            if !dispatch
+                .lines()
+                .any(|l| l.trim_start().trim_start_matches("run: ") == line)
+            {
+                out.push(format!("{what} {line:?} is not in ci-dispatch.yml"));
+            }
+        }
+        let hello = with_if("hello");
+        if hello.len() != 1
+            || hello.first().map(|s| step_run(s))
+                != Some(vec![
+                    "cargo xtask step --strict hello || exit /b 1".to_owned(),
+                ])
+        {
+            out.push("hello suite step".to_owned());
+        }
+        let win = with_if("win-test");
+        if win.len() != 1
+            || win.first().map(|s| step_run(s)) != Some(vec![format!("{gate} || exit /b 1")])
+        {
+            out.push("win-test suite step".to_owned());
+        }
+        let tor = with_if("tor-smoke");
+        if tor.len() != 2
+            || tor.first().map(|s| step_run(s)) != Some(vec![format!("{build} || exit /b 1")])
+        {
+            out.push("tor-smoke build step".to_owned());
+        }
+        let ps = tor
+            .get(1)
+            .map(|s| step_run(s).join("\n"))
+            .unwrap_or_default();
+        let regex = "'^MR07 bootstrap_seconds=[0-9.]+ bytes_down=[0-9]+$'";
+        if !dispatch.contains(&format!("grep -E {regex}")) {
+            out.push("the MR-07 regex is not in ci-dispatch.yml".to_owned());
+        }
+        for frag in [
+            "Join-Path $env:RUNNER_TEMP 'arti-profile'",
+            "Remove-Item -Recurse -Force",
+            "$LASTEXITCODE -ne 0",
+            "-Tail 1",
+            regex,
+        ] {
+            if !ps.contains(frag) {
+                out.push(format!("tor-smoke run step lacks {frag:?}"));
+            }
+        }
+        out
+    }
+
+    /// W-3g
+    #[test]
+    fn win_suite_lines_per_suite() {
+        let real = win_text();
+        let dispatch = lf(include_str!("../../.github/workflows/ci-dispatch.yml"));
+        assert_eq!(
+            win_suite_line_findings(&real, &dispatch),
+            Vec::<String>::new()
+        );
+        let kat = plant(
+            &real,
+            "doctest kat hello || exit",
+            "nextest kat hello || exit",
+        );
+        assert!(!win_suite_line_findings(&kat, &dispatch).is_empty());
+        let nasm = plant(&real, "nasm -v || exit /b 1", "nasm -v");
+        assert!(!win_suite_line_findings(&nasm, &dispatch).is_empty());
+        let cold = plant(
+            &real,
+            "          if (Test-Path $p) { Remove-Item -Recurse -Force $p }\n",
+            "",
+        );
+        assert!(!win_suite_line_findings(&cold, &dispatch).is_empty());
+        let order = plant(
+            &real,
+            "          cargo -V || exit /b 1\n          nasm -v || exit /b 1\n",
+            "          nasm -v || exit /b 1\n          cargo -V || exit /b 1\n",
+        );
+        assert!(!win_suite_line_findings(&order, &dispatch).is_empty());
+    }
+
+    fn win_hygiene_findings(text: &str) -> Vec<String> {
+        let mut out = workflow_findings(WIN_NAME, text);
+        let code: Vec<&str> = text
+            .lines()
+            .filter(|l| !l.trim_start().starts_with('#'))
+            .collect();
+        let joined = code.join("\n");
+        let login = code
+            .iter()
+            .filter(|l| l.contains("uses: azure/login@"))
+            .count();
+        if login != 2
+            || win_steps(text, "win-suite")
+                .iter()
+                .any(|s| s.iter().any(|l| l.contains("azure/login")))
+        {
+            out.push(format!("azure/login x{login} (vm-up and vm-down only)"));
+        }
+        let checkout = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1";
+        let in_suite = win_steps(text, "win-suite")
+            .iter()
+            .filter(|s| s.iter().any(|l| l.contains(checkout)))
+            .count();
+        if joined.matches("actions/checkout").count() != 1
+            || in_suite != 1
+            || !joined.contains("persist-credentials: false")
+        {
+            out.push("checkout: once, in win-suite, with persist-credentials: false".to_owned());
+        }
+        if joined.contains("secrets.") {
+            out.push("secrets.".to_owned());
+        }
+        for v in [
+            "AZURE_CLIENT_ID",
+            "AZURE_TENANT_ID",
+            "AZURE_SUBSCRIPTION_ID",
+            "AZURE_VM_RG",
+            "AZURE_VM_NAME",
+        ] {
+            if !joined.contains(&format!("vars.{v}")) {
+                out.push(format!("vars.{v} not referenced"));
+            }
+        }
+        if yaml_lines(text).iter().any(|l| l.key == "environment") {
+            out.push("environment: key".to_owned());
+        }
+        if joined.contains("apt-get") {
+            out.push("apt-get".to_owned());
+        }
+        for job in ["vm-up", "win-suite", "vm-down"] {
+            for s in win_steps(text, job) {
+                if step_run(&s).iter().any(|l| l.contains("${{")) {
+                    out.push(format!("{job}: expression inside a run block"));
+                }
+            }
+        }
+        out
+    }
+
+    /// W-3h
+    #[test]
+    fn win_ondemand_actions_pinned_and_no_secrets() {
+        let real = win_text();
+        assert_eq!(win_hygiene_findings(&real), Vec::<String>::new());
+        for (from, to) in [
+            (
+                "uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0",
+                "uses: azure/login@v2",
+            ),
+            (
+                "client-id: ${{ vars.AZURE_CLIENT_ID }}",
+                "client-id: ${{ secrets.X }}",
+            ),
+            (
+                "    runs-on: ubuntu-latest\n    timeout-minutes: 15\n    permissions:",
+                "    runs-on: ubuntu-latest\n    environment: ci\n    timeout-minutes: 15\n    permissions:",
+            ),
+            (
+                "        run: az logout\n",
+                "        run: echo ${{ inputs.suite }}\n",
+            ),
+            (
+                "          persist-credentials: false\n",
+                "          persist-credentials: true\n",
+            ),
+        ] {
+            assert!(
+                !win_hygiene_findings(&plant(&real, from, to)).is_empty(),
+                "{to}"
+            );
+        }
+    }
+
+    /// W-3i
+    #[test]
+    fn win_ondemand_concurrency_and_budgets() {
+        let real = win_text();
+        let want = "concurrency:\n  group: win-ondemand-vm\n  cancel-in-progress: false\n";
+        assert!(real.contains(want));
+        assert!(
+            !plant(
+                &real,
+                want,
+                "concurrency:\n  group: win-ondemand-vm\n  cancel-in-progress: true\n"
+            )
+            .contains(want)
+        );
+        let budgets: Vec<(String, Option<String>)> = yaml_jobs(&real)
+            .into_iter()
+            .map(|j| (j.id.clone(), j.prop("timeout-minutes").map(str::to_owned)))
+            .collect();
+        let expected = [("vm-up", "15"), ("win-suite", "60"), ("vm-down", "15")]
+            .map(|(j, t)| (j.to_owned(), Some(t.to_owned())));
+        assert_eq!(budgets, expected);
+    }
+
+    /// W-3j: the five real workflows, each under its full path, pass every workflow gate.
+    #[test]
+    fn every_real_workflow_passes_the_gates() {
+        let files = [
+            (
+                ".github/workflows/ci.yml",
+                lf(include_str!("../../.github/workflows/ci.yml")),
+            ),
+            (
+                ".github/workflows/ci-dispatch.yml",
+                lf(include_str!("../../.github/workflows/ci-dispatch.yml")),
+            ),
+            (
+                ".github/workflows/fuzz-nightly.yml",
+                lf(include_str!("../../.github/workflows/fuzz-nightly.yml")),
+            ),
+            (
+                ".github/workflows/miri-full.yml",
+                lf(include_str!("../../.github/workflows/miri-full.yml")),
+            ),
+            (WIN_NAME, win_text()),
+        ];
+        for (name, text) in &files {
+            assert_eq!(
+                workflow_token_findings(name, text),
+                Vec::<String>::new(),
+                "{name}"
+            );
+            assert_eq!(
+                workflow_findings(name, text),
+                Vec::<String>::new(),
+                "{name}"
+            );
+            assert_eq!(
+                step_name_findings(name, text),
+                Vec::<String>::new(),
+                "{name}"
+            );
+            assert_eq!(nasm_findings(name, text), Vec::<String>::new(), "{name}");
+        }
+        assert_eq!(
+            win_text().lines().next(),
+            Some("# SPDX-License-Identifier: AGPL-3.0-or-later")
+        );
+        let owned: Vec<(String, String)> = files
+            .iter()
+            .map(|(n, t)| ((*n).to_owned(), t.clone()))
+            .collect();
+        assert_eq!(required_job_findings(&owned), Vec::<String>::new());
+        let text_of = |n: &str| {
+            owned
+                .iter()
+                .find(|(f, _)| f == n)
+                .map(|(_, t)| t.clone())
+                .unwrap_or_default()
+        };
+        assert_eq!(
+            optional_job_findings(
+                &text_of(expect::REQUIRED_WORKFLOW),
+                &text_of(".github/workflows/ci-dispatch.yml")
+            ),
+            Vec::<String>::new()
+        );
+    }
+
+    /// W-3k
+    #[test]
+    fn win_ondemand_artefact_names_end_with_attempt() {
+        let real = win_text();
+        let names = upload_artifact_names(&yaml_lines(&real));
+        assert!(!names.is_empty());
+        for n in &names {
+            assert!(
+                n.as_deref()
+                    .is_some_and(|n| n.starts_with("win-ondemand-")
+                        && n.ends_with("-${{ github.run_attempt }}")),
+                "{n:?}"
+            );
+        }
+        let bare = plant(
+            &real,
+            "-${{ github.sha }}-${{ github.run_attempt }}",
+            "-${{ github.sha }}",
+        );
+        assert_eq!(workflow_findings(WIN_NAME, &bare).len(), 1);
+    }
+
+    /// W-3l: an OIDC workflow's `win-suite` is proved to have NASM by the probe alone; no other workflow gets that.
+    #[test]
+    fn oidc_workflow_nasm_by_probe() {
+        assert!(expect::NASM_JOBS.contains(&(WIN_NAME, "win-suite")));
+        let env = "env:\n  AWS_LC_SYS_PREBUILT_NASM: \"0\"\n";
+        let steps_ok =
+            "    steps:\n      - run: nasm -v\n      - run: cargo xtask step --strict hello\n";
+        let text =
+            |env: &str, steps: &str| format!("{env}jobs:\n  win-suite:\n    runs-on: x\n{steps}");
+        assert_eq!(
+            nasm_findings(WIN_NAME, &text(env, steps_ok)),
+            Vec::<String>::new()
+        );
+        let no_probe = "    steps:\n      - run: cargo xtask step --strict hello\n";
+        assert!(!nasm_findings(WIN_NAME, &text(env, no_probe)).is_empty());
+        let late =
+            "    steps:\n      - run: cargo xtask step --strict hello\n      - run: nasm -v\n";
+        assert!(!nasm_findings(WIN_NAME, &text(env, late)).is_empty());
+        assert!(!nasm_findings(WIN_NAME, &text("", steps_ok)).is_empty());
+        let dispatch = lf(include_str!("../../.github/workflows/ci-dispatch.yml"));
+        let start = dispatch.find("  dispatch-windows:\n").unwrap_or_default();
+        let from = dispatch.get(start..).unwrap_or_default();
+        let steps_at = start.saturating_add(from.find("    steps:\n").unwrap_or_default());
+        let end = start.saturating_add(from.find("\n  dispatch-xwin:").unwrap_or_default());
+        let swapped = format!(
+            "{}{}{}",
+            dispatch.get(..steps_at).unwrap_or_default(),
+            steps_ok,
+            dispatch.get(end..).unwrap_or_default()
+        );
+        let found = nasm_findings(".github/workflows/ci-dispatch.yml", &swapped);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(
+            found.iter().all(|f| f.contains("does not install NASM")),
+            "{found:?}"
+        );
     }
 
     /// M4 review C-5 (V5 (d)): every delegation of a pinned line maps to a pinned job with its own gate line, and the

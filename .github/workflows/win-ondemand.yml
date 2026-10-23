@@ -1,0 +1,144 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# On-demand Windows runs on the owner's Azure Windows 11 VM as a self-hosted runner (ADR-029 Amendment 1). Dispatch only
+# (`workflow_dispatch`; never a pull request, a push or a schedule), by the owner or the reviewer, and dispatchable only
+# once this file is on the default branch. Three jobs: `vm-up` starts the VM when it is stopped and reports whether it
+# was running; `win-suite` runs the chosen suite on the runner `secmpro-win11-x64` (labels self-hosted, windows, win11);
+# `vm-down` deallocates the VM only when `vm-up` started it (the VM is shared with another project and runs 24/7).
+# Azure access is GitHub OIDC with job-scoped `id-token: write` on `vm-up` and `vm-down` only (ubuntu-latest, no checkout,
+# no repository script); the suite job has no token. Identifiers are repository variables, there is no secret. Not a
+# required check; its output is owner evidence (X-10, TOR-10 bootstrap part, MR-05 VM part), not a CI gate.
+# Checked by `cargo xtask policy` as every workflow (`expect::OIDC_WORKFLOWS`, `expect::OIDC_JOBS`, `expect::NASM_JOBS`).
+name: win-ondemand
+
+on:
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: "hello = the hello gate step; win-test = the Windows gate (clippy, nextest, doctest, kat, hello); tor-smoke = the cold Arti bootstrap over real Tor and the MR-07 line"
+        type: choice
+        options: [hello, win-test, tor-smoke]
+        default: hello
+
+permissions:
+  contents: read
+
+# One VM, one group, for every ref and suite; a cancel must not race `vm-down`.
+concurrency:
+  group: win-ondemand-vm
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  # OPEN-M6-06 A, ADR-051: aws-lc-sys assembles from source with the NASM on the runner, never with its prebuilt objects
+  # (docs/06 §3); checked by `windows_builds_nasm_from_source`.
+  AWS_LC_SYS_PREBUILT_NASM: "0"
+
+jobs:
+  vm-up:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      id-token: write
+      contents: read
+    outputs:
+      was_running: ${{ steps.state.outputs.was_running }}
+    steps:
+      - name: Azure login (OIDC)
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Start the VM when it is stopped
+        id: state
+        env:
+          RG: ${{ vars.AZURE_VM_RG }}
+          VM: ${{ vars.AZURE_VM_NAME }}
+        run: |
+          power=$(az vm get-instance-view -g "$RG" -n "$VM" --query "instanceView.statuses[?starts_with(code, 'PowerState/')].code | [0]" -o tsv)
+          if [ "$power" = "PowerState/running" ]; then
+            echo "was_running=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "was_running=false" >> "$GITHUB_OUTPUT"
+            az vm start -g "$RG" -n "$VM"
+          fi
+      - name: Azure logout
+        if: always()
+        run: az logout
+
+  win-suite:
+    needs: vm-up
+    runs-on:
+      - self-hosted
+      - windows
+      - win11
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Probe the runner toolchain
+        shell: cmd
+        run: |
+          rustc -Vv || exit /b 1
+          cargo -V || exit /b 1
+          nasm -v || exit /b 1
+          git --version || exit /b 1
+          rustup component list --installed || exit /b 1
+          pwsh -v || echo no-pwsh
+      - name: Suite hello
+        if: inputs.suite == 'hello'
+        shell: cmd
+        run: cargo xtask step --strict hello || exit /b 1
+      - name: Suite win-test
+        if: inputs.suite == 'win-test'
+        shell: cmd
+        run: cargo xtask step --strict clippy nextest doctest kat hello || exit /b 1
+      - name: Build the Tor smoke check
+        if: inputs.suite == 'tor-smoke'
+        shell: cmd
+        run: cargo build --locked --release -p secmp-testkit --features harness --example tor_smoke || exit /b 1
+      - name: Cold bootstrap (MR-07)
+        if: inputs.suite == 'tor-smoke'
+        shell: powershell
+        run: |
+          $p = Join-Path $env:RUNNER_TEMP 'arti-profile'
+          if (Test-Path $p) { Remove-Item -Recurse -Force $p }
+          New-Item -ItemType Directory -Force target\tor-smoke | Out-Null
+          & target\release\examples\tor_smoke.exe $p | Tee-Object -FilePath target\tor-smoke\tor-smoke.txt
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          $last = Get-Content target\tor-smoke\tor-smoke.txt -Tail 1
+          if ($last -notmatch '^MR07 bootstrap_seconds=[0-9.]+ bytes_down=[0-9]+$') { exit 1 }
+      - name: Upload the evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: win-ondemand-${{ inputs.suite }}-${{ github.sha }}-${{ github.run_attempt }}
+          path: target/tor-smoke/
+          if-no-files-found: ignore
+
+  vm-down:
+    needs:
+      - vm-up
+      - win-suite
+    if: always() && needs.vm-up.outputs.was_running == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Azure login (OIDC)
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Deallocate the VM that vm-up started
+        env:
+          RG: ${{ vars.AZURE_VM_RG }}
+          VM: ${{ vars.AZURE_VM_NAME }}
+        run: az vm deallocate -g "$RG" -n "$VM"
+      - name: Azure logout
+        if: always()
+        run: az logout

@@ -1,6 +1,12 @@
 
 # cargo-vet audits file
 
+[[audits.ctutils]]
+who = "Claude Sonnet 5.5 (implementer)"
+criteria = "safe-to-deploy"
+delta = "0.4.2 -> 0.4.4"
+notes = "RUSTSEC-2026-0385 fix; diff read in full by the implementer under reviewer instruction C2-W2"
+
 [[audits.rand]]
 who = "Claude Code (Opus 5.5), SecMPro implementer"
 criteria = "safe-to-deploy"

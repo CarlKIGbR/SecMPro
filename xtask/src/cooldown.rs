@@ -548,7 +548,7 @@ mod tests {
             ("arti-client", "0.46.0"),
             ("rustls", "0.23.46"),
             ("tokio-rustls", "0.26.5"),
-            ("tokio", "1.53.1"),
+            ("tokio", "1.53.3"),
             ("aws-lc-rs", "1.18.1"),
             ("turmoil", "0.7.2"),
         ] {

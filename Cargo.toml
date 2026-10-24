@@ -64,7 +64,7 @@ aws-lc-rs = { version = "=1.18.1", default-features = false, features = ["aws-lc
 arti-client = { version = "=0.46.0", default-features = false, features = ["tokio", "rustls", "onion-service-client", "static-sqlite"] }
 rustls = { version = "=0.23.46", default-features = false, features = ["aws_lc_rs", "std"] }
 tokio-rustls = { version = "=0.26.5", default-features = false }
-tokio = { version = "=1.53.1", default-features = false, features = ["rt", "rt-multi-thread", "net", "time", "sync", "io-util"] }
+tokio = { version = "=1.53.3", default-features = false, features = ["rt", "rt-multi-thread", "net", "time", "sync", "io-util"] }
 turmoil = { version = "=0.7.2", default-features = false }
 
 # ADR-040: seeded generators for the property tests of secmp-proto (dev-dependency only; never key material).

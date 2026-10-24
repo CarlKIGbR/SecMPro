@@ -53,6 +53,7 @@ All notable changes to this project are documented in this file. The format foll
   exemptions only outside the normal `secmp-crypto`/`secmp-proto` closure (checked per target).
 - M6 Phase C2-4: `docs/measurements/M6-traffic.md` with evidence under `docs/measurements/M6-evidence/`; `cpu_per_slot_measured`; doc checks `m6_traffic_report_sections`, `recommendation_names_every_parameter`, `bootstrap_cost_measured`; `ct_targets_unchanged_in_m6`, `proverif_models_unchanged_in_m6`; `cargo xtask sbom` builds into `target/sbom-build` and checks the embedded package count against `Cargo.lock` (OPEN-M6-C1-3).
 - M6 Phase C2: large-file gate in the `policy` step (ADR-052): tracked files over 2 MiB must be in `expect::LARGE_FILE_ALLOW` with a reason, none may exceed 8 MiB; `core`/`core.*` are git-ignored.
+- M6 Phase C2-15b: `tokio` `=1.53.1` → `=1.53.3` (RUSTSEC-2026-0386, `AsyncFd` I/O safety; workspace pin + both lockfiles; vet delta certified; ADR-051 Am. 5).
 - M6 Phase C2-14: `linux-full` (and `dispatch-full`) restore the tools cache under `ci-tools-full-pv-`, so ProVerif is built once and cached instead of rebuilt on every run (ADR-045 Amendment 11).
 - M6 Phase C2-13: `linux-fast` budget 90 → 120 min (ADR-045 Amendment 10; runner-speed variance, PR run #182 was cancelled 22 ms after `ci-fast: PASS`).
 - M6 Phase C2-W2: `ctutils` 0.4.2 → 0.4.4 (lockfile only; RUSTSEC-2026-0385, non-constant-time mask generation; ADR-015 cooldown exception until 2026-10-30; vet delta certified).

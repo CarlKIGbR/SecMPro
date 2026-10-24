@@ -19,7 +19,7 @@ use secmp_proto::link::relay::RelayKeys;
 use secmp_proto::link::{FETCH_BATCH, FETCH_MULTI_BATCH, QUEUE_CAPACITY};
 use secmp_proto::tr::OsEntropy;
 use secmp_proto::wire::Id;
-use secmp_proto::wire::frame::{Request, RequestCmd};
+use secmp_proto::wire::frame::{CellrContext, Request, RequestCmd, ResponseCmd, opcode};
 use secmp_relay::budget::{
     BudgetLimits, LINKDATA_BLOB_CHARGE, LINKDATA_OVERHEAD, LINKDATA_RESERVATION, QUEUE_RESERVATION,
 };
@@ -30,9 +30,9 @@ use secmp_relay::keys::{DEFAULT_VALIDITY_SECS, Generation, KeyFile};
 use secmp_relay::linkdata::Entry;
 use secmp_relay::queue::Queue;
 use secmp_relay::relay::kat::StoreSnapshot;
-use secmp_relay::{HourBucket, Limits};
+use secmp_relay::{HourBucket, Limits, Outcome};
 
-use crate::fixture::{Client, EXPIRES, Key, at, now, rid_of, sid_of};
+use crate::fixture::{Client, EXPIRES, Key, at, lots, now, rid_of, sid_of};
 use crate::rl_util::{
     BLOB, CELL, Drive, V, Wire, add, code, distinct_bytes, flags, fresh_dir, identity, key_file,
     linkr, load, one_time, pair, presents, relay_sources, times, unlimited,
@@ -291,6 +291,73 @@ fn relay_sweeper_queue_idle_ttl() {
         rids(&d),
         Vec::<Id>::new(),
         "RL-05: expired at (b + 700) + 721"
+    );
+}
+
+/// VD-M6-A-10 `cell_ids_restart_on_queue_recreation`: cell ids belong to the queue instance, not to its `rid` (spec
+/// §9.1 `:591` "per-queue, monotonically increasing from 1", `:593` after a re-creation the recipient resets its ack
+/// and dedup set). A queue that is deleted, or that expires, and is created again with the same keys starts at
+/// `next_cell_id` 1 with no cells. The sweeper runs at the start of a command that is executed (§9.7 item 3,
+/// `Relay::execute`), so a `SKEY` — answered ERR 6 and not executed — at a new hour changes nothing, and the sweep and
+/// the re-creation of the next `QUEUE_NEW` happen in one command (the input `crash-335f88e8` of the `relay_executor`
+/// fuzz target found by CI run 38085054146: `QUEUE_NEW`, three `SEND`s, an hour jump past `QUEUE_IDLE_TTL`, `SKEY`,
+/// `QUEUE_NEW` with the same keys).
+#[test]
+fn cell_ids_restart_on_queue_recreation() {
+    let mut d = Drive::new(unlimited());
+    let (recv, sender) = pair(1, 2);
+    // `(next_cell_id, cell_ids)` of the only queue of the store
+    let only = |d: &Drive| {
+        let queues = d.b.relay.snapshot_kat().queues;
+        assert_eq!(queues.len(), 1, "one queue");
+        queues
+            .first()
+            .map(|q| (q.next_cell_id, q.cell_ids.clone()))
+            .unwrap()
+    };
+    let new = |d: &mut Drive, t| d.go(t, |c, n| c.queue_new(n, &recv, &sender));
+    let created = vec![V::QueueNew(rid_of(&recv.pk), sid_of(&recv.pk, &sender.pk))];
+
+    // deleted, then created again with the same keys
+    assert_eq!(new(&mut d, at(0, 0)), created);
+    for i in 1..=3 {
+        let sent = d.go(at(0, 0), |c, n| c.send(n, &recv, &sender, &[9; CELL]));
+        assert_eq!(sent, vec![V::Send(i, None)]);
+    }
+    assert_eq!(only(&d).0, 4);
+    assert_eq!(d.go(at(0, 0), |c, n| c.queue_del(n, &recv)), vec![V::Ok]);
+    assert_eq!(new(&mut d, at(0, 0)), created);
+    assert_eq!(only(&d), (1, vec![]), "after QUEUE_DEL and QUEUE_NEW");
+
+    // expired, then created again in the command that sweeps it
+    for i in 1..=3 {
+        let sent = d.go(at(0, 0), |c, n| c.send(n, &recv, &sender, &[9; CELL]));
+        assert_eq!(sent, vec![V::Send(i, None)]);
+    }
+    let seq = d.seq.bump();
+    let skey = [&[opcode::SKEY][..], &seq.to_be_bytes()].concat();
+    let unit = d.b.client.seal_payload(&skey);
+    let outcome = d.b.unit(&unit, at(721, 0), &mut lots());
+    assert!(matches!(outcome, Outcome::Respond(_)), "SKEY is answered");
+    let Outcome::Respond(frames) = outcome else {
+        return;
+    };
+    let first = frames.first().unwrap();
+    let answer = d.b.client.open(first.as_slice(), CellrContext::Fetch);
+    assert!(
+        matches!(answer.cmd, ResponseCmd::Err(c) if c.byte() == 6),
+        "SKEY is answered ERR 6"
+    );
+    assert_eq!(
+        only(&d),
+        (4, vec![1, 2, 3]),
+        "SKEY at b + 721 is not executed: nothing is swept"
+    );
+    assert_eq!(new(&mut d, at(721, 0)), created);
+    assert_eq!(
+        only(&d),
+        (1, vec![]),
+        "swept and created again in one command"
     );
 }
 

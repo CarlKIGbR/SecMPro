@@ -1,0 +1,45 @@
+K-12 / item 12: peak RSS of each secmp-proto Kani harness, run alone.
+tree: d1bcfdc (secmp-proto unchanged since the pin 6f6c7a8); host: container secmp-main (carlgpu4), Kani as installed there
+method: /usr/bin/time is not installed in the container; Python (python3 -I -c) ran
+  cargo kani -p secmp-proto -Z stubbing --harness kani_proofs::<name> --exact
+and read resource.getrusage(RUSAGE_CHILDREN).ru_maxrss (the same kernel value GNU time prints as "Maximum resident set size"),
+one process per harness, so the figure is that harness's largest descendant (cbmc). Wall time includes the cargo/Kani front end.
+Some runs overlapped with other harness runs; RSS is unaffected, wall times may be a little high.
+All 30 harnesses: VERIFICATION:- SUCCESSFUL.
+
+harness                                           max RSS (MB)   wall (s)   > 8 GB (8192 MB)
+kani_commit_accept_atomic                              13751        440     YES
+kani_proofs::tr_header_selection                       13425        141     YES
+kani_accept_opk_delete_only_on_success                 12127        420     YES
+kani_q_frame_plaintext_exact_fit                       11662        203     YES
+request_link_get                                        9304         57     YES
+response_frame                                          8754         60     YES
+kani_frame_pad_total                                    8541        346     YES
+kani_outer_unpad_total                                  7750         54
+kani_hx_grouping                                        5831        342
+header_v1_reencodes                                     3967         67
+request_fetch_multi                                     3802         78
+kani_cell_plaintext_decode_total                        3326         65
+request_link_put                                        2495         22
+kani_link_counter_strict_plus_one                       2432         31
+kani_link_counter_checked_add                           1857         27
+padding                                                 1756         59
+header_v1                                               1646         13
+request_queue_new                                       1303          8
+request_send                                            1235          8
+request_fetch                                           1218          7
+request_queue_del                                       1146          6
+request_frame                                           1122         13
+cell                                                     844         13
+request_skey                                             337          3
+request_cont                                             337          5
+request_ping                                             337          3
+kani_hx_chunk_bounds                                     251          2
+tr_skip_plan                                             244          2
+tr_eviction                                              242          2
+kani_cont_assembly                                       254          2
+
+peak: kani_commit_accept_atomic, 13751 MB (runner trace 38616364662: 13.8 GB; same harness).
+Seven harnesses exceed 8 GB, not one (BRIEF M6-C1 item 12 assumed a single peak).
+Solver probe: tr_header_selection with --solver cadical: 13421 MB, 140 s (13425 MB with the default): the memory is the
+symbolic execution / formula, not the SAT solver; no property-preserving reduction by solver choice.

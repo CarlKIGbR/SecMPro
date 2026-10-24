@@ -385,6 +385,8 @@ Negative control (M4 C-15): one committed K-06 run with the eviction removed, ex
 | CT-05 | `tr_decrypt_trial_open_position` | R-42/R-59: §7.4 header trial opens with 2 distinct skipped hks — composed | "header opens under the first candidate key" / "under the last" | B |
 | CT-06 | `link_same_content_control` | control for the new 2856-B record / 4352-B frame preparation path (ADR-042 Am. 2 rule: a new artefact class gets its control) | identical content through both class paths; FAIL ⇒ `CONTROL_FAIL` | B |
 
+CT-01…04 are floor-only; G-03 pins the comparison primitive (TEST-SPEC-M6 G-03, `ct_guard_sites_use_ct_eq`, M5 review F-6, R-124).
+
 Not targets (reason): `akc` and `relay_fp` compares (public values, §5.3); Ed25519 verification of RelayInfo and
 commands (public inputs); `cmd_seq` (known to both ends, its outcome is answered on the wire); frame counters (the
 counter is the nonce, nothing is compared); rid/sid/ld_id lookups (ids are not secret to the requester; M4 R-85).

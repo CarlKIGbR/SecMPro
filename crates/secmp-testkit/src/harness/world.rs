@@ -111,7 +111,7 @@ impl Client {
 }
 
 /// The relay's key material of a scenario: fixed seeds, so a restarted relay is the same relay (spec §8.2).
-struct RelaySeeds {
+pub(crate) struct RelaySeeds {
     sig: Vec<u8>,
     dh: Vec<u8>,
     kem: Vec<u8>,
@@ -119,7 +119,7 @@ struct RelaySeeds {
 }
 
 impl RelaySeeds {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let mut s = VectorStream::new("harness-relay-keys", 0);
         Self {
             sig: s.take(32),
@@ -129,7 +129,12 @@ impl RelaySeeds {
         }
     }
 
-    fn keys(&self) -> RelayKeys {
+    /// The relay's access key (the token credential, spec §9.6).
+    pub(crate) fn access(&self) -> AccessKey {
+        SecretBytes::from_slice(&self.access).unwrap()
+    }
+
+    pub(crate) fn keys(&self) -> RelayKeys {
         RelayKeys::new(
             Ed25519SigningKey::from_seed(&self.sig).unwrap(),
             X25519Secret::from_bytes(&self.dh).unwrap(),
@@ -142,7 +147,7 @@ impl RelaySeeds {
 }
 
 /// The relay's `valid_until` offset from the scenario start: the longest a `RELAYINFO` may announce (60 days).
-const KEY_VALIDITY_SECS: u64 = 5_184_000;
+pub(crate) const KEY_VALIDITY_SECS: u64 = 5_184_000;
 
 /// One relay and N clients (see the module documentation).
 pub struct Harness {
@@ -175,7 +180,11 @@ impl Harness {
         }
     }
 
-    fn start_relay(seeds: &RelaySeeds, config: &HarnessConfig, now: Now) -> &'static Relay {
+    pub(crate) fn start_relay(
+        seeds: &RelaySeeds,
+        config: &HarnessConfig,
+        now: Now,
+    ) -> &'static Relay {
         let ring = KeyRing::new(vec![(
             seeds.keys(),
             now.unix_secs.saturating_add(KEY_VALIDITY_SECS),
@@ -193,6 +202,17 @@ impl Harness {
     #[must_use]
     pub fn clock(&self) -> Clock {
         self.clock.clone()
+    }
+
+    /// A new connection to the relay (the relay's accept; `None` while it drains). The scheduler driver opens its
+    /// connections here.
+    pub fn open_stream(&mut self) -> Option<HarnessStream> {
+        HarnessStream::open(
+            self.relay,
+            &self.clock,
+            &self.relay_entropy,
+            self.config.split,
+        )
     }
 
     /// The relay (its stores and limits through the `kat` accessors).

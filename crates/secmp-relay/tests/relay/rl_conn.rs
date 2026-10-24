@@ -989,68 +989,73 @@ fn relay_unknown_request_opcode_tears_down() {
 }
 
 /// C-3 (M05 review R-107) `linked_idle_bound_closes_the_connection`: with the default idle bound (`link_idle_secs`
-/// 900), a link that has received no complete unit for 900 s is closed at the next tick, nothing emitted — 901 s of
-/// silence after the handshake: closed —; a complete unit restarts the bound; bytes after the close are not read
-/// (virtual clock).
+/// 240, OPEN-M6-15), a link that has received no complete unit for 240 s is closed at the next tick, nothing emitted
+/// — 241 s of silence after the handshake: closed —; a complete unit restarts the bound; bytes after the close are
+/// not read (virtual clock).
 #[test]
 fn linked_idle_bound_closes_the_connection() {
     let fx = RelayFx::case1();
     let relay = fx.relay(Limits::defaults());
-    assert_eq!(relay.limits().link_idle_ms, 900_000, "the C-3 default");
+    assert_eq!(
+        relay.limits().link_idle_ms,
+        240_000,
+        "the OPEN-M6-15 default"
+    );
     let mut quiet = Wire::link_a(&relay, &fx, mono(0));
     assert_eq!(
-        quiet.conn.on_tick(mono(899_999)),
+        quiet.conn.on_tick(mono(239_999)),
         Output::default(),
-        "C-3: open before 900 s"
+        "C-3: open before 240 s"
     );
     assert_eq!(
-        quiet.conn.on_tick(mono(901_000)),
+        quiet.conn.on_tick(mono(241_000)),
         closed(),
-        "C-3: 901 s of silence: closed, nothing emitted"
+        "C-3: 241 s of silence: closed, nothing emitted"
     );
     assert!(quiet.conn.is_closed() && quiet.conn.executor().is_none());
     let ping = quiet.client.seal(&Client::ping(1));
     assert_eq!(
-        quiet.conn.on_bytes(&ping, mono(901_000), &mut lots()),
+        quiet.conn.on_bytes(&ping, mono(241_000), &mut lots()),
         closed(),
         "C-3: nothing read or emitted after the close"
     );
     // a unit restarts the bound
     let t0 = 2_000_000;
     let mut w = Wire::link_a(&relay, &fx, mono(t0));
-    let unit_at = add(t0, 899_999);
+    let unit_at = add(t0, 239_999);
     assert_eq!(
         w.go(mono(unit_at), &mut lots(), |_, s| Client::ping(s)),
         vec![V::Ok],
         "C-3: a unit just before the bound is served"
     );
     assert_eq!(
-        w.conn.on_tick(mono(add(unit_at, 899_999))),
+        w.conn.on_tick(mono(add(unit_at, 239_999))),
         Output::default(),
         "C-3: the unit restarted the bound"
     );
     assert_eq!(
-        w.conn.on_tick(mono(add(unit_at, 900_000))),
+        w.conn.on_tick(mono(add(unit_at, 240_000))),
         closed(),
-        "C-3: 900 s after the last unit: closed"
+        "C-3: 240 s after the last unit: closed"
     );
 }
 
 /// C-3 (M05 review R-107) `linked_age_bound_closes_at_link_lifetime`: a link is closed, nothing emitted, once it is
-/// 24 h old — the upper end of `LINK_LIFETIME` ~ U[6 h, 24 h] (spec §2, §10.1 item 1; OPEN-M5-03) — also while it is
-/// busy: with a unit every 800 s it is served up to 24 h − 1 ms after its handshake and closed at 24 h; without the
-/// idle bound the age bound alone closes it, at a tick or at arriving bytes (virtual clock).
+/// 87 000 s old — the upper end of `LINK_LIFETIME` ~ U[6 h, 24 h] (spec §2, §10.1 item 1; OPEN-M5-03) plus 10 min
+/// (OPEN-M6-15) — also while it is busy: with a unit every 200 s (inside the 240-s idle bound) it is served up to
+/// 87 000 s − 1 ms after its handshake and closed at 87 000 s; without the idle bound the age bound alone closes it, at
+/// a tick or at arriving bytes (virtual clock).
 #[test]
 fn linked_age_bound_closes_at_link_lifetime() {
     let fx = RelayFx::case1();
-    assert_eq!(LINK_AGE_MAX_MS, times_ms(24 * 3600), "24 h");
+    assert_eq!(LINK_AGE_MAX_MS, times_ms(24 * 3600 + 600), "24 h + 10 min");
     let relay = fx.relay(Limits::defaults());
     let start = 5_000;
     let end = add(start, LINK_AGE_MAX_MS);
     let mut w = Wire::link_a(&relay, &fx, mono(start));
     let mut t = start;
-    while add(t, 800_000) < end {
-        t = add(t, 800_000);
+    while add(t, 200_000) < end {
+        t = add(t, 200_000);
         assert_eq!(
             w.go(mono(t), &mut lots(), |_, s| Client::ping(s)),
             vec![V::Ok],
@@ -1061,12 +1066,12 @@ fn linked_age_bound_closes_at_link_lifetime() {
     assert_eq!(
         w.go(mono(last), &mut lots(), |_, s| Client::ping(s)),
         vec![V::Ok],
-        "C-3: served at 24 h − 1 ms"
+        "C-3: served at 87 000 s − 1 ms"
     );
     assert_eq!(
         w.conn.on_tick(mono(end)),
         closed(),
-        "C-3: closed at 24 h, nothing emitted"
+        "C-3: closed at 87 000 s, nothing emitted"
     );
     // the age bound alone (no idle bound)
     let ageless = fx.relay(Limits {
@@ -1079,12 +1084,12 @@ fn linked_age_bound_closes_at_link_lifetime() {
     assert_eq!(
         w.conn.on_bytes(&ping, mono(end), &mut lots()),
         closed(),
-        "C-3: a unit at 24 h is not served: closed, nothing emitted"
+        "C-3: a unit at 87 000 s is not served: closed, nothing emitted"
     );
     let mut w = Wire::link_a(&ageless, &fx, mono(start));
     assert_eq!(
         w.conn.on_tick(mono(end)),
         closed(),
-        "C-3: a tick at 24 h closes"
+        "C-3: a tick at 87 000 s closes"
     );
 }

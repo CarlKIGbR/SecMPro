@@ -53,10 +53,19 @@ getrandom = { version = "=0.4.3", default-features = false }
 libc = { version = "=0.2.189", default-features = false }
 windows-sys = { version = "=0.61.2", default-features = false, features = ["Win32_Foundation", "Win32_System_Memory", "Win32_System_SystemInformation", "Win32_System_Threading"] }
 
-# ADR-023, ADR-036, ADR-037: test-only differential partners (dev-dependencies of secmp-testkit); never in the
-# shipped closure.
+# ADR-023, ADR-036, ADR-037: test-only differential partners (dev-dependencies of secmp-testkit). ADR-051 Part 2:
+# `aws-lc-rs` is also the TLS crypto provider of `secmp-transport` and of the relay's `direct-tls` listener.
 ml-kem = { version = "=0.3.2", default-features = false }
 aws-lc-rs = { version = "=1.18.1", default-features = false, features = ["aws-lc-sys", "alloc"] }
+
+# ADR-051 Part 2 (owner): the async runtime and the transport providers of M6 — Tor (Arti), TLS 1.3 (rustls over
+# aws-lc-rs, X25519MLKEM768 only) for `secmp-transport`, the relay's optional direct listener (`direct-tls`) and the
+# turmoil simulations (dev). Never used for SecMP constructions (CLAUDE.md §1.6). `aws-lc-rs` is the entry above.
+arti-client = { version = "=0.46.0", default-features = false, features = ["tokio", "rustls", "onion-service-client", "static-sqlite"] }
+rustls = { version = "=0.23.46", default-features = false, features = ["aws_lc_rs", "std"] }
+tokio-rustls = { version = "=0.26.5", default-features = false }
+tokio = { version = "=1.53.3", default-features = false, features = ["rt", "rt-multi-thread", "net", "time", "sync", "io-util"] }
+turmoil = { version = "=0.7.2", default-features = false }
 
 # ADR-040: seeded generators for the property tests of secmp-proto (dev-dependency only; never key material).
 rand = { version = "=0.10.3", default-features = false, features = ["std_rng"] }
@@ -64,6 +73,9 @@ rand = { version = "=0.10.3", default-features = false, features = ["std_rng"] }
 # Workspace crates (path dependencies; docs/02 §3 fixes who may depend on whom).
 secmp-crypto = { path = "crates/secmp-crypto" }
 secmp-proto = { path = "crates/secmp-proto" }
+secmp-relay = { path = "crates/secmp-relay" }
+secmp-transport = { path = "crates/secmp-transport" }
+secmp-client-core = { path = "crates/secmp-client-core" }
 secmp-sys-mem = { path = "crates/secmp-sys-mem" }
 secmp-testkit = { path = "crates/secmp-testkit" }
 
@@ -92,6 +104,20 @@ mem_forget = "deny"
 large_stack_arrays = "warn"
 undocumented_unsafe_blocks = "deny"      # every unsafe block needs a `// SAFETY:` comment (fires only where unsafe exists)
 multiple_unsafe_ops_per_block = "deny"   # one unsafe operation per block
+
+# M6: the scheduler tests run hours of virtual time, i.e. thousands of hybrid-ratchet steps and handshakes; third-party
+# crates and the two crypto crates are optimised in the dev/test profile (no change to the release profile, no change
+# to any lint or gate). Debug assertions stay on. Scoped to the `test` profile (M6-16): the `dev` profile also builds the
+# Kani harnesses, and `secmp-proto` at opt-level 3 made CBMC exceed the 16 GB of the CI runner (run 38606378025, job
+# `kani`, 15.5 GB RSS, OOM -> runner shutdown); on main (opt-level 0) the same harness set verifies within budget.
+[profile.test.package."*"]
+opt-level = 3
+
+[profile.test.package.secmp-crypto]
+opt-level = 3
+
+[profile.test.package.secmp-proto]
+opt-level = 3
 
 # docs/06 §6 — release profile for reproducible builds.
 [profile.release]

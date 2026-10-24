@@ -1,0 +1,35 @@
+Run 39776847202 (PR run #176, head a265384, workflow "M06 transport"), read with `gh run view 39776847202 --json jobs` and
+`gh run view 39776847202 --job <id> --log` on 2026-10-22. Wall time = completedAt − startedAt of the job.
+
+job                    id            conclusion  wall time
+linux-full             119817852433  success     3 h 30 m 52 s
+fuzz                   119817852743  success     1 h 13 m 06 s
+proverif-hx            119817852940  success     0 h 08 m 45 s
+proverif-link          119817852769  success     0 h 20 m 25 s
+kani                   119817852835  success     1 h 51 m 36 s
+ct                     119817852871  success     1 h 49 m 03 s
+xwin-cross             119817853151  success     0 h 07 m 31 s
+linux-fast             119817853030  success     0 h 56 m 45 s
+windows-native         119817852945  failure     0 h 42 m 06 s   (stack overflow of the main thread, fixed in 1769900; the cell is [#177])
+mutants-shard (0..11)  119817852999 …  9 success, 3 failure (shards 1, 2, 3: the three survivors of Conversation::message_key_digests_kat, killed in 2f71140)
+  shard wall times: 0: 2 h 24 m · 1: 2 h 22 m · 2: 2 h 31 m · 3: 2 h 19 m · 4: 1 h 50 m · 5: 2 h 20 m · 6: 2 h 17 m · 7: 1 h 40 m · 8: 1 h 29 m · 9: 2 h 22 m · 10: 2 h 20 m · 11: 1 h 33 m
+mutants (merge)        119892535945  failure     0 h 00 m 37 s   (the three undocumented survivors above)
+ci-verdict             119926086648  failure     (follows windows-native and mutants)
+
+Step lines of the jobs (the `step summary` of the gate runner):
+kani           PASS 6658 s   Kani 0.68.0: harness packages secmp-client-core, secmp-proto, secmp-relay; 46/46 harnesses verified (expect::KANI_HARNESSES)
+fuzz           PASS 4335 s   fuzz smoke, 120 s per target, 33 targets (caead_open … x25519_dh, incl. scheduler_event_sequence, relay_executor, relay_link_session)
+proverif-hx    PASS  493 s   ProVerif 2.05, --models hx; model hashes: 31 of 31 match expect::PROVERIF_MODEL_SHA256
+proverif-link  PASS 1177 s   ProVerif 2.05, --models link; model hashes: 31 of 31 match expect::PROVERIF_MODEL_SHA256
+ct             success       1 h 49 m 03 s; the job's step summary is not in the log (the bench output goes to target/ct-bench.log), no ct figure is quoted
+linux-full steps (job 119817852433): clippy 87 s · nextest 622 s · kat 4453 s · perf 24 s · coverage 4171 s · miri 2956 s · proverif (tr) 200 s · sbom 29 s
+linux-full perf: encrypt + persist + decrypt + commit per message, 200 per kind on x86_64-unknown-linux-gnu: chain median 199.9 µs, max 261.0 µs; DH step median 544.1 µs, max 616.3 µs
+linux-full coverage: secmp-cli 83.3 % · secmp-client-core 96.1 % (3233/3365 lines) · secmp-crypto 99.4 % (2525/2541 lines) · secmp-proto … (see the job log)
+
+mutants (mutants-merge, job 119892535945):
+  secmp-crypto       caught 171, missed 1, timeout 0, unviable 107 of 279
+  secmp-proto        caught 857, missed 3, timeout 0, unviable 350 of 1210
+  secmp-relay        caught 438, missed 0, timeout 0, unviable 134 of 572
+  secmp-client-core  caught 530, missed 8, timeout 0, unviable  95 of 633
+  secmp-transport    caught 341, missed 4, timeout 0, unviable 205 of 550
+  survivors documented in docs/mutants-accepted.md: 13, undocumented: 3 (conversation.rs:343:9, three replacements of message_key_digests_kat)

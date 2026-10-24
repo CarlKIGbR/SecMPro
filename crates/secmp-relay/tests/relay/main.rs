@@ -5,6 +5,8 @@
 
 mod conn_stream;
 mod d2;
+#[cfg(feature = "direct-tls")]
+mod direct_tls;
 mod fixture;
 mod generator;
 mod props;

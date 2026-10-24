@@ -1,0 +1,26 @@
+# PR run 39939400878 (head 60083afe8f613c4fa8f8574be6409e5e1ffd39f6, workflow "M06 transport"; the run as a whole was cancelled, the job below succeeded)
+# job windows-native 120366845842 · windows-latest · 2026-10-23 10:28:58–11:16:35 UTC (wall time 47 min 37 s) · conclusion success
+# read with: gh api --allow-escape-sequences repos/CarlKIGbR/SecMPro/actions/jobs/120366845842/logs (escape codes stripped)
+# Gate summary lines of `cargo xtask step --strict clippy nextest doctest kat hello` (ci.yml:127):
+   2 clippy          PASS        111s  clippy --all-features -D warnings on x86_64-pc-windows-msvc (12 crates)
+   4 nextest         PASS        799s  cargo nextest run --workspace; cargo nextest run --package secmp-proto (non-kat); both with SECMP_PROPTEST_SEED removed (every property with its DEFAULT_SEED, the CI run seed pass is in the k
+   4 doctest         PASS          1s  cargo test --doc
+   5 kat             PASS       1866s  KAT/differential packages: secmp-client-core, secmp-crypto, secmp-proto, secmp-relay, secmp-testkit (expected set matches); ML-KEM KATs and frozen vectors (M1 suites, tr, hx, link) also with 
+   4 hello           PASS          0s  secmp-relay 0.0.0 (M5) | secmp-cli 0.0.0 (M0 skeleton: no functionality) | secmp-ui 0.0.0 (M0 skeleton: no functionality)
+# nextest step (===[4] nextest=== … ===[4] doctest===): nextest summaries
+     Summary [  32.916s] 1074 tests run: 1074 passed (2 leaky), 0 skipped
+     Summary [   0.522s] 162 tests run: 162 passed, 0 skipped
+# kat step (===[5] kat=== … ===[4] hello===): nextest summaries
+     Summary [   0.124s] 18 tests run: 18 passed, 0 skipped
+     Summary [   0.794s] 125 tests run: 125 passed, 0 skipped
+     Summary [   5.337s] 378 tests run: 378 passed, 0 skipped
+     Summary [  15.422s] 192 tests run: 192 passed, 0 skipped
+     Summary [ 900.749s] 280 tests run: 280 passed (4 slow), 16 skipped
+     Summary [   3.008s] 29 tests run: 29 passed, 349 skipped
+     Summary [   0.876s] 6 tests run: 6 passed, 186 skipped
+     Summary [  10.659s] 8 tests run: 8 passed, 288 skipped
+     Summary [   0.313s] 22 tests run: 22 passed, 0 skipped
+     Summary [   1.874s] 202 tests run: 202 passed, 0 skipped
+# MR-05 on the runner:
+        PASS [  11.212s] (100/280) secmp-testkit::harness m6_measure::cpu_per_slot_measured
+# The test writes its figures to target/m6-evidence/MR-05.txt on the runner and does not print them; the job uploads no artefact, so no microsecond figure exists for Windows.

@@ -1,0 +1,4 @@
+# Coverage per crate and the X-01 youngest-crate line of the local ci-full run on cdf2b31
+
+   7 coverage        PASS        363s  secmp-cli: 5/6 lines = 83.3 % (min 80 %); secmp-client-core: 2960/3206 lines = 92.3 % (min 90 %); secmp-crypto: 2525/2541 lines = 99.4 % (min 90 %); secmp-proto: 6658/6814 lines = 97.7 % (min 90 %); secmp-relay: 2738/2803 lines = 97.7 % (min 80 %); secmp-store: no code; secmp-sys-desktop: no code; secmp-sys-mem: 242/254 lines = 95.3 % (min 80 %); secmp-testkit: 1751/1869 lines = 93.7 % (min 80 %); secmp-transport: 1765/2059 lines = 85.7 % (min 80 %); secmp-ui: 5/6 lines = 83.3 % (min 80 %) (xtask not measured)
+   3 cooldown        PASS         23s  561 registry packages (Cargo.lock, fuzz/Cargo.lock), all ≥ 7 days old or excepted (ADR-015 Am. 2); youngest: toml_writer 1.1.3+spec-1.1.0, 8 days; cooldown: exception rustls@0.23.46 until 2026-10-21 (RUSTSEC-2026-0346/-0347/-0348/-0349 (ADR-015 Am. 2))

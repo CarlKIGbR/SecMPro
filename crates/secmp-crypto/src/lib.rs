@@ -49,6 +49,8 @@ mod x25519;
 
 pub use aead::Aead;
 pub use caead::{AEAD_TAG_LEN, COM_LEN, Caead, NONCE_LEN};
+#[cfg(feature = "kat")]
+pub use ed25519::SIGN_CALLS_KAT;
 pub use ed25519::{
     ED25519_PK_LEN, ED25519_SEED_LEN, ED25519_SIG_LEN, Ed25519SigningKey, Ed25519VerifyingKey,
     check_ed25519_signature_encoding,

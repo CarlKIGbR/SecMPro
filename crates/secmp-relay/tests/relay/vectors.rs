@@ -48,6 +48,8 @@ pub struct Run {
     out: Vec<Vec<Vec<u8>>>,
     /// The response payloads the client decoded.
     opened: Vec<Vec<u8>>,
+    /// The payload length `unpad` found in each opened response plaintext (R-134).
+    unpadded: Vec<usize>,
     /// Relay (`c2r`, `r2c`, `cmd_seq`) after the case.
     relay_post: (u64, u64, u32),
     /// Client (`c2r`, `r2c`) after the case.
@@ -158,7 +160,7 @@ fn build(n: usize, case: &Case, cl: &Client, k: &Keys) -> Option<Vec<Request>> {
 }
 
 /// The client's frames, the relay's frames per request unit, the decoded response payloads.
-type Exchange = (Vec<Vec<u8>>, Vec<Vec<Vec<u8>>>, Vec<Vec<u8>>);
+type Exchange = (Vec<Vec<u8>>, Vec<Vec<Vec<u8>>>, Vec<Vec<u8>>, Vec<usize>);
 
 /// Run the request payloads of a case: seal, relay, open.
 fn run_requests(b: &mut Bench, reqs: &[Vec<u8>], entropy: &mut FixedEntropy) -> Exchange {
@@ -166,6 +168,7 @@ fn run_requests(b: &mut Bench, reqs: &[Vec<u8>], entropy: &mut FixedEntropy) -> 
     let mut sealed = Vec::new();
     let mut out = Vec::new();
     let mut opened = Vec::new();
+    let mut unpadded = Vec::new();
     for payload in reqs {
         let frame = b.client.seal_payload(payload);
         let outcome = b.unit(&frame, now(), entropy);
@@ -178,12 +181,21 @@ fn run_requests(b: &mut Bench, reqs: &[Vec<u8>], entropy: &mut FixedEntropy) -> 
             Outcome::Pending | Outcome::Teardown => Vec::new(),
         };
         for f in &frames {
+            // M05 review R-134: the unit as the client opens it is a 4336-byte padded plaintext whose padding is valid
+            // (`unpad` Ok); its payload is what the length rule says, never a re-padded copy of it
+            let unit = b.client.link.open_unit(f).unwrap();
+            assert_eq!(
+                unit.padded().len(),
+                PLAIN,
+                "the opened plaintext is one frame payload"
+            );
+            unpadded.push(unpad(unit.padded(), PLAIN).unwrap().len());
             opened.push(payload_of(&b.client.open(f, context)));
         }
         sealed.push(frame);
         out.push(frames);
     }
-    (sealed, out, opened)
+    (sealed, out, opened, unpadded)
 }
 
 fn fill(b: &mut Bench, c: &Case, k: &Keys) -> ([u8; 32], Vec<u8>) {
@@ -195,7 +207,8 @@ fn fill(b: &mut Bench, c: &Case, k: &Keys) -> ([u8; 32], Vec<u8>) {
         let req = b
             .client
             .send(c.cmd_seq().checked_add(i).unwrap(), &k.b.0, &k.b.1, &cell);
-        let (sealed, out, opened) = run_requests(b, &payloads(&[req]), &mut FixedEntropy::new(&[]));
+        let (sealed, out, opened, _) =
+            run_requests(b, &payloads(&[req]), &mut FixedEntropy::new(&[]));
         all.extend(sealed.concat());
         all.extend(out.concat().concat());
         last = opened.concat();
@@ -257,14 +270,21 @@ fn replay() -> &'static [Run] {
         for n in 6..=50 {
             let case = file.case(n);
             let mut entropy = FixedEntropy::new(&relay_draws(case));
-            let (built, sealed, out, opened, fill_out) = if case.op() == "send-fill" {
+            let (built, sealed, out, opened, unpadded, fill_out) = if case.op() == "send-fill" {
                 let f = fill(&mut bench, case, &keys);
-                (None, Vec::new(), Vec::new(), Vec::new(), Some(f))
+                (
+                    None,
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                    Some(f),
+                )
             } else {
                 let built = build(n, case, &bench.client, &keys).map(|reqs| payloads(&reqs));
-                let (sealed, out, opened) =
+                let (sealed, out, opened, unpadded) =
                     run_requests(&mut bench, &case.output_list("req"), &mut entropy);
-                (built, sealed, out, opened, None)
+                (built, sealed, out, opened, unpadded, None)
             };
             let l = &bench.client.link;
             runs.push(Run {
@@ -272,6 +292,7 @@ fn replay() -> &'static [Run] {
                 sealed,
                 out,
                 opened,
+                unpadded,
                 relay_post: bench.link_post(),
                 client_post: (l.send_counter().unwrap(), l.recv_counter().unwrap()),
                 snapshot: bench.relay.snapshot_kat(),
@@ -586,10 +607,30 @@ fn link_vectors_indist() {
     );
     for n in 6..=50 {
         check(n);
-        // every response plaintext the client opened was a 4336-byte ISO/IEC 7816-4 padded payload: re-pad it
-        for p in &run_of(n).opened {
-            let padded = secmp_proto::codec::pad(p, PLAIN).unwrap();
-            assert_eq!(padded.len(), PLAIN, "link-{n:04} plaintext length");
+    }
+}
+
+/// M05 review R-134 (M6 G-07): every response plaintext the client opened in the replay of cases 6…50 was a 4336-byte
+/// ISO/IEC 7816-4 padded payload — `unpad` of the opened unit is Ok and its payload at most 4335 bytes, read off the unit
+/// as opened, not off a re-padded copy of the payload.
+#[test]
+fn v16_checks_unpad() {
+    for n in 6..=50 {
+        // every response plaintext the client opened was a 4336-byte ISO/IEC 7816-4 padded payload: `unpad` of it is Ok
+        // and its payload is at most 4335 bytes — read off the opened unit, not a re-padded copy of the payload
+        let run = run_of(n);
+        assert_eq!(
+            run.unpadded.len(),
+            run.opened.len(),
+            "link-{n:04} one length per opened response"
+        );
+        for (len, payload) in run.unpadded.iter().zip(&run.opened) {
+            assert!(*len < PLAIN, "link-{n:04} payload length {len}");
+            assert_eq!(
+                *len,
+                payload.len(),
+                "link-{n:04} unpad matches the decoded payload"
+            );
         }
     }
 }

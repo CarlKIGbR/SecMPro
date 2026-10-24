@@ -1,0 +1,2354 @@
+diff --git a/work/home/.cache/cargo-vet/src/rustls-0.23.45/Cargo.toml b/work/home/.cache/cargo-vet/src/rustls-0.23.46/Cargo.toml
+index df0a113..dd67ad5 100644
+--- a/work/home/.cache/cargo-vet/src/rustls-0.23.45/Cargo.toml
++++ b/work/home/.cache/cargo-vet/src/rustls-0.23.46/Cargo.toml
+@@ -13,7 +13,7 @@
+ edition = "2021"
+ rust-version = "1.71"
+ name = "rustls"
+-version = "0.23.45"
++version = "0.23.46"
+ build = "build.rs"
+ exclude = [
+     "src/testdata",
+diff --git a/work/home/.cache/cargo-vet/src/rustls-0.23.45/Cargo.toml.orig b/work/home/.cache/cargo-vet/src/rustls-0.23.46/Cargo.toml.orig
+index a1c97bd..168aa06 100644
+--- a/work/home/.cache/cargo-vet/src/rustls-0.23.45/Cargo.toml.orig
++++ b/work/home/.cache/cargo-vet/src/rustls-0.23.46/Cargo.toml.orig
+@@ -1,6 +1,6 @@
+ [package]
+ name = "rustls"
+-version = "0.23.45"
++version = "0.23.46"
+ edition = "2021"
+ rust-version = "1.71"
+ license = "Apache-2.0 OR ISC OR MIT"
+diff --git a/work/home/.cache/cargo-vet/src/rustls-0.23.45/src/client/ech.rs b/work/home/.cache/cargo-vet/src/rustls-0.23.46/src/client/ech.rs
+index 3d0b767..c002891 100644
+--- a/work/home/.cache/cargo-vet/src/rustls-0.23.45/src/client/ech.rs
++++ b/work/home/.cache/cargo-vet/src/rustls-0.23.46/src/client/ech.rs
+@@ -326,6 +326,9 @@ pub(crate) struct EchState {
+     enable_sni: bool,
+     // The extensions sent in the inner hello.
+     sent_extensions: Vec<ExtensionType>,
++    // Whether a hello retry request accepted our ECH offer, if we received one. RFC 9849
++    // section 6.1.4 makes that decision final.
++    accepted_by_hello_retry_request: Option<bool>,
+ }
+ 
+ impl EchState {
+@@ -370,6 +373,7 @@ impl EchState {
+             early_data_key_schedule: None,
+             enable_sni,
+             sent_extensions: Vec::new(),
++            accepted_by_hello_retry_request: None,
+         })
+     }
+ 
+@@ -453,7 +457,16 @@ impl EchState {
+         server_hello_encoded: &Payload<'_>,
+         hash: &'static dyn Hash,
+         server_name: &mut ServerName<'static>,
++        common: &mut CommonState,
+     ) -> Result<Option<EchAccepted>, Error> {
++        // After a rejecting hello retry request the handshake continues with the outer hello
++        // without consulting the server hello, see RFC 9849 section 6.1.6.
++        if self.accepted_by_hello_retry_request == Some(false) {
++            trace!("ECH rejected by server in hello retry request");
++            *server_name = ServerName::DnsName(self.outer_name);
++            return Ok(None);
++        }
++
+         // Start the inner transcript hash now that we know the hash algorithm to use.
+         let inner_transcript = self
+             .inner_hello_transcript
+@@ -487,6 +500,13 @@ impl EchState {
+                     sent_extensions: self.sent_extensions,
+                 }))
+             }
++            // An accepting hello retry request requires an "illegal_parameter" alert here
++            // -- <https://www.rfc-editor.org/info/rfc9849/#section-6.1.5>
++            false if self.accepted_by_hello_retry_request == Some(true) => Err(common
++                .send_fatal_alert(
++                    AlertDescription::IllegalParameter,
++                    PeerMisbehaved::EchAcceptanceVariedAfterRetry,
++                )),
+             false => {
+                 trace!("ECH rejected by server");
+ 
+@@ -501,7 +521,7 @@ impl EchState {
+     }
+ 
+     pub(crate) fn confirm_hrr_acceptance(
+-        &self,
++        &mut self,
+         hrr: &HelloRetryRequest,
+         cs: &Tls13CipherSuite,
+         common: &mut CommonState,
+@@ -509,7 +529,10 @@ impl EchState {
+         // The client checks for the "encrypted_client_hello" extension.
+         let ech_conf = match &hrr.encrypted_client_hello {
+             // If none is found, the server has implicitly rejected ECH.
+-            None => return Ok(false),
++            None => {
++                self.accepted_by_hello_retry_request = Some(false);
++                return Ok(false);
++            }
+             // Otherwise, if it has a length other than 8, the client aborts the
+             // handshake with a "decode_error" alert.
+             Some(ech_conf) if ech_conf.bytes().len() != 8 => {
+@@ -537,16 +560,18 @@ impl EchState {
+             confirmation_transcript.current_hash(),
+         );
+ 
+-        match ConstantTimeEq::ct_eq(derived.as_ref(), ech_conf.bytes()).into() {
++        let accepted = match ConstantTimeEq::ct_eq(derived.as_ref(), ech_conf.bytes()).into() {
+             true => {
+                 trace!("ECH accepted by server in hello retry request");
+-                Ok(true)
++                true
+             }
+             false => {
+                 trace!("ECH rejected by server in hello retry request");
+-                Ok(false)
++                false
+             }
+-        }
++        };
++        self.accepted_by_hello_retry_request = Some(accepted);
++        Ok(accepted)
+     }
+ 
+     /// Update the ECH context inner hello transcript based on a received hello retry request message.
+@@ -944,6 +969,256 @@ mod tests {
+         }
+     }
+ 
++    #[macro_rules_attribute::apply(test_for_each_provider)]
++    mod hello_retry_request {
++        use super::*;
++        use crate::common_state::Side;
++        use crate::crypto::SharedSecret;
++        use crate::msgs::base::PayloadU16;
++        use crate::msgs::handshake::{HelloRetryRequestExtensions, SupportedProtocolVersions};
++        use crate::tls13::key_schedule::KeySchedulePreHandshake;
++
++        #[test]
++        fn ech_rejection_in_server_hello_after_acceptance_in_hello_retry_request() {
++            let suite = tls13_suite();
++            let hash = suite.common.hash_provider;
++            let mut state = ech_state();
++
++            // the server accepts our offer in its hello retry request...
++            state
++                .ech_hello(outer_hello(), None, &None)
++                .unwrap();
++            let hrr = accepting_hello_retry_request(&state, suite);
++            assert!(
++                state
++                    .confirm_hrr_acceptance(&hrr, suite, &mut CommonState::new(Side::Client))
++                    .unwrap()
++            );
++            state.transcript_hrr_update(hash, &hrr_message(&hrr));
++            state
++                .ech_hello(outer_hello(), Some(&hrr), &None)
++                .unwrap();
++
++            // ...but its server hello does not confirm that acceptance
++            let server_hello = server_hello(suite);
++            let mut server_name = inner_name();
++            assert_eq!(
++                state
++                    .confirm_acceptance(
++                        &mut handshake_key_schedule(suite),
++                        &server_hello,
++                        &encode(&server_hello),
++                        hash,
++                        &mut server_name,
++                        &mut CommonState::new(Side::Client),
++                    )
++                    .err(),
++                Some(PeerMisbehaved::EchAcceptanceVariedAfterRetry.into())
++            );
++        }
++
++        #[test]
++        fn ech_acceptance_in_server_hello_after_rejection_in_hello_retry_request() {
++            let suite = tls13_suite();
++            let hash = suite.common.hash_provider;
++            let mut key_schedule = handshake_key_schedule(suite);
++
++            // without a hello retry request, a confirming server hello accepts ECH
++            let mut state = ech_state();
++            state
++                .ech_hello(outer_hello(), None, &None)
++                .unwrap();
++            let server_hello = confirming_server_hello(&state, &mut key_schedule, suite);
++            let mut server_name = inner_name();
++            assert!(
++                state
++                    .confirm_acceptance(
++                        &mut key_schedule,
++                        &server_hello,
++                        &encode(&server_hello),
++                        hash,
++                        &mut server_name,
++                        &mut CommonState::new(Side::Client),
++                    )
++                    .unwrap()
++                    .is_some()
++            );
++            assert_eq!(server_name, inner_name());
++
++            // but after a rejecting hello retry request, a confirming server hello cannot revive it
++            let mut state = ech_state();
++            state
++                .ech_hello(outer_hello(), None, &None)
++                .unwrap();
++            let hrr = hello_retry_request(suite, None);
++            assert!(
++                !state
++                    .confirm_hrr_acceptance(&hrr, suite, &mut CommonState::new(Side::Client))
++                    .unwrap()
++            );
++            state.transcript_hrr_update(hash, &hrr_message(&hrr));
++            let server_hello = confirming_server_hello(&state, &mut key_schedule, suite);
++            let mut server_name = inner_name();
++            assert!(
++                state
++                    .confirm_acceptance(
++                        &mut key_schedule,
++                        &server_hello,
++                        &encode(&server_hello),
++                        hash,
++                        &mut server_name,
++                        &mut CommonState::new(Side::Client),
++                    )
++                    .unwrap()
++                    .is_none()
++            );
++            assert_eq!(server_name, ServerName::from(public_name()));
++        }
++
++        fn tls13_suite() -> &'static Tls13CipherSuite {
++            provider::cipher_suite::TLS13_AES_128_GCM_SHA256
++                .tls13()
++                .unwrap()
++        }
++
++        fn ech_state() -> EchState {
++            let config = EchConfig {
++                config: EchConfigPayload::V18(EchConfigContents {
++                    key_config: HpkeKeyConfig {
++                        config_id: 0,
++                        kem_id: MockHpke::SUITE.kem,
++                        public_key: PayloadU16::new(vec![0; 32]),
++                        symmetric_cipher_suites: vec![MockHpke::SUITE.sym],
++                    },
++                    maximum_name_length: 255,
++                    public_name: public_name(),
++                    extensions: vec![],
++                }),
++                suite: &MockHpke,
++            };
++
++            EchState::new(&config, inner_name(), false, &FixedRandom, true).unwrap()
++        }
++
++        fn inner_name() -> ServerName<'static> {
++            ServerName::try_from("inner.example.com").unwrap()
++        }
++
++        fn public_name() -> DnsName<'static> {
++            DnsName::try_from("public.example.com").unwrap()
++        }
++
++        fn outer_hello() -> ClientHelloPayload {
++            ClientHelloPayload {
++                client_version: ProtocolVersion::TLSv1_2,
++                random: Random([0u8; 32]),
++                session_id: SessionId::empty(),
++                cipher_suites: vec![tls13_suite().common.suite],
++                compression_methods: vec![Compression::Null],
++                extensions: Box::new(ClientExtensions {
++                    server_name: Some(ServerNamePayload::from(&public_name())),
++                    supported_versions: Some(SupportedProtocolVersions {
++                        tls13: true,
++                        tls12: false,
++                    }),
++                    ..Default::default()
++                }),
++            }
++        }
++
++        fn hello_retry_request(
++            suite: &'static Tls13CipherSuite,
++            encrypted_client_hello: Option<Payload<'static>>,
++        ) -> HelloRetryRequest {
++            HelloRetryRequest {
++                legacy_version: ProtocolVersion::TLSv1_2,
++                session_id: SessionId::empty(),
++                cipher_suite: suite.common.suite,
++                extensions: HelloRetryRequestExtensions {
++                    cookie: Some(PayloadU16::new(vec![1, 2, 3, 4])),
++                    supported_versions: Some(ProtocolVersion::TLSv1_3),
++                    encrypted_client_hello,
++                    ..HelloRetryRequestExtensions::default()
++                },
++            }
++        }
++
++        /// A hello retry request accepting the offer in `state`, see RFC 9849 section 7.2.1.
++        fn accepting_hello_retry_request(
++            state: &EchState,
++            suite: &'static Tls13CipherSuite,
++        ) -> HelloRetryRequest {
++            let mut hrr = hello_retry_request(suite, Some(Payload::new(vec![0u8; 8])));
++            let mut transcript = state
++                .inner_hello_transcript
++                .clone()
++                .start_hash(suite.common.hash_provider);
++            transcript.rollup_for_hrr();
++            transcript.add_message(&EchState::hello_retry_request_conf(&hrr));
++            let confirmation = server_ech_hrr_confirmation_secret(
++                suite.hkdf_provider,
++                &state.inner_hello_random.0,
++                transcript.current_hash(),
++            );
++            hrr.encrypted_client_hello = Some(Payload::new(confirmation.to_vec()));
++            hrr
++        }
++
++        fn hrr_message(hrr: &HelloRetryRequest) -> Message<'static> {
++            Message {
++                version: ProtocolVersion::TLSv1_2,
++                payload: MessagePayload::handshake(HandshakeMessagePayload(
++                    HandshakePayload::HelloRetryRequest(hrr.clone()),
++                )),
++            }
++        }
++
++        fn server_hello(suite: &'static Tls13CipherSuite) -> ServerHelloPayload {
++            ServerHelloPayload {
++                legacy_version: ProtocolVersion::TLSv1_2,
++                random: Random([0x55u8; 32]),
++                session_id: SessionId::empty(),
++                cipher_suite: suite.common.suite,
++                compression_method: Compression::Null,
++                extensions: Box::new(ServerExtensions::default()),
++            }
++        }
++
++        /// A server hello accepting the offer in `state`, see RFC 9849 section 7.2.
++        fn confirming_server_hello(
++            state: &EchState,
++            key_schedule: &mut KeyScheduleHandshakeStart,
++            suite: &'static Tls13CipherSuite,
++        ) -> ServerHelloPayload {
++            let mut server_hello = server_hello(suite);
++            let mut transcript = state
++                .inner_hello_transcript
++                .clone()
++                .start_hash(suite.common.hash_provider);
++            transcript.add_message(&EchState::server_hello_conf(
++                &server_hello,
++                &encode(&server_hello),
++            ));
++            let confirmation = key_schedule.server_ech_confirmation_secret(
++                &state.inner_hello_random.0,
++                transcript.current_hash(),
++            );
++            server_hello.random.0[24..].copy_from_slice(&confirmation);
++            server_hello
++        }
++
++        fn encode(server_hello: &ServerHelloPayload) -> Payload<'static> {
++            Payload::new(
++                HandshakeMessagePayload(HandshakePayload::ServerHello(server_hello.clone()))
++                    .get_encoding(),
++            )
++        }
++
++        fn handshake_key_schedule(suite: &'static Tls13CipherSuite) -> KeyScheduleHandshakeStart {
++            KeySchedulePreHandshake::new(suite).into_handshake(SharedSecret::from(&[0u8; 32][..]))
++        }
++    }
++
+     fn inner_hello_encoding_for_name(name: DnsName<'static>, enable_sni: bool) -> Vec<u8> {
+         let config = EchConfig {
+             config: EchConfigPayload::V18(EchConfigContents {
+@@ -1072,9 +1347,9 @@ mod tests {
+     struct MockHpkeSealer;
+ 
+     impl HpkeSealer for MockHpkeSealer {
+-        #[cfg_attr(coverage_nightly, coverage(off))]
+-        fn seal(&mut self, _aad: &[u8], _plaintext: &[u8]) -> Result<Vec<u8>, Error> {
+-            todo!()
++        fn seal(&mut self, _aad: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, Error> {
++            // ciphertext length as if sealed with the AEAD named in `MockHpke::SUITE`
++            Ok(vec![0xff; plaintext.len() + 16])
+         }
+     }
+ 
+diff --git a/work/home/.cache/cargo-vet/src/rustls-0.23.45/src/client/handy.rs b/work/home/.cache/cargo-vet/src/rustls-0.23.46/src/client/handy.rs
+index 3ad3073..3001167 100644
+--- a/work/home/.cache/cargo-vet/src/rustls-0.23.45/src/client/handy.rs
++++ b/work/home/.cache/cargo-vet/src/rustls-0.23.46/src/client/handy.rs
+@@ -75,10 +75,19 @@ mod cache {
+     }
+ 
+     impl ClientSessionMemoryCache {
+-        /// Make a new ClientSessionMemoryCache.  `size` is the
+-        /// maximum number of stored sessions.
++        /// Make a new `ClientSessionMemoryCache`.
++        ///
++        /// `size` determines the maximum number of servers to remember:
++        /// `size` divided by `MAX_TLS13_TICKETS_PER_SERVER` (8), rounded
++        /// up. Each server keeps up to 8 TLS 1.3 tickets. When the maximum
++        /// is reached, the server that was added first is evicted.
++        ///
++        /// For example, `new(100)` remembers up to 13 servers. Any `size`
++        /// from 1 to 8 remembers one server, and a `size` of 0 remembers
++        /// none.
+         #[cfg(feature = "std")]
+         pub fn new(size: usize) -> Self {
++            // Round up so that any non-zero size holds at least one server.
+             let max_servers = size.saturating_add(MAX_TLS13_TICKETS_PER_SERVER - 1)
+                 / MAX_TLS13_TICKETS_PER_SERVER;
+             Self {
+@@ -86,10 +95,19 @@ mod cache {
+             }
+         }
+ 
+-        /// Make a new ClientSessionMemoryCache.  `size` is the
+-        /// maximum number of stored sessions.
++        /// Make a new `ClientSessionMemoryCache`.
++        ///
++        /// `size` determines the maximum number of servers to remember:
++        /// `size` divided by `MAX_TLS13_TICKETS_PER_SERVER` (8), rounded
++        /// up. Each server keeps up to 8 TLS 1.3 tickets. When the maximum
++        /// is reached, the server that was added first is evicted.
++        ///
++        /// For example, `new(100)` remembers up to 13 servers. Any `size`
++        /// from 1 to 8 remembers one server, and a `size` of 0 remembers
++        /// none.
+         #[cfg(not(feature = "std"))]
+         pub fn new<M: crate::lock::MakeMutex>(size: usize) -> Self {
++            // Round up so that any non-zero size holds at least one server.
+             let max_servers = size.saturating_add(MAX_TLS13_TICKETS_PER_SERVER - 1)
+                 / MAX_TLS13_TICKETS_PER_SERVER;
+             Self {
+@@ -247,10 +265,14 @@ impl client::ResolvesClientCert for AlwaysResolvesClientRawPublicKeys {
+ #[cfg(test)]
+ #[macro_rules_attribute::apply(test_for_each_provider)]
+ mod tests {
++    use core::time::Duration;
+     use std::prelude::v1::*;
++    use std::{format, vec};
+ 
+     use pki_types::{ServerName, UnixTime};
+ 
++    #[cfg(feature = "std")]
++    use super::ClientSessionMemoryCache;
+     use super::NoClientSessionStorage;
+     use super::provider::cipher_suite;
+     use crate::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
+@@ -327,6 +349,121 @@ mod tests {
+         assert!(c.take_tls13_ticket(&name).is_none());
+     }
+ 
++    #[test]
++    fn debug_of_session_types() {
++        let server_cert_verifier: Arc<dyn ServerCertVerifier> = Arc::new(DummyServerCertVerifier);
++        let resolves_client_cert: Arc<dyn ResolvesClientCert> = Arc::new(DummyResolvesClientCert);
++
++        #[cfg(feature = "tls12")]
++        {
++            use crate::msgs::persist::Tls12ClientSessionValue;
++            let SupportedCipherSuite::Tls12(tls12_suite) =
++                cipher_suite::TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
++            else {
++                unreachable!()
++            };
++
++            let tls12 = Tls12ClientSessionValue::new(
++                tls12_suite,
++                SessionId::empty(),
++                Arc::new(PayloadU16::new(vec![5])),
++                &[0xa5; 48],
++                CertificateChain::default(),
++                &server_cert_verifier,
++                &resolves_client_cert,
++                UnixTime::since_unix_epoch(Duration::from_secs(1)),
++                2,
++                true,
++            );
++            let debug = format!("{tls12:?}");
++            assert!(
++                debug.contains("ClientSessionCommon { ticket: 05, epoch: 1, lifetime_secs: 2,")
++            );
++            assert!(!debug.contains("a5a5"), "{debug}");
++        }
++
++        let SupportedCipherSuite::Tls13(tls13_suite) = cipher_suite::TLS13_AES_256_GCM_SHA384
++        else {
++            unreachable!();
++        };
++        let tls13 = Tls13ClientSessionValue::new(
++            tls13_suite,
++            Arc::new(PayloadU16::new(vec![5])),
++            &[0xa5; 32],
++            CertificateChain::default(),
++            &server_cert_verifier,
++            &resolves_client_cert,
++            UnixTime::since_unix_epoch(Duration::from_secs(1)),
++            2,
++            3,
++            0,
++        );
++        let debug = format!("{tls13:?}");
++        assert!(debug.contains("ClientSessionCommon { ticket: 05, epoch: 1, lifetime_secs: 2,"));
++        assert!(!debug.contains("a5a5"), "{debug}");
++    }
++
++    /// For each `size` from 1 to 8, the cache keeps one server's key
++    /// exchange hint and TLS 1.3 ticket.
++    #[cfg(feature = "std")]
++    #[test]
++    fn test_clientsessionmemorycache_small_sizes_retain_server() {
++        for size in 1..=8 {
++            let c = ClientSessionMemoryCache::new(size);
++            let name = ServerName::try_from("example.com").unwrap();
++
++            c.set_kx_hint(name.clone(), NamedGroup::X25519);
++            assert_eq!(c.kx_hint(&name), Some(NamedGroup::X25519), "size {size}");
++
++            c.insert_tls13_ticket(name.clone(), tls13_session(UnixTime::now()));
++            assert!(c.take_tls13_ticket(&name).is_some(), "size {size}");
++        }
++    }
++
++    /// A cache of size 9 remembers two servers: after three servers are
++    /// added, the first is evicted and the other two remain.
++    #[cfg(feature = "std")]
++    #[test]
++    fn test_clientsessionmemorycache_evicts_oldest_server() {
++        let c = ClientSessionMemoryCache::new(9);
++        let first = ServerName::try_from("first.example.com").unwrap();
++        let second = ServerName::try_from("second.example.com").unwrap();
++        let third = ServerName::try_from("third.example.com").unwrap();
++
++        c.set_kx_hint(first.clone(), NamedGroup::X25519);
++        c.set_kx_hint(second.clone(), NamedGroup::X25519);
++        c.set_kx_hint(third.clone(), NamedGroup::X25519);
++
++        assert_eq!(c.kx_hint(&first), None);
++        assert_eq!(c.kx_hint(&second), Some(NamedGroup::X25519));
++        assert_eq!(c.kx_hint(&third), Some(NamedGroup::X25519));
++    }
++
++    /// Test helper: builds a placeholder TLS 1.3 ticket. Its contents are
++    /// empty or dummy values; the tests only check whether the cache
++    /// keeps it.
++    #[cfg(feature = "std")]
++    fn tls13_session(now: UnixTime) -> Tls13ClientSessionValue {
++        let SupportedCipherSuite::Tls13(tls13_suite) = cipher_suite::TLS13_AES_256_GCM_SHA384
++        else {
++            unreachable!();
++        };
++        let server_cert_verifier: Arc<dyn ServerCertVerifier> = Arc::new(DummyServerCertVerifier);
++        let resolves_client_cert: Arc<dyn ResolvesClientCert> = Arc::new(DummyResolvesClientCert);
++        Tls13ClientSessionValue::new(
++            tls13_suite,
++            Arc::new(PayloadU16::empty()),
++            &[],
++            CertificateChain::default(),
++            &server_cert_verifier,
++            &resolves_client_cert,
++            now,
++            0,
++            0,
++            0,
++        )
++    }
++
+     #[derive(Debug)]
+     struct DummyServerCertVerifier;
+ 
+diff --git a/work/home/.cache/cargo-vet/src/rustls-0.23.45/src/client/hs.rs b/work/home/.cache/cargo-vet/src/rustls-0.23.46/src/client/hs.rs
+index 4d22c04..5e90b6a 100644
+--- a/work/home/.cache/cargo-vet/src/rustls-0.23.45/src/client/hs.rs
++++ b/work/home/.cache/cargo-vet/src/rustls-0.23.46/src/client/hs.rs
+@@ -988,20 +988,18 @@ impl ExpectServerHelloOrHelloRetryRequest {
+         cx.common.handshake_kind = Some(HandshakeKind::FullWithHelloRetryRequest);
+ 
+         // If we offered ECH, we need to confirm that the server accepted it.
+-        match (self.next.ech_state.as_ref(), cs.tls13()) {
+-            // If the server did not confirm, then note the new ECH status but
+-            // continue the handshake. We will abort with an ECH required error
+-            // at the end.
+-            (Some(ech_state), Some(tls13_cs))
+-                if !ech_state.confirm_hrr_acceptance(hrr, tls13_cs, cx.common)? =>
+-            {
+-                cx.data.ech_status = EchStatus::Rejected
+-            }
+-            (Some(_), None) => {
++        if let Some(ech_state) = self.next.ech_state.as_mut() {
++            let Some(tls13_cs) = cs.tls13() else {
+                 unreachable!("ECH state should only be set when TLS 1.3 was negotiated")
++            };
++
++            if !ech_state.confirm_hrr_acceptance(hrr, tls13_cs, cx.common)? {
++                // If the server did not confirm, then note the new ECH status but
++                // continue the handshake. We will abort with an ECH required error
++                // at the end.
++                cx.data.ech_status = EchStatus::Rejected;
+             }
+-            _ => {}
+-        };
++        }
+ 
+         // This is the draft19 change where the transcript became a tree
+         let transcript = self
+diff --git a/work/home/.cache/cargo-vet/src/rustls-0.23.45/src/client/test.rs b/work/home/.cache/cargo-vet/src/rustls-0.23.46/src/client/test.rs
+index e4051d6..2990329 100644
+--- a/work/home/.cache/cargo-vet/src/rustls-0.23.45/src/client/test.rs
++++ b/work/home/.cache/cargo-vet/src/rustls-0.23.46/src/client/test.rs
+@@ -30,6 +30,7 @@ mod tests {
+     use crate::crypto::tls13::OkmBlock;
+     use crate::enums::CertificateType;
+     use crate::msgs::base::PayloadU8;
++    use crate::msgs::ccs::ChangeCipherSpecPayload;
+     use crate::msgs::enums::ECCurveType;
+     use crate::msgs::handshake::{
+         CertificateChain, EcParameters, HelloRetryRequestExtensions, KeyShareEntry,
+@@ -446,6 +447,63 @@ mod tests {
+         conn.process_new_packets().map(|_| ())
+     }
+ 
++    #[test]
++    fn test_client_rejects_protected_change_cipher_spec() {
++        let fake_server_crypto = Arc::new(FakeServerCrypto::new());
++        let mut config = ClientConfig::builder_with_provider(x25519_provider().into())
++            .with_protocol_versions(&[&version::TLS13])
++            .unwrap()
++            .with_root_certificates(roots())
++            .with_no_client_auth();
++        config.key_log = fake_server_crypto.clone();
++        let mut conn =
++            ClientConnection::new(config.into(), ServerName::try_from("localhost").unwrap())
++                .unwrap();
++        let mut sent = Vec::new();
++        conn.write_tls(&mut sent).unwrap();
++
++        let sh = Message {
++            version: ProtocolVersion::TLSv1_3,
++            payload: MessagePayload::handshake(HandshakeMessagePayload(
++                HandshakePayload::ServerHello(ServerHelloPayload {
++                    random: Random([0; 32]),
++                    compression_method: Compression::Null,
++                    cipher_suite: CipherSuite::TLS13_AES_128_GCM_SHA256,
++                    legacy_version: ProtocolVersion::TLSv1_3,
++                    session_id: SessionId::empty(),
++                    extensions: Box::new(ServerExtensions {
++                        key_share: Some(KeyShareEntry {
++                            group: NamedGroup::X25519,
++                            payload: PayloadU16::new(vec![0xaa; 32]),
++                        }),
++                        ..ServerExtensions::default()
++                    }),
++                }),
++            )),
++        };
++        conn.read_tls(&mut sh.into_wire_bytes().as_slice())
++            .unwrap();
++        conn.process_new_packets().unwrap();
++
++        // A change_cipher_spec protected under the handshake keys is not a
++        // compatibility-mode CCS, and must not be dropped like one.
++        let ccs = Message {
++            version: ProtocolVersion::TLSv1_3,
++            payload: MessagePayload::ChangeCipherSpec(ChangeCipherSpecPayload),
++        };
++
++        let mut encrypter = fake_server_crypto.server_handshake_encrypter();
++        let enc_ccs = encrypter
++            .encrypt(PlainMessage::from(ccs).borrow_outbound(), 0)
++            .unwrap();
++        conn.read_tls(&mut enc_ccs.encode().as_slice())
++            .unwrap();
++        assert_eq!(
++            conn.process_new_packets().unwrap_err(),
++            PeerMisbehaved::IllegalMiddleboxChangeCipherSpec.into()
++        );
++    }
++
+     fn client_config_for_rpk(key_log: Arc<dyn KeyLog>) -> ClientConfig {
+         let mut config = ClientConfig::builder_with_provider(x25519_provider().into())
+             .with_protocol_versions(&[&version::TLS13])
+diff --git a/work/home/.cache/cargo-vet/src/rustls-0.23.45/src/client/tls13.rs b/work/home/.cache/cargo-vet/src/rustls-0.23.46/src/client/tls13.rs
+index 5507a9a..8678c1d 100644
+--- a/work/home/.cache/cargo-vet/src/rustls-0.23.45/src/client/tls13.rs
++++ b/work/home/.cache/cargo-vet/src/rustls-0.23.46/src/client/tls13.rs
+@@ -27,7 +27,7 @@ use crate::log::{debug, trace, warn};
+ use crate::msgs::base::{Payload, PayloadU8};
+ use crate::msgs::ccs::ChangeCipherSpecPayload;
+ use crate::msgs::codec::{Codec, Reader};
+-use crate::msgs::enums::{ExtensionType, KeyUpdateRequest};
++use crate::msgs::enums::{ExtensionType, KeyUpdateRequest, NamedGroup};
+ use crate::msgs::handshake::{
+     CERTIFICATE_MAX_SIZE_LIMIT, CertificatePayloadTls13, ClientExtensions, EchConfigPayload,
+     HandshakeMessagePayload, HandshakePayload, KeyShareEntry, NewSessionTicketPayloadTls13,
+@@ -197,6 +197,7 @@ pub(super) fn handle_server_hello(
+             server_hello_encoded,
+             suite.common.hash_provider,
+             &mut server_name,
++            cx.common,
+         )? {
+             // The server accepted our ECH offer, so complete the inner transcript with the
+             // server hello message, and switch the relevant state to the copies for the
+@@ -215,12 +216,6 @@ pub(super) fn handle_server_hello(
+         };
+     }
+ 
+-    // Remember what KX group the server liked for next time.
+-    config
+-        .resumption
+-        .store
+-        .set_kx_hint(server_name.clone(), their_key_share.group);
+-
+     // If we change keying when a subsequent handshake message is being joined,
+     // the two halves will have different record layer protections.  Disallow this.
+     cx.common.check_aligned_handshake()?;
+@@ -245,6 +240,7 @@ pub(super) fn handle_server_hello(
+         suite,
+         transcript,
+         key_schedule,
++        kx_group: their_key_share.group,
+         hello,
+     }))
+ }
+@@ -480,6 +476,7 @@ struct ExpectEncryptedExtensions {
+     suite: &'static Tls13CipherSuite,
+     transcript: HandshakeHash,
+     key_schedule: KeyScheduleHandshake,
++    kx_group: NamedGroup,
+     hello: ClientHelloDetails,
+ }
+ 
+@@ -591,6 +588,7 @@ impl State<ClientConnectionData> for ExpectEncryptedExtensions {
+                     suite: self.suite,
+                     transcript: self.transcript,
+                     key_schedule: self.key_schedule,
++                    kx_group: self.kx_group,
+                     client_auth: None,
+                     cert_verified,
+                     sig_verified,
+@@ -613,6 +611,7 @@ impl State<ClientConnectionData> for ExpectEncryptedExtensions {
+                         suite: self.suite,
+                         transcript: self.transcript,
+                         key_schedule: self.key_schedule,
++                        kx_group: self.kx_group,
+                         ech_retry_configs,
+                     })
+                 } else {
+@@ -623,6 +622,7 @@ impl State<ClientConnectionData> for ExpectEncryptedExtensions {
+                         suite: self.suite,
+                         transcript: self.transcript,
+                         key_schedule: self.key_schedule,
++                        kx_group: self.kx_group,
+                         ech_retry_configs,
+                     })
+                 })
+@@ -642,6 +642,7 @@ struct ExpectCertificateOrCompressedCertificateOrCertReq {
+     suite: &'static Tls13CipherSuite,
+     transcript: HandshakeHash,
+     key_schedule: KeyScheduleHandshake,
++    kx_group: NamedGroup,
+     ech_retry_configs: Option<Vec<EchConfigPayload>>,
+ }
+ 
+@@ -665,6 +666,7 @@ impl State<ClientConnectionData> for ExpectCertificateOrCompressedCertificateOrC
+                 suite: self.suite,
+                 transcript: self.transcript,
+                 key_schedule: self.key_schedule,
++                kx_group: self.kx_group,
+                 client_auth: None,
+                 message_already_in_transcript: false,
+                 ech_retry_configs: self.ech_retry_configs,
+@@ -680,6 +682,7 @@ impl State<ClientConnectionData> for ExpectCertificateOrCompressedCertificateOrC
+                 suite: self.suite,
+                 transcript: self.transcript,
+                 key_schedule: self.key_schedule,
++                kx_group: self.kx_group,
+                 client_auth: None,
+                 ech_retry_configs: self.ech_retry_configs,
+             })
+@@ -694,6 +697,7 @@ impl State<ClientConnectionData> for ExpectCertificateOrCompressedCertificateOrC
+                 suite: self.suite,
+                 transcript: self.transcript,
+                 key_schedule: self.key_schedule,
++                kx_group: self.kx_group,
+                 offered_cert_compression: true,
+                 ech_retry_configs: self.ech_retry_configs,
+             })
+@@ -722,6 +726,7 @@ struct ExpectCertificateOrCompressedCertificate {
+     suite: &'static Tls13CipherSuite,
+     transcript: HandshakeHash,
+     key_schedule: KeyScheduleHandshake,
++    kx_group: NamedGroup,
+     client_auth: Option<ClientAuthDetails>,
+     ech_retry_configs: Option<Vec<EchConfigPayload>>,
+ }
+@@ -746,6 +751,7 @@ impl State<ClientConnectionData> for ExpectCertificateOrCompressedCertificate {
+                 suite: self.suite,
+                 transcript: self.transcript,
+                 key_schedule: self.key_schedule,
++                kx_group: self.kx_group,
+                 client_auth: self.client_auth,
+                 message_already_in_transcript: false,
+                 ech_retry_configs: self.ech_retry_configs,
+@@ -761,6 +767,7 @@ impl State<ClientConnectionData> for ExpectCertificateOrCompressedCertificate {
+                 suite: self.suite,
+                 transcript: self.transcript,
+                 key_schedule: self.key_schedule,
++                kx_group: self.kx_group,
+                 client_auth: self.client_auth,
+                 ech_retry_configs: self.ech_retry_configs,
+             })
+@@ -788,6 +795,7 @@ struct ExpectCertificateOrCertReq {
+     suite: &'static Tls13CipherSuite,
+     transcript: HandshakeHash,
+     key_schedule: KeyScheduleHandshake,
++    kx_group: NamedGroup,
+     ech_retry_configs: Option<Vec<EchConfigPayload>>,
+ }
+ 
+@@ -811,6 +819,7 @@ impl State<ClientConnectionData> for ExpectCertificateOrCertReq {
+                 suite: self.suite,
+                 transcript: self.transcript,
+                 key_schedule: self.key_schedule,
++                kx_group: self.kx_group,
+                 client_auth: None,
+                 message_already_in_transcript: false,
+                 ech_retry_configs: self.ech_retry_configs,
+@@ -826,6 +835,7 @@ impl State<ClientConnectionData> for ExpectCertificateOrCertReq {
+                 suite: self.suite,
+                 transcript: self.transcript,
+                 key_schedule: self.key_schedule,
++                kx_group: self.kx_group,
+                 offered_cert_compression: false,
+                 ech_retry_configs: self.ech_retry_configs,
+             })
+@@ -856,6 +866,7 @@ struct ExpectCertificateRequest {
+     suite: &'static Tls13CipherSuite,
+     transcript: HandshakeHash,
+     key_schedule: KeyScheduleHandshake,
++    kx_group: NamedGroup,
+     offered_cert_compression: bool,
+     ech_retry_configs: Option<Vec<EchConfigPayload>>,
+ }
+@@ -939,6 +950,7 @@ impl State<ClientConnectionData> for ExpectCertificateRequest {
+                 suite: self.suite,
+                 transcript: self.transcript,
+                 key_schedule: self.key_schedule,
++                kx_group: self.kx_group,
+                 client_auth: Some(client_auth),
+                 ech_retry_configs: self.ech_retry_configs,
+             })
+@@ -950,6 +962,7 @@ impl State<ClientConnectionData> for ExpectCertificateRequest {
+                 suite: self.suite,
+                 transcript: self.transcript,
+                 key_schedule: self.key_schedule,
++                kx_group: self.kx_group,
+                 client_auth: Some(client_auth),
+                 message_already_in_transcript: false,
+                 ech_retry_configs: self.ech_retry_configs,
+@@ -969,6 +982,7 @@ struct ExpectCompressedCertificate {
+     suite: &'static Tls13CipherSuite,
+     transcript: HandshakeHash,
+     key_schedule: KeyScheduleHandshake,
++    kx_group: NamedGroup,
+     client_auth: Option<ClientAuthDetails>,
+     ech_retry_configs: Option<Vec<EchConfigPayload>>,
+ }
+@@ -1053,6 +1067,7 @@ impl State<ClientConnectionData> for ExpectCompressedCertificate {
+             suite: self.suite,
+             transcript: self.transcript,
+             key_schedule: self.key_schedule,
++            kx_group: self.kx_group,
+             client_auth: self.client_auth,
+             message_already_in_transcript: true,
+             ech_retry_configs: self.ech_retry_configs,
+@@ -1072,6 +1087,7 @@ struct ExpectCertificate {
+     suite: &'static Tls13CipherSuite,
+     transcript: HandshakeHash,
+     key_schedule: KeyScheduleHandshake,
++    kx_group: NamedGroup,
+     client_auth: Option<ClientAuthDetails>,
+     message_already_in_transcript: bool,
+     ech_retry_configs: Option<Vec<EchConfigPayload>>,
+@@ -1118,6 +1134,7 @@ impl State<ClientConnectionData> for ExpectCertificate {
+             suite: self.suite,
+             transcript: self.transcript,
+             key_schedule: self.key_schedule,
++            kx_group: self.kx_group,
+             server_cert,
+             client_auth: self.client_auth,
+             ech_retry_configs: self.ech_retry_configs,
+@@ -1137,6 +1154,7 @@ struct ExpectCertificateVerify<'a> {
+     suite: &'static Tls13CipherSuite,
+     transcript: HandshakeHash,
+     key_schedule: KeyScheduleHandshake,
++    kx_group: NamedGroup,
+     server_cert: ServerCertDetails<'a>,
+     client_auth: Option<ClientAuthDetails>,
+     ech_retry_configs: Option<Vec<EchConfigPayload>>,
+@@ -1208,6 +1226,7 @@ impl State<ClientConnectionData> for ExpectCertificateVerify<'_> {
+             suite: self.suite,
+             transcript: self.transcript,
+             key_schedule: self.key_schedule,
++            kx_group: self.kx_group,
+             client_auth: self.client_auth,
+             cert_verified,
+             sig_verified,
+@@ -1223,6 +1242,7 @@ impl State<ClientConnectionData> for ExpectCertificateVerify<'_> {
+             suite: self.suite,
+             transcript: self.transcript,
+             key_schedule: self.key_schedule,
++            kx_group: self.kx_group,
+             server_cert: self.server_cert.into_owned(),
+             client_auth: self.client_auth,
+             ech_retry_configs: self.ech_retry_configs,
+@@ -1315,6 +1335,7 @@ struct ExpectFinished {
+     suite: &'static Tls13CipherSuite,
+     transcript: HandshakeHash,
+     key_schedule: KeyScheduleHandshake,
++    kx_group: NamedGroup,
+     client_auth: Option<ClientAuthDetails>,
+     cert_verified: verify::ServerCertVerified,
+     sig_verified: verify::HandshakeSignatureValid,
+@@ -1415,6 +1436,12 @@ impl State<ClientConnectionData> for ExpectFinished {
+         emit_finished_tls13(&mut flight, &verify_data);
+         flight.finish(cx.common);
+ 
++        // Remember what KX group the server liked for next time.
++        st.config
++            .resumption
++            .store
++            .set_kx_hint(st.server_name.clone(), st.kx_group);
++
+         /* We're now sure this server supports TLS1.3.  But if we run out of TLS1.3 tickets
+          * when connecting to it again, we definitely don't want to attempt a TLS1.2 resumption. */
+         st.config
+@@ -1426,16 +1453,19 @@ impl State<ClientConnectionData> for ExpectFinished {
+         cx.common.check_aligned_handshake()?;
+         let (key_schedule, resumption) =
+             key_schedule_pre_finished.into_traffic(cx.common, st.transcript.current_hash());
+-        cx.common
+-            .start_traffic(&mut cx.sendable_plaintext);
+ 
+         // Now that we've reached the end of the normal handshake we must enforce ECH acceptance by
+         // sending an alert and returning an error (potentially with retry configs) if the server
+-        // did not accept our ECH offer.
++        // did not accept our ECH offer. This must happen before the connection is made available
++        // for application data, since the server has only been authenticated for the ECH config's
++        // `public_name`.
+         if cx.data.ech_status == EchStatus::Rejected {
+             return Err(ech::fatal_alert_required(st.ech_retry_configs, cx.common));
+         }
+ 
++        cx.common
++            .start_traffic(&mut cx.sendable_plaintext);
++
+         let st = ExpectTraffic {
+             config: st.config.clone(),
+             session_storage: st.config.resumption.store.clone(),
+diff --git a/work/home/.cache/cargo-vet/src/rustls-0.23.45/src/common_state.rs b/work/home/.cache/cargo-vet/src/rustls-0.23.46/src/common_state.rs
+index 8b1d499..9a6e6b5 100644
+--- a/work/home/.cache/cargo-vet/src/rustls-0.23.45/src/common_state.rs
++++ b/work/home/.cache/cargo-vet/src/rustls-0.23.46/src/common_state.rs
+@@ -233,6 +233,33 @@ impl CommonState {
+         }
+     }
+ 
++    /// Ask for a TLS 1.3 key update before encrypting `payload`, if one of its records would
++    /// take the last sequence number allowed by the current keys.
++    ///
++    /// The key update then takes that sequence number instead.
++    pub(crate) fn request_key_update_for(&mut self, payload: OutboundChunks<'_>) {
++        let records = self
++            .message_fragmenter
++            .fragment_payload(
++                ContentType::ApplicationData,
++                ProtocolVersion::TLSv1_2,
++                payload,
++            )
++            .len();
++
++        if records > 0
++            && self.negotiated_version == Some(ProtocolVersion::TLSv1_3)
++            && self.record_layer.write_seq() > 0
++            && self
++                .record_layer
++                .pre_encrypt_action(records as u64)
++                != PreEncryptAction::Nothing
++        {
++            // driven by caller, as we don't have the `State` here
++            self.refresh_traffic_keys_pending = true;
++        }
++    }
++
+     pub(crate) fn write_plaintext(
+         &mut self,
+         payload: OutboundChunks<'_>,
+@@ -317,7 +344,17 @@ impl CommonState {
+     }
+ 
+     /// Like send_msg_encrypt, but operate on an appdata directly.
+-    fn send_appdata_encrypt(&mut self, payload: OutboundChunks<'_>, limit: Limit) -> usize {
++    ///
++    /// If `stop_for_key_update` is true, this stops before a TLS 1.3 record that would take
++    /// the last sequence number allowed by the current keys, so that the caller can first send
++    /// a `key_update` request with that sequence number. In that case, the return value is the
++    /// number of bytes sent so far.
++    fn send_appdata_encrypt(
++        &mut self,
++        payload: OutboundChunks<'_>,
++        limit: Limit,
++        stop_for_key_update: bool,
++    ) -> usize {
+         // Here, the limit on sendable_tls applies to encrypted data,
+         // but we're respecting it for plaintext data -- so we'll
+         // be out by whatever the cipher+record overhead is.  That's a
+@@ -337,7 +374,30 @@ impl CommonState {
+                 ProtocolVersion::TLSv1_2,
+                 payload.split_at(len).0,
+             );
++
++        // Check the record limit for the last fragment before encrypting any of them, so
++        // that a write crossing the limit is not sent in part.
++        if let Some(last) = (iter.len() as u64).checked_sub(1) {
++            if !self.check_pre_encrypt_action(last) {
++                return len;
++            }
++        }
++
++        let mut sent = 0;
+         for m in iter {
++            // The key update takes the last sequence number allowed by the current keys,
++            // unless they have not been used yet (as updating them would not help then).
++            if stop_for_key_update
++                && self.negotiated_version == Some(ProtocolVersion::TLSv1_3)
++                && self.record_layer.write_seq() > 0
++                && self.record_layer.pre_encrypt_action(1) != PreEncryptAction::Nothing
++            {
++                // driven by caller, as we don't have the `State` here
++                self.refresh_traffic_keys_pending = true;
++                return sent;
++            }
++
++            sent += m.payload.len();
+             self.send_single_fragment(m);
+         }
+ 
+@@ -352,42 +412,53 @@ impl CommonState {
+             return;
+         }
+ 
++        if !self.check_pre_encrypt_action(0) {
++            return;
++        }
++
++        let em = self.record_layer.encrypt_outgoing(m);
++        self.queue_tls_message(em);
++    }
++
++    /// Take the remedial action needed before encrypting the record `add` records after the next.
++    ///
++    /// Returns `false` if that record must not be encrypted.
++    fn check_pre_encrypt_action(&mut self, add: u64) -> bool {
+         match self
+             .record_layer
+-            .next_pre_encrypt_action()
++            .pre_encrypt_action(add)
+         {
+-            PreEncryptAction::Nothing => {}
++            PreEncryptAction::Nothing => true,
+ 
+             // Close connection once we start to run out of
+             // sequence space.
+-            PreEncryptAction::RefreshOrClose => {
+-                match self.negotiated_version {
+-                    Some(ProtocolVersion::TLSv1_3) => {
+-                        // driven by caller, as we don't have the `State` here
+-                        self.refresh_traffic_keys_pending = true;
+-                    }
+-                    _ => {
+-                        error!(
+-                            "traffic keys exhausted, closing connection to prevent security failure"
+-                        );
+-                        self.send_close_notify();
+-                        return;
+-                    }
++            PreEncryptAction::RefreshOrClose => match self.negotiated_version {
++                Some(ProtocolVersion::TLSv1_3) => {
++                    // driven by caller, as we don't have the `State` here
++                    self.refresh_traffic_keys_pending = true;
++                    true
+                 }
+-            }
++                _ => {
++                    error!(
++                        "traffic keys exhausted, closing connection to prevent security failure"
++                    );
++                    self.send_close_notify();
++                    false
++                }
++            },
+ 
+             // Refuse to wrap counter at all costs.  This
+             // is basically untestable unfortunately.
+-            PreEncryptAction::Refuse => {
+-                return;
+-            }
+-        };
+-
+-        let em = self.record_layer.encrypt_outgoing(m);
+-        self.queue_tls_message(em);
++            PreEncryptAction::Refuse => false,
++        }
+     }
+ 
+-    fn send_plain_non_buffering(&mut self, payload: OutboundChunks<'_>, limit: Limit) -> usize {
++    fn send_plain_non_buffering(
++        &mut self,
++        payload: OutboundChunks<'_>,
++        limit: Limit,
++        stop_for_key_update: bool,
++    ) -> usize {
+         debug_assert!(self.may_send_application_data);
+         debug_assert!(self.record_layer.is_encrypting());
+ 
+@@ -396,7 +467,7 @@ impl CommonState {
+             return 0;
+         }
+ 
+-        self.send_appdata_encrypt(payload, limit)
++        self.send_appdata_encrypt(payload, limit, stop_for_key_update)
+     }
+ 
+     /// Mark the connection as ready to send application data.
+@@ -428,7 +499,7 @@ impl CommonState {
+         }
+ 
+         while let Some(buf) = sendable_plaintext.pop() {
+-            self.send_plain_non_buffering(buf.as_slice().into(), Limit::No);
++            self.send_plain_non_buffering(buf.as_slice().into(), Limit::No, false);
+         }
+     }
+ 
+@@ -732,8 +803,8 @@ impl CommonState {
+     /// Send plaintext application data, fragmenting and
+     /// encrypting it as it goes out.
+     ///
+-    /// If internal buffers are too small, this function will not accept
+-    /// all the data.
++    /// If internal buffers are too small, or if the traffic keys must be
++    /// updated first, this function will not accept all the data.
+     pub(crate) fn buffer_plaintext(
+         &mut self,
+         payload: OutboundChunks<'_>,
+@@ -752,7 +823,7 @@ impl CommonState {
+             return 0;
+         }
+ 
+-        self.send_appdata_encrypt(data.into(), Limit::Yes)
++        self.send_appdata_encrypt(data.into(), Limit::Yes, false)
+     }
+ 
+     /// Encrypt and send some plaintext `data`.  `limit` controls
+@@ -776,7 +847,7 @@ impl CommonState {
+             return len;
+         }
+ 
+-        self.send_plain_non_buffering(payload, limit)
++        self.send_plain_non_buffering(payload, limit, true)
+     }
+ }
+ 
+diff --git a/work/home/.cache/cargo-vet/src/rustls-0.23.45/src/compress.rs b/work/home/.cache/cargo-vet/src/rustls-0.23.46/src/compress.rs
+index 0bd0018..89ed185 100644
+--- a/work/home/.cache/cargo-vet/src/rustls-0.23.45/src/compress.rs
++++ b/work/home/.cache/cargo-vet/src/rustls-0.23.46/src/compress.rs
+@@ -126,7 +126,7 @@ pub struct CompressionFailed;
+ #[cfg(feature = "zlib")]
+ mod feat_zlib_rs {
+     use zlib_rs::{
+-        DeflateConfig, InflateConfig, ReturnCode, compress_bound, compress_slice, decompress_slice,
++        DeflateConfig, Inflate, InflateFlush, ReturnCode, Status, compress_bound, compress_slice,
+     };
+ 
+     use super::*;
+@@ -139,10 +139,17 @@ mod feat_zlib_rs {
+ 
+     impl CertDecompressor for ZlibRsDecompressor {
+         fn decompress(&self, input: &[u8], output: &mut [u8]) -> Result<(), DecompressionFailed> {
+-            let output_len = output.len();
+-            match decompress_slice(output, input, InflateConfig::default()) {
+-                (output_filled, ReturnCode::Ok) if output_filled.len() == output_len => Ok(()),
+-                (_, _) => Err(DecompressionFailed),
++            // `Inflate` rather than `decompress_slice()`, because the latter does not
++            // report how much of `input` the stream used: see `total_in()` below.
++            let mut state = Inflate::new(true, ZLIB_WINDOW_BITS);
++            match state.decompress(input, output, InflateFlush::Finish) {
++                Ok(Status::StreamEnd)
++                    if state.total_in() == input.len() as u64
++                        && state.total_out() == output.len() as u64 =>
++                {
++                    Ok(())
++                }
++                _ => Err(DecompressionFailed),
+             }
+         }
+ 
+@@ -182,6 +189,9 @@ mod feat_zlib_rs {
+             CertificateCompressionAlgorithm::Zlib
+         }
+     }
++
++    /// Largest LZ77 window, matching `InflateConfig::default()`.
++    const ZLIB_WINDOW_BITS: u8 = 15;
+ }
+ 
+ #[cfg(feature = "zlib")]
+@@ -192,6 +202,8 @@ pub use feat_zlib_rs::{ZLIB_COMPRESSOR, ZLIB_DECOMPRESSOR};
+ mod feat_brotli {
+     use std::io::{Cursor, Write};
+ 
++    use brotli_decompressor::{BrotliDecompressStream, BrotliResult, BrotliState, StandardAlloc};
++
+     use super::*;
+ 
+     /// A certificate decompressor for the brotli algorithm using the `brotli` crate.
+@@ -202,17 +214,27 @@ mod feat_brotli {
+ 
+     impl CertDecompressor for BrotliDecompressor {
+         fn decompress(&self, input: &[u8], output: &mut [u8]) -> Result<(), DecompressionFailed> {
+-            let mut in_cursor = Cursor::new(input);
+-            let mut out_cursor = Cursor::new(output);
+-
+-            brotli::BrotliDecompress(&mut in_cursor, &mut out_cursor)
+-                .map_err(|_| DecompressionFailed)?;
+-
+-            if out_cursor.position() as usize != out_cursor.into_inner().len() {
+-                return Err(DecompressionFailed);
++            let mut state = BrotliState::new_strict(
++                StandardAlloc::default(),
++                StandardAlloc::default(),
++                StandardAlloc::default(),
++            );
++            let (mut available_in, mut input_offset) = (input.len(), 0);
++            let (mut available_out, mut output_offset, mut total_out) = (output.len(), 0, 0);
++
++            match BrotliDecompressStream(
++                &mut available_in,
++                &mut input_offset,
++                input,
++                &mut available_out,
++                &mut output_offset,
++                output,
++                &mut total_out,
++                &mut state,
++            ) {
++                BrotliResult::ResultSuccess if available_out == 0 && available_in == 0 => Ok(()),
++                _ => Err(DecompressionFailed),
+             }
+-
+-            Ok(())
+         }
+ 
+         fn algorithm(&self) -> CertificateCompressionAlgorithm {
+@@ -464,12 +486,23 @@ mod tests {
+         test_compressor(BROTLI_COMPRESSOR, BROTLI_DECOMPRESSOR);
+     }
+ 
++    #[test]
++    #[cfg(feature = "brotli")]
++    fn test_brotli_rejects_large_window() {
++        let large_window_empty = [0x11, 0xd0];
++        brotli::BrotliDecompress(&mut &large_window_empty[..], &mut Vec::new()).unwrap();
++        BROTLI_DECOMPRESSOR
++            .decompress(&large_window_empty, &mut [])
++            .unwrap_err();
++    }
++
+     fn test_compressor(comp: &dyn CertCompressor, decomp: &dyn CertDecompressor) {
+         assert_eq!(comp.algorithm(), decomp.algorithm());
+         for sz in [16, 64, 512, 2048, 8192, 16384] {
+             test_trivial_pairwise(comp, decomp, sz);
+         }
+         test_decompress_wrong_len(comp, decomp);
++        test_decompress_trailing_data(comp, decomp);
+         test_decompress_garbage(decomp);
+     }
+ 
+@@ -519,6 +552,19 @@ mod tests {
+             .unwrap_err();
+     }
+ 
++    fn test_decompress_trailing_data(comp: &dyn CertCompressor, decomp: &dyn CertDecompressor) {
++        let original = vec![0u8; 2048];
++        let mut compressed = comp
++            .compress(original.clone(), CompressionLevel::Interactive)
++            .unwrap();
++        compressed.extend_from_slice(b"trailing data");
++
++        let mut recovered = vec![0xffu8; original.len()];
++        decomp
++            .decompress(&compressed, &mut recovered)
++            .unwrap_err();
++    }
++
+     fn test_decompress_garbage(decomp: &dyn CertDecompressor) {
+         let junk = [0u8; 1024];
+         let mut recovered = vec![0u8; 512];
+diff --git a/work/home/.cache/cargo-vet/src/rustls-0.23.45/src/conn/unbuffered.rs b/work/home/.cache/cargo-vet/src/rustls-0.23.46/src/conn/unbuffered.rs
+index 77927b5..53bf442 100644
+--- a/work/home/.cache/cargo-vet/src/rustls-0.23.45/src/conn/unbuffered.rs
++++ b/work/home/.cache/cargo-vet/src/rustls-0.23.46/src/conn/unbuffered.rs
+@@ -447,6 +447,10 @@ impl<Data> WriteTraffic<'_, Data> {
+         application_data: &[u8],
+         outgoing_tls: &mut [u8],
+     ) -> Result<usize, EncryptError> {
++        self.conn
++            .core
++            .common_state
++            .request_key_update_for(application_data.into());
+         self.conn
+             .core
+             .maybe_refresh_traffic_keys();
+diff --git a/work/home/.cache/cargo-vet/src/rustls-0.23.45/src/conn.rs b/work/home/.cache/cargo-vet/src/rustls-0.23.46/src/conn.rs
+index 3d1e739..9bcaf09 100644
+--- a/work/home/.cache/cargo-vet/src/rustls-0.23.45/src/conn.rs
++++ b/work/home/.cache/cargo-vet/src/rustls-0.23.46/src/conn.rs
+@@ -327,6 +327,10 @@ https://docs.rs/rustls/latest/rustls/manual/_03_howto/index.html#unexpected-eof"
+         /// TLS handshake completes, and sends it as soon
+         /// as it can.  See [`ConnectionCommon::set_buffer_limit`] to control
+         /// the size of this buffer.
++        ///
++        /// If the connection previously encountered a fatal error (for example, while
++        /// processing received data in [`Connection::process_new_packets`]), this returns
++        /// that error, even if `buf` is empty.
+         fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+             self.sink.write(buf)
+         }
+@@ -335,6 +339,8 @@ https://docs.rs/rustls/latest/rustls/manual/_03_howto/index.html#unexpected-eof"
+             self.sink.write_vectored(bufs)
+         }
+ 
++        /// This does not do any I/O, but returns the fatal error the connection previously
++        /// encountered, if any.
+         fn flush(&mut self) -> io::Result<()> {
+             self.sink.flush()
+         }
+@@ -351,17 +357,40 @@ https://docs.rs/rustls/latest/rustls/manual/_03_howto/index.html#unexpected-eof"
+         fn flush(&mut self) -> io::Result<()>;
+     }
+ 
++    impl<T> ConnectionCommon<T> {
++        /// Return the fatal error this connection previously encountered, if any.
++        fn check_error(&self) -> io::Result<()> {
++            match &self.core.state {
++                Ok(_) => Ok(()),
++                Err(err) => Err(io::Error::new(io::ErrorKind::InvalidData, err.clone())),
++            }
++        }
++
++        /// Send or buffer as much of `payload` as possible.
++        ///
++        /// This updates the TLS 1.3 traffic keys as needed between records.
++        fn send_plaintext(&mut self, payload: OutboundChunks<'_>) -> usize {
++            let mut len = 0;
++            loop {
++                len += self
++                    .core
++                    .common_state
++                    .buffer_plaintext(payload.split_at(len).1, &mut self.sendable_plaintext);
++                if !self.core.maybe_refresh_traffic_keys() || len == payload.len() {
++                    return len;
++                }
++            }
++        }
++    }
++
+     impl<T> PlaintextSink for ConnectionCommon<T> {
+         fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+-            let len = self
+-                .core
+-                .common_state
+-                .buffer_plaintext(buf.into(), &mut self.sendable_plaintext);
+-            self.core.maybe_refresh_traffic_keys();
+-            Ok(len)
++            self.check_error()?;
++            Ok(self.send_plaintext(buf.into()))
+         }
+ 
+         fn write_vectored(&mut self, bufs: &[io::IoSlice<'_>]) -> io::Result<usize> {
++            self.check_error()?;
+             let payload_owner: Vec<&[u8]>;
+             let payload = match bufs.len() {
+                 0 => return Ok(0),
+@@ -375,16 +404,11 @@ https://docs.rs/rustls/latest/rustls/manual/_03_howto/index.html#unexpected-eof"
+                     OutboundChunks::new(&payload_owner)
+                 }
+             };
+-            let len = self
+-                .core
+-                .common_state
+-                .buffer_plaintext(payload, &mut self.sendable_plaintext);
+-            self.core.maybe_refresh_traffic_keys();
+-            Ok(len)
++            Ok(self.send_plaintext(payload))
+         }
+ 
+         fn flush(&mut self) -> io::Result<()> {
+-            Ok(())
++            self.check_error()
+         }
+     }
+ }
+@@ -1135,6 +1159,9 @@ impl<Data> ConnectionCore<Data> {
+                 self.common_state
+                     .send_fatal_alert(AlertDescription::BadRecordMac, error)
+             }
++            Error::PeerMisbehaved(PeerMisbehaved::IllegalMiddleboxChangeCipherSpec) => self
++                .common_state
++                .send_fatal_alert(AlertDescription::UnexpectedMessage, error),
+ 
+             error => error,
+         }
+@@ -1256,14 +1283,14 @@ impl<Data> ConnectionCore<Data> {
+     }
+ 
+     /// Trigger a `refresh_traffic_keys` if required by `CommonState`.
+-    fn maybe_refresh_traffic_keys(&mut self) {
+-        if mem::take(
++    ///
++    /// Returns whether the traffic keys were updated.
++    fn maybe_refresh_traffic_keys(&mut self) -> bool {
++        mem::take(
+             &mut self
+                 .common_state
+                 .refresh_traffic_keys_pending,
+-        ) {
+-            let _ = self.refresh_traffic_keys();
+-        }
++        ) && self.refresh_traffic_keys().is_ok()
+     }
+ 
+     fn refresh_traffic_keys(&mut self) -> Result<(), Error> {
+diff --git a/work/home/.cache/cargo-vet/src/rustls-0.23.45/src/crypto/aws_lc_rs/hpke.rs b/work/home/.cache/cargo-vet/src/rustls-0.23.46/src/crypto/aws_lc_rs/hpke.rs
+index 2e5c3a5..dcea100 100644
+--- a/work/home/.cache/cargo-vet/src/rustls-0.23.45/src/crypto/aws_lc_rs/hpke.rs
++++ b/work/home/.cache/cargo-vet/src/rustls-0.23.46/src/crypto/aws_lc_rs/hpke.rs
+@@ -2,9 +2,7 @@ use alloc::boxed::Box;
+ use alloc::vec::Vec;
+ use core::fmt::{self, Debug, Formatter};
+ 
+-use aws_lc_rs::aead::{
+-    self, Aad, BoundKey, NONCE_LEN, Nonce, NonceSequence, OpeningKey, SealingKey, UnboundKey,
+-};
++use aws_lc_rs::aead::{self, Aad, LessSafeKey, NONCE_LEN, Nonce, UnboundKey};
+ use aws_lc_rs::agreement;
+ use aws_lc_rs::cipher::{AES_128_KEY_LEN, AES_256_KEY_LEN};
+ use aws_lc_rs::digest::{SHA256_OUTPUT_LEN, SHA384_OUTPUT_LEN, SHA512_OUTPUT_LEN};
+@@ -441,11 +439,16 @@ impl<const KEY_SIZE: usize, const KDF_SIZE: usize> HpkeSealer for Sealer<KEY_SIZ
+ 
+         let key = UnboundKey::new(self.key_schedule.aead, &self.key_schedule.key.0)
+             .map_err(unspecified_err)?;
+-        let mut sealing_key = SealingKey::new(key, &mut self.key_schedule);
++        let sealing_key = LessSafeKey::new(key);
++
++        let nonce = self.key_schedule.compute_nonce();
++        self.key_schedule
++            .increment_seq_num()
++            .map_err(unspecified_err)?;
+ 
+         let mut in_out_buffer = Vec::from(plaintext);
+         sealing_key
+-            .seal_in_place_append_tag(Aad::from(aad), &mut in_out_buffer)
++            .seal_in_place_append_tag(nonce, Aad::from(aad), &mut in_out_buffer)
+             .map_err(unspecified_err)?;
+ 
+         Ok(in_out_buffer)
+@@ -494,11 +497,18 @@ impl<const KEY_SIZE: usize, const KDF_SIZE: usize> HpkeOpener for Opener<KEY_SIZ
+ 
+         let key = UnboundKey::new(self.key_schedule.aead, &self.key_schedule.key.0)
+             .map_err(unspecified_err)?;
+-        let mut opening_key = OpeningKey::new(key, &mut self.key_schedule);
++        let opening_key = LessSafeKey::new(key);
+ 
+         let mut in_out_buffer = Vec::from(ciphertext);
+         let plaintext = opening_key
+-            .open_in_place(Aad::from(aad), &mut in_out_buffer)
++            .open_in_place(
++                self.key_schedule.compute_nonce(),
++                Aad::from(aad),
++                &mut in_out_buffer,
++            )
++            .map_err(unspecified_err)?;
++        self.key_schedule
++            .increment_seq_num()
+             .map_err(unspecified_err)?;
+ 
+         Ok(plaintext.to_vec())
+@@ -739,7 +749,7 @@ impl<const KEY_SIZE: usize> KeySchedule<KEY_SIZE> {
+     /// See [RFC 9180 §5.2 "Encryption and Decryption"][0].
+     ///
+     /// [0]: https://www.rfc-editor.org/rfc/rfc9180.html#section-5.2
+-    fn compute_nonce(&self) -> [u8; NONCE_LEN] {
++    fn compute_nonce(&self) -> Nonce {
+         // def Context<ROLE>.ComputeNonce(seq):
+         //   seq_bytes = I2OSP(seq, Nn)
+         //   return xor(self.base_nonce, seq_bytes)
+@@ -755,7 +765,7 @@ impl<const KEY_SIZE: usize> KeySchedule<KEY_SIZE> {
+             *n ^= b;
+         }
+ 
+-        nonce
++        Nonce::assume_unique_for_key(nonce)
+     }
+ 
+     /// See [RFC 9180 §5.2 "Encryption and Decryption"][0].
+@@ -782,14 +792,6 @@ impl<const KEY_SIZE: usize> KeySchedule<KEY_SIZE> {
+     }
+ }
+ 
+-impl<const KEY_SIZE: usize> NonceSequence for &mut KeySchedule<KEY_SIZE> {
+-    fn advance(&mut self) -> Result<Nonce, aws_lc_rs::error::Unspecified> {
+-        let nonce = self.compute_nonce();
+-        self.increment_seq_num()?;
+-        Nonce::try_assume_unique_for_key(&nonce)
+-    }
+-}
+-
+ /// See [RFC 9180 §4 "Cryptographic Dependencies"][0].
+ ///
+ /// [0]: https://www.rfc-editor.org/rfc/rfc9180.html#section-4
+@@ -1031,6 +1033,29 @@ mod tests {
+             assert_eq!(suite.fips(), *expected);
+         }
+     }
++
++    #[test]
++    fn failed_open_does_not_consume_sequence() {
++        for suite in ALL_SUPPORTED_SUITES {
++            let (pk, sk) = suite.generate_key_pair().unwrap();
++            let (enc, mut sealer) = suite
++                .setup_sealer(b"example", &pk)
++                .unwrap();
++            let ct0 = sealer
++                .seal(b"aad", b"message 0")
++                .unwrap();
++            let ct1 = sealer
++                .seal(b"aad", b"message 1")
++                .unwrap();
++
++            let mut opener = suite
++                .setup_opener(&enc, b"example", &sk)
++                .unwrap();
++            assert!(opener.open(b"wrong aad", &ct0).is_err());
++            assert_eq!(opener.open(b"aad", &ct0).unwrap(), b"message 0");
++            assert_eq!(opener.open(b"aad", &ct1).unwrap(), b"message 1");
++        }
++    }
+ }
+ 
+ #[cfg(test)]
+diff --git a/work/home/.cache/cargo-vet/src/rustls-0.23.45/src/error.rs b/work/home/.cache/cargo-vet/src/rustls-0.23.46/src/error.rs
+index eec8c32..dbd043f 100644
+--- a/work/home/.cache/cargo-vet/src/rustls-0.23.45/src/error.rs
++++ b/work/home/.cache/cargo-vet/src/rustls-0.23.46/src/error.rs
+@@ -248,6 +248,7 @@ pub enum PeerMisbehaved {
+     EarlyDataAttemptedInSecondClientHello,
+     EarlyDataExtensionWithoutResumption,
+     EarlyDataOfferedWithVariedCipherSuite,
++    EchAcceptanceVariedAfterRetry,
+     HandshakeHashVariedAfterRetry,
+     IllegalHelloRetryRequestWithEmptyCookie,
+     IllegalHelloRetryRequestWithNoChanges,
+diff --git a/work/home/.cache/cargo-vet/src/rustls-0.23.45/src/limited_cache.rs b/work/home/.cache/cargo-vet/src/rustls-0.23.46/src/limited_cache.rs
+index 6ae8bf9..0cd5df7 100644
+--- a/work/home/.cache/cargo-vet/src/rustls-0.23.45/src/limited_cache.rs
++++ b/work/home/.cache/cargo-vet/src/rustls-0.23.46/src/limited_cache.rs
+@@ -17,6 +17,10 @@ pub(crate) struct LimitedCache<K: Clone + Hash + Eq, V> {
+ 
+     // first item is the oldest key
+     oldest: VecDeque<K>,
++
++    /// Maximum number of entries to retain. Compared after insert so
++    /// a capacity of 1 still keeps the item that was just added.
++    max: usize,
+ }
+ 
+ impl<K, V> LimitedCache<K, V>
+@@ -38,8 +42,7 @@ where
+             }
+         };
+ 
+-        // ensure next insertion does not require a realloc
+-        if inserted_new_item && self.oldest.capacity() == self.oldest.len() {
++        if inserted_new_item && self.oldest.len() > self.max {
+             if let Some(oldest_key) = self.oldest.pop_front() {
+                 self.map.remove(&oldest_key);
+             }
+@@ -64,6 +67,7 @@ where
+         Self {
+             map: HashMap::with_capacity(capacity_order_of_magnitude),
+             oldest: VecDeque::with_capacity(capacity_order_of_magnitude),
++            max: capacity_order_of_magnitude,
+         }
+     }
+ 
+@@ -83,8 +87,7 @@ where
+             }
+         };
+ 
+-        // ensure next insertion does not require a realloc
+-        if inserted_new_item && self.oldest.capacity() == self.oldest.len() {
++        if inserted_new_item && self.oldest.len() > self.max {
+             if let Some(oldest_key) = self.oldest.pop_front() {
+                 self.map.remove(&oldest_key);
+             }
+@@ -138,9 +141,23 @@ mod tests {
+         t.insert("def".into(), 2);
+         t.insert("ghi".into(), 3);
+ 
+-        assert_eq!(t.get("abc"), None);
++        assert_eq!(t.get("abc"), Some(&1));
+         assert_eq!(t.get("def"), Some(&2));
+         assert_eq!(t.get("ghi"), Some(&3));
++
++        t.insert("jkl".into(), 4);
++        assert_eq!(t.get("abc"), None);
++        assert_eq!(t.get("jkl"), Some(&4));
++    }
++
++    #[test]
++    fn test_capacity_one_retains_the_item() {
++        let mut t = Test::new(1);
++        t.insert("abc".into(), 1);
++        assert_eq!(t.get("abc"), Some(&1));
++        t.insert("def".into(), 2);
++        assert_eq!(t.get("abc"), None);
++        assert_eq!(t.get("def"), Some(&2));
+     }
+ 
+     #[test]
+@@ -155,7 +172,7 @@ mod tests {
+         t.insert("jkl".into(), 4);
+ 
+         assert_eq!(t.get("abc"), None);
+-        assert_eq!(t.get("def"), None);
++        assert_eq!(t.get("def"), Some(&2));
+         assert_eq!(t.get("ghi"), Some(&3));
+         assert_eq!(t.get("jkl"), Some(&4));
+     }
+@@ -172,10 +189,14 @@ mod tests {
+         t.insert("ghi".into(), 3);
+         t.insert("jkl".into(), 4);
+ 
+-        assert_eq!(t.get("abc"), None);
++        assert_eq!(t.get("abc"), Some(&1));
+         assert_eq!(t.get("def"), None);
+         assert_eq!(t.get("ghi"), Some(&3));
+         assert_eq!(t.get("jkl"), Some(&4));
++
++        t.insert("mno".into(), 5);
++        assert_eq!(t.get("abc"), None);
++        assert_eq!(t.get("mno"), Some(&5));
+     }
+ 
+     #[test]
+@@ -193,7 +214,7 @@ mod tests {
+ 
+         assert_eq!(t.get("abc"), None);
+         assert_eq!(t.get("def"), None);
+-        assert_eq!(t.get("ghi"), None);
++        assert_eq!(t.get("ghi"), Some(&3));
+         assert_eq!(t.get("jkl"), Some(&4));
+         assert_eq!(t.get("mno"), Some(&5));
+     }
+@@ -215,26 +236,25 @@ mod tests {
+ 
+         t.get_or_insert_default_and_edit("abc".into(), |v| *v += 1);
+         t.get_or_insert_default_and_edit("def".into(), |v| *v += 2);
++        t.get_or_insert_default_and_edit("ghi".into(), |v| *v += 3);
++        assert_eq!(t.get("abc"), Some(&1));
+ 
+         // evicts "abc"
+-        t.get_or_insert_default_and_edit("ghi".into(), |v| *v += 3);
++        t.get_or_insert_default_and_edit("jkl".into(), |v| *v += 4);
+         assert_eq!(t.get("abc"), None);
+ 
+         // evicts "def"
+-        t.get_or_insert_default_and_edit("jkl".into(), |v| *v += 4);
++        t.get_or_insert_default_and_edit("abc".into(), |v| *v += 5);
+         assert_eq!(t.get("def"), None);
+ 
+         // evicts "ghi"
+-        t.get_or_insert_default_and_edit("abc".into(), |v| *v += 5);
+-        assert_eq!(t.get("ghi"), None);
+-
+-        // evicts "jkl"
+         t.get_or_insert_default_and_edit("def".into(), |v| *v += 6);
++        assert_eq!(t.get("ghi"), None);
+ 
+         assert_eq!(t.get("abc"), Some(&5));
+         assert_eq!(t.get("def"), Some(&6));
+         assert_eq!(t.get("ghi"), None);
+-        assert_eq!(t.get("jkl"), None);
++        assert_eq!(t.get("jkl"), Some(&4));
+     }
+ 
+     #[test]
+diff --git a/work/home/.cache/cargo-vet/src/rustls-0.23.45/src/msgs/message/inbound.rs b/work/home/.cache/cargo-vet/src/rustls-0.23.46/src/msgs/message/inbound.rs
+index f8b2181..5168a5f 100644
+--- a/work/home/.cache/cargo-vet/src/rustls-0.23.45/src/msgs/message/inbound.rs
++++ b/work/home/.cache/cargo-vet/src/rustls-0.23.46/src/msgs/message/inbound.rs
+@@ -56,7 +56,8 @@ impl<'a> InboundOpaqueMessage<'a> {
+     /// For TLS1.3 (only), checks the length msg.payload is valid and removes the padding.
+     ///
+     /// Returns an error if the message (pre-unpadding) is too long, or the padding is invalid,
+-    /// or the message (post-unpadding) is too long.
++    /// or the inner content type is `change_cipher_spec`, or the message (post-unpadding) is
++    /// too long.
+     pub fn into_tls13_unpadded_message(mut self) -> Result<InboundPlainMessage<'a>, Error> {
+         let payload = &mut self.payload;
+ 
+@@ -69,6 +70,14 @@ impl<'a> InboundOpaqueMessage<'a> {
+             return Err(PeerMisbehaved::IllegalTlsInnerPlaintext.into());
+         }
+ 
++        // > An implementation which receives any other change_cipher_spec value or
++        // > which receives a protected change_cipher_spec record MUST abort the
++        // > handshake with an "unexpected_message" alert.
++        // <https://www.rfc-editor.org/rfc/rfc9846#section-5>
++        if self.typ == ContentType::ChangeCipherSpec {
++            return Err(PeerMisbehaved::IllegalMiddleboxChangeCipherSpec.into());
++        }
++
+         if payload.len() > MAX_FRAGMENT_LEN {
+             return Err(Error::PeerSentOversizedRecord);
+         }
+diff --git a/work/home/.cache/cargo-vet/src/rustls-0.23.45/src/msgs/message_test.rs b/work/home/.cache/cargo-vet/src/rustls-0.23.46/src/msgs/message_test.rs
+index 8125fb6..0f5a08b 100644
+--- a/work/home/.cache/cargo-vet/src/rustls-0.23.45/src/msgs/message_test.rs
++++ b/work/home/.cache/cargo-vet/src/rustls-0.23.46/src/msgs/message_test.rs
+@@ -6,8 +6,9 @@ use std::{format, fs, println, vec};
+ use super::base::Payload;
+ use super::codec::Reader;
+ use super::enums::AlertLevel;
+-use super::message::{Message, OutboundOpaqueMessage, PlainMessage};
+-use crate::enums::{AlertDescription, HandshakeType};
++use super::message::{InboundOpaqueMessage, Message, OutboundOpaqueMessage, PlainMessage};
++use crate::enums::{AlertDescription, ContentType, HandshakeType, ProtocolVersion};
++use crate::error::{Error, PeerMisbehaved};
+ use crate::msgs::base::{MaybeEmpty, NonEmpty, PayloadU8, PayloadU16, PayloadU24};
+ 
+ #[test]
+@@ -125,3 +126,18 @@ fn into_wire_format() {
+         &[0x16, 0x3, 0x4, 0x0, 0x5, 0x18, 0x0, 0x0, 0x1, 0x1]
+     );
+ }
++
++#[test]
++fn tls13_unpadded_message_rejects_protected_change_cipher_spec() {
++    let mut payload = [0x01u8, ContentType::ChangeCipherSpec.into(), 0x00];
++    let msg = InboundOpaqueMessage::new(
++        ContentType::ApplicationData,
++        ProtocolVersion::TLSv1_2,
++        &mut payload,
++    );
++    assert_eq!(
++        msg.into_tls13_unpadded_message()
++            .unwrap_err(),
++        Error::PeerMisbehaved(PeerMisbehaved::IllegalMiddleboxChangeCipherSpec)
++    );
++}
+diff --git a/work/home/.cache/cargo-vet/src/rustls-0.23.45/src/msgs/persist.rs b/work/home/.cache/cargo-vet/src/rustls-0.23.46/src/msgs/persist.rs
+index 9b8f19e..79370ed 100644
+--- a/work/home/.cache/cargo-vet/src/rustls-0.23.45/src/msgs/persist.rs
++++ b/work/home/.cache/cargo-vet/src/rustls-0.23.46/src/msgs/persist.rs
+@@ -1,5 +1,5 @@
+ use alloc::vec::Vec;
+-use core::cmp;
++use core::{cmp, fmt};
+ 
+ use pki_types::{DnsName, UnixTime};
+ use zeroize::Zeroizing;
+@@ -72,7 +72,6 @@ impl<T> core::ops::Deref for Retrieved<T> {
+     }
+ }
+ 
+-#[derive(Debug)]
+ pub struct Tls13ClientSessionValue {
+     suite: &'static Tls13CipherSuite,
+     age_add: u32,
+@@ -148,6 +147,26 @@ impl core::ops::Deref for Tls13ClientSessionValue {
+     }
+ }
+ 
++impl fmt::Debug for Tls13ClientSessionValue {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        let Self {
++            suite,
++            age_add,
++            max_early_data_size,
++            common,
++            quic_params,
++        } = self;
++
++        f.debug_struct("Tls13ClientSessionValue")
++            .field("suite", suite)
++            .field("age_add", age_add)
++            .field("max_early_data_size", max_early_data_size)
++            .field("common", common)
++            .field("quic_params", quic_params)
++            .finish()
++    }
++}
++
+ #[derive(Debug, Clone)]
+ pub struct Tls12ClientSessionValue {
+     #[cfg(feature = "tls12")]
+@@ -219,7 +238,7 @@ impl core::ops::Deref for Tls12ClientSessionValue {
+     }
+ }
+ 
+-#[derive(Debug, Clone)]
++#[derive(Clone)]
+ pub struct ClientSessionCommon {
+     ticket: Arc<PayloadU16>,
+     secret: Zeroizing<PayloadU8>,
+@@ -290,6 +309,28 @@ impl ClientSessionCommon {
+     }
+ }
+ 
++impl fmt::Debug for ClientSessionCommon {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        let Self {
++            ticket,
++            secret: _,
++            epoch,
++            lifetime_secs,
++            server_cert_chain,
++            server_cert_verifier,
++            client_creds,
++        } = self;
++        f.debug_struct("ClientSessionCommon")
++            .field("ticket", ticket)
++            .field("epoch", epoch)
++            .field("lifetime_secs", lifetime_secs)
++            .field("server_cert_chain", server_cert_chain)
++            .field("server_cert_verifier", server_cert_verifier)
++            .field("client_creds", client_creds)
++            .finish_non_exhaustive()
++    }
++}
++
+ static MAX_TICKET_LIFETIME: u32 = 7 * 24 * 60 * 60;
+ 
+ /// This is the maximum allowed skew between server and client clocks, over
+@@ -299,7 +340,6 @@ static MAX_TICKET_LIFETIME: u32 = 7 * 24 * 60 * 60;
+ static MAX_FRESHNESS_SKEW_MS: u32 = 60 * 1000;
+ 
+ // --- Server types ---
+-#[derive(Debug)]
+ pub struct ServerSessionValue {
+     pub(crate) sni: Option<DnsName<'static>>,
+     pub(crate) version: ProtocolVersion,
+@@ -314,6 +354,36 @@ pub struct ServerSessionValue {
+     freshness: Option<bool>,
+ }
+ 
++impl fmt::Debug for ServerSessionValue {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        let Self {
++            sni,
++            version,
++            cipher_suite,
++            master_secret: _,
++            extended_ms,
++            client_cert_chain,
++            alpn,
++            application_data,
++            creation_time_sec,
++            age_obfuscation_offset,
++            freshness,
++        } = self;
++        f.debug_struct("ServerSessionValue")
++            .field("sni", sni)
++            .field("version", version)
++            .field("cipher_suite", cipher_suite)
++            .field("extended_ms", extended_ms)
++            .field("client_cert_chain", client_cert_chain)
++            .field("alpn", alpn)
++            .field("application_data", application_data)
++            .field("creation_time_sec", creation_time_sec)
++            .field("age_obfuscation_offset", age_obfuscation_offset)
++            .field("freshness", freshness)
++            .finish_non_exhaustive()
++    }
++}
++
+ impl Codec<'_> for ServerSessionValue {
+     fn encode(&self, bytes: &mut Vec<u8>) {
+         if let Some(sni) = &self.sni {
+@@ -456,19 +526,22 @@ mod tests {
+     #[cfg(feature = "std")] // for UnixTime::now
+     #[test]
+     fn serversessionvalue_is_debug() {
+-        use std::{println, vec};
++        use std::{format, println, vec};
+         let ssv = ServerSessionValue::new(
+             None,
+             ProtocolVersion::TLSv1_3,
+             CipherSuite::TLS13_AES_128_GCM_SHA256,
+-            &[1, 2, 3],
++            &[0xa5; 48],
+             None,
+             None,
+             vec![4, 5, 6],
+             UnixTime::now(),
+             0x12345678,
+         );
+-        println!("{ssv:?}");
++        let debug = format!("{ssv:?}");
++        println!("{debug}");
++        assert!(debug.contains("application_data: 040506"));
++        assert!(!debug.contains("a5a5"), "{debug}");
+     }
+ 
+     #[test]
+diff --git a/work/home/.cache/cargo-vet/src/rustls-0.23.45/src/record_layer.rs b/work/home/.cache/cargo-vet/src/rustls-0.23.46/src/record_layer.rs
+index 8c2ea6b..0106daf 100644
+--- a/work/home/.cache/cargo-vet/src/rustls-0.23.45/src/record_layer.rs
++++ b/work/home/.cache/cargo-vet/src/rustls-0.23.46/src/record_layer.rs
+@@ -198,8 +198,8 @@ impl RecordLayer {
+     /// "the next message processed by `encrypt_outgoing`"
+     pub(crate) fn pre_encrypt_action(&self, add: u64) -> PreEncryptAction {
+         match self.write_seq.saturating_add(add) {
+-            v if v == self.write_seq_max => PreEncryptAction::RefreshOrClose,
+             SEQ_HARD_LIMIT.. => PreEncryptAction::Refuse,
++            v if v >= self.write_seq_max => PreEncryptAction::RefreshOrClose,
+             _ => PreEncryptAction::Nothing,
+         }
+     }
+@@ -273,6 +273,28 @@ const SEQ_HARD_LIMIT: u64 = 0xffff_ffff_ffff_fffeu64;
+ mod tests {
+     use super::*;
+ 
++    #[test]
++    fn pre_encrypt_action_checks_limits() {
++        let action = |write_seq_max, write_seq, add| {
++            let mut record_layer = RecordLayer::new();
++            record_layer.write_seq_max = write_seq_max;
++            record_layer.write_seq = write_seq;
++            record_layer.pre_encrypt_action(add)
++        };
++
++        assert_eq!(action(10, 8, 1), PreEncryptAction::Nothing);
++        assert_eq!(action(10, 8, 2), PreEncryptAction::RefreshOrClose);
++        assert_eq!(action(10, 11, 0), PreEncryptAction::RefreshOrClose);
++        assert_eq!(
++            action(SEQ_SOFT_LIMIT, SEQ_HARD_LIMIT - 1, 0),
++            PreEncryptAction::RefreshOrClose
++        );
++        assert_eq!(
++            action(SEQ_SOFT_LIMIT, SEQ_HARD_LIMIT - 1, 1),
++            PreEncryptAction::Refuse
++        );
++    }
++
+     #[test]
+     fn test_has_decrypted() {
+         use crate::{ContentType, ProtocolVersion};
+diff --git a/work/home/.cache/cargo-vet/src/rustls-0.23.45/src/server/handy.rs b/work/home/.cache/cargo-vet/src/rustls-0.23.46/src/server/handy.rs
+index ea3ec5d..e695aa8 100644
+--- a/work/home/.cache/cargo-vet/src/rustls-0.23.45/src/server/handy.rs
++++ b/work/home/.cache/cargo-vet/src/rustls-0.23.46/src/server/handy.rs
+@@ -34,7 +34,7 @@ mod cache {
+     use crate::{limited_cache, server};
+ 
+     /// An implementer of `StoresServerSessions` that stores everything
+-    /// in memory.  If enforces a limit on the number of stored sessions
++    /// in memory.  It enforces a limit on the number of stored sessions
+     /// to bound memory usage.
+     pub struct ServerSessionMemoryCache {
+         cache: Mutex<limited_cache::LimitedCache<Vec<u8>, Vec<u8>>>,
+@@ -124,6 +124,8 @@ mod cache {
+             assert_eq!(c.get(&[0x01]), Some(vec![0x04]));
+         }
+ 
++        /// After five sessions are put into a cache of size 2, exactly the
++        /// two most recently added sessions remain.
+         #[test]
+         fn test_serversessionmemorycache_drops_to_maintain_size_invariant() {
+             let c = ServerSessionMemoryCache::new(2);
+@@ -133,13 +135,24 @@ mod cache {
+             assert!(c.put(vec![0x07], vec![0x08]));
+             assert!(c.put(vec![0x09], vec![0x0a]));
+ 
+-            let count = c.get(&[0x01]).iter().count()
+-                + c.get(&[0x03]).iter().count()
+-                + c.get(&[0x05]).iter().count()
+-                + c.get(&[0x07]).iter().count()
+-                + c.get(&[0x09]).iter().count();
++            assert_eq!(c.get(&[0x01]), None);
++            assert_eq!(c.get(&[0x03]), None);
++            assert_eq!(c.get(&[0x05]), None);
++            assert_eq!(c.get(&[0x07]), Some(vec![0x08]));
++            assert_eq!(c.get(&[0x09]), Some(vec![0x0a]));
++        }
++
++        /// A cache of size 1 keeps the session put into it, and a second
++        /// put replaces it.
++        #[test]
++        fn test_serversessionmemorycache_size_one_retains_session() {
++            let c = ServerSessionMemoryCache::new(1);
++            assert!(c.put(vec![0x01], vec![0x02]));
++            assert_eq!(c.get(&[0x01]), Some(vec![0x02]));
+ 
+-            assert!(count < 5);
++            assert!(c.put(vec![0x03], vec![0x04]));
++            assert_eq!(c.get(&[0x01]), None);
++            assert_eq!(c.get(&[0x03]), Some(vec![0x04]));
+         }
+     }
+ }
+diff --git a/work/home/.cache/cargo-vet/src/rustls-0.23.45/src/server/test.rs b/work/home/.cache/cargo-vet/src/rustls-0.23.46/src/server/test.rs
+index 07dc0da..2b9efed 100644
+--- a/work/home/.cache/cargo-vet/src/rustls-0.23.45/src/server/test.rs
++++ b/work/home/.cache/cargo-vet/src/rustls-0.23.46/src/server/test.rs
+@@ -72,12 +72,18 @@ mod tests {
+         ActiveKeyExchange, CryptoProvider, KeyExchangeAlgorithm, SupportedKxGroup,
+     };
+     use crate::enums::CertificateType;
+-    use crate::msgs::handshake::{PresharedKeyIdentity, PresharedKeyOffer, PskKeyExchangeModes};
++    use crate::msgs::codec::{Codec, Reader};
++    use crate::msgs::handshake::{
++        PresharedKeyBinder, PresharedKeyIdentity, PresharedKeyOffer, PskKeyExchangeModes,
++    };
++    use crate::msgs::message::HEADER_SIZE;
++    use crate::msgs::persist;
+     use crate::pki_types::pem::PemObject;
+     use crate::pki_types::{CertificateDer, PrivateKeyDer};
+     use crate::server::{AlwaysResolvesServerRawPublicKeys, ServerConfig, ServerConnection};
+     use crate::sign::CertifiedKey;
+     use crate::sync::Arc;
++    use crate::tls13::key_schedule::KeyScheduleEarly;
+     use crate::{
+         CipherSuiteCommon, SupportedCipherSuite, Tls12CipherSuite, Tls13CipherSuite, version,
+     };
+@@ -349,6 +355,122 @@ mod tests {
+         );
+     }
+ 
++    #[test]
++    fn early_data_accepted_for_first_psk_identity() {
++        let (selected, early_data_accepted) = resume_with_early_data(0);
++        assert_eq!(selected, Some(0));
++        assert!(early_data_accepted);
++    }
++
++    #[test]
++    fn early_data_rejected_for_later_psk_identity() {
++        // RFC 9846 section 4.3.10: "In order to accept early data, the server MUST have
++        // accepted a PSK cipher suite and selected the first key offered in the client's
++        // "pre_shared_key" extension." The server may still resume with a later PSK.
++        let (selected, early_data_accepted) = resume_with_early_data(1);
++        assert_eq!(selected, Some(1));
++        assert!(!early_data_accepted);
++    }
++
++    /// Offer a resumable PSK at `index` (preceded by unknown identities) along with an
++    /// early data request, returning the selected PSK index and whether early data was accepted.
++    fn resume_with_early_data(index: usize) -> (Option<u16>, bool) {
++        // ensures X25519 is offered irrespective of cfg(feature = "fips"), to match
++        // `minimal_client_hello()`
++        let provider = CryptoProvider {
++            kx_groups: vec![super::provider::kx_group::X25519],
++            ..super::provider::default_provider()
++        };
++        let mut config = ServerConfig::builder_with_provider(provider.into())
++            .with_protocol_versions(&[&version::TLS13])
++            .unwrap()
++            .with_no_client_auth()
++            .with_single_cert(server_cert(), server_key())
++            .unwrap();
++        config.max_early_data_size = 1024;
++
++        let SupportedCipherSuite::Tls13(suite) =
++            super::provider::cipher_suite::TLS13_AES_128_GCM_SHA256
++        else {
++            unreachable!();
++        };
++
++        let secret = [0x42u8; 32];
++        let ticket = b"resumable ticket";
++        let session = persist::ServerSessionValue::new(
++            None,
++            ProtocolVersion::TLSv1_3,
++            suite.common.suite,
++            &secret,
++            None,
++            None,
++            vec![],
++            config.current_time().unwrap(),
++            0,
++        );
++        assert!(
++            config
++                .session_storage
++                .put(ticket.to_vec(), session.get_encoding())
++        );
++
++        let binder_len = suite.common.hash_provider.output_len();
++        let mut identities = vec![PresharedKeyIdentity::new(b"unknown ticket".to_vec(), 0); index];
++        identities.push(PresharedKeyIdentity::new(ticket.to_vec(), 0));
++        let binders = vec![PresharedKeyBinder::from(vec![0u8; binder_len]); identities.len()];
++
++        let mut ch = minimal_client_hello();
++        ch.cipher_suites = vec![suite.common.suite];
++        ch.extensions.preshared_key_modes = Some(PskKeyExchangeModes {
++            psk_dhe: true,
++            psk: false,
++        });
++        ch.extensions.early_data_request = Some(());
++        ch.extensions.preshared_key_offer = Some(PresharedKeyOffer {
++            identities,
++            binders,
++        });
++        let mut hmp = HandshakeMessagePayload(HandshakePayload::ClientHello(ch));
++
++        // compute a genuine binder for the resumable PSK over the final ClientHello
++        let key_schedule = KeyScheduleEarly::new(suite, &secret);
++        let handshake_hash = suite
++            .common
++            .hash_provider
++            .hash(&hmp.encoding_for_binder_signing());
++        let binder = key_schedule.resumption_psk_binder_key_and_sign_verify_data(&handshake_hash);
++        let HandshakePayload::ClientHello(ch) = &mut hmp.0 else {
++            unreachable!();
++        };
++        ch.preshared_key_offer
++            .as_mut()
++            .unwrap()
++            .binders[index] = PresharedKeyBinder::from(binder.as_ref().to_vec());
++
++        let ch = Message {
++            version: ProtocolVersion::TLSv1_3,
++            payload: MessagePayload::handshake(hmp),
++        };
++        let mut conn = ServerConnection::new(config.into()).unwrap();
++        conn.read_tls(&mut ch.into_wire_bytes().as_slice())
++            .unwrap();
++        conn.process_new_packets().unwrap();
++
++        let mut flight = vec![];
++        conn.write_tls(&mut flight).unwrap();
++        let mut r = Reader::init(&flight[HEADER_SIZE..]);
++        let HandshakeMessagePayload(HandshakePayload::ServerHello(server_hello)) =
++            HandshakeMessagePayload::read(&mut r).unwrap()
++        else {
++            panic!("expected ServerHello");
++        };
++
++        (
++            server_hello.extensions.preshared_key,
++            conn.early_data().is_some(),
++        )
++    }
++
+     static TLS13_AES_128_GCM_SHA256_ALT: SupportedCipherSuite =
+         SupportedCipherSuite::Tls13(&TLS13_AES_128_GCM_SHA256_ALT_INNER);
+ 
+diff --git a/work/home/.cache/cargo-vet/src/rustls-0.23.45/src/server/tls13.rs b/work/home/.cache/cargo-vet/src/rustls-0.23.46/src/server/tls13.rs
+index 42a5520..55e32f1 100644
+--- a/work/home/.cache/cargo-vet/src/rustls-0.23.45/src/server/tls13.rs
++++ b/work/home/.cache/cargo-vet/src/rustls-0.23.46/src/server/tls13.rs
+@@ -410,7 +410,7 @@ mod client_hello {
+                 cx,
+                 &mut ocsp_response,
+                 client_hello,
+-                resumedata.as_ref(),
++                chosen_psk_index.zip(resumedata.as_ref()),
+                 self.extra_exts,
+                 &self.config,
+                 self.send_tickets,
+@@ -649,7 +649,7 @@ mod client_hello {
+     fn decide_if_early_data_allowed(
+         cx: &mut ServerContext<'_>,
+         client_hello: &ClientHelloPayload,
+-        resumedata: Option<&persist::ServerSessionValue>,
++        resuming: Option<(usize, &persist::ServerSessionValue)>,
+         suite: &'static Tls13CipherSuite,
+         config: &ServerConfig,
+     ) -> EarlyDataDecision {
+@@ -661,7 +661,7 @@ mod client_hello {
+             false => EarlyDataDecision::Disabled,
+         };
+ 
+-        let Some(resume) = resumedata else {
++        let Some((psk_index, resume)) = resuming else {
+             // never any early data if not resuming.
+             return rejected_or_disabled;
+         };
+@@ -685,8 +685,13 @@ mod client_hello {
+          *  - The selected cipher suite
+          *  - The selected ALPN [RFC7301] protocol, if any"
+          *
++         * "In order to accept early data, the server MUST have accepted a PSK
++         *  cipher suite and selected the first key offered in the client's
++         *  "pre_shared_key" extension."
++         *
+          * (RFC8446, 4.2.10) */
+         let early_data_possible = early_data_requested
++            && psk_index == 0
+             && resume.is_fresh()
+             && Some(resume.version) == cx.common.negotiated_version
+             && resume.cipher_suite == suite.common.suite
+@@ -710,13 +715,19 @@ mod client_hello {
+         cx: &mut ServerContext<'_>,
+         ocsp_response: &mut Option<&[u8]>,
+         hello: &ClientHelloPayload,
+-        resumedata: Option<&persist::ServerSessionValue>,
++        resuming: Option<(usize, &persist::ServerSessionValue)>,
+         extra_exts: ServerExtensionsInput<'static>,
+         config: &ServerConfig,
+         send_tickets: usize,
+     ) -> Result<EarlyDataDecision, Error> {
+         let mut ep = hs::ExtensionProcessing::new(extra_exts);
+-        ep.process_common(config, cx, ocsp_response, hello, resumedata)?;
++        ep.process_common(
++            config,
++            cx,
++            ocsp_response,
++            hello,
++            resuming.map(|(_, session)| session),
++        )?;
+ 
+         // RFC 9149: echo the expected ticket count if the client sent the extension.
+         if hello.ticket_request.is_some() && config.max_tls13_tickets > 0 {
+@@ -725,7 +736,7 @@ mod client_hello {
+             });
+         }
+ 
+-        let early_data = decide_if_early_data_allowed(cx, hello, resumedata, suite, config);
++        let early_data = decide_if_early_data_allowed(cx, hello, resuming, suite, config);
+         if early_data == EarlyDataDecision::Accepted {
+             ep.extensions.early_data_ack = Some(());
+         }
+@@ -1087,6 +1098,17 @@ impl State<ServerConnectionData> for ExpectCertificate {
+             HandshakePayload::CertificateTls13
+         )?;
+ 
++        // RFC 8446: the certificate_request_context in the client's Certificate
++        // must match the one in our CertificateRequest, which we always send
++        // empty.  The client applies the mirror-image check to the server's
++        // Certificate.
++        if !certp.context.0.is_empty() {
++            return Err(cx.common.send_fatal_alert(
++                AlertDescription::DecodeError,
++                InvalidMessage::InvalidCertRequest,
++            ));
++        }
++
+         // We don't send any CertificateRequest extensions, so any extensions
+         // here are illegal.
+         if certp
+diff --git a/work/home/.cache/cargo-vet/src/rustls-0.23.45/src/stream.rs b/work/home/.cache/cargo-vet/src/rustls-0.23.46/src/stream.rs
+index ee57862..88b5937 100644
+--- a/work/home/.cache/cargo-vet/src/rustls-0.23.45/src/stream.rs
++++ b/work/home/.cache/cargo-vet/src/rustls-0.23.46/src/stream.rs
+@@ -1,5 +1,5 @@
+ use core::ops::{Deref, DerefMut};
+-use std::io::{BufRead, IoSlice, Read, Result, Write};
++use std::io::{BufRead, ErrorKind, IoSlice, Read, Result, Write};
+ 
+ use crate::conn::{ConnectionCommon, SideData};
+ 
+@@ -45,14 +45,22 @@ where
+     }
+ 
+     fn prepare_read(&mut self) -> Result<()> {
++        // Return buffered plaintext without doing any IO: `complete_io()` does not read
++        // while plaintext is buffered, so blocked writes would otherwise hide it.
++        if !self.conn.received_plaintext.is_empty() {
++            return Ok(());
++        }
++
+         self.complete_prior_io()?;
+ 
+         // We call complete_io() in a loop since a single call may read only
+-        // a partial packet from the underlying transport. A full packet is
+-        // needed to get more plaintext, which we must do if EOF has not been
+-        // hit.
++        // a partial packet from the underlying transport, or may only write
++        // pending TLS data (like an alert queued while processing received
++        // records). A full packet is needed to get more plaintext, which we
++        // must do if EOF has not been hit.
+         while self.conn.wants_read() {
+-            if self.conn.complete_io(self.sock)?.0 == 0 {
++            let (read, written) = self.conn.complete_io(self.sock)?;
++            if read == 0 && written == 0 {
+                 break;
+             }
+         }
+@@ -146,11 +154,24 @@ where
+     fn flush(&mut self) -> Result<()> {
+         self.complete_prior_io()?;
+ 
+-        self.conn.writer().flush()?;
+-        if self.conn.wants_write() {
+-            self.conn.complete_io(self.sock)?;
++        // `complete_prior_io()` may return after making only partial progress, so
++        // keep writing until all TLS output has been handed to the transport.
++        while self.conn.wants_write() {
++            match self.conn.write_tls(self.sock) {
++                Ok(0) => return Err(ErrorKind::WriteZero.into()),
++                Ok(_) => {}
++                Err(err) if err.kind() == ErrorKind::Interrupted => {}
++                Err(err) => return Err(err),
++            }
+         }
+-        Ok(())
++
++        // Always flush the transport, even if we had no TLS output: an earlier
++        // flush (for example, from within `write()`) may have failed.
++        self.sock.flush()?;
++
++        // Report any fatal error the connection encountered after an earlier `write()`
++        // had already accepted its plaintext (for example, while processing received data).
++        self.conn.writer().flush()
+     }
+ }
+ 
+diff --git a/work/home/.cache/cargo-vet/src/rustls-0.23.45/src/tls13/key_schedule.rs b/work/home/.cache/cargo-vet/src/rustls-0.23.46/src/tls13/key_schedule.rs
+index 4bf0421..7914ae2 100644
+--- a/work/home/.cache/cargo-vet/src/rustls-0.23.45/src/tls13/key_schedule.rs
++++ b/work/home/.cache/cargo-vet/src/rustls-0.23.46/src/tls13/key_schedule.rs
+@@ -533,6 +533,9 @@ impl KeyScheduleTraffic {
+         common.send_msg_encrypt(Message::build_key_update_request().into());
+         let secret = self.next_application_traffic_secret(common.side);
+         self.ks.set_encrypter(&secret, common);
++        // Sending the request with the exhausted keys asked for another update,
++        // which the new keys make unnecessary.
++        common.refresh_traffic_keys_pending = false;
+         Ok(())
+     }
+ 
+
+Use |cargo vet certify| to record your audit.

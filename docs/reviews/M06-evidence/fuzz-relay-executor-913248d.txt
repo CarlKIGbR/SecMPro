@@ -1,0 +1,14 @@
+code head 913248d: fix(m6) VD-M6-A-10 (WEISUNG M6-7); seed fuzz/corpus/relay_executor/335f88e8be20a3e13d192d1458eafa1472cc5a16 = crash-335f88e8 of CI run 38085054146
+command: rustup run nightly-2026-09-21 cargo fuzz run --fuzz-dir fuzz relay_executor target/tmp/fz-corpus fuzz/corpus/relay_executor -- -max_total_time=900 -max_len=4322 -timeout=60 -len_control=0
+#5	INITED cov: 5912 ft: 10910 corp: 4/880b exec/s: 0 rss: 80Mb
+#64	pulse  cov: 5991 ft: 19273 corp: 54/9830b lim: 4322 exec/s: 21 rss: 396Mb
+#128	pulse  cov: 6053 ft: 20781 corp: 109/20Kb lim: 4322 exec/s: 21 rss: 401Mb
+#256	pulse  cov: 6091 ft: 21779 corp: 171/31Kb lim: 4322 exec/s: 23 rss: 412Mb
+#512	pulse  cov: 6093 ft: 23287 corp: 280/58Kb lim: 4322 exec/s: 19 rss: 429Mb
+#1024	pulse  cov: 6104 ft: 24368 corp: 406/91Kb lim: 4322 exec/s: 20 rss: 430Mb
+#2048	pulse  cov: 6111 ft: 25083 corp: 535/138Kb lim: 4322 exec/s: 18 rss: 436Mb
+#4096	pulse  cov: 6123 ft: 25718 corp: 654/188Kb lim: 4322 exec/s: 16 rss: 460Mb
+#8192	pulse  cov: 6135 ft: 26302 corp: 772/248Kb lim: 4322 exec/s: 14 rss: 463Mb
+#12208	DONE   cov: 6147 ft: 26504 corp: 821/270Kb lim: 4322 exec/s: 13 rss: 472Mb
+Done 12208 runs in 901 second(s)
+no crash, no panic

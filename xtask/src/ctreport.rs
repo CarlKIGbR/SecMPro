@@ -683,6 +683,8 @@ pub(crate) struct TargetSet {
     /// Whether its reports record `k` per measurement, `requantised` and `k_initial` (ADR-041 Amendment 2); the
     /// reports of the M2 set predate it.
     batch_record: bool,
+    /// The informative targets its reports carry in `informative` (ADR-042 Amendment 5); none before it.
+    informative: &'static [&'static str],
 }
 
 /// The gate's target set.
@@ -690,6 +692,16 @@ pub(crate) const CURRENT_TARGETS: TargetSet = TargetSet {
     label: "expect::CT_TARGETS",
     names: expect::CT_TARGETS,
     batch_record: true,
+    informative: expect::CT_INFORMATIVE_TARGETS,
+};
+
+/// The target set of the reports written from M5 until ADR-042 Amendment 5 (M6-CI-13): the current targets, no
+/// informative target. For re-reading them with `cargo xtask ct-check --targets m5`.
+pub(crate) const M5_TARGETS: TargetSet = TargetSet {
+    label: "the M5 target set",
+    names: expect::CT_TARGETS,
+    batch_record: true,
+    informative: &[],
 };
 
 /// The target set of the reports written before ADR-042 added `aa_prime_control` (M2; the committed evidence under
@@ -708,6 +720,7 @@ pub(crate) const M2_TARGETS: TargetSet = TargetSet {
         "caead_open_reject_samekey",
     ],
     batch_record: false,
+    informative: &[],
 };
 
 /// The target set of the reports written in M4 (the committed evidence under `docs/reviews/M04-evidence/`: the
@@ -738,6 +751,7 @@ pub(crate) const M4_TARGETS: TargetSet = TargetSet {
         "hx_same_content_control",
     ],
     batch_record: true,
+    informative: &[],
 };
 
 /// M2 review C3 (a), (c): the target set is `targets` (the gate: `expect::CT_TARGETS`), each measured with the sample
@@ -772,7 +786,86 @@ fn set_findings(report: &Value, results: &[Value], targets: TargetSet) -> Vec<St
             ));
         }
     }
+    out.extend(informative_findings(report, targets));
     out
+}
+
+/// The informative entries of a report (`informative`; none if absent).
+fn informative_entries(report: &Value) -> &[Value] {
+    report
+        .get("informative")
+        .and_then(Value::as_array)
+        .map_or(&[], Vec::as_slice)
+}
+
+/// ADR-042 Amendment 5: the report's informative entries are exactly the target set's informative targets. Each is
+/// marked informative with no verdict and measured with the sample count of `expect.rs`. Their measurements never fail
+/// the gate.
+fn informative_findings(report: &Value, targets: TargetSet) -> Vec<String> {
+    let mut out = Vec::new();
+    let entries = informative_entries(report);
+    let names: Vec<&str> = entries.iter().map(|e| text(e, "name")).collect();
+    let set: BTreeSet<&str> = names.iter().copied().collect();
+    let expected: BTreeSet<&str> = targets.informative.iter().copied().collect();
+    if set.len() != names.len() || set != expected {
+        out.push(format!(
+            "ct report: informative targets {names:?} differ from {:?} (ADR-042 Amendment 5)",
+            targets.informative
+        ));
+    }
+    for e in entries {
+        let name = text(e, "name");
+        let marked = e.get("informative").and_then(Value::as_bool) == Some(true)
+            && e.get("verdict").is_some_and(Value::is_null);
+        if !marked {
+            out.push(format!(
+                "ct report: {name} is not marked informative without a verdict (ADR-042 Amendment 5)"
+            ));
+        }
+        let got = e.get("samples").and_then(Value::as_u64);
+        if got != u64::try_from(expect::CT_SAMPLES).ok() {
+            out.push(format!(
+                "ct report: informative {name} measured {got:?} samples, expect {}",
+                expect::CT_SAMPLES
+            ));
+        }
+    }
+    out
+}
+
+/// ADR-042 Amendment 5: the line of an informative target (no verdict, never a failure): Δ (ticks) and t at every crop
+/// of each measurement, or "not measured".
+fn ct_informative_line(entry: &Value) -> String {
+    let name = text(entry, "name");
+    let half = |key: &str| {
+        let Some(m) = entry.get(key).filter(|m| !m.is_null()) else {
+            return format!("{key} not measured");
+        };
+        let crops = m
+            .get("crops")
+            .and_then(Value::as_object)
+            .map(|crops| {
+                crops
+                    .iter()
+                    .map(|(crop, s)| {
+                        let num = |k: &str| {
+                            s.get(k)
+                                .and_then(Value::as_f64)
+                                .map_or_else(|| "?".to_owned(), |v| format!("{v:+.2}"))
+                        };
+                        format!("{crop} Δ {} t {}", num("delta"), num("t"))
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .unwrap_or_default();
+        format!("{key}: {crops}")
+    };
+    format!(
+        "{name}: informative (no verdict) — {}; {} (ticks; ADR-042 Amendment 5)",
+        half("first"),
+        half("second")
+    )
 }
 
 /// The verdicts the bench can give the positive control: measured once, PASS if detected, FAIL if not, or not
@@ -1116,6 +1209,10 @@ pub(crate) fn ct_table_for(json: &str, targets: TargetSet) -> Result<CtTable> {
     if let Some(line) = ct_same_content_line(&v) {
         table.lines.push(line);
     }
+    // ADR-042 Amendment 5: the informative targets, printed, never a failure
+    for entry in informative_entries(&v) {
+        table.lines.push(ct_informative_line(entry));
+    }
     table
         .failed
         .extend(rederive(&v, run_verdict, results, targets));
@@ -1127,16 +1224,20 @@ pub(crate) fn ct_table_for(json: &str, targets: TargetSet) -> Result<CtTable> {
     Ok(table)
 }
 
-/// The arguments of `ct-check`: an optional `--targets m2` (the target set of the committed M2 reports, before
-/// ADR-042), `--targets m4` (that of the committed M4 reports, before TEST-SPEC-M5 (g)) or `--targets current` (the
-/// default, `expect::CT_TARGETS`), then the report files.
+/// The arguments of `ct-check`, then the report files. The target set is optional:
+///
+/// - `--targets m2`: the committed M2 reports, before ADR-042;
+/// - `--targets m4`: the committed M4 reports, before TEST-SPEC-M5 (g);
+/// - `--targets m5`: the reports from M5 until ADR-042 Amendment 5, without informative targets;
+/// - `--targets current` (the default): `expect::CT_TARGETS` with `expect::CT_INFORMATIVE_TARGETS`.
 fn check_args(args: &[String]) -> Result<(TargetSet, &[String])> {
-    let usage = "usage: cargo xtask ct-check [--targets current|m2|m4] <ct-report.json>…";
+    let usage = "usage: cargo xtask ct-check [--targets current|m2|m4|m5] <ct-report.json>…";
     let (targets, files) = match args {
         [flag, set, files @ ..] if flag == "--targets" => match set.as_str() {
             "current" => (CURRENT_TARGETS, files),
             "m2" => (M2_TARGETS, files),
             "m4" => (M4_TARGETS, files),
+            "m5" => (M5_TARGETS, files),
             other => bail!("ct-check: unknown target set {other:?}; {usage}"),
         },
         [flag, ..] if flag.starts_with('-') => bail!("ct-check: unknown option {flag:?}; {usage}"),
@@ -1236,8 +1337,16 @@ mod tests {
                 "t": {}, "crops": {}, "q_eff_ticks": 1.0, "q_eff_source": "clock", "distinct": 900,
                 "median_ticks": 20000, "median_ns": 10000.0, "class_median_ticks": 20000,
                 "realised_quanta": 20000.0}},
+            "informative": expect::CT_INFORMATIVE_TARGETS.iter().map(|t| informative(t)).collect::<Vec<_>>(),
             "results": results
         })
+    }
+
+    /// An informative entry named `name` (ADR-042 Amendment 5): marked informative, no verdict, two measurements.
+    fn informative(name: &str) -> Value {
+        serde_json::json!({"name": name, "class0": "a", "class1": "b", "samples": expect::CT_SAMPLES,
+            "informative": true, "verdict": null, "k": 1,
+            "first": measurement(1.0, 0.1), "second": measurement(1.0, 0.1)})
     }
 
     fn table(v: &Value) -> Result<CtTable> {
@@ -1322,6 +1431,114 @@ mod tests {
             .all(|f| f.starts_with("tag_compare: FAIL at p90")))
     }
 
+    /// ADR-042 Amendment 5: the informative nonce target is pinned, never fails the gate whatever it measured, is
+    /// printed with Δ and t per crop, and a report must carry exactly the pinned informative targets, marked
+    /// informative, without a verdict and with the full sample count. Reports from before the amendment are read with
+    /// `--targets m5`.
+    #[test]
+    fn informative_targets_are_pinned_printed_and_never_fail() -> Result<()> {
+        assert_eq!(
+            expect::CT_INFORMATIVE_TARGETS,
+            &["tr_decrypt_nonce_dependence"]
+        );
+        assert!(
+            expect::CT_INFORMATIVE_TARGETS
+                .iter()
+                .all(|t| !expect::CT_TARGETS.contains(t))
+        );
+        let bench = include_str!("../../crates/secmp-testkit/benches/ct.rs");
+        assert!(bench.contains("\"tr_decrypt_nonce_dependence\""));
+        // a reproduced shift far above the floor in the informative target: printed, not a failure
+        let mut v = report();
+        let shifted = measurement_with(&[("p90", 170.0, 65.0)], 1.0);
+        for half in ["first", "second"] {
+            let entry = v
+                .get_mut("informative")
+                .and_then(|i| i.get_mut(0))
+                .unwrap_or_else(|| unreachable!("fixture informative entry {half}"));
+            set(entry, &[half], shifted.clone());
+        }
+        let t = table(&v)?;
+        assert!(t.failed.is_empty() && t.not_measurable.is_empty(), "{t:?}");
+        let line = t
+            .lines
+            .iter()
+            .find(|l| l.starts_with("tr_decrypt_nonce_dependence: informative (no verdict)"))
+            .ok_or_else(|| Error(format!("no informative line: {:?}", t.lines)))?;
+        assert!(line.contains("p90 Δ +65.00 t +170.00"), "{line}");
+        // missing, renamed, duplicated, given a verdict, shortened: each refused
+        let refuse = |edit: &dyn Fn(&mut Value), needle: &str| -> Result<()> {
+            let mut v = report();
+            edit(&mut v);
+            assert!(refused(&v, needle)?, "{needle}: {:?}", table(&v)?.failed);
+            Ok(())
+        };
+        refuse(
+            &|v| {
+                if let Some(o) = v.as_object_mut() {
+                    o.remove("informative");
+                }
+            },
+            "informative targets [] differ",
+        )?;
+        refuse(
+            &|v| set(v, &["informative"], Value::from(Vec::<Value>::new())),
+            "informative targets [] differ",
+        )?;
+        refuse(
+            &|v| {
+                set(
+                    v,
+                    &["informative"],
+                    serde_json::json!([informative("tr_decrypt_other")]),
+                );
+            },
+            "differ from [\"tr_decrypt_nonce_dependence\"]",
+        )?;
+        refuse(
+            &|v| {
+                let entry = informative("tr_decrypt_nonce_dependence");
+                set(
+                    v,
+                    &["informative"],
+                    serde_json::json!([entry.clone(), entry]),
+                );
+            },
+            "informative targets",
+        )?;
+        refuse(
+            &|v| {
+                let mut entry = informative("tr_decrypt_nonce_dependence");
+                set(&mut entry, &["verdict"], Value::from("PASS"));
+                set(v, &["informative"], serde_json::json!([entry]));
+            },
+            "not marked informative without a verdict",
+        )?;
+        refuse(
+            &|v| {
+                let mut entry = informative("tr_decrypt_nonce_dependence");
+                set(&mut entry, &["samples"], Value::from(1000));
+                set(v, &["informative"], serde_json::json!([entry]));
+            },
+            "informative tr_decrypt_nonce_dependence measured Some(1000) samples",
+        )?;
+        // the M5 set: no informative target, so a report without one passes, and one with it is refused
+        let mut old = report();
+        if let Some(o) = old.as_object_mut() {
+            o.remove("informative");
+        }
+        let read = ct_table_for(&old.to_string(), M5_TARGETS)?;
+        assert!(read.failed.is_empty(), "{:?}", read.failed);
+        let read = ct_table_for(&report().to_string(), M5_TARGETS)?;
+        assert!(
+            read.failed.iter().any(|f| f
+                .contains("informative targets [\"tr_decrypt_nonce_dependence\"] differ from []")),
+            "{:?}",
+            read.failed
+        );
+        Ok(())
+    }
+
     #[test]
     fn a_consistent_report_passes_and_is_printed() -> Result<()> {
         let mut v = report();
@@ -1333,7 +1550,13 @@ mod tests {
         set(msg, &["decisive_crop"], Value::from("p90"));
         let t = table(&v)?;
         assert!(t.failed.is_empty() && t.not_measurable.is_empty(), "{t:?}");
-        assert_eq!(t.lines.len(), expect::CT_TARGETS.len().saturating_add(1));
+        assert_eq!(
+            t.lines.len(),
+            expect::CT_TARGETS
+                .len()
+                .saturating_add(1)
+                .saturating_add(expect::CT_INFORMATIVE_TARGETS.len())
+        );
         assert!(
             t.lines
                 .iter()
@@ -2034,6 +2257,8 @@ mod tests {
                     .any(|l| l.contains("differ from expect::CT_TARGETS"))
                     && now.failed.iter().all(|l| {
                         l.contains("differ from expect::CT_TARGETS")
+                            // ADR-042 Amendment 5: the current set has an informative target these predate
+                            || l.contains("informative targets [] differ")
                             || l == "ct report: run verdict PASS with a failing target"
                             || l.contains("which is no first pair or one re-batch")
                             || l.contains("taken with k None")
@@ -2916,7 +3141,8 @@ mod tests {
             .is_empty()
         );
         // the committed report of run 37127247911 (one measurement): the raw rule, its recorded CONTROL_FAIL — read
-        // against the M4 target set it was written with; against the current set it lacks the M5 targets alone
+        // against the M4 target set it was written with; against the current set it lacks the M5 targets and the
+        // informative target of ADR-042 Amendment 5 alone
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../docs/reviews/M04-evidence/ct-report-linux-37127247911-cac6eff.json");
         let json = std::fs::read_to_string(path)?;
@@ -2926,12 +3152,17 @@ mod tests {
         let control_fail = "CONTROL_FAIL — sensitivity control min_leak_control below the effect floor: raw Δ -11.70 \
                             ticks < floor 26.00 ticks (1 q_eff, 10 ns)";
         let now = ct_table(&json)?;
-        assert_eq!(now.failed.len(), 2, "{:?}", now.failed);
+        assert_eq!(now.failed.len(), 3, "{:?}", now.failed);
         assert!(now.failed.iter().any(|f| f == control_fail));
         assert!(
             now.failed
                 .iter()
                 .any(|f| f.contains("differ from expect::CT_TARGETS"))
+        );
+        assert!(
+            now.failed
+                .iter()
+                .any(|f| f.contains("informative targets [] differ"))
         );
         let t = ct_table_for(&json, M4_TARGETS)?;
         assert_eq!(t.failed, vec![control_fail.to_owned()]);

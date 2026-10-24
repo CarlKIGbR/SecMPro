@@ -1,0 +1,764 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//! M6 property tests (P-01…P-04, P-06, P-07; `docs/06` §4 "Property"): seeded through `seed::master_seed` (the default
+//! seed and, in CI, the run seed).
+
+use std::collections::BTreeSet;
+
+use secmp_client_core::scheduler::control::When;
+use secmp_client_core::scheduler::conversation::{Conversation, Conversations};
+use secmp_client_core::scheduler::core::Scheduler;
+use secmp_client_core::scheduler::outbox::{
+    MemOutbox, MemPersist, MsgId, MsgState, OutMessage, Outbox,
+};
+use secmp_client_core::scheduler::params::{Mode, Params};
+use secmp_client_core::scheduler::types::{CellSource, ControlKind, Output, QueueId, RelayId};
+use secmp_client_core::timing::TimingRng;
+use secmp_crypto::{SecretBytes, Zeroizing};
+use secmp_proto::tr::{FixedEntropy, RatchetState};
+use secmp_proto::wire::cell::AppKind;
+use secmp_proto::wire::frame::RequestCmd;
+use secmp_testkit::harness::{EntropyPool, Inspect, START_UNIX, ratchet_pair};
+
+use crate::m6_activity::{Rig, Scenario, activity, compare, control_equal};
+use crate::m6_common::{
+    client_with, driver, run_until_link_up, send_only, send_only_full, send_only_sid,
+};
+use crate::m6_rand::Mix;
+use crate::m6_sched_bal::{NoCells, fresh_recv_cap};
+use crate::seed;
+
+fn cases() -> u64 {
+    std::env::var("SECMP_PROPTEST_CASES")
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
+        .unwrap_or(4)
+}
+
+const PERIODS: [u64; 4] = [10_000, 20_000, 40_000, 80_000];
+
+/// A random scenario: a mode, 1…3 contacts with random periods (Balanced / Low-bw within their rate bounds).
+fn random_scenario(mix: &mut Mix, seed: u64) -> Scenario {
+    let mode = mix.pick(&[Mode::Strict, Mode::Balanced, Mode::LowBw]);
+    let n = usize::try_from(mix.below(3)).unwrap().saturating_add(1);
+    let recv: &[u64] = if mode == Mode::LowBw {
+        &[40_000, 80_000]
+    } else {
+        &PERIODS
+    };
+    let contacts = (0..n)
+        .map(|_| (mix.pick(&PERIODS), mix.pick(recv)))
+        .collect();
+    Scenario {
+        mode,
+        contacts,
+        pool: mix.below(2) == 0,
+        seed,
+    }
+}
+
+const DEFAULT_SEED: u64 = 0x5ec3_2d00_0000_0601;
+
+/// P-01: for a random mode, periods, link set and activity the emitted frames equal the idle run's within 5 ms.
+#[test]
+fn prop_schedule_independent_of_activity() {
+    let master = seed::master_seed(DEFAULT_SEED);
+    for case in 0..cases() {
+        let mut mix = Mix::new(master ^ case.wrapping_mul(0x1234_5678_9abc_def1));
+        let sc_seed = mix.next();
+        let sc = random_scenario(&mut mix, sc_seed);
+        let n = sc.contacts.len();
+        let idle = Rig::new(&sc, Params::default()).run(1, None);
+        let act = activity(mix.next(), 1, n);
+        let run = Rig::new(&sc, Params::default()).run(1, Some(&act));
+        let (c, r) = compare(&idle, &run);
+        assert!(
+            c.is_some_and(|d| d <= 5),
+            "case {case} (seed {master}): C2R {c:?} in {:?}",
+            sc.mode
+        );
+        assert!(
+            r.is_some_and(|d| d <= 5),
+            "case {case} (seed {master}): R2C {r:?}"
+        );
+        assert_eq!(idle.draws, run.draws, "case {case}: timing draws");
+        assert!(
+            control_equal(&idle, &run),
+            "case {case}: the one-shot links differ"
+        );
+    }
+}
+
+/// P-02: whatever the rotations and reconnects, two `SEND`s to a queue are never less than *that queue's own* `P_q`
+/// apart (VD-M6-A-19: not the smallest period of the set); the first case has the mixed periods {10 s, 80 s}.
+#[test]
+fn prop_at_most_once_per_period() {
+    let master = seed::master_seed(DEFAULT_SEED.wrapping_add(1));
+    for case in 0..cases() {
+        let mut mix = Mix::new(master ^ case.wrapping_mul(0x9e37_79b9_7f4a_7c13));
+        let picked = mix.pick(&[Mode::Strict, Mode::Balanced]);
+        // the mixed periods {10 s, 80 s} of case 0 share one Balanced link
+        let mode = if case == 0 { Mode::Balanced } else { picked };
+        let params = Params {
+            lifetime_ms: {
+                let lo = 100_000 + mix.below(50_000);
+                (lo, lo + mix.below(100_000))
+            },
+            phase_max_ms: 2_000 + mix.below(20_000),
+            ..Params::default()
+        };
+        let mut sim = driver();
+        let alice = client_with(&mut sim, mode, params, mix.next());
+        let bob = client_with(&mut sim, Mode::Strict, Params::default(), 1);
+        let queues = if case == 0 {
+            2
+        } else {
+            usize::try_from(mix.below(3)).unwrap().saturating_add(1)
+        };
+        // sid -> (period, SEND times)
+        let mut own: std::collections::BTreeMap<[u8; 16], (u64, Vec<u64>)> =
+            std::collections::BTreeMap::new();
+        let mut periods = Vec::new();
+        for n in 0..queues {
+            let p = if case == 0 {
+                *[10_000, 80_000].get(n).unwrap()
+            } else {
+                mix.pick(&PERIODS)
+            };
+            periods.push(p);
+            let (_, sid) = send_only_sid(&mut sim, alice, bob, p);
+            own.insert(sid, (p, Vec::new()));
+        }
+        sim.client(alice).opts.inspect = Inspect::Requests;
+        let mut t = 0;
+        for round in 0..12_u64 {
+            t += 200_000;
+            sim.run_until(t);
+            if mix.below(4) == 0 || round == 5 {
+                sim.restart_relay();
+            }
+        }
+        for (at, _, r) in &sim.client_ref(alice).requests {
+            if let RequestCmd::Send { sid, .. } = &r.cmd {
+                own.get_mut(sid)
+                    .expect("a SEND to a queue of the scenario")
+                    .1
+                    .push(*at);
+            }
+        }
+        for (sid, (period, times)) in &own {
+            let mut times = times.clone();
+            times.sort_unstable();
+            assert!(
+                times.len() > 2,
+                "case {case}: the queue of period {period} was sent to ({mode:?}, {periods:?}, {} requests)",
+                sim.client_ref(alice).requests.len()
+            );
+            // every consecutive gap, across connections, against the queue's own period
+            for w in times.windows(2) {
+                let gap = w.get(1).unwrap().saturating_sub(*w.first().unwrap());
+                assert!(
+                    gap >= *period,
+                    "case {case} (seed {master}): queue {sid:?} of period {period}: two SENDs {gap} ms apart ({mode:?}, {periods:?})"
+                );
+            }
+        }
+    }
+}
+
+/// A plain model of the outbox: one entry per message.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ModelEntry {
+    id: MsgId,
+    queued_at: u64,
+    ever_relayed: bool,
+    state: MsgState,
+    taken: bool,
+}
+
+fn model_apply(model: &mut Vec<ModelEntry>, op: &Op) {
+    match op {
+        Op::Enqueue(id, at) => model.push(ModelEntry {
+            id: *id,
+            queued_at: *at,
+            ever_relayed: false,
+            state: MsgState::Queued,
+            taken: false,
+        }),
+        Op::Take => {
+            if let Some(e) = model
+                .iter_mut()
+                .find(|e| e.state == MsgState::Queued && !e.taken)
+            {
+                e.taken = true;
+            }
+        }
+        Op::Relayed(id, cell) => {
+            if let Some(e) = model.iter_mut().find(|e| e.id == *id)
+                && e.state == MsgState::Queued
+            {
+                e.state = MsgState::Relayed(*cell);
+                e.ever_relayed = true;
+                e.taken = false;
+            }
+        }
+        Op::Requeue(id) => {
+            if let Some(e) = model.iter_mut().find(|e| e.id == *id)
+                && matches!(e.state, MsgState::Queued | MsgState::Relayed(_))
+            {
+                e.state = MsgState::Queued;
+                e.taken = false;
+            }
+        }
+        Op::Lost => {
+            for e in model.iter_mut() {
+                if matches!(e.state, MsgState::Relayed(_)) {
+                    e.state = MsgState::Queued;
+                    e.taken = false;
+                }
+            }
+        }
+        Op::Delivered(id) => {
+            if let Some(e) = model.iter_mut().find(|e| e.id == *id)
+                && e.state != MsgState::Failed
+            {
+                e.state = MsgState::Delivered;
+                e.taken = false;
+            }
+        }
+        Op::Expire(now) => {
+            for e in model.iter_mut() {
+                // spec §10.4: only a message never relayed fails
+                if e.state == MsgState::Queued
+                    && !e.ever_relayed
+                    && now.saturating_sub(e.queued_at) >= 2_592_000_000
+                {
+                    e.state = MsgState::Failed;
+                    e.taken = false;
+                }
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+enum Op {
+    Enqueue(MsgId, u64),
+    Take,
+    Relayed(MsgId, u64),
+    Requeue(MsgId),
+    Lost,
+    Delivered(MsgId),
+    Expire(u64),
+}
+
+/// P-03: random enqueue / relayed / evicted / lost-queue / receipt / 30-day sequences leave the outbox in the states a
+/// plain model computes.
+#[test]
+fn prop_outbox_matches_model() {
+    let master = seed::master_seed(DEFAULT_SEED.wrapping_add(2));
+    for case in 0..cases().max(1) * 50 {
+        let mut mix = Mix::new(master ^ case.wrapping_mul(0x517c_c1b7_2722_0a95));
+        let mut outbox = MemOutbox::new();
+        let mut model: Vec<ModelEntry> = Vec::new();
+        let mut now = 0_u64;
+        let mut next_id = 0_u8;
+        for step in 0..120 {
+            now += mix.below(900_000_000);
+            let known: Vec<MsgId> = model.iter().map(|e| e.id).collect();
+            let pick = |mix: &mut Mix| -> MsgId {
+                if known.is_empty() {
+                    [0xee; 16]
+                } else {
+                    mix.pick(&known)
+                }
+            };
+            let op = match mix.below(8) {
+                0 | 1 => {
+                    next_id = next_id.wrapping_add(1);
+                    Op::Enqueue([next_id; 16], now)
+                }
+                2 => Op::Take,
+                3 => Op::Relayed(pick(&mut mix), mix.below(1000)),
+                4 => Op::Requeue(pick(&mut mix)),
+                5 => Op::Lost,
+                6 => Op::Delivered(pick(&mut mix)),
+                _ => Op::Expire(now),
+            };
+            match &op {
+                Op::Enqueue(id, at) => outbox.enqueue(
+                    OutMessage {
+                        msg_id: *id,
+                        kind: AppKind::Text,
+                        expire_after: 0,
+                        payload: Zeroizing::new(vec![1; 8]),
+                    },
+                    *at,
+                ),
+                Op::Take => {
+                    let _ = outbox.take_next();
+                }
+                Op::Relayed(id, cell) => outbox.relayed(id, *cell),
+                Op::Requeue(id) => outbox.requeue(id),
+                Op::Lost => outbox.requeue_unreceipted(),
+                Op::Delivered(id) => outbox.delivered(id),
+                Op::Expire(at) => outbox.expire(*at),
+            }
+            model_apply(&mut model, &op);
+            let states: Vec<(MsgId, MsgState)> = model.iter().map(|e| (e.id, e.state)).collect();
+            assert_eq!(
+                outbox.states(),
+                states,
+                "case {case} (seed {master}) step {step}: {op:?}"
+            );
+            let waiting = model
+                .iter()
+                .filter(|e| e.state == MsgState::Queued && !e.taken)
+                .count();
+            assert_eq!(outbox.waiting(), waiting, "case {case} step {step}");
+        }
+    }
+}
+
+/// P-04: every random draw of the schedule lies in its interval.
+#[test]
+fn prop_draws_in_range() {
+    let master = seed::master_seed(DEFAULT_SEED.wrapping_add(3));
+    for case in 0..cases() * 20 {
+        let mut mix = Mix::new(master ^ case.wrapping_mul(0x2545_f491_4f6c_dd1d));
+        let phase = 1 + mix.below(300_000);
+        let (lo, hi) = (10_000 + mix.below(100_000), 200_000 + mix.below(500_000));
+        let params = Params {
+            phase_max_ms: phase,
+            lifetime_ms: (lo, hi),
+            control_delay_ms: (lo, hi),
+            backoff_cap_ms: phase.saturating_mul(1 + mix.below(40)),
+            ..Params::default()
+        };
+        let mut sched = Scheduler::new(params.clone(), Mode::Strict, TimingRng::seeded(mix.next()));
+        let now = mix.below(1_000_000);
+        for n in 0..20 {
+            sched
+                .add_recv_queue(now, RelayId(0), fresh_recv_cap(n), 80_000)
+                .unwrap();
+        }
+        for l in sched.links() {
+            assert!(
+                (now..=now + phase).contains(&l.starts_at.unwrap()),
+                "case {case}: phase"
+            );
+        }
+        for n in 0..20_u32 {
+            let op = sched
+                .schedule_control(
+                    now,
+                    ControlKind::QueueNew(QueueId(100 + n)),
+                    RelayId(0),
+                    u64::from(n),
+                    When::Delayed,
+                )
+                .unwrap();
+            let due = sched.control_due(op).unwrap();
+            assert!(
+                (now + lo..=now + hi).contains(&due),
+                "case {case}: control delay {}",
+                due - now
+            );
+        }
+        // back-off: n consecutive closes before RELAYINFO
+        let mut at = now + phase;
+        let mut closed = 0_u32;
+        for _ in 0..8 {
+            let outs = sched.poll(at, &mut NoCells).unwrap();
+            let Some(link) = outs.iter().find_map(|o| {
+                if let Output::Connect { link, .. } = o {
+                    Some(*link)
+                } else {
+                    None
+                }
+            }) else {
+                break;
+            };
+            sched.connect_failed(link, at, true).unwrap();
+            closed += 1;
+            let cap = secmp_client_core::scheduler::params::backoff_cap(
+                closed,
+                phase,
+                params.backoff_cap_ms,
+            );
+            let next = sched
+                .links()
+                .iter()
+                .filter_map(|l| l.starts_at)
+                .min()
+                .unwrap();
+            assert!(
+                next - at <= cap,
+                "case {case}: back-off {} > {cap}",
+                next - at
+            );
+            at = next;
+        }
+    }
+    // lifetimes of connections that came up
+    let mut mix = Mix::new(master);
+    let params = Params {
+        lifetime_ms: (50_000_000, 60_000_000),
+        ..Params::default()
+    };
+    let mut sim = driver();
+    let alice = client_with(&mut sim, Mode::Strict, params, mix.next());
+    let bob = client_with(&mut sim, Mode::Strict, Params::default(), 2);
+    send_only(&mut sim, alice, bob, 80_000);
+    let (_, t_up) = run_until_link_up(
+        &mut sim,
+        alice,
+        secmp_client_core::scheduler::core::LinkKind::Send,
+    );
+    let info = *sim.client_ref(alice).sched.links().first().unwrap();
+    let life = info.die_at.unwrap() - t_up;
+    assert!((50_000_000..=60_000_000).contains(&life), "lifetime {life}");
+}
+
+/// P-06: random sets of control operations each run on their own new key, prompt ones at once, the others no earlier than
+/// a minute after anything related.
+#[test]
+fn prop_control_ops_isolated_and_delayed() {
+    let master = seed::master_seed(DEFAULT_SEED.wrapping_add(4));
+    for case in 0..cases() * 10 {
+        let mut mix = Mix::new(master ^ case.wrapping_mul(0x9e37_79b9_7f4a_7c15));
+        let mut sched = Scheduler::new(
+            Params::default(),
+            Mode::Strict,
+            TimingRng::seeded(mix.next()),
+        );
+        let mut ops = Vec::new();
+        let mut last: std::collections::BTreeMap<u64, u64> = std::collections::BTreeMap::new();
+        for n in 0..30_u32 {
+            let now = u64::from(n) * 5_000;
+            let related = mix.below(6);
+            let when = if mix.below(4) == 0 {
+                When::Prompt
+            } else {
+                When::Delayed
+            };
+            let op = sched
+                .schedule_control(
+                    now,
+                    ControlKind::QueueNew(QueueId(n)),
+                    RelayId(0),
+                    related,
+                    when,
+                )
+                .unwrap();
+            let due = sched.control_due(op).unwrap();
+            let base = now.max(last.get(&related).copied().unwrap_or(0));
+            match when {
+                When::Prompt => assert_eq!(due, now),
+                _ => {
+                    assert!(
+                        (base + 60_000..=base + 3_600_000).contains(&due),
+                        "case {case}: delay {} from {base}",
+                        due - base
+                    );
+                }
+            }
+            last.insert(related, due.max(last.get(&related).copied().unwrap_or(0)));
+            ops.push(op);
+        }
+        let mut keys = BTreeSet::new();
+        let mut seen = 0;
+        while let Some(t) = sched.next_deadline() {
+            if seen >= ops.len() {
+                break;
+            }
+            for o in sched.poll(t, &mut NoCells).unwrap() {
+                if let Output::Control { key, .. } = o {
+                    assert!(keys.insert(key), "case {case}: a key was used twice");
+                    seen += 1;
+                }
+            }
+        }
+        assert_eq!(seen, ops.len(), "case {case}: every op started");
+    }
+}
+
+/// Where the process dies in one preparation (VD-M6-A-21).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Crash {
+    /// After `Persist::commit(Send)` made the new state durable, before the cell is released to the scheduler.
+    CommittedNotReleased,
+    /// After the cell was released to the scheduler, before the driver wrote it.
+    ReleasedNotWritten,
+    /// After the cell was written (the peer has it).
+    Written,
+}
+
+/// The peer opens one written cell: its message-key digest and the messages it carries.
+fn peer_opens(
+    peer: RatchetState,
+    cell: &secmp_proto::wire::cell::Cell,
+    pool: &mut EntropyPool,
+    digests: &mut Vec<[u8; 32]>,
+    delivered: &mut BTreeSet<MsgId>,
+) -> RatchetState {
+    let opened = peer
+        .decrypt_with(cell.as_bytes(), pool.get())
+        .ok()
+        .expect("the peer opens every written cell");
+    digests.push(opened.plaintext().message_key_digest_kat());
+    if let Ok(content) = opened.plaintext().content()
+        && let secmp_proto::wire::cell::ContentBody::Batch(b) = content.body
+    {
+        delivered.extend(b.messages.iter().map(|m| m.msg_id));
+    }
+    let (state, _) = opened.commit(|_| Ok::<(), ()>(())).unwrap();
+    state
+}
+
+/// A sender conversation (queue 0) in a one-conversation cell source, and the peer's ratchet state.
+fn p7_sender(
+    pool: &mut EntropyPool,
+) -> (
+    Conversations<MemOutbox, MemPersist, EntropyPool>,
+    usize,
+    RatchetState,
+) {
+    let sk = SecretBytes::from_slice(&[9_u8; 32]).unwrap();
+    let transcript: [u8; 32] = pool.bytes(32).try_into().unwrap();
+    let mut ea = FixedEntropy::new(&pool.bytes(1 << 16));
+    let mut eb = FixedEntropy::new(&pool.bytes(1 << 16));
+    let (sender, peer) = ratchet_pair(&sk, &transcript, &mut ea, &mut eb);
+    let mut conv: Conversation<MemOutbox, MemPersist, EntropyPool> = Conversation::new(
+        sender,
+        MemOutbox::new(),
+        MemPersist::new(),
+        EntropyPool::new("m6-p7-conv", 0),
+        secmp_crypto::HybridSigningKey::from_seeds(&[1; 32], &[2; 32])
+            .unwrap()
+            .verifying_key(),
+        START_UNIX,
+    );
+    conv.bind(QueueId(0), QueueId(1));
+    let mut convs = Conversations::new();
+    let idx = convs.add(conv);
+    (convs, idx, peer)
+}
+
+/// P-07 (VD-M6-A-21): a crash at each of the boundaries around persist, release and write — (i) the new state durable
+/// but the cell not released, (ii) the cell released but not written, (iii) the cell written — never makes a message key
+/// reappear, and after the restart from the durable state of the store every message is delivered, none lost. The
+/// process restarts with the outbox and the queues (`Conversation::restart_from`); what was in flight is gone and the
+/// message that was being sent is sent again under a new key. (iii) at the driver's write hook is
+/// `prop_no_message_key_reuse_across_crashes_at_the_write`.
+#[test]
+fn prop_no_message_key_reuse_across_crashes() {
+    let master = seed::master_seed(DEFAULT_SEED.wrapping_add(5));
+    let mut seen = (false, false, false);
+    for case in 0..cases() * 3 {
+        let mut mix = Mix::new(master ^ case.wrapping_mul(0xd6e8_feb8_6659_fd93));
+        let mut pool = EntropyPool::new("m6-p7", u32::try_from(case).unwrap());
+        let (mut convs, idx, mut peer) = p7_sender(&mut pool);
+        let mut digests: Vec<[u8; 32]> = Vec::new();
+        let mut enqueued: BTreeSet<MsgId> = BTreeSet::new();
+        let mut delivered: BTreeSet<MsgId> = BTreeSet::new();
+        let (mut after_commit, mut after_release, mut after_write) = (0_u32, 0_u32, 0_u32);
+        for step in 0..90_u64 {
+            let conv = convs.get_mut(idx).unwrap();
+            let fail = mix.below(5) == 0;
+            conv.persist_mut().set_failing(fail);
+            if mix.below(3) == 0 {
+                let id = [u8::try_from(step).unwrap(); 16];
+                enqueued.insert(id);
+                conv.outbox_mut().enqueue(
+                    OutMessage {
+                        msg_id: id,
+                        kind: AppKind::Text,
+                        expire_after: 0,
+                        payload: Zeroizing::new(vec![3; 30]),
+                    },
+                    step,
+                );
+            }
+            // the crash point of this preparation, if any
+            let crash = (mix.below(4) == 0).then(|| {
+                mix.pick(&[
+                    Crash::CommittedNotReleased,
+                    Crash::ReleasedNotWritten,
+                    Crash::Written,
+                ])
+            });
+            if crash == Some(Crash::CommittedNotReleased) && !fail {
+                conv.persist_mut().crash_after_next_commit();
+            }
+            let made = convs.prepare_cell(QueueId(0), step * 10_000);
+            let mut restart = false;
+            match (made, crash) {
+                (Err(_), Some(Crash::CommittedNotReleased)) if !fail => {
+                    // (i) durable, never released: the peer never sees the cell
+                    after_commit = after_commit.saturating_add(1);
+                    restart = true;
+                }
+                (Ok(Some(_released)), Some(Crash::ReleasedNotWritten)) => {
+                    // (ii) released to the scheduler, never written
+                    after_release = after_release.saturating_add(1);
+                    restart = true;
+                }
+                (Ok(Some(cell)), crash) => {
+                    assert!(!fail, "a failing persist released a cell");
+                    peer = peer_opens(peer, &cell.cell, &mut pool, &mut digests, &mut delivered);
+                    // the relay answered: the conversation learns it, so that a restart finds the message relayed
+                    convs.relayed(QueueId(0), cell.token, step + 1);
+                    if crash == Some(Crash::Written) {
+                        // (iii) written
+                        after_write = after_write.saturating_add(1);
+                        restart = true;
+                    }
+                }
+                (Ok(None), _) => unreachable!(),
+                (Err(_), _) => assert!(fail, "an unexpected preparation failure"),
+            }
+            if restart {
+                // the durable state of the store, not the process's memory
+                let durable = convs
+                    .get(idx)
+                    .unwrap()
+                    .persist()
+                    .durable()
+                    .unwrap()
+                    .to_vec();
+                convs.restart(idx, &durable).unwrap();
+                convs.get_mut(idx).unwrap().persist_mut().set_failing(false);
+            }
+        }
+        assert!(digests.len() > 20);
+        // quiet drain: whatever was in flight is sent again, nothing is lost
+        convs.get_mut(idx).unwrap().persist_mut().set_failing(false);
+        for extra in 0..(u64::try_from(enqueued.len()).unwrap() * 2 + 4) {
+            let cell = convs
+                .prepare_cell(QueueId(0), (100 + extra) * 10_000)
+                .unwrap()
+                .unwrap();
+            peer = peer_opens(peer, &cell.cell, &mut pool, &mut digests, &mut delivered);
+            convs.relayed(QueueId(0), cell.token, 1_000 + extra);
+        }
+        let label = format!(
+            "case {case} (seed {master}), crashes {after_commit}/{after_release}/{after_write}"
+        );
+        assert_all_keys_distinct(&digests, &label);
+        assert_eq!(
+            delivered, enqueued,
+            "{label}: a message was lost or invented"
+        );
+        seen.0 |= after_commit > 0;
+        seen.1 |= after_release > 0;
+        seen.2 |= after_write > 0;
+    }
+    assert!(
+        seen.0 && seen.1 && seen.2,
+        "every boundary was crashed at: {seen:?}"
+    );
+}
+
+/// No message key was used twice.
+fn assert_all_keys_distinct(digests: &[[u8; 32]], label: &str) {
+    let distinct: BTreeSet<[u8; 32]> = digests.iter().copied().collect();
+    assert_eq!(
+        distinct.len(),
+        digests.len(),
+        "{label}: a message key was used twice"
+    );
+}
+
+/// P-07 (iii) (VD-M6-A-21): the crash at the driver's write hook, after a frame is on the wire. A sender client runs on
+/// the virtual driver; after a write the hook kills and restarts its process (the conversation from the durable state of
+/// the store, the outbox surviving). The peer opens every cell that was written, in order: no message key appears
+/// twice, and once the sender has run on undisturbed every message arrived.
+#[test]
+fn prop_no_message_key_reuse_across_crashes_at_the_write() {
+    let master = seed::master_seed(DEFAULT_SEED.wrapping_add(6));
+    for case in 0..cases() {
+        let mut mix = Mix::new(master ^ case.wrapping_mul(0x2545_f491_4f6c_dd1d));
+        let mut sim = driver();
+        let alice = client_with(
+            &mut sim,
+            Mode::Strict,
+            Params {
+                phase_max_ms: 1_000,
+                ..Params::default()
+            },
+            mix.next(),
+        );
+        let bob = client_with(&mut sim, Mode::Strict, Params::default(), 1);
+        let (conv, _sid, mut peer) = send_only_full(&mut sim, alice, bob, 10_000);
+        sim.client(alice).opts.inspect = Inspect::Requests;
+        // the hook: after a write the process dies with probability 1/3 and restarts from the durable state
+        let crashes = std::rc::Rc::new(std::cell::Cell::new(0_u32));
+        let mut hook_mix = Mix::new(mix.next());
+        let counter = std::rc::Rc::clone(&crashes);
+        sim.client(alice).after_write = Some(Box::new(move |convs, _bytes| {
+            if hook_mix.below(3) == 0 {
+                let durable = convs
+                    .get(conv)
+                    .unwrap()
+                    .persist()
+                    .durable()
+                    .unwrap()
+                    .to_vec();
+                convs.restart(conv, &durable).unwrap();
+                counter.set(counter.get().saturating_add(1));
+            }
+        }));
+        let mut enqueued: BTreeSet<MsgId> = BTreeSet::new();
+        let mut t = 0_u64;
+        for round in 0..24_u64 {
+            if mix.below(2) == 0 {
+                let id = [u8::try_from(round).unwrap().saturating_add(1); 16];
+                enqueued.insert(id);
+                sim.client(alice)
+                    .convs
+                    .get_mut(conv)
+                    .unwrap()
+                    .outbox_mut()
+                    .enqueue(
+                        OutMessage {
+                            msg_id: id,
+                            kind: AppKind::Text,
+                            expire_after: 0,
+                            payload: Zeroizing::new(vec![5; 40]),
+                        },
+                        t,
+                    );
+            }
+            t += 25_000;
+            sim.run_until(t);
+        }
+        // undisturbed: no more crashes, the rest of the outbox is sent
+        sim.client(alice).after_write = None;
+        for _ in 0..(enqueued.len() + 4) {
+            t += 25_000;
+            sim.run_until(t);
+        }
+        let mut pool = EntropyPool::new("m6-p7-driver", u32::try_from(case).unwrap());
+        let mut digests: Vec<[u8; 32]> = Vec::new();
+        let mut delivered: BTreeSet<MsgId> = BTreeSet::new();
+        for (_, _, r) in &sim.client_ref(alice).requests {
+            if let RequestCmd::Send { cell, .. } = &r.cmd {
+                peer = peer_opens(peer, cell, &mut pool, &mut digests, &mut delivered);
+            }
+        }
+        assert_all_keys_distinct(
+            &digests,
+            &format!("case {case} (seed {master}), {} crashes", crashes.get()),
+        );
+        assert_eq!(
+            delivered,
+            enqueued,
+            "case {case} (seed {master}): a message was lost ({} crashes)",
+            crashes.get()
+        );
+        assert!(
+            crashes.get() > 0,
+            "case {case}: the hook crashed the process"
+        );
+    }
+}

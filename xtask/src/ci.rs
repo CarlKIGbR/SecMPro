@@ -223,8 +223,15 @@ const ON_DEMAND: &[Step] = &[
         id: "mutants-merge",
         run: gates::mutants_merge,
     },
+    // ADR-045 Amendment 2: the verdict over the needs of every other gate job (the `ci-verdict` job of ci.yml)
+    Step {
+        num: "15",
+        id: "ci-verdict",
+        run: crate::verdict::ci_verdict,
+    },
 ];
 
+#[derive(Clone)]
 struct Options {
     strict: bool,
     delegated: Vec<String>,
@@ -394,6 +401,61 @@ mod tests {
                 .count(),
             crate::expect::MIRI_PACKAGES.len()
         );
+    }
+
+    /// WEISUNG M6-C1-7 §2: `execute` (behind `ci-full`, `ci-fast` and `step`) returns `Err` — and `main` turns it
+    /// into a failing exit status — iff a step failed; a skip fails only under `--strict`.
+    #[test]
+    fn a_failing_step_makes_execute_fail() -> Result<()> {
+        // the step signature is fixed; a fallible detail keeps these fakes clear of `unnecessary_wraps`
+        fn detail(s: &str) -> Result<String> {
+            if s.is_empty() {
+                bail!("empty detail")
+            }
+            Ok(s.to_owned())
+        }
+        fn passes(_: &Ctx) -> Result<Outcome> {
+            Ok(Outcome::Pass(detail("ok")?))
+        }
+        fn fails(_: &Ctx) -> Result<Outcome> {
+            bail!("fake failure")
+        }
+        fn skips(_: &Ctx) -> Result<Outcome> {
+            Ok(Outcome::Skip(detail("host")?))
+        }
+        let good = Step {
+            num: "1",
+            id: "fake-pass",
+            run: passes,
+        };
+        let bad = Step {
+            num: "2",
+            id: "fake-fail",
+            run: fails,
+        };
+        let skip = Step {
+            num: "3",
+            id: "fake-skip",
+            run: skips,
+        };
+        let lax = Options {
+            strict: false,
+            delegated: Vec::new(),
+            ids: Vec::new(),
+        };
+        let strict = Options {
+            strict: true,
+            ..lax.clone()
+        };
+        execute(&[&good], &lax, "t")?;
+        assert!(execute(&[&good, &bad], &lax, "t").is_err());
+        assert!(execute(&[&bad, &good], &strict, "t").is_err());
+        execute(&[&good, &skip], &lax, "t")?;
+        assert!(execute(&[&good, &skip], &strict, "t").is_err());
+        let mut delegated = lax;
+        delegated.delegated.push("fake-fail".to_owned());
+        execute(&[&good, &bad], &delegated, "t")?;
+        Ok(())
     }
 
     #[test]

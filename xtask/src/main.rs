@@ -15,6 +15,8 @@
 mod ci;
 mod cooldown;
 mod ctreport;
+#[cfg(test)]
+mod docs;
 mod expect;
 mod fuzzseed;
 mod gates;
@@ -27,8 +29,10 @@ mod summary;
 mod testscan;
 mod time;
 mod tools;
+mod trace;
 mod util;
 mod vectors;
+mod verdict;
 mod wintest;
 
 use std::path::Path;
@@ -48,11 +52,11 @@ usage: cargo xtask <command> [options]
   policy                                    repository policy checks only
   cooldown                                  7-day dependency cooldown only
   sbom                                      CycloneDX SBOMs + cargo-auditable release builds
-  win-test --backend github|libvirt         Windows gate (github: windows-latest; libvirt: from M9)
-    step: [--shard K/N]                     the mutants step's shard (CI: K/8, merged by `step mutants-merge`)
+  win-test --backend github|selfhosted|libvirt  Windows gate (github: windows-latest; selfhosted: on-demand Azure VM runner; libvirt: from M9)
+    step: [--shard K/N]                     the mutants step's shard (CI: K/12, merged by `step mutants-merge`)
   install-tools [--set NAME] [--nightly]    install the pinned tools (fast | windows | xwin | mutants | miri | fuzz | full | all)
   vectors                                   generate the Rust vectors, compare with vectors/ref, freeze
-  ct-check [--targets current|m2|m4] REPORT... the ct gate's reading of saved ct reports
+  ct-check [--targets current|m2|m4|m5] REPORT... the ct gate's reading of saved ct reports
   repro-check | ops-check                   documented stubs until M11 / M10";
 
 fn run(args: &[String]) -> Result<()> {
@@ -72,6 +76,9 @@ fn run(args: &[String]) -> Result<()> {
     let (rest, shard) = split_mutants_options(cmd, &rest)?;
     if let Some(s) = shard {
         gates::set_mutants_shard(s)?;
+    }
+    if matches!(cmd.as_str(), "step" | "ci-full" | "ci" | "ci-fast") {
+        trace::start_if_enabled();
     }
     match cmd.as_str() {
         "ci-fast" => ci::fast(&rest),

@@ -1,0 +1,25 @@
+        PASS [   0.025s] (180/202) secmp-proto::link relay_hs::relay_keys_report_their_kid
+        PASS [   0.025s] (181/202) secmp-proto::link relay_hs::relay_second_hello_tears_down
+        PASS [   0.024s] (182/202) secmp-proto::link vectors::link_vectors_derived_ids_and_token_of_case_6
+        PASS [   0.023s] (183/202) secmp-proto::link vectors::link_vectors_hs1
+        PASS [   0.022s] (184/202) secmp-proto::link vectors::link_vectors_hs2
+        PASS [   0.022s] (185/202) secmp-proto::link vectors::link_vectors_hs2_accept
+        PASS [   0.026s] (186/202) secmp-proto::link vectors::link_vectors_file_shape
+        PASS [   0.026s] (187/202) secmp-proto::link vectors::link_vectors_hs1_reject
+        PASS [   0.024s] (188/202) secmp-proto::link vectors::link_vectors_hs2_reject
+        PASS [   0.022s] (189/202) secmp-proto::link vectors::link_vectors_relayinfo_accept
+        PASS [   0.023s] (190/202) secmp-proto::link vectors::link_vectors_relay_keys
+        PASS [   0.022s] (191/202) secmp-proto::link vectors::link_vectors_relayinfo_reject
+        PASS [   0.068s] (192/202) secmp-proto::link frames::prop_frame_roundtrip_any_payload
+        PASS [   0.022s] (193/202) secmp-proto::link vectors::relay_info_without_placeholder_signature
+        PASS [   0.083s] (194/202) secmp-proto::link frames::link_client_response_value_rules_reject
+        PASS [   0.094s] (195/202) secmp-proto::link frames::prop_frame_sequence_tampering_rejects
+        PASS [   0.173s] (196/202) secmp-proto::hx props::prop_k_id_independent_of_iks_i_dh1_dh2
+        PASS [   0.115s] (197/202) secmp-proto::link frames::prop_frame_single_byte_flip_rejects
+        PASS [   0.108s] (198/202) secmp-proto::link relay_hs::relay_handshake_rejection_keeps_no_state
+        PASS [   0.179s] (199/202) secmp-proto::hx props::prop_resealed_padded_flip_rejects
+        PASS [   0.217s] (200/202) secmp-proto::tr_vectors every_event_of_the_tr_file
+        PASS [   0.217s] (201/202) secmp-proto::tr_vectors tr_vectors_f14_new_iks_equals_vector_iks
+        PASS [   0.401s] (202/202) secmp-proto::hx accept_ok::first_msg_with_nonzero_n_rejects_before_any_chain_step
+────────────
+     Summary [   0.459s] 202 tests run: 202 passed, 0 skipped

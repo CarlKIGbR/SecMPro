@@ -15,3 +15,7 @@
 ref/.venv/
 ref/.pytest_cache/
 __pycache__/
+
+# core dumps (never committed)
+core
+core.*

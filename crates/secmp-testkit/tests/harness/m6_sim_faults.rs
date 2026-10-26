@@ -10,7 +10,7 @@ use secmp_client_core::scheduler::types::{LinkEvent, Reason};
 use secmp_proto::wire::Id;
 use secmp_testkit::harness::{Dir, EntropyPool, HarnessConfig, MemRelay, RelayLimits};
 
-use crate::m6_sim::{Flood, Outcome, Rig, Spec, reconnect_delays, simulate};
+use crate::m6_sim::{Flood, Outcome, Rig, Spec, check_reconnects, simulate};
 
 /// The cell ids in the queue `rid` of the current relay and its `next_cell_id`.
 fn queue_state(relay: &Mutex<Option<MemRelay>>, rid: &Id) -> (Vec<u64>, u64) {
@@ -49,20 +49,22 @@ fn sim_loss_breaks_links_eventual_delivery() {
     let mut teardowns = 0_usize;
     for idx in 0..2 {
         let o = run.observers.get(idx).unwrap();
-        for (why, t, delay) in reconnect_delays(&o.events(), &o.connects()) {
-            let bound = match why {
-                Reason::Closed | Reason::InFlight | Reason::Overrun | Reason::Rejected => 180_000,
-                Reason::ClosedBeforeRelayInfo => 3_600_000,
-                _ => continue,
-            };
-            teardowns += 1;
-            if let Some(delay) = delay {
-                assert!(
-                    delay <= bound + 1_000,
-                    "client {idx}: {why:?} at {t}: the reconnect {delay} ms later, bound {bound}"
-                );
-            }
-        }
+        // FIN5b-1: the pooled bound, and every teardown has a reconnect (see `check_reconnects`)
+        let checked =
+            check_reconnects(
+                &o.events(),
+                &o.connects(),
+                2 * 3_600 * 1_000,
+                |why| match why {
+                    Reason::Closed | Reason::InFlight | Reason::Overrun | Reason::Rejected => {
+                        Some(180_000)
+                    }
+                    Reason::ClosedBeforeRelayInfo => Some(3_600_000),
+                    _ => None,
+                },
+            );
+        assert!(checked.is_ok(), "client {idx}: {checked:?}");
+        teardowns += checked.unwrap_or(0);
     }
     assert!(
         teardowns >= 10,

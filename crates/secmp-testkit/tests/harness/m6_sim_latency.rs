@@ -8,7 +8,7 @@ use std::time::Duration;
 use secmp_client_core::scheduler::types::{LinkEvent, Reason};
 use secmp_testkit::harness::{Dir, HarnessConfig, RelayLimits};
 
-use crate::m6_sim::{Outcome, Spec, reconnect_delays, simulate};
+use crate::m6_sim::{Outcome, Spec, check_reconnects, simulate};
 
 /// The C2R frame times (the client's clock, ms) of each link of client `idx`, by slot.
 fn frames(run: &Outcome, idx: usize) -> BTreeMap<u64, Vec<u64>> {
@@ -203,17 +203,12 @@ fn sim_slow_link_in_flight_teardown() {
             per_link.values().filter(|n| **n == 2).count() >= downs.len() / 2,
             "client {idx}: frames per link {per_link:?}"
         );
-        // LR-02: the reconnect after each teardown, matched to distinct connects
-        for (why, t, delay) in reconnect_delays(&events, &o.connects()) {
-            if why == Reason::InFlight
-                && let Some(delay) = delay
-            {
-                assert!(
-                    delay <= 180_000 + 1_000,
-                    "client {idx}: reconnect after {delay} ms at {t}"
-                );
-            }
-        }
+        // LR-02, pooled (FIN5b-1): every `InFlight` teardown has a reconnect within the bound, in a matching of
+        // teardowns to distinct connects; per logical link LR-02 is proven by `m6_reconnect::reconnect_jitter_after_failure`
+        let checked = check_reconnects(&events, &o.connects(), 8 * 3_600 * 1_000, |why| {
+            (why == Reason::InFlight).then_some(180_000)
+        });
+        assert!(checked.is_ok(), "client {idx}: {checked:?}");
     }
     run.assert_k("SIM-07");
     run.assert_exact("SIM-07");

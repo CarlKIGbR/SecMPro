@@ -1297,6 +1297,7 @@ required job (`ct`, `mutants`, `proverif-hx`) is not green.
 - **Pool and simulation streams (WEISUNG M6-C2-4 item 8):** the pool streams are strict like the others (a residual at drop is an
   error entry); the streams of the scheduled links in a simulation are lenient at drop (a broken network ends units mid-way on purpose),
   but `Recorder::check()` now runs in simulation runs too and all ten rows pass it. A lenient stream can hide a unit cut in two by a *dropped* connection (the client tore the link down mid-frame) — a residual at drop is not reported for the scheduled links of a simulation; one cut by the end of the stream (EOF) or by `poll_shutdown` is still an error entry, and the recorded units themselves are exact.
+- **M7 (FIN5b-1):** per-link reconnect matching needs the logical link id in `Purpose::Link`/`LinkEvent` (a product change; Phase C allows none). Until then the SIM-01/SIM-07 reconnect oracle (`m6_sim::check_reconnects`) proves a pooled bound plus "every teardown has a reconnect"; LR-02 per logical link stays proven by `m6_reconnect::reconnect_jitter_after_failure`.
 
 ## 8. Blocked / questions for the reviewer or owner
 
@@ -1797,7 +1798,7 @@ the window of the restart (reconnect `U[0,180 s]` + one period ≤ 80 s + `U[10 
 320 s, was my error — measured 348 s), and one handshake per client. SIM-06 compares per scheduled link the C2R frame times relative to
 the link's first frame between latency 10…2 000 ms and 0 (equal over the common prefix of ≥ 100 frames; every gap is exactly 10 s; no
 `InFlight`); the first frame itself moves with the handshake. SIM-01: from 15 min, fail rate 0.01 and repair rate 0.5; ≥ 10 teardowns, and
-the next link connect follows each within 180 s (LR-02) / 3 600 s (LR-03, close before `RELAYINFO`). SIM-02: A ↔ relay partitioned
+every teardown has a matching link connect (teardowns matched in time order to distinct later connects) within 180 s (LR-02) / 3 600 s (LR-03, close before `RELAYINFO`) — a pooled bound, not a per-link one (FIN5b-1, C2-18); a teardown in the last bound + 1 s of the run is excused. SIM-02: A ↔ relay partitioned
 1 800…3 600 s; the ids reported evicted to B equal `[head at partition, head at heal)` of the relay's queue (A fetched nothing, so the
 queue's head moved only by eviction; 128 kept). SIM-04: both hosts bounced at 1 h; each client's run resumes (no new invitation).
 SIM-05: A is bounced half a period after its latest frame: at the crash it had sealed ≥ 1 cell the relay never stored (the prepared one);
@@ -1856,7 +1857,7 @@ accepted as a protocol gap** (OPEN-M6-C2-1, §7, OQ-19). The `ci-fast --strict` 
 
 - **SIM-07** (`m6_sim_latency::sim_slow_link_in_flight_teardown`, 11.8 s): every `Up` link is `TornDown(InFlight)` 30.0–30.25 s later and
   no other teardown; at most two C2R frames per scheduled link; `responses_read == 0` (R2C frames of 4 352 B after the first `Up`:
-  0); reconnect per LR-02 (matched to distinct connects); (K); `exact`. **Rig parameters of this row only** (`Spec`, no default
+  0); every `InFlight` teardown has a reconnect within the LR-02 bound (pooled matching, FIN5b-1; per logical link LR-02 is proven by `m6_reconnect::reconnect_jitter_after_failure`); (K); `exact`. **Rig parameters of this row only** (`Spec`, no default
   changed): relay `hello_timeout_ms` = 300 000 (default 30 000, OPEN-M5-02: the handshake over 25 s one way takes 75 s) and the drivers'
   connect timeout 600 000 ms (`CONNECT_TIMEOUT_MS` default 120 000: TCP connect 50 s + handshake 100 s).
 - **SIM-10** (item 3): the field `present == 2` of the `FETCH_MULTI` answers is read inside the client's channel

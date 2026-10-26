@@ -449,10 +449,10 @@ fn add_attacker(sim: &mut turmoil::Sim<'_>, flood: Flood) {
 /// Each teardown of a client with the delay until the connect that follows it: the teardowns, in time order, are matched
 /// to distinct later connects of scheduled links, each to the earliest one not taken. A `LinkId` names one connection
 /// and the events do not say which link a connect renews, so this matching never charges one connect to two teardowns.
-/// What it proves is a maximum bound: if every reconnect follows its teardown within `b`, then every matched delay is
-/// `<= b`; it does not say which connect belongs to which teardown (the delay it reports can be shorter than the own
-/// reconnect of that link, or longer than that of another), so a bound that holds for it holds for each link at its
-/// maximum, and a violation is a violation for some link.
+/// What it proves: the greedy matching is a pooled bound — if there is a matching in which every delay is within `b`, the
+/// reported maximum is `<= b` — and every teardown has a reconnect. It does not say which connect renews which logical
+/// link (the delay it reports can be shorter than that link's own reconnect and longer than another's), so it is not a
+/// per-link bound; see [`check_reconnects`].
 pub fn reconnect_delays(
     events: &[(u64, secmp_client_core::scheduler::types::LinkEvent)],
     connects: &[(u64, secmp_client_core::scheduler::run::Purpose)],
@@ -494,4 +494,104 @@ pub fn reconnect_delays(
             (why, t, delay)
         })
         .collect()
+}
+
+/// The reconnect oracle (LR-02, SIM-01/SIM-07): for every teardown of a scheduled link whose reason has a bound
+/// (`bound` returns `Some(ms)`), the pooled matching of [`reconnect_delays`] has a reconnect within `bound + 1 000 ms`,
+/// unless the teardown is in the last `bound + 1 000 ms` before `end_ms` (the run ended before it could reconnect).
+/// Returns the number of teardowns checked. FIN5b-1: what this proves is the **pooled** bound — there is a matching of
+/// teardowns to distinct later connects in which every delay is within its bound, and every checked teardown has a
+/// reconnect (a teardown that never reconnects is a failure). It does not say which connect renews which logical link:
+/// `LinkEvent`/`Purpose::Link` carry the connection's `LinkId`, not a logical link id, so per-link matching needs that id
+/// in the product types (M7). LR-02 per logical link stays proven by `m6_reconnect::reconnect_jitter_after_failure`.
+pub fn check_reconnects(
+    events: &[(u64, secmp_client_core::scheduler::types::LinkEvent)],
+    connects: &[(u64, secmp_client_core::scheduler::run::Purpose)],
+    end_ms: u64,
+    bound: impl Fn(secmp_client_core::scheduler::types::Reason) -> Option<u64>,
+) -> Result<usize, String> {
+    let mut checked = 0_usize;
+    for (why, t, delay) in reconnect_delays(events, connects) {
+        let Some(bound) = bound(why) else { continue };
+        checked += 1;
+        let Some(delay) = delay else {
+            // a teardown in the last `bound + 1 000 ms` of the run may not have had the time to reconnect
+            if t + bound + 1_000 > end_ms {
+                continue;
+            }
+            return Err(format!("{why:?} at {t}: no reconnect follows"));
+        };
+        if delay > bound + 1_000 {
+            return Err(format!(
+                "{why:?} at {t}: the reconnect {delay} ms later, bound {bound}"
+            ));
+        }
+    }
+    Ok(checked)
+}
+
+use secmp_client_core::scheduler::run::Purpose;
+use secmp_client_core::scheduler::types::{LinkEvent, LinkId, Reason};
+
+const ORACLE_BOUND: u64 = 100;
+
+/// The end of the fixture runs (ms), far beyond `ORACLE_BOUND + 1 000`.
+const ORACLE_END: u64 = 10_000;
+
+fn oracle_bound(_: secmp_client_core::scheduler::types::Reason) -> Option<u64> {
+    Some(ORACLE_BOUND)
+}
+
+fn oracle_down(t: u64, id: u64) -> (u64, secmp_client_core::scheduler::types::LinkEvent) {
+    use secmp_client_core::scheduler::types::{LinkEvent, LinkId, Reason};
+    (t, LinkEvent::TornDown(LinkId(id), Reason::Closed))
+}
+
+fn oracle_connect(t: u64, id: u64) -> (u64, secmp_client_core::scheduler::run::Purpose) {
+    use secmp_client_core::scheduler::run::Purpose;
+    (
+        t,
+        Purpose::Link(secmp_client_core::scheduler::types::LinkId(id)),
+    )
+}
+
+/// Positive control: two teardowns, each reconnected within the bound.
+#[test]
+fn oracle_accepts_reconnects_within_the_bound() {
+    let events = [oracle_down(0, 1), oracle_down(10, 2)];
+    let connects = [oracle_connect(50, 3), oracle_connect(60, 4)];
+    assert_eq!(
+        check_reconnects(&events, &connects, ORACLE_END, oracle_bound),
+        Ok(2)
+    );
+}
+
+/// FIN5b-1: a teardown that never reconnects fails (it used to be skipped by `if let Some(delay)`).
+#[test]
+fn oracle_rejects_a_teardown_without_reconnect() {
+    let events = [oracle_down(0, 1), oracle_down(10, 2)];
+    let connects = [oracle_connect(50, 3)];
+    assert!(check_reconnects(&events, &connects, ORACLE_END, oracle_bound).is_err());
+}
+
+/// FIN5b-1: teardowns of A (t = 0) and B (t = 10); B reconnects at 500, A only at 2 500 (crossed). No matching of the
+/// two connects to the two teardowns keeps both delays within the bound + 1 000 ms (the best has 2 490 ms), so the
+/// pooled bound breaks and the oracle rejects, though the earlier connect alone would have been in time.
+#[test]
+fn oracle_rejects_a_crossed_reconnect_that_breaks_the_pooled_bound() {
+    let events = [oracle_down(0, 1), oracle_down(10, 2)];
+    let connects = [oracle_connect(500, 3), oracle_connect(2_500, 4)];
+    let e = check_reconnects(&events, &connects, ORACLE_END, oracle_bound).unwrap_err();
+    assert!(e.contains("2490 ms"), "{e}");
+}
+
+/// A teardown in the last `bound + 1 000 ms` of the run has not had the time to reconnect and is not a finding.
+#[test]
+fn oracle_excuses_a_teardown_in_the_last_bound_window() {
+    let events = [oracle_down(0, 1), oracle_down(ORACLE_END - 500, 2)];
+    let connects = [oracle_connect(50, 3)];
+    assert_eq!(
+        check_reconnects(&events, &connects, ORACLE_END, oracle_bound),
+        Ok(2)
+    );
 }

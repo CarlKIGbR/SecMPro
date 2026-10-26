@@ -95,13 +95,18 @@ pub struct Report {
     pub counts_per_link: Vec<(u64, Ks)>,
     /// All links pooled, the number of frames per departure.
     pub counts_pooled: Ks,
-    /// The smallest and the largest number of frames in one departure, over every link and both hours.
+    /// The smallest and the largest number of frames in one departure, over every scheduled slot (the short connections
+    /// below `min_frames` included, FIN5b-2) and both hours.
     pub frames_per_departure: (u64, u64),
     /// The same per scheduled link: `(slot, (min, max))`.
     pub frames_per_departure_per_link: Vec<(u64, (u64, u64))>,
     /// Every unit of a scheduled link is a frame of 4 352 B, except the handshake records at the start of a connection (a
     /// 9 B first unit, a 2 856 B first or second unit).
     pub all_frames_full: bool,
+    /// The number of scheduled slots whose shape (unit length, frames per departure) was checked.
+    pub slots_checked: usize,
+    /// How many of them have fewer than `min_frames` frames and so enter no KS sample.
+    pub slots_below_min: usize,
 }
 
 impl Report {
@@ -137,36 +142,47 @@ pub struct Samples {
     pub active_counts: Vec<u64>,
 }
 
-/// The scheduled links' samples: for each slot with at least `min_frames` frames of [`FRAME`] bytes, the gaps between
-/// consecutive departures (frames less than [`SAME_SLOT_MS`] apart are one departure) that end at or before `split`
-/// (idle) and the gaps that start at or after it (active) — a gap that spans `split` is in neither — and the number of
-/// frames of every departure.
-#[must_use]
-pub fn gaps(frames: &[Frame], split: u64, min_frames: usize) -> BTreeMap<u64, Samples> {
+/// The departures of one slot: `(time of the first frame, frames)`, frames less than [`SAME_SLOT_MS`] apart being one.
+fn departures_of(times: &mut [u64]) -> Vec<(u64, u64)> {
+    times.sort_unstable();
+    let mut departures: Vec<(u64, u64)> = Vec::new();
+    let mut last_frame = 0_u64;
+    for t in times.iter() {
+        match departures.last_mut() {
+            Some(d) if t.saturating_sub(last_frame) < SAME_SLOT_MS => {
+                d.1 = d.1.saturating_add(1);
+            }
+            _ => departures.push((*t, 1)),
+        }
+        last_frame = *t;
+    }
+    departures
+}
+
+/// Every scheduled slot — one with at least one frame of [`FRAME`] bytes, however few — and its frame times. The KS
+/// samples ([`gaps`]) need `min_frames` of them; the shape checks (unit length, frames per departure) do not (FIN5b-2).
+fn scheduled_slots(frames: &[Frame]) -> BTreeMap<u64, Vec<u64>> {
     let mut by_slot: BTreeMap<u64, Vec<u64>> = BTreeMap::new();
     for (t, slot, len) in frames {
         if *len == FRAME {
             by_slot.entry(*slot).or_default().push(*t);
         }
     }
+    by_slot
+}
+
+/// The scheduled links' samples: for each slot with at least `min_frames` frames of [`FRAME`] bytes, the gaps between
+/// consecutive departures (frames less than [`SAME_SLOT_MS`] apart are one departure) that end at or before `split`
+/// (idle) and the gaps that start at or after it (active) — a gap that spans `split` is in neither — and the number of
+/// frames of every departure.
+#[must_use]
+pub fn gaps(frames: &[Frame], split: u64, min_frames: usize) -> BTreeMap<u64, Samples> {
     let mut out = BTreeMap::new();
-    for (slot, mut times) in by_slot {
+    for (slot, mut times) in scheduled_slots(frames) {
         if times.len() < min_frames {
             continue;
         }
-        times.sort_unstable();
-        // departures: (time of the first frame, frames)
-        let mut departures: Vec<(u64, u64)> = Vec::new();
-        let mut last_frame = 0_u64;
-        for t in &times {
-            match departures.last_mut() {
-                Some(d) if t.saturating_sub(last_frame) < SAME_SLOT_MS => {
-                    d.1 = d.1.saturating_add(1);
-                }
-                _ => departures.push((*t, 1)),
-            }
-            last_frame = *t;
-        }
+        let departures = departures_of(&mut times);
         let mut samples = Samples::default();
         for (at, count) in &departures {
             if *at < split {
@@ -220,9 +236,18 @@ pub fn analyse(frames: &[Frame], split: u64, min_frames: usize) -> Option<Report
     }
     let pooled = two_sample(&all_idle, &all_active)?;
     let counts_pooled = two_sample(&all_idle_n, &all_active_n)?;
-    let counts = all_idle_n.iter().chain(&all_active_n);
-    let frames_per_departure = (counts.clone().min().copied()?, counts.max().copied()?);
-    let scheduled: Vec<u64> = per.keys().copied().collect();
+    // FIN5b-2: the shape checks run over every scheduled slot, the short connections included
+    let all_slots = scheduled_slots(frames);
+    let mut per_departure: Vec<u64> = Vec::new();
+    for times in all_slots.values() {
+        let mut times = times.clone();
+        per_departure.extend(departures_of(&mut times).iter().map(|d| d.1));
+    }
+    let frames_per_departure = (
+        per_departure.iter().min().copied()?,
+        per_departure.iter().max().copied()?,
+    );
+    let scheduled: Vec<u64> = all_slots.keys().copied().collect();
     Some(Report {
         per_link,
         pooled,
@@ -231,6 +256,8 @@ pub fn analyse(frames: &[Frame], split: u64, min_frames: usize) -> Option<Report
         frames_per_departure,
         frames_per_departure_per_link: fpd_per_link,
         all_frames_full: units_are_frames(frames, &scheduled),
+        slots_checked: scheduled.len(),
+        slots_below_min: scheduled.len().saturating_sub(per.len()),
     })
 }
 
@@ -271,6 +298,11 @@ pub fn evidence(report: &Report) -> String {
             "frames per departure, link {slot}: min = {lo}, max = {hi}"
         );
     }
+    let _ = writeln!(
+        s,
+        "slots checked: {} ({} below min_frames, shape-checked only)",
+        report.slots_checked, report.slots_below_min
+    );
     let _ = writeln!(s, "all units 4352 B: {}", report.all_frames_full);
     s
 }
@@ -425,6 +457,53 @@ mod tests {
         // the same lengths in the middle of the link
         frames.push((SPLIT, 0, 2_856));
         assert!(!analyse(&frames, SPLIT, 100).unwrap().all_frames_full);
+    }
+
+    /// FIN5b-2: a short scheduled connection (below `min_frames`): 6 departures of 2 frames, 10 s apart, from `from` on.
+    fn short_slot(slot: u64, from: u64) -> Vec<Frame> {
+        (0..6_u64)
+            .flat_map(|k| {
+                let t = from.saturating_add(k.saturating_mul(10_000));
+                [(t, slot, FRAME), (t.saturating_add(1), slot, FRAME)]
+            })
+            .collect()
+    }
+
+    /// FIN5b-2 (positive control): four long links plus one short connection with clean frames: every shape check
+    /// holds, the short slot is counted as shape-checked only, and the criterion's inputs are all MET.
+    #[test]
+    fn short_connection_with_clean_frames_stays_met() {
+        let mut frames = trace(4, 360, 0, 3, 2, 11);
+        frames.extend(short_slot(99, 1_000_000));
+        let r = analyse(&frames, SPLIT, 100).unwrap();
+        assert_eq!(r.per_link.len(), 4);
+        assert!(r.all_frames_full);
+        assert_eq!(r.constant_frames_per_departure(), Some(2));
+        assert_eq!((r.slots_checked, r.slots_below_min), (5, 1));
+        assert!(r.per_link.iter().all(|(_, k)| k.p >= 0.01));
+        assert!(evidence(&r).contains("slots checked: 5 (1 below min_frames, shape-checked only)"));
+    }
+
+    /// FIN5b-2: one 4 353 B unit on a short scheduled connection is a finding (`all units 4352 B: false`), as on a long one.
+    #[test]
+    fn short_connection_with_a_4353_byte_unit_is_not_met() {
+        let mut frames = trace(4, 360, 0, 3, 2, 11);
+        frames.extend(short_slot(99, 1_000_000));
+        frames.push((1_000_050, 99, FRAME + 1));
+        let r = analyse(&frames, SPLIT, 100).unwrap();
+        assert!(!r.all_frames_full, "the 4353-byte unit was not checked");
+        assert!(evidence(&r).contains("all units 4352 B: false"));
+    }
+
+    /// FIN5b-2: a departure of 3 frames on a short scheduled connection is a finding (frames per departure min 2, max 3).
+    #[test]
+    fn short_connection_with_a_three_frame_departure_is_not_met() {
+        let mut frames = trace(4, 360, 0, 3, 2, 11);
+        frames.extend(short_slot(99, 1_000_000));
+        frames.push((1_000_002, 99, FRAME));
+        let r = analyse(&frames, SPLIT, 100).unwrap();
+        assert_eq!(r.frames_per_departure, (2, 3));
+        assert_eq!(r.constant_frames_per_departure(), None);
     }
 
     #[test]

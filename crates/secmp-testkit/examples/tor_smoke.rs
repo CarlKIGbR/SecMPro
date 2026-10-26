@@ -54,7 +54,9 @@ fn unhex(s: &str) -> Option<Vec<u8>> {
         .collect()
 }
 
-/// Bytes received on the interfaces other than `lo` (Linux `/proc/net/dev`).
+/// Bytes received on the interfaces other than `lo` (Linux `/proc/net/dev`). Platform behaviour (FIN5b-3): there is no
+/// such file on Windows, so the result is `None` and the last line prints `bytes_down=n/a` (a bootstrap-only run; the
+/// MR-07 byte count comes from the Linux dispatch, `ci-dispatch.yml` `tor-smoke`, which still requires digits).
 fn rx_bytes() -> Option<u64> {
     let text = std::fs::read_to_string("/proc/net/dev").ok()?;
     let mut total = 0_u64;

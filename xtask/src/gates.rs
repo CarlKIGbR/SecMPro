@@ -8494,12 +8494,15 @@ mod tests {
         if !dispatch.contains(&format!("grep -E {regex}")) {
             out.push("the MR-07 regex is not in ci-dispatch.yml".to_owned());
         }
+        // FIN5b-3: Windows has no /proc/net/dev, `tor_smoke` prints `bytes_down=n/a` there; the Linux dispatch keeps digits
+        let regex_win = "'^MR07 bootstrap_seconds=[0-9.]+ bytes_down=(\\d+|n/a)$'";
         for frag in [
             "Join-Path $env:RUNNER_TEMP 'arti-profile'",
             "Remove-Item -Recurse -Force",
             "$LASTEXITCODE -ne 0",
             "-Tail 1",
-            regex,
+            regex_win,
+            "Windows: bootstrap-only (byte count n/a; MR-07 bytes come from the Linux dispatch)",
         ] {
             if !ps.contains(frag) {
                 out.push(format!("tor-smoke run step lacks {frag:?}"));
@@ -8531,6 +8534,9 @@ mod tests {
             "",
         );
         assert!(!win_suite_line_findings(&cold, &dispatch).is_empty());
+        // FIN5b-3: the digits-only regex of the Linux dispatch rejects the Windows output by construction
+        let digits_only = plant(&real, "bytes_down=(\\d+|n/a)$'", "bytes_down=[0-9]+$'");
+        assert!(!win_suite_line_findings(&digits_only, &dispatch).is_empty());
         let order = plant(
             &real,
             "          cargo -V || exit /b 1\n          nasm -v || exit /b 1\n",

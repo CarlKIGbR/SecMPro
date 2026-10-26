@@ -31,9 +31,11 @@ fn recv_rid(rig: &Rig<'_, '_>, idx: usize) -> Option<Id> {
 }
 
 /// SIM-01 `sim_loss_breaks_links_eventual_delivery` (`docs/07:124`): `fail_rate(0.01)` on both client links,
-/// `repair_rate(0.5)` (turmoil breaks the TCP connection on a loss), 200 messages each way over 2 h — (E), (K); every
-/// reconnect follows its teardown within the bound of LR-02 (`U[0, 180 s]` after a failure) or, for a close before
-/// `RELAYINFO`, LR-03 (the cap of 3 600 s). The loss starts at 15 min, not at 0: the clients' set-up (the scripted
+/// `repair_rate(0.5)` (turmoil breaks the TCP connection on a loss), 200 messages each way over 2 h — (E), (K); the
+/// teardowns have a reconnect within the bound of LR-02 (`U[0, 180 s]` after a failure) or, for a close before
+/// `RELAYINFO`, LR-03 (the cap of 3 600 s) — a pooled bound (`check_reconnects`: a matching of teardowns to distinct
+/// connects, not a per-link one), and a teardown in the last bound of the run is excused; with the 3 600 s bound of LR-03
+/// that excuses every such teardown of the second hour. The loss starts at 15 min, not at 0: the clients' set-up (the scripted
 /// handshake of deviation D-C2-1) runs on single links without a retry and ends within the first minutes.
 #[test]
 fn sim_loss_breaks_links_eventual_delivery() {
@@ -50,19 +52,18 @@ fn sim_loss_breaks_links_eventual_delivery() {
     for idx in 0..2 {
         let o = run.observers.get(idx).unwrap();
         // FIN5b-1: the pooled bound, and every teardown has a reconnect (see `check_reconnects`)
-        let checked =
-            check_reconnects(
-                &o.events(),
-                &o.connects(),
-                2 * 3_600 * 1_000,
-                |why| match why {
-                    Reason::Closed | Reason::InFlight | Reason::Overrun | Reason::Rejected => {
-                        Some(180_000)
-                    }
-                    Reason::ClosedBeforeRelayInfo => Some(3_600_000),
-                    _ => None,
-                },
-            );
+        let checked = check_reconnects(
+            &o.events(),
+            &o.connects(),
+            spec.end_s.saturating_mul(1_000),
+            |why| match why {
+                Reason::Closed | Reason::InFlight | Reason::Overrun | Reason::Rejected => {
+                    Some(180_000)
+                }
+                Reason::ClosedBeforeRelayInfo => Some(3_600_000),
+                _ => None,
+            },
+        );
         assert!(checked.is_ok(), "client {idx}: {checked:?}");
         teardowns += checked.unwrap_or(0);
     }

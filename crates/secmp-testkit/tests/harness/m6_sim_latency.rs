@@ -205,9 +205,12 @@ fn sim_slow_link_in_flight_teardown() {
         );
         // LR-02, pooled (FIN5b-1): every `InFlight` teardown has a reconnect within the bound, in a matching of
         // teardowns to distinct connects; per logical link LR-02 is proven by `m6_reconnect::reconnect_jitter_after_failure`
-        let checked = check_reconnects(&events, &o.connects(), 8 * 3_600 * 1_000, |why| {
-            (why == Reason::InFlight).then_some(180_000)
-        });
+        let checked = check_reconnects(
+            &events,
+            &o.connects(),
+            spec.end_s.saturating_mul(1_000),
+            |why| (why == Reason::InFlight).then_some(180_000),
+        );
         assert!(checked.is_ok(), "client {idx}: {checked:?}");
     }
     run.assert_k("SIM-07");

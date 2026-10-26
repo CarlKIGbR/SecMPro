@@ -513,14 +513,15 @@ pub fn check_reconnects(
     let mut checked = 0_usize;
     for (why, t, delay) in reconnect_delays(events, connects) {
         let Some(bound) = bound(why) else { continue };
-        checked = checked.saturating_add(1);
         let Some(delay) = delay else {
-            // a teardown in the last `bound + 1 000 ms` of the run may not have had the time to reconnect
+            // a teardown in the last `bound + 1 000 ms` of the run may not have had the time to reconnect: excused, and
+            // not counted as checked
             if t.saturating_add(bound).saturating_add(1_000) > end_ms {
                 continue;
             }
             return Err(format!("{why:?} at {t}: no reconnect follows"));
         };
+        checked = checked.saturating_add(1);
         if delay > bound.saturating_add(1_000) {
             return Err(format!(
                 "{why:?} at {t}: the reconnect {delay} ms later, bound {bound}"
@@ -582,13 +583,29 @@ fn oracle_rejects_a_crossed_reconnect_that_breaks_the_pooled_bound() {
     assert!(e.contains("2490 ms"), "{e}");
 }
 
-/// A teardown in the last `bound + 1 000 ms` of the run has not had the time to reconnect and is not a finding.
+/// A teardown in the last `bound + 1 000 ms` of the run has not had the time to reconnect and is not a finding; it is
+/// not counted as checked either (the `teardowns >= 10` of SIM-01 counts checked teardowns only).
 #[test]
 fn oracle_excuses_a_teardown_in_the_last_bound_window() {
     let events = [oracle_down(0, 1), oracle_down(ORACLE_END - 500, 2)];
     let connects = [oracle_connect(50, 3)];
     assert_eq!(
         check_reconnects(&events, &connects, ORACLE_END, oracle_bound),
-        Ok(2)
+        Ok(1)
+    );
+}
+
+/// The edge of the window, both sides: the teardown is excused iff `t + bound + 1 000 > end` — exactly `bound + 1 s`
+/// before the end it is still checked (and fails without a reconnect), one millisecond later it is excused.
+#[test]
+fn oracle_window_edge_is_pinned_on_both_sides() {
+    let window = ORACLE_BOUND + 1_000;
+    let connects = [oracle_connect(50, 3)];
+    let at_edge = [oracle_down(0, 1), oracle_down(ORACLE_END - window, 2)];
+    assert!(check_reconnects(&at_edge, &connects, ORACLE_END, oracle_bound).is_err());
+    let inside = [oracle_down(0, 1), oracle_down(ORACLE_END - window + 1, 2)];
+    assert_eq!(
+        check_reconnects(&inside, &connects, ORACLE_END, oracle_bound),
+        Ok(1)
     );
 }

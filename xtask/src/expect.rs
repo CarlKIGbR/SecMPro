@@ -132,6 +132,14 @@ pub(crate) const AUDIT_IGNORES: &[(&str, &str)] = &[
         "ADR-051 Am. 1: bincode 2.0.1 (unmaintained) is an optional dependency of typed-index-collections; \
          lock-only, never compiled (cargo tree -i prints nothing); cargo deny does not report it",
     ),
+    (
+        "RUSTSEC-2026-0387",
+        "ADR-051 Am. 6: crypto-bigint 0.5.5 timing variability — lock-only via arti-client 0.46.0 → tor-hscrypto → \
+         tor-key-forge → ssh-key-fork-arti 0.6.7 → p256 0.13.2 → ecdsa → elliptic-curve 0.13.8 (cargo tree -i prints \
+         nothing; cargo deny does not report it); no SecMP construction uses crypto-bigint (secmp-crypto and \
+         secmp-proto closures: 0); patched 0.7.6 needs ssh-key-fork-arti on p256/elliptic-curve 0.14, not released \
+         (0.6.7 requires ^0.13); removed in the first milestone after arti-client moves",
+    ),
 ];
 
 /// Cooldown exceptions (ADR-015 Amendment 2) as (crate, version, until = publish date + 7 days, advisory): a version

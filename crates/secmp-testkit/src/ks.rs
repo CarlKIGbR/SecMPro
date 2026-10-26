@@ -226,8 +226,13 @@ pub fn cut_at(frames: &[Frame], end: u64) -> Vec<Frame> {
     out
 }
 
+/// The most 4 352 B units one control slot may carry: a control slot is a `QUEUE_NEW` one-shot (spec §10.6), one command
+/// on its own link (C2-18c, G1 (c): without a cap a faulty short link among the control slots would pass).
+pub const CONTROL_FRAMES_CAP: u64 = 1;
+
 /// The shape of the control slots in `control` that appear in `frames`: how many, the fewest and the most 4 352 B units
-/// on one, and whether every one is HELLO (9 B), HS1 (2 856 B), then 4 352 B units, nothing else (control cells are cells).
+/// on one, and whether every one is HELLO (9 B), HS1 (2 856 B), then at most [`CONTROL_FRAMES_CAP`] 4 352 B units, nothing
+/// else (control cells are cells; a missing HELLO or HS1 is a finding).
 fn control_shape(frames: &[Frame], control: &BTreeSet<u64>) -> (usize, (u64, u64), bool) {
     let mut counts: Vec<u64> = Vec::new();
     let mut ok = true;
@@ -244,6 +249,9 @@ fn control_shape(frames: &[Frame], control: &BTreeSet<u64>) -> (usize, (u64, u64
                 (i, FRAME) if i >= 2 => n = n.saturating_add(1),
                 _ => ok = false,
             }
+        }
+        if units.len() < 2 || n > CONTROL_FRAMES_CAP {
+            ok = false;
         }
         counts.push(n);
     }
@@ -423,7 +431,7 @@ pub fn evidence(report: &Report) -> String {
         };
         let _ = writeln!(
             s,
-            "control slots: {} (handshake + {k} × 4352 B units)",
+            "control slots: {} (handshake + {k} × 4352 B units; cap {CONTROL_FRAMES_CAP})",
             report.control_slots
         );
     }
@@ -645,7 +653,7 @@ mod tests {
             "{e}"
         );
         assert!(
-            e.contains("control slots: 8 (handshake + 1 × 4352 B units)"),
+            e.contains("control slots: 8 (handshake + 1 × 4352 B units; cap 1)"),
             "{e}"
         );
     }
@@ -691,6 +699,55 @@ mod tests {
             "a link slot of wrong-sized units was not checked"
         );
         assert!(evidence(&r).contains("all units 4352 B: false"));
+    }
+
+    /// C2-18c (G1 (c)): a control slot is a `QUEUE_NEW` one-shot — HELLO, HS1 and at most one 4 352 B unit. A second
+    /// 4 352 B unit is a finding (a faulty short link that landed among the control slots would otherwise pass).
+    #[test]
+    fn control_slot_with_two_units_is_not_met() {
+        let (mut frames, mut control) = real_shape();
+        frames.extend(control_slot(300, 3_000_000, 2));
+        control.insert(300);
+        let r = analyse_with(&frames, SPLIT, 100, &control).unwrap();
+        assert!(
+            !r.control_ok,
+            "a control slot with two 4352-byte units passed"
+        );
+        assert!(evidence(&r).contains("control slots all handshake + 4352 B units: false"));
+    }
+
+    /// C2-18c: a control slot without its handshake records (a 4 352 B unit alone) is a finding.
+    #[test]
+    fn control_slot_without_handshake_is_not_met() {
+        let (mut frames, mut control) = real_shape();
+        frames.push((3_000_000, 300, FRAME));
+        control.insert(300);
+        let r = analyse_with(&frames, SPLIT, 100, &control).unwrap();
+        assert!(!r.control_ok);
+    }
+
+    /// C2-18c: the shape of the verifier's rustc probe — four long links of two frames per departure with their handshake
+    /// records and eight control slots of HELLO, HS1 and one 4 352 B unit — is MET in every input of the criterion.
+    #[test]
+    fn real_run_shape_is_met() {
+        let mut frames: Vec<Frame> = (0..4).flat_map(handshake).collect();
+        frames.extend(trace(4, 360, 0, 3, 2, 11));
+        let control: BTreeSet<u64> = (200..208).collect();
+        for slot in &control {
+            frames.extend(control_slot(
+                *slot,
+                2_000_000_u64.saturating_add(slot.saturating_mul(1_000)),
+                1,
+            ));
+        }
+        let r = analyse_with(&frames, SPLIT, 100, &control).unwrap();
+        assert_eq!(r.per_link.len(), 4);
+        assert!(r.all_frames_full);
+        assert_eq!(r.constant_frames_per_departure(), Some(2));
+        assert!(r.control_ok);
+        assert_eq!((r.control_slots, r.control_frames), (8, (1, 1)));
+        assert!(r.per_link.iter().all(|(_, k)| k.p >= 0.01) && r.pooled.p >= 0.01);
+        assert!(evidence(&r).contains("control slots: 8 (handshake + 1 × 4352 B units; cap 1)"));
     }
 
     /// C2-18b: control cells are cells — a control slot with a unit of another length is a finding too.

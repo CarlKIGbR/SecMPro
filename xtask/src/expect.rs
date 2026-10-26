@@ -535,7 +535,9 @@ pub(crate) const MUTANTS_HARNESS_TEST_TIMEOUT_SECONDS: u64 = 900;
 /// per-mutant run of the second run, as (name, reason with the nextest time on the 32-core container, 2026-10-15). The
 /// `kat` and `nextest` steps run them on every PR; they take 10–619 s each (FIN5b-4, C2-18b: the two entries below the
 /// ≈ 10 s of the rule — `sim_loss_breaks_links_eventual_delivery`, 6 s, and `ai07_fault_paired_tokio`, 5 s on the 32-core
-/// container, 3.8 s on the 4-core one — are off the list), and the per-mutant suite without them about 10 s.
+/// container, 3.8 s on the 4-core one — are off the list). Measured in C2-18c on the 32-core container: the per-mutant
+/// suite without them (349 tests) takes 70 s wall, dominated by `m6_activity::timing_draws_independent_of_activity`
+/// (69.5 s, on no skip list) and `m6_sched_life::relay_idle_and_age_bounds_from_schedule` (27 s).
 pub(crate) const MUTANT_HARNESS_SKIP_TESTS: &[(&str, &str)] = &[
     (
         "activity_independence_balanced_virtual",

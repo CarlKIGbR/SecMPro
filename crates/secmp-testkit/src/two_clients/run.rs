@@ -250,6 +250,8 @@ struct Node<P: StreamProvider + 'static, R: Rand> {
     sched: Scheduler,
     driver: NodeDriver<P, R>,
     convs: Arc<Mutex<Convs<R>>>,
+    /// The driver id of the node's traced provider: its log's connects are matched to slots by `(driver, key)`.
+    driver_id: u64,
 }
 
 /// What a client that restarts needs besides its conversations (which survive in memory, like a disk): its two queues
@@ -290,8 +292,9 @@ pub struct Observer {
     evicted: Mutex<Vec<u64>>,
     /// Every connection the drivers opened: time (ms), purpose.
     connects: Mutex<Vec<(u64, secmp_client_core::scheduler::run::Purpose)>>,
-    /// The isolation keys of the connections opened for control operations (the pool's `QUEUE_NEW` one-shots, spec §10.6).
-    control_isolations: Mutex<Vec<u64>>,
+    /// The `(driver, isolation key)` of the connections the client drivers opened for control operations (spec §10.6);
+    /// a key alone is ambiguous (every scheduler counts from 0). The pool's one-shots are tagged in the recorder instead.
+    control_keys: Mutex<Vec<(u64, u64)>>,
     events: Mutex<Vec<(u64, secmp_client_core::scheduler::types::LinkEvent)>>,
     rec: Mutex<Option<Arc<Recorder>>>,
     registered: Mutex<Vec<Registered>>,
@@ -343,12 +346,13 @@ impl Observer {
             .clone()
     }
 
-    /// The slots of the recorder whose connection was opened for a control operation (the pool's one-shot connections,
-    /// not link traffic; C2-18b), as far as the runs ended and reported.
+    /// The control slots of the recorder (spec §10.6; not link traffic): the slots the pools' control-class providers
+    /// created (tagged at creation, C2-18c), and the slots whose `(driver, isolation key)` a client driver's log names
+    /// for a `Purpose::Control` connect — the latter as far as the runs ended and reported.
     #[must_use]
     pub fn control_slots(&self) -> std::collections::BTreeSet<u64> {
-        let keys: std::collections::BTreeSet<u64> = self
-            .control_isolations
+        let keys: std::collections::BTreeSet<(u64, u64)> = self
+            .control_keys
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .iter()
@@ -356,11 +360,14 @@ impl Observer {
             .collect();
         self.recorder()
             .map(|r| {
-                r.isolations()
-                    .into_iter()
-                    .filter(|(_, key)| keys.contains(key))
-                    .map(|(slot, _)| slot)
-                    .collect()
+                let mut slots = r.control_slots();
+                slots.extend(
+                    r.origins()
+                        .into_iter()
+                        .filter(|(_, origin)| keys.contains(origin))
+                        .map(|(slot, _)| slot),
+                );
+                slots
             })
             .unwrap_or_default()
     }
@@ -574,16 +581,15 @@ impl<P: StreamProvider + 'static> World<P> {
             .unwrap_or_else(PoisonError::into_inner)
             .queues
             .insert(rq.0, recv.2);
+        let traced = if self.observer.is_some() {
+            // a simulation breaks connections on purpose: a stream dropped inside a unit is no error
+            Traced::lenient(Arc::clone(&self.provider), Arc::clone(&self.rec))
+        } else {
+            Traced::new(Arc::clone(&self.provider), Arc::clone(&self.rec))
+        };
+        let driver_id = traced.driver();
         let driver = Driver::new(
-            Arc::new(Only::new(
-                if self.observer.is_some() {
-                    // a simulation breaks connections on purpose: a stream dropped inside a unit is no error
-                    Traced::lenient(Arc::clone(&self.provider), Arc::clone(&self.rec))
-                } else {
-                    Traced::new(Arc::clone(&self.provider), Arc::clone(&self.rec))
-                },
-                transport,
-            )),
+            Arc::new(Only::new(traced, transport)),
             Arc::new(TestDirectory::new(
                 self.relay.clone(),
                 copy_key(&self.access),
@@ -607,6 +613,7 @@ impl<P: StreamProvider + 'static> World<P> {
             sched,
             driver,
             convs,
+            driver_id,
         })
     }
 
@@ -1241,7 +1248,8 @@ async fn finish<P: StreamProvider + 'static, R: Rand>(
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
                 .extend(log.connects.iter().map(|(t, p, _)| (*t, *p)));
-            o.control_isolations
+            let driver = node.driver_id;
+            o.control_keys
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
                 .extend(
@@ -1250,7 +1258,7 @@ async fn finish<P: StreamProvider + 'static, R: Rand>(
                         .filter(|(_, p, _)| {
                             matches!(p, secmp_client_core::scheduler::run::Purpose::Control(_))
                         })
-                        .map(|(_, _, i)| i.0),
+                        .map(|(_, _, i)| (driver, i.0)),
                 );
         }
         node.driver
@@ -1496,7 +1504,8 @@ impl<P: StreamProvider + 'static> World<P> {
         };
         let driver = Driver::new(
             Arc::new(Only::new(
-                Traced::new(Arc::clone(&self.provider), Arc::clone(&self.rec)),
+                // the pool's connections are control operations, tagged as such when each stream is made (C2-18c)
+                Traced::new(Arc::clone(&self.provider), Arc::clone(&self.rec)).control(),
                 transport,
             )),
             Arc::new(TestDirectory::new(
@@ -1931,34 +1940,36 @@ pub fn run_in(
 mod control_slot_tests {
     use super::*;
 
-    /// C2-18b (F1): `Observer::control_slots` joins the isolation key each slot was connected with (recorded by
-    /// `Traced::connect` through `Recorder::wrap_isolated`) with the isolation keys of the `Purpose::Control` connects of
-    /// the drivers' logs: slots 1 and 3 were connected for control operations, slot 0 (a link) and slot 2 (no key
-    /// recorded) were not.
+    /// C2-18c (G1 (b)): `Observer::control_slots` = the slots tagged at creation by a control-class provider, plus the
+    /// slots whose `(driver, isolation key)` a client driver logged for a control connect — never by the key alone. Two
+    /// drivers both start their keys at 0: driver 0's key-0 slot is a link, driver 1's key-0 slot is its control op.
     #[tokio::test]
-    async fn control_slots_join_the_recorded_isolations_with_the_control_connects() {
+    async fn control_slots_match_driver_and_key_never_the_key_alone() {
         let observer = Observer::new();
         assert!(observer.control_slots().is_empty(), "no recorder yet");
         let rec = Recorder::new(TokioClock::new(1_000));
-        let (a, _a2) = tokio::io::duplex(64);
-        let (b, _b2) = tokio::io::duplex(64);
-        let (c, _c2) = tokio::io::duplex(64);
-        let (d, _d2) = tokio::io::duplex(64);
-        let _links = [
-            rec.wrap_isolated(a, Some(10)),
-            rec.wrap_isolated(b, Some(11)),
-            rec.wrap(c),
-            rec.wrap_isolated(d, Some(12)),
+        let streams: Vec<_> = (0..5).map(|_| tokio::io::duplex(64)).collect();
+        let mut it = streams.into_iter().map(|(a, _b)| a);
+        let mut next = || it.next().unwrap();
+        let _slots = [
+            rec.wrap_with(next(), Some((0, 0)), false), // slot 0: driver 0, key 0 — a link
+            rec.wrap_with(next(), Some((1, 0)), false), // slot 1: driver 1, key 0 — its control op
+            rec.wrap_with(next(), Some((2, 0)), true),  // slot 2: a pool's (tagged) connection
+            rec.wrap_with(next(), Some((2, 1)), true),  // slot 3: a pool's (tagged) connection
+            rec.wrap(next()),                           // slot 4: no origin
         ];
-        // slot 0: key 10 (a link), slot 1: key 11 (control), slot 2: none, slot 3: key 12 (control)
         *observer.rec.lock().unwrap() = Some(Arc::clone(&rec));
+        assert_eq!(
+            observer.control_slots().into_iter().collect::<Vec<_>>(),
+            vec![2, 3]
+        );
         observer
-            .control_isolations
+            .control_keys
             .lock()
             .unwrap()
-            .extend([11, 12, 99]);
+            .extend([(1, 0), (7, 0)]);
         let slots: Vec<u64> = observer.control_slots().into_iter().collect();
-        assert_eq!(slots, vec![1, 3]);
-        assert_eq!(rec.isolations().len(), 3);
+        assert_eq!(slots, vec![1, 2, 3], "key 0 of driver 0 must stay a link");
+        assert_eq!(rec.origins().len(), 4);
     }
 }

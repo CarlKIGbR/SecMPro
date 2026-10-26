@@ -12,7 +12,7 @@
 //! cross ([`Traced`]): the lengths of the handshake records are those of spec D.1 (`HELLO` 9, `RELAYINFO` 1 744,
 //! `HS1` 2 856, `HS2` 1 156); every later unit is a frame of 4 352 bytes.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::io::Write as _;
 use std::pin::Pin;
@@ -61,8 +61,15 @@ struct Inner {
     errors: Vec<(u64, String)>,
     /// The run is over: streams dropped from now on are not residuals.
     sealed: bool,
-    /// The isolation key each link slot was connected with (the driver's, fresh for every connection), by slot.
-    isolations: BTreeMap<u64, u64>,
+    /// Where each slot's connection came from, by slot: `(driver, isolation key)`. An isolation key is fresh per
+    /// connection only within one scheduler — every scheduler counts its keys from 0, and the schedulers of a process
+    /// (each client's and each pool's) share this recorder — so a key names a connection only together with the driver.
+    origins: BTreeMap<u64, (u64, u64)>,
+    /// The slots of control-class providers (a pool driver's `QUEUE_NEW` one-shots, spec §10.6): tagged when the stream
+    /// is created (C2-18c).
+    control: BTreeSet<u64>,
+    /// The driver ids handed out so far ([`Recorder::next_driver`]).
+    drivers: u64,
 }
 
 /// What a run recorded (shared by both clients of a process).
@@ -119,14 +126,26 @@ impl Recorder {
     /// A stream of the run under this recorder: its units are recorded as they cross (see [`TracedStream`]); the link
     /// slot is the next in creation order.
     pub fn wrap<S>(self: &Arc<Self>, inner: S) -> TracedStream<S> {
-        self.wrap_isolated(inner, None)
+        self.wrap_with(inner, None, false)
     }
 
-    /// As [`Recorder::wrap`], remembering the isolation key the connection was made with ([`Recorder::isolations`]).
-    pub fn wrap_isolated<S>(self: &Arc<Self>, inner: S, isolation: Option<u64>) -> TracedStream<S> {
+    /// As [`Recorder::wrap`], remembering where the connection came from — `(driver, isolation key)`, see
+    /// [`Recorder::origins`] — and whether it is a control-class connection ([`Recorder::control_slots`]).
+    pub fn wrap_with<S>(
+        self: &Arc<Self>,
+        inner: S,
+        origin: Option<(u64, u64)>,
+        control: bool,
+    ) -> TracedStream<S> {
         let slot = self.next_slot();
-        if let Some(key) = isolation {
-            self.lock().isolations.insert(slot, key);
+        {
+            let mut g = self.lock();
+            if let Some(o) = origin {
+                g.origins.insert(slot, o);
+            }
+            if control {
+                g.control.insert(slot);
+            }
         }
         TracedStream {
             inner,
@@ -157,10 +176,25 @@ impl Recorder {
         self.lock().events.push(EventRec { event, msg, t_ms });
     }
 
-    /// The isolation key of each slot's connection, by slot (C2-18b: it tells a control connection from a link).
+    /// A driver id, unique under this recorder: a [`Traced`] provider takes one, so the slots it creates carry
+    /// `(driver, isolation key)` and a driver's log entry can be matched to its slot (C2-18c).
+    pub fn next_driver(&self) -> u64 {
+        let mut g = self.lock();
+        let id = g.drivers;
+        g.drivers = g.drivers.saturating_add(1);
+        id
+    }
+
+    /// Where each slot's connection came from, by slot: `(driver, isolation key)`.
     #[must_use]
-    pub fn isolations(&self) -> BTreeMap<u64, u64> {
-        self.lock().isolations.clone()
+    pub fn origins(&self) -> BTreeMap<u64, (u64, u64)> {
+        self.lock().origins.clone()
+    }
+
+    /// The slots created by control-class providers (the pools' one-shot connections), tagged at creation.
+    #[must_use]
+    pub fn control_slots(&self) -> BTreeSet<u64> {
+        self.lock().control.clone()
     }
 
     /// The units recorded so far.
@@ -372,31 +406,53 @@ impl<S: AsyncWrite + Unpin> AsyncWrite for TracedStream<S> {
     }
 }
 
-/// A provider shared by the clients of a process, whose streams are traced. Only the driver's connections go through
-/// it: the invitation and handshake of the script use the plain provider and are not part of the trace.
+/// A provider of one driver, whose streams are traced into the recorder the drivers of a process share. Only the drivers'
+/// connections go through it: the invitation and handshake of the script use the plain provider and are not part of the
+/// trace. Each `Traced` takes its own driver id from the recorder; a control-class one ([`Traced::control`], the pool's
+/// driver) tags every slot it creates as a control slot.
 pub struct Traced<P> {
     inner: Arc<P>,
     rec: Arc<Recorder>,
     lenient: bool,
+    driver: u64,
+    control: bool,
 }
 
 impl<P> Traced<P> {
-    /// `inner`, recording into `rec`.
-    pub const fn new(inner: Arc<P>, rec: Arc<Recorder>) -> Self {
+    /// `inner`, recording into `rec`, under a fresh driver id.
+    pub fn new(inner: Arc<P>, rec: Arc<Recorder>) -> Self {
+        let driver = rec.next_driver();
         Self {
             inner,
             rec,
             lenient: false,
+            driver,
+            control: false,
         }
     }
 
     /// As [`Traced::new`], for streams that may be dropped inside a unit (a pool shut down on purpose).
-    pub const fn lenient(inner: Arc<P>, rec: Arc<Recorder>) -> Self {
+    pub fn lenient(inner: Arc<P>, rec: Arc<Recorder>) -> Self {
         Self {
-            inner,
-            rec,
             lenient: true,
+            ..Self::new(inner, rec)
         }
+    }
+
+    /// This provider's connections are control operations (the pool's `QUEUE_NEW` one-shots, spec §10.6), not links:
+    /// every slot it creates is tagged a control slot when the stream is made (C2-18c).
+    #[must_use]
+    pub fn control(self) -> Self {
+        Self {
+            control: true,
+            ..self
+        }
+    }
+
+    /// The driver id the slots of this provider carry ([`Recorder::origins`]).
+    #[must_use]
+    pub const fn driver(&self) -> u64 {
+        self.driver
     }
 }
 
@@ -409,7 +465,9 @@ impl<P: StreamProvider> StreamProvider for Traced<P> {
         isolation: Isolation,
     ) -> Result<Self::Stream, TransportError> {
         let inner = self.inner.connect(relay, isolation).await?;
-        let mut stream = self.rec.wrap_isolated(inner, Some(isolation.0));
+        let mut stream = self
+            .rec
+            .wrap_with(inner, Some((self.driver, isolation.0)), self.control);
         stream.lenient = self.lenient;
         Ok(stream)
     }

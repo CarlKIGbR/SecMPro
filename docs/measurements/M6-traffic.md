@@ -39,7 +39,7 @@ owner-operated measurement carries the reason and the date of its absence. ADR-0
 
 ## Bandwidth
 
-Bytes on the wire of the link layer (4 352-B frames), without Tor, per contact steady state (MR-01, 24 virtual hours;
+Bytes on the wire of the link layer (4 352-B frames), without Tor, per scenario (4 and 5 contacts) steady state (MR-01, 24 virtual hours;
 `M6-evidence/MR-01.txt`):
 
 | mode (scenario) | model, B/s | measured, B/s while up | error | measured, MB/day |

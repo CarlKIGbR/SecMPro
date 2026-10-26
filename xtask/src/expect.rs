@@ -533,8 +533,8 @@ pub(crate) const MUTANTS_HARNESS_TEST_TIMEOUT_SECONDS: u64 = 900;
 
 /// ADR-047 Amendment 4, with the rule of Amendment 1 (5): the long tests of the testkit harness left out of the
 /// per-mutant run of the second run, as (name, reason with the nextest time on the 32-core container, 2026-10-15). The
-/// `kat` and `nextest` steps run them on every PR; together they take 20–226 s each, and the per-mutant suite without
-/// them about 10 s.
+/// `kat` and `nextest` steps run them on every PR; they take 5–619 s each (FIN5b-4: the SIM-01 row, 6 s, is off the list), and
+/// the per-mutant suite without them about 10 s.
 pub(crate) const MUTANT_HARNESS_SKIP_TESTS: &[(&str, &str)] = &[
     (
         "activity_independence_balanced_virtual",
@@ -614,10 +614,6 @@ pub(crate) const MUTANT_HARNESS_SKIP_TESTS: &[(&str, &str)] = &[
     (
         "sim_latency_does_not_move_emission",
         "SIM-06, two runs of 3 h virtual: 19 s",
-    ),
-    (
-        "sim_loss_breaks_links_eventual_delivery",
-        "SIM-01, 2 h virtual with 1 % loss: 6 s",
     ),
     (
         "sim_slow_link_in_flight_teardown",

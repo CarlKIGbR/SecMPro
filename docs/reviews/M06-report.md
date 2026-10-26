@@ -1565,7 +1565,7 @@ return block.
 - **CLOSED (same weisung): D-C2-1, branch (ii) accepted** — the handshake stays scripted outside the scheduler; the M7 entry in §7 stands.
   No ADR (a test-row deviation, not a spec deviation).
 - **OPEN (C2-13, §10): `linux-fast` `timeout-minutes: 120`** — whether the budget gets a pin in `expect.rs` (today it is text in `ci.yml` and ADR-045 Am. 10 only). For the reviewer.
-- **Owner question (C2-15c):** ratify the `tokio` 1.53.1 → 1.53.3 vet record (direct dependency; docs/06 §3, ADR-051 Part 2; ADR-051 Am. 5, `supply-chain/audits.toml`). Provisional until the owner records it.
+- **Owner question (C2-15c) — answered:** ratify the `tokio` 1.53.1 → 1.53.3 vet record (direct dependency; docs/06 §3, ADR-051 Part 2; ADR-051 Am. 5, `supply-chain/audits.toml`). **Ratified 2026-10-26** (owner, chat; C2-16b).
 
 ## 9. Checklist before requesting review
 
@@ -2295,6 +2295,7 @@ ADR-045 Amendment 11 (`docs/08`). Facts: PR run #183 (39970611819, `fda4992`), `
 - **Pin test:** `cooldown::tests::cooldown_covers_m6_lock` lists the locked versions it expects; with the new lock it failed at `xtask/src/cooldown.rs:555:13` (`tokio 1.53.1` no longer in `Cargo.lock`, first `ci-fast` run: `nextest` FAIL, everything else PASS); the entry is now `("tokio", "1.53.3")`, test green. The `tokio v1.53.1` strings in `xtask/src/policy.rs:2098,2102` are synthetic `cargo tree` fixtures, not pins.
 - **Paused time (tokio #8595):** 1.53.3 changes when a `current_thread` runtime auto-advances paused time under `test-util` (affects only our `start_paused(true)` tests). `cargo xtask ci-fast --strict` on `eaa76f7` ran the full nextest and `kat` including `m6_tokio`/`m6_tokio_ai` on tokio 1.53.3 (all PASS); re-run for the record: `cargo nextest run -p secmp-testkit --features harness --test harness m6_tokio` → `Summary [62.694s] 8 tests run: 8 passed (1 slow), 262 skipped` (`m6_tokio::tokio_driver_smoke_strict_one_hour`, `m6_tokio_ai::ai01_strict_tokio` … `ai07_fault_paired_tokio` all PASS; the Δt = 0 ms rows are among them).
 - **Owner ratification:** the vet record and ADR-051 Am. 5 are provisional until the owner ratifies the direct-dependency bump (see §8).
+- Owner ratification 2026-10-26 (C2-16b): `who` set to the owner, ADR-051 Am. 5 Accepted (Owner).
 
 ### C2-16 (WEISUNG M6-C2-16)
 

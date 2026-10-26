@@ -32,10 +32,10 @@ delta = "0.103.15 -> 0.103.16"
 notes = "Delta read in full. Security patch for RUSTSEC-2026-0382: adds a DISTRUSTED_SPKIS list (8 emSign intermediate SPKIs, src/data/distrusted/*.spki.der) checked in verify_cert build_chain on every path node and on the trust anchor; new Error::CertDistrusted; ChainOptions gains distrusted_spkis; new unit test. Files: Cargo.toml(.orig) version, end_entity.rs, error.rs, verify_cert.rs, 8 data files. No build script, no new dependencies, no unsafe, no feature changes."
 
 [[audits.tokio]]
-who = "Claude Sonnet 5.5 (implementer) + reviewer's verifier; owner ratification pending"
+who = "Christopher Carl (owner), ratified 2026-10-26 on the reviewer's recommendation"
 criteria = "safe-to-deploy"
 delta = "1.53.1 -> 1.53.3"
-notes = "RUSTSEC-2026-0386 fix (AsyncFd::register/register_with_interest as unsafe fn; deprecated safe wrappers unchanged; #8540 revert leaks a registration on EPOLL_CTL_DEL failure instead of freeing it). Delta 5427 lines / 83 files read: async_fd.rs, Cargo.toml, CHANGELOG, all unsafe hunks and sync/time hunks by the implementer (WEISUNG M6-C2-15b); the remaining files in full by the reviewer's verifier (VERIFY-C2-15b, 2026-10-24). No build script, no new dependency, no feature/MSRV change; one new unsafe block in sync/batch_semaphore.rs:367 under tokio_unstable+tracing only. Direct dependency: owner ratification requested (docs/06 §3, ADR-051 Part 2; MEMO 2026-10-24) — provisional until the owner records it."
+notes = "RUSTSEC-2026-0386 fix (AsyncFd::register/register_with_interest as unsafe fn; deprecated safe wrappers unchanged; #8540 revert leaks a registration on EPOLL_CTL_DEL failure instead of freeing it). Delta 5427 lines / 83 files read: async_fd.rs, Cargo.toml, CHANGELOG, all unsafe hunks and sync/time hunks by the implementer (WEISUNG M6-C2-15b); the remaining files in full by the reviewer's verifier (VERIFY-C2-15b, 2026-10-24). No build script, no new dependency, no feature/MSRV change; one new unsafe block in sync/batch_semaphore.rs:367 under tokio_unstable+tracing only. Direct dependency: owner ratification 2026-10-26 (chat, on the reviewer's memo of 2026-10-24; precedent `rand`, docs/08:288). Read by the implementer (WEISUNG M6-C2-15b) and in full by the reviewer's verifier (VERIFY-C2-15b)."
 
 [[trusted.aead]]
 criteria = "safe-to-deploy"

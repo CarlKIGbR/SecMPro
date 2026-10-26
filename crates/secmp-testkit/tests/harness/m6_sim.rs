@@ -513,15 +513,15 @@ pub fn check_reconnects(
     let mut checked = 0_usize;
     for (why, t, delay) in reconnect_delays(events, connects) {
         let Some(bound) = bound(why) else { continue };
-        checked += 1;
+        checked = checked.saturating_add(1);
         let Some(delay) = delay else {
             // a teardown in the last `bound + 1 000 ms` of the run may not have had the time to reconnect
-            if t + bound + 1_000 > end_ms {
+            if t.saturating_add(bound).saturating_add(1_000) > end_ms {
                 continue;
             }
             return Err(format!("{why:?} at {t}: no reconnect follows"));
         };
-        if delay > bound + 1_000 {
+        if delay > bound.saturating_add(1_000) {
             return Err(format!(
                 "{why:?} at {t}: the reconnect {delay} ms later, bound {bound}"
             ));
@@ -530,16 +530,13 @@ pub fn check_reconnects(
     Ok(checked)
 }
 
-use secmp_client_core::scheduler::run::Purpose;
-use secmp_client_core::scheduler::types::{LinkEvent, LinkId, Reason};
-
 const ORACLE_BOUND: u64 = 100;
 
 /// The end of the fixture runs (ms), far beyond `ORACLE_BOUND + 1 000`.
 const ORACLE_END: u64 = 10_000;
 
-fn oracle_bound(_: secmp_client_core::scheduler::types::Reason) -> Option<u64> {
-    Some(ORACLE_BOUND)
+fn oracle_bound(why: secmp_client_core::scheduler::types::Reason) -> Option<u64> {
+    (why != secmp_client_core::scheduler::types::Reason::ModeChange).then_some(ORACLE_BOUND)
 }
 
 fn oracle_down(t: u64, id: u64) -> (u64, secmp_client_core::scheduler::types::LinkEvent) {

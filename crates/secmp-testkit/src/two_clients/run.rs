@@ -1926,3 +1926,39 @@ pub fn run_in(
         }
     })
 }
+
+#[cfg(test)]
+mod control_slot_tests {
+    use super::*;
+
+    /// C2-18b (F1): `Observer::control_slots` joins the isolation key each slot was connected with (recorded by
+    /// `Traced::connect` through `Recorder::wrap_isolated`) with the isolation keys of the `Purpose::Control` connects of
+    /// the drivers' logs: slots 1 and 3 were connected for control operations, slot 0 (a link) and slot 2 (no key
+    /// recorded) were not.
+    #[tokio::test]
+    async fn control_slots_join_the_recorded_isolations_with_the_control_connects() {
+        let observer = Observer::new();
+        assert!(observer.control_slots().is_empty(), "no recorder yet");
+        let rec = Recorder::new(TokioClock::new(1_000));
+        let (a, _a2) = tokio::io::duplex(64);
+        let (b, _b2) = tokio::io::duplex(64);
+        let (c, _c2) = tokio::io::duplex(64);
+        let (d, _d2) = tokio::io::duplex(64);
+        let _links = [
+            rec.wrap_isolated(a, Some(10)),
+            rec.wrap_isolated(b, Some(11)),
+            rec.wrap(c),
+            rec.wrap_isolated(d, Some(12)),
+        ];
+        // slot 0: key 10 (a link), slot 1: key 11 (control), slot 2: none, slot 3: key 12 (control)
+        *observer.rec.lock().unwrap() = Some(Arc::clone(&rec));
+        observer
+            .control_isolations
+            .lock()
+            .unwrap()
+            .extend([11, 12, 99]);
+        let slots: Vec<u64> = observer.control_slots().into_iter().collect();
+        assert_eq!(slots, vec![1, 3]);
+        assert_eq!(rec.isolations().len(), 3);
+    }
+}

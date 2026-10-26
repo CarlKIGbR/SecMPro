@@ -533,8 +533,9 @@ pub(crate) const MUTANTS_HARNESS_TEST_TIMEOUT_SECONDS: u64 = 900;
 
 /// ADR-047 Amendment 4, with the rule of Amendment 1 (5): the long tests of the testkit harness left out of the
 /// per-mutant run of the second run, as (name, reason with the nextest time on the 32-core container, 2026-10-15). The
-/// `kat` and `nextest` steps run them on every PR; they take 5–619 s each (FIN5b-4: the SIM-01 row, 6 s, is off the list), and
-/// the per-mutant suite without them about 10 s.
+/// `kat` and `nextest` steps run them on every PR; they take 10–619 s each (FIN5b-4, C2-18b: the two entries below the
+/// ≈ 10 s of the rule — `sim_loss_breaks_links_eventual_delivery`, 6 s, and `ai07_fault_paired_tokio`, 5 s on the 32-core
+/// container, 3.8 s on the 4-core one — are off the list), and the per-mutant suite without them about 10 s.
 pub(crate) const MUTANT_HARNESS_SKIP_TESTS: &[(&str, &str)] = &[
     (
         "activity_independence_balanced_virtual",
@@ -591,10 +592,6 @@ pub(crate) const MUTANT_HARNESS_SKIP_TESTS: &[(&str, &str)] = &[
     (
         "ai06_both_directions_tokio",
         "AI-06 over the tokio driver, 8 traces x 6 h: 43 s",
-    ),
-    (
-        "ai07_fault_paired_tokio",
-        "AI-07 over the tokio driver, fault-paired, 4 traces x 1 min: 5 s",
     ),
     // the `two-clients` rows with a relay on 127.0.0.1 and the long exchange (M6 Phase C2-1), nextest on the 32-core
     // container, the two real-time rows in parallel (WEISUNG M6-C2-2, ADR-047 Am. 1 (5))

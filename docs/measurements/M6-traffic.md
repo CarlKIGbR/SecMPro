@@ -39,7 +39,7 @@ owner-operated measurement carries the reason and the date of its absence. ADR-0
 
 ## Bandwidth
 
-Bytes on the wire of the link layer (4 352-B frames), without Tor, per scenario (4 and 5 contacts) steady state (MR-01, 24 virtual hours;
+Bytes on the wire of the link layer (4 352-B frames), without Tor, per scenario (Strict 1 contact, Balanced 4, Low-bw 5) steady state (MR-01, 24 virtual hours;
 `M6-evidence/MR-01.txt`):
 
 | mode (scenario) | model, B/s | measured, B/s while up | error | measured, MB/day |
@@ -105,7 +105,7 @@ ADR-018 stays **"Proposed (owner decides after M6)"**; the table is the executor
 
 | parameter | provisional value (spec §4.2) | measured cost | §10.1 check | recommendation |
 |---|---|---|---|---|
-| `PERIODS` | {10, 20, 40, 80} s | Strict 3 045.9 B/s = 263.2 MB/day per contact at P = 10 s (measured); at 20 / 40 / 80 s ½ / ¼ / ⅛ of it (model, the rate is ∝ 1/P) | AI-01…AI-06: max \|Δt\| = 0 ms on both directions, 64 traces × 6 h; AI-10 / AI-07 loopback part: KS test of the departure gaps (`ks-hour`, dispatch); AI-07 loopback: MET, run 39942819176 (analyser of `60083af` shape-checked the 4 long links, 5 678 frames; 32 units on short scheduled connections were not shape-checked — FIN5b-2, fixed in C2-18; re-run of `ks-hour` on the fixed head requested, owner dispatch) | keep |
+| `PERIODS` | {10, 20, 40, 80} s | Strict 3 045.9 B/s = 263.2 MB/day per contact at P = 10 s (measured); at 20 / 40 / 80 s ½ / ¼ / ⅛ of it (model, the rate is ∝ 1/P) | AI-01…AI-06: max \|Δt\| = 0 ms on both directions, 64 traces × 6 h; AI-10 / AI-07 loopback part: KS test of the departure gaps (`ks-hour`, dispatch); AI-07 loopback: MET, run 39942819176 (analyser of `60083af` shape-checked the 4 long links, 5 678 frames; 24 units on 8 pool control connections (QUEUE_NEW one-shots) plus 8 long-link handshake units were outside the C2-12 shape check; control slots are now checked separately — FIN5b-2 / C2-18b; re-run of `ks-hour` on the fixed head requested, owner dispatch) | keep |
 | `T_BALANCED` | 10 s | 4 786.3 B/s = 413.5 MB/day for 4 contacts (measured) | AI-02; Balanced KS in `ks-hour`: frames per departure constant 2 | keep |
 | `T_LOWBW` | 30 s | 1 594.7 B/s = 137.8 MB/day for 5 contacts (measured) | AI-03 | keep |
 | `F` | 4 cells per `FETCH` | Strict: queue drained in 42 receive ticks after 24 h offline (bound 45) | drain is part of the fixed slot, no extra operation | keep |

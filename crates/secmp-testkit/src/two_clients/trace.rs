@@ -12,6 +12,7 @@
 //! cross ([`Traced`]): the lengths of the handshake records are those of spec D.1 (`HELLO` 9, `RELAYINFO` 1 744,
 //! `HS1` 2 856, `HS2` 1 156); every later unit is a frame of 4 352 bytes.
 
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::io::Write as _;
 use std::pin::Pin;
@@ -60,6 +61,8 @@ struct Inner {
     errors: Vec<(u64, String)>,
     /// The run is over: streams dropped from now on are not residuals.
     sealed: bool,
+    /// The isolation key each link slot was connected with (the driver's, fresh for every connection), by slot.
+    isolations: BTreeMap<u64, u64>,
 }
 
 /// What a run recorded (shared by both clients of a process).
@@ -116,10 +119,19 @@ impl Recorder {
     /// A stream of the run under this recorder: its units are recorded as they cross (see [`TracedStream`]); the link
     /// slot is the next in creation order.
     pub fn wrap<S>(self: &Arc<Self>, inner: S) -> TracedStream<S> {
+        self.wrap_isolated(inner, None)
+    }
+
+    /// As [`Recorder::wrap`], remembering the isolation key the connection was made with ([`Recorder::isolations`]).
+    pub fn wrap_isolated<S>(self: &Arc<Self>, inner: S, isolation: Option<u64>) -> TracedStream<S> {
+        let slot = self.next_slot();
+        if let Some(key) = isolation {
+            self.lock().isolations.insert(slot, key);
+        }
         TracedStream {
             inner,
             rec: Arc::clone(self),
-            slot: self.next_slot(),
+            slot,
             pending: 0,
             read: ReadSide::default(),
             lenient: false,
@@ -143,6 +155,12 @@ impl Recorder {
     /// A message event at `t_ms`.
     pub fn event(&self, event: &'static str, msg: u64, t_ms: u64) {
         self.lock().events.push(EventRec { event, msg, t_ms });
+    }
+
+    /// The isolation key of each slot's connection, by slot (C2-18b: it tells a control connection from a link).
+    #[must_use]
+    pub fn isolations(&self) -> BTreeMap<u64, u64> {
+        self.lock().isolations.clone()
     }
 
     /// The units recorded so far.
@@ -391,7 +409,7 @@ impl<P: StreamProvider> StreamProvider for Traced<P> {
         isolation: Isolation,
     ) -> Result<Self::Stream, TransportError> {
         let inner = self.inner.connect(relay, isolation).await?;
-        let mut stream = self.rec.wrap(inner);
+        let mut stream = self.rec.wrap_isolated(inner, Some(isolation.0));
         stream.lenient = self.lenient;
         Ok(stream)
     }

@@ -10,7 +10,7 @@
 //! favours "no dependence" — AI-10 is the control that the tool still sees a shift of one millisecond at the row's `n`
 //! when the jitter of the timer is at most a few milliseconds wide.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// The result of one test.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -107,6 +107,12 @@ pub struct Report {
     pub slots_checked: usize,
     /// How many of them have fewer than `min_frames` frames and so enter no KS sample.
     pub slots_below_min: usize,
+    /// The number of control slots (the pool's one-shot connections, spec §10.6), checked apart from the link slots.
+    pub control_slots: usize,
+    /// The fewest and the most 4 352 B units on one control slot.
+    pub control_frames: (u64, u64),
+    /// Every control slot is HELLO (9 B) + HS1 (2 856 B) + 4 352 B units, nothing else.
+    pub control_ok: bool,
 }
 
 impl Report {
@@ -159,16 +165,91 @@ fn departures_of(times: &mut [u64]) -> Vec<(u64, u64)> {
     departures
 }
 
-/// Every scheduled slot — one with at least one frame of [`FRAME`] bytes, however few — and its frame times. The KS
-/// samples ([`gaps`]) need `min_frames` of them; the shape checks (unit length, frames per departure) do not (FIN5b-2).
-fn scheduled_slots(frames: &[Frame]) -> BTreeMap<u64, Vec<u64>> {
+/// Every link slot — every slot of `frames` that is not a control slot, whatever the lengths of its units (C2-18b, F2: a
+/// slot of wrong-sized units only is a link slot too) — and the times of its frames of [`FRAME`] bytes. The KS samples
+/// ([`gaps_of`]) need `min_frames` of them; the shape checks (unit length, frames per departure) do not (FIN5b-2). The
+/// control slots (the pool's `QUEUE_NEW` one-shot connections, spec §10.6) are not link traffic and are checked apart
+/// ([`control_shape`], C2-18b F1).
+fn link_slots(frames: &[Frame], control: &BTreeSet<u64>) -> BTreeMap<u64, Vec<u64>> {
     let mut by_slot: BTreeMap<u64, Vec<u64>> = BTreeMap::new();
     for (t, slot, len) in frames {
+        if control.contains(slot) {
+            continue;
+        }
+        let times = by_slot.entry(*slot).or_default();
         if *len == FRAME {
-            by_slot.entry(*slot).or_default().push(*t);
+            times.push(*t);
         }
     }
     by_slot
+}
+
+/// The frames minus the control slots.
+#[must_use]
+pub fn link_frames(frames: &[Frame], control: &BTreeSet<u64>) -> Vec<Frame> {
+    frames
+        .iter()
+        .filter(|f| !control.contains(&f.1))
+        .copied()
+        .collect()
+}
+
+/// The units up to the end of the last whole departure at or before `end`: a departure whose frames straddle `end` is
+/// dropped entirely, as is everything after it (C2-18b F3: a cut inside a departure would leave a one-frame departure).
+/// Departures are formed per slot from units less than [`SAME_SLOT_MS`] apart, whatever their lengths.
+#[must_use]
+pub fn cut_at(frames: &[Frame], end: u64) -> Vec<Frame> {
+    let mut by_slot: BTreeMap<u64, Vec<Frame>> = BTreeMap::new();
+    for f in frames {
+        by_slot.entry(f.1).or_default().push(*f);
+    }
+    let mut out = Vec::new();
+    for (_, mut units) in by_slot {
+        units.sort_by_key(|f| f.0);
+        let mut group: Vec<Frame> = Vec::new();
+        let mut last = 0_u64;
+        for f in units {
+            if !group.is_empty() && f.0.saturating_sub(last) >= SAME_SLOT_MS {
+                if last <= end {
+                    out.append(&mut group);
+                } else {
+                    group.clear();
+                }
+            }
+            last = f.0;
+            group.push(f);
+        }
+        if last <= end {
+            out.append(&mut group);
+        }
+    }
+    out
+}
+
+/// The shape of the control slots in `control` that appear in `frames`: how many, the fewest and the most 4 352 B units
+/// on one, and whether every one is HELLO (9 B), HS1 (2 856 B), then 4 352 B units, nothing else (control cells are cells).
+fn control_shape(frames: &[Frame], control: &BTreeSet<u64>) -> (usize, (u64, u64), bool) {
+    let mut counts: Vec<u64> = Vec::new();
+    let mut ok = true;
+    for slot in control {
+        let mut units: Vec<&Frame> = frames.iter().filter(|f| f.1 == *slot).collect();
+        if units.is_empty() {
+            continue;
+        }
+        units.sort_by_key(|f| f.0);
+        let mut n = 0_u64;
+        for (i, (_, _, len)) in units.iter().enumerate() {
+            match (i, *len) {
+                (0, 9) | (1, 2_856) => {}
+                (i, FRAME) if i >= 2 => n = n.saturating_add(1),
+                _ => ok = false,
+            }
+        }
+        counts.push(n);
+    }
+    let lo = counts.iter().min().copied().unwrap_or(0);
+    let hi = counts.iter().max().copied().unwrap_or(0);
+    (counts.len(), (lo, hi), ok)
 }
 
 /// The scheduled links' samples: for each slot with at least `min_frames` frames of [`FRAME`] bytes, the gaps between
@@ -177,11 +258,21 @@ fn scheduled_slots(frames: &[Frame]) -> BTreeMap<u64, Vec<u64>> {
 /// frames of every departure.
 #[must_use]
 pub fn gaps(frames: &[Frame], split: u64, min_frames: usize) -> BTreeMap<u64, Samples> {
+    gaps_of(&link_slots(frames, &BTreeSet::new()), split, min_frames)
+}
+
+/// [`gaps`] of the link slots already collected by [`link_slots`].
+fn gaps_of(
+    slots: &BTreeMap<u64, Vec<u64>>,
+    split: u64,
+    min_frames: usize,
+) -> BTreeMap<u64, Samples> {
     let mut out = BTreeMap::new();
-    for (slot, mut times) in scheduled_slots(frames) {
+    for (slot, times) in slots {
         if times.len() < min_frames {
             continue;
         }
+        let mut times = times.clone();
         let departures = departures_of(&mut times);
         let mut samples = Samples::default();
         for (at, count) in &departures {
@@ -199,7 +290,7 @@ pub fn gaps(frames: &[Frame], split: u64, min_frames: usize) -> BTreeMap<u64, Sa
                 samples.active.push(to.saturating_sub(*from));
             }
         }
-        out.insert(slot, samples);
+        out.insert(*slot, samples);
     }
     out
 }
@@ -219,7 +310,22 @@ fn units_are_frames(frames: &[Frame], scheduled: &[u64]) -> bool {
 /// The test of every scheduled link and of all pooled.
 #[must_use]
 pub fn analyse(frames: &[Frame], split: u64, min_frames: usize) -> Option<Report> {
-    let per = gaps(frames, split, min_frames);
+    analyse_with(frames, split, min_frames, &BTreeSet::new())
+}
+
+/// As [`analyse`], with the slots of the control connections: the pool's one-shot connections are not link slots, they
+/// enter neither the KS samples nor the link shape checks, and have their own check ([`control_shape`]).
+#[must_use]
+pub fn analyse_with(
+    frames: &[Frame],
+    split: u64,
+    min_frames: usize,
+    control: &BTreeSet<u64>,
+) -> Option<Report> {
+    // FIN5b-2: the shape checks run over every link slot, the short connections included; `min_frames` gates only the
+    // KS samples
+    let slots = link_slots(frames, control);
+    let per = gaps_of(&slots, split, min_frames);
     let (mut all_idle, mut all_active) = (Vec::new(), Vec::new());
     let (mut all_idle_n, mut all_active_n) = (Vec::new(), Vec::new());
     let (mut per_link, mut counts_per_link) = (Vec::new(), Vec::new());
@@ -236,10 +342,8 @@ pub fn analyse(frames: &[Frame], split: u64, min_frames: usize) -> Option<Report
     }
     let pooled = two_sample(&all_idle, &all_active)?;
     let counts_pooled = two_sample(&all_idle_n, &all_active_n)?;
-    // FIN5b-2: the shape checks run over every scheduled slot, the short connections included
-    let all_slots = scheduled_slots(frames);
     let mut per_departure: Vec<u64> = Vec::new();
-    for times in all_slots.values() {
+    for times in slots.values() {
         let mut times = times.clone();
         per_departure.extend(departures_of(&mut times).iter().map(|d| d.1));
     }
@@ -247,7 +351,8 @@ pub fn analyse(frames: &[Frame], split: u64, min_frames: usize) -> Option<Report
         per_departure.iter().min().copied()?,
         per_departure.iter().max().copied()?,
     );
-    let scheduled: Vec<u64> = all_slots.keys().copied().collect();
+    let scheduled: Vec<u64> = slots.keys().copied().collect();
+    let (control_slots, control_frames, control_ok) = control_shape(frames, control);
     Some(Report {
         per_link,
         pooled,
@@ -258,6 +363,9 @@ pub fn analyse(frames: &[Frame], split: u64, min_frames: usize) -> Option<Report
         all_frames_full: units_are_frames(frames, &scheduled),
         slots_checked: scheduled.len(),
         slots_below_min: scheduled.len().saturating_sub(per.len()),
+        control_slots,
+        control_frames,
+        control_ok,
     })
 }
 
@@ -304,6 +412,26 @@ pub fn evidence(report: &Report) -> String {
         report.slots_checked, report.slots_below_min
     );
     let _ = writeln!(s, "all units 4352 B: {}", report.all_frames_full);
+    if report.control_slots == 0 {
+        let _ = writeln!(s, "control slots: 0");
+    } else {
+        let (lo, hi) = report.control_frames;
+        let k = if lo == hi {
+            lo.to_string()
+        } else {
+            format!("{lo}–{hi}")
+        };
+        let _ = writeln!(
+            s,
+            "control slots: {} (handshake + {k} × 4352 B units)",
+            report.control_slots
+        );
+    }
+    let _ = writeln!(
+        s,
+        "control slots all handshake + 4352 B units: {}",
+        report.control_ok
+    );
     s
 }
 
@@ -469,19 +597,116 @@ mod tests {
             .collect()
     }
 
-    /// FIN5b-2 (positive control): four long links plus one short connection with clean frames: every shape check
-    /// holds, the short slot is counted as shape-checked only, and the criterion's inputs are all MET.
+    /// The handshake records at the start of a connection: HELLO (9 B), HS1 (2 856 B).
+    fn handshake(slot: u64) -> Vec<Frame> {
+        vec![(0, slot, 9), (0, slot, 2_856)]
+    }
+
+    /// A control slot (a pool one-shot, `QUEUE_NEW`): the handshake records and `k` frames of 4 352 B from `from` on.
+    fn control_slot(slot: u64, from: u64, k: u64) -> Vec<Frame> {
+        let mut v = vec![(from, slot, 9), (from, slot, 2_856)];
+        v.extend((0..k).map(|i| (from.saturating_add(10).saturating_add(i), slot, FRAME)));
+        v
+    }
+
+    /// The real run's shape: four long links of two frames per departure with their handshake records, one short link
+    /// slot (99), and eight control slots (200…207) of one frame each.
+    fn real_shape() -> (Vec<Frame>, BTreeSet<u64>) {
+        let mut frames: Vec<Frame> = (0..4).flat_map(handshake).collect();
+        frames.extend(trace(4, 360, 0, 3, 2, 11));
+        frames.extend(handshake(99));
+        frames.extend(short_slot(99, 1_000_000));
+        let control: BTreeSet<u64> = (200..208).collect();
+        for slot in &control {
+            frames.extend(control_slot(
+                *slot,
+                2_000_000_u64.saturating_add(slot.saturating_mul(1_000)),
+                1,
+            ));
+        }
+        (frames, control)
+    }
+
+    /// FIN5b-2 (positive control, reworked in C2-18b): the real run's shape — link slots with two frames per departure and
+    /// a short link slot, control slots with one frame — is MET in every input of the criterion.
     #[test]
     fn short_connection_with_clean_frames_stays_met() {
-        let mut frames = trace(4, 360, 0, 3, 2, 11);
-        frames.extend(short_slot(99, 1_000_000));
-        let r = analyse(&frames, SPLIT, 100).unwrap();
+        let (frames, control) = real_shape();
+        let r = analyse_with(&frames, SPLIT, 100, &control).unwrap();
         assert_eq!(r.per_link.len(), 4);
         assert!(r.all_frames_full);
         assert_eq!(r.constant_frames_per_departure(), Some(2));
         assert_eq!((r.slots_checked, r.slots_below_min), (5, 1));
+        assert!(r.control_ok);
         assert!(r.per_link.iter().all(|(_, k)| k.p >= 0.01));
-        assert!(evidence(&r).contains("slots checked: 5 (1 below min_frames, shape-checked only)"));
+        let e = evidence(&r);
+        assert!(
+            e.contains("slots checked: 5 (1 below min_frames, shape-checked only)"),
+            "{e}"
+        );
+        assert!(
+            e.contains("control slots: 8 (handshake + 1 × 4352 B units)"),
+            "{e}"
+        );
+    }
+
+    /// C2-18b (F1): eight control slots of one frame each (the pool's `QUEUE_NEW` one-shots) are not link departures: the
+    /// criterion's inputs stay MET. RED on `640ceff`, which counted them as link slots (frames per departure (1, 2)).
+    #[test]
+    fn eight_one_frame_control_slots_stay_met() {
+        let (frames, control) = real_shape();
+        let r = analyse_with(&frames, SPLIT, 100, &control).unwrap();
+        assert_eq!(
+            r.frames_per_departure,
+            (2, 2),
+            "control slots counted as link departures"
+        );
+        assert_eq!(r.control_slots, 8);
+        assert_eq!(r.control_frames, (1, 1));
+    }
+
+    /// C2-18b: a short link slot whose last departure has one frame is a finding.
+    #[test]
+    fn one_frame_departure_on_a_link_slot_is_not_met() {
+        let (mut frames, control) = real_shape();
+        frames.push((1_100_000, 99, FRAME));
+        let r = analyse_with(&frames, SPLIT, 100, &control).unwrap();
+        assert_eq!(r.frames_per_departure, (1, 2));
+        assert_eq!(r.constant_frames_per_departure(), None);
+    }
+
+    /// C2-18b (F2): a link slot with only wrong-sized units (HELLO + HS1 + 4 353 B) is a finding, though it has no 4 352 B
+    /// unit. RED on `640ceff`, which never counted such a slot as scheduled.
+    #[test]
+    fn link_slot_with_only_wrong_sized_units_is_not_met() {
+        let (mut frames, control) = real_shape();
+        frames.extend([
+            (3_000_000, 300, 9),
+            (3_000_000, 300, 2_856),
+            (3_000_010, 300, FRAME + 1),
+        ]);
+        let r = analyse_with(&frames, SPLIT, 100, &control).unwrap();
+        assert!(
+            !r.all_frames_full,
+            "a link slot of wrong-sized units was not checked"
+        );
+        assert!(evidence(&r).contains("all units 4352 B: false"));
+    }
+
+    /// C2-18b: control cells are cells — a control slot with a unit of another length is a finding too.
+    #[test]
+    fn control_slot_with_a_wrong_sized_unit_is_not_met() {
+        let (mut frames, mut control) = real_shape();
+        frames.extend([
+            (3_000_000, 300, 9),
+            (3_000_000, 300, 2_856),
+            (3_000_010, 300, FRAME + 1),
+        ]);
+        control.insert(300);
+        let r = analyse_with(&frames, SPLIT, 100, &control).unwrap();
+        assert!(!r.control_ok);
+        assert!(r.all_frames_full, "the link slots are untouched");
+        assert!(evidence(&r).contains("control slots all handshake + 4352 B units: false"));
     }
 
     /// FIN5b-2: one 4 353 B unit on a short scheduled connection is a finding (`all units 4352 B: false`), as on a long one.
@@ -504,6 +729,27 @@ mod tests {
         let r = analyse(&frames, SPLIT, 100).unwrap();
         assert_eq!(r.frames_per_departure, (2, 3));
         assert_eq!(r.constant_frames_per_departure(), None);
+    }
+
+    /// C2-18b (F3): a departure that straddles the end of the active hour is dropped whole, one that ends at or before it is
+    /// kept, and a slot with nothing straddling is untouched.
+    #[test]
+    fn the_cut_drops_a_straddling_departure_whole() {
+        let slot = |id: u64| -> Vec<Frame> {
+            [0, 1, 10_000, 10_001, 20_000, 20_001]
+                .iter()
+                .map(|t| (*t, id, FRAME))
+                .collect()
+        };
+        let frames: Vec<Frame> = slot(1).into_iter().chain(slot(2)).collect();
+        // the third departure (20 000, 20 001) straddles 20 000: both its frames go, on both slots
+        let cut = cut_at(&frames, 20_000);
+        assert_eq!(cut.len(), 8, "{cut:?}");
+        assert!(cut.iter().all(|f| f.0 <= 10_001));
+        // at 20 001 it is whole and stays
+        assert_eq!(cut_at(&frames, 20_001).len(), 12);
+        // a cut before the first departure keeps nothing
+        assert!(cut_at(&frames, 0).is_empty());
     }
 
     #[test]

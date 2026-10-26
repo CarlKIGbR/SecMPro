@@ -17,6 +17,7 @@
 #![forbid(unsafe_code)]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::io::Write as _;
 use std::path::PathBuf;
@@ -38,6 +39,8 @@ const SPLIT: u64 = 10_000_000;
 /// The frames of a pair, as `(t, slot, len)` of the C2R units, and the time of its first message.
 struct Pair {
     frames: Vec<Frame>,
+    /// The slots of the pool's one-shot control connections (spec §10.6), not link slots.
+    control: BTreeSet<u64>,
     first_message_ms: u64,
 }
 
@@ -114,6 +117,7 @@ async fn run_pair(
         .collect();
     Ok(Pair {
         frames,
+        control: observer.control_slots(),
         first_message_ms,
     })
 }
@@ -133,11 +137,12 @@ async fn run(out_dir: PathBuf, idle_s: u64, active_s: u64) -> Result<bool, Strin
     let pairs = [a?, b?];
     // both pairs on one time axis: the first message of each at the common split
     let mut frames: Vec<Frame> = Vec::new();
+    let mut control: BTreeSet<u64> = BTreeSet::new();
     let mut shown = String::new();
     say(
         &mut shown,
         &format!(
-            "ks-hour: idle {idle_s} s, active {active_s} s, P = 10 s, 2 contacts, loopback TLS (direct mode: the effective mode is Balanced, spec §10.2; frames of one slot are one departure)"
+            "ks-hour: idle {idle_s} s, active {active_s} s, P = 10 s, 2 contacts, loopback TLS (direct mode: the effective mode is Balanced, spec §10.2; frames of one slot are one departure; the trace is cut on departure boundaries at the end of the active hour; the pool's one-shot control connections are excluded from the link analysis and checked apart)"
         ),
     );
     for (i, pair) in pairs.iter().enumerate() {
@@ -147,17 +152,17 @@ async fn run(out_dir: PathBuf, idle_s: u64, active_s: u64) -> Result<bool, Strin
         let end = pair
             .first_message_ms
             .saturating_add(active_s.saturating_mul(1000));
-        for (t, slot, len) in &pair.frames {
-            if *t <= end {
-                let moved = t
-                    .saturating_add(SPLIT)
-                    .saturating_sub(pair.first_message_ms);
-                frames.push((moved, slot.saturating_add(slot_base), *len));
-            }
+        // cut on departure boundaries: a departure that straddles the end of the active hour is dropped whole (C2-18b)
+        for (t, slot, len) in ks::cut_at(&pair.frames, end) {
+            let moved = t
+                .saturating_add(SPLIT)
+                .saturating_sub(pair.first_message_ms);
+            frames.push((moved, slot.saturating_add(slot_base), len));
         }
+        control.extend(pair.control.iter().map(|c| c.saturating_add(slot_base)));
     }
-    let report =
-        ks::analyse(&frames, SPLIT, 100).ok_or("no scheduled link had gaps in both hours")?;
+    let report = ks::analyse_with(&frames, SPLIT, 100, &control)
+        .ok_or("no scheduled link had gaps in both hours")?;
     let mut digest_input = String::new();
     frames.sort_unstable();
     for (t, slot, len) in &frames {
@@ -169,13 +174,14 @@ async fn run(out_dir: PathBuf, idle_s: u64, active_s: u64) -> Result<bool, Strin
         h
     });
     say(&mut shown, &ks::evidence(&report));
-    for (slot, samples) in ks::gaps(&frames, SPLIT, 100) {
+    let link_frames = ks::link_frames(&frames, &control);
+    for (slot, samples) in ks::gaps(&link_frames, SPLIT, 100) {
         let median = |v: &[u64]| {
             let mut v = v.to_vec();
             v.sort_unstable();
             v.get(v.len() / 2).copied().unwrap_or(0)
         };
-        let total = frames
+        let total = link_frames
             .iter()
             .filter(|f| f.1 == slot && f.2 == ks::FRAME)
             .count();
@@ -201,11 +207,12 @@ async fn run(out_dir: PathBuf, idle_s: u64, active_s: u64) -> Result<bool, Strin
         && report.counts_pooled.p >= 0.01
         && per_departure
         && report.all_frames_full
+        && report.control_ok
         && report.per_link.len() >= 4;
     say(
         &mut shown,
         &format!(
-            "criterion (p >= 0.01 per link and pooled, 4 links, a constant 2 frames per departure, 4352 B): {}",
+            "criterion (p >= 0.01 per link and pooled, 4 links, a constant 2 frames per departure on every link slot, 4352 B units, control slots handshake + 4352 B units): {}",
             if ok { "MET" } else { "NOT MET" }
         ),
     );

@@ -290,6 +290,8 @@ pub struct Observer {
     evicted: Mutex<Vec<u64>>,
     /// Every connection the drivers opened: time (ms), purpose.
     connects: Mutex<Vec<(u64, secmp_client_core::scheduler::run::Purpose)>>,
+    /// The isolation keys of the connections opened for control operations (the pool's `QUEUE_NEW` one-shots, spec §10.6).
+    control_isolations: Mutex<Vec<u64>>,
     events: Mutex<Vec<(u64, secmp_client_core::scheduler::types::LinkEvent)>>,
     rec: Mutex<Option<Arc<Recorder>>>,
     registered: Mutex<Vec<Registered>>,
@@ -339,6 +341,28 @@ impl Observer {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
+    }
+
+    /// The slots of the recorder whose connection was opened for a control operation (the pool's one-shot connections,
+    /// not link traffic; C2-18b), as far as the runs ended and reported.
+    #[must_use]
+    pub fn control_slots(&self) -> std::collections::BTreeSet<u64> {
+        let keys: std::collections::BTreeSet<u64> = self
+            .control_isolations
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .copied()
+            .collect();
+        self.recorder()
+            .map(|r| {
+                r.isolations()
+                    .into_iter()
+                    .filter(|(_, key)| keys.contains(key))
+                    .map(|(slot, _)| slot)
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     /// The local events of the scheduler (`Up`, `TornDown`, …) with their times, as far as the runs ended and reported.
@@ -1217,6 +1241,17 @@ async fn finish<P: StreamProvider + 'static, R: Rand>(
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
                 .extend(log.connects.iter().map(|(t, p, _)| (*t, *p)));
+            o.control_isolations
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .extend(
+                    log.connects
+                        .iter()
+                        .filter(|(_, p, _)| {
+                            matches!(p, secmp_client_core::scheduler::run::Purpose::Control(_))
+                        })
+                        .map(|(_, _, i)| i.0),
+                );
         }
         node.driver
             .shutdown(&mut node.sched)

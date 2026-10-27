@@ -1,0 +1,17 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//! A0 probe, scratch only: links the SQLCipher/OpenSSL C code under cargo-fuzz's sanitizer flags and runs it: an
+//! in-memory SQLCipher database keyed with the input's first 32 bytes stores and reads back the rest.
+#![no_main]
+
+use libfuzzer_sys::fuzz_target;
+
+fuzz_target!(|data: &[u8]| {
+    let _ = secmp_store::probe_cipher_version();
+    if let Some((key, rest)) = data.split_first_chunk::<32>() {
+        let hex: String = key.iter().map(|b| format!("{b:02x}")).collect();
+        if let Ok(c) = secmp_store::rusqlite_open_keyed(&hex) {
+            let _ = c.execute("CREATE TABLE t (v BLOB)", []);
+            let _ = c.execute("INSERT INTO t VALUES (?1)", [rest]);
+        }
+    }
+});

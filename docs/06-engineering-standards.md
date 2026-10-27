@@ -92,12 +92,12 @@ Crypto-specific rules (enforced by review checklist and, where possible, by type
 
 CI triggers (M2, 2026-09-29): `push` runs only for `main`; every PR head is covered by its `pull_request` run, whose jobs are the `main-protection` required checks (a cancelled push run on `7d4e4f0` had left `cancelled` check runs under the required names and blocked the merge). Required job names exist only in the pull_request/push workflow; dispatch workflows use distinct job names (M2 review C2: `ci.yml` holds the required checks and has no `workflow_dispatch`; on-demand runs use `ci-dispatch.yml`, checked by `cargo xtask policy`).
 
-Jobs of `ci.yml` (pinned by `expect::PINNED_JOBS`; the first four and `ci-verdict` are the required checks of the `main-protection` ruleset, the others are the jobs `linux-full` delegates to and become required checks once the owner adds them to the ruleset):
+Jobs of `ci.yml` (pinned by `expect::PINNED_JOBS`, budgets by `expect::JOB_BUDGETS`; the first four and `ci-verdict` are the required checks of the `main-protection` ruleset, the others are the jobs `linux-full` delegates to and become required checks once the owner adds them to the ruleset):
 
 | Job | What | Budget (`timeout-minutes`) |
 |---|---|---|
-| `linux-fast` | `ci-fast` (steps 1–5), SBOM, systemd exposure | 90 |
-| `windows-native` | native MSVC build, clippy, tests, KATs, hello | 90 |
+| `linux-fast` | `ci-fast` (steps 1–5) less the delegated `harness` step, SBOM, systemd exposure | 120 |
+| `windows-native` | native MSVC build, clippy, tests, KATs, the testkit harness binary, hello | 90 |
 | `xwin-cross` | `cargo-xwin` cross-build, less the store-dependent crates of `expect::XWIN_EXCLUDE` (ADR-034 Amendment 1) | 60 |
 | `linux-full` | `ci-full` steps 1–14 less the delegated ones (`windows-*`, `mutants`, `ct`, `fuzz`, `kani`, `proverif-link`) | 240 |
 | `ct` | constant-time gate (step 5), `--delegated ct` | 330 |
@@ -105,6 +105,7 @@ Jobs of `ci.yml` (pinned by `expect::PINNED_JOBS`; the first four and `ci-verdic
 | `proverif-hx`, `proverif-link` | ProVerif SecMP-HX and SecMP-LINK models (step 10), `--delegated proverif-link` | 180, 120 |
 | `kani` | Kani harnesses (step 9: every `KANI_PACKAGES`, `-Z stubbing` where used, the verified-harness and cover pins), `--delegated kani` (M6, WEISUNG M6-11, VD-M6-A-23: `linux-full` had passed 240 min); `SECMP_RUNNER_TRACE=1`: xtask writes a `runner-trace` line (memory, swap, disk, largest process) every 20 s to the job log (M6-15) | 150 |
 | `fuzz` | fuzz smoke (step 6, every target, `FUZZ_SMOKE_SECONDS` each), `--delegated fuzz` (M6-CI, WEISUNG M6-CI-1 §4, ADR-047 Amendment 5) | 120 |
+| `harness` | the testkit `harness` binary (step 5 `harness`: in-process harness, virtual-time and loopback simulations, its property tests with the CI run seed), `--delegated harness` from `linux-fast` and `linux-full` (M7, TEST-SPEC-M7 G7-07, ADR-045 Amendment 12); every event, like `linux-fast` | 150 |
 | `ci-verdict` | the aggregate check: green only if every other job above ended `success` (`needs:` all of them, `NEEDS_JSON`, `step ci-verdict`; ADR-045 Amendment 2) | 15 |
 
 Integration precondition (OPEN-M6-C-1, closed by spec reading): a contact enters the scheduler only after its first ratchet step, so both parties hold a sending chain before any combined relay link is built.

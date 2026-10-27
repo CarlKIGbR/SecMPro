@@ -180,8 +180,8 @@ pub(crate) fn cooldown(ctx: &Ctx) -> Result<Outcome> {
 
 /// The nextest filterset of the workspace run: not the `secmp-testkit` `harness` binary. Feature unification enables
 /// `secmp-testkit/harness` in a `--workspace` build (dev-dependency of `secmp-transport`, TLS-01…TLS-11), which
-/// would run the long simulations here a second time; the `kat` step is the one runner of that binary (WEISUNG
-/// M6-CI-1, ADR-047 Amendment 5).
+/// would run the long simulations here a second time; the `harness` step is the one runner of that binary (WEISUNG
+/// M6-CI-1, ADR-047 Amendment 5; from M7 its own step and job, ADR-045 Amendment 12).
 pub(crate) const NEXTEST_WORKSPACE_FILTER: &str = "not binary(=harness)";
 
 /// The workspace `cargo nextest` arguments (feature unification enables `kat` of `secmp-proto` through `secmp-testkit`).
@@ -313,6 +313,25 @@ pub(crate) fn kat(ctx: &Ctx) -> Result<Outcome> {
         list(&found),
         crate::testscan::kat_seed_detail(ci_seed)
     )))
+}
+
+/// The testkit `harness` binary (TEST-SPEC-M7 G7-07, OPEN-M7-18 A, ADR-045 Amendment 12): the in-process harness and
+/// the virtual-time and loopback simulations, out of the `kat` step (36–63 min on 4 vCPU, ADR-045 Amendment 10) and into
+/// the pinned job `harness`; `linux-fast` and `linux-full` delegate it there, `windows-native` runs it by name. The same
+/// build as the testkit's kat run (`--features kat`), with [`crate::testscan::SEED_ENV`] handled as in `kat`.
+pub(crate) fn harness(_: &Ctx) -> Result<Outcome> {
+    tools::require(tools::NEXTEST)?;
+    let ci_seed = crate::testscan::ci_run_seed()?;
+    for run in crate::testscan::harness_runs(ci_seed) {
+        // as in `kat`: on Windows without `expect::WINDOWS_SKIP_TESTS`
+        let run = if cfg!(windows) {
+            crate::testscan::windows_scoped(run)
+        } else {
+            run
+        };
+        run.run()?;
+    }
+    Ok(Outcome::Pass(crate::testscan::harness_seed_detail(ci_seed)))
 }
 
 /// dudect-style constant-time tests (docs/06 §2, §4; ADR-038, ADR-041 with Amendment 1): `cargo bench --package
@@ -3709,7 +3728,8 @@ pub(crate) fn windows_cross_args() -> Vec<String> {
 pub(crate) fn windows_native(ctx: &Ctx) -> Outcome {
     if ctx.host.contains("windows") {
         return Outcome::Skip(
-            "run `cargo xtask step clippy nextest doctest kat hello` natively instead".into(),
+            "run `cargo xtask step clippy nextest doctest kat harness hello` natively instead"
+                .into(),
         );
     }
     Outcome::Skip(
@@ -4523,6 +4543,65 @@ fn sorted_str(items: &[&str]) -> Vec<String> {
     sorted(&items.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>())
 }
 
+/// TEST-SPEC-M7 G7-08 (OPEN-M7-18 A, ADR-045 Amendment 12): the `timeout-minutes` of the pinned jobs against
+/// `expect::JOB_BUDGETS`. Findings: a pinned job without a budget entry, an entry that is no pinned job, a job of
+/// `budgets` missing from `ci`, a job whose `timeout-minutes` is absent, not a number or another value, and the same for
+/// its dispatch twin (`expect::DISPATCH_TWINS`) in `dispatch`.
+pub(crate) fn job_budget_findings(
+    ci: &str,
+    dispatch: &str,
+    budgets: &[(&str, u64)],
+    twins: &[(&str, &str)],
+) -> Vec<String> {
+    let mut out = Vec::new();
+    for job in expect::PINNED_JOBS {
+        if !budgets.iter().any(|(j, _)| j == job) {
+            out.push(format!(
+                "job-budgets: pinned job `{job}` has no entry in expect::JOB_BUDGETS"
+            ));
+        }
+    }
+    let minutes = |text: &str, job: &str| -> Option<Option<u64>> {
+        yaml_jobs(text).into_iter().find(|j| j.id == job).map(|j| {
+            j.prop("timeout-minutes")
+                .and_then(|m| m.trim().parse().ok())
+        })
+    };
+    for (job, want) in budgets {
+        if !expect::PINNED_JOBS.contains(job) {
+            out.push(format!(
+                "job-budgets: `{job}` of expect::JOB_BUDGETS is no pinned job"
+            ));
+        }
+        let mut places = vec![("ci.yml", ci, *job)];
+        if let Some((twin, _)) = twins.iter().find(|(_, j)| j == job) {
+            places.push(("ci-dispatch.yml", dispatch, *twin));
+        }
+        for (file, text, id) in places {
+            match minutes(text, id) {
+                None => out.push(format!("job-budgets: no job `{id}` in {file}")),
+                Some(None) => out.push(format!(
+                    "job-budgets: {file} `{id}` has no numeric `timeout-minutes` (pinned {want})"
+                )),
+                Some(Some(found)) if found != *want => out.push(format!(
+                    "job-budgets: {file} `{id}` has `timeout-minutes: {found}`, pinned {want} (expect::JOB_BUDGETS)"
+                )),
+                Some(Some(_)) => {}
+            }
+        }
+    }
+    out
+}
+
+/// The job-level property `key` of job `job` of a workflow (`None`: no such job or no such property).
+#[cfg(test)]
+pub(crate) fn job_prop(text: &str, job: &str, key: &str) -> Option<String> {
+    yaml_jobs(text)
+        .into_iter()
+        .find(|j| j.id == job)
+        .and_then(|j| j.prop(key).map(str::to_owned))
+}
+
 /// The `cargo xtask` gate `run:` lines of job `job` of a workflow, in order (`install-tools` aside).
 #[cfg(test)]
 pub(crate) fn job_gate_lines(text: &str, job: &str) -> Vec<String> {
@@ -4803,6 +4882,12 @@ fn workflows(root: &Path) -> Result<String> {
         text_of(expect::REQUIRED_WORKFLOW),
         text_of(".github/workflows/ci-dispatch.yml"),
     ));
+    findings.extend(job_budget_findings(
+        text_of(expect::REQUIRED_WORKFLOW),
+        text_of(".github/workflows/ci-dispatch.yml"),
+        expect::JOB_BUDGETS,
+        expect::DISPATCH_TWINS,
+    ));
     let mut scanned = texts.clone();
     for f in walk_files(&root.join("crates"), &|p: &Path| {
         p.extension().is_some_and(|e| e == "rs") && p.components().any(|c| c.as_os_str() == "tests")
@@ -4824,7 +4909,7 @@ fn workflows(root: &Path) -> Result<String> {
         bail!("{} CI-hygiene finding(s)", findings.len());
     }
     Ok(format!(
-        "workflows: {} files, triggers/SHA pins/flow style/continue-on-error/permissions ok; pinned jobs ({}) only in ci.yml, no dispatch there, job conditions, needs, defaults/shell and gate run lines as pinned, delegations mapped (accident guard, not tamper-proof)",
+        "workflows: {} files, triggers/SHA pins/flow style/continue-on-error/permissions ok; pinned jobs ({}) only in ci.yml, no dispatch there, job conditions, needs, defaults/shell, gate run lines and budgets (also of the dispatch twins) as pinned, delegations mapped (accident guard, not tamper-proof)",
         files.len(),
         expect::PINNED_JOBS.join(", ")
     ))
@@ -6752,7 +6837,7 @@ mod tests {
 
     /// The pinned jobs `linux-full` delegates to (M4 review C-5), with their pinned conditions, `needs:` and gate lines,
     /// as they follow the required jobs in a `ci.yml` fixture.
-    const PINNED_EXTRA: &str = "  ct:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict ct\n  mutants-shard:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    strategy:\n      matrix:\n        shard:\n          - 0\n          - 1\n    steps:\n      - run: cargo xtask install-tools --set mutants\n      - run: cargo xtask step --strict mutants --shard ${{ matrix.shard }}/12\n  mutants:\n    needs: mutants-shard\n    if: always() && (github.event_name == 'schedule' || github.event_name == 'pull_request')\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict mutants-merge\n  proverif-hx:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict proverif --models hx --jobs 4\n  proverif-link:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict proverif --models link --jobs 4\n  kani:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict kani\n  fuzz:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict fuzz\n  ci-verdict:\n    needs:\n      - linux-fast\n      - windows-native\n      - xwin-cross\n      - linux-full\n      - ct\n      - mutants-shard\n      - mutants\n      - proverif-hx\n      - proverif-link\n      - kani\n      - fuzz\n    if: always() && (github.event_name == 'schedule' || github.event_name == 'pull_request')\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict ci-verdict\n";
+    const PINNED_EXTRA: &str = "  ct:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict ct\n  mutants-shard:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    strategy:\n      matrix:\n        shard:\n          - 0\n          - 1\n    steps:\n      - run: cargo xtask install-tools --set mutants\n      - run: cargo xtask step --strict mutants --shard ${{ matrix.shard }}/12\n  mutants:\n    needs: mutants-shard\n    if: always() && (github.event_name == 'schedule' || github.event_name == 'pull_request')\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict mutants-merge\n  proverif-hx:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict proverif --models hx --jobs 4\n  proverif-link:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict proverif --models link --jobs 4\n  kani:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict kani\n  fuzz:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict fuzz\n  harness:\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict harness\n  ci-verdict:\n    needs:\n      - linux-fast\n      - windows-native\n      - xwin-cross\n      - linux-full\n      - ct\n      - mutants-shard\n      - mutants\n      - proverif-hx\n      - proverif-link\n      - kani\n      - fuzz\n      - harness\n    if: always() && (github.event_name == 'schedule' || github.event_name == 'pull_request')\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict ci-verdict\n";
 
     /// M6-12: the `ci.yml` of `b83ed0b` (an unquoted `: ` in the Kani step name) gives exactly one finding, at line 240.
     #[test]
@@ -6875,7 +6960,8 @@ mod tests {
             step.contains("nasm -v") && step.contains("choco install nasm --version=$pin"),
             "{step}"
         );
-        let gate = "        run: cargo xtask step --strict clippy nextest doctest kat hello\n";
+        let gate =
+            "        run: cargo xtask step --strict clippy nextest doctest kat harness hello\n";
         let late = ci
             .replacen(&step, "", 1)
             .replacen(gate, &format!("{gate}{step}"), 1);
@@ -7023,7 +7109,7 @@ mod tests {
         );
         // the conditions as parsed
         let parsed = job_conditions(ci);
-        assert_eq!(parsed.len(), 13);
+        assert_eq!(parsed.len(), 14);
         assert_eq!(parsed.first(), Some(&("linux-fast".to_owned(), None)));
         assert_eq!(
             parsed.get(4),
@@ -7408,7 +7494,7 @@ mod tests {
     /// `linux-fast` after its `runs-on`, `fast_step` replaces its first gate step line.
     fn gate_ci(fast: &str, fast_step: &str) -> String {
         format!(
-            "on:\n  pull_request:\npermissions:\n  contents: read\njobs:\n  linux-fast:\n    runs-on: x\n{fast}    steps:\n      - uses: actions/cache/save@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6\n        if: steps.c.outputs.hit != 'true'\n{fast_step}      - run: cargo xtask step --strict sbom systemd\n  windows-native:\n    runs-on: x\n    steps:\n      - run: cargo xtask install-tools --set windows\n      - run: cargo xtask step --strict clippy nextest doctest kat hello\n  xwin-cross:\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict windows-cross\n  linux-full:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask ci-full --strict --delegated windows-native --delegated windows-cross --delegated mutants --delegated ct --delegated fuzz --delegated kani --delegated proverif-link --models tr\n{PINNED_EXTRA}"
+            "on:\n  pull_request:\npermissions:\n  contents: read\njobs:\n  linux-fast:\n    runs-on: x\n{fast}    steps:\n      - uses: actions/cache/save@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6\n        if: steps.c.outputs.hit != 'true'\n{fast_step}      - run: cargo xtask step --strict sbom systemd\n  windows-native:\n    runs-on: x\n    steps:\n      - run: cargo xtask install-tools --set windows\n      - run: cargo xtask step --strict clippy nextest doctest kat harness hello\n  xwin-cross:\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict windows-cross\n  linux-full:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask ci-full --strict --delegated windows-native --delegated windows-cross --delegated mutants --delegated ct --delegated fuzz --delegated kani --delegated proverif-link --delegated harness --models tr\n{PINNED_EXTRA}"
         )
     }
 
@@ -7432,7 +7518,7 @@ mod tests {
     /// hygiene rules now yields a finding, as do `needs:`, a step-level `if` on a gate step and a changed gate line.
     #[test]
     fn required_job_bypasses_are_findings() {
-        let gate = "      - run: cargo xtask ci-fast --strict\n";
+        let gate = "      - run: cargo xtask ci-fast --strict --delegated harness\n";
         let good = gate_ci("", gate);
         assert_eq!(all_ci_findings(&good), Vec::<String>::new());
         // 2: `if : false`
@@ -7460,7 +7546,7 @@ mod tests {
         // 6: a step-level `if` on a gate step
         let case6 = gate_ci(
             "",
-            "      - if: false\n        run: cargo xtask ci-fast --strict\n",
+            "      - if: false\n        run: cargo xtask ci-fast --strict --delegated harness\n",
         );
         assert!(
             all_ci_findings(&case6)
@@ -7470,7 +7556,7 @@ mod tests {
         );
         let case6b = gate_ci(
             "",
-            "      - run: cargo xtask ci-fast --strict\n        if: false\n",
+            "      - run: cargo xtask ci-fast --strict --delegated harness\n        if: false\n",
         );
         assert!(!all_ci_findings(&case6b).is_empty(), "case 6b");
         // 7: `continue-on-error: true # false`, and the quoted-key and expression forms
@@ -7483,7 +7569,7 @@ mod tests {
         }
         let case7 = gate_ci(
             "",
-            "      - run: cargo xtask ci-fast --strict\n        continue-on-error: true # false\n",
+            "      - run: cargo xtask ci-fast --strict --delegated harness\n        continue-on-error: true # false\n",
         );
         assert!(!all_ci_findings(&case7).is_empty(), "case 7 step");
         // a flow-style job and a renamed check run
@@ -7510,7 +7596,7 @@ mod tests {
         // an `if` text inside a block scalar is content, not a key
         let block = gate_ci(
             "",
-            "      - run: cargo xtask ci-fast --strict\n      - run: |\n          if: false\n          echo done\n",
+            "      - run: cargo xtask ci-fast --strict --delegated harness\n      - run: |\n          if: false\n          echo done\n",
         );
         assert_eq!(all_ci_findings(&block), Vec::<String>::new());
         // the real ci.yml passes every check
@@ -7544,7 +7630,10 @@ mod tests {
     #[test]
     fn deleting_or_neutering_a_pinned_job_is_a_finding() {
         let real = lf(include_str!("../../.github/workflows/ci.yml"));
-        let fixture = gate_ci("", "      - run: cargo xtask ci-fast --strict\n");
+        let fixture = gate_ci(
+            "",
+            "      - run: cargo xtask ci-fast --strict --delegated harness\n",
+        );
         for (what, ci) in [("fixture", fixture.as_str()), ("ci.yml", real.as_str())] {
             assert_eq!(all_ci_findings(ci), Vec::<String>::new(), "{what}");
             let variants = pin_edit_variants(ci);
@@ -7570,7 +7659,29 @@ mod tests {
                 ),
                 (
                     "linux-full without --delegated proverif-link",
-                    ci.replacen(" --delegated proverif-link --models tr", " --models tr", 1),
+                    ci.replacen(" --delegated proverif-link --delegated harness --models tr", " --delegated harness --models tr", 1),
+                ),
+                // TEST-SPEC-M7 G7-07: the harness job deleted, its gate line changed, or a delegation dropped
+                ("delete harness", without_job(ci, "harness")),
+                (
+                    "harness without --strict",
+                    ci.replacen("cargo xtask step --strict harness", "cargo xtask step harness", 1),
+                ),
+                (
+                    "linux-fast without --delegated harness",
+                    ci.replacen("cargo xtask ci-fast --strict --delegated harness", "cargo xtask ci-fast --strict", 1),
+                ),
+                (
+                    "linux-full without --delegated harness",
+                    ci.replacen(" --delegated harness --models tr", " --models tr", 1),
+                ),
+                (
+                    "harness skipped on push",
+                    ci.replacen(
+                        "  harness:\n    runs-on:",
+                        "  harness:\n    if: github.event_name == 'pull_request'\n    runs-on:",
+                        1,
+                    ),
                 ),
                 // M6 (WEISUNG M6-11): the Kani job deleted, its gate line changed, or its delegation dropped
                 ("delete kani", without_job(ci, "kani")),
@@ -7723,7 +7834,10 @@ mod tests {
     /// finding; every real workflow passes.
     #[test]
     fn workflow_permissions_shell_and_prover_override_are_findings() {
-        let good = gate_ci("", "      - run: cargo xtask ci-fast --strict\n");
+        let good = gate_ci(
+            "",
+            "      - run: cargo xtask ci-fast --strict --delegated harness\n",
+        );
         assert_eq!(all_ci_findings(&good), Vec::<String>::new());
         let block = "permissions:\n  contents: read\n";
         let variants = [
@@ -7736,7 +7850,7 @@ mod tests {
             ),
             (
                 "job-level permissions",
-                gate_ci("    permissions:\n      contents: write\n      id-token: write\n", "      - run: cargo xtask ci-fast --strict\n"),
+                gate_ci("    permissions:\n      contents: write\n      id-token: write\n", "      - run: cargo xtask ci-fast --strict --delegated harness\n"),
             ),
             (
                 "defaults.run.shell",
@@ -7744,11 +7858,11 @@ mod tests {
             ),
             (
                 "job defaults",
-                gate_ci("    defaults:\n      run:\n        shell: 'bash -c \"exit 0\"'\n", "      - run: cargo xtask ci-fast --strict\n"),
+                gate_ci("    defaults:\n      run:\n        shell: 'bash -c \"exit 0\"'\n", "      - run: cargo xtask ci-fast --strict --delegated harness\n"),
             ),
             (
                 "step shell",
-                gate_ci("", "      - run: cargo xtask ci-fast --strict\n        shell: 'bash -c \"exit 0\"'\n"),
+                gate_ci("", "      - run: cargo xtask ci-fast --strict --delegated harness\n        shell: 'bash -c \"exit 0\"'\n"),
             ),
             (
                 "env SECMP_PROVERIF",
@@ -8477,7 +8591,7 @@ mod tests {
                 .filter(|s| step_field(s, "if").as_deref() == Some(cond.as_str()))
                 .collect()
         };
-        let gate = "cargo xtask step --strict clippy nextest doctest kat hello";
+        let gate = "cargo xtask step --strict clippy nextest doctest kat harness hello";
         let build = "cargo build --locked --release -p secmp-testkit --features harness --example tor_smoke";
         for (line, what) in [
             (gate, "ci-dispatch win-test gate line"),
@@ -8547,8 +8661,8 @@ mod tests {
         );
         let kat = plant(
             &real,
-            "doctest kat hello || exit",
-            "nextest kat hello || exit",
+            "doctest kat harness hello || exit",
+            "nextest kat harness hello || exit",
         );
         assert!(!win_suite_line_findings(&kat, &dispatch).is_empty());
         let nasm = plant(&real, "nasm -v || exit /b 1", "nasm -v");
@@ -10647,21 +10761,7 @@ mod tests {
             .unwrap_or_default();
         assert_eq!(pinned.len(), 1);
         assert_eq!(gate_lines(&dispatch, "dispatch-full"), pinned);
-        for (twin, job) in [
-            ("dispatch-fast", "linux-fast"),
-            ("dispatch-windows", "windows-native"),
-            ("dispatch-xwin", "xwin-cross"),
-            ("dispatch-full", "linux-full"),
-            ("dispatch-ct", "ct"),
-            ("dispatch-mutants-shard", "mutants-shard"),
-            ("dispatch-mutants", "mutants"),
-            ("dispatch-proverif-hx", "proverif-hx"),
-            ("dispatch-proverif-link", "proverif-link"),
-            // M6 (WEISUNG M6-11)
-            ("dispatch-kani", "kani"),
-            // M6-CI (WEISUNG M6-CI-1 §4)
-            ("dispatch-fuzz", "fuzz"),
-        ] {
+        for (twin, job) in expect::DISPATCH_TWINS.iter().copied() {
             let lines = gate_lines(&ci, job);
             assert!(!lines.is_empty(), "{job}: no gate line in ci.yml");
             assert_eq!(gate_lines(&dispatch, twin), lines, "{twin} vs {job}");

@@ -831,8 +831,10 @@ mod tests {
     }
 
     /// The invocations: the `nextest` step's two runs with the variable removed; the `kat` step's run of every KAT
-    /// package with the variable removed and, with a CI run seed, of every property package filtered to its property
-    /// tests with the variable set; the steps' code runs exactly these and names the seed in the verdict line.
+    /// package with the variable removed (the testkit without its `harness` binary) and, with a CI run seed, of every
+    /// property package but the testkit filtered to its property tests with the variable set; the `harness` step's run
+    /// of that binary, and its property tests with the CI run seed (TEST-SPEC-M7 G7-07); the steps' code runs exactly
+    /// these and names the seed in the verdict line.
     fn check_invocations() -> Result<()> {
         let plain =
             |args: Vec<&str>| -> Vec<String> { args.into_iter().map(str::to_owned).collect() };
@@ -856,8 +858,8 @@ mod tests {
         let local = kat_runs(&packages, None)?;
         let defaults: Vec<NextestRun> = packages
             .iter()
-            .map(|p| NextestRun {
-                args: plain(vec![
+            .map(|p| {
+                let mut args = vec![
                     "nextest",
                     "run",
                     "--locked",
@@ -865,8 +867,14 @@ mod tests {
                     p.as_str(),
                     "--features",
                     "kat",
-                ]),
-                seed: None,
+                ];
+                if p == "secmp-testkit" {
+                    args.extend(["-E", "not binary(=harness)"]);
+                }
+                NextestRun {
+                    args: plain(args),
+                    seed: None,
+                }
             })
             .collect();
         assert_eq!(local, defaults);
@@ -874,6 +882,7 @@ mod tests {
         assert_eq!(ci.get(..defaults.len()), Some(defaults.as_slice()));
         let seeded: Vec<NextestRun> = PROPERTY_PACKAGES
             .iter()
+            .filter(|p| **p != "secmp-testkit")
             .map(|p| {
                 let mut args = kat_args(p);
                 args.extend(["-E".to_owned(), property_filter()]);
@@ -931,6 +940,52 @@ mod tests {
         Ok(())
     }
 
+    /// The `harness` step's invocations (TEST-SPEC-M7 G7-07): the testkit's `harness` binary with the variable removed,
+    /// then — with a CI run seed — its property tests with the variable set; the verdict line names the reproduction.
+    fn check_harness_invocations() {
+        let plain =
+            |args: Vec<&str>| -> Vec<String> { args.into_iter().map(str::to_owned).collect() };
+        let harness_args = |filter: &str| {
+            plain(vec![
+                "nextest",
+                "run",
+                "--locked",
+                "--package",
+                "secmp-testkit",
+                "--features",
+                "kat",
+                "-E",
+                filter,
+            ])
+        };
+        assert_eq!(
+            crate::testscan::harness_runs(None),
+            vec![NextestRun {
+                args: harness_args("binary(=harness)"),
+                seed: None
+            }]
+        );
+        let with_seed = crate::testscan::harness_runs(Some(37_041_956_810));
+        assert_eq!(
+            with_seed,
+            vec![
+                NextestRun {
+                    args: harness_args("binary(=harness)"),
+                    seed: None
+                },
+                NextestRun {
+                    args: harness_args(&format!("({}) and binary(=harness)", property_filter())),
+                    seed: Some(37_041_956_810)
+                },
+            ]
+        );
+        let detail = crate::testscan::harness_seed_detail(Some(37_041_956_810));
+        for run in with_seed.iter().filter(|r| r.seed.is_some()) {
+            assert!(detail.contains(&run.reproduction()), "{detail}");
+        }
+        assert!(crate::testscan::harness_seed_detail(None).contains("DEFAULT_SEED only"));
+    }
+
     /// The gates run these invocations, the kat step with the seed of the environment.
     fn check_gate_code() -> Result<()> {
         let nextest = gate_body("nextest(_: &Ctx)")?;
@@ -952,11 +1007,24 @@ mod tests {
         }
         // the only other nextest invocation of the kat step is the portable-backend rerun
         assert_eq!(kat.matches("Cmd::cargo()").count(), 1, "{kat}");
+        let harness = gate_body("harness(_: &Ctx)")?;
+        for needle in [
+            "testscan::ci_run_seed()?",
+            "testscan::harness_runs(ci_seed)",
+            "run.run()?",
+            "testscan::harness_seed_detail(ci_seed)",
+            "crate::testscan::windows_scoped(run)",
+        ] {
+            assert!(harness.contains(needle), "gates::harness lacks {needle}");
+        }
+        assert!(!harness.contains("Cmd::cargo()"), "{harness}");
         Ok(())
     }
 
     /// The kat step runs in every pull-request run: `ci.yml` triggers on `pull_request`, `linux-fast` (no job condition)
-    /// runs `ci-fast`, whose steps include `kat`, and `windows-native` (no job condition) runs the step by name.
+    /// runs `ci-fast`, whose steps include `kat`, and `windows-native` (no job condition) runs the step by name; the
+    /// `harness` step likewise: `linux-fast` delegates it to the job `harness` (no job condition), `windows-native` runs
+    /// it by name (TEST-SPEC-M7 G7-07).
     fn check_pr_jobs() -> Result<()> {
         let ci_yml = std::fs::read_to_string(root().join(crate::expect::REQUIRED_WORKFLOW))?
             .replace("\r\n", "\n");
@@ -968,8 +1036,9 @@ mod tests {
                 .map(|(_, lines)| *lines)
                 .unwrap_or_default()
         };
-        assert!(runs("linux-fast").contains(&"cargo xtask ci-fast --strict"));
-        for step in ["nextest", "kat"] {
+        assert!(runs("linux-fast").contains(&"cargo xtask ci-fast --strict --delegated harness"));
+        assert_eq!(runs("harness"), ["cargo xtask step --strict harness"]);
+        for step in ["nextest", "kat", "harness"] {
             assert!(
                 runs("windows-native")
                     .iter()
@@ -977,7 +1046,7 @@ mod tests {
                 "{step}"
             );
         }
-        for job in ["linux-fast", "windows-native"] {
+        for job in ["linux-fast", "windows-native", "harness"] {
             assert!(
                 crate::expect::REQUIRED_JOB_CONDITIONS.contains(&(job, None)),
                 "{job} runs on every event"
@@ -990,6 +1059,7 @@ mod tests {
             .map(|(steps, _)| steps)
             .ok_or_else(|| Error("ci.rs: no FAST".to_owned()))?;
         assert!(fast.contains("id: \"nextest\"") && fast.contains("id: \"kat\""));
+        assert!(fast.contains("id: \"harness\""));
         Ok(())
     }
 
@@ -1037,6 +1107,7 @@ mod tests {
     #[test]
     fn pr_ci_runs_props_with_ci_run_seed() -> Result<()> {
         check_invocations()?;
+        check_harness_invocations();
         check_gate_code()?;
         check_pr_jobs()?;
         let scan = scan_seeds(&root())?;
@@ -1380,8 +1451,9 @@ mod tests {
     }
 
     /// WEISUNG M6-CI-1 §1: `--workspace` unifies `secmp-testkit/harness` (dev-dependency of `secmp-transport`), so the
-    /// `nextest` step leaves the `harness` binary out and the `kat` step stays its one runner; the double run of the
-    /// long simulations (linux-fast #152: 45 min) cannot come back silently.
+    /// `nextest` step leaves the `harness` binary out; from M7 (TEST-SPEC-M7 G7-07) the `kat` step leaves it out too and
+    /// the `harness` step is its one runner; the double run of the long simulations (linux-fast #152: 45 min) cannot come
+    /// back silently.
     #[test]
     fn nextest_does_not_run_the_harness_binary_twice() -> Result<()> {
         // the workspace nextest run carries exactly one filterset, the one that leaves the harness binary out
@@ -1396,10 +1468,36 @@ mod tests {
             crate::gates::NEXTEST_WORKSPACE_FILTER,
             "not binary(=harness)"
         );
-        // the kat run of the testkit selects the whole package (no filterset), and `kat` implies `harness`
+        // the kat run of the testkit leaves the binary out, the harness step selects exactly it; `kat` implies `harness`
         assert!(crate::expect::KAT_PACKAGES.contains(&"secmp-testkit"));
         let kat = kat_args("secmp-testkit");
         assert!(!kat.iter().any(|a| a == "-E" || a.contains("harness")));
+        let packages: BTreeSet<String> = crate::expect::KAT_PACKAGES
+            .iter()
+            .map(|p| (*p).to_owned())
+            .collect();
+        for seed in [None, Some(1)] {
+            let testkit: Vec<NextestRun> = kat_runs(&packages, seed)?
+                .into_iter()
+                .filter(|r| r.args.iter().any(|a| a == "secmp-testkit"))
+                .collect();
+            assert_eq!(testkit.len(), 1, "{testkit:?}");
+            assert_eq!(
+                testkit
+                    .first()
+                    .and_then(|r| r.args.last())
+                    .map(String::as_str),
+                Some("not binary(=harness)")
+            );
+            for run in crate::testscan::harness_runs(seed) {
+                assert!(
+                    run.args.last().is_some_and(
+                        |f| f.ends_with("binary(=harness)") && !f.contains("not binary")
+                    ),
+                    "{run:?}"
+                );
+            }
+        }
         let manifest = std::fs::read_to_string(root().join("crates/secmp-testkit/Cargo.toml"))?;
         assert!(
             manifest

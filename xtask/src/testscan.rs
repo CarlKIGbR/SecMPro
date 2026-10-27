@@ -5,7 +5,8 @@
 //! helper, `crates/secmp-proto/tests/common/seed.rs` (`scan::SEED_HELPER`): the decimal `u64` in
 //! `SECMP_PROPTEST_SEED` if it is set and not empty, else the file's own `DEFAULT_SEED`. The property tests live in
 //! the packages of [`PROPERTY_PACKAGES`], and their test crates need the feature `kat` (`secmp-relay`'s `relay` is
-//! built by no workspace run), so the `kat` step carries the seeds ([`kat_runs`]): it runs every KAT package with
+//! built by no workspace run), so the `kat` step carries the seeds ([`kat_runs`]), and for the testkit's `harness` binary
+//! the `harness` step ([`harness_runs`], TEST-SPEC-M7 G7-07): it runs every KAT package with
 //! `--features kat` and the variable removed (every property with its `DEFAULT_SEED`), and in a GitHub Actions run
 //! (`GITHUB_ACTIONS=true`: every pull request, push and scheduled run of `ci.yml`, in `linux-fast`, `windows-native`
 //! and `linux-full`) then each property package once more, filtered to its property tests ([`property_filter`]),
@@ -189,9 +190,24 @@ pub(crate) fn kat_args(package: &str) -> Vec<String> {
     ])
 }
 
+/// The package of the testkit `harness` binary (TEST-SPEC-M7 G7-07, ADR-045 Amendment 12): the `harness` step is the
+/// one runner of that binary, the `kat` step runs the rest of the package.
+pub(crate) const HARNESS_PACKAGE: &str = "secmp-testkit";
+
+/// The nextest filterset of the testkit `harness` binary.
+pub(crate) const HARNESS_BINARY: &str = "binary(=harness)";
+
+/// `args` with the filterset `filter`.
+fn filtered(mut args: Vec<String>, filter: String) -> Vec<String> {
+    args.extend(["-E".to_owned(), filter]);
+    args
+}
+
 /// The invocations of the `kat` step before its portable-backend reruns: the kat run of every package of `packages`
-/// with [`SEED_ENV`] removed, then — with a CI run seed — the kat run of every [`PROPERTY_PACKAGES`] package filtered
-/// to its property tests with [`SEED_ENV`] set to it. A property package that is not among `packages` fails.
+/// with [`SEED_ENV`] removed — [`HARNESS_PACKAGE`] without its `harness` binary, which the `harness` step runs
+/// ([`harness_runs`]) — then, with a CI run seed, the kat run of every other [`PROPERTY_PACKAGES`] package filtered to
+/// its property tests with [`SEED_ENV`] set to it (the testkit's property tests are all in the `harness` binary). A
+/// property package that is not among `packages` fails.
 pub(crate) fn kat_runs(
     packages: &BTreeSet<String>,
     ci_seed: Option<u64>,
@@ -199,7 +215,11 @@ pub(crate) fn kat_runs(
     let mut runs: Vec<NextestRun> = packages
         .iter()
         .map(|p| NextestRun {
-            args: kat_args(p),
+            args: if p == HARNESS_PACKAGE {
+                filtered(kat_args(p), format!("not {HARNESS_BINARY}"))
+            } else {
+                kat_args(p)
+            },
             seed: None,
         })
         .collect();
@@ -210,15 +230,57 @@ pub(crate) fn kat_runs(
                     "property package {p} is not a KAT package: the CI-seed pass needs its `kat` run (M4 review R-93)"
                 );
             }
-            let mut args = kat_args(p);
-            args.extend(["-E".to_owned(), property_filter()]);
+            if *p == HARNESS_PACKAGE {
+                continue;
+            }
             runs.push(NextestRun {
-                args,
+                args: filtered(kat_args(p), property_filter()),
                 seed: Some(seed),
             });
         }
     }
     Ok(runs)
+}
+
+/// The invocations of the `harness` step (TEST-SPEC-M7 G7-07): the kat run of [`HARNESS_PACKAGE`] filtered to its
+/// `harness` binary with [`SEED_ENV`] removed, then — with a CI run seed — the same filtered to the binary's property
+/// tests with [`SEED_ENV`] set to it. Same arguments as the kat run of the package plus one filterset, so it reuses
+/// that build.
+pub(crate) fn harness_runs(ci_seed: Option<u64>) -> Vec<NextestRun> {
+    let mut runs = vec![NextestRun {
+        args: filtered(kat_args(HARNESS_PACKAGE), HARNESS_BINARY.to_owned()),
+        seed: None,
+    }];
+    if let Some(seed) = ci_seed {
+        runs.push(NextestRun {
+            args: filtered(
+                kat_args(HARNESS_PACKAGE),
+                format!("({}) and {HARNESS_BINARY}", property_filter()),
+            ),
+            seed: Some(seed),
+        });
+    }
+    runs
+}
+
+/// The `harness` step's verdict part about the seeds.
+pub(crate) fn harness_seed_detail(ci_seed: Option<u64>) -> String {
+    match ci_seed {
+        None => format!(
+            "{HARNESS_PACKAGE} harness binary; property tests with their DEFAULT_SEED only ({SEED_ENV} removed, no CI run seed outside GitHub Actions)"
+        ),
+        Some(seed) => {
+            let again: Vec<String> = harness_runs(Some(seed))
+                .iter()
+                .filter(|r| r.seed.is_some())
+                .map(NextestRun::reproduction)
+                .collect();
+            format!(
+                "{HARNESS_PACKAGE} harness binary; property tests with their DEFAULT_SEED ({SEED_ENV} removed), then again with the CI run seed {SEED_ENV}={seed} (GITHUB_RUN_ID, reproduce: {})",
+                again.join(" && ")
+            )
+        }
+    }
 }
 
 /// The nextest filterset that leaves out `expect::WINDOWS_SKIP_TESTS` (each matched by its last path segment).
@@ -252,21 +314,24 @@ pub(crate) fn kat_seed_detail(ci_seed: Option<u64>) -> String {
             "property tests with their DEFAULT_SEED only ({SEED_ENV} removed, no CI run seed outside GitHub Actions)"
         ),
         Some(seed) => {
-            let again: Vec<String> = PROPERTY_PACKAGES
+            let packages: Vec<&str> = PROPERTY_PACKAGES
+                .iter()
+                .copied()
+                .filter(|p| *p != HARNESS_PACKAGE)
+                .collect();
+            let again: Vec<String> = packages
                 .iter()
                 .map(|p| {
-                    let mut args = kat_args(p);
-                    args.extend(["-E".to_owned(), property_filter()]);
                     NextestRun {
-                        args,
+                        args: filtered(kat_args(p), property_filter()),
                         seed: Some(seed),
                     }
                     .reproduction()
                 })
                 .collect();
             format!(
-                "property tests with their DEFAULT_SEED ({SEED_ENV} removed); property tests of {} again with the CI run seed {SEED_ENV}={seed} (GITHUB_RUN_ID, reproduce: {})",
-                PROPERTY_PACKAGES.join(", "),
+                "property tests with their DEFAULT_SEED ({SEED_ENV} removed); property tests of {} again with the CI run seed {SEED_ENV}={seed} (GITHUB_RUN_ID, reproduce: {}; those of {HARNESS_PACKAGE} in the harness step)",
+                packages.join(", "),
                 again.join(" && ")
             )
         }

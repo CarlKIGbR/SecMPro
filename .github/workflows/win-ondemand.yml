@@ -93,7 +93,7 @@ jobs:
       - name: Suite win-test
         if: inputs.suite == 'win-test'
         shell: cmd
-        run: cargo xtask step --strict clippy nextest doctest kat hello || exit /b 1
+        run: cargo xtask step --strict clippy nextest doctest kat harness hello || exit /b 1
       - name: Build the Tor smoke check
         if: inputs.suite == 'tor-smoke'
         shell: cmd

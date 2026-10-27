@@ -1731,6 +1731,8 @@ pub(crate) const PINNED_JOBS: &[&str] = &[
     "kani",
     // WEISUNG M6-CI-1 §4 (ADR-047 Amendment 5): the fuzz smoke (70 min) out of `linux-full`
     "fuzz",
+    // TEST-SPEC-M7 G7-07 (ADR-045 Amendment 12): the testkit harness binary out of `linux-fast` and `linux-full`
+    "harness",
     // ADR-045 Amendment 2: the one required check that fails when any other gate job did not succeed
     "ci-verdict",
 ];
@@ -1758,6 +1760,7 @@ pub(crate) const CI_VERDICT_NEEDS: &[&str] = &[
     "proverif-link",
     "kani",
     "fuzz",
+    "harness",
 ];
 
 /// Where each `--delegated <step>` of a pinned gate line runs, as (step, pinned job) — M4 review C-5: the policy step
@@ -1774,6 +1777,8 @@ pub(crate) const DELEGATED_TO: &[(&str, &str)] = &[
     ("kani", "kani"),
     // WEISUNG M6-CI-1 §4: the `ci-full` step `fuzz` runs in the job of the same name
     ("fuzz", "fuzz"),
+    // TEST-SPEC-M7 G7-07: the `ci-fast`/`ci-full` step `harness` runs in the job of the same name
+    ("harness", "harness"),
 ];
 
 /// The `cargo xtask` gate `run:` lines of each pinned job of [`PINNED_JOBS`], in order (M3 review F3, R-09;
@@ -1784,13 +1789,13 @@ pub(crate) const REQUIRED_GATE_RUNS: &[(&str, &[&str])] = &[
     (
         "linux-fast",
         &[
-            "cargo xtask ci-fast --strict",
+            "cargo xtask ci-fast --strict --delegated harness",
             "cargo xtask step --strict sbom systemd",
         ],
     ),
     (
         "windows-native",
-        &["cargo xtask step --strict clippy nextest doctest kat hello"],
+        &["cargo xtask step --strict clippy nextest doctest kat harness hello"],
     ),
     ("xwin-cross", &["cargo xtask step --strict windows-cross"]),
     (
@@ -1798,7 +1803,7 @@ pub(crate) const REQUIRED_GATE_RUNS: &[(&str, &[&str])] = &[
         // the SecMP-HX models run in their own job `proverif-hx` (WEISUNG M4-5 §5), mutation testing in `mutants` (ADR-047),
         // the ct gate in `ct` (ADR-047 Amendment 1, M4 review C-2), the SecMP-LINK models in `proverif-link` (BRIEF_M5-B §1)
         &[
-            "cargo xtask ci-full --strict --delegated windows-native --delegated windows-cross --delegated mutants --delegated ct --delegated fuzz --delegated kani --delegated proverif-link --models tr",
+            "cargo xtask ci-full --strict --delegated windows-native --delegated windows-cross --delegated mutants --delegated ct --delegated fuzz --delegated kani --delegated proverif-link --delegated harness --models tr",
         ],
     ),
     // M4 review C-5 (R-01): the delegated jobs
@@ -1820,6 +1825,8 @@ pub(crate) const REQUIRED_GATE_RUNS: &[(&str, &[&str])] = &[
     ("kani", &["cargo xtask step --strict kani"]),
     // WEISUNG M6-CI-1 §4: the fuzz smoke step in its own job
     ("fuzz", &["cargo xtask step --strict fuzz"]),
+    // TEST-SPEC-M7 G7-07: the testkit harness binary in its own job
+    ("harness", &["cargo xtask step --strict harness"]),
     // ADR-045 Amendment 2: the verdict over the needs of every other gate job
     ("ci-verdict", &["cargo xtask step --strict ci-verdict"]),
 ];
@@ -1868,6 +1875,8 @@ pub(crate) const REQUIRED_JOB_CONDITIONS: &[(&str, Option<&str>)] = &[
         "fuzz",
         Some("github.event_name == 'schedule' || github.event_name == 'pull_request'"),
     ),
+    // TEST-SPEC-M7 G7-07: on every event, like `linux-fast`, which delegates its step here
+    ("harness", None),
     // ADR-045 Amendment 2: after every gate job whatever its outcome, on the events the gate jobs run on
     (
         "ci-verdict",
@@ -1875,6 +1884,48 @@ pub(crate) const REQUIRED_JOB_CONDITIONS: &[(&str, Option<&str>)] = &[
             "always() && (github.event_name == 'schedule' || github.event_name == 'pull_request')",
         ),
     ),
+];
+
+/// TEST-SPEC-M7 G7-08 (OPEN-M7-18 A, ADR-045 Amendment 12): the `timeout-minutes` of every pinned job of [`PINNED_JOBS`],
+/// as (job, minutes). The policy step refuses a pinned job without an entry, an entry that is not a pinned job, and a
+/// job of `ci.yml` or its dispatch twin ([`DISPATCH_TWINS`]) whose budget differs (docs/06 §4 job table).
+pub(crate) const JOB_BUDGETS: &[(&str, u64)] = &[
+    // ADR-045 Amendment 10
+    ("linux-fast", 120),
+    ("windows-native", 90),
+    ("xwin-cross", 60),
+    ("linux-full", 240),
+    ("ct", 330),
+    ("mutants-shard", 300),
+    ("mutants", 30),
+    ("proverif-hx", 180),
+    ("proverif-link", 120),
+    ("kani", 150),
+    ("fuzz", 120),
+    // TEST-SPEC-M7 G7-07 (OPEN-M7-18 A)
+    ("harness", 150),
+    ("ci-verdict", 15),
+];
+
+/// The dispatch twin in `ci-dispatch.yml` of each pinned job but `ci-verdict`, as (twin, job) — M4 review C-4 (R-14):
+/// the twin runs the job's gate lines (`gates::tests::dispatch_full_runs_the_linux_full_line`) under the job's budget
+/// ([`JOB_BUDGETS`]).
+pub(crate) const DISPATCH_TWINS: &[(&str, &str)] = &[
+    ("dispatch-fast", "linux-fast"),
+    ("dispatch-windows", "windows-native"),
+    ("dispatch-xwin", "xwin-cross"),
+    ("dispatch-full", "linux-full"),
+    ("dispatch-ct", "ct"),
+    ("dispatch-mutants-shard", "mutants-shard"),
+    ("dispatch-mutants", "mutants"),
+    ("dispatch-proverif-hx", "proverif-hx"),
+    ("dispatch-proverif-link", "proverif-link"),
+    // M6 (WEISUNG M6-11)
+    ("dispatch-kani", "kani"),
+    // M6-CI (WEISUNG M6-CI-1 §4)
+    ("dispatch-fuzz", "fuzz"),
+    // TEST-SPEC-M7 G7-07
+    ("dispatch-harness", "harness"),
 ];
 
 #[cfg(test)]

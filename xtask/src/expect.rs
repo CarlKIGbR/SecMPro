@@ -1876,3 +1876,35 @@ pub(crate) const REQUIRED_JOB_CONDITIONS: &[(&str, Option<&str>)] = &[
         ),
     ),
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// TEST-SPEC-M7 G7-16 (OPEN-M7-41): `cargo audit` ignores exactly the advisories of ADR-037 and ADR-051 Am. 1 and
+    /// Am. 6; RUSTSEC-2026-0387 (`crypto-bigint` 0.5.5) stays until `arti-client` moves, and M7 adds no ignore.
+    #[test]
+    fn audit_ignores_unchanged() {
+        let ids: Vec<&str> = AUDIT_IGNORES.iter().map(|(id, _)| *id).collect();
+        assert_eq!(
+            ids,
+            [
+                "RUSTSEC-2026-0173",
+                "RUSTSEC-2023-0071",
+                "RUSTSEC-2024-0436",
+                "RUSTSEC-2025-0141",
+                "RUSTSEC-2026-0387",
+            ]
+        );
+        let bigint = AUDIT_IGNORES
+            .iter()
+            .find(|(id, _)| *id == "RUSTSEC-2026-0387")
+            .map(|(_, why)| *why)
+            .unwrap_or_default();
+        assert!(
+            bigint.starts_with("ADR-051 Am. 6: crypto-bigint 0.5.5"),
+            "{bigint}"
+        );
+        assert!(bigint.contains("removed in the first milestone after arti-client moves"));
+    }
+}

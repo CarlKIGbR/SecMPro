@@ -1,0 +1,38 @@
+MU-C2 / item 9: mutants shard times from outcomes.json of the downloaded shard artifacts (read-only gh run download)
+run #160 = 39080358115 (head 86c832f, Am. 6 active, shard 4 artifact missing), run #156 = 38982316415 (Am. 6 not yet active; shards 4 and 5 missing).
+first run = cargo test over crypto/proto/relay + own tests; second run = harness run over client-core/transport (nextest). Minutes = outcomes.json end_time - start_time.
+
+#156 (38982316415)
+shard 0: first run 59 min (403 mutants, 0 timeout), second run 205 min (145 mutants, 5 timeout)
+   five slowest second-run mutants (s): 2200 timing.rs:40 accept_ceiling; 1305 clock.rs:102 ManualClock::advance_ms; 915 mod.rs:380 World::period_of; 914 session.rs:233 AsyncSession<S>::send; 913 conversation.rs:686 Conversations<O, P, S>::by_send
+shard 1: first run 58 min (403 mutants, 0 timeout), second run 199 min (145 mutants, 4 timeout)
+   five slowest second-run mutants (s): 2310 timing.rs:40 accept_ceiling; 1642 clock.rs:107 ManualClock::set_ms; 919 mod.rs:380 World::period_of; 908 mod.rs:1813 Scheduler::link_up; 908 mod.rs:1408 Scheduler::sync_links
+shard 2: first run 39 min (403 mutants, 1 timeout), second run 118 min (145 mutants, 4 timeout)
+   five slowest second-run mutants (s): 1763 timing.rs:47 sample_with; 956 clock.rs:113 <impl Clock for ManualClock>::mono_ms; 916 mod.rs:600 World::prepare_link; 913 mod.rs:380 World::period_of; 911 mod.rs:1611 Scheduler::control_failed
+shard 3: first run 60 min (403 mutants, 1 timeout), second run 197 min (145 mutants, 4 timeout)
+   five slowest second-run mutants (s): 1433 clock.rs:113 <impl Clock for ManualClock>::mono_ms; 1304 timing.rs:47 sample_with; 922 mod.rs:1140 Scheduler::links; 919 session.rs:50 write_all; 911 mod.rs:1716 Scheduler::work_pass
+shard 6: first run 59 min (401 mutants, 1 timeout), second run 214 min (144 mutants, 8 timeout)
+   five slowest second-run mutants (s): 2155 timing.rs:56 sample_round; 1536 timing.rs:18 <impl core::fmt::Display for Unavailable>::fmt; 922 conversation.rs:700 <impl CellSource for Conversations<O, P, S>>::prepare_cell; 917 conversation.rs:243 Conversation<O, P, S>::bind; 915 mod.rs:1796 Scheduler::find
+shard 7: first run 55 min (401 mutants, 1 timeout), second run 180 min (144 mutants, 3 timeout)
+   five slowest second-run mutants (s): 2256 timing.rs:40 accept_ceiling; 1256 timing.rs:56 sample_round; 913 mod.rs:512 World::tick; 910 mod.rs:1797 Scheduler::find; 640 clock.rs:78 <impl Clock for TokioClock>::unix_secs
+
+#160 (39080358115)
+shard 0: first run 45 min (403 mutants, 0 timeout), second run 106 min (145 mutants, 0 timeout)
+   five slowest second-run mutants (s): 1109 clock.rs:102 ManualClock::advance_ms; 1065 timing.rs:40 accept_ceiling; 549 clock.rs:39 <impl Clock for SystemClock>::mono_ms; 453 mod.rs:515 World::tick; 423 mod.rs:784 World::step_due
+shard 1: first run 46 min (403 mutants, 0 timeout), second run 118 min (145 mutants, 1 timeout)
+   five slowest second-run mutants (s): 1572 clock.rs:107 ManualClock::set_ms; 1063 timing.rs:40 accept_ceiling; 921 mod.rs:383 World::period_of; 595 clock.rs:39 <impl Clock for SystemClock>::mono_ms; 408 mod.rs:906 World::queue_error
+shard 2: first run 45 min (403 mutants, 0 timeout), second run 110 min (145 mutants, 1 timeout)
+   five slowest second-run mutants (s): 1213 clock.rs:113 <impl Clock for ManualClock>::mono_ms; 1151 timing.rs:47 sample_with; 925 mod.rs:383 World::period_of; 408 mod.rs:1706 Scheduler::work_pass; 400 session.rs:57 read_exact
+shard 3: first run 59 min (403 mutants, 0 timeout), second run 127 min (145 mutants, 0 timeout)
+   five slowest second-run mutants (s): 1562 clock.rs:113 <impl Clock for ManualClock>::mono_ms; 1500 timing.rs:47 sample_with; 523 ops.rs:570 fetch_multi_len_ok; 522 mod.rs:241 <impl Release for Deferred>::release_failed; 517 mod.rs:1378 Scheduler::set_queue_period
+shard 5: first run 57 min (402 mutants, 0 timeout), second run 143 min (145 mutants, 1 timeout)
+   five slowest second-run mutants (s): 1827 clock.rs:117 <impl Clock for ManualClock>::unix_secs; 1667 timing.rs:47 sample_with; 1352 clock.rs:74 <impl Clock for TokioClock>::mono_ms; 605 mod.rs:782 World::step_due; 568 mod.rs:1676 Scheduler::next_deadline
+shard 6: first run 46 min (402 mutants, 0 timeout), second run 89 min (145 mutants, 0 timeout)
+   five slowest second-run mutants (s): 1510 timing.rs:18 <impl core::fmt::Display for Unavailable>::fmt; 1067 timing.rs:56 sample_round; 399 tls.rs:366 <impl StreamProvider for TlsProvider<D>>::connect; 397 mod.rs:53 base32; 379 mod.rs:742 World::prepare_fetch
+shard 7: first run 56 min (402 mutants, 0 timeout), second run 142 min (145 mutants, 1 timeout)
+   five slowest second-run mutants (s): 1522 timing.rs:40 accept_ceiling; 1453 timing.rs:56 sample_round; 927 session.rs:50 write_all; 542 conversation.rs:322 Conversation<O, P, S>::has_pending_real; 537 session.rs:240 Session<S>::ensure_open
+
+Whole job minutes (gh run view --json jobs, startedAt to completedAt; the job budget is 240 min):
+run 156: shard 0 264, 1 258, 2 157, 3 258, 4 132, 5 55, 6 273, 7 236 (Am. 6 not active: the 900-s TIMEOUT mutants)
+run 160: shard 0 152, 1 165, 2 155, 3 187, 4 67 (no artifact), 5 200, 6 136, 7 199 (Am. 6 active)
+

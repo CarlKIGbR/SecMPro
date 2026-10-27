@@ -7,6 +7,7 @@
 //! secmp-relay --config <file>                       serve (docs/05 §4)
 //! secmp-relay keygen --out <file> [--valid-days N]  new identity and key generation 1; prints relay_fp
 //! secmp-relay rotate-static --keys <file> [--valid-days N]   add generation kid + 1, drop the expired ones
+//! secmp-relay spki <cert.der>                       the pin of the direct listener's certificate (docs/05 §7)
 //! ```
 #![forbid(unsafe_code)]
 
@@ -102,6 +103,21 @@ fn rotate(args: &[String]) -> ExitCode {
     }
 }
 
+/// `spki <cert.der>`: the 64-hex SHA-256 of the certificate's `SubjectPublicKeyInfo` — the value clients pin as
+/// `RelayRef.direct.spki_sha256` (spec D.3; TEST-SPEC-M6 TLS-15).
+fn spki(args: &[String]) -> ExitCode {
+    let Some(path) = args.get(1) else {
+        return fail("spki needs <cert.der>");
+    };
+    let Ok(cert) = std::fs::read(path) else {
+        return fail("cannot read the certificate");
+    };
+    match secmp_relay::spki::pin_of(&cert) {
+        Some(pin) => out(&hex(&pin)),
+        None => fail("not a DER X.509 certificate"),
+    }
+}
+
 fn run(config: &std::path::Path) -> ExitCode {
     let clock = Clock::start();
     StderrSink.emit(&Event::Startup);
@@ -109,9 +125,33 @@ fn run(config: &std::path::Path) -> ExitCode {
         return ExitCode::FAILURE;
     };
     let relay = Arc::new(relay);
+    #[cfg(feature = "direct-tls")]
+    let direct = match &cfg.direct_tls {
+        None => None,
+        Some(d) => match secmp_relay::tls::load(&d.cert, &d.key) {
+            Ok(tls) => Some((d.addr, tls)),
+            Err(e) => {
+                relay.events().emit(&Event::ConfigError {
+                    reason: "direct_tls certificate or key",
+                });
+                return fail(&e.to_string());
+            }
+        },
+    };
     let Ok(listener) = server::bind(&relay, cfg.listen) else {
         return fail("cannot bind the listener");
     };
+    #[cfg(feature = "direct-tls")]
+    if let Some((addr, tls)) = direct {
+        let Ok(direct) = secmp_relay::tls::bind(&relay, addr, tls) else {
+            return fail("cannot bind the direct_tls listener");
+        };
+        let both = secmp_relay::tls::Listeners::new(listener, direct);
+        return match server::serve(&relay, &both, &clock, server::spawn_thread) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => fail(&e.to_string()),
+        };
+    }
     match server::serve(&relay, &listener, &clock, server::spawn_thread) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => fail(&e.to_string()),
@@ -124,6 +164,7 @@ fn main() -> ExitCode {
         None | Some("--version") => out(BANNER),
         Some("keygen") => keygen(&args),
         Some("rotate-static") => rotate(&args),
+        Some("spki") => spki(&args),
         Some("--config") => match path_after(&args, "--config") {
             Some(p) => run(&p),
             None => fail("--config needs a file"),

@@ -1,0 +1,13 @@
+code head 03cc660 (evidence commit on top); command: cargo xtask ci-fast --strict
+   1 fmt             PASS          0s  rustfmt: no changes
+   2 clippy          PASS          0s  clippy --all-features -D warnings on x86_64-unknown-linux-gnu (12 crates)
+   2 policy          PASS          0s  unsafe-attrs: 38 target roots forbid, 2 sys library roots allow, 1 ADR-038 bench root allows (crates/secmp-testkit/benches/ct.rs), 2 secmp-ui roots deny, 2 secmp-ui files without `unsafe`; lints-table: 12 manifests; lint-allows: 131 relaxing attributes (all sanctioned); build-scripts: 12 crates, none; spdx: 369 files; relay-events: 7 names as expect::RELAY_TRACE_ALLOW; normal-deps: 4 crates within expect::NORMAL_DEPENDENCY_ALLOW; secmp-crypto/secmp-proto normal closure (x86_64-unknown-linux-gnu, x86_64-pc-windows-msvc, aarch64-apple-darwin): 52 external c
+   3 deny            PASS          0s  advisories, bans, licenses, sources: ok
+   3 vet             PASS          0s  secmp-crypto/secmp-proto normal closure (x86_64-unknown-linux-gnu, x86_64-pc-windows-msvc, aarch64-apple-darwin): 52 external crates, 0 exempted; tracked exemptions elsewhere: 25
+   3 audit           PASS          1s  RustSec: no advisories (warnings denied); ignored with an ADR: RUSTSEC-2026-0173
+   3 cooldown        PASS          6s  119 registry packages (Cargo.lock, fuzz/Cargo.lock), all ≥ 7 days old; youngest: rand 0.10.3, 20 days
+   4 nextest         PASS         11s  cargo nextest run --workspace; cargo nextest run --package secmp-proto (non-kat); both with SECMP_PROPTEST_SEED removed (every property with its DEFAULT_SEED, the CI run seed pass is in the kat step)
+   4 doctest         PASS          0s  cargo test --doc
+   4 hello           PASS          0s  secmp-relay 0.0.0 (M5) | secmp-cli 0.0.0 (M0 skeleton: no functionality) | secmp-ui 0.0.0 (M0 skeleton: no functionality)
+   5 kat             PASS        241s  KAT/differential packages: secmp-client-core, secmp-crypto, secmp-proto, secmp-relay, secmp-testkit (expected set matches); ML-KEM KATs and frozen vectors (M1 suites, tr, hx, link) also with libcrux's portable backend; property tests with their DEFAULT_SEED only (SECMP_PROPTEST_SEED removed, no CI run seed outside GitHub Actions)
+ci-fast: PASS

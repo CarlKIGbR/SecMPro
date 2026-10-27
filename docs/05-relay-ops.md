@@ -132,6 +132,8 @@ Inside the process (after binding sockets and loading credentials): `mlockall(MC
 [listen]
 tor_loopback = "127.0.0.1:7443"        # C tor forwards the onion port here (no TLS)
 direct_tls   = ""                      # e.g. "0.0.0.0:443"; empty = disabled (default)
+# direct_tls_cert = "/etc/secmp/relay-tls.der"  # DER certificate: required when direct_tls is set, refused otherwise (§7)
+# direct_tls_key  = "/etc/secmp/relay-tls.key"  # its PKCS#8 private key, DER: the same rule (an enabled example is in §7)
 
 [limits]
 queue_budget_bytes    = 6_000_000_000  # queue pool: accounting bound for queue reservations, about 1 % under the allocator footprint (`budget.rs`)
@@ -172,6 +174,20 @@ Changing `queue_capacity`, `cell_ttl_hours` or frame sizes changes protocol beha
 
 - rustls with the `aws-lc-rs` provider, TLS 1.3 only, key exchange groups `[X25519MLKEM768]` only, ALPN `secmp/1`, no session tickets, no 0-RTT, no client certificates.
 - Certificate: self-signed Ed25519 (or ML-DSA-65 once rustls stabilises signing), long-lived, pinned by clients via `RelayRef.direct.spki_sha256`. Web PKI is not used.
+- Certificate and key are files the operator makes and names in `[listen]` as `direct_tls_cert` and `direct_tls_key` (both DER; required when `direct_tls` is not empty, refused otherwise). With `openssl` (OPEN-M6-09, prefix from docs/reviews/M06-planning/OPEN-M6.md):
+  ```
+  openssl req -x509 -newkey ed25519 -nodes -days 3650 -subj "/CN=secmp-relay" -keyout relay-tls.pem -outform DER -out relay-tls.der
+  openssl pkey -in relay-tls.pem -outform DER -out relay-tls.key
+  ```
+  `secmp-relay spki relay-tls.der` prints the pin (SHA-256 of the SubjectPublicKeyInfo) that clients take as `RelayRef.direct.spki_sha256`; delete `relay-tls.pem` after the conversion.
+- The enabled `[listen]` stanza (the two key lines are set exactly when `direct_tls` is not empty):
+  ```toml
+  [listen]
+  tor_loopback    = "127.0.0.1:7443"
+  direct_tls      = "0.0.0.0:443"
+  direct_tls_cert = "/etc/secmp/relay-tls.der"
+  direct_tls_key  = "/etc/secmp/relay-tls.key"
+  ```
 - Behind the TLS stream runs the identical SecMP-LINK handshake and frames.
 - The operator must understand that this listener exposes client IPs to the host and its provider; the docs mark it "testing / own-VPN use".
 

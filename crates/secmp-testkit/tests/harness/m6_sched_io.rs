@@ -1,0 +1,1459 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//! M6 (d1) the cell path of the scheduler: one path for real and dummy cells, persist-before-send / -ack, acknowledgement
+//! of every delivered cell, response handling, queue re-creation (S-25…S-32; spec §7.5, §9.1, §9.3, §10.3).
+
+use secmp_client_core::scheduler::conversation::{Conversation, Conversations, counters};
+use secmp_client_core::scheduler::core::{LinkKind, Scheduler};
+use secmp_client_core::scheduler::outbox::{MemOutbox, MemPersist, MsgState, OutMessage, Outbox};
+use secmp_client_core::scheduler::params::{Mode, Params};
+use secmp_client_core::scheduler::types::{
+    Alert, CellSource, CellToken, ControlKind, LinkEvent, LinkId, Output, PreparedCell, QueueId,
+    Reason, RelayId, SendFailure, SourceError,
+};
+use secmp_client_core::timing::TimingRng;
+use secmp_crypto::{SecretBytes, Zeroizing};
+use secmp_proto::tr::{Entropy, FixedEntropy};
+use secmp_proto::wire::cell::{AppKind, Cell};
+use secmp_proto::wire::frame::{ErrCode, Request, RequestCmd, Response, ResponseCmd};
+use secmp_testkit::harness::{
+    Audit, Dir, EntropyPool, Inspect, START_UNIX, VirtualDriver, ratchet_pair,
+};
+use secmp_transport::{QueueTransport, RecvCap, RelayQueueTransport, SendCap, Session};
+
+use crate::m6_common::{
+    FRAME, at, client, client_with, contact, driver, frames, frames_of, half_contact, inject,
+    run_until_link_up, send_only,
+};
+use crate::scripted::{self, Script, Scripted};
+
+fn text(n: u8, len: usize) -> OutMessage {
+    OutMessage {
+        msg_id: [n; 16],
+        kind: AppKind::Text,
+        expire_after: 0,
+        payload: Zeroizing::new(vec![n; len]),
+    }
+}
+
+type TestConv = Conversation<MemOutbox, MemPersist, EntropyPool>;
+
+/// A conversation over a fresh ratchet pair; the second state is the peer's, to open the cells.
+fn conv_with_peer(tag: u32) -> (TestConv, secmp_proto::tr::RatchetState, EntropyPool) {
+    let sk = SecretBytes::from_slice(&[7_u8; 32]).unwrap();
+    let mut pool = EntropyPool::new("m6-io-pair", tag);
+    let transcript: [u8; 32] = pool.bytes(32).try_into().unwrap();
+    let mut ea = FixedEntropy::new(&pool.bytes(1 << 16));
+    let mut eb = FixedEntropy::new(&pool.bytes(1 << 16));
+    let (sender, receiver) = ratchet_pair(&sk, &transcript, &mut ea, &mut eb);
+    let peer_key = pool.get().hybrid_signing_key().unwrap().verifying_key();
+    let mut conv = Conversation::new(
+        sender,
+        MemOutbox::new(),
+        MemPersist::new(),
+        EntropyPool::new("m6-io-conv", tag),
+        peer_key,
+        START_UNIX,
+    );
+    conv.bind(QueueId(0), QueueId(1));
+    (conv, receiver, EntropyPool::new("m6-io-peer", tag))
+}
+
+fn content_type_of(
+    cell: &Cell,
+    peer: secmp_proto::tr::RatchetState,
+    pool: &mut EntropyPool,
+) -> (u8, secmp_proto::tr::RatchetState) {
+    let opened = peer.decrypt_with(cell.as_bytes(), pool.get()).ok().unwrap();
+    let ty = opened.plaintext().content().unwrap().body.content_type();
+    let (state, _) = opened.commit(|_| Ok::<(), ()>(())).unwrap();
+    (ty, state)
+}
+
+/// The `Content` of a cell opened with the peer's ratchet state (type, seq), and the peer's next state.
+fn content_of(
+    cell: &Cell,
+    peer: secmp_proto::tr::RatchetState,
+    pool: &mut EntropyPool,
+) -> ((u8, u64), secmp_proto::tr::RatchetState) {
+    let opened = peer.decrypt_with(cell.as_bytes(), pool.get()).ok().unwrap();
+    let content = opened.plaintext().content().unwrap();
+    let key = (content.body.content_type(), content.seq);
+    let (state, _) = opened.commit(|_| Ok::<(), ()>(())).unwrap();
+    (key, state)
+}
+
+/// Mutants-156 (`conversation.rs:345`, `take_seq` → `1`): the application sequence of the contents a conversation sends
+/// counts up — two messages carry consecutive numbers.
+#[test]
+fn content_seq_counts_up() {
+    let (conv, peer, mut pool) = conv_with_peer(31);
+    let mut convs = Conversations::new();
+    let i = convs.add(conv);
+    for n in [1, 2] {
+        convs
+            .get_mut(i)
+            .unwrap()
+            .outbox_mut()
+            .enqueue(text(n, 40), 0);
+    }
+    let first = convs.prepare_cell(QueueId(0), 10_000).unwrap().unwrap();
+    let second = convs.prepare_cell(QueueId(0), 20_000).unwrap().unwrap();
+    let ((t1, s1), peer) = content_of(&first.cell, peer, &mut pool);
+    let ((t2, s2), _) = content_of(&second.cell, peer, &mut pool);
+    assert_eq!((t1, t2), (0x02, 0x02));
+    assert_eq!(s2, s1 + 1, "seq {s1} then {s2}");
+}
+
+/// Mutants-156 (`conversation.rs:719`, `Conversations::send_failed` → `()`): a `SEND` the relay refused hands the cell's
+/// message back — the next cell for the queue carries it again (a real content, not a dummy).
+#[test]
+fn send_failed_requeues_the_message() {
+    let (conv, peer, mut pool) = conv_with_peer(32);
+    let mut convs = Conversations::new();
+    let i = convs.add(conv);
+    convs
+        .get_mut(i)
+        .unwrap()
+        .outbox_mut()
+        .enqueue(text(7, 40), 0);
+    let first = convs.prepare_cell(QueueId(0), 10_000).unwrap().unwrap();
+    convs.send_failed(QueueId(0), first.token, SendFailure::Rate);
+    let again = convs.prepare_cell(QueueId(0), 20_000).unwrap().unwrap();
+    let ((t1, _), peer) = content_of(&first.cell, peer, &mut pool);
+    let ((t2, _), _) = content_of(&again.cell, peer, &mut pool);
+    assert_eq!((t1, t2), (0x02, 0x02), "the message is sent again");
+}
+
+/// S-25: a dummy and a real message take the same path — one `encrypt` call site, both 4 096 B; Content types 0x00 and
+/// 0x02; the frames carrying them are the same operation and size.
+#[test]
+fn real_and_dummy_share_one_path() {
+    let (conv, peer, mut pool) = conv_with_peer(1);
+    let mut convs = Conversations::new();
+    let i = convs.add(conv);
+    let before = counters::tr_encrypt_calls();
+    let dummy = convs.prepare_cell(QueueId(0), 0).unwrap().unwrap();
+    convs
+        .get_mut(i)
+        .unwrap()
+        .outbox_mut()
+        .enqueue(text(1, 100), 0);
+    let real = convs.prepare_cell(QueueId(0), 10_000).unwrap().unwrap();
+    assert_eq!(counters::tr_encrypt_calls() - before, 2);
+    assert_eq!(
+        counters::encrypt_sites(),
+        vec!["Conversation::seal"],
+        "one call site"
+    );
+    assert_eq!(
+        (dummy.cell.as_bytes().len(), real.cell.as_bytes().len()),
+        (4096, 4096)
+    );
+    let (t1, peer) = content_type_of(&dummy.cell, peer, &mut pool);
+    let (t2, _) = content_type_of(&real.cell, peer, &mut pool);
+    assert_eq!((t1, t2), (0x00, 0x02));
+
+    // on the wire: the same request, the same size
+    let mut sim = driver();
+    let a = client(&mut sim, Mode::Strict, 251);
+    let b = client(&mut sim, Mode::Strict, 252);
+    let c = contact(&mut sim, a, b, 10_000, 80_000);
+    sim.client(a).opts.inspect = Inspect::Requests;
+    sim.run_until(300_000);
+    sim.client(a)
+        .convs
+        .get_mut(c.conv_a)
+        .unwrap()
+        .outbox_mut()
+        .enqueue(text(2, 500), 300_000);
+    sim.run_until(600_000);
+    let c2r = frames(&sim, a, Dir::C2R);
+    assert!(c2r.iter().all(|e| e.len == FRAME));
+    let sends = sim
+        .client_ref(a)
+        .requests
+        .iter()
+        .filter(|(_, _, r)| matches!(r.cmd, RequestCmd::Send { .. }))
+        .count();
+    assert!(sends > 20);
+    assert_eq!(
+        sim.client_ref(b)
+            .convs
+            .get(c.conv_b)
+            .unwrap()
+            .received()
+            .len(),
+        1,
+        "the real message arrived among the dummies"
+    );
+}
+
+/// S-26: persist before send — encrypt, then persist, then seal, then write; when persisting fails no frame is built
+/// and the message stays queued.
+#[test]
+fn persist_before_send_order() {
+    let mut sim = driver();
+    let a = client(&mut sim, Mode::Strict, 261);
+    let b = client(&mut sim, Mode::Strict, 262);
+    let c = send_only(&mut sim, a, b, 10_000);
+    sim.client(a)
+        .convs
+        .get_mut(c)
+        .unwrap()
+        .outbox_mut()
+        .enqueue(text(1, 60), 0);
+    sim.run_until(400_000);
+    let audit = sim.client_ref(a).gate.audit.clone();
+    let mut last_prepared: Option<[u64; 3]> = None;
+    let mut checked = 0;
+    for e in &audit {
+        match *e {
+            Audit::Prepared(p) => {
+                assert_eq!(
+                    p[0], p[1],
+                    "every encrypt was persisted before the cell was released"
+                );
+                if let Some(q) = last_prepared {
+                    assert_eq!(p[0] - q[0], 1);
+                }
+                last_prepared = Some(p);
+            }
+            Audit::Wrote(seal) => {
+                let p = last_prepared.expect("written after prepared");
+                assert!(seal > p[2], "sealed after persisted, written after sealed");
+                checked += 1;
+            }
+        }
+    }
+    assert!(checked > 10);
+
+    // run 2: persist fails — no frame is prepared, the link goes down at the tick, the message stays queued
+    let mut sim = driver();
+    let a = client(&mut sim, Mode::Strict, 263);
+    let b = client(&mut sim, Mode::Strict, 264);
+    let c = send_only(&mut sim, a, b, 10_000);
+    let (slot, t_up) = run_until_link_up(&mut sim, a, LinkKind::Send);
+    {
+        let conv = sim.client(a).convs.get_mut(c).unwrap();
+        conv.persist_mut().set_failing(true);
+        conv.outbox_mut().enqueue(text(9, 60), 0);
+    }
+    let _ = (slot, t_up);
+    sim.run_until(at(t_up, 3, 10_000));
+    let torn = sim
+        .client_ref(a)
+        .events
+        .iter()
+        .any(|(_, e)| matches!(e, LinkEvent::TornDown(_, Reason::Overrun)));
+    assert!(torn, "no frame was prepared: overrun");
+    let state = sim
+        .client_ref(a)
+        .convs
+        .get(c)
+        .unwrap()
+        .outbox()
+        .state(&[9; 16]);
+    assert_eq!(state, Some(MsgState::Queued));
+}
+
+/// S-27: persist before ack — a cell whose commit fails is not acknowledged and is fetched again; once the commit
+/// succeeds the acknowledgement moves.
+#[test]
+fn persist_before_ack_order() {
+    let mut sim = driver();
+    let a = client(&mut sim, Mode::Strict, 271);
+    let b = client(&mut sim, Mode::Strict, 272);
+    let h = half_contact(&mut sim, a, b, 10_000);
+    let real = {
+        let conv = sim.client(b).convs.get_mut(h.conv_b).unwrap();
+        conv.outbox_mut().enqueue(text(5, 80), 0);
+        conv.prepare_direct(0).unwrap().cell
+    };
+    sim.client(a)
+        .convs
+        .get_mut(h.conv_a)
+        .unwrap()
+        .persist_mut()
+        .set_failing(true);
+    sim.client(a).opts.inspect = Inspect::Requests;
+    let id = inject(&mut sim, b, &h, &real);
+    let (slot, t_up) = run_until_link_up(&mut sim, a, LinkKind::Recv);
+    sim.run_until(at(t_up, 4, 10_000));
+    assert_eq!(
+        sim.client_ref(a).sched.acked(h.a_recv),
+        Some(0),
+        "no acknowledgement without a commit"
+    );
+    let acks: Vec<u64> = fetch_acks(&sim, a, slot);
+    assert!(
+        acks.iter().all(|a| *a == 0),
+        "the next FETCHes carry the old ack: {acks:?}"
+    );
+    assert!(
+        sim.client_ref(a)
+            .gate
+            .delivered
+            .get(&(h.a_recv.0, id))
+            .copied()
+            .unwrap_or(0)
+            >= 2,
+        "fetched again"
+    );
+    sim.client(a)
+        .convs
+        .get_mut(h.conv_a)
+        .unwrap()
+        .persist_mut()
+        .set_failing(false);
+    sim.run_until(at(t_up, 7, 10_000));
+    assert_eq!(sim.client_ref(a).sched.acked(h.a_recv), Some(id));
+    assert_eq!(
+        sim.client_ref(a)
+            .convs
+            .get(h.conv_a)
+            .unwrap()
+            .received()
+            .len(),
+        1
+    );
+}
+
+/// VD-M6-A-14 `receive_commit_failure_does_not_advance_ack`: a message of two fragments is fetched in one response;
+/// the commit of fragment 1 fails — the acknowledgement stops at fragment 0, the next `FETCH`es carry it and fragment 1
+/// comes again; once persistence works the message is delivered once and the acknowledgement moves past fragment 1.
+#[test]
+fn receive_commit_failure_does_not_advance_ack() {
+    let mut sim = driver();
+    let a = client(&mut sim, Mode::Strict, 291);
+    let b = client(&mut sim, Mode::Strict, 292);
+    let h = half_contact(&mut sim, a, b, 10_000);
+    let (f0, f1) = {
+        let conv = sim.client(b).convs.get_mut(h.conv_b).unwrap();
+        conv.outbox_mut().enqueue(text(5, 2500), 0);
+        let f0 = conv.prepare_direct(0).unwrap().cell;
+        let f1 = conv.prepare_direct(0).unwrap().cell;
+        (f0, f1)
+    };
+    // fragment 0 commits, every later commit of a fails
+    sim.client(a)
+        .convs
+        .get_mut(h.conv_a)
+        .unwrap()
+        .persist_mut()
+        .fail_after_commits(Some(1));
+    sim.client(a).opts.inspect = Inspect::Requests;
+    let id0 = inject(&mut sim, b, &h, &f0);
+    let id1 = inject(&mut sim, b, &h, &f1);
+    let (slot, t_up) = run_until_link_up(&mut sim, a, LinkKind::Recv);
+    sim.run_until(at(t_up, 5, 10_000));
+    assert_eq!(
+        sim.client_ref(a).sched.acked(h.a_recv),
+        Some(id0),
+        "the acknowledgement stops at the committed fragment"
+    );
+    let acks = fetch_acks(&sim, a, slot);
+    assert!(
+        acks.iter().all(|a| *a <= id0),
+        "no FETCH acknowledges fragment 1: {acks:?}"
+    );
+    {
+        let conv = sim.client_ref(a).convs.get(h.conv_a).unwrap();
+        assert_eq!((conv.partials(), conv.received().len()), (1, 0));
+    }
+    assert!(
+        sim.client_ref(a)
+            .gate
+            .delivered
+            .get(&(h.a_recv.0, id1))
+            .copied()
+            .unwrap_or(0)
+            >= 2,
+        "fragment 1 comes again"
+    );
+    sim.client(a)
+        .convs
+        .get_mut(h.conv_a)
+        .unwrap()
+        .persist_mut()
+        .fail_after_commits(None);
+    sim.run_until(at(t_up, 9, 10_000));
+    assert_eq!(sim.client_ref(a).sched.acked(h.a_recv), Some(id1));
+    let conv = sim.client_ref(a).convs.get(h.conv_a).unwrap();
+    assert_eq!((conv.partials(), conv.received().len()), (0, 1));
+}
+
+fn fetch_acks(sim: &VirtualDriver, c: usize, slot: u64) -> Vec<u64> {
+    sim.client_ref(c)
+        .requests
+        .iter()
+        .filter(|(_, s, _)| *s == slot)
+        .filter_map(|(_, _, r)| match &r.cmd {
+            RequestCmd::Fetch { ack, .. } => Some(*ack),
+            _ => None,
+        })
+        .collect()
+}
+
+/// S-28: a cell that does not decrypt is discarded, its decision is committed and the acknowledgement covers it; the
+/// real cells around it are delivered.
+#[test]
+fn every_delivered_cell_is_acknowledged() {
+    let mut sim = driver();
+    let a = client(&mut sim, Mode::Strict, 281);
+    let b = client(&mut sim, Mode::Strict, 282);
+    let h = half_contact(&mut sim, a, b, 10_000);
+    let (r1, r2) = {
+        let conv = sim.client(b).convs.get_mut(h.conv_b).unwrap();
+        conv.outbox_mut().enqueue(text(1, 80), 0);
+        let r1 = conv.prepare_direct(0).unwrap().cell;
+        conv.outbox_mut().enqueue(text(2, 80), 0);
+        let r2 = conv.prepare_direct(0).unwrap().cell;
+        (r1, r2)
+    };
+    let id1 = inject(&mut sim, b, &h, &r1);
+    let garbage = Cell::from_bytes(&[0x33; 4096]).unwrap();
+    let id2 = inject(&mut sim, b, &h, &garbage);
+    let id3 = inject(&mut sim, b, &h, &r2);
+    assert_eq!((id1, id2, id3), (1, 2, 3));
+    let (_, t_up) = run_until_link_up(&mut sim, a, LinkKind::Recv);
+    sim.run_until(at(t_up, 3, 10_000));
+    let conv = sim.client_ref(a).convs.get(h.conv_a).unwrap();
+    assert_eq!(conv.received().len(), 2, "both real cells delivered");
+    assert_eq!(conv.discarded(), 1);
+    assert_eq!(
+        sim.client_ref(a).sched.acked(h.a_recv),
+        Some(3),
+        "the ack covers the discarded cell"
+    );
+}
+
+/// S-29: a cell delivered twice by the relay (a re-fetch with an older acknowledgement) is processed once.
+#[test]
+fn refetch_dedup_by_cell_id() {
+    let mut sim = driver();
+    let a = client(&mut sim, Mode::Strict, 291);
+    let b = client(&mut sim, Mode::Strict, 292);
+    let h = half_contact(&mut sim, a, b, 10_000);
+    let real = {
+        let conv = sim.client(b).convs.get_mut(h.conv_b).unwrap();
+        conv.outbox_mut().enqueue(text(3, 80), 0);
+        conv.prepare_direct(0).unwrap().cell
+    };
+    let id = inject(&mut sim, b, &h, &real);
+    sim.client(a).latency_ms = 9_500;
+    sim.client(a).opts.inspect = Inspect::Requests;
+    let (slot, t_up) = run_until_link_up(&mut sim, a, LinkKind::Recv);
+    sim.run_until(at(t_up, 5, 10_000));
+    let acks = fetch_acks(&sim, a, slot);
+    assert!(
+        acks.iter().filter(|a| **a == 0).count() >= 2,
+        "the cell was asked for twice: {acks:?}"
+    );
+    assert_eq!(
+        sim.client_ref(a).gate.delivered.get(&(h.a_recv.0, id)),
+        Some(&1),
+        "processed once"
+    );
+    assert_eq!(
+        sim.client_ref(a)
+            .convs
+            .get(h.conv_a)
+            .unwrap()
+            .received()
+            .len(),
+        1
+    );
+}
+
+// ---- S-30: response handling against a scripted relay ---------------------------------------------------------------
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Call {
+    Relayed(u64, u64),
+    Evicted(u64),
+    Failed(SendFailure),
+    Discard,
+    Lost,
+}
+
+#[derive(Default)]
+pub(crate) struct Fake {
+    pub(crate) next: u64,
+    pub(crate) calls: Vec<Call>,
+    /// `prepare_cell` is "not ready" before this time (a preparation that finishes late).
+    pub(crate) ready_at: u64,
+    /// The queues `prepare_cell` was asked for and answered, in order.
+    pub(crate) asked: Vec<QueueId>,
+}
+
+impl CellSource for Fake {
+    fn prepare_cell(&mut self, q: QueueId, now: u64) -> Result<Option<PreparedCell>, SourceError> {
+        if now < self.ready_at {
+            return Ok(None);
+        }
+        self.asked.push(q);
+        self.next = self.next.saturating_add(1);
+        Ok(Some(PreparedCell {
+            cell: Cell::from_bytes(&[u8::try_from(self.next).unwrap(); 4096]).unwrap(),
+            token: CellToken(self.next),
+        }))
+    }
+    fn relayed(&mut self, _: QueueId, t: CellToken, id: u64) {
+        self.calls.push(Call::Relayed(t.0, id));
+    }
+    fn evicted(&mut self, _: QueueId, id: u64) {
+        self.calls.push(Call::Evicted(id));
+    }
+    fn send_failed(&mut self, _: QueueId, _: CellToken, why: SendFailure) {
+        self.calls.push(Call::Failed(why));
+    }
+    fn discard(&mut self, _: QueueId, _: CellToken) {
+        self.calls.push(Call::Discard);
+    }
+    fn queue_lost(&mut self, _: QueueId) {
+        self.calls.push(Call::Lost);
+    }
+    fn deliver(&mut self, _: QueueId, _: u64, _: &Cell) -> Result<(), SourceError> {
+        Ok(())
+    }
+}
+
+/// The scheduler core driven by hand against a scripted relay.
+pub(crate) struct Rig {
+    pub(crate) sched: Scheduler,
+    pub(crate) src: Fake,
+    pub(crate) stream: Scripted,
+    pub(crate) link: Option<LinkId>,
+    pub(crate) writes: Vec<u64>,
+    pub(crate) events: Vec<LinkEvent>,
+    pub(crate) now: u64,
+    /// A script for each further connection (a scripted relay serves one connection).
+    pub(crate) remake: Option<fn() -> Script>,
+    /// Whether `apply` reports a written frame to the scheduler (`frame_written`); a test that holds its writer sets false.
+    pub(crate) report_written: bool,
+}
+
+impl Rig {
+    pub(crate) fn new(script: Script, mode: Mode) -> Self {
+        Self::with(
+            script,
+            mode,
+            Params {
+                phase_max_ms: 0,
+                ..Params::default()
+            },
+        )
+    }
+
+    pub(crate) fn with(script: Script, mode: Mode, params: Params) -> Self {
+        let mut sched = Scheduler::new(params, mode, TimingRng::seeded(3));
+        let cap =
+            SendCap::from_route([1; 16], &SecretBytes::from_slice(&[9; 32]).unwrap()).unwrap();
+        sched.add_send_queue(0, RelayId(0), cap, 10_000).unwrap();
+        Self {
+            sched,
+            src: Fake::default(),
+            stream: Scripted::new(script),
+            link: None,
+            writes: Vec::new(),
+            events: Vec::new(),
+            now: 0,
+            remake: None,
+            report_written: true,
+        }
+    }
+
+    pub(crate) fn apply(&mut self, outs: Vec<Output>) {
+        let mut queue: std::collections::VecDeque<Output> = outs.into();
+        while let Some(o) = queue.pop_front() {
+            match o {
+                Output::Connect { link, .. } => {
+                    if let (Some(make), Some(_)) = (self.remake, self.link) {
+                        self.stream = Scripted::new(make());
+                    }
+                    let id = scripted::identity();
+                    let mut entropy = EntropyPool::new("m6-rig-client", 0);
+                    let session = Session::connect(
+                        self.stream.clone(),
+                        id.fp,
+                        Some(&id.access),
+                        scripted::T0,
+                        entropy.get(),
+                    )
+                    .unwrap();
+                    let (_s, chan) = session.into_parts();
+                    self.link = Some(link);
+                    let more = self.sched.link_up(link, self.now, chan).unwrap();
+                    queue.extend(more);
+                    let more = self.sched.work(self.now, &mut self.src).unwrap();
+                    queue.extend(more);
+                }
+                Output::Write { link, bytes, at } => {
+                    self.writes.push(at);
+                    std::io::Write::write_all(&mut self.stream, &bytes).unwrap();
+                    if self.report_written {
+                        self.sched.frame_written(link);
+                    }
+                    loop {
+                        let mut frame = vec![0_u8; FRAME];
+                        let mut got = 0_usize;
+                        while got < FRAME {
+                            let n = std::io::Read::read(
+                                &mut self.stream,
+                                frame.get_mut(got..).unwrap(),
+                            )
+                            .unwrap();
+                            if n == 0 {
+                                break;
+                            }
+                            got = got.saturating_add(n);
+                        }
+                        if got < FRAME {
+                            break;
+                        }
+                        let more = self.sched.on_frame(link, self.now, &frame).unwrap();
+                        queue.extend(more);
+                    }
+                    let more = self.sched.work(self.now, &mut self.src).unwrap();
+                    queue.extend(more);
+                }
+                Output::Event(e) => self.events.push(e),
+                Output::Close { .. } | Output::Control { .. } => {}
+            }
+        }
+    }
+
+    /// The driver wakes at `t` (not at a deadline): what is due is flushed first, then the work runs (the split API of
+    /// reviewer VD-M6-A-12; the work is modelled as instantaneous).
+    pub(crate) fn poll_at(&mut self, t: u64) {
+        self.now = t;
+        let outs = self.sched.poll_due(t).unwrap();
+        self.apply(outs);
+        let outs = self.sched.work(t, &mut self.src).unwrap();
+        self.apply(outs);
+        self.sched.prepared_until(t);
+    }
+
+    pub(crate) fn run_to(&mut self, t_end: u64) {
+        loop {
+            match self.sched.next_deadline() {
+                Some(t) if t <= t_end => self.poll_at(t.max(self.now)),
+                _ => break,
+            }
+        }
+        self.now = t_end;
+    }
+}
+
+pub(crate) fn send_script() -> Script {
+    Box::new(|request: &Request, n| {
+        let seq = request.cmd_seq;
+        let resp = match n {
+            0 => ResponseCmd::OkSend {
+                cell_id: 10,
+                evicted: Some(5),
+            },
+            1 => ResponseCmd::OkSend {
+                cell_id: 11,
+                evicted: Some(6),
+            },
+            2 => ResponseCmd::Err(ErrCode::NoQueue),
+            3 => ResponseCmd::Err(ErrCode::Auth),
+            _ => ResponseCmd::Err(ErrCode::Rate),
+        };
+        vec![Response {
+            cmd_seq: seq,
+            cmd: resp,
+        }]
+    })
+}
+
+/// S-30: `OK_SEND` with an evicted id, `ERR` 3, 4 and 7 each have their consequence, and none changes the tick
+/// schedule.
+#[test]
+fn send_response_handling() {
+    let mut rig = Rig::new(send_script(), Mode::Strict);
+    rig.run_to(0);
+    let t_up = 0;
+    rig.run_to(at(t_up, 5, 10_000));
+    assert_eq!(
+        rig.writes,
+        (1..=5).map(|k| k * 10_000).collect::<Vec<u64>>(),
+        "schedule unchanged"
+    );
+    assert_eq!(
+        rig.src.calls,
+        vec![
+            Call::Relayed(1, 10),
+            Call::Evicted(5),
+            Call::Relayed(2, 11),
+            Call::Evicted(6),
+            Call::Failed(SendFailure::NoQueue),
+            Call::Lost,
+            Call::Failed(SendFailure::Auth),
+            Call::Failed(SendFailure::Rate),
+        ]
+    );
+    let q = QueueId(0);
+    assert!(rig.sched.route_dead(q), "ERR 3 marks the route dead");
+    assert!(rig.events.contains(&LinkEvent::RouteDead(q)));
+    assert!(rig.events.contains(&LinkEvent::Alert(q, Alert::QueueAuth)));
+    assert!(rig.events.contains(&LinkEvent::Alert(q, Alert::QueueRate)));
+    assert!(
+        !rig.events
+            .iter()
+            .any(|e| matches!(e, LinkEvent::TornDown(..))),
+        "no teardown"
+    );
+}
+
+/// S-31: a `FETCH` answered `present` 2 makes the recipient re-create the identical queue on a one-shot link after
+/// `U[10 s, 5 min]`, with its acknowledgement reset; the recv link keeps its ticks.
+#[test]
+fn recv_noqueue_recreates_after_delay() {
+    let mut sim = driver();
+    let a = client(&mut sim, Mode::Strict, 311);
+    let b = client(&mut sim, Mode::Strict, 312);
+    let c = contact(&mut sim, a, b, 10_000, 10_000);
+    let (slot, t_up) = run_until_link_up(&mut sim, a, LinkKind::Recv);
+    sim.run_until(at(t_up, 40, 10_000));
+    assert!(sim.client_ref(a).sched.acked(c.a_recv).unwrap() > 0);
+    // the relay loses the queue (QUEUE_DEL by its owner's key stands in for a restart that keeps the connections)
+    let (recv_seed, send_seed) = *sim.client_ref(a).material.queues.get(&c.a_recv.0).unwrap();
+    {
+        let access = sim.harness().access_key();
+        let fp = sim.harness().relay_fp();
+        let unix = sim.harness().clock().unix();
+        let stream = sim.harness_mut().open_stream().unwrap();
+        let mut t = RelayQueueTransport::connect(
+            stream,
+            fp,
+            Some(&access),
+            unix,
+            sim.client(a).entropy.get(),
+        )
+        .unwrap();
+        t.delete_queue(&RecvCap::from_seed(&SecretBytes::from_slice(&recv_seed).unwrap()).unwrap())
+            .unwrap();
+    }
+    let t_gone = sim.now();
+    sim.run_until(at(t_up, 41, 10_000));
+    let t_seen = at(t_up, 41, 10_000);
+    assert_eq!(
+        sim.client_ref(a).sched.acked(c.a_recv),
+        Some(0),
+        "acknowledgement reset"
+    );
+    sim.run_until(t_seen + 320_000);
+    let started: Vec<_> = sim
+        .client_ref(a)
+        .controls_started
+        .iter()
+        .filter(|(_, _, k)| matches!(k, ControlKind::QueueNew(q) if *q == c.a_recv))
+        .collect();
+    assert_eq!(started.len(), 1, "one re-creation");
+    let when = started.first().unwrap().0;
+    assert!(
+        (t_seen + 10_000..=t_seen + 300_000).contains(&when),
+        "t + U[10 s, 5 min]: {t_gone} {t_seen} {when}"
+    );
+    // identical keys: the original sender capability works again, and the recv link has kept its ticks
+    let sends = sim.client_ref(a).material.queues.get(&c.a_recv.0).copied();
+    assert_eq!(sends, Some((recv_seed, send_seed)));
+    let ticks: Vec<u64> = frames_of(&sim, a, Dir::C2R, slot)
+        .iter()
+        .map(|e| e.t_ms)
+        .collect();
+    for (k, t) in ticks.iter().enumerate() {
+        assert_eq!(*t, at(t_up, u64::try_from(k).unwrap() + 1, 10_000));
+    }
+    assert!(
+        !sim.client_ref(a)
+            .events
+            .iter()
+            .any(|(_, e)| matches!(e, LinkEvent::TornDown(id, _) if id.0 == slot))
+    );
+    assert!(
+        sim.client_ref(a).sched.acked(c.a_recv).unwrap() > 0,
+        "fetching again after the re-creation"
+    );
+}
+
+/// S-32: after `ERR_NOQUEUE` on a send queue the sender forgets its `cell_id → message` map; a later `evicted` id of the
+/// re-created queue does not requeue a stale message.
+#[test]
+fn sender_noqueue_discards_cell_id_map() {
+    let (conv, _peer, _) = conv_with_peer(32);
+    let mut convs = Conversations::new();
+    let i = convs.add(conv);
+    for n in 0..7_u8 {
+        convs
+            .get_mut(i)
+            .unwrap()
+            .outbox_mut()
+            .enqueue(text(n, 30), 0);
+        let p = convs
+            .prepare_cell(QueueId(0), u64::from(n) * 10_000)
+            .unwrap()
+            .unwrap();
+        convs.relayed(QueueId(0), p.token, u64::from(n) + 1);
+    }
+    assert_eq!(convs.get(i).unwrap().mapped_cells(), 7);
+    convs.queue_lost(QueueId(0));
+    assert_eq!(convs.get(i).unwrap().mapped_cells(), 0, "map empty");
+    // the messages were relayed into a queue that is gone: queued again
+    for n in 0..7_u8 {
+        assert_eq!(
+            convs.get(i).unwrap().outbox().state(&[n; 16]),
+            Some(MsgState::Queued)
+        );
+    }
+    // take one message out again (relayed in the new queue), then a stale evicted id arrives: ignored
+    let p = convs.prepare_cell(QueueId(0), 100_000).unwrap().unwrap();
+    convs.relayed(QueueId(0), p.token, 20);
+    assert_eq!(
+        convs.get(i).unwrap().outbox().state(&[0; 16]),
+        Some(MsgState::Relayed(20))
+    );
+    convs.evicted(QueueId(0), 3);
+    assert_eq!(
+        convs.get(i).unwrap().outbox().state(&[0; 16]),
+        Some(MsgState::Relayed(20)),
+        "stale id ignored"
+    );
+}
+
+pub(crate) fn ok_script() -> Script {
+    Box::new(|request: &Request, n| {
+        vec![Response {
+            cmd_seq: request.cmd_seq,
+            cmd: ResponseCmd::OkSend {
+                cell_id: u64::try_from(n).unwrap().saturating_add(1),
+                evicted: None,
+            },
+        }]
+    })
+}
+
+/// VD-1: a frame whose preparation finishes one millisecond after its tick is not written at that tick: the tick is an
+/// overrun, the link goes down and comes back at a fresh random phase.
+#[test]
+fn s_overrun_prepare_late_by_one_ms_writes_nothing() {
+    let params = Params {
+        phase_max_ms: 180_000,
+        ..Params::default()
+    };
+    let mut rig = Rig::with(ok_script(), Mode::Strict, params);
+    // the link comes up at its phase; ticks are 10 s later
+    while rig.sched.links().first().unwrap().t_up.is_none() {
+        rig.run_to(rig.now.saturating_add(500));
+    }
+    let t_up = rig.sched.links().first().unwrap().t_up.unwrap();
+    let tick2 = at(t_up, 2, 10_000);
+    // the cell for tick 2 is prepared after tick 1; it finishes one millisecond after tick 2
+    rig.src.ready_at = tick2 + 1;
+    rig.run_to(at(t_up, 1, 10_000));
+    let draws = rig.sched.timing_draws();
+    rig.run_to(tick2);
+    assert!(!rig.writes.contains(&tick2), "nothing is written at tick 2");
+    assert!(
+        rig.events
+            .iter()
+            .any(|e| matches!(e, LinkEvent::TornDown(_, Reason::Overrun)))
+    );
+    assert_eq!(rig.sched.overruns(), 1);
+    rig.poll_at(tick2 + 1);
+    assert!(
+        !rig.writes.contains(&tick2),
+        "and not a millisecond later either"
+    );
+    let info = *rig.sched.links().first().unwrap();
+    assert!(
+        info.id.is_none() && info.starts_at.is_some(),
+        "a reconnect is scheduled"
+    );
+    assert!((tick2..=tick2 + 180_000).contains(&info.starts_at.unwrap()));
+    assert!(
+        rig.sched.timing_draws().0 > draws.0,
+        "with a fresh phase from the links' generator"
+    );
+}
+
+/// VD-1: a driver that wakes within the jitter of a tick whose frame is ready writes it once, stamped as the tick.
+#[test]
+fn s_late_driver_wake_within_jitter_writes_once() {
+    let mut rig = Rig::new(ok_script(), Mode::Strict);
+    rig.run_to(10_000);
+    assert_eq!(rig.writes, vec![10_000]);
+    rig.run_to(19_999);
+    rig.poll_at(20_049);
+    assert_eq!(
+        rig.writes,
+        vec![10_000, 20_000],
+        "one write at tick 2, stamped 20 000"
+    );
+    assert!(
+        !rig.events
+            .iter()
+            .any(|e| matches!(e, LinkEvent::TornDown(..)))
+    );
+}
+
+/// VD-1: beyond the jitter the late wake is an overrun, not a late write.
+#[test]
+fn s_late_driver_wake_beyond_jitter_is_overrun() {
+    let mut rig = Rig::new(ok_script(), Mode::Strict);
+    rig.run_to(10_000);
+    rig.run_to(19_999);
+    rig.poll_at(20_051);
+    assert_eq!(rig.writes, vec![10_000], "nothing is written for tick 2");
+    assert!(
+        rig.events
+            .iter()
+            .any(|e| matches!(e, LinkEvent::TornDown(_, Reason::Overrun)))
+    );
+    assert_eq!(rig.sched.overruns(), 1);
+}
+
+/// VD-M6-A-12 `s_prepare_completing_after_tick_is_overrun_even_within_jitter`: a frame whose preparation starts at
+/// 19 999 and, as the driver reports with `prepared_until`, ends at 20 001 is not ready at its tick 20 000. The driver
+/// polls at 20 030 — inside the 50 ms jitter — and finds an overrun: nothing is written.
+#[test]
+fn s_prepare_completing_after_tick_is_overrun_even_within_jitter() {
+    let mut rig = Rig::new(ok_script(), Mode::Strict);
+    rig.run_to(9_999);
+    // the cell source is not ready before 19 999: the frame of tick 2 is not built right after tick 1
+    rig.src.ready_at = 19_999;
+    rig.run_to(10_000);
+    assert_eq!(rig.writes, vec![10_000]);
+    rig.now = 19_999;
+    let outs = rig.sched.work(19_999, &mut rig.src).unwrap();
+    rig.apply(outs);
+    // the preparation took until 20 001
+    rig.sched.prepared_until(20_001);
+    rig.now = 20_030;
+    let outs = rig.sched.poll_due(20_030).unwrap();
+    assert!(
+        !outs.iter().any(|o| matches!(o, Output::Write { .. })),
+        "no write for tick 2"
+    );
+    rig.apply(outs);
+    assert_eq!(rig.writes, vec![10_000], "nothing is written for tick 2");
+    assert!(
+        rig.events
+            .iter()
+            .any(|e| matches!(e, LinkEvent::TornDown(_, Reason::Overrun)))
+    );
+    assert_eq!(rig.sched.overruns(), 1);
+
+    // the same preparation, reported finished at 20 000 (not after the tick): the tick is kept
+    let mut rig = Rig::new(ok_script(), Mode::Strict);
+    rig.run_to(9_999);
+    rig.src.ready_at = 19_999;
+    rig.run_to(10_000);
+    rig.now = 19_999;
+    let outs = rig.sched.work(19_999, &mut rig.src).unwrap();
+    rig.apply(outs);
+    rig.sched.prepared_until(20_000);
+    rig.now = 20_030;
+    let outs = rig.sched.poll_due(20_030).unwrap();
+    rig.apply(outs);
+    assert_eq!(rig.writes, vec![10_000, 20_000]);
+    assert_eq!(rig.sched.overruns(), 0);
+}
+
+/// VD-M6-A-12 `s_poll_due_performs_no_crypto_and_no_persist`: what is due is decided and its frame handed out without a
+/// seal, a signature, a ratchet encryption or a persist, and without a call to the cell source; the next preparation
+/// (`work`) does those.
+#[test]
+fn s_poll_due_performs_no_crypto_and_no_persist() {
+    let mut rig = Rig::new(ok_script(), Mode::Strict);
+    rig.run_to(9_999);
+    let counted = || {
+        [
+            secmp_transport::channel::counters::seal_calls(),
+            secmp_transport::channel::counters::sign_calls(),
+            counters::tr_encrypt_calls(),
+            counters::persist_calls(),
+        ]
+    };
+    let (before, prepared_before) = (counted(), rig.src.next);
+    let outs = rig.sched.poll_due(10_000).unwrap();
+    assert_eq!(
+        outs.iter()
+            .filter(|o| matches!(o, Output::Write { at: 10_000, .. }))
+            .count(),
+        1,
+        "the due write is handed out"
+    );
+    assert_eq!(counted(), before, "no crypto, no persist across poll_due");
+    assert_eq!(
+        rig.src.next, prepared_before,
+        "the cell source is not called"
+    );
+    rig.apply(outs);
+    rig.now = 10_000;
+    let outs = rig.sched.work(10_000, &mut rig.src).unwrap();
+    rig.apply(outs);
+    assert_eq!(
+        rig.src.next,
+        prepared_before + 1,
+        "work prepares the next cell"
+    );
+    assert_eq!(
+        counted()[0] - before[0],
+        1,
+        "and seals its frame (one seal)"
+    );
+}
+
+/// VD-M6-A-12 `s_due_writes_handed_off_before_any_prepare`: two links tick together every 10 s. Preparing a real cell
+/// costs 20 ms (modelled), a dummy 1 ms; link B's message is queued so that its real cell is prepared at the very
+/// instant of a tick. The due writes of both links are in the `poll_due` output of that tick and the driver emits them
+/// at the tick — not after B's 20 ms of preparation — which the trace (emission time, kept apart from the tick the
+/// core stamped) shows: every frame leaves at its tick.
+#[test]
+fn s_due_writes_handed_off_before_any_prepare() {
+    let mut sim = driver();
+    sim.prepare_cost(20, 1);
+    let a = client_with(
+        &mut sim,
+        Mode::Strict,
+        Params {
+            phase_max_ms: 0,
+            ..Params::default()
+        },
+        301,
+    );
+    let b = client(&mut sim, Mode::Strict, 302);
+    let _link_a = send_only(&mut sim, a, b, 10_000);
+    let link_b = send_only(&mut sim, a, b, 10_000);
+    sim.run_until(15_000);
+    // queued between tick 1 and tick 2: its cell is prepared right after tick 2 (at 20 000), 20 ms of work
+    sim.client(a)
+        .convs
+        .get_mut(link_b)
+        .unwrap()
+        .outbox_mut()
+        .enqueue(text(30, 80), 15_000);
+    let work_before = sim.client_ref(a).work_total_ms;
+    sim.run_until(60_000);
+    assert!(
+        sim.client_ref(a).work_total_ms - work_before >= 20,
+        "the real cell was prepared (20 ms of work)"
+    );
+    // the handshake records at the start are not frames
+    let sent: Vec<_> = sim
+        .scheduled(a, Dir::C2R)
+        .into_iter()
+        .filter(|e| e.len == FRAME)
+        .collect();
+    let ticks: Vec<u64> = sent.iter().map(|e| e.t_ms).collect();
+    assert_eq!(
+        ticks,
+        (1..=6_u64)
+            .flat_map(|k| [k * 10_000, k * 10_000])
+            .collect::<Vec<_>>(),
+        "two frames at each tick"
+    );
+    assert!(
+        sent.iter().all(|e| e.t_ms == e.at_ms),
+        "every frame left at the tick the core stamped on it"
+    );
+}
+
+/// GLM2B-1 `balanced_rr_does_not_advance_on_teardown_before_tick`: the round-robin position moves when a SEND is
+/// written, not when its cell is obtained. Balanced, three queues due; the cell of the first tick is obtained from q0,
+/// its preparation ends after the tick (an Overrun, so nothing is written), the link reconnects: the first cell asked
+/// for on the new link is q0's again — the post-reconnect rotation does not depend on whether a teardown came between
+/// obtaining and writing.
+#[test]
+fn balanced_rr_does_not_advance_on_teardown_before_tick() {
+    let params = Params {
+        phase_max_ms: 0,
+        ..Params::default()
+    };
+    let mut rig = Rig::with(ok_script(), Mode::Balanced, params);
+    rig.remake = Some(ok_script);
+    let q0 = QueueId(0);
+    let mut queues = vec![q0];
+    for route in [2_u8, 3] {
+        let cap =
+            SendCap::from_route([route; 16], &SecretBytes::from_slice(&[9; 32]).unwrap()).unwrap();
+        queues.push(
+            rig.sched
+                .add_send_queue(0, RelayId(0), cap, 10_000)
+                .unwrap(),
+        );
+    }
+    // the link comes up at 0 and builds its first frames; the driver reports the preparation as ending at 10 001,
+    // after tick 1 (10 000)
+    let outs = rig.sched.poll_due(0).unwrap();
+    rig.apply(outs);
+    assert_eq!(rig.src.asked, vec![q0], "the cell of tick 1 is q0's");
+    rig.sched.prepared_until(10_001);
+    rig.run_to(10_000);
+    assert!(rig.writes.is_empty(), "nothing is written for tick 1");
+    assert_eq!(rig.sched.overruns(), 1);
+    assert!(
+        rig.events
+            .iter()
+            .any(|e| matches!(e, LinkEvent::TornDown(_, Reason::Overrun)))
+    );
+    // the link reconnects and builds the first frames of the new connection
+    let mut t = 10_000;
+    while rig.src.asked.len() < 2 {
+        t += 500;
+        assert!(t < 400_000, "no reconnect");
+        rig.run_to(t);
+    }
+    assert_eq!(
+        rig.src.asked.get(1),
+        Some(&q0),
+        "asked: {:?}",
+        rig.src.asked
+    );
+    // mutants-156 (`core/mod.rs:234`, `Deferred::release_discard` → `()`): the cell prepared for the tick that was lost
+    // goes back to the source (`discard`), once, at the next work pass
+    assert_eq!(
+        rig.src
+            .calls
+            .iter()
+            .filter(|c| **c == Call::Discard)
+            .count(),
+        1,
+        "{:?}",
+        rig.src.calls
+    );
+}
+
+/// Mutants-156 (`core/mod.rs:600`, `needs_send && up.send_part.is_none()` → `||`): a work pass that finds the tick's SEND
+/// part already prepared must not prepare it again — a second `prepare_cell` for the same tick would seal another part and
+/// leave a gap in the link's counters (the relay would refuse the frame). Strict, one send queue: the cell of tick 1 is asked
+/// for once when the link comes up, work passes in the middle of the interval ask for nothing, tick 1 is written and accepted.
+#[test]
+fn work_pass_does_not_prepare_a_prepared_send_twice() {
+    let mut rig = Rig::new(ok_script(), Mode::Strict);
+    let outs = rig.sched.poll_due(0).unwrap();
+    rig.apply(outs);
+    assert_eq!(rig.src.asked.len(), 1, "the cell of tick 1");
+    for t in [3_000, 6_000] {
+        rig.now = t;
+        let outs = rig.sched.work(t, &mut rig.src).unwrap();
+        assert!(!outs.iter().any(|o| matches!(o, Output::Write { .. })));
+        rig.apply(outs);
+        assert_eq!(rig.src.asked.len(), 1, "work at {t} asked again");
+    }
+    rig.run_to(10_000);
+    assert_eq!(rig.writes, vec![10_000]);
+    assert!(
+        !rig.events
+            .iter()
+            .any(|e| matches!(e, LinkEvent::TornDown(..))),
+        "{:?}",
+        rig.events
+    );
+}
+
+/// Mutants-156 (`core/mod.rs:1302`, `1314`: `==` → `!=` in `Scheduler::remove_queue`): an unknown queue is refused even
+/// when others exist, and a Balanced relay link is closed only when its last queue is removed — not when one of two send
+/// queues of the relay goes.
+#[test]
+fn remove_queue_refuses_unknown_and_ends_the_relay_link_with_its_last_queue() {
+    let mut rig = Rig::new(ok_script(), Mode::Balanced);
+    let cap = SendCap::from_route([5; 16], &SecretBytes::from_slice(&[9; 32]).unwrap()).unwrap();
+    let q1 = rig
+        .sched
+        .add_send_queue(0, RelayId(0), cap, 10_000)
+        .unwrap();
+    let q0 = QueueId(0);
+    assert!(matches!(
+        rig.sched.remove_queue(0, QueueId(99), &mut rig.src),
+        Err(secmp_client_core::scheduler::core::SchedError::UnknownQueue)
+    ));
+    let outs = rig.sched.poll_due(0).unwrap();
+    rig.apply(outs);
+    assert!(rig.sched.links().iter().any(|l| l.id.is_some()), "link up");
+    let outs = rig.sched.remove_queue(1_000, q0, &mut rig.src).unwrap();
+    rig.apply(outs);
+    assert!(
+        !rig.events
+            .iter()
+            .any(|e| matches!(e, LinkEvent::TornDown(..))),
+        "one queue of the relay is left: {:?}",
+        rig.events
+    );
+    assert!(rig.sched.links().iter().any(|l| l.id.is_some()), "still up");
+    let outs = rig.sched.remove_queue(2_000, q1, &mut rig.src).unwrap();
+    rig.apply(outs);
+    assert!(
+        rig.events
+            .iter()
+            .any(|e| matches!(e, LinkEvent::TornDown(_, Reason::Closed))),
+        "{:?}",
+        rig.events
+    );
+    // mutants-156 (`core/mod.rs:217`, the direct `Release for S::release_discard`): the cell prepared for the closed link's
+    // next tick goes back to the source at once
+    assert_eq!(
+        rig.src
+            .calls
+            .iter()
+            .filter(|c| **c == Call::Discard)
+            .count(),
+        1,
+        "{:?}",
+        rig.src.calls
+    );
+}
+
+/// Mutants-156 (`core/mod.rs:380`, `World::period_of` → `Some(1)`): a link ticks at its queue's period (Strict) or at the
+/// mode's slot (Balanced, Low-bw) — read here as the time of the first deadline after the link is up, so that a period of
+/// 1 ms fails at once instead of looping through a run of ticks.
+#[test]
+fn link_period_is_the_queues_or_the_modes_slot() {
+    for (mode, expect) in [
+        (Mode::Strict, 10_000),
+        (Mode::Balanced, Params::default().t_balanced_ms),
+        (Mode::LowBw, Params::default().t_lowbw_ms),
+    ] {
+        let mut rig = Rig::new(ok_script(), mode);
+        let outs = rig.sched.poll_due(0).unwrap();
+        rig.apply(outs);
+        // the first deadline is the FETCH lead, `fetch_lead_ms` before the first tick
+        let lead = Params::default().fetch_lead_ms;
+        assert_eq!(rig.sched.next_deadline(), Some(expect - lead), "{mode:?}");
+    }
+}
+
+/// FIN2-1 (Astra FINAL2): while SEND frames are written but not yet reported complete, the next SEND is chosen from the
+/// position the newest pending one will commit — the chain Q0 → Q1 → Q2 over three ticks with no completion reported — and a
+/// teardown before any completion leaves the committed position: the replacement link starts at Q0 again.
+#[test]
+fn balanced_rr_reserves_the_successor_of_an_unwritten_send() {
+    let params = Params {
+        phase_max_ms: 0,
+        ..Params::default()
+    };
+    let mut rig = Rig::with(ok_script(), Mode::Balanced, params);
+    rig.remake = Some(ok_script);
+    rig.report_written = false;
+    let q0 = QueueId(0);
+    let mut queues = vec![q0];
+    for route in [2_u8, 3] {
+        let cap =
+            SendCap::from_route([route; 16], &SecretBytes::from_slice(&[9; 32]).unwrap()).unwrap();
+        queues.push(
+            rig.sched
+                .add_send_queue(0, RelayId(0), cap, 10_000)
+                .unwrap(),
+        );
+    }
+    rig.run_to(30_000);
+    assert_eq!(rig.writes, vec![10_000, 20_000, 30_000]);
+    assert_eq!(
+        rig.src.asked.get(..3),
+        Some(queues.as_slice()),
+        "asked: {:?}",
+        rig.src.asked
+    );
+    // the writer never completed: tear the link down; the replacement starts at the committed position
+    let link = rig.link.unwrap();
+    let before = rig.src.asked.len();
+    let outs = rig.sched.on_closed(link, 30_001).unwrap();
+    rig.apply(outs);
+    rig.report_written = true;
+    let mut t = 30_001;
+    while rig.src.asked.len() == before {
+        t += 500;
+        assert!(t < 400_000, "no reconnect");
+        rig.run_to(t);
+    }
+    assert_eq!(
+        rig.src.asked.get(before),
+        Some(&q0),
+        "asked: {:?}",
+        rig.src.asked
+    );
+}
+
+/// Three send queues on relay 0 (periods 10 s), the first being the rig's own: `[Q0, Q1, Q2]`.
+pub(crate) fn rig_with_three_queues(rig: &mut Rig) -> Vec<QueueId> {
+    let mut queues = vec![QueueId(0)];
+    for route in [2_u8, 3] {
+        let cap =
+            SendCap::from_route([route; 16], &SecretBytes::from_slice(&[9; 32]).unwrap()).unwrap();
+        queues.push(
+            rig.sched
+                .add_send_queue(0, RelayId(0), cap, 10_000)
+                .unwrap(),
+        );
+    }
+    queues
+}
+
+/// C2-01 (item 10): a `frame_written` on an up link whose ledger is empty is counted and changes nothing else — the
+/// rotation stays where the first completion put it.
+#[test]
+fn frame_written_on_an_empty_ledger_is_counted() {
+    let params = Params {
+        phase_max_ms: 0,
+        ..Params::default()
+    };
+    let mut rig = Rig::with(ok_script(), Mode::Balanced, params);
+    let queues = rig_with_three_queues(&mut rig);
+    rig.run_to(10_000);
+    assert_eq!(rig.writes, vec![10_000], "one SEND tick");
+    assert_eq!(
+        rig.sched.unmatched_written(),
+        0,
+        "the rig's completion matched"
+    );
+    let link = rig.link.unwrap();
+    rig.sched.frame_written(link);
+    assert_eq!(rig.sched.unmatched_written(), 1);
+    // `rr` is where the first completion left it (after Q0): the next SENDs go to Q1 and Q2
+    rig.run_to(30_000);
+    assert_eq!(
+        rig.src.asked.get(..3),
+        Some(queues.as_slice()),
+        "asked: {:?}",
+        rig.src.asked
+    );
+    assert_eq!(
+        rig.sched.unmatched_written(),
+        1,
+        "no other call was unmatched"
+    );
+}
+
+/// C2-02 (item 10): a closed or unknown link stays ignored, as before.
+#[test]
+fn frame_written_for_a_closed_link_is_not_counted() {
+    let params = Params {
+        phase_max_ms: 0,
+        ..Params::default()
+    };
+    let mut rig = Rig::with(ok_script(), Mode::Balanced, params);
+    rig.remake = Some(ok_script);
+    let _ = rig_with_three_queues(&mut rig);
+    rig.run_to(10_000);
+    let link = rig.link.unwrap();
+    let outs = rig.sched.on_closed(link, 10_001).unwrap();
+    rig.apply(outs);
+    rig.sched.frame_written(link);
+    rig.sched.frame_written(LinkId(9_999));
+    assert_eq!(rig.sched.unmatched_written(), 0);
+}
+
+/// `UNWRITTEN_MAX` at the default parameters: `2 * max_in_flight` (spec §10.3, `:678`).
+const UNWRITTEN_MAX_DEFAULT: usize = 4;
+
+/// Run `rig` for `periods` send periods (10 s), stepping 500 ms; return the longest ledger seen on an up link and, if a
+/// link was torn down with `Reason::InFlight`, the number of writes made when the first such teardown was seen.
+fn run_ledger_watch(rig: &mut Rig, periods: u64) -> (usize, Option<usize>) {
+    let (mut longest, mut first_teardown) = (0_usize, None);
+    let mut t = 0_u64;
+    while t < periods.saturating_mul(10_000) {
+        t = t.saturating_add(500);
+        rig.run_to(t);
+        if let Some(n) = rig.link.and_then(|l| rig.sched.unwritten_len(l)) {
+            longest = longest.max(n);
+        }
+        if first_teardown.is_none()
+            && rig
+                .events
+                .iter()
+                .any(|e| matches!(e, LinkEvent::TornDown(_, Reason::InFlight)))
+        {
+            first_teardown = Some(rig.writes.len());
+        }
+    }
+    (longest, first_teardown)
+}
+
+/// C2-04 (item 11): responses arrive but no write is ever reported complete: the ledger is bounded by `UNWRITTEN_MAX` and
+/// the tick that would exceed it tears the link down with `Reason::InFlight`, before any frame of that tick is written.
+/// (The pin: the ledger grows with every tick, 120+ entries, and no teardown — Astra FINAL3 (f).)
+#[test]
+fn unwritten_ledger_is_bounded_without_completions() {
+    let params = Params {
+        phase_max_ms: 0,
+        ..Params::default()
+    };
+    let mut rig = Rig::with(ok_script(), Mode::Balanced, params);
+    rig.remake = Some(ok_script);
+    rig.report_written = false;
+    let (longest, first_teardown) = run_ledger_watch(&mut rig, 200);
+    assert_eq!(
+        first_teardown,
+        Some(UNWRITTEN_MAX_DEFAULT),
+        "the fifth tick tears the link down: {longest} entries at most"
+    );
+    assert_eq!(longest, UNWRITTEN_MAX_DEFAULT, "ledger length");
+}
+
+/// C2-05 (item 11): with every completion reported the bound is never reached: no teardown for 200 periods, and the
+/// ledger is empty after each tick (the rig reports at the write).
+#[test]
+fn unwritten_bound_is_not_reached_with_completions() {
+    let params = Params {
+        phase_max_ms: 0,
+        ..Params::default()
+    };
+    let mut rig = Rig::with(ok_script(), Mode::Balanced, params);
+    rig.remake = Some(ok_script);
+    let (longest, first_teardown) = run_ledger_watch(&mut rig, 200);
+    assert_eq!(first_teardown, None, "no InFlight teardown");
+    assert!(longest <= 2, "ledger length {longest}");
+    assert!(rig.writes.len() >= 190, "writes: {}", rig.writes.len());
+}
+
+/// C2-07 (item 11): the `InFlight` teardown of the ledger bound is itself activity-independent. A virtual driver that never
+/// reports `frame_written` (Balanced, three contacts, seed 103; the AI-01 activity trace against the idle run): the
+/// emitted units — time, size, direction, link — are identical, including the time of the teardown and the replacement
+/// link's first frame, over the first teardown and two reconnect cycles. (The pin: no teardown in either run, one link.)
+#[test]
+fn unwritten_bound_teardown_is_activity_independent() {
+    use crate::m6_activity::{Rig as ActRig, Scenario as ActScenario, activity};
+    let hours = 1;
+    let run = |active: bool| {
+        let sc = ActScenario {
+            mode: Mode::Balanced,
+            contacts: vec![(10_000, 10_000); 3],
+            pool: false,
+            seed: 103,
+        };
+        let mut rig = ActRig::new(&sc, Params::default());
+        rig.sim.report_written(false);
+        let act = activity(0, hours, 3);
+        rig.run(hours, if active { Some(&act) } else { None })
+    };
+    let idle = run(false);
+    let active = run(true);
+    let links = |r: &crate::m6_activity::Run| {
+        let mut slots: Vec<u64> = r.c2r.iter().map(|e| e.slot).collect();
+        slots.dedup();
+        slots
+    };
+    assert!(
+        links(&idle).len() >= 3,
+        "the ledger bound tore the link down twice at least: links {:?}",
+        links(&idle)
+    );
+    assert!(
+        active.to_peers.saturating_add(active.to_x) > 0,
+        "the activity really happened"
+    );
+    assert_eq!(links(&idle), links(&active));
+    assert_eq!(
+        crate::m6_common::max_dt(&idle.c2r, &active.c2r),
+        Some(0),
+        "C2R"
+    );
+    assert_eq!(
+        crate::m6_common::max_dt(&idle.r2c, &active.r2c),
+        Some(0),
+        "R2C"
+    );
+}

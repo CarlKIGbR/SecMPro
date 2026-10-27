@@ -15,7 +15,7 @@
 //! connection before `RELAYINFO`; a connection without a complete `HS1` within the `HELLO`→`HS1` timeout of its
 //! `HELLO` is closed, nothing emitted (the same bound applies from accept to `HELLO`, an engineering choice); `HS1`
 //! is accepted only for a key generation that is still valid (OPEN-M5-10). A link is closed, nothing emitted, once it
-//! is [`LINK_AGE_MAX_MS`] old (the longest `LINK_LIFETIME`, spec §2, OPEN-M5-03) or has received no complete unit for
+//! is [`LINK_AGE_MAX_MS`] old (the longest `LINK_LIFETIME` plus 10 min, OPEN-M6-15) or has received no complete unit for
 //! the configured idle bound (`link_idle_secs`, M05 review C-3). The connection buffers at most one record or unit.
 
 use secmp_proto::Decode;
@@ -34,9 +34,10 @@ const HELLO_RECORD_LEN: usize = 2 + HELLO_BODY_LEN;
 const HS1_BODY_LEN: usize = 1 + HS1_LEN;
 /// Bytes of an `HS1` record.
 const HS1_RECORD_LEN: usize = 2 + HS1_BODY_LEN;
-/// The age at which the relay closes a link: 24 h, the upper end of `LINK_LIFETIME` ~ U[6 h, 24 h] (spec §2, §10.1
-/// item 1; OPEN-M5-03), after which a compliant client has re-handshaken on a fresh circuit (M05 review C-3).
-pub const LINK_AGE_MAX_MS: u64 = 86_400_000;
+/// The age at which the relay closes a link: 87 000 s = 24 h + 10 min (OPEN-M6-15, TEST-SPEC-M6 G-12) — the upper end
+/// of `LINK_LIFETIME` ~ U[6 h, 24 h] (spec §2, §10.1 item 1; OPEN-M5-03) with a margin, so a client lifetime of
+/// exactly 24 h never meets it; by then a compliant client has re-handshaken on a fresh circuit (M05 review C-3).
+pub const LINK_AGE_MAX_MS: u64 = 87_000_000;
 
 /// What to write and whether to close.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -125,7 +126,7 @@ impl<'r> Connection<'r> {
             Phase::Linked {
                 since_ms, last_ms, ..
             } => {
-                now.mono_ms.saturating_sub(*since_ms) >= LINK_AGE_MAX_MS
+                now.mono_ms.saturating_sub(*since_ms) >= limits.link_age_ms
                     || now.mono_ms.saturating_sub(*last_ms) >= limits.link_idle_ms
             }
             Phase::Closed => false,

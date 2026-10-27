@@ -1,0 +1,10 @@
+machine: secmp-main (container on carlgpu4), 32 logical CPUs, Linux 7.0.0-34-generic, 2026-10-22
+code: parent commit ba40754 plus the commit that adds this file; blob of crates/secmp-testkit/tests/harness/m6_measure.rs = bef9a11be699ab53147d7b02938525a9110927c4
+command: cargo nextest run -p secmp-testkit --features kat cpu_per_slot (alone, exactly 3 rounds, minimum p99 judged)
+prepare per slot (TR encrypt + persist + seal), 10 000 slots, quietest of exactly 3 rounds: median 311.8 µs, p99 341.5 µs, max 1122.7 µs
+round 1: median 311.8 µs, p99 341.5 µs, max 1122.7 µs
+round 2: median 311.4 µs, p99 343.6 µs, max 469.8 µs
+round 3: median 311.9 µs, p99 341.6 µs, max 583.6 µs
+Strict: 1 h virtual in 1099 ms of wall time = 0.03 % of a core (rig incl. relay)
+Balanced: 1 h virtual in 1635 ms of wall time = 0.04 % of a core (rig incl. relay)
+Low-bw: 1 h virtual in 585 ms of wall time = 0.01 % of a core (rig incl. relay)

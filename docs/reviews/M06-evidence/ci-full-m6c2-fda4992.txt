@@ -1,0 +1,33 @@
+# Local ci-full on fda4992 (container secmp-main, 2026-10-23; exit status 0): cargo xtask ci-full --strict --delegated windows-native
+# --delegated windows-cross --delegated mutants --delegated ct --delegated proverif-link --models tr
+# (the linux-full delegations of ci.yml; fuzz and kani NOT delegated, they ran here). Full log not committed; below the summary.
+
+=== ci-full summary (host x86_64-unknown-linux-gnu, strict: true) ===
+   1 fmt             PASS          0s  rustfmt: no changes
+   2 clippy          PASS          0s  clippy --all-features -D warnings on x86_64-unknown-linux-gnu (12 crates)
+   2 policy          PASS          1s  unsafe-attrs: 43 target roots forbid, 2 sys library roots allow, 1 ADR-038 bench root allows (crates/secmp-testkit/benches/ct.rs), 2 secmp-ui roots deny, 2 secmp-ui files without `unsafe`; lints-table:
+   3 deny            PASS          0s  advisories, bans, licenses, sources: ok
+   3 vet             PASS          1s  secmp-crypto/secmp-proto normal closure (x86_64-unknown-linux-gnu, x86_64-pc-windows-msvc, aarch64-apple-darwin): 55 external crates, 0 exempted; tracked exemptions elsewhere: 327
+   3 audit           PASS          3s  RustSec: no advisories (warnings denied); ignored with an ADR: RUSTSEC-2026-0173, RUSTSEC-2023-0071, RUSTSEC-2024-0436, RUSTSEC-2025-0141
+   3 cooldown        PASS         23s  561 registry packages (Cargo.lock, fuzz/Cargo.lock), all ≥ 7 days old or excepted (ADR-015 Am. 2); youngest: rustls 0.23.46, 9 days; cooldown: exception ctutils@0.4.4 until 2026-10-30 (RUSTSEC-2026-038
+   4 nextest         PASS         13s  cargo nextest run --workspace; cargo nextest run --package secmp-proto (non-kat); both with SECMP_PROPTEST_SEED removed (every property with its DEFAULT_SEED, the CI run seed pass is in the kat step)
+   4 doctest         PASS          1s  cargo test --doc
+   4 hello           PASS          0s  secmp-relay 0.0.0 (M5) | secmp-cli 0.0.0 (M0 skeleton: no functionality) | secmp-ui 0.0.0 (M0 skeleton: no functionality)
+   5 kat             PASS       1013s  KAT/differential packages: secmp-client-core, secmp-crypto, secmp-proto, secmp-relay, secmp-testkit (expected set matches); ML-KEM KATs and frozen vectors (M1 suites, tr, hx, link) also with libcrux's 
+   5 perf            PASS         14s  encrypt+persist+decrypt+commit per message, 200 messages per kind on x86_64-unknown-linux-gnu: chain: median 130.5 µs, max 170.2 µs; step: median 336.9 µs, max 393.9 µs; every maximum below 3 ms
+   5 ct              DELEGATED     0s  handed to another CI job with --delegated
+   6 fuzz            PASS       4088s  fuzz smoke, 120 s per target on the vector-seeded scratch corpus plus the tracked corpus (read-only), -max_len from expect::FUZZ_MAX_LEN: caead_open, client_pipeline_responses, ed25519_verify, hx_accep
+   7 coverage        PASS       1103s  secmp-cli: 5/6 lines = 83.3 % (min 80 %); secmp-client-core: 3324/3456 lines = 96.2 % (min 90 %); secmp-crypto: 2525/2541 lines = 99.4 % (min 90 %); secmp-proto: 6658/6814 lines = 97.7 % (min 90 %); se
+   8 mutants         DELEGATED     0s  handed to another CI job with --delegated
+   9 miri            PASS       2102s  Miri (nightly-2026-09-21, interpreting aarch64-unknown-linux-gnu, libcrux portable backend): secmp-sys-mem, secmp-sys-desktop, secmp-crypto, secmp-proto; skipped tests: secmp-crypto: mldsa::, secmp-cry
+   9 kani            PASS       3725s  Kani 0.68.0: harness packages secmp-client-core, secmp-proto, secmp-relay (expected set matches); 46/46 harnesses verified (expect::KANI_HARNESSES): kani_proofs::cell, kani_proofs::header_v1, kani_proo
+  10 proverif        PASS        142s  ProVerif 2.05 self-test [true, false] ok; --models tr, 4 parallel processes, timeout 1800 s per file; model hashes: 31 of 31 match expect::PROVERIF_MODEL_SHA256; single-file models: tr (expected set ma
+  10 proverif-link   DELEGATED     0s  handed to another CI job with --delegated
+  11 windows-cross   DELEGATED     0s  handed to another CI job with --delegated
+  11 windows-native  DELEGATED     0s  handed to another CI job with --delegated
+  11 linux-target    PASS          0s  host is x86_64-unknown-linux-gnu: every step above ran natively
+ 12a ref-vectors     PASS          0s  12 frozen suites (969 cases) structurally and byte-identical to vectors/ref (ADR-026); pending freeze (shape only): none
+  12 repro           STUB          0s  two-builder reproducibility check becomes real in M11 (`cargo xtask repro-check`)
+  13 sbom            PASS         14s  12 CycloneDX SBOMs in target/sbom; auditable release builds (x86_64-unknown-linux-gnu, remapped paths) read back by `cargo audit bin`: target/sbom-build/release/secmp-relay, target/sbom-build/release/s
+  14 systemd         PASS          0s  systemd 255 (255.4-1ubuntu8.17); self-test: unhardened fixture 9.4 > 2 rejected; units: none (deploy/secmp-relay.service arrives in M10)
+ci-full: PASS

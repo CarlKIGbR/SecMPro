@@ -1,0 +1,93 @@
+# Second cargo-mutants run, scheduler/core/mod.rs only, at cdf2b31 (WEISUNG M6-B-6 §0.1 (ii)); local, 2026-10-16
+# The gate's harness-run flags (--features harness, both packages, test packages client-core/transport/testkit,
+# --test-tool nextest --timeout 900, MUTANT_SKIP_TESTS + MUTANT_HARNESS_SKIP_TESTS, MUTANT_EXCLUDE_RE) with
+# --file crates/secmp-client-core/src/scheduler/core/mod.rs --file crates/secmp-transport/src/caps.rs (caps.rs only so
+# that the baseline selects both packages as the gate does; its 61 mutants are not counted below); -j 8.
+# cargo-mutants: 312 mutants tested in 2h: 44 missed, 148 caught, 80 unviable, 40 timeouts (both files).
+
+core/mod.rs: 251 mutants — caught 122, missed 41, timeout 40 (caught-by-hang under docs/mutants-accepted.md §Rules: 8), unviable 48
+
+## missed (core/mod.rs)
+crates/secmp-client-core/src/scheduler/core/mod.rs:214:9: replace <impl Release for S>::release_discard with ()
+crates/secmp-client-core/src/scheduler/core/mod.rs:218:9: replace <impl Release for S>::release_failed with ()
+crates/secmp-client-core/src/scheduler/core/mod.rs:297:5: replace counters_now -> [u64; 4] with [0; 4]
+crates/secmp-client-core/src/scheduler/core/mod.rs:297:5: replace counters_now -> [u64; 4] with [1; 4]
+crates/secmp-client-core/src/scheduler/core/mod.rs:231:9: replace <impl Release for Deferred>::release_discard with ()
+crates/secmp-client-core/src/scheduler/core/mod.rs:235:9: replace <impl Release for Deferred>::release_failed with ()
+crates/secmp-client-core/src/scheduler/core/mod.rs:393:43: replace == with != in World::relay_has_recv
+crates/secmp-client-core/src/scheduler/core/mod.rs:393:9: replace World::relay_has_recv -> bool with false
+crates/secmp-client-core/src/scheduler/core/mod.rs:398:9: replace World::release with ()
+crates/secmp-client-core/src/scheduler/core/mod.rs:512:35: replace > with >= in World::tick
+crates/secmp-client-core/src/scheduler/core/mod.rs:521:43: replace || with && in World::tick
+crates/secmp-client-core/src/scheduler/core/mod.rs:721:56: replace > with == in World::prepare_fetch
+crates/secmp-client-core/src/scheduler/core/mod.rs:721:39: replace || with && in World::prepare_fetch
+crates/secmp-client-core/src/scheduler/core/mod.rs:721:56: replace > with >= in World::prepare_fetch
+crates/secmp-client-core/src/scheduler/core/mod.rs:811:9: replace World::begin_work with ()
+crates/secmp-client-core/src/scheduler/core/mod.rs:881:13: delete match arm TransportError::Auth in World::queue_error
+crates/secmp-client-core/src/scheduler/core/mod.rs:884:13: delete match arm TransportError::Rate in World::queue_error
+crates/secmp-client-core/src/scheduler/core/mod.rs:941:44: replace == with != in World::outcome
+crates/secmp-client-core/src/scheduler/core/mod.rs:949:52: replace == with != in World::outcome
+crates/secmp-client-core/src/scheduler/core/mod.rs:960:35: replace == with != in World::outcome
+crates/secmp-client-core/src/scheduler/core/mod.rs:1006:9: delete match arm TransportError::Closed in reason_of
+crates/secmp-client-core/src/scheduler/core/mod.rs:1169:9: replace Scheduler::route_dead -> bool with true
+crates/secmp-client-core/src/scheduler/core/mod.rs:1169:55: replace && with || in Scheduler::route_dead
+crates/secmp-client-core/src/scheduler/core/mod.rs:1291:58: replace == with != in Scheduler::remove_queue
+crates/secmp-client-core/src/scheduler/core/mod.rs:1292:53: replace == with != in Scheduler::remove_queue
+crates/secmp-client-core/src/scheduler/core/mod.rs:1296:42: replace != with == in Scheduler::remove_queue
+crates/secmp-client-core/src/scheduler/core/mod.rs:1301:52: replace == with != in Scheduler::remove_queue
+crates/secmp-client-core/src/scheduler/core/mod.rs:1304:25: replace && with || in Scheduler::remove_queue
+crates/secmp-client-core/src/scheduler/core/mod.rs:1303:57: replace == with != in Scheduler::remove_queue
+crates/secmp-client-core/src/scheduler/core/mod.rs:1303:21: delete ! in Scheduler::remove_queue
+crates/secmp-client-core/src/scheduler/core/mod.rs:1304:28: delete ! in Scheduler::remove_queue
+crates/secmp-client-core/src/scheduler/core/mod.rs:1312:31: delete ! in Scheduler::remove_queue
+crates/secmp-client-core/src/scheduler/core/mod.rs:1304:64: replace == with != in Scheduler::remove_queue
+crates/secmp-client-core/src/scheduler/core/mod.rs:1356:35: delete ! in Scheduler::set_queue_period
+crates/secmp-client-core/src/scheduler/core/mod.rs:1447:35: replace && with || in Scheduler::change_mode
+crates/secmp-client-core/src/scheduler/core/mod.rs:1582:9: replace Scheduler::control_done with ()
+crates/secmp-client-core/src/scheduler/core/mod.rs:1624:32: replace || with && in Scheduler::owner_status
+crates/secmp-client-core/src/scheduler/core/mod.rs:1624:20: replace || with && in Scheduler::owner_status
+crates/secmp-client-core/src/scheduler/core/mod.rs:1684:21: delete match arm State::Up(up) in Scheduler::work_pass
+crates/secmp-client-core/src/scheduler/core/mod.rs:1684:44: replace == with != in Scheduler::work_pass
+crates/secmp-client-core/src/scheduler/core/mod.rs:1923:59: replace == with != in Scheduler::on_frame
+
+## timeout (core/mod.rs)
+crates/secmp-client-core/src/scheduler/core/mod.rs:339:24: replace && with || in World::effective_mode
+crates/secmp-client-core/src/scheduler/core/mod.rs:377:9: replace World::period_of -> Option<u64> with None
+crates/secmp-client-core/src/scheduler/core/mod.rs:377:9: replace World::period_of -> Option<u64> with Some(0)
+crates/secmp-client-core/src/scheduler/core/mod.rs:377:9: replace World::period_of -> Option<u64> with Some(1)
+crates/secmp-client-core/src/scheduler/core/mod.rs:379:62: replace == with != in World::period_of
+crates/secmp-client-core/src/scheduler/core/mod.rs:421:9: replace World::tear -> Result<(), SchedError> with Ok(())
+crates/secmp-client-core/src/scheduler/core/mod.rs:458:9: replace World::start_connect with ()
+crates/secmp-client-core/src/scheduler/core/mod.rs:459:62: replace == with != in World::start_connect
+crates/secmp-client-core/src/scheduler/core/mod.rs:460:62: replace == with != in World::start_connect
+crates/secmp-client-core/src/scheduler/core/mod.rs:509:16: replace < with == in World::tick
+crates/secmp-client-core/src/scheduler/core/mod.rs:509:16: replace < with > in World::tick
+crates/secmp-client-core/src/scheduler/core/mod.rs:509:16: replace < with <= in World::tick
+crates/secmp-client-core/src/scheduler/core/mod.rs:591:27: replace && with || in World::prepare_link
+crates/secmp-client-core/src/scheduler/core/mod.rs:762:13: delete match arm State::Up(_) in World::step_due
+crates/secmp-client-core/src/scheduler/core/mod.rs:760:35: replace match guard *at <= now with false in World::step_due
+crates/secmp-client-core/src/scheduler/core/mod.rs:761:30: replace match guard now >= up.die_at with true in World::step_due
+crates/secmp-client-core/src/scheduler/core/mod.rs:760:39: replace <= with > in World::step_due
+crates/secmp-client-core/src/scheduler/core/mod.rs:761:34: replace >= with < in World::step_due
+crates/secmp-client-core/src/scheduler/core/mod.rs:979:9: replace World::top_up_pool -> Result<(), SchedError> with Ok(())
+crates/secmp-client-core/src/scheduler/core/mod.rs:1129:9: replace Scheduler::links -> Vec<LinkInfo> with vec![]
+crates/secmp-client-core/src/scheduler/core/mod.rs:1131:25: delete ! in Scheduler::links
+crates/secmp-client-core/src/scheduler/core/mod.rs:1264:9: replace Scheduler::add_recv_with_id -> Result<(), SchedError> with Ok(())
+crates/secmp-client-core/src/scheduler/core/mod.rs:1264:12: delete ! in Scheduler::add_recv_with_id
+crates/secmp-client-core/src/scheduler/core/mod.rs:1364:9: replace Scheduler::sync_links -> Result<(), SchedError> with Ok(())
+crates/secmp-client-core/src/scheduler/core/mod.rs:1366:17: replace == with != in Scheduler::sync_links
+crates/secmp-client-core/src/scheduler/core/mod.rs:1478:9: replace Scheduler::manage_pool -> Result<(), SchedError> with Ok(())
+crates/secmp-client-core/src/scheduler/core/mod.rs:1498:9: replace Scheduler::pool_queue_ready -> Result<(), SchedError> with Ok(())
+crates/secmp-client-core/src/scheduler/core/mod.rs:1600:9: replace Scheduler::control_failed -> Result<(), SchedError> with Ok(())
+crates/secmp-client-core/src/scheduler/core/mod.rs:1642:9: replace Scheduler::next_deadline -> Option<u64> with Some(0)
+crates/secmp-client-core/src/scheduler/core/mod.rs:1642:9: replace Scheduler::next_deadline -> Option<u64> with Some(1)
+crates/secmp-client-core/src/scheduler/core/mod.rs:1654:33: replace > with == in Scheduler::next_deadline
+crates/secmp-client-core/src/scheduler/core/mod.rs:1654:33: replace > with >= in Scheduler::next_deadline
+crates/secmp-client-core/src/scheduler/core/mod.rs:1654:33: replace > with < in Scheduler::next_deadline
+crates/secmp-client-core/src/scheduler/core/mod.rs:1705:31: delete ! in Scheduler::work_pass
+crates/secmp-client-core/src/scheduler/core/mod.rs:1717:9: replace Scheduler::poll_due -> Result<Vec<Output>, SchedError> with Ok(vec![])
+crates/secmp-client-core/src/scheduler/core/mod.rs:1728:31: delete ! in Scheduler::poll_due
+crates/secmp-client-core/src/scheduler/core/mod.rs:1785:9: replace Scheduler::find -> Option<usize> with None
+crates/secmp-client-core/src/scheduler/core/mod.rs:1785:9: replace Scheduler::find -> Option<usize> with Some(1)
+crates/secmp-client-core/src/scheduler/core/mod.rs:1786:47: replace == with != in Scheduler::find
+crates/secmp-client-core/src/scheduler/core/mod.rs:1802:9: replace Scheduler::link_up -> Result<Vec<Output>, SchedError> with Ok(vec![])

@@ -1,0 +1,16 @@
+ct diag_repeat: tr_decrypt_trial_open_position rep 0 half 1 Δp50/Δp75/Δp90 -4.21/-6.23/-8.93 t90 -25.22 addr0 0x56c928de74a0 addr1 0x56c928de74a0 d4096 0 d64 0 verdict PASS
+ct diag_repeat: tr_decrypt_trial_open_position rep 0 half 2 Δp50/Δp75/Δp90 +0.20/+0.11/+0.46 t90 1.25 addr0 0x56c928de8de0 addr1 0x56c928de8de0 d4096 0 d64 0 verdict PASS
+ct diag_repeat: tr_decrypt_trial_open_position rep 1 half 1 Δp50/Δp75/Δp90 -0.08/-0.19/+0.17 t90 0.46 addr0 0x56c928de6850 addr1 0x56c928de6850 d4096 0 d64 0 verdict PASS
+ct diag_repeat: tr_decrypt_trial_open_position rep 1 half 2 Δp50/Δp75/Δp90 +2.43/+3.41/+3.81 t90 10.93 addr0 0x56c928df24d0 addr1 0x56c928df24d0 d4096 0 d64 0 verdict PASS
+ct diag_repeat: tr_decrypt_trial_open_position rep 2 half 1 Δp50/Δp75/Δp90 -1.05/-1.12/-1.27 t90 -3.51 addr0 0x56c928de86a0 addr1 0x56c928de86a0 d4096 0 d64 0 verdict PASS
+ct diag_repeat: tr_decrypt_trial_open_position rep 2 half 2 Δp50/Δp75/Δp90 +0.57/+0.88/+0.27 t90 0.72 addr0 0x56c928dea8f0 addr1 0x56c928dea8f0 d4096 0 d64 0 verdict PASS
+ct diag_repeat: tr_decrypt_trial_open_position rep 3 half 1 Δp50/Δp75/Δp90 -0.00/-0.10/-0.04 t90 -0.12 addr0 0x56c928e04d40 addr1 0x56c928e04d40 d4096 0 d64 0 verdict PASS
+ct diag_repeat: tr_decrypt_trial_open_position rep 3 half 2 Δp50/Δp75/Δp90 +0.22/+0.26/+0.12 t90 0.37 addr0 0x56c928e041f0 addr1 0x56c928e041f0 d4096 0 d64 0 verdict PASS
+ct diag_repeat: tr_decrypt_reject_skipped rep 0 half 1 Δp50/Δp75/Δp90 -1.98/-3.67/-5.20 t90 -12.93 addr0 0x56c928e11850 addr1 0x56c928e11850 d4096 0 d64 0 verdict PASS
+ct diag_repeat: tr_decrypt_reject_skipped rep 0 half 2 Δp50/Δp75/Δp90 +0.02/-0.36/+0.00 t90 0.01 addr0 0x56c928e13ac0 addr1 0x56c928e13ac0 d4096 0 d64 0 verdict PASS
+ct diag_repeat: tr_decrypt_reject_skipped rep 1 half 1 Δp50/Δp75/Δp90 -0.24/+0.31/+0.50 t90 1.23 addr0 0x56c928e08260 addr1 0x56c928e08260 d4096 0 d64 0 verdict PASS
+ct diag_repeat: tr_decrypt_reject_skipped rep 1 half 2 Δp50/Δp75/Δp90 +0.24/+0.41/+0.10 t90 0.24 addr0 0x56c928e1ca80 addr1 0x56c928e1ca80 d4096 0 d64 0 verdict PASS
+ct diag_repeat: tr_decrypt_reject_skipped rep 2 half 1 Δp50/Δp75/Δp90 +0.77/+0.97/+1.14 t90 2.81 addr0 0x56c928e22f10 addr1 0x56c928e22f10 d4096 0 d64 0 verdict PASS
+ct diag_repeat: tr_decrypt_reject_skipped rep 2 half 2 Δp50/Δp75/Δp90 +0.76/+0.42/+0.28 t90 0.69 addr0 0x56c928e261f0 addr1 0x56c928e261f0 d4096 0 d64 0 verdict PASS
+ct diag_repeat: tr_decrypt_reject_skipped rep 3 half 1 Δp50/Δp75/Δp90 -0.02/-0.39/-0.37 t90 -0.89 addr0 0x56c928e15740 addr1 0x56c928e15740 d4096 0 d64 0 verdict PASS
+ct diag_repeat: tr_decrypt_reject_skipped rep 3 half 2 Δp50/Δp75/Δp90 +0.38/+0.33/-0.27 t90 -0.65 addr0 0x56c928e14280 addr1 0x56c928e14280 d4096 0 d64 0 verdict PASS

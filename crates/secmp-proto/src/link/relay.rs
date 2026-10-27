@@ -101,8 +101,9 @@ impl RelayKeys {
     /// # Errors
     /// [`Error::Rejected`] only if the signature fails the encoding rules (not reachable for an honest signer).
     pub fn relay_info(&self, valid_until: u64) -> Result<RelayInfoV1> {
-        // the signature covers every field before `sig`: build the value with a placeholder `sig`, sign, rebuild
-        let placeholder = Ed25519Sig::from_bytes(&self.sig.sign(b""))?;
+        // the signature covers every field before `sig`: build the value with a constant filler in the `sig` field (not a
+        // signature, no signing operation; M05 review R-144), take its signed prefix, sign once, rebuild
+        let placeholder = Ed25519Sig::from_bytes(&[0x01; 64])?;
         let unsigned = RelayInfoV1 {
             relay_sig_pk: self.sig_pk,
             kid: self.kid,

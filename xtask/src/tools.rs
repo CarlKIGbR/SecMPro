@@ -91,8 +91,9 @@ pub(crate) fn set(name: &str) -> Result<Vec<CargoTool>> {
         "fast" => vec![NEXTEST, DENY, VET, AUDIT, AUDITABLE, CYCLONEDX],
         "windows" => vec![NEXTEST],
         "xwin" => vec![XWIN],
-        // the `mutants-shard` jobs of ci.yml (ADR-047 Amendment 1): cargo-mutants alone, under its own cache key
-        "mutants" => vec![MUTANTS],
+        // the `mutants-shard` jobs of ci.yml (ADR-047 Amendment 1), under their own cache key; nextest for the second run
+        // of ADR-047 Amendment 4 (the harness suite needs one process per test)
+        "mutants" => vec![MUTANTS, NEXTEST],
         // the weekly `miri-full` workflow needs only the pinned nightly (`--nightly`)
         "miri" => vec![],
         // the daily `fuzz-nightly` workflow: the campaign (with `--nightly`) and the seeded property run

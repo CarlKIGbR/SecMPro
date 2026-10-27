@@ -1,0 +1,347 @@
+# Local ci-full on cdf2b31 (container secmp-main, 2026-10-16): cargo xtask ci-full --strict --delegated windows-native
+# --delegated windows-cross --delegated mutants --delegated ct --delegated proverif-link --models tr
+# (the linux-full delegations; kani NOT delegated — the core changed, WEISUNG M6-B-6 §1). Full log: 24568 lines, not
+# committed; below the per-gate verdict tables and the summary.
+
+### gate `fmt`
+| item | verdict |
+|---|---|
+| status | PASS (0 s) |
+| line 1 | rustfmt: no changes |
+### gate `clippy`
+| item | verdict |
+|---|---|
+| status | PASS (0 s) |
+| line 1 | clippy --all-features -D warnings on x86_64-unknown-linux-gnu (12 crates) |
+### gate `policy`
+| item | verdict |
+|---|---|
+| status | PASS (1 s) |
+| line 1 | unsafe-attrs: 41 target roots forbid, 2 sys library roots allow, 1 ADR-038 bench root allows (crates/secmp-testkit/benches/ct.rs), 2 secmp-ui roots deny, 2 secmp-ui files without `unsafe` |
+| line 2 | lints-table: 12 manifests |
+| line 3 | lint-allows: 143 relaxing attributes (all sanctioned) |
+| line 4 | build-scripts: 12 crates, none |
+| line 5 | spdx: 399 files |
+| line 6 | relay-events: 7 names as expect::RELAY_TRACE_ALLOW |
+| line 7 | normal-deps: 4 crates within expect::NORMAL_DEPENDENCY_ALLOW |
+| line 8 | secmp-crypto/secmp-proto normal closure (x86_64-unknown-linux-gnu, x86_64-pc-windows-msvc, aarch64-apple-darwin): 55 external crates, 0 exempted |
+| line 9 | tracked exemptions elsewhere: 327 |
+| line 10 | workflows: 4 files, triggers/SHA pins/flow style/continue-on-error/permissions ok |
+| line 11 | pinned jobs (linux-fast, windows-native, xwin-cross, linux-full, ct, mutants-shard, mutants, proverif-hx, proverif-link, kani) only in ci.yml, no dispatch there, job conditions, needs, defaults/shell and gate run lines as pinned, delegations mapped (accident guard, not tamper-proof) |
+### gate `deny`
+| item | verdict |
+|---|---|
+| status | PASS (1 s) |
+| line 1 | advisories, bans, licenses, sources: ok |
+### gate `vet`
+| item | verdict |
+|---|---|
+| status | PASS (1 s) |
+| line 1 | secmp-crypto/secmp-proto normal closure (x86_64-unknown-linux-gnu, x86_64-pc-windows-msvc, aarch64-apple-darwin): 55 external crates, 0 exempted |
+| line 2 | tracked exemptions elsewhere: 327 |
+### gate `audit`
+| item | verdict |
+|---|---|
+| status | PASS (2 s) |
+| line 1 | RustSec: no advisories (warnings denied) |
+| line 2 | ignored with an ADR: RUSTSEC-2026-0173, RUSTSEC-2023-0071, RUSTSEC-2024-0436, RUSTSEC-2025-0141 |
+### gate `cooldown`
+| item | verdict |
+|---|---|
+| status | PASS (23 s) |
+| line 1 | 561 registry packages (Cargo.lock, fuzz/Cargo.lock), all ≥ 7 days old or excepted (ADR-015 Am. 2) |
+| line 2 | youngest: toml_writer 1.1.3+spec-1.1.0, 8 days |
+| line 3 | cooldown: exception rustls@0.23.46 until 2026-10-21 (RUSTSEC-2026-0346/-0347/-0348/-0349 (ADR-015 Am. 2)) |
+### gate `nextest`
+| item | verdict |
+|---|---|
+| status | PASS (297 s) |
+| line 1 | cargo nextest run --workspace |
+| line 2 | cargo nextest run --package secmp-proto (non-kat) |
+| line 3 | both with SECMP_PROPTEST_SEED removed (every property with its DEFAULT_SEED, the CI run seed pass is in the kat step) |
+### gate `doctest`
+| item | verdict |
+|---|---|
+| status | PASS (1 s) |
+| line 1 | cargo test --doc |
+### gate `hello`
+| item | verdict |
+|---|---|
+| status | PASS (0 s) |
+| line 1 | secmp-relay 0.0.0 (M5) \| secmp-cli 0.0.0 (M0 skeleton: no functionality) \| secmp-ui 0.0.0 (M0 skeleton: no functionality) |
+### gate `kat`
+| item | verdict |
+|---|---|
+| status | PASS (320 s) |
+| line 1 | KAT/differential packages: secmp-client-core, secmp-crypto, secmp-proto, secmp-relay, secmp-testkit (expected set matches) |
+| line 2 | ML-KEM KATs and frozen vectors (M1 suites, tr, hx, link) also with libcrux's portable backend |
+| line 3 | property tests with their DEFAULT_SEED only (SECMP_PROPTEST_SEED removed, no CI run seed outside GitHub Actions) |
+### gate `perf`
+| item | verdict |
+|---|---|
+| status | PASS (0 s) |
+| line 1 | encrypt+persist+decrypt+commit per message, 200 messages per kind on x86_64-unknown-linux-gnu: chain: median 129.3 µs, max 169.2 µs |
+| line 2 | step: median 339.5 µs, max 372.8 µs |
+| line 3 | every maximum below 3 ms |
+### gate `ct`
+| item | verdict |
+|---|---|
+| status | DELEGATED (0 s) |
+| line 1 | handed to another CI job with --delegated |
+| item | verdict |
+|---|---|
+| run verdict | PASS |
+| runner timer | {"arch":"x86_64","available_clocksource":"tsc hpet acpi_pm","calibration_ns":200000043.0,"calibration_ticks":799981840,"current_clocksource":"tsc","lattice_probe":{"median_gap":40,"regular":1.0,"runs":2},"lattice_ticks":null,"median_delta_ns":20.000458310403644,"median_delta_ticks":80,"overhead_ns":10.000229155201822,"overhead_ticks":40,"q_eff_ns":10.000229155201822,"q_eff_ticks":40.0,"resolution_ns":10.000229155201822,"resolution_ticks":40,"tick_ns":0.2500057288800456,"timer":"rdtscp"} |
+| control_variable_time_compare | PASS — k=7, calibration median 175.7 ns, 1000000 samples; first max \|t\| = 40183.86 (p50), batch median 9700.2 ns, q_eff 40.0 ticks (clock), realised 123.0 quanta; A/A max \|t\| = 1.13 (p99), batch median 1230.0 ns, q_eff 40.0 ticks (clock), realised 123.0 quanta (positive control, must be detected) |
+| tag_compare | PASS — k=1, calibration median 8220.2 ns, 1000000 samples; first max \|t\| = 0.64 (p99), batch median 8220.2 ns, q_eff 40.0 ticks (clock), realised 822.0 quanta; second max \|t\| = 1.94 (p99), batch median 8220.2 ns, q_eff 40.0 ticks (clock), realised 822.0 quanta; A/A max \|t\| = 1.34 (p99), batch median 8220.2 ns, q_eff 40.0 ticks (clock), realised 822.0 quanta |
+| msg_open_reject | PASS — k=1, calibration median 2560.1 ns, 1000000 samples; first max \|t\| = 1.45 (p50), batch median 2580.1 ns, q_eff 40.0 ticks (samples), realised 258.0 quanta; second max \|t\| = 0.69 (p50), batch median 2580.1 ns, q_eff 40.0 ticks (samples), realised 258.0 quanta; A/A max \|t\| = 0.74 (p95), batch median 2560.1 ns, q_eff 40.0 ticks (samples), realised 256.0 quanta |
+| caead_open_reject | PASS — k=1, calibration median 5390.1 ns, 1000000 samples; first max \|t\| = 3.34 (p95), batch median 5400.1 ns, q_eff 40.0 ticks (samples), realised 540.0 quanta; second max \|t\| = 1.29 (raw), batch median 5420.1 ns, q_eff 40.0 ticks (samples), realised 542.0 quanta; A/A max \|t\| = 0.63 (p90), batch median 5400.1 ns, q_eff 40.0 ticks (samples), realised 540.0 quanta |
+| sas | PASS — k=1, calibration median 966692.2 ns, 20000 samples; first max \|t\| = 1.56 (p50), batch median 954671.9 ns, q_eff 40.0 ticks (samples), realised 95463.0 quanta; second max \|t\| = 1.13 (p75), batch median 955031.9 ns, q_eff 40.0 ticks (samples), realised 95501.0 quanta; A/A max \|t\| = 1.78 (p99), batch median 966012.1 ns, q_eff 40.0 ticks (samples), realised 96597.0 quanta |
+| caead_derive | SUB_FLOOR_SHIFT at p90 — k=4, calibration median 357.5 ns, 1000000 samples; first max \|t\| = 63.35 (p99), batch median 1390.0 ns, q_eff 40.0 ticks (samples), realised 139.0 quanta; second max \|t\| = 7.67 (p75), batch median 1400.0 ns, q_eff 40.0 ticks (samples), realised 140.0 quanta; A/A max \|t\| = 0.79 (p95), batch median 1410.0 ns, q_eff 40.0 ticks (samples), realised 141.0 quanta |
+| caead_aead_reject | PASS — k=1, calibration median 2250.1 ns, 1000000 samples; first max \|t\| = 14.26 (p90), batch median 2250.1 ns, q_eff 40.0 ticks (clock), realised 225.0 quanta; second max \|t\| = 0.94 (raw), batch median 2250.1 ns, q_eff 40.0 ticks (clock), realised 225.0 quanta; A/A max \|t\| = 1.55 (raw), batch median 2250.1 ns, q_eff 40.0 ticks (clock), realised 225.0 quanta |
+| caead_com_compare | PASS — k=1, calibration median 8280.2 ns, 1000000 samples; first max \|t\| = 1.21 (p90), batch median 8280.2 ns, q_eff 40.0 ticks (samples), realised 828.0 quanta; second max \|t\| = 1.93 (raw), batch median 8280.2 ns, q_eff 40.0 ticks (samples), realised 828.0 quanta; A/A max \|t\| = 1.59 (p95), batch median 8280.2 ns, q_eff 40.0 ticks (samples), realised 828.0 quanta |
+| caead_open_reject_samekey | PASS — k=1, calibration median 5390.1 ns, 1000000 samples; first max \|t\| = 0.85 (raw), batch median 5390.1 ns, q_eff 40.0 ticks (samples), realised 539.0 quanta; second max \|t\| = 1.69 (p50), batch median 5390.1 ns, q_eff 40.0 ticks (samples), realised 539.0 quanta; A/A max \|t\| = 0.85 (p75), batch median 5430.1 ns, q_eff 40.0 ticks (samples), realised 543.0 quanta |
+| aa_prime_control | PASS — k=1, calibration median 2560.1 ns, 1000000 samples; first max \|t\| = 22.49 (p95), batch median 2570.1 ns, q_eff 40.0 ticks (samples), realised 257.0 quanta; second max \|t\| = 5.02 (p95), batch median 2570.1 ns, q_eff 40.0 ticks (samples), realised 257.0 quanta; A/A max \|t\| = 1.16 (p50), batch median 2560.1 ns, q_eff 40.0 ticks (samples), realised 256.0 quanta (A/A′ placement control: a FAIL makes the run CONTROL_FAIL) |
+| tr_decrypt_reject_hdr_key | PASS — k=1, calibration median 15600.4 ns, 1000000 samples; first max \|t\| = 2.08 (p99), batch median 15520.4 ns, q_eff 40.0 ticks (samples), realised 1552.0 quanta; second max \|t\| = 1.33 (p75), batch median 15580.4 ns, q_eff 40.0 ticks (samples), realised 1558.0 quanta; A/A max \|t\| = 1.93 (raw), batch median 15530.4 ns, q_eff 40.0 ticks (samples), realised 1553.0 quanta |
+| tr_decrypt_reject_body_tag | PASS — k=1, calibration median 23030.5 ns, 1000000 samples; first max \|t\| = 1.43 (p75), batch median 22970.5 ns, q_eff 40.0 ticks (samples), realised 2297.0 quanta; second max \|t\| = 2.47 (p99), batch median 23040.5 ns, q_eff 40.0 ticks (samples), realised 2304.0 quanta; A/A max \|t\| = 1.59 (raw), batch median 22960.5 ns, q_eff 40.0 ticks (samples), realised 2296.0 quanta |
+| tr_decrypt_reject_ct_pq | PASS — k=1, calibration median 20140.5 ns, 1000000 samples; first max \|t\| = 1.53 (p99), batch median 20130.5 ns, q_eff 40.0 ticks (samples), realised 2013.0 quanta; second max \|t\| = 1.24 (p95), batch median 20040.5 ns, q_eff 40.0 ticks (samples), realised 2004.0 quanta; A/A max \|t\| = 1.30 (p99), batch median 20080.5 ns, q_eff 40.0 ticks (samples), realised 2008.0 quanta |
+| tr_decrypt_reject_skipped | PASS — k=1, calibration median 44611.0 ns, 1000000 samples; first max \|t\| = 155.98 (p90), batch median 44581.0 ns, q_eff 40.0 ticks (samples), realised 4457.0 quanta; second max \|t\| = 58.16 (p90), batch median 44621.0 ns, q_eff 40.0 ticks (samples), realised 4462.0 quanta; A/A max \|t\| = 3.19 (p95), batch median 44681.0 ns, q_eff 40.0 ticks (samples), realised 4468.0 quanta |
+| same_content_control | PASS — k=1, calibration median 22960.5 ns, 1000000 samples; first max \|t\| = 1.57 (p95), batch median 22940.5 ns, q_eff 40.0 ticks (samples), realised 2294.0 quanta; second max \|t\| = 1.94 (p50), batch median 23520.5 ns, q_eff 40.0 ticks (samples), realised 2352.0 quanta; A/A max \|t\| = 0.92 (p95), batch median 22960.5 ns, q_eff 40.0 ticks (samples), realised 2296.0 quanta (same-content control: a FAIL makes the run CONTROL_FAIL) |
+| inv_fingerprint_compare | PASS — k=1, calibration median 29260.7 ns, 1000000 samples; first max \|t\| = 1.97 (p90), batch median 26400.6 ns, q_eff 40.0 ticks (samples), realised 2640.0 quanta; second max \|t\| = 1.66 (p50), batch median 26420.6 ns, q_eff 40.0 ticks (samples), realised 2642.0 quanta; A/A max \|t\| = 2.00 (p75), batch median 26480.6 ns, q_eff 40.0 ticks (samples), realised 2648.0 quanta |
+| x25519_zero_check | PASS — k=1, calibration median 41350.9 ns, 1000000 samples; first max \|t\| = 1.90 (p50), batch median 41400.9 ns, q_eff 40.0 ticks (samples), realised 4140.0 quanta; second max \|t\| = 2.32 (p95), batch median 41390.9 ns, q_eff 40.0 ticks (samples), realised 4139.0 quanta; A/A max \|t\| = 1.69 (p95), batch median 41360.9 ns, q_eff 40.0 ticks (samples), realised 4136.0 quanta |
+| hx_accept_reject_inner | PASS — k=1, calibration median 205244.7 ns, 1000000 samples; first max \|t\| = 1.51 (p95), batch median 205574.7 ns, q_eff 40.0 ticks (samples), realised 20557.0 quanta; second max \|t\| = 2.40 (p75), batch median 205734.7 ns, q_eff 40.0 ticks (samples), realised 20573.0 quanta; A/A max \|t\| = 1.68 (p90), batch median 206204.7 ns, q_eff 40.0 ticks (samples), realised 20620.0 quanta |
+| hx_accept_reject_first_msg | PASS — k=1, calibration median 579133.3 ns, 1000000 samples; first max \|t\| = 1.14 (p50), batch median 581693.3 ns, q_eff 40.0 ticks (samples), realised 58167.0 quanta; second max \|t\| = 0.96 (p50), batch median 579923.3 ns, q_eff 40.0 ticks (samples), realised 57990.0 quanta; A/A max \|t\| = 0.78 (raw), batch median 580553.3 ns, q_eff 40.0 ticks (samples), realised 58053.0 quanta |
+| hx_same_content_control | PASS — k=1, calibration median 205354.7 ns, 1000000 samples; first max \|t\| = 1.26 (raw), batch median 205634.7 ns, q_eff 40.0 ticks (samples), realised 20562.0 quanta; second max \|t\| = 1.52 (p95), batch median 205654.7 ns, q_eff 40.0 ticks (samples), realised 20564.0 quanta; A/A max \|t\| = 1.84 (p75), batch median 207934.8 ns, q_eff 40.0 ticks (samples), realised 20793.0 quanta (HX same-content control: a FAIL makes the run CONTROL_FAIL) |
+| link_hs1_reject_mac1 | PASS — k=1, calibration median 115792.7 ns, 1000000 samples; first max \|t\| = 1.28 (raw), batch median 115862.7 ns, q_eff 40.0 ticks (samples), realised 11586.0 quanta; second max \|t\| = 1.43 (raw), batch median 116642.7 ns, q_eff 40.0 ticks (samples), realised 11664.0 quanta; A/A max \|t\| = 1.31 (raw), batch median 115842.7 ns, q_eff 40.0 ticks (samples), realised 11584.0 quanta |
+| link_hs2_reject_mac2 | PASS — k=1, calibration median 114152.6 ns, 1000000 samples; first max \|t\| = 1.85 (raw), batch median 114002.6 ns, q_eff 40.0 ticks (samples), realised 11400.0 quanta; second max \|t\| = 1.46 (p95), batch median 114062.6 ns, q_eff 40.0 ticks (samples), realised 11406.0 quanta; A/A max \|t\| = 1.45 (p75), batch median 113982.6 ns, q_eff 40.0 ticks (samples), realised 11398.0 quanta |
+| link_frame_open_reject | PASS — k=1, calibration median 3840.1 ns, 1000000 samples; first max \|t\| = 1.20 (p99), batch median 3840.1 ns, q_eff 40.0 ticks (samples), realised 384.0 quanta; second max \|t\| = 0.99 (p99), batch median 3840.1 ns, q_eff 40.0 ticks (clock), realised 384.0 quanta; A/A max \|t\| = 2.36 (raw), batch median 3840.1 ns, q_eff 40.0 ticks (samples), realised 384.0 quanta |
+| q_queue_new_reject_token | PASS — k=6, calibration median 190.0 ns, 1000000 samples; first max \|t\| = 1.62 (p99), batch median 1130.0 ns, q_eff 40.0 ticks (clock), realised 113.0 quanta; second max \|t\| = 2.19 (raw), batch median 1130.0 ns, q_eff 40.0 ticks (clock), realised 113.0 quanta; A/A max \|t\| = 0.98 (p75), batch median 1130.0 ns, q_eff 40.0 ticks (clock), realised 113.0 quanta |
+| tr_decrypt_trial_open_position | PASS — k=1, calibration median 35860.8 ns, 1000000 samples; first max \|t\| = 71.96 (p90), batch median 36430.8 ns, q_eff 40.0 ticks (samples), realised 3642.0 quanta; second max \|t\| = 2.55 (p95), batch median 35860.8 ns, q_eff 40.0 ticks (samples), realised 3586.0 quanta; A/A max \|t\| = 2.84 (raw), batch median 35930.8 ns, q_eff 40.0 ticks (samples), realised 3593.0 quanta |
+| link_same_content_control | PASS — k=1, calibration median 3830.1 ns, 1000000 samples; first max \|t\| = 1.05 (p50), batch median 3840.1 ns, q_eff 40.0 ticks (samples), realised 384.0 quanta; second max \|t\| = 1.39 (raw), batch median 3840.1 ns, q_eff 40.0 ticks (samples), realised 384.0 quanta; A/A max \|t\| = 1.31 (raw), batch median 3840.1 ns, q_eff 40.0 ticks (samples), realised 384.0 quanta (LINK same-content control: a FAIL makes the run CONTROL_FAIL) |
+| min_leak_control | CAUGHT — decide FAIL at p75, class 0 slower: Δ 504.84 / 436.29 ns (50.48 / 43.63 floors), t 1011.05 / 879.95; raw Δ 532.71 / 443.91 ns (information); k=1, 1000000 samples; first max \|t\| = 1011.05 (p75), batch median 5600.1 ns, q_eff 40.0 ticks (samples), realised 540.0 quanta; second max \|t\| = 879.95 (p75), batch median 5610.1 ns, q_eff 40.0 ticks (samples), realised 542.0 quanta (sensitivity control: the verdict rule must catch the injected leak with class 0 slower, ADR-041 Amendment 3) |
+| min_leak_same_content | informative (no verdict) — p50 Δ -0.00 ns (-0.00 floors), t -0.15; IQR class 0 120.00 / class 1 120.00 ticks (ratio 1.00); max \|t\| = 0.24 (p95), batch median 5650.1 ns, q_eff 40.0 ticks (samples), realised 565.0 quanta (same content through the per-class preparation, ADR-041 Amendment 3) |
+### gate `fuzz`
+| item | verdict |
+|---|---|
+| status | PASS (4130 s) |
+| line 1 | fuzz smoke, 120 s per target on the vector-seeded scratch corpus plus the tracked corpus (read-only), -max_len from expect::FUZZ_MAX_LEN: caead_open, client_pipeline_responses, ed25519_verify, hx_accept_raw, hx_accept_structured, hx_cell_plaintext, hx_inner, hx_outer, hybrid_sign_verify, inv_linkdata, inv_uri, link_client_handshake, link_frame_open, link_records, link_relay_handshake, mldsa65_verify, mlkem_parse, msg_open, proto_cell, proto_frames, proto_handshake, proto_invitation, proto_records, q_request_decode, q_response_decode, relay_executor, relay_link_session, relayref_onion_to_hsid, scheduler_event_sequence, tls_pin_verifier, tr_decrypt, tr_state, x25519_dh (expected set matches) |
+| line 2 | vector seeds: caead_open 25, client_pipeline_responses 0, ed25519_verify 25, hx_accept_raw 24, hx_accept_structured 39, hx_cell_plaintext 45, hx_inner 9, hx_outer 15, hybrid_sign_verify 42, inv_linkdata 13, inv_uri 4, link_client_handshake 9, link_frame_open 66, link_records 28, link_relay_handshake 13, mldsa65_verify 34, mlkem_parse 86, msg_open 24, proto_cell 190, proto_frames 182, proto_handshake 40, proto_invitation 132, proto_records 81, q_request_decode 53, q_response_decode 96, relay_executor 0, relay_link_session 0, relayref_onion_to_hsid 0, scheduler_event_sequence 0, tls_pin_verifier 0, tr_decrypt 53, tr_state 1, x25519_dh 54 |
+| line 3 | executor fuzzers with -len_control=0: relay_executor: 1595 runs, lim 4322 (= max_len) |
+| line 4 | relay_link_session: 18331 runs, lim 69426 (= max_len) |
+### gate `coverage`
+| item | verdict |
+|---|---|
+| status | PASS (363 s) |
+| line 1 | secmp-cli: 5/6 lines = 83.3 % (min 80 %) |
+| line 2 | secmp-client-core: 2960/3206 lines = 92.3 % (min 90 %) |
+| line 3 | secmp-crypto: 2525/2541 lines = 99.4 % (min 90 %) |
+| line 4 | secmp-proto: 6658/6814 lines = 97.7 % (min 90 %) |
+| line 5 | secmp-relay: 2738/2803 lines = 97.7 % (min 80 %) |
+| line 6 | secmp-store: no code |
+| line 7 | secmp-sys-desktop: no code |
+| line 8 | secmp-sys-mem: 242/254 lines = 95.3 % (min 80 %) |
+| line 9 | secmp-testkit: 1751/1869 lines = 93.7 % (min 80 %) |
+| line 10 | secmp-transport: 1765/2059 lines = 85.7 % (min 80 %) |
+| line 11 | secmp-ui: 5/6 lines = 83.3 % (min 80 %) (xtask not measured) |
+### gate `mutants`
+| item | verdict |
+|---|---|
+| status | DELEGATED (0 s) |
+| line 1 | handed to another CI job with --delegated |
+### gate `miri`
+| item | verdict |
+|---|---|
+| status | PASS (2093 s) |
+| line 1 | Miri (nightly-2026-09-21, interpreting aarch64-unknown-linux-gnu, libcrux portable backend): secmp-sys-mem, secmp-sys-desktop, secmp-crypto, secmp-proto |
+| line 2 | skipped tests: secmp-crypto: mldsa::, secmp-crypto: hybrid_sign::, secmp-crypto: sas::, secmp-proto: wire::inv::tests::iks_bundle_link_data_blob, secmp-proto: wire::frame::tests::reserved_and_foreign_opcodes_reject, secmp-proto: wire::cell::tests::fragment_payload_inner_types, secmp-proto: wire::cell::tests::key_change_receipt_control, secmp-proto: wire::inv::tests::largest_link_data_fits_its_padding, secmp-proto: wire::frame::tests::fetch_multi_count_and_link_get_rules, secmp-proto: wire::frame::tests::every_request_round_trips_at_frame_size, secmp-proto: wire::frame::tests::every_response_round_trips_at_frame_size, secmp-proto: tr::tests::, secmp-proto: test-target:canonical, secmp-proto: canonical_writer_is_stable, secmp-proto: tr::ratchet::trial_work::trial_opens_every_candidate_every_call, secmp-proto: wire::cell::tests::read_routes_pre_sizes_the_vector, secmp-proto: tr::ratchet::single_conversion::any_skipped_single_conversion, secmp-proto: wire::cell::tests::routes, secmp-proto: wire::cell::tests::app_message_and_batch, secmp-proto: tr::entropy::tests::os_entropy_draws_fresh_values, secmp-proto: every_row_of_the_encodings_file, secmp-proto: the_rust_generator_reproduces_every_positive_row |
+### gate `kani`
+| item | verdict |
+|---|---|
+| status | PASS (2920 s) |
+| line 1 | Kani 0.68.0: harness packages secmp-client-core, secmp-proto, secmp-relay (expected set matches) |
+| line 2 | 40/40 harnesses verified (expect::KANI_HARNESSES): kani_proofs::cell, kani_proofs::header_v1, kani_proofs::header_v1_reencodes, kani_proofs::kani_accept_opk_delete_only_on_success, kani_proofs::kani_backoff_cap, kani_proofs::kani_balanced_rr_selects_due_or_ping, kani_proofs::kani_cell_plaintext_decode_total, kani_proofs::kani_cmd_seq_monotone, kani_proofs::kani_commit_accept_atomic, kani_proofs::kani_cont_assembly, kani_proofs::kani_evicted_range, kani_proofs::kani_executor_response_count, kani_proofs::kani_frame_pad_total, kani_proofs::kani_hx_chunk_bounds, kani_proofs::kani_hx_grouping, kani_proofs::kani_in_flight_bound, kani_proofs::kani_link_counter_checked_add, kani_proofs::kani_link_counter_strict_plus_one, kani_proofs::kani_outer_unpad_total, kani_proofs::kani_q_frame_plaintext_exact_fit, kani_proofs::kani_queue_eviction_bounds, kani_proofs::kani_rate_bound_integer_form, kani_proofs::kani_tick_time_checked, kani_proofs::kani_uniform_draw_in_range, kani_proofs::padding, kani_proofs::request_cont, kani_proofs::request_fetch, kani_proofs::request_fetch_multi, kani_proofs::request_frame, kani_proofs::request_link_get, kani_proofs::request_link_put, kani_proofs::request_ping, kani_proofs::request_queue_del, kani_proofs::request_queue_new, kani_proofs::request_send, kani_proofs::request_skey, kani_proofs::response_frame, kani_proofs::tr_eviction, kani_proofs::tr_header_selection, kani_proofs::tr_skip_plan |
+| line 3 | every cover satisfied: kani_proofs::kani_evicted_range: 2 of 2 satisfied |
+| line 4 | kani_proofs::kani_rate_bound_integer_form: 2 of 2 satisfied |
+| line 5 | kani_proofs::kani_backoff_cap: 2 of 2 satisfied |
+| line 6 | kani_proofs::kani_uniform_draw_in_range: 1 of 1 satisfied |
+| line 7 | kani_proofs::kani_tick_time_checked: 2 of 2 satisfied |
+| line 8 | kani_proofs::kani_in_flight_bound: 1 of 1 satisfied |
+| line 9 | kani_proofs::kani_balanced_rr_selects_due_or_ping: 2 of 2 satisfied |
+| line 10 | kani_proofs::kani_q_frame_plaintext_exact_fit: 2 of 2 satisfied |
+| line 11 | kani_proofs::kani_cont_assembly: 1 of 1 satisfied |
+| line 12 | kani_proofs::kani_link_counter_checked_add: 3 of 3 satisfied |
+| line 13 | kani_proofs::kani_link_counter_strict_plus_one: 2 of 2 satisfied |
+| line 14 | kani_proofs::kani_frame_pad_total: 2 of 2 satisfied |
+| line 15 | kani_proofs::kani_commit_accept_atomic: 1 of 1 satisfied |
+| line 16 | kani_proofs::kani_accept_opk_delete_only_on_success: 1 of 1 satisfied |
+| line 17 | kani_proofs::kani_executor_response_count: 6 of 6 satisfied |
+| line 18 | kani_proofs::kani_queue_eviction_bounds: 3 of 3 satisfied |
+| line 19 | kani_proofs::kani_cmd_seq_monotone: 5 of 5 satisfied |
+### gate `proverif`
+| item | verdict |
+|---|---|
+| status | PASS (141 s) |
+| line 1 | ProVerif 2.05 self-test [true, false] ok |
+| line 2 | --models tr, 4 parallel processes, timeout 1800 s per file |
+| line 3 | model hashes: 31 of 31 match expect::PROVERIF_MODEL_SHA256 |
+| line 4 | single-file models: tr (expected set matches) |
+| line 5 | HX sessions over formal/hx.pvl: none (= the files of expect::PROVERIF_EXPECTED_HX) |
+| line 6 | LINK sessions over formal/link.pvl: none (= the files of expect::PROVERIF_EXPECTED_LINK) |
+| line 7 | formal/tr.pv: 47 RESULT lines as expected — T1 true ×6, T2 true ×2, T3 true ×4, T4 true ×2, T5 true ×2, T6 true ×2, T7 false ×2, T8 true ×12, T9 true ×4, T10 false ×1, T11 true ×1, T12 false ×1, T13 false ×7, T14 true ×1 (141.5 s) |
+| line 8 | evidence target/proverif/summary.txt, results.tsv and one log per file |
+| file | ID | verdict | expected | wall time of the file | sha256 |
+| --- | --- | --- | --- | --- | --- |
+| formal/tr.pv | T1 | true ×6 | true ×6 | 141.5 s | f726a1032e5b |
+| formal/tr.pv | T2 | true ×2 | true ×2 | 141.5 s | f726a1032e5b |
+| formal/tr.pv | T3 | true ×4 | true ×4 | 141.5 s | f726a1032e5b |
+| formal/tr.pv | T4 | true ×2 | true ×2 | 141.5 s | f726a1032e5b |
+| formal/tr.pv | T5 | true ×2 | true ×2 | 141.5 s | f726a1032e5b |
+| formal/tr.pv | T6 | true ×2 | true ×2 | 141.5 s | f726a1032e5b |
+| formal/tr.pv | T7 | false ×2 | false ×2 | 141.5 s | f726a1032e5b |
+| formal/tr.pv | T8 | true ×12 | true ×12 | 141.5 s | f726a1032e5b |
+| formal/tr.pv | T9 | true ×4 | true ×4 | 141.5 s | f726a1032e5b |
+| formal/tr.pv | T10 | false ×1 | false ×1 | 141.5 s | f726a1032e5b |
+| formal/tr.pv | T11 | true ×1 | true ×1 | 141.5 s | f726a1032e5b |
+| formal/tr.pv | T12 | false ×1 | any (informative) ×1 | 141.5 s | f726a1032e5b |
+| formal/tr.pv | T13 | false ×7 | false ×7 | 141.5 s | f726a1032e5b |
+| formal/tr.pv | T14 | true ×1 | true ×1 | 141.5 s | f726a1032e5b |
+| item | verdict |
+|---|---|
+| formal/tr.pv | sha256 f726a1032e5b54a0b0b95039068182f4c5db8270745d9f160607868cf78b483d |
+| formal/hx.pvl | sha256 a24b1a50637c7b13d22c8e23568d1d402d18b8e7650d4bd65b85261505f3d20b |
+| formal/hx/hBoth.pv | sha256 6a606316c7401a7924b8894bb7893b9551a477a2cfb25051edca7cea67cf4ef8 |
+| formal/hx/hClean-auth.pv | sha256 d7e0a63c0f5efa2c75ae63049ffe39b3b8aa81db62db2b6a1e36812609201d6e |
+| formal/hx/hClean.pv | sha256 c18c398e3d46b96e79ad45d8750d15aec50758cf6e18b976baedc842d7690fbd |
+| formal/hx/hDH-auth.pv | sha256 1beed1798581053ce0f200da6f7bcba2296604334aff0485cdc906ac07babe59 |
+| formal/hx/hDH.pv | sha256 28ed0e6819a164cd0829f0b0705e061643ec910209c31872bae12fe5e5a1f018 |
+| formal/hx/hFS.pv | sha256 f21c9d1f5a4e9190ffbe539ff3fe44bebe87cfbc08e6b5e0c704af10993fb15f |
+| formal/hx/hFSDH.pv | sha256 dc87046c29964180e4ceae349b9fef6fc12dcbb4c279a22312aa3e72bbc3a0ec |
+| formal/hx/hFSOPK.pv | sha256 ac8df3c07a2cb1212e99d60e4e9434ce0565bd7c580f33822a41acb6857e8e75 |
+| formal/hx/hId.pv | sha256 4ed5e5205221c86e6466f090eb6f633341ddc6958b967ead56406d996fda3c52 |
+| formal/hx/hIdLater.pv | sha256 2c6b2265c7b7af98682cd63aac9daf20918cadeab2377c814d88c954d98d53fa |
+| formal/hx/hIdLaterOPK.pv | sha256 43b483e056a221ca357ade4989739caeaaaffad0a2e9eb7b61b3a217b956b85e |
+| formal/hx/hIdThief.pv | sha256 a2c855940c688a0481ea7267e45f3314c898c68c749de8111975984c4f48abe5 |
+| formal/hx/hKCI-auth.pv | sha256 d6c5870001a50f9f639a5571821ea96d1c1e1fd844ffd6a973a5437870b686d3 |
+| formal/hx/hKCI.pv | sha256 eaf38619a061040a35770e3a486d5f85e2055d4a6c8c792fe5c867d941188113 |
+| formal/hx/hKCIi.pv | sha256 df6fe825f759a5c43d481e0bc6c5a595195864fa1acccb81c5bdea744dce84e9 |
+| formal/hx/hKCIlt-auth.pv | sha256 3ddae9f7502f3b90851ac2e4ff574ccd0312928234d01e0ce3631d414021f812 |
+| formal/hx/hKCIlt.pv | sha256 7157b89d3d9cab0cf5d673f2476b506fd32a3b4aeada6373ab1e174b1a6bab4c |
+| formal/hx/hKEM-auth.pv | sha256 307f29dd51c29771404d930e44d640291263b2b133be711f39fcc75f724ccc76 |
+| formal/hx/hKEM.pv | sha256 016d5c86fb75efaf6706034fb4d6e0d7f3a7316c45667fedb6e6c227e8c3a967 |
+| formal/link.pvl | sha256 2b4f9531563dd41ae3dcb92279dbacc275cf5aecf4b6779110f7882e8c8fd562 |
+| formal/link/lBoth.pv | sha256 d673db6b81c6d690b01076980b3d086bd081e1c47579545c1639051ecc26cf61 |
+| formal/link/lClean.pv | sha256 d9a0dcd5e4865ac06743d8868451befad050ae3a09f00c64e86caf0f907f6a27 |
+| formal/link/lDH.pv | sha256 f43257d189694ccd18e204ef8798de6d262001f2e25e32d62e61ed0096b439a7 |
+| formal/link/lFS.pv | sha256 b23e7b75052b2e5d922ae12e00c3ee94f401e100501d720cc7596e61a9f9a04e |
+| formal/link/lFSDH.pv | sha256 97f48931b341df472e03bd61bc70cb85bd338405828d4973b5be4c55231a6e4c |
+| formal/link/lFSEph.pv | sha256 adfa9fa88b2dcf1b8bf80f1f06575da0f36821b5ba050ebd4e182ba9a82633f8 |
+| formal/link/lKEM.pv | sha256 3789840b78dbd4d172bd973f814adde2cb43645ee7fe4b7fc9fcdc71598eb4e9 |
+| formal/link/lQKey.pv | sha256 5589100a569fc5bd1b89427ee2b201a6479a5b57ac81134dbcf5b9f70e2dcd83 |
+| formal/link/lSig.pv | sha256 b24c958a0d84d18da80c160a4386e882f401e7c55b6fd4fe2dc1fac3e1560f42 |
+### gate `proverif-link`
+| item | verdict |
+|---|---|
+| status | DELEGATED (0 s) |
+| line 1 | handed to another CI job with --delegated |
+| item | verdict |
+|---|---|
+| formal/tr.pv | sha256 f726a1032e5b54a0b0b95039068182f4c5db8270745d9f160607868cf78b483d |
+| formal/hx.pvl | sha256 a24b1a50637c7b13d22c8e23568d1d402d18b8e7650d4bd65b85261505f3d20b |
+| formal/hx/hBoth.pv | sha256 6a606316c7401a7924b8894bb7893b9551a477a2cfb25051edca7cea67cf4ef8 |
+| formal/hx/hClean-auth.pv | sha256 d7e0a63c0f5efa2c75ae63049ffe39b3b8aa81db62db2b6a1e36812609201d6e |
+| formal/hx/hClean.pv | sha256 c18c398e3d46b96e79ad45d8750d15aec50758cf6e18b976baedc842d7690fbd |
+| formal/hx/hDH-auth.pv | sha256 1beed1798581053ce0f200da6f7bcba2296604334aff0485cdc906ac07babe59 |
+| formal/hx/hDH.pv | sha256 28ed0e6819a164cd0829f0b0705e061643ec910209c31872bae12fe5e5a1f018 |
+| formal/hx/hFS.pv | sha256 f21c9d1f5a4e9190ffbe539ff3fe44bebe87cfbc08e6b5e0c704af10993fb15f |
+| formal/hx/hFSDH.pv | sha256 dc87046c29964180e4ceae349b9fef6fc12dcbb4c279a22312aa3e72bbc3a0ec |
+| formal/hx/hFSOPK.pv | sha256 ac8df3c07a2cb1212e99d60e4e9434ce0565bd7c580f33822a41acb6857e8e75 |
+| formal/hx/hId.pv | sha256 4ed5e5205221c86e6466f090eb6f633341ddc6958b967ead56406d996fda3c52 |
+| formal/hx/hIdLater.pv | sha256 2c6b2265c7b7af98682cd63aac9daf20918cadeab2377c814d88c954d98d53fa |
+| formal/hx/hIdLaterOPK.pv | sha256 43b483e056a221ca357ade4989739caeaaaffad0a2e9eb7b61b3a217b956b85e |
+| formal/hx/hIdThief.pv | sha256 a2c855940c688a0481ea7267e45f3314c898c68c749de8111975984c4f48abe5 |
+| formal/hx/hKCI-auth.pv | sha256 d6c5870001a50f9f639a5571821ea96d1c1e1fd844ffd6a973a5437870b686d3 |
+| formal/hx/hKCI.pv | sha256 eaf38619a061040a35770e3a486d5f85e2055d4a6c8c792fe5c867d941188113 |
+| formal/hx/hKCIi.pv | sha256 df6fe825f759a5c43d481e0bc6c5a595195864fa1acccb81c5bdea744dce84e9 |
+| formal/hx/hKCIlt-auth.pv | sha256 3ddae9f7502f3b90851ac2e4ff574ccd0312928234d01e0ce3631d414021f812 |
+| formal/hx/hKCIlt.pv | sha256 7157b89d3d9cab0cf5d673f2476b506fd32a3b4aeada6373ab1e174b1a6bab4c |
+| formal/hx/hKEM-auth.pv | sha256 307f29dd51c29771404d930e44d640291263b2b133be711f39fcc75f724ccc76 |
+| formal/hx/hKEM.pv | sha256 016d5c86fb75efaf6706034fb4d6e0d7f3a7316c45667fedb6e6c227e8c3a967 |
+| formal/link.pvl | sha256 2b4f9531563dd41ae3dcb92279dbacc275cf5aecf4b6779110f7882e8c8fd562 |
+| formal/link/lBoth.pv | sha256 d673db6b81c6d690b01076980b3d086bd081e1c47579545c1639051ecc26cf61 |
+| formal/link/lClean.pv | sha256 d9a0dcd5e4865ac06743d8868451befad050ae3a09f00c64e86caf0f907f6a27 |
+| formal/link/lDH.pv | sha256 f43257d189694ccd18e204ef8798de6d262001f2e25e32d62e61ed0096b439a7 |
+| formal/link/lFS.pv | sha256 b23e7b75052b2e5d922ae12e00c3ee94f401e100501d720cc7596e61a9f9a04e |
+| formal/link/lFSDH.pv | sha256 97f48931b341df472e03bd61bc70cb85bd338405828d4973b5be4c55231a6e4c |
+| formal/link/lFSEph.pv | sha256 adfa9fa88b2dcf1b8bf80f1f06575da0f36821b5ba050ebd4e182ba9a82633f8 |
+| formal/link/lKEM.pv | sha256 3789840b78dbd4d172bd973f814adde2cb43645ee7fe4b7fc9fcdc71598eb4e9 |
+| formal/link/lQKey.pv | sha256 5589100a569fc5bd1b89427ee2b201a6479a5b57ac81134dbcf5b9f70e2dcd83 |
+| formal/link/lSig.pv | sha256 b24c958a0d84d18da80c160a4386e882f401e7c55b6fd4fe2dc1fac3e1560f42 |
+### gate `windows-cross`
+| item | verdict |
+|---|---|
+| status | DELEGATED (0 s) |
+| line 1 | handed to another CI job with --delegated |
+### gate `windows-native`
+| item | verdict |
+|---|---|
+| status | DELEGATED (0 s) |
+| line 1 | handed to another CI job with --delegated |
+### gate `linux-target`
+| item | verdict |
+|---|---|
+| status | PASS (0 s) |
+| line 1 | host is x86_64-unknown-linux-gnu: every step above ran natively |
+### gate `ref-vectors`
+| item | verdict |
+|---|---|
+| status | PASS (0 s) |
+| line 1 | 12 frozen suites (969 cases) structurally and byte-identical to vectors/ref (ADR-026) |
+| line 2 | pending freeze (shape only): none |
+### gate `repro`
+| item | verdict |
+|---|---|
+| status | STUB (0 s) |
+| line 1 | two-builder reproducibility check becomes real in M11 (`cargo xtask repro-check`) |
+### gate `sbom`
+| item | verdict |
+|---|---|
+| status | PASS (3 s) |
+| line 1 | 12 CycloneDX SBOMs in target/sbom |
+| line 2 | auditable release builds (x86_64-unknown-linux-gnu, remapped paths) read back by `cargo audit bin`: target/release/secmp-relay, target/release/secmp-cli, target/release/secmp-ui |
+### gate `systemd`
+| item | verdict |
+|---|---|
+| status | PASS (0 s) |
+| line 1 | systemd 255 (255.4-1ubuntu8.17) |
+| line 2 | self-test: unhardened fixture 9.4 > 2 rejected |
+| line 3 | units: none (deploy/secmp-relay.service arrives in M10) |
+
+=== ci-full summary (host x86_64-unknown-linux-gnu, strict: true) ===
+   1 fmt             PASS          0s  rustfmt: no changes
+   2 clippy          PASS          0s  clippy --all-features -D warnings on x86_64-unknown-linux-gnu (12 crates)
+   2 policy          PASS          1s  unsafe-attrs: 41 target roots forbid, 2 sys library roots allow, 1 ADR-038 bench root allows (crates/secmp-testkit/benches/ct.rs), 2 secmp-ui roots deny, 2 secmp-ui files without `unsafe`; lints-table: 12 manifests; lint-allows: 143 relaxing attributes (all sanctioned); build-scripts: 12 crates, none; spdx: 399 files; relay-events: 7 names as expect::RELAY_TRACE_ALLOW; normal-deps: 4 crates within expect::NORMAL_DEPENDENCY_ALLOW; secmp-crypto/secmp-proto normal closure (x86_64-unknown-linux-gnu, x86_64-pc-windows-msvc, aarch64-apple-darwin): 55 external crates, 0 exempted; tracked exemptions elsewhere: 327; workflows: 4 files, triggers/SHA pins/flow style/continue-on-error/permissions ok; pinned jobs (linux-fast, windows-native, xwin-cross, linux-full, ct, mutants-shard, mutants, proverif-hx, proverif-link, kani) only in ci.yml, no dispatch there, job conditions, needs, defaults/shell and gate run lines as pinned, delegations mapped (accident guard, not tamper-proof)
+   3 deny            PASS          1s  advisories, bans, licenses, sources: ok
+   3 vet             PASS          1s  secmp-crypto/secmp-proto normal closure (x86_64-unknown-linux-gnu, x86_64-pc-windows-msvc, aarch64-apple-darwin): 55 external crates, 0 exempted; tracked exemptions elsewhere: 327
+   3 audit           PASS          2s  RustSec: no advisories (warnings denied); ignored with an ADR: RUSTSEC-2026-0173, RUSTSEC-2023-0071, RUSTSEC-2024-0436, RUSTSEC-2025-0141
+   3 cooldown        PASS         23s  561 registry packages (Cargo.lock, fuzz/Cargo.lock), all ≥ 7 days old or excepted (ADR-015 Am. 2); youngest: toml_writer 1.1.3+spec-1.1.0, 8 days; cooldown: exception rustls@0.23.46 until 2026-10-21 (RUSTSEC-2026-0346/-0347/-0348/-0349 (ADR-015 Am. 2))
+   4 nextest         PASS        297s  cargo nextest run --workspace; cargo nextest run --package secmp-proto (non-kat); both with SECMP_PROPTEST_SEED removed (every property with its DEFAULT_SEED, the CI run seed pass is in the kat step)
+   4 doctest         PASS          1s  cargo test --doc
+   4 hello           PASS          0s  secmp-relay 0.0.0 (M5) | secmp-cli 0.0.0 (M0 skeleton: no functionality) | secmp-ui 0.0.0 (M0 skeleton: no functionality)
+   5 kat             PASS        320s  KAT/differential packages: secmp-client-core, secmp-crypto, secmp-proto, secmp-relay, secmp-testkit (expected set matches); ML-KEM KATs and frozen vectors (M1 suites, tr, hx, link) also with libcrux's portable backend; property tests with their DEFAULT_SEED only (SECMP_PROPTEST_SEED removed, no CI run seed outside GitHub Actions)
+   5 perf            PASS          0s  encrypt+persist+decrypt+commit per message, 200 messages per kind on x86_64-unknown-linux-gnu: chain: median 129.3 µs, max 169.2 µs; step: median 339.5 µs, max 372.8 µs; every maximum below 3 ms
+   5 ct              DELEGATED     0s  handed to another CI job with --delegated
+   6 fuzz            PASS       4130s  fuzz smoke, 120 s per target on the vector-seeded scratch corpus plus the tracked corpus (read-only), -max_len from expect::FUZZ_MAX_LEN: caead_open, client_pipeline_responses, ed25519_verify, hx_accept_raw, hx_accept_structured, hx_cell_plaintext, hx_inner, hx_outer, hybrid_sign_verify, inv_linkdata, inv_uri, link_client_handshake, link_frame_open, link_records, link_relay_handshake, mldsa65_verify, mlkem_parse, msg_open, proto_cell, proto_frames, proto_handshake, proto_invitation, proto_records, q_request_decode, q_response_decode, relay_executor, relay_link_session, relayref_onion_to_hsid, scheduler_event_sequence, tls_pin_verifier, tr_decrypt, tr_state, x25519_dh (expected set matches); vector seeds: caead_open 25, client_pipeline_responses 0, ed25519_verify 25, hx_accept_raw 24, hx_accept_structured 39, hx_cell_plaintext 45, hx_inner 9, hx_outer 15, hybrid_sign_verify 42, inv_linkdata 13, inv_uri 4, link_client_handshake 9, link_frame_open 66, link_records 28, link_relay_handshake 13, mldsa65_verify 34, mlkem_parse 86, msg_open 24, proto_cell 190, proto_frames 182, proto_handshake 40, proto_invitation 132, proto_records 81, q_request_decode 53, q_response_decode 96, relay_executor 0, relay_link_session 0, relayref_onion_to_hsid 0, scheduler_event_sequence 0, tls_pin_verifier 0, tr_decrypt 53, tr_state 1, x25519_dh 54; executor fuzzers with -len_control=0: relay_executor: 1595 runs, lim 4322 (= max_len); relay_link_session: 18331 runs, lim 69426 (= max_len)
+   7 coverage        PASS        363s  secmp-cli: 5/6 lines = 83.3 % (min 80 %); secmp-client-core: 2960/3206 lines = 92.3 % (min 90 %); secmp-crypto: 2525/2541 lines = 99.4 % (min 90 %); secmp-proto: 6658/6814 lines = 97.7 % (min 90 %); secmp-relay: 2738/2803 lines = 97.7 % (min 80 %); secmp-store: no code; secmp-sys-desktop: no code; secmp-sys-mem: 242/254 lines = 95.3 % (min 80 %); secmp-testkit: 1751/1869 lines = 93.7 % (min 80 %); secmp-transport: 1765/2059 lines = 85.7 % (min 80 %); secmp-ui: 5/6 lines = 83.3 % (min 80 %) (xtask not measured)
+   8 mutants         DELEGATED     0s  handed to another CI job with --delegated
+   9 miri            PASS       2093s  Miri (nightly-2026-09-21, interpreting aarch64-unknown-linux-gnu, libcrux portable backend): secmp-sys-mem, secmp-sys-desktop, secmp-crypto, secmp-proto; skipped tests: secmp-crypto: mldsa::, secmp-crypto: hybrid_sign::, secmp-crypto: sas::, secmp-proto: wire::inv::tests::iks_bundle_link_data_blob, secmp-proto: wire::frame::tests::reserved_and_foreign_opcodes_reject, secmp-proto: wire::cell::tests::fragment_payload_inner_types, secmp-proto: wire::cell::tests::key_change_receipt_control, secmp-proto: wire::inv::tests::largest_link_data_fits_its_padding, secmp-proto: wire::frame::tests::fetch_multi_count_and_link_get_rules, secmp-proto: wire::frame::tests::every_request_round_trips_at_frame_size, secmp-proto: wire::frame::tests::every_response_round_trips_at_frame_size, secmp-proto: tr::tests::, secmp-proto: test-target:canonical, secmp-proto: canonical_writer_is_stable, secmp-proto: tr::ratchet::trial_work::trial_opens_every_candidate_every_call, secmp-proto: wire::cell::tests::read_routes_pre_sizes_the_vector, secmp-proto: tr::ratchet::single_conversion::any_skipped_single_conversion, secmp-proto: wire::cell::tests::routes, secmp-proto: wire::cell::tests::app_message_and_batch, secmp-proto: tr::entropy::tests::os_entropy_draws_fresh_values, secmp-proto: every_row_of_the_encodings_file, secmp-proto: the_rust_generator_reproduces_every_positive_row
+   9 kani            PASS       2920s  Kani 0.68.0: harness packages secmp-client-core, secmp-proto, secmp-relay (expected set matches); 40/40 harnesses verified (expect::KANI_HARNESSES): kani_proofs::cell, kani_proofs::header_v1, kani_proofs::header_v1_reencodes, kani_proofs::kani_accept_opk_delete_only_on_success, kani_proofs::kani_backoff_cap, kani_proofs::kani_balanced_rr_selects_due_or_ping, kani_proofs::kani_cell_plaintext_decode_total, kani_proofs::kani_cmd_seq_monotone, kani_proofs::kani_commit_accept_atomic, kani_proofs::kani_cont_assembly, kani_proofs::kani_evicted_range, kani_proofs::kani_executor_response_count, kani_proofs::kani_frame_pad_total, kani_proofs::kani_hx_chunk_bounds, kani_proofs::kani_hx_grouping, kani_proofs::kani_in_flight_bound, kani_proofs::kani_link_counter_checked_add, kani_proofs::kani_link_counter_strict_plus_one, kani_proofs::kani_outer_unpad_total, kani_proofs::kani_q_frame_plaintext_exact_fit, kani_proofs::kani_queue_eviction_bounds, kani_proofs::kani_rate_bound_integer_form, kani_proofs::kani_tick_time_checked, kani_proofs::kani_uniform_draw_in_range, kani_proofs::padding, kani_proofs::request_cont, kani_proofs::request_fetch, kani_proofs::request_fetch_multi, kani_proofs::request_frame, kani_proofs::request_link_get, kani_proofs::request_link_put, kani_proofs::request_ping, kani_proofs::request_queue_del, kani_proofs::request_queue_new, kani_proofs::request_send, kani_proofs::request_skey, kani_proofs::response_frame, kani_proofs::tr_eviction, kani_proofs::tr_header_selection, kani_proofs::tr_skip_plan; every cover satisfied: kani_proofs::kani_evicted_range: 2 of 2 satisfied; kani_proofs::kani_rate_bound_integer_form: 2 of 2 satisfied; kani_proofs::kani_backoff_cap: 2 of 2 satisfied; kani_proofs::kani_uniform_draw_in_range: 1 of 1 satisfied; kani_proofs::kani_tick_time_checked: 2 of 2 satisfied; kani_proofs::kani_in_flight_bound: 1 of 1 satisfied; kani_proofs::kani_balanced_rr_selects_due_or_ping: 2 of 2 satisfied; kani_proofs::kani_q_frame_plaintext_exact_fit: 2 of 2 satisfied; kani_proofs::kani_cont_assembly: 1 of 1 satisfied; kani_proofs::kani_link_counter_checked_add: 3 of 3 satisfied; kani_proofs::kani_link_counter_strict_plus_one: 2 of 2 satisfied; kani_proofs::kani_frame_pad_total: 2 of 2 satisfied; kani_proofs::kani_commit_accept_atomic: 1 of 1 satisfied; kani_proofs::kani_accept_opk_delete_only_on_success: 1 of 1 satisfied; kani_proofs::kani_executor_response_count: 6 of 6 satisfied; kani_proofs::kani_queue_eviction_bounds: 3 of 3 satisfied; kani_proofs::kani_cmd_seq_monotone: 5 of 5 satisfied
+  10 proverif        PASS        141s  ProVerif 2.05 self-test [true, false] ok; --models tr, 4 parallel processes, timeout 1800 s per file; model hashes: 31 of 31 match expect::PROVERIF_MODEL_SHA256; single-file models: tr (expected set matches); HX sessions over formal/hx.pvl: none (= the files of expect::PROVERIF_EXPECTED_HX); LINK sessions over formal/link.pvl: none (= the files of expect::PROVERIF_EXPECTED_LINK); formal/tr.pv: 47 RESULT lines as expected — T1 true ×6, T2 true ×2, T3 true ×4, T4 true ×2, T5 true ×2, T6 true ×2, T7 false ×2, T8 true ×12, T9 true ×4, T10 false ×1, T11 true ×1, T12 false ×1, T13 false ×7, T14 true ×1 (141.5 s); evidence target/proverif/summary.txt, results.tsv and one log per file
+  10 proverif-link   DELEGATED     0s  handed to another CI job with --delegated
+  11 windows-cross   DELEGATED     0s  handed to another CI job with --delegated
+  11 windows-native  DELEGATED     0s  handed to another CI job with --delegated
+  11 linux-target    PASS          0s  host is x86_64-unknown-linux-gnu: every step above ran natively
+ 12a ref-vectors     PASS          0s  12 frozen suites (969 cases) structurally and byte-identical to vectors/ref (ADR-026); pending freeze (shape only): none
+  12 repro           STUB          0s  two-builder reproducibility check becomes real in M11 (`cargo xtask repro-check`)
+  13 sbom            PASS          3s  12 CycloneDX SBOMs in target/sbom; auditable release builds (x86_64-unknown-linux-gnu, remapped paths) read back by `cargo audit bin`: target/release/secmp-relay, target/release/secmp-cli, target/release/secmp-ui
+  14 systemd         PASS          0s  systemd 255 (255.4-1ubuntu8.17); self-test: unhardened fixture 9.4 > 2 rejected; units: none (deploy/secmp-relay.service arrives in M10)
+ci-full: PASS

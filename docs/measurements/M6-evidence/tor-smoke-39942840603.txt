@@ -1,0 +1,15 @@
+# run 39942840603 (ci-dispatch, workflow_dispatch, suite=tor-smoke, attempt 1, branch m06-transport)
+# job tor-smoke 120378231120
+# head 60083afe8f613c4fa8f8574be6409e5e1ffd39f6
+# runner ubuntu-latest, 2026-10-23 10:58:41–11:03:15 UTC
+# conclusion success
+# artefact tor-smoke-60083afe8f613c4fa8f8574be6409e5e1ffd39f6-1 (file tor-smoke.txt, verbatim below)
+tor-smoke start unix=1792753383
+tor-event Blocked
+tor-event Progress(7)
+tor-event Progress(15)
+tor-event Progress(36)
+tor-event Progress(44)
+tor-event Ready
+READY unix=1792753392
+MR07 bootstrap_seconds=9.2 bytes_down=41751578

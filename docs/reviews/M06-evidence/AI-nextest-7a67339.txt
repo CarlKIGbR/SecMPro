@@ -1,0 +1,17 @@
+code head 7a67339: cargo nextest run -p secmp-testkit --features secmp-testkit/harness m6_activity
+(AI-01…AI-06 run with real 20 ms / dummy 1 ms / receive 5 ms; AI-01/02/03/06 assert max |dt| == 0 ms)
+PASS [   0.007s] ( 1/14) secmp-testkit::harness m6_activity::tick_path_reads_no_outbox
+PASS [   2.594s] ( 2/14) secmp-testkit::harness m6_activity::activity_comparator_detects_an_extra_control_link
+PASS [   2.600s] ( 3/14) secmp-testkit::harness m6_activity::activity_comparator_detects_a_late_emission
+PASS [   2.606s] ( 4/14) secmp-testkit::harness m6_activity::activity_comparator_detects_a_different_schedule
+PASS [   2.629s] ( 5/14) secmp-testkit::harness m6_activity::activity_comparator_detects_a_dropped_dummy
+PASS [   2.634s] ( 6/14) secmp-testkit::harness m6_activity::activity_comparator_detects_a_resized_frame
+PASS [   8.358s] ( 7/14) secmp-testkit::harness m6_activity::control_ops_are_the_only_extra_units
+PASS [  18.229s] ( 8/14) secmp-testkit::harness m6_activity::ai_asymmetric_prepare_cost_does_not_move_emission
+PASS [  49.334s] ( 9/14) secmp-testkit::harness m6_activity::activity_independence_when_receiving
+PASS [  51.558s] (10/14) secmp-testkit::harness m6_activity::activity_independence_both_directions
+PASS [ 113.629s] (11/14) secmp-testkit::harness m6_activity::timing_draws_independent_of_activity
+PASS [ 166.674s] (12/14) secmp-testkit::harness m6_activity::activity_independence_lowbw_virtual
+PASS [ 188.277s] (13/14) secmp-testkit::harness m6_activity::activity_independence_strict_virtual
+PASS [ 211.081s] (14/14) secmp-testkit::harness m6_activity::activity_independence_balanced_virtual
+Summary [ 211.082s] 14 tests run: 14 passed (4 slow), 122 skipped

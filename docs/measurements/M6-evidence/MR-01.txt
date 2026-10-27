@@ -1,0 +1,5 @@
+machine: secmp-main (container on carlgpu4), 32 logical CPUs, Linux 7.0.0-34-generic, 2026-10-22
+code: aa3d29e plus the MR-05 test of the C2-4 commit (cargo nextest run -p secmp-testkit --features kat)
+Strict: 3045.9 B/s while up, spec 3046.4 B/s (3046 B/s whole), error 0.00017
+Balanced: 4786.3 B/s while up, spec 4787.2 B/s (4787 B/s whole), error 0.00019
+Low-bw: 1594.7 B/s while up, spec 1595.7 B/s (1595 B/s whole), error 0.00065

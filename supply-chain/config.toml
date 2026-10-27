@@ -19,110 +19,1385 @@ url = "https://raw.githubusercontent.com/mozilla/supply-chain/main/audits.toml"
 [imports.zcash]
 url = "https://raw.githubusercontent.com/zcash/rust-ecosystem/main/supply-chain/audits.toml"
 
+[[exemptions.aes]]
+version = "0.9.3"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.amplify]]
+version = "4.9.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.amplify_derive]]
+version = "4.0.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.amplify_num]]
+version = "0.5.4"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.amplify_syn]]
+version = "2.0.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.android_system_properties]]
+version = "0.1.6"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.arrayvec]]
+version = "0.7.8"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.asn1-rs]]
+version = "0.7.2"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.asn1-rs-derive]]
+version = "0.6.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.asn1-rs-impl]]
+version = "0.2.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.assert_matches]]
+version = "1.5.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.async-compression]]
+version = "0.4.50"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.async-trait]]
+version = "0.1.92"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.async_executors]]
+version = "0.7.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.asynchronous-codec]]
+version = "0.7.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.atomic]]
+version = "0.5.3"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.atomic]]
+version = "0.6.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.base64]]
+version = "0.23.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.bincode]]
+version = "2.0.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
 [[exemptions.bitflags]]
 version = "2.13.2"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): build-dependency of bindgen <- crabgrind (build) <- libcrux-secrets under cfg(valgrind_ct_test), which is never set; outside the normal closure (ADR-036). Review at every release."
+
+[[exemptions.bitvec]]
+version = "1.1.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.blanket]]
+version = "0.3.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.bs58]]
+version = "0.5.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.bstr]]
+version = "1.13.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.by_address]]
+version = "1.2.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.bytemuck]]
+version = "1.25.2"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.bytes]]
+version = "1.12.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client, tokio, tokio-rustls, turmoil (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client, tokio, tokio-rustls, turmoil."
 
 [[exemptions.cc]]
 version = "1.4.7"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): build-dependency of cmake/aws-lc-sys <- aws-lc-rs (dev-dependency of secmp-crypto, differential tests) and of crabgrind (cfg(valgrind_ct_test) only); outside the normal closure (ADR-036). Pinned below 1.5.x by the 7-day cooldown. Review at every release."
 
+[[exemptions.chrono]]
+version = "0.4.45"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
 [[exemptions.clang-sys]]
 version = "1.9.1"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): dependency of bindgen <- crabgrind (build) <- libcrux-secrets under cfg(valgrind_ct_test), never compiled; outside the normal closure (ADR-036). Review at every release."
+
+[[exemptions.coarsetime]]
+version = "0.1.38"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.compression-codecs]]
+version = "0.4.45"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.compression-core]]
+version = "0.4.33"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.const-oid]]
+version = "0.9.6"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.convert_case]]
+version = "0.10.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.cookie-factory]]
+version = "0.3.3"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.cpubits]]
+version = "0.1.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
 
 [[exemptions.crabgrind]]
 version = "0.2.6"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): dependency of libcrux-secrets under cfg(valgrind_ct_test) (valgrind constant-time tests of libcrux), never set in our builds; outside the normal closure (ADR-036). Review at every release."
 
+[[exemptions.crc32fast]]
+version = "1.5.2"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.crossbeam-queue]]
+version = "0.3.14"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.crossbeam-utils]]
+version = "0.8.23"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.crypto-common]]
+version = "0.1.7"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.ctr]]
+version = "0.10.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.darling]]
+version = "0.14.4"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.darling]]
+version = "0.21.3"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.darling]]
+version = "0.24.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.darling_core]]
+version = "0.14.4"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.darling_core]]
+version = "0.21.3"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.darling_core]]
+version = "0.24.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.darling_macro]]
+version = "0.14.4"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.darling_macro]]
+version = "0.21.3"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.darling_macro]]
+version = "0.24.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.data-encoding]]
+version = "2.11.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.defmt]]
+version = "1.1.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.defmt-macros]]
+version = "1.1.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.defmt-parser]]
+version = "1.0.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.der-parser]]
+version = "10.0.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.derive_more]]
+version = "2.1.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.derive_more-impl]]
+version = "2.1.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.directories]]
+version = "6.0.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.dirs]]
+version = "6.0.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.dirs-sys]]
+version = "0.5.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.displaydoc]]
+version = "0.2.7"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.downcast-rs]]
+version = "2.0.2"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.dyn-clone]]
+version = "1.0.20"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.educe]]
+version = "0.4.23"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.enum-ordinalize]]
+version = "3.1.15"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.enum_dispatch]]
+version = "0.3.13"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.enumset]]
+version = "1.1.14"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.enumset_derive]]
+version = "0.15.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.event-listener]]
+version = "5.4.2"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.fastrand]]
+version = "2.5.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.ff]]
+version = "0.13.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.figment]]
+version = "0.10.19"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.filetime]]
+version = "0.2.29"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
 [[exemptions.find-msvc-tools]]
 version = "0.1.13"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): dependency of cc, a build-dependency of aws-lc-sys <- aws-lc-rs (dev-dependency of secmp-crypto, differential tests); outside the normal closure (ADR-036). Review at every release."
+
+[[exemptions.flate2]]
+version = "1.1.10"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.fluid-let]]
+version = "1.0.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.fs_extra]]
+version = "1.3.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client, rustls, tokio-rustls (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client, rustls, tokio-rustls."
 
 [[exemptions.fs_extra]]
 version = "1.3.0"
 criteria = "safe-to-run"
 notes = "Tracked exemption (supply-chain/README.md): build-dependency of aws-lc-sys <- aws-lc-rs (dev-dependency of secmp-crypto, differential tests); outside the normal closure (ADR-036). Review at every release."
 
+[[exemptions.funty]]
+version = "2.0.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.futures]]
+version = "0.3.34"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.futures-channel]]
+version = "0.3.34"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client, rustls, tokio-rustls, turmoil (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client, rustls, tokio-rustls, turmoil."
+
 [[exemptions.futures-core]]
 version = "0.3.34"
 criteria = "safe-to-deploy"
-notes = "Tracked exemption (supply-chain/README.md): dependency of js-sys, compiled only for wasm32 targets (getrandom/uuid); outside the normal closure (ADR-036). Review at every release."
+notes = "Tracked exemption (supply-chain/README.md): transitive via arti-client / tokio (ADR-051 Part 2), outside the crypto/proto closure (ADR-036). Review at every release."
+
+[[exemptions.futures-executor]]
+version = "0.3.34"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.futures-io]]
+version = "0.3.34"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client, rustls, tokio-rustls, turmoil (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client, rustls, tokio-rustls, turmoil."
+
+[[exemptions.futures-macro]]
+version = "0.3.34"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client, rustls, tokio-rustls, turmoil (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client, rustls, tokio-rustls, turmoil."
+
+[[exemptions.futures-rustls]]
+version = "0.26.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.futures-sink]]
+version = "0.3.34"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client, rustls, tokio-rustls, turmoil (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client, rustls, tokio-rustls, turmoil."
 
 [[exemptions.futures-task]]
 version = "0.3.34"
 criteria = "safe-to-deploy"
-notes = "Tracked exemption (supply-chain/README.md): dependency of futures-util <- js-sys, compiled only for wasm32 targets (getrandom/uuid); outside the normal closure (ADR-036). Review at every release."
+notes = "Tracked exemption (supply-chain/README.md): transitive via arti-client / tokio (ADR-051 Part 2), outside the crypto/proto closure (ADR-036). Review at every release."
 
 [[exemptions.futures-util]]
 version = "0.3.34"
 criteria = "safe-to-deploy"
-notes = "Tracked exemption (supply-chain/README.md): dependency of js-sys, compiled only for wasm32 targets (getrandom/uuid); outside the normal closure (ADR-036). Review at every release."
+notes = "Tracked exemption (supply-chain/README.md): transitive via arti-client / tokio (ADR-051 Part 2), outside the crypto/proto closure (ADR-036). Review at every release."
+
+[[exemptions.generic-array]]
+version = "0.14.7"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.getrandom]]
+version = "0.2.17"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client, rustls, tokio-rustls (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client, rustls, tokio-rustls."
+
+[[exemptions.getrandom]]
+version = "0.3.4"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client, turmoil (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client, turmoil."
+
+[[exemptions.getset]]
+version = "0.1.7"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.glob-match]]
+version = "0.2.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.group]]
+version = "0.13.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.hashbrown]]
+version = "0.12.3"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.hashbrown]]
+version = "0.15.5"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.hashbrown]]
+version = "0.16.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.hashbrown]]
+version = "0.17.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client, turmoil (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client, turmoil."
+
+[[exemptions.hashlink]]
+version = "0.11.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.hkdf]]
+version = "0.12.4"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.hostname-validator]]
+version = "1.1.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.http]]
+version = "1.5.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.httparse]]
+version = "1.10.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.humantime]]
+version = "2.4.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.humantime-serde]]
+version = "1.1.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.iana-time-zone]]
+version = "0.1.65"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.icu_collections]]
+version = "2.3.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.icu_locale_core]]
+version = "2.3.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.icu_normalizer]]
+version = "2.3.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.icu_normalizer_data]]
+version = "2.3.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.icu_properties]]
+version = "2.3.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.icu_properties_data]]
+version = "2.3.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.icu_provider]]
+version = "2.3.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.ident_case]]
+version = "1.0.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.idna]]
+version = "1.1.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.idna_adapter]]
+version = "1.2.2"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.imara-diff]]
+version = "0.2.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.indexmap]]
+version = "1.9.3"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.indexmap]]
+version = "2.14.2"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client, turmoil (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client, turmoil."
+
+[[exemptions.inotify]]
+version = "0.11.5"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.inotify-sys]]
+version = "0.1.8"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.inventory]]
+version = "0.3.25"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.ipnet]]
+version = "2.12.2"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.iprange]]
+version = "0.6.7"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
 
 [[exemptions.itertools]]
 version = "0.13.0"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): dependency of bindgen <- crabgrind (build) <- libcrux-secrets under cfg(valgrind_ct_test), never compiled; outside the normal closure (ADR-036). Review at every release."
 
+[[exemptions.itertools]]
+version = "0.15.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.jiff]]
+version = "0.2.38"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.jiff-core]]
+version = "0.1.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.jiff-static]]
+version = "0.2.38"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.jiff-tzdb]]
+version = "0.1.9"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.jiff-tzdb-platform]]
+version = "0.1.3"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
 [[exemptions.js-sys]]
 version = "0.3.105"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): wasm32-only dependency of getrandom and uuid; outside the normal closure (ADR-036). Pinned below 0.3.106 by the 7-day cooldown. Review at every release."
+
+[[exemptions.kqueue]]
+version = "1.2.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.kqueue-sys]]
+version = "1.1.2"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.lazy_static]]
+version = "1.5.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
 
 [[exemptions.libloading]]
 version = "0.8.9"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): dependency of clang-sys <- bindgen <- crabgrind (build) <- libcrux-secrets under cfg(valgrind_ct_test), never compiled; outside the normal closure (ADR-036). Review at every release."
 
+[[exemptions.libredox]]
+version = "0.1.25"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.libsqlite3-sys]]
+version = "0.37.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.linux-raw-sys]]
+version = "0.12.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.litemap]]
+version = "0.8.3"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.lock_api]]
+version = "0.4.14"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
 [[exemptions.log]]
 version = "0.4.34"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): dependency of bindgen <- crabgrind (build) <- libcrux-secrets under cfg(valgrind_ct_test), never compiled; outside the normal closure (ADR-036). Review at every release."
+
+[[exemptions.memmap2]]
+version = "0.9.11"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.merlin]]
+version = "3.0.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
 
 [[exemptions.minimal-lexical]]
 version = "0.2.1"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): dependency of nom <- cexpr <- bindgen <- crabgrind (build) <- libcrux-secrets under cfg(valgrind_ct_test), never compiled; outside the normal closure (ADR-036). Review at every release."
 
+[[exemptions.miniz_oxide]]
+version = "0.9.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.mio]]
+version = "1.2.4"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client, tokio, tokio-rustls, turmoil (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client, tokio, tokio-rustls, turmoil."
+
+[[exemptions.nonany]]
+version = "0.3.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.notify]]
+version = "8.2.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.notify-types]]
+version = "2.1.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.ntapi]]
+version = "0.4.3"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.num-bigint-dig]]
+version = "0.8.6"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.num-iter]]
+version = "0.1.46"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.num_enum]]
+version = "0.7.6"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.num_enum_derive]]
+version = "0.7.6"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.objc2-io-kit]]
+version = "0.3.2"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
 [[exemptions.once_cell]]
 version = "1.12.0"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): base version for the imported deltas up to the locked version; dependency of wasm-bindgen, compiled only for wasm32 targets; outside the normal closure (ADR-036). Review at every release."
+
+[[exemptions.ordered-float]]
+version = "2.10.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.os_str_bytes]]
+version = "6.6.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.parking_lot]]
+version = "0.12.5"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.parking_lot_core]]
+version = "0.9.12"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.paste]]
+version = "1.0.15"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
 
 [[exemptions.pastey]]
 version = "0.2.3"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): proc-macro dependency of core-models <- libcrux-intrinsics under cfg(hax) only (hax verification builds), never compiled; outside the normal closure (ADR-036). Review at every release."
 
+[[exemptions.phf]]
+version = "0.14.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.phf_generator]]
+version = "0.14.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.phf_macros]]
+version = "0.14.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.phf_shared]]
+version = "0.14.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.pin-project]]
+version = "1.1.13"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.pin-project-internal]]
+version = "1.1.13"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
 [[exemptions.pin-project-lite]]
 version = "0.2.17"
 criteria = "safe-to-deploy"
-notes = "Tracked exemption (supply-chain/README.md): dependency of futures-util <- js-sys, compiled only for wasm32 targets; outside the normal closure (ADR-036). Review at every release."
+notes = "Tracked exemption (supply-chain/README.md): transitive via arti-client / tokio (ADR-051 Part 2), outside the crypto/proto closure (ADR-036). Review at every release."
 
 [[exemptions.pkg-config]]
 version = "0.3.34"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): build-dependency of aws-lc-sys <- aws-lc-rs (dev-dependency of secmp-crypto) and of crabgrind (cfg(valgrind_ct_test) only); outside the normal closure (ADR-036). Review at every release."
 
+[[exemptions.polyval]]
+version = "0.7.3"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.portable-atomic]]
+version = "1.15.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.portable-atomic-util]]
+version = "0.2.8"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.postage]]
+version = "0.5.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.potential_utf]]
+version = "0.1.6"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.powerfmt]]
+version = "0.2.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.ppv-lite86]]
+version = "0.2.21"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client, turmoil (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client, turmoil."
+
+[[exemptions.priority-queue]]
+version = "2.7.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.proc-macro-crate]]
+version = "3.5.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.r-efi]]
+version = "5.3.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client, turmoil (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client, turmoil."
+
 [[exemptions.r-efi]]
 version = "6.0.0"
 criteria = "safe-to-deploy"
 notes = 'Tracked exemption (supply-chain/README.md): dependency of getrandom for target_os = "uefi" only; outside the normal closure (ADR-036). Review at every release.'
+
+[[exemptions.radium]]
+version = "0.7.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.rand]]
+version = "0.8.8"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.rand]]
+version = "0.9.5"
+criteria = "safe-to-run"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the dev-dependency closure (test-only) of turmoil (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of turmoil."
+
+[[exemptions.rand_chacha]]
+version = "0.3.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.rand_chacha]]
+version = "0.9.0"
+criteria = "safe-to-run"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the dev-dependency closure (test-only) of turmoil (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of turmoil."
+
+[[exemptions.rand_chacha]]
+version = "0.10.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.rand_jitter]]
+version = "0.6.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.rangemap]]
+version = "1.8.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.rdrand]]
+version = "0.9.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.redox_syscall]]
+version = "0.5.18"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.redox_users]]
+version = "0.5.3"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.ref-cast]]
+version = "1.0.27"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.ref-cast-impl]]
+version = "1.0.27"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.reseeding_rng]]
+version = "0.10.7"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.ring]]
+version = "0.17.14"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client, rustls, tokio-rustls (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client, rustls, tokio-rustls."
+
+[[exemptions.rsa]]
+version = "0.9.10"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.rsqlite-vfs]]
+version = "0.1.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.rusqlite]]
+version = "0.39.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
 
 [[exemptions.rustc-hash]]
 version = "2.1.3"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): dependency of bindgen <- crabgrind (build) <- libcrux-secrets under cfg(valgrind_ct_test), never compiled; outside the normal closure (ADR-036). Review at every release."
 
+[[exemptions.rusticata-macros]]
+version = "4.1.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.rustix]]
+version = "1.1.5"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.rustls-pki-types]]
+version = "1.15.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client, rustls, tokio-rustls (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client, rustls, tokio-rustls."
+
+[[exemptions.rustls-webpki]]
+version = "0.103.15"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client, rustls, tokio-rustls (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client, rustls, tokio-rustls."
+
+[[exemptions.same-file]]
+version = "1.0.6"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.sanitize-filename]]
+version = "0.6.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.saturating-time]]
+version = "0.4.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.schemars]]
+version = "0.9.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.schemars]]
+version = "1.2.2"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.scopeguard]]
+version = "1.2.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.serde_ignored]]
+version = "0.1.14"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.serde_spanned]]
+version = "0.6.9"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.serde_spanned]]
+version = "1.1.2"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.serde_with]]
+version = "3.24.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.serde_with_macros]]
+version = "3.24.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.sha1]]
+version = "0.10.7"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.sha3]]
+version = "0.10.9"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.signal-hook-registry]]
+version = "1.4.8"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client, tokio, tokio-rustls, turmoil (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client, tokio, tokio-rustls, turmoil."
+
+[[exemptions.simd-adler32]]
+version = "0.3.10"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.siphasher]]
+version = "1.0.4"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.slotmap]]
+version = "1.1.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.smallvec]]
+version = "1.16.2"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.socket2]]
+version = "0.6.5"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client, tokio, tokio-rustls, turmoil (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client, tokio, tokio-rustls, turmoil."
+
+[[exemptions.spin]]
+version = "0.9.9"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.spki]]
+version = "0.7.3"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.sqlite-wasm-rs]]
+version = "0.5.5"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.stable_deref_trait]]
+version = "1.2.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.strum]]
+version = "0.28.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.strum_macros]]
+version = "0.28.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.sync_wrapper]]
+version = "1.0.2"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.synstructure]]
+version = "0.13.2"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.synstructure]]
+version = "0.14.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.sysinfo]]
+version = "0.38.4"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.tap]]
+version = "1.0.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.tempfile]]
+version = "3.27.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.thiserror]]
+version = "1.0.69"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.thiserror]]
+version = "2.0.21"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.thiserror-impl]]
+version = "1.0.69"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.thiserror-impl]]
+version = "2.0.21"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.thread_local]]
+version = "1.1.10"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.time]]
+version = "0.3.55"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.time-macros]]
+version = "0.2.32"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.tinystr]]
+version = "0.8.4"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.tinyvec]]
+version = "1.13.3"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.tokio-macros]]
+version = "2.7.2"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client, tokio, tokio-rustls, turmoil (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client, tokio, tokio-rustls, turmoil."
+
+[[exemptions.tokio-util]]
+version = "0.7.19"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.toml]]
+version = "0.8.23"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.toml]]
+version = "1.1.6+spec-1.1.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.toml_datetime]]
+version = "0.6.11"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.toml_datetime]]
+version = "1.1.2+spec-1.1.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.toml_edit]]
+version = "0.22.27"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.toml_edit]]
+version = "0.25.15+spec-1.1.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.toml_parser]]
+version = "1.1.3+spec-1.1.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.toml_write]]
+version = "0.1.2"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.toml_writer]]
+version = "1.1.3+spec-1.1.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.tracing]]
+version = "0.1.44"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client, turmoil (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client, turmoil."
+
+[[exemptions.tracing-attributes]]
+version = "0.1.31"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client, turmoil (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client, turmoil."
+
+[[exemptions.tracing-subscriber]]
+version = "0.3.23"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.tracing-test]]
+version = "0.2.6"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.tracing-test-macro]]
+version = "0.2.6"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.turmoil]]
+version = "0.7.2"
+criteria = "safe-to-run"
+notes = "Tracked exemption (supply-chain/README.md): direct dev-dependency of secmp-testkit (network simulations, ADR-051 Part 2 vet route: tracked exemption or owner trust); never in a shipped build; outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release."
+
+[[exemptions.typed-index-collections]]
+version = "3.5.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.uncased]]
+version = "0.9.10"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.untrusted]]
+version = "0.9.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client, rustls, tokio-rustls (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client, rustls, tokio-rustls."
+
+[[exemptions.unty]]
+version = "0.0.4"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.url]]
+version = "2.5.8"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
 [[exemptions.uuid]]
 version = "1.26.1"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): dependency of hax-lib-macros-types <- hax-lib-macros under cfg(hax) only, never compiled; outside the normal closure (ADR-036). Review at every release."
+
+[[exemptions.valuable]]
+version = "0.1.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client, turmoil (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client, turmoil."
+
+[[exemptions.version_check]]
+version = "0.9.5"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.walkdir]]
+version = "2.5.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.wasi]]
+version = "0.11.1+wasi-snapshot-preview1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client, rustls, tokio, tokio-rustls, turmoil (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client, rustls, tokio, tokio-rustls, turmoil."
+
+[[exemptions.wasix]]
+version = "0.13.2"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
 
 [[exemptions.wasm-bindgen]]
 version = "0.2.128"
@@ -143,3 +1418,238 @@ notes = "Tracked exemption (supply-chain/README.md): support crate of wasm-bindg
 version = "0.2.128"
 criteria = "safe-to-deploy"
 notes = "Tracked exemption (supply-chain/README.md): shared crate of wasm-bindgen, wasm32 targets only; outside the normal closure (ADR-036). Review at every release."
+
+[[exemptions.web-time]]
+version = "1.1.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.winapi]]
+version = "0.3.9"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.winapi-i686-pc-windows-gnu]]
+version = "0.4.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.winapi-util]]
+version = "0.1.11"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.winapi-x86_64-pc-windows-gnu]]
+version = "0.4.0"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.windows]]
+version = "0.62.2"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.windows-collections]]
+version = "0.3.2"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.windows-core]]
+version = "0.62.2"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.windows-future]]
+version = "0.3.2"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.windows-implement]]
+version = "0.60.2"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.windows-interface]]
+version = "0.59.3"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.windows-numerics]]
+version = "0.3.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.windows-result]]
+version = "0.4.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.windows-strings]]
+version = "0.5.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.windows-targets]]
+version = "0.52.6"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client, rustls, tokio-rustls (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client, rustls, tokio-rustls."
+
+[[exemptions.windows-targets]]
+version = "0.53.5"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.windows-threading]]
+version = "0.2.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.windows_aarch64_gnullvm]]
+version = "0.52.6"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client, rustls, tokio-rustls (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client, rustls, tokio-rustls."
+
+[[exemptions.windows_aarch64_gnullvm]]
+version = "0.53.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.windows_aarch64_msvc]]
+version = "0.52.6"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client, rustls, tokio-rustls (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client, rustls, tokio-rustls."
+
+[[exemptions.windows_aarch64_msvc]]
+version = "0.53.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.windows_i686_gnu]]
+version = "0.52.6"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client, rustls, tokio-rustls (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client, rustls, tokio-rustls."
+
+[[exemptions.windows_i686_gnu]]
+version = "0.53.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.windows_i686_gnullvm]]
+version = "0.52.6"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client, rustls, tokio-rustls (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client, rustls, tokio-rustls."
+
+[[exemptions.windows_i686_gnullvm]]
+version = "0.53.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.windows_i686_msvc]]
+version = "0.52.6"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client, rustls, tokio-rustls (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client, rustls, tokio-rustls."
+
+[[exemptions.windows_i686_msvc]]
+version = "0.53.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.windows_x86_64_gnu]]
+version = "0.52.6"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client, rustls, tokio-rustls (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client, rustls, tokio-rustls."
+
+[[exemptions.windows_x86_64_gnu]]
+version = "0.53.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.windows_x86_64_gnullvm]]
+version = "0.52.6"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client, rustls, tokio-rustls (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client, rustls, tokio-rustls."
+
+[[exemptions.windows_x86_64_gnullvm]]
+version = "0.53.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.windows_x86_64_msvc]]
+version = "0.52.6"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client, rustls, tokio-rustls (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client, rustls, tokio-rustls."
+
+[[exemptions.windows_x86_64_msvc]]
+version = "0.53.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.winnow]]
+version = "0.7.15"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.winnow]]
+version = "1.0.4"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.writeable]]
+version = "0.6.4"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.wyz]]
+version = "0.5.1"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.yoke]]
+version = "0.8.3"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.yoke-derive]]
+version = "0.8.4"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.zerocopy]]
+version = "0.8.60"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client, turmoil (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client, turmoil."
+
+[[exemptions.zerocopy-derive]]
+version = "0.8.60"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client, turmoil (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client, turmoil."
+
+[[exemptions.zerofrom]]
+version = "0.1.8"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.zerofrom-derive]]
+version = "0.1.8"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.zerotrie]]
+version = "0.2.5"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.zerovec]]
+version = "0.11.8"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.zerovec-derive]]
+version = "0.11.6"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."
+
+[[exemptions.zlib-rs]]
+version = "0.6.8"
+criteria = "safe-to-deploy"
+notes = "Tracked exemption (supply-chain/README.md): transitive dependency in the closure of arti-client (ADR-051 Part 2); outside the secmp-crypto/secmp-proto normal closure (ADR-036). Review at every release and at every bump of arti-client."

@@ -14,7 +14,7 @@ use std::path::Path;
 use serde_json::Value;
 
 use crate::time::{parse_http_date, parse_rfc3339_utc};
-use crate::util::{Cmd, Error, Result, bail};
+use crate::util::{Cmd, Error, Result, bail, say};
 
 /// Minimum age of every dependency version, in seconds (7 days).
 pub(crate) const MIN_AGE_SECS: i64 = 7 * 86_400;
@@ -31,6 +31,8 @@ pub(crate) struct Locked {
     pub(crate) name: String,
     pub(crate) version: String,
     pub(crate) source: Option<String>,
+    /// The registry checksum (absent for workspace members and git sources).
+    pub(crate) checksum: Option<String>,
 }
 
 fn quoted(line: &str, key: &str) -> Option<String> {
@@ -57,6 +59,7 @@ pub(crate) fn parse_lock(lock: &str) -> Vec<Locked> {
                     name: String::new(),
                     version: String::new(),
                     source: None,
+                    checksum: None,
                 });
             }
             continue;
@@ -68,6 +71,8 @@ pub(crate) fn parse_lock(lock: &str) -> Vec<Locked> {
                 p.version = v;
             } else if let Some(v) = quoted(t, "source") {
                 p.source = Some(v);
+            } else if let Some(v) = quoted(t, "checksum") {
+                p.checksum = Some(v);
             }
         }
     }
@@ -141,27 +146,126 @@ pub(crate) struct Violation {
     pub(crate) age_secs: i64,
 }
 
-/// Evaluate ages against the reference time.
-pub(crate) fn evaluate(now: i64, published: &[(String, String, i64)]) -> Result<Vec<Violation>> {
-    let mut out = Vec::new();
+/// A cooldown exception (ADR-015 Amendment 2): (crate, version, until `YYYY-MM-DD`, advisory).
+pub(crate) type Exception = (&'static str, &'static str, &'static str, &'static str);
+
+/// The result of [`evaluate`]: young packages without a valid exception, the exceptions used (one line each) and the
+/// expired exceptions (findings whether or not their package is still young).
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct Evaluation {
+    pub(crate) violations: Vec<Violation>,
+    pub(crate) used: Vec<String>,
+    pub(crate) expired: Vec<String>,
+}
+
+/// UTC day number (days since 1970-01-01) of a `YYYY-MM-DD` date.
+fn day_of(date: &str) -> Result<i64> {
+    let t = parse_rfc3339_utc(&format!("{date}T00:00:00Z"))?;
+    Ok(t.div_euclid(86_400))
+}
+
+/// Evaluate ages against the reference time. A package younger than 7 days passes iff an exception names its exact
+/// (name, version) and the exception's `until` date is not before the UTC date of `now` (ADR-015 Amendment 2); an
+/// exception whose `until` date is before that date is itself a finding.
+pub(crate) fn evaluate(
+    now: i64,
+    published: &[(String, String, i64)],
+    exceptions: &[Exception],
+) -> Result<Evaluation> {
+    let today = now.div_euclid(86_400);
+    let mut out = Evaluation::default();
+    let mut valid = Vec::new();
+    for &(name, version, until, advisory) in exceptions {
+        if day_of(until)? < today {
+            out.expired.push(format!(
+                "expired cooldown exception {name}@{version} (until {until})"
+            ));
+        } else {
+            valid.push((name, version, until, advisory));
+        }
+    }
     for (name, version, t) in published {
         let age = now
             .checked_sub(*t)
             .ok_or_else(|| Error("time arithmetic overflow".to_owned()))?;
         if age < MIN_AGE_SECS {
-            out.push(Violation {
-                name: name.clone(),
-                version: version.clone(),
-                age_secs: age,
-            });
+            if let Some((n, v, until, advisory)) = valid
+                .iter()
+                .find(|(n, v, _, _)| *n == name.as_str() && *v == version.as_str())
+            {
+                out.used.push(format!(
+                    "cooldown: exception {n}@{v} until {until} ({advisory})"
+                ));
+            } else {
+                out.violations.push(Violation {
+                    name: name.clone(),
+                    version: version.clone(),
+                    age_secs: age,
+                });
+            }
         }
     }
     Ok(out)
 }
 
+/// curl exit codes of a transient transport failure (ADR-015 Amendment 1): DNS (6), connect (7), timeout (28), TLS
+/// handshake (35), empty reply (52), receive (56). `--fail` reports every HTTP error as 22, so HTTP 5xx is not told apart
+/// and 22 is not transient.
+pub(crate) fn is_transient_curl_status(code: Option<i32>) -> bool {
+    matches!(code, Some(6 | 7 | 28 | 35 | 52 | 56))
+}
+
+/// Attempts per package and the pauses between them, in seconds.
+const ATTEMPTS: usize = 3;
+const PAUSES_SECS: [u64; 2] = [5, 15];
+
+type Attempt<'a> = &'a mut dyn FnMut(&str) -> std::result::Result<String, (Option<i32>, String)>;
+
+/// The index entry of `name`, fetching with `attempt_fetch` and retrying a transient failure after 5 s and 15 s (at most
+/// three attempts); any other failure, and an exhausted retry, is an error. Nothing is ever skipped.
+fn fetch_with(
+    name: &str,
+    attempt_fetch: Attempt<'_>,
+    sleep: &mut dyn FnMut(u64),
+) -> Result<(i64, String)> {
+    let mut attempt = 1_usize;
+    loop {
+        match attempt_fetch(name) {
+            Ok(raw) => {
+                let (date, body) = split_response(&raw)?;
+                return Ok((parse_http_date(&date)?, body));
+            }
+            Err((code, msg)) if is_transient_curl_status(code) => {
+                if attempt >= ATTEMPTS {
+                    bail!("{msg} (after {ATTEMPTS} attempts)");
+                }
+                say(&format!(
+                    "cooldown: retry {}/{ATTEMPTS} for {name} after transient curl exit {}",
+                    attempt.saturating_add(1),
+                    code.unwrap_or_default()
+                ));
+                sleep(
+                    PAUSES_SECS
+                        .get(attempt.saturating_sub(1))
+                        .copied()
+                        .unwrap_or(15),
+                );
+                attempt = attempt.saturating_add(1);
+            }
+            Err((_, msg)) => bail!("{msg}"),
+        }
+    }
+}
+
 fn fetch(name: &str) -> Result<(i64, String)> {
+    fetch_with(name, &mut curl_index, &mut |s| {
+        std::thread::sleep(std::time::Duration::from_secs(s));
+    })
+}
+
+fn curl_index(name: &str) -> std::result::Result<String, (Option<i32>, String)> {
     let url = format!("{INDEX}/{}", index_path(name));
-    let raw = Cmd::new("curl")
+    Cmd::new("curl")
         .args([
             "--silent",
             "--show-error",
@@ -176,13 +280,12 @@ fn fetch(name: &str) -> Result<(i64, String)> {
             "secmpro-xtask-cooldown (https://github.com/CarlKIGbR/SecMPro)",
         ])
         .arg(url)
-        .read()?;
-    let (date, body) = split_response(&raw)?;
-    Ok((parse_http_date(&date)?, body))
+        .read_with_code()
 }
 
-/// The lockfiles checked: the workspace and, when present, the separate cargo-fuzz package.
-const LOCKFILES: &[&str] = &["Cargo.lock", "fuzz/Cargo.lock"];
+/// The lockfiles checked: the workspace and the separate cargo-fuzz package (both must exist: a missing fuzz lock would
+/// let the fuzz build resolve outside the vetted, cooldown-checked versions, EXTB-6).
+pub(crate) const LOCKFILES: &[&str] = &["Cargo.lock", "fuzz/Cargo.lock"];
 
 /// `cargo xtask cooldown`: check every registry package in the lockfiles.
 pub(crate) fn run(root: &Path) -> Result<String> {
@@ -191,8 +294,8 @@ pub(crate) fn run(root: &Path) -> Result<String> {
     let mut files = Vec::new();
     for rel in LOCKFILES {
         let path = root.join(rel);
-        if *rel != "Cargo.lock" && !path.exists() {
-            continue;
+        if !path.exists() {
+            bail!("cooldown: {rel} is missing (every lockfile of expect is checked; EXTB-6)");
         }
         files.push(*rel);
         for p in parse_lock(&std::fs::read_to_string(path)?) {
@@ -225,12 +328,17 @@ pub(crate) fn run(root: &Path) -> Result<String> {
             .map_err(|e| Error(format!("{} {}: {e}", p.name, p.version)))?;
         published.push((p.name.clone(), p.version.clone(), t));
     }
-    let violations = match now {
-        Some(n) => evaluate(n, &published)?,
-        None => Vec::new(),
+    let eval = match now {
+        Some(n) => evaluate(n, &published, crate::expect::COOLDOWN_EXCEPTIONS)?,
+        None => Evaluation::default(),
     };
-    if !violations.is_empty() {
-        let list: Vec<String> = violations
+    for line in &eval.used {
+        say(line);
+    }
+    let mut findings = eval.expired.clone();
+    if !eval.violations.is_empty() {
+        let list: Vec<String> = eval
+            .violations
             .iter()
             .map(|v| {
                 format!(
@@ -241,11 +349,24 @@ pub(crate) fn run(root: &Path) -> Result<String> {
                 )
             })
             .collect();
-        bail!("dependencies younger than 7 days: {}", list.join(", "));
+        findings.push(format!(
+            "dependencies younger than 7 days: {}",
+            list.join(", ")
+        ));
     }
+    if !findings.is_empty() {
+        bail!("{}", findings.join("; "));
+    }
+    // the youngest package outside the exceptions used (those are listed by name)
+    let excepted = |name: &str, v: &str| {
+        crate::expect::COOLDOWN_EXCEPTIONS
+            .iter()
+            .any(|(n, ev, _, _)| *n == name && *ev == v)
+    };
     let youngest = match now {
         Some(n) => published
             .iter()
+            .filter(|(name, v, _)| !excepted(name, v))
             .filter_map(|(name, v, t)| n.checked_sub(*t).map(|age| (age, name, v)))
             .min()
             .map(|(age, name, v)| {
@@ -257,8 +378,13 @@ pub(crate) fn run(root: &Path) -> Result<String> {
             .unwrap_or_default(),
         None => String::new(),
     };
+    let used = if eval.used.is_empty() {
+        String::new()
+    } else {
+        format!("; {}", eval.used.join("; "))
+    };
     Ok(format!(
-        "{} registry packages ({}), all ≥ 7 days old{youngest}",
+        "{} registry packages ({}), all ≥ 7 days old or excepted (ADR-015 Am. 2){youngest}{used}",
         registry.len(),
         files.join(", ")
     ))
@@ -286,6 +412,69 @@ mod tests {
         assert_eq!(index_path("ab"), "2/ab");
         assert_eq!(index_path("abc"), "3/a/abc");
         assert_eq!(index_path("Serde_JSON"), "se/rd/serde_json");
+    }
+
+    #[test]
+    fn transient_curl_statuses() {
+        for c in [6, 7, 28, 35, 52, 56] {
+            assert!(is_transient_curl_status(Some(c)), "{c}");
+        }
+        for c in [0, 1, 3, 22, 23, 60] {
+            assert!(!is_transient_curl_status(Some(c)), "{c}");
+        }
+        assert!(!is_transient_curl_status(None));
+    }
+
+    const GOOD: &str = "HTTP/2 200 \r\ncontent-type: text/plain\r\ndate: Mon, 28 Sep 2026 16:10:53 GMT\r\n\r\n{\"name\":\"x\",\"vers\":\"1.0.0\",\"pubtime\":\"2026-09-01T00:00:00Z\"}\n";
+
+    /// Run `fetch_with` over scripted results; returns (result, fetch calls, sleeps).
+    fn scripted(
+        results: Vec<std::result::Result<String, (Option<i32>, String)>>,
+    ) -> (Result<(i64, String)>, usize, Vec<u64>) {
+        let mut queue = results.into_iter();
+        let mut calls = 0_usize;
+        let mut sleeps = Vec::new();
+        let out = fetch_with(
+            "x",
+            &mut |_| {
+                calls = calls.saturating_add(1);
+                queue
+                    .next()
+                    .unwrap_or_else(|| Err((None, "exhausted".to_owned())))
+            },
+            &mut |s| sleeps.push(s),
+        );
+        (out, calls, sleeps)
+    }
+
+    #[test]
+    fn transient_failure_is_retried_then_succeeds() {
+        let (out, calls, sleeps) = scripted(vec![
+            Err((Some(7), "connect".to_owned())),
+            Err((Some(7), "connect".to_owned())),
+            Ok(GOOD.to_owned()),
+        ]);
+        assert!(out.is_ok());
+        assert_eq!((calls, sleeps), (3, vec![5, 15]));
+    }
+
+    #[test]
+    fn retry_stops_after_three_transient_failures() {
+        let (out, calls, sleeps) = scripted(vec![
+            Err((Some(28), "timeout".to_owned())),
+            Err((Some(28), "timeout".to_owned())),
+            Err((Some(28), "timeout".to_owned())),
+        ]);
+        let err = out.err().map(|e| e.to_string()).unwrap_or_default();
+        assert!(err.contains("after 3 attempts"), "{err}");
+        assert_eq!((calls, sleeps), (3, vec![5, 15]));
+    }
+
+    #[test]
+    fn non_transient_failure_is_not_retried() {
+        let (out, calls, sleeps) = scripted(vec![Err((Some(22), "http".to_owned()))]);
+        assert!(out.is_err());
+        assert_eq!((calls, sleeps), (1, Vec::new()));
     }
 
     #[test]
@@ -323,15 +512,147 @@ mod tests {
                 ("ok".into(), "1".into(), ok),
                 ("young".into(), "2".into(), young),
             ],
+            &[],
         )?;
         assert_eq!(
-            v,
+            v.violations,
             vec![Violation {
                 name: "young".into(),
                 version: "2".into(),
                 age_secs: MIN_AGE_SECS - 1
             }]
         );
+        assert!(v.used.is_empty() && v.expired.is_empty());
+        Ok(())
+    }
+
+    /// TEST-SPEC-M6 X-01: the cooldown gate covers the M6 lock — `Cargo.lock` is one of its inputs, every ADR-051 Part 2
+    /// pin is a crates.io package of it (so the gate fetches its `pubtime`), and the only exception is the rustls entry of
+    /// ADR-015 Amendment 2, naming a package that is in the lock at exactly that version. The ages themselves are the
+    /// gate's output (`cargo xtask cooldown`, network), quoted in the report with the youngest crate.
+    #[test]
+    fn cooldown_covers_m6_lock() -> Result<()> {
+        assert!(LOCKFILES.contains(&"Cargo.lock"));
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let lock = parse_lock(&std::fs::read_to_string(root.join("Cargo.lock"))?);
+        let registry = |n: &str, v: &str| {
+            lock.iter().any(|p| {
+                p.name == n
+                    && p.version == v
+                    && p.source
+                        .as_deref()
+                        .is_some_and(|s| CRATES_IO_SOURCES.contains(&s))
+            })
+        };
+        for (n, v) in [
+            ("arti-client", "0.46.0"),
+            ("rustls", "0.23.46"),
+            ("tokio-rustls", "0.26.5"),
+            ("tokio", "1.53.3"),
+            // no exception any more (ADR-015 Am. 2 item (2) expired 2026-10-27): pinned by the lock alone
+            ("rustls-webpki", "0.103.16"),
+            ("aws-lc-rs", "1.18.1"),
+            ("turmoil", "0.7.2"),
+        ] {
+            assert!(registry(n, v), "{n} {v}");
+        }
+        let tor = lock
+            .iter()
+            .filter(|p| p.name.starts_with("tor-") && p.source.is_some())
+            .count();
+        assert!(tor >= 30, "{tor} tor-* packages");
+        let expected = [("ctutils", "0.4.4", "2026-10-30", "RUSTSEC-2026-0385")];
+        assert_eq!(crate::expect::COOLDOWN_EXCEPTIONS.len(), expected.len());
+        for ((n, v, until, advisory), (en, ev, euntil, eadv)) in
+            crate::expect::COOLDOWN_EXCEPTIONS.iter().zip(expected)
+        {
+            assert_eq!((*n, *v, *until), (en, ev, euntil));
+            assert!(advisory.contains(eadv) && advisory.contains("ADR-015 Am. 2"));
+            assert!(registry(n, v), "{n} {v}");
+            assert!(day_of(until).is_ok());
+        }
+        Ok(())
+    }
+
+    const EXC: Exception = (
+        "rustls",
+        "0.23.46",
+        "2026-10-21",
+        "RUSTSEC-2026-0349 (ADR-015 Am. 2)",
+    );
+
+    /// ADR-015 Amendment 2: a young pinned version passes while the exception's `until` date has not passed, also on the
+    /// `until` date itself; the gate line names the exception.
+    #[test]
+    fn exception_allows_young_pinned_version_until_date() -> Result<()> {
+        let published = parse_rfc3339_utc("2026-10-14T09:54:00Z")?;
+        let pkgs = [("rustls".to_owned(), "0.23.46".to_owned(), published)];
+        for now in [
+            "2026-10-15T05:00:00Z",
+            "2026-10-21T00:00:00Z",
+            "2026-10-21T09:53:59Z",
+        ] {
+            let e = evaluate(parse_rfc3339_utc(now)?, &pkgs, &[EXC])?;
+            assert!(e.violations.is_empty(), "{now}: {e:?}");
+            assert!(e.expired.is_empty(), "{now}: {e:?}");
+            assert_eq!(
+                e.used,
+                vec!["cooldown: exception rustls@0.23.46 until 2026-10-21 (RUSTSEC-2026-0349 (ADR-015 Am. 2))".to_owned()],
+                "{now}"
+            );
+        }
+        // without the exception the same package is a violation
+        let e = evaluate(parse_rfc3339_utc("2026-10-15T05:00:00Z")?, &pkgs, &[])?;
+        assert_eq!(e.violations.len(), 1);
+        Ok(())
+    }
+
+    /// An exception past its `until` date is a finding, whether or not its package is still young or still locked.
+    #[test]
+    fn expired_exception_is_a_finding() -> Result<()> {
+        let now = parse_rfc3339_utc("2026-10-22T00:00:00Z")?;
+        let old = parse_rfc3339_utc("2026-10-14T09:54:00Z")?; // > 7 days at `now`
+        let young = parse_rfc3339_utc("2026-10-20T00:00:00Z")?;
+        let expired = "expired cooldown exception rustls@0.23.46 (until 2026-10-21)".to_owned();
+        // package no longer young
+        let e = evaluate(now, &[("rustls".into(), "0.23.46".into(), old)], &[EXC])?;
+        assert_eq!(e.expired, vec![expired.clone()]);
+        assert!(e.violations.is_empty() && e.used.is_empty());
+        // package not in the lock at all
+        let e = evaluate(now, &[], &[EXC])?;
+        assert_eq!(e.expired, vec![expired.clone()]);
+        // package (hypothetically) still young: expired and not excepted
+        let e = evaluate(now, &[("rustls".into(), "0.23.46".into(), young)], &[EXC])?;
+        assert_eq!(e.expired, vec![expired]);
+        assert_eq!(e.violations.len(), 1);
+        assert!(e.used.is_empty());
+        Ok(())
+    }
+
+    /// The exception covers exactly (name, version): another version of the crate, or another crate, stays a violation.
+    #[test]
+    fn exception_does_not_cover_other_versions() -> Result<()> {
+        let now = parse_rfc3339_utc("2026-10-15T05:00:00Z")?;
+        let young = parse_rfc3339_utc("2026-10-14T09:54:00Z")?;
+        let e = evaluate(
+            now,
+            &[
+                ("rustls".into(), "0.23.47".into(), young),
+                ("rustls-webpki".into(), "0.23.46".into(), young),
+                ("rustls".into(), "0.23.46".into(), young),
+            ],
+            &[EXC],
+        )?;
+        let names: Vec<(&str, &str)> = e
+            .violations
+            .iter()
+            .map(|v| (v.name.as_str(), v.version.as_str()))
+            .collect();
+        assert_eq!(
+            names,
+            vec![("rustls", "0.23.47"), ("rustls-webpki", "0.23.46")]
+        );
+        assert_eq!(e.used.len(), 1);
         Ok(())
     }
 }

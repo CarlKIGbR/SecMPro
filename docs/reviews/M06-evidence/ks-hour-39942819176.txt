@@ -1,0 +1,29 @@
+# run 39942819176 (ci-dispatch, workflow_dispatch, suite=ks-hour, attempt 1, branch m06-transport)
+# job ks-hour 120378169284
+# head 60083afe8f613c4fa8f8574be6409e5e1ffd39f6
+# runner ubuntu-latest, 2026-10-23 10:58:30–13:17:16 UTC
+# conclusion success
+# artefact ks-hour-60083afe8f613c4fa8f8574be6409e5e1ffd39f6-1 (file ks-hour.txt, verbatim below)
+ks-hour: idle 3600 s, active 3600 s, P = 10 s, 2 contacts, loopback TLS (direct mode: the effective mode is Balanced, spec §10.2; frames of one slot are one departure)
+link 4: D = 0.024553, p = 0.999916, n_idle = 345, n_active = 359
+link 5: D = 0.011191, p = 1.000000, n_idle = 345, n_active = 359
+link 1004: D = 0.055939, p = 0.621331, n_idle = 353, n_active = 359
+link 1005: D = 0.013445, p = 1.000000, n_idle = 352, n_active = 359
+pooled: D = 0.008341, p = 1.000000, n_idle = 1395, n_active = 1436
+frames per departure, link 4: D = 0.000000, p = 1.000000
+frames per departure, link 5: D = 0.000000, p = 1.000000
+frames per departure, link 1004: D = 0.000000, p = 1.000000
+frames per departure, link 1005: D = 0.000000, p = 1.000000
+frames per departure, pooled: D = 0.000000, p = 1.000000, min = 2, max = 2
+frames per departure, link 4: min = 2, max = 2
+frames per departure, link 5: min = 2, max = 2
+frames per departure, link 1004: min = 2, max = 2
+frames per departure, link 1005: min = 2, max = 2
+all units 4352 B: true
+
+link 4: 1412 frames, median gap idle 10000 ms, active 10000 ms
+link 5: 1412 frames, median gap idle 10000 ms, active 10000 ms
+link 1004: 1428 frames, median gap idle 10000 ms, active 10000 ms
+link 1005: 1426 frames, median gap idle 10000 ms, active 10000 ms
+frames analysed: 5710, sha256 6dfebf7abdf83e8f9dd9196d632852df16e2f3defc78ef22778159b6630f8e31
+criterion (p >= 0.01 per link and pooled, 4 links, a constant 2 frames per departure, 4352 B): MET

@@ -8,6 +8,7 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Added
 
+- M6 Phase C2: `two-clients` (TC-*), turmoil simulations SIM-01…SIM-10, the KS analyser and the dispatch jobs `ks-hour`/`tor-smoke` (AI-07 loopback MET, run 39942819176; AI-10), `docs/measurements/M6-traffic.md` (MR-03…MR-07), gates CT-00, PV-01, X-07, X-08.
 - M0 repository bootstrap: Cargo workspace with the eleven `secmp-*` crates as documented skeletons (responsibility
   and allowed dependencies per `docs/02` §3; `#![forbid(unsafe_code)]` everywhere except `secmp-sys-mem` and
   `secmp-sys-desktop`), pinned toolchain (Rust 1.98.1), workspace lint set of `docs/06` §2, release profile and
@@ -50,6 +51,24 @@ All notable changes to this project are documented in this file. The format foll
 - M1 supply chain (ADR-036, ADR-037): publisher trust for the RustCrypto, dalek, Cryspen and AWS accounts,
   crate-scoped trust for `getrandom`, `hax-lib*` and `typenum`, delta audits for `rand_core` and `rand`, tracked
   exemptions only outside the normal `secmp-crypto`/`secmp-proto` closure (checked per target).
+- M6 Phase C2-4: `docs/measurements/M6-traffic.md` with evidence under `docs/measurements/M6-evidence/`; `cpu_per_slot_measured`; doc checks `m6_traffic_report_sections`, `recommendation_names_every_parameter`, `bootstrap_cost_measured`; `ct_targets_unchanged_in_m6`, `proverif_models_unchanged_in_m6`; `cargo xtask sbom` builds into `target/sbom-build` and checks the embedded package count against `Cargo.lock` (OPEN-M6-C1-3).
+- M6 Phase C2: large-file gate in the `policy` step (ADR-052): tracked files over 2 MiB must be in `expect::LARGE_FILE_ALLOW` with a reason, none may exceed 8 MiB; `core`/`core.*` are git-ignored.
+- M6 Phase C2-19: `ks-hour` re-run on the fixed analyser (run 40489376175): criterion MET, pooled p = 1.0, 8 control slots checked apart; evidence `M06-evidence/ks-hour-40489376175.txt`.
+- M6 Phase C2-17: the `rustls-webpki` 0.103.16 cooldown exception expired on 2026-10-27 and is removed (ADR-015 Am. 2); `ctutils` stays until 2026-10-30.
+- M6 Phase C2-18c: control slots are tagged where the pool's connections are made (C2-18b's key join left them empty on a real run), client control connects are matched by driver and key, and a control slot carries at most one 4352-B unit.
+- M6 Phase C2-18b: the KS analyser checks the pool's one-shot control connections apart from the link slots (they are not link departures), shape-checks every link slot whatever its units, and cuts the active hour on departure boundaries; the reconnect oracle counts only checked teardowns and pins the window edge.
+- M6 Phase C2-18: FINAL5b fix-ups — the KS analyser shape-checks every scheduled slot (short connections included), `win-ondemand` accepts `bytes_down=n/a` on Windows, the sim reconnect oracle requires a reconnect for every teardown and states the pooled bound it proves; `sim_loss_breaks_links_eventual_delivery` leaves the mutant skip list.
+- M6 Phase C2-16: `cargo audit` ignores RUSTSEC-2026-0387 (`crypto-bigint` 0.5.5, lock-only via arti's `ssh-key-fork-arti`; outside the `secmp-crypto`/`secmp-proto` closure; ADR-051 Am. 6).
+- M6 Phase C2-15b: `tokio` `=1.53.1` → `=1.53.3` (RUSTSEC-2026-0386, `AsyncFd` I/O safety; workspace pin + both lockfiles; vet delta certified; ADR-051 Am. 5).
+- M6 Phase C2-14: `linux-full` (and `dispatch-full`) restore the tools cache under `ci-tools-full-pv-`, so ProVerif is built once and cached instead of rebuilt on every run (ADR-045 Amendment 11).
+- M6 Phase C2-13: `linux-fast` budget 90 → 120 min (ADR-045 Amendment 10; runner-speed variance, PR run #182 was cancelled 22 ms after `ci-fast: PASS`).
+- M6 Phase C2-W2: `ctutils` 0.4.2 → 0.4.4 (lockfile only; RUSTSEC-2026-0385, non-constant-time mask generation; ADR-015 cooldown exception until 2026-10-30; vet delta certified).
+- M6 Phase C2-W: on-demand self-hosted Windows runner (ADR-029 Am. 1): the dispatch-only workflow `win-ondemand.yml` (Azure OIDC on `vm-up`/`vm-down` only), the gate exception `expect::OIDC_WORKFLOWS`/`OIDC_JOBS` and `cargo xtask win-test --backend selfhosted`; dispatchable only after the M6 merge.
+- M6 Phase C2: dropped the expired ADR-015 Am. 2 cooldown exception `rustls@0.23.46` (`expect::COOLDOWN_EXCEPTIONS` keeps `rustls-webpki` 0.103.16 until 2026-10-27).
+- M6 Phase C1: the aggregate required check `ci-verdict` (green only if every other gate job succeeded; ADR-045
+  Amendment 2); Kani harnesses K-C1…K-C6 for the unwritten-frame ledger and the round-robin reservation; the
+  `Scheduler::unmatched_written` counter; 82 mutation killers for the survivors of PR run 160 (module `m0_early` first
+  in the test order); the receive-throughput characterisation R-01; `docs/05` keys `direct_tls_cert`/`direct_tls_key`.
 
 ### Changed
 
@@ -174,3 +193,15 @@ All notable changes to this project are documented in this file. The format foll
 - M4 CI and gates (M4 review C-1…C-7): the workflow policy pins the delegated jobs (`ct`, `mutants-shard`/`mutants`,
   `proverif-hx`), reads `uses` as YAML, and checks the read-only token, `defaults`/`shell` and the prover override;
   the Miri gate names the feature-gated suites it cannot run; a tracked seed corpus for every fuzz target.
+- M6 Phase C1: a tick that would leave more than `2 × max_in_flight` frames unreported is not written and the link goes
+  down (`Reason::InFlight`); the mutation gate runs as 12 shards (ADR-047 Amendment 7) with `--max-fail=1:immediate`
+  for the harness run (Amendment 6); the ledger and reservation logic moved into `scheduler/core/pure.rs`.
+- M6 Phase C1, external round FINAL4: killers for the frame bound of `Channel::prepare` and `AsyncSession::send`, `SystemClock::mono_ms`,
+  the relay's `Deadlined::flush`, `reason_of`, `Channel::synced` and `Session::ensure_open` (eight accepted rows removed);
+  `docs/05` TLS-off example fixed and tested; ADR-042 Amendment 5 text corrected; R-01 labelled as internal readiness.
+- M6 Phase C1, PR run 163: the mutation gate unescapes the table escape `\|` in `docs/mutants-accepted.md` before it compares a
+  survivor (three rows never matched), a policy check keeps the rows at four cells, and `MemPersist::set_durable` has a killer.
+- M6 Phase C1: `rustls-webpki` 0.103.16 (lockfile only) for RUSTSEC-2026-0382, ADR-015 cooldown exception until 2026-10-27, vet delta
+  audit recorded.
+- M6 Phase C1: `xtask` test that a failing step makes `ci-full`/`ci-fast`/`step` fail (`ci::tests::a_failing_step_makes_execute_fail`); no defect found.
+- M6 Phase C1: in-crate test modules carry a plain `#[cfg(test)]` (second attribute for the feature), so cargo-mutants no longer mutates test helpers.

@@ -14,11 +14,33 @@ publish.workspace = true
 [features]
 harness = ["secmp-proto/kat", "secmp-crypto/kat"]
 
-# docs/02 §3: `secmp-proto`, `secmp-crypto` only among workspace crates; no third-party runtime crate in M5 (the
-# stream is `std::io`, ADR-049).
+# docs/02 §3: `secmp-proto`, `secmp-crypto` only among workspace crates. ADR-051 Part 2: the async driver (`tokio`),
+# the Tor provider (`arti-client`) and the TLS provider (`rustls`, `tokio-rustls`, `aws-lc-rs` as the explicit
+# `CryptoProvider` source).
 [dependencies]
 secmp-crypto.workspace = true
 secmp-proto.workspace = true
+rustls.workspace = true
+tokio-rustls.workspace = true
+tokio.workspace = true
+aws-lc-rs.workspace = true
+
+# Not under Kani (`cargo kani` sets `--cfg=kani` in the rustflags, which Cargo's target cfg sees): the Kani harnesses of
+# `secmp-client-core` verify the sans-IO core only, and the Arti closure does not compile under `cfg(kani)` (`zerocopy`
+# 0.8.60's own `cfg(kani)` code needs its `derive` feature; kani job of PR runs 38691107733, 38724110285).
+[target.'cfg(not(kani))'.dependencies]
+arti-client.workspace = true
+
+# Test-only: the in-process relay (`MemRelay`) of the testkit for the direct-mode TLS tests (TLS-01…TLS-11); the TLS
+# fixtures use this crate's own `rustls` / `tokio-rustls` (no new crate, no new edge to a third-party crate).
+[dev-dependencies]
+secmp-testkit = { workspace = true, features = ["harness"] }
+
+# The direct-mode tests (TEST-SPEC-M6 TLS-01…TLS-11): an in-process rustls server, loopback TCP for TLS-04/TLS-11.
+[[test]]
+name = "tls"
+path = "tests/tls/main.rs"
+required-features = ["harness"]
 
 [lints]
 workspace = true

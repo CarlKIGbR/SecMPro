@@ -10,15 +10,23 @@ repository.workspace = true
 publish.workspace = true
 
 # Derandomised entry points and the kat accessors of the stores (store digest, live-buffer counter, the values in
-# effect): the vectors, the tests and the generator of `vectors/link.json`; never enabled in a shipped build.
+# effect): the vectors, the tests and the generator of `vectors/link.json`; never enabled in a shipped build. It turns
+# on `direct-tls` too, so the relay's own test suite (`tests/relay/direct_tls.rs`) and the mutation gate's first run,
+# which builds this package with `--features kat`, cover the direct listener.
 [features]
-kat = ["secmp-proto/kat", "secmp-crypto/kat"]
+kat = ["secmp-proto/kat", "secmp-crypto/kat", "direct-tls"]
+# ADR-051 Part 2, OPEN-M6-08 A: the optional direct listener (synchronous rustls `ServerConnection`/`StreamOwned` in the
+# std::net thread model); off by default — the default build stays std-only (ADR-049).
+direct-tls = ["dep:rustls", "dep:aws-lc-rs"]
 
 # docs/02 §3: `secmp-crypto`, `secmp-proto` (and later `secmp-sys-mem`) only among workspace crates; no third-party
-# runtime crate (the listener is `std::net`, the event sink is the crate's own closed set, ADR-049).
+# runtime crate (the listener is `std::net`, the event sink is the crate's own closed set, ADR-049); `rustls` and
+# `aws-lc-rs` only with feature `direct-tls` (ADR-051 Part 2).
 [dependencies]
 secmp-crypto.workspace = true
 secmp-proto.workspace = true
+rustls = { workspace = true, optional = true }
+aws-lc-rs = { workspace = true, optional = true }
 
 # ADR-049: test-only, workspace crates of the vetted closure (the vector file, seeded generators of the properties).
 [dev-dependencies]

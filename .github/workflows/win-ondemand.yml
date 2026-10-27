@@ -112,7 +112,7 @@ jobs:
           if ($last -match 'bytes_down=n/a$') { Write-Host 'Windows: bootstrap-only (byte count n/a; MR-07 bytes come from the Linux dispatch)' }
       - name: Upload the evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: win-ondemand-${{ inputs.suite }}-${{ github.sha }}-${{ github.run_attempt }}
           path: target/tor-smoke/

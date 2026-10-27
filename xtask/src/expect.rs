@@ -145,20 +145,12 @@ pub(crate) const AUDIT_IGNORES: &[(&str, &str)] = &[
 /// Cooldown exceptions (ADR-015 Amendment 2) as (crate, version, until = publish date + 7 days, advisory): a version
 /// younger than 7 days that closes a RUSTSEC advisory on a pinned crate, kept until the cooldown it bridges is over; an
 /// entry past its `until` date is itself a cooldown finding. The delta diff is in `docs/reviews/MNN-evidence/vet-deltas/`.
-pub(crate) const COOLDOWN_EXCEPTIONS: &[(&str, &str, &str, &str)] = &[
-    (
-        "rustls-webpki",
-        "0.103.16",
-        "2026-10-27",
-        "RUSTSEC-2026-0382 (ADR-015 Am. 2)",
-    ),
-    (
-        "ctutils",
-        "0.4.4",
-        "2026-10-30",
-        "RUSTSEC-2026-0385 (ADR-015 Am. 2)",
-    ),
-];
+pub(crate) const COOLDOWN_EXCEPTIONS: &[(&str, &str, &str, &str)] = &[(
+    "ctutils",
+    "0.4.4",
+    "2026-10-30",
+    "RUSTSEC-2026-0385 (ADR-015 Am. 2)",
+)];
 
 /// Packages exposing the `kat` feature (docs/06 §5 step 5): external KATs, differential tests, vector checks; M3:
 /// `secmp-proto` (derandomised TR entry points for the vectors and the ct bench, ADR-042); M5: `secmp-relay` (the

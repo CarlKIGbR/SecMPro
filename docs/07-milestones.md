@@ -148,6 +148,8 @@ v1.1: M16 → M17 → M18 → M19 → M20 (release)
 
 **Obligation from the M4 review (F-M7, C-12).** The transactional store: `PrekeyStore::commit_accept` of the encrypted store stages the OPK deletion and the record's consumption in one store transaction, which the client commits together with the whole `hx::Accepted` (`state`, `peer`, `routes`, `profile`) before it acknowledges any cell of the invitation queue and before it retires that queue; a commit that cannot be made durable is `Error::Unavailable` and changes nothing (R-26). The client retains at most the newest 24 unclassified cells of an invitation queue between `accept` calls, and a complete group is spent after one `accept` (RT-1).
 
+**Status (2026-10-27).** Started 2026-10-27 on branch `m07-client-core` from `main` at `bf550999fb2c7771153863f1da2f19adb5a677b5`; plan, test specification (`docs/reviews/M07-planning/TEST-SPEC-M7.md`, 174 rows), OPEN-M7 decisions and ADR-053, ADR-054, ADR-055 (Proposed) were committed first. Report: `docs/reviews/M07-report.md`. Phase A (Opus) in progress; A-2 waits for the A0 report, "ADR-055 accepted" and the owner's vet records; A-4 waits for "ADR-053 accepted".
+
 ---
 
 ### M8 — Desktop UI (Slint) (L)

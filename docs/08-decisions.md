@@ -867,6 +867,164 @@ aarch64-unknown-linux-gnu -p secmp-crypto` builds no `aws-lc-sys`, `rustls`, Art
 
 ---
 
+### ADR-053 — Store key hierarchy: passphrase wrap, per-table keys, record sealing, SQLCipher key, backup (spec rev 2.7)
+
+**Status.** Proposed (planner, 2026-10-27; OPEN-M7-01, reviewer decisions Q80, Q123, Q124). **OWNER class** (a crypto
+composition and four new labels = spec change, `docs/03:774`; CLAUDE.md §5). **No default applies**: it takes effect
+only with the owner's written "ADR-053 accepted"; until then no [O-01] row of TEST-SPEC-M7 is built. Extends ADR-020 and
+ADR-027; changes no wire structure, no App. D layout, no frozen vector.
+
+**Context.** CS-3.2 (`docs/04:53`) fixes Argon2id m = 256 MiB, t = 3, p = 4 and a random 32-B `MK_profile` wrapped by a
+passphrase key; CS-3.3 (`:54`) seals secret columns "with `CAEAD` under keys derived from `MK_profile`
+(`"SecMP-STORE/1 <table>"`)"; CS-3.5 (`:56`) wants the backup "with the same wrapping"; App. A (`docs/03:767-768`) has the
+nine table labels. Unspecified: Argon2id salt/output, the wrap, the HKDF parameters, record nonce/AD, the SQLCipher key,
+the backup format; App. A has no label for wrap, SQLCipher key or backup.
+
+**Decision.**
+1. *Passphrase key* (RFC 9106 §3.1 Argon2id, v = 0x13; §4 parameter choice): `KEK = Argon2id(P = passphrase (UTF-8 as
+   entered), S = salt, p = 4, T = 32, m = 262 144 KiB, t = 3, v = 0x13, K = X = empty)`, `salt` 16 B from `OsRng`. RFC 9106
+   §4 recommends a 128-bit salt and 256-bit tag; its second option is t = 3, p = 4, 64 MiB — CS-3.2 raises memory to 256 MiB.
+2. *Wrap of `MK_profile`* (CAEAD, spec §3.4 `docs/03:119-128`, which names local storage as a CAEAD use): `wrap = ver(0x01)
+   ‖ salt(16) ‖ params(m u32 ‖ t u32 ‖ p u32) ‖ N(24) ‖ CAEAD.Seal(KEK, N, AD = "SecMP-STORE/1 wrap" ‖ ver ‖ salt ‖ params,
+   MK_profile)` = 133 B, `N` random. **Unlock accepts exactly `ver` = 0x01 with `params` = `PROFILE` (262 144, 3, 4)**; any
+   other `ver`/`params`, or a wrap of another length, is the uniform unlock error, decided **before** the KDF. That check
+   reads only file bytes, never the passphrase, so it adds no passphrase-dependent timing; it bounds the work a crafted
+   file can demand (no attacker-chosen m). Otherwise: Argon2id once, CAEAD.Open once, every failure the same error.
+3. *Table keys* (HKDF-SHA-256 with salt 0^32 as in §6.4; App. A label pattern): `K_t = HKDF-SHA-256(salt = 0^32, IKM =
+   MK_profile, info = "SecMP-STORE/1 <table>", L = 32)` for the nine tables of `docs/02` §4.2.
+4. *SQLCipher key* (CS-3.1): `K_db = HKDF-SHA-256(salt = 0^32, IKM = MK_profile, info = "SecMP-STORE/1 db", L = 32)` as
+   the raw key (`PRAGMA key = "x'…'"`); `MK_profile` is only ever HKDF input (no key reuse across constructions).
+5. *Record seal* (CAEAD §3.4): `rec = N(24) ‖ CAEAD.Seal(K_t, N, AD = "SecMP-STORE/1 <table>" ‖ col_len u8 ‖ column name
+   (ASCII) ‖ row_key, record)`; `row_key` = u64 big-endian for integer keys, `len u8 ‖ bytes` for byte-string ids. A record
+   moved to another table, row **or column** does not open.
+6. *Backup* (CS-3.5; "same wrapping" = the same construction, not the same key): at export the user enters a **backup
+   passphrase**; `file = "SecMProbackup"(13 B, plaintext magic: reveals the file type only, accepted) ‖ header ‖ N(24) ‖
+   CAEAD.Seal(K_bk, N, AD = "SecMP-STORE/1 backup" ‖ header, body)`, `header = ver(0x01) ‖ salt(16) ‖ params(12) ‖ bwrap ‖
+   section table`, `bwrap = N'(24) ‖ CAEAD.Seal(KEK_bk, N', AD = "SecMP-STORE/1 bwrap" ‖ ver ‖ salt ‖ params, MK_bk)`
+   (KEK_bk = item 1 over the backup passphrase and this salt; `MK_bk` fresh 32 B), `K_bk = HKDF-SHA-256(salt = 0^32,
+   IKM = MK_bk, info = "SecMP-STORE/1 backup", L = 32)`. Item 2's acceptance rule applies to `params`. Layouts: Appendix.
+7. *Labels* (spec rev 2.7, App. A): add `"SecMP-STORE/1 wrap"`, `"SecMP-STORE/1 db"`, `"SecMP-STORE/1 backup"`,
+   `"SecMP-STORE/1 bwrap"`. **Prefix-free** (`docs/03:774`): checked over the 49 App. A labels + 4 new = 53, 0 prefix
+   pairs; both implementations' prefix-freeness tests re-read the list.
+8. *Vectors*: `ref/` generates `vectors/store.json` from this text alone (items 1–6 + Appendix, fixed inputs; Argon2id
+   also against RFC 9106 §5.3); until then the store KATs are [REF]-open (OPEN-M7-38).
+
+**Appendix — backup layout (all integers big-endian).** `section table = count u8 (= 4) ‖ {tag u8 ‖ len u32} × 4`,
+tags in this order: 1 identity, 2 contacts, 3 settings, 4 messages; `body` = the four sections concatenated, each exactly
+`len` bytes. identity = `ver(0x01) ‖ ed25519_seed[32] ‖ mldsa65_seed[32] ‖ x25519_secret[32]` (the seed forms of the
+proto's key types). contacts = `n u32 ‖ { IKSPublic[2017] ‖ verified u8 (0/1) ‖ Profile (D.3) ‖ local_name_len u8 ‖ local_name (UTF-8, ≤ 64; the user's own display name of the contact, `docs/02:95`) } × n`. settings = `n u16 ‖
+{ key_len u8 ‖ key (ASCII) ‖ val_len u16 ‖ val } × n`. messages = `n u32 ‖ { contact_index u32 ‖ direction u8 (0 in, 1
+out) ‖ ts u64 ‖ AppMessage (D.5) } × n` (no view-once, CS-3.4). Nothing else; trailing bytes reject (uniform error).
+
+**Alternatives.** (a) `MK_profile` as SQLCipher key — key reuse; rejected. (b) Wrap without commitment — a crafted file
+could open under a wrong key; CAEAD is the committing wrapper (ADR-019). (c) ADR-027 fallback — not triggered. (d) A
+passphrase verifier hash — an early-exit oracle; rejected (CT-01). (e) Backup under the profile passphrase and wrap
+label — profile and backup wraps would be interchangeable; rejected (Q124).
+
+**Consequences.** `docs/03` rev 2.7: App. A + four labels, changelog line. `secmp-crypto` exposes Argon2id (ADR-055)
+beside HKDF and CAEAD; `secmp-store` composes them only as written. Gated rows: ST-05…ST-07, ST-10…ST-12, ST-19, CT-01,
+CT-02, CT-05, BK-*, FO-03, FZ-01, FZ-02, PR-03, IN-03. Any later parameter change is a new `ver`, never a silent change.
+
+---
+
+### ADR-054 — Application-layer payloads for M7: text, view-once, Control arguments, `Profile.name`
+
+**Status.** Proposed (planner, 2026-10-27; M7 planning, OPEN-M7-02, reviewer decision Q81). **OWNER class** (protocol
+semantics above the encoding layer). Owner default **+24 h** after delivery of the memo of 2026-10-27: build as written.
+Fulfils the obligation of §7.6 `docs/03:509` ("defined by an application-layer ADR before M7") for the kinds M7 sends;
+answers M02 review F12 (`Profile.name` control characters, `docs/reviews/M02-review.md:91`). No byte layout changes.
+
+**Context.** §7.6 (`docs/03:490-509`) defines `AppMessage { msg_id, kind (1 text, 2 attachment-inline, 3 view-once-text,
+4 reaction, 5 edit, 6 delete), expire_after, payload_len, payload }` and `Control { code, arg_len, arg }` (codes 1
+contact-removed, 2 session-reset-request), with `payload` and `arg` opaque at the encoding layer and "Text ≤ 16 KiB
+UTF-8". `Profile.name` is checked as UTF-8 at decode (D.3) but control characters are not ruled out (F12). M7 sends
+text, view-once text, receipts, RouteUpdate, KeyChange and the two Control codes (`docs/07:141-143`).
+
+**Decision.**
+1. *Kind 1 text and kind 3 view-once-text.* `payload` = UTF-8 (well-formed, no overlong forms), 1 ≤ `payload_len` ≤
+   16 384, no U+0000. A receiver drops (and acknowledges, §9.3) an `AppMessage` that violates this; the sender's `Api`
+   refuses it before queueing.
+2. *Kind 3 handling* is CS-1.14/CS-3.4 (`docs/04:35,55`, "kept only in memory") plus OPEN-M7-27 (owner default A, Q125):
+   the sender refuses view-once to an unverified contact; on both sides a view-once lives in memory only, never in the
+   outbox or messages table — an unsent view-once is lost at a restart and the `Api` reports `ViewOnceLost(msg_id)`; a
+   receiver holds a view-once from an unverified sender locked in memory until verification.
+3. *Kinds 2, 4, 5, 6.* Not defined by this ADR. The M7 `Api` refuses to send them; a receiver drops them (acknowledged).
+   Kind 2 (inline ≤ 64 KiB, OQ-11) is defined by a later amendment of this ADR; until then SE-20 runs on a kind-1 text of
+   16 KiB.
+4. *Control.* Codes 1 and 2 carry `arg_len = 0`; a non-empty `arg` or another code is dropped (acknowledged) and
+   surfaced as nothing to the user.
+5. *`Profile.name`.* 0…64 bytes of UTF-8 (D.3) without C0 (U+0000–U+001F), DEL (U+007F) and C1 (U+0080–U+009F) control
+   characters; a name violating this is shown as empty and never rejects the handshake (the HX rejection set of §6.6
+   is unchanged).
+
+**Alternatives.** (a) Define all six kinds now — reaction/edit/delete target semantics need UI decisions (M8). (b) Reject
+the handshake on a bad `Profile.name` — would change §6.6 (spec, vectors); rejected.
+
+**Consequences.** `secmp-client-core` validates at the `Api` and at delivery; rows SE-10, SE-11, SE-15, SE-20, CL-05
+follow this text. A later amendment adds kinds 2/4/5/6 without changing these rules.
+
+---
+
+### ADR-055 — M7 dependency set: `rusqlite` with bundled SQLCipher/OpenSSL in `secmp-store`, `argon2` in `secmp-crypto`
+
+**Status.** Proposed (planner, 2026-10-27; M7 planning, OPEN-M7-03, reviewer decision Q82). **OWNER class** (shipped
+dependencies, `cargo vet` records by a named human, build inputs; CLAUDE.md §1.9, `docs/06:65`). **Ratification
+precondition:** the Phase A step A0 probe report (below) is delivered and read by the reviewer; then the owner writes
+"ADR-055 accepted" and records the vet entries. No `Cargo.toml` change before both. Extends ADR-020, ADR-027 (M0 outcome),
+ADR-051 (`docs/08:797`: `secmp-store` must share Arti's `rusqlite`/`libsqlite3-sys` majors).
+
+**Context.** `Cargo.lock` holds `rusqlite` 0.39.0 (`:3302`) and `libsqlite3-sys` 0.37.0 (`:2321`, deps `cc`, `pkg-config`,
+`vcpkg`, no OpenSSL) through `arti-client` 0.46.0 feature `static-sqlite` (`Cargo.toml:64`); both are only tracked
+exemptions (`supply-chain/config.toml:722,1032`). `libsqlite3-sys` declares `links = "sqlite3"`, so the graph can hold
+one version. `libsqlite3-sys` 0.37.0 bundles **SQLCipher 4.10.0** (SQLite 3.50.4;
+`sqlcipher/sqlite3.c:108426` `#define CIPHER_VERSION_NUMBER 4.10.0`, verifier read of the crate source) — older than the
+M0 spike (4.14.0 with `rusqlite` 0.40.2, ADR-027 `docs/08:149`) and than CS-3.1's "4.17.0 at the time of writing"
+(`docs/04:52`), which asks for a start-up check against a pinned version. `argon2` is absent from the lock; `docs/06` §3 lists it among the
+crates allowed only in `secmp-crypto`.
+
+**Decision.**
+1. *`secmp-store`* gains `rusqlite` at **exactly the version Arti resolves** (0.39.0 at `bf55099`) with
+   `default-features = false, features = ["bundled-sqlcipher-vendored-openssl"]` (no other feature). This enables in
+   `libsqlite3-sys` 0.37.0 the features `bundled-sqlcipher` and `bundled-sqlcipher-vendored-openssl`, which add
+   `openssl-sys` and `openssl-src` (C build of OpenSSL 3, build scripts) — exact versions = those of the A0 probe.
+2. *`secmp-crypto`* gains `argon2` (exact pin; 0.6.0 of 2026-08-27 unless A0 finds a newer one ≥ 7 days old;
+   `default-features = false`, features `alloc`, `zeroize`); its non-optional dependencies `blake2`, `base64ct` (already
+   trusted, `supply-chain/audits.toml:112`) and `cpufeatures` 0.3 enter the crypto closure; only `secmp-crypto` uses them.
+3. *Unification consequence for Arti.* Features unify across the graph: Arti's state database is then built against
+   SQLCipher instead of plain SQLite. Arti opens it without a key; SQLCipher without a key reads and writes plain SQLite
+   files. CS-3.6 (`docs/04:57`) says Tor state is not secret, so nothing is lost; the A0 probe must show Arti's
+   bootstrap with an existing state dir and with a fresh one still works (tokio-paused loopback test + `tor-smoke`).
+4. *Version pin (Q119).* `expect::SQLCIPHER_MIN` = **4.10.0**, the one version the graph can hold (`links = "sqlite3"`,
+   Arti's); ST-02 refuses < 4.10.0 and accepts 4.10.0. The pin moves with Arti. CS-3.1's "4.17.0" is an owner point (memo):
+   accept 4.10.0 as the M7 pin. A0 checks SQLCipher 4.10.0 / SQLite 3.50.4 / the vendored OpenSSL for open advisories.
+5. *`cargo vet` records.* The direct deps `rusqlite` (of `secmp-store`) and `argon2` (of `secmp-crypto`) need an audit or
+   trust record **recorded by the owner** (named human; `docs/06:65`); their transitive deps in the zero-exemption crypto
+   closure (`blake2`, `cpufeatures`; ADR-036, `docs/06:68`) need imports, RustCrypto publisher trust or owner delta
+   audits — no exemption; `libsqlite3-sys`, `openssl-sys`, `openssl-src` (outside that closure) need a record or a tracked
+   exemption naming `rusqlite`; the reviewer's verifier reads the crates/deltas (Q72 precedent), the owner ratifies with one
+   sentence. xtask's `miniz_oxide` (OPEN-M7-21) is asked for in the same memo item.
+6. *Gates.* `NORMAL_DEPENDENCY_ALLOW` (`xtask/src/expect.rs:35-66`) and the ADR-051 third-party table checked by
+   `normal_dependencies_match_adr_allowlist` (`policy.rs:2434-2462`), always in the same commit: full rows `secmp-store`,
+   `secmp-crypto` (14 deps + `argon2`) in A-2 (G7-01); store edges of client-core/testkit in A-3 (G7-06); `secmp-cli` in C (G7-21); `deny.toml` licenses: OpenSSL (Apache-2.0),
+   SQLCipher (BSD-3-Clause) are in the allowlist — no new exception; cooldown ≥ 7 days for every new lock entry.
+
+**A0 probe (precondition, report only, scratch crate outside the workspace).** Resolve the workspace pins + item 1 + item
+2 for the three targets of `VET_CLOSURE_TARGETS`, **and the same for `fuzz/Cargo.lock`** (the fuzz workspace gains
+`argon2` and, through client-core, the SQLCipher/OpenSSL C build: build one fuzz target under cargo-fuzz's sanitizer
+flags); report: resolved versions, new lock entries with publish dates, build
+scripts, license set, `cargo tree -i libsqlite3-sys -e features`, bundled SQLCipher version, Arti state-DB smoke result,
+native Windows build (`windows-latest`) result. A0 red (unification breaks Arti, a crate < 7 days, an advisory, a license
+outside the allowlist) = STOP; the reviewer then chooses between a store-local alternative and the ADR-027 fallback.
+
+**Alternatives.** (a) `rusqlite` 0.40.x as in the spike — impossible beside Arti's 0.39 (`links`). (b) System SQLCipher
+via `pkg-config` — not reproducible, absent on Windows. (c) ADR-027 fallback — kept as the STOP branch.
+
+**Consequences.** `xwin-cross` cannot cross-build vendored OpenSSL (ADR-027 M0 outcome): ADR-034 amendment excludes the
+store-dependent crates there (OPEN-M7-04); `secmp-store` is `cfg(not(kani))` in `secmp-client-core` (OPEN-M7-05); the
+reproducibility risk of the C builds is tracked for M11 (`docs/06` §6).
+
+---
+
 *Template for new entries:*
 
 ### ADR-0NN — Title

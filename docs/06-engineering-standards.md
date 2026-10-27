@@ -98,7 +98,7 @@ Jobs of `ci.yml` (pinned by `expect::PINNED_JOBS`; the first four and `ci-verdic
 |---|---|---|
 | `linux-fast` | `ci-fast` (steps 1–5), SBOM, systemd exposure | 90 |
 | `windows-native` | native MSVC build, clippy, tests, KATs, hello | 90 |
-| `xwin-cross` | `cargo-xwin` cross-build | 60 |
+| `xwin-cross` | `cargo-xwin` cross-build, less the store-dependent crates of `expect::XWIN_EXCLUDE` (ADR-034 Amendment 1) | 60 |
 | `linux-full` | `ci-full` steps 1–14 less the delegated ones (`windows-*`, `mutants`, `ct`, `fuzz`, `kani`, `proverif-link`) | 240 |
 | `ct` | constant-time gate (step 5), `--delegated ct` | 330 |
 | `mutants-shard` ×12, `mutants` | mutation testing (step 8) and its verdict, `--delegated mutants` | 300, 30 |

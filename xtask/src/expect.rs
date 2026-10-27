@@ -1687,6 +1687,18 @@ pub(crate) const NASM_JOBS: &[(&str, &str)] = &[
     (".github/workflows/win-ondemand.yml", "win-suite"),
 ];
 
+/// ADR-034 Amendment 1 (OPEN-M7-04 A, Q83): the packages the `windows-cross` step (job `xwin-cross`) leaves out of the
+/// cargo-xwin cross-build — `secmp-store` and the crates that depend on it once it holds SQLCipher with vendored OpenSSL
+/// (M7, ADR-055), whose `VC-WIN64A` configuration needs a Windows perl and `nmake` (ADR-027 M0 outcome). The job
+/// `windows-native` builds and tests the whole workspace, these packages included.
+pub(crate) const XWIN_EXCLUDE: &[&str] = &[
+    "secmp-store",
+    "secmp-client-core",
+    "secmp-cli",
+    "secmp-testkit",
+    "secmp-ui",
+];
+
 /// The job names of the required checks of the `main-protection` ruleset (M2 review C2): they exist only in
 /// [`REQUIRED_WORKFLOW`], which has no `workflow_dispatch` trigger, so no dispatch can add a `skipped` (= passing) check
 /// run under a required name. The policy step pins [`PINNED_JOBS`], a superset.

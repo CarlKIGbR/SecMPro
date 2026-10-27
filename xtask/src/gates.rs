@@ -3677,20 +3677,33 @@ pub(crate) fn windows_cross(ctx: &Ctx) -> Result<Outcome> {
         ));
     }
     tools::require(tools::XWIN)?;
-    Cmd::cargo()
-        .args([
-            "xwin",
-            "build",
-            "--workspace",
-            "--all-targets",
-            "--locked",
-            "--target",
-            "x86_64-pc-windows-msvc",
-        ])
-        .run()?;
-    Ok(Outcome::Pass(
-        "cargo xwin build --all-targets for x86_64-pc-windows-msvc".into(),
-    ))
+    Cmd::cargo().args(windows_cross_args()).run()?;
+    Ok(Outcome::Pass(format!(
+        "cargo xwin build --all-targets for x86_64-pc-windows-msvc, excluding {} (ADR-034 Amendment 1; built and tested natively by windows-native)",
+        expect::XWIN_EXCLUDE.join(", ")
+    )))
+}
+
+/// The cargo-xwin cross-build of the `windows-cross` step: the workspace less `expect::XWIN_EXCLUDE` (ADR-034
+/// Amendment 1, OPEN-M7-04 A: vendored OpenSSL cannot be cross-built).
+pub(crate) fn windows_cross_args() -> Vec<String> {
+    let mut args: Vec<String> = [
+        "xwin",
+        "build",
+        "--workspace",
+        "--all-targets",
+        "--locked",
+        "--target",
+        "x86_64-pc-windows-msvc",
+    ]
+    .iter()
+    .map(|a| (*a).to_owned())
+    .collect();
+    for p in expect::XWIN_EXCLUDE {
+        args.push("--exclude".to_owned());
+        args.push((*p).to_owned());
+    }
+    args
 }
 
 pub(crate) fn windows_native(ctx: &Ctx) -> Outcome {
@@ -4508,6 +4521,18 @@ fn sorted(items: &[String]) -> Vec<String> {
 
 fn sorted_str(items: &[&str]) -> Vec<String> {
     sorted(&items.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>())
+}
+
+/// The `cargo xtask` gate `run:` lines of job `job` of a workflow, in order (`install-tools` aside).
+#[cfg(test)]
+pub(crate) fn job_gate_lines(text: &str, job: &str) -> Vec<String> {
+    yaml_jobs(text)
+        .into_iter()
+        .filter(|j| j.id == job)
+        .flat_map(|j| j.steps.into_iter().flatten())
+        .filter(|(k, v)| k == "run" && is_gate_run(v))
+        .map(|(_, v)| v)
+        .collect()
 }
 
 /// A step that runs a `cargo xtask` gate (not the tool installation).

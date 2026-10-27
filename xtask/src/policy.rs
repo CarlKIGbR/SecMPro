@@ -2934,4 +2934,64 @@ mod tests {
         assert!(summary.contains(", 0 exempted;"), "{summary}");
         Ok(())
     }
+
+    /// TEST-SPEC-M7 G7-05 (OPEN-M7-04 A, ADR-034 Amendment 1): the cargo-xwin cross-build of the job `xwin-cross` leaves
+    /// out exactly the store-dependent packages, each a workspace member, and builds every other one with all targets;
+    /// `windows-native` (and its dispatch twin) runs its gate steps over the whole workspace, with no package restriction.
+    #[test]
+    fn xwin_scope_excludes_sqlcipher_crates() -> Result<()> {
+        assert_eq!(
+            expect::XWIN_EXCLUDE,
+            &[
+                "secmp-store",
+                "secmp-client-core",
+                "secmp-cli",
+                "secmp-testkit",
+                "secmp-ui"
+            ]
+        );
+        let ws = Workspace::load()?;
+        for p in expect::XWIN_EXCLUDE {
+            assert!(ws.member(p).is_some(), "{p} is no workspace member");
+        }
+        let args = crate::gates::windows_cross_args();
+        for want in ["xwin", "build", "--workspace", "--all-targets", "--locked"] {
+            assert!(args.iter().any(|a| a == want), "{want}: {args:?}");
+        }
+        assert!(
+            args.windows(2)
+                .any(|w| w == ["--target", "x86_64-pc-windows-msvc"])
+        );
+        let excluded: Vec<&str> = args
+            .windows(2)
+            .filter(|w| w.first().is_some_and(|a| a == "--exclude"))
+            .filter_map(|w| w.get(1).map(String::as_str))
+            .collect();
+        assert_eq!(excluded, expect::XWIN_EXCLUDE);
+        assert!(!args.iter().any(|a| a == "-p" || a == "--package"));
+        // the jobs: xwin-cross runs the step, windows-native and dispatch-windows the native gate without restriction
+        let ci = repo_file(".github/workflows/ci.yml")?;
+        let dispatch = repo_file(".github/workflows/ci-dispatch.yml")?;
+        assert_eq!(
+            crate::gates::job_gate_lines(&ci, "xwin-cross"),
+            ["cargo xtask step --strict windows-cross"]
+        );
+        for (text, job) in [(&ci, "windows-native"), (&dispatch, "dispatch-windows")] {
+            let lines = crate::gates::job_gate_lines(text, job);
+            assert!(!lines.is_empty(), "{job}");
+            for l in &lines {
+                assert!(
+                    l.starts_with("cargo xtask step --strict ")
+                        && !l.contains("--exclude")
+                        && !l.contains("--package")
+                        && !l.contains(" -p "),
+                    "{job}: {l}"
+                );
+                for step in ["clippy", "nextest", "kat"] {
+                    assert!(l.split_whitespace().any(|w| w == step), "{job}: {step}");
+                }
+            }
+        }
+        Ok(())
+    }
 }

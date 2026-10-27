@@ -704,6 +704,15 @@ pub(crate) const M5_TARGETS: TargetSet = TargetSet {
     informative: &[],
 };
 
+/// The target set of the reports written in M6 after ADR-042 Amendment 5 (one informative target), until TEST-SPEC-M7
+/// CT-04 added `tr_decrypt_header_contents_dependence`. For re-reading them with `cargo xtask ct-check --targets m6`.
+pub(crate) const M6_TARGETS: TargetSet = TargetSet {
+    label: "the M6 target set",
+    names: expect::CT_TARGETS,
+    batch_record: true,
+    informative: &["tr_decrypt_nonce_dependence"],
+};
+
 /// The target set of the reports written before ADR-042 added `aa_prime_control` (M2; the committed evidence under
 /// `docs/reviews/M02-evidence/`), for re-reading them with `cargo xtask ct-check --targets m2`.
 pub(crate) const M2_TARGETS: TargetSet = TargetSet {
@@ -1229,15 +1238,17 @@ pub(crate) fn ct_table_for(json: &str, targets: TargetSet) -> Result<CtTable> {
 /// - `--targets m2`: the committed M2 reports, before ADR-042;
 /// - `--targets m4`: the committed M4 reports, before TEST-SPEC-M5 (g);
 /// - `--targets m5`: the reports from M5 until ADR-042 Amendment 5, without informative targets;
+/// - `--targets m6`: the M6 reports after ADR-042 Amendment 5, with `tr_decrypt_nonce_dependence` only;
 /// - `--targets current` (the default): `expect::CT_TARGETS` with `expect::CT_INFORMATIVE_TARGETS`.
 fn check_args(args: &[String]) -> Result<(TargetSet, &[String])> {
-    let usage = "usage: cargo xtask ct-check [--targets current|m2|m4|m5] <ct-report.json>…";
+    let usage = "usage: cargo xtask ct-check [--targets current|m2|m4|m5|m6] <ct-report.json>…";
     let (targets, files) = match args {
         [flag, set, files @ ..] if flag == "--targets" => match set.as_str() {
             "current" => (CURRENT_TARGETS, files),
             "m2" => (M2_TARGETS, files),
             "m4" => (M4_TARGETS, files),
             "m5" => (M5_TARGETS, files),
+            "m6" => (M6_TARGETS, files),
             other => bail!("ct-check: unknown target set {other:?}; {usage}"),
         },
         [flag, ..] if flag.starts_with('-') => bail!("ct-check: unknown option {flag:?}; {usage}"),
@@ -1439,7 +1450,10 @@ mod tests {
     fn informative_targets_are_pinned_printed_and_never_fail() -> Result<()> {
         assert_eq!(
             expect::CT_INFORMATIVE_TARGETS,
-            &["tr_decrypt_nonce_dependence"]
+            &[
+                "tr_decrypt_nonce_dependence",
+                "tr_decrypt_header_contents_dependence"
+            ]
         );
         assert!(
             expect::CT_INFORMATIVE_TARGETS
@@ -1447,7 +1461,9 @@ mod tests {
                 .all(|t| !expect::CT_TARGETS.contains(t))
         );
         let bench = include_str!("../../crates/secmp-testkit/benches/ct.rs");
-        assert!(bench.contains("\"tr_decrypt_nonce_dependence\""));
+        for t in expect::CT_INFORMATIVE_TARGETS {
+            assert!(bench.contains(&format!("target: \"{t}\"")), "{t}");
+        }
         // a reproduced shift far above the floor in the informative target: printed, not a failure
         let mut v = report();
         let shifted = measurement_with(&[("p90", 170.0, 65.0)], 1.0);
@@ -1493,15 +1509,16 @@ mod tests {
                     serde_json::json!([informative("tr_decrypt_other")]),
                 );
             },
-            "differ from [\"tr_decrypt_nonce_dependence\"]",
+            "differ from [\"tr_decrypt_nonce_dependence\", \"tr_decrypt_header_contents_dependence\"]",
         )?;
         refuse(
             &|v| {
                 let entry = informative("tr_decrypt_nonce_dependence");
+                let other = informative("tr_decrypt_header_contents_dependence");
                 set(
                     v,
                     &["informative"],
-                    serde_json::json!([entry.clone(), entry]),
+                    serde_json::json!([entry.clone(), other, entry]),
                 );
             },
             "informative targets",
@@ -1510,18 +1527,27 @@ mod tests {
             &|v| {
                 let mut entry = informative("tr_decrypt_nonce_dependence");
                 set(&mut entry, &["verdict"], Value::from("PASS"));
-                set(v, &["informative"], serde_json::json!([entry]));
+                let other = informative("tr_decrypt_header_contents_dependence");
+                set(v, &["informative"], serde_json::json!([entry, other]));
             },
             "not marked informative without a verdict",
         )?;
         refuse(
             &|v| {
-                let mut entry = informative("tr_decrypt_nonce_dependence");
-                set(&mut entry, &["samples"], Value::from(1000));
-                set(v, &["informative"], serde_json::json!([entry]));
+                let entry = informative("tr_decrypt_nonce_dependence");
+                let mut other = informative("tr_decrypt_header_contents_dependence");
+                set(&mut other, &["samples"], Value::from(1000));
+                set(v, &["informative"], serde_json::json!([entry, other]));
             },
-            "informative tr_decrypt_nonce_dependence measured Some(1000) samples",
+            "informative tr_decrypt_header_contents_dependence measured Some(1000) samples",
         )?;
+        Ok(())
+    }
+
+    /// ADR-042 Amendment 5, TEST-SPEC-M7 CT-04: the committed reports keep their own informative sets — none for the M5
+    /// set, the nonce target alone for the M6 set; the current set has both, and each set refuses the others' reports.
+    #[test]
+    fn informative_targets_per_target_set() -> Result<()> {
         // the M5 set: no informative target, so a report without one passes, and one with it is refused
         let mut old = report();
         if let Some(o) = old.as_object_mut() {
@@ -1531,10 +1557,28 @@ mod tests {
         assert!(read.failed.is_empty(), "{:?}", read.failed);
         let read = ct_table_for(&report().to_string(), M5_TARGETS)?;
         assert!(
-            read.failed.iter().any(|f| f
-                .contains("informative targets [\"tr_decrypt_nonce_dependence\"] differ from []")),
+            read.failed.iter().any(|f| f.contains(
+                "informative targets [\"tr_decrypt_nonce_dependence\", \"tr_decrypt_header_contents_dependence\"] differ from []"
+            )),
             "{:?}",
             read.failed
+        );
+        // the M6 set: the nonce target alone; a current report (two) is refused there, an M6 one passes
+        let mut m6 = report();
+        if let Some(list) = m6.get_mut("informative").and_then(Value::as_array_mut) {
+            list.truncate(1);
+        }
+        let read = ct_table_for(&m6.to_string(), M6_TARGETS)?;
+        assert!(read.failed.is_empty(), "{:?}", read.failed);
+        assert!(
+            !ct_table_for(&m6.to_string(), CURRENT_TARGETS)?
+                .failed
+                .is_empty()
+        );
+        assert!(
+            !ct_table_for(&report().to_string(), M6_TARGETS)?
+                .failed
+                .is_empty()
         );
         Ok(())
     }

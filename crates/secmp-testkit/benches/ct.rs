@@ -83,7 +83,9 @@
 //! header nonce alone shifts §7.4 Decrypt by up to 65 ticks with either sign (CT-DIAG-3). The informative target
 //! `tr_decrypt_nonce_dependence` (class 1 = class 0 re-sealed with a fresh nonce) keeps that effect visible: it is
 //! measured twice after the targets, with no verdict and no A/A pass, and reported in `informative`
-//! (`expect::CT_INFORMATIVE_TARGETS`).
+//! (`expect::CT_INFORMATIVE_TARGETS`). The informative contrast target `tr_decrypt_header_contents_dependence` (TEST-SPEC-M7
+//! CT-04, OPEN-M6-C1-2, OPEN-M7-25 A) holds the nonce constant instead: its classes differ only in a decoded header field
+//! (`pn` 0 vs 3), re-sealed under the same key with the same nonce.
 //!
 //! The LINK targets have no product reject-site tag (spec §8.5: one uniform `link::Error::Rejected`); their pre-check
 //! binds each class to its compare by the positive twin instead: each class gives the claimed outcome, and the
@@ -2086,8 +2088,21 @@ const CLAIM_TR_NONCE: Claim = Claim {
     check: SiteCheck::Tagged,
 };
 
+/// The informative header-contents target (TEST-SPEC-M7 CT-04, OPEN-M7-25 A; `expect::CT_INFORMATIVE_TARGETS`).
+const CLAIM_TR_HDR_CONTENTS: Claim = Claim {
+    target: "tr_decrypt_header_contents_dependence",
+    classes: [
+        "A's undelivered (hk_1, n = 0) with pn = 0 in its header plaintext, re-sealed under hk_1 with its own nonce (trial \
+         0 of 2; entry 0 of 4), body tag wrong in byte 0",
+        "the same header plaintext with pn = 3, re-sealed under hk_1 with the same nonce, the same body, body tag wrong in \
+         byte 0",
+    ],
+    site: "body MAC",
+    check: SiteCheck::Tagged,
+};
+
 /// Every claim, for the report (`claim_json`).
-const CLAIMS: [Claim; 17] = [
+const CLAIMS: [Claim; 18] = [
     CLAIM_TR_HDR_KEY,
     CLAIM_TR_BODY_TAG,
     CLAIM_TR_CT_PQ,
@@ -2105,6 +2120,7 @@ const CLAIMS: [Claim; 17] = [
     CLAIM_TR_TRIAL_POSITION,
     CLAIM_LINK_SAME_CONTENT,
     CLAIM_TR_NONCE,
+    CLAIM_TR_HDR_CONTENTS,
 ];
 
 /// A target built from its claim (name and classes from the claim).
@@ -2729,6 +2745,46 @@ fn tr_decrypt_nonce_dependence(
         &class1,
     )
 }
+
+/// `tr_decrypt_header_contents_dependence` (TEST-SPEC-M7 CT-04, OPEN-M6-C1-2, OPEN-M7-25 A): informative, no verdict. The
+/// constant-nonce contrast to `tr_decrypt_nonce_dependence`: one header nonce, classes that differ only in the decoded
+/// header contents.
+///
+/// - Class 0 is A's undelivered `(hk_1, n = 0)` of the `tr_decrypt_trial_open_position` fixture with `pn` = 0 in its
+///   header plaintext, re-sealed under `hk_1` with the cell's own nonce (`tr_resealed`).
+/// - Class 1 is the same header plaintext with `pn` = 3, re-sealed under `hk_1` with the same nonce.
+///
+/// Each has its body tag wrong in byte 0; both open at trial 0, find `(hk_1, 0)` on the skipped path, where `pn` selects
+/// nothing, and are refused by the body MAC. The classes share the nonce, the header key, the entry and the body bytes;
+/// they differ in `pn`, so in `hdr_ct` and in the body AD. Measured with `tr_measure`, so the pre-check is the TR one.
+fn tr_decrypt_header_contents_dependence(
+    n: usize,
+    k: usize,
+    stream: &mut Stream,
+) -> Result<Samples, secmp_crypto::Error> {
+    let fixture = tr_skipped_session_with(stream, &TR_TRIAL_PER_CHAIN).map_err(crypto_error)?;
+    let (first, hk1, _) = tr_class0_source(&fixture).map_err(crypto_error)?;
+    let pn0 =
+        tr_resealed(&fixture, first, hk1, hk1, |header| header.pn = 0).map_err(crypto_error)?;
+    let pn3 = tr_resealed(&fixture, first, hk1, hk1, |header| {
+        header.pn = TR_HDR_CONTENTS_CLASS1_PN;
+    })
+    .map_err(crypto_error)?;
+    let class0 = body_tag_wrong(&pn0).map_err(crypto_error)?;
+    let class1 = body_tag_wrong(&pn3).map_err(crypto_error)?;
+    tr_measure(
+        n,
+        k,
+        stream,
+        CLAIM_TR_HDR_CONTENTS,
+        fixture.receiver,
+        &class0,
+        &class1,
+    )
+}
+
+/// The `pn` of class 1 of `tr_decrypt_header_contents_dependence` (class 0: 0).
+const TR_HDR_CONTENTS_CLASS1_PN: u32 = 3;
 
 /// `cell` with its header plaintext (opened under `hk`) sealed again under `hk` with `nonce`, followed by `cell`'s
 /// body: `nonce ‖ Seal(hk, nonce, hdr AD, header) ‖ body`.
@@ -4046,8 +4102,15 @@ fn tr_targets(n: usize) -> [Target; 5] {
 
 /// The informative targets (ADR-042 Amendment 5; `expect::CT_INFORMATIVE_TARGETS`): measured after the targets, no
 /// verdict.
-fn informative_targets(n: usize) -> [Target; 1] {
-    [claimed(CLAIM_TR_NONCE, n, tr_decrypt_nonce_dependence)]
+fn informative_targets(n: usize) -> [Target; 2] {
+    [
+        claimed(CLAIM_TR_NONCE, n, tr_decrypt_nonce_dependence),
+        claimed(
+            CLAIM_TR_HDR_CONTENTS,
+            n,
+            tr_decrypt_header_contents_dependence,
+        ),
+    ]
 }
 
 /// An informative target's record (ADR-042 Amendment 5): its calibration and two measurements, no verdict.

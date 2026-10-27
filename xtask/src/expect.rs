@@ -260,8 +260,12 @@ pub(crate) const CT_TARGETS: &[&str] = &[
 /// `informative` (not in `results`), each measured twice, with no verdict; they never fail the gate. The gate checks
 /// that exactly these names are present and prints Δ and t per crop.
 /// `tr_decrypt_nonce_dependence` keeps the public header-nonce micro-timing of §7.4 Decrypt visible (CT-DIAG-3: up to
-/// 65 ticks, either sign).
-pub(crate) const CT_INFORMATIVE_TARGETS: &[&str] = &["tr_decrypt_nonce_dependence"];
+/// 65 ticks, either sign). TEST-SPEC-M7 CT-04 (OPEN-M6-C1-2, OPEN-M7-25 A): `tr_decrypt_header_contents_dependence`,
+/// its constant-nonce contrast — one nonce, classes that differ only in the decoded header contents (`pn` 0 vs 3).
+pub(crate) const CT_INFORMATIVE_TARGETS: &[&str] = &[
+    "tr_decrypt_nonce_dependence",
+    "tr_decrypt_header_contents_dependence",
+];
 
 /// The positive control among [`CT_TARGETS`].
 pub(crate) const CT_POSITIVE_CONTROL: &str = "control_variable_time_compare";

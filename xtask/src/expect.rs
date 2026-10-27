@@ -1081,6 +1081,15 @@ pub(crate) const MIRI_UNSUPPORTED: &[(&str, &str, &str)] = &[
     ),
 ];
 
+/// TEST-SPEC-M7 G7-12 (OPEN-M7-26 A, OPEN-M6-C1-1): the RSS limit of one `cbmc` process of the `kani` step, in KiB:
+/// 14.5 GB = 14 500 000 000 B = 14 160 156 KiB (`ps -o rss` reports KiB). The `ubuntu-latest` runner has 16 GB; the
+/// largest harness peaked at 13.75 GB in M6 (`docs/reviews/M06-report.md` §7). Above it the step stops Kani and fails
+/// naming the harness being checked, before the runner's out-of-memory kill ends the job without a word.
+pub(crate) const KANI_CBMC_RSS_LIMIT_KIB: u64 = 14_160_156;
+
+/// How often the `kani` step samples the `cbmc` processes' RSS, in seconds.
+pub(crate) const KANI_RSS_POLL_SECONDS: u64 = 2;
+
 /// Packages containing Kani harnesses (docs/06 §4). M2: `secmp-proto` (`src/kani_proofs.rs`). M5 (Phase B):
 /// `secmp-relay` (`src/kani_proofs.rs`, TEST-SPEC-M5 K-05…K-07).
 pub(crate) const KANI_PACKAGES: &[&str] = &["secmp-client-core", "secmp-proto", "secmp-relay"];

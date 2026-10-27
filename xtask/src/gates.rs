@@ -2403,14 +2403,25 @@ pub(crate) fn kani(ctx: &Ctx) -> Result<Outcome> {
     // stubbed harnesses did not compile in CI run 36614956208), and `--manifest-path` could not start `cargo
     // metadata` on the CI runner (run 36633643390): the gate passes the package's unstable features as `-Z` itself
     let mut output = String::new();
+    let mut peaks: Vec<(String, u64)> = Vec::new();
     for p in &packages {
         let mut c = Cmd::cargo().args(["kani", "--package", &p.name]);
         for feature in &p.kani_unstable {
             c = c.args(["-Z", feature]);
         }
-        let cap = c.dir(&ctx.root).capture()?;
+        // G7-12: run under the cbmc RSS guard, stdout and stderr in a log the guard reads for the current harness
+        let log = ctx.root.join("target").join(format!("kani-{}.log", p.name));
+        let run = kani_guarded(
+            &c.dir(&ctx.root),
+            &log,
+            expect::KANI_CBMC_RSS_LIMIT_KIB,
+            std::time::Duration::from_secs(expect::KANI_RSS_POLL_SECONDS),
+            &mut cbmc_rss_sample,
+        )?;
+        peaks.extend(run.peaks);
+        let stdout = std::fs::read_to_string(&log)?;
         // the harness verdicts and Kani's summary into the log (the full output only on failure)
-        for line in cap.stdout.lines().filter(|l| {
+        for line in stdout.lines().filter(|l| {
             l.starts_with("Checking harness")
                 || l.starts_with("VERIFICATION:-")
                 || l.starts_with("Verification Time")
@@ -2419,12 +2430,17 @@ pub(crate) fn kani(ctx: &Ctx) -> Result<Outcome> {
         }) {
             say(&format!("  {line}"));
         }
-        if !cap.success {
-            say(cap.stdout.trim_end());
-            say(cap.stderr.trim_end());
+        if !run.success {
+            say(stdout.trim_end());
             bail!("cargo kani --package {} failed", p.name);
         }
-        output.push_str(&cap.stdout);
+        output.push_str(&stdout);
+    }
+    for (harness, kib) in &peaks {
+        say(&format!(
+            "  kani-rss {harness}: peak cbmc RSS {kib} KiB (limit {} KiB)",
+            expect::KANI_CBMC_RSS_LIMIT_KIB
+        ));
     }
     let verified = kani_verified(&output)?;
     let covers = kani_covers(&output)?;
@@ -2452,6 +2468,89 @@ pub(crate) fn kani(ctx: &Ctx) -> Result<Outcome> {
             covers.join("; ")
         }
     )))
+}
+
+/// The outcome of one guarded `cargo kani` run: its exit status and the peak `cbmc` RSS (KiB) seen per harness.
+pub(crate) struct KaniRun {
+    pub(crate) success: bool,
+    pub(crate) peaks: Vec<(String, u64)>,
+}
+
+/// The largest `cbmc` process of a `ps -eo pid,rss,comm` listing, as (pid, RSS in KiB); `None` without one.
+pub(crate) fn largest_cbmc(ps: &str) -> Option<(u32, u64)> {
+    ps.lines()
+        .filter_map(|l| {
+            let mut f = l.split_whitespace();
+            let pid = f.next()?.parse().ok()?;
+            let rss = f.next()?.parse().ok()?;
+            let comm = f.next()?;
+            (comm == "cbmc" || comm.ends_with("/cbmc")).then_some((pid, rss))
+        })
+        .max_by_key(|(_, rss)| *rss)
+}
+
+/// The harness of the last `Checking harness <name>...` line of a Kani log, or `(before the first harness)`.
+pub(crate) fn current_kani_harness(log: &str) -> String {
+    log.lines()
+        .rev()
+        .find_map(|l| l.strip_prefix("Checking harness "))
+        .map_or_else(
+            || "(before the first harness)".to_owned(),
+            |h| h.trim_end_matches("...").trim().to_owned(),
+        )
+}
+
+/// The `ps` listing the guard samples (empty if `ps` cannot run).
+fn cbmc_rss_sample() -> String {
+    std::process::Command::new("ps")
+        .args(["-eo", "pid,rss,comm"])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_default()
+}
+
+/// TEST-SPEC-M7 G7-12 (OPEN-M7-26 A): run `cmd` (a `cargo kani`) with its output in `log` and sample the `cbmc`
+/// processes every `every` with `sample` (a `ps -eo pid,rss,comm` listing). Records the peak RSS per harness (the one of
+/// the last `Checking harness` line). When a `cbmc` exceeds `limit_kib`, it kills that process, stops the run and fails
+/// naming the harness, the RSS and the limit. Otherwise returns the run's status and the peaks.
+pub(crate) fn kani_guarded(
+    cmd: &Cmd,
+    log: &Path,
+    limit_kib: u64,
+    every: std::time::Duration,
+    sample: &mut dyn FnMut() -> String,
+) -> Result<KaniRun> {
+    let mut child = cmd.spawn_logged(log)?;
+    let mut peaks: Vec<(String, u64)> = Vec::new();
+    loop {
+        let status = child.try_wait()?;
+        if let Some((pid, rss)) = largest_cbmc(&sample()) {
+            let harness = current_kani_harness(&std::fs::read_to_string(log).unwrap_or_default());
+            match peaks.iter_mut().find(|(h, _)| *h == harness) {
+                Some((_, peak)) => *peak = (*peak).max(rss),
+                None => peaks.push((harness.clone(), rss)),
+            }
+            if rss > limit_kib {
+                let _ = std::process::Command::new("kill")
+                    .args(["-KILL", &pid.to_string()])
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .status();
+                stop_child(&mut child)?;
+                bail!(
+                    "kani: cbmc RSS {rss} KiB exceeds the limit of {limit_kib} KiB (expect::KANI_CBMC_RSS_LIMIT_KIB, OPEN-M7-26) while checking harness {harness}; stopped"
+                );
+            }
+        }
+        if let Some(status) = status {
+            return Ok(KaniRun {
+                success: status.success(),
+                peaks,
+            });
+        }
+        std::thread::sleep(every);
+    }
 }
 
 /// M4 review C-15 (R-34): the `kani::cover!` results of a Kani run, per harness ("<harness>: N of M cover properties
@@ -9923,6 +10022,84 @@ mod tests {
             m.remove("package");
         }
         assert!(mutant_counts(&[nameless]).is_err());
+    }
+
+    /// TEST-SPEC-M7 G7-12 (OPEN-M7-26 A): the `kani` step runs every `cargo kani` under the cbmc RSS guard with the 14.5 GB
+    /// limit; the guard reads the largest `cbmc` and the current harness, records peaks, and — red test with a lowered
+    /// limit — stops a run whose `cbmc` exceeds it, kills that process and fails naming the harness; under the limit the
+    /// run's own status and the peak are returned.
+    #[test]
+    fn kani_rss_guard() -> Result<()> {
+        assert_eq!(expect::KANI_CBMC_RSS_LIMIT_KIB, 14_160_156);
+        assert_eq!(14_500_000_000_u64 / 1024, expect::KANI_CBMC_RSS_LIMIT_KIB);
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let gates_rs = lf(&std::fs::read_to_string(root.join("xtask/src/gates.rs"))?);
+        let body = gates_rs
+            .split_once("pub(crate) fn kani(ctx: &Ctx) -> Result<Outcome> {")
+            .and_then(|(_, rest)| rest.split_once("\n}\n"))
+            .map(|(b, _)| b)
+            .unwrap_or_default();
+        assert!(body.contains("kani_guarded(") && body.contains("expect::KANI_CBMC_RSS_LIMIT_KIB"));
+        assert!(!body.contains(".capture()"));
+        // the readers
+        let ps = "    PID   RSS COMMAND\n    1   900 systemd\n  4242 5000000 cbmc\n  4243 7000000 cbmc\n  4244 9000000 rustc\n";
+        assert_eq!(largest_cbmc(ps), Some((4243, 7_000_000)));
+        assert_eq!(largest_cbmc("  PID RSS COMMAND\n  7 10 bash\n"), None);
+        let log = "Compiling x\nChecking harness kani_proofs::kani_a...\nVERIFICATION:- SUCCESSFUL\nChecking harness kani_proofs::kani_b...\n";
+        assert_eq!(current_kani_harness(log), "kani_proofs::kani_b");
+        assert_eq!(current_kani_harness(""), "(before the first harness)");
+        #[cfg(unix)]
+        {
+            let dir = root.join("target").join("kani-guard-test");
+            std::fs::create_dir_all(&dir)?;
+            let fake = || {
+                Cmd::new("sh").args([
+                    "-c",
+                    "echo 'Checking harness kani_proofs::kani_fake...'; exec sleep 30",
+                ])
+            };
+            // a stand-in for the cbmc process, which the guard kills
+            let mut victim = std::process::Command::new("sleep").arg("60").spawn()?;
+            let pid = victim.id();
+            let mut calls = 0_u32;
+            let mut over = || {
+                calls = calls.saturating_add(1);
+                if calls < 3 {
+                    String::new()
+                } else {
+                    format!("  PID RSS COMMAND\n  {pid} 2000000 cbmc\n")
+                }
+            };
+            let every = std::time::Duration::from_millis(200);
+            let lowered = 1_000_000;
+            let err = kani_guarded(&fake(), &dir.join("over.log"), lowered, every, &mut over)
+                .err()
+                .map(|e| e.to_string())
+                .unwrap_or_default();
+            assert!(
+                err.contains("2000000 KiB exceeds the limit of 1000000 KiB")
+                    && err.contains("while checking harness kani_proofs::kani_fake"),
+                "{err}"
+            );
+            let killed = victim.wait()?;
+            assert!(!killed.success(), "the cbmc stand-in was killed");
+            // under the limit: the run ends with its own status, the peak is recorded
+            let quick = Cmd::new("sh").args([
+                "-c",
+                "echo 'Checking harness kani_proofs::kani_ok...'; sleep 1",
+            ]);
+            let mut under = || "  PID RSS COMMAND\n  1 500 cbmc\n".to_owned();
+            let run = kani_guarded(&quick, &dir.join("under.log"), lowered, every, &mut under)?;
+            assert!(run.success);
+            assert!(
+                run.peaks
+                    .iter()
+                    .any(|(h, k)| h == "kani_proofs::kani_ok" && *k == 500),
+                "{:?}",
+                run.peaks
+            );
+        }
+        Ok(())
     }
 
     /// TEST-SPEC-M7 G7-10 (OPEN-M7-20 A, ADR-047 Amendment 9): the second mutants run selects the nextest profile whose

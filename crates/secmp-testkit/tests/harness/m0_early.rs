@@ -1,16 +1,19 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! Killers of the mutants that make other tests run for ever (WEISUNG M6-C1-3, item 1). This module's name sorts before
-//! `m6_activity`, whose six-hour simulations a mutant of a period or a clock turns into runs of hours: with four test threads
-//! (the runner) four of them hold every thread and a failing test behind them never starts, so the mutant times out at 900 s.
-//! The tests here fail within a second and are listed first; none of them loops or waits for a wall clock (the waits are
-//! virtual: the paused tokio clock advances at once when every task is idle).
+//! Killers of the mutants that make other tests run for ever (WEISUNG M6-C1-3, item 1). The second mutants run starts them
+//! before `m6_activity`, whose six-hour simulations a mutant of a period or a clock turns into runs of hours: with four test
+//! threads (the runner) four of them hold every thread and a failing test behind them never starts, so the mutant times out
+//! at 900 s. The tests here fail within a second; none of them loops or waits for a wall clock (the waits are virtual: the
+//! paused tokio clock advances at once when every task is idle).
 //!
 //! **Why the four `m6_activity::activity_comparator_detects_*` tests matter:** they run six-hour simulations; under a mutated
 //! period or clock they never end, hold all four threads of the runner, and a failing test queued behind them is never started.
 //!
-//! **The order is the module name.** nextest lists tests by `binary`, then by the full test path, so `m0_early::…` runs before
-//! `m6_activity::…`. That is a dependency: renaming this file or `m6_activity` (or adding a module that sorts before
-//! `m0_early` with long tests) breaks the guarantee, and `mutants-c1-41ee485.md` ("Timeouts") shows what follows.
+//! **The order is an explicit filter** (TEST-SPEC-M7 G7-10, ADR-047 Amendment 9; until M7 it was this module's name, which
+//! sorted first). The second mutants run uses the nextest profile `mutants-harness` of `.config/nextest.toml`, whose one
+//! override gives the tests of `expect::MUTANT_KILLER_MODULE` (this module) priority 100, so nextest starts them before every
+//! other test whatever the module is called. Renaming this file means changing that constant and the profile's filter in the
+//! same commit; the test `mutant_killers_run_first_by_filter` fails otherwise (`mutants-c1-41ee485.md`, "Timeouts", shows
+//! what a late killer costs).
 
 use std::time::Duration;
 

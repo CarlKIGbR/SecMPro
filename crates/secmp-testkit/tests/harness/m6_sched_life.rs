@@ -334,13 +334,11 @@ fn scheduler_reads_no_ui_state() {
     }
 }
 
-/// G-12 `relay_idle_and_age_bounds_from_schedule` (OPEN-M6-15; M05 review C-3 "M6 adjusts"): the relay's default idle
-/// bound is 3 × the slowest scheduler period and its age bound the longest link lifetime plus 10 min; a compliant
-/// client at the slowest period, holding its links for the longest lifetime, is never cut by the relay — in Strict
-/// (P = 80 s) and in Low-bw over 25 h on the default relay limits, no link ends with `Closed` (the relay's close), and
-/// a link is held to the end of its 24-h lifetime. (The SIM-01…SIM-10 part of the row is Phase C.)
+/// G-12, short form of `relay_idle_and_age_bounds_from_schedule` (TEST-SPEC-M7 G7-09): the relay's default idle bound
+/// is 3 × the slowest scheduler period (80 s) and its age bound the longest link lifetime plus 10 min, and the harness
+/// relay runs on these defaults. Kept in the per-mutant run of the mutation gate.
 #[test]
-fn relay_idle_and_age_bounds_from_schedule() {
+fn relay_idle_and_age_bounds_defaults() {
     let params = Params::default();
     let defaults = secmp_testkit::harness::RelayLimits::defaults();
     let slowest = params.periods_ms.iter().copied().max().unwrap();
@@ -355,6 +353,20 @@ fn relay_idle_and_age_bounds_from_schedule() {
             .link_idle_ms,
         defaults.link_idle_ms
     );
+}
+
+/// G-12 `relay_idle_and_age_bounds_from_schedule` (OPEN-M6-15; M05 review C-3 "M6 adjusts"): the relay's default idle
+/// bound is 3 × the slowest scheduler period and its age bound the longest link lifetime plus 10 min; a compliant
+/// client at the slowest period, holding its links for the longest lifetime, is never cut by the relay — in Strict
+/// (P = 80 s) and in Low-bw over 25 h on the default relay limits, no link ends with `Closed` (the relay's close), and
+/// a link is held to the end of its 24-h lifetime. (The SIM-01…SIM-10 part of the row is Phase C.) The 25-h runs (about
+/// 27 s) are left out of the per-mutant run (`expect::MUTANT_HARNESS_SKIP_TESTS`); the bounds themselves are checked by
+/// the short form `relay_idle_and_age_bounds_defaults` (TEST-SPEC-M7 G7-09, OPEN-M7-19 B).
+#[test]
+fn relay_idle_and_age_bounds_from_schedule() {
+    let params = Params::default();
+    let slowest = params.periods_ms.iter().copied().max().unwrap();
+    relay_idle_and_age_bounds_defaults();
     let longest = Params {
         lifetime_ms: (params.lifetime_ms.1, params.lifetime_ms.1),
         ..Params::default()

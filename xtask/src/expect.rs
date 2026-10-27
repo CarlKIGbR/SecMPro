@@ -516,6 +516,18 @@ pub(crate) const MUTANT_PACKAGES: &[&str] = &[
 /// the tests of [`MUTANT_HARNESS_TEST_PACKAGES`] with feature `harness`.
 pub(crate) const MUTANT_HARNESS_PACKAGES: &[&str] = &["secmp-client-core", "secmp-transport"];
 
+/// TEST-SPEC-M7 G7-10 (OPEN-M7-20 A, ADR-047 Amendment 9): the harness module of the killers of clock and period mutants
+/// (ADR-047 Amendment 7 (2)). The second run starts its tests first through the nextest profile
+/// [`MUTANTS_HARNESS_PROFILE`], whose one override gives them [`MUTANT_KILLERS_PRIORITY`]; the module's name no longer has to
+/// sort before `m6_activity`.
+pub(crate) const MUTANT_KILLER_MODULE: &str = "m0_early";
+
+/// The nextest profile of the second mutants run (`.config/nextest.toml`, `gates::mutants_killer_profile`).
+pub(crate) const MUTANTS_HARNESS_PROFILE: &str = "mutants-harness";
+
+/// The nextest priority of the tests of [`MUTANT_KILLER_MODULE`] in [`MUTANTS_HARNESS_PROFILE`] (every other test: 0).
+pub(crate) const MUTANT_KILLERS_PRIORITY: i32 = 100;
+
 /// ADR-047 Amendment 4: the per-mutant test timeout of the second run, in seconds (cargo-mutants derives its automatic
 /// timeout from a baseline that runs only the mutated package's own tests: 2 tests, 0 s, i.e. 20 s, and every mutant
 /// timed out on the harness suite in the local smoke run of 2026-10-15). 15 min: the per-mutant suite (without
@@ -649,6 +661,16 @@ pub(crate) const MUTANT_HARNESS_SKIP_TESTS: &[(&str, &str)] = &[
     (
         "two_clients_profiles_are_in_memory",
         "TC-02, two runs of the engine with a filesystem snapshot: 41 s",
+    ),
+    // TEST-SPEC-M7 G7-09 (OPEN-M7-19 B): the two tests that dominated the per-mutant suite (C2-18c, 32-core container),
+    // each split into a short form that stays in the per-mutant run (named in docs/mutants-accepted.md §Skipped)
+    (
+        "timing_draws_independent_of_activity",
+        "AI-05, 6 h x 4 traces: 69.5 s; short form timing_draws_unmoved_by_one_hour_of_activity",
+    ),
+    (
+        "relay_idle_and_age_bounds_from_schedule",
+        "G-12, two 25 h runs: 27 s; short form relay_idle_and_age_bounds_defaults",
     ),
 ];
 

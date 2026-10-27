@@ -67,7 +67,28 @@ pub(crate) fn policy(ctx: &Ctx) -> Result<Outcome> {
     detail.push_str(&workflows(&ctx.root)?);
     detail.push_str("; ");
     detail.push_str(&large_files(&ctx.root)?);
+    detail.push_str("; ");
+    detail.push_str(&mutants_profile(&ctx.root)?);
     Ok(Outcome::Pass(detail))
+}
+
+/// TEST-SPEC-M7 G7-10 (ADR-047 Amendment 9): `.config/nextest.toml` holds the profile of the second mutants run exactly as
+/// `mutants_killer_profile` writes it for `expect::MUTANT_KILLER_MODULE`, once, and no other `priority`.
+fn mutants_profile(root: &Path) -> Result<String> {
+    let config = lf(&std::fs::read_to_string(root.join(".config/nextest.toml"))?);
+    let block = mutants_killer_profile(expect::MUTANT_KILLER_MODULE);
+    if config.matches(&block).count() != 1 || config.matches("priority =").count() != 1 {
+        bail!(
+            "mutants-profile: .config/nextest.toml must hold the profile {} once, as gates::mutants_killer_profile writes it, and no other priority",
+            expect::MUTANTS_HARNESS_PROFILE
+        );
+    }
+    Ok(format!(
+        "mutants-profile: {} starts {}::* first (priority {})",
+        expect::MUTANTS_HARNESS_PROFILE,
+        expect::MUTANT_KILLER_MODULE,
+        expect::MUTANT_KILLERS_PRIORITY
+    ))
 }
 
 /// The tracked files over `limit` bytes that are not allowlisted, and the allowlisted ones over `cap` (ADR-052): one
@@ -1439,12 +1460,33 @@ pub(crate) fn mutants_harness_args(shard: Option<MutantsShard>) -> Vec<String> {
         .iter()
         .position(|x| x == "--")
         .map_or(a.len(), |i| i.saturating_add(1));
-    a.splice(after..after, [MUTANTS_HARNESS_MAX_FAIL.to_owned()]);
+    a.splice(
+        after..after,
+        [
+            MUTANTS_HARNESS_MAX_FAIL.to_owned(),
+            // TEST-SPEC-M7 G7-10 (ADR-047 Amendment 9): the killers of clock and period mutants first, by the profile's
+            // priority override (`mutants_killer_profile`), not by the sort position of their module's name
+            "--profile".to_owned(),
+            expect::MUTANTS_HARNESS_PROFILE.to_owned(),
+        ],
+    );
     a
 }
 
 /// The nextest option that cancels the harness run of a mutant at the first failing test.
 pub(crate) const MUTANTS_HARNESS_MAX_FAIL: &str = "--max-fail=1:immediate";
+
+/// TEST-SPEC-M7 G7-10 (OPEN-M7-20 A, ADR-047 Amendment 9): the nextest profile of the second mutants run as it stands in
+/// `.config/nextest.toml` — one override that gives every test of the harness module `module` the priority
+/// `expect::MUTANT_KILLERS_PRIORITY`, so nextest starts them before every other test whatever the module is called (the
+/// other tests keep priority 0 and nextest's order). The default profile's overrides still apply.
+pub(crate) fn mutants_killer_profile(module: &str) -> String {
+    format!(
+        "[profile.{profile}]\n\n[[profile.{profile}.overrides]]\nfilter = 'test(/^{module}::/)'\npriority = {priority}\n",
+        profile = expect::MUTANTS_HARNESS_PROFILE,
+        priority = expect::MUTANT_KILLERS_PRIORITY,
+    )
+}
 
 /// How often the mutation gate polls cargo-mutants and echoes its new output lines.
 const MUTANTS_POLL: std::time::Duration = std::time::Duration::from_secs(5);
@@ -9881,6 +9923,117 @@ mod tests {
             m.remove("package");
         }
         assert!(mutant_counts(&[nameless]).is_err());
+    }
+
+    /// TEST-SPEC-M7 G7-10 (OPEN-M7-20 A, ADR-047 Amendment 9): the second mutants run selects the nextest profile whose
+    /// one override gives the killer module's tests a priority above every other test, so they start first by that filter;
+    /// `.config/nextest.toml` holds exactly the block `mutants_killer_profile` writes for `expect::MUTANT_KILLER_MODULE`.
+    /// Renaming the module keeps the order: the block for another name (one that sorts after `m6_activity`) carries the
+    /// same priority, and the first run (own tests) uses no such profile. The killer module exists and holds tests.
+    #[test]
+    fn mutant_killers_run_first_by_filter() -> Result<()> {
+        let args = mutants_harness_args(None);
+        let dashes = args.iter().position(|a| a == "--").unwrap_or(usize::MAX);
+        let profile = args.iter().position(|a| a == "--profile");
+        assert_eq!(profile, Some(dashes.saturating_add(2)));
+        assert_eq!(
+            profile
+                .and_then(|i| args.get(i.saturating_add(1)))
+                .map(String::as_str),
+            Some(expect::MUTANTS_HARNESS_PROFILE)
+        );
+        assert!(!mutants_args(None).iter().any(|a| a == "--profile"));
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let config = lf(&std::fs::read_to_string(root.join(".config/nextest.toml"))?);
+        let block = mutants_killer_profile(expect::MUTANT_KILLER_MODULE);
+        assert_eq!(config.matches(&block).count(), 1, "{config}");
+        assert_eq!(config.matches("priority =").count(), 1);
+        assert!(block.contains("filter = 'test(/^m0_early::/)'\npriority = 100\n"));
+        // another module name: the same profile and priority, only the filter follows the name
+        let renamed = mutants_killer_profile("zz_killers");
+        assert!("zz_killers" > "m6_activity");
+        assert_eq!(
+            renamed.replace("zz_killers", expect::MUTANT_KILLER_MODULE),
+            block
+        );
+        // the module is declared in the harness binary and holds tests
+        let main = lf(&std::fs::read_to_string(
+            root.join("crates/secmp-testkit/tests/harness/main.rs"),
+        )?);
+        assert!(main.contains(&format!("mod {};", expect::MUTANT_KILLER_MODULE)));
+        let killers = std::fs::read_to_string(
+            root.join("crates/secmp-testkit/tests/harness")
+                .join(format!("{}.rs", expect::MUTANT_KILLER_MODULE)),
+        )?;
+        assert!(killers.matches("#[test]").count() >= 4);
+        // nextest's `priority` override needs nextest 0.9.91 or later; the pinned version
+        assert_eq!(tools::NEXTEST.version, "0.9.145");
+        Ok(())
+    }
+
+    /// TEST-SPEC-M7 G7-09 (OPEN-M7-19 B): the two tests that dominated the per-mutant harness suite (C2-18c: 70 s on 32
+    /// cores, of it 69.5 s and 27 s) are split. Each long form is in `expect::MUTANT_HARNESS_SKIP_TESTS` with its time
+    /// and the name of its short form; the short form is a harness test that no skip entry matches (a `--skip` filter is
+    /// a substring match), so it runs for every mutant; docs/mutants-accepted.md §Skipped names it as the killer. The
+    /// suite's wall time on 32 cores is measured and reported (M07 report §4), not asserted here (no wall clock in tests).
+    #[test]
+    fn mutant_harness_suite_under_30s() -> Result<()> {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let mut sources = String::new();
+        for f in walk_files(
+            &root.join("crates/secmp-testkit/tests/harness"),
+            &|p: &Path| p.extension().is_some_and(|e| e == "rs"),
+        )? {
+            sources.push_str(&lf(&std::fs::read_to_string(f)?));
+        }
+        let accepted = lf(&std::fs::read_to_string(
+            root.join("docs/mutants-accepted.md"),
+        )?);
+        let skipped = accepted
+            .split_once("\n## Skipped\n")
+            .map(|(_, s)| s)
+            .unwrap_or_default();
+        for (long, short) in [
+            (
+                "timing_draws_independent_of_activity",
+                "timing_draws_unmoved_by_one_hour_of_activity",
+            ),
+            (
+                "relay_idle_and_age_bounds_from_schedule",
+                "relay_idle_and_age_bounds_defaults",
+            ),
+        ] {
+            let reason = expect::MUTANT_HARNESS_SKIP_TESTS
+                .iter()
+                .find(|(n, _)| *n == long)
+                .map(|(_, r)| *r)
+                .unwrap_or_default();
+            assert!(
+                reason.contains(" s;") && reason.ends_with(&format!("short form {short}")),
+                "{long}: {reason:?}"
+            );
+            for name in [long, short] {
+                assert_eq!(
+                    sources.matches(&format!("#[test]\nfn {name}() {{")).count(),
+                    1,
+                    "{name}"
+                );
+            }
+            for (name, _) in expect::MUTANT_HARNESS_SKIP_TESTS
+                .iter()
+                .chain(expect::MUTANT_SKIP_TESTS)
+            {
+                assert!(!short.contains(name), "{name} would skip {short}");
+            }
+            assert!(
+                skipped
+                    .lines()
+                    .any(|l| l.starts_with(&format!("| `{long}`"))
+                        && l.contains(&format!("killer: `{short}`"))),
+                "docs/mutants-accepted.md §Skipped: {long}"
+            );
+        }
+        Ok(())
     }
 
     /// ADR-047 Amendment 1 (5): every test skipped for each mutant is a `#[cfg(feature = "kat")]` test function of

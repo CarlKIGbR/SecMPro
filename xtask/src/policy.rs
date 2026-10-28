@@ -719,7 +719,8 @@ fn quoted_value(line: &str, key: &str) -> Option<String> {
 }
 
 /// The normal (shipped) dependency closure of `secmp-crypto`/`secmp-proto` (ADR-036, docs/06 §3): normal edges
-/// only (`cargo tree -e normal`), taken on every target of `expect::VET_CLOSURE_TARGETS` and united, so a crate
+/// only (`cargo metadata --filter-platform`, which also counts optional dependencies that are lock-only), taken on every
+/// target of `expect::VET_CLOSURE_TARGETS` and united, so a crate
 /// compiled for any shipped target or the development host is inside. Build- and dev-dependencies and
 /// dependencies of other platforms or unset `cfg`s are outside and may be tracked exemptions.
 pub(crate) fn zero_exemption_closure(ws: &Workspace) -> Result<BTreeSet<(String, String)>> {

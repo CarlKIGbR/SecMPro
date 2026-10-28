@@ -8923,12 +8923,12 @@ mod tests {
     fn vet_records_for_m7_closure() -> Result<()> {
         let audits = m7_repo_file("supply-chain/audits.toml")?;
         let config = m7_repo_file("supply-chain/config.toml")?;
-        for (krate, publisher, version) in [
-            ("argon2", "github:RustCrypto/password-hashes", "0.6.0"),
-            ("blake2", "github:RustCrypto/hashes", "0.11.0"),
+        for (krate, publisher, start) in [
+            ("argon2", "github:RustCrypto/password-hashes", "2026-08-27"),
+            ("blake2", "github:RustCrypto/hashes", "2026-08-26"),
             // lock-only under argon2 but inside the zero-exemption closure: publisher trust, not an exemption (A-2 finding)
-            ("password-hash", "github:RustCrypto/traits", "0.6.1"),
-            ("phc", "github:RustCrypto/formats", "0.6.1"),
+            ("password-hash", "github:RustCrypto/traits", "2026-04-08"),
+            ("phc", "github:RustCrypto/formats", "2026-03-09"),
         ] {
             let blocks = vet_blocks(&audits, "trusted", krate);
             assert_eq!(blocks.len(), 1, "{krate}");
@@ -8946,7 +8946,8 @@ mod tests {
                 b.contains("ADR-055 item") && b.contains("Read by the implementer:"),
                 "{krate}"
             );
-            let _ = version;
+            assert!(b.contains(&format!("start = \"{start}\"")), "{krate}");
+            assert!(b.contains("end = \"2027-10-28\""), "{krate}");
             assert!(
                 vet_blocks(&config, "exemptions", krate).is_empty(),
                 "{krate} has no exemption"

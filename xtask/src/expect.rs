@@ -2001,64 +2001,65 @@ pub(crate) const DISPATCH_TWINS: &[(&str, &str)] = &[
     ("dispatch-harness", "harness"),
 ];
 
+/// TEST-SPEC-M7 G7-01 (ADR-055, OPEN-M7-03 A, Q129): the allowlist rows of the dependency set of M7 — `secmp-store` is
+/// {`rusqlite`, `secmp-crypto`, `secmp-proto`}, `secmp-crypto` its normal dependencies + `argon2` — in the order of this
+/// file; the other rows are unchanged (the client-core and testkit edges to the store are G7-06, the CLI row G7-21).
+#[cfg(test)]
+#[test]
+fn normal_dependency_allow_m7() {
+    let row = |name: &str| -> Vec<&str> {
+        NORMAL_DEPENDENCY_ALLOW
+            .iter()
+            .find(|(k, _)| *k == name)
+            .map(|(_, v)| v.to_vec())
+            .unwrap_or_default()
+    };
+    assert_eq!(
+        row("secmp-store"),
+        ["rusqlite", "secmp-crypto", "secmp-proto"]
+    );
+    assert_eq!(
+        row("secmp-crypto"),
+        [
+            "argon2",
+            "chacha20",
+            "chacha20poly1305",
+            "ed25519-dalek",
+            "getrandom",
+            "hkdf",
+            "hmac",
+            "libcrux-ml-kem",
+            "ml-dsa",
+            "secmp-sys-mem",
+            "sha2",
+            "sha3",
+            "subtle",
+            "x25519-dalek",
+            "zeroize",
+        ]
+    );
+    assert_eq!(
+        row("secmp-client-core"),
+        ["secmp-crypto", "secmp-proto", "secmp-transport", "tokio"]
+    );
+    assert!(!row("secmp-testkit").contains(&"secmp-store"));
+    let rows: Vec<&str> = NORMAL_DEPENDENCY_ALLOW.iter().map(|(k, _)| *k).collect();
+    assert_eq!(
+        rows,
+        [
+            "secmp-relay",
+            "secmp-transport",
+            "secmp-client-core",
+            "secmp-testkit",
+            "secmp-store",
+            "secmp-crypto"
+        ]
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// TEST-SPEC-M7 G7-01 (ADR-055, OPEN-M7-03 A, Q129): the allowlist rows of the dependency set of M7 — `secmp-store` is
-    /// {`rusqlite`, `secmp-crypto`, `secmp-proto`}, `secmp-crypto` its normal dependencies + `argon2` — in the order of this
-    /// file; the other rows are unchanged (the client-core and testkit edges to the store are G7-06, the CLI row G7-21).
-    #[test]
-    fn normal_dependency_allow_m7() {
-        let row = |name: &str| -> Vec<&str> {
-            NORMAL_DEPENDENCY_ALLOW
-                .iter()
-                .find(|(k, _)| *k == name)
-                .map(|(_, v)| v.to_vec())
-                .unwrap_or_default()
-        };
-        assert_eq!(
-            row("secmp-store"),
-            ["rusqlite", "secmp-crypto", "secmp-proto"]
-        );
-        assert_eq!(
-            row("secmp-crypto"),
-            [
-                "argon2",
-                "chacha20",
-                "chacha20poly1305",
-                "ed25519-dalek",
-                "getrandom",
-                "hkdf",
-                "hmac",
-                "libcrux-ml-kem",
-                "ml-dsa",
-                "secmp-sys-mem",
-                "sha2",
-                "sha3",
-                "subtle",
-                "x25519-dalek",
-                "zeroize",
-            ]
-        );
-        assert_eq!(
-            row("secmp-client-core"),
-            ["secmp-crypto", "secmp-proto", "secmp-transport", "tokio"]
-        );
-        assert!(!row("secmp-testkit").contains(&"secmp-store"));
-        let rows: Vec<&str> = NORMAL_DEPENDENCY_ALLOW.iter().map(|(k, _)| *k).collect();
-        assert_eq!(
-            rows,
-            [
-                "secmp-relay",
-                "secmp-transport",
-                "secmp-client-core",
-                "secmp-testkit",
-                "secmp-store",
-                "secmp-crypto"
-            ]
-        );
-    }
 
     /// TEST-SPEC-M7 G7-16 (OPEN-M7-41): `cargo audit` ignores exactly the advisories of ADR-037 and ADR-051 Am. 1 and
     /// Am. 6; RUSTSEC-2026-0387 (`crypto-bigint` 0.5.5) stays until `arti-client` moves, and M7 adds no ignore.

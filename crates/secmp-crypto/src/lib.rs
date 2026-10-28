@@ -5,7 +5,8 @@
 //! docs/06 §2–3): typed keys, nonces and counters; `HybridKEM` (spec §3.2), `MsgEncrypt` (§3.3), `CAEAD` (§3.4),
 //! `HybridSign` (§3.5), plain XChaCha20-Poly1305 for ratchet headers and link frames ([`Aead`], §3 table, §7.5,
 //! §8.4), HKDF helpers with the labels of spec Appendix A, the SecMP-TR key derivations (§7.2), the safety number
-//! (§6.7) and fingerprints (§6.2). No primitive is implemented here; constructions only compose allowlisted crates
+//! (§6.7) and fingerprints (§6.2), and the Argon2id wrapper over the `argon2` crate (RFC 9106; ADR-055, `argon2id`,
+//! `argon2id_with_secret_and_ad`; parameters and the store key hierarchy are ADR-053's, not this crate's). No primitive is implemented here; constructions only compose allowlisted crates
 //! exactly as the spec defines them.
 //!
 //! **Allowed dependencies** (docs/02 §3, docs/06 §3): `secmp-sys-mem`; the allowlisted crypto crates of docs/06 §3

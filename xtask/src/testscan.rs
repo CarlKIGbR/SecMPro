@@ -452,6 +452,69 @@ fn kat_argon2_params_only_with_kat() -> Result<()> {
     Ok(())
 }
 
+/// The names of the store and of its client-side implementations (`secmp-client-core/src/{persist,outbox}.rs`), as
+/// [`scheduler_sees_only_traits`] looks for them.
+#[cfg(test)]
+const STORE_NAMES: &[&str] = &[
+    "secmp_store",
+    "secmp-store",
+    "StorePersist",
+    "StoreOutbox",
+    "SharedStore",
+    "crate::persist",
+    "crate::outbox",
+];
+
+/// The lines of `src` that name one of [`STORE_NAMES`], comments included.
+#[cfg(test)]
+fn store_lines(src: &str) -> Vec<(usize, &str)> {
+    src.lines()
+        .enumerate()
+        .filter(|(_, l)| STORE_NAMES.iter().any(|w| l.contains(w)))
+        .map(|(i, l)| (i.saturating_add(1), l))
+        .collect()
+}
+
+/// TEST-SPEC-M7 PC-12 (OB-07; `docs/02:104`): the scheduler sees only the `Outbox` and `Persist` traits — no file under
+/// `crates/secmp-client-core/src/scheduler/**` names the store crate (`secmp_store`, `secmp-store`), its client-side
+/// implementations (`StorePersist`, `StoreOutbox`, `SharedStore`) or their modules (`crate::persist`, `crate::outbox`),
+/// not even in a comment; the scan reads at least the scheduler's known files, and finds the names where they are.
+#[cfg(test)]
+#[test]
+fn scheduler_sees_only_traits() -> Result<()> {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let scheduler = root.join("crates/secmp-client-core/src/scheduler");
+    let mut files = Vec::new();
+    let mut bad = Vec::new();
+    for file in crate::util::walk_files(&scheduler, &|p| p.extension().is_some_and(|x| x == "rs"))?
+    {
+        let rel = crate::util::rel(&root, &file);
+        let src = std::fs::read_to_string(&file)?;
+        for (n, line) in store_lines(&src) {
+            bad.push(format!("{rel}:{n}: {}", line.trim()));
+        }
+        files.push(rel);
+    }
+    assert!(bad.is_empty(), "the scheduler names the store: {bad:?}");
+    for known in [
+        "scheduler/mod.rs",
+        "scheduler/outbox.rs",
+        "scheduler/conversation.rs",
+        "scheduler/run.rs",
+    ] {
+        assert!(
+            files.iter().any(|f| f.ends_with(known)),
+            "{known} not scanned: {files:?}"
+        );
+    }
+    // the positive control: the implementations outside the scheduler name the store
+    for outside in ["persist.rs", "outbox.rs"] {
+        let src = std::fs::read_to_string(root.join("crates/secmp-client-core/src").join(outside))?;
+        assert!(!store_lines(&src).is_empty(), "{outside}");
+    }
+    Ok(())
+}
+
 /// The source scans and their tests (test-only).
 #[cfg(test)]
 mod scan;

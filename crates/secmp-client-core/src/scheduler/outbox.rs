@@ -117,6 +117,38 @@ impl MemOutbox {
             .collect()
     }
 
+    /// The entries in enqueue order as a durable outbox keeps them: the message, when it was queued, when it was first
+    /// relayed, its state (what is in flight is not durable, spec §10.4).
+    pub fn entries(&self) -> impl Iterator<Item = (&OutMessage, u64, Option<u64>, MsgState)> {
+        self.entries
+            .iter()
+            .map(|e| (&e.message, e.queued_at, e.first_relayed_at, e.state))
+    }
+
+    /// The outbox of a restarted process from durable entries ([`MemOutbox::entries`], enqueue order): nothing in
+    /// flight.
+    #[must_use]
+    pub fn from_entries(entries: Vec<(OutMessage, u64, Option<u64>, MsgState)>) -> Self {
+        let clock = entries
+            .iter()
+            .map(|(_, queued, first, _)| first.unwrap_or(*queued).max(*queued))
+            .max()
+            .unwrap_or(0);
+        Self {
+            entries: entries
+                .into_iter()
+                .map(|(message, queued_at, first_relayed_at, state)| Entry {
+                    message,
+                    queued_at,
+                    first_relayed_at,
+                    state,
+                    taken: false,
+                })
+                .collect(),
+            clock,
+        }
+    }
+
     fn entry(&mut self, id: &MsgId) -> Option<&mut Entry> {
         self.entries.iter_mut().find(|e| e.message.msg_id == *id)
     }

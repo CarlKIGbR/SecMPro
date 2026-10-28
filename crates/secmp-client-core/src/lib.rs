@@ -16,6 +16,8 @@ pub mod clock;
 #[cfg(kani)]
 mod kani_proofs;
 #[cfg(not(kani))]
+pub mod outbox;
+#[cfg(not(kani))]
 pub mod persist;
 pub mod scheduler;
 pub mod timing;

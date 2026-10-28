@@ -601,6 +601,109 @@ mod tests {
         Ok(())
     }
 
+    /// PC-06 (P-03 of M6; spec §10.4): seeded random sequences of enqueue, send (`take_next`), `OK_SEND` (`relayed`),
+    /// eviction (`requeue`), `NOQUEUE` (`requeue_unreceipted`), receipt (`delivered`), 30-day expiry and restart on a
+    /// `StoreOutbox` — whose restart reopens the store — and on the model `MemOutbox`: after every step the `MsgState` of
+    /// every id is the same, and so is the number waiting.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn prop_store_matches_mem_model() -> R {
+        use crate::outbox::StoreOutbox;
+        use crate::scheduler::outbox::{FAIL_AFTER_MS, MemOutbox, OutMessage, Outbox};
+        use secmp_proto::wire::cell::AppKind;
+        let master = super::seed::master_seed(DEFAULT_SEED);
+        for case in 0..3_u64 {
+            let mut mix = Mix(master ^ case.wrapping_add(1).wrapping_mul(0xa076_1d64_78bd_642f));
+            let dir = f(secmp_store::kat::TempDir::new("pc06"), "dir")?;
+            let mut store_o = f(StoreOutbox::open(shared(dir.path())?, 3), "open")?;
+            let mut model = MemOutbox::new();
+            let mut ids: Vec<[u8; 16]> = Vec::new();
+            let mut taken: Vec<[u8; 16]> = Vec::new();
+            let mut now = 0_u64;
+            let mut cell = 0_u64;
+            for step in 0..150_u32 {
+                now = now.saturating_add(mix.below(3_600_000));
+                let pick = |mix: &mut Mix, from: &[[u8; 16]]| -> Option<[u8; 16]> {
+                    let len = u64::try_from(from.len()).ok()?;
+                    from.get(usize::try_from(mix.below(len)).ok()?).copied()
+                };
+                match mix.below(9) {
+                    0 | 1 => {
+                        let n = u8::try_from(ids.len().checked_rem(250).unwrap_or(0))
+                            .map_err(|_| "n")?;
+                        let id = [n, 0x5a, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
+                        let message = || OutMessage {
+                            msg_id: id,
+                            kind: AppKind::Text,
+                            expire_after: 0,
+                            payload: secmp_crypto::Zeroizing::new(vec![n; 4]),
+                        };
+                        store_o.enqueue(message(), now);
+                        model.enqueue(message(), now);
+                        ids.push(id);
+                    }
+                    2 => {
+                        let a = store_o.take_next().map(|m| m.msg_id);
+                        let b = model.take_next().map(|m| m.msg_id);
+                        assert_eq!(a, b, "case {case} step {step}: take_next");
+                        taken.extend(a);
+                    }
+                    3 => {
+                        if let Some(id) = pick(&mut mix, &taken) {
+                            cell = cell.saturating_add(1);
+                            store_o.relayed(&id, cell);
+                            model.relayed(&id, cell);
+                        }
+                    }
+                    4 => {
+                        if let Some(id) = pick(&mut mix, &ids) {
+                            store_o.requeue(&id);
+                            model.requeue(&id);
+                        }
+                    }
+                    5 => {
+                        store_o.requeue_unreceipted();
+                        model.requeue_unreceipted();
+                    }
+                    6 => {
+                        if let Some(id) = pick(&mut mix, &ids) {
+                            store_o.delivered(&id);
+                            model.delivered(&id);
+                        }
+                    }
+                    7 => {
+                        now = now.saturating_add(
+                            FAIL_AFTER_MS.saturating_sub(mix.below(2 * 86_400_000)),
+                        );
+                        store_o.expire(now);
+                        model.expire(now);
+                    }
+                    _ => {
+                        // the process restarts: the store outbox is reopened from disk
+                        drop(store_o);
+                        store_o = f(StoreOutbox::open(shared(dir.path())?, 3), "reopen")?;
+                        model.restart();
+                        taken.clear();
+                    }
+                }
+                for id in &ids {
+                    assert_eq!(
+                        store_o.state(id),
+                        model.state(id),
+                        "case {case} step {step}"
+                    );
+                }
+                assert_eq!(
+                    store_o.waiting(),
+                    model.waiting(),
+                    "case {case} step {step}"
+                );
+                assert_eq!(store_o.write_errors(), 0);
+            }
+        }
+        Ok(())
+    }
+
     /// The child of PC-01: commit S0, then S1 (`Send`), record SHA-256(S1) next to the profile, abort.
     #[cfg(feature = "kat")]
     fn durable_child(dir: &std::path::Path) -> R {

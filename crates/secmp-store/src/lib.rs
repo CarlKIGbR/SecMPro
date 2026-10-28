@@ -18,6 +18,7 @@ pub mod delete;
 mod error;
 pub mod messages;
 pub mod migrate;
+pub mod outbox;
 pub mod schema;
 pub mod sessions;
 pub mod store;

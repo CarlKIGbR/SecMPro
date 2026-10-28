@@ -12,7 +12,7 @@ Sources: `docs/03` rev 2.6 (`docs/03:<line>` at `main` `bf55099`), `docs/07:137-
 
 | Section | Rows | A | B | C |
 |---|---|---|---|---|
-| (a) store core ST | 19 | 19 | 0 | 0 |
+| (a) store core ST | 20 | 20 | 0 | 0 |
 | (b) persistence contract PC | 13 | 13 | 0 | 0 |
 | (c) forensic FO + constant time CT | 9 | 5 | 0 | 4 |
 | (d) backup BK | 7 | 7 | 0 | 0 |
@@ -24,7 +24,7 @@ Sources: `docs/03` rev 2.6 (`docs/03:<line>` at `main` `bf55099`), `docs/07:137-
 | (j) CLI CL | 14 | 0 | 0 | 14 |
 | (k) E2E E2 | 12 | 0 | 0 | 12 |
 | (l) gates G7, fuzz FZ, Kani K7, transport carry-overs C-T | 32 | 19 | 3 | 10 |
-| **total** | **174** | **63** | **71** | **40** |
+| **total** | **175** | **64** | **71** | **40** |
 
 Built unconditionally: 169 rows. **(cond, not built)**: SE-13a (OQ-19 reading A, until the owner rules A), C-T2 (`socket2`, default "not M7") — dictated, built only if the decision flips. **(cond, owner action)**: G7-11 (after the owner's `miniz_oxide` vet record), G7-19 (after an ADR-018 acceptance), G7-20 (after `harness` joins the ruleset).
 
@@ -102,6 +102,7 @@ corpus, `KANI_HARNESSES`, `NORMAL_DEPENDENCY_ALLOW` edge) lands in the same comm
 | ST-17 | `messages::tests::view_once_never_written` [O-27] | CS-3.4; CS-1.14 `docs/04:35` | receive a view-once (kind 3) with canary; send one (queued, not yet relayed); close; FO-01a scan; decrypted page images | both canaries absent from every file and page, no `outbox`/`messages` row for either; received one in memory until revealed + 20 s; after a restart the unsent one is gone and the `Api` reports `ViewOnceLost(msg_id)` (Q125) | unit | A | 3 s |
 | ST-18 | `messages::tests::expire_after_deletes` [O-09] | CS-3.4; §7.6 `expire_after` `docs/03:507` | message with `expire_after` = 60; clock +59 s, +61 s | present; deleted (row gone); default retention setting = keep | unit | A | <1 s |
 | ST-19 | `secrets::tests::long_lived_keys_in_secret_pages` [O-32][O-01] | CS-2.2 `docs/04:44` | unlocked profile | `MK_profile`, `KEK`, table keys and IKS secrets are `SecretPage`-backed types (type assertion), zeroized on lock (kat probe) | unit | A | <1 s |
+| ST-20 | `secmp_store::tests::open_sets_defensive_mode` (added Q128, WEISUNG M7-A1b §6; A-3) | ADR-055 item 7 (upstream advisories: SQLite CVE-2026-11822/-11824, SQLCipher 4.15.0 defensive-mode fix) | open an existing and a new profile; `PRAGMA writable_schema=ON` then a direct write to `sqlite_master` | `SQLITE_DBCONFIG_DEFENSIVE` = 1 on every connection the store opens (`Connection::set_db_config`); the `sqlite_master` write is rejected and the schema is unchanged | unit | A | <1 s |
 
 ## (b) Persistence contract (CLAUDE.md §1.7; §7.5 `docs/03:488`; `docs/02:104`; OB-07) — Phase A
 

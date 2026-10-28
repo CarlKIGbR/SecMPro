@@ -1005,12 +1005,27 @@ crates allowed only in `secmp-crypto`.
    trust record **recorded by the owner** (named human; `docs/06:65`); their transitive deps in the zero-exemption crypto
    closure (`blake2`, `cpufeatures`; ADR-036, `docs/06:68`) need imports, RustCrypto publisher trust or owner delta
    audits — no exemption; `libsqlite3-sys`, `openssl-sys`, `openssl-src` (outside that closure) need a record or a tracked
-   exemption naming `rusqlite`; the reviewer's verifier reads the crates/deltas (Q72 precedent), the owner ratifies with one
+   exemption naming `rusqlite`; `password-hash` 0.6.1 and `phc` 0.6.1 are lock-only (optional dependencies of `argon2`, feature off, A0 probe §1; `phc` adds an edge to
+   `ctutils`) and need a vet record or a tracked exemption naming `argon2`; the reviewer's verifier reads the crates/deltas (Q72 precedent), the owner ratifies with one
    sentence. xtask's `miniz_oxide` (OPEN-M7-21) is asked for in the same memo item.
 6. *Gates.* `NORMAL_DEPENDENCY_ALLOW` (`xtask/src/expect.rs:35-66`) and the ADR-051 third-party table checked by
    `normal_dependencies_match_adr_allowlist` (`policy.rs:2434-2462`), always in the same commit: full rows `secmp-store`,
    `secmp-crypto` (14 deps + `argon2`) in A-2 (G7-01); store edges of client-core/testkit in A-3 (G7-06); `secmp-cli` in C (G7-21); `deny.toml` licenses: OpenSSL (Apache-2.0),
    SQLCipher (BSD-3-Clause) are in the allowlist — no new exception; cooldown ≥ 7 days for every new lock entry.
+
+7. *Upstream advisories (reviewer web check 2026-10-28; sources: `docs/reviews/M07-evidence/a0/upstream-advisories.md`).*
+   SQLite 3.50.4: CVE-2026-11822 and CVE-2026-11824 (heap write past the end; need attacker-supplied SQL, FTS5 and DEFENSIVE off; fixed
+   3.53.2), CVE-2025-70873 (zipfile extension only; fixed 3.53.0). SQLCipher 4.10.0: 4.15.0 fixes a defensive-mode bypass in
+   `sqlcipher_export` (CVSS 4.0 2.1 Low, no CVE id). OpenSSL 3.6.3: fixed in 3.6.4 — CVE-2026-63072, CVE-2026-63076, CVE-2026-18798
+   (Moderate: CMS, CMP, QUIC) and Low advisories incl. CVE-2026-75803 (AEAD forgery with empty ciphertext via `EVP_Cipher()`); fixed in
+   3.6.5 — CVE-2026-84782 (High, DTLS) and Low advisories incl. CVE-2026-54872 (timing, non-NIST EC). No RustSec or OSV advisory for
+   `libsqlite3-sys` 0.37.0, `rusqlite` 0.39.0, `openssl-sys` 0.9.117, `openssl-src` 300.6.1+3.6.3, `argon2` 0.6.0, `blake2` 0.11.0. The newest
+   `openssl-src` 300.x on crates.io is 300.6.1+3.6.3 (no 3.6.4 or 3.6.5 bundle); the newest `libsqlite3-sys` is 0.39.1; both pins follow
+   Arti's `links = "sqlite3"` unification (items 3 and 4). Exposure, as facts: the store executes no attacker-supplied SQL; FTS5 and the
+   zipfile extension are not used; OpenSSL is used only through SQLCipher (EVP AES-CBC, HMAC, PBKDF2) — no TLS, DTLS, QUIC, CMS, CMP or
+   OCSP (the SecMP TLS path is rustls/aws-lc-rs); the re-pin follows the next Arti move. Mitigation row ST-20
+   `secmp_store::tests::open_sets_defensive_mode` (reviewer, Q128; built in A-3): `SQLITE_DBCONFIG_DEFENSIVE` is set at every open and
+   a `PRAGMA writable_schema=ON` / direct `sqlite_master` write is rejected on an opened store.
 
 **A0 probe (precondition, report only, scratch crate outside the workspace).** Resolve the workspace pins + item 1 + item
 2 for the three targets of `VET_CLOSURE_TARGETS`, **and the same for `fuzz/Cargo.lock`** (the fuzz workspace gains

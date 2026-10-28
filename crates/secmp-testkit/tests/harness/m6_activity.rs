@@ -552,6 +552,14 @@ fn timing_draws_unmoved_by_one_hour_of_activity() {
     let idle = Rig::new(&sc, Params::default()).run(hours, None);
     assert!(idle.draws.len() == 1 && idle.draws.iter().all(|d| d.0 > 0 && d.1 > 0));
     let act = activity(900, hours, 2);
+    // the long form asserts no send count; the short form's trace must not be empty (WEISUNG M7-A1b §3): at least 100
+    let sends = act
+        .events
+        .iter()
+        .filter(|(_, e)| matches!(e, Event::UserSend { .. }))
+        .count();
+    println!("timing_draws_unmoved_by_one_hour_of_activity: {sends} user sends in the trace");
+    assert!(sends >= 100, "{sends} user sends");
     let run = Rig::new(&sc, Params::default()).run(hours, Some(&act));
     assert_eq!(run.draws, idle.draws);
 }

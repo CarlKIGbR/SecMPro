@@ -10229,7 +10229,22 @@ mod tests {
         assert!(block.contains("filter = 'test(/^m0_early::/)'\npriority = 100\n"));
         // another module name: the same profile and priority, only the filter follows the name
         let renamed = mutants_killer_profile("zz_killers");
-        assert!("zz_killers" > "m6_activity");
+        // the real override list: the one priority entry of the profile is the killer module's, with the highest priority
+        let overrides: Vec<&str> = config
+            .lines()
+            .filter(|l| {
+                l.trim_start().starts_with("filter = ") || l.trim_start().starts_with("priority =")
+            })
+            .collect();
+        assert_eq!(
+            overrides
+                .iter()
+                .skip_while(|l| !l.contains("m0_early::"))
+                .take(2)
+                .copied()
+                .collect::<Vec<_>>(),
+            ["filter = 'test(/^m0_early::/)'", "priority = 100"]
+        );
         assert_eq!(
             renamed.replace("zz_killers", expect::MUTANT_KILLER_MODULE),
             block

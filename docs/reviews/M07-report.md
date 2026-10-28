@@ -71,8 +71,8 @@ harness `m6_activity::timing_draws_unmoved_by_one_hour_of_activity`, `m6_sched_l
 
 | Gate | Result |
 |---|---|
-| `cargo xtask ci-fast` at `fa0adef` (`ci-fast-a1-fa0adef.txt`) | PASS: fmt 1 s, clippy, policy 1 s, deny, vet, audit, cooldown 23 s, nextest 18 s, doctest, hello, kat 93 s, harness 942 s |
-| `cargo xtask ci-fast` at `f6e2928` (`ci-fast-a1b-s5-f6e2928.txt`) | PASS: fmt 0 s, clippy, policy 1 s, deny, vet, audit 2 s, cooldown 24 s, nextest 16 s, doctest 1 s, hello, kat 92 s, harness 927 s |
+| `cargo xtask ci-fast` at `fa0adef` (`ci-fast-a1-fa0adef.txt`) | PASS: kat 93 s, harness 942 s |
+| `cargo xtask ci-fast` at `62c2dbc` (`ci-fast-a1c-62c2dbc.txt`, first line names the head, clean tree) | PASS: fmt 0 s, clippy 0 s, policy 1 s, deny 1 s, vet 1 s, audit 2 s, cooldown 23 s (561 packages), nextest 16 s, doctest 1 s, hello 0 s, kat 89 s, harness 1023 s |
 | `cargo xtask ci-full` | not run in A-1b |
 | Kani | see G7-12 row |
 | Fuzz / mutants / coverage / ct (full) | not run |

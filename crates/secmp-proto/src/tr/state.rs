@@ -397,3 +397,100 @@ fn skipped_is_canonical(skipped: &VecDeque<SkippedKey>) -> bool {
     }
     true
 }
+
+/// The length of one skipped entry of `RatchetStateV1`: `hk[32] ‖ n u32 ‖ mk[32]`.
+pub const SKIPPED_ENTRY_LEN: usize = ENTRY_LEN;
+
+/// The length of the key of a skipped entry inside the entry: `hk[32] ‖ n u32` (the entry's identity, spec §7.1).
+pub const SKIPPED_KEY_LEN: usize = sum(&[32, 4]);
+
+/// `RatchetStateV1` in the parts an incremental store keeps apart (CS-3.7 `docs/04:58`, `docs/02:102`; OPEN-M7-14 A):
+/// `fixed` holds every byte before `count`, `skipped` the entries `hk ‖ n ‖ mk` in insertion order. The layout is the
+/// frozen one: [`RatchetParts::to_bytes`] = `fixed ‖ count u16 ‖ entries` = [`RatchetState::to_bytes`].
+pub struct RatchetParts {
+    /// The fixed part (format byte through `pn`).
+    pub fixed: Zeroizing<Vec<u8>>,
+    /// The skipped entries, [`SKIPPED_ENTRY_LEN`] bytes each, in insertion order.
+    pub skipped: Vec<Zeroizing<Vec<u8>>>,
+}
+
+impl RatchetParts {
+    /// Split an encoding at its `count` (the lengths only: every check of a state is [`RatchetState::from_parts`]'s).
+    ///
+    /// # Errors
+    /// [`Error::Rejected`] if the bytes are not shaped as `RatchetStateV1` (format byte, presence bytes, lengths, `count`
+    /// ≤ 512, no trailing byte).
+    pub fn split(bytes: &[u8]) -> Result<Self> {
+        let mut r = Reader::new(bytes);
+        r.expect(FORMAT_V1)?;
+        r.take(HASH_LEN)?;
+        r.take(32)?;
+        r.take(32)?;
+        read_opt(&mut r, X25519_PK_LEN)?;
+        r.take(SEED_LEN)?;
+        read_opt(&mut r, MLKEM768_EK_LEN)?;
+        read_opt(&mut r, MLKEM768_CT_LEN)?;
+        read_opt(&mut r, MLKEM768_CT_LEN)?;
+        for _ in 0..6 {
+            read_opt(&mut r, 32)?;
+        }
+        r.u32()?;
+        r.u32()?;
+        r.u32()?;
+        let fixed_len = bytes
+            .len()
+            .checked_sub(r.rest().len())
+            .ok_or(Error::Rejected)?;
+        let mut r = Reader::new(bytes.get(fixed_len..).ok_or(Error::Rejected)?);
+        let count = usize::from(r.u16()?);
+        if count > MAX_SKIPPED {
+            return Err(Error::Rejected);
+        }
+        let mut skipped = Vec::with_capacity(count);
+        for _ in 0..count {
+            skipped.push(Zeroizing::new(r.take(SKIPPED_ENTRY_LEN)?.to_vec()));
+        }
+        r.finish()?;
+        Ok(Self {
+            fixed: Zeroizing::new(bytes.get(..fixed_len).ok_or(Error::Rejected)?.to_vec()),
+            skipped,
+        })
+    }
+
+    /// `fixed ‖ count u16 ‖ entries`.
+    ///
+    /// # Errors
+    /// [`Error::Rejected`] if there are more than 512 entries or an entry is not [`SKIPPED_ENTRY_LEN`] bytes.
+    pub fn to_bytes(&self) -> Result<Zeroizing<Vec<u8>>> {
+        if self.skipped.len() > MAX_SKIPPED
+            || self.skipped.iter().any(|e| e.len() != SKIPPED_ENTRY_LEN)
+        {
+            return Err(Error::Rejected);
+        }
+        let mut w = Writer::with_capacity(RatchetState::MAX_ENCODED_LEN);
+        w.bytes(&self.fixed);
+        w.u16(u16::try_from(self.skipped.len()).map_err(|_| Error::Rejected)?);
+        for e in &self.skipped {
+            w.bytes(e);
+        }
+        Ok(w.into_bytes())
+    }
+}
+
+impl RatchetState {
+    /// The state in its parts ([`RatchetParts`]): the encoding `RatchetStateV1`, split at `count`.
+    ///
+    /// # Errors
+    /// As [`RatchetState::to_bytes`].
+    pub fn to_parts(&self) -> Result<RatchetParts> {
+        RatchetParts::split(&self.to_bytes()?)
+    }
+
+    /// The state from its parts: [`RatchetState::from_bytes`] of [`RatchetParts::to_bytes`] (every check of the decoder).
+    ///
+    /// # Errors
+    /// As [`RatchetState::from_bytes`].
+    pub fn from_parts(parts: &RatchetParts) -> Result<Self> {
+        Self::from_bytes(&parts.to_bytes()?)
+    }
+}

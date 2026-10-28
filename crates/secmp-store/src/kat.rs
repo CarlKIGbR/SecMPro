@@ -105,7 +105,7 @@ pub enum CrashAt {
     AfterCommitBeforeWrite,
     /// After the frame is written, before `OK_SEND` reaches the outbox.
     AfterWriteBeforeOkSend,
-    /// Inside a store transaction, after its k-th statement (1-based).
+    /// Inside a store transaction, after its k-th statement (1-based) — after the last one, before the commit point.
     MidTxn(u32),
     /// After a received cell is decrypted, before its decision is committed.
     AfterDecryptBeforeCommit,

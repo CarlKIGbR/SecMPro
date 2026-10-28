@@ -769,6 +769,14 @@ mod tests {
         Ok(())
     }
 
+    /// The reproduction of the CI-seed run of package `p` among `seeded` (A-3: `secmp-client-core` runs first).
+    fn seeded_run(seeded: &[NextestRun], p: &str) -> Option<String> {
+        seeded
+            .iter()
+            .map(NextestRun::reproduction)
+            .find(|r| r.contains(&format!("--package {p} ")))
+    }
+
     /// TEST-SPEC-M6 G-10 (M5 review R-155, CLAUDE.md §6): no `#[ignore]` in a first-party Rust file unless
     /// `expect::IGNORE_ADR` lists the file (empty); the fixtures prove the detection and the listing.
     #[test]
@@ -921,7 +929,7 @@ mod tests {
         );
         // the verdict line (ADR-045 summary rows) and the failure message carry the seed and the reproduction
         assert_eq!(
-            seeded.first().map(NextestRun::reproduction).as_deref(),
+            seeded_run(&seeded, "secmp-proto").as_deref(),
             Some(
                 "SECMP_PROPTEST_SEED=37041956810 cargo nextest run --locked --package secmp-proto --features kat -E 'test(/(^|::)prop_/) | binary_id(=secmp-proto::canonical) | binary_id(=secmp-proto::tr_properties)'"
             )
@@ -1281,6 +1289,7 @@ mod tests {
             "a::range::prop_r: its package is not in PROPERTY_PACKAGES (no CI-seed pass)",
             "a::range::prop_unreached: its package is not in PROPERTY_PACKAGES (no CI-seed pass)",
             "b::bin::prop_via_main: its package is not in PROPERTY_PACKAGES (no CI-seed pass)",
+            "PROPERTY_PACKAGES: secmp-client-core holds no property test (stale entry)",
             "PROPERTY_PACKAGES: secmp-proto holds no property test (stale entry)",
             "PROPERTY_PACKAGES: secmp-relay holds no property test (stale entry)",
             "PROPERTY_PACKAGES: secmp-testkit holds no property test (stale entry)",

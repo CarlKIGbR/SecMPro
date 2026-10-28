@@ -14,13 +14,16 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use secmp_crypto::{HybridVerifyingKey, Zeroizing};
 use secmp_proto::Encode;
 use secmp_proto::tr::content::{Delivery, Inbox, Trust, dummy, split_chunks};
-use secmp_proto::tr::{Entropy, OsEntropy, RatchetState};
+use secmp_proto::tr::{Entropy, OsEntropy, RatchetParts, RatchetState};
 use secmp_proto::wire::cell::{
     AppKind, AppMessage, BatchBody, Cell, Content, ContentBody, Fragment, FragmentPayload,
     ReceiptBody, ReceiptKind,
 };
 
-use crate::scheduler::outbox::{MsgId, OutMessage, Outbox, Persist, PersistKind};
+use crate::scheduler::outbox::{
+    CommitParts, DeliveredMessage, MsgId, OutMessage, Outbox, Persist, PersistError, PersistKind,
+    trust_code,
+};
 use crate::scheduler::types::{
     CellSource, CellToken, PreparedCell, QueueId, SendFailure, SourceError,
 };
@@ -243,6 +246,11 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
         Ok(self)
     }
 
+    /// The messages already delivered by an earlier run (the history of the store): the dedup set after a restart.
+    pub fn seed_seen(&mut self, ids: impl IntoIterator<Item = MsgId>) {
+        self.seen.extend(ids);
+    }
+
     /// The scheduler queues of this conversation.
     pub const fn bind(&mut self, send: QueueId, recv: QueueId) {
         self.send_queue = Some(send);
@@ -453,9 +461,18 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
         let persist = &mut self.persist;
         let result = sealed.persist(|bytes| {
             counters::note_persist();
-            persist.commit(PersistKind::Send, bytes)?;
+            let ratchet = RatchetParts::split(bytes).map_err(|_| PersistError)?;
+            persist.commit_parts(
+                PersistKind::Send,
+                &CommitParts {
+                    ratchet: &ratchet,
+                    inbox: None,
+                    trust: None,
+                    delivered: &[],
+                },
+            )?;
             *new_durable = Zeroizing::new(bytes.to_vec());
-            Ok::<(), crate::scheduler::outbox::PersistError>(())
+            Ok::<(), PersistError>(())
         });
         if let Ok((state, cell)) = result {
             // a key counts as used once its state is durable: a cell that was never persisted was never released
@@ -603,14 +620,46 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
         let mut inbox = self.inbox.clone();
         let mut trust = self.trust;
         let delivery = inbox.receive(opened.plaintext(), &self.peer, &mut trust);
+        // the messages this cell delivers for the first time are durable with the state that consumed it
+        let fresh: Vec<DeliveredMessage<'_>> = match &delivery {
+            Delivery::Messages(messages) => messages
+                .iter()
+                .filter(|m| !self.seen.contains(&m.msg_id))
+                .map(|m| DeliveredMessage {
+                    msg_id: m.msg_id,
+                    kind: m.kind.byte(),
+                    payload: m.payload.as_slice(),
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
+        // the reassembly state when it is or was non-empty, the trust when it changed: in the same commit (PC-09)
+        let inbox_changed = inbox.partials() != 0 || self.inbox.partials() != 0;
+        let trust_changed = (trust != self.trust).then_some(trust_code(trust));
         let durable = &mut self.durable;
         let persist = &mut self.persist;
+        let staged = &inbox;
         let committed = opened.commit(|bytes| {
             counters::note_persist();
-            persist.commit(PersistKind::Receive, bytes)?;
+            let ratchet = RatchetParts::split(bytes).map_err(|_| PersistError)?;
+            let inbox_bytes = if inbox_changed {
+                Some(staged.to_bytes().map_err(|_| PersistError)?)
+            } else {
+                None
+            };
+            persist.commit_parts(
+                PersistKind::Receive,
+                &CommitParts {
+                    ratchet: &ratchet,
+                    inbox: inbox_bytes.as_ref().map(|b| b.as_slice()),
+                    trust: trust_changed,
+                    delivered: &fresh,
+                },
+            )?;
             *durable = Zeroizing::new(bytes.to_vec());
-            Ok::<(), crate::scheduler::outbox::PersistError>(())
+            Ok::<(), PersistError>(())
         });
+        drop(fresh);
         if let Ok((state, _plaintext)) = committed {
             self.state = Some(state);
             self.inbox = inbox;

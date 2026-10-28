@@ -10,6 +10,7 @@
 //! back to *queued*: it is re-encrypted under a new key and sent again, the receiver deduplicates by `msg_id`.
 
 use secmp_crypto::Zeroizing;
+use secmp_proto::tr::RatchetParts;
 use secmp_proto::wire::Id;
 use secmp_proto::wire::cell::AppKind;
 
@@ -232,6 +233,43 @@ pub enum PersistKind {
     Receive,
 }
 
+/// A message a receiving commit records as delivered: the history row and the dedup key are durable together with the
+/// ratchet state that consumed its cell (persist-before-ack covers the delivery, PC-05).
+pub struct DeliveredMessage<'a> {
+    /// Its id.
+    pub msg_id: MsgId,
+    /// `AppMessage.kind`.
+    pub kind: u8,
+    /// The payload.
+    pub payload: &'a [u8],
+}
+
+/// What one commit makes durable together, in one store transaction (OPEN-M7-14 A; PC-09): the ratchet state in its
+/// parts (CS-3.7: fixed part and skipped entries), and with a received cell the reassembly state, the trust and the
+/// messages the cell delivered.
+pub struct CommitParts<'a> {
+    /// The ratchet state.
+    pub ratchet: &'a RatchetParts,
+    /// The reassembly state (`Inbox`), when it changed.
+    pub inbox: Option<&'a [u8]>,
+    /// The trust, when it changed.
+    pub trust: Option<u8>,
+    /// The messages delivered by the received cell.
+    pub delivered: &'a [DeliveredMessage<'a>],
+}
+
+/// The code of a trust in [`CommitParts::trust`] (the `sessions` trust row).
+#[must_use]
+pub const fn trust_code(trust: secmp_proto::tr::content::Trust) -> u8 {
+    use secmp_proto::tr::content::Trust;
+    match trust {
+        Trust::Unverified => 0,
+        Trust::Verified => 1,
+        Trust::KeyChanged => 2,
+        Trust::Frozen => 3,
+    }
+}
+
 /// Where a ratchet state becomes durable (the encrypted store of M7).
 pub trait Persist {
     /// Make `state` (the serialised `RatchetStateV1`) durable.
@@ -239,6 +277,20 @@ pub trait Persist {
     /// # Errors
     /// [`PersistError`]: nothing is durable; the caller neither sends nor acknowledges.
     fn commit(&mut self, kind: PersistKind, state: &[u8]) -> Result<(), PersistError>;
+
+    /// Make `parts` durable in one commit; the default writes the whole state ([`Persist::commit`]) and keeps nothing
+    /// else (the in-memory durability); an incremental store overrides it.
+    ///
+    /// # Errors
+    /// [`PersistError`]: nothing is durable; the caller neither sends nor acknowledges.
+    fn commit_parts(
+        &mut self,
+        kind: PersistKind,
+        parts: &CommitParts<'_>,
+    ) -> Result<(), PersistError> {
+        let bytes = parts.ratchet.to_bytes().map_err(|_| PersistError)?;
+        self.commit(kind, &bytes)
+    }
 }
 
 /// The in-memory durability: the last durable state, counters, and failure injection for the tests.
@@ -251,6 +303,8 @@ pub struct MemPersist {
     fail_from: Option<u64>,
     /// The next commit is made durable and then the "process dies": it reports an error to the caller.
     crash_after: bool,
+    /// A second durability every commit goes to first (the store behind the in-memory copy in the tests, PC-03).
+    mirror: Option<Box<dyn Persist + Send>>,
 }
 
 impl MemPersist {
@@ -263,7 +317,13 @@ impl MemPersist {
             fail: false,
             fail_from: None,
             crash_after: false,
+            mirror: None,
         }
+    }
+
+    /// Make every later commit durable in `mirror` first (its failure fails the commit); the in-memory copy follows.
+    pub fn set_mirror(&mut self, mirror: Box<dyn Persist + Send>) {
+        self.mirror = Some(mirror);
     }
 
     /// The last durable state.
@@ -303,11 +363,41 @@ impl MemPersist {
     }
 }
 
+impl MemPersist {
+    fn refuses(&self) -> bool {
+        self.fail || self.fail_from.is_some_and(|n| self.commits >= n)
+    }
+}
+
 impl Persist for MemPersist {
-    fn commit(&mut self, _kind: PersistKind, state: &[u8]) -> Result<(), PersistError> {
-        if self.fail || self.fail_from.is_some_and(|n| self.commits >= n) {
+    fn commit(&mut self, kind: PersistKind, state: &[u8]) -> Result<(), PersistError> {
+        if self.refuses() {
             return Err(PersistError);
         }
+        if let Some(m) = self.mirror.as_mut() {
+            m.commit(kind, state)?;
+        }
+        self.keep(state)
+    }
+
+    fn commit_parts(
+        &mut self,
+        kind: PersistKind,
+        parts: &CommitParts<'_>,
+    ) -> Result<(), PersistError> {
+        if self.refuses() {
+            return Err(PersistError);
+        }
+        if let Some(m) = self.mirror.as_mut() {
+            m.commit_parts(kind, parts)?;
+        }
+        let bytes = parts.ratchet.to_bytes().map_err(|_| PersistError)?;
+        self.keep(&bytes)
+    }
+}
+
+impl MemPersist {
+    fn keep(&mut self, state: &[u8]) -> Result<(), PersistError> {
         self.durable = Some(Zeroizing::new(state.to_vec()));
         self.commits = self.commits.saturating_add(1);
         if self.crash_after {

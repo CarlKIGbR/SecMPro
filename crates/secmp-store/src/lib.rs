@@ -19,6 +19,7 @@ mod error;
 pub mod messages;
 pub mod migrate;
 pub mod schema;
+pub mod sessions;
 pub mod store;
 
 #[cfg(any(test, feature = "kat"))]

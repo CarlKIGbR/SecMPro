@@ -221,6 +221,11 @@ impl Store {
             let mut t = Tx { tx, statements: 0 };
             let out = f(&mut t);
             let Tx { tx, statements } = t;
+            // `kat::CrashAt::MidTxn(k)` after the last statement: before the commit point
+            #[cfg(any(test, feature = "kat"))]
+            if out.is_ok() && statements > 0 {
+                crate::kat::crash_point(crate::kat::CrashAt::MidTxn(statements));
+            }
             let result = match out {
                 Ok(v) => tx.commit().map(|()| v).map_err(|_| Error::Unavailable),
                 Err(e) => {

@@ -23,6 +23,7 @@ harness = [
     "secmp-relay/direct-tls",
     "secmp-transport/harness",
     "secmp-client-core/kat",
+    "secmp-store/kat",
 ]
 kat = ["harness"]
 

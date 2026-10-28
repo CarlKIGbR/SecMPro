@@ -12,7 +12,7 @@ publish.workspace = true
 # `kat`: seeded timing randomness, the counting accessors (`tr_encrypt_calls`, `persist_calls`, `timing_draws`) and
 # the derandomised ratchet entropy for the scheduler tests (TEST-SPEC-M6 "Conventions"); never in a shipped build.
 [features]
-kat = ["secmp-proto/kat", "secmp-crypto/kat", "secmp-transport/harness"]
+kat = ["secmp-proto/kat", "secmp-crypto/kat", "secmp-transport/harness", "secmp-store/kat"]
 
 # docs/02 §3: workspace crates plus `tokio` for `scheduler::run`, the driver of the sans-IO scheduler core (ADR-051
 # Part 1.1, Part 2). The store (`secmp-store`) is M7: the scheduler sees only the `Outbox` and `Persist` traits (OB-07).

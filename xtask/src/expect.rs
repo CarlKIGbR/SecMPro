@@ -172,6 +172,12 @@ pub(crate) const AUDIT_IGNORES: &[(&str, &str)] = &[
     ),
 ];
 
+/// TEST-SPEC-M7 ST-02 (CS-3.1, ADR-055 item 4, Q119): the oldest SQLCipher the store accepts — the version
+/// `libsqlite3-sys` 0.37.0 bundles (`sqlcipher/sqlite3.c:108426`). `secmp_store::SQLCIPHER_MIN` holds the same value as a
+/// tuple (`expect::tests::sqlcipher_min_matches_store`); it moves with Arti.
+#[cfg(test)]
+pub(crate) const SQLCIPHER_MIN: &str = "4.10.0";
+
 /// Cooldown exceptions (ADR-015 Amendment 2) as (crate, version, until = publish date + 7 days, advisory): a version
 /// younger than 7 days that closes a RUSTSEC advisory on a pinned crate, kept until the cooldown it bridges is over; an
 /// entry past its `until` date is itself a cooldown finding. The delta diff is in `docs/reviews/MNN-evidence/vet-deltas/`.
@@ -190,6 +196,7 @@ pub(crate) const KAT_PACKAGES: &[&str] = &[
     "secmp-crypto",
     "secmp-proto",
     "secmp-relay",
+    "secmp-store",
     "secmp-testkit",
 ];
 
@@ -2086,6 +2093,26 @@ fn normal_dependency_allow_m7() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// TEST-SPEC-M7 ST-02 (extra test): xtask's `SQLCIPHER_MIN` and the store's own minimum are the same version.
+    #[test]
+    fn sqlcipher_min_matches_store() -> crate::util::Result<()> {
+        let src = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../crates/secmp-store/src/store.rs"),
+        )?;
+        let tuple = SQLCIPHER_MIN.replace('.', ", ");
+        assert_eq!(
+            src.matches(&format!(
+                "pub const SQLCIPHER_MIN: (u32, u32, u32) = ({tuple});"
+            ))
+            .count(),
+            1,
+            "secmp_store::SQLCIPHER_MIN = ({tuple})"
+        );
+        assert_eq!(SQLCIPHER_MIN, "4.10.0");
+        Ok(())
+    }
 
     /// TEST-SPEC-M7 G7-16 (OPEN-M7-41): `cargo audit` ignores exactly the advisories of ADR-037 and ADR-051 Am. 1 and
     /// Am. 6; RUSTSEC-2026-0387 (`crypto-bigint` 0.5.5) stays until `arti-client` moves, and M7 adds no ignore.

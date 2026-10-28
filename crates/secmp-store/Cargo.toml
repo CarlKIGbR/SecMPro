@@ -9,6 +9,11 @@ license.workspace = true
 repository.workspace = true
 publish.workspace = true
 
+# `kat`: the fixed test key, temporary profiles, failure and crash injection and the counting accessors (TEST-SPEC-M7
+# "Conventions"); never in a shipped build (ST-09).
+[features]
+kat = ["secmp-crypto/kat", "secmp-proto/kat"]
+
 [dependencies]
 rusqlite.workspace = true
 secmp-crypto.workspace = true

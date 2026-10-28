@@ -558,7 +558,10 @@ fn timing_draws_unmoved_by_one_hour_of_activity() {
         .iter()
         .filter(|(_, e)| matches!(e, Event::UserSend { .. }))
         .count();
-    println!("timing_draws_unmoved_by_one_hour_of_activity: {sends} user sends in the trace");
+    evidence(
+        "timing_draws_unmoved_by_one_hour_of_activity",
+        &format!("timing_draws_unmoved_by_one_hour_of_activity: {sends} user sends in the trace"),
+    );
     assert!(sends >= 100, "{sends} user sends");
     let run = Rig::new(&sc, Params::default()).run(hours, Some(&act));
     assert_eq!(run.draws, idle.draws);

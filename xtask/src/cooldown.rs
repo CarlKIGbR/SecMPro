@@ -526,6 +526,52 @@ mod tests {
         Ok(())
     }
 
+    /// TEST-SPEC-M7 G7-04 (ADR-055): the lock entries of the M7 dependency set are registry packages at the pinned versions in
+    /// `Cargo.lock` (six new; `fuzz/Cargo.lock` four of them), each published at least 7 days before the date of the entry
+    /// below (the dates are the crates.io `pubtime`s of `docs/reviews/M07-evidence/a0/pubtimes.txt`, checked by the network
+    /// `cooldown` step against the index); `COOLDOWN_EXCEPTIONS` is unchanged.
+    #[test]
+    fn cooldown_covers_m7_lock() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let registry = |lock: &str, n: &str, v: &str| {
+            parse_lock(&std::fs::read_to_string(root.join(lock)).unwrap_or_default())
+                .iter()
+                .any(|p| {
+                    p.name == n
+                        && p.version == v
+                        && p.source
+                            .as_deref()
+                            .is_some_and(|s| CRATES_IO_SOURCES.contains(&s))
+                })
+        };
+        // (crate, version, pubtime day, in fuzz/Cargo.lock too)
+        let new = [
+            ("argon2", "0.6.0", "2026-08-27", true),
+            ("blake2", "0.11.0", "2026-08-26", true),
+            ("password-hash", "0.6.1", "2026-04-08", true),
+            ("phc", "0.6.1", "2026-03-09", true),
+            ("openssl-sys", "0.9.117", "2026-06-12", false),
+            ("openssl-src", "300.6.1+3.6.3", "2026-06-09", false),
+        ];
+        // the youngest of the six is 60 days old on 2026-10-28; 7 days before the first day of M7's dependency commit
+        let cutoff = "2026-10-21";
+        for (n, v, day, fuzz) in new {
+            assert!(registry("Cargo.lock", n, v), "{n} {v} in Cargo.lock");
+            assert_eq!(
+                registry("fuzz/Cargo.lock", n, v),
+                fuzz,
+                "{n} {v} in fuzz/Cargo.lock"
+            );
+            assert!(day <= cutoff, "{n} {v}: {day} is younger than 7 days");
+            assert!(day_of(day).is_ok());
+        }
+        assert_eq!(
+            crate::expect::COOLDOWN_EXCEPTIONS.len(),
+            1,
+            "no new exception"
+        );
+    }
+
     /// TEST-SPEC-M6 X-01: the cooldown gate covers the M6 lock — `Cargo.lock` is one of its inputs, every ADR-051 Part 2
     /// pin is a crates.io package of it (so the gate fetches its `pubtime`), and the only exception is the rustls entry of
     /// ADR-015 Amendment 2, naming a package that is in the lock at exactly that version. The ages themselves are the

@@ -19,6 +19,12 @@ criteria = "safe-to-deploy"
 delta = "0.10.0 -> 0.10.1"
 notes = "delta audit by implementer; reviewer read; owner approved. ADR-036 (3). Diff: docs/reviews/M01-evidence/vet-deltas/rand_core-0.10.0-0.10.1.diff (CHANGELOG, version bump, two doc-comment links; no code change). Owner approval: Christopher Carl, 2026-09-29 (M1 review §D)."
 
+[[audits.rusqlite]]
+who = "Claude Sonnet 5.5 (implementer) + reviewer's verifier; owner ratification pending (Q129)"
+criteria = "safe-to-deploy"
+version = "0.39.0"
+notes = "Provisional (ADR-055, Q129). Read by the implementer: src/inner_connection.rs (open_with_flags, close, prepare: sqlite3_open_v2/close/prepare_v3 via FFI, busy timeout 5000 ms set at open), src/raw_statement.rs and src/util/sqlite_string.rs (statement, bind and string-ownership FFI sites); unsafe sites ~250 across src/ (session, functions, trace, serialize, hooks are feature-gated or unused by secmp-store); FFI boundary = libsqlite3-sys only; no network; no build script in rusqlite itself (the build script is libsqlite3-sys's, exempted); bundled-sqlcipher-vendored-openssl feature path = feature forwarding to libsqlite3-sys. Not read: the C code (SQLCipher 4.10.0, SQLite 3.50.4, OpenSSL 3.6.3) and the remaining modules. Reviewed at every release and at every bump."
+
 [[audits.rustls]]
 who = "Christopher Carl (owner), delta audit by reviewer Fable"
 criteria = "safe-to-deploy"
@@ -63,6 +69,13 @@ user-id = 189 # Andrew Gallant (BurntSushi)
 start = "2019-03-28"
 end = "2027-09-28"
 notes = "Publisher trust (docs/06 §3, ADR-015 update of the M0 review): publisher trusted by >= 2 imported audit sets (Mozilla, ISRG, Bytecode Alliance); reviewed at every release."
+
+[[trusted.argon2]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:RustCrypto/password-hashes"
+start = "2026-08-27"
+end = "2027-10-28"
+notes = "Publisher trust (ADR-036 (2), docs/06 §3): RustCrypto trusted-publishing identity for argon2, chosen by ADR-055 item 2; provisional, owner ratification pending (Q129). Compensating controls: ST-08 RFC 9106 KAT on every target, mutation gate. Read by the implementer: argon2 0.6.0 src/{lib,block,memory,params,algorithm,blake2b_long}.rs; `unsafe` in block.rs (alloc_zeroed/dealloc/from_raw_parts_mut of the block matrix, each with a SAFETY comment), memory.rs (Send/Sync for a private pointer type, SegmentView::new and get_block/get_block_mut behind bounds and aliasing asserts) and lib.rs (AVX2 compress behind runtime detection); the 256 MiB working matrix is deallocated, not zeroized, on drop (only the initial hash is); no build script. Reviewed at every release."
 
 [[trusted.arti-client]]
 criteria = "safe-to-deploy"
@@ -114,6 +127,13 @@ criteria = "safe-to-deploy"
 user-id = 267 # Tony Arcieri (tarcieri)
 start = "2021-01-21"
 end = "2027-10-01"
+
+[[trusted.blake2]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:RustCrypto/hashes"
+start = "2026-08-26"
+end = "2027-10-28"
+notes = "Publisher trust (ADR-036 (2), docs/06 §3): RustCrypto trusted-publishing identity for blake2, chosen by ADR-055 item 2; provisional, owner ratification pending (Q129). Compensating controls: ST-08 RFC 9106 KAT on every target, mutation gate. Read by the implementer: blake2 0.11.0 src/{lib,simd,macros,consts}.rs; the one `unsafe` is simd.rs `as_bytes` (a #[repr] vector viewed as bytes); no build script. Reviewed at every release."
 
 [[trusted.block-buffer]]
 criteria = "safe-to-deploy"
@@ -660,6 +680,20 @@ criteria = "safe-to-deploy"
 user-id = 267 # Tony Arcieri (tarcieri)
 start = "2023-03-04"
 end = "2027-10-01"
+
+[[trusted.password-hash]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:RustCrypto/traits"
+start = "2026-04-08"
+end = "2027-10-28"
+notes = "Publisher trust (ADR-036 (2), docs/06 §3): RustCrypto trusted-publishing identity for password-hash, a transitive dependency of argon2 (ADR-055 item 5) inside the zero-exemption crypto closure; provisional, owner ratification pending (Q129). Compensating controls: ST-08 RFC 9106 KAT on every target, mutation gate. Read by the implementer: nothing — no code of this crate is compiled into any target (argon2's `password-hash` feature is off, `cargo tree -i` prints nothing: A0 probe §1); the record rests on the publisher identity and on that fact. Reviewed at every release."
+
+[[trusted.phc]]
+criteria = "safe-to-deploy"
+trusted-publisher = "github:RustCrypto/formats"
+start = "2026-03-09"
+end = "2027-10-28"
+notes = "Publisher trust (ADR-036 (2), docs/06 §3): RustCrypto trusted-publishing identity for phc, a transitive dependency of argon2 (ADR-055 item 5) inside the zero-exemption crypto closure; provisional, owner ratification pending (Q129). Compensating controls: ST-08 RFC 9106 KAT on every target, mutation gate. Read by the implementer: nothing — no code of this crate is compiled into any target (it sits under `password-hash`, which is not built: A0 probe §1); the record rests on the publisher identity and on that fact. Reviewed at every release."
 
 [[trusted.pkcs1]]
 criteria = "safe-to-deploy"

@@ -1,6 +1,6 @@
 ### ADR-055 — M7 dependency set: `rusqlite` with bundled SQLCipher/OpenSSL in `secmp-store`, `argon2` in `secmp-crypto`
 
-**Status.** Proposed (planner, 2026-10-27; M7 planning, OPEN-M7-03, reviewer decision Q82). **OWNER class** (shipped
+**Status.** Accepted (Owner default, memo 2026-10-27 item 3, effective 2026-10-28 19:08 UTC; vet records of the direct dependencies provisional — Q129, owner ratification pending). Proposed by the planner 2026-10-27 (M7 planning, OPEN-M7-03, reviewer decision Q82). **OWNER class** (shipped
 dependencies, `cargo vet` records by a named human, build inputs; CLAUDE.md §1.9, `docs/06:65`). **Ratification
 precondition:** the Phase A step A0 probe report (below) is delivered and read by the reviewer; then the owner writes
 "ADR-055 accepted" and records the vet entries. No `Cargo.toml` change before both. Extends ADR-020, ADR-027 (M0 outcome),

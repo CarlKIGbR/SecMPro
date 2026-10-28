@@ -1710,6 +1710,7 @@ mod tests {
             "secmp-transport",
             "secmp-client-core",
             "secmp-testkit",
+            "secmp-store",
             "secmp-crypto",
             "secmp-proto",
         ];
@@ -2451,6 +2452,27 @@ mod tests {
             ),
             ("secmp-client-core", &["tokio"]),
             ("secmp-testkit", &["serde_json", "tokio"]),
+            // ADR-055
+            ("secmp-store", &["rusqlite"]),
+            (
+                "secmp-crypto",
+                &[
+                    "argon2",
+                    "chacha20",
+                    "chacha20poly1305",
+                    "ed25519-dalek",
+                    "getrandom",
+                    "hkdf",
+                    "hmac",
+                    "libcrux-ml-kem",
+                    "ml-dsa",
+                    "sha2",
+                    "sha3",
+                    "subtle",
+                    "x25519-dalek",
+                    "zeroize",
+                ],
+            ),
         ];
         for (krate, allowed) in expect::NORMAL_DEPENDENCY_ALLOW {
             let third: Vec<&str> = allowed

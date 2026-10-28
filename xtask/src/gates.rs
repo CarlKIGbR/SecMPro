@@ -8895,6 +8895,181 @@ mod tests {
         assert_eq!(win_cmd_bare_optional_findings(&last).len(), 1);
     }
 
+    /// The text of a repository file, line endings normalised.
+    fn m7_repo_file(rel_path: &str) -> Result<String> {
+        Ok(lf(&std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("..")
+                .join(rel_path),
+        )?))
+    }
+
+    /// The text of the `[[<table>.<name>]]` blocks of a vet file (up to the next `[[`).
+    fn vet_blocks(text: &str, table: &str, name: &str) -> Vec<String> {
+        let head = format!("[[{table}.{name}]]\n");
+        text.split("\n\n")
+            .filter(|b| b.starts_with(&head))
+            .map(str::to_owned)
+            .collect()
+    }
+
+    /// TEST-SPEC-M7 G7-02 (ADR-055 item 5, Q129): the vet records of the M7 dependency set. `argon2` and `blake2` (the
+    /// zero-exemption crypto closure) are covered by publisher trust of their RustCrypto repositories, provisional with the
+    /// owner's ratification pending; `rusqlite`, now a direct dependency of `secmp-store`, has a full audit by the
+    /// implementer (provisional, same wording) and no exemption any more; the build inputs and the lock-only crates are
+    /// tracked exemptions that say so; `check_vet_closure` stays zero-exemption with `argon2` and `blake2` in the closure.
+    /// `cargo vet --locked` itself is the `vet` step.
+    #[test]
+    fn vet_records_for_m7_closure() -> Result<()> {
+        let audits = m7_repo_file("supply-chain/audits.toml")?;
+        let config = m7_repo_file("supply-chain/config.toml")?;
+        for (krate, publisher, version) in [
+            ("argon2", "github:RustCrypto/password-hashes", "0.6.0"),
+            ("blake2", "github:RustCrypto/hashes", "0.11.0"),
+            // lock-only under argon2 but inside the zero-exemption closure: publisher trust, not an exemption (A-2 finding)
+            ("password-hash", "github:RustCrypto/traits", "0.6.1"),
+            ("phc", "github:RustCrypto/formats", "0.6.1"),
+        ] {
+            let blocks = vet_blocks(&audits, "trusted", krate);
+            assert_eq!(blocks.len(), 1, "{krate}");
+            let b = blocks.first().map_or("", String::as_str);
+            assert!(b.contains("criteria = \"safe-to-deploy\""), "{krate}");
+            assert!(
+                b.contains(&format!("trusted-publisher = \"{publisher}\"")),
+                "{krate}"
+            );
+            assert!(
+                b.contains("provisional, owner ratification pending (Q129)"),
+                "{krate}"
+            );
+            assert!(
+                b.contains("ADR-055 item") && b.contains("Read by the implementer:"),
+                "{krate}"
+            );
+            let _ = version;
+            assert!(
+                vet_blocks(&config, "exemptions", krate).is_empty(),
+                "{krate} has no exemption"
+            );
+        }
+        let rusqlite = vet_blocks(&audits, "audits", "rusqlite");
+        assert_eq!(rusqlite.len(), 1);
+        let r = rusqlite.first().map_or("", String::as_str);
+        assert!(r.contains("version = \"0.39.0\"") && r.contains("criteria = \"safe-to-deploy\""));
+        assert!(r.contains("who = \"Claude Sonnet 5.5 (implementer) + reviewer's verifier; owner ratification pending (Q129)\""));
+        assert!(
+            vet_blocks(&config, "exemptions", "rusqlite").is_empty(),
+            "rusqlite has a record, no exemption"
+        );
+        for (krate, version, needle) in [
+            (
+                "libsqlite3-sys",
+                "0.37.0",
+                "rusqlite (secmp-store, ADR-055) and arti-client",
+            ),
+            (
+                "openssl-sys",
+                "0.9.117",
+                "ADR-055 item 5, build input of the vendored OpenSSL",
+            ),
+            (
+                "openssl-src",
+                "300.6.1+3.6.3",
+                "ADR-055 item 5, build input of the vendored OpenSSL",
+            ),
+        ] {
+            let blocks = vet_blocks(&config, "exemptions", krate);
+            assert_eq!(blocks.len(), 1, "{krate}");
+            let b = blocks.first().map_or("", String::as_str);
+            assert!(b.contains(&format!("version = \"{version}\"")), "{krate}");
+            assert!(
+                b.contains("Tracked exemption (supply-chain/README.md):") && b.contains(needle),
+                "{krate}"
+            );
+        }
+        // base64ct and cpufeatures stay under the publisher trust of user-id 267
+        for krate in ["base64ct", "cpufeatures"] {
+            let blocks = vet_blocks(&audits, "trusted", krate);
+            assert!(
+                blocks.iter().any(|b| b.contains("user-id = 267")),
+                "{krate}"
+            );
+        }
+        // the zero-exemption closure holds the new crates and no exemption
+        let ws = crate::meta::Workspace::load()?;
+        let closure = crate::policy::zero_exemption_closure(&ws)?;
+        for krate in ["argon2", "blake2", "password-hash", "phc"] {
+            assert!(
+                closure.iter().any(|(n, _)| n == krate),
+                "{krate} in the closure"
+            );
+        }
+        let summary = crate::policy::check_vet_closure(&ws)?;
+        assert!(summary.contains(", 0 exempted;"), "{summary}");
+        Ok(())
+    }
+
+    /// TEST-SPEC-M7 G7-03 (ADR-055, item 6): the licence policy is untouched by the M7 closure — the allowlist and the
+    /// exceptions of `deny.toml` are the M6 ones, with Apache-2.0 (OpenSSL) and BSD-3-Clause (SQLCipher) among them, and
+    /// the new lock crates carry licences inside it (`MIT`, `MIT OR Apache-2.0`, `Apache-2.0 OR MIT`, `MIT/Apache-2.0`);
+    /// `cargo deny check licenses` is the gate.
+    #[test]
+    fn licenses_cover_m7_closure() -> Result<()> {
+        let deny = m7_repo_file("deny.toml")?;
+        let list = deny
+            .split_once("\nallow = [\n")
+            .and_then(|(_, r)| r.split_once("\n]"))
+            .map(|(b, _)| b.to_owned())
+            .unwrap_or_default();
+        let allow: Vec<&str> = list
+            .lines()
+            .filter_map(|l| {
+                l.trim()
+                    .strip_prefix('"')
+                    .and_then(|r| r.split_once('"'))
+                    .map(|(v, _)| v)
+            })
+            .collect();
+        assert_eq!(
+            allow,
+            [
+                "MIT",
+                "Apache-2.0",
+                "BSD-2-Clause",
+                "BSD-3-Clause",
+                "ISC",
+                "Zlib",
+                "Unicode-3.0",
+                "Unicode-DFS-2016",
+                "MPL-2.0"
+            ]
+        );
+        assert!(allow.contains(&"Apache-2.0") && allow.contains(&"BSD-3-Clause"));
+        let exceptions = deny
+            .split_once("\nexceptions = [\n")
+            .and_then(|(_, r)| r.split_once("\n]"))
+            .map(|(b, _)| b.matches("crate = ").count())
+            .unwrap_or_default();
+        assert_eq!(exceptions, 3, "slint, async_executors, notify only");
+        let ws = crate::meta::Workspace::load()?;
+        for krate in [
+            "argon2",
+            "blake2",
+            "password-hash",
+            "phc",
+            "openssl-sys",
+            "openssl-src",
+            "rusqlite",
+            "libsqlite3-sys",
+        ] {
+            assert!(
+                ws.all.values().any(|(n, _, _)| n == krate),
+                "{krate} is in the lock"
+            );
+        }
+        Ok(())
+    }
+
     /// W-3g
     #[test]
     fn win_suite_lines_per_suite() {

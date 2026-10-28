@@ -2500,6 +2500,14 @@ pub(crate) fn current_kani_harness(log: &str) -> String {
         )
 }
 
+/// Whether a `ps -eo pid,rss,comm` listing has its header line (`PID RSS COMMAND`): without it `ps` did not run.
+pub(crate) fn ps_listing_has_header(ps: &str) -> bool {
+    ps.lines().any(|l| {
+        let f: Vec<&str> = l.split_whitespace().collect();
+        f.len() >= 3 && f.first() == Some(&"PID") && f.get(1) == Some(&"RSS")
+    })
+}
+
 /// The `ps` listing the guard samples (empty if `ps` cannot run).
 fn cbmc_rss_sample() -> String {
     std::process::Command::new("ps")
@@ -2524,7 +2532,15 @@ pub(crate) fn kani_guarded(
     let mut peaks: Vec<(String, u64)> = Vec::new();
     loop {
         let status = child.try_wait()?;
-        if let Some((pid, rss)) = largest_cbmc(&sample()) {
+        let listing = sample();
+        if !ps_listing_has_header(&listing) {
+            let _ = child.kill();
+            let _ = child.wait();
+            bail!(
+                "kani: no RSS sample: `ps -eo pid,rss,comm` gave no listing with a header line, so the cbmc guard cannot see memory (OPEN-M7-26); stopped"
+            );
+        }
+        if let Some((pid, rss)) = largest_cbmc(&listing) {
             let harness = current_kani_harness(&std::fs::read_to_string(log).unwrap_or_default());
             match peaks.iter_mut().find(|(h, _)| *h == harness) {
                 Some((_, peak)) => *peak = (*peak).max(rss),
@@ -2544,6 +2560,13 @@ pub(crate) fn kani_guarded(
             }
         }
         if let Some(status) = status {
+            let log_text = std::fs::read_to_string(log).unwrap_or_default();
+            if peaks.is_empty() && log_text.contains("Checking harness ") {
+                bail!(
+                    "kani: no cbmc peak recorded although harnesses were checked (last: {}); the RSS guard saw no cbmc process (OPEN-M7-26)",
+                    current_kani_harness(&log_text)
+                );
+            }
             return Ok(KaniRun {
                 success: status.success(),
                 peaks,
@@ -10065,7 +10088,7 @@ mod tests {
             let mut over = || {
                 calls = calls.saturating_add(1);
                 if calls < 3 {
-                    String::new()
+                    "  PID RSS COMMAND\n".to_owned()
                 } else {
                     format!("  PID RSS COMMAND\n  {pid} 2000000 cbmc\n")
                 }
@@ -10099,6 +10122,84 @@ mod tests {
                 run.peaks
             );
         }
+        Ok(())
+    }
+
+    /// WEISUNG M7-A1b §2 (F-04): a `ps` that yields nothing, or no header line, is a step failure naming the cause, never
+    /// a silent pass; a sample with the header and no `cbmc` row is a legitimate quiet moment.
+    #[test]
+    #[cfg(unix)]
+    fn kani_rss_guard_fails_closed_without_ps_sample() -> Result<()> {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("target")
+            .join("kani-guard-test");
+        std::fs::create_dir_all(&dir)?;
+        let every = std::time::Duration::from_millis(100);
+        let quick = || {
+            Cmd::new("sh").args([
+                "-c",
+                "echo 'Checking harness kani_proofs::kani_q...'; sleep 1",
+            ])
+        };
+        for (name, text) in [("empty", ""), ("headerless", "  1 500 cbmc\n")] {
+            let mut sample = || text.to_owned();
+            let err = kani_guarded(
+                &quick(),
+                &dir.join("closed.log"),
+                1_000_000,
+                every,
+                &mut sample,
+            )
+            .err()
+            .map(|e| e.to_string())
+            .unwrap_or_default();
+            assert!(err.contains("no RSS sample"), "{name}: {err}");
+        }
+        Ok(())
+    }
+
+    /// WEISUNG M7-A1b §2 (F-04): a log with `Checking harness` lines and no recorded peak fails naming the harness; with a
+    /// recorded peak, and with a log that has no harness line at all, the run returns normally.
+    #[test]
+    #[cfg(unix)]
+    fn kani_rss_guard_requires_a_peak_per_checked_harness() -> Result<()> {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("target")
+            .join("kani-guard-test");
+        std::fs::create_dir_all(&dir)?;
+        let every = std::time::Duration::from_millis(100);
+        let header = "  PID RSS COMMAND\n  1 10 bash\n";
+        let checked = Cmd::new("sh").args([
+            "-c",
+            "echo 'Checking harness kani_proofs::kani_nopeak...'; sleep 1",
+        ]);
+        let mut quiet = || header.to_owned();
+        let err = kani_guarded(
+            &checked,
+            &dir.join("nopeak.log"),
+            1_000_000,
+            every,
+            &mut quiet,
+        )
+        .err()
+        .map(|e| e.to_string())
+        .unwrap_or_default();
+        assert!(
+            err.contains("no cbmc peak") && err.contains("kani_proofs::kani_nopeak"),
+            "{err}"
+        );
+        let none = Cmd::new("sh").args(["-c", "echo 'Compiling x'; sleep 1"]);
+        let mut quiet = || header.to_owned();
+        let run = kani_guarded(
+            &none,
+            &dir.join("noharness.log"),
+            1_000_000,
+            every,
+            &mut quiet,
+        )?;
+        assert!(run.success && run.peaks.is_empty());
         Ok(())
     }
 

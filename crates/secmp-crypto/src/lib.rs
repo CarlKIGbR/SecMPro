@@ -23,6 +23,7 @@
 #![forbid(unsafe_code)]
 
 mod aead;
+mod argon2;
 mod caead;
 mod ed25519;
 mod error;
@@ -47,6 +48,7 @@ mod tr_kdf;
 mod vector_stream;
 mod x25519;
 
+pub use crate::argon2::{argon2id, argon2id_with_secret_and_ad};
 pub use aead::Aead;
 pub use caead::{AEAD_TAG_LEN, COM_LEN, Caead, NONCE_LEN};
 #[cfg(feature = "kat")]

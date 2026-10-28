@@ -98,7 +98,7 @@ Jobs of `ci.yml` (pinned by `expect::PINNED_JOBS`, budgets by `expect::JOB_BUDGE
 |---|---|---|
 | `linux-fast` | `ci-fast` (steps 1–5) less the delegated `harness` step, SBOM, systemd exposure | 120 |
 | `windows-native` | native MSVC build, clippy, tests, KATs, the testkit harness binary, hello | 90 |
-| `xwin-cross` | `cargo-xwin` cross-build in two invocations: all targets less the store-dependent crates of `expect::XWIN_EXCLUDE` and `expect::XWIN_LIB_ONLY`, then `--lib --bins` of the same-listed `XWIN_LIB_ONLY` packages (`secmp-crypto`, `secmp-proto`, `secmp-relay`, `secmp-transport`) (ADR-034 Amendment 1 rev. 2) | 60 |
+| `xwin-cross` | `cargo-xwin` cross-build in two invocations: all targets less the store-dependent crates of `expect::XWIN_EXCLUDE` and `expect::XWIN_LIB_ONLY`, then `--lib --bins` of the two packages that dev-depend on the excluded testkit, `secmp-crypto` and `secmp-transport` (ADR-034 Amendment 1 rev. 2) | 60 |
 | `linux-full` | `ci-full` steps 1–14 less the delegated ones (`windows-*`, `mutants`, `ct`, `fuzz`, `kani`, `proverif-link`, `harness`) | 240 |
 | `ct` | constant-time gate (step 5), `--delegated ct` | 330 |
 | `mutants-shard` ×12, `mutants` | mutation testing (step 8) and its verdict, `--delegated mutants` | 300, 30 |

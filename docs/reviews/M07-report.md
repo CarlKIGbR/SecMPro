@@ -4,7 +4,7 @@ Branch: `m07-client-core` · Base: `bf550999fb2c7771153863f1da2f19adb5a677b5` ·
 
 ## 1. Plan (written before implementation, updated during)
 
-Binding inputs: `docs/reviews/M07-planning/` (`BRIEF_M7.md`, `TEST-SPEC-M7.md` (174 rows: A 63, B 71, C 40),
+Binding inputs: `docs/reviews/M07-planning/` (`BRIEF_M7.md`, `TEST-SPEC-M7.md` (175 rows: A 64, B 71, C 40),
 `OPEN-M7.md`, `OPEN-M7-decided.md`, `ADR-053-proposed.md`, `ADR-054-proposed.md`, `ADR-055-proposed.md`). ADR-053,
 ADR-054 and ADR-055 are appended to `docs/08-decisions.md` as **Proposed**. Phases: A (Opus) → B (Sonnet; Opus weisung
 for SC-01…SC-10) → C (Sonnet). [O-01] rows are built only after the owner's "ADR-053 accepted"; no `Cargo.toml`
@@ -46,7 +46,7 @@ Phase A, A-1 (numbers; raw files under `docs/reviews/M07-evidence/`). Phase B/C 
 
 | Row | Test / command | Result |
 |---|---|---|
-| G7-05 | `xtask::policy::tests::xwin_scope_excludes_sqlcipher_crates`, `xwin_full_roots_have_no_excluded_dev_dependency` (re-dictated Q127, `f6e2928`) | pass; red first on the single-invocation list: `roots with an excluded dev-dependency: ["secmp-crypto:36", "secmp-transport:37"]`; with the list of the weisung (those two) the test is still red: `["secmp-proto:23", "secmp-relay:33"]` — see §8 Q-A2. The `cargo xwin` invocations themselves were not run (no network for the Windows SDK) |
+| G7-05 | `xtask::policy::tests::xwin_scope_excludes_sqlcipher_crates`, `xwin_full_roots_have_no_excluded_dev_dependency`, `xwin_dev_dependency_scan_sees_target_tables` (Q127, Q130) | pass. Red first, new test with `XWIN_LIB_ONLY` emptied (= the single-invocation list of `fa0adef`): `roots with an excluded dev-dependency: ["secmp-crypto:36", "secmp-transport:37"]`; red first of the scan test: `left: [12]  right: [5, 7, 12]` (the old scanner saw only the plain `[dev-dependencies]` table). The `cargo xwin` invocations themselves were not run (no network for the Windows SDK) |
 | G7-07 | `xtask::policy::tests::harness_job_is_pinned`, `testscan::scan::tests::pr_ci_runs_props_with_ci_run_seed`, `nextest_does_not_run_the_harness_binary_twice` | pass; `ci-fast` step `harness`: PASS 942 s (`fa0adef`), 927 s (`f6e2928`); `kat` 93 s / 92 s |
 | G7-08 | `xtask::policy::tests::job_budgets_are_pinned` | pass |
 | G7-09 | `xtask::gates::tests::mutant_harness_suite_under_30s`; command `sh g7-09-measure.sh.txt` (`cargo nextest run --locked -p secmp-client-core -p secmp-transport -p secmp-testkit --features secmp-testkit/harness --max-fail=1:immediate --profile mutants-harness -- <--skip of every entry of MUTANT_SKIP_TESTS and MUTANT_HARNESS_SKIP_TESTS>`) | per-mutant harness suite on the **32-core container** (`nproc` 32, unmutated tree): nextest `Summary [12.773s] 349 tests run: 349 passed, 33 skipped` (`g7-09-per-mutant-harness-suite.txt`); the 4-vCPU runner is not measured here. Before the split (C2-18c): 70 s |
@@ -102,11 +102,9 @@ the container; RustSec shows none).
 
 **Q-A1 (closed by Q127, `f6e2928`).** Two cross-build invocations; see G7-05.
 
-**Q-A2 (G7-05, deviation from WEISUNG M7-A1b §5).** The weisung lists `XWIN_LIB_ONLY = [secmp-crypto, secmp-transport]`. The
-new test `xwin_full_roots_have_no_excluded_dev_dependency` is red with that list: `secmp-proto` (Cargo.toml:23) and
-`secmp-relay` (Cargo.toml:33) also dev-depend on `secmp-testkit`. `XWIN_LIB_ONLY` therefore also names `secmp-proto` and
-`secmp-relay` (the second invocation builds `--lib --bins` of the four). Reviewer to confirm or re-dictate; ADR-034
-Amendment 1 rev. 2, docs/06 and the verbatim test follow the four-package list.
+**Q-A2 (answered, Q130).** `secmp-proto` and `secmp-relay` dev-depend on `secmp-crypto`, not on `secmp-testkit`; the earlier
+red for them came from treating `XWIN_LIB_ONLY` crates as poison. `XWIN_LIB_ONLY` is `[secmp-crypto, secmp-transport]` again; the poison
+set of the test is `XWIN_EXCLUDE`.
 
 **Q-A3 (Kani peak figures).** The `kani` step prints its `kani-rss` lines after the last package; a step that is stopped
 earlier prints none. The first guarded local run was stopped by the background limit during `secmp-proto`.

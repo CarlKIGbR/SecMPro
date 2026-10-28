@@ -2534,8 +2534,7 @@ pub(crate) fn kani_guarded(
         let status = child.try_wait()?;
         let listing = sample();
         if !ps_listing_has_header(&listing) {
-            let _ = child.kill();
-            let _ = child.wait();
+            stop_child(&mut child)?;
             bail!(
                 "kani: no RSS sample: `ps -eo pid,rss,comm` gave no listing with a header line, so the cbmc guard cannot see memory (OPEN-M7-26); stopped"
             );
@@ -10228,8 +10227,8 @@ mod tests {
     /// TEST-SPEC-M7 G7-10 (OPEN-M7-20 A, ADR-047 Amendment 9): the second mutants run selects the nextest profile whose
     /// one override gives the killer module's tests a priority above every other test, so they start first by that filter;
     /// `.config/nextest.toml` holds exactly the block `mutants_killer_profile` writes for `expect::MUTANT_KILLER_MODULE`.
-    /// Renaming the module keeps the order: the block for another name (one that sorts after `m6_activity`) carries the
-    /// same priority, and the first run (own tests) uses no such profile. The killer module exists and holds tests.
+    /// Renaming the module keeps the order: the block for another module name differs only in its filter and carries the
+    /// same priority; the override list of the real file puts the `m0_early::` entry first, and the first run (own tests) uses no such profile. The killer module exists and holds tests.
     #[test]
     fn mutant_killers_run_first_by_filter() -> Result<()> {
         let args = mutants_harness_args(None);

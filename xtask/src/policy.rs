@@ -2954,15 +2954,7 @@ mod tests {
         for p in expect::XWIN_EXCLUDE {
             assert!(ws.member(p).is_some(), "{p} is no workspace member");
         }
-        assert_eq!(
-            expect::XWIN_LIB_ONLY,
-            &[
-                "secmp-crypto",
-                "secmp-proto",
-                "secmp-relay",
-                "secmp-transport"
-            ]
-        );
+        assert_eq!(expect::XWIN_LIB_ONLY, &["secmp-crypto", "secmp-transport"]);
         for p in expect::XWIN_LIB_ONLY {
             assert!(ws.member(p).is_some(), "{p} is no workspace member");
         }
@@ -2971,12 +2963,11 @@ mod tests {
         let want_all = words(
             "xwin build --workspace --all-targets --locked --target x86_64-pc-windows-msvc \
              --exclude secmp-store --exclude secmp-client-core --exclude secmp-cli --exclude secmp-testkit \
-             --exclude secmp-ui --exclude secmp-crypto --exclude secmp-proto --exclude secmp-relay \
-             --exclude secmp-transport",
+             --exclude secmp-ui --exclude secmp-crypto --exclude secmp-transport",
         );
         let want_roots = words(
             "xwin build --lib --bins --locked --target x86_64-pc-windows-msvc \
-             -p secmp-crypto -p secmp-proto -p secmp-relay -p secmp-transport",
+             -p secmp-crypto -p secmp-transport",
         );
         assert_eq!(
             crate::gates::windows_cross_args(),
@@ -3008,33 +2999,88 @@ mod tests {
         Ok(())
     }
 
-    /// WEISUNG M7-A1b §5 (Q127, ADR-034 Amendment 1 rev. 2): no root of the all-targets cross-build dev-depends on a
-    /// crate it excludes — a dev-dependency is compiled for the root's tests, examples and benches, so an excluded
-    /// `secmp-testkit` (which will pull the store and vendored OpenSSL) would come back through it.
+    /// The lines (1-based) of a manifest's dev-dependency tables that name a package of `poison`: `[dev-dependencies]`,
+    /// `[target.<cfg or triple>.dev-dependencies]` (key lines `name = …` and `name.workspace = true`) and the dotted
+    /// tables `[dev-dependencies.<name>]` / `[target.<…>.dev-dependencies.<name>]` (the header line itself).
+    fn poison_dev_dependencies(manifest: &str, poison: &[&str]) -> Vec<usize> {
+        let mut out = Vec::new();
+        let mut in_dev = false;
+        for (n, line) in manifest.lines().enumerate() {
+            let t = line.trim();
+            if let Some(header) = t.strip_prefix('[') {
+                let header = header.trim_end_matches(']').trim();
+                in_dev = header == "dev-dependencies"
+                    || (header.starts_with("target.") && header.ends_with(".dev-dependencies"));
+                let dotted = header
+                    .rfind("dev-dependencies.")
+                    .filter(|i| *i == 0 || header.get(..*i).is_some_and(|b| b.ends_with('.')))
+                    .and_then(|i| header.get(i.saturating_add("dev-dependencies.".len())..))
+                    .map(|name| name.trim_matches(['"', '\'']));
+                if dotted.is_some_and(|name| poison.contains(&name)) {
+                    out.push(n.saturating_add(1));
+                }
+                continue;
+            }
+            let name = t.split(['=', '.', ' ']).next().unwrap_or_default();
+            if in_dev && poison.contains(&name) {
+                out.push(n.saturating_add(1));
+            }
+        }
+        out
+    }
+
+    /// WEISUNG M7-A1c §2 (G-02): the manifest scan of `xwin_full_roots_have_no_excluded_dev_dependency` sees a target-specific
+    /// table (`[target.'cfg(windows)'.dev-dependencies]`) and a dotted table, not only `[dev-dependencies]`.
+    #[test]
+    fn xwin_dev_dependency_scan_sees_target_tables() {
+        let poison = ["secmp-testkit"];
+        let manifest = "[dependencies]\nsecmp-testkit.workspace = true\n\n[target.'cfg(windows)'.dev-dependencies]\nsecmp-testkit = { workspace = true }\n\n[dev-dependencies.secmp-testkit]\nworkspace = true\n\n[dev-dependencies]\nserde_json.workspace = true\nsecmp-testkit.workspace = true\n";
+        assert_eq!(poison_dev_dependencies(manifest, &poison), vec![5, 7, 12]);
+        assert!(
+            poison_dev_dependencies("[dependencies]\nsecmp-testkit.workspace = true\n", &poison)
+                .is_empty()
+        );
+    }
+
+    /// The manifests of the `[workspace] members` of the root `Cargo.toml`.
+    fn workspace_member_manifests() -> Result<Vec<(String, String)>> {
+        let root = repo_file("Cargo.toml")?;
+        let list = root
+            .split_once("members = [")
+            .and_then(|(_, rest)| rest.split_once(']'))
+            .map(|(l, _)| l)
+            .unwrap_or_default();
+        let mut out = Vec::new();
+        for item in list.split(',') {
+            let path = item.trim().trim_matches('"');
+            if path.is_empty() {
+                continue;
+            }
+            let name = path.rsplit('/').next().unwrap_or(path).to_owned();
+            out.push((name, repo_file(&format!("{path}/Cargo.toml"))?));
+        }
+        Ok(out)
+    }
+
+    /// WEISUNG M7-A1b §5, M7-A1c §1 (Q127, Q130; ADR-034 Amendment 1 rev. 2): no root of the all-targets cross-build
+    /// dev-depends on a crate of `XWIN_EXCLUDE` — a dev-dependency is compiled for the root's tests, examples and
+    /// benches, so an excluded `secmp-testkit` (which will pull the store and vendored OpenSSL) would come back through
+    /// it. Roots are the workspace members less `XWIN_EXCLUDE` and `XWIN_LIB_ONLY` (those are not roots of invocation 1);
+    /// the second invocation builds `--lib --bins` only, which compile no dev-dependency. A dev-dependency on a
+    /// `XWIN_LIB_ONLY` crate is harmless: Cargo builds a dependency's library, never its dev-dependencies.
     #[test]
     fn xwin_full_roots_have_no_excluded_dev_dependency() -> Result<()> {
-        let ws = Workspace::load()?;
-        let lib_only = expect::XWIN_LIB_ONLY;
+        let members = workspace_member_manifests()?;
+        assert!(members.len() >= 12, "{} members", members.len());
         let mut bad = Vec::new();
-        for m in &ws.members {
-            if m.name == "xtask"
-                || expect::XWIN_EXCLUDE.contains(&m.name.as_str())
-                || lib_only.contains(&m.name.as_str())
+        for (name, text) in &members {
+            if expect::XWIN_EXCLUDE.contains(&name.as_str())
+                || expect::XWIN_LIB_ONLY.contains(&name.as_str())
             {
                 continue;
             }
-            let text = lf(&std::fs::read_to_string(&m.manifest_path)?);
-            let mut in_dev = false;
-            for (n, line) in text.lines().enumerate() {
-                let t = line.trim();
-                if t.starts_with('[') {
-                    in_dev = t == "[dev-dependencies]";
-                    continue;
-                }
-                let name = t.split(['=', '.', ' ']).next().unwrap_or_default();
-                if in_dev && (expect::XWIN_EXCLUDE.contains(&name) || lib_only.contains(&name)) {
-                    bad.push(format!("{}:{}", m.name, n.saturating_add(1)));
-                }
+            for n in poison_dev_dependencies(&lf(text), expect::XWIN_EXCLUDE) {
+                bad.push(format!("{name}:{n}"));
             }
         }
         assert!(

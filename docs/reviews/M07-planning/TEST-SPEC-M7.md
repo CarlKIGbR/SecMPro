@@ -26,7 +26,7 @@ Sources: `docs/03` rev 2.6 (`docs/03:<line>` at `main` `bf55099`), `docs/07:137-
 | (l) gates G7, fuzz FZ, Kani K7, transport carry-overs C-T | 32 | 19 | 3 | 10 |
 | **total** | **175** | **64** | **71** | **40** |
 
-Built unconditionally: 169 rows. **(cond, not built)**: SE-13a (OQ-19 reading A, until the owner rules A), C-T2 (`socket2`, default "not M7") — dictated, built only if the decision flips. **(cond, owner action)**: G7-11 (after the owner's `miniz_oxide` vet record), G7-19 (after an ADR-018 acceptance), G7-20 (after `harness` joins the ruleset).
+Built unconditionally: 170 rows. **(cond, not built)**: SE-13a (OQ-19 reading A, until the owner rules A), C-T2 (`socket2`, default "not M7") — dictated, built only if the decision flips. **(cond, owner action)**: G7-11 (after the owner's `miniz_oxide` vet record), G7-19 (after an ADR-018 acceptance), G7-20 (after `harness` joins the ruleset).
 
 ⚙ = owner-operated: E2-07 (nightly over real Tor to the test relay), the Windows VM re-run of the store KATs (G7-17).
 Their non-availability path is the M6 one (`TEST-SPEC-M6.md` "Conventions"): listed under "Blocked — owner
@@ -71,7 +71,7 @@ corpus, `KANI_HARNESSES`, `NORMAL_DEPENDENCY_ALLOW` edge) lands in the same comm
 2. **A-2, after the A0 report, "ADR-055 accepted" and the owner's vet records:** G7-01…G7-04 (the edges, with the crates
    they allow), ST-08.
 3. **A-3, store code with a `kat`-only test key (`secmp_store::kat::TestKey`; no ADR-053 construction in the tree):**
-   G7-06 first (the client-core → store and testkit → store edges), then ST-01…ST-04, ST-09, ST-13…ST-18, PC-01…PC-13
+   G7-06 first (the client-core → store and testkit → store edges), then ST-01…ST-04, ST-09, ST-13…ST-18, ST-20, PC-01…PC-13
    (PC-07 introduces `to_parts`/`from_parts`), G7-18, G7-13 and G7-14 (the store enters mutants/coverage only once it has code).
 4. **A-4, only after the owner's "ADR-053 accepted":** ST-05…ST-07, ST-10…ST-12, ST-19, CT-01 with CT-05, CT-02, BK-01…BK-07,
    FO-03, FZ-01 and FZ-02 with G7-15a. ST-10 and BK-04 stay [REF]-open until `vectors/store.json` exists (Q117).

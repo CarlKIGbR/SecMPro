@@ -1734,18 +1734,12 @@ pub(crate) const XWIN_EXCLUDE: &[&str] = &[
     "secmp-ui",
 ];
 
-/// ADR-034 Amendment 1 rev. 2 (Q127): the packages whose tests, examples and benches the all-targets cross-build leaves
-/// out because their dev-dependency `secmp-testkit` (excluded) would pull the store and vendored OpenSSL after G7-06
-/// (`secmp-crypto`, `secmp-proto`, `secmp-relay`, `secmp-transport`: each lists it under `[dev-dependencies]`;
-/// `secmp-proto` and `secmp-relay` are added to the weisung's two by the test
-/// `xwin_full_roots_have_no_excluded_dev_dependency`, report §8 Q-A2). They are cross-built a second time with
-/// `--lib --bins` only.
-pub(crate) const XWIN_LIB_ONLY: &[&str] = &[
-    "secmp-crypto",
-    "secmp-proto",
-    "secmp-relay",
-    "secmp-transport",
-];
+/// ADR-034 Amendment 1 rev. 2 (Q127, Q130): the packages whose tests, examples and benches the all-targets cross-build
+/// leaves out — `secmp-crypto` and `secmp-transport`, the only two that dev-depend on the excluded `secmp-testkit`, which
+/// after G7-06 pulls the store and vendored OpenSSL. They are cross-built a second time with `--lib --bins` only. Other
+/// crates that dev-depend on a `XWIN_LIB_ONLY` crate (`secmp-proto`, `secmp-relay`: `secmp-crypto` with feature `kat`) stay
+/// roots of the all-targets build: Cargo builds a dependency's library, never its dev-dependencies.
+pub(crate) const XWIN_LIB_ONLY: &[&str] = &["secmp-crypto", "secmp-transport"];
 
 /// The job names of the required checks of the `main-protection` ruleset (M2 review C2): they exist only in
 /// [`REQUIRED_WORKFLOW`], which has no `workflow_dispatch` trigger, so no dispatch can add a `skipped` (= passing) check

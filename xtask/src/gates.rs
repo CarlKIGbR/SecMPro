@@ -10802,6 +10802,40 @@ mod tests {
         Ok(())
     }
 
+    /// OPEN-M7-26 B (Q132, Q133): the committed M5 run is history and predates the split of `kani_commit_accept_atomic`; its
+    /// block of the old harness is left out of `log` (nothing on disk is rewritten) and the real run of the two new harnesses
+    /// (`docs/reviews/M07-evidence/kani-m7-a1f-commit-accept-<sha7>.txt`) is appended in its place.
+    fn swap_split_harness_block(root: &Path, log: &mut String) -> Result<()> {
+        let old_block = log
+            .split_once("  Checking harness kani_proofs::kani_commit_accept_atomic...\n")
+            .and_then(|(_, rest)| rest.split_once("  Checking harness "))
+            .map(|(block, _)| {
+                format!("  Checking harness kani_proofs::kani_commit_accept_atomic...\n{block}")
+            })
+            .ok_or_else(|| Error("no block of the old harness in the M5 log".into()))?;
+        assert_eq!(log.matches(&old_block).count(), 1);
+        *log = log.replacen(&old_block, "", 1);
+        let mut split: Vec<_> = std::fs::read_dir(root.join("docs/reviews/M07-evidence"))?
+            .filter_map(std::result::Result::ok)
+            .map(|e| e.path())
+            .filter(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with("kani-m7-a1f-commit-accept-"))
+            })
+            .collect();
+        split.sort();
+        assert_eq!(
+            split.len(),
+            1,
+            "one committed run of the split harnesses: {split:?}"
+        );
+        log.push_str(&lf(&std::fs::read_to_string(
+            split.first().ok_or_else(|| Error("no run".into()))?,
+        )?));
+        Ok(())
+    }
+
     /// M4 delta review VD1-5: the number of covers is pinned (`expect::KANI_COVERS`: as many as `kani_proofs.rs` has,
     /// each on a known harness); the committed Kani log matches it; a deleted or an added cover is a finding; a
     /// summary with Kani's `(K unreachable)` suffix fails the cover check.
@@ -10884,6 +10918,7 @@ mod tests {
         // the C1 run covers the client-core harnesses again: those of Phase A are replaced by its (newer) summaries
         log = log.replace(positive, "");
         log.push_str(&c1_log);
+        swap_split_harness_block(&root, &mut log)?;
         assert_eq!(
             kani_cover_pin_findings(&kani_covers(&log)?),
             Vec::<String>::new()
@@ -10942,8 +10977,9 @@ mod tests {
         let all = expect::KANI_HARNESSES;
         // M5 Phase B: 30 + the three relay harnesses (TEST-SPEC-M5 K-05…K-07); M6 Phase A: + the seven of
         // `secmp-client-core` (TEST-SPEC-M6 K-01…K-07); M6 Phase C1: + K-C1…K-C6
-        assert_eq!(all.len(), 46);
-        assert_eq!(kani_verified(&kani_log(all, 0))?.len(), 46);
+        // M7 A1e (Q132): `kani_commit_accept_atomic` split in two, 47
+        assert_eq!(all.len(), 47);
+        assert_eq!(kani_verified(&kani_log(all, 0))?.len(), 47);
         // a deleted harness: 18 verified, and Kani's own summary says 18 of 18
         let fifteen = all.get(1..).unwrap_or_default();
         assert!(kani_verified(&kani_log(fifteen, 0)).is_err());

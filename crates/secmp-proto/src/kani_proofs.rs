@@ -777,9 +777,11 @@ fn kani_record_tag(store: &MemoryPrekeyStore, ld_id: &[u8; 16]) -> Option<(u32, 
         .map(|r| (r.spk_id, r.opk_id, r.expires, r.link_key.expose_secret()[0]))
 }
 
-/// [`kani_commit_accept_atomic`] on one store: SPK generation 1 (arbitrary `created`), OPKs 1 and 2, the record
-/// `[1; 16]` naming OPK `named` (arbitrary `expires`), then `delete_opk(delete)` unless `delete` is 0.
-fn kani_commit_on(named: u32, delete: u32) {
+/// [`kani_commit_accept_atomic_record_names_opk1`] and [`kani_commit_accept_atomic_record_names_deleted_opk2`] on one
+/// store: SPK generation 1 (arbitrary `created`), OPKs 1 and 2, the record `[1; 16]` naming OPK `named` (arbitrary
+/// `expires`), then `delete_opk(delete)` unless `delete` is 0. Returns whether the commit succeeded; each harness covers the
+/// outcome its configuration can reach.
+fn kani_commit_on(named: u32, delete: u32) -> bool {
     let mut store = MemoryPrekeyStore::starting_at(1, 1);
     assert!(store.create_spk(kani::any(), &mut OsEntropy) == Ok(1));
     assert!(store.issue_opk(&mut OsEntropy) == Ok(1));
@@ -852,9 +854,9 @@ fn kani_commit_on(named: u32, delete: u32) {
     } else {
         ld_after == probe_ld_before
     });
-    kani::cover!(ok, "a commit");
     // the store's drop is not part of the property
     core::mem::forget(store);
+    ok
 }
 
 /// K4b: [`PrekeyStore::commit_accept`] of the real [`MemoryPrekeyStore`] is atomic, for every `(opk_id, ld_id)` on
@@ -865,15 +867,29 @@ fn kani_commit_on(named: u32, delete: u32) {
 /// id of each kind — present after exactly as before unless it is the removed one, with the same tag — shows that
 /// nothing else is removed, changed or added. Bound (WEISUNG M4-3 asked for every store of ≤ 2 OPKs and ≤ 2 records
 /// with arbitrary ids; M4 report §11.2): no proof with a second record or a symbolic store finished in 9–30 minutes.
+/// Split into two harnesses by store configuration (OPEN-M7-26 B, Q132); together they are the former
+/// `kani_commit_accept_atomic`. The two configurations cover one outcome each (Q133): a commit (OPK 1 held) and a
+/// rejected commit (the record's OPK 2 was deleted).
 #[kani::proof]
 #[kani::stub(secmp_crypto::rng::fill, kani_fill)]
 #[kani::stub(zeroize::optimization_barrier, kani_no_barrier)]
 #[kani::stub(<[u8; 64] as zeroize::Zeroize>::zeroize, kani_zeroize_array)]
 #[kani::stub(<[u8; 16] as PartialEq<[u8; 16]>>::eq, kani_array_eq)]
 #[kani::unwind(3)] // the vectors hold at most 2 entries
-fn kani_commit_accept_atomic() {
-    kani_commit_on(1, 0);
-    kani_commit_on(2, 2);
+fn kani_commit_accept_atomic_record_names_opk1() {
+    let ok = kani_commit_on(1, 0);
+    kani::cover!(ok, "a commit");
+}
+
+#[kani::proof]
+#[kani::stub(secmp_crypto::rng::fill, kani_fill)]
+#[kani::stub(zeroize::optimization_barrier, kani_no_barrier)]
+#[kani::stub(<[u8; 64] as zeroize::Zeroize>::zeroize, kani_zeroize_array)]
+#[kani::stub(<[u8; 16] as PartialEq<[u8; 16]>>::eq, kani_array_eq)]
+#[kani::unwind(3)] // the vectors hold at most 2 entries
+fn kani_commit_accept_atomic_record_names_deleted_opk2() {
+    let ok = kani_commit_on(2, 2);
+    kani::cover!(!ok, "a rejected commit (the record's OPK was deleted)");
 }
 
 /// `HandshakeCellPlaintext` (D.4) on every input of 4023…4025 bytes (the exact size and its neighbours): the decoder

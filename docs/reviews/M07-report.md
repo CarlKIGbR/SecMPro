@@ -4,14 +4,14 @@ Branch: `m07-client-core` · Base: `bf550999fb2c7771153863f1da2f19adb5a677b5` ·
 
 ## 1. Plan (written before implementation, updated during)
 
-Binding inputs: `docs/reviews/M07-planning/` (`BRIEF_M7.md`, `TEST-SPEC-M7.md` (175 rows: A 64, B 71, C 40),
+Binding inputs: `docs/reviews/M07-planning/` (`BRIEF_M7.md`, `TEST-SPEC-M7.md` (176 rows: A 65, B 71, C 40),
 `OPEN-M7.md`, `OPEN-M7-decided.md`, `ADR-053-proposed.md`, `ADR-054-proposed.md`, `ADR-055-proposed.md`). ADR-053,
 ADR-054 and ADR-055 are appended to `docs/08-decisions.md` as **Proposed**. Phases: A (Opus) → B (Sonnet; Opus weisung
 for SC-01…SC-10) → C (Sonnet). [O-01] rows are built only after the owner's "ADR-053 accepted"; no `Cargo.toml`
 dependency change before the A0 report, "ADR-055 accepted" and the owner's vet records.
 
-Phase A rows (64): ST-01…ST-20, PC-01…PC-13, FO-03, CT-01, CT-02, CT-04, CT-05, BK-01…BK-07, G7-00…G7-10, G7-12…G7-14,
-G7-15a, G7-16, G7-18, FZ-01, FZ-02.
+Phase A rows (65): ST-01…ST-20, PC-01…PC-13, FO-03, CT-01, CT-02, CT-04, CT-05, BK-01…BK-07, G7-00…G7-10, G7-12…G7-14,
+G7-15a, G7-16, G7-18, K7-02, FZ-01, FZ-02.
 
 | Step | Phase | What | TEST-SPEC rows closed | Status |
 |---|---|---|---|---|
@@ -74,7 +74,7 @@ harness `m6_activity::timing_draws_unmoved_by_one_hour_of_activity`, `m6_sched_l
 | `cargo xtask ci-fast` at `fa0adef` (`ci-fast-a1-fa0adef.txt`) | PASS: kat 93 s, harness 942 s |
 | `cargo xtask ci-fast` at `62c2dbc` (`ci-fast-a1c-62c2dbc.txt`, first line names the head, clean tree) | PASS: fmt 0 s, clippy 0 s, policy 1 s, deny 1 s, vet 1 s, audit 2 s, cooldown 23 s (561 packages), nextest 16 s, doctest 1 s, hello 0 s, kat 89 s, harness 1023 s |
 | `cargo xtask ci-full` | not run in A-1b |
-| Kani | see G7-12 row |
+| Kani (`cargo xtask step kani`, foreground, 3679 s, `kani-m7-a1e-9eac343.txt`) | all harnesses verified (`secmp-client-core` 13/13, `secmp-proto` 31/31, `secmp-relay` 3/3); the step failed at the cover pin of the first split (Q133, §8 A1e). Re-run of the two split harnesses with the covers in the harnesses (`kani-m7-a1f-commit-accept-9eac343.txt`): see K7-02 and the peak table below |
 | Fuzz / mutants / coverage / ct (full) | not run |
 
 ## 5. Deviations from spec / plan
@@ -86,6 +86,8 @@ None.
 None yet (ADR-055 Proposed).
 
 ## 7. Open risks and known limitations
+
+**Kani memory.** `kani_proofs::tr_header_selection`: peak cbmc RSS 13 393 720 KiB = 94.6 % of the limit of 14 160 156 KiB (A1e run); next OPEN-M7-26 B candidate if it trips. Next: `kani_accept_opk_delete_only_on_success` 12 372 716 KiB (87.4 %), `kani_q_frame_plaintext_exact_fit` 12 121 336 KiB (85.6 %).
 
 ## 8. Blocked / questions for the reviewer or owner
 
@@ -113,3 +115,11 @@ earlier prints none. The first guarded local run was stopped by the background l
 expected value 4.10.0 is the leading version of that string.
 
 **A1d.** Smoke `hello` (owner dispatch, run 40692102750) red: the step "Probe the runner toolchain" of `win-ondemand.yml` ended with `pwsh -v || echo no-pwsh`; in `shell: cmd` the exit code is the final ERRORLEVEL and `echo` does not reset it, so the 9009 of the missing `pwsh` survived. Fixed: the line is dropped (nothing uses `pwsh`), policy test `win_ondemand_cmd_steps_have_no_bare_optional_probe`. Re-run after merge (or on a temporary `m07-client-core` federated credential, owner's choice).
+
+**A1e / A1f (Q132, Q133).** PR run 40688358569: the guard stopped `kani_commit_accept_atomic` at cbmc 14 188 096 KiB (limit 14 160 156 KiB; M6: 13 751 MB). OPEN-M7-26 B: the harness is split by store configuration into `kani_commit_accept_atomic_record_names_opk1` and `…_deleted_opk2` (no bound, unwind, stub or limit change). First split run (shared cover in `kani_commit_on`): `..._deleted_opk2` 0 of 1 cover — the record's OPK is deleted, so that configuration never commits. Q133: `kani_commit_on` returns `ok`; opk1 covers "a commit", deleted_opk2 covers "a rejected commit". Historical evidence untouched; `kani_cover_pin_findings` fixture takes the real run `kani-m7-a1f-commit-accept-9eac343.txt` in place of the M5 block of the old name (left out in memory, not rewritten).
+
+Quoted (foreground, `cargo kani -p secmp-proto -Z stubbing --harness <name>`):
+- `kani_commit_accept_atomic_record_names_opk1`: `** 1 of 1 cover properties satisfied`, `VERIFICATION:- SUCCESSFUL`, 92.0803 s
+- `kani_commit_accept_atomic_record_names_deleted_opk2`: `** 1 of 1 cover properties satisfied`, `VERIFICATION:- SUCCESSFUL`, 116.59998 s
+
+Peaks of the full step (`kani-m7-a1e-9eac343.txt`, KiB; limit 14 160 156): `..._deleted_opk2` 6 220 484, `..._opk1` 5 737 528 (re-measured in the PR run); `tr_header_selection` 13 393 720, `kani_accept_opk_delete_only_on_success` 12 372 716, `kani_q_frame_plaintext_exact_fit` 12 121 336, `request_link_get` 9 479 788, `response_frame` 8 945 636, `kani_frame_pad_total` 8 053 804, `kani_outer_unpad_total` 7 780 720; `secmp-relay` largest `kani_executor_response_count` 4 136 084; `secmp-client-core` largest `kani_rate_bound_integer_form` 2 952 940.

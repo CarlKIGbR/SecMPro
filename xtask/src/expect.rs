@@ -1102,7 +1102,7 @@ pub(crate) const KANI_PACKAGES: &[&str] = &["secmp-client-core", "secmp-proto", 
 /// verified ("Complete - N successfully verified harnesses, 0 failures, N total." with N = this count), so a
 /// deleted or renamed harness fails the gate instead of passing silently. M3 (plan step 9): the three `tr_*`
 /// harnesses of the SecMP-TR decisions (`tr::select`). M4: the five `kani_*` harnesses of SecMP-HX, and (WEISUNG M4-8)
-/// K4b `kani_commit_accept_atomic` on the real prekey store. M5 Phase B: the three relay harnesses of `secmp-relay`
+/// K4b `kani_commit_accept_atomic` (from M7 two harnesses, `…_record_names_opk1` and `…_record_names_deleted_opk2`, OPEN-M7-26 B) on the real prekey store. M5 Phase B: the three relay harnesses of `secmp-relay`
 /// (`kani_cmd_seq_monotone`, `kani_queue_eviction_bounds`, `kani_executor_response_count`; TEST-SPEC-M5 K-05…K-07).
 pub(crate) const KANI_HARNESSES: &[&str] = &[
     "kani_proofs::cell",
@@ -1113,7 +1113,8 @@ pub(crate) const KANI_HARNESSES: &[&str] = &[
     "kani_proofs::kani_balanced_rr_selects_due_or_ping",
     "kani_proofs::kani_cell_plaintext_decode_total",
     "kani_proofs::kani_cmd_seq_monotone",
-    "kani_proofs::kani_commit_accept_atomic",
+    "kani_proofs::kani_commit_accept_atomic_record_names_opk1",
+    "kani_proofs::kani_commit_accept_atomic_record_names_deleted_opk2",
     "kani_proofs::kani_cont_assembly",
     "kani_proofs::kani_deadline_arithmetic_checked",
     "kani_proofs::kani_evicted_range",
@@ -1161,7 +1162,14 @@ pub(crate) const KANI_COVERS: &[(&str, usize)] = &[
     ("kani_proofs::kani_backoff_cap", 2),
     ("kani_proofs::kani_balanced_rr_selects_due_or_ping", 2),
     ("kani_proofs::kani_cmd_seq_monotone", 5),
-    ("kani_proofs::kani_commit_accept_atomic", 1),
+    (
+        "kani_proofs::kani_commit_accept_atomic_record_names_opk1",
+        1,
+    ),
+    (
+        "kani_proofs::kani_commit_accept_atomic_record_names_deleted_opk2",
+        1,
+    ),
     ("kani_proofs::kani_cont_assembly", 1),
     ("kani_proofs::kani_deadline_arithmetic_checked", 1),
     ("kani_proofs::kani_evicted_range", 2),

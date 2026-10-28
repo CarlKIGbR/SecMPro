@@ -8,6 +8,7 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Added
 
+- M7 A1e/A1f: `kani_commit_accept_atomic` split into `…_record_names_opk1` and `…_record_names_deleted_opk2` (OPEN-M7-26 B, Q132/Q133), one cover per harness; evidence `docs/reviews/M07-evidence/kani-m7-a1e-9eac343.txt`, `kani-m7-a1f-commit-accept-9eac343.txt`.
 - M7 A1d: `win-ondemand.yml` probe step no longer leaks the `pwsh` ERRORLEVEL (smoke run 40692102750); policy test `win_ondemand_cmd_steps_have_no_bare_optional_probe`; ADR-029 Amendment 1 notes the OIDC subject format with owner and repository ids.
 - M6 Phase C2: `two-clients` (TC-*), turmoil simulations SIM-01…SIM-10, the KS analyser and the dispatch jobs `ks-hour`/`tor-smoke` (AI-07 loopback MET, run 39942819176; AI-10), `docs/measurements/M6-traffic.md` (MR-03…MR-07), gates CT-00, PV-01, X-07, X-08.
 - M0 repository bootstrap: Cargo workspace with the eleven `secmp-*` crates as documented skeletons (responsibility

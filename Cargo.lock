@@ -3554,6 +3554,7 @@ version = "0.0.0"
 dependencies = [
  "secmp-crypto",
  "secmp-proto",
+ "secmp-store",
  "secmp-transport",
  "tokio",
 ]
@@ -3635,6 +3636,7 @@ dependencies = [
  "secmp-crypto",
  "secmp-proto",
  "secmp-relay",
+ "secmp-store",
  "secmp-transport",
  "serde_json",
  "sha3 0.11.0",

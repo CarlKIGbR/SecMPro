@@ -8913,6 +8913,64 @@ mod tests {
             .collect()
     }
 
+    /// TEST-SPEC-M7 G7-06 (OPEN-M7-05 A): the `secmp-client-core` → `secmp-store` edge is the only store dependency line of
+    /// the client core and sits in its `[target.'cfg(not(kani))'.dependencies]` table, so the Kani build (`--cfg kani`, which
+    /// `cargo kani` passes as `CARGO_ENCODED_RUSTFLAGS`) has no store, no `rusqlite` and no `openssl-src`; the same tree
+    /// without the cfg has all three (the negative control). `cargo kani -p secmp-client-core --only-codegen` is the
+    /// evidence of the build itself (`docs/reviews/M07-evidence/kani-codegen-g7-06-<sha7>.txt`).
+    #[test]
+    fn kani_build_has_no_store() -> Result<()> {
+        let manifest = m7_repo_file("crates/secmp-client-core/Cargo.toml")?;
+        let mut table = String::new();
+        let mut store_lines = Vec::new();
+        for line in manifest.lines() {
+            let t = line.trim();
+            if t.starts_with('[') {
+                table = t.to_owned();
+                continue;
+            }
+            if t.starts_with("secmp-store") {
+                store_lines.push(table.clone());
+            }
+        }
+        assert_eq!(
+            store_lines,
+            ["[target.'cfg(not(kani))'.dependencies]"],
+            "the one secmp-store dependency line of secmp-client-core"
+        );
+        let tree = |kani: bool| -> Result<String> {
+            let cmd = Cmd::cargo()
+                .args([
+                    "tree",
+                    "--locked",
+                    "-p",
+                    "secmp-client-core",
+                    "-e",
+                    // `openssl-src` is a build-dependency of `openssl-sys`: `normal` alone never lists it
+                    "normal,build",
+                    "--target",
+                    "x86_64-unknown-linux-gnu",
+                    "--prefix",
+                    "none",
+                ])
+                .env_remove("RUSTFLAGS");
+            let cmd = if kani {
+                cmd.env("CARGO_ENCODED_RUSTFLAGS", "--cfg\u{1f}kani")
+            } else {
+                cmd.env_remove("CARGO_ENCODED_RUSTFLAGS")
+            };
+            cmd.read()
+        };
+        let has = |text: &str, prefix: &str| text.lines().any(|l| l.starts_with(prefix));
+        let with_kani = tree(true)?;
+        let without = tree(false)?;
+        for prefix in ["secmp-store v", "rusqlite v", "openssl-src v"] {
+            assert!(!has(&with_kani, prefix), "kani build has {prefix}");
+            assert!(has(&without, prefix), "negative control lacks {prefix}");
+        }
+        Ok(())
+    }
+
     /// TEST-SPEC-M7 G7-02 (ADR-055 item 5, Q129): the vet records of the M7 dependency set. `argon2` and `blake2` (the
     /// zero-exemption crypto closure) are covered by publisher trust of their RustCrypto repositories, provisional with the
     /// owner's ratification pending; `rusqlite`, now a direct dependency of `secmp-store`, has a full audit by the

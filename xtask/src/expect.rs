@@ -51,7 +51,13 @@ pub(crate) const NORMAL_DEPENDENCY_ALLOW: &[(&str, &[&str])] = &[
     ),
     (
         "secmp-client-core",
-        &["secmp-crypto", "secmp-proto", "secmp-transport", "tokio"],
+        &[
+            "secmp-crypto",
+            "secmp-proto",
+            "secmp-store",
+            "secmp-transport",
+            "tokio",
+        ],
     ),
     (
         "secmp-testkit",
@@ -60,6 +66,7 @@ pub(crate) const NORMAL_DEPENDENCY_ALLOW: &[(&str, &[&str])] = &[
             "secmp-crypto",
             "secmp-proto",
             "secmp-relay",
+            "secmp-store",
             "secmp-transport",
             "serde_json",
             "tokio",
@@ -2038,11 +2045,30 @@ fn normal_dependency_allow_m7() {
             "zeroize",
         ]
     );
+    // G7-06 (A-3): the client-core (`cfg(not(kani))`) and testkit edges to the store
     assert_eq!(
         row("secmp-client-core"),
-        ["secmp-crypto", "secmp-proto", "secmp-transport", "tokio"]
+        [
+            "secmp-crypto",
+            "secmp-proto",
+            "secmp-store",
+            "secmp-transport",
+            "tokio"
+        ]
     );
-    assert!(!row("secmp-testkit").contains(&"secmp-store"));
+    assert_eq!(
+        row("secmp-testkit"),
+        [
+            "secmp-client-core",
+            "secmp-crypto",
+            "secmp-proto",
+            "secmp-relay",
+            "secmp-store",
+            "secmp-transport",
+            "serde_json",
+            "tokio"
+        ]
+    );
     let rows: Vec<&str> = NORMAL_DEPENDENCY_ALLOW.iter().map(|(k, _)| *k).collect();
     assert_eq!(
         rows,

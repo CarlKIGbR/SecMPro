@@ -550,8 +550,9 @@ mod tests {
             ("blake2", "0.11.0", "2026-08-26", true),
             ("password-hash", "0.6.1", "2026-04-08", true),
             ("phc", "0.6.1", "2026-03-09", true),
-            ("openssl-sys", "0.9.117", "2026-06-12", false),
-            ("openssl-src", "300.6.1+3.6.3", "2026-06-09", false),
+            // G7-06: the store reaches the fuzz workspace through `secmp-client-core`
+            ("openssl-sys", "0.9.117", "2026-06-12", true),
+            ("openssl-src", "300.6.1+3.6.3", "2026-06-09", true),
         ];
         // the youngest of the six is 60 days old on 2026-10-28; 7 days before the first day of M7's dependency commit
         let cutoff = "2026-10-21";

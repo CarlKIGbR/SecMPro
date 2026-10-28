@@ -22,5 +22,10 @@ secmp-proto.workspace = true
 secmp-transport.workspace = true
 tokio.workspace = true
 
+# G7-06 (OPEN-M7-05 A): the encrypted store, outside the Kani build (`cargo kani` sets `--cfg kani`; the SQLCipher/OpenSSL
+# C build has no place there). Only the store-backed `Persist`/`Outbox` use it; the scheduler sees the traits (OB-07).
+[target.'cfg(not(kani))'.dependencies]
+secmp-store.workspace = true
+
 [lints]
 workspace = true

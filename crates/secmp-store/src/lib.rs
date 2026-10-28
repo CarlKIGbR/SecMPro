@@ -14,7 +14,9 @@
 //! of a [`DbKey`] exists until A-4.
 #![forbid(unsafe_code)]
 
+pub mod delete;
 mod error;
+pub mod messages;
 pub mod migrate;
 pub mod schema;
 pub mod store;

@@ -87,6 +87,8 @@ pub struct Store {
     pub(crate) conn: Connection,
     dir: PathBuf,
     _lock: File,
+    /// View-once messages, in memory only (CS-3.4, ST-17).
+    pub(crate) view_once: crate::messages::ViewOnceHolder,
     /// The size of the write-ahead log after the last commit (`kat::measure_writes`).
     #[cfg(any(test, feature = "kat"))]
     wal_size: Option<u64>,
@@ -186,6 +188,7 @@ impl Store {
             conn,
             dir: dir.to_path_buf(),
             _lock: lock,
+            view_once: crate::messages::ViewOnceHolder::default(),
             #[cfg(any(test, feature = "kat"))]
             wal_size: None,
         };
@@ -425,8 +428,15 @@ mod tests {
         )?;
         assert!(ok, "the child failed");
         assert_eq!(std::fs::read_dir(&tmp)?.count(), 0, "TMPDIR is not empty");
-        // the store is closed: reopen it so that the -wal and -shm files exist as during use
-        let _store = Store::open(&profile, &TestKey::db_key())?;
+        // the child did the work (its rows are there); the store is closed: reopen it so that the -wal and -shm files
+        // exist as during use
+        assert!(profile.join(DB_FILE).exists(), "the child ran");
+        let store = Store::open(&profile, &TestKey::db_key())?;
+        let n: i64 =
+            store
+                .connection_kat()
+                .query_row("SELECT count(*) FROM messages", [], |r| r.get(0))?;
+        assert_eq!(n, 2000);
         let mut names: Vec<String> = std::fs::read_dir(&profile)?
             .filter_map(|e| e.ok().map(|e| e.file_name().to_string_lossy().into_owned()))
             .collect();

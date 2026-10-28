@@ -338,6 +338,115 @@ pub(crate) fn kat_seed_detail(ci_seed: Option<u64>) -> String {
     }
 }
 
+/// Whether `line` is a `cfg` attribute that limits the next item to the `kat` feature (alone or with `test`).
+#[cfg(test)]
+fn is_kat_cfg(line: &str) -> bool {
+    let t = line.trim();
+    t == "#[cfg(feature = \"kat\")]" || t == "#[cfg(any(test, feature = \"kat\"))]"
+}
+
+/// The lines of a Rust source that lie outside every `kat`-gated item and outside the trailing `#[cfg(test)] mod tests`
+/// module: a gated item starts at a line after an [`is_kat_cfg`] attribute and ends where its braces close (or at its
+/// `;` when it has none).
+#[cfg(test)]
+fn ungated_lines(src: &str) -> Vec<(usize, &str)> {
+    let mut out = Vec::new();
+    let mut pending = false;
+    let mut gated_depth: Option<i64> = None;
+    let mut depth: i64 = 0;
+    let mut in_tests = false;
+    let mut prev_test_cfg = false;
+    for (n, line) in src.lines().enumerate() {
+        let t = line.trim();
+        if prev_test_cfg && t.starts_with("mod tests") {
+            in_tests = true;
+        }
+        prev_test_cfg = t == "#[cfg(test)]";
+        let gated = in_tests || pending || gated_depth.is_some();
+        if !gated && !t.starts_with("//") {
+            out.push((n.saturating_add(1), line));
+        }
+        let before = depth;
+        let opens = i64::try_from(line.matches('{').count()).unwrap_or(0);
+        let closes = i64::try_from(line.matches('}').count()).unwrap_or(0);
+        depth = depth.saturating_add(opens).saturating_sub(closes);
+        if is_kat_cfg(line) {
+            pending = true;
+        } else if pending && !t.starts_with("#[") && !t.starts_with("///") && !t.is_empty() {
+            pending = false;
+            if depth > before {
+                gated_depth = Some(before);
+            }
+        } else if gated_depth.is_some_and(|g| depth <= g) {
+            gated_depth = None;
+        }
+    }
+    out
+}
+
+/// TEST-SPEC-M7 ST-09 (`docs/06` §2; M4 review RT-2): the test-only constructors stay test-only. In every shipped
+/// crate's `src/` (all but `secmp-testkit`): `kat_small` is defined only under `cfg(feature = "kat")` (0 sites in A-3 —
+/// the Argon2 parameters are A-4); every line naming `TestKey`, `CrashAt` or `FailAt` is inside a `kat`-gated item, a
+/// test module, or `secmp-store/src/kat.rs`, which `lib.rs` declares under `cfg(any(test, feature = "kat"))`; at least
+/// one `TestKey` site exists; and `cargo tree -e features -p secmp-cli` shows no `kat` feature.
+#[cfg(test)]
+#[test]
+fn kat_argon2_params_only_with_kat() -> Result<()> {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let store_lib = std::fs::read_to_string(root.join("crates/secmp-store/src/lib.rs"))?;
+    assert!(store_lib.contains("#[cfg(any(test, feature = \"kat\"))]\npub mod kat;"));
+    let mut test_key_sites = 0_usize;
+    let mut kat_small_sites = 0_usize;
+    let mut bad = Vec::new();
+    for file in crate::util::walk_files(&root.join("crates"), &|p| {
+        p.extension().is_some_and(|x| x == "rs")
+            && p.components().any(|c| c.as_os_str() == "src")
+            && !p.components().any(|c| c.as_os_str() == "secmp-testkit")
+    })? {
+        let rel = crate::util::rel(&root, &file);
+        let src = std::fs::read_to_string(&file)?.replace("\r\n", "\n");
+        let words = |l: &str, w: &str| {
+            l.split(|c: char| !(c.is_alphanumeric() || c == '_'))
+                .any(|x| x == w)
+        };
+        for line in src.lines() {
+            if words(line, "TestKey") {
+                test_key_sites = test_key_sites.saturating_add(1);
+            }
+            if words(line, "kat_small") && line.contains("fn kat_small") {
+                kat_small_sites = kat_small_sites.saturating_add(1);
+            }
+        }
+        if rel.ends_with("crates/secmp-store/src/kat.rs") {
+            continue;
+        }
+        for (n, line) in ungated_lines(&src) {
+            for w in ["TestKey", "CrashAt", "FailAt", "kat_small"] {
+                if words(line, w) {
+                    bad.push(format!("{rel}:{n}: {w}"));
+                }
+            }
+        }
+    }
+    assert!(bad.is_empty(), "outside a kat gate: {bad:?}");
+    assert!(test_key_sites >= 1, "no TestKey site");
+    assert_eq!(kat_small_sites, 0, "kat_small: 0 sites in A-3 (A-4)");
+    let tree = Cmd::cargo()
+        .args(["tree", "--locked", "-e", "features", "-p", "secmp-cli"])
+        .read()?;
+    assert!(!tree.contains("feature \"kat\""), "{tree}");
+    assert!(!tree.contains("feature \"harness\""));
+    // the scanner itself: a gated item and a test module are skipped, an ungated line is found
+    let fixture = "fn a() { TestKey }\n#[cfg(feature = \"kat\")]\nfn b() {\n    TestKey\n}\nfn c() {}\n#[cfg(test)]\nmod tests {\n    TestKey\n}\n";
+    let lines: Vec<usize> = ungated_lines(fixture)
+        .into_iter()
+        .filter(|(_, l)| l.contains("TestKey"))
+        .map(|(n, _)| n)
+        .collect();
+    assert_eq!(lines, [1]);
+    Ok(())
+}
+
 /// The source scans and their tests (test-only).
 #[cfg(test)]
 mod scan;

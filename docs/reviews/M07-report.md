@@ -116,7 +116,7 @@ ADR-055 effective 2026-10-28 (memo default); records provisional (Q129), owner r
 
 **Upstream advisories (ADR-055 item 7).** SQLite 3.50.4 (CVE-2026-11822/-11824, fixed 3.53.2; CVE-2025-70873 zipfile, fixed 3.53.0), SQLCipher 4.10.0 (defensive-mode bypass in `sqlcipher_export`, fixed 4.15.0, Low), OpenSSL 3.6.3 (fixed in 3.6.4 and 3.6.5; CVE-2026-84782 DTLS High) — bundled by `libsqlite3-sys` 0.37.0 / `openssl-src` 300.6.1+3.6.3, which follow Arti's `links = "sqlite3"`; exposure as listed in the ADR (no attacker SQL, FTS5/zipfile unused, OpenSSL only through SQLCipher); mitigation row ST-20 in A-3.
 
-**Argon2 working memory.** The `argon2` crate frees the 256 MiB matrix without zeroizing it (only the initial hash is zeroized); recorded in the vet notes and ADR-051 Am. 7.
+**Argon2 working memory.** The `argon2` crate frees the 256 MiB block matrix without zeroizing it; it zeroizes the initial hash (`src/lib.rs:390`) and, in `finalize`, `blockhash`/`blockhash_bytes` (`:572-573`); recorded in the vet notes and ADR-051 Am. 7.
 
 **Kani memory.** `kani_proofs::tr_header_selection`: peak cbmc RSS 13 393 720 KiB = 94.6 % of the limit of 14 160 156 KiB (A1e run); next OPEN-M7-26 B candidate if it trips. Next: `kani_accept_opk_delete_only_on_success` 12 372 716 KiB (87.4 %), `kani_q_frame_plaintext_exact_fit` 12 121 336 KiB (85.6 %).
 
@@ -139,7 +139,7 @@ the container; RustSec shows none).
 red for them came from treating `XWIN_LIB_ONLY` crates as poison. `XWIN_LIB_ONLY` is `[secmp-crypto, secmp-transport]` again; the poison
 set of the test is `XWIN_EXCLUDE`.
 
-**A-2 closed @ `bf54d98`; A-3 next; owner: ratify the provisional records (Q129) — `who` of `argon2`, `blake2`, `password-hash`, `phc`, `rusqlite`.**
+**A-2 closed @ `bf54d98`; A-3 next; owner: ratify the provisional records (Q129) — at ratification the owner's sentence replaces `who` of `[[audits.rusqlite]]` (marker `Claude Sonnet 5.5 (implementer) + reviewer's verifier; owner ratification pending (Q129)`) and, in the `notes` of `[[trusted.argon2]]`, `[[trusted.blake2]]`, `[[trusted.password-hash]]`, `[[trusted.phc]]`, the marker `provisional, owner ratification pending (Q129)`.**
 
 **Q-A4 (Miri budget of ST-08).** `rfc9106_argon2id_vector` takes about 105 s of host wall time under Miri (aarch64, portable libcrux); no `MIRI_SKIP` entry was added (the 60-s rule is documented for `secmp-proto`; the crypto entries are ≥ 10 min). Reviewer to confirm or dictate the entry.
 
@@ -162,3 +162,7 @@ Quoted (foreground, `cargo kani -p secmp-proto -Z stubbing --harness <name>`):
 - `kani_commit_accept_atomic_record_names_deleted_opk2`: `** 1 of 1 cover properties satisfied`, `VERIFICATION:- SUCCESSFUL`, 116.59998 s
 
 Peaks of the full step (`kani-m7-a1e-9eac343.txt`, KiB; limit 14 160 156): `..._deleted_opk2` 6 220 484, `..._opk1` 5 737 528 (re-measured in the PR run); `tr_header_selection` 13 393 720, `kani_accept_opk_delete_only_on_success` 12 372 716, `kani_q_frame_plaintext_exact_fit` 12 121 336, `request_link_get` 9 479 788, `response_frame` 8 945 636, `kani_frame_pad_total` 8 053 804, `kani_outer_unpad_total` 7 780 720; `secmp-relay` largest `kani_executor_response_count` 4 136 084; `secmp-client-core` largest `kani_rate_bound_integer_form` 2 952 940.
+
+**A-4: F3** — Argon2 matrix zeroization (`hash_password_into_with_memory` with a `Zeroizing<Vec<Block>>`). No code for it in A-3.
+
+**Correction (A-3 §0.1).** The age of `argon2` 0.6.0 (published 2026-08-27) was given as 60 days in A0 and A-2; it is 61 days on 2026-10-27 and 62 days on 2026-10-28 (`cooldown-m7-a3.txt`). The vet closure grew by five crates, not four (`vet-suggest-m7-a3.txt`).

@@ -4,8 +4,9 @@
 //! [`SecretBytes`]; every failure of the underlying crate — an out-of-range parameter, a salt that is too short or too
 //! long, an oversized secret or associated datum — is the one uniform [`Error::Rejected`] (CLAUDE.md §4).
 //!
-//! The working memory (`m_kib` KiB) is allocated zeroed and freed by the `argon2` crate; it is not zeroized on drop
-//! (the crate zeroizes only the initial hash), a property recorded with the vet record of `argon2` (ADR-051 Am. 7).
+//! The working memory (`m_kib` KiB) is allocated zeroed and freed by the `argon2` crate; the block matrix is not zeroized
+//! on drop (the crate zeroizes the initial hash and, in `finalize`, `blockhash`/`blockhash_bytes`), a property recorded with
+//! the vet record of `argon2` (ADR-051 Am. 7).
 
 use ::argon2::{Algorithm, Argon2, AssociatedData, ParamsBuilder, Version};
 

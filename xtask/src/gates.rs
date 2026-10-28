@@ -8918,7 +8918,8 @@ mod tests {
     /// owner's ratification pending; `rusqlite`, now a direct dependency of `secmp-store`, has a full audit by the
     /// implementer (provisional, same wording) and no exemption any more; the build inputs and the lock-only crates are
     /// tracked exemptions that say so; `check_vet_closure` stays zero-exemption with `argon2` and `blake2` in the closure.
-    /// `cargo vet --locked` itself is the `vet` step.
+    /// `cargo vet --locked` itself is the `vet` step. Both markers are replaced by the owner's ratification; this test is
+    /// re-dictated in that commit.
     #[test]
     fn vet_records_for_m7_closure() -> Result<()> {
         let audits = m7_repo_file("supply-chain/audits.toml")?;

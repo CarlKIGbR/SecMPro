@@ -1,0 +1,729 @@
+# WEISUNG M7-A3 §0.1 (a), (c), 2026-10-28, head ba1dce6 + the §0.1 doc edits (no lock change)
+# `cargo vet suggest`: NOT empty — 313 suggestions, the backlog of the tracked exemptions (cargo vet --locked: 241 fully audited,
+# 2 partially audited, 322 exempted). M7 crates that appear in it: openssl-sys 0.9.117, openssl-src 300.6.1+3.6.3, libsqlite3-sys 0.37.0
+# (tracked exemptions of ADR-055 item 5). No entry for argon2, blake2, password-hash, phc, rusqlite (all recorded).
+# Closure count (a): vet step 55 (ci-fast-a1c-62c2dbc.txt) -> 60 (vet-m7-a2.txt) = +5: argon2, blake2, password-hash, phc, base64ct 1.8.3.
+# base64ct's only normal path to secmp-crypto is argon2; cpufeatures 0.3.1 has other paths (chacha20, curve25519-dalek, ...).
+
+== cargo vet suggest
+recommended audits for safe-to-deploy:
+    Command                                               Publisher                            Used By                                      Audit Size
+    cargo vet diff cpubits 0.1.0 0.1.1                    github:RustCrypto/utils              aes and polyval                              4 files changed, 9 insertions(+), 3 deletions(-)
+      NOTE: this project trusts github:RustCrypto/utils - consider cargo vet trust cpubits github:RustCrypto/utils
+    cargo vet diff spki 0.8.0-pre.0 0.7.3                 baloo                                rsa, ecdsa, pkcs1, and pkcs8                 4 files changed, 7 insertions(+), 7 deletions(-)
+    cargo vet diff futures-io 0.3.31 0.3.34               taiki-e                              futures, tokio-util, and 3 others            2 files changed, 9 insertions(+), 7 deletions(-)
+    cargo vet diff futures-sink 0.3.31 0.3.34             taiki-e                              futures, tokio-util, and 3 others            2 files changed, 9 insertions(+), 7 deletions(-)
+      NOTE: cargo vet import ariel-os would reduce this to a 4-line diff
+    cargo vet diff futures-macro 0.3.31 0.3.34            taiki-e                              futures-util                                 3 files changed, 11 insertions(+), 9 deletions(-)
+      NOTE: cargo vet import ariel-os would reduce this to a 8-line diff
+    cargo vet diff const-oid 0.9.5 0.9.6                  baloo                                der, rsa, and digest                         4 files changed, 22 insertions(+), 2 deletions(-)
+    cargo vet diff crypto-common 0.1.6 0.1.7              newpavlov                            cipher and digest                            3 files changed, 25 insertions(+), 8 deletions(-)
+    cargo vet diff idna_adapter 1.2.1 1.2.2               hsivonen                             idna                                         4 files changed, 20 insertions(+), 17 deletions(-)
+    cargo vet diff serde_spanned 1.1.1 1.1.2              epage                                toml                                         4 files changed, 24 insertions(+), 15 deletions(-)
+      NOTE: isrg, mozilla, and bytecode-alliance trust Ed Page (epage) - consider cargo vet trust serde_spanned or cargo vet trust --all epage
+    cargo vet diff toml_datetime 1.1.1+spec-1.1.0 1.1.2+spec-1.1.0
+                                                          epage                                toml and toml_edit                           4 files changed, 24 insertions(+), 15 deletions(-)
+      NOTE: isrg, mozilla, and bytecode-alliance trust Ed Page (epage) - consider cargo vet trust toml_datetime or cargo vet trust --all epage
+    cargo vet diff num-iter 0.1.45 0.1.46                 cuviper                              num-bigint-dig                               4 files changed, 29 insertions(+), 17 deletions(-)
+      NOTE: this project trusts Josh Stone (cuviper) - consider cargo vet trust num-iter or cargo vet trust --all cuviper
+    cargo vet diff android_system_properties 0.1.5 0.1.6  nical                                iana-time-zone                               3 files changed, 38 insertions(+), 10 deletions(-)
+    cargo vet diff toml_writer 1.1.1+spec-1.1.0 1.1.3+spec-1.1.0
+                                                          epage                                toml                                         5 files changed, 32 insertions(+), 21 deletions(-)
+      NOTE: isrg, mozilla, and bytecode-alliance trust Ed Page (epage) - consider cargo vet trust toml_writer or cargo vet trust --all epage
+    cargo vet diff version_check 0.9.4 0.9.5              SergioBenitez                        figment, slotmap, uncased, and 1 other       4 files changed, 55 insertions(+), 4 deletions(-)
+    cargo vet diff hkdf 0.12.3 0.12.4                     newpavlov                            tor-proto                                    4 files changed, 45 insertions(+), 15 deletions(-)
+    cargo vet diff stable_deref_trait 1.2.0 1.2.1         Storyyeller                          yoke                                         3 files changed, 45 insertions(+), 18 deletions(-)
+    cargo vet diff rand 0.8.6 0.8.8                       github:rust-random/rand              num-bigint-dig                               5 files changed, 63 insertions(+), 2 deletions(-)
+    cargo vet diff idna 0.3.0 0.4.0                       valenting                            url                                          6 files changed, 53 insertions(+), 18 deletions(-)
+      NOTE: cargo vet import embark-studios would eliminate this
+      NOTE: mozilla trusts Manish Goregaokar (Manishearth), who published another version of this crate - consider cargo vet trust idna Manishearth
+    cargo vet diff strum 0.27.2 0.28.0                    Peternator7                          tor-error, tor-proto, and 9 others           5 files changed, 38 insertions(+), 39 deletions(-)
+    cargo vet diff rustc-hash 2.1.1 2.1.3                 Noratrieb                            bindgen                                      5 files changed, 52 insertions(+), 28 deletions(-)
+    cargo vet diff synstructure 0.13.2 0.14.0             mystor                               yoke-derive and zerofrom-derive              4 files changed, 40 insertions(+), 41 deletions(-)
+    cargo vet diff lazy_static 1.5.0 1.5.1                rust-lang-owner                      sharded-slab and num-bigint-dig              5 files changed, 59 insertions(+), 25 deletions(-)
+      NOTE: this project trusts rust-lang-owner - consider cargo vet trust lazy_static rust-lang-owner
+    cargo vet diff sha3 0.10.8 0.10.9                     newpavlov                            tor-llcrypto                                 6 files changed, 72 insertions(+), 16 deletions(-)
+    cargo vet diff url 2.5.7 2.5.8                        Manishearth                          tor-chanmgr                                  7 files changed, 61 insertions(+), 27 deletions(-)
+      NOTE: mozilla trusts Manish Goregaokar (Manishearth) - consider cargo vet trust url Manishearth
+    cargo vet diff futures-executor 0.3.31 0.3.34         taiki-e                              futures                                      6 files changed, 37 insertions(+), 52 deletions(-)
+    cargo vet diff sha1 0.10.6 0.10.7                     github:RustCrypto/hashes             tor-llcrypto                                 6 files changed, 49 insertions(+), 45 deletions(-)
+      NOTE: this project trusts github:RustCrypto/hashes - consider cargo vet trust sha1 github:RustCrypto/hashes
+    cargo vet diff zerofrom 0.1.6 0.1.8                   sffc                                 yoke, zerovec, zerotrie, and 2 others        3 files changed, 79 insertions(+), 22 deletions(-)
+      NOTE: mozilla trusts Manish Goregaokar (Manishearth), who published another version of this crate - consider cargo vet trust zerofrom Manishearth
+    cargo vet inspect darling_macro 0.13.4                TedDriggs                            darling                                      113 lines
+    cargo vet inspect darling_macro 0.14.4                TedDriggs                            darling                                      117 lines
+    cargo vet diff find-msvc-tools 0.1.12 0.1.13          github:rust-lang/cc-rs               cc                                           7 files changed, 54 insertions(+), 64 deletions(-)
+    cargo vet diff potential_utf 0.1.4 0.1.6              sffc                                 icu_collections                              6 files changed, 101 insertions(+), 22 deletions(-)
+      NOTE: mozilla trusts Manish Goregaokar (Manishearth), who published another version of this crate - consider cargo vet trust potential_utf Manishearth
+    cargo vet inspect darling_macro 0.24.1                TedDriggs                            darling                                      125 lines
+    cargo vet diff arrayvec 0.7.6 0.7.8                   bluss                                tor-keymgr                                   8 files changed, 112 insertions(+), 25 deletions(-)
+    cargo vet diff zerofrom-derive 0.1.6 0.1.8            sffc                                 zerofrom                                     5 files changed, 100 insertions(+), 47 deletions(-)
+      NOTE: mozilla trusts Manish Goregaokar (Manishearth), who published another version of this crate - consider cargo vet trust zerofrom-derive Manishearth
+    cargo vet diff cc 1.4.5 1.4.7                         github:rust-lang/cc-rs               ring, cmake, crabgrind, and 6 others         11 files changed, 110 insertions(+), 38 deletions(-)
+    cargo vet inspect hostname-validator 1.1.1            mmstick                              tor-netdoc and arti-client                   151 lines
+    cargo vet diff icu_normalizer_data 2.1.1 2.3.0        sffc                                 icu_normalizer                               12 files changed, 100 insertions(+), 65 deletions(-)
+      NOTE: mozilla trusts Robert Bastian (robertbastian), who published another version of this crate - consider cargo vet trust icu_normalizer_data robertbastian
+    cargo vet inspect jiff-tzdb-platform 0.1.3            BurntSushi                           jiff                                         168 lines
+      NOTE: this project trusts Andrew Gallant (BurntSushi) - consider cargo vet trust jiff-tzdb-platform or cargo vet trust --all BurntSushi
+    cargo vet diff iana-time-zone 0.1.64 0.1.65           github:strawlab/iana-time-zone       chrono                                       10 files changed, 147 insertions(+), 32 deletions(-)
+    cargo vet inspect asn1-rs-impl 0.2.0                  chifflier                            asn1-rs                                      190 lines
+    cargo vet diff rsa 0.9.6 0.9.10                       dignifiedquire                       tor-llcrypto, tor-key-forge, and 1 other     10 files changed, 134 insertions(+), 66 deletions(-)
+    cargo vet diff tracing-attributes 0.1.30 0.1.31       hds                                  tracing                                      9 files changed, 168 insertions(+), 52 deletions(-)
+    cargo vet diff litemap 0.8.1 0.8.3                    sffc                                 icu_locale_core                              10 files changed, 191 insertions(+), 46 deletions(-)
+      NOTE: mozilla trusts Manish Goregaokar (Manishearth), who published another version of this crate - consider cargo vet trust litemap Manishearth
+    cargo vet inspect ident_case 1.0.1                    TedDriggs                            darling_core                                 247 lines
+      NOTE: cargo vet import embark-studios would eliminate this
+    cargo vet diff ctr 0.10.0-rc.3 0.10.1                 github:RustCrypto/block-modes        tor-proto and tor-llcrypto                   12 files changed, 205 insertions(+), 45 deletions(-)
+    cargo vet diff serde_spanned 1.0.3 0.6.9              epage                                toml and toml_edit                           6 files changed, 71 insertions(+), 186 deletions(-)
+      NOTE: isrg, mozilla, and bytecode-alliance trust Ed Page (epage) - consider cargo vet trust serde_spanned or cargo vet trust --all epage
+    cargo vet diff powerfmt 0.2.0 0.2.1                   jhpratt                              time                                         7 files changed, 202 insertions(+), 67 deletions(-)
+    cargo vet diff rand_chacha 0.9.0 0.10.0               dhardy                               tor-llcrypto and tor-basic-utils             7 files changed, 130 insertions(+), 140 deletions(-)
+    cargo vet diff bstr 1.11.3 1.13.1                     BurntSushi                           shellexpand                                  11 files changed, 230 insertions(+), 45 deletions(-)
+      NOTE: this project trusts Andrew Gallant (BurntSushi) - consider cargo vet trust bstr or cargo vet trust --all BurntSushi
+    cargo vet diff futures-channel 0.3.31 0.3.34          taiki-e                              futures and futures-util                     8 files changed, 225 insertions(+), 51 deletions(-)
+    cargo vet inspect windows_aarch64_gnullvm 0.52.6      kennykerr                            windows-targets                              278 lines
+      NOTE: this project trusts Kenny Kerr (kennykerr) - consider cargo vet trust windows_aarch64_gnullvm or cargo vet trust --all kennykerr
+    cargo vet inspect windows_aarch64_msvc 0.52.6         kennykerr                            windows-targets                              278 lines
+      NOTE: this project trusts Kenny Kerr (kennykerr) - consider cargo vet trust windows_aarch64_msvc kennykerr
+    cargo vet inspect windows_i686_gnu 0.52.6             kennykerr                            windows-targets                              278 lines
+      NOTE: this project trusts Kenny Kerr (kennykerr) - consider cargo vet trust windows_i686_gnu kennykerr
+    cargo vet inspect windows_i686_gnullvm 0.52.6         kennykerr                            windows-targets                              278 lines
+      NOTE: this project trusts Kenny Kerr (kennykerr) - consider cargo vet trust windows_i686_gnullvm or cargo vet trust --all kennykerr
+    cargo vet inspect windows_i686_msvc 0.52.6            kennykerr                            windows-targets                              278 lines
+      NOTE: this project trusts Kenny Kerr (kennykerr) - consider cargo vet trust windows_i686_msvc kennykerr
+    cargo vet inspect windows_x86_64_gnu 0.52.6           kennykerr                            windows-targets                              278 lines
+      NOTE: this project trusts Kenny Kerr (kennykerr) - consider cargo vet trust windows_x86_64_gnu kennykerr
+    cargo vet inspect windows_x86_64_gnullvm 0.52.6       kennykerr                            windows-targets                              278 lines
+      NOTE: this project trusts Kenny Kerr (kennykerr) - consider cargo vet trust windows_x86_64_gnullvm or cargo vet trust --all kennykerr
+    cargo vet inspect windows_x86_64_msvc 0.52.6          kennykerr                            windows-targets                              278 lines
+      NOTE: this project trusts Kenny Kerr (kennykerr) - consider cargo vet trust windows_x86_64_msvc kennykerr
+    cargo vet inspect windows_aarch64_gnullvm 0.53.0      kennykerr                            windows-targets                              279 lines
+      NOTE: this project trusts Kenny Kerr (kennykerr) - consider cargo vet trust windows_aarch64_gnullvm or cargo vet trust --all kennykerr
+    cargo vet inspect windows_aarch64_msvc 0.53.0         kennykerr                            windows-targets                              279 lines
+      NOTE: this project trusts Kenny Kerr (kennykerr) - consider cargo vet trust windows_aarch64_msvc kennykerr
+    cargo vet inspect windows_i686_gnu 0.53.0             kennykerr                            windows-targets                              279 lines
+      NOTE: this project trusts Kenny Kerr (kennykerr) - consider cargo vet trust windows_i686_gnu kennykerr
+    cargo vet inspect windows_i686_gnullvm 0.53.0         kennykerr                            windows-targets                              279 lines
+      NOTE: this project trusts Kenny Kerr (kennykerr) - consider cargo vet trust windows_i686_gnullvm or cargo vet trust --all kennykerr
+    cargo vet inspect windows_i686_msvc 0.53.0            kennykerr                            windows-targets                              279 lines
+      NOTE: this project trusts Kenny Kerr (kennykerr) - consider cargo vet trust windows_i686_msvc kennykerr
+    cargo vet inspect windows_x86_64_gnu 0.53.0           kennykerr                            windows-targets                              279 lines
+      NOTE: this project trusts Kenny Kerr (kennykerr) - consider cargo vet trust windows_x86_64_gnu kennykerr
+    cargo vet inspect windows_x86_64_gnullvm 0.53.0       kennykerr                            windows-targets                              279 lines
+      NOTE: this project trusts Kenny Kerr (kennykerr) - consider cargo vet trust windows_x86_64_gnullvm or cargo vet trust --all kennykerr
+    cargo vet inspect windows_x86_64_msvc 0.53.0          kennykerr                            windows-targets                              279 lines
+      NOTE: this project trusts Kenny Kerr (kennykerr) - consider cargo vet trust windows_x86_64_msvc kennykerr
+    cargo vet diff pin-project-lite 0.2.16 0.2.17         github:taiki-e/pin-project-lite      tokio, tracing, tokio-util, and 4 others     19 files changed, 145 insertions(+), 147 deletions(-)
+    cargo vet diff futures 0.3.31 0.3.34                  taiki-e                              postage, tor-error, and 18 others            16 files changed, 236 insertions(+), 116 deletions(-)
+    cargo vet diff bytemuck 1.22.0 1.25.2                 Lokathor                             atomic                                       19 files changed, 307 insertions(+), 51 deletions(-)
+    cargo vet diff saturating-time 0.5.0 0.4.0            cvengler                             tor-cert and tor-netdoc                      7 files changed, 246 insertions(+), 122 deletions(-)
+    cargo vet inspect windows-targets 0.53.5              kennykerr                            windows-sys                                  388 lines
+      NOTE: this project trusts Kenny Kerr (kennykerr) - consider cargo vet trust windows-targets or cargo vet trust --all kennykerr
+    cargo vet inspect windows-targets 0.52.6              kennykerr                            windows-sys                                  409 lines
+      NOTE: this project trusts Kenny Kerr (kennykerr) - consider cargo vet trust windows-targets or cargo vet trust --all kennykerr
+    cargo vet diff log 0.4.29 0.4.34                      KodrAus                              mio, jiff, notify, rustls, and 4 others      11 files changed, 368 insertions(+), 67 deletions(-)
+      NOTE: cargo vet import ariel-os would reduce this to a 63-line diff
+    cargo vet inspect unty 0.0.4                          VictorKoenders                       bincode                                      439 lines
+    cargo vet inspect wasm-bindgen-macro 0.2.128          github:wasm-bindgen/wasm-bindgen     wasm-bindgen                                 446 lines
+      NOTE: isrg, mozilla, and bytecode-alliance trust Alex Crichton (alexcrichton), who published another version of this crate - consider cargo vet trust wasm-bindgen-macro alexcrichton
+    cargo vet diff fastrand 2.3.0 2.5.0                   taiki-e                              tempfile and phf_generator                   8 files changed, 389 insertions(+), 59 deletions(-)
+    cargo vet diff icu_collections 2.1.1 2.3.0            sffc                                 icu_normalizer and icu_properties            21 files changed, 270 insertions(+), 178 deletions(-)
+      NOTE: mozilla trusts Robert Bastian (robertbastian), who published another version of this crate - consider cargo vet trust icu_collections robertbastian
+    cargo vet diff strum_macros 0.27.2 0.28.0             Peternator7                          strum                                        17 files changed, 247 insertions(+), 208 deletions(-)
+    cargo vet inspect sanitize-filename 0.6.0             kardeiz                              tor-persist                                  457 lines
+    cargo vet diff thread_local 1.1.9 1.1.10              Amanieu                              tracing-subscriber                           9 files changed, 260 insertions(+), 199 deletions(-)
+      NOTE: isrg, mozilla, and bytecode-alliance trust Amanieu d'Antras (Amanieu) - consider cargo vet trust thread_local or cargo vet trust --all Amanieu
+    cargo vet diff signal-hook-registry 1.4.1 1.4.8       vorner                               tokio                                        6 files changed, 382 insertions(+), 101 deletions(-)
+    cargo vet inspect tracing-test-macro 0.2.6            dbrgn                                tracing-test                                 484 lines
+    cargo vet diff zerovec-derive 0.11.2 0.11.6           sffc                                 zerovec                                      14 files changed, 377 insertions(+), 108 deletions(-)
+      NOTE: mozilla trusts Robert Bastian (robertbastian), who published another version of this crate - consider cargo vet trust zerovec-derive robertbastian
+    cargo vet diff simd-adler32 0.3.7 0.3.10              mcountryman                          miniz_oxide                                  15 files changed, 295 insertions(+), 205 deletions(-)
+    cargo vet diff wasm-bindgen-shared 0.2.92 0.2.128     github:wasm-bindgen/wasm-bindgen     wasm-bindgen and wasm-bindgen-macro-support  7 files changed, 503 insertions(+), 36 deletions(-)
+      NOTE: isrg, mozilla, and bytecode-alliance trust Alex Crichton (alexcrichton), who published another version of this crate - consider cargo vet trust wasm-bindgen-shared alexcrichton
+    cargo vet diff tinystr 0.8.1 0.8.4                    sffc                                 tor-netdoc and icu_locale_core               10 files changed, 375 insertions(+), 169 deletions(-)
+      NOTE: mozilla trusts Robert Bastian (robertbastian), who published another version of this crate - consider cargo vet trust tinystr robertbastian
+    cargo vet diff indexmap 2.14.0 2.14.2                 cuviper                              toml, turmoil, toml_edit, and 3 others       20 files changed, 348 insertions(+), 217 deletions(-)
+      NOTE: this project trusts Josh Stone (cuviper) - consider cargo vet trust indexmap cuviper
+    cargo vet inspect tracing-test 0.2.6                  dbrgn                                tor-rtmock                                   592 lines
+    cargo vet diff toml_datetime 0.7.3 0.6.11             epage                                toml and toml_edit                           7 files changed, 91 insertions(+), 522 deletions(-)
+      NOTE: isrg, mozilla, and bytecode-alliance trust Ed Page (epage) - consider cargo vet trust toml_datetime or cargo vet trust --all epage
+    cargo vet diff icu_provider 2.1.1 2.3.1               sffc                                 icu_normalizer and icu_properties            21 files changed, 452 insertions(+), 227 deletions(-)
+      NOTE: mozilla trusts Robert Bastian (robertbastian), who published another version of this crate - consider cargo vet trust icu_provider robertbastian
+    cargo vet inspect jiff-static 0.2.38                  BurntSushi                           jiff                                         680 lines
+      NOTE: this project trusts Andrew Gallant (BurntSushi) - consider cargo vet trust jiff-static or cargo vet trust --all BurntSushi
+    cargo vet inspect assert_matches 1.5.0                murarth                              tor-rtmock                                   686 lines
+    cargo vet inspect windows-threading 0.2.1             kennykerr                            windows-future                               689 lines
+      NOTE: this project trusts Kenny Kerr (kennykerr) - consider cargo vet trust windows-threading or cargo vet trust --all kennykerr
+    cargo vet diff miniz_oxide 0.8.9 0.9.1                oyvindln                             flate2                                       14 files changed, 540 insertions(+), 185 deletions(-)
+    cargo vet diff bitflags 2.11.1 2.13.2                 KodrAus                              notify, rustix, bindgen, and 8 others        12 files changed, 641 insertions(+), 92 deletions(-)
+    cargo vet inspect humantime-serde 1.1.1               jean-airoldie                        tor-config, tor-dirmgr, and 4 others         750 lines
+    cargo vet inspect by_address 1.2.1                    mbrubeck                             tor-linkspec                                 781 lines
+      NOTE: mozilla trusts Matt Brubeck (mbrubeck) - consider cargo vet trust by_address or cargo vet trust --all mbrubeck
+    cargo vet diff crossbeam-queue 0.3.8 0.3.14           taiki-e                              postage                                      12 files changed, 541 insertions(+), 252 deletions(-)
+    cargo vet inspect dirs-sys 0.5.0                      soc                                  dirs and directories                         819 lines
+    cargo vet inspect ref-cast-impl 1.0.27                dtolnay                              ref-cast                                     842 lines
+      NOTE: this project trusts David Tolnay (dtolnay) - consider cargo vet trust ref-cast-impl or cargo vet trust --all dtolnay
+    cargo vet diff radium 0.5.3 0.7.0                     myrrlyn                              bitvec                                       8 files changed, 605 insertions(+), 239 deletions(-)
+    cargo vet inspect dirs 2.0.2                          soc                                  fs-mistrust and shellexpand                  882 lines
+    cargo vet inspect enum-ordinalize 3.1.15              magiclen                             educe                                        893 lines
+    cargo vet diff tracing-subscriber 0.3.20 0.3.23       hds                                  tracing-test                                 33 files changed, 711 insertions(+), 186 deletions(-)
+      NOTE: this project trusts Carl Lerche (carllerche), who published another version of this crate - consider cargo vet trust tracing-subscriber carllerche
+    cargo vet diff getrandom 0.4.0-rc.0 0.3.4             josephlr                             amplify, rand_core, and tor-llcrypto         40 files changed, 432 insertions(+), 472 deletions(-)
+    cargo vet inspect compression-core 0.4.33             github:Nullus157/async-compression   async-compression and compression-codecs     923 lines
+    cargo vet inspect jiff-tzdb 0.1.9                     BurntSushi                           jiff-tzdb-platform                           945 lines
+      NOTE: this project trusts Andrew Gallant (BurntSushi) - consider cargo vet trust jiff-tzdb or cargo vet trust --all BurntSushi
+    cargo vet inspect inotify-sys 0.1.8                   hannobraun                           inotify                                      970 lines
+    cargo vet inspect defmt-parser 1.0.0                  Veykril                              defmt-macros                                 981 lines
+    cargo vet diff smallvec 1.15.2 1.16.2                 jdm                                  idna, rusqlite, tor-cell, and 7 others       6 files changed, 603 insertions(+), 396 deletions(-)
+      NOTE: mozilla trusts Matt Brubeck (mbrubeck), who published another version of this crate - consider cargo vet trust smallvec mbrubeck
+    cargo vet inspect scopeguard 1.1.0                    Amanieu                              lock_api and tor-dirmgr                      1010 lines
+      NOTE: isrg, mozilla, and bytecode-alliance trust Amanieu d'Antras (Amanieu) - consider cargo vet trust scopeguard or cargo vet trust --all Amanieu
+    cargo vet inspect fluid-let 1.0.0                     ilammy                               safelog                                      1018 lines
+    cargo vet diff yoke 0.8.0 0.8.3                       Manishearth                          zerovec, zerotrie, and 2 others              9 files changed, 863 insertions(+), 156 deletions(-)
+      NOTE: mozilla trusts Manish Goregaokar (Manishearth) - consider cargo vet trust yoke Manishearth
+    cargo vet inspect kqueue-sys 1.1.2                    worr                                 kqueue                                       1059 lines
+    cargo vet inspect dyn-clone 1.0.19                    dtolnay                              schemars, tor-keymgr, and 4 others           1063 lines
+      NOTE: this project trusts David Tolnay (dtolnay) - consider cargo vet trust dyn-clone or cargo vet trust --all dtolnay
+    cargo vet diff writeable 0.6.2 0.6.4                  sffc                                 icu_provider and icu_locale_core             14 files changed, 984 insertions(+), 83 deletions(-)
+      NOTE: mozilla trusts Manish Goregaokar (Manishearth), who published another version of this crate - consider cargo vet trust writeable Manishearth
+    cargo vet inspect windows-interface 0.59.3            kennykerr                            windows-core                                 1080 lines
+      NOTE: this project trusts Kenny Kerr (kennykerr) - consider cargo vet trust windows-interface or cargo vet trust --all kennykerr
+    cargo vet inspect proc-macro-crate 3.5.0              bkchr                                num_enum_derive and derive-deftly-macros     1085 lines
+    cargo vet inspect same-file 1.0.6                     BurntSushi                           walkdir                                      1109 lines
+      NOTE: this project trusts Andrew Gallant (BurntSushi) - consider cargo vet trust same-file or cargo vet trust --all BurntSushi
+    cargo vet inspect winapi-i686-pc-windows-gnu 0.4.0    UNKNOWN                              winapi                                       1132 lines
+    cargo vet diff crc32fast 1.4.2 1.5.2                  srijs                                flate2                                       13 files changed, 922 insertions(+), 212 deletions(-)
+    cargo vet inspect phf_generator 0.14.0                JohnTitor                            phf_macros                                   1141 lines
+      NOTE: isrg, mozilla, and bytecode-alliance trust Yuki Okushi (JohnTitor) - consider cargo vet trust phf_generator JohnTitor
+    cargo vet inspect merlin 3.0.0                        hdevalence                           ed25519-dalek                                1145 lines
+    cargo vet diff getset 0.1.3 0.1.7                     jbaublitz                            tor-dircommon                                12 files changed, 1025 insertions(+), 123 deletions(-)
+    cargo vet inspect futures-task 0.3.31                 taiki-e                              futures, futures-util, and 2 others          1155 lines
+    cargo vet inspect rdrand 0.9.0                        nagisa                               tor-llcrypto                                 1155 lines
+    cargo vet inspect winapi-x86_64-pc-windows-gnu 0.4.0  UNKNOWN                              winapi                                       1167 lines
+    cargo vet inspect uncased 0.9.10                      SergioBenitez                        figment                                      1172 lines
+    cargo vet diff libloading 0.9.0 0.8.9                 nagisa                               clang-sys                                    16 files changed, 275 insertions(+), 907 deletions(-)
+    cargo vet diff windows-implement 0.52.0 0.60.2        kennykerr                            windows-core                                 6 files changed, 1000 insertions(+), 196 deletions(-)
+      NOTE: this project trusts Kenny Kerr (kennykerr) - consider cargo vet trust windows-implement kennykerr
+    cargo vet inspect coarsetime 0.1.38                   jedisct1                             tor-proto and tor-rtcompat                   1201 lines
+    cargo vet inspect rusticata-macros 4.1.0              chifflier                            asn1-rs and der-parser                       1201 lines
+    cargo vet inspect asn1-rs-derive 0.6.0                chifflier                            asn1-rs                                      1211 lines
+    cargo vet inspect reseeding_rng 0.10.7                LiosK                                tor-llcrypto                                 1212 lines
+    cargo vet inspect windows-result 0.4.1                kennykerr                            windows-core                                 1241 lines
+      NOTE: this project trusts Kenny Kerr (kennykerr) - consider cargo vet trust windows-result or cargo vet trust --all kennykerr
+    cargo vet diff displaydoc 0.2.5 0.2.7                 Manishearth                          asn1-rs, tinystr, zerotrie, and 5 others     41 files changed, 413 insertions(+), 846 deletions(-)
+      NOTE: mozilla trusts Manish Goregaokar (Manishearth) - consider cargo vet trust displaydoc Manishearth
+    cargo vet inspect inventory 0.3.25                    dtolnay                              tor-keymgr                                   1298 lines
+      NOTE: this project trusts David Tolnay (dtolnay) - consider cargo vet trust inventory or cargo vet trust --all dtolnay
+    cargo vet inspect winapi-util 0.1.9                   BurntSushi                           walkdir and same-file                        1298 lines
+      NOTE: this project trusts Andrew Gallant (BurntSushi) - consider cargo vet trust winapi-util or cargo vet trust --all BurntSushi
+    cargo vet inspect tap 1.0.1                           myrrlyn                              wyz and bitvec                               1334 lines
+      NOTE: cargo vet import embark-studios would eliminate this
+    cargo vet inspect toml_write 0.1.2                    epage                                toml_edit                                    1345 lines
+      NOTE: isrg, mozilla, and bytecode-alliance trust Ed Page (epage) - consider cargo vet trust toml_write or cargo vet trust --all epage
+    cargo vet inspect libredox 0.1.25                     4lDO2                                redox_users                                  1406 lines
+    cargo vet inspect ref-cast 1.0.27                     dtolnay                              schemars                                     1407 lines
+      NOTE: this project trusts David Tolnay (dtolnay) - consider cargo vet trust ref-cast or cargo vet trust --all dtolnay
+    cargo vet inspect downcast-rs 2.0.2                   marcianx                             tor-keymgr, tor-circmgr, and 1 other         1408 lines
+    cargo vet inspect rand_jitter 0.6.1                   vks                                  tor-llcrypto                                 1411 lines
+    cargo vet inspect phf_shared 0.14.0                   JohnTitor                            phf, phf_macros, and phf_generator           1441 lines
+      NOTE: isrg, mozilla, and bytecode-alliance trust Yuki Okushi (JohnTitor) - consider cargo vet trust phf_shared JohnTitor
+    cargo vet inspect nonany 0.3.0                        rick-de-water                        tor-proto                                    1444 lines
+    cargo vet inspect phf_macros 0.14.0                   JohnTitor                            phf                                          1461 lines
+      NOTE: isrg, mozilla, and bytecode-alliance trust Yuki Okushi (JohnTitor) - consider cargo vet trust phf_macros JohnTitor
+    cargo vet inspect group 0.12.0                        ebfull                               elliptic-curve                               1496 lines
+      NOTE: zcash trusts Sean Bowe (ebfull) - consider cargo vet trust group ebfull
+    cargo vet inspect windows-numerics 0.3.1              kennykerr                            windows                                      1502 lines
+      NOTE: this project trusts Kenny Kerr (kennykerr) - consider cargo vet trust windows-numerics or cargo vet trust --all kennykerr
+    cargo vet inspect directories 5.0.1                   soc                                  tor-config-path                              1505 lines
+    cargo vet diff yoke-derive 0.8.1 0.8.4                robertbastian                        yoke                                         6 files changed, 1253 insertions(+), 260 deletions(-)
+      NOTE: mozilla trusts Robert Bastian (robertbastian) - consider cargo vet trust yoke-derive robertbastian
+    cargo vet inspect atomic 0.5.3                        Amanieu                              postage                                      1577 lines
+      NOTE: isrg, mozilla, and bytecode-alliance trust Amanieu d'Antras (Amanieu) - consider cargo vet trust atomic or cargo vet trust --all Amanieu
+    cargo vet diff zerovec 0.11.4 0.11.8                  Manishearth                          tinystr, icu_provider, and 5 others          47 files changed, 1134 insertions(+), 452 deletions(-)
+      NOTE: mozilla trusts Manish Goregaokar (Manishearth) - consider cargo vet trust zerovec Manishearth
+    cargo vet diff zlib-rs 0.6.3 0.6.8                    folkertdev                           flate2                                       30 files changed, 1257 insertions(+), 331 deletions(-)
+      NOTE: mozilla trusts Ruben Nijveld (rnijveld), who published another version of this crate - consider cargo vet trust zlib-rs rnijveld
+    cargo vet inspect ff 0.13.1                           str4d                                group and elliptic-curve                     1596 lines
+      NOTE: zcash trusts Jack Grigg (str4d) - consider cargo vet trust ff str4d
+    cargo vet inspect filetime 0.2.29                     alexcrichton                         tor-persist                                  1624 lines
+      NOTE: isrg, mozilla, and bytecode-alliance trust Alex Crichton (alexcrichton) - consider cargo vet trust filetime or cargo vet trust --all alexcrichton
+    cargo vet inspect windows-strings 0.5.1               kennykerr                            windows-core                                 1759 lines
+      NOTE: this project trusts Kenny Kerr (kennykerr) - consider cargo vet trust windows-strings or cargo vet trust --all kennykerr
+    cargo vet inspect enumset_derive 0.15.0               Lymia                                enumset                                      1784 lines
+    cargo vet inspect notify-types 2.1.0                  JohnTitor                            notify                                       1793 lines
+      NOTE: isrg, mozilla, and bytecode-alliance trust Yuki Okushi (JohnTitor) - consider cargo vet trust notify-types JohnTitor
+    cargo vet inspect atomic 0.6.1                        Amanieu                              figment                                      1813 lines
+      NOTE: isrg, mozilla, and bytecode-alliance trust Amanieu d'Antras (Amanieu) - consider cargo vet trust atomic or cargo vet trust --all Amanieu
+    cargo vet inspect funty 2.0.0                         myrrlyn                              bitvec                                       1829 lines
+    cargo vet inspect thiserror-impl 1.0.30               dtolnay                              thiserror                                    1829 lines
+      NOTE: cargo vet import embark-studios would eliminate this
+      NOTE: this project trusts David Tolnay (dtolnay) - consider cargo vet trust thiserror-impl or cargo vet trust --all dtolnay
+    cargo vet inspect redox_users 0.5.3                   jackpot51                            dirs-sys                                     1914 lines
+    cargo vet diff icu_locale_core 2.1.1 2.3.0            sffc                                 icu_provider and icu_properties              52 files changed, 1386 insertions(+), 540 deletions(-)
+      NOTE: mozilla trusts Robert Bastian (robertbastian), who published another version of this crate - consider cargo vet trust icu_locale_core robertbastian
+    cargo vet inspect tokio-macros 2.7.2                  Darksonn                             tokio                                        1943 lines
+      NOTE: this project trusts Alice Ryhl (Darksonn) - consider cargo vet trust tokio-macros Darksonn
+    cargo vet inspect num_enum_derive 0.7.6               illicitonion                         num_enum                                     2038 lines
+      NOTE: cargo vet import embark-studios would reduce this to a 233-line diff
+    cargo vet inspect serde_ignored 0.1.14                dtolnay                              tor-config                                   2087 lines
+      NOTE: this project trusts David Tolnay (dtolnay) - consider cargo vet trust serde_ignored or cargo vet trust --all dtolnay
+    cargo vet diff polyval 0.7.0-rc.7 0.7.3               github:RustCrypto/universal-hashes   tor-proto                                    24 files changed, 1121 insertions(+), 1081 deletions(-)
+      NOTE: this project trusts github:RustCrypto/universal-hashes - consider cargo vet trust polyval github:RustCrypto/universal-hashes
+    cargo vet diff flate2 1.1.5 1.1.10                    Byron                                compression-codecs                           30 files changed, 1792 insertions(+), 415 deletions(-)
+      NOTE: mozilla trusts Sebastian Thiel (Byron) - consider cargo vet trust flate2 Byron
+    cargo vet inspect siphasher 1.0.4                     jedisct1                             phf_shared                                   2237 lines
+    cargo vet inspect getrandom 0.2.2                     newpavlov                            ring, amplify, rand_core, and tor-llcrypto   2241 lines
+    cargo vet inspect phf 0.14.0                          JohnTitor                            tor-netdoc                                   2260 lines
+      NOTE: isrg, mozilla, and bytecode-alliance trust Yuki Okushi (JohnTitor) - consider cargo vet trust phf JohnTitor
+    cargo vet inspect glob-match 0.2.1                    devongovett                          tor-keymgr                                   2334 lines
+    cargo vet inspect generic-array 0.14.6                novacrazy                            sec1, inout, block-buffer, and 3 others      2341 lines
+    cargo vet inspect wyz 0.5.1                           myrrlyn                              bitvec                                       2361 lines
+    cargo vet inspect darling 0.13.4                      TedDriggs                            enumset_derive                               2366 lines
+    cargo vet inspect paste 1.0.10                        dtolnay                              pwd-grp, tor-cell, and 13 others             2397 lines
+      NOTE: this project trusts David Tolnay (dtolnay) - consider cargo vet trust paste or cargo vet trust --all dtolnay
+    cargo vet inspect asynchronous-codec 0.7.0            mxinden                              tor-proto and tor-rtcompat                   2414 lines
+    cargo vet inspect thiserror 1.0.30                    dtolnay                              postage                                      2441 lines
+      NOTE: cargo vet import embark-studios would eliminate this
+      NOTE: this project trusts David Tolnay (dtolnay) - consider cargo vet trust thiserror or cargo vet trust --all dtolnay
+    cargo vet inspect rsqlite-vfs 0.1.1                   Spxg                                 sqlite-wasm-rs                               2446 lines
+    cargo vet inspect memmap2 0.2.3                       RazrFalcon                           tor-dirmgr                                   2466 lines
+    cargo vet inspect futures-rustls 0.26.0               quininer                             tor-rtcompat                                 2483 lines
+      NOTE: this project trusts quininer (quininer) - consider cargo vet trust futures-rustls or cargo vet trust --all quininer
+    cargo vet diff icu_properties_data 2.1.2 2.3.0        sffc                                 icu_properties                               142 files changed, 1660 insertions(+), 934 deletions(-)
+      NOTE: mozilla trusts Robert Bastian (robertbastian), who published another version of this crate - consider cargo vet trust icu_properties_data robertbastian
+    cargo vet inspect bs58 0.5.0                          Nemo157                              serde_with                                   2608 lines
+    cargo vet diff time-macros 0.2.27 0.2.32              github:time-rs/time                  time                                         22 files changed, 2009 insertions(+), 656 deletions(-)
+    cargo vet inspect windows-collections 0.3.2           kennykerr                            windows                                      2722 lines
+      NOTE: this project trusts Kenny Kerr (kennykerr) - consider cargo vet trust windows-collections or cargo vet trust --all kennykerr
+    cargo vet inspect num_enum 0.7.6                      illicitonion                         tor-netdir and tor-guardmgr                  2727 lines
+      NOTE: cargo vet import embark-studios would reduce this to a 208-line diff
+    cargo vet inspect thiserror-impl 2.0.21               dtolnay                              thiserror                                    2747 lines
+      NOTE: cargo vet import embark-studios would reduce this to a 1117-line diff
+      NOTE: this project trusts David Tolnay (dtolnay) - consider cargo vet trust thiserror-impl or cargo vet trust --all dtolnay
+    cargo vet inspect darling 0.14.4                      TedDriggs                            derive_builder_core_fork_arti                2749 lines
+    cargo vet inspect convert_case 0.10.0                 rutrum                               derive_more-impl                             2951 lines
+    cargo vet inspect cookie-factory 0.3.3                Geal                                 der-parser                                   2968 lines
+    cargo vet inspect data-encoding 2.11.1                ia0                                  tor-hscrypto                                 2968 lines
+    cargo vet inspect ordered-float 2.10.1                mbrubeck                             serde-value                                  3080 lines
+      NOTE: mozilla trusts Matt Brubeck (mbrubeck) - consider cargo vet trust ordered-float or cargo vet trust --all mbrubeck
+    cargo vet inspect pin-project-internal 1.1.13         github:taiki-e/pin-project           pin-project                                  3096 lines
+    cargo vet inspect amplify_syn 2.0.1                   dr-orlovsky                          amplify_derive                               3163 lines
+    cargo vet inspect defmt-macros 1.1.1                  jonathanpallant                      defmt                                        3173 lines
+      NOTE: cargo vet import ariel-os would reduce this to a 3093-line diff
+    cargo vet inspect enumset 1.1.14                      Lymia                                tor-netdoc                                   3179 lines
+    cargo vet diff zerotrie 0.2.2 0.2.5                   sffc                                 icu_provider and icu_properties              30 files changed, 2650 insertions(+), 538 deletions(-)
+      NOTE: mozilla trusts Manish Goregaokar (Manishearth), who published another version of this crate - consider cargo vet trust zerotrie Manishearth
+    cargo vet inspect inotify 0.11.5                      hannobraun                           notify                                       3214 lines
+    cargo vet diff http 1.0.0 1.5.0                       seanmonstar                          tor-dirclient                                28 files changed, 2169 insertions(+), 1087 deletions(-)
+      NOTE: isrg, mozilla, and bytecode-alliance trust Sean McArthur (seanmonstar) - consider cargo vet trust http or cargo vet trust --all seanmonstar
+    cargo vet inspect kqueue 1.2.1                        worr                                 notify                                       3262 lines
+    cargo vet inspect wasi 0.11.0+wasi-snapshot-preview1  alexcrichton                         mio, wasix, and getrandom                    3302 lines
+      NOTE: isrg, mozilla, and bytecode-alliance trust Alex Crichton (alexcrichton) - consider cargo vet trust wasi alexcrichton
+    cargo vet diff base64 0.22.1 0.23.1                   marshallpierce                       serde_with                                   30 files changed, 2751 insertions(+), 619 deletions(-)
+    cargo vet inspect windows-future 0.3.2                kennykerr                            windows                                      3572 lines
+      NOTE: this project trusts Kenny Kerr (kennykerr) - consider cargo vet trust windows-future or cargo vet trust --all kennykerr
+    cargo vet inspect walkdir 2.5.0                       BurntSushi                           notify, tor-keymgr, and fs-mistrust          3588 lines
+      NOTE: this project trusts Andrew Gallant (BurntSushi) - consider cargo vet trust walkdir or cargo vet trust --all BurntSushi
+    cargo vet inspect enum_dispatch 0.3.13                antonok-edm                          tor-proto                                    3751 lines
+    cargo vet inspect serde_with_macros 3.24.0            github:jonasbb/serde_with            serde_with                                   3940 lines
+    cargo vet inspect once_cell 1.12.0                    matklad                              rustls, tempfile, and 7 others               3974 lines
+    cargo vet inspect thiserror 2.0.21                    dtolnay                              asn1-rs, pwd-grp, and 41 others              3996 lines
+      NOTE: cargo vet import embark-studios would reduce this to a 1004-line diff
+      NOTE: this project trusts David Tolnay (dtolnay) - consider cargo vet trust thiserror or cargo vet trust --all dtolnay
+    cargo vet inspect parking_lot_core 0.9.12             Amanieu                              parking_lot                                  4029 lines
+      NOTE: isrg, mozilla, and bytecode-alliance trust Amanieu d'Antras (Amanieu) - consider cargo vet trust parking_lot_core Amanieu
+    cargo vet inspect event-listener 5.4.2                zeenix                               tor-dirmgr                                   4042 lines
+    cargo vet inspect tempfile 3.3.0                      Stebalien                            arti-client                                  4059 lines
+    cargo vet inspect ipnet 2.5.0                         krisprice                            iprange and tor-netdoc                       4066 lines
+    cargo vet inspect blanket 0.3.0                       althonos                             async_executors                              4132 lines
+    cargo vet inspect ppv-lite86 0.2.21                   kazcw                                rand_chacha                                  4155 lines
+    cargo vet inspect async_executors 0.7.0               najamelan                            tor-rtcompat                                 4173 lines
+    cargo vet inspect async-trait 0.1.92                  dtolnay                              tor-proto, tor-dirmgr, and 7 others          4276 lines
+      NOTE: this project trusts David Tolnay (dtolnay) - consider cargo vet trust async-trait or cargo vet trust --all dtolnay
+    cargo vet inspect defmt 1.1.1                         jonathanpallant                      jiff and jiff-core                           4279 lines
+      NOTE: cargo vet import ariel-os would reduce this to a 3776-line diff
+    cargo vet inspect notify 8.2.0                        dfaust                               tor-config                                   4439 lines
+      NOTE: isrg, mozilla, and bytecode-alliance trust Yuki Okushi (JohnTitor), who published another version of this crate - consider cargo vet trust notify JohnTitor
+    cargo vet inspect rustls-pki-types 1.15.1             djc                                  rustls, tor-rtcompat, and 2 others           4561 lines
+      NOTE: this project trusts Dirkjan Ochtman (djc) - consider cargo vet trust rustls-pki-types djc
+    cargo vet inspect crabgrind 0.2.6                     2dav                                 libcrux-secrets                              4626 lines
+    cargo vet inspect compression-codecs 0.4.45           github:Nullus157/async-compression   async-compression                            4766 lines
+    cargo vet inspect amplify_num 0.5.4                   dr-orlovsky                          amplify                                      4789 lines
+    cargo vet inspect redox_syscall 0.5.18                4lDO2                                parking_lot_core                             4818 lines
+    cargo vet inspect os_str_bytes 6.6.1                  dylni                                shellexpand                                  4819 lines
+    cargo vet inspect valuable 0.1.0                      carllerche                           tracing-core                                 5120 lines
+      NOTE: cargo vet import embark-studios would eliminate this
+      NOTE: this project trusts Carl Lerche (carllerche) - consider cargo vet trust valuable carllerche
+    cargo vet inspect amplify_derive 4.0.1                dr-orlovsky                          amplify                                      5136 lines
+    cargo vet diff hashbrown 0.14.0 0.14.2                Amanieu                              hashlink, indexmap, and 3 others             16 files changed, 4693 insertions(+), 598 deletions(-)
+      NOTE: isrg, mozilla, and bytecode-alliance trust Amanieu d'Antras (Amanieu) - consider cargo vet trust hashbrown Amanieu
+    cargo vet inspect toml 0.8.23                         epage                                figment                                      5313 lines
+      NOTE: isrg, mozilla, and bytecode-alliance trust Ed Page (epage) - consider cargo vet trust toml epage
+    cargo vet inspect spin 0.9.9                          zesterer                             lazy_static                                  5505 lines
+    cargo vet inspect portable-atomic-util 0.2.8          github:taiki-e/portable-atomic-util  jiff                                         5656 lines
+    cargo vet inspect lock_api 0.4.14                     Amanieu                              parking_lot                                  5749 lines
+      NOTE: isrg, mozilla, and bytecode-alliance trust Amanieu d'Antras (Amanieu) - consider cargo vet trust lock_api Amanieu
+    cargo vet inspect clang-sys 1.9.1                     madsmtm                              bindgen                                      5941 lines
+    cargo vet inspect hashlink 0.11.1                     djc                                  rusqlite                                     6033 lines
+      NOTE: this project trusts Dirkjan Ochtman (djc) - consider cargo vet trust hashlink djc
+    cargo vet inspect amplify 4.9.0                       dr-orlovsky                          tor-cell, tor-proto, and 8 others            6160 lines
+    cargo vet inspect crossbeam-utils 0.8.23              taiki-e                              crossbeam-queue                              6191 lines
+    cargo vet inspect parking_lot 0.12.5                  Amanieu                              postage                                      6208 lines
+      NOTE: isrg, mozilla, and bytecode-alliance trust Amanieu d'Antras (Amanieu) - consider cargo vet trust parking_lot Amanieu
+    cargo vet inspect darling 0.24.1                      TedDriggs                            serde_with_macros                            6421 lines
+    cargo vet diff windows-core 0.52.0 0.62.2             kennykerr                            windows, iana-time-zone, and 3 others        52 files changed, 2872 insertions(+), 4050 deletions(-)
+      NOTE: this project trusts Kenny Kerr (kennykerr) - consider cargo vet trust windows-core or cargo vet trust --all kennykerr
+    cargo vet inspect async-compression 0.4.50            github:Nullus157/async-compression   tor-dirclient                                7280 lines
+    cargo vet inspect typed-index-collections 3.5.0       zheland                              tor-netdir                                   7659 lines
+    cargo vet inspect rangemap 1.8.0                      jeffparsons                          tor-netdoc                                   7819 lines
+    cargo vet inspect darling_core 0.13.4                 TedDriggs                            darling and darling_macro                    7830 lines
+    cargo vet inspect toml_parser 1.1.3+spec-1.1.0        epage                                toml and toml_edit                           8095 lines
+      NOTE: isrg, mozilla, and bytecode-alliance trust Ed Page (epage) - consider cargo vet trust toml_parser or cargo vet trust --all epage
+    cargo vet inspect priority-queue 2.7.0                garro95                              tor-rtmock                                   8125 lines
+    cargo vet inspect darling_core 0.14.4                 TedDriggs                            darling and darling_macro                    8404 lines
+    cargo vet inspect imara-diff 0.2.0                    pascalkuthe                          tor-consdiff                                 8715 lines
+    cargo vet diff icu_properties 2.1.2 2.3.0             sffc                                 idna_adapter and icu_normalizer              20 files changed, 7622 insertions(+), 1139 deletions(-)
+      NOTE: mozilla trusts Robert Bastian (robertbastian), who published another version of this crate - consider cargo vet trust icu_properties robertbastian
+    cargo vet inspect socket2 0.6.5                       Thomasdezeeuw                        tokio and tor-rtcompat                       8763 lines
+      NOTE: mozilla and bytecode-alliance trust Thomas de Zeeuw (Thomasdezeeuw) - consider cargo vet trust socket2 Thomasdezeeuw
+    cargo vet inspect minimal-lexical 0.2.1               Alexhuszagh                          nom                                          8787 lines
+    cargo vet inspect wasm-bindgen 0.2.128                github:wasm-bindgen/wasm-bindgen     uuid, js-sys, amplify, and 6 others          8861 lines
+      NOTE: isrg, mozilla, and bytecode-alliance trust Alex Crichton (alexcrichton), who published another version of this crate - consider cargo vet trust wasm-bindgen alexcrichton
+    cargo vet inspect httparse 1.10.1                     seanmonstar                          tor-chanmgr and tor-dirclient                8999 lines
+      NOTE: isrg, mozilla, and bytecode-alliance trust Sean McArthur (seanmonstar) - consider cargo vet trust httparse or cargo vet trust --all seanmonstar
+    cargo vet inspect iprange 0.6.7                       sticnarf                             tor-netdoc                                   9008 lines
+    cargo vet inspect der-parser 10.0.0                   chifflier                            tor-llcrypto                                 9278 lines
+    cargo vet inspect indexmap 1.8.1                      cuviper                              serde_with                                   9445 lines
+      NOTE: this project trusts Josh Stone (cuviper) - consider cargo vet trust indexmap cuviper
+    cargo vet inspect postage 0.5.0                       austinjones                          tor-proto, tor-config, and 6 others          9530 lines
+    cargo vet inspect figment 0.10.19                     SergioBenitez                        tor-config                                   9587 lines
+    cargo vet inspect slotmap 1.1.1                       orlp                                 slotmap-careful                              9732 lines
+    cargo vet diff tokio-util 0.7.4 0.7.19                Darksonn                             tor-proto, tor-rtcompat, and 1 other         87 files changed, 8855 insertions(+), 1043 deletions(-)
+      NOTE: this project trusts Alice Ryhl (Darksonn) - consider cargo vet trust tokio-util Darksonn
+    cargo vet inspect toml 1.1.6+spec-1.1.0               epage                                tor-config                                   9925 lines
+      NOTE: isrg, mozilla, and bytecode-alliance trust Ed Page (epage) - consider cargo vet trust toml epage
+    cargo vet inspect r-efi 5.3.0                         dvdhrm                               getrandom                                    9927 lines
+    cargo vet inspect r-efi 6.0.0                         dvdhrm                               getrandom                                    9953 lines
+    cargo vet inspect uuid 1.26.1                         KodrAus                              hax-lib-macros-types                         10053 lines
+    cargo vet inspect toml_edit 0.25.15+spec-1.1.0        epage                                proc-macro-crate                             10846 lines
+      NOTE: isrg, mozilla, and bytecode-alliance trust Ed Page (epage) - consider cargo vet trust toml_edit epage
+    cargo vet diff aes 0.9.0-rc.4 0.9.3                   github:RustCrypto/block-ciphers      tor-proto and tor-llcrypto                   55 files changed, 3765 insertions(+), 7374 deletions(-)
+    cargo vet diff wasm-bindgen-macro-support 0.2.92 0.2.128
+                                                          github:wasm-bindgen/wasm-bindgen     wasm-bindgen-macro                           10 files changed, 11111 insertions(+), 458 deletions(-)
+      NOTE: isrg, mozilla, and bytecode-alliance trust Alex Crichton (alexcrichton), who published another version of this crate - consider cargo vet trust wasm-bindgen-macro-support alexcrichton
+    cargo vet inspect bincode 2.0.1                       ghost_3672                           typed-index-collections                      11637 lines
+      NOTE: this project trusts David Tolnay (dtolnay), who published another version of this crate - consider cargo vet trust bincode dtolnay
+    cargo vet inspect openssl-sys 0.9.117                 alex                                 libsqlite3-sys                               11678 lines
+    cargo vet inspect darling_core 0.24.1                 TedDriggs                            darling and darling_macro                    11733 lines
+    cargo vet inspect wasix 0.13.2                        Arshia001                            coarsetime                                   11914 lines
+    cargo vet inspect toml_edit 0.22.27                   epage                                toml                                         12417 lines
+      NOTE: isrg, mozilla, and bytecode-alliance trust Ed Page (epage) - consider cargo vet trust toml_edit epage
+    cargo vet inspect schemars 0.8.12                     GREsau                               serde_with                                   12632 lines
+      NOTE: cargo vet import embark-studios would eliminate this
+    cargo vet inspect fs_extra 1.3.0                      webdesus                             aws-lc-sys                                   12715 lines
+    cargo vet inspect bytes 1.12.1                        Darksonn                             http, tokio, turmoil, and 5 others           13937 lines
+      NOTE: this project trusts Alice Ryhl (Darksonn) - consider cargo vet trust bytes Darksonn
+    cargo vet inspect pin-project 1.1.13                  github:taiki-e/pin-project           postage, tor-proto, and 7 others             14239 lines
+    cargo vet inspect asn1-rs 0.7.2                       chifflier                            der-parser                                   14441 lines
+    cargo vet inspect educe 0.4.23                        magiclen                             safelog, tor-cell, and 17 others             14801 lines
+    cargo vet inspect mio 1.2.4                           Thomasdezeeuw                        tokio and notify                             15284 lines
+      NOTE: mozilla and bytecode-alliance trust Thomas de Zeeuw (Thomasdezeeuw) - consider cargo vet trust mio Thomasdezeeuw
+    cargo vet inspect jiff-core 0.1.1                     BurntSushi                           jiff and jiff-static                         15306 lines
+      NOTE: this project trusts Andrew Gallant (BurntSushi) - consider cargo vet trust jiff-core or cargo vet trust --all BurntSushi
+    cargo vet diff rustls-webpki 0.101.4 0.103.10         ctz                                  rustls and tor-rtcompat                      255 files changed, 6869 insertions(+), 9453 deletions(-)
+      NOTE: this project trusts Joe Birr-Pixton (ctz) - consider cargo vet trust rustls-webpki ctz
+    cargo vet inspect num-bigint-dig 0.8.6                dignifiedquire                       rsa and ssh-key-fork-arti                    17114 lines
+    cargo vet inspect derive_more-impl 2.1.1              JelteF                               derive_more                                  17560 lines
+      NOTE: mozilla trusts Jelte Fennema-Nio (JelteF) - consider cargo vet trust derive_more-impl or cargo vet trust --all JelteF
+    cargo vet inspect itertools 0.10.3                    jswrenn                              tor-cell, tor-proto, and 18 others           17908 lines
+    cargo vet inspect js-sys 0.3.105                      github:wasm-bindgen/wasm-bindgen     time, uuid, web-time, and 3 others           19405 lines
+      NOTE: isrg, mozilla, and bytecode-alliance trust Alex Crichton (alexcrichton), who published another version of this crate - consider cargo vet trust js-sys alexcrichton
+    cargo vet inspect schemars 1.2.2                      GREsau                               serde_with                                   20057 lines
+      NOTE: cargo vet import embark-studios would reduce this to a 366-line diff
+    cargo vet inspect ntapi 0.4.3                         MSxDOS                               sysinfo                                      21237 lines
+    cargo vet diff icu_normalizer 2.1.1 2.3.0             sffc                                 idna_adapter                                 37 files changed, 21271 insertions(+), 1276 deletions(-)
+      NOTE: mozilla trusts Robert Bastian (robertbastian), who published another version of this crate - consider cargo vet trust icu_normalizer robertbastian
+    cargo vet inspect itertools 0.13.0                    jswrenn                              bindgen                                      22757 lines
+    cargo vet inspect futures-util 0.3.21                 taiki-e                              js-sys, futures, tor-proto, and 3 others     25067 lines
+    cargo vet inspect derive_more 2.1.1                   JelteF                               safelog, tor-cell, and 25 others             27620 lines
+      NOTE: cargo vet import embark-studios would reduce this to a 18442-line diff
+      NOTE: mozilla trusts Jelte Fennema-Nio (JelteF) - consider cargo vet trust derive_more or cargo vet trust --all JelteF
+    cargo vet inspect portable-atomic 1.15.0              github:taiki-e/portable-atomic       jiff and portable-atomic-util                30165 lines
+    cargo vet diff zerocopy 0.8.27 0.8.60                 github:google/zerocopy               ppv-lite86                                   648 files changed, 22839 insertions(+), 11668 deletions(-)
+    cargo vet inspect sysinfo 0.38.4                      GuillaumeGomez                       tor-memquota                                 34593 lines
+    cargo vet inspect chrono 0.4.45                       djc                                  serde_with                                   34862 lines
+      NOTE: this project trusts Dirkjan Ochtman (djc) - consider cargo vet trust chrono djc
+    cargo vet inspect bitvec 1.1.1                        myrrlyn                              tor-proto                                    36660 lines
+    cargo vet inspect serde_with 3.24.0                   github:jonasbb/serde_with            tor-netdoc, tor-chanmgr, and 2 others        43166 lines
+    cargo vet inspect winnow 0.7.15                       epage                                toml_edit                                    46926 lines
+      NOTE: isrg, mozilla, and bytecode-alliance trust Ed Page (epage) - consider cargo vet trust winnow or cargo vet trust --all epage
+    cargo vet inspect winnow 1.0.4                        epage                                toml, toml_edit, and toml_parser             47156 lines
+      NOTE: isrg, mozilla, and bytecode-alliance trust Ed Page (epage) - consider cargo vet trust winnow or cargo vet trust --all epage
+    cargo vet inspect objc2-io-kit 0.3.2                  madsmtm                              sysinfo                                      54139 lines
+    cargo vet inspect time 0.3.55                         github:time-rs/time                  rusqlite, serde_with, and 5 others           56059 lines
+    cargo vet diff zerocopy-derive 0.8.27 0.8.60          github:google/zerocopy               zerocopy                                     209 files changed, 44898 insertions(+), 12109 deletions(-)
+    cargo vet diff tracing 0.1.41 0.1.44                  hds                                  turmoil, tor-error, and 20 others            65 files changed, 61566 insertions(+), 258 deletions(-)
+    cargo vet diff rustix 0.37.13 1.1.5                   sunfishcode                          tempfile                                     363 files changed, 45705 insertions(+), 24994 deletions(-)
+      NOTE: isrg, mozilla, and bytecode-alliance trust Dan Gohman (sunfishcode) - consider cargo vet trust rustix or cargo vet trust --all sunfishcode
+    cargo vet inspect jiff 0.2.38                         BurntSushi                           serde_with                                   94993 lines
+      NOTE: this project trusts Andrew Gallant (BurntSushi) - consider cargo vet trust jiff or cargo vet trust --all BurntSushi
+    cargo vet inspect winapi 0.3.9                        retep998                             ntapi                                        181323 lines
+    cargo vet inspect ring 0.17.11                        ctz                                  rustls-webpki                                256539 lines
+      NOTE: this project trusts Joe Birr-Pixton (ctz) - consider cargo vet trust ring ctz
+    cargo vet diff linux-raw-sys 0.3.3 0.12.1             sunfishcode                          rustix                                       465 files changed, 433309 insertions(+), 98073 deletions(-)
+      NOTE: isrg, mozilla, and bytecode-alliance trust Dan Gohman (sunfishcode) - consider cargo vet trust linux-raw-sys or cargo vet trust --all sunfishcode
+    cargo vet inspect libsqlite3-sys 0.37.0               gwenn                                rusqlite                                     591546 lines
+    cargo vet inspect sqlite-wasm-rs 0.5.5                Spxg                                 rusqlite                                     680523 lines
+    cargo vet inspect openssl-src 300.6.1+3.6.3           alexcrichton                         openssl-sys                                  1025545 lines
+      NOTE: isrg, mozilla, and bytecode-alliance trust Alex Crichton (alexcrichton) - consider cargo vet trust openssl-src alexcrichton
+    cargo vet inspect windows 0.62.2                      kennykerr                            sysinfo                                      1836411 lines
+      NOTE: this project trusts Kenny Kerr (kennykerr) - consider cargo vet trust windows kennykerr
+
+recommended audits for safe-to-run (or safe-to-deploy):
+    Command                          Publisher                Used By                 Audit Size
+    cargo vet diff rand 0.9.4 0.9.5  github:rust-random/rand  turmoil and rand_distr  6 files changed, 53 insertions(+), 2 deletions(-)
+    cargo vet inspect turmoil 0.7.2  mcches                   secmp-testkit           17853 lines
+      NOTE: this project trusts Carl Lerche (carllerche), who published another version of this crate - consider cargo vet trust turmoil carllerche
+
+estimated audit backlog: 6862749 lines
+
+Use |cargo vet certify| to record the audits.
+
+== cargo tree --locked -e normal -i base64ct@1.8.3 --target all
+base64ct v1.8.3
+├── argon2 v0.6.0
+│   └── secmp-crypto v0.0.0 (/work/SecMPro/crates/secmp-crypto)
+│       ├── secmp-client-core v0.0.0 (/work/SecMPro/crates/secmp-client-core)
+│       │   └── secmp-testkit v0.0.0 (/work/SecMPro/crates/secmp-testkit)
+│       ├── secmp-proto v0.0.0 (/work/SecMPro/crates/secmp-proto)
+│       │   ├── secmp-client-core v0.0.0 (/work/SecMPro/crates/secmp-client-core) (*)
+│       │   ├── secmp-relay v0.0.0 (/work/SecMPro/crates/secmp-relay)
+│       │   │   └── secmp-testkit v0.0.0 (/work/SecMPro/crates/secmp-testkit)
+│       │   ├── secmp-store v0.0.0 (/work/SecMPro/crates/secmp-store)
+│       │   ├── secmp-testkit v0.0.0 (/work/SecMPro/crates/secmp-testkit)
+│       │   └── secmp-transport v0.0.0 (/work/SecMPro/crates/secmp-transport)
+│       │       ├── secmp-client-core v0.0.0 (/work/SecMPro/crates/secmp-client-core) (*)
+│       │       └── secmp-testkit v0.0.0 (/work/SecMPro/crates/secmp-testkit)
+│       ├── secmp-relay v0.0.0 (/work/SecMPro/crates/secmp-relay) (*)
+│       ├── secmp-store v0.0.0 (/work/SecMPro/crates/secmp-store)
+│       ├── secmp-testkit v0.0.0 (/work/SecMPro/crates/secmp-testkit)
+│       └── secmp-transport v0.0.0 (/work/SecMPro/crates/secmp-transport) (*)
+├── pem-rfc7468 v0.7.0
+│   ├── der v0.7.10
+│   │   ├── pkcs1 v0.7.5
+│   │   │   └── rsa v0.9.10
+│   │   │       ├── ssh-key-fork-arti v0.6.7
+│   │   │       │   ├── tor-key-forge v0.46.0
+│   │   │       │   │   ├── tor-hscrypto v0.46.0
+│   │   │       │   │   │   ├── arti-client v0.46.0
+│   │   │       │   │   │   │   └── secmp-transport v0.0.0 (/work/SecMPro/crates/secmp-transport) (*)
+│   │   │       │   │   │   ├── tor-cell v0.46.0
+│   │   │       │   │   │   │   ├── tor-chanmgr v0.46.0
+│   │   │       │   │   │   │   │   ├── arti-client v0.46.0 (*)
+│   │   │       │   │   │   │   │   └── tor-circmgr v0.46.0
+│   │   │       │   │   │   │   │       ├── arti-client v0.46.0 (*)
+│   │   │       │   │   │   │   │       ├── tor-dirclient v0.46.0
+│   │   │       │   │   │   │   │       │   ├── tor-dirmgr v0.46.0
+│   │   │       │   │   │   │   │       │   │   └── arti-client v0.46.0 (*)
+│   │   │       │   │   │   │   │       │   └── tor-hsclient v0.46.0
+│   │   │       │   │   │   │   │       │       └── arti-client v0.46.0 (*)
+│   │   │       │   │   │   │   │       ├── tor-dirmgr v0.46.0 (*)
+│   │   │       │   │   │   │   │       └── tor-hsclient v0.46.0 (*)
+│   │   │       │   │   │   │   ├── tor-circmgr v0.46.0 (*)
+│   │   │       │   │   │   │   ├── tor-hsclient v0.46.0 (*)
+│   │   │       │   │   │   │   ├── tor-netdoc v0.46.0
+│   │   │       │   │   │   │   │   ├── arti-client v0.46.0 (*)
+│   │   │       │   │   │   │   │   ├── tor-circmgr v0.46.0 (*)
+│   │   │       │   │   │   │   │   ├── tor-consdiff v0.46.0
+│   │   │       │   │   │   │   │   │   └── tor-dirmgr v0.46.0 (*)
+│   │   │       │   │   │   │   │   ├── tor-dirclient v0.46.0 (*)
+│   │   │       │   │   │   │   │   ├── tor-dircommon v0.46.0
+│   │   │       │   │   │   │   │   │   ├── arti-client v0.46.0 (*)
+│   │   │       │   │   │   │   │   │   ├── tor-circmgr v0.46.0 (*)
+│   │   │       │   │   │   │   │   │   ├── tor-dirmgr v0.46.0 (*)
+│   │   │       │   │   │   │   │   │   └── tor-guardmgr v0.46.0
+│   │   │       │   │   │   │   │   │       ├── arti-client v0.46.0 (*)
+│   │   │       │   │   │   │   │   │       ├── tor-circmgr v0.46.0 (*)
+│   │   │       │   │   │   │   │   │       └── tor-dirmgr v0.46.0 (*)
+│   │   │       │   │   │   │   │   ├── tor-dirmgr v0.46.0 (*)
+│   │   │       │   │   │   │   │   ├── tor-guardmgr v0.46.0 (*)
+│   │   │       │   │   │   │   │   ├── tor-hsclient v0.46.0 (*)
+│   │   │       │   │   │   │   │   ├── tor-netdir v0.46.0
+│   │   │       │   │   │   │   │   │   ├── arti-client v0.46.0 (*)
+│   │   │       │   │   │   │   │   │   ├── tor-chanmgr v0.46.0 (*)
+│   │   │       │   │   │   │   │   │   ├── tor-circmgr v0.46.0 (*)
+│   │   │       │   │   │   │   │   │   ├── tor-dirmgr v0.46.0 (*)
+│   │   │       │   │   │   │   │   │   ├── tor-guardmgr v0.46.0 (*)
+│   │   │       │   │   │   │   │   │   ├── tor-hsclient v0.46.0 (*)
+│   │   │       │   │   │   │   │   │   └── tor-relay-selection v0.46.0
+│   │   │       │   │   │   │   │   │       ├── tor-circmgr v0.46.0 (*)
+│   │   │       │   │   │   │   │   │       └── tor-guardmgr v0.46.0 (*)
+│   │   │       │   │   │   │   │   └── tor-relay-selection v0.46.0 (*)
+│   │   │       │   │   │   │   └── tor-proto v0.46.0
+│   │   │       │   │   │   │       ├── arti-client v0.46.0 (*)
+│   │   │       │   │   │   │       ├── tor-chanmgr v0.46.0 (*)
+│   │   │       │   │   │   │       ├── tor-circmgr v0.46.0 (*)
+│   │   │       │   │   │   │       ├── tor-dirclient v0.46.0 (*)
+│   │   │       │   │   │   │       ├── tor-dirmgr v0.46.0 (*)
+│   │   │       │   │   │   │       ├── tor-guardmgr v0.46.0 (*)
+│   │   │       │   │   │   │       └── tor-hsclient v0.46.0 (*)
+│   │   │       │   │   │   ├── tor-dirclient v0.46.0 (*)
+│   │   │       │   │   │   ├── tor-hsclient v0.46.0 (*)
+│   │   │       │   │   │   ├── tor-keymgr v0.46.0
+│   │   │       │   │   │   │   ├── arti-client v0.46.0 (*)
+│   │   │       │   │   │   │   ├── tor-chanmgr v0.46.0 (*)
+│   │   │       │   │   │   │   └── tor-hsclient v0.46.0 (*)
+│   │   │       │   │   │   ├── tor-netdir v0.46.0 (*)
+│   │   │       │   │   │   ├── tor-netdoc v0.46.0 (*)
+│   │   │       │   │   │   └── tor-proto v0.46.0 (*)
+│   │   │       │   │   └── tor-keymgr v0.46.0 (*)
+│   │   │       │   └── tor-keymgr v0.46.0 (*)
+│   │   │       ├── tor-key-forge v0.46.0 (*)
+│   │   │       └── tor-llcrypto v0.46.0
+│   │   │           ├── arti-client v0.46.0 (*)
+│   │   │           ├── tor-bytes v0.46.0
+│   │   │           │   ├── tor-cell v0.46.0 (*)
+│   │   │           │   ├── tor-cert v0.46.0
+│   │   │           │   │   ├── tor-cell v0.46.0 (*)
+│   │   │           │   │   ├── tor-key-forge v0.46.0 (*)
+│   │   │           │   │   ├── tor-netdoc v0.46.0 (*)
+│   │   │           │   │   └── tor-proto v0.46.0 (*)
+│   │   │           │   ├── tor-hsclient v0.46.0 (*)
+│   │   │           │   ├── tor-hscrypto v0.46.0 (*)
+│   │   │           │   ├── tor-key-forge v0.46.0 (*)
+│   │   │           │   ├── tor-keymgr v0.46.0 (*)
+│   │   │           │   ├── tor-linkspec v0.46.0
+│   │   │           │   │   ├── arti-client v0.46.0 (*)
+│   │   │           │   │   ├── tor-cell v0.46.0 (*)
+│   │   │           │   │   ├── tor-chanmgr v0.46.0 (*)
+│   │   │           │   │   ├── tor-circmgr v0.46.0 (*)
+│   │   │           │   │   ├── tor-dirclient v0.46.0 (*)
+│   │   │           │   │   ├── tor-dircommon v0.46.0 (*)
+│   │   │           │   │   ├── tor-guardmgr v0.46.0 (*)
+│   │   │           │   │   ├── tor-hsclient v0.46.0 (*)
+│   │   │           │   │   ├── tor-netdir v0.46.0 (*)
+│   │   │           │   │   ├── tor-netdoc v0.46.0 (*)
+│   │   │           │   │   ├── tor-proto v0.46.0 (*)
+│   │   │           │   │   └── tor-relay-selection v0.46.0 (*)
+│   │   │           │   ├── tor-netdoc v0.46.0 (*)
+│   │   │           │   ├── tor-proto v0.46.0 (*)
+│   │   │           │   ├── tor-protover v0.46.0
+│   │   │           │   │   ├── arti-client v0.46.0 (*)
+│   │   │           │   │   ├── tor-cell v0.46.0 (*)
+│   │   │           │   │   ├── tor-circmgr v0.46.0 (*)
+│   │   │           │   │   ├── tor-dirmgr v0.46.0 (*)
+│   │   │           │   │   ├── tor-hsclient v0.46.0 (*)
+│   │   │           │   │   ├── tor-linkspec v0.46.0 (*)
+│   │   │           │   │   ├── tor-netdir v0.46.0 (*)
+│   │   │           │   │   ├── tor-netdoc v0.46.0 (*)
+│   │   │           │   │   └── tor-proto v0.46.0 (*)
+│   │   │           │   └── tor-socksproto v0.46.0
+│   │   │           │       └── tor-chanmgr v0.46.0 (*)
+│   │   │           ├── tor-cell v0.46.0 (*)
+│   │   │           ├── tor-cert v0.46.0 (*)
+│   │   │           ├── tor-chanmgr v0.46.0 (*)
+│   │   │           ├── tor-checkable v0.46.0
+│   │   │           │   ├── tor-cert v0.46.0 (*)
+│   │   │           │   ├── tor-dircommon v0.46.0 (*)
+│   │   │           │   ├── tor-dirmgr v0.46.0 (*)
+│   │   │           │   ├── tor-hsclient v0.46.0 (*)
+│   │   │           │   ├── tor-key-forge v0.46.0 (*)
+│   │   │           │   ├── tor-netdoc v0.46.0 (*)
+│   │   │           │   └── tor-proto v0.46.0 (*)
+│   │   │           ├── tor-consdiff v0.46.0 (*)
+│   │   │           ├── tor-dirclient v0.46.0 (*)
+│   │   │           ├── tor-dircommon v0.46.0 (*)
+│   │   │           ├── tor-dirmgr v0.46.0 (*)
+│   │   │           ├── tor-guardmgr v0.46.0 (*)
+│   │   │           ├── tor-hsclient v0.46.0 (*)
+│   │   │           ├── tor-hscrypto v0.46.0 (*)
+│   │   │           ├── tor-key-forge v0.46.0 (*)
+│   │   │           ├── tor-keymgr v0.46.0 (*)
+│   │   │           ├── tor-linkspec v0.46.0 (*)
+│   │   │           ├── tor-netdir v0.46.0 (*)
+│   │   │           ├── tor-netdoc v0.46.0 (*)
+│   │   │           └── tor-proto v0.46.0 (*)
+│   │   ├── pkcs8 v0.10.2
+│   │   │   ├── pkcs1 v0.7.5 (*)
+│   │   │   └── rsa v0.9.10 (*)
+│   │   └── spki v0.7.3
+│   │       ├── pkcs1 v0.7.5 (*)
+│   │       ├── pkcs8 v0.10.2 (*)
+│   │       └── rsa v0.9.10 (*)
+│   └── ssh-encoding-fork-arti v0.2.0
+│       ├── ssh-cipher-fork-arti v0.2.0
+│       │   └── ssh-key-fork-arti v0.6.7 (*)
+│       └── ssh-key-fork-arti v0.6.7 (*)
+├── ssh-encoding-fork-arti v0.2.0 (*)
+├── tor-chanmgr v0.46.0 (*)
+├── tor-dirclient v0.46.0 (*)
+├── tor-dircommon v0.46.0 (*)
+├── tor-dirmgr v0.46.0 (*)
+├── tor-guardmgr v0.46.0 (*)
+├── tor-linkspec v0.46.0 (*)
+├── tor-llcrypto v0.46.0 (*)
+└── tor-netdoc v0.46.0 (*)
+
+== cargo tree --locked -e normal -i cpufeatures@0.3.1 --target all (first 60 lines)
+cpufeatures v0.3.1
+├── aes v0.9.3
+│   ├── tor-llcrypto v0.46.0
+│   │   ├── arti-client v0.46.0
+│   │   │   └── secmp-transport v0.0.0 (/work/SecMPro/crates/secmp-transport)
+│   │   │       ├── secmp-client-core v0.0.0 (/work/SecMPro/crates/secmp-client-core)
+│   │   │       │   └── secmp-testkit v0.0.0 (/work/SecMPro/crates/secmp-testkit)
+│   │   │       └── secmp-testkit v0.0.0 (/work/SecMPro/crates/secmp-testkit)
+│   │   ├── tor-bytes v0.46.0
+│   │   │   ├── tor-cell v0.46.0
+│   │   │   │   ├── tor-chanmgr v0.46.0
+│   │   │   │   │   ├── arti-client v0.46.0 (*)
+│   │   │   │   │   └── tor-circmgr v0.46.0
+│   │   │   │   │       ├── arti-client v0.46.0 (*)
+│   │   │   │   │       ├── tor-dirclient v0.46.0
+│   │   │   │   │       │   ├── tor-dirmgr v0.46.0
+│   │   │   │   │       │   │   └── arti-client v0.46.0 (*)
+│   │   │   │   │       │   └── tor-hsclient v0.46.0
+│   │   │   │   │       │       └── arti-client v0.46.0 (*)
+│   │   │   │   │       ├── tor-dirmgr v0.46.0 (*)
+│   │   │   │   │       └── tor-hsclient v0.46.0 (*)
+│   │   │   │   ├── tor-circmgr v0.46.0 (*)
+│   │   │   │   ├── tor-hsclient v0.46.0 (*)
+│   │   │   │   ├── tor-netdoc v0.46.0
+│   │   │   │   │   ├── arti-client v0.46.0 (*)
+│   │   │   │   │   ├── tor-circmgr v0.46.0 (*)
+│   │   │   │   │   ├── tor-consdiff v0.46.0
+│   │   │   │   │   │   └── tor-dirmgr v0.46.0 (*)
+│   │   │   │   │   ├── tor-dirclient v0.46.0 (*)
+│   │   │   │   │   ├── tor-dircommon v0.46.0
+│   │   │   │   │   │   ├── arti-client v0.46.0 (*)
+│   │   │   │   │   │   ├── tor-circmgr v0.46.0 (*)
+│   │   │   │   │   │   ├── tor-dirmgr v0.46.0 (*)
+│   │   │   │   │   │   └── tor-guardmgr v0.46.0
+│   │   │   │   │   │       ├── arti-client v0.46.0 (*)
+│   │   │   │   │   │       ├── tor-circmgr v0.46.0 (*)
+│   │   │   │   │   │       └── tor-dirmgr v0.46.0 (*)
+│   │   │   │   │   ├── tor-dirmgr v0.46.0 (*)
+│   │   │   │   │   ├── tor-guardmgr v0.46.0 (*)
+│   │   │   │   │   ├── tor-hsclient v0.46.0 (*)
+│   │   │   │   │   ├── tor-netdir v0.46.0
+│   │   │   │   │   │   ├── arti-client v0.46.0 (*)
+│   │   │   │   │   │   ├── tor-chanmgr v0.46.0 (*)
+│   │   │   │   │   │   ├── tor-circmgr v0.46.0 (*)
+│   │   │   │   │   │   ├── tor-dirmgr v0.46.0 (*)
+│   │   │   │   │   │   ├── tor-guardmgr v0.46.0 (*)
+│   │   │   │   │   │   ├── tor-hsclient v0.46.0 (*)
+│   │   │   │   │   │   └── tor-relay-selection v0.46.0
+│   │   │   │   │   │       ├── tor-circmgr v0.46.0 (*)
+│   │   │   │   │   │       └── tor-guardmgr v0.46.0 (*)
+│   │   │   │   │   └── tor-relay-selection v0.46.0 (*)
+│   │   │   │   └── tor-proto v0.46.0
+│   │   │   │       ├── arti-client v0.46.0 (*)
+│   │   │   │       ├── tor-chanmgr v0.46.0 (*)
+│   │   │   │       ├── tor-circmgr v0.46.0 (*)
+│   │   │   │       ├── tor-dirclient v0.46.0 (*)
+│   │   │   │       ├── tor-dirmgr v0.46.0 (*)
+│   │   │   │       ├── tor-guardmgr v0.46.0 (*)
+│   │   │   │       └── tor-hsclient v0.46.0 (*)
+│   │   │   ├── tor-cert v0.46.0
+
+== cargo tree --locked -p secmp-crypto -e normal --target all -i cpufeatures@0.3.1 (head): argon2, chacha20 (chacha20poly1305, rand -> libcrux), curve25519-dalek (ed25519-dalek)

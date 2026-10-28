@@ -85,7 +85,6 @@ jobs:
           nasm -v || exit /b 1
           git --version || exit /b 1
           rustup component list --installed || exit /b 1
-          pwsh -v || echo no-pwsh
       - name: Suite hello
         if: inputs.suite == 'hello'
         shell: cmd

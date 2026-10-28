@@ -8753,7 +8753,6 @@ mod tests {
             "nasm -v || exit /b 1",
             "git --version || exit /b 1",
             "rustup component list --installed || exit /b 1",
-            "pwsh -v || echo no-pwsh",
         ]
         .map(str::to_owned)
         .to_vec();
@@ -8763,7 +8762,7 @@ mod tests {
         for s in &steps {
             if step_field(s, "shell").as_deref() == Some("cmd") {
                 for l in step_run(s) {
-                    if !l.ends_with(" || exit /b 1") && l != "pwsh -v || echo no-pwsh" {
+                    if !l.ends_with(" || exit /b 1") {
                         out.push(format!("cmd line without `|| exit /b 1`: {l}"));
                     }
                 }
@@ -8833,6 +8832,67 @@ mod tests {
             }
         }
         out
+    }
+
+    /// The `shell: cmd` steps of `win-ondemand.yml` whose last command line ends in an `|| <fallback>` without `exit /b`:
+    /// in `cmd` the step's exit code is the final ERRORLEVEL, and `echo` does not reset it, so the failing optional command's
+    /// code survives the fallback (run 40692102750: `pwsh -v || echo no-pwsh` ended the probe step with exit code 1).
+    fn win_cmd_bare_optional_findings(text: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        for job in ["vm-up", "win-suite", "vm-down"] {
+            for step in win_steps(text, job) {
+                if step_field(&step, "shell").as_deref() != Some("cmd") {
+                    continue;
+                }
+                let name = step_field(&step, "name").unwrap_or_default();
+                if let Some(last) = step_run(&step).last()
+                    && last.contains("||")
+                    && !last.contains("exit /b")
+                {
+                    out.push(format!(
+                        "{job}: step {name:?}: last line `{last}` leaks its ERRORLEVEL"
+                    ));
+                }
+            }
+        }
+        out
+    }
+
+    /// WEISUNG M7-A1d: no `shell: cmd` step of `win-ondemand.yml` ends in a bare optional probe (`<cmd> || echo …`); the
+    /// file as committed has none, the file with the old `pwsh -v || echo no-pwsh` line is a finding, and so is any
+    /// other last line of that form.
+    #[test]
+    fn win_ondemand_cmd_steps_have_no_bare_optional_probe() {
+        let real = win_text();
+        assert_eq!(win_cmd_bare_optional_findings(&real), Vec::<String>::new());
+        let old = plant(
+            &real,
+            "          rustup component list --installed || exit /b 1\n",
+            "          rustup component list --installed || exit /b 1\n          pwsh -v || echo no-pwsh\n",
+        );
+        let found = win_cmd_bare_optional_findings(&old);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(
+            found
+                .iter()
+                .all(|f| f.contains("Probe the runner toolchain")
+                    && f.contains("pwsh -v || echo no-pwsh"))
+        );
+        let other = plant(
+            &real,
+            "          git --version || exit /b 1\n",
+            "          git --version || echo no-git\n",
+        );
+        assert!(
+            win_cmd_bare_optional_findings(&other).is_empty(),
+            "only the last line leaks"
+        );
+        let last = plant(
+            &real,
+            "          rustup component list --installed || exit /b 1\n",
+            "          rustup component list --installed || echo none\n",
+        );
+        assert_eq!(win_cmd_bare_optional_findings(&last).len(), 1);
     }
 
     /// W-3g

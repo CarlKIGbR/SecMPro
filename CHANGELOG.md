@@ -8,6 +8,7 @@ All notable changes to this project are documented in this file. The format foll
 
 ### Added
 
+- M7 A1d: `win-ondemand.yml` probe step no longer leaks the `pwsh` ERRORLEVEL (smoke run 40692102750); policy test `win_ondemand_cmd_steps_have_no_bare_optional_probe`; ADR-029 Amendment 1 notes the OIDC subject format with owner and repository ids.
 - M6 Phase C2: `two-clients` (TC-*), turmoil simulations SIM-01…SIM-10, the KS analyser and the dispatch jobs `ks-hour`/`tor-smoke` (AI-07 loopback MET, run 39942819176; AI-10), `docs/measurements/M6-traffic.md` (MR-03…MR-07), gates CT-00, PV-01, X-07, X-08.
 - M0 repository bootstrap: Cargo workspace with the eleven `secmp-*` crates as documented skeletons (responsibility
   and allowed dependencies per `docs/02` §3; `#![forbid(unsafe_code)]` everywhere except `secmp-sys-mem` and

@@ -42,7 +42,40 @@ A0 probe: `docs/reviews/M07-evidence/A0-probe.md` (raw outputs in `docs/reviews/
 
 ## 3. Evidence per acceptance criterion
 
+Phase A, A-1 (numbers; raw files under `docs/reviews/M07-evidence/`). Phase B/C and A-2…A-4 rows: not yet built.
+
+| Row | Test / command | Result |
+|---|---|---|
+| G7-05 | `xtask::policy::tests::xwin_scope_excludes_sqlcipher_crates`, `xwin_full_roots_have_no_excluded_dev_dependency` (re-dictated Q127, `f6e2928`) | pass; red first on the single-invocation list: `roots with an excluded dev-dependency: ["secmp-crypto:36", "secmp-transport:37"]`; with the list of the weisung (those two) the test is still red: `["secmp-proto:23", "secmp-relay:33"]` — see §8 Q-A2. The `cargo xwin` invocations themselves were not run (no network for the Windows SDK) |
+| G7-07 | `xtask::policy::tests::harness_job_is_pinned`, `testscan::scan::tests::pr_ci_runs_props_with_ci_run_seed`, `nextest_does_not_run_the_harness_binary_twice` | pass; `ci-fast` step `harness`: PASS 942 s (`fa0adef`), 927 s (`f6e2928`); `kat` 93 s / 92 s |
+| G7-08 | `xtask::policy::tests::job_budgets_are_pinned` | pass |
+| G7-09 | `xtask::gates::tests::mutant_harness_suite_under_30s`; command `sh g7-09-measure.sh.txt` (`cargo nextest run --locked -p secmp-client-core -p secmp-transport -p secmp-testkit --features secmp-testkit/harness --max-fail=1:immediate --profile mutants-harness -- <--skip of every entry of MUTANT_SKIP_TESTS and MUTANT_HARNESS_SKIP_TESTS>`) | per-mutant harness suite on the **32-core container** (`nproc` 32, unmutated tree): nextest `Summary [12.773s] 349 tests run: 349 passed, 33 skipped` (`g7-09-per-mutant-harness-suite.txt`); the 4-vCPU runner is not measured here. Before the split (C2-18c): 70 s |
+| G7-09 short forms (OPEN-M7-19 B) | `m6_activity::timing_draws_unmoved_by_one_hour_of_activity`, `m6_sched_life::relay_idle_and_age_bounds_defaults` | 4.4 s (long form 69.5 s, C2-18c; 128 s under load in the `ci-fast` of `5a66eda`); 0.006 s (long form 26.1 s). Trace of the AI-05 short form: **1717** user sends (trace 900, 1 h, 2 contacts; asserted ≥ 100; the long form asserts no count) |
+| G7-10 | `xtask::gates::tests::mutant_killers_run_first_by_filter`; `g7-10-nextest-priority.txt` | pass; `--test-threads 1`: with the repo profile the first test started is `m0_early::async_handshake_writes_its_records`; with the same block aimed at `m6_sched_life::` that module's test starts first |
+| G7-12 | `xtask::gates::tests::kani_rss_guard`, `kani_rss_guard_fails_closed_without_ps_sample`, `kani_rss_guard_requires_a_peak_per_checked_harness` (`ea0f9b7`) | pass; red first, line of the first test: `empty: ` (the guard returned without error on an empty sample); line of the second: `panicked at xtask/src/gates.rs:10166:9` (no error for a log with a checked harness and no peak). Local `cargo xtask step kani` on `97a7d12`: `secmp-client-core` 13/13 verified (`Complete - 13 successfully verified harnesses`), the step was then stopped by the 30-min background limit during `secmp-proto`; no `kani-rss` line (printed after the last package) — no pass/fail verdict of the step, no peak figures |
+| G7-16 | `xtask::expect::tests::audit_ignores_unchanged` | pass |
+| CT-04 | `SECMP_CT_SCALE=1000 cargo bench --locked -p secmp-testkit --features kat --bench ct` (`target/m7logs/ct-smoke.sh`; the bench has no single-target filter, the scale divides every sample count, the gate refuses scaled reports; `ct-04-informative-smoke-scale1000.txt`) | run_verdict PASS, pre-check passed (`Err(Rejected)`, site `body MAC`, both classes) for `tr_decrypt_header_contents_dependence`; 1000 samples per half, Δ in ticks / t: first `raw −221.66/−0.51, p50 +7.63/+0.99, p75 +4.77/+0.55, p90 +4.41/+0.44, p95 −3.17/−0.27, p99 −395.41/−2.10`; second `raw +120.50/+0.35, p50 −0.08/−0.01, p75 +0.33/+0.04, p90 +4.19/+0.39, p95 +6.15/+0.52, p99 −112.12/−0.62`. Same run, `tr_decrypt_nonce_dependence`: p90 −58.22/−4.64 (second). Informative: no verdict; the full-sample run is the `ct` job |
+| A0 | `A0-probe.md` | see there |
+| G7-00 | — | not before 2026-10-30 02:00 UTC |
+
+Extra tests of A-1 (not rows of TEST-SPEC-M7): `xtask::ctreport::tests::informative_targets_per_target_set`;
+`xtask::testscan::scan::tests` helper `check_harness_invocations` (inside `pr_ci_runs_props_with_ci_run_seed`);
+`xtask::gates::tests::kani_rss_guard`, `kani_rss_guard_fails_closed_without_ps_sample`,
+`kani_rss_guard_requires_a_peak_per_checked_harness`; `xtask::policy::tests::xwin_full_roots_have_no_excluded_dev_dependency`;
+harness `m6_activity::timing_draws_unmoved_by_one_hour_of_activity`, `m6_sched_life::relay_idle_and_age_bounds_defaults`
+(short forms). Changed existing tests: `ctreport::tests::informative_targets_are_pinned_printed_and_never_fail`,
+`gates::tests::deleting_or_neutering_a_pinned_job_is_a_finding` (harness variants), `required_jobs_keep_their_pinned_conditions`
+(14 jobs), `testscan::scan::tests::nextest_does_not_run_the_harness_binary_twice`.
+
 ## 4. Gates
+
+| Gate | Result |
+|---|---|
+| `cargo xtask ci-fast` at `fa0adef` (`ci-fast-a1-fa0adef.txt`) | PASS: fmt 1 s, clippy, policy 1 s, deny, vet, audit, cooldown 23 s, nextest 18 s, doctest, hello, kat 93 s, harness 942 s |
+| `cargo xtask ci-fast` at `f6e2928` (`ci-fast-a1b-s5-f6e2928.txt`) | PASS: fmt 0 s, clippy, policy 1 s, deny, vet, audit 2 s, cooldown 24 s, nextest 16 s, doctest 1 s, hello, kat 92 s, harness 927 s |
+| `cargo xtask ci-full` | not run in A-1b |
+| Kani | see G7-12 row |
+| Fuzz / mutants / coverage / ct (full) | not run |
 
 ## 5. Deviations from spec / plan
 
@@ -67,10 +100,16 @@ until it lands.
 the executor cannot dispatch); vendor CVE lists of SQLite 3.50.4 / SQLCipher 4.10.0 / OpenSSL 3.6.3 (no web access in
 the container; RustSec shows none).
 
-**Q-A1 (G7-05 vs G7-06, OPEN-M7-04 A).** `secmp-crypto` and `secmp-transport` dev-depend on `secmp-testkit`. With the
-G7-06 edge `secmp-testkit` → `secmp-store`, `cargo xwin build --workspace --all-targets --exclude …` still builds the
-testkit, the store and vendored OpenSSL as dev-dependencies of the non-excluded packages, so the excluded list does not
-keep OpenSSL out of the xwin build. Not observable before G7-06 (A-3). Needs a reviewer reading before A-3.
+**Q-A1 (closed by Q127, `f6e2928`).** Two cross-build invocations; see G7-05.
+
+**Q-A2 (G7-05, deviation from WEISUNG M7-A1b §5).** The weisung lists `XWIN_LIB_ONLY = [secmp-crypto, secmp-transport]`. The
+new test `xwin_full_roots_have_no_excluded_dev_dependency` is red with that list: `secmp-proto` (Cargo.toml:23) and
+`secmp-relay` (Cargo.toml:33) also dev-depend on `secmp-testkit`. `XWIN_LIB_ONLY` therefore also names `secmp-proto` and
+`secmp-relay` (the second invocation builds `--lib --bins` of the four). Reviewer to confirm or re-dictate; ADR-034
+Amendment 1 rev. 2, docs/06 and the verbatim test follow the four-package list.
+
+**Q-A3 (Kani peak figures).** The `kani` step prints its `kani-rss` lines after the last package; a step that is stopped
+earlier prints none. The first guarded local run was stopped by the background limit during `secmp-proto`.
 
 **Note for ST-02.** The bundled SQLCipher reports `PRAGMA cipher_version` = `4.10.0 community` (A0 §3); the row's
 expected value 4.10.0 is the leading version of that string.

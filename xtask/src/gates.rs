@@ -3860,17 +3860,23 @@ pub(crate) fn windows_cross(ctx: &Ctx) -> Result<Outcome> {
         ));
     }
     tools::require(tools::XWIN)?;
-    Cmd::cargo().args(windows_cross_args()).run()?;
+    for args in windows_cross_args() {
+        Cmd::cargo().args(args).run()?;
+    }
     Ok(Outcome::Pass(format!(
-        "cargo xwin build --all-targets for x86_64-pc-windows-msvc, excluding {} (ADR-034 Amendment 1; built and tested natively by windows-native)",
-        expect::XWIN_EXCLUDE.join(", ")
+        "cargo xwin build --all-targets for x86_64-pc-windows-msvc, excluding {} and {}; and --lib --bins of {} (ADR-034 Amendment 1 rev. 2; built and tested natively by windows-native)",
+        expect::XWIN_EXCLUDE.join(", "),
+        expect::XWIN_LIB_ONLY.join(", "),
+        expect::XWIN_LIB_ONLY.join(", ")
     )))
 }
 
-/// The cargo-xwin cross-build of the `windows-cross` step: the workspace less `expect::XWIN_EXCLUDE` (ADR-034
-/// Amendment 1, OPEN-M7-04 A: vendored OpenSSL cannot be cross-built).
-pub(crate) fn windows_cross_args() -> Vec<String> {
-    let mut args: Vec<String> = [
+/// The two cargo-xwin invocations of the `windows-cross` step (ADR-034 Amendment 1 rev. 2, OPEN-M7-04 A, Q127; vendored
+/// OpenSSL cannot be cross-built): (1) the workspace with all targets less `expect::XWIN_EXCLUDE` and
+/// `expect::XWIN_LIB_ONLY`; (2) the libraries and binaries of `expect::XWIN_LIB_ONLY`, without tests, examples and
+/// benches (their dev-dependency `secmp-testkit` is excluded).
+pub(crate) fn windows_cross_args() -> Vec<Vec<String>> {
+    let mut all: Vec<String> = [
         "xwin",
         "build",
         "--workspace",
@@ -3882,11 +3888,27 @@ pub(crate) fn windows_cross_args() -> Vec<String> {
     .iter()
     .map(|a| (*a).to_owned())
     .collect();
-    for p in expect::XWIN_EXCLUDE {
-        args.push("--exclude".to_owned());
-        args.push((*p).to_owned());
+    for p in expect::XWIN_EXCLUDE.iter().chain(expect::XWIN_LIB_ONLY) {
+        all.push("--exclude".to_owned());
+        all.push((*p).to_owned());
     }
-    args
+    let mut roots: Vec<String> = [
+        "xwin",
+        "build",
+        "--lib",
+        "--bins",
+        "--locked",
+        "--target",
+        "x86_64-pc-windows-msvc",
+    ]
+    .iter()
+    .map(|a| (*a).to_owned())
+    .collect();
+    for p in expect::XWIN_LIB_ONLY {
+        roots.push("-p".to_owned());
+        roots.push((*p).to_owned());
+    }
+    vec![all, roots]
 }
 
 pub(crate) fn windows_native(ctx: &Ctx) -> Outcome {

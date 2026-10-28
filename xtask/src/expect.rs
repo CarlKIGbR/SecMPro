@@ -1734,6 +1734,19 @@ pub(crate) const XWIN_EXCLUDE: &[&str] = &[
     "secmp-ui",
 ];
 
+/// ADR-034 Amendment 1 rev. 2 (Q127): the packages whose tests, examples and benches the all-targets cross-build leaves
+/// out because their dev-dependency `secmp-testkit` (excluded) would pull the store and vendored OpenSSL after G7-06
+/// (`secmp-crypto`, `secmp-proto`, `secmp-relay`, `secmp-transport`: each lists it under `[dev-dependencies]`;
+/// `secmp-proto` and `secmp-relay` are added to the weisung's two by the test
+/// `xwin_full_roots_have_no_excluded_dev_dependency`, report §8 Q-A2). They are cross-built a second time with
+/// `--lib --bins` only.
+pub(crate) const XWIN_LIB_ONLY: &[&str] = &[
+    "secmp-crypto",
+    "secmp-proto",
+    "secmp-relay",
+    "secmp-transport",
+];
+
 /// The job names of the required checks of the `main-protection` ruleset (M2 review C2): they exist only in
 /// [`REQUIRED_WORKFLOW`], which has no `workflow_dispatch` trigger, so no dispatch can add a `skipped` (= passing) check
 /// run under a required name. The policy step pins [`PINNED_JOBS`], a superset.

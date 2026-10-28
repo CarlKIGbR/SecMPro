@@ -2954,21 +2954,34 @@ mod tests {
         for p in expect::XWIN_EXCLUDE {
             assert!(ws.member(p).is_some(), "{p} is no workspace member");
         }
-        let args = crate::gates::windows_cross_args();
-        for want in ["xwin", "build", "--workspace", "--all-targets", "--locked"] {
-            assert!(args.iter().any(|a| a == want), "{want}: {args:?}");
-        }
-        assert!(
-            args.windows(2)
-                .any(|w| w == ["--target", "x86_64-pc-windows-msvc"])
+        assert_eq!(
+            expect::XWIN_LIB_ONLY,
+            &[
+                "secmp-crypto",
+                "secmp-proto",
+                "secmp-relay",
+                "secmp-transport"
+            ]
         );
-        let excluded: Vec<&str> = args
-            .windows(2)
-            .filter(|w| w.first().is_some_and(|a| a == "--exclude"))
-            .filter_map(|w| w.get(1).map(String::as_str))
-            .collect();
-        assert_eq!(excluded, expect::XWIN_EXCLUDE);
-        assert!(!args.iter().any(|a| a == "-p" || a == "--package"));
+        for p in expect::XWIN_LIB_ONLY {
+            assert!(ws.member(p).is_some(), "{p} is no workspace member");
+        }
+        // the two invocations, verbatim (Q127)
+        let words = |s: &str| -> Vec<String> { s.split_whitespace().map(str::to_owned).collect() };
+        let want_all = words(
+            "xwin build --workspace --all-targets --locked --target x86_64-pc-windows-msvc \
+             --exclude secmp-store --exclude secmp-client-core --exclude secmp-cli --exclude secmp-testkit \
+             --exclude secmp-ui --exclude secmp-crypto --exclude secmp-proto --exclude secmp-relay \
+             --exclude secmp-transport",
+        );
+        let want_roots = words(
+            "xwin build --lib --bins --locked --target x86_64-pc-windows-msvc \
+             -p secmp-crypto -p secmp-proto -p secmp-relay -p secmp-transport",
+        );
+        assert_eq!(
+            crate::gates::windows_cross_args(),
+            vec![want_all, want_roots]
+        );
         // the jobs: xwin-cross runs the step, windows-native and dispatch-windows the native gate without restriction
         let ci = repo_file(".github/workflows/ci.yml")?;
         let dispatch = repo_file(".github/workflows/ci-dispatch.yml")?;
@@ -2992,6 +3005,42 @@ mod tests {
                 }
             }
         }
+        Ok(())
+    }
+
+    /// WEISUNG M7-A1b §5 (Q127, ADR-034 Amendment 1 rev. 2): no root of the all-targets cross-build dev-depends on a
+    /// crate it excludes — a dev-dependency is compiled for the root's tests, examples and benches, so an excluded
+    /// `secmp-testkit` (which will pull the store and vendored OpenSSL) would come back through it.
+    #[test]
+    fn xwin_full_roots_have_no_excluded_dev_dependency() -> Result<()> {
+        let ws = Workspace::load()?;
+        let lib_only = expect::XWIN_LIB_ONLY;
+        let mut bad = Vec::new();
+        for m in &ws.members {
+            if m.name == "xtask"
+                || expect::XWIN_EXCLUDE.contains(&m.name.as_str())
+                || lib_only.contains(&m.name.as_str())
+            {
+                continue;
+            }
+            let text = lf(&std::fs::read_to_string(&m.manifest_path)?);
+            let mut in_dev = false;
+            for (n, line) in text.lines().enumerate() {
+                let t = line.trim();
+                if t.starts_with('[') {
+                    in_dev = t == "[dev-dependencies]";
+                    continue;
+                }
+                let name = t.split(['=', '.', ' ']).next().unwrap_or_default();
+                if in_dev && (expect::XWIN_EXCLUDE.contains(&name) || lib_only.contains(&name)) {
+                    bad.push(format!("{}:{}", m.name, n.saturating_add(1)));
+                }
+            }
+        }
+        assert!(
+            bad.is_empty(),
+            "roots with an excluded dev-dependency: {bad:?}"
+        );
         Ok(())
     }
 

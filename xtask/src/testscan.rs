@@ -389,6 +389,24 @@ fn ungated_lines(src: &str) -> Vec<(usize, &str)> {
     out
 }
 
+/// Whether `lib` declares the store's `kat` module under `cfg(any(test, feature = "kat"))` (ST-09).
+#[cfg(test)]
+fn declares_kat_module(lib: &str) -> bool {
+    lib.replace("\r\n", "\n")
+        .contains("#[cfg(any(test, feature = \"kat\"))]\npub mod kat;")
+}
+
+/// V1-F7 (extra test): the declaration check of ST-09 holds for LF and for CRLF text (a Windows checkout) and fails
+/// without the `cfg` line.
+#[cfg(test)]
+#[test]
+fn kat_mod_declaration_matches_crlf() {
+    let lf = "#[cfg(any(test, feature = \"kat\"))]\npub mod kat;\n";
+    assert!(declares_kat_module(lf));
+    assert!(declares_kat_module(&lf.replace('\n', "\r\n")));
+    assert!(!declares_kat_module("pub mod kat;\n"));
+}
+
 /// TEST-SPEC-M7 ST-09 (`docs/06` §2; M4 review RT-2): the test-only constructors stay test-only. In every shipped
 /// crate's `src/` (all but `secmp-testkit`): `kat_small` is defined only under `cfg(feature = "kat")` (0 sites in A-3 —
 /// the Argon2 parameters are A-4); every line naming `TestKey`, `CrashAt` or `FailAt` is inside a `kat`-gated item, a
@@ -399,7 +417,7 @@ fn ungated_lines(src: &str) -> Vec<(usize, &str)> {
 fn kat_argon2_params_only_with_kat() -> Result<()> {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
     let store_lib = std::fs::read_to_string(root.join("crates/secmp-store/src/lib.rs"))?;
-    assert!(store_lib.contains("#[cfg(any(test, feature = \"kat\"))]\npub mod kat;"));
+    assert!(declares_kat_module(&store_lib));
     let mut test_key_sites = 0_usize;
     let mut kat_small_sites = 0_usize;
     let mut bad = Vec::new();

@@ -14,6 +14,7 @@
 
 use std::sync::{Arc, Mutex};
 
+use secmp_crypto::{Choice, ConstantTimeEq, Zeroize, Zeroizing};
 use secmp_proto::tr::{RatchetParts, SKIPPED_KEY_LEN};
 use secmp_store::Store;
 
@@ -36,24 +37,46 @@ pub struct WriteCounts {
     pub skipped_deleted: u64,
 }
 
-/// The durable reassembly state and trust row of a session (each `None` before its first write).
-pub type InboxTrust = (Option<Vec<u8>>, Option<Vec<u8>>);
+/// The durable reassembly state and trust row of a session (each `None` before its first write; zeroized on drop).
+pub use secmp_store::sessions::InboxTrust;
 
 /// The store-backed durability of one session (see the module documentation).
 pub struct StorePersist {
     store: SharedStore,
     session: i64,
     /// The stored skipped entries: `ord` and the entry's key `hk ‖ n`, in insertion order.
-    entries: Vec<(i64, [u8; SKIPPED_KEY_LEN])>,
+    entries: Vec<(i64, EntryKey)>,
     next_ord: i64,
     counts: WriteCounts,
 }
 
-fn key_of(entry: &[u8]) -> Result<[u8; SKIPPED_KEY_LEN], PersistError> {
-    entry
-        .get(..SKIPPED_KEY_LEN)
-        .and_then(|k| <[u8; SKIPPED_KEY_LEN]>::try_from(k).ok())
-        .ok_or(PersistError)
+/// The key `hk ‖ n` of a skipped entry (spec §7.1): `hk` is a header key, so the key is a secret (CLAUDE.md §1.6) —
+/// zeroized on drop, compared only in constant time, no `Clone`, no `PartialEq`.
+pub(crate) struct EntryKey(Zeroizing<[u8; SKIPPED_KEY_LEN]>);
+
+impl Zeroize for EntryKey {
+    fn zeroize(&mut self) {
+        self.0.zeroize();
+    }
+}
+
+impl ConstantTimeEq for EntryKey {
+    fn ct_eq(&self, other: &Self) -> Choice {
+        self.0.as_slice().ct_eq(other.0.as_slice())
+    }
+}
+
+/// Whether `set` holds `k`: every element is compared (no early exit), the result is converted once.
+fn holds<'a>(set: impl Iterator<Item = &'a EntryKey>, k: &EntryKey) -> bool {
+    let found = set.fold(Choice::from(0), |acc, e| acc | e.ct_eq(k));
+    bool::from(found)
+}
+
+fn key_of(entry: &[u8]) -> Result<EntryKey, PersistError> {
+    let bytes = entry.get(..SKIPPED_KEY_LEN).ok_or(PersistError)?;
+    let mut key = Zeroizing::new([0_u8; SKIPPED_KEY_LEN]);
+    key.copy_from_slice(bytes);
+    Ok(EntryKey(key))
 }
 
 impl StorePersist {
@@ -64,14 +87,12 @@ impl StorePersist {
     pub fn open(store: SharedStore, session: i64) -> Result<Self, PersistError> {
         let entries = {
             let s = store.lock().map_err(|_| PersistError)?;
-            match s.session_rows(session).map_err(|_| PersistError)? {
-                Some(rows) => rows
-                    .skipped
-                    .iter()
-                    .map(|(ord, e)| key_of(e).map(|k| (*ord, k)))
-                    .collect::<Result<Vec<_>, _>>()?,
-                None => Vec::new(),
-            }
+            // the keys only: no message key and no fixed part is read (V1-F2)
+            s.skipped_keys(session)
+                .map_err(|_| PersistError)?
+                .iter()
+                .map(|(ord, k)| key_of(k).map(|k| (*ord, k)))
+                .collect::<Result<Vec<_>, _>>()?
         };
         let next_ord = entries.last().map_or(0, |(o, _)| o.saturating_add(1));
         Ok(Self {
@@ -97,9 +118,7 @@ impl StorePersist {
     /// [`PersistError`] if the store cannot be read.
     pub fn load_inbox_trust(&self) -> Result<InboxTrust, PersistError> {
         let s = self.store.lock().map_err(|_| PersistError)?;
-        Ok(s.session_rows(self.session)
-            .map_err(|_| PersistError)?
-            .map_or((None, None), |r| (r.inbox, r.trust)))
+        s.inbox_trust(self.session).map_err(|_| PersistError)
     }
 
     /// The messages the history holds as delivered on this session (the dedup set after a restart).
@@ -128,12 +147,8 @@ pub fn load_parts(store: &SharedStore, session: i64) -> Result<Option<RatchetPar
         return Ok(None);
     };
     Ok(Some(RatchetParts {
-        fixed: secmp_crypto::Zeroizing::new(rows.fixed),
-        skipped: rows
-            .skipped
-            .into_iter()
-            .map(|(_, e)| secmp_crypto::Zeroizing::new(e))
-            .collect(),
+        fixed: rows.fixed,
+        skipped: rows.skipped.into_iter().map(|(_, e)| e).collect(),
     }))
 }
 
@@ -162,7 +177,7 @@ impl Persist for StorePersist {
         }
         // the diff against the stored entries, by key (hk, n): deleted are the stored ones the new state lacks, inserted
         // the new ones the store lacks, in their order (always at the back of the deque)
-        let new_keys: Vec<[u8; SKIPPED_KEY_LEN]> = parts
+        let new_keys: Vec<EntryKey> = parts
             .ratchet
             .skipped
             .iter()
@@ -171,13 +186,13 @@ impl Persist for StorePersist {
         let deleted: Vec<i64> = self
             .entries
             .iter()
-            .filter(|(_, k)| !new_keys.contains(k))
+            .filter(|(_, k)| !holds(new_keys.iter(), k))
             .map(|(o, _)| *o)
             .collect();
         let mut inserted: Vec<(i64, usize)> = Vec::new();
         let mut ord = self.next_ord;
         for (i, k) in new_keys.iter().enumerate() {
-            if !self.entries.iter().any(|(_, s)| s == k) {
+            if !holds(self.entries.iter().map(|(_, s)| s), k) {
                 inserted.push((ord, i));
                 ord = ord.checked_add(1).ok_or(PersistError)?;
             }
@@ -218,9 +233,11 @@ impl Persist for StorePersist {
             .map_err(|_| PersistError)?;
         }
         self.entries.retain(|(o, _)| !deleted.contains(o));
-        for (o, i) in &inserted {
-            if let Some(k) = new_keys.get(*i) {
-                self.entries.push((*o, *k));
+        // the keys of the inserted entries move out of `new_keys` (no copy of a key is made)
+        let mut fresh = inserted.iter().peekable();
+        for (i, k) in new_keys.into_iter().enumerate() {
+            if let Some((o, _)) = fresh.next_if(|(_, at)| *at == i) {
+                self.entries.push((*o, k));
             }
         }
         self.next_ord = ord;
@@ -262,6 +279,28 @@ mod tests {
 
     #[cfg(feature = "kat")]
     type R = Result<(), String>;
+
+    /// V1-F1 (CLAUDE.md §1.6; extra test): the key of a skipped entry (`hk ‖ n`, a header key) is a typed secret — it
+    /// zeroizes and compares only in constant time; it has no `PartialEq` and no derive, so no `==` can reach it.
+    #[test]
+    fn entry_keys_are_zeroizing_secrets() {
+        fn needs_zeroize<T: secmp_crypto::Zeroize>() {}
+        fn needs_ct_eq<T: secmp_crypto::ConstantTimeEq>() {}
+        needs_zeroize::<super::EntryKey>();
+        needs_ct_eq::<super::EntryKey>();
+        let src = include_str!("persist.rs").replace("\r\n", "\n");
+        let partial_eq = ["PartialEq", " for EntryKey"].concat();
+        assert_eq!(src.matches(&partial_eq).count(), 0);
+        let decl = ["pub(crate) struct ", "EntryKey("].concat();
+        assert_eq!(src.matches(&decl).count(), 1);
+        let lines: Vec<&str> = src.lines().collect();
+        let at = lines.iter().position(|l| l.contains(&decl));
+        let before = at.and_then(|i| i.checked_sub(1)).and_then(|i| lines.get(i));
+        assert!(
+            before.is_some_and(|l| !l.trim_start().starts_with("#[derive")),
+            "{before:?}"
+        );
+    }
 
     /// `r` with its error as text.
     #[cfg(feature = "kat")]
@@ -942,17 +981,45 @@ mod tests {
             let state = durable(&store, 2)?;
             let (inbox, trust) = f(pb.load_inbox_trust(), "inbox/trust")?;
             let all_new = state == new_state
-                && inbox.as_deref() == Some(b"inbox-new".as_slice())
-                && trust.as_ref() == Some(&frozen);
+                && inbox.as_deref().map(Vec::as_slice) == Some(b"inbox-new".as_slice())
+                && trust.as_deref().map(Vec::as_slice) == Some(frozen.as_slice());
             let all_old = state == old_state
-                && inbox.as_deref() == Some(b"inbox-old".as_slice())
-                && trust.as_ref() == Some(&verified);
+                && inbox.as_deref().map(Vec::as_slice) == Some(b"inbox-old".as_slice())
+                && trust.as_deref().map(Vec::as_slice) == Some(verified.as_slice());
             if k <= 5 {
                 assert!(all_old, "k = {k}: all three old");
             } else {
                 assert!(all_new, "after the commit: all three new");
             }
         }
+        Ok(())
+    }
+
+    /// V1-F2 (extra test): opening a session's durability and reading its inbox/trust read no ratchet secret — no
+    /// message key, no fixed part (`secmp_store::kat::session_secret_bytes_read` stays 0).
+    #[test]
+    #[cfg(feature = "kat")]
+    fn open_reads_no_message_keys() -> R {
+        let dir = f(secmp_store::kat::TempDir::new("open-no-mk"), "dir")?;
+        let store = shared(dir.path())?;
+        let (a, mut ea, b, mut eb) = pair(11)?;
+        let mut pa = f(StorePersist::open(Arc::clone(&store), 1), "persist A")?;
+        let mut pb = f(StorePersist::open(Arc::clone(&store), 2), "persist B")?;
+        let (a, _skipped) = seal(a, &text(1), &mut ea, &mut pa)?;
+        let (_a, second) = seal(a, &text(2), &mut ea, &mut pa)?;
+        let _b = open(b, &second, &mut eb, &mut pb)?;
+        assert_eq!(
+            f(f(store.lock(), "lock")?.session_rows(2), "rows")?
+                .ok_or("rows")?
+                .skipped
+                .len(),
+            1,
+            "one stored skipped entry"
+        );
+        secmp_store::kat::reset_counters();
+        let reopened = f(StorePersist::open(Arc::clone(&store), 2), "reopen")?;
+        let _ = f(reopened.load_inbox_trust(), "inbox/trust")?;
+        assert_eq!(secmp_store::kat::session_secret_bytes_read(), 0);
         Ok(())
     }
 }

@@ -5,6 +5,7 @@
 //! transition through these functions, one transaction each.
 
 use rusqlite::params;
+use secmp_crypto::Zeroizing;
 
 use crate::error::{Error, Result};
 use crate::store::Store;
@@ -31,8 +32,8 @@ pub struct OutboxRow {
     pub kind: u8,
     /// `expire_after` (seconds).
     pub expire_after: u32,
-    /// The payload.
-    pub payload: Vec<u8>,
+    /// The payload (a message: zeroized on drop).
+    pub payload: Zeroizing<Vec<u8>>,
     /// When it was queued.
     pub queued_ms: u64,
     /// When it was first relayed.
@@ -71,7 +72,7 @@ impl Store {
                     row.seq,
                     i64::from(row.kind),
                     i64::from(row.expire_after),
-                    row.payload,
+                    row.payload.as_slice(),
                     queued,
                     state::QUEUED
                 ],
@@ -134,7 +135,7 @@ impl Store {
                         .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(2, kind))?,
                     expire_after: u32::try_from(expire_after)
                         .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(3, expire_after))?,
-                    payload: r.get(4)?,
+                    payload: Zeroizing::new(r.get(4)?),
                     queued_ms: u64_of(r.get(5)?)?,
                     first_relayed_ms: r.get::<_, Option<i64>>(6)?.map(u64_of).transpose()?,
                     state: r.get(7)?,
@@ -160,7 +161,7 @@ mod tests {
             seq,
             kind: 1,
             expire_after: 60,
-            payload: vec![n; 3],
+            payload: Zeroizing::new(vec![n; 3]),
             queued_ms,
             first_relayed_ms: None,
             state: state::QUEUED,
@@ -204,7 +205,7 @@ mod tests {
             (first.seq, first.kind, first.expire_after, first.queued_ms),
             (3, 1, 60, 2_000)
         );
-        assert_eq!(first.payload, vec![1; 3]);
+        assert_eq!(first.payload.as_slice(), [1_u8; 3].as_slice());
         assert_eq!(
             (first.state, first.cell_id, first.first_relayed_ms),
             (state::FAILED, None, None)

@@ -2,7 +2,8 @@
 //! The profile store: one SQLCipher database per profile directory (CS-3.1, `docs/04:52`; `docs/02` §4.2).
 //!
 //! **Opening** (`open_connection`, the only place a connection is made): `SQLITE_DBCONFIG_DEFENSIVE` before any
-//! statement (ST-20, ADR-055 item 7), the raw key, `cipher_memory_security = ON`, a read of `sqlite_master` that
+//! statement (ST-20, ADR-055 item 7), `cipher_memory_security = ON` before the key is given, the raw key (one statement
+//! from a zeroizing buffer, [`DbKey::key_statement`]), a read of `sqlite_master` that
 //! decides the key (every failure there is the uniform [`Error::Unlock`]), the SQLCipher version check against
 //! [`SQLCIPHER_MIN`], then `journal_mode = WAL`, `temp_store = MEMORY` (no temp files, `docs/02:102`) and
 //! `secure_delete = ON` (CS-3.4). The profile directory holds `profile.db`, its `-wal` and `-shm`, and `lock`, which an
@@ -53,7 +54,26 @@ impl DbKey {
         s.push('\'');
         s
     }
+
+    /// `PRAGMA key = "x'<64 hex digits>'"` (82 bytes), built in one zeroizing buffer of exactly that capacity, so no
+    /// reallocation leaves a copy of the key behind.
+    pub(crate) fn key_statement(&self) -> Zeroizing<String> {
+        let mut s = Zeroizing::new(String::with_capacity(82));
+        s.push_str("PRAGMA key = \"");
+        s.push_str(&self.pragma_value());
+        s.push('"');
+        s
+    }
 }
+
+/// One step of `open_connection` in the `kat` step log ([`crate::kat::open_steps`]; a static tag, never SQL or a key).
+#[cfg(any(test, feature = "kat"))]
+fn step(tag: &'static str) {
+    crate::kat::note_open_step(tag);
+}
+
+#[cfg(not(any(test, feature = "kat")))]
+const fn step(_tag: &'static str) {}
 
 fn hex_digit(n: u8) -> char {
     match n {
@@ -100,6 +120,8 @@ fn open_connection(path: &Path, key: Option<&DbKey>) -> Result<Connection> {
     let flags = OpenFlags::SQLITE_OPEN_READ_WRITE
         | OpenFlags::SQLITE_OPEN_CREATE
         | OpenFlags::SQLITE_OPEN_NO_MUTEX;
+    #[cfg(any(test, feature = "kat"))]
+    crate::kat::clear_open_steps();
     let conn = Connection::open_with_flags(path, flags).map_err(|_| Error::Unavailable)?;
     // ST-20 (ADR-055 item 7): before any statement
     let on = conn
@@ -108,31 +130,40 @@ fn open_connection(path: &Path, key: Option<&DbKey>) -> Result<Connection> {
     if !on {
         return Err(Error::Unavailable);
     }
-    if let Some(k) = key {
-        conn.pragma_update(None, "key", k.pragma_value().as_str())
-            .map_err(|_| Error::Unlock)?;
-    }
-    conn.pragma_update(None, "cipher_memory_security", "ON")
+    step("defensive");
+    // V1-F3: SQLCipher's memory security is on before the key reaches it
+    conn.execute_batch("PRAGMA cipher_memory_security = ON")
         .map_err(|_| Error::Unlock)?;
+    step("cipher_memory_security");
+    if let Some(k) = key {
+        conn.execute_batch(&k.key_statement())
+            .map_err(|_| Error::Unlock)?;
+        step("key");
+    }
     // the key is decided by the first read of the schema: SQLCipher allocates and checks only then
     conn.query_row("SELECT count(*) FROM sqlite_master", [], |r| {
         r.get::<_, i64>(0)
     })
     .map_err(|_| Error::Unlock)?;
+    step("check_key");
     let version: String = conn
         .query_row("PRAGMA cipher_version", [], |r| r.get(0))
         .map_err(|_| Error::Unsupported)?;
     check_cipher_version(&version)?;
+    step("cipher_version");
     let mode: String = conn
         .query_row("PRAGMA journal_mode = WAL", [], |r| r.get(0))
         .map_err(|_| Error::Unavailable)?;
     if !mode.eq_ignore_ascii_case("wal") {
         return Err(Error::Unavailable);
     }
+    step("journal_mode");
     conn.pragma_update(None, "temp_store", 2)
         .map_err(|_| Error::Unavailable)?;
+    step("temp_store");
     conn.pragma_update(None, "secure_delete", "ON")
         .map_err(|_| Error::Unavailable)?;
+    step("secure_delete");
     #[cfg(any(test, feature = "kat"))]
     if crate::kat::measuring() {
         conn.pragma_update(None, "wal_autocheckpoint", 0)
@@ -479,6 +510,35 @@ mod tests {
         assert!(Store::open(dir.path(), &TestKey::db_key()).is_ok());
         Ok(())
     }
+    /// V1-F3 (CLAUDE.md §1.6): `cipher_memory_security` is on before the key is given, the key is one statement in an
+    /// 82-byte zeroizing buffer (`PRAGMA key = "x'<64 hex>'"`), and the open runs its steps in the documented order;
+    /// without a key the same steps without `key`. The step log holds static tags only.
+    #[test]
+    fn key_pragma_order_and_zeroizing() -> R {
+        let dir = TempDir::new("open-steps")?;
+        let all = [
+            "defensive",
+            "cipher_memory_security",
+            "key",
+            "check_key",
+            "cipher_version",
+            "journal_mode",
+            "temp_store",
+            "secure_delete",
+        ];
+        drop(Store::open(dir.path(), &TestKey::db_key())?);
+        assert_eq!(crate::kat::open_steps(), all);
+        let plain = TempDir::new("open-steps-plain")?;
+        drop(Store::open_unkeyed_kat(plain.path())?);
+        let unkeyed: Vec<&str> = all.iter().copied().filter(|s| *s != "key").collect();
+        assert_eq!(crate::kat::open_steps(), unkeyed);
+        let s: Zeroizing<String> = TestKey::db_key().key_statement();
+        assert_eq!(s.len(), 82);
+        assert!(s.starts_with("PRAGMA key = \"x'") && s.ends_with("'\""));
+        assert_eq!(s.capacity(), 82, "built in place, no reallocation");
+        Ok(())
+    }
+
     /// G7-13 extra test: `PRAGMA key` gets the raw key as `x'<64 lowercase hex>'`, high nibble first, every digit
     /// value; the one-bit-off key of ST-04 differs from the test key in exactly one bit.
     #[test]

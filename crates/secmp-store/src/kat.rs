@@ -123,6 +123,7 @@ thread_local! {
     static CRASH_SEEN: Cell<u32> = const { Cell::new(0) };
     static TXN_COMMITS: Cell<u64> = const { Cell::new(0) };
     static BYTES_WRITTEN: Cell<u64> = const { Cell::new(0) };
+    static SESSION_SECRET_BYTES: Cell<u64> = const { Cell::new(0) };
     static MIGRATION_STATEMENTS: Cell<u64> = const { Cell::new(0) };
     static MEASURE_WRITES: Cell<bool> = const { Cell::new(false) };
 }
@@ -220,8 +221,40 @@ pub(crate) fn measuring() -> bool {
     MEASURE_WRITES.with(Cell::get)
 }
 
+/// Bytes of FIXED and SKIPPED rows (ratchet secrets: chain, header and message keys) `Store::session_rows` read on this
+/// thread; the key-only and inbox/trust reads add nothing (V1-F2).
+#[must_use]
+pub fn session_secret_bytes_read() -> u64 {
+    SESSION_SECRET_BYTES.with(Cell::get)
+}
+
+pub(crate) fn note_session_secret_bytes(n: usize) {
+    let n = u64::try_from(n).unwrap_or(u64::MAX);
+    SESSION_SECRET_BYTES.with(|c| c.set(c.get().saturating_add(n)));
+}
+
+thread_local! {
+    static OPEN_STEPS: std::cell::RefCell<Vec<&'static str>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// The steps of the last `open_connection` on this thread, in order (static tags only: never SQL text, never key
+/// bytes; V1-F3).
+#[must_use]
+pub fn open_steps() -> Vec<&'static str> {
+    OPEN_STEPS.with(|s| s.borrow().clone())
+}
+
+pub(crate) fn clear_open_steps() {
+    OPEN_STEPS.with(|s| s.borrow_mut().clear());
+}
+
+pub(crate) fn note_open_step(tag: &'static str) {
+    OPEN_STEPS.with(|s| s.borrow_mut().push(tag));
+}
+
 /// Reset the counters of this thread.
 pub fn reset_counters() {
+    SESSION_SECRET_BYTES.with(|c| c.set(0));
     TXN_COMMITS.with(|c| c.set(0));
     BYTES_WRITTEN.with(|c| c.set(0));
     MIGRATION_STATEMENTS.with(|c| c.set(0));

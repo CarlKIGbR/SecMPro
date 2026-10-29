@@ -6,22 +6,29 @@
 //! and trust state and the messages it delivered in one transaction (persist-before-send/ack, PC-09).
 
 use rusqlite::params;
+use secmp_crypto::Zeroizing;
 
 use crate::error::{Error, Result};
 use crate::schema::part;
 use crate::store::{Store, Tx};
 
-/// The rows of a session as stored.
+/// The length of the key `hk ‖ n` at the front of a skipped entry (`secmp_proto::tr::SKIPPED_KEY_LEN`).
+pub const SKIPPED_KEY_LEN: i64 = 36;
+
+/// The rows of a session as stored (every part a secret or a secret's container: zeroized on drop, CLAUDE.md §1.6).
 pub struct SessionRows {
     /// The fixed part.
-    pub fixed: Vec<u8>,
+    pub fixed: Zeroizing<Vec<u8>>,
     /// The skipped entries with their `ord`, in insertion order.
-    pub skipped: Vec<(i64, Vec<u8>)>,
+    pub skipped: Vec<(i64, Zeroizing<Vec<u8>>)>,
     /// The reassembly state, if any.
-    pub inbox: Option<Vec<u8>>,
+    pub inbox: Option<Zeroizing<Vec<u8>>>,
     /// The trust, if any.
-    pub trust: Option<Vec<u8>>,
+    pub trust: Option<Zeroizing<Vec<u8>>>,
 }
+
+/// The reassembly state and the trust of a session (each `None` before its first write).
+pub type InboxTrust = (Option<Zeroizing<Vec<u8>>>, Option<Zeroizing<Vec<u8>>>);
 
 fn put(tx: &mut Tx<'_>, session: i64, p: i64, ord: i64, data: &[u8]) -> Result<()> {
     tx.exec(
@@ -112,28 +119,68 @@ impl Store {
     /// # Errors
     /// [`Error::Unavailable`] if a read fails.
     pub fn session_rows(&self, session: i64) -> Result<Option<SessionRows>> {
-        let read = |p: i64| -> Result<Vec<(i64, Vec<u8>)>> {
-            let mut stmt = self
-                .conn
-                .prepare(
-                    "SELECT ord, data FROM sessions WHERE session_id = ?1 AND part = ?2 ORDER BY ord",
-                )
-                .map_err(|_| Error::Unavailable)?;
-            let rows = stmt
-                .query_map(params![session, p], |r| Ok((r.get(0)?, r.get(1)?)))
-                .map_err(|_| Error::Unavailable)?;
-            rows.collect::<rusqlite::Result<_>>()
-                .map_err(|_| Error::Unavailable)
-        };
-        let Some((_, fixed)) = read(part::FIXED)?.into_iter().next() else {
+        let Some((_, fixed)) = self.read_part(session, part::FIXED)?.into_iter().next() else {
             return Ok(None);
         };
+        let skipped = self.read_part(session, part::SKIPPED)?;
+        #[cfg(any(test, feature = "kat"))]
+        crate::kat::note_session_secret_bytes(
+            skipped
+                .iter()
+                .fold(fixed.len(), |n, (_, e)| n.saturating_add(e.len())),
+        );
+        let (inbox, trust) = self.inbox_trust(session)?;
         Ok(Some(SessionRows {
             fixed,
-            skipped: read(part::SKIPPED)?,
-            inbox: read(part::INBOX)?.into_iter().next().map(|(_, d)| d),
-            trust: read(part::TRUST)?.into_iter().next().map(|(_, d)| d),
+            skipped,
+            inbox,
+            trust,
         }))
+    }
+
+    /// The rows of one part of `session`, in `ord` order.
+    fn read_part(&self, session: i64, p: i64) -> Result<Vec<(i64, Zeroizing<Vec<u8>>)>> {
+        self.read_rows(
+            "SELECT ord, data FROM sessions WHERE session_id = ?1 AND part = ?2 ORDER BY ord",
+            params![session, p],
+        )
+    }
+
+    fn read_rows<P: rusqlite::Params>(
+        &self,
+        sql: &str,
+        params: P,
+    ) -> Result<Vec<(i64, Zeroizing<Vec<u8>>)>> {
+        let mut stmt = self.conn.prepare(sql).map_err(|_| Error::Unavailable)?;
+        let rows = stmt
+            .query_map(params, |r| {
+                Ok((r.get(0)?, Zeroizing::new(r.get::<_, Vec<u8>>(1)?)))
+            })
+            .map_err(|_| Error::Unavailable)?;
+        rows.collect::<rusqlite::Result<_>>()
+            .map_err(|_| Error::Unavailable)
+    }
+
+    /// The keys `hk ‖ n` of the skipped entries of `session` with their `ord`, in insertion order — the first
+    /// [`SKIPPED_KEY_LEN`] bytes of each row: the message keys are not read (V1-F2).
+    ///
+    /// # Errors
+    /// [`Error::Unavailable`] if a read fails.
+    pub fn skipped_keys(&self, session: i64) -> Result<Vec<(i64, Zeroizing<Vec<u8>>)>> {
+        self.read_rows(
+            "SELECT ord, substr(data, 1, ?3) FROM sessions WHERE session_id = ?1 AND part = ?2 ORDER BY ord",
+            params![session, part::SKIPPED, SKIPPED_KEY_LEN],
+        )
+    }
+
+    /// The reassembly state and the trust of `session` (the INBOX and TRUST parts only).
+    ///
+    /// # Errors
+    /// [`Error::Unavailable`] if a read fails.
+    pub fn inbox_trust(&self, session: i64) -> Result<InboxTrust> {
+        let inbox = self.read_part(session, part::INBOX)?.into_iter().next();
+        let trust = self.read_part(session, part::TRUST)?.into_iter().next();
+        Ok((inbox.map(|(_, d)| d), trust.map(|(_, d)| d)))
     }
 
     /// The `msg_id`s the history holds as received from `contact_id` (the dedup set after a restart).
@@ -198,15 +245,26 @@ mod tests {
             "no such row"
         );
         let rows = store.session_rows(7)?.ok_or("rows")?;
-        assert_eq!(rows.fixed, b"fixed-2");
+        assert_eq!(rows.fixed.as_slice(), b"fixed-2");
+        let skipped: Vec<(i64, &[u8])> = rows
+            .skipped
+            .iter()
+            .map(|(o, e)| (*o, e.as_slice()))
+            .collect();
         assert_eq!(
-            rows.skipped,
-            vec![(0, b"entry-0".to_vec()), (2, b"entry-2".to_vec())]
+            skipped,
+            vec![(0, b"entry-0".as_slice()), (2, b"entry-2".as_slice())]
         );
-        assert_eq!(rows.inbox.as_deref(), Some(b"inbox".as_slice()));
-        assert_eq!(rows.trust.as_deref(), Some([3_u8].as_slice()));
+        assert_eq!(
+            rows.inbox.as_deref().map(Vec::as_slice),
+            Some(b"inbox".as_slice())
+        );
+        assert_eq!(
+            rows.trust.as_deref().map(Vec::as_slice),
+            Some([3_u8].as_slice())
+        );
         let other = store.session_rows(8)?.ok_or("rows")?;
-        assert_eq!(other.fixed, b"other");
+        assert_eq!(other.fixed.as_slice(), b"other");
         assert!(other.skipped.is_empty() && other.inbox.is_none() && other.trust.is_none());
         Ok(())
     }
@@ -236,6 +294,51 @@ mod tests {
         assert_eq!(store.delivered_ids(1)?, vec![[2; 16], [1; 16]]);
         assert_eq!(store.delivered_ids(9)?, vec![[5; 16]]);
         assert!(store.delivered_ids(3)?.is_empty());
+        Ok(())
+    }
+
+    /// V1-F2 (CLAUDE.md §1.6): reading the stored keys of the skipped entries and the inbox/trust reads no message key
+    /// and no fixed part — `skipped_keys` returns only the 36-byte prefix `hk ‖ n` of each entry; `session_rows` (the
+    /// control) reads the fixed part and every whole entry.
+    #[test]
+    fn open_reads_no_message_keys() -> R {
+        use crate::kat::{reset_counters, session_secret_bytes_read};
+        use secmp_proto::tr::{SKIPPED_ENTRY_LEN, SKIPPED_KEY_LEN as PROTO_KEY_LEN};
+        assert_eq!(usize::try_from(SKIPPED_KEY_LEN)?, PROTO_KEY_LEN);
+        let dir = TempDir::new("no-mk")?;
+        let mut store = Store::open(dir.path(), &TestKey::db_key())?;
+        let entries: Vec<Vec<u8>> = (1..=3_u8).map(|n| vec![n; SKIPPED_ENTRY_LEN]).collect();
+        let fixed = vec![0x42_u8; 100];
+        store.txn(|tx| {
+            put_fixed(tx, 4, &fixed)?;
+            for (ord, e) in (0_i64..).zip(&entries) {
+                insert_skipped(tx, 4, ord, e)?;
+            }
+            put_inbox(tx, 4, b"inbox")?;
+            put_trust(tx, 4, &[1])
+        })?;
+        reset_counters();
+        let keys = store.skipped_keys(4)?;
+        assert_eq!(keys.len(), 3);
+        for ((ord, k), (want_ord, e)) in keys.iter().zip((0_i64..).zip(&entries)) {
+            assert_eq!(*ord, want_ord);
+            assert_eq!(k.len(), PROTO_KEY_LEN);
+            assert_eq!(Some(k.as_slice()), e.get(..PROTO_KEY_LEN));
+        }
+        assert_eq!(session_secret_bytes_read(), 0);
+        let (inbox, trust) = store.inbox_trust(4)?;
+        assert_eq!(
+            inbox.as_deref().map(Vec::as_slice),
+            Some(b"inbox".as_slice())
+        );
+        assert_eq!(trust.as_deref().map(Vec::as_slice), Some([1_u8].as_slice()));
+        assert_eq!(session_secret_bytes_read(), 0);
+        let rows = store.session_rows(4)?.ok_or("rows")?;
+        assert_eq!(rows.skipped.len(), 3);
+        assert_eq!(
+            session_secret_bytes_read(),
+            u64::try_from(fixed.len() + 3 * SKIPPED_ENTRY_LEN)?
+        );
         Ok(())
     }
 }

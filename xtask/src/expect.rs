@@ -542,13 +542,15 @@ pub(crate) const FUZZ_MAX_LEN: &[(&str, usize)] = &[
 
 /// Packages under the mutation gate (docs/06 §4, §5 step 8); M5: `secmp-relay`, the relay security kernel (ADR-047
 /// Amendment 3, OPEN-M5-12); M6: `secmp-client-core` (the constant-rate scheduler) and `secmp-transport` (ADR-047
-/// Amendment 4, OPEN-M6-23).
+/// Amendment 4, OPEN-M6-23); M7: `secmp-store` (the encrypted profile store, ADR-047 Amendment 10; TEST-SPEC-M7 G7-13),
+/// in the first run with its own tests (feature `kat`).
 pub(crate) const MUTANT_PACKAGES: &[&str] = &[
     "secmp-crypto",
     "secmp-proto",
     "secmp-relay",
     "secmp-client-core",
     "secmp-transport",
+    "secmp-store",
 ];
 
 /// ADR-047 Amendment 4: the packages of [`MUTANT_PACKAGES`] whose tests live in `secmp-testkit/tests/harness` (they need
@@ -2102,6 +2104,36 @@ fn normal_dependency_allow_m7() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// TEST-SPEC-M7 G7-13 (ADR-047 Amendment 10): `MUTANT_PACKAGES` += `secmp-store`, appended; the per-package rule is
+    /// unchanged — the store is not a harness package, so the first run mutates it and tests each mutant with its own
+    /// tests and feature `kat` (which the store has), under the same floor (`MUTANT_MIN_CAUGHT_PERCENT` = 50); docs/06 §4
+    /// and §5 step 8 name it, and docs/08 holds the amendment.
+    #[test]
+    fn mutants_scope_includes_store() -> crate::util::Result<()> {
+        assert_eq!(MUTANT_PACKAGES.last(), Some(&"secmp-store"));
+        assert_eq!(MUTANT_PACKAGES.len(), 6);
+        assert!(!MUTANT_HARNESS_PACKAGES.contains(&"secmp-store"));
+        assert!(!MUTANT_HARNESS_TEST_PACKAGES.contains(&"secmp-store"));
+        assert_eq!(MUTANT_MIN_CAUGHT_PERCENT, 50);
+        assert!(KAT_PACKAGES.contains(&"secmp-store"));
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let manifest = std::fs::read_to_string(root.join("crates/secmp-store/Cargo.toml"))?;
+        assert!(
+            manifest.contains("\nkat = ["),
+            "secmp-store has feature kat"
+        );
+        let standards = std::fs::read_to_string(root.join("docs/06-engineering-standards.md"))?;
+        assert!(standards.contains(
+            "`secmp-crypto`, `secmp-proto`, `secmp-relay`, `secmp-client-core`, `secmp-transport`, `secmp-store` (ADR-047"
+        ));
+        assert!(standards.contains("`secmp-client-core`/`secmp-transport`/`secmp-store`)"));
+        let decisions = std::fs::read_to_string(root.join("docs/08-decisions.md"))?;
+        assert!(
+            decisions.contains("**ADR-047 Amendment 10 — `secmp-store` under the mutation gate.")
+        );
+        Ok(())
+    }
 
     /// TEST-SPEC-M7 ST-02 (extra test): xtask's `SQLCIPHER_MIN` and the store's own minimum are the same version.
     #[test]

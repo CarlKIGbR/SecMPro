@@ -9849,9 +9849,10 @@ mod tests {
     }
 
     /// TEST-SPEC-M6 MU-01 (ADR-047 Amendment 4, OPEN-M6-23): the gate covers `secmp-crypto`, `secmp-proto`,
-    /// `secmp-relay`, `secmp-client-core` and `secmp-transport` in the 8 shards with the Amendment 2 floor; the two M6
-    /// packages are mutated in the second run of every shard, tested by their own tests and the testkit harness
-    /// (`--test-package`, feature `harness`), the first run keeps the three others with feature `kat`; `secmp-testkit`
+    /// `secmp-relay`, `secmp-client-core`, `secmp-transport` and (M7, ADR-047 Amendment 10, G7-13) `secmp-store` in the 8
+    /// shards with the Amendment 2 floor; the two M6 packages are mutated in the second run of every shard, tested by their
+    /// own tests and the testkit harness (`--test-package`, feature `harness`), the first run keeps the four others with
+    /// feature `kat`; `secmp-testkit`
     /// itself is never mutated (G-11); `MUTANT_EXCLUDE_FILES` holds only Kani-only files and Arti glue named in
     /// `docs/mutants-accepted.md` §Excluded; docs/06 §4 lists the five packages.
     #[test]
@@ -9863,7 +9864,8 @@ mod tests {
                 "secmp-proto",
                 "secmp-relay",
                 "secmp-client-core",
-                "secmp-transport"
+                "secmp-transport",
+                "secmp-store"
             ]
         );
         assert_eq!(
@@ -9887,7 +9889,7 @@ mod tests {
             let second = pairs(&mutants_harness_args(shard));
             let has =
                 |p: &[(String, String)], a: &str, b: &str| p.iter().any(|(x, y)| x == a && y == b);
-            for p in ["secmp-crypto", "secmp-proto", "secmp-relay"] {
+            for p in ["secmp-crypto", "secmp-proto", "secmp-relay", "secmp-store"] {
                 assert!(
                     has(&first, "--package", p) && !has(&second, "--package", p),
                     "{k} {p}"
@@ -10239,13 +10241,21 @@ mod tests {
         let floor = |outcomes: Vec<Value>| -> Result<MutantsFloor> {
             Ok(mutants_floor(&mutant_counts(&outcomes)?))
         };
+        // the four other packages, all above the floor
+        let rest = || {
+            [
+                mutant_outcomes("secmp-relay", 50, 10, 0),
+                mutant_outcomes("secmp-client-core", 40, 5, 0),
+                mutant_outcomes("secmp-transport", 30, 3, 0),
+                mutant_outcomes("secmp-store", 20, 2, 0),
+            ]
+            .concat()
+        };
         // every crypto mutant unviable (the R-06 build failure)
         let all_unviable = [
             mutant_outcomes("secmp-crypto", 0, 241, 0),
             mutant_outcomes("secmp-proto", 60, 30, 1),
-            mutant_outcomes("secmp-relay", 50, 10, 0),
-            mutant_outcomes("secmp-client-core", 40, 5, 0),
-            mutant_outcomes("secmp-transport", 30, 3, 0),
+            rest(),
         ]
         .concat();
         let MutantsFloor {
@@ -10267,9 +10277,7 @@ mod tests {
             [
                 mutant_outcomes("secmp-crypto", 64, 36, 0),
                 mutant_outcomes("secmp-proto", 70, 30, 0),
-                mutant_outcomes("secmp-relay", 50, 10, 0),
-                mutant_outcomes("secmp-client-core", 40, 5, 0),
-                mutant_outcomes("secmp-transport", 30, 3, 0),
+                rest(),
             ]
             .concat(),
         )?;
@@ -10285,9 +10293,7 @@ mod tests {
             [
                 mutant_outcomes("secmp-crypto", 70, 30, 0),
                 mutant_outcomes("secmp-proto", 63, 36, 1),
-                mutant_outcomes("secmp-relay", 50, 10, 0),
-                mutant_outcomes("secmp-client-core", 40, 5, 0),
-                mutant_outcomes("secmp-transport", 30, 3, 0),
+                rest(),
             ]
             .concat(),
         )?;
@@ -10304,9 +10310,7 @@ mod tests {
             [
                 mutant_outcomes("secmp-crypto", 65, 35, 0),
                 mutant_outcomes("secmp-proto", 80, 18, 2),
-                mutant_outcomes("secmp-relay", 50, 10, 0),
-                mutant_outcomes("secmp-client-core", 40, 5, 0),
-                mutant_outcomes("secmp-transport", 30, 3, 0),
+                rest(),
             ]
             .concat(),
         )?;
@@ -10323,6 +10327,7 @@ mod tests {
                 "secmp-relay: caught 50, missed 0, timeout 0, unviable 10 of 60 (caught 83.3 %, at least 50 %, unviable 16.7 %)".to_owned(),
                 "secmp-client-core: caught 40, missed 0, timeout 0, unviable 5 of 45 (caught 88.9 %, at least 50 %, unviable 11.1 %)".to_owned(),
                 "secmp-transport: caught 30, missed 0, timeout 0, unviable 3 of 33 (caught 90.9 %, at least 50 %, unviable 9.1 %)".to_owned(),
+                "secmp-store: caught 20, missed 0, timeout 0, unviable 2 of 22 (caught 90.9 %, at least 50 %, unviable 9.1 %)".to_owned(),
             ]
         );
         // a package without any mutant: no caught mutant
@@ -10333,7 +10338,8 @@ mod tests {
                 "secmp-crypto: no caught mutant (of 0)".to_owned(),
                 "secmp-relay: no caught mutant (of 0)".to_owned(),
                 "secmp-client-core: no caught mutant (of 0)".to_owned(),
-                "secmp-transport: no caught mutant (of 0)".to_owned()
+                "secmp-transport: no caught mutant (of 0)".to_owned(),
+                "secmp-store: no caught mutant (of 0)".to_owned()
             ]
         );
         Ok(())
@@ -10821,9 +10827,10 @@ mod tests {
                 mutant_outcomes("secmp-relay", 50, 10, 0),
                 mutant_outcomes("secmp-client-core", 40, 5, 0),
                 mutant_outcomes("secmp-transport", 30, 3, 0),
+                mutant_outcomes("secmp-store", 20, 2, 0),
             ]
             .concat(),
-            138,
+            160,
         )?;
         for k in 3..8 {
             write_shard(&dir, (k, 8), "PASS", &[], 0)?;
@@ -10878,9 +10885,10 @@ mod tests {
                 mutant_outcomes("secmp-relay", 50, 10, 0),
                 mutant_outcomes("secmp-client-core", 40, 5, 0),
                 mutant_outcomes("secmp-transport", 30, 3, 0),
+                mutant_outcomes("secmp-store", 20, 2, 0),
             ]
             .concat(),
-            138,
+            160,
         )?;
         for k in 3..8 {
             write_shard(&dir, (k, 8), "PASS", &[], 0)?;
@@ -10935,6 +10943,7 @@ mod tests {
                 mutant_outcomes("secmp-relay", 10, 2, 0),
                 mutant_outcomes("secmp-client-core", 8, 1, 0),
                 mutant_outcomes("secmp-transport", 4, 1, 0),
+                mutant_outcomes("secmp-store", 4, 1, 0),
             ]
             .concat();
             let failed = survivors.iter().find(|(s, _)| *s == k);

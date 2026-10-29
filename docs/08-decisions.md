@@ -889,7 +889,7 @@ aarch64-unknown-linux-gnu -p secmp-crypto` builds no `aws-lc-sys`, `rustls`, Art
 
 ### ADR-053 — Store key hierarchy: passphrase wrap, per-table keys, record sealing, SQLCipher key, backup (spec rev 2.7)
 
-**Status.** Proposed (planner, 2026-10-27; OPEN-M7-01, reviewer decisions Q80, Q123, Q124). **OWNER class** (a crypto
+**Status.** Accepted (Owner, 2026-10-28, Q127a). Proposed (planner, 2026-10-27; OPEN-M7-01, reviewer decisions Q80, Q123, Q124). **OWNER class** (a crypto
 composition and four new labels = spec change, `docs/03:774`; CLAUDE.md §5). **No default applies**: it takes effect
 only with the owner's written "ADR-053 accepted"; until then no [O-01] row of TEST-SPEC-M7 is built. Extends ADR-020 and
 ADR-027; changes no wire structure, no App. D layout, no frozen vector.
@@ -944,6 +944,8 @@ label — profile and backup wraps would be interchangeable; rejected (Q124).
 **Consequences.** `docs/03` rev 2.7: App. A + four labels, changelog line. `secmp-crypto` exposes Argon2id (ADR-055)
 beside HKDF and CAEAD; `secmp-store` composes them only as written. Gated rows: ST-05…ST-07, ST-10…ST-12, ST-19, CT-01,
 CT-02, CT-05, BK-*, FO-03, FZ-01, FZ-02, PR-03, IN-03. Any later parameter change is a new `ver`, never a silent change.
+
+**ADR-053 Amendment 1 — `row_key` of a composite primary key. Status: Proposed (owner; reviewer 2026-10-29).** `row_key` of a composite primary key = the concatenation, in primary-key column order, of each part encoded by item 5's rule (an integer part as u64 big-endian, a byte-string part as `len u8 ‖ bytes`); a negative integer part is not encodable (`Error::Unavailable`). The AD is otherwise item 5's, unchanged: `"SecMP-STORE/1 <table>" ‖ col_len u8 ‖ column name (ASCII) ‖ row_key` — `prekeys` (kind, id) 16 B, `sessions` (session_id, part, ord) 24 B.
 
 ---
 

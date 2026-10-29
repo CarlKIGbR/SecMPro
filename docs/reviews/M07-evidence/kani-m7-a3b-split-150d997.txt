@@ -1,0 +1,74 @@
+tree = 150d997 + the split of this commit
+# cargo kani --package secmp-proto -Z stubbing --harness kani_proofs::<name> --exact, each alone (2026-10-29, nproc 32), via
+# docs/reviews/M07-evidence/kani-one-a3b.py.txt; peak = getrusage(RUSAGE_CHILDREN).ru_maxrss of the wrapper process
+# (one process per harness), limit KANI_CBMC_RSS_LIMIT_KIB 14160156, 90 % = 12744140.
+  Checking harness kani_proofs::kani_q_frame_plaintext_exact_fit_request...
+  Check 80: kani_proofs::kani_q_frame_plaintext_exact_fit_request.cover.1
+  - Status: SATISFIED
+  SUMMARY:
+  ** 0 of 323 failed (7 unreachable)
+  ** 1 of 1 cover properties satisfied
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 12.39339s
+  Complete - 1 successfully verified harnesses, 0 failures, 1 total.
+  exit 0; peak 999464 KiB = 7.1 % of 14160156 KiB
+  Checking harness kani_proofs::kani_q_frame_plaintext_exact_fit_response_fetch...
+  Check 64: kani_proofs::kani_q_frame_plaintext_exact_fit_response_fetch.cover.1
+  - Status: SATISFIED
+  SUMMARY:
+  ** 0 of 957 failed (5 unreachable)
+  ** 1 of 1 cover properties satisfied
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 59.323715s
+  Complete - 1 successfully verified harnesses, 0 failures, 1 total.
+  exit 0; peak 8375848 KiB = 59.2 % of 14160156 KiB
+  Checking harness kani_proofs::kani_q_frame_plaintext_exact_fit_response_fetch_multi...
+  Check 152: kani_proofs::kani_q_frame_plaintext_exact_fit_response_fetch_multi.cover.1
+  - Status: SATISFIED
+  SUMMARY:
+  ** 0 of 957 failed (5 unreachable)
+  ** 1 of 1 cover properties satisfied
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 103.84176s
+  Complete - 1 successfully verified harnesses, 0 failures, 1 total.
+  exit 0; peak 9288076 KiB = 65.6 % of 14160156 KiB
+  Checking harness kani_proofs::tr_header_selection_k0_2...
+  SUMMARY:
+  ** 0 of 985 failed (11 unreachable)
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 121.48577s
+  Complete - 1 successfully verified harnesses, 0 failures, 1 total.
+  exit 0; peak 13588600 KiB = 96.0 % of 14160156 KiB
+  Checking harness kani_proofs::tr_header_selection_k3...
+  SUMMARY:
+  ** 0 of 985 failed (11 unreachable)
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 109.89314s
+  Complete - 1 successfully verified harnesses, 0 failures, 1 total.
+  exit 0; peak 13635700 KiB = 96.3 % of 14160156 KiB
+  Checking harness kani_proofs::tr_header_selection_k4...
+  SUMMARY:
+  ** 0 of 985 failed (11 unreachable)
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 105.50641s
+  Complete - 1 successfully verified harnesses, 0 failures, 1 total.
+  exit 0; peak 13636560 KiB = 96.3 % of 14160156 KiB
+# --- replaced in this commit (the dictated second step: tr_header_selection_k3_4 alone > 90 %) ---
+  Checking harness kani_proofs::tr_header_selection_k3_4...
+  SUMMARY:
+  ** 0 of 985 failed (11 unreachable)
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 108.66012s
+  Complete - 1 successfully verified harnesses, 0 failures, 1 total.
+  exit 0; peak 12759388 KiB = 90.1 % of 14160156 KiB
+
+# --- baseline: the unsplit tr_header_selection of 150d997, alone, same method (the file checked out at 150d997 for the run, restored) ---
+  Checking harness kani_proofs::tr_header_selection...
+  SUMMARY:
+  ** 0 of 985 failed (11 unreachable)
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 138.27042s
+  Complete - 1 successfully verified harnesses, 0 failures, 1 total.
+  exit 0; peak 13746024 KiB = 97.1 % of 14160156 KiB
+# RESULT: the three q_frame harnesses 7.1 / 59.2 / 65.6 %; tr_header_selection_k0_2 96.0 %, _k3 96.3 %, _k4 96.3 % (> 90 %:
+# STOP, WEISUNG M7-A3b §2); the unsplit harness 97.1 % with the same method.

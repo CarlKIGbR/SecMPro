@@ -23,10 +23,10 @@ Sources: `docs/03` rev 2.6 (`docs/03:<line>` at `main` `bf55099`), `docs/07:137-
 | (i) scheduler-core carry-overs SC | 10 | 0 | 10 | 0 |
 | (j) CLI CL | 14 | 0 | 0 | 14 |
 | (k) E2E E2 | 12 | 0 | 0 | 12 |
-| (l) gates G7, fuzz FZ, Kani K7, transport carry-overs C-T | 33 | 20 | 3 | 10 |
-| **total** | **176** | **65** | **71** | **40** |
+| (l) gates G7, fuzz FZ, Kani K7, transport carry-overs C-T | 34 | 21 | 3 | 10 |
+| **total** | **177** | **66** | **71** | **40** |
 
-Built unconditionally: 171 rows. **(cond, not built)**: SE-13a (OQ-19 reading A, until the owner rules A), C-T2 (`socket2`, default "not M7") — dictated, built only if the decision flips. **(cond, owner action)**: G7-11 (after the owner's `miniz_oxide` vet record), G7-19 (after an ADR-018 acceptance), G7-20 (after `harness` joins the ruleset).
+Built unconditionally: 172 rows. **(cond, not built)**: SE-13a (OQ-19 reading A, until the owner rules A), C-T2 (`socket2`, default "not M7") — dictated, built only if the decision flips. **(cond, owner action)**: G7-11 (after the owner's `miniz_oxide` vet record), G7-19 (after an ADR-018 acceptance), G7-20 (after `harness` joins the ruleset).
 
 ⚙ = owner-operated: E2-07 (nightly over real Tor to the test relay), the Windows VM re-run of the store KATs (G7-17).
 Their non-availability path is the M6 one (`TEST-SPEC-M6.md` "Conventions"): listed under "Blocked — owner
@@ -313,6 +313,7 @@ All CL rows live in the integration test binary `crates/secmp-cli/tests/cli_it.r
 | FZ-04 | fuzz `invitation_queue_retention` | arbitrary fetch rounds and `accept` outcomes ⇒ retained ≤ 24, a spent group never retained | fuzz | B |
 | K7-01 | `secmp-client-core::kani_proofs::kani_retention_bound_24` (RT-1) | the retention function keeps ≤ 24 newest cells for ≤ 40 inputs | kani | B |
 | K7-02 | `secmp-proto::kani_proofs::kani_commit_accept_atomic_record_names_opk1` + `…_record_names_deleted_opk2` (OPEN-M7-26 B, Q132/Q133) | both `VERIFICATION:- SUCCESSFUL`; one cover each, 1 of 1 ("a commit" / "a rejected commit"); each peak < `KANI_CBMC_RSS_LIMIT_KIB` | gate | A |
+| K7-03 | `secmp-proto::kani_proofs::kani_q_frame_plaintext_exact_fit_request` + `…_response_fetch` + `…_response_fetch_multi` + `tr_header_selection_k0_2` + `tr_header_selection_k3` + `tr_header_selection_k4` (OPEN-M7-26 B applied twice, Q135) | each `VERIFICATION:- SUCCESSFUL`; the three q_frame covers 1 of 1 each; each peak ≤ 90 % of `KANI_CBMC_RSS_LIMIT_KIB` | gate | A |
 | C-T1 | `tor::tests::onion_key_must_be_a_point` [O-22] | a `RelayRef.onion` whose key is not a valid Ed25519 point ⇒ `Err` before any connect; T-01/T-02 still green | unit | C |
 | C-T2 | `tls::tests::direct_socket_keepalive_timings` [O-23] **(cond, not built** — default B "not M7"; built only if the owner says A within +24 h) | keepalive 30/10/3 and `TCP_USER_TIMEOUT` 60 s read back on Linux | unit | C |
 | C-T3 | `harness::m7_two_clients::two_clients_uses_core_handshake` | `two-clients` runs the M7 invitation path (IN-17); scripted set-up path deleted (D-C2-1 closed) | regression | C |

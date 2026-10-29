@@ -11052,17 +11052,22 @@ mod tests {
         Ok(())
     }
 
-    /// OPEN-M7-26 B (Q132, Q133): the committed M5 run is history and predates the split of `kani_commit_accept_atomic`; its
-    /// block of the old harness is left out of `log` (nothing on disk is rewritten) and the real run of the two new harnesses
-    /// (`docs/reviews/M07-evidence/kani-m7-a1f-commit-accept-<sha7>.txt`) is appended in its place.
-    fn swap_split_harness_block(root: &Path, log: &mut String) -> Result<()> {
+    /// OPEN-M7-26 B (Q132, Q133, Q135): the committed M5 run is history and predates the splits of
+    /// `kani_commit_accept_atomic` and `kani_q_frame_plaintext_exact_fit`; the block of `old_harness` is left out of `log`
+    /// (nothing on disk is rewritten) and the real run of its split harnesses (the one committed file
+    /// `docs/reviews/M07-evidence/<evidence_prefix><sha7>.txt`) is appended in its place.
+    fn swap_split_harness_block(
+        root: &Path,
+        log: &mut String,
+        old_harness: &str,
+        evidence_prefix: &str,
+    ) -> Result<()> {
+        let head = format!("  Checking harness kani_proofs::{old_harness}...\n");
         let old_block = log
-            .split_once("  Checking harness kani_proofs::kani_commit_accept_atomic...\n")
+            .split_once(&head)
             .and_then(|(_, rest)| rest.split_once("  Checking harness "))
-            .map(|(block, _)| {
-                format!("  Checking harness kani_proofs::kani_commit_accept_atomic...\n{block}")
-            })
-            .ok_or_else(|| Error("no block of the old harness in the M5 log".into()))?;
+            .map(|(block, _)| format!("{head}{block}"))
+            .ok_or_else(|| Error(format!("no block of {old_harness} in the M5 log")))?;
         assert_eq!(log.matches(&old_block).count(), 1);
         *log = log.replacen(&old_block, "", 1);
         let mut split: Vec<_> = std::fs::read_dir(root.join("docs/reviews/M07-evidence"))?
@@ -11071,7 +11076,7 @@ mod tests {
             .filter(|p| {
                 p.file_name()
                     .and_then(|n| n.to_str())
-                    .is_some_and(|n| n.starts_with("kani-m7-a1f-commit-accept-"))
+                    .is_some_and(|n| n.starts_with(evidence_prefix))
             })
             .collect();
         split.sort();
@@ -11119,11 +11124,7 @@ mod tests {
             )?));
         }
         // M5 fix round (M05 review R-121, C-12): the runs of K-01, K-03 and K-08 with their new covers
-        for h in [
-            "kani_frame_pad_total",
-            "kani_link_counter_checked_add",
-            "kani_q_frame_plaintext_exact_fit",
-        ] {
+        for h in ["kani_frame_pad_total", "kani_link_counter_checked_add"] {
             log.push_str(&lf(&std::fs::read_to_string(
                 root.join(format!("docs/reviews/M05-evidence/kani-m5fix-{h}.txt")),
             )?));
@@ -11168,7 +11169,12 @@ mod tests {
         // the C1 run covers the client-core harnesses again: those of Phase A are replaced by its (newer) summaries
         log = log.replace(positive, "");
         log.push_str(&c1_log);
-        swap_split_harness_block(&root, &mut log)?;
+        for (old, prefix) in [
+            ("kani_commit_accept_atomic", "kani-m7-a1f-commit-accept-"),
+            ("kani_q_frame_plaintext_exact_fit", "kani-m7-a3b-split-"),
+        ] {
+            swap_split_harness_block(&root, &mut log, old, prefix)?;
+        }
         assert_eq!(
             kani_cover_pin_findings(&kani_covers(&log)?),
             Vec::<String>::new()
@@ -11228,8 +11234,9 @@ mod tests {
         // M5 Phase B: 30 + the three relay harnesses (TEST-SPEC-M5 K-05…K-07); M6 Phase A: + the seven of
         // `secmp-client-core` (TEST-SPEC-M6 K-01…K-07); M6 Phase C1: + K-C1…K-C6
         // M7 A1e (Q132): `kani_commit_accept_atomic` split in two, 47
-        assert_eq!(all.len(), 47);
-        assert_eq!(kani_verified(&kani_log(all, 0))?.len(), 47);
+        // M7 A-3b (Q135): q_frame split in three, tr_header_selection in three (k ≤ 2, k = 3, k = 4), 51
+        assert_eq!(all.len(), 51);
+        assert_eq!(kani_verified(&kani_log(all, 0))?.len(), 51);
         // a deleted harness: 18 verified, and Kani's own summary says 18 of 18
         let fifteen = all.get(1..).unwrap_or_default();
         assert!(kani_verified(&kani_log(fifteen, 0)).is_err());

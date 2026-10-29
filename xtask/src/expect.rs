@@ -1150,7 +1150,9 @@ pub(crate) const KANI_PACKAGES: &[&str] = &["secmp-client-core", "secmp-proto", 
 /// verified ("Complete - N successfully verified harnesses, 0 failures, N total." with N = this count), so a
 /// deleted or renamed harness fails the gate instead of passing silently. M3 (plan step 9): the three `tr_*`
 /// harnesses of the SecMP-TR decisions (`tr::select`). M4: the five `kani_*` harnesses of SecMP-HX, and (WEISUNG M4-8)
-/// K4b `kani_commit_accept_atomic` (from M7 two harnesses, `…_record_names_opk1` and `…_record_names_deleted_opk2`, OPEN-M7-26 B) on the real prekey store. M5 Phase B: the three relay harnesses of `secmp-relay`
+/// K4b `kani_commit_accept_atomic` (from M7 two harnesses, `…_record_names_opk1` and `…_record_names_deleted_opk2`, OPEN-M7-26 B) on the real prekey store.
+/// M7 A-3b (OPEN-M7-26 B applied twice, Q135): `kani_q_frame_plaintext_exact_fit` split by decoder and context into
+/// `…_request`, `…_response_fetch`, `…_response_fetch_multi`; `tr_header_selection` split by `k` into `…_k0_2`, `…_k3` and `…_k4`. M5 Phase B: the three relay harnesses of `secmp-relay`
 /// (`kani_cmd_seq_monotone`, `kani_queue_eviction_bounds`, `kani_executor_response_count`; TEST-SPEC-M5 K-05…K-07).
 pub(crate) const KANI_HARNESSES: &[&str] = &[
     "kani_proofs::cell",
@@ -1175,7 +1177,9 @@ pub(crate) const KANI_HARNESSES: &[&str] = &[
     "kani_proofs::kani_link_counter_checked_add",
     "kani_proofs::kani_link_counter_strict_plus_one",
     "kani_proofs::kani_outer_unpad_total",
-    "kani_proofs::kani_q_frame_plaintext_exact_fit",
+    "kani_proofs::kani_q_frame_plaintext_exact_fit_request",
+    "kani_proofs::kani_q_frame_plaintext_exact_fit_response_fetch",
+    "kani_proofs::kani_q_frame_plaintext_exact_fit_response_fetch_multi",
     "kani_proofs::kani_queue_eviction_bounds",
     "kani_proofs::kani_rate_bound_integer_form",
     "kani_proofs::kani_reservation_is_schedule_only",
@@ -1198,7 +1202,9 @@ pub(crate) const KANI_HARNESSES: &[&str] = &[
     "kani_proofs::request_skey",
     "kani_proofs::response_frame",
     "kani_proofs::tr_eviction",
-    "kani_proofs::tr_header_selection",
+    "kani_proofs::tr_header_selection_k0_2",
+    "kani_proofs::tr_header_selection_k3",
+    "kani_proofs::tr_header_selection_k4",
     "kani_proofs::tr_skip_plan",
 ];
 
@@ -1227,7 +1233,15 @@ pub(crate) const KANI_COVERS: &[(&str, usize)] = &[
     ("kani_proofs::kani_in_flight_bound", 1),
     ("kani_proofs::kani_link_counter_checked_add", 3),
     ("kani_proofs::kani_link_counter_strict_plus_one", 2),
-    ("kani_proofs::kani_q_frame_plaintext_exact_fit", 2),
+    ("kani_proofs::kani_q_frame_plaintext_exact_fit_request", 1),
+    (
+        "kani_proofs::kani_q_frame_plaintext_exact_fit_response_fetch",
+        1,
+    ),
+    (
+        "kani_proofs::kani_q_frame_plaintext_exact_fit_response_fetch_multi",
+        1,
+    ),
     ("kani_proofs::kani_queue_eviction_bounds", 3),
     ("kani_proofs::kani_rate_bound_integer_form", 2),
     ("kani_proofs::kani_reservation_is_schedule_only", 1),

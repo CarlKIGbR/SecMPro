@@ -29,7 +29,8 @@
 //! depends on the input carry `#[kani::unwind]`; Kani then also proves the bound sufficient (unwinding assertions).
 //!
 //! M3 (plan step 9): the pure decisions of SecMP-TR decryption (`tr::select`, spec §7.4) — `tr_header_selection`
-//! (the constant-time header-key selection equals the sequential pseudocode), `tr_skip_plan` (the bounds of
+//! (since M7 A-3b the harnesses `tr_header_selection_k0_2`, `…_k3`, `…_k4`, Q135; the constant-time
+//! header-key selection equals the sequential pseudocode), `tr_skip_plan` (the bounds of
 //! `skip_message_keys`) and `tr_eviction` (the bound on `skipped`). They run on the real `subtle::Choice` (re-exported
 //! by `secmp-crypto`): its optimisation barrier is a volatile read, which Kani executes as a read, so nothing is
 //! stubbed.
@@ -243,14 +244,15 @@ fn response_frame() {
     }
 }
 
-/// `tr_header_selection` covers every number of distinct skipped header keys `k` in `0..=TR_SKIPPED_KEYS`.
+/// `tr_header_selection_k0_2`, `tr_header_selection_k3` and `tr_header_selection_k4` cover every number of distinct skipped header keys `k` in
+/// `0..=TR_SKIPPED_KEYS`.
 const TR_SKIPPED_KEYS: usize = 4;
 
 fn choice(b: bool) -> Choice {
     Choice::from(u8::from(b))
 }
 
-/// Spec §7.4 steps 1–2 as written, sequentially: the reference `tr_header_selection` compares with.
+/// Spec §7.4 steps 1–2 as written, sequentially: the reference `tr_header_selection_with` compares with.
 /// `opened[i]`: the i-th distinct skipped header key (first-seen order) opened the header; `found[i]`: `(hk_i,
 /// header.n)` is in `skipped`; `current`/`next`: `hk_r`/`nhk_r` opened the header.
 fn sequential_path(opened: &[bool], found: &[bool], current: bool, next: bool) -> Path {
@@ -277,13 +279,13 @@ fn sequential_path(opened: &[bool], found: &[bool], current: bool, next: bool) -
 /// [`select::first_opened`] is one-hot on the lowest opened index (so the `conditional_assign` loop of `open` selects
 /// exactly that key's header and key) and says whether any opened, and [`select::decide`] on the lookup of the
 /// selected key equals the sequential pseudocode.
-#[kani::proof]
-#[kani::unwind(6)] // TR_SKIPPED_KEYS + 2
-fn tr_header_selection() {
+///
+/// M7 A-3b (OPEN-M7-26 B, Q135): split by `k` into [`tr_header_selection_k0_2`] (`k ≤ 2`) and
+/// [`tr_header_selection_k3`], [`tr_header_selection_k4`] (`k = 3`, `k = TR_SKIPPED_KEYS`); their union is the former
+/// `tr_header_selection`, `∀ k ≤ 4`.
+fn tr_header_selection_with(k: usize) {
     let opened_all: [bool; TR_SKIPPED_KEYS] = kani::any();
     let found_all: [bool; TR_SKIPPED_KEYS] = kani::any();
-    let k: usize = kani::any();
-    kani::assume(k <= TR_SKIPPED_KEYS);
     let opened = opened_all.get(..k).unwrap_or_default();
     let found = found_all.get(..k).unwrap_or_default();
     let results: Vec<Choice> = opened.iter().map(|o| choice(*o)).collect();
@@ -307,6 +309,34 @@ fn tr_header_selection() {
         select::decide(any, found_first, choice(current), choice(next))
             == sequential_path(opened, found, current, next)
     );
+}
+
+/// [`tr_header_selection_with`] for `k ≤ 2` distinct skipped header keys.
+#[kani::proof]
+#[kani::unwind(6)] // TR_SKIPPED_KEYS + 2
+fn tr_header_selection_k0_2() {
+    let k: usize = kani::any();
+    kani::assume(k <= 2);
+    tr_header_selection_with(k);
+}
+
+/// [`tr_header_selection_with`] for `k = 3` distinct skipped header keys (`3 ≤ k ≤ 4` alone peaked at 90.1 % of
+/// `KANI_CBMC_RSS_LIMIT_KIB`, Q135).
+#[kani::proof]
+#[kani::unwind(6)] // TR_SKIPPED_KEYS + 2
+fn tr_header_selection_k3() {
+    let k: usize = kani::any();
+    kani::assume(k == 3);
+    tr_header_selection_with(k);
+}
+
+/// [`tr_header_selection_with`] for `k = TR_SKIPPED_KEYS` distinct skipped header keys.
+#[kani::proof]
+#[kani::unwind(6)] // TR_SKIPPED_KEYS + 2
+fn tr_header_selection_k4() {
+    let k: usize = kani::any();
+    kani::assume(k == TR_SKIPPED_KEYS);
+    tr_header_selection_with(k);
 }
 
 /// `skip_message_keys(until)` on a chain at `n_r` (spec §7.4), for every `n_r` and `until`: [`select::skip_plan`]
@@ -1206,45 +1236,85 @@ fn kani_cont_assembly() {
     kani::cover!(completed, "a three-frame message completes");
 }
 
-/// K-08. Both D.2 frame-plaintext decoders over the same arbitrary plaintext of 4335, 4336 or 4337 bytes (the exact
-/// size and its neighbours; every field string shorter than 4336 bytes through the `unpad` over-approximation of
+/// K-08. The D.2 frame-plaintext decoders over an arbitrary plaintext of 4335, 4336 or 4337 bytes (the exact size and
+/// its neighbours; every field string shorter than 4336 bytes through the `unpad` over-approximation of
 /// `request_frame`/`response_frame`, with `RequestCmd::decode_fields` stubbed as in `request_frame`; the per-opcode
-/// request harnesses and `response_frame` prove the field decoders): neither panics; each accepts only at exactly
-/// 4336 bytes; an accepted request or response carries the `cmd_seq` of bytes 1 ..= 4 (the layout `op ‖ cmd_seq ‖
-/// fields`); an accepted response has the opcode of byte 0, which is one of the seven response opcodes of D.2 and
-/// no request opcode (so a request frame is never taken for a response), for both `CELLR` contexts. The covers show
-/// that each decoder accepts some input (M05 review C-12).
-#[kani::proof]
-#[kani::stub(crate::codec::unpad, crate::codec::kani_stubs::unpad)]
-#[kani::stub(
-    crate::wire::frame::RequestCmd::decode_fields,
-    crate::wire::frame::kani_stubs::request_decode_fields
-)]
-fn kani_q_frame_plaintext_exact_fit() {
-    let bytes: [u8; FRAME_PLAINTEXT_LEN + 1] = kani::any();
+/// request harnesses and `response_frame` prove the field decoders): none panics; each accepts only at exactly 4336
+/// bytes; an accepted request or response carries the `cmd_seq` of bytes 1 ..= 4 (the layout `op ‖ cmd_seq ‖
+/// fields`); an accepted response has the opcode of byte 0, which is one of the seven response opcodes of D.2 and no
+/// request opcode (so a request frame is never taken for a response), for both `CELLR` contexts. The covers show that
+/// each decoder accepts some input (M05 review C-12).
+///
+/// M7 A-3b (OPEN-M7-26 B, Q135): the former `kani_q_frame_plaintext_exact_fit` is split by decoder and context into
+/// [`kani_q_frame_plaintext_exact_fit_request`], [`kani_q_frame_plaintext_exact_fit_response_fetch`] and
+/// [`kani_q_frame_plaintext_exact_fit_response_fetch_multi`]: the three together are the old harness (its halves share
+/// no assertion; the symbolic `CellrContext` is the two response harnesses), with the same stubs, set-up and assertions.
+fn q_frame_input(bytes: &[u8; FRAME_PLAINTEXT_LEN + 1]) -> (&[u8], usize, Option<u32>) {
     let len = frame_len();
     let input = bytes.get(..len).unwrap_or_default();
     let cmd_seq = bytes
         .get(1..5)
         .and_then(|b| <[u8; 4]>::try_from(b).ok())
         .map(u32::from_be_bytes);
+    (input, len, cmd_seq)
+}
+
+/// K-08, the request decoder (see [`q_frame_input`]).
+#[kani::proof]
+#[kani::stub(crate::codec::unpad, crate::codec::kani_stubs::unpad)]
+#[kani::stub(
+    crate::wire::frame::RequestCmd::decode_fields,
+    crate::wire::frame::kani_stubs::request_decode_fields
+)]
+fn kani_q_frame_plaintext_exact_fit_request() {
+    let bytes: [u8; FRAME_PLAINTEXT_LEN + 1] = kani::any();
+    let (input, len, cmd_seq) = q_frame_input(&bytes);
     if let Ok(req) = Request::decode(input) {
         assert!(len == FRAME_PLAINTEXT_LEN);
         assert!(Some(req.cmd_seq) == cmd_seq);
         kani::cover!(true, "K-08: a request is accepted");
     }
-    let context = if kani::any() {
-        CellrContext::Fetch
-    } else {
-        CellrContext::FetchMulti
+}
+
+/// K-08, the response decoder in `context` (see [`q_frame_input`]).
+fn q_frame_response(bytes: &[u8; FRAME_PLAINTEXT_LEN + 1], context: CellrContext) -> bool {
+    let (input, len, cmd_seq) = q_frame_input(bytes);
+    let Ok(resp) = Response::decode(input, context) else {
+        return false;
     };
-    if let Ok(resp) = Response::decode(input, context) {
-        let op = resp.cmd.op();
-        assert!(len == FRAME_PLAINTEXT_LEN);
-        assert!(Some(resp.cmd_seq) == cmd_seq);
-        assert!(bytes.first() == Some(&op));
-        assert!(opcode::RESPONSES.iter().any(|(o, _)| *o == op));
-        assert!(!opcode::REQUESTS.iter().any(|(o, _)| *o == op));
-        kani::cover!(true, "K-08: a response is accepted");
+    let op = resp.cmd.op();
+    assert!(len == FRAME_PLAINTEXT_LEN);
+    assert!(Some(resp.cmd_seq) == cmd_seq);
+    assert!(bytes.first() == Some(&op));
+    assert!(opcode::RESPONSES.iter().any(|(o, _)| *o == op));
+    assert!(!opcode::REQUESTS.iter().any(|(o, _)| *o == op));
+    true
+}
+
+/// K-08, the response decoder for `CELLR` in the `FETCH` context.
+#[kani::proof]
+#[kani::stub(crate::codec::unpad, crate::codec::kani_stubs::unpad)]
+#[kani::stub(
+    crate::wire::frame::RequestCmd::decode_fields,
+    crate::wire::frame::kani_stubs::request_decode_fields
+)]
+fn kani_q_frame_plaintext_exact_fit_response_fetch() {
+    let bytes: [u8; FRAME_PLAINTEXT_LEN + 1] = kani::any();
+    if q_frame_response(&bytes, CellrContext::Fetch) {
+        kani::cover!(true, "K-08: a response is accepted (Fetch)");
+    }
+}
+
+/// K-08, the response decoder for `CELLR` in the `FETCH_MULTI` context.
+#[kani::proof]
+#[kani::stub(crate::codec::unpad, crate::codec::kani_stubs::unpad)]
+#[kani::stub(
+    crate::wire::frame::RequestCmd::decode_fields,
+    crate::wire::frame::kani_stubs::request_decode_fields
+)]
+fn kani_q_frame_plaintext_exact_fit_response_fetch_multi() {
+    let bytes: [u8; FRAME_PLAINTEXT_LEN + 1] = kani::any();
+    if q_frame_response(&bytes, CellrContext::FetchMulti) {
+        kani::cover!(true, "K-08: a response is accepted (FetchMulti)");
     }
 }

@@ -553,7 +553,7 @@ pub(crate) const FUZZ_DEEP_NIGHTLY_SECONDS: u64 = 3_600;
 /// - `backup_import` (FZ-01): mode 1 + a file of a 64 KiB body (the seed cap, ADR-052) in its 239 bytes of magic (13),
 ///   header (154), `N` (24), `COM` (32) and tag (16) = 65776 (the structured mode takes 6 + body).
 /// - `store_record_open` (FZ-02): table 1 + `col_len` 1 + a column of 255 + `row_len` 1 + a row key of 255 + mode 1 +
-///   the largest record, the fixed part of `RatchetStateV1` at its maximum (38 585) sealed (+ 72) = 39171.
+///   the largest record — `RatchetStateV1` at its maximum (38 585) bounds the fixed part — sealed (+ 72) = 39171.
 pub(crate) const FUZZ_MAX_LEN: &[(&str, usize)] = &[
     ("backup_import", 65_777),
     ("caead_open", 12_618),

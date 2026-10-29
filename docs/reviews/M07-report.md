@@ -20,7 +20,7 @@ G7-15a, G7-16, G7-18, K7-02, FZ-01, FZ-02.
 | A-1 | A | No dependency change, no store code: xwin scope (OPEN-M7-04), `harness` pinned job + `dispatch-harness` (OPEN-M7-18), `JOB_BUDGETS`, mutant harness suite split/skip (OPEN-M7-19), killer filter (OPEN-M7-20), Kani RSS guard (OPEN-M7-26), `AUDIT_IGNORES` pin, informative ct target with its registration; G7-00 in the first commit after 2026-10-30 02:00 UTC | G7-00, G7-05, G7-07, G7-08, G7-09, G7-10, G7-12, G7-16, CT-04 | done except G7-00 (not before 2026-10-30 02:00 UTC) |
 | A0 | A | ADR-055 probe in a scratch crate outside the workspace (three `VET_CLOSURE_TARGETS`, `fuzz/Cargo.lock`, cargo-fuzz sanitizer build of the OpenSSL/SQLCipher C code, Arti state-DB smoke, `windows-latest`); report only, no `Cargo.toml` change | — (ADR-055 precondition) | report delivered: `docs/reviews/M07-evidence/A0-probe.md` |
 | A-2 | A | After the A0 report, "ADR-055 accepted" and the owner's vet records: `rusqlite` in `secmp-store`, `argon2` in `secmp-crypto`, allowlist rows, vet/deny/cooldown | G7-01, G7-02, G7-03, G7-04, ST-08 | done @ `bf54d98` |
-| A-3 | A | Store code with the `kat`-only `secmp_store::kat::TestKey`: client-core/testkit → store edges first; pragmas, version check, defensive mode (ST-20, Q128), no temp files, schema, migrations, secure delete, view-once, expiry; persistence contract (`to_parts`/`from_parts`, `StoreOutbox`, store `Persist`); mutants/coverage scope | G7-06, ST-01…ST-04, ST-09, ST-13…ST-18, ST-20, PC-01…PC-13, G7-18, G7-13, G7-14 | done @ `365a3da` (ST-17: store half; `modell=claude-opus-5-5`) |
+| A-3 | A | Store code with the `kat`-only `secmp_store::kat::TestKey`: client-core/testkit → store edges first; pragmas, version check, defensive mode (ST-20, Q128), no temp files, schema, migrations, secure delete, view-once, expiry; persistence contract (`to_parts`/`from_parts`, `StoreOutbox`, store `Persist`); mutants/coverage scope | G7-06, ST-01…ST-04, ST-09, ST-13…ST-18, ST-20, PC-01…PC-13, G7-18, G7-13, G7-14 | closed @ `cdc3c0a` (ST-17: store half; A-3b/A-3d/A-3e fix-ups; Kani exception Q138; `modell=claude-opus-5-5`) |
 | A-4 | A | After "ADR-053 accepted": wrap, table keys, record seal, `SecretPage` secrets, ct target `store_unlock_reject` with its registration, backup, export forensic, store fuzz targets | ST-05…ST-07, ST-10…ST-12, ST-19, CT-01, CT-05, CT-02, BK-01…BK-07, FO-03, FZ-01, FZ-02, G7-15a (ST-10, BK-04 [REF]-open) | next (ADR-053 accepted, Q127a) |
 | B | B | `Profile`, `Contacts`, `Invitations`, `Sessions`, `Api`, settings, relay view, transport boundary, transactional accept, handshake as scheduled ops; scheduler-core carry-overs (Opus) | PR-*, IN-*, SE-*, AP-*, SC-*, G7-15b, FZ-04, K7-01 | waiting (Phase A) |
 | C | C | `secmp-cli`, E2E, forensic, CT-03, CLI fuzz, transport carry-overs, owner-action rows | CL-*, E2-*, FO-01, FO-01a, FO-02, CT-03, FZ-03, G7-15c, G7-21, C-T1, C-T3, G7-17 ⚙, G7-11, G7-19, G7-20 (cond) | waiting (Phase B) |
@@ -143,7 +143,7 @@ the_seed_scan_flags_each_rule}` (`secmp-client-core` is a property package); the
 mutants_merge_passes_the_crypto_tally_of_run_37127247911, mutants_merge_reports_every_shard_and_package_before_it_fails}` carry a
 `secmp-store` tally (the other packages' expectations unchanged).
 
-A-3b (WEISUNG M7-A3b; `modell=claude-opus-5-5`), done so far — §1 and §2; §3–§6 not started (STOP, §8):
+A-3b/A-3d/A-3e (WEISUNGEN M7-A3b, -A3d, -A3e; `modell=claude-opus-5-5`): §1, §2/§2′/§2″, §3–§6 done:
 
 | Item | Test | Result |
 |---|---|---|
@@ -152,7 +152,15 @@ A-3b (WEISUNG M7-A3b; `modell=claude-opus-5-5`), done so far — §1 and §2; §
 | V1-F3 | `store::tests::key_pragma_order_and_zeroizing` | pass; red first: `error[E0425]: cannot find function open_steps in module crate::kat`, `error[E0599]: no method named key_statement found for struct store::DbKey`; ST-01 still reads `cipher_memory_security` = 1 (no D11) |
 | V1-F7 | extra `xtask::testscan::kat_mod_declaration_matches_crlf` | pass; red first (helper without normalising): `assertion failed: declares_kat_module(&lf.replace('\n', "\r\n"))` |
 | §1 gate | `cargo xtask ci-fast` at `7c927a6` (`ci-fast-a3b-1-7c927a6.txt`) | PASS: kat 119 s, harness 945 s |
-| K7-03 (Q135) | the five, then six split harnesses, each alone (`kani-m7-a3b-split-150d997.txt`) | q_frame `_request` 7.1 %, `_response_fetch` 59.2 %, `_response_fetch_multi` 65.6 % (each 1 of 1 cover, SUCCESSFUL); `tr_header_selection_k0_2` **96.0 %**, `_k3_4` 90.1 % → `_k3` **96.3 %**, `_k4` **96.3 %** (SUCCESSFUL); unsplit 97.1 % — **STOP** (§8) |
+| K7-03 (Q135, Q137, Q138) | the six split harnesses, each alone: `kani-m7-a3b-split-150d997.txt` (unwind 6 everywhere: STOP of A-3b), `kani-m7-a3d-tr-25e9f38.txt` (Q137 bounds, not committed: STOP of A-3d), `kani-m7-a3e-tr-8ce73d9.txt` (Q138) | q_frame `_request` 7.1 %, `_response_fetch` 59.2 %, `_response_fetch_multi` 65.6 % (each 1 of 1 cover); Q138 bounds: `tr_header_selection_k0_2` unwind 5 57.7 %, `_k3` unwind 5 57.9 %, `_k4` unwind 6 96.3 % (exception Q138) — each SUCCESSFUL, 6/6 unwinding assertions SUCCESS; full step `kani-m7-a3e-full-c276c37.txt`: 51/51, `_k4` 94.0 % |
+| V1-F4 | `sessions::tests::delivered_message_expires`; extra `persist::tests::commit_parts_delivered_message_expires`, `scheduler::conversation::tests::delivered_carries_unix_ms` | pass; red first (insert without `ts_ms`/`expire_at_ms`): `assertion left == right failed, left: 0, right: 1` (sessions.rs:362), the persist twin likewise (persist.rs:1066); `delivered_carries_unix_ms` red by construction (no `received_ms` on the unfixed tree) |
+| V1-F10 | `outbox::tests::store_outbox_view_once_reported_lost` (PC-10, kind 3) | pass; red first (no `queue_view_once`): `left: [], right: [[51; 16]]` (outbox.rs:360) |
+| V1-F13 (Q-A14) | ST-01 `store::tests::create_sets_pragmas` += `synchronous` = 2; `key_pragma_order_and_zeroizing` += step `synchronous` | pass; **not red** without the pragma: the bundled SQLite's default is already `synchronous` = 2 (FULL); the explicit pragma and the assertion pin it against a change of the default |
+| V1-F15 | extra `kat::tests::temp_dirs_distinct_across_threads` | pass; red first (per-thread counter): `assertion left != right failed`, both `…/same-label-<pid>-0` (kat.rs:457) |
+| V1-F8, V1-F11 | PC-13 `commits >= slots`, `per_slot >= 4 096`; PC-05 duplicate check of life 1 | pass (`pc-13-write-amplification-675bad6.txt`: WAL bytes/day 142 135 880, 8 239 bytes/dummy slot ≤ 11 098; `pc-05-key-digests-675bad6.txt`: 6076/6076, 0 duplicates) |
+| Q-A15 ST-16 | `delete::tests::secure_delete_removes_message` (name unchanged) | pass: D3 path + plaintext control — on unkeyed profiles, after delete and `wal_checkpoint(TRUNCATE)`, the canary is absent from raw `profile.db` + `-wal` with `secure_delete` and **present** after `PRAGMA secure_delete = OFF` |
+| Q-A16 ST-03 | `store::tests::no_temp_files_anywhere` (name unchanged) | pass: child env `TMPDIR`/`TMP`/`TEMP`; a 20 000-row `randomblob(512)` temp table: 0 descriptors into `TMPDIR` (Linux); control child `st03-control` (`temp_store = FILE`): ≥ 1 descriptor, first try with 20 000 rows |
+| V2-1 | killers `outbox::tests::{store_outbox_restores_every_field, store_outbox_counts_refused_writes, store_outbox_writes_only_changes, store_outbox_restart_requeues_in_flight}`, `persist::tests::{entry_key_zeroize_and_holds, load_and_delivered_ids_read_back, decrypt_crash_point_only_on_receive, trust_codes_are_fixed, default_commit_parts_commits_the_joined_state}`, `scheduler::conversation::tests::{receive_commit_carries_inbox_only_while_fragmented, seed_seen_suppresses_redelivery}`, `secmp-proto tr::state::tests::ratchet_parts_to_bytes_refuses_each_bad_shape` | pass; each kills its mutant (`mutants-a3b-core-proto-store-cdc3c0a.txt`: every first-run survivor caught in the rerun); red of the proto killer on its mutant: `assertion left == right failed: an entry of 67 bytes, left: None` |
 
 Extra tests of A-1 (not rows of TEST-SPEC-M7): `xtask::ctreport::tests::informative_targets_per_target_set`;
 `xtask::testscan::scan::tests` helper `check_harness_invocations` (inside `pr_ci_runs_props_with_ci_run_seed`);
@@ -181,6 +189,25 @@ harness `m6_activity::timing_draws_unmoved_by_one_hour_of_activity`, `m6_sched_l
 | Coverage (`coverage-a3-7ee87a2.txt`, `cargo xtask step coverage`, code `365a3da`) | PASS: secmp-store 94.3 %, secmp-client-core 94.5 %, secmp-crypto 99.3 %, secmp-proto 97.5 %, secmp-relay 97.5 %, secmp-transport 89.8 %, secmp-testkit 93.6 %, secmp-sys-mem 95.3 % |
 | Kani (`cargo xtask step kani`, foreground, 3679 s, `kani-m7-a1e-9eac343.txt`) | all harnesses verified (`secmp-client-core` 13/13, `secmp-proto` 31/31, `secmp-relay` 3/3); the step failed at the cover pin of the first split (Q133, §8 A1e). Re-run of the two split harnesses with the covers in the harnesses (`kani-m7-a1f-commit-accept-9eac343.txt`): see K7-02 and the peak table below |
 | ct (full) | not run locally (delegated in ci-full) |
+| `cargo xtask ci-fast` at `7c927a6` (`ci-fast-a3b-1-7c927a6.txt`, A-3b §1) | PASS: kat 119 s, harness 945 s |
+| `cargo xtask step --strict kani` at `c276c37` (`kani-m7-a3e-full-c276c37.txt`) | PASS 3710 s, 51/51 |
+| `cargo xtask ci-fast` at `675bad6` (`ci-fast-a3b-l-675bad6.txt`; code head `cdc3c0a`) | PASS: kat 122 s, harness 932 s (one run for §2″, §3, §4 and §6, §5 D13) |
+| local mutants (`mutants-a3b-core-proto-store-cdc3c0a.txt`) | first runs: core 51 caught / 18 missed / 21 unviable; proto 13 / 1 / 7; store (new code) 83 / 0 / 44; after the killers (`cdc3c0a`): core 69 / 0 / 21 / 0 timeout, proto 14 / 0 / 7 / 0, store 83 / 0 / 44 / 0 |
+| `cargo xtask ci-full --strict` at `dd92e5c` (code head `cdc3c0a`; `ci-full-a3b-dd92e5c.txt`, head on line 1, clean tree), A-3 delegations | **PASS**, 3 h 28 min: kat 99 s, harness 1053 s, perf 9 s, fuzz 4071 s (33 targets), coverage 1052 s (secmp-store 94.9 %, client-core 94.7 %, crypto 99.3 %, proto 97.6 %, relay 97.5 %, transport 89.8 %, testkit 93.6 %), miri 2342 s, kani 3642 s (51/51), proverif 142 s (`tr`), ref-vectors (12 suites, 969 cases), sbom, systemd; repro STUB; ct, mutants, proverif-link, windows-cross, windows-native DELEGATED |
+
+Kani peaks, full `kani` step of the A-3e ci-full (KiB; limit 14 160 156; the five new names first; 42 of 51 harnesses sampled — the
+other nine end before the guard's first 2-s sample):
+
+| Harness | Peak | Container share | CI share | Flag |
+|---|---|---|---|---|
+| `kani_q_frame_plaintext_exact_fit_request` | ≈ 954 596 (A-3e step) | 6.7 % | — | |
+| `kani_q_frame_plaintext_exact_fit_response_fetch` | 9 007 180 | 63.6 % | — | |
+| `kani_q_frame_plaintext_exact_fit_response_fetch_multi` | ≈ 9 068 184 (A-3e step) | 64.0 % | — | |
+| `tr_header_selection_k0_2` (unwind 5) | ≈ 7 981 520 (A-3e step) | 56.4 % | — | |
+| `tr_header_selection_k3` (unwind 5) | ≈ 8 012 720 (A-3e step) | 56.6 % | — | |
+| `tr_header_selection_k4` (unwind 6) | 13 313 532 | 94.0 % | ≤ 85.6 % (superset, run 40767217812) | **exception Q138** |
+| `kani_accept_opk_delete_only_on_success` | 12 322 920 | 87.0 % | — | > 80 %, reported |
+| `request_link_get` | 9 454 808 | 66.8 % | — | |
 
 Kani peaks of the ci-full `kani` step (cbmc RSS, KiB; limit `KANI_CBMC_RSS_LIMIT_KIB` 14 160 156; 90 % = 12 744 140):
 
@@ -232,6 +259,19 @@ No deviation from the spec. Deviations from the weisung's wording or the TEST-SP
   passes every state through `to_parts`/`from_parts` (the digest parses `RatchetStateV1` at its documented offsets); it is gated on
   feature `kat` (the derandomised entry points), so the feature-less Miri run does not build it (no `MIRI_SKIP` entry);
   `secmp-proto/src/lib.rs` gains `#[cfg(test)] extern crate self as secmp_proto;` so the unit test shares `tests/common/tr_digest.rs`.
+- **D2 addendum:** Q-A7 ratified by the reviewer (2026-10-29).
+- **D10 (Q-A14) V1-F13:** `PRAGMA synchronous = FULL` in `open_connection` (step `synchronous`); CS-3.1 is silent; the default is
+  already FULL in the bundled build (ST-01 not red without it).
+- **D11:** none (`cipher_memory_security` reads 1 with the early statement).
+- **D12 (Q135, Q137, Q138):** the q_frame and `tr_header_selection` splits; the bounds of Q138; `tr_header_selection_k4` the one
+  documented exception (container ≈ 94–96 %, CI ≤ 85.6 % for the unsplit superset); B row K7-03b.
+- **D13:** one `ci-fast` (`ci-fast-a3b-l-675bad6.txt`, code `cdc3c0a`) stands for the four dictated runs `ci-fast-a3e-kani`,
+  `ci-fast-a3b-3`, `ci-fast-a3b-4` and `ci-fast-a3b-l`: §3–§5 were committed while the full Kani step ran (Kani builds of the
+  touched crates had ended, so the measured Kani tree is `c276c37`), and §6 followed; the PC-05/PC-13 numbers of §3 come from it.
+- **D14 (Q-A17) §6 run (1):** `--features kat` instead of the gate's `--features harness` — with the `--file` filters only
+  `secmp-client-core` has mutants, cargo-mutants builds the baseline for it alone, and it has no `harness` feature ("the package
+  'secmp-client-core' does not contain this feature: harness"); client-core `kat` turns on `secmp-transport/harness` and
+  `secmp-store/kat`, the testkit's `kat` includes `harness`.
 - **Commit 3 subject:** first committed as `a02069b` with a different subject; amended (subject as dictated, PC-05 evidence per crash
   point) before any measurement, as `0c448f0`; nothing was measured on `a02069b`.
 
@@ -284,6 +324,10 @@ D8). Shipped code starts no child process today; the client fails closed (`Unava
 contact at P = 10 s, each with one fsync of the write-ahead log (`synchronous` FULL, persist-before-send); 142 MB/day of log for two
 profiles with checkpoints off in the measurement. More contacts multiply it; checkpointing writes each page once more.
 
+**F9.** A refused outbox insert keeps the message in memory only (`write_errors` counts it) → Phase B `Api` reports it.
+
+**F14.** The AI (activity-independence) runs use `MemPersist`; a run with `StorePersist` behind the scheduler is B/C.
+
 **Windows runtime of PC-05/PC-13 unmeasured.** Both run in the `harness` step of `windows-native` (not in `WINDOWS_SKIP_TESTS`); 30 000+
 fsyncs and 200 child processes per run may be slow on the Windows runner.
 
@@ -335,6 +379,14 @@ Quoted (foreground, `cargo kani -p secmp-proto -Z stubbing --harness <name>`):
 Peaks of the full step (`kani-m7-a1e-9eac343.txt`, KiB; limit 14 160 156): `..._deleted_opk2` 6 220 484, `..._opk1` 5 737 528 (re-measured in the PR run); `tr_header_selection` 13 393 720, `kani_accept_opk_delete_only_on_success` 12 372 716, `kani_q_frame_plaintext_exact_fit` 12 121 336, `request_link_get` 9 479 788, `response_frame` 8 945 636, `kani_frame_pad_total` 8 053 804, `kani_outer_unpad_total` 7 780 720; `secmp-relay` largest `kani_executor_response_count` 4 136 084; `secmp-client-core` largest `kani_rate_bound_integer_form` 2 952 940.
 
 **A-4: F3** — Argon2 matrix zeroization (`hash_password_into_with_memory` with a `Zeroizing<Vec<Block>>`). No code for it in A-3.
+
+**Resolved:** the three Kani STOPs below (A-3, A-3b, A-3d) are resolved by Q135, Q137 and Q138 (split, bounds, the `_k4`
+exception); A-3 closed @ `cdc3c0a`.
+
+**K7-03b (Phase B, open, Q138 item 3).** Rewrite `tr_header_selection_k0_2`, `_k3`, `_k4` without the heap (`Vec<Choice>` built by
+`collect` → `[Choice; TR_SKIPPED_KEYS]` sliced to `k`), re-measure, lift the exception if `_k4` falls under 90 %.
+
+**A-4: ADR-053 landing adds `synchronous = FULL` to the CS-3.1 wording (Q-A14).**
 
 **Blocked — STOP (WEISUNG M7-A3, STOP list: "a Kani harness peak RSS > 90 % of `KANI_CBMC_RSS_LIMIT_KIB`").** The ci-full `kani` step
 on `1f3129c` (code `365a3da`) measured `kani_proofs::kani_q_frame_plaintext_exact_fit` (secmp-proto, K-08 frame decode) at

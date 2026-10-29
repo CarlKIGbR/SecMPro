@@ -16,12 +16,16 @@
 
 pub mod delete;
 mod error;
+pub mod keys;
 pub mod messages;
 pub mod migrate;
 pub mod outbox;
+mod rand;
 pub mod schema;
+pub mod secrets;
 pub mod sessions;
 pub mod store;
+pub mod wrap;
 
 #[cfg(any(test, feature = "kat"))]
 pub mod kat;

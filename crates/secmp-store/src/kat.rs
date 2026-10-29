@@ -15,6 +15,9 @@ use std::path::{Path, PathBuf};
 
 use crate::store::DbKey;
 
+/// The fixed `MK_profile` the table keys of [`TestKey`] are derived from (the A-3 raw key is not derived from it).
+pub const TEST_MK: [u8; 32] = [0x4d; 32];
+
 /// The fixed raw key of the test profiles: 32 bytes, applied as `PRAGMA key = "x'…'"`.
 pub struct TestKey;
 
@@ -120,6 +123,10 @@ thread_local! {
     static TXN_COMMITS: Cell<u64> = const { Cell::new(0) };
     static BYTES_WRITTEN: Cell<u64> = const { Cell::new(0) };
     static SESSION_SECRET_BYTES: Cell<u64> = const { Cell::new(0) };
+    static ARGON2_CALLS: Cell<u64> = const { Cell::new(0) };
+    static CAEAD_OPEN_CALLS: Cell<u64> = const { Cell::new(0) };
+    static KEY_PAGES: Cell<i64> = const { Cell::new(0) };
+    static FIXED_RANDOM: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
     static MIGRATION_STATEMENTS: Cell<u64> = const { Cell::new(0) };
     static MEASURE_WRITES: Cell<bool> = const { Cell::new(false) };
 }
@@ -248,8 +255,60 @@ pub(crate) fn note_open_step(tag: &'static str) {
     OPEN_STEPS.with(|s| s.borrow_mut().push(tag));
 }
 
+/// Argon2id derivations of the wrap on this thread (CT-02, ST-06).
+#[must_use]
+pub fn argon2_calls() -> u64 {
+    ARGON2_CALLS.with(Cell::get)
+}
+
+pub(crate) fn note_argon2_call() {
+    ARGON2_CALLS.with(|c| c.set(c.get().saturating_add(1)));
+}
+
+/// `CAEAD.Open`s of the wrap on this thread (CT-02).
+#[must_use]
+pub fn caead_open_calls() -> u64 {
+    CAEAD_OPEN_CALLS.with(Cell::get)
+}
+
+pub(crate) fn note_caead_open_call() {
+    CAEAD_OPEN_CALLS.with(|c| c.set(c.get().saturating_add(1)));
+}
+
+/// Live store key holders on this thread (+1 when made, −1 in `Drop`; ST-19).
+#[must_use]
+pub fn live_key_pages() -> i64 {
+    KEY_PAGES.with(Cell::get)
+}
+
+pub(crate) fn note_key_page(delta: i64) {
+    KEY_PAGES.with(|c| c.set(c.get().saturating_add(delta)));
+}
+
+#[cfg(feature = "kat")]
+/// Queue `bytes` as the next random bytes of the store on this thread (salts, nonces, keys; the known-answer rows).
+pub fn fixed_random(bytes: &[u8]) {
+    FIXED_RANDOM.with(|f| f.borrow_mut().extend_from_slice(bytes));
+}
+
+/// The next `N` queued bytes, if `N` are queued.
+#[cfg(feature = "kat")]
+pub(crate) fn take_fixed<const N: usize>() -> Option<[u8; N]> {
+    FIXED_RANDOM.with(|f| {
+        let mut q = f.borrow_mut();
+        if q.len() < N {
+            return None;
+        }
+        let rest = q.split_off(N);
+        let head = core::mem::replace(&mut *q, rest);
+        head.try_into().ok()
+    })
+}
+
 /// Reset the counters of this thread.
 pub fn reset_counters() {
+    ARGON2_CALLS.with(|c| c.set(0));
+    CAEAD_OPEN_CALLS.with(|c| c.set(0));
     SESSION_SECRET_BYTES.with(|c| c.set(0));
     TXN_COMMITS.with(|c| c.set(0));
     BYTES_WRITTEN.with(|c| c.set(0));

@@ -23,6 +23,7 @@ use rusqlite::{Connection, OpenFlags, Params, Row};
 use secmp_crypto::Zeroizing;
 
 use crate::error::{Error, Result};
+use crate::keys::TableKeys;
 
 /// The file name of the database inside a profile directory.
 pub const DB_FILE: &str = "profile.db";
@@ -33,14 +34,31 @@ pub const LOCK_FILE: &str = "lock";
 /// version `libsqlite3-sys` 0.37.0 bundles, the one the graph can hold beside Arti (`links = "sqlite3"`).
 pub const SQLCIPHER_MIN: (u32, u32, u32) = (4, 10, 0);
 
-/// The SQLCipher raw key of a profile, zeroized on drop. No `Clone`, `Debug` or `PartialEq`.
-pub struct DbKey(Zeroizing<[u8; 32]>);
+/// The keys of a profile's database: the SQLCipher raw key `K_db` (the bytes of `PRAGMA key`, zeroized on drop) and the
+/// nine table keys of the record seal (ADR-053 items 3–5; `None` only if locked memory was unavailable for a `kat` key).
+/// No `Clone`, `Debug` or `PartialEq`. The shipped constructor is [`crate::wrap::Unlocked::db_key`] (ADR-053's
+/// derivation).
+pub struct DbKey(Zeroizing<[u8; 32]>, Option<TableKeys>);
 
 impl DbKey {
-    /// A key from its bytes: test-only in A-3 (the shipped constructor is ADR-053's derivation, A-4).
+    /// A key from its bytes (feature `kat`: the A-3 test key); its table keys are derived from the fixed
+    /// [`crate::kat::TEST_MK`] (the A-3 raw key is not derived from it).
     #[cfg(any(test, feature = "kat"))]
     pub(crate) fn from_bytes(bytes: [u8; 32]) -> Self {
-        Self(Zeroizing::new(bytes))
+        let tables = secmp_crypto::LockedSecret::<32>::from_slice(&crate::kat::TEST_MK)
+            .ok()
+            .and_then(|mk| TableKeys::derive(&mk).ok());
+        Self(Zeroizing::new(bytes), tables)
+    }
+
+    /// `K_db` (a copy) and the table keys of an unlocked profile (ADR-053 items 3, 4).
+    pub(crate) fn from_unlocked(db: &secmp_crypto::LockedSecret<32>, tables: TableKeys) -> Self {
+        Self(Zeroizing::new(*db.expose_secret()), Some(tables))
+    }
+
+    /// The table keys.
+    pub(crate) const fn tables(&self) -> Option<&TableKeys> {
+        self.1.as_ref()
     }
 
     /// `x'<64 hex digits>'`, the raw-key form of `PRAGMA key`, in a zeroizing buffer.
@@ -183,8 +201,19 @@ impl Store {
     /// [`Error::Unlock`] for a wrong key or a file that is no profile; [`Error::Unsupported`] for an older SQLCipher;
     /// [`Error::TooNew`] for a newer schema (the file is not touched); [`Error::Unavailable`] if the directory cannot be
     /// used, another store holds it, or a migration statement failed (nothing changed).
+    #[cfg(any(test, feature = "kat"))]
     pub fn open(dir: &Path, key: &DbKey) -> Result<Self> {
         Self::open_with(dir, Some(key))
+    }
+
+    /// Open the profile in `dir` that `unlocked` unlocked (`K_db` as the SQLCipher key, the table keys for the record
+    /// seal; ADR-053 items 3–5).
+    ///
+    /// # Errors
+    /// As [`Store::open`].
+    pub fn open_unlocked(dir: &Path, unlocked: &crate::wrap::Unlocked) -> Result<Self> {
+        let key = unlocked.db_key()?;
+        Self::open_with(dir, Some(&key))
     }
 
     /// [`Store::open`] without a key (ST-04: a keyed profile must not open).
@@ -222,6 +251,10 @@ impl Store {
             #[cfg(any(test, feature = "kat"))]
             let _spawning = crate::kat::spawn_guard();
             lock.try_lock().map_err(|_| Error::Unavailable)?;
+        }
+        // the record seal needs the table keys: a key without them opens nothing (fail closed)
+        if key.is_some_and(|k| k.tables().is_none()) {
+            return Err(Error::Unavailable);
         }
         let conn = open_connection(&dir.join(DB_FILE), key)?;
         let mut store = Self {

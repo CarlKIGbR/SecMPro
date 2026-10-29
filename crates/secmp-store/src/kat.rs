@@ -244,7 +244,9 @@ pub fn child_role() -> Option<String> {
 /// so a test that misreads its role fails at once instead of re-entering itself without end.
 pub fn run_child(test: &str, role: &str, env: &[(&str, &Path)]) -> std::io::Result<bool> {
     if std::env::var_os(CHILD_ROLE).is_some() {
-        return Err(std::io::Error::other("a child process does not start children"));
+        return Err(std::io::Error::other(
+            "a child process does not start children",
+        ));
     }
     let exe = std::env::current_exe()?;
     let mut cmd = std::process::Command::new(exe);
@@ -253,11 +255,35 @@ pub fn run_child(test: &str, role: &str, env: &[(&str, &Path)]) -> std::io::Resu
     for (k, v) in env {
         cmd.env(k, v);
     }
-    let out = cmd
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()?;
-    Ok(out.success())
+    cmd.stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null());
+    let child = {
+        let _spawning = spawn_guard();
+        let mut child = cmd.spawn()?;
+        // the test harness of the child writes its first line only once `exec` has closed the copies of our
+        // descriptors; a child that ends before writing anything has closed them too
+        if let Some(out) = child.stdout.as_mut() {
+            let mut first = [0_u8; 1];
+            let _ = std::io::Read::read(out, &mut first)?;
+        }
+        child
+    };
+    Ok(child.wait_with_output()?.status.success())
+}
+
+/// Held while a child is being started (until it has run its first line: its `exec` is complete) and while a store
+/// takes its profile lock (`Store::open`): from `fork` until `exec` has closed them a child holds a copy of every
+/// descriptor of this process — `spawn` returns when `exec` releases the parent, a little before the copies are
+/// closed — so a lock another test of the same binary has just released would still be held by that copy, and its
+/// reopen would fail with `WouldBlock` (the `cargo test` run of the mutation gate runs the tests on threads of one
+/// process; measured: busy for about 1 ms, in 3 of 30 runs).
+static SPAWNING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// The guard of [`SPAWNING`] (a poisoned lock is still a lock).
+pub(crate) fn spawn_guard() -> std::sync::MutexGuard<'static, ()> {
+    SPAWNING
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// One finding of [`scan_dir`]: a file and what was found in it.

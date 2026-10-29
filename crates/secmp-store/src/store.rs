@@ -182,7 +182,12 @@ impl Store {
             .write(true)
             .open(dir.join(LOCK_FILE))
             .map_err(|_| Error::Unavailable)?;
-        lock.try_lock().map_err(|_| Error::Unavailable)?;
+        {
+            // `kat`: no child of a test is between `fork` and `exec` holding a copy of a released lock
+            #[cfg(any(test, feature = "kat"))]
+            let _spawning = crate::kat::spawn_guard();
+            lock.try_lock().map_err(|_| Error::Unavailable)?;
+        }
         let conn = open_connection(&dir.join(DB_FILE), key)?;
         let mut store = Self {
             conn,

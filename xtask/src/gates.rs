@@ -8971,13 +8971,12 @@ mod tests {
         Ok(())
     }
 
-    /// TEST-SPEC-M7 G7-02 (ADR-055 item 5, Q129): the vet records of the M7 dependency set. `argon2` and `blake2` (the
-    /// zero-exemption crypto closure) are covered by publisher trust of their RustCrypto repositories, provisional with the
-    /// owner's ratification pending; `rusqlite`, now a direct dependency of `secmp-store`, has a full audit by the
-    /// implementer (provisional, same wording) and no exemption any more; the build inputs and the lock-only crates are
-    /// tracked exemptions that say so; `check_vet_closure` stays zero-exemption with `argon2` and `blake2` in the closure.
-    /// `cargo vet --locked` itself is the `vet` step. Both markers are replaced by the owner's ratification; this test is
-    /// re-dictated in that commit.
+    /// TEST-SPEC-M7 G7-02 (ADR-055 item 5, Q129, Q136): the vet records of the M7 dependency set. `argon2` and `blake2`
+    /// (the zero-exemption crypto closure) are covered by publisher trust of their RustCrypto repositories, ratified on
+    /// 2026-10-29 by the reviewer under the owner's delegation; `rusqlite`, a direct dependency of `secmp-store`, has a
+    /// full source audit by the reviewer's verifier, ratified the same way, and no exemption; the build inputs and the
+    /// lock-only crates are tracked exemptions that say so; `check_vet_closure` stays zero-exemption with `argon2` and
+    /// `blake2` in the closure. `cargo vet --locked` itself is the `vet` step.
     #[test]
     fn vet_records_for_m7_closure() -> Result<()> {
         let audits = m7_repo_file("supply-chain/audits.toml")?;
@@ -8998,9 +8997,12 @@ mod tests {
                 "{krate}"
             );
             assert!(
-                b.contains("provisional, owner ratification pending (Q129)"),
+                b.contains(
+                    "ratified 2026-10-29 by the reviewer under the owner's delegation of 2026-10-29 (Q136)"
+                ),
                 "{krate}"
             );
+            assert!(!b.contains("ratification pending"), "{krate}");
             assert!(
                 b.contains("ADR-055 item") && b.contains("Read by the implementer:"),
                 "{krate}"
@@ -9016,7 +9018,7 @@ mod tests {
         assert_eq!(rusqlite.len(), 1);
         let r = rusqlite.first().map_or("", String::as_str);
         assert!(r.contains("version = \"0.39.0\"") && r.contains("criteria = \"safe-to-deploy\""));
-        assert!(r.contains("who = \"Claude Sonnet 5.5 (implementer) + reviewer's verifier; owner ratification pending (Q129)\""));
+        assert!(r.contains("who = \"Christopher Carl (owner), ratified 2026-10-29 by delegation to the reviewer (Q136); source audit by the reviewer's verifier (Claude Opus)\""));
         assert!(
             vet_blocks(&config, "exemptions", "rusqlite").is_empty(),
             "rusqlite has a record, no exemption"

@@ -237,16 +237,16 @@ No deviation from the spec. Deviations from the weisung's wording or the TEST-SP
 
 ## 6. Dependencies added or bumped
 
-ADR-055 effective 2026-10-28 (memo default); records provisional (Q129), owner ratification pending. `Cargo.lock` +70 lines
+ADR-055 effective 2026-10-28 (memo default); records ratified 2026-10-29 (Q136). `Cargo.lock` +70 lines
 (six packages), `fuzz/Cargo.lock` +42 (four packages); `git diff --stat bf55099..HEAD -- Cargo.lock fuzz/Cargo.lock`: 112 insertions.
 
 | Crate | Version | Published | Record | Who |
 |---|---|---|---|---|
-| `rusqlite` | 0.39.0 | 2026-03-15 | audit (direct dependency of `secmp-store`) | Claude Sonnet 5.5 (implementer) + reviewer's verifier; owner ratification pending (Q129) |
-| `argon2` | 0.6.0 | 2026-08-27 | publisher trust `github:RustCrypto/password-hashes` | same, provisional |
-| `blake2` | 0.11.0 | 2026-08-26 | publisher trust `github:RustCrypto/hashes` | same, provisional |
-| `password-hash` | 0.6.1 | 2026-04-08 | publisher trust `github:RustCrypto/traits` (lock-only) | same, provisional |
-| `phc` | 0.6.1 | 2026-03-09 | publisher trust `github:RustCrypto/formats` (lock-only) | same, provisional |
+| `rusqlite` | 0.39.0 | 2026-03-15 | audit (direct dependency of `secmp-store`) | Christopher Carl (owner), ratified 2026-10-29 by delegation to the reviewer (Q136); source audit by the reviewer's verifier |
+| `argon2` | 0.6.0 | 2026-08-27 | publisher trust `github:RustCrypto/password-hashes` | same, ratified 2026-10-29 (Q136) |
+| `blake2` | 0.11.0 | 2026-08-26 | publisher trust `github:RustCrypto/hashes` | same, ratified 2026-10-29 (Q136) |
+| `password-hash` | 0.6.1 | 2026-04-08 | publisher trust `github:RustCrypto/traits` (lock-only) | same, ratified 2026-10-29 (Q136) |
+| `phc` | 0.6.1 | 2026-03-09 | publisher trust `github:RustCrypto/formats` (lock-only) | same, ratified 2026-10-29 (Q136) |
 | `openssl-sys` | 0.9.117 | 2026-06-12 | tracked exemption | — |
 | `openssl-src` | 300.6.1+3.6.3 | 2026-06-09 | tracked exemption | — |
 | `libsqlite3-sys` | 0.37.0 | 2026-03-15 | tracked exemption (text now names `rusqlite`) | — |
@@ -310,7 +310,7 @@ the container; RustSec shows none).
 red for them came from treating `XWIN_LIB_ONLY` crates as poison. `XWIN_LIB_ONLY` is `[secmp-crypto, secmp-transport]` again; the poison
 set of the test is `XWIN_EXCLUDE`.
 
-**A-2 closed @ `bf54d98`; A-3 next; owner: ratify the provisional records (Q129) — at ratification the owner's sentence replaces `who` of `[[audits.rusqlite]]` (marker `Claude Sonnet 5.5 (implementer) + reviewer's verifier; owner ratification pending (Q129)`) and, in the `notes` of `[[trusted.argon2]]`, `[[trusted.blake2]]`, `[[trusted.password-hash]]`, `[[trusted.phc]]`, the marker `provisional, owner ratification pending (Q129)`.**
+**A-2 closed @ `bf54d98`; A-3 next.**
 
 **Q-A4 (Miri budget of ST-08).** `rfc9106_argon2id_vector` takes about 105 s of host wall time under Miri (aarch64, portable libcrux); no `MIRI_SKIP` entry was added (the 60-s rule is documented for `secmp-proto`; the crypto entries are ≥ 10 min). Reviewer to confirm or dictate the entry.
 
@@ -351,7 +351,9 @@ non-secmp-* crates only.
 `Store::take_view_once_lost()`) is Phase B; the full FO-01a forensic scan of a profile is Phase C (the store half uses the Conventions'
 Rust scan over the profile directory). ST-17 counts as partial (store half).
 
-**A-3 done @ `365a3da` (STOP above); A-4 next (ADR-053 accepted, Q127a); owner: ratify the provisional records (Q129).**
+**A-3 done @ `365a3da` (STOP above); A-4 next (ADR-053 accepted, Q127a).** Records ratified 2026-10-29 (Q136).
+
+A-4: never format rusqlite `Error`/`Statement` on the key path (vet note N-3/N-4).
 
 **Blocked — STOP (WEISUNG M7-A3b §2: "each peak ≤ 12 744 140 KiB (90 % of 14 160 156), else STOP with the numbers — no other remedy
 than the `_k3`/`_k4` step").** `modell=claude-opus-5-5`. The q_frame split resolves `kani_q_frame_plaintext_exact_fit` (7.1 / 59.2 /

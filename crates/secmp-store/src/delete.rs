@@ -32,6 +32,43 @@ mod tests {
 
     type R = core::result::Result<(), Box<dyn std::error::Error>>;
 
+    /// The plaintext half of ST-16 (Q-A15): a canary inserted, deleted and checkpointed on an unkeyed profile, then searched
+    /// in the raw `profile.db` and `profile.db-wal`: absent with `secure_delete`, present without it.
+    fn plaintext_control(label: &str, secure: bool, id: [u8; 16], canary: &[u8]) -> R {
+        let plain_dir = TempDir::new(label)?;
+        let mut store = Store::open_unkeyed_kat(plain_dir.path())?;
+        if !secure {
+            store
+                .connection_kat()
+                .execute_batch("PRAGMA secure_delete = OFF")?;
+        }
+        store.insert_message(&NewMessage {
+            contact_id: 3,
+            msg_id: id,
+            direction: Direction::Out,
+            kind: 1,
+            ts_ms: 1,
+            expire_after: 0,
+            payload: canary,
+        })?;
+        assert!(store.delete_message(3, &id)?);
+        let _: (i64, i64, i64) =
+            store
+                .connection_kat()
+                .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| {
+                    Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+                })?;
+        let mut raw = std::fs::read(plain_dir.path().join("profile.db"))?;
+        raw.extend(std::fs::read(plain_dir.path().join("profile.db-wal")).unwrap_or_default());
+        assert_eq!(
+            contains(&raw, canary),
+            !secure,
+            "{label}: canary in the raw files ({} bytes)",
+            raw.len()
+        );
+        Ok(())
+    }
+
     /// ST-16 (CS-3.4): a message with a canary is stored, deleted, the log checkpointed (`TRUNCATE`); the canary is in
     /// no decrypted page image, and `secure_delete` reads back 1. This SQLCipher build has no `sqlite_dbpage` (not
     /// compiled in: `libsqlite3-sys` 0.37.0 sets no `SQLITE_ENABLE_DBPAGE_VTAB`), so the page images are those of a
@@ -113,6 +150,10 @@ mod tests {
             let bytes = std::fs::read(dir.path().join(f)).unwrap_or_default();
             assert!(!contains(&bytes, canary), "{f}");
         }
+        // Q-A15: the same on plaintext profiles (every setting of `open_connection`, no key), where the raw files are the
+        // pages — with `secure_delete` the canary is gone, without it (the control) the scan finds the remnant
+        plaintext_control("st16-plain-on", true, id, canary)?;
+        plaintext_control("st16-plain-off", false, id, canary)?;
         Ok(())
     }
 

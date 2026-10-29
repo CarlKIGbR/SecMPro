@@ -451,6 +451,60 @@ mod tests {
         )?;
         assert_eq!(sorted, 10000);
         store.connection_kat().execute_batch("VACUUM")?;
+        spill(&store)?;
+        Ok(())
+    }
+
+    /// A temporary table of 20 000 rows of 512 random bytes in one transaction (≈ 10 MB, beyond the page cache); on Linux,
+    /// the descriptors of the process that point into `TMPDIR` while the table exists: 0 (`temp_store = MEMORY`).
+    fn spill(store: &Store) -> R {
+        let conn = store.connection_kat();
+        conn.execute_batch(
+            "CREATE TEMP TABLE spill(x BLOB); \
+             WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c WHERE x < 20000) \
+             INSERT INTO spill SELECT randomblob(512) FROM c",
+        )?;
+        #[cfg(target_os = "linux")]
+        {
+            let tmp = std::fs::canonicalize(std::env::var_os("TMPDIR").ok_or("no TMPDIR")?)?;
+            assert_eq!(
+                fds_into(&tmp)?,
+                0,
+                "a descriptor into TMPDIR while the temp table exists"
+            );
+        }
+        conn.execute_batch("DROP TABLE spill")?;
+        Ok(())
+    }
+
+    /// The descriptors of this process whose target lies under `dir` (an unlinked file shows as `… (deleted)`).
+    #[cfg(target_os = "linux")]
+    fn fds_into(dir: &Path) -> std::io::Result<usize> {
+        let mut n = 0_usize;
+        for entry in std::fs::read_dir("/proc/self/fd")? {
+            let Ok(entry) = entry else { continue };
+            if std::fs::read_link(entry.path()).is_ok_and(|t| t.starts_with(dir)) {
+                n = n.saturating_add(1);
+            }
+        }
+        Ok(n)
+    }
+
+    /// The control child of ST-03 (Linux): the same temporary table after `PRAGMA temp_store = FILE` opens a temp file
+    /// in `TMPDIR` (SQLite unlinks it at once; the descriptor stays).
+    #[cfg(target_os = "linux")]
+    fn temp_file_control_child(dir: &Path) -> R {
+        let store = Store::open(dir, &TestKey::db_key())?;
+        let conn = store.connection_kat();
+        conn.execute_batch(
+            "PRAGMA temp_store = FILE; CREATE TEMP TABLE spill(x BLOB); \
+             WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c WHERE x < 20000) \
+             INSERT INTO spill SELECT randomblob(512) FROM c",
+        )?;
+        let tmp = std::fs::canonicalize(std::env::var_os("TMPDIR").ok_or("no TMPDIR")?)?;
+        let open = fds_into(&tmp)?;
+        std::fs::write(dir.join("control-fds"), open.to_string())?;
+        assert!(open >= 1, "control: no temp file descriptor in TMPDIR");
         Ok(())
     }
 
@@ -463,6 +517,11 @@ mod tests {
             let dir = std::env::var_os("SECMP_STORE_DIR").ok_or("no dir")?;
             return no_temp_files_child(Path::new(&dir));
         }
+        #[cfg(target_os = "linux")]
+        if crate::kat::child_role().as_deref() == Some("st03-control") {
+            let dir = std::env::var_os("SECMP_STORE_DIR").ok_or("no dir")?;
+            return temp_file_control_child(Path::new(&dir));
+        }
         let root = TempDir::new("st03")?;
         let tmp = root.path().join("tmp");
         let profile = root.path().join("profile");
@@ -470,7 +529,12 @@ mod tests {
         let ok = crate::kat::run_child(
             "store::tests::no_temp_files_anywhere",
             "st03",
-            &[("TMPDIR", &tmp), ("SECMP_STORE_DIR", &profile)],
+            &[
+                ("TMPDIR", &tmp),
+                ("TMP", &tmp),
+                ("TEMP", &tmp),
+                ("SECMP_STORE_DIR", &profile),
+            ],
         )?;
         assert!(ok, "the child failed");
         assert_eq!(std::fs::read_dir(&tmp)?.count(), 0, "TMPDIR is not empty");
@@ -492,6 +556,30 @@ mod tests {
             ["lock", "profile.db", "profile.db-shm", "profile.db-wal"]
         );
         assert_eq!(std::fs::read_dir(&tmp)?.count(), 0);
+        drop(store);
+        // the control (Q-A16): with `temp_store = FILE` the same table does open a file in TMPDIR
+        #[cfg(target_os = "linux")]
+        {
+            let control_tmp = root.path().join("tmp-control");
+            let control = root.path().join("profile-control");
+            std::fs::create_dir_all(&control_tmp)?;
+            std::fs::create_dir_all(&control)?;
+            let ok = crate::kat::run_child(
+                "store::tests::no_temp_files_anywhere",
+                "st03-control",
+                &[
+                    ("TMPDIR", &control_tmp),
+                    ("TMP", &control_tmp),
+                    ("TEMP", &control_tmp),
+                    ("SECMP_STORE_DIR", &control),
+                ],
+            )?;
+            let fds = std::fs::read_to_string(control.join("control-fds")).unwrap_or_default();
+            assert!(
+                ok,
+                "the control child failed (descriptors into TMPDIR: {fds:?})"
+            );
+        }
         Ok(())
     }
 

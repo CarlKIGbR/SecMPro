@@ -143,6 +143,17 @@ the_seed_scan_flags_each_rule}` (`secmp-client-core` is a property package); the
 mutants_merge_passes_the_crypto_tally_of_run_37127247911, mutants_merge_reports_every_shard_and_package_before_it_fails}` carry a
 `secmp-store` tally (the other packages' expectations unchanged).
 
+A-3b (WEISUNG M7-A3b; `modell=claude-opus-5-5`), done so far — §1 and §2; §3–§6 not started (STOP, §8):
+
+| Item | Test | Result |
+|---|---|---|
+| V1-F1 | extra `persist::tests::entry_keys_are_zeroizing_secrets` | pass; red first (unfixed tree): `error[E0425]: cannot find type EntryKey in module super` (persist.rs:272) |
+| V1-F2 | `sessions::tests::open_reads_no_message_keys`; extra `persist::tests::open_reads_no_message_keys` | pass; red first of the extra test (`StorePersist::open`/`load_inbox_trust` still on `session_rows`): `assertion left == right failed, left: 7670, right: 0` (persist.rs:1023); the store test's 0s hold by construction, its oracle the 36-byte key length |
+| V1-F3 | `store::tests::key_pragma_order_and_zeroizing` | pass; red first: `error[E0425]: cannot find function open_steps in module crate::kat`, `error[E0599]: no method named key_statement found for struct store::DbKey`; ST-01 still reads `cipher_memory_security` = 1 (no D11) |
+| V1-F7 | extra `xtask::testscan::kat_mod_declaration_matches_crlf` | pass; red first (helper without normalising): `assertion failed: declares_kat_module(&lf.replace('\n', "\r\n"))` |
+| §1 gate | `cargo xtask ci-fast` at `7c927a6` (`ci-fast-a3b-1-7c927a6.txt`) | PASS: kat 119 s, harness 945 s |
+| K7-03 (Q135) | the five, then six split harnesses, each alone (`kani-m7-a3b-split-150d997.txt`) | q_frame `_request` 7.1 %, `_response_fetch` 59.2 %, `_response_fetch_multi` 65.6 % (each 1 of 1 cover, SUCCESSFUL); `tr_header_selection_k0_2` **96.0 %**, `_k3_4` 90.1 % → `_k3` **96.3 %**, `_k4` **96.3 %** (SUCCESSFUL); unsplit 97.1 % — **STOP** (§8) |
+
 Extra tests of A-1 (not rows of TEST-SPEC-M7): `xtask::ctreport::tests::informative_targets_per_target_set`;
 `xtask::testscan::scan::tests` helper `check_harness_invocations` (inside `pr_ci_runs_props_with_ci_run_seed`);
 `xtask::gates::tests::kani_rss_guard`, `kani_rss_guard_fails_closed_without_ps_sample`,
@@ -341,5 +352,17 @@ non-secmp-* crates only.
 Rust scan over the profile directory). ST-17 counts as partial (store half).
 
 **A-3 done @ `365a3da` (STOP above); A-4 next (ADR-053 accepted, Q127a); owner: ratify the provisional records (Q129).**
+
+**Blocked — STOP (WEISUNG M7-A3b §2: "each peak ≤ 12 744 140 KiB (90 % of 14 160 156), else STOP with the numbers — no other remedy
+than the `_k3`/`_k4` step").** `modell=claude-opus-5-5`. The q_frame split resolves `kani_q_frame_plaintext_exact_fit` (7.1 / 59.2 /
+65.6 %). The `tr_header_selection` split by `k` does not reduce memory: alone (`getrusage` of the largest child, one process per
+harness, `kani-m7-a3b-split-150d997.txt`) `_k0_2` 13 588 600 KiB = 96.0 %, `_k3_4` 12 759 388 KiB = 90.1 % → the dictated `_k3`
+13 635 700 KiB = 96.3 % and `_k4` 13 636 560 KiB = 96.3 %; the unsplit harness of `150d997` 13 746 024 KiB = 97.1 % with the same
+method (94.7 % sampled by the `kani` step in the A-3 ci-full). Every variant has the same **985 checks** (`** 0 of 985 failed (11
+unreachable)`): `#[kani::unwind(6)]` unrolls the loops over `opened`/`found`/`first` to 6 whatever `k` is, so an `assume` on `k`
+prunes no part of the formula CBMC builds. Committed as dictated (`9ef0b81`: 51 harnesses, `_k0_2`, `_k3`, `_k4`; every harness
+SUCCESSFUL; no bound, unwind, stub or limit changed). Not run: the full `kani` step, ci-fast `-2`, §3–§6. Reviewer: decide the
+remedy for `tr_header_selection` (options the weisung excludes for me: a per-harness `unwind` matching `k` + 2 — `unwind(4)` for
+`k ≤ 2` —, a smaller `TR_SKIPPED_KEYS` per harness, a limit or an exception like A-3's; or leave it unsplit with the A-3 exception).
 
 **Correction (A-3 §0.1).** The age of `argon2` 0.6.0 (published 2026-08-27) was given as 60 days in A0 and A-2; it is 61 days on 2026-10-27 and 62 days on 2026-10-28 (`cooldown-m7-a3.txt`). The vet closure grew by five crates, not four (`vet-suggest-m7-a3.txt`).

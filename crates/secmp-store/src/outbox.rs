@@ -8,6 +8,8 @@ use rusqlite::params;
 use secmp_crypto::Zeroizing;
 
 use crate::error::{Error, Result};
+use crate::keys::Table;
+use crate::seal::{KeyPart, row_key};
 use crate::store::Store;
 
 /// The state codes of the `state` column.
@@ -62,7 +64,10 @@ impl Store {
             return Err(Error::Unsupported);
         }
         let queued = i64_of(row.queued_ms)?;
+        let rk = row_key(&[KeyPart::Bytes(&row.msg_id)])?;
         self.txn(|tx| {
+            // spec §3.4; ADR-053 item 5
+            let payload = tx.seal(Table::Outbox, "payload", &rk, &row.payload)?;
             tx.exec(
                 "INSERT INTO outbox (msg_id, contact_id, seq, kind, expire_after, payload, queued_ms, first_relayed_ms, state, cell_id) \
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, ?8, NULL)",
@@ -72,7 +77,7 @@ impl Store {
                     row.seq,
                     i64::from(row.kind),
                     i64::from(row.expire_after),
-                    row.payload.as_slice(),
+                    payload,
                     queued,
                     state::QUEUED
                 ],
@@ -143,8 +148,15 @@ impl Store {
                 })
             })
             .map_err(|_| Error::Unavailable)?;
-        rows.collect::<rusqlite::Result<_>>()
-            .map_err(|_| Error::Unavailable)
+        let mut out: Vec<OutboxRow> = rows
+            .collect::<rusqlite::Result<_>>()
+            .map_err(|_| Error::Unavailable)?;
+        for row in &mut out {
+            let rk = row_key(&[KeyPart::Bytes(&row.msg_id)])?;
+            // spec §3.4; ADR-053 item 5
+            row.payload = self.open_record(Table::Outbox, "payload", &rk, &row.payload)?;
+        }
+        Ok(out)
     }
 }
 

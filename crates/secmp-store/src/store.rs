@@ -127,6 +127,8 @@ pub struct Store {
     _lock: File,
     /// View-once messages, in memory only (CS-3.4, ST-17).
     pub(crate) view_once: crate::messages::ViewOnceHolder,
+    /// The table keys of the record seal (ADR-053 item 5); `None` for an unkeyed `kat` profile, which seals nothing.
+    tables: Option<TableKeys>,
     /// The size of the write-ahead log after the last commit (`kat::measure_writes`).
     #[cfg(any(test, feature = "kat"))]
     wal_size: Option<u64>,
@@ -257,11 +259,16 @@ impl Store {
             return Err(Error::Unavailable);
         }
         let conn = open_connection(&dir.join(DB_FILE), key)?;
+        let tables = match key.and_then(DbKey::tables) {
+            Some(t) => Some(t.copy()?),
+            None => None,
+        };
         let mut store = Self {
             conn,
             dir: dir.to_path_buf(),
             _lock: lock,
             view_once: crate::messages::ViewOnceHolder::default(),
+            tables,
             #[cfg(any(test, feature = "kat"))]
             wal_size: None,
         };
@@ -273,6 +280,21 @@ impl Store {
             store.wal_size = store.measured_wal_size();
         }
         Ok(store)
+    }
+
+    /// Open a record of (`table`, `column`, `row_key`) (ADR-053 item 5).
+    ///
+    /// # Errors
+    /// [`Error::Unavailable`] without table keys or if the record does not open there (uniform).
+    pub(crate) fn open_record(
+        &self,
+        table: crate::keys::Table,
+        column: &str,
+        row_key: &[u8],
+        rec: &[u8],
+    ) -> Result<secmp_crypto::Zeroizing<Vec<u8>>> {
+        let keys = self.tables.as_ref().ok_or(Error::Unavailable)?;
+        crate::seal::open(keys.get(table), table, column, row_key, rec)
     }
 
     /// The profile directory.
@@ -287,13 +309,22 @@ impl Store {
     /// [`Error::Unavailable`] if a statement or the commit fails (the transaction is rolled back), or `f`'s error.
     pub fn txn<T>(&mut self, f: impl FnOnce(&mut Tx<'_>) -> Result<T>) -> Result<T> {
         let (result, statements) = {
+            let keys = self.tables.as_ref();
             let tx = self
                 .conn
                 .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
                 .map_err(|_| Error::Unavailable)?;
-            let mut t = Tx { tx, statements: 0 };
+            let mut t = Tx {
+                inner: tx,
+                statements: 0,
+                keys,
+            };
             let out = f(&mut t);
-            let Tx { tx, statements } = t;
+            let Tx {
+                inner: tx,
+                statements,
+                ..
+            } = t;
             // `kat::CrashAt::MidTxn(k)` after the last statement: before the commit point
             #[cfg(any(test, feature = "kat"))]
             if out.is_ok() && statements > 0 {
@@ -360,11 +391,27 @@ impl Store {
 
 /// A transaction of [`Store::txn`]: every statement is counted (failure and crash injection, `kat`).
 pub struct Tx<'a> {
-    tx: rusqlite::Transaction<'a>,
+    inner: rusqlite::Transaction<'a>,
     statements: u32,
+    keys: Option<&'a TableKeys>,
 }
 
 impl Tx<'_> {
+    /// Seal `record` for (`table`, `column`, `row_key`) (ADR-053 item 5).
+    ///
+    /// # Errors
+    /// [`Error::Unavailable`] without table keys (an unkeyed profile) or if the seal fails.
+    pub(crate) fn seal(
+        &self,
+        table: crate::keys::Table,
+        column: &str,
+        row_key: &[u8],
+        record: &[u8],
+    ) -> Result<Vec<u8>> {
+        let keys = self.keys.ok_or(Error::Unavailable)?;
+        crate::seal::seal(keys.get(table), table, column, row_key, record)
+    }
+
     /// Count the next statement; `true` if the failure injection makes it fail (`kat`; never otherwise).
     fn next_statement_fails(&mut self) -> bool {
         self.statements = self.statements.saturating_add(1);
@@ -382,7 +429,9 @@ impl Tx<'_> {
         if self.next_statement_fails() {
             return Err(Error::Unavailable);
         }
-        self.tx.execute(sql, params).map_err(|_| Error::Unavailable)
+        self.inner
+            .execute(sql, params)
+            .map_err(|_| Error::Unavailable)
     }
 
     /// Read one row (`None` without one).
@@ -398,7 +447,7 @@ impl Tx<'_> {
         if self.next_statement_fails() {
             return Err(Error::Unavailable);
         }
-        match self.tx.query_row(sql, params, f) {
+        match self.inner.query_row(sql, params, f) {
             Ok(v) => Ok(Some(v)),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(_) => Err(Error::Unavailable),

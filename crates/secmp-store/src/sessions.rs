@@ -9,7 +9,9 @@ use rusqlite::params;
 use secmp_crypto::Zeroizing;
 
 use crate::error::{Error, Result};
+use crate::keys::Table;
 use crate::schema::part;
+use crate::seal::{KeyPart, row_key};
 use crate::store::{Store, Tx};
 
 /// The length of the key `hk ‖ n` at the front of a skipped entry (`secmp_proto::tr::SKIPPED_KEY_LEN`).
@@ -30,11 +32,23 @@ pub struct SessionRows {
 /// The reassembly state and the trust of a session (each `None` before its first write).
 pub type InboxTrust = (Option<Zeroizing<Vec<u8>>>, Option<Zeroizing<Vec<u8>>>);
 
+/// `row_key` of a `sessions` row: (`session_id`, `part`, `ord`), 24 bytes (ADR-053 item 5, Am. 1).
+fn session_row(session: i64, p: i64, ord: i64) -> Result<Vec<u8>> {
+    row_key(&[KeyPart::Int(session), KeyPart::Int(p), KeyPart::Int(ord)])
+}
+
 fn put(tx: &mut Tx<'_>, session: i64, p: i64, ord: i64, data: &[u8]) -> Result<()> {
+    // spec §3.4; ADR-053 item 5
+    let sealed = tx.seal(
+        Table::Sessions,
+        "data",
+        &session_row(session, p, ord)?,
+        data,
+    )?;
     tx.exec(
         "INSERT INTO sessions (session_id, part, ord, data) VALUES (?1, ?2, ?3, ?4) \
          ON CONFLICT (session_id, part, ord) DO UPDATE SET data = excluded.data",
-        params![session, p, ord, data],
+        params![session, p, ord, sealed],
     )?;
     Ok(())
 }
@@ -47,14 +61,22 @@ pub fn put_fixed(tx: &mut Tx<'_>, session: i64, fixed: &[u8]) -> Result<()> {
     put(tx, session, part::FIXED, 0, fixed)
 }
 
-/// Insert one skipped entry at `ord`.
+/// Insert one skipped entry at `ord`: the whole entry sealed in `data`, its key `hk ‖ n` (the first [`SKIPPED_KEY_LEN`]
+/// bytes) sealed in `skey`.
 ///
 /// # Errors
 /// [`Error::Unavailable`] if the statement fails (also if `ord` is taken).
 pub fn insert_skipped(tx: &mut Tx<'_>, session: i64, ord: i64, entry: &[u8]) -> Result<()> {
+    let rk = session_row(session, part::SKIPPED, ord)?;
+    let key_len = usize::try_from(SKIPPED_KEY_LEN).map_err(|_| Error::Unavailable)?;
+    let key = entry.get(..key_len).unwrap_or(entry);
+    // spec §3.4; ADR-053 item 5
+    let data = tx.seal(Table::Sessions, "data", &rk, entry)?;
+    // spec §3.4; ADR-053 item 5
+    let skey = tx.seal(Table::Sessions, "skey", &rk, key)?;
     tx.exec(
-        "INSERT INTO sessions (session_id, part, ord, data) VALUES (?1, ?2, ?3, ?4)",
-        params![session, part::SKIPPED, ord, entry],
+        "INSERT INTO sessions (session_id, part, ord, data, skey) VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![session, part::SKIPPED, ord, data, skey],
     )?;
     Ok(())
 }
@@ -144,38 +166,55 @@ impl Store {
         }))
     }
 
-    /// The rows of one part of `session`, in `ord` order.
+    /// The rows of one part of `session`, in `ord` order, opened.
     fn read_part(&self, session: i64, p: i64) -> Result<Vec<(i64, Zeroizing<Vec<u8>>)>> {
         self.read_rows(
             "SELECT ord, data FROM sessions WHERE session_id = ?1 AND part = ?2 ORDER BY ord",
-            params![session, p],
+            session,
+            p,
+            "data",
         )
     }
 
-    fn read_rows<P: rusqlite::Params>(
+    /// The sealed `column` of the rows `sql` selects (`ord`, `column`), each opened under its row (ADR-053 item 5).
+    fn read_rows(
         &self,
         sql: &str,
-        params: P,
+        session: i64,
+        p: i64,
+        column: &str,
     ) -> Result<Vec<(i64, Zeroizing<Vec<u8>>)>> {
         let mut stmt = self.conn.prepare(sql).map_err(|_| Error::Unavailable)?;
         let rows = stmt
-            .query_map(params, |r| {
-                Ok((r.get(0)?, Zeroizing::new(r.get::<_, Vec<u8>>(1)?)))
+            .query_map(params![session, p], |r| {
+                Ok((r.get::<_, i64>(0)?, r.get::<_, Option<Vec<u8>>>(1)?))
             })
             .map_err(|_| Error::Unavailable)?;
-        rows.collect::<rusqlite::Result<_>>()
-            .map_err(|_| Error::Unavailable)
+        let mut out = Vec::new();
+        for row in rows {
+            let (ord, sealed) = row.map_err(|_| Error::Unavailable)?;
+            let sealed = sealed.ok_or(Error::Unavailable)?;
+            let rk = session_row(session, p, ord)?;
+            // spec §3.4; ADR-053 item 5
+            out.push((
+                ord,
+                self.open_record(Table::Sessions, column, &rk, &sealed)?,
+            ));
+        }
+        Ok(out)
     }
 
-    /// The keys `hk ‖ n` of the skipped entries of `session` with their `ord`, in insertion order — the first
-    /// [`SKIPPED_KEY_LEN`] bytes of each row: the message keys are not read (V1-F2).
+    /// The keys `hk ‖ n` of the skipped entries of `session` with their `ord`, in insertion order — the sealed `skey`
+    /// column only (the first [`SKIPPED_KEY_LEN`] bytes of each entry): no message key is opened (V1-F2).
     ///
     /// # Errors
-    /// [`Error::Unavailable`] if a read fails.
+    /// [`Error::Unavailable`] if a read or an open fails.
     pub fn skipped_keys(&self, session: i64) -> Result<Vec<(i64, Zeroizing<Vec<u8>>)>> {
         self.read_rows(
-            "SELECT ord, substr(data, 1, ?3) FROM sessions WHERE session_id = ?1 AND part = ?2 ORDER BY ord",
-            params![session, part::SKIPPED, SKIPPED_KEY_LEN],
+            "SELECT ord, skey FROM sessions WHERE session_id = ?1 AND part = ?2 ORDER BY ord",
+            session,
+            part::SKIPPED,
+            "skey",
         )
     }
 

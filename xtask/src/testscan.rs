@@ -408,10 +408,10 @@ fn kat_mod_declaration_matches_crlf() {
 }
 
 /// TEST-SPEC-M7 ST-09 (`docs/06` §2; M4 review RT-2): the test-only constructors stay test-only. In every shipped
-/// crate's `src/` (all but `secmp-testkit`): `kat_small` is defined only under `cfg(feature = "kat")` (0 sites in A-3 —
-/// the Argon2 parameters are A-4); every line naming `TestKey`, `CrashAt` or `FailAt` is inside a `kat`-gated item, a
-/// test module, or `secmp-store/src/kat.rs`, which `lib.rs` declares under `cfg(any(test, feature = "kat"))`; at least
-/// one `TestKey` site exists; and `cargo tree -e features -p secmp-cli` shows no `kat` feature.
+/// crate's `src/` (all but `secmp-testkit`): `kat_small` is defined only under `cfg(feature = "kat")` (one site since
+/// A-4: `secmp-store` `wrap::Argon2Params::kat_small`); every line naming `TestKey`, `CrashAt` or `FailAt` is inside a
+/// `kat`-gated item, a test module, or `secmp-store/src/kat.rs`, which `lib.rs` declares under
+/// `cfg(any(test, feature = "kat"))`; at least one `TestKey` site exists; and `cargo tree -e features -p secmp-cli` shows no `kat` feature.
 #[cfg(test)]
 #[test]
 fn kat_argon2_params_only_with_kat() -> Result<()> {
@@ -453,7 +453,7 @@ fn kat_argon2_params_only_with_kat() -> Result<()> {
     }
     assert!(bad.is_empty(), "outside a kat gate: {bad:?}");
     assert!(test_key_sites >= 1, "no TestKey site");
-    assert_eq!(kat_small_sites, 0, "kat_small: 0 sites in A-3 (A-4)");
+    assert_eq!(kat_small_sites, 1, "kat_small: one site (A-4, secmp-store)");
     let tree = Cmd::cargo()
         .args(["tree", "--locked", "-e", "features", "-p", "secmp-cli"])
         .read()?;

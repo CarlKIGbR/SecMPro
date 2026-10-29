@@ -93,7 +93,6 @@ impl TableKeys {
     }
 
     /// The key of `table`.
-    #[cfg(any(test, feature = "kat"))]
     pub(crate) fn get(&self, table: Table) -> &LockedSecret<32> {
         let [
             identity,

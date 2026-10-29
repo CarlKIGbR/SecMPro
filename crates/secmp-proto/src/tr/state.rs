@@ -729,4 +729,31 @@ mod tests {
         );
         Ok(())
     }
+
+    /// V2-1 (killer of the A-3 mutant `state.rs:466:13`, `||` → `&&` in `RatchetParts::to_bytes`): one entry of the wrong
+    /// length is refused on its own (at most 512 entries), as are 513 entries of the right length.
+    #[test]
+    fn ratchet_parts_to_bytes_refuses_each_bad_shape() {
+        use crate::Error;
+        use crate::codec::Zeroizing;
+        use crate::tr::MAX_SKIPPED;
+        let parts = |entries: Vec<Vec<u8>>| super::RatchetParts {
+            fixed: Zeroizing::new(Vec::new()),
+            skipped: entries.into_iter().map(Zeroizing::new).collect(),
+        };
+        let short = parts(vec![vec![0_u8; super::SKIPPED_ENTRY_LEN - 1]]);
+        assert_eq!(
+            short.to_bytes().err(),
+            Some(Error::Rejected),
+            "an entry of 67 bytes"
+        );
+        let too_many = parts(vec![vec![0_u8; super::SKIPPED_ENTRY_LEN]; MAX_SKIPPED + 1]);
+        assert_eq!(
+            too_many.to_bytes().err(),
+            Some(Error::Rejected),
+            "513 entries"
+        );
+        let fine = parts(vec![vec![0_u8; super::SKIPPED_ENTRY_LEN]; MAX_SKIPPED]);
+        assert!(fine.to_bytes().is_ok(), "512 entries of 68 bytes");
+    }
 }

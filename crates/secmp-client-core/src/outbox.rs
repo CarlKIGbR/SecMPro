@@ -370,4 +370,80 @@ mod tests {
         );
         Ok(())
     }
+
+    /// V2-1 (killer, `outbox.rs:74`): a reopened outbox restores every field of a queued message — its kind among
+    /// them, read back by its code.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn store_outbox_restores_every_field() -> R {
+        let dir = secmp_store::kat::TempDir::new("outbox-fields").map_err(|e| e.to_string())?;
+        {
+            let mut o = StoreOutbox::open(shared(dir.path())?, 4).map_err(|_| "open")?;
+            let mut m = message(9);
+            m.kind = AppKind::Edit;
+            m.expire_after = 77;
+            o.enqueue(m, 5);
+        }
+        let mut o = StoreOutbox::open(shared(dir.path())?, 4).map_err(|_| "reopen")?;
+        let m = o.take_next().ok_or("take")?;
+        assert_eq!(m.msg_id, [9; 16]);
+        assert_eq!(m.kind.byte(), AppKind::Edit.byte());
+        assert_eq!(m.expire_after, 77);
+        assert_eq!(m.payload.as_slice(), [9_u8; 8].as_slice());
+        Ok(())
+    }
+
+    /// V2-1 (killer, `outbox.rs:105`): a write the store refuses is counted.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn store_outbox_counts_refused_writes() -> R {
+        let dir = secmp_store::kat::TempDir::new("outbox-refused").map_err(|e| e.to_string())?;
+        let mut o = StoreOutbox::open(shared(dir.path())?, 4).map_err(|_| "open")?;
+        secmp_store::kat::fail_at(secmp_store::kat::FailAt(1));
+        o.enqueue(message(1), 1);
+        assert_eq!(o.write_errors(), 1);
+        Ok(())
+    }
+
+    /// V2-1 (killer, `outbox.rs:126`): a change writes only the rows that changed — an expiry that fails nothing writes
+    /// nothing.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn store_outbox_writes_only_changes() -> R {
+        let dir = secmp_store::kat::TempDir::new("outbox-changes").map_err(|e| e.to_string())?;
+        let mut o = StoreOutbox::open(shared(dir.path())?, 4).map_err(|_| "open")?;
+        for n in 1..=3_u8 {
+            o.enqueue(message(n), 0);
+        }
+        let before = secmp_store::kat::store_txn_commits();
+        o.expire(1_000);
+        assert_eq!(
+            secmp_store::kat::store_txn_commits(),
+            before,
+            "no state changed, no write"
+        );
+        let taken = o.take_next().ok_or("take")?;
+        o.relayed(&taken.msg_id, 9);
+        assert_eq!(
+            secmp_store::kat::store_txn_commits(),
+            before + 1,
+            "one row changed, one write"
+        );
+        Ok(())
+    }
+
+    /// V2-1 (killer, `outbox.rs:208`): a restart queues the message that was in flight again.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn store_outbox_restart_requeues_in_flight() -> R {
+        let dir = secmp_store::kat::TempDir::new("outbox-restart").map_err(|e| e.to_string())?;
+        let mut o = StoreOutbox::open(shared(dir.path())?, 4).map_err(|_| "open")?;
+        o.enqueue(message(1), 0);
+        let _in_flight = o.take_next().ok_or("take")?;
+        assert_eq!(o.waiting(), 0);
+        o.restart();
+        assert_eq!(o.waiting(), 1);
+        assert_eq!(o.take_next().ok_or("take again")?.msg_id, [1; 16]);
+        Ok(())
+    }
 }

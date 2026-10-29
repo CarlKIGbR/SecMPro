@@ -1067,4 +1067,153 @@ mod tests {
         assert!(!f(s.has_message(6, &[7; 16]), "has")?);
         Ok(())
     }
+
+    /// V2-1 (killers, `persist.rs:59`, `:71`): `EntryKey::zeroize` clears the key; `holds` is set membership (also with a
+    /// repeated element).
+    #[test]
+    #[cfg(feature = "kat")]
+    fn entry_key_zeroize_and_holds() -> R {
+        use secmp_crypto::{ConstantTimeEq as _, Zeroize as _};
+        let mut k = f(key_of(&[0x55; SKIPPED_KEY_LEN]), "key")?;
+        let zero = f(key_of(&[0; SKIPPED_KEY_LEN]), "zero")?;
+        assert!(!bool::from(k.ct_eq(&zero)));
+        k.zeroize();
+        assert!(bool::from(k.ct_eq(&zero)), "zeroized");
+        let a = f(key_of(&[1; SKIPPED_KEY_LEN]), "a")?;
+        let b = f(key_of(&[2; SKIPPED_KEY_LEN]), "b")?;
+        let a2 = f(key_of(&[1; SKIPPED_KEY_LEN]), "a2")?;
+        assert!(holds([&a, &b].into_iter(), &a2));
+        assert!(holds([&a, &a].into_iter(), &a2), "a repeated element");
+        assert!(!holds([&b].into_iter(), &a2));
+        assert!(!holds(std::iter::empty(), &a2));
+        Ok(())
+    }
+
+    /// V2-1 (killers, `persist.rs:112`, `:129`): `load` returns the committed state, `delivered_ids` the delivered
+    /// messages.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn load_and_delivered_ids_read_back() -> R {
+        use crate::scheduler::outbox::DeliveredMessage;
+        let dir = f(secmp_store::kat::TempDir::new("read-back"), "dir")?;
+        let store = shared(dir.path())?;
+        let (a, _, _, _) = pair(13)?;
+        let mut pa = f(StorePersist::open(Arc::clone(&store), 3), "persist")?;
+        assert!(f(pa.load(), "load")?.is_none());
+        let bytes = f(a.to_bytes(), "a")?;
+        let ratchet = f(RatchetParts::split(&bytes), "split")?;
+        let delivered = [DeliveredMessage {
+            msg_id: [4; 16],
+            kind: 1,
+            payload: b"hello",
+            expire_after: 0,
+            received_ms: 1,
+        }];
+        f(
+            pa.commit_parts(
+                PersistKind::Receive,
+                &CommitParts {
+                    ratchet: &ratchet,
+                    inbox: None,
+                    trust: None,
+                    delivered: &delivered,
+                },
+            ),
+            "commit",
+        )?;
+        let loaded = f(pa.load(), "load")?.ok_or("no state")?;
+        assert_eq!(*f(loaded.to_bytes(), "join")?, *bytes);
+        assert_eq!(f(pa.delivered_ids(), "ids")?, vec![[4_u8; 16]]);
+        Ok(())
+    }
+
+    /// The child of [`decrypt_crash_point_only_on_receive`]: `AfterDecryptBeforeCommit` armed, a `Send` commit (no
+    /// abort, a mark), then a `Receive` commit (the abort).
+    #[cfg(feature = "kat")]
+    fn crash_kind_child(dir: &std::path::Path) -> R {
+        let store = shared(dir)?;
+        let (a, _, _, _) = pair(14)?;
+        let mut pa = f(StorePersist::open(Arc::clone(&store), 1), "persist")?;
+        let bytes = f(a.to_bytes(), "a")?;
+        secmp_store::kat::arm_crash(secmp_store::kat::CrashAt::AfterDecryptBeforeCommit, 1);
+        f(pa.commit(PersistKind::Send, &bytes), "send")?;
+        f(std::fs::write(dir.join("after-send"), b"x"), "mark")?;
+        f(pa.commit(PersistKind::Receive, &bytes), "receive")?;
+        Ok(())
+    }
+
+    /// V2-1 (killer, `persist.rs:175`): the crash point `AfterDecryptBeforeCommit` is on a `Receive` commit only — a child
+    /// with it armed passes a `Send` commit and aborts at the `Receive` one.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn decrypt_crash_point_only_on_receive() -> R {
+        if secmp_store::kat::child_role().as_deref() == Some("crash-kind") {
+            let dir = std::env::var_os("SECMP_STORE_DIR").ok_or("no dir")?;
+            return crash_kind_child(std::path::Path::new(&dir));
+        }
+        let root = f(secmp_store::kat::TempDir::new("crash-kind"), "dir")?;
+        let ok = f(
+            secmp_store::kat::run_child(
+                "persist::tests::decrypt_crash_point_only_on_receive",
+                "crash-kind",
+                &[("SECMP_STORE_DIR", root.path())],
+            ),
+            "child",
+        )?;
+        assert!(!ok, "the child aborts at the Receive commit");
+        assert!(
+            root.path().join("after-send").exists(),
+            "the Send commit passed the crash point"
+        );
+        Ok(())
+    }
+
+    /// V2-1 (killer, `scheduler/outbox.rs:301`): the trust codes of the `sessions` trust row.
+    #[test]
+    fn trust_codes_are_fixed() {
+        use secmp_proto::tr::content::Trust;
+        assert_eq!(
+            [
+                Trust::Unverified,
+                Trust::Verified,
+                Trust::KeyChanged,
+                Trust::Frozen
+            ]
+            .map(super::trust_code),
+            [0, 1, 2, 3]
+        );
+    }
+
+    /// V2-1 (killer, `scheduler/outbox.rs:328`): the default `Persist::commit_parts` commits the joined state through
+    /// `commit`.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn default_commit_parts_commits_the_joined_state() -> R {
+        #[derive(Default)]
+        struct Whole(Vec<(PersistKind, Vec<u8>)>);
+        impl Persist for Whole {
+            fn commit(&mut self, kind: PersistKind, state: &[u8]) -> Result<(), PersistError> {
+                self.0.push((kind, state.to_vec()));
+                Ok(())
+            }
+        }
+        let (a, _, _, _) = pair(15)?;
+        let bytes = f(a.to_bytes(), "a")?;
+        let ratchet = f(RatchetParts::split(&bytes), "split")?;
+        let mut w = Whole::default();
+        f(
+            w.commit_parts(
+                PersistKind::Send,
+                &CommitParts {
+                    ratchet: &ratchet,
+                    inbox: None,
+                    trust: None,
+                    delivered: &[],
+                },
+            ),
+            "commit_parts",
+        )?;
+        assert_eq!(w.0, vec![(PersistKind::Send, bytes.to_vec())]);
+        Ok(())
+    }
 }

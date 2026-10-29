@@ -1060,4 +1060,140 @@ mod tests {
         assert_eq!(b.persist().0, vec![1_700_000_005_000]);
         Ok(())
     }
+
+    /// What a recording `Persist` saw of each receive commit: the reassembly state present, the trust code.
+    #[cfg(feature = "kat")]
+    #[derive(Default)]
+    struct Commits(Vec<(bool, Option<u8>)>);
+
+    #[cfg(feature = "kat")]
+    impl crate::scheduler::outbox::Persist for Commits {
+        fn commit(
+            &mut self,
+            _kind: crate::scheduler::outbox::PersistKind,
+            _state: &[u8],
+        ) -> Result<(), crate::scheduler::outbox::PersistError> {
+            Ok(())
+        }
+
+        fn commit_parts(
+            &mut self,
+            kind: crate::scheduler::outbox::PersistKind,
+            parts: &crate::scheduler::outbox::CommitParts<'_>,
+        ) -> Result<(), crate::scheduler::outbox::PersistError> {
+            if kind == crate::scheduler::outbox::PersistKind::Receive {
+                self.0.push((parts.inbox.is_some(), parts.trust));
+            }
+            Ok(())
+        }
+    }
+
+    /// Two conversations of one session: the initiator (`MemPersist`) and the responder with `persist`, its receive queue
+    /// bound to 1, inside a `Conversations`.
+    #[cfg(feature = "kat")]
+    type Session<P> = (
+        TestConversation,
+        super::Conversations<crate::scheduler::outbox::MemOutbox, P, Fixed>,
+    );
+
+    #[cfg(feature = "kat")]
+    fn session<P: crate::scheduler::outbox::Persist>(persist: P) -> Result<Session<P>, Fail> {
+        use crate::scheduler::outbox::{MemOutbox, MemPersist};
+        use crate::scheduler::types::QueueId;
+        use secmp_proto::tr::{Entropy as _, FixedEntropy, RatchetState};
+        let mut responder = FixedEntropy::new(&stream(2, 1 << 16));
+        let mut initiator = FixedEntropy::new(&stream(1, 1 << 16));
+        let spk_dh = responder.x25519().map_err(|_| "x25519")?;
+        let rpk_kem = responder.mlkem768().map_err(|_| "ml-kem")?;
+        let spk = secmp_proto::keys::X25519Pk::from_bytes(spk_dh.public_key().as_bytes())
+            .map_err(|_| "spk")?;
+        let ek = secmp_proto::keys::MlKem768Ek::from_bytes(rpk_kem.encapsulation_key().as_bytes())
+            .map_err(|_| "ek")?;
+        let sk = secmp_crypto::SecretBytes::from_slice(&[7_u8; 32]).map_err(|_| "secret")?;
+        let a_state =
+            RatchetState::init_initiator_with(&sk, &[9_u8; 32], &spk, &ek, &mut initiator)
+                .map_err(|_| "initiator")?;
+        let b_state = RatchetState::init_responder(&sk, &[9_u8; 32], spk_dh, rpk_kem)
+            .map_err(|_| "responder")?;
+        let peer = FixedEntropy::new(&stream(3, 1 << 20))
+            .hybrid_signing_key()
+            .map_err(|_| "peer key")?
+            .verifying_key();
+        let a = super::Conversation::new(
+            a_state,
+            MemOutbox::new(),
+            MemPersist::new(),
+            Fixed(FixedEntropy::new(&stream(4, 1 << 20))),
+            peer.clone(),
+            0,
+        );
+        let mut b = super::Conversation::new(
+            b_state,
+            MemOutbox::new(),
+            persist,
+            Fixed(FixedEntropy::new(&stream(6, 1 << 20))),
+            peer,
+            0,
+        );
+        b.bind(QueueId(2), QueueId(1));
+        let mut convs = super::Conversations::new();
+        convs.add(b);
+        Ok((a, convs))
+    }
+
+    /// A text message `n` of `len` bytes.
+    #[cfg(feature = "kat")]
+    fn text_message(n: u8, len: usize) -> crate::scheduler::outbox::OutMessage {
+        crate::scheduler::outbox::OutMessage {
+            msg_id: [n; 16],
+            kind: secmp_proto::wire::cell::AppKind::Text,
+            expire_after: 0,
+            payload: secmp_crypto::Zeroizing::new(vec![n; len]),
+        }
+    }
+
+    /// V2-1 (killers, `conversation.rs:644`, `:645`): a receive commit carries the reassembly state while a message is in
+    /// fragments (also the commit that completes it), not for a one-cell message, and no trust when the trust did not
+    /// change.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn receive_commit_carries_inbox_only_while_fragmented() -> Result<(), Fail> {
+        use crate::scheduler::outbox::Outbox as _;
+        use crate::scheduler::types::{CellSource as _, QueueId};
+        let (mut a, mut convs) = session(Commits::default())?;
+        a.outbox_mut().enqueue(text_message(1, 3_000), 0);
+        let first = a.prepare_direct(0).map_err(|_| "seal 1")?.cell;
+        let second = a.prepare_direct(0).map_err(|_| "seal 2")?.cell;
+        a.outbox_mut().enqueue(text_message(2, 10), 0);
+        let third = a.prepare_direct(0).map_err(|_| "seal 3")?.cell;
+        for (id, cell) in [(1, &first), (2, &second), (3, &third)] {
+            convs.deliver(QueueId(1), id, cell).map_err(|_| "deliver")?;
+        }
+        let b = convs.get(0).ok_or("conversation")?;
+        assert_eq!(b.received().len(), 2, "the long and the short message");
+        assert_eq!(
+            b.persist().0,
+            vec![(true, None), (true, None), (false, None)],
+            "fragment, completing fragment, one-cell message"
+        );
+        Ok(())
+    }
+
+    /// V2-1 (killer, `conversation.rs:254`): the delivered ids of an earlier run suppress a redelivery.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn seed_seen_suppresses_redelivery() -> Result<(), Fail> {
+        use crate::scheduler::outbox::Outbox as _;
+        use crate::scheduler::types::{CellSource as _, QueueId};
+        let (mut a, mut convs) = session(crate::scheduler::outbox::MemPersist::new())?;
+        a.outbox_mut().enqueue(text_message(5, 10), 0);
+        let cell = a.prepare_direct(0).map_err(|_| "seal")?.cell;
+        convs
+            .get_mut(0)
+            .ok_or("conversation")?
+            .seed_seen([[5_u8; 16]]);
+        convs.deliver(QueueId(1), 1, &cell).map_err(|_| "deliver")?;
+        assert!(convs.get(0).ok_or("conversation")?.received().is_empty());
+        Ok(())
+    }
 }

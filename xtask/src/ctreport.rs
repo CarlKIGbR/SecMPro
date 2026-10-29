@@ -1514,45 +1514,28 @@ mod tests {
             },
             "differ from [\"tr_decrypt_nonce_dependence\", \"tr_decrypt_header_contents_dependence\", \"store_unwrap_reject_post_kdf\"]",
         )?;
+        // the fixture's own informative entries, one edited (duplicated, given a verdict, shortened)
+        let edit = |v: &mut Value, i: usize, key: &str, value: Value| {
+            if let Some(e) = v.get_mut("informative").and_then(|l| l.get_mut(i)) {
+                set(e, &[key], value);
+            }
+        };
         refuse(
             &|v| {
-                let entry = informative("tr_decrypt_nonce_dependence");
-                let other = informative("tr_decrypt_header_contents_dependence");
-                let store = informative("store_unwrap_reject_post_kdf");
-                set(
-                    v,
-                    &["informative"],
-                    serde_json::json!([entry.clone(), other, store, entry]),
-                );
+                if let Some(l) = v.get_mut("informative").and_then(Value::as_array_mut)
+                    && let Some(first) = l.first().cloned()
+                {
+                    l.push(first);
+                }
             },
             "informative targets",
         )?;
         refuse(
-            &|v| {
-                let mut entry = informative("tr_decrypt_nonce_dependence");
-                set(&mut entry, &["verdict"], Value::from("PASS"));
-                let other = informative("tr_decrypt_header_contents_dependence");
-                let store = informative("store_unwrap_reject_post_kdf");
-                set(
-                    v,
-                    &["informative"],
-                    serde_json::json!([entry, other, store]),
-                );
-            },
+            &|v| edit(v, 0, "verdict", Value::from("PASS")),
             "not marked informative without a verdict",
         )?;
         refuse(
-            &|v| {
-                let entry = informative("tr_decrypt_nonce_dependence");
-                let mut other = informative("tr_decrypt_header_contents_dependence");
-                set(&mut other, &["samples"], Value::from(1000));
-                let store = informative("store_unwrap_reject_post_kdf");
-                set(
-                    v,
-                    &["informative"],
-                    serde_json::json!([entry, other, store]),
-                );
-            },
+            &|v| edit(v, 1, "samples", Value::from(1000)),
             "informative tr_decrypt_header_contents_dependence measured Some(1000) samples",
         )?;
         Ok(())

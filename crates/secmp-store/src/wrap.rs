@@ -29,6 +29,16 @@ const VER: u8 = 0x01;
 pub const WRAP_LEN: usize = 1 + 16 + 12 + 24 + 32 + 32 + 16;
 const _: () = assert!(WRAP_LEN == 133);
 
+#[cfg(feature = "kat")]
+std::thread_local! {
+    /// The reject-site tag of the last unlock on this thread (feature `kat`; the `inv::INVITEE_SITE_KAT` mechanism), read
+    /// with `WRAP_SITE_KAT.get()`: the constant-time bench checks before measuring that both classes of
+    /// `store_unlock_reject` end at the same step. `None` at the start of each unlock (a wrap refused from its bytes, before
+    /// the KDF, leaves it `None`); `"wrap: open"` — set after the KDF, right before `CAEAD.Open` of `MK_profile`. Without
+    /// `kat` neither the tag nor any statement setting it exists.
+    pub static WRAP_SITE_KAT: core::cell::Cell<Option<&'static str>> = const { core::cell::Cell::new(None) };
+}
+
 /// The Argon2id cost parameters of a wrap (RFC 9106 §3.1; CS-3.2).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Argon2Params {
@@ -240,9 +250,34 @@ pub fn kek_kat(passphrase: &[u8], salt: &[u8; 16], params: Argon2Params) -> Resu
     kek(passphrase, salt, params)
 }
 
-/// ADR-053 item 2, the unlock order: file bytes checked, then Argon2id once, then `CAEAD.Open` once.
-fn open(wrap: &[u8], passphrase: &[u8], accept: Argon2Params) -> Result<Unlocked> {
-    // decided from the file bytes alone, before the KDF (Q123)
+/// [`unlock`]'s `CAEAD.Open` of the wrap bytes `wrap` under a given `kek`, without the KDF (feature `kat`: the
+/// informative constant-time target `store_unwrap_reject_post_kdf`, Q140). The file bytes are checked as by [`unlock`].
+///
+/// # Errors
+/// As [`unlock`].
+#[cfg(feature = "kat")]
+pub fn open_with_kek_kat(
+    wrap: &[u8],
+    kek: &secmp_crypto::LockedSecret<32>,
+    accept: Argon2Params,
+) -> Result<Unlocked> {
+    let parts = parse(wrap, accept)?;
+    open_mk(kek, &parts)
+}
+
+/// The fields of a wrap that [`parse`] accepted: `salt`, `params` (encoded), `N` and the sealed `MK_profile`.
+struct Parts<'a> {
+    salt: [u8; 16],
+    enc: [u8; 12],
+    n: [u8; 24],
+    sealed: &'a [u8],
+}
+
+/// The checks decided from the file bytes alone, before the KDF (ADR-053 item 2, Q123): length 133, `ver` 0x01 and
+/// `params` = `accept`.
+fn parse(wrap: &[u8], accept: Argon2Params) -> Result<Parts<'_>> {
+    #[cfg(feature = "kat")]
+    WRAP_SITE_KAT.set(None);
     if wrap.len() != WRAP_LEN {
         return Err(Error::Unlock);
     }
@@ -253,17 +288,32 @@ fn open(wrap: &[u8], passphrase: &[u8], accept: Argon2Params) -> Result<Unlocked
     if ver != [VER] || params != accept.encode() {
         return Err(Error::Unlock);
     }
-    let salt: [u8; 16] = salt.try_into().map_err(|_| Error::Unlock)?;
-    let enc: [u8; 12] = params.try_into().map_err(|_| Error::Unlock)?;
-    let n: [u8; 24] = n.try_into().map_err(|_| Error::Unlock)?;
-    let kek = kek(passphrase, &salt, accept)?;
+    Ok(Parts {
+        salt: salt.try_into().map_err(|_| Error::Unlock)?,
+        enc: params.try_into().map_err(|_| Error::Unlock)?,
+        n: n.try_into().map_err(|_| Error::Unlock)?,
+        sealed,
+    })
+}
+
+/// `CAEAD.Open(KEK, N, AD, ·)` of the sealed `MK_profile` (ADR-053 item 2); every failure [`Error::Unlock`].
+fn open_mk(kek: &secmp_crypto::LockedSecret<32>, parts: &Parts<'_>) -> Result<Unlocked> {
+    #[cfg(feature = "kat")]
+    WRAP_SITE_KAT.set(Some("wrap: open"));
     #[cfg(any(test, feature = "kat"))]
     crate::kat::note_caead_open_call();
     // spec §3.4; ADR-053 item 2
-    let mk = Caead::open_locked(kek.locked(), &n, &ad(&salt, &enc), sealed)
+    let mk = Caead::open_locked(kek, &parts.n, &ad(&parts.salt, &parts.enc), parts.sealed)
         .map_err(|_| Error::Unlock)?;
     let mk = StoreKey::new(secmp_crypto::LockedSecret::from_slice(&mk).map_err(|_| Error::Unlock)?);
     Ok(Unlocked::from_mk(mk))
+}
+
+/// ADR-053 item 2, the unlock order: file bytes checked, then Argon2id once, then `CAEAD.Open` once.
+fn open(wrap: &[u8], passphrase: &[u8], accept: Argon2Params) -> Result<Unlocked> {
+    let parts = parse(wrap, accept)?;
+    let kek = kek(passphrase, &parts.salt, accept)?;
+    open_mk(kek.locked(), &parts)
 }
 
 #[cfg(test)]

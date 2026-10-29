@@ -250,6 +250,10 @@ pub(crate) const CT_STEP_TIMEOUT_SECONDS: u64 = 17_400;
 /// Samples per measurement of `sas` (`SafetyNumber::new`, Argon2id: about a millisecond per call).
 pub(crate) const CT_SAS_SAMPLES: usize = 20_000;
 
+/// ADR-042 Amendment 6 (TEST-SPEC-M7 CT-01, OPEN-M7-15 A, Q94): samples per measurement of `store_unlock_reject`
+/// (`wrap::open_kat` with the `kat` Argon2 parameters, one Argon2id and one `CAEAD.Open` per call).
+pub(crate) const CT_STORE_SAMPLES: usize = 100_000;
+
 /// The ct targets (M2 review C3 (a)): the gate refuses a report whose target set differs. Exactly one of them, the
 /// positive control, is measured once and must be detected. M3: the three SecMP-TR rejection targets
 /// `tr_decrypt_reject_*` (plan D9: `RatchetState::decrypt_with` on one fixed receiver state), the A/A′ placement
@@ -263,8 +267,42 @@ pub(crate) const CT_SAS_SAMPLES: usize = 20_000;
 /// (the client's `mac2` compare, §8.3), CT-03 `link_frame_open_reject` (`Link::open`, §8.4), CT-04
 /// `q_queue_new_reject_token` (`link::ids::token_verify`, §9.6), CT-05 `tr_decrypt_trial_open_position` (§7.4, the
 /// opening trial's position among 2 distinct skipped header keys; M4 review R-42, campaign R-59) and CT-06 the LINK
-/// same-content control [`CT_LINK_SAME_CONTENT_CONTROL`].
+/// same-content control [`CT_LINK_SAME_CONTENT_CONTROL`]. M7, TEST-SPEC-M7 CT-01 (ADR-042 Amendment 6, OPEN-M7-15 A):
+/// `store_unlock_reject` (`secmp_store::wrap` unlock of one wrap under two wrong passphrases, `kat` Argon2 parameters,
+/// [`CT_STORE_SAMPLES`]).
 pub(crate) const CT_TARGETS: &[&str] = &[
+    "control_variable_time_compare",
+    "tag_compare",
+    "msg_open_reject",
+    "caead_open_reject",
+    "sas",
+    "caead_derive",
+    "caead_aead_reject",
+    "caead_com_compare",
+    "caead_open_reject_samekey",
+    "aa_prime_control",
+    "tr_decrypt_reject_hdr_key",
+    "tr_decrypt_reject_body_tag",
+    "tr_decrypt_reject_ct_pq",
+    "tr_decrypt_reject_skipped",
+    "same_content_control",
+    "inv_fingerprint_compare",
+    "x25519_zero_check",
+    "hx_accept_reject_inner",
+    "hx_accept_reject_first_msg",
+    "hx_same_content_control",
+    "link_hs1_reject_mac1",
+    "link_hs2_reject_mac2",
+    "link_frame_open_reject",
+    "q_queue_new_reject_token",
+    "tr_decrypt_trial_open_position",
+    "link_same_content_control",
+    "store_unlock_reject",
+];
+
+/// The ct targets of the M6 close (the 26 names before TEST-SPEC-M7 CT-01): the target set of the reports written in
+/// M5 and M6 (`ctreport::M5_TARGETS`, `ctreport::M6_TARGETS`).
+pub(crate) const CT_TARGETS_M6: &[&str] = &[
     "control_variable_time_compare",
     "tag_compare",
     "msg_open_reject",
@@ -299,9 +337,11 @@ pub(crate) const CT_TARGETS: &[&str] = &[
 /// `tr_decrypt_nonce_dependence` keeps the public header-nonce micro-timing of §7.4 Decrypt visible (CT-DIAG-3: up to
 /// 65 ticks, either sign). TEST-SPEC-M7 CT-04 (OPEN-M6-C1-2, OPEN-M7-25 A): `tr_decrypt_header_contents_dependence`,
 /// its constant-nonce contrast — one nonce, classes that differ only in the decoded header contents (`pn` 0 vs 3).
+/// ADR-042 Amendment 6 (Q140): `store_unwrap_reject_post_kdf`, the `CAEAD.Open` of one wrap under two wrong KEKs.
 pub(crate) const CT_INFORMATIVE_TARGETS: &[&str] = &[
     "tr_decrypt_nonce_dependence",
     "tr_decrypt_header_contents_dependence",
+    "store_unwrap_reject_post_kdf",
 ];
 
 /// The positive control among [`CT_TARGETS`].
@@ -348,6 +388,7 @@ pub(crate) const CT_TARGET_SITES: &[(&str, &str)] = &[
     ("hx_accept_reject_first_msg", "first_msg decrypt"),
     ("hx_same_content_control", "inner open"),
     ("tr_decrypt_trial_open_position", "body MAC"),
+    ("store_unlock_reject", "wrap: open"),
 ];
 
 /// docs/07 M3 acceptance "encrypt+decrypt of a message < 3 ms" (M3 plan D11): the `perf` step fails if the maximum of
@@ -907,6 +948,8 @@ pub(crate) const KNOWN_SITES: &[&str] = &[
     "first_msg decrypt",
     "first_msg checks",
     "opk delete",
+    // SecMP-STORE (`secmp_store::wrap`, ADR-053 item 2)
+    "wrap: open",
     // the Output claim of `x25519_zero_check`
     "§3/§6.4 all-zero check of the output (passes: not a reject target)",
 ];
@@ -2047,6 +2090,24 @@ pub(crate) const DISPATCH_TWINS: &[(&str, &str)] = &[
     // TEST-SPEC-M7 G7-07
     ("dispatch-harness", "harness"),
 ];
+
+/// TEST-SPEC-M7 CT-05 (Q121; ADR-042 Amendment 6): `CT_TARGETS` is the M6 list and `store_unlock_reject` (27 names),
+/// `CT_TARGET_SITES` binds 12 targets, among them `store_unlock_reject` to `wrap: open`, which `KNOWN_SITES` holds; the
+/// informative post-KDF target (Q140) is no gated target.
+#[cfg(test)]
+#[test]
+fn ct_targets_m7() {
+    assert_eq!(CT_TARGETS_M6.len(), 26);
+    assert_eq!(CT_TARGETS.get(..26), Some(CT_TARGETS_M6));
+    assert_eq!(CT_TARGETS.len(), 27);
+    assert_eq!(CT_TARGETS.last(), Some(&"store_unlock_reject"));
+    assert_eq!(CT_TARGET_SITES.len(), 12);
+    assert!(CT_TARGET_SITES.contains(&("store_unlock_reject", "wrap: open")));
+    assert!(KNOWN_SITES.contains(&"wrap: open"));
+    assert!(CT_INFORMATIVE_TARGETS.contains(&"store_unwrap_reject_post_kdf"));
+    assert!(!CT_TARGETS.contains(&"store_unwrap_reject_post_kdf"));
+    assert_eq!(CT_STORE_SAMPLES, 100_000);
+}
 
 /// TEST-SPEC-M7 G7-01 (ADR-055, OPEN-M7-03 A, Q129): the allowlist rows of the dependency set of M7 — `secmp-store` is
 /// {`rusqlite`, `secmp-crypto`, `secmp-proto`}, `secmp-crypto` its normal dependencies + `argon2` — in the order of this

@@ -388,6 +388,17 @@ Reviewer decision (WEISUNG M6-CI-13, engineering delegation 30.09.2026):
 Evidence: `docs/reviews/M06-evidence/ct-nonce-M6-CI-13.md`, which holds the condensed CT-DIAG tables and the local verification of the new fixture under the repeat mode.
 Amended 2026-10-17 — Accepted (Reviewer, Owner-Delegation 30.09., 2026-10-17).
 
+**Amendment 6 (2026-10-29; WEISUNG M7-A4 §4; TEST-SPEC-M7 CT-01, CT-05; OPEN-M7-15 A, Q94, Q121, Q140): the store unlock target.** Gated `store_unlock_reject`: `CT_STORE_SAMPLES` = 100 000, kat Argon2 parameters (OPEN-M7-15 A, Q94); informative `store_unwrap_reject_post_kdf` (Q140): `CAEAD.Open` of one wrap under two wrong KEKs, no verdict.
+
+- **Target.** `store_unlock_reject` measures `secmp_store::wrap::open_kat` (ADR-053 item 2: the file bytes checked, Argon2id once, `CAEAD.Open` once) on one fixed `kat_small` wrap (m = 64 KiB, t = 1, p = 1), made once with a right passphrase of 24 B. Class 0 is the right passphrase with its last byte changed; class 1 is a passphrase of the same length that shares no byte with it. Both come from one common source, fresh per sample, through the same allocation sequence (`blend` under the opaque per-call mask, Amendment 4). Nothing class-dependent precedes the KDF, and no trial's position differs.
+- **Site.** Both classes are refused at `wrap: open` (`wrap::WRAP_SITE_KAT`, feature `kat`, set right before the `CAEAD.Open` of `MK_profile`). The pre-check verifies `Err(Unlock)` at that site for each class; the right passphrase opening the same wrap is its positive twin. `expect::CT_TARGET_SITES` binds the target to `wrap: open` (12 entries), and `expect::KNOWN_SITES` holds it. `gates::tests::known_sites_equal_the_product_site_tags` also walks `crates/secmp-store/src`.
+- **Lists.** `expect::CT_TARGETS` is the 26 names of the M6 close (`expect::CT_TARGETS_M6`, which `ctreport::M5_TARGETS`/`M6_TARGETS` now name) plus `store_unlock_reject` (27). `expect::CT_INFORMATIVE_TARGETS` gains `store_unwrap_reject_post_kdf` (three). The bench reads `CT_STORE_SAMPLES` from `expect.rs` and echoes it as `store_samples`; the gate checks the echo and the target's sample count.
+- **Informative target.** `store_unwrap_reject_post_kdf` (Q140 open — reviewer: which CT-01 form is gated) calls `wrap::open_with_kek_kat` on the same kind of wrap under the KEKs of the two wrong passphrases (Argon2id computed once, outside the measurement). It measures `CAEAD.Open` only, at site `wrap: open`.
+- **Argon2id.** Argon2id's data-dependent second half (RFC 9106 §3.4.1.3) is a documented property of the crate, not a leak of a SecMP construction.
+- **Unchanged.** ADR-041's criterion, its sign rule, the floor, the thresholds, the crops, the other sample counts and every control. No new control (reviewer).
+
+Status: Accepted (Reviewer, Owner-Delegation 2026-09-30).
+
 ---
 
 ### ADR-043 — Spec clarifications rev 2.4 from the M3 and M4 reviews

@@ -120,6 +120,7 @@ fn ct_check_parameters(v: &Value) -> Result<()> {
     for (key, expected) in [
         ("samples", expect::CT_SAMPLES),
         ("sas_samples", expect::CT_SAS_SAMPLES),
+        ("store_samples", expect::CT_STORE_SAMPLES),
     ] {
         if let Some(echoed) = th.get(key)
             && echoed.as_u64() != u64::try_from(expected).ok()
@@ -699,7 +700,7 @@ pub(crate) const CURRENT_TARGETS: TargetSet = TargetSet {
 /// informative target. For re-reading them with `cargo xtask ct-check --targets m5`.
 pub(crate) const M5_TARGETS: TargetSet = TargetSet {
     label: "the M5 target set",
-    names: expect::CT_TARGETS,
+    names: expect::CT_TARGETS_M6,
     batch_record: true,
     informative: &[],
 };
@@ -708,7 +709,7 @@ pub(crate) const M5_TARGETS: TargetSet = TargetSet {
 /// CT-04 added `tr_decrypt_header_contents_dependence`. For re-reading them with `cargo xtask ct-check --targets m6`.
 pub(crate) const M6_TARGETS: TargetSet = TargetSet {
     label: "the M6 target set",
-    names: expect::CT_TARGETS,
+    names: expect::CT_TARGETS_M6,
     batch_record: true,
     informative: &["tr_decrypt_nonce_dependence"],
 };
@@ -783,10 +784,10 @@ fn set_findings(report: &Value, results: &[Value], targets: TargetSet) -> Vec<St
     }
     for r in results {
         let name = text(r, "name");
-        let want = if name == "sas" {
-            expect::CT_SAS_SAMPLES
-        } else {
-            expect::CT_SAMPLES
+        let want = match name {
+            "sas" => expect::CT_SAS_SAMPLES,
+            "store_unlock_reject" => expect::CT_STORE_SAMPLES,
+            _ => expect::CT_SAMPLES,
         };
         let got = r.get("samples").and_then(Value::as_u64);
         if got != u64::try_from(want).ok() {
@@ -1316,10 +1317,10 @@ mod tests {
     /// A PASS target (t 1, Δ 0.1 tick in both measurements, A/A t 1.25).
     fn target(name: &str) -> Value {
         let control = name == expect::CT_POSITIVE_CONTROL;
-        let samples = if name == "sas" {
-            expect::CT_SAS_SAMPLES
-        } else {
-            expect::CT_SAMPLES
+        let samples = match name {
+            "sas" => expect::CT_SAS_SAMPLES,
+            "store_unlock_reject" => expect::CT_STORE_SAMPLES,
+            _ => expect::CT_SAMPLES,
         };
         serde_json::json!({"name": name, "class0": "a", "class1": "b", "samples": samples, "control": control,
             "k": 1, "requantised": false, "k_initial": 1, "calibration_median_ticks": 3000,
@@ -1338,7 +1339,8 @@ mod tests {
                 "max_batch": expect::CT_MAX_BATCH, "batch_margin": expect::CT_BATCH_MARGIN,
                 "min_realised_quanta": expect::CT_MIN_REALISED_QUANTA,
                 "effect_floor_quanta": expect::CT_EFFECT_FLOOR_QUANTA, "effect_floor_ns": expect::CT_EFFECT_FLOOR_NS,
-                "aa_max_t": expect::CT_AA_MAX_T, "samples": expect::CT_SAMPLES, "sas_samples": expect::CT_SAS_SAMPLES},
+                "aa_max_t": expect::CT_AA_MAX_T, "samples": expect::CT_SAMPLES, "sas_samples": expect::CT_SAS_SAMPLES,
+                "store_samples": expect::CT_STORE_SAMPLES},
             "sign": "t < 0: class 0 faster",
             "clock": {"timer": "rdtscp", "tick_ns": 0.5, "resolution_ns": 0.5, "q_eff_ticks": 1.0, "q_eff_ns": 0.5},
             "run_verdict": "PASS", "run_reason": null,
@@ -1452,7 +1454,8 @@ mod tests {
             expect::CT_INFORMATIVE_TARGETS,
             &[
                 "tr_decrypt_nonce_dependence",
-                "tr_decrypt_header_contents_dependence"
+                "tr_decrypt_header_contents_dependence",
+                "store_unwrap_reject_post_kdf"
             ]
         );
         assert!(
@@ -1509,16 +1512,17 @@ mod tests {
                     serde_json::json!([informative("tr_decrypt_other")]),
                 );
             },
-            "differ from [\"tr_decrypt_nonce_dependence\", \"tr_decrypt_header_contents_dependence\"]",
+            "differ from [\"tr_decrypt_nonce_dependence\", \"tr_decrypt_header_contents_dependence\", \"store_unwrap_reject_post_kdf\"]",
         )?;
         refuse(
             &|v| {
                 let entry = informative("tr_decrypt_nonce_dependence");
                 let other = informative("tr_decrypt_header_contents_dependence");
+                let store = informative("store_unwrap_reject_post_kdf");
                 set(
                     v,
                     &["informative"],
-                    serde_json::json!([entry.clone(), other, entry]),
+                    serde_json::json!([entry.clone(), other, store, entry]),
                 );
             },
             "informative targets",
@@ -1528,7 +1532,12 @@ mod tests {
                 let mut entry = informative("tr_decrypt_nonce_dependence");
                 set(&mut entry, &["verdict"], Value::from("PASS"));
                 let other = informative("tr_decrypt_header_contents_dependence");
-                set(v, &["informative"], serde_json::json!([entry, other]));
+                let store = informative("store_unwrap_reject_post_kdf");
+                set(
+                    v,
+                    &["informative"],
+                    serde_json::json!([entry, other, store]),
+                );
             },
             "not marked informative without a verdict",
         )?;
@@ -1537,15 +1546,30 @@ mod tests {
                 let entry = informative("tr_decrypt_nonce_dependence");
                 let mut other = informative("tr_decrypt_header_contents_dependence");
                 set(&mut other, &["samples"], Value::from(1000));
-                set(v, &["informative"], serde_json::json!([entry, other]));
+                let store = informative("store_unwrap_reject_post_kdf");
+                set(
+                    v,
+                    &["informative"],
+                    serde_json::json!([entry, other, store]),
+                );
             },
             "informative tr_decrypt_header_contents_dependence measured Some(1000) samples",
         )?;
         Ok(())
     }
 
-    /// ADR-042 Amendment 5, TEST-SPEC-M7 CT-04: the committed reports keep their own informative sets — none for the M5
-    /// set, the nonce target alone for the M6 set; the current set has both, and each set refuses the others' reports.
+    /// `v` as a report of the M5/M6 target set: without the M7 target `store_unlock_reject` (TEST-SPEC-M7 CT-01).
+    fn without_m7_target(v: &mut Value) {
+        if let Some(results) = v.get_mut("results").and_then(Value::as_array_mut) {
+            results
+                .retain(|r| r.get("name").and_then(Value::as_str) != Some("store_unlock_reject"));
+        }
+    }
+
+    /// ADR-042 Amendments 5 and 6, TEST-SPEC-M7 CT-04, CT-01: the committed reports keep their own target and
+    /// informative sets — the 26 targets of the M6 close and no informative target for the M5 set, the nonce target
+    /// alone for the M6 set; the current set has `store_unlock_reject` and three informative targets, and each set
+    /// refuses the others' reports.
     #[test]
     fn informative_targets_per_target_set() -> Result<()> {
         // the M5 set: no informative target, so a report without one passes, and one with it is refused
@@ -1553,21 +1577,23 @@ mod tests {
         if let Some(o) = old.as_object_mut() {
             o.remove("informative");
         }
+        without_m7_target(&mut old);
         let read = ct_table_for(&old.to_string(), M5_TARGETS)?;
         assert!(read.failed.is_empty(), "{:?}", read.failed);
         let read = ct_table_for(&report().to_string(), M5_TARGETS)?;
         assert!(
             read.failed.iter().any(|f| f.contains(
-                "informative targets [\"tr_decrypt_nonce_dependence\", \"tr_decrypt_header_contents_dependence\"] differ from []"
+                "informative targets [\"tr_decrypt_nonce_dependence\", \"tr_decrypt_header_contents_dependence\", \"store_unwrap_reject_post_kdf\"] differ from []"
             )),
             "{:?}",
             read.failed
         );
-        // the M6 set: the nonce target alone; a current report (two) is refused there, an M6 one passes
+        // the M6 set: the nonce target alone; a current report (three) is refused there, an M6 one passes
         let mut m6 = report();
         if let Some(list) = m6.get_mut("informative").and_then(Value::as_array_mut) {
             list.truncate(1);
         }
+        without_m7_target(&mut m6);
         let read = ct_table_for(&m6.to_string(), M6_TARGETS)?;
         assert!(read.failed.is_empty(), "{:?}", read.failed);
         assert!(
@@ -2247,6 +2273,7 @@ mod tests {
             ("effect_floor_ns", Value::from(20.0)),
             ("aa_max_t", Value::from(9.0)),
             ("sas_samples", Value::from(10)),
+            ("store_samples", Value::from(10)),
         ] {
             let mut v = report();
             set(&mut v, &["thresholds", key], value);
@@ -2586,7 +2613,8 @@ mod tests {
     }
 
     /// TEST-SPEC-M5 X-03: `expect::CT_TARGETS` holds the six rows of TEST-SPEC-M5 (g) — CT-01…CT-05 and the LINK
-    /// same-content control CT-06 — each once, next to the M4 set, and the bench names each. CT-06 is judged as a
+    /// same-content control CT-06 — each once, next to the M4 set and the M7 target `store_unlock_reject` (TEST-SPEC-M7
+    /// CT-01, last), and the bench names each. CT-06 is judged as a
     /// control, like `same_content_control`: PASS and a sub-floor shift pass; a FAIL in a FAIL run is refused (only
     /// `CONTROL_FAIL` is consistent), and so is a label its crops do not give; a `CONTROL_FAIL` run naming it fails with
     /// its reason alone; it is not the positive control. CT-01…CT-05 are targets: a reproduced shift at the floor is
@@ -2605,8 +2633,13 @@ mod tests {
         assert_eq!(targets.len(), expect::CT_TARGETS.len(), "a duplicate");
         assert_eq!(
             expect::CT_TARGETS.len(),
-            M4_TARGETS.names.len().saturating_add(M5.len())
+            M4_TARGETS
+                .names
+                .len()
+                .saturating_add(M5.len())
+                .saturating_add(1)
         );
+        assert_eq!(expect::CT_TARGETS.last(), Some(&"store_unlock_reject"));
         assert!(M4_TARGETS.names.iter().all(|t| targets.contains(t)));
         let bench = include_str!("../../crates/secmp-testkit/benches/ct.rs");
         for name in M5 {

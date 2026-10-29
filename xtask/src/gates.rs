@@ -9728,12 +9728,17 @@ mod tests {
     /// Output claim; a site added without its entry, or an entry no code sets, fails.
     #[test]
     fn known_sites_equal_the_product_site_tags() -> Result<()> {
-        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../crates/secmp-proto/src");
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../crates");
         let mut tags: BTreeSet<String> = BTreeSet::new();
         let mut calls = 0_usize;
-        for f in walk_files(&src, &|p: &Path| {
+        let mut files = walk_files(&root.join("secmp-proto/src"), &|p: &Path| {
             p.extension().is_some_and(|e| e == "rs") && !p.ends_with("tests.rs")
-        })? {
+        })?;
+        // TEST-SPEC-M7 CT-01: the store's unlock tag (`wrap::WRAP_SITE_KAT`)
+        files.extend(walk_files(&root.join("secmp-store/src"), &|p: &Path| {
+            p.extension().is_some_and(|e| e == "rs")
+        })?);
+        for f in files {
             let full = lf(&std::fs::read_to_string(&f)?);
             let text = full.split("#[cfg(test)]\nmod ").next().unwrap_or_default();
             for (at, _) in text.match_indices("_SITE_KAT.set(") {
@@ -11920,7 +11925,7 @@ mod tests {
             assert!(expect::CT_TARGETS.contains(target), "{target}");
             assert!(expect::KNOWN_SITES.contains(site), "{target}: {site}");
         }
-        assert_eq!(expect::CT_TARGET_SITES.len(), 11);
+        assert_eq!(expect::CT_TARGET_SITES.len(), 12);
         assert!(expect::CT_TARGET_SITES.contains(&("tr_decrypt_trial_open_position", "body MAC")));
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../docs/reviews/M04-evidence/ct-report-local-b138a2b-scale10.json");
@@ -11939,9 +11944,10 @@ mod tests {
                 Some((name.to_owned(), r.get("site")?.as_str()?.to_owned()))
             })
             .collect();
+        // the M4 report predates `tr_decrypt_trial_open_position` (M5) and `store_unlock_reject` (M7)
         let bound: BTreeSet<(String, String)> = expect::CT_TARGET_SITES
             .iter()
-            .filter(|(t, _)| *t != "tr_decrypt_trial_open_position")
+            .filter(|(t, _)| *t != "tr_decrypt_trial_open_position" && *t != "store_unlock_reject")
             .map(|(t, s)| ((*t).to_owned(), (*s).to_owned()))
             .collect();
         assert_eq!(claimed, bound);
@@ -12019,8 +12025,9 @@ mod tests {
     }
 
     /// CT-00 (TEST-SPEC-M6 (j)): M6 adds no ct target. `expect::CT_TARGETS` is the list of the M5 close (BASE `6300b65`, 26 names,
-    /// compared with `git show 6300b65:xtask/src/expect.rs` on 2026-10-22); the ADR-042 Amendment 5 informative target is
-    /// not in it, and no name occurs twice.
+    /// compared with `git show 6300b65:xtask/src/expect.rs` on 2026-10-22) — since TEST-SPEC-M7 CT-01 its first 26 names,
+    /// followed by `store_unlock_reject` (CT-05: `expect::ct_targets_m7`); the informative targets are not in it, and no
+    /// name occurs twice.
     #[test]
     fn ct_targets_unchanged_in_m6() {
         const M5: [&str; 26] = [
@@ -12051,7 +12058,7 @@ mod tests {
             "tr_decrypt_trial_open_position",
             "link_same_content_control",
         ];
-        assert_eq!(expect::CT_TARGETS, M5.as_slice());
+        assert_eq!(expect::CT_TARGETS.get(..26), Some(M5.as_slice()));
         let unique: std::collections::BTreeSet<&&str> = expect::CT_TARGETS.iter().collect();
         assert_eq!(unique.len(), expect::CT_TARGETS.len());
         for informative in expect::CT_INFORMATIVE_TARGETS {

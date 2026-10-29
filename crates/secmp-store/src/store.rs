@@ -118,8 +118,8 @@ pub struct Store {
 /// settings of the module documentation.
 fn open_connection(path: &Path, key: Option<&DbKey>) -> Result<Connection> {
     let flags = OpenFlags::SQLITE_OPEN_READ_WRITE
-        | OpenFlags::SQLITE_OPEN_CREATE
-        | OpenFlags::SQLITE_OPEN_NO_MUTEX;
+        .union(OpenFlags::SQLITE_OPEN_CREATE)
+        .union(OpenFlags::SQLITE_OPEN_NO_MUTEX);
     #[cfg(any(test, feature = "kat"))]
     crate::kat::clear_open_steps();
     let conn = Connection::open_with_flags(path, flags).map_err(|_| Error::Unavailable)?;

@@ -31,12 +31,13 @@ impl TestKey {
         DbKey::from_bytes(TEST_KEY)
     }
 
-    /// The test key with its last bit flipped (ST-04: a key differing in one bit).
+    /// The test key with bit 1 of the last byte flipped (ST-04: a key differing in one bit; bit 1 of `0xb6` is 1, so the
+    /// flip is no `|=`).
     #[must_use]
     pub fn one_bit_off() -> DbKey {
         let mut k = TEST_KEY;
         if let Some(last) = k.last_mut() {
-            *last ^= 1;
+            *last ^= 0x02;
         }
         DbKey::from_bytes(k)
     }

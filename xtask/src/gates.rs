@@ -9862,7 +9862,7 @@ mod tests {
     /// own tests and the testkit harness (`--test-package`, feature `harness`), the first run keeps the four others with
     /// feature `kat`; `secmp-testkit`
     /// itself is never mutated (G-11); `MUTANT_EXCLUDE_FILES` holds only Kani-only files and Arti glue named in
-    /// `docs/mutants-accepted.md` §Excluded; docs/06 §4 lists the five packages.
+    /// `docs/mutants-accepted.md` §Excluded; docs/06 §4 lists the six packages.
     #[test]
     fn mutants_scope_includes_client_core_and_transport() {
         assert_eq!(

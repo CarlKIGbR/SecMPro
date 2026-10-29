@@ -240,8 +240,12 @@ pub fn child_role() -> Option<String> {
 /// environment `env`; returns whether the child exited successfully (an aborted child returns `false`).
 ///
 /// # Errors
-/// If the child cannot be started.
+/// If the child cannot be started, or this process is itself a child (`CHILD_ROLE` set): a child never starts children,
+/// so a test that misreads its role fails at once instead of re-entering itself without end.
 pub fn run_child(test: &str, role: &str, env: &[(&str, &Path)]) -> std::io::Result<bool> {
+    if std::env::var_os(CHILD_ROLE).is_some() {
+        return Err(std::io::Error::other("a child process does not start children"));
+    }
     let exe = std::env::current_exe()?;
     let mut cmd = std::process::Command::new(exe);
     cmd.args([test, "--exact", "--test-threads", "1"])

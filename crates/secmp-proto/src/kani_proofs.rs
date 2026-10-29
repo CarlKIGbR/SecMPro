@@ -312,8 +312,9 @@ fn tr_header_selection_with(k: usize) {
 }
 
 /// [`tr_header_selection_with`] for `k ≤ 2` distinct skipped header keys.
+/// Q138: the bound is `max(k_max + 2, TR_SKIPPED_KEYS + 1)` — `kani::any::<[bool; TR_SKIPPED_KEYS]>()` needs 5.
 #[kani::proof]
-#[kani::unwind(6)] // TR_SKIPPED_KEYS + 2
+#[kani::unwind(5)] // arrays of TR_SKIPPED_KEYS: floor 5
 fn tr_header_selection_k0_2() {
     let k: usize = kani::any();
     kani::assume(k <= 2);
@@ -321,18 +322,20 @@ fn tr_header_selection_k0_2() {
 }
 
 /// [`tr_header_selection_with`] for `k = 3` distinct skipped header keys (`3 ≤ k ≤ 4` alone peaked at 90.1 % of
-/// `KANI_CBMC_RSS_LIMIT_KIB`, Q135).
+/// `KANI_CBMC_RSS_LIMIT_KIB`, Q135). Q138: the bound is `k + 2`.
 #[kani::proof]
-#[kani::unwind(6)] // TR_SKIPPED_KEYS + 2
+#[kani::unwind(5)] // k + 2
 fn tr_header_selection_k3() {
     let k: usize = kani::any();
     kani::assume(k == 3);
     tr_header_selection_with(k);
 }
 
-/// [`tr_header_selection_with`] for `k = TR_SKIPPED_KEYS` distinct skipped header keys.
+/// [`tr_header_selection_with`] for `k = TR_SKIPPED_KEYS` distinct skipped header keys. Q138: the bound is `k + 2`, the
+/// original one; this harness costs what the original cost and is the documented exception above the 90 % container
+/// threshold (CI: ≤ 85.6 % for the unsplit superset, PR run 40767217812).
 #[kani::proof]
-#[kani::unwind(6)] // TR_SKIPPED_KEYS + 2
+#[kani::unwind(6)] // k + 2 (= the original bound)
 fn tr_header_selection_k4() {
     let k: usize = kani::any();
     kani::assume(k == TR_SKIPPED_KEYS);

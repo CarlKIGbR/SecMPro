@@ -333,7 +333,7 @@ fn tr_header_selection_k3() {
 
 /// [`tr_header_selection_with`] for `k = TR_SKIPPED_KEYS` distinct skipped header keys. Q138: the bound is `k + 2`, the
 /// original one; this harness costs what the original cost and is the documented exception above the 90 % container
-/// threshold (CI: ≤ 85.6 % for the unsplit superset, PR run 40767217812).
+/// threshold (exception Q138: `tr_header_selection_k4` 94.0 % container (ci-full) / 96.3 % alone; CI figure from the PR run on `92b4404` to be recorded; the RSS guard trips above 100 % (`gates.rs:2550`); K7-03b (heap-free harness) is pulled forward if CI is red or above 95 %).
 #[kani::proof]
 #[kani::unwind(6)] // k + 2 (= the original bound)
 fn tr_header_selection_k4() {

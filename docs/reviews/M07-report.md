@@ -195,19 +195,24 @@ harness `m6_activity::timing_draws_unmoved_by_one_hour_of_activity`, `m6_sched_l
 | local mutants (`mutants-a3b-core-proto-store-cdc3c0a.txt`) | first runs: core 51 caught / 18 missed / 21 unviable; proto 13 / 1 / 7; store (new code) 83 / 0 / 44; after the killers (`cdc3c0a`): core 69 / 0 / 21 / 0 timeout, proto 14 / 0 / 7 / 0, store 83 / 0 / 44 / 0 |
 | `cargo xtask ci-full --strict` at `dd92e5c` (code head `cdc3c0a`; `ci-full-a3b-dd92e5c.txt`, head on line 1, clean tree), A-3 delegations | **PASS**, 3 h 28 min: kat 99 s, harness 1053 s, perf 9 s, fuzz 4071 s (33 targets), coverage 1052 s (secmp-store 94.9 %, client-core 94.7 %, crypto 99.3 %, proto 97.6 %, relay 97.5 %, transport 89.8 %, testkit 93.6 %), miri 2342 s, kani 3642 s (51/51), proverif 142 s (`tr`), ref-vectors (12 suites, 969 cases), sbom, systemd; repro STUB; ct, mutants, proverif-link, windows-cross, windows-native DELEGATED |
 
-Kani peaks, full `kani` step of the A-3e ci-full (KiB; limit 14 160 156; the five new names first; 42 of 51 harnesses sampled — the
-other nine end before the guard's first 2-s sample):
+Kani peaks (cbmc RSS, KiB; limit 14 160 156; the five new names first). One source per column: "step c276c37" =
+`kani-m7-a3e-full-c276c37.txt`, "ci-full dd92e5c" = `ci-full-a3b-dd92e5c.txt`, "alone" = `kani-m7-a3b-split-150d997.txt` (q_frame) and
+`kani-m7-a3e-tr-8ce73d9.txt` (`tr_header_selection_*`); 42 of 51 harnesses are sampled in a step (the other nine end before the guard's
+first 2-s sample). `kani-m7-a3e-tr-8ce73d9.txt:34` keeps its historical CI sentence (not edited).
 
-| Harness | Peak | Container share | CI share | Flag |
-|---|---|---|---|---|
-| `kani_q_frame_plaintext_exact_fit_request` | ≈ 954 596 (A-3e step) | 6.7 % | — | |
-| `kani_q_frame_plaintext_exact_fit_response_fetch` | 9 007 180 | 63.6 % | — | |
-| `kani_q_frame_plaintext_exact_fit_response_fetch_multi` | ≈ 9 068 184 (A-3e step) | 64.0 % | — | |
-| `tr_header_selection_k0_2` (unwind 5) | ≈ 7 981 520 (A-3e step) | 56.4 % | — | |
-| `tr_header_selection_k3` (unwind 5) | ≈ 8 012 720 (A-3e step) | 56.6 % | — | |
-| `tr_header_selection_k4` (unwind 6) | 13 313 532 | 94.0 % | ≤ 85.6 % (superset, run 40767217812) | **exception Q138** |
-| `kani_accept_opk_delete_only_on_success` | 12 322 920 | 87.0 % | — | > 80 %, reported |
-| `request_link_get` | 9 454 808 | 66.8 % | — | |
+| Harness | step c276c37 | ci-full dd92e5c | alone | CI 92b4404 | Flag |
+|---|---|---|---|---|---|
+| `kani_q_frame_plaintext_exact_fit_request` | 954 596 (6.7 %) | 968 016 (6.8 %) | 999 464 (7.1 %) | pending (reviewer) | |
+| `kani_q_frame_plaintext_exact_fit_response_fetch` | 8 159 064 (57.6 %) | 9 007 180 (63.6 %) | 8 375 848 (59.2 %) | pending (reviewer) | |
+| `kani_q_frame_plaintext_exact_fit_response_fetch_multi` | 9 068 184 (64.0 %) | 8 645 156 (61.1 %) | 9 288 076 (65.6 %) | pending (reviewer) | |
+| `tr_header_selection_k0_2` (unwind 5) | 7 981 520 (56.4 %) | 7 786 360 (55.0 %) | 8 170 476 (57.7 %) | pending (reviewer) | |
+| `tr_header_selection_k3` (unwind 5) | 8 012 720 (56.6 %) | 7 831 784 (55.3 %) | 8 201 176 (57.9 %) | pending (reviewer) | |
+| `tr_header_selection_k4` (unwind 6) | 13 315 376 (94.0 %) | 13 313 532 (94.0 %) | 13 637 312 (96.3 %) | pending (PR run 92b4404) | **exception Q138: `tr_header_selection_k4` 94.0 % container (ci-full) / 96.3 % alone; CI figure from the PR run on `92b4404` to be recorded; the RSS guard trips above 100 % (`gates.rs:2550`); K7-03b (heap-free harness) is pulled forward if CI is red or above 95 %** |
+| `kani_accept_opk_delete_only_on_success` | 12 324 192 (87.0 %) | 12 322 920 (87.0 %) | — | pending (reviewer) | > 80 %, reported |
+| `request_link_get` | 9 437 900 (66.7 %) | 9 454 808 (66.8 %) | — | pending (reviewer) | |
+
+`ci-fast-a3c-af4e848.txt`, `gate-vet-records-a3c.txt`, `vet-m7-a3c.txt` were taken on `af4e848` (the two vet files committed in
+`af4e848` itself); the files are not edited.
 
 Kani peaks of the ci-full `kani` step (cbmc RSS, KiB; limit `KANI_CBMC_RSS_LIMIT_KIB` 14 160 156; 90 % = 12 744 140):
 
@@ -264,7 +269,7 @@ No deviation from the spec. Deviations from the weisung's wording or the TEST-SP
   already FULL in the bundled build (ST-01 not red without it).
 - **D11:** none (`cipher_memory_security` reads 1 with the early statement).
 - **D12 (Q135, Q137, Q138):** the q_frame and `tr_header_selection` splits; the bounds of Q138; `tr_header_selection_k4` the one
-  documented exception (container ≈ 94–96 %, CI ≤ 85.6 % for the unsplit superset); B row K7-03b.
+  documented exception (exception Q138: `tr_header_selection_k4` 94.0 % container (ci-full) / 96.3 % alone; CI figure from the PR run on `92b4404` to be recorded; the RSS guard trips above 100 % (`gates.rs:2550`); K7-03b (heap-free harness) is pulled forward if CI is red or above 95 %); B row K7-03b.
 - **D13:** one `ci-fast` (`ci-fast-a3b-l-675bad6.txt`, code `cdc3c0a`) stands for the four dictated runs `ci-fast-a3e-kani`,
   `ci-fast-a3b-3`, `ci-fast-a3b-4` and `ci-fast-a3b-l`: §3–§5 were committed while the full Kani step ran (Kani builds of the
   touched crates had ended, so the measured Kani tree is `c276c37`), and §6 followed; the PC-05/PC-13 numbers of §3 come from it.
@@ -272,6 +277,8 @@ No deviation from the spec. Deviations from the weisung's wording or the TEST-SP
   `secmp-client-core` has mutants, cargo-mutants builds the baseline for it alone, and it has no `harness` feature ("the package
   'secmp-client-core' does not contain this feature: harness"); client-core `kat` turns on `secmp-transport/harness` and
   `secmp-store/kat`, the testkit's `kat` includes `harness`.
+- **D15 (Q-A15):** ST-16 plaintext control (`open_unkeyed_kat`, `secure_delete = OFF` → canary present), reviewer decision.
+- **D16 (Q-A16):** ST-03 `TMP`/`TEMP`, the spill table and the Linux `st03-control` (`temp_store = FILE` → ≥ 1 fd), reviewer decision.
 - **Commit 3 subject:** first committed as `a02069b` with a different subject; amended (subject as dictated, PC-05 evidence per crash
   point) before any measurement, as `0c448f0`; nothing was measured on `a02069b`.
 

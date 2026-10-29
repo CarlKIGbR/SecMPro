@@ -84,3 +84,5 @@ PR. Runtimes: nextest on the 32-core container, 2026-10-15 (harness) and the CI 
 | `ai07_fault_paired_tokio` (AI-07, tokio driver, fault-paired) | `secmp-testkit` harness | 5 s | `MUTANT_HARNESS_SKIP_TESTS` |
 | `timing_draws_independent_of_activity` (AI-05; TEST-SPEC-M7 G7-09, split, killer: `timing_draws_unmoved_by_one_hour_of_activity` — the same scenario over 1 h with one trace, kept in the per-mutant run) | `secmp-testkit` harness | 69.5 s (C2-18c) | `MUTANT_HARNESS_SKIP_TESTS` |
 | `relay_idle_and_age_bounds_from_schedule` (G-12; TEST-SPEC-M7 G7-09, split, killer: `relay_idle_and_age_bounds_defaults` — the idle and age bounds of the relay defaults, kept in the per-mutant run) | `secmp-testkit` harness | 27 s (C2-18c) | `MUTANT_HARNESS_SKIP_TESTS` |
+| `crash_between_persist_and_send_no_key_reuse` (PC-05; TEST-SPEC-M7, A-3: 5 crash points × 20 seeds, two child processes each) | `secmp-testkit` harness | 244 s | `MUTANT_HARNESS_SKIP_TESTS` |
+| `write_amplification_measured` (PC-13; TEST-SPEC-M7, A-3: 24 h virtual over two SQLCipher profiles, one fsync per commit) | `secmp-testkit` harness | 295 s | `MUTANT_HARNESS_SKIP_TESTS` |

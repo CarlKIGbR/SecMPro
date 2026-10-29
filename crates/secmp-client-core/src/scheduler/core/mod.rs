@@ -209,6 +209,9 @@ pub struct PrepRecord {
     pub kind: u8,
     /// The queue of a send or a single fetch.
     pub queue: Option<QueueId>,
+    /// `seal_calls` right after the frame was sealed (the frame's place among the seals of the thread; TEST-SPEC-M7
+    /// PC-04 orders the decisions before and after it).
+    pub seal: u64,
 }
 
 /// What a teardown hands back to the cell source (`release`): done at once by the work-phase calls, and noted by
@@ -332,6 +335,7 @@ impl PrepLog {
             at: now,
             kind: kind.0,
             queue: kind.1,
+            seal: secmp_transport::channel::counters::seal_calls(),
         });
     }
 

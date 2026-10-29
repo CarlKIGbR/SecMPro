@@ -160,11 +160,48 @@ pub enum Output {
 pub struct SourceError;
 
 /// A cell ready for a `SEND`, with the token that ties `OK_SEND` to the message it carries.
+///
+/// Persist-before-send by construction (§7.5; TEST-SPEC-M7 PC-03): outside this crate a `PreparedCell` comes only from
+/// a conversation whose new ratchet state was committed ([`PreparedCell::committed`] is crate-private; the field
+/// `_committed` is private) — a struct literal does not compile:
+///
+/// ```compile_fail,E0451
+/// use secmp_client_core::scheduler::types::{CellToken, PreparedCell};
+/// use secmp_proto::wire::cell::Cell;
+/// fn forge(cell: Cell) -> PreparedCell {
+///     PreparedCell { cell, token: CellToken(0), _committed: unimplemented!() }
+/// }
+/// ```
+///
+/// The fake cell sources of the tests use [`PreparedCell::unpersisted_kat`] (feature `kat`).
 pub struct PreparedCell {
     /// The 4096-byte cell (a real message or a dummy, indistinguishable).
     pub cell: Cell,
     /// Its token.
     pub token: CellToken,
+    /// The proof that the state that sealed `cell` is durable.
+    _committed: Committed,
+}
+
+/// The private witness of a [`PreparedCell`]: the new ratchet state was committed before the cell was released.
+struct Committed;
+
+impl PreparedCell {
+    /// The cell of a conversation whose new ratchet state is durable (the only constructor of a shipped build).
+    pub(crate) const fn committed(cell: Cell, token: CellToken) -> Self {
+        Self {
+            cell,
+            token,
+            _committed: Committed,
+        }
+    }
+
+    /// A cell of a fake cell source, persisted nowhere (feature `kat`: the scheduler tests and the fuzz target).
+    #[cfg(feature = "kat")]
+    #[must_use]
+    pub const fn unpersisted_kat(cell: Cell, token: CellToken) -> Self {
+        Self::committed(cell, token)
+    }
 }
 
 /// Why a `SEND` did not store its cell.

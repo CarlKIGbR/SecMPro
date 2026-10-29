@@ -713,6 +713,15 @@ pub(crate) const MUTANT_HARNESS_SKIP_TESTS: &[(&str, &str)] = &[
         "relay_idle_and_age_bounds_from_schedule",
         "G-12, two 25 h runs: 27 s; short form relay_idle_and_age_bounds_defaults",
     ),
+    // TEST-SPEC-M7 A-3 (WEISUNG M7-A3 §3): the two long persistence rows, nextest on the 32-core container
+    (
+        "crash_between_persist_and_send_no_key_reuse",
+        "PC-05, 5 crash points x 20 seeds, two child processes each: 244 s",
+    ),
+    (
+        "write_amplification_measured",
+        "PC-13, 24 h virtual over two SQLCipher profiles, one fsync per commit: 295 s",
+    ),
 ];
 
 /// WEISUNG M6-B-3 §1: the long, host-independent simulations the `kat` step leaves out when it runs on Windows

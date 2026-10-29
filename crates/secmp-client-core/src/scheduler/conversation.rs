@@ -542,10 +542,7 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
                         total: planned.total,
                     },
                 );
-                Ok(PreparedCell {
-                    cell,
-                    token: CellToken(token),
-                })
+                Ok(PreparedCell::committed(cell, CellToken(token)))
             }
             Err(e) => {
                 self.restore(&planned.owner);

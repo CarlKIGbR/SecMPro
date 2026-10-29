@@ -45,10 +45,10 @@ struct Src(u64);
 impl CellSource for Src {
     fn prepare_cell(&mut self, _: QueueId, _: u64) -> Result<Option<PreparedCell>, SourceError> {
         self.0 += 1;
-        Ok(Some(PreparedCell {
-            cell: Cell::from_bytes(&[(self.0 & 0xff) as u8; 4096]).unwrap(),
-            token: CellToken(self.0),
-        }))
+        Ok(Some(PreparedCell::unpersisted_kat(
+            Cell::from_bytes(&[(self.0 & 0xff) as u8; 4096]).unwrap(),
+            CellToken(self.0),
+        )))
     }
     fn relayed(&mut self, _: QueueId, _: CellToken, _: u64) {}
     fn evicted(&mut self, _: QueueId, _: u64) {}

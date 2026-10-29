@@ -209,6 +209,9 @@ pub enum Audit {
     Prepared([u64; 3]),
     /// Frames were written: `seal_calls` at that moment.
     Wrote(u64),
+    /// A received cell was decided and its decision committed: `(queue, cell_id, seal_calls)` right after (TEST-SPEC-M7
+    /// PC-04: the acknowledgements of the frames sealed later may cover it, none sealed earlier).
+    Decided([u64; 3]),
 }
 
 /// The cell source the scheduler sees: the conversations behind a gate that can hold preparation back and audits the
@@ -277,7 +280,15 @@ impl CellSource for Gate<'_> {
         self.state.work_ms = self.state.work_ms.saturating_add(self.state.costs.receive);
         let n = self.state.delivered.entry((queue.0, cell_id)).or_insert(0);
         *n = n.saturating_add(1);
-        self.convs.deliver(queue, cell_id, cell)
+        let out = self.convs.deliver(queue, cell_id, cell);
+        if out.is_ok() {
+            self.state.audit.push(Audit::Decided([
+                u64::from(queue.0),
+                cell_id,
+                secmp_transport::channel::counters::seal_calls(),
+            ]));
+        }
+        out
     }
 }
 

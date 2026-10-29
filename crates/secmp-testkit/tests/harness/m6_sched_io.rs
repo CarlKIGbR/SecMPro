@@ -223,6 +223,7 @@ fn persist_before_send_order() {
                 assert!(seal > p[2], "sealed after persisted, written after sealed");
                 checked += 1;
             }
+            Audit::Decided(_) => {}
         }
     }
     assert!(checked > 10);
@@ -493,10 +494,10 @@ impl CellSource for Fake {
         }
         self.asked.push(q);
         self.next = self.next.saturating_add(1);
-        Ok(Some(PreparedCell {
-            cell: Cell::from_bytes(&[u8::try_from(self.next).unwrap(); 4096]).unwrap(),
-            token: CellToken(self.next),
-        }))
+        Ok(Some(PreparedCell::unpersisted_kat(
+            Cell::from_bytes(&[u8::try_from(self.next).unwrap(); 4096]).unwrap(),
+            CellToken(self.next),
+        )))
     }
     fn relayed(&mut self, _: QueueId, t: CellToken, id: u64) {
         self.calls.push(Call::Relayed(t.0, id));

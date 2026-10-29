@@ -158,3 +158,84 @@ impl Store {
         Ok(out)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::kat::{TempDir, TestKey};
+
+    type R = core::result::Result<(), Box<dyn std::error::Error>>;
+
+    /// The rows of a session as written (G7-13 extra test, store half of PC-07/PC-09): the fixed part, the skipped entries
+    /// by `ord` in order, the reassembly state and the trust; an `ord` is taken once; deleting an entry removes exactly it,
+    /// deleting a missing one fails; a second session is apart; nothing before the first fixed part.
+    #[test]
+    fn session_rows_round_trip() -> R {
+        let dir = TempDir::new("sessions")?;
+        let mut store = Store::open(dir.path(), &TestKey::db_key())?;
+        assert!(store.session_rows(7)?.is_none(), "no fixed part yet");
+        store.txn(|tx| {
+            put_fixed(tx, 7, b"fixed-1")?;
+            insert_skipped(tx, 7, 0, b"entry-0")?;
+            insert_skipped(tx, 7, 1, b"entry-1")?;
+            insert_skipped(tx, 7, 2, b"entry-2")?;
+            put_inbox(tx, 7, b"inbox")?;
+            put_trust(tx, 7, &[3])?;
+            put_fixed(tx, 8, b"other")
+        })?;
+        assert_eq!(
+            store.txn(|tx| insert_skipped(tx, 7, 1, b"again")),
+            Err(Error::Unavailable),
+            "an ord is taken once"
+        );
+        store.txn(|tx| {
+            put_fixed(tx, 7, b"fixed-2")?;
+            delete_skipped(tx, 7, 1)
+        })?;
+        assert_eq!(
+            store.txn(|tx| delete_skipped(tx, 7, 1)),
+            Err(Error::Unavailable),
+            "no such row"
+        );
+        let rows = store.session_rows(7)?.ok_or("rows")?;
+        assert_eq!(rows.fixed, b"fixed-2");
+        assert_eq!(
+            rows.skipped,
+            vec![(0, b"entry-0".to_vec()), (2, b"entry-2".to_vec())]
+        );
+        assert_eq!(rows.inbox.as_deref(), Some(b"inbox".as_slice()));
+        assert_eq!(rows.trust.as_deref(), Some([3_u8].as_slice()));
+        let other = store.session_rows(8)?.ok_or("rows")?;
+        assert_eq!(other.fixed, b"other");
+        assert!(other.skipped.is_empty() && other.inbox.is_none() && other.trust.is_none());
+        Ok(())
+    }
+
+    /// The delivered history of a session (G7-13 extra test, store half of PC-05): ids in delivery order, a message
+    /// delivered again is kept once, a view-once is never written (`Unsupported`), another contact's are apart.
+    #[test]
+    fn delivered_history_dedups() -> R {
+        let dir = TempDir::new("delivered")?;
+        let mut store = Store::open(dir.path(), &TestKey::db_key())?;
+        store.txn(|tx| {
+            insert_delivered(tx, 1, &[2; 16], 1, b"two")?;
+            insert_delivered(tx, 1, &[1; 16], 1, b"one")?;
+            insert_delivered(tx, 1, &[2; 16], 1, b"two again")?;
+            insert_delivered(tx, 9, &[5; 16], 1, b"other")
+        })?;
+        assert_eq!(
+            store.txn(|tx| insert_delivered(
+                tx,
+                1,
+                &[4; 16],
+                crate::messages::KIND_VIEW_ONCE,
+                b"vo"
+            )),
+            Err(Error::Unsupported)
+        );
+        assert_eq!(store.delivered_ids(1)?, vec![[2; 16], [1; 16]]);
+        assert_eq!(store.delivered_ids(9)?, vec![[5; 16]]);
+        assert!(store.delivered_ids(3)?.is_empty());
+        Ok(())
+    }
+}

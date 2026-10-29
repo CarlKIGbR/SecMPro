@@ -236,7 +236,7 @@ impl Store {
             (result, statements)
         };
         #[cfg(any(test, feature = "kat"))]
-        crate::kat::transaction_ended(statements, result.is_ok());
+        crate::kat::transaction_ended(result.is_ok());
         let _ = statements;
         #[cfg(any(test, feature = "kat"))]
         if result.is_ok() {
@@ -472,6 +472,207 @@ mod tests {
         );
         assert_eq!(secmp_crypto::sha256(&[&std::fs::read(&db)?]), before);
         assert!(Store::open(dir.path(), &TestKey::db_key()).is_ok());
+        Ok(())
+    }
+    /// G7-13 extra test: `PRAGMA key` gets the raw key as `x'<64 lowercase hex>'`, high nibble first, every digit
+    /// value; the one-bit-off key of ST-04 differs from the test key in exactly one bit.
+    #[test]
+    fn raw_key_pragma_value() -> R {
+        let mut bytes = [0_u8; 32];
+        for (i, b) in bytes.iter_mut().enumerate() {
+            *b = u8::try_from(i.wrapping_mul(0x11).wrapping_add(0x0f) & 0xff)?;
+        }
+        let want = bytes.iter().fold(String::new(), |mut s, b| {
+            use std::fmt::Write as _;
+            let _ = write!(s, "{b:02x}");
+            s
+        });
+        assert_eq!(
+            *DbKey::from_bytes(bytes).pragma_value(),
+            format!("x'{want}'")
+        );
+        assert_eq!(
+            *DbKey::from_bytes([0xa5; 32]).pragma_value(),
+            format!("x'{}'", "a5".repeat(32))
+        );
+        let (a, b) = (TestKey::db_key(), TestKey::one_bit_off());
+        let bits: u32 =
+            a.0.iter()
+                .zip(b.0.iter())
+                .map(|(x, y)| (x ^ y).count_ones())
+                .sum();
+        assert_eq!(bits, 1);
+        Ok(())
+    }
+
+    /// A row of `t` in `store`.
+    fn count(store: &Store) -> rusqlite::Result<i64> {
+        store.connection_kat().query_row(
+            "SELECT count(*) FROM settings WHERE key LIKE 'crash-%'",
+            [],
+            |r| r.get(0),
+        )
+    }
+
+    /// One write of the crash test (`key` = `crash-<n>`).
+    fn put(tx: &mut Tx<'_>, n: u32) -> Result<()> {
+        tx.exec(
+            "INSERT INTO settings (key, value) VALUES (?1, x'00')",
+            rusqlite::params![format!("crash-{n}")],
+        )?;
+        Ok(())
+    }
+
+    /// The child of [`crash_points_fire_where_armed`]: the scenario `role`, then a mark file (reached only without an
+    /// abort).
+    fn crash_child(role: &str, dir: &Path) -> R {
+        use crate::kat::{CrashAt, arm_crash};
+        let mut store = Store::open(dir, &TestKey::db_key())?;
+        match role {
+            // MidTxn(0) is no point: an empty transaction and a one-statement one run to the end
+            "mid0" => {
+                arm_crash(CrashAt::MidTxn(0), 1);
+                store.txn(|_| Ok(()))?;
+                store.txn(|tx| put(tx, 1))?;
+            }
+            // after the first of two statements
+            "midfirst" => {
+                arm_crash(CrashAt::MidTxn(1), 1);
+                store.txn(|tx| {
+                    put(tx, 1)?;
+                    put(tx, 2)
+                })?;
+            }
+            // after the last statement: before the commit point
+            "midlast" => {
+                arm_crash(CrashAt::MidTxn(1), 1);
+                store.txn(|tx| put(tx, 1))?;
+            }
+            // a transaction that fails after its statement does not reach the commit point (no crash there)
+            "midfail" => {
+                arm_crash(CrashAt::MidTxn(1), 1);
+                let failed: Result<()> = store.txn(|tx| {
+                    put(tx, 1)?;
+                    Err(Error::Unavailable)
+                });
+                assert_eq!(failed, Err(Error::Unavailable));
+            }
+            // the second occurrence: the first transaction commits
+            "nth2" => {
+                arm_crash(CrashAt::MidTxn(1), 2);
+                store.txn(|tx| put(tx, 1))?;
+                store.txn(|tx| put(tx, 2))?;
+            }
+            // another point armed: none of the store's fires
+            _ => {
+                arm_crash(CrashAt::AfterCommitBeforeAck, 1);
+                store.txn(|tx| put(tx, 1))?;
+                crate::kat::crash_point(CrashAt::AfterCommitBeforeWrite);
+            }
+        }
+        std::fs::write(dir.join("mark"), b"ran to the end")?;
+        Ok(())
+    }
+
+    /// G7-13 extra test (the `kat` crash points of the Conventions; PC-09's `MidTxn(k)` after the last statement): in a
+    /// child, `MidTxn(k)` aborts after statement k — also after the last one, before the commit point — at its armed
+    /// occurrence; `MidTxn(0)`, a failed transaction and another point never abort. After reopen exactly the committed
+    /// rows are there.
+    #[test]
+    fn crash_points_fire_where_armed() -> R {
+        if let Some(role) = crate::kat::child_role() {
+            let dir = std::env::var_os("SECMP_STORE_DIR").ok_or("no dir")?;
+            return crash_child(&role, Path::new(&dir));
+        }
+        for (role, aborts, rows) in [
+            ("mid0", false, 1),
+            ("midfirst", true, 0),
+            ("midlast", true, 0),
+            ("midfail", false, 0),
+            ("nth2", true, 1),
+            ("other", false, 1),
+        ] {
+            let root = TempDir::new("crash")?;
+            let ok = crate::kat::run_child(
+                "store::tests::crash_points_fire_where_armed",
+                role,
+                &[("SECMP_STORE_DIR", root.path())],
+            )?;
+            assert_eq!(!ok, aborts, "{role}: aborted");
+            assert_eq!(
+                root.path().join("mark").exists(),
+                !aborts,
+                "{role}: ran to the end"
+            );
+            let store = Store::open(root.path(), &TestKey::db_key())?;
+            assert_eq!(count(&store)?, rows, "{role}: rows after reopen");
+        }
+        Ok(())
+    }
+
+    /// G7-13 extra test (PC-13's counters): with `measure_writes` on at open, each committed transaction adds the log
+    /// bytes it appended — at least one page frame — and counts one commit; a failed one adds neither; with it off at
+    /// open nothing is measured.
+    #[test]
+    fn write_measurement_counts_committed_log_bytes() -> R {
+        use crate::kat::{measure_writes, reset_counters, store_bytes_written, store_txn_commits};
+        let dir = TempDir::new("measure")?;
+        measure_writes(true);
+        reset_counters();
+        let mut store = Store::open(dir.path(), &TestKey::db_key())?;
+        let (b0, c0) = (store_bytes_written(), store_txn_commits());
+        store.txn(|tx| put(tx, 1))?;
+        let (b1, c1) = (store_bytes_written(), store_txn_commits());
+        assert_eq!(c1.saturating_sub(c0), 1);
+        assert!(b1.saturating_sub(b0) >= 4_096 + 24, "{b0} → {b1}");
+        let _ = store.txn(|tx| {
+            put(tx, 2)?;
+            Err::<(), _>(Error::Unavailable)
+        });
+        assert_eq!((store_bytes_written(), store_txn_commits()), (b1, c1));
+        store.txn(|tx| put(tx, 3))?;
+        let b3 = store_bytes_written();
+        assert!(b3.saturating_sub(b1) >= 4_096 + 24);
+        let wal = std::fs::metadata(dir.path().join("profile.db-wal"))?.len();
+        assert!(
+            b3 <= wal,
+            "the measured bytes are in the log ({b3} of {wal})"
+        );
+        drop(store);
+        measure_writes(false);
+        reset_counters();
+        let other = TempDir::new("measure-off")?;
+        let mut store = Store::open(other.path(), &TestKey::db_key())?;
+        let c = store_txn_commits();
+        store.txn(|tx| put(tx, 1))?;
+        assert_eq!(store_bytes_written(), 0, "not measured");
+        assert_eq!(
+            store_txn_commits().saturating_sub(c),
+            1,
+            "commits are always counted"
+        );
+        Ok(())
+    }
+
+    /// G7-13 extra test: `Tx::query_row` returns the row, `None` without one, and an error for a bad statement.
+    #[test]
+    fn tx_query_row_reads_inside_the_transaction() -> R {
+        let dir = TempDir::new("query")?;
+        let mut store = Store::open(dir.path(), &TestKey::db_key())?;
+        let (got, none, bad) = store.txn(|tx| {
+            put(tx, 5)?;
+            let got = tx.query_row("SELECT key FROM settings WHERE key = 'crash-5'", [], |r| {
+                r.get::<_, String>(0)
+            })?;
+            let none = tx.query_row("SELECT key FROM settings WHERE key = 'nope'", [], |r| {
+                r.get::<_, String>(0)
+            })?;
+            let bad = tx.query_row("SELECT nope FROM nowhere", [], |r| r.get::<_, String>(0));
+            Ok((got, none, bad))
+        })?;
+        assert_eq!(got.as_deref(), Some("crash-5"));
+        assert_eq!(none, None);
+        assert_eq!(bad, Err(Error::Unavailable));
         Ok(())
     }
 }

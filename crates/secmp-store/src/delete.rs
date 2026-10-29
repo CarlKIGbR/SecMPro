@@ -115,4 +115,24 @@ mod tests {
         }
         Ok(())
     }
+
+    /// G7-13 extra test: deleting a message reports whether one was there.
+    #[test]
+    fn delete_reports_presence() -> R {
+        let dir = TempDir::new("delete")?;
+        let mut store = Store::open(dir.path(), &TestKey::db_key())?;
+        assert!(!store.delete_message(1, &[9; 16])?, "nothing to delete");
+        store.insert_message(&NewMessage {
+            contact_id: 1,
+            msg_id: [9; 16],
+            direction: Direction::In,
+            kind: 1,
+            ts_ms: 1,
+            expire_after: 0,
+            payload: b"x",
+        })?;
+        assert!(store.delete_message(1, &[9; 16])?);
+        assert!(!store.delete_message(1, &[9; 16])?);
+        Ok(())
+    }
 }

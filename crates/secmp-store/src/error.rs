@@ -36,3 +36,27 @@ impl std::error::Error for Error {}
 
 /// Shorthand used throughout the crate.
 pub type Result<T> = core::result::Result<T, Error>;
+
+#[cfg(test)]
+mod tests {
+    use super::Error;
+
+    /// G7-13 extra test: each error displays its fixed text, with no detail (uniform errors, `docs/06` §2).
+    #[test]
+    fn errors_display_fixed_text() {
+        for (e, text) in [
+            (
+                Error::Unlock,
+                "secmp-store: the profile could not be unlocked",
+            ),
+            (Error::Unsupported, "secmp-store: unsupported"),
+            (
+                Error::TooNew,
+                "secmp-store: the profile is newer than this build",
+            ),
+            (Error::Unavailable, "secmp-store: the store is unavailable"),
+        ] {
+            assert_eq!(e.to_string(), text);
+        }
+    }
+}

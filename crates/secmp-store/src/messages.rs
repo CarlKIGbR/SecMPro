@@ -380,4 +380,64 @@ mod tests {
         assert!(!store.has_message(7, &id)?);
         Ok(())
     }
+
+    /// G7-13 extra test (OPEN-M7-09): `retention_days` > 0 is `Days`, 0 is `Keep`, as is no setting.
+    #[test]
+    fn retention_setting_days_or_keep() -> R {
+        let dir = TempDir::new("retention")?;
+        let store = Store::open(dir.path(), &TestKey::db_key())?;
+        assert_eq!(store.retention()?, Retention::Keep);
+        let set = |d: i64| {
+            store.connection_kat().execute(
+                "INSERT OR REPLACE INTO settings (key, value) VALUES ('retention_days', ?1)",
+                rusqlite::params![d],
+            )
+        };
+        set(7)?;
+        assert_eq!(store.retention()?, Retention::Days(7));
+        set(1)?;
+        assert_eq!(store.retention()?, Retention::Days(1));
+        set(0)?;
+        assert_eq!(store.retention()?, Retention::Keep);
+        Ok(())
+    }
+
+    /// G7-13 extra test (CS-3.4): a received and an outgoing view-once are held apart by id and direction — revealing,
+    /// holding and the outgoing payload each find only their own.
+    #[test]
+    fn view_once_lookups_by_id_and_direction() -> R {
+        let dir = TempDir::new("view-once")?;
+        let mut store = Store::open(dir.path(), &TestKey::db_key())?;
+        let (received, outgoing) = ([0x51_u8; 16], [0x52_u8; 16]);
+        store.hold_received_view_once(received, b"in");
+        store.queue_view_once(outgoing, b"out")?;
+        assert_eq!(
+            store.reveal_view_once(&outgoing, 0),
+            None,
+            "an outgoing one is not revealed"
+        );
+        assert!(!store.view_once_held(&outgoing, 0), "nor held as received");
+        assert!(!store.view_once_held(&[0x53; 16], 0));
+        assert_eq!(
+            store.outgoing_view_once(&received),
+            None,
+            "a received one is not sent"
+        );
+        assert_eq!(
+            store
+                .outgoing_view_once(&outgoing)
+                .as_deref()
+                .map(Vec::as_slice),
+            Some(b"out".as_slice())
+        );
+        assert_eq!(
+            store
+                .reveal_view_once(&received, 0)
+                .as_deref()
+                .map(Vec::as_slice),
+            Some(b"in".as_slice())
+        );
+        assert!(store.view_once_held(&received, 0));
+        Ok(())
+    }
 }

@@ -174,9 +174,9 @@ fn crash_point_mid_txn(k: u32) {
     }
 }
 
-/// Called by the executor when a transaction ends (committed or not): the failure injection is one-shot.
-pub(crate) fn transaction_ended(statements: u32, committed: bool) {
-    crash_point_mid_txn(statements);
+/// Called by the executor when a transaction ends (committed or not): the failure injection is one-shot. (`MidTxn(k)`
+/// after the last statement is the executor's point before the commit point; a transaction that failed has none.)
+pub(crate) fn transaction_ended(committed: bool) {
     FAIL.with(|c| c.set(None));
     if committed {
         TXN_COMMITS.with(|c| c.set(c.get().saturating_add(1)));
@@ -329,4 +329,62 @@ fn printable_runs(data: &[u8]) -> impl Iterator<Item = &[u8]> {
 fn substring_hit(run: &[u8], needle: &[u8], min_sub: usize) -> bool {
     let w = min_sub.min(needle.len());
     w > 0 && needle.windows(w).any(|s| contains(run, s))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    type R = core::result::Result<(), Box<dyn std::error::Error>>;
+
+    /// G7-13 extra test: a `TempDir` is removed on drop, a kept one is not.
+    #[test]
+    fn temp_dir_removed_on_drop() -> R {
+        let dir = TempDir::new("drop")?;
+        let path = dir.path().to_path_buf();
+        std::fs::write(path.join("f"), b"x")?;
+        drop(dir);
+        assert!(!path.exists());
+        let made = TempDir::new("keep")?;
+        let kept = TempDir::keep(made.path().to_path_buf());
+        drop(kept);
+        assert!(made.path().exists(), "a kept directory stays");
+        Ok(())
+    }
+
+    /// G7-13 extra test (the FO-01a scan of the Conventions): a needle found as raw bytes; a substring of `min_sub`
+    /// bytes inside a printable run of at least 4 bytes; none in a run of 3, in non-printable surroundings or below
+    /// `min_sub`; an empty needle never.
+    #[test]
+    fn scan_finds_raw_and_printable_substrings() -> R {
+        let dir = TempDir::new("scan")?;
+        std::fs::write(dir.path().join("raw"), b"\x00\x01NEEDLE-123\x02")?;
+        std::fs::write(dir.path().join("strings"), b"\x00xyNEEDLzw\x01")?;
+        std::fs::write(dir.path().join("short"), b"\x00EDL\x01")?;
+        std::fs::create_dir(dir.path().join("sub"))?;
+        std::fs::write(dir.path().join("sub/none"), b"\x00\x01\x02")?;
+        let (mut hits, files, bytes) = scan_dir(dir.path(), &[b"NEEDLE-123", b""], 5)?;
+        hits.sort_by(|a, b| a.file.cmp(&b.file));
+        assert_eq!(
+            hits,
+            vec![
+                ScanHit {
+                    file: "raw".into(),
+                    needle: 0,
+                    raw: true
+                },
+                ScanHit {
+                    file: "strings".into(),
+                    needle: 0,
+                    raw: false
+                },
+            ]
+        );
+        assert_eq!((files, bytes), (4, 13 + 11 + 5 + 3));
+        let (hits, _, _) = scan_dir(dir.path(), &[b"NEEDLE-123"], 6)?;
+        assert_eq!(hits.len(), 1, "NEEDL is 5 bytes: below min_sub 6");
+        assert!(!contains(b"abc", b""));
+        assert!(contains(b"abc", b"bc") && !contains(b"abc", b"cb"));
+        Ok(())
+    }
 }

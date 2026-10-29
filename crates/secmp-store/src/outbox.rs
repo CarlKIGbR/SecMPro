@@ -146,3 +146,80 @@ impl Store {
             .map_err(|_| Error::Unavailable)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::kat::{TempDir, TestKey};
+
+    type R = core::result::Result<(), Box<dyn std::error::Error>>;
+
+    fn row(n: u8, seq: i64, queued_ms: u64) -> OutboxRow {
+        OutboxRow {
+            msg_id: [n; 16],
+            seq,
+            kind: 1,
+            expire_after: 60,
+            payload: vec![n; 3],
+            queued_ms,
+            first_relayed_ms: None,
+            state: state::QUEUED,
+            cell_id: None,
+        }
+    }
+
+    /// The outbox rows (G7-13 extra test, store half of PC-06/PC-10/PC-11): inserted queued, read back in `seq` order with
+    /// every column; a state change sets the `cell_id`, the first relayed time is kept once set; another contact's rows
+    /// are apart; a view-once is never written; a time beyond `i64` is refused.
+    #[test]
+    fn outbox_rows_round_trip() -> R {
+        let dir = TempDir::new("outbox")?;
+        let mut store = Store::open(dir.path(), &TestKey::db_key())?;
+        store.outbox_insert(1, &row(2, 5, 1_000))?;
+        store.outbox_insert(1, &row(1, 3, 2_000))?;
+        store.outbox_insert(4, &row(9, 0, 3_000))?;
+        let mut vo = row(7, 6, 0);
+        vo.kind = crate::messages::KIND_VIEW_ONCE;
+        assert_eq!(store.outbox_insert(1, &vo), Err(Error::Unsupported));
+        assert_eq!(
+            store.outbox_insert(1, &row(8, 7, u64::MAX)),
+            Err(Error::Unavailable)
+        );
+        store.outbox_set_state(&[2; 16], state::RELAYED, Some(41), Some(5_000))?;
+        store.outbox_set_state(&[2; 16], state::QUEUED, None, Some(9_000))?;
+        store.outbox_set_state(&[1; 16], state::FAILED, None, None)?;
+        assert_eq!(
+            store.outbox_set_state(&[1; 16], state::RELAYED, Some(u64::MAX), None),
+            Err(Error::Unavailable)
+        );
+        let rows = store.outbox_rows(1)?;
+        let ids: Vec<[u8; 16]> = rows.iter().map(|r| r.msg_id).collect();
+        assert_eq!(
+            ids,
+            vec![[1; 16], [2; 16]],
+            "seq order, the view-once absent"
+        );
+        let (first, second) = (rows.first().ok_or("row")?, rows.get(1).ok_or("row")?);
+        assert_eq!(
+            (first.seq, first.kind, first.expire_after, first.queued_ms),
+            (3, 1, 60, 2_000)
+        );
+        assert_eq!(first.payload, vec![1; 3]);
+        assert_eq!(
+            (first.state, first.cell_id, first.first_relayed_ms),
+            (state::FAILED, None, None)
+        );
+        assert_eq!(
+            (second.state, second.cell_id, second.first_relayed_ms),
+            (state::QUEUED, None, Some(5_000)),
+            "requeued; its first relay kept"
+        );
+        assert_eq!(second.queued_ms, 1_000);
+        store.outbox_set_state(&[2; 16], state::RELAYED, Some(77), None)?;
+        let relayed = store.outbox_rows(1)?;
+        assert_eq!(relayed.get(1).and_then(|r| r.cell_id), Some(77));
+        assert_eq!(store.outbox_rows(4)?.len(), 1);
+        assert!(store.outbox_rows(2)?.is_empty());
+        Ok(())
+    }
+}

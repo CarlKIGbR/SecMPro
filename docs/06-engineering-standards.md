@@ -75,7 +75,7 @@ Crypto-specific rules (enforced by review checklist and, where possible, by type
 
 | Layer | Requirement |
 |---|---|
-| Unit | Every public function in `secmp-crypto`/`secmp-proto` has tests including failure paths. Coverage gate ≥ 90 % lines for those two crates, ≥ 80 % elsewhere (`cargo llvm-cov`). |
+| Unit | Every public function in `secmp-crypto`/`secmp-proto` has tests including failure paths. Coverage gate ≥ 90 % lines for `secmp-crypto`, `secmp-proto`, `secmp-client-core` and `secmp-store` (`expect::COVERAGE_STRICT`; M6 COV-01, M7 G7-14), ≥ 80 % elsewhere (`cargo llvm-cov`). |
 | Known-answer tests | Wycheproof (X25519, Ed25519, XChaCha20-Poly1305, HMAC, HKDF, ML-KEM, ML-DSA), NIST ACVP (ML-KEM, ML-DSA), RFC vectors (7748, 8032, 8439, 5869) run on **every target** (Linux x86_64, Windows x86_64 in the VM; aarch64 Linux optional). Frozen SecMP vectors in `vectors/` (spec Appendix C). |
 | Differential | ML-KEM: libcrux vs RustCrypto `ml-kem` vs `aws-lc-rs` on random inputs (encaps/decaps agree). ML-DSA: `ml-dsa` vs `aws-lc-rs`. Ed25519: dalek vs `aws-lc-rs`. |
 | Property | `proptest` for encodings (canonical), ratchet (arbitrary interleavings/out-of-order/duplicates never break or reuse keys), scheduler (traffic pattern independent of activity — a model-based test that records emitted frame sizes/times for random activity and asserts identical sequences). |

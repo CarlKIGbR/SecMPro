@@ -1704,10 +1704,17 @@ pub(crate) const SYSTEMD_UNITS: &[&str] = &[];
 pub(crate) const SYSTEMD_MAX_EXPOSURE: f64 = 2.0;
 
 /// Line-coverage thresholds in percent (docs/06 §4): `secmp-crypto` and `secmp-proto` ≥ 90, since M6 also
-/// `secmp-client-core` (the constant-rate scheduler, OPEN-M6-23, TEST-SPEC-M6 COV-01); every other shipped crate ≥ 80,
+/// `secmp-client-core` (the constant-rate scheduler, OPEN-M6-23, TEST-SPEC-M6 COV-01), since M7 `secmp-store` (the
+/// encrypted profile store, TEST-SPEC-M7 G7-14; its `kat` tests come in through `secmp-testkit/harness`); every other
+/// shipped crate ≥ 80,
 /// `secmp-transport` with its Arti glue counted (COV-02; an exclusion list needs the reviewer's written approval). `xtask`
 /// is build tooling and not measured.
-pub(crate) const COVERAGE_STRICT: &[&str] = &["secmp-crypto", "secmp-proto", "secmp-client-core"];
+pub(crate) const COVERAGE_STRICT: &[&str] = &[
+    "secmp-crypto",
+    "secmp-proto",
+    "secmp-client-core",
+    "secmp-store",
+];
 pub(crate) const COVERAGE_STRICT_MIN: f64 = 90.0;
 pub(crate) const COVERAGE_MIN: f64 = 80.0;
 
@@ -2132,6 +2139,26 @@ mod tests {
         assert!(
             decisions.contains("**ADR-047 Amendment 10 — `secmp-store` under the mutation gate.")
         );
+        Ok(())
+    }
+
+    /// TEST-SPEC-M7 G7-14: `COVERAGE_STRICT` += `secmp-store` (≥ 90 % lines); the store's `kat` feature reaches the
+    /// coverage run through `secmp-testkit/harness` (`COVERAGE_FEATURES` unchanged); docs/06 §4 names the four crates.
+    #[test]
+    fn coverage_store_90() -> crate::util::Result<()> {
+        assert_eq!(COVERAGE_STRICT.last(), Some(&"secmp-store"));
+        assert!((COVERAGE_STRICT_MIN - 90.0).abs() < f64::EPSILON);
+        assert_eq!(
+            crate::gates::COVERAGE_FEATURES,
+            "secmp-relay/kat,secmp-testkit/harness"
+        );
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let testkit = std::fs::read_to_string(root.join("crates/secmp-testkit/Cargo.toml"))?;
+        assert!(testkit.contains("    \"secmp-store/kat\",\n]\nkat = [\"harness\"]"));
+        let standards = std::fs::read_to_string(root.join("docs/06-engineering-standards.md"))?;
+        assert!(standards.contains(
+            "Coverage gate ≥ 90 % lines for `secmp-crypto`, `secmp-proto`, `secmp-client-core` and `secmp-store`"
+        ));
         Ok(())
     }
 

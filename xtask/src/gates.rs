@@ -9534,12 +9534,18 @@ mod tests {
         assert!(workflow_findings("miri-full.yml", &text).is_empty());
     }
 
-    /// TEST-SPEC-M6 COV-01 (OPEN-M6-23): `secmp-client-core` joins the 90 % crates.
+    /// TEST-SPEC-M6 COV-01 (OPEN-M6-23): `secmp-client-core` joins the 90 % crates; TEST-SPEC-M7 G7-14: so does
+    /// `secmp-store`.
     #[test]
     fn coverage_strict_includes_client_core() {
         assert_eq!(
             expect::COVERAGE_STRICT,
-            &["secmp-crypto", "secmp-proto", "secmp-client-core"]
+            &[
+                "secmp-crypto",
+                "secmp-proto",
+                "secmp-client-core",
+                "secmp-store"
+            ]
         );
         assert!((expect::COVERAGE_STRICT_MIN - 90.0).abs() < f64::EPSILON);
     }

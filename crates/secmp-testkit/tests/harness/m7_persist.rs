@@ -341,8 +341,14 @@ fn write_amplification_measured() {
     let outbox_row = one_cell_payload + 16 + 8 * 7;
     let bound = 2 * (fixed + outbox_row);
     let per_slot = bytes / slots;
+    assert!(commits >= slots, "{commits} commits for {slots} send slots");
+    assert!(
+        per_slot >= 4_096,
+        "{per_slot} bytes per slot: less than one page frame"
+    );
     let text = format!(
-        "PC-13 write amplification (24 h virtual, Strict, one contact, P = 10 s, two profiles): bytes/day = {bytes}, \
+        "PC-13 write amplification (24 h virtual, Strict, one contact, P = 10 s, two profiles): WAL bytes/day = {bytes}; \
+         db-file writes ≤ WAL bytes (automatic checkpoints off), \
          commits/day = {commits}, send slots/day = {slots}, bytes/dummy slot = {per_slot} (sender + receiver commit), \
          bound 2 × (fixed {fixed} + outbox row {outbox_row}) = {bound}"
     );

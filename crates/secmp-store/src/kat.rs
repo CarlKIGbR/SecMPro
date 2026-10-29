@@ -48,21 +48,16 @@ pub struct TempDir {
     remove: bool,
 }
 
-thread_local! {
-    static DIR_SEQ: Cell<u64> = const { Cell::new(0) };
-}
+/// The counter of [`TempDir::new`], shared by every thread of the process (V1-F15).
+static DIR_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 impl TempDir {
-    /// A new empty directory named after `label`, the process and a per-thread counter.
+    /// A new empty directory named after `label`, the process and a process-wide counter.
     ///
     /// # Errors
     /// If the directory cannot be created.
     pub fn new(label: &str) -> std::io::Result<Self> {
-        let n = DIR_SEQ.with(|c| {
-            let n = c.get();
-            c.set(n.saturating_add(1));
-            n
-        });
+        let n = DIR_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../target/secmp-store-tests")
             .join(format!("{label}-{}-{n}", std::process::id()));
@@ -448,6 +443,19 @@ mod tests {
         assert_eq!(hits.len(), 1, "NEEDL is 5 bytes: below min_sub 6");
         assert!(!contains(b"abc", b""));
         assert!(contains(b"abc", b"bc") && !contains(b"abc", b"cb"));
+        Ok(())
+    }
+
+    /// V1-F15 (extra test): two threads with the same label get different directories, both of which exist.
+    #[test]
+    fn temp_dirs_distinct_across_threads() -> R {
+        let make = || TempDir::new("same-label");
+        let a = std::thread::spawn(make);
+        let b = std::thread::spawn(make);
+        let a = a.join().map_err(|_| "thread a")??;
+        let b = b.join().map_err(|_| "thread b")??;
+        assert_ne!(a.path(), b.path());
+        assert!(a.path().exists() && b.path().exists());
         Ok(())
     }
 }

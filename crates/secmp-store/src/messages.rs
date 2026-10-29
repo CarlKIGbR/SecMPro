@@ -76,6 +76,18 @@ impl ViewOnceHolder {
     }
 }
 
+/// The `expire_at_ms` of a message stored at `ts_ms` with `expire_after` seconds (`None`: 0, never expires) — shared by
+/// the history writes of sent and of delivered messages.
+///
+/// # Errors
+/// [`Error::Unavailable`] if the time does not fit the column.
+pub fn expire_at(ts_ms: u64, expire_after: u32) -> Result<Option<i64>> {
+    if expire_after == 0 {
+        return Ok(None);
+    }
+    i64_of(ts_ms.saturating_add(u64::from(expire_after).saturating_mul(1000))).map(Some)
+}
+
 fn i64_of(v: u64) -> Result<i64> {
     i64::try_from(v).map_err(|_| Error::Unavailable)
 }
@@ -90,13 +102,7 @@ impl Store {
             return Err(Error::Unsupported);
         }
         let ts = i64_of(m.ts_ms)?;
-        let expire_at = if m.expire_after == 0 {
-            None
-        } else {
-            Some(i64_of(m.ts_ms.saturating_add(
-                u64::from(m.expire_after).saturating_mul(1000),
-            ))?)
-        };
+        let expire_at = expire_at(m.ts_ms, m.expire_after)?;
         let direction: i64 = match m.direction {
             Direction::In => 0,
             Direction::Out => 1,

@@ -148,6 +148,10 @@ impl StoreOutbox {
                             continue;
                         }
                         Err(secmp_store::Error::Unsupported) => {
+                            // a view-once stays in memory; its id is recorded so a restart reports it lost (V1-F10)
+                            if s.queue_view_once(id, &message.payload).is_err() {
+                                self.write_errors = self.write_errors.saturating_add(1);
+                            }
                             self.memory_only.insert(id);
                             continue;
                         }
@@ -332,6 +336,37 @@ mod tests {
             o.state(&once),
             Some(MsgState::Queued),
             "its first relay survived the restart"
+        );
+        Ok(())
+    }
+
+    /// V1-F10 (PC-10, kind 3): a view-once queued through the store outbox is never an outbox row; after a restart it
+    /// has no state and the store reports it lost, once.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn store_outbox_view_once_reported_lost() -> R {
+        let dir = secmp_store::kat::TempDir::new("pc10-vo").map_err(|e| e.to_string())?;
+        let id = [0x33_u8; 16];
+        {
+            let store = shared(dir.path())?;
+            let mut o = StoreOutbox::open(store, 4).map_err(|_| "open outbox")?;
+            let mut vo = message(0x33);
+            vo.kind = AppKind::ViewOnceText;
+            o.enqueue(vo, 1);
+            assert_eq!(o.state(&id), Some(MsgState::Queued), "held in memory");
+            assert_eq!(o.write_errors(), 0);
+        }
+        let store = shared(dir.path())?;
+        let o = StoreOutbox::open(Arc::clone(&store), 4).map_err(|_| "reopen outbox")?;
+        assert_eq!(o.state(&id), None, "no outbox state for the view-once");
+        let mut s = store.lock().map_err(|_| "lock")?;
+        assert_eq!(
+            s.take_view_once_lost().map_err(|e| format!("{e:?}"))?,
+            vec![id]
+        );
+        assert_eq!(
+            s.take_view_once_lost().map_err(|e| format!("{e:?}"))?,
+            Vec::<MsgId>::new()
         );
         Ok(())
     }

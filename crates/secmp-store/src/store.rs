@@ -6,7 +6,7 @@
 //! from a zeroizing buffer, [`DbKey::key_statement`]), a read of `sqlite_master` that
 //! decides the key (every failure there is the uniform [`Error::Unlock`]), the SQLCipher version check against
 //! [`SQLCIPHER_MIN`], then `journal_mode = WAL`, `temp_store = MEMORY` (no temp files, `docs/02:102`) and
-//! `secure_delete = ON` (CS-3.4). The profile directory holds `profile.db`, its `-wal` and `-shm`, and `lock`, which an
+//! `secure_delete = ON` (CS-3.4) and `synchronous = FULL` (Q-A14). The profile directory holds `profile.db`, its `-wal` and `-shm`, and `lock`, which an
 //! open store holds locked (one writer per profile).
 //!
 //! **Transactions.** Every write goes through [`Store::txn`]: one `BEGIN IMMEDIATE … COMMIT`, every statement through
@@ -164,6 +164,10 @@ fn open_connection(path: &Path, key: Option<&DbKey>) -> Result<Connection> {
     conn.pragma_update(None, "secure_delete", "ON")
         .map_err(|_| Error::Unavailable)?;
     step("secure_delete");
+    // V1-F13 (Q-A14): every commit is on disk before it returns (persist-before-send/ack)
+    conn.pragma_update(None, "synchronous", "FULL")
+        .map_err(|_| Error::Unavailable)?;
+    step("synchronous");
     #[cfg(any(test, feature = "kat"))]
     if crate::kat::measuring() {
         conn.pragma_update(None, "wal_autocheckpoint", 0)
@@ -402,6 +406,7 @@ mod tests {
         assert_eq!(pragma(&store, "temp_store")?, "2");
         assert_eq!(pragma(&store, "journal_mode")?, "wal");
         assert_eq!(pragma(&store, "secure_delete")?, "1");
+        assert_eq!(pragma(&store, "synchronous")?, "2");
         Ok(())
     }
 
@@ -525,6 +530,7 @@ mod tests {
             "journal_mode",
             "temp_store",
             "secure_delete",
+            "synchronous",
         ];
         drop(Store::open(dir.path(), &TestKey::db_key())?);
         assert_eq!(crate::kat::open_steps(), all);

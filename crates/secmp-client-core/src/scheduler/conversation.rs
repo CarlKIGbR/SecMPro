@@ -169,6 +169,8 @@ pub struct Conversation<O: Outbox, P: Persist, S: EntropySource> {
     next_token: u64,
     next_seq: u64,
     unix_base: u64,
+    /// The latest `now_ms` of a preparation (the time a delivered message is stamped with, V1-F4).
+    last_now_ms: u64,
     inbox: Inbox,
     trust: Trust,
     peer: HybridVerifyingKey,
@@ -215,6 +217,7 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
             next_token: 0,
             next_seq: 1,
             unix_base,
+            last_now_ms: 0,
             inbox: Inbox::new(),
             trust: Trust::Verified,
             peer,
@@ -518,6 +521,7 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
     }
 
     fn prepare(&mut self, now_ms: u64) -> Result<PreparedCell, SourceError> {
+        self.last_now_ms = self.last_now_ms.max(now_ms);
         self.outbox.expire(now_ms);
         if self.plan.is_empty() {
             if self.send_receipts && !self.receipts_due.is_empty() {
@@ -618,6 +622,10 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
         let mut trust = self.trust;
         let delivery = inbox.receive(opened.plaintext(), &self.peer, &mut trust);
         // the messages this cell delivers for the first time are durable with the state that consumed it
+        let received_ms = self
+            .unix_base
+            .saturating_mul(1000)
+            .saturating_add(self.last_now_ms);
         let fresh: Vec<DeliveredMessage<'_>> = match &delivery {
             Delivery::Messages(messages) => messages
                 .iter()
@@ -626,6 +634,8 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
                     msg_id: m.msg_id,
                     kind: m.kind.byte(),
                     payload: m.payload.as_slice(),
+                    expire_after: m.expire_after,
+                    received_ms,
                 })
                 .collect(),
             _ => Vec::new(),
@@ -957,6 +967,97 @@ mod tests {
         conv.persist_mut().set_failing(false);
         conv.prepare_direct(0).map_err(|_| "seal")?;
         assert_eq!(conv.message_key_digests_kat().len(), 1);
+        Ok(())
+    }
+
+    /// The `received_ms` of every delivered message a `Persist` was handed.
+    #[cfg(feature = "kat")]
+    #[derive(Default)]
+    struct Stamps(Vec<u64>);
+
+    #[cfg(feature = "kat")]
+    impl crate::scheduler::outbox::Persist for Stamps {
+        fn commit(
+            &mut self,
+            _kind: crate::scheduler::outbox::PersistKind,
+            _state: &[u8],
+        ) -> Result<(), crate::scheduler::outbox::PersistError> {
+            Ok(())
+        }
+
+        fn commit_parts(
+            &mut self,
+            _kind: crate::scheduler::outbox::PersistKind,
+            parts: &crate::scheduler::outbox::CommitParts<'_>,
+        ) -> Result<(), crate::scheduler::outbox::PersistError> {
+            self.0.extend(parts.delivered.iter().map(|m| m.received_ms));
+            Ok(())
+        }
+    }
+
+    /// V1-F4 (extra test): a delivered message carries the Unix ms of the latest slot preparation — `unix_base`·1000 +
+    /// the `now_ms` of `prepare`.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn delivered_carries_unix_ms() -> Result<(), Fail> {
+        use crate::scheduler::outbox::{MemOutbox, MemPersist, OutMessage, Outbox};
+        use crate::scheduler::types::{CellSource, QueueId};
+        use secmp_proto::tr::{Entropy as _, FixedEntropy, RatchetState};
+        use secmp_proto::wire::cell::AppKind;
+        // the two ends of one session (as `initiator_state`, with the responder kept)
+        let mut responder = FixedEntropy::new(&stream(2, 1 << 16));
+        let mut initiator = FixedEntropy::new(&stream(1, 1 << 16));
+        let spk_dh = responder.x25519().map_err(|_| "x25519")?;
+        let rpk_kem = responder.mlkem768().map_err(|_| "ml-kem")?;
+        let spk = secmp_proto::keys::X25519Pk::from_bytes(spk_dh.public_key().as_bytes())
+            .map_err(|_| "spk")?;
+        let ek = secmp_proto::keys::MlKem768Ek::from_bytes(rpk_kem.encapsulation_key().as_bytes())
+            .map_err(|_| "ek")?;
+        let sk = secmp_crypto::SecretBytes::from_slice(&[7_u8; 32]).map_err(|_| "secret")?;
+        let a_state =
+            RatchetState::init_initiator_with(&sk, &[9_u8; 32], &spk, &ek, &mut initiator)
+                .map_err(|_| "initiator")?;
+        let b_state = RatchetState::init_responder(&sk, &[9_u8; 32], spk_dh, rpk_kem)
+            .map_err(|_| "responder")?;
+        let peer = FixedEntropy::new(&stream(3, 1 << 20))
+            .hybrid_signing_key()
+            .map_err(|_| "peer key")?
+            .verifying_key();
+        let mut a = super::Conversation::new(
+            a_state,
+            MemOutbox::new(),
+            MemPersist::new(),
+            Fixed(FixedEntropy::new(&stream(4, 1 << 20))),
+            peer.clone(),
+            0,
+        );
+        a.outbox_mut().enqueue(
+            OutMessage {
+                msg_id: [5; 16],
+                kind: AppKind::Text,
+                expire_after: 0,
+                payload: secmp_crypto::Zeroizing::new(vec![1; 8]),
+            },
+            0,
+        );
+        let cell = a.prepare_direct(0).map_err(|_| "seal")?.cell;
+        let mut b = super::Conversation::new(
+            b_state,
+            MemOutbox::new(),
+            Stamps::default(),
+            Fixed(FixedEntropy::new(&stream(6, 1 << 20))),
+            peer,
+            1_700_000_000,
+        );
+        // the responder's first preparation fails (no sending chain yet) but stamps the time
+        let _ = b.prepare_direct(5_000);
+        b.bind(QueueId(2), QueueId(1));
+        let mut convs = super::Conversations::new();
+        convs.add(b);
+        convs.deliver(QueueId(1), 1, &cell).map_err(|_| "deliver")?;
+        let b = convs.get(0).ok_or("conversation")?;
+        assert_eq!(b.received().len(), 1, "the text was delivered");
+        assert_eq!(b.persist().0, vec![1_700_000_005_000]);
         Ok(())
     }
 }

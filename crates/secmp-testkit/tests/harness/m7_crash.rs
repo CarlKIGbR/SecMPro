@@ -412,6 +412,12 @@ fn run(index: u64, seed: u64) -> (usize, usize) {
             .collect();
         let r1 = lines(&dir.join(format!("received-1-{me}.txt")));
         let r2 = lines(&dir.join(format!("received-2-{me}.txt")));
+        let r1_set: BTreeSet<&String> = r1.iter().collect();
+        assert_eq!(
+            r1_set.len(),
+            r1.len(),
+            "{me}: a message delivered twice in life 1"
+        );
         let r2_set: BTreeSet<String> = r2.iter().cloned().collect();
         assert_eq!(
             r2_set.len(),

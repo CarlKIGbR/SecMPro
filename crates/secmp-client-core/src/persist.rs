@@ -221,7 +221,13 @@ impl Persist for StorePersist {
                 }
                 for m in parts.delivered {
                     match secmp_store::sessions::insert_delivered(
-                        tx, session, &m.msg_id, m.kind, m.payload,
+                        tx,
+                        session,
+                        &m.msg_id,
+                        m.kind,
+                        m.payload,
+                        m.received_ms,
+                        m.expire_after,
                     ) {
                         // a view-once is held in memory by the application, never written (CS-3.4)
                         Ok(()) | Err(secmp_store::Error::Unsupported) => {}
@@ -1020,6 +1026,45 @@ mod tests {
         let reopened = f(StorePersist::open(Arc::clone(&store), 2), "reopen")?;
         let _ = f(reopened.load_inbox_trust(), "inbox/trust")?;
         assert_eq!(secmp_store::kat::session_secret_bytes_read(), 0);
+        Ok(())
+    }
+
+    /// V1-F4 (extra test): a message delivered through `StorePersist::commit_parts` is stored with its receive time and
+    /// expires `expire_after` seconds later.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn commit_parts_delivered_message_expires() -> R {
+        use crate::scheduler::outbox::DeliveredMessage;
+        let dir = f(secmp_store::kat::TempDir::new("pc-expiry"), "dir")?;
+        let store = shared(dir.path())?;
+        let (a, _, _, _) = pair(12)?;
+        let mut pa = f(StorePersist::open(Arc::clone(&store), 6), "persist")?;
+        let ratchet = f(RatchetParts::split(&f(a.to_bytes(), "a")?), "split")?;
+        let now = 1_000_000_u64;
+        let delivered = [DeliveredMessage {
+            msg_id: [7; 16],
+            kind: 1,
+            payload: b"soon gone",
+            expire_after: 86_400,
+            received_ms: now,
+        }];
+        f(
+            pa.commit_parts(
+                PersistKind::Receive,
+                &CommitParts {
+                    ratchet: &ratchet,
+                    inbox: None,
+                    trust: None,
+                    delivered: &delivered,
+                },
+            ),
+            "commit",
+        )?;
+        let mut s = f(store.lock(), "lock")?;
+        assert_eq!(f(s.expire_messages(now + 86_400_000 - 1), "expire")?, 0);
+        assert!(f(s.has_message(6, &[7; 16]), "has")?);
+        assert_eq!(f(s.expire_messages(now + 86_400_000 + 1), "expire")?, 1);
+        assert!(!f(s.has_message(6, &[7; 16]), "has")?);
         Ok(())
     }
 }

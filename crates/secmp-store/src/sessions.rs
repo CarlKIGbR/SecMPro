@@ -91,24 +91,30 @@ pub fn put_trust(tx: &mut Tx<'_>, session: i64, trust: &[u8]) -> Result<()> {
     put(tx, session, part::TRUST, 0, trust)
 }
 
-/// Record a delivered message in the history (`INSERT OR IGNORE`: a message delivered again is kept once).
+/// Record a delivered message in the history (`INSERT OR IGNORE`: a message delivered again is kept once), received at
+/// `ts_ms` (Unix ms) and expiring `expire_after` seconds later (0: never; V1-F4).
 ///
 /// # Errors
-/// [`Error::Unsupported`] for a view-once (never written, CS-3.4); [`Error::Unavailable`] if the statement fails.
+/// [`Error::Unsupported`] for a view-once (never written, CS-3.4); [`Error::Unavailable`] if the statement fails or the
+/// time does not fit the column.
 pub fn insert_delivered(
     tx: &mut Tx<'_>,
     contact_id: i64,
     msg_id: &[u8; 16],
     kind: u8,
     payload: &[u8],
+    ts_ms: u64,
+    expire_after: u32,
 ) -> Result<()> {
     if kind == crate::messages::KIND_VIEW_ONCE {
         return Err(Error::Unsupported);
     }
+    let ts = i64::try_from(ts_ms).map_err(|_| Error::Unavailable)?;
+    let expire_at = crate::messages::expire_at(ts_ms, expire_after)?;
     tx.exec(
         "INSERT OR IGNORE INTO messages (contact_id, msg_id, direction, kind, ts_ms, expire_at_ms, payload) \
-         VALUES (?1, ?2, 0, ?3, 0, NULL, ?4)",
-        params![contact_id, msg_id.as_slice(), i64::from(kind), payload],
+         VALUES (?1, ?2, 0, ?3, ?4, ?5, ?6)",
+        params![contact_id, msg_id.as_slice(), i64::from(kind), ts, expire_at, payload],
     )?;
     Ok(())
 }
@@ -276,10 +282,10 @@ mod tests {
         let dir = TempDir::new("delivered")?;
         let mut store = Store::open(dir.path(), &TestKey::db_key())?;
         store.txn(|tx| {
-            insert_delivered(tx, 1, &[2; 16], 1, b"two")?;
-            insert_delivered(tx, 1, &[1; 16], 1, b"one")?;
-            insert_delivered(tx, 1, &[2; 16], 1, b"two again")?;
-            insert_delivered(tx, 9, &[5; 16], 1, b"other")
+            insert_delivered(tx, 1, &[2; 16], 1, b"two", 0, 0)?;
+            insert_delivered(tx, 1, &[1; 16], 1, b"one", 0, 0)?;
+            insert_delivered(tx, 1, &[2; 16], 1, b"two again", 0, 0)?;
+            insert_delivered(tx, 9, &[5; 16], 1, b"other", 0, 0)
         })?;
         assert_eq!(
             store.txn(|tx| insert_delivered(
@@ -287,7 +293,9 @@ mod tests {
                 1,
                 &[4; 16],
                 crate::messages::KIND_VIEW_ONCE,
-                b"vo"
+                b"vo",
+                0,
+                0
             )),
             Err(Error::Unsupported)
         );
@@ -339,6 +347,20 @@ mod tests {
             session_secret_bytes_read(),
             u64::try_from(fixed.len() + 3 * SKIPPED_ENTRY_LEN)?
         );
+        Ok(())
+    }
+
+    /// V1-F4 (dictated): a delivered message is stored with its receive time and its `expire_after`, and expires.
+    #[test]
+    fn delivered_message_expires() -> R {
+        let dir = TempDir::new("delivered-expiry")?;
+        let mut store = Store::open(dir.path(), &TestKey::db_key())?;
+        let now = 1_000_000_u64;
+        store.txn(|tx| insert_delivered(tx, 6, &[7; 16], 1, b"soon gone", now, 86_400))?;
+        assert_eq!(store.expire_messages(now + 86_400_000 - 1)?, 0);
+        assert!(store.has_message(6, &[7; 16])?);
+        assert_eq!(store.expire_messages(now + 86_400_000 + 1)?, 1);
+        assert!(!store.has_message(6, &[7; 16])?);
         Ok(())
     }
 }

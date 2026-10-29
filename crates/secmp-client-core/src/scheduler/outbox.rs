@@ -274,6 +274,11 @@ pub struct DeliveredMessage<'a> {
     pub kind: u8,
     /// The payload.
     pub payload: &'a [u8],
+    /// `AppMessage.expire_after` (seconds, 0: never).
+    pub expire_after: u32,
+    /// Unix ms of the latest slot preparation, ≤ one period before the fetch; before the first preparation,
+    /// `unix_base`·1000 (V1-F4).
+    pub received_ms: u64,
 }
 
 /// What one commit makes durable together, in one store transaction (OPEN-M7-14 A; PC-09): the ratchet state in its

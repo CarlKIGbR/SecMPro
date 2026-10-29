@@ -19,6 +19,11 @@ pub enum Error {
     TooNew,
     /// The store could not complete the operation (I/O, a busy profile, a failed statement): nothing was changed.
     Unavailable,
+    /// A backup export without the user's explicit confirmation (CS-3.5): the file holds the identity keys, and after a
+    /// restore every contact must be re-invited.
+    ConfirmRequired,
+    /// A backup export into a cloud-synchronised folder without `force` (CS-3.5; OPEN-M7-37 A, Q141).
+    CloudFolder,
 }
 
 impl fmt::Display for Error {
@@ -28,6 +33,11 @@ impl fmt::Display for Error {
             Self::Unsupported => "secmp-store: unsupported",
             Self::TooNew => "secmp-store: the profile is newer than this build",
             Self::Unavailable => "secmp-store: the store is unavailable",
+            Self::ConfirmRequired => {
+                "secmp-store: confirm the export: the file contains your identity keys, and after a restore every \
+                 contact must be re-invited"
+            }
+            Self::CloudFolder => "secmp-store: the export path is inside a cloud-synchronised folder",
         })
     }
 }

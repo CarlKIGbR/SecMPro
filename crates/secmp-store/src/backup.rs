@@ -23,6 +23,11 @@
 //! `bwrap` open, the body open, and the decoding of the four sections, each consuming exactly its `len`. Every failure
 //! is the one [`Error::Unlock`] (no "bad length" vs "bad tag", CLAUDE.md §4; Q125). Import writes nothing unless all of
 //! it decoded.
+//!
+//! **Export** happens only on the user's explicit request (CS-3.5: never automatic — no timer, no startup path; the one
+//! caller is the client's `Api` handler, Phase B): [`export`] refuses without `confirm` ([`Error::ConfirmRequired`],
+//! whose text is the warning the user confirms) and refuses a path inside a cloud-synchronised folder
+//! ([`Error::CloudFolder`], [`CLOUD_FOLDERS`]) unless `force`.
 
 use std::path::Path;
 
@@ -60,6 +65,75 @@ const FILE_OVERHEAD: usize = 13 + HEADER_LEN + 24 + 32 + 16;
 const _: () = assert!(BWRAP_LEN == 104 && HEADER_LEN == 154 && IDENTITY_LEN == 97);
 /// The longest local name (`docs/02:95`; ADR-053 Appendix).
 const LOCAL_NAME_MAX: usize = 64;
+
+/// The cloud-synchronised folders (OPEN-M7-37 A, Q141): an export path with a component equal to one of these,
+/// compared case-insensitively, is refused unless `force`.
+pub const CLOUD_FOLDERS: &[&str] = &[
+    "OneDrive",
+    "Dropbox",
+    "Google Drive",
+    "GoogleDrive",
+    "iCloudDrive",
+    "iCloud Drive",
+    "Mobile Documents",
+    "Nextcloud",
+    "ownCloud",
+    "pCloud",
+    "MEGA",
+    "Box",
+];
+
+/// Whether `path` lies inside a folder of [`CLOUD_FOLDERS`] (a component equal to one, case-insensitively).
+#[must_use]
+pub fn in_cloud_folder(path: &Path) -> bool {
+    path.components().any(|c| match c {
+        std::path::Component::Normal(name) => name
+            .to_str()
+            .is_some_and(|n| CLOUD_FOLDERS.iter().any(|f| f.eq_ignore_ascii_case(n))),
+        _ => false,
+    })
+}
+
+/// Write the backup file of `store` to `path` under the backup `passphrase` ([`Argon2Params::PROFILE`]), on the user's
+/// explicit request only (CS-3.5).
+///
+/// # Errors
+/// [`Error::ConfirmRequired`] without `confirm`; [`Error::CloudFolder`] for a path inside a folder of
+/// [`CLOUD_FOLDERS`] without `force` (both before any work); [`Error::Unavailable`] if the profile has no identity, a
+/// value does not fit its field, or the file cannot be written.
+pub fn export(
+    store: &Store,
+    path: &Path,
+    passphrase: &[u8],
+    confirm: bool,
+    force: bool,
+) -> Result<()> {
+    export_checked(
+        store,
+        path,
+        passphrase,
+        (confirm, force),
+        Argon2Params::PROFILE,
+    )
+}
+
+/// [`export`] with `params`: the confirmation and the cloud-folder refusal, then the file.
+fn export_checked(
+    store: &Store,
+    path: &Path,
+    passphrase: &[u8],
+    (confirm, force): (bool, bool),
+    params: Argon2Params,
+) -> Result<()> {
+    if !confirm {
+        return Err(Error::ConfirmRequired);
+    }
+    if !force && in_cloud_folder(path) {
+        return Err(Error::CloudFolder);
+    }
+    let bytes = export_bytes(store, passphrase, params)?;
+    std::fs::write(path, bytes).map_err(|_| Error::Unavailable)
+}
 
 /// A restored contact.
 pub struct BackupContact {
@@ -349,8 +423,7 @@ pub fn export_kat(
     passphrase: &[u8],
     params: Argon2Params,
 ) -> Result<()> {
-    let bytes = export_bytes(store, passphrase, params)?;
-    std::fs::write(path, bytes).map_err(|_| Error::Unavailable)
+    export_checked(store, path, passphrase, (true, true), params)
 }
 
 /// The fields of a backup file that the byte checks accepted.
@@ -1184,6 +1257,129 @@ mod tests {
                 .all(|m| m.msg_id != [0x31; 16] && m.msg_id != [0x32; 16])
         );
         assert_eq!(c.messages.len(), 2);
+        Ok(())
+    }
+
+    /// BK-06 [O-37] (CS-3.5; OPEN-M7-37 A, Q141): an export without `confirm` is `Err(ConfirmRequired)` with the
+    /// warning text, before the cloud check; a path under `…/OneDrive/…` (any case) is `Err(CloudFolder)`; the same with
+    /// `force` writes the file, which opens under the passphrase; nothing is written by a refused export.
+    #[test]
+    fn explicit_never_cloud() -> R {
+        let dir = TempDir::new("bk06")?;
+        let mut store = Store::open(&dir.path().join("profile"), &TestKey::db_key())?;
+        populate(&mut store)?;
+        let plain = dir.path().join("export");
+        let refused = export(&store, &plain, PASS, false, false).err();
+        assert_eq!(refused, Some(Error::ConfirmRequired));
+        assert_eq!(
+            refused.map(|e| e.to_string()).as_deref(),
+            Some(
+                "secmp-store: confirm the export: the file contains your identity keys, and after a restore every \
+                 contact must be re-invited"
+            )
+        );
+        let cloud = dir.path().join("OneDrive").join("Backups");
+        std::fs::create_dir_all(&cloud)?;
+        let file = cloud.join("export");
+        assert_eq!(
+            export(&store, &file, PASS, false, true),
+            Err(Error::ConfirmRequired)
+        );
+        assert_eq!(
+            export(&store, &file, PASS, true, false),
+            Err(Error::CloudFolder)
+        );
+        assert!(!plain.exists() && !file.exists(), "nothing written");
+        for f in CLOUD_FOLDERS {
+            for name in [f.to_string(), f.to_lowercase(), f.to_uppercase()] {
+                assert!(
+                    in_cloud_folder(&Path::new("/home/u").join(&name).join("x")),
+                    "{name}"
+                );
+            }
+        }
+        assert!(!in_cloud_folder(Path::new("/home/u/OneDriveX/Boxes/x")));
+        export(&store, &file, PASS, true, true)?;
+        let bytes = std::fs::read(&file)?;
+        assert_eq!(
+            bytes.get(30..42),
+            Some(Argon2Params::PROFILE.encode().as_slice())
+        );
+        assert_eq!(
+            open_export(&bytes, PASS, Argon2Params::PROFILE)?
+                .contacts
+                .len(),
+            2
+        );
+        Ok(())
+    }
+
+    /// Whether a product source line names `backup::export` (not `export_kat` or another item).
+    fn names_export(line: &str) -> bool {
+        line.contains("backup::")
+            && line.match_indices("export").any(|(at, _)| {
+                line.get(at.saturating_add(6)..)
+                    .and_then(|rest| rest.chars().next())
+                    .is_none_or(|c| !(c == '_' || c.is_ascii_alphanumeric()))
+            })
+    }
+
+    /// BK-07 [O-01] (CS-3.5: never automatic): a scan of every crate's product source (test modules excluded,
+    /// CRLF-normalised) finds no line naming `backup::export` outside the allowed set — the client's `Api` handler
+    /// (`secmp-client-core/src/api.rs`, Phase B), so no timer or startup path calls it. In A-4 there is no caller at
+    /// all; Phase B re-runs this test unchanged.
+    #[test]
+    fn never_automatic() -> R {
+        const ALLOWED: &[&str] = &["secmp-client-core/src/api.rs"];
+        assert!(names_export(
+            "let _ = secmp_store::backup::export(&s, p, b\"x\", true, false);"
+        ));
+        assert!(names_export("use secmp_store::backup::{export, import};"));
+        assert!(!names_export(
+            "secmp_store::backup::export_kat(&s, p, b\"x\", small)?;"
+        ));
+        let crates = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let mut callers = Vec::new();
+        let mut files = 0_usize;
+        let mut stack: Vec<std::path::PathBuf> = std::fs::read_dir(&crates)?
+            .map(|e| e.map(|e| e.path().join("src")))
+            .collect::<std::io::Result<_>>()?;
+        while let Some(d) = stack.pop() {
+            if !d.is_dir() {
+                continue;
+            }
+            for entry in std::fs::read_dir(&d)? {
+                let path = entry?.path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                if path.extension().is_none_or(|e| e != "rs")
+                    || path.ends_with("secmp-store/src/backup.rs")
+                {
+                    continue;
+                }
+                files = files.saturating_add(1);
+                let text = std::fs::read_to_string(&path)?.replace("\r\n", "\n");
+                let product = text
+                    .split("#[cfg(test)]\nmod tests")
+                    .next()
+                    .unwrap_or_default();
+                let rel = path
+                    .strip_prefix(&crates)?
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                if product.lines().any(names_export) {
+                    callers.push(rel);
+                }
+            }
+        }
+        assert!(files > 100, "{files} source files scanned");
+        assert!(
+            callers.iter().all(|c| ALLOWED.contains(&c.as_str())),
+            "{callers:?}"
+        );
+        assert_eq!(callers, Vec::<String>::new(), "A-4: no caller");
         Ok(())
     }
 }

@@ -1,0 +1,38 @@
+tree = 25e9f38 + the Q137 bounds of WEISUNG M7-A3d §2′.1 (unwind 4 / 5 / 6 on _k0_2 / _k3 / _k4); not committed (STOP)
+# cargo kani --package secmp-proto -Z stubbing --harness kani_proofs::<name> --exact, each alone (2026-10-29, nproc 32),
+# wrapper docs/reviews/M07-evidence/kani-one-a3b.py.txt (+ the full log kept in target/); peak = getrusage(RUSAGE_CHILDREN)
+# .ru_maxrss, one process per harness; limit 14160156 KiB, 90 % = 12744140 KiB.
+  Checking harness kani_proofs::tr_header_selection_k0_2...
+  SUMMARY:
+  ** 1 of 980 failed (979 undetermined)
+  VERIFICATION:- FAILED
+  Verification Time: 0.19504794s
+  Complete - 0 successfully verified harnesses, 1 failures, 1 total.
+  exit 1; peak 371556 KiB = 2.6 % of 14160156 KiB
+  Checking harness kani_proofs::tr_header_selection_k3...
+  SUMMARY:
+  ** 0 of 985 failed (11 unreachable)
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 77.92865s
+  Complete - 1 successfully verified harnesses, 0 failures, 1 total.
+  exit 0; peak 8204240 KiB = 57.9 % of 14160156 KiB
+  Checking harness kani_proofs::tr_header_selection_k4...
+  SUMMARY:
+  ** 0 of 985 failed (11 unreachable)
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 107.66533s
+  Complete - 1 successfully verified harnesses, 0 failures, 1 total.
+  exit 0; peak 13640532 KiB = 96.3 % of 14160156 KiB
+# the failed check of _k0_2 (unwind 4), verbatim:
+  Check 980: std::array::try_from_fn_erased::<std::ops::try_trait::NeverShortCircuit<bool>, &mut std::array::drain::Drain<'_, '_, (), {closure@std::ops::try_trait::NeverShortCircuit<bool>::wrap_mut_1<(), {closure@<bool as kani::Arbitrary>::any_array<4>::{closure#0}}>::{closure#0}}>>.unwind.0
+  	 - Status: FAILURE
+  	 - Description: "unwinding assertion loop 0"
+  	 - Location: ../../home/runner/.rustup/toolchains/nightly-2026-08-21-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/array/mod.rs:930:5 in function std::array::try_from_fn_erased::<std::ops::try_trait::NeverShortCircuit<bool>, &mut std::array::drain::Drain<'_, '_, (), {closure@std::ops::try_trait::NeverShortCircuit<bool>::wrap_mut_1<(), {closure@<bool as kani::Arbitrary>::any_array<4>::{closure#0}}>::{closure#0}}>>
+# unwinding assertions per harness (every Check whose description is "unwinding assertion …"):
+  tr_header_selection_k0_2: 1 unwinding assertions, statuses ['FAILURE'], SUCCESS 0
+  tr_header_selection_k3: 6 unwinding assertions, statuses ['SUCCESS'], SUCCESS 6
+  tr_header_selection_k4: 6 unwinding assertions, statuses ['SUCCESS'], SUCCESS 6
+# peak table:
+  tr_header_selection_k0_2  unwind 4   371556 KiB =  2.6 %  VERIFICATION:- FAILED (unwinding assertion of kani::any::<[bool; 4]>)
+  tr_header_selection_k3    unwind 5  8204240 KiB = 57.9 %  SUCCESSFUL, 6/6 unwinding assertions SUCCESS
+  tr_header_selection_k4    unwind 6 13640532 KiB = 96.3 %  SUCCESSFUL, 6/6 unwinding assertions SUCCESS — > 90 %: STOP

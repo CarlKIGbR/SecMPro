@@ -367,4 +367,19 @@ SUCCESSFUL; no bound, unwind, stub or limit changed). Not run: the full `kani` s
 remedy for `tr_header_selection` (options the weisung excludes for me: a per-harness `unwind` matching `k` + 2 — `unwind(4)` for
 `k ≤ 2` —, a smaller `TR_SKIPPED_KEYS` per harness, a limit or an exception like A-3's; or leave it unsplit with the A-3 exception).
 
+**Blocked — STOP (WEISUNG M7-A3d §2′.2: "if `_k4` (unwind 6, the original bound with k fixed) is still above 90 %, STOP with the three
+numbers").** `modell=claude-opus-5-5`. Q137 bounds applied on `25e9f38` and measured alone (`kani-m7-a3d-tr-25e9f38.txt`; the source
+change is **not committed**, the tree is the A-3c head):
+
+| Harness | unwind | Peak (KiB) | Share | Result |
+|---|---|---|---|---|
+| `tr_header_selection_k0_2` | 4 | 371 556 | 2.6 % | **VERIFICATION:- FAILED** — the unwinding assertion of `kani::any::<[bool; 4]>()` (`core::array::try_from_fn_erased`, loop 0): the arbitrary arrays `opened_all`/`found_all` are built by a loop of `TR_SKIPPED_KEYS` = 4 iterations, so every harness needs unwind ≥ 5 whatever its `k` |
+| `tr_header_selection_k3` | 5 | 8 204 240 | 57.9 % | SUCCESSFUL, 6/6 unwinding assertions SUCCESS |
+| `tr_header_selection_k4` | 6 | 13 640 532 | **96.3 %** | SUCCESSFUL, 6/6 unwinding assertions SUCCESS — over 90 % |
+
+Not run: the full `kani` step, ci-fast `-kani`, §3–§6. For the reviewer: `_k3` at unwind 5 shows that the array generation needs 5 and
+that 5 is affordable; `_k0_2` at unwind 5 is then the floor `max(k_max + 2, TR_SKIPPED_KEYS + 1)`; `_k4` needs 6 (its loops over
+`opened` run 4 times + exit), and at the original bound it is the original's cost (96–97 %). A remedy for `_k4` needs a decision outside
+Q137 (e.g. arrays of length `k` per harness instead of `TR_SKIPPED_KEYS`, an exception like A-3's, or the limit).
+
 **Correction (A-3 §0.1).** The age of `argon2` 0.6.0 (published 2026-08-27) was given as 60 days in A0 and A-2; it is 61 days on 2026-10-27 and 62 days on 2026-10-28 (`cooldown-m7-a3.txt`). The vet closure grew by five crates, not four (`vet-suggest-m7-a3.txt`).

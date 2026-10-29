@@ -49,7 +49,7 @@ mod tr_kdf;
 mod vector_stream;
 mod x25519;
 
-pub use crate::argon2::{argon2id, argon2id_with_secret_and_ad};
+pub use crate::argon2::{argon2id, argon2id_locked, argon2id_with_secret_and_ad};
 pub use aead::Aead;
 pub use caead::{AEAD_TAG_LEN, COM_LEN, Caead, NONCE_LEN};
 #[cfg(feature = "kat")]
@@ -68,7 +68,7 @@ pub use hybrid_kem::{
 pub use hybrid_sign::{HYBRID_SIG_LEN, HybridSignature, HybridSigningKey, HybridVerifyingKey};
 #[cfg(feature = "kat")]
 pub use kdf::hkdf_kat;
-pub use kdf::{HKDF_MAX_LEN, hkdf, hkdf_expand};
+pub use kdf::{HKDF_MAX_LEN, hkdf, hkdf_expand, hkdf_locked};
 pub use label::Label;
 pub use mac::{MAC_LEN, hkdf_extract, hmac_sha256, hmac_sha256_verify};
 pub use mldsa::{

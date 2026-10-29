@@ -4,14 +4,15 @@
 //! [`SecretBytes`]; every failure of the underlying crate — an out-of-range parameter, a salt that is too short or too
 //! long, an oversized secret or associated datum — is the one uniform [`Error::Rejected`] (CLAUDE.md §4).
 //!
-//! The working memory (`m_kib` KiB) is allocated zeroed and freed by the `argon2` crate; the block matrix is not zeroized
-//! on drop (the crate zeroizes the initial hash and, in `finalize`, `blockhash`/`blockhash_bytes`), a property recorded with
-//! the vet record of `argon2` (ADR-051 Am. 7).
+//! The working memory (`m_kib` KiB, the block matrix) is allocated here as a `Zeroizing<Vec<argon2::Block>>` and handed to
+//! `Argon2::hash_password_into_with_memory`, so it is zeroized on drop (A-4 F3); the crate itself zeroizes the initial hash
+//! and, in `finalize`, `blockhash`/`blockhash_bytes`.
 
-use ::argon2::{Algorithm, Argon2, AssociatedData, ParamsBuilder, Version};
+use ::argon2::{Algorithm, Argon2, AssociatedData, Block, ParamsBuilder, Version};
+use zeroize::Zeroizing;
 
 use crate::error::{Error, Result};
-use crate::secret::SecretBytes;
+use crate::secret::{LockedSecret, SecretBytes};
 
 /// Argon2id v0x13 with no secret and no associated data: `Argon2id(P = password, S = salt, p, T = L, m = m_kib KiB,
 /// t, v = 0x13)` (RFC 9106 §3.1).
@@ -45,6 +46,29 @@ pub fn argon2id_with_secret_and_ad<const L: usize>(
     derive::<L>(password, salt, m_kib, t, p, secret, ad)
 }
 
+/// [`argon2id`] with the output in a locked page (CS-2.2): the same bytes.
+///
+/// # Errors
+/// As [`argon2id`]; [`Error::Unavailable`] if locked memory is unavailable.
+pub fn argon2id_locked<const L: usize>(
+    password: &[u8],
+    salt: &[u8],
+    m_kib: u32,
+    t: u32,
+    p: u32,
+) -> Result<LockedSecret<L>> {
+    let mut out = LockedSecret::<L>::zeroed()?;
+    derive_into(
+        password,
+        salt,
+        (m_kib, t, p),
+        &[],
+        &[],
+        out.expose_secret_mut(),
+    )?;
+    Ok(out)
+}
+
 fn derive<const L: usize>(
     password: &[u8],
     salt: &[u8],
@@ -54,22 +78,49 @@ fn derive<const L: usize>(
     secret: &[u8],
     ad: &[u8],
 ) -> Result<SecretBytes<L>> {
+    let mut out = SecretBytes::<L>::zero();
+    derive_into(
+        password,
+        salt,
+        (m_kib, t, p),
+        secret,
+        ad,
+        out.expose_secret_mut(),
+    )?;
+    Ok(out)
+}
+
+/// The derivation into `out`; `cost` = (`m_kib`, `t`, `p`).
+fn derive_into(
+    password: &[u8],
+    salt: &[u8],
+    cost: (u32, u32, u32),
+    secret: &[u8],
+    ad: &[u8],
+    out: &mut [u8],
+) -> Result<()> {
+    let (m_kib, t, p) = cost;
     let mut builder = ParamsBuilder::new();
-    builder.m_cost(m_kib).t_cost(t).p_cost(p).output_len(L);
+    builder
+        .m_cost(m_kib)
+        .t_cost(t)
+        .p_cost(p)
+        .output_len(out.len());
     if !ad.is_empty() {
         builder.data(AssociatedData::new(ad).map_err(|_| Error::Rejected)?);
     }
     let params = builder.build().map_err(|_| Error::Rejected)?;
+    let block_count = params.block_count();
     let ctx = if secret.is_empty() {
         Argon2::new(Algorithm::Argon2id, Version::V0x13, params)
     } else {
         Argon2::new_with_secret(secret, Algorithm::Argon2id, Version::V0x13, params)
             .map_err(|_| Error::Rejected)?
     };
-    let mut out = SecretBytes::<L>::zero();
-    ctx.hash_password_into(password, salt, out.expose_secret_mut())
-        .map_err(|_| Error::Rejected)?;
-    Ok(out)
+    // A-4 F3: the block matrix is ours, zeroized on drop
+    let mut blocks: Zeroizing<Vec<Block>> = Zeroizing::new(vec![Block::default(); block_count]);
+    ctx.hash_password_into_with_memory(password, salt, out, &mut *blocks)
+        .map_err(|_| Error::Rejected)
 }
 
 #[cfg(test)]
@@ -168,5 +219,42 @@ mod tests {
         );
         let long_ad = argon2id_with_secret_and_ad::<32>(&pw, &salt, 32, 1, 4, &[], &[0x04; 33]);
         assert_eq!(long_ad.err(), Some(Error::Rejected), "ad 33 B");
+    }
+
+    /// A-4 F3 (dictated extra test): the Argon2 block matrix is a zeroizing type and the only call into the crate is the
+    /// one that takes that matrix — `hash_password_into(` 0 times outside the tests, `hash_password_into_with_memory(`
+    /// once, in the statement after the `let` that allocates the matrix as `Zeroizing<Vec<…>>`.
+    #[test]
+    fn block_matrix_is_zeroizing() {
+        fn needs_zeroize<T: zeroize::Zeroize>() {}
+        needs_zeroize::<Vec<::argon2::Block>>();
+        let src = include_str!("argon2.rs").replace("\r\n", "\n");
+        let product = src.split("#[cfg(test)]").next().unwrap_or_default();
+        let plain = ["hash_password_into", "("].concat();
+        let with_memory = ["hash_password_into_with_memory", "("].concat();
+        assert_eq!(
+            product.matches(&plain).count(),
+            0,
+            "the call without the matrix"
+        );
+        assert_eq!(product.matches(&with_memory).count(), 1);
+        let alloc = product
+            .lines()
+            .find(|l| l.contains("let mut blocks"))
+            .unwrap_or_default();
+        assert!(alloc.contains(&["Zeroizing<", "Vec<"].concat()), "{alloc}");
+    }
+
+    /// A-4 §2 (extra test): the locked-page form returns the bytes of [`argon2id`].
+    #[test]
+    fn locked_output_equals_argon2id() -> Result<()> {
+        let plain = argon2id::<32>(b"passphrase", &[0x02; 16], 64, 1, 1)?;
+        let locked = argon2id_locked::<32>(b"passphrase", &[0x02; 16], 64, 1, 1)?;
+        assert_eq!(plain.expose_secret(), locked.expose_secret());
+        assert_eq!(
+            argon2id_locked::<32>(b"p", &[0; 4], 64, 1, 1).err(),
+            Some(Error::Rejected)
+        );
+        Ok(())
     }
 }

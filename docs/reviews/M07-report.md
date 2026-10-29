@@ -310,7 +310,7 @@ Vet: `Vetting Succeeded (241 fully audited, 2 partially audited, 322 exempted)`;
 
 **Upstream advisories (ADR-055 item 7).** SQLite 3.50.4 (CVE-2026-11822/-11824, fixed 3.53.2; CVE-2025-70873 zipfile, fixed 3.53.0), SQLCipher 4.10.0 (defensive-mode bypass in `sqlcipher_export`, fixed 4.15.0, Low), OpenSSL 3.6.3 (fixed in 3.6.4 and 3.6.5; CVE-2026-84782 DTLS High) — bundled by `libsqlite3-sys` 0.37.0 / `openssl-src` 300.6.1+3.6.3, which follow Arti's `links = "sqlite3"`; exposure as listed in the ADR (no attacker SQL, FTS5/zipfile unused, OpenSSL only through SQLCipher); mitigation row ST-20 in A-3.
 
-**Argon2 working memory.** The `argon2` crate frees the 256 MiB block matrix without zeroizing it; it zeroizes the initial hash (`src/lib.rs:390`) and, in `finalize`, `blockhash`/`blockhash_bytes` (`:572-573`); recorded in the vet notes and ADR-051 Am. 7.
+**Argon2 working memory.** The block matrix is zeroized on drop since A-4 (F3: `secmp-crypto` allocates it as `Zeroizing<Vec<argon2::Block>>` for `hash_password_into_with_memory`); the crate zeroizes the initial hash (`src/lib.rs:390`) and, in `finalize`, `blockhash`/`blockhash_bytes` (`:572-573`). `modell=claude-opus-5-5`
 
 **Kani memory.** ci-full of A-3: `kani_q_frame_plaintext_exact_fit` 95.1 % (STOP, §8), `tr_header_selection` 94.7 %,
 `kani_accept_opk_delete_only_on_success` 87.7 % of 14 160 156 KiB (A1e: 85.6 %, 94.6 %, 87.4 %); either of the first two can trip the guard

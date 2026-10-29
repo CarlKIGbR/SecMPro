@@ -107,6 +107,16 @@ impl<const N: usize> LockedSecret<N> {
         self.0.get()
     }
 
+    /// `N` zero bytes in locked memory, to be written in place by a primitive of this crate (no copy outside the page).
+    pub(crate) fn zeroed() -> Result<Self> {
+        Ok(Self(Self::page()?))
+    }
+
+    /// The secret bytes, writable (the primitives of this crate fill a fresh page in place).
+    pub(crate) fn expose_secret_mut(&mut self) -> &mut [u8; N] {
+        self.0.get_mut()
+    }
+
     /// The mechanism protecting the page (for the client's security status).
     #[must_use]
     pub fn protection(&self) -> Backend {

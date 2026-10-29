@@ -413,8 +413,11 @@ pub(crate) const TR_PERF_KINDS: &[&str] = &["chain", "step"];
 /// `link_relay_handshake`), `Link::open` (`link_frame_open`) and the D.2 frame-plaintext decoders (`q_request_decode`,
 /// `q_response_decode`); `hx_accept_structured` gains its mode 3 (M4 review R-44); M5 (Phase B) the relay's executor
 /// on structured, honestly signed command scripts (`relay_executor`, FZ-07) and a relay connection on honestly
-/// sealed arbitrary plaintexts with `LINK_PUT`/`CONT` interleavings (`relay_link_session`, FZ-08).
+/// sealed arbitrary plaintexts with `LINK_PUT`/`CONT` interleavings (`relay_link_session`, FZ-08). M7 (Phase A, TEST-SPEC-M7
+/// FZ-01, FZ-02): the backup import decoder (`backup_import`) and the record seal of a secret column
+/// (`store_record_open`).
 pub(crate) const FUZZ_TARGETS: &[&str] = &[
+    "backup_import",
     "caead_open",
     "client_pipeline_responses",
     "ed25519_verify",
@@ -444,6 +447,7 @@ pub(crate) const FUZZ_TARGETS: &[&str] = &[
     "relay_link_session",
     "relayref_onion_to_hsid",
     "scheduler_event_sequence",
+    "store_record_open",
     "tls_pin_verifier",
     "tr_decrypt",
     "tr_state",
@@ -457,14 +461,17 @@ pub(crate) const FUZZ_TARGETS: &[&str] = &[
 /// `the_rules_name_listed_targets_and_frozen_suites` fails if a listed target has both). M5 Phase B: the two relay
 /// targets (TEST-SPEC-M5 FZ-07, FZ-08) are structured — their input is a command script that the harness signs,
 /// tokens and seals (`fuzz/fuzz_targets/relay_*.rs` headers), a layout no frozen suite has — so they rely on their
-/// tracked seeds (`fuzz/corpus/relay_executor/`, `fuzz/corpus/relay_link_session/`, M4 C-6).
+/// tracked seeds (`fuzz/corpus/relay_executor/`, `fuzz/corpus/relay_link_session/`, M4 C-6). M7 Phase A: the two
+/// store targets (TEST-SPEC-M7 FZ-01, FZ-02) — no frozen store suite exists (`vectors/store.json`, OPEN-M7-38).
 #[cfg(test)]
 pub(crate) const FUZZ_TRACKED_ONLY: &[&str] = &[
+    "backup_import",
     "client_pipeline_responses",
     "relay_executor",
     "relay_link_session",
     "relayref_onion_to_hsid",
     "scheduler_event_sequence",
+    "store_record_open",
     "tls_pin_verifier",
 ];
 
@@ -543,7 +550,12 @@ pub(crate) const FUZZ_DEEP_NIGHTLY_SECONDS: u64 = 3_600;
 ///   27 (the longest command, `FETCH_MULTI` with 12 entries: opcode, `cmd_seq`, count, 12 × (key, ack)) = 4321.
 /// - `relay_link_session`: the configuration byte and at most 16 units of at most 4339 bytes (split, kind, `u16`
 ///   length, a 4335-byte plaintext) = 69425.
+/// - `backup_import` (FZ-01): mode 1 + a file of a 64 KiB body (the seed cap, ADR-052) in its 239 bytes of magic (13),
+///   header (154), `N` (24), `COM` (32) and tag (16) = 65776 (the structured mode takes 6 + body).
+/// - `store_record_open` (FZ-02): table 1 + `col_len` 1 + a column of 255 + `row_len` 1 + a row key of 255 + mode 1 +
+///   the largest record, the fixed part of `RatchetStateV1` at its maximum (38 585) sealed (+ 72) = 39171.
 pub(crate) const FUZZ_MAX_LEN: &[(&str, usize)] = &[
+    ("backup_import", 65_777),
     ("caead_open", 12_618),
     ("client_pipeline_responses", 34_702),
     ("ed25519_verify", 4_243),
@@ -572,6 +584,7 @@ pub(crate) const FUZZ_MAX_LEN: &[(&str, usize)] = &[
     ("relay_executor", 4_322),
     ("relay_link_session", 69_426),
     ("scheduler_event_sequence", 970),
+    ("store_record_open", 39_172),
     // FZ-02 (M6 Phase B): the count byte and an end-entity DER of at most 8192 B (an ML-DSA-65 certificate ≈ 5.5 KB)
     ("tls_pin_verifier", 8_194),
     // FZ-03 (M6 Phase B): a decoded onion address is exactly 35 bytes (spec §5.3)
@@ -2235,6 +2248,53 @@ mod tests {
         assert!(standards.contains(
             "Coverage gate ≥ 90 % lines for `secmp-crypto`, `secmp-proto`, `secmp-client-core` and `secmp-store`"
         ));
+        Ok(())
+    }
+
+    /// TEST-SPEC-M7 G7-15a (Q121): `FUZZ_TARGETS` += `backup_import` (FZ-01) and `store_record_open` (FZ-02), each with
+    /// its `FUZZ_MAX_LEN` and a committed corpus (`fuzz/corpus/<target>/`, seeds ≤ 64 KiB, ADR-052), tracked-only (no
+    /// frozen store suite), a `[[bin]]` of `fuzz/Cargo.toml`, and the store as the fuzz package's path dependency with
+    /// feature `kat`; 35 targets.
+    #[test]
+    fn fuzz_targets_store() -> crate::util::Result<()> {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        assert_eq!(FUZZ_TARGETS.len(), 35);
+        let manifest = std::fs::read_to_string(root.join("fuzz/Cargo.toml"))?.replace("\r\n", "\n");
+        assert!(
+            manifest.contains(
+                "secmp-store = { path = \"../crates/secmp-store\", features = [\"kat\"] }"
+            )
+        );
+        for (target, max) in [("backup_import", 65_777), ("store_record_open", 39_172)] {
+            assert!(FUZZ_TARGETS.contains(&target), "{target}");
+            assert!(FUZZ_TRACKED_ONLY.contains(&target), "{target}");
+            assert_eq!(
+                FUZZ_MAX_LEN
+                    .iter()
+                    .find(|(t, _)| *t == target)
+                    .map(|(_, n)| *n),
+                Some(max),
+                "{target}"
+            );
+            assert!(manifest.contains(&format!(
+                "[[bin]]\nname = \"{target}\"\npath = \"fuzz_targets/{target}.rs\"\ntest = false\ndoc = false\n"
+            )));
+            assert!(root.join(format!("fuzz/fuzz_targets/{target}.rs")).exists());
+            let mut seeds = 0_usize;
+            for entry in std::fs::read_dir(root.join(format!("fuzz/corpus/{target}")))? {
+                let len = entry?.metadata()?.len();
+                assert!(len <= 65_536, "{target}: a seed of {len} B");
+                seeds = seeds.saturating_add(1);
+            }
+            assert!(seeds >= 4, "{target}: {seeds} seeds");
+        }
+        let mut sorted = FUZZ_TARGETS.to_vec();
+        sorted.sort_unstable();
+        assert_eq!(sorted, FUZZ_TARGETS, "alphabetical");
+        let names: Vec<&str> = FUZZ_MAX_LEN.iter().map(|(t, _)| *t).collect();
+        let mut by_name = names.clone();
+        by_name.sort_unstable();
+        assert_eq!(by_name, sorted, "FUZZ_MAX_LEN names every target once");
         Ok(())
     }
 

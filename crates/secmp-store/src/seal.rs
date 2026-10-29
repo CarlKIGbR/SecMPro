@@ -91,6 +91,35 @@ pub(crate) fn open(
     Caead::open_locked(key, n, &ad(table, column, row_key)?, sealed).map_err(|_| Error::Unavailable)
 }
 
+/// [`seal`] under the table keys of `kat::TEST_MK` (feature `kat`: the fuzz target `store_record_open`).
+///
+/// # Errors
+/// As [`seal`].
+#[cfg(feature = "kat")]
+pub fn seal_kat(table: Table, column: &str, row_key: &[u8], record: &[u8]) -> Result<Vec<u8>> {
+    let mk =
+        LockedSecret::<32>::from_slice(&crate::kat::TEST_MK).map_err(|_| Error::Unavailable)?;
+    let keys = crate::keys::TableKeys::derive(&mk)?;
+    seal(keys.get(table), table, column, row_key, record)
+}
+
+/// [`open`] under the table keys of `kat::TEST_MK` (feature `kat`: the fuzz target `store_record_open`).
+///
+/// # Errors
+/// As [`open`].
+#[cfg(feature = "kat")]
+pub fn open_kat(
+    table: Table,
+    column: &str,
+    row_key: &[u8],
+    rec: &[u8],
+) -> Result<Zeroizing<Vec<u8>>> {
+    let mk =
+        LockedSecret::<32>::from_slice(&crate::kat::TEST_MK).map_err(|_| Error::Unavailable)?;
+    let keys = crate::keys::TableKeys::derive(&mk)?;
+    open(keys.get(table), table, column, row_key, rec)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

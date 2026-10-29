@@ -3532,6 +3532,7 @@ dependencies = [
  "secmp-crypto",
  "secmp-proto",
  "secmp-relay",
+ "secmp-store",
  "secmp-transport",
 ]
 

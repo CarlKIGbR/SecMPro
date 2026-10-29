@@ -679,6 +679,30 @@ pub fn open_export_kat(file: &[u8], passphrase: &[u8]) -> Result<Contents> {
     open_export(file, passphrase, Argon2Params::kat_small())
 }
 
+/// The file of `body` with the section table `table` under `passphrase` and the `kat` Argon2 parameters (feature `kat`:
+/// the fuzz target `backup_import` seals structured bodies, whose table it chooses, to reach the section decoders).
+///
+/// # Errors
+/// [`Error::Unavailable`] if randomness is unavailable or the table has more than 255 entries.
+#[cfg(feature = "kat")]
+pub fn seal_file_kat(passphrase: &[u8], table: &[(u8, u32)], body: &[u8]) -> Result<Vec<u8>> {
+    seal_file(passphrase, Argon2Params::kat_small(), table, body)
+}
+
+/// The body that [`Contents`] encodes to (feature `kat`: the fuzz target `backup_import` checks that an accepted body
+/// is canonical).
+///
+/// # Errors
+/// [`Error::Unavailable`] if a value does not fit its field.
+#[cfg(feature = "kat")]
+pub fn encode_body_kat(contents: &Contents) -> Result<Zeroizing<Vec<u8>>> {
+    let mut body = Zeroizing::new(Vec::new());
+    for s in &contents.encode()? {
+        body.extend_from_slice(s);
+    }
+    Ok(body)
+}
+
 /// The decrypted body of `file` (feature `kat`: BK-02 and the view-once row search it).
 ///
 /// # Errors

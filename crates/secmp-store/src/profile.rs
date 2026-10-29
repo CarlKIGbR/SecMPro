@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! The rows of the identity, the prekeys, the relays, the contacts and the invitations (`docs/02` §4.2 `:90-100`). The
-//! secret column of each (Q139: `identity.secret`, `prekeys.secret`, `relays.access_key`, `invitations.record`) is
-//! sealed per record ([`crate::seal`], ADR-053 item 5) under its row: `identity` (`id`), `prekeys` (`kind`, `id`),
-//! `relays` (`id`), `invitations` (`ld_id`). `contacts` holds public material only (the peer's `IKSPublic`, its
-//! fingerprint, names, routes, queues, state and `profile`, Q143) and lies inside the SQLCipher file only. The writes are
-//! statements of the caller's transaction ([`crate::Tx`]).
+//! The rows of the identity, the prekeys, the relays and the invitations (`docs/02` §4.2 `:90-100`; the contacts:
+//! [`crate::contacts`]). The secret column of each (Q139: `identity.secret`, `prekeys.secret`, `relays.access_key`,
+//! `invitations.record`) is sealed per record ([`crate::seal`], ADR-053 item 5) under its row: `identity` (`id`),
+//! `prekeys` (`kind`, `id`), `relays` (`id`), `invitations` (`ld_id`). The writes are statements of the caller's
+//! transaction ([`crate::Tx`]).
 
 use rusqlite::params;
 use secmp_crypto::Zeroizing;
@@ -13,28 +12,6 @@ use crate::error::{Error, Result};
 use crate::keys::Table;
 use crate::seal::{KeyPart, row_key};
 use crate::store::{Store, Tx};
-
-/// One contact row (no secret column).
-pub struct Contact<'a> {
-    /// The row id.
-    pub id: i64,
-    /// The peer's `IKSPublic`.
-    pub iks: &'a [u8],
-    /// The peer's fingerprint.
-    pub fingerprint: &'a [u8],
-    /// The local name.
-    pub display_name: Option<&'a str>,
-    /// The verified flag.
-    pub verified: bool,
-    /// The routes.
-    pub routes: Option<&'a [u8]>,
-    /// The queues.
-    pub queues: Option<&'a [u8]>,
-    /// The state.
-    pub state: i64,
-    /// The peer's profile (Q143).
-    pub profile: Option<&'a [u8]>,
-}
 
 fn i64_of(v: u64) -> Result<i64> {
     i64::try_from(v).map_err(|_| Error::Unavailable)
@@ -108,32 +85,6 @@ pub fn put_relay(
         "INSERT INTO relays (id, relay_ref, access_key) VALUES (?1, ?2, ?3) \
          ON CONFLICT (id) DO UPDATE SET relay_ref = excluded.relay_ref, access_key = excluded.access_key",
         params![id, relay_ref, sealed],
-    )?;
-    Ok(())
-}
-
-/// Write a contact row.
-///
-/// # Errors
-/// [`Error::Unavailable`] if the statement fails.
-pub fn put_contact(tx: &mut Tx<'_>, c: &Contact<'_>) -> Result<()> {
-    tx.exec(
-        "INSERT INTO contacts (id, iks, fingerprint, display_name, verified, routes, queues, state, profile) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) \
-         ON CONFLICT (id) DO UPDATE SET iks = excluded.iks, fingerprint = excluded.fingerprint, \
-         display_name = excluded.display_name, verified = excluded.verified, routes = excluded.routes, \
-         queues = excluded.queues, state = excluded.state, profile = excluded.profile",
-        params![
-            c.id,
-            c.iks,
-            c.fingerprint,
-            c.display_name,
-            i64::from(c.verified),
-            c.routes,
-            c.queues,
-            c.state,
-            c.profile
-        ],
     )?;
     Ok(())
 }
@@ -252,20 +203,6 @@ mod tests {
             insert_prekey(tx, 2, 7, b"opk seed", None)?;
             put_relay(tx, 3, b"relay", Some(b"access"))?;
             put_relay(tx, 4, b"relay without key", None)?;
-            put_contact(
-                tx,
-                &Contact {
-                    id: 1,
-                    iks: b"iks",
-                    fingerprint: b"fp",
-                    display_name: Some("Bob"),
-                    verified: true,
-                    routes: None,
-                    queues: None,
-                    state: 0,
-                    profile: Some(b"profile"),
-                },
-            )?;
             insert_invitation(tx, &[5; 16], b"invitation record", 100)
         })?;
         let read = |v: Option<Zeroizing<Vec<u8>>>| v.map(|z| z.to_vec());

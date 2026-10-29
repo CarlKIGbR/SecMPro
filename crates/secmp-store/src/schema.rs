@@ -98,10 +98,9 @@ mod tests {
     /// A populated profile (identity, three prekey generations, two contacts, two sessions, the outbox, one invitation,
     /// a relay access key); the secret columns written, with their plaintexts.
     fn populate(store: &mut Store) -> core::result::Result<Vec<Site>, Box<dyn std::error::Error>> {
+        use crate::contacts::{Contact, put_contact};
         use crate::outbox::{OutboxRow, state};
-        use crate::profile::{
-            Contact, insert_invitation, insert_prekey, put_contact, put_identity, put_relay,
-        };
+        use crate::profile::{insert_invitation, insert_prekey, put_identity, put_relay};
         use crate::sessions::{insert_skipped, put_fixed, put_inbox, put_trust};
 
         let mut want: Vec<Site> = Vec::new();

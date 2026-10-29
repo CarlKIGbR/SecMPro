@@ -81,7 +81,7 @@ impl Argon2Params {
 }
 
 /// `KEK = Argon2id(P, S = salt, params, T = 32, v = 0x13)` in a locked page (ADR-053 item 1).
-fn kek(passphrase: &[u8], salt: &[u8; 16], params: Argon2Params) -> Result<StoreKey> {
+pub(crate) fn kek(passphrase: &[u8], salt: &[u8; 16], params: Argon2Params) -> Result<StoreKey> {
     #[cfg(any(test, feature = "kat"))]
     crate::kat::note_argon2_call();
     // spec §3.4; ADR-053 item 1

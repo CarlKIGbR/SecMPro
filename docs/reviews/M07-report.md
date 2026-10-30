@@ -72,7 +72,7 @@ non-empty, the trust code when the trust changed, and the messages the cell deli
 skipped entries by key `(hk, n)` and writes fixed part, deletes, inserts, inbox, trust and history rows in one transaction.
 `StorePersist` (`persist.rs`) and `StoreOutbox` (`outbox.rs`) are top-level client-core modules under `cfg(not(kani))`.
 
-Phase A, step A-4 (WEISUNG M7-A4; `modell=claude-opus-5-5`; ADR-053 accepted, Q127a; Amendment 1 Proposed):
+Phase A, step A-4 (WEISUNG M7-A4; `modell=claude-opus-5-5`; ADR-053 accepted, Q127a; Amendment 1 accepted by the owner 2026-10-29 (Q144, commit 6ad3ec6)):
 
 | Rows | Commit | What |
 |---|---|---|
@@ -100,7 +100,7 @@ workspace builds without `kat` (`cargo build --workspace --all-targets`). The A-
 
 ## 3. Evidence per acceptance criterion
 
-Phase A, A-1 (numbers; raw files under `docs/reviews/M07-evidence/`). Phase B/C and A-2…A-4 rows: not yet built.
+Phase A, A-1 (numbers; raw files under `docs/reviews/M07-evidence/`). Phase B/C rows: not yet built; A-2…A-4 rows below.
 
 | Row | Test / command | Result |
 |---|---|---|
@@ -201,19 +201,19 @@ Phase A, A-4 (times: `ci-fast-a4-6-4383c8a.txt`; red-first lines: `redfirst-a4-1
 
 | Row | Test | Result |
 |---|---|---|
-| §1 labels | `secmp-crypto label::tests::enum_equals_appendix_a_of_the_spec`, `label_set_is_prefix_free` | pass (53 labels, 0 prefix pairs); red first (Appendix A without the four rev-2.7 labels): `Appendix A should list 49 labels … left: 53, right: 49` (`label.rs:264`) |
-| §2 F3 | extra `argon2::tests::block_matrix_is_zeroizing`; ST-08 `rfc9106_argon2id_vector` | pass; red first (the scan on the unfixed file): `the call without the matrix, left: 1, right: 0` (`argon2.rs:184`) |
+| §1 labels | `secmp-crypto label::tests::enum_equals_appendix_a_of_the_spec`, `label_set_is_prefix_free` | pass (53 labels, 0 prefix pairs); red first (Appendix A without the four rev-2.7 labels): `Appendix A should list 49 labels … left: 53, right: 49` (`label.rs:264`; `a4-red-first.txt`) |
+| §2 F3 | extra `argon2::tests::block_matrix_is_zeroizing`; ST-08 `rfc9106_argon2id_vector` | pass; red first (the scan on the unfixed file): `the call without the matrix, left: 1, right: 0` (`argon2.rs:184`; `a4-red-first.txt`) |
 | §2 overloads | extra `argon2::tests::locked_output_equals_argon2id`, `kdf::tests::hkdf_locked_equals_hkdf`, `caead::tests::locked_key_forms_equal_seal_and_open` | pass (each equal to the existing primitive on the same bytes) |
 | ST-05 | `wrap::tests::unlock_roundtrip` | pass (0.007 s, `kat_small`); same `MK_profile` digest after unlock(P); P with its last byte flipped → `Err(Unlock)` |
 | ST-06 | `wrap::tests::unlock_errors_are_uniform` | pass; the eight cases (wrong P, truncated, flipped salt, flipped tag, version, m = 4 194 304, t = 4, p = 1) one `Error::Unlock`, equal `Debug`; `argon2_calls` = 0 for the version and the three `params` cases (shipped `wrap::unlock`, accept = `PROFILE`) |
 | ST-06 extra | `wrap::tests::unlock_error_text_is_fixed` | pass; the text of `error.rs:27` for every case; scan of `crates/secmp-store/src` (CRLF-normalised, test modules excluded): 0 `{e}`, `{e:?}`, `{:?}`, `.to_string()` |
-| ST-07 | `wrap::tests::argon2_params_are_cs_3_2` | pass (1.29 s); `PROFILE` = (262 144, 3, 4), block `00 04 00 00 00 00 00 03 00 00 00 04` at wrap offset 17..29; **one `PROFILE` wrap: create 523 ms** (`target/m7-st07-time.txt`; 485 ms at `bd9e240`) |
+| ST-07 | `wrap::tests::argon2_params_are_cs_3_2` | pass (1.29 s); `PROFILE` = (262 144, 3, 4), block `00 04 00 00 00 00 00 03 00 00 00 04` at wrap offset 17..29; **one `PROFILE` wrap: create 553 ms** (`st-07-wrap-create-5d44443.txt`, measured by ci-fast at `5d44443`; A-4 report: 523 ms / 485 ms, not retained) |
 | ST-10 [REF] | `keys::tests::table_keys_match_vectors` | pass; nine `K_t` pairwise distinct, `K_db` distinct from each, each equal to `secmp_crypto::hkdf` (salt 0^32, App. A label) for MK = 32 × 0x4d. **ST-10 open [REF] — waits for `vectors/store.json` (OPEN-M7-38)** |
 | ST-19 | `secrets::tests::long_lived_keys_in_secret_pages` | pass; `fn locked<const N>(_: &LockedSecret<N>)` on `mk_kat`, `db_kat`, every `table_key_kat`, `kek_kat`; IKS types hold `LockedSecret` (`ed25519.rs:115`, `mldsa.rs:28`, `x25519.rs:19`); `live_key_pages()` = 0 after `lock()` |
 | CT-02 | `wrap::tests::unlock_work_is_outcome_independent` | pass; right, wrong, empty, prefix-sharing, one-byte-longer: `argon2_calls` = 1 and `caead_open_calls` = 1 each; the four failures one `Error::Unlock` |
 | ST-11 | `seal::tests::record_bound_to_table_and_row` | pass; Ok only for (`sessions`, `data`, (7, 0, 0)); (8, 0, 0), `outbox` `[7; 16]`, column `skey`, flipped `COM`, flipped tag → one `Unavailable`; row keys 24 B / 17 B |
 | ST-12 | `schema::tests::secret_columns_are_sealed` | pass; populated profile (identity, 3 prekey generations × 3 kinds, 2 contacts, 2 sessions, outbox, 1 invitation, relay access key): 23 cells in the seven Q139 columns, each `len = plaintext + 72`, no plaintext and no 8-byte prefix inside |
-| PC-13 (+72 B) | `harness::m7_persist::write_amplification_measured` (A-3 test, unchanged) | pass at `b014540`: 8 241 bytes/dummy slot ≤ 11 098 (the unchanged A-3 bound; with +72 B per sealed record the weisung's bound is 11 098 + 4 × 72 = 11 386) |
+| PC-13 (+72 B) | `harness::m7_persist::write_amplification_measured` (A-3 test, unchanged) | pass: 8 241 bytes/dummy slot ≤ 11 098 (`pc-13-write-amplification-5d44443.txt`, ci-fast at `5d44443`; A-4 report: 8 241 B at b014540, not retained; A-3: 8 239 B at 675bad6) (the unchanged A-3 bound; with +72 B per sealed record the weisung's bound is 11 098 + 4 × 72 = 11 386) |
 | CT-01 | ct target `store_unlock_reject` (`ct-m7-a4-4b0ffaf.txt`) | **PASS** (run PASS, every control PASS, sensitivity CAUGHT); 100 000 samples, k = 1, 63.6 µs per call; first max \|t\| 2.46 at p99 (Δ +153.39 ticks = 38.3 ns, below the threshold 4.5, not reproduced: second p99 Δ +22.21 t +0.35), second max \|t\| 0.52 at p95 (Δ +13.03 ticks), A/A 2.28 at p75 (Δ −13.73 ticks); floor 40 ticks = 10 ns; site `wrap: open`, pre-check `Err(Unlock)` both classes, twin `Ok` |
 | CT-01 (Q140) | informative `store_unwrap_reject_post_kdf` | no verdict; first p90 Δ +1.04 t +6.47, p95 +1.19 / +6.82; second p90 +1.20 / +7.43, p95 +1.56 / +8.66 (ticks of 0.25 ns: ≤ 0.4 ns, 0.04 floors) |
 | CT-05 | `xtask::expect::ct_targets_m7`; `gates::tests::ct_targets_unchanged_in_m6` (`[..26]`), `ct_target_sites_bind_each_target_to_its_site` (12), `known_sites_equal_the_product_site_tags` (walks `secmp-store/src`), `ctreport::tests::ct_targets_list_names_m5_targets` (M4 + 6 + 1, last `store_unlock_reject`), `informative_targets_are_pinned_printed_and_never_fail` (3 names), `informative_targets_per_target_set` | pass; red first: `ct_targets_m7` with `CT_TARGETS` of 26 → `left: 26 right: 27` (`expect.rs:2114`); `known_sites_equal_the_product_site_tags` without the store walk → the tag set lacks `"wrap: open"` (`gates.rs:9766`) |
@@ -263,11 +263,15 @@ Phase A, A-4 (times: `ci-fast-a4-6-4383c8a.txt`; red-first lines: `redfirst-a4-1
 | `cargo xtask ci-fast` at `f51f7c2` (`ci-fast-a4-6-f51f7c2-red.txt`) | **FAIL** nextest and kat: `secmp-proto` `fuzz_max_len_is_the_largest_valid_input_plus_one` `left: 35 right: 33` (§5 D20) |
 | `cargo xtask ci-fast` at `4383c8a` (`ci-fast-a4-6-4383c8a.txt`, §6) | PASS: cooldown 25 s, nextest 14 s, kat 101 s, harness 1011 s |
 | fuzz smoke at `f51f7c2` (`fuzz-m7-a4-f51f7c2.txt`, §5 D21) | `backup_import` 175 212 runs, `cov: 2159 ft: 3783`; `store_record_open` 181 646 runs, `cov: 904 ft: 2457`; 0 crashes; tracked corpora unchanged |
-| `cargo xtask step ct` at `4b0ffaf` (`ct-m7-a4-4b0ffaf.txt`, 5806 s, unscaled) | **PASS**; every target PASS, controls PASS (A/A′, three same-content), sensitivity CAUGHT (Δ 108.91 / 113.32 ns, p75); `store_unlock_reject` PASS (table below) |
+| `cargo xtask step ct` at `4b0ffaf` (`ct-m7-a4-4b0ffaf.txt`, 5806 s, unscaled) | **PASS**; every gated target PASS (`caead_derive`: SUB_FLOOR_SHIFT at p99, a passing verdict of a gated target, ct L144), controls PASS (A/A′, three same-content), sensitivity CAUGHT (Δ 108.91 / 113.32 ns, p75); `store_unlock_reject` PASS (table below) |
 | local mutants (`mutants-a4-crypto-store-1be3f1d.txt`, first runs on `b697b7b`, diff `92b4404..`) | crypto (new code) 23 caught / 0 missed / 25 unviable / 0 timeout of 48; store (new code) first run 272 / 44 / 186 / 0 of 502, after the killers (`1be3f1d`) **315 / 1 / 186 / 0** — the 1 accepted (equivalent, `wrap.rs:123:9`) |
 | coverage pre-check (`cargo xtask step coverage` at `57927cc`, `target/m7draft/coverage-a4-pre.log`, not committed) | PASS: secmp-store 96.3 % (3851/4001), secmp-crypto 99.4 % (2765/2783) |
 | `cargo xtask ci-fast` at `eb9d3b8` (`ci-fast-a4-l-eb9d3b8.txt`; G7-00 and the last A-4 run, one run for the dictated `ci-fast-a4-g700` and `ci-fast-a4-l`, §5 D29) | PASS: cooldown 25 s (567 packages, no exception, youngest `ctutils` 0.4.4, 7 days), nextest 19 s, kat 106 s, harness 983 s |
-| `cargo xtask ci-full --strict` at `c3c1dcf` (`ci-full-a4-c3c1dcf.txt`, head on line 1, clean tree), the A-3 delegations (`--delegated windows-native --delegated windows-cross --delegated mutants --delegated ct --delegated proverif-link --models tr`) | **PASS**, 3 h 43 min: kat 100 s, harness 953 s, perf 9 s, fuzz 4294 s (35 targets), coverage 1109 s (**secmp-store 96.3 %** (3851/4001), **secmp-crypto 99.4 %** (2765/2783), client-core 94.7 %, proto 97.6 %, relay 97.5 %, transport 89.8 %, testkit 93.6 %), miri 2429 s, kani 3715 s (51/51; `tr_header_selection_k4` 13 315 156 KiB = 94.0 %, exception Q138; `kani_accept_opk_delete_only_on_success` 12 422 268 KiB = 87.7 %), proverif 143 s (`tr`), ref-vectors (12 suites, 969 cases), sbom, systemd; repro STUB; ct, mutants, proverif-link, windows-cross, windows-native DELEGATED. A first call with `--delegated windows-native windows-cross …` ended at once (`unknown argument "windows-cross"`); rerun in the form above |
+| `cargo xtask ci-full --strict` at `c3c1dcf` (`ci-full-a4-c3c1dcf.txt`, head on line 1, clean tree; reduced to the summary form in A-4d2, D30), the A-3 delegations (`--delegated windows-native --delegated windows-cross --delegated mutants --delegated ct --delegated proverif-link --models tr`) | **PASS**, step times sum ≈ 3 h 33 min (summary table; the file carries no wall-clock timestamps): kat 100 s, harness 953 s, perf 9 s, fuzz 4294 s (35 targets), coverage 1109 s (**secmp-store 96.3 %** (3851/4001), **secmp-crypto 99.4 %** (2765/2783), client-core 94.7 %, proto 97.6 %, relay 97.5 %, transport 89.8 %, testkit 93.6 %), miri 2429 s, kani 3715 s (51/51; `tr_header_selection_k4` 13 315 156 KiB = 94.0 %, exception Q138; `kani_accept_opk_delete_only_on_success` 12 422 268 KiB = 87.7 %), proverif 143 s (`tr`), ref-vectors (12 suites, 969 cases), sbom, systemd; repro STUB; ct, mutants, proverif-link, windows-cross, windows-native DELEGATED. A first call with `--delegated windows-native windows-cross …` ended at once (`unknown argument "windows-cross"`); rerun in the form above |
+| `cargo xtask ci-fast` at `6ad3ec6` (`ci-fast-a4b-6ad3ec6.txt`, A-4b) | **FAIL** policy `large-files: 1 finding(s)` and nextest `gates::tests::large_file_gate_is_clean_on_this_tree` (the 2.9 MB ci-full log) |
+| A-4d (WEISUNG M7-A4d) | not run in this box before A-4d2; A-4d2 brings the ci-full evidence file to the summary form |
+| A-4d2 `docs(m7): ci-full evidence at c3c1dcf in the summary form with exact line selection (ADR-052; Q174)` | `5d44443`: file 2 896 642 B → 22 986 B, 51 `VERIFICATION:- ` lines; `gates::tests::large_file_gate_is_clean_on_this_tree` PASS |
+| `cargo xtask ci-fast` at `5d44443` (`ci-fast-a4d2-5d44443.txt`; green A-4d2 run) | PASS: cooldown 26 s, nextest 14 s, kat 100 s, harness 978 s; `st-07-wrap-create-5d44443.txt` (553 ms), `pc-13-write-amplification-5d44443.txt` (8 241 B/slot); commit `8426991` |
 
 ct, `store_unlock_reject` (`ct-m7-a4-4b0ffaf.txt`; Δ in ticks of 0.25 ns; floor 40 ticks = 10 ns; threshold |t| 4.5):
 
@@ -378,7 +382,7 @@ A-4 (`modell=claude-opus-5-5`; no deviation from the spec, ADR-053 or Amendment 
 - **D18 (Q-A19) ST-09 re-dictation in the second §3 commit:** `testscan.rs:456` moved to `kat_small_sites == 1` in `b014540`, not
   in `bd9e240`, which introduced the site (`bd9e240` alone: the A-3 assertion red, `left: 1 right: 0`); ci-fast ran after both
   commits, as dictated.
-- **D19 ci-fast red at `0882c77`:** clippy `too_many_lines` (104/100) on `informative_targets_are_pinned_printed_and_never_fail`
+- **D19 ci-fast red at `0882c77`:** clippy `too_many_lines` (104/100) on `informative_targets_are_pinned_printed_and_never_fail` (ci-fast red at `82148dd`, `f393a22` and `0882c77`; the clippy `too_many_lines` failure originates in `82148dd`'s ctreport.rs)
   after the three-name pins (`ci-fast-a4-4-0882c77-red.txt`); `9ab5d5b` edits the fixture's own entries instead of rebuilding the
   list; `ci-fast-a4-4-9ab5d5b.txt` PASS.
 - **D20 ci-fast red at `f51f7c2`:** the M2 test `secmp-proto/tests/fuzz_max_len.rs` recomputes every `FUZZ_MAX_LEN` entry
@@ -393,7 +397,7 @@ A-4 (`modell=claude-opus-5-5`; no deviation from the spec, ADR-053 or Amendment 
   `struct_field_names` with the third field); `Store`/`Tx` carry the table keys (`Tx::seal`, `Store::open_record`).
 - **D23 `sessions.skey` of a short entry:** an entry shorter than 36 B gets the whole entry as its `skey` (the A-3 `substr(data, 1,
   36)` semantics), so the A-3 test `session_rows_round_trip` (7-byte entries) runs unchanged.
-- **D24 PC-13:** the A-3 test is unchanged; it passes its own bound (11 098 B, measured 8 241 B at `b014540`), which is tighter
+- **D24 PC-13:** the A-3 test is unchanged; it passes its own bound (11 098 B, measured 8 241 B, `pc-13-write-amplification-5d44443.txt`; A-4 report: 8 241 B at b014540, not retained; A-3: 8 239 B at 675bad6), which is tighter
   than the weisung's +72 B-per-sealed-record bound (11 386 B).
 - **D25 (Q-A22) backup details the weisung leaves open:** `import(store, path, passphrase, now_ms)` restores into an empty profile
   the caller opened (identity `created_ms` = `now_ms`; the store has no clock); a message whose contact is not in the contacts
@@ -406,6 +410,8 @@ A-4 (`modell=claude-opus-5-5`; no deviation from the spec, ADR-053 or Amendment 
   open_body_kat, open_export_kat, export_kat, import_kat}`, `seal::{seal_kat, open_kat}` — all `cfg(feature = "kat")` (or tests).
 - **D28 mutants rerun diff:** the first-run diff (`92b4404..b697b7b`) was refused for the rerun after the killers ("Diff content
   doesn't match source file"); the rerun used the same range regenerated at `1be3f1d`.
+- **D30:** A-4 committed the full ci-full log (2.9 MB) against the A-3b precedent; reduced in A-4d2 (Q174).
+- **D31:** the red-first outputs of §3 (labels, F3) are in `a4-red-first.txt` (A-4d2).
 - **D29:** one `ci-fast` at `eb9d3b8` (`ci-fast-a4-l-eb9d3b8.txt`) stands for the dictated `ci-fast-a4-g700` and
   `ci-fast-a4-l` (G7-00 was the last code commit before it; D13 precedent).
 

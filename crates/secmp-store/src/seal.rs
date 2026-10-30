@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! The record seal of a secret column (CS-3.3 `docs/04:54`; ADR-053 item 5 and Amendment 1, Proposed):
+//! The record seal of a secret column (CS-3.3 `docs/04:54`; ADR-053 item 5 and Amendment 1, accepted 2026-10-29, Q144):
 //!
 //! ```text
 //! rec = N(24) ‖ CAEAD.Seal(K_t, N, AD = "SecMP-STORE/1 <table>" ‖ col_len u8 ‖ column name (ASCII) ‖ row_key, record)

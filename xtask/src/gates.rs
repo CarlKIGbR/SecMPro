@@ -11099,7 +11099,7 @@ mod tests {
     }
 
     /// The B-SC harnesses whose committed alone runs the cover pin reads (M7 B-SC §3, one per commit).
-    const B_SC_RUNS: &[&str] = &["kani_in_flight_over_transitions"];
+    const B_SC_RUNS: &[&str] = &["kani_in_flight_over_transitions", "kani_queue_generations"];
 
     /// M4 delta review VD1-5: the number of covers is pinned (`expect::KANI_COVERS`: as many as `kani_proofs.rs` has,
     /// each on a known harness); the committed Kani log matches it; a deleted or an added cover is a finding; a
@@ -11253,8 +11253,9 @@ mod tests {
         // M7 A1e (Q132): `kani_commit_accept_atomic` split in two, 47
         // M7 A-3b (Q135): q_frame split in three, tr_header_selection in three (k ≤ 2, k = 3, k = 4), 51
         // M7 B-SC: + SC-06
-        assert_eq!(all.len(), 52);
-        assert_eq!(kani_verified(&kani_log(all, 0))?.len(), 52);
+        // M7 B-SC: + SC-07
+        assert_eq!(all.len(), 53);
+        assert_eq!(kani_verified(&kani_log(all, 0))?.len(), 53);
         // a deleted harness: 18 verified, and Kani's own summary says 18 of 18
         let fifteen = all.get(1..).unwrap_or_default();
         assert!(kani_verified(&kani_log(fifteen, 0)).is_err());

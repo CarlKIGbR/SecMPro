@@ -10,14 +10,16 @@
 //! - K-07 `kani_evicted_range`: the plausibility rule of `OK_SEND`'s evicted id (`secmp_transport::evicted`).
 //! - K-C1…K-C6: the unwritten-frame ledger and the round-robin rotation (M6 Phase C1, below).
 //! - SC-06 `kani_in_flight_over_transitions`: the in-flight rule over the core's transitions (`pure::InFlight`).
+//! - SC-07 `kani_queue_generations`: a response of an old generation never updates the new one (`pure::take_response`).
 
 use secmp_transport::evicted::evicted_is_plausible;
 
 use crate::scheduler::core::pure::{
-    Flight, InFlight, complete_oldest, hand_out, ledger_admits, reserved_rr, rr_select, tick_time,
-    unwritten_max,
+    Flight, InFlight, RecvLedger, complete_oldest, hand_out, ledger_admits, reserved_rr, rr_select,
+    take_response, tick_time, unwritten_max,
 };
 use crate::scheduler::params::{backoff_cap, rate_sum_ok};
+use crate::scheduler::types::{Delivered, SourceError};
 use crate::timing::{accept_ceiling, sample_with};
 
 /// `PERIODS` in milliseconds.
@@ -494,5 +496,87 @@ fn kani_in_flight_over_transitions() {
             _ => f = InFlight::new(2),
         }
         assert!(f.count() <= 2);
+    }
+}
+
+/// SC-07 `kani_queue_generations`: a response of an old generation never updates the new one. Queue 0 is added and a
+/// request is asked for it in generation 0; a response in that generation may arrive first (one cell, any id, any
+/// outcome). Then queue 0 is re-created (spec §9.1: `RecvLedger::recreate`, generation 1), or removed and re-added — the
+/// re-added queue has a new id (queue 1, generation 0) — or neither. The old request's response then arrives (any id, any
+/// outcome) through `take_response`, which the core's `fetched` calls: after a re-creation or a re-add it changes no queue
+/// (the same acknowledgement, generation and fetched cells, nothing handed to the cell source); with neither it is taken.
+#[kani::proof]
+#[kani::unwind(5)]
+fn kani_queue_generations() {
+    let mut q0: RecvLedger<2> = RecvLedger::new();
+    let mut q1: RecvLedger<2> = RecvLedger::new();
+    let asked = (0_u32, q0.generation());
+    if kani::any() {
+        let id: u64 = kani::any();
+        let answer = any_answer();
+        assert!(take_response(
+            [(0_u32, &mut q0)],
+            &0,
+            0,
+            [(id, ())],
+            |_, ()| answer
+        ));
+    }
+    let action: u8 = kani::any();
+    kani::assume(action < 3);
+    let (present0, present1) = match action {
+        0 => {
+            q0.recreate();
+            (true, false)
+        }
+        1 => (false, true),
+        _ => (true, false),
+    };
+    let (before0, before1) = (state(&q0), state(&q1));
+    let id: u64 = kani::any();
+    let answer = any_answer();
+    let mut handed = false;
+    let mut table = Vec::with_capacity(2);
+    if present0 {
+        table.push((0_u32, &mut q0));
+    }
+    if present1 {
+        table.push((1_u32, &mut q1));
+    }
+    let applied = take_response(table, &asked.0, asked.1, [(id, ())], |_, ()| {
+        handed = true;
+        answer
+    });
+    if action == 2 {
+        assert!(applied);
+        kani::cover!(handed, "the current generation takes the response");
+    } else {
+        assert!(!applied && !handed);
+        assert!(state(&q0) == before0 && state(&q1) == before1);
+        kani::cover!(action == 0, "a re-creation ignores the old response");
+        kani::cover!(
+            action == 1,
+            "a re-added queue ignores the removed one's response"
+        );
+    }
+}
+
+/// What a ledger shows: its acknowledgement, generation, fetched cells and whether one is pending (compared field by
+/// field: a derived `==` is a `memcmp`, whose byte loop the unwind bound does not cover).
+fn state(l: &RecvLedger<2>) -> (u64, u64, usize, bool) {
+    (
+        l.acked(),
+        l.generation(),
+        l.received().len(),
+        l.has_pending(),
+    )
+}
+
+/// The cell source's answer for one cell: committed, pending, or a storage failure.
+fn any_answer() -> Result<Delivered, SourceError> {
+    match kani::any::<u8>() % 3 {
+        0 => Ok(Delivered::Committed),
+        1 => Ok(Delivered::Pending),
+        _ => Err(SourceError),
     }
 }

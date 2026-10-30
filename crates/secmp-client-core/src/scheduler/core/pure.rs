@@ -235,6 +235,22 @@ impl<const N: usize> Default for RecvLedger<N> {
     }
 }
 
+/// The response to a request asked for `queue` in `generation` (SC-07): it goes to the recv-queue of that id among
+/// `queues`, if that queue still exists — a removed queue's response finds none, and a re-added queue has a new id — and
+/// changes it only in that generation ([`RecvLedger::take`]). `false` if it changed nothing.
+pub fn take_response<'a, Q: PartialEq, C, const N: usize>(
+    queues: impl IntoIterator<Item = (Q, &'a mut RecvLedger<N>)>,
+    queue: &Q,
+    generation: u64,
+    cells: impl IntoIterator<Item = (u64, C)>,
+    deliver: impl FnMut(u64, C) -> Result<Delivered, SourceError>,
+) -> bool {
+    match queues.into_iter().find(|(q, _)| q == queue) {
+        Some((_, ledger)) => ledger.take(generation, cells, deliver),
+        None => false,
+    }
+}
+
 /// The queue a Balanced slot sends to (spec §10.2): the first queue, from the round-robin pointer `rr`, whose previous
 /// `SEND` is at least `P_q` before the slot `slot_ms` (or that was never sent to). `None`: nothing is due, the slot
 /// carries a `PING`. `queues` is `(last_send_ms, period_ms)` in the fixed round-robin order.
@@ -570,6 +586,24 @@ mod tests {
         assert_eq!(l, before);
         assert_eq!(take(&mut l, 1, &[(1, b'C')]), [1]);
         assert_eq!(l.acked(), 1);
+    }
+
+    /// SC-07 (unit): a response goes to the queue of its id, in its generation; a removed queue's response finds none.
+    #[test]
+    fn take_response_finds_the_queue_and_its_generation() {
+        let (mut a, mut b): (RecvLedger<4>, RecvLedger<4>) = (RecvLedger::new(), RecvLedger::new());
+        let deliver = |_: u64, (): ()| Ok(Delivered::Committed);
+        assert!(take_response(
+            [(1_u32, &mut a), (2, &mut b)],
+            &2,
+            0,
+            [(5, ())],
+            deliver
+        ));
+        assert_eq!((a.acked(), b.acked()), (0, 5));
+        assert!(!take_response([(1_u32, &mut a)], &2, 0, [(6, ())], deliver));
+        assert!(!take_response([(1_u32, &mut a)], &1, 1, [(6, ())], deliver));
+        assert_eq!((a.acked(), b.acked()), (0, 5));
     }
 
     /// The ledger bound: a full ledger records nothing more and keeps the acknowledgement below the first id it could not

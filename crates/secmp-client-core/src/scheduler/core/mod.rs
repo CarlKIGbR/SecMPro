@@ -45,7 +45,7 @@ use crate::timing::{TimingRng, Unavailable};
 use self::backoff::reconnect_delay;
 use self::pure::{
     InFlight, RECEIVED_MAX, RecvLedger, Ticked, complete_oldest, hand_out, ledger_admits,
-    reserved_rr, rr_select, tick_time, unwritten_max,
+    reserved_rr, rr_select, take_response, tick_time, unwritten_max,
 };
 
 /// Why a scheduler call was refused (nothing changed).
@@ -947,10 +947,8 @@ impl World {
         cells: Vec<(u64, secmp_proto::wire::cell::Cell)>,
         source: &mut S,
     ) {
-        let Some(rq) = self.recvs.iter_mut().find(|r| r.id == queue) else {
-            return;
-        };
-        rq.ledger.take(generation, cells, |id, cell| {
+        let queues = self.recvs.iter_mut().map(|r| (r.id, &mut r.ledger));
+        take_response(queues, &queue, generation, cells, |id, cell| {
             source.deliver(queue, id, &cell)
         });
     }

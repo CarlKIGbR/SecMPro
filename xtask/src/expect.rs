@@ -1235,6 +1235,7 @@ pub(crate) const KANI_HARNESSES: &[&str] = &[
     "kani_proofs::kani_q_frame_plaintext_exact_fit_response_fetch",
     "kani_proofs::kani_q_frame_plaintext_exact_fit_response_fetch_multi",
     "kani_proofs::kani_queue_eviction_bounds",
+    "kani_proofs::kani_queue_generations",
     "kani_proofs::kani_rate_bound_integer_form",
     "kani_proofs::kani_reservation_is_schedule_only",
     "kani_proofs::kani_teardown_keeps_the_committed_rr",
@@ -1298,6 +1299,7 @@ pub(crate) const KANI_COVERS: &[(&str, usize)] = &[
         1,
     ),
     ("kani_proofs::kani_queue_eviction_bounds", 3),
+    ("kani_proofs::kani_queue_generations", 3),
     ("kani_proofs::kani_rate_bound_integer_form", 2),
     ("kani_proofs::kani_reservation_is_schedule_only", 1),
     ("kani_proofs::kani_teardown_keeps_the_committed_rr", 1),
@@ -2228,7 +2230,10 @@ mod tests {
     }
 
     /// The Kani harnesses of WEISUNG M7-B-SC with their covers (G7-15b), one added per commit.
-    const B_SC_HARNESSES: &[(&str, usize)] = &[("kani_in_flight_over_transitions", 2)];
+    const B_SC_HARNESSES: &[(&str, usize)] = &[
+        ("kani_in_flight_over_transitions", 2),
+        ("kani_queue_generations", 3),
+    ];
 
     /// TEST-SPEC-M7 G7-15b (TEST-SPEC (l): "`FUZZ_TARGETS` += FZ-04, `KANI_HARNESSES` += K7-01, SC-06…SC-09, each in the
     /// commit of its target"; created by WEISUNG M7-B-SC with SC-06, BRIEF M7-B adds K7-01 and FZ-04): every Kani harness of

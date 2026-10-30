@@ -1205,7 +1205,7 @@ pub(crate) const KANI_PACKAGES: &[&str] = &["secmp-client-core", "secmp-proto", 
 /// K4b `kani_commit_accept_atomic` (from M7 two harnesses, `…_record_names_opk1` and `…_record_names_deleted_opk2`, OPEN-M7-26 B) on the real prekey store.
 /// M7 A-3b (OPEN-M7-26 B applied twice, Q135): `kani_q_frame_plaintext_exact_fit` split by decoder and context into
 /// `…_request`, `…_response_fetch`, `…_response_fetch_multi`; `tr_header_selection` split by `k` into `…_k0_2`, `…_k3` and `…_k4`; a harness split by `k` carries the unwind `k_max + 2`, at least
-/// `TR_SKIPPED_KEYS + 1` (Q138; `…_k4` is the documented exception above the 90 % container threshold). M5 Phase B: the three relay harnesses of `secmp-relay`
+/// `TR_SKIPPED_KEYS + 1` (Q138; the exception of `…_k4` above the 90 % container threshold is lifted by K7-03b, M7 B-SC). M5 Phase B: the three relay harnesses of `secmp-relay`
 /// (`kani_cmd_seq_monotone`, `kani_queue_eviction_bounds`, `kani_executor_response_count`; TEST-SPEC-M5 K-05…K-07).
 pub(crate) const KANI_HARNESSES: &[&str] = &[
     "kani_proofs::cell",

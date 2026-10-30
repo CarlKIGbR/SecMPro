@@ -288,8 +288,13 @@ fn tr_header_selection_with(k: usize) {
     let found_all: [bool; TR_SKIPPED_KEYS] = kani::any();
     let opened = opened_all.get(..k).unwrap_or_default();
     let found = found_all.get(..k).unwrap_or_default();
-    let results: Vec<Choice> = opened.iter().map(|o| choice(*o)).collect();
-    let (first, any) = select::first_opened(&results);
+    // K7-03b (Q138 item 3): the per-key results without the heap — a fixed array sliced to `k`, no `collect`
+    let mut all = [Choice::from(0); TR_SKIPPED_KEYS];
+    for (r, o) in all.iter_mut().zip(opened_all) {
+        *r = choice(o);
+    }
+    let results = all.get(..k).unwrap_or_default();
+    let (first, any) = select::first_opened(results);
     assert!(first.len() == k);
     let lowest = opened.iter().position(|o| *o);
     for (i, f) in first.iter().enumerate() {
@@ -332,8 +337,9 @@ fn tr_header_selection_k3() {
 }
 
 /// [`tr_header_selection_with`] for `k = TR_SKIPPED_KEYS` distinct skipped header keys. Q138: the bound is `k + 2`, the
-/// original one; this harness costs what the original cost and is the documented exception above the 90 % container
-/// threshold (exception Q138: `tr_header_selection_k4` 94.0 % container (ci-full) / 96.3 % alone; CI figure from the PR run on `92b4404` to be recorded; the RSS guard trips above 100 % (`gates.rs:2550`); K7-03b (heap-free harness) is pulled forward if CI is red or above 95 %).
+/// original one. M7 B-SC K7-03b (Q138 item 3): with the per-key results in a fixed array instead of a `collect`ed `Vec`
+/// this harness peaks at 7.4 % of `KANI_CBMC_RSS_LIMIT_KIB` alone (it was 96.3 %); the exception Q138 above the 90 %
+/// threshold is lifted.
 #[kani::proof]
 #[kani::unwind(6)] // k + 2 (= the original bound)
 fn tr_header_selection_k4() {

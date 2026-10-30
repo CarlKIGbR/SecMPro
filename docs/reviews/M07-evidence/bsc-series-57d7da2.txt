@@ -1,0 +1,96 @@
+# M7 B-SC series printed by the tests (target/m6-evidence/*.txt at 57d7da2)
+
+== SC-01-strict-silent
+strict-silent: (committed in the period, backlog before it) per period: [(4, 128), (4, 124), (4, 120), (4, 116), (4, 112), (4, 108), (4, 104), (4, 100), (4, 96), (4, 92), (4, 88), (4, 84), (4, 80), (4, 76), (4, 72), (4, 68), (4, 64), (4, 60), (4, 56), (4, 52), (4, 48), (4, 44), (4, 40), (4, 36), (4, 32), (4, 28), (4, 24), (4, 20), (4, 16), (4, 12), (4, 8), (4, 4)]; drained after Some(32) periods (bound 45)
+
+== SC-01-strict-constant
+strict-constant: (committed in the period, backlog before it) per period: [(4, 128), (4, 125), (4, 122), (4, 119), (4, 116), (4, 113), (4, 110), (4, 107), (4, 104), (4, 101), (4, 98), (4, 95), (4, 92), (4, 89), (4, 86), (4, 83), (4, 80), (4, 77), (4, 74), (4, 71), (4, 68), (4, 65), (4, 62), (4, 59), (4, 56), (4, 53), (4, 50), (4, 47), (4, 44), (4, 41), (4, 38), (4, 35), (4, 32), (4, 29), (4, 26), (4, 23), (4, 20), (4, 17), (4, 14), (4, 11), (4, 8), (4, 5), (2, 2)]; drained after Some(43) periods (bound 66)
+
+== SC-01-balanced-silent
+balanced-silent: (committed in the period, backlog before it) per period: [(8, 128), (8, 120), (8, 112), (8, 104), (8, 96), (8, 88), (8, 80), (8, 72), (8, 64), (8, 56), (8, 48), (8, 40), (8, 32), (8, 24), (8, 16), (8, 8)]; drained after Some(16) periods (bound 21)
+
+== SC-01-balanced-constant
+balanced-constant: (committed in the period, backlog before it) per period: [(8, 128), (8, 121), (8, 114), (8, 107), (8, 100), (8, 93), (8, 86), (8, 79), (8, 72), (8, 65), (8, 58), (8, 51), (8, 44), (8, 37), (8, 30), (8, 23), (8, 16), (8, 9), (2, 2)]; drained after Some(19) periods (bound 24)
+
+== SC-02
+acknowledgement after the commits of 1, 3, 2: [Some(1), Some(1), Some(3)]; FETCH acks: [0, 1, 3]; ticks: [10000, 20000, 30000]; delivered: [1, 2, 3, 2]
+
+== SC-04
+connections per logical link: {LogicalLinkId(0): {LinkId(0), LinkId(2), LinkId(4), LinkId(6), LinkId(8), LinkId(10), LinkId(12), LinkId(14), LinkId(16), LinkId(18), LinkId(20), LinkId(22), LinkId(24), LinkId(26), LinkId(28)}, LogicalLinkId(1): {LinkId(1), LinkId(3), LinkId(5), LinkId(7), LinkId(9), LinkId(11), LinkId(13), LinkId(15), LinkId(17), LinkId(19), LinkId(21), LinkId(23), LinkId(25), LinkId(27), LinkId(29)}}; lifetime teardowns checked per logical link: Ok(28)
+
+== SIM-02-queue
+queue B -> A at the end of the run: 1 cells (ids [1070], next_cell_id 1071)
+
+== R-01
+R-01 receive throughput of the facade (Balanced, 4 cells stored before the first FETCH, costs 5 ms per received cell)
+committed at (s): [11, 11, 11, 11]
+ready to acknowledge at (s, internal): [11, 11, 11, 11]
+seconds between commits: [0, 0, 0]
+ack delay per cell (s): [0, 0, 0, 0]
+relay-observed acknowledgement at (s): [20]
+
+== vectors (Q147 (i)): cargo xtask vectors at 74b7ea6 (before) and on the §0.2 tree (after, = 14acea8)
+-- before
+  caead: agrees with ref; frozen file unchanged
+  encodings: agrees with ref; frozen file unchanged
+  fingerprint: agrees with ref; frozen file unchanged
+  hkdf-labels: agrees with ref; frozen file unchanged
+  hx: agrees with ref; frozen file unchanged
+  hybridkem-1024: agrees with ref; frozen file unchanged
+  hybridkem-768: agrees with ref; frozen file unchanged
+  hybridsign: agrees with ref; frozen file unchanged
+  link: agrees with ref; frozen file unchanged
+  msgencrypt: agrees with ref; frozen file unchanged
+  sas: agrees with ref; frozen file unchanged
+  tr: agrees with ref; frozen file unchanged
+vectors: 12 suites identical to vectors/ref (structural, SCHEMA §1; positive rows of encodings)
+-- after
+  caead: agrees with ref; frozen file unchanged
+  encodings: agrees with ref; frozen file unchanged
+  fingerprint: agrees with ref; frozen file unchanged
+  hkdf-labels: agrees with ref; frozen file unchanged
+  hx: agrees with ref; frozen file unchanged
+  hybridkem-1024: agrees with ref; frozen file unchanged
+  hybridkem-768: agrees with ref; frozen file unchanged
+  hybridsign: agrees with ref; frozen file unchanged
+  link: agrees with ref; frozen file unchanged
+  msgencrypt: agrees with ref; frozen file unchanged
+  sas: agrees with ref; frozen file unchanged
+  tr: agrees with ref; frozen file unchanged
+vectors: 12 suites identical to vectors/ref (structural, SCHEMA §1; positive rows of encodings)
+
+== red first
+- SIM-02 assertion on the old core (the §1 product stashed, 2026-10-30): "queue B -> A holds 128 cells at the end of the run" (the raw nextest output was not kept; the test printed target/m6-evidence/SIM-02-queue.txt with 128 cells, ids 943..=1070)
+- R-01 new expectation on the old core: "the relay saw one acknowledgement of all four" left 4, right 1; committed at (s) [11, 21, 31, 41]; relay-observed acknowledgement at (s) [30, 40, 50, 60] (raw not kept)
+- SC-10 kc5_calls_extracted on 9722477 + the SC-06 work in progress (no extraction yet):
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.08s
+────────────
+ Nextest run ID 4d1df463-9c1a-474a-bee7-e9aefde663f1 with nextest profile: default
+    Starting 1 test across 1 binary (305 tests skipped)
+        FAIL [   0.012s] (1/1) xtask::bin/xtask testscan::kc5_calls_extracted
+  stdout ───
+
+    running 1 test
+    test testscan::kc5_calls_extracted ... FAILED
+
+    failures:
+
+    failures:
+        testscan::kc5_calls_extracted
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 305 filtered out; finished in 0.01s
+
+  stderr ───
+
+    thread 'testscan::kc5_calls_extracted' (319183) panicked at xtask/src/testscan.rs:631:5:
+    assertion `left == right` failed: the call sites of the K-C5 functions
+      left: []
+     right: [("kani_proofs.rs", "kani_deadline_arithmetic_checked", "fetch_lead_deadline"), ("kani_proofs.rs", "kani_deadline_arithmetic_checked", "flush_bound"), ("scheduler/core/mod.rs", "next_deadline", "fetch_lead_deadline"), ("scheduler/core/mod.rs", "prepare_link", "fetch_lead_deadline"), ("scheduler/run.rs", "flush_wait", "flush_bound")]
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+  Cancelling due to test failure: 
+────────────
+     Summary [   0.013s] 1 test run: 0 passed, 1 failed, 305 skipped
+        FAIL [   0.012s] (1/1) xtask::bin/xtask testscan::kc5_calls_extracted
+error: test run failed
+9722477

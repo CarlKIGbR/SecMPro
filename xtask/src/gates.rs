@@ -11103,6 +11103,7 @@ mod tests {
         "kani_in_flight_over_transitions",
         "kani_queue_generations",
         "kani_persist_contract_abstract",
+        "kani_paired_executions",
     ];
 
     /// M4 delta review VD1-5: the number of covers is pinned (`expect::KANI_COVERS`: as many as `kani_proofs.rs` has,
@@ -11259,8 +11260,9 @@ mod tests {
         // M7 B-SC: + SC-06
         // M7 B-SC: + SC-07
         // M7 B-SC: + SC-08
-        assert_eq!(all.len(), 54);
-        assert_eq!(kani_verified(&kani_log(all, 0))?.len(), 54);
+        // M7 B-SC: + SC-09
+        assert_eq!(all.len(), 55);
+        assert_eq!(kani_verified(&kani_log(all, 0))?.len(), 55);
         // a deleted harness: 18 verified, and Kani's own summary says 18 of 18
         let fifteen = all.get(1..).unwrap_or_default();
         assert!(kani_verified(&kani_log(fifteen, 0)).is_err());

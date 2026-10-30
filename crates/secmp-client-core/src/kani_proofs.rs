@@ -12,12 +12,13 @@
 //! - SC-06 `kani_in_flight_over_transitions`: the in-flight rule over the core's transitions (`pure::InFlight`).
 //! - SC-07 `kani_queue_generations`: a response of an old generation never updates the new one (`pure::take_response`).
 //! - SC-08 `kani_persist_contract_abstract`: no frame and no acknowledgement after a failed commit (`sendable`, `RecvLedger`).
+//! - SC-09 `kani_paired_executions`: two runs differing only in activity emit the same schedule (`send_choice`, …).
 
 use secmp_transport::evicted::evicted_is_plausible;
 
 use crate::scheduler::core::pure::{
     Flight, InFlight, RecvLedger, complete_oldest, hand_out, ledger_admits, reserved_rr, rr_select,
-    sendable, take_response, tick_time, unwritten_max,
+    send_choice, sendable, take_response, tick_time, unwritten_max,
 };
 use crate::scheduler::params::{backoff_cap, rate_sum_ok};
 use crate::scheduler::types::{Delivered, SourceError};
@@ -652,5 +653,95 @@ fn kani_persist_contract_abstract() {
     kani::cover!(
         l.acked() == 0 && fetched[1],
         "a failed or pending first cell holds the acknowledgement"
+    );
+}
+
+/// What one run of a Balanced relay link emits on its first three ticks (SC-09): per tick its time and the queue its
+/// `SEND` goes to (`None`: a `PING`). The schedule is the link's `t_up`, `T_BALANCED` = 10 s and the queues' periods; the
+/// activity is, per tick, the preparation pass at which the cell source answers ready (1…3 — every preparation finishes
+/// before its tick, the §10.1 premise) and whether the cell is a real message or a dummy. Every decision is a core
+/// function: the tick time (`tick_time`), the choice (`send_choice` from `reserved_rr`, re-made at every pass as
+/// `prepare_link` does), the answer (`sendable`), the hand-out at the tick (`hand_out`) and the commit when the frame is
+/// written (`complete_oldest`); `last_send` is the tick's time (set inline in `World::tick`).
+fn balanced_run(
+    n: usize,
+    periods: &[u64; 3],
+    t_up: u64,
+    ready_at: [u8; 3],
+    real: [bool; 3],
+) -> [(u64, Option<usize>); 3] {
+    let mut last: [Option<u64>; 3] = [None; 3];
+    let mut ledger: Vec<(u8, Option<usize>)> = Vec::with_capacity(4);
+    let mut rr = 0_usize;
+    let mut out = [(0_u64, None); 3];
+    for k in 0..3_u8 {
+        let slot = tick_time(t_up, u32::from(k) + 1, 10_000).unwrap();
+        let mut table = [(None, 10_000_u64); 3];
+        for (i, entry) in table.iter_mut().enumerate() {
+            *entry = (last[i], periods[i]);
+        }
+        let mut part: Option<(Option<usize>, Option<usize>)> = None;
+        for pass in 1..=3_u8 {
+            match send_choice(reserved_rr(&ledger, rr), &table[..n], slot) {
+                None => {
+                    part = Some((None, None));
+                    break;
+                }
+                Some((at, next)) => {
+                    let answer: Result<Option<bool>, SourceError> =
+                        if pass >= ready_at[usize::from(k)] {
+                            Ok(Some(real[usize::from(k)]))
+                        } else {
+                            Ok(None)
+                        };
+                    if sendable(answer).is_some() {
+                        part = Some((Some(at), Some(next)));
+                        break;
+                    }
+                }
+            }
+        }
+        // ready before the tick: the tick writes the part, the driver reports it written
+        let (to, commits) = part.unwrap();
+        hand_out(&mut ledger, k, commits);
+        if let Some(at) = to {
+            last[at] = Some(slot);
+        }
+        assert!(complete_oldest(&mut ledger, &mut rr, &k));
+        out[usize::from(k)] = (slot, to);
+    }
+    out
+}
+
+/// SC-09 `kani_paired_executions` (spec §10.1): two runs of one Balanced relay link (one to three send-queues) that share
+/// every timing draw — `t_up` and the queues' periods — and differ only in activity (per tick, when the cell source
+/// answers ready and whether the cell is real) emit the same schedule: the same tick times and the same frame kind and
+/// queue on every tick.
+#[kani::proof]
+#[kani::unwind(4)]
+fn kani_paired_executions() {
+    let n: usize = kani::any();
+    kani::assume(n >= 1 && n <= 3);
+    let periods = [any_period(), any_period(), any_period()];
+    let t_up: u64 = kani::any();
+    kani::assume(t_up <= 1_000_000_000);
+    let ready_a: [u8; 3] = kani::any();
+    let ready_b: [u8; 3] = kani::any();
+    for (a, b) in ready_a.iter().zip(ready_b.iter()) {
+        kani::assume(*a >= 1 && *a <= 3 && *b >= 1 && *b <= 3);
+    }
+    let real_a: [bool; 3] = kani::any();
+    let real_b: [bool; 3] = kani::any();
+    let a = balanced_run(n, &periods, t_up, ready_a, real_a);
+    let b = balanced_run(n, &periods, t_up, ready_b, real_b);
+    assert!(a == b);
+    kani::cover!(
+        ready_a != ready_b && real_a != real_b,
+        "the activities differ"
+    );
+    kani::cover!(a.iter().any(|(_, q)| q.is_none()), "a PING slot");
+    kani::cover!(
+        a.iter().filter(|(_, q)| q.is_some()).count() >= 2,
+        "two SENDs"
     );
 }

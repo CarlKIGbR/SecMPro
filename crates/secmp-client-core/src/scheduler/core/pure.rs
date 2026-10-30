@@ -279,6 +279,23 @@ pub fn rr_select(rr: usize, queues: &[(Option<u64>, u64)], slot_ms: u64) -> Opti
     None
 }
 
+/// The choice of a Balanced slot (spec §10.2, SC-09): the index of the queue its `SEND` goes to ([`rr_select`] from the
+/// round-robin position `rr`) and the position after it, which the `SEND` commits once it is written — or `None`, a
+/// `PING`. Only the schedule enters: the positions, the previous `SEND`s and the slot.
+#[must_use]
+pub fn send_choice(
+    rr: usize,
+    queues: &[(Option<u64>, u64)],
+    slot_ms: u64,
+) -> Option<(usize, usize)> {
+    let at = rr_select(rr, queues, slot_ms)?;
+    let next = at
+        .checked_add(1)
+        .and_then(|n| n.checked_rem(queues.len()))
+        .unwrap_or(0);
+    Some((at, next))
+}
+
 /// The time of tick `k`: `t_up + k·period` (K-03). `None` on overflow — never wraps.
 #[must_use]
 pub fn tick_time(t_up: u64, k: u32, period_ms: u64) -> Option<u64> {
@@ -487,6 +504,18 @@ mod tests {
         let none = [(Some(0), 10), (Some(5), 40)];
         assert_eq!(rr_select(0, &none, 5), None);
         assert_eq!(rr_select(0, &[], 5), None);
+    }
+
+    /// SC-09 (unit): the choice of a Balanced slot and the position after it, wrapping at the end of the order.
+    #[test]
+    fn send_choice_names_the_queue_and_the_next_position() {
+        let q = [(Some(0), 10), (None, 40), (Some(5), 40)];
+        assert_eq!(send_choice(0, &q, 10), Some((0, 1)));
+        assert_eq!(send_choice(2, &q, 10), Some((0, 1)));
+        assert_eq!(send_choice(1, &q, 10), Some((1, 2)));
+        let last = [(Some(0), 40), (Some(0), 40), (None, 40)];
+        assert_eq!(send_choice(0, &last, 10), Some((2, 0)), "wraps");
+        assert_eq!(send_choice(0, &[(Some(0), 10)], 5), None);
     }
 
     #[test]

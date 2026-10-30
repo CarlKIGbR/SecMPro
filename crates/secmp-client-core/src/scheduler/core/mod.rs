@@ -45,7 +45,7 @@ use crate::timing::{TimingRng, Unavailable};
 use self::backoff::reconnect_delay;
 use self::pure::{
     InFlight, RECEIVED_MAX, RecvLedger, Ticked, complete_oldest, hand_out, ledger_admits,
-    reserved_rr, rr_select, sendable, take_response, tick_time, unwritten_max,
+    reserved_rr, send_choice, sendable, take_response, tick_time, unwritten_max,
 };
 
 /// Why a scheduler call was refused (nothing changed).
@@ -716,13 +716,9 @@ impl World {
                     .collect();
                 let table: Vec<(Option<u64>, u64)> =
                     members.iter().map(|(_, l, p)| (*l, *p)).collect();
-                match rr_select(rr, &table, slot) {
-                    Some(at) => {
-                        next_rr = Some(
-                            at.checked_add(1)
-                                .and_then(|n| n.checked_rem(members.len()))
-                                .unwrap_or(0),
-                        );
+                match send_choice(rr, &table, slot) {
+                    Some((at, next)) => {
+                        next_rr = Some(next);
                         members.get(at).map(|(q, _, _)| *q)
                     }
                     None => None,

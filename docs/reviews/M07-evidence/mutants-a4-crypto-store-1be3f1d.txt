@@ -1,0 +1,69 @@
+mutants on HEAD 1be3f1d2a2b50015baa2ef50ab87534c14e42b69 (the killers commit); first runs on b697b7bf3b14b171d1ade152ac6f4708512ce58e, WEISUNG M7-A4 §7 (2)
+# cargo-mutants 27.1.0; first runs: git diff 92b4404..b697b7b -- crates/secmp-crypto/src crates/secmp-store/src
+#   > target/m7-a4-mutants.diff (3937 lines); rerun: the same diff regenerated at 1be3f1d (4205 lines; the stale diff
+#   was refused by cargo-mutants: "Diff content doesn't match source file").
+# flags of every run: --no-shuffle -j 3 --features kat --caught --unviable --exclude crates/secmp-proto/src/kani_proofs.rs --exclude crates/secmp-relay/src/kani_proofs.rs --exclude crates/secmp-client-core/src/kani_proofs.rs --exclude crates/secmp-transport/src/tor/arti.rs --exclude-re kani_stubs:: --exclude-re FixedEntropy --exclude-re message_key_digest_kat --exclude-re 'replace mk_digest ' --exclude-re 'RatchetState::(hk_s_kat|receiving_header_keys_kat|sb_kat|encrypt_padded_kat)' --exclude-re 'Groups<.*>::(get|remove_completed) ' --exclude-re 'impl (core::fmt::)?Display for \w+Error>::fmt' -- -- --skip ratchet_fast_forward_bound_on_the_chain --skip ratchet_fast_forward_bound_on_a_step
+
+== run crypto (first run, b697b7b)
+$ timeout 1800 cargo mutants --output target/m7-a4-mutants-crypto --package secmp-crypto --in-diff target/m7-a4-mutants.diff <flags>
+48 mutants tested in 6m: 23 caught, 25 unviable (0 missed, 0 timeouts)
+
+== run store (first run, b697b7b)
+$ timeout 1800 cargo mutants --output target/m7-a4-mutants-store --package secmp-store --in-diff target/m7-a4-mutants.diff <flags>
+502 mutants tested in 7m: 44 missed, 272 caught, 186 unviable (0 timeouts)
+
+== run store (rerun after the killers, 1be3f1d)
+$ timeout 1800 cargo mutants --output target/m7-a4-mutants-store-rerun --package secmp-store --in-diff target/m7-a4-mutants-rerun.diff <flags>
+502 mutants tested in 9m: 1 missed, 315 caught, 186 unviable (0 timeouts)
+
+tallies (new code): crypto 23 caught / 0 missed / 25 unviable / 0 timeout of 48; store first run 272 / 44 / 186 / 0 of 502;
+store after the killers 315 / 1 / 186 / 0 of 502 — the 1 missed is accepted (equivalent).
+
+every missed mutant of the first store run and its fate:
+  crates/secmp-store/src/backup.rs:193:43: replace || with && in Contents::of -> backup::tests::export_refuses_malformed_rows (caught in the rerun)
+  crates/secmp-store/src/backup.rs:223:17: replace || with && in Contents::encode -> backup::tests::export_refuses_malformed_rows (caught in the rerun)
+  crates/secmp-store/src/backup.rs:223:39: replace > with == in Contents::encode -> backup::tests::export_refuses_malformed_rows (caught in the rerun)
+  crates/secmp-store/src/backup.rs:223:39: replace > with >= in Contents::encode -> backup::tests::export_refuses_malformed_rows (caught in the rerun)
+  crates/secmp-store/src/backup.rs:459:21: replace || with && in parse -> backup::tests::header_checks_precede_the_kdf (caught in the rerun)
+  crates/secmp-store/src/backup.rs:518:9: replace Cursor<'a>::finish -> Result<()> with Ok(()) -> backup::tests::decode_refuses_malformed_sections (caught in the rerun)
+  crates/secmp-store/src/backup.rs:553:39: replace || with && in decode -> backup::tests::decode_refuses_malformed_sections (caught in the rerun)
+  crates/secmp-store/src/backup.rs:570:21: replace > with == in decode -> backup::tests::decode_refuses_malformed_sections (caught in the rerun)
+  crates/secmp-store/src/backup.rs:570:21: replace > with >= in decode -> backup::tests::decode_refuses_malformed_sections (caught in the rerun)
+  crates/secmp-store/src/backup.rs:689:5: replace seal_file_kat -> Result<Vec<u8>> with Ok(vec![]) -> backup::tests::fuzz_entry_points_round_trip (caught in the rerun)
+  crates/secmp-store/src/backup.rs:689:5: replace seal_file_kat -> Result<Vec<u8>> with Ok(vec![0]) -> backup::tests::fuzz_entry_points_round_trip (caught in the rerun)
+  crates/secmp-store/src/backup.rs:689:5: replace seal_file_kat -> Result<Vec<u8>> with Ok(vec![1]) -> backup::tests::fuzz_entry_points_round_trip (caught in the rerun)
+  crates/secmp-store/src/backup.rs:699:5: replace encode_body_kat -> Result<Zeroizing<Vec<u8>>> with Ok(Zeroizing::new(vec![])) -> backup::tests::fuzz_entry_points_round_trip (caught in the rerun)
+  crates/secmp-store/src/backup.rs:699:5: replace encode_body_kat -> Result<Zeroizing<Vec<u8>>> with Ok(Zeroizing::from(vec![])) -> backup::tests::fuzz_entry_points_round_trip (caught in the rerun)
+  crates/secmp-store/src/backup.rs:699:5: replace encode_body_kat -> Result<Zeroizing<Vec<u8>>> with Ok(Zeroizing::new(vec![0])) -> backup::tests::fuzz_entry_points_round_trip (caught in the rerun)
+  crates/secmp-store/src/backup.rs:699:5: replace encode_body_kat -> Result<Zeroizing<Vec<u8>>> with Ok(Zeroizing::from(vec![0])) -> backup::tests::fuzz_entry_points_round_trip (caught in the rerun)
+  crates/secmp-store/src/backup.rs:699:5: replace encode_body_kat -> Result<Zeroizing<Vec<u8>>> with Ok(Zeroizing::new(vec![1])) -> backup::tests::fuzz_entry_points_round_trip (caught in the rerun)
+  crates/secmp-store/src/backup.rs:699:5: replace encode_body_kat -> Result<Zeroizing<Vec<u8>>> with Ok(Zeroizing::from(vec![1])) -> backup::tests::fuzz_entry_points_round_trip (caught in the rerun)
+  crates/secmp-store/src/backup.rs:725:5: replace import -> Result<()> with Ok(()) -> backup::tests::import_restores_fingerprint_and_names (caught in the rerun)
+  crates/secmp-store/src/backup.rs:747:5: replace identity_fingerprint -> Result<[u8; 32]> with Ok([0; 32]) -> backup::tests::import_restores_fingerprint_and_names (caught in the rerun)
+  crates/secmp-store/src/backup.rs:747:5: replace identity_fingerprint -> Result<[u8; 32]> with Ok([1; 32]) -> backup::tests::import_restores_fingerprint_and_names (caught in the rerun)
+  crates/secmp-store/src/backup.rs:794:36: delete ! in import_bytes -> backup::tests::import_restores_fingerprint_and_names (caught in the rerun)
+  crates/secmp-store/src/profile.rs:17:5: replace i64_of -> Result<i64> with Ok(0) -> profile::tests::times_stored_as_given (caught in the rerun)
+  crates/secmp-store/src/profile.rs:17:5: replace i64_of -> Result<i64> with Ok(1) -> profile::tests::times_stored_as_given (caught in the rerun)
+  crates/secmp-store/src/profile.rs:17:5: replace i64_of -> Result<i64> with Ok(-1) -> profile::tests::times_stored_as_given (caught in the rerun)
+  crates/secmp-store/src/seal.rs:100:5: replace seal_kat -> Result<Vec<u8>> with Ok(vec![]) -> seal::tests::fuzz_entry_points_round_trip (caught in the rerun)
+  crates/secmp-store/src/seal.rs:100:5: replace seal_kat -> Result<Vec<u8>> with Ok(vec![0]) -> seal::tests::fuzz_entry_points_round_trip (caught in the rerun)
+  crates/secmp-store/src/seal.rs:100:5: replace seal_kat -> Result<Vec<u8>> with Ok(vec![1]) -> seal::tests::fuzz_entry_points_round_trip (caught in the rerun)
+  crates/secmp-store/src/seal.rs:117:5: replace open_kat -> Result<Zeroizing<Vec<u8>>> with Ok(Zeroizing::new(vec![])) -> seal::tests::fuzz_entry_points_round_trip (caught in the rerun)
+  crates/secmp-store/src/seal.rs:117:5: replace open_kat -> Result<Zeroizing<Vec<u8>>> with Ok(Zeroizing::from(vec![])) -> seal::tests::fuzz_entry_points_round_trip (caught in the rerun)
+  crates/secmp-store/src/seal.rs:117:5: replace open_kat -> Result<Zeroizing<Vec<u8>>> with Ok(Zeroizing::new(vec![0])) -> seal::tests::fuzz_entry_points_round_trip (caught in the rerun)
+  crates/secmp-store/src/seal.rs:117:5: replace open_kat -> Result<Zeroizing<Vec<u8>>> with Ok(Zeroizing::from(vec![0])) -> seal::tests::fuzz_entry_points_round_trip (caught in the rerun)
+  crates/secmp-store/src/seal.rs:117:5: replace open_kat -> Result<Zeroizing<Vec<u8>>> with Ok(Zeroizing::new(vec![1])) -> seal::tests::fuzz_entry_points_round_trip (caught in the rerun)
+  crates/secmp-store/src/seal.rs:117:5: replace open_kat -> Result<Zeroizing<Vec<u8>>> with Ok(Zeroizing::from(vec![1])) -> seal::tests::fuzz_entry_points_round_trip (caught in the rerun)
+  crates/secmp-store/src/sessions.rs:37:5: replace session_row -> Result<Vec<u8>> with Ok(vec![]) -> sessions::tests::sealed_part_bound_to_its_row (caught in the rerun)
+  crates/secmp-store/src/sessions.rs:37:5: replace session_row -> Result<Vec<u8>> with Ok(vec![0]) -> sessions::tests::sealed_part_bound_to_its_row (caught in the rerun)
+  crates/secmp-store/src/sessions.rs:37:5: replace session_row -> Result<Vec<u8>> with Ok(vec![1]) -> sessions::tests::sealed_part_bound_to_its_row (caught in the rerun)
+  crates/secmp-store/src/wrap.rs:95:5: replace ad -> Vec<u8> with vec![] -> wrap::tests::wrap_bytes_recomputed (caught in the rerun)
+  crates/secmp-store/src/wrap.rs:95:5: replace ad -> Vec<u8> with vec![0] -> wrap::tests::wrap_bytes_recomputed (caught in the rerun)
+  crates/secmp-store/src/wrap.rs:95:5: replace ad -> Vec<u8> with vec![1] -> wrap::tests::wrap_bytes_recomputed (caught in the rerun)
+  crates/secmp-store/src/wrap.rs:123:9: replace Unlocked::lock with () -> accepted (equivalent): docs/mutants-accepted.md row wrap.rs:123:9 (missed in the rerun)
+  crates/secmp-store/src/wrap.rs:137:9: replace Unlocked::mk_digest_kat -> [u8; 32] with [1; 32] -> wrap::tests::wrap_bytes_recomputed (caught in the rerun)
+  crates/secmp-store/src/wrap.rs:137:9: replace Unlocked::mk_digest_kat -> [u8; 32] with [0; 32] -> wrap::tests::wrap_bytes_recomputed (caught in the rerun)
+  crates/secmp-store/src/kat.rs:271:5: replace caead_open_calls -> u64 with 1 -> wrap::tests::wrap_bytes_recomputed (caught in the rerun)
+
+missed in the rerun:
+  MISSED   crates/secmp-store/src/wrap.rs:123:9: replace Unlocked::lock with ()

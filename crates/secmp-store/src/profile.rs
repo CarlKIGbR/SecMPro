@@ -226,4 +226,27 @@ mod tests {
         assert_eq!(store.prekey_secret(2, 7).err(), Some(Error::Unavailable));
         Ok(())
     }
+
+    /// Killer (A-4 mutant, `i64_of`): the times are stored as given, and a time beyond `i64` is refused.
+    #[test]
+    fn times_stored_as_given() -> R {
+        let dir = TempDir::new("profile-times")?;
+        let mut store = Store::open(dir.path(), &TestKey::db_key())?;
+        store.txn(|tx| {
+            put_identity(tx, 1, b"s", b"fp", 5)?;
+            insert_prekey(tx, 1, 1, b"s", Some(9))?;
+            insert_invitation(tx, &[5; 16], b"r", 11)
+        })?;
+        let read = |sql: &str| -> core::result::Result<i64, Box<dyn std::error::Error>> {
+            Ok(store.connection_kat().query_row(sql, [], |r| r.get(0))?)
+        };
+        assert_eq!(read("SELECT created_ms FROM identity")?, 5);
+        assert_eq!(read("SELECT expires_ms FROM prekeys")?, 9);
+        assert_eq!(read("SELECT expires_ms FROM invitations")?, 11);
+        assert_eq!(
+            store.txn(|tx| put_identity(tx, 2, b"s", b"fp", u64::MAX)),
+            Err(Error::Unavailable)
+        );
+        Ok(())
+    }
 }

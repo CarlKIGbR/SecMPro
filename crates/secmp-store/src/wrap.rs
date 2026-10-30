@@ -554,4 +554,31 @@ mod tests {
         }
         Ok(())
     }
+
+    /// Killers (A-4 mutants, `ad`, `Unlocked::mk_digest_kat`, `kat::caead_open_calls`): with fixed `MK_profile`, salt and
+    /// `N` (kat entropy, drawn in this order; `kat_small`) the wrap file is `ver ‖ salt ‖ params ‖ N ‖ CAEAD.Seal(KEK, N,
+    /// "SecMP-STORE/1 wrap" ‖ ver ‖ salt ‖ params, MK)` recomputed from the `secmp-crypto` primitives (ADR-053 items 1, 2);
+    /// `mk_digest_kat` is SHA-256 of that `MK` and differs for a second profile; creating a wrap runs one Argon2id and no
+    /// `CAEAD.Open`.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn wrap_bytes_recomputed() -> R {
+        let (mk, salt, n) = ([0x6b_u8; 32], [0x5a_u8; 16], [0x7c_u8; 24]);
+        crate::kat::fixed_random(&[&mk[..], &salt, &n].concat());
+        let dir = TempDir::new("wrap-kat")?;
+        reset_counters();
+        let unlocked = create_kat(dir.path(), PASS, Argon2Params::kat_small())?;
+        assert_eq!((argon2_calls(), caead_open_calls()), (1, 0));
+        let file = std::fs::read(dir.path().join(WRAP_FILE))?;
+        let params = Argon2Params::kat_small().encode();
+        let kek = secmp_crypto::argon2id::<32>(PASS, &salt, 64, 1, 1)?;
+        let ad = [Label::StoreWrap.as_bytes(), &[VER], &salt, &params].concat();
+        let sealed = Caead::seal(&kek, secmp_crypto::Nonce24::from_bytes_kat(n), &ad, &mk)?;
+        assert_eq!(file, [&[VER][..], &salt, &params, &n, &sealed].concat());
+        assert_eq!(unlocked.mk_digest_kat(), secmp_crypto::sha256(&[&mk]));
+        let other = TempDir::new("wrap-kat-2")?;
+        let second = create_kat(other.path(), PASS, Argon2Params::kat_small())?;
+        assert_ne!(second.mk_digest_kat(), unlocked.mk_digest_kat());
+        Ok(())
+    }
 }

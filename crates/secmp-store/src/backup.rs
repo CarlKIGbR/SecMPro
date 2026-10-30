@@ -1406,4 +1406,171 @@ mod tests {
         assert_eq!(callers, Vec::<String>::new(), "A-4: no caller");
         Ok(())
     }
+
+    /// Killers (A-4 mutants, `Contents::of`, `Contents::encode`): an identity section of the right length with version 2,
+    /// a contact name of 65 bytes and an `IKSPublic` one byte short are refused at export (`Unavailable`); a 64-byte name
+    /// is exported.
+    #[test]
+    fn export_refuses_malformed_rows() -> R {
+        let dir = TempDir::new("bk-k1")?;
+        let path = dir.path().join("export");
+        let iks = peer_iks(1)?;
+        let profile = Profile::new("Bob", None)?.encode()?;
+        let case = |label: &str, identity: &[u8], iks: &[u8], name: &str| -> Res<Result<()>> {
+            let mut store = Store::open(&dir.path().join(label), &TestKey::db_key())?;
+            store.txn(|tx| {
+                put_identity(tx, 1, identity, b"fp", 1)?;
+                let contact = Contact {
+                    id: 1,
+                    iks,
+                    fingerprint: b"fp",
+                    display_name: Some(name),
+                    verified: false,
+                    routes: None,
+                    queues: None,
+                    state: 0,
+                    profile: Some(&profile),
+                };
+                put_contact(tx, &contact)
+            })?;
+            Ok(export_kat(&store, &path, PASS, Argon2Params::kat_small()))
+        };
+        let mut v2 = identity();
+        if let Some(b) = v2.first_mut() {
+            *b = 2;
+        }
+        let short = iks.get(1..).unwrap_or_default();
+        assert_eq!(case("v2", &v2, &iks, "Bob")?, Err(Error::Unavailable));
+        assert_eq!(
+            case("name65", &identity(), &iks, &"n".repeat(65))?,
+            Err(Error::Unavailable)
+        );
+        assert_eq!(
+            case("iks", &identity(), short, "Bob")?,
+            Err(Error::Unavailable)
+        );
+        assert_eq!(case("name64", &identity(), &iks, &"n".repeat(64))?, Ok(()));
+        Ok(())
+    }
+
+    /// Killers (A-4 mutants, `decode`, `Cursor::finish`): a body whose identity section has version 2, whose contacts
+    /// section carries a trailing byte, or whose contact name is 65 bytes is refused (`Unlock`); a 64-byte name decodes.
+    #[test]
+    fn decode_refuses_malformed_sections() -> R {
+        let iks = peer_iks(1)?;
+        let profile = Profile::new("Bob", None)?.encode()?;
+        let contacts = |name_len: usize, trailing: bool| {
+            let mut c = 1_u32.to_be_bytes().to_vec();
+            c.extend_from_slice(&iks);
+            c.push(1);
+            c.extend_from_slice(&profile);
+            c.push(u8::try_from(name_len).unwrap_or(0));
+            c.extend(std::iter::repeat_n(b'n', name_len));
+            if trailing {
+                c.push(0);
+            }
+            c
+        };
+        let (settings, messages) = (0_u16.to_be_bytes(), 0_u32.to_be_bytes());
+        let body = |identity: &[u8], contacts: &[u8]| {
+            let lens = [
+                identity.len(),
+                contacts.len(),
+                settings.len(),
+                messages.len(),
+            ];
+            ([identity, contacts, &settings, &messages].concat(), lens)
+        };
+        let (ok, lens) = body(&identity(), &contacts(64, false));
+        let names: Vec<usize> = decode(&ok, lens)?
+            .contacts
+            .iter()
+            .map(|c| c.local_name.len())
+            .collect();
+        assert_eq!(names, [64]);
+        let mut v2 = identity();
+        if let Some(b) = v2.first_mut() {
+            *b = 2;
+        }
+        for (name, (b, lens)) in [
+            ("version 2", body(&v2, &contacts(0, false))),
+            ("trailing byte", body(&identity(), &contacts(3, true))),
+            ("name of 65", body(&identity(), &contacts(65, false))),
+        ] {
+            assert_eq!(decode(&b, lens).err(), Some(Error::Unlock), "{name}");
+        }
+        Ok(())
+    }
+
+    /// Killer (A-4 mutant, `parse`): a file whose `params` differ (version right) or whose version differs (`params`
+    /// right) is refused before the KDF — no Argon2id call (ADR-053 item 2 applied to item 6); the file itself takes one.
+    #[test]
+    fn header_checks_precede_the_kdf() -> R {
+        let (_dir, file) = exported("bk-k3")?;
+        let flip = |at: usize| {
+            let mut f = file.clone();
+            if let Some(b) = f.get_mut(at) {
+                *b ^= 1;
+            }
+            f
+        };
+        for (name, f) in [("params", flip(30 + 11)), ("version", flip(13))] {
+            crate::kat::reset_counters();
+            assert_eq!(
+                open_export_kat(&f, PASS).err(),
+                Some(Error::Unlock),
+                "{name}"
+            );
+            assert_eq!(crate::kat::argon2_calls(), 0, "{name}");
+        }
+        crate::kat::reset_counters();
+        assert!(open_export_kat(&file, PASS).is_ok());
+        assert_eq!(crate::kat::argon2_calls(), 1);
+        Ok(())
+    }
+
+    /// Killers (A-4 mutants, the `kat` entry points of the fuzz target `backup_import`): `seal_file_kat` seals a body that
+    /// `open_body_kat` gives back and `open_export_kat` decodes, and `encode_body_kat` re-encodes it to the same bytes.
+    #[test]
+    fn fuzz_entry_points_round_trip() -> R {
+        let (_dir, file) = exported("bk-k4")?;
+        let body = open_body_kat(&file, PASS)?;
+        let again = seal_file_kat(PASS, &table(&file), &body)?;
+        assert_eq!(again.len(), file.len());
+        assert_eq!(open_body_kat(&again, PASS)?.as_slice(), body.as_slice());
+        let contents = open_export_kat(&again, PASS)?;
+        assert_eq!(encode_body_kat(&contents)?.as_slice(), body.as_slice());
+        Ok(())
+    }
+
+    /// Killers (A-4 mutants, `import`, `identity_fingerprint`, `import_bytes`): `import` reads the file at a path with the
+    /// profile parameters; the restored identity row carries the fingerprint of its seeds; a contact's name is kept and
+    /// an empty name is stored as none.
+    #[test]
+    fn import_restores_fingerprint_and_names() -> R {
+        let dir = TempDir::new("bk-k5")?;
+        let mut store = Store::open(&dir.path().join("profile"), &TestKey::db_key())?;
+        populate(&mut store)?;
+        let path = dir.path().join("export");
+        export(&store, &path, PASS, true, true)?;
+        let mut fresh = Store::open(&dir.path().join("restored"), &TestKey::db_key())?;
+        import(&mut fresh, &path, PASS, 9)?;
+        let fp: Vec<u8> = fresh.connection_kat().query_row(
+            "SELECT fingerprint FROM identity WHERE id = 1",
+            [],
+            |r| r.get(0),
+        )?;
+        let own = IdentityKeys::from_parts(
+            HybridSigningKey::from_seeds(&[0x11; 32], &[0x22; 32])?,
+            IkDhSecret::from_bytes(&[0x33; 32])?,
+        )?;
+        assert_eq!(fp, own.fingerprint()?.to_vec());
+        let names: Vec<Option<String>> = fresh
+            .contacts()?
+            .into_iter()
+            .map(|c| c.display_name)
+            .collect();
+        assert_eq!(names, [Some("Bobby".to_owned()), None]);
+        Ok(())
+    }
 }

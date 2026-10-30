@@ -402,4 +402,23 @@ mod tests {
         assert!(!store.has_message(6, &[7; 16])?);
         Ok(())
     }
+
+    /// Killer (A-4 mutant, `session_row`): a sealed part copied to another row of `sessions` does not open there (the row
+    /// key `(session_id, part, ord)` is in the record's AD, ADR-053 item 5).
+    #[test]
+    fn sealed_part_bound_to_its_row() -> R {
+        let dir = TempDir::new("sessions-row")?;
+        let mut store = Store::open(dir.path(), &TestKey::db_key())?;
+        store.txn(|tx| {
+            put_fixed(tx, 7, b"fixed-7")?;
+            put_fixed(tx, 8, b"fixed-8")
+        })?;
+        store.connection_kat().execute(
+            "UPDATE sessions SET data = (SELECT data FROM sessions WHERE session_id = 7) WHERE session_id = 8",
+            [],
+        )?;
+        assert!(store.session_rows(7)?.is_some());
+        assert_eq!(store.session_rows(8).err(), Some(Error::Unavailable));
+        Ok(())
+    }
 }

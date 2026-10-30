@@ -185,4 +185,31 @@ mod tests {
         );
         Ok(())
     }
+
+    /// Killers (A-4 mutants, the `kat` entry points of the fuzz target `store_record_open`): `seal_kat` seals under the
+    /// table keys of `kat::TEST_MK` — [`open`] under those keys gives the record back — and `open_kat` opens it there and
+    /// not under another column.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn fuzz_entry_points_round_trip() -> R {
+        let mk = LockedSecret::<32>::from_slice(&crate::kat::TEST_MK)?;
+        let keys = TableKeys::derive(&mk)?;
+        let row = row_key(&[KeyPart::Int(7)])?;
+        let rec = seal_kat(Table::Identity, "secret", &row, b"identity section")?;
+        assert_eq!(rec.len(), 16 + SEAL_OVERHEAD);
+        let key = keys.get(Table::Identity);
+        assert_eq!(
+            open(key, Table::Identity, "secret", &row, &rec)?.as_slice(),
+            b"identity section"
+        );
+        assert_eq!(
+            open_kat(Table::Identity, "secret", &row, &rec)?.as_slice(),
+            b"identity section"
+        );
+        assert_eq!(
+            open_kat(Table::Identity, "other", &row, &rec).err(),
+            Some(Error::Unavailable)
+        );
+        Ok(())
+    }
 }

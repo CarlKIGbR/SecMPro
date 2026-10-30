@@ -415,6 +415,11 @@ A-4 (`modell=claude-opus-5-5`; no deviation from the spec, ADR-053 or Amendment 
 - **D31:** the red-first outputs of §3 (labels, F3) are in `a4-red-first.txt` (A-4d2).
 - **D29:** one `ci-fast` at `eb9d3b8` (`ci-fast-a4-l-eb9d3b8.txt`) stands for the dictated `ci-fast-a4-g700` and
   `ci-fast-a4-l` (G7-00 was the last code commit before it; D13 precedent).
+- **D32 (A4-1-01):** `DbKey` holds K_db as `StoreKey`; the `PRAGMA key` statement is built in a `LockedSecret<82>` (`secmp-crypto` `LockedSecret::with_fill`, new).
+- **D33 (A4-1-03):** the sessions AD vector uses (4, 1, 0) — the ruling's part 4 does not exist (parts 0–3); part 1 (skipped) covers both sealed columns (`data`, `skey`).
+- **D34 (A4-1-05):** a cloud-folder hit is a component equal to a listed name or starting with it followed by a space, `-` or `_` (`OneDrive - Org`, `Dropbox_Team`); no bare prefix (`Boxes` is not a hit); override: `force`.
+- **D35 (A4-1-04):** `own_name` is not allowlisted (no product code uses it), so it is never exported and the FO-03 `own_name` needle (`m7_forensic.rs:112`) is vacuous; FO-01a in Phase C re-targets that needle.
+- **Q175** (reviewer, 2026-10-30): a `sessions` skipped entry shorter than 36 B is malformed → the uniform record error; supersedes D23; the A-3 test `session_rows_round_trip` re-dictated to ≥ 36-B entries.
 
 ## 6. Dependencies added or bumped
 
@@ -629,3 +634,48 @@ Q137 (e.g. arrays of length `k` per harness instead of `TR_SKIPPED_KEYS`, an exc
   `docs/reviews/M07-evidence/ci-full-a4-c3c1dcf.txt` is 2 896 642 B > 2 097 152 B and not in `LARGE_FILE_ALLOW` (committed in `29a1865`,
   A-4). **Blocked:** not touched here (evidence file, no gate change); needs the reviewer's decision (trim the file, or an
   `LARGE_FILE_ALLOW` entry by ADR-052).
+
+## A-4e fix-ups (WEISUNG M7-A4e; verifier `VERIFY-A4-part1` of 2026-10-30; `modell=claude-sonnet-5-5`)
+
+Guard: tree clean, HEAD `9d0f22f9280ebf911e1794635068e9258e01c308` (A-4c commits `13174b1`, `d35f60e`, `37118da`, the A-4d2 commits `5d44443`, `8426991`, `3ce6c70`, `9d0f22f` present). The weisung's header names base `bf55099…` (the A-2 commit); the actual HEAD at the guard is `9d0f22f`. Commits: `fix(store): K_db only in locked pages…` (A4-1-01, 08), `fix(store): durable wrap creation…` (A4-1-02, 07), `test(store): hand-written record AD…` (A4-1-03), `fix(store): backup settings allowlist…` (A4-1-04, 05, 06), `fix(store): a skipped entry shorter than its key…` (Q175, A4-1-09, 10), `test(crypto,store): killers for the A-4e mutants`, `docs(m7): mutants-accepted wrap.rs row follows the code (A-4e)`. Code head `e88fd22`. No spec, ADR, label, vector or wire/format byte change; `Cargo.lock` unmoved; no skip, no `#[ignore]`, no threshold, no new error variant. `wrapping_and_header_kat` and `wrap_bytes_recomputed` stay green unchanged.
+
+### §3 tests (one row per new or re-dictated test)
+
+| item | test | commit | red first |
+|---|---|---|---|
+| A4-1-01 | `store::tests::k_db_never_outside_a_locked_page` | §1 | `left: 1, right: 0` (`Zeroizing<[u8; 32]>`) |
+| A4-1-01 | `secmp-crypto secret::tests::with_fill_writes_in_place` (the `Err(Unavailable)` path needs a failing locked-memory backend and is not reachable from a unit test) | §1 | new function, no red |
+| A4-1-01 (re-dictated) | `store::tests::key_pragma_order_and_zeroizing` (82 bytes via `expose_secret()`, prefix/suffix), `store::tests::raw_key_pragma_value` (compares `expose_secret()` bytes; the one-bit check reads `DbKey::k_db_kat()`), `secrets::tests::long_lived_keys_in_secret_pages` (+ `locked(db_key.k_db_kat())`) | §1 | expectations unchanged, types changed |
+| A4-1-08 | `wrap::tests::locked_memory_failure_is_unavailable` | §1 | `left: Unlock, right: Unavailable` (with `kdf_error = |_| Unlock` first) |
+| A4-1-02 | `wrap::tests::create_is_durable_and_refuses_existing` | §2 | `left: 0, right: 2` (`sync_all` count); the create-twice half is green at first run |
+| A4-1-07 | `store::tests::open_unlocked_with_another_profile_is_unlock`, `wrap::tests::unlock_without_wrap_is_unavailable`, `contacts::tests::contacts_read_failure_is_unavailable` (new `contacts.rs` test module) | §2 | green at first run (pin already-correct behaviour) |
+| A4-1-03 | `seal::tests::ad_vector_{prekeys, sessions, identity, relays, invitations, outbox}` | §3 | each with one wrong byte first (int width / length byte): all six `Error: Rejected` (`a4e-red-first.txt`), then the correct vector, green |
+| A4-1-04 | `backup::tests::settings_allowlist_pinned` | §4 | `left: ["retention", "retention_days", "theme"] right: ["retention_days"]` |
+| A4-1-04 (re-dictated) | `backup::tests::contents_whitelist` (BK-01): fixture `('retention_days', …), ('theme', …)`, settings section = `[retention_days]` | §4 | — |
+| A4-1-05 | `backup::tests::export_path_hardening` (`OneDrive - X`, `Dropbox_Team`, `Nextcloud-Work` → `CloudFolder`; `Boxes`, `Boxed-in` no hit; `<tmp>/Dropbox/../safe/x` → Ok, written into `safe`, mode `0o600`; existing file → `Unavailable`, bytes unchanged; symlink into `Dropbox` → `CloudFolder`) | §4 | `left: Ok(()) right: Err(CloudFolder)` (`OneDrive - X`) |
+| A4-1-06 | `backup::tests::import_refuses_any_nonempty_table` (eight cases) | §4 | `left: Ok(()) right: Err(Unavailable)` (`prekeys`) |
+| A4-1-09 / Q175 | `sessions::tests::short_skipped_entry_refused`; `sessions::tests::session_rows_round_trip` re-dictated (entries `[b'e'; 36]` + ordinal; `again` = 36 B; + `skipped_keys` = first 36 B) | §5 | `left: Ok(()) right: Err(Unavailable)` |
+| mutant killers | `store::tests::incomplete_keys_open_nothing`, `backup::tests::bare_file_name_resolves_against_the_current_dir` | killers | — |
+
+New tests: 19 (17 plus 2 mutant killers); 13 seen failing first (`a4e-red-first.txt`); green at first run: the three of A4-1-07, `with_fill_writes_in_place` and the two killers; re-dictated: 5 (`key_pragma_order_and_zeroizing`, `raw_key_pragma_value`, `long_lived_keys_in_secret_pages`, `contents_whitelist`, `session_rows_round_trip`). Red-first outputs: `docs/reviews/M07-evidence/a4e-red-first.txt` (13 failing tests).
+
+### Anchors and checks
+
+- **A4-1-01:** `store.rs:42` `pub struct DbKey(Option<StoreKey>, Option<TableKeys>);`; `open_inner` refuses a key without `K_db` or without table keys with `Unavailable` (`DbKey::has_db`). `wrap.rs` `db_key` hands the derived `StoreKey` over by value.
+- **A4-1-08:** `wrap.rs:86` `kdf_error` used at `:99` (`kek`), `:334` (`open_mk`) and `backup.rs:714` (`open_body`; the `kek` of `backup.rs:648` goes through `wrap::kek`). `Caead::open_locked` uses no locked memory, so its errors stay `Unlock`.
+- **A4-1-04 settings keys in product code** (`grep -rn "settings" crates --include=*.rs`, outside `#[cfg(test)]`): only `messages.rs:155` `"SELECT value FROM settings WHERE key = 'retention_days'"`; `BACKUP_SETTINGS_KEYS = ["retention_days"]`, `BACKUP_SETTINGS_EXCLUDED = []` (`backup.rs:73,75`). The filter is applied after the read.
+- **A4-1-05:** `in_cloud_folder` stays lexical; `export_checked` canonicalises the parent (`resolved`, `backup.rs:161`), refuses an existing path before the key derivation and at creation (`create_new`, Unix `0o600`, `sync_all`; a failed write removes the file). `export_kat` goes through the same path (its parent must exist).
+- **A4-1-09 callers of `insert_skipped`** (`grep -rn "insert_skipped" crates`): `backup.rs:972` and `:976` (68 B) checked: ≥ 36 B; `sessions.rs:271–273` and `:279` re-dictated to ≥ 36 B; `sessions.rs:362` (`SKIPPED_ENTRY_LEN`) checked: ≥ 36 B; `seal.rs:272` (47 B) checked: ≥ 36 B; `schema.rs:147` (68 B) checked: ≥ 36 B; `m7_forensic.rs:91` (68 B) checked: ≥ 36 B; `secmp-client-core/src/persist.rs:214` (entries of `RatchetParts.skipped`, `SKIPPED_ENTRY_LEN` each; `persist.rs:76` already refuses < `SKIPPED_KEY_LEN`) checked: ≥ 36 B. No short caller outside `secmp-store` tests.
+- **A4-1-10:** `seal.rs:2` already reads "accepted 2026-10-29, Q144" (A-4d2); nothing changed.
+
+### §4 gates
+
+| gate | result |
+|---|---|
+| `cargo xtask ci-fast` at `e88fd22` (`ci-fast-a4e-e88fd22.txt`, head on line 1, clean tree; named by the real head, the code head after the killers, not by the §5 commit `f0e4bdf`) | PASS: fmt 1 s, clippy 3 s, policy 1 s, deny 0 s, vet 1 s, audit 2 s, cooldown 23 s, nextest 20 s, doctest 1 s, hello 0 s, kat 121 s, harness 1034 s |
+| local mutants (`mutants-a4e-f0e4bdf.txt`; diff `9d0f22f..`) | crypto 0 / 0 / 1 / 0 of 1 (c/m/u/t); store first run 49 / 3 / 28 / 0 of 80, after the killers 52 / 0 / 28 / 0; `mutants-accepted.md` row `wrap.rs:123:9` → `:133:9` |
+| `cargo nextest run -p secmp-testkit --features harness` (before the killers) | 317 passed |
+
+### §7 risks
+
+None new. Blocked: none. STOP: none.

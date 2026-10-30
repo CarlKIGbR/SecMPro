@@ -438,10 +438,7 @@ mod tests {
             .get(usize::from(*t) % Table::ALL.len())
             .ok_or("table")?;
         let column = String::from_utf8_lossy(&column);
-        assert_eq!(
-            open_kat(table, &column, &row, bytes)?.as_slice(),
-            MESSAGE
-        );
+        assert_eq!(open_kat(table, &column, &row, bytes)?.as_slice(), MESSAGE);
         Ok(())
     }
 }

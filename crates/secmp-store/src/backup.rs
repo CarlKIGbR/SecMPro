@@ -1469,10 +1469,7 @@ mod tests {
     }
 
     /// A backup of the populated profile whose settings section is replaced by `settings` (sealed again under `PASS`).
-    fn forged(
-        label: &str,
-        settings: Vec<(&str, Vec<u8>)>,
-    ) -> Res<(TempDir, std::path::PathBuf)> {
+    fn forged(label: &str, settings: Vec<(&str, Vec<u8>)>) -> Res<(TempDir, std::path::PathBuf)> {
         let (dir, file) = exported(label)?;
         let mut contents = open_export_kat(&file, PASS)?;
         contents.settings = settings
@@ -1559,9 +1556,10 @@ mod tests {
         assert!(path.exists());
         drop(file);
         let mut fresh = Store::open(&dir.path().join("fresh"), &TestKey::db_key())?;
-        fresh
-            .connection_kat()
-            .execute("INSERT INTO settings (key, value) VALUES ('theme', x'01')", [])?;
+        fresh.connection_kat().execute(
+            "INSERT INTO settings (key, value) VALUES ('theme', x'01')",
+            [],
+        )?;
         assert_eq!(
             import_kat(&mut fresh, &path, PASS, Argon2Params::kat_small(), 1),
             Err(Error::Unavailable)

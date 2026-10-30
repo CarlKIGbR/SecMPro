@@ -436,7 +436,10 @@ mod tests {
                         })
                     })
                     .collect();
-                handles.into_iter().map(std::thread::ScopedJoinHandle::join).collect()
+                handles
+                    .into_iter()
+                    .map(std::thread::ScopedJoinHandle::join)
+                    .collect()
             });
             let mut winners = Vec::new();
             for r in results {

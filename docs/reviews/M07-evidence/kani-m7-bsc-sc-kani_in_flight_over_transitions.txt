@@ -1,0 +1,17 @@
+tree = 9722477 + SC-06 of this commit
+# cargo kani --package secmp-client-core --harness kani_proofs::kani_in_flight_over_transitions --exact, alone (2026-10-30, nproc 32), via
+# target/bsc-scripts/kani-one.py (= docs/reviews/M07-evidence/kani-one-a3b.py.txt with the package as an argument);
+# peak = getrusage(RUSAGE_CHILDREN).ru_maxrss of the wrapper process, limit KANI_CBMC_RSS_LIMIT_KIB 14160156,
+# 90 % = 12744140.
+  Checking harness kani_proofs::kani_in_flight_over_transitions...
+  Check 87: kani_proofs::kani_in_flight_over_transitions.cover.1
+  - Status: SATISFIED
+  Check 97: kani_proofs::kani_in_flight_over_transitions.cover.2
+  - Status: SATISFIED
+  SUMMARY:
+  ** 0 of 685 failed (16 unreachable)
+  ** 2 of 2 cover properties satisfied
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 37.083492s
+  Complete - 1 successfully verified harnesses, 0 failures, 1 total.
+  exit 0; wall 39 s; peak 1500392 KiB = 10.6 % of 14160156 KiB

@@ -1227,6 +1227,7 @@ pub(crate) const KANI_HARNESSES: &[&str] = &[
     "kani_proofs::kani_hx_chunk_bounds",
     "kani_proofs::kani_hx_grouping",
     "kani_proofs::kani_in_flight_bound",
+    "kani_proofs::kani_in_flight_over_transitions",
     "kani_proofs::kani_link_counter_checked_add",
     "kani_proofs::kani_link_counter_strict_plus_one",
     "kani_proofs::kani_outer_unpad_total",
@@ -1284,6 +1285,7 @@ pub(crate) const KANI_COVERS: &[(&str, usize)] = &[
     ("kani_proofs::kani_frame_pad_total", 2),
     ("kani_proofs::kani_frame_written_commits_fifo", 1),
     ("kani_proofs::kani_in_flight_bound", 1),
+    ("kani_proofs::kani_in_flight_over_transitions", 2),
     ("kani_proofs::kani_link_counter_checked_add", 3),
     ("kani_proofs::kani_link_counter_strict_plus_one", 2),
     ("kani_proofs::kani_q_frame_plaintext_exact_fit_request", 1),
@@ -2223,6 +2225,45 @@ mod tests {
         let needle = "    \"secmp-store/kat\",\n]\nkat = [\"harness\"]";
         assert!(!crlf.contains(needle));
         assert!(lf(crlf).contains(needle));
+    }
+
+    /// The Kani harnesses of WEISUNG M7-B-SC with their covers (G7-15b), one added per commit.
+    const B_SC_HARNESSES: &[(&str, usize)] = &[("kani_in_flight_over_transitions", 2)];
+
+    /// TEST-SPEC-M7 G7-15b (TEST-SPEC (l): "`FUZZ_TARGETS` += FZ-04, `KANI_HARNESSES` += K7-01, SC-06…SC-09, each in the
+    /// commit of its target"; created by WEISUNG M7-B-SC with SC-06, BRIEF M7-B adds K7-01 and FZ-04): every Kani harness of
+    /// B-SC is registered in `KANI_HARNESSES` with its covers in `KANI_COVERS`, and is a `#[kani::proof]` function of
+    /// `secmp-client-core`'s `kani_proofs.rs`.
+    #[test]
+    fn fuzz_and_kani_lists_core() -> crate::util::Result<()> {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let proofs = lf(&std::fs::read_to_string(
+            root.join("crates/secmp-client-core/src/kani_proofs.rs"),
+        )?);
+        for (harness, covers) in B_SC_HARNESSES {
+            let name = format!("kani_proofs::{harness}");
+            assert!(KANI_HARNESSES.contains(&name.as_str()), "{name} registered");
+            assert_eq!(
+                KANI_COVERS
+                    .iter()
+                    .find(|(n, _)| *n == name)
+                    .map(|(_, c)| *c),
+                Some(*covers),
+                "{name}: covers"
+            );
+            let def = format!("fn {harness}() {{");
+            let at = proofs
+                .find(&def)
+                .ok_or_else(|| crate::util::Error(format!("{def} missing")))?;
+            let before = proofs.get(..at).unwrap_or_default();
+            let attr = before.rfind("#[kani::proof]").unwrap_or(0);
+            let between = before.get(attr..).unwrap_or_default();
+            assert!(
+                before.contains("#[kani::proof]") && !between.contains("\nfn "),
+                "{harness} is a proof"
+            );
+        }
+        Ok(())
     }
 
     /// TEST-SPEC-M7 G7-13 (ADR-047 Amendment 10): `MUTANT_PACKAGES` += `secmp-store`, appended; the per-package rule is

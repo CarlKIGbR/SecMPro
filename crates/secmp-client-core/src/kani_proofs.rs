@@ -8,11 +8,13 @@
 //! - K-05 `kani_backoff_cap`: the cap of the reconnect back-off (`params::backoff_cap`).
 //! - K-06 `kani_rate_bound_integer_form`: the integer rate bound equals the exact rational one (`params::rate_sum_ok`).
 //! - K-07 `kani_evicted_range`: the plausibility rule of `OK_SEND`'s evicted id (`secmp_transport::evicted`).
+//! - K-C1…K-C6: the unwritten-frame ledger and the round-robin rotation (M6 Phase C1, below).
+//! - SC-06 `kani_in_flight_over_transitions`: the in-flight rule over the core's transitions (`pure::InFlight`).
 
 use secmp_transport::evicted::evicted_is_plausible;
 
 use crate::scheduler::core::pure::{
-    Flight, complete_oldest, hand_out, ledger_admits, reserved_rr, rr_select, tick_time,
+    Flight, InFlight, complete_oldest, hand_out, ledger_admits, reserved_rr, rr_select, tick_time,
     unwritten_max,
 };
 use crate::scheduler::params::{backoff_cap, rate_sum_ok};
@@ -208,9 +210,9 @@ fn kani_evicted_range() {
 
 // ---- K-C1…K-C6 (BRIEF M6-C1 item 5, A′ ledger): the unwritten-frame ledger of a link and the round-robin rotation -----
 //
-// Scope (M7 for the rest): the harnesses run the extracted pure functions (`reserved_rr`, `hand_out`, `complete_oldest`,
-// `ledger_admits`, `unwritten_max`; item 10b) on a symbolic ledger. They do not run the in-flight rule over real
-// transitions, queue generations, the abstract persist contract or paired executions. An up link needs a `Channel`, which
+// Scope: the harnesses run the extracted pure functions (`reserved_rr`, `hand_out`, `complete_oldest`, `ledger_admits`,
+// `unwritten_max`; item 10b) on a symbolic ledger. The in-flight rule over the core's transitions, queue generations, the
+// abstract persist contract and paired executions are SC-06…SC-09 (M7 B-SC, below). An up link needs a `Channel`, which
 // this crate cannot build under Kani, so `Scheduler` itself is out of reach (item 10b).
 
 /// Symbolic ledger contents: up to four entries (`len`), each `None` (a `FETCH`) or the position a `SEND` commits (`< n`).
@@ -440,4 +442,57 @@ fn kani_unwritten_bound() {
     // max + 2 ticks of at least one frame each cannot all be admitted
     assert!(torn);
     kani::cover!(torn && ledger.len() == max, "the bound is reached exactly");
+}
+
+// ---- SC-06…SC-09 (KANI-M6-C-1; M06-report §7 "Kani scope (item 5, M7)"): the rest of the M6 scope -------------------
+//
+// Each harness runs functions the core itself calls (`core/pure.rs`), never a copy: `Scheduler` needs an up link, whose
+// `Channel` this crate cannot build under Kani, so the transitions are extracted and the core calls the extracted ones.
+
+/// SC-06 `kani_in_flight_over_transitions`: the in-flight rule over the core's own transitions — `pure::InFlight`, which
+/// `World::tick` runs (`admit`, then `push` for each of the tick's one or two requests) and `Scheduler::on_frame` runs
+/// (`complete`), and the teardown that drops it with the up-state (the next connection starts a new one) — over every
+/// sequence of up to eight events: the count of outstanding ticks stays in {0, 1, 2}; a tick at two outstanding is refused
+/// and changes nothing; a response answers its tick only with the tick's last request (spec §10.3).
+#[kani::proof]
+#[kani::unwind(10)]
+fn kani_in_flight_over_transitions() {
+    let mut f: InFlight<u8> = InFlight::new(2);
+    let mut k: u8 = 0;
+    for _ in 0..8 {
+        let event: u8 = kani::any();
+        kani::assume(event < 3);
+        let before = f.count();
+        match event {
+            0 => {
+                if f.admit() {
+                    k += 1;
+                    assert!(f.push(k));
+                    if kani::any() {
+                        assert!(f.push(k));
+                    }
+                    assert!(f.count() == before + 1);
+                } else {
+                    assert!(before == 2 && f.count() == 2);
+                    kani::cover!(true, "a third tick is refused");
+                }
+            }
+            1 => match f.complete() {
+                Some(t) => {
+                    if f.front() == Some(&t) {
+                        assert!(f.count() == before);
+                        kani::cover!(
+                            true,
+                            "a tick's first response leaves its second request outstanding"
+                        );
+                    } else {
+                        assert!(f.count() + 1 == before);
+                    }
+                }
+                None => assert!(before == 0),
+            },
+            _ => f = InFlight::new(2),
+        }
+        assert!(f.count() <= 2);
+    }
 }

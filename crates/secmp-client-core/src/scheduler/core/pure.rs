@@ -313,6 +313,106 @@ pub fn unwritten_max(max_in_flight: u8) -> usize {
     usize::from(max_in_flight).saturating_mul(2)
 }
 
+/// A request whose response is outstanding, as the in-flight rule sees it: the tick it was written at.
+pub trait Ticked {
+    /// The tick (`k` of the link).
+    fn tick(&self) -> u32;
+}
+
+impl Ticked for u8 {
+    fn tick(&self) -> u32 {
+        u32::from(*self)
+    }
+}
+
+/// The most ticks a link may have outstanding (spec §10.3: "a third tick with two outstanding tears the link down"): the
+/// bound of [`InFlight`], whatever larger `max_in_flight` a caller asks for.
+pub const IN_FLIGHT_TICKS: u8 = 2;
+
+/// The most requests outstanding on a link: two ticks of at most two requests (a `SEND` and a `FETCH`).
+pub const IN_FLIGHT_REQS: usize = 4;
+
+/// The requests of an up link whose responses are outstanding, oldest first, with the count of their ticks (spec §10.3):
+/// the transitions `World::tick` makes (a due tick is admitted, its one or two requests join) and `Scheduler::on_frame`
+/// makes (a response completes the oldest request; its tick is answered once no request of it is left). A teardown drops
+/// it with the up-state; the next connection starts a new one (SC-06). A fixed array of [`IN_FLIGHT_REQS`] slots, no heap:
+/// a `Vec` or a `VecDeque` of symbolic length does not finish under Kani over eight transitions (M7 B-SC measurement).
+pub struct InFlight<R> {
+    flight: Flight,
+    reqs: [Option<R>; IN_FLIGHT_REQS],
+    len: usize,
+}
+
+impl<R: Ticked> InFlight<R> {
+    /// Nothing outstanding; at most `max` ticks allowed, and never more than [`IN_FLIGHT_TICKS`].
+    #[must_use]
+    pub fn new(max: u8) -> Self {
+        Self {
+            flight: Flight::new(max.min(IN_FLIGHT_TICKS)),
+            reqs: core::array::from_fn(|_| None),
+            len: 0,
+        }
+    }
+
+    /// Ticks outstanding.
+    #[must_use]
+    pub const fn count(&self) -> u8 {
+        self.flight.count()
+    }
+
+    /// A tick is due: `false` — and nothing changes — if `max` ticks are outstanding (the caller tears the link down
+    /// before it writes anything).
+    #[must_use]
+    pub const fn admit(&mut self) -> bool {
+        self.flight.on_tick()
+    }
+
+    /// A request of the admitted tick is written. `false` if all [`IN_FLIGHT_REQS`] slots are taken (not reachable: at
+    /// most two admitted ticks of at most two requests); the request is then not held, and its response does not match
+    /// the oldest request — the link is torn down (`Reason::Rejected`, fail closed).
+    #[must_use]
+    pub fn push(&mut self, req: R) -> bool {
+        let Some(slot) = self.reqs.get_mut(self.len) else {
+            return false;
+        };
+        *slot = Some(req);
+        self.len = self.len.saturating_add(1);
+        true
+    }
+
+    /// The oldest outstanding request (the one the next response answers).
+    #[must_use]
+    pub fn front(&self) -> Option<&R> {
+        self.iter().next()
+    }
+
+    /// The outstanding requests, oldest first.
+    pub fn iter(&self) -> impl Iterator<Item = &R> {
+        self.reqs.iter().take(self.len).flatten()
+    }
+
+    /// The response of the oldest request is complete: it leaves (the younger ones move up a slot), and its tick is
+    /// answered once no request of that tick is left.
+    pub fn complete(&mut self) -> Option<R> {
+        if self.len == 0 {
+            return None;
+        }
+        let req = self.reqs.first_mut()?.take()?;
+        self.reqs.rotate_left(1);
+        self.len = self.len.saturating_sub(1);
+        if !self.iter().any(|o| o.tick() == req.tick()) {
+            self.flight.on_response();
+        }
+        Some(req)
+    }
+
+    /// The link is torn down: every outstanding request is handed back, oldest first.
+    pub fn drain(&mut self) -> impl Iterator<Item = R> + '_ {
+        self.len = 0;
+        self.reqs.iter_mut().filter_map(Option::take)
+    }
+}
+
 /// Ticks whose responses are outstanding (spec §10.3): a third tick with two outstanding tears the link down.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Flight {
@@ -496,6 +596,36 @@ mod tests {
         assert!(!r.commit(11), "dropped");
         assert_eq!(Received::<2>::default(), Received::<2>::new());
         assert_eq!(RecvLedger::<2>::default(), RecvLedger::<2>::new());
+    }
+
+    /// SC-06 (unit): the in-flight count is the number of ticks with an outstanding request — a tick of two requests is
+    /// answered by its second response; a third tick is refused; a teardown hands every request back.
+    #[test]
+    fn in_flight_counts_ticks_not_requests() {
+        let mut f: InFlight<u8> = InFlight::new(2);
+        assert!(f.admit());
+        assert!(f.push(1));
+        assert!(f.push(1));
+        assert!(f.admit());
+        assert!(f.push(2));
+        assert!(!f.admit(), "a third tick");
+        assert_eq!(f.count(), 2);
+        assert_eq!(f.front(), Some(&1));
+        assert_eq!(f.complete(), Some(1));
+        assert_eq!(f.count(), 2, "the second request of tick 1 is outstanding");
+        assert_eq!(f.complete(), Some(1));
+        assert_eq!(f.count(), 1);
+        assert_eq!(f.iter().copied().collect::<Vec<_>>(), [2]);
+        assert_eq!(f.drain().collect::<Vec<_>>(), [2]);
+        assert_eq!(f.complete(), None);
+        assert_eq!(f.front(), None);
+        assert_eq!(Ticked::tick(&7_u8), 7);
+        // four slots: a fifth request is refused; a larger max is clamped to two ticks
+        let mut g: InFlight<u8> = InFlight::new(9);
+        assert!(g.admit() && g.admit() && !g.admit());
+        assert!((1..=4).all(|t| g.push(t)));
+        assert!(!g.push(5));
+        assert_eq!(g.iter().copied().collect::<Vec<_>>(), [1, 2, 3, 4]);
     }
 
     #[test]

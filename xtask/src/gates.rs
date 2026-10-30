@@ -11098,6 +11098,9 @@ mod tests {
         Ok(())
     }
 
+    /// The B-SC harnesses whose committed alone runs the cover pin reads (M7 B-SC §3, one per commit).
+    const B_SC_RUNS: &[&str] = &["kani_in_flight_over_transitions"];
+
     /// M4 delta review VD1-5: the number of covers is pinned (`expect::KANI_COVERS`: as many as `kani_proofs.rs` has,
     /// each on a known harness); the committed Kani log matches it; a deleted or an added cover is a finding; a
     /// summary with Kani's `(K unreachable)` suffix fails the cover check.
@@ -11182,6 +11185,13 @@ mod tests {
         ] {
             swap_split_harness_block(&root, &mut log, old, prefix)?;
         }
+        // M7 B-SC (SC-06…SC-09): the alone runs of the new `secmp-client-core` harnesses, one committed file each
+        // (`kani-m7-bsc-sc-<harness>.txt`, the A-3b wrapper's form)
+        for h in B_SC_RUNS {
+            log.push_str(&lf(&std::fs::read_to_string(
+                root.join(format!("docs/reviews/M07-evidence/kani-m7-bsc-sc-{h}.txt")),
+            )?));
+        }
         assert_eq!(
             kani_cover_pin_findings(&kani_covers(&log)?),
             Vec::<String>::new()
@@ -11242,8 +11252,9 @@ mod tests {
         // `secmp-client-core` (TEST-SPEC-M6 K-01…K-07); M6 Phase C1: + K-C1…K-C6
         // M7 A1e (Q132): `kani_commit_accept_atomic` split in two, 47
         // M7 A-3b (Q135): q_frame split in three, tr_header_selection in three (k ≤ 2, k = 3, k = 4), 51
-        assert_eq!(all.len(), 51);
-        assert_eq!(kani_verified(&kani_log(all, 0))?.len(), 51);
+        // M7 B-SC: + SC-06
+        assert_eq!(all.len(), 52);
+        assert_eq!(kani_verified(&kani_log(all, 0))?.len(), 52);
         // a deleted harness: 18 verified, and Kani's own summary says 18 of 18
         let fifteen = all.get(1..).unwrap_or_default();
         assert!(kani_verified(&kani_log(fifteen, 0)).is_err());

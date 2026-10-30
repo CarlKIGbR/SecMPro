@@ -44,8 +44,8 @@ use crate::timing::{TimingRng, Unavailable};
 
 use self::backoff::reconnect_delay;
 use self::pure::{
-    Flight, RECEIVED_MAX, RecvLedger, complete_oldest, hand_out, ledger_admits, reserved_rr,
-    rr_select, tick_time, unwritten_max,
+    InFlight, RECEIVED_MAX, RecvLedger, Ticked, complete_oldest, hand_out, ledger_admits,
+    reserved_rr, rr_select, tick_time, unwritten_max,
 };
 
 /// Why a scheduler call was refused (nothing changed).
@@ -134,6 +134,12 @@ struct Req {
     kind: ReqKind,
 }
 
+impl Ticked for Req {
+    fn tick(&self) -> u32 {
+        self.tick
+    }
+}
+
 struct Part {
     prepared: Prepared,
     kind: ReqKind,
@@ -157,8 +163,8 @@ struct Up {
     period: u64,
     send_part: Option<Part>,
     fetch_part: Option<Part>,
-    flight: Flight,
-    reqs: VecDeque<Req>,
+    /// The requests whose responses are outstanding and the in-flight count of their ticks (spec §10.3, SC-06).
+    flight: InFlight<Req>,
     /// One entry per frame handed to the driver and not yet reported as written ([`Scheduler::frame_written`]), oldest
     /// first: the frame's id and the round-robin position it commits when it is completely written (a `SEND`), or `None`.
     unwritten: Vec<(FrameId, Option<usize>)>,
@@ -445,7 +451,7 @@ impl World {
                 source.release_discard(queue, token);
             }
         }
-        for req in up.reqs.drain(..) {
+        for req in up.flight.drain() {
             if let ReqKind::Send { queue, token } = req.kind {
                 source.release_failed(queue, token);
             }
@@ -559,7 +565,7 @@ impl World {
             self.overruns = self.overruns.saturating_add(1);
             return TickResult::Tear(Reason::Overrun);
         }
-        if !up.flight.on_tick() {
+        if !up.flight.admit() {
             return TickResult::Tear(Reason::InFlight);
         }
         let needs_send = matches!(spec, Spec::Send(_) | Spec::Relay(_));
@@ -611,11 +617,13 @@ impl World {
                 bytes: part.prepared.bytes().to_vec(),
                 frame,
             });
-            up.reqs.push_back(Req {
+            let held = up.flight.push(Req {
                 tick: next,
                 seq: part.prepared.seq(),
                 kind: part.kind,
             });
+            // not reachable (two ticks of two requests): an unheld request fails its response's match, fail closed
+            debug_assert!(held);
         }
         up.k = next;
         if let Some(q) = sent_to
@@ -662,7 +670,7 @@ impl World {
             let send_missing = needs_send && up.send_part.is_none();
             if tear.is_none() && !send_missing && needs_fetch && up.fetch_part.is_none() {
                 let fetch_outstanding = up
-                    .reqs
+                    .flight
                     .iter()
                     .any(|r| matches!(r.kind, ReqKind::Fetch(..) | ReqKind::FetchMulti(_)));
                 // the acknowledgement the FETCH carries is fixed when it is sealed: it waits for the commits of the cells
@@ -1968,8 +1976,7 @@ impl Scheduler {
                 period,
                 send_part: None,
                 fetch_part: None,
-                flight: Flight::new(world.params.max_in_flight),
-                reqs: VecDeque::new(),
+                flight: InFlight::new(world.params.max_in_flight),
                 unwritten: Vec::new(),
             }));
             world
@@ -2056,7 +2063,7 @@ impl Scheduler {
                     Err(_) => bad = true,
                 }
                 if let Some(completed) = &done
-                    && up.reqs.front().is_none_or(|r| r.seq != completed.seq)
+                    && up.flight.front().is_none_or(|r| r.seq != completed.seq)
                 {
                     bad = true;
                     done = None;
@@ -2067,12 +2074,7 @@ impl Scheduler {
             } else if let Some(completed) = done {
                 let mut req = None;
                 if let State::Up(up) = &mut link.state {
-                    req = up.reqs.pop_front();
-                    if let Some(r) = &req
-                        && !up.reqs.iter().any(|o| o.tick == r.tick)
-                    {
-                        up.flight.on_response();
-                    }
+                    req = up.flight.complete();
                 }
                 if let Some(req) = req {
                     world.pending.push_back(PendingOutcome {

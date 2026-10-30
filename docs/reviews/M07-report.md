@@ -4,14 +4,14 @@ Branch: `m07-client-core` · Base: `bf550999fb2c7771153863f1da2f19adb5a677b5` ·
 
 ## 1. Plan (written before implementation, updated during)
 
-Binding inputs: `docs/reviews/M07-planning/` (`BRIEF_M7.md`, `TEST-SPEC-M7.md` (176 rows: A 65, B 71, C 40),
+Binding inputs: `docs/reviews/M07-planning/` (`BRIEF_M7.md`, `TEST-SPEC-M7.md` (178 rows: A 66, B 72, C 40; Q145),
 `OPEN-M7.md`, `OPEN-M7-decided.md`, `ADR-053-proposed.md`, `ADR-054-proposed.md`, `ADR-055-proposed.md`). ADR-053,
 ADR-054 and ADR-055 are appended to `docs/08-decisions.md` as **Proposed**. Phases: A (Opus) → B (Sonnet; Opus weisung
 for SC-01…SC-10) → C (Sonnet). [O-01] rows are built only after the owner's "ADR-053 accepted"; no `Cargo.toml`
 dependency change before the A0 report, "ADR-055 accepted" and the owner's vet records.
 
-Phase A rows (65): ST-01…ST-20, PC-01…PC-13, FO-03, CT-01, CT-02, CT-04, CT-05, BK-01…BK-07, G7-00…G7-10, G7-12…G7-14,
-G7-15a, G7-16, G7-18, K7-02, FZ-01, FZ-02.
+Phase A rows (66): ST-01…ST-20, PC-01…PC-13, FO-03, CT-01, CT-02, CT-04, CT-05, BK-01…BK-07, G7-00…G7-10, G7-12…G7-14,
+G7-15a, G7-16, G7-18, K7-02, K7-03, FZ-01, FZ-02.
 
 | Step | Phase | What | TEST-SPEC rows closed | Status |
 |---|---|---|---|---|
@@ -22,7 +22,7 @@ G7-15a, G7-16, G7-18, K7-02, FZ-01, FZ-02.
 | A-2 | A | After the A0 report, "ADR-055 accepted" and the owner's vet records: `rusqlite` in `secmp-store`, `argon2` in `secmp-crypto`, allowlist rows, vet/deny/cooldown | G7-01, G7-02, G7-03, G7-04, ST-08 | done @ `bf54d98` |
 | A-3 | A | Store code with the `kat`-only `secmp_store::kat::TestKey`: client-core/testkit → store edges first; pragmas, version check, defensive mode (ST-20, Q128), no temp files, schema, migrations, secure delete, view-once, expiry; persistence contract (`to_parts`/`from_parts`, `StoreOutbox`, store `Persist`); mutants/coverage scope | G7-06, ST-01…ST-04, ST-09, ST-13…ST-18, ST-20, PC-01…PC-13, G7-18, G7-13, G7-14 | closed @ `cdc3c0a` (ST-17: store half; A-3b/A-3d/A-3e fix-ups; Kani exception Q138; `modell=claude-opus-5-5`) |
 | A-4 | A | After "ADR-053 accepted": wrap, table keys, record seal, `SecretPage` secrets, ct target `store_unlock_reject` with its registration, backup, export forensic, store fuzz targets | ST-05…ST-07, ST-10…ST-12, ST-19, CT-01, CT-05, CT-02, BK-01…BK-07, FO-03, FZ-01, FZ-02, G7-15a (ST-10, BK-04 [REF]-open) | **A-4 built @ `c3c1dcf`; Phase A closes with the green PR run (BRIEF_M7 §5, reviewer)** (`modell=claude-opus-5-5`) |
-| B | B | `Profile`, `Contacts`, `Invitations`, `Sessions`, `Api`, settings, relay view, transport boundary, transactional accept, handshake as scheduled ops; scheduler-core carry-overs (Opus) | PR-*, IN-*, SE-*, AP-*, SC-*, G7-15b, FZ-04, K7-01 | waiting (Phase A) |
+| B | B | `Profile`, `Contacts`, `Invitations`, `Sessions`, `Api`, settings, relay view, transport boundary, transactional accept, handshake as scheduled ops; scheduler-core carry-overs (Opus) | B-SC (Opus): SC-01…SC-10, K7-03b, proto additions (Q147); B-1…B-3 (Sonnet): PR-01, PR-02, PR-04…PR-09, IN-01…IN-13, IN-18…IN-21, K7-01, FZ-04, G7-15b; B-4…B-7 (Sonnet, continuation): PR-03, IN-14…IN-17, SE-01…SE-20 (SE-13a not built), AP-01…AP-07 | B-SC next (Q146) |
 | C | C | `secmp-cli`, E2E, forensic, CT-03, CLI fuzz, transport carry-overs, owner-action rows | CL-*, E2-*, FO-01, FO-01a, FO-02, CT-03, FZ-03, G7-15c, G7-21, C-T1, C-T3, G7-17 ⚙, G7-11, G7-19, G7-20 (cond) | waiting (Phase B) |
 
 ## 2. What was built

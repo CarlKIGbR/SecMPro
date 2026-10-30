@@ -964,7 +964,7 @@ CT-02, CT-05, BK-*, FO-03, FZ-01, FZ-02, PR-03, IN-03. Any later parameter chang
 
 ### ADR-054 — Application-layer payloads for M7: text, view-once, Control arguments, `Profile.name`
 
-**Status.** Proposed (planner, 2026-10-27; M7 planning, OPEN-M7-02, reviewer decision Q81). **OWNER class** (protocol
+**Status.** Accepted (owner default, memo 2026-10-27 item 2, elapsed 2026-10-28 19:08 UTC; Q170). Proposed (planner, 2026-10-27; M7 planning, OPEN-M7-02, reviewer decision Q81). **OWNER class** (protocol
 semantics above the encoding layer). Owner default **+24 h** after delivery of the memo of 2026-10-27: build as written.
 Fulfils the obligation of §7.6 `docs/03:509` ("defined by an application-layer ADR before M7") for the kinds M7 sends;
 answers M02 review F12 (`Profile.name` control characters, `docs/reviews/M02-review.md:91`). No byte layout changes.

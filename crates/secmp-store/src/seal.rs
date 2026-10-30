@@ -212,4 +212,191 @@ mod tests {
         );
         Ok(())
     }
+
+    /// `N(24) ‖ rest` of a raw sealed column, opened under `K_t` — `HKDF(0^32, TEST_MK, label)`, derived here
+    /// independently of `keys.rs` — with the hand-written `ad` (hex); the record must give `want`.
+    fn open_vector(
+        table: Table,
+        raw: &[u8],
+        ad_hex: &str,
+        want: &[u8],
+    ) -> core::result::Result<(), Box<dyn std::error::Error>> {
+        let k = secmp_crypto::hkdf::<32>(&[0; 32], &crate::kat::TEST_MK, table.label(), &[])?;
+        let k = LockedSecret::<32>::from_slice(k.expose_secret())?;
+        let ad = ad_hex
+            .as_bytes()
+            .chunks(2)
+            .map(|c| u8::from_str_radix(core::str::from_utf8(c)?, 16).map_err(Into::into))
+            .collect::<core::result::Result<Vec<u8>, Box<dyn std::error::Error>>>()?;
+        let (n, rest) = raw.split_first_chunk::<24>().ok_or("short record")?;
+        assert_eq!(Caead::open_locked(&k, n, &ad, rest)?.as_slice(), want);
+        Ok(())
+    }
+
+    /// The raw bytes of the one column `sql` selects.
+    fn raw(
+        store: &crate::store::Store,
+        sql: &str,
+    ) -> core::result::Result<Vec<u8>, rusqlite::Error> {
+        store.connection_kat().query_row(sql, [], |r| r.get(0))
+    }
+
+    /// A4-1-03 `prekeys` (kind 1, id 2): the AD spelled out, `row_key` = two u64 big-endian.
+    #[test]
+    fn ad_vector_prekeys() -> R {
+        let dir = crate::kat::TempDir::new("adv-prekeys")?;
+        let mut store = crate::store::Store::open(dir.path(), &crate::kat::TestKey::db_key())?;
+        store.txn(|tx| crate::profile::insert_prekey(tx, 1, 2, b"prekey seed", None))?;
+        let rec = raw(&store, "SELECT secret FROM prekeys")?;
+        open_vector(
+            Table::Prekeys,
+            &rec,
+            concat!(
+                "5365634d502d53544f52452f3120",
+                "7072656b657973",
+                "06",
+                "736563726574",
+                "0000000000000001",
+                "0000000000000002"
+            ),
+            b"prekey seed",
+        )
+    }
+
+    /// A4-1-03 `sessions` (session 4, part 1 = skipped, ord 0): `data` and `skey`, the AD spelled out.
+    #[test]
+    fn ad_vector_sessions() -> R {
+        let dir = crate::kat::TempDir::new("adv-sessions")?;
+        let mut store = crate::store::Store::open(dir.path(), &crate::kat::TestKey::db_key())?;
+        let entry = [&[b'k'; 36][..], b"message key"].concat();
+        store.txn(|tx| crate::sessions::insert_skipped(tx, 4, 0, &entry))?;
+        let data = raw(&store, "SELECT data FROM sessions")?;
+        open_vector(
+            Table::Sessions,
+            &data,
+            concat!(
+                "5365634d502d53544f52452f3120",
+                "73657373696f6e73",
+                "04",
+                "64617461",
+                "0000000000000004",
+                "0000000000000001",
+                "0000000000000000"
+            ),
+            &entry,
+        )?;
+        let skey = raw(&store, "SELECT skey FROM sessions")?;
+        open_vector(
+            Table::Sessions,
+            &skey,
+            concat!(
+                "5365634d502d53544f52452f3120",
+                "73657373696f6e73",
+                "04",
+                "736b6579",
+                "0000000000000004",
+                "0000000000000001",
+                "0000000000000000"
+            ),
+            &[b'k'; 36],
+        )
+    }
+
+    /// A4-1-03 `identity` (id 1): the AD spelled out.
+    #[test]
+    fn ad_vector_identity() -> R {
+        let dir = crate::kat::TempDir::new("adv-identity")?;
+        let mut store = crate::store::Store::open(dir.path(), &crate::kat::TestKey::db_key())?;
+        store.txn(|tx| crate::profile::put_identity(tx, 1, b"identity section", b"fp", 5))?;
+        let rec = raw(&store, "SELECT secret FROM identity")?;
+        open_vector(
+            Table::Identity,
+            &rec,
+            concat!(
+                "5365634d502d53544f52452f3120",
+                "6964656e74697479",
+                "06",
+                "736563726574",
+                "0000000000000001"
+            ),
+            b"identity section",
+        )
+    }
+
+    /// A4-1-03 `relays` (id 1, column `access_key`): the AD spelled out.
+    #[test]
+    fn ad_vector_relays() -> R {
+        let dir = crate::kat::TempDir::new("adv-relays")?;
+        let mut store = crate::store::Store::open(dir.path(), &crate::kat::TestKey::db_key())?;
+        store.txn(|tx| crate::profile::put_relay(tx, 1, b"relay", Some(b"access key")))?;
+        let rec = raw(&store, "SELECT access_key FROM relays")?;
+        open_vector(
+            Table::Relays,
+            &rec,
+            concat!(
+                "5365634d502d53544f52452f3120",
+                "72656c617973",
+                "0a",
+                "6163636573735f6b6579",
+                "0000000000000001"
+            ),
+            b"access key",
+        )
+    }
+
+    /// A4-1-03 `invitations` (`ld_id` = 16 × 0x05): the AD spelled out, `row_key` = `len u8 ‖ bytes`.
+    #[test]
+    fn ad_vector_invitations() -> R {
+        let dir = crate::kat::TempDir::new("adv-invitations")?;
+        let mut store = crate::store::Store::open(dir.path(), &crate::kat::TestKey::db_key())?;
+        store
+            .txn(|tx| crate::profile::insert_invitation(tx, &[5; 16], b"invitation record", 100))?;
+        let rec = raw(&store, "SELECT record FROM invitations")?;
+        open_vector(
+            Table::Invitations,
+            &rec,
+            concat!(
+                "5365634d502d53544f52452f3120",
+                "696e7669746174696f6e73",
+                "06",
+                "7265636f7264",
+                "10",
+                "05050505050505050505050505050505"
+            ),
+            b"invitation record",
+        )
+    }
+
+    /// A4-1-03 `outbox` (`msg_id` = 16 × 0x09, column `payload`): the AD spelled out.
+    #[test]
+    fn ad_vector_outbox() -> R {
+        let dir = crate::kat::TempDir::new("adv-outbox")?;
+        let mut store = crate::store::Store::open(dir.path(), &crate::kat::TestKey::db_key())?;
+        let row = crate::outbox::OutboxRow {
+            msg_id: [9; 16],
+            seq: 1,
+            kind: 0,
+            expire_after: 0,
+            payload: Zeroizing::new(b"outbox payload".to_vec()),
+            queued_ms: 5,
+            first_relayed_ms: None,
+            state: crate::outbox::state::QUEUED,
+            cell_id: None,
+        };
+        store.outbox_insert(1, &row)?;
+        let rec = raw(&store, "SELECT payload FROM outbox")?;
+        open_vector(
+            Table::Outbox,
+            &rec,
+            concat!(
+                "5365634d502d53544f52452f3120",
+                "6f7574626f78",
+                "07",
+                "7061796c6f6164",
+                "10",
+                "09090909090909090909090909090909"
+            ),
+            b"outbox payload",
+        )
+    }
 }

@@ -272,6 +272,7 @@ Phase A, A-4 (times: `ci-fast-a4-6-4383c8a.txt`; red-first lines: `redfirst-a4-1
 | A-4d (WEISUNG M7-A4d) | not run in this box before A-4d2; A-4d2 brings the ci-full evidence file to the summary form |
 | A-4d2 `docs(m7): ci-full evidence at c3c1dcf in the summary form with exact line selection (ADR-052; Q174)` | `5d44443`: file 2 896 642 B → 22 986 B, 51 `VERIFICATION:- ` lines; `gates::tests::large_file_gate_is_clean_on_this_tree` PASS |
 | `cargo xtask ci-fast` at `5d44443` (`ci-fast-a4d2-5d44443.txt`; green A-4d2 run) | PASS: cooldown 26 s, nextest 14 s, kat 100 s, harness 978 s; `st-07-wrap-create-5d44443.txt` (553 ms), `pc-13-write-amplification-5d44443.txt` (8 241 B/slot); commit `8426991` |
+| A-4d2 corrections `3ce6c70` (`docs(m7): A-4 report corrections (A4-2-01, verifier of 2026-10-30)`; `modell=claude-sonnet-5-5`) and `cargo xtask ci-fast` at `3ce6c70` (`ci-fast-a4d2-2-3ce6c70.txt`, A-4d2 close) | PASS: cooldown 26 s, nextest 18 s, kat 106 s, harness 978 s; `docs::` 7/7 |
 
 ct, `store_unlock_reject` (`ct-m7-a4-4b0ffaf.txt`; Δ in ticks of 0.25 ns; floor 40 ticks = 10 ns; threshold |t| 4.5):
 

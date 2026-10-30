@@ -109,3 +109,4 @@ Rows of TEST-SPEC-M7 marked [O-n] follow this table; Q-numbers continue the revi
 | Q178 (EXT1-2) | `wrap::create` holds `<dir>/lock` from before the existence check to the publish (`rename`); per-call `wrap.<pid>.<n>.tmp`; no foreign-tmp removal; a stale tmp from a crash is left in place. Reopens A4-1-02. | reviewer | A4-1-02 |
 | Q179 (EXT1-4) | (a) import rejects a settings key outside `BACKUP_SETTINGS_KEYS` (`Unlock`) before any write; (b) the empty-profile rule counts `settings` too: nine tables. Residual of A4-1-04. | reviewer | A4-1-04, A4-1-06 |
 | Q180 (EXT1-5) | `store_record_open` even mode accepts an authentic record (`Ok`, or the uniform `Err(Unavailable)`); one authentic seed added to the committed corpus. | reviewer | FZ-02 |
+| Q181 (A-4f2) | A repeated settings key in a backup section is refused (`Unlock`) before any write: canonical decode (§1.8); fixed seen-set over `BACKUP_SETTINGS_KEYS`. | reviewer | BK-01 |

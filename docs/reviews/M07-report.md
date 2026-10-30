@@ -788,6 +788,8 @@ Guard: `git status --short` empty; `merge-base --is-ancestor 99ad44c HEAD` exit 
 | `backup::tests::contents_whitelist` + `settings_allowlist_pinned` fixtures (re-dictated: INTEGER 30 via `?1`; section `[("retention_days", [0,0,0,0x1e])]` unchanged) | `c16d9ac` | green |
 | `backup::tests::import_refuses_any_nonempty_table` (re-dictated: nine cases) | `c16d9ac` | green |
 | `seal::tests::authentic_even_seed_opens` (new; seed `8d094c96986f6f9330eb1c8639191fa4099c6021`) | `847d1dd` | red first (`left: None, right: Some(Unavailable)`) |
+| `backup::tests::import_refuses_duplicate_settings_key` (new, Q181) | `88ce8bb` | red first (`left: Ok(()), right: Err(Unlock)`) |
+| `backup::tests::export_refuses_out_of_range_retention` (new; verifier nit 4, no product change) | `88ce8bb` | green at first run |
 
 New tests: 7; re-dictated: 4 (+ the BK-01/allowlist fixtures). Red seen: 7 (`a4f-red-first.txt`; the race test was red at its first run). `wrapping_and_header_kat` and `wrap_bytes_recomputed` unchanged and green. Store suite: 80 passed. `grep -rn store_record_open xtask/src`: no corpus-count or hash pin (the check is `seeds >= 4`), no xtask edit; `cargo nextest run -p xtask -E 'test(/fuzz_targets_store|large_file_gate/)'` 6 passed; `cargo +nightly-2026-09-21 fuzz run --fuzz-dir fuzz store_record_open fuzz/corpus/store_record_open/8d094c96... -- -runs=1`: executed, no crash.
 
@@ -802,12 +804,14 @@ New tests: 7; re-dictated: 4 (+ the BK-01/allowlist fixtures). Red seen: 7 (`a4f
 - **D-A4f2** (EXT1-3, Q177): `retention_days` = u32 BE on the wire, INTEGER in SQLite; BK-01 fixture re-dictated to INTEGER 30 (`contents_whitelist`), wire bytes unchanged; ADR-053 Amendment 2 Proposed.
 - **D-A4f3** (EXT1-4/Q179): import rejects a non-allowlisted settings key (`Unlock`); the empty-profile rule covers nine tables (+ `settings`).
 - **D-A4f4** (EXT1-5, Q180): even-mode oracle accepts an authentic record; seed `8d094c96986f6f9330eb1c8639191fa4099c6021` added.
+- **D-A4f5** (Q181): a repeated settings key in a backup section is refused with the uniform `Unlock` (canonical decode, §1.8); the verifier's scratch reproduction (last value won) is the red of `import_refuses_duplicate_settings_key`.
+- **Note A-4f (verifier m-2):** the red-first line of `concurrent_create_exactly_one_wins` (`a4f-red-first.txt:54-57`, `wrap.rs:427@ee0f79e`, bare arrays) predates the committed assertion form (`wrap.rs:449@51e918c`, `Some([...])`); the oracle is the dictated one; against the pre-fix `create_with` the test is red by chance (verifier: 7 of 10 runs), deterministic red is the scan test.
 - A4-1-02 and A4-1-04 were closed by half in A-4e (VERIFY-A4-part1:101,111: no-replace publish and the import-side allowlist missing); closed by `842145e` and `c16d9ac`.
 - Q176: EXT1-1 minor; F9b recorded in A-4f; fix in Phase B (B-4, SE-21). Q177: retention_days typed codec. Q178: lock-serialized wrap create. Q179: import allowlist + nine-table empty rule. Q180: even-mode oracle + authentic seed.
 - Implementation note: `create_with` keeps the write/sync/rename inside a closure in its own body so the source scans of `create_is_durable_and_refuses_existing` and `create_publishes_without_replace` read all of it. `seal.rs` (test only) is edited because §3 dictates the seed test there.
 
 ### §7
-**F9b (EXT1-1, Q176).** A receipt's `Delivered` update (`conversation.rs:691-694` → `StoreOutbox::delivered` → `sync`) is a transaction separate from the receive commit and swallowed into `write_errors`. A refused write or a crash between the two loses it: the message stays `Relayed`, is re-sent after a relay loss, and the peer dedups it without a second receipt. The ratchet, the reassembly, the trust and the delivered messages are committed before the ack (spec 03:488). Phase B (B-4, sessions actor, with SC-02): `CommitParts.receipted`, with `StorePersist` marking `DELIVERED` in the receive transaction; row SE-21.
+- F9b: see §7 Open risks (`:480`).
 
 ### §8
 - Blocked: ci-fast step `fmt` (new test code layout, see §4); no other failure. STOP: none.

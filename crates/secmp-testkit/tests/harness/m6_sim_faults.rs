@@ -172,7 +172,27 @@ fn sim_partition_heals() {
         reported, want,
         "the evicted ids reported to B are not the ids the queue predicts"
     );
+    assert_drained(&run, &rid);
     run.assert_e_and_k("SIM-02");
+}
+
+/// SC-03 (Q167, OQ-20): every cell of a response goes to the worker at once and the acknowledgement is the highest
+/// committed prefix, so A drains the backlog after the heal — the queue B → A (`rid`) holds at most 6 cells at the end of
+/// the run (the M6 run ended at 128).
+fn assert_drained(run: &Outcome, rid: &Id) {
+    let (left, next) = queue_state(&run.relay, rid);
+    crate::m6_common::evidence(
+        "SIM-02-queue",
+        &format!(
+            "queue B -> A at the end of the run: {} cells (ids {left:?}, next_cell_id {next})",
+            left.len()
+        ),
+    );
+    assert!(
+        left.len() <= 6,
+        "queue B -> A holds {} cells at the end of the run",
+        left.len()
+    );
 }
 
 /// SIM-04 `sim_both_clients_restart` [O-18] (`docs/07:124`): both clients crash at 1 h and restart from their `MemPersist`

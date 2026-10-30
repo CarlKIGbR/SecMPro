@@ -7,8 +7,8 @@ use secmp_client_core::scheduler::core::{LinkKind, Scheduler};
 use secmp_client_core::scheduler::outbox::{MemOutbox, MemPersist, MsgState, OutMessage, Outbox};
 use secmp_client_core::scheduler::params::{Mode, Params};
 use secmp_client_core::scheduler::types::{
-    Alert, CellSource, CellToken, ControlKind, LinkEvent, LinkId, Output, PreparedCell, QueueId,
-    Reason, RelayId, SendFailure, SourceError,
+    Alert, CellSource, CellToken, ControlKind, Delivered, LinkEvent, LinkId, Output, PreparedCell,
+    QueueId, Reason, RelayId, SendFailure, SourceError,
 };
 use secmp_client_core::timing::TimingRng;
 use secmp_crypto::{SecretBytes, Zeroizing};
@@ -514,8 +514,8 @@ impl CellSource for Fake {
     fn queue_lost(&mut self, _: QueueId) {
         self.calls.push(Call::Lost);
     }
-    fn deliver(&mut self, _: QueueId, _: u64, _: &Cell) -> Result<(), SourceError> {
-        Ok(())
+    fn deliver(&mut self, _: QueueId, _: u64, _: &Cell) -> Result<Delivered, SourceError> {
+        Ok(Delivered::Committed)
     }
 }
 

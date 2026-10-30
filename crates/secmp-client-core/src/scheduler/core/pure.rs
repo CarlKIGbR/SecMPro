@@ -1,5 +1,239 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! The pure decisions of the scheduler core, small enough for Kani (K-01…K-03, K-C1…K-C6) and free of state.
+//! The pure decisions of the scheduler core, small enough for Kani (K-01…K-03, K-C1…K-C6, SC-06…SC-09) and free of
+//! I/O, store and codec.
+
+use crate::scheduler::types::{Delivered, SourceError};
+
+/// The most fetched cells above its acknowledgement a recv-queue keeps track of (OQ-20). An honest relay answers a
+/// `FETCH` with the lowest cells above the acknowledgement, at most `F_M` = 8 (spec §10.2), so the ledger holds at most
+/// eight; the bound only keeps a misbehaving relay from growing it.
+pub const RECEIVED_MAX: usize = 64;
+
+/// The fetched cells of a recv-queue above its acknowledgement, ascending by id, each with whether its decision is
+/// committed (OQ-20, OPEN-M7-08 A; spec §9.3, CLAUDE.md §1.7). A fixed array of `N` slots, no heap (the Kani harnesses
+/// run it with a small `N`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Received<const N: usize> {
+    ids: [u64; N],
+    committed: [bool; N],
+    len: usize,
+    /// The lowest fetched id that could not be recorded (the ledger was full): the acknowledgement stays below it until
+    /// it is recorded.
+    floor: Option<u64>,
+}
+
+impl<const N: usize> Received<N> {
+    /// Nothing fetched.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            ids: [0; N],
+            committed: [false; N],
+            len: 0,
+            floor: None,
+        }
+    }
+
+    /// The recorded ids.
+    #[must_use]
+    pub const fn len(&self) -> usize {
+        self.len
+    }
+
+    /// Nothing recorded.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    fn position(&self, id: u64) -> Option<usize> {
+        self.ids.iter().take(self.len).position(|x| *x == id)
+    }
+
+    /// `id` is recorded and its decision committed.
+    #[must_use]
+    pub fn is_committed(&self, id: u64) -> bool {
+        self.position(id)
+            .and_then(|at| self.committed.get(at))
+            .is_some_and(|c| *c)
+    }
+
+    /// A recorded decision is not committed yet.
+    #[must_use]
+    pub fn has_pending(&self) -> bool {
+        self.committed.iter().take(self.len).any(|c| !*c)
+    }
+
+    /// Record the fetched `id` with whether its decision is committed (a recorded id stays committed once it is). `false`
+    /// if the ledger is full: nothing is recorded, and the acknowledgement stays below `id` until it is.
+    pub fn record(&mut self, id: u64, committed: bool) -> bool {
+        if let Some(at) = self.position(id) {
+            if let Some(c) = self.committed.get_mut(at) {
+                *c |= committed;
+            }
+            return true;
+        }
+        let Some(grown) = self.len.checked_add(1).filter(|g| *g <= N) else {
+            self.floor = Some(self.floor.map_or(id, |f| f.min(id)));
+            return false;
+        };
+        let at = self
+            .ids
+            .iter()
+            .take(self.len)
+            .position(|x| *x > id)
+            .unwrap_or(self.len);
+        let Some(next) = at.checked_add(1) else {
+            return false;
+        };
+        // the ids from `at` on move up one slot (`grown ≤ N`: the last one fits)
+        self.ids.copy_within(at..self.len, next);
+        self.committed.copy_within(at..self.len, next);
+        if let (Some(slot), Some(c)) = (self.ids.get_mut(at), self.committed.get_mut(at)) {
+            *slot = id;
+            *c = committed;
+        }
+        self.len = grown;
+        if self.floor == Some(id) {
+            self.floor = None;
+        }
+        true
+    }
+
+    /// The decision of the recorded `id` is committed now (a later completion). `false` if `id` is not recorded.
+    pub fn commit(&mut self, id: u64) -> bool {
+        match self.position(id).and_then(|at| self.committed.get_mut(at)) {
+            Some(c) => {
+                *c = true;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// The acknowledgement after `acked`: the highest recorded id `h` such that every recorded id up to `h` is committed
+    /// (and `h` is below the floor); the entries up to it are dropped. `acked` itself if the oldest is not committed.
+    pub fn advance(&mut self, acked: u64) -> u64 {
+        let mut new = acked;
+        let mut done = 0_usize;
+        for (id, committed) in self.ids.iter().zip(&self.committed).take(self.len) {
+            if !*committed || self.floor.is_some_and(|f| *id >= f) {
+                break;
+            }
+            new = *id;
+            done = done.saturating_add(1);
+        }
+        self.ids.copy_within(done..self.len, 0);
+        self.committed.copy_within(done..self.len, 0);
+        self.len = self.len.saturating_sub(done);
+        new
+    }
+}
+
+impl<const N: usize> Default for Received<N> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// The receive side of one recv-queue (OQ-20, OPEN-M7-08 A): its cumulative acknowledgement, its generation and the
+/// cells fetched above the acknowledgement. The acknowledgement is the highest committed prefix of what was fetched
+/// (persist-before-ack, CLAUDE.md §1.7): a cell is acknowledged only once it and every fetched cell below it are
+/// committed. A re-creation of the queue (spec §9.1) starts a new generation, and a response asked in an older one
+/// changes nothing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecvLedger<const N: usize> {
+    acked: u64,
+    generation: u64,
+    received: Received<N>,
+}
+
+impl<const N: usize> RecvLedger<N> {
+    /// A new queue: nothing acknowledged, generation 0.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            acked: 0,
+            generation: 0,
+            received: Received::new(),
+        }
+    }
+
+    /// The cumulative acknowledgement (spec §9.3): every cell at or below it is decided and committed.
+    #[must_use]
+    pub const fn acked(&self) -> u64 {
+        self.acked
+    }
+
+    /// The generation a request is asked in.
+    #[must_use]
+    pub const fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// A fetched cell's decision is not committed yet (the next `FETCH` waits for it until its lead, OPEN-M6-13).
+    #[must_use]
+    pub fn has_pending(&self) -> bool {
+        self.received.has_pending()
+    }
+
+    /// The fetched cells above the acknowledgement.
+    #[must_use]
+    pub const fn received(&self) -> &Received<N> {
+        &self.received
+    }
+
+    /// The cells of a response asked in generation `asked`, in the relay's order: every cell above the acknowledgement
+    /// whose decision is not committed yet goes to `deliver` in this one pass (OPEN-M7-08 A: "the core hands every present
+    /// cell of a response to the worker at once"); a storage failure stops the pass (the rest comes again); then the
+    /// acknowledgement moves to the highest committed prefix. A response of an older generation changes nothing
+    /// (`false`).
+    pub fn take<C>(
+        &mut self,
+        asked: u64,
+        cells: impl IntoIterator<Item = (u64, C)>,
+        mut deliver: impl FnMut(u64, C) -> Result<Delivered, SourceError>,
+    ) -> bool {
+        if asked != self.generation {
+            return false;
+        }
+        for (id, cell) in cells {
+            // at or below the acknowledgement, or committed: decided already (a re-fetch, spec §9.3)
+            if id <= self.acked || self.received.is_committed(id) {
+                continue;
+            }
+            let outcome = deliver(id, cell);
+            let committed = matches!(outcome, Ok(Delivered::Committed));
+            if !self.received.record(id, committed) || outcome.is_err() {
+                break;
+            }
+        }
+        self.acked = self.received.advance(self.acked);
+        true
+    }
+
+    /// The decision of the fetched `id` is committed now (the worker finished it): the acknowledgement moves to the
+    /// highest committed prefix. An id that is not recorded (another generation's, or decided already) changes nothing.
+    pub fn committed(&mut self, id: u64) {
+        if self.received.commit(id) {
+            self.acked = self.received.advance(self.acked);
+        }
+    }
+
+    /// The queue is re-created (spec §9.1): the relay numbers its cells from 1 again; a new generation begins with
+    /// nothing acknowledged and nothing fetched.
+    pub fn recreate(&mut self) {
+        self.acked = 0;
+        self.received = Received::new();
+        self.generation = self.generation.wrapping_add(1);
+    }
+}
+
+impl<const N: usize> Default for RecvLedger<N> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 /// The queue a Balanced slot sends to (spec §10.2): the first queue, from the round-robin pointer `rr`, whose previous
 /// `SEND` is at least `P_q` before the slot `slot_ms` (or that was never sent to). `None`: nothing is due, the slot
@@ -134,6 +368,125 @@ mod tests {
         assert_eq!(unwritten_max(2), 4);
         assert_eq!(unwritten_max(0), 0);
         assert_eq!(unwritten_max(u8::MAX), 510);
+    }
+
+    /// What a test cell source answers for one fetched id.
+    fn answer(c: u8) -> Result<Delivered, SourceError> {
+        match c {
+            b'C' => Ok(Delivered::Committed),
+            b'P' => Ok(Delivered::Pending),
+            _ => Err(SourceError),
+        }
+    }
+
+    /// `take` over `(id, answer)` pairs; returns the ids handed to the cell source.
+    fn take<const N: usize>(l: &mut RecvLedger<N>, asked: u64, cells: &[(u64, u8)]) -> Vec<u64> {
+        let mut handed = Vec::new();
+        let applied = l.take(asked, cells.iter().copied(), |id, c| {
+            handed.push(id);
+            answer(c)
+        });
+        assert_eq!(applied, asked == l.generation());
+        handed
+    }
+
+    /// SC-02 (unit): commits in the order 1, 3, 2 — the acknowledgement is 1, stays 1 after 3, and is 3 once 2 is
+    /// committed; every present cell is handed over in one pass.
+    #[test]
+    fn ack_is_the_highest_committed_prefix() {
+        let mut l: RecvLedger<8> = RecvLedger::new();
+        assert_eq!(
+            take(&mut l, 0, &[(1, b'P'), (2, b'P'), (3, b'P')]),
+            [1, 2, 3]
+        );
+        assert_eq!(l.acked(), 0);
+        assert!(l.has_pending());
+        l.committed(1);
+        assert_eq!(l.acked(), 1);
+        l.committed(3);
+        assert_eq!(l.acked(), 1, "3 is committed, 2 is not");
+        l.committed(2);
+        assert_eq!(l.acked(), 3);
+        assert!(!l.has_pending());
+        assert!(l.received().is_empty());
+        // a report for a cell the ledger does not hold changes nothing
+        l.committed(9);
+        assert_eq!(l.acked(), 3);
+    }
+
+    /// A re-fetch: cells at or below the acknowledgement and committed cells are not handed over again; pending ones are
+    /// (the facade dedups its jobs); synchronous commits acknowledge at once; ids may have gaps.
+    #[test]
+    fn refetch_hands_over_only_what_is_not_committed() {
+        let mut l: RecvLedger<8> = RecvLedger::new();
+        assert_eq!(
+            take(&mut l, 0, &[(2, b'C'), (4, b'P'), (7, b'C')]),
+            [2, 4, 7]
+        );
+        assert_eq!(l.acked(), 2, "4 is pending");
+        assert_eq!(
+            take(&mut l, 0, &[(2, b'C'), (4, b'P'), (7, b'C'), (8, b'C')]),
+            [4, 8]
+        );
+        assert_eq!(l.acked(), 2);
+        assert_eq!(take(&mut l, 0, &[(4, b'C'), (7, b'C'), (8, b'C')]), [4]);
+        assert_eq!(l.acked(), 8);
+    }
+
+    /// A storage failure stops the pass: the failed cell blocks the acknowledgement, the rest of the response is not handed
+    /// over; the next response hands it over again.
+    #[test]
+    fn a_storage_failure_stops_the_pass_and_blocks_the_ack() {
+        let mut l: RecvLedger<8> = RecvLedger::new();
+        assert_eq!(take(&mut l, 0, &[(1, b'C'), (2, b'E'), (3, b'C')]), [1, 2]);
+        assert_eq!(l.acked(), 1);
+        assert!(l.has_pending());
+        assert_eq!(take(&mut l, 0, &[(2, b'C'), (3, b'C')]), [2, 3]);
+        assert_eq!(l.acked(), 3);
+    }
+
+    /// SC-07 (unit): a response asked in an older generation changes nothing; the re-creation starts from nothing.
+    #[test]
+    fn an_old_generation_changes_nothing() {
+        let mut l: RecvLedger<8> = RecvLedger::new();
+        assert_eq!(take(&mut l, 0, &[(1, b'C'), (2, b'P')]), [1, 2]);
+        l.recreate();
+        assert_eq!((l.acked(), l.generation()), (0, 1));
+        assert!(l.received().is_empty());
+        let before = l.clone();
+        assert!(take(&mut l, 0, &[(1, b'C'), (5, b'C')]).is_empty());
+        assert_eq!(l, before);
+        // the old generation's pending cell 2 is not held any more
+        l.committed(2);
+        assert_eq!(l, before);
+        assert_eq!(take(&mut l, 1, &[(1, b'C')]), [1]);
+        assert_eq!(l.acked(), 1);
+    }
+
+    /// The ledger bound: a full ledger records nothing more and keeps the acknowledgement below the first id it could not
+    /// record, until that id is recorded.
+    #[test]
+    fn a_full_ledger_keeps_the_ack_below_what_it_could_not_record() {
+        let mut r: Received<2> = Received::new();
+        assert!(r.record(5, true));
+        assert!(r.record(9, false));
+        assert!(!r.record(7, true), "full");
+        assert_eq!(r.len(), 2);
+        assert_eq!(r.advance(0), 5);
+        assert!(r.commit(9));
+        assert_eq!(r.advance(5), 5, "9 is above the unrecorded 7");
+        assert!(r.record(7, true));
+        assert_eq!(r.advance(5), 9);
+        assert!(r.is_empty());
+        // insertion keeps the ids ascending; a recorded id stays committed
+        assert!(r.record(12, false));
+        assert!(r.record(11, true));
+        assert!(r.record(11, false));
+        assert!(r.is_committed(11) && !r.is_committed(12));
+        assert_eq!(r.advance(10), 11);
+        assert!(!r.commit(11), "dropped");
+        assert_eq!(Received::<2>::default(), Received::<2>::new());
+        assert_eq!(RecvLedger::<2>::default(), RecvLedger::<2>::new());
     }
 
     #[test]

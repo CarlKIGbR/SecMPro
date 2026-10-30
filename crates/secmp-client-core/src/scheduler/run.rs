@@ -21,9 +21,11 @@
 //! - (vi) the work never runs on the I/O path: [`Scheduler::work`] sees a non-blocking cell source (`Deferred`). A cell
 //!   the core asks for is prepared by the serial [`Worker`], off the loop; until it is ready the facade answers "not
 //!   ready" and the core prepares the link again at its next pass (the tick finds no frame only if the worker is later
-//!   than the tick: an overrun). A received cell is decided and committed by the worker; until it is committed the
-//!   facade answers "not committed", so the core does not acknowledge it (spec §10.1, CLAUDE.md §1.7: persist before
-//!   ack) and the cell is fetched again — the next `FETCH` finds it committed. The notifications (`relayed`, `evicted`,
+//!   than the tick: an overrun). Every present cell of a response goes to the worker at once (OQ-20, OPEN-M7-08 A); the
+//!   facade answers [`Delivered::Pending`] until the worker has committed the decision, and the driver reports each
+//!   commit of the current generation with [`Scheduler::delivery_committed`], so the core acknowledges the highest
+//!   committed prefix of what it fetched and nothing else (spec §10.1, CLAUDE.md §1.7: persist before ack); the next
+//!   `FETCH` carries it. The notifications (`relayed`, `evicted`,
 //!   `send_failed`, `discard`, `queue_lost`) are queued to the worker in order. No preparation or receive cost of one
 //!   link can delay a due write of another.
 //! - (ii) after `work` the driver reports [`Scheduler::prepared_until`] with the time it read from the same clock right
@@ -61,7 +63,7 @@ use tokio::task::JoinHandle;
 use crate::clock::Clock;
 use crate::scheduler::core::{SchedError, Scheduler};
 use crate::scheduler::types::{
-    CellSource, CellToken, ControlKind, IsolationKey, LinkEvent, LinkId, OpId, Output,
+    CellSource, CellToken, ControlKind, Delivered, IsolationKey, LinkEvent, LinkId, OpId, Output,
     PreparedCell, QueueId, RelayId, SendFailure, SourceError, Transport,
 };
 
@@ -323,7 +325,10 @@ impl Job {
             } => JobDone::Delivered {
                 queue,
                 cell_id,
-                committed: source.deliver(queue, cell_id, &cell).is_ok(),
+                committed: matches!(
+                    source.deliver(queue, cell_id, &cell),
+                    Ok(Delivered::Committed)
+                ),
             },
             Self::Relayed {
                 queue,
@@ -416,21 +421,29 @@ impl<S: CellSource + Send + 'static> Worker for BlockingWorker<S> {
 ///
 /// What it knows of received cells belongs to one *generation* of a receive queue: when the scheduler re-creates a
 /// queue (after `NoQueue`, spec §9.1, its `QUEUE_NEW` control operation), the relay numbers the new queue's cells from 1
-/// again, so the committed high-water mark of the old queue is dropped and a delivery the worker finishes for the old
-/// generation commits nothing (WEISUNG M6-B-5 EXTB-2: persist before ack, CLAUDE.md §1.7).
+/// again, so the committed ids of the old queue are dropped and a delivery the worker finishes for the old generation
+/// commits nothing (WEISUNG M6-B-5 EXTB-2: persist before ack, CLAUDE.md §1.7).
+///
+/// The committed ids are a set, not a high-water mark (OQ-20): with every cell of a response in the worker at once, a
+/// failed commit of one cell followed by a successful commit of a later one must not make the first look committed.
 #[derive(Default)]
 struct Deferred {
     ready: BTreeMap<QueueId, PreparedCell>,
     preparing: BTreeSet<QueueId>,
     /// The current generation of each receive queue (0 until its first re-creation).
     generation: BTreeMap<QueueId, u64>,
-    /// The highest cell id committed in the current generation.
-    committed: BTreeMap<QueueId, u64>,
+    /// The cell ids committed in the current generation, the newest [`COMMITTED_KEPT`] of each queue.
+    committed: BTreeMap<QueueId, BTreeSet<u64>>,
     /// The deliveries handed to the worker and not finished, with the generation each was asked in, oldest first (the
     /// worker runs its jobs in order).
     delivering: BTreeMap<(QueueId, u64), VecDeque<u64>>,
     jobs: Vec<Job>,
 }
+
+/// The committed ids the facade keeps per queue (the newest): the core asks again only for cells above its
+/// acknowledgement, at most `pure::RECEIVED_MAX` of them; an id dropped here is only delivered again (a duplicate
+/// decision), never taken for committed.
+const COMMITTED_KEPT: usize = 256;
 
 impl Deferred {
     fn generation_of(&self, queue: QueueId) -> u64 {
@@ -444,13 +457,16 @@ impl Deferred {
         self.committed.remove(&queue);
     }
 
-    fn on_done(&mut self, done: JobDone) {
+    /// A job finished. `Some((queue, cell_id))`: a delivery of the current generation is committed now — the driver
+    /// reports it to the core ([`Scheduler::delivery_committed`]).
+    fn on_done(&mut self, done: JobDone) -> Option<(QueueId, u64)> {
         match done {
             JobDone::Prepared { queue, cell } => {
                 self.preparing.remove(&queue);
                 if let Ok(Some(cell)) = cell {
                     self.ready.insert(queue, cell);
                 }
+                None
             }
             JobDone::Delivered {
                 queue,
@@ -469,12 +485,17 @@ impl Deferred {
                     None => None,
                 };
                 // a completion of an older generation commits nothing in the current one
-                if committed && asked == Some(current) {
-                    let entry = self.committed.entry(queue).or_insert(0);
-                    *entry = (*entry).max(cell_id);
+                if !committed || asked != Some(current) {
+                    return None;
                 }
+                let ids = self.committed.entry(queue).or_default();
+                ids.insert(cell_id);
+                while ids.len() > COMMITTED_KEPT {
+                    ids.pop_first();
+                }
+                Some((queue, cell_id))
             }
-            JobDone::Noted => {}
+            JobDone::Noted => None,
         }
     }
 }
@@ -518,9 +539,18 @@ impl CellSource for Deferred {
         self.jobs.push(Job::QueueLost { queue });
     }
 
-    fn deliver(&mut self, queue: QueueId, cell_id: u64, cell: &Cell) -> Result<(), SourceError> {
-        if self.committed.get(&queue).is_some_and(|c| *c >= cell_id) {
-            return Ok(());
+    fn deliver(
+        &mut self,
+        queue: QueueId,
+        cell_id: u64,
+        cell: &Cell,
+    ) -> Result<Delivered, SourceError> {
+        if self
+            .committed
+            .get(&queue)
+            .is_some_and(|ids| ids.contains(&cell_id))
+        {
+            return Ok(Delivered::Committed);
         }
         let current = self.generation_of(queue);
         let pending = self
@@ -539,8 +569,8 @@ impl CellSource for Deferred {
                 cell: copy,
             });
         }
-        // not committed yet: no acknowledgement, the cell comes again (persist before ack)
-        Err(SourceError)
+        // not committed yet: no acknowledgement until the driver reports the commit (persist before ack)
+        Ok(Delivered::Pending)
     }
 }
 
@@ -774,7 +804,8 @@ where
             let failed = job.failed();
             let sent = self.jobs.as_ref().is_some_and(|tx| tx.send(job).is_ok());
             if !sent {
-                self.deferred.on_done(failed);
+                // a job that cannot run commits nothing
+                let _ = self.deferred.on_done(failed);
             }
         }
     }
@@ -1010,7 +1041,10 @@ where
                 Vec::new()
             }
             Event::Job(done) => {
-                self.deferred.on_done(done);
+                // a commit of the current generation moves the core's acknowledgement (OQ-20)
+                if let Some((queue, cell_id)) = self.deferred.on_done(done) {
+                    sched.delivery_committed(queue, cell_id);
+                }
                 Vec::new()
             }
             Event::Written(link, len, at, ok) => {
@@ -1407,41 +1441,95 @@ mod tests {
     #[test]
     fn late_delivery_of_an_old_generation_commits_nothing() -> Result<(), secmp_proto::Error> {
         let q = QueueId(3);
+        let pending = Ok(Delivered::Pending);
         let mut d = Deferred::default();
-        assert!(d.deliver(q, 1, &cell()?).is_err());
+        assert_eq!(d.deliver(q, 1, &cell()?), pending);
         assert_eq!(d.jobs.len(), 1);
         d.recreated(q);
-        // the old generation's job finishes now
-        d.on_done(JobDone::Delivered {
+        // the old generation's job finishes now: nothing to report to the core
+        let late = d.on_done(JobDone::Delivered {
             queue: q,
             cell_id: 1,
             committed: true,
         });
+        assert_eq!(late, None);
         assert!(!d.committed.contains_key(&q));
         // the new generation's cell 1 is delivered on its own
-        assert!(d.deliver(q, 1, &cell()?).is_err());
+        assert_eq!(d.deliver(q, 1, &cell()?), pending);
         assert_eq!(d.jobs.len(), 2);
-        assert!(
-            d.deliver(q, 1, &cell()?).is_err(),
+        assert_eq!(
+            d.deliver(q, 1, &cell()?),
+            pending,
             "pending: not asked twice"
         );
         assert_eq!(d.jobs.len(), 2);
-        d.on_done(JobDone::Delivered {
+        let done = d.on_done(JobDone::Delivered {
             queue: q,
             cell_id: 1,
             committed: true,
         });
-        assert_eq!(d.deliver(q, 1, &cell()?), Ok(()));
-        // a committed high-water mark of the old generation is dropped by the re-creation
+        assert_eq!(done, Some((q, 1)), "the commit is reported to the core");
+        assert_eq!(d.deliver(q, 1, &cell()?), Ok(Delivered::Committed));
+        // the committed ids of the old generation are dropped by the re-creation
         d.recreated(q);
-        assert!(d.deliver(q, 1, &cell()?).is_err());
+        assert_eq!(d.deliver(q, 1, &cell()?), pending);
         // a completion that was never asked commits nothing
-        d.on_done(JobDone::Delivered {
+        let never = d.on_done(JobDone::Delivered {
             queue: q,
             cell_id: 9,
             committed: true,
         });
+        assert_eq!(never, None);
         assert!(!d.committed.contains_key(&q));
+        Ok(())
+    }
+
+    /// OQ-20: the facade keeps the committed ids as a set — a failed commit of cell 1 followed by a successful commit of
+    /// cell 2 leaves cell 1 not committed (a high-water mark would answer "committed" for it); a failed delivery is asked
+    /// again; the set keeps the newest [`COMMITTED_KEPT`] ids.
+    #[test]
+    fn committed_ids_are_a_set() -> Result<(), secmp_proto::Error> {
+        let q = QueueId(5);
+        let mut d = Deferred::default();
+        for id in [1, 2] {
+            assert_eq!(d.deliver(q, id, &cell()?), Ok(Delivered::Pending));
+        }
+        let failed = d.on_done(JobDone::Delivered {
+            queue: q,
+            cell_id: 1,
+            committed: false,
+        });
+        assert_eq!(failed, None, "a failed commit is not reported");
+        let ok = d.on_done(JobDone::Delivered {
+            queue: q,
+            cell_id: 2,
+            committed: true,
+        });
+        assert_eq!(ok, Some((q, 2)));
+        assert_eq!(d.deliver(q, 2, &cell()?), Ok(Delivered::Committed));
+        assert_eq!(d.jobs.len(), 2);
+        assert_eq!(
+            d.deliver(q, 1, &cell()?),
+            Ok(Delivered::Pending),
+            "cell 1 is not committed"
+        );
+        assert_eq!(d.jobs.len(), 3, "the failed delivery is asked again");
+        for id in 10..(10 + 300) {
+            let _ = d.deliver(q, id, &cell()?);
+            let _ = d.on_done(JobDone::Delivered {
+                queue: q,
+                cell_id: id,
+                committed: true,
+            });
+        }
+        let kept = d.committed.get(&q).map_or(0, BTreeSet::len);
+        assert_eq!(kept, COMMITTED_KEPT);
+        assert_eq!(d.deliver(q, 309, &cell()?), Ok(Delivered::Committed));
+        assert_eq!(
+            d.deliver(q, 2, &cell()?),
+            Ok(Delivered::Pending),
+            "the oldest is dropped"
+        );
         Ok(())
     }
 }

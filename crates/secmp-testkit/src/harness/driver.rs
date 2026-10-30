@@ -19,8 +19,8 @@ use secmp_client_core::scheduler::core::{SchedError, Scheduler};
 use secmp_client_core::scheduler::outbox::{MemOutbox, MemPersist};
 use secmp_client_core::scheduler::params::{Mode, Params};
 use secmp_client_core::scheduler::types::{
-    CellSource, CellToken, ControlKind, IsolationKey, LinkEvent, LinkId, LinkKind, OpId, Output,
-    PreparedCell, QueueId, RelayId, SendFailure, SourceError,
+    CellSource, CellToken, ControlKind, Delivered, IsolationKey, LinkEvent, LinkId, LinkKind, OpId,
+    Output, PreparedCell, QueueId, RelayId, SendFailure, SourceError,
 };
 use secmp_client_core::timing::TimingRng;
 use secmp_crypto::{Aead, HybridSigningKey, Label, Nonce24, SecretBytes};
@@ -276,7 +276,12 @@ impl CellSource for Gate<'_> {
         self.convs.queue_lost(queue);
     }
 
-    fn deliver(&mut self, queue: QueueId, cell_id: u64, cell: &Cell) -> Result<(), SourceError> {
+    fn deliver(
+        &mut self,
+        queue: QueueId,
+        cell_id: u64,
+        cell: &Cell,
+    ) -> Result<Delivered, SourceError> {
         self.state.work_ms = self.state.work_ms.saturating_add(self.state.costs.receive);
         let n = self.state.delivered.entry((queue.0, cell_id)).or_insert(0);
         *n = n.saturating_add(1);

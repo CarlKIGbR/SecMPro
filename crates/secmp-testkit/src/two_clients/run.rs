@@ -29,7 +29,7 @@ use secmp_client_core::scheduler::outbox::{MemOutbox, MemPersist, MsgState, OutM
 use secmp_client_core::scheduler::params::{Mode, Params};
 use secmp_client_core::scheduler::run::{Driver, Job, JobDone, Only, Worker};
 use secmp_client_core::scheduler::types::{
-    CellSource, CellToken, QueueId, RelayId, SendFailure, SourceError, Transport,
+    CellSource, CellToken, Delivered, QueueId, RelayId, SendFailure, SourceError, Transport,
 };
 use secmp_crypto::{Fingerprint, SafetyNumber, SecretBytes, Zeroizing};
 use secmp_proto::hx::{Accepted, Initiator, Responder};
@@ -232,8 +232,8 @@ impl CellSource for NoCells {
     fn send_failed(&mut self, _: QueueId, _: CellToken, _: SendFailure) {}
     fn discard(&mut self, _: QueueId, _: CellToken) {}
     fn queue_lost(&mut self, _: QueueId) {}
-    fn deliver(&mut self, _: QueueId, _: u64, _: &Cell) -> Result<(), SourceError> {
-        Ok(())
+    fn deliver(&mut self, _: QueueId, _: u64, _: &Cell) -> Result<Delivered, SourceError> {
+        Ok(Delivered::Committed)
     }
 }
 

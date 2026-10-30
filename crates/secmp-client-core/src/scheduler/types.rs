@@ -204,6 +204,16 @@ impl PreparedCell {
     }
 }
 
+/// What [`CellSource::deliver`] did with a fetched cell (OQ-20, OPEN-M7-08 A: a deferred-commit outcome).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Delivered {
+    /// The decision is committed: the cell may be acknowledged.
+    Committed,
+    /// The decision is being committed (the driver's worker): not acknowledged until the driver reports the commit with
+    /// [`crate::scheduler::core::Scheduler::delivery_committed`].
+    Pending,
+}
+
 /// Why a `SEND` did not store its cell.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SendFailure {
@@ -249,9 +259,16 @@ pub trait CellSource {
     /// not yet receipted (spec §9.1, §10.4).
     fn queue_lost(&mut self, queue: QueueId);
 
-    /// A cell fetched from the recipient queue `queue`: decide it (decrypt, or discard), commit the decision.
+    /// A cell fetched from the recipient queue `queue`: decide it (decrypt, or discard), commit the decision —
+    /// [`Delivered::Committed`] — or start committing it — [`Delivered::Pending`], the commit is reported later. A cell is
+    /// acknowledged only once it and every fetched cell below it are committed (persist-before-ack, CLAUDE.md §1.7).
     ///
     /// # Errors
     /// [`SourceError`] if the decision could not be committed: the cell is not acknowledged and will be fetched again.
-    fn deliver(&mut self, queue: QueueId, cell_id: u64, cell: &Cell) -> Result<(), SourceError>;
+    fn deliver(
+        &mut self,
+        queue: QueueId,
+        cell_id: u64,
+        cell: &Cell,
+    ) -> Result<Delivered, SourceError>;
 }

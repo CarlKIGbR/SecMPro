@@ -44,8 +44,8 @@ use crate::timing::{TimingRng, Unavailable};
 
 use self::backoff::reconnect_delay;
 use self::pure::{
-    Flight, complete_oldest, hand_out, ledger_admits, reserved_rr, rr_select, tick_time,
-    unwritten_max,
+    Flight, RECEIVED_MAX, RecvLedger, complete_oldest, hand_out, ledger_admits, reserved_rr,
+    rr_select, tick_time, unwritten_max,
 };
 
 /// Why a scheduler call was refused (nothing changed).
@@ -97,8 +97,9 @@ struct RecvQ {
     relay: RelayId,
     period_ms: u64,
     cap: RecvCap,
-    /// The cumulative acknowledgement (spec §9.3): every cell at or below it is decided and committed — also the dedup.
-    acked: u64,
+    /// The cumulative acknowledgement (spec §9.3; every cell at or below it is decided and committed — also the dedup),
+    /// the generation, and the fetched cells above the acknowledgement (OQ-20).
+    ledger: RecvLedger<RECEIVED_MAX>,
     pool: bool,
     recreating: bool,
 }
@@ -112,10 +113,15 @@ enum Spec {
 
 /// What a request was (kept until its response is complete).
 enum ReqKind {
-    Send { queue: QueueId, token: CellToken },
+    Send {
+        queue: QueueId,
+        token: CellToken,
+    },
     Ping,
-    Fetch(QueueId),
-    FetchMulti(Vec<QueueId>),
+    /// The queue and the generation it was asked in.
+    Fetch(QueueId, u64),
+    /// The queues and the generation each was asked in.
+    FetchMulti(Vec<(QueueId, u64)>),
 }
 
 struct Req {
@@ -631,9 +637,19 @@ impl World {
                 let fetch_outstanding = up
                     .reqs
                     .iter()
-                    .any(|r| matches!(r.kind, ReqKind::Fetch(_) | ReqKind::FetchMulti(_)));
+                    .any(|r| matches!(r.kind, ReqKind::Fetch(..) | ReqKind::FetchMulti(_)));
+                // the acknowledgement the FETCH carries is fixed when it is sealed: it waits for the commits of the cells
+                // already fetched (OQ-20), at most until its lead (OPEN-M6-13) — the frame's time never moves
+                let commits_pending = self.recvs.iter().any(|q| {
+                    q.ledger.has_pending()
+                        && match spec {
+                            Spec::Recv(r) => q.id == r,
+                            Spec::Relay(r) => q.relay == r,
+                            Spec::Send(_) => false,
+                        }
+                });
                 let lead_reached = now >= slot.saturating_sub(self.params.fetch_lead_ms);
-                if !fetch_outstanding || lead_reached {
+                if (!fetch_outstanding && !commits_pending) || lead_reached {
                     tear = self.prepare_fetch(up, spec, slot, now);
                 }
             }
@@ -734,12 +750,12 @@ impl World {
                 let rq = self.recvs.iter().find(|r| r.id == q)?;
                 match up.chan.prepare(&Command::Fetch {
                     from: &rq.cap,
-                    ack: rq.acked,
+                    ack: rq.ledger.acked(),
                 }) {
                     Ok(prepared) => {
                         up.fetch_part = Some(Part {
                             prepared,
-                            kind: ReqKind::Fetch(q),
+                            kind: ReqKind::Fetch(q, rq.ledger.generation()),
                             ready: now,
                             open: true,
                             next_rr: None,
@@ -756,8 +772,11 @@ impl World {
                     return None;
                 }
                 let entries: Vec<(&RecvCap, u64)> =
-                    members.iter().map(|q| (&q.cap, q.acked)).collect();
-                let ids: Vec<QueueId> = members.iter().map(|q| q.id).collect();
+                    members.iter().map(|q| (&q.cap, q.ledger.acked())).collect();
+                let ids: Vec<(QueueId, u64)> = members
+                    .iter()
+                    .map(|q| (q.id, q.ledger.generation()))
+                    .collect();
                 match up.chan.prepare(&Command::FetchMulti { from: &entries }) {
                     Ok(prepared) => {
                         up.fetch_part = Some(Part {
@@ -864,7 +883,8 @@ impl World {
             return Ok(());
         }
         rq.recreating = true;
-        rq.acked = 0;
+        // a new generation: nothing acknowledged, nothing fetched; a response asked before changes nothing (SC-07)
+        rq.ledger.recreate();
         let relay = rq.relay;
         let at = now.saturating_add(self.ctl.uniform(lo, hi)?);
         let op = self.new_op_id();
@@ -883,26 +903,28 @@ impl World {
         Ok(())
     }
 
+    /// The cells of a response for `queue`, asked in `generation`: every present cell goes to the cell source in one pass
+    /// and the acknowledgement moves to the highest committed prefix (OQ-20, `pure::RecvLedger::take`).
     fn fetched<S: CellSource>(
         &mut self,
         queue: QueueId,
+        generation: u64,
         cells: Vec<(u64, secmp_proto::wire::cell::Cell)>,
         source: &mut S,
     ) {
         let Some(rq) = self.recvs.iter_mut().find(|r| r.id == queue) else {
             return;
         };
-        for (id, cell) in cells {
-            // at or below the acknowledgement: decided already (a re-fetch with an older `ack`, spec §9.3)
-            if id <= rq.acked {
-                continue;
-            }
-            if source.deliver(queue, id, &cell).is_err() {
-                // not committed: no acknowledgement, the cell comes again
-                break;
-            }
-            rq.acked = id;
-        }
+        rq.ledger.take(generation, cells, |id, cell| {
+            source.deliver(queue, id, &cell)
+        });
+    }
+
+    /// Whether `queue` exists and is in `generation` (a response asked in an older generation changes nothing, SC-07).
+    fn current(&self, queue: QueueId, generation: u64) -> bool {
+        self.recvs
+            .iter()
+            .any(|r| r.id == queue && r.ledger.generation() == generation)
     }
 
     fn queue_error(
@@ -963,13 +985,14 @@ impl World {
                 Err(_) => source.send_failed(queue, token, SendFailure::Unknown),
             },
             (ReqKind::Ping, Outcome::Ping(_)) => {}
-            (ReqKind::Fetch(queue), Outcome::Fetch(result)) => match result {
-                Ok(cells) => self.fetched(queue, cells, source),
-                Err(e) => self.queue_error(queue, e, now)?,
+            (ReqKind::Fetch(queue, generation), Outcome::Fetch(result)) => match result {
+                Ok(cells) => self.fetched(queue, generation, cells, source),
+                Err(e) if self.current(queue, generation) => self.queue_error(queue, e, now)?,
+                Err(_) => {}
             },
             (ReqKind::FetchMulti(queues), Outcome::FetchMulti(result)) => match result {
                 Ok(done) => {
-                    for q in &queues {
+                    for (q, generation) in &queues {
                         let Some(rid) = self
                             .recvs
                             .iter()
@@ -990,7 +1013,10 @@ impl World {
                             })
                             .filter_map(|(id, c)| c.ok().map(|c| (id, c)))
                             .collect();
-                        self.fetched(*q, cells, source);
+                        self.fetched(*q, *generation, cells, source);
+                        if !self.current(*q, *generation) {
+                            continue;
+                        }
                         for (r, e) in &done.errors {
                             if *r == rid {
                                 self.queue_error(*q, *e, now)?;
@@ -999,7 +1025,9 @@ impl World {
                     }
                 }
                 Err(e) => {
-                    if let Some(first) = queues.first() {
+                    if let Some((first, generation)) = queues.first()
+                        && self.current(*first, *generation)
+                    {
                         self.queue_error(*first, e, now)?;
                     }
                 }
@@ -1127,7 +1155,17 @@ impl Scheduler {
             .recvs
             .iter()
             .find(|r| r.id == queue)
-            .map(|r| r.acked)
+            .map(|r| r.ledger.acked())
+    }
+
+    /// The cell source finished committing the decision of cell `cell_id` of `queue`, which `deliver` answered
+    /// [`crate::scheduler::types::Delivered::Pending`] (OQ-20): the acknowledgement moves to the highest committed prefix
+    /// of what was fetched, and the next `FETCH` carries it (spec §9.3). A report for a cell the queue does not hold
+    /// (another generation's, or decided already) changes nothing.
+    pub fn delivery_committed(&mut self, queue: QueueId, cell_id: u64) {
+        if let Some(rq) = self.world.recv_mut(queue) {
+            rq.ledger.committed(cell_id);
+        }
     }
 
     /// What each tick cost in counted work (tests only).
@@ -1324,7 +1362,7 @@ impl Scheduler {
             relay,
             period_ms,
             cap,
-            acked: 0,
+            ledger: RecvLedger::new(),
             pool,
             recreating: false,
         });

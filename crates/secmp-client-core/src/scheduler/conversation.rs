@@ -25,7 +25,7 @@ use crate::scheduler::outbox::{
     trust_code,
 };
 use crate::scheduler::types::{
-    CellSource, CellToken, PreparedCell, QueueId, SendFailure, SourceError,
+    CellSource, CellToken, Delivered, PreparedCell, QueueId, SendFailure, SourceError,
 };
 
 /// Counting accessors of the `kat` build (`tr_encrypt_calls`, `persist_calls`; TEST-SPEC-M6 "Conventions"):
@@ -807,11 +807,17 @@ impl<O: Outbox, P: Persist, S: EntropySource> CellSource for Conversations<O, P,
         }
     }
 
-    fn deliver(&mut self, queue: QueueId, _cell_id: u64, cell: &Cell) -> Result<(), SourceError> {
+    fn deliver(
+        &mut self,
+        queue: QueueId,
+        _cell_id: u64,
+        cell: &Cell,
+    ) -> Result<Delivered, SourceError> {
         match self.by_recv(queue) {
-            Some(c) => c.on_deliver(cell),
+            // decided and committed before it returns
+            Some(c) => c.on_deliver(cell).map(|()| Delivered::Committed),
             // a queue without a conversation (a spare of the pool): nothing to decrypt, the cell is discarded
-            None => Ok(()),
+            None => Ok(Delivered::Committed),
         }
     }
 }

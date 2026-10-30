@@ -20,7 +20,7 @@ use libfuzzer_sys::fuzz_target;
 use secmp_client_core::scheduler::core::Scheduler;
 use secmp_client_core::scheduler::params::{Mode, Params};
 use secmp_client_core::scheduler::types::{
-    CellSource, CellToken, LinkId, Output, PreparedCell, QueueId, RelayId, SendFailure, SourceError,
+    CellSource, CellToken, LinkId, Output, PreparedCell, QueueId, RelayId, SendFailure, SourceError, Delivered,
 };
 use secmp_client_core::timing::TimingRng;
 use secmp_crypto::SecretBytes;
@@ -55,8 +55,8 @@ impl CellSource for Src {
     fn send_failed(&mut self, _: QueueId, _: CellToken, _: SendFailure) {}
     fn discard(&mut self, _: QueueId, _: CellToken) {}
     fn queue_lost(&mut self, _: QueueId) {}
-    fn deliver(&mut self, _: QueueId, _: u64, _: &Cell) -> Result<(), SourceError> {
-        Ok(())
+    fn deliver(&mut self, _: QueueId, _: u64, _: &Cell) -> Result<Delivered, SourceError> {
+        Ok(Delivered::Committed)
     }
 }
 

@@ -36,6 +36,7 @@ mod m6_tokio_ai;
 mod m6_tor;
 mod m6_two_clients;
 mod m7_crash;
+mod m7_drain;
 mod m7_forensic;
 mod m7_persist;
 mod scenarios;

@@ -1184,10 +1184,12 @@ fn driver_reports_no_unmatched_written() {
 /// `FETCH_MULTI`. Per period the test records how many cells were newly committed (decided and persisted by the worker, so
 /// delivered to the conversation) and when each cell became ready to acknowledge — the scheduler's *internal* acknowledgement
 /// state (`Scheduler::acked`), which the next `FETCH_MULTI` carries — and, as a second series, when the relay saw the
-/// acknowledgement (its head moved). The measured values are the expectation: **one cell is committed per response, each is
-/// ready to be acknowledged one period after its commit, and the relay sees it with the next `FETCH_MULTI`** — the cost the Phase-B report
-/// names (a `FETCH` response commits at most one new cell instead of up to four; the fix needs a core API, M7). The numbers
-/// are printed (`target/m6-evidence/R-01.txt`) and change only with the reviewer.
+/// acknowledgement (its head moved). M7 B-SC (OQ-20, OPEN-M7-08 A; the M6 series — one cell per response, each acknowledged
+/// one period after its commit — is history): the core hands every cell of a response to the worker at once and
+/// acknowledges the highest committed prefix, so the expectation is now **all four cells are committed after the first
+/// response, each is ready to be acknowledged as soon as it is committed, and the relay sees one acknowledgement of all four
+/// with the next `FETCH_MULTI`, at most one period later**. The numbers are printed (`target/m6-evidence/R-01.txt`) and
+/// change only with the reviewer.
 #[test]
 fn receive_throughput_per_fetch_is_measured() {
     use crate::m6_activity::Event;
@@ -1269,14 +1271,21 @@ fn receive_throughput_per_fetch_is_measured() {
         crate::m6_common::evidence("R-01", &text);
         assert_eq!(got_at.len(), 4, "all four cells are committed: {text}");
         assert_eq!(acked_at.len(), 4, "all four become ready to acknowledge: {text}");
-        assert_eq!(relay_acks.len(), 4, "the relay saw four acknowledgements: {text}");
+        assert_eq!(relay_acks.len(), 1, "the relay saw one acknowledgement of all four: {text}");
         assert!(
-            relay_acks.iter().zip(&acked_at).all(|(w, a)| w >= a),
-            "the relay sees an acknowledgement no earlier than it is ready: {text}"
+            acked_at.iter().all(|a| relay_acks.iter().all(|w| w >= a)),
+            "the relay sees the acknowledgement no earlier than it is ready: {text}"
         );
-        // one cell per response: the commits are one period apart
-        assert!(steps.iter().all(|d| *d == 10), "{text}");
-        // each acknowledgement is ready one period after its commit
-        assert!(delays.iter().all(|d| *d == 10), "{text}");
+        // every cell of the response at once: the commits fall in one second
+        assert!(steps.iter().all(|d| *d == 0), "{text}");
+        // each acknowledgement is ready as soon as its cell is committed
+        assert!(delays.iter().all(|d| *d == 0), "{text}");
+        // the next FETCH_MULTI carries it: at most one period (10 s) after the commits
+        assert!(
+            relay_acks
+                .iter()
+                .all(|w| w.saturating_sub(got_at.last().copied().unwrap_or(0)) <= 10),
+            "{text}"
+        );
     });
 }

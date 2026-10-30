@@ -956,7 +956,7 @@ label — profile and backup wraps would be interchangeable; rejected (Q124).
 beside HKDF and CAEAD; `secmp-store` composes them only as written. Gated rows: ST-05…ST-07, ST-10…ST-12, ST-19, CT-01,
 CT-02, CT-05, BK-*, FO-03, FZ-01, FZ-02, PR-03, IN-03. Any later parameter change is a new `ver`, never a silent change.
 
-**ADR-053 Amendment 1 — `row_key` of a composite primary key. Status: Proposed (owner; reviewer 2026-10-29).** `row_key` of a composite primary key = the concatenation, in primary-key column order, of each part encoded by item 5's rule (an integer part as u64 big-endian, a byte-string part as `len u8 ‖ bytes`); a negative integer part is not encodable (`Error::Unavailable`). The AD is otherwise item 5's, unchanged: `"SecMP-STORE/1 <table>" ‖ col_len u8 ‖ column name (ASCII) ‖ row_key` — `prekeys` (kind, id) 16 B, `sessions` (session_id, part, ord) 24 B.
+**ADR-053 Amendment 1 — `row_key` of a composite primary key. Status: Accepted (Owner, 2026-10-29, Q144; proposed by the Reviewer 2026-10-29).** `row_key` of a composite primary key = the concatenation, in primary-key column order, of each part encoded by item 5's rule (an integer part as u64 big-endian, a byte-string part as `len u8 ‖ bytes`); a negative integer part is not encodable (`Error::Unavailable`). The AD is otherwise item 5's, unchanged: `"SecMP-STORE/1 <table>" ‖ col_len u8 ‖ column name (ASCII) ‖ row_key` — `prekeys` (kind, id) 16 B, `sessions` (session_id, part, ord) 24 B.
 
 ---
 

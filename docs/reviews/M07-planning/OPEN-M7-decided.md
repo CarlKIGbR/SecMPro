@@ -72,3 +72,4 @@ Rows of TEST-SPEC-M7 marked [O-n] follow this table; Q-numbers continue the revi
 | Q141 (reviewer, 2026-10-29) | Cloud folders (OPEN-M7-37 A "a component in {…}"): a `const` of path components matched case-insensitively and equal — `OneDrive`, `Dropbox`, `Google Drive`, `GoogleDrive`, `iCloudDrive`, `iCloud Drive`, `Mobile Documents`, `Nextcloud`, `ownCloud`, `pCloud`, `MEGA`, `Box`. |
 | Q142 (reviewer, 2026-10-29) | `contacts::STATE_REINVITE_REQUIRED = 1`. |
 | Q143 (reviewer, 2026-10-29) | `contacts` gains `profile BLOB` (schema V1 in place; `local_name` = `display_name`); `identity.secret` plaintext = the 97-B identity section; backup `ts` = `ts_ms`. |
+| Q144 (2026-10-29) | ADR-053 Amendment 1 (composite row_key encoding) accepted by the owner in the owner chat 2026-10-29 ≈17:58 UTC ("ich akzeptiere deinen vorschlag"); A-4 §3 built it as Proposed, now Accepted — no code change. | owner | ST-11, ST-12 |

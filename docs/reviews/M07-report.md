@@ -21,7 +21,7 @@ G7-15a, G7-16, G7-18, K7-02, FZ-01, FZ-02.
 | A0 | A | ADR-055 probe in a scratch crate outside the workspace (three `VET_CLOSURE_TARGETS`, `fuzz/Cargo.lock`, cargo-fuzz sanitizer build of the OpenSSL/SQLCipher C code, Arti state-DB smoke, `windows-latest`); report only, no `Cargo.toml` change | — (ADR-055 precondition) | report delivered: `docs/reviews/M07-evidence/A0-probe.md` |
 | A-2 | A | After the A0 report, "ADR-055 accepted" and the owner's vet records: `rusqlite` in `secmp-store`, `argon2` in `secmp-crypto`, allowlist rows, vet/deny/cooldown | G7-01, G7-02, G7-03, G7-04, ST-08 | done @ `bf54d98` |
 | A-3 | A | Store code with the `kat`-only `secmp_store::kat::TestKey`: client-core/testkit → store edges first; pragmas, version check, defensive mode (ST-20, Q128), no temp files, schema, migrations, secure delete, view-once, expiry; persistence contract (`to_parts`/`from_parts`, `StoreOutbox`, store `Persist`); mutants/coverage scope | G7-06, ST-01…ST-04, ST-09, ST-13…ST-18, ST-20, PC-01…PC-13, G7-18, G7-13, G7-14 | closed @ `cdc3c0a` (ST-17: store half; A-3b/A-3d/A-3e fix-ups; Kani exception Q138; `modell=claude-opus-5-5`) |
-| A-4 | A | After "ADR-053 accepted": wrap, table keys, record seal, `SecretPage` secrets, ct target `store_unlock_reject` with its registration, backup, export forensic, store fuzz targets | ST-05…ST-07, ST-10…ST-12, ST-19, CT-01, CT-05, CT-02, BK-01…BK-07, FO-03, FZ-01, FZ-02, G7-15a (ST-10, BK-04 [REF]-open) | **A-4 built @ `c3c1dcf`; Phase A closes after the owner's acceptance of ADR-053 Amendment 1 and the green PR run (BRIEF_M7 §5, reviewer)** (`modell=claude-opus-5-5`) |
+| A-4 | A | After "ADR-053 accepted": wrap, table keys, record seal, `SecretPage` secrets, ct target `store_unlock_reject` with its registration, backup, export forensic, store fuzz targets | ST-05…ST-07, ST-10…ST-12, ST-19, CT-01, CT-05, CT-02, BK-01…BK-07, FO-03, FZ-01, FZ-02, G7-15a (ST-10, BK-04 [REF]-open) | **A-4 built @ `c3c1dcf`; Phase A closes with the green PR run (BRIEF_M7 §5, reviewer)** (`modell=claude-opus-5-5`) |
 | B | B | `Profile`, `Contacts`, `Invitations`, `Sessions`, `Api`, settings, relay view, transport boundary, transactional accept, handshake as scheduled ops; scheduler-core carry-overs (Opus) | PR-*, IN-*, SE-*, AP-*, SC-*, G7-15b, FZ-04, K7-01 | waiting (Phase A) |
 | C | C | `secmp-cli`, E2E, forensic, CT-03, CLI fuzz, transport carry-overs, owner-action rows | CL-*, E2-*, FO-01, FO-01a, FO-02, CT-03, FZ-03, G7-15c, G7-21, C-T1, C-T3, G7-17 ⚙, G7-11, G7-19, G7-20 (cond) | waiting (Phase B) |
 
@@ -372,7 +372,7 @@ No deviation from the spec. Deviations from the weisung's wording or the TEST-SP
 A-4 (`modell=claude-opus-5-5`; no deviation from the spec, ADR-053 or Amendment 1):
 
 - **A-4 record seal under Amendment 1:** the composite `row_key`s (`prekeys` (kind, id) 16 B, `sessions` (session_id, part, ord)
-  24 B) are built under Proposed Am. 1 — owner acceptance required before Phase A close (reviewer memo sent 2026-10-29).
+  24 B) are built under Proposed Am. 1 — accepted by the owner 2026-10-29 (Q144).
 - **D17 (Q-A18) `Unlocked::db_key` returns `Result<DbKey>`** (weisung: `-> DbKey`): the HKDF of `K_db` and the nine `K_t` into
   locked pages can fail (locked memory unavailable); the error is `Unavailable`.
 - **D18 (Q-A19) ST-09 re-dictation in the second §3 commit:** `testscan.rs:456` moved to `kat_small_sites == 1` in `b014540`, not
@@ -586,8 +586,8 @@ Q137 (e.g. arrays of length `k` per harness instead of `TR_SKIPPED_KEYS`, an exc
 
 **Correction (A-3 §0.1).** The age of `argon2` 0.6.0 (published 2026-08-27) was given as 60 days in A0 and A-2; it is 61 days on 2026-10-27 and 62 days on 2026-10-28 (`cooldown-m7-a3.txt`). The vet closure grew by five crates, not four (`vet-suggest-m7-a3.txt`).
 
-**A-4 built @ `c3c1dcf` (`modell=claude-opus-5-5`); Phase A closes after the owner's acceptance of ADR-053 Amendment 1 and the
-green PR run (BRIEF_M7 §5, reviewer).** Blocked: none. STOP: none. Open:
+**A-4 built @ `c3c1dcf` (`modell=claude-opus-5-5`); Phase A closes with the green PR run
+(BRIEF_M7 §5, reviewer).** Blocked: none. STOP: none. Open:
 
 - **ST-10, BK-04 [REF]:** the byte-exact clauses wait for `vectors/store.json` (OPEN-M7-38); both rows pass their built clauses.
 - **BK-03, ST-17 partial (store halves) — Phase B completes** (`Api.send` → `ReinviteRequired`, fresh prekeys; `ViewOnceLost`).
@@ -595,7 +595,6 @@ green PR run (BRIEF_M7 §5, reviewer).** Blocked: none. STOP: none. Open:
 - **Owner's ref session (OPEN-M7-38):** add the four rev-2.7 labels (ADR-053 item 7) to `ref/secmp_ref/labels.py`; no CI job runs it;
   no action here.
 - **Q124 "54 labels" vs ADR-053 item 7 = 53:** followed the ADR (53; `label::tests` pin 53).
-- **ADR-053 Amendment 1:** Proposed; the composite `row_key`s are built under it (§5) — owner acceptance before Phase A close.
 - **Q140 (open — reviewer):** which CT-01 form is gated; `store_unlock_reject` (full path) is gated and passed, the post-KDF form
   is informative (§4).
 - **K7-03b:** not done in A-4 (§0.2 ran only if named); Phase B row.

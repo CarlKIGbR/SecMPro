@@ -7,7 +7,9 @@
 //! relayed time) updated. What is in flight — a message taken but not yet relayed — is not durable: after a restart it
 //! is queued again (`Outbox::restart`, spec §10.4). A view-once message stays in memory only (CS-3.4). A write the
 //! store refuses is retried with the next change and counted ([`StoreOutbox::write_errors`]); the outbox is not the
-//! ratchet state (persist-before-send is the [`crate::persist::StorePersist`]'s).
+//! ratchet state (persist-before-send is the [`crate::persist::StorePersist`]'s). A receipt's `Delivered` is written
+//! in its own transaction after the receive commit (F9b): a refused write or a crash in between loses it (the
+//! message stays `Relayed`); Phase B moves it into the receive transaction (SE-21).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;

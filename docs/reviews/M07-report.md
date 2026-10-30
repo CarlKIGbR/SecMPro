@@ -477,6 +477,8 @@ profiles with checkpoints off in the measurement. More contacts multiply it; che
 
 **F9.** A refused outbox insert keeps the message in memory only (`write_errors` counts it) → Phase B `Api` reports it.
 
+**F9b (EXT1-1, Q176).** A receipt's `Delivered` update (`conversation.rs:691-694` → `StoreOutbox::delivered` → `sync`) is a transaction separate from the receive commit and swallowed into `write_errors`. A refused write or a crash between the two loses it: the message stays `Relayed`, is re-sent after a relay loss, and the peer dedups it without a second receipt. The ratchet, the reassembly, the trust and the delivered messages are committed before the ack (spec 03:488). Phase B (B-4, sessions actor, with SC-02): `CommitParts.receipted`, with `StorePersist` marking `DELIVERED` in the receive transaction; row SE-21.
+
 **F14.** The AI (activity-independence) runs use `MemPersist`; a run with `StorePersist` behind the scheduler is B/C.
 
 **Windows runtime of PC-05/PC-13 unmeasured.** Both run in the `harness` step of `windows-native` (not in `WINDOWS_SKIP_TESTS`); 30 000+

@@ -11,12 +11,13 @@
 //! - K-C1…K-C6: the unwritten-frame ledger and the round-robin rotation (M6 Phase C1, below).
 //! - SC-06 `kani_in_flight_over_transitions`: the in-flight rule over the core's transitions (`pure::InFlight`).
 //! - SC-07 `kani_queue_generations`: a response of an old generation never updates the new one (`pure::take_response`).
+//! - SC-08 `kani_persist_contract_abstract`: no frame and no acknowledgement after a failed commit (`sendable`, `RecvLedger`).
 
 use secmp_transport::evicted::evicted_is_plausible;
 
 use crate::scheduler::core::pure::{
     Flight, InFlight, RecvLedger, complete_oldest, hand_out, ledger_admits, reserved_rr, rr_select,
-    take_response, tick_time, unwritten_max,
+    sendable, take_response, tick_time, unwritten_max,
 };
 use crate::scheduler::params::{backoff_cap, rate_sum_ok};
 use crate::scheduler::types::{Delivered, SourceError};
@@ -579,4 +580,77 @@ fn any_answer() -> Result<Delivered, SourceError> {
         1 => Ok(Delivered::Pending),
         _ => Err(SourceError),
     }
+}
+
+/// SC-08 `kani_persist_contract_abstract` (spec §7.5, CLAUDE.md §1.7): with an abstract persist outcome {ok, fail} at every
+/// step, no frame and no acknowledgement follow a failed commit. Sending: the cell source's answer for a slot — a
+/// persisted cell, not ready, or not persisted — leaves a cell to build a frame from (`sendable`, which `prepare_send`
+/// calls) exactly when it was persisted. Receiving: three responses, each carrying the lowest cells above the
+/// acknowledgement, up to a symbolic id ≤ 3 (spec §9.3);
+/// every cell handed to the cell source is committed at once, pending, or its commit fails; after each response one
+/// pending cell may be committed later (`RecvLedger::committed`, the driver's report). After every step every fetched cell
+/// at or below the acknowledgement is committed.
+#[kani::proof]
+#[kani::unwind(4)]
+fn kani_persist_contract_abstract() {
+    let send: u8 = kani::any();
+    kani::assume(send < 3);
+    let answer: Result<Option<u8>, SourceError> = match send {
+        0 => Ok(Some(7)),
+        1 => Ok(None),
+        _ => Err(SourceError),
+    };
+    let frame = sendable(answer);
+    assert!(frame.is_some() == (send == 0));
+    kani::cover!(
+        send == 2 && frame.is_none(),
+        "a failed persist builds no frame"
+    );
+
+    let mut l: RecvLedger<3> = RecvLedger::new();
+    // ids 1..=3: fetched, committed, handed over as pending
+    let mut fetched = [false; 4];
+    let mut committed = [false; 4];
+    let mut pending = [false; 4];
+    for _ in 0..3 {
+        // the relay answers with the lowest cells above the acknowledgement the FETCH carried, at most up to 3
+        let lo = l.acked() + 1;
+        let hi: u64 = kani::any();
+        kani::assume(hi <= 3);
+        for id in lo..=hi {
+            fetched[id as usize] = true;
+        }
+        let _ = l.take(0, (lo..=hi).map(|id| (id, ())), |id, ()| {
+            let i = id as usize;
+            let answer: u8 = kani::any();
+            kani::assume(answer < 3);
+            match answer {
+                0 => {
+                    committed[i] = true;
+                    Ok(Delivered::Committed)
+                }
+                1 => {
+                    pending[i] = true;
+                    Ok(Delivered::Pending)
+                }
+                _ => Err(SourceError),
+            }
+        });
+        let later: u64 = kani::any();
+        kani::assume(later >= 1 && later <= 3);
+        if pending[later as usize] && kani::any() {
+            committed[later as usize] = true;
+            l.committed(later);
+        }
+        for id in 1..=3_u64 {
+            if id <= l.acked() && fetched[id as usize] {
+                assert!(committed[id as usize]);
+            }
+        }
+    }
+    kani::cover!(l.acked() == 3, "everything fetched is acknowledged");
+    kani::cover!(
+        l.acked() == 0 && fetched[1],
+        "a failed or pending first cell holds the acknowledgement"
+    );
 }

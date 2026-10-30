@@ -251,6 +251,14 @@ pub fn take_response<'a, Q: PartialEq, C, const N: usize>(
     }
 }
 
+/// What the cell source's answer for a send slot leaves to build (persist-before-send, spec §7.5, CLAUDE.md §1.7): the
+/// cell if it is ready and its new state was committed; nothing if it is not ready or not persisted — then no frame is
+/// built for the slot (SC-08).
+#[must_use]
+pub fn sendable<T>(answer: Result<Option<T>, SourceError>) -> Option<T> {
+    answer.ok().flatten()
+}
+
 /// The queue a Balanced slot sends to (spec §10.2): the first queue, from the round-robin pointer `rr`, whose previous
 /// `SEND` is at least `P_q` before the slot `slot_ms` (or that was never sent to). `None`: nothing is due, the slot
 /// carries a `PING`. `queues` is `(last_send_ms, period_ms)` in the fixed round-robin order.
@@ -604,6 +612,14 @@ mod tests {
         assert!(!take_response([(1_u32, &mut a)], &2, 0, [(6, ())], deliver));
         assert!(!take_response([(1_u32, &mut a)], &1, 1, [(6, ())], deliver));
         assert_eq!((a.acked(), b.acked()), (0, 5));
+    }
+
+    /// SC-08 (unit): only a persisted cell is sent.
+    #[test]
+    fn only_a_persisted_cell_is_sendable() {
+        assert_eq!(sendable(Ok(Some(3))), Some(3));
+        assert_eq!(sendable::<u8>(Ok(None)), None);
+        assert_eq!(sendable::<u8>(Err(SourceError)), None);
     }
 
     /// The ledger bound: a full ledger records nothing more and keeps the acknowledgement below the first id it could not

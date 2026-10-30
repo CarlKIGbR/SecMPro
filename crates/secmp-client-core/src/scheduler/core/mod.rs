@@ -45,7 +45,7 @@ use crate::timing::{TimingRng, Unavailable};
 use self::backoff::reconnect_delay;
 use self::pure::{
     InFlight, RECEIVED_MAX, RecvLedger, Ticked, complete_oldest, hand_out, ledger_admits,
-    reserved_rr, rr_select, take_response, tick_time, unwritten_max,
+    reserved_rr, rr_select, sendable, take_response, tick_time, unwritten_max,
 };
 
 /// Why a scheduler call was refused (nothing changed).
@@ -750,9 +750,7 @@ impl World {
         let cap = self.sends.iter().find(|s| s.id == queue).map(|s| &s.cap)?;
         // not ready, or not persisted: nothing is built, the tick finds no frame — and the same queue is asked again at
         // the next pass (the round-robin position moves only when a SEND is written, EXTB-1, GLM2B-1)
-        let Ok(Some(cell)) = source.prepare_cell(queue, now) else {
-            return None;
-        };
+        let cell = sendable(source.prepare_cell(queue, now))?;
         // the round-robin position moves in `tick`, when this SEND is written (GLM2B-1)
         match up.chan.prepare(&Command::Send {
             to: cap,

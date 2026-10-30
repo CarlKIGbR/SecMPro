@@ -1231,6 +1231,7 @@ pub(crate) const KANI_HARNESSES: &[&str] = &[
     "kani_proofs::kani_link_counter_checked_add",
     "kani_proofs::kani_link_counter_strict_plus_one",
     "kani_proofs::kani_outer_unpad_total",
+    "kani_proofs::kani_persist_contract_abstract",
     "kani_proofs::kani_q_frame_plaintext_exact_fit_request",
     "kani_proofs::kani_q_frame_plaintext_exact_fit_response_fetch",
     "kani_proofs::kani_q_frame_plaintext_exact_fit_response_fetch_multi",
@@ -1289,6 +1290,7 @@ pub(crate) const KANI_COVERS: &[(&str, usize)] = &[
     ("kani_proofs::kani_in_flight_over_transitions", 2),
     ("kani_proofs::kani_link_counter_checked_add", 3),
     ("kani_proofs::kani_link_counter_strict_plus_one", 2),
+    ("kani_proofs::kani_persist_contract_abstract", 3),
     ("kani_proofs::kani_q_frame_plaintext_exact_fit_request", 1),
     (
         "kani_proofs::kani_q_frame_plaintext_exact_fit_response_fetch",
@@ -2233,6 +2235,7 @@ mod tests {
     const B_SC_HARNESSES: &[(&str, usize)] = &[
         ("kani_in_flight_over_transitions", 2),
         ("kani_queue_generations", 3),
+        ("kani_persist_contract_abstract", 3),
     ];
 
     /// TEST-SPEC-M7 G7-15b (TEST-SPEC (l): "`FUZZ_TARGETS` += FZ-04, `KANI_HARNESSES` += K7-01, SC-06…SC-09, each in the

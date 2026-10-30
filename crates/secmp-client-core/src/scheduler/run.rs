@@ -61,6 +61,7 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 use crate::clock::Clock;
+use crate::scheduler::core::pure::flush_bound;
 use crate::scheduler::core::{SchedError, Scheduler};
 use crate::scheduler::types::{
     CellSource, CellToken, ControlKind, Delivered, FrameId, IsolationKey, LinkEvent, LinkId,
@@ -701,9 +702,8 @@ pub struct Driver<P: Providers, D, R, H, W, C> {
 }
 
 /// How long a pass waits, after handing out the writes of `poll_due`, for them to be flushed before it goes on to the work
-/// (obligation (i)). Well under the `FETCH` lead (1000 ms), so a slow stream never makes a preparation late; a write of
-/// the pass that is not flushed by then stays pending on its link, and the other links go on.
-pub const FLUSH_WAIT_MS: u64 = 250;
+/// (obligation (i)); defined with the bound K-C5 proves (`pure::flush_bound`).
+pub use crate::scheduler::core::pure::FLUSH_WAIT_MS;
 
 /// A link whose write has been pending this long is closed (as is one whose next tick comes while a write is still
 /// pending): the shortest period of `PERIODS`, so no link ever writes a tick late (EXTB-3).
@@ -883,10 +883,7 @@ where
     /// bound is what keeps a hanging writer of one link from delaying another link's tick that falls inside the wait
     /// (EXT3B-2): on expiry the pass goes on, the stalled write stays pending under [`WRITE_STALL_MS`].
     async fn flush_wait(&mut self, sched: &mut Scheduler, now: u64) -> Result<(), SchedError> {
-        let mut until = now.saturating_add(FLUSH_WAIT_MS);
-        if let Some(next) = sched.next_deadline() {
-            until = until.min(next.saturating_sub(sched.params().driver_jitter_ms));
-        }
+        let until = flush_bound(now, sched.next_deadline(), sched.params().driver_jitter_ms);
         while self
             .links
             .values()

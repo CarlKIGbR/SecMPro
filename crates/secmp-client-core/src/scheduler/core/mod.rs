@@ -44,8 +44,8 @@ use crate::timing::{TimingRng, Unavailable};
 
 use self::backoff::reconnect_delay;
 use self::pure::{
-    InFlight, RECEIVED_MAX, RecvLedger, Ticked, complete_oldest, hand_out, ledger_admits,
-    reserved_rr, send_choice, sendable, take_response, tick_time, unwritten_max,
+    InFlight, RECEIVED_MAX, RecvLedger, Ticked, complete_oldest, fetch_lead_deadline, hand_out,
+    ledger_admits, reserved_rr, send_choice, sendable, take_response, tick_time, unwritten_max,
 };
 
 /// Why a scheduler call was refused (nothing changed).
@@ -683,7 +683,7 @@ impl World {
                             Spec::Send(_) => false,
                         }
                 });
-                let lead_reached = now >= slot.saturating_sub(self.params.fetch_lead_ms);
+                let lead_reached = now >= fetch_lead_deadline(slot, self.params.fetch_lead_ms);
                 if (!fetch_outstanding && !commits_pending) || lead_reached {
                     tear = self.prepare_fetch(up, spec, slot, now);
                 }
@@ -1772,7 +1772,7 @@ impl Scheduler {
                         && let Some(at) = tick_time(up.since, next, up.period)
                     {
                         take(at);
-                        let lead = at.saturating_sub(self.world.params.fetch_lead_ms);
+                        let lead = fetch_lead_deadline(at, self.world.params.fetch_lead_ms);
                         if lead > self.world.last_now {
                             take(lead);
                         }

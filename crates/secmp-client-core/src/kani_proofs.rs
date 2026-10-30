@@ -17,8 +17,9 @@
 use secmp_transport::evicted::evicted_is_plausible;
 
 use crate::scheduler::core::pure::{
-    Flight, InFlight, RecvLedger, complete_oldest, hand_out, ledger_admits, reserved_rr, rr_select,
-    send_choice, sendable, take_response, tick_time, unwritten_max,
+    FLUSH_WAIT_MS, Flight, InFlight, RecvLedger, complete_oldest, fetch_lead_deadline, flush_bound,
+    hand_out, ledger_admits, reserved_rr, rr_select, send_choice, sendable, take_response,
+    tick_time, unwritten_max,
 };
 use crate::scheduler::params::{backoff_cap, rate_sum_ok};
 use crate::scheduler::types::{Delivered, SourceError};
@@ -382,9 +383,10 @@ fn kani_tick_hands_out_without_commit() {
 }
 
 /// K-C5: the deadline arithmetic never wraps. The tick time `t_up + k·P` (`pure::tick_time`) is `Some` for every smaller `k`
-/// whenever it is for `k` and is monotone in `k`; the `FETCH`-lead deadline `slot − lead` and the flush bound
-/// `min(now + FLUSH_WAIT_MS, next_deadline − driver_jitter_ms)` — written inline in `prepare_link` and `Driver::flush_wait`
-/// with saturating operations, here as the same expressions — never exceed the slot, the deadline or `now + 250`.
+/// whenever it is for `k` and is monotone in `k`; the `FETCH`-lead deadline `slot − lead` (`pure::fetch_lead_deadline`, which
+/// `prepare_link` and `Scheduler::next_deadline` call) and the flush bound `min(now + FLUSH_WAIT_MS, next_deadline −
+/// driver_jitter_ms)` (`pure::flush_bound`, which `Driver::flush_wait` calls; M7 B-SC SC-10, scan
+/// `xtask::testscan::kc5_calls_extracted`) never exceed the slot (by at most the lead), the deadline or `now + 250`.
 #[kani::proof]
 fn kani_deadline_arithmetic_checked() {
     let t_up: u64 = kani::any();
@@ -404,16 +406,18 @@ fn kani_deadline_arithmetic_checked() {
     let lead: u64 = kani::any();
     kani::assume(lead <= 1_000);
     let slot: u64 = kani::any();
-    assert!(slot.saturating_sub(lead) <= slot);
+    let deadline = fetch_lead_deadline(slot, lead);
+    assert!(deadline <= slot && slot - deadline <= lead);
     let now: u64 = kani::any();
-    let next_deadline: u64 = kani::any();
+    let next_deadline: Option<u64> = kani::any();
     let jitter: u64 = kani::any();
     kani::assume(jitter <= 50);
-    let flush = now
-        .saturating_add(250)
-        .min(next_deadline.saturating_sub(jitter));
-    assert!(flush <= now.saturating_add(250));
-    assert!(flush <= next_deadline);
+    let flush = flush_bound(now, next_deadline, jitter);
+    assert!(u128::from(flush) <= u128::from(now) + u128::from(FLUSH_WAIT_MS));
+    assert!(FLUSH_WAIT_MS == 250);
+    if let Some(next) = next_deadline {
+        assert!(flush <= next);
+    }
 }
 
 /// K-C6 (item 11): the ledger never exceeds `unwritten_max`. Any sequence of up to `UNWRITTEN_MAX + 2` ticks with no

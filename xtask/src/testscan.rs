@@ -533,6 +533,146 @@ fn scheduler_sees_only_traits() -> Result<()> {
     Ok(())
 }
 
+/// The function a line of `lines` lies in: the nearest line at or above it that declares a function (`fn <name>`).
+#[cfg(test)]
+fn enclosing_fn(lines: &[&str], at: usize) -> Option<String> {
+    lines.get(..=at)?.iter().rev().find_map(|line| {
+        let t = line.trim_start();
+        let decl = !t.starts_with("//")
+            && (t.starts_with(concat!("fn", " ")) || t.contains(concat!(" fn", " ")));
+        let after = t.split_once(concat!("fn", " "))?.1;
+        decl.then(|| {
+            after
+                .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+                .next()
+                .unwrap_or_default()
+                .to_owned()
+        })
+    })
+}
+
+/// The lines of function `name` in `lines`: from its declaration to the next function declaration.
+#[cfg(test)]
+fn fn_body(lines: &[&str], name: &str) -> String {
+    let decl = format!("{} {name}", "fn");
+    let declares = |l: &&&str| {
+        l.split_once(&decl)
+            .is_some_and(|(_, rest)| rest.starts_with('(') || rest.starts_with('<'))
+    };
+    let Some(start) = lines.iter().position(|l| declares(&l)) else {
+        return String::new();
+    };
+    let rest = lines.get(start.saturating_add(1)..).unwrap_or_default();
+    let end = rest
+        .iter()
+        .position(|l| {
+            let t = l.trim_start();
+            !t.starts_with("//")
+                && (t.starts_with(concat!("fn", " ")) || t.contains(concat!(" fn", " ")))
+        })
+        .map_or(lines.len(), |n| start.saturating_add(1).saturating_add(n));
+    lines.get(start..end).unwrap_or_default().join("\n")
+}
+
+/// Whether `body` keeps an inline `saturating_sub(…fetch_lead_ms)`: a `saturating_sub(` whose argument names the lead.
+#[cfg(test)]
+fn inline_lead(body: &str) -> bool {
+    body.match_indices(concat!("saturating", "_sub("))
+        .any(|(at, needle)| {
+            body.get(at.saturating_add(needle.len())..)
+                .and_then(|rest| rest.split(')').next())
+                .is_some_and(|arg| arg.contains(concat!("fetch", "_lead_ms")))
+        })
+}
+
+/// TEST-SPEC-M7 SC-10 `kc5_calls_extracted` (Q157, path deviation D-B3): the deadline arithmetic K-C5
+/// (`kani_deadline_arithmetic_checked`) proves is the production code's. `pure::fetch_lead_deadline` and
+/// `pure::flush_bound` (`core/pure.rs`, where they are defined and unit-tested) are called, outside `core/pure.rs`, from
+/// exactly the named sites — the `FETCH` lead of `prepare_link`, the lead deadline of `next_deadline`, the driver's
+/// `flush_wait`, and the K-C5 harness — and none of those bodies keeps the inline expression
+/// (`saturating_sub(…fetch_lead_ms)`, `saturating_add(250)`, `saturating_add(FLUSH_WAIT_MS)`). CRLF is normalised; the
+/// needles are spelled in parts so that this file matches none of them.
+#[cfg(test)]
+#[test]
+fn kc5_calls_extracted() -> Result<()> {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let src = root.join("crates/secmp-client-core/src");
+    let lead_fn = concat!("fetch", "_lead_deadline(");
+    let flush_fn = concat!("flush", "_bound(");
+    let mut calls: Vec<(String, String, String)> = Vec::new();
+    let mut texts = std::collections::BTreeMap::new();
+    for file in crate::util::walk_files(&src, &|p| p.extension().is_some_and(|x| x == "rs"))? {
+        let rel = crate::util::rel(&src, &file);
+        let text = std::fs::read_to_string(&file)?.replace("\r\n", "\n");
+        if !rel.ends_with("core/pure.rs") {
+            let lines: Vec<&str> = text.lines().collect();
+            for (n, line) in lines.iter().enumerate() {
+                let code = line.split("//").next().unwrap_or_default();
+                for needle in [lead_fn, flush_fn] {
+                    if code.contains(needle) {
+                        let site = enclosing_fn(&lines, n).unwrap_or_default();
+                        calls.push((rel.clone(), site, needle.trim_end_matches('(').to_owned()));
+                    }
+                }
+            }
+        }
+        texts.insert(rel, text);
+    }
+    calls.sort();
+    let lead = concat!("fetch", "_lead_deadline");
+    let flush = concat!("flush", "_bound");
+    let mut want: Vec<(String, String, String)> = [
+        ("kani_proofs.rs", "kani_deadline_arithmetic_checked", lead),
+        ("kani_proofs.rs", "kani_deadline_arithmetic_checked", flush),
+        ("scheduler/core/mod.rs", "next_deadline", lead),
+        ("scheduler/core/mod.rs", "prepare_link", lead),
+        ("scheduler/run.rs", "flush_wait", flush),
+    ]
+    .into_iter()
+    .map(|(f, s, n)| (f.to_owned(), s.to_owned(), n.to_owned()))
+    .collect();
+    want.sort();
+    assert_eq!(calls, want, "the call sites of the K-C5 functions");
+    for (file, site) in [
+        ("scheduler/core/mod.rs", "prepare_link"),
+        ("scheduler/core/mod.rs", "next_deadline"),
+        ("scheduler/run.rs", "flush_wait"),
+        ("kani_proofs.rs", "kani_deadline_arithmetic_checked"),
+    ] {
+        let text = texts.get(file).map_or("", String::as_str);
+        let lines: Vec<&str> = text.lines().collect();
+        let body = fn_body(&lines, site);
+        assert!(!body.is_empty(), "{file}: {site} not found");
+        assert!(!inline_lead(&body), "{file}: {site} keeps the inline lead");
+        for needle in [
+            concat!("saturating", "_add(250)"),
+            concat!("saturating", "_add(FLUSH", "_WAIT_MS)"),
+        ] {
+            assert!(!body.contains(needle), "{file}: {site} keeps `{needle}`");
+        }
+    }
+    // the positive control of the needles: the definitions keep the arithmetic
+    let pure = texts
+        .get("scheduler/core/pure.rs")
+        .map_or("", String::as_str);
+    let lines: Vec<&str> = pure.lines().collect();
+    assert!(inline_lead("x.saturating_sub(self.params.fetch_lead_ms)"));
+    assert!(!inline_lead("x.saturating_sub(lead)"));
+    assert!(fn_body(&lines, flush).contains(concat!("saturating", "_add(FLUSH", "_WAIT_MS)")));
+    assert_eq!(
+        enclosing_fn(&["    pub fn outer() {", "        let x = 1;"], 1).as_deref(),
+        Some("outer")
+    );
+    let generic = [
+        "    fn g<S: X>(",
+        "        a.saturating_add(250)",
+        "    fn h() {",
+    ];
+    assert!(fn_body(&generic, "g").contains("saturating_add(250)"));
+    assert!(!fn_body(&generic, "g").contains("fn h"));
+    Ok(())
+}
+
 /// The source scans and their tests (test-only).
 #[cfg(test)]
 mod scan;

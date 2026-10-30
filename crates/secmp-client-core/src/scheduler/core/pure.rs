@@ -296,6 +296,26 @@ pub fn send_choice(
     Some((at, next))
 }
 
+/// How long a pass waits, after handing out the writes of `poll_due`, for them to be flushed before it goes on to the work
+/// (the driver's obligation (i), `run::flush_wait`). Well under the `FETCH` lead (1000 ms), so a slow stream never makes a
+/// preparation late; a write of the pass that is not flushed by then stays pending on its link, and the other links go on.
+pub const FLUSH_WAIT_MS: u64 = 250;
+
+/// The latest time the `FETCH` of the tick at `slot` is built at (OPEN-M6-13): `lead` before the tick, saturating — never
+/// wraps (K-C5). `prepare_link` and `Scheduler::next_deadline` take it from here.
+#[must_use]
+pub const fn fetch_lead_deadline(slot: u64, lead: u64) -> u64 {
+    slot.saturating_sub(lead)
+}
+
+/// When the flush wait of a pass at `now` ends at the latest (`run::flush_wait`, EXT3B-2): `now + FLUSH_WAIT_MS`, and never
+/// past the scheduler's next deadline less the driver jitter — saturating, never wrapping (K-C5).
+#[must_use]
+pub fn flush_bound(now: u64, next_deadline: Option<u64>, jitter: u64) -> u64 {
+    let until = now.saturating_add(FLUSH_WAIT_MS);
+    next_deadline.map_or(until, |next| until.min(next.saturating_sub(jitter)))
+}
+
 /// The time of tick `k`: `t_up + k·period` (K-03). `None` on overflow — never wraps.
 #[must_use]
 pub fn tick_time(t_up: u64, k: u32, period_ms: u64) -> Option<u64> {
@@ -516,6 +536,19 @@ mod tests {
         let last = [(Some(0), 40), (Some(0), 40), (None, 40)];
         assert_eq!(send_choice(0, &last, 10), Some((2, 0)), "wraps");
         assert_eq!(send_choice(0, &[(Some(0), 10)], 5), None);
+    }
+
+    /// SC-10 (unit): the `FETCH` lead and the flush bound saturate and stay below the slot, the deadline less the jitter
+    /// and `now + FLUSH_WAIT_MS`.
+    #[test]
+    fn lead_and_flush_bounds() {
+        assert_eq!(fetch_lead_deadline(10_000, 1_000), 9_000);
+        assert_eq!(fetch_lead_deadline(500, 1_000), 0);
+        assert_eq!(flush_bound(1_000, None, 50), 1_250);
+        assert_eq!(flush_bound(1_000, Some(1_100), 50), 1_050);
+        assert_eq!(flush_bound(1_000, Some(5_000), 50), 1_250);
+        assert_eq!(flush_bound(1_000, Some(10), 50), 0);
+        assert_eq!(flush_bound(u64::MAX, None, 0), u64::MAX);
     }
 
     #[test]

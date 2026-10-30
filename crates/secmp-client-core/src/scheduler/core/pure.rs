@@ -689,7 +689,9 @@ mod tests {
     #[test]
     fn a_full_ledger_keeps_the_ack_below_what_it_could_not_record() {
         let mut r: Received<2> = Received::new();
+        assert!(r.is_empty());
         assert!(r.record(5, true));
+        assert!(!r.is_empty());
         assert!(r.record(9, false));
         assert!(!r.record(7, true), "full");
         assert_eq!(r.len(), 2);

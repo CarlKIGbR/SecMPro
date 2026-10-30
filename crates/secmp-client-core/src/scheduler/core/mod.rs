@@ -2101,7 +2101,7 @@ mod tests {
     use secmp_proto::link::relay::{self, RelayKeys};
     use secmp_proto::tr::OsEntropy;
     use secmp_proto::wire::cell::Cell;
-    use secmp_transport::{Channel, SendCap};
+    use secmp_transport::{Channel, Error as TransportError, Outcome, RecvCap, SendCap};
 
     use super::{LinkId, SchedError, Scheduler};
     use crate::scheduler::params::{Mode, Params};
@@ -2235,6 +2235,62 @@ mod tests {
         assert_eq!(
             SchedError::UnknownFrame.to_string(),
             "not the oldest frame handed out"
+        );
+        Ok(())
+    }
+
+    /// B-SC mutant killers (`core/mod.rs` `impl Ticked for Req`, `World::current`, the generation guard of
+    /// `World::outcome`): a request's tick is its own; `current` holds for the queue's id in its generation only; after a
+    /// re-creation an error answer to a `FETCH` asked in the old generation raises nothing, one asked in the new does.
+    #[test]
+    fn old_generation_errors_change_nothing() -> Result<(), Fail> {
+        use super::{Req, ReqKind};
+        use crate::scheduler::core::pure::Ticked;
+        use crate::scheduler::types::{Alert, LinkEvent};
+        let ping = Req {
+            tick: 5,
+            seq: 1,
+            kind: ReqKind::Ping,
+        };
+        assert_eq!(Ticked::tick(&ping), 5);
+        let mut sched = Scheduler::new(Params::default(), Mode::Strict, TimingRng::seeded(9));
+        let seed = SecretBytes::from_slice(&[0x21; 32]).map_err(|_| "seed")?;
+        let cap = RecvCap::from_seed(&seed).map_err(|_| "cap")?;
+        let q = sched
+            .add_recv_queue(0, RelayId(0), cap, 10_000)
+            .map_err(|_| "queue")?;
+        assert!(sched.world.current(q, 0));
+        assert!(!sched.world.current(q, 1));
+        assert!(!sched.world.current(QueueId(99), 0));
+        sched.world.recreate(q, 0).map_err(|_| "recreate")?;
+        assert!(sched.world.current(q, 1));
+        let fetch = |generation| Req {
+            tick: 1,
+            seq: 1,
+            kind: ReqKind::Fetch(q, generation),
+        };
+        let auth = || Outcome::Fetch(Err(TransportError::Auth));
+        let mut src = Dummies(0);
+        let fit = sched
+            .world
+            .outcome(fetch(0), auth(), 0, &mut src)
+            .map_err(|_| "old")?;
+        assert!(fit);
+        let alert = |out: &[Output]| {
+            out.iter()
+                .any(|o| matches!(o, Output::Event(LinkEvent::Alert(_, Alert::QueueAuth))))
+        };
+        assert!(
+            !alert(&sched.world.out),
+            "an old generation's error raises nothing"
+        );
+        sched
+            .world
+            .outcome(fetch(1), auth(), 0, &mut src)
+            .map_err(|_| "new")?;
+        assert!(
+            alert(&sched.world.out),
+            "the current generation's error raises the alert"
         );
         Ok(())
     }

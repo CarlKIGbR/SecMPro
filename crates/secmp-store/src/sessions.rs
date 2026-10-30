@@ -65,11 +65,13 @@ pub fn put_fixed(tx: &mut Tx<'_>, session: i64, fixed: &[u8]) -> Result<()> {
 /// bytes) sealed in `skey`.
 ///
 /// # Errors
-/// [`Error::Unavailable`] if the statement fails (also if `ord` is taken).
+/// [`Error::Unavailable`] if the entry is shorter than [`SKIPPED_KEY_LEN`] (malformed; nothing is written) or the
+/// statement fails (also if `ord` is taken).
 pub fn insert_skipped(tx: &mut Tx<'_>, session: i64, ord: i64, entry: &[u8]) -> Result<()> {
     let rk = session_row(session, part::SKIPPED, ord)?;
     let key_len = usize::try_from(SKIPPED_KEY_LEN).map_err(|_| Error::Unavailable)?;
-    let key = entry.get(..key_len).unwrap_or(entry);
+    // Q175: an entry shorter than its key is malformed
+    let key = entry.get(..key_len).ok_or(Error::Unavailable)?;
     // spec §3.4; ADR-053 item 5
     let data = tx.seal(Table::Sessions, "data", &rk, entry)?;
     // spec §3.4; ADR-053 item 5
@@ -258,6 +260,25 @@ mod tests {
 
     type R = core::result::Result<(), Box<dyn std::error::Error>>;
 
+    /// Q175 (A4-1-09): a skipped entry shorter than its key (`SKIPPED_KEY_LEN` = 36 B) is malformed — the uniform
+    /// `Unavailable`, nothing written; a 36-byte entry is stored.
+    #[test]
+    fn short_skipped_entry_refused() -> R {
+        let dir = TempDir::new("short-skipped")?;
+        let mut store = Store::open(dir.path(), &TestKey::db_key())?;
+        store.txn(|tx| put_fixed(tx, 9, b"fixed"))?;
+        assert_eq!(
+            store.txn(|tx| insert_skipped(tx, 9, 0, &[b'e'; 35])),
+            Err(Error::Unavailable)
+        );
+        let rows = store.session_rows(9)?.ok_or("rows")?;
+        assert!(rows.skipped.is_empty(), "nothing written");
+        store.txn(|tx| insert_skipped(tx, 9, 0, &[b'e'; 36]))?;
+        let rows = store.session_rows(9)?.ok_or("rows")?;
+        assert_eq!(rows.skipped.len(), 1);
+        Ok(())
+    }
+
     /// The rows of a session as written (G7-13 extra test, store half of PC-07/PC-09): the fixed part, the skipped entries
     /// by `ord` in order, the reassembly state and the trust; an `ord` is taken once; deleting an entry removes exactly it,
     /// deleting a missing one fails; a second session is apart; nothing before the first fixed part.
@@ -265,18 +286,20 @@ mod tests {
     fn session_rows_round_trip() -> R {
         let dir = TempDir::new("sessions")?;
         let mut store = Store::open(dir.path(), &TestKey::db_key())?;
+        // Q175: every skipped entry is at least `SKIPPED_KEY_LEN` (36) bytes: 36 × `e`, then its ordinal
+        let entry = |n: u8| [&[b'e'; 36][..], &[n]].concat();
         assert!(store.session_rows(7)?.is_none(), "no fixed part yet");
         store.txn(|tx| {
             put_fixed(tx, 7, b"fixed-1")?;
-            insert_skipped(tx, 7, 0, b"entry-0")?;
-            insert_skipped(tx, 7, 1, b"entry-1")?;
-            insert_skipped(tx, 7, 2, b"entry-2")?;
+            insert_skipped(tx, 7, 0, &entry(0))?;
+            insert_skipped(tx, 7, 1, &entry(1))?;
+            insert_skipped(tx, 7, 2, &entry(2))?;
             put_inbox(tx, 7, b"inbox")?;
             put_trust(tx, 7, &[3])?;
             put_fixed(tx, 8, b"other")
         })?;
         assert_eq!(
-            store.txn(|tx| insert_skipped(tx, 7, 1, b"again")),
+            store.txn(|tx| insert_skipped(tx, 7, 1, &[b'a'; 36])),
             Err(Error::Unavailable),
             "an ord is taken once"
         );
@@ -298,8 +321,14 @@ mod tests {
             .collect();
         assert_eq!(
             skipped,
-            vec![(0, b"entry-0".as_slice()), (2, b"entry-2".as_slice())]
+            vec![(0, entry(0).as_slice()), (2, entry(2).as_slice())]
         );
+        let keys: Vec<(i64, Vec<u8>)> = store
+            .skipped_keys(7)?
+            .into_iter()
+            .map(|(o, k)| (o, k.to_vec()))
+            .collect();
+        assert_eq!(keys, vec![(0, vec![b'e'; 36]), (2, vec![b'e'; 36])]);
         assert_eq!(
             rows.inbox.as_deref().map(Vec::as_slice),
             Some(b"inbox".as_slice())

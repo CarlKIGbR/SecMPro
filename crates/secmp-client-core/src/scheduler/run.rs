@@ -492,7 +492,8 @@ impl Deferred {
                 }
                 let ids = self.committed.entry(queue).or_default();
                 ids.insert(cell_id);
-                while ids.len() > COMMITTED_KEPT {
+                // one id joined: at most one leaves, the oldest
+                if ids.len() > COMMITTED_KEPT {
                     ids.pop_first();
                 }
                 Some((queue, cell_id))

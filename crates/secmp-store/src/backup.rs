@@ -588,6 +588,19 @@ fn profile_len(rest: &[u8]) -> Result<usize> {
     flag_at.checked_add(tail).ok_or(Error::Unlock)
 }
 
+/// One settings entry of a backup section: the key is allowlisted and not seen before in the section (canonical
+/// decode, Q181), the value is a u32 (ADR-053 Amendment 2); anything else is the uniform `Unlock`.
+fn settings_slot(seen: &mut [bool], key: &str, val_len: usize) -> Result<()> {
+    let pos = BACKUP_SETTINGS_KEYS.iter().position(|k| *k == key);
+    match pos.and_then(|p| seen.get_mut(p)) {
+        Some(s) if !*s && val_len == 4 => {
+            *s = true;
+            Ok(())
+        }
+        _ => Err(Error::Unlock),
+    }
+}
+
 /// The four sections of a decrypted body (`lens` from the section table), each consuming exactly its length; every
 /// field is checked (`IKSPublic` and `Profile` by the `secmp-proto` decoders, `AppMessage` likewise and never view-once).
 fn decode(body: &[u8], lens: [usize; 4]) -> Result<Contents> {
@@ -634,6 +647,7 @@ fn decode(body: &[u8], lens: [usize; 4]) -> Result<Contents> {
     let mut s = Cursor(settings_s);
     let n = s.u16()?;
     let mut settings = Vec::new();
+    let mut seen = [false; BACKUP_SETTINGS_KEYS.len()];
     for _ in 0..n {
         let key_len = usize::from(s.u8()?);
         let key = s.take(key_len)?;
@@ -643,11 +657,8 @@ fn decode(body: &[u8], lens: [usize; 4]) -> Result<Contents> {
         let key = core::str::from_utf8(key)
             .map_err(|_| Error::Unlock)?
             .to_owned();
-        // only allowlisted keys, each value a u32 (ADR-053 Amendment 2)
         let val_len = usize::from(s.u16()?);
-        if !BACKUP_SETTINGS_KEYS.contains(&key.as_str()) || val_len != 4 {
-            return Err(Error::Unlock);
-        }
+        settings_slot(&mut seen, &key, val_len)?;
         settings.push((key, Zeroizing::new(s.take(val_len)?.to_vec())));
     }
     s.finish()?;
@@ -1545,6 +1556,47 @@ mod tests {
             Err(Error::Unlock)
         );
         assert_eq!(settings_rows(&fresh)?, 0);
+        Ok(())
+    }
+
+    /// Q181 (canonical decode): a settings key repeated in a backup is a malformed section (`Unlock`), nothing is
+    /// written (the last value used to win).
+    #[test]
+    fn import_refuses_duplicate_settings_key() -> R {
+        let (dir, path) = forged(
+            "bk-dup",
+            vec![
+                ("retention_days", vec![0, 0, 0, 1]),
+                ("retention_days", vec![0, 0, 0, 9]),
+            ],
+        )?;
+        let mut fresh = Store::open(&dir.path().join("fresh"), &TestKey::db_key())?;
+        assert_eq!(
+            import_kat(&mut fresh, &path, PASS, Argon2Params::kat_small(), 1),
+            Err(Error::Unlock)
+        );
+        assert_eq!(settings_rows(&fresh)?, 0);
+        Ok(())
+    }
+
+    /// A `retention_days` outside the u32 range is not exported (`Unavailable`); `Store::retention` reads it as `Keep`
+    /// (`messages.rs`).
+    #[test]
+    fn export_refuses_out_of_range_retention() -> R {
+        use crate::messages::Retention;
+        let dir = TempDir::new("bk-retrange")?;
+        let mut store = Store::open(&dir.path().join("profile"), &TestKey::db_key())?;
+        populate(&mut store)?;
+        store.connection_kat().execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('retention_days', ?1)",
+            rusqlite::params![4_294_967_296_i64],
+        )?;
+        let path = dir.path().join("export.secmpbackup");
+        assert_eq!(
+            export_kat(&store, &path, PASS, Argon2Params::kat_small()),
+            Err(Error::Unavailable)
+        );
+        assert_eq!(store.retention(), Ok(Retention::Keep));
         Ok(())
     }
 

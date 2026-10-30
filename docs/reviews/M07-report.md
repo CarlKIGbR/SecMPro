@@ -22,7 +22,7 @@ G7-15a, G7-16, G7-18, K7-02, K7-03, FZ-01, FZ-02.
 | A-2 | A | After the A0 report, "ADR-055 accepted" and the owner's vet records: `rusqlite` in `secmp-store`, `argon2` in `secmp-crypto`, allowlist rows, vet/deny/cooldown | G7-01, G7-02, G7-03, G7-04, ST-08 | done @ `bf54d98` |
 | A-3 | A | Store code with the `kat`-only `secmp_store::kat::TestKey`: client-core/testkit → store edges first; pragmas, version check, defensive mode (ST-20, Q128), no temp files, schema, migrations, secure delete, view-once, expiry; persistence contract (`to_parts`/`from_parts`, `StoreOutbox`, store `Persist`); mutants/coverage scope | G7-06, ST-01…ST-04, ST-09, ST-13…ST-18, ST-20, PC-01…PC-13, G7-18, G7-13, G7-14 | closed @ `cdc3c0a` (ST-17: store half; A-3b/A-3d/A-3e fix-ups; Kani exception Q138; `modell=claude-opus-5-5`) |
 | A-4 | A | After "ADR-053 accepted": wrap, table keys, record seal, `SecretPage` secrets, ct target `store_unlock_reject` with its registration, backup, export forensic, store fuzz targets | ST-05…ST-07, ST-10…ST-12, ST-19, CT-01, CT-05, CT-02, BK-01…BK-07, FO-03, FZ-01, FZ-02, G7-15a (ST-10, BK-04 [REF]-open) | **A-4 built @ `c3c1dcf`; Phase A closes with the green PR run (BRIEF_M7 §5, reviewer)** (`modell=claude-opus-5-5`) |
-| B | B | `Profile`, `Contacts`, `Invitations`, `Sessions`, `Api`, settings, relay view, transport boundary, transactional accept, handshake as scheduled ops; scheduler-core carry-overs (Opus) | B-SC (Opus): SC-01…SC-10, K7-03b, proto additions (Q147); B-1…B-3 (Sonnet): PR-01, PR-02, PR-04…PR-09, IN-01…IN-13, IN-18…IN-21, K7-01, FZ-04, G7-15b; B-4…B-7 (Sonnet, continuation): PR-03, IN-14…IN-17, SE-01…SE-20 (SE-13a not built), AP-01…AP-07 | B-SC next (Q146) |
+| B | B | `Profile`, `Contacts`, `Invitations`, `Sessions`, `Api`, settings, relay view, transport boundary, transactional accept, handshake as scheduled ops; scheduler-core carry-overs (Opus) | B-SC (Opus): SC-01…SC-10, K7-03b, proto additions (Q147); B-1…B-3 (Sonnet): PR-01, PR-02, PR-04…PR-09, IN-01…IN-13, IN-18…IN-21, K7-01, FZ-04, G7-15b; B-4…B-7 (Sonnet, continuation): PR-03, IN-14…IN-17, SE-01…SE-20 (SE-13a not built), AP-01…AP-07 | B-SC closed @ `923b9ee` (SC-01…SC-10, K7-03b; G7-15b opened); B-1…B-3 next (Q146) |
 | C | C | `secmp-cli`, E2E, forensic, CT-03, CLI fuzz, transport carry-overs, owner-action rows | CL-*, E2-*, FO-01, FO-01a, FO-02, CT-03, FZ-03, G7-15c, G7-21, C-T1, C-T3, G7-17 ⚙, G7-11, G7-19, G7-20 (cond) | waiting (Phase B) |
 
 ## 2. What was built
@@ -679,3 +679,83 @@ New tests: 19 (17 plus 2 mutant killers); 13 seen failing first (`a4e-red-first.
 ### §7 risks
 
 None new. Blocked: none. STOP: none.
+
+## B-SC (WEISUNG M7-B-SC; scheduler-core carry-overs, their Kani proofs, heap-free `tr_header_selection`; `modell=claude-opus-5-5`)
+
+Guard: tree clean, HEAD `99ad44c174227c6bac5b8f621e612d26a7b72489`. Pins quoted at `99ad44c`: `gates.rs:11245-11246` `assert_eq!(all.len(), 51);` / `assert_eq!(kani_verified(&kani_log(all, 0))?.len(), 51);` (`KANI_HARNESSES.len()` = 51, `FUZZ_TARGETS` 35); A-4 §0.2 (K7-03b) had not run — `kani_proofs.rs:291` `let results: Vec<Choice> = opened.iter().map(|o| choice(*o)).collect();`, so §4 ran; `git diff --stat 92b4404..99ad44c -- crates/secmp-client-core/src/scheduler crates/secmp-proto`: `crates/secmp-proto/src/kani_proofs.rs | 2 +-`, `crates/secmp-proto/tests/fuzz_max_len.rs | 34 ++++++++++++++++++++++++++++++--` (2 files, 33 insertions, 3 deletions). No spec, ADR, label, vector, wire or store change; `Cargo.lock`/`fuzz/Cargo.lock` unmoved; no skip, `#[ignore]`, threshold, Kani bound change of an existing harness, stub or limit change.
+
+### §2 commits
+
+| commit | what |
+|---|---|
+| `74b7ea6` | commit 0 `docs(m7): Phase B re-dictations (Q145–Q174)`, edits E1–E16, E5b, E12b (every old quote found exactly once) |
+| `14acea8` | §0.2 `feat(proto): pooled invitation queue, prekey seeds, classified accept, KeyChange signing, K_id/SK kat accessors (Q147)` |
+| `107dad8` | §1 `feat(core): deferred-commit deliver; ack = highest committed prefix (OQ-20; SC-01, SC-02)` (amended once before its ci-fast: a clippy fix in the new test code) |
+| `9722477` | §2 `feat(core): logical link id in Purpose and LinkEvent; frame ids for frame_written (FIN5b-1, FINAL3 (e); SC-04, SC-05)` (amended: an extra K-C2 cover dropped — `kani_cover_count_is_pinned` pins covers against committed runs) |
+| `ca99b15`, `1f5b604`, `07117f0`, `20eae50` | §3 SC-06, SC-07, SC-08, SC-09: one commit per harness with its registration (`KANI_HARNESSES`, `KANI_COVERS`, pin +1, the committed alone run `kani-m7-bsc-sc-<harness>.txt` read by `kani_cover_count_is_pinned`, G7-15b) |
+| `a4897e3` | §3 SC-10 `feat(core): pure::fetch_lead_deadline and pure::flush_bound; K-C5 calls them (SC-10, D-B3)` |
+| `b7d7ee6` | §4 `fix(kani): tr_header_selection without the heap (K7-03b, Q138 item 3)` (exception Q138 lifted in the same commit) |
+| `57d7da2` | `fix(xtask): G7-15b test spells the Kani proof attribute in parts` (the literal made `gates::kani` count `xtask` as a harness package; found by the first full step) |
+| `b92c28f`, `27c644c` | mutant killers (`core::tests::old_generation_errors_change_nothing`, `Received::is_empty`); the committed-id trim of `Deferred::on_done` is an `if` (its `while` mutant hung) |
+| `864ac09`, `651edce`, `6d36dc0` | `docs(mutants)`: the `pure.rs:84:30` equivalent row; renumbering (no new acceptance); the gate test `accepted_rows_with_escaped_pipes_match_the_survivors` follows `755:39 → 800:39` |
+| `923b9ee` | evidence |
+
+### §3 rows
+
+| row | test | result | red first |
+|---|---|---|---|
+| Q147 (i) | `hx::store::issue_invitation_on_uses_the_pool_queue_seeds` (frozen hx-0003/0004 as oracle), `issue_invitation_on_draws_no_seed` | pass; `cargo xtask vectors` before (`74b7ea6`) and after (§0.2 tree): `vectors: 12 suites identical to vectors/ref (structural, SCHEMA §1; positive rows of encodings)`, every suite "agrees with ref; frozen file unchanged", identical; `vectors/` untouched | new API |
+| Q147 (ii) | `hx::store::seed_encodings_round_trip_and_reject_every_other_length` (SPK 172 B, OPK 100 B, record 128 B; every truncation and one extension `Rejected`) | pass | new API |
+| Q147 (iii) | `hx::classified::{classified_valid_group_among_garbage_spends_the_group, classified_rejected_group_is_spent, classified_partial_group_is_not_spent, classified_unavailable_spends_nothing}` | pass | new API |
+| Q147 (iv) | `tr::tests::key_change_body_is_signed_by_the_old_key` (oracle `tr/tests.rs` `key_change`; the existing KeyChange tests unchanged) | pass | new API |
+| Q147 (v) | `hx::tests::key_accessors_report_the_last_derivation` (kat), doctest `hx::kat_key_accessors_only_under_kat` (`compile_fail,E0425` without `kat`) | pass | — |
+| SC-01 | `harness::m7_drain::drain_f_cells_per_response` (2.4 s) | Strict silent: 4 committed per response, drained after 32 periods (bound 45); Strict 1/P: 4 per response, 43 periods (66); Balanced silent: 8 per `FETCH_MULTI` response, 16 slots (21); Balanced 1/slot: 8, 19 slots (24) | not runnable on the old tree (new API); the old behaviour is R-01's M6 series |
+| SC-02 | `harness::m7_drain::ack_is_highest_committed_prefix` | commits 1, 3, 2 at 12, 15, 25 s → ack 1, 1, 3; the `FETCH`es carry 0, 1, 3 at their ticks 10, 20, 30 s; handed to the source 1, 2, 3, then 2 (3 committed, not asked again) | new API |
+| SC-03 | the six modules (`sc-03-regression-57d7da2.txt`) | 42 passed (380 s); SIM-02 queue B → A at the end: 1 cell (M6: 128) | the SIM-02 assertion on the old core: "queue B -> A holds 128 cells at the end of the run" |
+| R-01 (OPEN-M6-B-1, name kept) | `m6_driver_io::receive_throughput_per_fetch_is_measured` | new series: committed at (s) [11, 11, 11, 11], ready to acknowledge [11, 11, 11, 11], relay acknowledgement [20] (M6: [11, 21, 31, 41] / relay [30, 40, 50, 60]) | the new expectation on the old core: "the relay saw one acknowledgement of all four" left 4, right 1 |
+| SC-04 | `harness::m7_links::logical_link_id_in_events` | the swap is rejected per logical link ("1500 ms") and accepted pooled; a run with 60-s link lifetimes: 2 logical links × 15 connections, every `Up`/`TornDown` names its connect's logical id, 28 lifetime teardowns checked per link; the FIN5b-1 oracle tests keep their names (`oracle_rejects_a_crossed_reconnect_that_breaks_the_pooled_bound` now reports A's own 2 500 ms) | the swap fixture under the M6 pooled matching passes (shown in the test) |
+| SC-05 | `scheduler::core::tests::frame_written_duplicate_detected` | out of order, duplicate with a non-empty ledger, empty ledger: `Err(UnknownFrame)`, counted, ledger unchanged; unknown link `Ok` | new API (M6: a duplicate popped the oldest entry by design, FINAL3 (e)) |
+| SC-06…SC-09 | `kani_in_flight_over_transitions`, `kani_queue_generations`, `kani_persist_contract_abstract`, `kani_paired_executions` | `VERIFICATION:- SUCCESSFUL` each, covers 2/2, 3/3, 3/3, 3/3 (§4 table) | — |
+| SC-10 | `xtask::testscan::kc5_calls_extracted` | pass | on `9722477` + SC-06 work, before any extraction: `left: []` (no call site) |
+| K7-03b | `tr_header_selection_k0_2`, `…_k3`, `…_k4` | 5.8 %, 5.8 %, 7.4 % alone; exception Q138 lifted | — |
+| G7-15b | `xtask::expect::tests::fuzz_and_kani_lists_core` (opened with SC-06, the four B-SC harnesses) | pass | — |
+
+Extracted (store-free, codec-free) into `core/pure.rs` and called by the core: `Received`/`RecvLedger` (+`take_response`), `InFlight`, `sendable`, `send_choice`, `fetch_lead_deadline`, `flush_bound` (+`FLUSH_WAIT_MS`, re-exported by `scheduler::run`). `InFlight` is a fixed 4-slot array: a `Vec` or `VecDeque` of symbolic length ran CBMC out of memory (116 GB) over eight events; `max_in_flight` is clamped to `IN_FLIGHT_TICKS` = 2 (spec §10.3).
+
+### §4 gates and Kani
+
+| harness | alone (`kani-m7-bsc-a4897e3.txt`, `kani-m7-bsc-k703b-b7d7ee6.txt`, `kani-m7-bsc-accept-14acea8.txt`) | in the step (`kani-m7-bsc-full-57d7da2.txt`) |
+|---|---|---|
+| `kani_in_flight_over_transitions` (SC-06) | 10.6 %, 39 s | 10.6 % |
+| `kani_queue_generations` (SC-07) | 24.9 %, 80 s | 22.3 % |
+| `kani_persist_contract_abstract` (SC-08, unwind 4) | 84.6 %, 458 s | 83.2 % |
+| `kani_paired_executions` (SC-09, unwind 4) | 68.6 %, 139 s | 67.2 % |
+| `kani_deadline_arithmetic_checked` (K-C5) | 1.6 %, 779 s | (step) |
+| K-C1 / K-C2 / K-C3 / K-C4 / K-C6 | 35.9 / 39.7 / 31.8 / 14.2 / 4.2 % | (step) |
+| `kani_accept_opk_delete_only_on_success` | 87.7 %, 426 s | 87.0 % |
+| `kani_hx_grouping` / `…_record_names_opk1` / `…_deleted_opk2` | 42.2 / 41.8 / 45.2 % | (step) |
+| `tr_header_selection_k0_2` / `_k3` / `_k4` | 5.8 / 5.8 / 7.4 % | 5.8 / 5.5 / 7.2 % |
+
+Full step `cargo xtask step --strict kani` at `57d7da2`: PASS, 55/55 harnesses verified, every cover satisfied, wall 4197 s (70 min; `expect::JOB_BUDGETS` `("kani", 150)`; not above 120 min, so no per-harness timing table is required); highest peak in the step 87.0 % (`kani_accept_opk_delete_only_on_success`). Unwinds of SC-08 and SC-09 are 4 = each loop's bound + 1 (unwind 6/5 measured 132.6 % / 86.0 % alone).
+
+| gate | result |
+|---|---|
+| ci-fast | `ci-fast-bsc-0-74b7ea6`, `-p-14acea8`, `-1-107dad8`, `-2-9722477`, `-3-a4897e3`, `-l-923b9ee`: PASS each (harness 852–1088 s) |
+| mutants (`mutants-bsc-651edce.txt`) | core 133 caught / 7 missed / 24 unviable / 1 timeout of 165 at first; after the killers 140 / 1 (accepted: `pure.rs:84:30`, equivalent) / 24 / 0; proto 43 / 0 / 31 / 0 of 74 |
+| coverage (`coverage-bsc-6d36dc0.txt`) | secmp-client-core 95.0 %, secmp-proto 97.6 % (min 90 %) |
+| ci-full (`ci-full-bsc-923b9ee.txt`, A-3b summary form, Q174) | PASS: fuzz 4317 s, coverage 941 s, Miri 2426 s, Kani 4327 s (55/55; highest peak 86.7 % `kani_accept_opk_delete_only_on_success`; SC-08 83.3 %, SC-09 66.7 %, SC-07 22.3 %, SC-06 10.6 %, `tr_header_selection_k4` 7.2 %), ProVerif `--models tr` 142 s, ref-vectors 969 cases identical; ct, mutants, proverif-link, windows-native, windows-cross delegated |
+
+### §5 deviations
+
+- **D-B3** (Q157): SC-10 is `xtask::testscan::kc5_calls_extracted`, a source scan, not a Kani harness; K-C5 keeps its name.
+- **D-SC1**: `pure::InFlight` clamps `max_in_flight` to 2 ticks (spec §10.3's two) and holds 4 requests in a fixed array; a caller asking for more gets two (no caller does: `Params::default()` is 2, no test changes it).
+- **D-SC2**: the extra K-C2 cover (a duplicate report) was dropped; K-C2 asserts it instead (a cover needs a committed run under `kani_cover_count_is_pinned`).
+- **D-SC3**: the full Kani step ran once, after §4 (at `57d7da2`), covering §3 and K7-03b; §3's alone runs are per commit.
+- **D-SC4**: `World::fetched` gives a recv-queue a generation (`RecvLedger`), and error answers of an older generation are ignored too (SC-07 "a response of an old generation never updates the new one").
+- **D-SC5**: the `FETCH` is built once the previous response's cells are committed, at the latest at its lead (`fetch_lead_ms`, the parameter's documented meaning); its tick time does not move.
+
+### §8
+
+- **OQ-20** resolved by OPEN-M7-08 A (no spec change); `docs/09` not edited.
+- **FIN5b-1** closed (logical link id, per-link oracle). **FINAL3 (e)** closed (frame ids). **KANI-M6-C-1** closed (SC-06…SC-09). **K-C5** closed (SC-10).
+- Blocked: none. STOP: none.

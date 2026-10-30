@@ -600,3 +600,25 @@ Q137 (e.g. arrays of length `k` per harness instead of `TR_SKIPPED_KEYS`, an exc
 - **K7-03b:** not done in A-4 (§0.2 ran only if named); Phase B row.
 - **The CI Kani figure of `92b4404`:** pending (reviewer); the report's Kani table keeps "pending".
 - Q-A18…Q-A23 (§5 D17, D18, D21, D22, D25, D27) for the reviewer.
+
+**A-4c fixes (WEISUNG M7-A4c; `modell=claude-sonnet-5-5`).** Base `ebb639f`, commits `13174b1`, `d35f60e`.
+
+- **§3 CRLF audit** (tests added since `bf55099` that read a file and match a multi-line needle): `expect::tests::coverage_store_90` (the
+  failure of PR run 40918729835) and `expect::tests::mutants_scope_includes_store` (`"\nkat = ["`) now read through `lf()`; already
+  normalised: `scan.rs` testkit `kat` manifest, `fuzz_targets_store`, `declares_kat_module`, the nextest killer profile,
+  `mutant_harness_suite_under_30s`. New test `expect::tests::crlf_needles_normalised`.
+- **Seed helper (Q20):** `persist.rs` `#[cfg(test)]` and `#[cfg(feature = "kat")]` on separate lines; `cargo mutants … --package
+  secmp-client-core --features kat --list`: 859 → 857 mutants, `seed.rs` 2 → 0.
+- **Renumbering after A-3:** `mutants-accepted.md` `core/mod.rs` `:751:39`→`:755:39`, `:1733:21`→`:1737:21`, `:1733:44`→`:1737:44` (no new
+  acceptance); the fixture `run_163` in `gates.rs` follows; all five client-core rows match the current `--list`.
+- **Windows harness (run 40918729835, job 123605864045):** the four "failed" tests — `m6_sched::strict_one_link_per_queue`,
+  `m6_props::prop_schedule_independent_of_activity`, `m6_sched::strict_counts_for_every_period`,
+  `m6_sched::strict_recv_link_one_fetch_per_period` — are `ABORT` with `0xc000013a` (CTRL+C) at 18:40:20, children killed by the
+  cancellation: a budget cut, no product-test change. The 23 min of `kat` (18:14:07–18:37:12) are the rebuild of the kat feature set
+  (`openssl-src` 18:25–18:27, `secmp-relay` 18:28–18:36), no test running. Evidence: `windows-a3-timings-40918729835.txt`.
+- **ADR-045 Amendment 13:** `windows-native`/`dispatch-windows` 90 → 240 min, `JOB_BUDGETS`, docs/06 §4.
+- **§4 ci-fast:** `ci-fast-a4c-1-13174b1.txt` (run on the tree of `13174b1` before `cargo fmt`; fmt FAIL there), `ci-fast-a4c-2-d35f60e.txt`:
+  all steps PASS except **policy `large-files`** (and the nextest test `gates::tests::large_file_gate_is_clean_on_this_tree`):
+  `docs/reviews/M07-evidence/ci-full-a4-c3c1dcf.txt` is 2 896 642 B > 2 097 152 B and not in `LARGE_FILE_ALLOW` (committed in `29a1865`,
+  A-4). **Blocked:** not touched here (evidence file, no gate change); needs the reviewer's decision (trim the file, or an
+  `LARGE_FILE_ALLOW` entry by ADR-052).

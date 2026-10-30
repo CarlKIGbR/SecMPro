@@ -8,8 +8,8 @@ use std::collections::BTreeSet;
 use secmp_client_core::scheduler::core::Scheduler;
 use secmp_client_core::scheduler::params::Mode;
 use secmp_client_core::scheduler::types::{
-    CellSource, CellToken, Delivered, LinkId, Output, PreparedCell, QueueId, RelayId, SendFailure,
-    SourceError,
+    CellSource, CellToken, Delivered, FrameId, LinkId, Output, PreparedCell, QueueId, RelayId,
+    SendFailure, SourceError,
 };
 use secmp_client_core::timing::TimingRng;
 use secmp_crypto::SecretBytes;
@@ -229,7 +229,12 @@ impl Rig {
                     queue.extend(self.sched.link_up(link, self.now, chan).unwrap());
                     queue.extend(self.sched.work(self.now, &mut self.src).unwrap());
                 }
-                Output::Write { link, bytes, at } => self.write(link, &bytes, at, &mut queue),
+                Output::Write {
+                    link,
+                    bytes,
+                    at,
+                    frame,
+                } => self.write((link, frame), &bytes, at, &mut queue),
                 Output::Event(_) | Output::Close { .. } | Output::Control { .. } => {}
             }
         }
@@ -237,14 +242,14 @@ impl Rig {
 
     fn write(
         &mut self,
-        link: LinkId,
+        (link, frame): (LinkId, FrameId),
         bytes: &[u8],
         at: u64,
         queue: &mut std::collections::VecDeque<Output>,
     ) {
         self.writes.push(at);
         std::io::Write::write_all(&mut self.stream, bytes).unwrap();
-        self.sched.frame_written(link);
+        self.sched.frame_written(link, frame).unwrap();
         loop {
             let mut frame = vec![0_u8; FRAME];
             let mut got = 0_usize;

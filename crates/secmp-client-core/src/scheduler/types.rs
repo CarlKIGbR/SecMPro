@@ -16,6 +16,16 @@ pub struct RelayId(pub u32);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct LinkId(pub u64);
 
+/// A scheduled link — the logical link a connection belongs to (FIN5b-1): stable across the link's reconnects, numbered
+/// in creation order. A mode change or a period change replaces the links, and the new ones get new ids.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct LogicalLinkId(pub u64);
+
+/// A frame handed to the driver ([`Output::Write`]), numbered in hand-out order: the driver names it when it reports the
+/// frame written (`Scheduler::frame_written`, FINAL3 (e)).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct FrameId(pub u64);
+
 /// What a provider must isolate a connection by (a Tor circuit, spec §8.1): fresh for every connection.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct IsolationKey(pub u64);
@@ -61,10 +71,10 @@ pub enum Alert {
 /// What the scheduler reports locally.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LinkEvent {
-    /// `HS2` accepted.
-    Up(LinkId),
-    /// The link is gone.
-    TornDown(LinkId, Reason),
+    /// `HS2` accepted: the connection and the logical link it serves.
+    Up(LinkId, LogicalLinkId),
+    /// The connection is gone: the connection, its logical link, why.
+    TornDown(LinkId, LogicalLinkId, Reason),
     /// An alert about a queue.
     Alert(QueueId, Alert),
     /// The route of a send queue is marked dead (`ERR_NOQUEUE`; the recipient will re-create it).
@@ -113,6 +123,8 @@ pub enum Output {
     Connect {
         /// The connection.
         link: LinkId,
+        /// The logical link the connection serves (stable across reconnects).
+        logical: LogicalLinkId,
         /// Its isolation.
         key: IsolationKey,
         /// The relay.
@@ -132,6 +144,8 @@ pub enum Output {
         at: u64,
         /// The sealed frames.
         bytes: Vec<u8>,
+        /// The frame's id: the driver reports it with `Scheduler::frame_written` once every byte is written.
+        frame: FrameId,
     },
     /// Close the connection.
     Close {

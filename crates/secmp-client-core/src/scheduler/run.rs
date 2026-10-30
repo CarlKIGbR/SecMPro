@@ -63,8 +63,9 @@ use tokio::task::JoinHandle;
 use crate::clock::Clock;
 use crate::scheduler::core::{SchedError, Scheduler};
 use crate::scheduler::types::{
-    CellSource, CellToken, ControlKind, Delivered, IsolationKey, LinkEvent, LinkId, OpId, Output,
-    PreparedCell, QueueId, RelayId, SendFailure, SourceError, Transport,
+    CellSource, CellToken, ControlKind, Delivered, FrameId, IsolationKey, LinkEvent, LinkId,
+    LogicalLinkId, OpId, Output, PreparedCell, QueueId, RelayId, SendFailure, SourceError,
+    Transport,
 };
 
 // ---- what the driver is generic over ---------------------------------------------------------------------------------
@@ -579,8 +580,8 @@ impl CellSource for Deferred {
 /// What a connection was opened for (the run log).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Purpose {
-    /// A scheduled link.
-    Link(LinkId),
+    /// A scheduled link: the connection and the logical link it serves (stable across reconnects, FIN5b-1).
+    Link(LinkId, LogicalLinkId),
     /// A control operation's one-shot link.
     Control(OpId),
 }
@@ -636,6 +637,8 @@ struct LinkIo {
     tasks: [JoinHandle<()>; 2],
     /// Writes handed to the writer task and not yet reported.
     pending: u32,
+    /// The ids of those writes' frames, oldest first (the writer reports its writes in order).
+    frames: VecDeque<FrameId>,
     /// When the oldest of them was handed out.
     oldest: Option<u64>,
 }
@@ -929,9 +932,12 @@ where
             if io.pending == 0 {
                 io.oldest = None;
             }
-            // the whole frame is on the stream: a `SEND` commits its round-robin position now (FIN-2)
-            sched.frame_written(link);
-            // every write is reported once, in order (the trusted-caller contract of `frame_written`)
+            // the whole frame is on the stream: a `SEND` commits its round-robin position now (FIN-2); every write is
+            // reported once, in order, by its frame id (FINAL3 (e))
+            if let Some(frame) = io.frames.pop_front() {
+                let reported = sched.frame_written(link, frame);
+                debug_assert_eq!(reported, Ok(()));
+            }
             debug_assert_eq!(sched.unmatched_written(), 0);
             Ok(())
         } else {
@@ -1003,7 +1009,7 @@ where
                         let outs = sched.link_up(link, now, chan)?;
                         if outs
                             .iter()
-                            .any(|o| matches!(o, Output::Event(LinkEvent::Up(l)) if *l == link))
+                            .any(|o| matches!(o, Output::Event(LinkEvent::Up(l, _)) if *l == link))
                         {
                             self.start_io(link, stream);
                         } else if let Some(log) = &mut self.log {
@@ -1072,12 +1078,15 @@ where
                 }
                 Output::Connect {
                     link,
+                    logical,
                     key,
                     relay,
                     transport,
                     ..
-                } => self.connect(now, link, key, relay, transport),
-                Output::Write { link, bytes, .. } => {
+                } => self.connect(now, (link, logical), key, relay, transport),
+                Output::Write {
+                    link, bytes, frame, ..
+                } => {
                     let stalled = self
                         .links
                         .get(&link)
@@ -1092,6 +1101,7 @@ where
                         && io.writer.send(bytes).is_ok()
                     {
                         io.pending = io.pending.saturating_add(1);
+                        io.frames.push_back(frame);
                         io.oldest.get_or_insert(now);
                     }
                 }
@@ -1154,6 +1164,7 @@ where
                 writer: tx,
                 tasks: [reader, writer],
                 pending: 0,
+                frames: VecDeque::new(),
                 oldest: None,
             },
         ) {
@@ -1164,14 +1175,15 @@ where
     fn connect(
         &mut self,
         now: u64,
-        link: LinkId,
+        (link, logical): (LinkId, LogicalLinkId),
         key: IsolationKey,
         relay: RelayId,
         transport: Transport,
     ) {
         let isolation = Isolation(key.0);
         if let Some(log) = &mut self.log {
-            log.connects.push((now, Purpose::Link(link), isolation));
+            log.connects
+                .push((now, Purpose::Link(link, logical), isolation));
         }
         let resolve = Resolve {
             link,
@@ -1425,6 +1437,7 @@ mod tests {
                 writer: tx,
                 tasks,
                 pending: 0,
+                frames: VecDeque::new(),
                 oldest: None,
             };
             tokio::task::yield_now().await;

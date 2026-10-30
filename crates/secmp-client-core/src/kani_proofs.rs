@@ -223,13 +223,19 @@ fn any_entries(n: usize) -> ([Option<usize>; 4], usize) {
     (entries, len)
 }
 
-/// The ledger `Vec` holding the first `len` of `entries` (pre-sized: no reallocation under symbolic lengths).
-fn ledger_of(entries: &[Option<usize>; 4], len: usize) -> Vec<Option<usize>> {
+/// The ledger `Vec` holding the first `len` of `entries`, entry `i` with the frame id `i` (FINAL3 (e); pre-sized: no
+/// reallocation under symbolic lengths).
+fn ledger_of(entries: &[Option<usize>; 4], len: usize) -> Vec<(u8, Option<usize>)> {
     let mut ledger = Vec::with_capacity(8);
-    for e in entries.iter().take(len) {
-        ledger.push(*e);
+    for (i, e) in entries.iter().take(len).enumerate() {
+        ledger.push((i as u8, *e));
     }
     ledger
+}
+
+/// The frame id of the oldest entry of `ledger` (the one the driver reports next), or an id never handed out.
+fn oldest(ledger: &[(u8, Option<usize>)]) -> u8 {
+    ledger.first().map_or(u8::MAX, |(f, _)| *f)
 }
 
 fn any_entry(n: usize) -> Option<usize> {
@@ -264,7 +270,8 @@ fn kani_reservation_is_schedule_only() {
     let m: usize = kani::any();
     kani::assume(m <= len);
     for _ in 0..m {
-        assert!(complete_oldest(&mut ledger, &mut rr));
+        let frame = oldest(&ledger);
+        assert!(complete_oldest(&mut ledger, &mut rr, &frame));
     }
     assert!(reserved_rr(&ledger, rr) == none_applied);
     assert!(none_applied < n);
@@ -273,7 +280,7 @@ fn kani_reservation_is_schedule_only() {
 
 /// K-C2: reports complete frames in the order they were handed out: after `m` of them `rr` is the last `Some` among the
 /// first `m` entries (unchanged if there is none), the later entries are untouched, and a report on an empty ledger is
-/// refused (`false`) and changes nothing.
+/// refused (`false`) and changes nothing; so is a duplicate report of the frame just completed (FINAL3 (e), SC-05).
 #[kani::proof]
 #[kani::unwind(7)]
 fn kani_frame_written_commits_fifo() {
@@ -286,20 +293,30 @@ fn kani_frame_written_commits_fifo() {
     let m: usize = kani::any();
     kani::assume(m <= 4);
     let mut rr = committed;
+    let mut last: Option<u8> = None;
     for i in 0..m {
         let was_empty = live.is_empty();
         let before = rr;
-        let matched = complete_oldest(&mut live, &mut rr);
+        let frame = oldest(&live);
+        let matched = complete_oldest(&mut live, &mut rr, &frame);
         assert!(matched == !was_empty);
         if was_empty {
             assert!(rr == before);
             assert!(i >= len);
+        } else {
+            last = Some(frame);
         }
+    }
+    // the duplicate report of the last completed frame: refused, nothing changes
+    if let Some(frame) = last {
+        let (before_len, before_rr) = (live.len(), rr);
+        assert!(!complete_oldest(&mut live, &mut rr, &frame));
+        assert!(live.len() == before_len && rr == before_rr);
     }
     assert!(rr == last_some_of_prefix(&entries[..len], m).unwrap_or(committed));
     assert!(live.len() == len.saturating_sub(m));
     for (a, b) in live.iter().zip(entries.iter().take(len).skip(m)) {
-        assert!(a == b);
+        assert!(a.1 == *b);
     }
     kani::cover!(rr != committed, "a commit moves the rotation");
 }
@@ -321,7 +338,8 @@ fn kani_teardown_keeps_the_committed_rr() {
     kani::assume(m <= len);
     let mut rr = committed;
     for _ in 0..m {
-        assert!(complete_oldest(&mut ledger, &mut rr));
+        let frame = oldest(&ledger);
+        assert!(complete_oldest(&mut ledger, &mut rr, &frame));
     }
     let committed_before_teardown = rr;
     // the teardown: the up-state, with its ledger, is dropped; the link keeps `rr`
@@ -348,9 +366,9 @@ fn kani_tick_hands_out_without_commit() {
     let old_len = ledger.len();
     let old_reserved = reserved_rr(&ledger, rr);
     let next_rr = any_entry(n);
-    hand_out(&mut ledger, next_rr);
+    hand_out(&mut ledger, 7, next_rr);
     assert!(ledger.len() == old_len + 1);
-    assert!(ledger.last() == Some(&next_rr));
+    assert!(ledger.last() == Some(&(7, next_rr)));
     // nothing was committed by the hand-out: the next preparation is reserved against the new entry (a SEND), else
     // against what it was
     assert!(reserved_rr(&ledger, rr) == next_rr.unwrap_or(old_reserved));
@@ -401,15 +419,15 @@ fn kani_unwritten_bound() {
     // the default `max_in_flight` = 2: `UNWRITTEN_MAX` = 4, six ticks (a symbolic `max_in_flight` cost 14.8 GB)
     let max = unwritten_max(2);
     assert!(max == 4);
-    let mut ledger: Vec<Option<usize>> = Vec::with_capacity(8);
+    let mut ledger: Vec<(u8, Option<usize>)> = Vec::with_capacity(8);
     let mut torn = false;
     for _ in 0..6 {
         let adding: usize = kani::any();
         kani::assume(adding >= 1 && adding <= 2);
         if ledger_admits(ledger.len(), adding, max) {
-            hand_out(&mut ledger, None);
+            hand_out(&mut ledger, 0, None);
             if adding == 2 {
-                hand_out(&mut ledger, None);
+                hand_out(&mut ledger, 1, None);
             }
         } else {
             assert!(ledger.len() + adding > max);

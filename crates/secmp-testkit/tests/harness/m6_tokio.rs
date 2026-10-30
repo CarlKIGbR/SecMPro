@@ -221,7 +221,7 @@ impl<P: StreamProvider + 'static> TClient<P> {
                 .iter()
                 .find(|(_, _, i)| *i == iso)
                 .map(|(_, p, _)| match p {
-                    Purpose::Link(l) => l.0,
+                    Purpose::Link(l, _) => l.0,
                     Purpose::Control(op) => CONTROL_SLOT_BASE.saturating_add(op.0),
                 })
         };
@@ -485,7 +485,7 @@ impl<P: StreamProvider + 'static> TokioRig<P> {
             .events
             .iter()
             .filter_map(|(t, e)| match e {
-                secmp_client_core::scheduler::types::LinkEvent::Up(l) => Some((l.0, *t)),
+                secmp_client_core::scheduler::types::LinkEvent::Up(l, _) => Some((l.0, *t)),
                 _ => None,
             })
             .collect();

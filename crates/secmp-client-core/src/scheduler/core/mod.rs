@@ -37,8 +37,8 @@ use crate::scheduler::params::{FETCH_MULTI_LIMIT, Mode, Params};
 use crate::scheduler::pool::QueuePool;
 pub use crate::scheduler::types::LinkKind;
 use crate::scheduler::types::{
-    Alert, CellSource, CellToken, ControlKind, IsolationKey, LinkEvent, LinkId, OpId, Output,
-    QueueId, Reason, RelayId, SendFailure, Transport,
+    Alert, CellSource, CellToken, ControlKind, FrameId, IsolationKey, LinkEvent, LinkId,
+    LogicalLinkId, OpId, Output, QueueId, Reason, RelayId, SendFailure, Transport,
 };
 use crate::timing::{TimingRng, Unavailable};
 
@@ -61,6 +61,9 @@ pub enum SchedError {
     UnknownQueue,
     /// No randomness (fail closed).
     Unavailable,
+    /// `frame_written` named a frame that is not the oldest one handed out on the link (a duplicate or unknown report;
+    /// nothing changed).
+    UnknownFrame,
 }
 
 impl From<Unavailable> for SchedError {
@@ -77,6 +80,7 @@ impl core::fmt::Display for SchedError {
             Self::TooManyQueues => "too many recv-queues for one FETCH_MULTI",
             Self::UnknownQueue => "unknown queue",
             Self::Unavailable => "randomness unavailable",
+            Self::UnknownFrame => "not the oldest frame handed out",
         })
     }
 }
@@ -156,8 +160,8 @@ struct Up {
     flight: Flight,
     reqs: VecDeque<Req>,
     /// One entry per frame handed to the driver and not yet reported as written ([`Scheduler::frame_written`]), oldest
-    /// first: the round-robin position the frame commits when it is completely written (a `SEND`), or `None`.
-    unwritten: Vec<Option<usize>>,
+    /// first: the frame's id and the round-robin position it commits when it is completely written (a `SEND`), or `None`.
+    unwritten: Vec<(FrameId, Option<usize>)>,
 }
 
 enum State {
@@ -169,6 +173,8 @@ enum State {
 
 struct Link {
     spec: Spec,
+    /// The logical link (FIN5b-1): the same id on every connection of this link.
+    logical: LogicalLinkId,
     state: State,
     /// Consecutive closes before `RELAYINFO` (back-off, LR-03); reset when `HS2` is accepted.
     closed_before: u32,
@@ -274,10 +280,13 @@ struct World {
     pool: QueuePool,
     next_queue: u32,
     next_link: u64,
+    next_logical: u64,
+    next_frame: u64,
     next_key: u64,
     next_op: u64,
     overruns: u64,
-    /// `frame_written` calls on an up link with nothing unwritten ([`Scheduler::unmatched_written`]).
+    /// `frame_written` calls on an up link that named no handed-out frame or not the oldest one
+    /// ([`Scheduler::unmatched_written`]).
     unmatched_written: u64,
     last_now: u64,
     out: Vec<Output>,
@@ -384,6 +393,18 @@ impl World {
         LinkId(id)
     }
 
+    fn new_logical_id(&mut self) -> LogicalLinkId {
+        let id = self.next_logical;
+        self.next_logical = self.next_logical.saturating_add(1);
+        LogicalLinkId(id)
+    }
+
+    fn new_frame_id(&mut self) -> FrameId {
+        let id = self.next_frame;
+        self.next_frame = self.next_frame.saturating_add(1);
+        FrameId(id)
+    }
+
     fn new_op_id(&mut self) -> OpId {
         let id = self.next_op;
         self.next_op = self.next_op.saturating_add(1);
@@ -443,13 +464,16 @@ impl World {
             State::Up(mut up) => {
                 Self::release(&mut up, source);
                 self.out.push(Output::Close { link: up.id });
-                self.out
-                    .push(Output::Event(LinkEvent::TornDown(up.id, reason)));
+                self.out.push(Output::Event(LinkEvent::TornDown(
+                    up.id,
+                    link.logical,
+                    reason,
+                )));
             }
             State::Connecting { id } => {
                 self.out.push(Output::Close { link: id });
                 self.out
-                    .push(Output::Event(LinkEvent::TornDown(id, reason)));
+                    .push(Output::Event(LinkEvent::TornDown(id, link.logical, reason)));
             }
             State::Down { .. } | State::Gone => {}
         }
@@ -499,6 +523,7 @@ impl World {
         );
         self.out.push(Output::Connect {
             link: id,
+            logical: link.logical,
             key,
             relay,
             transport,
@@ -577,12 +602,14 @@ impl World {
             } else {
                 None
             };
-            hand_out(&mut up.unwritten, commits);
+            let frame = self.new_frame_id();
+            hand_out(&mut up.unwritten, frame, commits);
             debug_assert!(up.unwritten.len() <= unwritten_max);
             self.out.push(Output::Write {
                 link: up.id,
                 at,
                 bytes: part.prepared.bytes().to_vec(),
+                frame,
             });
             up.reqs.push_back(Req {
                 tick: next,
@@ -1091,6 +1118,8 @@ impl Scheduler {
                 pool,
                 next_queue: 0,
                 next_link: 0,
+                next_logical: 0,
+                next_frame: 0,
                 next_key: 0,
                 next_op: 0,
                 overruns: 0,
@@ -1490,8 +1519,10 @@ impl Scheduler {
                 continue;
             }
             let at = now.saturating_add(self.world.phase()?);
+            let logical = self.world.new_logical_id();
             self.links.push(Link {
                 spec,
+                logical,
                 state: State::Down { at },
                 closed_before: 0,
                 rr: 0,
@@ -1880,26 +1911,28 @@ impl Scheduler {
         })
     }
 
-    /// The driver has written the oldest frame it was handed for `link` (an [`Output::Write`]) completely — the stream took
-    /// every byte; a failed or partial write is not a completion. A `SEND` frame commits the Balanced round-robin position
-    /// here (A′, GLM2B-1 / FIN-2): a link torn down before its frame was written leaves the rotation where it was. Frames
-    /// complete in the order they were handed out; an unknown or closed link is ignored.
+    /// The driver has written frame `frame` of `link` (an [`Output::Write`]) completely — the stream took every byte; a
+    /// failed or partial write is not a completion. A `SEND` frame commits the Balanced round-robin position here (A′,
+    /// GLM2B-1 / FIN-2): a link torn down before its frame was written leaves the rotation where it was. Frames complete
+    /// in the order they were handed out; an unknown or closed link is ignored (`Ok`).
     ///
-    /// A call on an up link whose ledger is empty reports a write that was never handed out: it is counted
-    /// ([`Scheduler::unmatched_written`]) and changes nothing else (no panic, the rotation is untouched). A duplicate
-    /// report while the ledger is not empty cannot be told from a genuine one — a frame carries no id — so it pops the
-    /// oldest entry: the driver is a trusted caller that reports each write once (Astra FINAL3 (e)).
-    pub fn frame_written(&mut self, link: LinkId) {
+    /// # Errors
+    /// [`SchedError::UnknownFrame`] if `frame` is not the oldest frame handed out on the up link `link` — its ledger is
+    /// empty (a write that was never handed out) or the report is a duplicate (FINAL3 (e)): it is counted
+    /// ([`Scheduler::unmatched_written`]) and changes nothing else (the ledger and the rotation are untouched).
+    pub fn frame_written(&mut self, link: LinkId, frame: FrameId) -> Result<(), SchedError> {
         for l in &mut self.links {
             if let State::Up(up) = &mut l.state
                 && up.id == link
             {
-                if !complete_oldest(&mut up.unwritten, &mut l.rr) {
-                    self.world.unmatched_written = self.world.unmatched_written.saturating_add(1);
+                if complete_oldest(&mut up.unwritten, &mut l.rr, &frame) {
+                    return Ok(());
                 }
-                return;
+                self.world.unmatched_written = self.world.unmatched_written.saturating_add(1);
+                return Err(SchedError::UnknownFrame);
             }
         }
+        Ok(())
     }
 
     /// The handshake of connection `id` succeeded at `now`: the link is up; its lifetime is drawn now.
@@ -1939,7 +1972,9 @@ impl Scheduler {
                 reqs: VecDeque::new(),
                 unwritten: Vec::new(),
             }));
-            world.out.push(Output::Event(LinkEvent::Up(id)));
+            world
+                .out
+                .push(Output::Event(LinkEvent::Up(id, link.logical)));
         }
         Ok(core::mem::take(&mut self.world.out))
     }
@@ -1970,7 +2005,7 @@ impl Scheduler {
             // the driver already dropped the connection: no `Close` for it
             world
                 .out
-                .push(Output::Event(LinkEvent::TornDown(id, reason)));
+                .push(Output::Event(LinkEvent::TornDown(id, link.logical, reason)));
             let delay = reconnect_delay(&world.params, &mut world.rng, link.closed_before)?;
             link.state = State::Down {
                 at: now.saturating_add(delay),
@@ -2060,6 +2095,154 @@ impl Scheduler {
             .iter()
             .find(|r| r.id == queue)
             .map(|r| r.cap.queue())
+    }
+}
+
+/// Unit tests of the core with an up link (feature `kat`: a channel over a real SecMP-LINK handshake).
+#[cfg(test)]
+#[cfg(feature = "kat")]
+mod tests {
+    use secmp_crypto::{Ed25519SigningKey, MlKem1024Dk, SecretBytes, X25519Secret};
+    use secmp_proto::link::client;
+    use secmp_proto::link::relay::{self, RelayKeys};
+    use secmp_proto::tr::OsEntropy;
+    use secmp_proto::wire::cell::Cell;
+    use secmp_transport::{Channel, SendCap};
+
+    use super::{LinkId, SchedError, Scheduler};
+    use crate::scheduler::params::{Mode, Params};
+    use crate::scheduler::types::{
+        CellSource, CellToken, Delivered, FrameId, Output, PreparedCell, QueueId, RelayId,
+        SendFailure, SourceError,
+    };
+    use crate::timing::TimingRng;
+
+    type Fail = &'static str;
+
+    const NOW: u64 = 1_760_000_000;
+
+    /// The client end of an honest SecMP-LINK handshake (spec §8.2, §8.3) as a channel.
+    fn channel() -> Result<Channel, Fail> {
+        let access = SecretBytes::from_slice(&[4; 32]).map_err(|_| "access")?;
+        let keys = RelayKeys::new(
+            Ed25519SigningKey::from_seed(&[1; 32]).map_err(|_| "sig")?,
+            X25519Secret::from_bytes(&[2; 32]).map_err(|_| "dh")?,
+            MlKem1024Dk::from_seed(&[3; 64]).map_err(|_| "kem")?,
+            SecretBytes::from_slice(&[4; 32]).map_err(|_| "access")?,
+            1,
+        )
+        .map_err(|_| "keys")?;
+        let (hello, wait_info) =
+            client::start(keys.fp(), Some(&access), NOW).map_err(|_| "hello")?;
+        let (info, wait_hs1) = relay::accept(&keys)
+            .on_hello(&hello, NOW.saturating_add(86_400))
+            .map_err(|_| "relayinfo")?;
+        let (hs1, wait_hs2) = wait_info
+            .on_relayinfo(&info, &mut OsEntropy)
+            .map_err(|_| "hs1")?;
+        let (hs2, _relay) = wait_hs1.on_hs1(&hs1, &mut OsEntropy).map_err(|_| "hs2")?;
+        let link = wait_hs2.on_hs2(&hs2).map_err(|_| "link")?;
+        Ok(Channel::from_link_kat(link))
+    }
+
+    /// A cell source with a dummy cell for every slot.
+    struct Dummies(u64);
+
+    impl CellSource for Dummies {
+        fn prepare_cell(
+            &mut self,
+            _: QueueId,
+            _: u64,
+        ) -> Result<Option<PreparedCell>, SourceError> {
+            self.0 = self.0.saturating_add(1);
+            let cell = Cell::from_bytes(&[0x5a; 4096]).map_err(|_| SourceError)?;
+            Ok(Some(PreparedCell::unpersisted_kat(cell, CellToken(self.0))))
+        }
+        fn relayed(&mut self, _: QueueId, _: CellToken, _: u64) {}
+        fn evicted(&mut self, _: QueueId, _: u64) {}
+        fn send_failed(&mut self, _: QueueId, _: CellToken, _: SendFailure) {}
+        fn discard(&mut self, _: QueueId, _: CellToken) {}
+        fn queue_lost(&mut self, _: QueueId) {}
+        fn deliver(&mut self, _: QueueId, _: u64, _: &Cell) -> Result<Delivered, SourceError> {
+            Ok(Delivered::Committed)
+        }
+    }
+
+    /// The frames written (link, id).
+    fn writes(outs: &[Output]) -> Vec<(LinkId, FrameId)> {
+        outs.iter()
+            .filter_map(|o| match o {
+                Output::Write { link, frame, .. } => Some((*link, *frame)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// SC-05 (FINAL3 (e)): two frames handed out on a Strict send link and not reported; the second reported before the
+    /// first is `Err(UnknownFrame)`; the first is reported written (`Ok`); the same id again — a duplicate with a non-empty
+    /// ledger — is `Err(UnknownFrame)`, counted, and leaves the ledger as it was; so does any id on an empty ledger. An
+    /// unknown link is ignored.
+    #[test]
+    fn frame_written_duplicate_detected() -> Result<(), Fail> {
+        let params = Params {
+            phase_max_ms: 0,
+            ..Params::default()
+        };
+        let mut sched = Scheduler::new(params, Mode::Strict, TimingRng::seeded(9));
+        let seed = SecretBytes::from_slice(&[9; 32]).map_err(|_| "seed")?;
+        let cap = SendCap::from_route([1; 16], &seed).map_err(|_| "cap")?;
+        sched
+            .add_send_queue(0, RelayId(0), cap, 10_000)
+            .map_err(|_| "queue")?;
+        let mut src = Dummies(0);
+        let outs = sched.poll(0, &mut src).map_err(|_| "poll")?;
+        let link = outs
+            .iter()
+            .find_map(|o| match o {
+                Output::Connect { link, .. } => Some(*link),
+                _ => None,
+            })
+            .ok_or("no connect")?;
+        sched.link_up(link, 0, channel()?).map_err(|_| "up")?;
+        let _ = sched.work(0, &mut src).map_err(|_| "work")?;
+        let first = writes(&sched.poll(10_000, &mut src).map_err(|_| "tick 1")?);
+        let second = writes(&sched.poll(20_000, &mut src).map_err(|_| "tick 2")?);
+        let (Some((l1, a)), Some((l2, b))) = (first.first().copied(), second.first().copied())
+        else {
+            return Err("two writes");
+        };
+        assert_eq!((l1, l2), (link, link));
+        assert_ne!(a, b);
+        assert_eq!(sched.unwritten_len(link), Some(2));
+        // the second frame before the first: not the oldest
+        assert_eq!(sched.frame_written(link, b), Err(SchedError::UnknownFrame));
+        assert_eq!(
+            (sched.unwritten_len(link), sched.unmatched_written()),
+            (Some(2), 1)
+        );
+        assert_eq!(sched.frame_written(link, a), Ok(()));
+        assert_eq!(sched.unwritten_len(link), Some(1));
+        // the duplicate report of `a` with `b` still in the ledger
+        assert_eq!(sched.frame_written(link, a), Err(SchedError::UnknownFrame));
+        assert_eq!(
+            (sched.unwritten_len(link), sched.unmatched_written()),
+            (Some(1), 2)
+        );
+        assert_eq!(sched.frame_written(link, b), Ok(()));
+        // an empty ledger
+        assert_eq!(sched.frame_written(link, b), Err(SchedError::UnknownFrame));
+        assert_eq!(
+            (sched.unwritten_len(link), sched.unmatched_written()),
+            (Some(0), 3)
+        );
+        // an unknown link is ignored
+        assert_eq!(sched.frame_written(LinkId(9_999), a), Ok(()));
+        assert_eq!(sched.unmatched_written(), 3);
+        assert_eq!(
+            SchedError::UnknownFrame.to_string(),
+            "not the oldest frame handed out"
+        );
+        Ok(())
     }
 }
 

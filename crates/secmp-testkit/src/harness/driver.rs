@@ -19,8 +19,8 @@ use secmp_client_core::scheduler::core::{SchedError, Scheduler};
 use secmp_client_core::scheduler::outbox::{MemOutbox, MemPersist};
 use secmp_client_core::scheduler::params::{Mode, Params};
 use secmp_client_core::scheduler::types::{
-    CellSource, CellToken, ControlKind, Delivered, IsolationKey, LinkEvent, LinkId, LinkKind, OpId,
-    Output, PreparedCell, QueueId, RelayId, SendFailure, SourceError,
+    CellSource, CellToken, ControlKind, Delivered, FrameId, IsolationKey, LinkEvent, LinkId,
+    LinkKind, OpId, Output, PreparedCell, QueueId, RelayId, SendFailure, SourceError,
 };
 use secmp_client_core::timing::TimingRng;
 use secmp_crypto::{Aead, HybridSigningKey, Label, Nonce24, SecretBytes};
@@ -718,8 +718,13 @@ impl VirtualDriver {
                     let more = self.connect(i, t, link);
                     queue.extend(more);
                 }
-                Output::Write { link, bytes, at } => {
-                    let more = self.write(i, t, at, link, &bytes);
+                Output::Write {
+                    link,
+                    bytes,
+                    at,
+                    frame,
+                } => {
+                    let more = self.write(i, t, at, (link, frame), &bytes);
                     queue.extend(more);
                 }
                 Output::Close { link } => {
@@ -824,7 +829,14 @@ impl VirtualDriver {
         }
     }
 
-    fn write(&mut self, i: usize, t: u64, at: u64, link: LinkId, bytes: &[u8]) -> Vec<Output> {
+    fn write(
+        &mut self,
+        i: usize,
+        t: u64,
+        at: u64,
+        (link, frame): (LinkId, FrameId),
+        bytes: &[u8],
+    ) -> Vec<Output> {
         // the entry carries the driver's own time of the write; the tick the core stamped is kept apart
         for _ in 0..bytes.len() / FRAME {
             self.trace_at(i, t, at, FRAME, Dir::C2R, link.0);
@@ -847,7 +859,14 @@ impl VirtualDriver {
         if ok {
             // the whole frame is on the stream: the core commits what the frame stood for (FIN-2)
             if self.report_written {
-                self.clients.get_mut(i).unwrap().sched.frame_written(link);
+                // reported once, in order, by its id (FINAL3 (e)): a trusted caller is never refused
+                let reported = self
+                    .clients
+                    .get_mut(i)
+                    .unwrap()
+                    .sched
+                    .frame_written(link, frame);
+                debug_assert_eq!(reported, Ok(()));
             }
             // the write is on the wire: the hook may kill the process here
             let c = self.clients.get_mut(i).unwrap();

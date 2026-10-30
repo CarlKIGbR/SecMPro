@@ -263,27 +263,36 @@ pub fn tick_time(t_up: u64, k: u32, period_ms: u64) -> Option<u64> {
 
 /// The round-robin position the next `SEND` preparation starts from (FIN2-1): the successor the newest still-unwritten
 /// `SEND` will commit, else the committed position `committed`. Whether a write completed before or after the
-/// preparation never changes the answer. `unwritten` holds, oldest first, the position each handed-out frame commits when
-/// it is completely written (a `SEND`), or `None`.
+/// preparation never changes the answer. `unwritten` holds, oldest first, each handed-out frame's id and the position it
+/// commits when it is completely written (a `SEND`), or `None`.
 #[must_use]
-pub fn reserved_rr(unwritten: &[Option<usize>], committed: usize) -> usize {
-    unwritten.iter().rev().find_map(|n| *n).unwrap_or(committed)
+pub fn reserved_rr<F>(unwritten: &[(F, Option<usize>)], committed: usize) -> usize {
+    unwritten
+        .iter()
+        .rev()
+        .find_map(|(_, n)| *n)
+        .unwrap_or(committed)
 }
 
-/// A frame is handed to the driver: its commit (the position after a `SEND`, `None` for any other frame) joins the ledger.
-/// Nothing is committed here (A′: the rotation advances only when a write completes).
-pub fn hand_out(unwritten: &mut Vec<Option<usize>>, commits: Option<usize>) {
-    unwritten.push(commits);
+/// A frame is handed to the driver: its id and its commit (the position after a `SEND`, `None` for any other frame) join
+/// the ledger. Nothing is committed here (A′: the rotation advances only when a write completes).
+pub fn hand_out<F>(unwritten: &mut Vec<(F, Option<usize>)>, frame: F, commits: Option<usize>) {
+    unwritten.push((frame, commits));
 }
 
-/// The driver reports the oldest handed-out frame completely written: a `SEND`'s position is committed into `rr`. `false`
-/// on an empty ledger (a report for a frame that was never handed out): nothing changes.
-pub fn complete_oldest(unwritten: &mut Vec<Option<usize>>, rr: &mut usize) -> bool {
+/// The driver reports frame `frame` completely written; frames complete in hand-out order, so it must be the oldest
+/// handed-out one: a `SEND`'s position is committed into `rr`. `false` — and nothing changes — on an empty ledger (a
+/// report for a frame that was never handed out) or for any other id (a duplicate report, FINAL3 (e)).
+pub fn complete_oldest<F: PartialEq>(
+    unwritten: &mut Vec<(F, Option<usize>)>,
+    rr: &mut usize,
+    frame: &F,
+) -> bool {
     // a `Vec`, not a `VecDeque`: the ledger holds at most `unwritten_max` entries, and the shift is the cost of nothing
-    if unwritten.is_empty() {
+    if unwritten.first().is_none_or(|(oldest, _)| oldest != frame) {
         return false;
     }
-    if let Some(n) = unwritten.remove(0) {
+    if let (_, Some(n)) = unwritten.remove(0) {
         *rr = n;
     }
     true

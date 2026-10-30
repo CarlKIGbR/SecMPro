@@ -64,7 +64,7 @@ fn lifetime_end_reconnects_fresh() {
     let events = &sim.client_ref(a).events;
     let torn = events
         .iter()
-        .find(|(_, e)| matches!(e, LinkEvent::TornDown(id, Reason::Lifetime) if id.0 == slot))
+        .find(|(_, e)| matches!(e, LinkEvent::TornDown(id, _, Reason::Lifetime) if id.0 == slot))
         .expect("lifetime teardown");
     assert_eq!(torn.0, end, "close at t_up + L");
     let old = frames_of(&sim, a, Dir::C2R, slot);
@@ -235,7 +235,7 @@ fn prepare_overrun_tears_down() {
         .client_ref(a)
         .events
         .iter()
-        .find(|(_, e)| matches!(e, LinkEvent::TornDown(id, Reason::Overrun) if id.0 == slot))
+        .find(|(_, e)| matches!(e, LinkEvent::TornDown(id, _, Reason::Overrun) if id.0 == slot))
         .expect("overrun");
     assert_eq!(torn.0, t6);
     assert_eq!(sim.client_ref(a).sched.overruns(), 1);
@@ -296,7 +296,7 @@ fn in_flight_bound_two() {
         .client_ref(a)
         .events
         .iter()
-        .find(|(_, e)| matches!(e, LinkEvent::TornDown(id, Reason::InFlight) if id.0 == slot))
+        .find(|(_, e)| matches!(e, LinkEvent::TornDown(id, _, Reason::InFlight) if id.0 == slot))
         .expect("in-flight teardown");
     assert_eq!(torn.0, t3);
     sim.run_until(t3 + 200_000);
@@ -384,13 +384,15 @@ fn relay_idle_and_age_bounds_from_schedule() {
             let events = &sim.client_ref(c).events;
             let other: Vec<_> = events
                 .iter()
-                .filter(|(_, e)| matches!(e, LinkEvent::TornDown(_, r) if *r != Reason::Lifetime))
+                .filter(
+                    |(_, e)| matches!(e, LinkEvent::TornDown(_, _, r) if *r != Reason::Lifetime),
+                )
                 .collect();
             assert!(other.is_empty(), "{mode:?}: client {name}: {other:?}");
             assert!(
                 events
                     .iter()
-                    .any(|(_, e)| matches!(e, LinkEvent::TornDown(_, Reason::Lifetime))),
+                    .any(|(_, e)| matches!(e, LinkEvent::TornDown(_, _, Reason::Lifetime))),
                 "{mode:?}: client {name}: the 24-h lifetime ended a link"
             );
         }

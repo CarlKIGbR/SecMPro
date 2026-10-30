@@ -452,7 +452,7 @@ fn sim_hello_flood_backoff_recovery() {
             .connects()
             .iter()
             .filter(|(t, p)| {
-                matches!(p, Purpose::Link(_)) && (flood.start * 1000..flood_end).contains(t)
+                matches!(p, Purpose::Link(_, _)) && (flood.start * 1000..flood_end).contains(t)
             })
             .count();
         assert!(
@@ -466,7 +466,7 @@ fn sim_hello_flood_backoff_recovery() {
             .iter()
             .filter(|(t, e)| {
                 (flood.start * 1000..flood_end).contains(t)
-                    && matches!(e, LinkEvent::TornDown(_, Reason::ClosedBeforeRelayInfo))
+                    && matches!(e, LinkEvent::TornDown(_, _, Reason::ClosedBeforeRelayInfo))
             })
             .count();
         assert!(
@@ -479,10 +479,10 @@ fn sim_hello_flood_backoff_recovery() {
         let mut up = std::collections::BTreeSet::new();
         for (t, e) in o.events() {
             match e {
-                LinkEvent::Up(l) if t <= deadline => {
+                LinkEvent::Up(l, _) if t <= deadline => {
                     up.insert(l.0);
                 }
-                LinkEvent::TornDown(l, _) if t <= deadline => {
+                LinkEvent::TornDown(l, _, _) if t <= deadline => {
                     up.remove(&l.0);
                 }
                 _ => {}

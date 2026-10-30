@@ -5,8 +5,8 @@
 //!
 //! Input: `table u8 ‖ col_len u8 ‖ column ‖ row_len u8 ‖ row_key ‖ mode u8 ‖ bytes`; the table is `Table::ALL[table %
 //! 9]` and the column the bytes as given (lossy UTF-8).
-//! - Even mode: `bytes` is opened as a record of (table, column, row): the one uniform `Err(Unavailable)`, since random
-//!   bytes are no record of that place.
+//! - Even mode: `bytes` is opened as a record of (table, column, row): it opens (an authentic record) or is refused
+//!   with the one uniform `Err(Unavailable)`.
 //! - Odd mode: `bytes` is sealed for (table, column, row). It must open there to `bytes`. It must be refused under
 //!   another column of the same row (`column` with `"x"` appended), another row (`row_key` with one byte appended) and
 //!   another table (the next of `Table::ALL`), and with one byte of the record changed.
@@ -45,7 +45,9 @@ fuzz_target!(|data: &[u8]| {
     };
     let column = String::from_utf8_lossy(column);
     if mode & 1 == 0 {
-        assert_eq!(open_kat(table, &column, row, bytes).err(), Some(Error::Unavailable));
+        if let Err(e) = open_kat(table, &column, row, bytes) {
+            assert_eq!(e, Error::Unavailable);
+        }
         return;
     }
     let Ok(rec) = seal_kat(table, &column, row, bytes) else {

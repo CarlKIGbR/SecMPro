@@ -399,4 +399,49 @@ mod tests {
             b"outbox payload",
         )
     }
+
+    /// EXT1-5 (Q180): the committed seed of `store_record_open` in even mode is an authentic record of (`identity`,
+    /// `secret`, row 1); it opens to its message. When the seed file is absent the test writes it to
+    /// `target/fable/store_record_open_even.bin` and fails.
+    #[cfg(feature = "kat")]
+    #[test]
+    fn authentic_even_seed_opens() -> R {
+        const SEED: &str = "fuzz/corpus/store_record_open/8d094c96986f6f9330eb1c8639191fa4099c6021";
+        const MESSAGE: &[u8] = b"EXT1-5 authentic even seed";
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let path = root.join(SEED);
+        if !path.exists() {
+            let row = 1_u64.to_be_bytes();
+            let rec = seal_kat(Table::Identity, "secret", &row, MESSAGE)?;
+            let mut seed = vec![0_u8, 6];
+            seed.extend_from_slice(b"secret");
+            seed.push(8);
+            seed.extend_from_slice(&row);
+            seed.push(0);
+            seed.extend_from_slice(&rec);
+            std::fs::write(root.join("target/fable/store_record_open_even.bin"), &seed)?;
+            return Err("seed written".into());
+        }
+        let data = std::fs::read(&path)?;
+        // the layout of the fuzz target: table u8 ‖ col_len u8 ‖ column ‖ row_len u8 ‖ row_key ‖ mode u8 ‖ bytes
+        let prefixed = |d: &[u8]| -> Option<(Vec<u8>, Vec<u8>)> {
+            let (n, rest) = d.split_first()?;
+            let (head, tail) = rest.split_at_checked(usize::from(*n))?;
+            Some((head.to_vec(), tail.to_vec()))
+        };
+        let (t, rest) = data.split_first().ok_or("empty seed")?;
+        let (column, rest) = prefixed(rest).ok_or("column")?;
+        let (row, rest) = prefixed(&rest).ok_or("row")?;
+        let (mode, bytes) = rest.split_first().ok_or("mode")?;
+        assert_eq!(mode & 1, 0, "an even-mode seed");
+        let table = *Table::ALL
+            .get(usize::from(*t) % Table::ALL.len())
+            .ok_or("table")?;
+        let column = String::from_utf8_lossy(&column);
+        assert_eq!(
+            open_kat(table, &column, &row, bytes)?.as_slice(),
+            MESSAGE
+        );
+        Ok(())
+    }
 }

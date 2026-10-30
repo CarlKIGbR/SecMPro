@@ -181,12 +181,8 @@ pub(crate) const SQLCIPHER_MIN: &str = "4.10.0";
 /// Cooldown exceptions (ADR-015 Amendment 2) as (crate, version, until = publish date + 7 days, advisory): a version
 /// younger than 7 days that closes a RUSTSEC advisory on a pinned crate, kept until the cooldown it bridges is over; an
 /// entry past its `until` date is itself a cooldown finding. The delta diff is in `docs/reviews/MNN-evidence/vet-deltas/`.
-pub(crate) const COOLDOWN_EXCEPTIONS: &[(&str, &str, &str, &str)] = &[(
-    "ctutils",
-    "0.4.4",
-    "2026-10-30",
-    "RUSTSEC-2026-0385 (ADR-015 Am. 2)",
-)];
+/// Empty since TEST-SPEC-M7 G7-00: the `ctutils` 0.4.4 entry (RUSTSEC-2026-0385) expired 2026-10-30 and was removed.
+pub(crate) const COOLDOWN_EXCEPTIONS: &[(&str, &str, &str, &str)] = &[];
 
 /// Packages exposing the `kat` feature (docs/06 §5 step 5): external KATs, differential tests, vector checks; M3:
 /// `secmp-proto` (derandomised TR entry points for the vectors and the ct bench, ADR-042); M5: `secmp-relay` (the
@@ -2103,6 +2099,19 @@ pub(crate) const DISPATCH_TWINS: &[(&str, &str)] = &[
     // TEST-SPEC-M7 G7-07
     ("dispatch-harness", "harness"),
 ];
+
+/// TEST-SPEC-M7 G7-00 (TEST-SPEC-M7:286; ADR-015 exception list (3)): the `ctutils` 0.4.4 cooldown exception expired on
+/// 2026-10-30 and is removed — `COOLDOWN_EXCEPTIONS` is empty, and ADR-015's list records the removal.
+#[cfg(test)]
+#[test]
+fn cooldown_exceptions_empty() -> crate::util::Result<()> {
+    assert!(COOLDOWN_EXCEPTIONS.is_empty(), "{COOLDOWN_EXCEPTIONS:?}");
+    let decisions = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../docs/08-decisions.md"),
+    )?;
+    assert!(decisions.contains("expired 2026-10-30, entry removed (G7-00)"));
+    Ok(())
+}
 
 /// TEST-SPEC-M7 CT-05 (Q121; ADR-042 Amendment 6): `CT_TARGETS` is the M6 list and `store_unlock_reject` (27 names),
 /// `CT_TARGET_SITES` binds 12 targets, among them `store_unlock_reject` to `wrap: open`, which `KNOWN_SITES` holds; the

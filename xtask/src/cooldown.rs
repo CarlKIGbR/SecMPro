@@ -529,7 +529,7 @@ mod tests {
     /// TEST-SPEC-M7 G7-04 (ADR-055): the lock entries of the M7 dependency set are registry packages at the pinned versions in
     /// `Cargo.lock` (six new; `fuzz/Cargo.lock` four of them), each published at least 7 days before the date of the entry
     /// below (the dates are the crates.io `pubtime`s of `docs/reviews/M07-evidence/a0/pubtimes.txt`, checked by the network
-    /// `cooldown` step against the index); `COOLDOWN_EXCEPTIONS` is unchanged.
+    /// `cooldown` step against the index); `COOLDOWN_EXCEPTIONS` is empty since G7-00.
     #[test]
     fn cooldown_covers_m7_lock() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
@@ -568,8 +568,8 @@ mod tests {
         }
         assert_eq!(
             crate::expect::COOLDOWN_EXCEPTIONS.len(),
-            1,
-            "no new exception"
+            0,
+            "no exception since G7-00"
         );
     }
 
@@ -608,7 +608,8 @@ mod tests {
             .filter(|p| p.name.starts_with("tor-") && p.source.is_some())
             .count();
         assert!(tor >= 30, "{tor} tor-* packages");
-        let expected = [("ctutils", "0.4.4", "2026-10-30", "RUSTSEC-2026-0385")];
+        // G7-00: the ctutils 0.4.4 entry (RUSTSEC-2026-0385, until 2026-10-30) expired and was removed
+        let expected: [(&str, &str, &str, &str); 0] = [];
         assert_eq!(crate::expect::COOLDOWN_EXCEPTIONS.len(), expected.len());
         for ((n, v, until, advisory), (en, ev, euntil, eadv)) in
             crate::expect::COOLDOWN_EXCEPTIONS.iter().zip(expected)

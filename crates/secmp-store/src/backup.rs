@@ -1534,6 +1534,17 @@ mod tests {
         Ok(())
     }
 
+    /// Killer (A-4e mutant, `resolved`): a bare file name resolves against the current directory (its parent is the
+    /// empty path, not a path to canonicalise); a name with a parent keeps it.
+    #[test]
+    fn bare_file_name_resolves_against_the_current_dir() -> R {
+        let here = std::fs::canonicalize(".")?;
+        assert_eq!(resolved(Path::new("bare-name"))?, here.join("bare-name"));
+        assert_eq!(resolved(Path::new("./bare-name"))?, here.join("bare-name"));
+        assert_eq!(resolved(Path::new("..")), Err(Error::Unavailable));
+        Ok(())
+    }
+
     /// A4-1-05: the export path is canonicalised before the cloud-folder check (a `..` segment or a symlink cannot
     /// hide or fake a cloud folder), `OneDrive - Org`, `Dropbox_Team` and `Nextcloud-Work` are cloud folders, `Boxes` is
     /// not, an existing file is not overwritten, and the file is written `0600` on Unix.

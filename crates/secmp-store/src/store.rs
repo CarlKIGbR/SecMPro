@@ -520,6 +520,35 @@ mod tests {
         Ok(())
     }
 
+    /// Killers (A-4e mutants, `DbKey::has_db`, the refusal in `open_inner`): a key without `K_db`, and a key without
+    /// table keys, each open nothing — `Unavailable` before any database file is made.
+    #[test]
+    fn incomplete_keys_open_nothing() -> R {
+        let mk = secmp_crypto::LockedSecret::<32>::from_slice(&crate::kat::TEST_MK)?;
+        let no_db = DbKey(None, Some(TableKeys::derive(&mk)?));
+        assert!(!no_db.has_db() && no_db.tables().is_some());
+        let no_tables = DbKey(
+            Some(StoreKey::new(secmp_crypto::LockedSecret::<32>::from_slice(
+                &[7; 32],
+            )?)),
+            None,
+        );
+        assert!(no_tables.has_db() && no_tables.tables().is_none());
+        for (name, key) in [("no K_db", no_db), ("no tables", no_tables)] {
+            let dir = TempDir::new("incomplete-key")?;
+            assert_eq!(
+                Store::open(dir.path(), &key).err(),
+                Some(Error::Unavailable),
+                "{name}"
+            );
+            assert!(
+                !dir.path().join(DB_FILE).exists(),
+                "{name}: no database made"
+            );
+        }
+        Ok(())
+    }
+
     /// A4-1-01 (CS-2.2): `K_db`, and any buffer holding the `PRAGMA key` statement, lives only in a `LockedSecret` page —
     /// the product source of `store.rs` has no plain `Zeroizing` holder of either.
     #[test]

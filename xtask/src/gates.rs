@@ -10013,7 +10013,7 @@ mod tests {
         let accepted = std::fs::read_to_string(
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../docs/mutants-accepted.md"),
         )?;
-        let run_163 = "crates/secmp-client-core/src/scheduler/core/mod.rs:751:39: replace || with && in World::prepare_fetch\n\
+        let run_163 = "crates/secmp-client-core/src/scheduler/core/mod.rs:755:39: replace || with && in World::prepare_fetch\n\
              crates/secmp-transport/src/tls.rs:366:13: replace || with && in <impl StreamProvider for TlsProvider<D>>::connect\n\
              crates/secmp-transport/src/tor/mod.rs:53:26: replace | with ^ in base32\n";
         assert_eq!(

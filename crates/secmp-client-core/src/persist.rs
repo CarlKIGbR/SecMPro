@@ -268,7 +268,8 @@ impl Persist for StorePersist {
 }
 
 // the seed helper of the property tests (`xtask` seed rules; `prop_parts_reassemble_to_state`)
-#[cfg(all(test, feature = "kat"))]
+#[cfg(test)]
+#[cfg(feature = "kat")]
 #[path = "../../secmp-proto/tests/common/seed.rs"]
 mod seed;
 

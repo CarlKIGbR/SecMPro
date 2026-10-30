@@ -2210,6 +2210,21 @@ fn normal_dependency_allow_m7() {
 mod tests {
     use super::*;
 
+    /// Checked-out files may carry CRLF (Windows); multi-line needles match on the LF form.
+    fn lf(s: &str) -> String {
+        s.replace("\r\n", "\n")
+    }
+
+    /// The Windows-only failure of `coverage_store_90` (and of `mutants_scope_includes_store`) came from CRLF in the
+    /// checked-out manifests; the needles match on the LF form.
+    #[test]
+    fn crlf_needles_normalised() {
+        let crlf = "    \"secmp-store/kat\",\r\n]\r\nkat = [\"harness\"]\r\n";
+        let needle = "    \"secmp-store/kat\",\n]\nkat = [\"harness\"]";
+        assert!(!crlf.contains(needle));
+        assert!(lf(crlf).contains(needle));
+    }
+
     /// TEST-SPEC-M7 G7-13 (ADR-047 Amendment 10): `MUTANT_PACKAGES` += `secmp-store`, appended; the per-package rule is
     /// unchanged — the store is not a harness package, so the first run mutates it and tests each mutant with its own
     /// tests and feature `kat` (which the store has), under the same floor (`MUTANT_MIN_CAUGHT_PERCENT` = 50); docs/06 §4
@@ -2223,7 +2238,9 @@ mod tests {
         assert_eq!(MUTANT_MIN_CAUGHT_PERCENT, 50);
         assert!(KAT_PACKAGES.contains(&"secmp-store"));
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
-        let manifest = std::fs::read_to_string(root.join("crates/secmp-store/Cargo.toml"))?;
+        let manifest = lf(&std::fs::read_to_string(
+            root.join("crates/secmp-store/Cargo.toml"),
+        )?);
         assert!(
             manifest.contains("\nkat = ["),
             "secmp-store has feature kat"
@@ -2251,7 +2268,9 @@ mod tests {
             "secmp-relay/kat,secmp-testkit/harness"
         );
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
-        let testkit = std::fs::read_to_string(root.join("crates/secmp-testkit/Cargo.toml"))?;
+        let testkit = lf(&std::fs::read_to_string(
+            root.join("crates/secmp-testkit/Cargo.toml"),
+        )?);
         assert!(testkit.contains("    \"secmp-store/kat\",\n]\nkat = [\"harness\"]"));
         let standards = std::fs::read_to_string(root.join("docs/06-engineering-standards.md"))?;
         assert!(standards.contains(

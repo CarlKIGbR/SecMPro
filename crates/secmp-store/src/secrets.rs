@@ -82,6 +82,9 @@ mod tests {
             for t in Table::ALL {
                 locked(unlocked.table_key_kat(t)?.locked());
             }
+            let db_key = unlocked.db_key()?;
+            locked(db_key.k_db_kat().ok_or("no K_db")?);
+            drop(db_key);
             let kek = wrap::kek_kat(b"passphrase", &[7; 16], Argon2Params::kat_small())?;
             locked(kek.locked());
             drop(kek);

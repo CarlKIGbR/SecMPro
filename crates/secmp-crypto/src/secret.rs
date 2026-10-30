@@ -112,6 +112,17 @@ impl<const N: usize> LockedSecret<N> {
         Ok(Self(Self::page()?))
     }
 
+    /// `N` bytes in locked memory, filled by `f` in place: the bytes are written into the page and never exist outside
+    /// it (no copy of the caller's).
+    ///
+    /// # Errors
+    /// [`Error::Unavailable`] if locked memory is unavailable.
+    pub fn with_fill(f: impl FnOnce(&mut [u8; N])) -> Result<Self> {
+        let mut page = Self::zeroed()?;
+        f(page.expose_secret_mut());
+        Ok(page)
+    }
+
     /// The secret bytes, writable (the primitives of this crate fill a fresh page in place).
     pub(crate) fn expose_secret_mut(&mut self) -> &mut [u8; N] {
         self.0.get_mut()
@@ -164,6 +175,21 @@ mod tests {
         let mut s = SecretBytes::<8>::from_slice(&[0xff; 8])?;
         s.expose_secret_mut().zeroize();
         assert_eq!(s.expose_secret(), &[0; 8]);
+        Ok(())
+    }
+
+    /// `with_fill` writes the bytes in place (the `Err(Unavailable)` path needs a failing locked-memory backend and is
+    /// not reachable from a unit test).
+    #[test]
+    fn with_fill_writes_in_place() -> Result<()> {
+        let s = LockedSecret::<4>::with_fill(|b| {
+            for (i, x) in b.iter_mut().enumerate() {
+                *x = u8::try_from(i).unwrap_or(0xff).wrapping_add(7);
+            }
+        })?;
+        assert_eq!(s.expose_secret(), &[7, 8, 9, 10]);
+        let untouched = LockedSecret::<4>::with_fill(|_| {})?;
+        assert_eq!(untouched.expose_secret(), &[0; 4]);
         Ok(())
     }
 

@@ -80,13 +80,22 @@ impl Argon2Params {
     }
 }
 
+/// The error of a key-derivation or locked-page step during an unlock (A4-1-08): locked memory that is unavailable is
+/// [`Error::Unavailable`]; everything else is the uniform [`Error::Unlock`] (uniformity is for authentication outcomes).
+pub(crate) fn kdf_error(e: secmp_crypto::Error) -> Error {
+    match e {
+        secmp_crypto::Error::Unavailable => Error::Unavailable,
+        _ => Error::Unlock,
+    }
+}
+
 /// `KEK = Argon2id(P, S = salt, params, T = 32, v = 0x13)` in a locked page (ADR-053 item 1).
 pub(crate) fn kek(passphrase: &[u8], salt: &[u8; 16], params: Argon2Params) -> Result<StoreKey> {
     #[cfg(any(test, feature = "kat"))]
     crate::kat::note_argon2_call();
     // spec §3.4; ADR-053 item 1
     let k = argon2id_locked::<32>(passphrase, salt, params.m_kib, params.t, params.p)
-        .map_err(|_| Error::Unlock)?;
+        .map_err(kdf_error)?;
     Ok(StoreKey::new(k))
 }
 
@@ -113,7 +122,7 @@ impl Unlocked {
     pub fn db_key(&self) -> Result<DbKey> {
         let db = derive(self.mk.locked(), Label::StoreDb)?;
         Ok(DbKey::from_unlocked(
-            db.locked(),
+            db,
             TableKeys::derive(self.mk.locked())?,
         ))
     }
@@ -305,7 +314,7 @@ fn open_mk(kek: &secmp_crypto::LockedSecret<32>, parts: &Parts<'_>) -> Result<Un
     // spec §3.4; ADR-053 item 2
     let mk = Caead::open_locked(kek, &parts.n, &ad(&parts.salt, &parts.enc), parts.sealed)
         .map_err(|_| Error::Unlock)?;
-    let mk = StoreKey::new(secmp_crypto::LockedSecret::from_slice(&mk).map_err(|_| Error::Unlock)?);
+    let mk = StoreKey::new(secmp_crypto::LockedSecret::from_slice(&mk).map_err(kdf_error)?);
     Ok(Unlocked::from_mk(mk))
 }
 
@@ -326,6 +335,16 @@ mod tests {
     type R = core::result::Result<(), Box<dyn std::error::Error>>;
 
     const PASS: &[u8] = b"correct horse battery staple";
+
+    /// A4-1-08: a locked-memory failure during unlock is `Unavailable`, any other KDF error the uniform `Unlock`.
+    #[test]
+    fn locked_memory_failure_is_unavailable() {
+        assert_eq!(
+            kdf_error(secmp_crypto::Error::Unavailable),
+            Error::Unavailable
+        );
+        assert_eq!(kdf_error(secmp_crypto::Error::Rejected), Error::Unlock);
+    }
 
     /// A `kat_small` wrap of a fresh profile in `dir`, and its bytes.
     #[cfg(feature = "kat")]

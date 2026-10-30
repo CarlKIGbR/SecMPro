@@ -20,10 +20,11 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::config::DbConfig;
 use rusqlite::{Connection, OpenFlags, Params, Row};
-use secmp_crypto::Zeroizing;
+use secmp_crypto::LockedSecret;
 
 use crate::error::{Error, Result};
 use crate::keys::TableKeys;
+use crate::secrets::StoreKey;
 
 /// The file name of the database inside a profile directory.
 pub const DB_FILE: &str = "profile.db";
@@ -34,11 +35,11 @@ pub const LOCK_FILE: &str = "lock";
 /// version `libsqlite3-sys` 0.37.0 bundles, the one the graph can hold beside Arti (`links = "sqlite3"`).
 pub const SQLCIPHER_MIN: (u32, u32, u32) = (4, 10, 0);
 
-/// The keys of a profile's database: the SQLCipher raw key `K_db` (the bytes of `PRAGMA key`, zeroized on drop) and the
+/// The keys of a profile's database: the SQLCipher raw key `K_db` (the bytes of `PRAGMA key`, in a locked page) and the
 /// nine table keys of the record seal (ADR-053 items 3–5; `None` only if locked memory was unavailable for a `kat` key).
 /// No `Clone`, `Debug` or `PartialEq`. The shipped constructor is [`crate::wrap::Unlocked::db_key`] (ADR-053's
-/// derivation).
-pub struct DbKey(Zeroizing<[u8; 32]>, Option<TableKeys>);
+/// derivation). Every buffer that holds `K_db` — also the `PRAGMA key` statement — is a `LockedSecret` page (A4-1-01).
+pub struct DbKey(Option<StoreKey>, Option<TableKeys>);
 
 impl DbKey {
     /// A key from its bytes (feature `kat`: the A-3 test key); its table keys are derived from the fixed
@@ -48,12 +49,15 @@ impl DbKey {
         let tables = secmp_crypto::LockedSecret::<32>::from_slice(&crate::kat::TEST_MK)
             .ok()
             .and_then(|mk| TableKeys::derive(&mk).ok());
-        Self(Zeroizing::new(bytes), tables)
+        let db = secmp_crypto::LockedSecret::<32>::from_slice(&bytes)
+            .ok()
+            .map(StoreKey::new);
+        Self(db, tables)
     }
 
-    /// `K_db` (a copy) and the table keys of an unlocked profile (ADR-053 items 3, 4).
-    pub(crate) fn from_unlocked(db: &secmp_crypto::LockedSecret<32>, tables: TableKeys) -> Self {
-        Self(Zeroizing::new(*db.expose_secret()), Some(tables))
+    /// `K_db` and the table keys of an unlocked profile (ADR-053 items 3, 4); `db` is taken by value, not copied.
+    pub(crate) const fn from_unlocked(db: StoreKey, tables: TableKeys) -> Self {
+        Self(Some(db), Some(tables))
     }
 
     /// The table keys.
@@ -61,26 +65,62 @@ impl DbKey {
         self.1.as_ref()
     }
 
-    /// `x'<64 hex digits>'`, the raw-key form of `PRAGMA key`, in a zeroizing buffer.
-    fn pragma_value(&self) -> Zeroizing<String> {
-        let mut s = Zeroizing::new(String::with_capacity(67));
-        s.push_str("x'");
-        for b in self.0.iter() {
-            s.push(hex_digit(b >> 4));
-            s.push(hex_digit(b & 0x0f));
-        }
-        s.push('\'');
-        s
+    /// Whether `K_db` is present (a `kat` key can lack it if locked memory was unavailable).
+    pub(crate) const fn has_db(&self) -> bool {
+        self.0.is_some()
     }
 
-    /// `PRAGMA key = "x'<64 hex digits>'"` (82 bytes), built in one zeroizing buffer of exactly that capacity, so no
-    /// reallocation leaves a copy of the key behind.
-    pub(crate) fn key_statement(&self) -> Zeroizing<String> {
-        let mut s = Zeroizing::new(String::with_capacity(82));
-        s.push_str("PRAGMA key = \"");
-        s.push_str(&self.pragma_value());
-        s.push('"');
-        s
+    /// `K_db` (feature `kat`, ST-19).
+    #[cfg(any(test, feature = "kat"))]
+    #[must_use]
+    pub fn k_db_kat(&self) -> Option<&secmp_crypto::LockedSecret<32>> {
+        self.0.as_ref().map(StoreKey::locked)
+    }
+
+    /// `x'<64 hex digits>'`, the raw-key form of `PRAGMA key` (67 bytes), written in place in a locked page.
+    ///
+    /// # Errors
+    /// [`Error::Unavailable`] without `K_db` or if locked memory is unavailable.
+    fn pragma_value(&self) -> Result<LockedSecret<67>> {
+        let k = self.0.as_ref().ok_or(Error::Unavailable)?.locked();
+        LockedSecret::<67>::with_fill(|dst| {
+            let Some((head, rest)) = dst.split_at_mut_checked(2) else {
+                return;
+            };
+            head.copy_from_slice(b"x'");
+            let Some((hex, tail)) = rest.split_at_mut_checked(64) else {
+                return;
+            };
+            let (pairs, _) = hex.as_chunks_mut::<2>();
+            for (pair, b) in pairs.iter_mut().zip(k.expose_secret()) {
+                for (slot, n) in pair.iter_mut().zip([b >> 4, b & 0x0f]) {
+                    *slot = hex_digit(n);
+                }
+            }
+            tail.copy_from_slice(b"'");
+        })
+        .map_err(|_| Error::Unavailable)
+    }
+
+    /// `PRAGMA key = "x'<64 hex digits>'"` (82 bytes), built in place in a locked page, so no copy of the key is left
+    /// outside one.
+    ///
+    /// # Errors
+    /// As [`DbKey::pragma_value`].
+    pub(crate) fn key_statement(&self) -> Result<LockedSecret<82>> {
+        let value = self.pragma_value()?;
+        LockedSecret::<82>::with_fill(|dst| {
+            let Some((head, rest)) = dst.split_at_mut_checked(14) else {
+                return;
+            };
+            head.copy_from_slice(b"PRAGMA key = \"");
+            let Some((mid, tail)) = rest.split_at_mut_checked(67) else {
+                return;
+            };
+            mid.copy_from_slice(value.expose_secret());
+            tail.copy_from_slice(b"\"");
+        })
+        .map_err(|_| Error::Unavailable)
     }
 }
 
@@ -93,10 +133,10 @@ fn step(tag: &'static str) {
 #[cfg(not(any(test, feature = "kat")))]
 const fn step(_tag: &'static str) {}
 
-fn hex_digit(n: u8) -> char {
+fn hex_digit(n: u8) -> u8 {
     match n {
-        0..=9 => char::from(b'0'.wrapping_add(n)),
-        _ => char::from(b'a'.wrapping_add(n.wrapping_sub(10))),
+        0..=9 => b'0'.wrapping_add(n),
+        _ => b'a'.wrapping_add(n.wrapping_sub(10)),
     }
 }
 
@@ -156,8 +196,9 @@ fn open_connection(path: &Path, key: Option<&DbKey>) -> Result<Connection> {
         .map_err(|_| Error::Unlock)?;
     step("cipher_memory_security");
     if let Some(k) = key {
-        conn.execute_batch(&k.key_statement())
-            .map_err(|_| Error::Unlock)?;
+        let stmt = k.key_statement()?;
+        let sql = core::str::from_utf8(stmt.expose_secret()).map_err(|_| Error::Unavailable)?;
+        conn.execute_batch(sql).map_err(|_| Error::Unlock)?;
         step("key");
     }
     // the key is decided by the first read of the schema: SQLCipher allocates and checks only then
@@ -254,8 +295,8 @@ impl Store {
             let _spawning = crate::kat::spawn_guard();
             lock.try_lock().map_err(|_| Error::Unavailable)?;
         }
-        // the record seal needs the table keys: a key without them opens nothing (fail closed)
-        if key.is_some_and(|k| k.tables().is_none()) {
+        // the record seal needs the table keys, the database `K_db`: a key without them opens nothing (fail closed)
+        if key.is_some_and(|k| k.tables().is_none() || !k.has_db()) {
             return Err(Error::Unavailable);
         }
         let conn = open_connection(&dir.join(DB_FILE), key)?;
@@ -461,6 +502,23 @@ mod tests {
     use crate::kat::{TempDir, TestKey};
 
     type R = core::result::Result<(), Box<dyn std::error::Error>>;
+
+    /// A4-1-01 (CS-2.2): `K_db`, and any buffer holding the `PRAGMA key` statement, lives only in a `LockedSecret` page —
+    /// the product source of `store.rs` has no plain `Zeroizing` holder of either.
+    #[test]
+    fn k_db_never_outside_a_locked_page() {
+        let text = include_str!("store.rs").replace("\r\n", "\n");
+        let product = text
+            .split("#[cfg(test)]\nmod tests")
+            .next()
+            .unwrap_or_default();
+        for needle in [
+            concat!("Zeroizing<", "[u8; 32]>"),
+            concat!("Zeroizing<", "String>"),
+        ] {
+            assert_eq!(product.matches(needle).count(), 0, "{needle}");
+        }
+    }
 
     fn pragma(store: &Store, name: &str) -> core::result::Result<String, rusqlite::Error> {
         store
@@ -708,10 +766,10 @@ mod tests {
         drop(Store::open_unkeyed_kat(plain.path())?);
         let unkeyed: Vec<&str> = all.iter().copied().filter(|s| *s != "key").collect();
         assert_eq!(crate::kat::open_steps(), unkeyed);
-        let s: Zeroizing<String> = TestKey::db_key().key_statement();
+        let s = TestKey::db_key().key_statement()?;
+        let s = s.expose_secret().as_slice();
         assert_eq!(s.len(), 82);
-        assert!(s.starts_with("PRAGMA key = \"x'") && s.ends_with("'\""));
-        assert_eq!(s.capacity(), 82, "built in place, no reallocation");
+        assert!(s.starts_with(b"PRAGMA key = \"x'") && s.ends_with(b"'\""));
         Ok(())
     }
 
@@ -729,19 +787,29 @@ mod tests {
             s
         });
         assert_eq!(
-            *DbKey::from_bytes(bytes).pragma_value(),
-            format!("x'{want}'")
+            DbKey::from_bytes(bytes)
+                .pragma_value()?
+                .expose_secret()
+                .as_slice(),
+            format!("x'{want}'").as_bytes()
         );
         assert_eq!(
-            *DbKey::from_bytes([0xa5; 32]).pragma_value(),
-            format!("x'{}'", "a5".repeat(32))
+            DbKey::from_bytes([0xa5; 32])
+                .pragma_value()?
+                .expose_secret()
+                .as_slice(),
+            format!("x'{}'", "a5".repeat(32)).as_bytes()
         );
         let (a, b) = (TestKey::db_key(), TestKey::one_bit_off());
-        let bits: u32 =
-            a.0.iter()
-                .zip(b.0.iter())
-                .map(|(x, y)| (x ^ y).count_ones())
-                .sum();
+        let (a, b) = (
+            a.k_db_kat().ok_or("no K_db")?.expose_secret(),
+            b.k_db_kat().ok_or("no K_db")?.expose_secret(),
+        );
+        let bits: u32 = a
+            .iter()
+            .zip(b.iter())
+            .map(|(x, y)| (x ^ y).count_ones())
+            .sum();
         assert_eq!(bits, 1);
         Ok(())
     }

@@ -44,7 +44,7 @@ use crate::keys::derive;
 use crate::messages::{Direction, KIND_VIEW_ONCE};
 use crate::profile::put_identity;
 use crate::store::Store;
-use crate::wrap::{Argon2Params, kek};
+use crate::wrap::{Argon2Params, kdf_error, kek};
 
 /// The plaintext magic of a backup file (it reveals the file type only; ADR-053 item 6).
 pub const MAGIC: &[u8; 13] = b"SecMProbackup";
@@ -654,7 +654,7 @@ fn open_body(
         p.wrapped,
     )
     .map_err(|_| Error::Unlock)?;
-    let mk = LockedSecret::<32>::from_slice(&mk).map_err(|_| Error::Unlock)?;
+    let mk = LockedSecret::<32>::from_slice(&mk).map_err(kdf_error)?;
     // spec §3.4; ADR-053 item 6
     let k_bk = derive(&mk, Label::StoreBackup).map_err(|_| Error::Unlock)?;
     // spec §3.4; ADR-053 item 6

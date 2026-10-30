@@ -14,6 +14,7 @@
 
 use std::io::Write as _;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use secmp_crypto::{Caead, Label, argon2id_locked};
 
@@ -208,32 +209,53 @@ pub fn create_kat(dir: &Path, passphrase: &[u8], params: Argon2Params) -> Result
 }
 
 fn create_with(dir: &Path, passphrase: &[u8], params: Argon2Params) -> Result<Unlocked> {
+    static TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
     std::fs::create_dir_all(dir).map_err(|_| Error::Unavailable)?;
+    // A4-1-02 (EXT1-2, Q178): the profile lock is held from before the existence check to the publish
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(dir.join(crate::store::LOCK_FILE))
+        .map_err(|_| Error::Unavailable)?;
+    {
+        // `kat`: no child of a test is between `fork` and `exec` holding a copy of a released lock
+        #[cfg(any(test, feature = "kat"))]
+        let _spawning = crate::kat::spawn_guard();
+        lock.try_lock().map_err(|_| Error::Unavailable)?;
+    }
     let path = dir.join(WRAP_FILE);
     if path.exists() {
         return Err(Error::Unavailable);
     }
     let mk = crate::rand::key()?;
     let wrap = seal(&mk, passphrase, params)?;
-    // A4-1-02: a new file beside the wrap, synced, renamed, and the directory synced (a stale one is removed first)
-    let tmp = dir.join("wrap.tmp");
-    if tmp.exists() {
-        std::fs::remove_file(&tmp).map_err(|_| Error::Unavailable)?;
+    // A4-1-02: a new file beside the wrap (a per-call name), synced, renamed, and the directory synced
+    let n = TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let tmp = dir.join(format!("wrap.{}.{n}.tmp", std::process::id()));
+    let publish = || -> Result<()> {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp)
+            .map_err(|_| Error::Unavailable)?;
+        file.write_all(&wrap).map_err(|_| Error::Unavailable)?;
+        file.sync_all().map_err(|_| Error::Unavailable)?;
+        drop(file);
+        std::fs::rename(&tmp, &path).map_err(|_| Error::Unavailable)?;
+        // a directory cannot be opened for a sync on Windows: skipped there
+        #[cfg(unix)]
+        std::fs::File::open(dir)
+            .and_then(|d| d.sync_all())
+            .map_err(|_| Error::Unavailable)?;
+        Ok(())
+    };
+    if let Err(e) = publish() {
+        // best effort: the caller's own tmp only
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
     }
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&tmp)
-        .map_err(|_| Error::Unavailable)?;
-    file.write_all(&wrap).map_err(|_| Error::Unavailable)?;
-    file.sync_all().map_err(|_| Error::Unavailable)?;
-    drop(file);
-    std::fs::rename(&tmp, &path).map_err(|_| Error::Unavailable)?;
-    // a directory cannot be opened for a sync on Windows: skipped there
-    #[cfg(unix)]
-    std::fs::File::open(dir)
-        .and_then(|d| d.sync_all())
-        .map_err(|_| Error::Unavailable)?;
+    drop(lock);
     Ok(Unlocked::from_mk(mk))
 }
 
@@ -366,7 +388,7 @@ mod tests {
             .unwrap_or_default();
         #[cfg(unix)]
         assert_eq!(body.matches(concat!("sync", "_all")).count(), 2);
-        assert_eq!(body.matches(concat!("create", "_new")).count(), 1);
+        assert!(body.matches(concat!("create", "_new")).count() >= 1);
         let dir = TempDir::new("wrap-durable")?;
         let _first = create_kat(dir.path(), PASS, Argon2Params::kat_small())?;
         let before = std::fs::read(dir.path().join(WRAP_FILE))?;
@@ -375,6 +397,57 @@ mod tests {
             Some(Error::Unavailable)
         );
         assert_eq!(std::fs::read(dir.path().join(WRAP_FILE))?, before);
+        Ok(())
+    }
+
+    /// A4-1-02 (EXT1-2, Q178): `create_with` takes the profile lock before the existence check and publishes with one
+    /// `rename`.
+    #[test]
+    fn create_publishes_without_replace() {
+        let text = include_str!("wrap.rs").replace("\r\n", "\n");
+        let body = text
+            .split(concat!("fn create_", "with("))
+            .nth(1)
+            .and_then(|t| t.split("\n}\n").next())
+            .unwrap_or_default();
+        assert_eq!(body.matches(concat!("try", "_lock")).count(), 1);
+        assert_eq!(body.matches(concat!("rename", "(")).count(), 1);
+        let line_of = |needle: &str| {
+            body.lines()
+                .position(|l| l.contains(needle))
+                .unwrap_or(usize::MAX)
+        };
+        assert!(line_of(concat!("path.exists", "()")) > line_of(concat!("try", "_lock")));
+    }
+
+    /// A4-1-02 (EXT1-2, Q178): two creators of one directory: exactly one wins, and its wrap is the one on disk.
+    #[test]
+    fn concurrent_create_exactly_one_wins() -> R {
+        use std::sync::Barrier;
+        for _ in 0..16 {
+            let dir = TempDir::new("wrap-race")?;
+            let barrier = Barrier::new(2);
+            let results: Vec<_> = std::thread::scope(|s| {
+                let handles: Vec<_> = (0..2)
+                    .map(|_| {
+                        s.spawn(|| {
+                            barrier.wait();
+                            create_kat(dir.path(), b"same", Argon2Params::kat_small())
+                        })
+                    })
+                    .collect();
+                handles.into_iter().map(std::thread::ScopedJoinHandle::join).collect()
+            });
+            let mut winners = Vec::new();
+            for r in results {
+                if let Ok(u) = r.map_err(|_| "thread panicked")? {
+                    winners.push(u.mk_digest_kat());
+                }
+            }
+            assert_eq!(winners.len(), 1);
+            let on_disk = unlock_kat(dir.path(), b"same", Argon2Params::kat_small())?;
+            assert_eq!(Some(&on_disk.mk_digest_kat()), winners.first());
+        }
         Ok(())
     }
 

@@ -777,7 +777,7 @@ pub(crate) const MUTANT_HARNESS_SKIP_TESTS: &[(&str, &str)] = &[
 ];
 
 /// WEISUNG M6-B-3 §1: the long, host-independent simulations the `kat` step leaves out when it runs on Windows
-/// (`windows-native`, timeout 90 min): the activity-independence runs AI-01…AI-06 on the virtual and the tokio driver,
+/// (`windows-native`, timeout 240 min): the activity-independence runs AI-01…AI-06 on the virtual and the tokio driver,
 /// the measurement runs MR-01/MR-02 and the pool run — as (test name, runtime note). They run on Linux in `kat` and
 /// `coverage` on every PR; Windows keeps every unit, KAT, vector and harness test besides these. Runtimes on the
 /// `windows-native` runner from PR run 38724110285 (the tokio repeats are measured on the 32-core container).
@@ -2064,7 +2064,7 @@ pub(crate) const REQUIRED_JOB_CONDITIONS: &[(&str, Option<&str>)] = &[
 pub(crate) const JOB_BUDGETS: &[(&str, u64)] = &[
     // ADR-045 Amendment 10
     ("linux-fast", 120),
-    ("windows-native", 90),
+    ("windows-native", 240),
     ("xwin-cross", 60),
     ("linux-full", 240),
     ("ct", 330),

@@ -318,27 +318,22 @@ impl Contents {
     }
 }
 
-/// The settings of `store` whose key is in [`BACKUP_SETTINGS_KEYS`], by key (A4-1-04).
+/// The settings of `store` whose key is in [`BACKUP_SETTINGS_KEYS`], by key (A4-1-04). Each value is a u32 (EXT1-3,
+/// Q177): an INTEGER in the store, 4 bytes big-endian in the backup; a value outside the u32 range is `Unavailable`.
 fn read_settings(store: &Store) -> Result<Vec<(String, Zeroizing<Vec<u8>>)>> {
-    let mut stmt = store
-        .conn
-        .prepare("SELECT key, value FROM settings ORDER BY key")
-        .map_err(|_| Error::Unavailable)?;
-    let rows = stmt
-        .query_map([], |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                Zeroizing::new(r.get::<_, Vec<u8>>(1)?),
-            ))
-        })
-        .map_err(|_| Error::Unavailable)?;
-    let all: Vec<(String, Zeroizing<Vec<u8>>)> = rows
-        .collect::<rusqlite::Result<_>>()
-        .map_err(|_| Error::Unavailable)?;
-    Ok(all
-        .into_iter()
-        .filter(|(k, _)| BACKUP_SETTINGS_KEYS.contains(&k.as_str()))
-        .collect())
+    let mut out = Vec::new();
+    for key in BACKUP_SETTINGS_KEYS {
+        let value = store.query_row(
+            "SELECT value FROM settings WHERE key = ?1",
+            params![key],
+            |r| r.get::<_, i64>(0),
+        )?;
+        if let Some(v) = value {
+            let v = u32::try_from(v).map_err(|_| Error::Unavailable)?;
+            out.push(((*key).to_owned(), Zeroizing::new(v.to_be_bytes().to_vec())));
+        }
+    }
+    Ok(out)
 }
 
 /// A `messages` row as [`read_messages`] selects it.
@@ -648,7 +643,11 @@ fn decode(body: &[u8], lens: [usize; 4]) -> Result<Contents> {
         let key = core::str::from_utf8(key)
             .map_err(|_| Error::Unlock)?
             .to_owned();
+        // only allowlisted keys, each value a u32 (ADR-053 Amendment 2)
         let val_len = usize::from(s.u16()?);
+        if !BACKUP_SETTINGS_KEYS.contains(&key.as_str()) || val_len != 4 {
+            return Err(Error::Unlock);
+        }
         settings.push((key, Zeroizing::new(s.take(val_len)?.to_vec())));
     }
     s.finish()?;
@@ -832,7 +831,8 @@ fn import_bytes(
         .query_row(
             "SELECT (SELECT count(*) FROM identity) + (SELECT count(*) FROM contacts) + (SELECT count(*) FROM messages) \
              + (SELECT count(*) FROM prekeys) + (SELECT count(*) FROM invitations) + (SELECT count(*) FROM sessions) \
-             + (SELECT count(*) FROM relays) + (SELECT count(*) FROM outbox)",
+             + (SELECT count(*) FROM relays) + (SELECT count(*) FROM outbox) \
+             + (SELECT count(*) FROM settings)",
             [],
             |r| r.get(0),
         )?
@@ -861,10 +861,11 @@ fn import_bytes(
             ids.push(id);
         }
         for (key, val) in &contents.settings {
+            let v = <[u8; 4]>::try_from(val.as_slice()).map_err(|_| Error::Unavailable)?;
             tx.exec(
                 "INSERT INTO settings (key, value) VALUES (?1, ?2) \
                  ON CONFLICT (key) DO UPDATE SET value = excluded.value",
-                params![key, val.as_slice()],
+                params![key, i64::from(u32::from_be_bytes(v))],
             )?;
         }
         for m in &contents.messages {
@@ -995,8 +996,8 @@ mod tests {
             },
         )?;
         store.connection_kat().execute(
-            "INSERT INTO settings (key, value) VALUES ('retention_days', x'0000001e'), ('theme', x'01')",
-            [],
+            "INSERT INTO settings (key, value) VALUES ('retention_days', ?1), ('theme', x'01')",
+            rusqlite::params![30_i64],
         )?;
         for (msg_id, direction, ts_ms, expire_after, payload) in [
             (
@@ -1456,8 +1457,8 @@ mod tests {
         let mut store = Store::open(&dir.path().join("profile"), &TestKey::db_key())?;
         populate(&mut store)?;
         store.connection_kat().execute(
-            "INSERT OR REPLACE INTO settings (key, value) VALUES ('retention_days', x'0000001e'), ('theme', x'01')",
-            [],
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('retention_days', ?1), ('theme', x'01')",
+            rusqlite::params![30_i64],
         )?;
         let path = dir.path().join("export.secmpbackup");
         export_kat(&store, &path, PASS, Argon2Params::kat_small())?;
@@ -1467,11 +1468,120 @@ mod tests {
         Ok(())
     }
 
-    /// A4-1-06: an import is refused (`Unavailable`, nothing written) into a profile with a row in any of the eight
-    /// tables `identity`, `contacts`, `messages`, `prekeys`, `invitations`, `sessions`, `relays`, `outbox`.
+    /// A backup of the populated profile whose settings section is replaced by `settings` (sealed again under `PASS`).
+    fn forged(
+        label: &str,
+        settings: Vec<(&str, Vec<u8>)>,
+    ) -> Res<(TempDir, std::path::PathBuf)> {
+        let (dir, file) = exported(label)?;
+        let mut contents = open_export_kat(&file, PASS)?;
+        contents.settings = settings
+            .into_iter()
+            .map(|(k, v)| (k.to_owned(), Zeroizing::new(v)))
+            .collect();
+        let sections = contents.encode()?;
+        let mut table = Vec::new();
+        let mut body = Vec::new();
+        for (tag, section) in (1_u8..).zip(&sections) {
+            table.push((tag, len_u32(section.len())?));
+            body.extend_from_slice(section);
+        }
+        let path = dir.path().join("forged.secmpbackup");
+        std::fs::write(&path, seal_file_kat(PASS, &table, &body)?)?;
+        Ok((dir, path))
+    }
+
+    /// The number of `settings` rows of `store`.
+    fn settings_rows(store: &Store) -> Res<i64> {
+        Ok(store
+            .connection_kat()
+            .query_row("SELECT count(*) FROM settings", [], |r| r.get(0))?)
+    }
+
+    /// EXT1-3 (Q177): `retention_days` is an INTEGER in the store and a u32 on the wire; a backup restores the
+    /// retention that `Store::retention` reads.
+    #[test]
+    fn retention_round_trips_through_store_retention() -> R {
+        use crate::messages::Retention;
+        let dir = TempDir::new("bk-ret")?;
+        let mut store = Store::open(&dir.path().join("profile"), &TestKey::db_key())?;
+        populate(&mut store)?;
+        store.connection_kat().execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('retention_days', ?1)",
+            rusqlite::params![7_i64],
+        )?;
+        assert_eq!(store.retention(), Ok(Retention::Days(7)));
+        let path = dir.path().join("export.secmpbackup");
+        let small = Argon2Params::kat_small();
+        assert_eq!(export_kat(&store, &path, PASS, small), Ok(()));
+        let mut fresh = Store::open(&dir.path().join("fresh"), &TestKey::db_key())?;
+        assert_eq!(import_kat(&mut fresh, &path, PASS, small, 1), Ok(()));
+        assert_eq!(fresh.retention(), Ok(Retention::Days(7)));
+        Ok(())
+    }
+
+    /// EXT1-3 (Q177): a `retention_days` value of another length than 4 is a malformed section (`Unlock`), nothing
+    /// is written.
+    #[test]
+    fn retention_wire_length_other_than_4_rejected() -> R {
+        for len in [3_usize, 8] {
+            let (dir, path) = forged("bk-retlen", vec![("retention_days", vec![0; len])])?;
+            let mut fresh = Store::open(&dir.path().join("fresh"), &TestKey::db_key())?;
+            assert_eq!(
+                import_kat(&mut fresh, &path, PASS, Argon2Params::kat_small(), 1),
+                Err(Error::Unlock),
+                "{len}"
+            );
+            assert_eq!(settings_rows(&fresh)?, 0, "{len}");
+        }
+        Ok(())
+    }
+
+    /// EXT1-4 (Q179a): a settings key outside [`BACKUP_SETTINGS_KEYS`] is a malformed section (`Unlock`), nothing is
+    /// written.
+    #[test]
+    fn import_refuses_non_allowlisted_setting() -> R {
+        let (dir, path) = forged("bk-allow", vec![("not_allowlisted", vec![1])])?;
+        let mut fresh = Store::open(&dir.path().join("fresh"), &TestKey::db_key())?;
+        assert_eq!(
+            import_kat(&mut fresh, &path, PASS, Argon2Params::kat_small(), 1),
+            Err(Error::Unlock)
+        );
+        assert_eq!(settings_rows(&fresh)?, 0);
+        Ok(())
+    }
+
+    /// EXT1-4 (Q179b): a profile with a `settings` row is not empty (`Unavailable`), the row is unchanged.
+    #[test]
+    fn import_refuses_profile_with_settings() -> R {
+        let (dir, file) = exported("bk-setrow")?;
+        let path = dir.path().join("export.secmpbackup");
+        assert!(path.exists());
+        drop(file);
+        let mut fresh = Store::open(&dir.path().join("fresh"), &TestKey::db_key())?;
+        fresh
+            .connection_kat()
+            .execute("INSERT INTO settings (key, value) VALUES ('theme', x'01')", [])?;
+        assert_eq!(
+            import_kat(&mut fresh, &path, PASS, Argon2Params::kat_small(), 1),
+            Err(Error::Unavailable)
+        );
+        assert_eq!(settings_rows(&fresh)?, 1);
+        let theme: Vec<u8> = fresh.connection_kat().query_row(
+            "SELECT value FROM settings WHERE key = 'theme'",
+            [],
+            |r| r.get(0),
+        )?;
+        assert_eq!(theme, [1]);
+        Ok(())
+    }
+
+    /// A4-1-06 (EXT1-4, Q179b): an import is refused (`Unavailable`, nothing written) into a profile with a row in any of
+    /// the nine tables `identity`, `contacts`, `messages`, `prekeys`, `invitations`, `sessions`, `relays`, `outbox`,
+    /// `settings`.
     #[test]
     fn import_refuses_any_nonempty_table() -> R {
-        const ROWS: [(&str, &str); 8] = [
+        const ROWS: [(&str, &str); 9] = [
             (
                 "identity",
                 "INSERT INTO identity (id, secret, fingerprint, created_ms) VALUES (1, x'00', x'00', 0)",
@@ -1503,6 +1613,10 @@ mod tests {
             (
                 "outbox",
                 "INSERT INTO outbox (msg_id, contact_id, seq, kind, expire_after, payload, queued_ms, state) VALUES (x'00', 1, 0, 1, 0, x'00', 0, 0)",
+            ),
+            (
+                "settings",
+                "INSERT INTO settings (key, value) VALUES ('theme', x'01')",
             ),
         ];
         let counts = |s: &Store| -> Res<Vec<i64>> {

@@ -761,3 +761,53 @@ Full step `cargo xtask step --strict kani` at `57d7da2`: PASS, 55/55 harnesses v
 - **OQ-20** resolved by OPEN-M7-08 A (no spec change); `docs/09` not edited.
 - **FIN5b-1** closed (logical link id, per-link oracle). **FINAL3 (e)** closed (frame ids). **KANI-M6-C-1** closed (SC-06…SC-09). **K-C5** closed (SC-10).
 - Blocked: none. STOP: none.
+
+
+## A-4f fix-ups (WEISUNG M7-A4f; external review EXT1, Astra @ 99ad44c; rulings Q176–Q180; `modell=claude-sonnet-5-5`)
+
+Guard: `git status --short` empty; `merge-base --is-ancestor 99ad44c HEAD` exit 0; `diff --stat 99ad44c HEAD -- <store, fuzz target, corpus>` empty. `<G>` = `1a7b4da` (`docs(m7): B-SC closed @ 923b9ee`). Migration check: `grep -n "settings" crates/secmp-store/src/migrate.rs` → no match (the table is created in `schema.rs:51`, no default row).
+
+### §2 commits
+| commit | subject |
+|---|---|
+| `842145e` | fix(store): wrap creation serialized by the profile lock (EXT1-2, Q178; A4-1-02) |
+| `c16d9ac` | fix(store): typed retention_days codec, import allowlist, settings in the empty-profile rule (EXT1-3, EXT1-4, Q177, Q179; A4-1-04) |
+| `847d1dd` | fix(fuzz): store_record_open even mode accepts an authentic record; authentic seed (EXT1-5, Q180) |
+| `ee0f79e` | docs(m7): ADR-053 Amendment 2 (Proposed), F9b, outbox doc; Q176–Q180 (EXT1) |
+
+### §3 tests (one row per new or re-dictated test)
+| test | commit | state |
+|---|---|---|
+| `wrap::tests::create_publishes_without_replace` (new) | `842145e` | red first (`left: 0, right: 1`, try_lock) |
+| `wrap::tests::concurrent_create_exactly_one_wins` (new, kat_small, 16 rounds) | `842145e` | red first (the winner's digest was not the wrap on disk) |
+| `wrap::tests::create_is_durable_and_refuses_existing` (re-dictated: `create_new` ≥ 1) | `842145e` | green |
+| `backup::tests::retention_round_trips_through_store_retention` (new) | `c16d9ac` | red first (`left: Err(Unavailable), right: Ok(())`) |
+| `backup::tests::retention_wire_length_other_than_4_rejected` (new) | `c16d9ac` | red first (`left: Ok(()), right: Err(Unlock)`) |
+| `backup::tests::import_refuses_non_allowlisted_setting` (new) | `c16d9ac` | red first (`left: Ok(())`) |
+| `backup::tests::import_refuses_profile_with_settings` (new) | `c16d9ac` | red first (`left: Ok(()), right: Err(Unavailable)`) |
+| `backup::tests::contents_whitelist` + `settings_allowlist_pinned` fixtures (re-dictated: INTEGER 30 via `?1`; section `[("retention_days", [0,0,0,0x1e])]` unchanged) | `c16d9ac` | green |
+| `backup::tests::import_refuses_any_nonempty_table` (re-dictated: nine cases) | `c16d9ac` | green |
+| `seal::tests::authentic_even_seed_opens` (new; seed `8d094c96986f6f9330eb1c8639191fa4099c6021`) | `847d1dd` | red first (`left: None, right: Some(Unavailable)`) |
+
+New tests: 7; re-dictated: 4 (+ the BK-01/allowlist fixtures). Red seen: 7 (`a4f-red-first.txt`; the race test was red at its first run). `wrapping_and_header_kat` and `wrap_bytes_recomputed` unchanged and green. Store suite: 80 passed. `grep -rn store_record_open xtask/src`: no corpus-count or hash pin (the check is `seeds >= 4`), no xtask edit; `cargo nextest run -p xtask -E 'test(/fuzz_targets_store|large_file_gate/)'` 6 passed; `cargo +nightly-2026-09-21 fuzz run --fuzz-dir fuzz store_record_open fuzz/corpus/store_record_open/8d094c96... -- -runs=1`: executed, no crash.
+
+### §4 gates
+| gate | result |
+|---|---|
+| `cargo xtask ci-fast` at `ee0f79e` (`ci-fast-a4f-ee0f79e.txt`, clean tree) | **FAIL: step 1 `fmt` only** (rustfmt layout of the new test code in `backup.rs`, `seal.rs`, `wrap.rs`); every other step PASS (clippy, policy, deny, vet, audit, cooldown, nextest, doctest, hello, kat, harness 285/285). No further fix made (weisung §5.1). |
+| local mutants (`mutants-a4f-ee0f79e.txt`; diff `1a7b4da..`) | store 17 caught / 0 missed / 10 unviable / 0 timeout of 27 |
+
+### §5 deviations
+- **D-A4f1** (EXT1-2, Q178): lock-serialized create: `wrap::create` holds `<dir>/lock` from before the existence check to the publish (`rename`); a writer that ignores the lock is outside the contract; a per-call `wrap.<pid>.<n>.tmp`; a stale one from a crash is left in place (never read).
+- **D-A4f2** (EXT1-3, Q177): `retention_days` = u32 BE on the wire, INTEGER in SQLite; BK-01 fixture re-dictated to INTEGER 30 (`contents_whitelist`), wire bytes unchanged; ADR-053 Amendment 2 Proposed.
+- **D-A4f3** (EXT1-4/Q179): import rejects a non-allowlisted settings key (`Unlock`); the empty-profile rule covers nine tables (+ `settings`).
+- **D-A4f4** (EXT1-5, Q180): even-mode oracle accepts an authentic record; seed `8d094c96986f6f9330eb1c8639191fa4099c6021` added.
+- A4-1-02 and A4-1-04 were closed by half in A-4e (VERIFY-A4-part1:101,111: no-replace publish and the import-side allowlist missing); closed by `842145e` and `c16d9ac`.
+- Q176: EXT1-1 minor; F9b recorded in A-4f; fix in Phase B (B-4, SE-21). Q177: retention_days typed codec. Q178: lock-serialized wrap create. Q179: import allowlist + nine-table empty rule. Q180: even-mode oracle + authentic seed.
+- Implementation note: `create_with` keeps the write/sync/rename inside a closure in its own body so the source scans of `create_is_durable_and_refuses_existing` and `create_publishes_without_replace` read all of it. `seal.rs` (test only) is edited because §3 dictates the seed test there.
+
+### §7
+**F9b (EXT1-1, Q176).** A receipt's `Delivered` update (`conversation.rs:691-694` → `StoreOutbox::delivered` → `sync`) is a transaction separate from the receive commit and swallowed into `write_errors`. A refused write or a crash between the two loses it: the message stays `Relayed`, is re-sent after a relay loss, and the peer dedups it without a second receipt. The ratchet, the reassembly, the trust and the delivered messages are committed before the ack (spec 03:488). Phase B (B-4, sessions actor, with SC-02): `CommitParts.receipted`, with `StorePersist` marking `DELIVERED` in the receive transaction; row SE-21.
+
+### §8
+- Blocked: ci-fast step `fmt` (new test code layout, see §4); no other failure. STOP: none.

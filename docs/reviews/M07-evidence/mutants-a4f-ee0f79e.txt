@@ -1,0 +1,5 @@
+mutants of the A-4f diff (WEISUNG M7-A4f §5.0; `gates::mutants_args` first-run form, excludes and skips as A-3b §6; `timeout 1800`)
+diff: `git diff 1a7b4da..HEAD -- crates/secmp-store/src` (1a7b4da = <G>, the HEAD the guard saw; 444 lines), run on ee0f79ee93a78513813ff26fc23318edce41e025
+
+secmp-store: c/m/u/t = 17/0/10/0 of 27  (27 mutants tested in 4m: 17 caught, 10 unviable)
+no missed mutant: no killer commit, no `docs/mutants-accepted.md` row

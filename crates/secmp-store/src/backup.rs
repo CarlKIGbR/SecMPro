@@ -29,6 +29,7 @@
 //! whose text is the warning the user confirms) and refuses a path inside a cloud-synchronised folder
 //! ([`Error::CloudFolder`], [`CLOUD_FOLDERS`]) unless `force`.
 
+use std::io::Write as _;
 use std::path::Path;
 
 use rusqlite::params;
@@ -66,8 +67,15 @@ const _: () = assert!(BWRAP_LEN == 104 && HEADER_LEN == 154 && IDENTITY_LEN == 9
 /// The longest local name (`docs/02:95`; ADR-053 Appendix).
 const LOCAL_NAME_MAX: usize = 64;
 
-/// The cloud-synchronised folders (OPEN-M7-37 A, Q141): an export path with a component equal to one of these,
-/// compared case-insensitively, is refused unless `force`.
+/// The settings keys a backup carries (A4-1-04): the keys product code uses (`retention_days`, `messages.rs`). A key
+/// of a later phase goes into exactly one of this list and [`BACKUP_SETTINGS_EXCLUDED`] (the pinned test refuses a key
+/// in neither).
+pub const BACKUP_SETTINGS_KEYS: &[&str] = &["retention_days"];
+/// The settings keys that a backup never carries.
+pub const BACKUP_SETTINGS_EXCLUDED: &[&str] = &[];
+
+/// The cloud-synchronised folders (OPEN-M7-37 A, Q141): an export path with a component equal to one of these (or
+/// starting with one and a space, `-` or `_`; [`in_cloud_folder`]), compared case-insensitively, is refused unless `force`.
 pub const CLOUD_FOLDERS: &[&str] = &[
     "OneDrive",
     "Dropbox",
@@ -83,13 +91,21 @@ pub const CLOUD_FOLDERS: &[&str] = &[
     "Box",
 ];
 
-/// Whether `path` lies inside a folder of [`CLOUD_FOLDERS`] (a component equal to one, case-insensitively).
+/// Whether `path` lies inside a folder of [`CLOUD_FOLDERS`]: a component equal to a listed name (case-insensitively) or
+/// starting with it followed by a space, `-` or `_` (`OneDrive - Org`, `Dropbox_Team`; A4-1-05). A bare prefix is no hit
+/// (`Boxes`). Purely lexical: no file-system access ([`export`] canonicalises the path first).
 #[must_use]
 pub fn in_cloud_folder(path: &Path) -> bool {
     path.components().any(|c| match c {
-        std::path::Component::Normal(name) => name
-            .to_str()
-            .is_some_and(|n| CLOUD_FOLDERS.iter().any(|f| f.eq_ignore_ascii_case(n))),
+        std::path::Component::Normal(name) => name.to_str().is_some_and(|n| {
+            CLOUD_FOLDERS.iter().any(|f| {
+                n.eq_ignore_ascii_case(f)
+                    || (n.get(..f.len()).is_some_and(|p| p.eq_ignore_ascii_case(f))
+                        && n.get(f.len()..)
+                            .and_then(|rest| rest.chars().next())
+                            .is_some_and(|c| matches!(c, ' ' | '-' | '_')))
+            })
+        }),
         _ => false,
     })
 }
@@ -128,11 +144,47 @@ fn export_checked(
     if !confirm {
         return Err(Error::ConfirmRequired);
     }
-    if !force && in_cloud_folder(path) {
+    let target = resolved(path)?;
+    if !force && in_cloud_folder(&target) {
         return Err(Error::CloudFolder);
     }
+    // an existing file (or a link) is never overwritten: refused before the key derivation, and again at the creation
+    if std::fs::symlink_metadata(&target).is_ok() {
+        return Err(Error::Unavailable);
+    }
     let bytes = export_bytes(store, passphrase, params)?;
-    std::fs::write(path, bytes).map_err(|_| Error::Unavailable)
+    write_new(&target, &bytes)
+}
+
+/// `path` with its parent canonicalised (symbolic links and `..` resolved; a relative path against the current
+/// directory), so that the cloud-folder check sees the folder the file will really be in.
+fn resolved(path: &Path) -> Result<std::path::PathBuf> {
+    let parent = match path.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p,
+        _ => Path::new("."),
+    };
+    let name = path.file_name().ok_or(Error::Unavailable)?;
+    let parent = std::fs::canonicalize(parent).map_err(|_| Error::Unavailable)?;
+    Ok(parent.join(name))
+}
+
+/// Create `path` (which must not exist; `0600` on Unix), write `bytes` and sync them to disk.
+fn write_new(path: &Path, bytes: &[u8]) -> Result<()> {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
+    }
+    let mut file = options.open(path).map_err(|_| Error::Unavailable)?;
+    let done = file.write_all(bytes).and_then(|()| file.sync_all());
+    drop(file);
+    if done.is_err() {
+        let _ = std::fs::remove_file(path);
+        return Err(Error::Unavailable);
+    }
+    Ok(())
 }
 
 /// A restored contact.
@@ -266,7 +318,7 @@ impl Contents {
     }
 }
 
-/// The settings of `store`, by key.
+/// The settings of `store` whose key is in [`BACKUP_SETTINGS_KEYS`], by key (A4-1-04).
 fn read_settings(store: &Store) -> Result<Vec<(String, Zeroizing<Vec<u8>>)>> {
     let mut stmt = store
         .conn
@@ -280,8 +332,13 @@ fn read_settings(store: &Store) -> Result<Vec<(String, Zeroizing<Vec<u8>>)>> {
             ))
         })
         .map_err(|_| Error::Unavailable)?;
-    rows.collect::<rusqlite::Result<_>>()
-        .map_err(|_| Error::Unavailable)
+    let all: Vec<(String, Zeroizing<Vec<u8>>)> = rows
+        .collect::<rusqlite::Result<_>>()
+        .map_err(|_| Error::Unavailable)?;
+    Ok(all
+        .into_iter()
+        .filter(|(k, _)| BACKUP_SETTINGS_KEYS.contains(&k.as_str()))
+        .collect())
 }
 
 /// A `messages` row as [`read_messages`] selects it.
@@ -773,7 +830,9 @@ fn import_bytes(
     }
     let empty: i64 = store
         .query_row(
-            "SELECT (SELECT count(*) FROM identity) + (SELECT count(*) FROM contacts) + (SELECT count(*) FROM messages)",
+            "SELECT (SELECT count(*) FROM identity) + (SELECT count(*) FROM contacts) + (SELECT count(*) FROM messages) \
+             + (SELECT count(*) FROM prekeys) + (SELECT count(*) FROM invitations) + (SELECT count(*) FROM sessions) \
+             + (SELECT count(*) FROM relays) + (SELECT count(*) FROM outbox)",
             [],
             |r| r.get(0),
         )?
@@ -936,7 +995,7 @@ mod tests {
             },
         )?;
         store.connection_kat().execute(
-            "INSERT INTO settings (key, value) VALUES ('theme', x'01'), ('retention', x'0000001e')",
+            "INSERT INTO settings (key, value) VALUES ('retention_days', x'0000001e'), ('theme', x'01')",
             [],
         )?;
         for (msg_id, direction, ts_ms, expire_after, payload) in [
@@ -1048,10 +1107,7 @@ mod tests {
             .collect();
         assert_eq!(
             settings,
-            vec![
-                ("retention", [0, 0, 0, 0x1e].as_slice()),
-                ("theme", [1].as_slice())
-            ]
+            vec![("retention_days", [0, 0, 0, 0x1e].as_slice())]
         );
         let messages: Vec<String> = c
             .messages
@@ -1335,6 +1391,202 @@ mod tests {
                 .len(),
             2
         );
+        Ok(())
+    }
+
+    /// The product part (before the test module, CRLF-normalised) of every `crates/*/src/**/*.rs`, with its path.
+    fn product_sources() -> Res<Vec<(String, String)>> {
+        let crates = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let mut out = Vec::new();
+        let mut stack: Vec<std::path::PathBuf> = std::fs::read_dir(&crates)?
+            .map(|e| e.map(|e| e.path().join("src")))
+            .collect::<std::io::Result<_>>()?;
+        while let Some(d) = stack.pop() {
+            if !d.is_dir() {
+                continue;
+            }
+            for entry in std::fs::read_dir(&d)? {
+                let path = entry?.path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    let text = std::fs::read_to_string(&path)?.replace("\r\n", "\n");
+                    let product = text
+                        .split("#[cfg(test)]\nmod tests")
+                        .next()
+                        .unwrap_or_default()
+                        .to_owned();
+                    out.push((path.to_string_lossy().into_owned(), product));
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// A4-1-04: every settings key that product code names in a SQL literal is in exactly one of
+    /// [`BACKUP_SETTINGS_KEYS`] and [`BACKUP_SETTINGS_EXCLUDED`]; a profile with `retention_days` and `theme` exports
+    /// `retention_days` only.
+    #[test]
+    fn settings_allowlist_pinned() -> R {
+        let mut found = Vec::new();
+        for (path, product) in product_sources()? {
+            for needle in [
+                concat!("settings WHERE key = ", "'"),
+                concat!("INTO settings (key, value) VALUES (", "'"),
+            ] {
+                for (at, _) in product.match_indices(needle) {
+                    let rest = product
+                        .get(at.saturating_add(needle.len())..)
+                        .unwrap_or_default();
+                    let key = rest.split('\'').next().unwrap_or_default().to_owned();
+                    found.push((path.clone(), key));
+                }
+            }
+        }
+        assert!(!found.is_empty(), "the scan finds the retention key");
+        for (path, key) in &found {
+            let listed = BACKUP_SETTINGS_KEYS.contains(&key.as_str());
+            let excluded = BACKUP_SETTINGS_EXCLUDED.contains(&key.as_str());
+            assert!(
+                listed != excluded,
+                "settings key {key:?} ({path}) in neither or both lists"
+            );
+        }
+        let dir = TempDir::new("bk-settings")?;
+        let mut store = Store::open(&dir.path().join("profile"), &TestKey::db_key())?;
+        populate(&mut store)?;
+        store.connection_kat().execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('retention_days', x'0000001e'), ('theme', x'01')",
+            [],
+        )?;
+        let path = dir.path().join("export.secmpbackup");
+        export_kat(&store, &path, PASS, Argon2Params::kat_small())?;
+        let c = open_export_kat(&std::fs::read(&path)?, PASS)?;
+        let keys: Vec<&str> = c.settings.iter().map(|(k, _)| k.as_str()).collect();
+        assert_eq!(keys, ["retention_days"]);
+        Ok(())
+    }
+
+    /// A4-1-06: an import is refused (`Unavailable`, nothing written) into a profile with a row in any of the eight
+    /// tables `identity`, `contacts`, `messages`, `prekeys`, `invitations`, `sessions`, `relays`, `outbox`.
+    #[test]
+    fn import_refuses_any_nonempty_table() -> R {
+        const ROWS: [(&str, &str); 8] = [
+            (
+                "identity",
+                "INSERT INTO identity (id, secret, fingerprint, created_ms) VALUES (1, x'00', x'00', 0)",
+            ),
+            (
+                "contacts",
+                "INSERT INTO contacts (id, iks, fingerprint) VALUES (1, x'00', x'00')",
+            ),
+            (
+                "messages",
+                "INSERT INTO messages (contact_id, msg_id, direction, kind, ts_ms, payload) VALUES (1, x'00', 0, 1, 0, x'00')",
+            ),
+            (
+                "prekeys",
+                "INSERT INTO prekeys (kind, id, secret) VALUES (1, 1, x'00')",
+            ),
+            (
+                "invitations",
+                "INSERT INTO invitations (ld_id, record, expires_ms) VALUES (x'00', x'00', 0)",
+            ),
+            (
+                "sessions",
+                "INSERT INTO sessions (session_id, part, ord, data) VALUES (1, 0, 0, x'00')",
+            ),
+            (
+                "relays",
+                "INSERT INTO relays (id, relay_ref) VALUES (1, x'00')",
+            ),
+            (
+                "outbox",
+                "INSERT INTO outbox (msg_id, contact_id, seq, kind, expire_after, payload, queued_ms, state) VALUES (x'00', 1, 0, 1, 0, x'00', 0, 0)",
+            ),
+        ];
+        let counts = |s: &Store| -> Res<Vec<i64>> {
+            ROWS.iter()
+                .map(|(t, _)| {
+                    s.connection_kat()
+                        .query_row(&format!("SELECT count(*) FROM {t}"), [], |r| r.get(0))
+                        .map_err(Into::into)
+                })
+                .collect()
+        };
+        let (dir, file) = exported("bk-nonempty")?;
+        let small = Argon2Params::kat_small();
+        for (table, insert) in ROWS {
+            let mut store = Store::open(
+                &dir.path().join(format!("fresh-{table}")),
+                &TestKey::db_key(),
+            )?;
+            store.connection_kat().execute(insert, [])?;
+            let before = counts(&store)?;
+            assert_eq!(before.iter().sum::<i64>(), 1, "{table}");
+            assert_eq!(
+                import_bytes(&mut store, &file, PASS, small, 1),
+                Err(Error::Unavailable),
+                "{table}"
+            );
+            assert_eq!(counts(&store)?, before, "{table}: nothing written");
+        }
+        Ok(())
+    }
+
+    /// A4-1-05: the export path is canonicalised before the cloud-folder check (a `..` segment or a symlink cannot
+    /// hide or fake a cloud folder), `OneDrive - Org`, `Dropbox_Team` and `Nextcloud-Work` are cloud folders, `Boxes` is
+    /// not, an existing file is not overwritten, and the file is written `0600` on Unix.
+    #[test]
+    fn export_path_hardening() -> R {
+        let dir = TempDir::new("bk-path")?;
+        let mut store = Store::open(&dir.path().join("profile"), &TestKey::db_key())?;
+        populate(&mut store)?;
+        for name in ["OneDrive - X", "Dropbox_Team", "Nextcloud-Work"] {
+            let folder = dir.path().join(name);
+            std::fs::create_dir_all(&folder)?;
+            assert_eq!(
+                export(&store, &folder.join("x"), PASS, true, false),
+                Err(Error::CloudFolder),
+                "{name}"
+            );
+            assert!(in_cloud_folder(Path::new("/home/u").join(name).as_path()));
+        }
+        assert!(!in_cloud_folder(Path::new("/home/u/Boxes/x")));
+        assert!(!in_cloud_folder(Path::new("/home/u/Boxed-in/x")));
+        let (dropbox, safe) = (dir.path().join("Dropbox"), dir.path().join("safe"));
+        std::fs::create_dir_all(&dropbox)?;
+        std::fs::create_dir_all(&safe)?;
+        let dotted = dropbox.join("..").join("safe").join("x");
+        export(&store, &dotted, PASS, true, false)?;
+        let written = safe.join("x");
+        assert!(written.is_file(), "written beside Dropbox, not into it");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            assert_eq!(
+                std::fs::metadata(&written)?.permissions().mode() & 0o777,
+                0o600
+            );
+        }
+        let before = std::fs::read(&written)?;
+        assert_eq!(
+            export(&store, &written, PASS, true, false),
+            Err(Error::Unavailable),
+            "an existing file is not overwritten"
+        );
+        assert_eq!(std::fs::read(&written)?, before);
+        #[cfg(unix)]
+        {
+            let link = dir.path().join("link");
+            std::os::unix::fs::symlink(&dropbox, &link)?;
+            assert_eq!(
+                export(&store, &link.join("y"), PASS, true, false),
+                Err(Error::CloudFolder),
+                "a symlink into a cloud folder"
+            );
+            assert!(!dropbox.join("y").exists());
+        }
         Ok(())
     }
 

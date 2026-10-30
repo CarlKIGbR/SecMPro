@@ -1,0 +1,2 @@
+# measured by ci-fast at 5d44443 (A-4d2); the A-4 values (523 ms at c3c1dcf / 485 ms at bd9e240; 8 241 B at b014540) were overwritten under target/ and are not retained
+ST-07 PROFILE wrap: create 553 ms (one Argon2id m = 256 MiB, t = 3, p = 4)

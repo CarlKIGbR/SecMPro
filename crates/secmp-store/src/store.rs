@@ -503,6 +503,23 @@ mod tests {
 
     type R = core::result::Result<(), Box<dyn std::error::Error>>;
 
+    /// A4-1-07: a store opened with the keys of another profile is the uniform `Unlock`, with the keys of its own `Ok`.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn open_unlocked_with_another_profile_is_unlock() -> R {
+        use crate::wrap::{Argon2Params, create_kat};
+        let (a, b) = (TempDir::new("prof-a")?, TempDir::new("prof-b")?);
+        let ua = create_kat(a.path(), b"pass a", Argon2Params::kat_small())?;
+        let ub = create_kat(b.path(), b"pass b", Argon2Params::kat_small())?;
+        drop(Store::open_unlocked(a.path(), &ua)?);
+        assert_eq!(
+            Store::open_unlocked(a.path(), &ub).err(),
+            Some(Error::Unlock)
+        );
+        assert!(Store::open_unlocked(a.path(), &ua).is_ok());
+        Ok(())
+    }
+
     /// A4-1-01 (CS-2.2): `K_db`, and any buffer holding the `PRAGMA key` statement, lives only in a `LockedSecret` page —
     /// the product source of `store.rs` has no plain `Zeroizing` holder of either.
     #[test]

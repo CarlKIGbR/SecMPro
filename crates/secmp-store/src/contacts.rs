@@ -107,3 +107,25 @@ impl Store {
             .map_err(|_| Error::Unavailable)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::error::Error;
+    use crate::kat::{TempDir, TestKey};
+    use crate::store::Store;
+
+    type R = core::result::Result<(), Box<dyn std::error::Error>>;
+
+    /// A4-1-07: a failing read of `contacts` is the uniform `Unavailable` (the table renamed away under the store).
+    #[test]
+    fn contacts_read_failure_is_unavailable() -> R {
+        let dir = TempDir::new("contacts-fail")?;
+        let store = Store::open(dir.path(), &TestKey::db_key())?;
+        assert_eq!(store.contacts()?.len(), 0);
+        store
+            .connection_kat()
+            .execute_batch("ALTER TABLE contacts RENAME TO c2")?;
+        assert_eq!(store.contacts().err(), Some(Error::Unavailable));
+        Ok(())
+    }
+}

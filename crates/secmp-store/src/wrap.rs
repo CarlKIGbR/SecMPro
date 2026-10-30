@@ -12,6 +12,7 @@
 //! every failure is the one [`Error::Unlock`] (Q123). [`Unlocked`] holds `MK_profile`, `K_db` and the nine table keys,
 //! each in a locked page.
 
+use std::io::Write as _;
 use std::path::Path;
 
 use secmp_crypto::{Caead, Label, argon2id_locked};
@@ -214,9 +215,25 @@ fn create_with(dir: &Path, passphrase: &[u8], params: Argon2Params) -> Result<Un
     }
     let mk = crate::rand::key()?;
     let wrap = seal(&mk, passphrase, params)?;
+    // A4-1-02: a new file beside the wrap, synced, renamed, and the directory synced (a stale one is removed first)
     let tmp = dir.join("wrap.tmp");
-    std::fs::write(&tmp, &wrap).map_err(|_| Error::Unavailable)?;
+    if tmp.exists() {
+        std::fs::remove_file(&tmp).map_err(|_| Error::Unavailable)?;
+    }
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&tmp)
+        .map_err(|_| Error::Unavailable)?;
+    file.write_all(&wrap).map_err(|_| Error::Unavailable)?;
+    file.sync_all().map_err(|_| Error::Unavailable)?;
+    drop(file);
     std::fs::rename(&tmp, &path).map_err(|_| Error::Unavailable)?;
+    // a directory cannot be opened for a sync on Windows: skipped there
+    #[cfg(unix)]
+    std::fs::File::open(dir)
+        .and_then(|d| d.sync_all())
+        .map_err(|_| Error::Unavailable)?;
     Ok(Unlocked::from_mk(mk))
 }
 
@@ -335,6 +352,39 @@ mod tests {
     type R = core::result::Result<(), Box<dyn std::error::Error>>;
 
     const PASS: &[u8] = b"correct horse battery staple";
+
+    /// A4-1-02: the wrap is written durably (`wrap.tmp` created new, file and directory fsynced, then renamed), and a
+    /// second `create` on the same directory is refused with the wrap untouched.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn create_is_durable_and_refuses_existing() -> R {
+        let text = include_str!("wrap.rs").replace("\r\n", "\n");
+        let body = text
+            .split("fn create_with(")
+            .nth(1)
+            .and_then(|t| t.split("\n}\n").next())
+            .unwrap_or_default();
+        #[cfg(unix)]
+        assert_eq!(body.matches(concat!("sync", "_all")).count(), 2);
+        assert_eq!(body.matches(concat!("create", "_new")).count(), 1);
+        let dir = TempDir::new("wrap-durable")?;
+        let _first = create_kat(dir.path(), PASS, Argon2Params::kat_small())?;
+        let before = std::fs::read(dir.path().join(WRAP_FILE))?;
+        assert_eq!(
+            create_kat(dir.path(), PASS, Argon2Params::kat_small()).err(),
+            Some(Error::Unavailable)
+        );
+        assert_eq!(std::fs::read(dir.path().join(WRAP_FILE))?, before);
+        Ok(())
+    }
+
+    /// A4-1-07: a directory without a `wrap` file does not unlock (`Unavailable`: the file cannot be read).
+    #[test]
+    fn unlock_without_wrap_is_unavailable() -> R {
+        let dir = TempDir::new("no-wrap")?;
+        assert_eq!(unlock(dir.path(), PASS).err(), Some(Error::Unavailable));
+        Ok(())
+    }
 
     /// A4-1-08: a locked-memory failure during unlock is `Unavailable`, any other KDF error the uniform `Unlock`.
     #[test]

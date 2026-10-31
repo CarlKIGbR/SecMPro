@@ -993,3 +993,35 @@ Write cost of the new sealed columns: `relays.pool` is rewritten whole per take/
 **K7-01 (`kani_retention_bound_24`, RT-1): not proven within the time the step can afford.** The harness (`kani-k701-harness.rs.txt`: `retain` over ≤ 40 inputs, fixed arrays sliced to symbolic lengths, no heap) ran three ways (`kani-m7-b-k701-blocked.txt`): symbolic-index insertion, 34 min at 9.6 GB and growing; loop-counter insertion (committed), killed at 60 min with 6.7 GB; with ids below 64, killed at 60 min with 6.2 GB. A shorter harness (fewer inputs) needs a bound change, which the brief forbids without a ruling. Question: accept a K7-01 over a smaller bound (e.g. 8 + 8 inputs, 8-bit ids) and a separate induction argument for the full 40, or a different formulation? Until then FZ-04 and `retention::tests` are the evidence.
 
 Return to the reviewer: D-B6 (proto `from_parts` or the assembly kept).
+
+## CI1 (WEISUNG M7-CI1; Q187, Q188; modell=claude-sonnet-5-5)
+
+### §2 Commits
+`6ae6f44` test(harness): m0_early killers of the timing.rs rejection-sampling mutants (Q187, G7-10) · `aa89fd5` ci(win-ondemand): probe perl and cargo-nextest before the build (Q188). Guard `<G>` = `7d80d6a`.
+
+### §3 The tests
+`m0_early::accept_ceiling_is_the_largest_multiple_of_span`, `sample_with_accepts_below_the_ceiling_and_rejects_at_it`, `sample_round_composes_ceiling_and_sample` (three; the weisung says four but lists three and excludes `uniform_counts_one_draw_per_call`). `cargo nextest run -p secmp-testkit --features harness -E 'test(/^m0_early::/)'`: 7 passed, new tests 0.007–0.011 s each, slowest 0.147 s. Q188: steps "Probe perl" and "Probe cargo-nextest" after "Probe the runner toolchain"; `cargo nextest run -p xtask -E 'test(/win_|vm_up|vm_down|nasm|id_token|oidc|workflow|ondemand/)'`: 30 passed.
+
+### §4 Evidence
+`mutants-ci1-timing-aa89fd5.txt`: RED (old `m0_early.rs`, `--timeout 120`) 40 mutants: 30 caught, 4 unviable, **6 timeouts** — exactly `accept_ceiling` None/Some(0)/Some(1), `sample_with` None and `>=`→`<`, `sample_round` None (reproduced locally). GREEN (HEAD): 40 mutants, 36 caught, 4 unviable, **0 timeouts, 0 missed**; of the timing.rs mutants 30 caught, 3 unviable. Command deviation (documented in the file): the weisung's `--features harness --package secmp-client-core --file timing.rs` fails in the unmutated tree (no such feature in that package), so `--package secmp-transport` was added and `--re` replaces `--file`; `--re` let 7 non-timing mutants through.
+`ci-fast-ci1-aa89fd5.txt`: **FAIL at gate `fmt`** only (see §8); clippy, policy and the rest of the printed gates pass.
+
+### §5 Deviations
+D-CI1: the Q186 skips removed the accidental early killers of the `timing.rs` mutants; explicit `m0_early` killers (G7-10) replace them; the skips stay.
+
+### §6 win-test
+win-test 41128820834 failed in 15 min (perl + nextest invisible to the SYSTEM runner service); with Q188 the next failure is at the probe; `vm-down` skipped by design (`was_running == true`).
+
+### §7 PR-run 41193864080
+all jobs green except mutants shards 2/3/4/5/8/9 (timeouts of timing.rs mutants); fixed here.
+
+### §8 Blocked
+**ci-fast red at `fmt`** (WEISUNG M7-CI1 §3: BLOCKED, no further fix). `cargo fmt --all --check` wants `m0_early.rs:108` wrapped over four lines:
+```
+-    assert_eq!(sample_with(18_446_744_073_709_551_609, 5, 10, C10), Some(14));
++    assert_eq!(
++        sample_with(18_446_744_073_709_551_609, 5, 10, C10),
++        Some(14)
++    );
+```
+Pure formatting of `6ae6f44`; the mutants runs are unaffected. Return to the reviewer: allow `cargo fmt` as a fix-up.

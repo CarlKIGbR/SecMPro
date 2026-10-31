@@ -115,3 +115,5 @@ Rows of TEST-SPEC-M7 marked [O-n] follow this table; Q-numbers continue the revi
 | Q184 (B-SC2) | SC-08 gains the hostile-relay class (arbitrary ids ≤ 7 per response, the handed-id oracle); kept at ≤ 90 % RSS alone. | reviewer | SC-08 |
 | Q185 (B-SC2) | FZ-04 `scheduler_event_sequence` drives the deferred path (real cells, hostile response modes, late commits, frame reports) with the §1.7 oracle. | reviewer | FZ-04 |
 | Q186 (B-SC2) | Q44 entries, one in-diff mutants run, report corrections. | reviewer | G7-09 |
+| Q187 (CI1) | Timing mutants killed by explicit `m0_early` tests calling the pure functions (no draw loop); Q186 skips stay; a timeout mutant is a test-design finding, never an accepted row. | reviewer | G7-10 |
+| Q188 (CI1) | `win-suite` probes `perl -v` and `cargo nextest --version` before the build; `vm-down` condition stays by design. | reviewer | Q63 |

@@ -815,3 +815,14 @@ New tests: 7; re-dictated: 4 (+ the BK-01/allowlist fixtures). Red seen: 7 (`a4f
 
 ### §8
 - Blocked: ci-fast step `fmt` (new test code layout, see §4); no other failure. STOP: none.
+
+### A-4f2 gates (WEISUNG M7-A4f2; `modell=claude-sonnet-5-5`)
+| gate | result |
+|---|---|
+| commits | `9ac2451` style(store): rustfmt (4 hunks, all in `#[cfg(test)]`); `88ce8bb` Q181; `2f9dc89` docs |
+| `cargo xtask ci-fast` at `2f9dc89` (`ci-fast-a4f2-2f9dc89.txt`, clean tree) | PASS, all steps (fmt now green) |
+| local mutants (`mutants-a4f2-2f9dc89.txt`; diff `51e918c..`) | store 7 caught / 0 missed / 1 unviable / 0 timeout of 8 |
+| red-first (`a4f2-red-first.txt`) | 1 red (`import_refuses_duplicate_settings_key`: `left: Ok(()), right: Err(Unlock)`); `export_refuses_out_of_range_retention` green at first run |
+| store suite | 82 passed; `wrapping_and_header_kat`, `wrap_bytes_recomputed` unchanged |
+- `settings_slot` (helper of the decode loop) keeps `decode` under clippy's `too_many_lines`.
+- Blocked: none. STOP: none.

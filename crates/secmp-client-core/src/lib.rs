@@ -28,6 +28,8 @@ pub mod persist;
 #[cfg(not(kani))]
 pub mod profile;
 pub mod scheduler;
+#[cfg(not(kani))]
+pub mod settings;
 #[cfg(all(test, feature = "kat"))]
 mod testutil;
 pub mod timing;

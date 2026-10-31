@@ -72,7 +72,11 @@ const LOCAL_NAME_MAX: usize = 64;
 /// in neither).
 pub const BACKUP_SETTINGS_KEYS: &[&str] = &["retention_days"];
 /// The settings keys that a backup never carries.
-pub const BACKUP_SETTINGS_EXCLUDED: &[&str] = &[];
+pub const BACKUP_SETTINGS_EXCLUDED: &[&str] = &[
+    crate::settings::KEY_MODE,
+    crate::settings::KEY_RECEIPTS_DELIVERED,
+    crate::settings::KEY_RECEIPTS_READ,
+];
 
 /// The cloud-synchronised folders (OPEN-M7-37 A, Q141): an export path with a component equal to one of these (or
 /// starting with one and a space, `-` or `_`; [`in_cloud_folder`]), compared case-insensitively, is refused unless `force`.

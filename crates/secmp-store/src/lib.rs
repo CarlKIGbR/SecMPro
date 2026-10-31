@@ -28,6 +28,7 @@ pub mod schema;
 pub mod seal;
 pub mod secrets;
 pub mod sessions;
+pub mod settings;
 pub mod store;
 pub mod wrap;
 

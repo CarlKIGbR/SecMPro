@@ -13,9 +13,11 @@
 //! - SC-07 `kani_queue_generations`: a response of an old generation never updates the new one (`pure::take_response`).
 //! - SC-08 `kani_persist_contract_abstract`: no frame and no acknowledgement after a failed commit (`sendable`, `RecvLedger`).
 //! - SC-09 `kani_paired_executions`: two runs differing only in activity emit the same schedule (`send_choice`, …).
+//! - K7-01 `kani_retention_bound_24`: one `offer` step keeps the newest 24, ascending (`retention`; by induction `retain`).
 
 use secmp_transport::evicted::evicted_is_plausible;
 
+use crate::retention::{RETAIN_MAX, offer};
 use crate::scheduler::core::pure::{
     FLUSH_WAIT_MS, Flight, InFlight, RecvLedger, complete_oldest, fetch_due, fetch_lead_deadline,
     flush_bound, hand_out, ledger_admits, note_sent, reserved_rr, rr_select, send_choice, sendable,
@@ -789,4 +791,68 @@ fn kani_paired_executions() {
         a.iter().filter(|(_, q, _)| q.is_some()).count() >= 2,
         "two SENDs"
     );
+}
+
+/// Membership in the first `len` slots of `a` (a guarded loop over the whole array: no symbolic index).
+fn in_first(a: &[u64; RETAIN_MAX], len: usize, p: u64) -> bool {
+    let mut found = false;
+    for i in 0..RETAIN_MAX {
+        if i < len && a[i] == p {
+            found = true;
+        }
+    }
+    found
+}
+
+/// K7-01 `kani_retention_bound_24` (Q148, re-dictated Q191 as an inductive step): one `offer` from any strictly ascending
+/// state of at most 24 ids (the slots beyond `len` arbitrary) keeps at most 24, ascending, and the result is the newest 24
+/// of (state ∪ {id}): every kept id was offered; an offered id that is not kept is below the oldest kept one and only when
+/// the cap is reached; the length grows by one below the cap unless the id is a duplicate, and stays 24 at the cap.
+/// `retain` is the fold of `offer` (`retention::retain`, unit test `retain_is_fold_of_offer`), so by induction the claim
+/// holds for every input length.
+#[kani::proof]
+#[kani::unwind(25)]
+fn kani_retention_bound_24() {
+    let mut out: [u64; RETAIN_MAX] = kani::any();
+    let len: usize = kani::any();
+    kani::assume(len <= RETAIN_MAX);
+    for i in 1..RETAIN_MAX {
+        if i < len {
+            kani::assume(out[i - 1] < out[i]);
+        }
+    }
+    let before = out;
+    let id: u64 = kani::any();
+    let n = offer(&mut out, len, id);
+
+    assert!(n <= RETAIN_MAX);
+    for i in 1..RETAIN_MAX {
+        if i < n {
+            assert!(out[i - 1] < out[i]);
+        }
+    }
+    let p: u64 = kani::any();
+    let offered = in_first(&before, len, p) || p == id;
+    if in_first(&out, n, p) {
+        assert!(offered);
+    }
+    if offered && !in_first(&out, n, p) {
+        assert!(n == RETAIN_MAX && p < out[0]);
+    }
+    let dup = in_first(&before, len, id);
+    if len < RETAIN_MAX {
+        assert!(n == len + usize::from(!dup));
+    } else {
+        assert!(n == RETAIN_MAX);
+    }
+    kani::cover!(
+        len == RETAIN_MAX && !dup && id > before[0],
+        "cap reached, the oldest evicted"
+    );
+    kani::cover!(
+        len == RETAIN_MAX && id < before[0],
+        "cap reached, the new id dropped"
+    );
+    kani::cover!(len < RETAIN_MAX && !dup, "inserted below the cap");
+    kani::cover!(dup, "duplicate ignored");
 }

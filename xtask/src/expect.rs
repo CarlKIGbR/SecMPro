@@ -1254,6 +1254,8 @@ pub(crate) const KANI_HARNESSES: &[&str] = &[
     "kani_proofs::kani_queue_generations",
     "kani_proofs::kani_rate_bound_integer_form",
     "kani_proofs::kani_reservation_is_schedule_only",
+    // M7 B-3b (Q191): K7-01 as an inductive step over `retention::offer`
+    "kani_proofs::kani_retention_bound_24",
     "kani_proofs::kani_teardown_keeps_the_committed_rr",
     "kani_proofs::kani_tick_hands_out_without_commit",
     "kani_proofs::kani_tick_time_checked",
@@ -1321,6 +1323,8 @@ pub(crate) const KANI_COVERS: &[(&str, usize)] = &[
     ("kani_proofs::kani_queue_generations", 3),
     ("kani_proofs::kani_rate_bound_integer_form", 2),
     ("kani_proofs::kani_reservation_is_schedule_only", 1),
+    // M7 B-3b (Q191): K7-01, four covers
+    ("kani_proofs::kani_retention_bound_24", 4),
     ("kani_proofs::kani_teardown_keeps_the_committed_rr", 1),
     ("kani_proofs::kani_tick_hands_out_without_commit", 1),
     ("kani_proofs::kani_tick_time_checked", 2),
@@ -2254,6 +2258,8 @@ mod tests {
         ("kani_queue_generations", 3),
         ("kani_persist_contract_abstract", 3),
         ("kani_paired_executions", 4),
+        // M7 B-3b (Q191): K7-01
+        ("kani_retention_bound_24", 4),
     ];
 
     /// TEST-SPEC-M7 G7-15b (TEST-SPEC (l): "`FUZZ_TARGETS` += FZ-04, `KANI_HARNESSES` += K7-01, SC-06…SC-09, each in the

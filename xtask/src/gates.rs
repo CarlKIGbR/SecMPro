@@ -11103,7 +11103,9 @@ mod tests {
     /// re-measured after its B-SC2 re-dictation reads its `kani-m7-bsc2-sc-<harness>.txt` instead.
     fn push_b_sc_runs(root: &Path, log: &mut String) -> Result<()> {
         for h in B_SC_RUNS {
-            let tag = if B_SC2_RUNS.contains(h) {
+            let tag = if B3B_RUNS.contains(h) {
+                "b3b"
+            } else if B_SC2_RUNS.contains(h) {
                 "bsc2"
             } else {
                 "bsc"
@@ -11117,12 +11119,16 @@ mod tests {
     /// The B-SC harnesses re-measured by WEISUNG M7-B-SC2: the cover pin reads their `kani-m7-bsc2-sc-<harness>.txt`.
     const B_SC2_RUNS: &[&str] = &["kani_paired_executions", "kani_persist_contract_abstract"];
 
+    /// The harness of WEISUNG M7-B3b (K7-01, Q191): the cover pin reads its `kani-m7-b3b-sc-<harness>.txt`.
+    const B3B_RUNS: &[&str] = &["kani_retention_bound_24"];
+
     /// The B-SC harnesses whose committed alone runs the cover pin reads (M7 B-SC §3, one per commit).
     const B_SC_RUNS: &[&str] = &[
         "kani_in_flight_over_transitions",
         "kani_queue_generations",
         "kani_persist_contract_abstract",
         "kani_paired_executions",
+        "kani_retention_bound_24",
     ];
 
     /// M4 delta review VD1-5: the number of covers is pinned (`expect::KANI_COVERS`: as many as `kani_proofs.rs` has,
@@ -11275,8 +11281,9 @@ mod tests {
         // M7 B-SC: + SC-07
         // M7 B-SC: + SC-08
         // M7 B-SC: + SC-09
-        assert_eq!(all.len(), 55);
-        assert_eq!(kani_verified(&kani_log(all, 0))?.len(), 55);
+        // M7 B-3b: + K7-01 (Q191)
+        assert_eq!(all.len(), 56);
+        assert_eq!(kani_verified(&kani_log(all, 0))?.len(), 56);
         // a deleted harness: 18 verified, and Kani's own summary says 18 of 18
         let fifteen = all.get(1..).unwrap_or_default();
         assert!(kani_verified(&kani_log(fifteen, 0)).is_err());

@@ -25,7 +25,7 @@ fn contains(set: &[u64], id: u64) -> bool {
 /// Offer `id` to the sorted `out[..len]`: kept if it is among the newest [`RETAIN_MAX`] seen so far; returns the new
 /// length. A duplicate is not added twice. Every index is a loop counter over the whole array (no symbolic index), so
 /// that the bounded model checker (K7-01) unrolls it cheaply.
-fn offer(out: &mut [u64; RETAIN_MAX], len: usize, id: u64) -> usize {
+pub(crate) fn offer(out: &mut [u64; RETAIN_MAX], len: usize, id: u64) -> usize {
     let mut dup = false;
     for (i, v) in out.iter().enumerate() {
         if i < len && *v == id {
@@ -67,6 +67,11 @@ fn offer(out: &mut [u64; RETAIN_MAX], len: usize, id: u64) -> usize {
 
 /// The newest [`RETAIN_MAX`] of (`retained` ∪ `fetched`) \ `spent`, by cell id (Q148): written ascending to the front of
 /// `out`; returns how many. Each id counts once, whichever of the two inputs holds it.
+///
+/// **Induction (K7-01, Q191).** `retain` is the fold of `offer` over `retained ++ fetched` minus `spent`, from length 0;
+/// `top24(top24(S) ∪ {x}) = top24(S ∪ {x})`; so K7-01's step lemma (`kani_retention_bound_24`: one `offer` from any
+/// strictly ascending state of ≤ 24 ids gives the newest 24 of the state and the id, ascending) gives the claim for every
+/// input length (≥ 40 included). Unit test `retain_is_fold_of_offer`.
 #[must_use]
 pub fn retain(
     retained: &[u64],
@@ -159,6 +164,39 @@ mod tests {
         let mut out = [u64::MAX; RETAIN_MAX];
         assert_eq!(retain(&[], &[1], &[], &mut out), 1);
         assert_eq!(out.get(..1), Some(&[1][..]));
+    }
+
+    /// Q191: `retain` equals the manual fold of `offer` from a zeroed `out` over `retained ++ fetched` minus `spent`, and
+    /// both equal the sort/dedup/truncate reference (10 000 runs of an in-test LCG; 0–40 ids < 64 per input, 0–8 spent).
+    #[test]
+    fn retain_is_fold_of_offer() {
+        let mut x: u64 = 0x853c_49e6_748f_ea9b;
+        let mut next = move || {
+            x = x
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            x >> 33
+        };
+        for round in 0..10_000_u32 {
+            let n = usize::try_from(next() % 41).unwrap_or(0);
+            let m = usize::try_from(next() % 41).unwrap_or(0);
+            let k = usize::try_from(next() % 9).unwrap_or(0);
+            let retained: Vec<u64> = (0..n).map(|_| next() % 64).collect();
+            let fetched: Vec<u64> = (0..m).map(|_| next() % 64).collect();
+            let spent: Vec<u64> = (0..k).map(|_| next() % 64).collect();
+
+            let mut fold = [0_u64; RETAIN_MAX];
+            let mut len = 0;
+            for id in retained.iter().chain(&fetched) {
+                if !spent.contains(id) {
+                    len = offer(&mut fold, len, *id);
+                }
+            }
+            let folded = fold.get(..len).unwrap_or(&[]).to_vec();
+            let got = run(&retained, &fetched, &spent);
+            assert_eq!(got, folded, "{round}");
+            assert_eq!(got, reference(&retained, &fetched, &spent), "{round}");
+        }
     }
 
     /// Never more than 24, whatever is offered, in any arrival order (a small deterministic sweep).

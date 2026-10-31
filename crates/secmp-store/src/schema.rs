@@ -42,12 +42,12 @@ pub const V1: &[&str] = &[
     "CREATE TABLE meta (key TEXT PRIMARY KEY NOT NULL, value BLOB NOT NULL)",
     "CREATE TABLE identity (id INTEGER PRIMARY KEY, secret BLOB NOT NULL, fingerprint BLOB NOT NULL, created_ms INTEGER NOT NULL)",
     "CREATE TABLE prekeys (kind INTEGER NOT NULL, id INTEGER NOT NULL, secret BLOB NOT NULL, expires_ms INTEGER, used INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (kind, id))",
-    "CREATE TABLE relays (id INTEGER PRIMARY KEY, relay_ref BLOB NOT NULL, access_key BLOB)",
+    "CREATE TABLE relays (id INTEGER PRIMARY KEY, relay_ref BLOB NOT NULL, access_key BLOB, pool BLOB)",
     "CREATE TABLE contacts (id INTEGER PRIMARY KEY, iks BLOB NOT NULL, fingerprint BLOB NOT NULL, display_name TEXT, verified INTEGER NOT NULL DEFAULT 0, routes BLOB, queues BLOB, state INTEGER NOT NULL DEFAULT 0, profile BLOB)",
     "CREATE TABLE sessions (session_id INTEGER NOT NULL, part INTEGER NOT NULL, ord INTEGER NOT NULL, data BLOB NOT NULL, skey BLOB, PRIMARY KEY (session_id, part, ord))",
     "CREATE TABLE outbox (msg_id BLOB PRIMARY KEY NOT NULL, contact_id INTEGER NOT NULL, seq INTEGER NOT NULL, kind INTEGER NOT NULL, expire_after INTEGER NOT NULL, payload BLOB NOT NULL, queued_ms INTEGER NOT NULL, first_relayed_ms INTEGER, state INTEGER NOT NULL, cell_id INTEGER)",
     "CREATE TABLE messages (id INTEGER PRIMARY KEY, contact_id INTEGER NOT NULL, msg_id BLOB NOT NULL, direction INTEGER NOT NULL, kind INTEGER NOT NULL, ts_ms INTEGER NOT NULL, expire_at_ms INTEGER, payload BLOB NOT NULL, UNIQUE (contact_id, direction, msg_id))",
-    "CREATE TABLE invitations (ld_id BLOB PRIMARY KEY NOT NULL, record BLOB NOT NULL, expires_ms INTEGER NOT NULL, status INTEGER NOT NULL DEFAULT 0)",
+    "CREATE TABLE invitations (ld_id BLOB PRIMARY KEY NOT NULL, record BLOB NOT NULL, expires_ms INTEGER NOT NULL, status INTEGER NOT NULL DEFAULT 0, retained BLOB)",
     "CREATE TABLE settings (key TEXT PRIMARY KEY NOT NULL, value BLOB NOT NULL)",
 ];
 

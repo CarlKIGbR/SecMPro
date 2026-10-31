@@ -109,6 +109,147 @@ pub fn insert_invitation(
     Ok(())
 }
 
+/// The `kind` of a signed-prekey row of `prekeys` (§6.1: `SPK_dh`, `SPK_kem` and `RPK_kem` in one secret).
+pub const KIND_SPK: i64 = 1;
+/// The `kind` of a one-time-prekey row of `prekeys`.
+pub const KIND_OPK: i64 = 2;
+
+/// The `status` of an invitation not yet used (`invitations.status`).
+pub const INVITATION_OPEN: i64 = 0;
+/// The `status` of an invitation whose handshake was accepted (§5.2 "until the invitation is consumed").
+pub const INVITATION_CONSUMED: i64 = 1;
+
+/// Delete the prekey (`kind`, `id`); with `secure_delete` on, its pages are overwritten.
+///
+/// # Errors
+/// [`Error::Unavailable`] if the statement fails or there is no such row.
+pub fn delete_prekey(tx: &mut Tx<'_>, kind: i64, id: i64) -> Result<()> {
+    let n = tx.exec(
+        "DELETE FROM prekeys WHERE kind = ?1 AND id = ?2",
+        params![kind, id],
+    )?;
+    if n == 1 {
+        Ok(())
+    } else {
+        Err(Error::Unavailable)
+    }
+}
+
+/// Set the status of the invitation `ld_id`.
+///
+/// # Errors
+/// [`Error::Unavailable`] if the statement fails or there is no such row.
+pub fn set_invitation_status(tx: &mut Tx<'_>, ld_id: &[u8], status: i64) -> Result<()> {
+    let n = tx.exec(
+        "UPDATE invitations SET status = ?2 WHERE ld_id = ?1",
+        params![ld_id, status],
+    )?;
+    if n == 1 {
+        Ok(())
+    } else {
+        Err(Error::Unavailable)
+    }
+}
+
+/// Delete the invitation `ld_id` (its record, its status and its retained cells).
+///
+/// # Errors
+/// [`Error::Unavailable`] if the statement fails or there is no such row.
+pub fn delete_invitation(tx: &mut Tx<'_>, ld_id: &[u8]) -> Result<()> {
+    let n = tx.exec("DELETE FROM invitations WHERE ld_id = ?1", params![ld_id])?;
+    if n == 1 {
+        Ok(())
+    } else {
+        Err(Error::Unavailable)
+    }
+}
+
+/// Write the cells that invitation `ld_id` retains between fetch rounds (Q149): sealed (`invitations.retained`), or
+/// cleared with `None`.
+///
+/// # Errors
+/// [`Error::Unavailable`] if the seal or the statement fails or there is no such invitation.
+pub fn put_invitation_retained(
+    tx: &mut Tx<'_>,
+    ld_id: &[u8],
+    retained: Option<&[u8]>,
+) -> Result<()> {
+    let rk = row_key(&[KeyPart::Bytes(ld_id)])?;
+    // spec §3.4; ADR-053 item 5
+    let sealed = retained
+        .map(|r| tx.seal(Table::Invitations, "retained", &rk, r))
+        .transpose()?;
+    let n = tx.exec(
+        "UPDATE invitations SET retained = ?2 WHERE ld_id = ?1",
+        params![ld_id, sealed],
+    )?;
+    if n == 1 {
+        Ok(())
+    } else {
+        Err(Error::Unavailable)
+    }
+}
+
+/// Write the spare-queue pool of the relay row `id` (Q151): sealed (`relays.pool`), or cleared with `None`.
+///
+/// # Errors
+/// [`Error::Unavailable`] if the seal or the statement fails or there is no such relay.
+pub fn put_relay_pool(tx: &mut Tx<'_>, id: i64, pool: Option<&[u8]>) -> Result<()> {
+    let rk = row_key(&[KeyPart::Int(id)])?;
+    // spec §3.4; ADR-053 item 5
+    let sealed = pool
+        .map(|p| tx.seal(Table::Relays, "pool", &rk, p))
+        .transpose()?;
+    let n = tx.exec(
+        "UPDATE relays SET pool = ?2 WHERE id = ?1",
+        params![id, sealed],
+    )?;
+    if n == 1 {
+        Ok(())
+    } else {
+        Err(Error::Unavailable)
+    }
+}
+
+/// Replace the sealed record of the invitation `ld_id` (`invitations.record`).
+///
+/// # Errors
+/// [`Error::Unavailable`] if the seal or the statement fails or there is no such invitation.
+pub fn put_invitation_record(tx: &mut Tx<'_>, ld_id: &[u8], record: &[u8]) -> Result<()> {
+    let rk = row_key(&[KeyPart::Bytes(ld_id)])?;
+    // spec §3.4; ADR-053 item 5
+    let sealed = tx.seal(Table::Invitations, "record", &rk, record)?;
+    let n = tx.exec(
+        "UPDATE invitations SET record = ?2 WHERE ld_id = ?1",
+        params![ld_id, sealed],
+    )?;
+    if n == 1 {
+        Ok(())
+    } else {
+        Err(Error::Unavailable)
+    }
+}
+
+/// A prekey row as listed (never its secret).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PrekeyRow {
+    /// The prekey id (`spk_id`, `opk_id`).
+    pub id: i64,
+    /// Unix ms at which it expires (`None`: single use, no time).
+    pub expires_ms: Option<u64>,
+}
+
+/// An invitation row as listed (never its record).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InvitationRow {
+    /// The link-data id.
+    pub ld_id: Vec<u8>,
+    /// Unix ms at which it expires.
+    pub expires_ms: u64,
+    /// [`INVITATION_OPEN`] or [`INVITATION_CONSUMED`].
+    pub status: i64,
+}
+
 impl Store {
     /// The one sealed column `sql` selects (`None`: no row or a NULL column), opened under (`table`, `column`, `rk`).
     fn read_sealed<P: rusqlite::Params>(
@@ -170,6 +311,109 @@ impl Store {
         )
     }
 
+    /// The spare-queue pool of the relay row `id`.
+    ///
+    /// # Errors
+    /// [`Error::Unavailable`] if the read or the open fails.
+    pub fn relay_pool(&self, id: i64) -> Result<Option<Zeroizing<Vec<u8>>>> {
+        let rk = row_key(&[KeyPart::Int(id)])?;
+        self.read_sealed(
+            "SELECT pool FROM relays WHERE id = ?1",
+            params![id],
+            (Table::Relays, "pool", &rk),
+        )
+    }
+
+    /// The cells invitation `ld_id` retains.
+    ///
+    /// # Errors
+    /// [`Error::Unavailable`] if the read or the open fails.
+    pub fn invitation_retained(&self, ld_id: &[u8]) -> Result<Option<Zeroizing<Vec<u8>>>> {
+        let rk = row_key(&[KeyPart::Bytes(ld_id)])?;
+        self.read_sealed(
+            "SELECT retained FROM invitations WHERE ld_id = ?1",
+            params![ld_id],
+            (Table::Invitations, "retained", &rk),
+        )
+    }
+
+    /// The rows of `prekeys` of `kind`, by id.
+    ///
+    /// # Errors
+    /// [`Error::Unavailable`] if the read fails.
+    pub fn prekeys(&self, kind: i64) -> Result<Vec<PrekeyRow>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, expires_ms FROM prekeys WHERE kind = ?1 ORDER BY id")
+            .map_err(|_| Error::Unavailable)?;
+        let rows = stmt
+            .query_map(params![kind], |r| {
+                Ok((r.get::<_, i64>(0)?, r.get::<_, Option<i64>>(1)?))
+            })
+            .map_err(|_| Error::Unavailable)?;
+        rows.map(|r| {
+            let (id, expires) = r.map_err(|_| Error::Unavailable)?;
+            let expires_ms = expires
+                .map(|e| u64::try_from(e).map_err(|_| Error::Unavailable))
+                .transpose()?;
+            Ok(PrekeyRow { id, expires_ms })
+        })
+        .collect()
+    }
+
+    /// The invitations, by `ld_id`.
+    ///
+    /// # Errors
+    /// [`Error::Unavailable`] if the read fails.
+    pub fn invitations(&self) -> Result<Vec<InvitationRow>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT ld_id, expires_ms, status FROM invitations ORDER BY ld_id")
+            .map_err(|_| Error::Unavailable)?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, Vec<u8>>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, i64>(2)?,
+                ))
+            })
+            .map_err(|_| Error::Unavailable)?;
+        rows.map(|r| {
+            let (ld_id, expires, status) = r.map_err(|_| Error::Unavailable)?;
+            Ok(InvitationRow {
+                ld_id,
+                expires_ms: u64::try_from(expires).map_err(|_| Error::Unavailable)?,
+                status,
+            })
+        })
+        .collect()
+    }
+
+    /// The relay reference of the relay row `id` (a public value: the `RelayRef` of spec §5.3).
+    ///
+    /// # Errors
+    /// [`Error::Unavailable`] if the read fails.
+    pub fn relay_ref(&self, id: i64) -> Result<Option<Vec<u8>>> {
+        self.query_row(
+            "SELECT relay_ref FROM relays WHERE id = ?1",
+            params![id],
+            |r| r.get::<_, Vec<u8>>(0),
+        )
+    }
+
+    /// The fingerprint column of the identity row `id` (a public value).
+    ///
+    /// # Errors
+    /// [`Error::Unavailable`] if the read fails.
+    pub fn identity_fingerprint(&self, id: i64) -> Result<Option<Vec<u8>>> {
+        self.query_row(
+            "SELECT fingerprint FROM identity WHERE id = ?1",
+            params![id],
+            |r| r.get::<_, Vec<u8>>(0),
+        )
+    }
+
     /// The record of the invitation `ld_id`.
     ///
     /// # Errors
@@ -224,6 +468,116 @@ mod tests {
             [],
         )?;
         assert_eq!(store.prekey_secret(2, 7).err(), Some(Error::Unavailable));
+        Ok(())
+    }
+
+    /// B-1…B-2 rows (extra test): the prekeys list by id with their expiry; a prekey is deleted once (a second delete and a
+    /// delete of a missing row are the uniform error); an invitation's status, its sealed record and its sealed retained
+    /// cells are updated in place and read back, a cleared column reads `None`; the relay pool is sealed like the access
+    /// key; the lists carry no secret.
+    #[test]
+    fn lifecycle_rows() -> R {
+        let dir = TempDir::new("profile-lifecycle")?;
+        let mut store = Store::open(dir.path(), &TestKey::db_key())?;
+        store.txn(|tx| {
+            insert_prekey(tx, KIND_SPK, 2, b"spk 2", Some(2000))?;
+            insert_prekey(tx, KIND_SPK, 1, b"spk 1", Some(1000))?;
+            insert_prekey(tx, KIND_OPK, 1, b"opk 1", None)?;
+            put_relay(tx, 3, b"relay ref", None)?;
+            insert_invitation(tx, &[5; 16], b"record", 100)?;
+            insert_invitation(tx, &[4; 16], b"other", 200)
+        })?;
+        assert_eq!(
+            store.prekeys(KIND_SPK)?,
+            [
+                PrekeyRow {
+                    id: 1,
+                    expires_ms: Some(1000)
+                },
+                PrekeyRow {
+                    id: 2,
+                    expires_ms: Some(2000)
+                }
+            ]
+        );
+        assert_eq!(
+            store.prekeys(KIND_OPK)?,
+            [PrekeyRow {
+                id: 1,
+                expires_ms: None
+            }]
+        );
+        assert_eq!(store.relay_ref(3)?, Some(b"relay ref".to_vec()));
+        assert_eq!(store.relay_ref(4)?, None);
+        let rows = store.invitations()?;
+        assert_eq!(
+            rows,
+            [
+                InvitationRow {
+                    ld_id: vec![4; 16],
+                    expires_ms: 200,
+                    status: INVITATION_OPEN
+                },
+                InvitationRow {
+                    ld_id: vec![5; 16],
+                    expires_ms: 100,
+                    status: INVITATION_OPEN
+                }
+            ]
+        );
+
+        store.txn(|tx| {
+            delete_prekey(tx, KIND_SPK, 1)?;
+            set_invitation_status(tx, &[5; 16], INVITATION_CONSUMED)?;
+            put_invitation_retained(tx, &[5; 16], Some(b"cells"))?;
+            put_invitation_record(tx, &[4; 16], b"replaced record")?;
+            put_relay_pool(tx, 3, Some(b"pool"))
+        })?;
+        assert_eq!(store.prekeys(KIND_SPK)?.len(), 1);
+        assert_eq!(
+            store
+                .invitations()?
+                .iter()
+                .map(|r| r.status)
+                .collect::<Vec<_>>(),
+            [INVITATION_OPEN, INVITATION_CONSUMED]
+        );
+        let read = |v: Option<Zeroizing<Vec<u8>>>| v.map(|z| z.to_vec());
+        assert_eq!(
+            read(store.invitation_retained(&[5; 16])?),
+            Some(b"cells".to_vec())
+        );
+        assert_eq!(read(store.invitation_retained(&[4; 16])?), None);
+        assert_eq!(
+            read(store.invitation_record(&[4; 16])?),
+            Some(b"replaced record".to_vec())
+        );
+        assert_eq!(read(store.relay_pool(3)?), Some(b"pool".to_vec()));
+        store.txn(|tx| {
+            put_invitation_retained(tx, &[5; 16], None)?;
+            put_relay_pool(tx, 3, None)
+        })?;
+        assert_eq!(read(store.invitation_retained(&[5; 16])?), None);
+        assert_eq!(read(store.relay_pool(3)?), None);
+
+        // a missing row, or a second delete, is the uniform error and changes nothing
+        for failing in [
+            store.txn(|tx| delete_prekey(tx, KIND_SPK, 1)),
+            store.txn(|tx| delete_prekey(tx, KIND_OPK, 9)),
+            store.txn(|tx| set_invitation_status(tx, &[9; 16], INVITATION_CONSUMED)),
+            store.txn(|tx| delete_invitation(tx, &[9; 16])),
+            store.txn(|tx| put_invitation_retained(tx, &[9; 16], Some(b"x"))),
+            store.txn(|tx| put_invitation_record(tx, &[9; 16], b"x")),
+            store.txn(|tx| put_relay_pool(tx, 9, Some(b"x"))),
+        ] {
+            assert_eq!(failing, Err(Error::Unavailable));
+        }
+        store.txn(|tx| delete_invitation(tx, &[5; 16]))?;
+        assert_eq!(store.invitations()?.len(), 1);
+        assert_eq!(
+            store.txn(|tx| delete_invitation(tx, &[5; 16])),
+            Err(Error::Unavailable)
+        );
         Ok(())
     }
 

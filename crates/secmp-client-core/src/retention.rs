@@ -132,6 +132,26 @@ mod tests {
         }
     }
 
+    /// Killers (mutants of `offer`): the id 0 is an id like another (the unused part of `out` is zeros); a full set drops
+    /// an id older than all 24 and makes room for a newer one.
+    #[test]
+    fn zero_and_full_set() {
+        assert_eq!(run(&[], &[0], &[]), [0]);
+        assert_eq!(run(&[0], &[0, 5], &[]), [0, 5]);
+        let full: Vec<u64> = (10..34).collect();
+        assert_eq!(run(&full, &[9], &[]), full, "older than all 24: dropped");
+        let mut newer: Vec<u64> = (11..34).collect();
+        newer.push(40);
+        assert_eq!(run(&full, &[40], &[]), newer);
+        let mut gaps: Vec<u64> = (0..24).map(|i| i * 2 + 10).collect();
+        let at = gaps.len();
+        gaps.push(25);
+        gaps.sort_unstable();
+        let want: Vec<u64> = gaps.iter().copied().skip(1).collect();
+        assert_eq!(at, 24);
+        assert_eq!(run(&[], &gaps, &[]), want);
+    }
+
     /// Never more than 24, whatever is offered, in any arrival order (a small deterministic sweep).
     #[test]
     fn never_more_than_24() {

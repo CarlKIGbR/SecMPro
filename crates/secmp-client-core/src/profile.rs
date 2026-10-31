@@ -463,6 +463,57 @@ mod tests {
         Ok(())
     }
 
+    /// Killers (mutants of `keys_from_section`, `rotate_if_due`, `retire`): a section of the right length with another
+    /// version, and one of another length with the right version, are refused; a generation that is exactly 7 days old is
+    /// replaced; a consumed invitation that expires is retired without touching a one-time prekey.
+    #[cfg(feature = "kat")]
+    #[test]
+    fn section_rotation_and_consumed_retirement() -> R {
+        let mut e = crate::testutil::entropy(6);
+        let fx = Fixture::new("pr-killers", &mut e)?;
+        let p = &fx.profile;
+        let section = {
+            let store = p.store();
+            let s = store.lock().map_err(|_| "lock")?;
+            s.identity_secret(IDENTITY_ROW)?.ok_or("section")?.to_vec()
+        };
+        assert!(identity_from_section(&section).is_ok());
+        let mut other_version = section.clone();
+        *other_version.first_mut().ok_or("ver")? = 2;
+        assert!(identity_from_section(&other_version).is_err());
+        assert!(identity_from_section(section.get(..96).ok_or("len")?).is_err());
+        assert!(identity_from_section(&[section.clone(), vec![0]].concat()).is_err());
+
+        // exactly 7 days after creation the generation is no longer current
+        fx.at_day(7);
+        assert_eq!(p.rotate_if_due(&fx.clock, &mut e)?, 2);
+        assert_eq!(p.rotate_if_due(&fx.clock, &mut e)?, 2, "not again");
+
+        // a consumed invitation expires: its row goes, the one-time prekey is not touched
+        insert_record(p, [9; 16], (2, 1), T0 + 8 * DAY)?;
+        {
+            let store = p.store();
+            let mut s = store.lock().map_err(|_| "lock")?;
+            s.txn(|tx| {
+                secmp_store::profile::set_invitation_status(
+                    tx,
+                    &[9; 16],
+                    secmp_store::profile::INVITATION_CONSUMED,
+                )
+            })?;
+        }
+        fx.at_day(9);
+        let retired = p.retire(&fx.clock)?;
+        assert_eq!(retired.len(), 1);
+        assert!(retired.iter().all(|r| r.consumed && !r.used_elsewhere));
+        assert_eq!(
+            p.opk_ids()?,
+            [1],
+            "the consumed invitation's OPK row is not this retirement's"
+        );
+        Ok(())
+    }
+
     /// PR-02 (§6.1 `docs/03:273`): generation 1 is referenced by an invitation expiring on day 20. On day 8 (a new
     /// generation has been made, 1 is no longer current), day 19 and day 21 the clock reads: 1 is present, present,
     /// retired — with the invitation, and the one-time prekey that it named.

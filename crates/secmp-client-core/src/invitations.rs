@@ -62,8 +62,7 @@ use crate::scheduler::types::{ControlKind, QueueId, RelayId};
 /// the invitation was used by someone else (§5.2).
 pub const FLAG_CONSUMED_SEEN: u8 = 1;
 
-/// The trailer after the record: `relay u32 ‖ queue u32 ‖ flags u8 ‖ blob_present u8`.
-const TRAILER_LEN: usize = 4 + 4 + 1 + 1;
+// The trailer after the record: `relay u32 ‖ queue u32 ‖ flags u8 ‖ blob_present u8`.
 
 /// The offset of the flags byte in the plaintext of a stored record.
 const FLAGS_AT: usize = RECORD_LEN + 4 + 4;
@@ -143,11 +142,7 @@ impl Stored {
     /// The plaintext that is sealed: the record, the trailer, the blob if any.
     pub(crate) fn encode(&self) -> Zeroizing<Vec<u8>> {
         let blob_len = self.blob.as_ref().map_or(0, |b| b.len());
-        let mut v = Zeroizing::new(Vec::with_capacity(
-            RECORD_LEN
-                .saturating_add(TRAILER_LEN)
-                .saturating_add(blob_len),
-        ));
+        let mut v = Zeroizing::new(Vec::with_capacity(blob_len.saturating_add(RECORD_LEN)));
         v.extend_from_slice(&self.record.to_bytes());
         v.extend_from_slice(&self.relay.0.to_be_bytes());
         v.extend_from_slice(&self.queue.0.to_be_bytes());

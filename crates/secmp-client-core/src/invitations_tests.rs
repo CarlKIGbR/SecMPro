@@ -852,3 +852,205 @@ fn opk_and_record_in_one_txn() -> R {
 
     Ok(())
 }
+
+/// Killers (B-1…B-3 mutants of `link_data_n`, `Cursor::finish`, `SparePool`, the live counters): the id of a link data is
+/// the big-endian first four bytes of its `ld_id`; a record or a pool with a trailing byte does not decode; the pool
+/// counts, hands out the oldest and writes nothing when it is full already; the live counters follow the opened records.
+#[cfg(feature = "kat")]
+#[test]
+fn killers_pool_and_counters() -> R {
+    assert_eq!(
+        link_data_n(&[1, 2, 3, 4, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9]),
+        0x0102_0304
+    );
+    assert_eq!(link_data_n(&[0; 16]), 0);
+
+    let (fx, mut e) = inviter("killers", 39, 3)?;
+    let pool = SparePool::new(fx.profile.store());
+    assert_eq!(
+        (pool.len(RelayId(1))?, pool.is_empty(RelayId(1))?),
+        (3, false)
+    );
+    assert_eq!(pool.len(RelayId(2))?, 0);
+    assert!(pool.is_empty(RelayId(2))?);
+    let commits = secmp_store::kat::store_txn_commits();
+    assert_eq!(pool.fill(RelayId(1), 3, &mut e)?, 0, "full already");
+    assert_eq!(
+        secmp_store::kat::store_txn_commits(),
+        commits,
+        "nothing is written"
+    );
+    assert_eq!(pool.fill(RelayId(1), 4, &mut e)?, 1);
+    let first = pool.take(RelayId(1))?.ok_or("take")?;
+    assert_eq!(first.queue, QueueId(1));
+    assert_eq!(pool.len(RelayId(1))?, 3);
+    assert_eq!(pool.take(RelayId(2))?.map(|q| q.queue), None);
+
+    // trailing bytes
+    let mut long = PoolBlob::empty().encode()?.to_vec();
+    long.push(0);
+    assert!(PoolBlob::decode(&long).is_err());
+    let blob = {
+        let store = fx.profile.store();
+        let s = store.lock().map_err(|_| "lock")?;
+        s.relay_pool(1)?.ok_or("pool")?.to_vec()
+    };
+    assert!(PoolBlob::decode(&blob).is_ok());
+    assert!(PoolBlob::decode(&[blob.clone(), vec![0]].concat()).is_err());
+    assert!(Cursor::new(&[1]).finish().is_err());
+    assert!(Cursor::new(&[]).finish().is_ok());
+
+    // the live counters
+    assert_eq!(live_records_kat(), 0);
+    reset_live_peak_kat();
+    assert_eq!(live_records_peak_kat(), 0);
+    let invitations = Invitations::new(fx.profile.clone());
+    let a = invitations.issue(&request(1)?, &fx.clock, &mut e)?;
+    let b = invitations.issue(&request(1)?, &fx.clock, &mut e)?;
+    reset_live_peak_kat();
+    {
+        let store = fx.profile.store();
+        let s = store.lock().map_err(|_| "lock")?;
+        let first = load(&s, &a.invitation.ld_id)?.ok_or("a")?;
+        assert_eq!((live_records_kat(), live_records_peak_kat()), (1, 1));
+        let second = load(&s, &b.invitation.ld_id)?.ok_or("b")?;
+        assert_eq!((live_records_kat(), live_records_peak_kat()), (2, 2));
+        drop(first);
+        assert_eq!((live_records_kat(), live_records_peak_kat()), (1, 2));
+        drop(second);
+    }
+    assert_eq!(live_records_kat(), 0);
+
+    // two invitations on one profile: distinct link data, distinct one-time prekeys (the first is referenced)
+    let (ra, rb) = (
+        record_of(&fx, &a.invitation.ld_id)?,
+        record_of(&fx, &b.invitation.ld_id)?,
+    );
+    assert_ne!(ra.record.opk_id, rb.record.opk_id);
+    assert_ne!(ra.queue, rb.queue);
+    assert_eq!(
+        rb.record.spk_id, ra.record.spk_id,
+        "one signed prekey for both"
+    );
+    Ok(())
+}
+
+/// Killers (rounds, the cap of a round, retained cells, routes and queues of the contact): the retained cells are the
+/// cells that were fetched, byte for byte; more than 152 distinct cells in a round are refused; the contact's routes
+/// and queues hold what the accept wrote; the owner status of a consumed invitation changes nothing.
+#[cfg(feature = "kat")]
+#[test]
+fn killers_rounds_and_contact() -> R {
+    let (fx, mut e) = inviter("killers2", 41, 1)?;
+    let (peer, mut pe) = invitee("killers2-peer", 43, 2)?;
+    let invitations = Invitations::new(fx.profile.clone());
+    let issued = invitations.issue(&request(1)?, &fx.clock, &mut e)?;
+    let ld_id = issued.invitation.ld_id;
+    let status = |present, consumed| OwnerStatus { present, consumed };
+
+    // retained cells are the fetched ones
+    invitations.process_round(
+        &ld_id,
+        &[(1, garbage(1)?), (2, garbage(2)?)],
+        &fx.clock,
+        &mut e,
+    )?;
+    {
+        let store = fx.profile.store();
+        let s = store.lock().map_err(|_| "lock")?;
+        let kept = decode_retained(
+            s.invitation_retained(&ld_id)?
+                .as_ref()
+                .map(|z| z.as_slice()),
+        )?;
+        assert_eq!(kept.iter().map(|(i, _)| *i).collect::<Vec<_>>(), [1, 2]);
+        assert_eq!(
+            kept.first().map(|(_, c)| c.as_bytes().to_vec()),
+            Some(garbage(1)?.as_bytes().to_vec())
+        );
+        assert_eq!(
+            kept.get(1).map(|(_, c)| c.as_bytes().to_vec()),
+            Some(garbage(2)?.as_bytes().to_vec())
+        );
+    }
+
+    // the cap of a round: 24 retained and 128 fetched are decided, 129 fetched are refused
+    let many = |from: u64, n: u64| -> Result<Vec<(u64, Cell)>, E> {
+        (from..from + n).map(|i| Ok((i, garbage(i)?))).collect()
+    };
+    let ok = invitations.process_round(&ld_id, &many(100, 128)?, &fx.clock, &mut e)?;
+    assert_eq!(ok.ack_through, Some(227));
+    assert_eq!(
+        invitations
+            .process_round(&ld_id, &many(300, 129)?, &fx.clock, &mut e)
+            .err(),
+        Some(Error::Unavailable),
+        "24 retained and 129 fetched"
+    );
+
+    // the accept: the routes and the queues the contact row holds
+    let cells = handshake(&peer, &mut pe, &issued)?;
+    let record = record_of(&fx, &ld_id)?;
+    let fetched: Vec<(u64, Cell)> = (1000..).zip(cells).collect();
+    let out = invitations.process_round(&ld_id, &fetched, &fx.clock, &mut e)?;
+    assert_eq!(out.accepted, Some(ContactId(1)));
+    {
+        let store = fx.profile.store();
+        let s = store.lock().map_err(|_| "lock")?;
+        let queues = s.contact_queues(1)?.ok_or("queues")?;
+        assert_eq!(
+            queues.as_slice(),
+            [&[1_u8][..], record.record.invq_recv_seed.expose_secret()].concat()
+        );
+        let routes = s.contact_routes(1)?.ok_or("routes")?;
+        assert_eq!(routes.first(), Some(&1));
+        assert!(routes.len() > 100, "a route descriptor follows the count");
+    }
+    // the owner status of a consumed invitation changes nothing
+    assert!(
+        invitations
+            .on_owner_status(&ld_id, status(false, false), &fx.clock)?
+            .is_empty()
+    );
+    assert!(
+        invitations
+            .on_owner_status(&ld_id, status(false, true), &fx.clock)?
+            .is_empty()
+    );
+    // the consumed invitation expires: retired without an OPK delete (the accept deleted it) and without an operation
+    fx.at_day(11);
+    assert_eq!(invitations.maintain(&fx.clock)?, Maintained::default());
+    Ok(())
+}
+
+/// Killers (an expired invitation): the owner status of an expired, still open invitation asks for nothing; a round past
+/// `expires` returns the retirement's events and operation and acknowledges nothing.
+#[cfg(feature = "kat")]
+#[test]
+fn killers_expired_invitation() -> R {
+    let (fx, mut e) = inviter("killers3", 45, 1)?;
+    let invitations = Invitations::new(fx.profile.clone());
+    let issued = invitations.issue(&request(1)?, &fx.clock, &mut e)?;
+    let ld_id = issued.invitation.ld_id;
+    let consumed = OwnerStatus {
+        present: false,
+        consumed: true,
+    };
+    invitations.on_owner_status(&ld_id, consumed, &fx.clock)?;
+    fx.at_day(11);
+    let gone = OwnerStatus {
+        present: false,
+        consumed: false,
+    };
+    assert!(
+        invitations
+            .on_owner_status(&ld_id, gone, &fx.clock)?
+            .is_empty(),
+        "expired: not put again"
+    );
+    let round = invitations.process_round(&ld_id, &[(1, garbage(1)?)], &fx.clock, &mut e)?;
+    assert_eq!(round.events, [Event::InvitationUsedElsewhere]);
+    assert_eq!(round.ops.len(), 1);
+    assert_eq!(round.ack_through, None);
+    Ok(())
+}

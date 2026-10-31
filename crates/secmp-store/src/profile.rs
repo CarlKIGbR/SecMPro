@@ -484,7 +484,6 @@ mod tests {
             insert_prekey(tx, KIND_SPK, 1, b"spk 1", Some(1000))?;
             insert_prekey(tx, KIND_OPK, 1, b"opk 1", None)?;
             put_relay(tx, 3, b"relay ref", None)?;
-            put_identity(tx, 1, b"identity section", b"fingerprint bytes", 5)?;
             insert_invitation(tx, &[5; 16], b"record", 100)?;
             insert_invitation(tx, &[4; 16], b"other", 200)
         })?;
@@ -510,11 +509,6 @@ mod tests {
         );
         assert_eq!(store.relay_ref(3)?, Some(b"relay ref".to_vec()));
         assert_eq!(store.relay_ref(4)?, None);
-        assert_eq!(
-            store.identity_fingerprint(1)?,
-            Some(b"fingerprint bytes".to_vec())
-        );
-        assert_eq!(store.identity_fingerprint(2)?, None);
         let rows = store.invitations()?;
         assert_eq!(
             rows,
@@ -584,6 +578,20 @@ mod tests {
             store.txn(|tx| delete_invitation(tx, &[5; 16])),
             Err(Error::Unavailable)
         );
+        Ok(())
+    }
+
+    /// Killer (mutant of `identity_fingerprint`): the public fingerprint column reads back as written; a missing row is `None`.
+    #[test]
+    fn identity_fingerprint_column() -> R {
+        let dir = TempDir::new("profile-fp")?;
+        let mut store = Store::open(dir.path(), &TestKey::db_key())?;
+        store.txn(|tx| put_identity(tx, 1, b"identity section", b"fingerprint bytes", 5))?;
+        assert_eq!(
+            store.identity_fingerprint(1)?,
+            Some(b"fingerprint bytes".to_vec())
+        );
+        assert_eq!(store.identity_fingerprint(2)?, None);
         Ok(())
     }
 

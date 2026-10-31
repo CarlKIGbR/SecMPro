@@ -567,6 +567,36 @@ mod tests {
         Ok(())
     }
 
+    /// Killer (mutant of `ContactState::of`): a restored contact (state 1) lists as `ReinviteRequired` and refuses real
+    /// sends with that error; a state no build writes is the uniform `Unavailable`.
+    #[cfg(feature = "kat")]
+    #[test]
+    fn reinvite_required_state() -> R {
+        let mut e = entropy(9);
+        let fx = Fixture::new("pr-reinvite", &mut e)?;
+        put_row(&fx, 1, &[7; 32])?;
+        let store = fx.profile.store();
+        store
+            .lock()
+            .map_err(|_| "lock")?
+            .txn(|tx| set_contact_state(tx, 1, STATE_REINVITE_REQUIRED))?;
+        let contacts = Contacts::new(fx.profile.store(), [1; 32]);
+        assert_eq!(
+            contacts.get(ContactId(1))?.state,
+            ContactState::ReinviteRequired
+        );
+        assert_eq!(
+            contacts.check_send(ContactId(1)),
+            Err(Error::ReinviteRequired)
+        );
+        store
+            .lock()
+            .map_err(|_| "lock")?
+            .txn(|tx| set_contact_state(tx, 1, 9))?;
+        assert_eq!(contacts.list().err(), Some(Error::Unavailable));
+        Ok(())
+    }
+
     /// PR-08 (§7.6 Control code 1, ADR-054 item 4): `Control{1}` without an argument marks the contact removed; real sends
     /// are refused; the scheduler is not told — the conversation keeps preparing cells (dummies) as before; a Control with
     /// an argument, or another code, changes nothing.

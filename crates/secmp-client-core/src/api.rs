@@ -144,5 +144,17 @@ mod tests {
             Error::from(secmp_store::Error::Unavailable),
             Error::Unavailable
         );
+        assert_eq!(
+            Error::from(secmp_store::Error::ConfirmRequired),
+            Error::ConfirmRequired
+        );
+        assert_eq!(
+            Error::from(secmp_store::Error::CloudFolder),
+            Error::CloudFolder
+        );
+        assert_eq!(
+            Error::from(secmp_store::Error::Unsupported),
+            Error::Unsupported
+        );
     }
 }

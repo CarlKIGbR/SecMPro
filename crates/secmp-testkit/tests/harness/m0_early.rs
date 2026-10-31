@@ -108,7 +108,10 @@ fn accept_ceiling_is_the_largest_multiple_of_span() {
 #[test]
 fn sample_with_accepts_below_the_ceiling_and_rejects_at_it() {
     assert_eq!(sample_with(0, 5, 10, C10), Some(5));
-    assert_eq!(sample_with(18_446_744_073_709_551_609, 5, 10, C10), Some(14));
+    assert_eq!(
+        sample_with(18_446_744_073_709_551_609, 5, 10, C10),
+        Some(14)
+    );
     assert_eq!(sample_with(C10, 5, 10, C10), None);
     assert_eq!(sample_with(u64::MAX, 5, 10, C10), None);
 }

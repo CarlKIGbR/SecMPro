@@ -11423,16 +11423,16 @@ mod tests {
             let want = if expect::FUZZ_DEEP_TARGETS.contains(t) {
                 3_600
             } else {
-                218
+                211
             };
             assert_eq!(nightly_seconds_for(t)?, want, "{t}");
         }
-        // M7 Phase A (FZ-01, FZ-02): 33 x 218 + 2 x 3600 = 14 394 <= 14 400 (M6 Phase B: 31 x 232 + 2 x 3600)
+        // M7 Phase B (FZ-04): 34 x 211 + 2 x 3600 = 14 374 <= 14 400 (Phase A: 33 x 218 + 2 x 3600 = 14 394)
         let total: u64 = expect::FUZZ_TARGETS
             .iter()
             .map(|t| nightly_seconds_for(t))
             .sum::<Result<u64>>()?;
-        assert_eq!(total, 14_394);
+        assert_eq!(total, 14_374);
         assert!(total <= expect::FUZZ_NIGHTLY_SECONDS);
         // the evidence: runs and lim per target, lim = max_len
         let log = "#4\tINITED cov: 5493 ft: 8753 corp: 3/637b exec/s: 0 rss: 53Mb\n\

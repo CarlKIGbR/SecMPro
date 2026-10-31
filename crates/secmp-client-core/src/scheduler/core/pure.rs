@@ -332,6 +332,25 @@ pub const fn fetch_lead_deadline(slot: u64, lead: u64) -> u64 {
     slot.saturating_sub(lead)
 }
 
+/// Whether the `FETCH` of the tick at `slot` is built now (OQ-20, OPEN-M6-13; SC-09): when no `FETCH` is outstanding and
+/// no fetched cell waits for its commit, or at the latest at its lead. Its tick time never depends on this.
+#[must_use]
+pub const fn fetch_due(
+    fetch_outstanding: bool,
+    commits_pending: bool,
+    now: u64,
+    slot: u64,
+    lead_ms: u64,
+) -> bool {
+    (!fetch_outstanding && !commits_pending) || now >= fetch_lead_deadline(slot, lead_ms)
+}
+
+/// A `SEND` of the queue was written at the tick `at` (`World::tick`): its previous `SEND` is now `at`, which the
+/// Balanced choice compares with `P_q` ([`send_choice`]).
+pub const fn note_sent(last: &mut Option<u64>, at: u64) {
+    *last = Some(at);
+}
+
 /// When the flush wait of a pass at `now` ends at the latest (`run::flush_wait`, EXT3B-2): `now + FLUSH_WAIT_MS`, and never
 /// past the scheduler's next deadline less the driver jitter — saturating, never wrapping (K-C5).
 #[must_use]
@@ -573,6 +592,19 @@ mod tests {
         assert_eq!(flush_bound(1_000, Some(5_000), 50), 1_250);
         assert_eq!(flush_bound(1_000, Some(10), 50), 0);
         assert_eq!(flush_bound(u64::MAX, None, 0), u64::MAX);
+    }
+
+    /// SC-09 (unit): the `FETCH` is built at once when nothing waits, else at its lead; a `SEND` notes its tick.
+    #[test]
+    fn fetch_due_and_note_sent() {
+        assert!(fetch_due(false, false, 0, 10_000, 1_000));
+        assert!(!fetch_due(true, false, 8_999, 10_000, 1_000));
+        assert!(!fetch_due(false, true, 8_999, 10_000, 1_000));
+        assert!(fetch_due(false, true, 9_000, 10_000, 1_000));
+        assert!(fetch_due(true, true, 9_500, 10_000, 1_000));
+        let mut last = None;
+        note_sent(&mut last, 7);
+        assert_eq!(last, Some(7));
     }
 
     #[test]

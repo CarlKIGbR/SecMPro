@@ -1291,7 +1291,8 @@ pub(crate) const KANI_COVERS: &[(&str, usize)] = &[
     ("kani_proofs::kani_in_flight_over_transitions", 2),
     ("kani_proofs::kani_link_counter_checked_add", 3),
     ("kani_proofs::kani_link_counter_strict_plus_one", 2),
-    ("kani_proofs::kani_paired_executions", 3),
+    // M7 B-SC2 (Q183): SC-09 re-dictated, four covers
+    ("kani_proofs::kani_paired_executions", 4),
     ("kani_proofs::kani_persist_contract_abstract", 3),
     ("kani_proofs::kani_q_frame_plaintext_exact_fit_request", 1),
     (
@@ -2238,7 +2239,7 @@ mod tests {
         ("kani_in_flight_over_transitions", 2),
         ("kani_queue_generations", 3),
         ("kani_persist_contract_abstract", 3),
-        ("kani_paired_executions", 3),
+        ("kani_paired_executions", 4),
     ];
 
     /// TEST-SPEC-M7 G7-15b (TEST-SPEC (l): "`FUZZ_TARGETS` += FZ-04, `KANI_HARNESSES` += K7-01, SC-06…SC-09, each in the

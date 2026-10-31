@@ -11099,6 +11099,9 @@ mod tests {
         Ok(())
     }
 
+    /// The B-SC harnesses re-measured by WEISUNG M7-B-SC2: the cover pin reads their `kani-m7-bsc2-sc-<harness>.txt`.
+    const B_SC2_RUNS: &[&str] = &["kani_paired_executions"];
+
     /// The B-SC harnesses whose committed alone runs the cover pin reads (M7 B-SC §3, one per commit).
     const B_SC_RUNS: &[&str] = &[
         "kani_in_flight_over_transitions",
@@ -11193,10 +11196,14 @@ mod tests {
         }
         // M7 B-SC (SC-06…SC-09): the alone runs of the new `secmp-client-core` harnesses, one committed file each
         // (`kani-m7-bsc-sc-<harness>.txt`, the A-3b wrapper's form)
+        // M7 B-SC2: a harness re-measured after its re-dictation reads its B-SC2 run instead
         for h in B_SC_RUNS {
-            log.push_str(&lf(&std::fs::read_to_string(
-                root.join(format!("docs/reviews/M07-evidence/kani-m7-bsc-sc-{h}.txt")),
-            )?));
+            let file = if B_SC2_RUNS.contains(h) {
+                format!("docs/reviews/M07-evidence/kani-m7-bsc2-sc-{h}.txt")
+            } else {
+                format!("docs/reviews/M07-evidence/kani-m7-bsc-sc-{h}.txt")
+            };
+            log.push_str(&lf(&std::fs::read_to_string(root.join(file))?));
         }
         assert_eq!(
             kani_cover_pin_findings(&kani_covers(&log)?),

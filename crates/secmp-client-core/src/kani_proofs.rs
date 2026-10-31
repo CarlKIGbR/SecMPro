@@ -17,9 +17,9 @@
 use secmp_transport::evicted::evicted_is_plausible;
 
 use crate::scheduler::core::pure::{
-    FLUSH_WAIT_MS, Flight, InFlight, RecvLedger, complete_oldest, fetch_lead_deadline, flush_bound,
-    hand_out, ledger_admits, reserved_rr, rr_select, send_choice, sendable, take_response,
-    tick_time, unwritten_max,
+    FLUSH_WAIT_MS, Flight, InFlight, RecvLedger, complete_oldest, fetch_due, fetch_lead_deadline,
+    flush_bound, hand_out, ledger_admits, note_sent, reserved_rr, rr_select, send_choice, sendable,
+    take_response, tick_time, unwritten_max,
 };
 use crate::scheduler::params::{backoff_cap, rate_sum_ok};
 use crate::scheduler::types::{Delivered, SourceError};
@@ -660,67 +660,102 @@ fn kani_persist_contract_abstract() {
     );
 }
 
-/// What one run of a Balanced relay link emits on its first three ticks (SC-09): per tick its time and the queue its
-/// `SEND` goes to (`None`: a `PING`). The schedule is the link's `t_up`, `T_BALANCED` = 10 s and the queues' periods; the
-/// activity is, per tick, the preparation pass at which the cell source answers ready (1…3 — every preparation finishes
-/// before its tick, the §10.1 premise) and whether the cell is a real message or a dummy. Every decision is a core
-/// function: the tick time (`tick_time`), the choice (`send_choice` from `reserved_rr`, re-made at every pass as
-/// `prepare_link` does), the answer (`sendable`), the hand-out at the tick (`hand_out`) and the commit when the frame is
-/// written (`complete_oldest`); `last_send` is the tick's time (set inline in `World::tick`).
+/// What one run of a Balanced relay link (one to three send-queues and one recv-queue) emits on its first three ticks
+/// (SC-09, re-dictated Q183): per tick its time, the queue its `SEND` goes to (`None`: a `PING`) and whether its `FETCH`
+/// is present. The schedule is the link's `t_up`, `T_BALANCED` = 10 s, the queues' periods and the 1-s `FETCH` lead; the
+/// activity inputs that reach the core are, per tick: `ready` — the preparation pass (1…3, at `slot − 3 s`, `slot − 2 s`,
+/// `slot − 1 s`) from which the cell source answers ready (`sendable`; a source not ready at the tick is an overrun,
+/// not modelled); `written` — the previous tick's frames are reported written (`complete_oldest`) before pass 1 (0) or
+/// after pass `written`, so `reserved_rr` sees the reserved or the committed position (FIN2-1); `pending` — fetched
+/// cells wait for their commits (`fetch_due`). Every decision is a core function: `tick_time`, `send_choice` from
+/// `reserved_rr`, `sendable`, `fetch_due` (only once the `SEND` part exists, as `prepare_link`'s `send_missing`),
+/// `hand_out`, `complete_oldest` and `note_sent`.
 fn balanced_run(
     n: usize,
     periods: &[u64; 3],
     t_up: u64,
-    ready_at: [u8; 3],
-    real: [bool; 3],
-) -> [(u64, Option<usize>); 3] {
+    ready: [u8; 3],
+    written: [u8; 3],
+    pending: [bool; 3],
+) -> [(u64, Option<usize>, bool); 3] {
     let mut last: [Option<u64>; 3] = [None; 3];
     let mut ledger: Vec<(u8, Option<usize>)> = Vec::with_capacity(4);
     let mut rr = 0_usize;
-    let mut out = [(0_u64, None); 3];
-    for k in 0..3_u8 {
-        let slot = tick_time(t_up, u32::from(k) + 1, 10_000).unwrap();
+    let mut frame = 0_u8;
+    let mut out = [(0_u64, None, false); 3];
+    for k in 0..3_usize {
+        let slot = tick_time(t_up, k as u32 + 1, 10_000).unwrap();
         let mut table = [(None, 10_000_u64); 3];
         for (i, entry) in table.iter_mut().enumerate() {
             *entry = (last[i], periods[i]);
         }
-        let mut part: Option<(Option<usize>, Option<usize>)> = None;
-        for pass in 1..=3_u8 {
-            match send_choice(reserved_rr(&ledger, rr), &table[..n], slot) {
-                None => {
-                    part = Some((None, None));
-                    break;
-                }
-                Some((at, next)) => {
-                    let answer: Result<Option<bool>, SourceError> =
-                        if pass >= ready_at[usize::from(k)] {
-                            Ok(Some(real[usize::from(k)]))
+        let mut send: Option<(Option<usize>, Option<usize>)> = None;
+        let mut fetch = false;
+        // one preparation pass at `slot − 3 s + pass · 1 s` (`prepare_link`)
+        let mut prepare = |pass: u8, ledger: &Vec<(u8, Option<usize>)>, rr: usize| {
+            let now = slot - 3_000 + u64::from(pass) * 1_000;
+            if send.is_none() {
+                send = match send_choice(reserved_rr(ledger, rr), &table[..n], slot) {
+                    None => Some((None, None)),
+                    Some((at, next)) => {
+                        let answer: Result<Option<()>, SourceError> = if pass + 1 >= ready[k] {
+                            Ok(Some(()))
                         } else {
                             Ok(None)
                         };
-                    if sendable(answer).is_some() {
-                        part = Some((Some(at), Some(next)));
-                        break;
+                        sendable(answer).map(|()| (Some(at), Some(next)))
                     }
-                }
+                };
+            }
+            if send.is_some() && !fetch {
+                fetch = fetch_due(false, pending[k], now, slot, 1_000);
+            }
+        };
+        // the previous tick's frames are reported written before pass 1 (`written` 0) or after pass `written`
+        for pass in 0..3_u8 {
+            if pass < written[k] {
+                prepare(pass, &ledger, rr);
             }
         }
-        // ready before the tick: the tick writes the part, the driver reports it written
-        let (to, commits) = part.unwrap();
-        hand_out(&mut ledger, k, commits);
-        if let Some(at) = to {
-            last[at] = Some(slot);
+        report_all(&mut ledger, &mut rr);
+        // every frame is reported: the ledger is empty (asserted); a fresh one keeps CBMC's heap small
+        ledger = Vec::with_capacity(4);
+        for pass in 0..3_u8 {
+            if pass >= written[k] {
+                prepare(pass, &ledger, rr);
+            }
         }
-        assert!(complete_oldest(&mut ledger, &mut rr, &k));
-        out[usize::from(k)] = (slot, to);
+        // the tick: the parts exist (ready by the last pass; the FETCH at its lead at the latest)
+        let (to, commits) = send.unwrap();
+        hand_out(&mut ledger, frame, commits);
+        frame += 1;
+        if let Some(at) = to {
+            note_sent(&mut last[at], slot);
+        }
+        if fetch {
+            hand_out(&mut ledger, frame, None);
+            frame += 1;
+        }
+        out[k] = (slot, to, fetch);
     }
     out
 }
 
-/// SC-09 `kani_paired_executions` (spec §10.1): two runs of one Balanced relay link (one to three send-queues) that share
-/// every timing draw — `t_up` and the queues' periods — and differ only in activity (per tick, when the cell source
-/// answers ready and whether the cell is real) emit the same schedule: the same tick times and the same frame kind and
-/// queue on every tick.
+/// The driver reports every handed-out frame of the link written, oldest first (`Scheduler::frame_written`).
+fn report_all(ledger: &mut Vec<(u8, Option<usize>)>, rr: &mut usize) {
+    for _ in 0..2 {
+        if let Some(oldest) = ledger.first().map(|(f, _)| *f) {
+            assert!(complete_oldest(ledger, rr, &oldest));
+        }
+    }
+    assert!(ledger.is_empty());
+}
+
+/// SC-09 `kani_paired_executions` (spec §10.1; re-dictated Q183): two runs of one Balanced relay link that share every
+/// timing draw — `t_up` and the queues' periods — and differ only in the activity inputs that reach the core (per tick:
+/// the pass the cell source answers ready, when the previous frames are reported written, whether commits are pending)
+/// emit the same `(tick time, SEND queue | PING, FETCH present)` on every tick. The core sees an opaque `PreparedCell`:
+/// real versus dummy is the cell source's (AI-01…AI-06, SE-19, ProVerif L12), not an input here.
 #[kani::proof]
 #[kani::unwind(4)]
 fn kani_paired_executions() {
@@ -731,21 +766,25 @@ fn kani_paired_executions() {
     kani::assume(t_up <= 1_000_000_000);
     let ready_a: [u8; 3] = kani::any();
     let ready_b: [u8; 3] = kani::any();
-    for (a, b) in ready_a.iter().zip(ready_b.iter()) {
-        kani::assume(*a >= 1 && *a <= 3 && *b >= 1 && *b <= 3);
+    let written_a: [u8; 3] = kani::any();
+    let written_b: [u8; 3] = kani::any();
+    for i in 0..3 {
+        kani::assume(ready_a[i] >= 1 && ready_a[i] <= 3 && ready_b[i] >= 1 && ready_b[i] <= 3);
+        kani::assume(written_a[i] <= 3 && written_b[i] <= 3);
     }
-    let real_a: [bool; 3] = kani::any();
-    let real_b: [bool; 3] = kani::any();
-    let a = balanced_run(n, &periods, t_up, ready_a, real_a);
-    let b = balanced_run(n, &periods, t_up, ready_b, real_b);
+    let pending_a: [bool; 3] = kani::any();
+    let pending_b: [bool; 3] = kani::any();
+    let a = balanced_run(n, &periods, t_up, ready_a, written_a, pending_a);
+    let b = balanced_run(n, &periods, t_up, ready_b, written_b, pending_b);
     assert!(a == b);
     kani::cover!(
-        ready_a != ready_b && real_a != real_b,
-        "the activities differ"
+        (written_a[1] == 0) != (written_b[1] == 0),
+        "write report before vs after preparation differs between runs"
     );
-    kani::cover!(a.iter().any(|(_, q)| q.is_none()), "a PING slot");
+    kani::cover!(pending_a != pending_b, "commits pending in one run only");
+    kani::cover!(a.iter().any(|(_, q, _)| q.is_none()), "a PING slot");
     kani::cover!(
-        a.iter().filter(|(_, q)| q.is_some()).count() >= 2,
+        a.iter().filter(|(_, q, _)| q.is_some()).count() >= 2,
         "two SENDs"
     );
 }

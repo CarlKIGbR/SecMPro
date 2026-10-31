@@ -588,8 +588,10 @@ fn inline_lead(body: &str) -> bool {
 /// TEST-SPEC-M7 SC-10 `kc5_calls_extracted` (Q157, path deviation D-B3): the deadline arithmetic K-C5
 /// (`kani_deadline_arithmetic_checked`) proves is the production code's. `pure::fetch_lead_deadline` and
 /// `pure::flush_bound` (`core/pure.rs`, where they are defined and unit-tested) are called, outside `core/pure.rs`, from
-/// exactly the named sites — the `FETCH` lead of `prepare_link`, the lead deadline of `next_deadline`, the driver's
-/// `flush_wait`, and the K-C5 harness — and none of those bodies keeps the inline expression
+/// exactly the named sites — the lead deadline of `next_deadline`, the driver's `flush_wait`, and the K-C5 harness; the
+/// `FETCH` lead of `prepare_link` goes through `pure::fetch_due` (called from `prepare_link` and the SC-09 harness only),
+/// which calls `fetch_lead_deadline` (WEISUNG M7-B-SC2b, the Q183 amendment) — and none of those bodies keeps the inline
+/// expression
 /// (`saturating_sub(…fetch_lead_ms)`, `saturating_add(250)`, `saturating_add(FLUSH_WAIT_MS)`). CRLF is normalised; the
 /// needles are spelled in parts so that this file matches none of them.
 #[cfg(test)]
@@ -599,6 +601,8 @@ fn kc5_calls_extracted() -> Result<()> {
     let src = root.join("crates/secmp-client-core/src");
     let lead_fn = concat!("fetch", "_lead_deadline(");
     let flush_fn = concat!("flush", "_bound(");
+    // Q183 amendment (WEISUNG M7-B-SC2b): prepare_link reaches the lead through pure::fetch_due
+    let due_fn = concat!("fetch", "_due(");
     let mut calls: Vec<(String, String, String)> = Vec::new();
     let mut texts = std::collections::BTreeMap::new();
     for file in crate::util::walk_files(&src, &|p| p.extension().is_some_and(|x| x == "rs"))? {
@@ -608,7 +612,7 @@ fn kc5_calls_extracted() -> Result<()> {
             let lines: Vec<&str> = text.lines().collect();
             for (n, line) in lines.iter().enumerate() {
                 let code = line.split("//").next().unwrap_or_default();
-                for needle in [lead_fn, flush_fn] {
+                for needle in [lead_fn, flush_fn, due_fn] {
                     if code.contains(needle) {
                         let site = enclosing_fn(&lines, n).unwrap_or_default();
                         calls.push((rel.clone(), site, needle.trim_end_matches('(').to_owned()));
@@ -621,11 +625,14 @@ fn kc5_calls_extracted() -> Result<()> {
     calls.sort();
     let lead = concat!("fetch", "_lead_deadline");
     let flush = concat!("flush", "_bound");
+    let due = concat!("fetch", "_due");
     let mut want: Vec<(String, String, String)> = [
         ("kani_proofs.rs", "kani_deadline_arithmetic_checked", lead),
         ("kani_proofs.rs", "kani_deadline_arithmetic_checked", flush),
         ("scheduler/core/mod.rs", "next_deadline", lead),
-        ("scheduler/core/mod.rs", "prepare_link", lead),
+        // the SC-09 harness `kani_paired_executions`, through its run `balanced_run`
+        ("kani_proofs.rs", "balanced_run", due),
+        ("scheduler/core/mod.rs", "prepare_link", due),
         ("scheduler/run.rs", "flush_wait", flush),
     ]
     .into_iter()
@@ -659,6 +666,12 @@ fn kc5_calls_extracted() -> Result<()> {
     assert!(inline_lead("x.saturating_sub(self.params.fetch_lead_ms)"));
     assert!(!inline_lead("x.saturating_sub(lead)"));
     assert!(fn_body(&lines, flush).contains(concat!("saturating", "_add(FLUSH", "_WAIT_MS)")));
+    // the chain prepare_link -> fetch_due -> fetch_lead_deadline (the `pure.rs` exclusion lifted for this needle only)
+    let due_body = fn_body(&lines, due);
+    assert!(
+        due_body.contains(lead_fn),
+        "pure::fetch_due does not call fetch_lead_deadline: {due_body:?}"
+    );
     assert_eq!(
         enclosing_fn(&["    pub fn outer() {", "        let x = 1;"], 1).as_deref(),
         Some("outer")

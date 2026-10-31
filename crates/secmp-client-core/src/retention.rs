@@ -152,6 +152,15 @@ mod tests {
         assert_eq!(run(&[], &gaps, &[]), want);
     }
 
+    /// Q190 (killer of `offer`'s `i < len` → `i <= len` in the bubble loop): `retain` assumes nothing about the slots of
+    /// `out` beyond those it wrote — a prefilled `out` gives the answer of a zeroed one.
+    #[test]
+    fn offer_ignores_a_prefilled_out() {
+        let mut out = [u64::MAX; RETAIN_MAX];
+        assert_eq!(retain(&[], &[1], &[], &mut out), 1);
+        assert_eq!(out.get(..1), Some(&[1][..]));
+    }
+
     /// Never more than 24, whatever is offered, in any arrival order (a small deterministic sweep).
     #[test]
     fn never_more_than_24() {

@@ -1105,3 +1105,43 @@ fn killers_expired_invitation() -> R {
     assert_eq!(round.ack_through, None);
     Ok(())
 }
+
+/// Q190 (killer of `StagedPrekeys::commit_accept`, `||` → `&&` before `self.opk`): a second `commit_accept` on the same
+/// staging names the same record and OPK, but the OPK is already staged for deletion — it is refused.
+#[cfg(feature = "kat")]
+#[test]
+fn commit_accept_twice_is_rejected() -> R {
+    let (fx, mut e) = inviter("q190-twice", 51, 1)?;
+    let issued = Invitations::new(fx.profile.clone()).issue(&request(1)?, &fx.clock, &mut e)?;
+    let ld_id = issued.invitation.ld_id;
+    let store = fx.profile.store();
+    let s = store.lock().map_err(|_| "lock")?;
+    let stored = load(&s, &ld_id)?.ok_or("record")?.stored;
+    let opk_id = stored.record.opk_id;
+    let mut staged = StagedPrekeys::load(&s, &stored.record)?;
+    assert_eq!(staged.commit_accept(opk_id, &ld_id), Ok(()));
+    assert_eq!(
+        staged.commit_accept(opk_id, &ld_id),
+        Err(secmp_proto::Error::Rejected)
+    );
+    Ok(())
+}
+
+/// Q190 (killer of the version guard of `check_invitation`, Q154): with a version byte 0x02 **and** a kind byte 0x02 the
+/// class is `Invalid` — the version is checked before the kind.
+#[cfg(feature = "kat")]
+#[test]
+fn check_invitation_refuses_bad_version_before_kind() -> R {
+    let (fx, mut e) = inviter("q190-ver", 53, 1)?;
+    let issued = Invitations::new(fx.profile.clone()).issue(&request(1)?, &fx.clock, &mut e)?;
+    let blob = issued.blob.encode()?;
+    let text = issued.uri.strip_prefix("secmp://i/").ok_or("prefix")?;
+    let mut bytes = secmp_proto::inv::base64url_decode(text)?.to_vec();
+    *bytes.first_mut().ok_or("version byte")? = 0x02;
+    *bytes.get_mut(1).ok_or("kind byte")? = 0x02;
+    assert_eq!(
+        check_invitation(&uri_of(&bytes), &blob, T0 + 1).err(),
+        Some(InviteReject::Invalid)
+    );
+    Ok(())
+}

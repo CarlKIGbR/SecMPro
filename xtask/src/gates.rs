@@ -67,7 +67,28 @@ pub(crate) fn policy(ctx: &Ctx) -> Result<Outcome> {
     detail.push_str(&workflows(&ctx.root)?);
     detail.push_str("; ");
     detail.push_str(&large_files(&ctx.root)?);
+    detail.push_str("; ");
+    detail.push_str(&mutants_profile(&ctx.root)?);
     Ok(Outcome::Pass(detail))
+}
+
+/// TEST-SPEC-M7 G7-10 (ADR-047 Amendment 9): `.config/nextest.toml` holds the profile of the second mutants run exactly as
+/// `mutants_killer_profile` writes it for `expect::MUTANT_KILLER_MODULE`, once, and no other `priority`.
+fn mutants_profile(root: &Path) -> Result<String> {
+    let config = lf(&std::fs::read_to_string(root.join(".config/nextest.toml"))?);
+    let block = mutants_killer_profile(expect::MUTANT_KILLER_MODULE);
+    if config.matches(&block).count() != 1 || config.matches("priority =").count() != 1 {
+        bail!(
+            "mutants-profile: .config/nextest.toml must hold the profile {} once, as gates::mutants_killer_profile writes it, and no other priority",
+            expect::MUTANTS_HARNESS_PROFILE
+        );
+    }
+    Ok(format!(
+        "mutants-profile: {} starts {}::* first (priority {})",
+        expect::MUTANTS_HARNESS_PROFILE,
+        expect::MUTANT_KILLER_MODULE,
+        expect::MUTANT_KILLERS_PRIORITY
+    ))
 }
 
 /// The tracked files over `limit` bytes that are not allowlisted, and the allowlisted ones over `cap` (ADR-052): one
@@ -180,8 +201,8 @@ pub(crate) fn cooldown(ctx: &Ctx) -> Result<Outcome> {
 
 /// The nextest filterset of the workspace run: not the `secmp-testkit` `harness` binary. Feature unification enables
 /// `secmp-testkit/harness` in a `--workspace` build (dev-dependency of `secmp-transport`, TLS-01…TLS-11), which
-/// would run the long simulations here a second time; the `kat` step is the one runner of that binary (WEISUNG
-/// M6-CI-1, ADR-047 Amendment 5).
+/// would run the long simulations here a second time; the `harness` step is the one runner of that binary (WEISUNG
+/// M6-CI-1, ADR-047 Amendment 5; from M7 its own step and job, ADR-045 Amendment 12).
 pub(crate) const NEXTEST_WORKSPACE_FILTER: &str = "not binary(=harness)";
 
 /// The workspace `cargo nextest` arguments (feature unification enables `kat` of `secmp-proto` through `secmp-testkit`).
@@ -313,6 +334,25 @@ pub(crate) fn kat(ctx: &Ctx) -> Result<Outcome> {
         list(&found),
         crate::testscan::kat_seed_detail(ci_seed)
     )))
+}
+
+/// The testkit `harness` binary (TEST-SPEC-M7 G7-07, OPEN-M7-18 A, ADR-045 Amendment 12): the in-process harness and
+/// the virtual-time and loopback simulations, out of the `kat` step (36–63 min on 4 vCPU, ADR-045 Amendment 10) and into
+/// the pinned job `harness`; `linux-fast` and `linux-full` delegate it there, `windows-native` runs it by name. The same
+/// build as the testkit's kat run (`--features kat`), with [`crate::testscan::SEED_ENV`] handled as in `kat`.
+pub(crate) fn harness(_: &Ctx) -> Result<Outcome> {
+    tools::require(tools::NEXTEST)?;
+    let ci_seed = crate::testscan::ci_run_seed()?;
+    for run in crate::testscan::harness_runs(ci_seed) {
+        // as in `kat`: on Windows without `expect::WINDOWS_SKIP_TESTS`
+        let run = if cfg!(windows) {
+            crate::testscan::windows_scoped(run)
+        } else {
+            run
+        };
+        run.run()?;
+    }
+    Ok(Outcome::Pass(crate::testscan::harness_seed_detail(ci_seed)))
 }
 
 /// dudect-style constant-time tests (docs/06 §2, §4; ADR-038, ADR-041 with Amendment 1): `cargo bench --package
@@ -1420,12 +1460,33 @@ pub(crate) fn mutants_harness_args(shard: Option<MutantsShard>) -> Vec<String> {
         .iter()
         .position(|x| x == "--")
         .map_or(a.len(), |i| i.saturating_add(1));
-    a.splice(after..after, [MUTANTS_HARNESS_MAX_FAIL.to_owned()]);
+    a.splice(
+        after..after,
+        [
+            MUTANTS_HARNESS_MAX_FAIL.to_owned(),
+            // TEST-SPEC-M7 G7-10 (ADR-047 Amendment 9): the killers of clock and period mutants first, by the profile's
+            // priority override (`mutants_killer_profile`), not by the sort position of their module's name
+            "--profile".to_owned(),
+            expect::MUTANTS_HARNESS_PROFILE.to_owned(),
+        ],
+    );
     a
 }
 
 /// The nextest option that cancels the harness run of a mutant at the first failing test.
 pub(crate) const MUTANTS_HARNESS_MAX_FAIL: &str = "--max-fail=1:immediate";
+
+/// TEST-SPEC-M7 G7-10 (OPEN-M7-20 A, ADR-047 Amendment 9): the nextest profile of the second mutants run as it stands in
+/// `.config/nextest.toml` — one override that gives every test of the harness module `module` the priority
+/// `expect::MUTANT_KILLERS_PRIORITY`, so nextest starts them before every other test whatever the module is called (the
+/// other tests keep priority 0 and nextest's order). The default profile's overrides still apply.
+pub(crate) fn mutants_killer_profile(module: &str) -> String {
+    format!(
+        "[profile.{profile}]\n\n[[profile.{profile}.overrides]]\nfilter = 'test(/^{module}::/)'\npriority = {priority}\n",
+        profile = expect::MUTANTS_HARNESS_PROFILE,
+        priority = expect::MUTANT_KILLERS_PRIORITY,
+    )
+}
 
 /// How often the mutation gate polls cargo-mutants and echoes its new output lines.
 const MUTANTS_POLL: std::time::Duration = std::time::Duration::from_secs(5);
@@ -2342,14 +2403,25 @@ pub(crate) fn kani(ctx: &Ctx) -> Result<Outcome> {
     // stubbed harnesses did not compile in CI run 36614956208), and `--manifest-path` could not start `cargo
     // metadata` on the CI runner (run 36633643390): the gate passes the package's unstable features as `-Z` itself
     let mut output = String::new();
+    let mut peaks: Vec<(String, u64)> = Vec::new();
     for p in &packages {
         let mut c = Cmd::cargo().args(["kani", "--package", &p.name]);
         for feature in &p.kani_unstable {
             c = c.args(["-Z", feature]);
         }
-        let cap = c.dir(&ctx.root).capture()?;
+        // G7-12: run under the cbmc RSS guard, stdout and stderr in a log the guard reads for the current harness
+        let log = ctx.root.join("target").join(format!("kani-{}.log", p.name));
+        let run = kani_guarded(
+            &c.dir(&ctx.root),
+            &log,
+            expect::KANI_CBMC_RSS_LIMIT_KIB,
+            std::time::Duration::from_secs(expect::KANI_RSS_POLL_SECONDS),
+            &mut cbmc_rss_sample,
+        )?;
+        peaks.extend(run.peaks);
+        let stdout = std::fs::read_to_string(&log)?;
         // the harness verdicts and Kani's summary into the log (the full output only on failure)
-        for line in cap.stdout.lines().filter(|l| {
+        for line in stdout.lines().filter(|l| {
             l.starts_with("Checking harness")
                 || l.starts_with("VERIFICATION:-")
                 || l.starts_with("Verification Time")
@@ -2358,12 +2430,17 @@ pub(crate) fn kani(ctx: &Ctx) -> Result<Outcome> {
         }) {
             say(&format!("  {line}"));
         }
-        if !cap.success {
-            say(cap.stdout.trim_end());
-            say(cap.stderr.trim_end());
+        if !run.success {
+            say(stdout.trim_end());
             bail!("cargo kani --package {} failed", p.name);
         }
-        output.push_str(&cap.stdout);
+        output.push_str(&stdout);
+    }
+    for (harness, kib) in &peaks {
+        say(&format!(
+            "  kani-rss {harness}: peak cbmc RSS {kib} KiB (limit {} KiB)",
+            expect::KANI_CBMC_RSS_LIMIT_KIB
+        ));
     }
     let verified = kani_verified(&output)?;
     let covers = kani_covers(&output)?;
@@ -2391,6 +2468,111 @@ pub(crate) fn kani(ctx: &Ctx) -> Result<Outcome> {
             covers.join("; ")
         }
     )))
+}
+
+/// The outcome of one guarded `cargo kani` run: its exit status and the peak `cbmc` RSS (KiB) seen per harness.
+pub(crate) struct KaniRun {
+    pub(crate) success: bool,
+    pub(crate) peaks: Vec<(String, u64)>,
+}
+
+/// The largest `cbmc` process of a `ps -eo pid,rss,comm` listing, as (pid, RSS in KiB); `None` without one.
+pub(crate) fn largest_cbmc(ps: &str) -> Option<(u32, u64)> {
+    ps.lines()
+        .filter_map(|l| {
+            let mut f = l.split_whitespace();
+            let pid = f.next()?.parse().ok()?;
+            let rss = f.next()?.parse().ok()?;
+            let comm = f.next()?;
+            (comm == "cbmc" || comm.ends_with("/cbmc")).then_some((pid, rss))
+        })
+        .max_by_key(|(_, rss)| *rss)
+}
+
+/// The harness of the last `Checking harness <name>...` line of a Kani log, or `(before the first harness)`.
+pub(crate) fn current_kani_harness(log: &str) -> String {
+    log.lines()
+        .rev()
+        .find_map(|l| l.strip_prefix("Checking harness "))
+        .map_or_else(
+            || "(before the first harness)".to_owned(),
+            |h| h.trim_end_matches("...").trim().to_owned(),
+        )
+}
+
+/// Whether a `ps -eo pid,rss,comm` listing has its header line (`PID RSS COMMAND`): without it `ps` did not run.
+pub(crate) fn ps_listing_has_header(ps: &str) -> bool {
+    ps.lines().any(|l| {
+        let f: Vec<&str> = l.split_whitespace().collect();
+        f.len() >= 3 && f.first() == Some(&"PID") && f.get(1) == Some(&"RSS")
+    })
+}
+
+/// The `ps` listing the guard samples (empty if `ps` cannot run).
+fn cbmc_rss_sample() -> String {
+    std::process::Command::new("ps")
+        .args(["-eo", "pid,rss,comm"])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+        .unwrap_or_default()
+}
+
+/// TEST-SPEC-M7 G7-12 (OPEN-M7-26 A): run `cmd` (a `cargo kani`) with its output in `log` and sample the `cbmc`
+/// processes every `every` with `sample` (a `ps -eo pid,rss,comm` listing). Records the peak RSS per harness (the one of
+/// the last `Checking harness` line). When a `cbmc` exceeds `limit_kib`, it kills that process, stops the run and fails
+/// naming the harness, the RSS and the limit. Otherwise returns the run's status and the peaks.
+pub(crate) fn kani_guarded(
+    cmd: &Cmd,
+    log: &Path,
+    limit_kib: u64,
+    every: std::time::Duration,
+    sample: &mut dyn FnMut() -> String,
+) -> Result<KaniRun> {
+    let mut child = cmd.spawn_logged(log)?;
+    let mut peaks: Vec<(String, u64)> = Vec::new();
+    loop {
+        let status = child.try_wait()?;
+        let listing = sample();
+        if !ps_listing_has_header(&listing) {
+            stop_child(&mut child)?;
+            bail!(
+                "kani: no RSS sample: `ps -eo pid,rss,comm` gave no listing with a header line, so the cbmc guard cannot see memory (OPEN-M7-26); stopped"
+            );
+        }
+        if let Some((pid, rss)) = largest_cbmc(&listing) {
+            let harness = current_kani_harness(&std::fs::read_to_string(log).unwrap_or_default());
+            match peaks.iter_mut().find(|(h, _)| *h == harness) {
+                Some((_, peak)) => *peak = (*peak).max(rss),
+                None => peaks.push((harness.clone(), rss)),
+            }
+            if rss > limit_kib {
+                let _ = std::process::Command::new("kill")
+                    .args(["-KILL", &pid.to_string()])
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .status();
+                stop_child(&mut child)?;
+                bail!(
+                    "kani: cbmc RSS {rss} KiB exceeds the limit of {limit_kib} KiB (expect::KANI_CBMC_RSS_LIMIT_KIB, OPEN-M7-26) while checking harness {harness}; stopped"
+                );
+            }
+        }
+        if let Some(status) = status {
+            let log_text = std::fs::read_to_string(log).unwrap_or_default();
+            if peaks.is_empty() && log_text.contains("Checking harness ") {
+                bail!(
+                    "kani: no cbmc peak recorded although harnesses were checked (last: {}); the RSS guard saw no cbmc process (OPEN-M7-26)",
+                    current_kani_harness(&log_text)
+                );
+            }
+            return Ok(KaniRun {
+                success: status.success(),
+                peaks,
+            });
+        }
+        std::thread::sleep(every);
+    }
 }
 
 /// M4 review C-15 (R-34): the `kani::cover!` results of a Kani run, per harness ("<harness>: N of M cover properties
@@ -3677,26 +3859,62 @@ pub(crate) fn windows_cross(ctx: &Ctx) -> Result<Outcome> {
         ));
     }
     tools::require(tools::XWIN)?;
-    Cmd::cargo()
-        .args([
-            "xwin",
-            "build",
-            "--workspace",
-            "--all-targets",
-            "--locked",
-            "--target",
-            "x86_64-pc-windows-msvc",
-        ])
-        .run()?;
-    Ok(Outcome::Pass(
-        "cargo xwin build --all-targets for x86_64-pc-windows-msvc".into(),
-    ))
+    for args in windows_cross_args() {
+        Cmd::cargo().args(args).run()?;
+    }
+    Ok(Outcome::Pass(format!(
+        "cargo xwin build --all-targets for x86_64-pc-windows-msvc, excluding {} and {}; and --lib --bins of {} (ADR-034 Amendment 1 rev. 2; built and tested natively by windows-native)",
+        expect::XWIN_EXCLUDE.join(", "),
+        expect::XWIN_LIB_ONLY.join(", "),
+        expect::XWIN_LIB_ONLY.join(", ")
+    )))
+}
+
+/// The two cargo-xwin invocations of the `windows-cross` step (ADR-034 Amendment 1 rev. 2, OPEN-M7-04 A, Q127; vendored
+/// OpenSSL cannot be cross-built): (1) the workspace with all targets less `expect::XWIN_EXCLUDE` and
+/// `expect::XWIN_LIB_ONLY`; (2) the libraries and binaries of `expect::XWIN_LIB_ONLY`, without tests, examples and
+/// benches (their dev-dependency `secmp-testkit` is excluded).
+pub(crate) fn windows_cross_args() -> Vec<Vec<String>> {
+    let mut all: Vec<String> = [
+        "xwin",
+        "build",
+        "--workspace",
+        "--all-targets",
+        "--locked",
+        "--target",
+        "x86_64-pc-windows-msvc",
+    ]
+    .iter()
+    .map(|a| (*a).to_owned())
+    .collect();
+    for p in expect::XWIN_EXCLUDE.iter().chain(expect::XWIN_LIB_ONLY) {
+        all.push("--exclude".to_owned());
+        all.push((*p).to_owned());
+    }
+    let mut roots: Vec<String> = [
+        "xwin",
+        "build",
+        "--lib",
+        "--bins",
+        "--locked",
+        "--target",
+        "x86_64-pc-windows-msvc",
+    ]
+    .iter()
+    .map(|a| (*a).to_owned())
+    .collect();
+    for p in expect::XWIN_LIB_ONLY {
+        roots.push("-p".to_owned());
+        roots.push((*p).to_owned());
+    }
+    vec![all, roots]
 }
 
 pub(crate) fn windows_native(ctx: &Ctx) -> Outcome {
     if ctx.host.contains("windows") {
         return Outcome::Skip(
-            "run `cargo xtask step clippy nextest doctest kat hello` natively instead".into(),
+            "run `cargo xtask step clippy nextest doctest kat harness hello` natively instead"
+                .into(),
         );
     }
     Outcome::Skip(
@@ -4510,6 +4728,77 @@ fn sorted_str(items: &[&str]) -> Vec<String> {
     sorted(&items.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>())
 }
 
+/// TEST-SPEC-M7 G7-08 (OPEN-M7-18 A, ADR-045 Amendment 12): the `timeout-minutes` of the pinned jobs against
+/// `expect::JOB_BUDGETS`. Findings: a pinned job without a budget entry, an entry that is no pinned job, a job of
+/// `budgets` missing from `ci`, a job whose `timeout-minutes` is absent, not a number or another value, and the same for
+/// its dispatch twin (`expect::DISPATCH_TWINS`) in `dispatch`.
+pub(crate) fn job_budget_findings(
+    ci: &str,
+    dispatch: &str,
+    budgets: &[(&str, u64)],
+    twins: &[(&str, &str)],
+) -> Vec<String> {
+    let mut out = Vec::new();
+    for job in expect::PINNED_JOBS {
+        if !budgets.iter().any(|(j, _)| j == job) {
+            out.push(format!(
+                "job-budgets: pinned job `{job}` has no entry in expect::JOB_BUDGETS"
+            ));
+        }
+    }
+    let minutes = |text: &str, job: &str| -> Option<Option<u64>> {
+        yaml_jobs(text).into_iter().find(|j| j.id == job).map(|j| {
+            j.prop("timeout-minutes")
+                .and_then(|m| m.trim().parse().ok())
+        })
+    };
+    for (job, want) in budgets {
+        if !expect::PINNED_JOBS.contains(job) {
+            out.push(format!(
+                "job-budgets: `{job}` of expect::JOB_BUDGETS is no pinned job"
+            ));
+        }
+        let mut places = vec![("ci.yml", ci, *job)];
+        if let Some((twin, _)) = twins.iter().find(|(_, j)| j == job) {
+            places.push(("ci-dispatch.yml", dispatch, *twin));
+        }
+        for (file, text, id) in places {
+            match minutes(text, id) {
+                None => out.push(format!("job-budgets: no job `{id}` in {file}")),
+                Some(None) => out.push(format!(
+                    "job-budgets: {file} `{id}` has no numeric `timeout-minutes` (pinned {want})"
+                )),
+                Some(Some(found)) if found != *want => out.push(format!(
+                    "job-budgets: {file} `{id}` has `timeout-minutes: {found}`, pinned {want} (expect::JOB_BUDGETS)"
+                )),
+                Some(Some(_)) => {}
+            }
+        }
+    }
+    out
+}
+
+/// The job-level property `key` of job `job` of a workflow (`None`: no such job or no such property).
+#[cfg(test)]
+pub(crate) fn job_prop(text: &str, job: &str, key: &str) -> Option<String> {
+    yaml_jobs(text)
+        .into_iter()
+        .find(|j| j.id == job)
+        .and_then(|j| j.prop(key).map(str::to_owned))
+}
+
+/// The `cargo xtask` gate `run:` lines of job `job` of a workflow, in order (`install-tools` aside).
+#[cfg(test)]
+pub(crate) fn job_gate_lines(text: &str, job: &str) -> Vec<String> {
+    yaml_jobs(text)
+        .into_iter()
+        .filter(|j| j.id == job)
+        .flat_map(|j| j.steps.into_iter().flatten())
+        .filter(|(k, v)| k == "run" && is_gate_run(v))
+        .map(|(_, v)| v)
+        .collect()
+}
+
 /// A step that runs a `cargo xtask` gate (not the tool installation).
 fn is_gate_run(run: &str) -> bool {
     run.contains("cargo xtask") && !run.contains("install-tools")
@@ -4778,6 +5067,12 @@ fn workflows(root: &Path) -> Result<String> {
         text_of(expect::REQUIRED_WORKFLOW),
         text_of(".github/workflows/ci-dispatch.yml"),
     ));
+    findings.extend(job_budget_findings(
+        text_of(expect::REQUIRED_WORKFLOW),
+        text_of(".github/workflows/ci-dispatch.yml"),
+        expect::JOB_BUDGETS,
+        expect::DISPATCH_TWINS,
+    ));
     let mut scanned = texts.clone();
     for f in walk_files(&root.join("crates"), &|p: &Path| {
         p.extension().is_some_and(|e| e == "rs") && p.components().any(|c| c.as_os_str() == "tests")
@@ -4799,7 +5094,7 @@ fn workflows(root: &Path) -> Result<String> {
         bail!("{} CI-hygiene finding(s)", findings.len());
     }
     Ok(format!(
-        "workflows: {} files, triggers/SHA pins/flow style/continue-on-error/permissions ok; pinned jobs ({}) only in ci.yml, no dispatch there, job conditions, needs, defaults/shell and gate run lines as pinned, delegations mapped (accident guard, not tamper-proof)",
+        "workflows: {} files, triggers/SHA pins/flow style/continue-on-error/permissions ok; pinned jobs ({}) only in ci.yml, no dispatch there, job conditions, needs, defaults/shell, gate run lines and budgets (also of the dispatch twins) as pinned, delegations mapped (accident guard, not tamper-proof)",
         files.len(),
         expect::PINNED_JOBS.join(", ")
     ))
@@ -6727,7 +7022,7 @@ mod tests {
 
     /// The pinned jobs `linux-full` delegates to (M4 review C-5), with their pinned conditions, `needs:` and gate lines,
     /// as they follow the required jobs in a `ci.yml` fixture.
-    const PINNED_EXTRA: &str = "  ct:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict ct\n  mutants-shard:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    strategy:\n      matrix:\n        shard:\n          - 0\n          - 1\n    steps:\n      - run: cargo xtask install-tools --set mutants\n      - run: cargo xtask step --strict mutants --shard ${{ matrix.shard }}/12\n  mutants:\n    needs: mutants-shard\n    if: always() && (github.event_name == 'schedule' || github.event_name == 'pull_request')\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict mutants-merge\n  proverif-hx:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict proverif --models hx --jobs 4\n  proverif-link:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict proverif --models link --jobs 4\n  kani:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict kani\n  fuzz:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict fuzz\n  ci-verdict:\n    needs:\n      - linux-fast\n      - windows-native\n      - xwin-cross\n      - linux-full\n      - ct\n      - mutants-shard\n      - mutants\n      - proverif-hx\n      - proverif-link\n      - kani\n      - fuzz\n    if: always() && (github.event_name == 'schedule' || github.event_name == 'pull_request')\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict ci-verdict\n";
+    const PINNED_EXTRA: &str = "  ct:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict ct\n  mutants-shard:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    strategy:\n      matrix:\n        shard:\n          - 0\n          - 1\n    steps:\n      - run: cargo xtask install-tools --set mutants\n      - run: cargo xtask step --strict mutants --shard ${{ matrix.shard }}/12\n  mutants:\n    needs: mutants-shard\n    if: always() && (github.event_name == 'schedule' || github.event_name == 'pull_request')\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict mutants-merge\n  proverif-hx:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict proverif --models hx --jobs 4\n  proverif-link:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict proverif --models link --jobs 4\n  kani:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict kani\n  fuzz:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict fuzz\n  harness:\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict harness\n  ci-verdict:\n    needs:\n      - linux-fast\n      - windows-native\n      - xwin-cross\n      - linux-full\n      - ct\n      - mutants-shard\n      - mutants\n      - proverif-hx\n      - proverif-link\n      - kani\n      - fuzz\n      - harness\n    if: always() && (github.event_name == 'schedule' || github.event_name == 'pull_request')\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict ci-verdict\n";
 
     /// M6-12: the `ci.yml` of `b83ed0b` (an unquoted `: ` in the Kani step name) gives exactly one finding, at line 240.
     #[test]
@@ -6850,7 +7145,8 @@ mod tests {
             step.contains("nasm -v") && step.contains("choco install nasm --version=$pin"),
             "{step}"
         );
-        let gate = "        run: cargo xtask step --strict clippy nextest doctest kat hello\n";
+        let gate =
+            "        run: cargo xtask step --strict clippy nextest doctest kat harness hello\n";
         let late = ci
             .replacen(&step, "", 1)
             .replacen(gate, &format!("{gate}{step}"), 1);
@@ -6998,7 +7294,7 @@ mod tests {
         );
         // the conditions as parsed
         let parsed = job_conditions(ci);
-        assert_eq!(parsed.len(), 13);
+        assert_eq!(parsed.len(), 14);
         assert_eq!(parsed.first(), Some(&("linux-fast".to_owned(), None)));
         assert_eq!(
             parsed.get(4),
@@ -7383,7 +7679,7 @@ mod tests {
     /// `linux-fast` after its `runs-on`, `fast_step` replaces its first gate step line.
     fn gate_ci(fast: &str, fast_step: &str) -> String {
         format!(
-            "on:\n  pull_request:\npermissions:\n  contents: read\njobs:\n  linux-fast:\n    runs-on: x\n{fast}    steps:\n      - uses: actions/cache/save@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6\n        if: steps.c.outputs.hit != 'true'\n{fast_step}      - run: cargo xtask step --strict sbom systemd\n  windows-native:\n    runs-on: x\n    steps:\n      - run: cargo xtask install-tools --set windows\n      - run: cargo xtask step --strict clippy nextest doctest kat hello\n  xwin-cross:\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict windows-cross\n  linux-full:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask ci-full --strict --delegated windows-native --delegated windows-cross --delegated mutants --delegated ct --delegated fuzz --delegated kani --delegated proverif-link --models tr\n{PINNED_EXTRA}"
+            "on:\n  pull_request:\npermissions:\n  contents: read\njobs:\n  linux-fast:\n    runs-on: x\n{fast}    steps:\n      - uses: actions/cache/save@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6\n        if: steps.c.outputs.hit != 'true'\n{fast_step}      - run: cargo xtask step --strict sbom systemd\n  windows-native:\n    runs-on: x\n    steps:\n      - run: cargo xtask install-tools --set windows\n      - run: cargo xtask step --strict clippy nextest doctest kat harness hello\n  xwin-cross:\n    runs-on: x\n    steps:\n      - run: cargo xtask step --strict windows-cross\n  linux-full:\n    if: github.event_name == 'schedule' || github.event_name == 'pull_request'\n    runs-on: x\n    steps:\n      - run: cargo xtask ci-full --strict --delegated windows-native --delegated windows-cross --delegated mutants --delegated ct --delegated fuzz --delegated kani --delegated proverif-link --delegated harness --models tr\n{PINNED_EXTRA}"
         )
     }
 
@@ -7407,7 +7703,7 @@ mod tests {
     /// hygiene rules now yields a finding, as do `needs:`, a step-level `if` on a gate step and a changed gate line.
     #[test]
     fn required_job_bypasses_are_findings() {
-        let gate = "      - run: cargo xtask ci-fast --strict\n";
+        let gate = "      - run: cargo xtask ci-fast --strict --delegated harness\n";
         let good = gate_ci("", gate);
         assert_eq!(all_ci_findings(&good), Vec::<String>::new());
         // 2: `if : false`
@@ -7435,7 +7731,7 @@ mod tests {
         // 6: a step-level `if` on a gate step
         let case6 = gate_ci(
             "",
-            "      - if: false\n        run: cargo xtask ci-fast --strict\n",
+            "      - if: false\n        run: cargo xtask ci-fast --strict --delegated harness\n",
         );
         assert!(
             all_ci_findings(&case6)
@@ -7445,7 +7741,7 @@ mod tests {
         );
         let case6b = gate_ci(
             "",
-            "      - run: cargo xtask ci-fast --strict\n        if: false\n",
+            "      - run: cargo xtask ci-fast --strict --delegated harness\n        if: false\n",
         );
         assert!(!all_ci_findings(&case6b).is_empty(), "case 6b");
         // 7: `continue-on-error: true # false`, and the quoted-key and expression forms
@@ -7458,7 +7754,7 @@ mod tests {
         }
         let case7 = gate_ci(
             "",
-            "      - run: cargo xtask ci-fast --strict\n        continue-on-error: true # false\n",
+            "      - run: cargo xtask ci-fast --strict --delegated harness\n        continue-on-error: true # false\n",
         );
         assert!(!all_ci_findings(&case7).is_empty(), "case 7 step");
         // a flow-style job and a renamed check run
@@ -7485,7 +7781,7 @@ mod tests {
         // an `if` text inside a block scalar is content, not a key
         let block = gate_ci(
             "",
-            "      - run: cargo xtask ci-fast --strict\n      - run: |\n          if: false\n          echo done\n",
+            "      - run: cargo xtask ci-fast --strict --delegated harness\n      - run: |\n          if: false\n          echo done\n",
         );
         assert_eq!(all_ci_findings(&block), Vec::<String>::new());
         // the real ci.yml passes every check
@@ -7519,7 +7815,10 @@ mod tests {
     #[test]
     fn deleting_or_neutering_a_pinned_job_is_a_finding() {
         let real = lf(include_str!("../../.github/workflows/ci.yml"));
-        let fixture = gate_ci("", "      - run: cargo xtask ci-fast --strict\n");
+        let fixture = gate_ci(
+            "",
+            "      - run: cargo xtask ci-fast --strict --delegated harness\n",
+        );
         for (what, ci) in [("fixture", fixture.as_str()), ("ci.yml", real.as_str())] {
             assert_eq!(all_ci_findings(ci), Vec::<String>::new(), "{what}");
             let variants = pin_edit_variants(ci);
@@ -7545,7 +7844,29 @@ mod tests {
                 ),
                 (
                     "linux-full without --delegated proverif-link",
-                    ci.replacen(" --delegated proverif-link --models tr", " --models tr", 1),
+                    ci.replacen(" --delegated proverif-link --delegated harness --models tr", " --delegated harness --models tr", 1),
+                ),
+                // TEST-SPEC-M7 G7-07: the harness job deleted, its gate line changed, or a delegation dropped
+                ("delete harness", without_job(ci, "harness")),
+                (
+                    "harness without --strict",
+                    ci.replacen("cargo xtask step --strict harness", "cargo xtask step harness", 1),
+                ),
+                (
+                    "linux-fast without --delegated harness",
+                    ci.replacen("cargo xtask ci-fast --strict --delegated harness", "cargo xtask ci-fast --strict", 1),
+                ),
+                (
+                    "linux-full without --delegated harness",
+                    ci.replacen(" --delegated harness --models tr", " --models tr", 1),
+                ),
+                (
+                    "harness skipped on push",
+                    ci.replacen(
+                        "  harness:\n    runs-on:",
+                        "  harness:\n    if: github.event_name == 'pull_request'\n    runs-on:",
+                        1,
+                    ),
                 ),
                 // M6 (WEISUNG M6-11): the Kani job deleted, its gate line changed, or its delegation dropped
                 ("delete kani", without_job(ci, "kani")),
@@ -7698,7 +8019,10 @@ mod tests {
     /// finding; every real workflow passes.
     #[test]
     fn workflow_permissions_shell_and_prover_override_are_findings() {
-        let good = gate_ci("", "      - run: cargo xtask ci-fast --strict\n");
+        let good = gate_ci(
+            "",
+            "      - run: cargo xtask ci-fast --strict --delegated harness\n",
+        );
         assert_eq!(all_ci_findings(&good), Vec::<String>::new());
         let block = "permissions:\n  contents: read\n";
         let variants = [
@@ -7711,7 +8035,7 @@ mod tests {
             ),
             (
                 "job-level permissions",
-                gate_ci("    permissions:\n      contents: write\n      id-token: write\n", "      - run: cargo xtask ci-fast --strict\n"),
+                gate_ci("    permissions:\n      contents: write\n      id-token: write\n", "      - run: cargo xtask ci-fast --strict --delegated harness\n"),
             ),
             (
                 "defaults.run.shell",
@@ -7719,11 +8043,11 @@ mod tests {
             ),
             (
                 "job defaults",
-                gate_ci("    defaults:\n      run:\n        shell: 'bash -c \"exit 0\"'\n", "      - run: cargo xtask ci-fast --strict\n"),
+                gate_ci("    defaults:\n      run:\n        shell: 'bash -c \"exit 0\"'\n", "      - run: cargo xtask ci-fast --strict --delegated harness\n"),
             ),
             (
                 "step shell",
-                gate_ci("", "      - run: cargo xtask ci-fast --strict\n        shell: 'bash -c \"exit 0\"'\n"),
+                gate_ci("", "      - run: cargo xtask ci-fast --strict --delegated harness\n        shell: 'bash -c \"exit 0\"'\n"),
             ),
             (
                 "env SECMP_PROVERIF",
@@ -8429,7 +8753,6 @@ mod tests {
             "nasm -v || exit /b 1",
             "git --version || exit /b 1",
             "rustup component list --installed || exit /b 1",
-            "pwsh -v || echo no-pwsh",
         ]
         .map(str::to_owned)
         .to_vec();
@@ -8439,7 +8762,7 @@ mod tests {
         for s in &steps {
             if step_field(s, "shell").as_deref() == Some("cmd") {
                 for l in step_run(s) {
-                    if !l.ends_with(" || exit /b 1") && l != "pwsh -v || echo no-pwsh" {
+                    if !l.ends_with(" || exit /b 1") {
                         out.push(format!("cmd line without `|| exit /b 1`: {l}"));
                     }
                 }
@@ -8452,7 +8775,7 @@ mod tests {
                 .filter(|s| step_field(s, "if").as_deref() == Some(cond.as_str()))
                 .collect()
         };
-        let gate = "cargo xtask step --strict clippy nextest doctest kat hello";
+        let gate = "cargo xtask step --strict clippy nextest doctest kat harness hello";
         let build = "cargo build --locked --release -p secmp-testkit --features harness --example tor_smoke";
         for (line, what) in [
             (gate, "ci-dispatch win-test gate line"),
@@ -8511,6 +8834,304 @@ mod tests {
         out
     }
 
+    /// The `shell: cmd` steps of `win-ondemand.yml` whose last command line ends in an `|| <fallback>` without `exit /b`:
+    /// in `cmd` the step's exit code is the final ERRORLEVEL, and `echo` does not reset it, so the failing optional command's
+    /// code survives the fallback (run 40692102750: `pwsh -v || echo no-pwsh` ended the probe step with exit code 1).
+    fn win_cmd_bare_optional_findings(text: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        for job in ["vm-up", "win-suite", "vm-down"] {
+            for step in win_steps(text, job) {
+                if step_field(&step, "shell").as_deref() != Some("cmd") {
+                    continue;
+                }
+                let name = step_field(&step, "name").unwrap_or_default();
+                if let Some(last) = step_run(&step).last()
+                    && last.contains("||")
+                    && !last.contains("exit /b")
+                {
+                    out.push(format!(
+                        "{job}: step {name:?}: last line `{last}` leaks its ERRORLEVEL"
+                    ));
+                }
+            }
+        }
+        out
+    }
+
+    /// WEISUNG M7-A1d: no `shell: cmd` step of `win-ondemand.yml` ends in a bare optional probe (`<cmd> || echo …`); the
+    /// file as committed has none, the file with the old `pwsh -v || echo no-pwsh` line is a finding, and so is any
+    /// other last line of that form.
+    #[test]
+    fn win_ondemand_cmd_steps_have_no_bare_optional_probe() {
+        let real = win_text();
+        assert_eq!(win_cmd_bare_optional_findings(&real), Vec::<String>::new());
+        let old = plant(
+            &real,
+            "          rustup component list --installed || exit /b 1\n",
+            "          rustup component list --installed || exit /b 1\n          pwsh -v || echo no-pwsh\n",
+        );
+        let found = win_cmd_bare_optional_findings(&old);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(
+            found
+                .iter()
+                .all(|f| f.contains("Probe the runner toolchain")
+                    && f.contains("pwsh -v || echo no-pwsh"))
+        );
+        let other = plant(
+            &real,
+            "          git --version || exit /b 1\n",
+            "          git --version || echo no-git\n",
+        );
+        assert!(
+            win_cmd_bare_optional_findings(&other).is_empty(),
+            "only the last line leaks"
+        );
+        let last = plant(
+            &real,
+            "          rustup component list --installed || exit /b 1\n",
+            "          rustup component list --installed || echo none\n",
+        );
+        assert_eq!(win_cmd_bare_optional_findings(&last).len(), 1);
+    }
+
+    /// The text of a repository file, line endings normalised.
+    fn m7_repo_file(rel_path: &str) -> Result<String> {
+        Ok(lf(&std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("..")
+                .join(rel_path),
+        )?))
+    }
+
+    /// The text of the `[[<table>.<name>]]` blocks of a vet file (up to the next `[[`).
+    fn vet_blocks(text: &str, table: &str, name: &str) -> Vec<String> {
+        let head = format!("[[{table}.{name}]]\n");
+        text.split("\n\n")
+            .filter(|b| b.starts_with(&head))
+            .map(str::to_owned)
+            .collect()
+    }
+
+    /// TEST-SPEC-M7 G7-06 (OPEN-M7-05 A): the `secmp-client-core` → `secmp-store` edge is the only store dependency line of
+    /// the client core and sits in its `[target.'cfg(not(kani))'.dependencies]` table, so the Kani build (`--cfg kani`, which
+    /// `cargo kani` passes as `CARGO_ENCODED_RUSTFLAGS`) has no store, no `rusqlite` and no `openssl-src`; the same tree
+    /// without the cfg has all three (the negative control). `cargo kani -p secmp-client-core --only-codegen` is the
+    /// evidence of the build itself (`docs/reviews/M07-evidence/kani-codegen-g7-06-<sha7>.txt`).
+    #[test]
+    fn kani_build_has_no_store() -> Result<()> {
+        let manifest = m7_repo_file("crates/secmp-client-core/Cargo.toml")?;
+        let mut table = String::new();
+        let mut store_lines = Vec::new();
+        for line in manifest.lines() {
+            let t = line.trim();
+            if t.starts_with('[') {
+                table = t.to_owned();
+                continue;
+            }
+            if t.starts_with("secmp-store") {
+                store_lines.push(table.clone());
+            }
+        }
+        assert_eq!(
+            store_lines,
+            ["[target.'cfg(not(kani))'.dependencies]"],
+            "the one secmp-store dependency line of secmp-client-core"
+        );
+        let tree = |kani: bool| -> Result<String> {
+            let cmd = Cmd::cargo()
+                .args([
+                    "tree",
+                    "--locked",
+                    "-p",
+                    "secmp-client-core",
+                    "-e",
+                    // `openssl-src` is a build-dependency of `openssl-sys`: `normal` alone never lists it
+                    "normal,build",
+                    "--target",
+                    "x86_64-unknown-linux-gnu",
+                    "--prefix",
+                    "none",
+                ])
+                .env_remove("RUSTFLAGS");
+            let cmd = if kani {
+                cmd.env("CARGO_ENCODED_RUSTFLAGS", "--cfg\u{1f}kani")
+            } else {
+                cmd.env_remove("CARGO_ENCODED_RUSTFLAGS")
+            };
+            cmd.read()
+        };
+        let has = |text: &str, prefix: &str| text.lines().any(|l| l.starts_with(prefix));
+        let with_kani = tree(true)?;
+        let without = tree(false)?;
+        for prefix in ["secmp-store v", "rusqlite v", "openssl-src v"] {
+            assert!(!has(&with_kani, prefix), "kani build has {prefix}");
+            assert!(has(&without, prefix), "negative control lacks {prefix}");
+        }
+        Ok(())
+    }
+
+    /// TEST-SPEC-M7 G7-02 (ADR-055 item 5, Q129, Q136): the vet records of the M7 dependency set. `argon2` and `blake2`
+    /// (the zero-exemption crypto closure) are covered by publisher trust of their RustCrypto repositories, ratified on
+    /// 2026-10-29 by the reviewer under the owner's delegation; `rusqlite`, a direct dependency of `secmp-store`, has a
+    /// full source audit by the reviewer's verifier, ratified the same way, and no exemption; the build inputs and the
+    /// lock-only crates are tracked exemptions that say so; `check_vet_closure` stays zero-exemption with `argon2` and
+    /// `blake2` in the closure. `cargo vet --locked` itself is the `vet` step.
+    #[test]
+    fn vet_records_for_m7_closure() -> Result<()> {
+        let audits = m7_repo_file("supply-chain/audits.toml")?;
+        let config = m7_repo_file("supply-chain/config.toml")?;
+        for (krate, publisher, start) in [
+            ("argon2", "github:RustCrypto/password-hashes", "2026-08-27"),
+            ("blake2", "github:RustCrypto/hashes", "2026-08-26"),
+            // lock-only under argon2 but inside the zero-exemption closure: publisher trust, not an exemption (A-2 finding)
+            ("password-hash", "github:RustCrypto/traits", "2026-04-08"),
+            ("phc", "github:RustCrypto/formats", "2026-03-09"),
+        ] {
+            let blocks = vet_blocks(&audits, "trusted", krate);
+            assert_eq!(blocks.len(), 1, "{krate}");
+            let b = blocks.first().map_or("", String::as_str);
+            assert!(b.contains("criteria = \"safe-to-deploy\""), "{krate}");
+            assert!(
+                b.contains(&format!("trusted-publisher = \"{publisher}\"")),
+                "{krate}"
+            );
+            assert!(
+                b.contains(
+                    "ratified 2026-10-29 by the reviewer under the owner's delegation of 2026-10-29 (Q136)"
+                ),
+                "{krate}"
+            );
+            assert!(!b.contains("ratification pending"), "{krate}");
+            assert!(
+                b.contains("ADR-055 item") && b.contains("Read by the implementer:"),
+                "{krate}"
+            );
+            assert!(b.contains(&format!("start = \"{start}\"")), "{krate}");
+            assert!(b.contains("end = \"2027-10-28\""), "{krate}");
+            assert!(
+                vet_blocks(&config, "exemptions", krate).is_empty(),
+                "{krate} has no exemption"
+            );
+        }
+        let rusqlite = vet_blocks(&audits, "audits", "rusqlite");
+        assert_eq!(rusqlite.len(), 1);
+        let r = rusqlite.first().map_or("", String::as_str);
+        assert!(r.contains("version = \"0.39.0\"") && r.contains("criteria = \"safe-to-deploy\""));
+        assert!(r.contains("who = \"Christopher Carl (owner), ratified 2026-10-29 by delegation to the reviewer (Q136); source audit by the reviewer's verifier (Claude Opus)\""));
+        assert!(
+            vet_blocks(&config, "exemptions", "rusqlite").is_empty(),
+            "rusqlite has a record, no exemption"
+        );
+        for (krate, version, needle) in [
+            (
+                "libsqlite3-sys",
+                "0.37.0",
+                "rusqlite (secmp-store, ADR-055) and arti-client",
+            ),
+            (
+                "openssl-sys",
+                "0.9.117",
+                "ADR-055 item 5, build input of the vendored OpenSSL",
+            ),
+            (
+                "openssl-src",
+                "300.6.1+3.6.3",
+                "ADR-055 item 5, build input of the vendored OpenSSL",
+            ),
+        ] {
+            let blocks = vet_blocks(&config, "exemptions", krate);
+            assert_eq!(blocks.len(), 1, "{krate}");
+            let b = blocks.first().map_or("", String::as_str);
+            assert!(b.contains(&format!("version = \"{version}\"")), "{krate}");
+            assert!(
+                b.contains("Tracked exemption (supply-chain/README.md):") && b.contains(needle),
+                "{krate}"
+            );
+        }
+        // base64ct and cpufeatures stay under the publisher trust of user-id 267
+        for krate in ["base64ct", "cpufeatures"] {
+            let blocks = vet_blocks(&audits, "trusted", krate);
+            assert!(
+                blocks.iter().any(|b| b.contains("user-id = 267")),
+                "{krate}"
+            );
+        }
+        // the zero-exemption closure holds the new crates and no exemption
+        let ws = crate::meta::Workspace::load()?;
+        let closure = crate::policy::zero_exemption_closure(&ws)?;
+        for krate in ["argon2", "blake2", "password-hash", "phc"] {
+            assert!(
+                closure.iter().any(|(n, _)| n == krate),
+                "{krate} in the closure"
+            );
+        }
+        let summary = crate::policy::check_vet_closure(&ws)?;
+        assert!(summary.contains(", 0 exempted;"), "{summary}");
+        Ok(())
+    }
+
+    /// TEST-SPEC-M7 G7-03 (ADR-055, item 6): the licence policy is untouched by the M7 closure — the allowlist and the
+    /// exceptions of `deny.toml` are the M6 ones, with Apache-2.0 (OpenSSL) and BSD-3-Clause (SQLCipher) among them, and
+    /// the new lock crates carry licences inside it (`MIT`, `MIT OR Apache-2.0`, `Apache-2.0 OR MIT`, `MIT/Apache-2.0`);
+    /// `cargo deny check licenses` is the gate.
+    #[test]
+    fn licenses_cover_m7_closure() -> Result<()> {
+        let deny = m7_repo_file("deny.toml")?;
+        let list = deny
+            .split_once("\nallow = [\n")
+            .and_then(|(_, r)| r.split_once("\n]"))
+            .map(|(b, _)| b.to_owned())
+            .unwrap_or_default();
+        let allow: Vec<&str> = list
+            .lines()
+            .filter_map(|l| {
+                l.trim()
+                    .strip_prefix('"')
+                    .and_then(|r| r.split_once('"'))
+                    .map(|(v, _)| v)
+            })
+            .collect();
+        assert_eq!(
+            allow,
+            [
+                "MIT",
+                "Apache-2.0",
+                "BSD-2-Clause",
+                "BSD-3-Clause",
+                "ISC",
+                "Zlib",
+                "Unicode-3.0",
+                "Unicode-DFS-2016",
+                "MPL-2.0"
+            ]
+        );
+        assert!(allow.contains(&"Apache-2.0") && allow.contains(&"BSD-3-Clause"));
+        let exceptions = deny
+            .split_once("\nexceptions = [\n")
+            .and_then(|(_, r)| r.split_once("\n]"))
+            .map(|(b, _)| b.matches("crate = ").count())
+            .unwrap_or_default();
+        assert_eq!(exceptions, 3, "slint, async_executors, notify only");
+        let ws = crate::meta::Workspace::load()?;
+        for krate in [
+            "argon2",
+            "blake2",
+            "password-hash",
+            "phc",
+            "openssl-sys",
+            "openssl-src",
+            "rusqlite",
+            "libsqlite3-sys",
+        ] {
+            assert!(
+                ws.all.values().any(|(n, _, _)| n == krate),
+                "{krate} is in the lock"
+            );
+        }
+        Ok(())
+    }
+
     /// W-3g
     #[test]
     fn win_suite_lines_per_suite() {
@@ -8522,8 +9143,8 @@ mod tests {
         );
         let kat = plant(
             &real,
-            "doctest kat hello || exit",
-            "nextest kat hello || exit",
+            "doctest kat harness hello || exit",
+            "nextest kat harness hello || exit",
         );
         assert!(!win_suite_line_findings(&kat, &dispatch).is_empty());
         let nasm = plant(&real, "nasm -v || exit /b 1", "nasm -v");
@@ -8915,12 +9536,18 @@ mod tests {
         assert!(workflow_findings("miri-full.yml", &text).is_empty());
     }
 
-    /// TEST-SPEC-M6 COV-01 (OPEN-M6-23): `secmp-client-core` joins the 90 % crates.
+    /// TEST-SPEC-M6 COV-01 (OPEN-M6-23): `secmp-client-core` joins the 90 % crates; TEST-SPEC-M7 G7-14: so does
+    /// `secmp-store`.
     #[test]
     fn coverage_strict_includes_client_core() {
         assert_eq!(
             expect::COVERAGE_STRICT,
-            &["secmp-crypto", "secmp-proto", "secmp-client-core"]
+            &[
+                "secmp-crypto",
+                "secmp-proto",
+                "secmp-client-core",
+                "secmp-store"
+            ]
         );
         assert!((expect::COVERAGE_STRICT_MIN - 90.0).abs() < f64::EPSILON);
     }
@@ -9101,12 +9728,17 @@ mod tests {
     /// Output claim; a site added without its entry, or an entry no code sets, fails.
     #[test]
     fn known_sites_equal_the_product_site_tags() -> Result<()> {
-        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../crates/secmp-proto/src");
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../crates");
         let mut tags: BTreeSet<String> = BTreeSet::new();
         let mut calls = 0_usize;
-        for f in walk_files(&src, &|p: &Path| {
+        let mut files = walk_files(&root.join("secmp-proto/src"), &|p: &Path| {
             p.extension().is_some_and(|e| e == "rs") && !p.ends_with("tests.rs")
-        })? {
+        })?;
+        // TEST-SPEC-M7 CT-01: the store's unlock tag (`wrap::WRAP_SITE_KAT`)
+        files.extend(walk_files(&root.join("secmp-store/src"), &|p: &Path| {
+            p.extension().is_some_and(|e| e == "rs")
+        })?);
+        for f in files {
             let full = lf(&std::fs::read_to_string(&f)?);
             let text = full.split("#[cfg(test)]\nmod ").next().unwrap_or_default();
             for (at, _) in text.match_indices("_SITE_KAT.set(") {
@@ -9230,11 +9862,12 @@ mod tests {
     }
 
     /// TEST-SPEC-M6 MU-01 (ADR-047 Amendment 4, OPEN-M6-23): the gate covers `secmp-crypto`, `secmp-proto`,
-    /// `secmp-relay`, `secmp-client-core` and `secmp-transport` in the 8 shards with the Amendment 2 floor; the two M6
-    /// packages are mutated in the second run of every shard, tested by their own tests and the testkit harness
-    /// (`--test-package`, feature `harness`), the first run keeps the three others with feature `kat`; `secmp-testkit`
+    /// `secmp-relay`, `secmp-client-core`, `secmp-transport` and (M7, ADR-047 Amendment 10, G7-13) `secmp-store` in the 8
+    /// shards with the Amendment 2 floor; the two M6 packages are mutated in the second run of every shard, tested by their
+    /// own tests and the testkit harness (`--test-package`, feature `harness`), the first run keeps the four others with
+    /// feature `kat`; `secmp-testkit`
     /// itself is never mutated (G-11); `MUTANT_EXCLUDE_FILES` holds only Kani-only files and Arti glue named in
-    /// `docs/mutants-accepted.md` §Excluded; docs/06 §4 lists the five packages.
+    /// `docs/mutants-accepted.md` §Excluded; docs/06 §4 lists the six packages.
     #[test]
     fn mutants_scope_includes_client_core_and_transport() {
         assert_eq!(
@@ -9244,7 +9877,8 @@ mod tests {
                 "secmp-proto",
                 "secmp-relay",
                 "secmp-client-core",
-                "secmp-transport"
+                "secmp-transport",
+                "secmp-store"
             ]
         );
         assert_eq!(
@@ -9268,7 +9902,7 @@ mod tests {
             let second = pairs(&mutants_harness_args(shard));
             let has =
                 |p: &[(String, String)], a: &str, b: &str| p.iter().any(|(x, y)| x == a && y == b);
-            for p in ["secmp-crypto", "secmp-proto", "secmp-relay"] {
+            for p in ["secmp-crypto", "secmp-proto", "secmp-relay", "secmp-store"] {
                 assert!(
                     has(&first, "--package", p) && !has(&second, "--package", p),
                     "{k} {p}"
@@ -9379,7 +10013,8 @@ mod tests {
         let accepted = std::fs::read_to_string(
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../docs/mutants-accepted.md"),
         )?;
-        let run_163 = "crates/secmp-client-core/src/scheduler/core/mod.rs:751:39: replace || with && in World::prepare_fetch\n\
+        // the run of M6 (163 mutants), with the core row's place as renumbered after M7 B-SC2 (755:39 -> 806:39)
+        let run_163 = "crates/secmp-client-core/src/scheduler/core/mod.rs:806:39: replace || with && in World::prepare_fetch\n\
              crates/secmp-transport/src/tls.rs:366:13: replace || with && in <impl StreamProvider for TlsProvider<D>>::connect\n\
              crates/secmp-transport/src/tor/mod.rs:53:26: replace | with ^ in base32\n";
         assert_eq!(
@@ -9620,13 +10255,21 @@ mod tests {
         let floor = |outcomes: Vec<Value>| -> Result<MutantsFloor> {
             Ok(mutants_floor(&mutant_counts(&outcomes)?))
         };
+        // the four other packages, all above the floor
+        let rest = || {
+            [
+                mutant_outcomes("secmp-relay", 50, 10, 0),
+                mutant_outcomes("secmp-client-core", 40, 5, 0),
+                mutant_outcomes("secmp-transport", 30, 3, 0),
+                mutant_outcomes("secmp-store", 20, 2, 0),
+            ]
+            .concat()
+        };
         // every crypto mutant unviable (the R-06 build failure)
         let all_unviable = [
             mutant_outcomes("secmp-crypto", 0, 241, 0),
             mutant_outcomes("secmp-proto", 60, 30, 1),
-            mutant_outcomes("secmp-relay", 50, 10, 0),
-            mutant_outcomes("secmp-client-core", 40, 5, 0),
-            mutant_outcomes("secmp-transport", 30, 3, 0),
+            rest(),
         ]
         .concat();
         let MutantsFloor {
@@ -9648,9 +10291,7 @@ mod tests {
             [
                 mutant_outcomes("secmp-crypto", 64, 36, 0),
                 mutant_outcomes("secmp-proto", 70, 30, 0),
-                mutant_outcomes("secmp-relay", 50, 10, 0),
-                mutant_outcomes("secmp-client-core", 40, 5, 0),
-                mutant_outcomes("secmp-transport", 30, 3, 0),
+                rest(),
             ]
             .concat(),
         )?;
@@ -9666,9 +10307,7 @@ mod tests {
             [
                 mutant_outcomes("secmp-crypto", 70, 30, 0),
                 mutant_outcomes("secmp-proto", 63, 36, 1),
-                mutant_outcomes("secmp-relay", 50, 10, 0),
-                mutant_outcomes("secmp-client-core", 40, 5, 0),
-                mutant_outcomes("secmp-transport", 30, 3, 0),
+                rest(),
             ]
             .concat(),
         )?;
@@ -9685,9 +10324,7 @@ mod tests {
             [
                 mutant_outcomes("secmp-crypto", 65, 35, 0),
                 mutant_outcomes("secmp-proto", 80, 18, 2),
-                mutant_outcomes("secmp-relay", 50, 10, 0),
-                mutant_outcomes("secmp-client-core", 40, 5, 0),
-                mutant_outcomes("secmp-transport", 30, 3, 0),
+                rest(),
             ]
             .concat(),
         )?;
@@ -9704,6 +10341,7 @@ mod tests {
                 "secmp-relay: caught 50, missed 0, timeout 0, unviable 10 of 60 (caught 83.3 %, at least 50 %, unviable 16.7 %)".to_owned(),
                 "secmp-client-core: caught 40, missed 0, timeout 0, unviable 5 of 45 (caught 88.9 %, at least 50 %, unviable 11.1 %)".to_owned(),
                 "secmp-transport: caught 30, missed 0, timeout 0, unviable 3 of 33 (caught 90.9 %, at least 50 %, unviable 9.1 %)".to_owned(),
+                "secmp-store: caught 20, missed 0, timeout 0, unviable 2 of 22 (caught 90.9 %, at least 50 %, unviable 9.1 %)".to_owned(),
             ]
         );
         // a package without any mutant: no caught mutant
@@ -9714,7 +10352,8 @@ mod tests {
                 "secmp-crypto: no caught mutant (of 0)".to_owned(),
                 "secmp-relay: no caught mutant (of 0)".to_owned(),
                 "secmp-client-core: no caught mutant (of 0)".to_owned(),
-                "secmp-transport: no caught mutant (of 0)".to_owned()
+                "secmp-transport: no caught mutant (of 0)".to_owned(),
+                "secmp-store: no caught mutant (of 0)".to_owned()
             ]
         );
         Ok(())
@@ -9742,6 +10381,288 @@ mod tests {
             m.remove("package");
         }
         assert!(mutant_counts(&[nameless]).is_err());
+    }
+
+    /// TEST-SPEC-M7 G7-12 (OPEN-M7-26 A): the `kani` step runs every `cargo kani` under the cbmc RSS guard with the 14.5 GB
+    /// limit; the guard reads the largest `cbmc` and the current harness, records peaks, and — red test with a lowered
+    /// limit — stops a run whose `cbmc` exceeds it, kills that process and fails naming the harness; under the limit the
+    /// run's own status and the peak are returned.
+    #[test]
+    fn kani_rss_guard() -> Result<()> {
+        assert_eq!(expect::KANI_CBMC_RSS_LIMIT_KIB, 14_160_156);
+        assert_eq!(14_500_000_000_u64 / 1024, expect::KANI_CBMC_RSS_LIMIT_KIB);
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let gates_rs = lf(&std::fs::read_to_string(root.join("xtask/src/gates.rs"))?);
+        let body = gates_rs
+            .split_once("pub(crate) fn kani(ctx: &Ctx) -> Result<Outcome> {")
+            .and_then(|(_, rest)| rest.split_once("\n}\n"))
+            .map(|(b, _)| b)
+            .unwrap_or_default();
+        assert!(body.contains("kani_guarded(") && body.contains("expect::KANI_CBMC_RSS_LIMIT_KIB"));
+        assert!(!body.contains(".capture()"));
+        // the readers
+        let ps = "    PID   RSS COMMAND\n    1   900 systemd\n  4242 5000000 cbmc\n  4243 7000000 cbmc\n  4244 9000000 rustc\n";
+        assert_eq!(largest_cbmc(ps), Some((4243, 7_000_000)));
+        assert_eq!(largest_cbmc("  PID RSS COMMAND\n  7 10 bash\n"), None);
+        let log = "Compiling x\nChecking harness kani_proofs::kani_a...\nVERIFICATION:- SUCCESSFUL\nChecking harness kani_proofs::kani_b...\n";
+        assert_eq!(current_kani_harness(log), "kani_proofs::kani_b");
+        assert_eq!(current_kani_harness(""), "(before the first harness)");
+        #[cfg(unix)]
+        {
+            let dir = root.join("target").join("kani-guard-test");
+            std::fs::create_dir_all(&dir)?;
+            let fake = || {
+                Cmd::new("sh").args([
+                    "-c",
+                    "echo 'Checking harness kani_proofs::kani_fake...'; exec sleep 30",
+                ])
+            };
+            // a stand-in for the cbmc process, which the guard kills
+            let mut victim = std::process::Command::new("sleep").arg("60").spawn()?;
+            let pid = victim.id();
+            let mut calls = 0_u32;
+            let mut over = || {
+                calls = calls.saturating_add(1);
+                if calls < 3 {
+                    "  PID RSS COMMAND\n".to_owned()
+                } else {
+                    format!("  PID RSS COMMAND\n  {pid} 2000000 cbmc\n")
+                }
+            };
+            let every = std::time::Duration::from_millis(200);
+            let lowered = 1_000_000;
+            let err = kani_guarded(&fake(), &dir.join("over.log"), lowered, every, &mut over)
+                .err()
+                .map(|e| e.to_string())
+                .unwrap_or_default();
+            assert!(
+                err.contains("2000000 KiB exceeds the limit of 1000000 KiB")
+                    && err.contains("while checking harness kani_proofs::kani_fake"),
+                "{err}"
+            );
+            let killed = victim.wait()?;
+            assert!(!killed.success(), "the cbmc stand-in was killed");
+            // under the limit: the run ends with its own status, the peak is recorded
+            let quick = Cmd::new("sh").args([
+                "-c",
+                "echo 'Checking harness kani_proofs::kani_ok...'; sleep 1",
+            ]);
+            let mut under = || "  PID RSS COMMAND\n  1 500 cbmc\n".to_owned();
+            let run = kani_guarded(&quick, &dir.join("under.log"), lowered, every, &mut under)?;
+            assert!(run.success);
+            assert!(
+                run.peaks
+                    .iter()
+                    .any(|(h, k)| h == "kani_proofs::kani_ok" && *k == 500),
+                "{:?}",
+                run.peaks
+            );
+        }
+        Ok(())
+    }
+
+    /// WEISUNG M7-A1b §2 (F-04): a `ps` that yields nothing, or no header line, is a step failure naming the cause, never
+    /// a silent pass; a sample with the header and no `cbmc` row is a legitimate quiet moment.
+    #[test]
+    #[cfg(unix)]
+    fn kani_rss_guard_fails_closed_without_ps_sample() -> Result<()> {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("target")
+            .join("kani-guard-test");
+        std::fs::create_dir_all(&dir)?;
+        let every = std::time::Duration::from_millis(100);
+        let quick = || {
+            Cmd::new("sh").args([
+                "-c",
+                "echo 'Checking harness kani_proofs::kani_q...'; sleep 1",
+            ])
+        };
+        for (name, text) in [("empty", ""), ("headerless", "  1 500 cbmc\n")] {
+            let mut sample = || text.to_owned();
+            let err = kani_guarded(
+                &quick(),
+                &dir.join("closed.log"),
+                1_000_000,
+                every,
+                &mut sample,
+            )
+            .err()
+            .map(|e| e.to_string())
+            .unwrap_or_default();
+            assert!(err.contains("no RSS sample"), "{name}: {err}");
+        }
+        Ok(())
+    }
+
+    /// WEISUNG M7-A1b §2 (F-04): a log with `Checking harness` lines and no recorded peak fails naming the harness; with a
+    /// recorded peak, and with a log that has no harness line at all, the run returns normally.
+    #[test]
+    #[cfg(unix)]
+    fn kani_rss_guard_requires_a_peak_per_checked_harness() -> Result<()> {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("target")
+            .join("kani-guard-test");
+        std::fs::create_dir_all(&dir)?;
+        let every = std::time::Duration::from_millis(100);
+        let header = "  PID RSS COMMAND\n  1 10 bash\n";
+        let checked = Cmd::new("sh").args([
+            "-c",
+            "echo 'Checking harness kani_proofs::kani_nopeak...'; sleep 1",
+        ]);
+        let mut quiet = || header.to_owned();
+        let err = kani_guarded(
+            &checked,
+            &dir.join("nopeak.log"),
+            1_000_000,
+            every,
+            &mut quiet,
+        )
+        .err()
+        .map(|e| e.to_string())
+        .unwrap_or_default();
+        assert!(
+            err.contains("no cbmc peak") && err.contains("kani_proofs::kani_nopeak"),
+            "{err}"
+        );
+        let none = Cmd::new("sh").args(["-c", "echo 'Compiling x'; sleep 1"]);
+        let mut quiet = || header.to_owned();
+        let run = kani_guarded(
+            &none,
+            &dir.join("noharness.log"),
+            1_000_000,
+            every,
+            &mut quiet,
+        )?;
+        assert!(run.success && run.peaks.is_empty());
+        Ok(())
+    }
+
+    /// TEST-SPEC-M7 G7-10 (OPEN-M7-20 A, ADR-047 Amendment 9): the second mutants run selects the nextest profile whose
+    /// one override gives the killer module's tests a priority above every other test, so they start first by that filter;
+    /// `.config/nextest.toml` holds exactly the block `mutants_killer_profile` writes for `expect::MUTANT_KILLER_MODULE`.
+    /// Renaming the module keeps the order: the block for another module name differs only in its filter and carries the
+    /// same priority; the override list of the real file puts the `m0_early::` entry first, and the first run (own tests) uses no such profile. The killer module exists and holds tests.
+    #[test]
+    fn mutant_killers_run_first_by_filter() -> Result<()> {
+        let args = mutants_harness_args(None);
+        let dashes = args.iter().position(|a| a == "--").unwrap_or(usize::MAX);
+        let profile = args.iter().position(|a| a == "--profile");
+        assert_eq!(profile, Some(dashes.saturating_add(2)));
+        assert_eq!(
+            profile
+                .and_then(|i| args.get(i.saturating_add(1)))
+                .map(String::as_str),
+            Some(expect::MUTANTS_HARNESS_PROFILE)
+        );
+        assert!(!mutants_args(None).iter().any(|a| a == "--profile"));
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let config = lf(&std::fs::read_to_string(root.join(".config/nextest.toml"))?);
+        let block = mutants_killer_profile(expect::MUTANT_KILLER_MODULE);
+        assert_eq!(config.matches(&block).count(), 1, "{config}");
+        assert_eq!(config.matches("priority =").count(), 1);
+        assert!(block.contains("filter = 'test(/^m0_early::/)'\npriority = 100\n"));
+        // another module name: the same profile and priority, only the filter follows the name
+        let renamed = mutants_killer_profile("zz_killers");
+        // the real override list: the one priority entry of the profile is the killer module's, with the highest priority
+        let overrides: Vec<&str> = config
+            .lines()
+            .filter(|l| {
+                l.trim_start().starts_with("filter = ") || l.trim_start().starts_with("priority =")
+            })
+            .collect();
+        assert_eq!(
+            overrides
+                .iter()
+                .skip_while(|l| !l.contains("m0_early::"))
+                .take(2)
+                .copied()
+                .collect::<Vec<_>>(),
+            ["filter = 'test(/^m0_early::/)'", "priority = 100"]
+        );
+        assert_eq!(
+            renamed.replace("zz_killers", expect::MUTANT_KILLER_MODULE),
+            block
+        );
+        // the module is declared in the harness binary and holds tests
+        let main = lf(&std::fs::read_to_string(
+            root.join("crates/secmp-testkit/tests/harness/main.rs"),
+        )?);
+        assert!(main.contains(&format!("mod {};", expect::MUTANT_KILLER_MODULE)));
+        let killers = std::fs::read_to_string(
+            root.join("crates/secmp-testkit/tests/harness")
+                .join(format!("{}.rs", expect::MUTANT_KILLER_MODULE)),
+        )?;
+        assert!(killers.matches("#[test]").count() >= 4);
+        // nextest's `priority` override needs nextest 0.9.91 or later; the pinned version
+        assert_eq!(tools::NEXTEST.version, "0.9.145");
+        Ok(())
+    }
+
+    /// TEST-SPEC-M7 G7-09 (OPEN-M7-19 B): the two tests that dominated the per-mutant harness suite (C2-18c: 70 s on 32
+    /// cores, of it 69.5 s and 27 s) are split. Each long form is in `expect::MUTANT_HARNESS_SKIP_TESTS` with its time
+    /// and the name of its short form; the short form is a harness test that no skip entry matches (a `--skip` filter is
+    /// a substring match), so it runs for every mutant; docs/mutants-accepted.md §Skipped names it as the killer. The
+    /// suite's wall time on 32 cores is measured and reported (M07 report §4), not asserted here (no wall clock in tests).
+    #[test]
+    fn mutant_harness_suite_under_30s() -> Result<()> {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let mut sources = String::new();
+        for f in walk_files(
+            &root.join("crates/secmp-testkit/tests/harness"),
+            &|p: &Path| p.extension().is_some_and(|e| e == "rs"),
+        )? {
+            sources.push_str(&lf(&std::fs::read_to_string(f)?));
+        }
+        let accepted = lf(&std::fs::read_to_string(
+            root.join("docs/mutants-accepted.md"),
+        )?);
+        let skipped = accepted
+            .split_once("\n## Skipped\n")
+            .map(|(_, s)| s)
+            .unwrap_or_default();
+        for (long, short) in [
+            (
+                "timing_draws_independent_of_activity",
+                "timing_draws_unmoved_by_one_hour_of_activity",
+            ),
+            (
+                "relay_idle_and_age_bounds_from_schedule",
+                "relay_idle_and_age_bounds_defaults",
+            ),
+        ] {
+            let reason = expect::MUTANT_HARNESS_SKIP_TESTS
+                .iter()
+                .find(|(n, _)| *n == long)
+                .map(|(_, r)| *r)
+                .unwrap_or_default();
+            assert!(
+                reason.contains(" s;") && reason.ends_with(&format!("short form {short}")),
+                "{long}: {reason:?}"
+            );
+            for name in [long, short] {
+                assert_eq!(
+                    sources.matches(&format!("#[test]\nfn {name}() {{")).count(),
+                    1,
+                    "{name}"
+                );
+            }
+            for (name, _) in expect::MUTANT_HARNESS_SKIP_TESTS
+                .iter()
+                .chain(expect::MUTANT_SKIP_TESTS)
+            {
+                assert!(!short.contains(name), "{name} would skip {short}");
+            }
+            assert!(
+                skipped
+                    .lines()
+                    .any(|l| l.starts_with(&format!("| `{long}`"))
+                        && l.contains(&format!("killer: `{short}`"))),
+                "docs/mutants-accepted.md §Skipped: {long}"
+            );
+        }
+        Ok(())
     }
 
     /// ADR-047 Amendment 1 (5): every test skipped for each mutant is a `#[cfg(feature = "kat")]` test function of
@@ -9920,9 +10841,10 @@ mod tests {
                 mutant_outcomes("secmp-relay", 50, 10, 0),
                 mutant_outcomes("secmp-client-core", 40, 5, 0),
                 mutant_outcomes("secmp-transport", 30, 3, 0),
+                mutant_outcomes("secmp-store", 20, 2, 0),
             ]
             .concat(),
-            138,
+            160,
         )?;
         for k in 3..8 {
             write_shard(&dir, (k, 8), "PASS", &[], 0)?;
@@ -9977,9 +10899,10 @@ mod tests {
                 mutant_outcomes("secmp-relay", 50, 10, 0),
                 mutant_outcomes("secmp-client-core", 40, 5, 0),
                 mutant_outcomes("secmp-transport", 30, 3, 0),
+                mutant_outcomes("secmp-store", 20, 2, 0),
             ]
             .concat(),
-            138,
+            160,
         )?;
         for k in 3..8 {
             write_shard(&dir, (k, 8), "PASS", &[], 0)?;
@@ -10034,6 +10957,7 @@ mod tests {
                 mutant_outcomes("secmp-relay", 10, 2, 0),
                 mutant_outcomes("secmp-client-core", 8, 1, 0),
                 mutant_outcomes("secmp-transport", 4, 1, 0),
+                mutant_outcomes("secmp-store", 4, 1, 0),
             ]
             .concat();
             let failed = survivors.iter().find(|(s, _)| *s == k);
@@ -10136,6 +11060,71 @@ mod tests {
         Ok(())
     }
 
+    /// OPEN-M7-26 B (Q132, Q133, Q135): the committed M5 run is history and predates the splits of
+    /// `kani_commit_accept_atomic` and `kani_q_frame_plaintext_exact_fit`; the block of `old_harness` is left out of `log`
+    /// (nothing on disk is rewritten) and the real run of its split harnesses (the one committed file
+    /// `docs/reviews/M07-evidence/<evidence_prefix><sha7>.txt`) is appended in its place.
+    fn swap_split_harness_block(
+        root: &Path,
+        log: &mut String,
+        old_harness: &str,
+        evidence_prefix: &str,
+    ) -> Result<()> {
+        let head = format!("  Checking harness kani_proofs::{old_harness}...\n");
+        let old_block = log
+            .split_once(&head)
+            .and_then(|(_, rest)| rest.split_once("  Checking harness "))
+            .map(|(block, _)| format!("{head}{block}"))
+            .ok_or_else(|| Error(format!("no block of {old_harness} in the M5 log")))?;
+        assert_eq!(log.matches(&old_block).count(), 1);
+        *log = log.replacen(&old_block, "", 1);
+        let mut split: Vec<_> = std::fs::read_dir(root.join("docs/reviews/M07-evidence"))?
+            .filter_map(std::result::Result::ok)
+            .map(|e| e.path())
+            .filter(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with(evidence_prefix))
+            })
+            .collect();
+        split.sort();
+        assert_eq!(
+            split.len(),
+            1,
+            "one committed run of the split harnesses: {split:?}"
+        );
+        log.push_str(&lf(&std::fs::read_to_string(
+            split.first().ok_or_else(|| Error("no run".into()))?,
+        )?));
+        Ok(())
+    }
+
+    /// The committed alone runs of the B-SC harnesses (`kani-m7-bsc-sc-<harness>.txt`, the A-3b wrapper's form); a harness
+    /// re-measured after its B-SC2 re-dictation reads its `kani-m7-bsc2-sc-<harness>.txt` instead.
+    fn push_b_sc_runs(root: &Path, log: &mut String) -> Result<()> {
+        for h in B_SC_RUNS {
+            let tag = if B_SC2_RUNS.contains(h) {
+                "bsc2"
+            } else {
+                "bsc"
+            };
+            let file = format!("docs/reviews/M07-evidence/kani-m7-{tag}-sc-{h}.txt");
+            log.push_str(&lf(&std::fs::read_to_string(root.join(file))?));
+        }
+        Ok(())
+    }
+
+    /// The B-SC harnesses re-measured by WEISUNG M7-B-SC2: the cover pin reads their `kani-m7-bsc2-sc-<harness>.txt`.
+    const B_SC2_RUNS: &[&str] = &["kani_paired_executions", "kani_persist_contract_abstract"];
+
+    /// The B-SC harnesses whose committed alone runs the cover pin reads (M7 B-SC §3, one per commit).
+    const B_SC_RUNS: &[&str] = &[
+        "kani_in_flight_over_transitions",
+        "kani_queue_generations",
+        "kani_persist_contract_abstract",
+        "kani_paired_executions",
+    ];
+
     /// M4 delta review VD1-5: the number of covers is pinned (`expect::KANI_COVERS`: as many as `kani_proofs.rs` has,
     /// each on a known harness); the committed Kani log matches it; a deleted or an added cover is a finding; a
     /// summary with Kani's `(K unreachable)` suffix fails the cover check.
@@ -10169,11 +11158,7 @@ mod tests {
             )?));
         }
         // M5 fix round (M05 review R-121, C-12): the runs of K-01, K-03 and K-08 with their new covers
-        for h in [
-            "kani_frame_pad_total",
-            "kani_link_counter_checked_add",
-            "kani_q_frame_plaintext_exact_fit",
-        ] {
+        for h in ["kani_frame_pad_total", "kani_link_counter_checked_add"] {
             log.push_str(&lf(&std::fs::read_to_string(
                 root.join(format!("docs/reviews/M05-evidence/kani-m5fix-{h}.txt")),
             )?));
@@ -10218,6 +11203,14 @@ mod tests {
         // the C1 run covers the client-core harnesses again: those of Phase A are replaced by its (newer) summaries
         log = log.replace(positive, "");
         log.push_str(&c1_log);
+        for (old, prefix) in [
+            ("kani_commit_accept_atomic", "kani-m7-a1f-commit-accept-"),
+            ("kani_q_frame_plaintext_exact_fit", "kani-m7-a3b-split-"),
+        ] {
+            swap_split_harness_block(&root, &mut log, old, prefix)?;
+        }
+        // M7 B-SC (SC-06…SC-09) and B-SC2: the committed alone runs of the new `secmp-client-core` harnesses
+        push_b_sc_runs(&root, &mut log)?;
         assert_eq!(
             kani_cover_pin_findings(&kani_covers(&log)?),
             Vec::<String>::new()
@@ -10276,8 +11269,14 @@ mod tests {
         let all = expect::KANI_HARNESSES;
         // M5 Phase B: 30 + the three relay harnesses (TEST-SPEC-M5 K-05…K-07); M6 Phase A: + the seven of
         // `secmp-client-core` (TEST-SPEC-M6 K-01…K-07); M6 Phase C1: + K-C1…K-C6
-        assert_eq!(all.len(), 46);
-        assert_eq!(kani_verified(&kani_log(all, 0))?.len(), 46);
+        // M7 A1e (Q132): `kani_commit_accept_atomic` split in two, 47
+        // M7 A-3b (Q135): q_frame split in three, tr_header_selection in three (k ≤ 2, k = 3, k = 4), 51
+        // M7 B-SC: + SC-06
+        // M7 B-SC: + SC-07
+        // M7 B-SC: + SC-08
+        // M7 B-SC: + SC-09
+        assert_eq!(all.len(), 55);
+        assert_eq!(kani_verified(&kani_log(all, 0))?.len(), 55);
         // a deleted harness: 18 verified, and Kani's own summary says 18 of 18
         let fifteen = all.get(1..).unwrap_or_default();
         assert!(kani_verified(&kani_log(fifteen, 0)).is_err());
@@ -10424,16 +11423,16 @@ mod tests {
             let want = if expect::FUZZ_DEEP_TARGETS.contains(t) {
                 3_600
             } else {
-                232
+                218
             };
             assert_eq!(nightly_seconds_for(t)?, want, "{t}");
         }
-        // M6 Phase B (FZ-02, FZ-03): 31 x 232 + 2 x 3600 = 14 392 <= 14 400
+        // M7 Phase A (FZ-01, FZ-02): 33 x 218 + 2 x 3600 = 14 394 <= 14 400 (M6 Phase B: 31 x 232 + 2 x 3600)
         let total: u64 = expect::FUZZ_TARGETS
             .iter()
             .map(|t| nightly_seconds_for(t))
             .sum::<Result<u64>>()?;
-        assert_eq!(total, 14_392);
+        assert_eq!(total, 14_394);
         assert!(total <= expect::FUZZ_NIGHTLY_SECONDS);
         // the evidence: runs and lim per target, lim = max_len
         let log = "#4\tINITED cov: 5493 ft: 8753 corp: 3/637b exec/s: 0 rss: 53Mb\n\
@@ -10622,21 +11621,7 @@ mod tests {
             .unwrap_or_default();
         assert_eq!(pinned.len(), 1);
         assert_eq!(gate_lines(&dispatch, "dispatch-full"), pinned);
-        for (twin, job) in [
-            ("dispatch-fast", "linux-fast"),
-            ("dispatch-windows", "windows-native"),
-            ("dispatch-xwin", "xwin-cross"),
-            ("dispatch-full", "linux-full"),
-            ("dispatch-ct", "ct"),
-            ("dispatch-mutants-shard", "mutants-shard"),
-            ("dispatch-mutants", "mutants"),
-            ("dispatch-proverif-hx", "proverif-hx"),
-            ("dispatch-proverif-link", "proverif-link"),
-            // M6 (WEISUNG M6-11)
-            ("dispatch-kani", "kani"),
-            // M6-CI (WEISUNG M6-CI-1 §4)
-            ("dispatch-fuzz", "fuzz"),
-        ] {
+        for (twin, job) in expect::DISPATCH_TWINS.iter().copied() {
             let lines = gate_lines(&ci, job);
             assert!(!lines.is_empty(), "{job}: no gate line in ci.yml");
             assert_eq!(gate_lines(&dispatch, twin), lines, "{twin} vs {job}");
@@ -10796,8 +11781,8 @@ mod tests {
         assert_eq!(expect::FUZZ_NIGHTLY_SECONDS, 14_400);
         assert_eq!(
             nightly_seconds_per_target(expect::FUZZ_NIGHTLY_SECONDS, expect::FUZZ_TARGETS.len())?,
-            // M6 Phase B: 33 targets (+ FZ-02, FZ-03 of M6), 436 s each
-            14_400 / 33
+            // M7 Phase A: 35 targets (+ FZ-01, FZ-02 of M7), 411 s each
+            14_400 / 35
         );
         assert_eq!(nightly_seconds_per_target(14_400, 14)?, 1028);
         assert!(nightly_seconds_per_target(14_400, 0).is_err());
@@ -10973,7 +11958,7 @@ mod tests {
             assert!(expect::CT_TARGETS.contains(target), "{target}");
             assert!(expect::KNOWN_SITES.contains(site), "{target}: {site}");
         }
-        assert_eq!(expect::CT_TARGET_SITES.len(), 11);
+        assert_eq!(expect::CT_TARGET_SITES.len(), 12);
         assert!(expect::CT_TARGET_SITES.contains(&("tr_decrypt_trial_open_position", "body MAC")));
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../docs/reviews/M04-evidence/ct-report-local-b138a2b-scale10.json");
@@ -10992,9 +11977,10 @@ mod tests {
                 Some((name.to_owned(), r.get("site")?.as_str()?.to_owned()))
             })
             .collect();
+        // the M4 report predates `tr_decrypt_trial_open_position` (M5) and `store_unlock_reject` (M7)
         let bound: BTreeSet<(String, String)> = expect::CT_TARGET_SITES
             .iter()
-            .filter(|(t, _)| *t != "tr_decrypt_trial_open_position")
+            .filter(|(t, _)| *t != "tr_decrypt_trial_open_position" && *t != "store_unlock_reject")
             .map(|(t, s)| ((*t).to_owned(), (*s).to_owned()))
             .collect();
         assert_eq!(claimed, bound);
@@ -11072,8 +12058,9 @@ mod tests {
     }
 
     /// CT-00 (TEST-SPEC-M6 (j)): M6 adds no ct target. `expect::CT_TARGETS` is the list of the M5 close (BASE `6300b65`, 26 names,
-    /// compared with `git show 6300b65:xtask/src/expect.rs` on 2026-10-22); the ADR-042 Amendment 5 informative target is
-    /// not in it, and no name occurs twice.
+    /// compared with `git show 6300b65:xtask/src/expect.rs` on 2026-10-22) — since TEST-SPEC-M7 CT-01 its first 26 names,
+    /// followed by `store_unlock_reject` (CT-05: `expect::ct_targets_m7`); the informative targets are not in it, and no
+    /// name occurs twice.
     #[test]
     fn ct_targets_unchanged_in_m6() {
         const M5: [&str; 26] = [
@@ -11104,7 +12091,7 @@ mod tests {
             "tr_decrypt_trial_open_position",
             "link_same_content_control",
         ];
-        assert_eq!(expect::CT_TARGETS, M5.as_slice());
+        assert_eq!(expect::CT_TARGETS.get(..26), Some(M5.as_slice()));
         let unique: std::collections::BTreeSet<&&str> = expect::CT_TARGETS.iter().collect();
         assert_eq!(unique.len(), expect::CT_TARGETS.len());
         for informative in expect::CT_INFORMATIVE_TARGETS {

@@ -654,7 +654,7 @@ fn pool_handout_recreates_link_with_announced_period() {
     assert!(taken.is_some());
     assert!(outs.iter().any(|o| matches!(
         o,
-        secmp_client_core::scheduler::types::Output::Event(LinkEvent::TornDown(id, Reason::Closed)) if id.0 == old_slot
+        secmp_client_core::scheduler::types::Output::Event(LinkEvent::TornDown(id, _, Reason::Closed)) if id.0 == old_slot
     )), "the 80 s link closes");
     let keys_before = sim.client_ref(alice).connects.len();
     sim.run_until(t + 190_000);

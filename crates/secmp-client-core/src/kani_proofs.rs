@@ -8,14 +8,21 @@
 //! - K-05 `kani_backoff_cap`: the cap of the reconnect back-off (`params::backoff_cap`).
 //! - K-06 `kani_rate_bound_integer_form`: the integer rate bound equals the exact rational one (`params::rate_sum_ok`).
 //! - K-07 `kani_evicted_range`: the plausibility rule of `OK_SEND`'s evicted id (`secmp_transport::evicted`).
+//! - K-C1…K-C6: the unwritten-frame ledger and the round-robin rotation (M6 Phase C1, below).
+//! - SC-06 `kani_in_flight_over_transitions`: the in-flight rule over the core's transitions (`pure::InFlight`).
+//! - SC-07 `kani_queue_generations`: a response of an old generation never updates the new one (`pure::take_response`).
+//! - SC-08 `kani_persist_contract_abstract`: no frame and no acknowledgement after a failed commit (`sendable`, `RecvLedger`).
+//! - SC-09 `kani_paired_executions`: two runs differing only in activity emit the same schedule (`send_choice`, …).
 
 use secmp_transport::evicted::evicted_is_plausible;
 
 use crate::scheduler::core::pure::{
-    Flight, complete_oldest, hand_out, ledger_admits, reserved_rr, rr_select, tick_time,
-    unwritten_max,
+    FLUSH_WAIT_MS, Flight, InFlight, RecvLedger, complete_oldest, fetch_due, fetch_lead_deadline,
+    flush_bound, hand_out, ledger_admits, note_sent, reserved_rr, rr_select, send_choice, sendable,
+    take_response, tick_time, unwritten_max,
 };
 use crate::scheduler::params::{backoff_cap, rate_sum_ok};
+use crate::scheduler::types::{Delivered, SourceError};
 use crate::timing::{accept_ceiling, sample_with};
 
 /// `PERIODS` in milliseconds.
@@ -208,9 +215,9 @@ fn kani_evicted_range() {
 
 // ---- K-C1…K-C6 (BRIEF M6-C1 item 5, A′ ledger): the unwritten-frame ledger of a link and the round-robin rotation -----
 //
-// Scope (M7 for the rest): the harnesses run the extracted pure functions (`reserved_rr`, `hand_out`, `complete_oldest`,
-// `ledger_admits`, `unwritten_max`; item 10b) on a symbolic ledger. They do not run the in-flight rule over real
-// transitions, queue generations, the abstract persist contract or paired executions. An up link needs a `Channel`, which
+// Scope: the harnesses run the extracted pure functions (`reserved_rr`, `hand_out`, `complete_oldest`, `ledger_admits`,
+// `unwritten_max`; item 10b) on a symbolic ledger. The in-flight rule over the core's transitions, queue generations, the
+// abstract persist contract and paired executions are SC-06…SC-09 (M7 B-SC, below). An up link needs a `Channel`, which
 // this crate cannot build under Kani, so `Scheduler` itself is out of reach (item 10b).
 
 /// Symbolic ledger contents: up to four entries (`len`), each `None` (a `FETCH`) or the position a `SEND` commits (`< n`).
@@ -223,13 +230,19 @@ fn any_entries(n: usize) -> ([Option<usize>; 4], usize) {
     (entries, len)
 }
 
-/// The ledger `Vec` holding the first `len` of `entries` (pre-sized: no reallocation under symbolic lengths).
-fn ledger_of(entries: &[Option<usize>; 4], len: usize) -> Vec<Option<usize>> {
+/// The ledger `Vec` holding the first `len` of `entries`, entry `i` with the frame id `i` (FINAL3 (e); pre-sized: no
+/// reallocation under symbolic lengths).
+fn ledger_of(entries: &[Option<usize>; 4], len: usize) -> Vec<(u8, Option<usize>)> {
     let mut ledger = Vec::with_capacity(8);
-    for e in entries.iter().take(len) {
-        ledger.push(*e);
+    for (i, e) in entries.iter().take(len).enumerate() {
+        ledger.push((i as u8, *e));
     }
     ledger
+}
+
+/// The frame id of the oldest entry of `ledger` (the one the driver reports next), or an id never handed out.
+fn oldest(ledger: &[(u8, Option<usize>)]) -> u8 {
+    ledger.first().map_or(u8::MAX, |(f, _)| *f)
 }
 
 fn any_entry(n: usize) -> Option<usize> {
@@ -264,7 +277,8 @@ fn kani_reservation_is_schedule_only() {
     let m: usize = kani::any();
     kani::assume(m <= len);
     for _ in 0..m {
-        assert!(complete_oldest(&mut ledger, &mut rr));
+        let frame = oldest(&ledger);
+        assert!(complete_oldest(&mut ledger, &mut rr, &frame));
     }
     assert!(reserved_rr(&ledger, rr) == none_applied);
     assert!(none_applied < n);
@@ -273,7 +287,7 @@ fn kani_reservation_is_schedule_only() {
 
 /// K-C2: reports complete frames in the order they were handed out: after `m` of them `rr` is the last `Some` among the
 /// first `m` entries (unchanged if there is none), the later entries are untouched, and a report on an empty ledger is
-/// refused (`false`) and changes nothing.
+/// refused (`false`) and changes nothing; so is a duplicate report of the frame just completed (FINAL3 (e), SC-05).
 #[kani::proof]
 #[kani::unwind(7)]
 fn kani_frame_written_commits_fifo() {
@@ -286,20 +300,30 @@ fn kani_frame_written_commits_fifo() {
     let m: usize = kani::any();
     kani::assume(m <= 4);
     let mut rr = committed;
+    let mut last: Option<u8> = None;
     for i in 0..m {
         let was_empty = live.is_empty();
         let before = rr;
-        let matched = complete_oldest(&mut live, &mut rr);
+        let frame = oldest(&live);
+        let matched = complete_oldest(&mut live, &mut rr, &frame);
         assert!(matched == !was_empty);
         if was_empty {
             assert!(rr == before);
             assert!(i >= len);
+        } else {
+            last = Some(frame);
         }
+    }
+    // the duplicate report of the last completed frame: refused, nothing changes
+    if let Some(frame) = last {
+        let (before_len, before_rr) = (live.len(), rr);
+        assert!(!complete_oldest(&mut live, &mut rr, &frame));
+        assert!(live.len() == before_len && rr == before_rr);
     }
     assert!(rr == last_some_of_prefix(&entries[..len], m).unwrap_or(committed));
     assert!(live.len() == len.saturating_sub(m));
     for (a, b) in live.iter().zip(entries.iter().take(len).skip(m)) {
-        assert!(a == b);
+        assert!(a.1 == *b);
     }
     kani::cover!(rr != committed, "a commit moves the rotation");
 }
@@ -321,7 +345,8 @@ fn kani_teardown_keeps_the_committed_rr() {
     kani::assume(m <= len);
     let mut rr = committed;
     for _ in 0..m {
-        assert!(complete_oldest(&mut ledger, &mut rr));
+        let frame = oldest(&ledger);
+        assert!(complete_oldest(&mut ledger, &mut rr, &frame));
     }
     let committed_before_teardown = rr;
     // the teardown: the up-state, with its ledger, is dropped; the link keeps `rr`
@@ -348,9 +373,9 @@ fn kani_tick_hands_out_without_commit() {
     let old_len = ledger.len();
     let old_reserved = reserved_rr(&ledger, rr);
     let next_rr = any_entry(n);
-    hand_out(&mut ledger, next_rr);
+    hand_out(&mut ledger, 7, next_rr);
     assert!(ledger.len() == old_len + 1);
-    assert!(ledger.last() == Some(&next_rr));
+    assert!(ledger.last() == Some(&(7, next_rr)));
     // nothing was committed by the hand-out: the next preparation is reserved against the new entry (a SEND), else
     // against what it was
     assert!(reserved_rr(&ledger, rr) == next_rr.unwrap_or(old_reserved));
@@ -358,9 +383,10 @@ fn kani_tick_hands_out_without_commit() {
 }
 
 /// K-C5: the deadline arithmetic never wraps. The tick time `t_up + k·P` (`pure::tick_time`) is `Some` for every smaller `k`
-/// whenever it is for `k` and is monotone in `k`; the `FETCH`-lead deadline `slot − lead` and the flush bound
-/// `min(now + FLUSH_WAIT_MS, next_deadline − driver_jitter_ms)` — written inline in `prepare_link` and `Driver::flush_wait`
-/// with saturating operations, here as the same expressions — never exceed the slot, the deadline or `now + 250`.
+/// whenever it is for `k` and is monotone in `k`; the `FETCH`-lead deadline `slot − lead` (`pure::fetch_lead_deadline`, which
+/// `prepare_link` and `Scheduler::next_deadline` call) and the flush bound `min(now + FLUSH_WAIT_MS, next_deadline −
+/// driver_jitter_ms)` (`pure::flush_bound`, which `Driver::flush_wait` calls; M7 B-SC SC-10, scan
+/// `xtask::testscan::kc5_calls_extracted`) never exceed the slot (by at most the lead), the deadline or `now + 250`.
 #[kani::proof]
 fn kani_deadline_arithmetic_checked() {
     let t_up: u64 = kani::any();
@@ -380,16 +406,18 @@ fn kani_deadline_arithmetic_checked() {
     let lead: u64 = kani::any();
     kani::assume(lead <= 1_000);
     let slot: u64 = kani::any();
-    assert!(slot.saturating_sub(lead) <= slot);
+    let deadline = fetch_lead_deadline(slot, lead);
+    assert!(deadline <= slot && slot - deadline <= lead);
     let now: u64 = kani::any();
-    let next_deadline: u64 = kani::any();
+    let next_deadline: Option<u64> = kani::any();
     let jitter: u64 = kani::any();
     kani::assume(jitter <= 50);
-    let flush = now
-        .saturating_add(250)
-        .min(next_deadline.saturating_sub(jitter));
-    assert!(flush <= now.saturating_add(250));
-    assert!(flush <= next_deadline);
+    let flush = flush_bound(now, next_deadline, jitter);
+    assert!(u128::from(flush) <= u128::from(now) + u128::from(FLUSH_WAIT_MS));
+    assert!(FLUSH_WAIT_MS == 250);
+    if let Some(next) = next_deadline {
+        assert!(flush <= next);
+    }
 }
 
 /// K-C6 (item 11): the ledger never exceeds `unwritten_max`. Any sequence of up to `UNWRITTEN_MAX + 2` ticks with no
@@ -401,15 +429,15 @@ fn kani_unwritten_bound() {
     // the default `max_in_flight` = 2: `UNWRITTEN_MAX` = 4, six ticks (a symbolic `max_in_flight` cost 14.8 GB)
     let max = unwritten_max(2);
     assert!(max == 4);
-    let mut ledger: Vec<Option<usize>> = Vec::with_capacity(8);
+    let mut ledger: Vec<(u8, Option<usize>)> = Vec::with_capacity(8);
     let mut torn = false;
     for _ in 0..6 {
         let adding: usize = kani::any();
         kani::assume(adding >= 1 && adding <= 2);
         if ledger_admits(ledger.len(), adding, max) {
-            hand_out(&mut ledger, None);
+            hand_out(&mut ledger, 0, None);
             if adding == 2 {
-                hand_out(&mut ledger, None);
+                hand_out(&mut ledger, 1, None);
             }
         } else {
             assert!(ledger.len() + adding > max);
@@ -422,4 +450,343 @@ fn kani_unwritten_bound() {
     // max + 2 ticks of at least one frame each cannot all be admitted
     assert!(torn);
     kani::cover!(torn && ledger.len() == max, "the bound is reached exactly");
+}
+
+// ---- SC-06…SC-09 (KANI-M6-C-1; M06-report §7 "Kani scope (item 5, M7)"): the rest of the M6 scope -------------------
+//
+// Each harness runs functions the core itself calls (`core/pure.rs`), never a copy: `Scheduler` needs an up link, whose
+// `Channel` this crate cannot build under Kani, so the transitions are extracted and the core calls the extracted ones.
+
+/// SC-06 `kani_in_flight_over_transitions`: the in-flight rule over the core's own transitions — `pure::InFlight`, which
+/// `World::tick` runs (`admit`, then `push` for each of the tick's one or two requests) and `Scheduler::on_frame` runs
+/// (`complete`), and the teardown that drops it with the up-state (the next connection starts a new one) — over every
+/// sequence of up to eight events: the count of outstanding ticks stays in {0, 1, 2}; a tick at two outstanding is refused
+/// and changes nothing; a response answers its tick only with the tick's last request (spec §10.3).
+#[kani::proof]
+#[kani::unwind(10)]
+fn kani_in_flight_over_transitions() {
+    let mut f: InFlight<u8> = InFlight::new(2);
+    let mut k: u8 = 0;
+    for _ in 0..8 {
+        let event: u8 = kani::any();
+        kani::assume(event < 3);
+        let before = f.count();
+        match event {
+            0 => {
+                if f.admit() {
+                    k += 1;
+                    assert!(f.push(k));
+                    if kani::any() {
+                        assert!(f.push(k));
+                    }
+                    assert!(f.count() == before + 1);
+                } else {
+                    assert!(before == 2 && f.count() == 2);
+                    kani::cover!(true, "a third tick is refused");
+                }
+            }
+            1 => match f.complete() {
+                Some(t) => {
+                    if f.front() == Some(&t) {
+                        assert!(f.count() == before);
+                        kani::cover!(
+                            true,
+                            "a tick's first response leaves its second request outstanding"
+                        );
+                    } else {
+                        assert!(f.count() + 1 == before);
+                    }
+                }
+                None => assert!(before == 0),
+            },
+            _ => f = InFlight::new(2),
+        }
+        assert!(f.count() <= 2);
+    }
+}
+
+/// SC-07 `kani_queue_generations`: a response of an old generation never updates the new one. Queue 0 is added and a
+/// request is asked for it in generation 0; a response in that generation may arrive first (one cell, any id, any
+/// outcome). Then queue 0 is re-created (spec §9.1: `RecvLedger::recreate`, generation 1), or removed and re-added — the
+/// re-added queue has a new id (queue 1, generation 0) — or neither. The old request's response then arrives (any id, any
+/// outcome) through `take_response`, which the core's `fetched` calls: after a re-creation or a re-add it changes no queue
+/// (the same acknowledgement, generation and fetched cells, nothing handed to the cell source); with neither it is taken.
+#[kani::proof]
+#[kani::unwind(5)]
+fn kani_queue_generations() {
+    let mut q0: RecvLedger<2> = RecvLedger::new();
+    let mut q1: RecvLedger<2> = RecvLedger::new();
+    let asked = (0_u32, q0.generation());
+    if kani::any() {
+        let id: u64 = kani::any();
+        let answer = any_answer();
+        assert!(take_response(
+            [(0_u32, &mut q0)],
+            &0,
+            0,
+            [(id, ())],
+            |_, ()| answer
+        ));
+    }
+    let action: u8 = kani::any();
+    kani::assume(action < 3);
+    let (present0, present1) = match action {
+        0 => {
+            q0.recreate();
+            (true, false)
+        }
+        1 => (false, true),
+        _ => (true, false),
+    };
+    let (before0, before1) = (state(&q0), state(&q1));
+    let id: u64 = kani::any();
+    let answer = any_answer();
+    let mut handed = false;
+    let mut table = Vec::with_capacity(2);
+    if present0 {
+        table.push((0_u32, &mut q0));
+    }
+    if present1 {
+        table.push((1_u32, &mut q1));
+    }
+    let applied = take_response(table, &asked.0, asked.1, [(id, ())], |_, ()| {
+        handed = true;
+        answer
+    });
+    if action == 2 {
+        assert!(applied);
+        kani::cover!(handed, "the current generation takes the response");
+    } else {
+        assert!(!applied && !handed);
+        assert!(state(&q0) == before0 && state(&q1) == before1);
+        kani::cover!(action == 0, "a re-creation ignores the old response");
+        kani::cover!(
+            action == 1,
+            "a re-added queue ignores the removed one's response"
+        );
+    }
+}
+
+/// What a ledger shows: its acknowledgement, generation, fetched cells and whether one is pending (compared field by
+/// field: a derived `==` is a `memcmp`, whose byte loop the unwind bound does not cover).
+fn state(l: &RecvLedger<2>) -> (u64, u64, usize, bool) {
+    (
+        l.acked(),
+        l.generation(),
+        l.received().len(),
+        l.has_pending(),
+    )
+}
+
+/// The cell source's answer for one cell: committed, pending, or a storage failure.
+fn any_answer() -> Result<Delivered, SourceError> {
+    match kani::any::<u8>() % 3 {
+        0 => Ok(Delivered::Committed),
+        1 => Ok(Delivered::Pending),
+        _ => Err(SourceError),
+    }
+}
+
+/// SC-08 `kani_persist_contract_abstract` (spec §7.5, CLAUDE.md §1.7; widened by Q184 to a hostile relay): with an
+/// abstract persist outcome {ok, fail} at every step, no frame and no acknowledgement follow a failed commit. Sending:
+/// the cell source's answer for a slot — a persisted cell, not ready, or not persisted — leaves a cell to build a frame
+/// from (`sendable`, which `prepare_send` calls) exactly when it was persisted. Receiving: three responses of up to three
+/// arbitrary ids ≤ 7 each — any order, duplicates and gaps allowed (the relay is the adversary, docs/01); every cell
+/// handed to the cell source is committed at once, pending, or its commit fails (an id committed before answers
+/// committed); after each response one pending cell may be committed later (`RecvLedger::committed`, the driver's
+/// report). After every step every *handed* cell at or below the acknowledgement is committed.
+#[kani::proof]
+#[kani::unwind(4)]
+fn kani_persist_contract_abstract() {
+    let send: u8 = kani::any();
+    kani::assume(send < 3);
+    let answer: Result<Option<u8>, SourceError> = match send {
+        0 => Ok(Some(7)),
+        1 => Ok(None),
+        _ => Err(SourceError),
+    };
+    let frame = sendable(answer);
+    assert!(frame.is_some() == (send == 0));
+    kani::cover!(
+        send == 2 && frame.is_none(),
+        "a failed persist builds no frame"
+    );
+
+    let mut l: RecvLedger<3> = RecvLedger::new();
+    // ids 0..=7: handed to the cell source, committed, handed over as pending
+    let mut handed = [false; 8];
+    let mut committed = [false; 8];
+    let mut pending = [false; 8];
+    for _ in 0..3 {
+        let ids: [u64; 3] = kani::any();
+        let count: usize = kani::any();
+        kani::assume(count <= 3);
+        for id in ids.iter() {
+            kani::assume(*id <= 7);
+        }
+        let _ = l.take(0, ids.iter().take(count).map(|id| (*id, ())), |id, ()| {
+            let i = id as usize;
+            handed[i] = true;
+            if committed[i] {
+                return Ok(Delivered::Committed);
+            }
+            let answer: u8 = kani::any();
+            kani::assume(answer < 3);
+            match answer {
+                0 => {
+                    committed[i] = true;
+                    Ok(Delivered::Committed)
+                }
+                1 => {
+                    pending[i] = true;
+                    Ok(Delivered::Pending)
+                }
+                _ => Err(SourceError),
+            }
+        });
+        let later: u64 = kani::any();
+        kani::assume(later <= 7);
+        if pending[later as usize] && kani::any() {
+            committed[later as usize] = true;
+            l.committed(later);
+        }
+        // every handed id at or below the acknowledgement is committed (written out: no loop for the unwind bound)
+        let acked = l.acked();
+        let ok = |i: u64| !(handed[i as usize] && i <= acked) || committed[i as usize];
+        assert!(ok(0) && ok(1) && ok(2) && ok(3) && ok(4) && ok(5) && ok(6) && ok(7));
+    }
+    kani::cover!(l.acked() == 3, "everything fetched is acknowledged");
+    kani::cover!(
+        l.acked() == 0 && handed[1],
+        "a failed or pending first cell holds the acknowledgement"
+    );
+}
+
+/// What one run of a Balanced relay link (one to three send-queues and one recv-queue) emits on its first three ticks
+/// (SC-09, re-dictated Q183): per tick its time, the queue its `SEND` goes to (`None`: a `PING`) and whether its `FETCH`
+/// is present. The schedule is the link's `t_up`, `T_BALANCED` = 10 s, the queues' periods and the 1-s `FETCH` lead; the
+/// activity inputs that reach the core are, per tick: `ready` — the preparation pass (1…3, at `slot − 3 s`, `slot − 2 s`,
+/// `slot − 1 s`) from which the cell source answers ready (`sendable`; a source not ready at the tick is an overrun,
+/// not modelled); `written` — the previous tick's frames are reported written (`complete_oldest`) before pass 1 (0) or
+/// after pass `written`, so `reserved_rr` sees the reserved or the committed position (FIN2-1); `pending` — fetched
+/// cells wait for their commits (`fetch_due`). Every decision is a core function: `tick_time`, `send_choice` from
+/// `reserved_rr`, `sendable`, `fetch_due` (only once the `SEND` part exists, as `prepare_link`'s `send_missing`),
+/// `hand_out`, `complete_oldest` and `note_sent`.
+fn balanced_run(
+    n: usize,
+    periods: &[u64; 3],
+    t_up: u64,
+    ready: [u8; 3],
+    written: [u8; 3],
+    pending: [bool; 3],
+) -> [(u64, Option<usize>, bool); 3] {
+    let mut last: [Option<u64>; 3] = [None; 3];
+    let mut ledger: Vec<(u8, Option<usize>)> = Vec::with_capacity(4);
+    let mut rr = 0_usize;
+    let mut frame = 0_u8;
+    let mut out = [(0_u64, None, false); 3];
+    for k in 0..3_usize {
+        let slot = tick_time(t_up, k as u32 + 1, 10_000).unwrap();
+        let mut table = [(None, 10_000_u64); 3];
+        for (i, entry) in table.iter_mut().enumerate() {
+            *entry = (last[i], periods[i]);
+        }
+        let mut send: Option<(Option<usize>, Option<usize>)> = None;
+        let mut fetch = false;
+        // one preparation pass at `slot − 3 s + pass · 1 s` (`prepare_link`)
+        let mut prepare = |pass: u8, ledger: &Vec<(u8, Option<usize>)>, rr: usize| {
+            let now = slot - 3_000 + u64::from(pass) * 1_000;
+            if send.is_none() {
+                send = match send_choice(reserved_rr(ledger, rr), &table[..n], slot) {
+                    None => Some((None, None)),
+                    Some((at, next)) => {
+                        let answer: Result<Option<()>, SourceError> = if pass + 1 >= ready[k] {
+                            Ok(Some(()))
+                        } else {
+                            Ok(None)
+                        };
+                        sendable(answer).map(|()| (Some(at), Some(next)))
+                    }
+                };
+            }
+            if send.is_some() && !fetch {
+                fetch = fetch_due(false, pending[k], now, slot, 1_000);
+            }
+        };
+        // the previous tick's frames are reported written before pass 1 (`written` 0) or after pass `written`
+        for pass in 0..3_u8 {
+            if pass < written[k] {
+                prepare(pass, &ledger, rr);
+            }
+        }
+        report_all(&mut ledger, &mut rr);
+        // every frame is reported: the ledger is empty (asserted); a fresh one keeps CBMC's heap small
+        ledger = Vec::with_capacity(4);
+        for pass in 0..3_u8 {
+            if pass >= written[k] {
+                prepare(pass, &ledger, rr);
+            }
+        }
+        // the tick: the parts exist (ready by the last pass; the FETCH at its lead at the latest)
+        let (to, commits) = send.unwrap();
+        hand_out(&mut ledger, frame, commits);
+        frame += 1;
+        if let Some(at) = to {
+            note_sent(&mut last[at], slot);
+        }
+        if fetch {
+            hand_out(&mut ledger, frame, None);
+            frame += 1;
+        }
+        out[k] = (slot, to, fetch);
+    }
+    out
+}
+
+/// The driver reports every handed-out frame of the link written, oldest first (`Scheduler::frame_written`).
+fn report_all(ledger: &mut Vec<(u8, Option<usize>)>, rr: &mut usize) {
+    for _ in 0..2 {
+        if let Some(oldest) = ledger.first().map(|(f, _)| *f) {
+            assert!(complete_oldest(ledger, rr, &oldest));
+        }
+    }
+    assert!(ledger.is_empty());
+}
+
+/// SC-09 `kani_paired_executions` (spec §10.1; re-dictated Q183): two runs of one Balanced relay link that share every
+/// timing draw — `t_up` and the queues' periods — and differ only in the activity inputs that reach the core (per tick:
+/// the pass the cell source answers ready, when the previous frames are reported written, whether commits are pending)
+/// emit the same `(tick time, SEND queue | PING, FETCH present)` on every tick. The core sees an opaque `PreparedCell`:
+/// real versus dummy is the cell source's (AI-01…AI-06, SE-19, ProVerif L12), not an input here.
+#[kani::proof]
+#[kani::unwind(4)]
+fn kani_paired_executions() {
+    let n: usize = kani::any();
+    kani::assume(n >= 1 && n <= 3);
+    let periods = [any_period(), any_period(), any_period()];
+    let t_up: u64 = kani::any();
+    kani::assume(t_up <= 1_000_000_000);
+    let ready_a: [u8; 3] = kani::any();
+    let ready_b: [u8; 3] = kani::any();
+    let written_a: [u8; 3] = kani::any();
+    let written_b: [u8; 3] = kani::any();
+    for i in 0..3 {
+        kani::assume(ready_a[i] >= 1 && ready_a[i] <= 3 && ready_b[i] >= 1 && ready_b[i] <= 3);
+        kani::assume(written_a[i] <= 3 && written_b[i] <= 3);
+    }
+    let pending_a: [bool; 3] = kani::any();
+    let pending_b: [bool; 3] = kani::any();
+    let a = balanced_run(n, &periods, t_up, ready_a, written_a, pending_a);
+    let b = balanced_run(n, &periods, t_up, ready_b, written_b, pending_b);
+    assert!(a == b);
+    kani::cover!(
+        (written_a[1] == 0) != (written_b[1] == 0),
+        "write report before vs after preparation differs between runs"
+    );
+    kani::cover!(pending_a != pending_b, "commits pending in one run only");
+    kani::cover!(a.iter().any(|(_, q, _)| q.is_none()), "a PING slot");
+    kani::cover!(
+        a.iter().filter(|(_, q, _)| q.is_some()).count() >= 2,
+        "two SENDs"
+    );
 }

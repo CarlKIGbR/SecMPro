@@ -1,0 +1,8 @@
+== repo profile mutants-harness (priority on m0_early), --test-threads 1
+        PASS [   0.081s] (1/5) secmp-testkit::harness m0_early::async_handshake_writes_its_records
+        PASS [   0.091s] (2/5) secmp-testkit::harness m0_early::async_session_send_writes_the_request_the_relay_answers
+        PASS [   0.153s] (3/5) secmp-testkit::harness m0_early::period_of_gives_the_deadline_of_the_first_tick
+== the same block for a module that sorts after m0_early (m6_sched_life), --test-threads 1
+        PASS [   0.007s] (1/5) secmp-testkit::harness m6_sched_life::relay_idle_and_age_bounds_defaults
+        PASS [   0.087s] (2/5) secmp-testkit::harness m0_early::async_handshake_writes_its_records
+        PASS [   0.086s] (3/5) secmp-testkit::harness m0_early::async_session_send_writes_the_request_the_relay_answers

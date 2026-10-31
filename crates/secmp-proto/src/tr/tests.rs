@@ -2427,6 +2427,43 @@ fn content_verified_key_change() -> Result<()> {
     Ok(())
 }
 
+/// Q147 (iv): the product's `key_change_body` (§7.6 `docs/03:503`, §7.7) is `new IKSPublic ‖ HybridSign(old IK_sig,
+/// "SecMP-TR/1 keychange", fingerprint(new))`: it verifies with the old key as the oracle's (`key_change`) does, and is
+/// delivered as the new identity; a body signed by another key does not verify.
+#[test]
+fn key_change_body_is_signed_by_the_old_key() -> Result<()> {
+    let (old_sk, old_iks) = identity(1)?;
+    let peer = content::ik_sig(&old_iks)?;
+    let (other_sk, _) = identity(3)?;
+    let (_, new_iks) = identity(2)?;
+    let body = content::key_change_body(&old_sk, &new_iks)?;
+    assert_eq!(body.iks, new_iks);
+    assert!(content::key_change_verifies(&body, &peer).is_ok());
+    // the oracle's body verifies the same way
+    let FragmentPayload::KeyChange(oracle) = FragmentPayload::decode(&key_change(
+        &old_sk,
+        Label::TrKeychange,
+        &new_iks,
+        &new_iks,
+    )?)?
+    else {
+        return Err(Error::Rejected);
+    };
+    assert_eq!(oracle.iks, body.iks);
+    assert!(content::key_change_verifies(&oracle, &peer).is_ok());
+    // signed by another key: refused
+    let forged = content::key_change_body(&other_sk, &new_iks)?;
+    assert!(content::key_change_verifies(&forged, &peer).is_err());
+    // the product body, fragmented, is delivered as the new identity
+    let payload = FragmentPayload::KeyChange(body).encode()?;
+    let pts = plaintexts(&fragments(1, &payload, 1669)?)?;
+    let mut trust = Trust::Verified;
+    let ds = receive_all(&mut Inbox::new(), &pts, &[0, 1, 2, 3], &peer, &mut trust)?;
+    assert_eq!(kinds(&ds), ["Partial", "Partial", "Partial", "KeyChange"]);
+    assert_eq!(trust, Trust::KeyChanged);
+    Ok(())
+}
+
 /// An unverifiable `KeyChange` (§7.7) — signed by another key, under another label, over another identity, or with
 /// its ML-DSA half damaged, and (M3 review C3) a reassembled `0x05` payload that does not decode: an all-zero
 /// signature, Ed25519 `S = L`, a small-order `R`, a low-order `ik_dh` — is refused and freezes the session: every

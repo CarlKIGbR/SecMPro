@@ -14,15 +14,18 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use secmp_crypto::{HybridVerifyingKey, Zeroizing};
 use secmp_proto::Encode;
 use secmp_proto::tr::content::{Delivery, Inbox, Trust, dummy, split_chunks};
-use secmp_proto::tr::{Entropy, OsEntropy, RatchetState};
+use secmp_proto::tr::{Entropy, OsEntropy, RatchetParts, RatchetState};
 use secmp_proto::wire::cell::{
     AppKind, AppMessage, BatchBody, Cell, Content, ContentBody, Fragment, FragmentPayload,
     ReceiptBody, ReceiptKind,
 };
 
-use crate::scheduler::outbox::{MsgId, OutMessage, Outbox, Persist, PersistKind};
+use crate::scheduler::outbox::{
+    CommitParts, DeliveredMessage, MsgId, OutMessage, Outbox, Persist, PersistError, PersistKind,
+    trust_code,
+};
 use crate::scheduler::types::{
-    CellSource, CellToken, PreparedCell, QueueId, SendFailure, SourceError,
+    CellSource, CellToken, Delivered, PreparedCell, QueueId, SendFailure, SourceError,
 };
 
 /// Counting accessors of the `kat` build (`tr_encrypt_calls`, `persist_calls`; TEST-SPEC-M6 "Conventions"):
@@ -166,6 +169,8 @@ pub struct Conversation<O: Outbox, P: Persist, S: EntropySource> {
     next_token: u64,
     next_seq: u64,
     unix_base: u64,
+    /// The latest `now_ms` of a preparation (the time a delivered message is stamped with, V1-F4).
+    last_now_ms: u64,
     inbox: Inbox,
     trust: Trust,
     peer: HybridVerifyingKey,
@@ -212,6 +217,7 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
             next_token: 0,
             next_seq: 1,
             unix_base,
+            last_now_ms: 0,
             inbox: Inbox::new(),
             trust: Trust::Verified,
             peer,
@@ -241,6 +247,11 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
         self.by_cell.clear();
         self.relayed_cells.clear();
         Ok(self)
+    }
+
+    /// The messages already delivered by an earlier run (the history of the store): the dedup set after a restart.
+    pub fn seed_seen(&mut self, ids: impl IntoIterator<Item = MsgId>) {
+        self.seen.extend(ids);
     }
 
     /// The scheduler queues of this conversation.
@@ -453,9 +464,18 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
         let persist = &mut self.persist;
         let result = sealed.persist(|bytes| {
             counters::note_persist();
-            persist.commit(PersistKind::Send, bytes)?;
+            let ratchet = RatchetParts::split(bytes).map_err(|_| PersistError)?;
+            persist.commit_parts(
+                PersistKind::Send,
+                &CommitParts {
+                    ratchet: &ratchet,
+                    inbox: None,
+                    trust: None,
+                    delivered: &[],
+                },
+            )?;
             *new_durable = Zeroizing::new(bytes.to_vec());
-            Ok::<(), crate::scheduler::outbox::PersistError>(())
+            Ok::<(), PersistError>(())
         });
         if let Ok((state, cell)) = result {
             // a key counts as used once its state is durable: a cell that was never persisted was never released
@@ -501,6 +521,7 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
     }
 
     fn prepare(&mut self, now_ms: u64) -> Result<PreparedCell, SourceError> {
+        self.last_now_ms = self.last_now_ms.max(now_ms);
         self.outbox.expire(now_ms);
         if self.plan.is_empty() {
             if self.send_receipts && !self.receipts_due.is_empty() {
@@ -525,10 +546,7 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
                         total: planned.total,
                     },
                 );
-                Ok(PreparedCell {
-                    cell,
-                    token: CellToken(token),
-                })
+                Ok(PreparedCell::committed(cell, CellToken(token)))
             }
             Err(e) => {
                 self.restore(&planned.owner);
@@ -603,14 +621,52 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
         let mut inbox = self.inbox.clone();
         let mut trust = self.trust;
         let delivery = inbox.receive(opened.plaintext(), &self.peer, &mut trust);
+        // the messages this cell delivers for the first time are durable with the state that consumed it
+        let received_ms = self
+            .unix_base
+            .saturating_mul(1000)
+            .saturating_add(self.last_now_ms);
+        let fresh: Vec<DeliveredMessage<'_>> = match &delivery {
+            Delivery::Messages(messages) => messages
+                .iter()
+                .filter(|m| !self.seen.contains(&m.msg_id))
+                .map(|m| DeliveredMessage {
+                    msg_id: m.msg_id,
+                    kind: m.kind.byte(),
+                    payload: m.payload.as_slice(),
+                    expire_after: m.expire_after,
+                    received_ms,
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
+        // the reassembly state when it is or was non-empty, the trust when it changed: in the same commit (PC-09)
+        let inbox_changed = inbox.partials() != 0 || self.inbox.partials() != 0;
+        let trust_changed = (trust != self.trust).then_some(trust_code(trust));
         let durable = &mut self.durable;
         let persist = &mut self.persist;
+        let staged = &inbox;
         let committed = opened.commit(|bytes| {
             counters::note_persist();
-            persist.commit(PersistKind::Receive, bytes)?;
+            let ratchet = RatchetParts::split(bytes).map_err(|_| PersistError)?;
+            let inbox_bytes = if inbox_changed {
+                Some(staged.to_bytes().map_err(|_| PersistError)?)
+            } else {
+                None
+            };
+            persist.commit_parts(
+                PersistKind::Receive,
+                &CommitParts {
+                    ratchet: &ratchet,
+                    inbox: inbox_bytes.as_ref().map(|b| b.as_slice()),
+                    trust: trust_changed,
+                    delivered: &fresh,
+                },
+            )?;
             *durable = Zeroizing::new(bytes.to_vec());
-            Ok::<(), crate::scheduler::outbox::PersistError>(())
+            Ok::<(), PersistError>(())
         });
+        drop(fresh);
         if let Ok((state, _plaintext)) = committed {
             self.state = Some(state);
             self.inbox = inbox;
@@ -751,11 +807,17 @@ impl<O: Outbox, P: Persist, S: EntropySource> CellSource for Conversations<O, P,
         }
     }
 
-    fn deliver(&mut self, queue: QueueId, _cell_id: u64, cell: &Cell) -> Result<(), SourceError> {
+    fn deliver(
+        &mut self,
+        queue: QueueId,
+        _cell_id: u64,
+        cell: &Cell,
+    ) -> Result<Delivered, SourceError> {
         match self.by_recv(queue) {
-            Some(c) => c.on_deliver(cell),
+            // decided and committed before it returns
+            Some(c) => c.on_deliver(cell).map(|()| Delivered::Committed),
             // a queue without a conversation (a spare of the pool): nothing to decrypt, the cell is discarded
-            None => Ok(()),
+            None => Ok(Delivered::Committed),
         }
     }
 }
@@ -911,6 +973,233 @@ mod tests {
         conv.persist_mut().set_failing(false);
         conv.prepare_direct(0).map_err(|_| "seal")?;
         assert_eq!(conv.message_key_digests_kat().len(), 1);
+        Ok(())
+    }
+
+    /// The `received_ms` of every delivered message a `Persist` was handed.
+    #[cfg(feature = "kat")]
+    #[derive(Default)]
+    struct Stamps(Vec<u64>);
+
+    #[cfg(feature = "kat")]
+    impl crate::scheduler::outbox::Persist for Stamps {
+        fn commit(
+            &mut self,
+            _kind: crate::scheduler::outbox::PersistKind,
+            _state: &[u8],
+        ) -> Result<(), crate::scheduler::outbox::PersistError> {
+            Ok(())
+        }
+
+        fn commit_parts(
+            &mut self,
+            _kind: crate::scheduler::outbox::PersistKind,
+            parts: &crate::scheduler::outbox::CommitParts<'_>,
+        ) -> Result<(), crate::scheduler::outbox::PersistError> {
+            self.0.extend(parts.delivered.iter().map(|m| m.received_ms));
+            Ok(())
+        }
+    }
+
+    /// V1-F4 (extra test): a delivered message carries the Unix ms of the latest slot preparation — `unix_base`·1000 +
+    /// the `now_ms` of `prepare`.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn delivered_carries_unix_ms() -> Result<(), Fail> {
+        use crate::scheduler::outbox::{MemOutbox, MemPersist, OutMessage, Outbox};
+        use crate::scheduler::types::{CellSource, QueueId};
+        use secmp_proto::tr::{Entropy as _, FixedEntropy, RatchetState};
+        use secmp_proto::wire::cell::AppKind;
+        // the two ends of one session (as `initiator_state`, with the responder kept)
+        let mut responder = FixedEntropy::new(&stream(2, 1 << 16));
+        let mut initiator = FixedEntropy::new(&stream(1, 1 << 16));
+        let spk_dh = responder.x25519().map_err(|_| "x25519")?;
+        let rpk_kem = responder.mlkem768().map_err(|_| "ml-kem")?;
+        let spk = secmp_proto::keys::X25519Pk::from_bytes(spk_dh.public_key().as_bytes())
+            .map_err(|_| "spk")?;
+        let ek = secmp_proto::keys::MlKem768Ek::from_bytes(rpk_kem.encapsulation_key().as_bytes())
+            .map_err(|_| "ek")?;
+        let sk = secmp_crypto::SecretBytes::from_slice(&[7_u8; 32]).map_err(|_| "secret")?;
+        let a_state =
+            RatchetState::init_initiator_with(&sk, &[9_u8; 32], &spk, &ek, &mut initiator)
+                .map_err(|_| "initiator")?;
+        let b_state = RatchetState::init_responder(&sk, &[9_u8; 32], spk_dh, rpk_kem)
+            .map_err(|_| "responder")?;
+        let peer = FixedEntropy::new(&stream(3, 1 << 20))
+            .hybrid_signing_key()
+            .map_err(|_| "peer key")?
+            .verifying_key();
+        let mut a = super::Conversation::new(
+            a_state,
+            MemOutbox::new(),
+            MemPersist::new(),
+            Fixed(FixedEntropy::new(&stream(4, 1 << 20))),
+            peer.clone(),
+            0,
+        );
+        a.outbox_mut().enqueue(
+            OutMessage {
+                msg_id: [5; 16],
+                kind: AppKind::Text,
+                expire_after: 0,
+                payload: secmp_crypto::Zeroizing::new(vec![1; 8]),
+            },
+            0,
+        );
+        let cell = a.prepare_direct(0).map_err(|_| "seal")?.cell;
+        let mut b = super::Conversation::new(
+            b_state,
+            MemOutbox::new(),
+            Stamps::default(),
+            Fixed(FixedEntropy::new(&stream(6, 1 << 20))),
+            peer,
+            1_700_000_000,
+        );
+        // the responder's first preparation fails (no sending chain yet) but stamps the time
+        let _ = b.prepare_direct(5_000);
+        b.bind(QueueId(2), QueueId(1));
+        let mut convs = super::Conversations::new();
+        convs.add(b);
+        convs.deliver(QueueId(1), 1, &cell).map_err(|_| "deliver")?;
+        let b = convs.get(0).ok_or("conversation")?;
+        assert_eq!(b.received().len(), 1, "the text was delivered");
+        assert_eq!(b.persist().0, vec![1_700_000_005_000]);
+        Ok(())
+    }
+
+    /// What a recording `Persist` saw of each receive commit: the reassembly state present, the trust code.
+    #[cfg(feature = "kat")]
+    #[derive(Default)]
+    struct Commits(Vec<(bool, Option<u8>)>);
+
+    #[cfg(feature = "kat")]
+    impl crate::scheduler::outbox::Persist for Commits {
+        fn commit(
+            &mut self,
+            _kind: crate::scheduler::outbox::PersistKind,
+            _state: &[u8],
+        ) -> Result<(), crate::scheduler::outbox::PersistError> {
+            Ok(())
+        }
+
+        fn commit_parts(
+            &mut self,
+            kind: crate::scheduler::outbox::PersistKind,
+            parts: &crate::scheduler::outbox::CommitParts<'_>,
+        ) -> Result<(), crate::scheduler::outbox::PersistError> {
+            if kind == crate::scheduler::outbox::PersistKind::Receive {
+                self.0.push((parts.inbox.is_some(), parts.trust));
+            }
+            Ok(())
+        }
+    }
+
+    /// Two conversations of one session: the initiator (`MemPersist`) and the responder with `persist`, its receive queue
+    /// bound to 1, inside a `Conversations`.
+    #[cfg(feature = "kat")]
+    type Session<P> = (
+        TestConversation,
+        super::Conversations<crate::scheduler::outbox::MemOutbox, P, Fixed>,
+    );
+
+    #[cfg(feature = "kat")]
+    fn session<P: crate::scheduler::outbox::Persist>(persist: P) -> Result<Session<P>, Fail> {
+        use crate::scheduler::outbox::{MemOutbox, MemPersist};
+        use crate::scheduler::types::QueueId;
+        use secmp_proto::tr::{Entropy as _, FixedEntropy, RatchetState};
+        let mut responder = FixedEntropy::new(&stream(2, 1 << 16));
+        let mut initiator = FixedEntropy::new(&stream(1, 1 << 16));
+        let spk_dh = responder.x25519().map_err(|_| "x25519")?;
+        let rpk_kem = responder.mlkem768().map_err(|_| "ml-kem")?;
+        let spk = secmp_proto::keys::X25519Pk::from_bytes(spk_dh.public_key().as_bytes())
+            .map_err(|_| "spk")?;
+        let ek = secmp_proto::keys::MlKem768Ek::from_bytes(rpk_kem.encapsulation_key().as_bytes())
+            .map_err(|_| "ek")?;
+        let sk = secmp_crypto::SecretBytes::from_slice(&[7_u8; 32]).map_err(|_| "secret")?;
+        let a_state =
+            RatchetState::init_initiator_with(&sk, &[9_u8; 32], &spk, &ek, &mut initiator)
+                .map_err(|_| "initiator")?;
+        let b_state = RatchetState::init_responder(&sk, &[9_u8; 32], spk_dh, rpk_kem)
+            .map_err(|_| "responder")?;
+        let peer = FixedEntropy::new(&stream(3, 1 << 20))
+            .hybrid_signing_key()
+            .map_err(|_| "peer key")?
+            .verifying_key();
+        let a = super::Conversation::new(
+            a_state,
+            MemOutbox::new(),
+            MemPersist::new(),
+            Fixed(FixedEntropy::new(&stream(4, 1 << 20))),
+            peer.clone(),
+            0,
+        );
+        let mut b = super::Conversation::new(
+            b_state,
+            MemOutbox::new(),
+            persist,
+            Fixed(FixedEntropy::new(&stream(6, 1 << 20))),
+            peer,
+            0,
+        );
+        b.bind(QueueId(2), QueueId(1));
+        let mut convs = super::Conversations::new();
+        convs.add(b);
+        Ok((a, convs))
+    }
+
+    /// A text message `n` of `len` bytes.
+    #[cfg(feature = "kat")]
+    fn text_message(n: u8, len: usize) -> crate::scheduler::outbox::OutMessage {
+        crate::scheduler::outbox::OutMessage {
+            msg_id: [n; 16],
+            kind: secmp_proto::wire::cell::AppKind::Text,
+            expire_after: 0,
+            payload: secmp_crypto::Zeroizing::new(vec![n; len]),
+        }
+    }
+
+    /// V2-1 (killers, `conversation.rs:644`, `:645`): a receive commit carries the reassembly state while a message is in
+    /// fragments (also the commit that completes it), not for a one-cell message, and no trust when the trust did not
+    /// change.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn receive_commit_carries_inbox_only_while_fragmented() -> Result<(), Fail> {
+        use crate::scheduler::outbox::Outbox as _;
+        use crate::scheduler::types::{CellSource as _, QueueId};
+        let (mut a, mut convs) = session(Commits::default())?;
+        a.outbox_mut().enqueue(text_message(1, 3_000), 0);
+        let first = a.prepare_direct(0).map_err(|_| "seal 1")?.cell;
+        let second = a.prepare_direct(0).map_err(|_| "seal 2")?.cell;
+        a.outbox_mut().enqueue(text_message(2, 10), 0);
+        let third = a.prepare_direct(0).map_err(|_| "seal 3")?.cell;
+        for (id, cell) in [(1, &first), (2, &second), (3, &third)] {
+            convs.deliver(QueueId(1), id, cell).map_err(|_| "deliver")?;
+        }
+        let b = convs.get(0).ok_or("conversation")?;
+        assert_eq!(b.received().len(), 2, "the long and the short message");
+        assert_eq!(
+            b.persist().0,
+            vec![(true, None), (true, None), (false, None)],
+            "fragment, completing fragment, one-cell message"
+        );
+        Ok(())
+    }
+
+    /// V2-1 (killer, `conversation.rs:254`): the delivered ids of an earlier run suppress a redelivery.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn seed_seen_suppresses_redelivery() -> Result<(), Fail> {
+        use crate::scheduler::outbox::Outbox as _;
+        use crate::scheduler::types::{CellSource as _, QueueId};
+        let (mut a, mut convs) = session(crate::scheduler::outbox::MemPersist::new())?;
+        a.outbox_mut().enqueue(text_message(5, 10), 0);
+        let cell = a.prepare_direct(0).map_err(|_| "seal")?.cell;
+        convs
+            .get_mut(0)
+            .ok_or("conversation")?
+            .seed_seen([[5_u8; 16]]);
+        convs.deliver(QueueId(1), 1, &cell).map_err(|_| "deliver")?;
+        assert!(convs.get(0).ok_or("conversation")?.received().is_empty());
         Ok(())
     }
 }

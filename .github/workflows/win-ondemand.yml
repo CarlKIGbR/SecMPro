@@ -85,7 +85,6 @@ jobs:
           nasm -v || exit /b 1
           git --version || exit /b 1
           rustup component list --installed || exit /b 1
-          pwsh -v || echo no-pwsh
       - name: Suite hello
         if: inputs.suite == 'hello'
         shell: cmd
@@ -93,7 +92,7 @@ jobs:
       - name: Suite win-test
         if: inputs.suite == 'win-test'
         shell: cmd
-        run: cargo xtask step --strict clippy nextest doctest kat hello || exit /b 1
+        run: cargo xtask step --strict clippy nextest doctest kat harness hello || exit /b 1
       - name: Build the Tor smoke check
         if: inputs.suite == 'tor-smoke'
         shell: cmd

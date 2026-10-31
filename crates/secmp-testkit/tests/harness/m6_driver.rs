@@ -807,7 +807,7 @@ fn driver_reports_late_preparation_as_overrun() {
     assert!(
         events
             .iter()
-            .any(|(_, e)| matches!(e, LinkEvent::TornDown(_, Reason::Overrun))),
+            .any(|(_, e)| matches!(e, LinkEvent::TornDown(_, _, Reason::Overrun))),
         "{events:?}"
     );
     // the work's end is the clock's reading right after it (no virtual time passes inside `work`)
@@ -844,7 +844,7 @@ fn driver_resolves_every_connect() {
             .connects
             .iter()
             .filter_map(|(_, p, _)| match p {
-                secmp_client_core::scheduler::run::Purpose::Link(l) => Some(*l),
+                secmp_client_core::scheduler::run::Purpose::Link(l, _) => Some(*l),
                 secmp_client_core::scheduler::run::Purpose::Control(_) => None,
             })
             .collect();
@@ -860,7 +860,7 @@ fn driver_resolves_every_connect() {
         assert!(
             log.events
                 .iter()
-                .any(|(_, e)| matches!(e, LinkEvent::TornDown(_, Reason::ClosedBeforeRelayInfo)))
+                .any(|(_, e)| matches!(e, LinkEvent::TornDown(_, _, Reason::ClosedBeforeRelayInfo)))
         );
         // the hanging connect was given up after the timeout, not later; the others at once
         let delays: Vec<u64> = log
@@ -871,7 +871,7 @@ fn driver_resolves_every_connect() {
                 let started = log
                     .connects
                     .iter()
-                    .find(|(_, p, _)| *p == secmp_client_core::scheduler::run::Purpose::Link(*l))
+                    .find(|(_, p, _)| matches!(p, secmp_client_core::scheduler::run::Purpose::Link(x, _) if x == l))
                     .unwrap()
                     .0;
                 t.saturating_sub(started)
@@ -886,7 +886,7 @@ fn driver_resolves_every_connect() {
         let ups = log
             .events
             .iter()
-            .filter(|(_, e)| matches!(e, LinkEvent::Up(_)))
+            .filter(|(_, e)| matches!(e, LinkEvent::Up(_, _)))
             .count();
         assert!(ups >= 4, "{ups}");
         assert!(

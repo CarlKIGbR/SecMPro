@@ -25,11 +25,14 @@
 
 use std::collections::VecDeque;
 
-use secmp_crypto::{ConstantTimeEq, Fingerprint, HybridSignature, HybridVerifyingKey, Label};
+use secmp_crypto::{
+    ConstantTimeEq, Fingerprint, HybridSignature, HybridSigningKey, HybridVerifyingKey, Label,
+};
 
 // the encodings' zeroizing buffer (`secmp_crypto::Zeroizing`; a stand-in under Kani, see `codec`)
 use crate::codec::{Decode, Encode, Reader, Writer, Zeroizing};
 use crate::error::{Error, Result};
+use crate::keys::HybridSig;
 use crate::sizes::{
     CONTENT_BODY_MAX, FRAGMENT_HEADER_LEN, FRAGMENT_TOTAL_MAX, FRAGMENT_TOTAL_MIN, ID_LEN,
 };
@@ -160,8 +163,24 @@ pub struct Inbox {
     partials: VecDeque<Partial>,
 }
 
+/// The `KeyChange` body announcing `new` (spec §7.6 `docs/03:503`, §7.7 `:513`): `new IKSPublic ‖ HybridSign(old
+/// IK_sig, "SecMP-TR/1 keychange", fingerprint(new))`, signed by the *old* identity key. It is sent fragmented, like
+/// every 5390-byte `KeyChange` (§7.6).
+///
+/// # Errors
+/// [`Error::Rejected`] if `new` has no encoding; [`Error::Unavailable`] without randomness for the hedged signature.
+pub fn key_change_body(old: &HybridSigningKey, new: &IksPublic) -> Result<KeyChangeBody> {
+    // spec §7.6: the signed message is fingerprint(new IKSPublic) under the label "SecMP-TR/1 keychange"
+    let fp = Fingerprint::of_encoded_iks(&new.encode()?)?;
+    let sig = old.sign(Label::TrKeychange, fp.as_bytes())?;
+    Ok(KeyChangeBody {
+        iks: new.clone(),
+        sig: HybridSig::from_bytes(sig.as_bytes())?,
+    })
+}
+
 /// `HybridVerify(old IK_sig, "SecMP-TR/1 keychange", fingerprint(new IKSPublic))` (spec §7.6, §7.7).
-fn key_change_verifies(kc: &KeyChangeBody, old: &HybridVerifyingKey) -> Result<()> {
+pub(crate) fn key_change_verifies(kc: &KeyChangeBody, old: &HybridVerifyingKey) -> Result<()> {
     let fp = Fingerprint::of_encoded_iks(&kc.iks.encode()?)?;
     let sig = HybridSignature::from_bytes(kc.sig.as_bytes())?;
     old.verify(Label::TrKeychange, fp.as_bytes(), &sig)?;

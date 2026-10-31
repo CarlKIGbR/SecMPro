@@ -5,7 +5,9 @@
 //! recomputes every entry from `sizes.rs`, the `secmp-crypto` constants and live encodings, so the table cannot
 //! drift from the structures it bounds.
 
-use secmp_crypto::{MLDSA65_PK_LEN, MLDSA65_SIG_LEN, MSG_SEALED_LEN, Zeroizing};
+use secmp_crypto::{
+    AEAD_TAG_LEN, COM_LEN, MLDSA65_PK_LEN, MLDSA65_SIG_LEN, MSG_SEALED_LEN, Zeroizing,
+};
 use secmp_proto::sizes::{
     CELL_LEN, CONTENT_BODY_MAX, ED25519_PK_LEN, ED25519_SIG_LEN, FRAGMENT_HEADER_LEN, FRAME_LEN,
     FRAME_PLAINTEXT_LEN, HANDSHAKE_CELL_PT_LEN, HEADER_LEN, HOST_MAX, HS1_LEN, HYBRID_SIG_LEN,
@@ -83,6 +85,34 @@ fn link_entries() -> [(&'static str, usize); 6] {
         // selector / mode byte, then a frame plaintext
         ("q_request_decode", sum(&[1, FRAME_PLAINTEXT_LEN])),
         ("q_response_decode", sum(&[1, FRAME_PLAINTEXT_LEN])),
+    ]
+}
+
+/// TEST-SPEC-M7 FZ-01, FZ-02 (ADR-053 items 5, 6 and Appendix): the two store targets. A sealed record and a backup
+/// file carry `N` (24), `COM` and the tag around their plaintext.
+fn m7_entries() -> Vec<(&'static str, usize)> {
+    let seal = sum(&[NONCE_LEN, COM_LEN, AEAD_TAG_LEN]);
+    // ver ‖ salt ‖ params ‖ bwrap (N' ‖ COM ‖ MK_bk ‖ tag) ‖ section table (count ‖ {tag ‖ len u32} × 4)
+    let header = sum(&[1, 16, 12, sum(&[seal, 32]), 1, 4 * 5]);
+    assert_eq!(header, 154);
+    vec![
+        // mode, then the magic, the header and the body seal around a body of the 64 KiB seed cap (ADR-052)
+        ("backup_import", sum(&[1, 13, header, seal, 65_536])),
+        // table, col_len, column, row_len, row key, mode, then the largest record (`RatchetStateV1` at its maximum
+        // bounds the fixed part) sealed
+        (
+            "store_record_open",
+            sum(&[
+                1,
+                1,
+                U8_MAX_LEN,
+                1,
+                U8_MAX_LEN,
+                1,
+                RatchetState::MAX_ENCODED_LEN,
+                seal,
+            ]),
+        ),
     ]
 }
 
@@ -244,7 +274,7 @@ fn fuzz_max_len_is_the_largest_valid_input_plus_one() -> Result<(), Error> {
         ),
     ]
     .into_iter()
-    .chain(m5_entries())
+    .chain(m5_entries().chain(m7_entries()))
     .collect();
     assert_eq!(handshake, 65_642);
     assert_eq!(send, 4_146);

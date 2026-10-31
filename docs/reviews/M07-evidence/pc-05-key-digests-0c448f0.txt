@@ -1,0 +1,7 @@
+measured on HEAD 0c448f06193707ce1f9fff7b455fa74b31c9563a (harness step of ci-fast-a3b-0c448f0.txt)
+PC-05 crash between persist and send (5 crash points x 20 seeds, two profiles, 30 real messages each way; SHA-256 digests of the message keys, never the keys): distinct/total = 6074/6074, duplicates 0; every message delivered exactly once
+  AfterCommitBeforeWrite: keys counted 1200, distinct 1200, duplicates 0
+  AfterWriteBeforeOkSend: keys counted 1220, distinct 1220, duplicates 0
+  MidTxn(1|2): keys counted 1214, distinct 1214, duplicates 0
+  AfterDecryptBeforeCommit: keys counted 1220, distinct 1220, duplicates 0
+  AfterCommitBeforeAck: keys counted 1220, distinct 1220, duplicates 0

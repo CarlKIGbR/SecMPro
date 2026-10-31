@@ -1,0 +1,145 @@
+tree = a4897e3 (§3 head); each row measured on the tree of its commit (column tree), identical in these files to a4897e3
+# cargo kani --package <p> --harness kani_proofs::<name> --exact, each alone (2026-10-30, nproc 32), via
+# target/bsc-scripts/kani-one.py (= docs/reviews/M07-evidence/kani-one-a3b.py.txt with the package as an argument,
+# committed as docs/reviews/M07-evidence/kani-one-bsc.py.txt); peak = getrusage(RUSAGE_CHILDREN).ru_maxrss of the
+# wrapper process (one process per harness), limit KANI_CBMC_RSS_LIMIT_KIB 14160156, 90 % = 12744140.
+
+| harness | tree | VERIFICATION | covers | verification time (s) | wall (s) | peak KiB | % of limit |
+|---|---|---|---|---|---|---|---|
+| `kani_in_flight_over_transitions` | ca99b15 (SC-06) | SUCCESSFUL | 2 of 2 | 37.083492 | 39 | 1500392 | 10.6 |
+| `kani_queue_generations` | 1f5b604 (SC-07) | SUCCESSFUL | 3 of 3 | 77.24362 | 80 | 3527324 | 24.9 |
+| `kani_persist_contract_abstract` | 07117f0 (SC-08) | SUCCESSFUL | 3 of 3 | 456.63815 | 458 | 11986380 | 84.6 |
+| `kani_paired_executions` | 20eae50 (SC-09) | SUCCESSFUL | 3 of 3 | 136.57578 | 139 | 9715740 | 68.6 |
+| `kani_deadline_arithmetic_checked` | a4897e3 (SC-10: K-C5 re-measured) | SUCCESSFUL | 1 of 1 | 778.0912 | 779 | 230984 | 1.6 |
+| `kani_reservation_is_schedule_only` | 9a5d10a (§2 before its amend; this harness and its functions identical in 9722477): K-C1 re-measured | SUCCESSFUL | 1 of 1 | 70.59993 | 74 | 5077488 | 35.9 |
+| `kani_frame_written_commits_fifo` | 9722477 (§2: K-C2 re-measured) | SUCCESSFUL | 1 of 1 | 76.47546 | 79 | 5623916 | 39.7 |
+| `kani_teardown_keeps_the_committed_rr` | 9a5d10a (as K-C1): K-C3 re-measured | SUCCESSFUL | 1 of 1 | 53.42118 | 57 | 4506380 | 31.8 |
+| `kani_tick_hands_out_without_commit` | 9a5d10a (as K-C1): K-C4 re-measured | SUCCESSFUL | 1 of 1 | 15.106885 | 17 | 2011152 | 14.2 |
+| `kani_unwritten_bound` | 9a5d10a (as K-C1): K-C6 re-measured | SUCCESSFUL | 1 of 1 | 6.961633 | 8 | 594188 | 4.2 |
+
+## raw (the wrapper's kept lines)
+
+  Checking harness kani_proofs::kani_in_flight_over_transitions...
+  Check 87: kani_proofs::kani_in_flight_over_transitions.cover.1
+  - Status: SATISFIED
+  Check 97: kani_proofs::kani_in_flight_over_transitions.cover.2
+  - Status: SATISFIED
+  SUMMARY:
+  ** 0 of 685 failed (16 unreachable)
+  ** 2 of 2 cover properties satisfied
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 37.083492s
+  Complete - 1 successfully verified harnesses, 0 failures, 1 total.
+  exit 0; wall 39 s; peak 1500392 KiB = 10.6 % of 14160156 KiB
+
+  Checking harness kani_proofs::kani_queue_generations...
+  Check 159: kani_proofs::kani_queue_generations.cover.1
+  - Status: SATISFIED
+  Check 162: kani_proofs::kani_queue_generations.cover.2
+  - Status: SATISFIED
+  Check 163: kani_proofs::kani_queue_generations.cover.3
+  - Status: SATISFIED
+  SUMMARY:
+  ** 0 of 1613 failed (12 unreachable)
+  ** 3 of 3 cover properties satisfied
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 77.24362s
+  Complete - 1 successfully verified harnesses, 0 failures, 1 total.
+  exit 0; wall 80 s; peak 3527324 KiB = 24.9 % of 14160156 KiB
+
+  Checking harness kani_proofs::kani_persist_contract_abstract...
+  Check 62: kani_proofs::kani_persist_contract_abstract.cover.1
+  - Status: SATISFIED
+  Check 71: kani_proofs::kani_persist_contract_abstract.cover.2
+  - Status: SATISFIED
+  Check 73: kani_proofs::kani_persist_contract_abstract.cover.3
+  - Status: SATISFIED
+  SUMMARY:
+  ** 0 of 883 failed (4 unreachable)
+  ** 3 of 3 cover properties satisfied
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 456.63815s
+  Complete - 1 successfully verified harnesses, 0 failures, 1 total.
+  exit 0; wall 458 s; peak 11986380 KiB = 84.6 % of 14160156 KiB
+
+  Checking harness kani_proofs::kani_paired_executions...
+  Check 160: kani_proofs::kani_paired_executions.cover.1
+  - Status: SATISFIED
+  Check 161: kani_proofs::kani_paired_executions.cover.2
+  - Status: SATISFIED
+  Check 162: kani_proofs::kani_paired_executions.cover.3
+  - Status: SATISFIED
+  SUMMARY:
+  ** 0 of 1138 failed (12 unreachable)
+  ** 3 of 3 cover properties satisfied
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 136.57578s
+  Complete - 1 successfully verified harnesses, 0 failures, 1 total.
+  exit 0; wall 139 s; peak 9715740 KiB = 68.6 % of 14160156 KiB
+
+  Checking harness kani_proofs::kani_deadline_arithmetic_checked...
+  Check 10: kani_proofs::kani_deadline_arithmetic_checked.cover.1
+  - Status: SATISFIED
+  SUMMARY:
+  ** 0 of 50 failed
+  ** 1 of 1 cover properties satisfied
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 778.0912s
+  Complete - 1 successfully verified harnesses, 0 failures, 1 total.
+  exit 0; wall 779 s; peak 230984 KiB = 1.6 % of 14160156 KiB
+
+  Checking harness kani_proofs::kani_reservation_is_schedule_only...
+  Check 32: kani_proofs::kani_reservation_is_schedule_only.cover.1
+  - Status: SATISFIED
+  SUMMARY:
+  ** 0 of 561 failed (7 unreachable)
+  ** 1 of 1 cover properties satisfied
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 70.59993s
+  Complete - 1 successfully verified harnesses, 0 failures, 1 total.
+  exit 0; wall 74 s; peak 5077488 KiB = 35.9 % of 14160156 KiB
+
+  Checking harness kani_proofs::kani_frame_written_commits_fifo...
+  Check 115: kani_proofs::kani_frame_written_commits_fifo.cover.1
+  - Status: SATISFIED
+  SUMMARY:
+  ** 0 of 874 failed (8 unreachable)
+  ** 1 of 1 cover properties satisfied
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 76.47546s
+  Complete - 1 successfully verified harnesses, 0 failures, 1 total.
+  exit 0; wall 79 s; peak 5623916 KiB = 39.7 % of 14160156 KiB
+
+  Checking harness kani_proofs::kani_teardown_keeps_the_committed_rr...
+  Check 102: kani_proofs::kani_teardown_keeps_the_committed_rr.cover.1
+  - Status: SATISFIED
+  SUMMARY:
+  ** 0 of 669 failed (7 unreachable)
+  ** 1 of 1 cover properties satisfied
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 53.42118s
+  Complete - 1 successfully verified harnesses, 0 failures, 1 total.
+  exit 0; wall 57 s; peak 4506380 KiB = 31.8 % of 14160156 KiB
+
+  Checking harness kani_proofs::kani_tick_hands_out_without_commit...
+  Check 33: kani_proofs::kani_tick_hands_out_without_commit.cover.1
+  - Status: SATISFIED
+  SUMMARY:
+  ** 0 of 563 failed (7 unreachable)
+  ** 1 of 1 cover properties satisfied
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 15.106885s
+  Complete - 1 successfully verified harnesses, 0 failures, 1 total.
+  exit 0; wall 17 s; peak 2011152 KiB = 14.2 % of 14160156 KiB
+
+  Checking harness kani_proofs::kani_unwritten_bound...
+  Check 32: kani_proofs::kani_unwritten_bound.cover.1
+  - Status: SATISFIED
+  SUMMARY:
+  ** 0 of 317 failed (6 unreachable)
+  ** 1 of 1 cover properties satisfied
+  VERIFICATION:- SUCCESSFUL
+  Verification Time: 6.961633s
+  Complete - 1 successfully verified harnesses, 0 failures, 1 total.
+  exit 0; wall 8 s; peak 594188 KiB = 4.2 % of 14160156 KiB
+

@@ -1,12 +1,12 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # On-demand runs of single SecMPro gates (`workflow_dispatch` only; M2 review C2). The job names differ from the
-# required checks and the other gate jobs of `ci.yml` (`ct`, `mutants-shard`, `mutants`, `proverif-hx`, `proverif-link`, `kani`, `fuzz`), so a dispatch
+# required checks and the other gate jobs of `ci.yml` (`ct`, `mutants-shard`, `mutants`, `proverif-hx`, `proverif-link`, `kani`, `fuzz`, `harness`), so a dispatch
 # on a pull-request head never adds a check run under such a name. Each job runs the same `cargo xtask` gate lines as its `ci.yml`
 # counterpart (M4 review C-4, R-14; checked by `gates::tests::dispatch_full_runs_the_linux_full_line`):
 # `dispatch-fast` = `linux-fast`, `dispatch-windows` = `windows-native`, `dispatch-xwin` = `xwin-cross`,
 # `dispatch-full` = `linux-full` (which delegates mutation testing, ct, fuzz, Kani and the SecMP-LINK models), `dispatch-ct` = `ct`,
 # `dispatch-mutants-shard`/`dispatch-mutants` = `mutants-shard`/`mutants`, `dispatch-proverif-hx` = `proverif-hx`,
-# `dispatch-proverif-link` = `proverif-link` (M5, the SecMP-LINK models `linux-full` delegates), `dispatch-kani` = `kani` (M6), `dispatch-fuzz` = `fuzz` (M6-CI); the
+# `dispatch-proverif-link` = `proverif-link` (M5, the SecMP-LINK models `linux-full` delegates), `dispatch-kani` = `kani` (M6), `dispatch-fuzz` = `fuzz` (M6-CI), `dispatch-harness` = `harness` (M7, suites `fast` and `full`); the
 # suites `full` and `all` run all of the delegated jobs. `cargo xtask win-test --backend github --dispatch` starts
 # `suite: windows`.
 # Checked by `cargo xtask policy` as every workflow (see the header of ci.yml), including the read-only token. By
@@ -42,7 +42,7 @@ jobs:
   dispatch-fast:
     if: inputs.suite == 'all' || inputs.suite == 'fast'
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -67,8 +67,8 @@ jobs:
         with:
           path: ~/.secmp-tools
           key: ${{ steps.tools-cache.outputs.cache-primary-key }}
-      - name: ci-fast (steps 1–5)
-        run: cargo xtask ci-fast --strict
+      - name: ci-fast (steps 1–5; the harness binary in job dispatch-harness)
+        run: cargo xtask ci-fast --strict --delegated harness
       - name: SBOM (step 13) and systemd exposure (step 14)
         run: cargo xtask step --strict sbom systemd
       - name: Upload SBOMs
@@ -78,11 +78,44 @@ jobs:
           path: target/sbom/
           if-no-files-found: error
 
+  # TEST-SPEC-M7 G7-07: the twin of `harness` (the testkit harness binary, which `dispatch-fast` and `dispatch-full`
+  # delegate here).
+  dispatch-harness:
+    if: inputs.suite == 'all' || inputs.suite == 'fast' || inputs.suite == 'full'
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Pinned toolchain (rust-toolchain.toml)
+        run: rustup toolchain install && rustc -vV
+      - name: Tool install root
+        run: |
+          echo "SECMP_TOOLS_ROOT=$HOME/.secmp-tools" >> "$GITHUB_ENV"
+          echo "$HOME/.secmp-tools/bin" >> "$GITHUB_PATH"
+      - name: Restore pinned tools
+        id: tools-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.secmp-tools
+          key: ci-tools-fast-${{ runner.os }}-${{ hashFiles('xtask/src/tools.rs', 'rust-toolchain.toml') }}
+      - name: Install pinned tools
+        run: cargo xtask install-tools --set fast
+      - name: Save pinned tools (right after installing, so a later failing step cannot lose the cache)
+        if: steps.tools-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.secmp-tools
+          key: ${{ steps.tools-cache.outputs.cache-primary-key }}
+      - name: Harness binary (step 5 harness)
+        run: cargo xtask step --strict harness
+
   # The Windows gate (Amendment A1 §2): native MSVC build, clippy, tests, KATs, hello-world binaries.
   dispatch-windows:
     if: inputs.suite == 'all' || inputs.suite == 'windows'
     runs-on: windows-latest
-    timeout-minutes: 90
+    timeout-minutes: 240
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -121,7 +154,7 @@ jobs:
           path: ~/.secmp-tools
           key: ${{ steps.tools-cache.outputs.cache-primary-key }}
       - name: Windows gate
-        run: cargo xtask step --strict clippy nextest doctest kat hello
+        run: cargo xtask step --strict clippy nextest doctest kat harness hello
 
   # docs/06 §5 step 11: the cargo-xwin cross-build (ADR-034).
   dispatch-xwin:
@@ -233,7 +266,7 @@ jobs:
             ~/.kani
           key: ${{ steps.tools-cache.outputs.cache-primary-key }}
       - name: ci-full (steps 1–14)
-        run: cargo xtask ci-full --strict --delegated windows-native --delegated windows-cross --delegated mutants --delegated ct --delegated fuzz --delegated kani --delegated proverif-link --models tr
+        run: cargo xtask ci-full --strict --delegated windows-native --delegated windows-cross --delegated mutants --delegated ct --delegated fuzz --delegated kani --delegated proverif-link --delegated harness --models tr
 
   # Step 8 as in ci.yml (ADR-047 Amendment 1): 8 shards, then the verdict over them.
   dispatch-mutants-shard:

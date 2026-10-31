@@ -23,6 +23,7 @@ harness = [
     "secmp-relay/direct-tls",
     "secmp-transport/harness",
     "secmp-client-core/kat",
+    "secmp-store/kat",
 ]
 kat = ["harness"]
 
@@ -43,6 +44,7 @@ tokio.workspace = true
 # 38724110285). The harness, the only user of these two crates, is compiled out under Miri (`src/lib.rs`).
 [target.'cfg(not(miri))'.dependencies]
 secmp-client-core.workspace = true
+secmp-store.workspace = true
 secmp-transport.workspace = true
 
 # Test-only. `chacha20poly1305`, `subtle` and `sha3` serve the constant-time bench (its isolating CAEAD targets and

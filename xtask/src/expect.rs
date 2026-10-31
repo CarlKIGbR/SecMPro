@@ -51,7 +51,13 @@ pub(crate) const NORMAL_DEPENDENCY_ALLOW: &[(&str, &[&str])] = &[
     ),
     (
         "secmp-client-core",
-        &["secmp-crypto", "secmp-proto", "secmp-transport", "tokio"],
+        &[
+            "secmp-crypto",
+            "secmp-proto",
+            "secmp-store",
+            "secmp-transport",
+            "tokio",
+        ],
     ),
     (
         "secmp-testkit",
@@ -60,9 +66,33 @@ pub(crate) const NORMAL_DEPENDENCY_ALLOW: &[(&str, &[&str])] = &[
             "secmp-crypto",
             "secmp-proto",
             "secmp-relay",
+            "secmp-store",
             "secmp-transport",
             "serde_json",
             "tokio",
+        ],
+    ),
+    // ADR-055 (G7-01): the encrypted store; `rusqlite` bundles SQLCipher with vendored OpenSSL, never used for SecMP constructions
+    ("secmp-store", &["rusqlite", "secmp-crypto", "secmp-proto"]),
+    // ADR-055 (G7-01): the crypto crate's normal dependencies (docs/06 §3) + `argon2`; `secmp-sys-mem` is a workspace crate
+    (
+        "secmp-crypto",
+        &[
+            "argon2",
+            "chacha20",
+            "chacha20poly1305",
+            "ed25519-dalek",
+            "getrandom",
+            "hkdf",
+            "hmac",
+            "libcrux-ml-kem",
+            "ml-dsa",
+            "secmp-sys-mem",
+            "sha2",
+            "sha3",
+            "subtle",
+            "x25519-dalek",
+            "zeroize",
         ],
     ),
 ];
@@ -142,15 +172,17 @@ pub(crate) const AUDIT_IGNORES: &[(&str, &str)] = &[
     ),
 ];
 
+/// TEST-SPEC-M7 ST-02 (CS-3.1, ADR-055 item 4, Q119): the oldest SQLCipher the store accepts — the version
+/// `libsqlite3-sys` 0.37.0 bundles (`sqlcipher/sqlite3.c:108426`). `secmp_store::SQLCIPHER_MIN` holds the same value as a
+/// tuple (`expect::tests::sqlcipher_min_matches_store`); it moves with Arti.
+#[cfg(test)]
+pub(crate) const SQLCIPHER_MIN: &str = "4.10.0";
+
 /// Cooldown exceptions (ADR-015 Amendment 2) as (crate, version, until = publish date + 7 days, advisory): a version
 /// younger than 7 days that closes a RUSTSEC advisory on a pinned crate, kept until the cooldown it bridges is over; an
 /// entry past its `until` date is itself a cooldown finding. The delta diff is in `docs/reviews/MNN-evidence/vet-deltas/`.
-pub(crate) const COOLDOWN_EXCEPTIONS: &[(&str, &str, &str, &str)] = &[(
-    "ctutils",
-    "0.4.4",
-    "2026-10-30",
-    "RUSTSEC-2026-0385 (ADR-015 Am. 2)",
-)];
+/// Empty since TEST-SPEC-M7 G7-00: the `ctutils` 0.4.4 entry (RUSTSEC-2026-0385) expired 2026-10-30 and was removed.
+pub(crate) const COOLDOWN_EXCEPTIONS: &[(&str, &str, &str, &str)] = &[];
 
 /// Packages exposing the `kat` feature (docs/06 §5 step 5): external KATs, differential tests, vector checks; M3:
 /// `secmp-proto` (derandomised TR entry points for the vectors and the ct bench, ADR-042); M5: `secmp-relay` (the
@@ -160,6 +192,7 @@ pub(crate) const KAT_PACKAGES: &[&str] = &[
     "secmp-crypto",
     "secmp-proto",
     "secmp-relay",
+    "secmp-store",
     "secmp-testkit",
 ];
 
@@ -213,6 +246,10 @@ pub(crate) const CT_STEP_TIMEOUT_SECONDS: u64 = 17_400;
 /// Samples per measurement of `sas` (`SafetyNumber::new`, Argon2id: about a millisecond per call).
 pub(crate) const CT_SAS_SAMPLES: usize = 20_000;
 
+/// ADR-042 Amendment 6 (TEST-SPEC-M7 CT-01, OPEN-M7-15 A, Q94): samples per measurement of `store_unlock_reject`
+/// (`wrap::open_kat` with the `kat` Argon2 parameters, one Argon2id and one `CAEAD.Open` per call).
+pub(crate) const CT_STORE_SAMPLES: usize = 100_000;
+
 /// The ct targets (M2 review C3 (a)): the gate refuses a report whose target set differs. Exactly one of them, the
 /// positive control, is measured once and must be detected. M3: the three SecMP-TR rejection targets
 /// `tr_decrypt_reject_*` (plan D9: `RatchetState::decrypt_with` on one fixed receiver state), the A/A′ placement
@@ -226,8 +263,42 @@ pub(crate) const CT_SAS_SAMPLES: usize = 20_000;
 /// (the client's `mac2` compare, §8.3), CT-03 `link_frame_open_reject` (`Link::open`, §8.4), CT-04
 /// `q_queue_new_reject_token` (`link::ids::token_verify`, §9.6), CT-05 `tr_decrypt_trial_open_position` (§7.4, the
 /// opening trial's position among 2 distinct skipped header keys; M4 review R-42, campaign R-59) and CT-06 the LINK
-/// same-content control [`CT_LINK_SAME_CONTENT_CONTROL`].
+/// same-content control [`CT_LINK_SAME_CONTENT_CONTROL`]. M7, TEST-SPEC-M7 CT-01 (ADR-042 Amendment 6, OPEN-M7-15 A):
+/// `store_unlock_reject` (`secmp_store::wrap` unlock of one wrap under two wrong passphrases, `kat` Argon2 parameters,
+/// [`CT_STORE_SAMPLES`]).
 pub(crate) const CT_TARGETS: &[&str] = &[
+    "control_variable_time_compare",
+    "tag_compare",
+    "msg_open_reject",
+    "caead_open_reject",
+    "sas",
+    "caead_derive",
+    "caead_aead_reject",
+    "caead_com_compare",
+    "caead_open_reject_samekey",
+    "aa_prime_control",
+    "tr_decrypt_reject_hdr_key",
+    "tr_decrypt_reject_body_tag",
+    "tr_decrypt_reject_ct_pq",
+    "tr_decrypt_reject_skipped",
+    "same_content_control",
+    "inv_fingerprint_compare",
+    "x25519_zero_check",
+    "hx_accept_reject_inner",
+    "hx_accept_reject_first_msg",
+    "hx_same_content_control",
+    "link_hs1_reject_mac1",
+    "link_hs2_reject_mac2",
+    "link_frame_open_reject",
+    "q_queue_new_reject_token",
+    "tr_decrypt_trial_open_position",
+    "link_same_content_control",
+    "store_unlock_reject",
+];
+
+/// The ct targets of the M6 close (the 26 names before TEST-SPEC-M7 CT-01): the target set of the reports written in
+/// M5 and M6 (`ctreport::M5_TARGETS`, `ctreport::M6_TARGETS`).
+pub(crate) const CT_TARGETS_M6: &[&str] = &[
     "control_variable_time_compare",
     "tag_compare",
     "msg_open_reject",
@@ -260,8 +331,14 @@ pub(crate) const CT_TARGETS: &[&str] = &[
 /// `informative` (not in `results`), each measured twice, with no verdict; they never fail the gate. The gate checks
 /// that exactly these names are present and prints Δ and t per crop.
 /// `tr_decrypt_nonce_dependence` keeps the public header-nonce micro-timing of §7.4 Decrypt visible (CT-DIAG-3: up to
-/// 65 ticks, either sign).
-pub(crate) const CT_INFORMATIVE_TARGETS: &[&str] = &["tr_decrypt_nonce_dependence"];
+/// 65 ticks, either sign). TEST-SPEC-M7 CT-04 (OPEN-M6-C1-2, OPEN-M7-25 A): `tr_decrypt_header_contents_dependence`,
+/// its constant-nonce contrast — one nonce, classes that differ only in the decoded header contents (`pn` 0 vs 3).
+/// ADR-042 Amendment 6 (Q140): `store_unwrap_reject_post_kdf`, the `CAEAD.Open` of one wrap under two wrong KEKs.
+pub(crate) const CT_INFORMATIVE_TARGETS: &[&str] = &[
+    "tr_decrypt_nonce_dependence",
+    "tr_decrypt_header_contents_dependence",
+    "store_unwrap_reject_post_kdf",
+];
 
 /// The positive control among [`CT_TARGETS`].
 pub(crate) const CT_POSITIVE_CONTROL: &str = "control_variable_time_compare";
@@ -307,6 +384,7 @@ pub(crate) const CT_TARGET_SITES: &[(&str, &str)] = &[
     ("hx_accept_reject_first_msg", "first_msg decrypt"),
     ("hx_same_content_control", "inner open"),
     ("tr_decrypt_trial_open_position", "body MAC"),
+    ("store_unlock_reject", "wrap: open"),
 ];
 
 /// docs/07 M3 acceptance "encrypt+decrypt of a message < 3 ms" (M3 plan D11): the `perf` step fails if the maximum of
@@ -331,8 +409,11 @@ pub(crate) const TR_PERF_KINDS: &[&str] = &["chain", "step"];
 /// `link_relay_handshake`), `Link::open` (`link_frame_open`) and the D.2 frame-plaintext decoders (`q_request_decode`,
 /// `q_response_decode`); `hx_accept_structured` gains its mode 3 (M4 review R-44); M5 (Phase B) the relay's executor
 /// on structured, honestly signed command scripts (`relay_executor`, FZ-07) and a relay connection on honestly
-/// sealed arbitrary plaintexts with `LINK_PUT`/`CONT` interleavings (`relay_link_session`, FZ-08).
+/// sealed arbitrary plaintexts with `LINK_PUT`/`CONT` interleavings (`relay_link_session`, FZ-08). M7 (Phase A, TEST-SPEC-M7
+/// FZ-01, FZ-02): the backup import decoder (`backup_import`) and the record seal of a secret column
+/// (`store_record_open`).
 pub(crate) const FUZZ_TARGETS: &[&str] = &[
+    "backup_import",
     "caead_open",
     "client_pipeline_responses",
     "ed25519_verify",
@@ -362,6 +443,7 @@ pub(crate) const FUZZ_TARGETS: &[&str] = &[
     "relay_link_session",
     "relayref_onion_to_hsid",
     "scheduler_event_sequence",
+    "store_record_open",
     "tls_pin_verifier",
     "tr_decrypt",
     "tr_state",
@@ -375,14 +457,17 @@ pub(crate) const FUZZ_TARGETS: &[&str] = &[
 /// `the_rules_name_listed_targets_and_frozen_suites` fails if a listed target has both). M5 Phase B: the two relay
 /// targets (TEST-SPEC-M5 FZ-07, FZ-08) are structured — their input is a command script that the harness signs,
 /// tokens and seals (`fuzz/fuzz_targets/relay_*.rs` headers), a layout no frozen suite has — so they rely on their
-/// tracked seeds (`fuzz/corpus/relay_executor/`, `fuzz/corpus/relay_link_session/`, M4 C-6).
+/// tracked seeds (`fuzz/corpus/relay_executor/`, `fuzz/corpus/relay_link_session/`, M4 C-6). M7 Phase A: the two
+/// store targets (TEST-SPEC-M7 FZ-01, FZ-02) — no frozen store suite exists (`vectors/store.json`, OPEN-M7-38).
 #[cfg(test)]
 pub(crate) const FUZZ_TRACKED_ONLY: &[&str] = &[
+    "backup_import",
     "client_pipeline_responses",
     "relay_executor",
     "relay_link_session",
     "relayref_onion_to_hsid",
     "scheduler_event_sequence",
+    "store_record_open",
     "tls_pin_verifier",
 ];
 
@@ -461,7 +546,12 @@ pub(crate) const FUZZ_DEEP_NIGHTLY_SECONDS: u64 = 3_600;
 ///   27 (the longest command, `FETCH_MULTI` with 12 entries: opcode, `cmd_seq`, count, 12 × (key, ack)) = 4321.
 /// - `relay_link_session`: the configuration byte and at most 16 units of at most 4339 bytes (split, kind, `u16`
 ///   length, a 4335-byte plaintext) = 69425.
+/// - `backup_import` (FZ-01): mode 1 + a file of a 64 KiB body (the seed cap, ADR-052) in its 239 bytes of magic (13),
+///   header (154), `N` (24), `COM` (32) and tag (16) = 65776 (the structured mode takes 6 + body).
+/// - `store_record_open` (FZ-02): table 1 + `col_len` 1 + a column of 255 + `row_len` 1 + a row key of 255 + mode 1 +
+///   the largest record — `RatchetStateV1` at its maximum (38 585) bounds the fixed part — sealed (+ 72) = 39171.
 pub(crate) const FUZZ_MAX_LEN: &[(&str, usize)] = &[
+    ("backup_import", 65_777),
     ("caead_open", 12_618),
     ("client_pipeline_responses", 34_702),
     ("ed25519_verify", 4_243),
@@ -490,6 +580,7 @@ pub(crate) const FUZZ_MAX_LEN: &[(&str, usize)] = &[
     ("relay_executor", 4_322),
     ("relay_link_session", 69_426),
     ("scheduler_event_sequence", 970),
+    ("store_record_open", 39_172),
     // FZ-02 (M6 Phase B): the count byte and an end-entity DER of at most 8192 B (an ML-DSA-65 certificate ≈ 5.5 KB)
     ("tls_pin_verifier", 8_194),
     // FZ-03 (M6 Phase B): a decoded onion address is exactly 35 bytes (spec §5.3)
@@ -501,13 +592,15 @@ pub(crate) const FUZZ_MAX_LEN: &[(&str, usize)] = &[
 
 /// Packages under the mutation gate (docs/06 §4, §5 step 8); M5: `secmp-relay`, the relay security kernel (ADR-047
 /// Amendment 3, OPEN-M5-12); M6: `secmp-client-core` (the constant-rate scheduler) and `secmp-transport` (ADR-047
-/// Amendment 4, OPEN-M6-23).
+/// Amendment 4, OPEN-M6-23); M7: `secmp-store` (the encrypted profile store, ADR-047 Amendment 10; TEST-SPEC-M7 G7-13),
+/// in the first run with its own tests (feature `kat`).
 pub(crate) const MUTANT_PACKAGES: &[&str] = &[
     "secmp-crypto",
     "secmp-proto",
     "secmp-relay",
     "secmp-client-core",
     "secmp-transport",
+    "secmp-store",
 ];
 
 /// ADR-047 Amendment 4: the packages of [`MUTANT_PACKAGES`] whose tests live in `secmp-testkit/tests/harness` (they need
@@ -515,6 +608,18 @@ pub(crate) const MUTANT_PACKAGES: &[&str] = &[
 /// `secmp-transport` 2). The gate mutates them in a second cargo-mutants run per shard whose every mutant is tested by
 /// the tests of [`MUTANT_HARNESS_TEST_PACKAGES`] with feature `harness`.
 pub(crate) const MUTANT_HARNESS_PACKAGES: &[&str] = &["secmp-client-core", "secmp-transport"];
+
+/// TEST-SPEC-M7 G7-10 (OPEN-M7-20 A, ADR-047 Amendment 9): the harness module of the killers of clock and period mutants
+/// (ADR-047 Amendment 7 (2)). The second run starts its tests first through the nextest profile
+/// [`MUTANTS_HARNESS_PROFILE`], whose one override gives them [`MUTANT_KILLERS_PRIORITY`]; the module's name no longer has to
+/// sort before `m6_activity`.
+pub(crate) const MUTANT_KILLER_MODULE: &str = "m0_early";
+
+/// The nextest profile of the second mutants run (`.config/nextest.toml`, `gates::mutants_killer_profile`).
+pub(crate) const MUTANTS_HARNESS_PROFILE: &str = "mutants-harness";
+
+/// The nextest priority of the tests of [`MUTANT_KILLER_MODULE`] in [`MUTANTS_HARNESS_PROFILE`] (every other test: 0).
+pub(crate) const MUTANT_KILLERS_PRIORITY: i32 = 100;
 
 /// ADR-047 Amendment 4: the per-mutant test timeout of the second run, in seconds (cargo-mutants derives its automatic
 /// timeout from a baseline that runs only the mutated package's own tests: 2 tests, 0 s, i.e. 20 s, and every mutant
@@ -650,10 +755,38 @@ pub(crate) const MUTANT_HARNESS_SKIP_TESTS: &[(&str, &str)] = &[
         "two_clients_profiles_are_in_memory",
         "TC-02, two runs of the engine with a filesystem snapshot: 41 s",
     ),
+    // TEST-SPEC-M7 G7-09 (OPEN-M7-19 B): the two tests that dominated the per-mutant suite (C2-18c, 32-core container),
+    // each split into a short form that stays in the per-mutant run (named in docs/mutants-accepted.md §Skipped)
+    (
+        "timing_draws_independent_of_activity",
+        "AI-05, 6 h x 4 traces: 69.5 s; short form timing_draws_unmoved_by_one_hour_of_activity",
+    ),
+    (
+        "relay_idle_and_age_bounds_from_schedule",
+        "G-12, two 25 h runs: 27 s; short form relay_idle_and_age_bounds_defaults",
+    ),
+    // TEST-SPEC-M7 A-3 (WEISUNG M7-A3 §3): the two long persistence rows, nextest on the 32-core container
+    (
+        "crash_between_persist_and_send_no_key_reuse",
+        "PC-05, 5 crash points x 20 seeds, two child processes each: 244 s",
+    ),
+    (
+        "write_amplification_measured",
+        "PC-13, 24 h virtual over two SQLCipher profiles, one fsync per commit: 295 s",
+    ),
+    // M7 B-SC2 (Q186, Q44 extended to drifted tests): times of the full harness run of ci-fast-bsc-l-923b9ee (alone 8.5 s, 5.8 s)
+    (
+        "lifetime_end_reconnects_fresh",
+        "S-17, lifetime end, Strict P = 10 s: 16.8 s",
+    ),
+    (
+        "link_lifetime_uniform_6h_24h",
+        "S-16, 1 000 lifetimes: 10.9 s",
+    ),
 ];
 
 /// WEISUNG M6-B-3 §1: the long, host-independent simulations the `kat` step leaves out when it runs on Windows
-/// (`windows-native`, timeout 90 min): the activity-independence runs AI-01…AI-06 on the virtual and the tokio driver,
+/// (`windows-native`, timeout 240 min): the activity-independence runs AI-01…AI-06 on the virtual and the tokio driver,
 /// the measurement runs MR-01/MR-02 and the pool run — as (test name, runtime note). They run on Linux in `kat` and
 /// `coverage` on every PR; Windows keeps every unit, KAT, vector and harness test besides these. Runtimes on the
 /// `windows-native` runner from PR run 38724110285 (the tokio repeats are measured on the 32-core container).
@@ -833,6 +966,8 @@ pub(crate) const KNOWN_SITES: &[&str] = &[
     "first_msg decrypt",
     "first_msg checks",
     "opk delete",
+    // SecMP-STORE (`secmp_store::wrap`, ADR-053 item 2)
+    "wrap: open",
     // the Output claim of `x25519_zero_check`
     "§3/§6.4 all-zero check of the output (passes: not a reject target)",
 ];
@@ -1059,6 +1194,15 @@ pub(crate) const MIRI_UNSUPPORTED: &[(&str, &str, &str)] = &[
     ),
 ];
 
+/// TEST-SPEC-M7 G7-12 (OPEN-M7-26 A, OPEN-M6-C1-1): the RSS limit of one `cbmc` process of the `kani` step, in KiB:
+/// 14.5 GB = 14 500 000 000 B = 14 160 156 KiB (`ps -o rss` reports KiB). The `ubuntu-latest` runner has 16 GB; the
+/// largest harness peaked at 13.75 GB in M6 (`docs/reviews/M06-report.md` §7). Above it the step stops Kani and fails
+/// naming the harness being checked, before the runner's out-of-memory kill ends the job without a word.
+pub(crate) const KANI_CBMC_RSS_LIMIT_KIB: u64 = 14_160_156;
+
+/// How often the `kani` step samples the `cbmc` processes' RSS, in seconds.
+pub(crate) const KANI_RSS_POLL_SECONDS: u64 = 2;
+
 /// Packages containing Kani harnesses (docs/06 §4). M2: `secmp-proto` (`src/kani_proofs.rs`). M5 (Phase B):
 /// `secmp-relay` (`src/kani_proofs.rs`, TEST-SPEC-M5 K-05…K-07).
 pub(crate) const KANI_PACKAGES: &[&str] = &["secmp-client-core", "secmp-proto", "secmp-relay"];
@@ -1067,7 +1211,10 @@ pub(crate) const KANI_PACKAGES: &[&str] = &["secmp-client-core", "secmp-proto", 
 /// verified ("Complete - N successfully verified harnesses, 0 failures, N total." with N = this count), so a
 /// deleted or renamed harness fails the gate instead of passing silently. M3 (plan step 9): the three `tr_*`
 /// harnesses of the SecMP-TR decisions (`tr::select`). M4: the five `kani_*` harnesses of SecMP-HX, and (WEISUNG M4-8)
-/// K4b `kani_commit_accept_atomic` on the real prekey store. M5 Phase B: the three relay harnesses of `secmp-relay`
+/// K4b `kani_commit_accept_atomic` (from M7 two harnesses, `…_record_names_opk1` and `…_record_names_deleted_opk2`, OPEN-M7-26 B) on the real prekey store.
+/// M7 A-3b (OPEN-M7-26 B applied twice, Q135): `kani_q_frame_plaintext_exact_fit` split by decoder and context into
+/// `…_request`, `…_response_fetch`, `…_response_fetch_multi`; `tr_header_selection` split by `k` into `…_k0_2`, `…_k3` and `…_k4`; a harness split by `k` carries the unwind `k_max + 2`, at least
+/// `TR_SKIPPED_KEYS + 1` (Q138; the exception of `…_k4` above the 90 % container threshold is lifted by K7-03b, M7 B-SC). M5 Phase B: the three relay harnesses of `secmp-relay`
 /// (`kani_cmd_seq_monotone`, `kani_queue_eviction_bounds`, `kani_executor_response_count`; TEST-SPEC-M5 K-05…K-07).
 pub(crate) const KANI_HARNESSES: &[&str] = &[
     "kani_proofs::cell",
@@ -1078,7 +1225,8 @@ pub(crate) const KANI_HARNESSES: &[&str] = &[
     "kani_proofs::kani_balanced_rr_selects_due_or_ping",
     "kani_proofs::kani_cell_plaintext_decode_total",
     "kani_proofs::kani_cmd_seq_monotone",
-    "kani_proofs::kani_commit_accept_atomic",
+    "kani_proofs::kani_commit_accept_atomic_record_names_opk1",
+    "kani_proofs::kani_commit_accept_atomic_record_names_deleted_opk2",
     "kani_proofs::kani_cont_assembly",
     "kani_proofs::kani_deadline_arithmetic_checked",
     "kani_proofs::kani_evicted_range",
@@ -1088,11 +1236,17 @@ pub(crate) const KANI_HARNESSES: &[&str] = &[
     "kani_proofs::kani_hx_chunk_bounds",
     "kani_proofs::kani_hx_grouping",
     "kani_proofs::kani_in_flight_bound",
+    "kani_proofs::kani_in_flight_over_transitions",
     "kani_proofs::kani_link_counter_checked_add",
     "kani_proofs::kani_link_counter_strict_plus_one",
     "kani_proofs::kani_outer_unpad_total",
-    "kani_proofs::kani_q_frame_plaintext_exact_fit",
+    "kani_proofs::kani_paired_executions",
+    "kani_proofs::kani_persist_contract_abstract",
+    "kani_proofs::kani_q_frame_plaintext_exact_fit_request",
+    "kani_proofs::kani_q_frame_plaintext_exact_fit_response_fetch",
+    "kani_proofs::kani_q_frame_plaintext_exact_fit_response_fetch_multi",
     "kani_proofs::kani_queue_eviction_bounds",
+    "kani_proofs::kani_queue_generations",
     "kani_proofs::kani_rate_bound_integer_form",
     "kani_proofs::kani_reservation_is_schedule_only",
     "kani_proofs::kani_teardown_keeps_the_committed_rr",
@@ -1114,7 +1268,9 @@ pub(crate) const KANI_HARNESSES: &[&str] = &[
     "kani_proofs::request_skey",
     "kani_proofs::response_frame",
     "kani_proofs::tr_eviction",
-    "kani_proofs::tr_header_selection",
+    "kani_proofs::tr_header_selection_k0_2",
+    "kani_proofs::tr_header_selection_k3",
+    "kani_proofs::tr_header_selection_k4",
     "kani_proofs::tr_skip_plan",
 ];
 
@@ -1126,7 +1282,14 @@ pub(crate) const KANI_COVERS: &[(&str, usize)] = &[
     ("kani_proofs::kani_backoff_cap", 2),
     ("kani_proofs::kani_balanced_rr_selects_due_or_ping", 2),
     ("kani_proofs::kani_cmd_seq_monotone", 5),
-    ("kani_proofs::kani_commit_accept_atomic", 1),
+    (
+        "kani_proofs::kani_commit_accept_atomic_record_names_opk1",
+        1,
+    ),
+    (
+        "kani_proofs::kani_commit_accept_atomic_record_names_deleted_opk2",
+        1,
+    ),
     ("kani_proofs::kani_cont_assembly", 1),
     ("kani_proofs::kani_deadline_arithmetic_checked", 1),
     ("kani_proofs::kani_evicted_range", 2),
@@ -1134,10 +1297,23 @@ pub(crate) const KANI_COVERS: &[(&str, usize)] = &[
     ("kani_proofs::kani_frame_pad_total", 2),
     ("kani_proofs::kani_frame_written_commits_fifo", 1),
     ("kani_proofs::kani_in_flight_bound", 1),
+    ("kani_proofs::kani_in_flight_over_transitions", 2),
     ("kani_proofs::kani_link_counter_checked_add", 3),
     ("kani_proofs::kani_link_counter_strict_plus_one", 2),
-    ("kani_proofs::kani_q_frame_plaintext_exact_fit", 2),
+    // M7 B-SC2 (Q183): SC-09 re-dictated, four covers
+    ("kani_proofs::kani_paired_executions", 4),
+    ("kani_proofs::kani_persist_contract_abstract", 3),
+    ("kani_proofs::kani_q_frame_plaintext_exact_fit_request", 1),
+    (
+        "kani_proofs::kani_q_frame_plaintext_exact_fit_response_fetch",
+        1,
+    ),
+    (
+        "kani_proofs::kani_q_frame_plaintext_exact_fit_response_fetch_multi",
+        1,
+    ),
     ("kani_proofs::kani_queue_eviction_bounds", 3),
+    ("kani_proofs::kani_queue_generations", 3),
     ("kani_proofs::kani_rate_bound_integer_form", 2),
     ("kani_proofs::kani_reservation_is_schedule_only", 1),
     ("kani_proofs::kani_teardown_keeps_the_committed_rr", 1),
@@ -1613,10 +1789,17 @@ pub(crate) const SYSTEMD_UNITS: &[&str] = &[];
 pub(crate) const SYSTEMD_MAX_EXPOSURE: f64 = 2.0;
 
 /// Line-coverage thresholds in percent (docs/06 §4): `secmp-crypto` and `secmp-proto` ≥ 90, since M6 also
-/// `secmp-client-core` (the constant-rate scheduler, OPEN-M6-23, TEST-SPEC-M6 COV-01); every other shipped crate ≥ 80,
+/// `secmp-client-core` (the constant-rate scheduler, OPEN-M6-23, TEST-SPEC-M6 COV-01), since M7 `secmp-store` (the
+/// encrypted profile store, TEST-SPEC-M7 G7-14; its `kat` tests come in through `secmp-testkit/harness`); every other
+/// shipped crate ≥ 80,
 /// `secmp-transport` with its Arti glue counted (COV-02; an exclusion list needs the reviewer's written approval). `xtask`
 /// is build tooling and not measured.
-pub(crate) const COVERAGE_STRICT: &[&str] = &["secmp-crypto", "secmp-proto", "secmp-client-core"];
+pub(crate) const COVERAGE_STRICT: &[&str] = &[
+    "secmp-crypto",
+    "secmp-proto",
+    "secmp-client-core",
+    "secmp-store",
+];
 pub(crate) const COVERAGE_STRICT_MIN: f64 = 90.0;
 pub(crate) const COVERAGE_MIN: f64 = 80.0;
 
@@ -1687,6 +1870,25 @@ pub(crate) const NASM_JOBS: &[(&str, &str)] = &[
     (".github/workflows/win-ondemand.yml", "win-suite"),
 ];
 
+/// ADR-034 Amendment 1 (OPEN-M7-04 A, Q83): the packages the `windows-cross` step (job `xwin-cross`) leaves out of the
+/// cargo-xwin cross-build — `secmp-store` and the crates that depend on it once it holds SQLCipher with vendored OpenSSL
+/// (M7, ADR-055), whose `VC-WIN64A` configuration needs a Windows perl and `nmake` (ADR-027 M0 outcome). The job
+/// `windows-native` builds and tests the whole workspace, these packages included.
+pub(crate) const XWIN_EXCLUDE: &[&str] = &[
+    "secmp-store",
+    "secmp-client-core",
+    "secmp-cli",
+    "secmp-testkit",
+    "secmp-ui",
+];
+
+/// ADR-034 Amendment 1 rev. 2 (Q127, Q130): the packages whose tests, examples and benches the all-targets cross-build
+/// leaves out — `secmp-crypto` and `secmp-transport`, the only two that dev-depend on the excluded `secmp-testkit`, which
+/// after G7-06 pulls the store and vendored OpenSSL. They are cross-built a second time with `--lib --bins` only. Other
+/// crates that dev-depend on a `XWIN_LIB_ONLY` crate (`secmp-proto`, `secmp-relay`: `secmp-crypto` with feature `kat`) stay
+/// roots of the all-targets build: Cargo builds a dependency's library, never its dev-dependencies.
+pub(crate) const XWIN_LIB_ONLY: &[&str] = &["secmp-crypto", "secmp-transport"];
+
 /// The job names of the required checks of the `main-protection` ruleset (M2 review C2): they exist only in
 /// [`REQUIRED_WORKFLOW`], which has no `workflow_dispatch` trigger, so no dispatch can add a `skipped` (= passing) check
 /// run under a required name. The policy step pins [`PINNED_JOBS`], a superset.
@@ -1719,6 +1921,8 @@ pub(crate) const PINNED_JOBS: &[&str] = &[
     "kani",
     // WEISUNG M6-CI-1 §4 (ADR-047 Amendment 5): the fuzz smoke (70 min) out of `linux-full`
     "fuzz",
+    // TEST-SPEC-M7 G7-07 (ADR-045 Amendment 12): the testkit harness binary out of `linux-fast` and `linux-full`
+    "harness",
     // ADR-045 Amendment 2: the one required check that fails when any other gate job did not succeed
     "ci-verdict",
 ];
@@ -1746,6 +1950,7 @@ pub(crate) const CI_VERDICT_NEEDS: &[&str] = &[
     "proverif-link",
     "kani",
     "fuzz",
+    "harness",
 ];
 
 /// Where each `--delegated <step>` of a pinned gate line runs, as (step, pinned job) — M4 review C-5: the policy step
@@ -1762,6 +1967,8 @@ pub(crate) const DELEGATED_TO: &[(&str, &str)] = &[
     ("kani", "kani"),
     // WEISUNG M6-CI-1 §4: the `ci-full` step `fuzz` runs in the job of the same name
     ("fuzz", "fuzz"),
+    // TEST-SPEC-M7 G7-07: the `ci-fast`/`ci-full` step `harness` runs in the job of the same name
+    ("harness", "harness"),
 ];
 
 /// The `cargo xtask` gate `run:` lines of each pinned job of [`PINNED_JOBS`], in order (M3 review F3, R-09;
@@ -1772,13 +1979,13 @@ pub(crate) const REQUIRED_GATE_RUNS: &[(&str, &[&str])] = &[
     (
         "linux-fast",
         &[
-            "cargo xtask ci-fast --strict",
+            "cargo xtask ci-fast --strict --delegated harness",
             "cargo xtask step --strict sbom systemd",
         ],
     ),
     (
         "windows-native",
-        &["cargo xtask step --strict clippy nextest doctest kat hello"],
+        &["cargo xtask step --strict clippy nextest doctest kat harness hello"],
     ),
     ("xwin-cross", &["cargo xtask step --strict windows-cross"]),
     (
@@ -1786,7 +1993,7 @@ pub(crate) const REQUIRED_GATE_RUNS: &[(&str, &[&str])] = &[
         // the SecMP-HX models run in their own job `proverif-hx` (WEISUNG M4-5 §5), mutation testing in `mutants` (ADR-047),
         // the ct gate in `ct` (ADR-047 Amendment 1, M4 review C-2), the SecMP-LINK models in `proverif-link` (BRIEF_M5-B §1)
         &[
-            "cargo xtask ci-full --strict --delegated windows-native --delegated windows-cross --delegated mutants --delegated ct --delegated fuzz --delegated kani --delegated proverif-link --models tr",
+            "cargo xtask ci-full --strict --delegated windows-native --delegated windows-cross --delegated mutants --delegated ct --delegated fuzz --delegated kani --delegated proverif-link --delegated harness --models tr",
         ],
     ),
     // M4 review C-5 (R-01): the delegated jobs
@@ -1808,6 +2015,8 @@ pub(crate) const REQUIRED_GATE_RUNS: &[(&str, &[&str])] = &[
     ("kani", &["cargo xtask step --strict kani"]),
     // WEISUNG M6-CI-1 §4: the fuzz smoke step in its own job
     ("fuzz", &["cargo xtask step --strict fuzz"]),
+    // TEST-SPEC-M7 G7-07: the testkit harness binary in its own job
+    ("harness", &["cargo xtask step --strict harness"]),
     // ADR-045 Amendment 2: the verdict over the needs of every other gate job
     ("ci-verdict", &["cargo xtask step --strict ci-verdict"]),
 ];
@@ -1856,6 +2065,8 @@ pub(crate) const REQUIRED_JOB_CONDITIONS: &[(&str, Option<&str>)] = &[
         "fuzz",
         Some("github.event_name == 'schedule' || github.event_name == 'pull_request'"),
     ),
+    // TEST-SPEC-M7 G7-07: on every event, like `linux-fast`, which delegates its step here
+    ("harness", None),
     // ADR-045 Amendment 2: after every gate job whatever its outcome, on the events the gate jobs run on
     (
         "ci-verdict",
@@ -1864,3 +2075,365 @@ pub(crate) const REQUIRED_JOB_CONDITIONS: &[(&str, Option<&str>)] = &[
         ),
     ),
 ];
+
+/// TEST-SPEC-M7 G7-08 (OPEN-M7-18 A, ADR-045 Amendment 12): the `timeout-minutes` of every pinned job of [`PINNED_JOBS`],
+/// as (job, minutes). The policy step refuses a pinned job without an entry, an entry that is not a pinned job, and a
+/// job of `ci.yml` or its dispatch twin ([`DISPATCH_TWINS`]) whose budget differs (docs/06 §4 job table).
+pub(crate) const JOB_BUDGETS: &[(&str, u64)] = &[
+    // ADR-045 Amendment 10
+    ("linux-fast", 120),
+    ("windows-native", 240),
+    ("xwin-cross", 60),
+    ("linux-full", 240),
+    ("ct", 330),
+    ("mutants-shard", 300),
+    ("mutants", 30),
+    ("proverif-hx", 180),
+    ("proverif-link", 120),
+    ("kani", 150),
+    ("fuzz", 120),
+    // TEST-SPEC-M7 G7-07 (OPEN-M7-18 A)
+    ("harness", 150),
+    ("ci-verdict", 15),
+];
+
+/// The dispatch twin in `ci-dispatch.yml` of each pinned job but `ci-verdict`, as (twin, job) — M4 review C-4 (R-14):
+/// the twin runs the job's gate lines (`gates::tests::dispatch_full_runs_the_linux_full_line`) under the job's budget
+/// ([`JOB_BUDGETS`]).
+pub(crate) const DISPATCH_TWINS: &[(&str, &str)] = &[
+    ("dispatch-fast", "linux-fast"),
+    ("dispatch-windows", "windows-native"),
+    ("dispatch-xwin", "xwin-cross"),
+    ("dispatch-full", "linux-full"),
+    ("dispatch-ct", "ct"),
+    ("dispatch-mutants-shard", "mutants-shard"),
+    ("dispatch-mutants", "mutants"),
+    ("dispatch-proverif-hx", "proverif-hx"),
+    ("dispatch-proverif-link", "proverif-link"),
+    // M6 (WEISUNG M6-11)
+    ("dispatch-kani", "kani"),
+    // M6-CI (WEISUNG M6-CI-1 §4)
+    ("dispatch-fuzz", "fuzz"),
+    // TEST-SPEC-M7 G7-07
+    ("dispatch-harness", "harness"),
+];
+
+/// TEST-SPEC-M7 G7-00 (TEST-SPEC-M7:286; ADR-015 exception list (3)): the `ctutils` 0.4.4 cooldown exception expired on
+/// 2026-10-30 and is removed — `COOLDOWN_EXCEPTIONS` is empty, and ADR-015's list records the removal.
+#[cfg(test)]
+#[test]
+fn cooldown_exceptions_empty() -> crate::util::Result<()> {
+    assert!(COOLDOWN_EXCEPTIONS.is_empty(), "{COOLDOWN_EXCEPTIONS:?}");
+    let decisions = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../docs/08-decisions.md"),
+    )?;
+    assert!(decisions.contains("expired 2026-10-30, entry removed (G7-00)"));
+    Ok(())
+}
+
+/// TEST-SPEC-M7 CT-05 (Q121; ADR-042 Amendment 6): `CT_TARGETS` is the M6 list and `store_unlock_reject` (27 names),
+/// `CT_TARGET_SITES` binds 12 targets, among them `store_unlock_reject` to `wrap: open`, which `KNOWN_SITES` holds; the
+/// informative post-KDF target (Q140) is no gated target.
+#[cfg(test)]
+#[test]
+fn ct_targets_m7() {
+    assert_eq!(CT_TARGETS_M6.len(), 26);
+    assert_eq!(CT_TARGETS.get(..26), Some(CT_TARGETS_M6));
+    assert_eq!(CT_TARGETS.len(), 27);
+    assert_eq!(CT_TARGETS.last(), Some(&"store_unlock_reject"));
+    assert_eq!(CT_TARGET_SITES.len(), 12);
+    assert!(CT_TARGET_SITES.contains(&("store_unlock_reject", "wrap: open")));
+    assert!(KNOWN_SITES.contains(&"wrap: open"));
+    assert!(CT_INFORMATIVE_TARGETS.contains(&"store_unwrap_reject_post_kdf"));
+    assert!(!CT_TARGETS.contains(&"store_unwrap_reject_post_kdf"));
+    assert_eq!(CT_STORE_SAMPLES, 100_000);
+}
+
+/// TEST-SPEC-M7 G7-01 (ADR-055, OPEN-M7-03 A, Q129): the allowlist rows of the dependency set of M7 — `secmp-store` is
+/// {`rusqlite`, `secmp-crypto`, `secmp-proto`}, `secmp-crypto` its normal dependencies + `argon2` — in the order of this
+/// file; the other rows are unchanged (the client-core and testkit edges to the store are G7-06, the CLI row G7-21).
+#[cfg(test)]
+#[test]
+fn normal_dependency_allow_m7() {
+    let row = |name: &str| -> Vec<&str> {
+        NORMAL_DEPENDENCY_ALLOW
+            .iter()
+            .find(|(k, _)| *k == name)
+            .map(|(_, v)| v.to_vec())
+            .unwrap_or_default()
+    };
+    assert_eq!(
+        row("secmp-store"),
+        ["rusqlite", "secmp-crypto", "secmp-proto"]
+    );
+    assert_eq!(
+        row("secmp-crypto"),
+        [
+            "argon2",
+            "chacha20",
+            "chacha20poly1305",
+            "ed25519-dalek",
+            "getrandom",
+            "hkdf",
+            "hmac",
+            "libcrux-ml-kem",
+            "ml-dsa",
+            "secmp-sys-mem",
+            "sha2",
+            "sha3",
+            "subtle",
+            "x25519-dalek",
+            "zeroize",
+        ]
+    );
+    // G7-06 (A-3): the client-core (`cfg(not(kani))`) and testkit edges to the store
+    assert_eq!(
+        row("secmp-client-core"),
+        [
+            "secmp-crypto",
+            "secmp-proto",
+            "secmp-store",
+            "secmp-transport",
+            "tokio"
+        ]
+    );
+    assert_eq!(
+        row("secmp-testkit"),
+        [
+            "secmp-client-core",
+            "secmp-crypto",
+            "secmp-proto",
+            "secmp-relay",
+            "secmp-store",
+            "secmp-transport",
+            "serde_json",
+            "tokio"
+        ]
+    );
+    let rows: Vec<&str> = NORMAL_DEPENDENCY_ALLOW.iter().map(|(k, _)| *k).collect();
+    assert_eq!(
+        rows,
+        [
+            "secmp-relay",
+            "secmp-transport",
+            "secmp-client-core",
+            "secmp-testkit",
+            "secmp-store",
+            "secmp-crypto"
+        ]
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Checked-out files may carry CRLF (Windows); multi-line needles match on the LF form.
+    fn lf(s: &str) -> String {
+        s.replace("\r\n", "\n")
+    }
+
+    /// The Windows-only failure of `coverage_store_90` (and of `mutants_scope_includes_store`) came from CRLF in the
+    /// checked-out manifests; the needles match on the LF form.
+    #[test]
+    fn crlf_needles_normalised() {
+        let crlf = "    \"secmp-store/kat\",\r\n]\r\nkat = [\"harness\"]\r\n";
+        let needle = "    \"secmp-store/kat\",\n]\nkat = [\"harness\"]";
+        assert!(!crlf.contains(needle));
+        assert!(lf(crlf).contains(needle));
+    }
+
+    /// The Kani harnesses of WEISUNG M7-B-SC with their covers (G7-15b), one added per commit.
+    const B_SC_HARNESSES: &[(&str, usize)] = &[
+        ("kani_in_flight_over_transitions", 2),
+        ("kani_queue_generations", 3),
+        ("kani_persist_contract_abstract", 3),
+        ("kani_paired_executions", 4),
+    ];
+
+    /// TEST-SPEC-M7 G7-15b (TEST-SPEC (l): "`FUZZ_TARGETS` += FZ-04, `KANI_HARNESSES` += K7-01, SC-06…SC-09, each in the
+    /// commit of its target"; created by WEISUNG M7-B-SC with SC-06, BRIEF M7-B adds K7-01 and FZ-04): every Kani harness of
+    /// B-SC is registered in `KANI_HARNESSES` with its covers in `KANI_COVERS`, and is a Kani proof function of
+    /// `secmp-client-core`'s `kani_proofs.rs`.
+    #[test]
+    fn fuzz_and_kani_lists_core() -> crate::util::Result<()> {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let proofs = lf(&std::fs::read_to_string(
+            root.join("crates/secmp-client-core/src/kani_proofs.rs"),
+        )?);
+        for (harness, covers) in B_SC_HARNESSES {
+            let name = format!("kani_proofs::{harness}");
+            assert!(KANI_HARNESSES.contains(&name.as_str()), "{name} registered");
+            assert_eq!(
+                KANI_COVERS
+                    .iter()
+                    .find(|(n, _)| *n == name)
+                    .map(|(_, c)| *c),
+                Some(*covers),
+                "{name}: covers"
+            );
+            let def = format!("fn {harness}() {{");
+            let at = proofs
+                .find(&def)
+                .ok_or_else(|| crate::util::Error(format!("{def} missing")))?;
+            let before = proofs.get(..at).unwrap_or_default();
+            // spelled in two parts so that this file does not count as a harness (`gates::kani`)
+            let proof = concat!("#[kani", "::proof]");
+            let attr = before.rfind(proof).unwrap_or(0);
+            let between = before.get(attr..).unwrap_or_default();
+            assert!(
+                before.contains(proof) && !between.contains("\nfn "),
+                "{harness} is a proof"
+            );
+        }
+        Ok(())
+    }
+
+    /// TEST-SPEC-M7 G7-13 (ADR-047 Amendment 10): `MUTANT_PACKAGES` += `secmp-store`, appended; the per-package rule is
+    /// unchanged — the store is not a harness package, so the first run mutates it and tests each mutant with its own
+    /// tests and feature `kat` (which the store has), under the same floor (`MUTANT_MIN_CAUGHT_PERCENT` = 50); docs/06 §4
+    /// and §5 step 8 name it, and docs/08 holds the amendment.
+    #[test]
+    fn mutants_scope_includes_store() -> crate::util::Result<()> {
+        assert_eq!(MUTANT_PACKAGES.last(), Some(&"secmp-store"));
+        assert_eq!(MUTANT_PACKAGES.len(), 6);
+        assert!(!MUTANT_HARNESS_PACKAGES.contains(&"secmp-store"));
+        assert!(!MUTANT_HARNESS_TEST_PACKAGES.contains(&"secmp-store"));
+        assert_eq!(MUTANT_MIN_CAUGHT_PERCENT, 50);
+        assert!(KAT_PACKAGES.contains(&"secmp-store"));
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let manifest = lf(&std::fs::read_to_string(
+            root.join("crates/secmp-store/Cargo.toml"),
+        )?);
+        assert!(
+            manifest.contains("\nkat = ["),
+            "secmp-store has feature kat"
+        );
+        let standards = std::fs::read_to_string(root.join("docs/06-engineering-standards.md"))?;
+        assert!(standards.contains(
+            "`secmp-crypto`, `secmp-proto`, `secmp-relay`, `secmp-client-core`, `secmp-transport`, `secmp-store` (ADR-047"
+        ));
+        assert!(standards.contains("`secmp-client-core`/`secmp-transport`/`secmp-store`)"));
+        let decisions = std::fs::read_to_string(root.join("docs/08-decisions.md"))?;
+        assert!(
+            decisions.contains("**ADR-047 Amendment 10 — `secmp-store` under the mutation gate.")
+        );
+        Ok(())
+    }
+
+    /// TEST-SPEC-M7 G7-14: `COVERAGE_STRICT` += `secmp-store` (≥ 90 % lines); the store's `kat` feature reaches the
+    /// coverage run through `secmp-testkit/harness` (`COVERAGE_FEATURES` unchanged); docs/06 §4 names the four crates.
+    #[test]
+    fn coverage_store_90() -> crate::util::Result<()> {
+        assert_eq!(COVERAGE_STRICT.last(), Some(&"secmp-store"));
+        assert!((COVERAGE_STRICT_MIN - 90.0).abs() < f64::EPSILON);
+        assert_eq!(
+            crate::gates::COVERAGE_FEATURES,
+            "secmp-relay/kat,secmp-testkit/harness"
+        );
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let testkit = lf(&std::fs::read_to_string(
+            root.join("crates/secmp-testkit/Cargo.toml"),
+        )?);
+        assert!(testkit.contains("    \"secmp-store/kat\",\n]\nkat = [\"harness\"]"));
+        let standards = std::fs::read_to_string(root.join("docs/06-engineering-standards.md"))?;
+        assert!(standards.contains(
+            "Coverage gate ≥ 90 % lines for `secmp-crypto`, `secmp-proto`, `secmp-client-core` and `secmp-store`"
+        ));
+        Ok(())
+    }
+
+    /// TEST-SPEC-M7 G7-15a (Q121): `FUZZ_TARGETS` += `backup_import` (FZ-01) and `store_record_open` (FZ-02), each with
+    /// its `FUZZ_MAX_LEN` and a committed corpus (`fuzz/corpus/<target>/`, seeds ≤ 64 KiB, ADR-052), tracked-only (no
+    /// frozen store suite), a `[[bin]]` of `fuzz/Cargo.toml`, and the store as the fuzz package's path dependency with
+    /// feature `kat`; 35 targets.
+    #[test]
+    fn fuzz_targets_store() -> crate::util::Result<()> {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        assert_eq!(FUZZ_TARGETS.len(), 35);
+        let manifest = std::fs::read_to_string(root.join("fuzz/Cargo.toml"))?.replace("\r\n", "\n");
+        assert!(
+            manifest.contains(
+                "secmp-store = { path = \"../crates/secmp-store\", features = [\"kat\"] }"
+            )
+        );
+        for (target, max) in [("backup_import", 65_777), ("store_record_open", 39_172)] {
+            assert!(FUZZ_TARGETS.contains(&target), "{target}");
+            assert!(FUZZ_TRACKED_ONLY.contains(&target), "{target}");
+            assert_eq!(
+                FUZZ_MAX_LEN
+                    .iter()
+                    .find(|(t, _)| *t == target)
+                    .map(|(_, n)| *n),
+                Some(max),
+                "{target}"
+            );
+            assert!(manifest.contains(&format!(
+                "[[bin]]\nname = \"{target}\"\npath = \"fuzz_targets/{target}.rs\"\ntest = false\ndoc = false\n"
+            )));
+            assert!(root.join(format!("fuzz/fuzz_targets/{target}.rs")).exists());
+            let mut seeds = 0_usize;
+            for entry in std::fs::read_dir(root.join(format!("fuzz/corpus/{target}")))? {
+                let len = entry?.metadata()?.len();
+                assert!(len <= 65_536, "{target}: a seed of {len} B");
+                seeds = seeds.saturating_add(1);
+            }
+            assert!(seeds >= 4, "{target}: {seeds} seeds");
+        }
+        let mut sorted = FUZZ_TARGETS.to_vec();
+        sorted.sort_unstable();
+        assert_eq!(sorted, FUZZ_TARGETS, "alphabetical");
+        let names: Vec<&str> = FUZZ_MAX_LEN.iter().map(|(t, _)| *t).collect();
+        let mut by_name = names.clone();
+        by_name.sort_unstable();
+        assert_eq!(by_name, sorted, "FUZZ_MAX_LEN names every target once");
+        Ok(())
+    }
+
+    /// TEST-SPEC-M7 ST-02 (extra test): xtask's `SQLCIPHER_MIN` and the store's own minimum are the same version.
+    #[test]
+    fn sqlcipher_min_matches_store() -> crate::util::Result<()> {
+        let src = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../crates/secmp-store/src/store.rs"),
+        )?;
+        let tuple = SQLCIPHER_MIN.replace('.', ", ");
+        assert_eq!(
+            src.matches(&format!(
+                "pub const SQLCIPHER_MIN: (u32, u32, u32) = ({tuple});"
+            ))
+            .count(),
+            1,
+            "secmp_store::SQLCIPHER_MIN = ({tuple})"
+        );
+        assert_eq!(SQLCIPHER_MIN, "4.10.0");
+        Ok(())
+    }
+
+    /// TEST-SPEC-M7 G7-16 (OPEN-M7-41): `cargo audit` ignores exactly the advisories of ADR-037 and ADR-051 Am. 1 and
+    /// Am. 6; RUSTSEC-2026-0387 (`crypto-bigint` 0.5.5) stays until `arti-client` moves, and M7 adds no ignore.
+    #[test]
+    fn audit_ignores_unchanged() {
+        let ids: Vec<&str> = AUDIT_IGNORES.iter().map(|(id, _)| *id).collect();
+        assert_eq!(
+            ids,
+            [
+                "RUSTSEC-2026-0173",
+                "RUSTSEC-2023-0071",
+                "RUSTSEC-2024-0436",
+                "RUSTSEC-2025-0141",
+                "RUSTSEC-2026-0387",
+            ]
+        );
+        let bigint = AUDIT_IGNORES
+            .iter()
+            .find(|(id, _)| *id == "RUSTSEC-2026-0387")
+            .map(|(_, why)| *why)
+            .unwrap_or_default();
+        assert!(
+            bigint.starts_with("ADR-051 Am. 6: crypto-bigint 0.5.5"),
+            "{bigint}"
+        );
+        assert!(bigint.contains("removed in the first milestone after arti-client moves"));
+    }
+}

@@ -1,0 +1,74 @@
+head 57d7da2 (clean tree): cargo nextest run -p secmp-testkit --features harness --test harness -E 'test(/^(m6_activity|m6_tokio_ai|m6_sim|m6_sim_faults|m6_measure|m6_props)::/)'
+
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.24s
+────────────
+ Nextest run ID e6981dc9-93cf-48d9-a3b4-0b2fdba278a5 with nextest profile: default
+    Starting 42 tests across 1 binary (243 tests skipped)
+        PASS [   0.027s] ( 1/42) secmp-testkit::harness m6_activity::tick_path_reads_no_outbox
+        PASS [   2.991s] ( 2/42) secmp-testkit::harness m6_activity::activity_comparator_detects_a_different_schedule
+        PASS [   2.993s] ( 3/42) secmp-testkit::harness m6_activity::activity_comparator_detects_an_extra_control_link
+        PASS [   3.026s] ( 4/42) secmp-testkit::harness m6_activity::activity_comparator_detects_a_dropped_dummy
+        PASS [   3.053s] ( 5/42) secmp-testkit::harness m6_activity::activity_comparator_detects_a_resized_frame
+        PASS [   3.116s] ( 6/42) secmp-testkit::harness m6_activity::activity_comparator_detects_a_late_emission
+        PASS [   5.554s] ( 7/42) secmp-testkit::harness m6_activity::timing_draws_unmoved_by_one_hour_of_activity
+        PASS [   9.955s] ( 8/42) secmp-testkit::harness m6_activity::control_ops_are_the_only_extra_units
+        PASS [  24.547s] ( 9/42) secmp-testkit::harness m6_activity::ai_asymmetric_prepare_cost_does_not_move_emission
+        SLOW [> 60.000s] (─────) secmp-testkit::harness m6_activity::activity_independence_lowbw_virtual
+        SLOW [> 60.000s] (─────) secmp-testkit::harness m6_activity::activity_independence_balanced_virtual
+        SLOW [> 60.000s] (─────) secmp-testkit::harness m6_activity::activity_independence_both_directions
+        SLOW [> 60.000s] (─────) secmp-testkit::harness m6_activity::activity_independence_strict_virtual
+        SLOW [> 60.000s] (─────) secmp-testkit::harness m6_activity::activity_independence_when_receiving
+        SLOW [> 60.000s] (─────) secmp-testkit::harness m6_activity::timing_draws_independent_of_activity
+        SLOW [> 60.000s] (─────) secmp-testkit::harness m6_measure::bandwidth_model_matches_capture
+        PASS [  67.655s] (10/42) secmp-testkit::harness m6_activity::activity_independence_when_receiving
+        PASS [  71.324s] (11/42) secmp-testkit::harness m6_activity::activity_independence_both_directions
+        SLOW [>120.000s] (─────) secmp-testkit::harness m6_activity::activity_independence_balanced_virtual
+        SLOW [>120.000s] (─────) secmp-testkit::harness m6_activity::activity_independence_lowbw_virtual
+        SLOW [>120.000s] (─────) secmp-testkit::harness m6_measure::bandwidth_model_matches_capture
+        SLOW [>120.000s] (─────) secmp-testkit::harness m6_activity::activity_independence_strict_virtual
+        SLOW [>120.000s] (─────) secmp-testkit::harness m6_activity::timing_draws_independent_of_activity
+        PASS [ 151.174s] (12/42) secmp-testkit::harness m6_activity::timing_draws_independent_of_activity
+        SLOW [>180.000s] (─────) secmp-testkit::harness m6_activity::activity_independence_balanced_virtual
+        SLOW [>180.000s] (─────) secmp-testkit::harness m6_activity::activity_independence_lowbw_virtual
+        SLOW [>180.000s] (─────) secmp-testkit::harness m6_activity::activity_independence_strict_virtual
+        SLOW [>180.000s] (─────) secmp-testkit::harness m6_measure::bandwidth_model_matches_capture
+        PASS [ 183.603s] (13/42) secmp-testkit::harness m6_measure::bandwidth_model_matches_capture
+        PASS [ 209.039s] (14/42) secmp-testkit::harness m6_activity::activity_independence_lowbw_virtual
+        PASS [ 238.346s] (15/42) secmp-testkit::harness m6_activity::activity_independence_strict_virtual
+        SLOW [>240.000s] (─────) secmp-testkit::harness m6_activity::activity_independence_balanced_virtual
+        PASS [ 262.056s] (16/42) secmp-testkit::harness m6_activity::activity_independence_balanced_virtual
+        PASS [  21.752s] (17/42) secmp-testkit::harness m6_measure::cpu_per_slot_measured
+        PASS [   0.008s] (18/42) secmp-testkit::harness m6_sim::oracle_accepts_reconnects_within_the_bound
+        PASS [   0.010s] (19/42) secmp-testkit::harness m6_sim::oracle_excuses_a_teardown_in_the_last_bound_window
+        PASS [   0.010s] (20/42) secmp-testkit::harness m6_sim::oracle_rejects_a_teardown_without_reconnect
+        PASS [   0.012s] (21/42) secmp-testkit::harness m6_sim::oracle_rejects_a_crossed_reconnect_that_breaks_the_pooled_bound
+        PASS [   0.012s] (22/42) secmp-testkit::harness m6_sim::oracle_window_edge_is_pinned_on_both_sides
+        PASS [   0.016s] (23/42) secmp-testkit::harness m6_props::prop_control_ops_isolated_and_delayed
+        PASS [   0.068s] (24/42) secmp-testkit::harness m6_props::prop_outbox_matches_model
+        PASS [   0.247s] (25/42) secmp-testkit::harness m6_props::prop_draws_in_range
+        PASS [   1.292s] (26/42) secmp-testkit::harness m6_props::prop_at_most_once_per_period
+        PASS [   1.517s] (27/42) secmp-testkit::harness m6_props::prop_no_message_key_reuse_across_crashes_at_the_write
+        PASS [   2.910s] (28/42) secmp-testkit::harness m6_props::prop_no_message_key_reuse_across_crashes
+        PASS [   4.028s] (29/42) secmp-testkit::harness m6_tokio_ai::ai07_fault_paired_tokio
+        PASS [  12.876s] (30/42) secmp-testkit::harness m6_sim_faults::sim_loss_breaks_links_eventual_delivery
+        PASS [  20.607s] (31/42) secmp-testkit::harness m6_sim_faults::sim_crash_between_persist_and_write
+        PASS [  22.393s] (32/42) secmp-testkit::harness m6_sim_faults::sim_both_clients_restart
+        PASS [  24.844s] (33/42) secmp-testkit::harness m6_props::prop_schedule_independent_of_activity
+        PASS [  27.619s] (34/42) secmp-testkit::harness m6_sim_faults::sim_hello_flood_backoff_recovery
+        PASS [  55.321s] (35/42) secmp-testkit::harness m6_tokio_ai::ai05_timing_draws_tokio
+        SLOW [> 60.000s] (─────) secmp-testkit::harness m6_tokio_ai::ai06_both_directions_tokio
+        SLOW [> 60.000s] (─────) secmp-testkit::harness m6_tokio_ai::ai01_strict_tokio
+        SLOW [> 60.000s] (─────) secmp-testkit::harness m6_measure::drain_after_offline_virtual
+        SLOW [> 60.000s] (─────) secmp-testkit::harness m6_tokio_ai::ai03_lowbw_tokio
+        SLOW [> 60.000s] (─────) secmp-testkit::harness m6_tokio_ai::ai02_balanced_tokio
+        SLOW [> 60.000s] (─────) secmp-testkit::harness m6_sim_faults::sim_partition_heals
+        SLOW [> 60.000s] (─────) secmp-testkit::harness m6_tokio_ai::ai04_when_receiving_tokio
+        PASS [  61.629s] (36/42) secmp-testkit::harness m6_tokio_ai::ai03_lowbw_tokio
+        PASS [  63.555s] (37/42) secmp-testkit::harness m6_measure::drain_after_offline_virtual
+        PASS [  64.363s] (38/42) secmp-testkit::harness m6_tokio_ai::ai04_when_receiving_tokio
+        PASS [  68.038s] (39/42) secmp-testkit::harness m6_tokio_ai::ai06_both_directions_tokio
+        PASS [  83.326s] (40/42) secmp-testkit::harness m6_tokio_ai::ai01_strict_tokio
+        PASS [  89.567s] (41/42) secmp-testkit::harness m6_tokio_ai::ai02_balanced_tokio
+        PASS [  96.399s] (42/42) secmp-testkit::harness m6_sim_faults::sim_partition_heals
+────────────
+     Summary [ 380.209s] 42 tests run: 42 passed (14 slow), 243 skipped

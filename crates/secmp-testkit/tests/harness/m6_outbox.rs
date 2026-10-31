@@ -355,7 +355,9 @@ fn receipts_ride_normal_slots() {
     assert_eq!(max_dt(&idle, &busy), Some(0));
 }
 
-/// OB-07: the scheduler sees the outbox only through its two traits — `secmp-client-core` has no store dependency.
+/// OB-07: the scheduler sees the outbox only through its two traits. M6: `secmp-client-core` had no store dependency;
+/// from M7 (TEST-SPEC-M7 G7-06) its only store dependency is the `[target.'cfg(not(kani))'.dependencies]` edge, and no
+/// file under `src/scheduler` names the store (PC-12 `xtask::testscan::scheduler_sees_only_traits` is the M7 gate).
 #[test]
 fn outbox_is_the_store_boundary() {
     fn walk(dir: &std::path::Path, hits: &mut Vec<String>) {
@@ -372,10 +374,23 @@ fn outbox_is_the_store_boundary() {
     }
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../secmp-client-core");
     let manifest = std::fs::read_to_string(root.join("Cargo.toml")).unwrap();
-    let deps = manifest.split("[dependencies]").nth(1).unwrap();
-    assert!(!deps.contains("secmp-store"), "no store dependency in M6");
+    let mut table = "";
+    let mut store_tables = Vec::new();
+    for line in manifest.lines() {
+        let t = line.trim();
+        if t.starts_with('[') {
+            table = t;
+        } else if t.starts_with("secmp-store") {
+            store_tables.push(table);
+        }
+    }
+    assert_eq!(
+        store_tables,
+        ["[target.'cfg(not(kani))'.dependencies]"],
+        "the store edge (G7-06)"
+    );
     let mut hits = Vec::new();
-    walk(&root.join("src"), &mut hits);
+    walk(&root.join("src").join("scheduler"), &mut hits);
     assert!(hits.is_empty(), "{hits:?}");
 }
 

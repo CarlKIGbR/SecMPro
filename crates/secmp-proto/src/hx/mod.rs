@@ -22,10 +22,12 @@ mod initiator;
 pub(crate) mod responder;
 
 pub use derive::{Shared, TranscriptInputs, k_id, session_key, transcript};
+#[cfg(feature = "kat")]
+pub use derive::{k_id_kat, sk_digest_kat};
 pub use initiator::Initiator;
 #[cfg(feature = "kat")]
 pub use responder::ACCEPT_SITE_KAT;
-pub use responder::{Accepted, Responder};
+pub use responder::{Accepted, Responder, Spent};
 
 use secmp_crypto::{SecretBytes, X25519Public, X25519Secret};
 
@@ -36,6 +38,18 @@ use crate::sizes::{CELL_LEN, HANDSHAKE_CHUNKS};
 use crate::tr::RatchetState;
 use crate::wire::cell::{Cell, RouteDescriptor};
 use crate::wire::inv::IksPublic;
+
+/// Q147: `k_id_kat` and `sk_digest_kat`, the last `K_id` and the digest of the last `SK` on this thread, exist only with
+/// feature `kat` (as `InvitationRecord::duplicate_kat`, M5 review C-6). Without `kat` the block fails for the missing
+/// functions and nothing else:
+///
+#[cfg_attr(not(feature = "kat"), doc = "```compile_fail,E0425")]
+#[cfg_attr(feature = "kat", doc = "```")]
+/// let _ = secmp_proto::hx::k_id_kat();
+/// let _ = secmp_proto::hx::sk_digest_kat();
+/// ```
+#[cfg(doctest)]
+pub mod kat_key_accessors_only_under_kat {}
 
 /// The three handshake cells of one envelope (§6.5), generated once: the cells are released only with the
 /// initiator's state in the same persist call (`release(state, persist)`, [`HandshakeCells::release`]), so a caller

@@ -1,0 +1,48 @@
+mutants on HEAD cdc3c0a (the killers commit); first runs on 19d89bf/6c16963 (code head 19d89bf), WEISUNG M7-A3b §6
+# cargo-mutants 27.1.0; diffs: git diff ba1dce6..HEAD -- crates/secmp-client-core/src/{persist.rs,outbox.rs,scheduler}
+#   crates/secmp-proto/src/tr/state.rs > target/m7-a3b-mutants.diff; git diff 5a60ffa..HEAD -- crates/secmp-store/src
+#   > target/m7-a3b-mutants-store.diff (regenerated at cdc3c0a for the reruns).
+# Deviation (Q-A17): run (1) uses --features kat instead of the gate form --features harness: with the --file filters only
+#   secmp-client-core has mutants, cargo-mutants builds the baseline for that package alone, and it has no feature harness
+#   ("the package secmp-client-core does not contain this feature: harness"); client-core kat turns on
+#   secmp-transport/harness and secmp-store/kat, testkit kat includes harness.
+
+== run core (rerun at cdc3c0a)
+$ timeout 3600 cargo mutants --no-shuffle -j 3 --output target/m7-a3b-mutants-core --features kat --caught --unviable --package secmp-client-core --test-package secmp-client-core --test-package secmp-transport --test-package secmp-testkit --exclude crates/secmp-proto/src/kani_proofs.rs --exclude crates/secmp-relay/src/kani_proofs.rs --exclude crates/secmp-client-core/src/kani_proofs.rs --exclude crates/secmp-transport/src/tor/arti.rs --exclude-re kani_stubs:: --exclude-re FixedEntropy --exclude-re message_key_digest_kat --exclude-re 'replace mk_digest ' --exclude-re 'RatchetState::(hk_s_kat|receiving_header_keys_kat|sb_kat|encrypt_padded_kat)' --exclude-re 'Groups<.*>::(get|remove_completed) ' --exclude-re 'impl (core::fmt::)?Display for \\w+Error>::fmt' --file crates/secmp-client-core/src/persist.rs --file crates/secmp-client-core/src/outbox.rs --file crates/secmp-client-core/src/scheduler/conversation.rs --file crates/secmp-client-core/src/scheduler/outbox.rs --file crates/secmp-client-core/src/scheduler/types.rs --file crates/secmp-client-core/src/scheduler/core/mod.rs --in-diff target/m7-a3b-mutants.diff --test-tool nextest --timeout 900 -- --max-fail=1:immediate --profile mutants-harness -- --skip ratchet_fast_forward_bound_on_the_chain --skip ratchet_fast_forward_bound_on_a_step --skip activity_independence_balanced_virtual --skip activity_independence_strict_virtual --skip activity_independence_lowbw_virtual --skip bandwidth_model_matches_capture --skip pool_queue_never_idles_out --skip activity_independence_both_directions --skip activity_independence_when_receiving --skip drain_after_offline_virtual --skip ai_asymmetric_prepare_cost_does_not_move_emission --skip prop_schedule_independent_of_activity --skip ai01_strict_tokio --skip ai02_balanced_tokio --skip ai03_lowbw_tokio --skip ai04_when_receiving_tokio --skip ai05_timing_draws_tokio --skip ai06_both_directions_tokio --skip two_clients_loopback_tcp --skip two_clients_direct_tls_loopback --skip sim_replay_deterministic --skip sim_latency_does_not_move_emission --skip sim_slow_link_in_flight_teardown --skip sim_partition_heals --skip sim_both_clients_restart --skip sim_crash_between_persist_and_write --skip sim_hello_flood_backoff_recovery --skip sim_relay_restart_recovery --skip sim_balanced_relay_restart --skip two_clients_exchange_script_mem --skip active_hour_enqueues_ten_bursts_of_twenty --skip cpu_per_slot_measured --skip two_clients_profiles_are_in_memory --skip timing_draws_independent_of_activity --skip relay_idle_and_age_bounds_from_schedule --skip crash_between_persist_and_send_no_key_reuse --skip write_amplification_measured
+90 mutants tested in 9m: 69 caught, 21 unviable
+exit status: 0
+== run proto (rerun at cdc3c0a)
+$ timeout 900 cargo mutants --no-shuffle -j 3 --output target/m7-a3b-mutants-proto --features kat --caught --unviable --package secmp-proto --exclude crates/secmp-proto/src/kani_proofs.rs --exclude crates/secmp-relay/src/kani_proofs.rs --exclude crates/secmp-client-core/src/kani_proofs.rs --exclude crates/secmp-transport/src/tor/arti.rs --exclude-re kani_stubs:: --exclude-re FixedEntropy --exclude-re message_key_digest_kat --exclude-re 'replace mk_digest ' --exclude-re 'RatchetState::(hk_s_kat|receiving_header_keys_kat|sb_kat|encrypt_padded_kat)' --exclude-re 'Groups<.*>::(get|remove_completed) ' --exclude-re 'impl (core::fmt::)?Display for \\w+Error>::fmt' --file crates/secmp-proto/src/tr/state.rs --in-diff target/m7-a3b-mutants.diff -- -- --skip ratchet_fast_forward_bound_on_the_chain --skip ratchet_fast_forward_bound_on_a_step
+21 mutants tested in 86s: 14 caught, 7 unviable
+exit status: 0
+== run store (rerun at cdc3c0a)
+$ timeout 900 cargo mutants --no-shuffle -j 3 --output target/m7-a3b-mutants-store --features kat --caught --unviable --package secmp-store --exclude crates/secmp-proto/src/kani_proofs.rs --exclude crates/secmp-relay/src/kani_proofs.rs --exclude crates/secmp-client-core/src/kani_proofs.rs --exclude crates/secmp-transport/src/tor/arti.rs --exclude-re kani_stubs:: --exclude-re FixedEntropy --exclude-re message_key_digest_kat --exclude-re 'replace mk_digest ' --exclude-re 'RatchetState::(hk_s_kat|receiving_header_keys_kat|sb_kat|encrypt_padded_kat)' --exclude-re 'Groups<.*>::(get|remove_completed) ' --exclude-re 'impl (core::fmt::)?Display for \\w+Error>::fmt' --in-diff target/m7-a3b-mutants-store.diff -- -- --skip ratchet_fast_forward_bound_on_the_chain --skip ratchet_fast_forward_bound_on_a_step
+127 mutants tested in 3m: 83 caught, 44 unviable
+exit status: 0
+
+first runs (before the killers):
+  (1) core:  90 mutants tested in 18m: 18 missed, 51 caught, 21 unviable (0 timeouts)
+  (2) proto: 21 mutants tested in 2m: 1 missed, 13 caught, 7 unviable
+  (3) store: 127 mutants tested in 3m: 83 caught, 44 unviable (0 missed, 0 timeouts) — the fresh store tally of the new code
+reruns at cdc3c0a: core 69 caught / 0 missed / 21 unviable / 0 timeout; proto 14 / 0 / 7 / 0; store 83 / 0 / 44 / 0
+
+every missed mutant of the first runs and its fate (killer, commit cdc3c0a):
+  crates/secmp-client-core/src/outbox.rs:74:36: replace == with != in StoreOutbox::open -> killed by outbox::tests::store_outbox_restores_every_field
+  crates/secmp-client-core/src/outbox.rs:105:9: replace StoreOutbox::write_errors -> u64 with 0 -> killed by outbox::tests::store_outbox_counts_refused_writes
+  crates/secmp-client-core/src/outbox.rs:126:31: replace match guard *have == (st, first) with false in StoreOutbox::sync -> killed by outbox::tests::store_outbox_writes_only_changes
+  crates/secmp-client-core/src/outbox.rs:208:9: replace <impl Outbox for StoreOutbox>::restart with () -> killed by outbox::tests::store_outbox_restart_requeues_in_flight
+  crates/secmp-client-core/src/persist.rs:59:9: replace <impl Zeroize for EntryKey>::zeroize with () -> killed by persist::tests::entry_key_zeroize_and_holds
+  crates/secmp-client-core/src/persist.rs:71:56: replace | with ^ in holds -> killed by persist::tests::entry_key_zeroize_and_holds (a repeated element)
+  crates/secmp-client-core/src/persist.rs:112:9: replace StorePersist::load -> Result<Option<RatchetParts>, PersistError> with Ok(None) -> killed by persist::tests::load_and_delivered_ids_read_back
+  crates/secmp-client-core/src/persist.rs:129:9: replace StorePersist::delivered_ids -> Result<Vec<MsgId>, PersistError> with Ok(vec![]) -> killed by persist::tests::load_and_delivered_ids_read_back
+  crates/secmp-client-core/src/persist.rs:129:9: replace StorePersist::delivered_ids -> Result<Vec<MsgId>, PersistError> with Ok(vec![Default::default()]) -> killed by persist::tests::load_and_delivered_ids_read_back
+  crates/secmp-client-core/src/persist.rs:175:17: replace == with != in <impl Persist for StorePersist>::commit_parts -> killed by persist::tests::decrypt_crash_point_only_on_receive
+  crates/secmp-client-core/src/scheduler/conversation.rs:254:9: replace Conversation<O, P, S>::seed_seen with () -> killed by scheduler::conversation::tests::seed_seen_suppresses_redelivery
+  crates/secmp-client-core/src/scheduler/conversation.rs:644:51: replace || with && in Conversation<O, P, S>::on_deliver -> killed by scheduler::conversation::tests::receive_commit_carries_inbox_only_while_fragmented
+  crates/secmp-client-core/src/scheduler/conversation.rs:644:46: replace != with == in Conversation<O, P, S>::on_deliver -> killed by scheduler::conversation::tests::receive_commit_carries_inbox_only_while_fragmented
+  crates/secmp-client-core/src/scheduler/conversation.rs:644:76: replace != with == in Conversation<O, P, S>::on_deliver -> killed by scheduler::conversation::tests::receive_commit_carries_inbox_only_while_fragmented
+  crates/secmp-client-core/src/scheduler/conversation.rs:645:36: replace != with == in Conversation<O, P, S>::on_deliver -> killed by scheduler::conversation::tests::receive_commit_carries_inbox_only_while_fragmented
+  crates/secmp-client-core/src/scheduler/outbox.rs:301:5: replace trust_code -> u8 with 0 -> killed by persist::tests::trust_codes_are_fixed
+  crates/secmp-client-core/src/scheduler/outbox.rs:301:5: replace trust_code -> u8 with 1 -> killed by persist::tests::trust_codes_are_fixed
+  crates/secmp-client-core/src/scheduler/outbox.rs:328:9: replace Persist::commit_parts -> Result<(), PersistError> with Ok(()) -> killed by persist::tests::default_commit_parts_commits_the_joined_state
+  crates/secmp-proto/src/tr/state.rs:466:13: replace || with && in RatchetParts::to_bytes -> killed by secmp-proto tr::state::tests::ratchet_parts_to_bytes_refuses_each_bad_shape

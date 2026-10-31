@@ -37,15 +37,16 @@ use crate::scheduler::params::{FETCH_MULTI_LIMIT, Mode, Params};
 use crate::scheduler::pool::QueuePool;
 pub use crate::scheduler::types::LinkKind;
 use crate::scheduler::types::{
-    Alert, CellSource, CellToken, ControlKind, IsolationKey, LinkEvent, LinkId, OpId, Output,
-    QueueId, Reason, RelayId, SendFailure, Transport,
+    Alert, CellSource, CellToken, ControlKind, FrameId, IsolationKey, LinkEvent, LinkId,
+    LogicalLinkId, OpId, Output, QueueId, Reason, RelayId, SendFailure, Transport,
 };
 use crate::timing::{TimingRng, Unavailable};
 
 use self::backoff::reconnect_delay;
 use self::pure::{
-    Flight, complete_oldest, hand_out, ledger_admits, reserved_rr, rr_select, tick_time,
-    unwritten_max,
+    InFlight, RECEIVED_MAX, RecvLedger, Ticked, complete_oldest, fetch_due, fetch_lead_deadline,
+    hand_out, ledger_admits, note_sent, reserved_rr, send_choice, sendable, take_response,
+    tick_time, unwritten_max,
 };
 
 /// Why a scheduler call was refused (nothing changed).
@@ -61,6 +62,9 @@ pub enum SchedError {
     UnknownQueue,
     /// No randomness (fail closed).
     Unavailable,
+    /// `frame_written` named a frame that is not the oldest one handed out on the link (a duplicate or unknown report;
+    /// nothing changed).
+    UnknownFrame,
 }
 
 impl From<Unavailable> for SchedError {
@@ -77,6 +81,7 @@ impl core::fmt::Display for SchedError {
             Self::TooManyQueues => "too many recv-queues for one FETCH_MULTI",
             Self::UnknownQueue => "unknown queue",
             Self::Unavailable => "randomness unavailable",
+            Self::UnknownFrame => "not the oldest frame handed out",
         })
     }
 }
@@ -97,8 +102,9 @@ struct RecvQ {
     relay: RelayId,
     period_ms: u64,
     cap: RecvCap,
-    /// The cumulative acknowledgement (spec §9.3): every cell at or below it is decided and committed — also the dedup.
-    acked: u64,
+    /// The cumulative acknowledgement (spec §9.3; every cell at or below it is decided and committed — also the dedup),
+    /// the generation, and the fetched cells above the acknowledgement (OQ-20).
+    ledger: RecvLedger<RECEIVED_MAX>,
     pool: bool,
     recreating: bool,
 }
@@ -112,16 +118,27 @@ enum Spec {
 
 /// What a request was (kept until its response is complete).
 enum ReqKind {
-    Send { queue: QueueId, token: CellToken },
+    Send {
+        queue: QueueId,
+        token: CellToken,
+    },
     Ping,
-    Fetch(QueueId),
-    FetchMulti(Vec<QueueId>),
+    /// The queue and the generation it was asked in.
+    Fetch(QueueId, u64),
+    /// The queues and the generation each was asked in.
+    FetchMulti(Vec<(QueueId, u64)>),
 }
 
 struct Req {
     tick: u32,
     seq: u32,
     kind: ReqKind,
+}
+
+impl Ticked for Req {
+    fn tick(&self) -> u32 {
+        self.tick
+    }
 }
 
 struct Part {
@@ -147,11 +164,11 @@ struct Up {
     period: u64,
     send_part: Option<Part>,
     fetch_part: Option<Part>,
-    flight: Flight,
-    reqs: VecDeque<Req>,
+    /// The requests whose responses are outstanding and the in-flight count of their ticks (spec §10.3, SC-06).
+    flight: InFlight<Req>,
     /// One entry per frame handed to the driver and not yet reported as written ([`Scheduler::frame_written`]), oldest
-    /// first: the round-robin position the frame commits when it is completely written (a `SEND`), or `None`.
-    unwritten: Vec<Option<usize>>,
+    /// first: the frame's id and the round-robin position it commits when it is completely written (a `SEND`), or `None`.
+    unwritten: Vec<(FrameId, Option<usize>)>,
 }
 
 enum State {
@@ -163,6 +180,8 @@ enum State {
 
 struct Link {
     spec: Spec,
+    /// The logical link (FIN5b-1): the same id on every connection of this link.
+    logical: LogicalLinkId,
     state: State,
     /// Consecutive closes before `RELAYINFO` (back-off, LR-03); reset when `HS2` is accepted.
     closed_before: u32,
@@ -209,6 +228,9 @@ pub struct PrepRecord {
     pub kind: u8,
     /// The queue of a send or a single fetch.
     pub queue: Option<QueueId>,
+    /// `seal_calls` right after the frame was sealed (the frame's place among the seals of the thread; TEST-SPEC-M7
+    /// PC-04 orders the decisions before and after it).
+    pub seal: u64,
 }
 
 /// What a teardown hands back to the cell source (`release`): done at once by the work-phase calls, and noted by
@@ -265,10 +287,13 @@ struct World {
     pool: QueuePool,
     next_queue: u32,
     next_link: u64,
+    next_logical: u64,
+    next_frame: u64,
     next_key: u64,
     next_op: u64,
     overruns: u64,
-    /// `frame_written` calls on an up link with nothing unwritten ([`Scheduler::unmatched_written`]).
+    /// `frame_written` calls on an up link that named no handed-out frame or not the oldest one
+    /// ([`Scheduler::unmatched_written`]).
     unmatched_written: u64,
     last_now: u64,
     out: Vec<Output>,
@@ -332,6 +357,7 @@ impl PrepLog {
             at: now,
             kind: kind.0,
             queue: kind.1,
+            seal: secmp_transport::channel::counters::seal_calls(),
         });
     }
 
@@ -374,6 +400,18 @@ impl World {
         LinkId(id)
     }
 
+    fn new_logical_id(&mut self) -> LogicalLinkId {
+        let id = self.next_logical;
+        self.next_logical = self.next_logical.saturating_add(1);
+        LogicalLinkId(id)
+    }
+
+    fn new_frame_id(&mut self) -> FrameId {
+        let id = self.next_frame;
+        self.next_frame = self.next_frame.saturating_add(1);
+        FrameId(id)
+    }
+
     fn new_op_id(&mut self) -> OpId {
         let id = self.next_op;
         self.next_op = self.next_op.saturating_add(1);
@@ -414,7 +452,7 @@ impl World {
                 source.release_discard(queue, token);
             }
         }
-        for req in up.reqs.drain(..) {
+        for req in up.flight.drain() {
             if let ReqKind::Send { queue, token } = req.kind {
                 source.release_failed(queue, token);
             }
@@ -433,13 +471,16 @@ impl World {
             State::Up(mut up) => {
                 Self::release(&mut up, source);
                 self.out.push(Output::Close { link: up.id });
-                self.out
-                    .push(Output::Event(LinkEvent::TornDown(up.id, reason)));
+                self.out.push(Output::Event(LinkEvent::TornDown(
+                    up.id,
+                    link.logical,
+                    reason,
+                )));
             }
             State::Connecting { id } => {
                 self.out.push(Output::Close { link: id });
                 self.out
-                    .push(Output::Event(LinkEvent::TornDown(id, reason)));
+                    .push(Output::Event(LinkEvent::TornDown(id, link.logical, reason)));
             }
             State::Down { .. } | State::Gone => {}
         }
@@ -489,6 +530,7 @@ impl World {
         );
         self.out.push(Output::Connect {
             link: id,
+            logical: link.logical,
             key,
             relay,
             transport,
@@ -524,7 +566,7 @@ impl World {
             self.overruns = self.overruns.saturating_add(1);
             return TickResult::Tear(Reason::Overrun);
         }
-        if !up.flight.on_tick() {
+        if !up.flight.admit() {
             return TickResult::Tear(Reason::InFlight);
         }
         let needs_send = matches!(spec, Spec::Send(_) | Spec::Relay(_));
@@ -567,24 +609,28 @@ impl World {
             } else {
                 None
             };
-            hand_out(&mut up.unwritten, commits);
+            let frame = self.new_frame_id();
+            hand_out(&mut up.unwritten, frame, commits);
             debug_assert!(up.unwritten.len() <= unwritten_max);
             self.out.push(Output::Write {
                 link: up.id,
                 at,
                 bytes: part.prepared.bytes().to_vec(),
+                frame,
             });
-            up.reqs.push_back(Req {
+            let held = up.flight.push(Req {
                 tick: next,
                 seq: part.prepared.seq(),
                 kind: part.kind,
             });
+            // not reachable (two ticks of two requests): an unheld request fails its response's match, fail closed
+            debug_assert!(held);
         }
         up.k = next;
         if let Some(q) = sent_to
             && let Some(sq) = self.sends.iter_mut().find(|s| s.id == q)
         {
-            sq.last_send = Some(at);
+            note_sent(&mut sq.last_send, at);
         }
         TickResult::Wrote
     }
@@ -625,11 +671,26 @@ impl World {
             let send_missing = needs_send && up.send_part.is_none();
             if tear.is_none() && !send_missing && needs_fetch && up.fetch_part.is_none() {
                 let fetch_outstanding = up
-                    .reqs
+                    .flight
                     .iter()
-                    .any(|r| matches!(r.kind, ReqKind::Fetch(_) | ReqKind::FetchMulti(_)));
-                let lead_reached = now >= slot.saturating_sub(self.params.fetch_lead_ms);
-                if !fetch_outstanding || lead_reached {
+                    .any(|r| matches!(r.kind, ReqKind::Fetch(..) | ReqKind::FetchMulti(_)));
+                // the acknowledgement the FETCH carries is fixed when it is sealed: it waits for the commits of the cells
+                // already fetched (OQ-20), at most until its lead (OPEN-M6-13) — the frame's time never moves
+                let commits_pending = self.recvs.iter().any(|q| {
+                    q.ledger.has_pending()
+                        && match spec {
+                            Spec::Recv(r) => q.id == r,
+                            Spec::Relay(r) => q.relay == r,
+                            Spec::Send(_) => false,
+                        }
+                });
+                if fetch_due(
+                    fetch_outstanding,
+                    commits_pending,
+                    now,
+                    slot,
+                    self.params.fetch_lead_ms,
+                ) {
                     tear = self.prepare_fetch(up, spec, slot, now);
                 }
             }
@@ -661,13 +722,9 @@ impl World {
                     .collect();
                 let table: Vec<(Option<u64>, u64)> =
                     members.iter().map(|(_, l, p)| (*l, *p)).collect();
-                match rr_select(rr, &table, slot) {
-                    Some(at) => {
-                        next_rr = Some(
-                            at.checked_add(1)
-                                .and_then(|n| n.checked_rem(members.len()))
-                                .unwrap_or(0),
-                        );
+                match send_choice(rr, &table, slot) {
+                    Some((at, next)) => {
+                        next_rr = Some(next);
                         members.get(at).map(|(q, _, _)| *q)
                     }
                     None => None,
@@ -695,9 +752,7 @@ impl World {
         let cap = self.sends.iter().find(|s| s.id == queue).map(|s| &s.cap)?;
         // not ready, or not persisted: nothing is built, the tick finds no frame — and the same queue is asked again at
         // the next pass (the round-robin position moves only when a SEND is written, EXTB-1, GLM2B-1)
-        let Ok(Some(cell)) = source.prepare_cell(queue, now) else {
-            return None;
-        };
+        let cell = sendable(source.prepare_cell(queue, now))?;
         // the round-robin position moves in `tick`, when this SEND is written (GLM2B-1)
         match up.chan.prepare(&Command::Send {
             to: cap,
@@ -730,12 +785,12 @@ impl World {
                 let rq = self.recvs.iter().find(|r| r.id == q)?;
                 match up.chan.prepare(&Command::Fetch {
                     from: &rq.cap,
-                    ack: rq.acked,
+                    ack: rq.ledger.acked(),
                 }) {
                     Ok(prepared) => {
                         up.fetch_part = Some(Part {
                             prepared,
-                            kind: ReqKind::Fetch(q),
+                            kind: ReqKind::Fetch(q, rq.ledger.generation()),
                             ready: now,
                             open: true,
                             next_rr: None,
@@ -752,8 +807,11 @@ impl World {
                     return None;
                 }
                 let entries: Vec<(&RecvCap, u64)> =
-                    members.iter().map(|q| (&q.cap, q.acked)).collect();
-                let ids: Vec<QueueId> = members.iter().map(|q| q.id).collect();
+                    members.iter().map(|q| (&q.cap, q.ledger.acked())).collect();
+                let ids: Vec<(QueueId, u64)> = members
+                    .iter()
+                    .map(|q| (q.id, q.ledger.generation()))
+                    .collect();
                 match up.chan.prepare(&Command::FetchMulti { from: &entries }) {
                     Ok(prepared) => {
                         up.fetch_part = Some(Part {
@@ -860,7 +918,8 @@ impl World {
             return Ok(());
         }
         rq.recreating = true;
-        rq.acked = 0;
+        // a new generation: nothing acknowledged, nothing fetched; a response asked before changes nothing (SC-07)
+        rq.ledger.recreate();
         let relay = rq.relay;
         let at = now.saturating_add(self.ctl.uniform(lo, hi)?);
         let op = self.new_op_id();
@@ -879,26 +938,26 @@ impl World {
         Ok(())
     }
 
+    /// The cells of a response for `queue`, asked in `generation`: every present cell goes to the cell source in one pass
+    /// and the acknowledgement moves to the highest committed prefix (OQ-20, `pure::RecvLedger::take`).
     fn fetched<S: CellSource>(
         &mut self,
         queue: QueueId,
+        generation: u64,
         cells: Vec<(u64, secmp_proto::wire::cell::Cell)>,
         source: &mut S,
     ) {
-        let Some(rq) = self.recvs.iter_mut().find(|r| r.id == queue) else {
-            return;
-        };
-        for (id, cell) in cells {
-            // at or below the acknowledgement: decided already (a re-fetch with an older `ack`, spec §9.3)
-            if id <= rq.acked {
-                continue;
-            }
-            if source.deliver(queue, id, &cell).is_err() {
-                // not committed: no acknowledgement, the cell comes again
-                break;
-            }
-            rq.acked = id;
-        }
+        let queues = self.recvs.iter_mut().map(|r| (r.id, &mut r.ledger));
+        take_response(queues, &queue, generation, cells, |id, cell| {
+            source.deliver(queue, id, &cell)
+        });
+    }
+
+    /// Whether `queue` exists and is in `generation` (a response asked in an older generation changes nothing, SC-07).
+    fn current(&self, queue: QueueId, generation: u64) -> bool {
+        self.recvs
+            .iter()
+            .any(|r| r.id == queue && r.ledger.generation() == generation)
     }
 
     fn queue_error(
@@ -959,13 +1018,14 @@ impl World {
                 Err(_) => source.send_failed(queue, token, SendFailure::Unknown),
             },
             (ReqKind::Ping, Outcome::Ping(_)) => {}
-            (ReqKind::Fetch(queue), Outcome::Fetch(result)) => match result {
-                Ok(cells) => self.fetched(queue, cells, source),
-                Err(e) => self.queue_error(queue, e, now)?,
+            (ReqKind::Fetch(queue, generation), Outcome::Fetch(result)) => match result {
+                Ok(cells) => self.fetched(queue, generation, cells, source),
+                Err(e) if self.current(queue, generation) => self.queue_error(queue, e, now)?,
+                Err(_) => {}
             },
             (ReqKind::FetchMulti(queues), Outcome::FetchMulti(result)) => match result {
                 Ok(done) => {
-                    for q in &queues {
+                    for (q, generation) in &queues {
                         let Some(rid) = self
                             .recvs
                             .iter()
@@ -986,7 +1046,10 @@ impl World {
                             })
                             .filter_map(|(id, c)| c.ok().map(|c| (id, c)))
                             .collect();
-                        self.fetched(*q, cells, source);
+                        self.fetched(*q, *generation, cells, source);
+                        if !self.current(*q, *generation) {
+                            continue;
+                        }
                         for (r, e) in &done.errors {
                             if *r == rid {
                                 self.queue_error(*q, *e, now)?;
@@ -995,7 +1058,9 @@ impl World {
                     }
                 }
                 Err(e) => {
-                    if let Some(first) = queues.first() {
+                    if let Some((first, generation)) = queues.first()
+                        && self.current(*first, *generation)
+                    {
                         self.queue_error(*first, e, now)?;
                     }
                 }
@@ -1059,6 +1124,8 @@ impl Scheduler {
                 pool,
                 next_queue: 0,
                 next_link: 0,
+                next_logical: 0,
+                next_frame: 0,
                 next_key: 0,
                 next_op: 0,
                 overruns: 0,
@@ -1123,7 +1190,17 @@ impl Scheduler {
             .recvs
             .iter()
             .find(|r| r.id == queue)
-            .map(|r| r.acked)
+            .map(|r| r.ledger.acked())
+    }
+
+    /// The cell source finished committing the decision of cell `cell_id` of `queue`, which `deliver` answered
+    /// [`crate::scheduler::types::Delivered::Pending`] (OQ-20): the acknowledgement moves to the highest committed prefix
+    /// of what was fetched, and the next `FETCH` carries it (spec §9.3). A report for a cell the queue does not hold
+    /// (another generation's, or decided already) changes nothing.
+    pub fn delivery_committed(&mut self, queue: QueueId, cell_id: u64) {
+        if let Some(rq) = self.world.recv_mut(queue) {
+            rq.ledger.committed(cell_id);
+        }
     }
 
     /// What each tick cost in counted work (tests only).
@@ -1320,7 +1397,7 @@ impl Scheduler {
             relay,
             period_ms,
             cap,
-            acked: 0,
+            ledger: RecvLedger::new(),
             pool,
             recreating: false,
         });
@@ -1448,8 +1525,10 @@ impl Scheduler {
                 continue;
             }
             let at = now.saturating_add(self.world.phase()?);
+            let logical = self.world.new_logical_id();
             self.links.push(Link {
                 spec,
+                logical,
                 state: State::Down { at },
                 closed_before: 0,
                 rr: 0,
@@ -1699,7 +1778,7 @@ impl Scheduler {
                         && let Some(at) = tick_time(up.since, next, up.period)
                     {
                         take(at);
-                        let lead = at.saturating_sub(self.world.params.fetch_lead_ms);
+                        let lead = fetch_lead_deadline(at, self.world.params.fetch_lead_ms);
                         if lead > self.world.last_now {
                             take(lead);
                         }
@@ -1838,26 +1917,28 @@ impl Scheduler {
         })
     }
 
-    /// The driver has written the oldest frame it was handed for `link` (an [`Output::Write`]) completely — the stream took
-    /// every byte; a failed or partial write is not a completion. A `SEND` frame commits the Balanced round-robin position
-    /// here (A′, GLM2B-1 / FIN-2): a link torn down before its frame was written leaves the rotation where it was. Frames
-    /// complete in the order they were handed out; an unknown or closed link is ignored.
+    /// The driver has written frame `frame` of `link` (an [`Output::Write`]) completely — the stream took every byte; a
+    /// failed or partial write is not a completion. A `SEND` frame commits the Balanced round-robin position here (A′,
+    /// GLM2B-1 / FIN-2): a link torn down before its frame was written leaves the rotation where it was. Frames complete
+    /// in the order they were handed out; an unknown or closed link is ignored (`Ok`).
     ///
-    /// A call on an up link whose ledger is empty reports a write that was never handed out: it is counted
-    /// ([`Scheduler::unmatched_written`]) and changes nothing else (no panic, the rotation is untouched). A duplicate
-    /// report while the ledger is not empty cannot be told from a genuine one — a frame carries no id — so it pops the
-    /// oldest entry: the driver is a trusted caller that reports each write once (Astra FINAL3 (e)).
-    pub fn frame_written(&mut self, link: LinkId) {
+    /// # Errors
+    /// [`SchedError::UnknownFrame`] if `frame` is not the oldest frame handed out on the up link `link` — its ledger is
+    /// empty (a write that was never handed out) or the report is a duplicate (FINAL3 (e)): it is counted
+    /// ([`Scheduler::unmatched_written`]) and changes nothing else (the ledger and the rotation are untouched).
+    pub fn frame_written(&mut self, link: LinkId, frame: FrameId) -> Result<(), SchedError> {
         for l in &mut self.links {
             if let State::Up(up) = &mut l.state
                 && up.id == link
             {
-                if !complete_oldest(&mut up.unwritten, &mut l.rr) {
-                    self.world.unmatched_written = self.world.unmatched_written.saturating_add(1);
+                if complete_oldest(&mut up.unwritten, &mut l.rr, &frame) {
+                    return Ok(());
                 }
-                return;
+                self.world.unmatched_written = self.world.unmatched_written.saturating_add(1);
+                return Err(SchedError::UnknownFrame);
             }
         }
+        Ok(())
     }
 
     /// The handshake of connection `id` succeeded at `now`: the link is up; its lifetime is drawn now.
@@ -1893,11 +1974,12 @@ impl Scheduler {
                 period,
                 send_part: None,
                 fetch_part: None,
-                flight: Flight::new(world.params.max_in_flight),
-                reqs: VecDeque::new(),
+                flight: InFlight::new(world.params.max_in_flight),
                 unwritten: Vec::new(),
             }));
-            world.out.push(Output::Event(LinkEvent::Up(id)));
+            world
+                .out
+                .push(Output::Event(LinkEvent::Up(id, link.logical)));
         }
         Ok(core::mem::take(&mut self.world.out))
     }
@@ -1928,7 +2010,7 @@ impl Scheduler {
             // the driver already dropped the connection: no `Close` for it
             world
                 .out
-                .push(Output::Event(LinkEvent::TornDown(id, reason)));
+                .push(Output::Event(LinkEvent::TornDown(id, link.logical, reason)));
             let delay = reconnect_delay(&world.params, &mut world.rng, link.closed_before)?;
             link.state = State::Down {
                 at: now.saturating_add(delay),
@@ -1979,7 +2061,7 @@ impl Scheduler {
                     Err(_) => bad = true,
                 }
                 if let Some(completed) = &done
-                    && up.reqs.front().is_none_or(|r| r.seq != completed.seq)
+                    && up.flight.front().is_none_or(|r| r.seq != completed.seq)
                 {
                     bad = true;
                     done = None;
@@ -1990,12 +2072,7 @@ impl Scheduler {
             } else if let Some(completed) = done {
                 let mut req = None;
                 if let State::Up(up) = &mut link.state {
-                    req = up.reqs.pop_front();
-                    if let Some(r) = &req
-                        && !up.reqs.iter().any(|o| o.tick == r.tick)
-                    {
-                        up.flight.on_response();
-                    }
+                    req = up.flight.complete();
                 }
                 if let Some(req) = req {
                     world.pending.push_back(PendingOutcome {
@@ -2018,6 +2095,210 @@ impl Scheduler {
             .iter()
             .find(|r| r.id == queue)
             .map(|r| r.cap.queue())
+    }
+}
+
+/// Unit tests of the core with an up link (feature `kat`: a channel over a real SecMP-LINK handshake).
+#[cfg(test)]
+#[cfg(feature = "kat")]
+mod tests {
+    use secmp_crypto::{Ed25519SigningKey, MlKem1024Dk, SecretBytes, X25519Secret};
+    use secmp_proto::link::client;
+    use secmp_proto::link::relay::{self, RelayKeys};
+    use secmp_proto::tr::OsEntropy;
+    use secmp_proto::wire::cell::Cell;
+    use secmp_transport::{Channel, Error as TransportError, Outcome, RecvCap, SendCap};
+
+    use super::{LinkId, SchedError, Scheduler};
+    use crate::scheduler::params::{Mode, Params};
+    use crate::scheduler::types::{
+        CellSource, CellToken, Delivered, FrameId, Output, PreparedCell, QueueId, RelayId,
+        SendFailure, SourceError,
+    };
+    use crate::timing::TimingRng;
+
+    type Fail = &'static str;
+
+    const NOW: u64 = 1_760_000_000;
+
+    /// The client end of an honest SecMP-LINK handshake (spec §8.2, §8.3) as a channel.
+    fn channel() -> Result<Channel, Fail> {
+        let access = SecretBytes::from_slice(&[4; 32]).map_err(|_| "access")?;
+        let keys = RelayKeys::new(
+            Ed25519SigningKey::from_seed(&[1; 32]).map_err(|_| "sig")?,
+            X25519Secret::from_bytes(&[2; 32]).map_err(|_| "dh")?,
+            MlKem1024Dk::from_seed(&[3; 64]).map_err(|_| "kem")?,
+            SecretBytes::from_slice(&[4; 32]).map_err(|_| "access")?,
+            1,
+        )
+        .map_err(|_| "keys")?;
+        let (hello, wait_info) =
+            client::start(keys.fp(), Some(&access), NOW).map_err(|_| "hello")?;
+        let (info, wait_hs1) = relay::accept(&keys)
+            .on_hello(&hello, NOW.saturating_add(86_400))
+            .map_err(|_| "relayinfo")?;
+        let (hs1, wait_hs2) = wait_info
+            .on_relayinfo(&info, &mut OsEntropy)
+            .map_err(|_| "hs1")?;
+        let (hs2, _relay) = wait_hs1.on_hs1(&hs1, &mut OsEntropy).map_err(|_| "hs2")?;
+        let link = wait_hs2.on_hs2(&hs2).map_err(|_| "link")?;
+        Ok(Channel::from_link_kat(link))
+    }
+
+    /// A cell source with a dummy cell for every slot.
+    struct Dummies(u64);
+
+    impl CellSource for Dummies {
+        fn prepare_cell(
+            &mut self,
+            _: QueueId,
+            _: u64,
+        ) -> Result<Option<PreparedCell>, SourceError> {
+            self.0 = self.0.saturating_add(1);
+            let cell = Cell::from_bytes(&[0x5a; 4096]).map_err(|_| SourceError)?;
+            Ok(Some(PreparedCell::unpersisted_kat(cell, CellToken(self.0))))
+        }
+        fn relayed(&mut self, _: QueueId, _: CellToken, _: u64) {}
+        fn evicted(&mut self, _: QueueId, _: u64) {}
+        fn send_failed(&mut self, _: QueueId, _: CellToken, _: SendFailure) {}
+        fn discard(&mut self, _: QueueId, _: CellToken) {}
+        fn queue_lost(&mut self, _: QueueId) {}
+        fn deliver(&mut self, _: QueueId, _: u64, _: &Cell) -> Result<Delivered, SourceError> {
+            Ok(Delivered::Committed)
+        }
+    }
+
+    /// The frames written (link, id).
+    fn writes(outs: &[Output]) -> Vec<(LinkId, FrameId)> {
+        outs.iter()
+            .filter_map(|o| match o {
+                Output::Write { link, frame, .. } => Some((*link, *frame)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// SC-05 (FINAL3 (e)): two frames handed out on a Strict send link and not reported; the second reported before the
+    /// first is `Err(UnknownFrame)`; the first is reported written (`Ok`); the same id again — a duplicate with a non-empty
+    /// ledger — is `Err(UnknownFrame)`, counted, and leaves the ledger as it was; so does any id on an empty ledger. An
+    /// unknown link is ignored.
+    #[test]
+    fn frame_written_duplicate_detected() -> Result<(), Fail> {
+        let params = Params {
+            phase_max_ms: 0,
+            ..Params::default()
+        };
+        let mut sched = Scheduler::new(params, Mode::Strict, TimingRng::seeded(9));
+        let seed = SecretBytes::from_slice(&[9; 32]).map_err(|_| "seed")?;
+        let cap = SendCap::from_route([1; 16], &seed).map_err(|_| "cap")?;
+        sched
+            .add_send_queue(0, RelayId(0), cap, 10_000)
+            .map_err(|_| "queue")?;
+        let mut src = Dummies(0);
+        let outs = sched.poll(0, &mut src).map_err(|_| "poll")?;
+        let link = outs
+            .iter()
+            .find_map(|o| match o {
+                Output::Connect { link, .. } => Some(*link),
+                _ => None,
+            })
+            .ok_or("no connect")?;
+        sched.link_up(link, 0, channel()?).map_err(|_| "up")?;
+        let _ = sched.work(0, &mut src).map_err(|_| "work")?;
+        let first = writes(&sched.poll(10_000, &mut src).map_err(|_| "tick 1")?);
+        let second = writes(&sched.poll(20_000, &mut src).map_err(|_| "tick 2")?);
+        let (Some((l1, a)), Some((l2, b))) = (first.first().copied(), second.first().copied())
+        else {
+            return Err("two writes");
+        };
+        assert_eq!((l1, l2), (link, link));
+        assert_ne!(a, b);
+        assert_eq!(sched.unwritten_len(link), Some(2));
+        // the second frame before the first: not the oldest
+        assert_eq!(sched.frame_written(link, b), Err(SchedError::UnknownFrame));
+        assert_eq!(
+            (sched.unwritten_len(link), sched.unmatched_written()),
+            (Some(2), 1)
+        );
+        assert_eq!(sched.frame_written(link, a), Ok(()));
+        assert_eq!(sched.unwritten_len(link), Some(1));
+        // the duplicate report of `a` with `b` still in the ledger
+        assert_eq!(sched.frame_written(link, a), Err(SchedError::UnknownFrame));
+        assert_eq!(
+            (sched.unwritten_len(link), sched.unmatched_written()),
+            (Some(1), 2)
+        );
+        assert_eq!(sched.frame_written(link, b), Ok(()));
+        // an empty ledger
+        assert_eq!(sched.frame_written(link, b), Err(SchedError::UnknownFrame));
+        assert_eq!(
+            (sched.unwritten_len(link), sched.unmatched_written()),
+            (Some(0), 3)
+        );
+        // an unknown link is ignored
+        assert_eq!(sched.frame_written(LinkId(9_999), a), Ok(()));
+        assert_eq!(sched.unmatched_written(), 3);
+        assert_eq!(
+            SchedError::UnknownFrame.to_string(),
+            "not the oldest frame handed out"
+        );
+        Ok(())
+    }
+
+    /// B-SC mutant killers (`core/mod.rs` `impl Ticked for Req`, `World::current`, the generation guard of
+    /// `World::outcome`): a request's tick is its own; `current` holds for the queue's id in its generation only; after a
+    /// re-creation an error answer to a `FETCH` asked in the old generation raises nothing, one asked in the new does.
+    #[test]
+    fn old_generation_errors_change_nothing() -> Result<(), Fail> {
+        use super::{Req, ReqKind};
+        use crate::scheduler::core::pure::Ticked;
+        use crate::scheduler::types::{Alert, LinkEvent};
+        let ping = Req {
+            tick: 5,
+            seq: 1,
+            kind: ReqKind::Ping,
+        };
+        assert_eq!(Ticked::tick(&ping), 5);
+        let mut sched = Scheduler::new(Params::default(), Mode::Strict, TimingRng::seeded(9));
+        let seed = SecretBytes::from_slice(&[0x21; 32]).map_err(|_| "seed")?;
+        let cap = RecvCap::from_seed(&seed).map_err(|_| "cap")?;
+        let q = sched
+            .add_recv_queue(0, RelayId(0), cap, 10_000)
+            .map_err(|_| "queue")?;
+        assert!(sched.world.current(q, 0));
+        assert!(!sched.world.current(q, 1));
+        assert!(!sched.world.current(QueueId(99), 0));
+        sched.world.recreate(q, 0).map_err(|_| "recreate")?;
+        assert!(sched.world.current(q, 1));
+        let fetch = |generation| Req {
+            tick: 1,
+            seq: 1,
+            kind: ReqKind::Fetch(q, generation),
+        };
+        let auth = || Outcome::Fetch(Err(TransportError::Auth));
+        let mut src = Dummies(0);
+        let fit = sched
+            .world
+            .outcome(fetch(0), auth(), 0, &mut src)
+            .map_err(|_| "old")?;
+        assert!(fit);
+        let alert = |out: &[Output]| {
+            out.iter()
+                .any(|o| matches!(o, Output::Event(LinkEvent::Alert(_, Alert::QueueAuth))))
+        };
+        assert!(
+            !alert(&sched.world.out),
+            "an old generation's error raises nothing"
+        );
+        sched
+            .world
+            .outcome(fetch(1), auth(), 0, &mut src)
+            .map_err(|_| "new")?;
+        assert!(
+            alert(&sched.world.out),
+            "the current generation's error raises the alert"
+        );
+        Ok(())
     }
 }
 

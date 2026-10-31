@@ -1,0 +1,63 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//! `secmp-store` — the encrypted local profile store.
+//!
+//! **Responsibility.** One encrypted database per profile (rusqlite + SQLCipher, or the ADR-027 fallback),
+//! master-key wrapping (docs/04 §3), migrations, outbox tables, incremental ratchet persistence
+//! (persist-before-send, persist-before-ack), secure delete, and backup export/import without ratchet state
+//! (CS-3.5). Schema per docs/02 §4.2.
+//!
+//! **Allowed dependencies** (docs/02 §3): `secmp-proto`, `secmp-crypto`, `secmp-sys-desktop` (OS keystores);
+//! `rusqlite` with bundled SQLCipher/OpenSSL (exempt from the "only `secmp-crypto`" rule, never used for SecMP
+//! constructions), added with an ADR.
+//!
+//! **Status.** M0 skeleton — no code (implementation starts in M7).
+#![forbid(unsafe_code)]
+
+/// A0 probe: the bundled SQLCipher version (`PRAGMA cipher_version`) of an in-memory database opened with a key.
+pub fn probe_cipher_version() -> rusqlite::Result<String> {
+    let c = rusqlite::Connection::open_in_memory()?;
+    c.pragma_update(None, "key", "x'00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff'")?;
+    c.query_row("PRAGMA cipher_version", [], |r| r.get(0))
+}
+
+/// A0 probe: an in-memory database keyed with the raw key `hex` (64 hex digits).
+pub fn rusqlite_open_keyed(hex: &str) -> rusqlite::Result<rusqlite::Connection> {
+    let c = rusqlite::Connection::open_in_memory()?;
+    c.pragma_update(None, "key", format!("x'{hex}'"))?;
+    Ok(c)
+}
+
+#[cfg(test)]
+mod a0 {
+    /// A0 probe: versions of the bundled C code, written next to the scratch workspace.
+    #[test]
+    fn a0_cipher_version() -> rusqlite::Result<()> {
+        let v = super::probe_cipher_version()?;
+        let c = rusqlite::Connection::open_in_memory()?;
+        c.pragma_update(None, "key", "x'00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff'")?;
+        let sqlite: String = c.query_row("SELECT sqlite_version()", [], |r| r.get(0))?;
+        let provider: String = c.query_row("PRAGMA cipher_provider", [], |r| r.get(0))?;
+        let provider_v: String = c.query_row("PRAGMA cipher_provider_version", [], |r| r.get(0))?;
+        let out = format!(
+            "cipher_version={v}\nsqlite_version={sqlite}\ncipher_provider={provider}\ncipher_provider_version={provider_v}\n"
+        );
+        std::fs::write(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../a0-cipher-version.txt"), out)
+            .map_err(|_| rusqlite::Error::InvalidQuery)?;
+        Ok(())
+    }
+
+    /// A0 probe: Arti's directory cache as the SQLCipher build reads it without a key (a plain SQLite file).
+    #[test]
+    fn a0_arti_db_unkeyed() -> rusqlite::Result<()> {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../../a0-arti/tor/cache/dir.sqlite3");
+        let c = rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        let check: String = c.query_row("PRAGMA integrity_check", [], |r| r.get(0))?;
+        let mut s = c.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")?;
+        let tables: Vec<String> = s.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+        let version: i64 = c.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        let out = format!("integrity_check={check}\nuser_version={version}\ntables={}\n", tables.join(","));
+        std::fs::write(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../a0-arti-db.txt"), out)
+            .map_err(|_| rusqlite::Error::InvalidQuery)?;
+        Ok(())
+    }
+}

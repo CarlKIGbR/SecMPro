@@ -1,0 +1,5 @@
+run_verdict PASS secmp_ct_scale 1000
+tr_decrypt_nonce_dependence first samples 1000 raw:Δ=+220.35,t=+0.81 p50:Δ=+7.76,t=+0.63 p75:Δ=-41.29,t=-1.80 p90:Δ=-21.40,t=-0.79 p95:Δ=+54.49,t=+1.63 p99:Δ=-68.92,t=-0.35
+tr_decrypt_nonce_dependence second samples 1000 raw:Δ=-95.37,t=-0.34 p50:Δ=-13.39,t=-1.55 p75:Δ=-16.16,t=-1.69 p90:Δ=-58.22,t=-4.64 p95:Δ=-59.04,t=-3.46 p99:Δ=-286.78,t=-1.51
+tr_decrypt_header_contents_dependence first samples 1000 raw:Δ=-221.66,t=-0.51 p50:Δ=+7.63,t=+0.99 p75:Δ=+4.77,t=+0.55 p90:Δ=+4.41,t=+0.44 p95:Δ=-3.17,t=-0.27 p99:Δ=-395.41,t=-2.10
+tr_decrypt_header_contents_dependence second samples 1000 raw:Δ=+120.50,t=+0.35 p50:Δ=-0.08,t=-0.01 p75:Δ=+0.33,t=+0.04 p90:Δ=+4.19,t=+0.39 p95:Δ=+6.15,t=+0.52 p99:Δ=-112.12,t=-0.62

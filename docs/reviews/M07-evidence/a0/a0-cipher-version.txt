@@ -1,0 +1,4 @@
+cipher_version=4.10.0 community
+sqlite_version=3.50.4
+cipher_provider=openssl
+cipher_provider_version=OpenSSL 3.6.3 9 Jun 2026

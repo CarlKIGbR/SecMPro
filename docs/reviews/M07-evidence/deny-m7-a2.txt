@@ -1,0 +1,24 @@
+# cargo xtask step deny (cargo deny check advisories bans licenses sources), A-2 head
+$ /work/home/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/cargo deny --locked check
+warning[license-exception-not-encountered]: license exception was not encountered
+   ┌─ /work/SecMPro/deny.toml:44:42
+   │
+44 │     { allow = ["GPL-3.0-only"], crate = "slint" },
+   │                                          ━━━━━ unmatched license exception
+
+warning[license-not-encountered]: license was not encountered
+   ┌─ /work/SecMPro/deny.toml:34:6
+   │
+34 │     "Unicode-DFS-2016",
+   │      ━━━━━━━━━━━━━━━━ unmatched license allowance
+
+advisories ok, bans ok, licenses ok, sources ok
+### gate `deny`
+
+| item | verdict |
+|---|---|
+| status | PASS (0 s) |
+| line 1 | advisories, bans, licenses, sources: ok |
+
+
+

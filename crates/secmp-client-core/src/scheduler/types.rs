@@ -16,6 +16,16 @@ pub struct RelayId(pub u32);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct LinkId(pub u64);
 
+/// A scheduled link — the logical link a connection belongs to (FIN5b-1): stable across the link's reconnects, numbered
+/// in creation order. A mode change or a period change replaces the links, and the new ones get new ids.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct LogicalLinkId(pub u64);
+
+/// A frame handed to the driver ([`Output::Write`]), numbered in hand-out order: the driver names it when it reports the
+/// frame written (`Scheduler::frame_written`, FINAL3 (e)).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct FrameId(pub u64);
+
 /// What a provider must isolate a connection by (a Tor circuit, spec §8.1): fresh for every connection.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct IsolationKey(pub u64);
@@ -61,10 +71,10 @@ pub enum Alert {
 /// What the scheduler reports locally.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LinkEvent {
-    /// `HS2` accepted.
-    Up(LinkId),
-    /// The link is gone.
-    TornDown(LinkId, Reason),
+    /// `HS2` accepted: the connection and the logical link it serves.
+    Up(LinkId, LogicalLinkId),
+    /// The connection is gone: the connection, its logical link, why.
+    TornDown(LinkId, LogicalLinkId, Reason),
     /// An alert about a queue.
     Alert(QueueId, Alert),
     /// The route of a send queue is marked dead (`ERR_NOQUEUE`; the recipient will re-create it).
@@ -113,6 +123,8 @@ pub enum Output {
     Connect {
         /// The connection.
         link: LinkId,
+        /// The logical link the connection serves (stable across reconnects).
+        logical: LogicalLinkId,
         /// Its isolation.
         key: IsolationKey,
         /// The relay.
@@ -132,6 +144,8 @@ pub enum Output {
         at: u64,
         /// The sealed frames.
         bytes: Vec<u8>,
+        /// The frame's id: the driver reports it with `Scheduler::frame_written` once every byte is written.
+        frame: FrameId,
     },
     /// Close the connection.
     Close {
@@ -160,11 +174,58 @@ pub enum Output {
 pub struct SourceError;
 
 /// A cell ready for a `SEND`, with the token that ties `OK_SEND` to the message it carries.
+///
+/// Persist-before-send by construction (§7.5; TEST-SPEC-M7 PC-03): outside this crate a `PreparedCell` comes only from
+/// a conversation whose new ratchet state was committed ([`PreparedCell::committed`] is crate-private; the field
+/// `_committed` is private) — a struct literal does not compile:
+///
+/// ```compile_fail,E0451
+/// use secmp_client_core::scheduler::types::{CellToken, PreparedCell};
+/// use secmp_proto::wire::cell::Cell;
+/// fn forge(cell: Cell) -> PreparedCell {
+///     PreparedCell { cell, token: CellToken(0), _committed: unimplemented!() }
+/// }
+/// ```
+///
+/// The fake cell sources of the tests use [`PreparedCell::unpersisted_kat`] (feature `kat`).
 pub struct PreparedCell {
     /// The 4096-byte cell (a real message or a dummy, indistinguishable).
     pub cell: Cell,
     /// Its token.
     pub token: CellToken,
+    /// The proof that the state that sealed `cell` is durable.
+    _committed: Committed,
+}
+
+/// The private witness of a [`PreparedCell`]: the new ratchet state was committed before the cell was released.
+struct Committed;
+
+impl PreparedCell {
+    /// The cell of a conversation whose new ratchet state is durable (the only constructor of a shipped build).
+    pub(crate) const fn committed(cell: Cell, token: CellToken) -> Self {
+        Self {
+            cell,
+            token,
+            _committed: Committed,
+        }
+    }
+
+    /// A cell of a fake cell source, persisted nowhere (feature `kat`: the scheduler tests and the fuzz target).
+    #[cfg(feature = "kat")]
+    #[must_use]
+    pub const fn unpersisted_kat(cell: Cell, token: CellToken) -> Self {
+        Self::committed(cell, token)
+    }
+}
+
+/// What [`CellSource::deliver`] did with a fetched cell (OQ-20, OPEN-M7-08 A: a deferred-commit outcome).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Delivered {
+    /// The decision is committed: the cell may be acknowledged.
+    Committed,
+    /// The decision is being committed (the driver's worker): not acknowledged until the driver reports the commit with
+    /// [`crate::scheduler::core::Scheduler::delivery_committed`].
+    Pending,
 }
 
 /// Why a `SEND` did not store its cell.
@@ -212,9 +273,16 @@ pub trait CellSource {
     /// not yet receipted (spec §9.1, §10.4).
     fn queue_lost(&mut self, queue: QueueId);
 
-    /// A cell fetched from the recipient queue `queue`: decide it (decrypt, or discard), commit the decision.
+    /// A cell fetched from the recipient queue `queue`: decide it (decrypt, or discard), commit the decision —
+    /// [`Delivered::Committed`] — or start committing it — [`Delivered::Pending`], the commit is reported later. A cell is
+    /// acknowledged only once it and every fetched cell below it are committed (persist-before-ack, CLAUDE.md §1.7).
     ///
     /// # Errors
     /// [`SourceError`] if the decision could not be committed: the cell is not acknowledged and will be fetched again.
-    fn deliver(&mut self, queue: QueueId, cell_id: u64, cell: &Cell) -> Result<(), SourceError>;
+    fn deliver(
+        &mut self,
+        queue: QueueId,
+        cell_id: u64,
+        cell: &Cell,
+    ) -> Result<Delivered, SourceError>;
 }

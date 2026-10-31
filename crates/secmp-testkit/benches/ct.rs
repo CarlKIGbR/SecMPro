@@ -83,7 +83,9 @@
 //! header nonce alone shifts §7.4 Decrypt by up to 65 ticks with either sign (CT-DIAG-3). The informative target
 //! `tr_decrypt_nonce_dependence` (class 1 = class 0 re-sealed with a fresh nonce) keeps that effect visible: it is
 //! measured twice after the targets, with no verdict and no A/A pass, and reported in `informative`
-//! (`expect::CT_INFORMATIVE_TARGETS`).
+//! (`expect::CT_INFORMATIVE_TARGETS`). The informative contrast target `tr_decrypt_header_contents_dependence` (TEST-SPEC-M7
+//! CT-04, OPEN-M6-C1-2, OPEN-M7-25 A) holds the nonce constant instead: its classes differ only in a decoded header field
+//! (`pn` 0 vs 3), re-sealed under the same key with the same nonce.
 //!
 //! The LINK targets have no product reject-site tag (spec §8.5: one uniform `link::Error::Rejected`); their pre-check
 //! binds each class to its compare by the positive twin instead: each class gives the claimed outcome, and the
@@ -178,7 +180,8 @@
 //!   measured once; it has no verdict and never fails the run.
 //! - The parameters are read from `xtask/src/expect.rs` (`CT_THRESHOLDS`, `CT_RESOLUTION_MAX_FRACTION`,
 //!   `CT_MAX_BATCH`, `CT_BATCH_MARGIN`, `CT_MIN_REALISED_QUANTA`, `CT_EFFECT_FLOOR_QUANTA`, `CT_EFFECT_FLOOR_NS`,
-//!   `CT_AA_MAX_T`, `CT_SAMPLES`, `CT_SAS_SAMPLES`) — this file contains no copy of them — and echoed in the report,
+//!   `CT_AA_MAX_T`, `CT_SAMPLES`, `CT_SAS_SAMPLES`, `CT_STORE_SAMPLES`) — this file contains no copy of them — and
+//!   echoed in the report,
 //!   which the gate checks; the gate also re-derives every verdict from the report (M2 review C3).
 //!
 //! The report carries the clock (arch, Linux clocksource, timer, tick, reported resolution, overhead, the clock's
@@ -295,6 +298,8 @@ struct Rules {
     samples: usize,
     /// Samples per measurement of `sas`.
     sas_samples: usize,
+    /// Samples per measurement of `store_unlock_reject` (ADR-042 Amendment 6).
+    store_samples: usize,
 }
 
 /// The value text of the one-line `pub(crate) const <name>: … = <value>;` in `EXPECT_RS`.
@@ -325,6 +330,7 @@ impl Rules {
             aa_max_t: parsed("CT_AA_MAX_T")?,
             samples: parsed("CT_SAMPLES")?,
             sas_samples: parsed("CT_SAS_SAMPLES")?,
+            store_samples: parsed("CT_STORE_SAMPLES")?,
         };
         let sane = rules.pass > 0.0
             && rules.max_resolution_fraction > 0.0
@@ -337,7 +343,8 @@ impl Rules {
             && rules.effect_floor_ns.is_finite()
             && rules.aa_max_t > 0.0
             && rules.samples > 0
-            && rules.sas_samples > 0;
+            && rules.sas_samples > 0
+            && rules.store_samples > 0;
         sane.then_some(rules)
     }
 
@@ -370,7 +377,7 @@ impl Rules {
 
     fn json(self) -> String {
         format!(
-            "{{\"pass\":{},\"max_resolution_fraction\":{},\"max_batch\":{},\"batch_margin\":{},\"min_realised_quanta\":{},\"effect_floor_quanta\":{},\"effect_floor_ns\":{},\"aa_max_t\":{},\"samples\":{},\"sas_samples\":{}}}",
+            "{{\"pass\":{},\"max_resolution_fraction\":{},\"max_batch\":{},\"batch_margin\":{},\"min_realised_quanta\":{},\"effect_floor_quanta\":{},\"effect_floor_ns\":{},\"aa_max_t\":{},\"samples\":{},\"sas_samples\":{},\"store_samples\":{}}}",
             self.pass,
             self.max_resolution_fraction,
             self.max_batch,
@@ -380,7 +387,8 @@ impl Rules {
             self.effect_floor_ns,
             self.aa_max_t,
             self.samples,
-            self.sas_samples
+            self.sas_samples,
+            self.store_samples
         )
     }
 }
@@ -2086,8 +2094,21 @@ const CLAIM_TR_NONCE: Claim = Claim {
     check: SiteCheck::Tagged,
 };
 
+/// The informative header-contents target (TEST-SPEC-M7 CT-04, OPEN-M7-25 A; `expect::CT_INFORMATIVE_TARGETS`).
+const CLAIM_TR_HDR_CONTENTS: Claim = Claim {
+    target: "tr_decrypt_header_contents_dependence",
+    classes: [
+        "A's undelivered (hk_1, n = 0) with pn = 0 in its header plaintext, re-sealed under hk_1 with its own nonce (trial \
+         0 of 2; entry 0 of 4), body tag wrong in byte 0",
+        "the same header plaintext with pn = 3, re-sealed under hk_1 with the same nonce, the same body, body tag wrong in \
+         byte 0",
+    ],
+    site: "body MAC",
+    check: SiteCheck::Tagged,
+};
+
 /// Every claim, for the report (`claim_json`).
-const CLAIMS: [Claim; 17] = [
+const CLAIMS: [Claim; 20] = [
     CLAIM_TR_HDR_KEY,
     CLAIM_TR_BODY_TAG,
     CLAIM_TR_CT_PQ,
@@ -2105,6 +2126,9 @@ const CLAIMS: [Claim; 17] = [
     CLAIM_TR_TRIAL_POSITION,
     CLAIM_LINK_SAME_CONTENT,
     CLAIM_TR_NONCE,
+    CLAIM_TR_HDR_CONTENTS,
+    CLAIM_STORE_UNLOCK,
+    CLAIM_STORE_POST_KDF,
 ];
 
 /// A target built from its claim (name and classes from the claim).
@@ -2729,6 +2753,46 @@ fn tr_decrypt_nonce_dependence(
         &class1,
     )
 }
+
+/// `tr_decrypt_header_contents_dependence` (TEST-SPEC-M7 CT-04, OPEN-M6-C1-2, OPEN-M7-25 A): informative, no verdict. The
+/// constant-nonce contrast to `tr_decrypt_nonce_dependence`: one header nonce, classes that differ only in the decoded
+/// header contents.
+///
+/// - Class 0 is A's undelivered `(hk_1, n = 0)` of the `tr_decrypt_trial_open_position` fixture with `pn` = 0 in its
+///   header plaintext, re-sealed under `hk_1` with the cell's own nonce (`tr_resealed`).
+/// - Class 1 is the same header plaintext with `pn` = 3, re-sealed under `hk_1` with the same nonce.
+///
+/// Each has its body tag wrong in byte 0; both open at trial 0, find `(hk_1, 0)` on the skipped path, where `pn` selects
+/// nothing, and are refused by the body MAC. The classes share the nonce, the header key, the entry and the body bytes;
+/// they differ in `pn`, so in `hdr_ct` and in the body AD. Measured with `tr_measure`, so the pre-check is the TR one.
+fn tr_decrypt_header_contents_dependence(
+    n: usize,
+    k: usize,
+    stream: &mut Stream,
+) -> Result<Samples, secmp_crypto::Error> {
+    let fixture = tr_skipped_session_with(stream, &TR_TRIAL_PER_CHAIN).map_err(crypto_error)?;
+    let (first, hk1, _) = tr_class0_source(&fixture).map_err(crypto_error)?;
+    let pn0 =
+        tr_resealed(&fixture, first, hk1, hk1, |header| header.pn = 0).map_err(crypto_error)?;
+    let pn3 = tr_resealed(&fixture, first, hk1, hk1, |header| {
+        header.pn = TR_HDR_CONTENTS_CLASS1_PN;
+    })
+    .map_err(crypto_error)?;
+    let class0 = body_tag_wrong(&pn0).map_err(crypto_error)?;
+    let class1 = body_tag_wrong(&pn3).map_err(crypto_error)?;
+    tr_measure(
+        n,
+        k,
+        stream,
+        CLAIM_TR_HDR_CONTENTS,
+        fixture.receiver,
+        &class0,
+        &class1,
+    )
+}
+
+/// The `pn` of class 1 of `tr_decrypt_header_contents_dependence` (class 0: 0).
+const TR_HDR_CONTENTS_CLASS1_PN: u32 = 3;
 
 /// `cell` with its header plaintext (opened under `hk`) sealed again under `hk` with `nonce`, followed by `cell`'s
 /// body: `nonce ‖ Seal(hk, nonce, hdr AD, header) ‖ body`.
@@ -3931,6 +3995,220 @@ fn m5_targets(n: usize) -> [Target; 6] {
     ]
 }
 
+// ---- SecMP-STORE targets (TEST-SPEC-M7 CT-01; ADR-042 Amendment 6; OPEN-M7-15 A) ----------------------------------
+//
+// `store_unlock_reject` measures the unlock of one profile wrap (ADR-053 item 2: the file bytes checked, Argon2id once,
+// `CAEAD.Open` once) under two wrong passphrases of equal length, with the `kat` Argon2 parameters (`kat_small`, Q94):
+// one fixed wrap made once with the right passphrase, the passphrase of each sample blended from the two wrong ones
+// (ADR-042 Amendment 4), both classes through `wrap::open_kat` on the same wrap bytes, both refused at the same site
+// (`wrap::WRAP_SITE_KAT` = "wrap: open", the `CAEAD.Open` of `MK_profile`); nothing class-dependent precedes the KDF and
+// no trial's position differs. The right passphrase is only the positive twin of the pre-check. Argon2id's
+// data-dependent second half (RFC 9106 §3.4.1.3) is a documented property of the crate, not a leak of a SecMP
+// construction. The informative `store_unwrap_reject_post_kdf` (Q140) isolates the `CAEAD.Open` of the same wrap under
+// the two wrong KEKs (`wrap::open_with_kek_kat`), with no verdict.
+
+/// `store_unlock_reject` (TEST-SPEC-M7 CT-01).
+const CLAIM_STORE_UNLOCK: Claim = Claim {
+    target: "store_unlock_reject",
+    classes: [
+        "wrong passphrase: the right one (24 B) with its last byte changed",
+        "wrong passphrase of the same length sharing no byte with the right one",
+    ],
+    site: "wrap: open",
+    check: SiteCheck::Tagged,
+};
+
+/// The informative post-KDF target (Q140; `expect::CT_INFORMATIVE_TARGETS`).
+const CLAIM_STORE_POST_KDF: Claim = Claim {
+    target: "store_unwrap_reject_post_kdf",
+    classes: [
+        "the KEK of class 0 of store_unlock_reject (CAEAD.Open only)",
+        "the KEK of class 1 of store_unlock_reject (CAEAD.Open only)",
+    ],
+    site: "wrap: open",
+    check: SiteCheck::Tagged,
+};
+
+/// The passphrase length of the store targets.
+const STORE_PASS_LEN: usize = 24;
+
+/// The fixture of the store targets: one `kat_small` wrap made with the right passphrase, and the two wrong ones.
+struct StoreFixture {
+    wrap: Vec<u8>,
+    right: Zeroizing<Vec<u8>>,
+    wrong: [Zeroizing<Vec<u8>>; 2],
+}
+
+/// A store call's outcome as the pre-check states it: `Ok` or `Err(<error>)`.
+fn store_outcome<T>(r: &Result<T, secmp_store::Error>) -> String {
+    match r {
+        Ok(_) => "Ok".to_owned(),
+        Err(e) => format!("Err({e:?})"),
+    }
+}
+
+/// The store targets' fixture, all from the stream: the right passphrase; class 0 = it with its last byte changed;
+/// class 1 = a passphrase that differs from it in every byte.
+fn store_fixture(stream: &mut Stream) -> Result<StoreFixture, secmp_crypto::Error> {
+    let right = drawn(stream, STORE_PASS_LEN);
+    let mut last = right.clone();
+    if let Some(b) = last.last_mut() {
+        *b ^= 0x01;
+    }
+    let mut other = drawn(stream, STORE_PASS_LEN);
+    for (o, r) in other.iter_mut().zip(right.iter()) {
+        if o == r {
+            *o ^= 0x80;
+        }
+    }
+    let failed = |what: &str| {
+        abort(format!(
+            "bench aborted: store_unlock_reject fixture: {what}"
+        ))
+    };
+    let dir = secmp_store::kat::TempDir::new("ct-store").map_err(|_| failed("no directory"))?;
+    let params = secmp_store::wrap::Argon2Params::kat_small();
+    secmp_store::wrap::create_kat(dir.path(), &right, params).map_err(|_| failed("no wrap"))?;
+    let wrap = std::fs::read(dir.path().join(secmp_store::wrap::WRAP_FILE))
+        .map_err(|_| failed("wrap not readable"))?;
+    Ok(StoreFixture {
+        wrap,
+        right,
+        wrong: [last, other],
+    })
+}
+
+/// The reject-site tag of the last unlock (`wrap::WRAP_SITE_KAT`).
+fn wrap_site() -> &'static str {
+    secmp_store::wrap::WRAP_SITE_KAT.get().unwrap_or("none")
+}
+
+/// `store_unlock_reject` (TEST-SPEC-M7 CT-01; ADR-053 item 2): `wrap::open_kat` of the fixture's wrap (`kat_small`),
+/// the passphrase of class 0 vs class 1 (`store_fixture`), each a fresh `blend`ed copy (class 1 the base). Pre-check:
+/// each class gives `Err(Unlock)` with `wrap::WRAP_SITE_KAT` at "wrap: open", and the right passphrase opens the same
+/// wrap. Aborts if any measured call opened.
+fn store_unlock_reject(
+    n: usize,
+    k: usize,
+    stream: &mut Stream,
+) -> Result<Samples, secmp_crypto::Error> {
+    let fixture = store_fixture(stream)?;
+    let params = secmp_store::wrap::Argon2Params::kat_small();
+    let wrap = fixture.wrap;
+    let check = |pass: &[u8]| store_outcome(&secmp_store::wrap::open_kat(&wrap, pass, params));
+    let rejected = |pass: &[u8]| {
+        let seen = check(pass);
+        format!("{seen}, site {}", wrap_site())
+    };
+    let [class0, class1] = fixture.wrong;
+    let expected = format!("Err(Unlock), site {}", CLAIM_STORE_UNLOCK.site);
+    precheck(
+        CLAIM_STORE_UNLOCK,
+        [expected.clone(), expected],
+        [rejected(&class0), rejected(&class1)],
+        Some(("Ok".to_owned(), check(&fixture.right))),
+    )?;
+    let delta = Deltas::new(&class0, &class1);
+    let mut opened = false;
+    let samples = measure(
+        n,
+        k,
+        stream,
+        |c, _| Zeroizing::new(blended_vec(&class1, &delta, c)),
+        |pass| {
+            opened |= black_box(
+                secmp_store::wrap::open_kat(black_box(&wrap), black_box(pass), params).is_ok(),
+            );
+        },
+    );
+    if opened {
+        return Err(abort(
+            "bench aborted: wrap::open_kat opened the wrap under a passphrase of store_unlock_reject, which must be \
+             refused in both classes"
+                .to_owned(),
+        ));
+    }
+    Ok(samples)
+}
+
+/// `store_unwrap_reject_post_kdf` (Q140; informative): `wrap::open_with_kek_kat` of the fixture's wrap under the KEK of
+/// class 0 vs class 1 of `store_unlock_reject` (Argon2id of each wrong passphrase over the wrap's salt, computed once),
+/// each a fresh `blend`ed key in a locked page (class 1 the base): `CAEAD.Open` only. Pre-check: each class gives
+/// `Err(Unlock)` at "wrap: open", and the right KEK opens the same wrap. Aborts if any measured call opened.
+fn store_unwrap_reject_post_kdf(
+    n: usize,
+    k: usize,
+    stream: &mut Stream,
+) -> Result<Samples, secmp_crypto::Error> {
+    let fixture = store_fixture(stream)?;
+    let params = secmp_store::wrap::Argon2Params::kat_small();
+    let wrap = fixture.wrap;
+    let failed = || abort("bench aborted: store_unwrap_reject_post_kdf: no KEK".to_owned());
+    let salt: [u8; 16] = wrap
+        .get(1..17)
+        .and_then(|s| s.try_into().ok())
+        .ok_or_else(failed)?;
+    let kek = |pass: &[u8]| -> Result<[u8; 32], secmp_crypto::Error> {
+        let key = secmp_store::wrap::kek_kat(pass, &salt, params).map_err(|_| failed())?;
+        Ok(*key.locked().expose_secret())
+    };
+    let [wrong0, wrong1] = &fixture.wrong;
+    let (kek0, kek1) = (kek(wrong0)?, kek(wrong1)?);
+    let right = secmp_store::wrap::kek_kat(&fixture.right, &salt, params).map_err(|_| failed())?;
+    let check = |key: &[u8; 32]| {
+        let key = secmp_crypto::LockedSecret::<32>::from_slice(key)
+            .map_err(|_| secmp_store::Error::Unavailable);
+        store_outcome(
+            &key.and_then(|key| secmp_store::wrap::open_with_kek_kat(&wrap, &key, params)),
+        )
+    };
+    let rejected = |key: &[u8; 32]| {
+        let seen = check(key);
+        format!("{seen}, site {}", wrap_site())
+    };
+    let expected = format!("Err(Unlock), site {}", CLAIM_STORE_POST_KDF.site);
+    precheck(
+        CLAIM_STORE_POST_KDF,
+        [expected.clone(), expected],
+        [rejected(&kek0), rejected(&kek1)],
+        Some(("Ok".to_owned(), check(right.locked().expose_secret()))),
+    )?;
+    let delta = Deltas::new(&kek0, &kek1);
+    let mut opened = false;
+    let samples = measure(
+        n,
+        k,
+        stream,
+        |c, _| {
+            let mut key = [0_u8; 32];
+            blend(&kek1, &delta, c, &mut key);
+            secmp_crypto::LockedSecret::<32>::from_slice(&key).ok()
+        },
+        |key| {
+            if let Some(key) = key {
+                opened |= black_box(
+                    secmp_store::wrap::open_with_kek_kat(black_box(&wrap), black_box(key), params)
+                        .is_ok(),
+                );
+            }
+        },
+    );
+    if opened {
+        return Err(abort(
+            "bench aborted: wrap::open_with_kek_kat opened the wrap under a KEK of store_unwrap_reject_post_kdf, which \
+             must be refused in both classes"
+                .to_owned(),
+        ));
+    }
+    Ok(samples)
+}
+
+/// The SecMP-STORE target of TEST-SPEC-M7 CT-01 (ADR-042 Amendment 6), measured after `m5_targets`, `n_store` samples
+/// per measurement (`expect::CT_STORE_SAMPLES`).
+fn m7_targets(n_store: usize) -> [Target; 1] {
+    [claimed(CLAIM_STORE_UNLOCK, n_store, store_unlock_reject)]
+}
+
 /// `SECMP_CT_SCALE` if set (local quick runs only; echoed in the report, refused by the gate).
 fn ct_scale() -> Option<String> {
     std::env::var("SECMP_CT_SCALE").ok()
@@ -4044,10 +4322,18 @@ fn tr_targets(n: usize) -> [Target; 5] {
     ]
 }
 
-/// The informative targets (ADR-042 Amendment 5; `expect::CT_INFORMATIVE_TARGETS`): measured after the targets, no
-/// verdict.
-fn informative_targets(n: usize) -> [Target; 1] {
-    [claimed(CLAIM_TR_NONCE, n, tr_decrypt_nonce_dependence)]
+/// The informative targets (ADR-042 Amendments 5 and 6; `expect::CT_INFORMATIVE_TARGETS`): measured after the
+/// targets, no verdict.
+fn informative_targets(n: usize) -> [Target; 3] {
+    [
+        claimed(CLAIM_TR_NONCE, n, tr_decrypt_nonce_dependence),
+        claimed(
+            CLAIM_TR_HDR_CONTENTS,
+            n,
+            tr_decrypt_header_contents_dependence,
+        ),
+        claimed(CLAIM_STORE_POST_KDF, n, store_unwrap_reject_post_kdf),
+    ]
 }
 
 /// An informative target's record (ADR-042 Amendment 5): its calibration and two measurements, no verdict.
@@ -4130,12 +4416,14 @@ fn run(rules: Rules) -> Result<RunRecord, secmp_crypto::Error> {
     let mut stream = Stream::new()?;
     let n = rules.samples.checked_div(scale).unwrap_or(1);
     let n_sas = rules.sas_samples.checked_div(scale).unwrap_or(1);
+    let n_store = rules.store_samples.checked_div(scale).unwrap_or(1);
     let mut out = Vec::new();
     for target in targets(n, n_sas)
         .into_iter()
         .chain(tr_targets(n))
         .chain(hx_targets(n))
         .chain(m5_targets(n))
+        .chain(m7_targets(n_store))
     {
         out.push(evaluate(target, &mut stream, &clock, rules)?);
     }
@@ -4599,7 +4887,7 @@ fn main() -> ExitCode {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/ct-report.json");
     let Some(rules) = Rules::from_expect() else {
         // written for the gate to print; the bench itself may not print (docs/06 §2)
-        let error = "{\"error\":\"CT_THRESHOLDS / CT_RESOLUTION_MAX_FRACTION / CT_MAX_BATCH / CT_BATCH_MARGIN / CT_MIN_REALISED_QUANTA / CT_EFFECT_FLOOR_QUANTA / CT_EFFECT_FLOOR_NS / CT_AA_MAX_T / CT_SAMPLES / CT_SAS_SAMPLES not readable from xtask/src/expect.rs\"}";
+        let error = "{\"error\":\"CT_THRESHOLDS / CT_RESOLUTION_MAX_FRACTION / CT_MAX_BATCH / CT_BATCH_MARGIN / CT_MIN_REALISED_QUANTA / CT_EFFECT_FLOOR_QUANTA / CT_EFFECT_FLOOR_NS / CT_AA_MAX_T / CT_SAMPLES / CT_SAS_SAMPLES / CT_STORE_SAMPLES not readable from xtask/src/expect.rs\"}";
         let _ = std::fs::write(path, error);
         return ExitCode::FAILURE;
     };

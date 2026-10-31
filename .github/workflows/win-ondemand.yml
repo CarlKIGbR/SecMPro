@@ -85,6 +85,12 @@ jobs:
           nasm -v || exit /b 1
           git --version || exit /b 1
           rustup component list --installed || exit /b 1
+      - name: Probe perl
+        shell: cmd
+        run: perl -v || exit /b 1
+      - name: Probe cargo-nextest
+        shell: cmd
+        run: cargo nextest --version || exit /b 1
       - name: Suite hello
         if: inputs.suite == 'hello'
         shell: cmd

@@ -276,3 +276,10 @@ path = "fuzz_targets/store_record_open.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "invitation_queue_retention"
+path = "fuzz_targets/invitation_queue_retention.rs"
+test = false
+doc = false
+bench = false

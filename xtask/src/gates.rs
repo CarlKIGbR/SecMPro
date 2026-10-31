@@ -11781,8 +11781,8 @@ mod tests {
         assert_eq!(expect::FUZZ_NIGHTLY_SECONDS, 14_400);
         assert_eq!(
             nightly_seconds_per_target(expect::FUZZ_NIGHTLY_SECONDS, expect::FUZZ_TARGETS.len())?,
-            // M7 Phase A: 35 targets (+ FZ-01, FZ-02 of M7), 411 s each
-            14_400 / 35
+            // M7 Phase B: 36 targets (+ FZ-04 of M7 Phase B), 400 s each
+            14_400 / 36
         );
         assert_eq!(nightly_seconds_per_target(14_400, 14)?, 1028);
         assert!(nightly_seconds_per_target(14_400, 0).is_err());

@@ -88,14 +88,19 @@ fn link_entries() -> [(&'static str, usize); 6] {
     ]
 }
 
-/// TEST-SPEC-M7 FZ-01, FZ-02 (ADR-053 items 5, 6 and Appendix): the two store targets. A sealed record and a backup
+/// TEST-SPEC-M7 FZ-01, FZ-02 (ADR-053 items 5, 6 and Appendix): the two store targets, and FZ-04 (Phase B). A sealed record and a backup
 /// file carry `N` (24), `COM` and the tag around their plaintext.
 fn m7_entries() -> Vec<(&'static str, usize)> {
     let seal = sum(&[NONCE_LEN, COM_LEN, AEAD_TAG_LEN]);
     // ver ‖ salt ‖ params ‖ bwrap (N' ‖ COM ‖ MK_bk ‖ tag) ‖ section table (count ‖ {tag ‖ len u32} × 4)
     let header = sum(&[1, 16, 12, sum(&[seal, 32]), 1, 4 * 5]);
     assert_eq!(header, 154);
+    // FZ-04 (Phase B): one round is `n` (1), at most 128 fetched ids of 2 bytes, `k` (1) and at most 8 spent indices of 1
+    let round = sum(&[1, 128 * 2, 1, 8]);
+    assert_eq!(round, 266);
     vec![
+        // at most 16 rounds
+        ("invitation_queue_retention", round.saturating_mul(16)),
         // mode, then the magic, the header and the body seal around a body of the 64 KiB seed cap (ADR-052)
         ("backup_import", sum(&[1, 13, header, seal, 65_536])),
         // table, col_len, column, row_len, row key, mode, then the largest record (`RatchetStateV1` at its maximum

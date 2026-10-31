@@ -411,7 +411,7 @@ pub(crate) const TR_PERF_KINDS: &[&str] = &["chain", "step"];
 /// on structured, honestly signed command scripts (`relay_executor`, FZ-07) and a relay connection on honestly
 /// sealed arbitrary plaintexts with `LINK_PUT`/`CONT` interleavings (`relay_link_session`, FZ-08). M7 (Phase A, TEST-SPEC-M7
 /// FZ-01, FZ-02): the backup import decoder (`backup_import`) and the record seal of a secret column
-/// (`store_record_open`).
+/// (`store_record_open`); Phase B (FZ-04): the invitation queue's retention (`invitation_queue_retention`).
 pub(crate) const FUZZ_TARGETS: &[&str] = &[
     "backup_import",
     "caead_open",
@@ -425,6 +425,7 @@ pub(crate) const FUZZ_TARGETS: &[&str] = &[
     "hybrid_sign_verify",
     "inv_linkdata",
     "inv_uri",
+    "invitation_queue_retention",
     "link_client_handshake",
     "link_frame_open",
     "link_records",
@@ -463,6 +464,7 @@ pub(crate) const FUZZ_TARGETS: &[&str] = &[
 pub(crate) const FUZZ_TRACKED_ONLY: &[&str] = &[
     "backup_import",
     "client_pipeline_responses",
+    "invitation_queue_retention",
     "relay_executor",
     "relay_link_session",
     "relayref_onion_to_hsid",
@@ -550,6 +552,8 @@ pub(crate) const FUZZ_DEEP_NIGHTLY_SECONDS: u64 = 3_600;
 ///   header (154), `N` (24), `COM` (32) and tag (16) = 65776 (the structured mode takes 6 + body).
 /// - `store_record_open` (FZ-02): table 1 + `col_len` 1 + a column of 255 + `row_len` 1 + a row key of 255 + mode 1 +
 ///   the largest record — `RatchetStateV1` at its maximum (38 585) bounds the fixed part — sealed (+ 72) = 39171.
+/// - `invitation_queue_retention` (FZ-04): at most 16 rounds of `n` 1 + 128 ids of 2 + `k` 1 + 8 spent indices of 1 = 266
+///   each = 4256.
 pub(crate) const FUZZ_MAX_LEN: &[(&str, usize)] = &[
     ("backup_import", 65_777),
     ("caead_open", 12_618),
@@ -563,6 +567,7 @@ pub(crate) const FUZZ_MAX_LEN: &[(&str, usize)] = &[
     ("hybrid_sign_verify", 7_810),
     ("inv_linkdata", 12_362),
     ("inv_uri", 718),
+    ("invitation_queue_retention", 4_257),
     ("link_client_handshake", 1_747),
     ("link_frame_open", 4_354),
     ("link_records", 2_858),
@@ -2286,6 +2291,24 @@ mod tests {
                 "{harness} is a proof"
             );
         }
+        // FZ-04 (BRIEF M7-B): the retention fuzz target is a listed, tracked-only target with its bound, its `[[bin]]` and
+        // its corpus
+        let target = "invitation_queue_retention";
+        assert!(FUZZ_TARGETS.contains(&target), "{target}");
+        assert!(FUZZ_TRACKED_ONLY.contains(&target), "{target}");
+        assert_eq!(
+            FUZZ_MAX_LEN
+                .iter()
+                .find(|(t, _)| *t == target)
+                .map(|(_, n)| *n),
+            Some(4_257)
+        );
+        let manifest = lf(&std::fs::read_to_string(root.join("fuzz/Cargo.toml"))?);
+        assert!(manifest.contains(&format!(
+            "[[bin]]\nname = \"{target}\"\npath = \"fuzz_targets/{target}.rs\"\ntest = false\ndoc = false\n"
+        )));
+        assert!(root.join(format!("fuzz/fuzz_targets/{target}.rs")).exists());
+        assert!(std::fs::read_dir(root.join(format!("fuzz/corpus/{target}")))?.count() >= 1);
         Ok(())
     }
 
@@ -2346,11 +2369,11 @@ mod tests {
     /// TEST-SPEC-M7 G7-15a (Q121): `FUZZ_TARGETS` += `backup_import` (FZ-01) and `store_record_open` (FZ-02), each with
     /// its `FUZZ_MAX_LEN` and a committed corpus (`fuzz/corpus/<target>/`, seeds ≤ 64 KiB, ADR-052), tracked-only (no
     /// frozen store suite), a `[[bin]]` of `fuzz/Cargo.toml`, and the store as the fuzz package's path dependency with
-    /// feature `kat`; 35 targets.
+    /// feature `kat`; 36 targets (FZ-04 of Phase B: `invitation_queue_retention`).
     #[test]
     fn fuzz_targets_store() -> crate::util::Result<()> {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
-        assert_eq!(FUZZ_TARGETS.len(), 35);
+        assert_eq!(FUZZ_TARGETS.len(), 36);
         let manifest = std::fs::read_to_string(root.join("fuzz/Cargo.toml"))?.replace("\r\n", "\n");
         assert!(
             manifest.contains(

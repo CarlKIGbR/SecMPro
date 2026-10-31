@@ -50,3 +50,10 @@ different decision re-dictates the row, it is never silently changed. "Silent" =
 | OPEN-M7-39 | ADR-018 `docs/08:105-108`; OQ-4 `docs/09:10`; `docs/measurements/M6-traffic.md:102-117` | Traffic parameters after the M6 report. | owner accepts or changes | **not M7 code**; M7 uses `Params::default()` (provisional §4.2) | **owner** | — |
 | OPEN-M7-40 | ADR-015 Am. 2 exception (3) `docs/08:93`; `expect.rs:148-153` (`ctutils` 0.4.4, until 2026-10-30) | Removal date. An exception past its `until` is itself a cooldown finding: CI goes red on the first run after the date until removed. | — | **settled**: row G7-00, first M7 commit after 2026-10-30 02:00 UTC (C2-17 precedent) | engineering | G7-00 |
 | OPEN-M7-41 | ADR-051 Am. 6 `docs/08:861` (`crypto-bigint` 0.5.5 `--ignore`, RUSTSEC-2026-0387) | — | — | **settled**: stays until `arti-client` moves; G7-16 pins it unchanged | — | G7-16 |
+
+## Phase B follow-ups
+
+| ID | Hangs on | Question | Alternatives | Recommended default | Decides | Blocks |
+|---|---|---|---|---|---|---|
+| OPEN-M7-B-2 | `M06-report.md:791`; `core/mod.rs:670-671` (`send_missing`); KANI-M6-C-1 | The SEND-before-FETCH guard of `prepare_link` is not covered by a Kani harness. | (A) extract the guard into `core/pure.rs` and prove it in a harness; (B) keep it covered by the unit and harness tests only. | **A**, in B-4 or later | engineering | — |
+| OPEN-M7-B-3 | `Scheduler::delivery_committed` (`core/mod.rs`, no generation); `Deferred`'s generation counter (`run.rs:451-492`) | Late commits of an old generation are routed by the driver's facade; the core API takes no generation. | (A) `delivery_committed(queue, generation, cell_id)` and the generation carried by `deliver`; (B) keep the facade's counter. | **A**, in B-4 (the sessions actor) | engineering | SC-07 |

@@ -19,6 +19,7 @@ use std::time::Duration;
 
 use secmp_client_core::clock::{Clock, TokioClock};
 use secmp_client_core::scheduler::params::{Mode, Params};
+use secmp_client_core::timing::{accept_ceiling, sample_round, sample_with};
 
 use crate::m6_sched_io::{Rig, ok_script};
 use crate::m6_tokio::{Setup, runtime};
@@ -86,4 +87,37 @@ fn async_session_send_writes_the_request_the_relay_answers() {
         let answered = tokio::time::timeout(std::time::Duration::from_secs(60), t.ping()).await;
         assert!(matches!(answered, Ok(Ok(()))), "the PING was answered");
     });
+}
+
+/// `u64::MAX - 5`, the largest multiple of 10 that fits 64 bits.
+const C10: u64 = 18_446_744_073_709_551_610;
+
+/// `timing.rs:40` (`accept_ceiling` → `None` / `Some(0)` / `Some(1)`; PR-run 41193864080, mutants shards 2, 3, 4): under these
+/// mutants `TimingRng::uniform` never accepts a draw, loops for ever, and every test that draws holds a runner thread (G7-10).
+/// Pure function, one pass, no draw loop.
+#[test]
+fn accept_ceiling_is_the_largest_multiple_of_span() {
+    assert_eq!(accept_ceiling(1), Some(u64::MAX));
+    assert_eq!(accept_ceiling(10), Some(C10));
+    assert_eq!(accept_ceiling(u64::MAX), Some(u64::MAX));
+    assert_eq!(accept_ceiling(0), None);
+}
+
+/// `timing.rs:47` (`sample_with` → `None` / `Some(0)` / `Some(1)` and `>=` → `<`; PR-run 41193864080, shards 5 and 8): the
+/// same endless loop of `uniform`. A draw below the ceiling is accepted, one at or above it is rejected.
+#[test]
+fn sample_with_accepts_below_the_ceiling_and_rejects_at_it() {
+    assert_eq!(sample_with(0, 5, 10, C10), Some(5));
+    assert_eq!(sample_with(18_446_744_073_709_551_609, 5, 10, C10), Some(14));
+    assert_eq!(sample_with(C10, 5, 10, C10), None);
+    assert_eq!(sample_with(u64::MAX, 5, 10, C10), None);
+}
+
+/// `timing.rs:56` (`sample_round` → `None`; PR-run 41193864080, shard 9): the round composes the ceiling and the sample.
+#[test]
+fn sample_round_composes_ceiling_and_sample() {
+    assert_eq!(sample_round(7, 100, 5), Some(102));
+    // 2^64 ≡ 1 (mod 5), so `u64::MAX % 5 == 0` and `accept_ceiling(5) == Some(u64::MAX)`: the draw equals the ceiling and is rejected.
+    assert_eq!(sample_round(u64::MAX, 100, 5), None);
+    assert_eq!(sample_round(3, 0, 0), None);
 }

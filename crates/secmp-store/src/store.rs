@@ -359,6 +359,8 @@ impl Store {
                 inner: tx,
                 statements: 0,
                 keys,
+                #[cfg(any(test, feature = "kat"))]
+                seq: crate::kat::begin_txn(),
             };
             let out = f(&mut t);
             let Tx {
@@ -435,6 +437,8 @@ pub struct Tx<'a> {
     inner: rusqlite::Transaction<'a>,
     statements: u32,
     keys: Option<&'a TableKeys>,
+    #[cfg(any(test, feature = "kat"))]
+    seq: u64,
 }
 
 impl Tx<'_> {
@@ -470,9 +474,13 @@ impl Tx<'_> {
         if self.next_statement_fails() {
             return Err(Error::Unavailable);
         }
-        self.inner
+        let n = self
+            .inner
             .execute(sql, params)
-            .map_err(|_| Error::Unavailable)
+            .map_err(|_| Error::Unavailable)?;
+        #[cfg(any(test, feature = "kat"))]
+        crate::kat::note_statement(self.seq, sql);
+        Ok(n)
     }
 
     /// Read one row (`None` without one).

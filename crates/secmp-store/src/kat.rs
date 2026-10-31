@@ -129,6 +129,54 @@ thread_local! {
     static FIXED_RANDOM: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
     static MIGRATION_STATEMENTS: Cell<u64> = const { Cell::new(0) };
     static MEASURE_WRITES: Cell<bool> = const { Cell::new(false) };
+    static TXN_SEQ: Cell<u64> = const { Cell::new(0) };
+    static TXN_LOG: std::cell::RefCell<Vec<(u64, &'static str, &'static str)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// The statements the transactions of this thread executed since the last [`reset_counters`], in order: the sequence
+/// number of the transaction (1-based, as begun), the table the statement writes and its verb (`insert`, `update`,
+/// `delete`; `other` for anything else) — IN-05, IN-08 (B-3).
+#[must_use]
+pub fn txn_log() -> Vec<(u64, &'static str, &'static str)> {
+    TXN_LOG.with(|l| l.borrow().clone())
+}
+
+/// A transaction begins: its sequence number.
+pub(crate) fn begin_txn() -> u64 {
+    TXN_SEQ.with(|c| {
+        let n = c.get().saturating_add(1);
+        c.set(n);
+        n
+    })
+}
+
+/// The table and the verb of a statement (`INSERT [OR …] INTO t`, `UPDATE t`, `DELETE FROM t`).
+fn classify(sql: &str) -> (&'static str, &'static str) {
+    let words: Vec<&str> = sql.split_whitespace().collect();
+    let (verb, at) = match words.first().map(|w| w.to_ascii_uppercase()).as_deref() {
+        Some("INSERT") => (
+            "insert",
+            words.iter().position(|w| w.eq_ignore_ascii_case("INTO")),
+        ),
+        Some("UPDATE") => ("update", Some(0)),
+        Some("DELETE") => (
+            "delete",
+            words.iter().position(|w| w.eq_ignore_ascii_case("FROM")),
+        ),
+        _ => ("other", None),
+    };
+    let table = at
+        .and_then(|i| words.get(i.saturating_add(1)))
+        .and_then(|w| crate::schema::TABLES.iter().find(|t| **t == *w))
+        .copied()
+        .unwrap_or("?");
+    (table, verb)
+}
+
+/// A statement of transaction `seq` was executed.
+pub(crate) fn note_statement(seq: u64, sql: &str) {
+    let (table, verb) = classify(sql);
+    TXN_LOG.with(|l| l.borrow_mut().push((seq, table, verb)));
 }
 
 /// Arm `f` for the next transaction of this thread (cleared when that transaction ends).
@@ -313,6 +361,8 @@ pub fn reset_counters() {
     TXN_COMMITS.with(|c| c.set(0));
     BYTES_WRITTEN.with(|c| c.set(0));
     MIGRATION_STATEMENTS.with(|c| c.set(0));
+    TXN_SEQ.with(|c| c.set(0));
+    TXN_LOG.with(|l| l.borrow_mut().clear());
 }
 
 /// The environment variable that selects the role of a re-entered test binary (the Conventions' child process).
@@ -503,6 +553,54 @@ mod tests {
         assert_eq!(hits.len(), 1, "NEEDL is 5 bytes: below min_sub 6");
         assert!(!contains(b"abc", b""));
         assert!(contains(b"abc", b"bc") && !contains(b"abc", b"cb"));
+        Ok(())
+    }
+
+    /// `kat::txn_log` (B-3, IN-05, IN-08; extra test): each executed statement is logged with the sequence number of its
+    /// transaction, the table it writes and its verb; a statement that fails is not logged; `reset_counters` clears the log
+    /// and the numbering.
+    #[test]
+    fn txn_log_records_table_and_verb() -> R {
+        use crate::profile::{insert_invitation, insert_prekey};
+        use crate::store::Store;
+
+        let dir = TempDir::new("txn-log")?;
+        let mut store = Store::open(dir.path(), &TestKey::db_key())?;
+        reset_counters();
+        store.txn(|tx| {
+            insert_invitation(tx, &[1; 16], b"r", 1)?;
+            tx.exec(
+                "UPDATE invitations SET status = 1 WHERE ld_id = ?1",
+                [&[1_u8; 16][..]],
+            )?;
+            tx.exec(
+                "DELETE FROM invitations WHERE ld_id = ?1",
+                [&[1_u8; 16][..]],
+            )?;
+            tx.exec(
+                "INSERT OR REPLACE INTO settings (key, value) VALUES ('k', x'00')",
+                [],
+            )?;
+            tx.exec("PRAGMA user_version", []).ok();
+            Ok(())
+        })?;
+        store.txn(|tx| insert_prekey(tx, 1, 1, b"s", None))?;
+        fail_at(FailAt(1));
+        assert!(store.txn(|tx| insert_prekey(tx, 1, 2, b"s", None)).is_err());
+        assert_eq!(
+            txn_log(),
+            [
+                (1, "invitations", "insert"),
+                (1, "invitations", "update"),
+                (1, "invitations", "delete"),
+                (1, "settings", "insert"),
+                (2, "prekeys", "insert"),
+            ]
+        );
+        reset_counters();
+        assert!(txn_log().is_empty());
+        store.txn(|tx| insert_prekey(tx, 1, 3, b"s", None))?;
+        assert_eq!(txn_log(), [(1, "prekeys", "insert")]);
         Ok(())
     }
 

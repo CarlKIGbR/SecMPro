@@ -786,3 +786,69 @@ fn issue_equals_issue_invitation_on() -> R {
     assert_eq!(*issued.uri, *invitation_uri(&want.invitation)?);
     Ok(())
 }
+
+/// IN-08 (review focus "OPK deletion" `docs/07:147`; §6.6 step 4 `:351`): in a successful accept the OPK row delete and
+/// the record's status update are statements of the same store transaction as the session insert (`kat::txn_log`); and
+/// `commit_accept` of the staged prekeys refuses a record that names another OPK, or another invitation, and stages
+/// nothing then.
+#[cfg(feature = "kat")]
+#[test]
+fn opk_and_record_in_one_txn() -> R {
+    let (fx, mut e) = inviter("in08", 35, 1)?;
+    let (peer, mut pe) = invitee("in08-peer", 37, 2)?;
+    let invitations = Invitations::new(fx.profile.clone());
+    let issued = invitations.issue(&request(1)?, &fx.clock, &mut e)?;
+    let ld_id = issued.invitation.ld_id;
+    let [c0, c1, c2] = handshake(&peer, &mut pe, &issued)?;
+
+    // a record that names another OPK is refused; the right one stages (and writes nothing)
+    {
+        let store = fx.profile.store();
+        let s = store.lock().map_err(|_| "lock")?;
+        let stored = load(&s, &ld_id)?.ok_or("record")?.stored;
+        let opk_id = stored.record.opk_id;
+        let mut staged = StagedPrekeys::load(&s, &stored.record)?;
+        assert_eq!(
+            staged.commit_accept(opk_id + 1, &ld_id),
+            Err(secmp_proto::Error::Rejected)
+        );
+        assert_eq!(
+            staged.commit_accept(opk_id, &[0; 16]),
+            Err(secmp_proto::Error::Rejected)
+        );
+        assert_eq!(staged.delete_opk(99), Err(secmp_proto::Error::Rejected));
+        assert!(!staged.staged());
+        assert_eq!(staged.commit_accept(opk_id, &ld_id), Ok(()));
+        assert!(staged.staged() && staged.opk(opk_id).is_none());
+        assert_eq!(
+            s.prekeys(KIND_OPK)?.len(),
+            2,
+            "the store itself is untouched"
+        );
+    }
+
+    secmp_store::kat::reset_counters();
+    let out = invitations.process_round(&ld_id, &[(1, c0), (2, c1), (3, c2)], &fx.clock, &mut e)?;
+    assert_eq!(out.accepted, Some(ContactId(1)));
+    let log = secmp_store::kat::txn_log();
+    let seq_of = |table: &str, verb: &str| -> Vec<u64> {
+        log.iter()
+            .filter(|(_, t, v)| *t == table && *v == verb)
+            .map(|(s, _, _)| *s)
+            .collect()
+    };
+    let opk = seq_of("prekeys", "delete");
+    let record = seq_of("invitations", "update");
+    let session = seq_of("sessions", "insert");
+    assert_eq!(opk.len(), 1);
+    assert!(!record.is_empty() && !session.is_empty());
+    assert!(
+        record
+            .iter()
+            .chain(&session)
+            .all(|s| Some(s) == opk.first()),
+        "{log:?}"
+    );
+
+    Ok(())
+}

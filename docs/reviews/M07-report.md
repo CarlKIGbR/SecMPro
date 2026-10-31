@@ -759,7 +759,7 @@ Full step `cargo xtask step --strict kani` at `57d7da2`: PASS, 55/55 harnesses v
 ### §8
 
 - **OQ-20** resolved by OPEN-M7-08 A (no spec change); `docs/09` not edited.
-- **FIN5b-1** closed (logical link id, per-link oracle). **FINAL3 (e)** closed (frame ids). **KANI-M6-C-1** closed (SC-06…SC-09). **K-C5** closed (SC-10).
+- **FIN5b-1** closed (logical link id, per-link oracle). **FINAL3 (e)** closed (frame ids). **KANI-M6-C-1**: see B-SC2 §7. **K-C5** closed (SC-10).
 - Blocked: none. STOP: none.
 
 
@@ -829,13 +829,21 @@ New tests: 7; re-dictated: 4 (+ the BK-01/allowlist fixtures). Red seen: 7 (`a4f
 
 ## B-SC2 fix-ups (WEISUNG M7-B-SC2; rulings Q182–Q186; `modell=claude-opus-5-5`)
 
-Guard (2026-10-31): `git status --short` empty (exit 0); `merge-base --is-ancestor 51e918c HEAD` exit 0; `git log --oneline 1a7b4da..HEAD` = `bf34f9b`, `2f9dc89`, `88ce8bb`, `9ac2451`, `51e918c`, `ee0f79e`, `847d1dd`, `c16d9ac`, `842145e` (A-4f, A-4f2); the diff of the B-SC paths `1a7b4da..HEAD` empty (exit 0); `cargo fmt --all -- --check` clean (exit 0). `<G>` = `bf34f9b73b1d13ef55914737505a7fd8ee1a9af8`.
+Guard (2026-10-31): `git status --short` empty (exit 0); `merge-base --is-ancestor 51e918c HEAD` exit 0; `git log --oneline 1a7b4da..HEAD` = `bf34f9b`, `2f9dc89`, `88ce8bb`, `9ac2451`, `51e918c`, `ee0f79e`, `847d1dd`, `c16d9ac`, `842145e` (A-4f, A-4f2); the diff of the B-SC paths `1a7b4da..HEAD` empty (exit 0); `cargo fmt --all -- --check` clean (exit 0). `<G>` = `bf34f9b73b1d13ef55914737505a7fd8ee1a9af8`. The §2 blocker (the SC-10 scan pinned `prepare_link → fetch_lead_deadline`; `testscan.rs` outside the file list) was resolved by WEISUNG M7-B-SC2b (Q183 amendment); guard of B-SC2b: tree clean, HEAD `d2b93ba`.
 
 ### §2 commits
 
 | commit | what |
 |---|---|
 | `2ae2270` | §1 `fix(core): nothing is handed to the worker unrecorded (Q182, §1.7)` |
+| `d2b93ba` | the §2 blocker note (docs) |
+| `5ad062b` | §2 `fix(kani): SC-09 over the activity inputs that reach the core (Q183); SC-10 scan follows the extraction` |
+| `0110d44` | §3 `test(kani,core): SC-08 hostile-relay responses (Q184)` |
+| `a1c1d96` | §4 `test(fuzz): scheduler_event_sequence drives the deferred path with the §1.7 oracle (Q185)` |
+| `0bed941` | §5.1 `test(xtask): Q44 skip-list entries for two drifted harness tests (Q186)` |
+| `0b9a5ed` | `docs(mutants): line renumbering after B-SC2, no new acceptance` (`core/mod.rs` 800:39 → 806:39, 1806 → 1812; `pure.rs` 84:30 → 99:30; the accepted-rows gate test follows) |
+| `4eee783` | evidence (red-first, mutants, Kani step) and planning follow-ups |
+| `69bfc24` | `fix(xtask): the cover pin reads the B-SC runs through a helper (clippy too_many_lines)` (the reader of `5ad062b` pushed `kani_cover_count_is_pinned` past 100 lines; caught by the first ci-fast, `ci-fast-bsc2-4eee783` not committed) |
 
 ### §3 tests
 
@@ -843,11 +851,51 @@ Guard (2026-10-31): `git status --short` empty (exit 0); `merge-base --is-ancest
 |---|---|---|---|
 | Q182 | `pure::tests::hostile_relay_never_acks_uncommitted` | `2ae2270` | `id 6 acked 7 not committed` |
 | Q182 | `pure::tests::full_ledger_hands_nothing` | `2ae2270` | `left: 5, right: 4` |
-| Q182 | `pure::tests::hostile_relay_random_sequences` (10 000 runs × 12 steps) | `2ae2270` | first run on the pre-fix tree: `id 13 acked 17 not committed` |
+| Q182 | `pure::tests::hostile_relay_random_sequences` (10 000 runs × 12 steps; LCG in the test) | `2ae2270` | first run on the pre-fix tree: `id 13 acked 17 not committed` |
+| Q183 | `kani_proofs::kani_paired_executions` (re-dictated; 4 covers) | `5ad062b` | the pin with 4 covers against the B-SC run: `missing: kani_proofs::kani_paired_executions: 4 of 4 satisfied` |
+| Q183 | `xtask::testscan::kc5_calls_extracted` (amended: `prepare_link → fetch_due → fetch_lead_deadline`; the SC-09 site is its run `balanced_run`) | `5ad062b` | on `d2b93ba`: `left: [... ("scheduler/core/mod.rs", "prepare_link", "fetch_lead_deadline") ...]`, `right: [... ("scheduler/core/mod.rs", "prepare_link", "fetch_due") ...]` |
+| Q183 | `pure::tests::fetch_due_and_note_sent` | `5ad062b` | new functions |
+| Q184 | `kani_proofs::kani_persist_contract_abstract` (widened: arbitrary ids ≤ 7, any order, duplicates, gaps; handed-id oracle) | `0110d44` | against the pre-Q182 `take` (check removed temporarily): `VERIFICATION:- SUCCESSFUL` — not red: the F1 sequence needs more responses than N = 3 and three responses of ≤ 3 ids reach; F1 is red in the §1 unit tests |
+| Q185 | FZ-04 `scheduler_event_sequence` (deferred path, hostile responses, §1.7 oracle) + seed `3ef4177e…` | `a1c1d96` | 120 s against `bf34f9b` (pre-Q182) in a scratch copy: not reached (`Done 6163 runs in 121 second(s)`), as the ruling expected (64-slot ledger, ≤ 192 events) |
 
-`a_full_ledger_keeps_the_ack_below_what_it_could_not_record` is unchanged and green. The SC-01 (four fixtures), R-01 and SIM-02 series after the fix are byte-identical to `bsc-series-57d7da2.txt` (`m7_drain::drain_f_cells_per_response`, `receive_throughput_per_fetch_is_measured`, `sim_partition_heals`: 3 passed).
+`a_full_ledger_keeps_the_ack_below_what_it_could_not_record` is unchanged and green. After §1 the SC-01 (four fixtures), R-01 and SIM-02 series are byte-identical to `bsc-series-57d7da2.txt` (strict-silent 4/period drained after 32; strict-constant 43; balanced-silent 8/slot 16; balanced-constant 19; R-01 committed [11, 11, 11, 11], relay [20]; SIM-02 1 cell).
 
-### §8 Blocked (STOP: an edit falls outside the file list)
+### §4 Kani, mutants, CI
 
-§2 (Q183) cannot be built within the §0 file list. Q183 item 2 extracts `pure::fetch_due(..)` (`= (!fetch_outstanding && !commits_pending) || now >= fetch_lead_deadline(slot, lead_ms)`) and has `prepare_link` call it. The B-SC SC-10 scan `xtask::testscan::kc5_calls_extracted` pins the direct call sites of `fetch_lead_deadline` outside `core/pure.rs`: `testscan.rs:628` `("scheduler/core/mod.rs", "prepare_link", lead)`, and calls inside `pure.rs` are not counted (`:607`). After the extraction the scan fails, and the fix is an edit of `xtask/src/testscan.rs`, which is not in the file list. Proposal: in the §2 commit, `testscan.rs:628` becomes the site of `fetch_due` (a third needle `concat!("fetch", "_due(")`, expected only in `prepare_link` and the SC-09 harness), and the scan also asserts that `pure::fetch_due` calls `fetch_lead_deadline`; the inline-needle checks of `prepare_link` stay. §3–§5 were not started (they follow §2 in the weisung's order; §5's runs need the final tree). Question: may §2 edit `xtask/src/testscan.rs` as proposed?
+| harness | alone | in the step (`kani-m7-bsc2-full-0b9a5ed.txt`) |
+|---|---|---|
+| `kani_paired_executions` (SC-09, unwind 4) | 52.4 %, 235 s (`kani-m7-bsc2-sc-kani_paired_executions.txt`) | 51.6 % |
+| `kani_persist_contract_abstract` (SC-08, unwind 4) | 88.4 %, 754 s (`kani-m7-bsc2-sc-kani_persist_contract_abstract.txt`) | 87.2 % |
+| K-C1 / K-C2 / K-C3 / K-C4 / K-C5 / K-C6 (F6: re-measured) | — | 33.5 / 37.5 / 29.7 / 13.6 / 0.7 / 4.1 % |
 
+Kani step at `0b9a5ed`: PASS, 55/55 (the pin of 55 unchanged), wall 4620 s (77 min; `JOB_BUDGETS` `("kani", 150)`), highest peak 87.2 % (`kani_persist_contract_abstract`; `kani_accept_opk_delete_only_on_success` 86.9 %). SC-09 measurement path: a `Vec` ledger carried over three ticks with symbolic report points ran CBMC out of memory (116 GB, also split by `n`: `_n1` and `_n3` alone each); one tick 3.9 %, two ticks 23.6 %; with a fresh pre-sized ledger per tick after `report_all` asserts it empty, the unsplit harness is 52.4 % — no split, name and pin unchanged.
+
+Mutants (`mutants-bsc2-0b9a5ed.txt`; one run per package over the whole B-SC in-diff set `99ad44c..0bed941`, no `--re`; F5): core 151 caught / 1 missed / 24 unviable / 0 timeout of 176 — the miss is the accepted equivalent row (`pure.rs:99:30`, formerly `:84:30`); proto 43 / 0 / 31 / 0 of 74. These replace the composed B-SC core tally (140/1/24/0).
+
+| gate | result |
+|---|---|
+| ci-fast (`ci-fast-bsc2-69bfc24.txt`) | PASS (harness 900 s) |
+| ci-full (`ci-full-bsc2-69bfc24.txt`, summary form Q174) | PASS: fuzz 4279 s, coverage 892 s (secmp-client-core 95.1 %), Miri 2429 s, Kani 4724 s (55/55; highest peak 87.5 % `kani_accept_opk_delete_only_on_success`; SC-08 87.1 %, SC-09 51.2 %), ProVerif `--models tr` 143 s, ref-vectors 969 cases identical; ct, mutants, proverif-link, windows-native, windows-cross delegated |
+| fuzz (Q185) | 300 s on the §4 tree: no crash, `Done 17667 runs in 301 second(s)` |
+
+### §5 deviations
+
+- **D-SC6** (Q182): `take` checks `Received::can_record` before `deliver`; a handed cell is always recorded.
+- **D-SC7**: an id seen but never handed (the ledger was full) may be passed by the acknowledgement once the floor's id is recorded — equivalent to the relay omitting it (docs/01: the relay may drop cells); no §1.7 violation.
+- **D-SC8** (Q183): the core sees an opaque `PreparedCell` (`core/mod.rs:749`); real versus dummy is the cell source's (`Conversation::prepare`) and is carried by AI-01…AI-06, SE-19 and ProVerif L12 — a type-level fact, not an SC-09 input. A source not ready at the tick is an overrun (`types.rs:248`, `core/mod.rs:577-584`), covered by the overrun tests.
+- **D-SC9** (Q183): `pure::fetch_due` (`prepare_link`) and `pure::note_sent` (`World::tick`) extracted; `fetch_lead_deadline` is reached from `prepare_link` through `pure::fetch_due`; the SC-10 scan pins the chain `prepare_link → fetch_due → fetch_lead_deadline` (WEISUNG M7-B-SC2b). Each SC-09 tick starts from a fresh ledger after `report_all` (the production ledger is empty there too).
+- **D-SC10** (Q184): SC-08 widened and kept (88.4 % alone ≤ 90 %); no `kani_persist_contract_hostile`.
+- **D-SC11** (Q185): FZ-04 relay with real cells, hostile response modes, late commits, frame reports and the §1.7 oracle; event budget ≤ 5 bytes, `FUZZ_MAX_LEN` 970 unchanged.
+- **D-SC12** (Q186): the reviewer extends Q44 to drifted tests: `lifetime_end_reconnects_fresh` (16.8 s) and `link_lifetime_uniform_6h_24h` (10.9 s) in `MUTANT_HARNESS_SKIP_TESTS` (times of the full harness run of `ci-fast-bsc-l-923b9ee`; alone 8.5 s and 5.8 s).
+
+### §7 risks
+
+- KANI-M6-C-1: items 1–3 and 5 closed; item 4 closed by the re-dictated SC-09 (Q183); the SEND-before-FETCH guard (`core/mod.rs:670-671`, M06-report:791) is not harness-covered — OPEN-M7-B-2.
+- SC-07: late commits of an old generation are routed by `Deferred`'s counter (`run.rs:451-492`); `Scheduler::delivery_committed` takes no generation — OPEN-M7-B-3.
+- Two activity-dependent overrun margins at system level: real-cell preparation latency in the Deferred worker; FETCH prepared at its 1 s lead while commits are pending (D-SC5) — not a core leak; Phase B measurement posten.
+- (F6) `kani-m7-bsc-a4897e3.txt` was measured on the amended commit `9a5d10a` (not in history); re-measured in `kani-m7-bsc2-full-0b9a5ed.txt`.
+- SC-08 runs at 87–88 % of the Kani limit (alone and in the step): the closest harness to the 90 % line.
+
+### §8
+
+Blocked: none (the §2 blocker resolved by WEISUNG M7-B-SC2b, Q183 amendment). STOP: none.

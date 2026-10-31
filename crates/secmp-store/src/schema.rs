@@ -9,7 +9,9 @@
 //!
 //! The secret columns (Q139: `identity.secret`, `prekeys.secret`, `sessions.data`, `sessions.skey`, `outbox.payload`,
 //! `invitations.record`, `relays.access_key`) are sealed record by record ([`crate::seal`], ADR-053 item 5) inside the
-//! SQLCipher file; `messages` lies inside the SQLCipher file only.
+//! SQLCipher file; so are the columns that hold queue capabilities and retained cells (Q149, Q151: `contacts.routes`,
+//! `contacts.queues`, `relays.pool`, `invitations.retained`, the last two added to version 1 in place); `messages` lies
+//! inside the SQLCipher file only.
 
 /// The tables of a profile, in creation order.
 pub const TABLES: [&str; 10] = [
@@ -172,6 +174,72 @@ mod tests {
         let msg = "msg_id = x'09090909090909090909090909090909'";
         want.push(("outbox", "payload", msg.into(), payload));
         Ok(want)
+    }
+
+    /// Q149, Q151 (extra test): the columns that hold queue capabilities — `contacts.routes`, `contacts.queues`,
+    /// `relays.pool` — and the cells an invitation retains (`invitations.retained`) are sealed per record: the raw bytes of
+    /// each, read with the SQLCipher key, are its plaintext plus 72 bytes and do not contain it. ST-12's seven columns are
+    /// unchanged.
+    #[test]
+    fn capability_columns_are_sealed() -> R {
+        use crate::contacts::{Contact, put_contact};
+        use crate::kat::contains;
+        use crate::profile::{
+            insert_invitation, put_invitation_retained, put_relay, put_relay_pool,
+        };
+        use crate::seal::SEAL_OVERHEAD;
+
+        let dir = TempDir::new("capability-columns")?;
+        let mut store = Store::open(dir.path(), &TestKey::db_key())?;
+        let routes = canary("contacts.routes", 90);
+        let queues = canary("contacts.queues", 70);
+        let pool = canary("relays.pool", 135);
+        let retained = canary("invitations.retained", 4105);
+        store.txn(|tx| {
+            put_contact(
+                tx,
+                &Contact {
+                    id: 1,
+                    iks: b"peer iks",
+                    fingerprint: b"peer fingerprint",
+                    display_name: Some("peer"),
+                    verified: false,
+                    routes: Some(&routes),
+                    queues: Some(&queues),
+                    state: 0,
+                    profile: None,
+                },
+            )?;
+            put_relay(tx, 1, b"relay ref", None)?;
+            put_relay_pool(tx, 1, Some(&pool))?;
+            insert_invitation(tx, &[5; 16], b"record", 1)?;
+            put_invitation_retained(tx, &[5; 16], Some(&retained))
+        })?;
+        for (table, column, cond, plain) in [
+            ("contacts", "routes", "id = 1", &routes),
+            ("contacts", "queues", "id = 1", &queues),
+            ("relays", "pool", "id = 1", &pool),
+            (
+                "invitations",
+                "retained",
+                "ld_id = x'05050505050505050505050505050505'",
+                &retained,
+            ),
+        ] {
+            let raw: Vec<u8> = store.connection_kat().query_row(
+                &format!("SELECT {column} FROM {table} WHERE {cond}"),
+                [],
+                |r| r.get(0),
+            )?;
+            let site = format!("{table}.{column}");
+            assert_eq!(raw.len(), plain.len() + SEAL_OVERHEAD, "{site}");
+            assert!(!contains(&raw, plain), "{site}: plaintext inside");
+            assert!(
+                !contains(&raw, plain.get(..8).ok_or("prefix")?),
+                "{site}: plaintext prefix inside"
+            );
+        }
+        Ok(())
     }
 
     /// ST-12 (CS-3.3; ADR-053 item 5, Q139): after a populated profile ([`populate`]) the raw bytes of every secret column,

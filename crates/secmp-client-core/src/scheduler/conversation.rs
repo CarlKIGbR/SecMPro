@@ -153,6 +153,16 @@ struct Sent {
 /// The largest number of ids in one receipt: `2 + 16·n ≤ 1689` (spec §7.6).
 const RECEIPT_IDS_MAX: usize = 100;
 
+/// The ratchet state of a new session in its parts, as the session's rows hold them (CS-3.7): the accept transaction of an
+/// invitation writes them through the `sessions` functions of the store (B-3, F-M7). The only `RatchetState` call outside
+/// a conversation.
+///
+/// # Errors
+/// [`PersistError`] if the state does not serialise.
+pub fn initial_parts(state: &RatchetState) -> Result<RatchetParts, PersistError> {
+    state.to_parts().map_err(|_| PersistError)
+}
+
 /// One conversation (see the module documentation).
 pub struct Conversation<O: Outbox, P: Persist, S: EntropySource> {
     state: Option<RatchetState>,

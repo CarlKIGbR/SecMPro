@@ -27,7 +27,10 @@ pub mod outbox;
 pub mod persist;
 #[cfg(not(kani))]
 pub mod profile;
+pub mod retention;
 pub mod scheduler;
+#[cfg(not(kani))]
+pub mod sessions;
 #[cfg(not(kani))]
 pub mod settings;
 #[cfg(all(test, feature = "kat"))]

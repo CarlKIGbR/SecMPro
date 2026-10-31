@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! The invitations the user issued (spec §5, §6.5, §6.6, §9.4, §9.7): the sealed record of each, from issue to consumption
-//! or expiry.
+//! The invitations (spec §5, §6.5, §6.6, §9.4, §9.7): the inviter's side — issue, owner status, the fetch rounds of the
+//! invitation queue and the transactional accept — and the invitee's checks (§5.5).
 //!
 //! **The record (§5.2, Q147 (ii), IN-03).** `invitations.record` holds, sealed per record (ADR-053 item 5; `invitations`
 //! `K_t`, row key = `ld_id` as `len u8 ‖ bytes`), the 128-byte `InvitationRecord` encoding of `secmp-proto` — `ld_id`,
@@ -10,28 +10,73 @@
 //! is re-issued from it, never re-sealed).
 //!
 //! **No resident secret (Q173, IN-21).** A record is opened for one step — issue, owner status, one fetch round — and
-//! dropped (zeroizing) at its end; [`live_records_kat`] counts the opened records that are still alive.
+//! dropped (zeroizing) at its end; `live_records_kat` counts the opened records that are still alive. The prekeys a step
+//! needs are loaded from their sealed rows into a [`StagedPrekeys`] for that step only.
+//!
+//! **The queue pool (§10.6 (3), ADR-048 (m)).** An invitation is issued on one of the user's spare recv-queues, so that no
+//! `QUEUE_NEW` is needed at that moment; the spare queues' seeds are in `relays.pool` (sealed, Q151).
+//!
+//! **The fetch round (§6.5, RT-1, F-M7).** [`Invitations::process_round`] classifies the cells fetched from the invitation
+//! queue together with the (at most 24) it retained: a complete group is spent after one `accept`, the others are
+//! retained ([`crate::retention`], Q148) in the same store commit that decides the fetched cells, before the cells are
+//! acknowledged (Q149). The accept itself — the OPK delete, the record's consumption, the contact and the session — is one
+//! store transaction, written after `Responder::accept_classified` returned `Ok` over a [`StagedPrekeys`] that only
+//! staged the two deletions (C-12, R-26).
 
-#[cfg(test)]
-use secmp_crypto::Zeroizing;
-use secmp_proto::prekeys::{InvitationRecord, RECORD_LEN};
-use secmp_proto::wire::Id;
+use std::collections::BTreeMap;
+
+use secmp_crypto::{Ed25519SigningKey, Label, SecretBytes, Zeroizing};
+use secmp_proto::hx::{Accepted, HandshakeCells, Initiator, Responder};
+use secmp_proto::inv::{
+    self, InviteeAccepted, URI_PREFIX, base64url_decode, check_issue_bounds, invitation_uri,
+    parse_invitation_uri,
+};
+use secmp_proto::keys::{Ed25519Pk, HybridSig};
+use secmp_proto::link::ids::sid;
+use secmp_proto::prekeys::{InvitationRecord, OpkSecrets, PrekeyStore, RECORD_LEN, SpkGeneration};
+use secmp_proto::sizes::{CELL_LEN, HYBRID_SIG_LEN, LINK_BLOB_LEN};
+use secmp_proto::tr::{Entropy, RatchetState};
+use secmp_proto::wire::cell::{Cell, RelayQueue, RouteDescriptor};
+use secmp_proto::wire::inv::{
+    InvitationV1, LinkBlob, LinkDataV1, PrekeyBundle, Profile as WireProfile, RelayRef,
+};
+use secmp_proto::wire::{Id, Period};
+use secmp_proto::{Decode as _, Encode as _};
 use secmp_store::Store;
+use secmp_store::profile::{
+    INVITATION_CONSUMED, INVITATION_OPEN, KIND_OPK, KIND_SPK, delete_prekey, insert_invitation,
+    insert_prekey, put_invitation_record, put_invitation_retained, put_relay_pool,
+    set_invitation_status,
+};
 
-use crate::api::Error;
-use crate::scheduler::types::{QueueId, RelayId};
-
-/// The record trailer is `relay u32 ‖ queue u32 ‖ flags u8 ‖ blob_present u8`.
-#[cfg(test)]
-const TRAILER_LEN: usize = 4 + 4 + 1 + 1;
+use crate::api::{ContactId, Error, Event, InviteReject};
+use crate::clock::Clock;
+use crate::contacts::{self, NewContact};
+use crate::persist::SharedStore;
+use crate::profile::Profile;
+use crate::retention::{RETAIN_MAX, retain};
+use crate::scheduler::control::{OpSpec, When};
+use crate::scheduler::types::{ControlKind, QueueId, RelayId};
 
 /// Flag: the owner status said that the link data was consumed (§9.4); with no handshake before `expires` the user is told
 /// the invitation was used by someone else (§5.2).
 pub const FLAG_CONSUMED_SEEN: u8 = 1;
 
+/// The trailer after the record: `relay u32 ‖ queue u32 ‖ flags u8 ‖ blob_present u8`.
+const TRAILER_LEN: usize = 4 + 4 + 1 + 1;
+
+/// The offset of the flags byte in the plaintext of a stored record.
+const FLAGS_AT: usize = RECORD_LEN + 4 + 4;
+
+/// The most cells a fetch round holds in all: what one `FETCH` returns (`QUEUE_CAPACITY`, `docs/03:168`) and the cells
+/// retained from earlier rounds.
+const ROUND_CELLS_MAX: usize = 128 + RETAIN_MAX;
+
 #[cfg(feature = "kat")]
 std::thread_local! {
     static LIVE_RECORDS: core::cell::Cell<i64> = const { core::cell::Cell::new(0) };
+    static LIVE_PEAK: core::cell::Cell<i64> = const { core::cell::Cell::new(0) };
+    static ACCEPT_CALLS: core::cell::Cell<u64> = const { core::cell::Cell::new(0) };
 }
 
 /// The number of opened invitation records alive on this thread (feature `kat`; IN-21, the ST-19 pattern): it is 0 outside
@@ -42,13 +87,37 @@ pub fn live_records_kat() -> i64 {
     LIVE_RECORDS.with(core::cell::Cell::get)
 }
 
+/// The most opened records alive at once on this thread since [`reset_live_peak_kat`] (feature `kat`; IN-21: during a step
+/// the record is in memory, after it none is).
+#[cfg(feature = "kat")]
+#[must_use]
+pub fn live_records_peak_kat() -> i64 {
+    LIVE_PEAK.with(core::cell::Cell::get)
+}
+
+/// Reset [`live_records_peak_kat`] to the number alive now (feature `kat`).
+#[cfg(feature = "kat")]
+pub fn reset_live_peak_kat() {
+    LIVE_PEAK.with(|p| p.set(LIVE_RECORDS.with(core::cell::Cell::get)));
+}
+
+/// How many times this thread called `Responder::accept_classified` (feature `kat`; IN-11: only offered records reach it).
+#[cfg(feature = "kat")]
+#[must_use]
+pub fn accept_calls_kat() -> u64 {
+    ACCEPT_CALLS.with(core::cell::Cell::get)
+}
+
 /// Counts an opened record while it lives (feature `kat`; a zero-sized no-op otherwise).
 struct LiveGuard;
 
 impl LiveGuard {
     fn new() -> Self {
         #[cfg(feature = "kat")]
-        LIVE_RECORDS.with(|c| c.set(c.get().saturating_add(1)));
+        LIVE_RECORDS.with(|c| {
+            c.set(c.get().saturating_add(1));
+            LIVE_PEAK.with(|p| p.set(p.get().max(c.get())));
+        });
         Self
     }
 }
@@ -66,18 +135,30 @@ pub(crate) struct Stored {
     pub(crate) relay: RelayId,
     pub(crate) queue: QueueId,
     pub(crate) flags: u8,
+    /// The sealed link data `LINK_PUT` sent, kept byte for byte (§9.7 (1)).
+    pub(crate) blob: Option<Zeroizing<Vec<u8>>>,
 }
 
 impl Stored {
-    /// The plaintext that is sealed: the record and the trailer (the link-data blob follows from B-2, IN-19).
-    #[cfg(test)]
+    /// The plaintext that is sealed: the record, the trailer, the blob if any.
     pub(crate) fn encode(&self) -> Zeroizing<Vec<u8>> {
-        let mut v = Zeroizing::new(Vec::with_capacity(RECORD_LEN.saturating_add(TRAILER_LEN)));
+        let blob_len = self.blob.as_ref().map_or(0, |b| b.len());
+        let mut v = Zeroizing::new(Vec::with_capacity(
+            RECORD_LEN
+                .saturating_add(TRAILER_LEN)
+                .saturating_add(blob_len),
+        ));
         v.extend_from_slice(&self.record.to_bytes());
         v.extend_from_slice(&self.relay.0.to_be_bytes());
         v.extend_from_slice(&self.queue.0.to_be_bytes());
         v.push(self.flags);
-        v.push(0);
+        match &self.blob {
+            Some(b) => {
+                v.push(1);
+                v.extend_from_slice(b);
+            }
+            None => v.push(0),
+        }
         v
     }
 
@@ -94,16 +175,18 @@ impl Stored {
         let relay = RelayId(c.u32()?);
         let queue = QueueId(c.u32()?);
         let flags = c.u8()?;
-        // no blob is stored yet (it is, from B-2): a record that says so is not one this build wrote
-        if c.u8()? != 0 {
-            return Err(Error::Unavailable);
-        }
+        let blob = match c.u8()? {
+            0 => None,
+            1 => Some(Zeroizing::new(c.take(LINK_BLOB_LEN)?.to_vec())),
+            _ => return Err(Error::Unavailable),
+        };
         c.finish()?;
         Ok(Self {
             record,
             relay,
             queue,
             flags,
+            blob,
         })
     }
 }
@@ -133,6 +216,27 @@ pub(crate) fn load(store: &Store, ld_id: &Id) -> Result<Option<Loaded>, Error> {
     }))
 }
 
+/// The `ld_id` of a row.
+fn ld_id_of(bytes: &[u8]) -> Result<Id, Error> {
+    bytes.try_into().map_err(|_| Error::Unavailable)
+}
+
+/// The ids of the one-time prekeys that an open invitation references (each record is opened and dropped).
+///
+/// # Errors
+/// [`Error::Unavailable`] if a record does not open.
+pub(crate) fn referenced_opks(store: &Store) -> Result<Vec<u32>, Error> {
+    let mut ids = Vec::new();
+    for row in store.invitations()? {
+        if row.status != INVITATION_OPEN {
+            continue;
+        }
+        let loaded = load(store, &ld_id_of(&row.ld_id)?)?.ok_or(Error::Unavailable)?;
+        ids.push(loaded.stored.record.opk_id);
+    }
+    Ok(ids)
+}
+
 /// A cursor over bytes of this crate's own persistence formats: every read is bounds-checked, `finish` refuses a
 /// trailing byte.
 pub(crate) struct Cursor<'a>(&'a [u8]);
@@ -160,6 +264,14 @@ impl<'a> Cursor<'a> {
         Ok(u32::from_be_bytes(self.array()?))
     }
 
+    pub(crate) fn u64(&mut self) -> Result<u64, Error> {
+        Ok(u64::from_be_bytes(self.array()?))
+    }
+
+    pub(crate) fn seed(&mut self) -> Result<SecretBytes<32>, Error> {
+        Ok(SecretBytes::from_slice(self.take(32)?)?)
+    }
+
     pub(crate) const fn finish(&self) -> Result<(), Error> {
         if self.0.is_empty() {
             Ok(())
@@ -168,3 +280,966 @@ impl<'a> Cursor<'a> {
         }
     }
 }
+
+/// A spare recv-queue of the pool: the seeds of its recipient key and of its sender key (§9.1, §10.6 (3)).
+pub struct PoolQueue {
+    /// The scheduler's id of the queue.
+    pub queue: QueueId,
+    /// The Ed25519 seed of the recipient key.
+    pub recv_seed: SecretBytes<32>,
+    /// The Ed25519 seed of the sender key.
+    pub send_seed: SecretBytes<32>,
+}
+
+/// The pool of one relay as `relays.pool` holds it: `next u32 ‖ count u8 ‖ {queue u32 ‖ recv_seed ‖ send_seed} × count`.
+struct PoolBlob {
+    next: u32,
+    queues: Vec<PoolQueue>,
+}
+
+impl PoolBlob {
+    const fn empty() -> Self {
+        Self {
+            next: 1,
+            queues: Vec::new(),
+        }
+    }
+
+    fn encode(&self) -> Result<Zeroizing<Vec<u8>>, Error> {
+        let mut v = Zeroizing::new(Vec::with_capacity(
+            5_usize.saturating_add(self.queues.len().saturating_mul(68)),
+        ));
+        v.extend_from_slice(&self.next.to_be_bytes());
+        v.push(u8::try_from(self.queues.len()).map_err(|_| Error::Unavailable)?);
+        for q in &self.queues {
+            v.extend_from_slice(&q.queue.0.to_be_bytes());
+            v.extend_from_slice(q.recv_seed.expose_secret());
+            v.extend_from_slice(q.send_seed.expose_secret());
+        }
+        Ok(v)
+    }
+
+    fn decode(bytes: &[u8]) -> Result<Self, Error> {
+        let mut c = Cursor::new(bytes);
+        let next = c.u32()?;
+        let count = c.u8()?;
+        let mut queues = Vec::with_capacity(usize::from(count));
+        for _ in 0..count {
+            queues.push(PoolQueue {
+                queue: QueueId(c.u32()?),
+                recv_seed: c.seed()?,
+                send_seed: c.seed()?,
+            });
+        }
+        c.finish()?;
+        Ok(Self { next, queues })
+    }
+
+    fn read(store: &Store, relay: RelayId) -> Result<Self, Error> {
+        store
+            .relay_pool(i64::from(relay.0))?
+            .map_or_else(|| Ok(Self::empty()), |b| Self::decode(&b))
+    }
+}
+
+/// The spare recv-queues of the user's relays (sealed, `relays.pool`): the invitations and the invitee's reply routes
+/// draw their queues from here, so that creating or accepting an invitation needs no `QUEUE_NEW` at that moment.
+pub struct SparePool {
+    store: SharedStore,
+}
+
+impl SparePool {
+    /// The pools in `store`; the relay rows must exist (`secmp_store::profile::put_relay`).
+    #[must_use]
+    pub const fn new(store: SharedStore) -> Self {
+        Self { store }
+    }
+
+    fn lock(&self) -> Result<std::sync::MutexGuard<'_, Store>, Error> {
+        self.store.lock().map_err(|_| Error::Unavailable)
+    }
+
+    /// Top the pool of `relay` up to `target` spare queues with seeds from `entropy` (the recipient seed, then the sender
+    /// seed, of each queue); returns how many were added. The queues' creation on the relay is the scheduler's.
+    ///
+    /// # Errors
+    /// [`Error::Unavailable`] without randomness, for an unknown relay or if the store cannot be written.
+    pub fn fill(
+        &self,
+        relay: RelayId,
+        target: usize,
+        entropy: &mut impl Entropy,
+    ) -> Result<usize, Error> {
+        let mut store = self.lock()?;
+        let mut pool = PoolBlob::read(&store, relay)?;
+        let mut added = 0_usize;
+        while pool.queues.len() < target {
+            let recv_seed = entropy.secret::<32>()?;
+            let send_seed = entropy.secret::<32>()?;
+            pool.queues.push(PoolQueue {
+                queue: QueueId(pool.next),
+                recv_seed,
+                send_seed,
+            });
+            pool.next = pool.next.checked_add(1).ok_or(Error::Unavailable)?;
+            added = added.saturating_add(1);
+        }
+        if added > 0 {
+            let blob = pool.encode()?;
+            store.txn(|tx| put_relay_pool(tx, i64::from(relay.0), Some(&blob)))?;
+        }
+        Ok(added)
+    }
+
+    /// The spare queues of `relay`.
+    ///
+    /// # Errors
+    /// [`Error::Unavailable`] if the store cannot be read.
+    pub fn len(&self, relay: RelayId) -> Result<usize, Error> {
+        let store = self.lock()?;
+        Ok(PoolBlob::read(&store, relay)?.queues.len())
+    }
+
+    /// Whether `relay` has no spare queue.
+    ///
+    /// # Errors
+    /// [`Error::Unavailable`] if the store cannot be read.
+    pub fn is_empty(&self, relay: RelayId) -> Result<bool, Error> {
+        Ok(self.len(relay)? == 0)
+    }
+
+    /// Hand out the oldest spare queue of `relay` and write the pool without it, in one store transaction.
+    ///
+    /// # Errors
+    /// [`Error::Unavailable`] if the store cannot be read or written (the queue stays in the pool).
+    pub fn take(&self, relay: RelayId) -> Result<Option<PoolQueue>, Error> {
+        let mut store = self.lock()?;
+        let Some((queue, rest)) = take_oldest(&store, relay)? else {
+            return Ok(None);
+        };
+        store.txn(|tx| put_relay_pool(tx, i64::from(relay.0), Some(&rest)))?;
+        Ok(Some(queue))
+    }
+}
+
+/// A spare queue taken from a pool, with the encoding of the pool that is left.
+type Taken = (PoolQueue, Zeroizing<Vec<u8>>);
+
+/// The oldest spare queue of `relay` and the encoding of the pool without it (nothing is written).
+fn take_oldest(store: &Store, relay: RelayId) -> Result<Option<Taken>, Error> {
+    let mut pool = PoolBlob::read(store, relay)?;
+    if pool.queues.is_empty() {
+        return Ok(None);
+    }
+    let queue = pool.queues.remove(0);
+    let rest = pool.encode()?;
+    Ok(Some((queue, rest)))
+}
+
+/// The scheduler's id of the link data of `ld_id`: its first four bytes (`ControlKind::LinkPut(n)`); a collision with
+/// another invitation is refused at issue (2⁻³² per pair).
+fn link_data_n(ld_id: &Id) -> u32 {
+    let [a, b, c, d, ..] = *ld_id;
+    u32::from_be_bytes([a, b, c, d])
+}
+
+/// The Ed25519 public key of a 32-byte seed.
+fn ed25519_pk_of(seed: &SecretBytes<32>) -> Result<Ed25519Pk, Error> {
+    let key = Ed25519SigningKey::from_seed(seed.expose_secret())?;
+    Ok(Ed25519Pk::from_bytes(key.verifying_key().as_bytes())?)
+}
+
+/// What to issue.
+pub struct IssueRequest {
+    /// The relay (a row of `relays`) whose spare queue becomes the invitation queue.
+    pub relay: RelayId,
+    /// The invitation queue's period.
+    pub inv_period: Period,
+    /// The inviter's profile for the link data.
+    pub profile: WireProfile,
+    /// `expires` of the invitation (Unix seconds, at most 30 days on).
+    pub expires: u64,
+}
+
+/// An issued invitation: what goes to the invitee out of band and what the host does next.
+pub struct Issuance {
+    /// The invitation (a secret).
+    pub invitation: InvitationV1,
+    /// Its URI (a secret): `secmp://i/` and 322 characters.
+    pub uri: Zeroizing<String>,
+    /// The sealed link data for `LINK_PUT`.
+    pub blob: LinkBlob,
+    /// The control operations to queue: the `LINK_PUT`, at once, on a one-shot link (a user waits, §10.6 (2)); never a
+    /// `QUEUE_NEW`.
+    pub ops: Vec<OpSpec>,
+}
+
+/// The arguments of a `LINK_PUT` of an issued invitation (§9.3), read from its sealed record.
+pub struct LinkPutArgs {
+    /// The link-data id.
+    pub ld_id: Id,
+    /// The public key of the link-data owner key.
+    pub owner_pk: Ed25519Pk,
+    /// The sealed link data, byte for byte as issued (12 360 bytes).
+    pub blob: Zeroizing<Vec<u8>>,
+    /// `expires` of the invitation (Unix seconds).
+    pub expires: u64,
+}
+
+/// The answer of an owner-status `LINK_GET` (§9.4).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OwnerStatus {
+    /// The relay holds the link data.
+    pub present: bool,
+    /// The link data was consumed.
+    pub consumed: bool,
+}
+
+/// What one fetch round decided (see [`Invitations::process_round`]).
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Round {
+    /// The cell to acknowledge on the invitation queue: everything up to it is decided and durable. `None` if no cell was
+    /// decided.
+    pub ack_through: Option<u64>,
+    /// The contact of the accepted handshake.
+    pub accepted: Option<ContactId>,
+    /// Events for the user.
+    pub events: Vec<Event>,
+    /// Control operations to queue (the retirement of an expired invitation's queue).
+    pub ops: Vec<OpSpec>,
+}
+
+/// What [`Invitations::maintain`] did.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Maintained {
+    /// Events for the user.
+    pub events: Vec<Event>,
+    /// `QUEUE_DEL` of the queue of every invitation that expired unused, at `U[1 min, 60 min]` (§10.6 (4), Q163: after an
+    /// empty `FETCH`, which the host's queue runs before the deletion).
+    pub ops: Vec<OpSpec>,
+}
+
+/// The inviter's invitations (see the module documentation).
+pub struct Invitations {
+    profile: Profile,
+}
+
+impl Invitations {
+    /// The invitations of `profile`.
+    #[must_use]
+    pub const fn new(profile: Profile) -> Self {
+        Self { profile }
+    }
+
+    fn lock(&self) -> Result<std::sync::MutexGuard<'_, Store>, Error> {
+        self.profile.lock_store()
+    }
+
+    /// Issue an invitation (§5.2, §5.4, §6.3): rotate the signed prekey if due, take an unreferenced one-time prekey (or
+    /// draw one), sign the bundle, draw `ld_id`, `link_key`, a discarded 16 bytes, the blob nonce and the owner seed
+    /// (the draws and their order of `MemoryPrekeyStore::issue_invitation_on`), seal the link data, take a spare queue of
+    /// the relay as the invitation queue and record the invitation — all in one store transaction. The queue's seeds are
+    /// the pool's, drawn before and independent of any identity key (IN-02, `docs/03:597`).
+    ///
+    /// # Errors
+    /// [`Error::Unsupported`] for an `expires` outside §5.2/§6.3; [`Error::Unavailable`] if the relay has no spare
+    /// queue, randomness or the store is unavailable (nothing is recorded).
+    pub fn issue(
+        &self,
+        req: &IssueRequest,
+        clock: &impl Clock,
+        entropy: &mut impl Entropy,
+    ) -> Result<Issuance, Error> {
+        let now = clock.unix_secs();
+        // §6.3: `spk_expiry` ≥ `expires`; the signed prekey is retained until the invitation expires (§6.1)
+        check_issue_bounds(now, req.expires, req.expires).map_err(|_| Error::Unsupported)?;
+        let spk_id = self.profile.rotate_if_due(clock, entropy)?;
+        let (identity, signer) = self.profile.identity_parts()?;
+        let issuance = {
+            let mut store = self.lock()?;
+            let keys = Keys {
+                identity: &identity,
+                signer: &signer,
+                spk_id,
+            };
+            issue_in(&mut store, &keys, req, now, entropy)?
+        };
+        // keep the pool of unreferenced one-time prekeys full (the draws come after the invitation's)
+        self.profile.fill_opks(1, entropy)?;
+        Ok(issuance)
+    }
+
+    /// The arguments of the `LINK_PUT` of link data `n` (`ControlKind::LinkPut(n)`), from the sealed record: the same bytes
+    /// whenever it is asked (§9.7 (1)).
+    ///
+    /// # Errors
+    /// [`Error::Unavailable`] if no invitation has link data `n`, or its record does not open.
+    pub fn link_put_args(&self, n: u32) -> Result<LinkPutArgs, Error> {
+        let store = self.lock()?;
+        for row in store.invitations()? {
+            let ld_id = ld_id_of(&row.ld_id)?;
+            if link_data_n(&ld_id) != n {
+                continue;
+            }
+            let loaded = load(&store, &ld_id)?.ok_or(Error::Unavailable)?;
+            let blob = loaded.stored.blob.clone().ok_or(Error::Unavailable)?;
+            return Ok(LinkPutArgs {
+                ld_id,
+                owner_pk: loaded.stored.record.owner_pk()?,
+                blob,
+                expires: loaded.stored.record.expires,
+            });
+        }
+        Err(Error::Unavailable)
+    }
+
+    /// The owner status of the link data of `ld_id` (§9.4, §9.7 (1)): `present = 0, consumed = 0` before `expires` means the
+    /// relay restarted — the identical `LINK_PUT` is queued again, delayed `U[1 min, 60 min]` (no user waits, §10.6 (2)); a
+    /// consumed link data is noted, and with no handshake before `expires` the invitation is reported as used by someone
+    /// else ([`Invitations::maintain`]).
+    ///
+    /// # Errors
+    /// [`Error::Unavailable`] if the invitation is unknown or the store cannot be written.
+    pub fn on_owner_status(
+        &self,
+        ld_id: &Id,
+        status: OwnerStatus,
+        clock: &impl Clock,
+    ) -> Result<Vec<OpSpec>, Error> {
+        let now = clock.unix_secs();
+        let mut store = self.lock()?;
+        let (expires, relay) = {
+            let loaded = load(&store, ld_id)?.ok_or(Error::Unavailable)?;
+            (loaded.stored.record.expires, loaded.stored.relay)
+        };
+        let open = store
+            .invitations()?
+            .iter()
+            .any(|r| r.ld_id == *ld_id && r.status == INVITATION_OPEN);
+        if !open || expires <= now {
+            return Ok(Vec::new());
+        }
+        if status.consumed {
+            let mut plain = store.invitation_record(ld_id)?.ok_or(Error::Unavailable)?;
+            *plain.get_mut(FLAGS_AT).ok_or(Error::Unavailable)? |= FLAG_CONSUMED_SEEN;
+            store.txn(|tx| put_invitation_record(tx, ld_id, &plain))?;
+            return Ok(Vec::new());
+        }
+        if status.present {
+            return Ok(Vec::new());
+        }
+        let n = link_data_n(ld_id);
+        Ok(vec![OpSpec {
+            kind: ControlKind::LinkPut(n),
+            relay,
+            related: u64::from(n),
+            when: When::Delayed,
+        }])
+    }
+
+    /// Retire what has expired (§6.1, §5.2): the profile's retirement ([`Profile::retire`]), the `QUEUE_DEL` of the queue
+    /// of every invitation that expired unused (a consumed invitation's queue is retired with its session), and
+    /// [`Event::InvitationUsedElsewhere`] once for an invitation whose link data was consumed and that no handshake
+    /// answered.
+    ///
+    /// # Errors
+    /// [`Error::Unavailable`] if the store cannot be read or written.
+    pub fn maintain(&self, clock: &impl Clock) -> Result<Maintained, Error> {
+        let mut out = Maintained::default();
+        for r in self.profile.retire(clock)? {
+            if r.used_elsewhere {
+                out.events.push(Event::InvitationUsedElsewhere);
+            }
+            if !r.consumed {
+                out.ops.push(OpSpec {
+                    kind: ControlKind::QueueDel(r.queue),
+                    relay: r.relay,
+                    related: u64::from(link_data_n(&r.ld_id)),
+                    when: When::Delayed,
+                });
+            }
+        }
+        Ok(out)
+    }
+
+    /// The ids of the cells that invitation `ld_id` retains (ascending).
+    ///
+    /// # Errors
+    /// [`Error::Unavailable`] if the store cannot be read.
+    pub fn retained_ids(&self, ld_id: &Id) -> Result<Vec<u64>, Error> {
+        let store = self.lock()?;
+        Ok(decode_retained(
+            store
+                .invitation_retained(ld_id)?
+                .as_ref()
+                .map(|z| z.as_slice()),
+        )?
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect())
+    }
+}
+
+/// The keys of one issue step.
+struct Keys<'a> {
+    identity: &'a secmp_proto::prekeys::IdentityKeys,
+    signer: &'a secmp_crypto::HybridSigningKey,
+    spk_id: u32,
+}
+
+/// [`Invitations::issue`] under the store lock.
+fn issue_in(
+    store: &mut Store,
+    keys: &Keys<'_>,
+    req: &IssueRequest,
+    now: u64,
+    entropy: &mut impl Entropy,
+) -> Result<Issuance, Error> {
+    let spk = SpkGeneration::from_seeds(
+        &store
+            .prekey_secret(KIND_SPK, i64::from(keys.spk_id))?
+            .ok_or(Error::Unavailable)?,
+    )?;
+    let (opk, opk_is_new) = unreferenced_opk(store, entropy)?;
+    let relay_ref = RelayRef::decode(
+        &store
+            .relay_ref(i64::from(req.relay.0))?
+            .ok_or(Error::Unavailable)?,
+    )?;
+    let (queue, pool_rest) = take_oldest(store, req.relay)?.ok_or(Error::Unavailable)?;
+
+    // §6.3, §5.2: the signed bundle, then the draws of `issue_invitation_on` in their order
+    let bundle = signed_bundle(keys, &spk, &opk, req.expires, entropy)?;
+    let ld_id: Id = *entropy.secret::<16>()?.expose_secret();
+    let link_key = entropy.secret::<32>()?;
+    let _discarded = entropy.secret::<16>()?;
+    let nonce = entropy.nonce()?;
+    let owner_seed = entropy.secret::<32>()?;
+    let inv_sid = sid(
+        &ed25519_pk_of(&queue.recv_seed)?,
+        &ed25519_pk_of(&queue.send_seed)?,
+    )?;
+
+    let link_data = LinkDataV1 {
+        inviter_iks: keys.identity.public().clone(),
+        bundle,
+        profile: req.profile.clone(),
+        created: now,
+    };
+    let blob = inv::seal_blob(&ld_id, &link_key, nonce, &link_data)?;
+    let n = link_data_n(&ld_id);
+    for row in store.invitations()? {
+        if link_data_n(&ld_id_of(&row.ld_id)?) == n {
+            return Err(Error::Unavailable);
+        }
+    }
+    let stored = Stored {
+        record: InvitationRecord {
+            ld_id,
+            link_key: SecretBytes::from_slice(link_key.expose_secret())?,
+            owner_seed,
+            invq_recv_seed: queue.recv_seed,
+            spk_id: keys.spk_id,
+            opk_id: opk.id(),
+            expires: req.expires,
+        },
+        relay: req.relay,
+        queue: queue.queue,
+        flags: 0,
+        blob: Some(blob.encode()?),
+    };
+    let invitation = InvitationV1 {
+        relay: relay_ref,
+        ld_id,
+        link_key,
+        inviter_fp: keys.identity.fingerprint()?,
+        inv_sid,
+        inv_send_seed: queue.send_seed,
+        inv_period_s: req.inv_period,
+        expires: req.expires,
+    };
+    let plain = stored.encode();
+    let expires_ms = req.expires.checked_mul(1000).ok_or(Error::Unavailable)?;
+    store.txn(|tx| {
+        if opk_is_new {
+            insert_prekey(tx, KIND_OPK, i64::from(opk.id()), &opk.to_seeds(), None)?;
+        }
+        put_relay_pool(tx, i64::from(req.relay.0), Some(&pool_rest))?;
+        insert_invitation(tx, &ld_id, &plain, expires_ms)
+    })?;
+    let uri = invitation_uri(&invitation)?;
+    Ok(Issuance {
+        invitation,
+        uri,
+        blob,
+        ops: vec![OpSpec {
+            kind: ControlKind::LinkPut(n),
+            relay: req.relay,
+            related: u64::from(n),
+            when: When::Prompt,
+        }],
+    })
+}
+
+/// The lowest-numbered one-time prekey that no open invitation references; if there is none, a fresh one (drawn now, to be
+/// inserted by the caller's transaction), numbered after the largest. The flag says which.
+fn unreferenced_opk(
+    store: &Store,
+    entropy: &mut impl Entropy,
+) -> Result<(OpkSecrets, bool), Error> {
+    let referenced = referenced_opks(store)?;
+    let rows = store.prekeys(KIND_OPK)?;
+    for row in &rows {
+        if referenced.iter().any(|o| i64::from(*o) == row.id) {
+            continue;
+        }
+        let seeds = store
+            .prekey_secret(KIND_OPK, row.id)?
+            .ok_or(Error::Unavailable)?;
+        return Ok((OpkSecrets::from_seeds(&seeds)?, false));
+    }
+    let next = rows.last().map_or(Ok(1_u32), |r| {
+        u32::try_from(r.id)
+            .map_err(|_| Error::Unavailable)?
+            .checked_add(1)
+            .ok_or(Error::Unavailable)
+    })?;
+    Ok((OpkSecrets::generate(next, entropy)?, true))
+}
+
+/// The signed prekey bundle of `spk` and `opk` (§6.3): `sig` = HybridSign(`IK_sig`, `"SecMP-HX/1 bundle"`, the encoded
+/// fields before `sig` ‖ `IK_dh`), hedged with randomness from `entropy`. The bundle is first built with a placeholder
+/// signature (the Ed25519 base point as `R`, `S` = 0: a valid encoding) that the signed fields do not cover.
+fn signed_bundle(
+    keys: &Keys<'_>,
+    spk: &SpkGeneration,
+    opk: &OpkSecrets,
+    spk_expiry: u64,
+    entropy: &mut impl Entropy,
+) -> Result<PrekeyBundle, Error> {
+    let mut placeholder = [0_u8; HYBRID_SIG_LEN];
+    for (i, b) in placeholder.iter_mut().take(32).enumerate() {
+        *b = if i == 0 { 0x58 } else { 0x66 };
+    }
+    let unsigned = PrekeyBundle {
+        spk_id: spk.id(),
+        spk_dh: spk.dh_public()?,
+        spk_kem: spk.kem_public()?,
+        rpk_kem: spk.rpk_public()?,
+        spk_expiry,
+        opk_id: opk.id(),
+        opk_dh: opk.dh_public()?,
+        opk_kem: opk.kem_public()?,
+        sig: HybridSig::from_bytes(&placeholder)?,
+    };
+    let message = inv::bundle_signed_message(&unsigned, keys.identity.public())?;
+    let sig = entropy.sign(keys.signer, Label::HxBundle, &message)?;
+    Ok(PrekeyBundle {
+        sig: HybridSig::from_bytes(sig.as_bytes())?,
+        ..unsigned
+    })
+}
+
+/// The cells of `invitations.retained`: `count u8 ‖ {cell_id u64 ‖ cell [4096]} × count`, ascending by id.
+fn decode_retained(bytes: Option<&[u8]>) -> Result<Vec<(u64, Cell)>, Error> {
+    let Some(bytes) = bytes else {
+        return Ok(Vec::new());
+    };
+    let mut c = Cursor::new(bytes);
+    let count = usize::from(c.u8()?);
+    if count > RETAIN_MAX {
+        return Err(Error::Unavailable);
+    }
+    let mut cells = Vec::with_capacity(count);
+    for _ in 0..count {
+        let id = c.u64()?;
+        cells.push((id, Cell::from_bytes(c.take(CELL_LEN)?)?));
+    }
+    c.finish()?;
+    Ok(cells)
+}
+
+fn encode_retained(cells: &[(u64, &Cell)]) -> Result<Zeroizing<Vec<u8>>, Error> {
+    let mut v = Zeroizing::new(Vec::with_capacity(
+        1_usize.saturating_add(cells.len().saturating_mul(CELL_LEN.saturating_add(8))),
+    ));
+    v.push(u8::try_from(cells.len()).map_err(|_| Error::Unavailable)?);
+    for (id, cell) in cells {
+        v.extend_from_slice(&id.to_be_bytes());
+        v.extend_from_slice(cell.as_bytes());
+    }
+    Ok(v)
+}
+
+/// The prekeys of one accept step, loaded from their sealed rows for the step and dropped after it: a [`PrekeyStore`] whose
+/// `delete_opk` and `commit_accept` validate and only **stage** (F-M7, C-12). The caller writes the deletions — with the
+/// record's consumption, the contact and the session — in one store transaction after `accept` returned `Ok`; if that
+/// transaction fails, this store is dropped and nothing was changed (R-26).
+pub struct StagedPrekeys {
+    spk: Option<SpkGeneration>,
+    opk: Option<OpkSecrets>,
+    ld_id: Id,
+    opk_id: u32,
+    staged: bool,
+}
+
+impl StagedPrekeys {
+    /// The prekeys that `record` names; one that is missing (retired) makes every handshake on it fail.
+    fn load(store: &Store, record: &InvitationRecord) -> Result<Self, Error> {
+        let spk = store
+            .prekey_secret(KIND_SPK, i64::from(record.spk_id))?
+            .map(|s| SpkGeneration::from_seeds(&s))
+            .transpose()?;
+        let opk = store
+            .prekey_secret(KIND_OPK, i64::from(record.opk_id))?
+            .map(|s| OpkSecrets::from_seeds(&s))
+            .transpose()?;
+        Ok(Self {
+            spk,
+            opk,
+            ld_id: record.ld_id,
+            opk_id: record.opk_id,
+            staged: false,
+        })
+    }
+
+    /// Whether `commit_accept` has staged the deletions.
+    #[must_use]
+    pub const fn staged(&self) -> bool {
+        self.staged
+    }
+}
+
+impl PrekeyStore for StagedPrekeys {
+    fn spk(&self, spk_id: u32) -> Option<&SpkGeneration> {
+        self.spk.as_ref().filter(|s| s.id() == spk_id)
+    }
+
+    fn opk(&self, opk_id: u32) -> Option<&OpkSecrets> {
+        if self.staged {
+            return None;
+        }
+        self.opk.as_ref().filter(|o| o.id() == opk_id)
+    }
+
+    fn delete_opk(&mut self, opk_id: u32) -> secmp_proto::Result<()> {
+        if self.opk(opk_id).is_none() {
+            return Err(secmp_proto::Error::Rejected);
+        }
+        self.staged = true;
+        Ok(())
+    }
+
+    fn commit_accept(&mut self, opk_id: u32, ld_id: &Id) -> secmp_proto::Result<()> {
+        // both must exist, and the record must name exactly this OPK, before anything is staged (M4 review R-64)
+        if *ld_id != self.ld_id || opk_id != self.opk_id || self.opk(opk_id).is_none() {
+            return Err(secmp_proto::Error::Rejected);
+        }
+        self.staged = true;
+        Ok(())
+    }
+}
+
+impl Invitations {
+    /// One fetch round of the invitation queue of `ld_id` (§6.5, §6.6, RT-1, F-M7): `fetched` are the cells `FETCH` returned,
+    /// with their `cell_id`s.
+    ///
+    /// Only a record that is **offered** — open and unexpired — reaches `accept` (R-69, ADR-044 (d)); for an expired one
+    /// the invitation is retired instead ([`Invitations::maintain`]: `QUEUE_DEL` in `Round::ops`). The fetched cells and
+    /// the cells retained from earlier rounds are classified by `Responder::accept_classified`: a complete group is spent
+    /// after one call, accepted or not; the others are retained, at most the newest 24 ([`retain`], Q148).
+    ///
+    /// The decision is one store commit — on an accept: the OPK row delete, the record's consumption, the contact, the
+    /// session (the `Accepted.state` in its parts) and the cleared retained cells; otherwise the retained cells — and only
+    /// after it is durable is `Round::ack_through` set (persist-before-ack, CLAUDE.md §1.7). If the commit fails the call is
+    /// [`Error::Unavailable`], nothing was changed and nothing is acknowledged: the same cells come again.
+    ///
+    /// # Errors
+    /// [`Error::Unavailable`] if the record, the prekeys or the store are unavailable, or `accept` could not be made
+    /// durable.
+    pub fn process_round(
+        &self,
+        ld_id: &Id,
+        fetched: &[(u64, Cell)],
+        clock: &impl Clock,
+        entropy: &mut impl Entropy,
+    ) -> Result<Round, Error> {
+        let now = clock.unix_secs();
+        let fetched_max = fetched.iter().map(|(id, _)| *id).max();
+        {
+            let store = self.lock()?;
+            let row = store
+                .invitations()?
+                .into_iter()
+                .find(|r| r.ld_id == *ld_id)
+                .ok_or(Error::Unavailable)?;
+            if row.status != INVITATION_OPEN {
+                // consumed: nothing more is decided on this queue; the cells are acknowledged
+                return Ok(Round {
+                    ack_through: fetched_max,
+                    ..Round::default()
+                });
+            }
+            if row.expires_ms / 1000 <= now {
+                drop(store);
+                let m = self.maintain(clock)?;
+                return Ok(Round {
+                    events: m.events,
+                    ops: m.ops,
+                    ..Round::default()
+                });
+            }
+        }
+        self.decide(ld_id, fetched, fetched_max, entropy)
+    }
+
+    /// The classification and the commit of one round of an offered record.
+    fn decide(
+        &self,
+        ld_id: &Id,
+        fetched: &[(u64, Cell)],
+        fetched_max: Option<u64>,
+        entropy: &mut impl Entropy,
+    ) -> Result<Round, Error> {
+        let (identity, _) = self.profile.identity_parts()?;
+        let mut store = self.lock()?;
+        let loaded = load(&store, ld_id)?.ok_or(Error::Unavailable)?;
+        let mut union: BTreeMap<u64, Cell> = BTreeMap::new();
+        let retained = decode_retained(
+            store
+                .invitation_retained(ld_id)?
+                .as_ref()
+                .map(|z| z.as_slice()),
+        )?;
+        let retained_ids: Vec<u64> = retained.iter().map(|(id, _)| *id).collect();
+        union.extend(retained);
+        for (id, cell) in fetched {
+            union.insert(*id, Cell::from_bytes(cell.as_bytes())?);
+        }
+        if union.len() > ROUND_CELLS_MAX {
+            return Err(Error::Unavailable);
+        }
+        let (ids, cells): (Vec<u64>, Vec<Cell>) = union.into_iter().unzip();
+        let fetched_ids: Vec<u64> = fetched.iter().map(|(id, _)| *id).collect();
+
+        let mut staged = StagedPrekeys::load(&store, &loaded.stored.record)?;
+        #[cfg(feature = "kat")]
+        ACCEPT_CALLS.with(|c| c.set(c.get().saturating_add(1)));
+        let (result, spent) = Responder::accept_classified(
+            &cells,
+            &loaded.stored.record,
+            &mut staged,
+            &identity.responder_keys(),
+            entropy,
+        );
+        let spent_ids: Vec<u64> = spent
+            .indices()
+            .iter()
+            .filter_map(|i| ids.get(*i).copied())
+            .collect();
+        match result {
+            // nothing was committed: the same cells are fetched again, nothing is spent or acknowledged (VD2-7)
+            Err(secmp_proto::Error::Unavailable) => Err(Error::Unavailable),
+            Err(_) => {
+                let mut keep = [0_u64; RETAIN_MAX];
+                let n = retain(&retained_ids, &fetched_ids, &spent_ids, &mut keep);
+                let kept: Vec<(u64, &Cell)> = keep
+                    .get(..n)
+                    .unwrap_or_default()
+                    .iter()
+                    .filter_map(|id| {
+                        let at = ids.iter().position(|i| i == id)?;
+                        Some((*id, cells.get(at)?))
+                    })
+                    .collect();
+                let blob = encode_retained(&kept)?;
+                store.txn(|tx| put_invitation_retained(tx, ld_id, Some(&blob)))?;
+                Ok(after_commit(Round {
+                    ack_through: fetched_max,
+                    ..Round::default()
+                }))
+            }
+            Ok(accepted) => {
+                if !staged.staged() {
+                    return Err(Error::Unavailable);
+                }
+                let (contact, events) =
+                    commit_accept(&mut store, ld_id, &loaded.stored.record, &accepted)?;
+                Ok(after_commit(Round {
+                    ack_through: fetched_max,
+                    accepted: Some(contact),
+                    events,
+                    ops: Vec::new(),
+                }))
+            }
+        }
+    }
+}
+
+/// After the commit, before the acknowledgement (`CrashAt::AfterCommitBeforeAck`).
+fn after_commit(round: Round) -> Round {
+    #[cfg(feature = "kat")]
+    secmp_store::kat::crash_point(secmp_store::kat::CrashAt::AfterCommitBeforeAck);
+    round
+}
+
+/// The accept transaction (F-M7, C-12): the OPK row delete, the record's consumption, the cleared retained cells, the
+/// contact (`peer`, `routes`, `profile`) and the session (`Accepted.state` in its parts), in one store transaction.
+fn commit_accept(
+    store: &mut Store,
+    ld_id: &Id,
+    record: &InvitationRecord,
+    accepted: &Accepted,
+) -> Result<(ContactId, Vec<Event>), Error> {
+    let planned = contacts::plan(store, &accepted.peer)?;
+    let routes = encode_routes(&accepted.routes)?;
+    let queues = encode_queues(record);
+    let session = planned.id.0;
+    let new = NewContact {
+        peer: &accepted.peer,
+        profile: &accepted.profile,
+        routes: Some(&routes),
+        queues: Some(&queues),
+    };
+    store.txn(|tx| {
+        delete_prekey(tx, KIND_OPK, i64::from(record.opk_id))?;
+        set_invitation_status(tx, ld_id, INVITATION_CONSUMED)?;
+        put_invitation_retained(tx, ld_id, None)?;
+        contacts::write(tx, &planned, &new)?;
+        crate::sessions::write_initial(tx, session, &accepted.state)
+    })?;
+    Ok((planned.id, contacts::events_of(&planned)))
+}
+
+/// `contacts.routes`: `count u8 ‖ RouteDescriptor × count` (the peer's reply routes, byte-identical to what it sent).
+fn encode_routes(routes: &[RouteDescriptor]) -> Result<Zeroizing<Vec<u8>>, Error> {
+    let mut v = Zeroizing::new(vec![
+        u8::try_from(routes.len()).map_err(|_| Error::Unavailable)?,
+    ]);
+    for r in routes {
+        v.extend_from_slice(&r.encode()?);
+    }
+    Ok(v)
+}
+
+/// `contacts.queues`: `count u8 ‖ recv_seed [32] × count` — the recv-queues of the session so far: the invitation queue,
+/// until the first reply moves the session to a queue of its own (§6.6 step 4).
+fn encode_queues(record: &InvitationRecord) -> Zeroizing<Vec<u8>> {
+    let mut v = Zeroizing::new(vec![1]);
+    v.extend_from_slice(record.invq_recv_seed.expose_secret());
+    v
+}
+
+/// §5.5 as the invitee runs it on the invitation it was given and the link data `LINK_GET` returned, in this order
+/// (IN-12, Q154): the URI decodes (`Invalid`); the version byte is 0x01 (`Invalid`) and the kind byte is 0x01
+/// (`Unsupported`); the invitation parses (`Invalid`); `now ≥ expires` (`Expired`); the blob opens under the invitation's
+/// key (`Invalid`); the inviter's fingerprint is the invitation's (`Mismatch`, compared in constant time); then
+/// `invitee_check` — the signature of the bundle and its expiry (`Invalid`). The class is computed here, from the
+/// invitation and the opened link data, shown to the user, never logged or sent; the protocol's own error stays uniform.
+///
+/// # Errors
+/// [`InviteReject`] as above.
+pub fn check_invitation(uri: &str, blob: &[u8], now: u64) -> Result<InviteeAccepted, InviteReject> {
+    use secmp_crypto::{ConstantTimeEq as _, Fingerprint};
+
+    let text = uri.strip_prefix(URI_PREFIX).ok_or(InviteReject::Invalid)?;
+    let bytes = base64url_decode(text).map_err(|_| InviteReject::Invalid)?;
+    match bytes.as_slice() {
+        [ver, ..] if *ver != 1 => return Err(InviteReject::Invalid),
+        [_, kind, ..] if *kind != 1 => return Err(InviteReject::Unsupported),
+        [_, _, ..] => {}
+        _ => return Err(InviteReject::Invalid),
+    }
+    let invitation = parse_invitation_uri(uri).map_err(|_| InviteReject::Invalid)?;
+    if now >= invitation.expires {
+        return Err(InviteReject::Expired);
+    }
+    let link_data = inv::open_blob(&invitation.ld_id, &invitation.link_key, blob)
+        .map_err(|_| InviteReject::Invalid)?;
+    let iks = link_data
+        .inviter_iks
+        .encode()
+        .map_err(|_| InviteReject::Invalid)?;
+    let fp = Fingerprint::of_encoded_iks(&iks).map_err(|_| InviteReject::Invalid)?;
+    if !bool::from(fp.as_bytes().ct_eq(&invitation.inviter_fp)) {
+        return Err(InviteReject::Mismatch);
+    }
+    inv::invitee_check(invitation, blob, now).map_err(|_| InviteReject::Invalid)
+}
+
+/// What the invitee holds after accepting an invitation: the three handshake cells and the initiator state (both to be
+/// persisted before any cell is released, §6.5), and the pool queue that became its reply queue.
+pub struct InviteeStart {
+    /// The three sealed handshake cells.
+    pub cells: HandshakeCells,
+    /// The initiator's ratchet state after `first_msg`.
+    pub state: RatchetState,
+    /// The spare queue the reply route names (no `QUEUE_NEW` at that moment, §5.5 step 5).
+    pub reply_queue: QueueId,
+}
+
+/// What the invitee needs besides the invitation and its link data.
+pub struct AcceptRequest<'a> {
+    /// The user's relay whose spare queue becomes the reply queue.
+    pub relay: RelayId,
+    /// The period the user asks for on its reply queue.
+    pub reply_period: Period,
+    /// The user's own profile for the handshake.
+    pub profile: &'a WireProfile,
+}
+
+impl Invitations {
+    /// The invitee's side of an invitation (§5.5 steps 1–5, §6.4–§6.5): the checks of [`check_invitation`], the reply route
+    /// from a spare queue of the user's relay (the pool's, so that no `QUEUE_NEW` is needed now), and the handshake
+    /// (`Initiator::start`) with the user's own profile.
+    ///
+    /// # Errors
+    /// [`Error::Invitation`] for a refused invitation; [`Error::Unavailable`] if the relay has no spare queue, randomness
+    /// or the store is unavailable.
+    pub fn accept_invitation(
+        &self,
+        uri: &str,
+        blob: &[u8],
+        req: &AcceptRequest<'_>,
+        clock: &impl Clock,
+        entropy: &mut impl Entropy,
+    ) -> Result<InviteeStart, Error> {
+        let now = clock.unix_secs();
+        let accepted = check_invitation(uri, blob, now).map_err(Error::Invitation)?;
+        let (identity, _) = self.profile.identity_parts()?;
+        let (queue, own_relay) = {
+            let mut store = self.lock()?;
+            let own_relay = RelayRef::decode(
+                &store
+                    .relay_ref(i64::from(req.relay.0))?
+                    .ok_or(Error::Unavailable)?,
+            )?;
+            let (queue, rest) = take_oldest(&store, req.relay)?.ok_or(Error::Unavailable)?;
+            store.txn(|tx| put_relay_pool(tx, i64::from(req.relay.0), Some(&rest)))?;
+            (queue, own_relay)
+        };
+        let route = RelayQueue::derived(
+            own_relay,
+            &ed25519_pk_of(&queue.recv_seed)?,
+            queue.send_seed,
+            req.reply_period,
+        )?;
+        let (cells, state) = Initiator::start(
+            &accepted,
+            &identity.initiator_keys(),
+            &[RouteDescriptor::RelayQueue(route)],
+            req.profile,
+            now,
+            entropy,
+        )?;
+        Ok(InviteeStart {
+            cells,
+            state,
+            reply_queue: queue.queue,
+        })
+    }
+}
+
+#[cfg(test)]
+#[path = "invitations_tests.rs"]
+mod tests;

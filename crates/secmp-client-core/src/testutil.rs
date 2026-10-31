@@ -118,6 +118,46 @@ impl Fixture {
     }
 }
 
+/// A relay reference without a direct endpoint.
+pub(crate) fn relay_ref() -> secmp_proto::wire::inv::RelayRef {
+    secmp_proto::wire::inv::RelayRef {
+        relay_fp: [1; 32],
+        onion: secmp_proto::wire::inv::Onion::from_pubkey(&[2; 32]),
+        akc: [3; 32],
+        direct: None,
+    }
+}
+
+/// A handshake profile.
+pub(crate) fn wire_profile(name: &str) -> Result<secmp_proto::wire::inv::Profile, E> {
+    Ok(secmp_proto::wire::inv::Profile::new(name, None)?)
+}
+
+impl Fixture {
+    /// Relay row `id` (the test relay) with `pool` spare queues whose seeds come from `entropy`.
+    pub(crate) fn add_relay(
+        &self,
+        id: u32,
+        pool: usize,
+        entropy: &mut FixedEntropy,
+    ) -> Result<(), E> {
+        use secmp_proto::Encode as _;
+
+        let store = self.profile.store();
+        let encoded = relay_ref().encode()?;
+        {
+            let mut s = store.lock().map_err(|_| "lock")?;
+            s.txn(|tx| secmp_store::profile::put_relay(tx, i64::from(id), &encoded, None))?;
+        }
+        crate::invitations::SparePool::new(store).fill(
+            crate::scheduler::types::RelayId(id),
+            pool,
+            entropy,
+        )?;
+        Ok(())
+    }
+}
+
 /// The randomness of a [`crate::scheduler::conversation::Conversation`] in the tests.
 pub(crate) struct Fixed(pub(crate) FixedEntropy);
 
@@ -188,6 +228,7 @@ pub(crate) fn insert_record(
         relay: RelayId(1),
         queue: QueueId(1),
         flags: 0,
+        blob: None,
     };
     let store = profile.store();
     let mut s = store.lock().map_err(|_| "lock")?;

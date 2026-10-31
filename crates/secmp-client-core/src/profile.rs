@@ -55,6 +55,7 @@ pub struct Retired {
 }
 
 /// The profile of the user (see the module documentation).
+#[derive(Clone)]
 pub struct Profile {
     store: SharedStore,
 }
@@ -75,8 +76,8 @@ fn new_identity(entropy: &mut impl Entropy) -> Result<(IdentityKeys, Zeroizing<V
     Ok((keys, section))
 }
 
-/// The identity of an identity section.
-pub(crate) fn identity_from_section(section: &[u8]) -> Result<IdentityKeys, Error> {
+/// The identity of an identity section, and its signing key (the bundle of an invitation is signed with it, §6.3).
+fn keys_from_section(section: &[u8]) -> Result<(IdentityKeys, HybridSigningKey), Error> {
     let [ver, rest @ ..] = section else {
         return Err(Error::Unavailable);
     };
@@ -86,9 +87,14 @@ pub(crate) fn identity_from_section(section: &[u8]) -> Result<IdentityKeys, Erro
     let ed = rest.get(..32).ok_or(Error::Unavailable)?;
     let mldsa = rest.get(32..64).ok_or(Error::Unavailable)?;
     let x = rest.get(64..96).ok_or(Error::Unavailable)?;
-    let sig = HybridSigningKey::from_seeds(ed, mldsa)?;
     let dh = IkDhSecret::from_bytes(x)?;
-    Ok(IdentityKeys::from_parts(sig, dh)?)
+    let identity = IdentityKeys::from_parts(HybridSigningKey::from_seeds(ed, mldsa)?, dh)?;
+    Ok((identity, HybridSigningKey::from_seeds(ed, mldsa)?))
+}
+
+/// The identity of an identity section.
+pub(crate) fn identity_from_section(section: &[u8]) -> Result<IdentityKeys, Error> {
+    Ok(keys_from_section(section)?.0)
 }
 
 fn ms(secs: u64) -> Result<u64, Error> {
@@ -181,6 +187,11 @@ impl Profile {
         self.store.lock().map_err(|_| Error::Unavailable)
     }
 
+    /// The store, locked for one step (the invitations and the sessions of this crate).
+    pub(crate) fn lock_store(&self) -> Result<std::sync::MutexGuard<'_, Store>, Error> {
+        self.lock()
+    }
+
     /// `fingerprint(IKSPublic)` of the user (§6.2).
     ///
     /// # Errors
@@ -202,6 +213,18 @@ impl Profile {
             .identity_secret(IDENTITY_ROW)?
             .ok_or(Error::Unavailable)?;
         identity_from_section(&section)
+    }
+
+    /// The identity keys and the signing key, loaded for one operation and zeroized when dropped.
+    ///
+    /// # Errors
+    /// [`Error::Unavailable`] if the profile has no identity or the row does not open.
+    pub(crate) fn identity_parts(&self) -> Result<(IdentityKeys, HybridSigningKey), Error> {
+        let section = self
+            .lock()?
+            .identity_secret(IDENTITY_ROW)?
+            .ok_or(Error::Unavailable)?;
+        keys_from_section(&section)
     }
 
     /// The ids of the held signed-prekey generations, ascending.
@@ -269,20 +292,31 @@ impl Profile {
         Ok(id)
     }
 
-    /// Keep at least `target` unused one-time prekeys (the pool the invitations draw from, §6.1).
+    /// Keep at least `target` one-time prekeys that no open invitation references (the pool the invitations draw from,
+    /// §6.1), drawing new ones from `entropy`.
     ///
     /// # Errors
     /// [`Error::Unavailable`] without randomness or if the store cannot be written.
     pub fn fill_opks(&self, target: usize, entropy: &mut impl Entropy) -> Result<(), Error> {
-        let have = self.lock()?.prekeys(KIND_OPK)?;
-        let mut next = have.last().map_or(Ok(1_u32), |r| {
-            id32(r.id)?.checked_add(1).ok_or(Error::Unavailable)
-        })?;
-        for _ in have.len()..target {
+        let (mut have, mut next) = {
+            let store = self.lock()?;
+            let referenced = crate::invitations::referenced_opks(&store)?;
+            let rows = store.prekeys(KIND_OPK)?;
+            let free = rows
+                .iter()
+                .filter(|r| !referenced.iter().any(|o| i64::from(*o) == r.id))
+                .count();
+            let next = rows.last().map_or(Ok(1_u32), |r| {
+                id32(r.id)?.checked_add(1).ok_or(Error::Unavailable)
+            })?;
+            (free, next)
+        };
+        while have < target {
             let opk = OpkSecrets::generate(next, entropy)?;
             self.lock()?
                 .txn(|tx| insert_prekey(tx, KIND_OPK, i64::from(next), &opk.to_seeds(), None))?;
             next = next.checked_add(1).ok_or(Error::Unavailable)?;
+            have = have.saturating_add(1);
         }
         Ok(())
     }

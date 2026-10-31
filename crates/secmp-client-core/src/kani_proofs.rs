@@ -587,14 +587,14 @@ fn any_answer() -> Result<Delivered, SourceError> {
     }
 }
 
-/// SC-08 `kani_persist_contract_abstract` (spec §7.5, CLAUDE.md §1.7): with an abstract persist outcome {ok, fail} at every
-/// step, no frame and no acknowledgement follow a failed commit. Sending: the cell source's answer for a slot — a
-/// persisted cell, not ready, or not persisted — leaves a cell to build a frame from (`sendable`, which `prepare_send`
-/// calls) exactly when it was persisted. Receiving: three responses, each carrying the lowest cells above the
-/// acknowledgement, up to a symbolic id ≤ 3 (spec §9.3);
-/// every cell handed to the cell source is committed at once, pending, or its commit fails; after each response one
-/// pending cell may be committed later (`RecvLedger::committed`, the driver's report). After every step every fetched cell
-/// at or below the acknowledgement is committed.
+/// SC-08 `kani_persist_contract_abstract` (spec §7.5, CLAUDE.md §1.7; widened by Q184 to a hostile relay): with an
+/// abstract persist outcome {ok, fail} at every step, no frame and no acknowledgement follow a failed commit. Sending:
+/// the cell source's answer for a slot — a persisted cell, not ready, or not persisted — leaves a cell to build a frame
+/// from (`sendable`, which `prepare_send` calls) exactly when it was persisted. Receiving: three responses of up to three
+/// arbitrary ids ≤ 7 each — any order, duplicates and gaps allowed (the relay is the adversary, docs/01); every cell
+/// handed to the cell source is committed at once, pending, or its commit fails (an id committed before answers
+/// committed); after each response one pending cell may be committed later (`RecvLedger::committed`, the driver's
+/// report). After every step every *handed* cell at or below the acknowledgement is committed.
 #[kani::proof]
 #[kani::unwind(4)]
 fn kani_persist_contract_abstract() {
@@ -613,20 +613,23 @@ fn kani_persist_contract_abstract() {
     );
 
     let mut l: RecvLedger<3> = RecvLedger::new();
-    // ids 1..=3: fetched, committed, handed over as pending
-    let mut fetched = [false; 4];
-    let mut committed = [false; 4];
-    let mut pending = [false; 4];
+    // ids 0..=7: handed to the cell source, committed, handed over as pending
+    let mut handed = [false; 8];
+    let mut committed = [false; 8];
+    let mut pending = [false; 8];
     for _ in 0..3 {
-        // the relay answers with the lowest cells above the acknowledgement the FETCH carried, at most up to 3
-        let lo = l.acked() + 1;
-        let hi: u64 = kani::any();
-        kani::assume(hi <= 3);
-        for id in lo..=hi {
-            fetched[id as usize] = true;
+        let ids: [u64; 3] = kani::any();
+        let count: usize = kani::any();
+        kani::assume(count <= 3);
+        for id in ids.iter() {
+            kani::assume(*id <= 7);
         }
-        let _ = l.take(0, (lo..=hi).map(|id| (id, ())), |id, ()| {
+        let _ = l.take(0, ids.iter().take(count).map(|id| (*id, ())), |id, ()| {
             let i = id as usize;
+            handed[i] = true;
+            if committed[i] {
+                return Ok(Delivered::Committed);
+            }
             let answer: u8 = kani::any();
             kani::assume(answer < 3);
             match answer {
@@ -642,20 +645,19 @@ fn kani_persist_contract_abstract() {
             }
         });
         let later: u64 = kani::any();
-        kani::assume(later >= 1 && later <= 3);
+        kani::assume(later <= 7);
         if pending[later as usize] && kani::any() {
             committed[later as usize] = true;
             l.committed(later);
         }
-        for id in 1..=3_u64 {
-            if id <= l.acked() && fetched[id as usize] {
-                assert!(committed[id as usize]);
-            }
-        }
+        // every handed id at or below the acknowledgement is committed (written out: no loop for the unwind bound)
+        let acked = l.acked();
+        let ok = |i: u64| !(handed[i as usize] && i <= acked) || committed[i as usize];
+        assert!(ok(0) && ok(1) && ok(2) && ok(3) && ok(4) && ok(5) && ok(6) && ok(7));
     }
     kani::cover!(l.acked() == 3, "everything fetched is acknowledged");
     kani::cover!(
-        l.acked() == 0 && fetched[1],
+        l.acked() == 0 && handed[1],
         "a failed or pending first cell holds the acknowledgement"
     );
 }

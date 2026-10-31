@@ -11100,7 +11100,7 @@ mod tests {
     }
 
     /// The B-SC harnesses re-measured by WEISUNG M7-B-SC2: the cover pin reads their `kani-m7-bsc2-sc-<harness>.txt`.
-    const B_SC2_RUNS: &[&str] = &["kani_paired_executions"];
+    const B_SC2_RUNS: &[&str] = &["kani_paired_executions", "kani_persist_contract_abstract"];
 
     /// The B-SC harnesses whose committed alone runs the cover pin reads (M7 B-SC §3, one per commit).
     const B_SC_RUNS: &[&str] = &[

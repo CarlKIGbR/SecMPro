@@ -1,0 +1,15 @@
+bf34f9b
+        FAIL [   0.005s] (1/3) secmp-client-core scheduler::core::pure::tests::full_ledger_hands_nothing
+    thread 'scheduler::core::pure::tests::full_ledger_hands_nothing' (1306121) panicked at crates/secmp-client-core/src/scheduler/core/pure.rs:770:9:
+    assertion `left == right` failed
+      left: 5
+     right: 4
+        FAIL [   0.007s] (2/3) secmp-client-core scheduler::core::pure::tests::hostile_relay_never_acks_uncommitted
+    thread 'scheduler::core::pure::tests::hostile_relay_never_acks_uncommitted' (1306122) panicked at crates/secmp-client-core/src/scheduler/core/pure.rs:725:17:
+    id 6 acked 7 not committed
+        FAIL [   0.040s] (3/3) secmp-client-core scheduler::core::pure::tests::hostile_relay_random_sequences
+    thread 'scheduler::core::pure::tests::hostile_relay_random_sequences' (1306123) panicked at crates/secmp-client-core/src/scheduler/core/pure.rs:725:17:
+    id 13 acked 17 not committed
+        FAIL [   0.005s] (1/3) secmp-client-core scheduler::core::pure::tests::full_ledger_hands_nothing
+        FAIL [   0.007s] (2/3) secmp-client-core scheduler::core::pure::tests::hostile_relay_never_acks_uncommitted
+        FAIL [   0.040s] (3/3) secmp-client-core scheduler::core::pure::tests::hostile_relay_random_sequences

@@ -826,3 +826,28 @@ New tests: 7; re-dictated: 4 (+ the BK-01/allowlist fixtures). Red seen: 7 (`a4f
 | store suite | 82 passed; `wrapping_and_header_kat`, `wrap_bytes_recomputed` unchanged |
 - `settings_slot` (helper of the decode loop) keeps `decode` under clippy's `too_many_lines`.
 - Blocked: none. STOP: none.
+
+## B-SC2 fix-ups (WEISUNG M7-B-SC2; rulings Q182–Q186; `modell=claude-opus-5-5`)
+
+Guard (2026-10-31): `git status --short` empty (exit 0); `merge-base --is-ancestor 51e918c HEAD` exit 0; `git log --oneline 1a7b4da..HEAD` = `bf34f9b`, `2f9dc89`, `88ce8bb`, `9ac2451`, `51e918c`, `ee0f79e`, `847d1dd`, `c16d9ac`, `842145e` (A-4f, A-4f2); the diff of the B-SC paths `1a7b4da..HEAD` empty (exit 0); `cargo fmt --all -- --check` clean (exit 0). `<G>` = `bf34f9b73b1d13ef55914737505a7fd8ee1a9af8`.
+
+### §2 commits
+
+| commit | what |
+|---|---|
+| `2ae2270` | §1 `fix(core): nothing is handed to the worker unrecorded (Q182, §1.7)` |
+
+### §3 tests
+
+| row | test | commit | red first (`bsc2-red-first.txt`) |
+|---|---|---|---|
+| Q182 | `pure::tests::hostile_relay_never_acks_uncommitted` | `2ae2270` | `id 6 acked 7 not committed` |
+| Q182 | `pure::tests::full_ledger_hands_nothing` | `2ae2270` | `left: 5, right: 4` |
+| Q182 | `pure::tests::hostile_relay_random_sequences` (10 000 runs × 12 steps) | `2ae2270` | first run on the pre-fix tree: `id 13 acked 17 not committed` |
+
+`a_full_ledger_keeps_the_ack_below_what_it_could_not_record` is unchanged and green. The SC-01 (four fixtures), R-01 and SIM-02 series after the fix are byte-identical to `bsc-series-57d7da2.txt` (`m7_drain::drain_f_cells_per_response`, `receive_throughput_per_fetch_is_measured`, `sim_partition_heals`: 3 passed).
+
+### §8 Blocked (STOP: an edit falls outside the file list)
+
+§2 (Q183) cannot be built within the §0 file list. Q183 item 2 extracts `pure::fetch_due(..)` (`= (!fetch_outstanding && !commits_pending) || now >= fetch_lead_deadline(slot, lead_ms)`) and has `prepare_link` call it. The B-SC SC-10 scan `xtask::testscan::kc5_calls_extracted` pins the direct call sites of `fetch_lead_deadline` outside `core/pure.rs`: `testscan.rs:628` `("scheduler/core/mod.rs", "prepare_link", lead)`, and calls inside `pure.rs` are not counted (`:607`). After the extraction the scan fails, and the fix is an edit of `xtask/src/testscan.rs`, which is not in the file list. Proposal: in the §2 commit, `testscan.rs:628` becomes the site of `fetch_due` (a third needle `concat!("fetch", "_due(")`, expected only in `prepare_link` and the SC-09 harness), and the scan also asserts that `pure::fetch_due` calls `fetch_lead_deadline`; the inline-needle checks of `prepare_link` stay. §3–§5 were not started (they follow §2 in the weisung's order; §5's runs need the final tree). Question: may §2 edit `xtask/src/testscan.rs` as proposed?
+

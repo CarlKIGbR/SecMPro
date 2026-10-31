@@ -1199,6 +1199,11 @@ fn decide_rechecks_status_after_lock() -> R {
     let out = invitations.decide(&ld_id, &fetched, Some(3), &fx.clock, &mut e)?;
     assert_eq!(accept_calls_kat(), before, "consumed: accept is not called");
     assert!(out.accepted.is_none());
+    assert_eq!(
+        out.ack_through,
+        Some(3),
+        "consumed: the cells are acknowledged (D-B10)"
+    );
     {
         let store = fx.profile.store();
         let s = store.lock().map_err(|_| "lock")?;

@@ -774,6 +774,15 @@ pub(crate) const MUTANT_HARNESS_SKIP_TESTS: &[(&str, &str)] = &[
         "write_amplification_measured",
         "PC-13, 24 h virtual over two SQLCipher profiles, one fsync per commit: 295 s",
     ),
+    // M7 B-SC2 (Q186, Q44 extended to drifted tests): times of the full harness run of ci-fast-bsc-l-923b9ee (alone 8.5 s, 5.8 s)
+    (
+        "lifetime_end_reconnects_fresh",
+        "S-17, lifetime end, Strict P = 10 s: 16.8 s",
+    ),
+    (
+        "link_lifetime_uniform_6h_24h",
+        "S-16, 1 000 lifetimes: 10.9 s",
+    ),
 ];
 
 /// WEISUNG M6-B-3 §1: the long, host-independent simulations the `kat` step leaves out when it runs on Windows

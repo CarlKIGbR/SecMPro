@@ -1004,7 +1004,7 @@ Return to the reviewer: D-B6 (proto `from_parts` or the assembly kept).
 
 ### §4 Evidence
 `mutants-ci1-timing-aa89fd5.txt`: RED (old `m0_early.rs`, `--timeout 120`) 40 mutants: 30 caught, 4 unviable, **6 timeouts** — exactly `accept_ceiling` None/Some(0)/Some(1), `sample_with` None and `>=`→`<`, `sample_round` None (reproduced locally). GREEN (HEAD): 40 mutants, 36 caught, 4 unviable, **0 timeouts, 0 missed**; of the timing.rs mutants 30 caught, 3 unviable. Command deviation (documented in the file): the weisung's `--features harness --package secmp-client-core --file timing.rs` fails in the unmutated tree (no such feature in that package), so `--package secmp-transport` was added and `--re` replaces `--file`; `--re` let 7 non-timing mutants through.
-`ci-fast-ci1-aa89fd5.txt`: **FAIL at gate `fmt`** only (see §8); clippy, policy and the rest of the printed gates pass.
+ci-fast-ci1-aa89fd5.txt red at fmt; ci-fast-ci1c-f32e8e8.txt green (after `f32e8e8` style(harness): rustfmt of the m0_early killers, formatting only).
 
 ### §5 Deviations
 D-CI1: the Q186 skips removed the accidental early killers of the `timing.rs` mutants; explicit `m0_early` killers (G7-10) replace them; the skips stay.
@@ -1016,7 +1016,7 @@ win-test 41128820834 failed in 15 min (perl + nextest invisible to the SYSTEM ru
 all jobs green except mutants shards 2/3/4/5/8/9 (timeouts of timing.rs mutants); fixed here.
 
 ### §8 Blocked
-**ci-fast red at `fmt`** (WEISUNG M7-CI1 §3: BLOCKED, no further fix). `cargo fmt --all --check` wants `m0_early.rs:108` wrapped over four lines:
+**Resolved by CI1c (`f32e8e8`): ci-fast green.** Was: ci-fast red at `fmt` (WEISUNG M7-CI1 §3: BLOCKED, no further fix). `cargo fmt --all --check` wants `m0_early.rs:108` wrapped over four lines:
 ```
 -    assert_eq!(sample_with(18_446_744_073_709_551_609, 5, 10, C10), Some(14));
 +    assert_eq!(

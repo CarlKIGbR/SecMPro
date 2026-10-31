@@ -1145,3 +1145,79 @@ fn check_invitation_refuses_bad_version_before_kind() -> R {
     );
     Ok(())
 }
+
+/// Q192 (IN-21, Q173): the consumed path of `on_owner_status` opens the record through `load` — counted while it lives,
+/// one record at a time, none alive after the step.
+#[cfg(feature = "kat")]
+#[test]
+fn live_counter_counts_owner_status_open() -> R {
+    let (fx, mut e) = inviter("q192-live", 55, 1)?;
+    let invitations = Invitations::new(fx.profile.clone());
+    let ld_id = invitations
+        .issue(&request(1)?, &fx.clock, &mut e)?
+        .invitation
+        .ld_id;
+    reset_live_peak_kat();
+    let consumed = OwnerStatus {
+        present: false,
+        consumed: true,
+    };
+    assert!(
+        invitations
+            .on_owner_status(&ld_id, consumed, &fx.clock)?
+            .is_empty()
+    );
+    assert_eq!(live_records_peak_kat(), 1);
+    assert_eq!(live_records_kat(), 0);
+    let store = fx.profile.store();
+    let s = store.lock().map_err(|_| "lock")?;
+    let loaded = load(&s, &ld_id)?.ok_or("record")?;
+    assert_eq!(loaded.stored.flags & FLAG_CONSUMED_SEEN, FLAG_CONSUMED_SEEN);
+    Ok(())
+}
+
+/// Q192: `decide` checks the record's status and expiry again under the lock it decides under. Called directly with a
+/// complete valid handshake: (a) on a record consumed after `process_round`'s check would have passed, `accept` is not
+/// called and no contact is made; (b) with the clock past `expires`, `accept` is not called and nothing is acknowledged.
+#[cfg(feature = "kat")]
+#[test]
+fn decide_rechecks_status_after_lock() -> R {
+    // (a) consumed between the check and the decision
+    let (fx, mut e) = inviter("q192-consumed", 57, 1)?;
+    let (peer, mut pe) = invitee("q192-consumed-peer", 59, 2)?;
+    let invitations = Invitations::new(fx.profile.clone());
+    let issued = invitations.issue(&request(1)?, &fx.clock, &mut e)?;
+    let ld_id = issued.invitation.ld_id;
+    let [c0, c1, c2] = handshake(&peer, &mut pe, &issued)?;
+    {
+        let store = fx.profile.store();
+        let mut s = store.lock().map_err(|_| "lock")?;
+        s.txn(|tx| set_invitation_status(tx, &ld_id, INVITATION_CONSUMED))?;
+    }
+    let before = accept_calls_kat();
+    let fetched = [(1, c0), (2, c1), (3, c2)];
+    let out = invitations.decide(&ld_id, &fetched, Some(3), &fx.clock, &mut e)?;
+    assert_eq!(accept_calls_kat(), before, "consumed: accept is not called");
+    assert!(out.accepted.is_none());
+    {
+        let store = fx.profile.store();
+        let s = store.lock().map_err(|_| "lock")?;
+        assert!(s.contacts()?.is_empty(), "no contact");
+    }
+
+    // (b) expired between the check and the decision
+    let (fx, mut e) = inviter("q192-expired", 61, 1)?;
+    let (peer, mut pe) = invitee("q192-expired-peer", 63, 2)?;
+    let invitations = Invitations::new(fx.profile.clone());
+    let issued = invitations.issue(&request(1)?, &fx.clock, &mut e)?;
+    let ld_id = issued.invitation.ld_id;
+    let [c0, c1, c2] = handshake(&peer, &mut pe, &issued)?;
+    fx.at_day(11);
+    let before = accept_calls_kat();
+    let fetched = [(1, c0), (2, c1), (3, c2)];
+    let out = invitations.decide(&ld_id, &fetched, Some(3), &fx.clock, &mut e)?;
+    assert_eq!(accept_calls_kat(), before, "expired: accept is not called");
+    assert_eq!(out.ack_through, None);
+    assert!(out.accepted.is_none());
+    Ok(())
+}

@@ -64,9 +64,6 @@ pub const FLAG_CONSUMED_SEEN: u8 = 1;
 
 // The trailer after the record: `relay u32 ‖ queue u32 ‖ flags u8 ‖ blob_present u8`.
 
-/// The offset of the flags byte in the plaintext of a stored record.
-const FLAGS_AT: usize = RECORD_LEN + 4 + 4;
-
 /// The most cells a fetch round holds in all: what one `FETCH` returns (`QUEUE_CAPACITY`, `docs/03:168`) and the cells
 /// retained from earlier rounds.
 const ROUND_CELLS_MAX: usize = 128 + RETAIN_MAX;
@@ -532,13 +529,17 @@ impl Invitations {
 
     /// Issue an invitation (§5.2, §5.4, §6.3): rotate the signed prekey if due, take an unreferenced one-time prekey (or
     /// draw one), sign the bundle, draw `ld_id`, `link_key`, a discarded 16 bytes, the blob nonce and the owner seed
-    /// (the draws and their order of `MemoryPrekeyStore::issue_invitation_on`), seal the link data, take a spare queue of
-    /// the relay as the invitation queue and record the invitation — all in one store transaction. The queue's seeds are
-    /// the pool's, drawn before and independent of any identity key (IN-02, `docs/03:597`).
+    /// (`secmp_proto::prekeys::issue_on_parts`, the construction of `MemoryPrekeyStore::issue_invitation_on`), seal the
+    /// link data, take a spare queue of the relay as the invitation queue and record the invitation. Three store
+    /// transactions: the rotation of the signed prekey (if due) commits first and on its own; then the drawn one-time
+    /// prekey (if any), the pool without the taken queue and the invitation in one transaction; then the refill of the
+    /// unreferenced one-time prekeys (`Profile::fill_opks`) on its own. The queue's seeds are the pool's, drawn before
+    /// and independent of any identity key (IN-02, `docs/03:597`).
     ///
     /// # Errors
     /// [`Error::Unsupported`] for an `expires` outside §5.2/§6.3; [`Error::Unavailable`] if the relay has no spare
-    /// queue, randomness or the store is unavailable (nothing is recorded).
+    /// queue, randomness or the store is unavailable (no invitation is recorded; a rotation that committed before
+    /// stays).
     pub fn issue(
         &self,
         req: &IssueRequest,
@@ -598,20 +599,15 @@ impl Invitations {
     ) -> Result<Vec<OpSpec>, Error> {
         let now = clock.unix_secs();
         let mut store = self.lock()?;
-        let (expires, relay) = {
-            let loaded = load(&store, ld_id)?.ok_or(Error::Unavailable)?;
-            (loaded.stored.record.expires, loaded.stored.relay)
-        };
-        let open = store
-            .invitations()?
-            .iter()
-            .any(|r| r.ld_id == *ld_id && r.status == INVITATION_OPEN);
-        if !open || expires <= now {
+        // the record is opened once, through `load` (counted while it lives, IN-21), for the whole step
+        let mut loaded = load(&store, ld_id)?.ok_or(Error::Unavailable)?;
+        let relay = loaded.stored.relay;
+        if offer_state(&store, ld_id, now)? != OfferState::Offered {
             return Ok(Vec::new());
         }
         if status.consumed {
-            let mut plain = store.invitation_record(ld_id)?.ok_or(Error::Unavailable)?;
-            *plain.get_mut(FLAGS_AT).ok_or(Error::Unavailable)? |= FLAG_CONSUMED_SEEN;
+            loaded.stored.flags |= FLAG_CONSUMED_SEEN;
+            let plain = loaded.stored.encode();
             store.txn(|tx| put_invitation_record(tx, ld_id, &plain))?;
             return Ok(Vec::new());
         }
@@ -901,24 +897,18 @@ impl Invitations {
         clock: &impl Clock,
         entropy: &mut impl Entropy,
     ) -> Result<Round, Error> {
-        let now = clock.unix_secs();
         let fetched_max = fetched.iter().map(|(id, _)| *id).max();
-        {
-            let store = self.lock()?;
-            let row = store
-                .invitations()?
-                .into_iter()
-                .find(|r| r.ld_id == *ld_id)
-                .ok_or(Error::Unavailable)?;
-            if row.status != INVITATION_OPEN {
-                // consumed: nothing more is decided on this queue; the cells are acknowledged
+        let state = offer_state(&*self.lock()?, ld_id, clock.unix_secs())?;
+        match state {
+            OfferState::Offered => {}
+            // consumed: nothing more is decided on this queue; the cells are acknowledged
+            OfferState::Consumed => {
                 return Ok(Round {
                     ack_through: fetched_max,
                     ..Round::default()
                 });
             }
-            if row.expires_ms / 1000 <= now {
-                drop(store);
+            OfferState::Expired => {
                 let m = self.maintain(clock)?;
                 return Ok(Round {
                     events: m.events,
@@ -927,19 +917,34 @@ impl Invitations {
                 });
             }
         }
-        self.decide(ld_id, fetched, fetched_max, entropy)
+        self.decide(ld_id, fetched, fetched_max, clock, entropy)
     }
 
-    /// The classification and the commit of one round of an offered record.
+    /// The classification and the commit of one round of an offered record. The record's status and expiry are checked
+    /// again under the lock that the decision holds (Q192): a record consumed or expired since [`Self::process_round`]
+    /// looked never reaches `accept`.
     fn decide(
         &self,
         ld_id: &Id,
         fetched: &[(u64, Cell)],
         fetched_max: Option<u64>,
+        clock: &impl Clock,
         entropy: &mut impl Entropy,
     ) -> Result<Round, Error> {
         let identity = self.profile.identity()?;
         let mut store = self.lock()?;
+        match offer_state(&store, ld_id, clock.unix_secs())? {
+            OfferState::Offered => {}
+            // consumed: nothing more is decided on this queue; the cells are acknowledged
+            OfferState::Consumed => {
+                return Ok(Round {
+                    ack_through: fetched_max,
+                    ..Round::default()
+                });
+            }
+            // expired: nothing is decided or acknowledged; the retirement is `maintain`'s
+            OfferState::Expired => return Ok(Round::default()),
+        }
         let loaded = load(&store, ld_id)?.ok_or(Error::Unavailable)?;
         let mut union: BTreeMap<u64, Cell> = BTreeMap::new();
         let retained = decode_retained(
@@ -1011,6 +1016,33 @@ impl Invitations {
             }
         }
     }
+}
+
+/// Whether the invitation of `ld_id` is offered at `now` (open and unexpired, R-69, ADR-044 (d)), consumed, or expired.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OfferState {
+    Offered,
+    Consumed,
+    Expired,
+}
+
+/// The [`OfferState`] of `ld_id` at `now` (Unix seconds), from its row.
+///
+/// # Errors
+/// [`Error::Unavailable`] if there is no such invitation or the store cannot be read.
+fn offer_state(store: &Store, ld_id: &Id, now: u64) -> Result<OfferState, Error> {
+    let row = store
+        .invitations()?
+        .into_iter()
+        .find(|r| r.ld_id == *ld_id)
+        .ok_or(Error::Unavailable)?;
+    Ok(if row.status != INVITATION_OPEN {
+        OfferState::Consumed
+    } else if row.expires_ms / 1000 <= now {
+        OfferState::Expired
+    } else {
+        OfferState::Offered
+    })
 }
 
 /// After the commit, before the acknowledgement (`CrashAt::AfterCommitBeforeAck`).

@@ -401,7 +401,7 @@ fn child() {
 /// IN-07 [E2E, process]: `CrashAt::MidTxn(k)` for every statement `k` of the accept transaction — and the crash after the
 /// commit, before the acknowledgement — in a child process; the profile reopened from disk is all-before (the OPK, the
 /// record, the contact and the session together) after a crash inside the transaction, and all-after after the commit;
-/// never in between. The cells fetched again are then accepted (before) or the invitation is consumed (after).
+/// never in between.
 #[test]
 fn crash_inside_accept_is_atomic() {
     if secmp_store::kat::child_role().as_deref() == Some(ROLE) {
@@ -455,14 +455,25 @@ fn crash_inside_accept_is_atomic() {
 }
 
 /// IN-20 (F-13; M05 review P-12/R-56): one invitation record duplicated into two stores (two host profiles built from
-/// the same entropy: the same keys, prekeys, queue and record), two initiators with different identities but the same
-/// handshake entropy — `K_id` (kat accessor) is equal on both sides and in both stores, `SK` differs: `K_id` does not
-/// depend on the initiator's identity, `SK` does.
+/// the same entropy: the same keys, prekeys, queue and record — the sealed records' plaintexts are asserted byte-identical;
+/// not `InvitationRecord::duplicate_kat`, which copies the record without the prekeys it names, B-3b D-B13), two
+/// initiators with different identities but the same handshake entropy — `K_id` (kat accessor) is equal on both sides and
+/// in both stores, `SK` differs: `K_id` does not depend on the initiator's identity, `SK` does.
 #[test]
 fn k_id_independent_end_to_end() {
-    let handshake_of = |seed: &str| -> (Vec<u8>, [u8; 32], [u8; 32], Party, Issuance, Relay) {
+    type Run = (Vec<u8>, Vec<u8>, [u8; 32], [u8; 32], Party, Issuance, Relay);
+    let handshake_of = |seed: &str| -> Run {
         let mut host = party("in20-a");
         let issued = issue(&mut host);
+        let record = host
+            .profile
+            .store()
+            .lock()
+            .unwrap()
+            .invitation_record(&issued.invitation.ld_id)
+            .unwrap()
+            .unwrap()
+            .to_vec();
         // the initiator's identity differs (its own profile entropy); its handshake entropy is the same for both
         let mut guest = party(&format!("in20-{seed}"));
         guest.e = entropy("in20-handshake");
@@ -472,6 +483,7 @@ fn k_id_independent_end_to_end() {
         let relay = Relay::with(cells);
         (
             issued.invitation.ld_id.to_vec(),
+            record,
             k_initiator,
             sk,
             host,
@@ -479,13 +491,14 @@ fn k_id_independent_end_to_end() {
             relay,
         )
     };
-    let (ld1, k1, sk1, mut inv1, iss1, mut relay1) = handshake_of("x");
+    let (ld1, rec1, k1, sk1, mut inv1, iss1, mut relay1) = handshake_of("x");
     round(&mut inv1, &iss1, &mut relay1).unwrap();
     let responder1 = secmp_proto::hx::k_id_kat().unwrap();
-    let (ld2, k2, sk2, mut inv2, iss2, mut relay2) = handshake_of("y");
+    let (ld2, rec2, k2, sk2, mut inv2, iss2, mut relay2) = handshake_of("y");
     round(&mut inv2, &iss2, &mut relay2).unwrap();
     let responder2 = secmp_proto::hx::k_id_kat().unwrap();
     assert_eq!(ld1, ld2, "the same invitation record in both stores");
+    assert_eq!(rec1, rec2, "the record is byte-identical in both stores");
     assert_eq!(k1, k2, "K_id of the initiators");
     assert_eq!(responder1, responder2, "K_id of the responders");
     assert_eq!(

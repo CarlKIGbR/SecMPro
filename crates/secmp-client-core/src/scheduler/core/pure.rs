@@ -64,8 +64,23 @@ impl<const N: usize> Received<N> {
         self.committed.iter().take(self.len).any(|c| !*c)
     }
 
+    /// Whether `id` can be recorded: it is recorded already, or a slot is free (Q182: [`RecvLedger::take`] asks before it
+    /// hands a cell to the cell source).
+    #[must_use]
+    pub fn can_record(&self, id: u64) -> bool {
+        self.position(id).is_some() || self.len < N
+    }
+
+    /// The ledger is full and `id` was seen but not recorded: the acknowledgement stays below the lowest such id until it
+    /// is recorded.
+    pub fn note_full(&mut self, id: u64) {
+        self.floor = Some(self.floor.map_or(id, |f| f.min(id)));
+    }
+
     /// Record the fetched `id` with whether its decision is committed (a recorded id stays committed once it is). `false`
-    /// if the ledger is full: nothing is recorded, and the acknowledgement stays below `id` until it is.
+    /// if the ledger is full: nothing is recorded, and the floor ([`Self::note_full`]) keeps the acknowledgement below the
+    /// lowest id seen and not recorded, until that id is recorded. A cell is handed to the cell source only when it can be
+    /// recorded ([`RecvLedger::take`]), so an id this refuses was never handed over.
     pub fn record(&mut self, id: u64, committed: bool) -> bool {
         if let Some(at) = self.position(id) {
             if let Some(c) = self.committed.get_mut(at) {
@@ -74,7 +89,7 @@ impl<const N: usize> Received<N> {
             return true;
         }
         let Some(grown) = self.len.checked_add(1).filter(|g| *g <= N) else {
-            self.floor = Some(self.floor.map_or(id, |f| f.min(id)));
+            self.note_full(id);
             return false;
         };
         let at = self
@@ -94,6 +109,9 @@ impl<const N: usize> Received<N> {
             *c = committed;
         }
         self.len = grown;
+        // a cell is handed to `deliver` only when it can be recorded (`take`), so the floor protects only ids that were
+        // seen and not handed; acknowledging past such an id equals the relay omitting it (docs/01: the relay may drop
+        // cells), never an uncommitted decision
         if self.floor == Some(id) {
             self.floor = None;
         }
@@ -201,6 +219,12 @@ impl<const N: usize> RecvLedger<N> {
             // at or below the acknowledgement, or committed: decided already (a re-fetch, spec §9.3)
             if id <= self.acked || self.received.is_committed(id) {
                 continue;
+            }
+            // Q182 (CLAUDE.md §1.7): nothing is handed to the cell source unrecorded — with the ledger full the pass stops
+            // here, the cell stays with the relay and the next FETCH asks for it again (spec §9.3)
+            if !self.received.can_record(id) {
+                self.received.note_full(id);
+                break;
             }
             let outcome = deliver(id, cell);
             let committed = matches!(outcome, Ok(Delivered::Committed));
@@ -682,6 +706,168 @@ mod tests {
         assert_eq!(sendable(Ok(Some(3))), Some(3));
         assert_eq!(sendable::<u8>(Ok(None)), None);
         assert_eq!(sendable::<u8>(Err(SourceError)), None);
+    }
+
+    /// The shadow of a cell source for the hostile-relay tests: what was handed to `deliver` and what is committed.
+    #[derive(Default)]
+    struct Shadow {
+        handed: std::collections::BTreeSet<u64>,
+        committed: std::collections::BTreeSet<u64>,
+    }
+
+    impl Shadow {
+        /// `take` with the answer `fresh(id)` for an id not committed yet (a committed one answers `Committed`).
+        fn take<const N: usize>(
+            &mut self,
+            l: &mut RecvLedger<N>,
+            ids: &[u64],
+            mut fresh: impl FnMut(u64) -> Result<Delivered, SourceError>,
+        ) {
+            let _ = l.take(0, ids.iter().map(|id| (*id, ())), |id, ()| {
+                self.handed.insert(id);
+                if self.committed.contains(&id) {
+                    return Ok(Delivered::Committed);
+                }
+                let answer = fresh(id);
+                if matches!(answer, Ok(Delivered::Committed)) {
+                    self.committed.insert(id);
+                }
+                answer
+            });
+        }
+
+        /// A later completion of `id`.
+        fn commit<const N: usize>(&mut self, l: &mut RecvLedger<N>, id: u64) {
+            self.committed.insert(id);
+            l.committed(id);
+        }
+
+        /// CLAUDE.md §1.7: every handed id at or below the acknowledgement is committed.
+        fn check<const N: usize>(&self, l: &RecvLedger<N>) {
+            let acked = l.acked();
+            for id in self.handed.iter().filter(|id| **id <= acked) {
+                assert!(
+                    self.committed.contains(id),
+                    "id {id} acked {acked} not committed"
+                );
+            }
+        }
+    }
+
+    /// Q182 (F1): a hostile relay (out of order, a gap filled later) never makes the acknowledgement pass a handed cell
+    /// whose decision is not committed — with the ledger full, a cell is not handed over at all.
+    #[test]
+    fn hostile_relay_never_acks_uncommitted() {
+        let mut l: RecvLedger<4> = RecvLedger::new();
+        let mut s = Shadow::default();
+        let pend = |_| Ok(Delivered::Pending);
+        let ok = |_| Ok(Delivered::Committed);
+        s.take(&mut l, &[1, 3, 4, 5], |id| {
+            if id == 1 {
+                Ok(Delivered::Pending)
+            } else {
+                Ok(Delivered::Committed)
+            }
+        });
+        s.check(&l);
+        s.take(&mut l, &[6], pend);
+        s.check(&l);
+        s.take(&mut l, &[2], |_| Err(SourceError));
+        s.check(&l);
+        s.commit(&mut l, 1);
+        s.check(&l);
+        s.take(&mut l, &[2], ok);
+        s.check(&l);
+        s.take(&mut l, &[7], ok);
+        s.check(&l);
+    }
+
+    /// Q182: with the ledger full, the pass stops before handing the cell over; the floor names it.
+    #[test]
+    fn full_ledger_hands_nothing() {
+        let mut l: RecvLedger<4> = RecvLedger::new();
+        let mut calls = 0_u32;
+        let _ = l.take(0, (1..=5_u64).map(|i| (i, ())), |_, ()| {
+            calls = calls.saturating_add(1);
+            Ok(Delivered::Pending)
+        });
+        assert_eq!(calls, 4);
+        assert_eq!(l.received().floor, Some(5));
+    }
+
+    /// A linear congruential generator for the random hostile-relay sequences (test-only; no dependency).
+    struct Lcg(u64);
+
+    impl Lcg {
+        fn next(&mut self) -> u64 {
+            self.0 = self
+                .0
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            self.0.rotate_right(29)
+        }
+
+        /// Uniform-enough in `0..n` (`n > 0`).
+        fn below(&mut self, n: u64) -> u64 {
+            self.next().checked_rem(n).unwrap_or(0)
+        }
+    }
+
+    /// Q182: 10 000 random hostile-relay sequences of 12 steps (responses of 0–8 ids above the acknowledgement, reversed,
+    /// with one dropped or one duplicated; late commits of pending ids; answers committed / pending / failing): the §1.7
+    /// oracle holds after every step.
+    #[test]
+    fn hostile_relay_random_sequences() {
+        let mut rng = Lcg(0x5eed_b5c2);
+        for _ in 0..10_000 {
+            let mut l: RecvLedger<4> = RecvLedger::new();
+            let mut s = Shadow::default();
+            for _ in 0..12 {
+                if rng.below(4) == 0 {
+                    let pending: Vec<u64> = s
+                        .handed
+                        .iter()
+                        .filter(|id| !s.committed.contains(id))
+                        .copied()
+                        .collect();
+                    if let Some(id) = pending
+                        .get(usize::try_from(rng.below(8)).unwrap_or(0))
+                        .copied()
+                    {
+                        s.commit(&mut l, id);
+                    }
+                } else {
+                    let count = rng.below(9);
+                    let base = l.acked().saturating_add(1);
+                    let mut ids: Vec<u64> = (0..count)
+                        .map(|_| base.saturating_add(rng.below(12)))
+                        .collect();
+                    ids.sort_unstable();
+                    ids.dedup();
+                    if rng.below(4) == 0 {
+                        ids.reverse();
+                    }
+                    if rng.below(4) == 0 && !ids.is_empty() {
+                        let at = usize::try_from(rng.below(8)).unwrap_or(0);
+                        if at < ids.len() {
+                            ids.remove(at);
+                        }
+                    }
+                    if rng.below(4) == 0
+                        && let Some(first) = ids.first().copied()
+                    {
+                        ids.push(first);
+                    }
+                    let mut answers = Lcg(rng.next());
+                    s.take(&mut l, &ids, |_| match answers.below(3) {
+                        0 => Ok(Delivered::Committed),
+                        1 => Ok(Delivered::Pending),
+                        _ => Err(SourceError),
+                    });
+                }
+                s.check(&l);
+            }
+        }
     }
 
     /// The ledger bound: a full ledger records nothing more and keeps the acknowledgement below the first id it could not

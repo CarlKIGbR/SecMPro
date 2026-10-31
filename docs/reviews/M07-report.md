@@ -925,7 +925,7 @@ Start counts: `KANI_HARNESSES.len()` 55, `FUZZ_TARGETS.len()` 35, the `kani_refu
 | B-3 | `8b0c5ba` | `kat::txn_log`, `harness::m7_accept` (IN-05, IN-06, IN-07, IN-20), `invitations::tests::opk_and_record_in_one_txn` (IN-08) |
 | close | `04b5249`, `a86e0eb`, `451dfac`, `b5bb6e0` | killers; accepted rows (six equivalent survivors); IN-05 trace writes `target/m7-evidence/in-05-accept-trace.txt` |
 
-### §3 Rows (28 dictated; 27 built, K7-01 blocked)
+### §3 Rows (28 dictated; 26 built, G7-15b FZ-04 half only, K7-01 blocked — corrected by B-3b, Q195; both close with Q191, see B-3b)
 
 | Row | Test | Result |
 |---|---|---|
@@ -955,7 +955,7 @@ Start counts: `KANI_HARNESSES.len()` 55, `FUZZ_TARGETS.len()` 35, the `kani_refu
 | IN-07 | `harness::m7_accept::crash_inside_accept_is_atomic` | pass; `MidTxn(1…6)` all-before, `AfterCommitBeforeAck` all-after |
 | IN-20 | `harness::m7_accept::k_id_independent_end_to_end` | pass |
 | FZ-04 | fuzz `invitation_queue_retention` | `fuzz-m7-b-cdac99c.txt`: 1 974 581 runs, 0 crashes, final `cov: 369 ft: 2286` |
-| G7-15b | `xtask::expect::tests::fuzz_and_kani_lists_core` | FZ-04 half built; red first: without the target in `FUZZ_TARGETS` it fails at `expect.rs:2299:9` (`invitation_queue_retention`); the K7-01 half is not built |
+| G7-15b | `xtask::expect::tests::fuzz_and_kani_lists_core` | FZ-04 half; K7-01 half closes with Q191 (B-3b `1057964`). Was: "FZ-04 half built" counted as built (Q195); red first: without the target in `FUZZ_TARGETS` it fails at `expect.rs:2299:9` (`invitation_queue_retention`); the K7-01 half is not built |
 | K7-01 | `kani_retention_bound_24` | **blocked**, §8 |
 
 Extra tests: `schema::tests::capability_columns_are_sealed`, `kat::tests::txn_log_records_table_and_verb`, `secmp-store` `profile::tests::{lifecycle_rows, identity_fingerprint_column}`, `contacts::tests::routes_and_queues_are_sealed`,
@@ -968,7 +968,7 @@ ci-fast: B-1 `ci-fast-b1-140b510.txt` green; B-2 `ci-fast-b2-cdac99c.txt` **red*
 Fuzz FZ-04: above. Coverage (`coverage-b3-8b0c5ba.txt`): client-core 95.1 %, store 96.1 %.
 Mutants (`mutants-b3-451dfac.txt`): core first run 365 tested: 216 caught, 49 missed, 100 unviable; rerun after the killers 359: 251 caught, 8 missed, 100 unviable; of the 8 two are killed by `451dfac`, six are equivalent and are rows of `docs/mutants-accepted.md`
 (`invitations.rs:817:19`, `:930:58`, `:1143:22`, `retention.rs:42:15`, `:56:14`, `:56:29`). Store: 122 tested: 94 caught, 4 missed (`identity_fingerprint`, killer `identity_fingerprint_column`), 24 unviable; rerun: 98 caught, 0 missed.
-Kani K7-01: three attempts, none finished (`kani-m7-b-k701-blocked.txt`).
+Kani K7-01: three attempts: 34 min stopped at 9.6 GB (≈ 68 % of the limit), 60 min, 60 min (`kani-m7-b-k701-blocked.txt`); none finished (corrected by B-3b, Q195). The comment of the old harness (`kani-k701-harness.rs.txt:28`, "no proof in 70 minutes") is wrong: the evidence is 34/60/60 min. The harness is history, superseded by Q191 (B-3b).
 
 ### §5 Deviations
 
@@ -1025,3 +1025,72 @@ all jobs green except mutants shards 2/3/4/5/8/9 (timeouts of timing.rs mutants)
 +    );
 ```
 Pure formatting of `6ae6f44`; the mutants runs are unaffected. Return to the reviewer: allow `cargo fmt` as a fix-up.
+
+## B-3b (WEISUNG M7-B3b; Q189–Q195; modell=claude-opus-5-5)
+
+Guard (2026-10-31, session M7-B3b2; single commands, each exit 0): `git status --short` empty; `git merge-base --is-ancestor 7d80d6a HEAD`; `git log --oneline 7d80d6a..HEAD` = `05f58e1` (CI1 ci-fast green), `f32e8e8` (CI1c rustfmt), `6a34863`, `aa89fd5`, `6ae6f44` — as expected; `git diff --stat 7d80d6a HEAD -- crates/secmp-client-core/src crates/secmp-proto/src crates/secmp-store/src xtask/src/expect.rs` empty; `cargo fmt --all -- --check` clean. `<G>` = `05f58e1da71ee5010efc28e9b496a544ea7d4246`.
+
+### §2 commits
+
+| commit | what |
+|---|---|
+| `373869b` | §1 `refactor(proto,core): one issue construction — issue_on_parts, identity section (Q189)`; the `mutants-accepted` row of the deleted `signed_bundle` (`invitations.rs:817:19`) removed with it |
+| `323b209` | §2 `test(core): killers for three non-equivalent mutants (Q190)` + `b3b-red-first.txt` |
+| `1057964` | §3 `test(kani,core): K7-01 as an inductive step over offer (Q191)` + the alone run |
+| `c70827c` | §4 `fix(core): invitation minors (Q192)` |
+| `5d2be5f` | `test(core): decide acknowledges the cells of a consumed record (mutants miss)` — the one miss of the §5 mutants run |
+| this commit | §5 `docs(m7): B-3b @ 5d2be5f (Q189–Q195)` with the evidence files |
+
+### §3 tests (one row per new or re-dictated test)
+
+| ruling | test | commit | evidence |
+|---|---|---|---|
+| Q189 | `secmp-proto` `prekeys::tests::identity_section_round_trip` | `373869b` | green; `generate_with_section` and `generate` from one `FixedEntropy` stream give the same `IKSPublic`; `from_section` gives it back; version 0x02 and 96 bytes `Rejected` |
+| Q189 | `invitations::tests::issue_equals_issue_invitation_on` (extended) | `373869b` | green on three paths, each blob, invitation, URI **and stored `InvitationRecord` (`to_bytes`)** byte-equal to `MemoryPrekeyStore::issue_invitation_on`: reused OPK; `opk_is_new` (the creation's OPK row deleted first); SPK rotated inside the issue (day 8; reference `spk_id` 2). The rotation case runs on the `opk_is_new` path: the reference rotates before it draws the OPK, the product draws the reused OPK at creation — reused-OPK + rotation has no reference draw order |
+| Q190 | `invitations::tests::commit_accept_twice_is_rejected` | `323b209` | red 1/3 (`left: Ok(())`, `right: Err(Rejected)`) |
+| Q190 | `invitations::tests::check_invitation_refuses_bad_version_before_kind` | `323b209` | red 2/3 (`left: Some(Unsupported)`, `right: Some(Invalid)`) |
+| Q190 | `retention::tests::offer_ignores_a_prefilled_out` | `323b209` | red 3/3 (`left: Some([18446744073709551615])`, `right: Some([1])`) |
+| Q191 | `retention::tests::retain_is_fold_of_offer` (10 000 LCG runs) | `1057964` | green |
+| Q191 | `kani_proofs::kani_retention_bound_24` (K7-01, unwind 25, 4 covers) | `1057964` | `VERIFICATION:- SUCCESSFUL`, 0 of 343 failed, 4 of 4 covers |
+| Q192 | `invitations::tests::live_counter_counts_owner_status_open` | `c70827c` | green; peak 1, live 0 after, flag written. Green on the old code too (the old path's raw plaintext was not counted, so no counter test can see it); it pins the single open |
+| Q192 | `invitations::tests::decide_rechecks_status_after_lock` | `c70827c`, `5d2be5f` | green; with the re-check disabled by hand: `consumed: accept is not called` fails (sanity, not committed); (a) also asserts `ack_through == Some(3)` (`5d2be5f`, the mutants killer; red with the field deleted: `left: None`) |
+| Q192 | `harness::m7_accept::k_id_independent_end_to_end` (IN-20) | `c70827c` | green; now also asserts the two sealed records byte-identical (D-B13) |
+| Q191 | `xtask::expect::tests::fuzz_and_kani_lists_core`, `gates::tests::{kani_refuses_fifteen_harnesses, kani_cover_count_is_pinned}` | `1057964` | green (56; the pin reads `kani-m7-b3b-sc-kani_retention_bound_24.txt`) |
+
+All new tests green on the final code (`cargo nextest run -p secmp-client-core -p secmp-proto --features kat`: 487 passed at `c70827c`; the m7_accept harness 4/4; ci-fast at `5d2be5f`).
+
+### §4 Kani, mutants, coverage, vectors
+
+- **K7-01 alone** (`kani-m7-b3b-sc-kani_retention_bound_24.txt`): 40 s wall, peak 783 092 KiB = **5.5 %** of `KANI_CBMC_RSS_LIMIT_KIB`. `KANI_HARNESSES` 55 → 56.
+- **Mutants** (`mutants-b3b-5d2be5f.txt`; in-diff `git diff 7d80d6a..HEAD -- crates/secmp-client-core/src crates/secmp-proto/src`, forms of `mutants-a3b-core-proto-store-cdc3c0a.txt:11/:15`, no `--re`): core run 1 (`c70827c`) 18: 10 caught / **1 missed** / 7 unviable / 0 timeouts — `invitations.rs:941:21` delete field `ack_through` in `decide` → killer `5d2be5f`; core run 2 (`5d2be5f`) 18: **11 / 0 / 7 / 0**; proto 23: **7 / 0 / 16 / 0**. Unviable: `Default::default()` returns of types without `Default`, and `+ → -` in the const `IDENTITY_SECTION_LEN` (compile-time underflow). Caught of the viable: 100 % in both.
+- **Coverage** (`coverage-b3b-5d2be5f.txt`, `cargo xtask step coverage`, PASS 976 s): secmp-client-core 95.6 % (B-3: 95.1 %), secmp-proto 97.7 %, secmp-store 96.1 %.
+- **Vectors** (`b3b-vectors-373869b.txt`): before (`05f58e1`) and after (`373869b`) `vectors: 12 suites identical to vectors/ref (structural, SCHEMA §1; positive rows of encodings)`; the outputs differ only in build times, run ids and per-test timings (filtered diff empty).
+- **ci-fast** (`ci-fast-b3b-5d2be5f.txt`): PASS (harness 897 s; the working tree had the uncommitted §5 docs only).
+- Locks: `git diff --stat 05f58e1..HEAD -- Cargo.lock fuzz/Cargo.lock vectors/ '*Cargo.toml' docs/03-protocol-spec.md formal/ crates/secmp-store/src crates/secmp-client-core/src/scheduler` empty.
+
+### §5 deviations
+
+- **D-B6 closed (Q189).** `secmp-proto` exposes the existing construction: `prekeys::bundle_on_parts`, `prekeys::issue_on_parts` (the bodies of `MemoryPrekeyStore::bundle`/`issue_with`, moved), `IdentityKeys::{generate_with_section, from_section}` (+ `IDENTITY_SECTION_VER`, `IDENTITY_SECTION_LEN`). `generate_with_section` draws the three 32-byte seeds with `Entropy::secret` (byte-identical under `FixedEntropy` to `hybrid_signing_key` + `x25519`; the core's former `new_identity`), because `HybridSigningKey` gives no seeds back. The core keeps the store work; its `issue_in` assembly, `signed_bundle`, `new_identity`, `keys_from_section`, `identity_parts` are deleted; `profile::SECTION_LEN` is now `IDENTITY_SECTION_LEN`.
+- **D-B9 closed** (K7-01 built, Q191).
+- **D-B10** (Q193): `invitations.rs` (consumed path of `process_round`/`decide`) acknowledges and drops the cells of a consumed record; spec `docs/03:351` keeps processing them as TR cells of the session for U[1 h, 24 h] — B-4 commit 1 (OPEN-M7-B-6).
+- **D-B11** (Q194): QUEUE_DEL only after an empty FETCH is deferred to the host's queue; nothing sequences it (Q163) — B-4 (OPEN-M7-B-7).
+- **D-B12** (Q195): `a86e0eb` (`test(core,store): killers …`) changed product code: `TRAILER_LEN` removed and the `Stored::encode` capacity hint changed (`invitations.rs:65-66,145` @`a86e0eb`).
+- **D-B13** (Q192, IN-20): IN-20 keeps its method — both host profiles built from one entropy stream (same identity, prekeys, queue and record) — instead of `InvitationRecord::duplicate_kat`, which copies the record without the SPK/OPK it names (the second store would have none of them); the test now asserts the two sealed records' plaintexts byte-identical.
+- **D-B14** (form): the weisung writes the `B_SC_HARNESSES` entry as `("kani_proofs::kani_retention_bound_24", 4)`; the list holds bare names (the test prefixes `kani_proofs::`), so the entry is `("kani_retention_bound_24", 4)`.
+- **D-B15** (Q190 scope): besides the three dictated rows, the row `invitations.rs:817:19` (`signed_bundle`) was deleted in `373869b`: its code is gone (the file's rule "an entry is removed when the code changes"). `retention.rs:42:15` and `:56:29` stay (lines unchanged).
+- `on_owner_status`/`process_round`/`decide` share `offer_state` (open / consumed / expired from the row); `FLAGS_AT` removed (the flag is set on the decoded record and re-encoded).
+
+**Corrections in the B-1…B-3 section (Q195):** §3 heading — 26 built, G7-15b the FZ-04 half only (K7-01 half closes with Q191); G7-15b row likewise; §4 K7-01 — three attempts: 34 min stopped at 9.6 GB (≈ 68 % of the limit), 60 min, 60 min (`kani-m7-b-k701-blocked.txt`); the old harness comment "no proof in 70 minutes" (`kani-k701-harness.rs.txt:28`) is wrong. `kani-k701-harness.rs.txt` is history, superseded by Q191.
+
+### §7 risks
+
+- OPK ids are still `max + 1` (OPEN-M7-B-10): an id of a consumed/retired OPK is issued again once no row holds it.
+- `issue` commits in three transactions (rotation; the issue; `fill_opks`): a failure after the rotation leaves the new SPK generation (harmless: it is the current one).
+- The `opk_is_new` and rotated paths of the differential test share one case; reused-OPK + rotation has no reference order (§3).
+
+### §8 Blocked / questions
+
+- **OPK counter (Q192 item 3) not built — item STOP only.** `git grep -n 'fn .*meta' 05f58e1 -- crates/secmp-store/src`: no match (exit 1); no store function persists a counter without a schema or store-code change. Proposal (OPEN-M7-B-10): a `meta` row `opk_next` — store `fn meta_u32(&self, key: &str) -> Result<Option<u32>>` and `fn put_meta_u32(tx, key: &str, v: u32)` over a `meta(key TEXT PRIMARY KEY, value BLOB)` table — read and advanced (`checked_add`) in the transaction that inserts an OPK (`issue_in`, `fill_opks`, `Profile::create_with`); test `opk_ids_never_reused` (consume the highest OPK, `fill_opks`, the new id exceeds every id ever issued).
+- Question OPEN-M7-B-9: `spk_expiry` = this invitation's `expires` versus `docs/03:293` ("MUST be ≥ the expiry of every invitation referencing it").
+
+Blocked: none. STOP: none.

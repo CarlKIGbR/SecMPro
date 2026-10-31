@@ -1,0 +1,98 @@
+mutants of WEISUNG M7-B3b §5 (Q189–Q195); modell=claude-opus-5-5; cargo-mutants 27.1.0; nproc 32
+# diff: git diff 7d80d6a..HEAD -- crates/secmp-client-core/src crates/secmp-proto/src > target/fable/b3b-mutants.diff
+#   (run 1 at HEAD c70827c; run 2 regenerated at HEAD 5d2be5f). No --re (the command forms of
+#   mutants-a3b-core-proto-store-cdc3c0a.txt:11 (core) and :15 (proto)); the --file filters name the files of this diff
+#   that hold product code (invitations_tests.rs is a cfg(test) module; kani_proofs.rs is excluded by the form).
+
+== run core 1 (HEAD c70827c)
+$ timeout 3600 cargo mutants --no-shuffle -j 3 --output target/fable/b3b-mutants-core --features kat --caught --unviable --package secmp-client-core --test-package secmp-client-core --test-package secmp-transport --test-package secmp-testkit <the --exclude/--exclude-re set of mutants-a3b-core-proto-store-cdc3c0a.txt:11, unchanged> --file crates/secmp-client-core/src/invitations.rs --file crates/secmp-client-core/src/profile.rs --file crates/secmp-client-core/src/retention.rs --in-diff target/fable/b3b-mutants.diff --test-tool nextest --timeout 900 -- --max-fail=1:immediate --profile mutants-harness -- <the --skip set of :11, unchanged>
+Found 18 mutants to test
+unviable crates/secmp-client-core/src/invitations.rs:549:9: replace Invitations::issue -> Result<Issuance, Error> with Ok(Default::default()) in 31s build
+caught   crates/secmp-client-core/src/invitations.rs:600:9: replace Invitations::on_owner_status -> Result<Vec<OpSpec>, Error> with Ok(vec![]) in 17s build + 1s test
+unviable crates/secmp-client-core/src/invitations.rs:600:9: replace Invitations::on_owner_status -> Result<Vec<OpSpec>, Error> with Ok(vec![Default::default()]) in 1s build
+caught   crates/secmp-client-core/src/invitations.rs:605:45: replace != with == in Invitations::on_owner_status in 8s build + 1s test
+caught   crates/secmp-client-core/src/invitations.rs:609:33: replace |= with &= in Invitations::on_owner_status in 5s build + 1s test
+unviable crates/secmp-client-core/src/invitations.rs:679:5: replace issue_in -> Result<Issuance, Error> with Ok(Default::default()) in 1s build
+caught   crates/secmp-client-core/src/invitations.rs:900:9: replace Invitations::process_round -> Result<Round, Error> with Ok(Default::default()) in 11s build + 1s test
+caught   crates/secmp-client-core/src/invitations.rs:934:9: replace Invitations::decide -> Result<Round, Error> with Ok(Default::default()) in 8s build + 1s test
+MISSED   crates/secmp-client-core/src/invitations.rs:941:21: delete field ack_through from struct Round expression in Invitations::decide in 11s build + 98s test
+caught   crates/secmp-client-core/src/invitations.rs:1039:22: replace != with == in offer_state in 23s build + 2s test
+caught   crates/secmp-client-core/src/invitations.rs:1041:37: replace <= with > in offer_state in 12s build + 2s test
+caught   crates/secmp-client-core/src/invitations.rs:1041:30: replace / with % in offer_state in 7s build + 2s test
+caught   crates/secmp-client-core/src/invitations.rs:1041:30: replace / with * in offer_state in 7s build + 2s test
+unviable crates/secmp-client-core/src/invitations.rs:1176:9: replace Invitations::accept_invitation -> Result<InviteeStart, Error> with Ok(Default::default()) in 1s build
+unviable crates/secmp-client-core/src/profile.rs:97:9: replace Profile::create_with -> Result<Self, Error> with Ok(Default::default()) in 1s build
+unviable crates/secmp-client-core/src/profile.rs:173:9: replace Profile::identity -> Result<IdentityKeys, Error> with Ok(Default::default()) in 1s build
+unviable crates/secmp-client-core/src/invitations.rs:1034:5: replace offer_state -> Result<OfferState, Error> with Ok(Default::default()) in 169s build
+caught   crates/secmp-client-core/src/invitations.rs:1037:27: replace == with != in offer_state in 176s build + 1s test
+18 mutants tested in 9m: 1 missed, 10 caught, 7 unviable
+exit status: 2
+# missed.txt of run 1:
+#   crates/secmp-client-core/src/invitations.rs:941:21: delete field ack_through from struct Round expression in Invitations::decide
+# -> killer: decide_rechecks_status_after_lock (a) asserts ack_through == Some(3) (commit 5d2be5f).
+#    Red first with the field deleted by hand (invitations.rs:941 removed), one test, nextest exact filter:
+#   FAIL [   0.751s] (1/1) secmp-client-core invitations::tests::decide_rechecks_status_after_lock
+#   thread 'invitations::tests::decide_rechecks_status_after_lock' (262486) panicked at crates/secmp-client-core/src/invitations_tests.rs:1202:5:
+#   left: None
+#   right: Some(3)
+#    reverted: git checkout crates/secmp-client-core/src/invitations.rs; git diff --stat showed only the test and docs files.
+
+== run core 2 (HEAD 5d2be5f, after the killer)
+$ timeout 3600 cargo mutants --no-shuffle -j 3 --output target/fable/b3b-mutants-core --features kat --caught --unviable --package secmp-client-core --test-package secmp-client-core --test-package secmp-transport --test-package secmp-testkit <the --exclude/--exclude-re set of mutants-a3b-core-proto-store-cdc3c0a.txt:11, unchanged> --file crates/secmp-client-core/src/invitations.rs --file crates/secmp-client-core/src/profile.rs --file crates/secmp-client-core/src/retention.rs --in-diff target/fable/b3b-mutants.diff --test-tool nextest --timeout 900 -- --max-fail=1:immediate --profile mutants-harness -- <the --skip set of :11, unchanged>
+Found 18 mutants to test
+unviable crates/secmp-client-core/src/invitations.rs:549:9: replace Invitations::issue -> Result<Issuance, Error> with Ok(Default::default()) in 31s build
+caught   crates/secmp-client-core/src/invitations.rs:600:9: replace Invitations::on_owner_status -> Result<Vec<OpSpec>, Error> with Ok(vec![]) in 17s build + 2s test
+unviable crates/secmp-client-core/src/invitations.rs:600:9: replace Invitations::on_owner_status -> Result<Vec<OpSpec>, Error> with Ok(vec![Default::default()]) in 1s build
+caught   crates/secmp-client-core/src/invitations.rs:605:45: replace != with == in Invitations::on_owner_status in 6s build + 1s test
+caught   crates/secmp-client-core/src/invitations.rs:609:33: replace |= with &= in Invitations::on_owner_status in 4s build + 1s test
+unviable crates/secmp-client-core/src/invitations.rs:679:5: replace issue_in -> Result<Issuance, Error> with Ok(Default::default()) in 1s build
+caught   crates/secmp-client-core/src/invitations.rs:900:9: replace Invitations::process_round -> Result<Round, Error> with Ok(Default::default()) in 10s build + 1s test
+caught   crates/secmp-client-core/src/invitations.rs:934:9: replace Invitations::decide -> Result<Round, Error> with Ok(Default::default()) in 7s build + 1s test
+caught   crates/secmp-client-core/src/invitations.rs:941:21: delete field ack_through from struct Round expression in Invitations::decide in 11s build + 2s test
+unviable crates/secmp-client-core/src/invitations.rs:1034:5: replace offer_state -> Result<OfferState, Error> with Ok(Default::default()) in 1s build
+caught   crates/secmp-client-core/src/invitations.rs:1037:27: replace == with != in offer_state in 6s build + 1s test
+caught   crates/secmp-client-core/src/invitations.rs:1039:22: replace != with == in offer_state in 4s build + 1s test
+caught   crates/secmp-client-core/src/invitations.rs:1041:37: replace <= with > in offer_state in 4s build + 1s test
+caught   crates/secmp-client-core/src/invitations.rs:1041:30: replace / with % in offer_state in 4s build + 1s test
+caught   crates/secmp-client-core/src/invitations.rs:1041:30: replace / with * in offer_state in 4s build + 1s test
+unviable crates/secmp-client-core/src/invitations.rs:1176:9: replace Invitations::accept_invitation -> Result<InviteeStart, Error> with Ok(Default::default()) in 1s build
+unviable crates/secmp-client-core/src/profile.rs:97:9: replace Profile::create_with -> Result<Self, Error> with Ok(Default::default()) in 1s build
+unviable crates/secmp-client-core/src/profile.rs:173:9: replace Profile::identity -> Result<IdentityKeys, Error> with Ok(Default::default()) in 1s build
+18 mutants tested in 6m: 11 caught, 7 unviable
+exit status: 0
+
+== run proto (HEAD 5d2be5f)
+$ timeout 900 cargo mutants --no-shuffle -j 3 --output target/fable/b3b-mutants-proto --features kat --caught --unviable --package secmp-proto <the --exclude/--exclude-re set of mutants-a3b-core-proto-store-cdc3c0a.txt:15, unchanged> --file crates/secmp-proto/src/prekeys.rs --in-diff target/fable/b3b-mutants.diff -- -- --skip ratchet_fast_forward_bound_on_the_chain --skip ratchet_fast_forward_bound_on_a_step
+Found 23 mutants to test
+caught   crates/secmp-proto/src/prekeys.rs:48:53: replace + with - in 1s build + 0s test
+caught   crates/secmp-proto/src/prekeys.rs:48:53: replace + with * in 1s build + 0s test
+caught   crates/secmp-proto/src/prekeys.rs:48:48: replace + with - in 0s build + 0s test
+caught   crates/secmp-proto/src/prekeys.rs:48:48: replace + with * in 0s build + 0s test
+unviable crates/secmp-proto/src/prekeys.rs:48:43: replace + with - in 0s build
+caught   crates/secmp-proto/src/prekeys.rs:48:43: replace + with * in 1s build + 0s test
+unviable crates/secmp-proto/src/prekeys.rs:109:9: replace IdentityKeys::generate_with_section -> Result<(Self, Zeroizing<Vec<u8>>)> with Ok((Default::default(), Zeroizing::new())) in 0s build
+unviable crates/secmp-proto/src/prekeys.rs:109:9: replace IdentityKeys::generate_with_section -> Result<(Self, Zeroizing<Vec<u8>>)> with Ok((Default::default(), Zeroizing::from_iter([vec![]]))) in 0s build
+unviable crates/secmp-proto/src/prekeys.rs:109:9: replace IdentityKeys::generate_with_section -> Result<(Self, Zeroizing<Vec<u8>>)> with Ok((Default::default(), Zeroizing::new(vec![]))) in 0s build
+unviable crates/secmp-proto/src/prekeys.rs:109:9: replace IdentityKeys::generate_with_section -> Result<(Self, Zeroizing<Vec<u8>>)> with Ok((Default::default(), Zeroizing::from(vec![]))) in 0s build
+unviable crates/secmp-proto/src/prekeys.rs:109:9: replace IdentityKeys::generate_with_section -> Result<(Self, Zeroizing<Vec<u8>>)> with Ok((Default::default(), Zeroizing::from_iter([vec![0]]))) in 0s build
+unviable crates/secmp-proto/src/prekeys.rs:109:9: replace IdentityKeys::generate_with_section -> Result<(Self, Zeroizing<Vec<u8>>)> with Ok((Default::default(), Zeroizing::new(vec![0]))) in 0s build
+unviable crates/secmp-proto/src/prekeys.rs:109:9: replace IdentityKeys::generate_with_section -> Result<(Self, Zeroizing<Vec<u8>>)> with Ok((Default::default(), Zeroizing::from(vec![0]))) in 0s build
+unviable crates/secmp-proto/src/prekeys.rs:109:9: replace IdentityKeys::generate_with_section -> Result<(Self, Zeroizing<Vec<u8>>)> with Ok((Default::default(), Zeroizing::from_iter([vec![1]]))) in 0s build
+unviable crates/secmp-proto/src/prekeys.rs:109:9: replace IdentityKeys::generate_with_section -> Result<(Self, Zeroizing<Vec<u8>>)> with Ok((Default::default(), Zeroizing::new(vec![1]))) in 0s build
+unviable crates/secmp-proto/src/prekeys.rs:109:9: replace IdentityKeys::generate_with_section -> Result<(Self, Zeroizing<Vec<u8>>)> with Ok((Default::default(), Zeroizing::from(vec![1]))) in 0s build
+unviable crates/secmp-proto/src/prekeys.rs:128:9: replace IdentityKeys::from_section -> Result<Self> with Ok(Default::default()) in 0s build
+caught   crates/secmp-proto/src/prekeys.rs:129:20: replace != with == in IdentityKeys::from_section in 1s build + 0s test
+unviable crates/secmp-proto/src/prekeys.rs:686:9: replace MemoryPrekeyStore::bundle -> Result<PrekeyBundle> with Ok(Default::default()) in 0s build
+unviable crates/secmp-proto/src/prekeys.rs:835:9: replace MemoryPrekeyStore::issue_with -> core::result::Result<Issued, IssueError> with Ok(Default::default()) in 0s build
+unviable crates/secmp-proto/src/prekeys.rs:927:5: replace bundle_on_parts -> Result<PrekeyBundle> with Ok(Default::default()) in 0s build
+caught   crates/secmp-proto/src/prekeys.rs:954:9: delete field sig from struct PrekeyBundle expression in bundle_on_parts in 2s build + 1s test
+unviable crates/secmp-proto/src/prekeys.rs:975:5: replace issue_on_parts -> core::result::Result<(Issued, InvitationRecord), IssueError> with Ok((Default::default(), Default::default())) in 0s build
+23 mutants tested in 4m: 7 caught, 16 unviable
+exit status: 0
+
+== tally (final runs)
+secmp-client-core: 18 tested: 11 caught / 0 missed / 7 unviable / 0 timeouts (run 1: 10 / 1 / 7 / 0; the miss killed in 5d2be5f)
+secmp-proto:       23 tested:  7 caught / 0 missed / 16 unviable / 0 timeouts
+unviable: return-value replacements with Default::default() of types without Default (IdentityKeys, Issuance, Self,
+  PrekeyBundle, Issued, InvitationRecord, OfferState, InviteeStart) and one `+ -> -` in a const (IDENTITY_SECTION_LEN: underflow
+  at compile time). Caught of the viable: 100 % in both packages.

@@ -117,3 +117,10 @@ Rows of TEST-SPEC-M7 marked [O-n] follow this table; Q-numbers continue the revi
 | Q186 (B-SC2) | Q44 entries, one in-diff mutants run, report corrections. | reviewer | G7-09 |
 | Q187 (CI1) | Timing mutants killed by explicit `m0_early` tests calling the pure functions (no draw loop); Q186 skips stay; a timeout mutant is a test-design finding, never an accepted row. | reviewer | G7-10 |
 | Q188 (CI1) | `win-suite` probes `perl -v` and `cargo nextest --version` before the build; `vm-down` condition stays by design. | reviewer | Q63 |
+| Q189 (B-3b) | D-B6 closed by a proto refactor: stateless `prekeys::bundle_on_parts`/`issue_on_parts` and `IdentityKeys::{generate_with_section, from_section}` expose the existing construction; the core's copies are deleted; spec, labels, wire and vectors untouched. | reviewer | D-B6, IN-01…IN-04 |
+| Q190 (B-3b) | The three killable `mutants-accepted` rows (`invitations.rs:930:58`, `:1143:22`, `retention.rs:56:14`) are replaced by killers, red-first. | reviewer | G7-09 |
+| Q191 (B-3b) | K7-01 re-dictated as an inductive step over `retention::offer` (one step from any ascending state of ≤ 24 ids) plus the fold argument (`retain_is_fold_of_offer`); the old harness text stays as history. | reviewer | K7-01, G7-15b |
+| Q192 (B-3b) | Invitation minors: owner-status open through `load`; `decide` re-checks status/expiry under its lock; OPK id high-water mark (deferred if the store has no counter: OPEN-M7-B-10); IN-20/IN-07 docs; `issue`'s doc names its three transactions. | reviewer | IN-07, IN-20, IN-21 |
+| Q193 (B-3b) | §6.6 step 4 (cells of a consumed record keep being processed as TR cells of the session for U[1 h, 24 h]) not fixed in B-3b: D-B10, OPEN-M7-B-6, B-4 commit 1. | reviewer | IN-10 |
+| Q194 (B-3b) | Q163 (QUEUE_DEL only after an empty FETCH) not sequenced yet: D-B11, OPEN-M7-B-7, a B-4 row. | reviewer | IN-11 |
+| Q195 (B-3b) | D entry for `a86e0eb` (a `test(...)` commit with product changes); report corrections (G7-15b half, K7-01 attempts); OPEN-M7-B-8/-B-9; coverage re-measured. | reviewer | report |

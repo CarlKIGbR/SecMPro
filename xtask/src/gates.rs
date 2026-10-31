@@ -11099,6 +11099,21 @@ mod tests {
         Ok(())
     }
 
+    /// The committed alone runs of the B-SC harnesses (`kani-m7-bsc-sc-<harness>.txt`, the A-3b wrapper's form); a harness
+    /// re-measured after its B-SC2 re-dictation reads its `kani-m7-bsc2-sc-<harness>.txt` instead.
+    fn push_b_sc_runs(root: &Path, log: &mut String) -> Result<()> {
+        for h in B_SC_RUNS {
+            let tag = if B_SC2_RUNS.contains(h) {
+                "bsc2"
+            } else {
+                "bsc"
+            };
+            let file = format!("docs/reviews/M07-evidence/kani-m7-{tag}-sc-{h}.txt");
+            log.push_str(&lf(&std::fs::read_to_string(root.join(file))?));
+        }
+        Ok(())
+    }
+
     /// The B-SC harnesses re-measured by WEISUNG M7-B-SC2: the cover pin reads their `kani-m7-bsc2-sc-<harness>.txt`.
     const B_SC2_RUNS: &[&str] = &["kani_paired_executions", "kani_persist_contract_abstract"];
 
@@ -11194,17 +11209,8 @@ mod tests {
         ] {
             swap_split_harness_block(&root, &mut log, old, prefix)?;
         }
-        // M7 B-SC (SC-06…SC-09): the alone runs of the new `secmp-client-core` harnesses, one committed file each
-        // (`kani-m7-bsc-sc-<harness>.txt`, the A-3b wrapper's form)
-        // M7 B-SC2: a harness re-measured after its re-dictation reads its B-SC2 run instead
-        for h in B_SC_RUNS {
-            let file = if B_SC2_RUNS.contains(h) {
-                format!("docs/reviews/M07-evidence/kani-m7-bsc2-sc-{h}.txt")
-            } else {
-                format!("docs/reviews/M07-evidence/kani-m7-bsc-sc-{h}.txt")
-            };
-            log.push_str(&lf(&std::fs::read_to_string(root.join(file))?));
-        }
+        // M7 B-SC (SC-06…SC-09) and B-SC2: the committed alone runs of the new `secmp-client-core` harnesses
+        push_b_sc_runs(&root, &mut log)?;
         assert_eq!(
             kani_cover_pin_findings(&kani_covers(&log)?),
             Vec::<String>::new()

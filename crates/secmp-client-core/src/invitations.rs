@@ -25,21 +25,21 @@
 
 use std::collections::BTreeMap;
 
-use secmp_crypto::{Ed25519SigningKey, Label, SecretBytes, Zeroizing};
+use secmp_crypto::{Ed25519SigningKey, SecretBytes, Zeroizing};
 use secmp_proto::hx::{Accepted, HandshakeCells, Initiator, Responder};
 use secmp_proto::inv::{
     self, InviteeAccepted, URI_PREFIX, base64url_decode, check_issue_bounds, invitation_uri,
     parse_invitation_uri,
 };
-use secmp_proto::keys::{Ed25519Pk, HybridSig};
-use secmp_proto::link::ids::sid;
-use secmp_proto::prekeys::{InvitationRecord, OpkSecrets, PrekeyStore, RECORD_LEN, SpkGeneration};
-use secmp_proto::sizes::{CELL_LEN, HYBRID_SIG_LEN, LINK_BLOB_LEN};
+use secmp_proto::keys::Ed25519Pk;
+use secmp_proto::prekeys::{
+    IdentityKeys, InvitationRecord, IssueParams, Issued, OpkSecrets, PoolQueueSeeds, PrekeyStore,
+    RECORD_LEN, SpkGeneration, issue_on_parts,
+};
+use secmp_proto::sizes::{CELL_LEN, LINK_BLOB_LEN};
 use secmp_proto::tr::{Entropy, RatchetState};
 use secmp_proto::wire::cell::{Cell, RelayQueue, RouteDescriptor};
-use secmp_proto::wire::inv::{
-    InvitationV1, LinkBlob, LinkDataV1, PrekeyBundle, Profile as WireProfile, RelayRef,
-};
+use secmp_proto::wire::inv::{InvitationV1, LinkBlob, Profile as WireProfile, RelayRef};
 use secmp_proto::wire::{Id, Period};
 use secmp_proto::{Decode as _, Encode as _};
 use secmp_store::Store;
@@ -549,15 +549,10 @@ impl Invitations {
         // §6.3: `spk_expiry` ≥ `expires`; the signed prekey is retained until the invitation expires (§6.1)
         check_issue_bounds(now, req.expires, req.expires).map_err(|_| Error::Unsupported)?;
         let spk_id = self.profile.rotate_if_due(clock, entropy)?;
-        let (identity, signer) = self.profile.identity_parts()?;
+        let identity = self.profile.identity()?;
         let issuance = {
             let mut store = self.lock()?;
-            let keys = Keys {
-                identity: &identity,
-                signer: &signer,
-                spk_id,
-            };
-            issue_in(&mut store, &keys, req, now, entropy)?
+            issue_in(&mut store, &identity, spk_id, req, now, entropy)?
         };
         // keep the pool of unreferenced one-time prekeys full (the draws come after the invitation's)
         self.profile.fill_opks(1, entropy)?;
@@ -675,24 +670,19 @@ impl Invitations {
     }
 }
 
-/// The keys of one issue step.
-struct Keys<'a> {
-    identity: &'a secmp_proto::prekeys::IdentityKeys,
-    signer: &'a secmp_crypto::HybridSigningKey,
-    spk_id: u32,
-}
-
-/// [`Invitations::issue`] under the store lock.
+/// [`Invitations::issue`] under the store lock: the store work around the construction of `secmp-proto`
+/// (`prekeys::issue_on_parts` on the pool queue's seeds, Q189), written in one store transaction.
 fn issue_in(
     store: &mut Store,
-    keys: &Keys<'_>,
+    identity: &IdentityKeys,
+    spk_id: u32,
     req: &IssueRequest,
     now: u64,
     entropy: &mut impl Entropy,
 ) -> Result<Issuance, Error> {
     let spk = SpkGeneration::from_seeds(
         &store
-            .prekey_secret(KIND_SPK, i64::from(keys.spk_id))?
+            .prekey_secret(KIND_SPK, i64::from(spk_id))?
             .ok_or(Error::Unavailable)?,
     )?;
     let (opk, opk_is_new) = unreferenced_opk(store, entropy)?;
@@ -702,26 +692,29 @@ fn issue_in(
             .ok_or(Error::Unavailable)?,
     )?;
     let (queue, pool_rest) = take_oldest(store, req.relay)?.ok_or(Error::Unavailable)?;
+    let PoolQueue {
+        queue,
+        recv_seed,
+        send_seed,
+    } = queue;
 
-    // §6.3, §5.2: the signed bundle, then the draws of `issue_invitation_on` in their order
-    let bundle = signed_bundle(keys, &spk, &opk, req.expires, entropy)?;
-    let ld_id: Id = *entropy.secret::<16>()?.expose_secret();
-    let link_key = entropy.secret::<32>()?;
-    let _discarded = entropy.secret::<16>()?;
-    let nonce = entropy.nonce()?;
-    let owner_seed = entropy.secret::<32>()?;
-    let inv_sid = sid(
-        &ed25519_pk_of(&queue.recv_seed)?,
-        &ed25519_pk_of(&queue.send_seed)?,
-    )?;
-
-    let link_data = LinkDataV1 {
-        inviter_iks: keys.identity.public().clone(),
-        bundle,
+    // §5.2, §6.3: the one construction of `secmp-proto`, on the pool queue's seeds (§5.2 `docs/03:211`)
+    let params = IssueParams {
+        relay: relay_ref,
+        inv_period: req.inv_period,
         profile: req.profile.clone(),
-        created: now,
+        now,
+        expires: req.expires,
+        spk_expiry: req.expires,
     };
-    let blob = inv::seal_blob(&ld_id, &link_key, nonce, &link_data)?;
+    let seeds = PoolQueueSeeds {
+        invq_recv_seed: recv_seed,
+        inv_send_seed: send_seed,
+    };
+    let (Issued { invitation, blob }, record) =
+        issue_on_parts(identity, &spk, &opk, params, Some(seeds), entropy)
+            .map_err(|_| Error::Unavailable)?;
+    let ld_id = record.ld_id;
     let n = link_data_n(&ld_id);
     for row in store.invitations()? {
         if link_data_n(&ld_id_of(&row.ld_id)?) == n {
@@ -729,29 +722,11 @@ fn issue_in(
         }
     }
     let stored = Stored {
-        record: InvitationRecord {
-            ld_id,
-            link_key: SecretBytes::from_slice(link_key.expose_secret())?,
-            owner_seed,
-            invq_recv_seed: queue.recv_seed,
-            spk_id: keys.spk_id,
-            opk_id: opk.id(),
-            expires: req.expires,
-        },
+        record,
         relay: req.relay,
-        queue: queue.queue,
+        queue,
         flags: 0,
         blob: Some(blob.encode()?),
-    };
-    let invitation = InvitationV1 {
-        relay: relay_ref,
-        ld_id,
-        link_key,
-        inviter_fp: keys.identity.fingerprint()?,
-        inv_sid,
-        inv_send_seed: queue.send_seed,
-        inv_period_s: req.inv_period,
-        expires: req.expires,
     };
     let plain = stored.encode();
     let expires_ms = req.expires.checked_mul(1000).ok_or(Error::Unavailable)?;
@@ -800,39 +775,6 @@ fn unreferenced_opk(
             .ok_or(Error::Unavailable)
     })?;
     Ok((OpkSecrets::generate(next, entropy)?, true))
-}
-
-/// The signed prekey bundle of `spk` and `opk` (§6.3): `sig` = HybridSign(`IK_sig`, `"SecMP-HX/1 bundle"`, the encoded
-/// fields before `sig` ‖ `IK_dh`), hedged with randomness from `entropy`. The bundle is first built with a placeholder
-/// signature (the Ed25519 base point as `R`, `S` = 0: a valid encoding) that the signed fields do not cover.
-fn signed_bundle(
-    keys: &Keys<'_>,
-    spk: &SpkGeneration,
-    opk: &OpkSecrets,
-    spk_expiry: u64,
-    entropy: &mut impl Entropy,
-) -> Result<PrekeyBundle, Error> {
-    let mut placeholder = [0_u8; HYBRID_SIG_LEN];
-    for (i, b) in placeholder.iter_mut().take(32).enumerate() {
-        *b = if i == 0 { 0x58 } else { 0x66 };
-    }
-    let unsigned = PrekeyBundle {
-        spk_id: spk.id(),
-        spk_dh: spk.dh_public()?,
-        spk_kem: spk.kem_public()?,
-        rpk_kem: spk.rpk_public()?,
-        spk_expiry,
-        opk_id: opk.id(),
-        opk_dh: opk.dh_public()?,
-        opk_kem: opk.kem_public()?,
-        sig: HybridSig::from_bytes(&placeholder)?,
-    };
-    let message = inv::bundle_signed_message(&unsigned, keys.identity.public())?;
-    let sig = entropy.sign(keys.signer, Label::HxBundle, &message)?;
-    Ok(PrekeyBundle {
-        sig: HybridSig::from_bytes(sig.as_bytes())?,
-        ..unsigned
-    })
 }
 
 /// The cells of `invitations.retained`: `count u8 ‖ {cell_id u64 ‖ cell [4096]} × count`, ascending by id.
@@ -996,7 +938,7 @@ impl Invitations {
         fetched_max: Option<u64>,
         entropy: &mut impl Entropy,
     ) -> Result<Round, Error> {
-        let (identity, _) = self.profile.identity_parts()?;
+        let identity = self.profile.identity()?;
         let mut store = self.lock()?;
         let loaded = load(&store, ld_id)?.ok_or(Error::Unavailable)?;
         let mut union: BTreeMap<u64, Cell> = BTreeMap::new();
@@ -1201,7 +1143,7 @@ impl Invitations {
     ) -> Result<InviteeStart, Error> {
         let now = clock.unix_secs();
         let accepted = check_invitation(uri, blob, now).map_err(Error::Invitation)?;
-        let (identity, _) = self.profile.identity_parts()?;
+        let identity = self.profile.identity()?;
         let (queue, own_relay) = {
             let mut store = self.lock()?;
             let own_relay = RelayRef::decode(

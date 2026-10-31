@@ -15,8 +15,9 @@
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use secmp_crypto::{HybridSigningKey, Zeroizing};
-use secmp_proto::prekeys::{IdentityKeys, IkDhSecret, OpkSecrets, SPK_ROTATION_S, SpkGeneration};
+use secmp_proto::prekeys::{
+    IDENTITY_SECTION_LEN, IdentityKeys, OpkSecrets, SPK_ROTATION_S, SpkGeneration,
+};
 use secmp_proto::tr::Entropy;
 use secmp_proto::wire::Id;
 use secmp_store::Store;
@@ -33,10 +34,8 @@ use crate::scheduler::types::{QueueId, RelayId};
 
 /// The one identity row.
 pub const IDENTITY_ROW: i64 = 1;
-/// The version byte of the identity section.
-const SECTION_VER: u8 = 1;
-/// The length of the identity section (Q143).
-pub const SECTION_LEN: usize = 97;
+/// The length of the identity section (Q143; `IdentityKeys::generate_with_section`).
+pub const SECTION_LEN: usize = IDENTITY_SECTION_LEN;
 
 /// An invitation retired by [`Profile::retire`]: the queue it used is the caller's to retire (§10.6 (4)).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -58,43 +57,6 @@ pub struct Retired {
 #[derive(Clone)]
 pub struct Profile {
     store: SharedStore,
-}
-
-/// A fresh identity from `entropy`: `IK_sig` draws the ML-DSA `ξ` then the Ed25519 seed, `IK_dh` its 32 bytes (the order of
-/// `IdentityKeys::generate`); the keys come from the drawn seeds so that the section can be written (`HybridSigningKey`
-/// does not give its seeds back).
-fn new_identity(entropy: &mut impl Entropy) -> Result<(IdentityKeys, Zeroizing<Vec<u8>>), Error> {
-    let xi = entropy.secret::<32>()?;
-    let ed = entropy.secret::<32>()?;
-    let dh = entropy.secret::<32>()?;
-    let mut section = Zeroizing::new(Vec::with_capacity(SECTION_LEN));
-    section.push(SECTION_VER);
-    section.extend_from_slice(ed.expose_secret());
-    section.extend_from_slice(xi.expose_secret());
-    section.extend_from_slice(dh.expose_secret());
-    let keys = identity_from_section(&section)?;
-    Ok((keys, section))
-}
-
-/// The identity of an identity section, and its signing key (the bundle of an invitation is signed with it, §6.3).
-fn keys_from_section(section: &[u8]) -> Result<(IdentityKeys, HybridSigningKey), Error> {
-    let [ver, rest @ ..] = section else {
-        return Err(Error::Unavailable);
-    };
-    if *ver != SECTION_VER || section.len() != SECTION_LEN {
-        return Err(Error::Unavailable);
-    }
-    let ed = rest.get(..32).ok_or(Error::Unavailable)?;
-    let mldsa = rest.get(32..64).ok_or(Error::Unavailable)?;
-    let x = rest.get(64..96).ok_or(Error::Unavailable)?;
-    let dh = IkDhSecret::from_bytes(x)?;
-    let identity = IdentityKeys::from_parts(HybridSigningKey::from_seeds(ed, mldsa)?, dh)?;
-    Ok((identity, HybridSigningKey::from_seeds(ed, mldsa)?))
-}
-
-/// The identity of an identity section.
-pub(crate) fn identity_from_section(section: &[u8]) -> Result<IdentityKeys, Error> {
-    Ok(keys_from_section(section)?.0)
 }
 
 fn ms(secs: u64) -> Result<u64, Error> {
@@ -134,7 +96,7 @@ impl Profile {
     ) -> Result<Self, Error> {
         let now = clock.unix_secs();
         let mut store = Store::open_unlocked(dir, unlocked)?;
-        let (keys, section) = new_identity(entropy)?;
+        let (keys, section) = IdentityKeys::generate_with_section(entropy)?;
         let fp = keys.fingerprint()?;
         let spk = SpkGeneration::generate(1, now, entropy)?;
         let opk = OpkSecrets::generate(1, entropy)?;
@@ -212,19 +174,7 @@ impl Profile {
             .lock()?
             .identity_secret(IDENTITY_ROW)?
             .ok_or(Error::Unavailable)?;
-        identity_from_section(&section)
-    }
-
-    /// The identity keys and the signing key, loaded for one operation and zeroized when dropped.
-    ///
-    /// # Errors
-    /// [`Error::Unavailable`] if the profile has no identity or the row does not open.
-    pub(crate) fn identity_parts(&self) -> Result<(IdentityKeys, HybridSigningKey), Error> {
-        let section = self
-            .lock()?
-            .identity_secret(IDENTITY_ROW)?
-            .ok_or(Error::Unavailable)?;
-        keys_from_section(&section)
+        Ok(IdentityKeys::from_section(&section)?)
     }
 
     /// The ids of the held signed-prekey generations, ascending.
@@ -463,9 +413,9 @@ mod tests {
         Ok(())
     }
 
-    /// Killers (mutants of `keys_from_section`, `rotate_if_due`, `retire`): a section of the right length with another
-    /// version, and one of another length with the right version, are refused; a generation that is exactly 7 days old is
-    /// replaced; a consumed invitation that expires is retired without touching a one-time prekey.
+    /// Killers (mutants of `IdentityKeys::from_section`, `rotate_if_due`, `retire`): a section of the right length with
+    /// another version, and one of another length with the right version, are refused; a generation that is exactly 7
+    /// days old is replaced; a consumed invitation that expires is retired without touching a one-time prekey.
     #[cfg(feature = "kat")]
     #[test]
     fn section_rotation_and_consumed_retirement() -> R {
@@ -477,12 +427,12 @@ mod tests {
             let s = store.lock().map_err(|_| "lock")?;
             s.identity_secret(IDENTITY_ROW)?.ok_or("section")?.to_vec()
         };
-        assert!(identity_from_section(&section).is_ok());
+        assert!(IdentityKeys::from_section(&section).is_ok());
         let mut other_version = section.clone();
         *other_version.first_mut().ok_or("ver")? = 2;
-        assert!(identity_from_section(&other_version).is_err());
-        assert!(identity_from_section(section.get(..96).ok_or("len")?).is_err());
-        assert!(identity_from_section(&[section.clone(), vec![0]].concat()).is_err());
+        assert!(IdentityKeys::from_section(&other_version).is_err());
+        assert!(IdentityKeys::from_section(section.get(..96).ok_or("len")?).is_err());
+        assert!(IdentityKeys::from_section(&[section.clone(), vec![0]].concat()).is_err());
 
         // exactly 7 days after creation the generation is no longer current
         fx.at_day(7);

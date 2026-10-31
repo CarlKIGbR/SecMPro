@@ -41,6 +41,12 @@ use crate::wire::{Id, Period};
 /// A signed-prekey generation lasts 7 days (§6.1).
 pub const SPK_ROTATION_S: u64 = 7 * 24 * 60 * 60;
 
+/// The version byte of the identity section ([`IdentityKeys::generate_with_section`], Q143).
+pub const IDENTITY_SECTION_VER: u8 = 1;
+
+/// The length of the identity section: 1 + 32 + 32 + 32 (Q143).
+pub const IDENTITY_SECTION_LEN: usize = 1 + 32 + 32 + X25519_LEN;
+
 /// `IK_dh`: the long-term X25519 identity secret (§6.1).
 pub struct IkDhSecret(X25519Secret);
 
@@ -90,6 +96,47 @@ impl IdentityKeys {
         let sig = entropy.hybrid_signing_key()?;
         let dh = IkDhSecret::generate(entropy)?;
         Self::from_parts(sig, dh)
+    }
+
+    /// A fresh identity and its identity section (Q143, Q189): the draws of [`Self::generate`] in its order — the ML-DSA
+    /// `ξ`, the Ed25519 seed, the X25519 secret, 32 bytes each — taken as seeds, so that the section
+    /// `ver ‖ ed25519_seed ‖ mldsa65_seed ‖ x25519_secret` ([`IDENTITY_SECTION_LEN`] bytes) can be returned
+    /// (`HybridSigningKey` does not give its seeds back). Zeroized on drop.
+    ///
+    /// # Errors
+    /// [`Error::Unavailable`] without randomness or locked memory.
+    pub fn generate_with_section(entropy: &mut impl Entropy) -> Result<(Self, Zeroizing<Vec<u8>>)> {
+        let xi = entropy.secret::<32>()?;
+        let ed = entropy.secret::<32>()?;
+        let dh = entropy.secret::<X25519_LEN>()?;
+        let mut w = Writer::with_capacity(IDENTITY_SECTION_LEN);
+        w.u8(IDENTITY_SECTION_VER);
+        w.bytes(ed.expose_secret());
+        w.bytes(xi.expose_secret());
+        w.bytes(dh.expose_secret());
+        let section = w.into_bytes();
+        let keys = Self::from_section(&section)?;
+        Ok((keys, section))
+    }
+
+    /// The identity of an identity section ([`Self::generate_with_section`]).
+    ///
+    /// # Errors
+    /// The uniform [`Error::Rejected`] unless exactly [`IDENTITY_SECTION_LEN`] bytes with version byte
+    /// [`IDENTITY_SECTION_VER`]; [`Error::Unavailable`] without locked memory.
+    pub fn from_section(section: &[u8]) -> Result<Self> {
+        let mut r = Reader::new(section);
+        if r.u8()? != IDENTITY_SECTION_VER {
+            return Err(Error::Rejected);
+        }
+        let ed = r.take(32)?;
+        let mldsa = r.take(32)?;
+        let dh = r.take(X25519_LEN)?;
+        r.finish()?;
+        Self::from_parts(
+            HybridSigningKey::from_seeds(ed, mldsa)?,
+            IkDhSecret::from_bytes(dh)?,
+        )
     }
 
     /// An identity from its keys.
@@ -638,36 +685,7 @@ impl MemoryPrekeyStore {
     ) -> Result<PrekeyBundle> {
         let spk = self.spk(spk_id).ok_or(Error::Rejected)?;
         let opk = self.opk(opk_id).ok_or(Error::Rejected)?;
-        let spk_dh = spk.dh_public()?;
-        let spk_kem = spk.kem_public()?;
-        let rpk_kem = spk.rpk_public()?;
-        let opk_dh = opk.dh_public()?;
-        let opk_kem = opk.kem_public()?;
-        // the signed message is the one layout of the wire type (`PrekeyBundle::signed_fields`, §6.3): the bundle is
-        // built with a placeholder signature (the Ed25519 base point as `R`, `S` = 0: a valid encoding), which the
-        // signed fields do not cover, and then given its real signature
-        let mut placeholder = [0_u8; crate::sizes::HYBRID_SIG_LEN];
-        placeholder[0] = 0x58;
-        for b in placeholder.iter_mut().take(32).skip(1) {
-            *b = 0x66;
-        }
-        let unsigned = PrekeyBundle {
-            spk_id,
-            spk_dh,
-            spk_kem,
-            rpk_kem,
-            spk_expiry,
-            opk_id,
-            opk_dh,
-            opk_kem,
-            sig: HybridSig::from_bytes(&placeholder)?,
-        };
-        let message = inv::bundle_signed_message(&unsigned, identity.public())?;
-        let sig = entropy.sign(&identity.sig, Label::HxBundle, &message)?;
-        Ok(PrekeyBundle {
-            sig: HybridSig::from_bytes(sig.as_bytes())?,
-            ..unsigned
-        })
+        bundle_on_parts(identity, spk, opk, spk_expiry, entropy)
     }
 
     /// Record an issued invitation (§5.2). Both prekeys it names must be held, and its OPK must be no other record's:
@@ -814,60 +832,11 @@ impl MemoryPrekeyStore {
         seeds: Option<PoolQueueSeeds>,
         entropy: &mut impl Entropy,
     ) -> core::result::Result<Issued, IssueError> {
-        let bundle = self.bundle(identity, spk_id, opk_id, params.spk_expiry, entropy)?;
-        let ld_id: Id = *entropy.secret::<16>()?.expose_secret();
-        let link_key = entropy.secret::<HASH_LEN>()?;
-        // ADR-048 (m), OPEN-M5-14 B: the 16 bytes formerly drawn for `inv_sid` are still drawn, at their old place, and
-        // discarded (zeroized on drop), so that no other draw changes its bytes; `inv_sid` is derived below (§9.1)
-        let _discarded = entropy.secret::<16>()?;
-        // a pooled queue's seeds are not drawn (§5.2 `docs/03:211`); every other draw keeps its place
-        let (given_send, given_recv) = match seeds {
-            Some(s) => (Some(s.inv_send_seed), Some(s.invq_recv_seed)),
-            None => (None, None),
-        };
-        let inv_send_seed = match given_send {
-            Some(seed) => seed,
-            None => entropy.secret::<HASH_LEN>()?,
-        };
-        let nonce = entropy.nonce()?;
-        // the new draws follow the last old one: the invitation queue's recipient key and the link-data owner key
-        let invq_recv_seed = match given_recv {
-            Some(seed) => seed,
-            None => entropy.secret::<HASH_LEN>()?,
-        };
-        let owner_seed = entropy.secret::<HASH_LEN>()?;
-        let inv_sid = crate::link::ids::sid(
-            &ed25519_pk_of(&invq_recv_seed)?,
-            &ed25519_pk_of(&inv_send_seed)?,
-        )?;
-        let link_data = LinkDataV1 {
-            inviter_iks: identity.public().clone(),
-            bundle,
-            profile: params.profile,
-            created: params.now,
-        };
-        let blob = inv::seal_blob(&ld_id, &link_key, nonce, &link_data)?;
-        let record_key = SecretBytes::<HASH_LEN>::from_slice(link_key.expose_secret())?;
-        let invitation = InvitationV1 {
-            relay: params.relay,
-            ld_id,
-            link_key,
-            inviter_fp: identity.fingerprint()?,
-            inv_sid,
-            inv_send_seed,
-            inv_period_s: params.inv_period,
-            expires: params.expires,
-        };
-        self.add_record(InvitationRecord {
-            ld_id,
-            link_key: record_key,
-            owner_seed,
-            invq_recv_seed,
-            spk_id,
-            opk_id,
-            expires: params.expires,
-        })?;
-        Ok(Issued { invitation, blob })
+        let spk = self.spk(spk_id).ok_or(Error::Rejected)?;
+        let opk = self.opk(opk_id).ok_or(Error::Rejected)?;
+        let (issued, record) = issue_on_parts(identity, spk, opk, params, seeds, entropy)?;
+        self.add_record(record)?;
+        Ok(issued)
     }
 
     /// A deep copy, for tests: duplicates every secret — the prekey secrets into locked memory, the records' link
@@ -942,6 +911,124 @@ impl MemoryPrekeyStore {
     }
 }
 
+/// The signed bundle of `spk` and `opk` (§6.3): `sig` = HybridSign(`IK_sig`, `"SecMP-HX/1 bundle"`, the encoded fields
+/// before `sig` ‖ `IK_dh`), hedged with randomness from `entropy`. Stateless: the caller looks the prekeys up
+/// ([`MemoryPrekeyStore::bundle`], or the persistent store of the client; Q189).
+///
+/// # Errors
+/// [`Error::Unavailable`] without randomness; [`Error::Rejected`] never for generated keys.
+pub fn bundle_on_parts(
+    identity: &IdentityKeys,
+    spk: &SpkGeneration,
+    opk: &OpkSecrets,
+    spk_expiry: u64,
+    entropy: &mut impl Entropy,
+) -> Result<PrekeyBundle> {
+    let spk_dh = spk.dh_public()?;
+    let spk_kem = spk.kem_public()?;
+    let rpk_kem = spk.rpk_public()?;
+    let opk_dh = opk.dh_public()?;
+    let opk_kem = opk.kem_public()?;
+    // the signed message is the one layout of the wire type (`PrekeyBundle::signed_fields`, §6.3): the bundle is
+    // built with a placeholder signature (the Ed25519 base point as `R`, `S` = 0: a valid encoding), which the
+    // signed fields do not cover, and then given its real signature
+    let mut placeholder = [0_u8; crate::sizes::HYBRID_SIG_LEN];
+    placeholder[0] = 0x58;
+    for b in placeholder.iter_mut().take(32).skip(1) {
+        *b = 0x66;
+    }
+    let unsigned = PrekeyBundle {
+        spk_id: spk.id(),
+        spk_dh,
+        spk_kem,
+        rpk_kem,
+        spk_expiry,
+        opk_id: opk.id(),
+        opk_dh,
+        opk_kem,
+        sig: HybridSig::from_bytes(&placeholder)?,
+    };
+    let message = inv::bundle_signed_message(&unsigned, identity.public())?;
+    let sig = entropy.sign(&identity.sig, Label::HxBundle, &message)?;
+    Ok(PrekeyBundle {
+        sig: HybridSig::from_bytes(sig.as_bytes())?,
+        ..unsigned
+    })
+}
+
+/// The construction of an invitation on given prekeys (§5.2, §5.4, §6.3; Q189): sign the bundle of `spk` and `opk`
+/// ([`bundle_on_parts`]), draw `ld_id`, `link_key`, a discarded 16 bytes, `inv_send_seed` (unless `seeds`), the blob
+/// nonce, `invq_recv_seed` (unless `seeds`) and `owner_seed`, derive `inv_sid` (§9.1) and seal the link data. Stateless:
+/// the record is returned, not stored — [`MemoryPrekeyStore::issue_invitation`] adds it to its records, the client's
+/// persistent store writes it in its own transaction. The bounds are the caller's ([`inv::check_issue_bounds`]).
+///
+/// # Errors
+/// [`IssueError::Crypto`]: a cryptographic or environment error.
+pub fn issue_on_parts(
+    identity: &IdentityKeys,
+    spk: &SpkGeneration,
+    opk: &OpkSecrets,
+    params: IssueParams,
+    seeds: Option<PoolQueueSeeds>,
+    entropy: &mut impl Entropy,
+) -> core::result::Result<(Issued, InvitationRecord), IssueError> {
+    let bundle = bundle_on_parts(identity, spk, opk, params.spk_expiry, entropy)?;
+    let ld_id: Id = *entropy.secret::<16>()?.expose_secret();
+
+    let link_key = entropy.secret::<HASH_LEN>()?;
+    // ADR-048 (m), OPEN-M5-14 B: the 16 bytes formerly drawn for `inv_sid` are still drawn, at their old place, and
+    // discarded (zeroized on drop), so that no other draw changes its bytes; `inv_sid` is derived below (§9.1)
+    let _discarded = entropy.secret::<16>()?;
+    // a pooled queue's seeds are not drawn (§5.2 `docs/03:211`); every other draw keeps its place
+    let (given_send, given_recv) = match seeds {
+        Some(s) => (Some(s.inv_send_seed), Some(s.invq_recv_seed)),
+        None => (None, None),
+    };
+    let inv_send_seed = match given_send {
+        Some(seed) => seed,
+        None => entropy.secret::<HASH_LEN>()?,
+    };
+    let nonce = entropy.nonce()?;
+    // the new draws follow the last old one: the invitation queue's recipient key and the link-data owner key
+    let invq_recv_seed = match given_recv {
+        Some(seed) => seed,
+        None => entropy.secret::<HASH_LEN>()?,
+    };
+    let owner_seed = entropy.secret::<HASH_LEN>()?;
+    let inv_sid = crate::link::ids::sid(
+        &ed25519_pk_of(&invq_recv_seed)?,
+        &ed25519_pk_of(&inv_send_seed)?,
+    )?;
+    let link_data = LinkDataV1 {
+        inviter_iks: identity.public().clone(),
+        bundle,
+        profile: params.profile,
+        created: params.now,
+    };
+    let blob = inv::seal_blob(&ld_id, &link_key, nonce, &link_data)?;
+    let record_key = SecretBytes::<HASH_LEN>::from_slice(link_key.expose_secret())?;
+    let invitation = InvitationV1 {
+        relay: params.relay,
+        ld_id,
+        link_key,
+        inviter_fp: identity.fingerprint()?,
+        inv_sid,
+        inv_send_seed,
+        inv_period_s: params.inv_period,
+        expires: params.expires,
+    };
+    let record = InvitationRecord {
+        ld_id,
+        link_key: record_key,
+        owner_seed,
+        invq_recv_seed,
+        spk_id: spk.id(),
+        opk_id: opk.id(),
+        expires: params.expires,
+    };
+    Ok((Issued { invitation, blob }, record))
+}
+
 impl PrekeyStore for MemoryPrekeyStore {
     fn spk(&self, spk_id: u32) -> Option<&SpkGeneration> {
         self.generations.iter().find(|g| g.id == spk_id)
@@ -970,6 +1057,45 @@ impl PrekeyStore for MemoryPrekeyStore {
             .position(|o| o.id == opk_id)
             .ok_or(Error::Rejected)?;
         self.opks.remove(at);
+        Ok(())
+    }
+}
+
+#[cfg(all(test, feature = "kat"))]
+mod tests {
+    use super::*;
+    use crate::tr::FixedEntropy;
+
+    /// Q189: `generate_with_section` draws what `generate` draws, in its order, so from one stream both give the same
+    /// `IKSPublic`; `from_section` gives it back from the section; a section of another version or length is refused.
+    #[test]
+    fn identity_section_round_trip() -> Result<()> {
+        let stream: Vec<u8> = (0..96_u8)
+            .map(|i| i.wrapping_mul(37).wrapping_add(11))
+            .collect();
+        let (with_section, section) =
+            IdentityKeys::generate_with_section(&mut FixedEntropy::new(&stream))?;
+        let generated = IdentityKeys::generate(&mut FixedEntropy::new(&stream))?;
+        let want = generated.public().encode()?;
+        assert_eq!(with_section.public().encode()?, want);
+        assert_eq!(section.len(), IDENTITY_SECTION_LEN);
+        assert_eq!(
+            IdentityKeys::from_section(&section)?.public().encode()?,
+            want
+        );
+
+        let mut other_version = section.to_vec();
+        if let Some(v) = other_version.first_mut() {
+            *v = 0x02;
+        }
+        assert_eq!(
+            IdentityKeys::from_section(&other_version).err(),
+            Some(Error::Rejected)
+        );
+        assert_eq!(
+            IdentityKeys::from_section(section.get(..96).unwrap_or_default()).err(),
+            Some(Error::Rejected)
+        );
         Ok(())
     }
 }

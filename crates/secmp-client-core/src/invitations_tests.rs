@@ -5,6 +5,10 @@
 #[cfg(feature = "kat")]
 use secmp_proto::inv::{base64url_encode, invitation_uri, parse_invitation_uri};
 #[cfg(feature = "kat")]
+use secmp_proto::keys::HybridSig;
+#[cfg(feature = "kat")]
+use secmp_proto::link::ids::sid;
+#[cfg(feature = "kat")]
 use secmp_proto::tr::FixedEntropy;
 
 #[cfg(feature = "kat")]
@@ -740,29 +744,55 @@ fn link_key_lifetime() -> R {
     Ok(())
 }
 
-/// The issue equals the issue of `MemoryPrekeyStore::issue_invitation_on` (Q147 (i)): with the same entropy stream and the
-/// same spare queue, the sealed link data, the invitation and its URI are byte for byte those of the reference — the
-/// product assembles the bundle and the invitation from the persisted prekeys because `MemoryPrekeyStore` cannot be
-/// loaded from them (D-B6).
+/// The issue equals the issue of `MemoryPrekeyStore::issue_invitation_on` (Q147 (i), Q189): with the same entropy stream
+/// and the same spare queue, the sealed link data, the invitation, its URI and the stored `InvitationRecord` are byte for
+/// byte those of the reference — on the three paths of the product: a one-time prekey of the pool reused, none
+/// unreferenced (`opk_is_new`: drawn in the issue), and the signed prekey rotated inside the issue (clock at day 8). The
+/// rotation runs on the `opk_is_new` path: the reference draws the new generation before the one-time prekey, which the
+/// product does only when it draws the one-time prekey in the issue.
 #[cfg(feature = "kat")]
 #[test]
 fn issue_equals_issue_invitation_on() -> R {
+    diff_case("diff", 0, false)?;
+    diff_case("diff-new", 0, true)?;
+    diff_case("diff-rot", 8, true)
+}
+
+/// One case of [`issue_equals_issue_invitation_on`]: the issue on day `day`; `opk_new` deletes the one-time prekey of the
+/// profile's creation first, so that the issue draws one.
+#[cfg(feature = "kat")]
+fn diff_case(label: &str, day: u64, opk_new: bool) -> R {
     use secmp_proto::prekeys::{IdentityKeys, IssueParams, MemoryPrekeyStore, PoolQueueSeeds};
 
     let bytes = stream(77, 1 << 21);
     // the product: identity, signed prekey 1 and one-time prekey 1 at creation, then the issue
     let mut e1 = FixedEntropy::new(&bytes);
-    let fx = Fixture::new("diff", &mut e1)?;
+    let fx = Fixture::new(label, &mut e1)?;
     fx.add_relay(1, 1, &mut entropy(901))?;
+    if opk_new {
+        let store = fx.profile.store();
+        let mut s = store.lock().map_err(|_| "lock")?;
+        s.txn(|tx| delete_prekey(tx, KIND_OPK, 1))?;
+    }
+    fx.at_day(day);
     let queue = pool_of(&fx)?.queues.remove(0);
     let issued = Invitations::new(fx.profile.clone()).issue(&request(1)?, &fx.clock, &mut e1)?;
+    let record = {
+        let store = fx.profile.store();
+        let s = store.lock().map_err(|_| "lock")?;
+        let loaded = load(&s, &issued.invitation.ld_id)?.ok_or("record")?;
+        loaded.stored.record.to_bytes()
+    };
 
-    // the reference: the same stream — identity, signed prekey (`create_spk`), then `issue_invitation_on` draws the
-    // one-time prekey and everything after it
+    // the reference: the same stream — identity, signed prekey (`create_spk`), the one-time prekey of the creation if the
+    // product drew it again, then `issue_invitation_on` rotates if due, draws the one-time prekey and everything after it
     let mut e2 = FixedEntropy::new(&bytes);
     let identity = IdentityKeys::generate(&mut e2)?;
     let mut reference = MemoryPrekeyStore::default();
     reference.create_spk(T0, &mut e2)?;
+    if opk_new {
+        OpkSecrets::generate(0, &mut e2)?;
+    }
     let expires = T0 + 10 * DAY;
     let want = reference.issue_invitation_on(
         &identity,
@@ -770,7 +800,7 @@ fn issue_equals_issue_invitation_on() -> R {
             relay: relay_ref(),
             inv_period: Period::S10,
             profile: wire_profile("inviter")?,
-            now: T0,
+            now: T0.saturating_add(day.saturating_mul(DAY)),
             expires,
             spk_expiry: expires,
         },
@@ -781,9 +811,20 @@ fn issue_equals_issue_invitation_on() -> R {
         &mut e2,
     );
     let want = want.map_err(|_| "reference issue")?;
-    assert_eq!(*issued.blob.encode()?, *want.blob.encode()?);
-    assert_eq!(*issued.invitation.encode()?, *want.invitation.encode()?);
-    assert_eq!(*issued.uri, *invitation_uri(&want.invitation)?);
+    let want_record = reference
+        .record(&want.invitation.ld_id)
+        .ok_or("reference record")?;
+    assert_eq!(*issued.blob.encode()?, *want.blob.encode()?, "{label}");
+    assert_eq!(
+        *issued.invitation.encode()?,
+        *want.invitation.encode()?,
+        "{label}"
+    );
+    assert_eq!(*issued.uri, *invitation_uri(&want.invitation)?, "{label}");
+    assert_eq!(*record, *want_record.to_bytes(), "{label}");
+    if day > 0 {
+        assert_eq!(want_record.spk_id, 2, "{label}: rotated in the issue");
+    }
     Ok(())
 }
 

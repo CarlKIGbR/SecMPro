@@ -899,3 +899,97 @@ Mutants (`mutants-bsc2-0b9a5ed.txt`; one run per package over the whole B-SC in-
 ### §8
 
 Blocked: none (the §2 blocker resolved by WEISUNG M7-B-SC2b, Q183 amendment). STOP: none.
+
+
+## Phase B part 1 — B-1…B-3 (BRIEF M7-B; `modell=claude-sonnet-5-5`)
+
+### §1 Status and preconditions
+
+B-3 built @ `b5bb6e0` (code head; the evidence and report commits follow it); **K7-01 blocked** (§8); B-4…B-7 follow (WEISUNG M7-B-4). Start head `b57ca46`.
+Guard and preconditions, checked before any change: `git status --short` empty, `git log --oneline -1` = `b57ca46`; (1) `git merge-base --is-ancestor 99ad44c HEAD` succeeds and
+`secmp-store/src/{wrap,seal,profile,contacts,backup}.rs` exist; (2) `grep -c '^    "kani_proofs::kani_paired_executions",$' xtask/src/expect.rs` = 1, `pub fn frame_written(&mut self, link: LinkId, frame: FrameId) -> Result<(), SchedError>`
+(`scheduler/core/mod.rs:1929`), the four proto `pub fn` lines = 4, commit `docs(m7): Phase B re-dictations (Q145–Q174)` in `git log`; (3) `COOLDOWN_EXCEPTIONS: … = &[]`; (4) `git diff bf55099..HEAD -- vectors/` empty.
+Start counts: `KANI_HARNESSES.len()` 55, `FUZZ_TARGETS.len()` 35, the `kani_refuses_fifteen_harnesses` literals 55/55. End counts: Kani 55 (K7-01 not registered), fuzz 36.
+
+### §2 Commits
+
+| Step | Commit | What |
+|---|---|---|
+| B-1 | `cf440c4` | `Profile::create/open_with/rotate_if_due/retire`, the 97-B identity section, prekey rows (PR-01, PR-02); `api::{Error, InviteReject, Event}`; the sealed record (`invitations::Stored`); store rows for prekeys, invitations, relay pool, retained cells; schema V1 in place (`relays.pool`, `invitations.retained`) |
+| B-1 | `1e2f1c8` | `contacts` (PR-04…PR-08); store `contacts.routes`/`queues` sealed (Q151), `STATE_REMOVED`, state/verified updates |
+| B-1 | `140b510` | `settings` (PR-09), store `settings.rs`, `BACKUP_SETTINGS_EXCLUDED` |
+| B-1 | `1e358a7` | evidence `ci-fast-b1-140b510.txt` |
+| B-2 | `0314820` | `invitations` (issue, owner status, `maintain`, `process_round`, `check_invitation`, `accept_invitation`, `SparePool`, `StagedPrekeys`), `retention::retain`, `sessions::write_initial`, `initial_parts`, `schema::tests::capability_columns_are_sealed`, `docs/04:45` (IN-01…IN-04, IN-09…IN-13, IN-18, IN-19, IN-21) |
+| B-2 | `cdac99c` | FZ-04 (`invitation_queue_retention`, corpus, lists, pins, `fuzz_max_len.rs` entry V-01, G7-15b extended) |
+| B-2 | `9dd26c8` | `gates::tests::fuzz_executor_depth` follows 36 targets (211 s) |
+| B-3 | `8b0c5ba` | `kat::txn_log`, `harness::m7_accept` (IN-05, IN-06, IN-07, IN-20), `invitations::tests::opk_and_record_in_one_txn` (IN-08) |
+| close | `04b5249`, `a86e0eb`, `451dfac`, `b5bb6e0` | killers; accepted rows (six equivalent survivors); IN-05 trace writes `target/m7-evidence/in-05-accept-trace.txt` |
+
+### §3 Rows (28 dictated; 27 built, K7-01 blocked)
+
+| Row | Test | Result |
+|---|---|---|
+| PR-01 | `profile::tests::new_profile_keys` | pass; `Profile::create` with the real Argon2 cost; entropy of `fp-0001` gives the vector's IKS (2017 B) and fingerprint |
+| PR-02 | `profile::tests::spk_retained_for_open_invitations` | pass; gen 1 present on day 8 and 19, retired on day 21 with the invitation and its OPK; reopened state equal |
+| PR-04 | `contacts::tests::identity_is_whole_iks` | pass; two contacts, source scan finds no signing-half use |
+| PR-05 | `contacts::tests::sas_matches_vectors` | pass; `vectors/sas.json` cases 1–3, both sides |
+| PR-06 | `contacts::tests::verify_by_digits_or_qr` | pass; Q158 own-first form |
+| PR-07 | `contacts::tests::same_iks_as_existing_contact` | pass; `Event::DuplicateIdentity { existing, new }` |
+| PR-08 | `contacts::tests::contact_removed_control` | pass; the conversation keeps preparing cells; the `Control` delivery is wired by B-4 |
+| PR-09 | `settings::tests::defaults_and_roundtrip` | pass |
+| IN-01 | `invitations::tests::uses_pool_queue` | pass; oldest pool queue, `LinkPut` `Prompt`, no `QUEUE_NEW`, zero timing draws |
+| IN-02 | `invitations::tests::queue_keys_independent_of_iks` | pass |
+| IN-03 | `invitations::tests::record_fields_persisted_sealed` | pass; column = plaintext + 72 B |
+| IN-04 | `invitations::tests::uri_roundtrip` | pass; 332 characters |
+| IN-08 | `invitations::tests::opk_and_record_in_one_txn` | pass; `kat::txn_log`, `StagedPrekeys::commit_accept` refuses another OPK / invitation |
+| IN-09 | `invitations::tests::unclassified_cells_capped_24` | pass; ids checked after each of four rounds |
+| IN-10 | `invitations::tests::complete_group_spent_after_one_accept` | pass |
+| IN-11 | `invitations::tests::accept_only_offered_records` | pass; `accept_calls_kat` 1 → 1; `QueueDel` due in [1 min, 60 min] |
+| IN-12 | `invitations::tests::invitee_checks_5_5` | pass; Expired / Unsupported / Mismatch / Invalid / Ok |
+| IN-13 | `invitations::tests::invitee_reply_queue_from_pool` | pass |
+| IN-18 | `invitations::tests::used_by_someone_else` | pass; once |
+| IN-19 | `invitations::tests::reissue_link_put_after_relay_restart` | pass; same blob and `ld_id`, no write, `Delayed` |
+| IN-21 | `invitations::tests::link_key_lifetime` | pass; peak 1, 0 after each step |
+| IN-05 | `harness::m7_accept::commit_with_accepted_before_any_ack` | pass (≈1 s); `in-05-accept-trace-451dfac.txt` |
+| IN-06 | `harness::m7_accept::commit_failure_is_unavailable` | pass; `FailAt(k)` for k = 1…6 |
+| IN-07 | `harness::m7_accept::crash_inside_accept_is_atomic` | pass; `MidTxn(1…6)` all-before, `AfterCommitBeforeAck` all-after |
+| IN-20 | `harness::m7_accept::k_id_independent_end_to_end` | pass |
+| FZ-04 | fuzz `invitation_queue_retention` | `fuzz-m7-b-cdac99c.txt`: 1 974 581 runs, 0 crashes, final `cov: 369 ft: 2286` |
+| G7-15b | `xtask::expect::tests::fuzz_and_kani_lists_core` | FZ-04 half built; red first: without the target in `FUZZ_TARGETS` it fails at `expect.rs:2299:9` (`invitation_queue_retention`); the K7-01 half is not built |
+| K7-01 | `kani_retention_bound_24` | **blocked**, §8 |
+
+Extra tests: `schema::tests::capability_columns_are_sealed`, `kat::tests::txn_log_records_table_and_verb`, `secmp-store` `profile::tests::{lifecycle_rows, identity_fingerprint_column}`, `contacts::tests::routes_and_queues_are_sealed`,
+`settings::tests::{settings_round_trip, byte_keys_are_excluded_from_backups}`, `contacts::tests::reinvite_required_state`, `profile::tests::section_rotation_and_consumed_retirement`, `retention::tests::{matches_the_reference, never_more_than_24, zero_and_full_set}`,
+`invitations::tests::{issue_equals_issue_invitation_on, killers_pool_and_counters, killers_rounds_and_contact, killers_expired_invitation}`, `api::tests::errors_display_fixed_text`.
+
+### §4 Gates
+
+ci-fast: B-1 `ci-fast-b1-140b510.txt` green; B-2 `ci-fast-b2-cdac99c.txt` **red** (`fuzz_executor_depth`, an unlisted count pin, fixed in `9dd26c8`); B-3 `ci-fast-b3-8b0c5ba.txt` green; close `ci-fast-b3-l-b5bb6e0.txt` green. No ci-full.
+Fuzz FZ-04: above. Coverage (`coverage-b3-8b0c5ba.txt`): client-core 95.1 %, store 96.1 %.
+Mutants (`mutants-b3-451dfac.txt`): core first run 365 tested: 216 caught, 49 missed, 100 unviable; rerun after the killers 359: 251 caught, 8 missed, 100 unviable; of the 8 two are killed by `451dfac`, six are equivalent and are rows of `docs/mutants-accepted.md`
+(`invitations.rs:817:19`, `:930:58`, `:1143:22`, `retention.rs:42:15`, `:56:14`, `:56:29`). Store: 122 tested: 94 caught, 4 missed (`identity_fingerprint`, killer `identity_fingerprint_column`), 24 unviable; rerun: 98 caught, 0 missed.
+Kani K7-01: three attempts, none finished (`kani-m7-b-k701-blocked.txt`).
+
+### §5 Deviations
+
+- **D-B6 (issue path).** The brief has the product issue through `MemoryPrekeyStore` as a view built from the sealed store. `MemoryPrekeyStore` has no constructor or import for persisted generations, OPKs or records (Q147 added the seed codecs of the parts only), `Entropy` is sealed (no replay), and an empty view would create a new signed prekey per invitation (spec §6.1: one per 7 days). B-2 therefore assembles the bundle and the invitation in `invitations::issue` from the public pieces (`SpkGeneration::from_seeds`, `OpkSecrets::from_seeds`, `inv::bundle_signed_message`, `Entropy::sign`, `inv::seal_blob`) with the draws of `issue_invitation_on` in the same order; `issue_equals_issue_invitation_on` compares the blob, the invitation and the URI byte for byte with the reference. No `secmp-proto` change. A proto `MemoryPrekeyStore::from_parts` would replace it; reviewer's choice. For the same reason the identity is drawn as three 32-byte secrets (`HybridSigningKey` gives no seeds back).
+- **D-B7.** The accept path (`StagedPrekeys`, `sessions::write_initial`, `initial_parts`) is in `0314820`, not in the B-3 commit: IN-10 (B-2) needs an accepted handshake. The B-3 commit has `kat::txn_log` and the atomicity tests.
+- **D-B8.** Two count pins outside the brief's list changed with the 36th fuzz target: `expect::tests::fuzz_targets_store` (35 → 36) and `gates::tests::fuzz_executor_depth` (218 s, 14 394 → 211 s, 14 374).
+- **D-B9.** K7-01 is not registered and has no commit; `KANI_HARNESSES` stays 55. The retention function itself is built, tested (reference oracle, fuzz) and loop-counter-indexed for the checker.
+- Initial `Inbox` of a new session is empty and has no `sessions` part-2 row (as a conversation writes it only when non-empty); the trust row is written (`Unverified`).
+- The `api.rs`/`relay_view.rs` of the placement: `api.rs` holds the error and event types only; `relay_view.rs` is not built (no row in B-1…B-3).
+- `ci-fast` per step: B-2 and B-3 ran separately; the evidence of B-2 is the red run.
+
+### §6 Locks and vectors
+
+`git diff --stat b57ca46..HEAD -- Cargo.lock fuzz/Cargo.lock`: empty. `git diff b57ca46..HEAD -- vectors/`: empty.
+
+### §7 Risks
+
+Write cost of the new sealed columns: `relays.pool` is rewritten whole per take/fill (≤ 68 B per queue), `invitations.retained` up to 24 × 4104 B per non-deciding round, `invitations.record` carries the 12 360-B blob; none is on the per-slot path. A consumed invitation's sealed record (link key) stays until its expiry (`maintain`); IN-21 covers memory, not that. `link_data_n` is the first four bytes of `ld_id` (2⁻³² collision refused at issue).
+
+### §8 Blocked / questions
+
+**K7-01 (`kani_retention_bound_24`, RT-1): not proven within the time the step can afford.** The harness (`kani-k701-harness.rs.txt`: `retain` over ≤ 40 inputs, fixed arrays sliced to symbolic lengths, no heap) ran three ways (`kani-m7-b-k701-blocked.txt`): symbolic-index insertion, 34 min at 9.6 GB and growing; loop-counter insertion (committed), killed at 60 min with 6.7 GB; with ids below 64, killed at 60 min with 6.2 GB. A shorter harness (fewer inputs) needs a bound change, which the brief forbids without a ruling. Question: accept a K7-01 over a smaller bound (e.g. 8 + 8 inputs, 8-bit ids) and a separate induction argument for the full 40, or a different formulation? Until then FZ-04 and `retention::tests` are the evidence.
+
+Return to the reviewer: D-B6 (proto `from_parts` or the assembly kept).

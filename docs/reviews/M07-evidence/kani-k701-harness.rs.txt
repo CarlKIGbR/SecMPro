@@ -1,0 +1,55 @@
+// ---- K7-01 (TEST-SPEC-M7; RT-1) --------------------------------------------------------------------------------------
+
+/// Whether `set` holds `x`.
+fn has(set: &[u64], x: u64) -> bool {
+    let mut found = false;
+    for s in set {
+        if *s == x {
+            found = true;
+        }
+    }
+    found
+}
+
+/// K7-01 `kani_retention_bound_24` (RT-1, Q148, Q172): `crate::retention::retain` — the function the invitation queue's
+/// round calls — keeps at most 24 cells, and they are the newest 24 of (retained ∪ fetched) \ spent: for up to 40 inputs
+/// (the 24 retained and 16 fetched, with up to 8 spent; fixed arrays sliced to symbolic lengths, no heap) the result is
+/// strictly ascending, holds only ids that were offered and not spent, and leaves out an id of the offered, unspent ones
+/// only if 24 are kept and the id is older than all of them.
+#[kani::proof]
+#[kani::unwind(42)]
+fn kani_retention_bound_24() {
+    let retained: [u64; 24] = kani::any();
+    let fetched: [u64; 16] = kani::any();
+    let spent: [u64; 8] = kani::any();
+    let (r, f, s): (usize, usize, usize) = (kani::any(), kani::any(), kani::any());
+    kani::assume(r <= 24 && f <= 16 && s <= 8);
+    // `retain` only compares ids (order and equality), so what matters is their order type: 40 values below 64 realise
+    // every order type of 40 ids; the 64-bit domain gave no proof in 70 minutes (measured, B-2)
+    for x in retained.iter().chain(&fetched).chain(&spent) {
+        kani::assume(*x < 64);
+    }
+    let (retained, fetched, spent) = (&retained[..r], &fetched[..f], &spent[..s]);
+    let mut out = [0_u64; RETAIN_MAX];
+    let n = retain(retained, fetched, spent, &mut out);
+    assert!(n <= RETAIN_MAX);
+    let kept = &out[..n];
+    for i in 0..RETAIN_MAX {
+        if i < n {
+            if i > 0 {
+                assert!(out[i - 1] < out[i]);
+            }
+            assert!(has(retained, out[i]) || has(fetched, out[i]));
+            assert!(!has(spent, out[i]));
+        }
+    }
+    let probe: u64 = kani::any();
+    if (has(retained, probe) || has(fetched, probe)) && !has(spent, probe) {
+        assert!(has(kept, probe) || (n == RETAIN_MAX && probe < kept[0]));
+    }
+    kani::cover!(n == RETAIN_MAX, "24 cells are kept");
+    kani::cover!(
+        n == RETAIN_MAX && !has(kept, probe) && (has(retained, probe) || has(fetched, probe)),
+        "an offered cell older than the 24 is dropped"
+    );
+}

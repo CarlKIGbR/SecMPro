@@ -253,7 +253,7 @@ fn accept_statements() -> usize {
 /// The accept is one store transaction — the OPK row delete, the record's consumption, the contact (peer, routes,
 /// profile) and the session (`Accepted.state` in its parts) — and the relay is told to acknowledge a cell only after that
 /// commit is durable; the queue is not retired before it. The trace (the transaction log and the sequence at the relay)
-/// is written to `SECMP_IN05_TRACE` when set (the evidence file `in-05-accept-trace-<sha7>.txt`).
+/// is written to `target/m7-evidence/in-05-accept-trace.txt` (the evidence file `in-05-accept-trace-<sha7>.txt`).
 #[test]
 fn commit_with_accepted_before_any_ack() {
     let (mut host, issued, mut relay, guest) = world("in05");
@@ -305,7 +305,7 @@ fn commit_with_accepted_before_any_ack() {
             Seen::Ack(7)
         ]
     );
-    if let Ok(path) = std::env::var("SECMP_IN05_TRACE") {
+    {
         let mut text = String::from(
             "IN-05 transactional accept: the host fetches the three handshake cells (ids 3, 5, 6 among garbage 1, 2, 4, 7)\n\
              from a recording relay; kat::txn_log() of the round (txn seq, table, verb):\n",
@@ -322,7 +322,7 @@ fn commit_with_accepted_before_any_ack() {
             "store transactions committed by the round: {commits}; acknowledged only after the commit; QUEUE_DEL not asked for"
         )
         .unwrap();
-        std::fs::write(path, text).unwrap();
+        crate::m7_persist::evidence("in-05-accept-trace", &text);
     }
 }
 

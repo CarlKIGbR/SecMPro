@@ -920,6 +920,9 @@ fn killers_pool_and_counters() -> R {
         drop(second);
     }
     assert_eq!(live_records_kat(), 0);
+    assert_eq!(live_records_peak_kat(), 2);
+    reset_live_peak_kat();
+    assert_eq!(live_records_peak_kat(), 0, "reset to the number alive now");
 
     // two invitations on one profile: distinct link data, distinct one-time prekeys (the first is referenced)
     let (ra, rb) = (
@@ -978,8 +981,15 @@ fn killers_rounds_and_contact() -> R {
     let many = |from: u64, n: u64| -> Result<Vec<(u64, Cell)>, E> {
         (from..from + n).map(|i| Ok((i, garbage(i)?))).collect()
     };
+    let fill = invitations.process_round(&ld_id, &many(50, 40)?, &fx.clock, &mut e)?;
+    assert_eq!(fill.ack_through, Some(89));
+    assert_eq!(invitations.retained_ids(&ld_id)?.len(), 24);
     let ok = invitations.process_round(&ld_id, &many(100, 128)?, &fx.clock, &mut e)?;
-    assert_eq!(ok.ack_through, Some(227));
+    assert_eq!(
+        ok.ack_through,
+        Some(227),
+        "24 retained and 128 fetched: 152, the cap"
+    );
     assert_eq!(
         invitations
             .process_round(&ld_id, &many(300, 129)?, &fx.clock, &mut e)

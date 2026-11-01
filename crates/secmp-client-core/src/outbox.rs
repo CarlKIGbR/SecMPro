@@ -206,6 +206,20 @@ impl Outbox for StoreOutbox {
         self.sync();
     }
 
+    fn delivered_committed(&mut self, id: &MsgId) {
+        // the receive commit wrote the row (SE-21): only the in-memory view and the record of what the store holds follow
+        self.mem.delivered(id);
+        let first = self
+            .mem
+            .entries()
+            .into_iter()
+            .find(|(m, _, _, _)| m.msg_id == *id)
+            .and_then(|(_, _, first, _)| first);
+        if self.synced.contains_key(id) {
+            self.synced.insert(*id, (MsgState::Delivered, first));
+        }
+    }
+
     fn restart(&mut self) {
         self.mem.restart();
     }

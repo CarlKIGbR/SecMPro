@@ -68,6 +68,12 @@ pub trait Outbox {
     /// A `Receipt{delivered}` for the message.
     fn delivered(&mut self, id: &MsgId);
 
+    /// The message became `Delivered` in a commit that already made it durable (SE-21): only the in-memory view follows,
+    /// no row is written. The default is [`Outbox::delivered`] (an outbox without a store).
+    fn delivered_committed(&mut self, id: &MsgId) {
+        self.delivered(id);
+    }
+
     /// The process restarted: a message that was being sent (taken, no `OK_SEND` yet) is waiting again — the outbox
     /// survives restarts, what was in flight does not (spec §10.4).
     fn restart(&mut self);
@@ -293,6 +299,12 @@ pub struct CommitParts<'a> {
     pub trust: Option<u8>,
     /// The messages delivered by the received cell.
     pub delivered: &'a [DeliveredMessage<'a>],
+    /// The messages that a `Receipt{delivered}` in the received cell confirms: `Delivered` in the same commit (SE-21).
+    pub receipted: &'a [MsgId],
+    /// The routes of a `RouteUpdate` in the received cell (`count u8 ‖ RouteDescriptor × count`), for the contact (SE-01).
+    pub routes: Option<&'a [u8]>,
+    /// The first reply of an initiator was decrypted: its stored handshake cells go (Q150, IN-14).
+    pub clear_handshake: bool,
 }
 
 /// The code of a trust in [`CommitParts::trust`] (the `sessions` trust row).

@@ -16,9 +16,10 @@ use secmp_proto::Encode;
 use secmp_proto::tr::content::{Delivery, Inbox, Trust, dummy, split_chunks};
 use secmp_proto::tr::{Entropy, OsEntropy, RatchetParts, RatchetState};
 use secmp_proto::wire::cell::{
-    AppKind, AppMessage, BatchBody, Cell, Content, ContentBody, Fragment, FragmentPayload,
-    ReceiptBody, ReceiptKind,
+    AppKind, AppMessage, BatchBody, Cell, Content, ContentBody, ControlCode, Fragment,
+    FragmentPayload, KeyChangeBody, ReceiptBody, ReceiptKind, RouteDescriptor, RouteUpdateBody,
 };
+use secmp_proto::wire::inv::IksPublic;
 
 use crate::scheduler::outbox::{
     CommitParts, DeliveredMessage, MsgId, OutMessage, Outbox, Persist, PersistError, PersistKind,
@@ -135,6 +136,8 @@ enum Owner {
     Message(MsgId),
     Receipt(Vec<MsgId>),
     Dummy,
+    /// A persisted handshake cell (its bytes), sent again if its send fails.
+    Handshake(Vec<u8>),
 }
 
 struct Planned {
@@ -163,6 +166,48 @@ pub fn initial_parts(state: &RatchetState) -> Result<RatchetParts, PersistError>
     state.to_parts().map_err(|_| PersistError)
 }
 
+/// The shortest `T_RS`: 24 h in ms.
+pub const T_RS_MIN_MS: u64 = 24 * 60 * 60 * 1000;
+
+/// `T_RS` (spec §10.4; OPEN-M7-07, a reading that is not normative; Q159, D-B4): after how long a relayed message without
+/// a receipt is reported as not confirmed — `max(24 h, 2 · QUEUE_CAPACITY · P_q)` from the `OK_SEND`, a function of the
+/// send period `P_q` of the queue in ms. Once per `msg_id`; only for contacts that send receipts.
+#[must_use]
+pub fn receipt_timeout_ms(period_ms: u64) -> u64 {
+    let queue = u64::try_from(secmp_proto::link::QUEUE_CAPACITY).unwrap_or(u64::MAX);
+    T_RS_MIN_MS.max(queue.saturating_mul(2).saturating_mul(period_ms))
+}
+
+/// What a received cell told the session beyond its messages (taken with [`Conversation::take_events`], after the cell's
+/// commit): the host applies it to the contact (routes, key change, removal, reset) and to the user interface.
+pub enum SessionEvent {
+    /// A `RouteUpdate`: the routes of a known kind (0x01), already persisted with the receive commit.
+    Routes(Vec<RouteDescriptor>),
+    /// A verified `KeyChange` (spec §7.7): the peer's new identity; the trust is now `KeyChanged` and real sends are held.
+    KeyChanged(Box<IksPublic>),
+    /// An unverifiable `KeyChange`: the session is frozen.
+    KeyChangeInvalid,
+    /// `Control{ContactRemoved}` without an argument (ADR-054 item 4).
+    ContactRemoved,
+    /// `Control{SessionResetRequest}` (spec §7.6 code 2).
+    ResetRequested,
+    /// A message was relayed and no receipt came within `T_RS` (spec §10.4; OPEN-M7-07 A): not re-sent.
+    NotConfirmed(MsgId),
+}
+
+/// Why real content is refused at the one send entry ([`Conversation::may_send_real`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Refusal {
+    /// The trust forbids it (`KeyChanged`, `Frozen`).
+    Trust,
+    /// The peer removed us.
+    Removed,
+    /// A session reset was asked for (either side).
+    Reset,
+    /// An initiator holds real content until the first reply of the responder is decrypted (spec §6.5; IN-15).
+    AwaitingReply,
+}
+
 /// One conversation (see the module documentation).
 pub struct Conversation<O: Outbox, P: Persist, S: EntropySource> {
     state: Option<RatchetState>,
@@ -189,6 +234,17 @@ pub struct Conversation<O: Outbox, P: Persist, S: EntropySource> {
     receipts_due: Vec<MsgId>,
     send_receipts: bool,
     discarded: u64,
+    block: Option<Refusal>,
+    /// An initiator's three handshake cells still to send (byte-identical to the persisted ones, §6.5), and whether the
+    /// first reply is still awaited (Q150).
+    handshake_out: VecDeque<Vec<u8>>,
+    awaiting_first_reply: bool,
+    events: Vec<SessionEvent>,
+    /// When (monotonic ms) each relayed message was relayed, until its receipt (SE-13b).
+    relayed_at: BTreeMap<MsgId, u64>,
+    notified: BTreeSet<MsgId>,
+    /// `T_RS` in ms; 0: no confirmation timeout (the host sets it from the queue's period).
+    receipt_timeout_ms: u64,
     /// SHA-256 of every message key this conversation sealed a cell under, in order (feature `kat`; TEST-SPEC-M6 (K)).
     #[cfg(feature = "kat")]
     mk_digests: Vec<[u8; 32]>,
@@ -236,9 +292,165 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
             receipts_due: Vec::new(),
             send_receipts: true,
             discarded: 0,
+            block: None,
+            handshake_out: VecDeque::new(),
+            awaiting_first_reply: false,
+            events: Vec::new(),
+            relayed_at: BTreeMap::new(),
+            notified: BTreeSet::new(),
+            receipt_timeout_ms: 0,
             #[cfg(feature = "kat")]
             mk_digests: Vec::new(),
         }
+    }
+
+    /// A conversation over the durable state `parts` (a session's rows, CS-3.7): the ratchet state is rebuilt from them,
+    /// the reassembly state and the trust restored. `RatchetState::from_parts` is called here only (SE-18).
+    ///
+    /// # Errors
+    /// [`SourceError`] if the parts are not a ratchet state or the inbox does not decode.
+    pub fn from_parts(
+        parts: &RatchetParts,
+        inbox: Option<&[u8]>,
+        trust: Trust,
+        (outbox, persist, source): (O, P, S),
+        peer: HybridVerifyingKey,
+        unix_base: u64,
+    ) -> Result<Self, SourceError> {
+        let state = RatchetState::from_parts(parts).map_err(|_| SourceError)?;
+        let mut conversation = Self::new(state, outbox, persist, source, peer, unix_base);
+        conversation.trust = trust;
+        if let Some(bytes) = inbox {
+            conversation.inbox = Inbox::from_bytes(bytes).map_err(|_| SourceError)?;
+        }
+        Ok(conversation)
+    }
+
+    /// Plan a control content of the session (not a user message): it is sealed on a coming slot like every cell, through
+    /// the same path; it is not held by the trust or by a reset (a reset request is sent from `Frozen`, SE-15).
+    fn plan_control(&mut self, body: ContentBody) {
+        let seq = self.take_seq();
+        let ts = self.ts(self.last_now_ms);
+        self.plan.push_back(Planned {
+            content: Content { seq, ts, body },
+            owner: Owner::Dummy,
+            total: 1,
+        });
+    }
+
+    /// Announce `routes` to the peer (`RouteUpdate`, spec §9.8, §10.6 (5): the first reply of a responder, a rotation).
+    pub fn queue_route_update(&mut self, routes: Vec<RouteDescriptor>) {
+        self.plan_control(ContentBody::RouteUpdate(RouteUpdateBody { routes }));
+    }
+
+    /// Send `Control{code}` without an argument (spec §7.6 codes 1 and 2; ADR-054 item 4).
+    pub fn queue_control(&mut self, code: ControlCode) {
+        self.plan_control(ContentBody::Control(secmp_proto::wire::cell::ControlBody {
+            code,
+            arg: Zeroizing::new(Vec::new()),
+        }));
+    }
+
+    /// Announce a new identity (`KeyChange`, spec §7.7): 5390 bytes, always fragmented, signed by the old `IK_sig`.
+    ///
+    /// # Errors
+    /// [`SourceError`] without randomness for the message id or if the body does not encode.
+    pub fn queue_key_change(&mut self, body: KeyChangeBody) -> Result<(), SourceError> {
+        let id: MsgId = *self
+            .source
+            .entropy()
+            .secret::<16>()
+            .map_err(|_| SourceError)?
+            .expose_secret();
+        let bytes = FragmentPayload::KeyChange(body)
+            .encode()
+            .map_err(|_| SourceError)?;
+        let chunks = split_chunks(&bytes);
+        let total = u16::try_from(chunks.len()).map_err(|_| SourceError)?;
+        for (idx, chunk) in chunks.into_iter().enumerate() {
+            let seq = self.take_seq();
+            let ts = self.ts(self.last_now_ms);
+            self.plan.push_back(Planned {
+                content: Content {
+                    seq,
+                    ts,
+                    body: ContentBody::Fragment(Fragment {
+                        msg_id: id,
+                        idx: u16::try_from(idx).map_err(|_| SourceError)?,
+                        total,
+                        chunk: Zeroizing::new(chunk.to_vec()),
+                    }),
+                },
+                owner: Owner::Dummy,
+                total,
+            });
+        }
+        Ok(())
+    }
+
+    /// This conversation is an initiator's that has not heard from the responder yet: the three handshake cells go out
+    /// first, on the slots of the invitation queue, byte for byte as persisted (§6.5, IN-14); until the first reply is
+    /// decrypted every other cell is a dummy (IN-15).
+    pub fn queue_handshake(&mut self, cells: &[Cell; 3]) {
+        self.handshake_out = cells.iter().map(|c| c.as_bytes().to_vec()).collect();
+        self.awaiting_first_reply = true;
+    }
+
+    /// Whether the first reply of the responder is still awaited.
+    #[must_use]
+    pub const fn awaiting_first_reply(&self) -> bool {
+        self.awaiting_first_reply
+    }
+
+    /// The trust changed outside a received cell (the user verified the safety number, or a key change was re-verified).
+    ///
+    /// A frozen session stays frozen (spec §7.7, §7.8): only a new invitation helps, no call here un-freezes it.
+    pub fn set_trust(&mut self, trust: Trust) {
+        if self.trust != Trust::Frozen {
+            self.trust = trust;
+        }
+    }
+
+    /// The contact's new `IK_sig` after a key change was accepted (§7.7).
+    pub fn set_peer(&mut self, peer: HybridVerifyingKey) {
+        self.peer = peer;
+    }
+
+    /// `T_RS` of this conversation in ms (0: none).
+    pub const fn set_receipt_timeout_ms(&mut self, ms: u64) {
+        self.receipt_timeout_ms = ms;
+    }
+
+    /// The session was reset or the contact removed us: real content is refused (dummies go on).
+    pub const fn mark_removed(&mut self) {
+        self.block = Some(Refusal::Removed);
+    }
+
+    /// A session reset was asked for.
+    pub const fn mark_reset(&mut self) {
+        self.block = Some(Refusal::Reset);
+    }
+
+    /// The one entry through which real content (a message, a fragment, a receipt) reaches a cell: `Ok` if it may be
+    /// sealed now. SE-17 (F29): everything that is not a dummy asks here, and [`Conversation::seal`] is the only seal.
+    ///
+    /// # Errors
+    /// [`Refusal`] naming why not.
+    pub const fn may_send_real(&self) -> Result<(), Refusal> {
+        if let Some(why) = self.block {
+            Err(why)
+        } else if !self.trust.may_send_real() {
+            Err(Refusal::Trust)
+        } else if self.awaiting_first_reply {
+            Err(Refusal::AwaitingReply)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// The events of the cells received since the last call (see [`SessionEvent`]).
+    pub fn take_events(&mut self) -> Vec<SessionEvent> {
+        core::mem::take(&mut self.events)
     }
 
     /// The process died and restarted from `durable` (a serialised ratchet state, e.g. `MemPersist::durable`): what was in
@@ -482,6 +694,9 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
                     inbox: None,
                     trust: None,
                     delivered: &[],
+                    receipted: &[],
+                    routes: None,
+                    clear_handshake: false,
                 },
             )?;
             *new_durable = Zeroizing::new(bytes.to_vec());
@@ -516,6 +731,7 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
                 }
             }
             Owner::Dummy => {}
+            Owner::Handshake(bytes) => self.handshake_out.push_front(bytes.clone()),
         }
     }
 }
@@ -530,10 +746,40 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
         self.prepare(now_ms)
     }
 
+    /// Decide a received cell of this conversation (what the scheduler's `deliver` does), for callers that drive a
+    /// conversation by hand: decrypted, processed, committed — then it counts as decided.
+    ///
+    /// # Errors
+    /// [`SourceError`] if the new state could not be committed: nothing is decided, the cell comes again.
+    pub fn deliver_direct(&mut self, cell: &Cell) -> Result<(), SourceError> {
+        self.on_deliver(cell)
+    }
+
+    /// `OK_SEND` for the cell of `token` (what the scheduler's `relayed` does), for callers that drive a conversation by
+    /// hand.
+    pub fn relayed_direct(&mut self, token: CellToken, cell_id: u64) {
+        self.on_relayed(token, cell_id);
+    }
+
     fn prepare(&mut self, now_ms: u64) -> Result<PreparedCell, SourceError> {
         self.last_now_ms = self.last_now_ms.max(now_ms);
         self.outbox.expire(now_ms);
-        if self.plan.is_empty() {
+        self.note_unconfirmed(now_ms);
+        // an initiator's handshake cells go first, as persisted (they are already sealed and durable, §6.5)
+        if let Some(bytes) = self.handshake_out.pop_front() {
+            let cell = Cell::from_bytes(&bytes).map_err(|_| SourceError)?;
+            let token = self.next_token;
+            self.next_token = self.next_token.saturating_add(1);
+            self.inflight.insert(
+                token,
+                Sent {
+                    owner: Owner::Handshake(bytes),
+                    total: 1,
+                },
+            );
+            return Ok(PreparedCell::committed(cell, CellToken(token)));
+        }
+        if self.plan.is_empty() && self.may_send_real().is_ok() {
             if self.send_receipts && !self.receipts_due.is_empty() {
                 self.plan_receipt(now_ms);
             } else if let Some(message) = self.outbox.take_next() {
@@ -577,6 +823,7 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
             if *done >= sent.total {
                 self.relayed_cells.remove(id);
                 self.outbox.relayed(id, cell_id);
+                self.relayed_at.insert(*id, self.last_now_ms);
             }
         }
         self.by_cell.insert(cell_id, sent);
@@ -653,6 +900,18 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
         // the reassembly state when it is or was non-empty, the trust when it changed: in the same commit (PC-09)
         let inbox_changed = inbox.partials() != 0 || self.inbox.partials() != 0;
         let trust_changed = (trust != self.trust).then_some(trust_code(trust));
+        // the receipts this cell carries make their messages `Delivered` in the same commit (SE-21, F9b)
+        let receipted: Vec<MsgId> = match &delivery {
+            Delivery::Receipt(body) => body.msg_ids.clone(),
+            _ => Vec::new(),
+        };
+        // the routes of a `RouteUpdate`, of the kind this version knows (spec §9.8; an unknown kind is ignored)
+        let routes: Option<Zeroizing<Vec<u8>>> = match &delivery {
+            Delivery::Routes(rs) => routes_bytes(rs),
+            _ => None,
+        };
+        // the first decrypted reply of an initiator: its stored handshake cells go with this commit (Q150)
+        let clear_handshake = self.awaiting_first_reply;
         let durable = &mut self.durable;
         let persist = &mut self.persist;
         let staged = &inbox;
@@ -671,6 +930,9 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
                     inbox: inbox_bytes.as_ref().map(|b| b.as_slice()),
                     trust: trust_changed,
                     delivered: &fresh,
+                    receipted: &receipted,
+                    routes: routes.as_ref().map(|r| r.as_slice()),
+                    clear_handshake,
                 },
             )?;
             *durable = Zeroizing::new(bytes.to_vec());
@@ -681,10 +943,20 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
             self.state = Some(state);
             self.inbox = inbox;
             self.trust = trust;
+            if clear_handshake {
+                self.awaiting_first_reply = false;
+                self.handshake_out.clear();
+            }
         } else {
             self.state = RatchetState::from_bytes(&self.durable).ok();
             return Err(SourceError);
         }
+        self.apply_delivery(delivery);
+        Ok(())
+    }
+
+    /// What a committed cell tells the session: messages for the application, receipts, the events for the host.
+    fn apply_delivery(&mut self, delivery: Delivery) {
         match delivery {
             Delivery::Messages(messages) => {
                 for m in messages {
@@ -699,14 +971,75 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
                 }
             }
             Delivery::Receipt(body) => {
+                // durable already (in the receive commit); only the in-memory view follows
                 for id in &body.msg_ids {
-                    self.outbox.delivered(id);
+                    self.outbox.delivered_committed(id);
+                    self.relayed_at.remove(id);
                 }
             }
+            Delivery::Routes(rs) => {
+                let known: Vec<RouteDescriptor> = rs
+                    .into_iter()
+                    .filter(|r| matches!(r, RouteDescriptor::RelayQueue(_)))
+                    .collect();
+                if !known.is_empty() {
+                    self.events.push(SessionEvent::Routes(known));
+                }
+            }
+            Delivery::KeyChange(iks) => self.events.push(SessionEvent::KeyChanged(Box::new(iks))),
+            Delivery::KeyChangeRefused => self.events.push(SessionEvent::KeyChangeInvalid),
+            Delivery::Control(body) => match body.code {
+                ControlCode::ContactRemoved if body.arg.is_empty() => {
+                    self.block = Some(Refusal::Removed);
+                    self.events.push(SessionEvent::ContactRemoved);
+                }
+                ControlCode::SessionResetRequest => {
+                    self.block = Some(Refusal::Reset);
+                    self.events.push(SessionEvent::ResetRequested);
+                }
+                ControlCode::ContactRemoved => {}
+            },
             _ => {}
         }
-        Ok(())
     }
+
+    /// SE-13b (spec §10.4, OPEN-M7-07 A): a message relayed `T_RS` ago with no receipt is reported once, never re-sent.
+    fn note_unconfirmed(&mut self, now_ms: u64) {
+        if self.receipt_timeout_ms == 0 || !self.send_receipts {
+            return;
+        }
+        let due: Vec<MsgId> = self
+            .relayed_at
+            .iter()
+            .filter(|(id, at)| {
+                now_ms.saturating_sub(**at) >= self.receipt_timeout_ms
+                    && !self.notified.contains(*id)
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        for id in due {
+            self.notified.insert(id);
+            self.relayed_at.remove(&id);
+            self.events.push(SessionEvent::NotConfirmed(id));
+        }
+    }
+}
+
+/// `contacts.routes` / `RouteUpdate` bytes of the routes of a known kind: `count u8 ‖ RouteDescriptor × count`; `None`
+/// if there is none.
+fn routes_bytes(routes: &[RouteDescriptor]) -> Option<Zeroizing<Vec<u8>>> {
+    let known: Vec<&RouteDescriptor> = routes
+        .iter()
+        .filter(|r| matches!(r, RouteDescriptor::RelayQueue(_)))
+        .collect();
+    let mut out = Zeroizing::new(vec![u8::try_from(known.len()).ok()?]);
+    if known.is_empty() {
+        return None;
+    }
+    for r in known {
+        out.extend_from_slice(&r.encode().ok()?);
+    }
+    Some(out)
 }
 
 /// The conversations of a client, as the scheduler's cell source: a cell is routed by the queue it is for.

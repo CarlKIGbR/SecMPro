@@ -117,6 +117,20 @@ pub enum Event {
     },
     /// An invitation was consumed by someone else: the owner status says used, no handshake came before `expires`.
     InvitationUsedElsewhere,
+    /// An unconsumed invitation was retired (Q164, SE-09); `id` is its link-data number.
+    InvitationRetired {
+        /// The invitation.
+        id: u32,
+        /// Why.
+        reason: RetireReason,
+    },
+}
+
+/// Why an invitation was retired.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RetireReason {
+    /// The user rotated the identity (spec §7.7; Q164).
+    IdentityRotated,
 }
 
 #[cfg(test)]

@@ -37,6 +37,8 @@ pub mod part {
     pub const INBOX: i64 = 2;
     /// The trust.
     pub const TRUST: i64 = 3;
+    /// The three sealed handshake cells of an initiator, until the first decrypted reply (Q150, IN-14).
+    pub const HANDSHAKE: i64 = 4;
 }
 
 /// The statements of schema version 1.

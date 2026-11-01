@@ -54,6 +54,20 @@ fn u64_of(v: i64) -> rusqlite::Result<u64> {
     u64::try_from(v).map_err(|_| rusqlite::Error::IntegralValueOutOfRange(0, v))
 }
 
+/// Set the message `msg_id` `Delivered` as a statement of the caller's transaction (SE-21): the receive commit that carries
+/// the receipt makes it durable with the ratchet state. A message that has no row (a view-once, held in memory) is not an
+/// error.
+///
+/// # Errors
+/// [`Error::Unavailable`] if the statement fails.
+pub fn set_delivered(tx: &mut crate::store::Tx<'_>, msg_id: &[u8; 16]) -> Result<()> {
+    tx.exec(
+        "UPDATE outbox SET state = ?2, cell_id = NULL WHERE msg_id = ?1",
+        params![msg_id.as_slice(), state::DELIVERED],
+    )?;
+    Ok(())
+}
+
 impl Store {
     /// Insert a queued message.
     ///

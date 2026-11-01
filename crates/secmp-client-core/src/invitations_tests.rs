@@ -266,9 +266,7 @@ fn handshake(invitee: &Fixture, e: &mut FixedEntropy, issued: &Issuance) -> Resu
         &invitee.clock,
         e,
     )?;
-    Ok(start
-        .cells
-        .release(&start.state, |_, _| Ok::<(), secmp_proto::Error>(()))?)
+    Ok(start.cells)
 }
 
 /// A garbage cell: 4096 bytes that open under no key.
@@ -377,7 +375,11 @@ fn complete_group_spent_after_one_accept() -> R {
     let out = invitations.process_round(&ld_id, &again, &fx.clock, &mut e)?;
     assert_eq!(accept_calls_kat(), before + 1, "accept is not called again");
     assert!(out.accepted.is_none());
-    assert_eq!(out.ack_through, Some(11));
+    assert_eq!(
+        out.ack_through, None,
+        "cells of a consumed record are session cells (Q193)"
+    );
+    assert_eq!(out.to_session, vec![8, 9, 10, 11]);
     assert_eq!(invitations.retained_ids(&ld_id)?, Vec::<u64>::new());
     {
         let store = fx.profile.store();
@@ -1200,9 +1202,13 @@ fn decide_rechecks_status_after_lock() -> R {
     assert_eq!(accept_calls_kat(), before, "consumed: accept is not called");
     assert!(out.accepted.is_none());
     assert_eq!(
-        out.ack_through,
-        Some(3),
-        "consumed: the cells are acknowledged (D-B10)"
+        out.ack_through, None,
+        "consumed: nothing is acknowledged by the invitation path (Q193)"
+    );
+    assert_eq!(
+        out.to_session,
+        vec![1, 2, 3],
+        "consumed: the cells go to the session path, which decides and acknowledges them"
     );
     {
         let store = fx.profile.store();

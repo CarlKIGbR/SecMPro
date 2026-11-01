@@ -26,7 +26,7 @@
 use std::collections::BTreeMap;
 
 use secmp_crypto::{Ed25519SigningKey, SecretBytes, Zeroizing};
-use secmp_proto::hx::{Accepted, HandshakeCells, Initiator, Responder};
+use secmp_proto::hx::{Accepted, Initiator, Responder};
 use secmp_proto::inv::{
     self, InviteeAccepted, URI_PREFIX, base64url_decode, check_issue_bounds, invitation_uri,
     parse_invitation_uri,
@@ -37,7 +37,7 @@ use secmp_proto::prekeys::{
     RECORD_LEN, SpkGeneration, issue_on_parts,
 };
 use secmp_proto::sizes::{CELL_LEN, LINK_BLOB_LEN};
-use secmp_proto::tr::{Entropy, RatchetState};
+use secmp_proto::tr::{Entropy, RatchetParts};
 use secmp_proto::wire::cell::{Cell, RelayQueue, RouteDescriptor};
 use secmp_proto::wire::inv::{InvitationV1, LinkBlob, Profile as WireProfile, RelayRef};
 use secmp_proto::wire::{Id, Period};
@@ -49,11 +49,11 @@ use secmp_store::profile::{
     set_invitation_status,
 };
 
-use crate::api::{ContactId, Error, Event, InviteReject};
+use crate::api::{ContactId, Error, Event, InviteReject, RetireReason};
 use crate::clock::Clock;
 use crate::contacts::{self, NewContact};
 use crate::persist::SharedStore;
-use crate::profile::Profile;
+use crate::profile::{Profile, Retired};
 use crate::retention::{RETAIN_MAX, retain};
 use crate::scheduler::control::{OpSpec, When};
 use crate::scheduler::types::{ControlKind, QueueId, RelayId};
@@ -499,6 +499,10 @@ pub struct Round {
     pub events: Vec<Event>,
     /// Control operations to queue (the retirement of an expired invitation's queue).
     pub ops: Vec<OpSpec>,
+    /// The ids of the fetched cells that belong to the session of a consumed invitation (Q193, `docs/03:351`), in fetch
+    /// order: the caller feeds them to that session's receive path, which acknowledges them through its own commit. The
+    /// caller still holds the cells.
+    pub to_session: Vec<u64>,
 }
 
 /// What [`Invitations::maintain`] did.
@@ -631,21 +635,7 @@ impl Invitations {
     /// # Errors
     /// [`Error::Unavailable`] if the store cannot be read or written.
     pub fn maintain(&self, clock: &impl Clock) -> Result<Maintained, Error> {
-        let mut out = Maintained::default();
-        for r in self.profile.retire(clock)? {
-            if r.used_elsewhere {
-                out.events.push(Event::InvitationUsedElsewhere);
-            }
-            if !r.consumed {
-                out.ops.push(OpSpec {
-                    kind: ControlKind::QueueDel(r.queue),
-                    relay: r.relay,
-                    related: u64::from(link_data_n(&r.ld_id)),
-                    when: When::Delayed,
-                });
-            }
-        }
-        Ok(out)
+        Ok(retirement(&self.profile.retire(clock)?, None))
     }
 
     /// The ids of the cells that invitation `ld_id` retains (ascending).
@@ -664,6 +654,36 @@ impl Invitations {
         .map(|(id, _)| id)
         .collect())
     }
+}
+
+/// The events and the control operations of retired invitations: `QUEUE_DEL` of the queue of each one that was not
+/// consumed (a consumed invitation's queue is retired with its session), [`Event::InvitationUsedElsewhere`] once for one
+/// whose link data was consumed without a handshake, and — for an identity rotation (`rotated`) —
+/// [`Event::InvitationRetired`].
+#[must_use]
+pub fn retirement(retired: &[Retired], rotated: Option<RetireReason>) -> Maintained {
+    let mut out = Maintained::default();
+    for r in retired {
+        if r.used_elsewhere {
+            out.events.push(Event::InvitationUsedElsewhere);
+        }
+        if r.consumed {
+            continue;
+        }
+        if let Some(reason) = rotated {
+            out.events.push(Event::InvitationRetired {
+                id: link_data_n(&r.ld_id),
+                reason,
+            });
+        }
+        out.ops.push(OpSpec {
+            kind: ControlKind::QueueDel(r.queue),
+            relay: r.relay,
+            related: u64::from(link_data_n(&r.ld_id)),
+            when: When::Delayed,
+        });
+    }
+    out
 }
 
 /// [`Invitations::issue`] under the store lock: the store work around the construction of `secmp-proto`
@@ -901,8 +921,14 @@ impl Invitations {
         let state = offer_state(&*self.lock()?, ld_id, clock.unix_secs())?;
         match state {
             OfferState::Offered => {}
-            // consumed: nothing more is decided on this queue; the cells are acknowledged
+            // consumed: the cells are TR cells of the session (Q193, §6.6 step 4), decided by its receive path
             OfferState::Consumed => {
+                return Ok(Round {
+                    to_session: fetched.iter().map(|(id, _)| *id).collect(),
+                    ..Round::default()
+                });
+            }
+            OfferState::Retired => {
                 return Ok(Round {
                     ack_through: fetched_max,
                     ..Round::default()
@@ -935,15 +961,22 @@ impl Invitations {
         let mut store = self.lock()?;
         match offer_state(&store, ld_id, clock.unix_secs())? {
             OfferState::Offered => {}
-            // consumed: nothing more is decided on this queue; the cells are acknowledged
+            // consumed: the cells are TR cells of the session (Q193, §6.6 step 4), decided by its receive path
             OfferState::Consumed => {
                 return Ok(Round {
-                    ack_through: fetched_max,
+                    to_session: fetched.iter().map(|(id, _)| *id).collect(),
                     ..Round::default()
                 });
             }
             // expired: nothing is decided or acknowledged; the retirement is `maintain`'s
             OfferState::Expired => return Ok(Round::default()),
+            // retired: a handshake on it is dropped silently, never answered (Q164)
+            OfferState::Retired => {
+                return Ok(Round {
+                    ack_through: fetched_max,
+                    ..Round::default()
+                });
+            }
         }
         let loaded = load(&store, ld_id)?.ok_or(Error::Unavailable)?;
         let mut union: BTreeMap<u64, Cell> = BTreeMap::new();
@@ -1012,6 +1045,7 @@ impl Invitations {
                     accepted: Some(contact),
                     events,
                     ops: Vec::new(),
+                    to_session: Vec::new(),
                 }))
             }
         }
@@ -1024,6 +1058,7 @@ enum OfferState {
     Offered,
     Consumed,
     Expired,
+    Retired,
 }
 
 /// The [`OfferState`] of `ld_id` at `now` (Unix seconds), from its row.
@@ -1031,11 +1066,10 @@ enum OfferState {
 /// # Errors
 /// [`Error::Unavailable`] if there is no such invitation or the store cannot be read.
 fn offer_state(store: &Store, ld_id: &Id, now: u64) -> Result<OfferState, Error> {
-    let row = store
-        .invitations()?
-        .into_iter()
-        .find(|r| r.ld_id == *ld_id)
-        .ok_or(Error::Unavailable)?;
+    // no row: the invitation was retired (expired and swept, or an identity rotation, Q164)
+    let Some(row) = store.invitations()?.into_iter().find(|r| r.ld_id == *ld_id) else {
+        return Ok(OfferState::Retired);
+    };
     Ok(if row.status != INVITATION_OPEN {
         OfferState::Consumed
     } else if row.expires_ms / 1000 <= now {
@@ -1136,13 +1170,16 @@ pub fn check_invitation(uri: &str, blob: &[u8], now: u64) -> Result<InviteeAccep
     inv::invitee_check(invitation, blob, now).map_err(|_| InviteReject::Invalid)
 }
 
-/// What the invitee holds after accepting an invitation: the three handshake cells and the initiator state (both to be
-/// persisted before any cell is released, §6.5), and the pool queue that became its reply queue.
+/// What the invitee holds after accepting an invitation: the three handshake cells, released only after they were made
+/// durable together with the session (persist-before-send, §6.5), the contact it made of the inviter, and the pool queue
+/// that became its reply queue.
 pub struct InviteeStart {
-    /// The three sealed handshake cells.
-    pub cells: HandshakeCells,
-    /// The initiator's ratchet state after `first_msg`.
-    pub state: RatchetState,
+    /// The three sealed handshake cells, byte-identical to the persisted ones (`sessions` part 4, Q150).
+    pub cells: [Cell; 3],
+    /// The contact made of the inviter (unverified); its id is its session's.
+    pub contact: ContactId,
+    /// Events (a duplicate identity, ADR-044 (f)).
+    pub events: Vec<Event>,
     /// The spare queue the reply route names (no `QUEUE_NEW` at that moment, §5.5 step 5).
     pub reply_queue: QueueId,
 }
@@ -1176,17 +1213,15 @@ impl Invitations {
         let now = clock.unix_secs();
         let accepted = check_invitation(uri, blob, now).map_err(Error::Invitation)?;
         let identity = self.profile.identity()?;
-        let (queue, own_relay) = {
-            let mut store = self.lock()?;
-            let own_relay = RelayRef::decode(
-                &store
-                    .relay_ref(i64::from(req.relay.0))?
-                    .ok_or(Error::Unavailable)?,
-            )?;
-            let (queue, rest) = take_oldest(&store, req.relay)?.ok_or(Error::Unavailable)?;
-            store.txn(|tx| put_relay_pool(tx, i64::from(req.relay.0), Some(&rest)))?;
-            (queue, own_relay)
-        };
+        let mut store = self.lock()?;
+        let own_relay = RelayRef::decode(
+            &store
+                .relay_ref(i64::from(req.relay.0))?
+                .ok_or(Error::Unavailable)?,
+        )?;
+        let (queue, rest) = take_oldest(&store, req.relay)?.ok_or(Error::Unavailable)?;
+        let recv_seed = SecretBytes::<32>::from_slice(queue.recv_seed.expose_secret())?;
+        let reply_queue = queue.queue;
         let route = RelayQueue::derived(
             own_relay,
             &ed25519_pk_of(&queue.recv_seed)?,
@@ -1201,10 +1236,43 @@ impl Invitations {
             now,
             entropy,
         )?;
+        // the inviter: its identity and profile from the link data, the invitation queue as its route
+        let invitation = accepted.invitation();
+        let inviter_route = RouteDescriptor::RelayQueue(RelayQueue {
+            relay: invitation.relay.clone(),
+            sid: invitation.inv_sid,
+            send_seed: SecretBytes::from_slice(invitation.inv_send_seed.expose_secret())?,
+            period_s: invitation.inv_period_s,
+        });
+        let routes = encode_routes(&[inviter_route])?;
+        let mut queues = Zeroizing::new(vec![1_u8]);
+        queues.extend_from_slice(recv_seed.expose_secret());
+        let link_data = accepted.link_data();
+        let planned = contacts::plan(&store, &link_data.inviter_iks)?;
+        let new = NewContact {
+            peer: &link_data.inviter_iks,
+            profile: &link_data.profile,
+            routes: Some(&routes),
+            queues: Some(&queues),
+        };
+        // persist-before-send: the pool queue, the contact, the session and the three cells are one transaction, and the
+        // cells are released only after it committed (a failed start above took nothing from the pool)
+        let released = cells.release(&state, |cell_bytes, state_bytes| {
+            let parts = RatchetParts::split(state_bytes)?;
+            store
+                .txn(|tx| {
+                    put_relay_pool(tx, i64::from(req.relay.0), Some(&rest))?;
+                    contacts::write(tx, &planned, &new)?;
+                    crate::sessions::write_initial_parts(tx, planned.id.0, &parts)?;
+                    secmp_store::sessions::put_handshake(tx, planned.id.0, cell_bytes)
+                })
+                .map_err(Error::from)
+        })?;
         Ok(InviteeStart {
-            cells,
-            state,
-            reply_queue: queue.queue,
+            cells: released,
+            contact: planned.id,
+            events: contacts::events_of(&planned),
+            reply_queue,
         })
     }
 }

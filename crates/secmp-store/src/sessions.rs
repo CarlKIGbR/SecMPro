@@ -107,6 +107,27 @@ pub fn put_inbox(tx: &mut Tx<'_>, session: i64, inbox: &[u8]) -> Result<()> {
     put(tx, session, part::INBOX, 0, inbox)
 }
 
+/// Write the three handshake cells of an initiator (`PersistedCells` encoding, 3 × 4096 B; Q150): sealed, until the first
+/// decrypted reply.
+///
+/// # Errors
+/// [`Error::Unavailable`] if the statement fails.
+pub fn put_handshake(tx: &mut Tx<'_>, session: i64, cells: &[u8]) -> Result<()> {
+    put(tx, session, part::HANDSHAKE, 0, cells)
+}
+
+/// Delete the handshake cells of `session` (the first reply was decrypted); no row is not an error.
+///
+/// # Errors
+/// [`Error::Unavailable`] if the statement fails.
+pub fn delete_handshake(tx: &mut Tx<'_>, session: i64) -> Result<()> {
+    tx.exec(
+        "DELETE FROM sessions WHERE session_id = ?1 AND part = ?2",
+        params![session, part::HANDSHAKE],
+    )?;
+    Ok(())
+}
+
 /// Write the trust.
 ///
 /// # Errors
@@ -218,6 +239,18 @@ impl Store {
             part::SKIPPED,
             "skey",
         )
+    }
+
+    /// The handshake cells of `session`, if its first reply has not been decrypted yet.
+    ///
+    /// # Errors
+    /// [`Error::Unavailable`] if a read fails.
+    pub fn handshake(&self, session: i64) -> Result<Option<Zeroizing<Vec<u8>>>> {
+        Ok(self
+            .read_part(session, part::HANDSHAKE)?
+            .into_iter()
+            .next()
+            .map(|(_, d)| d))
     }
 
     /// The reassembly state and the trust of `session` (the INBOX and TRUST parts only).

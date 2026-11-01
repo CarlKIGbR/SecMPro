@@ -130,10 +130,7 @@ fn handshake(guest: &mut Party, issued: &Issuance) -> [Cell; 3] {
             &mut guest.e,
         )
         .unwrap();
-    start
-        .cells
-        .release(&start.state, |_, _| Ok::<(), secmp_proto::Error>(()))
-        .unwrap()
+    start.cells
 }
 
 /// A copy of a cell.

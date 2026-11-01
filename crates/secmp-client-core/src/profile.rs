@@ -177,6 +177,21 @@ impl Profile {
         Ok(IdentityKeys::from_section(&section)?)
     }
 
+    /// The signing key `IK_sig` (Ed25519 and ML-DSA-65 seeds of the identity section), loaded for one operation: it signs
+    /// the `KeyChange` of an identity rotation (spec §7.7) and is zeroized when dropped.
+    ///
+    /// # Errors
+    /// [`Error::Unavailable`] if the profile has no identity or the section is malformed.
+    pub(crate) fn signing_key(&self) -> Result<secmp_crypto::HybridSigningKey, Error> {
+        let section = self
+            .lock()?
+            .identity_secret(IDENTITY_ROW)?
+            .ok_or(Error::Unavailable)?;
+        let ed = section.get(1..33).ok_or(Error::Unavailable)?;
+        let mldsa = section.get(33..65).ok_or(Error::Unavailable)?;
+        Ok(secmp_crypto::HybridSigningKey::from_seeds(ed, mldsa)?)
+    }
+
     /// The ids of the held signed-prekey generations, ascending.
     ///
     /// # Errors
@@ -292,6 +307,17 @@ impl Profile {
     /// # Errors
     /// [`Error::Unavailable`] if the store cannot be read or written (nothing is retired then).
     pub fn retire(&self, clock: &impl Clock) -> Result<Vec<Retired>, Error> {
+        self.retire_with(clock, false, |_| Ok(()))
+    }
+
+    /// [`Profile::retire`], also retiring every open invitation when `all_open` (an identity rotation, Q164), and running
+    /// `extra` as statements of the same store transaction.
+    fn retire_with(
+        &self,
+        clock: &impl Clock,
+        all_open: bool,
+        extra: impl FnOnce(&mut secmp_store::Tx<'_>) -> secmp_store::Result<()>,
+    ) -> Result<Vec<Retired>, Error> {
         let now_ms = ms(clock.unix_secs())?;
         let mut store = self.lock()?;
         let mut dead = Vec::new();
@@ -304,7 +330,7 @@ impl Profile {
                 .map_err(|_| Error::Unavailable)?;
             let loaded = crate::invitations::load(&store, &ld_id)?.ok_or(Error::Unavailable)?;
             let refs = (loaded.stored.record.spk_id, loaded.stored.record.opk_id);
-            if row.expires_ms <= now_ms {
+            if row.expires_ms <= now_ms || (all_open && row.status == INVITATION_OPEN) {
                 let consumed = row.status != INVITATION_OPEN;
                 let retired = Retired {
                     ld_id,
@@ -337,10 +363,55 @@ impl Profile {
             for id in &dead_spks {
                 delete_prekey(tx, KIND_SPK, *id)?;
             }
-            Ok(())
+            extra(tx)
         })?;
         Ok(dead.into_iter().map(|(retired, _)| retired).collect())
     }
+
+    /// Rotate the identity (spec §7.7, §7.8; O-28; Q164): a new `IKS` and fingerprint replace the old ones in one store
+    /// transaction that also retires every unconsumed invitation (their records, one-time prekeys and — for the caller —
+    /// queues: a handshake that arrives on a retired invitation is dropped silently, never answered with the new
+    /// identity under the old bundle). The `KeyChange` for each of `contacts` contacts is signed by the **old**
+    /// `IK_sig`; the caller queues one per session. Bundles issued from now on are signed by the new key.
+    ///
+    /// # Errors
+    /// [`Error::Unavailable`] without randomness or if the store cannot be written (nothing changes then).
+    pub fn rotate_identity(
+        &self,
+        contacts: usize,
+        clock: &impl Clock,
+        entropy: &mut impl Entropy,
+    ) -> Result<Rotation, Error> {
+        let old = self.signing_key()?;
+        let (keys, section) = IdentityKeys::generate_with_section(entropy)?;
+        let mut key_changes = Vec::with_capacity(contacts);
+        for _ in 0..contacts {
+            key_changes.push(secmp_proto::tr::content::key_change_body(
+                &old,
+                keys.public(),
+            )?);
+        }
+        let fp = keys.fingerprint()?;
+        let now_ms = ms(clock.unix_secs())?;
+        let retired = self.retire_with(clock, true, |tx| {
+            put_identity(tx, IDENTITY_ROW, &section, &fp, now_ms)
+        })?;
+        Ok(Rotation {
+            key_changes,
+            retired,
+            fingerprint: fp,
+        })
+    }
+}
+
+/// What [`Profile::rotate_identity`] did.
+pub struct Rotation {
+    /// One `KeyChange` body per contact, signed by the old `IK_sig`.
+    pub key_changes: Vec<secmp_proto::wire::cell::KeyChangeBody>,
+    /// The invitations that were retired.
+    pub retired: Vec<Retired>,
+    /// The new fingerprint.
+    pub fingerprint: [u8; 32],
 }
 
 #[cfg(test)]
@@ -462,6 +533,115 @@ mod tests {
             "the consumed invitation's OPK row is not this retirement's"
         );
         Ok(())
+    }
+
+    /// SE-09 [O-28] (§7.7; §7.6 `docs/03:503`; Q164, D-B5): `Profile::rotate_identity` with two contacts gives a new
+    /// identity and fingerprint, one `KeyChange` per contact signed by the **old** `IK_sig` (each contact's session
+    /// verifies it and takes the new identity), and retires every unconsumed invitation (row, one-time prekey) — a
+    /// handshake that arrives on a retired invitation afterwards is dropped silently and answered with nothing.
+    #[cfg(feature = "kat")]
+    #[test]
+    fn rotate_identity_announces_key_change() -> R {
+        use crate::api::ContactId;
+        use crate::invitations::Invitations;
+        use crate::sessions::accept_key_change;
+        use crate::sessions::actor::SessionEvent;
+        use crate::sessions::tests::{big, connect, deliver, next, party, pending_handshake};
+        use crate::testutil::entropy;
+        use secmp_proto::wire::cell::Cell;
+
+        big(|| {
+            let host = party("se09-h", 61)?;
+            let (g1, g2) = (party("se09-g1", 63)?, party("se09-g2", 65)?);
+            let (mut h1, mut c1, id1) = connect(&host, &g1, 100)?;
+            let (mut h2, mut c2, id2) = connect(&host, &g2, 200)?;
+            assert_eq!((id1, id2), (ContactId(1), ContactId(2)));
+            // an open invitation, and a handshake on it that has not been decided yet
+            let invitations = Invitations::new(host.profile.clone());
+            let (open, cells) = pending_handshake(&host, 300)?;
+            let old_fp = host.profile.fingerprint()?;
+
+            let rotation = host
+                .profile
+                .rotate_identity(2, &host.clock, &mut entropy(304))?;
+            assert_ne!(rotation.fingerprint, old_fp);
+            assert_eq!(host.profile.fingerprint()?, rotation.fingerprint);
+            assert_eq!(rotation.key_changes.len(), 2);
+            assert_eq!(rotation.retired.len(), 1);
+            let gone = crate::invitations::retirement(
+                &rotation.retired,
+                Some(crate::api::RetireReason::IdentityRotated),
+            );
+            let id = u32::from_be_bytes([
+                open.invitation.ld_id[0],
+                open.invitation.ld_id[1],
+                open.invitation.ld_id[2],
+                open.invitation.ld_id[3],
+            ]);
+            assert_eq!(
+                gone.events,
+                [crate::api::Event::InvitationRetired {
+                    id,
+                    reason: crate::api::RetireReason::IdentityRotated
+                }]
+            );
+            assert_eq!(
+                gone.ops.len(),
+                1,
+                "one QUEUE_DEL, on the IN-11 schedule (Delayed)"
+            );
+            assert_eq!(
+                gone.ops.first().map(|o| o.when),
+                Some(crate::scheduler::control::When::Delayed)
+            );
+            assert_eq!(
+                rotation.retired.first().map(|r| r.ld_id),
+                Some(open.invitation.ld_id)
+            );
+            let mut bodies = rotation.key_changes.into_iter();
+            h1.queue_key_change(bodies.next().ok_or("body")?)
+                .map_err(|_| "queue")?;
+            h2.queue_key_change(bodies.next().ok_or("body")?)
+                .map_err(|_| "queue")?;
+            for (h, c, g) in [(&mut h1, &mut c1, &g1), (&mut h2, &mut c2, &g2)] {
+                for i in 0_u64..4 {
+                    let cell = next(h, 30_000_u64.saturating_add(i.saturating_mul(1_000)))?;
+                    deliver(c, &cell)?;
+                }
+                let events = c.take_events();
+                let new = host.profile.identity()?;
+                assert!(
+                    matches!(events.as_slice(), [SessionEvent::KeyChanged(iks)] if **iks == *new.public()),
+                    "each contact verified the key change under the old IK_sig"
+                );
+                accept_key_change(&g.profile.store(), c, ContactId(1), new.public())?;
+            }
+            let store = host.profile.store();
+            {
+                let s = store.lock().map_err(|_| "lock")?;
+                assert!(
+                    s.invitations()?.iter().all(|r| r.status != 0),
+                    "no open invitation"
+                );
+                assert!(s.prekeys(KIND_OPK)?.iter().all(|r| r.id != 1 && r.id != 2));
+            }
+
+            // the handshake on the retired invitation: dropped silently, never answered
+            let fetched: Vec<(u64, Cell)> = (1..).zip(cells).collect();
+            let round = invitations.process_round(
+                &open.invitation.ld_id,
+                &fetched,
+                &host.clock,
+                &mut entropy(306),
+            )?;
+            assert!(
+                round.accepted.is_none() && round.events.is_empty() && round.to_session.is_empty()
+            );
+            assert_eq!(round.ack_through, Some(3));
+            let contacts = crate::contacts::Contacts::new(store, host.profile.fingerprint()?);
+            assert_eq!(contacts.list()?.len(), 2, "no third contact");
+            Ok(())
+        })
     }
 
     /// PR-02 (§6.1 `docs/03:273`): generation 1 is referenced by an invitation expiring on day 20. On day 8 (a new

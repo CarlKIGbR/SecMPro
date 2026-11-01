@@ -162,6 +162,9 @@ impl Persist for StorePersist {
                 inbox: None,
                 trust: None,
                 delivered: &[],
+                receipted: &[],
+                routes: None,
+                clear_handshake: false,
             },
         )
     }
@@ -218,6 +221,17 @@ impl Persist for StorePersist {
                 }
                 if let Some(trust) = parts.trust {
                     secmp_store::sessions::put_trust(tx, session, &[trust])?;
+                }
+                // the receipts of this cell: their messages are `Delivered` with the state that consumed the cell (SE-21)
+                for id in parts.receipted {
+                    secmp_store::outbox::set_delivered(tx, id)?;
+                }
+                // the routes of a `RouteUpdate` (SE-01); the session's id is its contact's
+                if let Some(routes) = parts.routes {
+                    secmp_store::contacts::put_contact_routes(tx, session, routes)?;
+                }
+                if parts.clear_handshake {
+                    secmp_store::sessions::delete_handshake(tx, session)?;
                 }
                 for m in parts.delivered {
                     match secmp_store::sessions::insert_delivered(
@@ -916,6 +930,9 @@ mod tests {
                     inbox: Some(b"inbox-new"),
                     trust: Some(trust_code(secmp_proto::tr::content::Trust::Frozen)),
                     delivered: &[],
+                    receipted: &[],
+                    routes: None,
+                    clear_handshake: false,
                 },
             ),
             "commit",
@@ -961,6 +978,9 @@ mod tests {
                             inbox: Some(b"inbox-old"),
                             trust: Some(trust_code(secmp_proto::tr::content::Trust::Verified)),
                             delivered: &[],
+                            receipted: &[],
+                            routes: None,
+                            clear_handshake: false,
                         },
                     ),
                     "old",
@@ -1057,6 +1077,9 @@ mod tests {
                     inbox: None,
                     trust: None,
                     delivered: &delivered,
+                    receipted: &[],
+                    routes: None,
+                    clear_handshake: false,
                 },
             ),
             "commit",
@@ -1118,6 +1141,9 @@ mod tests {
                     inbox: None,
                     trust: None,
                     delivered: &delivered,
+                    receipted: &[],
+                    routes: None,
+                    clear_handshake: false,
                 },
             ),
             "commit",
@@ -1210,6 +1236,9 @@ mod tests {
                     inbox: None,
                     trust: None,
                     delivered: &[],
+                    receipted: &[],
+                    routes: None,
+                    clear_handshake: false,
                 },
             ),
             "commit_parts",

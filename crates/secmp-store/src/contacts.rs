@@ -161,6 +161,25 @@ impl Store {
     }
 }
 
+/// Replace the routes of contact `id` (sealed, Q151) as a statement of the caller's transaction.
+///
+/// # Errors
+/// [`Error::Unavailable`] if the seal or the statement fails or there is no such contact.
+pub fn put_contact_routes(tx: &mut Tx<'_>, id: i64, routes: &[u8]) -> Result<()> {
+    let rk = row_key(&[KeyPart::Int(id)])?;
+    // spec §3.4; ADR-053 item 5
+    let sealed = tx.seal(Table::Contacts, "routes", &rk, routes)?;
+    let n = tx.exec(
+        "UPDATE contacts SET routes = ?2 WHERE id = ?1",
+        params![id, sealed],
+    )?;
+    if n == 1 {
+        Ok(())
+    } else {
+        Err(Error::Unavailable)
+    }
+}
+
 /// Set the state of contact `id`.
 ///
 /// # Errors
@@ -169,6 +188,28 @@ pub fn set_contact_state(tx: &mut Tx<'_>, id: i64, state: i64) -> Result<()> {
     let n = tx.exec(
         "UPDATE contacts SET state = ?2 WHERE id = ?1",
         params![id, state],
+    )?;
+    if n == 1 {
+        Ok(())
+    } else {
+        Err(Error::Unavailable)
+    }
+}
+
+/// Replace the identity of contact `id` after an accepted key change (spec §7.7): the new `IKSPublic` and its
+/// fingerprint; the contact is unverified again.
+///
+/// # Errors
+/// [`Error::Unavailable`] if the statement fails or there is no such contact.
+pub fn put_contact_identity(
+    tx: &mut Tx<'_>,
+    id: i64,
+    iks: &[u8],
+    fingerprint: &[u8],
+) -> Result<()> {
+    let n = tx.exec(
+        "UPDATE contacts SET iks = ?2, fingerprint = ?3, verified = 0 WHERE id = ?1",
+        params![id, iks, fingerprint],
     )?;
     if n == 1 {
         Ok(())

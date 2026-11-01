@@ -689,6 +689,63 @@ mod tests {
         })
     }
 
+    /// PR-03 [O-01] (ST-06 at the `Api`; report §7 "Profile lock and child processes"): `Core::open` with a wrong passphrase is
+    /// the uniform `Error::Unlock` and writes no file — the profile directory hashes the same before and after; a
+    /// directory that holds no profile is `Error::Unavailable` and stays empty; the profile held by a running core (the `flock` on `<profile>/lock`) is
+    /// `Error::Unavailable` to a second opener, not `Unlock`.
+    #[cfg(feature = "kat")]
+    #[test]
+    fn open_wrong_passphrase_uniform() -> R {
+        use secmp_store::wrap::Argon2Params;
+
+        use crate::api::Core;
+        use crate::clock::ManualClock;
+        use crate::testutil::Fixed;
+
+        fn tree_hash(dir: &std::path::Path) -> Result<[u8; 32], E> {
+            let mut names: Vec<_> = std::fs::read_dir(dir)?
+                .map(|e| e.map(|e| e.path()))
+                .collect::<Result<_, _>>()?;
+            names.sort();
+            let mut all = Vec::new();
+            for path in names {
+                all.extend_from_slice(path.file_name().map_or(&[][..], |n| n.as_encoded_bytes()));
+                if path.is_file() {
+                    all.extend_from_slice(&std::fs::read(&path)?);
+                }
+            }
+            Ok(sha256(&[&all]))
+        }
+
+        let mut e = crate::testutil::entropy(3);
+        let fx = Fixture::new("pr03", &mut e)?;
+        let open = |dir: &std::path::Path, pass: &[u8]| {
+            Core::<ManualClock, Fixed>::open_kat(
+                dir,
+                pass,
+                Argon2Params::kat_small(),
+                ManualClock::new(T0),
+                || Fixed(crate::testutil::entropy(1)),
+            )
+        };
+        let before = tree_hash(fx.dir.path())?;
+        assert_eq!(open(fx.dir.path(), b"wrong").err(), Some(Error::Unlock));
+        assert_eq!(open(fx.dir.path(), b"").err(), Some(Error::Unlock));
+        let empty = secmp_store::kat::TempDir::new("pr03-empty")?;
+        assert_eq!(
+            open(empty.path(), b"correct horse").err(),
+            Some(Error::Unavailable)
+        );
+        assert_eq!(tree_hash(fx.dir.path())?, before, "nothing written");
+        assert_eq!(std::fs::read_dir(empty.path())?.count(), 0);
+        // the right passphrase while the fixture's profile holds the lock: unavailable, not unlock
+        assert_eq!(
+            open(fx.dir.path(), b"correct horse").err(),
+            Some(Error::Unavailable)
+        );
+        Ok(())
+    }
+
     /// PR-02 (§6.1 `docs/03:273`): generation 1 is referenced by an invitation expiring on day 20. On day 8 (a new
     /// generation has been made, 1 is no longer current), day 19 and day 21 the clock reads: 1 is present, present,
     /// retired — with the invitation, and the one-time prekey that it named.

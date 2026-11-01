@@ -1781,8 +1781,8 @@ mod tests {
 
     /// BK-07 [O-01] (CS-3.5: never automatic): a scan of every crate's product source (test modules excluded,
     /// CRLF-normalised) finds no line naming `backup::export` outside the allowed set — the client's `Api` handler
-    /// (`secmp-client-core/src/api.rs`, Phase B), so no timer or startup path calls it. In A-4 there is no caller at
-    /// all; Phase B re-runs this test unchanged.
+    /// (`secmp-client-core/src/api.rs`, Phase B), so no timer or startup path calls it. In A-4 there was no caller at
+    /// all; since B-4 the `Api` handler is the one (the last assertion says so, D-B17).
     #[test]
     fn never_automatic() -> R {
         const ALLOWED: &[&str] = &["secmp-client-core/src/api.rs"];
@@ -1834,7 +1834,12 @@ mod tests {
             callers.iter().all(|c| ALLOWED.contains(&c.as_str())),
             "{callers:?}"
         );
-        assert_eq!(callers, Vec::<String>::new(), "A-4: no caller");
+        // B-4 (D-B17): the `Api` export handler is the one caller (A-4 had none)
+        assert_eq!(
+            callers,
+            ["secmp-client-core/src/api.rs"],
+            "exactly the Api handler"
+        );
         Ok(())
     }
 

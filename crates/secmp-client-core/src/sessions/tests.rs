@@ -24,7 +24,7 @@ use crate::sessions::actor::{Refusal, SessionEvent, T_RS_MIN_MS, counters, recei
 use crate::testutil::{DAY, E, Fixed, Fixture, T0, entropy, relay_ref, wire_profile};
 
 #[cfg(feature = "kat")]
-type R = Result<(), E>;
+pub(crate) type R = Result<(), E>;
 
 /// Two profiles with an accepted invitation between them and the conversation of each (the host is the inviter).
 #[cfg(feature = "kat")]

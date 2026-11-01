@@ -42,8 +42,12 @@ pub enum Error {
     Unlock,
     /// The store or the environment could not complete the operation; nothing was changed.
     Unavailable,
-    /// The contact does not take real messages (it removed us).
+    /// The contact does not take real messages (it removed us, or its identity changed and is not verified again).
     Blocked,
+    /// The session is frozen (an invalid key change, spec §7.7); only a reset (spec §7.8) helps.
+    Frozen,
+    /// A session reset was requested (either side, spec §7.8); real messages wait for a new invitation.
+    ResetRequested,
     /// The contact is not verified and the operation needs it.
     Unverified,
     /// The contact came from a restored backup and must be invited again.
@@ -64,6 +68,8 @@ impl fmt::Display for Error {
             Self::Unlock => f.write_str("the profile could not be unlocked"),
             Self::Unavailable => f.write_str("unavailable"),
             Self::Blocked => f.write_str("the contact does not accept messages"),
+            Self::Frozen => f.write_str("the session is frozen"),
+            Self::ResetRequested => f.write_str("a session reset was requested"),
             Self::Unverified => f.write_str("the contact is not verified"),
             Self::ReinviteRequired => f.write_str("the contact must be invited again"),
             Self::ConfirmRequired => f.write_str("confirmation required"),

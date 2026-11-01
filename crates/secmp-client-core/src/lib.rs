@@ -27,6 +27,8 @@ pub mod outbox;
 pub mod persist;
 #[cfg(not(kani))]
 pub mod profile;
+#[cfg(not(kani))]
+pub mod relay_view;
 pub mod retention;
 pub mod scheduler;
 #[cfg(not(kani))]

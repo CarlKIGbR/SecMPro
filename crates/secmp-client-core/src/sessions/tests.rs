@@ -11,6 +11,8 @@ use secmp_proto::wire::cell::{AppKind, Cell};
 #[cfg(feature = "kat")]
 use super::*;
 #[cfg(feature = "kat")]
+use crate::contacts::Contacts;
+#[cfg(feature = "kat")]
 use crate::invitations::{AcceptRequest, Invitations, IssueRequest};
 #[cfg(feature = "kat")]
 use crate::scheduler::outbox::{OutMessage, Outbox};
@@ -834,4 +836,116 @@ fn queue_set_codec_is_canonical() -> R {
     assert!(rotation::QueueSet::decode(&[]).is_err());
     assert!(rotation::QueueSet::decode(&[0; 9]).is_err(), "no entry");
     Ok(())
+}
+
+/// The row count of `table`.
+#[cfg(feature = "kat")]
+fn rows(fx: &Fixture, table: &str) -> Result<i64, E> {
+    let store = fx.profile.store();
+    let s = store.lock().map_err(|_| "lock")?;
+    Ok(s.connection_kat()
+        .query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))?)
+}
+
+/// SE-10 [O-27] (`docs/07:147`): `send` of a view-once (kind 3) to an unverified contact is refused with
+/// `Err(Unverified)` — the outbox, the history and the schedule are as they were (the next slot carries a dummy); to a
+/// verified contact it is accepted, held in memory only (no `outbox` row, no `messages` row, ST-17) and goes out in a slot.
+#[cfg(feature = "kat")]
+#[test]
+fn view_once_refused_for_unverified() -> R {
+    big(|| {
+        let mut w = established("se10", 61)?;
+        let store = w.guest.profile.store();
+        let contacts = Contacts::new(store.clone(), w.guest.profile.fingerprint()?);
+        let vo = Outgoing {
+            kind: AppKind::ViewOnceText.byte(),
+            payload: b"burn after reading",
+            expire_after: 0,
+        };
+        let refused = queue_message(&store, &contacts, &mut w.g, ContactId(1), &vo, ms(5));
+        assert_eq!(refused, Err(Error::Unverified));
+        assert_eq!(w.g.outbox().waiting(), 0);
+        assert_eq!(
+            (rows(&w.guest, "outbox")?, rows(&w.guest, "messages")?),
+            (0, 0)
+        );
+        // the schedule is unchanged: a slot carries a dummy, which the peer decides without a message
+        let dummy = next(&mut w.g, ms(10))?;
+        deliver(&mut w.h, &dummy)?;
+        assert!(w.h.received().is_empty());
+
+        set_verified(&store, &mut w.g, ContactId(1))?;
+        let id = queue_message(&store, &contacts, &mut w.g, ContactId(1), &vo, ms(20))?;
+        assert_eq!(w.g.outbox().waiting(), 1);
+        assert_eq!(
+            (rows(&w.guest, "outbox")?, rows(&w.guest, "messages")?),
+            (0, 0)
+        );
+        assert!(
+            store
+                .lock()
+                .map_err(|_| "lock")?
+                .outgoing_view_once(&id)
+                .is_some(),
+            "held in memory"
+        );
+        let cell = next(&mut w.g, ms(30))?;
+        deliver(&mut w.h, &cell)?;
+        assert_eq!(w.h.received().len(), 1);
+        assert_eq!(w.h.received().first().map(|r| r.msg_id), Some(id));
+        Ok(())
+    })
+}
+
+/// SE-11 [O-27] (CS-1.14): a view-once received from an unverified contact is held in memory and locked — `reveal` is
+/// `Err(Unverified)` — and is never written (no `messages` row); after the contact is verified `reveal` shows it, once
+/// the 20 s window has started.
+#[cfg(feature = "kat")]
+#[test]
+fn view_once_from_unverified_locked() -> R {
+    big(|| {
+        let mut w = established("se11", 63)?;
+        let (gstore, hstore) = (w.guest.profile.store(), w.host.profile.store());
+        let contacts = Contacts::new(gstore.clone(), w.guest.profile.fingerprint()?);
+        set_verified(&gstore, &mut w.g, ContactId(1))?;
+        let id = queue_message(
+            &gstore,
+            &contacts,
+            &mut w.g,
+            ContactId(1),
+            &Outgoing {
+                kind: AppKind::ViewOnceText.byte(),
+                payload: b"for your eyes",
+                expire_after: 0,
+            },
+            ms(5),
+        )?;
+        let cell = next(&mut w.g, ms(10))?;
+        deliver(&mut w.h, &cell)?;
+        let got = w.h.take_received();
+        assert_eq!(
+            store_received(&hstore, ContactId(1), got, ms(11))?,
+            [(id, 3)]
+        );
+        assert_eq!(rows(&w.host, "messages")?, 0, "never written");
+        assert!(
+            hstore
+                .lock()
+                .map_err(|_| "lock")?
+                .view_once_held(&id, ms(12))
+        );
+        assert_eq!(reveal(&hstore, &w.h, &id, ms(12)), Err(Error::Unverified));
+        // still held, still locked
+        assert!(
+            hstore
+                .lock()
+                .map_err(|_| "lock")?
+                .view_once_held(&id, ms(13))
+        );
+        set_verified(&hstore, &mut w.h, ContactId(1))?;
+        let shown = reveal(&hstore, &w.h, &id, ms(14))?;
+        assert_eq!(&**shown, b"for your eyes");
+        assert_eq!(rows(&w.host, "messages")?, 0);
+        Ok(())
+    })
 }

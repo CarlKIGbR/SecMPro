@@ -6,19 +6,22 @@
 pub mod actor;
 pub mod rotation;
 
-use secmp_crypto::HybridVerifyingKey;
+use secmp_crypto::{HybridVerifyingKey, Zeroizing};
 use secmp_proto::Decode as _;
+use secmp_proto::tr::Entropy as _;
 use secmp_proto::tr::RatchetState;
 use secmp_proto::tr::content::{Trust, ik_sig};
+use secmp_proto::wire::cell::AppKind;
 use secmp_proto::wire::inv::IksPublic;
 use secmp_store::Tx;
 use secmp_store::sessions::{insert_skipped, put_fixed, put_trust};
 
 use crate::api::{ContactId, Error};
+use crate::contacts::Contacts;
 use crate::outbox::StoreOutbox;
 use crate::persist::{SharedStore, StorePersist};
-use crate::scheduler::outbox::trust_code;
-use actor::{Conversation, EntropySource, initial_parts};
+use crate::scheduler::outbox::{MsgId, OutMessage, Outbox as _, trust_code};
+use actor::{Conversation, EntropySource, Received, Refusal, initial_parts};
 
 /// A conversation over the profile store: the session's rows, the contact's outbox.
 pub type StoreConversation<S> = Conversation<StoreOutbox, StorePersist, S>;
@@ -89,6 +92,164 @@ pub fn set_verified<S: EntropySource>(
     })?;
     conversation.set_trust(Trust::Verified);
     Ok(())
+}
+
+/// The largest text the `Api` takes: 16 KiB (ADR-054 item 3; inline attachments are kind 1 of at most 64 fragments).
+pub const MESSAGE_MAX: usize = 16_384;
+
+/// What the application sends.
+pub struct Outgoing<'a> {
+    /// `AppMessage.kind`.
+    pub kind: u8,
+    /// The payload.
+    pub payload: &'a [u8],
+    /// `expire_after` in seconds (0: never).
+    pub expire_after: u32,
+}
+
+/// Queue a message for `contact` (`Api.send`, spec §10.4, §7.6; O-27): the one entry through which the application's
+/// content reaches a session. Nothing here wakes, adds or removes a slot — a refusal leaves the schedule as it was (the
+/// slots keep carrying dummies, spec §10.1), and an accepted message only changes the outbox and the history.
+///
+/// Refusals, before anything is queued: [`Error::Unsupported`] for kind 2 (ADR-054 item 3), an unknown kind or a payload
+/// over [`MESSAGE_MAX`]; [`Error::Blocked`] for a removed contact or a changed identity that is not verified again;
+/// [`Error::ReinviteRequired`]; [`Error::Frozen`]; [`Error::ResetRequested`]; [`Error::Unverified`] for a view-once
+/// (kind 3) to a contact that is not verified.
+///
+/// # Errors
+/// As above; [`Error::Unavailable`] if the store refused the outbox row or the history row (F9: the message is not queued).
+pub fn queue_message<S: EntropySource>(
+    store: &SharedStore,
+    contacts: &Contacts,
+    conversation: &mut StoreConversation<S>,
+    contact: ContactId,
+    message: &Outgoing<'_>,
+    now_ms: u64,
+) -> Result<MsgId, Error> {
+    let Outgoing {
+        kind,
+        payload,
+        expire_after,
+    } = *message;
+    let kind = AppKind::ALL
+        .into_iter()
+        .find(|k| k.byte() == kind)
+        .ok_or(Error::Unsupported)?;
+    if matches!(kind, AppKind::AttachmentInline) || payload.len() > MESSAGE_MAX {
+        return Err(Error::Unsupported);
+    }
+    contacts.check_send(contact)?;
+    match conversation.may_send_real() {
+        Ok(()) | Err(Refusal::AwaitingReply) => {}
+        Err(Refusal::Trust) => {
+            return Err(if matches!(conversation.trust(), Trust::Frozen) {
+                Error::Frozen
+            } else {
+                Error::Blocked
+            });
+        }
+        Err(Refusal::Removed) => return Err(Error::Blocked),
+        Err(Refusal::Reset) => return Err(Error::ResetRequested),
+    }
+    let view_once = matches!(kind, AppKind::ViewOnceText);
+    if view_once && !matches!(conversation.trust(), Trust::Verified) {
+        return Err(Error::Unverified);
+    }
+    let msg_id: MsgId = *conversation
+        .source_mut()
+        .entropy()
+        .secret::<16>()
+        .map_err(|_| Error::Unavailable)?
+        .expose_secret();
+    // the history first (a view-once is never written): an outbox that refuses takes the row back
+    if !view_once {
+        store
+            .lock()
+            .map_err(|_| Error::Unavailable)?
+            .insert_message(&secmp_store::messages::NewMessage {
+                contact_id: contact.0,
+                msg_id,
+                direction: secmp_store::messages::Direction::Out,
+                kind: kind.byte(),
+                ts_ms: now_ms,
+                expire_after,
+                payload,
+            })?;
+    }
+    let queued = conversation.outbox_mut().enqueue_durable(
+        OutMessage {
+            msg_id,
+            kind,
+            expire_after,
+            payload: Zeroizing::new(payload.to_vec()),
+        },
+        now_ms,
+    );
+    if !queued {
+        if !view_once {
+            let _ = store
+                .lock()
+                .map_err(|_| Error::Unavailable)?
+                .delete_message(contact.0, &msg_id);
+        }
+        return Err(Error::Unavailable);
+    }
+    Ok(msg_id)
+}
+
+/// The application takes the messages a conversation delivered: a view-once is held in memory (never written, even when
+/// the contact is not verified — `reveal` refuses then, O-27, CS-1.14); every other message goes to the history. Returns
+/// each message's id and kind byte.
+///
+/// # Errors
+/// [`Error::Unavailable`] if the history cannot be written (the messages already taken are not lost: the failing one and
+/// those after it are returned to nobody — the store is the application's, a retry is its decision).
+pub fn store_received(
+    store: &SharedStore,
+    contact: ContactId,
+    received: Vec<Received>,
+    now_ms: u64,
+) -> Result<Vec<(MsgId, u8)>, Error> {
+    let mut out = Vec::with_capacity(received.len());
+    let mut s = store.lock().map_err(|_| Error::Unavailable)?;
+    for r in received {
+        if matches!(r.kind, AppKind::ViewOnceText) {
+            s.hold_received_view_once(r.msg_id, &r.payload);
+        } else {
+            s.insert_message(&secmp_store::messages::NewMessage {
+                contact_id: contact.0,
+                msg_id: r.msg_id,
+                direction: secmp_store::messages::Direction::In,
+                kind: r.kind.byte(),
+                ts_ms: now_ms,
+                expire_after: 0,
+                payload: &r.payload,
+            })?;
+        }
+        out.push((r.msg_id, r.kind.byte()));
+    }
+    Ok(out)
+}
+
+/// Show a received view-once (`Api.reveal`, O-27): only for a verified contact — from an unverified one it stays held,
+/// locked — and for 20 s after the first reveal; it is never written.
+///
+/// # Errors
+/// [`Error::Unverified`] unless the contact is verified; [`Error::Unavailable`] if it is not (or no longer) held.
+pub fn reveal<S: EntropySource>(
+    store: &SharedStore,
+    conversation: &StoreConversation<S>,
+    msg_id: &MsgId,
+    now_ms: u64,
+) -> Result<Zeroizing<Vec<u8>>, Error> {
+    if !matches!(conversation.trust(), Trust::Verified) {
+        return Err(Error::Unverified);
+    }
+    store
+        .lock()
+        .map_err(|_| Error::Unavailable)?
+        .reveal_view_once(msg_id, now_ms)
+        .ok_or(Error::Unavailable)
 }
 
 /// The contacts whose queues may enter the scheduler: those with a durable session (SE-16, Q165) — for a responder after

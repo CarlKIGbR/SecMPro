@@ -50,6 +50,14 @@ pub trait Outbox {
     /// Queue a message at `now_ms`.
     fn enqueue(&mut self, message: OutMessage, now_ms: u64);
 
+    /// Queue a message and report whether it is as durable as the outbox promises; a store that refused the write gives the
+    /// message back (it is dropped again) and the answer is `false` (F9: the `Api` answers with an error and the message is
+    /// not queued). The default is [`Outbox::enqueue`] (an outbox without a store).
+    fn enqueue_durable(&mut self, message: OutMessage, now_ms: u64) -> bool {
+        self.enqueue(message, now_ms);
+        true
+    }
+
     /// The state of a message.
     fn state(&self, id: &MsgId) -> Option<MsgState>;
 
@@ -153,6 +161,14 @@ impl MemOutbox {
                 .collect(),
             clock,
         }
+    }
+
+    /// Drop a message that was queued and is waiting (not in flight, not relayed): `enqueue_durable`'s rollback.
+    pub fn discard(&mut self, id: &MsgId) -> bool {
+        let before = self.entries.len();
+        self.entries
+            .retain(|e| !(e.message.msg_id == *id && e.state == MsgState::Queued && !e.taken));
+        self.entries.len() != before
     }
 
     fn entry(&mut self, id: &MsgId) -> Option<&mut Entry> {

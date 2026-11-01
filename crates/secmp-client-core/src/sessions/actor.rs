@@ -530,6 +530,12 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
         &self.received
     }
 
+    /// The messages delivered to the application since the last call; the application stores them (the `Api` writes the
+    /// history, or holds a view-once in memory).
+    pub fn take_received(&mut self) -> Vec<Received> {
+        core::mem::take(&mut self.received)
+    }
+
     /// The trust in the contact's identity (a key change moves it).
     #[must_use]
     pub const fn trust(&self) -> Trust {

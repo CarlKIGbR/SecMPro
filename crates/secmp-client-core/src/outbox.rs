@@ -177,6 +177,20 @@ impl Outbox for StoreOutbox {
         self.sync();
     }
 
+    fn enqueue_durable(&mut self, message: OutMessage, now_ms: u64) -> bool {
+        let (id, before) = (message.msg_id, self.write_errors);
+        self.mem.enqueue(message, now_ms);
+        self.sync();
+        if self.write_errors == before {
+            return true;
+        }
+        // F9: the store refused the row; the message is not queued
+        self.mem.discard(&id);
+        self.synced.remove(&id);
+        self.memory_only.remove(&id);
+        false
+    }
+
     fn state(&self, id: &MsgId) -> Option<MsgState> {
         self.mem.state(id)
     }

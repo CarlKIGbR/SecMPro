@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! M6 (h) measurements on the virtual clock (MR-01, MR-02; spec §10.2, §9.5; `docs/07` M6).
 
-use secmp_client_core::scheduler::conversation::Conversation;
 use secmp_client_core::scheduler::core::LinkKind;
 use secmp_client_core::scheduler::outbox::{MemOutbox, MemPersist, MsgState, OutMessage, Outbox};
 use secmp_client_core::scheduler::params::{Mode, Params};
 use secmp_client_core::scheduler::types::{LinkEvent, QueueId, RelayId};
+use secmp_client_core::sessions::actor::Conversation;
 use secmp_crypto::Zeroizing;
 use secmp_proto::wire::cell::AppKind;
 use secmp_relay::Limits;

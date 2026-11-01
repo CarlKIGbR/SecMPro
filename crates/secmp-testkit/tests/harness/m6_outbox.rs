@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! M6 (d4) the outbox (OB-01…OB-08; spec §7.6, §9.5, §10.4, `docs/07` M6).
 
-use secmp_client_core::scheduler::conversation::{Conversation, Conversations};
 use secmp_client_core::scheduler::outbox::{MemOutbox, MemPersist, MsgState, OutMessage, Outbox};
 use secmp_client_core::scheduler::params::Mode;
 use secmp_client_core::scheduler::types::{CellSource, QueueId};
+use secmp_client_core::sessions::actor::{Conversation, Conversations};
 use secmp_crypto::{SecretBytes, Zeroizing};
 use secmp_proto::tr::{Entropy, FixedEntropy};
 use secmp_proto::wire::cell::AppKind;

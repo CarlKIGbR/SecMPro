@@ -986,7 +986,7 @@ fn blocking_worker_runs_jobs_on_the_blocking_pool() {
     use secmp_client_core::scheduler::types::{CellToken, QueueId, SendFailure};
     runtime().block_on(async {
         let convs: secmp_testkit::harness::Convs =
-            secmp_client_core::scheduler::conversation::Conversations::new();
+            secmp_client_core::sessions::actor::Conversations::new();
         let mut w = BlockingWorker::new(convs);
         let prepared = w
             .run(Job::Prepare {

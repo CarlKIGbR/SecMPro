@@ -2,7 +2,6 @@
 //! M6 (d1) the cell path of the scheduler: one path for real and dummy cells, persist-before-send / -ack, acknowledgement
 //! of every delivered cell, response handling, queue re-creation (S-25…S-32; spec §7.5, §9.1, §9.3, §10.3).
 
-use secmp_client_core::scheduler::conversation::{Conversation, Conversations, counters};
 use secmp_client_core::scheduler::core::{LinkKind, SchedError, Scheduler};
 use secmp_client_core::scheduler::outbox::{MemOutbox, MemPersist, MsgState, OutMessage, Outbox};
 use secmp_client_core::scheduler::params::{Mode, Params};
@@ -10,6 +9,7 @@ use secmp_client_core::scheduler::types::{
     Alert, CellSource, CellToken, ControlKind, Delivered, FrameId, LinkEvent, LinkId, Output,
     PreparedCell, QueueId, Reason, RelayId, SendFailure, SourceError,
 };
+use secmp_client_core::sessions::actor::{Conversation, Conversations, counters};
 use secmp_client_core::timing::TimingRng;
 use secmp_crypto::{SecretBytes, Zeroizing};
 use secmp_proto::tr::{Entropy, FixedEntropy};

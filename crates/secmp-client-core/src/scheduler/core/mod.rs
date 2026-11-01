@@ -333,8 +333,8 @@ fn counters_now() -> [u64; 4] {
     [
         secmp_transport::channel::counters::seal_calls(),
         secmp_transport::channel::counters::sign_calls(),
-        crate::scheduler::conversation::counters::tr_encrypt_calls(),
-        crate::scheduler::conversation::counters::persist_calls(),
+        crate::sessions::actor::counters::tr_encrypt_calls(),
+        crate::sessions::actor::counters::persist_calls(),
     ]
 }
 
@@ -2308,7 +2308,7 @@ mod tests {
 #[cfg(feature = "kat")]
 mod m6_mut {
     use super::counters_now;
-    use crate::scheduler::conversation::counters;
+    use crate::sessions::actor::counters;
 
     #[test]
     fn counters_now_moves_when_a_counted_step_runs() {

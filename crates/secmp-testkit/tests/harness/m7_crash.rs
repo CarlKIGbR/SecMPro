@@ -19,9 +19,9 @@ use std::sync::Arc;
 
 use secmp_client_core::outbox::StoreOutbox;
 use secmp_client_core::persist::{SharedStore, StorePersist};
-use secmp_client_core::scheduler::conversation::{Conversation, Conversations, EntropySource};
 use secmp_client_core::scheduler::outbox::{Outbox, Persist, PersistKind};
 use secmp_client_core::scheduler::types::{CellSource, QueueId};
+use secmp_client_core::sessions::actor::{Conversation, Conversations, EntropySource};
 use secmp_crypto::SecretBytes;
 use secmp_proto::tr::{Entropy, FixedEntropy, RatchetState};
 use secmp_proto::wire::cell::Cell;

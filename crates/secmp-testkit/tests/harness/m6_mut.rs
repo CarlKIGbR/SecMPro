@@ -1167,7 +1167,7 @@ fn conversation_cells_carry_the_senders_clock() {
     use secmp_crypto::SecretBytes;
     use secmp_proto::tr::{Entropy, FixedEntropy};
     use secmp_testkit::harness::{EntropyPool, START_UNIX, ratchet_pair};
-    type Conv = secmp_client_core::scheduler::conversation::Conversation<
+    type Conv = secmp_client_core::sessions::actor::Conversation<
         secmp_client_core::scheduler::outbox::MemOutbox,
         MemPersist,
         EntropyPool,
@@ -1179,7 +1179,7 @@ fn conversation_cells_carry_the_senders_clock() {
     let mut eb = FixedEntropy::new(&pool.bytes(1 << 16));
     let (sa, sb) = ratchet_pair(&sk, &transcript, &mut ea, &mut eb);
     let key = pool.get().hybrid_signing_key().unwrap().verifying_key();
-    let mut conv: Conv = secmp_client_core::scheduler::conversation::Conversation::new(
+    let mut conv: Conv = secmp_client_core::sessions::actor::Conversation::new(
         sa,
         secmp_client_core::scheduler::outbox::MemOutbox::new(),
         MemPersist::new(),
@@ -1188,7 +1188,7 @@ fn conversation_cells_carry_the_senders_clock() {
         START_UNIX,
     );
     conv.bind(A_SEND, A_RECV);
-    let mut convs = secmp_client_core::scheduler::conversation::Conversations::new();
+    let mut convs = secmp_client_core::sessions::actor::Conversations::new();
     let a = convs.add(conv);
     convs
         .get_mut(a)
@@ -1208,7 +1208,7 @@ fn conversation_cells_carry_the_senders_clock() {
 }
 
 fn real_cells_until_idle(
-    convs: &mut secmp_client_core::scheduler::conversation::Conversations<
+    convs: &mut secmp_client_core::sessions::actor::Conversations<
         secmp_client_core::scheduler::outbox::MemOutbox,
         MemPersist,
         secmp_testkit::harness::EntropyPool,

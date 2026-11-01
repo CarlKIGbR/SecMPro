@@ -7,10 +7,10 @@
 //! it; the idle run is the same scenario with the same timing seed and no activity.
 
 use secmp_client_core::scheduler::control::When;
-use secmp_client_core::scheduler::conversation::{Conversation, Conversations};
 use secmp_client_core::scheduler::outbox::{MemOutbox, MemPersist, OutMessage, Outbox};
 use secmp_client_core::scheduler::params::{Mode, Params};
 use secmp_client_core::scheduler::types::{CellSource, ControlKind, QueueId, RelayId};
+use secmp_client_core::sessions::actor::{Conversation, Conversations};
 use secmp_crypto::Zeroizing;
 use secmp_proto::wire::cell::AppKind;
 use secmp_testkit::harness::{

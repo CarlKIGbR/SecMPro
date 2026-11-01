@@ -12,9 +12,6 @@
 
 use std::collections::{BTreeMap, VecDeque};
 
-use secmp_client_core::scheduler::conversation::{
-    Conversation, Conversations, EntropySource, counters,
-};
 use secmp_client_core::scheduler::core::{SchedError, Scheduler};
 use secmp_client_core::scheduler::outbox::{MemOutbox, MemPersist};
 use secmp_client_core::scheduler::params::{Mode, Params};
@@ -22,6 +19,7 @@ use secmp_client_core::scheduler::types::{
     CellSource, CellToken, ControlKind, Delivered, FrameId, IsolationKey, LinkEvent, LinkId,
     LinkKind, OpId, Output, PreparedCell, QueueId, RelayId, SendFailure, SourceError,
 };
+use secmp_client_core::sessions::actor::{Conversation, Conversations, EntropySource, counters};
 use secmp_client_core::timing::TimingRng;
 use secmp_crypto::{Aead, HybridSigningKey, Label, Nonce24, SecretBytes};
 use secmp_proto::Decode;

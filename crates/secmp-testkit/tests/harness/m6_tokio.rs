@@ -7,12 +7,12 @@ use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
 
 use secmp_client_core::clock::{Clock, TokioClock};
-use secmp_client_core::scheduler::conversation::{Conversation, Conversations};
 use secmp_client_core::scheduler::core::Scheduler;
 use secmp_client_core::scheduler::outbox::{MemOutbox, MemPersist, OutMessage, Outbox};
 use secmp_client_core::scheduler::params::{Mode, Params};
 use secmp_client_core::scheduler::run::{Driver, Only, Purpose};
 use secmp_client_core::scheduler::types::{CellSource, QueueId, RelayId, Transport};
+use secmp_client_core::sessions::actor::{Conversation, Conversations};
 use secmp_client_core::timing::TimingRng;
 use secmp_crypto::{SecretBytes, Zeroizing};
 use secmp_proto::tr::{Entropy, FixedEntropy};

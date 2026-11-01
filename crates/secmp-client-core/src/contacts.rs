@@ -605,8 +605,8 @@ mod tests {
     fn contact_removed_control() -> R {
         use secmp_proto::wire::cell::AppKind;
 
-        use crate::scheduler::conversation::Conversation;
         use crate::scheduler::outbox::{MemOutbox, MemPersist};
+        use crate::sessions::actor::Conversation;
 
         let mut e = entropy(8);
         let fx = Fixture::new("pr08", &mut e)?;

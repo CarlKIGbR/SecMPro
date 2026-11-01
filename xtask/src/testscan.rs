@@ -504,8 +504,11 @@ fn scheduler_sees_only_traits() -> Result<()> {
     let scheduler = root.join("crates/secmp-client-core/src/scheduler");
     let mut files = Vec::new();
     let mut bad = Vec::new();
-    for file in crate::util::walk_files(&scheduler, &|p| p.extension().is_some_and(|x| x == "rs"))?
-    {
+    // Q171: the scan reads `scheduler/**` and `sessions/actor.rs` (the conversation moved there, SE-18)
+    let mut scanned =
+        crate::util::walk_files(&scheduler, &|p| p.extension().is_some_and(|x| x == "rs"))?;
+    scanned.push(root.join("crates/secmp-client-core/src/sessions/actor.rs"));
+    for file in scanned {
         let rel = crate::util::rel(&root, &file);
         let src = std::fs::read_to_string(&file)?;
         for (n, line) in store_lines(&src) {
@@ -517,7 +520,7 @@ fn scheduler_sees_only_traits() -> Result<()> {
     for known in [
         "scheduler/mod.rs",
         "scheduler/outbox.rs",
-        "scheduler/conversation.rs",
+        "sessions/actor.rs",
         "scheduler/run.rs",
     ] {
         assert!(
@@ -689,3 +692,68 @@ fn kc5_calls_extracted() -> Result<()> {
 /// The source scans and their tests (test-only).
 #[cfg(test)]
 mod scan;
+
+/// TEST-SPEC-M7 SE-18 (`docs/02:104`; Q152, Q171): the ratchet is driven in one place — no file of `secmp-client-core/src`
+/// but `sessions/actor.rs` calls a `RatchetState` constructor or method (`RatchetState::…`, `.encrypt_with(`,
+/// `.decrypt_with(`, `.decrypt_first_with(`, `.to_parts(`). The `#[cfg(test)] mod tests` of a file (V-18), the test
+/// helper files (`testutil.rs`, `*_tests.rs`) and `kani_proofs.rs` are excluded; the scan finds the calls where they are
+/// (the actor) and a fixture with a call outside it.
+#[cfg(test)]
+#[test]
+fn session_actor_owns_ratchet() -> Result<()> {
+    fn calls(src: &str) -> Vec<(usize, String)> {
+        let product = src
+            .replace("\r\n", "\n")
+            .split("#[cfg(test)]\nmod tests")
+            .next()
+            .unwrap_or_default()
+            .to_owned();
+        let needles = [
+            concat!("RatchetState", "::"),
+            concat!(".encrypt", "_with("),
+            concat!(".decrypt", "_with("),
+            concat!(".decrypt_first", "_with("),
+            concat!(".to_", "parts("),
+        ];
+        product
+            .lines()
+            .enumerate()
+            .filter(|(_, l)| !l.trim_start().starts_with("//"))
+            .filter(|(_, l)| needles.iter().any(|n| l.contains(n)))
+            .map(|(i, l)| (i.saturating_add(1), l.trim().to_owned()))
+            .collect()
+    }
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let src = root.join("crates/secmp-client-core/src");
+    let mut outside = Vec::new();
+    let mut inside = 0_usize;
+    for file in crate::util::walk_files(&src, &|p| p.extension().is_some_and(|x| x == "rs"))? {
+        let rel = crate::util::rel(&root, &file);
+        let name = file
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default();
+        if name == "testutil.rs" || name == "kani_proofs.rs" || name.ends_with("_tests.rs") {
+            continue;
+        }
+        let found = calls(&std::fs::read_to_string(&file)?);
+        if rel.ends_with("sessions/actor.rs") {
+            inside = found.len();
+        } else {
+            outside.extend(found.into_iter().map(|(n, l)| format!("{rel}:{n}: {l}")));
+        }
+    }
+    assert!(
+        outside.is_empty(),
+        "RatchetState used outside the actor: {outside:?}"
+    );
+    assert!(inside >= 5, "the scan finds the actor's calls: {inside}");
+    // the fixture: a call outside the actor is found; a test module is skipped
+    let fixture = format!(
+        "fn a() {{ s{} }}\n#[cfg(test)]\nmod tests {{\n    fn t() {{ s{} }}\n}}\n",
+        concat!(".encrypt", "_with(c, e)"),
+        concat!(".to_", "parts()")
+    );
+    assert_eq!(calls(&fixture).len(), 1);
+    Ok(())
+}

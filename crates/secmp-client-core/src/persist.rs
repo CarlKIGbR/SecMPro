@@ -813,7 +813,7 @@ mod tests {
     struct Fixed(FixedEntropy);
 
     #[cfg(feature = "kat")]
-    impl crate::scheduler::conversation::EntropySource for Fixed {
+    impl crate::sessions::actor::EntropySource for Fixed {
         type E = FixedEntropy;
 
         fn entropy(&mut self) -> &mut FixedEntropy {
@@ -828,9 +828,9 @@ mod tests {
     #[test]
     #[cfg(feature = "kat")]
     fn failed_commit_changes_nothing() -> R {
-        use crate::scheduler::conversation::{Conversation, Conversations};
         use crate::scheduler::outbox::MemOutbox;
         use crate::scheduler::types::{CellSource, QueueId};
+        use crate::sessions::actor::{Conversation, Conversations};
         let dir = f(secmp_store::kat::TempDir::new("pc02"), "dir")?;
         let store = shared(dir.path())?;
         let (a, ea, b, eb) = pair(2)?;

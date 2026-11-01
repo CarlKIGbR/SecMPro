@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Shared set-up of the M6 scheduler tests: contacts over the in-process relay on the virtual clock.
 
-use secmp_client_core::scheduler::conversation::Conversation;
 use secmp_client_core::scheduler::core::LinkKind;
 use secmp_client_core::scheduler::outbox::{MemOutbox, MemPersist};
 use secmp_client_core::scheduler::params::{Mode, Params};
 use secmp_client_core::scheduler::types::{CellSource, QueueId, RelayId};
+use secmp_client_core::sessions::actor::Conversation;
 use secmp_proto::wire::cell::Cell;
 use secmp_testkit::harness::{
     Dir, EntropyPool, HarnessConfig, START_UNIX, TraceEntry, VirtualDriver,

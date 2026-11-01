@@ -158,10 +158,10 @@ impl Fixture {
     }
 }
 
-/// The randomness of a [`crate::scheduler::conversation::Conversation`] in the tests.
+/// The randomness of a [`crate::sessions::actor::Conversation`] in the tests.
 pub(crate) struct Fixed(pub(crate) FixedEntropy);
 
-impl crate::scheduler::conversation::EntropySource for Fixed {
+impl crate::sessions::actor::EntropySource for Fixed {
     type E = FixedEntropy;
 
     fn entropy(&mut self) -> &mut FixedEntropy {

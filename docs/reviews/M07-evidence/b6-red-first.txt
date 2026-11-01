@@ -1,0 +1,53 @@
+red-first lines of B-5 and B-6 (WEISUNG M7-B-4): each test run against a deliberately broken tree, the failing assertion kept; the broken edit is named in the header line of each block
+
+== SE-02 sender_resends_last_real_on_new_queue (switch_send_queue without the re-queue of the last 128 cells)
+    thread 'm7_rotation::sender_resends_last_real_on_new_queue' (497555) panicked at crates/secmp-testkit/tests/harness/m7_rotation.rs:112:5:
+    assertion `left == right` failed: the 12 real messages of the last 128 cells go again, not the 3 before them
+      left: 0
+     right: 12
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+--
+     Summary [  33.114s] 1 test run: 0 passed, 1 failed, 335 skipped
+        FAIL [  33.113s] (1/1) secmp-testkit::harness m7_rotation::sender_resends_last_real_on_new_queue
+error: test run failed
+
+== AP-02 and AP-04 (a pub fn exposing the store on Api; hub.rs importing secmp_transport outside the pinned allowlist)
+        FAIL [   0.009s] (1/2) xtask::bin/xtask testscan::api_exposes_no_secrets_or_store
+  stdout ───
+
+    running 1 test
+    test testscan::api_exposes_no_secrets_or_store ... FAILED
+
+    failures:
+
+--
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 309 filtered out; finished in 0.00s
+
+  stderr ───
+
+    thread 'testscan::api_exposes_no_secrets_or_store' (508227) panicked at xtask/src/testscan.rs:903:5:
+    the Api exposes: ["api.rs:486: pub fn profile_store(&self) -> SharedStore {"]
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+--
+        FAIL [   0.012s] (2/2) xtask::bin/xtask testscan::no_identifiers_reach_transport_types
+  stdout ───
+
+    running 1 test
+    test testscan::no_identifiers_reach_transport_types ... FAILED
+
+    failures:
+
+--
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 309 filtered out; finished in 0.01s
+
+  stderr ───
+
+    thread 'testscan::no_identifiers_reach_transport_types' (508228) panicked at xtask/src/testscan.rs:1049:5:
+    assertion `left == right` failed: the modules that import secmp_transport
+      left: {"crates/secmp-client-core/src/hub.rs", "crates/secmp-client-core/src/kani_proofs.rs", "crates/secmp-client-core/src/scheduler/core/mod.rs", "crates/secmp-client-core/src/scheduler/run.rs"}
+     right: {"crates/secmp-client-core/src/kani_proofs.rs", "crates/secmp-client-core/src/scheduler/core/mod.rs", "crates/secmp-client-core/src/scheduler/run.rs"}
+--
+        FAIL [   0.009s] (1/2) xtask::bin/xtask testscan::api_exposes_no_secrets_or_store
+        FAIL [   0.012s] (2/2) xtask::bin/xtask testscan::no_identifiers_reach_transport_types
+error: test run failed

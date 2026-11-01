@@ -43,7 +43,7 @@ pub fn seed_conversation(sim: &mut VirtualDriver, alice: usize, bob: usize, c: &
         .unwrap();
     sim.client(bob)
         .convs
-        .deliver(c.b_recv, 0, &cell.cell)
+        .deliver(c.b_recv, 0, 0, &cell.cell)
         .unwrap();
 }
 

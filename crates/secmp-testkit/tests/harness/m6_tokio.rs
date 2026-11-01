@@ -343,7 +343,7 @@ impl<P: StreamProvider + 'static> TokioRig<P> {
             let first = conv_x.prepare_direct(0).unwrap();
             let mut convs = PeerConvs::new();
             convs.add(conv_p);
-            convs.deliver(QueueId(1), 0, &first.cell).unwrap();
+            convs.deliver(QueueId(1), 0, 0, &first.cell).unwrap();
             let x_conv = x.convs.lock().unwrap().add(conv_x);
             peers.push(TPeer {
                 convs,
@@ -380,7 +380,7 @@ impl<P: StreamProvider + 'static> TokioRig<P> {
                     break;
                 }
                 for (id, cell) in cells {
-                    CellSource::deliver(&mut peer.convs, QueueId(1), id, &cell).unwrap();
+                    CellSource::deliver(&mut peer.convs, QueueId(1), 0, id, &cell).unwrap();
                     peer.drained_to = peer.drained_to.max(id);
                 }
             }

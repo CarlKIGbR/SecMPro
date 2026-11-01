@@ -174,7 +174,7 @@ impl Rig {
             let first = conv_x.prepare_direct(0).unwrap();
             let mut convs = PeerConvs::new();
             convs.add(conv_p);
-            convs.deliver(QueueId(1), 0, &first.cell).unwrap();
+            convs.deliver(QueueId(1), 0, 0, &first.cell).unwrap();
             let x_conv = sim.client(x).convs.add(conv_x);
             peers.push(Peer {
                 convs,
@@ -217,7 +217,7 @@ impl Rig {
                     break;
                 }
                 for (id, cell) in cells {
-                    peer.convs.deliver(QueueId(1), id, &cell).unwrap();
+                    peer.convs.deliver(QueueId(1), 0, id, &cell).unwrap();
                     peer.drained_to = peer.drained_to.max(id);
                 }
             }

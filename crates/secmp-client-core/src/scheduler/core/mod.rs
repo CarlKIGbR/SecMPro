@@ -951,7 +951,7 @@ impl World {
         let empty = cells.is_empty();
         let queues = self.recvs.iter_mut().map(|r| (r.id, &mut r.ledger));
         take_response(queues, &queue, generation, cells, |id, cell| {
-            source.deliver(queue, id, &cell)
+            source.deliver(queue, generation, id, &cell)
         });
         // a FETCH with no present cell: a `QUEUE_DEL` that waited for it starts its delay (Q163, Q194)
         if empty && self.current(queue, generation) {
@@ -1204,8 +1204,10 @@ impl Scheduler {
     /// [`crate::scheduler::types::Delivered::Pending`] (OQ-20): the acknowledgement moves to the highest committed prefix
     /// of what was fetched, and the next `FETCH` carries it (spec §9.3). A report for a cell the queue does not hold
     /// (another generation's, or decided already) changes nothing.
-    pub fn delivery_committed(&mut self, queue: QueueId, cell_id: u64) {
-        if let Some(rq) = self.world.recv_mut(queue) {
+    pub fn delivery_committed(&mut self, queue: QueueId, generation: u64, cell_id: u64) {
+        if let Some(rq) = self.world.recv_mut(queue)
+            && rq.ledger.generation() == generation
+        {
             rq.ledger.committed(cell_id);
         }
     }
@@ -2195,8 +2197,41 @@ mod tests {
         fn send_failed(&mut self, _: QueueId, _: CellToken, _: SendFailure) {}
         fn discard(&mut self, _: QueueId, _: CellToken) {}
         fn queue_lost(&mut self, _: QueueId) {}
-        fn deliver(&mut self, _: QueueId, _: u64, _: &Cell) -> Result<Delivered, SourceError> {
+        fn deliver(
+            &mut self,
+            _: QueueId,
+            _: u64,
+            _: u64,
+            _: &Cell,
+        ) -> Result<Delivered, SourceError> {
             Ok(Delivered::Committed)
+        }
+    }
+
+    /// A cell source whose decisions are never committed in the call (`Delivered::Pending`).
+    struct PendingSource;
+
+    impl CellSource for PendingSource {
+        fn prepare_cell(
+            &mut self,
+            _: QueueId,
+            _: u64,
+        ) -> Result<Option<PreparedCell>, SourceError> {
+            Ok(None)
+        }
+        fn relayed(&mut self, _: QueueId, _: CellToken, _: u64) {}
+        fn evicted(&mut self, _: QueueId, _: u64) {}
+        fn send_failed(&mut self, _: QueueId, _: CellToken, _: SendFailure) {}
+        fn discard(&mut self, _: QueueId, _: CellToken) {}
+        fn queue_lost(&mut self, _: QueueId) {}
+        fn deliver(
+            &mut self,
+            _: QueueId,
+            _: u64,
+            _: u64,
+            _: &Cell,
+        ) -> Result<Delivered, SourceError> {
+            Ok(Delivered::Pending)
         }
     }
 
@@ -2273,6 +2308,45 @@ mod tests {
         assert_eq!(
             SchedError::UnknownFrame.to_string(),
             "not the oldest frame handed out"
+        );
+        Ok(())
+    }
+
+    /// OPEN-M7-B-3 (red first on the tree where `delivery_committed` took no generation: the old generation's report
+    /// acknowledged the new generation's cell 1): a commit of generation `g` that arrives after the queue was re-created as
+    /// `g + 1` is ignored — the acknowledgement of `g + 1` is unchanged; the commit of the current generation moves it.
+    #[test]
+    fn late_commit_of_old_generation_ignored() -> Result<(), Fail> {
+        use secmp_proto::wire::cell::Cell;
+        let mut sched = Scheduler::new(Params::default(), Mode::Strict, TimingRng::seeded(9));
+        let seed = SecretBytes::from_slice(&[0x23; 32]).map_err(|_| "seed")?;
+        let cap = RecvCap::from_seed(&seed).map_err(|_| "cap")?;
+        let q = sched
+            .add_recv_queue(0, RelayId(0), cap, 10_000)
+            .map_err(|_| "queue")?;
+        let cell = || Cell::from_bytes(&[7_u8; 4096]).map_err(|_| "cell");
+        // generation 0 fetches cell 1 (pending), the queue is re-created, generation 1 fetches its cell 1 (pending)
+        let mut pending = PendingSource;
+        sched
+            .world
+            .fetched(q, 0, vec![(1, cell()?)], &mut pending, 0);
+        sched.world.recreate(q, 0).map_err(|_| "recreate")?;
+        sched
+            .world
+            .fetched(q, 1, vec![(1, cell()?)], &mut pending, 0);
+        assert_eq!(sched.acked(q), Some(0));
+        // generation 0's worker finishes late
+        sched.delivery_committed(q, 0, 1);
+        assert_eq!(
+            sched.acked(q),
+            Some(0),
+            "the old generation's commit is ignored"
+        );
+        sched.delivery_committed(q, 1, 1);
+        assert_eq!(
+            sched.acked(q),
+            Some(1),
+            "the current generation's commit counts"
         );
         Ok(())
     }

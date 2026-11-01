@@ -94,10 +94,10 @@ fn outbox_states() {
         convs.get(a).unwrap().outbox().state(&id),
         Some(MsgState::Relayed(9))
     );
-    convs.deliver(B_RECV, 9, &cell.cell).unwrap();
+    convs.deliver(B_RECV, 0, 9, &cell.cell).unwrap();
     assert_eq!(convs.get(b).unwrap().received().len(), 1);
     let receipt = convs.prepare_cell(B_SEND, 20_000).unwrap().unwrap();
-    convs.deliver(A_RECV, 1, &receipt.cell).unwrap();
+    convs.deliver(A_RECV, 0, 1, &receipt.cell).unwrap();
     assert_eq!(
         convs.get(a).unwrap().outbox().state(&id),
         Some(MsgState::Delivered)
@@ -144,7 +144,7 @@ fn outbox_requeues_evicted_real_with_new_key() {
         Some(MsgState::Relayed(10))
     );
     // the receiver sees the same msg_id (the first copy was lost, the second delivers)
-    convs.deliver(B_RECV, 10, &again.cell).unwrap();
+    convs.deliver(B_RECV, 0, 10, &again.cell).unwrap();
     assert_eq!(convs.get(b).unwrap().received().first().unwrap().msg_id, id);
 }
 
@@ -199,7 +199,7 @@ fn outbox_resends_unreceipted_after_restart() {
             .unwrap()
             .unwrap();
         convs.relayed(A_SEND, cell.token, 20 + slot);
-        convs.deliver(B_RECV, 20 + slot, &cell.cell).unwrap();
+        convs.deliver(B_RECV, 0, 20 + slot, &cell.cell).unwrap();
     }
     let received: Vec<u8> = convs
         .get(b)
@@ -227,7 +227,7 @@ fn outbox_fragments_large_message() {
     for slot in 0..41_u64 {
         let cell = convs.prepare_cell(A_SEND, slot * 10_000).unwrap().unwrap();
         convs.relayed(A_SEND, cell.token, slot + 1);
-        convs.deliver(B_RECV, slot + 1, &cell.cell).unwrap();
+        convs.deliver(B_RECV, 0, slot + 1, &cell.cell).unwrap();
         types.push(convs.get(b).unwrap().received().len());
     }
     assert_eq!(
@@ -300,7 +300,7 @@ fn receipts_ride_normal_slots() {
             .unwrap()
             .unwrap();
         convs.relayed(A_SEND, cell.token, u64::from(n));
-        convs.deliver(B_RECV, u64::from(n), &cell.cell).unwrap();
+        convs.deliver(B_RECV, 0, u64::from(n), &cell.cell).unwrap();
     }
     assert_eq!(convs.get(b).unwrap().receipts_due(), 3);
     let receipt = convs.prepare_cell(B_SEND, 40_000).unwrap().unwrap();
@@ -309,7 +309,7 @@ fn receipts_ride_normal_slots() {
         0,
         "one cell takes all three"
     );
-    convs.deliver(A_RECV, 1, &receipt.cell).unwrap();
+    convs.deliver(A_RECV, 0, 1, &receipt.cell).unwrap();
     for n in 1..=3_u8 {
         assert_eq!(
             convs.get(a).unwrap().outbox().state(&[n; 16]),
@@ -409,8 +409,8 @@ fn receiver_dedups_by_msg_id() {
     let second = convs.prepare_cell(A_SEND, 20_000).unwrap().unwrap();
     convs.relayed(A_SEND, second.token, 2);
     // both copies reach the receiver
-    convs.deliver(B_RECV, 1, &first.cell).unwrap();
-    convs.deliver(B_RECV, 2, &second.cell).unwrap();
+    convs.deliver(B_RECV, 0, 1, &first.cell).unwrap();
+    convs.deliver(B_RECV, 0, 2, &second.cell).unwrap();
     assert_eq!(convs.get(b).unwrap().received().len(), 1, "delivered once");
 }
 
@@ -427,14 +427,14 @@ fn receive_commit_failure_keeps_partial_and_trust() {
         .enqueue(text(14, 2500), 0);
     let f0 = convs.prepare_cell(A_SEND, 10_000).unwrap().unwrap();
     let f1 = convs.prepare_cell(A_SEND, 20_000).unwrap().unwrap();
-    convs.deliver(B_RECV, 1, &f0.cell).unwrap();
+    convs.deliver(B_RECV, 0, 1, &f0.cell).unwrap();
     {
         let conv = convs.get(b).unwrap();
         assert_eq!((conv.partials(), conv.received().len()), (1, 0));
     }
     let trust = convs.get(b).unwrap().trust();
     convs.get_mut(b).unwrap().persist_mut().set_failing(true);
-    assert!(convs.deliver(B_RECV, 2, &f1.cell).is_err());
+    assert!(convs.deliver(B_RECV, 0, 2, &f1.cell).is_err());
     {
         let conv = convs.get(b).unwrap();
         assert_eq!(
@@ -444,7 +444,7 @@ fn receive_commit_failure_keeps_partial_and_trust() {
         );
     }
     convs.get_mut(b).unwrap().persist_mut().set_failing(false);
-    convs.deliver(B_RECV, 2, &f1.cell).unwrap();
+    convs.deliver(B_RECV, 0, 2, &f1.cell).unwrap();
     let conv = convs.get(b).unwrap();
     assert_eq!(
         (conv.partials(), conv.received().len()),
@@ -453,7 +453,7 @@ fn receive_commit_failure_keeps_partial_and_trust() {
     );
     // the same cell again is not delivered a second time
     assert!(
-        convs.deliver(B_RECV, 2, &f1.cell).is_ok(),
+        convs.deliver(B_RECV, 0, 2, &f1.cell).is_ok(),
         "a replayed cell is decided (discarded)"
     );
     assert_eq!(convs.get(b).unwrap().received().len(), 1);
@@ -492,7 +492,7 @@ fn requeued_relayed_message_is_not_failed_after_30d() {
         "not failed"
     );
     convs.relayed(A_SEND, again.token, 8);
-    convs.deliver(B_RECV, 8, &again.cell).unwrap();
+    convs.deliver(B_RECV, 0, 8, &again.cell).unwrap();
     assert_eq!(convs.get(b).unwrap().received().len(), 1, "sent again");
     // a message never relayed is failed at day 30 (OB-03)
     convs

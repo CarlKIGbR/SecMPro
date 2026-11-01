@@ -321,7 +321,7 @@ fn send_all(
 /// `side` fetches the cells of `q`, decides each (committed) and acknowledges it.
 fn receive_all(side: &mut SideRun, q: &FileQueue, received: &Path) {
     for (id, cell) in q.fetch() {
-        side.convs.deliver(side.recv, id, &cell).unwrap();
+        side.convs.deliver(side.recv, 0, id, &cell).unwrap();
         q.ack(id);
         let conv = side.convs.get(0).unwrap();
         let fresh: Vec<[u8; 16]> = conv
@@ -575,7 +575,7 @@ fn se21_sides(dir: &Path) -> (SideRun, SideRun, Cell) {
         .enqueue(text(1, 24), 0);
     let sent = a.convs.prepare_cell(AB, 0).unwrap().unwrap();
     a.convs.relayed(AB, sent.token, 1);
-    b.convs.deliver(AB, 1, &sent.cell).unwrap();
+    b.convs.deliver(AB, 0, 1, &sent.cell).unwrap();
     assert_eq!(b.convs.get(0).unwrap().received().len(), 1, "b delivered m");
     let receipt = b.convs.prepare_cell(BA, 1_000).unwrap().unwrap();
     (a, b, receipt.cell)
@@ -659,7 +659,7 @@ fn receipt_effect_commits_with_receive_ratchet() {
         let (mut a, _b, receipt) = se21_sides(&dir);
         std::fs::write(dir.join("pre-fixed.bin"), fixed_part(&a.store)).unwrap();
         secmp_store::kat::arm_crash(CrashAt::AfterCommitBeforeAck, 1);
-        let _ = a.convs.deliver(BA, 1, &receipt);
+        let _ = a.convs.deliver(BA, 0, 1, &receipt);
         std::process::exit(0);
     }
     // (i)
@@ -681,7 +681,7 @@ fn receipt_effect_commits_with_receive_ratchet() {
         ))
         .unwrap();
     assert!(
-        a.convs.deliver(BA, 1, &receipt).is_err(),
+        a.convs.deliver(BA, 0, 1, &receipt).is_err(),
         "the receive is not decided"
     );
     assert_eq!(
@@ -701,7 +701,7 @@ fn receipt_effect_commits_with_receive_ratchet() {
         .connection_kat()
         .execute_batch("DROP TRIGGER fault")
         .unwrap();
-    a.convs.deliver(BA, 1, &receipt).unwrap();
+    a.convs.deliver(BA, 0, 1, &receipt).unwrap();
     assert_ne!(fixed_part(&a.store), before, "the same cell commits");
     let reopened = StoreOutbox::open(Arc::clone(&a.store), SESSION).unwrap();
     assert_eq!(

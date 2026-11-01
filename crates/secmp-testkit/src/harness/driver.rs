@@ -277,13 +277,14 @@ impl CellSource for Gate<'_> {
     fn deliver(
         &mut self,
         queue: QueueId,
+        _generation: u64,
         cell_id: u64,
         cell: &Cell,
     ) -> Result<Delivered, SourceError> {
         self.state.work_ms = self.state.work_ms.saturating_add(self.state.costs.receive);
         let n = self.state.delivered.entry((queue.0, cell_id)).or_insert(0);
         *n = n.saturating_add(1);
-        let out = self.convs.deliver(queue, cell_id, cell);
+        let out = self.convs.deliver(queue, 0, cell_id, cell);
         if out.is_ok() {
             self.state.audit.push(Audit::Decided([
                 u64::from(queue.0),

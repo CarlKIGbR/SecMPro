@@ -1004,6 +1004,7 @@ fn blocking_worker_runs_jobs_on_the_blocking_pool() {
         let delivered = w
             .run(Job::Deliver {
                 queue: QueueId(9),
+                generation: 0,
                 cell_id: 1,
                 cell: cell(1),
             })
@@ -1041,6 +1042,7 @@ fn blocking_worker_runs_jobs_on_the_blocking_pool() {
         assert!(matches!(failed, JobDone::Prepared { cell: Err(_), .. }));
         let failed = Job::Deliver {
             queue: QueueId(1),
+            generation: 0,
             cell_id: 2,
             cell: cell(2),
         }

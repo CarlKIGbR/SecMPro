@@ -1153,6 +1153,7 @@ impl<O: Outbox, P: Persist, S: EntropySource> CellSource for Conversations<O, P,
     fn deliver(
         &mut self,
         queue: QueueId,
+        _generation: u64,
         _cell_id: u64,
         cell: &Cell,
     ) -> Result<Delivered, SourceError> {
@@ -1403,7 +1404,9 @@ mod tests {
         b.bind(QueueId(2), QueueId(1));
         let mut convs = super::Conversations::new();
         convs.add(b);
-        convs.deliver(QueueId(1), 1, &cell).map_err(|_| "deliver")?;
+        convs
+            .deliver(QueueId(1), 0, 1, &cell)
+            .map_err(|_| "deliver")?;
         let b = convs.get(0).ok_or("conversation")?;
         assert_eq!(b.received().len(), 1, "the text was delivered");
         assert_eq!(b.persist().0, vec![1_700_000_005_000]);
@@ -1516,7 +1519,9 @@ mod tests {
         a.outbox_mut().enqueue(text_message(2, 10), 0);
         let third = a.prepare_direct(0).map_err(|_| "seal 3")?.cell;
         for (id, cell) in [(1, &first), (2, &second), (3, &third)] {
-            convs.deliver(QueueId(1), id, cell).map_err(|_| "deliver")?;
+            convs
+                .deliver(QueueId(1), 0, id, cell)
+                .map_err(|_| "deliver")?;
         }
         let b = convs.get(0).ok_or("conversation")?;
         assert_eq!(b.received().len(), 2, "the long and the short message");
@@ -1541,7 +1546,9 @@ mod tests {
             .get_mut(0)
             .ok_or("conversation")?
             .seed_seen([[5_u8; 16]]);
-        convs.deliver(QueueId(1), 1, &cell).map_err(|_| "deliver")?;
+        convs
+            .deliver(QueueId(1), 0, 1, &cell)
+            .map_err(|_| "deliver")?;
         assert!(convs.get(0).ok_or("conversation")?.received().is_empty());
         Ok(())
     }

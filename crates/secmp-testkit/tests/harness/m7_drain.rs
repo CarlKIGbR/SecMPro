@@ -164,7 +164,7 @@ impl CellSource for Later {
     fn send_failed(&mut self, _: QueueId, _: CellToken, _: SendFailure) {}
     fn discard(&mut self, _: QueueId, _: CellToken) {}
     fn queue_lost(&mut self, _: QueueId) {}
-    fn deliver(&mut self, _: QueueId, id: u64, _: &Cell) -> Result<Delivered, SourceError> {
+    fn deliver(&mut self, _: QueueId, _: u64, id: u64, _: &Cell) -> Result<Delivered, SourceError> {
         self.asked.push(id);
         Ok(if self.committed.contains(&id) {
             Delivered::Committed
@@ -289,7 +289,7 @@ impl Rig {
     fn commit_at(&mut self, q: QueueId, id: u64, t: u64) {
         self.run_to(t);
         self.src.committed.insert(id);
-        self.sched.delivery_committed(q, id);
+        self.sched.delivery_committed(q, 0, id);
         self.poll_at(t);
     }
 

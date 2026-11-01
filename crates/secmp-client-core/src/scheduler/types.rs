@@ -282,6 +282,7 @@ pub trait CellSource {
     fn deliver(
         &mut self,
         queue: QueueId,
+        generation: u64,
         cell_id: u64,
         cell: &Cell,
     ) -> Result<Delivered, SourceError>;

@@ -889,7 +889,7 @@ mod tests {
             let before = durable(&store, 2)?;
             secmp_store::kat::fail_at(secmp_store::kat::FailAt(k));
             assert!(
-                convs.deliver(QueueId(1), 3, &third).is_err(),
+                convs.deliver(QueueId(1), 0, 3, &third).is_err(),
                 "statement {k}: not decided, not acknowledged"
             );
             assert_eq!(
@@ -898,7 +898,7 @@ mod tests {
                 "receive, statement {k}: the previous state"
             );
         }
-        f(convs.deliver(QueueId(1), 3, &third), "deliver")?;
+        f(convs.deliver(QueueId(1), 0, 3, &third), "deliver")?;
         let rows = f(f(store.lock(), "lock")?.session_rows(2), "rows")?.ok_or("no rows")?;
         assert_eq!(rows.skipped.len(), 2, "decided after the failures");
         Ok(())

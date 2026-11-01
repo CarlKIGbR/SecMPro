@@ -246,6 +246,8 @@ pub enum Job {
     Deliver {
         /// The recipient queue.
         queue: QueueId,
+        /// The generation of the queue the cell was fetched in (the core's, OPEN-M7-B-3).
+        generation: u64,
         /// Its id.
         cell_id: u64,
         /// The cell.
@@ -303,6 +305,8 @@ pub enum JobDone {
     Delivered {
         /// The queue.
         queue: QueueId,
+        /// The generation the delivery was asked in.
+        generation: u64,
         /// The cell.
         cell_id: u64,
         /// The decision was committed.
@@ -322,13 +326,15 @@ impl Job {
             },
             Self::Deliver {
                 queue,
+                generation,
                 cell_id,
                 cell,
             } => JobDone::Delivered {
                 queue,
+                generation,
                 cell_id,
                 committed: matches!(
-                    source.deliver(queue, cell_id, &cell),
+                    source.deliver(queue, generation, cell_id, &cell),
                     Ok(Delivered::Committed)
                 ),
             },
@@ -367,8 +373,14 @@ impl Job {
                 queue: *queue,
                 cell: Err(SourceError),
             },
-            Self::Deliver { queue, cell_id, .. } => JobDone::Delivered {
+            Self::Deliver {
+                queue,
+                generation,
+                cell_id,
+                ..
+            } => JobDone::Delivered {
                 queue: *queue,
+                generation: *generation,
                 cell_id: *cell_id,
                 committed: false,
             },
@@ -432,13 +444,10 @@ impl<S: CellSource + Send + 'static> Worker for BlockingWorker<S> {
 struct Deferred {
     ready: BTreeMap<QueueId, PreparedCell>,
     preparing: BTreeSet<QueueId>,
-    /// The current generation of each receive queue (0 until its first re-creation).
-    generation: BTreeMap<QueueId, u64>,
-    /// The cell ids committed in the current generation, the newest [`COMMITTED_KEPT`] of each queue.
-    committed: BTreeMap<QueueId, BTreeSet<u64>>,
-    /// The deliveries handed to the worker and not finished, with the generation each was asked in, oldest first (the
-    /// worker runs its jobs in order).
-    delivering: BTreeMap<(QueueId, u64), VecDeque<u64>>,
+    /// The cell ids committed in the newest generation seen of each queue, the newest [`COMMITTED_KEPT`] of each.
+    committed: BTreeMap<QueueId, (u64, BTreeSet<u64>)>,
+    /// The deliveries handed to the worker and not finished: (queue, generation, cell id).
+    delivering: BTreeSet<(QueueId, u64, u64)>,
     jobs: Vec<Job>,
 }
 
@@ -448,20 +457,9 @@ struct Deferred {
 const COMMITTED_KEPT: usize = 256;
 
 impl Deferred {
-    fn generation_of(&self, queue: QueueId) -> u64 {
-        self.generation.get(&queue).copied().unwrap_or(0)
-    }
-
-    /// `queue` is re-created on the relay: a new generation begins.
-    fn recreated(&mut self, queue: QueueId) {
-        let next = self.generation_of(queue).saturating_add(1);
-        self.generation.insert(queue, next);
-        self.committed.remove(&queue);
-    }
-
-    /// A job finished. `Some((queue, cell_id))`: a delivery of the current generation is committed now — the driver
-    /// reports it to the core ([`Scheduler::delivery_committed`]).
-    fn on_done(&mut self, done: JobDone) -> Option<(QueueId, u64)> {
+    /// A job finished. `Some((queue, generation, cell_id))`: a delivery is committed now — the driver reports it to the core
+    /// ([`Scheduler::delivery_committed`]), which ignores one of an older generation than the queue's (OPEN-M7-B-3).
+    fn on_done(&mut self, done: JobDone) -> Option<(QueueId, u64, u64)> {
         match done {
             JobDone::Prepared { queue, cell } => {
                 self.preparing.remove(&queue);
@@ -472,31 +470,30 @@ impl Deferred {
             }
             JobDone::Delivered {
                 queue,
+                generation,
                 cell_id,
                 committed,
             } => {
-                let current = self.generation_of(queue);
-                let asked = match self.delivering.get_mut(&(queue, cell_id)) {
-                    Some(gens) => {
-                        let first = gens.pop_front();
-                        if gens.is_empty() {
-                            self.delivering.remove(&(queue, cell_id));
-                        }
-                        first
-                    }
-                    None => None,
-                };
-                // a completion of an older generation commits nothing in the current one
-                if !committed || asked != Some(current) {
+                // a completion that was never asked commits nothing
+                if !self.delivering.remove(&(queue, generation, cell_id)) || !committed {
                     return None;
                 }
-                let ids = self.committed.entry(queue).or_default();
-                ids.insert(cell_id);
-                // one id joined: at most one leaves, the oldest
-                if ids.len() > COMMITTED_KEPT {
-                    ids.pop_first();
+                let entry = self
+                    .committed
+                    .entry(queue)
+                    .or_insert_with(|| (generation, BTreeSet::new()));
+                // the ids of an older generation are void once a newer one commits
+                if generation > entry.0 {
+                    *entry = (generation, BTreeSet::new());
                 }
-                Some((queue, cell_id))
+                if generation == entry.0 {
+                    entry.1.insert(cell_id);
+                    // one id joined: at most one leaves, the oldest
+                    if entry.1.len() > COMMITTED_KEPT {
+                        entry.1.pop_first();
+                    }
+                }
+                Some((queue, generation, cell_id))
             }
             JobDone::Noted => None,
         }
@@ -545,29 +542,22 @@ impl CellSource for Deferred {
     fn deliver(
         &mut self,
         queue: QueueId,
+        generation: u64,
         cell_id: u64,
         cell: &Cell,
     ) -> Result<Delivered, SourceError> {
         if self
             .committed
             .get(&queue)
-            .is_some_and(|ids| ids.contains(&cell_id))
+            .is_some_and(|(g, ids)| *g == generation && ids.contains(&cell_id))
         {
             return Ok(Delivered::Committed);
         }
-        let current = self.generation_of(queue);
-        let pending = self
-            .delivering
-            .get(&(queue, cell_id))
-            .is_some_and(|gens| gens.contains(&current));
-        if !pending {
+        if self.delivering.insert((queue, generation, cell_id)) {
             let copy = Cell::from_bytes(cell.as_bytes()).map_err(|_| SourceError)?;
-            self.delivering
-                .entry((queue, cell_id))
-                .or_default()
-                .push_back(current);
             self.jobs.push(Job::Deliver {
                 queue,
+                generation,
                 cell_id,
                 cell: copy,
             });
@@ -1046,8 +1036,8 @@ where
             }
             Event::Job(done) => {
                 // a commit of the current generation moves the core's acknowledgement (OQ-20)
-                if let Some((queue, cell_id)) = self.deferred.on_done(done) {
-                    sched.delivery_committed(queue, cell_id);
+                if let Some((queue, generation, cell_id)) = self.deferred.on_done(done) {
+                    sched.delivery_committed(queue, generation, cell_id);
                 }
                 Vec::new()
             }
@@ -1118,10 +1108,6 @@ where
                     kind,
                     transport,
                 } => {
-                    // a re-creation (or a new pool queue): what the facade knew of the queue's cells is void (EXTB-2)
-                    if let ControlKind::QueueNew(queue) = kind {
-                        self.deferred.recreated(queue);
-                    }
                     self.control(now, op, key, relay, kind, transport);
                 }
             }
@@ -1447,51 +1433,57 @@ mod tests {
         });
     }
 
-    /// EXTB-2: a delivery asked in an older generation of a queue and finished after its re-creation commits nothing;
-    /// the same cell id in the new generation needs its own delivery.
+    /// EXTB-2, OPEN-M7-B-3: the generation travels with the delivery. A delivery asked in generation 0 and finished after the
+    /// queue was re-created is reported as `(queue, 0, cell)` — the core, not the facade, ignores it
+    /// (`late_commit_of_old_generation_ignored`); the same cell id in generation 1 needs its own delivery, and the commit of
+    /// generation 0 does not make it look committed.
     #[test]
     fn late_delivery_of_an_old_generation_commits_nothing() -> Result<(), secmp_proto::Error> {
         let q = QueueId(3);
         let pending = Ok(Delivered::Pending);
         let mut d = Deferred::default();
-        assert_eq!(d.deliver(q, 1, &cell()?), pending);
+        assert_eq!(d.deliver(q, 0, 1, &cell()?), pending);
         assert_eq!(d.jobs.len(), 1);
-        d.recreated(q);
-        // the old generation's job finishes now: nothing to report to the core
-        let late = d.on_done(JobDone::Delivered {
-            queue: q,
-            cell_id: 1,
-            committed: true,
-        });
-        assert_eq!(late, None);
-        assert!(!d.committed.contains_key(&q));
-        // the new generation's cell 1 is delivered on its own
-        assert_eq!(d.deliver(q, 1, &cell()?), pending);
+        // generation 1 asks for the same cell id: its own delivery
+        assert_eq!(d.deliver(q, 1, 1, &cell()?), pending);
         assert_eq!(d.jobs.len(), 2);
         assert_eq!(
-            d.deliver(q, 1, &cell()?),
+            d.deliver(q, 1, 1, &cell()?),
             pending,
             "pending: not asked twice"
         );
         assert_eq!(d.jobs.len(), 2);
-        let done = d.on_done(JobDone::Delivered {
+        // the old generation's job finishes: reported with its generation, for the core to ignore
+        let late = d.on_done(JobDone::Delivered {
             queue: q,
+            generation: 0,
             cell_id: 1,
             committed: true,
         });
-        assert_eq!(done, Some((q, 1)), "the commit is reported to the core");
-        assert_eq!(d.deliver(q, 1, &cell()?), Ok(Delivered::Committed));
-        // the committed ids of the old generation are dropped by the re-creation
-        d.recreated(q);
-        assert_eq!(d.deliver(q, 1, &cell()?), pending);
+        assert_eq!(late, Some((q, 0, 1)));
+        assert_eq!(
+            d.deliver(q, 1, 1, &cell()?),
+            pending,
+            "generation 0's commit does not commit generation 1's cell"
+        );
+        let done = d.on_done(JobDone::Delivered {
+            queue: q,
+            generation: 1,
+            cell_id: 1,
+            committed: true,
+        });
+        assert_eq!(done, Some((q, 1, 1)), "the commit is reported to the core");
+        assert_eq!(d.deliver(q, 1, 1, &cell()?), Ok(Delivered::Committed));
+        // the committed ids of the old generation are void once the new one commits
+        assert_eq!(d.deliver(q, 0, 1, &cell()?), pending);
         // a completion that was never asked commits nothing
         let never = d.on_done(JobDone::Delivered {
             queue: q,
+            generation: 1,
             cell_id: 9,
             committed: true,
         });
         assert_eq!(never, None);
-        assert!(!d.committed.contains_key(&q));
         Ok(())
     }
 
@@ -1503,41 +1495,44 @@ mod tests {
         let q = QueueId(5);
         let mut d = Deferred::default();
         for id in [1, 2] {
-            assert_eq!(d.deliver(q, id, &cell()?), Ok(Delivered::Pending));
+            assert_eq!(d.deliver(q, 0, id, &cell()?), Ok(Delivered::Pending));
         }
         let failed = d.on_done(JobDone::Delivered {
             queue: q,
+            generation: 0,
             cell_id: 1,
             committed: false,
         });
         assert_eq!(failed, None, "a failed commit is not reported");
         let ok = d.on_done(JobDone::Delivered {
             queue: q,
+            generation: 0,
             cell_id: 2,
             committed: true,
         });
-        assert_eq!(ok, Some((q, 2)));
-        assert_eq!(d.deliver(q, 2, &cell()?), Ok(Delivered::Committed));
+        assert_eq!(ok, Some((q, 0, 2)));
+        assert_eq!(d.deliver(q, 0, 2, &cell()?), Ok(Delivered::Committed));
         assert_eq!(d.jobs.len(), 2);
         assert_eq!(
-            d.deliver(q, 1, &cell()?),
+            d.deliver(q, 0, 1, &cell()?),
             Ok(Delivered::Pending),
             "cell 1 is not committed"
         );
         assert_eq!(d.jobs.len(), 3, "the failed delivery is asked again");
         for id in 10..(10 + 300) {
-            let _ = d.deliver(q, id, &cell()?);
+            let _ = d.deliver(q, 0, id, &cell()?);
             let _ = d.on_done(JobDone::Delivered {
                 queue: q,
+                generation: 0,
                 cell_id: id,
                 committed: true,
             });
         }
-        let kept = d.committed.get(&q).map_or(0, BTreeSet::len);
+        let kept = d.committed.get(&q).map_or(0, |(_, ids)| ids.len());
         assert_eq!(kept, COMMITTED_KEPT);
-        assert_eq!(d.deliver(q, 309, &cell()?), Ok(Delivered::Committed));
+        assert_eq!(d.deliver(q, 0, 309, &cell()?), Ok(Delivered::Committed));
         assert_eq!(
-            d.deliver(q, 2, &cell()?),
+            d.deliver(q, 0, 2, &cell()?),
             Ok(Delivered::Pending),
             "the oldest is dropped"
         );

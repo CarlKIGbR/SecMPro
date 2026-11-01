@@ -1098,11 +1098,11 @@ fn conversation_rebinding_the_queues_redirects_the_cell_source() {
     assert!(convs.prepare_cell(A_SEND, 10_000).unwrap().is_none());
     let cell = convs.prepare_cell(QueueId(10), 10_000).unwrap().unwrap();
     convs.get_mut(b).unwrap().set_recv_queue(QueueId(11));
-    convs.deliver(QueueId(11), 1, &cell.cell).unwrap();
+    convs.deliver(QueueId(11), 0, 1, &cell.cell).unwrap();
     assert_eq!(convs.get(b).unwrap().received().len(), 1);
     // the old recv queue of b has no conversation any more: a cell there is dropped, not decrypted
     let again = convs.prepare_cell(QueueId(10), 20_000).unwrap().unwrap();
-    convs.deliver(B_RECV, 2, &again.cell).unwrap();
+    convs.deliver(B_RECV, 0, 2, &again.cell).unwrap();
     assert_eq!(convs.get(b).unwrap().discarded(), 0);
 }
 
@@ -1112,9 +1112,9 @@ fn conversation_discarded_counts_cells_that_do_not_decrypt() {
     let (mut convs, _a, b) = pair(32);
     assert_eq!(convs.get(b).unwrap().discarded(), 0);
     let junk = Cell::from_bytes(&[0x5a; 4096]).unwrap();
-    convs.deliver(B_RECV, 1, &junk).unwrap();
+    convs.deliver(B_RECV, 0, 1, &junk).unwrap();
     assert_eq!(convs.get(b).unwrap().discarded(), 1);
-    convs.deliver(B_RECV, 2, &junk).unwrap();
+    convs.deliver(B_RECV, 0, 2, &junk).unwrap();
     assert_eq!(convs.get(b).unwrap().discarded(), 2);
 }
 
@@ -1137,7 +1137,7 @@ fn conversation_has_pending_real_follows_the_queue_and_the_receipts() {
     let cell = convs.prepare_cell(A_SEND, 10_000).unwrap().unwrap();
     assert!(!convs.get(a).unwrap().has_pending_real(), "taken");
     // the peer owes a receipt
-    convs.deliver(B_RECV, 1, &cell.cell).unwrap();
+    convs.deliver(B_RECV, 0, 1, &cell.cell).unwrap();
     assert!(convs.get(b).unwrap().has_pending_real(), "a receipt is due");
     convs.get_mut(b).unwrap().set_send_receipts(false);
     assert!(!convs.get(b).unwrap().has_pending_real(), "receipts off");

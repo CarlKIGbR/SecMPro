@@ -77,7 +77,14 @@ impl CellSource for Src {
     fn send_failed(&mut self, _: QueueId, _: CellToken, _: SendFailure) {}
     fn discard(&mut self, _: QueueId, _: CellToken) {}
     fn queue_lost(&mut self, _: QueueId) {}
-    fn deliver(&mut self, queue: QueueId, id: u64, _: &Cell) -> Result<Delivered, SourceError> {
+    fn deliver(
+        &mut self,
+        queue: QueueId,
+        generation: u64,
+        id: u64,
+        _: &Cell,
+    ) -> Result<Delivered, SourceError> {
+        self.generation.insert((queue, id), generation);
         self.handed.entry(queue).or_default().insert(id);
         if self.committed.get(&queue).is_some_and(|c| c.contains(&id)) {
             return Ok(Delivered::Committed);
@@ -400,7 +407,8 @@ fuzz_target!(|data: &[u8]| {
                     let (queue, id) = pending[usize::from(pick) % pending.len()];
                     w.src.pending.remove(&(queue, id));
                     w.src.committed.entry(queue).or_default().insert(id);
-                    w.sched.delivery_committed(queue, id);
+                    let generation = w.src.generation.get(&(queue, id)).copied().unwrap_or(0);
+                    w.sched.delivery_committed(queue, generation, id);
                 }
                 w.poll();
             }

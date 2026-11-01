@@ -514,7 +514,7 @@ impl CellSource for Fake {
     fn queue_lost(&mut self, _: QueueId) {
         self.calls.push(Call::Lost);
     }
-    fn deliver(&mut self, _: QueueId, _: u64, _: &Cell) -> Result<Delivered, SourceError> {
+    fn deliver(&mut self, _: QueueId, _: u64, _: u64, _: &Cell) -> Result<Delivered, SourceError> {
         Ok(Delivered::Committed)
     }
 }

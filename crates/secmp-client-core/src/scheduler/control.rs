@@ -24,7 +24,7 @@ pub enum When {
     /// queue, §10.6 (4), Q163, Q194): [`ControlOps::schedule_after_empty_fetch`].
     AfterEmptyFetch(QueueId),
     /// As [`When::AfterEmptyFetch`], but only a `FETCH` at or after this monotonic time counts: the queue is fetched through
-    /// its overlap window `U[1 h, 24 h]` first (a rotated queue, an invitation queue replaced by the first reply, §10.6 (4)
+    /// its overlap period `U[1 h, 24 h]` first (a rotated queue, an invitation queue replaced by the first reply, §10.6 (4)
     /// and (5)).
     AfterEmptyFetchFrom(QueueId, u64),
 }
@@ -46,7 +46,7 @@ struct Op {
     /// The queue whose `FETCH` must first answer with no present cell (Q163, Q194): the operation does not start, and has no
     /// time, until [`ControlOps::note_empty_fetch`] reports it.
     awaiting: Option<QueueId>,
-    /// The earliest monotonic time at which an empty `FETCH` of `awaiting` counts (the end of the overlap window).
+    /// The earliest monotonic time at which an empty `FETCH` of `awaiting` counts (the end of the overlap period).
     not_before: u64,
 }
 
@@ -201,7 +201,7 @@ impl ControlOps {
     }
 
     /// [`ControlOps::schedule_after_empty_fetch`] where only an empty `FETCH` at or after `from` (monotonic ms) counts: the
-    /// overlap window of a rotated or replaced queue, `U[1 h, 24 h]` (§10.6 (4)), drawn once when the queue is retired.
+    /// overlap period of a rotated or replaced queue, `U[1 h, 24 h]` (§10.6 (4)), drawn once when the queue is retired.
     ///
     /// # Errors
     /// As [`ControlOps::schedule_after_empty_fetch`].

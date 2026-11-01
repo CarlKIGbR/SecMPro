@@ -214,6 +214,11 @@ pub struct Conversation<O: Outbox, P: Persist, S: EntropySource> {
     durable: Zeroizing<Vec<u8>>,
     send_queue: Option<QueueId>,
     recv_queue: Option<QueueId>,
+    /// The queues we sent to before the peer's `RouteUpdate` moved us to a new one: they carry dummies only until they are
+    /// dropped (spec §10.6 (4)).
+    overlap_send: Vec<QueueId>,
+    /// The queues we receive on besides the current one: the ones in overlap, fetched until their `QUEUE_DEL`.
+    overlap_recv: Vec<QueueId>,
     outbox: O,
     persist: P,
     source: S,
@@ -273,6 +278,8 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
             durable,
             send_queue: None,
             recv_queue: None,
+            overlap_send: Vec::new(),
+            overlap_recv: Vec::new(),
             outbox,
             persist,
             source,
@@ -490,6 +497,61 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
     /// Replace the queue we receive on.
     pub const fn set_recv_queue(&mut self, recv: QueueId) {
         self.recv_queue = Some(recv);
+    }
+
+    /// A rotation made `new` the queue we receive on; the previous one stays in overlap, its cells are this conversation's
+    /// until [`Conversation::drop_recv_queue`] (spec §10.6 (4)).
+    pub fn rotate_recv_queue(&mut self, new: QueueId) {
+        if let Some(old) = self.recv_queue.replace(new)
+            && old != new
+            && !self.overlap_recv.contains(&old)
+        {
+            self.overlap_recv.push(old);
+        }
+    }
+
+    /// The overlap queue `queue` is gone (its `QUEUE_DEL` ran).
+    pub fn drop_recv_queue(&mut self, queue: QueueId) {
+        self.overlap_recv.retain(|q| *q != queue);
+        if self.recv_queue == Some(queue) {
+            self.recv_queue = None;
+        }
+    }
+
+    /// The peer's `RouteUpdate` moved us to the queue `new` (spec §10.6 (4)): the old queue carries dummies only from now on
+    /// ([`Conversations`] prepares those), and every real message among the last `QUEUE_CAPACITY` cells sent on it goes
+    /// back to the outbox, to be sent again on the new queue — the receiver deduplicates by `msg_id`. Returns how many
+    /// messages were requeued.
+    pub fn switch_send_queue(&mut self, new: QueueId) -> usize {
+        if let Some(old) = self.send_queue.replace(new)
+            && old != new
+            && !self.overlap_send.contains(&old)
+        {
+            self.overlap_send.push(old);
+        }
+        let newest = self.by_cell.keys().next_back().copied().unwrap_or(0);
+        let floor = newest.saturating_sub(
+            u64::try_from(secmp_proto::link::QUEUE_CAPACITY.saturating_sub(1)).unwrap_or(0),
+        );
+        let ids: BTreeSet<MsgId> = self
+            .by_cell
+            .range(floor..)
+            .filter_map(|(_, sent)| match &sent.owner {
+                Owner::Message(id) => Some(*id),
+                _ => None,
+            })
+            .collect();
+        for id in &ids {
+            self.outbox.requeue(id);
+        }
+        // the new queue numbers its cells from 1
+        self.by_cell.clear();
+        ids.len()
+    }
+
+    /// The old queue `queue` is no longer sent to.
+    pub fn drop_send_queue(&mut self, queue: QueueId) {
+        self.overlap_send.retain(|q| *q != queue);
     }
 
     /// Receipts on or off (on by default for verified contacts, spec §10.4).
@@ -765,6 +827,23 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
     /// hand.
     pub fn relayed_direct(&mut self, token: CellToken, cell_id: u64) {
         self.on_relayed(token, cell_id);
+    }
+
+    /// A dummy for a queue in send overlap: sealed by the same path as every cell, never real content and never a handshake
+    /// cell (spec §10.6 (4): "only dummies on the old queue").
+    fn prepare_overlap(&mut self, now_ms: u64) -> Result<PreparedCell, SourceError> {
+        self.last_now_ms = self.last_now_ms.max(now_ms);
+        let cell = self.seal(&dummy())?;
+        let token = self.next_token;
+        self.next_token = self.next_token.saturating_add(1);
+        self.inflight.insert(
+            token,
+            Sent {
+                owner: Owner::Dummy,
+                total: 1,
+            },
+        );
+        Ok(PreparedCell::committed(cell, CellToken(token)))
     }
 
     fn prepare(&mut self, now_ms: u64) -> Result<PreparedCell, SourceError> {
@@ -1109,8 +1188,15 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversations<O, P, S> {
         self.items.iter_mut().find(|c| c.send_queue == Some(q))
     }
 
+    /// The conversation for which `q` is a queue in send overlap (dummies only).
+    fn by_overlap_send(&mut self, q: QueueId) -> Option<&mut Conversation<O, P, S>> {
+        self.items.iter_mut().find(|c| c.overlap_send.contains(&q))
+    }
+
     fn by_recv(&mut self, q: QueueId) -> Option<&mut Conversation<O, P, S>> {
-        self.items.iter_mut().find(|c| c.recv_queue == Some(q))
+        self.items
+            .iter_mut()
+            .find(|c| c.recv_queue == Some(q) || c.overlap_recv.contains(&q))
     }
 }
 
@@ -1120,8 +1206,12 @@ impl<O: Outbox, P: Persist, S: EntropySource> CellSource for Conversations<O, P,
         queue: QueueId,
         now: u64,
     ) -> Result<Option<PreparedCell>, SourceError> {
-        match self.by_send(queue) {
-            Some(c) => c.prepare(now).map(Some),
+        if let Some(c) = self.by_send(queue) {
+            return c.prepare(now).map(Some);
+        }
+        // a queue in send overlap carries dummies, from the same ratchet (spec §10.6 (4))
+        match self.by_overlap_send(queue) {
+            Some(c) => c.prepare_overlap(now).map(Some),
             None => Ok(None),
         }
     }
@@ -1129,6 +1219,8 @@ impl<O: Outbox, P: Persist, S: EntropySource> CellSource for Conversations<O, P,
     fn relayed(&mut self, queue: QueueId, token: CellToken, cell_id: u64) {
         if let Some(c) = self.by_send(queue) {
             c.on_relayed(token, cell_id);
+        } else if let Some(c) = self.by_overlap_send(queue) {
+            c.inflight.remove(&token.0);
         }
     }
 
@@ -1141,12 +1233,16 @@ impl<O: Outbox, P: Persist, S: EntropySource> CellSource for Conversations<O, P,
     fn send_failed(&mut self, queue: QueueId, token: CellToken, _why: SendFailure) {
         if let Some(c) = self.by_send(queue) {
             c.on_failed(token);
+        } else if let Some(c) = self.by_overlap_send(queue) {
+            c.inflight.remove(&token.0);
         }
     }
 
     fn discard(&mut self, queue: QueueId, token: CellToken) {
         if let Some(c) = self.by_send(queue) {
             c.on_failed(token);
+        } else if let Some(c) = self.by_overlap_send(queue) {
+            c.inflight.remove(&token.0);
         }
     }
 

@@ -58,6 +58,7 @@ fn wire_profile(name: &str) -> WireProfile {
 /// A party: its profile (relay 1, two spare queues), clock and entropy.
 struct Party {
     _root: Option<TempDir>,
+    dir: PathBuf,
     profile: Profile,
     clock: ManualClock,
     e: FixedEntropy,
@@ -73,6 +74,7 @@ fn party_at(dir: &Path, name: &str, root: Option<TempDir>) -> Party {
     install_relay(&profile, 2, &mut entropy(&format!("{name}-pool")));
     Party {
         _root: root,
+        dir: dir.to_path_buf(),
         profile,
         clock,
         e,
@@ -503,4 +505,88 @@ fn k_id_independent_end_to_end() {
         "initiator and responder derive the same K_id"
     );
     assert_ne!(sk1, sk2, "SK depends on the initiator's identity");
+}
+
+/// IN-14 (§6.5 `docs/03:342`, Q150): the invitee accepts, sends cell 0 of its handshake and the process dies; started again
+/// from the store it sends the three cells — cells 1 and 2 among them, and any retry of a cell whose send failed — byte for
+/// byte as persisted at the accept (`sessions` part 4). Nothing is encrypted again: the actor's `tr_encrypt_calls` does not move; the one encryption
+/// of the envelope is `Initiator::start`'s, in `secmp-proto`, which has no counter (the row's "= 1", read as this).
+#[test]
+fn initiator_cells_byte_identical_after_restart() {
+    use secmp_client_core::scheduler::types::{CellSource, QueueId, SendFailure};
+    use secmp_client_core::sessions::actor::{Conversations, counters};
+    use secmp_client_core::sessions::open_conversation;
+
+    let mut host = party("in14-host");
+    let issued = issue(&mut host);
+    let mut guest = party("in14-guest");
+    let profile = wire_profile("invitee");
+    let start = Invitations::new(guest.profile.clone())
+        .accept_invitation(
+            &issued.uri,
+            &issued.blob.encode().unwrap(),
+            &AcceptRequest {
+                relay: RelayId(1),
+                reply_period: Period::S10,
+                profile: &profile,
+            },
+            &guest.clock,
+            &mut guest.e,
+        )
+        .unwrap();
+    let want: Vec<Vec<u8>> = start.cells.iter().map(|c| c.as_bytes().to_vec()).collect();
+    let (contact, encrypts) = (start.contact, counters::tr_encrypt_calls());
+    let life = |profile: &Profile, n: u32| -> Conversations<_, _, EntropyPool> {
+        let conversation = open_conversation(
+            &profile.store(),
+            contact,
+            EntropyPool::new("in14-src", n),
+            0,
+        )
+        .unwrap();
+        let mut convs = Conversations::new();
+        let at = convs.add(conversation);
+        convs.get_mut(at).unwrap().bind(QueueId(1), QueueId(2));
+        convs
+    };
+
+    // first life: cell 0 is the first cell persisted at the accept
+    let mut convs = life(&guest.profile, 1);
+    let first = convs.prepare_cell(QueueId(1), 0).unwrap().unwrap();
+    assert_eq!(first.cell.as_bytes(), want.first().unwrap().as_slice());
+    convs.relayed(QueueId(1), first.token, 1);
+    drop(convs);
+
+    // the process dies: the store is closed and opened again from disk
+    let Party { dir, profile, .. } = guest;
+    drop(profile);
+    let unlocked = unlock_kat(&dir, PASS, Argon2Params::kat_small()).unwrap();
+    let profile = Profile::open_with(&dir, &unlocked).unwrap();
+
+    // second life: what was in flight at the crash is not known to have arrived, so the three persisted cells go out again,
+    // in order, byte for byte; a send that failed is retried with the same bytes
+    let mut convs = life(&profile, 2);
+    for (n, token_cell) in [(1_u64, 0_usize), (2, 1)] {
+        let sent = convs.prepare_cell(QueueId(1), n * 10_000).unwrap().unwrap();
+        assert_eq!(
+            sent.cell.as_bytes(),
+            want.get(token_cell).unwrap().as_slice()
+        );
+        convs.relayed(QueueId(1), sent.token, n);
+    }
+    let third = convs.prepare_cell(QueueId(1), 30_000).unwrap().unwrap();
+    assert_eq!(third.cell.as_bytes(), want.get(2).unwrap().as_slice());
+    convs.send_failed(QueueId(1), third.token, SendFailure::Unknown);
+    let retry = convs.prepare_cell(QueueId(1), 40_000).unwrap().unwrap();
+    assert_eq!(
+        retry.cell.as_bytes(),
+        want.get(2).unwrap().as_slice(),
+        "the retry"
+    );
+    convs.relayed(QueueId(1), retry.token, 3);
+    // nothing was encrypted again, and the first thing sealed afterwards is not a handshake cell
+    assert_eq!(counters::tr_encrypt_calls(), encrypts);
+    let after = convs.prepare_cell(QueueId(1), 50_000).unwrap().unwrap();
+    assert!(want.iter().all(|w| w.as_slice() != after.cell.as_bytes()));
+    assert_eq!(counters::tr_encrypt_calls(), encrypts + 1);
 }

@@ -284,6 +284,9 @@ pub struct PoolQueue {
     pub send_seed: SecretBytes<32>,
 }
 
+/// A spare queue's id and seeds `(queue, recipient, sender)`.
+pub type PoolSeeds = (QueueId, [u8; 32], [u8; 32]);
+
 /// The pool of one relay as `relays.pool` holds it: `next u32 ‖ count u8 ‖ {queue u32 ‖ recv_seed ‖ send_seed} × count`.
 struct PoolBlob {
     next: u32,
@@ -384,6 +387,26 @@ impl SparePool {
         Ok(added)
     }
 
+    /// The ids and seeds `(queue, recipient, sender)` of the spare queues of `relay`, oldest first (the queues' creation on
+    /// the relay is the scheduler's; a test driver that made them earlier needs their seeds).
+    ///
+    /// # Errors
+    /// [`Error::Unavailable`] if the store cannot be read.
+    pub fn seeds(&self, relay: RelayId) -> Result<Vec<PoolSeeds>, Error> {
+        let store = self.lock()?;
+        Ok(PoolBlob::read(&store, relay)?
+            .queues
+            .iter()
+            .map(|q| {
+                (
+                    q.queue,
+                    *q.recv_seed.expose_secret(),
+                    *q.send_seed.expose_secret(),
+                )
+            })
+            .collect())
+    }
+
     /// The spare queues of `relay`.
     ///
     /// # Errors
@@ -467,12 +490,38 @@ pub struct Issuance {
     pub ops: Vec<OpSpec>,
 }
 
+/// An open invitation's queue, for the scheduler to fetch (the host registers it with the invitation's period).
+pub struct OpenQueue {
+    /// The invitation.
+    pub ld_id: Id,
+    /// Its link-data number (`ControlKind::LinkPut(n)`).
+    pub n: u32,
+    /// The relay.
+    pub relay: RelayId,
+    /// The queue's id.
+    pub queue: QueueId,
+    /// The Ed25519 seed of the recipient key.
+    pub recv_seed: SecretBytes<32>,
+}
+
+/// The link-data id and number of an invitation URI (the invitee's `LINK_GET` names them before anything else is known).
+///
+/// # Errors
+/// [`Error::Invitation`] (`Invalid`) for a URI that does not parse.
+pub fn uri_link_data(uri: &str) -> Result<(Id, u32), Error> {
+    let invitation =
+        inv::parse_invitation_uri(uri).map_err(|_| Error::Invitation(InviteReject::Invalid))?;
+    Ok((invitation.ld_id, link_data_n(&invitation.ld_id)))
+}
+
 /// The arguments of a `LINK_PUT` of an issued invitation (§9.3), read from its sealed record.
 pub struct LinkPutArgs {
     /// The link-data id.
     pub ld_id: Id,
     /// The public key of the link-data owner key.
     pub owner_pk: Ed25519Pk,
+    /// The seed of the owner key, which signs the `LINK_PUT` (§9.3).
+    pub owner_seed: SecretBytes<32>,
     /// The sealed link data, byte for byte as issued (12 360 bytes).
     pub blob: Zeroizing<Vec<u8>>,
     /// `expires` of the invitation (Unix seconds).
@@ -568,6 +617,39 @@ impl Invitations {
         Ok(issuance)
     }
 
+    /// The queue of the invitation `ld_id`, open or consumed (the host fetches it until it is retired).
+    ///
+    /// # Errors
+    /// [`Error::Unavailable`] if there is no such invitation or its record does not open.
+    pub fn queue_of(&self, ld_id: &Id) -> Result<OpenQueue, Error> {
+        let store = self.lock()?;
+        let loaded = load(&store, ld_id)?.ok_or(Error::Unavailable)?;
+        Ok(OpenQueue {
+            ld_id: *ld_id,
+            n: link_data_n(ld_id),
+            relay: loaded.stored.relay,
+            queue: loaded.stored.queue,
+            recv_seed: SecretBytes::from_slice(
+                loaded.stored.record.invq_recv_seed.expose_secret(),
+            )?,
+        })
+    }
+
+    /// The queues of the open invitations (after a restart the host registers them with the scheduler again).
+    ///
+    /// # Errors
+    /// [`Error::Unavailable`] if a record does not open.
+    pub fn open_queues(&self) -> Result<Vec<OpenQueue>, Error> {
+        let rows = self.lock()?.invitations()?;
+        let mut out = Vec::new();
+        for row in rows {
+            if row.status == INVITATION_OPEN {
+                out.push(self.queue_of(&ld_id_of(&row.ld_id)?)?);
+            }
+        }
+        Ok(out)
+    }
+
     /// The arguments of the `LINK_PUT` of link data `n` (`ControlKind::LinkPut(n)`), from the sealed record: the same bytes
     /// whenever it is asked (§9.7 (1)).
     ///
@@ -585,6 +667,9 @@ impl Invitations {
             return Ok(LinkPutArgs {
                 ld_id,
                 owner_pk: loaded.stored.record.owner_pk()?,
+                owner_seed: SecretBytes::from_slice(
+                    loaded.stored.record.owner_seed.expose_secret(),
+                )?,
                 blob,
                 expires: loaded.stored.record.expires,
             });

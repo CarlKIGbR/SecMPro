@@ -41,6 +41,10 @@ mod m7_drain;
 mod m7_forensic;
 mod m7_links;
 mod m7_persist;
+mod m7_restart;
+mod m7_rotation;
+mod m7_scheduled;
+mod m7_world;
 mod scenarios;
 mod scripted;
 #[path = "../../../secmp-proto/tests/common/seed.rs"]

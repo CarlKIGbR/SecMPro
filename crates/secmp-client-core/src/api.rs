@@ -19,7 +19,7 @@ use crate::persist::{SharedStore, StorePersist};
 use crate::profile::Profile;
 use crate::relay_view;
 use crate::scheduler::params::{Mode, Params};
-use crate::scheduler::types::RelayId;
+use crate::scheduler::types::{QueueId, RelayId};
 use crate::sessions::actor::{Conversations, EntropySource, SessionEvent};
 use crate::sessions::{self, StoreConversation};
 use crate::settings::{DeliveredReceipts, Settings};
@@ -318,17 +318,32 @@ pub struct SchedulerView {
 
 /// The core behind the [`Api`]: one profile, its sessions, the clock.
 pub struct Core<C: Clock, S: EntropySource> {
-    profile: Profile,
-    store: SharedStore,
-    clock: C,
-    make_source: Box<dyn FnMut() -> S>,
-    convs: Conversations<StoreOutbox, StorePersist, S>,
-    index: BTreeMap<i64, usize>,
-    events: Vec<Stamped>,
-    settings: Settings,
-    view: SchedulerView,
-    rng: TimingRng,
-    ops: Vec<crate::scheduler::control::OpSpec>,
+    pub(crate) profile: Profile,
+    pub(crate) store: SharedStore,
+    pub(crate) clock: C,
+    pub(crate) make_source: Box<dyn FnMut() -> S>,
+    pub(crate) convs: Conversations<StoreOutbox, StorePersist, S>,
+    pub(crate) index: BTreeMap<i64, usize>,
+    pub(crate) events: Vec<Stamped>,
+    pub(crate) settings: Settings,
+    pub(crate) view: SchedulerView,
+    pub(crate) rng: TimingRng,
+    pub(crate) ops: Vec<crate::scheduler::control::OpSpec>,
+    /// The contacts whose routes changed since the hub last looked (the hub moves the send queue).
+    pub(crate) routes_changed: Vec<ContactId>,
+    /// The rotations that started since the hub last looked (the hub registers the new queue).
+    pub(crate) rotated: Vec<RotationDone>,
+    /// The period of the queue a rotation makes current.
+    pub(crate) rotation_period: secmp_proto::wire::Period,
+}
+
+/// A rotation that started: the queue the scheduler fetches from now on.
+pub(crate) struct RotationDone {
+    pub(crate) relay: RelayId,
+    pub(crate) queue: QueueId,
+    pub(crate) recv_seed: secmp_crypto::SecretBytes<32>,
+    pub(crate) period: secmp_proto::wire::Period,
+    pub(crate) retire_op: Option<crate::scheduler::control::OpSpec>,
 }
 
 impl<C: Clock, S: EntropySource> Core<C, S> {
@@ -442,6 +457,9 @@ impl<C: Clock, S: EntropySource> Core<C, S> {
             view: SchedulerView::default(),
             rng: TimingRng::os(),
             ops: Vec::new(),
+            routes_changed: Vec::new(),
+            rotated: Vec::new(),
+            rotation_period: secmp_proto::wire::Period::S80,
         };
         let lost = core
             .store
@@ -457,23 +475,41 @@ impl<C: Clock, S: EntropySource> Core<C, S> {
         Ok(core)
     }
 
-    fn now_ms(&self) -> u64 {
+    /// Seed the timing randomness of the core (the overlap of a rotation): tests only, for runs that repeat.
+    #[cfg(feature = "kat")]
+    pub fn seed_timing_kat(&mut self, seed: u64) {
+        self.rng = TimingRng::seeded(seed);
+    }
+
+    /// The profile's store, shared with the sessions (a test reads rows through it).
+    #[must_use]
+    pub fn profile_store(&self) -> SharedStore {
+        Arc::clone(&self.store)
+    }
+
+    /// The clock the core stamps with.
+    #[must_use]
+    pub const fn clock(&self) -> &C {
+        &self.clock
+    }
+
+    pub(crate) fn now_ms(&self) -> u64 {
         self.clock.unix_secs().saturating_mul(1_000)
     }
 
-    fn raise(&mut self, event: Event) {
+    pub(crate) fn raise(&mut self, event: Event) {
         let at_ms = self.now_ms();
         self.events.push(Stamped { at_ms, event });
     }
 
-    fn contacts(&self) -> Result<Contacts, Error> {
+    pub(crate) fn contacts(&self) -> Result<Contacts, Error> {
         Ok(Contacts::new(
             Arc::clone(&self.store),
             self.profile.fingerprint()?,
         ))
     }
 
-    fn open_session(&mut self, contact: ContactId) -> Result<(), Error> {
+    pub(crate) fn open_session(&mut self, contact: ContactId) -> Result<(), Error> {
         let base = self.now_ms().saturating_sub(self.clock.mono_ms());
         let mut conversation =
             sessions::open_conversation(&self.store, contact, (self.make_source)(), base)?;
@@ -557,7 +593,10 @@ impl<C: Clock, S: EntropySource> Core<C, S> {
         event: SessionEvent,
     ) -> Result<Event, Error> {
         Ok(match event {
-            SessionEvent::Routes(_) => Event::RoutesChanged(contact),
+            SessionEvent::Routes(_) => {
+                self.routes_changed.push(contact);
+                Event::RoutesChanged(contact)
+            }
             SessionEvent::KeyChanged(iks) => {
                 if let Some(conversation) = self.convs.get_mut(at) {
                     sessions::accept_key_change(&self.store, conversation, contact, &iks)?;
@@ -668,7 +707,28 @@ impl<C: Clock, S: EntropySource> Core<C, S> {
     }
 
     fn rotate(&mut self, contact: ContactId, relay: RelayId) -> Result<Response, Error> {
+        Ok(Response::Rotated(self.rotate_contact(contact, relay)?))
+    }
+
+    /// Rotate the recv-queue of `contact` onto a pooled queue of `relay` (spec §10.6 (4)): on success the `RouteUpdate` is
+    /// queued on the session, the previous queue is in overlap and a [`RotationDone`] is left for the hub to register with
+    /// the scheduler; otherwise `Event::RotationDeferred`. Returns whether the rotation started.
+    pub(crate) fn rotate_contact(
+        &mut self,
+        contact: ContactId,
+        relay: RelayId,
+    ) -> Result<bool, Error> {
         let (now, store) = (self.now_ms(), Arc::clone(&self.store));
+        let old_queue = {
+            let s = store.lock().map_err(|_| Error::Unavailable)?;
+            match s.contact_queues(contact.0)? {
+                Some(bytes) => sessions::rotation::QueueSet::decode(&bytes)?
+                    .entries
+                    .last()
+                    .map(|e| QueueId(e.queue)),
+                None => None,
+            }
+        };
         let mode = if self.view.direct && matches!(self.settings.mode, Mode::Strict) {
             Mode::Balanced
         } else {
@@ -684,23 +744,40 @@ impl<C: Clock, S: EntropySource> Core<C, S> {
             &sessions::rotation::RotateRequest {
                 contact,
                 relay,
-                period: secmp_proto::wire::Period::S80,
+                period: self.rotation_period,
                 mode,
                 params: &params,
                 recv_periods_ms: &periods,
-                old_queue: None,
+                old_queue,
                 unix_base_ms: now.saturating_sub(self.clock.mono_ms()),
             },
             now,
             &mut self.rng,
         )?;
-        Ok(match outcome {
-            sessions::rotation::Rotated::Started { .. } => Response::Rotated(true),
+        match outcome {
+            sessions::rotation::Rotated::Started {
+                queue,
+                recv_seed,
+                retire_op,
+                ..
+            } => {
+                if let Some(conversation) = self.convs.get_mut(at) {
+                    conversation.rotate_recv_queue(queue);
+                }
+                self.rotated.push(RotationDone {
+                    relay,
+                    queue,
+                    recv_seed,
+                    period: self.rotation_period,
+                    retire_op,
+                });
+                Ok(true)
+            }
             sessions::rotation::Rotated::Deferred(event) => {
                 self.raise(event);
-                Response::Rotated(false)
+                Ok(false)
             }
-        })
+        }
     }
 
     fn rotate_identity(&mut self) -> Result<Response, Error> {

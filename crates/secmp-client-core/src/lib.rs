@@ -18,6 +18,8 @@ pub mod clock;
 #[cfg(not(kani))]
 pub mod contacts;
 #[cfg(not(kani))]
+pub mod hub;
+#[cfg(not(kani))]
 pub mod invitations;
 #[cfg(kani)]
 mod kani_proofs;

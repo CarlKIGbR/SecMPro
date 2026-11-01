@@ -345,6 +345,21 @@ pub const fn fetch_due(
     (!fetch_outstanding && !commits_pending) || now >= fetch_lead_deadline(slot, lead_ms)
 }
 
+/// Whether the tick's `SEND` part is still missing in a preparation pass: the link sends and has not built it (a cell
+/// source that answers "not ready" leaves it missing, EXTB-1).
+#[must_use]
+pub const fn send_missing(needs_send: bool, has_send_part: bool) -> bool {
+    needs_send && !has_send_part
+}
+
+/// Whether a preparation pass considers the tick's `FETCH` (EXTB-1, OPEN-M7-B-2): no teardown is pending, the `SEND` part
+/// exists (a tick's parts go out `SEND` first, so the link counters are in write order), the link fetches, and the
+/// `FETCH` is not built yet (`fetch_missing`). [`fetch_due`] then decides when.
+#[must_use]
+pub const fn fetch_gate(tear: bool, send_missing: bool, fetch_missing: bool) -> bool {
+    !tear && !send_missing && fetch_missing
+}
+
 /// A `SEND` of the queue was written at the tick `at` (`World::tick`): its previous `SEND` is now `at`, which the
 /// Balanced choice compares with `P_q` ([`send_choice`]).
 pub const fn note_sent(last: &mut Option<u64>, at: u64) {

@@ -44,9 +44,9 @@ use crate::timing::{TimingRng, Unavailable};
 
 use self::backoff::reconnect_delay;
 use self::pure::{
-    InFlight, RECEIVED_MAX, RecvLedger, Ticked, complete_oldest, fetch_due, fetch_lead_deadline,
-    hand_out, ledger_admits, note_sent, reserved_rr, send_choice, sendable, take_response,
-    tick_time, unwritten_max,
+    InFlight, RECEIVED_MAX, RecvLedger, Ticked, complete_oldest, fetch_due, fetch_gate,
+    fetch_lead_deadline, hand_out, ledger_admits, note_sent, reserved_rr, send_choice,
+    send_missing, sendable, take_response, tick_time, unwritten_max,
 };
 
 /// Why a scheduler call was refused (nothing changed).
@@ -668,8 +668,12 @@ impl World {
             }
             // a tick's parts go out SEND first (`tick`): its FETCH is sealed only after its SEND, so the counters are in
             // write order even when the cell source answers "not ready" (EXTB-1)
-            let send_missing = needs_send && up.send_part.is_none();
-            if tear.is_none() && !send_missing && needs_fetch && up.fetch_part.is_none() {
+            let unsent = send_missing(needs_send, up.send_part.is_some());
+            if fetch_gate(
+                tear.is_some(),
+                unsent,
+                needs_fetch && up.fetch_part.is_none(),
+            ) {
                 let fetch_outstanding = up
                     .flight
                     .iter()

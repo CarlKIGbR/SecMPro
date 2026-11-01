@@ -1251,6 +1251,7 @@ pub(crate) const KANI_HARNESSES: &[&str] = &[
     "kani_proofs::kani_q_frame_plaintext_exact_fit_response_fetch",
     "kani_proofs::kani_q_frame_plaintext_exact_fit_response_fetch_multi",
     "kani_proofs::kani_queue_eviction_bounds",
+    "kani_proofs::kani_prepare_link_send_before_fetch",
     "kani_proofs::kani_queue_generations",
     "kani_proofs::kani_rate_bound_integer_form",
     "kani_proofs::kani_reservation_is_schedule_only",
@@ -1310,6 +1311,8 @@ pub(crate) const KANI_COVERS: &[(&str, usize)] = &[
     // M7 B-SC2 (Q183): SC-09 re-dictated, four covers
     ("kani_proofs::kani_paired_executions", 4),
     ("kani_proofs::kani_persist_contract_abstract", 3),
+    // M7 B-4 (OPEN-M7-B-2): the SEND-before-FETCH guard, three covers
+    ("kani_proofs::kani_prepare_link_send_before_fetch", 3),
     ("kani_proofs::kani_q_frame_plaintext_exact_fit_request", 1),
     (
         "kani_proofs::kani_q_frame_plaintext_exact_fit_response_fetch",
@@ -2260,6 +2263,8 @@ mod tests {
         ("kani_paired_executions", 4),
         // M7 B-3b (Q191): K7-01
         ("kani_retention_bound_24", 4),
+        // M7 B-4 (OPEN-M7-B-2)
+        ("kani_prepare_link_send_before_fetch", 3),
     ];
 
     /// TEST-SPEC-M7 G7-15b (TEST-SPEC (l): "`FUZZ_TARGETS` += FZ-04, `KANI_HARNESSES` += K7-01, SC-06…SC-09, each in the

@@ -13,15 +13,16 @@
 //! - SC-07 `kani_queue_generations`: a response of an old generation never updates the new one (`pure::take_response`).
 //! - SC-08 `kani_persist_contract_abstract`: no frame and no acknowledgement after a failed commit (`sendable`, `RecvLedger`).
 //! - SC-09 `kani_paired_executions`: two runs differing only in activity emit the same schedule (`send_choice`, …).
+//! - B-2 `kani_prepare_link_send_before_fetch`: a tick's `FETCH` is built only after its `SEND` (`pure::fetch_gate`).
 //! - K7-01 `kani_retention_bound_24`: one `offer` step keeps the newest 24, ascending (`retention`; by induction `retain`).
 
 use secmp_transport::evicted::evicted_is_plausible;
 
 use crate::retention::{RETAIN_MAX, offer};
 use crate::scheduler::core::pure::{
-    FLUSH_WAIT_MS, Flight, InFlight, RecvLedger, complete_oldest, fetch_due, fetch_lead_deadline,
-    flush_bound, hand_out, ledger_admits, note_sent, reserved_rr, rr_select, send_choice, sendable,
-    take_response, tick_time, unwritten_max,
+    FLUSH_WAIT_MS, Flight, InFlight, RecvLedger, complete_oldest, fetch_due, fetch_gate,
+    fetch_lead_deadline, flush_bound, hand_out, ledger_admits, note_sent, reserved_rr, rr_select,
+    send_choice, send_missing, sendable, take_response, tick_time, unwritten_max,
 };
 use crate::scheduler::params::{backoff_cap, rate_sum_ok};
 use crate::scheduler::types::{Delivered, SourceError};
@@ -855,4 +856,58 @@ fn kani_retention_bound_24() {
     );
     kani::cover!(len < RETAIN_MAX && !dup, "inserted below the cap");
     kani::cover!(dup, "duplicate ignored");
+}
+
+/// B-2 `kani_prepare_link_send_before_fetch` (EXTB-1, OPEN-M7-B-2; M06-report KANI-M6-C-1): over the preparation passes of
+/// one tick of any link kind, with a cell source that becomes ready at an arbitrary pass (or never) and a teardown that may
+/// arrive at any pass, the `FETCH` part is built only when the `SEND` part of a sending link exists — so the link counters
+/// are in write order — and, when the `SEND` part exists and nothing prevents it, the `FETCH` is considered (`fetch_gate`;
+/// `fetch_due` then picks the pass). The gate never builds a second `FETCH` part.
+#[kani::proof]
+#[kani::unwind(5)]
+fn kani_prepare_link_send_before_fetch() {
+    let needs_send: bool = kani::any();
+    let needs_fetch: bool = kani::any();
+    let ready_at: u8 = kani::any();
+    let tear_at: u8 = kani::any();
+    let mut send_part = false;
+    let mut fetch_part = false;
+    let mut fetch_built: u8 = 0;
+    let mut gated_after_send = false;
+    for pass in 0..4_u8 {
+        let tear = pass == tear_at;
+        if needs_send && !send_part && pass >= ready_at {
+            send_part = true;
+        }
+        let missing = send_missing(needs_send, send_part);
+        if fetch_gate(tear, missing, needs_fetch && !fetch_part) {
+            // `fetch_due` said yes at this pass
+            fetch_part = true;
+            fetch_built += 1;
+            gated_after_send |= needs_send;
+        }
+        // the SEND-first order: a FETCH part exists only if the link does not send or its SEND part does
+        assert!(!fetch_part || !needs_send || send_part);
+        // the gate is closed while the SEND part is missing, on a teardown, for a link that does not fetch
+        if missing || tear || !needs_fetch {
+            assert!(!fetch_gate(tear, missing, needs_fetch && !fetch_part));
+        }
+        // liveness: nothing prevents the FETCH, so the gate is open
+        if !missing && !tear && needs_fetch && !fetch_part {
+            assert!(fetch_gate(tear, missing, needs_fetch && !fetch_part));
+        }
+    }
+    assert!(fetch_built <= 1);
+    kani::cover!(
+        fetch_built == 1 && gated_after_send,
+        "a sending link: the FETCH after its SEND"
+    );
+    kani::cover!(
+        fetch_built == 1 && !needs_send,
+        "a receive-only link fetches without a SEND"
+    );
+    kani::cover!(
+        needs_send && needs_fetch && ready_at > 3 && fetch_built == 0,
+        "SEND never ready: no FETCH"
+    );
 }

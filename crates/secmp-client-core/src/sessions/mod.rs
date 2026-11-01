@@ -4,6 +4,7 @@
 //! session actor that drives them (B-4…B-7) moves here with its `Conversation`.
 
 pub mod actor;
+pub mod rotation;
 
 use secmp_crypto::HybridVerifyingKey;
 use secmp_proto::Decode as _;

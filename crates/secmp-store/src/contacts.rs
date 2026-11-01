@@ -180,6 +180,25 @@ pub fn put_contact_routes(tx: &mut Tx<'_>, id: i64, routes: &[u8]) -> Result<()>
     }
 }
 
+/// Replace the queues of contact `id` (sealed, Q151) as a statement of the caller's transaction.
+///
+/// # Errors
+/// [`Error::Unavailable`] if the seal or the statement fails or there is no such contact.
+pub fn put_contact_queues(tx: &mut Tx<'_>, id: i64, queues: &[u8]) -> Result<()> {
+    let rk = row_key(&[KeyPart::Int(id)])?;
+    // spec §3.4; ADR-053 item 5
+    let sealed = tx.seal(Table::Contacts, "queues", &rk, queues)?;
+    let n = tx.exec(
+        "UPDATE contacts SET queues = ?2 WHERE id = ?1",
+        params![id, sealed],
+    )?;
+    if n == 1 {
+        Ok(())
+    } else {
+        Err(Error::Unavailable)
+    }
+}
+
 /// Set the state of contact `id`.
 ///
 /// # Errors

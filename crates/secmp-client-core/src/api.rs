@@ -124,6 +124,9 @@ pub enum Event {
         /// Why.
         reason: RetireReason,
     },
+    /// A queue rotation did not start: it would exceed the rate bound or the 32 entries of a `FETCH_MULTI` (spec §10.2), or
+    /// the pool has no spare queue.
+    RotationDeferred(ContactId),
 }
 
 /// Why an invitation was retired.

@@ -57,6 +57,7 @@ use crate::profile::{Profile, Retired};
 use crate::retention::{RETAIN_MAX, retain};
 use crate::scheduler::control::{OpSpec, When};
 use crate::scheduler::types::{ControlKind, QueueId, RelayId};
+use crate::sessions::rotation::QueueSet;
 
 /// Flag: the owner status said that the link data was consumed (§9.4); with no handshake before `expires` the user is told
 /// the invitation was used by someone else (§5.2).
@@ -415,10 +416,10 @@ impl SparePool {
 }
 
 /// A spare queue taken from a pool, with the encoding of the pool that is left.
-type Taken = (PoolQueue, Zeroizing<Vec<u8>>);
+pub(crate) type Taken = (PoolQueue, Zeroizing<Vec<u8>>);
 
 /// The oldest spare queue of `relay` and the encoding of the pool without it (nothing is written).
-fn take_oldest(store: &Store, relay: RelayId) -> Result<Option<Taken>, Error> {
+pub(crate) fn take_oldest(store: &Store, relay: RelayId) -> Result<Option<Taken>, Error> {
     let mut pool = PoolBlob::read(store, relay)?;
     if pool.queues.is_empty() {
         return Ok(None);
@@ -436,7 +437,7 @@ fn link_data_n(ld_id: &Id) -> u32 {
 }
 
 /// The Ed25519 public key of a 32-byte seed.
-fn ed25519_pk_of(seed: &SecretBytes<32>) -> Result<Ed25519Pk, Error> {
+pub(crate) fn ed25519_pk_of(seed: &SecretBytes<32>) -> Result<Ed25519Pk, Error> {
     let key = Ed25519SigningKey::from_seed(seed.expose_secret())?;
     Ok(Ed25519Pk::from_bytes(key.verifying_key().as_bytes())?)
 }
@@ -1039,8 +1040,13 @@ impl Invitations {
                 if !staged.staged() {
                     return Err(Error::Unavailable);
                 }
-                let (contact, events) =
-                    commit_accept(&mut store, ld_id, &loaded.stored.record, &accepted)?;
+                let (contact, events) = commit_accept(
+                    &mut store,
+                    ld_id,
+                    &loaded.stored.record,
+                    &accepted,
+                    clock.unix_secs().saturating_mul(1_000),
+                )?;
                 Ok(after_commit(Round {
                     ack_through: fetched_max,
                     accepted: Some(contact),
@@ -1094,10 +1100,11 @@ fn commit_accept(
     ld_id: &Id,
     record: &InvitationRecord,
     accepted: &Accepted,
+    now_ms: u64,
 ) -> Result<(ContactId, Vec<Event>), Error> {
     let planned = contacts::plan(store, &accepted.peer)?;
     let routes = encode_routes(&accepted.routes)?;
-    let queues = encode_queues(record);
+    let queues = encode_queues(record, now_ms)?;
     let session = planned.id.0;
     let new = NewContact {
         peer: &accepted.peer,
@@ -1126,12 +1133,10 @@ fn encode_routes(routes: &[RouteDescriptor]) -> Result<Zeroizing<Vec<u8>>, Error
     Ok(v)
 }
 
-/// `contacts.queues`: `count u8 ‖ recv_seed [32] × count` — the recv-queues of the session so far: the invitation queue,
-/// until the first reply moves the session to a queue of its own (§6.6 step 4).
-fn encode_queues(record: &InvitationRecord) -> Zeroizing<Vec<u8>> {
-    let mut v = Zeroizing::new(vec![1]);
-    v.extend_from_slice(record.invq_recv_seed.expose_secret());
-    v
+/// `contacts.queues` ([`QueueSet`]): the recv-queues of the session so far: the invitation queue, until the first reply
+/// moves the session to a queue of its own (§6.6 step 4).
+fn encode_queues(record: &InvitationRecord, now_ms: u64) -> Result<Zeroizing<Vec<u8>>, Error> {
+    QueueSet::first(&record.invq_recv_seed, now_ms)?.encode()
 }
 
 /// §5.5 as the invitee runs it on the invitation it was given and the link data `LINK_GET` returned, in this order
@@ -1246,8 +1251,7 @@ impl Invitations {
             period_s: invitation.inv_period_s,
         });
         let routes = encode_routes(&[inviter_route])?;
-        let mut queues = Zeroizing::new(vec![1_u8]);
-        queues.extend_from_slice(recv_seed.expose_secret());
+        let queues = QueueSet::first(&recv_seed, now.saturating_mul(1_000))?.encode()?;
         let link_data = accepted.link_data();
         let planned = contacts::plan(&store, &link_data.inviter_iks)?;
         let new = NewContact {

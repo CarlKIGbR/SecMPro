@@ -582,6 +582,42 @@ fn invitee_reply_queue_from_pool() -> R {
     Ok(())
 }
 
+/// OPEN-M7-B-5 (red first on the tree that took the pool queue in its own transaction before `Initiator::start`: the pool
+/// shrank although the start failed): an accept that fails in `Initiator::start` (the entropy is too short for it) takes no
+/// queue from the pool and writes no contact, session or handshake row.
+#[cfg(feature = "kat")]
+#[test]
+fn accept_failure_keeps_pool_queue() -> R {
+    let (fx, mut e) = inviter("b5", 41, 1)?;
+    let (peer, _) = invitee("b5-peer", 43, 2)?;
+    let issued = Invitations::new(fx.profile.clone()).issue(&request(1)?, &fx.clock, &mut e)?;
+    let before = pool_of(&peer)?;
+    assert_eq!(before.queues.len(), 2);
+    let profile = wire_profile("invitee")?;
+    let failed = Invitations::new(peer.profile.clone()).accept_invitation(
+        &issued.uri,
+        &issued.blob.encode()?,
+        &AcceptRequest {
+            relay: RelayId(1),
+            reply_period: Period::S10,
+            profile: &profile,
+        },
+        &peer.clock,
+        &mut FixedEntropy::new(&[]),
+    );
+    assert!(failed.is_err(), "the start needs randomness");
+    let after = pool_of(&peer)?;
+    assert_eq!(
+        after.queues.iter().map(|q| q.queue).collect::<Vec<_>>(),
+        before.queues.iter().map(|q| q.queue).collect::<Vec<_>>(),
+        "the pool is unchanged"
+    );
+    let contacts =
+        crate::contacts::Contacts::new(peer.profile.store(), peer.profile.fingerprint()?);
+    assert!(contacts.list()?.is_empty(), "no contact row");
+    Ok(())
+}
+
 /// IN-18 (§5.2 `docs/03:213`): an owner status of "consumed" with no handshake before `expires` shows
 /// `Event::InvitationUsedElsewhere` — once.
 #[cfg(feature = "kat")]

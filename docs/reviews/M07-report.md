@@ -1094,3 +1094,15 @@ All new tests green on the final code (`cargo nextest run -p secmp-client-core -
 - Question OPEN-M7-B-9: `spk_expiry` = this invitation's `expires` versus `docs/03:293` ("MUST be ≥ the expiry of every invitation referencing it").
 
 Blocked: none. STOP: none.
+
+
+## Commit 0 corrections (WEISUNG M7-B-4; VERIFY-DELTA-B3b, VERIFY-DELTA-A4f2-BSC2; `modell=claude-sonnet-5-5`)
+
+- **CI1 §4:** `timing.rs`: 30 caught / 3 unviable / 0 timeout of 33; the whole run 36 / 4 / 0 of 40 (`mutants-ci1-timing-aa89fd5.txt`); the CI1c footer reading "30/3/0, 40 run" is superseded by this line.
+- **CI1 §3:** the two filters it names, on the start head: `m0_early::` 7 passed; the xtask `win_|vm_up|vm_down|nasm|id_token|oidc|workflow|ondemand` filter 30 passed (`ci1-m0early-xtask-9b511a2.txt`).
+- **B-3b §3 ("487 passed at `c70827c`; the m7_accept harness 4/4"):** on the start head `9b511a2`: `cargo nextest run -p secmp-client-core -p secmp-proto --features kat` 487 passed; `m7_accept::` 4 passed (`nextest-b3b-9b511a2.txt`).
+- **D-CI2:** the CI1 mutants command deviated (`--package secmp-transport` added, `--re` instead of `--file`; recorded in CI1 §4).
+- **B-3b §3 `live_counter_counts_owner_status_open`:** pins peak 1 / live 0 / persisted flag; the no-raw-`invitation_record`-read property is structural (shown by reading `invitations.rs`); the test stays green with a raw read reintroduced.
+- **B-3b §3 `issue_equals_issue_invitation_on`:** runs `issue_on_parts` on both sides; pins the core's store work (lookups, OPK/rotation draw position, stored record), no longer the construction itself (that is pinned by the hx/encodings vectors).
+- **B-SC2 §7 (A4f2-BSC2 minors):** m-1 SC-08 Kani bound does not reach the F1 sequence; F1 is guarded by `pure::tests::hostile_relay_*` (same clause in D-SC10). m-2 the red-first line of the amended SC-10 scan (`bsc2-red-first.txt`) is of an earlier revision of `want` (`fetch_due`); the committed `want` (`balanced_run`) is also red on `d2b93ba` (same left side). m-3 Q186 times not re-measured: ci-fast-bsc2 shows 16.471 s / 10.762 s (`ci-fast-bsc2-69bfc24.txt:3116,3108`); the entries rest on Q44 (full-run time), not on the alone-time rule text of `expect.rs:636-640`. m-4 SC-09 covers 1 and 2 are input-only predicates; the reserved-position branch of `reserved_rr` is reached (tick 0 is always a SEND) but no cover witnesses it — follow-up: a cover "choice made against a non-empty ledger". m-5 the SC-01/R-01/SIM-02 series are summarised at B-SC2 §3, not quoted; the delta verifier re-ran them byte-identical to `bsc-series-57d7da2.txt`.
+- **TEST-SPEC / OPEN-M7:** SE-21 inserted (g 22, B 73, total 179, unconditional 174); Q196 and Q197 decided and booked (`OPEN-M7.md` B-9, B-10).

@@ -18,15 +18,15 @@ Sources: `docs/03` rev 2.6 (`docs/03:<line>` at `main` `bf55099`), `docs/07:137-
 | (d) backup BK | 7 | 7 | 0 | 0 |
 | (e) profile, contacts, verification PR | 9 | 0 | 9 | 0 |
 | (f) invitations, transactional accept IN | 21 | 0 | 21 | 0 |
-| (g) sessions SE | 21 | 0 | 21 | 0 |
+| (g) sessions SE | 22 | 0 | 22 | 0 |
 | (h) `Api`, relay view, transport boundary AP | 7 | 0 | 7 | 0 |
 | (i) scheduler-core carry-overs SC | 10 | 0 | 10 | 0 |
 | (j) CLI CL | 14 | 0 | 0 | 14 |
 | (k) E2E E2 | 12 | 0 | 0 | 12 |
 | (l) gates G7, fuzz FZ, Kani K7, transport carry-overs C-T | 35 | 21 | 4 | 10 |
-| **total** | **178** | **66** | **72** | **40** |
+| **total** | **179** | **66** | **73** | **40** |
 
-Built unconditionally: 173 rows. **(cond, not built)**: SE-13a (OQ-19 reading A, until the owner rules A), C-T2 (`socket2`, default "not M7") — dictated, built only if the decision flips. **(cond, owner action)**: G7-11 (after the owner's `miniz_oxide` vet record), G7-19 (after an ADR-018 acceptance), G7-20 (after `harness` joins the ruleset).
+Built unconditionally: 174 rows. **(cond, not built)**: SE-13a (OQ-19 reading A, until the owner rules A), C-T2 (`socket2`, default "not M7") — dictated, built only if the decision flips. **(cond, owner action)**: G7-11 (after the owner's `miniz_oxide` vet record), G7-19 (after an ADR-018 acceptance), G7-20 (after `harness` joins the ruleset).
 
 ⚙ = owner-operated: E2-07 (nightly over real Tor to the test relay), the Windows VM re-run of the store KATs (G7-17).
 Their non-availability path is the M6 one (`TEST-SPEC-M6.md` "Conventions"): listed under "Blocked — owner
@@ -214,6 +214,7 @@ corpus, `KANI_HARNESSES`, `NORMAL_DEPENDENCY_ALLOW` edge) lands in the same comm
 | SE-18 | `xtask::testscan::session_actor_owns_ratchet` | `docs/02:104` | source scan | `RatchetState` methods called only inside `sessions::actor` | unit | B | 1 s |
 | SE-19 | `harness::m7_activity::store_backed_source_activity_independent` | §10.1 `docs/03:656`; `docs/06` §4 | 6 h virtual, store on disk, injected commit latency U[0, 200] ms (virtual, on the worker's commit completion, Q160), random activity incl. one invitation accept and the refusal states `Frozen`, `ResetRequested`, `Removed`, `ReinviteRequired` | C2R trace = idle trace (Δt ≤ 5 ms), all modes | prop | B | 3 min |
 | SE-20 | `sessions::tests::inline_attachment_64k` [O-10][O-02] (kind 2 only if ADR-054 defines its payload, else kind 1 16 KiB and kind 2 rejected at the `Api`) | OQ-11; §7.6 Fragment `docs/03:501` | kind 2, 65 535 B (or kind 1, 16 KiB if ADR-054 has no kind 2) | ≤ 64 fragments, delivered byte-exact | unit | B | 10 s |
+| SE-21 | `harness::m7_crash::receipt_effect_commits_with_receive_ratchet` (Q176, EXT1-1; F9b) | M07-report §7 F9b; CLAUDE.md §1.7 | two store-backed sides, receipts on at B; A sends m, B delivers it, A has m `Relayed`; (i) a fault on A's `outbox` DELIVERED update (SQL trigger), then B's receipt cell to A; (ii) no fault, A's process crashes right after the receive commit | (i) nothing of the receive durable (`sessions` fixed part byte-equal, `outbox` row `Relayed`, cell not acked); fault removed: the same cell commits and `StoreOutbox` reads `Delivered`; (ii) after restart `StoreOutbox` reads `Delivered`, ratchet at the committed state | E2E (proc) | B | 30 s |
 
 ## (h) `Api`, relay view, transport boundary (`docs/02` §4.1, §4.5, §6; review focus `docs/07:147`) — Phase B
 

@@ -688,6 +688,8 @@ impl<C: Clock, S: EntropySource> Core<C, S> {
                 mode,
                 params: &params,
                 recv_periods_ms: &periods,
+                old_queue: None,
+                unix_base_ms: now.saturating_sub(self.clock.mono_ms()),
             },
             now,
             &mut self.rng,
@@ -997,6 +999,69 @@ mod tests {
         ];
         assert_eq!(events, want);
         Ok(())
+    }
+
+    /// PR-08 through the wiring (OPEN-M7-B-8; §7.6 Control code 1, ADR-054 item 4): the peer removes the contact; the core
+    /// marks it removed (`Event::ContactRemoved`, state `Removed`), a send is `Err(Blocked)`, and the schedule is as it was —
+    /// the session prepares one cell for every slot before and after (the removed contact's slots carry dummies), nothing
+    /// real is pending, and no slot appears or disappears (Δ = 0).
+    #[cfg(feature = "kat")]
+    #[test]
+    fn contact_removed_keeps_schedule() -> R {
+        big(|| {
+            let World {
+                guest, mut h, g, ..
+            } = world("pr08", 91)?;
+            drop(g);
+            let mut core =
+                Core::with_profile(guest.profile.clone(), guest.clock.clone(), sources(930))?;
+            let slots = |core: &mut Core<_, Fixed>, from: u64| -> Result<usize, E> {
+                let conv = core.conversations_mut().get_mut(0).ok_or("conversation")?;
+                let mut n = 0;
+                for k in 0..5 {
+                    if conv.prepare_direct(ms(from + 10 * k)).is_ok() {
+                        n += 1;
+                    }
+                }
+                assert!(!conv.has_pending_real());
+                Ok(n)
+            };
+            let before = slots(&mut core, 0)?;
+            // the host's first reply, then the removal
+            h.queue_route_update(vec![route(1)?]);
+            let reply = next(&mut h, ms(4))?;
+            h.queue_control(secmp_proto::wire::cell::ControlCode::ContactRemoved);
+            let removal = next(&mut h, ms(14))?;
+            let conv = core.conversations_mut().get_mut(0).ok_or("conversation")?;
+            deliver(conv, &reply)?;
+            deliver(conv, &removal)?;
+            core.pump()?;
+            let events: Vec<Event> = core.take_events().into_iter().map(|s| s.event).collect();
+            assert_eq!(
+                events,
+                [
+                    Event::RoutesChanged(ContactId(1)),
+                    Event::ContactRemoved(ContactId(1))
+                ]
+            );
+            let Response::Contacts(list) = core.handle(Request::Contacts)? else {
+                return Err("contacts".into());
+            };
+            assert_eq!(
+                list.first().map(|c| c.state),
+                Some(crate::contacts::ContactState::Removed)
+            );
+            let refused = core.handle(Request::Send {
+                contact: ContactId(1),
+                kind: 1,
+                payload: Zeroizing::new(b"x".to_vec()),
+                expire_after: 0,
+            });
+            assert!(matches!(refused, Err(Error::Blocked)));
+            assert_eq!(slots(&mut core, 100)?, before, "Δ = 0 slots");
+            assert_eq!(before, 5);
+            Ok(())
+        })
     }
 
     /// AP-03 (§11.3 `docs/03:717-725`, Q156): the page lists items 1–5 of §11.3 word for word — read from the spec file —

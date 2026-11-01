@@ -94,6 +94,7 @@ pub(crate) fn connect(host: &Fixture, guest: &Fixture, seed: u64) -> Result<Link
         g,
         contact,
         ld_id: issued.invitation.ld_id,
+        invitation_queue: round.invitation_queue,
     })
 }
 
@@ -106,6 +107,8 @@ pub(crate) struct Link {
     pub(crate) contact: ContactId,
     /// The consumed invitation.
     pub(crate) ld_id: [u8; 16],
+    /// The relay and the queue of the consumed invitation.
+    pub(crate) invitation_queue: Option<(RelayId, crate::scheduler::types::QueueId)>,
 }
 
 /// An open invitation of `host` and the three handshake cells of a new guest that accepted it (not yet decided by the
@@ -618,6 +621,8 @@ fn rotate_request<'a>(
         mode: crate::scheduler::params::Mode::Balanced,
         params,
         recv_periods_ms: periods,
+        old_queue: None,
+        unix_base_ms: 0,
     }
 }
 
@@ -946,6 +951,108 @@ fn view_once_from_unverified_locked() -> R {
         let shown = reveal(&hstore, &w.h, &id, ms(14))?;
         assert_eq!(&**shown, b"for your eyes");
         assert_eq!(rows(&w.host, "messages")?, 0);
+        Ok(())
+    })
+}
+
+/// IN-16 (D-C2-1; §6.6 step 4 `docs/03:351`, §10.6 (4), (5) `:696-697`): after the responder accepted a handshake, its first
+/// reply is a `RouteUpdate` with a queue from its pool (the pool shrinks by one, no `QUEUE_NEW`), the invitation queue is
+/// kept for `U[1 h, 24 h]` and then retired with a `QUEUE_DEL` that waits for a `FETCH` without a present cell — an empty
+/// `FETCH` inside the window does not count — and then runs `U[1 min, 60 min]` later.
+#[cfg(feature = "kat")]
+#[test]
+fn first_reply_carries_route_update() -> R {
+    use crate::scheduler::control::{ControlOps, OpSpec, When};
+    use crate::scheduler::params::{Mode, Params};
+    use crate::scheduler::types::{ControlKind, OpId, QueueId};
+    use crate::timing::TimingRng;
+
+    big(|| {
+        let host = party("in16-h", 81)?;
+        let guest = party("in16-g", 83)?;
+        let Link {
+            mut h,
+            mut g,
+            contact,
+            invitation_queue,
+            ..
+        } = connect(&host, &guest, 81)?;
+        let (relay, old) = invitation_queue.ok_or("invitation queue")?;
+        let store = host.profile.store();
+        let pool = crate::invitations::SparePool::new(store.clone());
+        let before = pool.len(relay)?;
+        let (params, mut rng) = (Params::default(), TimingRng::seeded(11));
+        let base = T0 * 1_000;
+        let request = rotation::RotateRequest {
+            contact,
+            relay,
+            period: Period::S20,
+            mode: Mode::Strict,
+            params: &params,
+            recv_periods_ms: &[],
+            old_queue: Some(old),
+            unix_base_ms: base,
+        };
+        let started = rotation::rotate(&store, &mut h, &request, base, &mut rng)?;
+        let rotation::Rotated::Started {
+            retire_at_ms,
+            retire_op: Some(op),
+            ..
+        } = started
+        else {
+            return Err("started with a retirement".into());
+        };
+        assert_eq!(pool.len(relay)?, before - 1, "a pool queue, no QUEUE_NEW");
+        assert!((base + 3_600_000..=base + 86_400_000).contains(&retire_at_ms));
+        let from = retire_at_ms - base;
+        assert_eq!(
+            op,
+            OpSpec {
+                kind: ControlKind::QueueDel(old),
+                relay,
+                related: u64::from(old.0),
+                when: When::AfterEmptyFetchFrom(old, from),
+            }
+        );
+        // the invitation queue is in overlap, the pool queue is current
+        let set = queue_set(&host)?;
+        assert_eq!(set.entries.len(), 2);
+        assert_eq!(
+            set.entries.first().and_then(|e| e.retire_at_ms),
+            Some(retire_at_ms)
+        );
+
+        // the first reply is the RouteUpdate, with the pool queue (period 20 s)
+        for i in 0..3 {
+            next(&mut g, ms(i))?;
+        }
+        let reply = next(&mut h, ms(4))?;
+        deliver(&mut g, &reply)?;
+        assert!(!g.awaiting_first_reply());
+        let events = g.take_events();
+        let [SessionEvent::Routes(routes)] = events.as_slice() else {
+            return Err("one Routes event".into());
+        };
+        let [secmp_proto::wire::cell::RouteDescriptor::RelayQueue(q)] = routes.as_slice() else {
+            return Err("one relay queue".into());
+        };
+        assert_eq!(q.period_s, Period::S20);
+
+        // the QUEUE_DEL waits: not within the window, then for an empty FETCH, then its delay
+        let mut ops = ControlOps::new();
+        ops.schedule(&params, &mut rng, OpId(1), 0, op)?;
+        assert!(ops.awaits_empty_fetch(OpId(1)));
+        ops.note_empty_fetch(&params, &mut rng, old, from - 1);
+        assert!(
+            ops.awaits_empty_fetch(OpId(1)),
+            "an empty FETCH inside the window"
+        );
+        ops.note_empty_fetch(&params, &mut rng, QueueId(9_999), from);
+        assert!(ops.awaits_empty_fetch(OpId(1)), "another queue's");
+        ops.note_empty_fetch(&params, &mut rng, old, from);
+        assert!(!ops.awaits_empty_fetch(OpId(1)));
+        let due = ops.due_of(OpId(1)).ok_or("due")?;
+        assert!((from + 60_000..=from + 3_600_000).contains(&due));
         Ok(())
     })
 }

@@ -1094,10 +1094,16 @@ fn killers_rounds_and_contact() -> R {
         let store = fx.profile.store();
         let s = store.lock().map_err(|_| "lock")?;
         let queues = s.contact_queues(1)?.ok_or("queues")?;
+        // `contacts.queues` is a `QueueSet` since B-4 (rotation): the invitation queue, current, made current at accept time
+        let set = crate::sessions::rotation::QueueSet::decode(&queues)?;
+        assert_eq!(set.rotated_ms, fx.clock.unix_secs() * 1000);
+        assert_eq!(set.entries.len(), 1);
+        let first = set.entries.first().ok_or("entry")?;
         assert_eq!(
-            queues.as_slice(),
-            [&[1_u8][..], record.record.invq_recv_seed.expose_secret()].concat()
+            first.seed.expose_secret(),
+            record.record.invq_recv_seed.expose_secret()
         );
+        assert_eq!(first.retire_at_ms, None);
         let routes = s.contact_routes(1)?.ok_or("routes")?;
         assert_eq!(routes.first(), Some(&1));
         assert!(routes.len() > 100, "a route descriptor follows the count");

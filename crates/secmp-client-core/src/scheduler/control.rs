@@ -23,6 +23,10 @@ pub enum When {
     /// After a `FETCH` of this queue that held no present cell, then `U[1 min, 60 min]` (the `QUEUE_DEL` of a retired
     /// queue, §10.6 (4), Q163, Q194): [`ControlOps::schedule_after_empty_fetch`].
     AfterEmptyFetch(QueueId),
+    /// As [`When::AfterEmptyFetch`], but only a `FETCH` at or after this monotonic time counts: the queue is fetched through
+    /// its overlap window `U[1 h, 24 h]` first (a rotated queue, an invitation queue replaced by the first reply, §10.6 (4)
+    /// and (5)).
+    AfterEmptyFetchFrom(QueueId, u64),
 }
 
 struct Op {
@@ -42,6 +46,8 @@ struct Op {
     /// The queue whose `FETCH` must first answer with no present cell (Q163, Q194): the operation does not start, and has no
     /// time, until [`ControlOps::note_empty_fetch`] reports it.
     awaiting: Option<QueueId>,
+    /// The earliest monotonic time at which an empty `FETCH` of `awaiting` counts (the end of the overlap window).
+    not_before: u64,
 }
 
 /// What to queue.
@@ -136,9 +142,12 @@ impl ControlOps {
         if let When::AfterEmptyFetch(queue) = when {
             return self.schedule_after_empty_fetch(id, spec, queue);
         }
+        if let When::AfterEmptyFetchFrom(queue, from) = when {
+            return self.schedule_after_empty_fetch_from(id, spec, queue, from);
+        }
         let mut delay = None;
         let due = match when {
-            When::Prompt | When::AfterEmptyFetch(_) => now,
+            When::Prompt | When::AfterEmptyFetch(_) | When::AfterEmptyFetchFrom(..) => now,
             When::At(t) => t,
             When::Delayed => {
                 let started = self
@@ -169,6 +178,7 @@ impl ControlOps {
             failures: 0,
             closed_before: 0,
             awaiting: None,
+            not_before: 0,
         });
         Ok(())
     }
@@ -187,6 +197,21 @@ impl ControlOps {
         spec: OpSpec,
         queue: QueueId,
     ) -> Result<(), Unavailable> {
+        self.schedule_after_empty_fetch_from(id, spec, queue, 0)
+    }
+
+    /// [`ControlOps::schedule_after_empty_fetch`] where only an empty `FETCH` at or after `from` (monotonic ms) counts: the
+    /// overlap window of a rotated or replaced queue, `U[1 h, 24 h]` (§10.6 (4)), drawn once when the queue is retired.
+    ///
+    /// # Errors
+    /// As [`ControlOps::schedule_after_empty_fetch`].
+    pub fn schedule_after_empty_fetch_from(
+        &mut self,
+        id: OpId,
+        spec: OpSpec,
+        queue: QueueId,
+        from: u64,
+    ) -> Result<(), Unavailable> {
         self.ops.push(Op {
             id,
             kind: spec.kind,
@@ -198,6 +223,7 @@ impl ControlOps {
             failures: 0,
             closed_before: 0,
             awaiting: Some(queue),
+            not_before: from,
         });
         Ok(())
     }
@@ -214,7 +240,7 @@ impl ControlOps {
     ) {
         for i in 0..self.ops.len() {
             let Some(op) = self.ops.get(i) else { break };
-            if op.awaiting != Some(queue) {
+            if op.awaiting != Some(queue) || now < op.not_before {
                 continue;
             }
             let related = op.related;

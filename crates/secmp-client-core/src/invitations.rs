@@ -504,6 +504,9 @@ pub struct Round {
     /// order: the caller feeds them to that session's receive path, which acknowledges them through its own commit. The
     /// caller still holds the cells.
     pub to_session: Vec<u64>,
+    /// The relay and the queue of the invitation whose handshake was accepted: the first reply replaces the queue with a
+    /// pooled one and retires it (§6.6 step 4, §10.6 (5); [`crate::sessions::rotation::rotate`]).
+    pub invitation_queue: Option<(RelayId, QueueId)>,
 }
 
 /// What [`Invitations::maintain`] did.
@@ -1053,6 +1056,7 @@ impl Invitations {
                     events,
                     ops: Vec::new(),
                     to_session: Vec::new(),
+                    invitation_queue: Some((loaded.stored.relay, loaded.stored.queue)),
                 }))
             }
         }

@@ -17,8 +17,9 @@ use super::actor::EntropySource;
 use crate::api::{ContactId, Error, Event};
 use crate::invitations::{ed25519_pk_of, take_oldest};
 use crate::persist::SharedStore;
+use crate::scheduler::control::{OpSpec, When};
 use crate::scheduler::params::{FETCH_MULTI_LIMIT, Mode, Params};
-use crate::scheduler::types::{QueueId, RelayId};
+use crate::scheduler::types::{ControlKind, QueueId, RelayId};
 use crate::timing::TimingRng;
 
 /// A recv-queue is rotated at the latest after 30 days (`docs/02:115`).
@@ -158,6 +159,11 @@ pub struct RotateRequest<'a> {
     pub params: &'a Params,
     /// The periods (ms) of every recv-queue of the scheduler, those in overlap included.
     pub recv_periods_ms: &'a [u64],
+    /// The scheduler's id of the queue that is replaced, if the caller knows it: its `QUEUE_DEL` is asked for
+    /// ([`Rotated::Started::retire_op`]).
+    pub old_queue: Option<QueueId>,
+    /// The Unix milliseconds at monotonic time 0 (the scheduler's clock) — the overlap deadline is Unix time in the store.
+    pub unix_base_ms: u64,
 }
 
 /// The outcome of a rotation.
@@ -172,6 +178,9 @@ pub enum Rotated {
         retired: SecretBytes<32>,
         /// The end of the previous queue's fetch window (Unix milliseconds).
         retire_at_ms: u64,
+        /// The `QUEUE_DEL` of the previous queue: after an empty `FETCH` at or after the end of its window, then
+        /// `U[1 min, 60 min]` (§10.6 (2), (4)); `Some` if the request named the queue.
+        retire_op: Option<OpSpec>,
     },
     /// The rotation did not start; the event says so (§10.2).
     Deferred(Event),
@@ -237,10 +246,17 @@ pub fn rotate<S: EntropySource>(
     })?;
     drop(guard);
     conversation.queue_route_update(vec![route]);
+    let retire_op = req.old_queue.map(|old| OpSpec {
+        kind: ControlKind::QueueDel(old),
+        relay: req.relay,
+        related: u64::from(old.0),
+        when: When::AfterEmptyFetchFrom(old, retire_at_ms.saturating_sub(req.unix_base_ms)),
+    });
     Ok(Rotated::Started {
         queue: taken.queue,
         recv_seed,
         retired,
         retire_at_ms,
+        retire_op,
     })
 }

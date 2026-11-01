@@ -1,0 +1,61 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//! A0 probe (ADR-055 item 3), scratch only: Arti built against the unified SQLCipher `libsqlite3-sys`. Creates the
+//! client without bootstrapping it (no network) on a fresh profile directory, drops it, creates it again on the now
+//! existing directory, and records every file Arti wrote with its first 16 bytes (a plain SQLite file starts with
+//! "SQLite format 3\0"; an SQLCipher-encrypted one with random bytes).
+#![forbid(unsafe_code)]
+
+use std::fmt::Write as _;
+use std::path::Path;
+
+fn walk(dir: &Path, out: &mut Vec<std::path::PathBuf>) -> std::io::Result<()> {
+    for e in std::fs::read_dir(dir)? {
+        let p = e?.path();
+        if p.is_dir() {
+            walk(&p, out)?;
+        } else {
+            out.push(p);
+        }
+    }
+    Ok(())
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../a0-arti");
+    // A0_KEEP: reopen a directory another build wrote (the plain-SQLite build of `main`)
+    if std::env::var_os("A0_KEEP").is_none() {
+        let _ = std::fs::remove_dir_all(&base);
+    }
+    std::fs::create_dir_all(&base)?;
+    let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
+    let mut report = String::new();
+    for round in ["fresh", "existing"] {
+        rt.block_on(async {
+            let config = secmp_transport::tor::config(&base)?;
+            let client = arti_client::TorClient::builder()
+                .config(config)
+                .bootstrap_behavior(arti_client::BootstrapBehavior::Manual)
+                .create_unbootstrapped()?;
+            // let Arti's background tasks open their stores
+            tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+            drop(client);
+            Ok::<(), Box<dyn std::error::Error>>(())
+        })?;
+        let mut files = Vec::new();
+        walk(&base, &mut files)?;
+        files.sort();
+        writeln!(report, "round {round}: {} files", files.len())?;
+        for f in &files {
+            let bytes = std::fs::read(f)?;
+            let head: String = bytes.iter().take(16).map(|b| format!("{b:02x}")).collect();
+            writeln!(
+                report,
+                "  {} {} B head {head}",
+                f.strip_prefix(&base)?.display(),
+                bytes.len()
+            )?;
+        }
+    }
+    std::fs::write(base.join("../a0-arti-report.txt"), report)?;
+    Ok(())
+}

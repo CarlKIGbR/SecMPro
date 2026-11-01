@@ -1,0 +1,2 @@
+measured on HEAD 06c28ec20d1f83938179fba04cf5a62644323d9d (harness step of ci-fast-a3l-06c28ec.txt; code head 365a3da)
+PC-13 write amplification (24 h virtual, Strict, one contact, P = 10 s, two profiles): bytes/day = 142135880, commits/day = 34495, send slots/day = 17250, bytes/dummy slot = 8239 (sender + receiver commit), bound 2 × (fixed 3767 + outbox row 1782) = 11098

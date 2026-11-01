@@ -1,0 +1,37 @@
+fuzz smoke on HEAD f51f7c2d8f13253e56fd95d72b28e7476782e014
+
+WEISUNG M7-A4 §6 smoke, 120 s per target, nightly-2026-09-21. A scratch corpus comes first (libFuzzer writes new
+inputs there) and the tracked corpus fuzz/corpus/<t>/ second (read only; `git status` empty after the runs).
+-max_len as expect::FUZZ_MAX_LEN, -timeout as expect::FUZZ_INPUT_TIMEOUT_SECONDS.
+
+=== backup_import: cargo +nightly-2026-09-21 fuzz run backup_import target/fuzz-scratch/backup_import fuzz/corpus/backup_import -- -max_total_time=120 -max_len=65777 -timeout=60
+#9	INITED cov: 1852 ft: 2818 corp: 8/5302b exec/s: 0 rss: 100Mb
+#175212	DONE   cov: 2159 ft: 3783 corp: 223/210Kb lim: 2615 exec/s: 1448 rss: 367Mb
+Done 175212 runs in 121 second(s)
+final cov/ft line: #175212	DONE   cov: 2159 ft: 3783 corp: 223/210Kb lim: 2615 exec/s: 1448 rss: 367Mb
+crashes: 0
+
+=== store_record_open: cargo +nightly-2026-09-21 fuzz run store_record_open target/fuzz-scratch/store_record_open fuzz/corpus/store_record_open -- -max_total_time=120 -max_len=39172 -timeout=60
+#7	INITED cov: 809 ft: 1574 corp: 6/370b exec/s: 0 rss: 100Mb
+#181646	DONE   cov: 904 ft: 2457 corp: 115/13299b lim: 1235 exec/s: 1501 rss: 454Mb
+Done 181646 runs in 121 second(s)
+final cov/ft line: #181646	DONE   cov: 904 ft: 2457 corp: 115/13299b lim: 1235 exec/s: 1501 rss: 454Mb
+crashes: 0
+
+=== git diff --stat 92b4404..f51f7c2 -- Cargo.lock fuzz/Cargo.lock
+ fuzz/Cargo.lock | 1 +
+ 1 file changed, 1 insertion(+)
+
+=== git diff 92b4404..f51f7c2 -- fuzz/Cargo.lock (the one allowed line)
+diff --git a/fuzz/Cargo.lock b/fuzz/Cargo.lock
+index d45e58c..bcb0773 100644
+--- a/fuzz/Cargo.lock
++++ b/fuzz/Cargo.lock
+@@ -3532,6 +3532,7 @@ dependencies = [
+  "secmp-crypto",
+  "secmp-proto",
+  "secmp-relay",
++ "secmp-store",
+  "secmp-transport",
+ ]
+

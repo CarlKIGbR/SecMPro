@@ -190,7 +190,7 @@ fn assert_recreated(run: &Outcome, info: &Restart) {
         let ups: Vec<u64> = o
             .events()
             .iter()
-            .filter_map(|(t, e)| matches!(e, LinkEvent::Up(_)).then_some(*t))
+            .filter_map(|(t, e)| matches!(e, LinkEvent::Up(_, _)).then_some(*t))
             .filter(|t| *t > info.at_ms)
             .take(2)
             .collect();

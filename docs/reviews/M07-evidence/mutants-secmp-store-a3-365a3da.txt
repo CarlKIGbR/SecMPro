@@ -1,0 +1,41 @@
+mutants on HEAD 365a3daf45375b11af18a0226329078445f499b5
+command: cargo mutants --no-shuffle -j 3 --package secmp-store --features kat --output target/m7-mutants-store
+(cargo-mutants 27.1.0, default test tool cargo test: the tests on threads of one process; 32-core container)
+
+secmp-store: caught 175, missed 3, timeout 0, unviable 42 of 220 (caught 79.5 %, MUTANT_MIN_CAUGHT_PERCENT 50)
+
+per file (caught / missed / timeout / unviable):
+  crates/secmp-store/src/delete.rs: 5 / 0 / 0 / 0
+  crates/secmp-store/src/error.rs: 1 / 0 / 0 / 0
+  crates/secmp-store/src/kat.rs: 53 / 1 / 0 / 15
+  crates/secmp-store/src/messages.rs: 55 / 0 / 0 / 9
+  crates/secmp-store/src/migrate.rs: 11 / 0 / 0 / 0
+  crates/secmp-store/src/outbox.rs: 9 / 0 / 0 / 1
+  crates/secmp-store/src/sessions.rs: 13 / 0 / 0 / 1
+  crates/secmp-store/src/store.rs: 28 / 2 / 0 / 16
+
+missed (each documented in docs/mutants-accepted.md, equivalent mutants):
+  crates/secmp-store/src/store.rs:102:9: replace | with ^ in open_connection
+  crates/secmp-store/src/store.rs:101:9: replace | with ^ in open_connection
+  crates/secmp-store/src/kat.rs:39:19: replace ^= with |= in TestKey::one_bit_off
+timeouts: none
+
+history of this evidence (WEISUNG M7-A3 §4: below the floor without a found cause = STOP):
+  bc67679: 216 mutants, 100 caught, 74 missed, 38 unviable, 4 timeouts (46.3 %) — cause found: sessions.rs and
+    outbox.rs exercised only by client-core tests (not run by the per-package run), kat helpers untested;
+    fixed by store unit tests in be0d82d
+  be0d82d: 216 mutants, 171 caught, 3 missed, 38 unviable, 4 timeouts (child_role mutants re-entering without end);
+    fixed in 04b9795 (a child never starts children), the 3 equivalent mutants documented
+  04b9795: baseline failed under cargo test (migration_is_atomic: profile lock copy held by a child between
+    fork and the close of its descriptors); fixed in 365a3da
+
+--- cargo mutants output ---
+Found 220 mutants to test
+ok       Unmutated baseline in 61s build + 1s test
+ INFO Auto-set test timeout to 20s
+MISSED   crates/secmp-store/src/store.rs:102:9: replace | with ^ in open_connection in 0s build + 2s test
+MISSED   crates/secmp-store/src/store.rs:101:9: replace | with ^ in open_connection in 0s build + 2s test
+MISSED   crates/secmp-store/src/kat.rs:39:19: replace ^= with |= in TestKey::one_bit_off in 0s build + 1s test
+220 mutants tested in 5m: 3 missed, 175 caught, 42 unviable
+cargo mutants exit status: 2
+

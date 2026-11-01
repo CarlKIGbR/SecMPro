@@ -35,7 +35,7 @@ fn new_link_required_rotates() {
         .events
         .iter()
         .find(
-            |(_, e)| matches!(e, LinkEvent::TornDown(id, Reason::NewLinkRequired) if id.0 == slot),
+            |(_, e)| matches!(e, LinkEvent::TornDown(id, _, Reason::NewLinkRequired) if id.0 == slot),
         )
         .expect("TornDown(NewLinkRequired)");
     let next = c
@@ -105,7 +105,7 @@ fn reconnect_jitter_after_failure() {
     let torn: Vec<u64> = c
         .events
         .iter()
-        .filter(|(at, e)| *at >= 400_000 && matches!(e, LinkEvent::TornDown(_, Reason::Closed)))
+        .filter(|(at, e)| *at >= 400_000 && matches!(e, LinkEvent::TornDown(_, _, Reason::Closed)))
         .map(|(at, _)| *at)
         .collect();
     assert!(!torn.is_empty());
@@ -287,7 +287,12 @@ fn rotation_and_reconnect_keep_send_spacing() {
         .client_ref(alice)
         .events
         .iter()
-        .filter(|(_, e)| matches!(e, LinkEvent::TornDown(_, Reason::Lifetime | Reason::Closed)))
+        .filter(|(_, e)| {
+            matches!(
+                e,
+                LinkEvent::TornDown(_, _, Reason::Lifetime | Reason::Closed)
+            )
+        })
         .count();
     assert!(rotations >= 100, "{rotations} rotations and reconnects");
     let mut sends: Vec<u64> = frames(&sim, alice, Dir::C2R)

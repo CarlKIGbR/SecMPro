@@ -4,8 +4,8 @@
 use secmp_client_core::scheduler::core::{LinkKind, SchedError, Scheduler};
 use secmp_client_core::scheduler::params::{Mode, Params};
 use secmp_client_core::scheduler::types::{
-    CellSource, CellToken, LinkEvent, Output, PreparedCell, QueueId, Reason, RelayId, SendFailure,
-    SourceError,
+    CellSource, CellToken, Delivered, LinkEvent, Output, PreparedCell, QueueId, Reason, RelayId,
+    SendFailure, SourceError,
 };
 use secmp_client_core::timing::TimingRng;
 use secmp_crypto::SecretBytes;
@@ -40,8 +40,8 @@ impl CellSource for NoCells {
     fn send_failed(&mut self, _: QueueId, _: CellToken, _: SendFailure) {}
     fn discard(&mut self, _: QueueId, _: CellToken) {}
     fn queue_lost(&mut self, _: QueueId) {}
-    fn deliver(&mut self, _: QueueId, _: u64, _: &Cell) -> Result<(), SourceError> {
-        Ok(())
+    fn deliver(&mut self, _: QueueId, _: u64, _: &Cell) -> Result<Delivered, SourceError> {
+        Ok(Delivered::Committed)
     }
 }
 
@@ -327,7 +327,12 @@ fn mode_change_tears_down_all_links() {
         .unwrap();
     let torn = outs
         .iter()
-        .filter(|o| matches!(o, Output::Event(LinkEvent::TornDown(_, Reason::ModeChange))))
+        .filter(|o| {
+            matches!(
+                o,
+                Output::Event(LinkEvent::TornDown(_, _, Reason::ModeChange))
+            )
+        })
         .count();
     assert_eq!(torn, 4, "every old link: TornDown(ModeChange) at t");
     let closes = outs

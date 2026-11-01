@@ -1,0 +1,236 @@
+
+=== [1] fmt ===
+$ /work/home/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/cargo fmt --all --check
+### gate `fmt`
+
+| item | verdict |
+|---|---|
+| status | PASS (1 s) |
+| line 1 | rustfmt: no changes |
+
+
+
+=== [2] clippy ===
+$ /work/home/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+### gate `clippy`
+
+| item | verdict |
+|---|---|
+| status | PASS (2 s) |
+| line 1 | clippy --all-features -D warnings on x86_64-unknown-linux-gnu (12 crates) |
+
+
+
+=== [2] policy ===
+### gate `policy`
+
+| item | verdict |
+|---|---|
+| status | PASS (1 s) |
+| line 1 | unsafe-attrs: 43 target roots forbid, 2 sys library roots allow, 1 ADR-038 bench root allows (crates/secmp-testkit/benches/ct.rs), 2 secmp-ui roots deny, 2 secmp-ui files without `unsafe` |
+| line 2 | lints-table: 12 manifests |
+| line 3 | lint-allows: 157 relaxing attributes (all sanctioned) |
+| line 4 | build-scripts: 12 crates, none |
+| line 5 | spdx: 443 files |
+| line 6 | relay-events: 7 names as expect::RELAY_TRACE_ALLOW |
+| line 7 | normal-deps: 6 crates within expect::NORMAL_DEPENDENCY_ALLOW |
+| line 8 | secmp-crypto/secmp-proto normal closure (x86_64-unknown-linux-gnu, x86_64-pc-windows-msvc, aarch64-apple-darwin): 60 external crates, 0 exempted |
+| line 9 | tracked exemptions elsewhere: 328 |
+| line 10 | workflows: 5 files, triggers/SHA pins/flow style/continue-on-error/permissions ok |
+| line 11 | pinned jobs (linux-fast, windows-native, xwin-cross, linux-full, ct, mutants-shard, mutants, proverif-hx, proverif-link, kani, fuzz, harness, ci-verdict) only in ci.yml, no dispatch there, job conditions, needs, defaults/shell, gate run lines and budgets (also of the dispatch twins) as pinned, delegations mapped (accident guard, not tamper-proof) |
+| line 12 | large-files: 3086 tracked files, none over 2 MiB except 5 allowlisted (hard cap 8 MiB) |
+| line 13 | mutants-profile: mutants-harness starts m0_early::* first (priority 100) |
+
+
+
+=== [3] deny ===
+$ /work/home/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/cargo deny --locked check
+advisories ok, bans ok, licenses ok, sources ok
+### gate `deny`
+
+| item | verdict |
+|---|---|
+| status | PASS (0 s) |
+| line 1 | advisories, bans, licenses, sources: ok |
+
+
+
+=== [3] vet ===
+$ /work/home/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/cargo vet --locked
+Vetting Succeeded (241 fully audited, 2 partially audited, 322 exempted)
+### gate `vet`
+
+| item | verdict |
+|---|---|
+| status | PASS (1 s) |
+| line 1 | secmp-crypto/secmp-proto normal closure (x86_64-unknown-linux-gnu, x86_64-pc-windows-msvc, aarch64-apple-darwin): 60 external crates, 0 exempted |
+| line 2 | tracked exemptions elsewhere: 328 |
+
+
+
+=== [3] audit ===
+$ /work/home/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/cargo audit --deny warnings --ignore RUSTSEC-2026-0173 --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2024-0436 --ignore RUSTSEC-2025-0141 --ignore RUSTSEC-2026-0387
+### gate `audit`
+
+| item | verdict |
+|---|---|
+| status | PASS (1 s) |
+| line 1 | RustSec: no advisories (warnings denied) |
+| line 2 | ignored with an ADR: RUSTSEC-2026-0173, RUSTSEC-2023-0071, RUSTSEC-2024-0436, RUSTSEC-2025-0141, RUSTSEC-2026-0387 |
+
+
+
+=== [3] cooldown ===
+### gate `cooldown`
+
+| item | verdict |
+|---|---|
+| status | PASS (26 s) |
+| line 1 | 567 registry packages (Cargo.lock, fuzz/Cargo.lock), all ≥ 7 days old or excepted (ADR-015 Am. 2) |
+| line 2 | youngest: ctutils 0.4.4, 7 days |
+
+
+
+=== [4] nextest ===
+$ -u SECMP_PROPTEST_SEED /work/home/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/cargo nextest run --workspace --locked --no-fail-fast -E 'not binary(=harness)'
+$ -u SECMP_PROPTEST_SEED /work/home/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/cargo nextest run --locked --no-fail-fast --package secmp-proto
+### gate `nextest`
+
+| item | verdict |
+|---|---|
+| status | PASS (18 s) |
+| line 1 | cargo nextest run --workspace |
+| line 2 | cargo nextest run --package secmp-proto (non-kat) |
+| line 3 | both with SECMP_PROPTEST_SEED removed (every property with its DEFAULT_SEED, the CI run seed pass is in the kat step) |
+
+
+
+=== [4] doctest ===
+$ /work/home/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/cargo test --workspace --locked --doc
+
+running 1 test
+test crates/secmp-client-core/src/scheduler/types.rs - scheduler::types::PreparedCell (line 168) - compile fail ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 1 test
+test crates/secmp-proto/src/prekeys.rs - prekeys::invitation_record_copies_only_under_kat (line 350) ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 4 tests
+test crates/secmp-proto/src/hx/mod.rs - hx::HandshakeCells (line 46) - compile fail ... ok
+test crates/secmp-proto/src/wire/cell.rs - wire::cell::wire_bodies_are_not_clone_outside_tests (line 300) - compile fail ... ok
+test crates/secmp-proto/src/wire/cell.rs - wire::cell::Cell (line 34) - compile fail ... ok
+test crates/secmp-proto/src/wire/cell.rs - wire::cell::wire_bodies_are_not_clone_outside_tests (line 283) - compile fail ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+all doctests ran in 0.25s; merged doctests compilation took 0.19s
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 2 tests
+test crates/secmp-transport/src/caps.rs - caps::SendCap (line 155) - compile fail ... ok
+test crates/secmp-transport/src/caps.rs - caps::RecvCap (line 78) - compile fail ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+
+### gate `doctest`
+
+| item | verdict |
+|---|---|
+| status | PASS (1 s) |
+| line 1 | cargo test --doc |
+
+
+
+=== [4] hello ===
+  hello-world: secmp-relay 0.0.0 (M5)
+  hello-world: secmp-cli 0.0.0 (M0 skeleton: no functionality)
+  hello-world: secmp-ui 0.0.0 (M0 skeleton: no functionality)
+### gate `hello`
+
+| item | verdict |
+|---|---|
+| status | PASS (0 s) |
+| line 1 | secmp-relay 0.0.0 (M5) \| secmp-cli 0.0.0 (M0 skeleton: no functionality) \| secmp-ui 0.0.0 (M0 skeleton: no functionality) |
+
+
+
+=== [5] kat ===
+$ -u SECMP_PROPTEST_SEED /work/home/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/cargo nextest run --locked --package secmp-client-core --features kat
+$ -u SECMP_PROPTEST_SEED /work/home/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/cargo nextest run --locked --package secmp-crypto --features kat
+$ -u SECMP_PROPTEST_SEED /work/home/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/cargo nextest run --locked --package secmp-proto --features kat
+$ -u SECMP_PROPTEST_SEED /work/home/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/cargo nextest run --locked --package secmp-relay --features kat
+$ -u SECMP_PROPTEST_SEED /work/home/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/cargo nextest run --locked --package secmp-store --features kat
+$ -u SECMP_PROPTEST_SEED /work/home/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/cargo nextest run --locked --package secmp-testkit --features kat -E 'not binary(=harness)'
+$ -u SECMP_PROPTEST_SEED LIBCRUX_DISABLE_SIMD128=1 LIBCRUX_DISABLE_SIMD256=1 CARGO_TARGET_DIR=/work/SecMPro/target/kat-portable /work/home/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/cargo nextest run --locked --package secmp-crypto --features kat --test kat_mlkem --test vectors
+$ -u SECMP_PROPTEST_SEED LIBCRUX_DISABLE_SIMD128=1 LIBCRUX_DISABLE_SIMD256=1 CARGO_TARGET_DIR=/work/SecMPro/target/kat-portable /work/home/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/cargo nextest run --locked --package secmp-proto --features kat --test tr_vectors --test hx --test link
+### gate `kat`
+
+| item | verdict |
+|---|---|
+| status | PASS (106 s) |
+| line 1 | KAT/differential packages: secmp-client-core, secmp-crypto, secmp-proto, secmp-relay, secmp-store, secmp-testkit (expected set matches) |
+| line 2 | ML-KEM KATs and frozen vectors (M1 suites, tr, hx, link) also with libcrux's portable backend |
+| line 3 | property tests with their DEFAULT_SEED only (SECMP_PROPTEST_SEED removed, no CI run seed outside GitHub Actions) |
+
+
+
+=== [5] harness ===
+$ -u SECMP_PROPTEST_SEED /work/home/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/cargo nextest run --locked --package secmp-testkit --features kat -E binary(=harness)
+### gate `harness`
+
+| item | verdict |
+|---|---|
+| status | PASS (978 s) |
+| line 1 | secmp-testkit harness binary |
+| line 2 | property tests with their DEFAULT_SEED only (SECMP_PROPTEST_SEED removed, no CI run seed outside GitHub Actions) |
+
+
+
+=== ci-fast summary (host x86_64-unknown-linux-gnu, strict: false) ===
+   1 fmt             PASS          1s  rustfmt: no changes
+   2 clippy          PASS          2s  clippy --all-features -D warnings on x86_64-unknown-linux-gnu (12 crates)
+   2 policy          PASS          1s  unsafe-attrs: 43 target roots forbid, 2 sys library roots allow, 1 ADR-038 bench root allows (crates/secmp-testkit/benches/ct.rs), 2 secmp-ui roots deny, 2 secmp-ui files without `unsafe`; lints-table: 12 manifests; lint-allows: 157 relaxing attributes (all sanctioned); build-scripts: 12 crates, none; spdx: 443 files; relay-events: 7 names as expect::RELAY_TRACE_ALLOW; normal-deps: 6 crates within expect::NORMAL_DEPENDENCY_ALLOW; secmp-crypto/secmp-proto normal closure (x86_64-unknown-linux-gnu, x86_64-pc-windows-msvc, aarch64-apple-darwin): 60 external crates, 0 exempted; tracked exemptions elsewhere: 328; workflows: 5 files, triggers/SHA pins/flow style/continue-on-error/permissions ok; pinned jobs (linux-fast, windows-native, xwin-cross, linux-full, ct, mutants-shard, mutants, proverif-hx, proverif-link, kani, fuzz, harness, ci-verdict) only in ci.yml, no dispatch there, job conditions, needs, defaults/shell, gate run lines and budgets (also of the dispatch twins) as pinned, delegations mapped (accident guard, not tamper-proof); large-files: 3086 tracked files, none over 2 MiB except 5 allowlisted (hard cap 8 MiB); mutants-profile: mutants-harness starts m0_early::* first (priority 100)
+   3 deny            PASS          0s  advisories, bans, licenses, sources: ok
+   3 vet             PASS          1s  secmp-crypto/secmp-proto normal closure (x86_64-unknown-linux-gnu, x86_64-pc-windows-msvc, aarch64-apple-darwin): 60 external crates, 0 exempted; tracked exemptions elsewhere: 328
+   3 audit           PASS          1s  RustSec: no advisories (warnings denied); ignored with an ADR: RUSTSEC-2026-0173, RUSTSEC-2023-0071, RUSTSEC-2024-0436, RUSTSEC-2025-0141, RUSTSEC-2026-0387
+   3 cooldown        PASS         26s  567 registry packages (Cargo.lock, fuzz/Cargo.lock), all ≥ 7 days old or excepted (ADR-015 Am. 2); youngest: ctutils 0.4.4, 7 days
+   4 nextest         PASS         18s  cargo nextest run --workspace; cargo nextest run --package secmp-proto (non-kat); both with SECMP_PROPTEST_SEED removed (every property with its DEFAULT_SEED, the CI run seed pass is in the kat step)
+   4 doctest         PASS          1s  cargo test --doc
+   4 hello           PASS          0s  secmp-relay 0.0.0 (M5) | secmp-cli 0.0.0 (M0 skeleton: no functionality) | secmp-ui 0.0.0 (M0 skeleton: no functionality)
+   5 kat             PASS        106s  KAT/differential packages: secmp-client-core, secmp-crypto, secmp-proto, secmp-relay, secmp-store, secmp-testkit (expected set matches); ML-KEM KATs and frozen vectors (M1 suites, tr, hx, link) also with libcrux's portable backend; property tests with their DEFAULT_SEED only (SECMP_PROPTEST_SEED removed, no CI run seed outside GitHub Actions)
+   5 harness         PASS        978s  secmp-testkit harness binary; property tests with their DEFAULT_SEED only (SECMP_PROPTEST_SEED removed, no CI run seed outside GitHub Actions)
+ci-fast: PASS

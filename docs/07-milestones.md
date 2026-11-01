@@ -130,7 +130,7 @@ v1.1: M16 → M17 → M18 → M19 → M20 (release)
 
 **Review focus.** No code path where activity influences timing (grep `Instant::now`, conditionals on outbox state outside `prepare`); isolation tokens per link; exactly one TLS KX group; Tor never bypassed silently.
 
-**Status (2026-10-09).** Started 2026-10-09 on branch `m06-transport` from `main` at `6300b653d0f1f176b7a31470910d5214fa87b9cc`; plan, test specification (`docs/reviews/M06-planning/TEST-SPEC-M6.md`, 177 rows), OPEN-M6 decisions and ADR-051 (Proposed) were committed first. Report: `docs/reviews/M06-report.md`. Phase A (Sonnet) in progress; Phase B waits for the owner's ADR-051 Part 2 approval. **Phase C1 closed @ `25625bc` (PR run #165 = 39660191651, all jobs green; local `ci-full` evidence at `c570d98`, later commits covered by run #165); Phase C closed @ `cbf0284`; ⚙ rows TC-07, TC-08, AI-07 Tor part, MR-04, MR-05 VM part, TOR-10, X-10 open (owner-operated after merge)** (BRIEF M6-C1: ledger bound and Kani K-C1…K-C6, mutation survivors, ADR-047 Amendments 6/7, `ci-verdict`; BRIEF M6-C2 follows; M6 merges only after C2).
+**Status (2026-10-09).** Started 2026-10-09 on branch `m06-transport` from `main` at `6300b653d0f1f176b7a31470910d5214fa87b9cc`; plan, test specification (`docs/reviews/M06-planning/TEST-SPEC-M6.md`, 177 rows), OPEN-M6 decisions and ADR-051 (Proposed) were committed first. Report: `docs/reviews/M06-report.md`. Phase A (Sonnet) in progress; Phase B waits for the owner's ADR-051 Part 2 approval. **Phase C1 closed @ `25625bc` (PR run #165 = 39660191651, all jobs green; local `ci-full` evidence at `c570d98`, later commits covered by run #165); Phase C closed @ `cbf0284`; ⚙ rows TC-07, TC-08, AI-07 Tor part, MR-04, MR-05 VM part, TOR-10, X-10 open (owner-operated after merge)** (BRIEF M6-C1: ledger bound and Kani K-C1…K-C6, mutation survivors, ADR-047 Amendments 6/7, `ci-verdict`; BRIEF M6-C2 follows; M6 merges only after C2). **Merged 2026-10-27 (#9, `bf55099`); review: `docs/reviews/M06-review.md` (acceptance record).**
 
 ---
 
@@ -147,6 +147,8 @@ v1.1: M16 → M17 → M18 → M19 → M20 (release)
 **Review focus.** Persist-before-send/ack enforced by construction; OPK deletion; unverified contacts cannot receive view-once messages; no identifiers reach `secmp-transport`; backup contains no ratchet material.
 
 **Obligation from the M4 review (F-M7, C-12).** The transactional store: `PrekeyStore::commit_accept` of the encrypted store stages the OPK deletion and the record's consumption in one store transaction, which the client commits together with the whole `hx::Accepted` (`state`, `peer`, `routes`, `profile`) before it acknowledges any cell of the invitation queue and before it retires that queue; a commit that cannot be made durable is `Error::Unavailable` and changes nothing (R-26). The client retains at most the newest 24 unclassified cells of an invitation queue between `accept` calls, and a complete group is spent after one `accept` (RT-1).
+
+**Status (2026-10-27).** Started 2026-10-27 on branch `m07-client-core` from `main` at `bf550999fb2c7771153863f1da2f19adb5a677b5`; plan, test specification (`docs/reviews/M07-planning/TEST-SPEC-M7.md`, 178 rows), OPEN-M7 decisions and ADR-053, ADR-054, ADR-055 (Proposed) were committed first. Report: `docs/reviews/M07-report.md`. Phase A (Opus) in progress; A-2 waits for the A0 report, "ADR-055 accepted" and the owner's vet records; A-4 waits for "ADR-053 accepted".
 
 ---
 

@@ -446,13 +446,11 @@ fn add_attacker(sim: &mut turmoil::Sim<'_>, flood: Flood) {
     });
 }
 
-/// Each teardown of a client with the delay until the connect that follows it: the teardowns, in time order, are matched
-/// to distinct later connects of scheduled links, each to the earliest one not taken. A `LinkId` names one connection
-/// and the events do not say which link a connect renews, so this matching never charges one connect to two teardowns.
-/// What it proves: the greedy matching is a pooled bound — if there is a matching in which every delay is within `b`, the
-/// reported maximum is `<= b` — and every teardown has a reconnect. It does not say which connect renews which logical
-/// link (the delay it reports can be shorter than that link's own reconnect and longer than another's), so it is not a
-/// per-link bound; see [`check_reconnects`].
+/// Each teardown of a client with the delay until the connect that renews its logical link (FIN5b-1; M7 B-SC SC-04:
+/// `LinkEvent::TornDown` and `Purpose::Link` carry the logical link id): the teardowns, in time order, are matched to the
+/// later connects of the same logical link, each to the earliest one not taken. On one logical link teardowns and
+/// connects alternate, so this is the link's own reconnect; a connect of another link never counts (a swap of two links'
+/// reconnects inside the pooled bound is a finding). See [`check_reconnects`].
 pub fn reconnect_delays(
     events: &[(u64, secmp_client_core::scheduler::types::LinkEvent)],
     connects: &[(u64, secmp_client_core::scheduler::run::Purpose)],
@@ -462,17 +460,23 @@ pub fn reconnect_delays(
     Option<u64>,
 )> {
     use secmp_client_core::scheduler::run::Purpose;
-    use secmp_client_core::scheduler::types::LinkEvent;
-    let mut conn: Vec<u64> = connects
+    use secmp_client_core::scheduler::types::{LinkEvent, LogicalLinkId};
+    let mut conn: Vec<(u64, LogicalLinkId)> = connects
         .iter()
-        .filter(|(_, p)| matches!(p, Purpose::Link(_)))
-        .map(|(t, _)| *t)
+        .filter_map(|(t, p)| match p {
+            Purpose::Link(_, logical) => Some((*t, *logical)),
+            Purpose::Control(_) => None,
+        })
         .collect();
     conn.sort_unstable();
-    let mut downs: Vec<(u64, secmp_client_core::scheduler::types::Reason)> = events
+    let mut downs: Vec<(
+        u64,
+        LogicalLinkId,
+        secmp_client_core::scheduler::types::Reason,
+    )> = events
         .iter()
         .filter_map(|(t, e)| match e {
-            LinkEvent::TornDown(_, why) => Some((*t, *why)),
+            LinkEvent::TornDown(_, logical, why) => Some((*t, *logical, *why)),
             _ => None,
         })
         .collect();
@@ -480,12 +484,11 @@ pub fn reconnect_delays(
     let mut taken = vec![false; conn.len()];
     downs
         .into_iter()
-        .map(|(t, why)| {
-            let next = conn
-                .iter()
-                .enumerate()
-                .find(|(i, c)| **c >= t && !taken.get(*i).copied().unwrap_or(true));
-            let delay = next.map(|(i, c)| {
+        .map(|(t, logical, why)| {
+            let next = conn.iter().enumerate().find(|(i, (c, l))| {
+                *l == logical && *c >= t && !taken.get(*i).copied().unwrap_or(true)
+            });
+            let delay = next.map(|(i, (c, _))| {
                 if let Some(slot) = taken.get_mut(i) {
                     *slot = true;
                 }
@@ -497,13 +500,11 @@ pub fn reconnect_delays(
 }
 
 /// The reconnect oracle (LR-02, SIM-01/SIM-07): for every teardown of a scheduled link whose reason has a bound
-/// (`bound` returns `Some(ms)`), the pooled matching of [`reconnect_delays`] has a reconnect within `bound + 1 000 ms`,
-/// unless the teardown is in the last `bound + 1 000 ms` before `end_ms` (the run ended before it could reconnect).
-/// Returns the number of teardowns checked. FIN5b-1: what this proves is the **pooled** bound — there is a matching of
-/// teardowns to distinct later connects in which every delay is within its bound, and every checked teardown has a
-/// reconnect (a teardown that never reconnects is a failure). It does not say which connect renews which logical link:
-/// `LinkEvent`/`Purpose::Link` carry the connection's `LinkId`, not a logical link id, so per-link matching needs that id
-/// in the product types (M7). LR-02 per logical link stays proven by `m6_reconnect::reconnect_jitter_after_failure`.
+/// (`bound` returns `Some(ms)`), the matching of [`reconnect_delays`] has a reconnect **of the same logical link** within
+/// `bound + 1 000 ms`, unless the teardown is in the last `bound + 1 000 ms` before `end_ms` (the run ended before it could
+/// reconnect). Returns the number of teardowns checked. FIN5b-1 (M6: a pooled bound over all connects) is now per logical
+/// link (M7 B-SC SC-04, the logical link id in `LinkEvent` and `Purpose::Link`): every checked teardown has its own link's
+/// reconnect within its bound (a teardown that never reconnects is a failure).
 pub fn check_reconnects(
     events: &[(u64, secmp_client_core::scheduler::types::LinkEvent)],
     connects: &[(u64, secmp_client_core::scheduler::run::Purpose)],
@@ -531,33 +532,44 @@ pub fn check_reconnects(
     Ok(checked)
 }
 
-const ORACLE_BOUND: u64 = 100;
+pub const ORACLE_BOUND: u64 = 100;
 
 /// The end of the fixture runs (ms), far beyond `ORACLE_BOUND + 1 000`.
-const ORACLE_END: u64 = 10_000;
+pub const ORACLE_END: u64 = 10_000;
 
-fn oracle_bound(why: secmp_client_core::scheduler::types::Reason) -> Option<u64> {
+pub fn oracle_bound(why: secmp_client_core::scheduler::types::Reason) -> Option<u64> {
     (why != secmp_client_core::scheduler::types::Reason::ModeChange).then_some(ORACLE_BOUND)
 }
 
-fn oracle_down(t: u64, id: u64) -> (u64, secmp_client_core::scheduler::types::LinkEvent) {
-    use secmp_client_core::scheduler::types::{LinkEvent, LinkId, Reason};
-    (t, LinkEvent::TornDown(LinkId(id), Reason::Closed))
-}
-
-fn oracle_connect(t: u64, id: u64) -> (u64, secmp_client_core::scheduler::run::Purpose) {
-    use secmp_client_core::scheduler::run::Purpose;
+/// A teardown at `t` of connection `id` of logical link `logical`.
+pub fn oracle_down(
+    t: u64,
+    id: u64,
+    logical: u64,
+) -> (u64, secmp_client_core::scheduler::types::LinkEvent) {
+    use secmp_client_core::scheduler::types::{LinkEvent, LinkId, LogicalLinkId, Reason};
     (
         t,
-        Purpose::Link(secmp_client_core::scheduler::types::LinkId(id)),
+        LinkEvent::TornDown(LinkId(id), LogicalLinkId(logical), Reason::Closed),
     )
 }
 
-/// Positive control: two teardowns, each reconnected within the bound.
+/// A connect at `t` of connection `id` of logical link `logical`.
+pub fn oracle_connect(
+    t: u64,
+    id: u64,
+    logical: u64,
+) -> (u64, secmp_client_core::scheduler::run::Purpose) {
+    use secmp_client_core::scheduler::run::Purpose;
+    use secmp_client_core::scheduler::types::{LinkId, LogicalLinkId};
+    (t, Purpose::Link(LinkId(id), LogicalLinkId(logical)))
+}
+
+/// Positive control: two teardowns (logical links 0 and 1), each reconnected within the bound.
 #[test]
 fn oracle_accepts_reconnects_within_the_bound() {
-    let events = [oracle_down(0, 1), oracle_down(10, 2)];
-    let connects = [oracle_connect(50, 3), oracle_connect(60, 4)];
+    let events = [oracle_down(0, 1, 0), oracle_down(10, 2, 1)];
+    let connects = [oracle_connect(50, 3, 0), oracle_connect(60, 4, 1)];
     assert_eq!(
         check_reconnects(&events, &connects, ORACLE_END, oracle_bound),
         Ok(2)
@@ -567,28 +579,28 @@ fn oracle_accepts_reconnects_within_the_bound() {
 /// FIN5b-1: a teardown that never reconnects fails (it used to be skipped by `if let Some(delay)`).
 #[test]
 fn oracle_rejects_a_teardown_without_reconnect() {
-    let events = [oracle_down(0, 1), oracle_down(10, 2)];
-    let connects = [oracle_connect(50, 3)];
+    let events = [oracle_down(0, 1, 0), oracle_down(10, 2, 1)];
+    let connects = [oracle_connect(50, 3, 0)];
     assert!(check_reconnects(&events, &connects, ORACLE_END, oracle_bound).is_err());
 }
 
-/// FIN5b-1: teardowns of A (t = 0) and B (t = 10); B reconnects at 500, A only at 2 500 (crossed). No matching of the
-/// two connects to the two teardowns keeps both delays within the bound + 1 000 ms (the best has 2 490 ms), so the
-/// pooled bound breaks and the oracle rejects, though the earlier connect alone would have been in time.
+/// FIN5b-1: teardowns of A (t = 0) and B (t = 10); B reconnects at 500, A only at 2 500 (crossed). A's own reconnect is
+/// 2 500 ms after its teardown, beyond the bound + 1 000 ms, so the oracle rejects, though the earlier connect (B's) alone
+/// would have been in time (M7 B-SC: matched per logical link).
 #[test]
 fn oracle_rejects_a_crossed_reconnect_that_breaks_the_pooled_bound() {
-    let events = [oracle_down(0, 1), oracle_down(10, 2)];
-    let connects = [oracle_connect(500, 3), oracle_connect(2_500, 4)];
+    let events = [oracle_down(0, 1, 0), oracle_down(10, 2, 1)];
+    let connects = [oracle_connect(500, 3, 1), oracle_connect(2_500, 4, 0)];
     let e = check_reconnects(&events, &connects, ORACLE_END, oracle_bound).unwrap_err();
-    assert!(e.contains("2490 ms"), "{e}");
+    assert!(e.contains("2500 ms"), "{e}");
 }
 
 /// A teardown in the last `bound + 1 000 ms` of the run has not had the time to reconnect and is not a finding; it is
 /// not counted as checked either (the `teardowns >= 10` of SIM-01 counts checked teardowns only).
 #[test]
 fn oracle_excuses_a_teardown_in_the_last_bound_window() {
-    let events = [oracle_down(0, 1), oracle_down(ORACLE_END - 500, 2)];
-    let connects = [oracle_connect(50, 3)];
+    let events = [oracle_down(0, 1, 0), oracle_down(ORACLE_END - 500, 2, 1)];
+    let connects = [oracle_connect(50, 3, 0)];
     assert_eq!(
         check_reconnects(&events, &connects, ORACLE_END, oracle_bound),
         Ok(1)
@@ -600,10 +612,13 @@ fn oracle_excuses_a_teardown_in_the_last_bound_window() {
 #[test]
 fn oracle_window_edge_is_pinned_on_both_sides() {
     let window = ORACLE_BOUND + 1_000;
-    let connects = [oracle_connect(50, 3)];
-    let at_edge = [oracle_down(0, 1), oracle_down(ORACLE_END - window, 2)];
+    let connects = [oracle_connect(50, 3, 0)];
+    let at_edge = [oracle_down(0, 1, 0), oracle_down(ORACLE_END - window, 2, 1)];
     assert!(check_reconnects(&at_edge, &connects, ORACLE_END, oracle_bound).is_err());
-    let inside = [oracle_down(0, 1), oracle_down(ORACLE_END - window + 1, 2)];
+    let inside = [
+        oracle_down(0, 1, 0),
+        oracle_down(ORACLE_END - window + 1, 2, 1),
+    ];
     assert_eq!(
         check_reconnects(&inside, &connects, ORACLE_END, oracle_bound),
         Ok(1)

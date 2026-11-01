@@ -516,7 +516,9 @@ fn activity_independence_when_receiving() {
     }
 }
 
-/// AI-05: the timing randomness is drawn the same way with or without activity.
+/// AI-05: the timing randomness is drawn the same way with or without activity. Long form (6 h, 4 traces; about 70 s),
+/// left out of the per-mutant run (`expect::MUTANT_HARNESS_SKIP_TESTS`); its short form is
+/// `timing_draws_unmoved_by_one_hour_of_activity` (TEST-SPEC-M7 G7-09, OPEN-M7-19 B).
 #[test]
 fn timing_draws_independent_of_activity() {
     let hours = 6;
@@ -533,6 +535,36 @@ fn timing_draws_independent_of_activity() {
         let run = Rig::new(&sc, Params::default()).run(hours, Some(&act));
         assert_eq!(run.draws, idle.draws, "trace {trace}");
     }
+}
+
+/// AI-05, short form of `timing_draws_independent_of_activity` (TEST-SPEC-M7 G7-09, OPEN-M7-19 B): the same scenario
+/// over 1 h with one activity trace — the draws of the hour are taken and equal those of the idle run. Kept in the
+/// per-mutant run of the mutation gate.
+#[test]
+fn timing_draws_unmoved_by_one_hour_of_activity() {
+    let hours = 1;
+    let sc = Scenario {
+        mode: Mode::Strict,
+        contacts: vec![(10_000, 10_000), (20_000, 40_000)],
+        pool: true,
+        seed: 79,
+    };
+    let idle = Rig::new(&sc, Params::default()).run(hours, None);
+    assert!(idle.draws.len() == 1 && idle.draws.iter().all(|d| d.0 > 0 && d.1 > 0));
+    let act = activity(900, hours, 2);
+    // the long form asserts no send count; the short form's trace must not be empty (WEISUNG M7-A1b §3): at least 100
+    let sends = act
+        .events
+        .iter()
+        .filter(|(_, e)| matches!(e, Event::UserSend { .. }))
+        .count();
+    evidence(
+        "timing_draws_unmoved_by_one_hour_of_activity",
+        &format!("timing_draws_unmoved_by_one_hour_of_activity: {sends} user sends in the trace"),
+    );
+    assert!(sends >= 100, "{sends} user sends");
+    let run = Rig::new(&sc, Params::default()).run(hours, Some(&act));
+    assert_eq!(run.draws, idle.draws);
 }
 
 /// AI-06: the relay's answers carry no activity either — same length, sizes, times.

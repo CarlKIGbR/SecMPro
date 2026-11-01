@@ -221,7 +221,7 @@ impl<P: StreamProvider + 'static> TClient<P> {
                 .iter()
                 .find(|(_, _, i)| *i == iso)
                 .map(|(_, p, _)| match p {
-                    Purpose::Link(l) => l.0,
+                    Purpose::Link(l, _) => l.0,
                     Purpose::Control(op) => CONTROL_SLOT_BASE.saturating_add(op.0),
                 })
         };
@@ -400,6 +400,27 @@ impl<P: StreamProvider + 'static> TokioRig<P> {
         }
     }
 
+    /// Peer `contact` sends `count` one-cell messages (ids from `first`) straight into `x`'s receive queue on a set-up
+    /// link (M7 B-SC drain tests, SC-01: a backlog, or one cell per period).
+    pub(crate) async fn peer_cells(&mut self, contact: usize, first: u64, count: u64, now: u64) {
+        let Self { setup, peers, .. } = self;
+        let peer = peers.get_mut(contact).unwrap();
+        for n in first..first.saturating_add(count) {
+            peer.convs
+                .get_mut(0)
+                .unwrap()
+                .outbox_mut()
+                .enqueue(text(n.saturating_add(2_000_000), 20), now);
+        }
+        let mut t = setup.transport(&mut peer.pool).await;
+        for _ in 0..count {
+            let cell = CellSource::prepare_cell(&mut peer.convs, QueueId(0), now)
+                .unwrap()
+                .unwrap();
+            t.send(&peer.into_x, &cell.cell).await.unwrap();
+        }
+    }
+
     pub fn apply(&mut self, e: Event, now: u64, n: u64) {
         match e {
             Event::UserSend { contact, len } => {
@@ -464,7 +485,7 @@ impl<P: StreamProvider + 'static> TokioRig<P> {
             .events
             .iter()
             .filter_map(|(t, e)| match e {
-                secmp_client_core::scheduler::types::LinkEvent::Up(l) => Some((l.0, *t)),
+                secmp_client_core::scheduler::types::LinkEvent::Up(l, _) => Some((l.0, *t)),
                 _ => None,
             })
             .collect();

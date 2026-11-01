@@ -1,0 +1,22 @@
+libsqlite3-sys v0.37.0
+├── libsqlite3-sys feature "bundled"
+│   ├── rusqlite feature "bundled"
+│   └── libsqlite3-sys feature "bundled-sqlcipher"
+├── libsqlite3-sys feature "bundled-sqlcipher" (*)
+├── libsqlite3-sys feature "bundled-sqlcipher-vendored-openssl"
+│   └── rusqlite feature "bundled-sqlcipher-vendored-openssl"
+├── libsqlite3-sys feature "bundled_bindings"
+│   ├── rusqlite feature "modern_sqlite"
+│   └── libsqlite3-sys feature "bundled" (*)
+├── libsqlite3-sys feature "cc"
+│   └── libsqlite3-sys feature "bundled" (*)
+├── libsqlite3-sys feature "default"
+│   └── rusqlite v0.39.0
+├── libsqlite3-sys feature "min_sqlite_version_3_34_1"
+│   └── libsqlite3-sys feature "default" (*)
+├── libsqlite3-sys feature "openssl-sys"
+│   └── libsqlite3-sys feature "bundled-sqlcipher-vendored-openssl" (*)
+├── libsqlite3-sys feature "pkg-config"
+│   └── libsqlite3-sys feature "min_sqlite_version_3_34_1" (*)
+└── libsqlite3-sys feature "vcpkg"
+    └── libsqlite3-sys feature "min_sqlite_version_3_34_1" (*)

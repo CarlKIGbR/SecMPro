@@ -96,6 +96,13 @@ const FAST: &[Step] = &[
         id: "kat",
         run: gates::kat,
     },
+    // TEST-SPEC-M7 G7-07 (ADR-045 Amendment 12): the testkit `harness` binary, delegated by `linux-fast` and `linux-full`
+    // to the pinned job `harness`
+    Step {
+        num: "5",
+        id: "harness",
+        run: gates::harness,
+    },
 ];
 
 const FULL_EXTRA: &[Step] = &[

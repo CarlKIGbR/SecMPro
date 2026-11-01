@@ -397,3 +397,363 @@ fn skipped_is_canonical(skipped: &VecDeque<SkippedKey>) -> bool {
     }
     true
 }
+
+/// The length of one skipped entry of `RatchetStateV1`: `hk[32] ‖ n u32 ‖ mk[32]`.
+pub const SKIPPED_ENTRY_LEN: usize = ENTRY_LEN;
+
+/// The length of the key of a skipped entry inside the entry: `hk[32] ‖ n u32` (the entry's identity, spec §7.1).
+pub const SKIPPED_KEY_LEN: usize = sum(&[32, 4]);
+
+/// `RatchetStateV1` in the parts an incremental store keeps apart (CS-3.7 `docs/04:58`, `docs/02:102`; OPEN-M7-14 A):
+/// `fixed` holds every byte before `count`, `skipped` the entries `hk ‖ n ‖ mk` in insertion order. The layout is the
+/// frozen one: [`RatchetParts::to_bytes`] = `fixed ‖ count u16 ‖ entries` = [`RatchetState::to_bytes`].
+pub struct RatchetParts {
+    /// The fixed part (format byte through `pn`).
+    pub fixed: Zeroizing<Vec<u8>>,
+    /// The skipped entries, [`SKIPPED_ENTRY_LEN`] bytes each, in insertion order.
+    pub skipped: Vec<Zeroizing<Vec<u8>>>,
+}
+
+impl RatchetParts {
+    /// Split an encoding at its `count` (the lengths only: every check of a state is [`RatchetState::from_parts`]'s).
+    ///
+    /// # Errors
+    /// [`Error::Rejected`] if the bytes are not shaped as `RatchetStateV1` (format byte, presence bytes, lengths, `count`
+    /// ≤ 512, no trailing byte).
+    pub fn split(bytes: &[u8]) -> Result<Self> {
+        let mut r = Reader::new(bytes);
+        r.expect(FORMAT_V1)?;
+        r.take(HASH_LEN)?;
+        r.take(32)?;
+        r.take(32)?;
+        read_opt(&mut r, X25519_PK_LEN)?;
+        r.take(SEED_LEN)?;
+        read_opt(&mut r, MLKEM768_EK_LEN)?;
+        read_opt(&mut r, MLKEM768_CT_LEN)?;
+        read_opt(&mut r, MLKEM768_CT_LEN)?;
+        for _ in 0..6 {
+            read_opt(&mut r, 32)?;
+        }
+        r.u32()?;
+        r.u32()?;
+        r.u32()?;
+        let fixed_len = bytes
+            .len()
+            .checked_sub(r.rest().len())
+            .ok_or(Error::Rejected)?;
+        let mut r = Reader::new(bytes.get(fixed_len..).ok_or(Error::Rejected)?);
+        let count = usize::from(r.u16()?);
+        if count > MAX_SKIPPED {
+            return Err(Error::Rejected);
+        }
+        let mut skipped = Vec::with_capacity(count);
+        for _ in 0..count {
+            skipped.push(Zeroizing::new(r.take(SKIPPED_ENTRY_LEN)?.to_vec()));
+        }
+        r.finish()?;
+        Ok(Self {
+            fixed: Zeroizing::new(bytes.get(..fixed_len).ok_or(Error::Rejected)?.to_vec()),
+            skipped,
+        })
+    }
+
+    /// `fixed ‖ count u16 ‖ entries`.
+    ///
+    /// # Errors
+    /// [`Error::Rejected`] if there are more than 512 entries or an entry is not [`SKIPPED_ENTRY_LEN`] bytes.
+    pub fn to_bytes(&self) -> Result<Zeroizing<Vec<u8>>> {
+        if self.skipped.len() > MAX_SKIPPED
+            || self.skipped.iter().any(|e| e.len() != SKIPPED_ENTRY_LEN)
+        {
+            return Err(Error::Rejected);
+        }
+        let mut w = Writer::with_capacity(RatchetState::MAX_ENCODED_LEN);
+        w.bytes(&self.fixed);
+        w.u16(u16::try_from(self.skipped.len()).map_err(|_| Error::Rejected)?);
+        for e in &self.skipped {
+            w.bytes(e);
+        }
+        Ok(w.into_bytes())
+    }
+}
+
+impl RatchetState {
+    /// The state in its parts ([`RatchetParts`]): the encoding `RatchetStateV1`, split at `count`.
+    ///
+    /// # Errors
+    /// As [`RatchetState::to_bytes`].
+    pub fn to_parts(&self) -> Result<RatchetParts> {
+        RatchetParts::split(&self.to_bytes()?)
+    }
+
+    /// The state from its parts: [`RatchetState::from_bytes`] of [`RatchetParts::to_bytes`] (every check of the decoder).
+    ///
+    /// # Errors
+    /// As [`RatchetState::from_bytes`].
+    pub fn from_parts(parts: &RatchetParts) -> Result<Self> {
+        Self::from_bytes(&parts.to_bytes()?)
+    }
+}
+
+/// `StateDigestV1` of the `tr` suite, parsed from `RatchetStateV1` at the documented offsets (shared with the replay test
+/// `tests/tr_vectors.rs` and the generator; G7-18).
+#[cfg(all(test, feature = "kat"))]
+#[path = "../../tests/common/tr_digest.rs"]
+mod tr_digest;
+
+#[cfg(test)]
+mod tests {
+    // The replay needs the derandomised entry points (feature `kat`), so the test is gated inside (a module under
+    // `cfg(all(test, feature))` is compiled out of the mutation gate's first run); it returns `Result` (no `unwrap`
+    // allowance in a crate's own test module).
+
+    #[cfg(feature = "kat")]
+    use super::*;
+    #[cfg(feature = "kat")]
+    use crate::tr::FixedEntropy;
+    #[cfg(feature = "kat")]
+    use serde_json::Value;
+
+    #[cfg(feature = "kat")]
+    type R<T> = core::result::Result<T, String>;
+
+    #[cfg(feature = "kat")]
+    fn f<T, E: core::fmt::Debug>(r: core::result::Result<T, E>, what: &str) -> R<T> {
+        r.map_err(|e| format!("{what}: {e:?}"))
+    }
+
+    #[cfg(feature = "kat")]
+    fn text<'a>(v: &'a Value, key: &str) -> R<&'a str> {
+        v.get(key)
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("no {key}"))
+    }
+
+    #[cfg(feature = "kat")]
+    fn bytes(v: &Value, key: &str) -> R<Vec<u8>> {
+        let s = text(v, key)?;
+        s.as_bytes()
+            .chunks(2)
+            .map(|p| {
+                let digits = core::str::from_utf8(p).map_err(|e| e.to_string())?;
+                u8::from_str_radix(digits, 16).map_err(|e| e.to_string())
+            })
+            .collect()
+    }
+
+    /// The `FixedEntropy` of the named inputs, in order.
+    #[cfg(feature = "kat")]
+    fn entropy(inputs: &Value, keys: &[&str]) -> R<FixedEntropy> {
+        let mut all = Vec::new();
+        for k in keys {
+            if inputs.get(*k).is_some() {
+                all.extend(bytes(inputs, k)?);
+            }
+        }
+        Ok(FixedEntropy::new(&all))
+    }
+
+    /// `st` through its parts: the parts are the encoding split at `count` (the frozen layout: fixed part, `count u16`,
+    /// entries of 68 bytes in insertion order), and the state rebuilt from them re-encodes byte-exact.
+    #[cfg(feature = "kat")]
+    fn through_parts(st: &RatchetState, id: &str) -> R<RatchetState> {
+        let bytes = f(st.to_bytes(), "to_bytes")?;
+        let parts = f(st.to_parts(), "to_parts")?;
+        let count = u16::try_from(parts.skipped.len()).map_err(|e| e.to_string())?;
+        let mut layout = parts.fixed.to_vec();
+        layout.extend_from_slice(&count.to_be_bytes());
+        for e in &parts.skipped {
+            assert_eq!(
+                e.len(),
+                68,
+                "{id}: a skipped entry is hk[32] ‖ n u32 ‖ mk[32]"
+            );
+            layout.extend_from_slice(e);
+        }
+        assert_eq!(
+            layout, *bytes,
+            "{id}: fixed ‖ count ‖ entries = RatchetStateV1"
+        );
+        assert_eq!(
+            *f(parts.to_bytes(), "join")?,
+            *bytes,
+            "{id}: RatchetParts::to_bytes"
+        );
+        let back = f(RatchetState::from_parts(&parts), "from_parts")?;
+        assert_eq!(
+            *f(back.to_bytes(), "to_bytes")?,
+            *bytes,
+            "{id}: re-encodes byte-exact"
+        );
+        Ok(back)
+    }
+
+    /// The typed Content of the vector's unpadded encoding.
+    #[cfg(feature = "kat")]
+    fn content_of(unpadded: &[u8]) -> R<crate::wire::cell::Content> {
+        use crate::Decode as _;
+        let padded = f(crate::codec::pad(unpadded, crate::sizes::BODY_LEN), "pad")?;
+        f(crate::wire::cell::Content::decode(&padded), "content")
+    }
+
+    /// The two states of the vector's `init` case (both through their parts).
+    #[cfg(feature = "kat")]
+    fn init_case(id: &str, inputs: &Value) -> R<(RatchetState, RatchetState)> {
+        use crate::keys::{MlKem768Ek, X25519Pk};
+        use secmp_crypto::{MlKem768Dk, SecretBytes, X25519Secret};
+        let sk = f(SecretBytes::<32>::from_slice(&bytes(inputs, "sk")?), "sk")?;
+        let sb: [u8; 32] = f(bytes(inputs, "sb")?.try_into(), "sb")?;
+        let spk = f(
+            X25519Secret::from_bytes(&bytes(inputs, "spk_dh_sk")?),
+            "spk",
+        )?;
+        let rpk = f(
+            MlKem768Dk::from_seed(&bytes(inputs, "rpk_kem_seed")?),
+            "rpk",
+        )?;
+        let spk_pub = f(X25519Pk::from_bytes(spk.public_key().as_bytes()), "spk pub")?;
+        let rpk_ek = f(
+            MlKem768Ek::from_bytes(rpk.encapsulation_key().as_bytes()),
+            "ek",
+        )?;
+        let mut e = entropy(inputs, &["dh_s_sk", "kem_s_seed", "m"])?;
+        let a = f(
+            RatchetState::init_initiator_with(&sk, &sb, &spk_pub, &rpk_ek, &mut e),
+            "A",
+        )?;
+        let b = f(RatchetState::init_responder(&sk, &sb, spk, rpk), "B")?;
+        Ok((through_parts(&a, id)?, through_parts(&b, id)?))
+    }
+
+    /// One event (`send`, `recv`, `advance`, `recv-reject`) of the vector on `st`; the cells sent are kept in `cells`.
+    #[cfg(feature = "kat")]
+    fn event(
+        st: RatchetState,
+        case: &Value,
+        cells: &mut std::collections::HashMap<String, Vec<u8>>,
+    ) -> R<RatchetState> {
+        let (id, op) = (text(case, "id")?, text(case, "op")?);
+        let inputs = case.get("inputs").ok_or("no inputs")?;
+        let outputs = case.get("outputs").ok_or("no outputs")?;
+        Ok(match op {
+            "send" => {
+                let content = content_of(&bytes(inputs, "content")?)?;
+                let mut e = entropy(inputs, &["hdr_nonce"])?;
+                let sealed = f(st.encrypt_with(&content, &mut e).map_err(|r| r.error()), id)?;
+                let (st, cell) = f(sealed.persist(|_| Ok::<(), ()>(())), id)?;
+                assert_eq!(
+                    cell.as_bytes().as_slice(),
+                    bytes(outputs, "cell")?.as_slice(),
+                    "{id} cell"
+                );
+                cells.insert(id.to_owned(), cell.as_bytes().to_vec());
+                st
+            }
+            "recv" => {
+                let cell = cells.get(text(case, "from")?).ok_or("no cell")?;
+                let mut e = entropy(inputs, &["dh_sk", "kem_seed", "m"])?;
+                let opened = f(st.decrypt_with(cell, &mut e).map_err(|r| r.error()), id)?;
+                f(opened.commit(|_| Ok::<(), ()>(())), id)?.0
+            }
+            "advance" => {
+                let mut st = st;
+                for nonce in bytes(inputs, "hdr_nonces")?.chunks(24) {
+                    let mut e = FixedEntropy::new(nonce);
+                    let sealed = f(
+                        st.encrypt_with(&crate::tr::content::dummy(), &mut e)
+                            .map_err(|r| r.error()),
+                        id,
+                    )?;
+                    st = f(sealed.persist(|_| Ok::<(), ()>(())), id)?.0;
+                }
+                st
+            }
+            _ => {
+                assert_eq!(op, "recv-reject", "{id}");
+                let mut e = entropy(inputs, &["dh_sk", "kem_seed", "m"])?;
+                match st.decrypt_with(&bytes(inputs, "cell")?, &mut e) {
+                    Ok(_) => return Err(format!("{id}: accepted")),
+                    Err(refused) => refused.into_state(),
+                }
+            }
+        })
+    }
+
+    /// G7-18 (TEST-SPEC-M7; OPEN-M7-14 A, decision 14): the 96 events of the frozen `vectors/tr.json` replayed with
+    /// every state of both parties passed through `to_parts`/`from_parts` before and after each event: each state's
+    /// `StateDigestV1` (parsed from `RatchetStateV1` at its documented offsets) is the frozen digest, its parts are the
+    /// encoding split at `count`, and the rebuilt state re-encodes byte-exact. The frozen file is read as compiled in.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn ratchet_state_v1_layout_unchanged() -> R<()> {
+        use super::tr_digest::digest;
+        let doc: Value = f(
+            serde_json::from_str(include_str!("../../../../vectors/tr.json")),
+            "tr.json",
+        )?;
+        assert_eq!(text(&doc, "suite")?, "tr");
+        let cases = doc
+            .get("cases")
+            .and_then(Value::as_array)
+            .ok_or("no cases")?;
+        assert_eq!(cases.len(), 96);
+        let (mut a, mut b): (Option<RatchetState>, Option<RatchetState>) = (None, None);
+        let mut cells = std::collections::HashMap::new();
+        let mut checked = 0_u32;
+        for case in cases {
+            let id = text(case, "id")?;
+            let outputs = case.get("outputs").ok_or("no outputs")?;
+            if text(case, "op")? == "init" {
+                let (sa, sb) = init_case(id, case.get("inputs").ok_or("no inputs")?)?;
+                assert_eq!(digest(&sa), text(outputs, "state_post_A")?, "{id} A");
+                assert_eq!(digest(&sb), text(outputs, "state_post_B")?, "{id} B");
+                (a, b) = (Some(sa), Some(sb));
+                checked = checked.saturating_add(2);
+                continue;
+            }
+            let slot = if text(case, "party")? == "A" {
+                &mut a
+            } else {
+                &mut b
+            };
+            let st = through_parts(&slot.take().ok_or("no state")?, id)?;
+            assert_eq!(digest(&st), text(outputs, "state_pre")?, "{id} pre");
+            let st = through_parts(&event(st, case, &mut cells)?, id)?;
+            assert_eq!(digest(&st), text(outputs, "state_post")?, "{id} post");
+            *slot = Some(st);
+            checked = checked.saturating_add(2);
+        }
+        assert_eq!(
+            checked, 192,
+            "every state before and after each of the 96 events"
+        );
+        Ok(())
+    }
+
+    /// V2-1 (killer of the A-3 mutant `state.rs:466:13`, `||` → `&&` in `RatchetParts::to_bytes`): one entry of the wrong
+    /// length is refused on its own (at most 512 entries), as are 513 entries of the right length.
+    #[test]
+    fn ratchet_parts_to_bytes_refuses_each_bad_shape() {
+        use crate::Error;
+        use crate::codec::Zeroizing;
+        use crate::tr::MAX_SKIPPED;
+        let parts = |entries: Vec<Vec<u8>>| super::RatchetParts {
+            fixed: Zeroizing::new(Vec::new()),
+            skipped: entries.into_iter().map(Zeroizing::new).collect(),
+        };
+        let short = parts(vec![vec![0_u8; super::SKIPPED_ENTRY_LEN - 1]]);
+        assert_eq!(
+            short.to_bytes().err(),
+            Some(Error::Rejected),
+            "an entry of 67 bytes"
+        );
+        let too_many = parts(vec![vec![0_u8; super::SKIPPED_ENTRY_LEN]; MAX_SKIPPED + 1]);
+        assert_eq!(
+            too_many.to_bytes().err(),
+            Some(Error::Rejected),
+            "513 entries"
+        );
+        let fine = parts(vec![vec![0_u8; super::SKIPPED_ENTRY_LEN]; MAX_SKIPPED]);
+        assert!(fine.to_bytes().is_ok(), "512 entries of 68 bytes");
+    }
+}

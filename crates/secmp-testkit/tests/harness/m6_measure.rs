@@ -58,7 +58,7 @@ fn check_model(rig: &Rig, end: u64) -> Vec<Conn> {
         let Some(up) = client
             .events
             .iter()
-            .find(|(_, e)| matches!(e, LinkEvent::Up(i) if i == id))
+            .find(|(_, e)| matches!(e, LinkEvent::Up(i, _) if i == id))
         else {
             continue;
         };
@@ -66,7 +66,7 @@ fn check_model(rig: &Rig, end: u64) -> Vec<Conn> {
         let down = client
             .events
             .iter()
-            .find(|(_, e)| matches!(e, LinkEvent::TornDown(i, _) if i == id))
+            .find(|(_, e)| matches!(e, LinkEvent::TornDown(i, _, _) if i == id))
             .map(|(t, _)| *t);
         let (stop, inclusive) = down.map_or((end, true), |t| (t, false));
         let n = ticks(up.0, stop, period, inclusive);

@@ -3,12 +3,12 @@
 //! of every delivered cell, response handling, queue re-creation (S-25…S-32; spec §7.5, §9.1, §9.3, §10.3).
 
 use secmp_client_core::scheduler::conversation::{Conversation, Conversations, counters};
-use secmp_client_core::scheduler::core::{LinkKind, Scheduler};
+use secmp_client_core::scheduler::core::{LinkKind, SchedError, Scheduler};
 use secmp_client_core::scheduler::outbox::{MemOutbox, MemPersist, MsgState, OutMessage, Outbox};
 use secmp_client_core::scheduler::params::{Mode, Params};
 use secmp_client_core::scheduler::types::{
-    Alert, CellSource, CellToken, ControlKind, LinkEvent, LinkId, Output, PreparedCell, QueueId,
-    Reason, RelayId, SendFailure, SourceError,
+    Alert, CellSource, CellToken, ControlKind, Delivered, FrameId, LinkEvent, LinkId, Output,
+    PreparedCell, QueueId, Reason, RelayId, SendFailure, SourceError,
 };
 use secmp_client_core::timing::TimingRng;
 use secmp_crypto::{SecretBytes, Zeroizing};
@@ -223,6 +223,7 @@ fn persist_before_send_order() {
                 assert!(seal > p[2], "sealed after persisted, written after sealed");
                 checked += 1;
             }
+            Audit::Decided(_) => {}
         }
     }
     assert!(checked > 10);
@@ -244,7 +245,7 @@ fn persist_before_send_order() {
         .client_ref(a)
         .events
         .iter()
-        .any(|(_, e)| matches!(e, LinkEvent::TornDown(_, Reason::Overrun)));
+        .any(|(_, e)| matches!(e, LinkEvent::TornDown(_, _, Reason::Overrun)));
     assert!(torn, "no frame was prepared: overrun");
     let state = sim
         .client_ref(a)
@@ -493,10 +494,10 @@ impl CellSource for Fake {
         }
         self.asked.push(q);
         self.next = self.next.saturating_add(1);
-        Ok(Some(PreparedCell {
-            cell: Cell::from_bytes(&[u8::try_from(self.next).unwrap(); 4096]).unwrap(),
-            token: CellToken(self.next),
-        }))
+        Ok(Some(PreparedCell::unpersisted_kat(
+            Cell::from_bytes(&[u8::try_from(self.next).unwrap(); 4096]).unwrap(),
+            CellToken(self.next),
+        )))
     }
     fn relayed(&mut self, _: QueueId, t: CellToken, id: u64) {
         self.calls.push(Call::Relayed(t.0, id));
@@ -513,8 +514,8 @@ impl CellSource for Fake {
     fn queue_lost(&mut self, _: QueueId) {
         self.calls.push(Call::Lost);
     }
-    fn deliver(&mut self, _: QueueId, _: u64, _: &Cell) -> Result<(), SourceError> {
-        Ok(())
+    fn deliver(&mut self, _: QueueId, _: u64, _: &Cell) -> Result<Delivered, SourceError> {
+        Ok(Delivered::Committed)
     }
 }
 
@@ -531,6 +532,8 @@ pub(crate) struct Rig {
     pub(crate) remake: Option<fn() -> Script>,
     /// Whether `apply` reports a written frame to the scheduler (`frame_written`); a test that holds its writer sets false.
     pub(crate) report_written: bool,
+    /// The id of the last frame written (FINAL3 (e)).
+    pub(crate) last_frame: Option<FrameId>,
 }
 
 impl Rig {
@@ -560,6 +563,7 @@ impl Rig {
             now: 0,
             remake: None,
             report_written: true,
+            last_frame: None,
         }
     }
 
@@ -588,11 +592,17 @@ impl Rig {
                     let more = self.sched.work(self.now, &mut self.src).unwrap();
                     queue.extend(more);
                 }
-                Output::Write { link, bytes, at } => {
+                Output::Write {
+                    link,
+                    bytes,
+                    at,
+                    frame,
+                } => {
                     self.writes.push(at);
+                    self.last_frame = Some(frame);
                     std::io::Write::write_all(&mut self.stream, &bytes).unwrap();
                     if self.report_written {
-                        self.sched.frame_written(link);
+                        self.sched.frame_written(link, frame).unwrap();
                     }
                     loop {
                         let mut frame = vec![0_u8; FRAME];
@@ -771,7 +781,7 @@ fn recv_noqueue_recreates_after_delay() {
         !sim.client_ref(a)
             .events
             .iter()
-            .any(|(_, e)| matches!(e, LinkEvent::TornDown(id, _) if id.0 == slot))
+            .any(|(_, e)| matches!(e, LinkEvent::TornDown(id, _, _) if id.0 == slot))
     );
     assert!(
         sim.client_ref(a).sched.acked(c.a_recv).unwrap() > 0,
@@ -859,7 +869,7 @@ fn s_overrun_prepare_late_by_one_ms_writes_nothing() {
     assert!(
         rig.events
             .iter()
-            .any(|e| matches!(e, LinkEvent::TornDown(_, Reason::Overrun)))
+            .any(|e| matches!(e, LinkEvent::TornDown(_, _, Reason::Overrun)))
     );
     assert_eq!(rig.sched.overruns(), 1);
     rig.poll_at(tick2 + 1);
@@ -910,7 +920,7 @@ fn s_late_driver_wake_beyond_jitter_is_overrun() {
     assert!(
         rig.events
             .iter()
-            .any(|e| matches!(e, LinkEvent::TornDown(_, Reason::Overrun)))
+            .any(|e| matches!(e, LinkEvent::TornDown(_, _, Reason::Overrun)))
     );
     assert_eq!(rig.sched.overruns(), 1);
 }
@@ -942,7 +952,7 @@ fn s_prepare_completing_after_tick_is_overrun_even_within_jitter() {
     assert!(
         rig.events
             .iter()
-            .any(|e| matches!(e, LinkEvent::TornDown(_, Reason::Overrun)))
+            .any(|e| matches!(e, LinkEvent::TornDown(_, _, Reason::Overrun)))
     );
     assert_eq!(rig.sched.overruns(), 1);
 
@@ -1098,7 +1108,7 @@ fn balanced_rr_does_not_advance_on_teardown_before_tick() {
     assert!(
         rig.events
             .iter()
-            .any(|e| matches!(e, LinkEvent::TornDown(_, Reason::Overrun)))
+            .any(|e| matches!(e, LinkEvent::TornDown(_, _, Reason::Overrun)))
     );
     // the link reconnects and builds the first frames of the new connection
     let mut t = 10_000;
@@ -1189,7 +1199,7 @@ fn remove_queue_refuses_unknown_and_ends_the_relay_link_with_its_last_queue() {
     assert!(
         rig.events
             .iter()
-            .any(|e| matches!(e, LinkEvent::TornDown(_, Reason::Closed))),
+            .any(|e| matches!(e, LinkEvent::TornDown(_, _, Reason::Closed))),
         "{:?}",
         rig.events
     );
@@ -1310,7 +1320,10 @@ fn frame_written_on_an_empty_ledger_is_counted() {
         "the rig's completion matched"
     );
     let link = rig.link.unwrap();
-    rig.sched.frame_written(link);
+    assert_eq!(
+        rig.sched.frame_written(link, rig.last_frame.unwrap()),
+        Err(SchedError::UnknownFrame)
+    );
     assert_eq!(rig.sched.unmatched_written(), 1);
     // `rr` is where the first completion left it (after Q0): the next SENDs go to Q1 and Q2
     rig.run_to(30_000);
@@ -1341,8 +1354,9 @@ fn frame_written_for_a_closed_link_is_not_counted() {
     let link = rig.link.unwrap();
     let outs = rig.sched.on_closed(link, 10_001).unwrap();
     rig.apply(outs);
-    rig.sched.frame_written(link);
-    rig.sched.frame_written(LinkId(9_999));
+    let frame = rig.last_frame.unwrap();
+    assert_eq!(rig.sched.frame_written(link, frame), Ok(()));
+    assert_eq!(rig.sched.frame_written(LinkId(9_999), frame), Ok(()));
     assert_eq!(rig.sched.unmatched_written(), 0);
 }
 
@@ -1364,7 +1378,7 @@ fn run_ledger_watch(rig: &mut Rig, periods: u64) -> (usize, Option<usize>) {
             && rig
                 .events
                 .iter()
-                .any(|e| matches!(e, LinkEvent::TornDown(_, Reason::InFlight)))
+                .any(|e| matches!(e, LinkEvent::TornDown(_, _, Reason::InFlight)))
         {
             first_teardown = Some(rig.writes.len());
         }

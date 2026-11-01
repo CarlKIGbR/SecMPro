@@ -19,8 +19,8 @@ use secmp_client_core::scheduler::core::{SchedError, Scheduler};
 use secmp_client_core::scheduler::outbox::{MemOutbox, MemPersist};
 use secmp_client_core::scheduler::params::{Mode, Params};
 use secmp_client_core::scheduler::types::{
-    CellSource, CellToken, ControlKind, IsolationKey, LinkEvent, LinkId, LinkKind, OpId, Output,
-    PreparedCell, QueueId, RelayId, SendFailure, SourceError,
+    CellSource, CellToken, ControlKind, Delivered, FrameId, IsolationKey, LinkEvent, LinkId,
+    LinkKind, OpId, Output, PreparedCell, QueueId, RelayId, SendFailure, SourceError,
 };
 use secmp_client_core::timing::TimingRng;
 use secmp_crypto::{Aead, HybridSigningKey, Label, Nonce24, SecretBytes};
@@ -209,6 +209,9 @@ pub enum Audit {
     Prepared([u64; 3]),
     /// Frames were written: `seal_calls` at that moment.
     Wrote(u64),
+    /// A received cell was decided and its decision committed: `(queue, cell_id, seal_calls)` right after (TEST-SPEC-M7
+    /// PC-04: the acknowledgements of the frames sealed later may cover it, none sealed earlier).
+    Decided([u64; 3]),
 }
 
 /// The cell source the scheduler sees: the conversations behind a gate that can hold preparation back and audits the
@@ -273,11 +276,24 @@ impl CellSource for Gate<'_> {
         self.convs.queue_lost(queue);
     }
 
-    fn deliver(&mut self, queue: QueueId, cell_id: u64, cell: &Cell) -> Result<(), SourceError> {
+    fn deliver(
+        &mut self,
+        queue: QueueId,
+        cell_id: u64,
+        cell: &Cell,
+    ) -> Result<Delivered, SourceError> {
         self.state.work_ms = self.state.work_ms.saturating_add(self.state.costs.receive);
         let n = self.state.delivered.entry((queue.0, cell_id)).or_insert(0);
         *n = n.saturating_add(1);
-        self.convs.deliver(queue, cell_id, cell)
+        let out = self.convs.deliver(queue, cell_id, cell);
+        if out.is_ok() {
+            self.state.audit.push(Audit::Decided([
+                u64::from(queue.0),
+                cell_id,
+                secmp_transport::channel::counters::seal_calls(),
+            ]));
+        }
+        out
     }
 }
 
@@ -702,8 +718,13 @@ impl VirtualDriver {
                     let more = self.connect(i, t, link);
                     queue.extend(more);
                 }
-                Output::Write { link, bytes, at } => {
-                    let more = self.write(i, t, at, link, &bytes);
+                Output::Write {
+                    link,
+                    bytes,
+                    at,
+                    frame,
+                } => {
+                    let more = self.write(i, t, at, (link, frame), &bytes);
                     queue.extend(more);
                 }
                 Output::Close { link } => {
@@ -808,7 +829,14 @@ impl VirtualDriver {
         }
     }
 
-    fn write(&mut self, i: usize, t: u64, at: u64, link: LinkId, bytes: &[u8]) -> Vec<Output> {
+    fn write(
+        &mut self,
+        i: usize,
+        t: u64,
+        at: u64,
+        (link, frame): (LinkId, FrameId),
+        bytes: &[u8],
+    ) -> Vec<Output> {
         // the entry carries the driver's own time of the write; the tick the core stamped is kept apart
         for _ in 0..bytes.len() / FRAME {
             self.trace_at(i, t, at, FRAME, Dir::C2R, link.0);
@@ -831,7 +859,14 @@ impl VirtualDriver {
         if ok {
             // the whole frame is on the stream: the core commits what the frame stood for (FIN-2)
             if self.report_written {
-                self.clients.get_mut(i).unwrap().sched.frame_written(link);
+                // reported once, in order, by its id (FINAL3 (e)): a trusted caller is never refused
+                let reported = self
+                    .clients
+                    .get_mut(i)
+                    .unwrap()
+                    .sched
+                    .frame_written(link, frame);
+                debug_assert_eq!(reported, Ok(()));
             }
             // the write is on the wire: the hook may kill the process here
             let c = self.clients.get_mut(i).unwrap();

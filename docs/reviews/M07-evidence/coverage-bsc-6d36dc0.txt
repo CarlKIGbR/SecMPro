@@ -1,0 +1,49 @@
+head 6d36dc0 (clean tree): cargo xtask step coverage (the per-test PASS lines dropped, ADR-052 summary form)
+
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.61s
+     Running `target/debug/xtask step coverage`
+
+=== [7] coverage ===
+$ /work/home/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/cargo llvm-cov nextest --workspace --locked --features secmp-relay/kat,secmp-testkit/harness --json --summary-only --ignore-filename-regex (/tests\.rs|/kani_proofs\.rs)$ --output-path /work/SecMPro/target/llvm-cov-summary.json
+info: cargo-llvm-cov currently setting cfg(coverage); you can opt-out it by passing --no-cfg-coverage
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 24.70s
+────────────
+ Nextest run ID 65fe6ea4-dbcc-4749-acdf-783f65984221 with nextest profile: default
+    Starting 1531 tests across 39 binaries
+────────────
+     Summary [ 924.174s] 1531 tests run: 1531 passed (22 slow), 0 skipped
+
+    Finished report saved to /work/SecMPro/target/llvm-cov-summary.json
+  coverage secmp-cli: 5/6 lines = 83.3 % (min 80 %)
+  coverage secmp-client-core: 5223/5498 lines = 95.0 % (min 90 %)
+  coverage secmp-crypto: 2783/2802 lines = 99.3 % (min 90 %)
+  coverage secmp-proto: 7018/7188 lines = 97.6 % (min 90 %)
+  coverage secmp-relay: 2846/2918 lines = 97.5 % (min 80 %)
+  coverage secmp-store: 4286/4447 lines = 96.4 % (min 90 %)
+  coverage secmp-sys-desktop: no code
+  coverage secmp-sys-mem: 242/254 lines = 95.3 % (min 80 %)
+  coverage secmp-testkit: 4321/4616 lines = 93.6 % (min 80 %)
+  coverage secmp-transport: 2271/2525 lines = 89.9 % (min 80 %)
+  coverage secmp-ui: 5/6 lines = 83.3 % (min 80 %)
+### gate `coverage`
+
+| item | verdict |
+|---|---|
+| status | PASS (951 s) |
+| line 1 | secmp-cli: 5/6 lines = 83.3 % (min 80 %) |
+| line 2 | secmp-client-core: 5223/5498 lines = 95.0 % (min 90 %) |
+| line 3 | secmp-crypto: 2783/2802 lines = 99.3 % (min 90 %) |
+| line 4 | secmp-proto: 7018/7188 lines = 97.6 % (min 90 %) |
+| line 5 | secmp-relay: 2846/2918 lines = 97.5 % (min 80 %) |
+| line 6 | secmp-store: 4286/4447 lines = 96.4 % (min 90 %) |
+| line 7 | secmp-sys-desktop: no code |
+| line 8 | secmp-sys-mem: 242/254 lines = 95.3 % (min 80 %) |
+| line 9 | secmp-testkit: 4321/4616 lines = 93.6 % (min 80 %) |
+| line 10 | secmp-transport: 2271/2525 lines = 89.9 % (min 80 %) |
+| line 11 | secmp-ui: 5/6 lines = 83.3 % (min 80 %) (xtask not measured) |
+
+
+
+=== step summary (host x86_64-unknown-linux-gnu, strict: false) ===
+   7 coverage        PASS        951s  secmp-cli: 5/6 lines = 83.3 % (min 80 %); secmp-client-core: 5223/5498 lines = 95.0 % (min 90 %); secmp-crypto: 2783/2802 lines = 99.3 % (min 90 %); secmp-proto: 7018/7188 lines = 97.6 % (min 90 %); secmp-relay: 2846/2918 lines = 97.5 % (min 80 %); secmp-store: 4286/4447 lines = 96.4 % (min 90 %); secmp-sys-desktop: no code; secmp-sys-mem: 242/254 lines = 95.3 % (min 80 %); secmp-testkit: 4321/4616 lines = 93.6 % (min 80 %); secmp-transport: 2271/2525 lines = 89.9 % (min 80 %); secmp-ui: 5/6 lines = 83.3 % (min 80 %) (xtask not measured)
+step: PASS

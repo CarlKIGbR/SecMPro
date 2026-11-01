@@ -1,0 +1,1811 @@
+# G7-06 evidence at b4b99db (WEISUNG M7-A3 §1)
+# cargo tree --locked -p secmp-client-core -e normal,build --target x86_64-unknown-linux-gnu --prefix none
+#   (the weisung's -e normal cannot show openssl-src, a build-dependency of openssl-sys; normal,build is used for both runs)
+# with CARGO_ENCODED_RUSTFLAGS='--cfg\x1fkani' (RUSTFLAGS removed): {'secmp-store v': 0, 'rusqlite v': 0, 'openssl-src v': 0}
+# negative control (both removed): {'secmp-store v': 1, 'rusqlite v': 2, 'openssl-src v': 1}
+# git diff --stat HEAD~1 HEAD -- Cargo.lock fuzz/Cargo.lock:
+ Cargo.lock      |  2 ++
+ fuzz/Cargo.lock | 33 +++++++++++++++++++++++++++++++++
+ 2 files changed, 35 insertions(+)
+# kani-codegen-g7-06-b4b99db.txt (cargo kani --package secmp-client-core --only-codegen): grep -c openssl-src = 0, grep -c -e secmp-store -e secmp_store = 0
+
+== tree with --cfg kani
+secmp-client-core v0.0.0 (/work/SecMPro/crates/secmp-client-core)
+secmp-crypto v0.0.0 (/work/SecMPro/crates/secmp-crypto)
+argon2 v0.6.0
+base64ct v1.8.3
+blake2 v0.11.0
+digest v0.11.3
+block-buffer v0.12.1
+hybrid-array v0.4.15
+ctutils v0.4.4
+cmov v0.5.4
+typenum v1.20.1
+zeroize v1.9.0
+zeroize v1.9.0
+crypto-common v0.2.2
+hybrid-array v0.4.15 (*)
+ctutils v0.4.4 (*)
+zeroize v1.9.0
+cpufeatures v0.3.1
+zeroize v1.9.0
+chacha20 v0.10.2
+cfg-if v1.0.5
+cipher v0.5.2
+block-buffer v0.12.1 (*)
+crypto-common v0.2.2 (*)
+inout v0.2.2
+hybrid-array v0.4.15 (*)
+cpufeatures v0.3.1
+zeroize v1.9.0
+chacha20poly1305 v0.11.0
+aead v0.6.1
+crypto-common v0.2.2 (*)
+inout v0.2.2 (*)
+chacha20 v0.10.2 (*)
+cipher v0.5.2 (*)
+poly1305 v0.9.1
+cpufeatures v0.3.1
+universal-hash v0.6.1
+crypto-common v0.2.2 (*)
+ctutils v0.4.4 (*)
+zeroize v1.9.0
+ed25519-dalek v3.0.0
+curve25519-dalek v5.0.0
+cfg-if v1.0.5
+cpufeatures v0.3.1
+curve25519-dalek-derive v0.1.1 (proc-macro)
+proc-macro2 v1.0.107
+unicode-ident v1.0.26
+quote v1.0.47
+proc-macro2 v1.0.107 (*)
+syn v2.0.119
+proc-macro2 v1.0.107 (*)
+quote v1.0.47 (*)
+unicode-ident v1.0.26
+digest v0.11.3 (*)
+subtle v2.6.1
+zeroize v1.9.0
+rustc_version v0.4.1
+semver v1.0.28
+ed25519 v3.0.0
+signature v3.0.0
+digest v0.11.3 (*)
+sha2 v0.11.0
+cfg-if v1.0.5
+cpufeatures v0.3.1
+digest v0.11.3 (*)
+subtle v2.6.1
+zeroize v1.9.0
+getrandom v0.4.3
+cfg-if v1.0.5
+libc v0.2.189
+hkdf v0.13.0
+hmac v0.13.0
+digest v0.11.3 (*)
+hmac v0.13.0 (*)
+libcrux-ml-kem v0.0.10
+hax-lib v0.3.7
+hax-lib-macros v0.3.7 (proc-macro)
+proc-macro2 v1.0.107 (*)
+quote v1.0.47 (*)
+syn v2.0.119 (*)
+libcrux-intrinsics v0.0.8
+hax-lib v0.3.7 (*)
+libcrux-platform v0.0.3
+libc v0.2.189
+libcrux-secrets v0.0.6
+hax-lib v0.3.7 (*)
+libcrux-sha3 v0.0.10
+hax-lib v0.3.7 (*)
+libcrux-intrinsics v0.0.8 (*)
+libcrux-platform v0.0.3 (*)
+libcrux-traits v0.0.8
+libcrux-secrets v0.0.6 (*)
+rand v0.10.3
+rand_core v0.10.1
+libcrux-traits v0.0.8 (*)
+ml-dsa v0.1.1
+crypto-common v0.2.2 (*)
+ctutils v0.4.4 (*)
+hybrid-array v0.4.15 (*)
+module-lattice v0.2.3
+ctutils v0.4.4 (*)
+hybrid-array v0.4.15 (*)
+num-traits v0.2.19
+autocfg v1.5.1
+zeroize v1.9.0
+shake v0.1.0
+digest v0.11.3 (*)
+keccak v0.2.2
+cfg-if v1.0.5
+sponge-cursor v0.1.0
+signature v3.0.0 (*)
+zeroize v1.9.0
+secmp-sys-mem v0.0.0 (/work/SecMPro/crates/secmp-sys-mem)
+libc v0.2.189
+zeroize v1.9.0
+sha2 v0.11.0 (*)
+sha3 v0.11.0
+digest v0.11.3 (*)
+keccak v0.2.2 (*)
+subtle v2.6.1
+x25519-dalek v3.0.0
+curve25519-dalek v5.0.0 (*)
+rand_core v0.10.1
+zeroize v1.9.0
+zeroize v1.9.0
+secmp-proto v0.0.0 (/work/SecMPro/crates/secmp-proto)
+secmp-crypto v0.0.0 (/work/SecMPro/crates/secmp-crypto) (*)
+secmp-transport v0.0.0 (/work/SecMPro/crates/secmp-transport)
+aws-lc-rs v1.18.1
+aws-lc-sys v0.45.0
+cc v1.4.7
+find-msvc-tools v0.1.13
+jobserver v0.1.35
+libc v0.2.189
+libc v0.2.189
+shlex v2.0.1
+cmake v0.1.58
+cc v1.4.7 (*)
+dunce v1.0.5
+fs_extra v1.3.0
+pkg-config v0.3.34
+zeroize v1.9.0
+rustls v0.23.46
+aws-lc-rs v1.18.1 (*)
+once_cell v1.21.4
+rustls-pki-types v1.15.1
+zeroize v1.9.0
+rustls-webpki v0.103.16
+aws-lc-rs v1.18.1 (*)
+rustls-pki-types v1.15.1 (*)
+untrusted v0.9.0
+subtle v2.6.1
+zeroize v1.9.0
+secmp-crypto v0.0.0 (/work/SecMPro/crates/secmp-crypto) (*)
+secmp-proto v0.0.0 (/work/SecMPro/crates/secmp-proto) (*)
+tokio v1.53.3
+bytes v1.12.1
+libc v0.2.189
+mio v1.2.4
+libc v0.2.189
+pin-project-lite v0.2.17
+socket2 v0.6.5
+libc v0.2.189
+tokio-rustls v0.26.5
+rustls v0.23.46 (*)
+tokio v1.53.3 (*)
+tokio v1.53.3 (*)
+
+== tree without (negative control)
+secmp-client-core v0.0.0 (/work/SecMPro/crates/secmp-client-core)
+secmp-crypto v0.0.0 (/work/SecMPro/crates/secmp-crypto)
+argon2 v0.6.0
+base64ct v1.8.3
+blake2 v0.11.0
+digest v0.11.3
+block-buffer v0.12.1
+hybrid-array v0.4.15
+ctutils v0.4.4
+cmov v0.5.4
+typenum v1.20.1
+zeroize v1.9.0
+zeroize_derive v1.5.0 (proc-macro)
+proc-macro2 v1.0.107
+unicode-ident v1.0.26
+quote v1.0.47
+proc-macro2 v1.0.107 (*)
+syn v2.0.119
+proc-macro2 v1.0.107 (*)
+quote v1.0.47 (*)
+unicode-ident v1.0.26
+zeroize v1.9.0 (*)
+crypto-common v0.2.2
+hybrid-array v0.4.15 (*)
+ctutils v0.4.4 (*)
+zeroize v1.9.0 (*)
+cpufeatures v0.3.1
+zeroize v1.9.0 (*)
+chacha20 v0.10.2
+cfg-if v1.0.5
+cipher v0.5.2
+block-buffer v0.12.1 (*)
+crypto-common v0.2.2 (*)
+inout v0.2.2
+hybrid-array v0.4.15 (*)
+zeroize v1.9.0 (*)
+cpufeatures v0.3.1
+rand_core v0.10.1
+zeroize v1.9.0 (*)
+chacha20poly1305 v0.11.0
+aead v0.6.1
+crypto-common v0.2.2 (*)
+inout v0.2.2 (*)
+chacha20 v0.10.2 (*)
+cipher v0.5.2 (*)
+poly1305 v0.9.1
+cpufeatures v0.3.1
+universal-hash v0.6.1
+crypto-common v0.2.2 (*)
+ctutils v0.4.4 (*)
+zeroize v1.9.0 (*)
+ed25519-dalek v3.0.0
+curve25519-dalek v5.0.0
+cfg-if v1.0.5
+cpufeatures v0.3.1
+curve25519-dalek-derive v0.1.1 (proc-macro)
+proc-macro2 v1.0.107 (*)
+quote v1.0.47 (*)
+syn v2.0.119 (*)
+digest v0.11.3 (*)
+subtle v2.6.1
+zeroize v1.9.0 (*)
+rustc_version v0.4.1
+semver v1.0.28
+ed25519 v3.0.0
+signature v3.0.0
+digest v0.11.3 (*)
+sha2 v0.11.0
+cfg-if v1.0.5
+cpufeatures v0.3.1
+digest v0.11.3 (*)
+subtle v2.6.1
+zeroize v1.9.0 (*)
+getrandom v0.4.3
+cfg-if v1.0.5
+libc v0.2.189
+rand_core v0.10.1
+hkdf v0.13.0
+hmac v0.13.0
+digest v0.11.3 (*)
+hmac v0.13.0 (*)
+libcrux-ml-kem v0.0.10
+hax-lib v0.3.7
+hax-lib-macros v0.3.7 (proc-macro)
+proc-macro2 v1.0.107 (*)
+quote v1.0.47 (*)
+syn v2.0.119 (*)
+libcrux-intrinsics v0.0.8
+hax-lib v0.3.7 (*)
+libcrux-platform v0.0.3
+libc v0.2.189
+libcrux-secrets v0.0.6
+hax-lib v0.3.7 (*)
+libcrux-sha3 v0.0.10
+hax-lib v0.3.7 (*)
+libcrux-intrinsics v0.0.8 (*)
+libcrux-platform v0.0.3 (*)
+libcrux-traits v0.0.8
+libcrux-secrets v0.0.6 (*)
+rand v0.10.3
+chacha20 v0.10.2 (*)
+getrandom v0.4.3 (*)
+rand_core v0.10.1
+libcrux-traits v0.0.8 (*)
+ml-dsa v0.1.1
+crypto-common v0.2.2 (*)
+ctutils v0.4.4 (*)
+hybrid-array v0.4.15 (*)
+module-lattice v0.2.3
+ctutils v0.4.4 (*)
+hybrid-array v0.4.15 (*)
+num-traits v0.2.19
+libm v0.2.16
+autocfg v1.5.1
+zeroize v1.9.0 (*)
+shake v0.1.0
+digest v0.11.3 (*)
+keccak v0.2.2
+cfg-if v1.0.5
+sponge-cursor v0.1.0
+signature v3.0.0 (*)
+zeroize v1.9.0 (*)
+secmp-sys-mem v0.0.0 (/work/SecMPro/crates/secmp-sys-mem)
+libc v0.2.189
+zeroize v1.9.0 (*)
+sha2 v0.11.0 (*)
+sha3 v0.11.0
+digest v0.11.3 (*)
+keccak v0.2.2 (*)
+subtle v2.6.1
+x25519-dalek v3.0.0
+curve25519-dalek v5.0.0 (*)
+rand_core v0.10.1
+zeroize v1.9.0 (*)
+zeroize v1.9.0 (*)
+secmp-proto v0.0.0 (/work/SecMPro/crates/secmp-proto)
+secmp-crypto v0.0.0 (/work/SecMPro/crates/secmp-crypto) (*)
+secmp-store v0.0.0 (/work/SecMPro/crates/secmp-store)
+rusqlite v0.39.0
+bitflags v2.13.2
+fallible-iterator v0.3.0
+fallible-streaming-iterator v0.1.9
+hashlink v0.11.1
+hashbrown v0.16.1
+foldhash v0.2.0
+libsqlite3-sys v0.37.0
+openssl-sys v0.9.117
+libc v0.2.189
+cc v1.4.7
+find-msvc-tools v0.1.13
+jobserver v0.1.35
+libc v0.2.189
+libc v0.2.189
+shlex v2.0.1
+openssl-src v300.6.1+3.6.3
+cc v1.4.7 (*)
+pkg-config v0.3.34
+vcpkg v0.2.15
+cc v1.4.7 (*)
+pkg-config v0.3.34
+vcpkg v0.2.15
+smallvec v1.16.2
+time v0.3.55
+deranged v0.5.8
+num-conv v0.2.2
+powerfmt v0.2.1
+time-core v0.1.9
+time-macros v0.2.32 (proc-macro)
+num-conv v0.2.2
+time-core v0.1.9
+secmp-crypto v0.0.0 (/work/SecMPro/crates/secmp-crypto) (*)
+secmp-proto v0.0.0 (/work/SecMPro/crates/secmp-proto) (*)
+secmp-transport v0.0.0 (/work/SecMPro/crates/secmp-transport)
+arti-client v0.46.0
+async-trait v0.1.92 (proc-macro)
+proc-macro2 v1.0.107 (*)
+quote v1.0.47 (*)
+syn v3.0.6
+proc-macro2 v1.0.107 (*)
+quote v1.0.47 (*)
+unicode-ident v1.0.26
+cfg-if v1.0.5
+derive-deftly v1.11.5
+derive-deftly-macros v1.11.5 (proc-macro)
+heck v0.5.0
+indexmap v2.14.2
+equivalent v1.0.2
+hashbrown v0.17.1
+itertools v0.15.0
+either v1.18.0
+proc-macro-crate v3.5.0
+toml_edit v0.25.15+spec-1.1.0
+indexmap v2.14.2 (*)
+toml_datetime v1.1.2+spec-1.1.0
+toml_parser v1.1.3+spec-1.1.0
+winnow v1.0.4
+winnow v1.0.4
+proc-macro2 v1.0.107 (*)
+quote v1.0.47 (*)
+sha3 v0.11.0
+digest v0.11.3
+block-buffer v0.12.1
+hybrid-array v0.4.15
+typenum v1.20.1
+const-oid v0.10.2
+crypto-common v0.2.2
+hybrid-array v0.4.15 (*)
+keccak v0.2.2
+cfg-if v1.0.5
+strum v0.28.0
+strum_macros v0.28.0 (proc-macro)
+heck v0.5.0
+proc-macro2 v1.0.107 (*)
+quote v1.0.47 (*)
+syn v2.0.119 (*)
+syn v3.0.6 (*)
+unicode-ident v1.0.26
+void v1.0.2
+heck v0.5.0
+derive_builder_fork_arti v0.11.2
+derive_builder_macro_fork_arti v0.11.2 (proc-macro)
+derive_builder_core_fork_arti v0.11.2
+darling v0.14.4
+darling_core v0.14.4
+fnv v1.0.7
+ident_case v1.0.1
+proc-macro2 v1.0.107 (*)
+quote v1.0.47 (*)
+strsim v0.10.0
+syn v1.0.109
+proc-macro2 v1.0.107 (*)
+quote v1.0.47 (*)
+unicode-ident v1.0.26
+darling_macro v0.14.4 (proc-macro)
+darling_core v0.14.4 (*)
+quote v1.0.47 (*)
+syn v1.0.109 (*)
+proc-macro2 v1.0.107 (*)
+quote v1.0.47 (*)
+syn v1.0.109 (*)
+syn v1.0.109 (*)
+derive_more v2.1.1
+derive_more-impl v2.1.1 (proc-macro)
+convert_case v0.10.0
+unicode-segmentation v1.13.3
+proc-macro2 v1.0.107 (*)
+quote v1.0.47 (*)
+syn v2.0.119 (*)
+unicode-xid v0.2.6
+rustc_version v0.4.1 (*)
+educe v0.4.23 (proc-macro)
+enum-ordinalize v3.1.15 (proc-macro)
+num-bigint v0.4.8
+num-integer v0.1.47
+num-traits v0.2.19
+autocfg v1.5.1
+num-traits v0.2.19 (*)
+num-traits v0.2.19 (*)
+proc-macro2 v1.0.107 (*)
+quote v1.0.47 (*)
+syn v2.0.119 (*)
+proc-macro2 v1.0.107 (*)
+quote v1.0.47 (*)
+syn v1.0.109 (*)
+fs-mistrust v0.15.1
+derive_builder_fork_arti v0.11.2 (*)
+dirs v6.0.0
+dirs-sys v0.5.0
+libc v0.2.189
+option-ext v0.2.0
+extend v1.2.0 (proc-macro)
+proc-macro2 v1.0.107 (*)
+quote v1.0.47 (*)
+syn v2.0.119 (*)
+libc v0.2.189
+pwd-grp v1.0.2
+derive-deftly v1.11.5 (*)
+libc v0.2.189
+paste v1.0.15 (proc-macro)
+thiserror v2.0.21
+thiserror-impl v2.0.21 (proc-macro)
+proc-macro2 v1.0.107 (*)
+quote v1.0.47 (*)
+syn v3.0.6 (*)
+serde v1.0.229
+serde_core v1.0.229
+serde_derive v1.0.229 (proc-macro)
+proc-macro2 v1.0.107 (*)
+quote v1.0.47 (*)
+syn v3.0.6 (*)
+thiserror v2.0.21 (*)
+void v1.0.2
+walkdir v2.5.0
+same-file v1.0.6
+futures v0.3.34
+futures-channel v0.3.34
+futures-core v0.3.34
+futures-sink v0.3.34
+futures-core v0.3.34
+futures-executor v0.3.34
+futures-core v0.3.34
+futures-task v0.3.34
+futures-util v0.3.34
+futures-channel v0.3.34 (*)
+futures-core v0.3.34
+futures-io v0.3.34
+futures-macro v0.3.34 (proc-macro)
+proc-macro2 v1.0.107 (*)
+quote v1.0.47 (*)
+syn v3.0.6 (*)
+futures-sink v0.3.34
+futures-task v0.3.34
+memchr v2.8.3
+pin-project-lite v0.2.17
+slab v0.4.12
+futures-io v0.3.34
+futures-sink v0.3.34
+futures-task v0.3.34
+futures-util v0.3.34 (*)
+hostname-validator v1.1.1
+humantime v2.4.0
+humantime-serde v1.1.1
+humantime v2.4.0
+serde v1.0.229 (*)
+libc v0.2.189
+once_cell v1.21.4
+postage v0.5.0
+atomic v0.5.3
+crossbeam-queue v0.3.14
+crossbeam-utils v0.8.23
+futures v0.3.34 (*)
+parking_lot v0.12.5
+lock_api v0.4.14
+scopeguard v1.2.0
+parking_lot_core v0.9.12
+cfg-if v1.0.5
+libc v0.2.189
+smallvec v1.16.2
+pin-project v1.1.13
+pin-project-internal v1.1.13 (proc-macro)
+proc-macro2 v1.0.107 (*)
+quote v1.0.47 (*)
+syn v2.0.119 (*)
+static_assertions v1.1.0
+thiserror v1.0.69
+thiserror-impl v1.0.69 (proc-macro)
+proc-macro2 v1.0.107 (*)
+quote v1.0.47 (*)
+syn v2.0.119 (*)
+rand v0.10.3 (*)
+safelog v0.9.1
+derive_more v2.1.1 (*)
+educe v0.4.23 (proc-macro) (*)
+either v1.18.0
+fluid-let v1.0.0
+thiserror v2.0.21 (*)
+serde v1.0.229 (*)
+tempfile v3.27.0
+fastrand v2.5.0
+getrandom v0.4.3 (*)
+once_cell v1.21.4
+rustix v1.1.5
+bitflags v2.13.2
+linux-raw-sys v0.12.1
+thiserror v2.0.21 (*)
+time v0.3.55 (*)
+tor-async-utils v0.46.0
+cfg-if v1.0.5
+derive-deftly v1.11.5 (*)
+educe v0.4.23 (proc-macro) (*)
+extend v1.2.0 (proc-macro) (*)
+futures v0.3.34 (*)
+oneshot-fused-workaround v0.7.1
+futures v0.3.34 (*)
+pin-project v1.1.13 (*)
+postage v0.5.0 (*)
+slotmap-careful v0.8.1
+paste v1.0.15 (proc-macro)
+serde v1.0.229 (*)
+slotmap v1.1.1
+serde v1.0.229 (*)
+version_check v0.9.5
+thiserror v2.0.21 (*)
+void v1.0.2
+sync_wrapper v1.0.2
+thiserror v2.0.21 (*)
+tokio v1.53.3
+bytes v1.12.1
+libc v0.2.189
+mio v1.2.4
+libc v0.2.189
+log v0.4.34
+pin-project-lite v0.2.17
+signal-hook-registry v1.4.8
+errno v0.3.14
+libc v0.2.189
+libc v0.2.189
+socket2 v0.6.5
+libc v0.2.189
+tokio-util v0.7.19
+bytes v1.12.1
+futures-core v0.3.34
+futures-io v0.3.34
+futures-sink v0.3.34
+pin-project-lite v0.2.17
+tokio v1.53.3 (*)
+tor-basic-utils v0.46.0
+derive-deftly v1.11.5 (*)
+derive_more v2.1.1 (*)
+educe v0.4.23 (proc-macro) (*)
+extend v1.2.0 (proc-macro) (*)
+hex v0.4.3
+itertools v0.15.0
+either v1.18.0
+libc v0.2.189
+paste v1.0.15 (proc-macro)
+rand v0.10.3 (*)
+rand_chacha v0.10.0
+ppv-lite86 v0.2.21
+zerocopy v0.8.60
+rand_core v0.10.1
+serde v1.0.229 (*)
+slab v0.4.12
+smallvec v1.16.2
+thiserror v2.0.21 (*)
+tracing v0.1.44
+pin-project-lite v0.2.17
+tracing-attributes v0.1.31 (proc-macro)
+proc-macro2 v1.0.107 (*)
+quote v1.0.47 (*)
+syn v2.0.119 (*)
+tracing-core v0.1.36
+once_cell v1.21.4
+weak-table v0.4.0
+cfg-if v1.0.5
+hashbrown v0.16.1 (*)
+web-time-compat v0.2.1
+tor-rtcompat v0.46.0
+amplify v4.9.0
+amplify_derive v4.0.1 (proc-macro)
+amplify_syn v2.0.1
+proc-macro2 v1.0.107 (*)
+quote v1.0.47 (*)
+syn v1.0.109 (*)
+proc-macro2 v1.0.107 (*)
+quote v1.0.47 (*)
+syn v1.0.109 (*)
+amplify_num v0.5.4
+ascii v1.1.0
+async-trait v0.1.92 (proc-macro) (*)
+async_executors v0.7.0
+blanket v0.3.0 (proc-macro)
+proc-macro2 v1.0.107 (*)
+quote v1.0.47 (*)
+syn v2.0.119 (*)
+futures-core v0.3.34
+futures-task v0.3.34
+futures-util v0.3.34 (*)
+pin-project v1.1.13 (*)
+tokio v1.53.3 (*)
+rustc_version v0.4.1 (*)
+asynchronous-codec v0.7.0
+bytes v1.12.1
+futures-sink v0.3.34
+futures-util v0.3.34 (*)
+memchr v2.8.3
+pin-project-lite v0.2.17
+cfg-if v1.0.5
+coarsetime v0.1.38
+libc v0.2.189
+derive_builder_fork_arti v0.11.2 (*)
+derive_more v2.1.1 (*)
+dyn-clone v1.0.20
+educe v0.4.23 (proc-macro) (*)
+futures v0.3.34 (*)
+futures-rustls v0.26.0
+futures-io v0.3.34
+rustls v0.23.46
+aws-lc-rs v1.18.1
+aws-lc-sys v0.45.0
+cc v1.4.7 (*)
+cmake v0.1.58
+cc v1.4.7 (*)
+dunce v1.0.5
+fs_extra v1.3.0
+pkg-config v0.3.34
+zeroize v1.9.0 (*)
+log v0.4.34
+once_cell v1.21.4
+rustls-pki-types v1.15.1
+zeroize v1.9.0 (*)
+rustls-webpki v0.103.16
+aws-lc-rs v1.18.1 (*)
+rustls-pki-types v1.15.1 (*)
+untrusted v0.9.0
+subtle v2.6.1
+zeroize v1.9.0 (*)
+rustls-pki-types v1.15.1 (*)
+hex v0.4.3
+libc v0.2.189
+paste v1.0.15 (proc-macro)
+pin-project v1.1.13 (*)
+rustls v0.23.46 (*)
+rustls-pki-types v1.15.1 (*)
+rustls-webpki v0.103.16 (*)
+socket2 v0.6.5 (*)
+thiserror v2.0.21 (*)
+tokio v1.53.3 (*)
+tokio-util v0.7.19 (*)
+tor-error v0.46.0
+derive_more v2.1.1 (*)
+futures v0.3.34 (*)
+paste v1.0.15 (proc-macro)
+retry-error v0.13.1
+humantime v2.4.0
+static_assertions v1.1.0
+strum v0.28.0
+strum_macros v0.28.0 (proc-macro) (*)
+thiserror v2.0.21 (*)
+tracing v0.1.44 (*)
+void v1.0.2
+web-time-compat v0.2.1
+tor-general-addr v0.46.0
+derive_more v2.1.1 (*)
+thiserror v2.0.21 (*)
+void v1.0.2
+tracing v0.1.44 (*)
+void v1.0.2
+web-time-compat v0.2.1
+zeroize v1.9.0 (*)
+tracing v0.1.44 (*)
+void v1.0.2
+web-time-compat v0.2.1
+tor-basic-utils v0.46.0 (*)
+tor-chanmgr v0.46.0
+async-trait v0.1.92 (proc-macro) (*)
+base64ct v1.8.3
+caret v0.10.1
+cfg-if v1.0.5
+derive-deftly v1.11.5 (*)
+derive_more v2.1.1 (*)
+educe v0.4.23 (proc-macro) (*)
+futures v0.3.34 (*)
+httparse v1.10.1
+oneshot-fused-workaround v0.7.1 (*)
+percent-encoding v2.3.2
+postage v0.5.0 (*)
+rand v0.10.3 (*)
+safelog v0.9.1 (*)
+serde v1.0.229 (*)
+serde_with v3.24.0
+serde_core v1.0.229
+serde_with_macros v3.24.0 (proc-macro)
+darling v0.24.1
+darling_core v0.24.1
+ident_case v1.0.1
+proc-macro2 v1.0.107 (*)
+quote v1.0.47 (*)
+strsim v0.11.1
+syn v3.0.6 (*)
+darling_macro v0.24.1 (proc-macro)
+darling_core v0.24.1 (*)
+quote v1.0.47 (*)
+syn v3.0.6 (*)
+proc-macro2 v1.0.107 (*)
+quote v1.0.47 (*)
+syn v3.0.6 (*)
+thiserror v2.0.21 (*)
+tor-async-utils v0.46.0 (*)
+tor-basic-utils v0.46.0 (*)
+tor-cell v0.46.0
+amplify v4.9.0 (*)
+bitflags v2.13.2
+bytes v1.12.1
+caret v0.10.1
+derive-deftly v1.11.5 (*)
+derive_more v2.1.1 (*)
+educe v0.4.23 (proc-macro) (*)
+itertools v0.15.0 (*)
+paste v1.0.15 (proc-macro)
+rand v0.10.3 (*)
+smallvec v1.16.2
+thiserror v2.0.21 (*)
+tor-basic-utils v0.46.0 (*)
+tor-bytes v0.46.0
+bytes v1.12.1
+derive-deftly v1.11.5 (*)
+digest v0.10.7
+block-buffer v0.10.4
+generic-array v0.14.7
+typenum v1.20.1
+version_check v0.9.5
+const-oid v0.9.6
+crypto-common v0.1.7
+generic-array v0.14.7 (*)
+typenum v1.20.1
+subtle v2.6.1
+educe v0.4.23 (proc-macro) (*)
+safelog v0.9.1 (*)
+thiserror v2.0.21 (*)
+tor-error v0.46.0 (*)
+tor-llcrypto v0.46.0
+aes v0.9.3
+cipher v0.5.2 (*)
+cpubits v0.1.1
+cpufeatures v0.3.1
+zeroize v1.9.0 (*)
+base64ct v1.8.3
+ctr v0.10.1
+cipher v0.5.2 (*)
+curve25519-dalek v4.1.3
+cfg-if v1.0.5
+cpufeatures v0.2.17
+curve25519-dalek-derive v0.1.1 (proc-macro) (*)
+digest v0.10.7 (*)
+subtle v2.6.1
+zeroize v1.9.0 (*)
+rustc_version v0.4.1 (*)
+der-parser v10.0.0
+asn1-rs v0.7.2
+asn1-rs-derive v0.6.0 (proc-macro)
+proc-macro2 v1.0.107 (*)
+quote v1.0.47 (*)
+syn v2.0.119 (*)
+synstructure v0.13.2
+proc-macro2 v1.0.107 (*)
+quote v1.0.47 (*)
+syn v2.0.119 (*)
+asn1-rs-impl v0.2.0 (proc-macro)
+proc-macro2 v1.0.107 (*)
+quote v1.0.47 (*)
+syn v2.0.119 (*)
+displaydoc v0.2.7 (proc-macro)
+proc-macro2 v1.0.107 (*)
+quote v1.0.47 (*)
+syn v3.0.6 (*)
+nom v7.1.3
+memchr v2.8.3
+minimal-lexical v0.2.1
+num-traits v0.2.19 (*)
+rusticata-macros v4.1.0
+nom v7.1.3 (*)
+thiserror v2.0.21 (*)
+cookie-factory v0.3.3
+futures v0.3.34 (*)
+displaydoc v0.2.7 (proc-macro) (*)
+nom v7.1.3 (*)
+num-traits v0.2.19 (*)
+rusticata-macros v4.1.0 (*)
+derive-deftly v1.11.5 (*)
+derive_more v2.1.1 (*)
+digest v0.10.7 (*)
+ed25519-dalek v2.2.0
+curve25519-dalek v4.1.3 (*)
+ed25519 v2.2.3
+signature v2.2.0
+digest v0.10.7 (*)
+rand_core v0.6.4
+getrandom v0.2.17
+cfg-if v1.0.5
+libc v0.2.189
+merlin v3.0.0
+byteorder v1.5.0
+keccak v0.1.6
+rand_core v0.6.4 (*)
+zeroize v1.9.0 (*)
+rand_core v0.6.4 (*)
+sha2 v0.10.9
+cfg-if v1.0.5
+cpufeatures v0.2.17
+digest v0.10.7 (*)
+subtle v2.6.1
+zeroize v1.9.0 (*)
+educe v0.4.23 (proc-macro) (*)
+hex v0.4.3
+rand v0.10.3 (*)
+rand_chacha v0.10.0 (*)
+rand_core v0.6.4 (*)
+rand_core v0.10.1
+rand_jitter v0.6.1
+rand_core v0.10.1
+rdrand v0.9.0
+rand_core v0.10.1
+reseeding_rng v0.10.7
+rand_core v0.10.1
+rsa v0.9.10
+const-oid v0.9.6
+digest v0.10.7 (*)
+num-bigint-dig v0.8.6
+lazy_static v1.5.1
+spin v0.9.9
+libm v0.2.16
+num-integer v0.1.47
+num-traits v0.2.19 (*)
+num-iter v0.1.46
+num-integer v0.1.47 (*)
+num-traits v0.2.19 (*)
+num-traits v0.2.19 (*)
+rand v0.8.8
+rand_chacha v0.3.1
+ppv-lite86 v0.2.21 (*)
+rand_core v0.6.4 (*)
+rand_core v0.6.4 (*)
+smallvec v1.16.2
+zeroize v1.9.0 (*)
+num-integer v0.1.47 (*)
+num-traits v0.2.19 (*)
+pkcs1 v0.7.5
+der v0.7.10
+const-oid v0.9.6
+pem-rfc7468 v0.7.0
+base64ct v1.8.3
+zeroize v1.9.0 (*)
+pkcs8 v0.10.2
+der v0.7.10 (*)
+spki v0.7.3
+der v0.7.10 (*)
+spki v0.7.3 (*)
+pkcs8 v0.10.2 (*)
+rand_core v0.6.4 (*)
+sha2 v0.10.9 (*)
+signature v2.2.0 (*)
+spki v0.7.3 (*)
+subtle v2.6.1
+zeroize v1.9.0 (*)
+safelog v0.9.1 (*)
+serde v1.0.229 (*)
+sha1 v0.10.7
+cfg-if v1.0.5
+cpufeatures v0.2.17
+digest v0.10.7 (*)
+sha2 v0.10.9 (*)
+sha3 v0.10.9
+digest v0.10.7 (*)
+keccak v0.1.6
+signature v2.2.0 (*)
+subtle v2.6.1
+thiserror v2.0.21 (*)
+tor-error v0.46.0 (*)
+tor-memquota-cost v0.46.0
+derive-deftly v1.11.5 (*)
+itertools v0.15.0 (*)
+paste v1.0.15 (proc-macro)
+void v1.0.2
+visibility v0.1.1 (proc-macro)
+proc-macro2 v1.0.107 (*)
+quote v1.0.47 (*)
+syn v2.0.119 (*)
+x25519-dalek v2.0.1
+curve25519-dalek v4.1.3 (*)
+rand_core v0.6.4 (*)
+zeroize v1.9.0 (*)
+zeroize v1.9.0 (*)
+zeroize v1.9.0 (*)
+tor-cert v0.46.0
+caret v0.10.1
+derive_builder_fork_arti v0.11.2 (*)
+derive_more v2.1.1 (*)
+digest v0.10.7 (*)
+saturating-time v0.4.0
+thiserror v2.0.21 (*)
+tor-bytes v0.46.0 (*)
+tor-checkable v0.46.0
+humantime v2.4.0
+itertools v0.15.0 (*)
+signature v2.2.0 (*)
+thiserror v2.0.21 (*)
+tor-llcrypto v0.46.0 (*)
+web-time-compat v0.2.1
+tor-error v0.46.0 (*)
+tor-llcrypto v0.46.0 (*)
+web-time-compat v0.2.1
+tor-error v0.46.0 (*)
+tor-hscrypto v0.46.0
+data-encoding v2.11.1
+derive-deftly v1.11.5 (*)
+derive_more v2.1.1 (*)
+digest v0.10.7 (*)
+hex v0.4.3
+humantime v2.4.0
+itertools v0.15.0 (*)
+paste v1.0.15 (proc-macro)
+rand v0.10.3 (*)
+safelog v0.9.1 (*)
+serde v1.0.229 (*)
+signature v2.2.0 (*)
+subtle v2.6.1
+thiserror v2.0.21 (*)
+tor-basic-utils v0.46.0 (*)
+tor-bytes v0.46.0 (*)
+tor-error v0.46.0 (*)
+tor-key-forge v0.46.0
+derive-deftly v1.11.5 (*)
+derive_more v2.1.1 (*)
+downcast-rs v2.0.2
+paste v1.0.15 (proc-macro)
+rand v0.10.3 (*)
+rsa v0.9.10 (*)
+signature v2.2.0 (*)
+ssh-key-fork-arti v0.6.7
+num-bigint-dig v0.8.6 (*)
+rand_core v0.6.4 (*)
+rsa v0.9.10 (*)
+sec1 v0.7.3
+base16ct v0.2.0
+generic-array v0.14.7 (*)
+sha2 v0.10.9 (*)
+signature v2.2.0 (*)
+ssh-cipher-fork-arti v0.2.0
+cipher v0.4.4
+crypto-common v0.1.7 (*)
+inout v0.1.4
+generic-array v0.14.7 (*)
+ssh-encoding-fork-arti v0.2.0
+base64ct v1.8.3
+pem-rfc7468 v0.7.0 (*)
+sha2 v0.10.9 (*)
+ssh-encoding-fork-arti v0.2.0 (*)
+subtle v2.6.1
+zeroize v1.9.0 (*)
+thiserror v2.0.21 (*)
+tor-bytes v0.46.0 (*)
+tor-cert v0.46.0 (*)
+tor-checkable v0.46.0 (*)
+tor-error v0.46.0 (*)
+tor-llcrypto v0.46.0 (*)
+tor-llcrypto v0.46.0 (*)
+tor-memquota v0.46.0
+cfg-if v1.0.5
+derive-deftly v1.11.5 (*)
+derive_more v2.1.1 (*)
+dyn-clone v1.0.20
+educe v0.4.23 (proc-macro) (*)
+extend v1.2.0 (proc-macro) (*)
+futures v0.3.34 (*)
+itertools v0.15.0 (*)
+paste v1.0.15 (proc-macro)
+pin-project v1.1.13 (*)
+serde v1.0.229 (*)
+slotmap-careful v0.8.1 (*)
+static_assertions v1.1.0
+sysinfo v0.38.4
+libc v0.2.189
+memchr v2.8.3
+thiserror v2.0.21 (*)
+tor-async-utils v0.46.0 (*)
+tor-basic-utils v0.46.0 (*)
+tor-config v0.46.0
+amplify v4.9.0 (*)
+cfg-if v1.0.5
+derive-deftly v1.11.5 (*)
+derive_builder_fork_arti v0.11.2 (*)
+educe v0.4.23 (proc-macro) (*)
+either v1.18.0
+extend v1.2.0 (proc-macro) (*)
+figment v0.10.19
+serde v1.0.229 (*)
+toml v0.8.23
+serde v1.0.229 (*)
+serde_spanned v0.6.9
+serde v1.0.229 (*)
+toml_datetime v0.6.11
+serde v1.0.229 (*)
+toml_edit v0.22.27
+indexmap v2.14.2
+equivalent v1.0.2
+hashbrown v0.17.1
+serde v1.0.229 (*)
+serde_spanned v0.6.9 (*)
+toml_datetime v0.6.11 (*)
+toml_write v0.1.2
+winnow v0.7.15
+uncased v0.9.10
+version_check v0.9.5
+version_check v0.9.5
+fs-mistrust v0.15.1 (*)
+futures v0.3.34 (*)
+humantime-serde v1.1.1 (*)
+itertools v0.15.0 (*)
+notify v8.2.0
+inotify v0.11.5
+bitflags v2.13.2
+inotify-sys v0.1.8
+libc v0.2.189
+libc v0.2.189
+libc v0.2.189
+log v0.4.34
+mio v1.2.4 (*)
+notify-types v2.1.0
+bitflags v2.13.2
+walkdir v2.5.0 (*)
+paste v1.0.15 (proc-macro)
+postage v0.5.0 (*)
+regex v1.13.1
+regex-automata v0.4.18
+regex-syntax v0.8.11
+regex-syntax v0.8.11
+serde v1.0.229 (*)
+serde-value v0.7.0
+ordered-float v2.10.1
+num-traits v0.2.19 (*)
+serde v1.0.229 (*)
+serde_ignored v0.1.14
+serde_core v1.0.229
+strum v0.28.0 (*)
+thiserror v2.0.21 (*)
+toml v1.1.6+spec-1.1.0
+serde_core v1.0.229
+serde_spanned v1.1.2
+serde_core v1.0.229
+toml_datetime v1.1.2+spec-1.1.0
+serde_core v1.0.229
+toml_parser v1.1.3+spec-1.1.0
+winnow v1.0.4
+toml_writer v1.1.3+spec-1.1.0
+winnow v1.0.4
+tor-basic-utils v0.46.0 (*)
+tor-error v0.46.0 (*)
+tor-rtcompat v0.46.0 (*)
+tracing v0.1.44 (*)
+void v1.0.2
+tor-error v0.46.0 (*)
+tor-log-ratelim v0.46.0
+futures v0.3.34 (*)
+humantime v2.4.0
+thiserror v2.0.21 (*)
+tor-error v0.46.0 (*)
+tor-rtcompat v0.46.0 (*)
+tracing v0.1.44 (*)
+weak-table v0.4.0 (*)
+web-time-compat v0.2.1
+tor-memquota-cost v0.46.0 (*)
+tor-rtcompat v0.46.0 (*)
+tracing v0.1.44 (*)
+void v1.0.2
+tor-units v0.46.0
+derive-deftly v1.11.5 (*)
+derive_more v2.1.1 (*)
+serde v1.0.229 (*)
+thiserror v2.0.21 (*)
+tor-memquota v0.46.0 (*)
+void v1.0.2
+web-time-compat v0.2.1
+tor-linkspec v0.46.0
+base64ct v1.8.3
+by_address v1.2.1
+caret v0.10.1
+derive-deftly v1.11.5 (*)
+derive_builder_fork_arti v0.11.2 (*)
+derive_more v2.1.1 (*)
+hex v0.4.3
+itertools v0.15.0 (*)
+safelog v0.9.1 (*)
+serde v1.0.229 (*)
+serde_with v3.24.0 (*)
+strum v0.28.0 (*)
+thiserror v2.0.21 (*)
+tor-basic-utils v0.46.0 (*)
+tor-bytes v0.46.0 (*)
+tor-config v0.46.0 (*)
+tor-llcrypto v0.46.0 (*)
+tor-memquota v0.46.0 (*)
+tor-protover v0.46.0
+caret v0.10.1
+derive-deftly v1.11.5 (*)
+paste v1.0.15 (proc-macro)
+serde_with v3.24.0 (*)
+thiserror v2.0.21 (*)
+tor-basic-utils v0.46.0 (*)
+tor-bytes v0.46.0 (*)
+tor-llcrypto v0.46.0 (*)
+tor-memquota v0.46.0 (*)
+tor-protover v0.46.0 (*)
+tor-units v0.46.0 (*)
+void v1.0.2
+tor-config v0.46.0 (*)
+tor-error v0.46.0 (*)
+tor-keymgr v0.46.0
+amplify v4.9.0 (*)
+arrayvec v0.7.8
+cfg-if v1.0.5
+derive-deftly v1.11.5 (*)
+derive_builder_fork_arti v0.11.2 (*)
+derive_more v2.1.1 (*)
+downcast-rs v2.0.2
+dyn-clone v1.0.20
+fs-mistrust v0.15.1 (*)
+glob-match v0.2.1
+humantime v2.4.0
+inventory v0.3.25
+itertools v0.15.0 (*)
+rand v0.10.3 (*)
+safelog v0.9.1 (*)
+serde v1.0.229 (*)
+signature v2.2.0 (*)
+ssh-key-fork-arti v0.6.7 (*)
+thiserror v2.0.21 (*)
+tor-basic-utils v0.46.0 (*)
+tor-bytes v0.46.0 (*)
+tor-config v0.46.0 (*)
+tor-config-path v0.46.0
+directories v6.0.0
+dirs-sys v0.5.0 (*)
+serde v1.0.229 (*)
+shellexpand v3.1.2
+bstr v1.13.1
+memchr v2.8.3
+regex-automata v0.4.18 (*)
+dirs v6.0.0 (*)
+os_str_bytes v6.6.1
+memchr v2.8.3
+thiserror v2.0.21 (*)
+tor-error v0.46.0 (*)
+tor-general-addr v0.46.0 (*)
+tor-error v0.46.0 (*)
+tor-hscrypto v0.46.0 (*)
+tor-key-forge v0.46.0 (*)
+tor-llcrypto v0.46.0 (*)
+tor-persist v0.46.0
+derive-deftly v1.11.5 (*)
+derive_more v2.1.1 (*)
+extend v1.2.0 (proc-macro) (*)
+filetime v0.2.29
+cfg-if v1.0.5
+libc v0.2.189
+fs-mistrust v0.15.1 (*)
+fslock-guard v0.8.2
+thiserror v2.0.21 (*)
+futures v0.3.34 (*)
+itertools v0.15.0 (*)
+oneshot-fused-workaround v0.7.1 (*)
+paste v1.0.15 (proc-macro)
+sanitize-filename v0.6.0
+regex v1.13.1 (*)
+serde v1.0.229 (*)
+serde_json v1.0.151
+itoa v1.0.18
+memchr v2.8.3
+serde_core v1.0.229
+zmij v1.0.23
+thiserror v2.0.21 (*)
+time v0.3.55 (*)
+tor-async-utils v0.46.0 (*)
+tor-basic-utils v0.46.0 (*)
+tor-error v0.46.0 (*)
+tracing v0.1.44 (*)
+void v1.0.2
+web-time-compat v0.2.1
+tracing v0.1.44 (*)
+visibility v0.1.1 (proc-macro) (*)
+walkdir v2.5.0 (*)
+web-time-compat v0.2.1
+zeroize v1.9.0 (*)
+tor-linkspec v0.46.0 (*)
+tor-llcrypto v0.46.0 (*)
+tor-memquota v0.46.0 (*)
+tor-netdir v0.46.0
+async-trait v0.1.92 (proc-macro) (*)
+bitflags v2.13.2
+derive_more v2.1.1 (*)
+digest v0.10.7 (*)
+futures v0.3.34 (*)
+hex v0.4.3
+humantime v2.4.0
+itertools v0.15.0 (*)
+num_enum v0.7.6
+num_enum_derive v0.7.6 (proc-macro)
+proc-macro-crate v3.5.0 (*)
+proc-macro2 v1.0.107 (*)
+quote v1.0.47 (*)
+syn v2.0.119 (*)
+rustversion v1.0.23 (proc-macro)
+rand v0.10.3 (*)
+serde v1.0.229 (*)
+strum v0.28.0 (*)
+thiserror v2.0.21 (*)
+time v0.3.55 (*)
+tor-basic-utils v0.46.0 (*)
+tor-error v0.46.0 (*)
+tor-hscrypto v0.46.0 (*)
+tor-linkspec v0.46.0 (*)
+tor-llcrypto v0.46.0 (*)
+tor-netdoc v0.46.0
+amplify v4.9.0 (*)
+base64ct v1.8.3
+cipher v0.5.2 (*)
+derive-deftly v1.11.5 (*)
+derive_builder_fork_arti v0.11.2 (*)
+derive_more v2.1.1 (*)
+digest v0.10.7 (*)
+educe v0.4.23 (proc-macro) (*)
+enumset v1.1.14
+enumset_derive v0.15.0 (proc-macro)
+darling v0.21.3
+darling_core v0.21.3
+fnv v1.0.7
+ident_case v1.0.1
+proc-macro2 v1.0.107 (*)
+quote v1.0.47 (*)
+syn v2.0.119 (*)
+darling_macro v0.21.3 (proc-macro)
+darling_core v0.21.3 (*)
+quote v1.0.47 (*)
+syn v2.0.119 (*)
+proc-macro2 v1.0.107 (*)
+quote v1.0.47 (*)
+syn v2.0.119 (*)
+extend v1.2.0 (proc-macro) (*)
+hex v0.4.3
+hostname-validator v1.1.1
+humantime v2.4.0
+ipnet v2.12.2
+iprange v0.6.7
+ipnet v2.12.2
+itertools v0.15.0 (*)
+memchr v2.8.3
+paste v1.0.15 (proc-macro)
+phf v0.14.0
+phf_macros v0.14.0 (proc-macro)
+phf_generator v0.14.0
+fastrand v2.5.0
+phf_shared v0.14.0
+siphasher v1.0.4
+phf_shared v0.14.0 (*)
+proc-macro2 v1.0.107 (*)
+quote v1.0.47 (*)
+syn v2.0.119 (*)
+phf_shared v0.14.0
+siphasher v1.0.4
+rand v0.10.3 (*)
+rangemap v1.8.0
+saturating-time v0.4.0
+serde v1.0.229 (*)
+serde_with v3.24.0 (*)
+signature v2.2.0 (*)
+smallvec v1.16.2
+strum v0.28.0 (*)
+subtle v2.6.1
+thiserror v2.0.21 (*)
+time v0.3.55 (*)
+tinystr v0.8.4
+displaydoc v0.2.7 (proc-macro) (*)
+zerovec v0.11.8
+yoke v0.8.3
+stable_deref_trait v1.2.1
+yoke-derive v0.8.4 (proc-macro)
+proc-macro2 v1.0.107 (*)
+quote v1.0.47 (*)
+syn v3.0.6 (*)
+synstructure v0.14.0
+proc-macro2 v1.0.107 (*)
+quote v1.0.47 (*)
+syn v3.0.6 (*)
+zerofrom v0.1.8
+zerofrom-derive v0.1.8 (proc-macro)
+proc-macro2 v1.0.107 (*)
+quote v1.0.47 (*)
+syn v3.0.6 (*)
+synstructure v0.14.0 (*)
+zerofrom v0.1.8 (*)
+zerovec-derive v0.11.6 (proc-macro)
+proc-macro2 v1.0.107 (*)
+quote v1.0.47 (*)
+syn v3.0.6 (*)
+tor-basic-utils v0.46.0 (*)
+tor-bytes v0.46.0 (*)
+tor-cell v0.46.0 (*)
+tor-cert v0.46.0 (*)
+tor-checkable v0.46.0 (*)
+tor-error v0.46.0 (*)
+tor-hscrypto v0.46.0 (*)
+tor-linkspec v0.46.0 (*)
+tor-llcrypto v0.46.0 (*)
+tor-protover v0.46.0 (*)
+tor-units v0.46.0 (*)
+void v1.0.2
+web-time-compat v0.2.1
+zeroize v1.9.0 (*)
+tor-protover v0.46.0 (*)
+tor-units v0.46.0 (*)
+tracing v0.1.44 (*)
+typed-index-collections v3.5.0
+web-time-compat v0.2.1
+tor-proto v0.46.0
+aes v0.9.3 (*)
+amplify v4.9.0 (*)
+async-trait v0.1.92 (proc-macro) (*)
+asynchronous-codec v0.7.0 (*)
+bitvec v1.1.1
+funty v2.0.0
+radium v0.7.0
+tap v1.0.1
+wyz v0.5.1
+tap v1.0.1
+bytes v1.12.1
+caret v0.10.1
+cfg-if v1.0.5
+cipher v0.5.2 (*)
+coarsetime v0.1.38 (*)
+ctr v0.10.1 (*)
+derive-deftly v1.11.5 (*)
+derive_builder_fork_arti v0.11.2 (*)
+derive_more v2.1.1 (*)
+digest v0.10.7 (*)
+educe v0.4.23 (proc-macro) (*)
+enum_dispatch v0.3.13 (proc-macro)
+once_cell v1.21.4
+proc-macro2 v1.0.107 (*)
+quote v1.0.47 (*)
+syn v2.0.119 (*)
+futures v0.3.34 (*)
+futures-util v0.3.34 (*)
+hkdf v0.12.4
+hmac v0.12.1
+digest v0.10.7 (*)
+hmac v0.12.1 (*)
+itertools v0.15.0 (*)
+nonany v0.3.0
+oneshot-fused-workaround v0.7.1 (*)
+pin-project v1.1.13 (*)
+polyval v0.7.3
+cpubits v0.1.1
+cpufeatures v0.3.1
+universal-hash v0.6.1 (*)
+postage v0.5.0 (*)
+rand v0.10.3 (*)
+rand_core v0.10.1
+safelog v0.9.1 (*)
+slotmap-careful v0.8.1 (*)
+smallvec v1.16.2
+static_assertions v1.1.0
+strum v0.28.0 (*)
+subtle v2.6.1
+thiserror v2.0.21 (*)
+tokio v1.53.3 (*)
+tokio-util v0.7.19 (*)
+tor-async-utils v0.46.0 (*)
+tor-basic-utils v0.46.0 (*)
+tor-bytes v0.46.0 (*)
+tor-cell v0.46.0 (*)
+tor-cert v0.46.0 (*)
+tor-checkable v0.46.0 (*)
+tor-config v0.46.0 (*)
+tor-error v0.46.0 (*)
+tor-hscrypto v0.46.0 (*)
+tor-linkspec v0.46.0 (*)
+tor-llcrypto v0.46.0 (*)
+tor-log-ratelim v0.46.0 (*)
+tor-memquota v0.46.0 (*)
+tor-protover v0.46.0 (*)
+tor-rtcompat v0.46.0 (*)
+tor-rtmock v0.46.0
+amplify v4.9.0 (*)
+assert_matches v1.5.0
+async-trait v0.1.92 (proc-macro) (*)
+derive-deftly v1.11.5 (*)
+derive_more v2.1.1 (*)
+educe v0.4.23 (proc-macro) (*)
+futures v0.3.34 (*)
+humantime v2.4.0
+itertools v0.15.0 (*)
+oneshot-fused-workaround v0.7.1 (*)
+pin-project v1.1.13 (*)
+priority-queue v2.7.0
+equivalent v1.0.2
+indexmap v2.14.2 (*)
+slotmap-careful v0.8.1 (*)
+strum v0.28.0 (*)
+thiserror v2.0.21 (*)
+tor-error v0.46.0 (*)
+tor-general-addr v0.46.0 (*)
+tor-rtcompat v0.46.0 (*)
+tracing v0.1.44 (*)
+tracing-test v0.2.6
+tracing-core v0.1.36 (*)
+tracing-subscriber v0.3.23
+matchers v0.2.0
+regex-automata v0.4.18 (*)
+nu-ansi-term v0.50.3
+once_cell v1.21.4
+regex-automata v0.4.18 (*)
+sharded-slab v0.1.7
+lazy_static v1.5.1 (*)
+smallvec v1.16.2
+thread_local v1.1.10
+cfg-if v1.0.5
+tracing v0.1.44 (*)
+tracing-core v0.1.36 (*)
+tracing-log v0.2.0
+log v0.4.34
+once_cell v1.21.4
+tracing-core v0.1.36 (*)
+tracing-test-macro v0.2.6 (proc-macro)
+quote v1.0.47 (*)
+syn v2.0.119 (*)
+void v1.0.2
+web-time-compat v0.2.1
+tor-units v0.46.0 (*)
+tracing v0.1.44 (*)
+typenum v1.20.1
+visibility v0.1.1 (proc-macro) (*)
+void v1.0.2
+web-time-compat v0.2.1
+zeroize v1.9.0 (*)
+tor-rtcompat v0.46.0 (*)
+tor-socksproto v0.46.0
+amplify v4.9.0 (*)
+caret v0.10.1
+derive-deftly v1.11.5 (*)
+educe v0.4.23 (proc-macro) (*)
+safelog v0.9.1 (*)
+subtle v2.6.1
+thiserror v2.0.21 (*)
+tor-bytes v0.46.0 (*)
+tor-error v0.46.0 (*)
+tor-units v0.46.0 (*)
+tracing v0.1.44 (*)
+url v2.5.8
+form_urlencoded v1.2.2
+percent-encoding v2.3.2
+idna v1.1.0
+idna_adapter v1.2.2
+icu_normalizer v2.3.0
+icu_collections v2.3.0
+displaydoc v0.2.7 (proc-macro) (*)
+potential_utf v0.1.6
+zerovec v0.11.8 (*)
+utf8_iter v1.0.4
+yoke v0.8.3 (*)
+zerofrom v0.1.8 (*)
+zerovec v0.11.8 (*)
+icu_normalizer_data v2.3.0
+icu_provider v2.3.1
+displaydoc v0.2.7 (proc-macro) (*)
+icu_locale_core v2.3.0
+displaydoc v0.2.7 (proc-macro) (*)
+litemap v0.8.3
+tinystr v0.8.4 (*)
+writeable v0.6.4
+zerovec v0.11.8 (*)
+writeable v0.6.4
+yoke v0.8.3 (*)
+zerofrom v0.1.8 (*)
+zerotrie v0.2.5
+displaydoc v0.2.7 (proc-macro) (*)
+yoke v0.8.3 (*)
+zerofrom v0.1.8 (*)
+zerovec v0.11.8 (*)
+smallvec v1.16.2
+zerovec v0.11.8 (*)
+icu_properties v2.3.0
+displaydoc v0.2.7 (proc-macro) (*)
+icu_collections v2.3.0 (*)
+icu_locale_core v2.3.0 (*)
+icu_properties_data v2.3.0
+icu_provider v2.3.1 (*)
+zerotrie v0.2.5 (*)
+zerovec v0.11.8 (*)
+smallvec v1.16.2
+utf8_iter v1.0.4
+percent-encoding v2.3.2
+void v1.0.2
+web-time-compat v0.2.1
+tor-circmgr v0.46.0
+amplify v4.9.0 (*)
+async-trait v0.1.92 (proc-macro) (*)
+cfg-if v1.0.5
+derive-deftly v1.11.5 (*)
+derive_builder_fork_arti v0.11.2 (*)
+derive_more v2.1.1 (*)
+downcast-rs v2.0.2
+dyn-clone v1.0.20
+educe v0.4.23 (proc-macro) (*)
+futures v0.3.34 (*)
+humantime-serde v1.1.1 (*)
+itertools v0.15.0 (*)
+once_cell v1.21.4
+oneshot-fused-workaround v0.7.1 (*)
+pin-project v1.1.13 (*)
+rand v0.10.3 (*)
+retry-error v0.13.1 (*)
+safelog v0.9.1 (*)
+serde v1.0.229 (*)
+thiserror v2.0.21 (*)
+tor-async-utils v0.46.0 (*)
+tor-basic-utils v0.46.0 (*)
+tor-cell v0.46.0 (*)
+tor-chanmgr v0.46.0 (*)
+tor-config v0.46.0 (*)
+tor-dircommon v0.46.0
+base64ct v1.8.3
+derive-deftly v1.11.5 (*)
+getset v0.1.7 (proc-macro)
+proc-macro2 v1.0.107 (*)
+quote v1.0.47 (*)
+syn v2.0.119 (*)
+humantime v2.4.0
+humantime-serde v1.1.1 (*)
+serde v1.0.229 (*)
+tor-basic-utils v0.46.0 (*)
+tor-checkable v0.46.0 (*)
+tor-config v0.46.0 (*)
+tor-linkspec v0.46.0 (*)
+tor-llcrypto v0.46.0 (*)
+tor-netdoc v0.46.0 (*)
+tracing v0.1.44 (*)
+tor-error v0.46.0 (*)
+tor-guardmgr v0.46.0
+amplify v4.9.0 (*)
+base64ct v1.8.3
+derive-deftly v1.11.5 (*)
+derive_builder_fork_arti v0.11.2 (*)
+derive_more v2.1.1 (*)
+dyn-clone v1.0.20
+educe v0.4.23 (proc-macro) (*)
+futures v0.3.34 (*)
+humantime v2.4.0
+humantime-serde v1.1.1 (*)
+itertools v0.15.0 (*)
+num_enum v0.7.6 (*)
+oneshot-fused-workaround v0.7.1 (*)
+pin-project v1.1.13 (*)
+postage v0.5.0 (*)
+rand v0.10.3 (*)
+safelog v0.9.1 (*)
+serde v1.0.229 (*)
+strum v0.28.0 (*)
+thiserror v2.0.21 (*)
+tor-async-utils v0.46.0 (*)
+tor-basic-utils v0.46.0 (*)
+tor-config v0.46.0 (*)
+tor-dircommon v0.46.0 (*)
+tor-error v0.46.0 (*)
+tor-linkspec v0.46.0 (*)
+tor-llcrypto v0.46.0 (*)
+tor-netdir v0.46.0 (*)
+tor-netdoc v0.46.0 (*)
+tor-persist v0.46.0 (*)
+tor-proto v0.46.0 (*)
+tor-relay-selection v0.46.0
+rand v0.10.3 (*)
+serde v1.0.229 (*)
+tor-basic-utils v0.46.0 (*)
+tor-linkspec v0.46.0 (*)
+tor-netdir v0.46.0 (*)
+tor-netdoc v0.46.0 (*)
+tor-rtcompat v0.46.0 (*)
+tor-units v0.46.0 (*)
+tracing v0.1.44 (*)
+web-time-compat v0.2.1
+tor-linkspec v0.46.0 (*)
+tor-memquota v0.46.0 (*)
+tor-netdir v0.46.0 (*)
+tor-netdoc v0.46.0 (*)
+tor-persist v0.46.0 (*)
+tor-proto v0.46.0 (*)
+tor-protover v0.46.0 (*)
+tor-relay-selection v0.46.0 (*)
+tor-rtcompat v0.46.0 (*)
+tor-units v0.46.0 (*)
+tracing v0.1.44 (*)
+void v1.0.2
+weak-table v0.4.0 (*)
+web-time-compat v0.2.1
+tor-config v0.46.0 (*)
+tor-config-path v0.46.0 (*)
+tor-dircommon v0.46.0 (*)
+tor-dirmgr v0.46.0
+async-trait v0.1.92 (proc-macro) (*)
+base64ct v1.8.3
+derive_builder_fork_arti v0.11.2 (*)
+derive_more v2.1.1 (*)
+digest v0.10.7 (*)
+educe v0.4.23 (proc-macro) (*)
+event-listener v5.4.2
+parking v2.2.1
+pin-project-lite v0.2.17
+fs-mistrust v0.15.1 (*)
+fslock-guard v0.8.2 (*)
+futures v0.3.34 (*)
+hex v0.4.3
+humantime v2.4.0
+humantime-serde v1.1.1 (*)
+itertools v0.15.0 (*)
+memmap2 v0.9.11
+libc v0.2.189
+oneshot-fused-workaround v0.7.1 (*)
+paste v1.0.15 (proc-macro)
+postage v0.5.0 (*)
+rand v0.10.3 (*)
+rusqlite v0.39.0 (*)
+safelog v0.9.1 (*)
+scopeguard v1.2.0
+serde v1.0.229 (*)
+serde_json v1.0.151 (*)
+signature v2.2.0 (*)
+static_assertions v1.1.0
+strum v0.28.0 (*)
+thiserror v2.0.21 (*)
+time v0.3.55 (*)
+tor-async-utils v0.46.0 (*)
+tor-basic-utils v0.46.0 (*)
+tor-checkable v0.46.0 (*)
+tor-circmgr v0.46.0 (*)
+tor-config v0.46.0 (*)
+tor-consdiff v0.46.0
+derive_more v2.1.1 (*)
+digest v0.10.7 (*)
+hex v0.4.3
+imara-diff v0.2.0
+hashbrown v0.15.5
+foldhash v0.1.5
+memchr v2.8.3
+static_assertions v1.1.0
+thiserror v2.0.21 (*)
+tor-error v0.46.0 (*)
+tor-llcrypto v0.46.0 (*)
+tor-netdoc v0.46.0 (*)
+tor-dirclient v0.46.0
+async-compression v0.4.50
+compression-codecs v0.4.45
+compression-core v0.4.33
+flate2 v1.1.10
+crc32fast v1.5.2
+cfg-if v1.0.5
+miniz_oxide v0.9.1
+adler2 v2.0.1
+simd-adler32 v0.3.10
+compression-core v0.4.33
+futures-io v0.3.34
+pin-project-lite v0.2.17
+base64ct v1.8.3
+derive_more v2.1.1 (*)
+futures v0.3.34 (*)
+hex v0.4.3
+http v1.5.0
+bytes v1.12.1
+itoa v1.0.18
+httparse v1.10.1
+httpdate v1.0.3
+itertools v0.15.0 (*)
+memchr v2.8.3
+thiserror v2.0.21 (*)
+tor-circmgr v0.46.0 (*)
+tor-error v0.46.0 (*)
+tor-hscrypto v0.46.0 (*)
+tor-linkspec v0.46.0 (*)
+tor-llcrypto v0.46.0 (*)
+tor-netdoc v0.46.0 (*)
+tor-proto v0.46.0 (*)
+tor-rtcompat v0.46.0 (*)
+tracing v0.1.44 (*)
+web-time-compat v0.2.1
+tor-dircommon v0.46.0 (*)
+tor-error v0.46.0 (*)
+tor-guardmgr v0.46.0 (*)
+tor-llcrypto v0.46.0 (*)
+tor-netdir v0.46.0 (*)
+tor-netdoc v0.46.0 (*)
+tor-persist v0.46.0 (*)
+tor-proto v0.46.0 (*)
+tor-protover v0.46.0 (*)
+tor-rtcompat v0.46.0 (*)
+tracing v0.1.44 (*)
+void v1.0.2
+web-time-compat v0.2.1
+tor-error v0.46.0 (*)
+tor-guardmgr v0.46.0 (*)
+tor-hsclient v0.46.0
+async-trait v0.1.92 (proc-macro) (*)
+cfg-if v1.0.5
+derive-deftly v1.11.5 (*)
+derive_more v2.1.1 (*)
+educe v0.4.23 (proc-macro) (*)
+either v1.18.0
+futures v0.3.34 (*)
+itertools v0.15.0 (*)
+oneshot-fused-workaround v0.7.1 (*)
+postage v0.5.0 (*)
+rand v0.10.3 (*)
+retry-error v0.13.1 (*)
+safelog v0.9.1 (*)
+slotmap-careful v0.8.1 (*)
+strum v0.28.0 (*)
+thiserror v2.0.21 (*)
+tor-async-utils v0.46.0 (*)
+tor-basic-utils v0.46.0 (*)
+tor-bytes v0.46.0 (*)
+tor-cell v0.46.0 (*)
+tor-checkable v0.46.0 (*)
+tor-circmgr v0.46.0 (*)
+tor-config v0.46.0 (*)
+tor-dirclient v0.46.0 (*)
+tor-error v0.46.0 (*)
+tor-hscrypto v0.46.0 (*)
+tor-keymgr v0.46.0 (*)
+tor-linkspec v0.46.0 (*)
+tor-llcrypto v0.46.0 (*)
+tor-memquota v0.46.0 (*)
+tor-netdir v0.46.0 (*)
+tor-netdoc v0.46.0 (*)
+tor-persist v0.46.0 (*)
+tor-proto v0.46.0 (*)
+tor-protover v0.46.0 (*)
+tor-rtcompat v0.46.0 (*)
+tracing v0.1.44 (*)
+web-time-compat v0.2.1
+tor-hscrypto v0.46.0 (*)
+tor-keymgr v0.46.0 (*)
+tor-linkspec v0.46.0 (*)
+tor-llcrypto v0.46.0 (*)
+tor-memquota v0.46.0 (*)
+tor-netdir v0.46.0 (*)
+tor-netdoc v0.46.0 (*)
+tor-persist v0.46.0 (*)
+tor-proto v0.46.0 (*)
+tor-protover v0.46.0 (*)
+tor-rtcompat v0.46.0 (*)
+tracing v0.1.44 (*)
+void v1.0.2
+web-time-compat v0.2.1
+aws-lc-rs v1.18.1 (*)
+rustls v0.23.46 (*)
+secmp-crypto v0.0.0 (/work/SecMPro/crates/secmp-crypto) (*)
+secmp-proto v0.0.0 (/work/SecMPro/crates/secmp-proto) (*)
+tokio v1.53.3 (*)
+tokio-rustls v0.26.5
+rustls v0.23.46 (*)
+tokio v1.53.3 (*)
+tokio v1.53.3 (*)

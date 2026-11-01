@@ -1,0 +1,32 @@
+# M7 A-3b: run one Kani harness of secmp-proto alone and report its peak memory.
+# Usage: python3 -I kani-one-a3b.py <harness>   (one process per harness: RUSAGE_CHILDREN is a running maximum)
+# Prints the output lines the `kani` step's evidence keeps (Checking harness, every cover check with its status,
+# SUMMARY and its counts, VERIFICATION, Verification Time, Complete) and `peak <KiB> = <%>`, the peak RSS of the largest
+# child process from getrusage(RUSAGE_CHILDREN).ru_maxrss (no /proc access).
+import resource
+import subprocess
+import sys
+
+LIMIT_KIB = 14160156  # expect::KANI_CBMC_RSS_LIMIT_KIB
+harness = sys.argv[1]
+p = subprocess.run(
+    ['cargo', 'kani', '--package', 'secmp-proto', '-Z', 'stubbing', '--harness', 'kani_proofs::' + harness, '--exact'],
+    cwd='/work/SecMPro', capture_output=True, text=True)
+peak = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss
+out = p.stdout + p.stderr
+keep = []
+lines = out.split('\n')
+for i, line in enumerate(lines):
+    t = line.strip()
+    if t.startswith('Checking harness') or t.startswith('VERIFICATION') or t.startswith('Verification Time') \
+            or t.startswith('Complete -') or t.startswith('SUMMARY') or 'cover properties satisfied' in t \
+            or (t.startswith('** ') and ' of ' in t and 'failed' in t):
+        keep.append('  ' + t)
+    elif t.startswith('Check ') and '.cover.' in t:
+        keep.append('  ' + t)
+        for nxt in lines[i + 1:i + 4]:
+            if nxt.strip().startswith('- Status:'):
+                keep.append('  ' + nxt.strip())
+                break
+print('\n'.join(keep))
+print(f'  exit {p.returncode}; peak {peak} KiB = {100.0 * peak / LIMIT_KIB:.1f} % of {LIMIT_KIB} KiB')

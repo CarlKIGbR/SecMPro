@@ -42,7 +42,7 @@ fn driver_balanced_first_tick_sends_and_fetches_in_order() {
             assert!(torn.is_empty(), "active {active}: {torn:?}");
             let up = events
                 .iter()
-                .find_map(|(t, e)| matches!(e, LinkEvent::Up(_)).then_some(*t))
+                .find_map(|(t, e)| matches!(e, LinkEvent::Up(_, _)).then_some(*t))
                 .unwrap();
             for k in 1..=5_u64 {
                 let tick = up + k * 10_000;

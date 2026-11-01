@@ -1,0 +1,42 @@
+=== dup exit 100
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.10s
+────────────
+ Nextest run ID 09c37dee-5ec4-4453-8ebb-d2a3736a9b9b with nextest profile: default
+    Starting 1 test across 1 binary (81 tests skipped)
+        FAIL [   0.132s] (1/1) secmp-store backup::tests::import_refuses_duplicate_settings_key
+  stdout ───
+
+    running 1 test
+    test backup::tests::import_refuses_duplicate_settings_key ... FAILED
+
+    failures:
+
+    failures:
+        backup::tests::import_refuses_duplicate_settings_key
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 81 filtered out; finished in 0.12s
+
+  stderr ───
+
+    thread 'backup::tests::import_refuses_duplicate_settings_key' (1262581) panicked at crates/secmp-store/src/backup.rs:1563:9:
+    assertion `left == right` failed
+      left: Ok(())
+     right: Err(Unlock)
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+  Cancelling due to test failure: 
+────────────
+     Summary [   0.133s] 1 test run: 0 passed, 1 failed, 81 skipped
+        FAIL [   0.132s] (1/1) secmp-store backup::tests::import_refuses_duplicate_settings_key
+error: test run failed
+
+=== export_out_of_range_green_at_first_run exit 0
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.09s
+────────────
+ Nextest run ID 5c7b39fd-7d72-4268-ac52-ba284d790f54 with nextest profile: default
+    Starting 1 test across 1 binary (81 tests skipped)
+        PASS [   0.083s] (1/1) secmp-store backup::tests::export_refuses_out_of_range_retention
+────────────
+     Summary [   0.083s] 1 test run: 1 passed, 81 skipped
+
+backup::tests::export_refuses_out_of_range_retention: green at first run (existing behaviour)

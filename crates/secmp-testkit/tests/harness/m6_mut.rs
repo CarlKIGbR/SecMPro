@@ -709,7 +709,7 @@ fn tick_without_a_prepared_send_is_an_overrun() {
     assert!(
         rig.events
             .iter()
-            .any(|e| matches!(e, LinkEvent::TornDown(_, Reason::Overrun)))
+            .any(|e| matches!(e, LinkEvent::TornDown(_, _, Reason::Overrun)))
     );
 }
 
@@ -830,7 +830,7 @@ fn in_flight_counts_a_tick_until_every_answer_is_in() {
     assert!(
         rig.events
             .iter()
-            .any(|e| matches!(e, LinkEvent::TornDown(_, Reason::InFlight))),
+            .any(|e| matches!(e, LinkEvent::TornDown(_, _, Reason::InFlight))),
         "{:?}",
         rig.events
     );
@@ -1296,10 +1296,10 @@ fn first_link_life(rig: &TokioRig<Holding>) -> (u64, Option<(u64, Reason)>) {
     let up = log
         .events
         .iter()
-        .find_map(|(t, e)| matches!(e, LinkEvent::Up(l) if *l == link).then_some(*t))
+        .find_map(|(t, e)| matches!(e, LinkEvent::Up(l, _) if *l == link).then_some(*t))
         .unwrap();
     let down = log.events.iter().find_map(|(t, e)| match e {
-        LinkEvent::TornDown(l, why) if *l == link => Some((*t, *why)),
+        LinkEvent::TornDown(l, _, why) if *l == link => Some((*t, *why)),
         _ => None,
     });
     (up, down)
@@ -1448,7 +1448,7 @@ fn rejected_by(script: Script) -> bool {
     rig.run_to(10_000);
     rig.events
         .iter()
-        .any(|e| matches!(e, LinkEvent::TornDown(_, Reason::Rejected)))
+        .any(|e| matches!(e, LinkEvent::TornDown(_, _, Reason::Rejected)))
 }
 
 /// `channel.rs:459` (the guard `cell_id != 0 && evicted_is_plausible(..)` → `true`), `:485` (`fits(code, allowed)` → `true`):
@@ -1511,7 +1511,7 @@ fn channel_single_rejects_a_ping_answered_with_the_wrong_type() {
     assert!(
         rig.events
             .iter()
-            .any(|e| matches!(e, LinkEvent::TornDown(_, Reason::Rejected))),
+            .any(|e| matches!(e, LinkEvent::TornDown(_, _, Reason::Rejected))),
         "a PING answered with OK_SEND ends the link: {:?}",
         rig.events
     );
@@ -1599,7 +1599,7 @@ fn reason_of_a_closed_channel_is_closed() {
     let reasons: Vec<Reason> = outs
         .iter()
         .filter_map(|o| match o {
-            Output::Event(LinkEvent::TornDown(l, why)) if *l == link => Some(*why),
+            Output::Event(LinkEvent::TornDown(l, _, why)) if *l == link => Some(*why),
             _ => None,
         })
         .collect();

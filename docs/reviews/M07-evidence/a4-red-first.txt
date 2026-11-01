@@ -1,0 +1,10 @@
+A-4 §1 label::tests::enum_equals_appendix_a_of_the_spec (docs edit alone): assertion left == right failed: Appendix A should list 49 labels: [... 53 names ...], left: 53, right: 49 (label.rs:264)
+A-4 §2 argon2::tests::block_matrix_is_zeroizing (unfixed argon2.rs): assertion left == right failed: the call without the matrix, left: 1, right: 0 (argon2.rs:184)
+§3 notes (bd9e240, b014540):
+- Unlocked::db_key -> Result<DbKey> (HKDF can fail) — deviation from "-> DbKey" wording.
+- ST-09 re-dictation landed in b014540 (commit 2), not bd9e240; at bd9e240 testscan kat_small_sites==1 vs 0 would be red.
+- Tx field `tx` renamed `inner` (clippy struct_field_names with 3 fields).
+- PC-13 @ b014540: bytes/dummy slot 8241; A-3 bound 2×(fixed 3767 + outbox row 1782)=11098 unchanged; +72 B per sealed record bound = 11098+4×72 = 11386. Test unchanged.
+- extra test profile::tests::profile_rows_round_trip; profile.rs new API for identity/prekeys/relays/contacts/invitations.
+- skey for an entry < 36 B = whole entry (mirrors A-3 substr semantics; session_rows_round_trip unchanged).
+- tests: store 38/38, client-core 42/42 (kat), testkit harness 316/316.

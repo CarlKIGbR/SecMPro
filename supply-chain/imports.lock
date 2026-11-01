@@ -13,6 +13,11 @@ user-id = 189
 user-login = "BurntSushi"
 user-name = "Andrew Gallant"
 
+[[publisher.argon2]]
+version = "0.6.0"
+when = "2026-08-27"
+trusted-publisher = "github:RustCrypto/password-hashes"
+
 [[publisher.arti-client]]
 version = "0.46.0"
 when = "2026-09-02"
@@ -54,6 +59,11 @@ when = "2026-01-12"
 user-id = 267
 user-login = "tarcieri"
 user-name = "Tony Arcieri"
+
+[[publisher.blake2]]
+version = "0.11.0"
+when = "2026-08-26"
+trusted-publisher = "github:RustCrypto/hashes"
 
 [[publisher.block-buffer]]
 version = "0.12.1"
@@ -480,6 +490,16 @@ when = "2023-11-11"
 user-id = 267
 user-login = "tarcieri"
 user-name = "Tony Arcieri"
+
+[[publisher.password-hash]]
+version = "0.6.1"
+when = "2026-04-08"
+trusted-publisher = "github:RustCrypto/traits"
+
+[[publisher.phc]]
+version = "0.6.1"
+when = "2026-03-09"
+trusted-publisher = "github:RustCrypto/formats"
 
 [[publisher.pkcs1]]
 version = "0.7.5"

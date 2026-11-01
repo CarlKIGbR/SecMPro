@@ -119,6 +119,20 @@ pub const INVITATION_OPEN: i64 = 0;
 /// The `status` of an invitation whose handshake was accepted (§5.2 "until the invitation is consumed").
 pub const INVITATION_CONSUMED: i64 = 1;
 
+/// Set the counter `key` of `meta` (a public value, e.g. `opk_next`: the next one-time prekey id, never reused, OPEN-M7-B-10)
+/// as a statement of the caller's transaction.
+///
+/// # Errors
+/// [`Error::Unavailable`] if the statement fails.
+pub fn put_meta_u32(tx: &mut Tx<'_>, key: &str, value: u32) -> Result<()> {
+    tx.exec(
+        "INSERT INTO meta (key, value) VALUES (?1, ?2) \
+         ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+        params![key, value.to_be_bytes().to_vec()],
+    )?;
+    Ok(())
+}
+
 /// Delete the prekey (`kind`, `id`); with `secure_delete` on, its pages are overwritten.
 ///
 /// # Errors
@@ -412,6 +426,19 @@ impl Store {
             params![id],
             |r| r.get::<_, Vec<u8>>(0),
         )
+    }
+
+    /// The counter `key` of `meta` ([`put_meta_u32`]); `None` if it was never set or is not four bytes.
+    ///
+    /// # Errors
+    /// [`Error::Unavailable`] if the read fails.
+    pub fn meta_u32(&self, key: &str) -> Result<Option<u32>> {
+        let raw = self.query_row("SELECT value FROM meta WHERE key = ?1", params![key], |r| {
+            r.get::<_, Vec<u8>>(0)
+        })?;
+        Ok(raw
+            .and_then(|b| <[u8; 4]>::try_from(b.as_slice()).ok())
+            .map(u32::from_be_bytes))
     }
 
     /// The record of the invitation `ld_id`.

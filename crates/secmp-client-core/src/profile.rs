@@ -23,7 +23,7 @@ use secmp_proto::wire::Id;
 use secmp_store::Store;
 use secmp_store::profile::{
     INVITATION_OPEN, KIND_OPK, KIND_SPK, delete_invitation, delete_prekey, insert_prekey,
-    put_identity,
+    put_identity, put_meta_u32,
 };
 use secmp_store::wrap::{self, Unlocked};
 
@@ -36,6 +36,9 @@ use crate::scheduler::types::{QueueId, RelayId};
 pub const IDENTITY_ROW: i64 = 1;
 /// The length of the identity section (Q143; `IdentityKeys::generate_with_section`).
 pub const SECTION_LEN: usize = IDENTITY_SECTION_LEN;
+
+/// The `meta` key of the next one-time prekey id (OPEN-M7-B-10).
+const OPK_NEXT: &str = "opk_next";
 
 /// An invitation retired by [`Profile::retire`]: the queue it used is the caller's to retire (§10.6 (4)).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -116,7 +119,8 @@ impl Profile {
                 &spk.to_seeds(),
                 Some(spk_expires),
             )?;
-            insert_prekey(tx, KIND_OPK, i64::from(opk.id()), &opk.to_seeds(), None)
+            insert_prekey(tx, KIND_OPK, i64::from(opk.id()), &opk.to_seeds(), None)?;
+            put_meta_u32(tx, OPK_NEXT, 2)
         })?;
         Ok(Self {
             store: Arc::new(Mutex::new(store)),
@@ -271,16 +275,21 @@ impl Profile {
                 .iter()
                 .filter(|r| !referenced.iter().any(|o| i64::from(*o) == r.id))
                 .count();
-            let next = rows.last().map_or(Ok(1_u32), |r| {
+            let after_last = rows.last().map_or(Ok(1_u32), |r| {
                 id32(r.id)?.checked_add(1).ok_or(Error::Unavailable)
             })?;
+            // an id is never reused, also after its row was deleted (OPEN-M7-B-10)
+            let next = after_last.max(store.meta_u32(OPK_NEXT)?.unwrap_or(1));
             (free, next)
         };
         while have < target {
             let opk = OpkSecrets::generate(next, entropy)?;
-            self.lock()?
-                .txn(|tx| insert_prekey(tx, KIND_OPK, i64::from(next), &opk.to_seeds(), None))?;
-            next = next.checked_add(1).ok_or(Error::Unavailable)?;
+            let following = next.checked_add(1).ok_or(Error::Unavailable)?;
+            self.lock()?.txn(|tx| {
+                insert_prekey(tx, KIND_OPK, i64::from(next), &opk.to_seeds(), None)?;
+                put_meta_u32(tx, OPK_NEXT, following)
+            })?;
+            next = following;
             have = have.saturating_add(1);
         }
         Ok(())
@@ -481,6 +490,34 @@ mod tests {
         assert_eq!(spk.rpk_public()?.as_bytes().len(), 1184);
         let opk = OpkSecrets::from_seeds(&s.prekey_secret(KIND_OPK, 1)?.ok_or("opk")?)?;
         assert_eq!(opk.id(), 1);
+        Ok(())
+    }
+
+    /// OPEN-M7-B-10 (red first on the tree that took `last row id + 1`: the id of a deleted highest row came back): a
+    /// one-time prekey id is never reused — `meta.opk_next` moves with every insert, also across the deletion of the
+    /// newest row and a reopen of the profile.
+    #[cfg(feature = "kat")]
+    #[test]
+    fn opk_ids_never_reused() -> R {
+        let mut e = crate::testutil::entropy(10);
+        let fx = Fixture::new("pr10", &mut e)?;
+        let p = &fx.profile;
+        p.fill_opks(3, &mut e)?;
+        assert_eq!(p.opk_ids()?, [1, 2, 3]);
+        p.lock()?.txn(|tx| delete_prekey(tx, KIND_OPK, 3))?;
+        assert_eq!(p.opk_ids()?, [1, 2]);
+        p.fill_opks(3, &mut e)?;
+        assert_eq!(p.opk_ids()?, [1, 2, 4], "3 is not issued a second time");
+        assert_eq!(p.lock()?.meta_u32(OPK_NEXT)?, Some(5));
+        // all of them gone: the counter still stands
+        p.lock()?.txn(|tx| {
+            for id in [1, 2, 4] {
+                delete_prekey(tx, KIND_OPK, id)?;
+            }
+            Ok(())
+        })?;
+        p.fill_opks(1, &mut e)?;
+        assert_eq!(p.opk_ids()?, [5]);
         Ok(())
     }
 

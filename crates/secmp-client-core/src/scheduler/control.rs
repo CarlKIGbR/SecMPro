@@ -351,3 +351,74 @@ impl ControlOps {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn spec(kind: ControlKind, related: u64, when: When) -> OpSpec {
+        OpSpec {
+            kind,
+            relay: RelayId(0),
+            related,
+            when,
+        }
+    }
+
+    /// B-4 killers (`ControlOps::note_empty_fetch`, Q194): the delay of a `QUEUE_DEL` starts from the latest start of an
+    /// operation of its own correlation — not of another one — and from now when there is none.
+    #[test]
+    fn empty_fetch_delay_starts_from_its_own_correlation() -> Result<(), Unavailable> {
+        let params = Params::default();
+        let mut rng = TimingRng::seeded(5);
+        let mut ops = ControlOps::new();
+        // another correlation started late
+        ops.schedule(
+            &params,
+            &mut rng,
+            OpId(1),
+            10_000_000,
+            spec(ControlKind::QueueNew(QueueId(1)), 1, When::Prompt),
+        )?;
+        assert_eq!(ops.take_due(10_000_000).len(), 1);
+        // an operation of correlation 2 waits for an empty `FETCH` of queue 2
+        ops.schedule(
+            &params,
+            &mut rng,
+            OpId(2),
+            0,
+            spec(
+                ControlKind::QueueDel(QueueId(2)),
+                2,
+                When::AfterEmptyFetch(QueueId(2)),
+            ),
+        )?;
+        assert!(ops.awaits_empty_fetch(OpId(2)));
+        assert_eq!(ops.due_of(OpId(2)), None);
+        // a `FETCH` of another queue arms nothing
+        ops.note_empty_fetch(&params, &mut rng, QueueId(3), 1_000);
+        assert!(ops.awaits_empty_fetch(OpId(2)));
+        ops.note_empty_fetch(&params, &mut rng, QueueId(2), 1_000);
+        let due = ops.due_of(OpId(2)).ok_or(Unavailable)?;
+        assert!((1_000 + 60_000..=1_000 + 3_600_000).contains(&due), "{due}");
+        // the same correlation started later: the delay follows that start
+        ops.schedule(
+            &params,
+            &mut rng,
+            OpId(3),
+            0,
+            spec(
+                ControlKind::QueueDel(QueueId(4)),
+                1,
+                When::AfterEmptyFetch(QueueId(4)),
+            ),
+        )?;
+        ops.note_empty_fetch(&params, &mut rng, QueueId(4), 2_000);
+        let due = ops.due_of(OpId(3)).ok_or(Unavailable)?;
+        assert!(
+            (10_000_000 + 60_000..=10_000_000 + 3_600_000).contains(&due),
+            "{due}"
+        );
+        Ok(())
+    }
+}

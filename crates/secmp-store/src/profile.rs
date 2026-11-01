@@ -659,4 +659,40 @@ mod tests {
         );
         Ok(())
     }
+
+    /// B-4 (killers of `put_meta_u32`, `meta_u32`, `max_prekey_id`; OPEN-M7-B-10): a counter of `meta` reads back what was
+    /// written, is `None` before and for a value that is not four bytes; the highest prekey id is per kind.
+    #[test]
+    fn meta_counter_and_highest_prekey() -> R {
+        let dir = TempDir::new("meta-counter")?;
+        let mut store = Store::open(dir.path(), &TestKey::db_key())?;
+        store.txn(|tx| {
+            assert_eq!(meta_u32(tx, "counter")?, None);
+            assert_eq!(max_prekey_id(tx, 2)?, None);
+            put_meta_u32(tx, "counter", 7)?;
+            assert_eq!(meta_u32(tx, "counter")?, Some(7));
+            put_meta_u32(tx, "counter", 300)?;
+            assert_eq!(meta_u32(tx, "counter")?, Some(300));
+            put_meta_u32(tx, "other", 1)?;
+            assert_eq!(meta_u32(tx, "counter")?, Some(300));
+            for id in [3, 7, 5] {
+                insert_prekey(tx, 2, id, b"opk", None)?;
+            }
+            insert_prekey(tx, 1, 100, b"spk", Some(9))?;
+            assert_eq!(max_prekey_id(tx, 2)?, Some(7));
+            assert_eq!(max_prekey_id(tx, 1)?, Some(100));
+            assert_eq!(max_prekey_id(tx, 3)?, None);
+            Ok(())
+        })?;
+        store
+            .connection_kat()
+            .execute("INSERT INTO meta (key, value) VALUES ('odd', x'0102')", [])?;
+        store
+            .txn(|tx| {
+                assert_eq!(meta_u32(tx, "odd")?, None, "two bytes are no counter");
+                Ok(())
+            })
+            .map_err(|e| format!("{e:?}"))?;
+        Ok(())
+    }
 }

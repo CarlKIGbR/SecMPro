@@ -1360,4 +1360,199 @@ mod tests {
             Error::Unsupported
         );
     }
+
+    /// B-4…B-7 killers (`Core::receipts_for`, `verify`): delivery receipts follow the setting — off, for verified contacts
+    /// only, for all — when a session is opened, and verifying a contact turns them on unless they are off.
+    #[cfg(feature = "kat")]
+    #[test]
+    fn receipts_follow_the_setting_and_the_verification() -> R {
+        big(|| {
+            for (n, (setting, at_open, after_verify)) in [
+                (DeliveredReceipts::Off, false, false),
+                (DeliveredReceipts::VerifiedOnly, false, true),
+                (DeliveredReceipts::All, true, true),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let w = world("api-receipts", 81 + u64::try_from(n)?)?;
+                let store = w.guest.profile.store();
+                let guest = w.guest;
+                drop((w.h, w.g));
+                let mut settings = Settings::load(&store)?;
+                settings.delivered_receipts = setting;
+                settings.save(&store)?;
+                let mut core =
+                    Core::with_profile(guest.profile.clone(), guest.clock.clone(), sources(910))?;
+                let receipts = |core: &mut Core<_, Fixed>| {
+                    core.conversations_mut()
+                        .get(0)
+                        .map(super::super::sessions::actor::Conversation::send_receipts_kat)
+                };
+                assert_eq!(receipts(&mut core), Some(at_open), "{setting:?} at open");
+                let Response::SafetyNumber(digits) = core.handle(Request::SafetyNumber {
+                    contact: ContactId(1),
+                })?
+                else {
+                    return Err("safety number".into());
+                };
+                let wrong = core.handle(Request::Verify {
+                    contact: ContactId(1),
+                    digits: "1".into(),
+                })?;
+                assert!(matches!(wrong, Response::Verified(false)));
+                assert_eq!(
+                    receipts(&mut core),
+                    Some(at_open),
+                    "{setting:?}: a wrong number changes nothing"
+                );
+                let right = core.handle(Request::Verify {
+                    contact: ContactId(1),
+                    digits,
+                })?;
+                assert!(matches!(right, Response::Verified(true)));
+                assert_eq!(
+                    receipts(&mut core),
+                    Some(after_verify),
+                    "{setting:?} after the verification"
+                );
+            }
+            Ok(())
+        })
+    }
+
+    /// B-4…B-7 killers (`set_scheduler_view`, `rotate_contact`; SE-04): the rate bound sees the recv-queues the scheduler
+    /// reports — in Balanced mode and in direct mode, which implies it, not in Strict mode — and `take_ops` hands over the
+    /// retirement of the invitation an identity rotation retired, once.
+    #[cfg(feature = "kat")]
+    #[test]
+    fn rotation_sees_the_scheduler_and_identity_rotation_leaves_ops() -> R {
+        use crate::scheduler::params::Mode;
+
+        big(|| {
+            let w = world("api-view", 83)?;
+            let guest = w.guest;
+            drop((w.h, w.g));
+            let mut core =
+                Core::with_profile(guest.profile.clone(), guest.clock.clone(), sources(920))?;
+            let rotate = |core: &mut Core<_, Fixed>| {
+                core.handle(Request::Rotate {
+                    contact: ContactId(1),
+                    relay: 1,
+                })
+            };
+            let full = |direct| SchedulerView {
+                direct,
+                recv_periods_ms: vec![10_000; 4],
+            };
+            // Strict, not direct: no bound
+            core.set_scheduler_view(full(false));
+            assert!(matches!(rotate(&mut core)?, Response::Rotated(true)));
+            // Strict and direct: Balanced, four queues at 10 s are full
+            core.set_scheduler_view(full(true));
+            assert!(matches!(rotate(&mut core)?, Response::Rotated(false)));
+            // Balanced, full: deferred; Balanced, empty view: starts
+            let mut settings = core.handle(Request::Settings).map(|r| match r {
+                Response::Settings(s) => s,
+                _ => Settings::default(),
+            })?;
+            settings.mode = Mode::Balanced;
+            core.handle(Request::SetSettings(settings))?;
+            core.set_scheduler_view(full(false));
+            assert!(matches!(rotate(&mut core)?, Response::Rotated(false)));
+            core.set_scheduler_view(SchedulerView::default());
+            assert!(matches!(rotate(&mut core)?, Response::Rotated(true)));
+            let deferred = core
+                .take_events()
+                .iter()
+                .filter(|e| matches!(e.event, Event::RotationDeferred(_)))
+                .count();
+            assert_eq!(deferred, 2);
+            // an open invitation is retired by the identity rotation: its QUEUE_DEL is left for the driver
+            let w = world("api-ops", 85)?;
+            let (host, _) = (w.host, w.guest);
+            drop((w.h, w.g));
+            let (_issued, _cells) = crate::sessions::tests::pending_handshake(&host, 87)?;
+            let mut core =
+                Core::with_profile(host.profile.clone(), host.clock.clone(), sources(930))?;
+            assert!(core.take_ops().is_empty());
+            let rotated = core.handle(Request::RotateIdentity)?;
+            assert!(matches!(rotated, Response::IdentityRotated(_)));
+            let ops = core.take_ops();
+            assert!(
+                ops.iter()
+                    .any(|op| matches!(op.kind, crate::scheduler::types::ControlKind::QueueDel(_))),
+                "{} ops",
+                ops.len()
+            );
+            assert!(core.take_ops().is_empty(), "handed over once");
+            Ok(())
+        })
+    }
+
+    /// B-4…B-7 killers (`Core::queue_key_change_kat`, `seed_timing_kat`; `Api::next_event`): a key change the test forged
+    /// reaches the peer, whose session freezes — `KeyChangeInvalid` — and the events come out of the stream in order.
+    #[cfg(feature = "kat")]
+    #[test]
+    fn forged_key_change_freezes_and_events_stream() -> R {
+        use secmp_proto::prekeys::IdentityKeys;
+        use secmp_proto::tr::Entropy as _;
+
+        big(|| {
+            let w = world("api-forged", 89)?;
+            let (host, guest) = (w.host, w.guest);
+            drop((w.h, w.g));
+            let mut host_core =
+                Core::with_profile(host.profile.clone(), host.clock.clone(), sources(940))?;
+            let mut guest_core =
+                Core::with_profile(guest.profile.clone(), guest.clock.clone(), sources(950))?;
+            host_core.seed_timing_kat(3);
+            assert_eq!(
+                host_core.rng.uniform(1, 1_000),
+                TimingRng::seeded(3).uniform(1, 1_000)
+            );
+            let forger = entropy(903).hybrid_signing_key()?;
+            let new = IdentityKeys::generate(&mut entropy(905))?;
+            let body = secmp_proto::tr::content::key_change_body(&forger, new.public())?;
+            host_core.queue_key_change_kat(ContactId(1), body)?;
+            for at in 0..6 {
+                let cell = next(
+                    host_core.conversations_mut().get_mut(0).ok_or("host")?,
+                    ms(at),
+                )?;
+                deliver(
+                    guest_core.conversations_mut().get_mut(0).ok_or("guest")?,
+                    &cell,
+                )?;
+            }
+            guest_core.pump()?;
+            let events = guest_core.take_events();
+            assert!(
+                events
+                    .iter()
+                    .any(|e| e.event == Event::KeyChangeInvalid(ContactId(1))),
+                "{events:?}"
+            );
+            // the stream hands the events over, oldest first
+            guest_core.raise(Event::ResetRequested(ContactId(1)));
+            guest_core.raise(Event::KeyChanged(ContactId(1)));
+            let (mut api, serve) = Api::new(guest_core);
+            let local = tokio::task::LocalSet::new();
+            local.spawn_local(serve);
+            let rt = tokio::runtime::Builder::new_current_thread().build()?;
+            let got = rt.block_on(local.run_until(async {
+                let first = api.next_event().await;
+                let second = api.next_event().await;
+                (first, second)
+            }));
+            assert_eq!(
+                (got.0.map(|s| s.event), got.1.map(|s| s.event)),
+                (
+                    Some(Event::ResetRequested(ContactId(1))),
+                    Some(Event::KeyChanged(ContactId(1)))
+                )
+            );
+            Ok(())
+        })
+    }
 }

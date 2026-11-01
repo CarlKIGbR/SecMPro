@@ -554,6 +554,27 @@ impl<O: Outbox, P: Persist, S: EntropySource> Conversation<O, P, S> {
         self.overlap_send.retain(|q| *q != queue);
     }
 
+    /// The queue we receive on and the ones in overlap (tests only).
+    #[cfg(feature = "kat")]
+    #[must_use]
+    pub fn recv_queues_kat(&self) -> (Option<QueueId>, Vec<QueueId>) {
+        (self.recv_queue, self.overlap_recv.clone())
+    }
+
+    /// The queue we send to and the ones in send overlap (tests only).
+    #[cfg(feature = "kat")]
+    #[must_use]
+    pub fn send_queues_kat(&self) -> (Option<QueueId>, Vec<QueueId>) {
+        (self.send_queue, self.overlap_send.clone())
+    }
+
+    /// Whether receipts are sent (tests only).
+    #[cfg(feature = "kat")]
+    #[must_use]
+    pub const fn send_receipts_kat(&self) -> bool {
+        self.send_receipts
+    }
+
     /// Receipts on or off (on by default for verified contacts, spec §10.4).
     pub const fn set_send_receipts(&mut self, on: bool) {
         self.send_receipts = on;
@@ -1652,6 +1673,148 @@ mod tests {
             .deliver(QueueId(1), 0, 1, &cell)
             .map_err(|_| "deliver")?;
         assert!(convs.get(0).ok_or("conversation")?.received().is_empty());
+        Ok(())
+    }
+
+    /// B-4 killers (`rotate_recv_queue`, `drop_recv_queue`): the queue a rotation leaves joins the overlap once and never
+    /// twice; rotating onto the current queue moves nothing; a dropped queue leaves the overlap, and dropping the current
+    /// one clears it.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn recv_overlap_follows_rotations_and_drops() -> Result<(), Fail> {
+        use crate::scheduler::types::QueueId as Q;
+        let mut conv = conversation(
+            initiator_state()?,
+            crate::scheduler::outbox::MemPersist::new(),
+        )?;
+        conv.rotate_recv_queue(Q(1));
+        assert_eq!(conv.recv_queues_kat(), (Some(Q(1)), vec![]));
+        conv.rotate_recv_queue(Q(2));
+        assert_eq!(conv.recv_queues_kat(), (Some(Q(2)), vec![Q(1)]));
+        conv.rotate_recv_queue(Q(2));
+        assert_eq!(
+            conv.recv_queues_kat(),
+            (Some(Q(2)), vec![Q(1)]),
+            "the same queue again"
+        );
+        conv.rotate_recv_queue(Q(1));
+        assert_eq!(conv.recv_queues_kat(), (Some(Q(1)), vec![Q(1), Q(2)]));
+        conv.drop_recv_queue(Q(2));
+        assert_eq!(conv.recv_queues_kat(), (Some(Q(1)), vec![Q(1)]));
+        conv.drop_recv_queue(Q(9));
+        assert_eq!(
+            conv.recv_queues_kat(),
+            (Some(Q(1)), vec![Q(1)]),
+            "an unknown queue"
+        );
+        conv.drop_recv_queue(Q(1));
+        assert_eq!(conv.recv_queues_kat(), (None, vec![]));
+        Ok(())
+    }
+
+    /// B-4 killers (`switch_send_queue`, `drop_send_queue`, SE-02): the queue we leave stays as a dummy-only queue until it
+    /// is dropped; every real message among the last 128 cells sent on it goes back to the outbox — the ones before them do
+    /// not, nor does a message that was delivered.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn switch_requeues_the_real_messages_of_the_last_128_cells() -> Result<(), Fail> {
+        use crate::scheduler::outbox::{MemPersist, MsgState, Outbox as _};
+        use crate::scheduler::types::QueueId as Q;
+        let mut conv = conversation(initiator_state()?, MemPersist::new())?;
+        conv.bind(Q(1), Q(2));
+        let mut cell_id = 0_u64;
+        let mut send = |conv: &mut TestConversation, message: Option<u8>| -> Result<(), Fail> {
+            if let Some(n) = message {
+                conv.outbox_mut().enqueue(text_message(n, 5), 0);
+            }
+            let prepared = conv.prepare_direct(0).map_err(|_| "seal")?;
+            cell_id = cell_id.saturating_add(1);
+            conv.relayed_direct(prepared.token, cell_id);
+            Ok(())
+        };
+        // two early messages (cells 1, 2), 130 dummies (3…132), three late messages (133…135), one of them delivered later
+        send(&mut conv, Some(1))?;
+        send(&mut conv, Some(2))?;
+        for _ in 0..130 {
+            send(&mut conv, None)?;
+        }
+        for n in [11, 12, 13] {
+            send(&mut conv, Some(n))?;
+        }
+        conv.outbox_mut().delivered(&[13; 16]);
+        assert_eq!(
+            conv.switch_send_queue(Q(9)),
+            3,
+            "11, 12 and 13 are in the window"
+        );
+        assert_eq!(conv.outbox().state(&[11; 16]), Some(MsgState::Queued));
+        assert_eq!(conv.outbox().state(&[12; 16]), Some(MsgState::Queued));
+        assert_eq!(conv.outbox().state(&[13; 16]), Some(MsgState::Delivered));
+        assert!(matches!(
+            conv.outbox().state(&[1; 16]),
+            Some(MsgState::Relayed(_))
+        ));
+        assert!(matches!(
+            conv.outbox().state(&[2; 16]),
+            Some(MsgState::Relayed(_))
+        ));
+        assert_eq!(conv.send_queues_kat(), (Some(Q(9)), vec![Q(1)]));
+        // a second switch onto the same queue leaves the overlap as it was
+        assert_eq!(conv.switch_send_queue(Q(9)), 0);
+        assert_eq!(conv.send_queues_kat(), (Some(Q(9)), vec![Q(1)]));
+        conv.drop_send_queue(Q(7));
+        assert_eq!(
+            conv.send_queues_kat(),
+            (Some(Q(9)), vec![Q(1)]),
+            "an unknown queue"
+        );
+        conv.drop_send_queue(Q(1));
+        assert_eq!(conv.send_queues_kat(), (Some(Q(9)), vec![]));
+        Ok(())
+    }
+
+    /// B-4 killer (`mark_removed`): a removed contact takes no real content.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn marked_removed_refuses_real_content() -> Result<(), Fail> {
+        let mut conv = conversation(
+            initiator_state()?,
+            crate::scheduler::outbox::MemPersist::new(),
+        )?;
+        assert_eq!(conv.may_send_real(), Ok(()));
+        conv.mark_removed();
+        assert_eq!(conv.may_send_real(), Err(super::Refusal::Removed));
+        Ok(())
+    }
+
+    /// B-4 killer (the guard of the `ContactRemoved` arm of `apply_delivery`, ADR-054 item 4): `Control{ContactRemoved}`
+    /// without an argument removes the contact; with an argument it does nothing.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn contact_removed_needs_an_empty_argument() -> Result<(), Fail> {
+        use crate::scheduler::types::{CellSource as _, QueueId};
+        use secmp_crypto::Zeroizing;
+        use secmp_proto::wire::cell::{ContentBody, ControlBody, ControlCode};
+        for (arg, removed) in [(vec![1_u8], false), (Vec::new(), true)] {
+            let (mut a, mut convs) = session(crate::scheduler::outbox::MemPersist::new())?;
+            a.plan_control(ContentBody::Control(ControlBody {
+                code: ControlCode::ContactRemoved,
+                arg: Zeroizing::new(arg),
+            }));
+            let cell = a.prepare_direct(0).map_err(|_| "seal")?.cell;
+            convs
+                .deliver(QueueId(1), 0, 1, &cell)
+                .map_err(|_| "deliver")?;
+            let events = convs.get_mut(0).ok_or("conversation")?.take_events();
+            assert_eq!(
+                matches!(events.as_slice(), [super::SessionEvent::ContactRemoved]),
+                removed
+            );
+            assert_eq!(
+                convs.get(0).ok_or("conversation")?.may_send_real().is_err(),
+                removed
+            );
+        }
         Ok(())
     }
 }

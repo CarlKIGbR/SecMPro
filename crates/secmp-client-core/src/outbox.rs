@@ -476,4 +476,33 @@ mod tests {
         assert_eq!(o.take_next().ok_or("take again")?.msg_id, [1; 16]);
         Ok(())
     }
+
+    /// B-4 killer (`delivered_committed`, SE-21): the record of what the store holds takes the first-relayed time of the
+    /// message that became delivered — not another message's — and the in-memory view follows without a write.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn delivered_committed_keeps_the_messages_own_first_relayed_time() -> R {
+        let dir = secmp_store::kat::TempDir::new("outbox-dc").map_err(|e| e.to_string())?;
+        let mut o = StoreOutbox::open(shared(dir.path())?, 4).map_err(|_| "open")?;
+        o.enqueue(message(1), 100);
+        let first = o.take_next().ok_or("first")?;
+        o.relayed(&first.msg_id, 10);
+        o.enqueue(message(2), 500);
+        let second = o.take_next().ok_or("second")?;
+        o.relayed(&second.msg_id, 11);
+        let commits = secmp_store::kat::store_txn_commits();
+        o.delivered_committed(&first.msg_id);
+        assert_eq!(o.state(&first.msg_id), Some(MsgState::Delivered));
+        assert_eq!(o.state(&second.msg_id), Some(MsgState::Relayed(11)));
+        assert_eq!(
+            o.synced.get(&first.msg_id),
+            Some(&(MsgState::Delivered, Some(100)))
+        );
+        assert_eq!(
+            secmp_store::kat::store_txn_commits(),
+            commits,
+            "no row is written"
+        );
+        Ok(())
+    }
 }

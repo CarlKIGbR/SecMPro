@@ -1074,3 +1074,112 @@ fn first_reply_carries_route_update() -> R {
         Ok(())
     })
 }
+
+/// B-4 killers (`trust_of`): the stored trust codes 0…3 are the four trusts, anything else is none.
+#[cfg(feature = "kat")]
+#[test]
+fn trust_codes_map_to_trusts() {
+    use secmp_proto::tr::content::Trust;
+    assert_eq!(trust_of(0), Some(Trust::Unverified));
+    assert_eq!(trust_of(1), Some(Trust::Verified));
+    assert_eq!(trust_of(2), Some(Trust::KeyChanged));
+    assert_eq!(trust_of(3), Some(Trust::Frozen));
+    assert_eq!(trust_of(4), None);
+    for trust in [
+        Trust::Unverified,
+        Trust::Verified,
+        Trust::KeyChanged,
+        Trust::Frozen,
+    ] {
+        assert_eq!(
+            trust_of(crate::scheduler::outbox::trust_code(trust)),
+            Some(trust)
+        );
+    }
+}
+
+/// B-4 killers (`queue_message`, `open_conversation`): a text of exactly `MESSAGE_MAX` bytes is taken and one byte more is
+/// `Unsupported`; the trust a session was verified with is the trust it is opened with again.
+#[cfg(feature = "kat")]
+#[test]
+fn message_limit_and_reopened_trust() -> R {
+    big(|| {
+        let mut w = established("se-lim", 47)?;
+        let store = w.guest.profile.store();
+        let contacts = Contacts::new(store.clone(), w.guest.profile.fingerprint()?);
+        let payload = vec![b'x'; MESSAGE_MAX];
+        let fits = Outgoing {
+            kind: 1,
+            payload: &payload,
+            expire_after: 0,
+        };
+        assert!(queue_message(&store, &contacts, &mut w.g, ContactId(1), &fits, ms(5)).is_ok());
+        let long = vec![b'x'; MESSAGE_MAX + 1];
+        let over = Outgoing {
+            kind: 1,
+            payload: &long,
+            expire_after: 0,
+        };
+        assert_eq!(
+            queue_message(&store, &contacts, &mut w.g, ContactId(1), &over, ms(6)),
+            Err(Error::Unsupported)
+        );
+        // verified, then opened again from the rows: still verified
+        set_verified(&store, &mut w.g, ContactId(1))?;
+        let again = open_conversation(&store, ContactId(1), Fixed(entropy(88)), T0)?;
+        assert_eq!(again.trust(), secmp_proto::tr::content::Trust::Verified);
+        Ok(())
+    })
+}
+
+/// B-4 killer (`Conversation::set_peer`, `accept_key_change`): after the first key change is accepted, a second one signed by
+/// the identity it announced verifies — the session verifies under the new `IK_sig`.
+#[cfg(feature = "kat")]
+#[test]
+fn second_key_change_verifies_under_the_new_key() -> R {
+    use secmp_proto::prekeys::IdentityKeys;
+    use secmp_proto::tr::content::key_change_body;
+
+    big(|| {
+        let mut w = established("se06b", 49)?;
+        let first = key_change(&mut w, false)?;
+        flush(&mut w.h, &mut w.g, 4)?;
+        assert!(matches!(
+            w.g.take_events().as_slice(),
+            [SessionEvent::KeyChanged(_)]
+        ));
+        accept_key_change(&w.guest.profile.store(), &mut w.g, ContactId(1), &first)?;
+        // the identity of `key_change` (stream 901) signs the next one
+        let signer = secmp_proto::tr::Entropy::hybrid_signing_key(&mut entropy(901))?;
+        let newer = IdentityKeys::generate(&mut entropy(907))?;
+        w.h.queue_key_change(key_change_body(&signer, newer.public())?)
+            .map_err(|_| "queue")?;
+        flush(&mut w.h, &mut w.g, 4)?;
+        let events = w.g.take_events();
+        assert!(
+            matches!(events.as_slice(), [SessionEvent::KeyChanged(iks)] if **iks == *newer.public()),
+            "the second key change is accepted under the first new key"
+        );
+        Ok(())
+    })
+}
+
+/// B-4 killer (`note_unconfirmed`, SE-13b): a contact that gets no receipts from us is not asked about them — no
+/// `NotConfirmed` after `T_RS` when receipts are off.
+#[cfg(feature = "kat")]
+#[test]
+fn no_unconfirmed_report_without_receipts() -> R {
+    big(|| {
+        let mut w = established("se13c", 51)?;
+        w.g.set_receipt_timeout_ms(T_RS_MIN_MS);
+        w.g.set_send_receipts(false);
+        w.g.outbox_mut().enqueue(text(6, 8), 0);
+        let prepared = w.g.prepare_direct(10_000).map_err(|_| "prepare")?;
+        w.g.relayed_direct(prepared.token, 5);
+        w.g.take_events();
+        let _ = next(&mut w.g, 10_000 + T_RS_MIN_MS)?;
+        let _ = next(&mut w.g, 10_000 + T_RS_MIN_MS + 10_000)?;
+        assert!(w.g.take_events().is_empty());
+        Ok(())
+    })
+}

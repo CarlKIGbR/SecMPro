@@ -2473,6 +2473,77 @@ mod tests {
         );
         Ok(())
     }
+    /// B-4 killers (`Scheduler::has_queue`, `add_recv_queue_seed`, `add_send_queue_route`): a queue the host registered by
+    /// id is known, whichever kind it is; an id in use is refused for both kinds and both orders.
+    #[test]
+    fn queues_by_id_and_seed() -> Result<(), Fail> {
+        let mut sched = Scheduler::new(Params::default(), Mode::Strict, TimingRng::seeded(3));
+        let seed = |byte: u8| SecretBytes::<32>::from_slice(&[byte; 32]).map_err(|_| "seed");
+        assert!(!sched.has_queue(QueueId(5)));
+        sched
+            .add_recv_queue_seed(0, QueueId(5), RelayId(0), &seed(0x21)?, 10_000)
+            .map_err(|_| "recv")?;
+        assert!(sched.has_queue(QueueId(5)));
+        assert!(!sched.has_queue(QueueId(6)));
+        sched
+            .add_send_queue_route(0, QueueId(6), RelayId(0), ([7; 16], &seed(0x22)?), 10_000)
+            .map_err(|_| "send")?;
+        assert!(sched.has_queue(QueueId(6)));
+        assert!(!sched.has_queue(QueueId(7)));
+        for id in [QueueId(5), QueueId(6)] {
+            assert_eq!(
+                sched.add_recv_queue_seed(0, id, RelayId(0), &seed(0x23)?, 10_000),
+                Err(SchedError::DuplicateQueue)
+            );
+            assert_eq!(
+                sched.add_send_queue_route(0, id, RelayId(0), ([8; 16], &seed(0x24)?), 10_000),
+                Err(SchedError::DuplicateQueue)
+            );
+        }
+        assert_eq!(
+            sched.add_recv_queue_seed(0, QueueId(8), RelayId(0), &seed(0x25)?, 15_000),
+            Err(SchedError::BadPeriod)
+        );
+        assert_eq!(
+            sched.add_send_queue_route(0, QueueId(8), RelayId(0), ([9; 16], &seed(0x26)?), 15_000),
+            Err(SchedError::BadPeriod)
+        );
+        Ok(())
+    }
+
+    /// B-4 killer (`World::fetched`, Q194): a `FETCH` response without a cell starts the delay of a waiting `QUEUE_DEL` only
+    /// when it was asked in the queue's current generation.
+    #[test]
+    fn empty_response_of_an_old_generation_arms_nothing() -> Result<(), Fail> {
+        let mut sched = Scheduler::new(Params::default(), Mode::Strict, TimingRng::seeded(11));
+        let seed = SecretBytes::<32>::from_slice(&[0x31; 32]).map_err(|_| "seed")?;
+        sched
+            .add_recv_queue_seed(0, QueueId(4), RelayId(0), &seed, 10_000)
+            .map_err(|_| "queue")?;
+        let op = sched
+            .schedule_queue_del_after_empty_fetch(RelayId(0), 4, QueueId(4))
+            .map_err(|_| "op")?;
+        sched
+            .world
+            .recreate(QueueId(4), 0)
+            .map_err(|_| "recreate")?;
+        let mut source = Dummies(0);
+        sched
+            .world
+            .fetched(QueueId(4), 0, Vec::new(), &mut source, 1_000);
+        assert!(
+            sched.world.control.awaits_empty_fetch(op),
+            "generation 0 is old"
+        );
+        sched
+            .world
+            .fetched(QueueId(4), 1, Vec::new(), &mut source, 1_000);
+        assert!(
+            !sched.world.control.awaits_empty_fetch(op),
+            "generation 1 is current"
+        );
+        Ok(())
+    }
 }
 
 /// Positive control of the tick audit (WEISUNG M6-C1-4, mutants `counters_now -> [0; 4]` / `[1; 4]`): the instrument moves

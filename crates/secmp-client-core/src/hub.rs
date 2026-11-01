@@ -566,6 +566,7 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
                 return Some((recv, send));
             }
         }
+        drop(s);
         let ld_id = self.inv_queues.get(&queue)?;
         let open = self.invitations.queue_of(ld_id).ok()?;
         Some((*open.recv_seed.expose_secret(), [0; 32]))
@@ -612,5 +613,448 @@ impl<C: Clock, S: EntropySource> CellSource for Hub<C, S> {
             return self.deliver_invitation((queue, ld_id), generation, cell_id, cell);
         }
         self.core.convs.deliver(queue, generation, cell_id, cell)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[cfg(feature = "kat")]
+    use super::*;
+    #[cfg(feature = "kat")]
+    use crate::api::{Request, Response};
+    #[cfg(feature = "kat")]
+    use crate::clock::ManualClock;
+    #[cfg(feature = "kat")]
+    use crate::scheduler::outbox::{MsgState, Outbox as _};
+    #[cfg(feature = "kat")]
+    use crate::sessions::tests::{R, big, ms, party};
+    #[cfg(feature = "kat")]
+    use crate::testutil::{DAY, Fixed, Fixture, T0, entropy, wire_profile};
+    #[cfg(feature = "kat")]
+    use crate::timing::TimingRng;
+    #[cfg(feature = "kat")]
+    use secmp_proto::Encode as _;
+    #[cfg(feature = "kat")]
+    use std::sync::Arc;
+
+    /// A hub over the profile of `fx`, its randomness a fixed stream by `seed`.
+    #[cfg(feature = "kat")]
+    fn hub_over(
+        fx: &Fixture,
+        name: &str,
+        seed: u64,
+    ) -> Result<Hub<ManualClock, Fixed>, crate::api::Error> {
+        let mut count = 0_u64;
+        let core = Core::with_profile(fx.profile.clone(), fx.clock.clone(), move || {
+            count = count.saturating_add(1);
+            Fixed(entropy(seed.saturating_add(count)))
+        })?;
+        Hub::new(
+            core,
+            HubConfig {
+                relay: RelayId(1),
+                inv_period: Period::S10,
+                reply_period: Period::S10,
+                profile: wire_profile(name).map_err(|_| crate::api::Error::Unavailable)?,
+            },
+        )
+    }
+
+    /// The `AddSend` of `actions`: its queue.
+    #[cfg(feature = "kat")]
+    fn added_send(actions: &[Action]) -> Option<QueueId> {
+        actions.iter().find_map(|a| match a {
+            Action::AddSend { queue, .. } => Some(*queue),
+            _ => None,
+        })
+    }
+
+    /// The state the steps of the hub contract share: both hubs and what one step hands the next.
+    #[cfg(feature = "kat")]
+    struct Scene {
+        host: Fixture,
+        inviter: Hub<ManualClock, Fixed>,
+        invitee: Hub<ManualClock, Fixed>,
+        issued: Option<crate::invitations::Issuance>,
+        inv_queue: QueueId,
+        n_link: u32,
+        material_recv: [u8; 32],
+        guest_send: QueueId,
+        host_send: QueueId,
+        reply_queue: QueueId,
+        contact: ContactId,
+        pooled: QueueId,
+        retire_from: u64,
+        moved: QueueId,
+    }
+
+    /// Step 1: the inviter issues: the invitation queue is fetched, the `LINK_PUT` runs at once.
+    #[cfg(feature = "kat")]
+    fn step_invite(sc: &mut Scene) -> R {
+        assert_eq!(OLD_SEND_MS, 24 * 3_600_000 + 60_000);
+        assert_eq!(SEND_BASE, 0x4000_0000);
+        assert!(sc.inviter.take_actions().is_empty() && sc.invitee.take_actions().is_empty());
+        // the timing draws are the seed's
+        sc.inviter.seed_timing_kat(9);
+        sc.invitee.seed_timing_kat(5);
+        assert_eq!(
+            sc.inviter.rng.uniform(1, 1_000),
+            TimingRng::seeded(9).uniform(1, 1_000)
+        );
+        assert_eq!(
+            sc.inviter.core.rng.uniform(1, 1_000),
+            TimingRng::seeded(9).uniform(1, 1_000)
+        );
+        sc.inviter.seed_timing_kat(9);
+        // the identity the hub shows
+        assert_eq!(
+            sc.inviter.own_fingerprint()?,
+            sc.host.profile.fingerprint()?
+        );
+        let iks = sc.inviter.own_iks()?;
+        assert_eq!(iks.len(), 2_017);
+        assert_eq!(
+            secmp_proto::prekeys::fingerprint_of(&secmp_proto::wire::inv::IksPublic::decode(
+                &iks
+            )?)?,
+            sc.inviter.own_fingerprint()?
+        );
+        assert!(Arc::ptr_eq(
+            &sc.inviter.profile_store(),
+            &sc.host.profile.store()
+        ));
+
+        let issued = sc.inviter.invite(T0 + 5 * DAY)?;
+        let inv_queue = sc
+            .inviter
+            .invitation_queue(&issued.invitation.ld_id)
+            .ok_or("queue")?;
+        assert_eq!(sc.inviter.invitation_queue(&[0xee; 16]), None);
+        let actions = sc.inviter.take_actions();
+        let [
+            Action::AddRecv {
+                queue,
+                period_ms: 10_000,
+                ..
+            },
+            Action::Control(put),
+        ] = actions.as_slice()
+        else {
+            return Err("issue: AddRecv, LinkPut".into());
+        };
+        assert_eq!(*queue, inv_queue);
+        let ControlKind::LinkPut(n_link) = put.kind else {
+            return Err("a LinkPut".into());
+        };
+        assert!(matches!(put.when, When::Prompt));
+        assert_eq!(
+            sc.inviter.link_put_args(n_link)?.ld_id,
+            issued.invitation.ld_id
+        );
+        let (material_recv, material_send) =
+            sc.inviter.queue_material(inv_queue).ok_or("material")?;
+        assert_eq!(
+            material_recv,
+            *sc.inviter
+                .invitations
+                .queue_of(&issued.invitation.ld_id)?
+                .recv_seed
+                .expose_secret()
+        );
+        assert_eq!(
+            material_send, [0; 32],
+            "an invitation queue has no sender seed"
+        );
+        assert_eq!(sc.inviter.queue_material(QueueId(999)), None);
+        sc.issued = Some(issued);
+        sc.inv_queue = inv_queue;
+        sc.n_link = n_link;
+        sc.material_recv = material_recv;
+        Ok(())
+    }
+
+    /// Step 2: the invitee accepts: `LINK_GET` at once, then the contact, its reply queue and the route to the invitation queue.
+    #[cfg(feature = "kat")]
+    fn step_accept(sc: &mut Scene) -> R {
+        let issued = sc.issued.as_ref().ok_or("issued")?;
+        let n = sc.n_link;
+        let (ld_id, n_get) = sc.invitee.begin_accept(&issued.uri)?;
+        assert_eq!((ld_id, n_get), (issued.invitation.ld_id, n));
+        let actions = sc.invitee.take_actions();
+        assert!(matches!(
+            actions.as_slice(),
+            [Action::Control(OpSpec { kind: ControlKind::LinkGetConsume(m), when: When::Prompt, .. })] if *m == n
+        ));
+        assert!(
+            sc.invitee
+                .link_consumed(n.saturating_add(1), Some(&[0]))
+                .is_err(),
+            "not waiting for it"
+        );
+        assert!(
+            sc.invitee.link_consumed(n, None).is_err(),
+            "the link data is gone"
+        );
+        sc.invitee.begin_accept(&issued.uri)?;
+        sc.invitee.take_actions();
+        let blob = issued.blob.encode()?;
+        sc.contact = sc.invitee.link_consumed(n, Some(&blob))?;
+        let actions = sc.invitee.take_actions();
+        sc.guest_send = added_send(&actions).ok_or("the route to the invitation queue")?;
+        let [
+            Action::AddRecv {
+                queue: reply_queue,
+                relay: RelayId(1),
+                period_ms: 10_000,
+                ..
+            },
+            Action::AddSend {
+                sid,
+                period_ms: 10_000,
+                ..
+            },
+        ] = actions.as_slice()
+        else {
+            return Err("accept: AddRecv, AddSend".into());
+        };
+        assert_eq!(*sid, issued.invitation.inv_sid);
+        assert!(sc.guest_send.0 >= SEND_BASE);
+        sc.reply_queue = *reply_queue;
+        Ok(())
+    }
+
+    /// Step 3: the three handshake cells reach the inviter's round; a send that failed is sent again as persisted;
+    /// accepted: the route to the invitee's reply queue; then, after `pump`, the pooled queue and the retirement.
+    #[cfg(feature = "kat")]
+    fn step_handshake(sc: &mut Scene) -> R {
+        let (guest_send, inv_queue) = (sc.guest_send, sc.inv_queue);
+        let first = sc
+            .invitee
+            .prepare_cell(guest_send, ms(0))
+            .map_err(|_| "prepare")?
+            .ok_or("cell 0")?;
+        let bytes = first.cell.as_bytes().to_vec();
+        sc.invitee
+            .send_failed(guest_send, first.token, SendFailure::Unknown);
+        let again = sc
+            .invitee
+            .prepare_cell(guest_send, ms(1))
+            .map_err(|_| "prepare")?
+            .ok_or("cell 0 again")?;
+        assert_eq!(again.cell.as_bytes(), bytes.as_slice());
+        let mut cells = vec![again];
+        for at in 2..4 {
+            cells.push(
+                sc.invitee
+                    .prepare_cell(guest_send, ms(at))
+                    .map_err(|_| "prepare")?
+                    .ok_or("cell")?,
+            );
+        }
+        for (n_cell, cell) in cells.iter().enumerate() {
+            let id = u64::try_from(n_cell)?.saturating_add(1);
+            sc.invitee.relayed(guest_send, cell.token, id);
+            let decided = sc.inviter.deliver(inv_queue, 0, id, &cell.cell);
+            assert_eq!(decided, Ok(Delivered::Committed), "cell {n_cell}");
+        }
+        let actions = sc.inviter.take_actions();
+        sc.host_send = added_send(&actions).ok_or("the route to the reply queue")?;
+        assert!(sc.inviter.sends_of(ContactId(1)).is_none());
+        sc.inviter.pump()?;
+        let actions = sc.inviter.take_actions();
+        let mut pooled = None;
+        let mut retire_from = None;
+        for action in &actions {
+            match action {
+                Action::AddRecv {
+                    queue,
+                    period_ms: 10_000,
+                    ..
+                } => pooled = Some(*queue),
+                Action::Control(OpSpec {
+                    kind: ControlKind::QueueDel(q),
+                    when: When::AfterEmptyFetchFrom(w, from),
+                    ..
+                }) if *q == inv_queue && *w == inv_queue => retire_from = Some(*from),
+                _ => {}
+            }
+        }
+        sc.pooled = pooled.ok_or("the first reply's pooled queue")?;
+        sc.retire_from = retire_from.ok_or("the invitation queue's retirement")?;
+        assert!(
+            (3_600_000..=86_400_000).contains(&sc.retire_from),
+            "the window ends U[1 h, 24 h] after now (monotonic): {}",
+            sc.retire_from
+        );
+        assert_eq!(
+            sc.inviter.core.view.recv_periods_ms,
+            vec![10_000, 10_000],
+            "both recv-queues count"
+        );
+        let (pooled_recv, pooled_send) = sc
+            .inviter
+            .queue_material(sc.pooled)
+            .ok_or("pooled material")?;
+        assert_ne!(pooled_send, [0; 32]);
+        assert_ne!(pooled_recv, sc.material_recv);
+        Ok(())
+    }
+
+    /// Step 4: a restart registers the same queues and re-arms the retirement from the stored deadline.
+    #[cfg(feature = "kat")]
+    fn step_restart(sc: &Scene) -> R {
+        let (pooled, inv_queue, from) = (sc.pooled, sc.inv_queue, sc.retire_from);
+        let mut restarted = hub_over(&sc.host, "host", 400)?;
+        let again = restarted.take_actions();
+        assert!(
+            again
+                .iter()
+                .any(|a| matches!(a, Action::AddRecv { queue, .. } if *queue == pooled))
+        );
+        assert!(
+            again
+                .iter()
+                .any(|a| matches!(a, Action::AddRecv { queue, .. } if *queue == inv_queue))
+        );
+        assert!(added_send(&again).is_some());
+        assert!(again.iter().any(|a| matches!(
+            a,
+            Action::Control(OpSpec { kind: ControlKind::QueueDel(q), when: When::AfterEmptyFetchFrom(w, f), .. })
+                if *q == inv_queue && *w == inv_queue && *f == from
+        )));
+        Ok(())
+    }
+
+    /// Step 5: the first reply reaches the invitee, whose send queue then moves to the pooled queue; the old queue
+    /// carries dummies for U[1 h, 24 h] more, then it is dropped (exactly at its time).
+    #[cfg(feature = "kat")]
+    fn step_reply(sc: &mut Scene) -> R {
+        let reply = sc
+            .inviter
+            .prepare_cell(sc.host_send, ms(10))
+            .map_err(|_| "prepare")?
+            .ok_or("the first reply")?;
+        let decided = sc.invitee.deliver(sc.reply_queue, 0, 1, &reply.cell);
+        assert_eq!(decided, Ok(Delivered::Committed));
+        sc.invitee.pump()?;
+        let actions = sc.invitee.take_actions();
+        sc.moved = added_send(&actions).ok_or("the new send queue")?;
+        assert_ne!(sc.moved, sc.guest_send);
+        assert_eq!(
+            sc.invitee.sends_of(sc.contact),
+            Some((sc.guest_send, sc.moved))
+        );
+        let overlap = TimingRng::seeded(5)
+            .uniform(3_600_000, 86_400_000)
+            .map_err(|_| "draw")?;
+        sc.invitee.tick(overlap.saturating_sub(1));
+        assert!(sc.invitee.take_actions().is_empty());
+        sc.invitee.tick(overlap);
+        let actions = sc.invitee.take_actions();
+        let old = sc.guest_send;
+        assert!(matches!(actions.as_slice(), [Action::Remove { queue }] if *queue == old));
+        assert!(!sc.invitee.pending_real(sc.moved));
+        Ok(())
+    }
+
+    /// Step 6: a message goes out on the new queue; what the scheduler reports of it reaches the session.
+    #[cfg(feature = "kat")]
+    fn step_message(sc: &mut Scene) -> R {
+        let (moved, contact) = (sc.moved, sc.contact);
+        let guest = &mut sc.invitee;
+        let Response::Sent(id) = guest.core_mut().handle(Request::Send {
+            contact,
+            kind: 1,
+            payload: secmp_crypto::Zeroizing::new(b"hello".to_vec()),
+            expire_after: 0,
+        })?
+        else {
+            return Err("sent".into());
+        };
+        assert!(guest.pending_real(moved));
+        let at = *guest.core.index.get(&contact.0).ok_or("index")?;
+        let state = |hub: &Hub<ManualClock, Fixed>| {
+            hub.core.convs.get(at).and_then(|c| c.outbox().state(&id))
+        };
+        let cell_at = |hub: &mut Hub<ManualClock, Fixed>, t: u64| {
+            hub.prepare_cell(moved, ms(t))
+                .map_err(|_| "prepare")?
+                .ok_or("message cell")
+        };
+        let cell = cell_at(guest, 20)?;
+        guest.relayed(moved, cell.token, 7);
+        assert_eq!(state(guest), Some(MsgState::Relayed(7)));
+        guest.evicted(moved, 7);
+        assert_eq!(state(guest), Some(MsgState::Queued));
+        let cell = cell_at(guest, 21)?;
+        guest.send_failed(moved, cell.token, SendFailure::Unknown);
+        assert_eq!(state(guest), Some(MsgState::Queued));
+        let cell = cell_at(guest, 22)?;
+        guest.discard(moved, cell.token);
+        assert_eq!(state(guest), Some(MsgState::Queued));
+        let cell = cell_at(guest, 23)?;
+        guest.relayed(moved, cell.token, 8);
+        assert_eq!(state(guest), Some(MsgState::Relayed(8)));
+        guest.queue_lost(moved);
+        assert_eq!(state(guest), Some(MsgState::Queued));
+        Ok(())
+    }
+
+    /// Step 7: the `QUEUE_DEL` ran: the retiring entry leaves the set, the queue the scheduler.
+    #[cfg(feature = "kat")]
+    fn step_retire(sc: &mut Scene) -> R {
+        let (inv_queue, pooled) = (sc.inv_queue, sc.pooled);
+        let host = &mut sc.inviter;
+        host.queue_deleted(inv_queue)?;
+        let actions = host.take_actions();
+        assert!(matches!(actions.as_slice(), [Action::Remove { queue }] if *queue == inv_queue));
+        let set = {
+            let store = host.profile_store();
+            let bytes = store
+                .lock()
+                .map_err(|_| "lock")?
+                .contact_queues(1)?
+                .ok_or("queues")?;
+            QueueSet::decode(&bytes)?
+        };
+        assert_eq!(set.entries.len(), 1);
+        assert_eq!(set.entries.first().map(|e| QueueId(e.queue)), Some(pooled));
+        assert_eq!(host.core.view.recv_periods_ms, vec![10_000]);
+        assert_eq!(host.queue_material(inv_queue), None);
+        Ok(())
+    }
+
+    /// B-4…B-7 killers for `Hub` (the invitation, the first reply, a route update, the retirement) without a scheduler: every
+    /// step is the call a driver makes, and the actions it gets back are asserted. Alone it is the hub's contract; the
+    /// driver tests (IN-17, SE-02, SE-03, SE-14) run it on the virtual clock.
+    #[test]
+    #[cfg(feature = "kat")]
+    fn invitation_reply_route_update_and_retirement() -> R {
+        big(|| {
+            let (host, guest) = (party("hub-h", 71)?, party("hub-g", 73)?);
+            let mut sc = Scene {
+                inviter: hub_over(&host, "host", 200)?,
+                invitee: hub_over(&guest, "guest", 300)?,
+                host,
+                issued: None,
+                inv_queue: QueueId(0),
+                n_link: 0,
+                material_recv: [0; 32],
+                guest_send: QueueId(0),
+                host_send: QueueId(0),
+                reply_queue: QueueId(0),
+                contact: ContactId(0),
+                pooled: QueueId(0),
+                retire_from: 0,
+                moved: QueueId(0),
+            };
+            step_invite(&mut sc)?;
+            step_accept(&mut sc)?;
+            step_handshake(&mut sc)?;
+            step_restart(&sc)?;
+            step_reply(&mut sc)?;
+            step_message(&mut sc)?;
+            step_retire(&mut sc)
+        })
     }
 }

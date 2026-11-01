@@ -377,4 +377,73 @@ mod tests {
         assert_eq!(store.contacts().err(), Some(Error::Unavailable));
         Ok(())
     }
+
+    /// B-4 (killers of `put_contact_routes`, `put_contact_queues`, `put_contact_identity`): the updates of a contact row are
+    /// statements of the caller's transaction; the sealed columns read back through their getters, the identity through the
+    /// list; an unknown contact is the uniform error and another contact's row is not touched.
+    #[test]
+    fn contact_row_updates() -> R {
+        use super::{
+            Contact, STATE_ACTIVE, put_contact, put_contact_identity, put_contact_queues,
+            put_contact_routes,
+        };
+
+        let dir = TempDir::new("contacts-updates")?;
+        let mut store = Store::open(dir.path(), &TestKey::db_key())?;
+        store.txn(|tx| {
+            for id in [1, 2] {
+                put_contact(
+                    tx,
+                    &Contact {
+                        id,
+                        iks: b"iks-old",
+                        fingerprint: b"fp-old",
+                        display_name: None,
+                        verified: false,
+                        routes: Some(b"routes-old"),
+                        queues: Some(b"queues-old"),
+                        state: STATE_ACTIVE,
+                        profile: None,
+                    },
+                )?;
+            }
+            Ok(())
+        })?;
+        store.txn(|tx| {
+            put_contact_routes(tx, 1, b"routes-new")?;
+            put_contact_queues(tx, 1, b"queues-new")?;
+            put_contact_identity(tx, 1, b"iks-new", b"fp-new")
+        })?;
+        let read = |v: Option<secmp_crypto::Zeroizing<Vec<u8>>>| v.map(|z| z.to_vec());
+        assert_eq!(read(store.contact_routes(1)?), Some(b"routes-new".to_vec()));
+        assert_eq!(read(store.contact_queues(1)?), Some(b"queues-new".to_vec()));
+        let rows = store.contacts()?;
+        let first = rows.first().ok_or("row 1")?;
+        assert_eq!(
+            (first.iks.clone(), first.fingerprint.clone()),
+            (b"iks-new".to_vec(), b"fp-new".to_vec())
+        );
+        // the other contact is as it was
+        let second = rows.get(1).ok_or("row 2")?;
+        assert_eq!(
+            (second.iks.clone(), second.fingerprint.clone()),
+            (b"iks-old".to_vec(), b"fp-old".to_vec())
+        );
+        assert_eq!(read(store.contact_routes(2)?), Some(b"routes-old".to_vec()));
+        assert_eq!(read(store.contact_queues(2)?), Some(b"queues-old".to_vec()));
+        // an unknown contact
+        assert_eq!(
+            store.txn(|tx| put_contact_routes(tx, 9, b"x")),
+            Err(Error::Unavailable)
+        );
+        assert_eq!(
+            store.txn(|tx| put_contact_queues(tx, 9, b"x")),
+            Err(Error::Unavailable)
+        );
+        assert_eq!(
+            store.txn(|tx| put_contact_identity(tx, 9, b"x", b"y")),
+            Err(Error::Unavailable)
+        );
+        Ok(())
+    }
 }

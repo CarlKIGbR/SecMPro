@@ -483,4 +483,34 @@ mod tests {
         assert_eq!(store.session_rows(8).err(), Some(Error::Unavailable));
         Ok(())
     }
+
+    /// B-4 (killers of `put_handshake`, `delete_handshake`, `Store::handshake`; Q150): the persisted handshake cells of an
+    /// initiator read back until deleted; another session has none; deleting none is no error; the fixed part is not touched.
+    #[test]
+    fn handshake_cells_round_trip() -> R {
+        let dir = TempDir::new("handshake-cells")?;
+        let mut store = Store::open(dir.path(), &TestKey::db_key())?;
+        assert!(store.handshake(4)?.is_none());
+        store.txn(|tx| {
+            put_fixed(tx, 4, b"fixed")?;
+            put_handshake(tx, 4, b"three cells")
+        })?;
+        assert_eq!(
+            store.handshake(4)?.map(|z| z.to_vec()),
+            Some(b"three cells".to_vec())
+        );
+        assert!(store.handshake(5)?.is_none(), "another session has none");
+        store.txn(|tx| delete_handshake(tx, 5))?;
+        assert!(
+            store.handshake(4)?.is_some(),
+            "deleting another session's none"
+        );
+        store.txn(|tx| delete_handshake(tx, 4))?;
+        assert!(store.handshake(4)?.is_none());
+        assert_eq!(
+            store.session_rows(4)?.ok_or("rows")?.fixed.to_vec(),
+            b"fixed".to_vec()
+        );
+        Ok(())
+    }
 }

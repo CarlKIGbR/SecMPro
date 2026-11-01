@@ -249,4 +249,24 @@ mod tests {
         assert!(store.outbox_rows(2)?.is_empty());
         Ok(())
     }
+
+    /// B-4 (killer of `set_delivered`, SE-21): the statement sets the row `Delivered` and clears its cell id; another row is
+    /// not touched; a message without a row (a view-once) is no error.
+    #[test]
+    fn set_delivered_marks_only_its_row() -> R {
+        let dir = TempDir::new("outbox-delivered")?;
+        let mut store = Store::open(dir.path(), &TestKey::db_key())?;
+        store.outbox_insert(1, &row(1, 1, 10))?;
+        store.outbox_insert(1, &row(2, 2, 20))?;
+        store.outbox_set_state(&[1; 16], state::RELAYED, Some(41), Some(15))?;
+        store.outbox_set_state(&[2; 16], state::RELAYED, Some(42), Some(25))?;
+        store.txn(|tx| set_delivered(tx, &[1; 16]))?;
+        store.txn(|tx| set_delivered(tx, &[9; 16]))?;
+        let rows = store.outbox_rows(1)?;
+        let first = rows.first().ok_or("row 1")?;
+        assert_eq!((first.state, first.cell_id), (state::DELIVERED, None));
+        let second = rows.get(1).ok_or("row 2")?;
+        assert_eq!((second.state, second.cell_id), (state::RELAYED, Some(42)));
+        Ok(())
+    }
 }

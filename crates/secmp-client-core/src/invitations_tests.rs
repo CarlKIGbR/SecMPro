@@ -1366,3 +1366,49 @@ fn expired_queue_del_after_empty_fetch() -> R {
     assert_eq!(queue.take_due(due).len(), 1);
     Ok(())
 }
+
+/// B-4 killers (`Invitations::open_queues`, `queue_of`, `SparePool::seeds`): the pool lists its spare queues with their ids
+/// and seeds, oldest first; an issued invitation takes the oldest; the open invitations list their queues (a consumed one
+/// does not, but `queue_of` still finds it).
+#[cfg(feature = "kat")]
+#[test]
+fn open_queues_and_pool_seeds() -> R {
+    use secmp_store::profile::{INVITATION_CONSUMED, set_invitation_status};
+
+    let (fx, mut e) = inviter("oq", 55, 3)?;
+    let invitations = Invitations::new(fx.profile.clone());
+    let pool = SparePool::new(fx.profile.store());
+    let before = pool.seeds(RelayId(1))?;
+    assert_eq!(before.len(), 3);
+    assert!(invitations.open_queues()?.is_empty());
+    let first = invitations.issue(&request(1)?, &fx.clock, &mut e)?;
+    let second = invitations.issue(&request(1)?, &fx.clock, &mut e)?;
+    let open = invitations.open_queues()?;
+    assert_eq!(open.len(), 2);
+    let (a, b) = (open.first().ok_or("a")?, open.get(1).ok_or("b")?);
+    let wanted = [
+        (&first.invitation.ld_id, before.first().ok_or("pool 0")?),
+        (&second.invitation.ld_id, before.get(1).ok_or("pool 1")?),
+    ];
+    for (found, (ld_id, (queue, recv, _send))) in [a, b].into_iter().zip(wanted) {
+        assert_eq!(&found.ld_id, ld_id);
+        assert_eq!(found.relay, RelayId(1));
+        assert_eq!(found.queue, *queue);
+        assert_eq!(found.recv_seed.expose_secret(), recv);
+        assert_eq!(found.n, link_data_n(ld_id));
+    }
+    assert_eq!(pool.seeds(RelayId(1))?.len(), 1);
+    // consumed: not open, still found by `queue_of`
+    {
+        let store = fx.profile.store();
+        let mut s = store.lock().map_err(|_| "lock")?;
+        s.txn(|tx| set_invitation_status(tx, &first.invitation.ld_id, INVITATION_CONSUMED))?;
+    }
+    let open = invitations.open_queues()?;
+    assert_eq!(open.len(), 1);
+    assert_eq!(open.first().map(|q| q.ld_id), Some(second.invitation.ld_id));
+    let consumed = invitations.queue_of(&first.invitation.ld_id)?;
+    assert_eq!(consumed.queue, before.first().ok_or("pool 0")?.0);
+    assert!(invitations.queue_of(&[0xee; 16]).is_err());
+    Ok(())
+}

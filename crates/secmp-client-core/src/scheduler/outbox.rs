@@ -472,3 +472,43 @@ impl MemPersist {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn message(n: u8) -> OutMessage {
+        OutMessage {
+            msg_id: [n; 16],
+            kind: secmp_proto::wire::cell::AppKind::Text,
+            expire_after: 0,
+            payload: Zeroizing::new(vec![n; 4]),
+        }
+    }
+
+    /// B-4 killers (`Outbox::enqueue_durable`, `MemOutbox::discard`, OPEN-M7-F9): an outbox without a store queues and says
+    /// so; a message that waits can be taken back, one that is in flight, relayed or unknown cannot, and only it goes.
+    #[test]
+    fn enqueue_durable_and_discard() {
+        let mut outbox = MemOutbox::new();
+        assert!(outbox.enqueue_durable(message(1), 0));
+        assert_eq!(outbox.state(&[1; 16]), Some(MsgState::Queued));
+        assert!(!outbox.discard(&[9; 16]), "unknown");
+        let _taken = outbox.take_next();
+        assert!(!outbox.discard(&[1; 16]), "in flight");
+        outbox.relayed(&[1; 16], 5);
+        assert!(!outbox.discard(&[1; 16]), "relayed");
+        outbox.enqueue(message(2), 0);
+        outbox.enqueue(message(3), 0);
+        assert!(outbox.discard(&[2; 16]));
+        assert_eq!(outbox.state(&[2; 16]), None);
+        assert_eq!(outbox.state(&[3; 16]), Some(MsgState::Queued));
+        assert_eq!(outbox.waiting(), 1);
+        assert!(!outbox.discard(&[2; 16]), "gone already");
+        // a requeued message waits again and can be taken back
+        outbox.requeue(&[1; 16]);
+        assert!(outbox.discard(&[1; 16]));
+        assert_eq!(outbox.state(&[1; 16]), None);
+        assert_eq!(outbox.state(&[3; 16]), Some(MsgState::Queued));
+    }
+}

@@ -152,6 +152,36 @@ impl<C: Clock, S: EntropySource> Hub<C, S> {
         self.core.seed_timing_kat(seed);
     }
 
+    /// Whether the conversation that sends on `queue` has something real waiting for a slot (the cost models of the test
+    /// drivers; the scheduler never asks).
+    pub fn pending_real(&mut self, queue: QueueId) -> bool {
+        self.core.convs.pending_real(queue)
+    }
+
+    /// `fingerprint(IKSPublic)` of the user (§6.2; public).
+    ///
+    /// # Errors
+    /// [`Error::Unavailable`] if the profile has no identity.
+    pub fn own_fingerprint(&self) -> Result<[u8; 32], Error> {
+        self.core.profile.fingerprint()
+    }
+
+    /// The user's `IKSPublic` encoding (public; a test searches the wire for it).
+    ///
+    /// # Errors
+    /// [`Error::Unavailable`] if the profile has no identity.
+    pub fn own_iks(&self) -> Result<Vec<u8>, Error> {
+        use secmp_proto::Encode as _;
+
+        Ok(self.core.profile.identity()?.public().encode()?.to_vec())
+    }
+
+    /// The profile's store (a test reads rows through it).
+    #[must_use]
+    pub fn profile_store(&self) -> crate::persist::SharedStore {
+        self.core.profile_store()
+    }
+
     /// The core (the `Api`'s state).
     pub const fn core_mut(&mut self) -> &mut Core<C, S> {
         &mut self.core

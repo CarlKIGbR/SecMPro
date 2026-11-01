@@ -788,6 +788,31 @@ pub(crate) const MUTANT_HARNESS_SKIP_TESTS: &[(&str, &str)] = &[
         "link_lifetime_uniform_6h_24h",
         "S-16, 1 000 lifetimes: 10.9 s",
     ),
+    // M7 B-5, B-6 (WEISUNG M7-B-4; Q121): the store-backed runs of the virtual driver, nextest on the 32-core container
+    (
+        "sender_resends_last_real_on_new_queue",
+        "SE-02, 200 cells and a rotation over two SQLCipher profiles: 40 s",
+    ),
+    (
+        "recipient_retires_old_queue",
+        "SE-03, a rotation and its QUEUE_DEL, 2.1 h virtual over two profiles: 144 s",
+    ),
+    (
+        "retirement_survives_restart",
+        "SE-03 and Q194, as the above with a restart in the overlap: 96 s",
+    ),
+    (
+        "relay_restart_with_store",
+        "SE-14, the relay and both clients restart: 14 s",
+    ),
+    (
+        "no_identifiers_in_request_plaintexts",
+        "AP-05, three profiles, two invitations, a rotation and a key change, 1.1 h virtual: 65 s",
+    ),
+    (
+        "store_backed_source_activity_independent",
+        "SE-19, three modes x (idle, active) x 6 h virtual over four profiles each, in parallel: 551 s",
+    ),
 ];
 
 /// WEISUNG M6-B-3 §1: the long, host-independent simulations the `kat` step leaves out when it runs on Windows

@@ -757,3 +757,375 @@ fn session_actor_owns_ratchet() -> Result<()> {
     assert_eq!(calls(&fixture).len(), 1);
     Ok(())
 }
+
+/// The product part of a Rust source (CRLF-normalised, the `#[cfg(test)] mod tests` cut off).
+#[cfg(test)]
+fn product(src: &str) -> String {
+    src.replace("\r\n", "\n")
+        .split("#[cfg(test)]\nmod tests")
+        .next()
+        .unwrap_or_default()
+        .to_owned()
+}
+
+/// The declarations of `src` that are public API: every `pub` item header, every `pub` field, and the whole body of a `pub
+/// enum` (its variants carry types) — as `(line, text)`. Items gated by `#[cfg(feature = "kat")]` are test-only accessors
+/// of the shipped crate and left out; so are comments.
+#[cfg(test)]
+fn public_surface(src: &str) -> Vec<(usize, String)> {
+    let mut out = Vec::new();
+    let lines: Vec<&str> = product(src)
+        .lines()
+        .map(str::to_owned)
+        .collect::<Vec<_>>()
+        .leak()
+        .iter()
+        .map(String::as_str)
+        .collect();
+    let (mut i, mut gated) = (0_usize, false);
+    while let Some(line) = lines.get(i).copied() {
+        let t = line.trim();
+        if t == r#"#[cfg(feature = "kat")]"# {
+            gated = true;
+            i = i.saturating_add(1);
+            continue;
+        }
+        if t.starts_with("//") || t.starts_with("#[") || t.is_empty() {
+            i = i.saturating_add(1);
+            continue;
+        }
+        // the extent of the item starting here: to its closing brace at this indent, or its `;`/`,` for a one-liner
+        let indent = line.len().saturating_sub(line.trim_start().len());
+        let mut end = i;
+        let mut text = String::new();
+        loop {
+            let l = lines.get(end).copied().unwrap_or_default();
+            text.push_str(l.trim());
+            text.push(' ');
+            let done_here = l.trim_end().ends_with(';')
+                || (l.trim_end().ends_with(',') && !l.contains('{'))
+                || l.trim_end().ends_with('{');
+            if done_here || end.saturating_add(1) >= lines.len() {
+                break;
+            }
+            end = end.saturating_add(1);
+        }
+        let public = t.starts_with("pub ") && !t.starts_with("pub(");
+        let opens_block = text.trim_end().ends_with('{');
+        if opens_block {
+            // find the closing line of the block
+            let close = (end.saturating_add(1)..lines.len())
+                .find(|k| {
+                    let l = lines.get(*k).copied().unwrap_or_default();
+                    l.trim() == "}"
+                        || (l.trim_start().starts_with('}')
+                            && l.len().saturating_sub(l.trim_start().len()) == indent)
+                })
+                .unwrap_or(lines.len().saturating_sub(1));
+            let is_enum = t.starts_with("pub enum ");
+            if public && !gated {
+                if is_enum {
+                    for k in i..=close {
+                        out.push((
+                            k.saturating_add(1),
+                            lines.get(k).copied().unwrap_or_default().trim().to_owned(),
+                        ));
+                    }
+                } else {
+                    out.push((i.saturating_add(1), text.trim().to_owned()));
+                }
+            }
+            // the members of an impl or a struct are items of their own: look inside, unless this item is gated or an enum
+            if gated || is_enum || t.starts_with("fn ") || t.contains(" fn ") {
+                i = close.saturating_add(1);
+            } else {
+                i = i.saturating_add(1);
+            }
+        } else {
+            if public && !gated {
+                out.push((i.saturating_add(1), text.trim().to_owned()));
+            }
+            i = end.saturating_add(1);
+        }
+        gated = false;
+    }
+    out
+}
+
+/// Whether `word` occurs in `text` as a whole identifier.
+#[cfg(test)]
+fn has_word(text: &str, word: &str) -> bool {
+    text.match_indices(word).any(|(at, _)| {
+        let before = text.get(..at).and_then(|s| s.chars().next_back());
+        let after = text
+            .get(at.saturating_add(word.len())..)
+            .and_then(|s| s.chars().next());
+        let ident = |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || c == '_');
+        !ident(before) && !ident(after)
+    })
+}
+
+/// TEST-SPEC-M7 AP-02 (`docs/02` §4.5, §6): the `Api` exposes no store type and no secret — no public item of
+/// `secmp-client-core/src/api.rs` (a signature, a field, a variant) names the store crate, its handle types, a secret
+/// newtype (`SecretBytes`, `SecretPage`, `LockedSecret`), a key type or the ratchet state. Test-only (`kat`) accessors are not
+/// part of the shipped surface. The scan finds the public items where they are, and a fixture that leaks a store handle.
+#[cfg(test)]
+#[test]
+fn api_exposes_no_secrets_or_store() -> Result<()> {
+    const FORBIDDEN: &[&str] = &[
+        "secmp_store",
+        "Store",
+        "StoreOutbox",
+        "StorePersist",
+        "StoreConversation",
+        "SharedStore",
+        "SecretBytes",
+        "SecretPage",
+        "LockedSecret",
+        "RatchetState",
+        "HybridSigningKey",
+        "Ed25519SigningKey",
+        "X25519Secret",
+        "MlKem768Dk",
+        "MlKem1024Dk",
+        "IdentityKeys",
+        "Unlocked",
+        "DbKey",
+    ];
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let src = std::fs::read_to_string(root.join("crates/secmp-client-core/src/api.rs"))?;
+    let items = public_surface(&src);
+    let leaks: Vec<String> = items
+        .iter()
+        .filter(|(_, text)| FORBIDDEN.iter().any(|w| has_word(text, w)))
+        .map(|(n, text)| format!("api.rs:{n}: {text}"))
+        .collect();
+    assert!(leaks.is_empty(), "the Api exposes: {leaks:?}");
+    // the scan sees the surface: the request and response enums, the handle, the core
+    for name in [
+        "pub enum Request",
+        "pub enum Response",
+        "pub enum Event",
+        "pub struct Api",
+        "pub struct Core",
+        "pub async fn call",
+        "pub fn handle",
+    ] {
+        assert!(items.iter().any(|(_, t)| t.starts_with(name)), "{name}");
+    }
+    assert!(items.len() > 40, "{} public declarations", items.len());
+    // the fixtures: a leaked handle is found, a kat-gated accessor and a private field are not
+    let leak = "pub struct Core {\n    pub store: SharedStore,\n    secret: SecretBytes<32>,\n}\n";
+    assert!(
+        public_surface(leak)
+            .iter()
+            .any(|(_, t)| has_word(t, "SharedStore"))
+    );
+    assert!(
+        !public_surface(leak)
+            .iter()
+            .any(|(_, t)| has_word(t, "SecretBytes"))
+    );
+    let gated = "impl Core {\n    #[cfg(feature = \"kat\")]\n    pub fn open_kat(a: secmp_store::wrap::Argon2Params) {}\n}\n";
+    assert!(
+        public_surface(gated)
+            .iter()
+            .all(|(_, t)| !has_word(t, "secmp_store"))
+    );
+    let variant = "pub enum Response {\n    Done,\n    Handle(DbKey),\n}\n";
+    assert!(
+        public_surface(variant)
+            .iter()
+            .any(|(_, t)| has_word(t, "DbKey"))
+    );
+    Ok(())
+}
+
+/// The names `secmp_transport` items are used under in `src` (CRLF-normalised, tests and comments left out): every
+/// identifier of a `secmp_transport::…` path or `use` list, without the aliases after `as`.
+#[cfg(test)]
+fn transport_names(src: &str) -> BTreeSet<String> {
+    let text = product(src);
+    let mut names = BTreeSet::new();
+    let mut rest = text.as_str();
+    while let Some(at) = rest.find("secmp_transport::") {
+        let (before, after) = rest.split_at(at);
+        let line_start = before.rfind('\n').map_or(0, |n| n.saturating_add(1));
+        let commented = before
+            .get(line_start..)
+            .is_some_and(|l| l.trim_start().starts_with("//"));
+        let tail = after.get("secmp_transport::".len()..).unwrap_or_default();
+        // a path ends at `;`, or at the first space/paren outside braces
+        let mut depth = 0_usize;
+        let mut end = tail.len();
+        for (k, c) in tail.char_indices() {
+            match c {
+                '{' => depth = depth.saturating_add(1),
+                '}' => depth = depth.saturating_sub(1),
+                ';' | '(' | ',' | ' ' | ')' | '\n' | '<' | '>' | '?' | '.' if depth == 0 => {
+                    end = k;
+                    break;
+                }
+                _ => {}
+            }
+        }
+        let path = tail.get(..end).unwrap_or_default();
+        rest = tail.get(end..).unwrap_or_default();
+        if commented {
+            continue;
+        }
+        let mut skip_next = false;
+        for token in path
+            .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+            .filter(|t| !t.is_empty())
+        {
+            if skip_next {
+                skip_next = false;
+            } else if token == "as" {
+                skip_next = true;
+            } else if token != "self" {
+                names.insert(token.to_owned());
+            }
+        }
+    }
+    names
+}
+
+/// TEST-SPEC-M7 AP-04 (Q153; `docs/07:147`, §12.2 `docs/03:748`): no identifier reaches a transport type. The modules of
+/// `secmp-client-core` that import `secmp_transport` are exactly `scheduler::core`, `scheduler::run` and `kani_proofs`; and
+/// every `secmp_transport` item they name is a capability or cell type of the allowlist or one of the plumbing names pinned
+/// here from `grep -rn secmp_transport crates/secmp-client-core/src` at the head of B-6. A new name needs a change of this
+/// test. AP-05 is the dynamic identifier oracle.
+#[cfg(test)]
+#[test]
+fn no_identifiers_reach_transport_types() -> Result<()> {
+    /// The capability and wire types the allowlist of Q153 names.
+    const TYPES: &[&str] = &[
+        "RecvCap", "SendCap", "LdId", "LinkBlob", "Cell", "CellId", "Token", "RelayRef", "Period",
+        "Bucket", "OwnerKey",
+    ];
+    /// The plumbing the scheduler core and its tokio driver use (`secmp_transport::channel::counters` is the `kat` counters;
+    /// `driver::…` is the async transport the tokio driver runs).
+    const PLUMBING: &[&str] = &[
+        "AsyncConnectOutcome",
+        "AsyncRelayQueueTransport",
+        "AsyncSession",
+        "Channel",
+        "Command",
+        "EitherStream",
+        "Error",
+        "Isolation",
+        "Outcome",
+        "Prepared",
+        "ProviderStream",
+        "QueueRef",
+        "StreamProvider",
+        "channel",
+        "counters",
+        "driver",
+        "evicted",
+        "evicted_is_plausible",
+        "seal_calls",
+        "sign_calls",
+    ];
+    const IMPORTERS: &[&str] = &[
+        "crates/secmp-client-core/src/kani_proofs.rs",
+        "crates/secmp-client-core/src/scheduler/core/mod.rs",
+        "crates/secmp-client-core/src/scheduler/run.rs",
+    ];
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let src = root.join("crates/secmp-client-core/src");
+    let mut importers = BTreeSet::new();
+    let mut named: BTreeSet<String> = BTreeSet::new();
+    for file in crate::util::walk_files(&src, &|p| p.extension().is_some_and(|x| x == "rs"))? {
+        let rel = crate::util::rel(&root, &file);
+        let used = transport_names(&std::fs::read_to_string(&file)?);
+        if !used.is_empty() {
+            importers.insert(rel);
+            named.extend(used);
+        }
+    }
+    let want: BTreeSet<String> = IMPORTERS.iter().map(|s| (*s).to_owned()).collect();
+    assert_eq!(importers, want, "the modules that import secmp_transport");
+    let allowed: BTreeSet<&str> = TYPES.iter().chain(PLUMBING).copied().collect();
+    let outside: Vec<&String> = named
+        .iter()
+        .filter(|n| !allowed.contains(n.as_str()))
+        .collect();
+    assert!(
+        outside.is_empty(),
+        "secmp_transport items outside the allowlist: {outside:?}"
+    );
+    // the scan finds what is there (the core names the capabilities), and the fixtures:
+    assert!(named.contains("RecvCap") && named.contains("SendCap") && named.contains("Channel"));
+    let fixture = "use secmp_transport::{Channel, Error as TransportError, ProviderStream};\nfn f() -> secmp_transport::LinkBlobPart {}\n";
+    let found = transport_names(fixture);
+    assert!(
+        found.contains("Channel") && found.contains("Error") && found.contains("ProviderStream")
+    );
+    assert!(!found.contains("TransportError"), "an alias is not an item");
+    assert!(found.contains("LinkBlobPart"), "an inline path is found");
+    assert!(transport_names("// secmp_transport::Channel\n").is_empty());
+    assert!(
+        transport_names("#[cfg(test)]\nmod tests {\n    use secmp_transport::Channel;\n}\n")
+            .is_empty()
+    );
+    Ok(())
+}
+
+/// TEST-SPEC-M7 AP-06 (`docs/02` §3, the dependency direction): `secmp-transport` depends, directly or through any chain,
+/// on neither `secmp-store` nor `secmp-client-core` (`cargo metadata`, normal dependencies: its dev-dependency on the test
+/// kit is the harness of its own tests).
+#[cfg(test)]
+#[test]
+fn transport_has_no_core_or_store_dep() -> Result<()> {
+    let ws = crate::meta::Workspace::load()?;
+    let id_of = |name: &str| {
+        ws.all
+            .iter()
+            .find(|(_, (n, _, member))| n == name && *member)
+            .map(|(id, _)| id.clone())
+    };
+    let transport =
+        id_of("secmp-transport").ok_or_else(|| Error("secmp-transport is not a member".into()))?;
+    let mut seen = BTreeSet::new();
+    let mut stack = vec![transport];
+    while let Some(id) = stack.pop() {
+        if !seen.insert(id.clone()) {
+            continue;
+        }
+        for (dep, normal) in ws.edges.get(&id).map(Vec::as_slice).unwrap_or_default() {
+            // the dev-dependency on the test kit (the harness of its own tests) is not a direction of the product
+            if *normal {
+                stack.push(dep.clone());
+            }
+        }
+    }
+    let names: BTreeSet<&str> = seen
+        .iter()
+        .filter_map(|id| ws.all.get(id).map(|(n, _, _)| n.as_str()))
+        .collect();
+    for forbidden in ["secmp-store", "secmp-client-core"] {
+        assert!(
+            !names.contains(forbidden),
+            "secmp-transport reaches {forbidden}"
+        );
+    }
+    // the graph is read: the transport reaches the crates it is documented to use, and the core does reach the transport
+    assert!(
+        names.contains("secmp-proto") && names.contains("secmp-crypto"),
+        "{names:?}"
+    );
+    let core = id_of("secmp-client-core")
+        .ok_or_else(|| Error("secmp-client-core is not a member".into()))?;
+    let core_deps: BTreeSet<&str> = ws
+        .edges
+        .get(&core)
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|(id, _)| ws.all.get(id).map(|(n, _, _)| n.as_str()))
+        .collect();
+    assert!(core_deps.contains("secmp-transport") && core_deps.contains("secmp-store"));
+    Ok(())
+}

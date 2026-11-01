@@ -284,6 +284,7 @@ pub const AI_COSTS: Costs = Costs {
     prepare_real: 20,
     prepare_dummy: 1,
     receive: 5,
+    jitter: 0,
 };
 
 fn text(n: u64, len: usize) -> OutMessage {

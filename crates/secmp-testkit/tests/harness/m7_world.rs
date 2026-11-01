@@ -59,10 +59,16 @@ fn relay_ref(d: &VirtualDriver) -> RelayRef {
 pub fn open_hub(name: &str, dir: &std::path::Path, clock: &ManualClock, epoch: u32) -> TestHub {
     let unlocked = unlock_kat(dir, PASS, Argon2Params::kat_small()).unwrap();
     let profile = Profile::open_with(dir, &unlocked).unwrap();
-    hub_of(name, profile, clock, epoch)
+    hub_of(name, profile, clock, epoch, Period::S10)
 }
 
-fn hub_of(name: &str, profile: Profile, clock: &ManualClock, epoch: u32) -> TestHub {
+fn hub_of(
+    name: &str,
+    profile: Profile,
+    clock: &ManualClock,
+    epoch: u32,
+    period: Period,
+) -> TestHub {
     let tag = name.to_owned();
     let mut n = epoch.saturating_mul(10_000);
     let core = secmp_client_core::api::Core::with_profile(profile, clock.clone(), move || {
@@ -74,8 +80,8 @@ fn hub_of(name: &str, profile: Profile, clock: &ManualClock, epoch: u32) -> Test
         core,
         HubConfig {
             relay: RelayId(1),
-            inv_period: Period::S10,
-            reply_period: Period::S10,
+            inv_period: period,
+            reply_period: period,
             profile: WireProfile::new(name, None).unwrap(),
         },
     )
@@ -94,6 +100,17 @@ pub fn add_party_mode(
     name: &str,
     pool: usize,
     (mode, seed): (Mode, u64),
+) -> Party {
+    add_party_period(d, name, pool, (mode, seed), Period::S10)
+}
+
+/// [`add_party_mode`] whose queues (invitation, reply, rotation) have period `period`.
+pub fn add_party_period(
+    d: &mut VirtualDriver,
+    name: &str,
+    pool: usize,
+    (mode, seed): (Mode, u64),
+    period: Period,
 ) -> Party {
     let root = TempDir::new(name).unwrap();
     let dir = root.path().join("profile");
@@ -118,7 +135,7 @@ pub fn add_party_mode(
     for (_, recv, send) in spares.seeds(RelayId(1)).unwrap() {
         d.new_queue_with(idx, &recv, &send);
     }
-    let hub = hub_of(name, profile, &clock, 0);
+    let hub = hub_of(name, profile, &clock, 0, period);
     d.attach_hub(idx, Box::new(hub));
     Party {
         _root: root,
@@ -164,7 +181,7 @@ pub fn persisted(client: &mut SimClient, contact: i64) -> Vec<Vec<u8>> {
         .any()
         .downcast_mut::<TestHub>()
         .unwrap();
-    let store = hub.core().profile_store();
+    let store = hub.profile_store();
     let bytes = store.lock().unwrap().handshake(contact).unwrap().unwrap();
     secmp_proto::hx::PersistedCells::from_bytes(&bytes)
         .unwrap()
@@ -180,37 +197,55 @@ pub fn start(d: &mut VirtualDriver, label: &str, pool: usize) -> Started {
     start_seeded(d, label, pool, None)
 }
 
-/// [`start`] with the timing randomness of the parties seeded.
-pub fn start_seeded(
-    d: &mut VirtualDriver,
-    label: &str,
-    pool: usize,
-    seeds: Option<(u64, u64)>,
-) -> Started {
-    use secmp_client_core::scheduler::types::ControlKind;
-    use secmp_testkit::harness::{Inspect, LinkMaterial};
+/// What [`invite_pair`] made.
+pub struct Invite {
+    /// The invitation's URI (a secret).
+    pub uri: String,
+    /// The invitation's link key (a secret).
+    pub link_key: [u8; 32],
+    /// The invitation queue's sender id.
+    pub inv_sid: [u8; 16],
+    /// The invitation queue.
+    pub inv_queue: secmp_client_core::scheduler::types::QueueId,
+    /// The invitee's contact (the inviter) and its persisted handshake cells.
+    pub guest_contact: i64,
+    /// The invitee's persisted handshake cells.
+    pub handshake: Vec<Vec<u8>>,
+}
 
-    let host = add_party(d, &format!("{label}-host"), pool, 11);
-    let guest = add_party(d, &format!("{label}-guest"), pool, 12);
-    for p in [&host, &guest] {
-        d.client(p.idx).opts.inspect = Inspect::Requests;
+/// The ids of the contacts of client `i`, ascending.
+pub fn contact_ids(d: &mut VirtualDriver, i: usize) -> Vec<i64> {
+    use secmp_client_core::api::{Request, Response};
+
+    match hub(d, i).core_mut().handle(Request::Contacts).unwrap() {
+        Response::Contacts(c) => c.iter().map(|c| c.id.0).collect(),
+        _ => Vec::new(),
     }
-    if let Some((h, g)) = seeds {
-        hub(d, host.idx).seed_timing_kat(h);
-        hub(d, guest.idx).seed_timing_kat(g);
-    }
+}
+
+/// `host` invites `guest`, as the driver's scheduled operations: the `LINK_PUT` on a one-shot link, the `LINK_GET` on another,
+/// the accept by the invitee — until 31 s of virtual time have passed.
+pub fn invite_pair(d: &mut VirtualDriver, host: &Party, guest: &Party) -> Invite {
+    use secmp_client_core::scheduler::types::ControlKind;
+    use secmp_testkit::harness::LinkMaterial;
+
+    let before = d.client_ref(host.idx).controls_done.len();
     let issued = hub(d, host.idx).invite(START_UNIX + 5 * 86_400).unwrap();
     let inv_queue = hub(d, host.idx)
         .invitation_queue(&issued.invitation.ld_id)
         .unwrap();
-    d.run_until(30_000);
+    let t = d.now();
+    d.run_until(t.saturating_add(30_000));
     assert!(
         d.client_ref(host.idx)
             .controls_done
             .iter()
+            .skip(before)
             .any(|(_, k)| matches!(k, ControlKind::LinkPut(_))),
         "the LINK_PUT ran on a one-shot link"
     );
+    let known = contact_ids(d, guest.idx);
+    let consumed = d.client_ref(guest.idx).controls_done.len();
     let (ld_id, n) = hub(d, guest.idx).begin_accept(&issued.uri).unwrap();
     d.client(guest.idx).links.insert(
         n,
@@ -222,23 +257,58 @@ pub fn start_seeded(
             expires_bucket: 0,
         },
     );
-    d.run_until(31_000);
+    let t = d.now();
+    d.run_until(t.saturating_add(1_000));
     assert_eq!(d.client_ref(guest.idx).hub_errors, Vec::<String>::new());
     assert!(
         d.client_ref(guest.idx)
             .controls_done
             .iter()
+            .skip(consumed)
             .any(|(_, k)| matches!(k, ControlKind::LinkGetConsume(_))),
         "the LINK_GET ran on a one-shot link"
     );
-    let handshake = persisted(d.client(guest.idx), 1);
+    let guest_contact = *contact_ids(d, guest.idx)
+        .iter()
+        .find(|c| !known.contains(c))
+        .expect("the invitee has a new contact");
+    let handshake = persisted(d.client(guest.idx), guest_contact);
     assert_eq!(handshake.len(), 3);
+    Invite {
+        uri: issued.uri.to_string(),
+        link_key: *issued.invitation.link_key.expose_secret(),
+        inv_sid: issued.invitation.inv_sid,
+        inv_queue,
+        guest_contact,
+        handshake,
+    }
+}
+
+/// [`start`] with the timing randomness of the parties seeded.
+pub fn start_seeded(
+    d: &mut VirtualDriver,
+    label: &str,
+    pool: usize,
+    seeds: Option<(u64, u64)>,
+) -> Started {
+    use secmp_testkit::harness::Inspect;
+
+    let host = add_party(d, &format!("{label}-host"), pool, 11);
+    let guest = add_party(d, &format!("{label}-guest"), pool, 12);
+    for p in [&host, &guest] {
+        d.client(p.idx).opts.inspect = Inspect::Requests;
+    }
+    if let Some((h, g)) = seeds {
+        hub(d, host.idx).seed_timing_kat(h);
+        hub(d, guest.idx).seed_timing_kat(g);
+    }
+    let invite = invite_pair(d, &host, &guest);
     Started {
         host,
         guest,
-        inv_sid: issued.invitation.inv_sid,
-        inv_queue,
-        handshake,
+        inv_sid: invite.inv_sid,
+        inv_queue: invite.inv_queue,
+        handshake: invite.handshake,
     }
 }
 
@@ -267,7 +337,7 @@ pub fn establish_seeded(
 pub fn send_sid(d: &mut VirtualDriver, i: usize) -> [u8; 16] {
     use secmp_proto::wire::cell::{RouteDescriptor, RouteUpdateBody};
 
-    let store = hub(d, i).core().profile_store();
+    let store = hub(d, i).profile_store();
     let bytes = store
         .lock()
         .unwrap()

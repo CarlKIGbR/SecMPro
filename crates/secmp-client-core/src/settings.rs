@@ -3,7 +3,7 @@
 //! rows of the `settings` table, no secret (Q139). The defaults of a fresh profile are the safe ones: Strict, keep the
 //! history, delivery receipts for verified contacts only, read receipts off.
 
-use secmp_store::messages::Retention;
+use secmp_store::messages::Retention as StoredRetention;
 use secmp_store::settings::{
     KEY_MODE, KEY_RECEIPTS_DELIVERED, KEY_RECEIPTS_READ, put_byte, put_retention,
 };
@@ -21,6 +21,33 @@ pub enum DeliveredReceipts {
     VerifiedOnly,
     /// Every contact.
     All,
+}
+
+/// How long the history is kept (the `Api` names no store type; this is the settings' own).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Retention {
+    /// Keep forever (the default).
+    Keep,
+    /// Delete messages older than this many days.
+    Days(u32),
+}
+
+impl From<StoredRetention> for Retention {
+    fn from(r: StoredRetention) -> Self {
+        match r {
+            StoredRetention::Keep => Self::Keep,
+            StoredRetention::Days(d) => Self::Days(d),
+        }
+    }
+}
+
+impl From<Retention> for StoredRetention {
+    fn from(r: Retention) -> Self {
+        match r {
+            Retention::Keep => Self::Keep,
+            Retention::Days(d) => Self::Days(d),
+        }
+    }
 }
 
 /// The settings of a profile.
@@ -89,7 +116,7 @@ impl Settings {
         };
         Ok(Self {
             mode,
-            retention: s.retention()?,
+            retention: s.retention()?.into(),
             delivered_receipts,
             read_receipts,
         })
@@ -109,7 +136,7 @@ impl Settings {
                 delivered_code(self.delivered_receipts),
             )?;
             put_byte(tx, KEY_RECEIPTS_READ, u8::from(self.read_receipts))?;
-            put_retention(tx, self.retention)
+            put_retention(tx, self.retention.into())
         })?;
         Ok(())
     }

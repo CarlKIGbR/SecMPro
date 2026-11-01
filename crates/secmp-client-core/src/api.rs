@@ -259,6 +259,12 @@ pub enum Request {
         /// The contact.
         contact: ContactId,
     },
+    /// Remove a contact (`Control{ContactRemoved}`, spec §7.6, ADR-054 item 4): the peer is told, real messages stop, the
+    /// slots keep carrying dummies.
+    Remove {
+        /// The contact.
+        contact: ContactId,
+    },
     /// The settings.
     Settings,
     /// Replace the settings.
@@ -475,6 +481,21 @@ impl<C: Clock, S: EntropySource> Core<C, S> {
         Ok(core)
     }
 
+    /// Queue a `KeyChange` the test built (possibly one that does not verify, spec §7.7): tests only.
+    ///
+    /// # Errors
+    /// [`Error::Unavailable`] for an unknown contact or without randomness.
+    #[cfg(feature = "kat")]
+    pub fn queue_key_change_kat(
+        &mut self,
+        contact: ContactId,
+        body: secmp_proto::wire::cell::KeyChangeBody,
+    ) -> Result<(), Error> {
+        self.session(contact)?
+            .queue_key_change(body)
+            .map_err(|_| Error::Unavailable)
+    }
+
     /// Seed the timing randomness of the core (the overlap of a rotation): tests only, for runs that repeat.
     #[cfg(feature = "kat")]
     pub fn seed_timing_kat(&mut self, seed: u64) {
@@ -483,7 +504,7 @@ impl<C: Clock, S: EntropySource> Core<C, S> {
 
     /// The profile's store, shared with the sessions (a test reads rows through it).
     #[must_use]
-    pub fn profile_store(&self) -> SharedStore {
+    pub(crate) fn profile_store(&self) -> SharedStore {
         Arc::clone(&self.store)
     }
 
@@ -536,8 +557,11 @@ impl<C: Clock, S: EntropySource> Core<C, S> {
         self.convs.get_mut(at).ok_or(Error::Unavailable)
     }
 
-    /// The sessions, for the scheduler's driver as its `CellSource` (B-5).
-    pub const fn conversations_mut(&mut self) -> &mut Conversations<StoreOutbox, StorePersist, S> {
+    /// The sessions (the tests of this module deliver cells by hand).
+    #[cfg(test)]
+    pub(crate) const fn conversations_mut(
+        &mut self,
+    ) -> &mut Conversations<StoreOutbox, StorePersist, S> {
         &mut self.convs
     }
 
@@ -663,6 +687,19 @@ impl<C: Clock, S: EntropySource> Core<C, S> {
                 let conversation = self.session(contact)?;
                 conversation.queue_control(ControlCode::SessionResetRequest);
                 conversation.mark_reset();
+                Response::Done
+            }
+            Request::Remove { contact } => {
+                let conversation = self.session(contact)?;
+                conversation.queue_control(ControlCode::ContactRemoved);
+                conversation.mark_removed();
+                self.contacts()?.on_control(
+                    contact,
+                    &secmp_proto::wire::cell::ControlBody {
+                        code: ControlCode::ContactRemoved,
+                        arg: Zeroizing::new(Vec::new()),
+                    },
+                )?;
                 Response::Done
             }
             Request::Settings => Response::Settings(self.settings),
@@ -1059,6 +1096,15 @@ mod tests {
         assert!(matches!(
             api.call(send(contact, 1, b"after")).await,
             Err(Error::ResetRequested)
+        ));
+        // removing the contact: the peer is told, real sends are refused
+        assert!(matches!(
+            api.call(Request::Remove { contact }).await?,
+            Response::Done
+        ));
+        assert!(matches!(
+            api.call(send(contact, 1, b"gone")).await,
+            Err(Error::Blocked)
         ));
         // the events, in order
         let mut events = Vec::new();

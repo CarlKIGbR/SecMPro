@@ -139,7 +139,7 @@ fn sender_resends_last_real_on_new_queue() {
 
 /// `contacts.queues` of client `i`, decoded.
 fn queue_set_of(d: &mut VirtualDriver, i: usize) -> QueueSet {
-    let store = hub(d, i).core().profile_store();
+    let store = hub(d, i).profile_store();
     let bytes = store.lock().unwrap().contact_queues(1).unwrap().unwrap();
     QueueSet::decode(&bytes).unwrap()
 }
@@ -335,7 +335,8 @@ fn retirement_delays_are_uniform() {
     let delay = Params::default().control_delay_ms;
     let mut report = Vec::new();
     for (name, (lo, hi)) in [("overlap", OVERLAP_MS), ("queue_del_delay", delay)] {
-        let mut rng = TimingRng::os();
+        // seeded: a fixed outcome (a test of a random p-value would fail one run in a hundred)
+        let mut rng = TimingRng::seeded(0x5e03 + lo);
         let draws: Vec<u64> = (0..1_000).map(|_| rng.uniform(lo, hi).unwrap()).collect();
         assert!(draws.iter().all(|x| (lo..=hi).contains(x)));
         let ks = two_sample(&draws, &reference(0x5eed, lo, hi, 1_000)).unwrap();

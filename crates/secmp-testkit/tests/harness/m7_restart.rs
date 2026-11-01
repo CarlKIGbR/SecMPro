@@ -71,7 +71,6 @@ fn relay_restart_with_store() {
     received(&mut d, host, &mut seen);
     assert_eq!(seen.len(), 3);
     let queues_before = hub(&mut d, host)
-        .core()
         .profile_store()
         .lock()
         .unwrap()
@@ -124,7 +123,6 @@ fn relay_restart_with_store() {
     }
     assert!(created > 0, "the recipient re-created a queue");
     let queues_after = hub(&mut d, host)
-        .core()
         .profile_store()
         .lock()
         .unwrap()

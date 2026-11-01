@@ -181,6 +181,9 @@ pub struct Costs {
     pub prepare_dummy: u64,
     /// One received cell decided and committed.
     pub receive: u64,
+    /// The upper bound of the random latency added to every cell prepared and every cell decided — the store's commit
+    /// completing late (TEST-SPEC-M7 SE-19, Q160): `U[0, jitter]` virtual milliseconds, drawn on the worker, never on a tick.
+    pub jitter: u64,
 }
 
 /// What the gate in front of the conversations records or does (S-22, S-26, S-29).
@@ -192,6 +195,8 @@ pub struct GateState {
     pub work_ms: u64,
     /// Hold the preparation of cells back: `prepare_cell` is "not ready".
     pub block_prepare: bool,
+    /// The state of the latency generator (`SplitMix64`).
+    pub jitter_state: u64,
     /// Deliveries per `(queue, cell_id)`.
     pub delivered: BTreeMap<(u32, u64), u32>,
     /// The cells prepared per queue: `(real, dummy)` (SE-02: the old queue carries dummies only after a route update).
@@ -254,7 +259,7 @@ pub trait StoreHub: Source {
 
 impl<S: EntropySource> Source for Hub<ManualClock, S> {
     fn pending_real(&mut self, queue: QueueId) -> bool {
-        self.core_mut().conversations_mut().pending_real(queue)
+        Hub::pending_real(self, queue)
     }
 }
 
@@ -310,6 +315,20 @@ impl<'a> Gate<'a> {
     fn new(convs: &'a mut dyn Source, state: &'a mut GateState) -> Self {
         Self { convs, state }
     }
+
+    /// The latency of one commit: `U[0, jitter]` from the gate's own generator (nothing to do with the timing randomness).
+    fn latency(&mut self) -> u64 {
+        let max = self.state.costs.jitter;
+        if max == 0 {
+            return 0;
+        }
+        self.state.jitter_state = self.state.jitter_state.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        let mut z = self.state.jitter_state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        z ^= z >> 31;
+        z.checked_rem(max.saturating_add(1)).unwrap_or(0)
+    }
 }
 
 impl CellSource for Gate<'_> {
@@ -335,7 +354,8 @@ impl CellSource for Gate<'_> {
             } else {
                 self.state.costs.prepare_dummy
             };
-            self.state.work_ms = self.state.work_ms.saturating_add(cost);
+            let late = self.latency();
+            self.state.work_ms = self.state.work_ms.saturating_add(cost).saturating_add(late);
             self.state.audit.push(Audit::Prepared([
                 counters::tr_encrypt_calls(),
                 counters::persist_calls(),
@@ -374,7 +394,12 @@ impl CellSource for Gate<'_> {
         cell_id: u64,
         cell: &Cell,
     ) -> Result<Delivered, SourceError> {
-        self.state.work_ms = self.state.work_ms.saturating_add(self.state.costs.receive);
+        let late = self.latency();
+        self.state.work_ms = self
+            .state
+            .work_ms
+            .saturating_add(self.state.costs.receive)
+            .saturating_add(late);
         let n = self.state.delivered.entry((queue.0, cell_id)).or_insert(0);
         *n = n.saturating_add(1);
         let out = self.convs.deliver(queue, generation, cell_id, cell);
@@ -457,6 +482,7 @@ pub struct VirtualDriver {
     now: u64,
     swept_minute: u64,
     costs: Costs,
+    jitter_seed: u64,
     /// Whether a completed write is reported to the scheduler (`frame_written`); `false` models a driver that never
     /// does (C2-07: the ledger bound of item 11).
     report_written: bool,
@@ -479,6 +505,7 @@ impl VirtualDriver {
             now: 0,
             swept_minute: 0,
             costs: Costs::default(),
+            jitter_seed: 0,
             report_written: true,
         }
     }
@@ -497,6 +524,21 @@ impl VirtualDriver {
         for c in &mut self.clients {
             c.gate.costs = costs;
         }
+    }
+
+    /// Model a commit that completes late: every cell prepared or decided takes `U[0, max_ms]` virtual milliseconds more, from
+    /// a generator seeded with `seed` (every client, present and future).
+    ///
+    /// # Panics
+    /// On a violated harness invariant: a test failure, never a production path.
+    pub fn commit_latency(&mut self, max_ms: u64, seed: u64) {
+        self.costs.jitter = max_ms;
+        let costs = self.costs;
+        for (n, c) in self.clients.iter_mut().enumerate() {
+            c.gate.costs = costs;
+            c.gate.jitter_state = seed.wrapping_add(u64::try_from(n).unwrap());
+        }
+        self.jitter_seed = seed;
     }
 
     /// Model the cost of deciding (decrypting and committing) one received cell: `per_cell` virtual milliseconds.
@@ -555,6 +597,7 @@ impl VirtualDriver {
             opts: Options::default(),
             gate: GateState {
                 costs: self.costs,
+                jitter_state: self.jitter_seed.wrapping_add(u64::from(index)),
                 ..GateState::default()
             },
             after_write: None,

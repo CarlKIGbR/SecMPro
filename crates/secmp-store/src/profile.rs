@@ -133,6 +133,34 @@ pub fn put_meta_u32(tx: &mut Tx<'_>, key: &str, value: u32) -> Result<()> {
     Ok(())
 }
 
+/// The counter `key` of `meta` ([`put_meta_u32`]) as a statement of the caller's transaction; `None` if it was never set or
+/// is not four bytes.
+///
+/// # Errors
+/// [`Error::Unavailable`] if the read fails.
+pub fn meta_u32(tx: &mut Tx<'_>, key: &str) -> Result<Option<u32>> {
+    let raw = tx.query_row("SELECT value FROM meta WHERE key = ?1", params![key], |r| {
+        r.get::<_, Vec<u8>>(0)
+    })?;
+    Ok(raw
+        .and_then(|b| <[u8; 4]>::try_from(b.as_slice()).ok())
+        .map(u32::from_be_bytes))
+}
+
+/// The highest id of the prekeys of `kind`, as a statement of the caller's transaction.
+///
+/// # Errors
+/// [`Error::Unavailable`] if the read fails.
+pub fn max_prekey_id(tx: &mut Tx<'_>, kind: i64) -> Result<Option<i64>> {
+    Ok(tx
+        .query_row(
+            "SELECT max(id) FROM prekeys WHERE kind = ?1",
+            params![kind],
+            |r| r.get::<_, Option<i64>>(0),
+        )?
+        .flatten())
+}
+
 /// Delete the prekey (`kind`, `id`); with `secure_delete` on, its pages are overwritten.
 ///
 /// # Errors
@@ -426,19 +454,6 @@ impl Store {
             params![id],
             |r| r.get::<_, Vec<u8>>(0),
         )
-    }
-
-    /// The counter `key` of `meta` ([`put_meta_u32`]); `None` if it was never set or is not four bytes.
-    ///
-    /// # Errors
-    /// [`Error::Unavailable`] if the read fails.
-    pub fn meta_u32(&self, key: &str) -> Result<Option<u32>> {
-        let raw = self.query_row("SELECT value FROM meta WHERE key = ?1", params![key], |r| {
-            r.get::<_, Vec<u8>>(0)
-        })?;
-        Ok(raw
-            .and_then(|b| <[u8; 4]>::try_from(b.as_slice()).ok())
-            .map(u32::from_be_bytes))
     }
 
     /// The record of the invitation `ld_id`.

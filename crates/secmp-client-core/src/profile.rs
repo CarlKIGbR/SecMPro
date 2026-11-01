@@ -23,7 +23,7 @@ use secmp_proto::wire::Id;
 use secmp_store::Store;
 use secmp_store::profile::{
     INVITATION_OPEN, KIND_OPK, KIND_SPK, delete_invitation, delete_prekey, insert_prekey,
-    put_identity, put_meta_u32,
+    max_prekey_id, meta_u32, put_identity, put_meta_u32,
 };
 use secmp_store::wrap::{self, Unlocked};
 
@@ -267,29 +267,33 @@ impl Profile {
     /// # Errors
     /// [`Error::Unavailable`] without randomness or if the store cannot be written.
     pub fn fill_opks(&self, target: usize, entropy: &mut impl Entropy) -> Result<(), Error> {
-        let (mut have, mut next) = {
+        let mut have = {
             let store = self.lock()?;
             let referenced = crate::invitations::referenced_opks(&store)?;
-            let rows = store.prekeys(KIND_OPK)?;
-            let free = rows
+            store
+                .prekeys(KIND_OPK)?
                 .iter()
                 .filter(|r| !referenced.iter().any(|o| i64::from(*o) == r.id))
-                .count();
-            let after_last = rows.last().map_or(Ok(1_u32), |r| {
-                id32(r.id)?.checked_add(1).ok_or(Error::Unavailable)
-            })?;
-            // an id is never reused, also after its row was deleted (OPEN-M7-B-10)
-            let next = after_last.max(store.meta_u32(OPK_NEXT)?.unwrap_or(1));
-            (free, next)
+                .count()
         };
         while have < target {
-            let opk = OpkSecrets::generate(next, entropy)?;
-            let following = next.checked_add(1).ok_or(Error::Unavailable)?;
+            // the id comes from the counter `meta.opk_next` (absent: the highest id + 1), read and advanced in the transaction
+            // that inserts the prekey: an id is never reused, also after its row was deleted (OPEN-M7-B-10, Q197)
             self.lock()?.txn(|tx| {
+                let after_last = match max_prekey_id(tx, KIND_OPK)? {
+                    Some(id) => id32(id)
+                        .map_err(|_| secmp_store::Error::Unavailable)?
+                        .checked_add(1)
+                        .ok_or(secmp_store::Error::Unavailable)?,
+                    None => 1,
+                };
+                let next = after_last.max(meta_u32(tx, OPK_NEXT)?.unwrap_or(1));
+                let opk = OpkSecrets::generate(next, entropy)
+                    .map_err(|_| secmp_store::Error::Unavailable)?;
+                let following = next.checked_add(1).ok_or(secmp_store::Error::Unavailable)?;
                 insert_prekey(tx, KIND_OPK, i64::from(next), &opk.to_seeds(), None)?;
                 put_meta_u32(tx, OPK_NEXT, following)
             })?;
-            next = following;
             have = have.saturating_add(1);
         }
         Ok(())
@@ -508,7 +512,7 @@ mod tests {
         assert_eq!(p.opk_ids()?, [1, 2]);
         p.fill_opks(3, &mut e)?;
         assert_eq!(p.opk_ids()?, [1, 2, 4], "3 is not issued a second time");
-        assert_eq!(p.lock()?.meta_u32(OPK_NEXT)?, Some(5));
+        assert_eq!(p.lock()?.txn(|tx| meta_u32(tx, OPK_NEXT))?, Some(5));
         // all of them gone: the counter still stands
         p.lock()?.txn(|tx| {
             for id in [1, 2, 4] {

@@ -1,0 +1,29 @@
+# B-4 red-first lines (WEISUNG M7-B-4 §4): each test, run on the tree where its fix is absent, fails at the quoted
+# assertion (a compile error is not a red). Produced by temporarily reverting the fix (python patch, restored byte-identical).
+# modell=claude-sonnet-5-5
+
+Q193 invitations::tests::consumed_queue_cells_reach_session — on the unfixed tree (consumed branches ack and drop):
+thread '<unnamed>' (404586) panicked at crates/secmp-client-core/src/invitations_tests.rs:1264:9:
+Error: "the test panicked"
+
+SE-21 harness::m7_crash::receipt_effect_commits_with_receive_ratchet — on the tree where the receipt effect commits in its own
+transaction (fault on the outbox DELIVERED update; the receive is not durable and the receipt is lost / the ratchet moved):
+thread 'm7_crash::receipt_effect_commits_with_receive_ratchet' (406494) panicked at crates/secmp-testkit/tests/harness/m7_crash.rs:682:5:
+
+OPEN-M7-B-3 scheduler::core::tests::late_commit_of_old_generation_ignored — with the generation check of delivery_committed
+replaced by `|| true` (the old generation's report acknowledges the new generation's cell 1):
+        FAIL [   0.007s] (1/1) secmp-client-core scheduler::core::tests::late_commit_of_old_generation_ignored
+    test scheduler::core::tests::late_commit_of_old_generation_ignored ... FAILED
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 110 filtered out; finished in 0.00s
+    thread 'scheduler::core::tests::late_commit_of_old_generation_ignored' (412800) panicked at crates/secmp-client-core/src/scheduler/core/mod.rs:2340:9:
+     Summary [   0.008s] 1 test run: 0 passed, 1 failed, 110 skipped
+        FAIL [   0.007s] (1/1) secmp-client-core scheduler::core::tests::late_commit_of_old_generation_ignored
+
+OPEN-M7-B-10 profile::tests::opk_ids_never_reused — with the id taken as `last row id + 1` again (the deleted highest id is reissued):
+    thread 'profile::tests::opk_ids_never_reused' (414320) panicked at crates/secmp-client-core/src/profile.rs:510:9:
+     Summary [   0.220s] 1 test run: 0 passed, 1 failed, 111 skipped
+
+OPEN-M7-B-5 invitations::tests::accept_failure_keeps_pool_queue — with the pool take written in its own transaction before
+Initiator::start (the pool shrank although the start failed):
+    thread 'invitations::tests::accept_failure_keeps_pool_queue' (421321) panicked at crates/secmp-client-core/src/invitations_tests.rs:610:5:
+     Summary [   0.671s] 1 test run: 0 passed, 1 failed, 112 skipped
